@@ -73,7 +73,7 @@ bool rvid_create_buffer(struct pipe_screen *screen, struct rvid_buffer *buffer,
 /* destroy a buffer */
 void rvid_destroy_buffer(struct rvid_buffer *buffer)
 {
-	pipe_resource_reference((struct pipe_resource **)&buffer->res, NULL);
+	r600_resource_reference(&buffer->res, NULL);
 }
 
 /* reallocate a buffer, preserving its content */
@@ -298,7 +298,7 @@ int rvid_get_video_param(struct pipe_screen *screen,
 		case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
 		case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
 		case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH:
-			return 41;
+			return (rscreen->family < CHIP_TONGA) ? 41 : 52;
 		case PIPE_VIDEO_PROFILE_HEVC_MAIN:
 		case PIPE_VIDEO_PROFILE_HEVC_MAIN_10:
 			return 186;

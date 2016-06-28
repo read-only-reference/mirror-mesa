@@ -105,31 +105,6 @@ brw_get_surface_num_multisamples(unsigned num_samples)
       return BRW_SURFACE_MULTISAMPLECOUNT_1;
 }
 
-void
-brw_configure_w_tiled(const struct intel_mipmap_tree *mt,
-                      bool is_render_target,
-                      unsigned *width, unsigned *height,
-                      unsigned *pitch, uint32_t *tiling, unsigned *format)
-{
-   static const unsigned halign_stencil = 8;
-
-   /* In Y-tiling row is twice as wide as in W-tiling, and subsequently
-    * there are half as many rows.
-    * In addition, mip-levels are accessed manually by the program and
-    * therefore the surface is setup to cover all the mip-levels for one slice.
-    * (Hardware is still used to access individual slices).
-    */
-   *tiling = I915_TILING_Y;
-   *pitch = mt->pitch * 2;
-   *width = ALIGN(mt->total_width, halign_stencil) * 2;
-   *height = (mt->total_height / mt->physical_depth0) / 2;
-
-   if (is_render_target) {
-      *format = BRW_SURFACEFORMAT_R8_UINT;
-   }
-}
-
-
 /**
  * Compute the combination of DEPTH_TEXTURE_MODE and EXT_texture_swizzle
  * swizzling.
@@ -262,9 +237,9 @@ gen4_emit_buffer_surface_state(struct brw_context *brw,
              surface_format << BRW_SURFACE_FORMAT_SHIFT |
              (brw->gen >= 6 ? BRW_SURFACE_RC_READ_WRITE : 0);
    surf[1] = (bo ? bo->offset64 : 0) + buffer_offset; /* reloc */
-   surf[2] = (buffer_size & 0x7f) << BRW_SURFACE_WIDTH_SHIFT |
-             ((buffer_size >> 7) & 0x1fff) << BRW_SURFACE_HEIGHT_SHIFT;
-   surf[3] = ((buffer_size >> 20) & 0x7f) << BRW_SURFACE_DEPTH_SHIFT |
+   surf[2] = ((buffer_size - 1) & 0x7f) << BRW_SURFACE_WIDTH_SHIFT |
+             (((buffer_size - 1) >> 7) & 0x1fff) << BRW_SURFACE_HEIGHT_SHIFT;
+   surf[3] = (((buffer_size - 1) >> 20) & 0x7f) << BRW_SURFACE_DEPTH_SHIFT |
              (pitch - 1) << BRW_SURFACE_PITCH_SHIFT;
 
    /* Emit relocation to surface contents.  The 965 PRM, Volume 4, section
@@ -332,10 +307,17 @@ brw_update_texture_surface(struct gl_context *ctx,
       return;
    }
 
+   if (plane > 0) {
+      if (mt->plane[plane - 1] == NULL)
+         return;
+      mt = mt->plane[plane - 1];
+   }
+
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  6 * 4, 32, surf_offset);
 
-   uint32_t tex_format = translate_tex_format(brw, mt->format,
+   mesa_format mesa_fmt = plane == 0 ? intelObj->_Format : mt->format;
+   uint32_t tex_format = translate_tex_format(brw, mesa_fmt,
                                               sampler->sRGBDecode);
 
    if (for_gather) {
@@ -382,8 +364,10 @@ brw_update_texture_surface(struct gl_context *ctx,
 	      (mt->logical_depth0 - 1) << BRW_SURFACE_DEPTH_SHIFT |
 	      (mt->pitch - 1) << BRW_SURFACE_PITCH_SHIFT);
 
+   const unsigned min_lod = tObj->MinLevel + tObj->BaseLevel - mt->first_level;
    surf[4] = (brw_get_surface_num_multisamples(mt->num_samples) |
-              SET_FIELD(tObj->BaseLevel - mt->first_level, BRW_SURFACE_MIN_LOD));
+              SET_FIELD(min_lod, BRW_SURFACE_MIN_LOD) |
+              SET_FIELD(tObj->MinLayer, BRW_SURFACE_MIN_ARRAY_ELEMENT));
 
    surf[5] = mt->valign == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0;
 
@@ -962,7 +946,7 @@ const struct brw_tracked_state brw_cs_texture_surfaces = {
 
 void
 brw_upload_ubo_surfaces(struct brw_context *brw,
-			struct gl_shader *shader,
+			struct gl_linked_shader *shader,
                         struct brw_stage_state *stage_state,
                         struct brw_stage_prog_data *prog_data)
 {
@@ -1080,7 +1064,7 @@ const struct brw_tracked_state brw_cs_ubo_surfaces = {
 
 void
 brw_upload_abo_surfaces(struct brw_context *brw,
-                        struct gl_shader *shader,
+                        struct gl_linked_shader *shader,
                         struct brw_stage_state *stage_state,
                         struct brw_stage_prog_data *prog_data)
 {
@@ -1366,7 +1350,7 @@ update_image_surface(struct brw_context *brw,
 
 void
 brw_upload_image_surfaces(struct brw_context *brw,
-                          struct gl_shader *shader,
+                          struct gl_linked_shader *shader,
                           struct brw_stage_state *stage_state,
                           struct brw_stage_prog_data *prog_data)
 {

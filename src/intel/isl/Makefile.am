@@ -1,4 +1,4 @@
-# Copyright 2015 Intel Corporation
+# Copyright 2015-2016 Intel Corporation
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
@@ -50,7 +50,7 @@ libisl_la_CFLAGS = $(CFLAGS) -Wno-override-init
 
 libisl_la_LIBADD = $(ISL_GEN_LIBS)
 
-libisl_la_SOURCES = $(ISL_FILES)
+libisl_la_SOURCES = $(ISL_FILES) $(ISL_GENERATED_FILES)
 
 libisl_gen7_la_SOURCES = $(ISL_GEN7_FILES)
 libisl_gen7_la_CFLAGS = $(libisl_la_CFLAGS) -DGEN_VERSIONx10=70
@@ -66,10 +66,12 @@ libisl_gen9_la_CFLAGS = $(libisl_la_CFLAGS) -DGEN_VERSIONx10=90
 
 BUILT_SOURCES = $(ISL_GENERATED_FILES)
 
-isl_format_layout.c: isl_format_layout_gen.bash \
+PYTHON_GEN = $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)
+
+isl_format_layout.c: gen_format_layout.py \
                      isl_format_layout.csv
-	$(AM_V_GEN)$(srcdir)/isl_format_layout_gen.bash \
-	    <$(srcdir)/isl_format_layout.csv >$@
+	$(PYTHON_GEN) $(srcdir)/gen_format_layout.py \
+	    --csv $(srcdir)/isl_format_layout.csv --out $@
 
 # ----------------------------------------------------------------------------
 #  Tests
@@ -87,6 +89,6 @@ tests_isl_surf_get_image_offset_test_LDADD = \
 # ----------------------------------------------------------------------------
 
 EXTRA_DIST = \
-	isl_format_layout_gen.bash \
+	gen_format_layout.py \
 	isl_format_layout.csv \
 	README

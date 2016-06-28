@@ -314,6 +314,7 @@ void st_init_limits(struct pipe_screen *screen,
    }
 
    c->LowerTessLevel = true;
+   c->LowerCsDerivedVariables = true;
    c->PrimitiveRestartForPatches =
       screen->get_param(screen, PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES);
 
@@ -459,6 +460,9 @@ void st_init_limits(struct pipe_screen *screen,
     */
    c->MaxFramebufferLayers =
       screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS);
+
+   c->MaxWindowRectangles =
+      screen->get_param(screen, PIPE_CAP_MAX_WINDOW_RECTANGLES);
 }
 
 
@@ -596,6 +600,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_sample_shading),               PIPE_CAP_SAMPLE_SHADING                   },
       { o(ARB_seamless_cube_map),            PIPE_CAP_SEAMLESS_CUBE_MAP                },
       { o(ARB_shader_draw_parameters),       PIPE_CAP_DRAW_PARAMETERS                  },
+      { o(ARB_shader_group_vote),            PIPE_CAP_TGSI_VOTE                        },
       { o(ARB_shader_stencil_export),        PIPE_CAP_SHADER_STENCIL_EXPORT            },
       { o(ARB_shader_texture_image_samples), PIPE_CAP_TGSI_TXQS                        },
       { o(ARB_shader_texture_lod),           PIPE_CAP_SM3                              },
@@ -622,6 +627,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(EXT_texture_mirror_clamp),         PIPE_CAP_TEXTURE_MIRROR_CLAMP             },
       { o(EXT_texture_swizzle),              PIPE_CAP_TEXTURE_SWIZZLE                  },
       { o(EXT_transform_feedback),           PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS        },
+      { o(EXT_window_rectangles),            PIPE_CAP_MAX_WINDOW_RECTANGLES            },
 
       { o(AMD_pinned_memory),                PIPE_CAP_RESOURCE_FROM_USER_MEMORY        },
       { o(ATI_meminfo),                      PIPE_CAP_QUERY_MEMORY_INFO                },
@@ -772,6 +778,8 @@ void st_init_extensions(struct pipe_screen *screen,
 
    /* Required: vertex fetch support. */
    static const struct st_extension_format_mapping vertex_mapping[] = {
+      { { o(EXT_vertex_array_bgra) },
+        { PIPE_FORMAT_B8G8R8A8_UNORM } },
       { { o(ARB_vertex_type_2_10_10_10_rev) },
         { PIPE_FORMAT_R10G10B10A2_UNORM,
           PIPE_FORMAT_B10G10R10A2_UNORM,
@@ -824,7 +832,6 @@ void st_init_extensions(struct pipe_screen *screen,
    extensions->EXT_provoking_vertex = GL_TRUE;
 
    extensions->EXT_texture_env_dot3 = GL_TRUE;
-   extensions->EXT_vertex_array_bgra = GL_TRUE;
 
    extensions->ATI_fragment_shader = GL_TRUE;
    extensions->ATI_texture_env_combine3 = GL_TRUE;

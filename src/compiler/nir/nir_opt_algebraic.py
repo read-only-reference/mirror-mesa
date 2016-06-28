@@ -45,10 +45,11 @@ d = 'd'
 # however, be used for backend-requested lowering operations as those need to
 # happen regardless of precision.
 #
-# Variable names are specified as "[#]name[@type]" where "#" inicates that
-# the given variable will only match constants and the type indicates that
+# Variable names are specified as "[#]name[@type][(cond)]" where "#" inicates
+# that the given variable will only match constants and the type indicates that
 # the given variable will only match values from ALU instructions with the
-# given output type.
+# given output type, and (cond) specifies an additional condition function
+# (see nir_search_helpers.h).
 #
 # For constants, you have to be careful to make sure that it is the right
 # type because python is unaware of the source and destination types of the
@@ -62,6 +63,14 @@ d = 'd'
 # constructed value should have that bit-size.
 
 optimizations = [
+
+   (('imul', a, '#b@32(is_pos_power_of_two)'), ('ishl', a, ('find_lsb', b))),
+   (('imul', a, '#b@32(is_neg_power_of_two)'), ('ineg', ('ishl', a, ('find_lsb', ('iabs', b))))),
+   (('udiv', a, '#b@32(is_pos_power_of_two)'), ('ushr', a, ('find_lsb', b))),
+   (('idiv', a, '#b@32(is_pos_power_of_two)'), ('imul', ('isign', a), ('ushr', ('iabs', a), ('find_lsb', b))), 'options->lower_idiv'),
+   (('idiv', a, '#b@32(is_neg_power_of_two)'), ('ineg', ('imul', ('isign', a), ('ushr', ('iabs', a), ('find_lsb', ('iabs', b))))), 'options->lower_idiv'),
+   (('umod', a, '#b(is_pos_power_of_two)'),    ('iand', a, ('isub', b, 1))),
+
    (('fneg', ('fneg', a)), a),
    (('ineg', ('ineg', a)), a),
    (('fabs', ('fabs', a)), ('fabs', a)),
@@ -224,8 +233,6 @@ optimizations = [
    (('~flog2', ('frcp', a)), ('fneg', ('flog2', a))),
    (('~flog2', ('frsq', a)), ('fmul', -0.5, ('flog2', a))),
    (('~flog2', ('fpow', a, b)), ('fmul', b, ('flog2', a))),
-   (('~fadd', ('flog2', a), ('flog2', b)), ('flog2', ('fmul', a, b))),
-   (('~fadd', ('flog2', a), ('fneg', ('flog2', b))), ('flog2', ('fdiv', a, b))),
    (('~fmul', ('fexp2', a), ('fexp2', b)), ('fexp2', ('fadd', a, b))),
    # Division and reciprocal
    (('~fdiv', 1.0, a), ('frcp', a)),

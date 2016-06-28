@@ -157,6 +157,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return PIPE_ENDIAN_LITTLE;
    case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
       return 30;
+   case PIPE_CAP_MAX_WINDOW_RECTANGLES:
+      return NVC0_MAX_WINDOW_RECTANGLES;
 
    /* supported caps */
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
@@ -230,11 +232,12 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CULL_DISTANCE:
    case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
    case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
+   case PIPE_CAP_COMPUTE:
+   case PIPE_CAP_TGSI_VOTE:
+   case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
-   case PIPE_CAP_COMPUTE:
-      return 1;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return nouveau_screen(pscreen)->vram_domain & NOUVEAU_BO_VRAM ? 1 : 0;
 

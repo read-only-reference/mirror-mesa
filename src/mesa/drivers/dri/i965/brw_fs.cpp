@@ -57,6 +57,7 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
    this->dst = dst;
    this->sources = sources;
    this->exec_size = exec_size;
+   this->base_mrf = -1;
 
    assert(dst.file != IMM && dst.file != UNIFORM);
 
@@ -503,19 +504,6 @@ type_size_scalar(const struct glsl_type *type)
    }
 
    return 0;
-}
-
-/**
- * Returns the number of scalar components needed to store type, assuming
- * that vectors are padded out to vec4.
- *
- * This has the packing rules of type_size_vec4(), but counts components
- * similar to type_size_scalar().
- */
-extern "C" int
-type_size_vec4_times_4(const struct glsl_type *type)
-{
-   return 4 * type_size_vec4(type);
 }
 
 /* Attribute arrays are loaded as one vec4 per element (or matrix column),
@@ -991,21 +979,17 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case FS_OPCODE_TXB:
    case SHADER_OPCODE_TXD:
    case SHADER_OPCODE_TXF:
-   case SHADER_OPCODE_TXF_LZ:
    case SHADER_OPCODE_TXF_CMS:
-   case SHADER_OPCODE_TXF_CMS_W:
    case SHADER_OPCODE_TXF_MCS:
    case SHADER_OPCODE_TG4:
    case SHADER_OPCODE_TG4_OFFSET:
    case SHADER_OPCODE_TXL:
-   case SHADER_OPCODE_TXL_LZ:
    case SHADER_OPCODE_TXS:
    case SHADER_OPCODE_LOD:
    case SHADER_OPCODE_SAMPLEINFO:
       return 1;
    case FS_OPCODE_FB_WRITE:
       return 2;
-   case FS_OPCODE_GET_BUFFER_SIZE:
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
    case SHADER_OPCODE_GEN4_SCRATCH_READ:
       return 1;
@@ -1013,21 +997,6 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
       return inst->mlen;
    case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
       return inst->mlen;
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_TYPED_ATOMIC:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_URB_WRITE_SIMD8:
-   case SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT:
-   case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED:
-   case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
-   case FS_OPCODE_INTERPOLATE_AT_CENTROID:
-   case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
-   case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
-   case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-      return 0;
    default:
       unreachable("not reached");
    }
@@ -1189,7 +1158,18 @@ fs_visitor::emit_general_interpolation(fs_reg *attr, const char *name,
           * handed us defined values in only the constant offset
           * field of the setup reg.
           */
-         for (unsigned int i = 0; i < type->vector_elements; i++) {
+         unsigned vector_elements = type->vector_elements;
+
+         /* Data starts at suboffet 3 in 32-bit units (12 bytes), so it is not
+          * 64-bit aligned and the current implementation fails to read the
+          * data properly. Instead, when there is a double input varying,
+          * read it as vector of floats with twice the number of components.
+          */
+         if (attr->type == BRW_REGISTER_TYPE_DF) {
+            vector_elements *= 2;
+            attr->type = BRW_REGISTER_TYPE_F;
+         }
+         for (unsigned int i = 0; i < vector_elements; i++) {
             struct brw_reg interp = interp_reg(*location, i);
             interp = suboffset(interp, 3);
             interp.type = attr->type;
@@ -2097,6 +2077,10 @@ fs_visitor::assign_constant_locations()
    bool contiguous[uniforms];
    memset(contiguous, 0, sizeof(contiguous));
 
+   int thread_local_id_index =
+      (stage == MESA_SHADER_COMPUTE) ?
+      ((brw_cs_prog_data*)stage_prog_data)->thread_local_id_index : -1;
+
    /* First, we walk through the instructions and do two things:
     *
     *  1) Figure out which uniforms are live.
@@ -2141,6 +2125,9 @@ fs_visitor::assign_constant_locations()
       }
    }
 
+   if (thread_local_id_index >= 0 && !is_live[thread_local_id_index])
+      thread_local_id_index = -1;
+
    /* Only allow 16 registers (128 uniform components) as push constants.
     *
     * Just demote the end of the list.  We could probably do better
@@ -2149,7 +2136,9 @@ fs_visitor::assign_constant_locations()
     * If changing this value, note the limitation about total_regs in
     * brw_curbe.c.
     */
-   const unsigned int max_push_components = 16 * 8;
+   unsigned int max_push_components = 16 * 8;
+   if (thread_local_id_index >= 0)
+      max_push_components--; /* Save a slot for the thread ID */
 
    /* We push small arrays, but no bigger than 16 floats.  This is big enough
     * for a vec4 but hopefully not large enough to push out other stuff.  We
@@ -2187,12 +2176,20 @@ fs_visitor::assign_constant_locations()
       if (!is_live[u] || is_live_64bit[u])
          continue;
 
+      /* Skip thread_local_id_index to put it in the last push register. */
+      if (thread_local_id_index == (int)u)
+         continue;
+
       set_push_pull_constant_loc(u, &chunk_start, contiguous[u],
                                  push_constant_loc, pull_constant_loc,
                                  &num_push_constants, &num_pull_constants,
                                  max_push_components, max_chunk_size,
                                  stage_prog_data);
    }
+
+   /* Add the CS local thread ID uniform at the end of the push constants */
+   if (thread_local_id_index >= 0)
+      push_constant_loc[thread_local_id_index] = num_push_constants++;
 
    /* As the uniforms are going to be reordered, take the data from a temporary
     * copy of the original param[].
@@ -2212,6 +2209,7 @@ fs_visitor::assign_constant_locations()
     * push_constant_loc[i] <= i and we can do it in one smooth loop without
     * having to make a copy.
     */
+   int new_thread_local_id_index = -1;
    for (unsigned int i = 0; i < uniforms; i++) {
       const gl_constant_value *value = param[i];
 
@@ -2219,9 +2217,15 @@ fs_visitor::assign_constant_locations()
          stage_prog_data->pull_param[pull_constant_loc[i]] = value;
       } else if (push_constant_loc[i] != -1) {
          stage_prog_data->param[push_constant_loc[i]] = value;
+         if (thread_local_id_index == (int)i)
+            new_thread_local_id_index = push_constant_loc[i];
       }
    }
    ralloc_free(param);
+
+   if (stage == MESA_SHADER_COMPUTE)
+      ((brw_cs_prog_data*)stage_prog_data)->thread_local_id_index =
+         new_thread_local_id_index;
 }
 
 /**
@@ -3380,7 +3384,6 @@ fs_visitor::lower_uniform_pull_constant_loads()
           */
          inst->opcode = FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7;
          inst->src[1] = payload;
-         inst->base_mrf = -1;
 
          invalidate_live_intervals();
       } else {
@@ -3529,7 +3532,10 @@ fs_visitor::lower_integer_multiplication()
                ibld.MOV(imm, inst->src[1]);
                ibld.MUL(inst->dst, imm, inst->src[0]);
             } else {
-               ibld.MUL(inst->dst, inst->src[0], inst->src[1]);
+               const bool ud = (inst->src[1].type == BRW_REGISTER_TYPE_UD);
+               ibld.MUL(inst->dst, inst->src[0],
+                        ud ? brw_imm_uw(inst->src[1].ud)
+                           : brw_imm_w(inst->src[1].d));
             }
          } else {
             /* Gen < 8 (and some Gen8+ low-power parts like Cherryview) cannot
@@ -3893,7 +3899,6 @@ lower_fb_write_logical_send(const fs_builder &bld, fs_inst *inst,
 
       inst->src[0] = payload;
       inst->resize_sources(1);
-      inst->base_mrf = -1;
    } else {
       /* Send from the MRF */
       load = bld.LOAD_PAYLOAD(fs_reg(MRF, 1, BRW_REGISTER_TYPE_F),
@@ -4239,6 +4244,8 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
          if (coord_components >= 2) {
             bld.MOV(retype(sources[length], BRW_REGISTER_TYPE_D),
                     offset(coordinate, bld, 1));
+         } else {
+            sources[length] = brw_imm_d(0);
          }
          length++;
       }
@@ -4337,7 +4344,6 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
    inst->src[1] = surface;
    inst->src[2] = sampler;
    inst->resize_sources(3);
-   inst->base_mrf = -1;
    inst->mlen = mlen;
    inst->header_size = header_size;
 
@@ -4448,6 +4454,14 @@ lower_varying_pull_constant_logical_send(const fs_builder &bld, fs_inst *inst)
    const brw_device_info *devinfo = bld.shader->devinfo;
 
    if (devinfo->gen >= 7) {
+      /* We are switching the instruction from an ALU-like instruction to a
+       * send-from-grf instruction.  Since sends can't handle strides or
+       * source modifiers, we have to make a copy of the offset source.
+       */
+      fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      bld.MOV(tmp, inst->src[1]);
+      inst->src[1] = tmp;
+
       inst->opcode = FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7;
 
    } else {
@@ -5078,6 +5092,52 @@ emit_unzip(const fs_builder &lbld, bblock_t *block, fs_inst *inst,
 }
 
 /**
+ * Return true if splitting out the group of channels of instruction \p inst
+ * given by lbld.group() requires allocating a temporary for the destination
+ * of the lowered instruction and copying the data back to the original
+ * destination region.
+ */
+static inline bool
+needs_dst_copy(const fs_builder &lbld, const fs_inst *inst)
+{
+   /* If the instruction writes more than one component we'll have to shuffle
+    * the results of multiple lowered instructions in order to make sure that
+    * they end up arranged correctly in the original destination region.
+    */
+   if (inst->regs_written * REG_SIZE >
+       inst->dst.component_size(inst->exec_size))
+      return true;
+
+   /* If the lowered execution size is larger than the original the result of
+    * the instruction won't fit in the original destination, so we'll have to
+    * allocate a temporary in any case.
+    */
+   if (lbld.dispatch_width() > inst->exec_size)
+      return true;
+
+   for (unsigned i = 0; i < inst->sources; i++) {
+      /* If we already made a copy of the source for other reasons there won't
+       * be any overlap with the destination.
+       */
+      if (needs_src_copy(lbld, inst, i))
+         continue;
+
+      /* In order to keep the logic simple we emit a copy whenever the
+       * destination region doesn't exactly match an overlapping source, which
+       * may point at the source and destination not being aligned group by
+       * group which could cause one of the lowered instructions to overwrite
+       * the data read from the same source by other lowered instructions.
+       */
+      if (regions_overlap(inst->dst, inst->regs_written * REG_SIZE,
+                          inst->src[i], inst->regs_read(i) * REG_SIZE) &&
+          !inst->dst.equals(inst->src[i]))
+        return true;
+   }
+
+   return false;
+}
+
+/**
  * Insert data from a packed temporary into the channel group given by
  * lbld.group() of the destination region of instruction \p inst and return
  * the temporary as result.  If any copy instructions are required they will
@@ -5097,23 +5157,32 @@ emit_zip(const fs_builder &lbld, bblock_t *block, fs_inst *inst)
    const fs_reg dst = horiz_offset(inst->dst, lbld.group());
    const unsigned dst_size = inst->regs_written * REG_SIZE /
             inst->dst.component_size(inst->exec_size);
-   const fs_reg tmp = lbld.vgrf(inst->dst.type, dst_size);
 
-   if (inst->predicate) {
-      /* Handle predication by copying the original contents of the
-       * destination into the temporary before emitting the lowered
-       * instruction.
-       */
+   if (needs_dst_copy(lbld, inst)) {
+      const fs_reg tmp = lbld.vgrf(inst->dst.type, dst_size);
+
+      if (inst->predicate) {
+         /* Handle predication by copying the original contents of
+          * the destination into the temporary before emitting the
+          * lowered instruction.
+          */
+         for (unsigned k = 0; k < dst_size; ++k)
+            cbld.at(block, inst)
+                .MOV(offset(tmp, lbld, k), offset(dst, inst->exec_size, k));
+      }
+
       for (unsigned k = 0; k < dst_size; ++k)
-         cbld.at(block, inst)
-             .MOV(offset(tmp, lbld, k), offset(dst, inst->exec_size, k));
+         cbld.at(block, inst->next)
+             .MOV(offset(dst, inst->exec_size, k), offset(tmp, lbld, k));
+
+      return tmp;
+
+   } else {
+      /* No need to allocate a temporary for the lowered instruction, just
+       * take the right group of channels from the original region.
+       */
+      return dst;
    }
-
-   for (unsigned k = 0; k < dst_size; ++k)
-      cbld.at(block, inst->next)
-          .MOV(offset(dst, inst->exec_size, k), offset(tmp, lbld, k));
-
-   return tmp;
 }
 
 bool
@@ -5163,9 +5232,9 @@ fs_visitor::lower_simd_width()
                split_inst.src[j] = emit_unzip(lbld, block, inst, j);
 
             split_inst.dst = emit_zip(lbld, block, inst);
-            split_inst.regs_written =
-               DIV_ROUND_UP(type_sz(inst->dst.type) * dst_size * lower_width,
-                            REG_SIZE);
+            split_inst.regs_written = DIV_ROUND_UP(
+               split_inst.dst.component_size(lower_width) * dst_size,
+               REG_SIZE);
 
             lbld.emit(split_inst);
          }
@@ -5253,6 +5322,10 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
 
    if (inst->mlen) {
       fprintf(file, "(mlen: %d) ", inst->mlen);
+   }
+
+   if (inst->eot) {
+      fprintf(file, "(EOT) ");
    }
 
    switch (inst->dst.file) {
@@ -5549,31 +5622,6 @@ fs_visitor::setup_vs_payload()
    payload.num_regs = 2;
 }
 
-/**
- * We are building the local ID push constant data using the simplest possible
- * method. We simply push the local IDs directly as they should appear in the
- * registers for the uvec3 gl_LocalInvocationID variable.
- *
- * Therefore, for SIMD8, we use 3 full registers, and for SIMD16 we use 6
- * registers worth of push constant space.
- *
- * Note: Any updates to brw_cs_prog_local_id_payload_dwords,
- * fill_local_id_payload or fs_visitor::emit_cs_local_invocation_id_setup need
- * to coordinated.
- *
- * FINISHME: There are a few easy optimizations to consider.
- *
- * 1. If gl_WorkGroupSize x, y or z is 1, we can just use zero, and there is
- *    no need for using push constant space for that dimension.
- *
- * 2. Since GL_MAX_COMPUTE_WORK_GROUP_SIZE is currently 1024 or less, we can
- *    easily use 16-bit words rather than 32-bit dwords in the push constant
- *    data.
- *
- * 3. If gl_WorkGroupSize x, y or z is small, then we can use bytes for
- *    conveying the data, and thereby reduce push constant usage.
- *
- */
 void
 fs_visitor::setup_gs_payload()
 {
@@ -5617,15 +5665,7 @@ void
 fs_visitor::setup_cs_payload()
 {
    assert(devinfo->gen >= 7);
-   brw_cs_prog_data *prog_data = (brw_cs_prog_data*) this->prog_data;
-
    payload.num_regs = 1;
-
-   if (nir->info.system_values_read & SYSTEM_BIT_LOCAL_INVOCATION_ID) {
-      prog_data->local_invocation_id_regs = dispatch_width * 3 / 8;
-      payload.local_invocation_id_reg = payload.num_regs;
-      payload.num_regs += prog_data->local_invocation_id_regs;
-   }
 }
 
 void
@@ -5920,8 +5960,41 @@ fs_visitor::allocate_registers(bool allow_spilling)
 
    schedule_instructions(SCHEDULE_POST);
 
-   if (last_scratch > 0)
+   if (last_scratch > 0) {
+      unsigned max_scratch_size = 2 * 1024 * 1024;
+
       prog_data->total_scratch = brw_get_scratch_size(last_scratch);
+
+      if (stage == MESA_SHADER_COMPUTE) {
+         if (devinfo->is_haswell) {
+            /* According to the MEDIA_VFE_STATE's "Per Thread Scratch Space"
+             * field documentation, Haswell supports a minimum of 2kB of
+             * scratch space for compute shaders, unlike every other stage
+             * and platform.
+             */
+            prog_data->total_scratch = MAX2(prog_data->total_scratch, 2048);
+         } else if (devinfo->gen <= 7) {
+            /* According to the MEDIA_VFE_STATE's "Per Thread Scratch Space"
+             * field documentation, platforms prior to Haswell measure scratch
+             * size linearly with a range of [1kB, 12kB] and 1kB granularity.
+             */
+            prog_data->total_scratch = ALIGN(last_scratch, 1024);
+            max_scratch_size = 12 * 1024;
+         }
+      }
+
+      /* We currently only support up to 2MB of scratch space.  If we
+       * need to support more eventually, the documentation suggests
+       * that we could allocate a larger buffer, and partition it out
+       * ourselves.  We'd just have to undo the hardware's address
+       * calculation by subtracting (FFTID * Per Thread Scratch Space)
+       * and then add FFTID * (Larger Per Thread Scratch Space).
+       *
+       * See 3D-Media-GPGPU Engine > Media GPGPU Pipeline >
+       * Thread Group Tracking > Local Memory/Scratch Space.
+       */
+      assert(prog_data->total_scratch < max_scratch_size);
+   }
 }
 
 bool
@@ -6019,7 +6092,6 @@ fs_visitor::run_tcs_single_patch()
    fs_inst *inst = bld.emit(SHADER_OPCODE_URB_WRITE_SIMD8_MASKED,
                             bld.null_reg_ud(), payload);
    inst->mlen = 3;
-   inst->base_mrf = -1;
    inst->eot = true;
 
    if (shader_time_index >= 0)
@@ -6500,25 +6572,6 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
 }
 
 fs_reg *
-fs_visitor::emit_cs_local_invocation_id_setup()
-{
-   assert(stage == MESA_SHADER_COMPUTE);
-
-   fs_reg *reg = new(this->mem_ctx) fs_reg(vgrf(glsl_type::uvec3_type));
-
-   struct brw_reg src =
-      brw_vec8_grf(payload.local_invocation_id_reg, 0);
-   src = retype(src, BRW_REGISTER_TYPE_UD);
-   bld.MOV(*reg, src);
-   src.nr += dispatch_width / 8;
-   bld.MOV(offset(*reg, bld, 1), src);
-   src.nr += dispatch_width / 8;
-   bld.MOV(offset(*reg, bld, 2), src);
-
-   return reg;
-}
-
-fs_reg *
 fs_visitor::emit_cs_work_group_id_setup()
 {
    assert(stage == MESA_SHADER_COMPUTE);
@@ -6536,6 +6589,70 @@ fs_visitor::emit_cs_work_group_id_setup()
    return reg;
 }
 
+static void
+fill_push_const_block_info(struct brw_push_const_block *block, unsigned dwords)
+{
+   block->dwords = dwords;
+   block->regs = DIV_ROUND_UP(dwords, 8);
+   block->size = block->regs * 32;
+}
+
+static void
+cs_fill_push_const_info(const struct brw_device_info *devinfo,
+                        struct brw_cs_prog_data *cs_prog_data)
+{
+   const struct brw_stage_prog_data *prog_data =
+      (struct brw_stage_prog_data*) cs_prog_data;
+   bool fill_thread_id =
+      cs_prog_data->thread_local_id_index >= 0 &&
+      cs_prog_data->thread_local_id_index < (int)prog_data->nr_params;
+   bool cross_thread_supported = devinfo->gen > 7 || devinfo->is_haswell;
+
+   /* The thread ID should be stored in the last param dword */
+   assert(prog_data->nr_params > 0 || !fill_thread_id);
+   assert(!fill_thread_id ||
+          cs_prog_data->thread_local_id_index ==
+             (int)prog_data->nr_params - 1);
+
+   unsigned cross_thread_dwords, per_thread_dwords;
+   if (!cross_thread_supported) {
+      cross_thread_dwords = 0u;
+      per_thread_dwords = prog_data->nr_params;
+   } else if (fill_thread_id) {
+      /* Fill all but the last register with cross-thread payload */
+      cross_thread_dwords = 8 * (cs_prog_data->thread_local_id_index / 8);
+      per_thread_dwords = prog_data->nr_params - cross_thread_dwords;
+      assert(per_thread_dwords > 0 && per_thread_dwords <= 8);
+   } else {
+      /* Fill all data using cross-thread payload */
+      cross_thread_dwords = prog_data->nr_params;
+      per_thread_dwords = 0u;
+   }
+
+   fill_push_const_block_info(&cs_prog_data->push.cross_thread, cross_thread_dwords);
+   fill_push_const_block_info(&cs_prog_data->push.per_thread, per_thread_dwords);
+
+   unsigned total_dwords =
+      (cs_prog_data->push.per_thread.size * cs_prog_data->threads +
+       cs_prog_data->push.cross_thread.size) / 4;
+   fill_push_const_block_info(&cs_prog_data->push.total, total_dwords);
+
+   assert(cs_prog_data->push.cross_thread.dwords % 8 == 0 ||
+          cs_prog_data->push.per_thread.size == 0);
+   assert(cs_prog_data->push.cross_thread.dwords +
+          cs_prog_data->push.per_thread.dwords ==
+             prog_data->nr_params);
+}
+
+static void
+cs_set_simd_size(struct brw_cs_prog_data *cs_prog_data, unsigned size)
+{
+   cs_prog_data->simd_size = size;
+   unsigned group_size = cs_prog_data->local_size[0] *
+      cs_prog_data->local_size[1] * cs_prog_data->local_size[2];
+   cs_prog_data->threads = (group_size + size - 1) / size;
+}
+
 const unsigned *
 brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
@@ -6551,6 +6668,16 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
                                       true);
    brw_nir_lower_cs_shared(shader);
    prog_data->base.total_shared += shader->num_shared;
+
+   /* Now that we cloned the nir_shader, we can update num_uniforms based on
+    * the thread_local_id_index.
+    */
+   assert(prog_data->thread_local_id_index >= 0);
+   shader->num_uniforms =
+      MAX2(shader->num_uniforms,
+           (unsigned)4 * (prog_data->thread_local_id_index + 1));
+
+   brw_nir_lower_intrinsics(shader, &prog_data->base);
    shader = brw_postprocess_nir(shader, compiler->devinfo, true);
 
    prog_data->local_size[0] = shader->info.cs.local_size[0];
@@ -6576,7 +6703,8 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
          fail_msg = v8.fail_msg;
       } else {
          cfg = v8.cfg;
-         prog_data->simd_size = 8;
+         cs_set_simd_size(prog_data, 8);
+         cs_fill_push_const_info(compiler->devinfo, prog_data);
          prog_data->base.dispatch_grf_start_reg = v8.payload.num_regs;
       }
    }
@@ -6601,7 +6729,8 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
          }
       } else {
          cfg = v16.cfg;
-         prog_data->simd_size = 16;
+         cs_set_simd_size(prog_data, 16);
+         cs_fill_push_const_info(compiler->devinfo, prog_data);
          prog_data->dispatch_grf_start_reg_16 = v16.payload.num_regs;
       }
    }
@@ -6628,7 +6757,8 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
          }
       } else {
          cfg = v32.cfg;
-         prog_data->simd_size = 32;
+         cs_set_simd_size(prog_data, 32);
+         cs_fill_push_const_info(compiler->devinfo, prog_data);
       }
    }
 
@@ -6654,40 +6784,4 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
    g.generate_code(cfg, prog_data->simd_size);
 
    return g.get_assembly(final_assembly_size);
-}
-
-void
-brw_cs_fill_local_id_payload(const struct brw_cs_prog_data *prog_data,
-                             void *buffer, uint32_t threads, uint32_t stride)
-{
-   if (prog_data->local_invocation_id_regs == 0)
-      return;
-
-   /* 'stride' should be an integer number of registers, that is, a multiple
-    * of 32 bytes.
-    */
-   assert(stride % 32 == 0);
-
-   unsigned x = 0, y = 0, z = 0;
-   for (unsigned t = 0; t < threads; t++) {
-      uint32_t *param = (uint32_t *) buffer + stride * t / 4;
-
-      for (unsigned i = 0; i < prog_data->simd_size; i++) {
-         param[0 * prog_data->simd_size + i] = x;
-         param[1 * prog_data->simd_size + i] = y;
-         param[2 * prog_data->simd_size + i] = z;
-
-         x++;
-         if (x == prog_data->local_size[0]) {
-            x = 0;
-            y++;
-            if (y == prog_data->local_size[1]) {
-               y = 0;
-               z++;
-               if (z == prog_data->local_size[2])
-                  z = 0;
-            }
-         }
-      }
-   }
 }

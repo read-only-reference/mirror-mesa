@@ -30,18 +30,18 @@
 #include <inttypes.h>
 #include <stdio.h>
 
-boolean r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
-					struct pb_buffer *buf,
-					enum radeon_bo_usage usage)
+bool r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
+				     struct pb_buffer *buf,
+				     enum radeon_bo_usage usage)
 {
 	if (ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs, buf, usage)) {
-		return TRUE;
+		return true;
 	}
 	if (radeon_emitted(ctx->dma.cs, 0) &&
 	    ctx->ws->cs_is_buffer_referenced(ctx->dma.cs, buf, usage)) {
-		return TRUE;
+		return true;
 	}
-	return FALSE;
+	return false;
 }
 
 void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
@@ -368,13 +368,13 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 				box->width + (box->x % R600_MAP_BUFFER_ALIGNMENT));
 		if (staging) {
 			/* Copy the VRAM buffer to the staging buffer. */
-			rctx->dma_copy(ctx, &staging->b.b, 0,
-				       box->x % R600_MAP_BUFFER_ALIGNMENT,
-				       0, 0, resource, level, box);
+			ctx->resource_copy_region(ctx, &staging->b.b, 0,
+						  box->x % R600_MAP_BUFFER_ALIGNMENT,
+						  0, 0, resource, level, box);
 
 			data = r600_buffer_map_sync_with_rings(rctx, staging, PIPE_TRANSFER_READ);
 			if (!data) {
-				pipe_resource_reference((struct pipe_resource **)&staging, NULL);
+				r600_resource_reference(&staging, NULL);
 				return NULL;
 			}
 			data += box->x % R600_MAP_BUFFER_ALIGNMENT;
@@ -398,7 +398,6 @@ static void r600_buffer_do_flush_region(struct pipe_context *ctx,
 					struct pipe_transfer *transfer,
 				        const struct pipe_box *box)
 {
-	struct r600_common_context *rctx = (struct r600_common_context*)ctx;
 	struct r600_transfer *rtransfer = (struct r600_transfer*)transfer;
 	struct r600_resource *rbuffer = r600_resource(transfer->resource);
 
@@ -414,7 +413,7 @@ static void r600_buffer_do_flush_region(struct pipe_context *ctx,
 		u_box_1d(soffset, box->width, &dma_box);
 
 		/* Copy the staging buffer into the original one. */
-		rctx->dma_copy(ctx, dst, 0, box->x, 0, 0, src, 0, &dma_box);
+		ctx->resource_copy_region(ctx, dst, 0, box->x, 0, 0, src, 0, &dma_box);
 	}
 
 	util_range_add(&rbuffer->valid_buffer_range, box->x,
@@ -445,7 +444,7 @@ static void r600_buffer_transfer_unmap(struct pipe_context *ctx,
 		r600_buffer_do_flush_region(ctx, transfer, &transfer->box);
 
 	if (rtransfer->staging)
-		pipe_resource_reference((struct pipe_resource**)&rtransfer->staging, NULL);
+		r600_resource_reference(&rtransfer->staging, NULL);
 
 	util_slab_free(&rctx->pool_transfers, transfer);
 }

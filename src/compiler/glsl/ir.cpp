@@ -341,6 +341,12 @@ ir_expression::ir_expression(int op, ir_rvalue *op0)
       this->type = glsl_type::int_type;
       break;
 
+   case ir_unop_vote_any:
+   case ir_unop_vote_all:
+   case ir_unop_vote_eq:
+      this->type = glsl_type::bool_type;
+      break;
+
    default:
       assert(!"not reached: missing automatic type setup for ir_expression");
       this->type = op0->type;
@@ -563,6 +569,9 @@ static const char *const operator_strs[] = {
    "interpolate_at_centroid",
    "get_buffer_size",
    "ssbo_unsized_array_length",
+   "vote_any",
+   "vote_all",
+   "vote_eq",
    "+",
    "-",
    "*",
@@ -2020,27 +2029,4 @@ mode_string(const ir_variable *var)
 
    assert(!"Should not get here.");
    return "invalid variable";
-}
-
-/**
- * Get the varying type stripped of the outermost array if we're processing
- * a stage whose varyings are arrays indexed by a vertex number (such as
- * geometry shader inputs).
- */
-const glsl_type *
-get_varying_type(const ir_variable *var, gl_shader_stage stage)
-{
-   const glsl_type *type = var->type;
-
-   if (!var->data.patch &&
-       ((var->data.mode == ir_var_shader_out &&
-         stage == MESA_SHADER_TESS_CTRL) ||
-        (var->data.mode == ir_var_shader_in &&
-         (stage == MESA_SHADER_TESS_CTRL || stage == MESA_SHADER_TESS_EVAL ||
-          stage == MESA_SHADER_GEOMETRY)))) {
-      assert(type->is_array());
-      type = type->fields.array;
-   }
-
-   return type;
 }

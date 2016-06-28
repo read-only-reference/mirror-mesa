@@ -61,6 +61,8 @@ get_sample(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	struct fd_hw_sample *samp = NULL;
 	int idx = pidx(query_type);
 
+	assume(idx >= 0);   /* query never would have been created otherwise */
+
 	if (!ctx->sample_cache[idx]) {
 		ctx->sample_cache[idx] =
 			ctx->sample_providers[idx]->get_sample(ctx, ring);
@@ -92,6 +94,7 @@ resume_query(struct fd_context *ctx, struct fd_hw_query *hq,
 		struct fd_ringbuffer *ring)
 {
 	int idx = pidx(hq->provider->query_type);
+	assert(idx >= 0);   /* query never would have been created otherwise */
 	assert(!hq->period);
 	ctx->active_providers |= (1 << idx);
 	hq->period = util_slab_alloc(&ctx->sample_period_pool);
@@ -106,6 +109,7 @@ pause_query(struct fd_context *ctx, struct fd_hw_query *hq,
 		struct fd_ringbuffer *ring)
 {
 	int idx = pidx(hq->provider->query_type);
+	assert(idx >= 0);   /* query never would have been created otherwise */
 	assert(hq->period && !hq->period->end);
 	assert(ctx->active_providers & (1 << idx));
 	hq->period->end = get_sample(ctx, ring, hq->base.type);

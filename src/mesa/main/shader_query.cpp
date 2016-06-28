@@ -505,7 +505,7 @@ _mesa_program_resource_find_name(struct gl_shader_program *shProg,
       if (rname_last_square_bracket) {
          baselen_without_array_index -= strlen(rname_last_square_bracket);
          rname_has_array_index_zero =
-            (strncmp(rname_last_square_bracket, "[0]\0", 4) == 0) &&
+            (strcmp(rname_last_square_bracket, "[0]") == 0) &&
             (baselen_without_array_index == strlen(name));
       }
 
@@ -881,6 +881,13 @@ _mesa_program_resource_location_index(struct gl_shader_program *shProg,
    if (!res || !(res->StageReferences & (1 << MESA_SHADER_FRAGMENT)))
       return -1;
 
+   /* From OpenGL 4.5 spec, 7.3 Program Objects
+    * "The value -1 will be returned by either command...
+    *  ... or if name identifies an active variable that does not have a
+    * valid location assigned.
+    */
+   if (RESOURCE_VAR(res)->location == -1)
+      return -1;
    return RESOURCE_VAR(res)->index;
 }
 
@@ -1233,12 +1240,18 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
       default:
          goto invalid_operation;
       }
-   case GL_LOCATION_INDEX:
+   case GL_LOCATION_INDEX: {
+      int tmp;
       if (res->Type != GL_PROGRAM_OUTPUT)
          goto invalid_operation;
-      *val = RESOURCE_VAR(res)->index;
+      tmp = program_resource_location(res, 0);
+      if (tmp == -1)
+         *val = -1;
+      else
+         *val = _mesa_program_resource_location_index(shProg, res->Type,
+                                                      RESOURCE_VAR(res)->name);
       return 1;
-
+   }
    case GL_NUM_COMPATIBLE_SUBROUTINES:
       if (res->Type != GL_VERTEX_SUBROUTINE_UNIFORM &&
           res->Type != GL_FRAGMENT_SUBROUTINE_UNIFORM &&
@@ -1251,7 +1264,7 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
       return 1;
    case GL_COMPATIBLE_SUBROUTINES: {
       const struct gl_uniform_storage *uni;
-      struct gl_shader *sh;
+      struct gl_linked_shader *sh;
       unsigned count, i;
       int j;
 

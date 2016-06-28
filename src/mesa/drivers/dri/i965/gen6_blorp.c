@@ -597,16 +597,22 @@ static void
 gen6_blorp_emit_sf_config(struct brw_context *brw,
                           const struct brw_blorp_params *params)
 {
+   const unsigned num_varyings =
+      params->wm_prog_data ? params->wm_prog_data->num_varying_inputs : 0;
+
    BEGIN_BATCH(20);
    OUT_BATCH(_3DSTATE_SF << 16 | (20 - 2));
-   OUT_BATCH(params->num_varyings << GEN6_SF_NUM_OUTPUTS_SHIFT |
+   OUT_BATCH(num_varyings << GEN6_SF_NUM_OUTPUTS_SHIFT |
              1 << GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT |
              BRW_SF_URB_ENTRY_READ_OFFSET <<
                 GEN6_SF_URB_ENTRY_READ_OFFSET_SHIFT);
    OUT_BATCH(0); /* dw2 */
    OUT_BATCH(params->dst.num_samples > 1 ? GEN6_SF_MSRAST_ON_PATTERN : 0);
-   for (int i = 0; i < 16; ++i)
+   for (int i = 0; i < 13; ++i)
       OUT_BATCH(0);
+   OUT_BATCH(params->wm_prog_data ? params->wm_prog_data->flat_inputs : 0);
+   OUT_BATCH(0);
+   OUT_BATCH(0);
    ADVANCE_BATCH();
 }
 
@@ -650,7 +656,9 @@ gen6_blorp_emit_wm_config(struct brw_context *brw,
    dw5 |= GEN6_WM_LINE_END_CAP_AA_WIDTH_0_5;
    dw5 |= (brw->max_wm_threads - 1) << GEN6_WM_MAX_THREADS_SHIFT;
    dw6 |= 0 << GEN6_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT; /* No interp */
-   dw6 |= 0 << GEN6_WM_NUM_SF_OUTPUTS_SHIFT; /* No inputs from SF */
+   dw6 |= (params->wm_prog_data ? prog_data->num_varying_inputs : 0) <<
+          GEN6_WM_NUM_SF_OUTPUTS_SHIFT;
+
    if (params->wm_prog_data) {
       dw5 |= GEN6_WM_DISPATCH_ENABLE; /* We are rendering */
 
@@ -1014,7 +1022,11 @@ gen6_blorp_exec(struct brw_context *brw,
    if (params->wm_prog_data) {
       uint32_t wm_surf_offset_renderbuffer;
       uint32_t wm_surf_offset_texture = 0;
-      wm_push_const_offset = gen6_blorp_emit_wm_constants(brw, params);
+
+      if (params->wm_prog_data->nr_params) {
+         wm_push_const_offset = gen6_blorp_emit_wm_constants(brw, params);
+      }
+
       intel_miptree_used_for_rendering(params->dst.mt);
       wm_surf_offset_renderbuffer =
          gen6_blorp_emit_surface_state(brw, params, &params->dst,
@@ -1040,7 +1052,7 @@ gen6_blorp_exec(struct brw_context *brw,
    gen6_blorp_emit_gs_disable(brw, params);
    gen6_blorp_emit_clip_disable(brw);
    gen6_blorp_emit_sf_config(brw, params);
-   if (params->wm_prog_data)
+   if (params->wm_prog_data && params->wm_prog_data->nr_params)
       gen6_blorp_emit_constant_ps(brw, params, wm_push_const_offset);
    else
       gen6_blorp_emit_constant_ps_disable(brw, params);

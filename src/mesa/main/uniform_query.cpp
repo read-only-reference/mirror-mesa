@@ -36,6 +36,7 @@
 #include "compiler/glsl/glsl_parser_extras.h"
 #include "compiler/glsl/program.h"
 #include "program/hash_table.h"
+#include "util/bitscan.h"
 
 
 extern "C" void GLAPIENTRY
@@ -322,8 +323,8 @@ _mesa_get_uniform(struct gl_context *ctx, GLuint program, GLint location,
    {
       unsigned elements = (uni->type->is_sampler())
 	 ? 1 : uni->type->components();
-      const int dmul = uni->type->base_type == GLSL_TYPE_DOUBLE ? 2 : 1;
-      const int rmul = returnType == GLSL_TYPE_DOUBLE ? 2 : 1;
+      const int dmul = uni->type->is_64bit() ? 2 : 1;
+      const int rmul = glsl_base_type_is_64bit(returnType) ? 2 : 1;
 
       /* Calculate the source base address *BEFORE* modifying elements to
        * account for the size of the user's buffer.
@@ -548,7 +549,7 @@ _mesa_propagate_uniforms_to_driver_storage(struct gl_uniform_storage *uni,
     */
    const unsigned components = MAX2(1, uni->type->vector_elements);
    const unsigned vectors = MAX2(1, uni->type->matrix_columns);
-   const int dmul = uni->type->base_type == GLSL_TYPE_DOUBLE ? 2 : 1;
+   const int dmul = uni->type->is_64bit() ? 2 : 1;
 
    /* Store the data in the driver's requested type in the driver's storage
     * areas.
@@ -668,7 +669,7 @@ _mesa_uniform(struct gl_context *ctx, struct gl_shader_program *shProg,
               unsigned src_components)
 {
    unsigned offset;
-   int size_mul = basicType == GLSL_TYPE_DOUBLE ? 2 : 1;
+   int size_mul = glsl_base_type_is_64bit(basicType) ? 2 : 1;
 
    struct gl_uniform_storage *const uni =
       validate_uniform_parameters(ctx, shProg, location, count,
@@ -823,7 +824,7 @@ _mesa_uniform(struct gl_context *ctx, struct gl_shader_program *shProg,
    if (uni->type->is_sampler()) {
       bool flushed = false;
       for (int i = 0; i < MESA_SHADER_STAGES; i++) {
-	 struct gl_shader *const sh = shProg->_LinkedShaders[i];
+	 struct gl_linked_shader *const sh = shProg->_LinkedShaders[i];
 
 	 /* If the shader stage doesn't use the sampler uniform, skip this.
 	  */
@@ -843,9 +844,10 @@ _mesa_uniform(struct gl_context *ctx, struct gl_shader_program *shProg,
 	  * been modified.
 	  */
 	 bool changed = false;
-	 for (unsigned j = 0; j < ARRAY_SIZE(prog->SamplerUnits); j++) {
-	    if ((sh->active_samplers & (1U << j)) != 0
-		&& (prog->SamplerUnits[j] != sh->SamplerUnits[j])) {
+	 GLbitfield mask = sh->active_samplers;
+	 while (mask) {
+	    const int j = u_bit_scan(&mask);
+	    if (prog->SamplerUnits[j] != sh->SamplerUnits[j]) {
 	       changed = true;
 	       break;
 	    }
@@ -874,7 +876,7 @@ _mesa_uniform(struct gl_context *ctx, struct gl_shader_program *shProg,
    if (uni->type->is_image()) {
       for (int i = 0; i < MESA_SHADER_STAGES; i++) {
 	 if (uni->opaque[i].active) {
-            struct gl_shader *sh = shProg->_LinkedShaders[i];
+            struct gl_linked_shader *sh = shProg->_LinkedShaders[i];
 
             for (int j = 0; j < count; j++)
                sh->ImageUnits[uni->opaque[i].index + offset + j] =

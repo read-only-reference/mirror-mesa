@@ -772,7 +772,7 @@ trace_context_set_sample_mask(struct pipe_context *_pipe,
 static void
 trace_context_set_constant_buffer(struct pipe_context *_pipe,
                                   uint shader, uint index,
-                                  struct pipe_constant_buffer *constant_buffer)
+                                  const struct pipe_constant_buffer *constant_buffer)
 {
    struct trace_context *tr_ctx = trace_context(_pipe);
    struct pipe_context *pipe = tr_ctx->pipe;
@@ -1671,7 +1671,7 @@ trace_context_set_tess_state(struct pipe_context *_context,
 static void trace_context_set_shader_buffers(struct pipe_context *_context,
                                              unsigned shader,
                                              unsigned start, unsigned nr,
-                                             struct pipe_shader_buffer *buffers)
+                                             const struct pipe_shader_buffer *buffers)
 {
    struct trace_context *tr_context = trace_context(_context);
    struct pipe_context *context = tr_context->pipe;
@@ -1709,7 +1709,7 @@ static void trace_context_set_shader_buffers(struct pipe_context *_context,
 static void trace_context_set_shader_images(struct pipe_context *_context,
                                             unsigned shader,
                                             unsigned start, unsigned nr,
-                                            struct pipe_image_view *images)
+                                            const struct pipe_image_view *images)
 {
    struct trace_context *tr_context = trace_context(_context);
    struct pipe_context *context = tr_context->pipe;

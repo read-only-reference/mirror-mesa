@@ -48,9 +48,9 @@ INTRINSIC(copy_var, 0, ARR(0), false, 0, 2, 0, xx, xx, xx, 0)
 
 /*
  * Interpolation of input.  The interp_var_at* intrinsics are similar to the
- * load_var intrinsic acting an a shader input except that they interpolate
+ * load_var intrinsic acting on a shader input except that they interpolate
  * the input differently.  The at_sample and at_offset intrinsics take an
- * aditional source that is a integer sample id or a vec2 position offset
+ * additional source that is an integer sample id or a vec2 position offset
  * respectively.
  */
 
@@ -299,10 +299,12 @@ SYSTEM_VALUE(tess_level_outer, 4, 0, xx, xx, xx)
 SYSTEM_VALUE(tess_level_inner, 2, 0, xx, xx, xx)
 SYSTEM_VALUE(patch_vertices_in, 1, 0, xx, xx, xx)
 SYSTEM_VALUE(local_invocation_id, 3, 0, xx, xx, xx)
+SYSTEM_VALUE(local_invocation_index, 1, 0, xx, xx, xx)
 SYSTEM_VALUE(work_group_id, 3, 0, xx, xx, xx)
 SYSTEM_VALUE(user_clip_plane, 4, 1, UCP_ID, xx, xx)
 SYSTEM_VALUE(num_work_groups, 3, 0, xx, xx, xx)
 SYSTEM_VALUE(helper_invocation, 1, 0, xx, xx, xx)
+SYSTEM_VALUE(channel_num, 1, 0, xx, xx, xx)
 
 /*
  * Load operations pull data from some piece of GPU memory.  All load

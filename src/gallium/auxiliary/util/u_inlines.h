@@ -626,10 +626,17 @@ static inline void
 util_copy_image_view(struct pipe_image_view *dst,
                      const struct pipe_image_view *src)
 {
-   pipe_resource_reference(&dst->resource, src->resource);
-   dst->format = src->format;
-   dst->access = src->access;
-   dst->u = src->u;
+   if (src) {
+      pipe_resource_reference(&dst->resource, src->resource);
+      dst->format = src->format;
+      dst->access = src->access;
+      dst->u = src->u;
+   } else {
+      pipe_resource_reference(&dst->resource, NULL);
+      dst->format = PIPE_FORMAT_NONE;
+      dst->access = 0;
+      memset(&dst->u, 0, sizeof(dst->u));
+   }
 }
 
 static inline unsigned
@@ -648,6 +655,18 @@ util_max_layer(const struct pipe_resource *r, unsigned level)
    default:
       return 0;
    }
+}
+
+static inline bool
+util_texrange_covers_whole_level(const struct pipe_resource *tex,
+                                 unsigned level, unsigned x, unsigned y,
+                                 unsigned z, unsigned width,
+                                 unsigned height, unsigned depth)
+{
+   return x == 0 && y == 0 && z == 0 &&
+          width == u_minify(tex->width0, level) &&
+          height == u_minify(tex->height0, level) &&
+          depth == util_max_layer(tex, level) + 1;
 }
 
 #ifdef __cplusplus

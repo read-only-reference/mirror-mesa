@@ -181,6 +181,8 @@ void WakeAllThreads(SWR_CONTEXT *pContext)
     pContext->FifosNotEmpty.notify_all();
 }
 
+static TileSet gSingleThreadLockedTiles;
+
 template<bool IsDraw>
 void QueueWork(SWR_CONTEXT *pContext)
 {
@@ -213,14 +215,13 @@ void QueueWork(SWR_CONTEXT *pContext)
 
         if (IsDraw)
         {
-            static TileSet lockedTiles;
-            uint64_t curDraw[2] = { pContext->pCurDrawContext->drawId, pContext->pCurDrawContext->drawId };
+            uint32_t curDraw[2] = { pContext->pCurDrawContext->drawId, pContext->pCurDrawContext->drawId };
             WorkOnFifoFE(pContext, 0, curDraw[0]);
-            WorkOnFifoBE(pContext, 0, curDraw[1], lockedTiles, 0, 0);
+            WorkOnFifoBE(pContext, 0, curDraw[1], gSingleThreadLockedTiles, 0, 0);
         }
         else
         {
-            uint64_t curDispatch = pContext->pCurDrawContext->drawId;
+            uint32_t curDispatch = pContext->pCurDrawContext->drawId;
             WorkOnCompute(pContext, 0, curDispatch);
         }
 
@@ -321,7 +322,7 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT *pContext, bool isSplitDraw = false)
 
         SWR_ASSERT(pCurDrawContext->pArena->IsEmpty() == true);
 
-        pCurDrawContext->dependency = 0;
+        pCurDrawContext->dependent = false;
         pCurDrawContext->pContext = pContext;
         pCurDrawContext->isCompute = false; // Dispatch has to set this to true.
 
@@ -405,7 +406,7 @@ void SwrSync(HANDLE hContext, PFN_CALLBACK_FUNC pfnFunc, uint64_t userData, uint
     pDC->FeWork.desc.sync.userData3 = userData3;
 
     // cannot execute until all previous draws have completed
-    pDC->dependency = pDC->drawId - 1;
+    pDC->dependent = true;
 
     //enqueue
     QueueDraw(pContext);
@@ -779,10 +780,7 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
         const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || rastState.forcedSampleCount) ? 1 : 0;
         const uint32_t centroid = ((psState.barycentricsMask & SWR_BARYCENTRIC_CENTROID_MASK) > 0) ? 1 : 0;
         const uint32_t canEarlyZ = (psState.forceEarlyZ || (!psState.writesODepth && !psState.usesSourceDepth && !psState.usesUAV)) ? 1 : 0;
-
-        // currently only support 'normal' input coverage
-        SWR_ASSERT(psState.inputCoverage == SWR_INPUT_COVERAGE_NORMAL ||
-                   psState.inputCoverage == SWR_INPUT_COVERAGE_NONE);
+        const uint32_t inputCoverage = (psState.inputCoverage != SWR_INPUT_COVERAGE_NONE);
      
         SWR_BARYCENTRICS_MASK barycentricsMask = (SWR_BARYCENTRICS_MASK)psState.barycentricsMask;
         
@@ -794,20 +792,20 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
             {
                 // always need to generate I & J per sample for Z interpolation
                 barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_SAMPLE_MASK);
-                backendFuncs.pfnBackend = gBackendPixelRateTable[rastState.sampleCount][rastState.samplePattern][psState.inputCoverage][centroid][forcedSampleCount][canEarlyZ];
+                backendFuncs.pfnBackend = gBackendPixelRateTable[rastState.sampleCount][rastState.samplePattern][inputCoverage][centroid][forcedSampleCount][canEarlyZ];
             }
             else
             {
                 // always need to generate I & J per pixel for Z interpolation
                 barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_PIXEL_MASK);
-                backendFuncs.pfnBackend = gBackendSingleSample[psState.inputCoverage][centroid][canEarlyZ];
+                backendFuncs.pfnBackend = gBackendSingleSample[inputCoverage][centroid][canEarlyZ];
             }
             break;
         case SWR_SHADING_RATE_SAMPLE:
             SWR_ASSERT(rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN);
             // always need to generate I & J per sample for Z interpolation
             barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_SAMPLE_MASK);
-            backendFuncs.pfnBackend = gBackendSampleRateTable[rastState.sampleCount][psState.inputCoverage][centroid][canEarlyZ];
+            backendFuncs.pfnBackend = gBackendSampleRateTable[rastState.sampleCount][inputCoverage][centroid][canEarlyZ];
             break;
         default:
             SWR_ASSERT(0 && "Invalid shading rate");
@@ -832,7 +830,7 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
         break;
     default:
         pState->pfnProcessPrims = ClipTriangles;
-        pfnBinner = BinTriangles;
+        pfnBinner = GetBinTrianglesFunc((rastState.conservativeRast > 0));
         break;
     };
 
@@ -1502,7 +1500,7 @@ void SwrGetStats(
     pDC->FeWork.desc.queryStats.pStats = pStats;
 
     // cannot execute until all previous draws have completed
-    pDC->dependency = pDC->drawId - 1;
+    pDC->dependent = true;
 
     //enqueue
     QueueDraw(pContext);

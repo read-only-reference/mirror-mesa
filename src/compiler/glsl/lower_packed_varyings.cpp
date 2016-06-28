@@ -172,7 +172,7 @@ public:
                                  bool disable_varying_packing,
                                  bool xfb_enabled);
 
-   void run(struct gl_shader *shader);
+   void run(struct gl_linked_shader *shader);
 
 private:
    void bitwise_assign_pack(ir_rvalue *lhs, ir_rvalue *rhs);
@@ -260,7 +260,7 @@ lower_packed_varyings_visitor::lower_packed_varyings_visitor(
 }
 
 void
-lower_packed_varyings_visitor::run(struct gl_shader *shader)
+lower_packed_varyings_visitor::run(struct gl_linked_shader *shader)
 {
    foreach_in_list(ir_instruction, node, shader->ir) {
       ir_variable *var = node->as_variable();
@@ -432,7 +432,7 @@ lower_packed_varyings_visitor::lower_rvalue(ir_rvalue *rvalue,
                                             bool gs_input_toplevel,
                                             unsigned vertex_index)
 {
-   unsigned dmul = rvalue->type->is_double() ? 2 : 1;
+   unsigned dmul = rvalue->type->is_64bit() ? 2 : 1;
    /* When gs_input_toplevel is set, we should be looking at a geometry shader
     * input array.
     */
@@ -480,7 +480,7 @@ lower_packed_varyings_visitor::lower_rvalue(ir_rvalue *rvalue,
       char right_swizzle_name[4] = { 0, 0, 0, 0 };
 
       left_components = 4 - fine_location % 4;
-      if (rvalue->type->is_double()) {
+      if (rvalue->type->is_64bit()) {
          /* We might actually end up with 0 left components! */
          left_components /= 2;
       }
@@ -676,7 +676,7 @@ lower_packed_varyings_visitor::needs_lowering(ir_variable *var)
       return false;
 
    type = type->without_array();
-   if (type->vector_elements == 4 && !type->is_double())
+   if (type->vector_elements == 4 && !type->is_64bit())
       return false;
    return true;
 }
@@ -767,7 +767,7 @@ lower_packed_varyings_return_splicer::visit_leave(ir_return *ret)
 void
 lower_packed_varyings(void *mem_ctx, unsigned locations_used,
                       ir_variable_mode mode, unsigned gs_input_vertices,
-                      gl_shader *shader, bool disable_varying_packing,
+                      gl_linked_shader *shader, bool disable_varying_packing,
                       bool xfb_enabled)
 {
    exec_list *instructions = shader->ir;

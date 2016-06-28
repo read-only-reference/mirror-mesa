@@ -76,41 +76,6 @@ gen7_emit_rs_state(struct anv_pipeline *pipeline,
 }
 
 static void
-gen7_emit_ds_state(struct anv_pipeline *pipeline,
-                   const VkPipelineDepthStencilStateCreateInfo *info)
-{
-   if (info == NULL) {
-      /* We're going to OR this together with the dynamic state.  We need
-       * to make sure it's initialized to something useful.
-       */
-      memset(pipeline->gen7.depth_stencil_state, 0,
-             sizeof(pipeline->gen7.depth_stencil_state));
-      return;
-   }
-
-   struct GENX(DEPTH_STENCIL_STATE) state = {
-      .DepthTestEnable = info->depthTestEnable,
-      .DepthBufferWriteEnable = info->depthWriteEnable,
-      .DepthTestFunction = vk_to_gen_compare_op[info->depthCompareOp],
-      .DoubleSidedStencilEnable = true,
-
-      .StencilTestEnable = info->stencilTestEnable,
-      .StencilBufferWriteEnable = info->stencilTestEnable,
-      .StencilFailOp = vk_to_gen_stencil_op[info->front.failOp],
-      .StencilPassDepthPassOp = vk_to_gen_stencil_op[info->front.passOp],
-      .StencilPassDepthFailOp = vk_to_gen_stencil_op[info->front.depthFailOp],
-      .StencilTestFunction = vk_to_gen_compare_op[info->front.compareOp],
-
-      .BackfaceStencilFailOp = vk_to_gen_stencil_op[info->back.failOp],
-      .BackfaceStencilPassDepthPassOp = vk_to_gen_stencil_op[info->back.passOp],
-      .BackfaceStencilPassDepthFailOp = vk_to_gen_stencil_op[info->back.depthFailOp],
-      .BackFaceStencilTestFunction = vk_to_gen_compare_op[info->back.compareOp],
-   };
-
-   GENX(DEPTH_STENCIL_STATE_pack)(NULL, &pipeline->gen7.depth_stencil_state, &state);
-}
-
-static void
 gen7_emit_cb_state(struct anv_pipeline *pipeline,
                    const VkPipelineColorBlendStateCreateInfo *info,
                    const VkPipelineMultisampleStateCreateInfo *ms_info)
@@ -190,6 +155,8 @@ genX(graphics_pipeline_create)(
     VkPipeline*                                 pPipeline)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_render_pass, pass, pCreateInfo->renderPass);
+   struct anv_subpass *subpass = &pass->subpasses[pCreateInfo->subpass];
    struct anv_pipeline *pipeline;
    VkResult result;
 
@@ -213,7 +180,7 @@ genX(graphics_pipeline_create)(
    assert(pCreateInfo->pRasterizationState);
    gen7_emit_rs_state(pipeline, pCreateInfo->pRasterizationState, extra);
 
-   gen7_emit_ds_state(pipeline, pCreateInfo->pDepthStencilState);
+   emit_ds_state(pipeline, pCreateInfo->pDepthStencilState, pass, subpass);
 
    gen7_emit_cb_state(pipeline, pCreateInfo->pColorBlendState,
                                 pCreateInfo->pMultisampleState);
@@ -229,6 +196,7 @@ genX(graphics_pipeline_create)(
       clip.ClipEnable               = !(extra && extra->use_rectlist),
       clip.APIMode                  = APIMODE_OGL,
       clip.ViewportXYClipTestEnable = true,
+      clip.ViewportZClipTestEnable  = !pipeline->depth_clamp_enable,
       clip.ClipMode                 = CLIPMODE_NORMAL,
 
       clip.TriangleStripListProvokingVertexSelect   = 0,
@@ -282,7 +250,13 @@ genX(graphics_pipeline_create)(
    else
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VS), vs) {
          vs.KernelStartPointer         = pipeline->vs_vec4;
-         vs.ScratchSpaceBaseOffset     = pipeline->scratch_start[MESA_SHADER_VERTEX];
+
+         vs.ScratchSpaceBasePointer = (struct anv_address) {
+            .bo = anv_scratch_pool_alloc(device, &device->scratch_pool,
+                                         MESA_SHADER_VERTEX,
+                                         vs_prog_data->base.base.total_scratch),
+            .offset = 0,
+         };
          vs.PerThreadScratchSpace      = scratch_space(&vs_prog_data->base.base);
 
          vs.DispatchGRFStartRegisterforURBData    =
@@ -302,7 +276,13 @@ genX(graphics_pipeline_create)(
    } else {
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_GS), gs) {
          gs.KernelStartPointer         = pipeline->gs_kernel;
-         gs.ScratchSpaceBasePointer    = pipeline->scratch_start[MESA_SHADER_GEOMETRY];
+
+         gs.ScratchSpaceBasePointer = (struct anv_address) {
+            .bo = anv_scratch_pool_alloc(device, &device->scratch_pool,
+                                         MESA_SHADER_GEOMETRY,
+                                         gs_prog_data->base.base.total_scratch),
+            .offset = 0,
+         };
          gs.PerThreadScratchSpace      = scratch_space(&gs_prog_data->base.base);
 
          gs.OutputVertexSize           = gs_prog_data->output_vertex_size_hwords * 2 - 1;
@@ -360,7 +340,13 @@ genX(graphics_pipeline_create)(
 
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_PS), ps) {
          ps.KernelStartPointer0           = pipeline->ps_ksp0;
-         ps.ScratchSpaceBasePointer       = pipeline->scratch_start[MESA_SHADER_FRAGMENT];
+
+         ps.ScratchSpaceBasePointer = (struct anv_address) {
+            .bo = anv_scratch_pool_alloc(device, &device->scratch_pool,
+                                         MESA_SHADER_FRAGMENT,
+                                         wm_prog_data->base.total_scratch),
+            .offset = 0,
+         };
          ps.PerThreadScratchSpace         = scratch_space(&wm_prog_data->base);
          ps.MaximumNumberofThreads        = device->info.max_wm_threads - 1;
          ps.PushConstantEnable            = wm_prog_data->base.nr_params > 0;
@@ -398,12 +384,20 @@ genX(graphics_pipeline_create)(
          wm.ThreadDispatchEnable                = true;
          wm.LineEndCapAntialiasingRegionWidth   = 0; /* 0.5 pixels */
          wm.LineAntialiasingRegionWidth         = 1; /* 1.0 pixels */
-         wm.EarlyDepthStencilControl            = EDSC_NORMAL;
          wm.PointRasterizationRule              = RASTRULE_UPPER_RIGHT;
          wm.PixelShaderComputedDepthMode        = wm_prog_data->computed_depth_mode;
          wm.PixelShaderUsesSourceDepth          = wm_prog_data->uses_src_depth;
          wm.PixelShaderUsesSourceW              = wm_prog_data->uses_src_w;
          wm.PixelShaderUsesInputCoverageMask    = wm_prog_data->uses_sample_mask;
+
+         if (wm_prog_data->early_fragment_tests) {
+            wm.EarlyDepthStencilControl         = EDSC_PREPS;
+         } else if (wm_prog_data->has_side_effects) {
+            wm.EarlyDepthStencilControl         = EDSC_PSEXEC;
+         } else {
+            wm.EarlyDepthStencilControl         = EDSC_NORMAL;
+         }
+
          wm.BarycentricInterpolationMode        = wm_prog_data->barycentric_interp_modes;
       }
    }

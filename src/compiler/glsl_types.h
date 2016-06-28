@@ -64,6 +64,11 @@ enum glsl_base_type {
    GLSL_TYPE_ERROR
 };
 
+static inline bool glsl_base_type_is_64bit(enum glsl_base_type type)
+{
+   return type == GLSL_TYPE_DOUBLE;
+}
+
 enum glsl_sampler_dim {
    GLSL_SAMPLER_DIM_1D = 0,
    GLSL_SAMPLER_DIM_2D,
@@ -490,11 +495,19 @@ struct glsl_type {
    }
 
    /**
-    * Query whether a double takes two slots.
+    * Query whether a 64-bit type takes two slots.
     */
-   bool is_dual_slot_double() const
+   bool is_dual_slot() const
    {
-      return base_type == GLSL_TYPE_DOUBLE && vector_elements > 2;
+      return is_64bit() && vector_elements > 2;
+   }
+
+   /**
+    * Query whether or not a type is 64-bit
+    */
+   bool is_64bit() const
+   {
+      return glsl_base_type_is_64bit(base_type);
    }
 
    /**
@@ -744,6 +757,14 @@ struct glsl_type {
     * same struct is defined in a block which has a location set on it.
     */
    bool record_compare(const glsl_type *b, bool match_locations = true) const;
+
+   /**
+    * Get the type interface packing.
+    */
+   enum glsl_interface_packing get_interface_packing() const
+   {
+      return (enum glsl_interface_packing)interface_packing;
+   }
 
 private:
 

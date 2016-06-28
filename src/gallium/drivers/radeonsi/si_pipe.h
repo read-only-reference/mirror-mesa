@@ -82,6 +82,8 @@ struct u_suballocator;
 struct si_screen {
 	struct r600_common_screen	b;
 	unsigned			gs_table_depth;
+	unsigned			tess_offchip_block_dw_size;
+	bool				has_distributed_tess;
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
 	bool				use_monolithic_shaders;
@@ -121,6 +123,9 @@ struct si_sampler_view {
          * [4..7] = buffer descriptor */
 	uint32_t			state[8];
 	uint32_t			fmask_state[8];
+	const struct radeon_surf_level	*base_level_info;
+	unsigned			base_level;
+	unsigned			block_width;
 	bool is_stencil_sampler;
 };
 
@@ -133,6 +138,7 @@ struct si_cs_shader_state {
 	struct si_compute		*emitted_program;
 	unsigned			offset;
 	bool				initialized;
+	bool				uses_scratch;
 };
 
 struct si_textures_info {
@@ -142,9 +148,9 @@ struct si_textures_info {
 };
 
 struct si_images_info {
-	struct si_descriptors		desc;
 	struct pipe_image_view		views[SI_NUM_IMAGES];
 	uint32_t			compressed_colortex_mask;
+	unsigned			enabled_mask;
 };
 
 struct si_framebuffer {
@@ -161,6 +167,7 @@ struct si_framebuffer {
 	unsigned			color_is_int8; /* bitmask */
 	unsigned			dirty_cbufs;
 	bool				dirty_zsbuf;
+	bool				any_dst_linear;
 };
 
 struct si_clip_state {
@@ -245,6 +252,8 @@ struct si_context {
 
 	/* shader descriptors */
 	struct si_descriptors		vertex_buffers;
+	struct si_descriptors		descriptors[SI_NUM_DESCS];
+	unsigned			descriptors_dirty;
 	struct si_buffer_resources	rw_buffers;
 	struct si_buffer_resources	const_buffers[SI_NUM_SHADERS];
 	struct si_buffer_resources	shader_buffers[SI_NUM_SHADERS];
@@ -296,12 +305,13 @@ struct si_context {
 	int			last_ls_hs_config;
 	int			last_rast_prim;
 	unsigned		last_sc_line_stipple;
+	int			last_vtx_reuse_depth;
 	int			current_rast_prim; /* primitive type after TES, GS */
 	unsigned		last_gsvs_itemsize;
 
 	/* Scratch buffer */
 	struct r600_resource	*scratch_buffer;
-	boolean                 emit_scratch_reloc;
+	bool			emit_scratch_reloc;
 	unsigned		scratch_waves;
 	unsigned		spi_tmpring_size;
 
@@ -315,14 +325,11 @@ struct si_context {
 
 	/* Debug state. */
 	bool			is_debug;
-	uint32_t		*last_ib;
-	unsigned		last_ib_dw_size;
+	struct radeon_saved_cs	last_gfx;
 	struct r600_resource	*last_trace_buf;
 	struct r600_resource	*trace_buf;
 	unsigned		trace_id;
 	uint64_t		dmesg_timestamp;
-	unsigned		last_bo_count;
-	struct radeon_bo_list_item *last_bo_list;
 
 	/* Other state */
 	bool need_check_render_feedback;
@@ -351,7 +358,8 @@ void si_init_cp_dma_functions(struct si_context *sctx);
 
 /* si_debug.c */
 void si_init_debug_functions(struct si_context *sctx);
-void si_check_vm_faults(struct si_context *sctx);
+void si_check_vm_faults(struct r600_common_context *ctx,
+			struct radeon_saved_cs *saved, enum ring_type ring);
 bool si_replace_shader(unsigned num, struct radeon_shader_binary *binary);
 
 /* si_dma.c */

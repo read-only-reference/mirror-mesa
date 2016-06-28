@@ -108,7 +108,7 @@ fs_visitor::nir_setup_single_output_varying(fs_reg *reg,
       for (unsigned count = 0; count < num_elements; count += 4) {
          this->outputs[*location] = *reg;
          this->output_components[*location] = MIN2(4, num_elements - count);
-         *reg = offset(*reg, bld, 4);
+         *reg = offset(*reg, bld, this->output_components[*location]);
          (*location)++;
       }
    }
@@ -270,13 +270,6 @@ emit_system_values_block(nir_block *block, fs_visitor *v)
          reg = &v->nir_system_values[SYSTEM_VALUE_SAMPLE_MASK_IN];
          if (reg->file == BAD_FILE)
             *reg = *v->emit_samplemaskin_setup();
-         break;
-
-      case nir_intrinsic_load_local_invocation_id:
-         assert(v->stage == MESA_SHADER_COMPUTE);
-         reg = &v->nir_system_values[SYSTEM_VALUE_LOCAL_INVOCATION_ID];
-         if (reg->file == BAD_FILE)
-            *reg = *v->emit_cs_local_invocation_id_setup();
          break;
 
       case nir_intrinsic_load_work_group_id:
@@ -722,10 +715,35 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_u2f:
       if (optimize_extract_to_float(instr, result))
          return;
+      inst = bld.MOV(result, op[0]);
+      inst->saturate = instr->dest.saturate;
+      break;
 
    case nir_op_f2d:
    case nir_op_i2d:
    case nir_op_u2d:
+      /* CHV PRM, vol07, 3D Media GPGPU Engine, Register Region Restrictions:
+       *
+       *    "When source or destination is 64b (...), regioning in Align1
+       *     must follow these rules:
+       *
+       *     1. Source and destination horizontal stride must be aligned to
+       *        the same qword.
+       *     (...)"
+       *
+       * This means that 32-bit to 64-bit conversions need to have the 32-bit
+       * data elements aligned to 64-bit. This restriction does not apply to
+       * BDW and later.
+       */
+      if (devinfo->is_cherryview || devinfo->is_broxton) {
+         fs_reg tmp = bld.vgrf(result.type, 1);
+         tmp = subscript(tmp, op[0].type, 0);
+         inst = bld.MOV(tmp, op[0]);
+         inst = bld.MOV(result, tmp);
+         inst->saturate = instr->dest.saturate;
+         break;
+      }
+      /* fallthrough */
    case nir_op_d2f:
    case nir_op_d2i:
    case nir_op_d2u:
@@ -1668,6 +1686,9 @@ fs_visitor::emit_gs_end_primitive(const nir_src &vertex_count_nir_src)
    struct brw_gs_prog_data *gs_prog_data =
       (struct brw_gs_prog_data *) prog_data;
 
+   if (gs_compile->control_data_header_size_bits == 0)
+      return;
+
    /* We can only do EndPrimitive() functionality when the control data
     * consists of cut bits.  Fortunately, the only time it isn't is when the
     * output type is points, in which case EndPrimitive() is a no-op.
@@ -2092,24 +2113,58 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
    }
 
    fs_inst *inst;
-   if (offset_const) {
-      /* Constant indexing - use global offset. */
-      inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, dst, icp_handle);
-      inst->offset = base_offset + offset_const->u32[0];
-      inst->base_mrf = -1;
-      inst->mlen = 1;
-      inst->regs_written = num_components;
-   } else {
-      /* Indirect indexing - use per-slot offsets as well. */
-      const fs_reg srcs[] = { icp_handle, get_nir_src(offset_src) };
-      fs_reg payload = bld.vgrf(BRW_REGISTER_TYPE_UD, 2);
-      bld.LOAD_PAYLOAD(payload, srcs, ARRAY_SIZE(srcs), 0);
 
-      inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT, dst, payload);
-      inst->offset = base_offset;
-      inst->base_mrf = -1;
-      inst->mlen = 2;
-      inst->regs_written = num_components;
+   fs_reg tmp_dst = dst;
+   fs_reg indirect_offset = get_nir_src(offset_src);
+   unsigned num_iterations = 1;
+   unsigned orig_num_components = num_components;
+
+   if (type_sz(dst.type) == 8) {
+      if (num_components > 2) {
+         num_iterations = 2;
+         num_components = 2;
+      }
+      fs_reg tmp = fs_reg(VGRF, alloc.allocate(4), dst.type);
+      tmp_dst = tmp;
+   }
+
+   for (unsigned iter = 0; iter < num_iterations; iter++) {
+      if (offset_const) {
+         /* Constant indexing - use global offset. */
+         inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, tmp_dst, icp_handle);
+         inst->offset = base_offset + offset_const->u32[0];
+         inst->mlen = 1;
+         inst->regs_written = num_components * type_sz(tmp_dst.type) / 4;
+      } else {
+         /* Indirect indexing - use per-slot offsets as well. */
+         const fs_reg srcs[] = { icp_handle, indirect_offset };
+         fs_reg payload = bld.vgrf(BRW_REGISTER_TYPE_UD, 2);
+         bld.LOAD_PAYLOAD(payload, srcs, ARRAY_SIZE(srcs), 0);
+
+         inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT, tmp_dst, payload);
+         inst->offset = base_offset;
+         inst->mlen = 2;
+         inst->regs_written = num_components * type_sz(tmp_dst.type) / 4;
+      }
+
+      if (type_sz(dst.type) == 8) {
+         shuffle_32bit_load_result_to_64bit_data(
+            bld, tmp_dst, retype(tmp_dst, BRW_REGISTER_TYPE_F), num_components);
+
+         for (unsigned c = 0; c < num_components; c++)
+            bld.MOV(offset(dst, bld, iter * 2 + c), offset(tmp_dst, bld, c));
+      }
+
+      if (num_iterations > 1) {
+         num_components = orig_num_components - 2;
+         if(offset_const) {
+            base_offset++;
+         } else {
+            fs_reg new_indirect = bld.vgrf(BRW_REGISTER_TYPE_UD, 1);
+            bld.ADD(new_indirect, indirect_offset, brw_imm_ud(1u));
+            indirect_offset = new_indirect;
+         }
+      }
    }
 
    if (is_point_size) {
@@ -2358,7 +2413,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
             inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, dst, icp_handle);
             inst->offset = imm_offset;
             inst->mlen = 1;
-            inst->base_mrf = -1;
          } else {
             /* Indirect indexing - use per-slot offsets as well. */
             const fs_reg srcs[] = { icp_handle, indirect_offset };
@@ -2367,7 +2421,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
 
             inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT, dst, payload);
             inst->offset = imm_offset;
-            inst->base_mrf = -1;
             inst->mlen = 2;
          }
          inst->regs_written = num_components * type_sz(dst.type) / 4;
@@ -2440,7 +2493,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
                inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, tmp, patch_handle);
                inst->offset = 0;
                inst->mlen = 1;
-               inst->base_mrf = -1;
                inst->regs_written = 4;
 
                /* dst.xy = tmp.wz */
@@ -2453,7 +2505,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
                inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, dst, patch_handle);
                inst->offset = 1;
                inst->mlen = 1;
-               inst->base_mrf = -1;
                inst->regs_written = 1;
                break;
             case GL_ISOLINES:
@@ -2472,7 +2523,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
             inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, tmp, patch_handle);
             inst->offset = 1;
             inst->mlen = 1;
-            inst->base_mrf = -1;
             inst->regs_written = 4;
 
             /* Reswizzle: WZYX */
@@ -2505,7 +2555,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
             inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, dst, patch_handle);
             inst->offset = imm_offset;
             inst->mlen = 1;
-            inst->base_mrf = -1;
             inst->regs_written = instr->num_components;
          }
       } else {
@@ -2520,7 +2569,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
          inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT, dst, payload);
          inst->offset = imm_offset;
          inst->mlen = 2;
-         inst->base_mrf = -1;
          inst->regs_written = instr->num_components;
       }
       break;
@@ -2687,7 +2735,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
          fs_inst *inst = bld.emit(opcode, bld.null_reg_ud(), payload);
          inst->offset = imm_offset;
          inst->mlen = mlen;
-         inst->base_mrf = -1;
 
          /* If this is a 64-bit attribute, select the next two 64-bit channels
           * to be handled in the next iteration.
@@ -2746,7 +2793,7 @@ fs_visitor::nir_emit_tes_intrinsic(const fs_builder &bld,
          break;
       case BRW_TESS_DOMAIN_ISOLINE:
          for (unsigned i = 0; i < 2; i++)
-            bld.MOV(offset(dest, bld, i), component(fs_reg(ATTR, 0), 7 - i));
+            bld.MOV(offset(dest, bld, i), component(fs_reg(ATTR, 0), 6 + i));
          break;
       }
       break;
@@ -2801,7 +2848,6 @@ fs_visitor::nir_emit_tes_intrinsic(const fs_builder &bld,
             inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, dest, patch_handle);
             inst->mlen = 1;
             inst->offset = imm_offset;
-            inst->base_mrf = -1;
             inst->regs_written = instr->num_components;
          }
       } else {
@@ -2816,7 +2862,6 @@ fs_visitor::nir_emit_tes_intrinsic(const fs_builder &bld,
          inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT, dest, payload);
          inst->mlen = 2;
          inst->offset = imm_offset;
-         inst->base_mrf = -1;
          inst->regs_written = instr->num_components;
       }
       break;
@@ -3335,6 +3380,10 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_atomic_counter_inc:
    case nir_intrinsic_atomic_counter_dec:
    case nir_intrinsic_atomic_counter_read: {
+      if (stage == MESA_SHADER_FRAGMENT &&
+          instr->intrinsic != nir_intrinsic_atomic_counter_read)
+         ((struct brw_wm_prog_data *)prog_data)->has_side_effects = true;
+
       /* Get the arguments of the atomic intrinsic. */
       const fs_reg offset = get_nir_src(instr->src[0]);
       const unsigned surface = (stage_prog_data->binding_table.abo_start +
@@ -3380,6 +3429,10 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_image_atomic_exchange:
    case nir_intrinsic_image_atomic_comp_swap: {
       using namespace image_access;
+
+      if (stage == MESA_SHADER_FRAGMENT &&
+          instr->intrinsic != nir_intrinsic_image_load)
+         ((struct brw_wm_prog_data *)prog_data)->has_side_effects = true;
 
       /* Get the referenced image variable and type. */
       const nir_variable *var = instr->variables[0]->var;
@@ -3546,10 +3599,32 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
          unsigned read_size = instr->const_index[1] -
             (instr->num_components - 1) * type_sz(dest.type);
 
+         fs_reg indirect_chv_high_32bit;
+         bool is_chv_bxt_64bit =
+            (devinfo->is_cherryview || devinfo->is_broxton) &&
+            type_sz(dest.type) == 8;
+         if (is_chv_bxt_64bit) {
+            indirect_chv_high_32bit = vgrf(glsl_type::uint_type);
+            /* Calculate indirect address to read high 32 bits */
+            bld.ADD(indirect_chv_high_32bit, indirect, brw_imm_ud(4));
+         }
+
          for (unsigned j = 0; j < instr->num_components; j++) {
-            bld.emit(SHADER_OPCODE_MOV_INDIRECT,
-                     offset(dest, bld, j), offset(src, bld, j),
-                     indirect, brw_imm_ud(read_size));
+            if (!is_chv_bxt_64bit) {
+               bld.emit(SHADER_OPCODE_MOV_INDIRECT,
+                        offset(dest, bld, j), offset(src, bld, j),
+                        indirect, brw_imm_ud(read_size));
+            } else {
+               bld.emit(SHADER_OPCODE_MOV_INDIRECT,
+                        subscript(offset(dest, bld, j), BRW_REGISTER_TYPE_UD, 0),
+                        offset(src, bld, j),
+                        indirect, brw_imm_ud(read_size));
+
+               bld.emit(SHADER_OPCODE_MOV_INDIRECT,
+                        subscript(offset(dest, bld, j), BRW_REGISTER_TYPE_UD, 1),
+                        offset(src, bld, j),
+                        indirect_chv_high_32bit, brw_imm_ud(read_size));
+            }
          }
       }
       break;
@@ -3666,9 +3741,21 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
    case nir_intrinsic_load_input: {
       fs_reg src;
+      unsigned num_components = instr->num_components;
+      enum brw_reg_type type = dest.type;
+
       if (stage == MESA_SHADER_VERTEX) {
          src = fs_reg(ATTR, instr->const_index[0], dest.type);
       } else {
+         assert(type_sz(type) >= 4);
+         if (type == BRW_REGISTER_TYPE_DF) {
+            /* const_index is in 32-bit type size units that could not be aligned
+             * with DF. We need to read the double vector as if it was a float
+             * vector of twice the number of components to fetch the right data.
+             */
+            dest = retype(dest, BRW_REGISTER_TYPE_F);
+            num_components *= 2;
+         }
          src = offset(retype(nir_inputs, dest.type), bld,
                       instr->const_index[0]);
       }
@@ -3677,8 +3764,16 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       assert(const_offset && "Indirect input loads not allowed");
       src = offset(src, bld, const_offset->u32[0]);
 
-      for (unsigned j = 0; j < instr->num_components; j++) {
+      for (unsigned j = 0; j < num_components; j++) {
          bld.MOV(offset(dest, bld, j), offset(src, bld, j));
+      }
+
+      if (type == BRW_REGISTER_TYPE_DF) {
+         /* Once the double vector is read, set again its original register
+          * type to continue with normal execution.
+          */
+         src = retype(src, type);
+         dest = retype(dest, type);
       }
 
       if (type_sz(src.type) == 8) {
@@ -3693,6 +3788,9 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
    case nir_intrinsic_store_ssbo: {
       assert(devinfo->gen >= 7);
+
+      if (stage == MESA_SHADER_FRAGMENT)
+         ((struct brw_wm_prog_data *)prog_data)->has_side_effects = true;
 
       /* Block index */
       fs_reg surf_index;
@@ -3873,6 +3971,21 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       break;
    }
 
+   case nir_intrinsic_load_channel_num: {
+      fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UW);
+      dest = retype(dest, BRW_REGISTER_TYPE_UD);
+      const fs_builder allbld8 = bld.group(8, 0).exec_all();
+      allbld8.MOV(tmp, brw_imm_v(0x76543210));
+      if (dispatch_width > 8)
+         allbld8.ADD(byte_offset(tmp, 16), tmp, brw_imm_uw(8u));
+      if (dispatch_width > 16) {
+         const fs_builder allbld16 = bld.group(16, 0).exec_all();
+         allbld16.ADD(byte_offset(tmp, 32), tmp, brw_imm_uw(16u));
+      }
+      bld.MOV(dest, tmp);
+      break;
+   }
+
    default:
       unreachable("unknown intrinsic");
    }
@@ -3882,6 +3995,9 @@ void
 fs_visitor::nir_emit_ssbo_atomic(const fs_builder &bld,
                                  int op, nir_intrinsic_instr *instr)
 {
+   if (stage == MESA_SHADER_FRAGMENT)
+      ((struct brw_wm_prog_data *)prog_data)->has_side_effects = true;
+
    fs_reg dest;
    if (nir_intrinsic_infos[instr->intrinsic].has_dest)
       dest = get_nir_dest(instr->dest);

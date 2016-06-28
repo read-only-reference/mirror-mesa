@@ -58,6 +58,7 @@
 #define NVC0_NEW_3D_TESSFACTOR   (1 << 25)
 #define NVC0_NEW_3D_BUFFERS      (1 << 26)
 #define NVC0_NEW_3D_DRIVERCONST  (1 << 27)
+#define NVC0_NEW_3D_WINDOW_RECTS (1 << 28)
 
 #define NVC0_NEW_CP_PROGRAM   (1 << 0)
 #define NVC0_NEW_CP_SURFACES  (1 << 1)
@@ -214,6 +215,7 @@ struct nvc0_context {
    struct pipe_viewport_state viewports[NVC0_MAX_VIEWPORTS];
    unsigned viewports_dirty;
    struct pipe_clip_state clip;
+   struct nvc0_window_rect_stateobj window_rect;
 
    unsigned sample_mask;
    unsigned min_samples;
@@ -333,6 +335,7 @@ void nve4_set_tex_handles(struct nvc0_context *);
 void nvc0_validate_surfaces(struct nvc0_context *);
 void nve4_set_surface_info(struct nouveau_pushbuf *, struct pipe_image_view *,
                            struct nvc0_context *);
+void nvc0_mark_image_range_valid(const struct pipe_image_view *);
 void nvc0_update_tic(struct nvc0_context *, struct nv50_tic_entry *,
                      struct nv04_resource *);
 

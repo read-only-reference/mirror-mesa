@@ -295,7 +295,7 @@ gen7_emit_texture_surface_state(struct brw_context *brw,
    if (mt->halign == 8)
       surf[0] |= GEN7_SURFACE_HALIGN_8;
 
-   if (_mesa_is_array_texture(target) || target == GL_TEXTURE_CUBE_MAP)
+   if (mt->target != GL_TEXTURE_3D)
       surf[0] |= GEN7_SURFACE_IS_ARRAY;
 
    if (mt->array_layout == ALL_SLICES_AT_EACH_LOD)
@@ -365,6 +365,13 @@ gen7_update_texture_surface(struct gl_context *ctx,
    } else {
       struct intel_texture_object *intel_obj = intel_texture_object(obj);
       struct intel_mipmap_tree *mt = intel_obj->mt;
+
+      if (plane > 0) {
+         if (mt->plane[plane - 1] == NULL)
+            return;
+         mt = mt->plane[plane - 1];
+      }
+
       struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
       /* If this is a view with restricted NumLayers, then our effective depth
        * is not just the miptree depth.
@@ -383,8 +390,9 @@ gen7_update_texture_surface(struct gl_context *ctx,
       const unsigned swizzle = (unlikely(alpha_depth) ? SWIZZLE_XYZW :
                                 brw_get_texture_swizzle(&brw->ctx, obj));
 
-      unsigned format = translate_tex_format(
-         brw, intel_obj->_Format, sampler->sRGBDecode);
+      mesa_format mesa_fmt = plane == 0 ? intel_obj->_Format : mt->format;
+      unsigned format = translate_tex_format(brw, mesa_fmt,
+                                             sampler->sRGBDecode);
 
       if (for_gather && format == BRW_SURFACEFORMAT_R32G32_FLOAT)
          format = BRW_SURFACEFORMAT_R32G32_FLOAT_LD;

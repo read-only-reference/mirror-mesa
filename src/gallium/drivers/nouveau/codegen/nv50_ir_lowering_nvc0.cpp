@@ -172,19 +172,33 @@ NVC0LegalizePostRA::addTexUse(std::list<TexUse> &uses,
                               Instruction *usei, const Instruction *texi)
 {
    bool add = true;
-   for (std::list<TexUse>::iterator it = uses.begin();
-        it != uses.end();) {
-      if (insnDominatedBy(usei, it->insn)) {
-         add = false;
-         break;
-      }
-      if (insnDominatedBy(it->insn, usei))
-         it = uses.erase(it);
-      else
+   bool dominated = insnDominatedBy(usei, texi);
+   // Uses before the tex have to all be included. Just because an earlier
+   // instruction dominates another instruction doesn't mean that there's no
+   // way to get from the tex to the later instruction. For example you could
+   // have nested loops, with the tex in the inner loop, and uses before it in
+   // both loops - even though the outer loop's instruction would dominate the
+   // inner's, we still want a texbar before the inner loop's instruction.
+   //
+   // However we can still use the eliding logic between uses dominated by the
+   // tex instruction, as that is unambiguously correct.
+   if (dominated) {
+      for (std::list<TexUse>::iterator it = uses.begin(); it != uses.end();) {
+         if (it->after) {
+            if (insnDominatedBy(usei, it->insn)) {
+               add = false;
+               break;
+            }
+            if (insnDominatedBy(it->insn, usei)) {
+               it = uses.erase(it);
+               continue;
+            }
+         }
          ++it;
+      }
    }
    if (add)
-      uses.push_back(TexUse(usei, texi));
+      uses.push_back(TexUse(usei, texi, dominated));
 }
 
 // While it might be tempting to use the an algorithm that just looks at tex
@@ -227,18 +241,20 @@ NVC0LegalizePostRA::findFirstUsesBB(
          continue;
 
       for (int d = 0; insn->defExists(d); ++d) {
+         const Value *def = insn->def(d).rep();
          if (insn->def(d).getFile() != FILE_GPR ||
-             insn->def(d).rep()->reg.data.id < minGPR ||
-             insn->def(d).rep()->reg.data.id > maxGPR)
+             def->reg.data.id + def->reg.size / 4 - 1 < minGPR ||
+             def->reg.data.id > maxGPR)
             continue;
          addTexUse(uses, insn, texi);
          return;
       }
 
       for (int s = 0; insn->srcExists(s); ++s) {
+         const Value *src = insn->src(s).rep();
          if (insn->src(s).getFile() != FILE_GPR ||
-             insn->src(s).rep()->reg.data.id < minGPR ||
-             insn->src(s).rep()->reg.data.id > maxGPR)
+             src->reg.data.id + src->reg.size / 4 - 1 < minGPR ||
+             src->reg.data.id > maxGPR)
             continue;
          addTexUse(uses, insn, texi);
          return;
@@ -2181,7 +2197,15 @@ NVC0LoweringPass::handleLDST(Instruction *i)
          int8_t fileIndex = i->getSrc(0)->reg.fileIndex - 1;
          Value *ind = i->getIndirect(0, 1);
 
-         // TODO: clamp the offset to the maximum number of const buf.
+         if (ind) {
+            // Clamp the UBO index when an indirect access is used to avoid
+            // loading information from the wrong place in the driver cb.
+            ind = bld.mkOp2v(OP_MIN, TYPE_U32, ind,
+                             bld.mkOp2v(OP_ADD, TYPE_U32, bld.getSSA(),
+                                        ind, bld.loadImm(NULL, fileIndex)),
+                             bld.loadImm(NULL, 12));
+         }
+
          if (i->src(0).isIndirect(1)) {
             Value *offset = bld.loadImm(NULL, i->getSrc(0)->reg.data.offset + typeSizeof(i->sType));
             Value *ptr = loadUboInfo64(ind, fileIndex * 16);

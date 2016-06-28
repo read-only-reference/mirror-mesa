@@ -22,6 +22,7 @@
  */
 
 #include "si_pipe.h"
+#include "sid.h"
 #include "util/u_format.h"
 #include "util/u_surface.h"
 
@@ -321,6 +322,13 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 
 	if (rtex->dcc_offset && need_dcc_decompress) {
 		custom_blend = sctx->custom_blend_dcc_decompress;
+
+		/* disable levels without DCC */
+		for (int i = first_level; i <= last_level; i++) {
+			if (!rtex->dcc_offset ||
+			    !rtex->surface.level[i].dcc_enabled)
+				level_mask &= ~(1 << i);
+		}
 	} else if (rtex->fmask.size) {
 		custom_blend = sctx->custom_blend_decompress;
 	} else {
@@ -415,7 +423,7 @@ si_decompress_image_color_textures(struct si_context *sctx,
 static void si_check_render_feedback_textures(struct si_context *sctx,
                                               struct si_textures_info *textures)
 {
-	uint32_t mask = textures->views.desc.enabled_mask;
+	uint32_t mask = textures->views.enabled_mask;
 
 	while (mask) {
 		const struct pipe_sampler_view *view;
@@ -458,7 +466,7 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 static void si_check_render_feedback_images(struct si_context *sctx,
                                             struct si_images_info *images)
 {
-	uint32_t mask = images->desc.enabled_mask;
+	uint32_t mask = images->enabled_mask;
 
 	while (mask) {
 		const struct pipe_image_view *view;
@@ -841,7 +849,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	util_blitter_blit_generic(sctx->blitter, dst_view, &dstbox,
 				  src_view, src_box, src_width0, src_height0,
 				  PIPE_MASK_RGBAZS, PIPE_TEX_FILTER_NEAREST, NULL,
-				  FALSE);
+				  false);
 	si_blitter_end(ctx);
 
 	pipe_surface_reference(&dst_view, NULL);
@@ -852,11 +860,22 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 				     const struct pipe_blit_info *info)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
+	struct r600_texture *src = (struct r600_texture*)info->src.resource;
 	struct r600_texture *dst = (struct r600_texture*)info->dst.resource;
 	unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
 	unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
-	enum pipe_format format = info->dst.format;
+	enum pipe_format format = info->src.format;
 	unsigned sample_mask = ~0;
+	struct pipe_resource *tmp, templ;
+	struct pipe_blit_info blit;
+
+	/* Check basic requirements for hw resolve. */
+	if (!(info->src.resource->nr_samples > 1 &&
+	      info->dst.resource->nr_samples <= 1 &&
+	      !util_format_is_pure_integer(format) &&
+	      !util_format_is_depth_or_stencil(format) &&
+	      util_max_layer(info->src.resource, 0) == 0))
+		return false;
 
 	/* Hardware MSAA resolve doesn't work if SPI format = NORM16_ABGR and
 	 * the format is R16G16. Use R16A16, which does work.
@@ -866,16 +885,12 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	if (format == PIPE_FORMAT_R16G16_SNORM)
 		format = PIPE_FORMAT_R16A16_SNORM;
 
-	if (info->src.resource->nr_samples > 1 &&
-	    info->dst.resource->nr_samples <= 1 &&
-	    util_max_layer(info->src.resource, 0) == 0 &&
-	    util_max_layer(info->dst.resource, info->dst.level) == 0 &&
-	    util_is_format_compatible(util_format_description(info->src.format),
-				      util_format_description(info->dst.format)) &&
-	    !util_format_is_pure_integer(format) &&
-	    !util_format_is_depth_or_stencil(format) &&
+	/* Check the remaining requirements for hw resolve. */
+	if (util_max_layer(info->dst.resource, info->dst.level) == 0 &&
 	    !info->scissor_enable &&
 	    (info->mask & PIPE_MASK_RGBA) == PIPE_MASK_RGBA &&
+	    util_is_format_compatible(util_format_description(info->src.format),
+				      util_format_description(info->dst.format)) &&
 	    dst_width == info->src.resource->width0 &&
 	    dst_height == info->src.resource->height0 &&
 	    info->dst.box.x == 0 &&
@@ -889,9 +904,30 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	    info->src.box.height == dst_height &&
 	    info->src.box.depth == 1 &&
 	    dst->surface.level[info->dst.level].mode >= RADEON_SURF_MODE_1D &&
-	    !(dst->surface.flags & RADEON_SURF_SCANOUT) &&
-	    (!dst->cmask.size || !dst->dirty_level_mask) && /* dst cannot be fast-cleared */
-	    !dst->dcc_offset) {
+	    (!dst->cmask.size || !dst->dirty_level_mask)) { /* dst cannot be fast-cleared */
+		/* Check the last constraint. */
+		if (src->surface.micro_tile_mode != dst->surface.micro_tile_mode) {
+			/* The next fast clear will switch to this mode to
+			 * get direct hw resolve next time if the mode is
+			 * different now.
+			 */
+			src->last_msaa_resolve_target_micro_mode =
+				dst->surface.micro_tile_mode;
+			goto resolve_to_temp;
+		}
+
+		/* Resolving into a surface with DCC is unsupported. Since
+		 * it's being overwritten anyway, clear it to uncompressed.
+		 * This is still the fastest codepath even with this clear.
+		 */
+		if (dst->dcc_offset &&
+		    dst->surface.level[info->dst.level].dcc_enabled) {
+			vi_dcc_clear_level(&sctx->b, dst, info->dst.level,
+					   0xFFFFFFFF);
+			dst->dirty_level_mask &= ~(1 << info->dst.level);
+		}
+
+		/* Resolve directly from src to dst. */
 		si_blitter_begin(ctx, SI_COLOR_RESOLVE |
 				 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
 		util_blitter_custom_resolve_color(sctx->blitter,
@@ -903,7 +939,56 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 		si_blitter_end(ctx);
 		return true;
 	}
-	return false;
+
+resolve_to_temp:
+	/* Shader-based resolve is VERY SLOW. Instead, resolve into
+	 * a temporary texture and blit.
+	 */
+	memset(&templ, 0, sizeof(templ));
+	templ.target = PIPE_TEXTURE_2D;
+	templ.format = info->src.resource->format;
+	templ.width0 = info->src.resource->width0;
+	templ.height0 = info->src.resource->height0;
+	templ.depth0 = 1;
+	templ.array_size = 1;
+	templ.usage = PIPE_USAGE_DEFAULT;
+	templ.flags = R600_RESOURCE_FLAG_FORCE_TILING |
+		      R600_RESOURCE_FLAG_DISABLE_DCC;
+
+	/* The src and dst microtile modes must be the same. */
+	if (src->surface.micro_tile_mode == V_009910_ADDR_SURF_DISPLAY_MICRO_TILING)
+		templ.bind = PIPE_BIND_SCANOUT;
+	else
+		templ.bind = 0;
+
+	tmp = ctx->screen->resource_create(ctx->screen, &templ);
+	if (!tmp)
+		return false;
+
+	assert(src->surface.micro_tile_mode ==
+	       ((struct r600_texture*)tmp)->surface.micro_tile_mode);
+
+	/* resolve */
+	si_blitter_begin(ctx, SI_COLOR_RESOLVE |
+			 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
+	util_blitter_custom_resolve_color(sctx->blitter, tmp, 0, 0,
+					  info->src.resource, info->src.box.z,
+					  sample_mask, sctx->custom_blend_resolve,
+					  format);
+	si_blitter_end(ctx);
+
+	/* blit */
+	blit = *info;
+	blit.src.resource = tmp;
+	blit.src.box.z = 0;
+
+	si_blitter_begin(ctx, SI_BLIT |
+			 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
+	util_blitter_blit(sctx->blitter, &blit);
+	si_blitter_end(ctx);
+
+	pipe_resource_reference(&tmp, NULL);
+	return true;
 }
 
 static void si_blit(struct pipe_context *ctx,
@@ -934,16 +1019,59 @@ static void si_blit(struct pipe_context *ctx,
 	si_blitter_end(ctx);
 }
 
+static boolean si_generate_mipmap(struct pipe_context *ctx,
+				  struct pipe_resource *tex,
+				  enum pipe_format format,
+				  unsigned base_level, unsigned last_level,
+				  unsigned first_layer, unsigned last_layer)
+{
+	struct si_context *sctx = (struct si_context*)ctx;
+	struct r600_texture *rtex = (struct r600_texture *)tex;
+
+	if (!util_blitter_is_copy_supported(sctx->blitter, tex, tex))
+		return false;
+
+	/* The driver doesn't decompress resources automatically while
+	 * u_blitter is rendering. */
+	si_decompress_subresource(ctx, tex, PIPE_MASK_RGBAZS,
+				  base_level, first_layer, last_layer);
+
+	/* Clear dirty_level_mask for the levels that will be overwritten. */
+	assert(base_level < last_level);
+	rtex->dirty_level_mask &= ~u_bit_consecutive(base_level + 1,
+						     last_level - base_level);
+
+	si_blitter_begin(ctx, SI_BLIT | SI_DISABLE_RENDER_COND);
+	util_blitter_generate_mipmap(sctx->blitter, tex, format,
+				     base_level, last_level,
+				     first_layer, last_layer);
+	si_blitter_end(ctx);
+	return true;
+}
+
 static void si_flush_resource(struct pipe_context *ctx,
 			      struct pipe_resource *res)
 {
 	struct r600_texture *rtex = (struct r600_texture*)res;
 
 	assert(res->target != PIPE_BUFFER);
+	assert(!rtex->dcc_separate_buffer || rtex->dcc_gather_statistics);
+
+	/* st/dri calls flush twice per frame (not a bug), this prevents double
+	 * decompression. */
+	if (rtex->dcc_separate_buffer && !rtex->separate_dcc_dirty)
+		return;
 
 	if (!rtex->is_depth && (rtex->cmask.size || rtex->dcc_offset)) {
 		si_blit_decompress_color(ctx, rtex, 0, res->last_level,
-					 0, util_max_layer(res, 0), false);
+					 0, util_max_layer(res, 0),
+					 rtex->dcc_separate_buffer != NULL);
+	}
+
+	/* Always do the analysis even if DCC is disabled at the moment. */
+	if (rtex->dcc_gather_statistics && rtex->separate_dcc_dirty) {
+		rtex->separate_dcc_dirty = false;
+		vi_separate_dcc_process_and_reset_stats(ctx, rtex);
 	}
 }
 
@@ -1027,6 +1155,7 @@ void si_init_blit_functions(struct si_context *sctx)
 	sctx->b.b.resource_copy_region = si_resource_copy_region;
 	sctx->b.b.blit = si_blit;
 	sctx->b.b.flush_resource = si_flush_resource;
+	sctx->b.b.generate_mipmap = si_generate_mipmap;
 	sctx->b.blit_decompress_depth = si_blit_decompress_depth;
 	sctx->b.decompress_dcc = si_decompress_dcc;
 }

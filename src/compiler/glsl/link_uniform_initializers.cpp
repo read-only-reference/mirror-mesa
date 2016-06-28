@@ -131,7 +131,7 @@ set_opaque_binding(void *mem_ctx, gl_shader_program *prog,
       }
 
       for (int sh = 0; sh < MESA_SHADER_STAGES; sh++) {
-        gl_shader *shader = prog->_LinkedShaders[sh];
+        gl_linked_shader *shader = prog->_LinkedShaders[sh];
 
          if (shader) {
             if (storage->type->base_type == GLSL_TYPE_SAMPLER &&
@@ -222,7 +222,7 @@ set_uniform_initializer(void *mem_ctx, gl_shader_program *prog,
 	 val->array_elements[0]->type->base_type;
       const unsigned int elements = val->array_elements[0]->type->components();
       unsigned int idx = 0;
-      unsigned dmul = (base_type == GLSL_TYPE_DOUBLE) ? 2 : 1;
+      unsigned dmul = glsl_base_type_is_64bit(base_type) ? 2 : 1;
 
       assert(val->type->length >= storage->array_elements);
       for (unsigned int i = 0; i < storage->array_elements; i++) {
@@ -243,7 +243,7 @@ set_uniform_initializer(void *mem_ctx, gl_shader_program *prog,
 
       if (storage->type->is_sampler()) {
          for (int sh = 0; sh < MESA_SHADER_STAGES; sh++) {
-            gl_shader *shader = prog->_LinkedShaders[sh];
+            gl_linked_shader *shader = prog->_LinkedShaders[sh];
 
             if (shader && storage->opaque[sh].active) {
                unsigned index = storage->opaque[sh].index;
@@ -263,7 +263,7 @@ link_set_uniform_initializers(struct gl_shader_program *prog,
    void *mem_ctx = NULL;
 
    for (unsigned int i = 0; i < MESA_SHADER_STAGES; i++) {
-      struct gl_shader *shader = prog->_LinkedShaders[i];
+      struct gl_linked_shader *shader = prog->_LinkedShaders[i];
 
       if (shader == NULL)
 	 continue;

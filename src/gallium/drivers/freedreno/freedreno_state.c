@@ -89,10 +89,12 @@ fd_set_sample_mask(struct pipe_context *pctx, unsigned sample_mask)
  */
 static void
 fd_set_constant_buffer(struct pipe_context *pctx, uint shader, uint index,
-		struct pipe_constant_buffer *cb)
+		const struct pipe_constant_buffer *cb)
 {
 	struct fd_context *ctx = fd_context(pctx);
 	struct fd_constbuf_stateobj *so = &ctx->constbuf[shader];
+
+	util_copy_constant_buffer(&so->cb[index], cb);
 
 	/* Note that the state tracker can unbind constant buffers by
 	 * passing NULL here.
@@ -100,14 +102,8 @@ fd_set_constant_buffer(struct pipe_context *pctx, uint shader, uint index,
 	if (unlikely(!cb)) {
 		so->enabled_mask &= ~(1 << index);
 		so->dirty_mask &= ~(1 << index);
-		pipe_resource_reference(&so->cb[index].buffer, NULL);
 		return;
 	}
-
-	pipe_resource_reference(&so->cb[index].buffer, cb->buffer);
-	so->cb[index].buffer_offset = cb->buffer_offset;
-	so->cb[index].buffer_size   = cb->buffer_size;
-	so->cb[index].user_buffer   = cb->user_buffer;
 
 	so->enabled_mask |= 1 << index;
 	so->dirty_mask |= 1 << index;
@@ -187,14 +183,16 @@ fd_set_vertex_buffers(struct pipe_context *pctx,
 	 * we need to mark VTXSTATE as dirty as well to trigger patching
 	 * and re-emitting the vtx shader:
 	 */
-	for (i = 0; i < count; i++) {
-		bool new_enabled = vb && (vb[i].buffer || vb[i].user_buffer);
-		bool old_enabled = so->vb[i].buffer || so->vb[i].user_buffer;
-		uint32_t new_stride = vb ? vb[i].stride : 0;
-		uint32_t old_stride = so->vb[i].stride;
-		if ((new_enabled != old_enabled) || (new_stride != old_stride)) {
-			ctx->dirty |= FD_DIRTY_VTXSTATE;
-			break;
+	if (ctx->screen->gpu_id < 300) {
+		for (i = 0; i < count; i++) {
+			bool new_enabled = vb && (vb[i].buffer || vb[i].user_buffer);
+			bool old_enabled = so->vb[i].buffer || so->vb[i].user_buffer;
+			uint32_t new_stride = vb ? vb[i].stride : 0;
+			uint32_t old_stride = so->vb[i].stride;
+			if ((new_enabled != old_enabled) || (new_stride != old_stride)) {
+				ctx->dirty |= FD_DIRTY_VTXSTATE;
+				break;
+			}
 		}
 	}
 

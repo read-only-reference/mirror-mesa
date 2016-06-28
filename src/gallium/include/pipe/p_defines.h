@@ -392,6 +392,7 @@ enum pipe_flush_flags
 #define PIPE_BARRIER_FRAMEBUFFER       (1 << 9)
 #define PIPE_BARRIER_STREAMOUT_BUFFER  (1 << 10)
 #define PIPE_BARRIER_GLOBAL_BUFFER     (1 << 11)
+#define PIPE_BARRIER_ALL               ((1 << 12) - 1)
 
 /**
  * Resource binding flags -- state tracker must specify in advance all
@@ -728,6 +729,9 @@ enum pipe_cap
    PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR,
    PIPE_CAP_CULL_DISTANCE,
    PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES,
+   PIPE_CAP_TGSI_VOTE,
+   PIPE_CAP_MAX_WINDOW_RECTANGLES,
+   PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)

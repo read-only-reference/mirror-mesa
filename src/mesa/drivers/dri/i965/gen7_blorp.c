@@ -67,8 +67,9 @@ gen7_blorp_emit_urb_config(struct brw_context *brw)
       push_constant_bytes / chunk_size_bytes;
    const unsigned vs_size = 1;
    const unsigned vs_start = push_constant_chunks;
+   const unsigned min_vs_entries = ALIGN(brw->urb.min_vs_entries, 8);
    const unsigned vs_chunks =
-      DIV_ROUND_UP(brw->urb.min_vs_entries * vs_size * 64, chunk_size_bytes);
+      DIV_ROUND_UP(min_vs_entries * vs_size * 64, chunk_size_bytes);
 
    if (gen7_blorp_skip_urb_config(brw))
       return;
@@ -83,7 +84,7 @@ gen7_blorp_emit_urb_config(struct brw_context *brw)
                                  urb_size / 2 /* fs_size */);
 
    gen7_emit_urb_state(brw,
-                       brw->urb.min_vs_entries /* num_vs_entries */,
+                       min_vs_entries /* num_vs_entries */,
                        vs_size,
                        vs_start,
                        0 /* num_hs_entries */,
@@ -442,15 +443,28 @@ gen7_blorp_emit_sf_config(struct brw_context *brw,
 
    /* 3DSTATE_SBE */
    {
+      const unsigned num_varyings =
+         params->wm_prog_data ? params->wm_prog_data->num_varying_inputs : 0;
+
       BEGIN_BATCH(14);
       OUT_BATCH(_3DSTATE_SBE << 16 | (14 - 2));
-      OUT_BATCH(GEN7_SBE_SWIZZLE_ENABLE |
-                params->num_varyings << GEN7_SBE_NUM_OUTPUTS_SHIFT |
+
+      /* There is no need for swizzling (GEN7_SBE_SWIZZLE_ENABLE). All the
+       * vertex data coming from vertex fetcher is taken as unmodified
+       * (i.e., passed through). Vertex shader state is disabled and vertex
+       * fetcher builds complete vertex entries including VUE header.
+       * This is for unknown reason really needed to be disabled when more
+       * than one vec4 worth of vertex attributes are needed.
+       */
+      OUT_BATCH(num_varyings << GEN7_SBE_NUM_OUTPUTS_SHIFT |
                 1 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
                 BRW_SF_URB_ENTRY_READ_OFFSET <<
                    GEN7_SBE_URB_ENTRY_READ_OFFSET_SHIFT);
-      for (int i = 0; i < 12; ++i)
+      for (int i = 0; i < 9; ++i)
          OUT_BATCH(0);
+      OUT_BATCH(params->wm_prog_data ? params->wm_prog_data->flat_inputs : 0);
+      OUT_BATCH(0);
+      OUT_BATCH(0);
       ADVANCE_BATCH();
    }
 }
@@ -536,7 +550,8 @@ gen7_blorp_emit_ps_config(struct brw_context *brw,
    if (brw->is_haswell)
       dw4 |= SET_FIELD(1, HSW_PS_SAMPLE_MASK); /* 1 sample for now */
    if (params->wm_prog_data) {
-      dw4 |= GEN7_PS_PUSH_CONSTANT_ENABLE;
+      if (params->wm_prog_data->nr_params)
+         dw4 |= GEN7_PS_PUSH_CONSTANT_ENABLE;
 
       dw5 |= prog_data->first_curbe_grf_0 << GEN7_PS_DISPATCH_START_GRF_SHIFT_0;
       dw5 |= prog_data->first_curbe_grf_2 << GEN7_PS_DISPATCH_START_GRF_SHIFT_2;
@@ -548,6 +563,8 @@ gen7_blorp_emit_ps_config(struct brw_context *brw,
          dw4 |= GEN7_PS_8_DISPATCH_ENABLE;
       if (params->wm_prog_data->dispatch_16)
          dw4 |= GEN7_PS_16_DISPATCH_ENABLE;
+      if (params->wm_prog_data->num_varying_inputs)
+         dw4 |= GEN7_PS_ATTRIBUTE_ENABLE;
    } else {
       /* The hardware gets angry if we don't enable at least one dispatch
        * mode, so just enable 16-pixel dispatch if we don't have a program.
@@ -838,7 +855,11 @@ gen7_blorp_exec(struct brw_context *brw,
    if (params->wm_prog_data) {
       uint32_t wm_surf_offset_renderbuffer;
       uint32_t wm_surf_offset_texture = 0;
-      wm_push_const_offset = gen6_blorp_emit_wm_constants(brw, params);
+
+      if (params->wm_prog_data->nr_params) {
+          wm_push_const_offset = gen6_blorp_emit_wm_constants(brw, params);
+      }
+
       intel_miptree_used_for_rendering(params->dst.mt);
       wm_surf_offset_renderbuffer =
          gen7_blorp_emit_surface_state(brw, &params->dst,
@@ -865,12 +886,13 @@ gen7_blorp_exec(struct brw_context *brw,
    gen6_blorp_emit_clip_disable(brw);
    gen7_blorp_emit_sf_config(brw, params);
    gen7_blorp_emit_wm_config(brw, params);
-   if (params->wm_prog_data) {
+   if (params->wm_prog_data)
       gen7_blorp_emit_binding_table_pointers_ps(brw, wm_bind_bo_offset);
+
+   if (params->wm_prog_data && params->wm_prog_data->nr_params)
       gen7_blorp_emit_constant_ps(brw, wm_push_const_offset);
-   } else {
+   else
       gen7_blorp_emit_constant_ps_disable(brw);
-   }
 
    if (params->src.mt) {
       const uint32_t sampler_offset =

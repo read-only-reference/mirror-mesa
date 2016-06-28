@@ -294,6 +294,7 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    uint64_t va = 0;
    struct amdgpu_winsys_bo *bo;
    amdgpu_va_handle va_handle;
+   unsigned va_gap_size;
    int r;
 
    assert(initial_domain & RADEON_DOMAIN_VRAM_GTT);
@@ -327,8 +328,9 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
       goto error_bo_alloc;
    }
 
+   va_gap_size = ws->check_vm ? MAX2(4 * alignment, 64 * 1024) : 0;
    r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-                             size, alignment, 0, &va, &va_handle, 0);
+                             size + va_gap_size, alignment, 0, &va, &va_handle, 0);
    if (r)
       goto error_va_alloc;
 
@@ -617,10 +619,10 @@ error:
    return NULL;
 }
 
-static boolean amdgpu_bo_get_handle(struct pb_buffer *buffer,
-                                    unsigned stride, unsigned offset,
-                                    unsigned slice_size,
-                                    struct winsys_handle *whandle)
+static bool amdgpu_bo_get_handle(struct pb_buffer *buffer,
+                                 unsigned stride, unsigned offset,
+                                 unsigned slice_size,
+                                 struct winsys_handle *whandle)
 {
    struct amdgpu_winsys_bo *bo = amdgpu_winsys_bo(buffer);
    enum amdgpu_bo_handle_type type;
@@ -639,18 +641,18 @@ static boolean amdgpu_bo_get_handle(struct pb_buffer *buffer,
       type = amdgpu_bo_handle_type_kms;
       break;
    default:
-      return FALSE;
+      return false;
    }
 
    r = amdgpu_bo_export(bo->bo, type, &whandle->handle);
    if (r)
-      return FALSE;
+      return false;
 
    whandle->stride = stride;
    whandle->offset = offset;
    whandle->offset += slice_size * whandle->layer;
    bo->is_shared = true;
-   return TRUE;
+   return true;
 }
 
 static struct pb_buffer *amdgpu_bo_from_ptr(struct radeon_winsys *rws,

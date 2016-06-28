@@ -69,6 +69,7 @@ extern "C" {
 #define PIPE_MAX_VIEWPORTS        16
 #define PIPE_MAX_CLIP_OR_CULL_DISTANCE_COUNT 8
 #define PIPE_MAX_CLIP_OR_CULL_DISTANCE_ELEMENT_COUNT 2
+#define PIPE_MAX_WINDOW_RECTANGLES 8
 
 
 struct pipe_reference
@@ -137,6 +138,13 @@ struct pipe_rasterizer_state
     * NOTE: D3D will always use depth clamping.
     */
    unsigned clip_halfz:1;
+
+   /**
+    * When true do not scale offset_units and use same rules for unorm and
+    * float depth buffers (D3D9). When false use GL/D3D1X behaviour.
+    * This depends on PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED.
+    */
+   unsigned offset_units_unscaled:1;
 
    /**
     * Enable bits for clipping half-spaces.
@@ -318,7 +326,17 @@ struct pipe_blend_state
 
 struct pipe_blend_color
 {
-   float color[4];
+   /**
+    * Making the color array explicitly 16-byte aligned provides a hint to
+    * compilers to make more efficient auto-vectorization optimizations.
+    * The actual performance gains from vectorizing the blend color array are
+    * fairly minimal, if any, but the alignment is necessary to work around
+    * buggy vectorization in some compilers which fail to generate the correct
+    * unaligned accessors resulting in a segfault.  Specifically several
+    * versions of the Intel compiler are known to be affected but it's likely
+    * others are as well.
+    */
+   PIPE_ALIGN_VAR(16) float color[4];
 };
 
 
@@ -709,6 +727,11 @@ struct pipe_blit_info
 
    boolean scissor_enable;
    struct pipe_scissor_state scissor;
+
+   /* Window rectangles can either be inclusive or exclusive. */
+   boolean window_rectangle_include;
+   unsigned num_window_rectangles;
+   struct pipe_scissor_state window_rectangles[PIPE_MAX_WINDOW_RECTANGLES];
 
    boolean render_condition_enable; /**< whether the blit should honor the
                                     current render condition */

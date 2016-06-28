@@ -288,7 +288,7 @@ error:
 
 void r600_pipe_shader_destroy(struct pipe_context *ctx, struct r600_pipe_shader *shader)
 {
-	pipe_resource_reference((struct pipe_resource**)&shader->bo, NULL);
+	r600_resource_reference(&shader->bo, NULL);
 	r600_bytecode_clear(&shader->shader.bc);
 	r600_release_command_buffer(&shader->command_buffer);
 }
@@ -9116,7 +9116,7 @@ static const struct r600_shader_tgsi_instruction eg_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_MAD]	= { ALU_OP3_MULADD, tgsi_op3},
 	[TGSI_OPCODE_SUB]	= { ALU_OP2_ADD, tgsi_op2},
 	[TGSI_OPCODE_LRP]	= { ALU_OP0_NOP, tgsi_lrp},
-	[TGSI_OPCODE_FMA]	= { ALU_OP0_NOP, tgsi_unsupported},
+	[TGSI_OPCODE_FMA]	= { ALU_OP3_FMA, tgsi_op3},
 	[TGSI_OPCODE_SQRT]	= { ALU_OP1_SQRT_IEEE, tgsi_trans_srcx_replicate},
 	[TGSI_OPCODE_DP2A]	= { ALU_OP0_NOP, tgsi_unsupported},
 	[22]			= { ALU_OP0_NOP, tgsi_unsupported},
@@ -9338,7 +9338,7 @@ static const struct r600_shader_tgsi_instruction cm_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_MAD]	= { ALU_OP3_MULADD, tgsi_op3},
 	[TGSI_OPCODE_SUB]	= { ALU_OP2_ADD, tgsi_op2},
 	[TGSI_OPCODE_LRP]	= { ALU_OP0_NOP, tgsi_lrp},
-	[TGSI_OPCODE_FMA]	= { ALU_OP0_NOP, tgsi_unsupported},
+	[TGSI_OPCODE_FMA]	= { ALU_OP3_FMA, tgsi_op3},
 	[TGSI_OPCODE_SQRT]	= { ALU_OP1_SQRT_IEEE, cayman_emit_float_instr},
 	[TGSI_OPCODE_DP2A]	= { ALU_OP0_NOP, tgsi_unsupported},
 	[22]			= { ALU_OP0_NOP, tgsi_unsupported},

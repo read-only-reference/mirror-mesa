@@ -347,7 +347,7 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog, nir_shader *nir)
 struct gl_program *
 st_nir_get_mesa_program(struct gl_context *ctx,
                         struct gl_shader_program *shader_program,
-                        struct gl_shader *shader)
+                        struct gl_linked_shader *shader)
 {
    struct gl_program *prog;
    GLenum target = _mesa_shader_stage_to_program(shader->Stage);
@@ -422,12 +422,12 @@ st_nir_get_mesa_program(struct gl_context *ctx,
    struct st_vertex_program *stvp;
    struct st_fragment_program *stfp;
 
-   switch (shader->Type) {
-   case GL_VERTEX_SHADER:
+   switch (shader->Stage) {
+   case MESA_SHADER_VERTEX:
       stvp = (struct st_vertex_program *)prog;
       stvp->shader_program = shader_program;
       break;
-   case GL_FRAGMENT_SHADER:
+   case MESA_SHADER_FRAGMENT:
       stfp = (struct st_fragment_program *)prog;
       stfp->shader_program = shader_program;
       break;

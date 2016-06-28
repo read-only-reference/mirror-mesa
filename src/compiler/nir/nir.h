@@ -804,7 +804,7 @@ typedef struct {
 } nir_deref_var;
 
 /* This enum describes how the array is referenced.  If the deref is
- * direct then the base_offset is used.  If the deref is indirect then then
+ * direct then the base_offset is used.  If the deref is indirect then
  * offset is given by base_offset + indirect.  If the deref is a wildcard
  * then the deref refers to all of the elements of the array at the same
  * time.  Wildcard dereferences are only ever allowed in copy_var
@@ -1651,6 +1651,9 @@ typedef struct nir_shader_compiler_options {
    /* lower {slt,sge,seq,sne} to {flt,fge,feq,fne} + b2f: */
    bool lower_scmp;
 
+   /** enables rules to lower idiv by power-of-two: */
+   bool lower_idiv;
+
    /* Does the native fdot instruction replicate its result for four
     * components?  If so, then opt_algebraic_late will turn all fdotN
     * instructions into fdot_replicatedN instructions.
@@ -1682,6 +1685,8 @@ typedef struct nir_shader_compiler_options {
 
    /* Indicates that the driver only has zero-based vertex id */
    bool vertex_id_zero_based;
+
+   bool lower_cs_local_index_from_id;
 } nir_shader_compiler_options;
 
 typedef struct nir_shader_info {
@@ -1717,9 +1722,6 @@ typedef struct nir_shader_info {
 
    /* Whether or not this shader ever uses textureGather() */
    bool uses_texture_gather;
-
-   /** Whether or not this shader uses nir_intrinsic_interp_var_at_offset */
-   bool uses_interp_var_at_offset;
 
    /* Whether or not this shader uses the gl_ClipDistance output */
    bool uses_clip_distance_out;
@@ -2287,6 +2289,8 @@ bool nir_lower_returns_impl(nir_function_impl *impl);
 bool nir_lower_returns(nir_shader *shader);
 
 bool nir_inline_functions(nir_shader *shader);
+
+bool nir_propagate_invariant(nir_shader *shader);
 
 void nir_lower_var_copy_instr(nir_intrinsic_instr *copy, void *mem_ctx);
 void nir_lower_var_copies(nir_shader *shader);

@@ -168,6 +168,7 @@ lower_distance_visitor::visit(ir_variable *ir)
       *new_var = ir->clone(ralloc_parent(ir), NULL);
       (*new_var)->name = ralloc_strdup(*new_var, GLSL_CLIP_VAR_NAME);
       (*new_var)->data.max_array_access = new_size - 1;
+      (*new_var)->data.location = VARYING_SLOT_CLIP_DIST0;
 
       if (!ir->type->fields.array->is_array()) {
          /* gl_ClipDistance (used for vertex, tessellation evaluation and
@@ -653,7 +654,8 @@ lower_distance_visitor_counter::handle_rvalue(ir_rvalue **rv)
 }
 
 bool
-lower_clip_cull_distance(struct gl_shader_program *prog, gl_shader *shader)
+lower_clip_cull_distance(struct gl_shader_program *prog,
+                         struct gl_linked_shader *shader)
 {
    int clip_size, cull_size;
 

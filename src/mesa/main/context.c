@@ -120,7 +120,6 @@
 #include "shared.h"
 #include "shaderobj.h"
 #include "shaderimage.h"
-#include "util/simple_list.h"
 #include "util/strtod.h"
 #include "state.h"
 #include "stencil.h"
@@ -407,8 +406,6 @@ one_time_init( struct gl_context *ctx )
 
    /* per-API one-time init */
    if (!(api_init_mask & (1 << ctx->API))) {
-      _mesa_init_get_hash(ctx);
-
       _mesa_init_remap_table();
    }
 
@@ -1269,44 +1266,6 @@ fail:
 
 
 /**
- * Allocate and initialize a struct gl_context structure.
- * Note that the driver needs to pass in its dd_function_table here since
- * we need to at least call driverFunctions->NewTextureObject to initialize
- * the rendering context.
- *
- * \param api the GL API type to create the context for
- * \param visual a struct gl_config pointer (we copy the struct contents) or
- *               NULL to create a configless context
- * \param share_list another context to share display lists with or NULL
- * \param driverFunctions points to the dd_function_table into which the
- *        driver has plugged in all its special functions.
- * 
- * \return pointer to a new __struct gl_contextRec or NULL if error.
- */
-struct gl_context *
-_mesa_create_context(gl_api api,
-                     const struct gl_config *visual,
-                     struct gl_context *share_list,
-                     const struct dd_function_table *driverFunctions)
-{
-   struct gl_context *ctx;
-
-   ctx = calloc(1, sizeof(struct gl_context));
-   if (!ctx)
-      return NULL;
-
-   if (_mesa_initialize_context(ctx, api, visual, share_list,
-                                driverFunctions)) {
-      return ctx;
-   }
-   else {
-      free(ctx);
-      return NULL;
-   }
-}
-
-
-/**
  * Free the data associated with the given context.
  * 
  * But doesn't free the struct gl_context struct itself.
@@ -1453,16 +1412,8 @@ _mesa_copy_context( const struct gl_context *src, struct gl_context *dst,
       dst->Hint = src->Hint;
    }
    if (mask & GL_LIGHTING_BIT) {
-      GLuint i;
-      /* begin with memcpy */
+      /* OK to memcpy */
       dst->Light = src->Light;
-      /* fixup linked lists to prevent pointer insanity */
-      make_empty_list( &(dst->Light.EnabledList) );
-      for (i = 0; i < MAX_LIGHTS; i++) {
-         if (dst->Light.Light[i].Enabled) {
-            insert_at_tail(&(dst->Light.EnabledList), &(dst->Light.Light[i]));
-         }
-      }
    }
    if (mask & GL_LINE_BIT) {
       /* OK to memcpy */

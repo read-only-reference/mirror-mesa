@@ -261,7 +261,7 @@ struct pipe_context {
 
    void (*set_constant_buffer)( struct pipe_context *,
                                 uint shader, uint index,
-                                struct pipe_constant_buffer *buf );
+                                const struct pipe_constant_buffer *buf );
 
    void (*set_framebuffer_state)( struct pipe_context *,
                                   const struct pipe_framebuffer_state * );
@@ -273,6 +273,11 @@ struct pipe_context {
                                unsigned start_slot,
                                unsigned num_scissors,
                                const struct pipe_scissor_state * );
+
+   void (*set_window_rectangles)( struct pipe_context *,
+                                  boolean include,
+                                  unsigned num_rectangles,
+                                  const struct pipe_scissor_state * );
 
    void (*set_viewport_states)( struct pipe_context *,
                                 unsigned start_slot,
@@ -309,7 +314,7 @@ struct pipe_context {
     */
    void (*set_shader_buffers)(struct pipe_context *, unsigned shader,
                               unsigned start_slot, unsigned count,
-                              struct pipe_shader_buffer *buffers);
+                              const struct pipe_shader_buffer *buffers);
 
    /**
     * Bind an array of images that will be used by a shader.
@@ -326,7 +331,7 @@ struct pipe_context {
     */
    void (*set_shader_images)(struct pipe_context *, unsigned shader,
                              unsigned start_slot, unsigned count,
-                             struct pipe_image_view *images);
+                             const struct pipe_image_view *images);
 
    void (*set_vertex_buffers)( struct pipe_context *,
                                unsigned start_slot,

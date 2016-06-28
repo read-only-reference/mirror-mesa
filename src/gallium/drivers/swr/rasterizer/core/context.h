@@ -83,6 +83,8 @@ struct SWR_TRIANGLE_DESC
     float *pUserClipBuffer;
 
     uint64_t coverageMask[SWR_MAX_NUM_MULTISAMPLES];
+    uint64_t conservativeCoverageMask;
+    uint64_t innerConservativeCoverageMask;
     uint64_t anyCoveredSamples;
 
     TRI_FLAGS triFlags;
@@ -379,16 +381,16 @@ struct DRAW_STATE
 struct DRAW_CONTEXT
 {
     SWR_CONTEXT*    pContext;
-    uint64_t        drawId;
     union
     {
         MacroTileMgr*   pTileMgr;
         DispatchQueue*  pDispatch;      // Queue for thread groups. (isCompute)
     };
-    uint64_t        dependency;
     DRAW_STATE*     pState;
     CachingArena*   pArena;
 
+    uint32_t        drawId;
+    bool            dependent;
     bool            isCompute;      // Is this DC a compute context?
     bool            cleanupState;   // True if this is the last draw using an entry in the state ring.
     volatile bool   doneFE;         // Is FE work done for this draw?

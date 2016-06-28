@@ -555,8 +555,10 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
 
     if (rws->info.has_virtual_memory) {
         struct drm_radeon_gem_va va;
+        unsigned va_gap_size;
 
-        bo->va = radeon_bomgr_find_va(rws, size, alignment);
+        va_gap_size = rws->check_vm ? MAX2(4 * alignment, 64 * 1024) : 0;
+        bo->va = radeon_bomgr_find_va(rws, size + va_gap_size, alignment);
 
         va.handle = bo->handle;
         va.vm_id = 0;
@@ -996,10 +998,10 @@ fail:
     return NULL;
 }
 
-static boolean radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
-                                           unsigned stride, unsigned offset,
-                                           unsigned slice_size,
-                                           struct winsys_handle *whandle)
+static bool radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
+                                        unsigned stride, unsigned offset,
+                                        unsigned slice_size,
+                                        struct winsys_handle *whandle)
 {
     struct drm_gem_flink flink;
     struct radeon_bo *bo = radeon_bo(buffer);
@@ -1014,7 +1016,7 @@ static boolean radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
             flink.handle = bo->handle;
 
             if (ioctl(ws->fd, DRM_IOCTL_GEM_FLINK, &flink)) {
-                return FALSE;
+                return false;
             }
 
             bo->flink_name = flink.name;
@@ -1028,14 +1030,14 @@ static boolean radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
         whandle->handle = bo->handle;
     } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
         if (drmPrimeHandleToFD(ws->fd, bo->handle, DRM_CLOEXEC, (int*)&whandle->handle))
-            return FALSE;
+            return false;
     }
 
     whandle->stride = stride;
     whandle->offset = offset;
     whandle->offset += slice_size * whandle->layer;
 
-    return TRUE;
+    return true;
 }
 
 static bool radeon_winsys_bo_is_user_ptr(struct pb_buffer *buf)

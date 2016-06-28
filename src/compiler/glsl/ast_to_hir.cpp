@@ -1276,7 +1276,7 @@ void
 ast_expression::set_is_lhs(bool new_value)
 {
    /* is_lhs is tracked only to print "variable used uninitialized" warnings,
-    * if we lack a identifier we can just skip it.
+    * if we lack an identifier we can just skip it.
     */
    if (this->primary_expression.identifier == NULL)
       return;
@@ -2100,7 +2100,7 @@ ast_expression::has_sequence_subexpression() const
       return false;
 
    case ast_aggregate:
-      unreachable("ast_aggregate: Should never get here.");
+      return false;
 
    case ast_function_call:
       unreachable("should be handled by ast_function_expression::hir");
@@ -2278,10 +2278,10 @@ precision_qualifier_allowed(const glsl_type *type)
     * From this, we infer that GLSL 1.30 (and later) should allow precision
     * qualifiers on sampler types just like float and integer types.
     */
-   return (type->is_float()
-       || type->is_integer()
-       || type->contains_opaque())
-       && !type->without_array()->is_record();
+   const glsl_type *const t = type->without_array();
+
+   return (t->is_float() || t->is_integer() || t->contains_opaque()) &&
+          !t->is_record();
 }
 
 const glsl_type *
@@ -3393,7 +3393,7 @@ apply_layout_qualifier_to_variable(const struct ast_type_qualifier *qual,
                 (qual_component + components - 1) > 3) {
                _mesa_glsl_error(loc, state, "component overflow (%u > 3)",
                                 (qual_component + components - 1));
-            } else if (qual_component == 1 && type->is_double()) {
+            } else if (qual_component == 1 && type->is_64bit()) {
                /* We don't bother checking for 3 as it should be caught by the
                 * overflow check above.
                 */
@@ -3442,11 +3442,11 @@ apply_layout_qualifier_to_variable(const struct ast_type_qualifier *qual,
    if (qual->flags.q.explicit_xfb_offset) {
       unsigned qual_xfb_offset;
       unsigned component_size = var->type->contains_double() ? 8 : 4;
-      const glsl_type *t = get_varying_type(var, state->stage);
+
       if (process_qualifier_constant(state, loc, "xfb_offset",
                                      qual->offset, &qual_xfb_offset) &&
           validate_xfb_offset_qualifier(loc, state, (int) qual_xfb_offset,
-                                        t, component_size)) {
+                                        var->type, component_size)) {
          var->data.offset = qual_xfb_offset;
          var->data.explicit_xfb_offset = true;
       }
@@ -4994,13 +4994,8 @@ ast_declarator_list::hir(exec_list *instructions,
          state->check_precision_qualifiers_allowed(&loc);
       }
 
-
-      /* If a precision qualifier is allowed on a type, it is allowed on
-       * an array of that type.
-       */
-      if (!(this->type->qualifier.precision == ast_precision_none
-          || precision_qualifier_allowed(var->type->without_array()))) {
-
+      if (this->type->qualifier.precision != ast_precision_none &&
+          !precision_qualifier_allowed(var->type)) {
          _mesa_glsl_error(&loc, state,
                           "precision qualifiers apply only to floating point"
                           ", integer and opaque types");
@@ -6843,7 +6838,7 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
             }
          } else {
             if (layout && layout->flags.q.explicit_xfb_offset) {
-               unsigned align = field_type->is_double() ? 8 : 4;
+               unsigned align = field_type->is_64bit() ? 8 : 4;
                fields[i].offset = glsl_align(block_xfb_offset, align);
                block_xfb_offset +=
                   MAX2(xfb_stride, (int) (4 * field_type->component_slots()));
@@ -7336,6 +7331,12 @@ ast_interface_block::hir(exec_list *instructions,
                                         packing,
                                         this->block_name);
 
+   unsigned component_size = block_type->contains_double() ? 8 : 4;
+   int xfb_offset =
+      layout.flags.q.explicit_xfb_offset ? (int) qual_xfb_offset : -1;
+   validate_xfb_offset_qualifier(&loc, state, xfb_offset, block_type,
+                                 component_size);
+
    if (!state->symbols->add_interface(block_type->name, block_type, var_mode)) {
       YYLTYPE loc = this->get_location();
       _mesa_glsl_error(&loc, state, "interface block `%s' with type `%s' "
@@ -7474,13 +7475,6 @@ ast_interface_block::hir(exec_list *instructions,
                                       var_mode);
       }
 
-      unsigned component_size = block_type->contains_double() ? 8 : 4;
-      int xfb_offset =
-         layout.flags.q.explicit_xfb_offset ? (int) qual_xfb_offset : -1;
-      const glsl_type *t = get_varying_type(var, state->stage);
-      validate_xfb_offset_qualifier(&loc, state, xfb_offset, t,
-                                    component_size);
-
       var->data.matrix_layout = matrix_layout == GLSL_MATRIX_LAYOUT_INHERITED
          ? GLSL_MATRIX_LAYOUT_COLUMN_MAJOR : matrix_layout;
 
@@ -7530,12 +7524,6 @@ ast_interface_block::hir(exec_list *instructions,
        * an instance name.
        */
       assert(this->array_specifier == NULL);
-
-      unsigned component_size = block_type->contains_double() ? 8 : 4;
-      int xfb_offset =
-         layout.flags.q.explicit_xfb_offset ? (int) qual_xfb_offset : -1;
-      validate_xfb_offset_qualifier(&loc, state, xfb_offset, block_type,
-                                    component_size);
 
       for (unsigned i = 0; i < num_variables; i++) {
          ir_variable *var =
@@ -7619,6 +7607,20 @@ ast_interface_block::hir(exec_list *instructions,
             if (var->is_in_shader_storage_block()) {
                if (is_unsized_array_last_element(var)) {
                   var->data.from_ssbo_unsized_array = true;
+               }
+            } else {
+               /* From GLSL ES 3.10 spec, section 4.1.9 "Arrays":
+                *
+                * "If an array is declared as the last member of a shader storage
+                * block and the size is not specified at compile-time, it is
+                * sized at run-time. In all other cases, arrays are sized only
+                * at compile-time."
+                */
+               if (state->es_shader) {
+                  _mesa_glsl_error(&loc, state, "unsized array `%s' "
+                                   "definition: only last member of a shader "
+                                   "storage block can be defined as unsized "
+                                   "array", fields[i].name);
                }
             }
          }

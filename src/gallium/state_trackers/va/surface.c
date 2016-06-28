@@ -71,6 +71,10 @@ vlVaDestroySurfaces(VADriverContextP ctx, VASurfaceID *surface_list, int num_sur
    pipe_mutex_lock(drv->mutex);
    for (i = 0; i < num_surfaces; ++i) {
       vlVaSurface *surf = handle_table_get(drv->htab, surface_list[i]);
+      if (!surf) {
+         pipe_mutex_unlock(drv->mutex);
+         return VA_STATUS_ERROR_INVALID_SURFACE;
+      }
       if (surf->buffer)
          surf->buffer->destroy(surf->buffer);
       util_dynarray_fini(&surf->subpics);
@@ -621,6 +625,14 @@ vlVaCreateSurfaces2(VADriverContextP ctx, unsigned int format,
 
       switch (memory_type) {
       case VA_SURFACE_ATTRIB_MEM_TYPE_VA:
+         /* The application will clear the TILING flag when the surface is
+          * intended to be exported as dmabuf. Adding shared flag because not
+          * null memory_attibute means VASurfaceAttribExternalBuffers is used.
+          */
+         if (memory_attibute &&
+             !(memory_attibute->flags & VA_SURFACE_EXTBUF_DESC_ENABLE_TILING))
+            templat.bind = PIPE_BIND_LINEAR | PIPE_BIND_SHARED;
+
          surf->buffer = drv->pipe->create_video_buffer(drv->pipe, &templat);
          if (!surf->buffer) {
             FREE(surf);

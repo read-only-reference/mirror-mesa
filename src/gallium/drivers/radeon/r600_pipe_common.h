@@ -48,6 +48,7 @@
 #define R600_RESOURCE_FLAG_TRANSFER		(PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
 #define R600_RESOURCE_FLAG_FLUSHED_DEPTH	(PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
 #define R600_RESOURCE_FLAG_FORCE_TILING		(PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
+#define R600_RESOURCE_FLAG_DISABLE_DCC		(PIPE_RESOURCE_FLAG_DRV_PRIV << 3)
 
 #define R600_CONTEXT_STREAMOUT_FLUSH		(1u << 0)
 /* Pipeline & streamout query controls. */
@@ -98,6 +99,8 @@
 #define DBG_SI_SCHED		(1llu << 46)
 #define DBG_MONOLITHIC_SHADERS	(1llu << 47)
 #define DBG_NO_CE		(1llu << 48)
+#define DBG_UNSAFE_MATH		(1llu << 49)
+#define DBG_NO_DCC_FB		(1llu << 50)
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 #define R600_MAX_VIEWPORTS        16
@@ -236,11 +239,12 @@ struct r600_texture {
 	struct r600_resource		resource;
 
 	uint64_t			size;
+	unsigned			num_level0_transfers;
 	bool				is_depth;
 	unsigned			dirty_level_mask; /* each bit says if that mipmap is compressed */
 	unsigned			stencil_dirty_level_mask; /* each bit says if that mipmap is compressed */
 	struct r600_texture		*flushed_depth_texture;
-	boolean				is_flushing_texture;
+	bool				is_flushing_texture;
 	struct radeon_surf		surface;
 
 	/* Colorbuffer compression and fast clear. */
@@ -250,6 +254,7 @@ struct r600_texture {
 	uint64_t			dcc_offset; /* 0 = disabled */
 	unsigned			cb_color_info; /* fast clear enable bit */
 	unsigned			color_clear_value[2];
+	unsigned			last_msaa_resolve_target_micro_mode;
 
 	/* Depth buffer compression and fast clear. */
 	struct r600_htile_info		htile;
@@ -261,6 +266,34 @@ struct r600_texture {
 
 	bool				non_disp_tiling; /* R600-Cayman only */
 
+	/* Whether the texture is a displayable back buffer and needs DCC
+	 * decompression, which is expensive. Therefore, it's enabled only
+	 * if statistics suggest that it will pay off and it's allocated
+	 * separately. It can't be bound as a sampler by apps. Limited to
+	 * target == 2D and last_level == 0. If enabled, dcc_offset contains
+	 * the absolute GPUVM address, not the relative one.
+	 */
+	struct r600_resource		*dcc_separate_buffer;
+	/* When DCC is temporarily disabled, the separate buffer is here. */
+	struct r600_resource		*last_dcc_separate_buffer;
+	/* We need to track DCC dirtiness, because st/dri usually calls
+	 * flush_resource twice per frame (not a bug) and we don't wanna
+	 * decompress DCC twice. Also, the dirty tracking must be done even
+	 * if DCC isn't used, because it's required by the DCC usage analysis
+	 * for a possible future enablement.
+	 */
+	bool				separate_dcc_dirty;
+	/* Statistics gathering for the DCC enablement heuristic. */
+	bool				dcc_gather_statistics;
+	/* Estimate of how much this color buffer is written to in units of
+	 * full-screen draws: ps_invocations / (width * height)
+	 * Shader kills, late Z, and blending with trivial discards make it
+	 * inaccurate (we need to count CB updates, not PS invocations).
+	 */
+	unsigned			ps_draw_ratio;
+	/* The number of clears since the last DCC usage analysis. */
+	unsigned			num_slow_clears;
+
 	/* Counter that should be non-zero if the texture is bound to a
 	 * framebuffer. Implemented in radeonsi only.
 	 */
@@ -269,6 +302,7 @@ struct r600_texture {
 
 struct r600_surface {
 	struct pipe_surface		base;
+	const struct radeon_surf_level	*level_info;
 
 	bool color_initialized;
 	bool depth_initialized;
@@ -286,7 +320,6 @@ struct r600_surface {
 	unsigned cb_color_dim;		/* EG only */
 	unsigned cb_color_pitch;	/* EG and later */
 	unsigned cb_color_slice;	/* EG and later */
-	unsigned cb_dcc_base;		/* VI and later */
 	unsigned cb_color_attrib;	/* EG and later */
 	unsigned cb_dcc_control;	/* VI and later */
 	unsigned cb_color_fmask;	/* CB_COLORn_FMASK (EG and later) or CB_COLORn_FRAG (r600) */
@@ -313,7 +346,6 @@ struct r600_surface {
 	unsigned db_htile_surface;
 	unsigned db_htile_data_base;
 	unsigned db_preload_control;	/* EG and later */
-	unsigned pa_su_poly_offset_db_fmt_cntl;
 };
 
 struct r600_common_screen {
@@ -368,9 +400,19 @@ struct r600_common_screen {
 	 */
 	unsigned			compressed_colortex_counter;
 
+	/* Atomically increment this counter when an existing texture's
+	 * backing buffer or tile mode parameters have changed that requires
+	 * recomputation of shader descriptors.
+	 */
+	unsigned			dirty_tex_descriptor_counter;
+
 	void (*query_opaque_metadata)(struct r600_common_screen *rscreen,
 				      struct r600_texture *rtex,
 				      struct radeon_bo_metadata *md);
+
+	void (*apply_opaque_metadata)(struct r600_common_screen *rscreen,
+				    struct r600_texture *rtex,
+				    struct radeon_bo_metadata *md);
 };
 
 /* This encapsulates a state or an operation which can emitted into the GPU
@@ -445,6 +487,15 @@ struct r600_ring {
 		      struct pipe_fence_handle **fence);
 };
 
+/* Saved CS data for debugging features. */
+struct radeon_saved_cs {
+	uint32_t			*ib;
+	unsigned			num_dw;
+
+	struct radeon_bo_list_item	*bo_list;
+	unsigned			bo_count;
+};
+
 struct r600_common_context {
 	struct pipe_context b; /* base class */
 
@@ -460,9 +511,10 @@ struct r600_common_context {
 	unsigned			gpu_reset_counter;
 	unsigned			last_dirty_fb_counter;
 	unsigned			last_compressed_colortex_counter;
+	unsigned			last_dirty_tex_descriptor_counter;
 
 	struct u_upload_mgr		*uploader;
-	struct u_suballocator		*allocator_so_filled_size;
+	struct u_suballocator		*allocator_zeroed_memory;
 	struct util_slab_mempool	pool_transfers;
 
 	/* Current unaccounted memory usage. */
@@ -491,13 +543,18 @@ struct r600_common_context {
 	unsigned			max_db; /* for OQ */
 	/* Misc stats. */
 	unsigned			num_draw_calls;
+	unsigned			num_spill_draw_calls;
+	unsigned			num_compute_calls;
+	unsigned			num_spill_compute_calls;
 	unsigned			num_dma_calls;
+	uint64_t			num_alloc_tex_transfer_bytes;
+	unsigned			last_tex_ps_draw_ratio; /* for query */
 
 	/* Render condition. */
 	struct r600_atom		render_cond_atom;
 	struct pipe_query		*render_cond;
 	unsigned			render_cond_mode;
-	boolean				render_cond_invert;
+	bool				render_cond_invert;
 	bool				render_cond_force_off; /* for u_blitter */
 
 	/* MSAA sample locations.
@@ -508,6 +565,25 @@ struct r600_common_context {
 	float				sample_locations_4x[4][2];
 	float				sample_locations_8x[8][2];
 	float				sample_locations_16x[16][2];
+
+	/* Statistics gathering for the DCC enablement heuristic. It can't be
+	 * in r600_texture because r600_texture can be shared by multiple
+	 * contexts. This is for back buffers only. We shouldn't get too many
+	 * of those.
+	 *
+	 * X11 DRI3 rotates among a finite set of back buffers. They should
+	 * all fit in this array. If they don't, separate DCC might never be
+	 * enabled by DCC stat gathering.
+	 */
+	struct {
+		struct r600_texture		*tex;
+		/* Query queue: 0 = usually active, 1 = waiting, 2 = readback. */
+		struct pipe_query		*ps_stats[3];
+		/* If all slots are used and another slot is needed,
+		 * the least recently used slot is evicted based on this. */
+		int64_t				last_use_timestamp;
+		bool				query_active;
+	} dcc_stats[5];
 
 	/* The list of all texture buffer objects in this context.
 	 * This list is walked when a buffer is invalidated/reallocated and
@@ -552,12 +628,16 @@ struct r600_common_context {
 
 	void (*set_atom_dirty)(struct r600_common_context *ctx,
 			       struct r600_atom *atom, bool dirty);
+
+	void (*check_vm_faults)(struct r600_common_context *ctx,
+				struct radeon_saved_cs *saved,
+				enum ring_type ring);
 };
 
 /* r600_buffer.c */
-boolean r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
-					struct pb_buffer *buf,
-					enum radeon_bo_usage usage);
+bool r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
+				     struct pb_buffer *buf,
+				     enum radeon_bo_usage usage);
 void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
                                       struct r600_resource *resource,
                                       unsigned usage);
@@ -605,6 +685,9 @@ const char *r600_get_llvm_processor_name(enum radeon_family family);
 void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 			 struct r600_resource *dst, struct r600_resource *src);
 void r600_dma_emit_wait_idle(struct r600_common_context *rctx);
+void radeon_save_cs(struct radeon_winsys *ws, struct radeon_winsys_cs *cs,
+		    struct radeon_saved_cs *saved);
+void radeon_clear_saved_cs(struct radeon_saved_cs *saved);
 
 /* r600_gpu_load.c */
 void r600_gpu_load_kill_thread(struct r600_common_screen *rscreen);
@@ -661,12 +744,21 @@ struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
 						const struct pipe_surface *templ,
 						unsigned width, unsigned height);
 unsigned r600_translate_colorswap(enum pipe_format format, bool do_endian_swap);
+void vi_separate_dcc_start_query(struct pipe_context *ctx,
+				 struct r600_texture *tex);
+void vi_separate_dcc_stop_query(struct pipe_context *ctx,
+				struct r600_texture *tex);
+void vi_separate_dcc_process_and_reset_stats(struct pipe_context *ctx,
+					     struct r600_texture *tex);
+void vi_dcc_clear_level(struct r600_common_context *rctx,
+			struct r600_texture *rtex,
+			unsigned level, unsigned clear_value);
 void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 				   struct pipe_framebuffer_state *fb,
 				   struct r600_atom *fb_state,
 				   unsigned *buffers, unsigned *dirty_cbufs,
 				   const union pipe_color_union *color);
-void r600_texture_disable_dcc(struct r600_common_screen *rscreen,
+bool r600_texture_disable_dcc(struct r600_common_screen *rscreen,
 			      struct r600_texture *rtex);
 void r600_init_screen_texture_functions(struct r600_common_screen *rscreen);
 void r600_init_context_texture_functions(struct r600_common_context *rctx);
@@ -689,7 +781,8 @@ void cayman_get_sample_position(struct pipe_context *ctx, unsigned sample_count,
 void cayman_init_msaa(struct pipe_context *ctx);
 void cayman_emit_msaa_sample_locs(struct radeon_winsys_cs *cs, int nr_samples);
 void cayman_emit_msaa_config(struct radeon_winsys_cs *cs, int nr_samples,
-			     int ps_iter_samples, int overrast_samples);
+			     int ps_iter_samples, int overrast_samples,
+			     unsigned sc_mode_cntl_1);
 
 
 /* Inline helpers. */
@@ -704,6 +797,12 @@ r600_resource_reference(struct r600_resource **ptr, struct r600_resource *res)
 {
 	pipe_resource_reference((struct pipe_resource **)ptr,
 				(struct pipe_resource *)res);
+}
+
+static inline void
+r600_texture_reference(struct r600_texture **ptr, struct r600_texture *res)
+{
+	pipe_resource_reference((struct pipe_resource **)ptr, &res->resource.b.b);
 }
 
 static inline bool r600_get_strmout_en(struct r600_common_context *rctx)

@@ -964,7 +964,7 @@ static LLVMValueRef buffer_load(struct lp_build_tgsi_context *bld_base,
 		return LLVMBuildBitCast(gallivm->builder, value, vec_type, "");
 	}
 
-	if (type != TGSI_TYPE_DOUBLE) {
+	if (!tgsi_type_is_64bit(type)) {
 		value = build_buffer_load(ctx, buffer, 4, NULL, base, offset,
 		                          0, 1, 0);
 
@@ -979,7 +979,7 @@ static LLVMValueRef buffer_load(struct lp_build_tgsi_context *bld_base,
 	value2 = build_buffer_load(ctx, buffer, 1, NULL, base, offset,
 	                           swizzle * 4 + 4, 1, 0);
 
-	return radeon_llvm_emit_fetch_double(bld_base, value, value2);
+	return radeon_llvm_emit_fetch_64bit(bld_base, type, value, value2);
 }
 
 /**
@@ -1011,12 +1011,12 @@ static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
 			    lp_build_const_int32(gallivm, swizzle));
 
 	value = build_indexed_load(ctx, ctx->lds, dw_addr, false);
-	if (type == TGSI_TYPE_DOUBLE) {
+	if (tgsi_type_is_64bit(type)) {
 		LLVMValueRef value2;
 		dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
 				       lp_build_const_int32(gallivm, swizzle + 1));
 		value2 = build_indexed_load(ctx, ctx->lds, dw_addr, false);
-		return radeon_llvm_emit_fetch_double(bld_base, value, value2);
+		return radeon_llvm_emit_fetch_64bit(bld_base, type, value, value2);
 	}
 
 	return LLVMBuildBitCast(gallivm->builder, value,
@@ -1230,15 +1230,15 @@ static LLVMValueRef fetch_input_gs(
 				   "llvm.SI.buffer.load.dword.i32.i32",
 				   ctx->i32, args, 9,
 				   LLVMReadOnlyAttribute | LLVMNoUnwindAttribute);
-	if (type == TGSI_TYPE_DOUBLE) {
+	if (tgsi_type_is_64bit(type)) {
 		LLVMValueRef value2;
 		args[2] = lp_build_const_int32(gallivm, (param * 4 + swizzle + 1) * 256);
 		value2 = lp_build_intrinsic(gallivm->builder,
 					    "llvm.SI.buffer.load.dword.i32.i32",
 					    ctx->i32, args, 9,
 					    LLVMReadOnlyAttribute | LLVMNoUnwindAttribute);
-		return radeon_llvm_emit_fetch_double(bld_base,
-						     value, value2);
+		return radeon_llvm_emit_fetch_64bit(bld_base, type,
+						    value, value2);
 	}
 	return LLVMBuildBitCast(gallivm->builder,
 				value,
@@ -1814,12 +1814,12 @@ static LLVMValueRef fetch_constant(
 	idx = reg->Register.Index * 4 + swizzle;
 
 	if (!reg->Register.Indirect && !reg->Dimension.Indirect) {
-		if (type != TGSI_TYPE_DOUBLE)
+		if (!tgsi_type_is_64bit(type))
 			return bitcast(bld_base, type, ctx->constants[buf][idx]);
 		else {
-			return radeon_llvm_emit_fetch_double(bld_base,
-							     ctx->constants[buf][idx],
-							     ctx->constants[buf][idx + 1]);
+			return radeon_llvm_emit_fetch_64bit(bld_base, type,
+							    ctx->constants[buf][idx],
+							    ctx->constants[buf][idx + 1]);
 		}
 	}
 
@@ -1842,7 +1842,7 @@ static LLVMValueRef fetch_constant(
 	result = buffer_load_const(base->gallivm->builder, bufp,
 				   addr, ctx->f32);
 
-	if (type != TGSI_TYPE_DOUBLE)
+	if (!tgsi_type_is_64bit(type))
 		result = bitcast(bld_base, type, result);
 	else {
 		LLVMValueRef addr2, result2;
@@ -1855,8 +1855,8 @@ static LLVMValueRef fetch_constant(
 		result2 = buffer_load_const(base->gallivm->builder, ctx->const_buffers[buf],
 				   addr2, ctx->f32);
 
-		result = radeon_llvm_emit_fetch_double(bld_base,
-					               result, result2);
+		result = radeon_llvm_emit_fetch_64bit(bld_base, type,
+						      result, result2);
 	}
 	return result;
 }
@@ -5255,6 +5255,22 @@ static void si_create_function(struct si_shader_context *ctx,
 		else
 			LLVMAddAttribute(P, LLVMInRegAttribute);
 	}
+
+	if (ctx->screen->b.debug_flags & DBG_UNSAFE_MATH) {
+		/* These were copied from some LLVM test. */
+		LLVMAddTargetDependentFunctionAttr(ctx->radeon_bld.main_fn,
+						   "less-precise-fpmad",
+						   "true");
+		LLVMAddTargetDependentFunctionAttr(ctx->radeon_bld.main_fn,
+						   "no-infs-fp-math",
+						   "true");
+		LLVMAddTargetDependentFunctionAttr(ctx->radeon_bld.main_fn,
+						   "no-nans-fp-math",
+						   "true");
+		LLVMAddTargetDependentFunctionAttr(ctx->radeon_bld.main_fn,
+						   "unsafe-fp-math",
+						   "true");
+	}
 }
 
 static void create_meta_data(struct si_shader_context *ctx)
@@ -5825,6 +5841,20 @@ void si_shader_binary_read_config(struct radeon_shader_binary *binary,
 	unsigned i;
 	const unsigned char *config =
 		radeon_shader_binary_config_start(binary, symbol_offset);
+	bool really_needs_scratch = false;
+
+	/* LLVM adds SGPR spills to the scratch size.
+	 * Find out if we really need the scratch buffer.
+	 */
+	for (i = 0; i < binary->reloc_count; i++) {
+		const struct radeon_shader_reloc *reloc = &binary->relocs[i];
+
+		if (!strcmp(scratch_rsrc_dword0_symbol, reloc->name) ||
+		    !strcmp(scratch_rsrc_dword1_symbol, reloc->name)) {
+			really_needs_scratch = true;
+			break;
+		}
+	}
 
 	/* XXX: We may be able to emit some of these values directly rather than
 	 * extracting fields to be emitted later.
@@ -5859,8 +5889,9 @@ void si_shader_binary_read_config(struct radeon_shader_binary *binary,
 		case R_0286E8_SPI_TMPRING_SIZE:
 		case R_00B860_COMPUTE_TMPRING_SIZE:
 			/* WAVESIZE is in units of 256 dwords. */
-			conf->scratch_bytes_per_wave =
-				G_00B860_WAVESIZE(value) * 256 * 4 * 1;
+			if (really_needs_scratch)
+				conf->scratch_bytes_per_wave =
+					G_00B860_WAVESIZE(value) * 256 * 4;
 			break;
 		default:
 			{
@@ -5888,8 +5919,16 @@ void si_shader_apply_scratch_relocs(struct si_context *sctx,
 	unsigned i;
 	uint32_t scratch_rsrc_dword0 = scratch_va;
 	uint32_t scratch_rsrc_dword1 =
-		S_008F04_BASE_ADDRESS_HI(scratch_va >> 32)
-		|  S_008F04_STRIDE(config->scratch_bytes_per_wave / 64);
+		S_008F04_BASE_ADDRESS_HI(scratch_va >> 32);
+
+	/* Enable scratch coalescing if LLVM sets ELEMENT_SIZE & INDEX_STRIDE
+	 * correctly.
+	 */
+	if (HAVE_LLVM >= 0x0309)
+		scratch_rsrc_dword1 |= S_008F04_SWIZZLE_ENABLE(1);
+	else
+		scratch_rsrc_dword1 |=
+			S_008F04_STRIDE(config->scratch_bytes_per_wave / 64);
 
 	for (i = 0 ; i < shader->binary.reloc_count; i++) {
 		const struct radeon_shader_reloc *reloc =
@@ -6017,6 +6056,8 @@ static void si_shader_dump_stats(struct si_screen *sscreen,
 	unsigned lds_increment = sscreen->b.chip_class >= CIK ? 512 : 256;
 	unsigned lds_per_wave = 0;
 	unsigned max_simd_waves = 10;
+	/* Assuming SGPRs aren't spilled. */
+	unsigned spilled_vgprs = conf->scratch_bytes_per_wave / 64 / 4;
 
 	/* Compute LDS usage for PS. */
 	if (processor == PIPE_SHADER_FRAGMENT) {
@@ -6063,22 +6104,23 @@ static void si_shader_dump_stats(struct si_screen *sscreen,
 		fprintf(file, "*** SHADER STATS ***\n"
 			"SGPRS: %d\n"
 			"VGPRS: %d\n"
+			"Spilled VGPRs: %d\n"
 			"Code Size: %d bytes\n"
 			"LDS: %d blocks\n"
 			"Scratch: %d bytes per wave\n"
 			"Max Waves: %d\n"
 			"********************\n",
-			conf->num_sgprs, conf->num_vgprs, code_size,
+			conf->num_sgprs, conf->num_vgprs, spilled_vgprs, code_size,
 			conf->lds_size, conf->scratch_bytes_per_wave,
 			max_simd_waves);
 	}
 
 	pipe_debug_message(debug, SHADER_INFO,
 			   "Shader Stats: SGPRS: %d VGPRS: %d Code Size: %d "
-			   "LDS: %d Scratch: %d Max Waves: %d",
+			   "LDS: %d Scratch: %d Max Waves: %d Spilled VGPRs: %d",
 			   conf->num_sgprs, conf->num_vgprs, code_size,
 			   conf->lds_size, conf->scratch_bytes_per_wave,
-			   max_simd_waves);
+			   max_simd_waves, spilled_vgprs);
 }
 
 static const char *si_get_shader_name(struct si_shader *shader,
@@ -6163,9 +6205,7 @@ int si_compile_llvm(struct si_screen *sscreen,
 	}
 
 	if (!si_replace_shader(count, binary)) {
-		r = radeon_llvm_compile(mod, binary,
-			r600_get_llvm_processor_name(sscreen->b.family), tm,
-			debug);
+		r = radeon_llvm_compile(mod, binary, tm, debug);
 		if (r)
 			return r;
 	}
@@ -6204,6 +6244,14 @@ int si_compile_llvm(struct si_screen *sscreen,
 	}
 
 	return r;
+}
+
+static void si_llvm_build_ret(struct si_shader_context *ctx, LLVMValueRef ret)
+{
+	if (LLVMGetTypeKind(LLVMTypeOf(ret)) == LLVMVoidTypeKind)
+		LLVMBuildRetVoid(ctx->radeon_bld.gallivm.builder);
+	else
+		LLVMBuildRet(ctx->radeon_bld.gallivm.builder, ret);
 }
 
 /* Generate code for the hardware VS shader stage to go with a geometry shader */
@@ -6267,7 +6315,7 @@ static int si_generate_gs_copy_shader(struct si_screen *sscreen,
 
 	si_llvm_export_vs(bld_base, outputs, gsinfo->num_outputs);
 
-	LLVMBuildRet(gallivm->builder, ctx->return_value);
+	LLVMBuildRetVoid(gallivm->builder);
 
 	/* Dump LLVM IR before any optimization passes */
 	if (sscreen->b.debug_flags & DBG_PREOPT_IR &&
@@ -6548,7 +6596,7 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 		goto out;
 	}
 
-	LLVMBuildRet(bld_base->base.gallivm->builder, ctx.return_value);
+	si_llvm_build_ret(&ctx, ctx.return_value);
 	mod = bld_base->base.gallivm->module;
 
 	/* Dump LLVM IR before any optimization passes */
@@ -6783,7 +6831,7 @@ static bool si_compile_vs_prolog(struct si_screen *sscreen,
 	}
 
 	/* Compile. */
-	LLVMBuildRet(gallivm->builder, ret);
+	si_llvm_build_ret(&ctx, ret);
 	radeon_llvm_finalize_module(&ctx.radeon_bld);
 
 	if (si_compile_llvm(sscreen, &out->binary, &out->config, tm,
@@ -6856,7 +6904,7 @@ static bool si_compile_vs_epilog(struct si_screen *sscreen,
 	}
 
 	/* Compile. */
-	LLVMBuildRet(gallivm->builder, ctx.return_value);
+	LLVMBuildRetVoid(gallivm->builder);
 	radeon_llvm_finalize_module(&ctx.radeon_bld);
 
 	if (si_compile_llvm(sscreen, &out->binary, &out->config, tm,
@@ -7011,7 +7059,7 @@ static bool si_compile_tcs_epilog(struct si_screen *sscreen,
 			      LLVMGetParam(func, last_sgpr + 3));
 
 	/* Compile. */
-	LLVMBuildRet(gallivm->builder, ctx.return_value);
+	LLVMBuildRetVoid(gallivm->builder);
 	radeon_llvm_finalize_module(&ctx.radeon_bld);
 
 	if (si_compile_llvm(sscreen, &out->binary, &out->config, tm,
@@ -7197,8 +7245,14 @@ static bool si_compile_ps_prolog(struct si_screen *sscreen,
 						   linear_sample[i], base + 10 + i, "");
 	}
 
+	/* Tell LLVM to insert WQM instruction sequence when needed. */
+	if (key->ps_prolog.wqm) {
+		LLVMAddTargetDependentFunctionAttr(func,
+						   "amdgpu-ps-wqm-outputs", "");
+	}
+
 	/* Compile. */
-	LLVMBuildRet(gallivm->builder, ret);
+	si_llvm_build_ret(&ctx, ret);
 	radeon_llvm_finalize_module(&ctx.radeon_bld);
 
 	if (si_compile_llvm(sscreen, &out->binary, &out->config, tm,
@@ -7347,6 +7401,9 @@ static bool si_shader_select_ps_parts(struct si_screen *sscreen,
 	prolog_key.ps_prolog.colors_read = info->colors_read;
 	prolog_key.ps_prolog.num_input_sgprs = shader->info.num_input_sgprs;
 	prolog_key.ps_prolog.num_input_vgprs = shader->info.num_input_vgprs;
+	prolog_key.ps_prolog.wqm = info->uses_derivatives &&
+		(prolog_key.ps_prolog.colors_read ||
+		 prolog_key.ps_prolog.states.force_persample_interp);
 
 	if (info->colors_read) {
 		unsigned *color = shader->selector->color_attr_index;

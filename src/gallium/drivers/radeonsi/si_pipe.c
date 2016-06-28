@@ -32,6 +32,9 @@
 #include "util/u_suballoc.h"
 #include "vl/vl_decoder.h"
 
+#define SI_LLVM_DEFAULT_FEATURES \
+	"+DumpCode,+vgpr-spilling,-fp32-denormals,+fp64-denormals"
+
 /*
  * pipe_context
  */
@@ -40,7 +43,11 @@ static void si_destroy_context(struct pipe_context *context)
 	struct si_context *sctx = (struct si_context *)context;
 	int i;
 
-	si_dec_framebuffer_counters(&sctx->framebuffer.state);
+	/* Unreference the framebuffer normally to disable related logic
+	 * properly.
+	 */
+	struct pipe_framebuffer_state fb = {};
+	context->set_framebuffer_state(context, &fb);
 
 	si_release_all_descriptors(sctx);
 
@@ -76,7 +83,6 @@ static void si_destroy_context(struct pipe_context *context)
 		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_fastclear);
 	if (sctx->custom_blend_dcc_decompress)
 		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_dcc_decompress);
-	util_unreference_framebuffer_state(&sctx->framebuffer.state);
 
 	if (sctx->blitter)
 		util_blitter_destroy(sctx->blitter);
@@ -87,12 +93,8 @@ static void si_destroy_context(struct pipe_context *context)
 
 	r600_resource_reference(&sctx->trace_buf, NULL);
 	r600_resource_reference(&sctx->last_trace_buf, NULL);
-	free(sctx->last_ib);
-	if (sctx->last_bo_list) {
-		for (i = 0; i < sctx->last_bo_count; i++)
-			pb_reference(&sctx->last_bo_list[i].buf, NULL);
-		free(sctx->last_bo_list);
-	}
+	radeon_clear_saved_cs(&sctx->last_gfx);
+
 	FREE(sctx);
 }
 
@@ -164,8 +166,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 		sctx->ce_suballocator =
 				u_suballocator_create(&sctx->b.b, 1024 * 1024,
-						      64, PIPE_BIND_CUSTOM,
-						      PIPE_USAGE_DEFAULT, FALSE);
+						      PIPE_BIND_CUSTOM,
+						      PIPE_USAGE_DEFAULT, false);
 		if (!sctx->ce_suballocator)
 			goto fail;
 	}
@@ -236,11 +238,25 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 				     R600_COHERENCY_SHADER);
 	}
 
-	/* XXX: This is the maximum value allowed.  I'm not sure how to compute
-	 * this for non-cs shaders.  Using the wrong value here can result in
-	 * GPU lockups, but the maximum value seems to always work.
+	uint64_t max_threads_per_block;
+	screen->get_compute_param(screen, PIPE_SHADER_IR_TGSI,
+				  PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK,
+				  &max_threads_per_block);
+
+	/* The maximum number of scratch waves. Scratch space isn't divided
+	 * evenly between CUs. The number is only a function of the number of CUs.
+	 * We can decrease the constant to decrease the scratch buffer size.
+	 *
+	 * sctx->scratch_waves must be >= the maximum posible size of
+	 * 1 threadgroup, so that the hw doesn't hang from being unable
+	 * to start any.
+	 *
+	 * The recommended value is 4 per CU at most. Higher numbers don't
+	 * bring much benefit, but they still occupy chip resources (think
+	 * async compute). I've seen ~2% performance difference between 4 and 32.
 	 */
-	sctx->scratch_waves = 32 * sscreen->b.info.num_good_compute_units;
+	sctx->scratch_waves = MAX2(32 * sscreen->b.info.num_good_compute_units,
+				   max_threads_per_block / 64);
 
 	/* Initialize LLVM TargetMachine */
 	r600_target = radeon_llvm_get_r600_target(triple);
@@ -248,9 +264,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 					   r600_get_llvm_processor_name(sscreen->b.family),
 #if HAVE_LLVM >= 0x0308
 					   sscreen->b.debug_flags & DBG_SI_SCHED ?
-					   	"+DumpCode,+vgpr-spilling,+si-scheduler" :
+						SI_LLVM_DEFAULT_FEATURES ",+si-scheduler" :
 #endif
-					   	"+DumpCode,+vgpr-spilling",
+						SI_LLVM_DEFAULT_FEATURES,
 					   LLVMCodeGenLevelDefault,
 					   LLVMRelocDefault,
 					   LLVMCodeModelDefault);
@@ -343,6 +359,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
 	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
 	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
+	case PIPE_CAP_GENERATE_MIPMAP:
+	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -395,11 +413,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_DRAW_PARAMETERS:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 	case PIPE_CAP_CULL_DISTANCE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
+	case PIPE_CAP_TGSI_VOTE:
+	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -676,7 +695,6 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	sscreen->b.b.destroy = si_destroy_screen;
 	sscreen->b.b.get_param = si_get_param;
 	sscreen->b.b.get_shader_param = si_get_shader_param;
-	sscreen->b.b.is_format_supported = si_is_format_supported;
 	sscreen->b.b.resource_create = r600_resource_create_common;
 
 	si_init_screen_state_functions(sscreen);
@@ -688,8 +706,18 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		return NULL;
 	}
 
-	if (!debug_get_bool_option("RADEON_DISABLE_PERFCOUNTERS", FALSE))
+	if (!debug_get_bool_option("RADEON_DISABLE_PERFCOUNTERS", false))
 		si_init_perfcounters(sscreen);
+
+	/* Hawaii has a bug with offchip buffers > 256 that can be worked
+	 * around by setting 4K granularity.
+	 */
+	sscreen->tess_offchip_block_dw_size =
+		sscreen->b.family == CHIP_HAWAII ? 4096 : 8192;
+
+	sscreen->has_distributed_tess =
+		sscreen->b.chip_class >= VI &&
+		sscreen->b.info.max_se >= 2;
 
 	sscreen->b.has_cp_dma = true;
 	sscreen->b.has_streamout = true;
@@ -698,7 +726,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		HAVE_LLVM < 0x0308 ||
 		(sscreen->b.debug_flags & DBG_MONOLITHIC_SHADERS) != 0;
 
-	if (debug_get_bool_option("RADEON_DUMP_SHADERS", FALSE))
+	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))
 		sscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
 
 	/* Create the auxiliary context. This must be done last. */

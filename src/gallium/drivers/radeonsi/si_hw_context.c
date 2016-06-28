@@ -84,9 +84,8 @@ void si_need_cs_space(struct si_context *ctx)
 	/* If the CS is sufficiently large, don't count the space needed
 	 * and just flush if there is not enough space left.
 	 */
-	if (unlikely(cs->cdw > cs->max_dw - 2048 ||
-                     (ce_ib && ce_ib->max_dw - ce_ib->cdw <
-                      si_ce_needed_cs_space())))
+	if (!ctx->b.ws->cs_check_space(cs, 2048) ||
+	    (ce_ib && !ctx->b.ws->cs_check_space(ce_ib, si_ce_needed_cs_space())))
 		ctx->b.gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
 }
 
@@ -131,26 +130,11 @@ void si_context_gfx_flush(void *context, unsigned flags,
 		si_trace_emit(ctx);
 
 	if (ctx->is_debug) {
-		unsigned i;
-
 		/* Save the IB for debug contexts. */
-		free(ctx->last_ib);
-		ctx->last_ib_dw_size = cs->cdw;
-		ctx->last_ib = malloc(cs->cdw * 4);
-		memcpy(ctx->last_ib, cs->buf, cs->cdw * 4);
+		radeon_clear_saved_cs(&ctx->last_gfx);
+		radeon_save_cs(ws, cs, &ctx->last_gfx);
 		r600_resource_reference(&ctx->last_trace_buf, ctx->trace_buf);
 		r600_resource_reference(&ctx->trace_buf, NULL);
-
-		/* Save the buffer list. */
-		if (ctx->last_bo_list) {
-			for (i = 0; i < ctx->last_bo_count; i++)
-				pb_reference(&ctx->last_bo_list[i].buf, NULL);
-			free(ctx->last_bo_list);
-		}
-		ctx->last_bo_count = ws->cs_get_buffer_list(cs, NULL);
-		ctx->last_bo_list = calloc(ctx->last_bo_count,
-					   sizeof(ctx->last_bo_list[0]));
-		ws->cs_get_buffer_list(cs, ctx->last_bo_list);
 	}
 
 	/* Flush the CS. */
@@ -160,8 +144,14 @@ void si_context_gfx_flush(void *context, unsigned flags,
 		ws->fence_reference(fence, ctx->last_gfx_fence);
 
 	/* Check VM faults if needed. */
-	if (ctx->screen->b.debug_flags & DBG_CHECK_VM)
-		si_check_vm_faults(ctx);
+	if (ctx->screen->b.debug_flags & DBG_CHECK_VM) {
+		/* Use conservative timeout 800ms, after which we won't wait any
+		 * longer and assume the GPU is hung.
+		 */
+		ctx->b.ws->fence_wait(ctx->b.ws, ctx->last_gfx_fence, 800*1000*1000);
+
+		si_check_vm_faults(&ctx->b, &ctx->last_gfx, RING_GFX);
+	}
 
 	si_begin_new_cs(ctx);
 	ctx->gfx_flush_in_progress = false;
@@ -208,6 +198,9 @@ void si_begin_new_cs(struct si_context *ctx)
 	else if (ctx->ce_ib)
 		si_ce_enable_loads(ctx->ce_ib);
 
+	if (ctx->ce_preamble_ib)
+		si_ce_reinitialize_all_descriptors(ctx);
+
 	ctx->framebuffer.dirty_cbufs = (1 << 8) - 1;
 	ctx->framebuffer.dirty_zsbuf = true;
 	si_mark_atom_dirty(ctx, &ctx->framebuffer.atom);
@@ -233,7 +226,8 @@ void si_begin_new_cs(struct si_context *ctx)
 
 	r600_postflush_resume_features(&ctx->b);
 
-	ctx->b.initial_gfx_cs_size = ctx->b.gfx.cs->cdw;
+	assert(!ctx->b.gfx.cs->prev_dw);
+	ctx->b.initial_gfx_cs_size = ctx->b.gfx.cs->current.cdw;
 
 	/* Invalidate various draw states so that they are emitted before
 	 * the first draw call. */
@@ -246,6 +240,7 @@ void si_begin_new_cs(struct si_context *ctx)
 	ctx->last_ls_hs_config = -1;
 	ctx->last_rast_prim = -1;
 	ctx->last_sc_line_stipple = ~0;
+	ctx->last_vtx_reuse_depth = -1;
 	ctx->emit_scratch_reloc = true;
 	ctx->last_ls = NULL;
 	ctx->last_tcs = NULL;

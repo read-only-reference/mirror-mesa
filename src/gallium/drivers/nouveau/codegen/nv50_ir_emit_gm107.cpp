@@ -420,7 +420,7 @@ CodeEmitterGM107::emitSAT(int pos)
 void
 CodeEmitterGM107::emitCC(int pos)
 {
-   emitField(pos, 1, insn->defExists(1));
+   emitField(pos, 1, insn->flagsDef >= 0);
 }
 
 void
@@ -678,8 +678,7 @@ CodeEmitterGM107::emitRAM()
 void
 CodeEmitterGM107::emitMOV()
 {
-   if ( insn->src(0).getFile() != FILE_IMMEDIATE ||
-       (insn->sType != TYPE_F32 && !longIMMD(insn->src(0)))) {
+   if (insn->src(0).getFile() != FILE_IMMEDIATE) {
       switch (insn->src(0).getFile()) {
       case FILE_GPR:
          if (insn->def(0).getFile() == FILE_PREDICATE) {
@@ -1607,7 +1606,7 @@ CodeEmitterGM107::emitLOP()
       break;
    }
 
-   if (!longIMMD(insn->src(1))) {
+   if (insn->src(1).getFile() != FILE_IMMEDIATE) {
       switch (insn->src(1).getFile()) {
       case FILE_GPR:
          emitInsn(0x5c400000);
@@ -1626,6 +1625,7 @@ CodeEmitterGM107::emitLOP()
          break;
       }
       emitPRED (0x30);
+      emitCC   (0x2f);
       emitX    (0x2b);
       emitField(0x29, 2, lop);
       emitINV  (0x28, insn->src(1));
@@ -1636,6 +1636,7 @@ CodeEmitterGM107::emitLOP()
       emitINV  (0x38, insn->src(1));
       emitINV  (0x37, insn->src(0));
       emitField(0x35, 2, lop);
+      emitCC   (0x34);
       emitIMMD (0x14, 32, insn->src(1));
    }
 
@@ -1719,7 +1720,7 @@ CodeEmitterGM107::emitIADD()
 void
 CodeEmitterGM107::emitIMUL()
 {
-   if (!longIMMD(insn->src(1))) {
+   if (insn->src(1).getFile() != FILE_IMMEDIATE) {
       switch (insn->src(1).getFile()) {
       case FILE_GPR:
          emitInsn(0x5c380000);
@@ -2788,23 +2789,26 @@ CodeEmitterGM107::emitMEMBAR()
 void
 CodeEmitterGM107::emitVOTE()
 {
-   int subOp;
+   assert(insn->src(0).getFile() == FILE_PREDICATE);
 
-   assert(insn->src(0).getFile() == FILE_PREDICATE &&
-          insn->def(1).getFile() == FILE_PREDICATE);
-
-   switch (insn->subOp) {
-   case NV50_IR_SUBOP_VOTE_ANY: subOp = 1; break;
-   default:
-      assert(insn->subOp == NV50_IR_SUBOP_VOTE_ALL);
-      subOp = 0;
-      break;
+   int r = -1, p = -1;
+   for (int i = 0; insn->defExists(i); i++) {
+      if (insn->def(i).getFile() == FILE_GPR)
+         r = i;
+      else if (insn->def(i).getFile() == FILE_PREDICATE)
+         p = i;
    }
 
    emitInsn (0x50d80000);
-   emitField(0x30, 2, subOp);
-   emitGPR  (0x00, insn->def(0));
-   emitPRED (0x2d, insn->def(1));
+   emitField(0x30, 2, insn->subOp);
+   if (r >= 0)
+      emitGPR  (0x00, insn->def(r));
+   else
+      emitGPR  (0x00);
+   if (p >= 0)
+      emitPRED (0x2d, insn->def(p));
+   else
+      emitPRED (0x2d);
    emitField(0x2a, 1, insn->src(0).mod == Modifier(NV50_IR_MOD_NOT));
    emitPRED (0x27, insn->src(0));
 }

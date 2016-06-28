@@ -294,22 +294,38 @@ static void
 gen8_blorp_emit_sbe_state(struct brw_context *brw,
                           const struct brw_blorp_params *params)
 {
+   const unsigned num_varyings = params->wm_prog_data->num_varying_inputs;
+
    /* 3DSTATE_SBE */
    {
       const unsigned sbe_cmd_length = brw->gen == 8 ? 4 : 6;
       BEGIN_BATCH(sbe_cmd_length);
       OUT_BATCH(_3DSTATE_SBE << 16 | (sbe_cmd_length - 2));
-      OUT_BATCH(GEN7_SBE_SWIZZLE_ENABLE |
-                params->num_varyings << GEN7_SBE_NUM_OUTPUTS_SHIFT |
+
+      /* There is no need for swizzling (GEN7_SBE_SWIZZLE_ENABLE). All the
+       * vertex data coming from vertex fetcher is taken as unmodified
+       * (i.e., passed through). Vertex shader state is disabled and vertex
+       * fetcher builds complete vertex entries including VUE header.
+       * This is for unknown reason really needed to be disabled when more
+       * than one vec4 worth of vertex attributes are needed.
+       */
+      OUT_BATCH(num_varyings << GEN7_SBE_NUM_OUTPUTS_SHIFT |
                 1 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
                 BRW_SF_URB_ENTRY_READ_OFFSET <<
                    GEN8_SBE_URB_ENTRY_READ_OFFSET_SHIFT |
                 GEN8_SBE_FORCE_URB_ENTRY_READ_LENGTH |
                 GEN8_SBE_FORCE_URB_ENTRY_READ_OFFSET);
       OUT_BATCH(0);
-      OUT_BATCH(0);
+      OUT_BATCH(params->wm_prog_data->flat_inputs);
       if (sbe_cmd_length >= 6) {
-         OUT_BATCH(GEN9_SBE_ACTIVE_COMPONENT_XYZW << (0 << 1));
+         /* Fragment coordinates are always enabled. */
+         uint32_t dw4 = (GEN9_SBE_ACTIVE_COMPONENT_XYZW << (0 << 1));
+
+         for (unsigned i = 0; i < num_varyings; ++i) {
+            dw4 |= (GEN9_SBE_ACTIVE_COMPONENT_XYZW << ((i + 1) << 1));
+         }
+
+         OUT_BATCH(dw4);
          OUT_BATCH(0);
       }
       ADVANCE_BATCH();
@@ -384,7 +400,9 @@ gen8_blorp_emit_ps_config(struct brw_context *brw,
       dw3 |= 1 << GEN7_PS_BINDING_TABLE_ENTRY_COUNT_SHIFT; /* One surface */
    }
 
-   dw6 |= GEN7_PS_PUSH_CONSTANT_ENABLE;
+   if (prog_data->nr_params)
+      dw6 |= GEN7_PS_PUSH_CONSTANT_ENABLE;
+
    dw7 |= prog_data->first_curbe_grf_0 << GEN7_PS_DISPATCH_START_GRF_SHIFT_0;
    dw7 |= prog_data->first_curbe_grf_2 << GEN7_PS_DISPATCH_START_GRF_SHIFT_2;
 
@@ -443,10 +461,11 @@ gen8_blorp_emit_ps_extra(struct brw_context *brw,
 
    dw1 |= GEN8_PSX_PIXEL_SHADER_VALID;
 
-   if (params->src.mt) {
+   if (params->src.mt)
       dw1 |= GEN8_PSX_KILL_ENABLE;
+
+   if (params->wm_prog_data->num_varying_inputs)
       dw1 |= GEN8_PSX_ATTRIBUTE_ENABLE;
-   }
 
    if (params->dst.num_samples > 1 && prog_data &&
        prog_data->persample_msaa_dispatch)
@@ -553,6 +572,7 @@ gen8_blorp_emit_depth_stencil_state(struct brw_context *brw,
 
 static void
 gen8_blorp_emit_constant_ps(struct brw_context *brw,
+                            const struct brw_blorp_params *params,
                             uint32_t wm_push_const_offset)
 {
    const int dwords = brw->gen >= 8 ? 11 : 7;
@@ -561,9 +581,9 @@ gen8_blorp_emit_constant_ps(struct brw_context *brw,
 
    if (brw->gen >= 9) {
       OUT_BATCH(0);
-      OUT_BATCH(BRW_BLORP_NUM_PUSH_CONST_REGS);
+      OUT_BATCH(params->wm_prog_data->nr_params);
    } else {
-      OUT_BATCH(BRW_BLORP_NUM_PUSH_CONST_REGS);
+      OUT_BATCH(params->wm_prog_data->nr_params);
       OUT_BATCH(0);
    }
 
@@ -572,8 +592,15 @@ gen8_blorp_emit_constant_ps(struct brw_context *brw,
       OUT_BATCH(0);
       OUT_BATCH(0);
       OUT_BATCH(0);
-      OUT_RELOC64(brw->batch.bo, I915_GEM_DOMAIN_RENDER, 0,
-                  wm_push_const_offset);
+
+      if (params->wm_prog_data->nr_params) {
+         OUT_RELOC64(brw->batch.bo, I915_GEM_DOMAIN_RENDER, 0,
+                     wm_push_const_offset);
+      } else {
+         OUT_BATCH(0);
+         OUT_BATCH(0);
+      }
+
       OUT_BATCH(0);
       OUT_BATCH(0);
    } else {
@@ -627,13 +654,12 @@ gen8_blorp_emit_surface_states(struct brw_context *brw,
                            mt->target == GL_TEXTURE_CUBE_MAP;
       const unsigned depth = (is_cube ? 6 : 1) * mt->logical_depth0;
       const GLenum target = is_cube ? GL_TEXTURE_2D_ARRAY : mt->target;
-      const unsigned max_level = surface->level + mt->last_level + 1;
       const unsigned layer = mt->target != GL_TEXTURE_3D ?
                                 surface->layer / layer_divider : 0;
 
       brw->vtbl.emit_texture_surface_state(brw, mt, target,
-                                           layer, layer + depth,
-                                           surface->level, max_level,
+                                           layer, depth,
+                                           surface->level, mt->last_level + 1,
                                            surface->brw_surfaceformat,
                                            surface->swizzle,
                                            &wm_surf_offset_texture,
@@ -672,9 +698,9 @@ gen8_blorp_exec(struct brw_context *brw, const struct brw_blorp_params *params)
    gen8_blorp_emit_disable_constant_state(brw, _3DSTATE_CONSTANT_DS);
    gen8_blorp_emit_disable_constant_state(brw, _3DSTATE_CONSTANT_GS);
 
-   const uint32_t wm_push_const_offset =
-      gen6_blorp_emit_wm_constants(brw, params);
-   gen8_blorp_emit_constant_ps(brw, wm_push_const_offset);
+   const uint32_t wm_push_const_offset = params->wm_prog_data->nr_params ?
+      gen6_blorp_emit_wm_constants(brw, params) : 0;
+   gen8_blorp_emit_constant_ps(brw, params, wm_push_const_offset);
    wm_bind_bo_offset = gen8_blorp_emit_surface_states(brw, params);
 
    gen8_blorp_emit_disable_binding_table(brw,
