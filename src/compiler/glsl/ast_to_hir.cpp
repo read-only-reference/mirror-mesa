@@ -244,7 +244,8 @@ get_implicit_conversion_operation(const glsl_type *to, const glsl_type *from,
       }
 
    case GLSL_TYPE_UINT:
-      if (!state->is_version(400, 0) && !state->ARB_gpu_shader5_enable)
+      if (!state->is_version(400, 0) && !state->ARB_gpu_shader5_enable
+          && !state->MESA_shader_integer_functions_enable)
          return (ir_expression_operation)0;
       switch (from->base_type) {
          case GLSL_TYPE_INT: return ir_unop_i2u;
@@ -1494,6 +1495,10 @@ ast_expression::do_hir(exec_list *instructions,
                  !state->check_version(120, 300, &loc,
                                        "array comparisons forbidden")) {
          error_emitted = true;
+      } else if ((op[0]->type->contains_subroutine() ||
+                  op[1]->type->contains_subroutine())) {
+         _mesa_glsl_error(&loc, state, "subroutine comparisons forbidden");
+         error_emitted = true;
       } else if ((op[0]->type->contains_opaque() ||
                   op[1]->type->contains_opaque())) {
          _mesa_glsl_error(&loc, state, "opaque type comparisons forbidden");
@@ -1982,16 +1987,16 @@ ast_expression::do_hir(exec_list *instructions,
        * therefore add instructions to the instruction list), they get dropped
        * on the floor.
        */
-      exec_node *previous_tail_pred = NULL;
+      exec_node *previous_tail = NULL;
       YYLTYPE previous_operand_loc = loc;
 
       foreach_list_typed (ast_node, ast, link, &this->expressions) {
          /* If one of the operands of comma operator does not generate any
           * code, we want to emit a warning.  At each pass through the loop
-          * previous_tail_pred will point to the last instruction in the
-          * stream *before* processing the previous operand.  Naturally,
-          * instructions->tail_pred will point to the last instruction in the
-          * stream *after* processing the previous operand.  If the two
+          * previous_tail will point to the last instruction in the stream
+          * *before* processing the previous operand.  Naturally,
+          * instructions->get_tail_raw() will point to the last instruction in
+          * the stream *after* processing the previous operand.  If the two
           * pointers match, then the previous operand had no effect.
           *
           * The warning behavior here differs slightly from GCC.  GCC will
@@ -2002,18 +2007,18 @@ ast_expression::do_hir(exec_list *instructions,
           * effect, but I don't think these cases exist in GLSL.  Either way,
           * it would be a giant hassle to replicate that behavior.
           */
-         if (previous_tail_pred == instructions->tail_pred) {
+         if (previous_tail == instructions->get_tail_raw()) {
             _mesa_glsl_warning(&previous_operand_loc, state,
                                "left-hand operand of comma expression has "
                                "no effect");
          }
 
-         /* tail_pred is directly accessed instead of using the get_tail()
+         /* The tail is directly accessed instead of using the get_tail()
           * method for performance reasons.  get_tail() has extra code to
           * return NULL when the list is empty.  We don't care about that
-          * here, so using tail_pred directly is fine.
+          * here, so using get_tail_raw() is fine.
           */
-         previous_tail_pred = instructions->tail_pred;
+         previous_tail = instructions->get_tail_raw();
          previous_operand_loc = ast->get_location();
 
          result = ast->hir(instructions, state);
@@ -2238,7 +2243,7 @@ process_array_type(YYLTYPE *loc, const glsl_type *base,
          }
       }
 
-      for (exec_node *node = array_specifier->array_dimensions.tail_pred;
+      for (exec_node *node = array_specifier->array_dimensions.get_tail_raw();
            !node->is_head_sentinel(); node = node->prev) {
          unsigned array_size = process_array_size(node, state);
          array_type = glsl_type::get_array_instance(array_type, array_size);
@@ -2826,7 +2831,7 @@ apply_explicit_binding(struct _mesa_glsl_parse_state *state,
 static void
 validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
                                  YYLTYPE *loc,
-                                 const glsl_interp_qualifier interpolation,
+                                 const glsl_interp_mode interpolation,
                                  const struct ast_type_qualifier *qual,
                                  const struct glsl_type *var_type,
                                  ir_variable_mode mode)
@@ -2855,7 +2860,7 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
     *    fragment shader."
     */
    if (state->is_version(130, 300)
-       && interpolation != INTERP_QUALIFIER_NONE) {
+       && interpolation != INTERP_MODE_NONE) {
       const char *i = interpolation_string(interpolation);
       if (mode != ir_var_shader_in && mode != ir_var_shader_out)
          _mesa_glsl_error(loc, state,
@@ -2893,7 +2898,7 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
     * These deprecated storage qualifiers do not exist in GLSL ES 3.00.
     */
    if (state->is_version(130, 0)
-       && interpolation != INTERP_QUALIFIER_NONE
+       && interpolation != INTERP_MODE_NONE
        && qual->flags.q.varying) {
 
       const char *i = interpolation_string(interpolation);
@@ -2939,7 +2944,7 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
     */
    if (state->is_version(130, 300)
        && var_type->contains_integer()
-       && interpolation != INTERP_QUALIFIER_FLAT
+       && interpolation != INTERP_MODE_FLAT
        && ((state->stage == MESA_SHADER_FRAGMENT && mode == ir_var_shader_in)
            || (state->stage == MESA_SHADER_VERTEX && mode == ir_var_shader_out
                && state->es_shader))) {
@@ -2969,7 +2974,7 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
     */
    if (state->has_double()
        && var_type->contains_double()
-       && interpolation != INTERP_QUALIFIER_FLAT
+       && interpolation != INTERP_MODE_FLAT
        && state->stage == MESA_SHADER_FRAGMENT
        && mode == ir_var_shader_in) {
       _mesa_glsl_error(loc, state, "if a fragment input is (or contains) "
@@ -2977,20 +2982,20 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
    }
 }
 
-static glsl_interp_qualifier
+static glsl_interp_mode
 interpret_interpolation_qualifier(const struct ast_type_qualifier *qual,
                                   const struct glsl_type *var_type,
                                   ir_variable_mode mode,
                                   struct _mesa_glsl_parse_state *state,
                                   YYLTYPE *loc)
 {
-   glsl_interp_qualifier interpolation;
+   glsl_interp_mode interpolation;
    if (qual->flags.q.flat)
-      interpolation = INTERP_QUALIFIER_FLAT;
+      interpolation = INTERP_MODE_FLAT;
    else if (qual->flags.q.noperspective)
-      interpolation = INTERP_QUALIFIER_NOPERSPECTIVE;
+      interpolation = INTERP_MODE_NOPERSPECTIVE;
    else if (qual->flags.q.smooth)
-      interpolation = INTERP_QUALIFIER_SMOOTH;
+      interpolation = INTERP_MODE_SMOOTH;
    else if (state->es_shader &&
             ((mode == ir_var_shader_in &&
               state->stage != MESA_SHADER_VERTEX) ||
@@ -3001,9 +3006,9 @@ interpret_interpolation_qualifier(const struct ast_type_qualifier *qual,
        *    "When no interpolation qualifier is present, smooth interpolation
        *    is used."
        */
-      interpolation = INTERP_QUALIFIER_SMOOTH;
+      interpolation = INTERP_MODE_SMOOTH;
    else
-      interpolation = INTERP_QUALIFIER_NONE;
+      interpolation = INTERP_MODE_NONE;
 
    validate_interpolation_qualifier(state, loc,
                                     interpolation,
@@ -4512,10 +4517,9 @@ ast_declarator_list::hir(exec_list *instructions,
       allowed_atomic_qual_mask.flags.q.explicit_offset = 1;
       allowed_atomic_qual_mask.flags.q.uniform = 1;
 
-      type->qualifier.validate_flags(&loc, state,
-                                     "invalid layout qualifier for "
-                                     "atomic_uint",
-                                     allowed_atomic_qual_mask);
+      type->qualifier.validate_flags(&loc, state, allowed_atomic_qual_mask,
+                                     "invalid layout qualifier for",
+                                     "atomic_uint");
    }
 
    if (this->declarations.is_empty()) {
@@ -4696,6 +4700,14 @@ ast_declarator_list::hir(exec_list *instructions,
 				       & loc, false);
       apply_layout_qualifier_to_variable(&this->type->qualifier, var, state,
                                          &loc);
+
+      if ((var->data.mode == ir_var_auto || var->data.mode == ir_var_temporary)
+          && (var->type->is_numeric() || var->type->is_boolean())
+          && state->zero_init) {
+         const ir_constant_data data = {0};
+         var->data.has_initializer = true;
+         var->constant_initializer = new(var) ir_constant(var->type, &data);
+      }
 
       if (this->type->qualifier.flags.q.invariant) {
          if (!is_varying_var(var, state->stage)) {
@@ -7042,12 +7054,80 @@ ast_interface_block::hir(exec_list *instructions,
                        this->block_name);
    }
 
-   if (!this->layout.flags.q.buffer &&
-       this->layout.flags.q.std430) {
-      _mesa_glsl_error(&loc, state,
-                       "std430 storage block layout qualifier is supported "
-                       "only for shader storage blocks");
+   /* Validate qualifiers:
+    *
+    * - Layout Qualifiers as per the table in Section 4.4
+    *   ("Layout Qualifiers") of the GLSL 4.50 spec.
+    *
+    * - Memory Qualifiers as per Section 4.10 ("Memory Qualifiers") of the
+    *   GLSL 4.50 spec:
+    *
+    *     "Additionally, memory qualifiers may also be used in the declaration
+    *      of shader storage blocks"
+    *
+    * Note the table in Section 4.4 says std430 is allowed on both uniform and
+    * buffer blocks however Section 4.4.5 (Uniform and Shader Storage Block
+    * Layout Qualifiers) of the GLSL 4.50 spec says:
+    *
+    *    "The std430 qualifier is supported only for shader storage blocks;
+    *    using std430 on a uniform block will result in a compile-time error."
+    */
+   ast_type_qualifier allowed_blk_qualifiers;
+   allowed_blk_qualifiers.flags.i = 0;
+   if (this->layout.flags.q.buffer || this->layout.flags.q.uniform) {
+      allowed_blk_qualifiers.flags.q.shared = 1;
+      allowed_blk_qualifiers.flags.q.packed = 1;
+      allowed_blk_qualifiers.flags.q.std140 = 1;
+      allowed_blk_qualifiers.flags.q.row_major = 1;
+      allowed_blk_qualifiers.flags.q.column_major = 1;
+      allowed_blk_qualifiers.flags.q.explicit_align = 1;
+      allowed_blk_qualifiers.flags.q.explicit_binding = 1;
+      if (this->layout.flags.q.buffer) {
+         allowed_blk_qualifiers.flags.q.buffer = 1;
+         allowed_blk_qualifiers.flags.q.std430 = 1;
+         allowed_blk_qualifiers.flags.q.coherent = 1;
+         allowed_blk_qualifiers.flags.q._volatile = 1;
+         allowed_blk_qualifiers.flags.q.restrict_flag = 1;
+         allowed_blk_qualifiers.flags.q.read_only = 1;
+         allowed_blk_qualifiers.flags.q.write_only = 1;
+      } else {
+         allowed_blk_qualifiers.flags.q.uniform = 1;
+      }
+   } else {
+      /* Interface block */
+      assert(this->layout.flags.q.in || this->layout.flags.q.out);
+
+      allowed_blk_qualifiers.flags.q.explicit_location = 1;
+      if (this->layout.flags.q.out) {
+         allowed_blk_qualifiers.flags.q.out = 1;
+         if (state->stage == MESA_SHADER_GEOMETRY ||
+          state->stage == MESA_SHADER_TESS_CTRL ||
+          state->stage == MESA_SHADER_TESS_EVAL ||
+          state->stage == MESA_SHADER_VERTEX ) {
+            allowed_blk_qualifiers.flags.q.explicit_xfb_offset = 1;
+            allowed_blk_qualifiers.flags.q.explicit_xfb_buffer = 1;
+            allowed_blk_qualifiers.flags.q.xfb_buffer = 1;
+            allowed_blk_qualifiers.flags.q.explicit_xfb_stride = 1;
+            allowed_blk_qualifiers.flags.q.xfb_stride = 1;
+            if (state->stage == MESA_SHADER_GEOMETRY) {
+               allowed_blk_qualifiers.flags.q.stream = 1;
+               allowed_blk_qualifiers.flags.q.explicit_stream = 1;
+            }
+            if (state->stage == MESA_SHADER_TESS_CTRL) {
+               allowed_blk_qualifiers.flags.q.patch = 1;
+            }
+         }
+      } else {
+         allowed_blk_qualifiers.flags.q.in = 1;
+         if (state->stage == MESA_SHADER_TESS_EVAL) {
+            allowed_blk_qualifiers.flags.q.patch = 1;
+         }
+      }
    }
+
+   this->layout.validate_flags(&loc, state, allowed_blk_qualifiers,
+                               "invalid qualifier for block",
+                               this->block_name);
 
    /* The ast_interface_block has a list of ast_declarator_lists.  We
     * need to turn those into ir_variables with an association
@@ -7102,12 +7182,6 @@ ast_interface_block::hir(exec_list *instructions,
    if (this->layout.flags.q.read_only && this->layout.flags.q.write_only) {
       _mesa_glsl_error(&loc, state,
                        "Interface block sets both readonly and writeonly");
-   }
-
-   if (this->layout.flags.q.explicit_component) {
-      _mesa_glsl_error(&loc, state, "component layout qualifier cannot be "
-                       "applied to a matrix, a structure, a block, or an "
-                       "array containing any of these.");
    }
 
    unsigned qual_stream;

@@ -105,6 +105,9 @@ void st_init_limits(struct pipe_screen *screen,
    c->MaxViewportHeight =
    c->MaxRenderbufferSize = c->MaxTextureRectSize;
 
+   c->ViewportSubpixelBits =
+      screen->get_param(screen, PIPE_CAP_VIEWPORT_SUBPIXEL_BITS);
+
    c->MaxDrawBuffers = c->MaxColorAttachments =
       _clamp(screen->get_param(screen, PIPE_CAP_MAX_RENDER_TARGETS),
              1, MAX_DRAW_BUFFERS);
@@ -443,7 +446,6 @@ void st_init_limits(struct pipe_screen *screen,
          c->Program[MESA_SHADER_COMPUTE].MaxImageUniforms;
    c->MaxCombinedShaderOutputResources += c->MaxCombinedImageUniforms;
    c->MaxImageUnits = MAX_IMAGE_UNITS;
-   c->MaxImageSamples = 0; /* XXX */
    if (c->MaxCombinedImageUniforms) {
       extensions->ARB_shader_image_load_store = GL_TRUE;
       extensions->ARB_shader_image_size = GL_TRUE;
@@ -911,6 +913,7 @@ void st_init_extensions(struct pipe_screen *screen,
 
       extensions->EXT_shader_integer_mix = GL_TRUE;
       extensions->ARB_arrays_of_arrays = GL_TRUE;
+      extensions->MESA_shader_integer_functions = GL_TRUE;
    } else {
       /* Optional integer support for GLSL 1.2. */
       if (screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
@@ -925,6 +928,8 @@ void st_init_extensions(struct pipe_screen *screen,
       /* Integer textures make no sense before GLSL 1.30 */
       extensions->EXT_texture_integer = GL_FALSE;
    }
+
+   consts->GLSLZeroInit = options->glsl_zero_init;
 
    consts->UniformBooleanTrue = consts->NativeIntegers ? ~0U : fui(1.0f);
 
@@ -987,6 +992,11 @@ void st_init_extensions(struct pipe_screen *screen,
          get_max_samples_for_formats(screen, ARRAY_SIZE(color_formats),
                                      color_formats, 16,
                                      PIPE_BIND_RENDER_TARGET);
+
+      consts->MaxImageSamples =
+         get_max_samples_for_formats(screen, ARRAY_SIZE(color_formats),
+                                     color_formats, 16,
+                                     PIPE_BIND_SHADER_IMAGE);
 
       consts->MaxColorTextureSamples =
          get_max_samples_for_formats(screen, ARRAY_SIZE(color_formats),

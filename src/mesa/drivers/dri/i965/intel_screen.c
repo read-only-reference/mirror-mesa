@@ -88,6 +88,10 @@ DRI_CONF_BEGIN
 	 DRI_CONF_DESC(en, "Perform code generation at shader link time.")
       DRI_CONF_OPT_END
    DRI_CONF_SECTION_END
+
+   DRI_CONF_SECTION_MISCELLANEOUS
+      DRI_CONF_GLSL_ZERO_INIT("false")
+   DRI_CONF_SECTION_END
 DRI_CONF_END
 };
 
@@ -1415,7 +1419,7 @@ set_max_gl_versions(struct intel_screen *screen)
    switch (screen->devinfo->gen) {
    case 9:
    case 8:
-      psp->max_gl_core_version = 43;
+      psp->max_gl_core_version = 44;
       psp->max_gl_compat_version = 30;
       psp->max_gl_es1_version = 11;
       psp->max_gl_es2_version = 31;

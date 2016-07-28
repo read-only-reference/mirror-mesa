@@ -31,6 +31,7 @@
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
 #include "vl/vl_decoder.h"
+#include "../ddebug/dd_util.h"
 
 #define SI_LLVM_DEFAULT_FEATURES \
 	"+DumpCode,+vgpr-spilling,-fp32-denormals,+fp64-denormals"
@@ -106,14 +107,45 @@ si_amdgpu_get_reset_status(struct pipe_context *ctx)
 	return sctx->b.ws->ctx_query_reset_status(sctx->b.ctx);
 }
 
+/* Apitrace profiling:
+ *   1) qapitrace : Tools -> Profile: Measure CPU & GPU times
+ *   2) In the middle panel, zoom in (mouse wheel) on some bad draw call
+ *      and remember its number.
+ *   3) In Mesa, enable queries and performance counters around that draw
+ *      call and print the results.
+ *   4) glretrace --benchmark --markers ..
+ */
+static void si_emit_string_marker(struct pipe_context *ctx,
+				  const char *string, int len)
+{
+	struct si_context *sctx = (struct si_context *)ctx;
+
+	dd_parse_apitrace_marker(string, len, &sctx->apitrace_call_number);
+}
+
+static LLVMTargetMachineRef
+si_create_llvm_target_machine(struct si_screen *sscreen)
+{
+	const char *triple = "amdgcn--";
+
+	return LLVMCreateTargetMachine(radeon_llvm_get_r600_target(triple), triple,
+				       r600_get_llvm_processor_name(sscreen->b.family),
+#if HAVE_LLVM >= 0x0308
+				       sscreen->b.debug_flags & DBG_SI_SCHED ?
+					       SI_LLVM_DEFAULT_FEATURES ",+si-scheduler" :
+#endif
+					       SI_LLVM_DEFAULT_FEATURES,
+				       LLVMCodeGenLevelDefault,
+				       LLVMRelocDefault,
+				       LLVMCodeModelDefault);
+}
+
 static struct pipe_context *si_create_context(struct pipe_screen *screen,
                                               void *priv, unsigned flags)
 {
 	struct si_context *sctx = CALLOC_STRUCT(si_context);
 	struct si_screen* sscreen = (struct si_screen *)screen;
 	struct radeon_winsys *ws = sscreen->b.ws;
-	LLVMTargetRef r600_target;
-	const char *triple = "amdgcn--";
 	int shader, i;
 
 	if (!sctx)
@@ -122,14 +154,18 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	if (sscreen->b.debug_flags & DBG_CHECK_VM)
 		flags |= PIPE_CONTEXT_DEBUG;
 
+	if (flags & PIPE_CONTEXT_DEBUG)
+		sscreen->record_llvm_ir = true; /* racy but not critical */
+
 	sctx->b.b.screen = screen; /* this must be set first */
 	sctx->b.b.priv = priv;
 	sctx->b.b.destroy = si_destroy_context;
+	sctx->b.b.emit_string_marker = si_emit_string_marker;
 	sctx->b.set_atom_dirty = (void *)si_set_atom_dirty;
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
 	sctx->is_debug = (flags & PIPE_CONTEXT_DEBUG) != 0;
 
-	if (!r600_common_context_init(&sctx->b, &sscreen->b))
+	if (!r600_common_context_init(&sctx->b, &sscreen->b, flags))
 		goto fail;
 
 	if (sscreen->b.info.drm_major == 3)
@@ -258,18 +294,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->scratch_waves = MAX2(32 * sscreen->b.info.num_good_compute_units,
 				   max_threads_per_block / 64);
 
-	/* Initialize LLVM TargetMachine */
-	r600_target = radeon_llvm_get_r600_target(triple);
-	sctx->tm = LLVMCreateTargetMachine(r600_target, triple,
-					   r600_get_llvm_processor_name(sscreen->b.family),
-#if HAVE_LLVM >= 0x0308
-					   sscreen->b.debug_flags & DBG_SI_SCHED ?
-						SI_LLVM_DEFAULT_FEATURES ",+si-scheduler" :
-#endif
-						SI_LLVM_DEFAULT_FEATURES,
-					   LLVMCodeGenLevelDefault,
-					   LLVMRelocDefault,
-					   LLVMCodeModelDefault);
+	sctx->tm = si_create_llvm_target_machine(sscreen);
 
 	return &sctx->b.b;
 fail:
@@ -361,6 +386,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
+	case PIPE_CAP_STRING_MARKER:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -397,7 +423,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		       HAVE_LLVM >= 0x0307 ? 410 : 330;
 
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
-		return MIN2(sscreen->b.info.vram_size, 0xFFFFFFFF);
+		return MIN2(sscreen->b.info.max_alloc_size, INT_MAX);
 
 	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
 		return 0;
@@ -413,7 +439,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_DRAW_PARAMETERS:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 	case PIPE_CAP_CULL_DISTANCE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
@@ -464,6 +489,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_MAX_VIEWPORTS:
 		return R600_MAX_VIEWPORTS;
+	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+		return 8;
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_QUERY_TIMESTAMP:
@@ -545,7 +572,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 			pscreen->get_compute_param(pscreen, PIPE_SHADER_IR_TGSI,
 				PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE,
 				&max_const_buffer_size);
-			return max_const_buffer_size;
+			return MIN2(max_const_buffer_size, INT_MAX);
 		}
 		default:
 			/* If compute shaders don't require a special value
@@ -638,6 +665,13 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 	if (!sscreen->b.ws->unref(sscreen->b.ws))
 		return;
 
+	if (util_queue_is_initialized(&sscreen->shader_compiler_queue))
+		util_queue_destroy(&sscreen->shader_compiler_queue);
+
+	for (i = 0; i < ARRAY_SIZE(sscreen->tm); i++)
+		if (sscreen->tm[i])
+			LLVMDisposeTargetMachine(sscreen->tm[i]);
+
 	/* Free shader parts. */
 	for (i = 0; i < ARRAY_SIZE(parts); i++) {
 		while (parts[i]) {
@@ -685,6 +719,7 @@ static bool si_init_gs_info(struct si_screen *sscreen)
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 {
 	struct si_screen *sscreen = CALLOC_STRUCT(si_screen);
+	unsigned num_cpus, num_compiler_threads, i;
 
 	if (!sscreen) {
 		return NULL;
@@ -728,6 +763,16 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))
 		sscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
+
+	/* Only enable as many threads as we have target machines and CPUs. */
+	num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+	num_compiler_threads = MIN2(num_cpus, ARRAY_SIZE(sscreen->tm));
+
+	for (i = 0; i < num_compiler_threads; i++)
+		sscreen->tm[i] = si_create_llvm_target_machine(sscreen);
+
+	util_queue_init(&sscreen->shader_compiler_queue, "si_shader",
+                        32, num_compiler_threads);
 
 	/* Create the auxiliary context. This must be done last. */
 	sscreen->b.aux_context = sscreen->b.b.context_create(&sscreen->b.b, NULL, 0);

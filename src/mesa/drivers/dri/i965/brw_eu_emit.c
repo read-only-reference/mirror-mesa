@@ -350,7 +350,8 @@ brw_set_src0(struct brw_codegen *p, brw_inst *inst, struct brw_reg reg)
    brw_inst_set_src0_address_mode(devinfo, inst, reg.address_mode);
 
    if (reg.file == BRW_IMMEDIATE_VALUE) {
-      if (reg.type == BRW_REGISTER_TYPE_DF)
+      if (reg.type == BRW_REGISTER_TYPE_DF ||
+          brw_inst_opcode(devinfo, inst) == BRW_OPCODE_DIM)
          brw_inst_set_imm_df(devinfo, inst, reg.df);
       else
          brw_inst_set_imm_ud(devinfo, inst, reg.ud);
@@ -1064,6 +1065,7 @@ ALU2(OR)
 ALU2(XOR)
 ALU2(SHR)
 ALU2(SHL)
+ALU1(DIM)
 ALU2(ASR)
 ALU1(FRC)
 ALU1(RNDD)

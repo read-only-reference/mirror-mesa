@@ -49,7 +49,6 @@
 #define VC4_DIRTY_ZSA           (1 <<  2)
 #define VC4_DIRTY_FRAGTEX       (1 <<  3)
 #define VC4_DIRTY_VERTTEX       (1 <<  4)
-#define VC4_DIRTY_TEXSTATE      (1 <<  5)
 
 #define VC4_DIRTY_BLEND_COLOR   (1 <<  7)
 #define VC4_DIRTY_STENCIL_REF   (1 <<  8)
@@ -75,6 +74,7 @@ struct vc4_sampler_view {
         struct pipe_sampler_view base;
         uint32_t texture_p0;
         uint32_t texture_p1;
+        bool force_first_level;
 };
 
 struct vc4_sampler_state {
@@ -87,7 +87,6 @@ struct vc4_texture_stateobj {
         unsigned num_textures;
         struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS];
         unsigned num_samplers;
-        unsigned dirty_samplers;
 };
 
 struct vc4_shader_uniform_info {
@@ -142,6 +141,8 @@ struct vc4_compiled_shader {
 
         /** bitmask of which inputs are color inputs, for flat shade handling. */
         uint32_t color_inputs;
+
+        bool disable_early_z;
 
         uint8_t num_inputs;
 

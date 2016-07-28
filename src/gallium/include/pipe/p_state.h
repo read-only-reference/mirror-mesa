@@ -326,17 +326,7 @@ struct pipe_blend_state
 
 struct pipe_blend_color
 {
-   /**
-    * Making the color array explicitly 16-byte aligned provides a hint to
-    * compilers to make more efficient auto-vectorization optimizations.
-    * The actual performance gains from vectorizing the blend color array are
-    * fairly minimal, if any, but the alignment is necessary to work around
-    * buggy vectorization in some compilers which fail to generate the correct
-    * unaligned accessors resulting in a segfault.  Specifically several
-    * versions of the Intel compiler are known to be affected but it's likely
-    * others are as well.
-    */
-   PIPE_ALIGN_VAR(16) float color[4];
+   float color[4];
 };
 
 
@@ -387,6 +377,17 @@ struct pipe_sampler_state
    union pipe_color_union border_color;
 };
 
+union pipe_surface_desc {
+   struct {
+      unsigned level;
+      unsigned first_layer:16;
+      unsigned last_layer:16;
+   } tex;
+   struct {
+      unsigned first_element;
+      unsigned last_element;
+   } buf;
+};
 
 /**
  * A view into a texture that can be bound to a color render target /
@@ -405,17 +406,7 @@ struct pipe_surface
 
    unsigned writable:1;          /**< writable shader resource */
 
-   union {
-      struct {
-         unsigned level;
-         unsigned first_layer:16;
-         unsigned last_layer:16;
-      } tex;
-      struct {
-         unsigned first_element;
-         unsigned last_element;
-      } buf;
-   } u;
+   union pipe_surface_desc u;
 };
 
 
@@ -756,6 +747,13 @@ struct pipe_grid_info
    void *input;
 
    /**
+    * Grid number of dimensions, 1-3, e.g. the work_dim parameter passed to
+    * clEnqueueNDRangeKernel. Note block[] and grid[] must be padded with
+    * 1 for non-used dimensions.
+    */
+   uint work_dim;
+
+   /**
     * Determine the layout of the working block (in thread units) to be used.
     */
    uint block[3];
@@ -801,6 +799,12 @@ struct pipe_compute_state
  */
 struct pipe_debug_callback
 {
+   /**
+    * When set to \c true, the callback may be called asynchronously from a
+    * driver-created thread.
+    */
+   bool async;
+
    /**
     * Callback for the driver to report debug/performance/etc information back
     * to the state tracker.

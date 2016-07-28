@@ -39,9 +39,13 @@
 #include "brw_program.h"
 #include "brw_dead_control_flow.h"
 #include "compiler/glsl_types.h"
+#include "compiler/nir/nir_builder.h"
 #include "program/prog_parameter.h"
 
 using namespace brw;
+
+static unsigned get_lowered_simd_width(const struct brw_device_info *devinfo,
+                                       const fs_inst *inst);
 
 void
 fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
@@ -249,7 +253,6 @@ fs_inst::is_send_from_grf() const
    switch (opcode) {
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7:
    case SHADER_OPCODE_SHADER_TIME_ADD:
-   case FS_OPCODE_INTERPOLATE_AT_CENTROID:
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
    case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
@@ -504,6 +507,19 @@ type_size_scalar(const struct glsl_type *type)
    }
 
    return 0;
+}
+
+/**
+ * Returns the number of scalar components needed to store type, assuming
+ * that vectors are padded out to vec4.
+ *
+ * This has the packing rules of type_size_vec4(), but counts components
+ * similar to type_size_scalar().
+ */
+extern "C" int
+type_size_vec4_times_4(const struct glsl_type *type)
+{
+   return 4 * type_size_vec4(type);
 }
 
 /* Attribute arrays are loaded as one vec4 per element (or matrix column),
@@ -1039,12 +1055,10 @@ fs_visitor::import_uniforms(fs_visitor *v)
    this->uniforms = v->uniforms;
 }
 
-fs_reg *
-fs_visitor::emit_fragcoord_interpolation()
+void
+fs_visitor::emit_fragcoord_interpolation(fs_reg wpos)
 {
    assert(stage == MESA_SHADER_FRAGMENT);
-   fs_reg *reg = new(this->mem_ctx) fs_reg(vgrf(glsl_type::vec4_type));
-   fs_reg wpos = *reg;
 
    /* gl_FragCoord.x */
    bld.MOV(wpos, this->pixel_x);
@@ -1059,164 +1073,53 @@ fs_visitor::emit_fragcoord_interpolation()
       bld.MOV(wpos, fs_reg(brw_vec8_grf(payload.source_depth_reg, 0)));
    } else {
       bld.emit(FS_OPCODE_LINTERP, wpos,
-           this->delta_xy[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
+           this->delta_xy[BRW_BARYCENTRIC_PERSPECTIVE_PIXEL],
            interp_reg(VARYING_SLOT_POS, 2));
    }
    wpos = offset(wpos, bld, 1);
 
    /* gl_FragCoord.w: Already set up in emit_interpolation */
    bld.MOV(wpos, this->wpos_w);
-
-   return reg;
 }
 
-fs_inst *
-fs_visitor::emit_linterp(const fs_reg &attr, const fs_reg &interp,
-                         glsl_interp_qualifier interpolation_mode,
-                         bool is_centroid, bool is_sample)
+enum brw_barycentric_mode
+brw_barycentric_mode(enum glsl_interp_mode mode, nir_intrinsic_op op)
 {
-   brw_wm_barycentric_interp_mode barycoord_mode;
-   if (devinfo->gen >= 6) {
-      if (is_centroid) {
-         if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
-            barycoord_mode = BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
-         else
-            barycoord_mode = BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
-      } else if (is_sample) {
-          if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
-            barycoord_mode = BRW_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC;
-         else
-            barycoord_mode = BRW_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC;
-      } else {
-         if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
-            barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
-         else
-            barycoord_mode = BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
-      }
-   } else {
-      /* On Ironlake and below, there is only one interpolation mode.
-       * Centroid interpolation doesn't mean anything on this hardware --
-       * there is no multisampling.
-       */
-      barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+   /* Barycentric modes don't make sense for flat inputs. */
+   assert(mode != INTERP_MODE_FLAT);
+
+   unsigned bary;
+   switch (op) {
+   case nir_intrinsic_load_barycentric_pixel:
+   case nir_intrinsic_load_barycentric_at_offset:
+      bary = BRW_BARYCENTRIC_PERSPECTIVE_PIXEL;
+      break;
+   case nir_intrinsic_load_barycentric_centroid:
+      bary = BRW_BARYCENTRIC_PERSPECTIVE_CENTROID;
+      break;
+   case nir_intrinsic_load_barycentric_sample:
+   case nir_intrinsic_load_barycentric_at_sample:
+      bary = BRW_BARYCENTRIC_PERSPECTIVE_SAMPLE;
+      break;
+   default:
+      unreachable("invalid intrinsic");
    }
-   return bld.emit(FS_OPCODE_LINTERP, attr,
-                   this->delta_xy[barycoord_mode], interp);
+
+   if (mode == INTERP_MODE_NOPERSPECTIVE)
+      bary += 3;
+
+   return (enum brw_barycentric_mode) bary;
 }
 
-void
-fs_visitor::emit_general_interpolation(fs_reg *attr, const char *name,
-                                       const glsl_type *type,
-                                       glsl_interp_qualifier interpolation_mode,
-                                       int *location, bool mod_centroid,
-                                       bool mod_sample)
+/**
+ * Turn one of the two CENTROID barycentric modes into PIXEL mode.
+ */
+static enum brw_barycentric_mode
+centroid_to_pixel(enum brw_barycentric_mode bary)
 {
-   assert(stage == MESA_SHADER_FRAGMENT);
-   brw_wm_prog_data *prog_data = (brw_wm_prog_data*) this->prog_data;
-   brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
-
-   if (interpolation_mode == INTERP_QUALIFIER_NONE) {
-      bool is_gl_Color =
-         *location == VARYING_SLOT_COL0 || *location == VARYING_SLOT_COL1;
-      if (key->flat_shade && is_gl_Color) {
-         interpolation_mode = INTERP_QUALIFIER_FLAT;
-      } else {
-         interpolation_mode = INTERP_QUALIFIER_SMOOTH;
-      }
-   }
-
-   if (type->is_array() || type->is_matrix()) {
-      const glsl_type *elem_type = glsl_get_array_element(type);
-      const unsigned length = glsl_get_length(type);
-
-      for (unsigned i = 0; i < length; i++) {
-         emit_general_interpolation(attr, name, elem_type, interpolation_mode,
-                                    location, mod_centroid, mod_sample);
-      }
-   } else if (type->is_record()) {
-      for (unsigned i = 0; i < type->length; i++) {
-         const glsl_type *field_type = type->fields.structure[i].type;
-         emit_general_interpolation(attr, name, field_type, interpolation_mode,
-                                    location, mod_centroid, mod_sample);
-      }
-   } else {
-      assert(type->is_scalar() || type->is_vector());
-
-      if (prog_data->urb_setup[*location] == -1) {
-         /* If there's no incoming setup data for this slot, don't
-          * emit interpolation for it.
-          */
-         *attr = offset(*attr, bld, type->vector_elements);
-         (*location)++;
-         return;
-      }
-
-      attr->type = brw_type_for_base_type(type->get_scalar_type());
-
-      if (interpolation_mode == INTERP_QUALIFIER_FLAT) {
-         /* Constant interpolation (flat shading) case. The SF has
-          * handed us defined values in only the constant offset
-          * field of the setup reg.
-          */
-         unsigned vector_elements = type->vector_elements;
-
-         /* Data starts at suboffet 3 in 32-bit units (12 bytes), so it is not
-          * 64-bit aligned and the current implementation fails to read the
-          * data properly. Instead, when there is a double input varying,
-          * read it as vector of floats with twice the number of components.
-          */
-         if (attr->type == BRW_REGISTER_TYPE_DF) {
-            vector_elements *= 2;
-            attr->type = BRW_REGISTER_TYPE_F;
-         }
-         for (unsigned int i = 0; i < vector_elements; i++) {
-            struct brw_reg interp = interp_reg(*location, i);
-            interp = suboffset(interp, 3);
-            interp.type = attr->type;
-            bld.emit(FS_OPCODE_CINTERP, *attr, fs_reg(interp));
-            *attr = offset(*attr, bld, 1);
-         }
-      } else {
-         /* Smooth/noperspective interpolation case. */
-         for (unsigned int i = 0; i < type->vector_elements; i++) {
-            struct brw_reg interp = interp_reg(*location, i);
-            if (devinfo->needs_unlit_centroid_workaround && mod_centroid) {
-               /* Get the pixel/sample mask into f0 so that we know
-                * which pixels are lit.  Then, for each channel that is
-                * unlit, replace the centroid data with non-centroid
-                * data.
-                */
-               bld.emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
-
-               fs_inst *inst;
-               inst = emit_linterp(*attr, fs_reg(interp), interpolation_mode,
-                                   false, false);
-               inst->predicate = BRW_PREDICATE_NORMAL;
-               inst->predicate_inverse = true;
-               if (devinfo->has_pln)
-                  inst->no_dd_clear = true;
-
-               inst = emit_linterp(*attr, fs_reg(interp), interpolation_mode,
-                                   mod_centroid && !key->persample_interp,
-                                   mod_sample || key->persample_interp);
-               inst->predicate = BRW_PREDICATE_NORMAL;
-               inst->predicate_inverse = false;
-               if (devinfo->has_pln)
-                  inst->no_dd_check = true;
-
-            } else {
-               emit_linterp(*attr, fs_reg(interp), interpolation_mode,
-                            mod_centroid && !key->persample_interp,
-                            mod_sample || key->persample_interp);
-            }
-            if (devinfo->gen < 6 && interpolation_mode == INTERP_QUALIFIER_SMOOTH) {
-               bld.MUL(*attr, *attr, this->pixel_w);
-            }
-            *attr = offset(*attr, bld, 1);
-         }
-      }
-      (*location)++;
-   }
+   assert(bary == BRW_BARYCENTRIC_PERSPECTIVE_CENTROID ||
+          bary == BRW_BARYCENTRIC_NONPERSPECTIVE_CENTROID);
+   return (enum brw_barycentric_mode) ((unsigned) bary - 1);
 }
 
 fs_reg *
@@ -3658,7 +3561,7 @@ fs_visitor::lower_integer_multiplication()
 
       } else if (inst->opcode == SHADER_OPCODE_MULH) {
          /* Should have been lowered to 8-wide. */
-         assert(inst->exec_size <= 8);
+         assert(inst->exec_size <= get_lowered_simd_width(devinfo, inst));
          const fs_reg acc = retype(brw_acc_reg(inst->exec_size),
                                    inst->dst.type);
          fs_inst *mul = ibld.MUL(acc, inst->src[0], inst->src[1]);
@@ -4755,6 +4658,35 @@ get_fpu_lowered_simd_width(const struct brw_device_info *devinfo,
    if (inst->is_3src(devinfo) && !devinfo->supports_simd16_3src)
       max_width = MIN2(max_width, inst->exec_size / reg_count);
 
+   /* Pre-Gen8 EUs are hardwired to use the QtrCtrl+1 (where QtrCtrl is
+    * the 8-bit quarter of the execution mask signals specified in the
+    * instruction control fields) for the second compressed half of any
+    * single-precision instruction (for double-precision instructions
+    * it's hardwired to use NibCtrl+1, at least on HSW), which means that
+    * the EU will apply the wrong execution controls for the second
+    * sequential GRF write if the number of channels per GRF is not exactly
+    * eight in single-precision mode (or four in double-float mode).
+    *
+    * In this situation we calculate the maximum size of the split
+    * instructions so they only ever write to a single register.
+    */
+   if (devinfo->gen < 8 && inst->regs_written > 1 &&
+       !inst->force_writemask_all) {
+      const unsigned channels_per_grf = inst->exec_size / inst->regs_written;
+      unsigned exec_type_size = 0;
+      for (int i = 0; i < inst->sources; i++) {
+         if (inst->src[i].file != BAD_FILE)
+            exec_type_size = MAX2(exec_type_size, type_sz(inst->src[i].type));
+      }
+      assert(exec_type_size);
+
+      /* The hardware shifts exactly 8 channels per compressed half of the
+       * instruction in single-precision mode and exactly 4 in double-precision.
+       */
+      if (channels_per_grf != (exec_type_size == 8 ? 4 : 8))
+         max_width = MIN2(max_width, channels_per_grf);
+   }
+
    /* Only power-of-two execution sizes are representable in the instruction
     * control fields.
     */
@@ -4868,7 +4800,6 @@ get_lowered_simd_width(const struct brw_device_info *devinfo,
    case FS_OPCODE_PACK_HALF_2x16_SPLIT:
    case FS_OPCODE_UNPACK_HALF_2x16_SPLIT_X:
    case FS_OPCODE_UNPACK_HALF_2x16_SPLIT_Y:
-   case FS_OPCODE_INTERPOLATE_AT_CENTROID:
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
    case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
@@ -5537,13 +5468,13 @@ fs_visitor::setup_fs_payload_gen6()
    /* R2: only for 32-pixel dispatch.*/
 
    /* R3-26: barycentric interpolation coordinates.  These appear in the
-    * same order that they appear in the brw_wm_barycentric_interp_mode
+    * same order that they appear in the brw_barycentric_mode
     * enum.  Each set of coordinates occupies 2 registers if dispatch width
     * == 8 and 4 registers if dispatch width == 16.  Coordinates only
     * appear if they were enabled using the "Barycentric Interpolation
     * Mode" bits in WM_STATE.
     */
-   for (int i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
+   for (int i = 0; i < BRW_BARYCENTRIC_MODE_COUNT; ++i) {
       if (barycentric_interp_modes & (1 << i)) {
          payload.barycentric_coord_reg[i] = payload.num_regs;
          payload.num_regs += 2;
@@ -5650,7 +5581,7 @@ fs_visitor::setup_gs_payload()
     * have to multiply by VerticesIn to obtain the total storage requirement.
     */
    if (8 * vue_prog_data->urb_read_length * nir->info.gs.vertices_in >
-       max_push_components) {
+       max_push_components || gs_prog_data->invocations > 1) {
       gs_prog_data->base.include_vue_handles = true;
 
       /* R3..RN: ICP Handles for each incoming vertex (when using pull model) */
@@ -5810,6 +5741,16 @@ fs_visitor::optimize()
    progress = false;
    pass_num = 0;
 
+   if (OPT(lower_pack)) {
+      OPT(register_coalesce);
+      OPT(dead_code_eliminate);
+   }
+
+   if (OPT(lower_d2x)) {
+      OPT(opt_copy_propagate);
+      OPT(dead_code_eliminate);
+   }
+
    OPT(lower_simd_width);
 
    /* After SIMD lowering just in case we had to unroll the EOT send. */
@@ -5843,16 +5784,6 @@ fs_visitor::optimize()
       split_virtual_grfs();
       OPT(register_coalesce);
       OPT(compute_to_mrf);
-      OPT(dead_code_eliminate);
-   }
-
-   if (OPT(lower_pack)) {
-      OPT(register_coalesce);
-      OPT(dead_code_eliminate);
-   }
-
-   if (OPT(lower_d2x)) {
-      OPT(opt_copy_propagate);
       OPT(dead_code_eliminate);
    }
 
@@ -6314,62 +6245,47 @@ fs_visitor::run_cs()
 
 /**
  * Return a bitfield where bit n is set if barycentric interpolation mode n
- * (see enum brw_wm_barycentric_interp_mode) is needed by the fragment shader.
+ * (see enum brw_barycentric_mode) is needed by the fragment shader.
+ *
+ * We examine the load_barycentric intrinsics rather than looking at input
+ * variables so that we catch interpolateAtCentroid() messages too, which
+ * also need the BRW_BARYCENTRIC_[NON]PERSPECTIVE_CENTROID mode set up.
  */
 static unsigned
 brw_compute_barycentric_interp_modes(const struct brw_device_info *devinfo,
-                                     bool shade_model_flat,
-                                     bool persample_shading,
                                      const nir_shader *shader)
 {
    unsigned barycentric_interp_modes = 0;
 
-   nir_foreach_variable(var, &shader->inputs) {
-      enum glsl_interp_qualifier interp_qualifier =
-         (enum glsl_interp_qualifier)var->data.interpolation;
-      bool is_centroid = var->data.centroid && !persample_shading;
-      bool is_sample = var->data.sample || persample_shading;
-      bool is_gl_Color = (var->data.location == VARYING_SLOT_COL0) ||
-                         (var->data.location == VARYING_SLOT_COL1);
-
-      /* Ignore WPOS and FACE, because they don't require interpolation. */
-      if (var->data.location == VARYING_SLOT_POS ||
-          var->data.location == VARYING_SLOT_FACE)
+   nir_foreach_function(f, shader) {
+      if (!f->impl)
          continue;
 
-      /* Determine the set (or sets) of barycentric coordinates needed to
-       * interpolate this variable.  Note that when
-       * brw->needs_unlit_centroid_workaround is set, centroid interpolation
-       * uses PIXEL interpolation for unlit pixels and CENTROID interpolation
-       * for lit pixels, so we need both sets of barycentric coordinates.
-       */
-      if (interp_qualifier == INTERP_QUALIFIER_NOPERSPECTIVE) {
-         if (is_centroid) {
-            barycentric_interp_modes |=
-               1 << BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
-         } else if (is_sample) {
-            barycentric_interp_modes |=
-               1 << BRW_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC;
-         }
-         if ((!is_centroid && !is_sample) ||
-             devinfo->needs_unlit_centroid_workaround) {
-            barycentric_interp_modes |=
-               1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
-         }
-      } else if (interp_qualifier == INTERP_QUALIFIER_SMOOTH ||
-                 (!(shade_model_flat && is_gl_Color) &&
-                  interp_qualifier == INTERP_QUALIFIER_NONE)) {
-         if (is_centroid) {
-            barycentric_interp_modes |=
-               1 << BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
-         } else if (is_sample) {
-            barycentric_interp_modes |=
-               1 << BRW_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC;
-         }
-         if ((!is_centroid && !is_sample) ||
-             devinfo->needs_unlit_centroid_workaround) {
-            barycentric_interp_modes |=
-               1 << BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+      nir_foreach_block(block, f->impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+            if (intrin->intrinsic != nir_intrinsic_load_interpolated_input)
+               continue;
+
+            /* Ignore WPOS; it doesn't require interpolation. */
+            if (nir_intrinsic_base(intrin) == VARYING_SLOT_POS)
+               continue;
+
+            intrin = nir_instr_as_intrinsic(intrin->src[0].ssa->parent_instr);
+            enum glsl_interp_mode interp = (enum glsl_interp_mode)
+               nir_intrinsic_interp_mode(intrin);
+            nir_intrinsic_op bary_op = intrin->intrinsic;
+            enum brw_barycentric_mode bary =
+               brw_barycentric_mode(interp, bary_op);
+
+            barycentric_interp_modes |= 1 << bary;
+
+            if (devinfo->needs_unlit_centroid_workaround &&
+                bary_op == nir_intrinsic_load_barycentric_centroid)
+               barycentric_interp_modes |= 1 << centroid_to_pixel(bary);
          }
       }
    }
@@ -6379,25 +6295,18 @@ brw_compute_barycentric_interp_modes(const struct brw_device_info *devinfo,
 
 static void
 brw_compute_flat_inputs(struct brw_wm_prog_data *prog_data,
-                        bool shade_model_flat, const nir_shader *shader)
+                        const nir_shader *shader)
 {
    prog_data->flat_inputs = 0;
 
    nir_foreach_variable(var, &shader->inputs) {
-      enum glsl_interp_qualifier interp_qualifier =
-         (enum glsl_interp_qualifier)var->data.interpolation;
-      bool is_gl_Color = (var->data.location == VARYING_SLOT_COL0) ||
-                         (var->data.location == VARYING_SLOT_COL1);
-
       int input_index = prog_data->urb_setup[var->data.location];
 
       if (input_index < 0)
 	 continue;
 
       /* flat shading */
-      if (interp_qualifier == INTERP_QUALIFIER_FLAT ||
-          (shade_model_flat && is_gl_Color &&
-           interp_qualifier == INTERP_QUALIFIER_NONE))
+      if (var->data.interpolation == INTERP_MODE_FLAT)
          prog_data->flat_inputs |= (1 << input_index);
    }
 }
@@ -6421,6 +6330,162 @@ computed_depth_mode(const nir_shader *shader)
    return BRW_PSCDEPTH_OFF;
 }
 
+/**
+ * Move load_interpolated_input with simple (payload-based) barycentric modes
+ * to the top of the program so we don't emit multiple PLNs for the same input.
+ *
+ * This works around CSE not being able to handle non-dominating cases
+ * such as:
+ *
+ *    if (...) {
+ *       interpolate input
+ *    } else {
+ *       interpolate the same exact input
+ *    }
+ *
+ * This should be replaced by global value numbering someday.
+ */
+void
+move_interpolation_to_top(nir_shader *nir)
+{
+   nir_foreach_function(f, nir) {
+      if (!f->impl)
+         continue;
+
+      nir_block *top = nir_start_block(f->impl);
+      exec_node *cursor_node = NULL;
+
+      nir_foreach_block(block, f->impl) {
+         if (block == top)
+            continue;
+
+         nir_foreach_instr_safe(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+            if (intrin->intrinsic != nir_intrinsic_load_interpolated_input)
+               continue;
+            nir_intrinsic_instr *bary_intrinsic =
+               nir_instr_as_intrinsic(intrin->src[0].ssa->parent_instr);
+            nir_intrinsic_op op = bary_intrinsic->intrinsic;
+
+            /* Leave interpolateAtSample/Offset() where they are. */
+            if (op == nir_intrinsic_load_barycentric_at_sample ||
+                op == nir_intrinsic_load_barycentric_at_offset)
+               continue;
+
+            nir_instr *move[3] = {
+               &bary_intrinsic->instr,
+               intrin->src[1].ssa->parent_instr,
+               instr
+            };
+
+            for (int i = 0; i < ARRAY_SIZE(move); i++) {
+               if (move[i]->block != top) {
+                  move[i]->block = top;
+                  exec_node_remove(&move[i]->node);
+                  if (cursor_node) {
+                     exec_node_insert_after(cursor_node, &move[i]->node);
+                  } else {
+                     exec_list_push_head(&top->instr_list, &move[i]->node);
+                  }
+                  cursor_node = &move[i]->node;
+               }
+            }
+         }
+      }
+      nir_metadata_preserve(f->impl, (nir_metadata)
+                            ((unsigned) nir_metadata_block_index |
+                             (unsigned) nir_metadata_dominance));
+   }
+}
+
+/**
+ * Apply default interpolation settings to FS inputs which don't specify any.
+ */
+static void
+brw_nir_set_default_interpolation(const struct brw_device_info *devinfo,
+                                  struct nir_shader *nir,
+                                  bool api_flat_shade,
+                                  bool per_sample_interpolation)
+{
+   assert(nir->stage == MESA_SHADER_FRAGMENT);
+
+   nir_foreach_variable(var, &nir->inputs) {
+      /* Apply default interpolation mode.
+       *
+       * Everything defaults to smooth except for the legacy GL color
+       * built-in variables, which might be flat depending on API state.
+       */
+      if (var->data.interpolation == INTERP_MODE_NONE) {
+         const bool flat = api_flat_shade &&
+            (var->data.location == VARYING_SLOT_COL0 ||
+             var->data.location == VARYING_SLOT_COL1);
+
+         var->data.interpolation = flat ? INTERP_MODE_FLAT
+                                        : INTERP_MODE_SMOOTH;
+      }
+
+      /* Apply 'sample' if necessary for API state. */
+      if (per_sample_interpolation &&
+          var->data.interpolation != INTERP_MODE_FLAT) {
+         var->data.centroid = false;
+         var->data.sample = true;
+      }
+
+      /* On Ironlake and below, there is only one interpolation mode.
+       * Centroid interpolation doesn't mean anything on this hardware --
+       * there is no multisampling.
+       */
+      if (devinfo->gen < 6) {
+         var->data.centroid = false;
+         var->data.sample = false;
+      }
+   }
+}
+
+/**
+ * Demote per-sample barycentric intrinsics to centroid.
+ *
+ * Useful when rendering to a non-multisampled buffer.
+ */
+static void
+demote_sample_qualifiers(nir_shader *nir)
+{
+   nir_foreach_function(f, nir) {
+      if (!f->impl)
+         continue;
+
+      nir_builder b;
+      nir_builder_init(&b, f->impl);
+
+      nir_foreach_block(block, f->impl) {
+         nir_foreach_instr_safe(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+            if (intrin->intrinsic != nir_intrinsic_load_barycentric_sample &&
+                intrin->intrinsic != nir_intrinsic_load_barycentric_at_sample)
+               continue;
+
+            b.cursor = nir_before_instr(instr);
+            nir_ssa_def *centroid =
+               nir_load_barycentric(&b, nir_intrinsic_load_barycentric_centroid,
+                                    nir_intrinsic_interp_mode(intrin));
+            nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
+                                     nir_src_for_ssa(centroid));
+            nir_instr_remove(instr);
+         }
+      }
+
+      nir_metadata_preserve(f->impl, (nir_metadata)
+                            ((unsigned) nir_metadata_block_index |
+                             (unsigned) nir_metadata_dominance));
+   }
+}
+
 const unsigned *
 brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
@@ -6437,8 +6502,13 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler->devinfo, &key->tex,
                                       true);
+   brw_nir_set_default_interpolation(compiler->devinfo, shader,
+                                     key->flat_shade, key->persample_interp);
    brw_nir_lower_fs_inputs(shader);
    brw_nir_lower_fs_outputs(shader);
+   if (!key->multisample_fbo)
+      NIR_PASS_V(shader, demote_sample_qualifiers);
+   NIR_PASS_V(shader, move_interpolation_to_top);
    shader = brw_postprocess_nir(shader, compiler->devinfo, true);
 
    /* key->alpha_test_func means simulating alpha testing via discards,
@@ -6461,10 +6531,7 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
    prog_data->early_fragment_tests = shader->info.fs.early_fragment_tests;
 
    prog_data->barycentric_interp_modes =
-      brw_compute_barycentric_interp_modes(compiler->devinfo,
-                                           key->flat_shade,
-                                           key->persample_interp,
-                                           shader);
+      brw_compute_barycentric_interp_modes(compiler->devinfo, shader);
 
    cfg_t *simd8_cfg = NULL, *simd16_cfg = NULL;
    uint8_t simd8_grf_start = 0, simd16_grf_start = 0;
@@ -6536,7 +6603,7 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
     * because it relies on prog_data->urb_setup which is computed in
     * fs_visitor::calculate_urb_setup().
     */
-   brw_compute_flat_inputs(prog_data, key->flat_shade, shader);
+   brw_compute_flat_inputs(prog_data, shader);
 
    fs_generator g(compiler, log_data, mem_ctx, (void *) key, &prog_data->base,
                   v8.promoted_constants, v8.runtime_check_aads_emit,

@@ -28,7 +28,7 @@
 #include <fcntl.h>
 
 #include "anv_private.h"
-#include "git_sha1.h"
+#include "anv_timestamp.h"
 #include "util/strtod.h"
 #include "util/debug.h"
 
@@ -372,10 +372,10 @@ void anv_GetPhysicalDeviceFeatures(
       .robustBufferAccess                       = true,
       .fullDrawIndexUint32                      = true,
       .imageCubeArray                           = false,
-      .independentBlend                         = pdevice->info->gen >= 8,
+      .independentBlend                         = true,
       .geometryShader                           = true,
       .tessellationShader                       = false,
-      .sampleRateShading                        = false,
+      .sampleRateShading                        = pdevice->info->gen >= 8,
       .dualSrcBlend                             = true,
       .logicOp                                  = true,
       .multiDrawIndirect                        = false,
@@ -426,7 +426,7 @@ void
 anv_device_get_cache_uuid(void *uuid)
 {
    memset(uuid, 0, VK_UUID_SIZE);
-   snprintf(uuid, VK_UUID_SIZE, "anv-%s", MESA_GIT_SHA1 + 4);
+   snprintf(uuid, VK_UUID_SIZE, "anv-%s", ANV_TIMESTAMP);
 }
 
 void anv_GetPhysicalDeviceProperties(
@@ -438,6 +438,10 @@ void anv_GetPhysicalDeviceProperties(
 
    const float time_stamp_base = devinfo->gen >= 9 ? 83.333 : 80.0;
 
+   /* See assertions made when programming the buffer surface state. */
+   const uint32_t max_raw_buffer_sz = devinfo->gen >= 7 ?
+                                      (1ul << 30) : (1ul << 27);
+
    VkSampleCountFlags sample_counts =
       isl_device_get_sample_counts(&pdevice->isl_dev);
 
@@ -448,8 +452,8 @@ void anv_GetPhysicalDeviceProperties(
       .maxImageDimensionCube                    = (1 << 14),
       .maxImageArrayLayers                      = (1 << 11),
       .maxTexelBufferElements                   = 128 * 1024 * 1024,
-      .maxUniformBufferRange                    = UINT32_MAX,
-      .maxStorageBufferRange                    = UINT32_MAX,
+      .maxUniformBufferRange                    = (1ul << 27),
+      .maxStorageBufferRange                    = max_raw_buffer_sz,
       .maxPushConstantsSize                     = MAX_PUSH_CONSTANTS_SIZE,
       .maxMemoryAllocationCount                 = UINT32_MAX,
       .maxSamplerAllocationCount                = 64 * 1024,

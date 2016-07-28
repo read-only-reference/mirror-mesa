@@ -96,6 +96,8 @@ static uint32_t *read_chunk(uint32_t *ptr, void **data, unsigned *size)
 {
 	*size = *ptr++;
 	assert(*data == NULL);
+	if (!*size)
+		return ptr;
 	*data = malloc(*size);
 	return read_data(ptr, *data, *size);
 }
@@ -110,6 +112,8 @@ static void *si_get_shader_binary(struct si_shader *shader)
 	unsigned relocs_size = shader->binary.reloc_count *
 			       sizeof(shader->binary.relocs[0]);
 	unsigned disasm_size = strlen(shader->binary.disasm_string) + 1;
+	unsigned llvm_ir_size = shader->binary.llvm_ir_string ?
+				strlen(shader->binary.llvm_ir_string) + 1 : 0;
 	unsigned size =
 		4 + /* total size */
 		4 + /* CRC32 of the data below */
@@ -118,7 +122,8 @@ static void *si_get_shader_binary(struct si_shader *shader)
 		4 + align(shader->binary.code_size, 4) +
 		4 + align(shader->binary.rodata_size, 4) +
 		4 + align(relocs_size, 4) +
-		4 + align(disasm_size, 4);
+		4 + align(disasm_size, 4) +
+		4 + align(llvm_ir_size, 4);
 	void *buffer = CALLOC(1, size);
 	uint32_t *ptr = (uint32_t*)buffer;
 
@@ -134,6 +139,7 @@ static void *si_get_shader_binary(struct si_shader *shader)
 	ptr = write_chunk(ptr, shader->binary.rodata, shader->binary.rodata_size);
 	ptr = write_chunk(ptr, shader->binary.relocs, relocs_size);
 	ptr = write_chunk(ptr, shader->binary.disasm_string, disasm_size);
+	ptr = write_chunk(ptr, shader->binary.llvm_ir_string, llvm_ir_size);
 	assert((char *)ptr - (char *)buffer == size);
 
 	/* Compute CRC32. */
@@ -165,6 +171,7 @@ static bool si_load_shader_binary(struct si_shader *shader, void *binary)
 	ptr = read_chunk(ptr, (void**)&shader->binary.relocs, &chunk_size);
 	shader->binary.reloc_count = chunk_size / sizeof(shader->binary.relocs[0]);
 	ptr = read_chunk(ptr, (void**)&shader->binary.disasm_string, &chunk_size);
+	ptr = read_chunk(ptr, (void**)&shader->binary.llvm_ir_string, &chunk_size);
 
 	return true;
 }
@@ -179,8 +186,14 @@ static bool si_shader_cache_insert_shader(struct si_screen *sscreen,
 					  void *tgsi_binary,
 					  struct si_shader *shader)
 {
-	void *hw_binary = si_get_shader_binary(shader);
+	void *hw_binary;
+	struct hash_entry *entry;
 
+	entry = _mesa_hash_table_search(sscreen->shader_cache, tgsi_binary);
+	if (entry)
+		return false; /* already added */
+
+	hw_binary = si_get_shader_binary(shader);
 	if (!hw_binary)
 		return false;
 
@@ -664,7 +677,6 @@ static void si_shader_ps(struct si_shader *shader)
 	unsigned spi_ps_in_control, spi_shader_col_format, cb_shader_mask;
 	unsigned spi_baryc_cntl = S_0286E0_FRONT_FACE_ALL_BITS(1);
 	uint64_t va;
-	bool has_centroid;
 	unsigned input_ena = shader->config.spi_ps_input_ena;
 
 	/* we need to enable at least one of them, otherwise we hang the GPU */
@@ -729,11 +741,7 @@ static void si_shader_ps(struct si_shader *shader)
 		       shader->config.spi_ps_input_addr);
 
 	/* Set interpolation controls. */
-	has_centroid = G_0286CC_PERSP_CENTROID_ENA(shader->config.spi_ps_input_ena) ||
-		       G_0286CC_LINEAR_CENTROID_ENA(shader->config.spi_ps_input_ena);
-
-	spi_ps_in_control = S_0286D8_NUM_INTERP(si_get_ps_num_interp(shader)) |
-			    S_0286D8_BC_OPTIMIZE_DISABLE(has_centroid);
+	spi_ps_in_control = S_0286D8_NUM_INTERP(si_get_ps_num_interp(shader));
 
 	/* Set registers. */
 	si_pm4_set_reg(pm4, R_0286E0_SPI_BARYC_CNTL, spi_baryc_cntl);
@@ -922,6 +930,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 			bool is_line = !is_poly && sctx->current_rast_prim != PIPE_PRIM_POINTS;
 
 			key->ps.prolog.color_two_side = rs->two_side && sel->info.colors_read;
+			key->ps.prolog.flatshade_colors = rs->flatshade && sel->info.colors_read;
 
 			if (sctx->queued.named.blend) {
 				key->ps.epilog.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
@@ -935,15 +944,38 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 							     sctx->framebuffer.nr_samples <= 1;
 			key->ps.epilog.clamp_color = rs->clamp_fragment_color;
 
-			key->ps.prolog.force_persample_interp =
-				rs->force_persample_interp &&
-				rs->multisample_enable &&
-				sctx->framebuffer.nr_samples > 1 &&
-				sctx->ps_iter_samples > 1 &&
-				(sel->info.uses_persp_center ||
-				 sel->info.uses_persp_centroid ||
-				 sel->info.uses_linear_center ||
-				 sel->info.uses_linear_centroid);
+			if (rs->force_persample_interp &&
+			    rs->multisample_enable &&
+			    sctx->framebuffer.nr_samples > 1 &&
+			    sctx->ps_iter_samples > 1) {
+				key->ps.prolog.force_persp_sample_interp =
+					sel->info.uses_persp_center ||
+					sel->info.uses_persp_centroid;
+
+				key->ps.prolog.force_linear_sample_interp =
+					sel->info.uses_linear_center ||
+					sel->info.uses_linear_centroid;
+			} else if (rs->multisample_enable &&
+				   sctx->framebuffer.nr_samples > 1) {
+				key->ps.prolog.bc_optimize_for_persp =
+					sel->info.uses_persp_center &&
+					sel->info.uses_persp_centroid;
+				key->ps.prolog.bc_optimize_for_linear =
+					sel->info.uses_linear_center &&
+					sel->info.uses_linear_centroid;
+			} else {
+				/* Make sure SPI doesn't compute more than 1 pair
+				 * of (i,j), which is the optimization here. */
+				key->ps.prolog.force_persp_center_interp =
+					sel->info.uses_persp_center +
+					sel->info.uses_persp_centroid +
+					sel->info.uses_persp_sample > 1;
+
+				key->ps.prolog.force_linear_center_interp =
+					sel->info.uses_linear_center +
+					sel->info.uses_linear_centroid +
+					sel->info.uses_linear_sample > 1;
+			}
 		}
 
 		key->ps.epilog.alpha_func = si_get_alpha_test_func(sctx);
@@ -955,11 +987,14 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 }
 
 /* Select the hw shader variant depending on the current state. */
-static int si_shader_select_with_key(struct pipe_context *ctx,
+static int si_shader_select_with_key(struct si_screen *sscreen,
 				     struct si_shader_ctx_state *state,
-				     union si_shader_key *key)
+				     union si_shader_key *key,
+				     LLVMTargetMachineRef tm,
+				     struct pipe_debug_callback *debug,
+				     bool wait,
+				     bool is_debug_context)
 {
-	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_shader_selector *sel = state->cso;
 	struct si_shader *current = state->current;
 	struct si_shader *iter, *shader = NULL;
@@ -971,6 +1006,13 @@ static int si_shader_select_with_key(struct pipe_context *ctx,
 	 * test. */
 	if (likely(current && memcmp(&current->key, key, sizeof(*key)) == 0))
 		return 0;
+
+	/* This must be done before the mutex is locked, because async GS
+	 * compilation calls this function too, and therefore must enter
+	 * the mutex first.
+	 */
+	if (wait)
+		util_queue_job_wait(&sel->ready);
 
 	pipe_mutex_lock(sel->mutex);
 
@@ -994,7 +1036,7 @@ static int si_shader_select_with_key(struct pipe_context *ctx,
 	shader->selector = sel;
 	shader->key = *key;
 
-	r = si_shader_create(sctx->screen, sctx->tm, shader, &sctx->b.debug);
+	r = si_shader_create(sscreen, tm, shader, debug);
 	if (unlikely(r)) {
 		R600_ERR("Failed to build shader variant (type=%u) %d\n",
 			 sel->type, r);
@@ -1002,7 +1044,17 @@ static int si_shader_select_with_key(struct pipe_context *ctx,
 		pipe_mutex_unlock(sel->mutex);
 		return r;
 	}
-	si_shader_init_pm4_state(sctx->screen, shader);
+
+	if (is_debug_context) {
+		FILE *f = open_memstream(&shader->shader_log,
+					 &shader->shader_log_size);
+		if (f) {
+			si_shader_dump(sscreen, shader, NULL, sel->type, f);
+			fclose(f);
+		}
+	}
+
+	si_shader_init_pm4_state(sscreen, shader);
 
 	if (!sel->last_variant) {
 		sel->first_variant = shader;
@@ -1019,10 +1071,13 @@ static int si_shader_select_with_key(struct pipe_context *ctx,
 static int si_shader_select(struct pipe_context *ctx,
 			    struct si_shader_ctx_state *state)
 {
+	struct si_context *sctx = (struct si_context *)ctx;
 	union si_shader_key key;
 
 	si_shader_selector_key(ctx, state->cso, &key);
-	return si_shader_select_with_key(ctx, state, &key);
+	return si_shader_select_with_key(sctx->screen, state, &key,
+					 sctx->tm, &sctx->b.debug, true,
+					 sctx->is_debug);
 }
 
 static void si_parse_next_shader_property(const struct tgsi_shader_info *info,
@@ -1050,6 +1105,108 @@ static void si_parse_next_shader_property(const struct tgsi_shader_info *info,
 	}
 }
 
+/**
+ * Compile the main shader part or the monolithic shader as part of
+ * si_shader_selector initialization. Since it can be done asynchronously,
+ * there is no way to report compile failures to applications.
+ */
+void si_init_shader_selector_async(void *job, int thread_index)
+{
+	struct si_shader_selector *sel = (struct si_shader_selector *)job;
+	struct si_screen *sscreen = sel->screen;
+	LLVMTargetMachineRef tm;
+	struct pipe_debug_callback *debug = &sel->debug;
+	unsigned i;
+
+	if (thread_index >= 0) {
+		assert(thread_index < ARRAY_SIZE(sscreen->tm));
+		tm = sscreen->tm[thread_index];
+		if (!debug->async)
+			debug = NULL;
+	} else {
+		tm = sel->tm;
+	}
+
+	/* Compile the main shader part for use with a prolog and/or epilog.
+	 * If this fails, the driver will try to compile a monolithic shader
+	 * on demand.
+	 */
+	if (sel->type != PIPE_SHADER_GEOMETRY &&
+	    !sscreen->use_monolithic_shaders) {
+		struct si_shader *shader = CALLOC_STRUCT(si_shader);
+		void *tgsi_binary;
+
+		if (!shader) {
+			fprintf(stderr, "radeonsi: can't allocate a main shader part\n");
+			return;
+		}
+
+		shader->selector = sel;
+		si_parse_next_shader_property(&sel->info, &shader->key);
+
+		tgsi_binary = si_get_tgsi_binary(sel);
+
+		/* Try to load the shader from the shader cache. */
+		pipe_mutex_lock(sscreen->shader_cache_mutex);
+
+		if (tgsi_binary &&
+		    si_shader_cache_load_shader(sscreen, tgsi_binary, shader)) {
+			FREE(tgsi_binary);
+			pipe_mutex_unlock(sscreen->shader_cache_mutex);
+		} else {
+			pipe_mutex_unlock(sscreen->shader_cache_mutex);
+
+			/* Compile the shader if it hasn't been loaded from the cache. */
+			if (si_compile_tgsi_shader(sscreen, tm, shader, false,
+						   debug) != 0) {
+				FREE(shader);
+				FREE(tgsi_binary);
+				fprintf(stderr, "radeonsi: can't compile a main shader part\n");
+				return;
+			}
+
+			if (tgsi_binary) {
+				pipe_mutex_lock(sscreen->shader_cache_mutex);
+				if (!si_shader_cache_insert_shader(sscreen, tgsi_binary, shader))
+					FREE(tgsi_binary);
+				pipe_mutex_unlock(sscreen->shader_cache_mutex);
+			}
+		}
+
+		sel->main_shader_part = shader;
+	}
+
+	/* Pre-compilation. */
+	if (sel->type == PIPE_SHADER_GEOMETRY ||
+	    sscreen->b.debug_flags & DBG_PRECOMPILE) {
+		struct si_shader_ctx_state state = {sel};
+		union si_shader_key key;
+
+		memset(&key, 0, sizeof(key));
+		si_parse_next_shader_property(&sel->info, &key);
+
+		/* Set reasonable defaults, so that the shader key doesn't
+		 * cause any code to be eliminated.
+		 */
+		switch (sel->type) {
+		case PIPE_SHADER_TESS_CTRL:
+			key.tcs.epilog.prim_mode = PIPE_PRIM_TRIANGLES;
+			break;
+		case PIPE_SHADER_FRAGMENT:
+			key.ps.epilog.alpha_func = PIPE_FUNC_ALWAYS;
+			for (i = 0; i < 8; i++)
+				if (sel->info.colors_written & (1 << i))
+					key.ps.epilog.spi_shader_col_format |=
+						V_028710_SPI_SHADER_FP16_ABGR << (i * 4);
+			break;
+		}
+
+		if (si_shader_select_with_key(sscreen, &state, &key, tm, debug,
+					      false, sel->is_debug_context))
+			fprintf(stderr, "radeonsi: can't create a monolithic shader\n");
+	}
+}
+
 static void *si_create_shader_selector(struct pipe_context *ctx,
 				       const struct pipe_shader_state *state)
 {
@@ -1061,6 +1218,10 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 	if (!sel)
 		return NULL;
 
+	sel->screen = sscreen;
+	sel->tm = sctx->tm;
+	sel->debug = sctx->b.debug;
+	sel->is_debug_context = sctx->is_debug;
 	sel->tokens = tgsi_dup_tokens(state->tokens);
 	if (!sel->tokens) {
 		FREE(sel);
@@ -1173,83 +1334,20 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 	if (sel->info.writes_memory)
 		sel->db_shader_control |= S_02880C_EXEC_ON_HIER_FAIL(1) |
 					  S_02880C_EXEC_ON_NOOP(1);
-
-	/* Compile the main shader part for use with a prolog and/or epilog. */
-	if (sel->type != PIPE_SHADER_GEOMETRY &&
-	    !sscreen->use_monolithic_shaders) {
-		struct si_shader *shader = CALLOC_STRUCT(si_shader);
-		void *tgsi_binary;
-
-		if (!shader)
-			goto error;
-
-		shader->selector = sel;
-		si_parse_next_shader_property(&sel->info, &shader->key);
-
-		tgsi_binary = si_get_tgsi_binary(sel);
-
-		/* Try to load the shader from the shader cache. */
-		pipe_mutex_lock(sscreen->shader_cache_mutex);
-
-		if (tgsi_binary &&
-		    si_shader_cache_load_shader(sscreen, tgsi_binary, shader)) {
-			FREE(tgsi_binary);
-		} else {
-			/* Compile the shader if it hasn't been loaded from the cache. */
-			if (si_compile_tgsi_shader(sscreen, sctx->tm, shader, false,
-						   &sctx->b.debug) != 0) {
-				FREE(shader);
-				FREE(tgsi_binary);
-				pipe_mutex_unlock(sscreen->shader_cache_mutex);
-				goto error;
-			}
-
-			if (tgsi_binary &&
-			    !si_shader_cache_insert_shader(sscreen, tgsi_binary, shader))
-				FREE(tgsi_binary);
-		}
-		pipe_mutex_unlock(sscreen->shader_cache_mutex);
-
-		sel->main_shader_part = shader;
-	}
-
-	/* Pre-compilation. */
-	if (sel->type == PIPE_SHADER_GEOMETRY ||
-	    sscreen->b.debug_flags & DBG_PRECOMPILE) {
-		struct si_shader_ctx_state state = {sel};
-		union si_shader_key key;
-
-		memset(&key, 0, sizeof(key));
-		si_parse_next_shader_property(&sel->info, &key);
-
-		/* Set reasonable defaults, so that the shader key doesn't
-		 * cause any code to be eliminated.
-		 */
-		switch (sel->type) {
-		case PIPE_SHADER_TESS_CTRL:
-			key.tcs.epilog.prim_mode = PIPE_PRIM_TRIANGLES;
-			break;
-		case PIPE_SHADER_FRAGMENT:
-			key.ps.epilog.alpha_func = PIPE_FUNC_ALWAYS;
-			for (i = 0; i < 8; i++)
-				if (sel->info.colors_written & (1 << i))
-					key.ps.epilog.spi_shader_col_format |=
-						V_028710_SPI_SHADER_FP16_ABGR << (i * 4);
-			break;
-		}
-
-		if (si_shader_select_with_key(ctx, &state, &key))
-			goto error;
-	}
-
 	pipe_mutex_init(sel->mutex);
-	return sel;
+	util_queue_fence_init(&sel->ready);
 
-error:
-	fprintf(stderr, "radeonsi: can't create a shader\n");
-	tgsi_free_tokens(sel->tokens);
-	FREE(sel);
-	return NULL;
+	if ((sctx->b.debug.debug_message && !sctx->b.debug.async) ||
+	    sctx->is_debug ||
+	    r600_can_dump_shader(&sscreen->b, sel->info.processor) ||
+	    !util_queue_is_initialized(&sscreen->shader_compiler_queue))
+		si_init_shader_selector_async(sel, -1);
+	else
+		util_queue_add_job(&sscreen->shader_compiler_queue, sel,
+                                   &sel->ready, si_init_shader_selector_async,
+                                   NULL);
+
+	return sel;
 }
 
 static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
@@ -1384,6 +1482,8 @@ static void si_delete_shader_selector(struct pipe_context *ctx, void *state)
 		[PIPE_SHADER_FRAGMENT] = &sctx->ps_shader,
 	};
 
+	util_queue_job_wait(&sel->ready);
+
 	if (current_shader[sel->type]->cso == sel) {
 		current_shader[sel->type]->cso = NULL;
 		current_shader[sel->type]->current = NULL;
@@ -1398,6 +1498,7 @@ static void si_delete_shader_selector(struct pipe_context *ctx, void *state)
 	if (sel->main_shader_part)
 		si_delete_shader(sctx, sel->main_shader_part);
 
+	util_queue_fence_destroy(&sel->ready);
 	pipe_mutex_destroy(sel->mutex);
 	free(sel->tokens);
 	free(sel);
@@ -2083,6 +2184,9 @@ bool si_update_shaders(struct si_context *sctx)
 
 			if (sctx->b.chip_class == SI)
 				si_mark_atom_dirty(sctx, &sctx->db_render_state);
+
+			if (sctx->framebuffer.nr_samples <= 1)
+				si_mark_atom_dirty(sctx, &sctx->msaa_sample_locs.atom);
 		}
 	}
 

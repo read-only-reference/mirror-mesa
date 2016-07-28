@@ -278,7 +278,7 @@ enum pipe_transfer_usage
     *
     * See also:
     * - Direct3D's D3DLOCK_DONOTWAIT flag.
-    * - Mesa3D's MESA_MAP_NOWAIT_BIT flag.
+    * - Mesa's MESA_MAP_NOWAIT_BIT flag.
     * - WDDM's D3DDDICB_LOCKFLAGS.DonotWait flag.
     */
    PIPE_TRANSFER_DONTBLOCK = (1 << 9),
@@ -348,13 +348,17 @@ enum pipe_transfer_usage
  */
 enum pipe_flush_flags
 {
-   PIPE_FLUSH_END_OF_FRAME = (1 << 0)
+   PIPE_FLUSH_END_OF_FRAME = (1 << 0),
+   PIPE_FLUSH_DEFERRED = (1 << 1),
 };
 
 /**
  * Flags for pipe_context::dump_debug_state.
  */
-#define PIPE_DEBUG_DEVICE_IS_HUNG      (1 << 0)
+#define PIPE_DUMP_DEVICE_STATUS_REGISTERS    (1 << 0)
+#define PIPE_DUMP_CURRENT_STATES             (1 << 1)
+#define PIPE_DUMP_CURRENT_SHADERS            (1 << 2)
+#define PIPE_DUMP_LAST_COMMAND_BUFFER        (1 << 3)
 
 /**
  * Create a compute-only context. Use in pipe_screen::context_create.
@@ -732,6 +736,7 @@ enum pipe_cap
    PIPE_CAP_TGSI_VOTE,
    PIPE_CAP_MAX_WINDOW_RECTANGLES,
    PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED,
+   PIPE_CAP_VIEWPORT_SUBPIXEL_BITS,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)

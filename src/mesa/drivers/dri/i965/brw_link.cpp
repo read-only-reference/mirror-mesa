@@ -106,14 +106,20 @@ process_glsl_ir(gl_shader_stage stage,
     */
    brw_lower_packing_builtins(brw, shader->Stage, shader->ir);
    do_mat_op_to_vec(shader->ir);
-   lower_instructions(shader->ir,
-                      DIV_TO_MUL_RCP |
-                      SUB_TO_ADD_NEG |
-                      EXP_TO_EXP2 |
-                      LOG_TO_LOG2 |
-                      DFREXP_DLDEXP_TO_ARITH |
-                      CARRY_TO_ARITH |
-                      BORROW_TO_ARITH);
+
+   unsigned instructions_to_lower = (DIV_TO_MUL_RCP |
+                                     SUB_TO_ADD_NEG |
+                                     EXP_TO_EXP2 |
+                                     LOG_TO_LOG2 |
+                                     DFREXP_DLDEXP_TO_ARITH);
+   if (brw->gen < 7) {
+      instructions_to_lower |= BIT_COUNT_TO_MATH |
+                               EXTRACT_TO_SHIFTS |
+                               INSERT_TO_SHIFTS |
+                               REVERSE_TO_SHIFTS;
+   }
+
+   lower_instructions(shader->ir, instructions_to_lower);
 
    /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
     * if-statements need to be flattened.
@@ -126,7 +132,6 @@ process_glsl_ir(gl_shader_stage stage,
    do_vec_index_to_cond_assign(shader->ir);
    lower_vector_insert(shader->ir, true);
    lower_offset_arrays(shader->ir);
-   brw_do_lower_unnormalized_offset(shader->ir);
    lower_noise(shader->ir);
    lower_quadop_vector(shader->ir, false);
 

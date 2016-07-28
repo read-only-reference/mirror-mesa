@@ -1958,12 +1958,14 @@ glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
          emit_asm(ir, TGSI_OPCODE_TRUNC, result_dst, op[0]);
       break;
    case ir_unop_bitcast_f2i:
-      result_src = op[0];
-      result_src.type = GLSL_TYPE_INT;
-      break;
    case ir_unop_bitcast_f2u:
-      result_src = op[0];
-      result_src.type = GLSL_TYPE_UINT;
+      /* Make sure we don't propagate the negate modifier to integer opcodes. */
+      if (op[0].negate)
+         emit_asm(ir, TGSI_OPCODE_MOV, result_dst, op[0]);
+      else
+         result_src = op[0];
+      result_src.type = ir->operation == ir_unop_bitcast_f2i ? GLSL_TYPE_INT :
+                                                               GLSL_TYPE_UINT;
       break;
    case ir_unop_bitcast_i2f:
    case ir_unop_bitcast_u2f:
@@ -6056,7 +6058,11 @@ st_translate_program(
                               inputSemanticName[i], inputSemanticIndex[i],
                               interpMode[i], 0, interpLocation[i],
                               array_id, array_size);
-            i += array_size - 1;
+
+            GLuint base_attr = inputSlotToAttr[i];
+            while (i + 1 < numInputs &&
+                   inputSlotToAttr[i + 1] < base_attr + array_size)
+               ++i;
          }
          else {
             t->inputs[i] = ureg_DECL_fs_input_cyl_centroid(ureg,
@@ -6685,71 +6691,6 @@ get_mesa_program(struct gl_context *ctx,
 
 extern "C" {
 
-static void
-st_dump_program_for_shader_db(struct gl_context *ctx,
-                              struct gl_shader_program *prog)
-{
-   /* Dump only successfully compiled and linked shaders to the specified
-    * file. This is for shader-db.
-    *
-    * These options allow some pre-processing of shaders while dumping,
-    * because some apps have ill-formed shaders.
-    */
-   const char *dump_filename = os_get_option("ST_DUMP_SHADERS");
-   const char *insert_directives = os_get_option("ST_DUMP_INSERT");
-
-   if (dump_filename && prog->Name != 0) {
-      FILE *f = fopen(dump_filename, "a");
-
-      if (f) {
-         for (unsigned i = 0; i < prog->NumShaders; i++) {
-            const struct gl_shader *sh = prog->Shaders[i];
-            const char *source;
-            bool skip_version = false;
-
-            if (!sh)
-               continue;
-
-            source = sh->Source;
-
-            /* This string mustn't be changed. shader-db uses it to find
-             * where the shader begins.
-             */
-            fprintf(f, "GLSL %s shader %d source for linked program %d:\n",
-                    _mesa_shader_stage_to_string(sh->Stage),
-                    i, prog->Name);
-
-            /* Dump the forced version if set. */
-            if (ctx->Const.ForceGLSLVersion) {
-               fprintf(f, "#version %i\n", ctx->Const.ForceGLSLVersion);
-               skip_version = true;
-            }
-
-            /* Insert directives (optional). */
-            if (insert_directives) {
-               if (!ctx->Const.ForceGLSLVersion && prog->Version)
-                  fprintf(f, "#version %i\n", prog->Version);
-               fprintf(f, "%s\n", insert_directives);
-               skip_version = true;
-            }
-
-            if (skip_version && strncmp(source, "#version ", 9) == 0) {
-               const char *next_line = strstr(source, "\n");
-
-               if (next_line)
-                  source = next_line + 1;
-               else
-                  continue;
-            }
-
-            fprintf(f, "%s", source);
-            fprintf(f, "\n");
-         }
-         fclose(f);
-      }
-   }
-}
-
 /**
  * Link a shader.
  * Called via ctx->Driver.LinkShader()
@@ -6824,7 +6765,21 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
                          (have_dround ? 0 : DOPS_TO_DFRAC) |
                          (options->EmitNoPow ? POW_TO_EXP2 : 0) |
                          (!ctx->Const.NativeIntegers ? INT_DIV_TO_MUL_RCP : 0) |
-                         (options->EmitNoSat ? SAT_TO_CLAMP : 0));
+                         (options->EmitNoSat ? SAT_TO_CLAMP : 0) |
+                         /* Assume that if ARB_gpu_shader5 is not supported
+                          * then all of the extended integer functions need
+                          * lowering.  It may be necessary to add some caps
+                          * for individual instructions.
+                          */
+                         (!ctx->Extensions.ARB_gpu_shader5
+                          ? BIT_COUNT_TO_MATH |
+                            EXTRACT_TO_SHIFTS |
+                            INSERT_TO_SHIFTS |
+                            REVERSE_TO_SHIFTS |
+                            FIND_LSB_TO_FLOAT_CAST |
+                            FIND_MSB_TO_FLOAT_CAST |
+                            IMUL_HIGH_TO_MUL
+                          : 0));
 
       do_vec_index_to_cond_assign(ir);
       lower_vector_insert(ir, true);
@@ -6876,7 +6831,6 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       _mesa_reference_program(ctx, &linked_prog, NULL);
    }
 
-   st_dump_program_for_shader_db(ctx, prog);
    return GL_TRUE;
 }
 

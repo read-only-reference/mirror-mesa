@@ -40,6 +40,8 @@
 #include "brw_compiler.h"
 #include "intel_aub.h"
 
+#include "isl/isl.h"
+
 #ifdef __cplusplus
 extern "C" {
 	/* Evil hack for using libdrm in a c++ compiler. */
@@ -390,7 +392,7 @@ struct interpolation_mode_map {
 static inline bool brw_any_flat_varyings(struct interpolation_mode_map *map)
 {
    for (int i = 0; i < BRW_VARYING_SLOT_COUNT; i++)
-      if (map->mode[i] == INTERP_QUALIFIER_FLAT)
+      if (map->mode[i] == INTERP_MODE_FLAT)
          return true;
 
    return false;
@@ -399,7 +401,7 @@ static inline bool brw_any_flat_varyings(struct interpolation_mode_map *map)
 static inline bool brw_any_noperspective_varyings(struct interpolation_mode_map *map)
 {
    for (int i = 0; i < BRW_VARYING_SLOT_COUNT; i++)
-      if (map->mode[i] == INTERP_QUALIFIER_NOPERSPECTIVE)
+      if (map->mode[i] == INTERP_MODE_NOPERSPECTIVE)
          return true;
 
    return false;
@@ -742,35 +744,10 @@ struct brw_context
 
    struct
    {
-      void (*update_texture_surface)(struct gl_context *ctx,
-                                     unsigned unit,
-                                     uint32_t *surf_offset,
-                                     bool for_gather, uint32_t plane);
       uint32_t (*update_renderbuffer_surface)(struct brw_context *brw,
                                               struct gl_renderbuffer *rb,
                                               bool layered, unsigned unit,
                                               uint32_t surf_index);
-
-      void (*emit_texture_surface_state)(struct brw_context *brw,
-                                         struct intel_mipmap_tree *mt,
-                                         GLenum target,
-                                         unsigned min_layer,
-                                         unsigned max_layer,
-                                         unsigned min_level,
-                                         unsigned max_level,
-                                         unsigned format,
-                                         unsigned swizzle,
-                                         uint32_t *surf_offset,
-                                         int surf_index,
-                                         bool rw, bool for_gather);
-      void (*emit_buffer_surface_state)(struct brw_context *brw,
-                                        uint32_t *out_offset,
-                                        drm_intel_bo *bo,
-                                        unsigned buffer_offset,
-                                        unsigned surface_format,
-                                        unsigned buffer_size,
-                                        unsigned pitch,
-                                        bool rw);
       void (*emit_null_surface_state)(struct brw_context *brw,
                                       unsigned width,
                                       unsigned height,
@@ -913,6 +890,8 @@ struct brw_context
     * fragment shader instructions.
     */
    bool needs_unlit_centroid_workaround;
+
+   struct isl_device isl_dev;
 
    GLuint NewGLState;
    struct {
@@ -1713,16 +1692,8 @@ gen7_emit_push_constant_state(struct brw_context *brw, unsigned vs_size,
                               unsigned gs_size, unsigned fs_size);
 
 void
-gen7_emit_urb_state(struct brw_context *brw,
-                    unsigned nr_vs_entries,
-                    unsigned vs_size, unsigned vs_start,
-                    unsigned nr_hs_entries,
-                    unsigned hs_size, unsigned hs_start,
-                    unsigned nr_ds_entries,
-                    unsigned ds_size, unsigned ds_start,
-                    unsigned nr_gs_entries,
-                    unsigned gs_size, unsigned gs_start);
-
+gen7_upload_urb(struct brw_context *brw, unsigned vs_size,
+                bool gs_present, bool tess_present);
 
 /* brw_reset.c */
 extern GLenum
@@ -1824,7 +1795,6 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
 bool brw_lower_texture_gradients(struct brw_context *brw,
                                  struct exec_list *instructions);
-bool brw_do_lower_unnormalized_offset(struct exec_list *instructions);
 
 extern const char * const conditional_modifier[16];
 extern const char *const pred_ctrl_align16[16];

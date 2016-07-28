@@ -419,7 +419,7 @@ static unsigned radeon_drm_cs_get_buffer_list(struct radeon_winsys_cs *rcs,
 
     if (list) {
         for (i = 0; i < cs->csc->crelocs; i++) {
-            pb_reference(&list[i].buf, &cs->csc->relocs_bo[i].bo->base);
+            list[i].bo_size = cs->csc->relocs_bo[i].bo->base.size;
             list[i].vm_address = cs->csc->relocs_bo[i].bo->va;
             list[i].priority_usage = cs->csc->relocs_bo[i].priority_usage;
         }
@@ -471,9 +471,9 @@ void radeon_drm_cs_sync_flush(struct radeon_winsys_cs *rcs)
 
 DEBUG_GET_ONCE_BOOL_OPTION(noop, "RADEON_NOOP", false)
 
-static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
-                                unsigned flags,
-                                struct pipe_fence_handle **fence)
+static int radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
+                               unsigned flags,
+                               struct pipe_fence_handle **fence)
 {
     struct radeon_drm_cs *cs = radeon_drm_cs(rcs);
     struct radeon_cs_context *tmp;
@@ -563,13 +563,10 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
         default:
         case RING_GFX:
         case RING_COMPUTE:
-            cs->cst->flags[0] = 0;
+            cs->cst->flags[0] = RADEON_CS_KEEP_TILING_FLAGS;
             cs->cst->flags[1] = RADEON_CS_RING_GFX;
-            cs->cst->cs.num_chunks = 2;
-            if (flags & RADEON_FLUSH_KEEP_TILING_FLAGS) {
-                cs->cst->flags[0] |= RADEON_CS_KEEP_TILING_FLAGS;
-                cs->cst->cs.num_chunks = 3;
-            }
+            cs->cst->cs.num_chunks = 3;
+
             if (cs->ws->info.has_virtual_memory) {
                 cs->cst->flags[0] |= RADEON_CS_USE_VM;
                 cs->cst->cs.num_chunks = 3;
@@ -587,7 +584,7 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
 
         if (util_queue_is_initialized(&cs->ws->cs_queue)) {
             util_queue_add_job(&cs->ws->cs_queue, cs, &cs->flush_completed,
-                               radeon_drm_cs_emit_ioctl_oneshot);
+                               radeon_drm_cs_emit_ioctl_oneshot, NULL);
             if (!(flags & RADEON_FLUSH_ASYNC))
                 radeon_drm_cs_sync_flush(rcs);
         } else {
@@ -602,6 +599,7 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
     cs->base.current.cdw = 0;
 
     cs->ws->num_cs_flushes++;
+    return 0;
 }
 
 static void radeon_drm_cs_destroy(struct radeon_winsys_cs *rcs)

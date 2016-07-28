@@ -37,12 +37,16 @@ DEBUG_GET_ONCE_OPTION(replace_shaders, "RADEON_REPLACE_SHADERS", NULL)
 static void si_dump_shader(struct si_screen *sscreen,
 			   struct si_shader_ctx_state *state, FILE *f)
 {
-	if (!state->cso || !state->current)
+	struct si_shader *current = state->current;
+
+	if (!state->cso || !current)
 		return;
 
-	si_dump_shader_key(state->cso->type, &state->current->key, f);
-	si_shader_dump(sscreen, state->current, NULL,
-		       state->cso->info.processor, f);
+	if (current->shader_log)
+		fwrite(current->shader_log, current->shader_log_size, 1, f);
+	else
+		si_shader_dump(sscreen, state->current, NULL,
+			       state->cso->info.processor, f);
 }
 
 /**
@@ -285,11 +289,6 @@ static uint32_t *si_parse_packet3(FILE *f, uint32_t *ib, int *num_dw,
 		break;
 	case PKT3_SET_SH_REG:
 		si_parse_set_reg_packet(f, ib, count, SI_SH_REG_OFFSET);
-		break;
-	case PKT3_DRAW_PREAMBLE:
-		si_dump_reg(f, R_030908_VGT_PRIMITIVE_TYPE, ib[1], ~0);
-		si_dump_reg(f, R_028AA8_IA_MULTI_VGT_PARAM, ib[2], ~0);
-		si_dump_reg(f, R_028B58_VGT_LS_HS_CONFIG, ib[3], ~0);
 		break;
 	case PKT3_ACQUIRE_MEM:
 		si_dump_reg(f, R_0301F0_CP_COHER_CNTL, ib[1], ~0);
@@ -609,13 +608,13 @@ static void si_dump_bo_list(struct si_context *sctx,
 		/* Note: Buffer sizes are expected to be aligned to 4k by the winsys. */
 		const unsigned page_size = sctx->b.screen->info.gart_page_size;
 		uint64_t va = saved->bo_list[i].vm_address;
-		uint64_t size = saved->bo_list[i].buf->size;
+		uint64_t size = saved->bo_list[i].bo_size;
 		bool hit = false;
 
 		/* If there's unused virtual memory between 2 buffers, print it. */
 		if (i) {
 			uint64_t previous_va_end = saved->bo_list[i-1].vm_address +
-						   saved->bo_list[i-1].buf->size;
+						   saved->bo_list[i-1].bo_size;
 
 			if (va > previous_va_end) {
 				fprintf(f, "  %10"PRIu64"    -- hole --\n",
@@ -670,24 +669,30 @@ static void si_dump_debug_state(struct pipe_context *ctx, FILE *f,
 {
 	struct si_context *sctx = (struct si_context*)ctx;
 
-	if (flags & PIPE_DEBUG_DEVICE_IS_HUNG)
+	if (flags & PIPE_DUMP_DEVICE_STATUS_REGISTERS)
 		si_dump_debug_registers(sctx, f);
 
-	si_dump_framebuffer(sctx, f);
-	si_dump_shader(sctx->screen, &sctx->vs_shader, f);
-	si_dump_shader(sctx->screen, &sctx->tcs_shader, f);
-	si_dump_shader(sctx->screen, &sctx->tes_shader, f);
-	si_dump_shader(sctx->screen, &sctx->gs_shader, f);
-	si_dump_shader(sctx->screen, &sctx->ps_shader, f);
+	if (flags & PIPE_DUMP_CURRENT_STATES)
+		si_dump_framebuffer(sctx, f);
 
-	si_dump_bo_list(sctx, &sctx->last_gfx, f);
-	si_dump_last_ib(sctx, f);
+	if (flags & PIPE_DUMP_CURRENT_SHADERS) {
+		si_dump_shader(sctx->screen, &sctx->vs_shader, f);
+		si_dump_shader(sctx->screen, &sctx->tcs_shader, f);
+		si_dump_shader(sctx->screen, &sctx->tes_shader, f);
+		si_dump_shader(sctx->screen, &sctx->gs_shader, f);
+		si_dump_shader(sctx->screen, &sctx->ps_shader, f);
+	}
 
-	fprintf(f, "Done.\n");
+	if (flags & PIPE_DUMP_LAST_COMMAND_BUFFER) {
+		si_dump_bo_list(sctx, &sctx->last_gfx, f);
+		si_dump_last_ib(sctx, f);
 
-	/* dump only once */
-	radeon_clear_saved_cs(&sctx->last_gfx);
-	r600_resource_reference(&sctx->last_trace_buf, NULL);
+		fprintf(f, "Done.\n");
+
+		/* dump only once */
+		radeon_clear_saved_cs(&sctx->last_gfx);
+		r600_resource_reference(&sctx->last_trace_buf, NULL);
+	}
 }
 
 static void si_dump_dma(struct si_context *sctx,
@@ -813,6 +818,10 @@ void si_check_vm_faults(struct r600_common_context *ctx,
 	fprintf(f, "Device vendor: %s\n", screen->get_device_vendor(screen));
 	fprintf(f, "Device name: %s\n\n", screen->get_name(screen));
 	fprintf(f, "Failing VM page: 0x%08x\n\n", addr);
+
+	if (sctx->apitrace_call_number)
+		fprintf(f, "Last apitrace call: %u\n\n",
+			sctx->apitrace_call_number);
 
 	switch (ring) {
 	case RING_GFX:

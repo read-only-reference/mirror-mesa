@@ -74,7 +74,8 @@ LIBDRM_AMDGPU_REQUIRED=2.4.63
 LIBDRM_INTEL_REQUIRED=2.4.61
 LIBDRM_NVVIEUX_REQUIRED=2.4.66
 LIBDRM_NOUVEAU_REQUIRED=2.4.66
-LIBDRM_FREEDRENO_REQUIRED=2.4.67
+LIBDRM_FREEDRENO_REQUIRED=2.4.68
+LIBDRM_VC4_REQUIRED=2.4.69
 DRI2PROTO_REQUIRED=2.6
 DRI3PROTO_REQUIRED=1.0
 PRESENTPROTO_REQUIRED=1.0
@@ -225,6 +226,7 @@ AX_GCC_FUNC_ATTRIBUTE([packed])
 AX_GCC_FUNC_ATTRIBUTE([pure])
 AX_GCC_FUNC_ATTRIBUTE([returns_nonnull])
 AX_GCC_FUNC_ATTRIBUTE([unused])
+AX_GCC_FUNC_ATTRIBUTE([visibility])
 AX_GCC_FUNC_ATTRIBUTE([warn_unused_result])
 AX_GCC_FUNC_ATTRIBUTE([weak])
 
@@ -254,14 +256,11 @@ case "$host_os" in
 *-android)
     android=yes
     ;;
-linux*|*-gnu*|gnu*)
+linux*|*-gnu*|gnu*|cygwin*)
     DEFINES="$DEFINES -D_GNU_SOURCE"
     ;;
 solaris*)
     DEFINES="$DEFINES -DSVR4"
-    ;;
-cygwin*)
-    DEFINES="$DEFINES -D_XOPEN_SOURCE=700"
     ;;
 esac
 
@@ -307,10 +306,6 @@ if test "x$GCC" = xyes; then
     # We don't want floating-point math functions to set errno or trap
     CFLAGS="$CFLAGS -fno-math-errno -fno-trapping-math"
 
-    # gcc's builtin memcmp is slower than glibc's
-    # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
-    CFLAGS="$CFLAGS -fno-builtin-memcmp"
-
     # Flags to help ensure that certain portions of the code -- and only those
     # portions -- can be built with MSVC:
     # - src/util, src/gallium/auxiliary, rc/gallium/drivers/llvmpipe, and
@@ -350,9 +345,8 @@ if test "x$GXX" = xyes; then
     # Work around aliasing bugs - developers should comment this out
     CXXFLAGS="$CXXFLAGS -fno-strict-aliasing"
 
-    # gcc's builtin memcmp is slower than glibc's
-    # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
-    CXXFLAGS="$CXXFLAGS -fno-builtin-memcmp"
+    # We don't want floating-point math functions to set errno or trap
+    CXXFLAGS="$CXXFLAGS -fno-math-errno -fno-trapping-math"
 fi
 
 AC_SUBST([MSVC2013_COMPAT_CFLAGS])
@@ -783,6 +777,7 @@ if test "x$enable_asm" = xyes; then
     esac
 fi
 
+AC_HEADER_MAJOR
 AC_CHECK_HEADER([xlocale.h], [DEFINES="$DEFINES -DHAVE_XLOCALE_H"])
 AC_CHECK_HEADER([sys/sysctl.h], [DEFINES="$DEFINES -DHAVE_SYS_SYSCTL_H"])
 AC_CHECK_FUNC([strtof], [DEFINES="$DEFINES -DHAVE_STRTOF"])
@@ -825,9 +820,21 @@ dnl to -pthread, which causes problems if we need -lpthread to appear in
 dnl pkgconfig files.
 test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
 
-PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs)
-AC_SUBST(PTHREADSTUBS_CFLAGS)
-AC_SUBST(PTHREADSTUBS_LIBS)
+dnl pthread-stubs is mandatory on targets where it exists
+case "$host_os" in
+cygwin* )
+    pthread_stubs_possible="no"
+    ;;
+* )
+    pthread_stubs_possible="yes"
+    ;;
+esac
+
+if test "x$pthread_stubs_possible" = xyes; then
+    PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs)
+    AC_SUBST(PTHREADSTUBS_CFLAGS)
+    AC_SUBST(PTHREADSTUBS_LIBS)
+fi
 
 dnl SELinux awareness.
 AC_ARG_ENABLE([selinux],
@@ -1060,6 +1067,7 @@ xno)
     ;;
 esac
 
+AM_CONDITIONAL(HAVE_GLX, test "x$enable_glx" != xno)
 AM_CONDITIONAL(HAVE_DRI_GLX, test "x$enable_glx" = xdri)
 AM_CONDITIONAL(HAVE_XLIB_GLX, test "x$enable_glx" = xxlib)
 AM_CONDITIONAL(HAVE_GALLIUM_XLIB_GLX, test "x$enable_glx" = xgallium-xlib)
@@ -1638,9 +1646,9 @@ esac
 
 AC_ARG_WITH([vulkan-icddir],
     [AS_HELP_STRING([--with-vulkan-icddir=DIR],
-        [directory for the Vulkan driver icd files @<:@${sysconfdir}/vulkan/icd.d@:>@])],
+        [directory for the Vulkan driver icd files @<:@${datarootdir}/vulkan/icd.d@:>@])],
     [VULKAN_ICD_INSTALL_DIR="$withval"],
-    [VULKAN_ICD_INSTALL_DIR='${sysconfdir}/vulkan/icd.d'])
+    [VULKAN_ICD_INSTALL_DIR='${datarootdir}/vulkan/icd.d'])
 AC_SUBST([VULKAN_ICD_INSTALL_DIR])
 
 if test -n "$with_vulkan_drivers"; then
@@ -2182,7 +2190,7 @@ if test "x$enable_gallium_llvm" = xyes; then
         LLVM_COMPONENTS="engine bitwriter mcjit mcdisassembler"
 
         if test "x$enable_opencl" = xyes; then
-            llvm_check_version_for "3" "5" "0" "opencl"
+            llvm_check_version_for "3" "6" "0" "opencl"
 
             LLVM_COMPONENTS="${LLVM_COMPONENTS} all-targets ipo linker instrumentation"
             LLVM_COMPONENTS="${LLVM_COMPONENTS} irreader option objcarcopts profiledata"
@@ -2457,6 +2465,7 @@ if test -n "$with_gallium_drivers"; then
             ;;
         xvc4)
             HAVE_GALLIUM_VC4=yes
+            PKG_CHECK_MODULES([VC4], [libdrm_vc4 >= $LIBDRM_VC4_REQUIRED])
             gallium_require_drm "vc4"
             gallium_require_drm_loader
 
@@ -2526,7 +2535,7 @@ if test "x$MESA_LLVM" != x0; then
         AC_MSG_WARN([Building mesa with statically linked LLVM may cause compilation issues])
         dnl We need to link to llvm system libs when using static libs
         dnl However, only llvm 3.5+ provides --system-libs
-        if test $LLVM_VERSION_MAJOR -eq 3 -a $LLVM_VERSION_MINOR -ge 5; then
+        if test $LLVM_VERSION_MAJOR -ge 4 -o $LLVM_VERSION_MAJOR -eq 3 -a $LLVM_VERSION_MINOR -ge 5; then
             LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --system-libs`"
         fi
     fi
@@ -2619,6 +2628,8 @@ AC_SUBST([XA_MAJOR], $XA_MAJOR)
 AC_SUBST([XA_MINOR], $XA_MINOR)
 AC_SUBST([XA_TINY], $XA_TINY)
 AC_SUBST([XA_VERSION], "$XA_MAJOR.$XA_MINOR.$XA_TINY")
+
+AC_SUBST([TIMESTAMP_CMD], '`test $(SOURCE_DATE_EPOCH) && echo $(SOURCE_DATE_EPOCH) || date +%s`')
 
 AC_ARG_ENABLE(valgrind,
               [AS_HELP_STRING([--enable-valgrind],

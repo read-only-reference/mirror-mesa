@@ -346,8 +346,8 @@ public:
 
    bool is_single_dimension() const
    {
-      return this->array_dimensions.tail_pred->prev != NULL &&
-             this->array_dimensions.tail_pred->prev->is_head_sentinel();
+      return this->array_dimensions.get_tail_raw()->prev != NULL &&
+             this->array_dimensions.get_tail_raw()->prev->is_head_sentinel();
    }
 
    virtual void print(void) const;
@@ -755,8 +755,8 @@ struct ast_type_qualifier {
 
    bool validate_flags(YYLTYPE *loc,
                        _mesa_glsl_parse_state *state,
-                       const char *message,
-                       const ast_type_qualifier &allowed_flags);
+                       const ast_type_qualifier &allowed_flags,
+                       const char *message, const char *name);
 
    ast_subroutine_list *subroutine_list;
 };

@@ -163,6 +163,9 @@ brw_codegen_gs_prog(struct brw_context *brw,
                      &prog_data, gs->Program->nir, prog,
                      st_index, &program_size, &error_str);
    if (program == NULL) {
+      ralloc_strcat(&prog->InfoLog, error_str);
+      _mesa_problem(NULL, "Failed to compile geometry shader: %s\n", error_str);
+
       ralloc_free(mem_ctx);
       return false;
    }
@@ -207,7 +210,6 @@ brw_gs_populate_key(struct brw_context *brw,
                     struct brw_gs_prog_key *key)
 {
    struct gl_context *ctx = &brw->ctx;
-   struct brw_stage_state *stage_state = &brw->gs.base;
    struct brw_geometry_program *gp =
       (struct brw_geometry_program *) brw->geometry_program;
    struct gl_program *prog = &gp->program.Base;
@@ -217,8 +219,7 @@ brw_gs_populate_key(struct brw_context *brw,
    key->program_string_id = gp->id;
 
    /* _NEW_TEXTURE */
-   brw_populate_sampler_prog_key_data(ctx, prog, stage_state->sampler_count,
-                                      &key->tex);
+   brw_populate_sampler_prog_key_data(ctx, prog, &key->tex);
 }
 
 void

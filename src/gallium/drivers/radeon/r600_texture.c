@@ -560,8 +560,7 @@ static void r600_texture_destroy(struct pipe_screen *screen,
 	struct r600_texture *rtex = (struct r600_texture*)ptex;
 	struct r600_resource *resource = &rtex->resource;
 
-	if (rtex->flushed_depth_texture)
-		r600_texture_reference(&rtex->flushed_depth_texture, NULL);
+	r600_texture_reference(&rtex->flushed_depth_texture, NULL);
 
 	r600_resource_reference(&rtex->htile_buffer, NULL);
 	if (rtex->cmask_buffer != &rtex->resource) {
@@ -961,9 +960,9 @@ void r600_print_texture_info(struct r600_texture *rtex, FILE *f)
 			rtex->surface.level[i].mode);
 
 	if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
+		fprintf(f, "  StencilLayout: tilesplit=%u\n",
+			rtex->surface.stencil_tile_split);
 		for (i = 0; i <= rtex->surface.last_level; i++) {
-			fprintf(f, "  StencilLayout: tilesplit=%u\n",
-				rtex->surface.stencil_tile_split);
 			fprintf(f, "  StencilLevel[%i]: offset=%"PRIu64", "
 				"slice_size=%"PRIu64", npix_x=%u, "
 				"npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
@@ -1028,11 +1027,24 @@ r600_texture_create_object(struct pipe_screen *screen,
 	rtex->ps_draw_ratio = 0;
 
 	if (rtex->is_depth) {
-		if (!(base->flags & (R600_RESOURCE_FLAG_TRANSFER |
-				     R600_RESOURCE_FLAG_FLUSHED_DEPTH)) &&
-		    !(rscreen->debug_flags & DBG_NO_HYPERZ)) {
+		if (base->flags & (R600_RESOURCE_FLAG_TRANSFER |
+				   R600_RESOURCE_FLAG_FLUSHED_DEPTH) ||
+		    rscreen->chip_class >= EVERGREEN) {
+			rtex->can_sample_z = !rtex->surface.depth_adjusted;
+			rtex->can_sample_s = !rtex->surface.stencil_adjusted;
+		} else {
+			if (rtex->resource.b.b.nr_samples <= 1 &&
+			    (rtex->resource.b.b.format == PIPE_FORMAT_Z16_UNORM ||
+			     rtex->resource.b.b.format == PIPE_FORMAT_Z32_FLOAT))
+				rtex->can_sample_z = true;
+		}
 
-			r600_texture_allocate_htile(rscreen, rtex);
+		if (!(base->flags & (R600_RESOURCE_FLAG_TRANSFER |
+				     R600_RESOURCE_FLAG_FLUSHED_DEPTH))) {
+			rtex->db_compatible = true;
+
+			if (!(rscreen->debug_flags & DBG_NO_HYPERZ))
+				r600_texture_allocate_htile(rscreen, rtex);
 		}
 	} else {
 		if (base->nr_samples > 1) {
@@ -1103,6 +1115,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	if (rscreen->debug_flags & DBG_TEX) {
 		puts("Texture:");
 		r600_print_texture_info(rtex, stdout);
+		fflush(stdout);
 	}
 
 	return rtex;
@@ -1262,12 +1275,43 @@ bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 	struct pipe_resource resource;
 	struct r600_texture **flushed_depth_texture = staging ?
 			staging : &rtex->flushed_depth_texture;
+	enum pipe_format pipe_format = texture->format;
 
-	if (!staging && rtex->flushed_depth_texture)
-		return true; /* it's ready */
+	if (!staging) {
+		if (rtex->flushed_depth_texture)
+			return true; /* it's ready */
+
+		if (!rtex->can_sample_z && rtex->can_sample_s) {
+			switch (pipe_format) {
+			case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+				/* Save memory by not allocating the S plane. */
+				pipe_format = PIPE_FORMAT_Z32_FLOAT;
+				break;
+			case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+			case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+				/* Save memory bandwidth by not copying the
+				 * stencil part during flush.
+				 *
+				 * This potentially increases memory bandwidth
+				 * if an application uses both Z and S texturing
+				 * simultaneously (a flushed Z24S8 texture
+				 * would be stored compactly), but how often
+				 * does that really happen?
+				 */
+				pipe_format = PIPE_FORMAT_Z24X8_UNORM;
+				break;
+			default:;
+			}
+		} else if (!rtex->can_sample_s && rtex->can_sample_z) {
+			assert(util_format_has_stencil(util_format_description(pipe_format)));
+
+			/* DB->CB copies to an 8bpp surface don't work. */
+			pipe_format = PIPE_FORMAT_X24S8_UINT;
+		}
+	}
 
 	resource.target = texture->target;
-	resource.format = texture->format;
+	resource.format = pipe_format;
 	resource.width0 = texture->width0;
 	resource.height0 = texture->height0;
 	resource.depth0 = texture->depth0;
@@ -1287,7 +1331,6 @@ bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 		return false;
 	}
 
-	(*flushed_depth_texture)->is_flushing_texture = true;
 	(*flushed_depth_texture)->non_disp_tiling = false;
 	return true;
 }
@@ -1585,7 +1628,6 @@ static const struct u_resource_vtbl r600_texture_vtbl =
 	r600_texture_transfer_map,	/* transfer_map */
 	u_default_transfer_flush_region, /* transfer_flush_region */
 	r600_texture_transfer_unmap,	/* transfer_unmap */
-	NULL				/* transfer_inline_write */
 };
 
 struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,

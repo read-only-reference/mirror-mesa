@@ -126,6 +126,77 @@ create_vert_shader(struct vl_compositor *c)
 }
 
 static void
+create_frag_shader_weave(struct ureg_program *shader, struct ureg_dst fragment)
+{
+   struct ureg_src i_tc[2];
+   struct ureg_src sampler[3];
+   struct ureg_dst t_tc[2];
+   struct ureg_dst t_texel[2];
+   unsigned i, j;
+
+   i_tc[0] = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTOP, TGSI_INTERPOLATE_LINEAR);
+   i_tc[1] = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VBOTTOM, TGSI_INTERPOLATE_LINEAR);
+
+   for (i = 0; i < 3; ++i)
+      sampler[i] = ureg_DECL_sampler(shader, i);
+
+   for (i = 0; i < 2; ++i) {
+      t_tc[i] = ureg_DECL_temporary(shader);
+      t_texel[i] = ureg_DECL_temporary(shader);
+   }
+
+   /* calculate the texture offsets
+    * t_tc.x = i_tc.x
+    * t_tc.y = (round(i_tc.y - 0.5) + 0.5) / height * 2
+    */
+   for (i = 0; i < 2; ++i) {
+      ureg_MOV(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_X), i_tc[i]);
+      ureg_SUB(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_YZ),
+               i_tc[i], ureg_imm1f(shader, 0.5f));
+      ureg_ROUND(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_YZ), ureg_src(t_tc[i]));
+      ureg_MOV(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_W),
+               ureg_imm1f(shader, i ? 1.0f : 0.0f));
+      ureg_ADD(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_YZ),
+               ureg_src(t_tc[i]), ureg_imm1f(shader, 0.5f));
+      ureg_MUL(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_Y),
+               ureg_src(t_tc[i]), ureg_scalar(i_tc[0], TGSI_SWIZZLE_W));
+      ureg_MUL(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_Z),
+               ureg_src(t_tc[i]), ureg_scalar(i_tc[1], TGSI_SWIZZLE_W));
+   }
+
+   /* fetch the texels
+    * texel[0..1].x = tex(t_tc[0..1][0])
+    * texel[0..1].y = tex(t_tc[0..1][1])
+    * texel[0..1].z = tex(t_tc[0..1][2])
+    */
+   for (i = 0; i < 2; ++i)
+      for (j = 0; j < 3; ++j) {
+         struct ureg_src src = ureg_swizzle(ureg_src(t_tc[i]),
+            TGSI_SWIZZLE_X, j ? TGSI_SWIZZLE_Z : TGSI_SWIZZLE_Y, TGSI_SWIZZLE_W, TGSI_SWIZZLE_W);
+
+         ureg_TEX(shader, ureg_writemask(t_texel[i], TGSI_WRITEMASK_X << j),
+                  TGSI_TEXTURE_2D_ARRAY, src, sampler[j]);
+      }
+
+   /* calculate linear interpolation factor
+    * factor = |round(i_tc.y) - i_tc.y| * 2
+    */
+   ureg_ROUND(shader, ureg_writemask(t_tc[0], TGSI_WRITEMASK_YZ), i_tc[0]);
+   ureg_ADD(shader, ureg_writemask(t_tc[0], TGSI_WRITEMASK_YZ),
+            ureg_src(t_tc[0]), ureg_negate(i_tc[0]));
+   ureg_MUL(shader, ureg_writemask(t_tc[0], TGSI_WRITEMASK_YZ),
+            ureg_abs(ureg_src(t_tc[0])), ureg_imm1f(shader, 2.0f));
+   ureg_LRP(shader, fragment, ureg_swizzle(ureg_src(t_tc[0]),
+            TGSI_SWIZZLE_Y, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_Z),
+            ureg_src(t_texel[0]), ureg_src(t_texel[1]));
+
+   for (i = 0; i < 2; ++i) {
+      ureg_release_temporary(shader, t_texel[i]);
+      ureg_release_temporary(shader, t_tc[i]);
+   }
+}
+
+static void
 create_frag_shader_csc(struct ureg_program *shader, struct ureg_dst texel,
 		       struct ureg_dst fragment)
 {
@@ -199,86 +270,51 @@ create_frag_shader_video_buffer(struct vl_compositor *c)
 }
 
 static void *
-create_frag_shader_weave(struct vl_compositor *c)
+create_frag_shader_weave_rgb(struct vl_compositor *c)
 {
    struct ureg_program *shader;
-   struct ureg_src i_tc[2];
-   struct ureg_src sampler[3];
-   struct ureg_dst t_tc[2];
-   struct ureg_dst t_texel[2];
-   struct ureg_dst o_fragment;
-   unsigned i, j;
+   struct ureg_dst texel, fragment;
 
    shader = ureg_create(PIPE_SHADER_FRAGMENT);
    if (!shader)
       return false;
 
-   i_tc[0] = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTOP, TGSI_INTERPOLATE_LINEAR);
-   i_tc[1] = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VBOTTOM, TGSI_INTERPOLATE_LINEAR);
+   texel = ureg_DECL_temporary(shader);
+   fragment = ureg_DECL_output(shader, TGSI_SEMANTIC_COLOR, 0);
 
-   for (i = 0; i < 3; ++i)
-      sampler[i] = ureg_DECL_sampler(shader, i);
+   create_frag_shader_weave(shader, texel);
+   create_frag_shader_csc(shader, texel, fragment);
 
-   for (i = 0; i < 2; ++i) {
-      t_tc[i] = ureg_DECL_temporary(shader);
-      t_texel[i] = ureg_DECL_temporary(shader);
-   }
-   o_fragment = ureg_DECL_output(shader, TGSI_SEMANTIC_COLOR, 0);
+   ureg_release_temporary(shader, texel);
 
-   /* calculate the texture offsets
-    * t_tc.x = i_tc.x
-    * t_tc.y = (round(i_tc.y - 0.5) + 0.5) / height * 2
-    */
-   for (i = 0; i < 2; ++i) {
-      ureg_MOV(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_X), i_tc[i]);
-      ureg_SUB(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_YZ),
-               i_tc[i], ureg_imm1f(shader, 0.5f));
-      ureg_ROUND(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_YZ), ureg_src(t_tc[i]));
-      ureg_MOV(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_W),
-               ureg_imm1f(shader, i ? 1.0f : 0.0f));
-      ureg_ADD(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_YZ),
-               ureg_src(t_tc[i]), ureg_imm1f(shader, 0.5f));
-      ureg_MUL(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_Y),
-               ureg_src(t_tc[i]), ureg_scalar(i_tc[0], TGSI_SWIZZLE_W));
-      ureg_MUL(shader, ureg_writemask(t_tc[i], TGSI_WRITEMASK_Z),
-               ureg_src(t_tc[i]), ureg_scalar(i_tc[1], TGSI_SWIZZLE_W));
-   }
+   ureg_END(shader);
 
-   /* fetch the texels
-    * texel[0..1].x = tex(t_tc[0..1][0])
-    * texel[0..1].y = tex(t_tc[0..1][1])
-    * texel[0..1].z = tex(t_tc[0..1][2])
-    */
-   for (i = 0; i < 2; ++i)
-      for (j = 0; j < 3; ++j) {
-         struct ureg_src src = ureg_swizzle(ureg_src(t_tc[i]),
-            TGSI_SWIZZLE_X, j ? TGSI_SWIZZLE_Z : TGSI_SWIZZLE_Y, TGSI_SWIZZLE_W, TGSI_SWIZZLE_W);
+   return ureg_create_shader_and_destroy(shader, c->pipe);
+}
 
-         ureg_TEX(shader, ureg_writemask(t_texel[i], TGSI_WRITEMASK_X << j),
-                  TGSI_TEXTURE_2D_ARRAY, src, sampler[j]);
-      }
+static void *
+create_frag_shader_weave_yuv(struct vl_compositor *c, bool y)
+{
+   struct ureg_program *shader;
+   struct ureg_dst texel, fragment;
 
-   /* calculate linear interpolation factor
-    * factor = |round(i_tc.y) - i_tc.y| * 2
-    */
-   ureg_ROUND(shader, ureg_writemask(t_tc[0], TGSI_WRITEMASK_YZ), i_tc[0]);
-   ureg_ADD(shader, ureg_writemask(t_tc[0], TGSI_WRITEMASK_YZ),
-            ureg_src(t_tc[0]), ureg_negate(i_tc[0]));
-   ureg_MUL(shader, ureg_writemask(t_tc[0], TGSI_WRITEMASK_YZ),
-            ureg_abs(ureg_src(t_tc[0])), ureg_imm1f(shader, 2.0f));
-   ureg_LRP(shader, t_texel[0], ureg_swizzle(ureg_src(t_tc[0]),
-            TGSI_SWIZZLE_Y, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_Z),
-            ureg_src(t_texel[0]), ureg_src(t_texel[1]));
+   shader = ureg_create(PIPE_SHADER_FRAGMENT);
+   if (!shader)
+      return false;
 
-   /* and finally do colour space transformation
-    * fragment = csc * texel
-    */
-   create_frag_shader_csc(shader, t_texel[0], o_fragment);
+   texel = ureg_DECL_temporary(shader);
+   fragment = ureg_DECL_output(shader, TGSI_SEMANTIC_COLOR, 0);
 
-   for (i = 0; i < 2; ++i) {
-      ureg_release_temporary(shader, t_texel[i]);
-      ureg_release_temporary(shader, t_tc[i]);
-   }
+   create_frag_shader_weave(shader, texel);
+
+   if (y)
+      ureg_MOV(shader, ureg_writemask(fragment, TGSI_WRITEMASK_X), ureg_src(texel));
+   else
+      ureg_MOV(shader, ureg_writemask(fragment, TGSI_WRITEMASK_XY),
+                       ureg_swizzle(ureg_src(texel), TGSI_SWIZZLE_Y,
+                               TGSI_SWIZZLE_Z, TGSI_SWIZZLE_W, TGSI_SWIZZLE_W));
+
+   ureg_release_temporary(shader, texel);
 
    ureg_END(shader);
 
@@ -378,9 +414,16 @@ init_shaders(struct vl_compositor *c)
       return false;
    }
 
-   c->fs_weave = create_frag_shader_weave(c);
-   if (!c->fs_weave) {
+   c->fs_weave_rgb = create_frag_shader_weave_rgb(c);
+   if (!c->fs_weave_rgb) {
       debug_printf("Unable to create YCbCr-to-RGB weave fragment shader.\n");
+      return false;
+   }
+
+   c->fs_weave_yuv.y = create_frag_shader_weave_yuv(c, true);
+   c->fs_weave_yuv.uv = create_frag_shader_weave_yuv(c, false);
+   if (!c->fs_weave_yuv.y || !c->fs_weave_yuv.uv) {
+      debug_printf("Unable to create YCbCr i-to-YCbCr p weave fragment shader.\n");
       return false;
    }
 
@@ -411,7 +454,9 @@ static void cleanup_shaders(struct vl_compositor *c)
 
    c->pipe->delete_vs_state(c->pipe, c->vs);
    c->pipe->delete_fs_state(c->pipe, c->fs_video_buffer);
-   c->pipe->delete_fs_state(c->pipe, c->fs_weave);
+   c->pipe->delete_fs_state(c->pipe, c->fs_weave_rgb);
+   c->pipe->delete_fs_state(c->pipe, c->fs_weave_yuv.y);
+   c->pipe->delete_fs_state(c->pipe, c->fs_weave_yuv.uv);
    c->pipe->delete_fs_state(c->pipe, c->fs_palette.yuv);
    c->pipe->delete_fs_state(c->pipe, c->fs_palette.rgb);
    c->pipe->delete_fs_state(c->pipe, c->fs_rgba);
@@ -971,7 +1016,7 @@ vl_compositor_set_buffer_layer(struct vl_compositor_state *s,
       float half_a_line = 0.5f / s->layers[layer].zw.y;
       switch(deinterlace) {
       case VL_COMPOSITOR_WEAVE:
-         s->layers[layer].fs = c->fs_weave;
+         s->layers[layer].fs = c->fs_weave_rgb;
          break;
 
       case VL_COMPOSITOR_BOB_TOP:
@@ -1063,6 +1108,36 @@ vl_compositor_set_layer_rotation(struct vl_compositor_state *s,
    assert(s);
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
    s->layers[layer].rotate = rotate;
+}
+
+void
+vl_compositor_set_yuv_layer(struct vl_compositor_state *s,
+                            struct vl_compositor *c,
+                            unsigned layer,
+                            struct pipe_video_buffer *buffer,
+                            struct u_rect *src_rect,
+                            struct u_rect *dst_rect,
+                            bool y)
+{
+   struct pipe_sampler_view **sampler_views;
+   unsigned i;
+
+   assert(s && c && buffer);
+
+   assert(layer < VL_COMPOSITOR_MAX_LAYERS);
+
+   s->used_layers |= 1 << layer;
+   sampler_views = buffer->get_sampler_view_components(buffer);
+   for (i = 0; i < 3; ++i) {
+      s->layers[layer].samplers[i] = c->sampler_linear;
+      pipe_sampler_view_reference(&s->layers[layer].sampler_views[i], sampler_views[i]);
+   }
+
+   calc_src_and_dst(&s->layers[layer], buffer->width, buffer->height,
+                    src_rect ? *src_rect : default_rect(&s->layers[layer]),
+                    dst_rect ? *dst_rect : default_rect(&s->layers[layer]));
+
+   s->layers[layer].fs = (y) ? c->fs_weave_yuv.y : c->fs_weave_yuv.uv;
 }
 
 void

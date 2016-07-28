@@ -794,15 +794,7 @@ static void GeometryShaderStage(
             uint8_t* pBase = pInstanceBase + instance * instanceStride;
             uint8_t* pCutBase = pCutBufferBase + instance * cutInstanceStride;
             
-            DWORD numAttribs;
-            if (_BitScanReverse(&numAttribs, state.feAttribMask))
-            {
-                numAttribs++;
-            }
-            else
-            {
-                numAttribs = 0;
-            }
+            uint32_t numAttribs = state.feNumAttributes;
 
             for (uint32_t stream = 0; stream < MAX_SO_STREAMS; ++stream)
             {
@@ -1445,7 +1437,6 @@ PFN_FE_WORK_FUNC GetProcessDrawFunc(
     return TemplateArgUnroller<FEDrawChooser>::GetFunc(IsIndexed, IsCutIndexEnabled, HasTessellation, HasGeometryShader, HasStreamOut, HasRasterization);
 }
 
-
 //////////////////////////////////////////////////////////////////////////
 /// @brief Processes attributes for the backend based on linkage mask and
 ///        linkage map.  Essentially just doing an SOA->AOS conversion and pack.
@@ -1455,75 +1446,100 @@ PFN_FE_WORK_FUNC GetProcessDrawFunc(
 /// @param pLinkageMap - maps VS attribute slot to PS slot
 /// @param triIndex - Triangle to process attributes for
 /// @param pBuffer - Output result
-template<uint32_t NumVerts>
+template<typename NumVertsT, typename IsSwizzledT, typename HasConstantInterpT>
 INLINE void ProcessAttributes(
     DRAW_CONTEXT *pDC,
     PA_STATE&pa,
-    uint32_t linkageMask,
-    const uint8_t* pLinkageMap,
     uint32_t triIndex,
+    uint32_t primId,
     float *pBuffer)
 {
-    DWORD slot = 0;
-    uint32_t mapIdx = 0;
-    LONG constantInterpMask = pDC->pState->state.backendState.constantInterpolationMask;
+    static_assert(NumVertsT::value > 0 && NumVertsT::value <= 3, "Invalid value for NumVertsT");
+    const SWR_BACKEND_STATE& backendState = pDC->pState->state.backendState;
+    LONG constantInterpMask = backendState.constantInterpolationMask;
     const uint32_t provokingVertex = pDC->pState->state.frontendState.topologyProvokingVertex;
     const PRIMITIVE_TOPOLOGY topo = pDC->pState->state.topology;
 
-    while (_BitScanForward(&slot, linkageMask))
-    {
-        linkageMask &= ~(1 << slot); // done with this bit.
+    static const float constTable[3][4] = {
+        {0.0f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f, 1.0f},
+        {1.0f, 1.0f, 1.0f, 1.0f}
+    };
 
-        // compute absolute slot in vertex attrib array
-        uint32_t inputSlot = VERTEX_ATTRIB_START_SLOT + pLinkageMap[mapIdx];
+    for (uint32_t i = 0; i < backendState.numAttributes; ++i)
+    {
+        uint32_t inputSlot;
+        if (IsSwizzledT::value)
+        {
+            SWR_ATTRIB_SWIZZLE attribSwizzle = backendState.swizzleMap[i];
+            inputSlot = VERTEX_ATTRIB_START_SLOT + attribSwizzle.sourceAttrib;
+
+        }
+        else
+        {
+            inputSlot = VERTEX_ATTRIB_START_SLOT + i;
+        }
 
         __m128 attrib[3];    // triangle attribs (always 4 wide)
+        float* pAttribStart = pBuffer;
 
-        if (_bittest(&constantInterpMask, mapIdx))
+        if (HasConstantInterpT::value)
         {
-            uint32_t vid;
-            static const uint32_t tristripProvokingVertex[] = {0, 2, 1};
-            static const int32_t quadProvokingTri[2][4] = {{0, 0, 0, 1}, {0, -1, 0, 0}};
-            static const uint32_t quadProvokingVertex[2][4] = {{0, 1, 2, 2}, {0, 1, 1, 2}};
-            static const int32_t qstripProvokingTri[2][4] = {{0, 0, 0, 1}, {-1, 0, 0, 0}};
-            static const uint32_t qstripProvokingVertex[2][4] = {{0, 1, 2, 1}, {0, 0, 2, 1}};
-
-            switch (topo) {
-            case TOP_QUAD_LIST:
-                pa.AssembleSingle(inputSlot,
-                                  triIndex + quadProvokingTri[triIndex & 1][provokingVertex],
-                                  attrib);
-                vid = quadProvokingVertex[triIndex & 1][provokingVertex];
-                break;
-            case TOP_QUAD_STRIP:
-                pa.AssembleSingle(inputSlot,
-                                  triIndex + qstripProvokingTri[triIndex & 1][provokingVertex],
-                                  attrib);
-                vid = qstripProvokingVertex[triIndex & 1][provokingVertex];
-                break;
-            case TOP_TRIANGLE_STRIP:
-               pa.AssembleSingle(inputSlot, triIndex, attrib);
-               vid = (triIndex & 1)
-                   ? tristripProvokingVertex[provokingVertex]
-                   : provokingVertex;
-               break;
-            default:
-                pa.AssembleSingle(inputSlot, triIndex, attrib);
-                vid = provokingVertex;
-                break;
-            }
-
-            for (uint32_t i = 0; i < NumVerts; ++i)
+            if (_bittest(&constantInterpMask, i))
             {
-                _mm_store_ps(pBuffer, attrib[vid]);
-                pBuffer += 4;
+                uint32_t vid;
+                uint32_t adjustedTriIndex;
+                static const uint32_t tristripProvokingVertex[] = { 0, 2, 1 };
+                static const int32_t quadProvokingTri[2][4] = { {0, 0, 0, 1}, {0, -1, 0, 0} };
+                static const uint32_t quadProvokingVertex[2][4] = { {0, 1, 2, 2}, {0, 1, 1, 2} };
+                static const int32_t qstripProvokingTri[2][4] = { {0, 0, 0, 1}, {-1, 0, 0, 0} };
+                static const uint32_t qstripProvokingVertex[2][4] = { {0, 1, 2, 1}, {0, 0, 2, 1} };
+
+                switch (topo) {
+                case TOP_QUAD_LIST:
+                    adjustedTriIndex = triIndex + quadProvokingTri[triIndex & 1][provokingVertex];
+                    vid = quadProvokingVertex[triIndex & 1][provokingVertex];
+                    break;
+                case TOP_QUAD_STRIP:
+                    adjustedTriIndex = triIndex + qstripProvokingTri[triIndex & 1][provokingVertex];
+                    vid = qstripProvokingVertex[triIndex & 1][provokingVertex];
+                    break;
+                case TOP_TRIANGLE_STRIP:
+                    adjustedTriIndex = triIndex;
+                    vid = (triIndex & 1)
+                        ? tristripProvokingVertex[provokingVertex]
+                        : provokingVertex;
+                    break;
+                default:
+                    adjustedTriIndex = triIndex;
+                    vid = provokingVertex;
+                    break;
+                }
+
+                pa.AssembleSingle(inputSlot, adjustedTriIndex, attrib);
+
+                for (uint32_t i = 0; i < NumVertsT::value; ++i)
+                {
+                    _mm_store_ps(pBuffer, attrib[vid]);
+                    pBuffer += 4;
+                }
+            }
+            else
+            {
+                pa.AssembleSingle(inputSlot, triIndex, attrib);
+
+                for (uint32_t i = 0; i < NumVertsT::value; ++i)
+                {
+                    _mm_store_ps(pBuffer, attrib[i]);
+                    pBuffer += 4;
+                }
             }
         }
         else
         {
             pa.AssembleSingle(inputSlot, triIndex, attrib);
 
-            for (uint32_t i = 0; i < NumVerts; ++i)
+            for (uint32_t i = 0; i < NumVertsT::value; ++i)
             {
                 _mm_store_ps(pBuffer, attrib[i]);
                 pBuffer += 4;
@@ -1534,14 +1550,64 @@ INLINE void ProcessAttributes(
         // interpolation code in the pixel shader works correctly for the
         // 3 topologies - point, line, tri.  This effectively zeros out the
         // effect of the missing vertices in the triangle interpolation.
-        for (uint32_t i = NumVerts; i < 3; ++i)
+        for (uint32_t v = NumVertsT::value; v < 3; ++v)
         {
-            _mm_store_ps(pBuffer, attrib[NumVerts - 1]);
+            _mm_store_ps(pBuffer, attrib[NumVertsT::value - 1]);
             pBuffer += 4;
         }
 
-        mapIdx++;
+        // check for constant source overrides
+        if (IsSwizzledT::value)
+        {
+            uint32_t mask = backendState.swizzleMap[i].componentOverrideMask;
+            if (mask)
+            {
+                DWORD comp;
+                while (_BitScanForward(&comp, mask))
+                {
+                    mask &= ~(1 << comp);
+
+                    float constantValue = 0.0f;
+                    switch ((SWR_CONSTANT_SOURCE)backendState.swizzleMap[i].constantSource)
+                    {
+                    case SWR_CONSTANT_SOURCE_CONST_0000:
+                    case SWR_CONSTANT_SOURCE_CONST_0001_FLOAT:
+                    case SWR_CONSTANT_SOURCE_CONST_1111_FLOAT:
+                        constantValue = constTable[backendState.swizzleMap[i].constantSource][comp];
+                        break;
+                    case SWR_CONSTANT_SOURCE_PRIM_ID:
+                        constantValue = *(float*)&primId;
+                        break;
+                    }
+
+                    // apply constant value to all 3 vertices
+                    for (uint32_t v = 0; v < 3; ++v)
+                    {
+                        pAttribStart[comp + v * 4] = constantValue;
+                    }
+                }
+            }
+        }
     }
+}
+
+
+typedef void(*PFN_PROCESS_ATTRIBUTES)(DRAW_CONTEXT*, PA_STATE&, uint32_t, uint32_t, float*);
+
+struct ProcessAttributesChooser
+{
+    typedef PFN_PROCESS_ATTRIBUTES FuncType;
+
+    template <typename... ArgsB>
+    static FuncType GetFunc()
+    {
+        return ProcessAttributes<ArgsB...>;
+    }
+};
+
+PFN_PROCESS_ATTRIBUTES GetProcessAttributesFunc(uint32_t NumVerts, bool IsSwizzled, bool HasConstantInterp)
+{
+    return TemplateArgUnroller<ProcessAttributesChooser>::GetFunc(IntArg<1, 3>{NumVerts}, IsSwizzled, HasConstantInterp);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1596,7 +1662,7 @@ void ProcessUserClipDist(PA_STATE& pa, uint32_t primIndex, uint8_t clipDistMask,
 template <typename PT = FixedPointTraits<Fixed_16_8>>
 INLINE simdscalari fpToFixedPointVertical(const simdscalar vIn)
 {
-    simdscalar vFixed = _simd_mul_ps(vIn, _simd_set1_ps(PT::FixedPointScaleT::value));
+    simdscalar vFixed = _simd_mul_ps(vIn, _simd_set1_ps(PT::ScaleT::value));
     return _simd_cvtps_epi32(vFixed);
 }
 
@@ -1742,6 +1808,10 @@ void BinTriangles(
     const SWR_GS_STATE& gsState = state.gsState;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
+    // Select attribute processor
+    PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(3,
+        state.backendState.swizzleEnable, state.backendState.constantInterpolationMask);
+
 
     simdscalar vRecipW0 = _simd_set1_ps(1.0f);
     simdscalar vRecipW1 = _simd_set1_ps(1.0f);
@@ -1842,10 +1912,13 @@ void BinTriangles(
     /// Note: these variable initializations must stay above any 'goto endBenTriangles'
     // compute per tri backface
     uint32_t frontFaceMask = frontWindingTris;
-
     uint32_t *pPrimID = (uint32_t *)&primID;
     DWORD triIndex = 0;
-
+    // for center sample pattern, all samples are at pixel center; calculate coverage
+    // once at center and broadcast the results in the backend
+    uint32_t sampleCount = (rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN) ? rastState.sampleCount : SWR_MULTISAMPLE_1X;
+    PFN_WORK_FUNC pfnWork = GetRasterizerFunc(sampleCount, (rastState.conservativeRast > 0),
+                                              pDC->pState->state.psState.inputCoverage, (rastState.scissorEnable > 0));
     if (!triMask)
     {
         goto endBinTriangles;
@@ -1945,34 +2018,22 @@ void BinTriangles(
         _simd_store_si((simdscalari*)aRTAI, _simd_setzero_si());
     }
 
-
     // scan remaining valid triangles and bin each separately
     while (_BitScanForward(&triIndex, triMask))
     {
-        uint32_t linkageCount = state.linkageCount;
-        uint32_t linkageMask  = state.linkageMask;
+        uint32_t linkageCount = state.backendState.numAttributes;
         uint32_t numScalarAttribs = linkageCount * 4;
-        
+
         BE_WORK work;
         work.type = DRAW;
+        work.pfnWork = pfnWork;
 
         TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
         desc.triFlags.frontFacing = state.forceFront ? 1 : ((frontFaceMask >> triIndex) & 1);
         desc.triFlags.primID = pPrimID[triIndex];
         desc.triFlags.renderTargetArrayIndex = aRTAI[triIndex];
-
-        if(rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN)
-        {
-            work.pfnWork = gRasterizerTable[rastState.scissorEnable][rastState.sampleCount];
-        }
-        else
-        {
-            // for center sample pattern, all samples are at pixel center; calculate coverage
-            // once at center and broadcast the results in the backend
-            work.pfnWork = gRasterizerTable[rastState.scissorEnable][SWR_MULTISAMPLE_1X];
-        }
-
+        
         auto pArena = pDC->pArena;
         SWR_ASSERT(pArena != nullptr);
 
@@ -1980,7 +2041,7 @@ void BinTriangles(
         float *pAttribs = (float*)pArena->AllocAligned(numScalarAttribs * 3 * sizeof(float), 16);
         desc.pAttribs = pAttribs;
         desc.numAttribs = linkageCount;
-        ProcessAttributes<3>(pDC, pa, linkageMask, state.linkageMap, triIndex, desc.pAttribs);
+        pfnProcessAttribs(pDC, pa, triIndex, pPrimID[triIndex], desc.pAttribs);
 
         // store triangle vertex data
         desc.pTriBuffer = (float*)pArena->AllocAligned(4 * 4 * sizeof(float), 16);
@@ -2028,7 +2089,7 @@ struct FEBinTrianglesChooser
     }
 };
 
-// Selector for correct templated Draw front-end function
+// Selector for correct templated BinTrinagles function
 PFN_PROCESS_PRIMS GetBinTrianglesFunc(bool IsConservative)
 {
     return TemplateArgUnroller<FEBinTrianglesChooser>::GetFunc(IsConservative);
@@ -2057,6 +2118,10 @@ void BinPoints(
     const SWR_FRONTEND_STATE& feState = state.frontendState;
     const SWR_GS_STATE& gsState = state.gsState;
     const SWR_RASTSTATE& rastState = state.rastState;
+
+    // Select attribute processor
+    PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(1,
+        state.backendState.swizzleEnable, state.backendState.constantInterpolationMask);
 
     if (!feState.vpTransformDisable)
     {
@@ -2138,12 +2203,13 @@ void BinPoints(
 
         uint32_t *pPrimID = (uint32_t *)&primID;
         DWORD primIndex = 0;
+
+        const SWR_BACKEND_STATE& backendState = pDC->pState->state.backendState;
+
         // scan remaining valid triangles and bin each separately
         while (_BitScanForward(&primIndex, primMask))
         {
-            uint32_t linkageCount = state.linkageCount;
-            uint32_t linkageMask = state.linkageMask;
-
+            uint32_t linkageCount = backendState.numAttributes;
             uint32_t numScalarAttribs = linkageCount * 4;
 
             BE_WORK work;
@@ -2166,7 +2232,7 @@ void BinPoints(
             desc.pAttribs = pAttribs;
             desc.numAttribs = linkageCount;
 
-            ProcessAttributes<1>(pDC, pa, linkageMask, state.linkageMap, primIndex, pAttribs);
+            pfnProcessAttribs(pDC, pa, primIndex, pPrimID[primIndex], pAttribs);
 
             // store raster tile aligned x, y, perspective correct z
             float *pTriBuffer = (float*)pArena->AllocAligned(4 * sizeof(float), 16);
@@ -2273,11 +2339,11 @@ void BinPoints(
         _simd_store_ps((float*)aPrimVertsZ, primVerts.z);
 
         // scan remaining valid prims and bin each separately
+        const SWR_BACKEND_STATE& backendState = state.backendState;
         DWORD primIndex;
         while (_BitScanForward(&primIndex, primMask))
         {
-            uint32_t linkageCount = state.linkageCount;
-            uint32_t linkageMask = state.linkageMask;
+            uint32_t linkageCount = backendState.numAttributes;
             uint32_t numScalarAttribs = linkageCount * 4;
 
             BE_WORK work;
@@ -2298,7 +2364,7 @@ void BinPoints(
             // store active attribs
             desc.pAttribs = (float*)pArena->AllocAligned(numScalarAttribs * 3 * sizeof(float), 16);
             desc.numAttribs = linkageCount;
-            ProcessAttributes<1>(pDC, pa, linkageMask, state.linkageMap, primIndex, desc.pAttribs);
+            pfnProcessAttribs(pDC, pa, primIndex, pPrimID[primIndex], desc.pAttribs);
 
             // store point vertex data
             float *pTriBuffer = (float*)pArena->AllocAligned(4 * sizeof(float), 16);
@@ -2360,6 +2426,10 @@ void BinLines(
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_FRONTEND_STATE& feState = state.frontendState;
     const SWR_GS_STATE& gsState = state.gsState;
+
+    // Select attribute processor
+    PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(2,
+    state.backendState.swizzleEnable, state.backendState.constantInterpolationMask);
 
     simdscalar vRecipW0 = _simd_set1_ps(1.0f);
     simdscalar vRecipW1 = _simd_set1_ps(1.0f);
@@ -2493,8 +2563,7 @@ void BinLines(
     DWORD primIndex;
     while (_BitScanForward(&primIndex, primMask))
     {
-        uint32_t linkageCount = state.linkageCount;
-        uint32_t linkageMask = state.linkageMask;
+        uint32_t linkageCount = state.backendState.numAttributes;
         uint32_t numScalarAttribs = linkageCount * 4;
 
         BE_WORK work;
@@ -2515,7 +2584,7 @@ void BinLines(
         // store active attribs
         desc.pAttribs = (float*)pArena->AllocAligned(numScalarAttribs * 3 * sizeof(float), 16);
         desc.numAttribs = linkageCount;
-        ProcessAttributes<2>(pDC, pa, linkageMask, state.linkageMap, primIndex, desc.pAttribs);
+        pfnProcessAttribs(pDC, pa, primIndex, pPrimID[primIndex], desc.pAttribs);
 
         // store line vertex data
         desc.pTriBuffer = (float*)pArena->AllocAligned(4 * 4 * sizeof(float), 16);

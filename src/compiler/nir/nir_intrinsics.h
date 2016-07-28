@@ -266,16 +266,16 @@ INTRINSIC(ssbo_atomic_comp_swap, 4, ARR(1, 1, 1, 1), true, 1, 0, 0, xx, xx, xx, 
  *    in shared_atomic_add, etc).
  * 2: For CompSwap only: the second data parameter.
  */
-INTRINSIC(shared_atomic_add, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_imin, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_umin, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_imax, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_umax, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_and, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_or, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_xor, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_exchange, 2, ARR(1, 1), true, 1, 0, 0, xx, xx, xx, 0)
-INTRINSIC(shared_atomic_comp_swap, 3, ARR(1, 1, 1), true, 1, 0, 0, xx, xx, xx, 0)
+INTRINSIC(shared_atomic_add, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_imin, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_umin, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_imax, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_umax, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_and, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_or, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_xor, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_exchange, 2, ARR(1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
+INTRINSIC(shared_atomic_comp_swap, 3, ARR(1, 1, 1), true, 1, 0, 1, BASE, xx, xx, 0)
 
 #define SYSTEM_VALUE(name, components, num_indices, idx0, idx1, idx2) \
    INTRINSIC(load_##name, 0, ARR(0), true, components, 0, num_indices, \
@@ -306,6 +306,35 @@ SYSTEM_VALUE(num_work_groups, 3, 0, xx, xx, xx)
 SYSTEM_VALUE(helper_invocation, 1, 0, xx, xx, xx)
 SYSTEM_VALUE(channel_num, 1, 0, xx, xx, xx)
 
+/**
+ * Barycentric coordinate intrinsics.
+ *
+ * These set up the barycentric coordinates for a particular interpolation.
+ * The first three are for the simple cases: pixel, centroid, or per-sample
+ * (at gl_SampleID).  The next two handle interpolating at a specified
+ * sample location, or interpolating with a vec2 offset,
+ *
+ * The interp_mode index should be either the INTERP_MODE_SMOOTH or
+ * INTERP_MODE_NOPERSPECTIVE enum values.
+ *
+ * The vec2 value produced by these intrinsics is intended for use as the
+ * barycoord source of a load_interpolated_input intrinsic.
+ */
+
+#define BARYCENTRIC(name, sources, source_components) \
+   INTRINSIC(load_barycentric_##name, sources, ARR(source_components), \
+             true, 2, 0, 1, INTERP_MODE, xx, xx, \
+             NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+
+/* no sources.  const_index[] = { interp_mode } */
+BARYCENTRIC(pixel, 0, 0)
+BARYCENTRIC(centroid, 0, 0)
+BARYCENTRIC(sample, 0, 0)
+/* src[] = { sample_id }.  const_index[] = { interp_mode } */
+BARYCENTRIC(at_sample, 1, 1)
+/* src[] = { offset.xy }.  const_index[] = { interp_mode } */
+BARYCENTRIC(at_offset, 1, 2)
+
 /*
  * Load operations pull data from some piece of GPU memory.  All load
  * operations operate in terms of offsets into some piece of theoretical
@@ -331,20 +360,23 @@ SYSTEM_VALUE(channel_num, 1, 0, xx, xx, xx)
 #define LOAD(name, srcs, num_indices, idx0, idx1, idx2, flags) \
    INTRINSIC(load_##name, srcs, ARR(1, 1, 1, 1), true, 0, 0, num_indices, idx0, idx1, idx2, flags)
 
-/* src[] = { offset }. const_index[] = { base } */
+/* src[] = { offset }. const_index[] = { base, range } */
 LOAD(uniform, 1, 2, BASE, RANGE, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 /* src[] = { buffer_index, offset }. No const_index */
 LOAD(ubo, 2, 0, xx, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
-/* src[] = { offset }. const_index[] = { base } */
-LOAD(input, 1, 1, BASE, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
-/* src[] = { vertex, offset }. const_index[] = { base } */
-LOAD(per_vertex_input, 2, 1, BASE, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+/* src[] = { offset }. const_index[] = { base, component } */
+LOAD(input, 1, 2, BASE, COMPONENT, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+/* src[] = { vertex, offset }. const_index[] = { base, component } */
+LOAD(per_vertex_input, 2, 2, BASE, COMPONENT, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+/* src[] = { barycoord, offset }. const_index[] = { base, component } */
+LOAD(interpolated_input, 2, 2, BASE, COMPONENT, xx, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+
 /* src[] = { buffer_index, offset }. No const_index */
 LOAD(ssbo, 2, 0, xx, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE)
-/* src[] = { offset }. const_index[] = { base } */
-LOAD(output, 1, 1, BASE, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE)
-/* src[] = { vertex, offset }. const_index[] = { base } */
-LOAD(per_vertex_output, 2, 1, BASE, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE)
+/* src[] = { offset }. const_index[] = { base, component } */
+LOAD(output, 1, 1, BASE, COMPONENT, xx, NIR_INTRINSIC_CAN_ELIMINATE)
+/* src[] = { vertex, offset }. const_index[] = { base, component } */
+LOAD(per_vertex_output, 2, 1, BASE, COMPONENT, xx, NIR_INTRINSIC_CAN_ELIMINATE)
 /* src[] = { offset }. const_index[] = { base } */
 LOAD(shared, 1, 1, BASE, xx, xx, NIR_INTRINSIC_CAN_ELIMINATE)
 /* src[] = { offset }. const_index[] = { base, range } */
@@ -361,10 +393,12 @@ LOAD(push_constant, 1, 2, BASE, RANGE, xx,
 #define STORE(name, srcs, num_indices, idx0, idx1, idx2, flags) \
    INTRINSIC(store_##name, srcs, ARR(0, 1, 1, 1), false, 0, 0, num_indices, idx0, idx1, idx2, flags)
 
-/* src[] = { value, offset }. const_index[] = { base, write_mask } */
-STORE(output, 2, 2, BASE, WRMASK, xx, 0)
-/* src[] = { value, vertex, offset }. const_index[] = { base, write_mask } */
-STORE(per_vertex_output, 3, 2, BASE, WRMASK, xx, 0)
+/* src[] = { value, offset }. const_index[] = { base, write_mask, component } */
+STORE(output, 2, 3, BASE, WRMASK, COMPONENT, 0)
+/* src[] = { value, vertex, offset }.
+ * const_index[] = { base, write_mask, component }
+ */
+STORE(per_vertex_output, 3, 3, BASE, WRMASK, COMPONENT, 0)
 /* src[] = { value, block_index, offset }. const_index[] = { write_mask } */
 STORE(ssbo, 3, 1, WRMASK, xx, xx, 0)
 /* src[] = { value, offset }. const_index[] = { base, write_mask } */

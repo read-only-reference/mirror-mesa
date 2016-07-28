@@ -1323,11 +1323,9 @@ struct gl_client_array
    GLint Size;                  /**< components per element (1,2,3,4) */
    GLenum Type;                 /**< datatype: GL_FLOAT, GL_INT, etc */
    GLenum Format;               /**< default: GL_RGBA, but may be GL_BGRA */
-   GLsizei Stride;		/**< user-specified stride */
    GLsizei StrideB;		/**< actual stride in bytes */
    GLuint _ElementSize;         /**< size of each element in bytes */
    const GLubyte *Ptr;          /**< Points to array data */
-   GLboolean Enabled;		/**< Enabled flag is a boolean */
    GLboolean Normalized;        /**< GL_ARB_vertex_program */
    GLboolean Integer;           /**< Integer-valued? */
    GLboolean Doubles;       /**< double precision values are not converted to floats */
@@ -2031,9 +2029,9 @@ struct gl_fragment_program
    /**
     * GLSL interpolation qualifier associated with each fragment shader input.
     * For inputs that do not have an interpolation qualifier specified in
-    * GLSL, the value is INTERP_QUALIFIER_NONE.
+    * GLSL, the value is INTERP_MODE_NONE.
     */
-   enum glsl_interp_qualifier InterpQualifier[VARYING_SLOT_MAX];
+   enum glsl_interp_mode InterpQualifier[VARYING_SLOT_MAX];
 
    /**
     * Bitfield indicating, for each fragment shader input, 1 if that input
@@ -2638,7 +2636,7 @@ struct gl_shader_variable
    /**
     * Interpolation mode for shader inputs / outputs
     *
-    * \sa glsl_interp_qualifier
+    * \sa glsl_interp_mode
     */
    unsigned interpolation:2;
 
@@ -3536,6 +3534,11 @@ struct gl_constants
    GLboolean AllowGLSLExtensionDirectiveMidShader;
 
    /**
+    * Force uninitialized variables to default to zero.
+    */
+   GLboolean GLSLZeroInit;
+
+   /**
     * Does the driver support real 32-bit integers?  (Otherwise, integers are
     * simulated via floats.)
     */
@@ -3941,7 +3944,9 @@ struct gl_extensions
    GLboolean KHR_robustness;
    GLboolean KHR_texture_compression_astc_hdr;
    GLboolean KHR_texture_compression_astc_ldr;
+   GLboolean KHR_texture_compression_astc_sliced_3d;
    GLboolean MESA_pack_invert;
+   GLboolean MESA_shader_integer_functions;
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_conditional_render;
    GLboolean NV_fog_distance;

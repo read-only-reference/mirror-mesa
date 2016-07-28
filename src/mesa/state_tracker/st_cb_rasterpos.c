@@ -196,10 +196,8 @@ new_draw_rastpos_stage(struct gl_context *ctx, struct draw_context *draw)
       rs->array[i].Size = 4;
       rs->array[i].Type = GL_FLOAT;
       rs->array[i].Format = GL_RGBA;
-      rs->array[i].Stride = 0;
       rs->array[i].StrideB = 0;
       rs->array[i].Ptr = (GLubyte *) ctx->Current.Attrib[i];
-      rs->array[i].Enabled = GL_TRUE;
       rs->array[i].Normalized = GL_TRUE;
       rs->array[i].BufferObj = NULL;
       rs->arrays[i] = &rs->array[i];

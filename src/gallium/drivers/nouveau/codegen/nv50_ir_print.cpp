@@ -312,6 +312,7 @@ static const char *SemanticStr[SV_LAST + 1] =
    "BASEVERTEX",
    "BASEINSTANCE",
    "DRAWID",
+   "WORK_DIM",
    "?",
    "(INVALID)"
 };
@@ -569,6 +570,7 @@ void Instruction::print() const
          PRINT("%s ", interpStr[ipa]);
       switch (op) {
       case OP_SUREDP:
+      case OP_SUREDB:
       case OP_ATOM:
          if (subOp < ARRAY_SIZE(atomSubOpStr))
             PRINT("%s ", atomSubOpStr[subOp]);

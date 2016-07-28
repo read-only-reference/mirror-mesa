@@ -408,6 +408,7 @@ static nv50_ir::SVSemantic translateSysVal(uint sysval)
    case TGSI_SEMANTIC_BASEVERTEX: return nv50_ir::SV_BASEVERTEX;
    case TGSI_SEMANTIC_BASEINSTANCE: return nv50_ir::SV_BASEINSTANCE;
    case TGSI_SEMANTIC_DRAWID:     return nv50_ir::SV_DRAWID;
+   case TGSI_SEMANTIC_WORK_DIM:   return nv50_ir::SV_WORK_DIM;
    default:
       assert(0);
       return nv50_ir::SV_CLOCK;
@@ -507,6 +508,8 @@ static nv50_ir::ImgFormat translateImgFormat(uint format)
    FMT_CASE(R8G8_SNORM, RG8_SNORM);
    FMT_CASE(R16_SNORM, R16_SNORM);
    FMT_CASE(R8_SNORM, R8_SNORM);
+
+   FMT_CASE(B8G8R8A8_UNORM, BGRA8);
    }
 
    assert(!"Unexpected format");
@@ -1005,7 +1008,7 @@ bool Source::scanSource()
 
    if (info->type == PIPE_SHADER_FRAGMENT) {
       info->prop.fp.writesDepth = scan.writes_z;
-      info->prop.fp.usesDiscard = scan.uses_kill;
+      info->prop.fp.usesDiscard = scan.uses_kill || info->io.alphaRefBase;
    } else
    if (info->type == PIPE_SHADER_GEOMETRY) {
       info->prop.gp.instanceCount = 1; // default value
@@ -2388,6 +2391,9 @@ Converter::getImageCoords(std::vector<Value *> &coords, int r, int s)
 
    for (int c = 0; c < arg; ++c)
       coords.push_back(fetchSrc(s, c));
+
+   if (t.isMS())
+      coords.push_back(fetchSrc(s, 3));
 }
 
 // For raw loads, granularity is 4 byte.
@@ -2746,8 +2752,8 @@ Converter::handleINTERP(Value *dst[4])
    Value *offset = NULL, *ptr = NULL, *w = NULL;
    Symbol *sym[4] = { NULL };
    bool linear;
-   operation op;
-   int c, mode;
+   operation op = OP_NOP;
+   int c, mode = 0;
 
    tgsi::Instruction::SrcRegister src = tgsi.getSrc(0);
 
@@ -3814,6 +3820,28 @@ Converter::handleUserClipPlanes()
 void
 Converter::exportOutputs()
 {
+   if (info->io.alphaRefBase) {
+      for (unsigned int i = 0; i < info->numOutputs; ++i) {
+         if (info->out[i].sn != TGSI_SEMANTIC_COLOR ||
+             info->out[i].si != 0)
+            continue;
+         const unsigned int c = 3;
+         if (!oData.exists(sub.cur->values, i, c))
+            continue;
+         Value *val = oData.load(sub.cur->values, i, c, NULL);
+         if (!val)
+            continue;
+
+         Symbol *ref = mkSymbol(FILE_MEMORY_CONST, info->io.auxCBSlot,
+                                TYPE_U32, info->io.alphaRefBase);
+         Value *pred = new_LValue(func, FILE_PREDICATE);
+         mkCmp(OP_SET, CC_TR, TYPE_U32, pred, TYPE_F32, val,
+               mkLoadv(TYPE_U32, ref, NULL))
+            ->subOp = 1;
+         mkOp(OP_DISCARD, TYPE_NONE, NULL)->setPredicate(CC_NOT_P, pred);
+      }
+   }
+
    for (unsigned int i = 0; i < info->numOutputs; ++i) {
       for (unsigned int c = 0; c < 4; ++c) {
          if (!oData.exists(sub.cur->values, i, c))

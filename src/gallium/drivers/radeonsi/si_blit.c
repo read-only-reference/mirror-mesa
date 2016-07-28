@@ -101,6 +101,76 @@ static unsigned u_max_sample(struct pipe_resource *r)
 	return r->nr_samples ? r->nr_samples - 1 : 0;
 }
 
+static unsigned
+si_blit_dbcb_copy(struct si_context *sctx,
+		  struct r600_texture *src,
+		  struct r600_texture *dst,
+		  unsigned planes, unsigned level_mask,
+		  unsigned first_layer, unsigned last_layer,
+		  unsigned first_sample, unsigned last_sample)
+{
+	struct pipe_surface surf_tmpl = {{0}};
+	unsigned layer, sample, checked_last_layer, max_layer;
+	unsigned fully_copied_levels = 0;
+
+	if (planes & PIPE_MASK_Z)
+		sctx->dbcb_depth_copy_enabled = true;
+	if (planes & PIPE_MASK_S)
+		sctx->dbcb_stencil_copy_enabled = true;
+	si_mark_atom_dirty(sctx, &sctx->db_render_state);
+
+	assert(sctx->dbcb_depth_copy_enabled || sctx->dbcb_stencil_copy_enabled);
+
+	while (level_mask) {
+		unsigned level = u_bit_scan(&level_mask);
+
+		/* The smaller the mipmap level, the less layers there are
+		 * as far as 3D textures are concerned. */
+		max_layer = util_max_layer(&src->resource.b.b, level);
+		checked_last_layer = MIN2(last_layer, max_layer);
+
+		surf_tmpl.u.tex.level = level;
+
+		for (layer = first_layer; layer <= checked_last_layer; layer++) {
+			struct pipe_surface *zsurf, *cbsurf;
+
+			surf_tmpl.format = src->resource.b.b.format;
+			surf_tmpl.u.tex.first_layer = layer;
+			surf_tmpl.u.tex.last_layer = layer;
+
+			zsurf = sctx->b.b.create_surface(&sctx->b.b, &src->resource.b.b, &surf_tmpl);
+
+			surf_tmpl.format = dst->resource.b.b.format;
+			cbsurf = sctx->b.b.create_surface(&sctx->b.b, &dst->resource.b.b, &surf_tmpl);
+
+			for (sample = first_sample; sample <= last_sample; sample++) {
+				if (sample != sctx->dbcb_copy_sample) {
+					sctx->dbcb_copy_sample = sample;
+					si_mark_atom_dirty(sctx, &sctx->db_render_state);
+				}
+
+				si_blitter_begin(&sctx->b.b, SI_DECOMPRESS);
+				util_blitter_custom_depth_stencil(sctx->blitter, zsurf, cbsurf, 1 << sample,
+								  sctx->custom_dsa_flush, 1.0f);
+				si_blitter_end(&sctx->b.b);
+			}
+
+			pipe_surface_reference(&zsurf, NULL);
+			pipe_surface_reference(&cbsurf, NULL);
+		}
+
+		if (first_layer == 0 && last_layer >= max_layer &&
+		    first_sample == 0 && last_sample >= u_max_sample(&src->resource.b.b))
+			fully_copied_levels |= 1u << level;
+	}
+
+	sctx->dbcb_depth_copy_enabled = false;
+	sctx->dbcb_stencil_copy_enabled = false;
+	si_mark_atom_dirty(sctx, &sctx->db_render_state);
+
+	return fully_copied_levels;
+}
+
 static void si_blit_decompress_depth(struct pipe_context *ctx,
 				     struct r600_texture *texture,
 				     struct r600_texture *staging,
@@ -108,60 +178,22 @@ static void si_blit_decompress_depth(struct pipe_context *ctx,
 				     unsigned first_layer, unsigned last_layer,
 				     unsigned first_sample, unsigned last_sample)
 {
-	struct si_context *sctx = (struct si_context *)ctx;
-	unsigned layer, level, sample, checked_last_layer, max_layer;
-	float depth = 1.0f;
 	const struct util_format_description *desc;
+	unsigned planes = 0;
 
 	assert(staging != NULL && "use si_blit_decompress_zs_in_place instead");
 
 	desc = util_format_description(staging->resource.b.b.format);
 
 	if (util_format_has_depth(desc))
-		sctx->dbcb_depth_copy_enabled = true;
+		planes |= PIPE_MASK_Z;
 	if (util_format_has_stencil(desc))
-		sctx->dbcb_stencil_copy_enabled = true;
+		planes |= PIPE_MASK_S;
 
-	assert(sctx->dbcb_depth_copy_enabled || sctx->dbcb_stencil_copy_enabled);
-
-	for (level = first_level; level <= last_level; level++) {
-		/* The smaller the mipmap level, the less layers there are
-		 * as far as 3D textures are concerned. */
-		max_layer = util_max_layer(&texture->resource.b.b, level);
-		checked_last_layer = MIN2(last_layer, max_layer);
-
-		for (layer = first_layer; layer <= checked_last_layer; layer++) {
-			for (sample = first_sample; sample <= last_sample; sample++) {
-				struct pipe_surface *zsurf, *cbsurf, surf_tmpl;
-
-				sctx->dbcb_copy_sample = sample;
-				si_mark_atom_dirty(sctx, &sctx->db_render_state);
-
-				surf_tmpl.format = texture->resource.b.b.format;
-				surf_tmpl.u.tex.level = level;
-				surf_tmpl.u.tex.first_layer = layer;
-				surf_tmpl.u.tex.last_layer = layer;
-
-				zsurf = ctx->create_surface(ctx, &texture->resource.b.b, &surf_tmpl);
-
-				surf_tmpl.format = staging->resource.b.b.format;
-				cbsurf = ctx->create_surface(ctx,
-						(struct pipe_resource*)staging, &surf_tmpl);
-
-				si_blitter_begin(ctx, SI_DECOMPRESS);
-				util_blitter_custom_depth_stencil(sctx->blitter, zsurf, cbsurf, 1 << sample,
-								  sctx->custom_dsa_flush, depth);
-				si_blitter_end(ctx);
-
-				pipe_surface_reference(&zsurf, NULL);
-				pipe_surface_reference(&cbsurf, NULL);
-			}
-		}
-	}
-
-	sctx->dbcb_depth_copy_enabled = false;
-	sctx->dbcb_stencil_copy_enabled = false;
-	si_mark_atom_dirty(sctx, &sctx->db_render_state);
+	si_blit_dbcb_copy(
+		(struct si_context *)ctx, texture, staging, planes,
+		u_bit_consecutive(first_level, last_level - first_level + 1),
+		first_layer, last_layer, first_sample, last_sample);
 }
 
 /* Helper function for si_blit_decompress_zs_in_place.
@@ -214,7 +246,7 @@ si_blit_decompress_zs_planes_in_place(struct si_context *sctx,
 
 		/* The texture will always be dirty if some layers aren't flushed.
 		 * I don't think this case occurs often though. */
-		if (first_layer == 0 && last_layer == max_layer) {
+		if (first_layer == 0 && last_layer >= max_layer) {
 			fully_decompressed_mask |= 1u << level;
 		}
 	}
@@ -229,48 +261,117 @@ si_blit_decompress_zs_planes_in_place(struct si_context *sctx,
 	si_mark_atom_dirty(sctx, &sctx->db_render_state);
 }
 
-/* Decompress Z and/or S planes in place, depending on mask.
+/* Helper function of si_flush_depth_texture: decompress the given levels
+ * of Z and/or S planes in place.
  */
 static void
 si_blit_decompress_zs_in_place(struct si_context *sctx,
 			       struct r600_texture *texture,
-			       unsigned planes,
-			       unsigned first_level, unsigned last_level,
+			       unsigned levels_z, unsigned levels_s,
 			       unsigned first_layer, unsigned last_layer)
 {
-	unsigned level_mask =
-		u_bit_consecutive(first_level, last_level - first_level + 1);
-	unsigned cur_level_mask;
+	unsigned both = levels_z & levels_s;
 
 	/* First, do combined Z & S decompresses for levels that need it. */
-	if (planes == (PIPE_MASK_Z | PIPE_MASK_S)) {
-		cur_level_mask =
-			level_mask &
-			texture->dirty_level_mask &
-			texture->stencil_dirty_level_mask;
+	if (both) {
 		si_blit_decompress_zs_planes_in_place(
 				sctx, texture, PIPE_MASK_Z | PIPE_MASK_S,
-				cur_level_mask,
+				both,
 				first_layer, last_layer);
-		level_mask &= ~cur_level_mask;
+		levels_z &= ~both;
+		levels_s &= ~both;
 	}
 
 	/* Now do separate Z and S decompresses. */
-	if (planes & PIPE_MASK_Z) {
-		cur_level_mask = level_mask & texture->dirty_level_mask;
+	if (levels_z) {
 		si_blit_decompress_zs_planes_in_place(
 				sctx, texture, PIPE_MASK_Z,
-				cur_level_mask,
+				levels_z,
 				first_layer, last_layer);
-		level_mask &= ~cur_level_mask;
 	}
 
-	if (planes & PIPE_MASK_S) {
-		cur_level_mask = level_mask & texture->stencil_dirty_level_mask;
+	if (levels_s) {
 		si_blit_decompress_zs_planes_in_place(
 				sctx, texture, PIPE_MASK_S,
-				cur_level_mask,
+				levels_s,
 				first_layer, last_layer);
+	}
+}
+
+static void
+si_flush_depth_texture(struct si_context *sctx,
+		       struct r600_texture *tex,
+		       unsigned required_planes,
+		       unsigned first_level, unsigned last_level,
+		       unsigned first_layer, unsigned last_layer)
+{
+	unsigned inplace_planes = 0;
+	unsigned copy_planes = 0;
+	unsigned level_mask = u_bit_consecutive(first_level, last_level - first_level + 1);
+	unsigned levels_z = 0;
+	unsigned levels_s = 0;
+
+	if (required_planes & PIPE_MASK_Z) {
+		levels_z = level_mask & tex->dirty_level_mask;
+
+		if (levels_z) {
+			if (r600_can_sample_zs(tex, false))
+				inplace_planes |= PIPE_MASK_Z;
+			else
+				copy_planes |= PIPE_MASK_Z;
+		}
+	}
+	if (required_planes & PIPE_MASK_S) {
+		levels_s = level_mask & tex->stencil_dirty_level_mask;
+
+		if (levels_s) {
+			if (r600_can_sample_zs(tex, true))
+				inplace_planes |= PIPE_MASK_S;
+			else
+				copy_planes |= PIPE_MASK_S;
+		}
+	}
+
+	/* We may have to allocate the flushed texture here when called from
+	 * si_decompress_subresource.
+	 */
+	if (copy_planes &&
+	    (tex->flushed_depth_texture ||
+	     r600_init_flushed_depth_texture(&sctx->b.b, &tex->resource.b.b, NULL))) {
+		struct r600_texture *dst = tex->flushed_depth_texture;
+		unsigned fully_copied_levels;
+		unsigned levels = 0;
+
+		assert(tex->flushed_depth_texture);
+
+		if (util_format_is_depth_and_stencil(dst->resource.b.b.format))
+			copy_planes = PIPE_MASK_Z | PIPE_MASK_S;
+
+		if (copy_planes & PIPE_MASK_Z) {
+			levels |= levels_z;
+			levels_z = 0;
+		}
+		if (copy_planes & PIPE_MASK_S) {
+			levels |= levels_s;
+			levels_s = 0;
+		}
+
+		fully_copied_levels = si_blit_dbcb_copy(
+			sctx, tex, dst, copy_planes, levels,
+			first_layer, last_layer,
+			0, u_max_sample(&tex->resource.b.b));
+
+		if (copy_planes & PIPE_MASK_Z)
+			tex->dirty_level_mask &= ~fully_copied_levels;
+		if (copy_planes & PIPE_MASK_S)
+			tex->stencil_dirty_level_mask &= ~fully_copied_levels;
+	}
+
+	if (inplace_planes) {
+		si_blit_decompress_zs_in_place(
+			sctx, tex,
+			levels_z, levels_s,
+			first_layer, last_layer);
 	}
 }
 
@@ -293,13 +394,13 @@ si_flush_depth_textures(struct si_context *sctx,
 		sview = (struct si_sampler_view*)view;
 
 		tex = (struct r600_texture *)view->texture;
-		assert(tex->is_depth && !tex->is_flushing_texture);
+		assert(tex->db_compatible);
 
-		si_blit_decompress_zs_in_place(sctx, tex,
-					       sview->is_stencil_sampler ? PIPE_MASK_S
-									 : PIPE_MASK_Z,
-					       view->u.tex.first_level, view->u.tex.last_level,
-					       0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level));
+		si_flush_depth_texture(
+				sctx, tex,
+				sview->is_stencil_sampler ? PIPE_MASK_S : PIPE_MASK_Z,
+				view->u.tex.first_level, view->u.tex.last_level,
+				0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level));
 	}
 }
 
@@ -361,7 +462,7 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 
 		/* The texture will always be dirty if some layers aren't flushed.
 		 * I don't think this case occurs often though. */
-		if (first_layer == 0 && last_layer == max_layer) {
+		if (first_layer == 0 && last_layer >= max_layer) {
 			rtex->dirty_level_mask &= ~(1 << level);
 		}
 	}
@@ -696,15 +797,15 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct r600_texture *rtex = (struct r600_texture*)tex;
 
-	if (rtex->is_depth && !rtex->is_flushing_texture) {
+	if (rtex->db_compatible) {
 		planes &= PIPE_MASK_Z | PIPE_MASK_S;
 
 		if (!(rtex->surface.flags & RADEON_SURF_SBUFFER))
 			planes &= ~PIPE_MASK_S;
 
-		si_blit_decompress_zs_in_place(sctx, rtex, planes,
-					       level, level,
-					       first_layer, last_layer);
+		si_flush_depth_texture(sctx, rtex, planes,
+				       level, level,
+				       first_layer, last_layer);
 	} else if (rtex->fmask.size || rtex->cmask.size || rtex->dcc_offset) {
 		si_blit_decompress_color(ctx, rtex, level, level,
 					 first_layer, last_layer, false);

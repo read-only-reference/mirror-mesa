@@ -856,8 +856,12 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 		return;
 
 	if (sctx->framebuffer.nr_samples > 1 &&
-	    (!old_rs || old_rs->multisample_enable != rs->multisample_enable))
+	    (!old_rs || old_rs->multisample_enable != rs->multisample_enable)) {
 		si_mark_atom_dirty(sctx, &sctx->db_render_state);
+
+		if (sctx->b.family >= CHIP_POLARIS10)
+			si_mark_atom_dirty(sctx, &sctx->msaa_sample_locs.atom);
+	}
 
 	r600_set_scissor_enable(&sctx->b, rs->scissor_enable);
 
@@ -2380,18 +2384,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 		constbuf.buffer_size = sctx->framebuffer.nr_samples * 2 * 4;
 		si_set_rw_buffer(sctx, SI_PS_CONST_SAMPLE_POSITIONS, &constbuf);
 
-		/* Smoothing (only possible with nr_samples == 1) uses the same
-		 * sample locations as the MSAA it simulates.
-		 *
-		 * Therefore, don't update the sample locations when
-		 * transitioning from no AA to smoothing-equivalent AA, and
-		 * vice versa.
-		 */
-		if ((sctx->framebuffer.nr_samples != 1 ||
-		     old_nr_samples != SI_NUM_SMOOTH_AA_SAMPLES) &&
-		    (sctx->framebuffer.nr_samples != SI_NUM_SMOOTH_AA_SAMPLES ||
-		     old_nr_samples != 1))
-			si_mark_atom_dirty(sctx, &sctx->msaa_sample_locs);
+		si_mark_atom_dirty(sctx, &sctx->msaa_sample_locs.atom);
 	}
 
 	sctx->need_check_render_feedback = true;
@@ -2570,8 +2563,37 @@ static void si_emit_msaa_sample_locs(struct si_context *sctx,
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	unsigned nr_samples = sctx->framebuffer.nr_samples;
 
-	cayman_emit_msaa_sample_locs(cs, nr_samples > 1 ? nr_samples :
-						SI_NUM_SMOOTH_AA_SAMPLES);
+	/* Smoothing (only possible with nr_samples == 1) uses the same
+	 * sample locations as the MSAA it simulates.
+	 */
+	if (nr_samples <= 1 && sctx->smoothing_enabled)
+		nr_samples = SI_NUM_SMOOTH_AA_SAMPLES;
+
+	/* On Polaris, the small primitive filter uses the sample locations
+	 * even when MSAA is off, so we need to make sure they're set to 0.
+	 */
+	if ((nr_samples > 1 || sctx->b.family >= CHIP_POLARIS10) &&
+	    (nr_samples != sctx->msaa_sample_locs.nr_samples)) {
+		sctx->msaa_sample_locs.nr_samples = nr_samples;
+		cayman_emit_msaa_sample_locs(cs, nr_samples);
+	}
+
+	if (sctx->b.family >= CHIP_POLARIS10) {
+		struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
+		unsigned small_prim_filter_cntl =
+			S_028830_SMALL_PRIM_FILTER_ENABLE(1) |
+			S_028830_LINE_FILTER_DISABLE(1); /* line bug */
+
+		/* The alternative of setting sample locations to 0 would
+		 * require a DB flush to avoid Z errors, see
+		 * https://bugs.freedesktop.org/show_bug.cgi?id=96908
+		 */
+		if (sctx->framebuffer.nr_samples > 1 && rs && !rs->multisample_enable)
+			small_prim_filter_cntl &= C_028830_SMALL_PRIM_FILTER_ENABLE;
+
+		radeon_set_context_reg(cs, R_028830_PA_SU_SMALL_PRIM_FILTER_CNTL,
+				       small_prim_filter_cntl);
+	}
 }
 
 static void si_emit_msaa_config(struct si_context *sctx, struct r600_atom *atom)
@@ -2978,16 +3000,39 @@ si_create_sampler_view_custom(struct pipe_context *ctx,
 
 	/* Texturing with separate depth and stencil. */
 	pipe_format = state->format;
+
+	/* Depth/stencil texturing sometimes needs separate texture. */
+	if (tmp->is_depth && !r600_can_sample_zs(tmp, view->is_stencil_sampler)) {
+		if (!tmp->flushed_depth_texture &&
+		    !r600_init_flushed_depth_texture(ctx, texture, NULL)) {
+			pipe_resource_reference(&view->base.texture, NULL);
+			FREE(view);
+			return NULL;
+		}
+
+		assert(tmp->flushed_depth_texture);
+
+		/* Override format for the case where the flushed texture
+		 * contains only Z or only S.
+		 */
+		if (tmp->flushed_depth_texture->resource.b.b.format != tmp->resource.b.b.format)
+			pipe_format = tmp->flushed_depth_texture->resource.b.b.format;
+
+		tmp = tmp->flushed_depth_texture;
+	}
+
 	surflevel = tmp->surface.level;
 
-	if (tmp->is_depth && !tmp->is_flushing_texture) {
+	if (tmp->db_compatible) {
 		switch (pipe_format) {
 		case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 			pipe_format = PIPE_FORMAT_Z32_FLOAT;
 			break;
 		case PIPE_FORMAT_X8Z24_UNORM:
 		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-			/* Z24 is always stored like this. */
+			/* Z24 is always stored like this for DB
+			 * compatibility.
+			 */
 			pipe_format = PIPE_FORMAT_Z24X8_UNORM;
 			break;
 		case PIPE_FORMAT_X24S8_UINT:
@@ -3158,6 +3203,13 @@ static void si_emit_sample_mask(struct si_context *sctx, struct r600_atom *atom)
 {
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	unsigned mask = sctx->sample_mask.sample_mask;
+
+	/* Needed for line and polygon smoothing as well as for the Polaris
+	 * small primitive filter. We expect the state tracker to take care of
+	 * this for us.
+	 */
+	assert(mask == 0xffff || sctx->framebuffer.nr_samples > 1 ||
+	       (mask & 1 && sctx->blitter->running));
 
 	radeon_set_context_reg_seq(cs, R_028C38_PA_SC_AA_MASK_X0Y0_X1Y0, 2);
 	radeon_emit(cs, mask | (mask << 16));
@@ -3381,7 +3433,7 @@ void si_init_state_functions(struct si_context *sctx)
 
 	si_init_atom(sctx, &sctx->cache_flush, &sctx->atoms.s.cache_flush, si_emit_cache_flush);
 	si_init_atom(sctx, &sctx->framebuffer.atom, &sctx->atoms.s.framebuffer, si_emit_framebuffer_state);
-	si_init_atom(sctx, &sctx->msaa_sample_locs, &sctx->atoms.s.msaa_sample_locs, si_emit_msaa_sample_locs);
+	si_init_atom(sctx, &sctx->msaa_sample_locs.atom, &sctx->atoms.s.msaa_sample_locs, si_emit_msaa_sample_locs);
 	si_init_atom(sctx, &sctx->db_render_state, &sctx->atoms.s.db_render_state, si_emit_db_render_state);
 	si_init_atom(sctx, &sctx->msaa_config, &sctx->atoms.s.msaa_config, si_emit_msaa_config);
 	si_init_atom(sctx, &sctx->sample_mask.atom, &sctx->atoms.s.sample_mask, si_emit_sample_mask);
@@ -3913,11 +3965,6 @@ static void si_init_config(struct si_context *sctx)
 
 	if (sctx->b.family == CHIP_STONEY)
 		si_pm4_set_reg(pm4, R_028C40_PA_SC_SHADER_CONTROL, 0);
-
-	if (sctx->b.family >= CHIP_POLARIS10)
-		si_pm4_set_reg(pm4, R_028830_PA_SU_SMALL_PRIM_FILTER_CNTL,
-			       S_028830_SMALL_PRIM_FILTER_ENABLE(1) |
-			       S_028830_LINE_FILTER_DISABLE(1)); /* line bug */
 
 	si_pm4_set_reg(pm4, R_028080_TA_BC_BASE_ADDR, border_color_va >> 8);
 	if (sctx->b.chip_class >= CIK)

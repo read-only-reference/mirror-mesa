@@ -155,6 +155,7 @@ struct radeon_shader_binary {
 
 	/** Disassembled shader in a string. */
 	char *disasm_string;
+	char *llvm_ir_string;
 };
 
 void radeon_shader_binary_init(struct radeon_shader_binary *b);
@@ -241,10 +242,12 @@ struct r600_texture {
 	uint64_t			size;
 	unsigned			num_level0_transfers;
 	bool				is_depth;
+	bool				db_compatible;
+	bool				can_sample_z;
+	bool				can_sample_s;
 	unsigned			dirty_level_mask; /* each bit says if that mipmap is compressed */
 	unsigned			stencil_dirty_level_mask; /* each bit says if that mipmap is compressed */
 	struct r600_texture		*flushed_depth_texture;
-	bool				is_flushing_texture;
 	struct radeon_surf		surface;
 
 	/* Colorbuffer compression and fast clear. */
@@ -641,6 +644,10 @@ bool r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
 void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
                                       struct r600_resource *resource,
                                       unsigned usage);
+void r600_buffer_subdata(struct pipe_context *ctx,
+			 struct pipe_resource *buffer,
+			 unsigned usage, unsigned offset,
+			 unsigned size, const void *data);
 bool r600_init_resource(struct r600_common_screen *rscreen,
 			struct r600_resource *res,
 			uint64_t size, unsigned alignment);
@@ -671,7 +678,8 @@ void r600_destroy_common_screen(struct r600_common_screen *rscreen);
 void r600_preflush_suspend_features(struct r600_common_context *ctx);
 void r600_postflush_resume_features(struct r600_common_context *ctx);
 bool r600_common_context_init(struct r600_common_context *rctx,
-			      struct r600_common_screen *rscreen);
+			      struct r600_common_screen *rscreen,
+			      unsigned context_flags);
 void r600_common_context_cleanup(struct r600_common_context *rctx);
 void r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resource *r);
 bool r600_can_dump_shader(struct r600_common_screen *rscreen,
@@ -869,6 +877,13 @@ r600_get_sampler_view_priority(struct r600_resource *res)
 		return RADEON_PRIO_SAMPLER_TEXTURE_MSAA;
 
 	return RADEON_PRIO_SAMPLER_TEXTURE;
+}
+
+static inline bool
+r600_can_sample_zs(struct r600_texture *tex, bool stencil_sampler)
+{
+	return (stencil_sampler && tex->can_sample_s) ||
+	       (!stencil_sampler && tex->can_sample_z);
 }
 
 #define COMPUTE_DBG(rscreen, fmt, args...) \

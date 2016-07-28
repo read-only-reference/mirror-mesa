@@ -327,10 +327,15 @@ brw_vs_populate_key(struct brw_context *brw,
          _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
    }
 
-   /* _NEW_POLYGON */
    if (brw->gen < 6) {
+      /* _NEW_POLYGON */
       key->copy_edgeflag = (ctx->Polygon.FrontMode != GL_FILL ||
                             ctx->Polygon.BackMode != GL_FILL);
+
+      /* _NEW_POINT */
+      if (ctx->Point.PointSprite) {
+         key->point_coord_replace = ctx->Point.CoordReplace & 0xff;
+      }
    }
 
    if (prog->OutputsWritten & (VARYING_BIT_COL0 | VARYING_BIT_COL1 |
@@ -339,18 +344,14 @@ brw_vs_populate_key(struct brw_context *brw,
       key->clamp_vertex_color = ctx->Light._ClampVertexColor;
    }
 
-   /* _NEW_POINT */
-   if (brw->gen < 6 && ctx->Point.PointSprite) {
-      key->point_coord_replace = ctx->Point.CoordReplace & 0xff;
-   }
-
    /* _NEW_TEXTURE */
-   brw_populate_sampler_prog_key_data(ctx, prog, brw->vs.base.sampler_count,
-                                      &key->tex);
+   brw_populate_sampler_prog_key_data(ctx, prog, &key->tex);
 
    /* BRW_NEW_VS_ATTRIB_WORKAROUNDS */
-   memcpy(key->gl_attrib_wa_flags, brw->vb.attrib_wa_flags,
-          sizeof(brw->vb.attrib_wa_flags));
+   if (brw->gen < 8 && !brw->is_haswell) {
+      memcpy(key->gl_attrib_wa_flags, brw->vb.attrib_wa_flags,
+             sizeof(brw->vb.attrib_wa_flags));
+   }
 }
 
 void

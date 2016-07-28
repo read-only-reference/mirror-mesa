@@ -1112,12 +1112,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
 #endif
          sb.StencilBufferObjectControlState = GENX(MOCS),
 
-         /* Stencil buffers have strange pitch. The PRM says:
-          *
-          *    The pitch must be set to 2x the value computed based on width,
-          *    as the stencil buffer is stored with two rows interleaved.
-          */
-         sb.SurfacePitch = 2 * image->stencil_surface.isl.row_pitch - 1,
+         sb.SurfacePitch = image->stencil_surface.isl.row_pitch - 1,
 
 #if GEN_GEN >= 8
          sb.SurfaceQPitch = isl_surf_get_array_pitch_el_rows(&image->stencil_surface.isl) >> 2,
@@ -1191,6 +1186,10 @@ void genX(CmdEndRenderPass)(
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
 
    anv_cmd_buffer_resolve_subpass(cmd_buffer);
+
+#ifndef NDEBUG
+   anv_dump_add_framebuffer(cmd_buffer, cmd_buffer->state.framebuffer);
+#endif
 }
 
 static void
@@ -1448,4 +1447,17 @@ void genX(CmdCopyQueryPoolResults)(
    }
 }
 
+#else
+void genX(CmdCopyQueryPoolResults)(
+    VkCommandBuffer                             commandBuffer,
+    VkQueryPool                                 queryPool,
+    uint32_t                                    firstQuery,
+    uint32_t                                    queryCount,
+    VkBuffer                                    destBuffer,
+    VkDeviceSize                                destOffset,
+    VkDeviceSize                                destStride,
+    VkQueryResultFlags                          flags)
+{
+   anv_finishme("Queries not yet supported on Ivy Bridge");
+}
 #endif

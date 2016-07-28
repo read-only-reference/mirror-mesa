@@ -274,19 +274,37 @@ GLuint translate_tex_format(struct brw_context *brw,
 int brw_get_texture_swizzle(const struct gl_context *ctx,
                             const struct gl_texture_object *t);
 
+void brw_emit_surface_state(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt,
+                            const struct isl_view *view,
+                            uint32_t mocs, bool for_gather,
+                            uint32_t *surf_offset, int surf_index,
+                            unsigned read_domains, unsigned write_domains);
+
+void brw_emit_buffer_surface_state(struct brw_context *brw,
+                                   uint32_t *out_offset,
+                                   drm_intel_bo *bo,
+                                   unsigned buffer_offset,
+                                   unsigned surface_format,
+                                   unsigned buffer_size,
+                                   unsigned pitch,
+                                   bool rw);
+
+void brw_update_texture_surface(struct gl_context *ctx,
+                                unsigned unit, uint32_t *surf_offset,
+                                bool for_gather, uint32_t plane);
+
+uint32_t brw_update_renderbuffer_surface(struct brw_context *brw,
+                                         struct gl_renderbuffer *rb,
+                                         bool layered, unsigned unit,
+                                         uint32_t surf_index);
+
 void brw_update_renderbuffer_surfaces(struct brw_context *brw,
                                       const struct gl_framebuffer *fb,
                                       uint32_t render_target_start,
                                       uint32_t *surf_offset);
 
 /* gen7_wm_surface_state.c */
-uint32_t gen7_surface_tiling_mode(uint32_t tiling);
-uint32_t gen7_surface_msaa_bits(unsigned num_samples, enum intel_msaa_layout l);
-void gen7_set_surface_mcs_info(struct brw_context *brw,
-                               uint32_t *surf,
-                               uint32_t surf_offset,
-                               const struct intel_mipmap_tree *mcs_mt,
-                               bool is_render_target);
 void gen7_check_surface_setup(uint32_t *surf, bool is_render_target);
 void gen7_init_vtable_surface_functions(struct brw_context *brw);
 
@@ -307,22 +325,6 @@ void gen8_upload_3dstate_so_buffers(struct brw_context *brw);
 /* gen8_surface_state.c */
 
 void gen8_init_vtable_surface_functions(struct brw_context *brw);
-
-unsigned gen8_surface_tiling_mode(uint32_t tiling);
-unsigned gen8_vertical_alignment(const struct brw_context *brw,
-                                 const struct intel_mipmap_tree *mt,
-                                 uint32_t surf_type);
-unsigned gen8_horizontal_alignment(const struct brw_context *brw,
-                                   const struct intel_mipmap_tree *mt,
-                                   uint32_t surf_type);
-uint32_t *gen8_allocate_surface_state(struct brw_context *brw,
-                                      uint32_t *out_offset, int index);
-
-void gen8_emit_fast_clear_color(const struct brw_context *brw,
-                                const struct intel_mipmap_tree *mt,
-                                uint32_t *surf);
-uint32_t gen8_get_aux_mode(const struct brw_context *brw,
-                           const struct intel_mipmap_tree *mt);
 
 /* brw_sampler_state.c */
 void brw_emit_sampler_state(struct brw_context *brw,

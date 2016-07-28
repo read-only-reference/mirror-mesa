@@ -27,6 +27,7 @@
 #define SI_PIPE_H
 
 #include "si_state.h"
+#include "util/u_queue.h"
 
 #include <llvm-c/TargetMachine.h>
 
@@ -87,6 +88,7 @@ struct si_screen {
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
 	bool				use_monolithic_shaders;
+	bool				record_llvm_ir;
 
 	pipe_mutex			shader_parts_mutex;
 	struct si_shader_part		*vs_prologs;
@@ -109,6 +111,10 @@ struct si_screen {
 	 */
 	pipe_mutex			shader_cache_mutex;
 	struct hash_table		*shader_cache;
+
+	/* Shader compiler queue for multithreaded compilation. */
+	struct util_queue		shader_compiler_queue;
+	LLVMTargetMachineRef		tm[4]; /* used by the queue only */
 };
 
 struct si_blend_color {
@@ -175,6 +181,11 @@ struct si_clip_state {
 	struct pipe_clip_state		state;
 };
 
+struct si_sample_locs {
+	struct r600_atom	atom;
+	unsigned		nr_samples;
+};
+
 struct si_sample_mask {
 	struct r600_atom	atom;
 	uint16_t		sample_mask;
@@ -206,7 +217,7 @@ struct si_context {
 
 	struct pipe_fence_handle	*last_gfx_fence;
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
-	LLVMTargetMachineRef		tm;
+	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
 	bool				gfx_flush_in_progress;
 
 	/* Atoms (direct states). */
@@ -219,7 +230,7 @@ struct si_context {
 	/* Atom declarations. */
 	struct r600_atom		cache_flush;
 	struct si_framebuffer		framebuffer;
-	struct r600_atom		msaa_sample_locs;
+	struct si_sample_locs		msaa_sample_locs;
 	struct r600_atom		db_render_state;
 	struct r600_atom		msaa_config;
 	struct si_sample_mask		sample_mask;
@@ -330,6 +341,7 @@ struct si_context {
 	struct r600_resource	*trace_buf;
 	unsigned		trace_id;
 	uint64_t		dmesg_timestamp;
+	unsigned		apitrace_call_number;
 
 	/* Other state */
 	bool need_check_render_feedback;

@@ -83,6 +83,12 @@ extern "C" {
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 static inline uint32_t
+align_down_npot_u32(uint32_t v, uint32_t a)
+{
+   return v - (v % a);
+}
+
+static inline uint32_t
 align_u32(uint32_t v, uint32_t a)
 {
    assert(a != 0 && a == (a & -a));
@@ -1698,7 +1704,10 @@ struct anv_image_view {
 
 struct anv_image_create_info {
    const VkImageCreateInfo *vk_info;
+
+   /** An opt-in bitmask which filters an ISL-mapping of the Vulkan tiling. */
    isl_tiling_flags_t isl_tiling_flags;
+
    uint32_t stride;
 };
 
@@ -1845,7 +1854,18 @@ void *anv_lookup_entrypoint(const char *name);
 
 void anv_dump_image_to_ppm(struct anv_device *device,
                            struct anv_image *image, unsigned miplevel,
-                           unsigned array_layer, const char *filename);
+                           unsigned array_layer, VkImageAspectFlagBits aspect,
+                           const char *filename);
+
+enum anv_dump_action {
+   ANV_DUMP_FRAMEBUFFERS_BIT = 0x1,
+};
+
+void anv_dump_start(struct anv_device *device, enum anv_dump_action actions);
+void anv_dump_finish(void);
+
+void anv_dump_add_framebuffer(struct anv_cmd_buffer *cmd_buffer,
+                              struct anv_framebuffer *fb);
 
 #define ANV_DEFINE_HANDLE_CASTS(__anv_type, __VkType)                      \
                                                                            \

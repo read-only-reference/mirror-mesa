@@ -101,7 +101,6 @@
 #define PKT3_INDIRECT_BUFFER_CONST             0x33
 #define PKT3_STRMOUT_BUFFER_UPDATE             0x34
 #define PKT3_DRAW_INDEX_OFFSET_2               0x35
-#define PKT3_DRAW_PREAMBLE                     0x36 /* new on CIK, required on GFX7.2 and later */
 #define PKT3_WRITE_DATA                        0x37
 #define   R_370_CONTROL				0x370 /* 0x[packet number][word index] */
 #define     S_370_ENGINE_SEL(x)			(((unsigned)(x) & 0x3) << 30)
@@ -7217,6 +7216,7 @@
 /*     */
 #define R_028830_PA_SU_SMALL_PRIM_FILTER_CNTL                           0x028830 /* Polaris */
 #define   S_028830_SMALL_PRIM_FILTER_ENABLE(x)                        (((x) & 0x1) << 0)
+#define   C_028830_SMALL_PRIM_FILTER_ENABLE                           0xFFFFFFFE
 #define   S_028830_TRIANGLE_FILTER_DISABLE(x)                         (((x) & 0x1) << 1)
 #define   S_028830_LINE_FILTER_DISABLE(x)                             (((x) & 0x1) << 2)
 #define   S_028830_POINT_FILTER_DISABLE(x)                            (((x) & 0x1) << 3)

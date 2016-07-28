@@ -113,8 +113,13 @@ struct vl_compositor
 
    void *vs;
    void *fs_video_buffer;
-   void *fs_weave;
+   void *fs_weave_rgb;
    void *fs_rgba;
+
+   struct {
+      void *y;
+      void *uv;
+   } fs_weave_yuv;
 
    struct {
       void *rgb;
@@ -235,6 +240,18 @@ void
 vl_compositor_set_layer_rotation(struct vl_compositor_state *state,
                                  unsigned layer,
                                  enum vl_compositor_rotation rotate);
+
+/**
+ * set a layer of y or uv to render
+ */
+void
+vl_compositor_set_yuv_layer(struct vl_compositor_state *s,
+                            struct vl_compositor *c,
+                            unsigned layer,
+                            struct pipe_video_buffer *buffer,
+                            struct u_rect *src_rect,
+                            struct u_rect *dst_rect,
+                            bool y);
 
 /*@}*/
 

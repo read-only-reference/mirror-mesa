@@ -29,8 +29,7 @@
 #include "pipebuffer/pb_buffer.h"
 
 #define RADEON_FLUSH_ASYNC		(1 << 0)
-#define RADEON_FLUSH_KEEP_TILING_FLAGS	(1 << 1)
-#define RADEON_FLUSH_END_OF_FRAME       (1 << 2)
+#define RADEON_FLUSH_END_OF_FRAME       (1 << 1)
 
 /* Tiling flags. */
 enum radeon_bo_layout {
@@ -253,6 +252,7 @@ struct radeon_info {
     uint32_t                    gart_page_size;
     uint64_t                    gart_size;
     uint64_t                    vram_size;
+    uint64_t                    max_alloc_size;
     bool                        has_dedicated_vram;
     bool                        has_virtual_memory;
     bool                        gfx_ib_pad_with_type2;
@@ -391,7 +391,6 @@ struct radeon_surf {
     uint32_t                    mtilea;
     uint32_t                    tile_split;
     uint32_t                    stencil_tile_split;
-    uint64_t                    stencil_offset;
     struct radeon_surf_level    level[RADEON_SURF_MAX_LEVEL];
     struct radeon_surf_level    stencil_level[RADEON_SURF_MAX_LEVEL];
     uint32_t                    tiling_index[RADEON_SURF_MAX_LEVEL];
@@ -401,12 +400,20 @@ struct radeon_surf {
     uint32_t                    macro_tile_index;
     uint32_t                    micro_tile_mode; /* displayable, thin, depth, rotated */
 
+    /* Whether the depth miptree or stencil miptree as used by the DB are
+     * adjusted from their TC compatible form to ensure depth/stencil
+     * compatibility. If either is true, the corresponding plane cannot be
+     * sampled from.
+     */
+    bool                        depth_adjusted;
+    bool                        stencil_adjusted;
+
     uint64_t                    dcc_size;
     uint64_t                    dcc_alignment;
 };
 
 struct radeon_bo_list_item {
-    struct pb_buffer *buf;
+    uint64_t bo_size;
     uint64_t vm_address;
     uint64_t priority_usage; /* mask of (1 << RADEON_PRIO_*) */
 };
@@ -725,10 +732,12 @@ struct radeon_winsys {
      * \param flags,      RADEON_FLUSH_ASYNC or 0.
      * \param fence       Pointer to a fence. If non-NULL, a fence is inserted
      *                    after the CS and is returned through this parameter.
+     * \return Negative POSIX error code or 0 for success.
+     *         Asynchronous submissions never return an error.
      */
-    void (*cs_flush)(struct radeon_winsys_cs *cs,
-                     unsigned flags,
-                     struct pipe_fence_handle **fence);
+    int (*cs_flush)(struct radeon_winsys_cs *cs,
+                    unsigned flags,
+                    struct pipe_fence_handle **fence);
 
     /**
      * Return true if a buffer is referenced by a command stream.

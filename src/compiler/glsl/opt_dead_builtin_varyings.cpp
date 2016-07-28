@@ -85,7 +85,8 @@ public:
    {
       ir_variable *var = ir->variable_referenced();
 
-      if (!var || var->data.mode != this->mode || !var->type->is_array())
+      if (!var || var->data.mode != this->mode || !var->type->is_array() ||
+          !is_gl_identifier(var->name))
          return visit_continue;
 
       /* Only match gl_FragData[], not gl_SecondaryFragDataEXT[] */
@@ -378,7 +379,7 @@ public:
                new_var[i]->data.explicit_index = 0;
             }
 
-            ir->head->insert_before(new_var[i]);
+            ir->get_head_raw()->insert_before(new_var[i]);
          }
       }
    }

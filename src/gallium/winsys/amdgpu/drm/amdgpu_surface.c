@@ -373,10 +373,15 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
    AddrSurfInfoIn.flags.noStencil = (surf->flags & RADEON_SURF_SBUFFER) == 0;
    AddrSurfInfoIn.flags.compressZ = AddrSurfInfoIn.flags.depth;
 
-   /* TODO: update addrlib to a newer version, remove this, and
-    * set flags.matchStencilTileCfg = 1 to fix stencil texturing.
+   /* noStencil = 0 can result in a depth part that is incompatible with
+    * mipmapped texturing. So set noStencil = 1 when mipmaps are requested (in
+    * this case, we may end up setting stencil_adjusted).
+    *
+    * TODO: update addrlib to a newer version, remove this, and
+    * use flags.matchStencilTileCfg = 1 as an alternative fix.
     */
-   AddrSurfInfoIn.flags.noStencil = 1;
+  if (surf->last_level > 0)
+      AddrSurfInfoIn.flags.noStencil = 1;
 
    /* Set preferred macrotile parameters. This is usually required
     * for shared resources. This is for 2D tiling only. */
@@ -454,9 +459,11 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
          if (r)
             return r;
 
-         if (level == 0) {
-            surf->stencil_offset = surf->stencil_level[0].offset;
+         /* DB uses the depth pitch for both stencil and depth. */
+         if (surf->stencil_level[level].nblk_x != surf->level[level].nblk_x)
+            surf->stencil_adjusted = true;
 
+         if (level == 0) {
             /* For 2D modes only. */
             if (AddrSurfInfoOut.tileMode >= ADDR_TM_2D_TILED_THIN1) {
                surf->stencil_tile_split =

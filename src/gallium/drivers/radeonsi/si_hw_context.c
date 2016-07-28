@@ -123,9 +123,6 @@ void si_context_gfx_flush(void *context, unsigned flags,
 
 	si_emit_cache_flush(ctx, NULL);
 
-	/* force to keep tiling flags */
-	flags |= RADEON_FLUSH_KEEP_TILING_FLAGS;
-
 	if (ctx->trace_buf)
 		si_trace_emit(ctx);
 
@@ -207,7 +204,8 @@ void si_begin_new_cs(struct si_context *ctx)
 
 	si_mark_atom_dirty(ctx, &ctx->clip_regs);
 	si_mark_atom_dirty(ctx, &ctx->clip_state.atom);
-	si_mark_atom_dirty(ctx, &ctx->msaa_sample_locs);
+	ctx->msaa_sample_locs.nr_samples = 0;
+	si_mark_atom_dirty(ctx, &ctx->msaa_sample_locs.atom);
 	si_mark_atom_dirty(ctx, &ctx->msaa_config);
 	si_mark_atom_dirty(ctx, &ctx->sample_mask.atom);
 	si_mark_atom_dirty(ctx, &ctx->cb_render_state);
