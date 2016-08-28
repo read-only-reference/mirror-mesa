@@ -184,6 +184,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_ENDIANNESS:
       return 0;
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+   case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
       return 1;
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
       return 0;
@@ -524,6 +525,7 @@ static void virgl_fence_reference(struct pipe_screen *screen,
 }
 
 static boolean virgl_fence_finish(struct pipe_screen *screen,
+                                  struct pipe_context *ctx,
                                   struct pipe_fence_handle *fence,
                                   uint64_t timeout)
 {

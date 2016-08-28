@@ -44,101 +44,6 @@ emit_ia_state(struct anv_pipeline *pipeline,
    }
 }
 
-static void
-emit_rs_state(struct anv_pipeline *pipeline,
-              const VkPipelineRasterizationStateCreateInfo *info,
-              const VkPipelineMultisampleStateCreateInfo *ms_info,
-              const struct anv_graphics_pipeline_create_info *extra)
-{
-   uint32_t samples = 1;
-
-   if (ms_info)
-      samples = ms_info->rasterizationSamples;
-
-   struct GENX(3DSTATE_SF) sf = {
-      GENX(3DSTATE_SF_header),
-      .ViewportTransformEnable = !(extra && extra->use_rectlist),
-      .TriangleStripListProvokingVertexSelect = 0,
-      .LineStripListProvokingVertexSelect = 0,
-      .TriangleFanProvokingVertexSelect = 1,
-      .PointWidthSource = Vertex,
-      .PointWidth = 1.0,
-   };
-
-   /* FINISHME: VkBool32 rasterizerDiscardEnable; */
-
-   GENX(3DSTATE_SF_pack)(NULL, pipeline->gen8.sf, &sf);
-
-   struct GENX(3DSTATE_RASTER) raster = {
-      GENX(3DSTATE_RASTER_header),
-
-      /* For details on 3DSTATE_RASTER multisample state, see the BSpec table
-       * "Multisample Modes State".
-       */
-      .DXMultisampleRasterizationEnable = samples > 1,
-      .ForcedSampleCount = FSC_NUMRASTSAMPLES_0,
-      .ForceMultisampling = false,
-
-      .FrontWinding = vk_to_gen_front_face[info->frontFace],
-      .CullMode = vk_to_gen_cullmode[info->cullMode],
-      .FrontFaceFillMode = vk_to_gen_fillmode[info->polygonMode],
-      .BackFaceFillMode = vk_to_gen_fillmode[info->polygonMode],
-      .ScissorRectangleEnable = !(extra && extra->use_rectlist),
-#if GEN_GEN == 8
-      .ViewportZClipTestEnable = !pipeline->depth_clamp_enable,
-#else
-      /* GEN9+ splits ViewportZClipTestEnable into near and far enable bits */
-      .ViewportZFarClipTestEnable = !pipeline->depth_clamp_enable,
-      .ViewportZNearClipTestEnable = !pipeline->depth_clamp_enable,
-#endif
-      .GlobalDepthOffsetEnableSolid = info->depthBiasEnable,
-      .GlobalDepthOffsetEnableWireframe = info->depthBiasEnable,
-      .GlobalDepthOffsetEnablePoint = info->depthBiasEnable,
-   };
-
-   GENX(3DSTATE_RASTER_pack)(NULL, pipeline->gen8.raster, &raster);
-}
-
-static void
-emit_ms_state(struct anv_pipeline *pipeline,
-              const VkPipelineMultisampleStateCreateInfo *info)
-{
-   uint32_t samples = 1;
-   uint32_t log2_samples = 0;
-
-   /* From the Vulkan 1.0 spec:
-    *    If pSampleMask is NULL, it is treated as if the mask has all bits
-    *    enabled, i.e. no coverage is removed from fragments.
-    *
-    * 3DSTATE_SAMPLE_MASK.SampleMask is 16 bits.
-    */
-   uint32_t sample_mask = 0xffff;
-
-   if (info) {
-      samples = info->rasterizationSamples;
-      log2_samples = __builtin_ffs(samples) - 1;
-   }
-
-   if (info && info->pSampleMask)
-      sample_mask &= info->pSampleMask[0];
-
-   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_MULTISAMPLE), ms) {
-      /* The PRM says that this bit is valid only for DX9:
-       *
-       *    SW can choose to set this bit only for DX9 API. DX10/OGL API's
-       *    should not have any effect by setting or not setting this bit.
-       */
-      ms.PixelPositionOffsetEnable = false;
-
-      ms.PixelLocation = CENTER;
-      ms.NumberofMultisamples = log2_samples;
-   }
-
-   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_SAMPLE_MASK), sm) {
-      sm.SampleMask = sample_mask;
-   }
-}
-
 VkResult
 genX(graphics_pipeline_create)(
     VkDevice                                    _device,
@@ -175,7 +80,7 @@ genX(graphics_pipeline_create)(
    emit_ia_state(pipeline, pCreateInfo->pInputAssemblyState, extra);
    assert(pCreateInfo->pRasterizationState);
    emit_rs_state(pipeline, pCreateInfo->pRasterizationState,
-                 pCreateInfo->pMultisampleState, extra);
+                 pCreateInfo->pMultisampleState, pass, subpass, extra);
    emit_ms_state(pipeline, pCreateInfo->pMultisampleState);
    emit_ds_state(pipeline, pCreateInfo->pDepthStencilState, pass, subpass);
    emit_cb_state(pipeline, pCreateInfo->pColorBlendState,

@@ -128,7 +128,7 @@ swr_transfer_map(struct pipe_context *pipe,
             if (!swr_is_fence_pending(screen->flush_fence))
                swr_fence_submit(swr_context(pipe), screen->flush_fence);
 
-            swr_fence_finish(pipe->screen, screen->flush_fence, 0);
+            swr_fence_finish(pipe->screen, NULL, screen->flush_fence, 0);
             swr_resource_unused(resource);
          }
       }
@@ -205,7 +205,7 @@ swr_resource_copy(struct pipe_context *pipe,
    swr_store_dirty_resource(pipe, src, SWR_TILE_RESOLVED);
    swr_store_dirty_resource(pipe, dst, SWR_TILE_RESOLVED);
 
-   swr_fence_finish(pipe->screen, screen->flush_fence, 0);
+   swr_fence_finish(pipe->screen, NULL, screen->flush_fence, 0);
    swr_resource_unused(src);
    swr_resource_unused(dst);
 
@@ -344,6 +344,50 @@ swr_render_condition(struct pipe_context *pipe,
    ctx->render_cond_cond = condition;
 }
 
+static void
+swr_UpdateStats(HANDLE hPrivateContext, const SWR_STATS *pStats)
+{
+   swr_draw_context *pDC = (swr_draw_context*)hPrivateContext;
+
+   if (!pDC)
+      return;
+
+   struct swr_context *ctx = (struct swr_context *)pDC->swr_ctx;
+
+   SWR_STATS *pSwrStats = &ctx->stats;
+
+   pSwrStats->DepthPassCount += pStats->DepthPassCount;
+   pSwrStats->PsInvocations += pStats->PsInvocations;
+   pSwrStats->CsInvocations += pStats->CsInvocations;
+}
+
+static void
+swr_UpdateStatsFE(HANDLE hPrivateContext, const SWR_STATS_FE *pStats)
+{
+   swr_draw_context *pDC = (swr_draw_context*)hPrivateContext;
+
+   if (!pDC)
+      return;
+
+   struct swr_context *ctx = (struct swr_context *)pDC->swr_ctx;
+
+   SWR_STATS_FE *pSwrStats = &ctx->statsFE;
+   pSwrStats->IaVertices += pStats->IaVertices;
+   pSwrStats->IaPrimitives += pStats->IaPrimitives;
+   pSwrStats->VsInvocations += pStats->VsInvocations;
+   pSwrStats->HsInvocations += pStats->HsInvocations;
+   pSwrStats->DsInvocations += pStats->DsInvocations;
+   pSwrStats->GsInvocations += pStats->GsInvocations;
+   pSwrStats->CInvocations += pStats->CInvocations;
+   pSwrStats->CPrimitives += pStats->CPrimitives;
+   pSwrStats->GsPrimitives += pStats->GsPrimitives;
+
+   for (unsigned i = 0; i < 4; i++) {
+      pSwrStats->SoPrimStorageNeeded[i] += pStats->SoPrimStorageNeeded[i];
+      pSwrStats->SoNumPrimsWritten[i] += pStats->SoNumPrimsWritten[i];
+   }
+}
+
 struct pipe_context *
 swr_create_context(struct pipe_screen *p_screen, void *priv, unsigned flags)
 {
@@ -352,11 +396,14 @@ swr_create_context(struct pipe_screen *p_screen, void *priv, unsigned flags)
       new std::unordered_map<BLEND_COMPILE_STATE, PFN_BLEND_JIT_FUNC>;
 
    SWR_CREATECONTEXT_INFO createInfo;
+   memset(&createInfo, 0, sizeof(createInfo));
    createInfo.driver = GL;
    createInfo.privateStateSize = sizeof(swr_draw_context);
    createInfo.pfnLoadTile = swr_LoadHotTile;
    createInfo.pfnStoreTile = swr_StoreHotTile;
    createInfo.pfnClearTile = swr_StoreHotTileClear;
+   createInfo.pfnUpdateStats = swr_UpdateStats;
+   createInfo.pfnUpdateStatsFE = swr_UpdateStatsFE;
    ctx->swrContext = SwrCreateContext(&createInfo);
 
    /* Init Load/Store/ClearTiles Tables */

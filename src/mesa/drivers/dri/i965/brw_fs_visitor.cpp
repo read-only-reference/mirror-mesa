@@ -308,9 +308,41 @@ fs_visitor::emit_interpolation_setup_gen6()
    this->wpos_w = vgrf(glsl_type::float_type);
    abld.emit(SHADER_OPCODE_RCP, this->wpos_w, this->pixel_w);
 
+   brw_wm_prog_data *wm_prog_data = (brw_wm_prog_data *) prog_data;
+   uint32_t centroid_modes = wm_prog_data->barycentric_interp_modes &
+      (1 << BRW_BARYCENTRIC_PERSPECTIVE_CENTROID |
+       1 << BRW_BARYCENTRIC_NONPERSPECTIVE_CENTROID);
+
    for (int i = 0; i < BRW_BARYCENTRIC_MODE_COUNT; ++i) {
       uint8_t reg = payload.barycentric_coord_reg[i];
       this->delta_xy[i] = fs_reg(brw_vec16_grf(reg, 0));
+
+      if (devinfo->needs_unlit_centroid_workaround &&
+          (centroid_modes & (1 << i))) {
+         /* Get the pixel/sample mask into f0 so that we know which
+          * pixels are lit.  Then, for each channel that is unlit,
+          * replace the centroid data with non-centroid data.
+          */
+         bld.emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
+
+         uint8_t pixel_reg = payload.barycentric_coord_reg[i - 1];
+
+         set_predicate_inv(BRW_PREDICATE_NORMAL, true,
+                           bld.half(0).MOV(brw_vec8_grf(reg, 0),
+                                           brw_vec8_grf(pixel_reg, 0)));
+         set_predicate_inv(BRW_PREDICATE_NORMAL, true,
+                           bld.half(0).MOV(brw_vec8_grf(reg + 1, 0),
+                                           brw_vec8_grf(pixel_reg + 1, 0)));
+         if (dispatch_width == 16) {
+            set_predicate_inv(BRW_PREDICATE_NORMAL, true,
+                              bld.half(1).MOV(brw_vec8_grf(reg + 2, 0),
+                                              brw_vec8_grf(pixel_reg + 2, 0)));
+            set_predicate_inv(BRW_PREDICATE_NORMAL, true,
+                              bld.half(1).MOV(brw_vec8_grf(reg + 3, 0),
+                                              brw_vec8_grf(pixel_reg + 3, 0)));
+         }
+         assert(dispatch_width != 32); /* not implemented yet */
+      }
    }
 }
 
@@ -437,32 +469,25 @@ fs_visitor::emit_fb_writes()
                            "in SIMD16+ mode.\n");
    }
 
-   if (do_dual_src) {
-      const fs_builder abld = bld.annotate("FB dual-source write");
+   for (int target = 0; target < key->nr_color_regions; target++) {
+      /* Skip over outputs that weren't written. */
+      if (this->outputs[target].file == BAD_FILE)
+         continue;
 
-      inst = emit_single_fb_write(abld, this->outputs[0],
-                                  this->dual_src_output, reg_undef, 4);
-      inst->target = 0;
+      const fs_builder abld = bld.annotate(
+         ralloc_asprintf(this->mem_ctx, "FB write target %d", target));
 
-      prog_data->dual_src_blend = true;
-   } else {
-      for (int target = 0; target < key->nr_color_regions; target++) {
-         /* Skip over outputs that weren't written. */
-         if (this->outputs[target].file == BAD_FILE)
-            continue;
+      fs_reg src0_alpha;
+      if (devinfo->gen >= 6 && key->replicate_alpha && target != 0)
+         src0_alpha = offset(outputs[0], bld, 3);
 
-         const fs_builder abld = bld.annotate(
-            ralloc_asprintf(this->mem_ctx, "FB write target %d", target));
-
-         fs_reg src0_alpha;
-         if (devinfo->gen >= 6 && key->replicate_alpha && target != 0)
-            src0_alpha = offset(outputs[0], bld, 3);
-
-         inst = emit_single_fb_write(abld, this->outputs[target], reg_undef,
-                                     src0_alpha, 4);
-         inst->target = target;
-      }
+      inst = emit_single_fb_write(abld, this->outputs[target],
+                                  this->dual_src_output, src0_alpha, 4);
+      inst->target = target;
    }
+
+   prog_data->dual_src_blend = (this->dual_src_output.file != BAD_FILE);
+   assert(!prog_data->dual_src_blend || key->nr_color_regions == 1);
 
    if (inst == NULL) {
       /* Even if there's no color buffers enabled, we still need to send
@@ -914,7 +939,6 @@ fs_visitor::init()
    this->promoted_constants = 0,
 
    this->spilled_any_registers = false;
-   this->do_dual_src = false;
 }
 
 fs_visitor::~fs_visitor()

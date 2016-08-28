@@ -198,6 +198,15 @@ enum ast_operators {
 
    ast_sequence,
    ast_aggregate
+
+   /**
+    * Number of possible operators for an ast_expression
+    *
+    * This is done as a define instead of as an additional value in the enum so
+    * that the compiler won't generate spurious messages like "warning:
+    * enumeration value ‘ast_num_operators’ not handled in switch"
+    */
+   #define AST_NUM_OPERATORS (ast_aggregate + 1)
 };
 
 /**
@@ -416,15 +425,6 @@ public:
                               struct _mesa_glsl_parse_state *state);
 };
 
-/**
- * Number of possible operators for an ast_expression
- *
- * This is done as a define instead of as an additional value in the enum so
- * that the compiler won't generate spurious messages like "warning:
- * enumeration value ‘ast_num_operators’ not handled in switch"
- */
-#define AST_NUM_OPERATORS (ast_sequence + 1)
-
 
 class ast_compound_statement : public ast_node {
 public:
@@ -596,6 +596,11 @@ struct ast_type_qualifier {
          unsigned subroutine:1;  /**< Is this marked 'subroutine' */
          unsigned subroutine_def:1; /**< Is this marked 'subroutine' with a list of types */
 	 /** \} */
+
+         /** \name Qualifiers for GL_KHR_blend_equation_advanced */
+         /** \{ */
+         unsigned blend_support:1; /**< Are there any blend_support_ qualifiers */
+         /** \} */
       }
       /** \brief Set of flags, accessed by name. */
       q;

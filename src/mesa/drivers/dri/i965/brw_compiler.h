@@ -220,6 +220,8 @@ struct brw_tcs_prog_key
    /** A bitfield of per-vertex outputs written. */
    uint64_t outputs_written;
 
+   bool quads_workaround;
+
    struct brw_sampler_prog_key_data tex;
 };
 
@@ -258,6 +260,7 @@ struct brw_wm_prog_key {
    unsigned line_aa:2;
    bool high_quality_derivatives:1;
    bool force_dual_color_blend:1;
+   bool coherent_fb_fetch:1;
 
    uint16_t drawable_height;
    uint64_t input_slots_valid;
@@ -386,6 +389,7 @@ struct brw_wm_prog_data {
        * surface indices the WM-specific surfaces
        */
       uint32_t render_target_start;
+      uint32_t render_target_read_start;
       /** @} */
    } binding_table;
 

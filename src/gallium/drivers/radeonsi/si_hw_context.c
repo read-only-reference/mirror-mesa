@@ -25,6 +25,7 @@
  */
 
 #include "si_pipe.h"
+#include "radeon/r600_cs.h"
 
 static unsigned si_descriptor_list_cs_space(unsigned count, unsigned element_size)
 {
@@ -71,8 +72,8 @@ void si_need_cs_space(struct si_context *ctx)
 	 * that have been added (cs_add_buffer) and two counters in the pipe
 	 * driver for those that haven't been added yet.
 	 */
-	if (unlikely(!ctx->b.ws->cs_memory_below_limit(ctx->b.gfx.cs,
-						       ctx->b.vram, ctx->b.gtt))) {
+	if (unlikely(!radeon_cs_memory_below_limit(ctx->b.screen, ctx->b.gfx.cs,
+						   ctx->b.vram, ctx->b.gtt))) {
 		ctx->b.gtt = 0;
 		ctx->b.vram = 0;
 		ctx->b.gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
@@ -99,17 +100,10 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	if (ctx->gfx_flush_in_progress)
 		return;
 
-	ctx->gfx_flush_in_progress = true;
-
-	if (!radeon_emitted(cs, ctx->b.initial_gfx_cs_size) &&
-	    (!fence || ctx->last_gfx_fence)) {
-		if (fence)
-			ws->fence_reference(fence, ctx->last_gfx_fence);
-		if (!(flags & RADEON_FLUSH_ASYNC))
-			ws->cs_sync_flush(cs);
-		ctx->gfx_flush_in_progress = false;
+	if (!radeon_emitted(cs, ctx->b.initial_gfx_cs_size))
 		return;
-	}
+
+	ctx->gfx_flush_in_progress = true;
 
 	r600_preflush_suspend_features(&ctx->b);
 
@@ -135,17 +129,17 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	}
 
 	/* Flush the CS. */
-	ws->cs_flush(cs, flags, &ctx->last_gfx_fence);
-
+	ws->cs_flush(cs, flags, &ctx->b.last_gfx_fence);
 	if (fence)
-		ws->fence_reference(fence, ctx->last_gfx_fence);
+		ws->fence_reference(fence, ctx->b.last_gfx_fence);
+	ctx->b.num_gfx_cs_flushes++;
 
 	/* Check VM faults if needed. */
 	if (ctx->screen->b.debug_flags & DBG_CHECK_VM) {
 		/* Use conservative timeout 800ms, after which we won't wait any
 		 * longer and assume the GPU is hung.
 		 */
-		ctx->b.ws->fence_wait(ctx->b.ws, ctx->last_gfx_fence, 800*1000*1000);
+		ctx->b.ws->fence_wait(ctx->b.ws, ctx->b.last_gfx_fence, 800*1000*1000);
 
 		si_check_vm_faults(&ctx->b, &ctx->last_gfx, RING_GFX);
 	}

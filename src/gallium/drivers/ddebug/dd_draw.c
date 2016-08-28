@@ -43,10 +43,14 @@ static FILE *
 dd_get_file_stream(struct dd_screen *dscreen, unsigned apitrace_call_number)
 {
    struct pipe_screen *screen = dscreen->screen;
+   char cmd_line[4096];
+
    FILE *f = dd_get_debug_file(dscreen->verbose);
    if (!f)
       return NULL;
 
+   if (os_get_command_line(cmd_line, sizeof(cmd_line)))
+      fprintf(f, "Command: %s\n", cmd_line);
    fprintf(f, "Driver vendor: %s\n", screen->get_vendor(screen));
    fprintf(f, "Device vendor: %s\n", screen->get_device_vendor(screen));
    fprintf(f, "Device name: %s\n\n", screen->get_name(screen));
@@ -544,7 +548,7 @@ dd_flush_and_check_hang(struct dd_context *dctx,
    if (!fence)
       return false;
 
-   idle = screen->fence_finish(screen, fence, timeout_ms * 1000000);
+   idle = screen->fence_finish(screen, NULL, fence, timeout_ms * 1000000);
    screen->fence_reference(screen, &fence, NULL);
    if (!idle)
       fprintf(stderr, "dd: GPU hang detected!\n");
@@ -930,6 +934,7 @@ PIPE_THREAD_ROUTINE(dd_thread_pipelined_hang_detect, input)
 static char *
 dd_get_driver_shader_log(struct dd_context *dctx)
 {
+#if defined(PIPE_OS_LINUX)
    FILE *f;
    char *buf;
    int written_bytes;
@@ -966,6 +971,10 @@ dd_get_driver_shader_log(struct dd_context *dctx)
    }
 
    return buf;
+#else
+   /* Return an empty string. */
+   return (char*)calloc(1, 4);
+#endif
 }
 
 static void
@@ -1082,7 +1091,10 @@ dd_after_draw(struct dd_context *dctx, struct dd_call *call)
       case DD_DUMP_APITRACE_CALL:
          if (dscreen->apitrace_dump_call ==
              dctx->draw_state.apitrace_call_number) {
-            dd_write_report(dctx, call, 0, false);
+            dd_write_report(dctx, call,
+                            PIPE_DUMP_CURRENT_STATES |
+                            PIPE_DUMP_CURRENT_SHADERS,
+                            false);
             /* No need to continue. */
             exit(0);
          }
@@ -1243,7 +1255,8 @@ dd_context_clear_render_target(struct pipe_context *_pipe,
                                struct pipe_surface *dst,
                                const union pipe_color_union *color,
                                unsigned dstx, unsigned dsty,
-                               unsigned width, unsigned height)
+                               unsigned width, unsigned height,
+                               bool render_condition_enabled)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
@@ -1252,7 +1265,8 @@ dd_context_clear_render_target(struct pipe_context *_pipe,
    call.type = CALL_CLEAR_RENDER_TARGET;
 
    dd_before_draw(dctx);
-   pipe->clear_render_target(pipe, dst, color, dstx, dsty, width, height);
+   pipe->clear_render_target(pipe, dst, color, dstx, dsty, width, height,
+                             render_condition_enabled);
    dd_after_draw(dctx, &call);
 }
 
@@ -1260,7 +1274,8 @@ static void
 dd_context_clear_depth_stencil(struct pipe_context *_pipe,
                                struct pipe_surface *dst, unsigned clear_flags,
                                double depth, unsigned stencil, unsigned dstx,
-                               unsigned dsty, unsigned width, unsigned height)
+                               unsigned dsty, unsigned width, unsigned height,
+                               bool render_condition_enabled)
 {
    struct dd_context *dctx = dd_context(_pipe);
    struct pipe_context *pipe = dctx->pipe;
@@ -1270,7 +1285,8 @@ dd_context_clear_depth_stencil(struct pipe_context *_pipe,
 
    dd_before_draw(dctx);
    pipe->clear_depth_stencil(pipe, dst, clear_flags, depth, stencil,
-                             dstx, dsty, width, height);
+                             dstx, dsty, width, height,
+                             render_condition_enabled);
    dd_after_draw(dctx, &call);
 }
 

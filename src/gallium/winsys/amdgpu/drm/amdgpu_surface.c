@@ -126,8 +126,13 @@ ADDR_HANDLE amdgpu_addr_create(struct amdgpu_winsys *ws)
    regValue.backendDisables = ws->amdinfo.backend_disable[0];
    regValue.pTileConfig = ws->amdinfo.gb_tile_mode;
    regValue.noOfEntries = ARRAY_SIZE(ws->amdinfo.gb_tile_mode);
-   regValue.pMacroTileConfig = ws->amdinfo.gb_macro_tile_mode;
-   regValue.noOfMacroEntries = ARRAY_SIZE(ws->amdinfo.gb_macro_tile_mode);
+   if (ws->info.chip_class == SI) {
+      regValue.pMacroTileConfig = NULL;
+      regValue.noOfMacroEntries = 0;
+   } else {
+      regValue.pMacroTileConfig = ws->amdinfo.gb_macro_tile_mode;
+      regValue.noOfMacroEntries = ARRAY_SIZE(ws->amdinfo.gb_macro_tile_mode);
+   }
 
    createFlags.value = 0;
    createFlags.useTileIndex = 1;
@@ -364,7 +369,8 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
     * - Mipmapped array textures have low performance (discovered by a closed
     *   driver team).
     */
-   AddrSurfInfoIn.flags.dccCompatible = !(surf->flags & RADEON_SURF_Z_OR_SBUFFER) &&
+   AddrSurfInfoIn.flags.dccCompatible = ws->info.chip_class >= VI &&
+                                        !(surf->flags & RADEON_SURF_Z_OR_SBUFFER) &&
                                         !(surf->flags & RADEON_SURF_DISABLE_DCC) &&
                                         !compressed && AddrDccIn.numSamples <= 1 &&
                                         ((surf->array_size == 1 && surf->npix_z == 1) ||
@@ -409,10 +415,29 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
       assert(!(surf->flags & RADEON_SURF_Z_OR_SBUFFER));
       assert(AddrSurfInfoIn.tileMode == ADDR_TM_2D_TILED_THIN1);
 
-      if (AddrSurfInfoIn.tileType == ADDR_DISPLAYABLE)
-         AddrSurfInfoIn.tileIndex = 10; /* 2D displayable */
-      else
-         AddrSurfInfoIn.tileIndex = 14; /* 2D non-displayable */
+      if (ws->info.chip_class == SI) {
+         if (AddrSurfInfoIn.tileType == ADDR_DISPLAYABLE) {
+            if (surf->bpe == 2)
+               AddrSurfInfoIn.tileIndex = 11; /* 16bpp */
+            else
+               AddrSurfInfoIn.tileIndex = 12; /* 32bpp */
+         } else {
+            if (surf->bpe == 1)
+               AddrSurfInfoIn.tileIndex = 14; /* 8bpp */
+            else if (surf->bpe == 2)
+               AddrSurfInfoIn.tileIndex = 15; /* 16bpp */
+            else if (surf->bpe == 4)
+               AddrSurfInfoIn.tileIndex = 16; /* 32bpp */
+            else
+               AddrSurfInfoIn.tileIndex = 17; /* 64bpp (and 128bpp) */
+         }
+      } else {
+         /* CIK - VI */
+         if (AddrSurfInfoIn.tileType == ADDR_DISPLAYABLE)
+            AddrSurfInfoIn.tileIndex = 10; /* 2D displayable */
+         else
+            AddrSurfInfoIn.tileIndex = 14; /* 2D non-displayable */
+      }
    }
 
    surf->bo_size = 0;

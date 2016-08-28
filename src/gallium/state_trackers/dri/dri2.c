@@ -404,7 +404,7 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
    else
       whandle.type = DRM_API_HANDLE_TYPE_KMS;
 
-   screen->base.screen->resource_get_handle(screen->base.screen,
+   screen->base.screen->resource_get_handle(screen->base.screen, NULL,
          buffer->resource, &whandle,
          PIPE_HANDLE_USAGE_EXPLICIT_FLUSH | PIPE_HANDLE_USAGE_READ);
 
@@ -963,25 +963,25 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
    case __DRI_IMAGE_ATTRIB_STRIDE:
       whandle.type = DRM_API_HANDLE_TYPE_KMS;
       image->texture->screen->resource_get_handle(image->texture->screen,
-            image->texture, &whandle, usage);
+            NULL, image->texture, &whandle, usage);
       *value = whandle.stride;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_HANDLE:
       whandle.type = DRM_API_HANDLE_TYPE_KMS;
       image->texture->screen->resource_get_handle(image->texture->screen,
-         image->texture, &whandle, usage);
+         NULL, image->texture, &whandle, usage);
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_NAME:
       whandle.type = DRM_API_HANDLE_TYPE_SHARED;
       image->texture->screen->resource_get_handle(image->texture->screen,
-         image->texture, &whandle, usage);
+         NULL, image->texture, &whandle, usage);
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_FD:
       whandle.type= DRM_API_HANDLE_TYPE_FD;
       image->texture->screen->resource_get_handle(image->texture->screen,
-         image->texture, &whandle, usage);
+         NULL, image->texture, &whandle, usage);
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_FORMAT:
@@ -1252,7 +1252,7 @@ dri2_blit_image(__DRIcontext *context, __DRIimage *dst, __DRIimage *src,
       screen = dri_screen(ctx->sPriv)->base.screen;
       pipe->flush_resource(pipe, dst->texture);
       ctx->st->flush(ctx->st, 0, &fence);
-      (void) screen->fence_finish(screen, fence, PIPE_TIMEOUT_INFINITE);
+      (void) screen->fence_finish(screen, NULL, fence, PIPE_TIMEOUT_INFINITE);
       screen->fence_reference(screen, &fence, NULL);
    }
 }
@@ -1451,13 +1451,13 @@ dri2_client_wait_sync(__DRIcontext *_ctx, void *_fence, unsigned flags,
    /* No need to flush. The context was flushed when the fence was created. */
 
    if (fence->pipe_fence)
-      return screen->fence_finish(screen, fence->pipe_fence, timeout);
+      return screen->fence_finish(screen, NULL, fence->pipe_fence, timeout);
    else if (fence->cl_event) {
       struct pipe_fence_handle *pipe_fence =
          driscreen->opencl_dri_event_get_fence(fence->cl_event);
 
       if (pipe_fence)
-         return screen->fence_finish(screen, pipe_fence, timeout);
+         return screen->fence_finish(screen, NULL, pipe_fence, timeout);
       else
          return driscreen->opencl_dri_event_wait(fence->cl_event, timeout);
    }
@@ -1720,7 +1720,8 @@ dri2_interop_export_object(__DRIcontext *_ctx,
    memset(&whandle, 0, sizeof(whandle));
    whandle.type = DRM_API_HANDLE_TYPE_FD;
 
-   success = screen->resource_get_handle(screen, res, &whandle, usage);
+   success = screen->resource_get_handle(screen, st->pipe, res, &whandle,
+                                         usage);
    mtx_unlock(&ctx->Shared->Mutex);
 
    if (!success)

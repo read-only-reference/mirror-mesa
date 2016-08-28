@@ -278,7 +278,8 @@ anv_get_format(const struct brw_device_info *devinfo, VkFormat vk_format,
        * hood.
        */
       enum isl_format rgbx = isl_format_rgb_to_rgbx(format.isl_format);
-      if (rgbx != ISL_FORMAT_UNSUPPORTED) {
+      if (rgbx != ISL_FORMAT_UNSUPPORTED &&
+          isl_format_supports_rendering(devinfo, rgbx)) {
          format.isl_format = rgbx;
       } else {
          format.isl_format = isl_format_rgb_to_rgba(format.isl_format);
@@ -507,25 +508,15 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties(
       sampleCounts = isl_device_get_sample_counts(&physical_device->isl_dev);
    }
 
-   if (usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) {
-      /* Meta implements transfers by sampling from the source image. */
-      if (!(format_feature_flags & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+   if (usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+      /* Accept transfers on anything we can sample from or renderer to. */
+      if (!(format_feature_flags & (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+                                    VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                    VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))) {
          goto unsupported;
       }
    }
-
-#if 0
-   if (usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
-      if (anv_format_for_vk_format(format)->has_stencil) {
-         /* Not yet implemented because copying to a W-tiled surface is crazy
-          * hard.
-          */
-         anv_finishme("support VK_IMAGE_USAGE_TRANSFER_DST_BIT for "
-                      "stencil format");
-         goto unsupported;
-      }
-   }
-#endif
 
    if (usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
       if (!(format_feature_flags & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {

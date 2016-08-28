@@ -40,7 +40,8 @@
   <struct name="VERTEX_BUFFER_STATE" length="4">
     <field name="Vertex Buffer Index" start="26" end="31" type="uint"/>
     <field name="Memory Object Control State" start="16" end="22" type="MEMORY_OBJECT_CONTROL_STATE"/>
-    <field name="Address Modify Enable" start="14" end="14" type="uint"/>
+    <field name="Vertex Buffer MOCS" start="16" end="22" type="uint"/>
+    <field name="Address Modify Enable" start="14" end="14" type="bool"/>
     <field name="Null Vertex Buffer" start="13" end="13" type="bool"/>
     <field name="Buffer Pitch" start="0" end="11" type="uint"/>
     <field name="Buffer Starting Address" start="32" end="95" type="address"/>
@@ -49,7 +50,7 @@
 
   <struct name="VERTEX_ELEMENT_STATE" length="2">
     <field name="Vertex Buffer Index" start="26" end="31" type="uint"/>
-    <field name="Valid" start="25" end="25" type="uint"/>
+    <field name="Valid" start="25" end="25" type="bool"/>
     <field name="Source Element Format" start="16" end="24" type="uint"/>
     <field name="Edge Flag Enable" start="15" end="15" type="bool"/>
     <field name="Source Element Offset" start="0" end="11" type="uint"/>
@@ -1216,6 +1217,7 @@
     <field name="Depth" start="181" end="191" type="uint"/>
     <field name="Minimum Array Element" start="170" end="180" type="uint"/>
     <field name="Depth Buffer Object Control State" start="160" end="166" type="MEMORY_OBJECT_CONTROL_STATE"/>
+    <field name="Depth Buffer MOCS" start="160" end="166" type="uint"/>
     <field name="Render Target View Extent" start="245" end="255" type="uint"/>
     <field name="Surface QPitch" start="224" end="238" type="uint"/>
   </instruction>
@@ -1452,6 +1454,7 @@
     <field name="3D Command Sub Opcode" start="16" end="23" type="uint" default="7"/>
     <field name="DWord Length" start="0" end="7" type="uint" default="3"/>
     <field name="Hierarchical Depth Buffer Object Control State" start="57" end="63" type="MEMORY_OBJECT_CONTROL_STATE"/>
+    <field name="Hierarchical Depth Buffer MOCS" start="57" end="63" type="uint"/>
     <field name="Surface Pitch" start="32" end="48" type="uint"/>
     <field name="Surface Base Address" start="64" end="127" type="address"/>
     <field name="Surface QPitch" start="128" end="142" type="uint"/>

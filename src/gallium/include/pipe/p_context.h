@@ -193,8 +193,9 @@ struct pipe_context {
    void * (*create_sampler_state)(struct pipe_context *,
                                   const struct pipe_sampler_state *);
    void   (*bind_sampler_states)(struct pipe_context *,
-                                 unsigned shader, unsigned start_slot,
-                                 unsigned num_samplers, void **samplers);
+                                 enum pipe_shader_type shader,
+                                 unsigned start_slot, unsigned num_samplers,
+                                 void **samplers);
    void   (*delete_sampler_state)(struct pipe_context *, void *);
 
    void * (*create_rasterizer_state)(struct pipe_context *,
@@ -284,7 +285,8 @@ struct pipe_context {
                                 unsigned num_viewports,
                                 const struct pipe_viewport_state *);
 
-   void (*set_sampler_views)(struct pipe_context *, unsigned shader,
+   void (*set_sampler_views)(struct pipe_context *,
+                             enum pipe_shader_type shader,
                              unsigned start_slot, unsigned num_views,
                              struct pipe_sampler_view **);
 
@@ -312,7 +314,8 @@ struct pipe_context {
     *                   unless it's NULL, in which case no buffers will
     *                   be bound.
     */
-   void (*set_shader_buffers)(struct pipe_context *, unsigned shader,
+   void (*set_shader_buffers)(struct pipe_context *,
+                              enum pipe_shader_type shader,
                               unsigned start_slot, unsigned count,
                               const struct pipe_shader_buffer *buffers);
 
@@ -329,7 +332,8 @@ struct pipe_context {
     *                   unless it's NULL, in which case no images will
     *                   be bound.
     */
-   void (*set_shader_images)(struct pipe_context *, unsigned shader,
+   void (*set_shader_images)(struct pipe_context *,
+                             enum pipe_shader_type shader,
                              unsigned start_slot, unsigned count,
                              const struct pipe_image_view *images);
 
@@ -416,7 +420,8 @@ struct pipe_context {
                                struct pipe_surface *dst,
                                const union pipe_color_union *color,
                                unsigned dstx, unsigned dsty,
-                               unsigned width, unsigned height);
+                               unsigned width, unsigned height,
+                               bool render_condition_enabled);
 
    /**
     * Clear a depth-stencil surface.
@@ -430,7 +435,8 @@ struct pipe_context {
                                double depth,
                                unsigned stencil,
                                unsigned dstx, unsigned dsty,
-                               unsigned width, unsigned height);
+                               unsigned width, unsigned height,
+                               bool render_condition_enabled);
 
    /**
     * Clear the texture with the specified texel. Not guaranteed to be a

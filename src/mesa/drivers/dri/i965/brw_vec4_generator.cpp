@@ -1140,6 +1140,10 @@ generate_scratch_read(struct brw_codegen *p,
    else
       msg_type = BRW_DATAPORT_READ_MESSAGE_OWORD_DUAL_BLOCK_READ;
 
+   const unsigned target_cache = devinfo->gen >= 7 ?
+      BRW_DATAPORT_READ_TARGET_DATA_CACHE :
+      BRW_DATAPORT_READ_TARGET_RENDER_CACHE;
+
    /* Each of the 8 channel enables is considered for whether each
     * dword is written.
     */
@@ -1151,8 +1155,7 @@ generate_scratch_read(struct brw_codegen *p,
    brw_set_dp_read_message(p, send,
                            brw_scratch_surface_idx(p),
 			   BRW_DATAPORT_OWORD_DUAL_BLOCK_1OWORD,
-			   msg_type,
-			   BRW_DATAPORT_READ_TARGET_RENDER_CACHE,
+			   msg_type, target_cache,
 			   2, /* mlen */
                            true, /* header_present */
 			   1 /* rlen */);
@@ -1475,6 +1478,7 @@ generate_code(struct brw_codegen *p,
       intel_debug_flag_for_shader_stage(nir->stage);
    struct annotation_info annotation;
    memset(&annotation, 0, sizeof(annotation));
+   int spill_count = 0, fill_count = 0;
    int loop_count = 0;
 
    foreach_block_and_inst (block, vec4_instruction, inst, cfg) {
@@ -1499,34 +1503,6 @@ generate_code(struct brw_codegen *p,
       assert(inst->mlen <= BRW_MAX_MSG_LENGTH);
 
       unsigned pre_emit_nr_insn = p->nr_insn;
-      bool fix_exec_size = false;
-
-      if (dst.width == BRW_WIDTH_4) {
-         /* This happens in attribute fixups for "dual instanced" geometry
-          * shaders, since they use attributes that are vec4's.  Since the exec
-          * width is only 4, it's essential that the caller set
-          * force_writemask_all in order to make sure the instruction is executed
-          * regardless of which channels are enabled.
-          */
-         assert(inst->force_writemask_all);
-
-         /* Fix up any <8;8,1> or <0;4,1> source registers to <4;4,1> to satisfy
-          * the following register region restrictions (from Graphics BSpec:
-          * 3D-Media-GPGPU Engine > EU Overview > Registers and Register Regions
-          * > Register Region Restrictions)
-          *
-          *     1. ExecSize must be greater than or equal to Width.
-          *
-          *     2. If ExecSize = Width and HorzStride != 0, VertStride must be set
-          *        to Width * HorzStride."
-          */
-         for (int i = 0; i < 3; i++) {
-            if (src[i].file == BRW_GENERAL_REGISTER_FILE)
-               src[i] = stride(src[i], 4, 4, 1);
-         }
-         brw_set_default_exec_size(p, BRW_EXECUTE_4);
-         fix_exec_size = true;
-      }
 
       switch (inst->opcode) {
       case VEC4_OPCODE_UNPACK_UNIFORM:
@@ -1758,10 +1734,12 @@ generate_code(struct brw_codegen *p,
 
       case SHADER_OPCODE_GEN4_SCRATCH_READ:
          generate_scratch_read(p, inst, dst, src[0]);
+         fill_count++;
          break;
 
       case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
          generate_scratch_write(p, inst, dst, src[0], src[1]);
+         spill_count++;
          break;
 
       case VS_OPCODE_PULL_CONSTANT_LOAD:
@@ -2028,9 +2006,6 @@ generate_code(struct brw_codegen *p,
          unreachable("Unsupported opcode");
       }
 
-      if (fix_exec_size)
-         brw_set_default_exec_size(p, BRW_EXECUTE_8);
-
       if (inst->opcode == VEC4_OPCODE_PACK_BYTES) {
          /* Handled dependency hints in the generator. */
 
@@ -2049,7 +2024,7 @@ generate_code(struct brw_codegen *p,
       }
    }
 
-   brw_set_uip_jip(p);
+   brw_set_uip_jip(p, 0);
    annotation_finalize(&annotation, p->next_insn_offset);
 
 #ifndef NDEBUG
@@ -2068,10 +2043,10 @@ generate_code(struct brw_codegen *p,
               nir->info.label ? nir->info.label : "unnamed",
               _mesa_shader_stage_to_string(nir->stage), nir->info.name);
 
-      fprintf(stderr, "%s vec4 shader: %d instructions. %d loops. %u cycles."
-                      "Compacted %d to %d bytes (%.0f%%)\n",
-              stage_abbrev,
-              before_size / 16, loop_count, cfg->cycle_count, before_size, after_size,
+      fprintf(stderr, "%s vec4 shader: %d instructions. %d loops. %u cycles. %d:%d "
+                      "spills:fills. Compacted %d to %d bytes (%.0f%%)\n",
+              stage_abbrev, before_size / 16, loop_count, cfg->cycle_count,
+              spill_count, fill_count, before_size, after_size,
               100.0f * (before_size - after_size) / before_size);
 
       dump_assembly(p->store, annotation.ann_count, annotation.ann,
@@ -2082,10 +2057,11 @@ generate_code(struct brw_codegen *p,
 
    compiler->shader_debug_log(log_data,
                               "%s vec4 shader: %d inst, %d loops, %u cycles, "
-                              "compacted %d to %d bytes.",
+                              "%d:%d spills:fills, compacted %d to %d bytes.",
                               stage_abbrev, before_size / 16,
-                              loop_count, cfg->cycle_count,
-                              before_size, after_size);
+                              loop_count, cfg->cycle_count, spill_count,
+                              fill_count, before_size, after_size);
+
 }
 
 extern "C" const unsigned *

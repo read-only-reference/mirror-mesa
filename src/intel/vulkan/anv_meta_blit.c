@@ -106,7 +106,7 @@ build_nir_copy_fragment_shader(enum glsl_sampler_dim tex_dim)
    nir_variable *color_out = nir_variable_create(b.shader, nir_var_shader_out,
                                                  vec4, "f_color");
    color_out->data.location = FRAG_RESULT_DATA0;
-   nir_store_var(&b, color_out, &tex->dest.ssa, 4);
+   nir_store_var(&b, color_out, &tex->dest.ssa, 0xf);
 
    return b.shader;
 }
@@ -300,7 +300,7 @@ meta_emit_blit(struct anv_cmd_buffer *cmd_buffer,
       pipeline = device->meta_state.blit.pipeline_3d_src;
       break;
    default:
-      unreachable(!"bad VkImageType");
+      unreachable("bad VkImageType");
    }
 
    if (cmd_buffer->state.pipeline != anv_pipeline_from_handle(pipeline)) {

@@ -37,7 +37,8 @@ void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 	if (radeon_emitted(ctx->b.dma.cs, 0))
 		ctx->b.dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
 
-	if (!ctx->b.ws->cs_memory_below_limit(ctx->b.gfx.cs, ctx->b.vram, ctx->b.gtt)) {
+	if (!radeon_cs_memory_below_limit(ctx->b.screen, ctx->b.gfx.cs,
+					  ctx->b.vram, ctx->b.gtt)) {
 		ctx->b.gtt = 0;
 		ctx->b.vram = 0;
 		ctx->b.gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
@@ -252,8 +253,9 @@ void r600_context_gfx_flush(void *context, unsigned flags,
 {
 	struct r600_context *ctx = context;
 	struct radeon_winsys_cs *cs = ctx->b.gfx.cs;
+	struct radeon_winsys *ws = ctx->b.ws;
 
-	if (!radeon_emitted(cs, ctx->b.initial_gfx_cs_size) && !fence)
+	if (!radeon_emitted(cs, ctx->b.initial_gfx_cs_size))
 		return;
 
 	r600_preflush_suspend_features(&ctx->b);
@@ -275,7 +277,10 @@ void r600_context_gfx_flush(void *context, unsigned flags,
 	}
 
 	/* Flush the CS. */
-	ctx->b.ws->cs_flush(cs, flags, fence);
+	ws->cs_flush(cs, flags, &ctx->b.last_gfx_fence);
+	if (fence)
+		ws->fence_reference(fence, ctx->b.last_gfx_fence);
+	ctx->b.num_gfx_cs_flushes++;
 
 	r600_begin_new_cs(ctx);
 }

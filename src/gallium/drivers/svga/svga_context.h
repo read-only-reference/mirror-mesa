@@ -31,6 +31,8 @@
 #include "pipe/p_defines.h"
 #include "pipe/p_state.h"
 
+#include "os/os_time.h"
+
 #include "util/u_blitter.h"
 #include "util/list.h"
 
@@ -332,21 +334,28 @@ struct svga_hw_view_state
  */
 struct svga_hw_draw_state
 {
+   /** VGPU9 rasterization state */
    unsigned rs[SVGA3D_RS_MAX];
+   /** VGPU9 texture sampler and bindings state */
    unsigned ts[SVGA3D_PIXEL_SAMPLERREG_MAX][SVGA3D_TS_MAX];
+   /** VGPU9 texture views */
+   unsigned num_views;
+   struct svga_hw_view_state views[PIPE_MAX_SAMPLERS];
+   /** VGPU9 constant buffer values */
    float cb[PIPE_SHADER_TYPES][SVGA3D_CONSTREG_MAX][4];
 
+   /** Currently bound shaders */
    struct svga_shader_variant *fs;
    struct svga_shader_variant *vs;
    struct svga_shader_variant *gs;
-   struct svga_hw_view_state views[PIPE_MAX_SAMPLERS];
-   unsigned num_views;
+
+   /** Currently bound constant buffer, per shader stage */
    struct pipe_resource *constbuf[PIPE_SHADER_TYPES];
 
-   /* Bitmask of enabled constant bufffers */
+   /** Bitmask of enabled constant buffers */
    unsigned enabled_constbufs[PIPE_SHADER_TYPES];
 
-   /* VGPU10 HW state (used to prevent emitting redundant state) */
+   /** VGPU10 HW state (used to prevent emitting redundant state) */
    SVGA3dDepthStencilStateId depth_stencil_id;
    unsigned stencil_ref;
    SVGA3dBlendStateId blend_id;
@@ -368,12 +377,15 @@ struct svga_hw_draw_state
    unsigned num_samplers[PIPE_SHADER_TYPES];
    SVGA3dSamplerId samplers[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
 
+   unsigned num_sampler_views[PIPE_SHADER_TYPES];
+   struct pipe_sampler_view
+      *sampler_views[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
+
    unsigned num_rendertargets;
    struct pipe_surface *rtv[SVGA3D_MAX_RENDER_TARGETS];
    struct pipe_surface *dsv;
 
    /* used for rebinding */
-   unsigned num_sampler_views[PIPE_SHADER_TYPES];
    unsigned default_constbuf_size[PIPE_SHADER_TYPES];
 };
 
@@ -537,6 +549,8 @@ struct svga_context
       uint64_t num_surface_views;       /**< SVGA_QUERY_NUM_SURFACE_VIEWS */
       uint64_t num_bytes_uploaded;      /**< SVGA_QUERY_NUM_BYTES_UPLOADED */
       uint64_t num_generate_mipmap;     /**< SVGA_QUERY_NUM_GENERATE_MIPMAP */
+
+      boolean uses_time;                /**< os_time_get() calls needed? */
    } hud;
 
    /** The currently bound stream output targets */
@@ -597,15 +611,6 @@ struct svga_context
 
 
 
-/***********************************************************************
- * svga_clear.c: 
- */
-void svga_clear(struct pipe_context *pipe, 
-                unsigned buffers,
-                const union pipe_color_union *color,
-                double depth,
-                unsigned stencil);
-
 
 /***********************************************************************
  * svga_screen_texture.c: 
@@ -634,8 +639,10 @@ void svga_init_draw_functions( struct svga_context *svga );
 void svga_init_query_functions( struct svga_context *svga );
 void svga_init_surface_functions(struct svga_context *svga);
 void svga_init_stream_output_functions( struct svga_context *svga );
+void svga_init_clear_functions( struct svga_context *svga );
 
 void svga_cleanup_vertex_state( struct svga_context *svga );
+void svga_cleanup_sampler_state( struct svga_context *svga );
 void svga_cleanup_tss_binding( struct svga_context *svga );
 void svga_cleanup_framebuffer( struct svga_context *svga );
 
@@ -665,6 +672,11 @@ svga_context( struct pipe_context *pipe )
    return (struct svga_context *)pipe;
 }
 
+static inline struct svga_winsys_screen *
+svga_sws(struct svga_context *svga)
+{
+   return svga_screen(svga->pipe.screen)->sws;
+}
 
 static inline boolean
 svga_have_gb_objects(const struct svga_context *svga)
@@ -695,5 +707,16 @@ svga_rects_equal(const SVGA3dRect *r1, const SVGA3dRect *r2)
 {
    return memcmp(r1, r2, sizeof(*r1)) == 0;
 }
+
+/**
+ * If the Gallium HUD is enabled, this will return the current time.
+ * Otherwise, just return zero.
+ */
+static inline int64_t
+svga_get_time(struct svga_context *svga)
+{
+   return svga->hud.uses_time ? os_time_get() : 0;
+}
+
 
 #endif

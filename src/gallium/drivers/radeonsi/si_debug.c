@@ -548,21 +548,17 @@ static const char *priority_to_string(enum radeon_bo_priority priority)
 	        ITEM(IB2),
 	        ITEM(DRAW_INDIRECT),
 	        ITEM(INDEX_BUFFER),
-	        ITEM(CP_DMA),
 	        ITEM(VCE),
 	        ITEM(UVD),
 	        ITEM(SDMA_BUFFER),
 	        ITEM(SDMA_TEXTURE),
-	        ITEM(USER_SHADER),
-	        ITEM(INTERNAL_SHADER),
+		ITEM(CP_DMA),
 	        ITEM(CONST_BUFFER),
 	        ITEM(DESCRIPTORS),
 	        ITEM(BORDER_COLORS),
 	        ITEM(SAMPLER_BUFFER),
 	        ITEM(VERTEX_BUFFER),
 	        ITEM(SHADER_RW_BUFFER),
-	        ITEM(RINGS_STREAMOUT),
-	        ITEM(SCRATCH_BUFFER),
 	        ITEM(COMPUTE_GLOBAL),
 	        ITEM(SAMPLER_TEXTURE),
 	        ITEM(SHADER_RW_IMAGE),
@@ -574,6 +570,9 @@ static const char *priority_to_string(enum radeon_bo_priority priority)
 	        ITEM(CMASK),
 	        ITEM(DCC),
 	        ITEM(HTILE),
+		ITEM(SHADER_BINARY),
+		ITEM(SHADER_RINGS),
+		ITEM(SCRATCH_BUFFER),
 	};
 #undef ITEM
 
@@ -805,6 +804,7 @@ void si_check_vm_faults(struct r600_common_context *ctx,
 	struct pipe_screen *screen = sctx->b.b.screen;
 	FILE *f;
 	uint32_t addr;
+	char cmd_line[4096];
 
 	if (!si_vm_fault_occured(sctx, &addr))
 		return;
@@ -814,6 +814,8 @@ void si_check_vm_faults(struct r600_common_context *ctx,
 		return;
 
 	fprintf(f, "VM fault report.\n\n");
+	if (os_get_command_line(cmd_line, sizeof(cmd_line)))
+		fprintf(f, "Command: %s\n", cmd_line);
 	fprintf(f, "Driver vendor: %s\n", screen->get_vendor(screen));
 	fprintf(f, "Device vendor: %s\n", screen->get_device_vendor(screen));
 	fprintf(f, "Device name: %s\n\n", screen->get_name(screen));
@@ -825,7 +827,9 @@ void si_check_vm_faults(struct r600_common_context *ctx,
 
 	switch (ring) {
 	case RING_GFX:
-		si_dump_debug_state(&sctx->b.b, f, 0);
+		si_dump_debug_state(&sctx->b.b, f,
+				    PIPE_DUMP_CURRENT_STATES |
+				    PIPE_DUMP_CURRENT_SHADERS);
 		break;
 
 	case RING_DMA:

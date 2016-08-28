@@ -109,8 +109,6 @@ template <>
 struct ConservativeRastFETraits<StandardRastT>
 {
     typedef std::false_type IsConservativeT;
-    typedef FixedPointTraits<Fixed_16_8> BBoxPrecisionT;
-    typedef FixedPointTraits<Fixed_16_8> ZeroAreaPrecisionT;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -119,13 +117,7 @@ template <>
 struct ConservativeRastFETraits<ConservativeRastT>
 {
     typedef std::true_type IsConservativeT;
-    typedef FixedPointTraits<Fixed_16_8> ZeroAreaPrecisionT;
-
-    /// Conservative bounding box needs to expand the area around each vertex by 1/512, which 
-    /// is the potential snapping error when going from FP-> 16.8 fixed
-    typedef FixedPointTraits<Fixed_16_9> BBoxPrecisionT;
     typedef std::integral_constant<uint32_t, 1> BoundingBoxOffsetT;
-    typedef std::integral_constant<uint32_t, 1> BoundingBoxShiftT;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -139,9 +131,10 @@ typedef ConservativeRastFETraits<ConservativeRastT> FEConservativeRastT;
 /// default to standard rasterization behavior
 /// @tparam ConservativeT: type of conservative rasterization
 /// @tparam InputCoverageT: type of input coverage requested, if any
-template <typename ConservativeT, typename InputCoverageT>
+template <typename ConservativeT, typename _InputCoverageT>
 struct ConservativeRastBETraits {
     typedef std::false_type IsConservativeT;
+    typedef _InputCoverageT InputCoverageT;
     typedef FixedPointTraits<Fixed_16_8> ConservativePrecisionT;
     typedef std::integral_constant<int32_t, 0> ConservativeEdgeOffsetT;
     typedef std::integral_constant<int32_t, 0> InnerConservativeEdgeOffsetT;
@@ -149,10 +142,11 @@ struct ConservativeRastBETraits {
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief StandardRastT specialization of ConservativeRastBETraits
-template <typename InputCoverageT>
-struct ConservativeRastBETraits<StandardRastT, InputCoverageT>
+template <typename _InputCoverageT>
+struct ConservativeRastBETraits<StandardRastT, _InputCoverageT>
 {
     typedef std::false_type IsConservativeT;
+    typedef _InputCoverageT InputCoverageT;
     typedef FixedPointTraits<Fixed_16_8> ConservativePrecisionT;
     typedef std::integral_constant<int32_t, 0> ConservativeEdgeOffsetT;
     typedef std::integral_constant<int32_t, 0> InnerConservativeEdgeOffsetT;
@@ -214,8 +208,8 @@ struct ConservativeRastBETraits<ConservativeRastT, InnerConservativeCoverageT>
     /// intersects a pixel
     typedef std::integral_constant<int32_t, (ConservativePrecisionT::ScaleT::value/2) + 1> ConservativeEdgeOffsetT;
 
-    /// offset edge towards from pixel center by 1/2 pixel + 1/512, in Fixed 16.9 precision
+    /// undo the outer conservative offset and offset edge towards from pixel center by 1/2 pixel + 1/512, in Fixed 16.9 precision
     /// this allows the rasterizer to do the 3 edge coverage tests against a single point, instead of 
     /// of having to compare individual edges to pixel corners to check if a pixel is fully covered by a triangle
-    typedef std::integral_constant<int32_t, static_cast<int32_t>(-((ConservativePrecisionT::ScaleT::value/2) + 1))> InnerConservativeEdgeOffsetT;
+    typedef std::integral_constant<int32_t, static_cast<int32_t>(-((ConservativePrecisionT::ScaleT::value/2) + 1) - ConservativeEdgeOffsetT::value)> InnerConservativeEdgeOffsetT;
 };

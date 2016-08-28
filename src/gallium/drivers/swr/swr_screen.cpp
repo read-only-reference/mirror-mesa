@@ -152,6 +152,7 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    switch (param) {
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+   case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
       return 1;
    case PIPE_CAP_TWO_SIDED_STENCIL:
       return 1;
@@ -657,7 +658,7 @@ swr_resource_destroy(struct pipe_screen *p_screen, struct pipe_resource *pt)
       if (!swr_is_fence_pending(screen->flush_fence))
          swr_fence_submit(swr_context(pipe), screen->flush_fence);
 
-      swr_fence_finish(p_screen, screen->flush_fence, 0);
+      swr_fence_finish(p_screen, NULL, screen->flush_fence, 0);
       swr_resource_unused(pt);
    }
 
@@ -692,7 +693,7 @@ swr_flush_frontbuffer(struct pipe_screen *p_screen,
    struct pipe_context *pipe = screen->pipe;
 
    if (pipe) {
-      swr_fence_finish(p_screen, screen->flush_fence, 0);
+      swr_fence_finish(p_screen, NULL, screen->flush_fence, 0);
       swr_resource_unused(resource);
       SwrEndFrame(swr_context(pipe)->swrContext);
    }
@@ -712,7 +713,7 @@ swr_destroy_screen(struct pipe_screen *p_screen)
 
    fprintf(stderr, "SWR destroy screen!\n");
 
-   swr_fence_finish(p_screen, screen->flush_fence, 0);
+   swr_fence_finish(p_screen, NULL, screen->flush_fence, 0);
    swr_fence_reference(p_screen, &screen->flush_fence, NULL);
 
    JitDestroyContext(screen->hJitMgr);
@@ -753,7 +754,7 @@ swr_create_screen(struct sw_winsys *winsys)
 
    screen->base.flush_frontbuffer = swr_flush_frontbuffer;
 
-   screen->hJitMgr = JitCreateContext(KNOB_SIMD_WIDTH, KNOB_ARCH_STR);
+   screen->hJitMgr = JitCreateContext(KNOB_SIMD_WIDTH, KNOB_ARCH_STR, "swr");
 
    swr_fence_init(&screen->base);
 

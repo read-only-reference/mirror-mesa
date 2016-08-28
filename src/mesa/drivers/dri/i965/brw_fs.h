@@ -204,8 +204,6 @@ public:
    void nir_emit_alu(const brw::fs_builder &bld, nir_alu_instr *instr);
    void nir_emit_load_const(const brw::fs_builder &bld,
                             nir_load_const_instr *instr);
-   void nir_emit_undef(const brw::fs_builder &bld,
-                       nir_ssa_undef_instr *instr);
    void nir_emit_vs_intrinsic(const brw::fs_builder &bld,
                               nir_intrinsic_instr *instr);
    void nir_emit_tcs_intrinsic(const brw::fs_builder &bld,
@@ -246,6 +244,8 @@ public:
                                  fs_reg color1, fs_reg color2,
                                  fs_reg src0_alpha, unsigned components);
    void emit_fb_writes();
+   fs_inst *emit_non_coherent_fb_read(const brw::fs_builder &bld,
+                                      const fs_reg &dst, unsigned target);
    void emit_urb_writes(const fs_reg &gs_vertex_count = fs_reg());
    void set_gs_stream_control_data_bits(const fs_reg &vertex_count,
                                         unsigned stream_id);
@@ -318,7 +318,6 @@ public:
    fs_reg sample_mask;
    fs_reg outputs[VARYING_SLOT_MAX];
    fs_reg dual_src_output;
-   bool do_dual_src;
    int first_non_payload_grf;
    /** Either BRW_MAX_GRF or GEN7_MRF_HACK_START */
    unsigned max_grf;
@@ -401,6 +400,8 @@ private:
                       struct brw_reg implied_header,
                       GLuint nr);
    void generate_fb_write(fs_inst *inst, struct brw_reg payload);
+   void generate_fb_read(fs_inst *inst, struct brw_reg dst,
+                         struct brw_reg payload);
    void generate_urb_read(fs_inst *inst, struct brw_reg dst, struct brw_reg payload);
    void generate_urb_write(fs_inst *inst, struct brw_reg payload);
    void generate_cs_terminate(fs_inst *inst, struct brw_reg payload);

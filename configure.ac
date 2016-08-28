@@ -90,7 +90,7 @@ XCBDRI2_REQUIRED=1.8
 XCBGLX_REQUIRED=1.8.1
 XSHMFENCE_REQUIRED=1.1
 XVMC_REQUIRED=1.0.6
-PYTHON_MAKO_REQUIRED=0.3.4
+PYTHON_MAKO_REQUIRED=0.8.0
 
 dnl Check for progs
 AC_PROG_CPP
@@ -300,9 +300,6 @@ if test "x$GCC" = xyes; then
     # Restore CFLAGS; VISIBILITY_CFLAGS are added to it where needed.
     CFLAGS=$save_CFLAGS
 
-    # Work around aliasing bugs - developers should comment this out
-    CFLAGS="$CFLAGS -fno-strict-aliasing"
-
     # We don't want floating-point math functions to set errno or trap
     CFLAGS="$CFLAGS -fno-math-errno -fno-trapping-math"
 
@@ -341,9 +338,6 @@ if test "x$GXX" = xyes; then
 
     # Restore CXXFLAGS; VISIBILITY_CXXFLAGS are added to it where needed.
     CXXFLAGS=$save_CXXFLAGS
-
-    # Work around aliasing bugs - developers should comment this out
-    CXXFLAGS="$CXXFLAGS -fno-strict-aliasing"
 
     # We don't want floating-point math functions to set errno or trap
     CXXFLAGS="$CXXFLAGS -fno-math-errno -fno-trapping-math"
@@ -1651,6 +1645,13 @@ AC_ARG_WITH([vulkan-icddir],
     [VULKAN_ICD_INSTALL_DIR='${datarootdir}/vulkan/icd.d'])
 AC_SUBST([VULKAN_ICD_INSTALL_DIR])
 
+AC_ARG_ENABLE([vulkan-icd-full-driver-path],
+   [AS_HELP_STRING([--disable-vulkan-icd-full-driver-path],
+                   [create Vulkan ICD files with just a .so name and no path])],
+   [vulkan_icd_driver_path="$enableval"],
+   [vulkan_icd_driver_path="yes"])
+AM_CONDITIONAL(VULKAN_ICD_DRIVER_PATH, test "x$vulkan_icd_driver_path" = xyes)
+
 if test -n "$with_vulkan_drivers"; then
     VULKAN_DRIVERS=`IFS=', '; echo $with_vulkan_drivers`
     for driver in $VULKAN_DRIVERS; do
@@ -2745,8 +2746,7 @@ AC_CONFIG_FILES([Makefile
 		src/glx/tests/Makefile
 		src/gtest/Makefile
 		src/intel/Makefile
-		src/intel/genxml/Makefile
-		src/intel/isl/Makefile
+		src/intel/tools/Makefile
 		src/intel/vulkan/Makefile
 		src/loader/Makefile
 		src/mapi/Makefile
@@ -2777,9 +2777,6 @@ AC_OUTPUT
 # Fix up dependencies in *.Plo files, where we changed the extension of a
 # source file
 $SED -i -e 's/brw_blorp.cpp/brw_blorp.c/' src/mesa/drivers/dri/i965/.deps/brw_blorp.Plo
-$SED -i -e 's/gen6_blorp.cpp/gen6_blorp.c/' src/mesa/drivers/dri/i965/.deps/gen6_blorp.Plo
-$SED -i -e 's/gen7_blorp.cpp/gen7_blorp.c/' src/mesa/drivers/dri/i965/.deps/gen7_blorp.Plo
-$SED -i -e 's/gen8_blorp.cpp/gen8_blorp.c/' src/mesa/drivers/dri/i965/.deps/gen8_blorp.Plo
 
 
 dnl

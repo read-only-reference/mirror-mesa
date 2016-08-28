@@ -96,10 +96,12 @@ mark(struct gl_program *prog, ir_variable *var, int offset, int len,
    for (int i = 0; i < len; i++) {
       assert(var->data.location != -1);
 
-      int idx = var->data.location + var->data.index + offset + i;
+      int idx = var->data.location + offset + i;
       bool is_patch_generic = var->data.patch &&
                               idx != VARYING_SLOT_TESS_LEVEL_INNER &&
-                              idx != VARYING_SLOT_TESS_LEVEL_OUTER;
+                              idx != VARYING_SLOT_TESS_LEVEL_OUTER &&
+                              idx != VARYING_SLOT_BOUNDING_BOX0 &&
+                              idx != VARYING_SLOT_BOUNDING_BOX1;
       GLbitfield64 bitfield;
 
       if (is_patch_generic) {
@@ -135,10 +137,16 @@ mark(struct gl_program *prog, ir_variable *var, int offset, int len,
          prog->SystemValuesRead |= bitfield;
       } else {
          assert(var->data.mode == ir_var_shader_out);
-         if (is_patch_generic)
+         if (is_patch_generic) {
             prog->PatchOutputsWritten |= bitfield;
-         else
+         } else if (!var->data.read_only) {
             prog->OutputsWritten |= bitfield;
+            if (var->data.index > 0)
+               prog->SecondaryOutputsWritten |= bitfield;
+         }
+
+         if (var->data.fb_fetch_output)
+            prog->OutputsRead |= bitfield;
       }
    }
 }
@@ -260,15 +268,19 @@ ir_set_program_inouts_visitor::try_mark_partial_variable(ir_variable *var,
     * lowering passes (do_vec_index_to_swizzle() gets rid of indexing into
     * vectors, and lower_packed_varyings() gets rid of structs that occur in
     * varyings).
+    *
+    * However, we don't use varying packing in all cases - tessellation
+    * shaders bypass it.  This means we'll see varying structs and arrays
+    * of structs here.  For now, we just give up so the caller marks the
+    * entire variable as used.
     */
    if (!(type->is_matrix() ||
         (type->is_array() &&
          (type->fields.array->is_numeric() ||
           type->fields.array->is_boolean())))) {
-      assert(!"Unexpected indexing in ir_set_program_inouts");
 
-      /* For safety in release builds, in case we ever encounter unexpected
-       * indexing, give up and let the caller mark the whole variable as used.
+      /* If we don't know how to handle this case, give up and let the
+       * caller mark the whole variable as used.
        */
       return false;
    }
@@ -440,6 +452,8 @@ do_set_program_inouts(exec_list *instructions, struct gl_program *prog,
 
    prog->InputsRead = 0;
    prog->OutputsWritten = 0;
+   prog->SecondaryOutputsWritten = 0;
+   prog->OutputsRead = 0;
    prog->PatchInputsRead = 0;
    prog->PatchOutputsWritten = 0;
    prog->SystemValuesRead = 0;

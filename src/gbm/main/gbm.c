@@ -104,32 +104,6 @@ gbm_device_destroy(struct gbm_device *gbm)
       gbm->destroy(gbm);
 }
 
-struct gbm_device *
-_gbm_mesa_get_device(int fd)
-{
-   struct gbm_device *gbm = NULL;
-   struct stat buf;
-   dev_t dev;
-   int i;
-
-   if (fd < 0 || fstat(fd, &buf) < 0 || !S_ISCHR(buf.st_mode)) {
-      errno = EINVAL;
-      return NULL;
-   }
-
-   for (i = 0; i < device_num; ++i) {
-      dev = devices[i]->stat.st_rdev;
-      if (major(dev) == major(buf.st_rdev) &&
-          minor(dev) == minor(buf.st_rdev)) {
-         gbm = devices[i];
-         gbm->refcount++;
-         break;
-      }
-   }
-
-   return gbm;
-}
-
 /** Create a gbm device for allocating buffers
  *
  * The file descriptor passed in is used by the backend to communicate with
@@ -359,7 +333,7 @@ gbm_bo_create(struct gbm_device *gbm,
  *
  * This function imports a foreign object and creates a new gbm bo for it.
  * This enabled using the foreign object with a display API such as KMS.
- * Currently two types of foreign objects are supported, indicated by the type
+ * Currently three types of foreign objects are supported, indicated by the type
  * argument:
  *
  *   GBM_BO_IMPORT_WL_BUFFER

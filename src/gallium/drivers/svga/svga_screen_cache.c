@@ -332,7 +332,7 @@ svga_screen_cache_flush(struct svga_screen *svgascreen,
          /* remove entry from the invalidated list */
          LIST_DEL(&entry->head);
 
-         svgascreen->sws->fence_reference(svgascreen->sws, &entry->fence, fence);
+         sws->fence_reference(sws, &entry->fence, fence);
 
          /* Add entry to the unused list */
          LIST_ADD(&entry->head, &cache->unused);
@@ -393,8 +393,7 @@ svga_screen_cache_cleanup(struct svga_screen *svgascreen)
       }
 
       if (cache->entries[i].fence)
-         svgascreen->sws->fence_reference(svgascreen->sws,
-                                          &cache->entries[i].fence, NULL);
+         sws->fence_reference(sws, &cache->entries[i].fence, NULL);
    }
 
    pipe_mutex_destroy(cache->mutex);
@@ -559,11 +558,6 @@ svga_screen_surface_destroy(struct svga_screen *svgascreen,
     * that case.
     */
    if (SVGA_SURFACE_CACHE_ENABLED && key->cachable) {
-
-      /* Invalidate the surface before putting it into the recycle pool */
-      if (key->format != SVGA3D_BUFFER)
-         sws->surface_invalidate(sws, *p_handle);
-
       svga_screen_cache_add(svgascreen, key, p_handle);
    }
    else {

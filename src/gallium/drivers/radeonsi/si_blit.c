@@ -557,10 +557,8 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 				render_feedback = true;
 		}
 
-		if (render_feedback) {
-			struct si_screen *screen = sctx->screen;
-			r600_texture_disable_dcc(&screen->b, tex);
-		}
+		if (render_feedback)
+			r600_texture_disable_dcc(&sctx->b, tex);
 	}
 }
 
@@ -599,10 +597,8 @@ static void si_check_render_feedback_images(struct si_context *sctx,
 				render_feedback = true;
 		}
 
-		if (render_feedback) {
-			struct si_screen *screen = sctx->screen;
-			r600_texture_disable_dcc(&screen->b, tex);
-		}
+		if (render_feedback)
+			r600_texture_disable_dcc(&sctx->b, tex);
 	}
 }
 
@@ -759,11 +755,13 @@ static void si_clear_render_target(struct pipe_context *ctx,
 				   struct pipe_surface *dst,
 				   const union pipe_color_union *color,
 				   unsigned dstx, unsigned dsty,
-				   unsigned width, unsigned height)
+				   unsigned width, unsigned height,
+				   bool render_condition_enabled)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
-	si_blitter_begin(ctx, SI_CLEAR_SURFACE);
+	si_blitter_begin(ctx, SI_CLEAR_SURFACE |
+			 (render_condition_enabled ? 0 : SI_DISABLE_RENDER_COND));
 	util_blitter_clear_render_target(sctx->blitter, dst, color,
 					 dstx, dsty, width, height);
 	si_blitter_end(ctx);
@@ -775,11 +773,13 @@ static void si_clear_depth_stencil(struct pipe_context *ctx,
 				   double depth,
 				   unsigned stencil,
 				   unsigned dstx, unsigned dsty,
-				   unsigned width, unsigned height)
+				   unsigned width, unsigned height,
+				   bool render_condition_enabled)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
-	si_blitter_begin(ctx, SI_CLEAR_SURFACE);
+	si_blitter_begin(ctx, SI_CLEAR_SURFACE |
+			 (render_condition_enabled ? 0 : SI_DISABLE_RENDER_COND));
 	util_blitter_clear_depth_stencil(sctx->blitter, dst, clear_flags, depth, stencil,
 					 dstx, dsty, width, height);
 	si_blitter_end(ctx);
@@ -1096,8 +1096,27 @@ static void si_blit(struct pipe_context *ctx,
 		    const struct pipe_blit_info *info)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
+	struct r600_texture *rdst = (struct r600_texture *)info->dst.resource;
 
 	if (do_hardware_msaa_resolve(ctx, info)) {
+		return;
+	}
+
+	/* Using SDMA for copying to a linear texture in GTT is much faster.
+	 * This improves DRI PRIME performance.
+	 *
+	 * resource_copy_region can't do this yet, because dma_copy calls it
+	 * on failure (recursion).
+	 */
+	if (rdst->surface.level[info->dst.level].mode ==
+	    RADEON_SURF_MODE_LINEAR_ALIGNED &&
+	    sctx->b.dma_copy &&
+	    util_can_blit_via_copy_region(info, false)) {
+		sctx->b.dma_copy(ctx, info->dst.resource, info->dst.level,
+				 info->dst.box.x, info->dst.box.y,
+				 info->dst.box.z,
+				 info->src.resource, info->src.level,
+				 &info->src.box);
 		return;
 	}
 

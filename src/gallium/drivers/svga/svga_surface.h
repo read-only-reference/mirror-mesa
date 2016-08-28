@@ -45,6 +45,12 @@ struct svga_surface
    struct pipe_surface base;
 
    struct svga_host_surface_cache_key key;
+
+   /*
+    * Note that the handle may point at a secondary / backing resource
+    * created by svga_texture_view_surface() which is something other
+    * than svga_texture(base->texture)->handle.
+    */
    struct svga_winsys_surface *handle;
 
    unsigned real_layer;
@@ -55,12 +61,25 @@ struct svga_surface
 
    /* VGPU10 */
    SVGA3dRenderTargetViewId view_id;
+
+   /*
+    * As with 'handle' above, this may point to a secondary / backing resource.
+    * We can't have one resource bound as both a render target and a shader
+    * resource at the same time.  But we sometimes want to do that, such as
+    * for mipmap generation where we sample from one level and render into
+    * another.
+    * In this situation, the backed surface is the render target while the
+    * original surface is the shader resource.
+    */
    struct svga_surface *backed;
 };
 
 
 extern void
 svga_propagate_surface(struct svga_context *svga, struct pipe_surface *surf);
+
+void
+svga_propagate_rendertargets(struct svga_context *svga);
 
 extern boolean
 svga_surface_needs_propagation(const struct pipe_surface *surf);
@@ -93,7 +112,6 @@ svga_texture_copy_handle(struct svga_context *svga,
 static inline struct svga_surface *
 svga_surface(struct pipe_surface *surface)
 {
-   assert(surface);
    return (struct svga_surface *)surface;
 }
 
@@ -101,7 +119,6 @@ svga_surface(struct pipe_surface *surface)
 static inline const struct svga_surface *
 svga_surface_const(const struct pipe_surface *surface)
 {
-   assert(surface);
    return (const struct svga_surface *)surface;
 }
 

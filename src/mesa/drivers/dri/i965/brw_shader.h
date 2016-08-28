@@ -261,7 +261,7 @@ struct brw_gs_compile
    unsigned control_data_header_size_bits;
 };
 
-void
+uint32_t
 brw_assign_common_binding_table_offsets(gl_shader_stage stage,
                                         const struct brw_device_info *devinfo,
                                         const struct gl_shader_program *shader_prog,
@@ -290,12 +290,6 @@ bool brw_cs_precompile(struct gl_context *ctx,
 
 GLboolean brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog);
 struct gl_linked_shader *brw_new_shader(gl_shader_stage stage);
-
-int type_size_scalar(const struct glsl_type *type);
-int type_size_vec4(const struct glsl_type *type);
-int type_size_dvec4(const struct glsl_type *type);
-int type_size_vec4_times_4(const struct glsl_type *type);
-int type_size_vs_input(const struct glsl_type *type);
 
 unsigned tesslevel_outer_components(GLenum tes_primitive_mode);
 unsigned tesslevel_inner_components(GLenum tes_primitive_mode);

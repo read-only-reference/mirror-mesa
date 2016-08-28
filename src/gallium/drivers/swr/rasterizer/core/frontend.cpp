@@ -72,34 +72,9 @@ void ProcessSync(
     uint32_t workerId,
     void *pUserData)
 {
-    SYNC_DESC *pSync = (SYNC_DESC*)pUserData;
     BE_WORK work;
     work.type = SYNC;
     work.pfnWork = ProcessSyncBE;
-    work.desc.sync = *pSync;
-
-    MacroTileMgr *pTileMgr = pDC->pTileMgr;
-    pTileMgr->enqueue(0, 0, &work);
-}
-
-//////////////////////////////////////////////////////////////////////////
-/// @brief FE handler for SwrGetStats.
-/// @param pContext - pointer to SWR context.
-/// @param pDC - pointer to draw context.
-/// @param workerId - thread's worker id. Even thread has a unique id.
-/// @param pUserData - Pointer to user data passed back to stats callback.
-/// @todo This should go away when we switch this to use compute threading.
-void ProcessQueryStats(
-    SWR_CONTEXT *pContext,
-    DRAW_CONTEXT *pDC,
-    uint32_t workerId,
-    void *pUserData)
-{
-    QUERY_DESC *pQueryStats = (QUERY_DESC*)pUserData;
-    BE_WORK work;
-    work.type = QUERYSTATS;
-    work.pfnWork = ProcessQueryStatsBE;
-    work.desc.queryStats = *pQueryStats;
 
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
     pTileMgr->enqueue(0, 0, &work);
@@ -118,26 +93,24 @@ void ProcessClear(
     uint32_t workerId,
     void *pUserData)
 {
-    CLEAR_DESC *pClear = (CLEAR_DESC*)pUserData;
+    CLEAR_DESC *pDesc = (CLEAR_DESC*)pUserData;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
-    const API_STATE& state = GetApiState(pDC);
-
     // queue a clear to each macro tile
-    // compute macro tile bounds for the current scissor/viewport
-    uint32_t macroTileLeft = state.scissorInFixedPoint.left / KNOB_MACROTILE_X_DIM_FIXED;
-    uint32_t macroTileRight = state.scissorInFixedPoint.right / KNOB_MACROTILE_X_DIM_FIXED;
-    uint32_t macroTileTop = state.scissorInFixedPoint.top / KNOB_MACROTILE_Y_DIM_FIXED;
-    uint32_t macroTileBottom = state.scissorInFixedPoint.bottom / KNOB_MACROTILE_Y_DIM_FIXED;
+    // compute macro tile bounds for the specified rect
+    uint32_t macroTileXMin = pDesc->rect.xmin / KNOB_MACROTILE_X_DIM;
+    uint32_t macroTileXMax = (pDesc->rect.xmax - 1) / KNOB_MACROTILE_X_DIM;
+    uint32_t macroTileYMin = pDesc->rect.ymin / KNOB_MACROTILE_Y_DIM;
+    uint32_t macroTileYMax = (pDesc->rect.ymax - 1) / KNOB_MACROTILE_Y_DIM;
 
     BE_WORK work;
     work.type = CLEAR;
     work.pfnWork = ProcessClearBE;
-    work.desc.clear = *pClear;
+    work.desc.clear = *pDesc;
 
-    for (uint32_t y = macroTileTop; y <= macroTileBottom; ++y)
+    for (uint32_t y = macroTileYMin; y <= macroTileYMax; ++y)
     {
-        for (uint32_t x = macroTileLeft; x <= macroTileRight; ++x)
+        for (uint32_t x = macroTileXMin; x <= macroTileXMax; ++x)
         {
             pTileMgr->enqueue(x, y, &work);
         }
@@ -158,28 +131,25 @@ void ProcessStoreTiles(
     void *pUserData)
 {
     RDTSC_START(FEProcessStoreTiles);
-    STORE_TILES_DESC *pStore = (STORE_TILES_DESC*)pUserData;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
-
-    const API_STATE& state = GetApiState(pDC);
+    STORE_TILES_DESC* pDesc = (STORE_TILES_DESC*)pUserData;
 
     // queue a store to each macro tile
-    // compute macro tile bounds for the current render target
-    const uint32_t macroWidth = KNOB_MACROTILE_X_DIM;
-    const uint32_t macroHeight = KNOB_MACROTILE_Y_DIM;
-
-    uint32_t numMacroTilesX = ((uint32_t)state.vp[0].width + (uint32_t)state.vp[0].x + (macroWidth - 1)) / macroWidth;
-    uint32_t numMacroTilesY = ((uint32_t)state.vp[0].height + (uint32_t)state.vp[0].y + (macroHeight - 1)) / macroHeight;
+    // compute macro tile bounds for the specified rect
+    uint32_t macroTileXMin = pDesc->rect.xmin / KNOB_MACROTILE_X_DIM;
+    uint32_t macroTileXMax = (pDesc->rect.xmax - 1) / KNOB_MACROTILE_X_DIM;
+    uint32_t macroTileYMin = pDesc->rect.ymin / KNOB_MACROTILE_Y_DIM;
+    uint32_t macroTileYMax = (pDesc->rect.ymax - 1) / KNOB_MACROTILE_Y_DIM;
 
     // store tiles
     BE_WORK work;
     work.type = STORETILES;
     work.pfnWork = ProcessStoreTileBE;
-    work.desc.storeTiles = *pStore;
+    work.desc.storeTiles = *pDesc;
 
-    for (uint32_t x = 0; x < numMacroTilesX; ++x)
+    for (uint32_t y = macroTileYMin; y <= macroTileYMax; ++y)
     {
-        for (uint32_t y = 0; y < numMacroTilesY; ++y)
+        for (uint32_t x = macroTileXMin; x <= macroTileXMax; ++x)
         {
             pTileMgr->enqueue(x, y, &work);
         }
@@ -202,64 +172,39 @@ void ProcessDiscardInvalidateTiles(
     void *pUserData)
 {
     RDTSC_START(FEProcessInvalidateTiles);
-    DISCARD_INVALIDATE_TILES_DESC *pInv = (DISCARD_INVALIDATE_TILES_DESC*)pUserData;
+    DISCARD_INVALIDATE_TILES_DESC *pDesc = (DISCARD_INVALIDATE_TILES_DESC*)pUserData;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
-    SWR_RECT rect;
+    // compute macro tile bounds for the specified rect
+    uint32_t macroTileXMin = (pDesc->rect.xmin + KNOB_MACROTILE_X_DIM - 1) / KNOB_MACROTILE_X_DIM;
+    uint32_t macroTileXMax = (pDesc->rect.xmax / KNOB_MACROTILE_X_DIM) - 1;
+    uint32_t macroTileYMin = (pDesc->rect.ymin + KNOB_MACROTILE_Y_DIM - 1) / KNOB_MACROTILE_Y_DIM;
+    uint32_t macroTileYMax = (pDesc->rect.ymax / KNOB_MACROTILE_Y_DIM) - 1;
 
-    if (pInv->rect.top | pInv->rect.bottom | pInv->rect.right | pInv->rect.left)
-    {
-        // Valid rect
-        rect = pInv->rect;
-    }
-    else
-    {
-        // Use viewport dimensions
-        const API_STATE& state = GetApiState(pDC);
-
-        rect.left   = (uint32_t)state.vp[0].x;
-        rect.right  = (uint32_t)(state.vp[0].x + state.vp[0].width);
-        rect.top    = (uint32_t)state.vp[0].y;
-        rect.bottom = (uint32_t)(state.vp[0].y + state.vp[0].height);
-    }
-
-    // queue a store to each macro tile
-    // compute macro tile bounds for the current render target
-    uint32_t macroWidth = KNOB_MACROTILE_X_DIM;
-    uint32_t macroHeight = KNOB_MACROTILE_Y_DIM;
-
-    // Setup region assuming full tiles
-    uint32_t macroTileStartX = (rect.left + (macroWidth - 1)) / macroWidth;
-    uint32_t macroTileStartY = (rect.top + (macroHeight - 1)) / macroHeight;
-
-    uint32_t macroTileEndX = rect.right / macroWidth;
-    uint32_t macroTileEndY = rect.bottom / macroHeight;
-
-    if (pInv->fullTilesOnly == false)
+    if (pDesc->fullTilesOnly == false)
     {
         // include partial tiles
-        macroTileStartX = rect.left / macroWidth;
-        macroTileStartY = rect.top / macroHeight;
-
-        macroTileEndX = (rect.right + macroWidth - 1) / macroWidth;
-        macroTileEndY = (rect.bottom + macroHeight - 1) / macroHeight;
+        macroTileXMin = pDesc->rect.xmin / KNOB_MACROTILE_X_DIM;
+        macroTileXMax = (pDesc->rect.xmax - 1) / KNOB_MACROTILE_X_DIM;
+        macroTileYMin = pDesc->rect.ymin / KNOB_MACROTILE_Y_DIM;
+        macroTileYMax = (pDesc->rect.ymax - 1) / KNOB_MACROTILE_Y_DIM;
     }
 
-    SWR_ASSERT(macroTileEndX <= KNOB_NUM_HOT_TILES_X);
-    SWR_ASSERT(macroTileEndY <= KNOB_NUM_HOT_TILES_Y);
+    SWR_ASSERT(macroTileXMax <= KNOB_NUM_HOT_TILES_X);
+    SWR_ASSERT(macroTileYMax <= KNOB_NUM_HOT_TILES_Y);
 
-    macroTileEndX = std::min<uint32_t>(macroTileEndX, KNOB_NUM_HOT_TILES_X);
-    macroTileEndY = std::min<uint32_t>(macroTileEndY, KNOB_NUM_HOT_TILES_Y);
+    macroTileXMax = std::min<int32_t>(macroTileXMax, KNOB_NUM_HOT_TILES_X);
+    macroTileYMax = std::min<int32_t>(macroTileYMax, KNOB_NUM_HOT_TILES_Y);
 
     // load tiles
     BE_WORK work;
     work.type = DISCARDINVALIDATETILES;
     work.pfnWork = ProcessDiscardInvalidateTilesBE;
-    work.desc.discardInvalidateTiles = *pInv;
+    work.desc.discardInvalidateTiles = *pDesc;
 
-    for (uint32_t x = macroTileStartX; x < macroTileEndX; ++x)
+    for (uint32_t x = macroTileXMin; x <= macroTileXMax; ++x)
     {
-        for (uint32_t y = macroTileStartY; y < macroTileEndY; ++y)
+        for (uint32_t y = macroTileYMin; y <= macroTileYMax; ++y)
         {
             pTileMgr->enqueue(x, y, &work);
         }
@@ -520,6 +465,70 @@ static INLINE simdscalari GenerateMask(uint32_t numItemsRemaining)
     return _simd_castps_si(vMask(mask));
 }
 
+
+//////////////////////////////////////////////////////////////////////////
+/// @brief  Gather scissor rect data based on per-prim viewport indices.
+/// @param pScissorsInFixedPoint - array of scissor rects in 16.8 fixed point.
+/// @param pViewportIndex - array of per-primitive vewport indexes.
+/// @param scisXmin - output vector of per-prmitive scissor rect Xmin data.
+/// @param scisYmin - output vector of per-prmitive scissor rect Ymin data.
+/// @param scisXmax - output vector of per-prmitive scissor rect Xmax data.
+/// @param scisYmax - output vector of per-prmitive scissor rect Ymax data.
+//
+/// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
+template<size_t SimdWidth>
+struct GatherScissors
+{
+    static void Gather(const SWR_RECT* pScissorsInFixedPoint, const uint32_t* pViewportIndex,
+        simdscalari &scisXmin, simdscalari &scisYmin,
+        simdscalari &scisXmax, simdscalari &scisYmax)
+    {
+        SWR_ASSERT(0, "Unhandled Simd Width in Scissor Rect Gather");
+    }
+};
+
+template<>
+struct GatherScissors<8>
+{
+    static void Gather(const SWR_RECT* pScissorsInFixedPoint, const uint32_t* pViewportIndex,
+        simdscalari &scisXmin, simdscalari &scisYmin,
+        simdscalari &scisXmax, simdscalari &scisYmax)
+    {
+        scisXmin = _simd_set_epi32(pScissorsInFixedPoint[pViewportIndex[0]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[1]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[2]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[3]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[4]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[5]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[6]].xmin,
+            pScissorsInFixedPoint[pViewportIndex[7]].xmin);
+        scisYmin = _simd_set_epi32(pScissorsInFixedPoint[pViewportIndex[0]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[1]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[2]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[3]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[4]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[5]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[6]].ymin,
+            pScissorsInFixedPoint[pViewportIndex[7]].ymin);
+        scisXmax = _simd_set_epi32(pScissorsInFixedPoint[pViewportIndex[0]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[1]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[2]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[3]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[4]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[5]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[6]].xmax,
+            pScissorsInFixedPoint[pViewportIndex[7]].xmax);
+        scisYmax = _simd_set_epi32(pScissorsInFixedPoint[pViewportIndex[0]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[1]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[2]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[3]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[4]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[5]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[6]].ymax,
+            pScissorsInFixedPoint[pViewportIndex[7]].ymax);
+    }
+};
+
 //////////////////////////////////////////////////////////////////////////
 /// @brief StreamOut - Streams vertex data out to SO buffers.
 ///        Generally, we are only streaming out a SIMDs worth of triangles.
@@ -534,8 +543,6 @@ static void StreamOut(
     uint32_t streamIndex)
 {
     RDTSC_START(FEStreamout);
-
-    SWR_CONTEXT* pContext = pDC->pContext;
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_STREAMOUT_STATE &soState = state.soState;
@@ -596,15 +603,17 @@ static void StreamOut(
         if (state.soBuffer[i].pWriteOffset)
         {
             *state.soBuffer[i].pWriteOffset = soContext.pBuffer[i]->streamOffset * sizeof(uint32_t);
+        }
 
-            // The SOS increments the existing write offset. So we don't want to increment
-            // the SoWriteOffset stat using an absolute offset instead of relative.
-            SET_STAT(SoWriteOffset[i], soContext.pBuffer[i]->streamOffset);
+        if (state.soBuffer[i].soWriteEnable)
+        {
+            pDC->dynState.SoWriteOffset[i] = soContext.pBuffer[i]->streamOffset * sizeof(uint32_t);
+            pDC->dynState.SoWriteOffsetDirty[i] = true;
         }
     }
 
-    UPDATE_STAT(SoPrimStorageNeeded[streamIndex], soContext.numPrimStorageNeeded);
-    UPDATE_STAT(SoNumPrimsWritten[streamIndex], soContext.numPrimsWritten);
+    UPDATE_STAT_FE(SoPrimStorageNeeded[streamIndex], soContext.numPrimStorageNeeded);
+    UPDATE_STAT_FE(SoNumPrimsWritten[streamIndex], soContext.numPrimsWritten);
 
     RDTSC_STOP(FEStreamout, 1, 0);
 }
@@ -612,7 +621,7 @@ static void StreamOut(
 //////////////////////////////////////////////////////////////////////////
 /// @brief Computes number of invocations. The current index represents
 ///        the start of the SIMD. The max index represents how much work
-///        items are remaining. If there is less then a SIMD's left of work
+///        items are remaining. If there is less then a SIMD's xmin of work
 ///        then return the remaining amount of work.
 /// @param curIndex - The start index for the SIMD.
 /// @param maxIndex - The last index for all work items.
@@ -690,8 +699,6 @@ static void GeometryShaderStage(
     simdscalari primID)
 {
     RDTSC_START(FEGeometryShader);
-
-    SWR_CONTEXT* pContext = pDC->pContext;
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_GS_STATE* pState = &state.gsState;
@@ -856,7 +863,26 @@ static void GeometryShaderStage(
                                     vPrimId = _simd_set1_epi32(pPrimitiveId[inputPrim]);
                                 }
 
-                                pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId);
+                                // use viewport array index if GS declares it as an output attribute. Otherwise use index 0.
+                                simdscalari vViewPortIdx;
+                                if (state.gsState.emitsViewportArrayIndex)
+                                {
+                                    simdvector vpiAttrib[3];
+                                    gsPa.Assemble(VERTEX_VIEWPORT_ARRAY_INDEX_SLOT, vpiAttrib);
+
+                                    // OOB indices => forced to zero.
+                                    simdscalari vNumViewports = _simd_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                    simdscalari vClearMask = _simd_cmplt_epi32(_simd_castps_si(vpiAttrib[0].x), vNumViewports);
+                                    vpiAttrib[0].x = _simd_and_ps(_simd_castsi_ps(vClearMask), vpiAttrib[0].x);
+
+                                    vViewPortIdx = _simd_castps_si(vpiAttrib[0].x);
+                                }
+                                else
+                                {
+                                    vViewPortIdx = _simd_set1_epi32(0);
+                                }
+
+                                pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId, vViewPortIdx);
                             }
                         }
                     } while (gsPa.NextPrim());
@@ -866,8 +892,8 @@ static void GeometryShaderStage(
     }
 
     // update GS pipeline stats
-    UPDATE_STAT(GsInvocations, numInputPrims * pState->instanceCount);
-    UPDATE_STAT(GsPrimitives, totalPrimsGenerated);
+    UPDATE_STAT_FE(GsInvocations, numInputPrims * pState->instanceCount);
+    UPDATE_STAT_FE(GsPrimitives, totalPrimsGenerated);
 
     RDTSC_STOP(FEGeometryShader, 1, 0);
 }
@@ -966,7 +992,6 @@ static void TessellationStages(
 {
     const API_STATE& state = GetApiState(pDC);
     const SWR_TS_STATE& tsState = state.tsState;
-    SWR_CONTEXT *pContext = pDC->pContext; // Needed for UPDATE_STATS macro
 
     SWR_ASSERT(gt_pTessellationThreadData);
 
@@ -1032,7 +1057,7 @@ static void TessellationStages(
     state.pfnHsFunc(GetPrivateState(pDC), &hsContext);
     RDTSC_STOP(FEHullShader, 0, 0);
 
-    UPDATE_STAT(HsInvocations, numPrims);
+    UPDATE_STAT_FE(HsInvocations, numPrims);
 
     const uint32_t* pPrimId = (const uint32_t*)&primID;
 
@@ -1088,7 +1113,7 @@ static void TessellationStages(
 
             dsInvocations += KNOB_SIMD_WIDTH;
         }
-        UPDATE_STAT(DsInvocations, tsData.NumDomainPoints);
+        UPDATE_STAT_FE(DsInvocations, tsData.NumDomainPoints);
 
         PA_TESS tessPa(
             pDC,
@@ -1127,7 +1152,7 @@ static void TessellationStages(
 
                     SWR_ASSERT(pfnClipFunc);
                     pfnClipFunc(pDC, tessPa, workerId, prim,
-                        GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID));
+                        GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID), _simd_set1_epi32(0));
                 }
             }
 
@@ -1267,13 +1292,6 @@ void ProcessDraw(
     if (HasStreamOutT::value)
     {
         pSoPrimData = (uint32_t*)pDC->pArena->AllocAligned(4096, 16);
-
-        // update the
-        for (uint32_t i = 0; i < 4; ++i)
-        {
-            SET_STAT(SoWriteOffset[i], state.soBuffer[i].streamOffset);
-        }
-
     }
 
     // choose primitive assembler
@@ -1332,7 +1350,7 @@ void ProcessDraw(
                     *pvCutIndices = _simd_movemask_ps(_simd_castsi_ps(fetchInfo.CutMask));
                 }
 
-                UPDATE_STAT(IaVertices, GetNumInvocations(i, endVertex));
+                UPDATE_STAT_FE(IaVertices, GetNumInvocations(i, endVertex));
 
 #if KNOB_ENABLE_TOSS_POINTS
                 if (!KNOB_TOSS_FETCH)
@@ -1342,7 +1360,7 @@ void ProcessDraw(
                     state.pfnVertexFunc(GetPrivateState(pDC), &vsContext);
                     RDTSC_STOP(FEVertexShader, 0, 0);
 
-                    UPDATE_STAT(VsInvocations, GetNumInvocations(i, endVertex));
+                    UPDATE_STAT_FE(VsInvocations, GetNumInvocations(i, endVertex));
                 }
             }
 
@@ -1365,7 +1383,7 @@ void ProcessDraw(
                     {
                         if (assemble)
                         {
-                            UPDATE_STAT(IaPrimitives, pa.NumPrims());
+                            UPDATE_STAT_FE(IaPrimitives, pa.NumPrims());
 
                             if (HasTessellationT::value)
                             {
@@ -1389,7 +1407,7 @@ void ProcessDraw(
                                 {
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims);
                                     pDC->pState->pfnProcessPrims(pDC, pa, workerId, prim,
-                                        GenMask(pa.NumPrims()), pa.GetPrimID(work.startPrimID));
+                                        GenMask(pa.NumPrims()), pa.GetPrimID(work.startPrimID), _simd_set1_epi32(0));
                                 }
                             }
                         }
@@ -1446,7 +1464,7 @@ PFN_FE_WORK_FUNC GetProcessDrawFunc(
 /// @param pLinkageMap - maps VS attribute slot to PS slot
 /// @param triIndex - Triangle to process attributes for
 /// @param pBuffer - Output result
-template<typename NumVertsT, typename IsSwizzledT, typename HasConstantInterpT>
+template<typename NumVertsT, typename IsSwizzledT, typename HasConstantInterpT, typename IsDegenerate>
 INLINE void ProcessAttributes(
     DRAW_CONTEXT *pDC,
     PA_STATE&pa,
@@ -1456,7 +1474,8 @@ INLINE void ProcessAttributes(
 {
     static_assert(NumVertsT::value > 0 && NumVertsT::value <= 3, "Invalid value for NumVertsT");
     const SWR_BACKEND_STATE& backendState = pDC->pState->state.backendState;
-    LONG constantInterpMask = backendState.constantInterpolationMask;
+    // Conservative Rasterization requires degenerate tris to have constant attribute interpolation
+    LONG constantInterpMask = IsDegenerate::value ? 0xFFFFFFFF : backendState.constantInterpolationMask;
     const uint32_t provokingVertex = pDC->pState->state.frontendState.topologyProvokingVertex;
     const PRIMITIVE_TOPOLOGY topo = pDC->pState->state.topology;
 
@@ -1483,7 +1502,7 @@ INLINE void ProcessAttributes(
         __m128 attrib[3];    // triangle attribs (always 4 wide)
         float* pAttribStart = pBuffer;
 
-        if (HasConstantInterpT::value)
+        if (HasConstantInterpT::value || IsDegenerate::value)
         {
             if (_bittest(&constantInterpMask, i))
             {
@@ -1605,9 +1624,9 @@ struct ProcessAttributesChooser
     }
 };
 
-PFN_PROCESS_ATTRIBUTES GetProcessAttributesFunc(uint32_t NumVerts, bool IsSwizzled, bool HasConstantInterp)
+PFN_PROCESS_ATTRIBUTES GetProcessAttributesFunc(uint32_t NumVerts, bool IsSwizzled, bool HasConstantInterp, bool IsDegenerate = false)
 {
-    return TemplateArgUnroller<ProcessAttributesChooser>::GetFunc(IntArg<1, 3>{NumVerts}, IsSwizzled, HasConstantInterp);
+    return TemplateArgUnroller<ProcessAttributesChooser>::GetFunc(IntArg<1, 3>{NumVerts}, IsSwizzled, HasConstantInterp, IsDegenerate);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1668,38 +1687,19 @@ INLINE simdscalari fpToFixedPointVertical(const simdscalar vIn)
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief Helper function to set the X,Y coords of a triangle to the 
-/// requested Fixed Point precision from FP32. If the RequestedT
-/// FixedPointTraits precision is the same as the CurrentT, no extra
-/// conversions will be done. If they are different, convert from FP32
-/// to the Requested precision and set vXi, vYi
-/// @tparam RequestedT: requested FixedPointTraits type
-/// @tparam CurrentT: FixedPointTraits type of the last 
-template<typename RequestedT, typename CurrentT = FixedPointTraits<Fixed_Uninit>>
-struct FPToFixedPoint
+/// requested Fixed Point precision from FP32.
+/// @param tri: simdvector[3] of FP triangle verts
+/// @param vXi: fixed point X coords of tri verts
+/// @param vYi: fixed point Y coords of tri verts
+INLINE static void FPToFixedPoint(const simdvector * const tri, simdscalari (&vXi)[3], simdscalari (&vYi)[3])
 {
-    //////////////////////////////////////////////////////////////////////////
-    /// @param tri: simdvector[3] of FP triangle verts
-    /// @param vXi: fixed point X coords of tri verts
-    /// @param vYi: fixed point Y coords of tri verts
-    INLINE static void Set(const simdvector * const tri, simdscalari (&vXi)[3], simdscalari (&vYi)[3])
-    {
-        vXi[0] = fpToFixedPointVertical<RequestedT>(tri[0].x);
-        vYi[0] = fpToFixedPointVertical<RequestedT>(tri[0].y);
-        vXi[1] = fpToFixedPointVertical<RequestedT>(tri[1].x);
-        vYi[1] = fpToFixedPointVertical<RequestedT>(tri[1].y);
-        vXi[2] = fpToFixedPointVertical<RequestedT>(tri[2].x);
-        vYi[2] = fpToFixedPointVertical<RequestedT>(tri[2].y);
-    };
-};
-
-//////////////////////////////////////////////////////////////////////////
-/// @brief In the case where the RequestedT and CurrentT fixed point 
-/// precisions are the same, do nothing.
-template<typename RequestedT>
-struct FPToFixedPoint<RequestedT, RequestedT>
-{
-    INLINE static void Set(const simdvector * const tri, simdscalari (&vXi)[3], simdscalari (&vYi)[3]){};
-};
+    vXi[0] = fpToFixedPointVertical(tri[0].x);
+    vYi[0] = fpToFixedPointVertical(tri[0].y);
+    vXi[1] = fpToFixedPointVertical(tri[1].x);
+    vYi[1] = fpToFixedPointVertical(tri[1].y);
+    vXi[2] = fpToFixedPointVertical(tri[2].x);
+    vYi[2] = fpToFixedPointVertical(tri[2].y);
+}
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief Calculate bounding box for current triangle
@@ -1710,20 +1710,8 @@ struct FPToFixedPoint<RequestedT, RequestedT>
 /// *Note*: expects vX, vY to be in the correct precision for the type 
 /// of rasterization. This avoids unnecessary FP->fixed conversions.
 template <typename CT>
-INLINE void calcBoundingBoxIntVertical(const simdvector * const tri, simdscalari (&vX)[3], simdscalari (&vY)[3], simdBBox &bbox){}
-
-//////////////////////////////////////////////////////////////////////////
-/// @brief FEStandardRastT specialization of calcBoundingBoxIntVertical
-template <>
-INLINE void calcBoundingBoxIntVertical<FEStandardRastT>(const simdvector * const tri, simdscalari (&vX)[3], simdscalari (&vY)[3], simdBBox &bbox)
+INLINE void calcBoundingBoxIntVertical(const simdvector * const tri, simdscalari (&vX)[3], simdscalari (&vY)[3], simdBBox &bbox)
 {
-    // FE conservative rast traits
-    typedef FEStandardRastT CT;
-
-    static_assert(std::is_same<CT::BBoxPrecisionT, FixedPointTraits<Fixed_16_8>>::value, "Standard rast BBox calculation needs to be in 16.8 precision");
-    // Update vXi, vYi fixed point precision for BBox calculation if necessary
-    FPToFixedPoint<CT::BBoxPrecisionT, CT::ZeroAreaPrecisionT>::Set(tri, vX, vY);
-
     simdscalari vMinX = vX[0];
     vMinX = _simd_min_epi32(vMinX, vX[1]);
     vMinX = _simd_min_epi32(vMinX, vX[2]);
@@ -1740,10 +1728,10 @@ INLINE void calcBoundingBoxIntVertical<FEStandardRastT>(const simdvector * const
     vMaxY = _simd_max_epi32(vMaxY, vY[1]);
     vMaxY = _simd_max_epi32(vMaxY, vY[2]);
 
-    bbox.left = vMinX;
-    bbox.right = vMaxX;
-    bbox.top = vMinY;
-    bbox.bottom = vMaxY;
+    bbox.xmin = vMinX;
+    bbox.xmax = vMaxX;
+    bbox.ymin = vMinY;
+    bbox.ymax = vMaxY;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1754,10 +1742,6 @@ INLINE void calcBoundingBoxIntVertical<FEConservativeRastT>(const simdvector * c
 {
     // FE conservative rast traits
     typedef FEConservativeRastT CT;
-
-    static_assert(std::is_same<CT::BBoxPrecisionT, FixedPointTraits<Fixed_16_9>>::value, "Conservative rast BBox calculation needs to be in 16.9 precision");
-    // Update vXi, vYi fixed point precision for BBox calculation if necessary
-    FPToFixedPoint<CT::BBoxPrecisionT, CT::ZeroAreaPrecisionT>::Set(tri, vX, vY);
 
     simdscalari vMinX = vX[0];
     vMinX = _simd_min_epi32(vMinX, vX[1]);
@@ -1776,10 +1760,11 @@ INLINE void calcBoundingBoxIntVertical<FEConservativeRastT>(const simdvector * c
     vMaxY = _simd_max_epi32(vMaxY, vY[2]);
     
     /// Bounding box needs to be expanded by 1/512 before snapping to 16.8 for conservative rasterization
-    bbox.left = _simd_srli_epi32(_simd_sub_epi32(vMinX, _simd_set1_epi32(CT::BoundingBoxOffsetT::value)), CT::BoundingBoxShiftT::value);
-    bbox.right = _simd_srli_epi32(_simd_add_epi32(vMaxX, _simd_set1_epi32(CT::BoundingBoxOffsetT::value)), CT::BoundingBoxShiftT::value);
-    bbox.top = _simd_srli_epi32(_simd_sub_epi32(vMinY, _simd_set1_epi32(CT::BoundingBoxOffsetT::value)), CT::BoundingBoxShiftT::value);
-    bbox.bottom = _simd_srli_epi32(_simd_add_epi32(vMaxY, _simd_set1_epi32(CT::BoundingBoxOffsetT::value)), CT::BoundingBoxShiftT::value);
+    /// expand bbox by 1/256; coverage will be correctly handled in the rasterizer.
+    bbox.xmin = _simd_sub_epi32(vMinX, _simd_set1_epi32(CT::BoundingBoxOffsetT::value));
+    bbox.xmax = _simd_add_epi32(vMaxX, _simd_set1_epi32(CT::BoundingBoxOffsetT::value));
+    bbox.ymin = _simd_sub_epi32(vMinY, _simd_set1_epi32(CT::BoundingBoxOffsetT::value));
+    bbox.ymax = _simd_add_epi32(vMaxY, _simd_set1_epi32(CT::BoundingBoxOffsetT::value));
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1790,6 +1775,7 @@ INLINE void calcBoundingBoxIntVertical<FEConservativeRastT>(const simdvector * c
 /// @param workerId - thread's worker id. Even thread has a unique id.
 /// @param tri - Contains triangle position data for SIMDs worth of triangles.
 /// @param primID - Primitive ID for each triangle.
+/// @param viewportIdx - viewport array index for each triangle.
 /// @tparam CT - ConservativeRastFETraits
 template <typename CT>
 void BinTriangles(
@@ -1798,7 +1784,8 @@ void BinTriangles(
     uint32_t workerId,
     simdvector tri[3],
     uint32_t triMask,
-    simdscalari primID)
+    simdscalari primID,
+    simdscalari viewportIdx)
 {
     RDTSC_START(FEBinTriangles);
 
@@ -1808,18 +1795,21 @@ void BinTriangles(
     const SWR_GS_STATE& gsState = state.gsState;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
-    // Select attribute processor
-    PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(3,
-        state.backendState.swizzleEnable, state.backendState.constantInterpolationMask);
-
 
     simdscalar vRecipW0 = _simd_set1_ps(1.0f);
     simdscalar vRecipW1 = _simd_set1_ps(1.0f);
     simdscalar vRecipW2 = _simd_set1_ps(1.0f);
 
-    if (!feState.vpTransformDisable)
+    if (feState.vpTransformDisable)
     {
-        // perspective divide
+        // RHW is passed in directly when VP transform is disabled
+        vRecipW0 = tri[0].v[3];
+        vRecipW1 = tri[1].v[3];
+        vRecipW2 = tri[2].v[3];
+    }
+    else
+    {
+        // Perspective divide
         vRecipW0 = _simd_div_ps(_simd_set1_ps(1.0f), tri[0].w);
         vRecipW1 = _simd_div_ps(_simd_set1_ps(1.0f), tri[1].w);
         vRecipW2 = _simd_div_ps(_simd_set1_ps(1.0f), tri[2].w);
@@ -1836,11 +1826,18 @@ void BinTriangles(
         tri[1].v[2] = _simd_mul_ps(tri[1].v[2], vRecipW1);
         tri[2].v[2] = _simd_mul_ps(tri[2].v[2], vRecipW2);
 
-        // viewport transform to screen coords
-        viewportTransform<3>(tri, state.vpMatrix[0]);
+        // Viewport transform to screen space coords
+        if (state.gsState.emitsViewportArrayIndex)
+        {
+            viewportTransform<3>(tri, state.vpMatrices, viewportIdx);
+        }
+        else
+        {
+            viewportTransform<3>(tri, state.vpMatrices);
+        }
     }
 
-    // adjust for pixel center location
+    // Adjust for pixel center location
     simdscalar offset = g_pixelOffsets[rastState.pixelLocation];
     tri[0].x = _simd_add_ps(tri[0].x, offset);
     tri[0].y = _simd_add_ps(tri[0].y, offset);
@@ -1852,8 +1849,8 @@ void BinTriangles(
     tri[2].y = _simd_add_ps(tri[2].y, offset);
 
     simdscalari vXi[3], vYi[3];
-    // Set vXi, vYi to fixed point precision required for degenerate triangle check
-    FPToFixedPoint<typename CT::ZeroAreaPrecisionT>::Set(tri, vXi, vYi);
+    // Set vXi, vYi to required fixed point precision
+    FPToFixedPoint(tri, vXi, vYi);
 
     // triangle setup
     simdscalari vAi[3], vBi[3];
@@ -1863,8 +1860,6 @@ void BinTriangles(
     simdscalari vDet[2];
     calcDeterminantIntVertical(vAi, vBi, vDet);
 
-    /// todo: handle degen tri's for Conservative Rast.  
-
     // cull zero area
     int maskLo = _simd_movemask_pd(_simd_castsi_pd(_simd_cmpeq_epi64(vDet[0], _simd_setzero_si())));
     int maskHi = _simd_movemask_pd(_simd_castsi_pd(_simd_cmpeq_epi64(vDet[1], _simd_setzero_si())));
@@ -1872,11 +1867,15 @@ void BinTriangles(
     int cullZeroAreaMask = maskLo | (maskHi << (KNOB_SIMD_WIDTH / 2));
 
     uint32_t origTriMask = triMask;
-    triMask &= ~cullZeroAreaMask;
+    // don't cull degenerate triangles if we're conservatively rasterizing
+    if(!CT::IsConservativeT::value)
+    {
+        triMask &= ~cullZeroAreaMask;
+    }
 
     // determine front winding tris
     // CW  +det
-    // CCW -det
+    // CCW det <= 0; 0 area triangles are marked as backfacing, which is required behavior for conservative rast
     maskLo = _simd_movemask_pd(_simd_castsi_pd(_simd_cmpgt_epi64(vDet[0], _simd_setzero_si())));
     maskHi = _simd_movemask_pd(_simd_castsi_pd(_simd_cmpgt_epi64(vDet[1], _simd_setzero_si())));
     int cwTriMask = maskLo | (maskHi << (KNOB_SIMD_WIDTH /2) );
@@ -1898,6 +1897,7 @@ void BinTriangles(
     case SWR_CULLMODE_BOTH:  cullTris = 0xffffffff; break;
     case SWR_CULLMODE_NONE:  cullTris = 0x0; break;
     case SWR_CULLMODE_FRONT: cullTris = frontWindingTris; break;
+    // 0 area triangles are marked as backfacing, which is required behavior for conservative rast
     case SWR_CULLMODE_BACK:  cullTris = ~frontWindingTris; break;
     default: SWR_ASSERT(false, "Invalid cull mode: %d", rastState.cullMode); cullTris = 0x0; break;
     }
@@ -1913,12 +1913,57 @@ void BinTriangles(
     // compute per tri backface
     uint32_t frontFaceMask = frontWindingTris;
     uint32_t *pPrimID = (uint32_t *)&primID;
+    const uint32_t *pViewportIndex = (uint32_t *)&viewportIdx;
     DWORD triIndex = 0;
     // for center sample pattern, all samples are at pixel center; calculate coverage
     // once at center and broadcast the results in the backend
-    uint32_t sampleCount = (rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN) ? rastState.sampleCount : SWR_MULTISAMPLE_1X;
-    PFN_WORK_FUNC pfnWork = GetRasterizerFunc(sampleCount, (rastState.conservativeRast > 0),
-                                              pDC->pState->state.psState.inputCoverage, (rastState.scissorEnable > 0));
+    const SWR_MULTISAMPLE_COUNT sampleCount = (rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN) ? rastState.sampleCount : SWR_MULTISAMPLE_1X;
+    uint32_t edgeEnable;
+    PFN_WORK_FUNC pfnWork;
+    if(CT::IsConservativeT::value)
+    {
+        // determine which edges of the degenerate tri, if any, are valid to rasterize.
+        // used to call the appropriate templated rasterizer function
+        if(cullZeroAreaMask > 0)
+        {
+            // e0 = v1-v0
+            simdscalari x0x1Mask = _simd_cmpeq_epi32(vXi[0], vXi[1]);
+            simdscalari y0y1Mask = _simd_cmpeq_epi32(vYi[0], vYi[1]);
+            uint32_t e0Mask = _simd_movemask_ps(_simd_castsi_ps(_simd_and_si(x0x1Mask, y0y1Mask)));
+
+            // e1 = v2-v1
+            simdscalari x1x2Mask = _simd_cmpeq_epi32(vXi[1], vXi[2]);
+            simdscalari y1y2Mask = _simd_cmpeq_epi32(vYi[1], vYi[2]);
+            uint32_t e1Mask = _simd_movemask_ps(_simd_castsi_ps(_simd_and_si(x1x2Mask, y1y2Mask)));
+
+            // e2 = v0-v2
+            // if v0 == v1 & v1 == v2, v0 == v2
+            uint32_t e2Mask = e0Mask & e1Mask;
+            SWR_ASSERT(KNOB_SIMD_WIDTH == 8, "Need to update degenerate mask code for avx512");
+
+            // edge order: e0 = v0v1, e1 = v1v2, e2 = v0v2
+            // 32 bit binary: 0000 0000 0010 0100 1001 0010 0100 1001
+            e0Mask = pdep_u32(e0Mask, 0x00249249);
+            // 32 bit binary: 0000 0000 0100 1001 0010 0100 1001 0010
+            e1Mask = pdep_u32(e1Mask, 0x00492492);
+            // 32 bit binary: 0000 0000 1001 0010 0100 1001 0010 0100
+            e2Mask = pdep_u32(e2Mask, 0x00924924);
+
+            edgeEnable = (0x00FFFFFF & (~(e0Mask | e1Mask | e2Mask)));
+        }
+        else
+        {
+            edgeEnable = 0x00FFFFFF;
+        }
+    }
+    else
+    {
+        // degenerate triangles won't be sent to rasterizer; just enable all edges
+        pfnWork = GetRasterizerFunc(sampleCount, (rastState.conservativeRast > 0),
+                                    (SWR_INPUT_COVERAGE)pDC->pState->state.psState.inputCoverage, ALL_EDGES_VALID, 
+                                    (state.scissorsTileAligned == false));
+    }
+
     if (!triMask)
     {
         goto endBinTriangles;
@@ -1930,27 +1975,27 @@ void BinTriangles(
 
     // determine if triangle falls between pixel centers and discard
     // only discard for non-MSAA case and when conservative rast is disabled
-    // (left + 127) & ~255
-    // (right + 128) & ~255
+    // (xmin + 127) & ~255
+    // (xmax + 128) & ~255
     if(rastState.sampleCount == SWR_MULTISAMPLE_1X && (!CT::IsConservativeT::value))
     {
         origTriMask = triMask;
 
         int cullCenterMask;
         {
-            simdscalari left = _simd_add_epi32(bbox.left, _simd_set1_epi32(127));
-            left = _simd_and_si(left, _simd_set1_epi32(~255));
-            simdscalari right = _simd_add_epi32(bbox.right, _simd_set1_epi32(128));
-            right = _simd_and_si(right, _simd_set1_epi32(~255));
+            simdscalari xmin = _simd_add_epi32(bbox.xmin, _simd_set1_epi32(127));
+            xmin = _simd_and_si(xmin, _simd_set1_epi32(~255));
+            simdscalari xmax = _simd_add_epi32(bbox.xmax, _simd_set1_epi32(128));
+            xmax = _simd_and_si(xmax, _simd_set1_epi32(~255));
 
-            simdscalari vMaskH = _simd_cmpeq_epi32(left, right);
+            simdscalari vMaskH = _simd_cmpeq_epi32(xmin, xmax);
 
-            simdscalari top = _simd_add_epi32(bbox.top, _simd_set1_epi32(127));
-            top = _simd_and_si(top, _simd_set1_epi32(~255));
-            simdscalari bottom = _simd_add_epi32(bbox.bottom, _simd_set1_epi32(128));
-            bottom = _simd_and_si(bottom, _simd_set1_epi32(~255));
+            simdscalari ymin = _simd_add_epi32(bbox.ymin, _simd_set1_epi32(127));
+            ymin = _simd_and_si(ymin, _simd_set1_epi32(~255));
+            simdscalari ymax = _simd_add_epi32(bbox.ymax, _simd_set1_epi32(128));
+            ymax = _simd_and_si(ymax, _simd_set1_epi32(~255));
 
-            simdscalari vMaskV = _simd_cmpeq_epi32(top, bottom);
+            simdscalari vMaskV = _simd_cmpeq_epi32(ymin, ymax);
             vMaskV = _simd_or_si(vMaskH, vMaskV);
             cullCenterMask = _simd_movemask_ps(_simd_castsi_ps(vMaskV));
         }
@@ -1963,16 +2008,42 @@ void BinTriangles(
         }
     }
 
-    // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since right/bottom edge is exclusive.
-    bbox.left   = _simd_max_epi32(bbox.left, _simd_set1_epi32(state.scissorInFixedPoint.left));
-    bbox.top    = _simd_max_epi32(bbox.top, _simd_set1_epi32(state.scissorInFixedPoint.top));
-    bbox.right  = _simd_min_epi32(_simd_sub_epi32(bbox.right, _simd_set1_epi32(1)), _simd_set1_epi32(state.scissorInFixedPoint.right));
-    bbox.bottom = _simd_min_epi32(_simd_sub_epi32(bbox.bottom, _simd_set1_epi32(1)), _simd_set1_epi32(state.scissorInFixedPoint.bottom));
+    // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
+    // Gather the AOS effective scissor rects based on the per-prim VP index.
+    /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
+    simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
+    if (state.gsState.emitsViewportArrayIndex)
+    {
+        GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                                                scisXmin, scisYmin, scisXmax, scisYmax);
+    }
+    else // broadcast fast path for non-VPAI case.
+    {
+        scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+        scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+        scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+        scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+    }
+
+    bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
+    bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
+    bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
+    bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
+
+    if(CT::IsConservativeT::value)
+    {
+        // in the case where a degenerate triangle is on a scissor edge, we need to make sure the primitive bbox has
+        // some area. Bump the xmax/ymax edges out 
+        simdscalari topEqualsBottom = _simd_cmpeq_epi32(bbox.ymin, bbox.ymax);
+        bbox.ymax = _simd_blendv_epi32(bbox.ymax, _simd_add_epi32(bbox.ymax, _simd_set1_epi32(1)), topEqualsBottom);
+        simdscalari leftEqualsRight = _simd_cmpeq_epi32(bbox.xmin, bbox.xmax);
+        bbox.xmax = _simd_blendv_epi32(bbox.xmax, _simd_add_epi32(bbox.xmax, _simd_set1_epi32(1)), leftEqualsRight);
+    }
 
     // Cull tris completely outside scissor
     {
-        simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.left, bbox.right);
-        simdscalari maskOutsideScissorY = _simd_cmpgt_epi32(bbox.top, bbox.bottom);
+        simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.xmin, bbox.xmax);
+        simdscalari maskOutsideScissorY = _simd_cmpgt_epi32(bbox.ymin, bbox.ymax);
         simdscalari maskOutsideScissorXY = _simd_or_si(maskOutsideScissorX, maskOutsideScissorY);
         uint32_t maskOutsideScissor = _simd_movemask_ps(_simd_castsi_ps(maskOutsideScissorXY));
         triMask = triMask & ~maskOutsideScissor;
@@ -1984,16 +2055,16 @@ void BinTriangles(
     }
 
     // Convert triangle bbox to macrotile units.
-    bbox.left = _simd_srai_epi32(bbox.left, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
-    bbox.top = _simd_srai_epi32(bbox.top, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
-    bbox.right = _simd_srai_epi32(bbox.right, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
-    bbox.bottom = _simd_srai_epi32(bbox.bottom, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
+    bbox.xmin = _simd_srai_epi32(bbox.xmin, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
+    bbox.ymin = _simd_srai_epi32(bbox.ymin, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
+    bbox.xmax = _simd_srai_epi32(bbox.xmax, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
+    bbox.ymax = _simd_srai_epi32(bbox.ymax, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
 
     OSALIGNSIMD(uint32_t) aMTLeft[KNOB_SIMD_WIDTH], aMTRight[KNOB_SIMD_WIDTH], aMTTop[KNOB_SIMD_WIDTH], aMTBottom[KNOB_SIMD_WIDTH];
-    _simd_store_si((simdscalari*)aMTLeft, bbox.left);
-    _simd_store_si((simdscalari*)aMTRight, bbox.right);
-    _simd_store_si((simdscalari*)aMTTop, bbox.top);
-    _simd_store_si((simdscalari*)aMTBottom, bbox.bottom);
+    _simd_store_si((simdscalari*)aMTLeft, bbox.xmin);
+    _simd_store_si((simdscalari*)aMTRight, bbox.xmax);
+    _simd_store_si((simdscalari*)aMTTop, bbox.ymin);
+    _simd_store_si((simdscalari*)aMTBottom, bbox.ymax);
 
     // transpose verts needed for backend
     /// @todo modify BE to take non-transformed verts
@@ -2026,14 +2097,36 @@ void BinTriangles(
 
         BE_WORK work;
         work.type = DRAW;
-        work.pfnWork = pfnWork;
+        
+        bool isDegenerate;
+        if(CT::IsConservativeT::value)
+        {
+            // only rasterize valid edges if we have a degenerate primitive
+            int32_t triEdgeEnable = (edgeEnable >> (triIndex * 3)) & ALL_EDGES_VALID;
+            work.pfnWork = GetRasterizerFunc(sampleCount, (rastState.conservativeRast > 0),
+                                        (SWR_INPUT_COVERAGE)pDC->pState->state.psState.inputCoverage, triEdgeEnable,
+                                        (state.scissorsTileAligned == false));
+
+            // Degenerate triangles are required to be constant interpolated
+            isDegenerate = (triEdgeEnable != ALL_EDGES_VALID) ? true : false;
+        }
+        else
+        {
+            isDegenerate = false;
+            work.pfnWork = pfnWork;
+        }
+
+        // Select attribute processor
+        PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(3,
+            state.backendState.swizzleEnable,  state.backendState.constantInterpolationMask, isDegenerate);
 
         TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
         desc.triFlags.frontFacing = state.forceFront ? 1 : ((frontFaceMask >> triIndex) & 1);
         desc.triFlags.primID = pPrimID[triIndex];
         desc.triFlags.renderTargetArrayIndex = aRTAI[triIndex];
-        
+        desc.triFlags.viewportIndex = pViewportIndex[triIndex];
+
         auto pArena = pDC->pArena;
         SWR_ASSERT(pArena != nullptr);
 
@@ -2108,7 +2201,8 @@ void BinPoints(
     uint32_t workerId,
     simdvector prim[3],
     uint32_t primMask,
-    simdscalari primID)
+    simdscalari primID,
+    simdscalari viewportIdx)
 {
     RDTSC_START(FEBinPoints);
 
@@ -2118,6 +2212,7 @@ void BinPoints(
     const SWR_FRONTEND_STATE& feState = state.frontendState;
     const SWR_GS_STATE& gsState = state.gsState;
     const SWR_RASTSTATE& rastState = state.rastState;
+    const uint32_t *pViewportIndex = (uint32_t *)&viewportIdx;
 
     // Select attribute processor
     PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(1,
@@ -2132,7 +2227,14 @@ void BinPoints(
         primVerts.z = _simd_mul_ps(primVerts.z, vRecipW0);
 
         // viewport transform to screen coords
-        viewportTransform<1>(&primVerts, state.vpMatrix[0]);
+        if (state.gsState.emitsViewportArrayIndex)
+        {
+            viewportTransform<1>(&primVerts, state.vpMatrices, viewportIdx);
+        }
+        else
+        {
+            viewportTransform<1>(&primVerts, state.vpMatrices);
+        }
     }
 
     // adjust for pixel center location
@@ -2147,11 +2249,11 @@ void BinPoints(
 
     if (CanUseSimplePoints(pDC))
     {
-        // adjust for top-left rule
+        // adjust for ymin-xmin rule
         vXi = _simd_sub_epi32(vXi, _simd_set1_epi32(1));
         vYi = _simd_sub_epi32(vYi, _simd_set1_epi32(1));
 
-        // cull points off the top-left edge of the viewport
+        // cull points off the ymin-xmin edge of the viewport
         primMask &= ~_simd_movemask_ps(_simd_castsi_ps(vXi));
         primMask &= ~_simd_movemask_ps(_simd_castsi_ps(vYi));
 
@@ -2221,6 +2323,7 @@ void BinPoints(
             desc.triFlags.frontFacing = 1;
             desc.triFlags.primID = pPrimID[primIndex];
             desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
+            desc.triFlags.viewportIndex = pViewportIndex[primIndex];
 
             work.pfnWork = RasterizeSimplePoint;
 
@@ -2276,40 +2379,56 @@ void BinPoints(
 
         // bloat point to bbox
         simdBBox bbox;
-        bbox.left = bbox.right = vXi;
-        bbox.top = bbox.bottom = vYi;
+        bbox.xmin = bbox.xmax = vXi;
+        bbox.ymin = bbox.ymax = vYi;
 
         simdscalar vHalfWidth = _simd_mul_ps(vPointSize, _simd_set1_ps(0.5f));
         simdscalari vHalfWidthi = fpToFixedPointVertical(vHalfWidth);
-        bbox.left = _simd_sub_epi32(bbox.left, vHalfWidthi);
-        bbox.right = _simd_add_epi32(bbox.right, vHalfWidthi);
-        bbox.top = _simd_sub_epi32(bbox.top, vHalfWidthi);
-        bbox.bottom = _simd_add_epi32(bbox.bottom, vHalfWidthi);
+        bbox.xmin = _simd_sub_epi32(bbox.xmin, vHalfWidthi);
+        bbox.xmax = _simd_add_epi32(bbox.xmax, vHalfWidthi);
+        bbox.ymin = _simd_sub_epi32(bbox.ymin, vHalfWidthi);
+        bbox.ymax = _simd_add_epi32(bbox.ymax, vHalfWidthi);
 
-        // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since right/bottom edge is exclusive.
-        bbox.left = _simd_max_epi32(bbox.left, _simd_set1_epi32(state.scissorInFixedPoint.left));
-        bbox.top = _simd_max_epi32(bbox.top, _simd_set1_epi32(state.scissorInFixedPoint.top));
-        bbox.right = _simd_min_epi32(_simd_sub_epi32(bbox.right, _simd_set1_epi32(1)), _simd_set1_epi32(state.scissorInFixedPoint.right));
-        bbox.bottom = _simd_min_epi32(_simd_sub_epi32(bbox.bottom, _simd_set1_epi32(1)), _simd_set1_epi32(state.scissorInFixedPoint.bottom));
+        // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
+        // Gather the AOS effective scissor rects based on the per-prim VP index.
+        /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
+        simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
+        if (state.gsState.emitsViewportArrayIndex)
+        {
+            GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                scisXmin, scisYmin, scisXmax, scisYmax);
+        }
+        else // broadcast fast path for non-VPAI case.
+        {
+            scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+            scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+            scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+            scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+        }
+
+        bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
+        bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
+        bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
+        bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
 
         // Cull bloated points completely outside scissor
-        simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.left, bbox.right);
-        simdscalari maskOutsideScissorY = _simd_cmpgt_epi32(bbox.top, bbox.bottom);
+        simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.xmin, bbox.xmax);
+        simdscalari maskOutsideScissorY = _simd_cmpgt_epi32(bbox.ymin, bbox.ymax);
         simdscalari maskOutsideScissorXY = _simd_or_si(maskOutsideScissorX, maskOutsideScissorY);
         uint32_t maskOutsideScissor = _simd_movemask_ps(_simd_castsi_ps(maskOutsideScissorXY));
         primMask = primMask & ~maskOutsideScissor;
 
         // Convert bbox to macrotile units.
-        bbox.left = _simd_srai_epi32(bbox.left, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
-        bbox.top = _simd_srai_epi32(bbox.top, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
-        bbox.right = _simd_srai_epi32(bbox.right, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
-        bbox.bottom = _simd_srai_epi32(bbox.bottom, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
+        bbox.xmin = _simd_srai_epi32(bbox.xmin, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
+        bbox.ymin = _simd_srai_epi32(bbox.ymin, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
+        bbox.xmax = _simd_srai_epi32(bbox.xmax, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
+        bbox.ymax = _simd_srai_epi32(bbox.ymax, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
 
         OSALIGNSIMD(uint32_t) aMTLeft[KNOB_SIMD_WIDTH], aMTRight[KNOB_SIMD_WIDTH], aMTTop[KNOB_SIMD_WIDTH], aMTBottom[KNOB_SIMD_WIDTH];
-        _simd_store_si((simdscalari*)aMTLeft, bbox.left);
-        _simd_store_si((simdscalari*)aMTRight, bbox.right);
-        _simd_store_si((simdscalari*)aMTTop, bbox.top);
-        _simd_store_si((simdscalari*)aMTBottom, bbox.bottom);
+        _simd_store_si((simdscalari*)aMTLeft, bbox.xmin);
+        _simd_store_si((simdscalari*)aMTRight, bbox.xmax);
+        _simd_store_si((simdscalari*)aMTTop, bbox.ymin);
+        _simd_store_si((simdscalari*)aMTBottom, bbox.ymax);
 
         // store render target array index
         OSALIGNSIMD(uint32_t) aRTAI[KNOB_SIMD_WIDTH];
@@ -2355,6 +2474,7 @@ void BinPoints(
             desc.triFlags.primID = pPrimID[primIndex];
             desc.triFlags.pointSize = aPointSize[primIndex];
             desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
+            desc.triFlags.viewportIndex = pViewportIndex[primIndex];
 
             work.pfnWork = RasterizeTriPoint;
 
@@ -2412,13 +2532,15 @@ void BinPoints(
 /// @param workerId - thread's worker id. Even thread has a unique id.
 /// @param tri - Contains line position data for SIMDs worth of points.
 /// @param primID - Primitive ID for each line.
+/// @param viewportIdx - Viewport Array Index for each line.
 void BinLines(
     DRAW_CONTEXT *pDC,
     PA_STATE& pa,
     uint32_t workerId,
     simdvector prim[],
     uint32_t primMask,
-    simdscalari primID)
+    simdscalari primID,
+    simdscalari viewportIdx)
 {
     RDTSC_START(FEBinLines);
 
@@ -2450,7 +2572,14 @@ void BinLines(
         prim[1].v[2] = _simd_mul_ps(prim[1].v[2], vRecipW1);
 
         // viewport transform to screen coords
-        viewportTransform<2>(prim, state.vpMatrix[0]);
+        if (state.gsState.emitsViewportArrayIndex)
+        {
+            viewportTransform<2>(prim, state.vpMatrices, viewportIdx);
+        }
+        else
+        {
+            viewportTransform<2>(prim, state.vpMatrices);
+        }
     }
 
     // adjust for pixel center location
@@ -2481,40 +2610,55 @@ void BinLines(
     primMask &= ~_simd_movemask_ps(_simd_castsi_ps(vZeroLengthMask));
 
     uint32_t *pPrimID = (uint32_t *)&primID;
+    const uint32_t *pViewportIndex = (uint32_t *)&viewportIdx;
 
     simdscalar vUnused = _simd_setzero_ps();
 
     // Calc bounding box of lines
     simdBBox bbox;
-    bbox.left = _simd_min_epi32(vXi[0], vXi[1]);
-    bbox.right = _simd_max_epi32(vXi[0], vXi[1]);
-    bbox.top = _simd_min_epi32(vYi[0], vYi[1]);
-    bbox.bottom = _simd_max_epi32(vYi[0], vYi[1]);
+    bbox.xmin = _simd_min_epi32(vXi[0], vXi[1]);
+    bbox.xmax = _simd_max_epi32(vXi[0], vXi[1]);
+    bbox.ymin = _simd_min_epi32(vYi[0], vYi[1]);
+    bbox.ymax = _simd_max_epi32(vYi[0], vYi[1]);
 
     // bloat bbox by line width along minor axis
     simdscalar vHalfWidth = _simd_set1_ps(rastState.lineWidth / 2.0f);
     simdscalari vHalfWidthi = fpToFixedPointVertical(vHalfWidth);
     simdBBox bloatBox;
-    bloatBox.left = _simd_sub_epi32(bbox.left, vHalfWidthi);
-    bloatBox.right = _simd_add_epi32(bbox.right, vHalfWidthi);
-    bloatBox.top = _simd_sub_epi32(bbox.top, vHalfWidthi);
-    bloatBox.bottom = _simd_add_epi32(bbox.bottom, vHalfWidthi);
+    bloatBox.xmin = _simd_sub_epi32(bbox.xmin, vHalfWidthi);
+    bloatBox.xmax = _simd_add_epi32(bbox.xmax, vHalfWidthi);
+    bloatBox.ymin = _simd_sub_epi32(bbox.ymin, vHalfWidthi);
+    bloatBox.ymax = _simd_add_epi32(bbox.ymax, vHalfWidthi);
 
-    bbox.left = _simd_blendv_epi32(bbox.left, bloatBox.left, vYmajorMask);
-    bbox.right = _simd_blendv_epi32(bbox.right, bloatBox.right, vYmajorMask);
-    bbox.top = _simd_blendv_epi32(bloatBox.top, bbox.top, vYmajorMask);
-    bbox.bottom = _simd_blendv_epi32(bloatBox.bottom, bbox.bottom, vYmajorMask);
+    bbox.xmin = _simd_blendv_epi32(bbox.xmin, bloatBox.xmin, vYmajorMask);
+    bbox.xmax = _simd_blendv_epi32(bbox.xmax, bloatBox.xmax, vYmajorMask);
+    bbox.ymin = _simd_blendv_epi32(bloatBox.ymin, bbox.ymin, vYmajorMask);
+    bbox.ymax = _simd_blendv_epi32(bloatBox.ymax, bbox.ymax, vYmajorMask);
 
-    // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since right/bottom edge is exclusive.
-    bbox.left = _simd_max_epi32(bbox.left, _simd_set1_epi32(state.scissorInFixedPoint.left));
-    bbox.top = _simd_max_epi32(bbox.top, _simd_set1_epi32(state.scissorInFixedPoint.top));
-    bbox.right = _simd_min_epi32(_simd_sub_epi32(bbox.right, _simd_set1_epi32(1)), _simd_set1_epi32(state.scissorInFixedPoint.right));
-    bbox.bottom = _simd_min_epi32(_simd_sub_epi32(bbox.bottom, _simd_set1_epi32(1)), _simd_set1_epi32(state.scissorInFixedPoint.bottom));
+    // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
+    simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
+    if (state.gsState.emitsViewportArrayIndex)
+    {
+        GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+            scisXmin, scisYmin, scisXmax, scisYmax);
+    }
+    else // broadcast fast path for non-VPAI case.
+    {
+        scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+        scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+        scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+        scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+    }
+
+    bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
+    bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
+    bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
+    bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
 
     // Cull prims completely outside scissor
     {
-        simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.left, bbox.right);
-        simdscalari maskOutsideScissorY = _simd_cmpgt_epi32(bbox.top, bbox.bottom);
+        simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.xmin, bbox.xmax);
+        simdscalari maskOutsideScissorY = _simd_cmpgt_epi32(bbox.ymin, bbox.ymax);
         simdscalari maskOutsideScissorXY = _simd_or_si(maskOutsideScissorX, maskOutsideScissorY);
         uint32_t maskOutsideScissor = _simd_movemask_ps(_simd_castsi_ps(maskOutsideScissorXY));
         primMask = primMask & ~maskOutsideScissor;
@@ -2526,16 +2670,16 @@ void BinLines(
     }
 
     // Convert triangle bbox to macrotile units.
-    bbox.left = _simd_srai_epi32(bbox.left, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
-    bbox.top = _simd_srai_epi32(bbox.top, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
-    bbox.right = _simd_srai_epi32(bbox.right, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
-    bbox.bottom = _simd_srai_epi32(bbox.bottom, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
+    bbox.xmin = _simd_srai_epi32(bbox.xmin, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
+    bbox.ymin = _simd_srai_epi32(bbox.ymin, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
+    bbox.xmax = _simd_srai_epi32(bbox.xmax, KNOB_MACROTILE_X_DIM_FIXED_SHIFT);
+    bbox.ymax = _simd_srai_epi32(bbox.ymax, KNOB_MACROTILE_Y_DIM_FIXED_SHIFT);
 
     OSALIGNSIMD(uint32_t) aMTLeft[KNOB_SIMD_WIDTH], aMTRight[KNOB_SIMD_WIDTH], aMTTop[KNOB_SIMD_WIDTH], aMTBottom[KNOB_SIMD_WIDTH];
-    _simd_store_si((simdscalari*)aMTLeft, bbox.left);
-    _simd_store_si((simdscalari*)aMTRight, bbox.right);
-    _simd_store_si((simdscalari*)aMTTop, bbox.top);
-    _simd_store_si((simdscalari*)aMTBottom, bbox.bottom);
+    _simd_store_si((simdscalari*)aMTLeft, bbox.xmin);
+    _simd_store_si((simdscalari*)aMTRight, bbox.xmax);
+    _simd_store_si((simdscalari*)aMTTop, bbox.ymin);
+    _simd_store_si((simdscalari*)aMTBottom, bbox.ymax);
 
     // transpose verts needed for backend
     /// @todo modify BE to take non-transformed verts
@@ -2575,6 +2719,7 @@ void BinLines(
         desc.triFlags.primID = pPrimID[primIndex];
         desc.triFlags.yMajor = (yMajorMask >> primIndex) & 1;
         desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
+        desc.triFlags.viewportIndex = pViewportIndex[primIndex];
 
         work.pfnWork = RasterizeLine;
 

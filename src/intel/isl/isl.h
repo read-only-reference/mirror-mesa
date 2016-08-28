@@ -79,6 +79,10 @@ struct brw_image_param;
 #define ISL_DEV_IS_HASWELL(__dev) ((__dev)->info->is_haswell)
 #endif
 
+#ifndef ISL_DEV_IS_BAYTRAIL
+#define ISL_DEV_IS_BAYTRAIL(__dev) ((__dev)->info->is_baytrail)
+#endif
+
 #ifndef ISL_DEV_USE_SEPARATE_STENCIL
 /**
  * You can define this as a compile-time constant in the CFLAGS. For example,
@@ -1016,6 +1020,8 @@ isl_format_has_int_channel(enum isl_format fmt)
 
 unsigned isl_format_get_num_channels(enum isl_format fmt);
 
+uint32_t isl_format_get_depth_format(enum isl_format fmt, bool has_stencil);
+
 static inline bool
 isl_format_is_compressed(enum isl_format fmt)
 {
@@ -1211,6 +1217,21 @@ isl_surf_get_tile_info(const struct isl_device *dev,
                        const struct isl_surf *surf,
                        struct isl_tile_info *tile_info);
 
+void
+isl_surf_get_hiz_surf(const struct isl_device *dev,
+                      const struct isl_surf *surf,
+                      struct isl_surf *hiz_surf);
+
+void
+isl_surf_get_mcs_surf(const struct isl_device *dev,
+                      const struct isl_surf *surf,
+                      struct isl_surf *mcs_surf);
+
+bool
+isl_surf_get_ccs_surf(const struct isl_device *dev,
+                      const struct isl_surf *surf,
+                      struct isl_surf *ccs_surf);
+
 #define isl_surf_fill_state(dev, state, ...) \
    isl_surf_fill_state_s((dev), (state), \
                          &(struct isl_surf_fill_state_info) {  __VA_ARGS__ });
@@ -1323,6 +1344,22 @@ isl_surf_get_array_pitch(const struct isl_surf *surf)
 }
 
 /**
+ * Calculate the offset, in units of surface samples, to a subimage in the
+ * surface.
+ *
+ * @invariant level < surface levels
+ * @invariant logical_array_layer < logical array length of surface
+ * @invariant logical_z_offset_px < logical depth of surface at level
+ */
+void
+isl_surf_get_image_offset_sa(const struct isl_surf *surf,
+                             uint32_t level,
+                             uint32_t logical_array_layer,
+                             uint32_t logical_z_offset_px,
+                             uint32_t *x_offset_sa,
+                             uint32_t *y_offset_sa);
+
+/**
  * Calculate the offset, in units of surface elements, to a subimage in the
  * surface.
  *
@@ -1353,11 +1390,43 @@ isl_tiling_get_intratile_offset_el(const struct isl_device *dev,
                                    enum isl_tiling tiling,
                                    uint8_t bs,
                                    uint32_t row_pitch,
-                                   uint32_t total_x_offset_B,
-                                   uint32_t total_y_offset_rows,
+                                   uint32_t total_x_offset_el,
+                                   uint32_t total_y_offset_el,
                                    uint32_t *base_address_offset,
-                                   uint32_t *x_offset_B,
-                                   uint32_t *y_offset_rows);
+                                   uint32_t *x_offset_el,
+                                   uint32_t *y_offset_el);
+
+static inline void
+isl_tiling_get_intratile_offset_sa(const struct isl_device *dev,
+                                   enum isl_tiling tiling,
+                                   enum isl_format format,
+                                   uint32_t row_pitch,
+                                   uint32_t total_x_offset_sa,
+                                   uint32_t total_y_offset_sa,
+                                   uint32_t *base_address_offset,
+                                   uint32_t *x_offset_sa,
+                                   uint32_t *y_offset_sa)
+{
+   const struct isl_format_layout *fmtl = isl_format_get_layout(format);
+
+   assert(fmtl->bpb % 8 == 0);
+
+   /* For computing the intratile offsets, we actually want a strange unit
+    * which is samples for multisampled surfaces but elements for compressed
+    * surfaces.
+    */
+   assert(total_x_offset_sa % fmtl->bw == 0);
+   assert(total_y_offset_sa % fmtl->bw == 0);
+   const uint32_t total_x_offset = total_x_offset_sa / fmtl->bw;
+   const uint32_t total_y_offset = total_y_offset_sa / fmtl->bh;
+
+   isl_tiling_get_intratile_offset_el(dev, tiling, fmtl->bpb / 8, row_pitch,
+                                      total_x_offset, total_y_offset,
+                                      base_address_offset,
+                                      x_offset_sa, y_offset_sa);
+   *x_offset_sa *= fmtl->bw;
+   *y_offset_sa *= fmtl->bh;
+}
 
 /**
  * @brief Get value of 3DSTATE_DEPTH_BUFFER.SurfaceFormat

@@ -64,7 +64,6 @@ static void si_destroy_context(struct pipe_context *context)
 	free(sctx->border_color_table);
 	r600_resource_reference(&sctx->scratch_buffer, NULL);
 	r600_resource_reference(&sctx->compute_scratch_buffer, NULL);
-	sctx->b.ws->fence_reference(&sctx->last_gfx_fence, NULL);
 
 	si_pm4_free_state(sctx, sctx->init_config, ~0);
 	if (sctx->init_config_gs_rings)
@@ -187,7 +186,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->b.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX,
 				       si_context_gfx_flush, sctx);
 
-	if (!(sscreen->b.debug_flags & DBG_NO_CE) && ws->cs_add_const_ib) {
+	/* SI + AMDGPU + CE = GPU hang */
+	if (!(sscreen->b.debug_flags & DBG_NO_CE) && ws->cs_add_const_ib &&
+	    sscreen->b.chip_class != SI) {
 		sctx->ce_ib = ws->cs_add_const_ib(sctx->b.gfx.cs);
 		if (!sctx->ce_ib)
 			goto fail;
@@ -252,8 +253,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	si_begin_new_cs(sctx);
 	r600_query_init_backend_mask(&sctx->b); /* this emits commands and must be last */
 
-	/* CIK cannot unbind a constant buffer (S_BUFFER_LOAD is buggy
-	 * with a NULL buffer). We need to use a dummy buffer instead. */
+	/* CIK cannot unbind a constant buffer (S_BUFFER_LOAD doesn't skip loads
+	 * if NUM_RECORDS == 0). We need to use a dummy buffer instead. */
 	if (sctx->b.chip_class == CIK) {
 		sctx->null_const_buf.buffer = pipe_buffer_create(screen, PIPE_BIND_CONSTANT_BUFFER,
 								 PIPE_USAGE_DEFAULT, 16);
@@ -267,6 +268,15 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 							      &sctx->null_const_buf);
 			}
 		}
+
+		si_set_rw_buffer(sctx, SI_HS_CONST_DEFAULT_TESS_LEVELS,
+				 &sctx->null_const_buf);
+		si_set_rw_buffer(sctx, SI_VS_CONST_CLIP_PLANES,
+				 &sctx->null_const_buf);
+		si_set_rw_buffer(sctx, SI_PS_CONST_POLY_STIPPLE,
+				 &sctx->null_const_buf);
+		si_set_rw_buffer(sctx, SI_PS_CONST_SAMPLE_POSITIONS,
+				 &sctx->null_const_buf);
 
 		/* Clear the NULL constant buffer, because loads should return zeros. */
 		sctx->b.clear_buffer(&sctx->b.b, sctx->null_const_buf.buffer, 0,
@@ -346,6 +356,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+	case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
@@ -387,6 +398,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
 	case PIPE_CAP_STRING_MARKER:
+	case PIPE_CAP_CLEAR_TEXTURE:
+	case PIPE_CAP_CULL_DISTANCE:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -435,16 +448,16 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FAKE_SW_MSAA:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_VERTEXID_NOBASE:
-	case PIPE_CAP_CLEAR_TEXTURE:
-	case PIPE_CAP_DRAW_PARAMETERS:
-	case PIPE_CAP_MULTI_DRAW_INDIRECT:
-	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
-	case PIPE_CAP_CULL_DISTANCE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 		return 0;
+
+	case PIPE_CAP_DRAW_PARAMETERS:
+	case PIPE_CAP_MULTI_DRAW_INDIRECT:
+	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
+		return sscreen->has_draw_indirect_multi;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
 		return 30;
@@ -716,6 +729,36 @@ static bool si_init_gs_info(struct si_screen *sscreen)
 	}
 }
 
+static void si_handle_env_var_force_family(struct si_screen *sscreen)
+{
+	const char *family = debug_get_option("SI_FORCE_FAMILY", NULL);
+	unsigned i;
+
+	if (!family)
+		return;
+
+	for (i = CHIP_TAHITI; i < CHIP_LAST; i++) {
+		if (!strcmp(family, r600_get_llvm_processor_name(i))) {
+			/* Override family and chip_class. */
+			sscreen->b.family = sscreen->b.info.family = i;
+
+			if (i >= CHIP_TONGA)
+				sscreen->b.chip_class = sscreen->b.info.chip_class = VI;
+			else if (i >= CHIP_BONAIRE)
+				sscreen->b.chip_class = sscreen->b.info.chip_class = CIK;
+			else
+				sscreen->b.chip_class = sscreen->b.info.chip_class = SI;
+
+			/* Don't submit any IBs. */
+			setenv("RADEON_NOOP", "1", 1);
+			return;
+		}
+	}
+
+	fprintf(stderr, "radeonsi: Unknown family: %s\n", family);
+	exit(1);
+}
+
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 {
 	struct si_screen *sscreen = CALLOC_STRUCT(si_screen);
@@ -741,6 +784,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		return NULL;
 	}
 
+	si_handle_env_var_force_family(sscreen);
+
 	if (!debug_get_bool_option("RADEON_DISABLE_PERFCOUNTERS", false))
 		si_init_perfcounters(sscreen);
 
@@ -753,6 +798,18 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	sscreen->has_distributed_tess =
 		sscreen->b.chip_class >= VI &&
 		sscreen->b.info.max_se >= 2;
+
+	sscreen->has_draw_indirect_multi =
+		(sscreen->b.family >= CHIP_POLARIS10) ||
+		(sscreen->b.chip_class == VI &&
+		 sscreen->b.info.pfp_fw_version >= 121 &&
+		 sscreen->b.info.me_fw_version >= 87) ||
+		(sscreen->b.chip_class == CIK &&
+		 sscreen->b.info.pfp_fw_version >= 211 &&
+		 sscreen->b.info.me_fw_version >= 173) ||
+		(sscreen->b.chip_class == SI &&
+		 sscreen->b.info.pfp_fw_version >= 121 &&
+		 sscreen->b.info.me_fw_version >= 87);
 
 	sscreen->b.has_cp_dma = true;
 	sscreen->b.has_streamout = true;

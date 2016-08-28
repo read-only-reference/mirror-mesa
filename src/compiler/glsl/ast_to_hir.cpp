@@ -280,7 +280,7 @@ get_implicit_conversion_operation(const glsl_type *to, const glsl_type *from,
  * If a conversion is possible (or unnecessary), \c true is returned.
  * Otherwise \c false is returned.
  */
-bool
+static bool
 apply_implicit_conversion(const glsl_type *to, ir_rvalue * &from,
                           struct _mesa_glsl_parse_state *state)
 {
@@ -1351,10 +1351,11 @@ ast_expression::do_hir(exec_list *instructions,
       -1,               /* ast_float_constant doesn't conv to ir_expression. */
       -1,               /* ast_bool_constant doesn't conv to ir_expression. */
       -1,               /* ast_sequence doesn't convert to ir_expression. */
+      -1,               /* ast_aggregate shouldn't ever even get here. */
    };
    ir_rvalue *result = NULL;
    ir_rvalue *op[3];
-   const struct glsl_type *type; /* a temporary variable for switch cases */
+   const struct glsl_type *type, *orig_type;
    bool error_emitted = false;
    YYLTYPE loc;
 
@@ -1644,9 +1645,17 @@ ast_expression::do_hir(exec_list *instructions,
       op[0] = this->subexpressions[0]->hir(instructions, state);
       op[1] = this->subexpressions[1]->hir(instructions, state);
 
+      orig_type = op[0]->type;
       type = arithmetic_result_type(op[0], op[1],
                                     (this->oper == ast_mul_assign),
                                     state, & loc);
+
+      if (type != orig_type) {
+         _mesa_glsl_error(& loc, state,
+                          "could not implicitly convert "
+                          "%s to %s", type->name, orig_type->name);
+         type = glsl_type::error_type;
+      }
 
       ir_rvalue *temp_rhs = new(ctx) ir_expression(operations[this->oper], type,
                                                    op[0], op[1]);
@@ -1671,7 +1680,15 @@ ast_expression::do_hir(exec_list *instructions,
       op[0] = this->subexpressions[0]->hir(instructions, state);
       op[1] = this->subexpressions[1]->hir(instructions, state);
 
+      orig_type = op[0]->type;
       type = modulus_result_type(op[0], op[1], state, &loc);
+
+      if (type != orig_type) {
+         _mesa_glsl_error(& loc, state,
+                          "could not implicitly convert "
+                          "%s to %s", type->name, orig_type->name);
+         type = glsl_type::error_type;
+      }
 
       assert(operations[this->oper] == ir_binop_mod);
 
@@ -1712,7 +1729,17 @@ ast_expression::do_hir(exec_list *instructions,
       this->subexpressions[0]->set_is_lhs(true);
       op[0] = this->subexpressions[0]->hir(instructions, state);
       op[1] = this->subexpressions[1]->hir(instructions, state);
+
+      orig_type = op[0]->type;
       type = bit_logic_result_type(op[0], op[1], this->oper, state, &loc);
+
+      if (type != orig_type) {
+         _mesa_glsl_error(& loc, state,
+                          "could not implicitly convert "
+                          "%s to %s", type->name, orig_type->name);
+         type = glsl_type::error_type;
+      }
+
       ir_rvalue *temp_rhs = new(ctx) ir_expression(operations[this->oper],
                                                    type, op[0], op[1]);
       error_emitted =
@@ -3686,7 +3713,7 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
     */
    assert(var->data.mode != ir_var_temporary);
    if (qual->flags.q.in && qual->flags.q.out)
-      var->data.mode = ir_var_function_inout;
+      var->data.mode = is_parameter ? ir_var_function_inout : ir_var_shader_out;
    else if (qual->flags.q.in)
       var->data.mode = is_parameter ? ir_var_function_in : ir_var_shader_in;
    else if (qual->flags.q.attribute
@@ -3702,6 +3729,9 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
       var->data.mode = ir_var_shader_storage;
    else if (qual->flags.q.shared_storage)
       var->data.mode = ir_var_shader_shared;
+
+   var->data.fb_fetch_output = state->stage == MESA_SHADER_FRAGMENT &&
+                               qual->flags.q.in && qual->flags.q.out;
 
    if (!is_parameter && is_varying_var(var, state->stage)) {
       /* User-defined ins/outs are not permitted in compute shaders. */
@@ -3948,6 +3978,18 @@ get_variable_being_redeclared(ir_variable *var, YYLTYPE loc,
       }
 
       earlier->data.depth_layout = var->data.depth_layout;
+
+   } else if (state->has_framebuffer_fetch() &&
+              strcmp(var->name, "gl_LastFragData") == 0 &&
+              var->type == earlier->type &&
+              var->data.mode == ir_var_auto) {
+      /* According to the EXT_shader_framebuffer_fetch spec:
+       *
+       *   "By default, gl_LastFragData is declared with the mediump precision
+       *    qualifier. This can be changed by redeclaring the corresponding
+       *    variables with the desired precision qualifier."
+       */
+      earlier->data.precision = var->data.precision;
 
    } else if (allow_all_redeclarations) {
       if (earlier->data.mode != var->data.mode) {
@@ -5866,6 +5908,26 @@ ast_selection_statement::hir(exec_list *instructions,
 }
 
 
+/* Used for detection of duplicate case values, compare
+ * given contents directly.
+ */
+static bool
+compare_case_value(const void *a, const void *b)
+{
+   return *(unsigned *) a == *(unsigned *) b;
+}
+
+
+/* Used for detection of duplicate case values, just
+ * returns key contents as is.
+ */
+static unsigned
+key_contents(const void *key)
+{
+   return *(unsigned *) key;
+}
+
+
 ir_rvalue *
 ast_switch_statement::hir(exec_list *instructions,
                           struct _mesa_glsl_parse_state *state)
@@ -5896,8 +5958,8 @@ ast_switch_statement::hir(exec_list *instructions,
 
    state->switch_state.is_switch_innermost = true;
    state->switch_state.switch_nesting_ast = this;
-   state->switch_state.labels_ht = hash_table_ctor(0, hash_table_pointer_hash,
-						   hash_table_pointer_compare);
+   state->switch_state.labels_ht = hash_table_ctor(0, key_contents,
+                                                   compare_case_value);
    state->switch_state.previous_default = NULL;
 
    /* Initalize is_fallthru state to false.
@@ -6155,7 +6217,7 @@ ast_case_label::hir(exec_list *instructions,
       } else {
          ast_expression *previous_label = (ast_expression *)
          hash_table_find(state->switch_state.labels_ht,
-                         (void *)(uintptr_t)label_const->value.u[0]);
+                         (void *)(uintptr_t)&label_const->value.u[0]);
 
          if (previous_label) {
             YYLTYPE loc = this->test_value->get_location();
@@ -6166,7 +6228,7 @@ ast_case_label::hir(exec_list *instructions,
          } else {
             hash_table_insert(state->switch_state.labels_ht,
                               this->test_value,
-                              (void *)(uintptr_t)label_const->value.u[0]);
+                              (void *)(uintptr_t)&label_const->value.u[0]);
          }
       }
 
@@ -7436,10 +7498,12 @@ ast_interface_block::hir(exec_list *instructions,
       _mesa_glsl_error(&loc, state, "geometry shader inputs must be arrays");
    } else if ((state->stage == MESA_SHADER_TESS_CTRL ||
                state->stage == MESA_SHADER_TESS_EVAL) &&
+              !this->layout.flags.q.patch &&
               this->array_specifier == NULL &&
               var_mode == ir_var_shader_in) {
       _mesa_glsl_error(&loc, state, "per-vertex tessellation shader inputs must be arrays");
    } else if (state->stage == MESA_SHADER_TESS_CTRL &&
+              !this->layout.flags.q.patch &&
               this->array_specifier == NULL &&
               var_mode == ir_var_shader_out) {
       _mesa_glsl_error(&loc, state, "tessellation control shader outputs must be arrays");
@@ -7554,6 +7618,8 @@ ast_interface_block::hir(exec_list *instructions,
 
       if (var_mode == ir_var_shader_in || var_mode == ir_var_uniform)
          var->data.read_only = true;
+
+      var->data.patch = this->layout.flags.q.patch;
 
       if (state->stage == MESA_SHADER_GEOMETRY && var_mode == ir_var_shader_in)
          handle_geometry_shader_input_decl(state, loc, var);

@@ -95,6 +95,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         /* Supported features (boolean caps). */
         case PIPE_CAP_NPOT_TEXTURES:
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+        case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
         case PIPE_CAP_TWO_SIDED_STENCIL:
         case PIPE_CAP_ANISOTROPIC_FILTER:
         case PIPE_CAP_POINT_SPRITE:
@@ -698,6 +699,7 @@ static void r300_fence_reference(struct pipe_screen *screen,
 }
 
 static boolean r300_fence_finish(struct pipe_screen *screen,
+                                 struct pipe_context *ctx,
                                  struct pipe_fence_handle *fence,
                                  uint64_t timeout)
 {

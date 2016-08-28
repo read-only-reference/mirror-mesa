@@ -310,6 +310,25 @@ brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
    brw_emit_pipe_control_flush(brw, bits);
 }
 
+static void
+brw_blend_barrier(struct gl_context *ctx)
+{
+   struct brw_context *brw = brw_context(ctx);
+
+   if (!ctx->Extensions.MESA_shader_framebuffer_fetch) {
+      if (brw->gen >= 6) {
+         brw_emit_pipe_control_flush(brw,
+                                     PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                                     PIPE_CONTROL_CS_STALL);
+         brw_emit_pipe_control_flush(brw,
+                                     PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE);
+      } else {
+         brw_emit_pipe_control_flush(brw,
+                                     PIPE_CONTROL_RENDER_TARGET_FLUSH);
+      }
+   }
+}
+
 void
 brw_add_texrect_params(struct gl_program *prog)
 {
@@ -379,6 +398,7 @@ void brwInitFragProgFuncs( struct dd_function_table *functions )
    functions->LinkShader = brw_link_shader;
 
    functions->MemoryBarrier = brw_memory_barrier;
+   functions->BlendBarrier = brw_blend_barrier;
 }
 
 struct shader_times {
@@ -674,7 +694,7 @@ brw_setup_tex_for_precompile(struct brw_context *brw,
                              struct gl_program *prog)
 {
    const bool has_shader_channel_select = brw->is_haswell || brw->gen >= 8;
-   unsigned sampler_count = _mesa_fls(prog->SamplersUsed);
+   unsigned sampler_count = util_last_bit(prog->SamplersUsed);
    for (unsigned i = 0; i < sampler_count; i++) {
       if (!has_shader_channel_select && (prog->ShadowSamplers & (1 << i))) {
          /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */

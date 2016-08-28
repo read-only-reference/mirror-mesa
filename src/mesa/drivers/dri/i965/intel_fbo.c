@@ -49,6 +49,7 @@
 #include "intel_screen.h"
 #include "intel_tex.h"
 #include "brw_context.h"
+#include "brw_defines.h"
 
 #define FILE_DEBUG_FLAG DEBUG_FBO
 
@@ -373,6 +374,19 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
                                          MIPTREE_LAYOUT_DISABLE_AUX);
    if (!irb->mt)
       return;
+
+   /* Adjust the miptree's upper-left coordinate.
+    *
+    * FIXME: Adjusting the miptree's layout outside of
+    * intel_miptree_create_layout() is fragile. Plumb the adjustment through
+    * intel_miptree_create_layout() and brw_tex_layout().
+    */
+   irb->mt->level[0].level_x = image->tile_x;
+   irb->mt->level[0].level_y = image->tile_y;
+   irb->mt->level[0].slice[0].x_offset = image->tile_x;
+   irb->mt->level[0].slice[0].y_offset = image->tile_y;
+   irb->mt->total_width += image->tile_x;
+   irb->mt->total_height += image->tile_y;
 
    rb->InternalFormat = image->internal_format;
    rb->Width = image->width;
@@ -825,6 +839,14 @@ intel_blit_framebuffer_with_blitter(struct gl_context *ctx,
          if (!dst_irb) {
             perf_debug("glBlitFramebuffer(): missing dst renderbuffer.  "
                        "Falling back to software rendering.\n");
+            return mask;
+         }
+
+         if (ctx->Color.sRGBEnabled &&
+             _mesa_get_format_color_encoding(src_irb->mt->format) !=
+             _mesa_get_format_color_encoding(dst_irb->mt->format)) {
+            perf_debug("glBlitFramebuffer() with sRGB conversion cannot be "
+                       "handled by BLT path.\n");
             return mask;
          }
 

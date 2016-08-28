@@ -338,6 +338,9 @@ descriptor=[
 
 # blend_func_extended
   [ "MAX_DUAL_SOURCE_DRAW_BUFFERS", "CONTEXT_INT(Const.MaxDualSourceDrawBuffers), extra_ARB_blend_func_extended" ],
+
+# GL_KHR_blend_equation_advanced_coherent
+  [ "BLEND_ADVANCED_COHERENT_KHR", "CONTEXT_BOOL(Color.BlendCoherent), extra_KHR_blend_equation_advanced_coherent" ],
 ]},
 
 # GLES3 is not a typo.
@@ -424,6 +427,10 @@ descriptor=[
 ]},
 
 { "apis": ["GLES", "GLES2"], "params": [
+# GL_EXT_shader_framebuffer_fetch.  Should be true if the MESA framebuffer
+# fetch extension is supported since the latter imposes no restrictions on
+# non-uniform per-sample discard.
+  [ "FRAGMENT_SHADER_DISCARDS_SAMPLES_EXT", "CONTEXT_BOOL(Extensions.MESA_shader_framebuffer_fetch), extra_EXT_shader_framebuffer_fetch" ],
 # GL_OES_EGL_image_external
   [ "TEXTURE_BINDING_EXTERNAL_OES", "LOC_CUSTOM, TYPE_INT, TEXTURE_EXTERNAL_INDEX, extra_OES_EGL_image_external" ],
   [ "TEXTURE_EXTERNAL_OES", "LOC_CUSTOM, TYPE_BOOLEAN, 0, extra_OES_EGL_image_external" ],
@@ -509,6 +516,9 @@ descriptor=[
   # GL_ARB_shader_image_load_store / GL_ARB_shader_storage_buffer_object / GLES 3.1
   # (MAX_COMBINED_IMAGE_UNITS_AND_FRAGMENT_OUTPUTS in GL_ARB_shader_image_load_store)
   [ "MAX_COMBINED_SHADER_OUTPUT_RESOURCES", "CONTEXT_INT(Const.MaxCombinedShaderOutputResources), extra_ARB_shader_image_load_store_shader_storage_buffer_object_es31" ],
+
+  # GL_ARB_texture_cube_map_array
+  [ "TEXTURE_BINDING_CUBE_MAP_ARRAY_ARB", "LOC_CUSTOM, TYPE_INT, TEXTURE_CUBE_ARRAY_INDEX, extra_ARB_texture_cube_map_array_OES_texture_cube_map_array" ],
 ]},
 
 # Enums in OpenGL Core profile and ES 3.0
@@ -532,15 +542,51 @@ descriptor=[
   [ "MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.MaxGeometryTotalOutputComponents), extra_version_32_OES_geometry_shader" ],
   [ "MAX_GEOMETRY_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxUniformComponents), extra_version_32_OES_geometry_shader" ],
 
+# GL_ARB_tessellation_shader / also OES and EXT
+  [ "PATCH_VERTICES", "CONTEXT_INT(TessCtrlProgram.patch_vertices), extra_ARB_tessellation_shader" ],
+  [ "PATCH_DEFAULT_OUTER_LEVEL", "CONTEXT_FLOAT4(TessCtrlProgram.patch_default_outer_level), extra_ARB_tessellation_shader" ],
+  [ "PATCH_DEFAULT_INNER_LEVEL", "CONTEXT_FLOAT2(TessCtrlProgram.patch_default_inner_level), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_GEN_LEVEL", "CONTEXT_INT(Const.MaxTessGenLevel), extra_ARB_tessellation_shader" ],
+  [ "MAX_PATCH_VERTICES", "CONTEXT_INT(Const.MaxPatchVertices), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_CONTROL_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxUniformComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_EVALUATION_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxUniformComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_CONTROL_TEXTURE_IMAGE_UNITS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxTextureImageUnits), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxTextureImageUnits), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_CONTROL_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxOutputComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_PATCH_COMPONENTS", "CONTEXT_INT(Const.MaxTessPatchComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_CONTROL_TOTAL_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.MaxTessControlTotalOutputComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_EVALUATION_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxOutputComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_CONTROL_INPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxInputComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_EVALUATION_INPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxInputComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_CONTROL_UNIFORM_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxUniformBlocks), extra_ARB_tessellation_shader" ],
+  [ "MAX_TESS_EVALUATION_UNIFORM_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxUniformBlocks), extra_ARB_tessellation_shader" ],
+  [ "MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxCombinedUniformComponents), extra_ARB_tessellation_shader" ],
+  [ "MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxCombinedUniformComponents), extra_ARB_tessellation_shader" ],
+  [ "PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED", "CONTEXT_BOOL(Const.PrimitiveRestartForPatches), extra_ARB_tessellation_shader" ],
+
 # GL_ARB_shader_image_load_store / geometry shader
   [ "MAX_GEOMETRY_IMAGE_UNIFORMS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxImageUniforms), extra_ARB_shader_image_load_store_and_geometry_shader" ],
+
+# GL_ARB_shader_image_load_store / tessellation shader
+  [ "MAX_TESS_CONTROL_IMAGE_UNIFORMS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxImageUniforms), extra_ARB_shader_image_load_store_and_tessellation"],
+  [ "MAX_TESS_EVALUATION_IMAGE_UNIFORMS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxImageUniforms), extra_ARB_shader_image_load_store_and_tessellation"],
 
 # GL_ARB_shader_atomic_counters / geometry shader
   [ "MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxAtomicBuffers), extra_ARB_shader_atomic_counters_and_geometry_shader " ],
   [ "MAX_GEOMETRY_ATOMIC_COUNTERS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxAtomicCounters), extra_ARB_shader_atomic_counters_and_geometry_shader" ],
 
+# GL_ARB_shader_atomic_counters / tessellation shader
+  [ "MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxAtomicBuffers), extra_ARB_shader_atomic_counters_and_tessellation" ],
+  [ "MAX_TESS_CONTROL_ATOMIC_COUNTERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxAtomicCounters), extra_ARB_shader_atomic_counters_and_tessellation" ],
+  [ "MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxAtomicBuffers), extra_ARB_shader_atomic_counters_and_tessellation" ],
+  [ "MAX_TESS_EVALUATION_ATOMIC_COUNTERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxAtomicCounters), extra_ARB_shader_atomic_counters_and_tessellation" ],
+
 # GL_ARB_shader_storage_buffer_object / geometry shader
   [ "MAX_GEOMETRY_SHADER_STORAGE_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxShaderStorageBlocks), extra_ARB_shader_storage_buffer_object_and_geometry_shader" ],
+
+# GL_ARB_shader_storage_buffer_object / tessellation shader
+  [ "MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxShaderStorageBlocks), extra_ARB_shader_storage_buffer_object" ],
+  [ "MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxShaderStorageBlocks), extra_ARB_shader_storage_buffer_object" ],
 
 # GL_ARB_uniform_buffer_object / geometry shader
   [ "MAX_GEOMETRY_UNIFORM_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxUniformBlocks), extra_ARB_uniform_buffer_object_and_geometry_shader" ],
@@ -561,6 +607,9 @@ descriptor=[
 
 # GL_ARB_texture_buffer_range
   [ "TEXTURE_BUFFER_OFFSET_ALIGNMENT", "CONTEXT_INT(Const.TextureBufferOffsetAlignment), extra_ARB_texture_buffer_range" ],
+
+# GL_OES_primitive_bounding_box
+  [ "PRIMITIVE_BOUNDING_BOX_ARB", "CONTEXT_FLOAT8(PrimitiveBoundingBox), extra_OES_primitive_bounding_box" ],
 ]},
 
 # Remaining enums are only in OpenGL
@@ -856,18 +905,11 @@ descriptor=[
 # GL_ARB_map_buffer_alignment
   [ "MIN_MAP_BUFFER_ALIGNMENT", "CONTEXT_INT(Const.MinMapBufferAlignment), NO_EXTRA" ],
 
-# GL_ARB_texture_cube_map_array
-  [ "TEXTURE_BINDING_CUBE_MAP_ARRAY_ARB", "LOC_CUSTOM, TYPE_INT, TEXTURE_CUBE_ARRAY_INDEX, extra_ARB_texture_cube_map_array" ],
-
 # GL_ARB_texture_gather
   [ "MAX_PROGRAM_TEXTURE_GATHER_COMPONENTS_ARB", "CONTEXT_INT(Const.MaxProgramTextureGatherComponents), extra_ARB_texture_gather"],
 
 # GL_ARB_shader_image_load_store
   [ "MAX_IMAGE_SAMPLES", "CONTEXT_INT(Const.MaxImageSamples), extra_ARB_shader_image_load_store" ],
-
-# GL_ARB_shader_storage_buffer_object
-  [ "MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxShaderStorageBlocks), extra_ARB_shader_storage_buffer_object" ],
-  [ "MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxShaderStorageBlocks), extra_ARB_shader_storage_buffer_object" ],
 
 # GL_ARB_query_buffer_object
   [ "QUERY_BUFFER_BINDING", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_query_buffer_object" ],
@@ -896,35 +938,6 @@ descriptor=[
   [ "VIEWPORT_SUBPIXEL_BITS", "CONTEXT_INT(Const.ViewportSubpixelBits), extra_ARB_viewport_array" ],
   [ "VIEWPORT_BOUNDS_RANGE", "CONTEXT_FLOAT2(Const.ViewportBounds), extra_ARB_viewport_array" ],
   [ "VIEWPORT_INDEX_PROVOKING_VERTEX", "CONTEXT_ENUM(Const.LayerAndVPIndexProvokingVertex), extra_ARB_viewport_array" ],
-
-# GL_ARB_tessellation_shader
-  [ "PATCH_VERTICES", "CONTEXT_INT(TessCtrlProgram.patch_vertices), extra_ARB_tessellation_shader" ],
-  [ "PATCH_DEFAULT_OUTER_LEVEL", "CONTEXT_FLOAT4(TessCtrlProgram.patch_default_outer_level), extra_ARB_tessellation_shader" ],
-  [ "PATCH_DEFAULT_INNER_LEVEL", "CONTEXT_FLOAT2(TessCtrlProgram.patch_default_inner_level), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_GEN_LEVEL", "CONTEXT_INT(Const.MaxTessGenLevel), extra_ARB_tessellation_shader" ],
-  [ "MAX_PATCH_VERTICES", "CONTEXT_INT(Const.MaxPatchVertices), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_CONTROL_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxUniformComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_EVALUATION_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxUniformComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_CONTROL_TEXTURE_IMAGE_UNITS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxTextureImageUnits), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxTextureImageUnits), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_CONTROL_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxOutputComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_PATCH_COMPONENTS", "CONTEXT_INT(Const.MaxTessPatchComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_CONTROL_TOTAL_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.MaxTessControlTotalOutputComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_EVALUATION_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxOutputComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_CONTROL_INPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxInputComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_EVALUATION_INPUT_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxInputComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_CONTROL_UNIFORM_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxUniformBlocks), extra_ARB_tessellation_shader" ],
-  [ "MAX_TESS_EVALUATION_UNIFORM_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxUniformBlocks), extra_ARB_tessellation_shader" ],
-  [ "MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxCombinedUniformComponents), extra_ARB_tessellation_shader" ],
-  [ "MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxCombinedUniformComponents), extra_ARB_tessellation_shader" ],
-  [ "PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED", "CONTEXT_BOOL(Const.PrimitiveRestartForPatches), extra_ARB_tessellation_shader" ],
-# Dependencies on GL_ARB_tessellation_shader
-  [ "MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxAtomicBuffers), extra_ARB_shader_atomic_counters_and_tessellation" ],
-  [ "MAX_TESS_CONTROL_ATOMIC_COUNTERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxAtomicCounters), extra_ARB_shader_atomic_counters_and_tessellation" ],
-  [ "MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxAtomicBuffers), extra_ARB_shader_atomic_counters_and_tessellation" ],
-  [ "MAX_TESS_EVALUATION_ATOMIC_COUNTERS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxAtomicCounters), extra_ARB_shader_atomic_counters_and_tessellation" ],
-  [ "MAX_TESS_CONTROL_IMAGE_UNIFORMS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_CTRL].MaxImageUniforms), extra_ARB_shader_image_load_store_and_tessellation"],
-  [ "MAX_TESS_EVALUATION_IMAGE_UNIFORMS", "CONTEXT_INT(Const.Program[MESA_SHADER_TESS_EVAL].MaxImageUniforms), extra_ARB_shader_image_load_store_and_tessellation"],
 
 # GL_ARB_shader_subroutine
   [ "MAX_SUBROUTINES", "CONST(MAX_SUBROUTINES), extra_ARB_shader_subroutine" ],

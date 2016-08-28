@@ -88,27 +88,20 @@ static unsigned si_pack_float_12p4(float x)
 /*
  * Inferred framebuffer and blender state.
  *
- * One of the reasons CB_TARGET_MASK must be derived from the framebuffer state
- * is that:
- * - The blend state mask is 0xf most of the time.
- * - The COLOR1 format isn't INVALID because of possible dual-source blending,
- *   so COLOR1 is enabled pretty much all the time.
- * So CB_TARGET_MASK is the only register that can disable COLOR1.
- *
- * Another reason is to avoid a hang with dual source blending.
+ * CB_TARGET_MASK is emitted here to avoid a hang with dual source blending
+ * if there is not enough PS outputs.
  */
 static void si_emit_cb_render_state(struct si_context *sctx, struct r600_atom *atom)
 {
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct si_state_blend *blend = sctx->queued.named.blend;
-	uint32_t cb_target_mask = 0, i;
+	uint32_t cb_target_mask, i;
 
-	for (i = 0; i < sctx->framebuffer.state.nr_cbufs; i++)
-		if (sctx->framebuffer.state.cbufs[i])
-			cb_target_mask |= 0xf << (4*i);
-
+	/* CB_COLORn_INFO.FORMAT=INVALID disables empty colorbuffer slots. */
 	if (blend)
-		cb_target_mask &= blend->cb_target_mask;
+		cb_target_mask = blend->cb_target_mask;
+	else
+		cb_target_mask = 0xffffffff;
 
 	/* Avoid a hang that happens when dual source blending is enabled
 	 * but there is not enough color outputs. This is undefined behavior,
@@ -460,6 +453,20 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
 			S_028760_COLOR_COMB_FCN(V_028760_OPT_COMB_BLEND_DISABLED) |
 			S_028760_ALPHA_COMB_FCN(V_028760_OPT_COMB_BLEND_DISABLED);
 
+		/* Only set dual source blending for MRT0 to avoid a hang. */
+		if (i >= 1 && blend->dual_src_blend)
+			continue;
+
+		/* Only addition and subtraction equations are supported with
+		 * dual source blending.
+		 */
+		if (blend->dual_src_blend &&
+		    (eqRGB == PIPE_BLEND_MIN || eqRGB == PIPE_BLEND_MAX ||
+		     eqA == PIPE_BLEND_MIN || eqA == PIPE_BLEND_MAX)) {
+			assert(!"Unsupported equation for dual source blending");
+			continue;
+		}
+
 		if (!state->rt[j].colormask)
 			continue;
 
@@ -572,6 +579,7 @@ static void si_bind_blend_state(struct pipe_context *ctx, void *state)
 	struct si_context *sctx = (struct si_context *)ctx;
 	si_pm4_bind_state(sctx, blend, (struct si_state_blend *)state);
 	si_mark_atom_dirty(sctx, &sctx->cb_render_state);
+	sctx->do_update_shaders = true;
 }
 
 static void si_delete_blend_state(struct pipe_context *ctx, void *state)
@@ -642,21 +650,22 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 	   info->properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
 	unsigned clipdist_mask =
 		info->writes_clipvertex ? SIX_BITS : info->clipdist_writemask;
+	unsigned total_mask = clipdist_mask | (info->culldist_writemask << info->num_written_clipdistance);
 
 	radeon_set_context_reg(cs, R_02881C_PA_CL_VS_OUT_CNTL,
 		S_02881C_USE_VTX_POINT_SIZE(info->writes_psize) |
 		S_02881C_USE_VTX_EDGE_FLAG(info->writes_edgeflag) |
 		S_02881C_USE_VTX_RENDER_TARGET_INDX(info->writes_layer) |
 	        S_02881C_USE_VTX_VIEWPORT_INDX(info->writes_viewport_index) |
-		S_02881C_VS_OUT_CCDIST0_VEC_ENA((clipdist_mask & 0x0F) != 0) |
-		S_02881C_VS_OUT_CCDIST1_VEC_ENA((clipdist_mask & 0xF0) != 0) |
+		S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0F) != 0) |
+		S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xF0) != 0) |
 		S_02881C_VS_OUT_MISC_VEC_ENA(info->writes_psize ||
 					    info->writes_edgeflag ||
 					    info->writes_layer ||
 					     info->writes_viewport_index) |
 		S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(1) |
 		(sctx->queued.named.rasterizer->clip_plane_enable &
-		 clipdist_mask));
+		 clipdist_mask) | (info->culldist_writemask << 8));
 	radeon_set_context_reg(cs, R_028810_PA_CL_CLIP_CNTL,
 		sctx->queued.named.rasterizer->pa_cl_clip_cntl |
 		(clipdist_mask ? 0 :
@@ -869,6 +878,7 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	si_update_poly_offset_state(sctx);
 
 	si_mark_atom_dirty(sctx, &sctx->clip_regs);
+	sctx->do_update_shaders = true;
 }
 
 static void si_delete_rs_state(struct pipe_context *ctx, void *state)
@@ -1018,6 +1028,7 @@ static void si_bind_dsa_state(struct pipe_context *ctx, void *state)
 		sctx->stencil_ref.dsa_part = dsa->stencil_ref;
 		si_mark_atom_dirty(sctx, &sctx->stencil_ref.atom);
 	}
+	sctx->do_update_shaders = true;
 }
 
 static void si_delete_dsa_state(struct pipe_context *ctx, void *state)
@@ -2049,6 +2060,12 @@ static void si_initialize_color_surface(struct si_context *sctx,
 		S_028C70_COMP_SWAP(swap) |
 		S_028C70_BLEND_CLAMP(blend_clamp) |
 		S_028C70_BLEND_BYPASS(blend_bypass) |
+		S_028C70_SIMPLE_FLOAT(1) |
+		S_028C70_ROUND_MODE(ntype != V_028C70_NUMBER_UNORM &&
+				    ntype != V_028C70_NUMBER_SNORM &&
+				    ntype != V_028C70_NUMBER_SRGB &&
+				    format != V_028C70_COLOR_8_24 &&
+				    format != V_028C70_COLOR_24_8) |
 		S_028C70_NUMBER_TYPE(ntype) |
 		S_028C70_ENDIAN(endian);
 
@@ -2327,17 +2344,6 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 			vi_separate_dcc_start_query(ctx, rtex);
 		}
 	}
-	/* Set the second SPI format for possible dual-src blending. */
-	if (i == 1 && surf) {
-		sctx->framebuffer.spi_shader_col_format |=
-			surf->spi_shader_col_format << (i * 4);
-		sctx->framebuffer.spi_shader_col_format_alpha |=
-			surf->spi_shader_col_format_alpha << (i * 4);
-		sctx->framebuffer.spi_shader_col_format_blend |=
-			surf->spi_shader_col_format_blend << (i * 4);
-		sctx->framebuffer.spi_shader_col_format_blend_alpha |=
-			surf->spi_shader_col_format_blend_alpha << (i * 4);
-	}
 
 	if (state->zsbuf) {
 		surf = (struct r600_surface*)state->zsbuf;
@@ -2388,6 +2394,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	}
 
 	sctx->need_check_render_feedback = true;
+	sctx->do_update_shaders = true;
 }
 
 static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom *atom)
@@ -2493,13 +2500,6 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 			radeon_emit(cs, ((!tex->dcc_separate_buffer ? tex->resource.gpu_address : 0) +
 					 tex->dcc_offset +
 				         tex->surface.level[cb->base.u.tex.level].dcc_offset) >> 8);
-	}
-	/* set CB_COLOR1_INFO for possible dual-src blending */
-	if (i == 1 && state->cbufs[0] &&
-	    sctx->framebuffer.dirty_cbufs & (1 << 0)) {
-		radeon_set_context_reg(cs, R_028C70_CB_COLOR0_INFO + 1 * 0x3C,
-				       cb_color_info);
-		i++;
 	}
 	for (; i < 8 ; i++)
 		if (sctx->framebuffer.dirty_cbufs & (1 << i))
@@ -2628,6 +2628,7 @@ static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
 		return;
 
 	sctx->ps_iter_samples = min_samples;
+	sctx->do_update_shaders = true;
 
 	if (sctx->framebuffer.nr_samples > 1)
 		si_mark_atom_dirty(sctx, &sctx->msaa_config);
@@ -2644,7 +2645,7 @@ static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
 void
 si_make_buffer_descriptor(struct si_screen *screen, struct r600_resource *buf,
 			  enum pipe_format format,
-			  unsigned first_element, unsigned last_element,
+			  unsigned offset, unsigned size,
 			  uint32_t *state)
 {
 	const struct util_format_description *desc;
@@ -2657,12 +2658,12 @@ si_make_buffer_descriptor(struct si_screen *screen, struct r600_resource *buf,
 	desc = util_format_description(format);
 	first_non_void = util_format_get_first_non_void_channel(format);
 	stride = desc->block.bits / 8;
-	va = buf->gpu_address + first_element * stride;
+	va = buf->gpu_address + offset;
 	num_format = si_translate_buffer_numformat(&screen->b.b, desc, first_non_void);
 	data_format = si_translate_buffer_dataformat(&screen->b.b, desc, first_non_void);
 
-	num_records = last_element + 1 - first_element;
-	num_records = MIN2(num_records, buf->b.b.width0 / stride);
+	num_records = size / stride;
+	num_records = MIN2(num_records, (buf->b.b.width0 - offset) / stride);
 
 	if (screen->b.chip_class >= VI)
 		num_records *= stride;
@@ -2960,8 +2961,8 @@ si_create_sampler_view_custom(struct pipe_context *ctx,
 		si_make_buffer_descriptor(sctx->screen,
 					  (struct r600_resource *)texture,
 					  state->format,
-					  state->u.buf.first_element,
-					  state->u.buf.last_element,
+					  state->u.buf.offset,
+					  state->u.buf.size,
 					  view->state);
 
 		LIST_ADDTAIL(&view->list, &sctx->b.texture_buffers);
@@ -3267,6 +3268,7 @@ static void si_bind_vertex_elements(struct pipe_context *ctx, void *state)
 
 	sctx->vertex_elements = v;
 	sctx->vertex_buffers_dirty = true;
+	sctx->do_update_shaders = true;
 }
 
 static void si_delete_vertex_element(struct pipe_context *ctx, void *state)

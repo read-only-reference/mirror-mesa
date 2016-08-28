@@ -756,7 +756,15 @@ brw_set_dp_read_message(struct brw_codegen *p,
    unsigned sfid;
 
    if (devinfo->gen >= 7) {
-      sfid = GEN7_SFID_DATAPORT_DATA_CACHE;
+      if (target_cache == BRW_DATAPORT_READ_TARGET_RENDER_CACHE)
+         sfid = GEN6_SFID_DATAPORT_RENDER_CACHE;
+      else if (target_cache == BRW_DATAPORT_READ_TARGET_DATA_CACHE)
+         sfid = GEN7_SFID_DATAPORT_DATA_CACHE;
+      else if (target_cache == BRW_DATAPORT_READ_TARGET_SAMPLER_CACHE)
+         sfid = GEN6_SFID_DATAPORT_SAMPLER_CACHE;
+      else
+         unreachable("Invalid target cache");
+
    } else if (devinfo->gen == 6) {
       if (target_cache == BRW_DATAPORT_READ_TARGET_RENDER_CACHE)
 	 sfid = GEN6_SFID_DATAPORT_RENDER_CACHE;
@@ -2204,6 +2212,9 @@ brw_oword_block_read_scratch(struct brw_codegen *p,
        num_regs == 2 ? BRW_DATAPORT_OWORD_BLOCK_4_OWORDS :
        num_regs == 4 ? BRW_DATAPORT_OWORD_BLOCK_8_OWORDS : 0);
    assert(msg_control);
+   const unsigned target_cache = devinfo->gen >= 7 ?
+      BRW_DATAPORT_READ_TARGET_DATA_CACHE :
+      BRW_DATAPORT_READ_TARGET_RENDER_CACHE;
 
    {
       brw_push_insn_state(p);
@@ -2238,7 +2249,7 @@ brw_oword_block_read_scratch(struct brw_codegen *p,
                               brw_scratch_surface_idx(p),
 			      msg_control,
 			      BRW_DATAPORT_READ_MESSAGE_OWORD_BLOCK_READ, /* msg_type */
-			      BRW_DATAPORT_READ_TARGET_RENDER_CACHE,
+			      target_cache,
 			      1, /* msg_length */
                               true, /* header_present */
 			      rlen);
@@ -2397,6 +2408,34 @@ void brw_fb_WRITE(struct brw_codegen *p,
 			    0 /* send_commit_msg */);
 }
 
+brw_inst *
+gen9_fb_READ(struct brw_codegen *p,
+             struct brw_reg dst,
+             struct brw_reg payload,
+             unsigned binding_table_index,
+             unsigned msg_length,
+             unsigned response_length,
+             bool per_sample)
+{
+   const struct brw_device_info *devinfo = p->devinfo;
+   assert(devinfo->gen >= 9);
+   const unsigned msg_subtype =
+      brw_inst_exec_size(devinfo, p->current) == BRW_EXECUTE_16 ? 0 : 1;
+   brw_inst *insn = next_insn(p, BRW_OPCODE_SENDC);
+
+   brw_set_dest(p, insn, dst);
+   brw_set_src0(p, insn, payload);
+   brw_set_dp_read_message(p, insn, binding_table_index,
+                           per_sample << 5 | msg_subtype,
+                           GEN9_DATAPORT_RC_RENDER_TARGET_READ,
+                           BRW_DATAPORT_READ_TARGET_RENDER_CACHE,
+                           msg_length, true /* header_present */,
+                           response_length);
+   brw_inst_set_rt_slot_group(devinfo, insn,
+                              brw_inst_qtr_control(devinfo, p->current) / 2);
+
+   return insn;
+}
 
 /**
  * Texture sample instruction.
@@ -2736,7 +2775,7 @@ brw_find_loop_end(struct brw_codegen *p, int start_offset)
  * BREAK, CONT, and HALT instructions to their correct locations.
  */
 void
-brw_set_uip_jip(struct brw_codegen *p)
+brw_set_uip_jip(struct brw_codegen *p, int start_offset)
 {
    const struct brw_device_info *devinfo = p->devinfo;
    int offset;
@@ -2747,17 +2786,9 @@ brw_set_uip_jip(struct brw_codegen *p)
    if (devinfo->gen < 6)
       return;
 
-   for (offset = 0; offset < p->next_insn_offset;
-        offset = next_offset(devinfo, store, offset)) {
+   for (offset = start_offset; offset < p->next_insn_offset; offset += 16) {
       brw_inst *insn = store + offset;
-
-      if (brw_inst_cmpt_control(devinfo, insn)) {
-	 /* Fixups for compacted BREAK/CONTINUE not supported yet. */
-         assert(brw_inst_opcode(devinfo, insn) != BRW_OPCODE_BREAK &&
-                brw_inst_opcode(devinfo, insn) != BRW_OPCODE_CONTINUE &&
-                brw_inst_opcode(devinfo, insn) != BRW_OPCODE_HALT);
-	 continue;
-      }
+      assert(brw_inst_cmpt_control(devinfo, insn) == 0);
 
       int block_end_offset = brw_find_next_block_end(p, offset);
       switch (brw_inst_opcode(devinfo, insn)) {

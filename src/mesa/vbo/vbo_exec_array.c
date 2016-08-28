@@ -43,56 +43,6 @@
 
 
 /**
- * All vertex buffers should be in an unmapped state when we're about
- * to draw.
- */
-static bool
-check_input_buffers_are_unmapped(const struct gl_vertex_array_object *vao)
-{
-   /* Walk the enabled arrays that have a vbo attached */
-   GLbitfield64 mask = vao->_Enabled & vao->VertexAttribBufferMask;
-
-   while (mask) {
-      int i = ffsll(mask) - 1;
-      const struct gl_vertex_attrib_array *attrib_array =
-         &vao->VertexAttrib[i];
-      const struct gl_vertex_buffer_binding *buffer_binding =
-         &vao->VertexBinding[attrib_array->VertexBinding];
-
-      /* Only enabled arrays shall appear in the _Enabled bitmask */
-      assert(attrib_array->Enabled);
-      /* We have already masked with vao->VertexAttribBufferMask  */
-      assert(_mesa_is_bufferobj(buffer_binding->BufferObj));
-
-      /* Bail out once we find the first disallowed mapping */
-      if (_mesa_check_disallowed_mapping(buffer_binding->BufferObj))
-         return false;
-
-      /* We have handled everything that is bound to this buffer_binding. */
-      mask &= ~buffer_binding->_BoundArrays;
-   }
-
-   return true;
-}
-
-
-/**
- * A debug function that may be called from other parts of Mesa as
- * needed during debugging.
- */
-static bool
-check_buffers_are_unmapped(struct gl_context *ctx)
-{
-   struct vbo_context *vbo = vbo_context(ctx);
-   struct vbo_exec_context *exec = &vbo->exec;
-
-   /* check the current vertex arrays */
-   return !_mesa_check_disallowed_mapping(exec->vtx.bufferobj) &&
-      check_input_buffers_are_unmapped(ctx->Array.VAO);
-}
-
-
-/**
  * Check that element 'j' of the array has reasonable data.
  * Map VBO if needed.
  * For debugging purposes; not normally used.
@@ -419,7 +369,7 @@ recalculate_input_bindings(struct gl_context *ctx)
  * Note that this might set the _NEW_VARYING_VP_INPUTS dirty flag so state
  * validation must be done after this call.
  */
-bool
+void
 vbo_bind_arrays(struct gl_context *ctx)
 {
    struct vbo_context *vbo = vbo_context(ctx);
@@ -445,14 +395,6 @@ vbo_bind_arrays(struct gl_context *ctx)
          exec->validating = GL_FALSE;
       }
    }
-
-   if (!check_buffers_are_unmapped(ctx)) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "draw call (vertex buffers are mapped)");
-      return false;
-   } else {
-      return true;
-   }
 }
 
 /**
@@ -468,8 +410,7 @@ vbo_draw_arrays(struct gl_context *ctx, GLenum mode, GLint start,
    struct vbo_context *vbo = vbo_context(ctx);
    struct _mesa_prim prim[2];
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    /* init most fields to zero */
    memset(prim, 0, sizeof(prim));
@@ -818,8 +759,7 @@ vbo_validated_drawrangeelements(struct gl_context *ctx, GLenum mode,
    struct _mesa_index_buffer ib;
    struct _mesa_prim prim[1];
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    ib.count = count;
    ib.type = type;
@@ -838,6 +778,7 @@ vbo_validated_drawrangeelements(struct gl_context *ctx, GLenum mode,
    prim[0].basevertex = basevertex;
    prim[0].num_instances = numInstances;
    prim[0].base_instance = baseInstance;
+   prim[0].draw_id = 0;
 
    /* Need to give special consideration to rendering a range of
     * indices starting somewhere above zero.  Typically the
@@ -959,7 +900,7 @@ vbo_exec_DrawRangeElementsBaseVertex(GLenum mode,
       index_bounds_valid = GL_FALSE;
 
 #if 0
-   check_draw_elements_data(ctx, count, type, indices);
+   check_draw_elements_data(ctx, count, type, indices, basevertex);
 #else
    (void) check_draw_elements_data;
 #endif
@@ -1162,10 +1103,7 @@ vbo_validated_multidrawelements(struct gl_context *ctx, GLenum mode,
       return;
    }
 
-   if (!vbo_bind_arrays(ctx)) {
-      free(prim);
-      return;
-   }
+   vbo_bind_arrays(ctx);
 
    min_index_ptr = (uintptr_t)indices[0];
    max_index_ptr = 0;
@@ -1329,8 +1267,7 @@ vbo_draw_transform_feedback(struct gl_context *ctx, GLenum mode,
       return;
    }
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    /* init most fields to zero */
    memset(prim, 0, sizeof(prim));
@@ -1426,8 +1363,7 @@ vbo_validated_drawarraysindirect(struct gl_context *ctx,
 {
    struct vbo_context *vbo = vbo_context(ctx);
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    vbo->draw_indirect_prims(ctx, mode,
                             ctx->DrawIndirectBuffer, (GLsizeiptr)indirect,
@@ -1450,8 +1386,7 @@ vbo_validated_multidrawarraysindirect(struct gl_context *ctx,
    if (primcount == 0)
       return;
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    vbo->draw_indirect_prims(ctx, mode,
                             ctx->DrawIndirectBuffer, offset,
@@ -1470,8 +1405,7 @@ vbo_validated_drawelementsindirect(struct gl_context *ctx,
    struct vbo_context *vbo = vbo_context(ctx);
    struct _mesa_index_buffer ib;
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    ib.count = 0; /* unknown */
    ib.type = type;
@@ -1501,8 +1435,7 @@ vbo_validated_multidrawelementsindirect(struct gl_context *ctx,
    if (primcount == 0)
       return;
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    /* NOTE: IndexBufferObj is guaranteed to be a VBO. */
 
@@ -1622,8 +1555,7 @@ vbo_validated_multidrawarraysindirectcount(struct gl_context *ctx,
    if (maxdrawcount == 0)
       return;
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    vbo->draw_indirect_prims(ctx, mode,
                             ctx->DrawIndirectBuffer, offset,
@@ -1650,8 +1582,7 @@ vbo_validated_multidrawelementsindirectcount(struct gl_context *ctx,
    if (maxdrawcount == 0)
       return;
 
-   if (!vbo_bind_arrays(ctx))
-      return;
+   vbo_bind_arrays(ctx);
 
    /* NOTE: IndexBufferObj is guaranteed to be a VBO. */
 
@@ -1681,8 +1612,9 @@ vbo_exec_MultiDrawArraysIndirectCount(GLenum mode,
    if (MESA_VERBOSE & VERBOSE_DRAW)
       _mesa_debug(ctx, "glMultiDrawArraysIndirectCountARB"
                   "(%s, %lx, %lx, %i, %i)\n",
-                  _mesa_enum_to_string(mode), indirect,
-                  drawcount, maxdrawcount, stride);
+                  _mesa_enum_to_string(mode),
+                  (unsigned long)indirect, (unsigned long)drawcount,
+                  maxdrawcount, stride);
 
    /* If <stride> is zero, the array elements are treated as tightly packed. */
    if (stride == 0)
@@ -1709,9 +1641,9 @@ vbo_exec_MultiDrawElementsIndirectCount(GLenum mode, GLenum type,
    if (MESA_VERBOSE & VERBOSE_DRAW)
       _mesa_debug(ctx, "glMultiDrawElementsIndirectCountARB"
                   "(%s, %s, %lx, %lx, %i, %i)\n",
-                  _mesa_enum_to_string(mode),
-                  _mesa_enum_to_string(type), indirect,
-                  drawcount, maxdrawcount, stride);
+                  _mesa_enum_to_string(mode), _mesa_enum_to_string(type),
+                  (unsigned long)indirect, (unsigned long)drawcount,
+                  maxdrawcount, stride);
 
    /* If <stride> is zero, the array elements are treated as tightly packed. */
    if (stride == 0)

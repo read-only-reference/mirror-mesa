@@ -170,6 +170,9 @@ struct r600_resource {
 	/* Winsys objects. */
 	struct pb_buffer		*buf;
 	uint64_t			gpu_address;
+	/* Memory usage if the buffer placement is optimal. */
+	uint64_t			vram_usage;
+	uint64_t			gart_usage;
 
 	/* Resource state. */
 	enum radeon_bo_domain		domains;
@@ -385,7 +388,7 @@ struct r600_common_screen {
 	unsigned			gpu_load_counter_idle;
 	volatile unsigned		gpu_load_stop_thread; /* bool */
 
-	char				renderer_string[64];
+	char				renderer_string[100];
 
 	/* Performance counters. */
 	struct r600_perfcounters	*perfcounters;
@@ -509,7 +512,9 @@ struct r600_common_context {
 	enum chip_class			chip_class;
 	struct r600_ring		gfx;
 	struct r600_ring		dma;
+	struct pipe_fence_handle	*last_gfx_fence;
 	struct pipe_fence_handle	*last_sdma_fence;
+	unsigned			num_gfx_cs_flushes;
 	unsigned			initial_gfx_cs_size;
 	unsigned			gpu_reset_counter;
 	unsigned			last_dirty_fb_counter;
@@ -766,7 +771,7 @@ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 				   struct r600_atom *fb_state,
 				   unsigned *buffers, unsigned *dirty_cbufs,
 				   const union pipe_color_union *color);
-bool r600_texture_disable_dcc(struct r600_common_screen *rscreen,
+bool r600_texture_disable_dcc(struct r600_common_context *rctx,
 			      struct r600_texture *rtex);
 void r600_init_screen_texture_functions(struct r600_common_screen *rscreen);
 void r600_init_context_texture_functions(struct r600_common_context *rctx);

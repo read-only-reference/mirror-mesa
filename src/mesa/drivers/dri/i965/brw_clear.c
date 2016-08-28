@@ -187,11 +187,11 @@ brw_fast_clear_depth(struct gl_context *ctx)
       for (unsigned layer = 0; layer < depth_irb->layer_count; layer++) {
          intel_hiz_exec(brw, mt, depth_irb->mt_level,
                         depth_irb->mt_layer + layer,
-                        GEN6_HIZ_OP_DEPTH_CLEAR);
+                        BLORP_HIZ_OP_DEPTH_CLEAR);
       }
    } else {
       intel_hiz_exec(brw, mt, depth_irb->mt_level, depth_irb->mt_layer,
-                     GEN6_HIZ_OP_DEPTH_CLEAR);
+                     BLORP_HIZ_OP_DEPTH_CLEAR);
    }
 
    if (brw->gen == 6) {
@@ -237,6 +237,14 @@ brw_clear(struct gl_context *ctx, GLbitfield mask)
 	 DBG("fast clear: depth\n");
 	 mask &= ~BUFFER_BIT_DEPTH;
       }
+   }
+
+   if (mask & BUFFER_BIT_STENCIL) {
+      struct intel_renderbuffer *stencil_irb =
+         intel_get_renderbuffer(fb, BUFFER_STENCIL);
+      struct intel_mipmap_tree *mt = stencil_irb->mt;
+      if (mt && mt->stencil_mt)
+         mt->stencil_mt->r8stencil_needs_update = true;
    }
 
    /* BLORP is currently only supported on Gen6+. */

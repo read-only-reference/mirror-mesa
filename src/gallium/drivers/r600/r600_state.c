@@ -631,8 +631,8 @@ texture_buffer_sampler_view(struct r600_pipe_sampler_view *view,
 	struct r600_texture *tmp = (struct r600_texture*)view->base.texture;
 	int stride = util_format_get_blocksize(view->base.format);
 	unsigned format, num_format, format_comp, endian;
-	uint64_t offset = view->base.u.buf.first_element * stride;
-	unsigned size = (view->base.u.buf.last_element - view->base.u.buf.first_element + 1) * stride;
+	uint64_t offset = view->base.u.buf.offset;
+	unsigned size = view->base.u.buf.size;
 
 	r600_vertex_data_type(view->base.format,
 			      &format, &num_format, &format_comp,
@@ -1909,7 +1909,7 @@ static void r600_emit_vertex_fetch_shader(struct r600_context *rctx, struct r600
 	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 	radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, shader->buffer,
                                                   RADEON_USAGE_READ,
-                                                  RADEON_PRIO_INTERNAL_SHADER));
+                                                  RADEON_PRIO_SHADER_BINARY));
 }
 
 static void r600_emit_shader_stages(struct r600_context *rctx, struct r600_atom *a)
@@ -1963,7 +1963,7 @@ static void r600_emit_gs_rings(struct r600_context *rctx, struct r600_atom *a)
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, rbuffer,
 						      RADEON_USAGE_READWRITE,
-						      RADEON_PRIO_RINGS_STREAMOUT));
+						      RADEON_PRIO_SHADER_RINGS));
 		radeon_set_config_reg(cs, R_008C44_SQ_ESGS_RING_SIZE,
 				state->esgs_ring.buffer_size >> 8);
 
@@ -1972,7 +1972,7 @@ static void r600_emit_gs_rings(struct r600_context *rctx, struct r600_atom *a)
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, rbuffer,
 						      RADEON_USAGE_READWRITE,
-						      RADEON_PRIO_RINGS_STREAMOUT));
+						      RADEON_PRIO_SHADER_RINGS));
 		radeon_set_config_reg(cs, R_008C4C_SQ_GSVS_RING_SIZE,
 				state->gsvs_ring.buffer_size >> 8);
 	} else {

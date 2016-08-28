@@ -142,7 +142,7 @@ get_image_alignment(const struct isl_surf *surf)
           * true alignment is likely outside the enum range of HALIGN* and
           * VALIGN*.
           */
-         return isl_extent3d(0, 0, 0);
+         return isl_extent3d(4, 4, 1);
       } else {
          /* In Skylake, RENDER_SUFFACE_STATE.SurfaceVerticalAlignment is in units
           * of surface elements (not pixels nor samples). For compressed formats,
@@ -210,6 +210,11 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    struct GENX(RENDER_SURFACE_STATE) s = { 0 };
 
    s.SurfaceType = get_surftype(info->surf->dim, info->view->usage);
+
+   if (info->view->usage & ISL_SURF_USAGE_RENDER_TARGET_BIT)
+      assert(isl_format_supports_rendering(dev->info, info->view->format));
+   else if (info->view->usage & ISL_SURF_USAGE_TEXTURE_BIT)
+      assert(isl_format_supports_sampling(dev->info, info->view->format));
    s.SurfaceFormat = info->view->format;
 
 #if GEN_IS_HASWELL
@@ -239,6 +244,19 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    switch (s.SurfaceType) {
    case SURFTYPE_1D:
    case SURFTYPE_2D:
+      /* From the Ivy Bridge PRM >> RENDER_SURFACE_STATE::MinimumArrayElement:
+       *
+       *    "If Number of Multisamples is not MULTISAMPLECOUNT_1, this field
+       *    must be set to zero if this surface is used with sampling engine
+       *    messages."
+       *
+       * This restriction appears to exist only on Ivy Bridge.
+       */
+      if (GEN_GEN == 7 && !GEN_IS_HASWELL && !ISL_DEV_IS_BAYTRAIL(dev) &&
+          (info->view->usage & ISL_SURF_USAGE_TEXTURE_BIT) &&
+          info->surf->samples > 1)
+         assert(info->view->base_array_layer == 0);
+
       s.MinimumArrayElement = info->view->base_array_layer;
 
       /* From the Broadwell PRM >> RENDER_SURFACE_STATE::Depth:
@@ -414,6 +432,16 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
       assert(info->surf->levels == 1);
       assert(info->surf->logical_level0_px.array_len == 1);
       assert(info->aux_usage == ISL_AUX_USAGE_NONE);
+
+      if (GEN_GEN >= 8) {
+         /* Broadwell added more rules. */
+         assert(info->surf->samples == 1);
+         if (isl_format_get_layout(info->view->format)->bpb == 8)
+            assert(info->x_offset_sa % 16 == 0);
+         if (isl_format_get_layout(info->view->format)->bpb == 16)
+            assert(info->x_offset_sa % 8 == 0);
+      }
+
 #if GEN_GEN >= 7
       s.SurfaceArray = false;
 #endif
@@ -480,35 +508,37 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    }
 #endif
 
+   if (info->aux_usage != ISL_AUX_USAGE_NONE) {
 #if GEN_GEN >= 9
-   s.RedClearColor = info->clear_color.u32[0];
-   s.GreenClearColor = info->clear_color.u32[1];
-   s.BlueClearColor = info->clear_color.u32[2];
-   s.AlphaClearColor = info->clear_color.u32[3];
+      s.RedClearColor = info->clear_color.u32[0];
+      s.GreenClearColor = info->clear_color.u32[1];
+      s.BlueClearColor = info->clear_color.u32[2];
+      s.AlphaClearColor = info->clear_color.u32[3];
 #elif GEN_GEN >= 7
-   /* Prior to Sky Lake, we only have one bit for the clear color which
-    * gives us 0 or 1 in whatever the surface's format happens to be.
-    */
-   if (isl_format_has_int_channel(info->view->format)) {
-      for (unsigned i = 0; i < 4; i++) {
-         assert(info->clear_color.u32[i] == 0 ||
-                info->clear_color.u32[i] == 1);
+      /* Prior to Sky Lake, we only have one bit for the clear color which
+       * gives us 0 or 1 in whatever the surface's format happens to be.
+       */
+      if (isl_format_has_int_channel(info->view->format)) {
+         for (unsigned i = 0; i < 4; i++) {
+            assert(info->clear_color.u32[i] == 0 ||
+                   info->clear_color.u32[i] == 1);
+         }
+         s.RedClearColor = info->clear_color.u32[0] != 0;
+         s.GreenClearColor = info->clear_color.u32[1] != 0;
+         s.BlueClearColor = info->clear_color.u32[2] != 0;
+         s.AlphaClearColor = info->clear_color.u32[3] != 0;
+      } else {
+         for (unsigned i = 0; i < 4; i++) {
+            assert(info->clear_color.f32[i] == 0.0f ||
+                   info->clear_color.f32[i] == 1.0f);
+         }
+         s.RedClearColor = info->clear_color.f32[0] != 0.0f;
+         s.GreenClearColor = info->clear_color.f32[1] != 0.0f;
+         s.BlueClearColor = info->clear_color.f32[2] != 0.0f;
+         s.AlphaClearColor = info->clear_color.f32[3] != 0.0f;
       }
-      s.RedClearColor = info->clear_color.u32[0] != 0;
-      s.GreenClearColor = info->clear_color.u32[1] != 0;
-      s.BlueClearColor = info->clear_color.u32[2] != 0;
-      s.AlphaClearColor = info->clear_color.u32[3] != 0;
-   } else {
-      for (unsigned i = 0; i < 4; i++) {
-         assert(info->clear_color.f32[i] == 0.0f ||
-                info->clear_color.f32[i] == 1.0f);
-      }
-      s.RedClearColor = info->clear_color.f32[0] != 0.0f;
-      s.GreenClearColor = info->clear_color.f32[1] != 0.0f;
-      s.BlueClearColor = info->clear_color.f32[2] != 0.0f;
-      s.AlphaClearColor = info->clear_color.f32[3] != 0.0f;
-   }
 #endif
+   }
 
    GENX(RENDER_SURFACE_STATE_pack)(NULL, state, &s);
 }

@@ -154,10 +154,13 @@ enum ring_type {
 enum radeon_value_id {
     RADEON_REQUESTED_VRAM_MEMORY,
     RADEON_REQUESTED_GTT_MEMORY,
+    RADEON_MAPPED_VRAM,
+    RADEON_MAPPED_GTT,
     RADEON_BUFFER_WAIT_TIME_NS,
     RADEON_TIMESTAMP,
     RADEON_NUM_CS_FLUSHES,
     RADEON_NUM_BYTES_MOVED,
+    RADEON_NUM_EVICTIONS,
     RADEON_VRAM_USAGE,
     RADEON_GTT_USAGE,
     RADEON_GPU_TEMPERATURE, /* DRM 2.42.0 */
@@ -178,46 +181,44 @@ enum radeon_bo_priority {
     RADEON_PRIO_DRAW_INDIRECT,
     RADEON_PRIO_INDEX_BUFFER,
 
-    RADEON_PRIO_CP_DMA = 8,
-
-    RADEON_PRIO_VCE = 12,
+    RADEON_PRIO_VCE = 8,
     RADEON_PRIO_UVD,
     RADEON_PRIO_SDMA_BUFFER,
     RADEON_PRIO_SDMA_TEXTURE,
 
-    RADEON_PRIO_USER_SHADER = 16,
-    RADEON_PRIO_INTERNAL_SHADER, /* fetch shader, etc. */
+    RADEON_PRIO_CP_DMA = 12,
 
-    /* gap: 20 */
-
-    RADEON_PRIO_CONST_BUFFER = 24,
+    RADEON_PRIO_CONST_BUFFER = 16,
     RADEON_PRIO_DESCRIPTORS,
     RADEON_PRIO_BORDER_COLORS,
 
-    RADEON_PRIO_SAMPLER_BUFFER = 28,
+    RADEON_PRIO_SAMPLER_BUFFER = 20,
     RADEON_PRIO_VERTEX_BUFFER,
 
-    RADEON_PRIO_SHADER_RW_BUFFER = 32,
-    RADEON_PRIO_RINGS_STREAMOUT,
-    RADEON_PRIO_SCRATCH_BUFFER,
+    RADEON_PRIO_SHADER_RW_BUFFER = 24,
     RADEON_PRIO_COMPUTE_GLOBAL,
 
-    RADEON_PRIO_SAMPLER_TEXTURE = 36,
+    RADEON_PRIO_SAMPLER_TEXTURE = 28,
     RADEON_PRIO_SHADER_RW_IMAGE,
 
-    RADEON_PRIO_SAMPLER_TEXTURE_MSAA = 40,
+    RADEON_PRIO_SAMPLER_TEXTURE_MSAA = 32,
 
-    RADEON_PRIO_COLOR_BUFFER = 44,
+    RADEON_PRIO_COLOR_BUFFER = 36,
 
-    RADEON_PRIO_DEPTH_BUFFER = 48,
+    RADEON_PRIO_DEPTH_BUFFER = 40,
 
-    RADEON_PRIO_COLOR_BUFFER_MSAA = 52,
+    RADEON_PRIO_COLOR_BUFFER_MSAA = 44,
 
-    RADEON_PRIO_DEPTH_BUFFER_MSAA = 56,
+    RADEON_PRIO_DEPTH_BUFFER_MSAA = 48,
 
-    RADEON_PRIO_CMASK = 60,
+    RADEON_PRIO_CMASK = 52,
     RADEON_PRIO_DCC,
     RADEON_PRIO_HTILE,
+    RADEON_PRIO_SHADER_BINARY, /* the hw can't hide instruction cache misses */
+
+    RADEON_PRIO_SHADER_RINGS = 56,
+
+    RADEON_PRIO_SCRATCH_BUFFER = 60,
     /* 63 is the maximum value */
 };
 
@@ -236,6 +237,11 @@ struct radeon_winsys_cs {
     unsigned                      num_prev; /* Number of previous chunks. */
     unsigned                      max_prev; /* Space in array pointed to by prev. */
     unsigned                      prev_dw; /* Total number of dwords in previous chunks. */
+
+    /* Memory usage of the buffer list. These are always 0 for CE and preamble
+     * IBs. */
+    uint64_t                      used_vram;
+    uint64_t                      used_gart;
 };
 
 struct radeon_info {
@@ -260,6 +266,9 @@ struct radeon_info {
     bool                        has_uvd;
     uint32_t                    uvd_fw_version;
     uint32_t                    vce_fw_version;
+    uint32_t                    me_fw_version;
+    uint32_t                    pfp_fw_version;
+    uint32_t                    ce_fw_version;
     uint32_t                    vce_harvest_config;
     uint32_t                    clock_crystal_freq;
 
@@ -703,19 +712,6 @@ struct radeon_winsys {
     bool (*cs_check_space)(struct radeon_winsys_cs *cs, unsigned dw);
 
     /**
-     * Return true if there is enough memory in VRAM and GTT for the buffers
-     * added so far.
-     *
-     * \param cs        A command stream to validate.
-     * \param vram      VRAM memory size pending to be use
-     * \param gtt       GTT memory size pending to be use
-     */
-    bool (*cs_memory_below_limit)(struct radeon_winsys_cs *cs,
-                                  uint64_t vram, uint64_t gtt);
-
-    uint64_t (*cs_query_memory_usage)(struct radeon_winsys_cs *cs);
-
-    /**
      * Return the buffer list.
      *
      * \param cs    Command stream
@@ -738,6 +734,13 @@ struct radeon_winsys {
     int (*cs_flush)(struct radeon_winsys_cs *cs,
                     unsigned flags,
                     struct pipe_fence_handle **fence);
+
+    /**
+     * Create a fence before the CS is flushed.
+     * The user must flush manually to complete the initializaton of the fence.
+     * The fence must not be used before the flush.
+     */
+    struct pipe_fence_handle *(*cs_get_next_fence)(struct radeon_winsys_cs *cs);
 
     /**
      * Return true if a buffer is referenced by a command stream.

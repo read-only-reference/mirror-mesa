@@ -178,8 +178,6 @@ ast_type_qualifier::merge_qualifier(YYLTYPE *loc,
    if (state->stage == MESA_SHADER_GEOMETRY) {
       allowed_duplicates_mask.flags.i |=
          stream_layout_mask.flags.i;
-      input_layout_mask.flags.i |=
-         stream_layout_mask.flags.i;
    }
 
    if (is_single_layout_merge && !state->has_enhanced_layouts() &&
@@ -229,7 +227,8 @@ ast_type_qualifier::merge_qualifier(YYLTYPE *loc,
          if (q.flags.q.stream) {
             this->flags.q.stream = 1;
             this->stream = q.stream;
-         } else if (!this->flags.q.stream && this->flags.q.out) {
+         } else if (!this->flags.q.stream && this->flags.q.out &&
+                    !this->flags.q.in) {
             /* Assign default global stream value */
             this->flags.q.stream = 1;
             this->stream = state->out_qualifier->stream;
@@ -242,7 +241,8 @@ ast_type_qualifier::merge_qualifier(YYLTYPE *loc,
          if (q.flags.q.xfb_buffer) {
             this->flags.q.xfb_buffer = 1;
             this->xfb_buffer = q.xfb_buffer;
-         } else if (!this->flags.q.xfb_buffer && this->flags.q.out) {
+         } else if (!this->flags.q.xfb_buffer && this->flags.q.out &&
+                    !this->flags.q.in) {
             /* Assign global xfb_buffer value */
             this->flags.q.xfb_buffer = 1;
             this->xfb_buffer = state->out_qualifier->xfb_buffer;
@@ -414,6 +414,8 @@ ast_type_qualifier::merge_out_qualifier(YYLTYPE *loc,
       valid_out_mask.flags.q.xfb_buffer = 1;
       valid_out_mask.flags.q.explicit_xfb_stride = 1;
       valid_out_mask.flags.q.xfb_stride = 1;
+   } else if (state->stage == MESA_SHADER_FRAGMENT) {
+      valid_out_mask.flags.q.blend_support = 1;
    } else {
       _mesa_glsl_error(loc, state, "out layout qualifiers only valid in "
                        "geometry, tessellation and vertex shaders");

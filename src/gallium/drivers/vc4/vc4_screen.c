@@ -96,6 +96,7 @@ vc4_screen_destroy(struct pipe_screen *pscreen)
 {
         struct vc4_screen *screen = vc4_screen(pscreen);
 
+        util_hash_table_destroy(screen->bo_handles);
         vc4_bufmgr_destroy(pscreen);
         close(screen->fd);
         ralloc_free(pscreen);
@@ -140,6 +141,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 return 1;
 
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+        case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
                 return 1;
 
                 /* Unsupported features. */
@@ -385,7 +387,7 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
                 return VC4_MAX_TEXTURE_SAMPLERS;
         case PIPE_SHADER_CAP_PREFERRED_IR:
-                return PIPE_SHADER_IR_TGSI;
+                return PIPE_SHADER_IR_NIR;
         case PIPE_SHADER_CAP_SUPPORTED_IRS:
                 return 0;
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
@@ -632,6 +634,7 @@ vc4_screen_create(int fd)
         pscreen->get_name = vc4_screen_get_name;
         pscreen->get_vendor = vc4_screen_get_vendor;
         pscreen->get_device_vendor = vc4_screen_get_vendor;
+        pscreen->get_compiler_options = vc4_screen_get_compiler_options;
 
         return pscreen;
 

@@ -39,6 +39,7 @@
 #include "program/prog_parameter.h"
 #include "program/prog_instruction.h"
 #include "main/framebuffer.h"
+#include "main/shaderapi.h"
 
 #include "isl/isl.h"
 
@@ -71,18 +72,63 @@ static const struct surface_state_info surface_state_infos[] = {
    [9] = {16, 64, 8,  10, SKL_MOCS_WB,  SKL_MOCS_PTE},
 };
 
-void
+static void
 brw_emit_surface_state(struct brw_context *brw,
                        struct intel_mipmap_tree *mt,
-                       const struct isl_view *view,
-                       uint32_t mocs, bool for_gather,
-                       uint32_t *surf_offset, int surf_index,
+                       GLenum target, struct isl_view view,
+                       uint32_t mocs, uint32_t *surf_offset, int surf_index,
                        unsigned read_domains, unsigned write_domains)
 {
    const struct surface_state_info ss_info = surface_state_infos[brw->gen];
+   uint32_t tile_x = 0, tile_y = 0;
+   uint32_t offset = mt->offset;
 
    struct isl_surf surf;
    intel_miptree_get_isl_surf(brw, mt, &surf);
+
+   surf.dim = get_isl_surf_dim(target);
+
+   const enum isl_dim_layout dim_layout =
+      get_isl_dim_layout(brw->intelScreen->devinfo, mt->tiling, target);
+
+   if (surf.dim_layout != dim_layout) {
+      /* The layout of the specified texture target is not compatible with the
+       * actual layout of the miptree structure in memory -- You're entering
+       * dangerous territory, this can only possibly work if you only intended
+       * to access a single level and slice of the texture, and the hardware
+       * supports the tile offset feature in order to allow non-tile-aligned
+       * base offsets, since we'll have to point the hardware to the first
+       * texel of the level instead of relying on the usual base level/layer
+       * controls.
+       */
+      assert(brw->has_surface_tile_offset);
+      assert(view.levels == 1 && view.array_len == 1);
+
+      offset += intel_miptree_get_tile_offsets(mt, view.base_level,
+                                               view.base_array_layer,
+                                               &tile_x, &tile_y);
+
+      /* Minify the logical dimensions of the texture. */
+      const unsigned l = view.base_level - mt->first_level;
+      surf.logical_level0_px.width = minify(surf.logical_level0_px.width, l);
+      surf.logical_level0_px.height = surf.dim <= ISL_SURF_DIM_1D ? 1 :
+         minify(surf.logical_level0_px.height, l);
+      surf.logical_level0_px.depth = surf.dim <= ISL_SURF_DIM_2D ? 1 :
+         minify(surf.logical_level0_px.depth, l);
+
+      /* Only the base level and layer can be addressed with the overridden
+       * layout.
+       */
+      surf.logical_level0_px.array_len = 1;
+      surf.levels = 1;
+      surf.dim_layout = dim_layout;
+
+      /* The requested slice of the texture is now at the base level and
+       * layer.
+       */
+      view.base_level = 0;
+      view.base_array_layer = 0;
+   }
 
    union isl_color_value clear_color = { .u32 = { 0, 0, 0, 0 } };
 
@@ -90,7 +136,7 @@ brw_emit_surface_state(struct brw_context *brw,
    uint64_t aux_offset = 0;
    enum isl_aux_usage aux_usage = ISL_AUX_USAGE_NONE;
    if (mt->mcs_mt &&
-       ((view->usage & ISL_SURF_USAGE_RENDER_TARGET_BIT) ||
+       ((view.usage & ISL_SURF_USAGE_RENDER_TARGET_BIT) ||
         mt->fast_clear_state != INTEL_FAST_CLEAR_STATE_RESOLVED)) {
       intel_miptree_get_aux_isl_surf(brw, mt, &aux_surf_s, &aux_usage);
       aux_surf = &aux_surf_s;
@@ -107,15 +153,16 @@ brw_emit_surface_state(struct brw_context *brw,
                                     ss_info.num_dwords * 4, ss_info.ss_align,
                                     surf_index, surf_offset);
 
-   isl_surf_fill_state(&brw->isl_dev, dw, .surf = &surf, .view = view,
-                       .address = mt->bo->offset64 + mt->offset,
+   isl_surf_fill_state(&brw->isl_dev, dw, .surf = &surf, .view = &view,
+                       .address = mt->bo->offset64 + offset,
                        .aux_surf = aux_surf, .aux_usage = aux_usage,
                        .aux_address = aux_offset,
-                       .mocs = mocs, .clear_color = clear_color);
+                       .mocs = mocs, .clear_color = clear_color,
+                       .x_offset_sa = tile_x, .y_offset_sa = tile_y);
 
    drm_intel_bo_emit_reloc(brw->batch.bo,
                            *surf_offset + 4 * ss_info.reloc_dw,
-                           mt->bo, mt->offset,
+                           mt->bo, offset,
                            read_domains, write_domains);
 
    if (aux_surf) {
@@ -173,8 +220,8 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    };
 
    uint32_t offset;
-   brw_emit_surface_state(brw, mt, &view,
-                          surface_state_infos[brw->gen].rb_mocs, false,
+   brw_emit_surface_state(brw, mt, mt->target, view,
+                          surface_state_infos[brw->gen].rb_mocs,
                           &offset, surf_index,
                           I915_GEM_DOMAIN_RENDER,
                           I915_GEM_DOMAIN_RENDER);
@@ -452,8 +499,16 @@ brw_update_texture_surface(struct gl_context *ctx,
       }
 
       if (obj->StencilSampling && firstImage->_BaseFormat == GL_DEPTH_STENCIL) {
-         assert(brw->gen >= 8);
-         mt = mt->stencil_mt;
+         if (brw->gen <= 7) {
+            assert(mt->r8stencil_mt && !mt->stencil_mt->r8stencil_needs_update);
+            mt = mt->r8stencil_mt;
+         } else {
+            mt = mt->stencil_mt;
+         }
+         format = BRW_SURFACEFORMAT_R8_UINT;
+      } else if (brw->gen <= 7 && mt->format == MESA_FORMAT_S_UINT8) {
+         assert(mt->r8stencil_mt && !mt->r8stencil_needs_update);
+         mt = mt->r8stencil_mt;
          format = BRW_SURFACEFORMAT_R8_UINT;
       }
 
@@ -478,8 +533,8 @@ brw_update_texture_surface(struct gl_context *ctx,
           obj->Target == GL_TEXTURE_CUBE_MAP_ARRAY)
          view.usage |= ISL_SURF_USAGE_CUBE_BIT;
 
-      brw_emit_surface_state(brw, mt, &view,
-                             surface_state_infos[brw->gen].tex_mocs, for_gather,
+      brw_emit_surface_state(brw, mt, mt->target, view,
+                             surface_state_infos[brw->gen].tex_mocs,
                              surf_offset, surf_index,
                              I915_GEM_DOMAIN_SAMPLER, 0);
    }
@@ -689,6 +744,7 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    /* BRW_NEW_FS_PROG_DATA */
    struct brw_stage_prog_data *prog_data = &brw->wm.prog_data->base;
 
+   _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_FRAGMENT);
    /* _NEW_PROGRAM_CONSTANTS */
    brw_upload_pull_constants(brw, BRW_NEW_SURFACES, &fp->program.Base,
                              stage_state, prog_data);
@@ -878,8 +934,8 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
 
    if (brw->gen < 6) {
       /* _NEW_COLOR */
-      if (!ctx->Color.ColorLogicOpEnabled &&
-	  (ctx->Color.BlendEnabled & (1 << unit)))
+      if (!ctx->Color.ColorLogicOpEnabled && !ctx->Color._AdvancedBlendMode &&
+          (ctx->Color.BlendEnabled & (1 << unit)))
 	 surf[0] |= BRW_SURFACE_BLEND_ENABLED;
 
       if (!ctx->Color.ColorMask[unit][0])
@@ -978,6 +1034,95 @@ const struct brw_tracked_state gen6_renderbuffer_surfaces = {
    .emit = update_renderbuffer_surfaces,
 };
 
+static void
+update_renderbuffer_read_surfaces(struct brw_context *brw)
+{
+   const struct gl_context *ctx = &brw->ctx;
+
+   /* BRW_NEW_FRAGMENT_PROGRAM */
+   if (!ctx->Extensions.MESA_shader_framebuffer_fetch &&
+       brw->fragment_program &&
+       brw->fragment_program->Base.OutputsRead) {
+      /* _NEW_BUFFERS */
+      const struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+      for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
+         struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[i];
+         const struct intel_renderbuffer *irb = intel_renderbuffer(rb);
+         const unsigned surf_index =
+            brw->wm.prog_data->binding_table.render_target_read_start + i;
+         uint32_t *surf_offset = &brw->wm.base.surf_offset[surf_index];
+
+         if (irb) {
+            const unsigned format = brw->render_target_format[
+               _mesa_get_render_format(ctx, intel_rb_format(irb))];
+            assert(isl_format_supports_sampling(brw->intelScreen->devinfo,
+                                                format));
+
+            /* Override the target of the texture if the render buffer is a
+             * single slice of a 3D texture (since the minimum array element
+             * field of the surface state structure is ignored by the sampler
+             * unit for 3D textures on some hardware), or if the render buffer
+             * is a 1D array (since shaders always provide the array index
+             * coordinate at the Z component to avoid state-dependent
+             * recompiles when changing the texture target of the
+             * framebuffer).
+             */
+            const GLenum target =
+               (irb->mt->target == GL_TEXTURE_3D &&
+                irb->layer_count == 1) ? GL_TEXTURE_2D :
+               irb->mt->target == GL_TEXTURE_1D_ARRAY ? GL_TEXTURE_2D_ARRAY :
+               irb->mt->target;
+
+            /* intel_renderbuffer::mt_layer is expressed in sample units for
+             * the UMS and CMS multisample layouts, but
+             * intel_renderbuffer::layer_count is expressed in units of whole
+             * logical layers regardless of the multisample layout.
+             */
+            const unsigned mt_layer_unit =
+               (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
+                irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) ?
+               MAX2(irb->mt->num_samples, 1) : 1;
+
+            const struct isl_view view = {
+               .format = format,
+               .base_level = irb->mt_level - irb->mt->first_level,
+               .levels = 1,
+               .base_array_layer = irb->mt_layer / mt_layer_unit,
+               .array_len = irb->layer_count,
+               .channel_select = {
+                  ISL_CHANNEL_SELECT_RED,
+                  ISL_CHANNEL_SELECT_GREEN,
+                  ISL_CHANNEL_SELECT_BLUE,
+                  ISL_CHANNEL_SELECT_ALPHA,
+               },
+               .usage = ISL_SURF_USAGE_TEXTURE_BIT,
+            };
+
+            brw_emit_surface_state(brw, irb->mt, target, view,
+                                   surface_state_infos[brw->gen].tex_mocs,
+                                   surf_offset, surf_index,
+                                   I915_GEM_DOMAIN_SAMPLER, 0);
+
+         } else {
+            brw->vtbl.emit_null_surface_state(
+               brw, _mesa_geometric_width(fb), _mesa_geometric_height(fb),
+               _mesa_geometric_samples(fb), surf_offset);
+         }
+      }
+
+      brw->ctx.NewDriverState |= BRW_NEW_SURFACES;
+   }
+}
+
+const struct brw_tracked_state brw_renderbuffer_read_surfaces = {
+   .dirty = {
+      .mesa = _NEW_BUFFERS,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_FRAGMENT_PROGRAM,
+   },
+   .emit = update_renderbuffer_read_surfaces,
+};
 
 static void
 update_stage_texture_surfaces(struct brw_context *brw,
@@ -998,7 +1143,7 @@ update_stage_texture_surfaces(struct brw_context *brw,
    else
       surf_offset += stage_state->prog_data->binding_table.plane_start[plane];
 
-   unsigned num_samplers = _mesa_fls(prog->SamplersUsed);
+   unsigned num_samplers = util_last_bit(prog->SamplersUsed);
    for (unsigned s = 0; s < num_samplers; s++) {
       surf_offset[s] = 0;
 
@@ -1382,10 +1527,10 @@ update_buffer_image_param(struct brw_context *brw,
                           struct brw_image_param *param)
 {
    struct gl_buffer_object *obj = u->TexObj->BufferObject;
-
+   const uint32_t size = MIN2((uint32_t)u->TexObj->BufferSize, obj->Size);
    update_default_image_param(brw, u, surface_idx, param);
 
-   param->size[0] = obj->Size / _mesa_get_format_bytes(u->_ActualFormat);
+   param->size[0] = size / _mesa_get_format_bytes(u->_ActualFormat);
    param->stride[0] = _mesa_get_format_bytes(u->_ActualFormat);
 }
 
@@ -1513,8 +1658,8 @@ update_image_surface(struct brw_context *brw,
 
             const int surf_index = surf_offset - &brw->wm.base.surf_offset[0];
 
-            brw_emit_surface_state(brw, mt, &view,
-                                   surface_state_infos[brw->gen].tex_mocs, false,
+            brw_emit_surface_state(brw, mt, mt->target, view,
+                                   surface_state_infos[brw->gen].tex_mocs,
                                    surf_offset, surf_index,
                                    I915_GEM_DOMAIN_SAMPLER,
                                    access == GL_READ_ONLY ? 0 :

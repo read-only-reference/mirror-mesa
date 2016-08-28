@@ -59,6 +59,10 @@
 #define     CIK__PIPE_CONFIG__ADDR_SURF_P16_32X32_8X16   16
 #define     CIK__PIPE_CONFIG__ADDR_SURF_P16_32X32_16X16  17
 
+#ifndef AMDGPU_INFO_NUM_EVICTIONS
+#define AMDGPU_INFO_NUM_EVICTIONS		0x18
+#endif
+
 static struct util_hash_table *dev_tab = NULL;
 pipe_static_mutex(dev_tab_mutex);
 
@@ -99,6 +103,7 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    struct amdgpu_heap_info vram, gtt;
    struct drm_amdgpu_info_hw_ip dma = {}, uvd = {}, vce = {};
    uint32_t vce_version = 0, vce_feature = 0, uvd_version = 0, uvd_feature = 0;
+   uint32_t unused_feature;
    int r, i, j;
    drmDevicePtr devinfo;
 
@@ -151,6 +156,27 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
       goto fail;
    }
 
+   r = amdgpu_query_firmware_version(ws->dev, AMDGPU_INFO_FW_GFX_ME, 0, 0,
+				     &ws->info.me_fw_version, &unused_feature);
+   if (r) {
+      fprintf(stderr, "amdgpu: amdgpu_query_firmware_version(me) failed.\n");
+      goto fail;
+   }
+
+   r = amdgpu_query_firmware_version(ws->dev, AMDGPU_INFO_FW_GFX_PFP, 0, 0,
+				     &ws->info.pfp_fw_version, &unused_feature);
+   if (r) {
+      fprintf(stderr, "amdgpu: amdgpu_query_firmware_version(pfp) failed.\n");
+      goto fail;
+   }
+
+   r = amdgpu_query_firmware_version(ws->dev, AMDGPU_INFO_FW_GFX_CE, 0, 0,
+				     &ws->info.ce_fw_version, &unused_feature);
+   if (r) {
+      fprintf(stderr, "amdgpu: amdgpu_query_firmware_version(ce) failed.\n");
+      goto fail;
+   }
+
    r = amdgpu_query_firmware_version(ws->dev, AMDGPU_INFO_FW_UVD, 0, 0,
 				     &uvd_version, &uvd_feature);
    if (r) {
@@ -189,6 +215,8 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
       ws->info.chip_class = VI;
    else if (ws->info.family >= CHIP_BONAIRE)
       ws->info.chip_class = CIK;
+   else if (ws->info.family >= CHIP_TAHITI)
+      ws->info.chip_class = SI;
    else {
       fprintf(stderr, "amdgpu: Unknown family.\n");
       goto fail;
@@ -204,6 +232,26 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
 
    /* family and rev_id are for addrlib */
    switch (ws->info.family) {
+   case CHIP_TAHITI:
+      ws->family = FAMILY_SI;
+      ws->rev_id = SI_TAHITI_P_A0;
+      break;
+   case CHIP_PITCAIRN:
+      ws->family = FAMILY_SI;
+      ws->rev_id = SI_PITCAIRN_PM_A0;
+      break;
+   case CHIP_VERDE:
+      ws->family = FAMILY_SI;
+      ws->rev_id = SI_CAPEVERDE_M_A0;
+      break;
+   case CHIP_OLAND:
+      ws->family = FAMILY_SI;
+      ws->rev_id = SI_OLAND_M_A0;
+      break;
+   case CHIP_HAINAN:
+      ws->family = FAMILY_SI;
+      ws->rev_id = SI_HAINAN_V_A0;
+      break;
    case CHIP_BONAIRE:
       ws->family = FAMILY_CI;
       ws->rev_id = CI_BONAIRE_M_A0;
@@ -305,6 +353,9 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
 
    ws->info.gart_page_size = alignment_info.size_remote;
 
+   if (ws->info.chip_class == SI)
+      ws->info.gfx_ib_pad_with_type2 = TRUE;
+
    ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL;
 
    return true;
@@ -357,6 +408,10 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
       return ws->allocated_vram;
    case RADEON_REQUESTED_GTT_MEMORY:
       return ws->allocated_gtt;
+   case RADEON_MAPPED_VRAM:
+      return ws->mapped_vram;
+   case RADEON_MAPPED_GTT:
+      return ws->mapped_gtt;
    case RADEON_BUFFER_WAIT_TIME_NS:
       return ws->buffer_wait_time;
    case RADEON_TIMESTAMP:
@@ -366,6 +421,9 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
       return ws->num_cs_flushes;
    case RADEON_NUM_BYTES_MOVED:
       amdgpu_query_info(ws->dev, AMDGPU_INFO_NUM_BYTES_MOVED, 8, &retval);
+      return retval;
+   case RADEON_NUM_EVICTIONS:
+      amdgpu_query_info(ws->dev, AMDGPU_INFO_NUM_EVICTIONS, 8, &retval);
       return retval;
    case RADEON_VRAM_USAGE:
       amdgpu_query_heap_info(ws->dev, AMDGPU_GEM_DOMAIN_VRAM, 0, &heap);

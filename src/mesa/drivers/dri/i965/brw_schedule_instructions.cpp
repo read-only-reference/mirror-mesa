@@ -86,7 +86,35 @@ public:
     * its children, or just the issue_time if it's a leaf node.
     */
    int delay;
+
+   /**
+    * Preferred exit node among the (direct or indirect) successors of this
+    * node.  Among the scheduler nodes blocked by this node, this will be the
+    * one that may cause earliest program termination, or NULL if none of the
+    * successors is an exit node.
+    */
+   schedule_node *exit;
+
+   bool is_barrier;
 };
+
+/**
+ * Lower bound of the scheduling time after which one of the instructions
+ * blocked by this node may lead to program termination.
+ *
+ * exit_unblocked_time() determines a strict partial ordering relation '«' on
+ * the set of scheduler nodes as follows:
+ *
+ *   n « m <-> exit_unblocked_time(n) < exit_unblocked_time(m)
+ *
+ * which can be used to heuristically order nodes according to how early they
+ * can unblock an exit node and lead to program termination.
+ */
+static inline int
+exit_unblocked_time(const schedule_node *n)
+{
+   return n->exit ? n->exit->unblocked_time : INT_MAX;
+}
 
 void
 schedule_node::set_latency_gen4()
@@ -459,7 +487,8 @@ public:
 
    void run(cfg_t *cfg);
    void add_insts_from_block(bblock_t *block);
-   void compute_delay(schedule_node *node);
+   void compute_delays();
+   void compute_exits();
    virtual void calculate_deps() = 0;
    virtual schedule_node *choose_instruction_to_schedule() = 0;
 
@@ -772,6 +801,8 @@ schedule_node::schedule_node(backend_instruction *inst,
    this->unblocked_time = 0;
    this->cand_generation = 0;
    this->delay = 0;
+   this->exit = NULL;
+   this->is_barrier = false;
 
    /* We can't measure Gen6 timings directly but expect them to be much
     * closer to Gen7 than Gen4.
@@ -796,17 +827,48 @@ instruction_scheduler::add_insts_from_block(bblock_t *block)
    this->instructions_to_schedule = block->end_ip - block->start_ip + 1;
 }
 
-/** Recursive computation of the delay member of a node. */
+/** Computation of the delay member of each node. */
 void
-instruction_scheduler::compute_delay(schedule_node *n)
+instruction_scheduler::compute_delays()
 {
-   if (!n->child_count) {
-      n->delay = issue_time(n->inst);
-   } else {
+   foreach_in_list_reverse(schedule_node, n, &instructions) {
+      if (!n->child_count) {
+         n->delay = issue_time(n->inst);
+      } else {
+         for (int i = 0; i < n->child_count; i++) {
+            assert(n->children[i]->delay);
+            n->delay = MAX2(n->delay, n->latency + n->children[i]->delay);
+         }
+      }
+   }
+}
+
+void
+instruction_scheduler::compute_exits()
+{
+   /* Calculate a lower bound of the scheduling time of each node in the
+    * graph.  This is analogous to the node's critical path but calculated
+    * from the top instead of from the bottom of the block.
+    */
+   foreach_in_list(schedule_node, n, &instructions) {
       for (int i = 0; i < n->child_count; i++) {
-         if (!n->children[i]->delay)
-            compute_delay(n->children[i]);
-         n->delay = MAX2(n->delay, n->latency + n->children[i]->delay);
+         n->children[i]->unblocked_time =
+            MAX2(n->children[i]->unblocked_time,
+                 n->unblocked_time + issue_time(n->inst) + n->child_latency[i]);
+      }
+   }
+
+   /* Calculate the exit of each node by induction based on the exit nodes of
+    * its children.  The preferred exit of a node is the one among the exit
+    * nodes of its children which can be unblocked first according to the
+    * optimistic unblocked time estimate calculated above.
+    */
+   foreach_in_list_reverse(schedule_node, n, &instructions) {
+      n->exit = (n->inst->opcode == FS_OPCODE_DISCARD_JUMP ? n : NULL);
+
+      for (int i = 0; i < n->child_count; i++) {
+         if (exit_unblocked_time(n->children[i]) < exit_unblocked_time(n))
+            n->exit = n->children[i]->exit;
       }
    }
 }
@@ -872,9 +934,13 @@ instruction_scheduler::add_barrier_deps(schedule_node *n)
    schedule_node *prev = (schedule_node *)n->prev;
    schedule_node *next = (schedule_node *)n->next;
 
+   n->is_barrier = true;
+
    if (prev) {
       while (!prev->is_head_sentinel()) {
          add_dep(prev, n, 0);
+         if (prev->is_barrier)
+            break;
          prev = (schedule_node *)prev->prev;
       }
    }
@@ -882,6 +948,8 @@ instruction_scheduler::add_barrier_deps(schedule_node *n)
    if (next) {
       while (!next->is_tail_sentinel()) {
          add_dep(n, next, 0);
+         if (next->is_barrier)
+            break;
          next = (schedule_node *)next->next;
       }
    }
@@ -901,8 +969,7 @@ is_scheduling_barrier(const fs_inst *inst)
 {
    return inst->opcode == FS_OPCODE_PLACEHOLDER_HALT ||
           inst->is_control_flow() ||
-          inst->eot ||
-          (inst->has_side_effects() && inst->opcode != FS_OPCODE_FB_WRITE);
+          inst->has_side_effects();
 }
 
 void
@@ -1348,11 +1415,15 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
    if (mode == SCHEDULE_PRE || mode == SCHEDULE_POST) {
       int chosen_time = 0;
 
-      /* Of the instructions ready to execute or the closest to
-       * being ready, choose the oldest one.
+      /* Of the instructions ready to execute or the closest to being ready,
+       * choose the one most likely to unblock an early program exit, or
+       * otherwise the oldest one.
        */
       foreach_in_list(schedule_node, n, &instructions) {
-         if (!chosen || n->unblocked_time < chosen_time) {
+         if (!chosen ||
+             exit_unblocked_time(n) < exit_unblocked_time(chosen) ||
+             (exit_unblocked_time(n) == exit_unblocked_time(chosen) &&
+              n->unblocked_time < chosen_time)) {
             chosen = n;
             chosen_time = n->unblocked_time;
          }
@@ -1438,6 +1509,15 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
             chosen = n;
             continue;
          } else if (n->delay < chosen->delay) {
+            continue;
+         }
+
+         /* Prefer the node most likely to unblock an early program exit.
+          */
+         if (exit_unblocked_time(n) < exit_unblocked_time(chosen)) {
+            chosen = n;
+            continue;
+         } else if (exit_unblocked_time(n) > exit_unblocked_time(chosen)) {
             continue;
          }
 
@@ -1629,9 +1709,8 @@ instruction_scheduler::run(cfg_t *cfg)
 
       calculate_deps();
 
-      foreach_in_list(schedule_node, n, &instructions) {
-         compute_delay(n);
-      }
+      compute_delays();
+      compute_exits();
 
       schedule_instructions(block);
    }

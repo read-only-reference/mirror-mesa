@@ -39,7 +39,6 @@
 #include "radeon/radeon_elf_util.h"
 #include "radeon/radeon_llvm_emit.h"
 #include "util/u_memory.h"
-#include "util/u_pstipple.h"
 #include "util/u_string.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_build.h"
@@ -566,11 +565,7 @@ static LLVMValueRef get_bounded_indirect_index(struct si_shader_context *ctx,
 					       const struct tgsi_ind_register *ind,
 					       int rel_index, unsigned num)
 {
-	struct gallivm_state *gallivm = &ctx->radeon_bld.gallivm;
-	LLVMBuilderRef builder = gallivm->builder;
 	LLVMValueRef result = get_indirect_index(ctx, ind, rel_index);
-	LLVMValueRef c_max = LLVMConstInt(ctx->i32, num - 1, 0);
-	LLVMValueRef cc;
 
 	/* LLVM 3.8: If indirect resource indexing is used:
 	 * - SI & CIK hang
@@ -579,20 +574,7 @@ static LLVMValueRef get_bounded_indirect_index(struct si_shader_context *ctx,
 	if (HAVE_LLVM <= 0x0308)
 		return LLVMGetUndef(ctx->i32);
 
-	if (util_is_power_of_two(num)) {
-		result = LLVMBuildAnd(builder, result, c_max, "");
-	} else {
-		/* In theory, this MAX pattern should result in code that is
-		 * as good as the bit-wise AND above.
-		 *
-		 * In practice, LLVM generates worse code (at the time of
-		 * writing), because its value tracking is not strong enough.
-		 */
-		cc = LLVMBuildICmp(builder, LLVMIntULE, result, c_max, "");
-		result = LLVMBuildSelect(builder, cc, result, c_max, "");
-	}
-
-	return result;
+	return radeon_llvm_bound_index(&ctx->radeon_bld, result, num);
 }
 
 
@@ -1593,12 +1575,14 @@ static LLVMValueRef get_thread_id(struct si_shader_context *ctx)
 /**
  * Load a dword from a constant buffer.
  */
-static LLVMValueRef buffer_load_const(LLVMBuilderRef builder, LLVMValueRef resource,
-				      LLVMValueRef offset, LLVMTypeRef return_type)
+static LLVMValueRef buffer_load_const(struct si_shader_context *ctx,
+				      LLVMValueRef resource,
+				      LLVMValueRef offset)
 {
+	LLVMBuilderRef builder = ctx->radeon_bld.gallivm.builder;
 	LLVMValueRef args[2] = {resource, offset};
 
-	return lp_build_intrinsic(builder, "llvm.SI.load.const", return_type, args, 2,
+	return lp_build_intrinsic(builder, "llvm.SI.load.const", ctx->f32, args, 2,
 			       LLVMReadNoneAttribute);
 }
 
@@ -1618,8 +1602,8 @@ static LLVMValueRef load_sample_position(struct radeon_llvm_context *radeon_bld,
 	LLVMValueRef offset1 = LLVMBuildAdd(builder, offset0, lp_build_const_int32(gallivm, 4), "");
 
 	LLVMValueRef pos[4] = {
-		buffer_load_const(builder, resource, offset0, ctx->f32),
-		buffer_load_const(builder, resource, offset1, ctx->f32),
+		buffer_load_const(ctx, resource, offset0),
+		buffer_load_const(ctx, resource, offset1),
 		lp_build_const_float(gallivm, 0),
 		lp_build_const_float(gallivm, 0)
 	};
@@ -1660,6 +1644,16 @@ static void declare_system_value(
 	case TGSI_SEMANTIC_BASEVERTEX:
 		value = LLVMGetParam(radeon_bld->main_fn,
 				     SI_PARAM_BASE_VERTEX);
+		break;
+
+	case TGSI_SEMANTIC_BASEINSTANCE:
+		value = LLVMGetParam(radeon_bld->main_fn,
+				     SI_PARAM_START_INSTANCE);
+		break;
+
+	case TGSI_SEMANTIC_DRAWID:
+		value = LLVMGetParam(radeon_bld->main_fn,
+				     SI_PARAM_DRAWID);
 		break;
 
 	case TGSI_SEMANTIC_INVOCATIONID:
@@ -1772,9 +1766,8 @@ static void declare_system_value(
 		offset = decl->Semantic.Name == TGSI_SEMANTIC_DEFAULT_TESSINNER_SI ? 4 : 0;
 
 		for (i = 0; i < 4; i++)
-			val[i] = buffer_load_const(gallivm->builder, buf,
-						   lp_build_const_int32(gallivm, (offset + i) * 4),
-						   ctx->f32);
+			val[i] = buffer_load_const(ctx, buf,
+						   lp_build_const_int32(gallivm, (offset + i) * 4));
 		value = lp_build_gather_values(gallivm, val, 4);
 		break;
 	}
@@ -1908,8 +1901,7 @@ static LLVMValueRef fetch_constant(
 	addr = lp_build_add(&bld_base->uint_bld, addr,
 			    lp_build_const_int32(base->gallivm, idx * 4));
 
-	result = buffer_load_const(base->gallivm->builder, bufp,
-				   addr, ctx->f32);
+	result = buffer_load_const(ctx, bufp, addr);
 
 	if (!tgsi_type_is_64bit(type))
 		result = bitcast(bld_base, type, result);
@@ -1921,8 +1913,8 @@ static LLVMValueRef fetch_constant(
 		addr2 = lp_build_add(&bld_base->uint_bld, addr2,
 				     lp_build_const_int32(base->gallivm, idx * 4));
 
-		result2 = buffer_load_const(base->gallivm->builder, ctx->const_buffers[buf],
-				   addr2, ctx->f32);
+		result2 = buffer_load_const(ctx, ctx->const_buffers[buf],
+					    addr2);
 
 		result = radeon_llvm_emit_fetch_64bit(bld_base, type,
 						      result, result2);
@@ -2219,8 +2211,8 @@ static void si_llvm_emit_clipvertex(struct lp_build_tgsi_context *bld_base,
 				args[1] = lp_build_const_int32(base->gallivm,
 							       ((reg_index * 4 + chan) * 4 +
 								const_chan) * 4);
-				base_elt = buffer_load_const(base->gallivm->builder, const_resource,
-						      args[1], ctx->f32);
+				base_elt = buffer_load_const(ctx, const_resource,
+							     args[1]);
 				args[5 + chan] =
 					lp_build_add(base, args[5 + chan],
 						     lp_build_mul(base, base_elt,
@@ -5421,16 +5413,13 @@ static unsigned llvm_get_type_size(LLVMTypeRef type)
 static void declare_tess_lds(struct si_shader_context *ctx)
 {
 	struct gallivm_state *gallivm = &ctx->radeon_bld.gallivm;
-	LLVMTypeRef i32 = ctx->radeon_bld.soa.bld_base.uint_bld.elem_type;
-	unsigned lds_size = ctx->screen->b.chip_class >= CIK ? 65536 : 32768;
+	struct lp_build_tgsi_context *bld_base = &ctx->radeon_bld.soa.bld_base;
+	struct lp_build_context *uint = &bld_base->uint_bld;
 
-	/* The actual size is computed outside of the shader to reduce
-	 * the number of shader variants. */
-	ctx->lds =
-		LLVMAddGlobalInAddressSpace(gallivm->module,
-					    LLVMArrayType(i32, lds_size / 4),
-					    "tess_lds",
-					    LOCAL_ADDR_SPACE);
+	unsigned lds_size = ctx->screen->b.chip_class >= CIK ? 65536 : 32768;
+	ctx->lds = LLVMBuildIntToPtr(gallivm->builder, uint->zero,
+		LLVMPointerType(LLVMArrayType(ctx->i32, lds_size / 4), LOCAL_ADDR_SPACE),
+		"tess_lds");
 }
 
 static void create_function(struct si_shader_context *ctx)
@@ -5456,7 +5445,8 @@ static void create_function(struct si_shader_context *ctx)
 		params[SI_PARAM_VERTEX_BUFFERS] = const_array(ctx->v16i8, SI_NUM_VERTEX_BUFFERS);
 		params[SI_PARAM_BASE_VERTEX] = ctx->i32;
 		params[SI_PARAM_START_INSTANCE] = ctx->i32;
-		num_params = SI_PARAM_START_INSTANCE+1;
+		params[SI_PARAM_DRAWID] = ctx->i32;
+		num_params = SI_PARAM_DRAWID+1;
 
 		if (shader->key.vs.as_es) {
 			params[ctx->param_es2gs_offset = num_params++] = ctx->i32;
@@ -5725,10 +5715,9 @@ static void preload_constants(struct si_shader_context *ctx)
 		/* Load the constants, we rely on the code sinking to do the rest */
 		for (i = 0; i < num_const * 4; ++i) {
 			ctx->constants[buf][i] =
-				buffer_load_const(gallivm->builder,
+				buffer_load_const(ctx,
 					ctx->const_buffers[buf],
-					lp_build_const_int32(gallivm, i * 4),
-					ctx->f32);
+					lp_build_const_int32(gallivm, i * 4));
 		}
 	}
 }
@@ -5904,7 +5893,8 @@ static void si_llvm_emit_polygon_stipple(struct si_shader_context *ctx,
 	/* The stipple pattern is 32x32, each row has 32 bits. */
 	offset = LLVMBuildMul(builder, address[1],
 			      LLVMConstInt(ctx->i32, 4, 0), "");
-	row = buffer_load_const(builder, desc, offset, ctx->i32);
+	row = buffer_load_const(ctx, desc, offset);
+	row = LLVMBuildBitCast(builder, row, ctx->i32, "");
 	bit = LLVMBuildLShr(builder, row, address[0], "");
 	bit = LLVMBuildTrunc(builder, bit, ctx->i1, "");
 
@@ -5991,10 +5981,10 @@ void si_shader_binary_read_config(struct radeon_shader_binary *binary,
 			}
 			break;
 		}
-
-		if (!conf->spi_ps_input_addr)
-			conf->spi_ps_input_addr = conf->spi_ps_input_ena;
 	}
+
+	if (!conf->spi_ps_input_addr)
+		conf->spi_ps_input_addr = conf->spi_ps_input_ena;
 }
 
 void si_shader_apply_scratch_relocs(struct si_context *sctx,
@@ -6512,7 +6502,10 @@ static void si_init_shader_ctx(struct si_shader_context *ctx,
 	struct lp_build_tgsi_action tmpl = {};
 
 	memset(ctx, 0, sizeof(*ctx));
-	radeon_llvm_context_init(&ctx->radeon_bld, "amdgcn--");
+	radeon_llvm_context_init(
+		&ctx->radeon_bld, "amdgcn--",
+		(shader && shader->selector) ? &shader->selector->info : NULL,
+		(shader && shader->selector) ? shader->selector->tokens : NULL);
 	ctx->tm = tm;
 	ctx->screen = sscreen;
 	if (shader && shader->selector)
@@ -6535,8 +6528,6 @@ static void si_init_shader_ctx(struct si_shader_context *ctx,
 	ctx->v8i32 = LLVMVectorType(ctx->i32, 8);
 
 	bld_base = &ctx->radeon_bld.soa.bld_base;
-	if (shader && shader->selector)
-		bld_base->info = &shader->selector->info;
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = fetch_constant;
 
 	bld_base->op_actions[TGSI_OPCODE_INTERP_CENTROID] = interp_action;

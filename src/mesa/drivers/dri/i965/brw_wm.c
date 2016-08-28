@@ -56,9 +56,16 @@ assign_fs_binding_table_offsets(const struct brw_device_info *devinfo,
    prog_data->binding_table.render_target_start = next_binding_table_offset;
    next_binding_table_offset += MAX2(key->nr_color_regions, 1);
 
-   brw_assign_common_binding_table_offsets(MESA_SHADER_FRAGMENT, devinfo,
-                                           shader_prog, prog, &prog_data->base,
-                                           next_binding_table_offset);
+   next_binding_table_offset =
+      brw_assign_common_binding_table_offsets(MESA_SHADER_FRAGMENT, devinfo,
+                                              shader_prog, prog, &prog_data->base,
+                                              next_binding_table_offset);
+
+   if (prog->nir->info.outputs_read && !key->coherent_fb_fetch) {
+      prog_data->binding_table.render_target_read_start =
+         next_binding_table_offset;
+      next_binding_table_offset += key->nr_color_regions;
+   }
 }
 
 /**
@@ -549,6 +556,9 @@ brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
 
    /* The unique fragment program ID */
    key->program_string_id = fp->id;
+
+   /* Whether reads from the framebuffer should behave coherently. */
+   key->coherent_fb_fetch = ctx->Extensions.MESA_shader_framebuffer_fetch;
 }
 
 void
@@ -608,9 +618,13 @@ brw_fs_precompile(struct gl_context *ctx,
 
    key.nr_color_regions = _mesa_bitcount_64(fp->Base.OutputsWritten &
          ~(BITFIELD64_BIT(FRAG_RESULT_DEPTH) |
-         BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK)));
+           BITFIELD64_BIT(FRAG_RESULT_STENCIL) |
+           BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK)));
 
    key.program_string_id = bfp->id;
+
+   /* Whether reads from the framebuffer should behave coherently. */
+   key.coherent_fb_fetch = ctx->Extensions.MESA_shader_framebuffer_fetch;
 
    uint32_t old_prog_offset = brw->wm.base.prog_offset;
    struct brw_wm_prog_data *old_prog_data = brw->wm.prog_data;

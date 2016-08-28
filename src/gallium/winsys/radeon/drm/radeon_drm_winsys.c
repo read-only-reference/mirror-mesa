@@ -603,6 +603,10 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
         return ws->allocated_vram;
     case RADEON_REQUESTED_GTT_MEMORY:
         return ws->allocated_gtt;
+    case RADEON_MAPPED_VRAM:
+       return ws->mapped_vram;
+    case RADEON_MAPPED_GTT:
+       return ws->mapped_gtt;
     case RADEON_BUFFER_WAIT_TIME_NS:
         return ws->buffer_wait_time;
     case RADEON_TIMESTAMP:
@@ -620,6 +624,8 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
         radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_BYTES_MOVED,
                              "num-bytes-moved", (uint32_t*)&retval);
         return retval;
+    case RADEON_NUM_EVICTIONS:
+        return 0; /* unimplemented */
     case RADEON_VRAM_USAGE:
         radeon_get_drm_value(ws->fd, RADEON_INFO_VRAM_USAGE,
                              "vram-usage", (uint32_t*)&retval);

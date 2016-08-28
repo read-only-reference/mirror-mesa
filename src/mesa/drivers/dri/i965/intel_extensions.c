@@ -26,6 +26,7 @@
 #include "main/version.h"
 
 #include "brw_context.h"
+#include "brw_defines.h"
 #include "intel_batchbuffer.h"
 
 /**
@@ -280,6 +281,11 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_shader_integer_mix = ctx->Const.GLSLVersion >= 130;
    ctx->Extensions.MESA_shader_integer_functions = ctx->Const.GLSLVersion >= 130;
 
+   if (brw->is_g4x || brw->gen >= 5) {
+      ctx->Extensions.MESA_shader_framebuffer_fetch_non_coherent = true;
+      ctx->Extensions.KHR_blend_equation_advanced = true;
+   }
+
    if (brw->gen >= 5) {
       ctx->Extensions.ARB_texture_query_levels = ctx->Const.GLSLVersion >= 130;
       ctx->Extensions.ARB_texture_query_lod = true;
@@ -348,6 +354,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_view = true;
       ctx->Extensions.ARB_shader_storage_buffer_object = true;
       ctx->Extensions.EXT_shader_samples_identical = true;
+      ctx->Extensions.OES_primitive_bounding_box = true;
       ctx->Extensions.OES_texture_buffer = true;
 
       if (brw->can_do_pipelined_register_writes) {
@@ -359,12 +366,18 @@ intelInitExtensions(struct gl_context *ctx)
          if ((brw->gen >= 8 || brw->intelScreen->cmd_parser_version >= 5) &&
              ctx->Const.MaxComputeWorkGroupSize[0] >= 1024) {
             ctx->Extensions.ARB_compute_shader = true;
-            ctx->Extensions.ARB_ES3_1_compatibility = brw->gen >= 8;
+            ctx->Extensions.ARB_ES3_1_compatibility =
+               brw->gen >= 8 || brw->is_haswell;
          }
 
          if (brw->intelScreen->cmd_parser_version >= 2)
             brw->predicate.supported = true;
       }
+   }
+
+   if (brw->gen >= 8 || brw->is_haswell) {
+      ctx->Extensions.ARB_stencil_texturing = true;
+      ctx->Extensions.ARB_texture_stencil8 = true;
    }
 
    if (brw->gen >= 8 || brw->is_haswell || brw->is_baytrail) {
@@ -385,17 +398,18 @@ intelInitExtensions(struct gl_context *ctx)
 
    if (brw->gen >= 8) {
       ctx->Extensions.ARB_shader_precision = true;
-      ctx->Extensions.ARB_stencil_texturing = true;
-      ctx->Extensions.ARB_texture_stencil8 = true;
       ctx->Extensions.ARB_gpu_shader_fp64 = true;
       ctx->Extensions.ARB_vertex_attrib_64bit = true;
-      ctx->Extensions.OES_shader_io_blocks = true;
+      ctx->Extensions.OES_geometry_shader = true;
+      ctx->Extensions.OES_texture_cube_map_array = true;
    }
 
    if (brw->gen >= 9) {
+      ctx->Extensions.KHR_blend_equation_advanced_coherent = true;
       ctx->Extensions.KHR_texture_compression_astc_ldr = true;
       ctx->Extensions.KHR_texture_compression_astc_sliced_3d = true;
       ctx->Extensions.ARB_shader_stencil_export = true;
+      ctx->Extensions.MESA_shader_framebuffer_fetch = true;
    }
 
    if (ctx->API == API_OPENGL_CORE)

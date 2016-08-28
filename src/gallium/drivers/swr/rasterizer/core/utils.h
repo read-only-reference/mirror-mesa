@@ -29,15 +29,17 @@
 
 #include <string.h>
 #include <type_traits>
+#include <algorithm>
 #include "common/os.h"
 #include "common/simdintrin.h"
 #include "common/swr_assert.h"
+#include "core/api.h"
 
 #if defined(_WIN64) || defined(__x86_64__)
 #define _MM_INSERT_EPI64 _mm_insert_epi64
 #define _MM_EXTRACT_EPI64 _mm_extract_epi64
 #else
-INLINE INT64 _MM_EXTRACT_EPI64(__m128i a, const int32_t ndx)
+INLINE int64_t _MM_EXTRACT_EPI64(__m128i a, const int32_t ndx)
 {
     OSALIGNLINE(uint32_t) elems[4];
     _mm_store_si128((__m128i*)elems, a);
@@ -55,7 +57,7 @@ INLINE INT64 _MM_EXTRACT_EPI64(__m128i a, const int32_t ndx)
     }
 }
 
-INLINE __m128i  _MM_INSERT_EPI64(__m128i a, INT64 b, const int32_t ndx)
+INLINE __m128i  _MM_INSERT_EPI64(__m128i a, int64_t b, const int32_t ndx)
 {
     OSALIGNLINE(int64_t) elems[2];
     _mm_store_si128((__m128i*)elems, a);
@@ -73,36 +75,12 @@ INLINE __m128i  _MM_INSERT_EPI64(__m128i a, INT64 b, const int32_t ndx)
 }
 #endif
 
-OSALIGNLINE(struct) BBOX
-{
-    int top{ 0 };
-    int bottom{ 0 };
-    int left{ 0 };
-    int right{ 0 };
-
-    BBOX() {}
-    BBOX(int t, int b, int l, int r) : top(t), bottom(b), left(l), right(r) {}
-
-    bool operator==(const BBOX& rhs)
-    {
-        return (this->top == rhs.top &&
-            this->bottom == rhs.bottom &&
-            this->left == rhs.left &&
-            this->right == rhs.right);
-    }
-
-    bool operator!=(const BBOX& rhs)
-    {
-        return !(*this == rhs);
-    }
-};
-
 struct simdBBox
 {
-    simdscalari top;
-    simdscalari bottom;
-    simdscalari left;
-    simdscalari right;
+    simdscalari ymin;
+    simdscalari ymax;
+    simdscalari xmin;
+    simdscalari xmax;
 };
 
 INLINE
@@ -826,6 +804,26 @@ struct UnrollerL {
 
 template<int End, int Step>
 struct UnrollerL<End, End, Step> {
+    template<typename Lambda>
+    static void step(Lambda& func) {
+    }
+};
+
+// helper function to unroll loops, with mask to skip specific iterations
+template<int Begin, int End, int Step = 1, int Mask = 0x7f>
+struct UnrollerLMask {
+    template<typename Lambda>
+    INLINE static void step(Lambda& func) {
+        if(Mask & (1 << Begin))
+        {
+            func(Begin);
+        }
+        UnrollerL<Begin + Step, End, Step>::step(func);
+    }
+};
+
+template<int End, int Step, int Mask>
+struct UnrollerLMask<End, End, Step, Mask> {
     template<typename Lambda>
     static void step(Lambda& func) {
     }

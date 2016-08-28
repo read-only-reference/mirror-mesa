@@ -489,9 +489,7 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
       *value = image->planar_format->components;
       return true;
    case __DRI_IMAGE_ATTRIB_FD:
-      if (drm_intel_bo_gem_export_to_prime(image->region->bo, value) == 0)
-         return true;
-      return false;
+      return !drm_intel_bo_gem_export_to_prime(image->region->bo, value);
   default:
       return false;
    }
@@ -1081,7 +1079,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      num_depth_stencil_bits,
                                      back_buffer_modes, 2,
                                      singlesample_samples, 1,
-                                     false);
+                                     false, false);
       configs = driConcatConfigs(configs, new_configs);
    }
 
@@ -1103,7 +1101,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      depth_bits, stencil_bits, 1,
                                      back_buffer_modes, 1,
                                      singlesample_samples, 1,
-                                     true);
+                                     true, false);
       configs = driConcatConfigs(configs, new_configs);
    }
 

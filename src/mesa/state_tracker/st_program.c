@@ -364,8 +364,22 @@ st_translate_vertex_program(struct st_context *st,
    output_semantic_name[num_outputs] = TGSI_SEMANTIC_EDGEFLAG;
    output_semantic_index[num_outputs] = 0;
 
-   if (!stvp->glsl_to_tgsi && !stvp->shader_program)
+   /* ARB_vp: */
+   if (!stvp->glsl_to_tgsi && !stvp->shader_program) {
       _mesa_remove_output_reads(&stvp->Base.Base, PROGRAM_OUTPUT);
+
+      /* This determines which states will be updated when the assembly
+       * shader is bound.
+       */
+      stvp->affected_states = ST_NEW_VS_STATE |
+                              ST_NEW_RASTERIZER |
+                              ST_NEW_VERTEX_ARRAYS;
+
+      if (stvp->Base.Base.Parameters->NumParameters)
+         stvp->affected_states |= ST_NEW_VS_CONSTANTS;
+
+      /* No samplers are allowed in ARB_vp. */
+   }
 
    if (stvp->shader_program) {
       nir_shader *nir = st_glsl_to_nir(st, &stvp->Base.Base,
@@ -572,7 +586,7 @@ bool
 st_translate_fragment_program(struct st_context *st,
                               struct st_fragment_program *stfp)
 {
-   GLuint outputMapping[FRAG_RESULT_MAX];
+   GLuint outputMapping[2 * FRAG_RESULT_MAX];
    GLuint inputMapping[VARYING_SLOT_MAX];
    GLuint inputSlotToAttr[VARYING_SLOT_MAX];
    GLuint interpMode[PIPE_MAX_SHADER_INPUTS];  /* XXX size? */
@@ -593,10 +607,31 @@ st_translate_fragment_program(struct st_context *st,
 
    memset(inputSlotToAttr, ~0, sizeof(inputSlotToAttr));
 
+   /* Non-GLSL programs: */
    if (!stfp->glsl_to_tgsi && !stfp->shader_program) {
       _mesa_remove_output_reads(&stfp->Base.Base, PROGRAM_OUTPUT);
       if (st->ctx->Const.GLSLFragCoordIsSysVal)
          _mesa_program_fragment_position_to_sysval(&stfp->Base.Base);
+
+      /* This determines which states will be updated when the assembly
+       * shader is bound.
+       *
+       * fragment.position and glDrawPixels always use constants.
+       */
+      stfp->affected_states = ST_NEW_FS_STATE |
+                              ST_NEW_SAMPLE_SHADING |
+                              ST_NEW_FS_CONSTANTS;
+
+      if (stfp->ati_fs) {
+         /* Just set them for ATI_fs unconditionally. */
+         stfp->affected_states |= ST_NEW_FS_SAMPLER_VIEWS |
+                                  ST_NEW_RENDER_SAMPLERS;
+      } else {
+         /* ARB_fp */
+         if (stfp->Base.Base.SamplersUsed)
+            stfp->affected_states |= ST_NEW_FS_SAMPLER_VIEWS |
+                                     ST_NEW_RENDER_SAMPLERS;
+      }
    }
 
    /*
@@ -775,9 +810,13 @@ st_translate_fragment_program(struct st_context *st,
       }
 
       /* handle remaining outputs (color) */
-      for (attr = 0; attr < FRAG_RESULT_MAX; attr++) {
-         if (outputsWritten & BITFIELD64_BIT(attr)) {
-            switch (attr) {
+      for (attr = 0; attr < ARRAY_SIZE(outputMapping); attr++) {
+         const GLbitfield64 written = attr < FRAG_RESULT_MAX ? outputsWritten :
+            stfp->Base.Base.SecondaryOutputsWritten;
+         const unsigned loc = attr % FRAG_RESULT_MAX;
+
+         if (written & BITFIELD64_BIT(loc)) {
+            switch (loc) {
             case FRAG_RESULT_DEPTH:
             case FRAG_RESULT_STENCIL:
             case FRAG_RESULT_SAMPLE_MASK:
@@ -787,8 +826,8 @@ st_translate_fragment_program(struct st_context *st,
             case FRAG_RESULT_COLOR:
                write_all = GL_TRUE; /* fallthrough */
             default:
-               assert(attr == FRAG_RESULT_COLOR ||
-                      (FRAG_RESULT_DATA0 <= attr && attr < FRAG_RESULT_MAX));
+               assert(loc == FRAG_RESULT_COLOR ||
+                      (FRAG_RESULT_DATA0 <= loc && loc < FRAG_RESULT_MAX));
                fs_output_semantic_name[fs_num_outputs] = TGSI_SEMANTIC_COLOR;
                fs_output_semantic_index[fs_num_outputs] = numColors;
                outputMapping[attr] = fs_num_outputs;
@@ -954,7 +993,7 @@ st_create_fp_variant(struct st_context *st,
 
       /* glDrawPixels (color only) */
       if (key->drawpixels) {
-         nir_lower_drawpixels_options options = {0};
+         nir_lower_drawpixels_options options = {{0}};
          unsigned samplers_used = stfp->Base.Base.SamplersUsed;
 
          /* Find the first unused slot. */

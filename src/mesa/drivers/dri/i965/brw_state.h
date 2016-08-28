@@ -34,7 +34,6 @@
 #define BRW_STATE_H
 
 #include "brw_context.h"
-#include "brw_defines.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,6 +85,7 @@ extern const struct brw_tracked_state brw_gs_abo_surfaces;
 extern const struct brw_tracked_state brw_gs_image_surfaces;
 extern const struct brw_tracked_state brw_vs_unit;
 extern const struct brw_tracked_state brw_renderbuffer_surfaces;
+extern const struct brw_tracked_state brw_renderbuffer_read_surfaces;
 extern const struct brw_tracked_state brw_texture_surfaces;
 extern const struct brw_tracked_state brw_wm_binding_table;
 extern const struct brw_tracked_state brw_gs_binding_table;
@@ -131,7 +131,6 @@ extern const struct brw_tracked_state gen6_vs_state;
 extern const struct brw_tracked_state gen6_wm_push_constants;
 extern const struct brw_tracked_state gen6_wm_state;
 extern const struct brw_tracked_state gen7_depthbuffer;
-extern const struct brw_tracked_state gen7_clip_state;
 extern const struct brw_tracked_state gen7_ds_state;
 extern const struct brw_tracked_state gen7_gs_state;
 extern const struct brw_tracked_state gen7_tcs_push_constants;
@@ -274,13 +273,6 @@ GLuint translate_tex_format(struct brw_context *brw,
 int brw_get_texture_swizzle(const struct gl_context *ctx,
                             const struct gl_texture_object *t);
 
-void brw_emit_surface_state(struct brw_context *brw,
-                            struct intel_mipmap_tree *mt,
-                            const struct isl_view *view,
-                            uint32_t mocs, bool for_gather,
-                            uint32_t *surf_offset, int surf_index,
-                            unsigned read_domains, unsigned write_domains);
-
 void brw_emit_buffer_surface_state(struct brw_context *brw,
                                    uint32_t *out_offset,
                                    drm_intel_bo *bo,
@@ -413,61 +405,12 @@ void brw_upload_clip_prog(struct brw_context *brw);
 /* brw_sf.c */
 void brw_upload_sf_prog(struct brw_context *brw);
 
+bool brw_is_drawing_points(const struct brw_context *brw);
+bool brw_is_drawing_lines(const struct brw_context *brw);
+
 /* gen7_l3_state.c */
 void
 gen7_restore_default_l3_config(struct brw_context *brw);
-
-static inline bool
-is_drawing_points(const struct brw_context *brw)
-{
-   /* Determine if the primitives *reaching the SF* are points */
-   /* _NEW_POLYGON */
-   if (brw->ctx.Polygon.FrontMode == GL_POINT ||
-       brw->ctx.Polygon.BackMode == GL_POINT) {
-      return true;
-   }
-
-   if (brw->geometry_program) {
-      /* BRW_NEW_GEOMETRY_PROGRAM */
-      return brw->geometry_program->OutputType == GL_POINTS;
-   } else if (brw->tes.prog_data) {
-      /* BRW_NEW_TES_PROG_DATA */
-      return brw->tes.prog_data->output_topology ==
-             BRW_TESS_OUTPUT_TOPOLOGY_POINT;
-   } else {
-      /* BRW_NEW_PRIMITIVE */
-      return brw->primitive == _3DPRIM_POINTLIST;
-   }
-}
-
-static inline bool
-is_drawing_lines(const struct brw_context *brw)
-{
-   /* Determine if the primitives *reaching the SF* are points */
-   /* _NEW_POLYGON */
-   if (brw->ctx.Polygon.FrontMode == GL_LINE ||
-       brw->ctx.Polygon.BackMode == GL_LINE) {
-      return true;
-   }
-
-   if (brw->geometry_program) {
-      /* BRW_NEW_GEOMETRY_PROGRAM */
-      return brw->geometry_program->OutputType == GL_LINE_STRIP;
-   } else if (brw->tes.prog_data) {
-      /* BRW_NEW_TES_PROG_DATA */
-      return brw->tes.prog_data->output_topology ==
-             BRW_TESS_OUTPUT_TOPOLOGY_LINE;
-   } else {
-      /* BRW_NEW_PRIMITIVE */
-      switch (brw->primitive) {
-      case _3DPRIM_LINELIST:
-      case _3DPRIM_LINESTRIP:
-      case _3DPRIM_LINELOOP:
-         return true;
-      }
-   }
-   return false;
-}
 
 static inline bool
 use_state_point_size(const struct brw_context *brw)

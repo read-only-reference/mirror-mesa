@@ -235,7 +235,7 @@ swr_create_sampler_state(struct pipe_context *pipe,
 
 static void
 swr_bind_sampler_states(struct pipe_context *pipe,
-                        unsigned shader,
+                        enum pipe_shader_type shader,
                         unsigned start,
                         unsigned num,
                         void **samplers)
@@ -282,7 +282,7 @@ swr_create_sampler_view(struct pipe_context *pipe,
 
 static void
 swr_set_sampler_views(struct pipe_context *pipe,
-                      unsigned shader,
+                      enum pipe_shader_type shader,
                       unsigned start,
                       unsigned num,
                       struct pipe_sampler_view **views)
@@ -575,6 +575,10 @@ swr_set_scissor_states(struct pipe_context *pipe,
    struct swr_context *ctx = swr_context(pipe);
 
    ctx->scissor = *scissor;
+   ctx->swr_scissor.xmin = scissor->minx;
+   ctx->swr_scissor.xmax = scissor->maxx;
+   ctx->swr_scissor.ymin = scissor->miny;
+   ctx->swr_scissor.ymax = scissor->maxy;
    ctx->dirty |= SWR_NEW_SCISSOR;
 }
 
@@ -930,10 +934,7 @@ swr_update_derived(struct pipe_context *pipe,
 
    /* Scissor */
    if (ctx->dirty & SWR_NEW_SCISSOR) {
-      pipe_scissor_state *scissor = &ctx->scissor;
-      BBOX bbox(scissor->miny, scissor->maxy,
-                scissor->minx, scissor->maxx);
-      SwrSetScissorRects(ctx->swrContext, 1, &bbox);
+      SwrSetScissorRects(ctx->swrContext, 1, &ctx->swr_scissor);
    }
 
    /* Viewport */
@@ -944,7 +945,7 @@ swr_update_derived(struct pipe_context *pipe,
       pipe_rasterizer_state *rasterizer = ctx->rasterizer;
 
       SWR_VIEWPORT *vp = &ctx->derived.vp;
-      SWR_VIEWPORT_MATRIX *vpm = &ctx->derived.vpm;
+      SWR_VIEWPORT_MATRICES *vpm = &ctx->derived.vpm;
 
       vp->x = state->translate[0] - state->scale[0];
       vp->width = state->translate[0] + state->scale[0];
@@ -958,12 +959,12 @@ swr_update_derived(struct pipe_context *pipe,
          vp->maxZ = state->translate[2] + state->scale[2];
       }
 
-      vpm->m00 = state->scale[0];
-      vpm->m11 = state->scale[1];
-      vpm->m22 = state->scale[2];
-      vpm->m30 = state->translate[0];
-      vpm->m31 = state->translate[1];
-      vpm->m32 = state->translate[2];
+      vpm->m00[0] = state->scale[0];
+      vpm->m11[0] = state->scale[1];
+      vpm->m22[0] = state->scale[2];
+      vpm->m30[0] = state->translate[0];
+      vpm->m31[0] = state->translate[1];
+      vpm->m32[0] = state->translate[2];
 
       /* Now that the matrix is calculated, clip the view coords to screen
        * size.  OpenGL allows for -ve x,y in the viewport. */
@@ -1390,7 +1391,7 @@ swr_update_derived(struct pipe_context *pipe,
 
    /* Ensure that any in-progress attachment change StoreTiles finish */
    if (swr_is_fence_pending(screen->flush_fence))
-      swr_fence_finish(pipe->screen, screen->flush_fence, 0);
+      swr_fence_finish(pipe->screen, NULL, screen->flush_fence, 0);
 
    /* Finally, update the in-use status of all resources involved in draw */
    swr_update_resource_status(pipe, p_draw_info);

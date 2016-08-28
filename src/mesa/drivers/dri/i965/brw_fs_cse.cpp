@@ -71,6 +71,7 @@ is_expression(const fs_visitor *v, const fs_inst *const inst)
    case BRW_OPCODE_PLN:
    case BRW_OPCODE_MAD:
    case BRW_OPCODE_LRP:
+   case FS_OPCODE_FB_READ_LOGICAL:
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_LOGICAL:
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7:
@@ -190,6 +191,7 @@ instructions_match(fs_inst *a, fs_inst *b, bool *negate)
           a->header_size == b->header_size &&
           a->shadow_compare == b->shadow_compare &&
           a->pi_noperspective == b->pi_noperspective &&
+          a->target == b->target &&
           a->sources == b->sources &&
           operands_match(a, b, negate);
 }

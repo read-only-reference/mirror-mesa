@@ -82,8 +82,6 @@ struct amdgpu_cs_context {
 
    int                         buffer_indices_hashlist[4096];
 
-   uint64_t                    used_vram;
-   uint64_t                    used_gart;
 
    unsigned                    max_dependencies;
 
@@ -115,6 +113,7 @@ struct amdgpu_cs {
    void *flush_data;
 
    struct util_queue_fence flush_completed;
+   struct pipe_fence_handle *next_fence;
 };
 
 struct amdgpu_fence {

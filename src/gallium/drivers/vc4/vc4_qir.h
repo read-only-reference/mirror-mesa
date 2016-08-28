@@ -61,6 +61,7 @@ enum qfile {
         QFILE_FRAG_X,
         QFILE_FRAG_Y,
         QFILE_FRAG_REV_FLAG,
+        QFILE_QPU_ELEMENT,
 
         /**
          * Stores an immediate value in the index field that will be used
@@ -155,7 +156,19 @@ enum qop {
          */
         QOP_TEX_RESULT,
 
+        /* 32-bit immediate loaded to each SIMD channel */
         QOP_LOAD_IMM,
+
+        /* 32-bit immediate divided into 16 2-bit unsigned int values and
+         * loaded to each corresponding SIMD channel.
+         */
+        QOP_LOAD_IMM_U2,
+        /* 32-bit immediate divided into 16 2-bit signed int values and
+         * loaded to each corresponding SIMD channel.
+         */
+        QOP_LOAD_IMM_I2,
+
+        QOP_ROT_MUL,
 
         /* Jumps to block->successor[0] if the qinst->cond (as a
          * QPU_COND_BRANCH_*) passes, or block->successor[1] if not.  Note
@@ -246,6 +259,8 @@ enum quniform_contents {
         /** A reference to a texture config parameter 2 cubemap stride uniform */
         QUNIFORM_TEXTURE_CONFIG_P2,
 
+        QUNIFORM_TEXTURE_FIRST_LEVEL,
+
         QUNIFORM_TEXTURE_MSAA_ADDR,
 
         QUNIFORM_UBO_ADDR,
@@ -314,7 +329,7 @@ struct vc4_key {
                                 unsigned compare_func:3;
                                 unsigned wrap_s:3;
                                 unsigned wrap_t:3;
-                                unsigned forced_first_level:8;
+                                bool force_first_level:1;
                         };
                         struct {
                                 uint16_t msaa_width, msaa_height;
@@ -350,12 +365,7 @@ struct vc4_fs_key {
 struct vc4_vs_key {
         struct vc4_key base;
 
-        /**
-         * This is a proxy for the array of FS input semantics, which is
-         * larger than we would want to put in the key.
-         */
-        uint64_t compiled_fs_id;
-
+        const struct vc4_fs_inputs *fs_inputs;
         enum pipe_format attr_formats[8];
         bool is_coord;
         bool per_vertex_point_size;
@@ -438,6 +448,7 @@ struct vc4_compile {
         struct qreg execute;
 
         struct qreg line_x, point_x, point_y;
+        /** boolean (~0 -> true) if the fragment has been discarded. */
         struct qreg discard;
         struct qreg payload_FRAG_Z;
         struct qreg payload_FRAG_W;
@@ -497,6 +508,18 @@ struct vc4_compile {
         uint32_t qpu_inst_size;
         uint32_t num_inputs;
 
+        /**
+         * Number of inputs from num_inputs remaining to be queued to the read
+         * FIFO in the VS/CS.
+         */
+        uint32_t num_inputs_remaining;
+
+        /* Number of inputs currently in the read FIFO for the VS/CS */
+        uint32_t num_inputs_in_fifo;
+
+        /** Next offset in the VPM to read from in the VS/CS */
+        uint32_t vpm_read_offset;
+
         uint32_t program_id;
         uint32_t variant_id;
 };
@@ -507,11 +530,6 @@ struct vc4_compile {
 #define VC4_NIR_TLB_COLOR_READ_INPUT		2000000000
 
 #define VC4_NIR_MS_MASK_OUTPUT			2000000000
-
-/* Special offset for nir_load_uniform values to get a QUNIFORM_*
- * state-dependent value.
- */
-#define VC4_NIR_STATE_UNIFORM_OFFSET		1000000000
 
 struct vc4_compile *qir_compile_init(void);
 void qir_compile_destroy(struct vc4_compile *c);
@@ -569,8 +587,6 @@ bool qir_opt_small_immediates(struct vc4_compile *c);
 bool qir_opt_vpm(struct vc4_compile *c);
 void vc4_nir_lower_blend(nir_shader *s, struct vc4_compile *c);
 void vc4_nir_lower_io(nir_shader *s, struct vc4_compile *c);
-nir_ssa_def *vc4_nir_get_state_uniform(struct nir_builder *b,
-                                       enum quniform_contents contents);
 nir_ssa_def *vc4_nir_get_swizzled_channel(struct nir_builder *b,
                                           nir_ssa_def **srcs, int swiz);
 void vc4_nir_lower_txf_ms(nir_shader *s, struct vc4_compile *c);
@@ -791,6 +807,32 @@ qir_LOAD_IMM(struct vc4_compile *c, uint32_t val)
 {
         return qir_emit_def(c, qir_inst(QOP_LOAD_IMM, c->undef,
                                         qir_reg(QFILE_LOAD_IMM, val), c->undef));
+}
+
+static inline struct qreg
+qir_LOAD_IMM_U2(struct vc4_compile *c, uint32_t val)
+{
+        return qir_emit_def(c, qir_inst(QOP_LOAD_IMM_U2, c->undef,
+                                        qir_reg(QFILE_LOAD_IMM, val),
+                                        c->undef));
+}
+
+static inline struct qreg
+qir_LOAD_IMM_I2(struct vc4_compile *c, uint32_t val)
+{
+        return qir_emit_def(c, qir_inst(QOP_LOAD_IMM_I2, c->undef,
+                                        qir_reg(QFILE_LOAD_IMM, val),
+                                        c->undef));
+}
+
+/** Shifts the multiply output to the right by rot channels */
+static inline struct qreg
+qir_ROT_MUL(struct vc4_compile *c, struct qreg val, uint32_t rot)
+{
+        return qir_emit_def(c, qir_inst(QOP_ROT_MUL, c->undef,
+                                        val,
+                                        qir_reg(QFILE_LOAD_IMM,
+                                                QPU_SMALL_IMM_MUL_ROT + rot)));
 }
 
 static inline void

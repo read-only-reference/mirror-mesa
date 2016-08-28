@@ -86,6 +86,8 @@ svga_get_name( struct pipe_screen *pscreen )
     */
    build = "build: DEBUG;";
    mutex = "mutex: " PIPE_ATOMIC ";";
+#elif defined(VMX86_STATS)
+   build = "build: OPT;";
 #else
    build = "build: RELEASE;";
 #endif
@@ -179,6 +181,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    switch (param) {
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+   case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
       return 1;
    case PIPE_CAP_TWO_SIDED_STENCIL:
       return 1;
@@ -390,6 +393,8 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
       return sws->have_vgpu10;
+   case PIPE_CAP_CLEAR_TEXTURE:
+      return sws->have_vgpu10;
    case PIPE_CAP_UMA:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -400,7 +405,6 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TXQS:
    case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
    case PIPE_CAP_SHAREABLE_SHADERS:
-   case PIPE_CAP_CLEAR_TEXTURE:
    case PIPE_CAP_DRAW_PARAMETERS:
    case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
    case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
@@ -804,18 +808,28 @@ svga_fence_reference(struct pipe_screen *screen,
 
 static boolean
 svga_fence_finish(struct pipe_screen *screen,
+                  struct pipe_context *ctx,
                   struct pipe_fence_handle *fence,
                   uint64_t timeout)
 {
    struct svga_winsys_screen *sws = svga_screen(screen)->sws;
+   boolean retVal;
 
-   if (!timeout)
-      return sws->fence_signalled(sws, fence, 0) == 0;
+   SVGA_STATS_TIME_PUSH(sws, SVGA_STATS_TIME_FENCEFINISH);
 
-   SVGA_DBG(DEBUG_DMA|DEBUG_PERF, "%s fence_ptr %p\n",
-            __FUNCTION__, fence);
+   if (!timeout) {
+      retVal = sws->fence_signalled(sws, fence, 0) == 0;
+   }
+   else {
+      SVGA_DBG(DEBUG_DMA|DEBUG_PERF, "%s fence_ptr %p\n",
+               __FUNCTION__, fence);
 
-   return sws->fence_finish(sws, fence, 0) == 0;
+      retVal = sws->fence_finish(sws, fence, 0) == 0;
+   }
+
+   SVGA_STATS_TIME_POP(sws);
+
+   return retVal;
 }
 
 

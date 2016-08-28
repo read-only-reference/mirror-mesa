@@ -292,6 +292,14 @@ void brw_fb_WRITE(struct brw_codegen *p,
 		   bool last_render_target,
 		   bool header_present);
 
+brw_inst *gen9_fb_READ(struct brw_codegen *p,
+                       struct brw_reg dst,
+                       struct brw_reg payload,
+                       unsigned binding_table_index,
+                       unsigned msg_length,
+                       unsigned response_length,
+                       bool per_sample);
+
 void brw_SAMPLE(struct brw_codegen *p,
 		struct brw_reg dest,
 		unsigned msg_reg_nr,
@@ -518,7 +526,7 @@ void brw_math_invert( struct brw_codegen *p,
 
 void brw_set_src1(struct brw_codegen *p, brw_inst *insn, struct brw_reg reg);
 
-void brw_set_uip_jip(struct brw_codegen *p);
+void brw_set_uip_jip(struct brw_codegen *p, int start_offset);
 
 enum brw_conditional_mod brw_negate_cmod(uint32_t cmod);
 enum brw_conditional_mod brw_swap_cmod(uint32_t cmod);

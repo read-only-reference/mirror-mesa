@@ -22,6 +22,7 @@
  */
 
 #include "vk_format_info.h"
+#include "genX_multisample.h"
 
 static uint32_t
 vertex_element_comp_control(enum isl_format format, unsigned comp)
@@ -236,44 +237,12 @@ emit_3dstate_sbe(struct anv_pipeline *pipeline)
       .PointSpriteTextureCoordinateOrigin = UPPERLEFT,
       .NumberofSFOutputAttributes = wm_prog_data->num_varying_inputs,
       .ConstantInterpolationEnable = wm_prog_data->flat_inputs,
+   };
 
 #if GEN_GEN >= 9
-      .Attribute0ActiveComponentFormat = ACF_XYZW,
-      .Attribute1ActiveComponentFormat = ACF_XYZW,
-      .Attribute2ActiveComponentFormat = ACF_XYZW,
-      .Attribute3ActiveComponentFormat = ACF_XYZW,
-      .Attribute4ActiveComponentFormat = ACF_XYZW,
-      .Attribute5ActiveComponentFormat = ACF_XYZW,
-      .Attribute6ActiveComponentFormat = ACF_XYZW,
-      .Attribute7ActiveComponentFormat = ACF_XYZW,
-      .Attribute8ActiveComponentFormat = ACF_XYZW,
-      .Attribute9ActiveComponentFormat = ACF_XYZW,
-      .Attribute10ActiveComponentFormat = ACF_XYZW,
-      .Attribute11ActiveComponentFormat = ACF_XYZW,
-      .Attribute12ActiveComponentFormat = ACF_XYZW,
-      .Attribute13ActiveComponentFormat = ACF_XYZW,
-      .Attribute14ActiveComponentFormat = ACF_XYZW,
-      .Attribute15ActiveComponentFormat = ACF_XYZW,
-      /* wow, much field, very attribute */
-      .Attribute16ActiveComponentFormat = ACF_XYZW,
-      .Attribute17ActiveComponentFormat = ACF_XYZW,
-      .Attribute18ActiveComponentFormat = ACF_XYZW,
-      .Attribute19ActiveComponentFormat = ACF_XYZW,
-      .Attribute20ActiveComponentFormat = ACF_XYZW,
-      .Attribute21ActiveComponentFormat = ACF_XYZW,
-      .Attribute22ActiveComponentFormat = ACF_XYZW,
-      .Attribute23ActiveComponentFormat = ACF_XYZW,
-      .Attribute24ActiveComponentFormat = ACF_XYZW,
-      .Attribute25ActiveComponentFormat = ACF_XYZW,
-      .Attribute26ActiveComponentFormat = ACF_XYZW,
-      .Attribute27ActiveComponentFormat = ACF_XYZW,
-      .Attribute28ActiveComponentFormat = ACF_XYZW,
-      .Attribute29ActiveComponentFormat = ACF_XYZW,
-      .Attribute28ActiveComponentFormat = ACF_XYZW,
-      .Attribute29ActiveComponentFormat = ACF_XYZW,
-      .Attribute30ActiveComponentFormat = ACF_XYZW,
+   for (unsigned i = 0; i < 32; i++)
+      sbe.AttributeActiveComponentFormat[i] = ACF_XYZW;
 #endif
-   };
 
 #if GEN_GEN >= 8
    /* On Broadwell, they broke 3DSTATE_SBE into two packets */
@@ -361,6 +330,158 @@ static const uint32_t vk_to_gen_front_face[] = {
    [VK_FRONT_FACE_COUNTER_CLOCKWISE]         = 1,
    [VK_FRONT_FACE_CLOCKWISE]                 = 0
 };
+
+static void
+emit_rs_state(struct anv_pipeline *pipeline,
+              const VkPipelineRasterizationStateCreateInfo *rs_info,
+              const VkPipelineMultisampleStateCreateInfo *ms_info,
+              const struct anv_render_pass *pass,
+              const struct anv_subpass *subpass,
+              const struct anv_graphics_pipeline_create_info *extra)
+{
+   struct GENX(3DSTATE_SF) sf = {
+      GENX(3DSTATE_SF_header),
+   };
+
+   sf.ViewportTransformEnable = !(extra && extra->use_rectlist);
+   sf.StatisticsEnable = true;
+   sf.TriangleStripListProvokingVertexSelect = 0;
+   sf.LineStripListProvokingVertexSelect = 0;
+   sf.TriangleFanProvokingVertexSelect = 1;
+   sf.PointWidthSource = Vertex;
+   sf.PointWidth = 1.0;
+
+#if GEN_GEN >= 8
+   struct GENX(3DSTATE_RASTER) raster = {
+      GENX(3DSTATE_RASTER_header),
+   };
+#else
+#  define raster sf
+#endif
+
+   /* For details on 3DSTATE_RASTER multisample state, see the BSpec table
+    * "Multisample Modes State".
+    */
+#if GEN_GEN >= 8
+   raster.DXMultisampleRasterizationEnable = true;
+   raster.ForcedSampleCount = FSC_NUMRASTSAMPLES_0;
+   raster.ForceMultisampling = false;
+#else
+   raster.MultisampleRasterizationMode =
+      (ms_info && ms_info->rasterizationSamples > 1) ?
+      MSRASTMODE_ON_PATTERN : MSRASTMODE_OFF_PIXEL;
+#endif
+
+   raster.FrontWinding = vk_to_gen_front_face[rs_info->frontFace];
+   raster.CullMode = vk_to_gen_cullmode[rs_info->cullMode];
+   raster.FrontFaceFillMode = vk_to_gen_fillmode[rs_info->polygonMode];
+   raster.BackFaceFillMode = vk_to_gen_fillmode[rs_info->polygonMode];
+   raster.ScissorRectangleEnable = !(extra && extra->use_rectlist);
+
+#if GEN_GEN >= 9
+   /* GEN9+ splits ViewportZClipTestEnable into near and far enable bits */
+   raster.ViewportZFarClipTestEnable = !pipeline->depth_clamp_enable;
+   raster.ViewportZNearClipTestEnable = !pipeline->depth_clamp_enable;
+#elif GEN_GEN >= 8
+   raster.ViewportZClipTestEnable = !pipeline->depth_clamp_enable;
+#endif
+
+   raster.GlobalDepthOffsetEnableSolid = rs_info->depthBiasEnable;
+   raster.GlobalDepthOffsetEnableWireframe = rs_info->depthBiasEnable;
+   raster.GlobalDepthOffsetEnablePoint = rs_info->depthBiasEnable;
+
+#if GEN_GEN == 7
+   /* Gen7 requires that we provide the depth format in 3DSTATE_SF so that it
+    * can get the depth offsets correct.
+    */
+   if (subpass->depth_stencil_attachment < pass->attachment_count) {
+      VkFormat vk_format =
+         pass->attachments[subpass->depth_stencil_attachment].format;
+      assert(vk_format_is_depth_or_stencil(vk_format));
+      if (vk_format_aspects(vk_format) & VK_IMAGE_ASPECT_DEPTH_BIT) {
+         enum isl_format isl_format =
+            anv_get_isl_format(&pipeline->device->info, vk_format,
+                               VK_IMAGE_ASPECT_DEPTH_BIT,
+                               VK_IMAGE_TILING_OPTIMAL);
+         sf.DepthBufferSurfaceFormat =
+            isl_format_get_depth_format(isl_format, false);
+      }
+   }
+#endif
+
+#if GEN_GEN >= 8
+   GENX(3DSTATE_SF_pack)(NULL, pipeline->gen8.sf, &sf);
+   GENX(3DSTATE_RASTER_pack)(NULL, pipeline->gen8.raster, &raster);
+#else
+#  undef raster
+   GENX(3DSTATE_SF_pack)(NULL, &pipeline->gen7.sf, &sf);
+#endif
+}
+
+static void
+emit_ms_state(struct anv_pipeline *pipeline,
+              const VkPipelineMultisampleStateCreateInfo *info)
+{
+   uint32_t samples = 1;
+   uint32_t log2_samples = 0;
+
+   /* From the Vulkan 1.0 spec:
+    *    If pSampleMask is NULL, it is treated as if the mask has all bits
+    *    enabled, i.e. no coverage is removed from fragments.
+    *
+    * 3DSTATE_SAMPLE_MASK.SampleMask is 16 bits.
+    */
+#if GEN_GEN >= 8
+   uint32_t sample_mask = 0xffff;
+#else
+   uint32_t sample_mask = 0xff;
+#endif
+
+   if (info) {
+      samples = info->rasterizationSamples;
+      log2_samples = __builtin_ffs(samples) - 1;
+   }
+
+   if (info && info->pSampleMask)
+      sample_mask &= info->pSampleMask[0];
+
+   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_MULTISAMPLE), ms) {
+      ms.NumberofMultisamples       = log2_samples;
+
+#if GEN_GEN >= 8
+      /* The PRM says that this bit is valid only for DX9:
+       *
+       *    SW can choose to set this bit only for DX9 API. DX10/OGL API's
+       *    should not have any effect by setting or not setting this bit.
+       */
+      ms.PixelPositionOffsetEnable  = false;
+      ms.PixelLocation              = CENTER;
+#else
+      ms.PixelLocation              = PIXLOC_CENTER;
+
+      switch (samples) {
+      case 1:
+         SAMPLE_POS_1X(ms.Sample);
+         break;
+      case 2:
+         SAMPLE_POS_2X(ms.Sample);
+         break;
+      case 4:
+         SAMPLE_POS_4X(ms.Sample);
+         break;
+      case 8:
+         SAMPLE_POS_8X(ms.Sample);
+         break;
+      default:
+         break;
+      }
+#endif
+   }
+
+   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_SAMPLE_MASK), sm) {
+      sm.SampleMask = sample_mask;
+   }
+}
 
 static const uint32_t vk_to_gen_logic_op[] = {
    [VK_LOGIC_OP_COPY]                        = LOGICOP_COPY,
@@ -547,11 +668,15 @@ emit_cb_state(struct anv_pipeline *pipeline,
       blend_state.Entry[i].WriteDisableBlue = true;
    }
 
-   struct anv_pipeline_bind_map *map =
-      &pipeline->bindings[MESA_SHADER_FRAGMENT];
+   uint32_t surface_count = 0;
+   struct anv_pipeline_bind_map *map;
+   if (anv_pipeline_has_stage(pipeline, MESA_SHADER_FRAGMENT)) {
+      map = &pipeline->shaders[MESA_SHADER_FRAGMENT]->bind_map;
+      surface_count = map->surface_count;
+   }
 
    bool has_writeable_rt = false;
-   for (unsigned i = 0; i < map->surface_count; i++) {
+   for (unsigned i = 0; i < surface_count; i++) {
       struct anv_pipeline_binding *binding = &map->surface_to_descriptor[i];
 
       /* All color attachments are at the beginning of the binding table */

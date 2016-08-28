@@ -288,7 +288,7 @@ static bool si_switch_compute_shader(struct si_context *sctx,
 	shader_va = shader->bo->gpu_address + offset;
 
 	radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx, shader->bo,
-	                          RADEON_USAGE_READ, RADEON_PRIO_USER_SHADER);
+	                          RADEON_USAGE_READ, RADEON_PRIO_SHADER_BINARY);
 
 	radeon_set_sh_reg_seq(cs, R_00B830_COMPUTE_PGM_LO, 2);
 	radeon_emit(cs, shader_va >> 8);
@@ -461,6 +461,12 @@ static void si_launch_grid(
 				 SI_CONTEXT_CS_PARTIAL_FLUSH;
 
 	si_decompress_compute_textures(sctx);
+
+	/* Add buffer sizes for memory checking in need_cs_space. */
+	r600_context_add_resource_size(ctx, &program->shader.bo->b.b);
+	if (info->indirect)
+		r600_context_add_resource_size(ctx, info->indirect);
+	/* TODO: add the scratch buffer */
 
 	si_need_cs_space(sctx);
 

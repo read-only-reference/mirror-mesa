@@ -67,6 +67,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    switch (param) {
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+   case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
       return 1;
    case PIPE_CAP_TWO_SIDED_STENCIL:
       return 1;
@@ -520,6 +521,7 @@ softpipe_get_compute_param(struct pipe_screen *_screen,
    case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
    case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
    case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+   case PIPE_COMPUTE_CAP_ADDRESS_BITS:
       break;
    }
    return 0;

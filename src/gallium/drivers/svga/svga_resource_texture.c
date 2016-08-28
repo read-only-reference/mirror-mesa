@@ -29,7 +29,6 @@
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
 #include "os/os_thread.h"
-#include "os/os_time.h"
 #include "util/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_math.h"
@@ -335,20 +334,22 @@ svga_texture_transfer_map(struct pipe_context *pipe,
    boolean use_direct_map = svga_have_gb_objects(svga) &&
       !svga_have_gb_dma(svga);
    unsigned d;
-   void *returnVal;
-   int64_t begin = os_time_get();
+   void *returnVal = NULL;
+   int64_t begin = svga_get_time(svga);
+
+   SVGA_STATS_TIME_PUSH(sws, SVGA_STATS_TIME_TEXTRANSFERMAP);
 
    /* We can't map texture storage directly unless we have GB objects */
    if (usage & PIPE_TRANSFER_MAP_DIRECTLY) {
       if (svga_have_gb_objects(svga))
          use_direct_map = TRUE;
       else
-         return NULL;
+         goto done;
    }
 
    st = CALLOC_STRUCT(svga_transfer);
    if (!st)
-      return NULL;
+      goto done;
 
    st->base.level = level;
    st->base.usage = usage;
@@ -396,6 +397,10 @@ svga_texture_transfer_map(struct pipe_context *pipe,
 
    st->base.stride = nblocksx*util_format_get_blocksize(texture->format);
    st->base.layer_stride = st->base.stride * nblocksy;
+   st->use_direct_map = use_direct_map;
+
+   *ptransfer = &st->base;
+
 
    if (usage & PIPE_TRANSFER_WRITE) {
       /* record texture upload for HUD */
@@ -416,7 +421,7 @@ svga_texture_transfer_map(struct pipe_context *pipe,
 
       if (!st->hwbuf) {
          FREE(st);
-         return NULL;
+         goto done;
       }
 
       if (st->hw_nblocksy < nblocksy) {
@@ -426,16 +431,16 @@ svga_texture_transfer_map(struct pipe_context *pipe,
             debug_printf("%s: failed to allocate %u KB of DMA, "
                          "splitting into %u x %u KB DMA transfers\n",
                          __FUNCTION__,
-                         (nblocksy*st->base.stride + 1023)/1024,
-                         (nblocksy + st->hw_nblocksy - 1)/st->hw_nblocksy,
-                         (st->hw_nblocksy*st->base.stride + 1023)/1024);
+                         (nblocksy * st->base.stride + 1023) / 1024,
+                         (nblocksy + st->hw_nblocksy - 1) / st->hw_nblocksy,
+                         (st->hw_nblocksy * st->base.stride + 1023) / 1024);
          }
 
          st->swbuf = MALLOC(nblocksy * st->base.stride * d);
          if (!st->swbuf) {
             sws->buffer_destroy(sws, st->hwbuf);
             FREE(st);
-            return NULL;
+            goto done;
          }
       }
 
@@ -450,7 +455,7 @@ svga_texture_transfer_map(struct pipe_context *pipe,
 
       if (!surf) {
          FREE(st);
-         return NULL;
+         goto done;
       }
 
       /* If this is the first time mapping to the surface in this
@@ -466,13 +471,14 @@ svga_texture_transfer_map(struct pipe_context *pipe,
          svga_surfaces_flush(svga);
 
          if (svga_have_vgpu10(svga)) {
-            ret = readback_image_vgpu10(svga, surf, st->slice, transfer->level,
+            ret = readback_image_vgpu10(svga, surf, st->slice, level,
                                         tex->b.b.last_level + 1);
          } else {
-            ret = readback_image_vgpu9(svga, surf, st->slice, transfer->level);
+            ret = readback_image_vgpu9(svga, surf, st->slice, level);
          }
 
          svga->hud.num_readbacks++;
+         SVGA_STATS_COUNT_INC(sws, SVGA_STATS_COUNT_TEXREADBACK);
 
          assert(ret == PIPE_OK);
          (void) ret;
@@ -483,12 +489,12 @@ svga_texture_transfer_map(struct pipe_context *pipe,
           * Note: if PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE were specified
           * we could potentially clear the flag for all faces/layers/mips.
           */
-         svga_clear_texture_rendered_to(tex, st->slice, transfer->level);
+         svga_clear_texture_rendered_to(tex, st->slice, level);
       }
       else {
-	 assert(transfer->usage & PIPE_TRANSFER_WRITE);
-	 if ((transfer->usage & PIPE_TRANSFER_UNSYNCHRONIZED) == 0) {
-            if (svga_is_texture_dirty(tex, st->slice, transfer->level)) {
+	 assert(usage & PIPE_TRANSFER_WRITE);
+	 if ((usage & PIPE_TRANSFER_UNSYNCHRONIZED) == 0) {
+            if (svga_is_texture_dirty(tex, st->slice, level)) {
                /*
                 * do a surface flush if the subresource has been modified
                 * in this command buffer.
@@ -496,20 +502,17 @@ svga_texture_transfer_map(struct pipe_context *pipe,
                svga_surfaces_flush(svga);
                if (!sws->surface_is_flushed(sws, surf)) {
                   svga->hud.surface_write_flushes++;
+                  SVGA_STATS_COUNT_INC(sws, SVGA_STATS_COUNT_SURFACEWRITEFLUSH);
                   svga_context_flush(svga, NULL);
                }
             }
 	 }
       }
-      if (transfer->usage & PIPE_TRANSFER_WRITE) {
+      if (usage & PIPE_TRANSFER_WRITE) {
          /* mark this texture level as dirty */
-         svga_set_texture_dirty(tex, st->slice, transfer->level);
+         svga_set_texture_dirty(tex, st->slice, level);
       }
    }
-
-   st->use_direct_map = use_direct_map;
-
-   *ptransfer = &st->base;
 
    /*
     * Begin mapping code
@@ -517,12 +520,11 @@ svga_texture_transfer_map(struct pipe_context *pipe,
    if (st->swbuf) {
       returnVal = st->swbuf;
    }
-   else if (!st->use_direct_map) {
+   else if (!use_direct_map) {
       returnVal = sws->buffer_map(sws, st->hwbuf, usage);
    }
    else {
       SVGA3dSize baseLevelSize;
-      struct svga_texture *tex = svga_texture(texture);
       struct svga_winsys_surface *surf = tex->handle;
       uint8_t *map;
       boolean retry;
@@ -546,7 +548,8 @@ svga_texture_transfer_map(struct pipe_context *pipe,
        */
       if (!map) {
          FREE(st);
-         return map;
+         returnVal = map;
+         goto done;
       }
 
       /**
@@ -579,9 +582,11 @@ svga_texture_transfer_map(struct pipe_context *pipe,
       returnVal = (void *) (map + offset);
    }
 
-   svga->hud.map_buffer_time += (os_time_get() - begin);
+   svga->hud.map_buffer_time += (svga_get_time(svga) - begin);
    svga->hud.num_resources_mapped++;
 
+done:
+   SVGA_STATS_TIME_POP(sws);
    return returnVal;
 }
 
@@ -662,6 +667,8 @@ svga_texture_transfer_unmap(struct pipe_context *pipe,
    struct svga_transfer *st = svga_transfer(transfer);
    struct svga_texture *tex = svga_texture(transfer->resource);
 
+   SVGA_STATS_TIME_PUSH(sws, SVGA_STATS_TIME_TEXTRANSFERUNMAP);
+
    if (!st->swbuf) {
       if (st->use_direct_map) {
          svga_texture_surface_unmap(svga, transfer);
@@ -685,8 +692,7 @@ svga_texture_transfer_unmap(struct pipe_context *pipe,
 
       svga_transfer_dma(svga, st, SVGA3D_WRITE_HOST_VRAM, flags);
    } else if (transfer->usage & PIPE_TRANSFER_WRITE) {
-      struct svga_winsys_surface *surf =
-	 svga_texture(transfer->resource)->handle;
+      struct svga_winsys_surface *surf = tex->handle;
       SVGA3dBox box;
       enum pipe_error ret;
       unsigned nlayers = 1;
@@ -758,6 +764,7 @@ svga_texture_transfer_unmap(struct pipe_context *pipe,
       sws->buffer_destroy(sws, st->hwbuf);
    }
    FREE(st);
+   SVGA_STATS_TIME_POP(sws);
 }
 
 
@@ -790,21 +797,24 @@ svga_texture_create(struct pipe_screen *screen,
    struct svga_texture *tex;
    unsigned bindings = template->bind;
 
+   SVGA_STATS_TIME_PUSH(svgascreen->sws,
+                        SVGA_STATS_TIME_CREATETEXTURE);
+
    assert(template->last_level < SVGA_MAX_TEXTURE_LEVELS);
    if (template->last_level >= SVGA_MAX_TEXTURE_LEVELS) {
-      return NULL;
+      goto fail_notex;
    }
 
    tex = CALLOC_STRUCT(svga_texture);
    if (!tex) {
-      return NULL;
+      goto fail_notex;
    }
 
    tex->defined = CALLOC(template->depth0 * template->array_size,
                          sizeof(tex->defined[0]));
    if (!tex->defined) {
       FREE(tex);
-      return NULL;
+      goto fail_notex;
    }
 
    tex->rendered_to = CALLOC(template->depth0 * template->array_size,
@@ -991,6 +1001,8 @@ svga_texture_create(struct pipe_screen *screen,
    svgascreen->hud.total_resource_bytes += tex->size;
    svgascreen->hud.num_resources++;
 
+   SVGA_STATS_TIME_POP(svgascreen->sws);
+
    return &tex->b.b;
 
 fail:
@@ -1001,6 +1013,8 @@ fail:
    if (tex->defined)
       FREE(tex->defined);
    FREE(tex);
+fail_notex:
+   SVGA_STATS_TIME_POP(svgascreen->sws);
    return NULL;
 }
 

@@ -34,47 +34,6 @@
 
 #include "genX_pipeline_util.h"
 
-static void
-gen7_emit_rs_state(struct anv_pipeline *pipeline,
-                   const VkPipelineRasterizationStateCreateInfo *info,
-                   const struct anv_graphics_pipeline_create_info *extra)
-{
-   struct GENX(3DSTATE_SF) sf = {
-      GENX(3DSTATE_SF_header),
-
-      /* LegacyGlobalDepthBiasEnable */
-
-      .StatisticsEnable                         = true,
-      .FrontFaceFillMode                        = vk_to_gen_fillmode[info->polygonMode],
-      .BackFaceFillMode                         = vk_to_gen_fillmode[info->polygonMode],
-      .ViewTransformEnable                      = !(extra && extra->use_rectlist),
-      .FrontWinding                             = vk_to_gen_front_face[info->frontFace],
-      /* bool                                         AntiAliasingEnable; */
-
-      .CullMode                                 = vk_to_gen_cullmode[info->cullMode],
-
-      /* uint32_t                                     LineEndCapAntialiasingRegionWidth; */
-      .ScissorRectangleEnable                   =  !(extra && extra->use_rectlist),
-
-      /* uint32_t                                     MultisampleRasterizationMode; */
-      /* bool                                         LastPixelEnable; */
-
-      .TriangleStripListProvokingVertexSelect   = 0,
-      .LineStripListProvokingVertexSelect       = 0,
-      .TriangleFanProvokingVertexSelect         = 1,
-
-      /* uint32_t                                     AALineDistanceMode; */
-      /* uint32_t                                     VertexSubPixelPrecisionSelect; */
-      .UsePointWidthState                       = false,
-      .PointWidth                               = 1.0,
-      .GlobalDepthOffsetEnableSolid             = info->depthBiasEnable,
-      .GlobalDepthOffsetEnableWireframe         = info->depthBiasEnable,
-      .GlobalDepthOffsetEnablePoint             = info->depthBiasEnable,
-   };
-
-   GENX(3DSTATE_SF_pack)(NULL, &pipeline->gen7.sf, &sf);
-}
-
 VkResult
 genX(graphics_pipeline_create)(
     VkDevice                                    _device,
@@ -108,7 +67,8 @@ genX(graphics_pipeline_create)(
    emit_vertex_input(pipeline, pCreateInfo->pVertexInputState, extra);
 
    assert(pCreateInfo->pRasterizationState);
-   gen7_emit_rs_state(pipeline, pCreateInfo->pRasterizationState, extra);
+   emit_rs_state(pipeline, pCreateInfo->pRasterizationState,
+                 pCreateInfo->pMultisampleState, pass, subpass, extra);
 
    emit_ds_state(pipeline, pCreateInfo->pDepthStencilState, pass, subpass);
 
@@ -121,21 +81,7 @@ genX(graphics_pipeline_create)(
                      pCreateInfo->pRasterizationState, extra);
    emit_3dstate_streamout(pipeline, pCreateInfo->pRasterizationState);
 
-   if (pCreateInfo->pMultisampleState &&
-       pCreateInfo->pMultisampleState->rasterizationSamples > 1)
-      anv_finishme("VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO");
-
-   uint32_t samples = 1;
-   uint32_t log2_samples = __builtin_ffs(samples) - 1;
-
-   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_MULTISAMPLE), ms) {
-      ms.PixelLocation        = PIXLOC_CENTER;
-      ms.NumberofMultisamples = log2_samples;
-   }
-
-   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_SAMPLE_MASK), sm) {
-      sm.SampleMask = 0xff;
-   }
+   emit_ms_state(pipeline, pCreateInfo->pMultisampleState);
 
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 
@@ -291,6 +237,9 @@ genX(graphics_pipeline_create)(
          ps.KernelStartPointer2           = pipeline->ps_ksp0 + wm_prog_data->prog_offset_2;
       }
 
+      uint32_t samples = pCreateInfo->pMultisampleState ?
+                         pCreateInfo->pMultisampleState->rasterizationSamples : 1;
+
       /* FIXME-GEN7: This needs a lot more work, cf gen7 upload_wm_state(). */
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_WM), wm) {
          wm.StatisticsEnable                    = true;
@@ -298,6 +247,7 @@ genX(graphics_pipeline_create)(
          wm.LineEndCapAntialiasingRegionWidth   = 0; /* 0.5 pixels */
          wm.LineAntialiasingRegionWidth         = 1; /* 1.0 pixels */
          wm.PointRasterizationRule              = RASTRULE_UPPER_RIGHT;
+         wm.PixelShaderKillPixel                = wm_prog_data->uses_kill;
          wm.PixelShaderComputedDepthMode        = wm_prog_data->computed_depth_mode;
          wm.PixelShaderUsesSourceDepth          = wm_prog_data->uses_src_depth;
          wm.PixelShaderUsesSourceW              = wm_prog_data->uses_src_w;
@@ -312,6 +262,11 @@ genX(graphics_pipeline_create)(
          }
 
          wm.BarycentricInterpolationMode        = wm_prog_data->barycentric_interp_modes;
+
+         wm.MultisampleRasterizationMode        = samples > 1 ?
+                                                  MSRASTMODE_ON_PATTERN : MSRASTMODE_OFF_PIXEL;
+         wm.MultisampleDispatchMode             = wm_prog_data->persample_dispatch ?
+                                                  MSDISPMODE_PERSAMPLE : MSDISPMODE_PERPIXEL;
       }
    }
 

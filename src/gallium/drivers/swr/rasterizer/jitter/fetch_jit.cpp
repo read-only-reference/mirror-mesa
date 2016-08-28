@@ -78,7 +78,7 @@ struct FetchJit : public Builder
     bool IsOddFormat(SWR_FORMAT format);
     bool IsUniformFormat(SWR_FORMAT format);
     void UnpackComponents(SWR_FORMAT format, Value* vInput, Value* result[4]);
-    void CreateGatherOddFormats(SWR_FORMAT format, Value* pBase, Value* offsets, Value* result[4]);
+    void CreateGatherOddFormats(SWR_FORMAT format, Value* pMask, Value* pBase, Value* offsets, Value* result[4]);
     void ConvertFormat(SWR_FORMAT format, Value *texels[4]);
 
     Value* mpFetchInfo;
@@ -158,8 +158,18 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
         default: SWR_ASSERT(0, "Unsupported index type"); vIndices = nullptr; break;
     }
 
+    Value* vVertexId = vIndices;
+    if (fetchState.bVertexIDOffsetEnable)
+    {
+        // Assuming one of baseVertex or startVertex is 0, so adding both should be functionally correct
+        Value* vBaseVertex = VBROADCAST(LOAD(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_BaseVertex }));
+        Value* vStartVertex = VBROADCAST(LOAD(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_StartVertex }));
+        vVertexId = ADD(vIndices, vBaseVertex);
+        vVertexId = ADD(vVertexId, vStartVertex);
+    }
+
     // store out vertex IDs
-    STORE(vIndices, GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID }));
+    STORE(vVertexId, GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_VertexID }));
 
     // store out cut mask if enabled
     if (fetchState.bEnableCutIndex)
@@ -552,7 +562,7 @@ void FetchJit::UnpackComponents(SWR_FORMAT format, Value* vInput, Value* result[
 // gather for odd component size formats
 // gather SIMD full pixels per lane then shift/mask to move each component to their
 // own vector
-void FetchJit::CreateGatherOddFormats(SWR_FORMAT format, Value* pBase, Value* offsets, Value* result[4])
+void FetchJit::CreateGatherOddFormats(SWR_FORMAT format, Value* pMask, Value* pBase, Value* offsets, Value* result[4])
 {
     const SWR_FORMAT_INFO &info = GetFormatInfo(format);
 
@@ -567,23 +577,34 @@ void FetchJit::CreateGatherOddFormats(SWR_FORMAT format, Value* pBase, Value* of
         result[comp] = VIMMED1((int)info.defaults[comp]);
     }
 
+    // load the proper amount of data based on component size
+    PointerType* pLoadTy = nullptr;
+    switch (info.bpp)
+    {
+    case 8: pLoadTy = Type::getInt8PtrTy(JM()->mContext); break;
+    case 16: pLoadTy = Type::getInt16PtrTy(JM()->mContext); break;
+    case 24:
+    case 32: pLoadTy = Type::getInt32PtrTy(JM()->mContext); break;
+    default: SWR_ASSERT(0);
+    }
+
+    // allocate temporary memory for masked off lanes
+    Value* pTmp = ALLOCA(pLoadTy->getElementType());
+
     // gather SIMD pixels
     for (uint32_t e = 0; e < JM()->mVWidth; ++e)
     {
-        Value* elemOffset = VEXTRACT(offsets, C(e));
-        Value* load = GEP(pBase, elemOffset);
+        Value* pElemOffset = VEXTRACT(offsets, C(e));
+        Value* pLoad = GEP(pBase, pElemOffset);
+        Value* pLaneMask = VEXTRACT(pMask, C(e));
 
-        // load the proper amount of data based on component size
-        switch (info.bpp)
-        {
-        case 8: load = POINTER_CAST(load, Type::getInt8PtrTy(JM()->mContext)); break;
-        case 16: load = POINTER_CAST(load, Type::getInt16PtrTy(JM()->mContext)); break;
-        case 32: load = POINTER_CAST(load, Type::getInt32PtrTy(JM()->mContext)); break;
-        default: SWR_ASSERT(0);
-        }
+        pLoad = POINTER_CAST(pLoad, pLoadTy);
+
+        // mask in tmp pointer for disabled lanes
+        pLoad = SELECT(pLaneMask, pLoad, pTmp);
 
         // load pixel
-        Value *val = LOAD(load);
+        Value *val = LOAD(pLoad);
 
         // zero extend to 32bit integer
         val = INT_CAST(val, mInt32Ty, false);
@@ -756,6 +777,10 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         // is the element is <= the partially valid size
         Value* vElementInBoundsMask = ICMP_SLE(vBpp, SUB(vPartialVertexSize, vAlignmentOffsets));
 
+        // override cur indices with 0 if pitch is 0
+        Value* pZeroPitchMask = ICMP_EQ(vStride, VIMMED1(0));
+        vCurIndices = SELECT(pZeroPitchMask, VIMMED1(0), vCurIndices);
+
         // are vertices partially OOB?
         Value* vMaxVertex = VBROADCAST(maxVertex);
         Value* vPartialOOBMask = ICMP_EQ(vCurIndices, vMaxVertex);
@@ -765,6 +790,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
 
         // blend in any partially OOB indices that have valid elements
         vGatherMask = SELECT(vPartialOOBMask, vElementInBoundsMask, vGatherMask);
+        Value* pMask = vGatherMask;
         vGatherMask = VMASK(vGatherMask);
 
         // calculate the actual offsets into the VB
@@ -780,7 +806,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         if (IsOddFormat((SWR_FORMAT)ied.Format))
         {
             Value* pResults[4];
-            CreateGatherOddFormats((SWR_FORMAT)ied.Format, pStreamBase, vOffsets, pResults);
+            CreateGatherOddFormats((SWR_FORMAT)ied.Format, pMask, pStreamBase, vOffsets, pResults);
             ConvertFormat((SWR_FORMAT)ied.Format, pResults);
 
             for (uint32_t c = 0; c < 4; ++c)
@@ -985,8 +1011,6 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                 break;
                 case 32:
                 {
-                    SWR_ASSERT(conversionType == CONVERT_NONE);
-
                     // Gathered components into place in simdvertex struct
                     for (uint32_t i = 0; i < 4; i++)
                     {
@@ -998,8 +1022,18 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 // save mask as it is zero'd out after each gather
                                 Value *vMask = vGatherMask;
 
-                                vVertexElements[currentVertexElement++] = GATHERDD(gatherSrc, pStreamBase, vOffsets, vMask, C((char)1));
+                                Value* pGather = GATHERDD(gatherSrc, pStreamBase, vOffsets, vMask, C((char)1));
 
+                                if (conversionType == CONVERT_USCALED)
+                                {
+                                    pGather = UI_TO_FP(pGather, mSimdFP32Ty);
+                                }
+                                else if (conversionType == CONVERT_SSCALED)
+                                {
+                                    pGather = SI_TO_FP(pGather, mSimdFP32Ty);
+                                }
+
+                                vVertexElements[currentVertexElement++] = pGather;
                                 // e.g. result of a single 8x32bit integer gather for 32bit components
                                 // 256i - 0    1    2    3    4    5    6    7
                                 //        xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx 

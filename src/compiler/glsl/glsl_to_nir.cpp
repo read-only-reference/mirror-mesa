@@ -146,7 +146,7 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
    shader->info.name = ralloc_asprintf(shader, "GLSL%d", shader_prog->Name);
    if (shader_prog->Label)
       shader->info.label = ralloc_strdup(shader, shader_prog->Label);
-   shader->info.num_textures = _mesa_fls(sh->Program->SamplersUsed);
+   shader->info.num_textures = util_last_bit(sh->Program->SamplersUsed);
    shader->info.num_ubos = sh->NumUniformBlocks;
    shader->info.num_abos = shader_prog->NumAtomicBuffers;
    shader->info.num_ssbos = sh->NumShaderStorageBlocks;
@@ -154,6 +154,7 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
    shader->info.inputs_read = sh->Program->InputsRead;
    shader->info.double_inputs_read = sh->Program->DoubleInputsRead;
    shader->info.outputs_written = sh->Program->OutputsWritten;
+   shader->info.outputs_read = sh->Program->OutputsRead;
    shader->info.patch_inputs_read = sh->Program->PatchInputsRead;
    shader->info.patch_outputs_written = sh->Program->PatchOutputsWritten;
    shader->info.system_values_read = sh->Program->SystemValuesRead;
@@ -406,6 +407,7 @@ nir_visitor::visit(ir_variable *ir)
    var->data.image.restrict_flag = ir->data.image_restrict;
    var->data.image.format = ir->data.image_format;
    var->data.max_array_access = ir->data.max_array_access;
+   var->data.fb_fetch_output = ir->data.fb_fetch_output;
 
    var->num_state_slots = ir->get_num_state_slots();
    if (var->num_state_slots > 0) {

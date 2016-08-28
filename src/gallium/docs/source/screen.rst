@@ -136,8 +136,8 @@ The integer capabilities:
   PIPE_BUFFER. In other words, the pointer returned by transfer_map is
   always aligned to this value.
 * ``PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT``: Describes the required
-  alignment for pipe_sampler_view::u.buf.first_element, in bytes.
-  If a driver does not support first/last_element, it should return 0.
+  alignment for pipe_sampler_view::u.buf.offset, in bytes.
+  If a driver does not support offset/size, it should return 0.
 * ``PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY``: Whether the driver only
   supports R, RG, RGB and RGBA formats for PIPE_BUFFER sampler views.
   When this is the case it should be assumed that the swizzle parameters
@@ -347,6 +347,12 @@ The integer capabilities:
   for ``pipe_rasterizer_state::offset_units_unscaled``.
 * ``PIPE_CAP_VIEWPORT_SUBPIXEL_BITS``: Number of bits of subpixel precision for
   floating point viewport bounds.
+* ``PIPE_CAP_MIXED_COLOR_DEPTH_BITS``: Whether there is non-fallback
+  support for color/depth format combinations that use a different
+  number of bits. For the purpose of this cap, Z24 is treated as
+  32-bit. If set to off, that means that a B5G6R5 + Z24 or RGBA8 + Z16
+  combination will require a driver fallback, and should not be
+  advertised in the GLX/EGL config list.
 
 
 .. _pipe_capf:
@@ -490,6 +496,8 @@ pipe_screen::get_compute_param.
   non-zero means yes, zero means no. Value type: ``uint32_t``
 * ``PIPE_COMPUTE_CAP_SUBGROUP_SIZE``: The size of a basic execution unit in
   threads. Also known as wavefront size, warp size or SIMD width.
+* ``PIPE_COMPUTE_CAP_ADDRESS_BITS``: The default compute device address space
+  size specified as an unsigned integer value in bits.
 
 .. _pipe_bind:
 

@@ -23,14 +23,19 @@
 
 #pragma once
 
-#include "brw_context.h"
 #include "brw_reg.h"
-#include "brw_shader.h"
 #include "compiler/nir/nir.h"
+#include "brw_compiler.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+int type_size_scalar(const struct glsl_type *type);
+int type_size_vec4(const struct glsl_type *type);
+int type_size_dvec4(const struct glsl_type *type);
+int type_size_vec4_times_4(const struct glsl_type *type);
+int type_size_vs_input(const struct glsl_type *type);
 
 static inline int
 type_size_scalar_bytes(const struct glsl_type *type)
@@ -117,6 +122,8 @@ bool brw_nir_apply_attribute_workarounds(nir_shader *nir,
 
 bool brw_nir_apply_trig_workarounds(nir_shader *nir);
 
+void brw_nir_apply_tcs_quads_workaround(nir_shader *nir);
+
 nir_shader *brw_nir_apply_sampler_key(nir_shader *nir,
                                       const struct brw_device_info *devinfo,
                                       const struct brw_sampler_prog_key_data *key,
@@ -136,6 +143,11 @@ void brw_nir_setup_arb_uniforms(nir_shader *shader, struct gl_program *prog,
                                 struct brw_stage_prog_data *stage_prog_data);
 
 bool brw_nir_opt_peephole_ffma(nir_shader *shader);
+
+#define BRW_NIR_FRAG_OUTPUT_INDEX_SHIFT 0
+#define BRW_NIR_FRAG_OUTPUT_INDEX_MASK INTEL_MASK(0, 0)
+#define BRW_NIR_FRAG_OUTPUT_LOCATION_SHIFT 1
+#define BRW_NIR_FRAG_OUTPUT_LOCATION_MASK INTEL_MASK(31, 1)
 
 #ifdef __cplusplus
 }

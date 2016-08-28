@@ -231,12 +231,16 @@ If a surface includes several layers then all layers will be cleared.
 ``clear_render_target`` clears a single color rendertarget with the specified
 color value. While it is only possible to clear one surface at a time (which can
 include several layers), this surface need not be bound to the framebuffer.
+If render_condition_enabled is false, any current rendering condition is ignored
+and the clear will be unconditional.
 
 ``clear_depth_stencil`` clears a single depth, stencil or depth/stencil surface
 with the specified depth and stencil values (for combined depth/stencil buffers,
 it is also possible to only clear one or the other part). While it is only
 possible to clear one surface at a time (which can include several layers),
 this surface need not be bound to the framebuffer.
+If render_condition_enabled is false, any current rendering condition is ignored
+and the clear will be unconditional.
 
 ``clear_texture`` clears a non-PIPE_BUFFER resource's specified level
 and bounding box with a clear value provided in that resource's native
@@ -428,9 +432,10 @@ A drawing command can be skipped depending on the outcome of a query
 (typically an occlusion query, or streamout overflow predicate).
 The ``render_condition`` function specifies the query which should be checked
 prior to rendering anything. Functions always honoring render_condition include
-(and are limited to) draw_vbo, clear, clear_render_target, clear_depth_stencil.
-The blit function (but not resource_copy_region, which seems inconsistent)
-can also optionally honor the current render condition.
+(and are limited to) draw_vbo and clear.
+The blit, clear_render_target and clear_depth_stencil functions (but
+not resource_copy_region, which seems inconsistent) can also optionally honor
+the current render condition.
 
 If ``render_condition`` is called with ``query`` = NULL, conditional
 rendering is disabled and drawing takes place normally.
@@ -466,12 +471,10 @@ Flushing
 PIPE_FLUSH_END_OF_FRAME: Whether the flush marks the end of frame.
 
 PIPE_FLUSH_DEFERRED: It is not required to flush right away, but it is required
-to return a valid fence. The behavior of fence_finish or any other call isn't
-changed. The only side effect can be that fence_finish will wait a little
-longer. No guidance is given as to how drivers should implement fence_finish
-with deferred flushes. If some drivers can't do deferred flushes safely, they
-should just ignore the flag.
-
+to return a valid fence. If fence_finish is called with the returned fence
+and the context is still unflushed, and the ctx parameter of fence_finish is
+equal to the context where the fence was created, fence_finish will flush
+the context.
 
 
 ``flush_resource``

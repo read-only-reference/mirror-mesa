@@ -97,6 +97,60 @@ swap_file(struct qpu_reg *src)
 }
 
 /**
+ * Sets up the VPM read FIFO before we do any VPM read.
+ *
+ * VPM reads (vertex attribute input) and VPM writes (varyings output) from
+ * the QPU reuse the VRI (varying interpolation) block's FIFOs to talk to the
+ * VPM block.  In the VS/CS (unlike in the FS), the block starts out
+ * uninitialized, and you need to emit setup to the block before any VPM
+ * reads/writes.
+ *
+ * VRI has a FIFO in each direction, with each FIFO able to hold four
+ * 32-bit-per-vertex values.  VPM reads come through the read FIFO and VPM
+ * writes go through the write FIFO.  The read/write setup values from QPU go
+ * through the write FIFO as well, with a sideband signal indicating that
+ * they're setup values.  Once a read setup reaches the other side of the
+ * FIFO, the VPM block will start asynchronously reading vertex attributes and
+ * filling the read FIFO -- that way hopefully the QPU doesn't have to block
+ * on reads later.
+ *
+ * VPM read setup can configure 16 32-bit-per-vertex values to be read at a
+ * time, which is 4 vec4s.  If more than that is being read (since we support
+ * 8 vec4 vertex attributes), then multiple read setup writes need to be done.
+ *
+ * The existence of the FIFO makes it seem like you should be able to emit
+ * both setups for the 5-8 attribute cases and then do all the attribute
+ * reads.  However, once the setup value makes it to the other end of the
+ * write FIFO, it will immediately update the VPM block's setup register.
+ * That updated setup register would be used for read FIFO fills from then on,
+ * breaking whatever remaining VPM values were supposed to be read into the
+ * read FIFO from the previous attribute set.
+ *
+ * As a result, we need to emit the read setup, pull every VPM read value from
+ * that setup, and only then emit the second setup if applicable.
+ */
+static void
+setup_for_vpm_read(struct vc4_compile *c, struct qblock *block)
+{
+        if (c->num_inputs_in_fifo) {
+                c->num_inputs_in_fifo--;
+                return;
+        }
+
+        c->num_inputs_in_fifo = MIN2(c->num_inputs_remaining, 16);
+
+        queue(block,
+              qpu_load_imm_ui(qpu_vrsetup(),
+                              c->vpm_read_offset |
+                              0x00001a00 |
+                              ((c->num_inputs_in_fifo & 0xf) << 20)));
+        c->num_inputs_remaining -= c->num_inputs_in_fifo;
+        c->vpm_read_offset += c->num_inputs_in_fifo;
+
+        c->num_inputs_in_fifo--;
+}
+
+/**
  * This is used to resolve the fact that we might register-allocate two
  * different operands of an instruction to the same physical register file
  * even though instructions have only one field for the register file source
@@ -268,6 +322,7 @@ vc4_generate_code_block(struct vc4_compile *c,
                                 assert(src[i].addr <= 47);
                                 break;
                         case QFILE_VPM:
+                                setup_for_vpm_read(c, block);
                                 assert((int)qinst->src[i].index >=
                                        last_vpm_read_index);
                                 (void)last_vpm_read_index;
@@ -283,6 +338,9 @@ vc4_generate_code_block(struct vc4_compile *c,
                                 break;
                         case QFILE_FRAG_REV_FLAG:
                                 src[i] = qpu_rb(QPU_R_MS_REV_FLAGS);
+                                break;
+                        case QFILE_QPU_ELEMENT:
+                                src[i] = qpu_ra(QPU_R_ELEM_QPU);
                                 break;
 
                         case QFILE_TLB_COLOR_WRITE:
@@ -328,6 +386,7 @@ vc4_generate_code_block(struct vc4_compile *c,
                 case QFILE_FRAG_X:
                 case QFILE_FRAG_Y:
                 case QFILE_FRAG_REV_FLAG:
+                case QFILE_QPU_ELEMENT:
                         assert(!"not reached");
                         break;
                 }
@@ -367,6 +426,28 @@ vc4_generate_code_block(struct vc4_compile *c,
                 case QOP_LOAD_IMM:
                         assert(qinst->src[0].file == QFILE_LOAD_IMM);
                         queue(block, qpu_load_imm_ui(dst, qinst->src[0].index));
+                        break;
+
+                case QOP_LOAD_IMM_U2:
+                        queue(block, qpu_load_imm_u2(dst, qinst->src[0].index));
+                        break;
+
+                case QOP_LOAD_IMM_I2:
+                        queue(block, qpu_load_imm_i2(dst, qinst->src[0].index));
+
+                case QOP_ROT_MUL:
+                        /* Rotation at the hardware level occurs on the inputs
+                         * to the MUL unit, and they must be accumulators in
+                         * order to have the time necessary to move things.
+                         */
+                        assert(src[0].mux <= QPU_MUX_R3);
+
+                        queue(block,
+                              qpu_m_rot(dst, src[0], qinst->src[1].index -
+                                        QPU_SMALL_IMM_MUL_ROT) | unpack);
+                        set_last_cond_mul(block, qinst->cond);
+                        handled_qinst_cond = true;
+                        set_last_dst_pack(block, qinst);
                         break;
 
                 case QOP_MS_MASK:
@@ -484,31 +565,13 @@ void
 vc4_generate_code(struct vc4_context *vc4, struct vc4_compile *c)
 {
         struct qpu_reg *temp_registers = vc4_register_allocate(vc4, c);
-        uint32_t inputs_remaining = c->num_inputs;
-        uint32_t vpm_read_fifo_count = 0;
-        uint32_t vpm_read_offset = 0;
         struct qblock *start_block = list_first_entry(&c->blocks,
                                                       struct qblock, link);
 
         switch (c->stage) {
         case QSTAGE_VERT:
         case QSTAGE_COORD:
-                /* There's a 4-entry FIFO for VPMVCD reads, each of which can
-                 * load up to 16 dwords (4 vec4s) per vertex.
-                 */
-                while (inputs_remaining) {
-                        uint32_t num_entries = MIN2(inputs_remaining, 16);
-                        queue(start_block,
-                              qpu_load_imm_ui(qpu_vrsetup(),
-                                              vpm_read_offset |
-                                              0x00001a00 |
-                                              ((num_entries & 0xf) << 20)));
-                        inputs_remaining -= num_entries;
-                        vpm_read_offset += num_entries;
-                        vpm_read_fifo_count++;
-                }
-                assert(vpm_read_fifo_count <= 4);
-
+                c->num_inputs_remaining = c->num_inputs;
                 queue(start_block, qpu_load_imm_ui(qpu_vwsetup(), 0x00001a00));
                 break;
         case QSTAGE_FRAG:

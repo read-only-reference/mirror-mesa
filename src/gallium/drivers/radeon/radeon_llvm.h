@@ -50,11 +50,6 @@ struct radeon_llvm_loop {
 	LLVMBasicBlockRef endloop_block;
 };
 
-struct radeon_llvm_array {
-	struct tgsi_declaration_range range;
-	LLVMValueRef alloca;
-};
-
 struct radeon_llvm_context {
 	struct lp_build_tgsi_soa_context soa;
 
@@ -101,7 +96,10 @@ struct radeon_llvm_context {
 	unsigned loop_depth;
 	unsigned loop_depth_max;
 
-	struct radeon_llvm_array *arrays;
+	struct tgsi_array_info *temp_arrays;
+	LLVMValueRef *temp_array_allocas;
+
+	LLVMValueRef undef_alloca;
 
 	LLVMValueRef main_fn;
 	LLVMTypeRef return_type;
@@ -118,13 +116,19 @@ LLVMTypeRef tgsi2llvmtype(struct lp_build_tgsi_context *bld_base,
 LLVMValueRef bitcast(struct lp_build_tgsi_context *bld_base,
 		     enum tgsi_opcode_type type, LLVMValueRef value);
 
+LLVMValueRef radeon_llvm_bound_index(struct radeon_llvm_context *ctx,
+				     LLVMValueRef index,
+				     unsigned num);
+
 void radeon_llvm_emit_prepare_cube_coords(struct lp_build_tgsi_context *bld_base,
 					  struct lp_build_emit_data *emit_data,
 					  LLVMValueRef *coords_arg,
 					  LLVMValueRef *derivs_arg);
 
 void radeon_llvm_context_init(struct radeon_llvm_context *ctx,
-                              const char *triple);
+                              const char *triple,
+			      const struct tgsi_shader_info *info,
+			      const struct tgsi_token *tokens);
 
 void radeon_llvm_create_func(struct radeon_llvm_context *ctx,
 			     LLVMTypeRef *return_types, unsigned num_return_elems,

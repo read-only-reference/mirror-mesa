@@ -47,6 +47,12 @@ struct r600_multi_fence {
 	struct pipe_reference reference;
 	struct pipe_fence_handle *gfx;
 	struct pipe_fence_handle *sdma;
+
+	/* If the context wasn't flushed at fence creation, this is non-NULL. */
+	struct {
+		struct r600_common_context *ctx;
+		unsigned ib_index;
+	} gfx_unflushed;
 };
 
 /*
@@ -144,16 +150,12 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	uint64_t vram = 0, gtt = 0;
 
 	if (dst) {
-		if (dst->domains & RADEON_DOMAIN_VRAM)
-			vram += dst->buf->size;
-		else if (dst->domains & RADEON_DOMAIN_GTT)
-			gtt += dst->buf->size;
+		vram += dst->vram_usage;
+		gtt += dst->gart_usage;
 	}
 	if (src) {
-		if (src->domains & RADEON_DOMAIN_VRAM)
-			vram += src->buf->size;
-		else if (src->domains & RADEON_DOMAIN_GTT)
-			gtt += src->buf->size;
+		vram += src->vram_usage;
+		gtt += src->gart_usage;
 	}
 
 	/* Flush the GFX IB if DMA depends on it. */
@@ -170,7 +172,7 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	 * is too large.
 	 */
 	if (!ctx->ws->cs_check_space(ctx->dma.cs, num_dw) ||
-	    !ctx->ws->cs_memory_below_limit(ctx->dma.cs, vram, gtt)) {
+	    !radeon_cs_memory_below_limit(ctx->screen, ctx->dma.cs, vram, gtt)) {
 		ctx->dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
 		assert((num_dw + ctx->dma.cs->current.cdw) <= ctx->dma.cs->current.max_dw);
 	}
@@ -207,7 +209,7 @@ void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
 	 * It improves texture upload performance by keeping the DMA
 	 * engine busy while uploads are being submitted.
 	 */
-	if (rctx->ws->cs_query_memory_usage(rctx->dma.cs) > 64 * 1024 * 1024) {
+	if (cs->used_vram + cs->used_gart > 64 * 1024 * 1024) {
 		rctx->dma.flush(rctx, RADEON_FLUSH_ASYNC, NULL);
 		return;
 	}
@@ -263,9 +265,11 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 {
 	struct pipe_screen *screen = ctx->screen;
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
+	struct radeon_winsys *ws = rctx->ws;
 	unsigned rflags = 0;
 	struct pipe_fence_handle *gfx_fence = NULL;
 	struct pipe_fence_handle *sdma_fence = NULL;
+	bool deferred_fence = false;
 
 	if (flags & PIPE_FLUSH_END_OF_FRAME)
 		rflags |= RADEON_FLUSH_END_OF_FRAME;
@@ -275,18 +279,42 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 	if (rctx->dma.cs) {
 		rctx->dma.flush(rctx, rflags, fence ? &sdma_fence : NULL);
 	}
-	rctx->gfx.flush(rctx, rflags, fence ? &gfx_fence : NULL);
+
+	if (!radeon_emitted(rctx->gfx.cs, rctx->initial_gfx_cs_size)) {
+		if (fence)
+			ws->fence_reference(&gfx_fence, rctx->last_gfx_fence);
+		if (!(rflags & RADEON_FLUSH_ASYNC))
+			ws->cs_sync_flush(rctx->gfx.cs);
+	} else {
+		/* Instead of flushing, create a deferred fence. Constraints:
+		 * - The state tracker must allow a deferred flush.
+		 * - The state tracker must request a fence.
+		 * Thread safety in fence_finish must be ensured by the state tracker.
+		 */
+		if (flags & PIPE_FLUSH_DEFERRED && fence) {
+			gfx_fence = rctx->ws->cs_get_next_fence(rctx->gfx.cs);
+			deferred_fence = true;
+		} else {
+			rctx->gfx.flush(rctx, rflags, fence ? &gfx_fence : NULL);
+		}
+	}
 
 	/* Both engines can signal out of order, so we need to keep both fences. */
-	if (gfx_fence || sdma_fence) {
+	if (fence) {
 		struct r600_multi_fence *multi_fence =
 			CALLOC_STRUCT(r600_multi_fence);
 		if (!multi_fence)
 			return;
 
 		multi_fence->reference.count = 1;
+		/* If both fences are NULL, fence_finish will always return true. */
 		multi_fence->gfx = gfx_fence;
 		multi_fence->sdma = sdma_fence;
+
+		if (deferred_fence) {
+			multi_fence->gfx_unflushed.ctx = rctx;
+			multi_fence->gfx_unflushed.ib_index = rctx->num_gfx_cs_flushes;
+		}
 
 		screen->fence_reference(screen, fence, NULL);
 		*fence = (struct pipe_fence_handle*)multi_fence;
@@ -510,6 +538,7 @@ void r600_common_context_cleanup(struct r600_common_context *rctx)
 	if (rctx->allocator_zeroed_memory) {
 		u_suballocator_destroy(rctx->allocator_zeroed_memory);
 	}
+	rctx->ws->fence_reference(&rctx->last_gfx_fence, NULL);
 	rctx->ws->fence_reference(&rctx->last_sdma_fence, NULL);
 }
 
@@ -529,10 +558,8 @@ void r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resour
 	 * In practice this gave very good estimate (+/- 10% of the target
 	 * memory limit).
 	 */
-	if (rr->domains & RADEON_DOMAIN_VRAM)
-		rctx->vram += rr->buf->size;
-	else if (rr->domains & RADEON_DOMAIN_GTT)
-		rctx->gtt += rr->buf->size;
+	rctx->vram += rr->vram_usage;
+	rctx->gtt += rr->gart_usage;
 }
 
 /*
@@ -854,6 +881,14 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 				*max_threads_per_block = 256;
 		}
 		return sizeof(uint64_t);
+	case PIPE_COMPUTE_CAP_ADDRESS_BITS:
+		if (ret) {
+			uint32_t *address_bits = ret;
+			address_bits[0] = 32;
+			if (rscreen->chip_class >= SI)
+				address_bits[0] = 64;
+		}
+		return 1 * sizeof(uint32_t);
 
 	case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE:
 		if (ret) {
@@ -959,11 +994,14 @@ static void r600_fence_reference(struct pipe_screen *screen,
 }
 
 static boolean r600_fence_finish(struct pipe_screen *screen,
+				 struct pipe_context *ctx,
 				 struct pipe_fence_handle *fence,
 				 uint64_t timeout)
 {
 	struct radeon_winsys *rws = ((struct r600_common_screen*)screen)->ws;
 	struct r600_multi_fence *rfence = (struct r600_multi_fence *)fence;
+	struct r600_common_context *rctx =
+		ctx ? (struct r600_common_context*)ctx : NULL;
 	int64_t abs_timeout = os_time_get_absolute_timeout(timeout);
 
 	if (rfence->sdma) {
@@ -979,6 +1017,23 @@ static boolean r600_fence_finish(struct pipe_screen *screen,
 
 	if (!rfence->gfx)
 		return true;
+
+	/* Flush the gfx IB if it hasn't been flushed yet. */
+	if (rctx &&
+	    rfence->gfx_unflushed.ctx == rctx &&
+	    rfence->gfx_unflushed.ib_index == rctx->num_gfx_cs_flushes) {
+		rctx->gfx.flush(rctx, timeout ? 0 : RADEON_FLUSH_ASYNC, NULL);
+		rfence->gfx_unflushed.ctx = NULL;
+
+		if (!timeout)
+			return false;
+
+		/* Recompute the timeout after all that. */
+		if (timeout && timeout != PIPE_TIMEOUT_INFINITE) {
+			int64_t time = os_time_get_nano();
+			timeout = abs_timeout > time ? abs_timeout - time : 0;
+		}
+	}
 
 	return rws->fence_wait(rws, rfence->gfx, timeout);
 }
@@ -1108,6 +1163,9 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		printf("gfx_ib_pad_with_type2 = %i\n", rscreen->info.gfx_ib_pad_with_type2);
 		printf("has_sdma = %i\n", rscreen->info.has_sdma);
 		printf("has_uvd = %i\n", rscreen->info.has_uvd);
+		printf("me_fw_version = %i\n", rscreen->info.me_fw_version);
+		printf("pfp_fw_version = %i\n", rscreen->info.pfp_fw_version);
+		printf("ce_fw_version = %i\n", rscreen->info.ce_fw_version);
 		printf("vce_fw_version = %i\n", rscreen->info.vce_fw_version);
 		printf("vce_harvest_config = %i\n", rscreen->info.vce_harvest_config);
 		printf("clock_crystal_freq = %i\n", rscreen->info.clock_crystal_freq);

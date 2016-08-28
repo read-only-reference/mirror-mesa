@@ -173,6 +173,9 @@ validate_ssa_src(nir_src *src, validate_state *state)
 
    validate_assert(state, entry);
 
+   if (!entry)
+      return;
+
    ssa_def_validate_state *def_state = (ssa_def_validate_state *)entry->data;
 
    validate_assert(state, def_state->where_defined == state->impl &&
@@ -970,7 +973,7 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
    }
 
    if (def_state->uses->entries != 0) {
-      printf("extra entries in register uses:\n");
+      printf("extra entries in SSA def uses:\n");
       struct set_entry *entry;
       set_foreach(def_state->uses, entry)
          printf("%p\n", entry->key);
@@ -985,7 +988,7 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
    }
 
    if (def_state->if_uses->entries != 0) {
-      printf("extra entries in register uses:\n");
+      printf("extra entries in SSA def uses:\n");
       struct set_entry *entry;
       set_foreach(def_state->if_uses, entry)
          printf("%p\n", entry->key);

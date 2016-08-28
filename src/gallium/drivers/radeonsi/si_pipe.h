@@ -85,6 +85,7 @@ struct si_screen {
 	unsigned			gs_table_depth;
 	unsigned			tess_offchip_block_dw_size;
 	bool				has_distributed_tess;
+	bool				has_draw_indirect_multi;
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
 	bool				use_monolithic_shaders;
@@ -215,7 +216,6 @@ struct si_context {
 	bool				ce_need_synchronization;
 	struct u_suballocator		*ce_suballocator;
 
-	struct pipe_fence_handle	*last_gfx_fence;
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
 	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
 	bool				gfx_flush_in_progress;
@@ -260,6 +260,7 @@ struct si_context {
 	struct si_vertex_element	*vertex_elements;
 	unsigned			sprite_coord_enable;
 	bool				flatshade;
+	bool				do_update_shaders;
 
 	/* shader descriptors */
 	struct si_descriptors		vertex_buffers;
@@ -307,6 +308,7 @@ struct si_context {
 	/* Emitted draw state. */
 	int			last_base_vertex;
 	int			last_start_instance;
+	int			last_drawid;
 	int			last_sh_base_reg;
 	int			last_primitive_restart_en;
 	int			last_restart_index;
@@ -413,8 +415,6 @@ static inline void
 si_invalidate_draw_sh_constants(struct si_context *sctx)
 {
 	sctx->last_base_vertex = SI_BASE_VERTEX_UNKNOWN;
-	sctx->last_start_instance = -1; /* reset to an unknown value */
-	sctx->last_sh_base_reg = -1; /* reset to an unknown value */
 }
 
 static inline void

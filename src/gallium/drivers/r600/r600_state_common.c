@@ -408,7 +408,7 @@ void r600_sampler_states_dirty(struct r600_context *rctx,
 }
 
 static void r600_bind_sampler_states(struct pipe_context *pipe,
-                               unsigned shader,
+			       enum pipe_shader_type shader,
 			       unsigned start,
 			       unsigned count, void **states)
 {
@@ -597,7 +597,8 @@ void r600_sampler_views_dirty(struct r600_context *rctx,
 	}
 }
 
-static void r600_set_sampler_views(struct pipe_context *pipe, unsigned shader,
+static void r600_set_sampler_views(struct pipe_context *pipe,
+				   enum pipe_shader_type shader,
 				   unsigned start, unsigned count,
 				   struct pipe_sampler_view **views)
 {
@@ -2156,7 +2157,7 @@ void r600_emit_shader(struct r600_context *rctx, struct r600_atom *a)
 	r600_emit_command_buffer(cs, &shader->command_buffer);
 	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 	radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, shader->bo,
-					      RADEON_USAGE_READ, RADEON_PRIO_USER_SHADER));
+					      RADEON_USAGE_READ, RADEON_PRIO_SHADER_BINARY));
 }
 
 unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
@@ -2831,8 +2832,7 @@ static void r600_invalidate_buffer(struct pipe_context *ctx, struct pipe_resourc
 	/* Texture buffer objects - update the virtual addresses in descriptors. */
 	LIST_FOR_EACH_ENTRY(view, &rctx->b.texture_buffers, list) {
 		if (view->base.texture == &rbuffer->b.b) {
-			unsigned stride = util_format_get_blocksize(view->base.format);
-			uint64_t offset = (uint64_t)view->base.u.buf.first_element * stride;
+			uint64_t offset = view->base.u.buf.offset;
 			uint64_t va = rbuffer->gpu_address + offset;
 
 			view->tex_resource_words[0] = va;

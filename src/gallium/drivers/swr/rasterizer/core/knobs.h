@@ -39,7 +39,6 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #define ENABLE_AVX512_SIMD16    0
-#define ENABLE_AVX512_EMULATION 0
 
 ///////////////////////////////////////////////////////////////////////////////
 // Architecture validation
@@ -76,8 +75,16 @@
 #endif
 
 #if ENABLE_AVX512_SIMD16
+
 #define KNOB_SIMD16_WIDTH 16
 #define KNOB_SIMD16_BYTES 64
+
+#if (KNOB_ARCH == KNOB_ARCH_AVX512)
+#define ENABLE_AVX512_EMULATION 0
+#else
+#define ENABLE_AVX512_EMULATION 1
+#endif
+
 #endif
 
 #define MAX_KNOB_ARCH_STR_LEN sizeof("AVX512_PLUS_PADDING")
@@ -85,8 +92,6 @@
 ///////////////////////////////////////////////////////////////////////////////
 // Configuration knobs
 ///////////////////////////////////////////////////////////////////////////////
-#define KNOB_MAX_NUM_THREADS                256 // Supports up to dual-HSW-Xeon.
-
 // Maximum supported number of active vertex buffer streams
 #define KNOB_NUM_STREAMS                    32
 
@@ -112,12 +117,12 @@
 
 // fixed macrotile pixel dimension for now, eventually will be 
 // dynamically set based on tile format and pixel size
-#define KNOB_MACROTILE_X_DIM                64
-#define KNOB_MACROTILE_Y_DIM                64
+#define KNOB_MACROTILE_X_DIM                32
+#define KNOB_MACROTILE_Y_DIM                32
+#define KNOB_MACROTILE_X_DIM_FIXED_SHIFT    13
+#define KNOB_MACROTILE_Y_DIM_FIXED_SHIFT    13
 #define KNOB_MACROTILE_X_DIM_FIXED          (KNOB_MACROTILE_X_DIM << 8)
 #define KNOB_MACROTILE_Y_DIM_FIXED          (KNOB_MACROTILE_Y_DIM << 8)
-#define KNOB_MACROTILE_X_DIM_FIXED_SHIFT    14
-#define KNOB_MACROTILE_Y_DIM_FIXED_SHIFT    14
 #define KNOB_MACROTILE_X_DIM_IN_TILES       (KNOB_MACROTILE_X_DIM >> KNOB_TILE_X_DIM_SHIFT)
 #define KNOB_MACROTILE_Y_DIM_IN_TILES       (KNOB_MACROTILE_Y_DIM >> KNOB_TILE_Y_DIM_SHIFT)
 

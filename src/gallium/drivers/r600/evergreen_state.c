@@ -613,8 +613,8 @@ texture_buffer_sampler_view(struct r600_context *rctx,
 	unsigned swizzle_res;
 	unsigned char swizzle[4];
 	const struct util_format_description *desc;
-	unsigned offset = view->base.u.buf.first_element * stride;
-	unsigned size = (view->base.u.buf.last_element - view->base.u.buf.first_element + 1) * stride;
+	unsigned offset = view->base.u.buf.offset;
+	unsigned size = view->base.u.buf.size;
 
 	swizzle[0] = view->base.swizzle_r;
 	swizzle[1] = view->base.swizzle_g;
@@ -2156,7 +2156,7 @@ static void evergreen_emit_vertex_fetch_shader(struct r600_context *rctx, struct
 	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 	radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, shader->buffer,
                                                   RADEON_USAGE_READ,
-                                                  RADEON_PRIO_INTERNAL_SHADER));
+                                                  RADEON_PRIO_SHADER_BINARY));
 }
 
 static void evergreen_emit_shader_stages(struct r600_context *rctx, struct r600_atom *a)
@@ -2280,7 +2280,7 @@ static void evergreen_emit_gs_rings(struct r600_context *rctx, struct r600_atom 
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, rbuffer,
 						      RADEON_USAGE_READWRITE,
-						      RADEON_PRIO_RINGS_STREAMOUT));
+						      RADEON_PRIO_SHADER_RINGS));
 		radeon_set_config_reg(cs, R_008C44_SQ_ESGS_RING_SIZE,
 				state->esgs_ring.buffer_size >> 8);
 
@@ -2290,7 +2290,7 @@ static void evergreen_emit_gs_rings(struct r600_context *rctx, struct r600_atom 
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, rbuffer,
 						      RADEON_USAGE_READWRITE,
-						      RADEON_PRIO_RINGS_STREAMOUT));
+						      RADEON_PRIO_SHADER_RINGS));
 		radeon_set_config_reg(cs, R_008C4C_SQ_GSVS_RING_SIZE,
 				state->gsvs_ring.buffer_size >> 8);
 	} else {

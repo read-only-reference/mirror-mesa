@@ -165,6 +165,10 @@ brw_instruction_name(const struct brw_device_info *devinfo, enum opcode op)
       return "fb_write_logical";
    case FS_OPCODE_REP_FB_WRITE:
       return "rep_fb_write";
+   case FS_OPCODE_FB_READ:
+      return "fb_read";
+   case FS_OPCODE_FB_READ_LOGICAL:
+      return "fb_read_logical";
 
    case SHADER_OPCODE_RCP:
       return "rcp";
@@ -1148,7 +1152,7 @@ backend_shader::calculate_cfg()
  * unused but also make sure that addition of small offsets to them will
  * trigger some of our asserts that surface indices are < BRW_MAX_SURFACES.
  */
-void
+uint32_t
 brw_assign_common_binding_table_offsets(gl_shader_stage stage,
                                         const struct brw_device_info *devinfo,
                                         const struct gl_shader_program *shader_prog,
@@ -1157,7 +1161,7 @@ brw_assign_common_binding_table_offsets(gl_shader_stage stage,
                                         uint32_t next_binding_table_offset)
 {
    const struct gl_linked_shader *shader = NULL;
-   int num_textures = _mesa_fls(prog->SamplersUsed);
+   int num_textures = util_last_bit(prog->SamplersUsed);
 
    if (shader_prog)
       shader = shader_prog->_LinkedShaders[stage];
@@ -1224,9 +1228,10 @@ brw_assign_common_binding_table_offsets(gl_shader_stage stage,
    stage_prog_data->binding_table.plane_start[2] = next_binding_table_offset;
    next_binding_table_offset += num_textures;
 
-   assert(next_binding_table_offset <= BRW_MAX_SURFACES);
-
    /* prog_data->base.binding_table.size will be set by brw_mark_surface_used. */
+
+   assert(next_binding_table_offset <= BRW_MAX_SURFACES);
+   return next_binding_table_offset;
 }
 
 static void

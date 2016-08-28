@@ -51,6 +51,7 @@
 
 #include "brw_context.h"
 #include "brw_defines.h"
+#include "brw_blorp.h"
 #include "brw_compiler.h"
 #include "brw_draw.h"
 #include "brw_state.h"
@@ -235,6 +236,11 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
                            0 : INTEL_MIPTREE_IGNORE_CCS_E;
       intel_miptree_resolve_color(brw, tex_obj->mt, flags);
       brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
+
+      if (tex_obj->base.StencilSampling ||
+          tex_obj->mt->format == MESA_FORMAT_S_UINT8) {
+         intel_update_r8stencil(brw, tex_obj->mt);
+      }
    }
 
    /* Resolve color for each active shader image. */
@@ -259,6 +265,23 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
                brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
             }
          }
+      }
+   }
+
+   /* Resolve color buffers for non-coherent framebufer fetch. */
+   if (!ctx->Extensions.MESA_shader_framebuffer_fetch &&
+       ctx->FragmentProgram._Current &&
+       ctx->FragmentProgram._Current->Base.OutputsRead) {
+      const struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+      for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
+         const struct intel_renderbuffer *irb =
+            intel_renderbuffer(fb->_ColorDrawBuffers[i]);
+
+         if (irb &&
+             intel_miptree_resolve_color(brw, irb->mt,
+                                         INTEL_MIPTREE_IGNORE_CCS_E))
+            brw_render_cache_set_check_flush(brw, irb->mt->bo);
       }
    }
 
@@ -749,15 +772,41 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.MaxFramebufferHeight = 16384;
    ctx->Const.MaxFramebufferLayers = ctx->Const.MaxArrayTextureLayers;
    ctx->Const.MaxFramebufferSamples = max_samples;
+
+   /* OES_primitive_bounding_box */
+   ctx->Const.NoPrimitiveBoundingBoxOutput = true;
 }
 
 static void
-brw_initialize_cs_context_constants(struct brw_context *brw, unsigned max_threads)
+brw_initialize_cs_context_constants(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
+   const struct intel_screen *screen = brw->intelScreen;
+   const struct brw_device_info *devinfo = screen->devinfo;
+
+   /* FINISHME: Do this for all platforms that the kernel supports */
+   if (brw->is_cherryview &&
+       screen->subslice_total > 0 && screen->eu_total > 0) {
+      /* Logical CS threads = EUs per subslice * 7 threads per EU */
+      brw->max_cs_threads = screen->eu_total / screen->subslice_total * 7;
+
+      /* Fuse configurations may give more threads than expected, never less. */
+      if (brw->max_cs_threads < devinfo->max_cs_threads)
+         brw->max_cs_threads = devinfo->max_cs_threads;
+   } else {
+      brw->max_cs_threads = devinfo->max_cs_threads;
+   }
+
    /* Maximum number of scalar compute shader invocations that can be run in
     * parallel in the same subslice assuming SIMD32 dispatch.
+    *
+    * We don't advertise more than 64 threads, because we are limited to 64 by
+    * our usage of thread_width_max in the gpgpu walker command. This only
+    * currently impacts Haswell, which otherwise might be able to advertise 70
+    * threads. With SIMD32 and 64 threads, Haswell still provides twice the
+    * required the number of invocation needed for ARB_compute_shader.
     */
+   const unsigned max_threads = MIN2(64, brw->max_cs_threads);
    const uint32_t max_invocations = 32 * max_threads;
    ctx->Const.MaxComputeWorkGroupSize[0] = max_invocations;
    ctx->Const.MaxComputeWorkGroupSize[1] = max_invocations;
@@ -961,7 +1010,7 @@ brwCreateContext(gl_api api,
    if (INTEL_DEBUG & DEBUG_PERF)
       brw->perf_debug = true;
 
-   brw_initialize_cs_context_constants(brw, devinfo->max_cs_threads);
+   brw_initialize_cs_context_constants(brw);
    brw_initialize_context_constants(brw);
 
    ctx->Const.ResetStrategy = notify_reset
@@ -1003,44 +1052,20 @@ brwCreateContext(gl_api api,
 
    brw_init_surface_formats(brw);
 
+   if (brw->gen >= 6)
+      brw_blorp_init(brw);
+
    brw->max_vs_threads = devinfo->max_vs_threads;
    brw->max_hs_threads = devinfo->max_hs_threads;
    brw->max_ds_threads = devinfo->max_ds_threads;
    brw->max_gs_threads = devinfo->max_gs_threads;
    brw->max_wm_threads = devinfo->max_wm_threads;
-   /* FINISHME: Do this for all platforms that the kernel supports */
-   if (brw->is_cherryview &&
-       screen->subslice_total > 0 && screen->eu_total > 0) {
-      /* Logical CS threads = EUs per subslice * 7 threads per EU */
-      brw->max_cs_threads = screen->eu_total / screen->subslice_total * 7;
-
-      /* Fuse configurations may give more threads than expected, never less. */
-      if (brw->max_cs_threads < devinfo->max_cs_threads)
-         brw->max_cs_threads = devinfo->max_cs_threads;
-   } else {
-      brw->max_cs_threads = devinfo->max_cs_threads;
-   }
    brw->urb.size = devinfo->urb.size;
    brw->urb.min_vs_entries = devinfo->urb.min_vs_entries;
    brw->urb.max_vs_entries = devinfo->urb.max_vs_entries;
    brw->urb.max_hs_entries = devinfo->urb.max_hs_entries;
    brw->urb.max_ds_entries = devinfo->urb.max_ds_entries;
    brw->urb.max_gs_entries = devinfo->urb.max_gs_entries;
-
-   /* Estimate the size of the mappable aperture into the GTT.  There's an
-    * ioctl to get the whole GTT size, but not one to get the mappable subset.
-    * It turns out it's basically always 256MB, though some ancient hardware
-    * was smaller.
-    */
-   uint32_t gtt_size = 256 * 1024 * 1024;
-
-   /* We don't want to map two objects such that a memcpy between them would
-    * just fault one mapping in and then the other over and over forever.  So
-    * we would need to divide the GTT size by 2.  Additionally, some GTT is
-    * taken up by things like the framebuffer and the ringbuffer and such, so
-    * be more conservative.
-    */
-   brw->max_gtt_map_object_size = gtt_size / 4;
 
    if (brw->gen == 6)
       brw->urb.gs_present = false;
@@ -1051,6 +1076,8 @@ brwCreateContext(gl_api api,
    brw->sf.viewport_transform_enable = true;
 
    brw->predicate.state = BRW_PREDICATE_STATE_RENDER;
+
+   brw->max_gtt_map_object_size = screen->max_gtt_map_object_size;
 
    brw->use_resource_streamer = screen->has_resource_streamer &&
       (env_var_as_boolean("INTEL_USE_HW_BT", false) ||
@@ -1109,6 +1136,9 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       brw_collect_and_report_shader_time(brw);
       brw_destroy_shader_time(brw);
    }
+
+   if (brw->gen >= 6)
+      blorp_finish(&brw->blorp);
 
    brw_destroy_state(brw);
    brw_draw_destroy(brw);

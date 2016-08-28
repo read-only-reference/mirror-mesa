@@ -24,9 +24,10 @@
       <value name="INSTANCEDATA" value="1"/>
     </field>
     <field name="Vertex Buffer Memory Object Control State" start="16" end="19" type="MEMORY_OBJECT_CONTROL_STATE"/>
-    <field name="Address Modify Enable" start="14" end="14" type="uint"/>
+    <field name="Vertex Buffer MOCS" start="16" end="19" type="uint"/>
+    <field name="Address Modify Enable" start="14" end="14" type="bool"/>
     <field name="Null Vertex Buffer" start="13" end="13" type="bool"/>
-    <field name="Vertex Fetch Invalidate" start="12" end="12" type="uint" default="0"/>
+    <field name="Vertex Fetch Invalidate" start="12" end="12" type="bool" default="0"/>
     <field name="Buffer Pitch" start="0" end="11" type="uint"/>
     <field name="Buffer Starting Address" start="32" end="63" type="address"/>
     <field name="End Address" start="64" end="95" type="address"/>
@@ -35,7 +36,7 @@
 
   <struct name="VERTEX_ELEMENT_STATE" length="2">
     <field name="Vertex Buffer Index" start="26" end="31" type="uint"/>
-    <field name="Valid" start="25" end="25" type="uint"/>
+    <field name="Valid" start="25" end="25" type="bool"/>
     <field name="Source Element Format" start="16" end="24" type="uint"/>
     <field name="Edge Flag Enable" start="15" end="15" type="bool"/>
     <field name="Source Element Offset" start="0" end="11" type="uint"/>
@@ -1068,6 +1069,7 @@
     </field>
     <field name="Minimum Array Element" start="138" end="148" type="uint"/>
     <field name="Depth Buffer Object Control State" start="128" end="131" type="MEMORY_OBJECT_CONTROL_STATE"/>
+    <field name="Depth Buffer MOCS" start="128" end="131" type="uint"/>
     <field name="Depth Coordinate Offset Y" start="176" end="191" type="int"/>
     <field name="Depth Coordinate Offset X" start="160" end="175" type="int"/>
     <field name="Render Target View Extent" start="213" end="223" type="uint"/>
@@ -1198,6 +1200,7 @@
     <field name="3D Command Sub Opcode" start="16" end="23" type="uint" default="7"/>
     <field name="DWord Length" start="0" end="7" type="uint" default="1"/>
     <field name="Hierarchical Depth Buffer Object Control State" start="57" end="60" type="MEMORY_OBJECT_CONTROL_STATE"/>
+    <field name="Hierarchical Depth Buffer MOCS" start="57" end="60" type="uint"/>
     <field name="Surface Pitch" start="32" end="48" type="uint"/>
     <field name="Surface Base Address" start="64" end="95" type="address"/>
   </instruction>
@@ -1612,7 +1615,7 @@
       <value name="WIREFRAME" value="1"/>
       <value name="POINT" value="2"/>
     </field>
-    <field name="View Transform Enable" start="33" end="33" type="bool"/>
+    <field name="Viewport Transform Enable" start="33" end="33" type="bool"/>
     <field name="Front Winding" start="32" end="32" type="uint"/>
     <field name="Anti-Aliasing Enable" start="95" end="95" type="bool"/>
     <field name="Cull Mode" start="93" end="94" type="uint" prefix="CULLMODE">
@@ -1641,7 +1644,10 @@
       <value name="AALINEDISTANCE_TRUE" value="1"/>
     </field>
     <field name="Vertex Sub Pixel Precision Select" start="108" end="108" type="uint"/>
-    <field name="Use Point Width State" start="107" end="107" type="uint"/>
+    <field name="Point Width Source" start="107" end="107" type="uint">
+      <value name="Vertex" value="0"/>
+      <value name="State" value="1"/>
+    </field>
     <field name="Point Width" start="96" end="106" type="u8.3"/>
     <field name="Global Depth Offset Constant" start="128" end="159" type="float"/>
     <field name="Global Depth Offset Scale" start="160" end="191" type="float"/>

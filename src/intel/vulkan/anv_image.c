@@ -332,81 +332,6 @@ void anv_GetImageSubresourceLayout(
    }
 }
 
-VkResult
-anv_validate_CreateImageView(VkDevice _device,
-                             const VkImageViewCreateInfo *pCreateInfo,
-                             const VkAllocationCallbacks *pAllocator,
-                             VkImageView *pView)
-{
-   ANV_FROM_HANDLE(anv_image, image, pCreateInfo->image);
-   const VkImageSubresourceRange *subresource;
-
-   /* Validate structure type before dereferencing it. */
-   assert(pCreateInfo);
-   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
-   subresource = &pCreateInfo->subresourceRange;
-
-   /* Validate viewType is in range before using it. */
-   assert(pCreateInfo->viewType >= VK_IMAGE_VIEW_TYPE_BEGIN_RANGE);
-   assert(pCreateInfo->viewType <= VK_IMAGE_VIEW_TYPE_END_RANGE);
-
-   /* Validate format is in range before using it. */
-   assert(pCreateInfo->format >= VK_FORMAT_BEGIN_RANGE);
-   assert(pCreateInfo->format <= VK_FORMAT_END_RANGE);
-
-   /* Validate channel swizzles. */
-   assert(pCreateInfo->components.r >= VK_COMPONENT_SWIZZLE_BEGIN_RANGE);
-   assert(pCreateInfo->components.r <= VK_COMPONENT_SWIZZLE_END_RANGE);
-   assert(pCreateInfo->components.g >= VK_COMPONENT_SWIZZLE_BEGIN_RANGE);
-   assert(pCreateInfo->components.g <= VK_COMPONENT_SWIZZLE_END_RANGE);
-   assert(pCreateInfo->components.b >= VK_COMPONENT_SWIZZLE_BEGIN_RANGE);
-   assert(pCreateInfo->components.b <= VK_COMPONENT_SWIZZLE_END_RANGE);
-   assert(pCreateInfo->components.a >= VK_COMPONENT_SWIZZLE_BEGIN_RANGE);
-   assert(pCreateInfo->components.a <= VK_COMPONENT_SWIZZLE_END_RANGE);
-
-   /* Validate subresource. */
-   assert(subresource->aspectMask != 0);
-   assert(subresource->levelCount > 0);
-   assert(subresource->layerCount > 0);
-   assert(subresource->baseMipLevel < image->levels);
-   assert(subresource->baseMipLevel + anv_get_levelCount(image, subresource) <= image->levels);
-   assert(subresource->baseArrayLayer < image->array_size);
-   assert(subresource->baseArrayLayer + anv_get_layerCount(image, subresource) <= image->array_size);
-   assert(pView);
-
-   MAYBE_UNUSED const VkImageAspectFlags view_format_aspects =
-      vk_format_aspects(pCreateInfo->format);
-
-   const VkImageAspectFlags ds_flags = VK_IMAGE_ASPECT_DEPTH_BIT
-                                     | VK_IMAGE_ASPECT_STENCIL_BIT;
-
-   /* Validate format. */
-   if (subresource->aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
-      assert(subresource->aspectMask == VK_IMAGE_ASPECT_COLOR_BIT);
-      assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
-      assert(view_format_aspects == VK_IMAGE_ASPECT_COLOR_BIT);
-   } else if (subresource->aspectMask & ds_flags) {
-      assert((subresource->aspectMask & ~ds_flags) == 0);
-
-      assert(pCreateInfo->format == image->vk_format);
-
-      if (subresource->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) {
-         assert(image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT);
-         assert(view_format_aspects & VK_IMAGE_ASPECT_DEPTH_BIT);
-      }
-
-      if (subresource->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) {
-         /* FINISHME: Is it legal to have an R8 view of S8? */
-         assert(image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT);
-         assert(view_format_aspects & VK_IMAGE_ASPECT_STENCIL_BIT);
-      }
-   } else {
-      assert(!"bad VkImageSubresourceRange::aspectFlags");
-   }
-
-   return anv_CreateImageView(_device, pCreateInfo, pAllocator, pView);
-}
-
 static struct anv_state
 alloc_surface_state(struct anv_device *device,
                     struct anv_cmd_buffer *cmd_buffer)
@@ -531,7 +456,18 @@ anv_image_view_init(struct anv_image_view *iview,
       iview->sampler_surface_state.alloc_size = 0;
    }
 
-   if (image->usage & usage_mask & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) {
+   /* This is kind-of hackish.  It is possible, due to get_full_usage above,
+    * to get a surface state with a non-renderable format but with
+    * VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT.  This happens in particular for
+    * formats which aren't renderable but where we want to use Vulkan copy
+    * commands so VK_IMAGE_USAGE_TRANSFER_DST_BIT is set.  In the case of a
+    * copy, meta will use a format that we can render to, but most of the rest
+    * of the time, we don't want to create those surface states.  Once we
+    * start using blorp for copies, this problem will go away and we can
+    * remove a lot of hacks.
+    */
+   if ((image->usage & usage_mask & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
+       isl_format_supports_rendering(&device->info, isl_view.format)) {
       iview->color_rt_surface_state = alloc_surface_state(device, cmd_buffer);
 
       isl_view.usage = cube_usage | ISL_SURF_USAGE_RENDER_TARGET_BIT;

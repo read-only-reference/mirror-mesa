@@ -480,7 +480,7 @@ vc4_set_framebuffer_state(struct pipe_context *pctx,
 }
 
 static struct vc4_texture_stateobj *
-vc4_get_stage_tex(struct vc4_context *vc4, unsigned shader)
+vc4_get_stage_tex(struct vc4_context *vc4, enum pipe_shader_type shader)
 {
         switch (shader) {
         case PIPE_SHADER_FRAGMENT:
@@ -559,7 +559,7 @@ vc4_create_sampler_state(struct pipe_context *pctx,
 
 static void
 vc4_sampler_states_bind(struct pipe_context *pctx,
-                        unsigned shader, unsigned start,
+                        enum pipe_shader_type shader, unsigned start,
                         unsigned nr, void **hwcso)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
@@ -586,7 +586,7 @@ static struct pipe_sampler_view *
 vc4_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                         const struct pipe_sampler_view *cso)
 {
-        struct vc4_sampler_view *so = malloc(sizeof(*so));
+        struct vc4_sampler_view *so = CALLOC_STRUCT(vc4_sampler_view);
         struct vc4_resource *rsc = vc4_resource(prsc);
 
         if (!so)
@@ -660,7 +660,8 @@ vc4_sampler_view_destroy(struct pipe_context *pctx,
 }
 
 static void
-vc4_set_sampler_views(struct pipe_context *pctx, unsigned shader,
+vc4_set_sampler_views(struct pipe_context *pctx,
+                      enum pipe_shader_type shader,
                       unsigned start, unsigned nr,
                       struct pipe_sampler_view **views)
 {

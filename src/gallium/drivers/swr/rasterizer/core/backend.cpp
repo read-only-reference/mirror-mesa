@@ -37,7 +37,7 @@
 
 #include <algorithm>
 
-typedef void(*PFN_CLEAR_TILES)(DRAW_CONTEXT*, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t, DWORD[4]);
+typedef void(*PFN_CLEAR_TILES)(DRAW_CONTEXT*, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t, DWORD[4], const SWR_RECT& rect);
 static PFN_CLEAR_TILES sClearTilesTable[NUM_SWR_FORMATS];
 
 //////////////////////////////////////////////////////////////////////////
@@ -68,7 +68,7 @@ void ProcessComputeBE(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t threadGroup
     csContext.dispatchDims[0] = pTaskData->threadGroupCountX;
     csContext.dispatchDims[1] = pTaskData->threadGroupCountY;
     csContext.dispatchDims[2] = pTaskData->threadGroupCountZ;
-    csContext.pTGSM = pContext->pScratch[workerId];
+    csContext.pTGSM = pContext->ppScratch[workerId];
     csContext.pSpillFillBuffer = (uint8_t*)pSpillFillBuffer;
 
     state.pfnCsFunc(GetPrivateState(pDC), &csContext);
@@ -80,60 +80,15 @@ void ProcessComputeBE(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t threadGroup
 
 void ProcessSyncBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, void *pUserData)
 {
-    SYNC_DESC *pSync = (SYNC_DESC*)pUserData;
-
     uint32_t x, y;
     MacroTileMgr::getTileIndices(macroTile, x, y);
     SWR_ASSERT(x == 0 && y == 0);
-
-    if (pSync->pfnCallbackFunc != nullptr)
-    {
-        pSync->pfnCallbackFunc(pSync->userData, pSync->userData2, pSync->userData3);
-    }
-}
-
-void ProcessQueryStatsBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, void *pUserData)
-{
-    QUERY_DESC* pQueryDesc = (QUERY_DESC*)pUserData;
-    SWR_STATS* pStats = pQueryDesc->pStats;
-    SWR_CONTEXT *pContext = pDC->pContext;
-
-    SWR_ASSERT(pStats != nullptr);
-
-    for (uint32_t i = 0; i < pContext->NumWorkerThreads; ++i)
-    {
-        pStats->DepthPassCount += pContext->stats[i].DepthPassCount;
-
-        pStats->IaVertices    += pContext->stats[i].IaVertices;
-        pStats->IaPrimitives  += pContext->stats[i].IaPrimitives;
-        pStats->VsInvocations += pContext->stats[i].VsInvocations;
-        pStats->HsInvocations += pContext->stats[i].HsInvocations;
-        pStats->DsInvocations += pContext->stats[i].DsInvocations;
-        pStats->GsInvocations += pContext->stats[i].GsInvocations;
-        pStats->PsInvocations += pContext->stats[i].PsInvocations;
-        pStats->CInvocations  += pContext->stats[i].CInvocations;
-        pStats->CsInvocations += pContext->stats[i].CsInvocations;
-        pStats->CPrimitives   += pContext->stats[i].CPrimitives;
-        pStats->GsPrimitives  += pContext->stats[i].GsPrimitives;
-
-        for (uint32_t stream = 0; stream < MAX_SO_STREAMS; ++stream)
-        {
-            pStats->SoWriteOffset[stream] += pContext->stats[i].SoWriteOffset[stream];
-
-            /// @note client is required to provide valid write offset before every draw, so we clear
-            /// out the contents of the write offset when storing stats
-            pContext->stats[i].SoWriteOffset[stream] = 0;
-
-            pStats->SoPrimStorageNeeded[stream] += pContext->stats[i].SoPrimStorageNeeded[stream];
-            pStats->SoNumPrimsWritten[stream] += pContext->stats[i].SoNumPrimsWritten[stream];
-        }
-    }
 }
 
 template<SWR_FORMAT format>
 void ClearRasterTile(uint8_t *pTileBuffer, simdvector &value)
 {
-    auto lambda = [&](int comp)
+    auto lambda = [&](int32_t comp)
     {
         FormatTraits<format>::storeSOA(comp, pTileBuffer, value.v[comp]);
         pTileBuffer += (KNOB_SIMD_WIDTH * FormatTraits<format>::GetBPC(comp) / 8);
@@ -147,7 +102,7 @@ void ClearRasterTile(uint8_t *pTileBuffer, simdvector &value)
 }
 
 template<SWR_FORMAT format>
-INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t macroTile, DWORD clear[4])
+INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t macroTile, DWORD clear[4], const SWR_RECT& rect)
 {
     // convert clear color to hottile format
     // clear color is in RGBA float/uint32
@@ -167,32 +122,33 @@ INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, ui
 
     uint32_t tileX, tileY;
     MacroTileMgr::getTileIndices(macroTile, tileX, tileY);
-    const API_STATE& state = GetApiState(pDC);
-    
-    int top = KNOB_MACROTILE_Y_DIM_FIXED * tileY;
-    int bottom = top + KNOB_MACROTILE_Y_DIM_FIXED - 1;
-    int left = KNOB_MACROTILE_X_DIM_FIXED * tileX;
-    int right = left + KNOB_MACROTILE_X_DIM_FIXED - 1;
 
-    // intersect with scissor
-    top = std::max(top, state.scissorInFixedPoint.top);
-    left = std::max(left, state.scissorInFixedPoint.left);
-    bottom = std::min(bottom, state.scissorInFixedPoint.bottom);
-    right = std::min(right, state.scissorInFixedPoint.right);
+    // Init to full macrotile
+    SWR_RECT clearTile =
+    {
+        KNOB_MACROTILE_X_DIM * int32_t(tileX),
+        KNOB_MACROTILE_Y_DIM * int32_t(tileY),
+        KNOB_MACROTILE_X_DIM * int32_t(tileX + 1),
+        KNOB_MACROTILE_Y_DIM * int32_t(tileY + 1),
+    };
+
+    // intersect with clear rect
+    clearTile &= rect;
 
     // translate to local hottile origin
-    top -= KNOB_MACROTILE_Y_DIM_FIXED * tileY;
-    bottom -= KNOB_MACROTILE_Y_DIM_FIXED * tileY;
-    left -= KNOB_MACROTILE_X_DIM_FIXED * tileX;
-    right -= KNOB_MACROTILE_X_DIM_FIXED * tileX;
+    clearTile.Translate(-int32_t(tileX) * KNOB_MACROTILE_X_DIM, -int32_t(tileY) * KNOB_MACROTILE_Y_DIM);
+
+    // Make maximums inclusive (needed for convert to raster tiles)
+    clearTile.xmax -= 1;
+    clearTile.ymax -= 1;
 
     // convert to raster tiles
-    top >>= (KNOB_TILE_Y_DIM_SHIFT + FIXED_POINT_SHIFT);
-    bottom >>= (KNOB_TILE_Y_DIM_SHIFT + FIXED_POINT_SHIFT);
-    left >>= (KNOB_TILE_X_DIM_SHIFT + FIXED_POINT_SHIFT);
-    right >>= (KNOB_TILE_X_DIM_SHIFT + FIXED_POINT_SHIFT);
+    clearTile.ymin >>= (KNOB_TILE_Y_DIM_SHIFT);
+    clearTile.ymax >>= (KNOB_TILE_Y_DIM_SHIFT);
+    clearTile.xmin >>= (KNOB_TILE_X_DIM_SHIFT);
+    clearTile.xmax >>= (KNOB_TILE_X_DIM_SHIFT);
 
-    const int numSamples = GetNumSamples(pDC->pState->state.rastState.sampleCount);
+    const int32_t numSamples = GetNumSamples(pDC->pState->state.rastState.sampleCount);
     // compute steps between raster tile samples / raster tiles / macro tile rows
     const uint32_t rasterTileSampleStep = KNOB_TILE_X_DIM * KNOB_TILE_Y_DIM * FormatTraits<format>::bpp / 8;
     const uint32_t rasterTileStep = (KNOB_TILE_X_DIM * KNOB_TILE_Y_DIM * (FormatTraits<format>::bpp / 8)) * numSamples;
@@ -200,16 +156,16 @@ INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, ui
     const uint32_t pitch = (FormatTraits<format>::bpp * KNOB_MACROTILE_X_DIM / 8);
 
     HOTTILE *pHotTile = pDC->pContext->pHotTileMgr->GetHotTile(pDC->pContext, pDC, macroTile, rt, true, numSamples);
-    uint32_t rasterTileStartOffset = (ComputeTileOffset2D< TilingTraits<SWR_TILE_SWRZ, FormatTraits<format>::bpp > >(pitch, left, top)) * numSamples;
+    uint32_t rasterTileStartOffset = (ComputeTileOffset2D< TilingTraits<SWR_TILE_SWRZ, FormatTraits<format>::bpp > >(pitch, clearTile.xmin, clearTile.ymin)) * numSamples;
     uint8_t* pRasterTileRow = pHotTile->pBuffer + rasterTileStartOffset; //(ComputeTileOffset2D< TilingTraits<SWR_TILE_SWRZ, FormatTraits<format>::bpp > >(pitch, x, y)) * numSamples;
 
     // loop over all raster tiles in the current hot tile
-    for (int y = top; y <= bottom; ++y)
+    for (int32_t y = clearTile.ymin; y <= clearTile.ymax; ++y)
     {
         uint8_t* pRasterTile = pRasterTileRow;
-        for (int x = left; x <= right; ++x)
+        for (int32_t x = clearTile.xmin; x <= clearTile.xmax; ++x)
         {
-            for( int sampleNum = 0; sampleNum < numSamples; sampleNum++)
+            for( int32_t sampleNum = 0; sampleNum < numSamples; sampleNum++)
             {
                 ClearRasterTile<format>(pRasterTile, vClear);
                 pRasterTile += rasterTileSampleStep;
@@ -286,7 +242,7 @@ void ProcessClearBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, vo
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[KNOB_COLOR_HOT_TILE_FORMAT];
             SWR_ASSERT(pfnClearTiles != nullptr);
 
-            pfnClearTiles(pDC, SWR_ATTACHMENT_COLOR0, macroTile, clearData);
+            pfnClearTiles(pDC, SWR_ATTACHMENT_COLOR0, macroTile, clearData, pClear->rect);
         }
 
         if (pClear->flags.mask & SWR_CLEAR_DEPTH)
@@ -296,7 +252,7 @@ void ProcessClearBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, vo
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[KNOB_DEPTH_HOT_TILE_FORMAT];
             SWR_ASSERT(pfnClearTiles != nullptr);
 
-            pfnClearTiles(pDC, SWR_ATTACHMENT_DEPTH, macroTile, clearData);
+            pfnClearTiles(pDC, SWR_ATTACHMENT_DEPTH, macroTile, clearData, pClear->rect);
         }
 
         if (pClear->flags.mask & SWR_CLEAR_STENCIL)
@@ -306,7 +262,7 @@ void ProcessClearBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, vo
             clearData[0] = *(DWORD*)&value;
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[KNOB_STENCIL_HOT_TILE_FORMAT];
 
-            pfnClearTiles(pDC, SWR_ATTACHMENT_STENCIL, macroTile, clearData);
+            pfnClearTiles(pDC, SWR_ATTACHMENT_STENCIL, macroTile, clearData, pClear->rect);
         }
 
         RDTSC_STOP(BEClear, 0, 0);
@@ -352,13 +308,13 @@ void ProcessStoreTileBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[srcFormat];
             SWR_ASSERT(pfnClearTiles != nullptr);
 
-            pfnClearTiles(pDC, pDesc->attachment, macroTile, pHotTile->clearData);
+            pfnClearTiles(pDC, pDesc->attachment, macroTile, pHotTile->clearData, pDesc->rect);
         }
 
         if (pHotTile->state == HOTTILE_DIRTY || pDesc->postStoreTileState == (SWR_TILE_STATE)HOTTILE_DIRTY)
         {
-            int destX = KNOB_MACROTILE_X_DIM * x;
-            int destY = KNOB_MACROTILE_Y_DIM * y;
+            int32_t destX = KNOB_MACROTILE_X_DIM * x;
+            int32_t destY = KNOB_MACROTILE_Y_DIM * y;
 
             pContext->pfnStoreTile(GetPrivateState(pDC), srcFormat,
                 pDesc->attachment, destX, destY, pHotTile->renderTargetArrayIndex, pHotTile->pBuffer);
@@ -379,7 +335,7 @@ void ProcessDiscardInvalidateTilesBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint3
     DISCARD_INVALIDATE_TILES_DESC *pDesc = (DISCARD_INVALIDATE_TILES_DESC *)pData;
     SWR_CONTEXT *pContext = pDC->pContext;
 
-    const int numSamples = GetNumSamples(pDC->pState->state.rastState.sampleCount);
+    const int32_t numSamples = GetNumSamples(pDC->pState->state.rastState.sampleCount);
 
     for (uint32_t i = 0; i < SWR_NUM_ATTACHMENTS; ++i)
     {
@@ -403,12 +359,6 @@ const __m256 vULOffsetsY = {0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0};
 #else
 #error Unsupported vector width
 #endif
-
-INLINE
-bool CanEarlyZ(const SWR_PS_STATE *pPSState)
-{
-    return (pPSState->forceEarlyZ || (!pPSState->writesODepth && !pPSState->usesSourceDepth && !pPSState->usesUAV));
-}
 
 simdmask ComputeUserClipMask(uint8_t clipMask, float* pUserClipBuffer, simdscalar vI, simdscalar vJ)
 {
@@ -440,7 +390,6 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
     RDTSC_START(BESingleSampleBackend);
     RDTSC_START(BESetup);
 
-    SWR_CONTEXT *pContext = pDC->pContext;
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_PS_STATE *pPSState = &state.psState;
@@ -489,6 +438,7 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
     psContext.pRecipW = work.pRecipW;
     psContext.pSamplePosX = (const float*)&T::MultisampleT::samplePosX;
     psContext.pSamplePosY = (const float*)&T::MultisampleT::samplePosY;
+    psContext.rasterizerSampleCount = T::MultisampleT::numSamples;
 
     for(uint32_t yy = y; yy < y + KNOB_TILE_Y_DIM; yy += SIMD_TILE_Y_DIM)
     {
@@ -505,9 +455,11 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                 // pixel center
                 psContext.vX.center = _simd_add_ps(vCenterOffsetsX, _simd_set1_ps((float)xx));
 
-                if(T::bInputCoverage)
+                if(T::InputCoverage != SWR_INPUT_COVERAGE_NONE)
                 {
-                    generateInputCoverage<T>(&work.coverageMask[0], psContext.inputMask, pBlendState->sampleMask);
+                    const uint64_t* pCoverageMask = (T::InputCoverage == SWR_INPUT_COVERAGE_INNER_CONSERVATIVE) ? &work.innerCoverageMask : 
+                                                    &work.coverageMask[0];
+                    generateInputCoverage<T, T::InputCoverage>(pCoverageMask, psContext.inputMask, pBlendState->sampleMask);
                 }
 
                 RDTSC_START(BEBarycentric);
@@ -541,14 +493,14 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                 if(T::bCanEarlyZ)
                 {
                     RDTSC_START(BEEarlyDepthTest);
-                    depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing,
-                                                        psContext.vZ, pDepthBase, vCoverageMask, pStencilBase, &stencilPassMask);
+                    depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
+                                                     psContext.vZ, pDepthBase, vCoverageMask, pStencilBase, &stencilPassMask);
                     RDTSC_STOP(BEEarlyDepthTest, 0, 0);
 
                     // early-exit if no pixels passed depth or earlyZ is forced on
                     if(pPSState->forceEarlyZ || !_simd_movemask_ps(depthPassMask))
                     {
-                        DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                        DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                                             pDepthBase, depthPassMask, vCoverageMask, pStencilBase, stencilPassMask);
 
                         if (!_simd_movemask_ps(depthPassMask))
@@ -573,14 +525,14 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                 if(!T::bCanEarlyZ)
                 {
                     RDTSC_START(BELateDepthTest);
-                    depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing,
+                    depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                                         psContext.vZ, pDepthBase, vCoverageMask, pStencilBase, &stencilPassMask);
                     RDTSC_STOP(BELateDepthTest, 0, 0);
 
                     if(!_simd_movemask_ps(depthPassMask))
                     {
                         // need to call depth/stencil write for stencil write
-                        DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                        DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                                             pDepthBase, depthPassMask, vCoverageMask, pStencilBase, stencilPassMask);
                         goto Endtile;
                     }
@@ -597,7 +549,7 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                 // do final depth write after all pixel kills
                 if (!pPSState->forceEarlyZ)
                 {
-                    DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                    DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                         pDepthBase, depthPassMask, vCoverageMask, pStencilBase, stencilPassMask);
                 }
                 RDTSC_STOP(BEOutputMerger, 0, 0);
@@ -606,6 +558,10 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
 Endtile:
             RDTSC_START(BEEndTile);
             coverageMask >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
+            if(T::InputCoverage == SWR_INPUT_COVERAGE_INNER_CONSERVATIVE)
+            {
+                work.innerCoverageMask >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
+            }
             pDepthBase += (KNOB_SIMD_WIDTH * FormatTraits<KNOB_DEPTH_HOT_TILE_FORMAT>::bpp) / 8;
             pStencilBase += (KNOB_SIMD_WIDTH * FormatTraits<KNOB_STENCIL_HOT_TILE_FORMAT>::bpp) / 8;
 
@@ -625,7 +581,6 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
     RDTSC_START(BESampleRateBackend);
     RDTSC_START(BESetup);
 
-    SWR_CONTEXT *pContext = pDC->pContext;
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_PS_STATE *pPSState = &state.psState;
@@ -673,6 +628,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
     psContext.recipDet = work.recipDet;
     psContext.pSamplePosX = (const float*)&T::MultisampleT::samplePosX;
     psContext.pSamplePosY = (const float*)&T::MultisampleT::samplePosY;
+    psContext.rasterizerSampleCount = T::MultisampleT::numSamples;
 
     for (uint32_t yy = y; yy < y + KNOB_TILE_Y_DIM; yy += SIMD_TILE_Y_DIM)
     {
@@ -691,9 +647,11 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
             CalcPixelBarycentrics(coeffs, psContext);
             RDTSC_STOP(BEBarycentric, 0, 0);
 
-            if(T::bInputCoverage)
+            if(T::InputCoverage != SWR_INPUT_COVERAGE_NONE)
             {
-                generateInputCoverage<T>(&work.coverageMask[0], psContext.inputMask, pBlendState->sampleMask);
+                const uint64_t* pCoverageMask = (T::InputCoverage == SWR_INPUT_COVERAGE_INNER_CONSERVATIVE) ? &work.innerCoverageMask :
+                                                &work.coverageMask[0];
+                generateInputCoverage<T, T::InputCoverage>(pCoverageMask, psContext.inputMask, pBlendState->sampleMask);
             }
 
             if(T::bCentroidPos)
@@ -754,14 +712,14 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                     if (T::bCanEarlyZ)
                     {
                         RDTSC_START(BEEarlyDepthTest);
-                        depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing,
+                        depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                               psContext.vZ, pDepthSample, vCoverageMask, pStencilSample, &stencilPassMask);
                         RDTSC_STOP(BEEarlyDepthTest, 0, 0);
 
                         // early-exit if no samples passed depth or earlyZ is forced on.
                         if (pPSState->forceEarlyZ || !_simd_movemask_ps(depthPassMask))
                         {
-                            DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                            DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                                 pDepthSample, depthPassMask, vCoverageMask, pStencilSample, stencilPassMask);
 
                             if (!_simd_movemask_ps(depthPassMask))
@@ -787,14 +745,14 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                     if (!T::bCanEarlyZ)
                     {
                         RDTSC_START(BELateDepthTest);
-                        depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing,
+                        depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                               psContext.vZ, pDepthSample, vCoverageMask, pStencilSample, &stencilPassMask);
                         RDTSC_STOP(BELateDepthTest, 0, 0);
 
                         if (!_simd_movemask_ps(depthPassMask))
                         {
                             // need to call depth/stencil write for stencil write
-                            DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                            DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                                 pDepthSample, depthPassMask, vCoverageMask, pStencilSample, stencilPassMask);
 
                             work.coverageMask[sample] >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
@@ -813,7 +771,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                     // do final depth write after all pixel kills
                     if (!pPSState->forceEarlyZ)
                     {
-                        DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                        DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                             pDepthSample, depthPassMask, vCoverageMask, pStencilSample, stencilPassMask);
                     }
                     RDTSC_STOP(BEOutputMerger, 0, 0);
@@ -821,6 +779,10 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                 work.coverageMask[sample] >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
             }
             RDTSC_START(BEEndTile);
+            if(T::InputCoverage == SWR_INPUT_COVERAGE_INNER_CONSERVATIVE)
+            {
+                work.innerCoverageMask >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
+            }
             pDepthBase += (KNOB_SIMD_WIDTH * FormatTraits<KNOB_DEPTH_HOT_TILE_FORMAT>::bpp) / 8;
             pStencilBase += (KNOB_SIMD_WIDTH * FormatTraits<KNOB_STENCIL_HOT_TILE_FORMAT>::bpp) / 8;
 
@@ -840,7 +802,6 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
     RDTSC_START(BEPixelRateBackend);
     RDTSC_START(BESetup);
 
-    SWR_CONTEXT *pContext = pDC->pContext;
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_PS_STATE *pPSState = &state.psState;
@@ -887,6 +848,8 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
     psContext.recipDet = work.recipDet;
     psContext.pSamplePosX = (const float*)&T::MultisampleT::samplePosX;
     psContext.pSamplePosY = (const float*)&T::MultisampleT::samplePosY;
+    psContext.rasterizerSampleCount = T::MultisampleT::numSamples;
+
     psContext.sampleIndex = 0;
     
     PixelRateZTestLoop<T> PixelRateZTest(pDC, work, coeffs, state, pDepthBase, pStencilBase, rastState.clipDistanceMask);
@@ -909,9 +872,11 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
             CalcPixelBarycentrics(coeffs, psContext);
             RDTSC_STOP(BEBarycentric, 0, 0);
 
-            if (T::bInputCoverage)
+            if (T::InputCoverage != SWR_INPUT_COVERAGE_NONE)
             {
-                generateInputCoverage<T>(&work.coverageMask[0], psContext.inputMask, pBlendState->sampleMask);
+                const uint64_t* pCoverageMask = (T::InputCoverage == SWR_INPUT_COVERAGE_INNER_CONSERVATIVE) ? &work.innerCoverageMask :
+                                                &work.coverageMask[0];
+                generateInputCoverage<T, T::InputCoverage>(pCoverageMask, psContext.inputMask, pBlendState->sampleMask);
             }
 
             if(T::bCentroidPos)
@@ -1019,7 +984,7 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
                     uint8_t *pDepthSample = pDepthBase + RasterTileDepthOffset(sample);
                     uint8_t * pStencilSample = pStencilBase + RasterTileStencilOffset(sample);
 
-                    DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, PixelRateZTest.vZ[coverageSampleNum],
+                    DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, PixelRateZTest.vZ[coverageSampleNum],
                                       pDepthSample, depthMask, coverageMask, pStencilSample, PixelRateZTest.stencilPassMask[coverageSampleNum]);
                 }
                 RDTSC_STOP(BEOutputMerger, 0, 0);        
@@ -1031,6 +996,10 @@ Endtile:
                 work.coverageMask[sample] >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
             }
 
+            if(T::InputCoverage == SWR_INPUT_COVERAGE_INNER_CONSERVATIVE)
+            {
+                work.innerCoverageMask >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
+            }
             work.anyCoveredSamples >>= (SIMD_TILE_Y_DIM * SIMD_TILE_X_DIM);
             pDepthBase += (KNOB_SIMD_WIDTH * FormatTraits<KNOB_DEPTH_HOT_TILE_FORMAT>::bpp) / 8;
             pStencilBase += (KNOB_SIMD_WIDTH * FormatTraits<KNOB_STENCIL_HOT_TILE_FORMAT>::bpp) / 8;
@@ -1053,7 +1022,6 @@ void BackendNullPS(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t y,
     typedef SwrBackendTraits<sampleCountT, SWR_MSAA_STANDARD_PATTERN> T;
     RDTSC_START(BESetup);
 
-    SWR_CONTEXT *pContext = pDC->pContext;
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = pDC->pState->state.rastState;
 
@@ -1125,9 +1093,9 @@ void BackendNullPS(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t y,
                     uint8_t *pStencilSample = pStencilBase + RasterTileStencilOffset(sample);
 
                     RDTSC_START(BEEarlyDepthTest);
-                    simdscalar depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing,
+                    simdscalar depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                         psContext.vZ, pDepthSample, vCoverageMask, pStencilSample, &stencilPassMask);
-                    DepthStencilWrite(&state.vp[0], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
+                    DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                         pDepthSample, depthPassMask, vCoverageMask, pStencilSample, stencilPassMask);
                     RDTSC_STOP(BEEarlyDepthTest, 0, 0);
 
@@ -1156,19 +1124,19 @@ void InitClearTilesTable()
 }
 
 PFN_BACKEND_FUNC gBackendNullPs[SWR_MULTISAMPLE_TYPE_COUNT];
-PFN_BACKEND_FUNC gBackendSingleSample[2] // input coverage
+PFN_BACKEND_FUNC gBackendSingleSample[SWR_INPUT_COVERAGE_COUNT]
                                      [2] // centroid
                                      [2] // canEarlyZ
                                      = {};
 PFN_BACKEND_FUNC gBackendPixelRateTable[SWR_MULTISAMPLE_TYPE_COUNT]
                                        [SWR_MSAA_SAMPLE_PATTERN_COUNT]
-                                       [2] // input coverage
+                                       [SWR_INPUT_COVERAGE_COUNT]
                                        [2] // centroid
                                        [2] // forcedSampleCount
                                        [2] // canEarlyZ
                                        = {};
 PFN_BACKEND_FUNC gBackendSampleRateTable[SWR_MULTISAMPLE_TYPE_COUNT]
-                                        [2] // input coverage
+                                        [SWR_INPUT_COVERAGE_COUNT]
                                         [2] // centroid
                                         [2] // canEarlyZ
                                         = {};
@@ -1210,6 +1178,22 @@ struct BEChooser
 
     // Recursively parse args
     template <typename... TArgsT>
+    static PFN_BACKEND_FUNC GetFunc(SWR_INPUT_COVERAGE tArg, TArgsT... remainingArgs)
+    {
+        switch(tArg)
+        {
+        case SWR_INPUT_COVERAGE_NONE: return BEChooser<ArgsT..., SWR_INPUT_COVERAGE_NONE>::GetFunc(remainingArgs...); break;
+        case SWR_INPUT_COVERAGE_NORMAL: return BEChooser<ArgsT..., SWR_INPUT_COVERAGE_NORMAL>::GetFunc(remainingArgs...); break;
+        case SWR_INPUT_COVERAGE_INNER_CONSERVATIVE: return BEChooser<ArgsT..., SWR_INPUT_COVERAGE_INNER_CONSERVATIVE>::GetFunc(remainingArgs...); break;
+        default:
+        SWR_ASSERT(0 && "Invalid sample pattern\n");
+        return BEChooser<ArgsT..., SWR_INPUT_COVERAGE_NONE>::GetFunc(remainingArgs...);
+        break;
+        }
+    }
+
+    // Recursively parse args
+    template <typename... TArgsT>
     static PFN_BACKEND_FUNC GetFunc(SWR_MULTISAMPLE_COUNT tArg, TArgsT... remainingArgs)
     {
         switch(tArg)
@@ -1239,29 +1223,29 @@ struct BEChooser
     }
 };
 
-void InitBackendSingleFuncTable(PFN_BACKEND_FUNC (&table)[2][2][2])
+void InitBackendSingleFuncTable(PFN_BACKEND_FUNC (&table)[SWR_INPUT_COVERAGE_COUNT][2][2])
 {
-    for(uint32_t inputCoverage = 0; inputCoverage < 2; inputCoverage++)
+    for(uint32_t inputCoverage = 0; inputCoverage < SWR_INPUT_COVERAGE_COUNT; inputCoverage++)
     {
         for(uint32_t isCentroid = 0; isCentroid < 2; isCentroid++)
         {
             for(uint32_t canEarlyZ = 0; canEarlyZ < 2; canEarlyZ++)
             {
                 table[inputCoverage][isCentroid][canEarlyZ] =
-                    BEChooser<>::GetFunc(SWR_MULTISAMPLE_1X, SWR_MSAA_STANDARD_PATTERN, (inputCoverage > 0),
+                    BEChooser<>::GetFunc(SWR_MULTISAMPLE_1X, SWR_MSAA_STANDARD_PATTERN, (SWR_INPUT_COVERAGE)inputCoverage,
                                          (isCentroid > 0), false, (canEarlyZ > 0), SWR_BACKEND_SINGLE_SAMPLE);
             }
         }
     }
 }
 
-void InitBackendPixelFuncTable(PFN_BACKEND_FUNC (&table)[SWR_MULTISAMPLE_TYPE_COUNT][SWR_MSAA_SAMPLE_PATTERN_COUNT][2][2][2][2])
+void InitBackendPixelFuncTable(PFN_BACKEND_FUNC (&table)[SWR_MULTISAMPLE_TYPE_COUNT][SWR_MSAA_SAMPLE_PATTERN_COUNT][SWR_INPUT_COVERAGE_COUNT][2][2][2])
 {
     for(uint32_t sampleCount = SWR_MULTISAMPLE_1X; sampleCount < SWR_MULTISAMPLE_TYPE_COUNT; sampleCount++)
     {
         for(uint32_t samplePattern = SWR_MSAA_CENTER_PATTERN; samplePattern < SWR_MSAA_SAMPLE_PATTERN_COUNT; samplePattern++)
         {
-            for(uint32_t inputCoverage = 0; inputCoverage < 2; inputCoverage++)
+            for(uint32_t inputCoverage = 0; inputCoverage < SWR_INPUT_COVERAGE_COUNT; inputCoverage++)
             {
                 for(uint32_t isCentroid = 0; isCentroid < 2; isCentroid++)
                 {
@@ -1270,7 +1254,7 @@ void InitBackendPixelFuncTable(PFN_BACKEND_FUNC (&table)[SWR_MULTISAMPLE_TYPE_CO
                         for(uint32_t canEarlyZ = 0; canEarlyZ < 2; canEarlyZ++)
                         {
                             table[sampleCount][samplePattern][inputCoverage][isCentroid][forcedSampleCount][canEarlyZ] =
-                                BEChooser<>::GetFunc((SWR_MULTISAMPLE_COUNT)sampleCount, (SWR_MSAA_SAMPLE_PATTERN)samplePattern, (inputCoverage > 0), 
+                                BEChooser<>::GetFunc((SWR_MULTISAMPLE_COUNT)sampleCount, (SWR_MSAA_SAMPLE_PATTERN)samplePattern, (SWR_INPUT_COVERAGE)inputCoverage, 
                                                         (isCentroid > 0), (forcedSampleCount > 0), (canEarlyZ > 0), SWR_BACKEND_MSAA_PIXEL_RATE);
                         }
                     }
@@ -1280,18 +1264,18 @@ void InitBackendPixelFuncTable(PFN_BACKEND_FUNC (&table)[SWR_MULTISAMPLE_TYPE_CO
     }
 }
 
-void InitBackendSampleFuncTable(PFN_BACKEND_FUNC (&table)[SWR_MULTISAMPLE_TYPE_COUNT][2][2][2])
+void InitBackendSampleFuncTable(PFN_BACKEND_FUNC (&table)[SWR_MULTISAMPLE_TYPE_COUNT][SWR_INPUT_COVERAGE_COUNT][2][2])
 {
     for(uint32_t sampleCount = SWR_MULTISAMPLE_1X; sampleCount < SWR_MULTISAMPLE_TYPE_COUNT; sampleCount++)
     {
-        for(uint32_t inputCoverage = 0; inputCoverage < 2; inputCoverage++)
+        for(uint32_t inputCoverage = 0; inputCoverage < SWR_INPUT_COVERAGE_COUNT; inputCoverage++)
         {
             for(uint32_t centroid = 0; centroid < 2; centroid++)
             {
                 for(uint32_t canEarlyZ = 0; canEarlyZ < 2; canEarlyZ++)
                 {
                     table[sampleCount][inputCoverage][centroid][canEarlyZ] =
-                        BEChooser<>::GetFunc((SWR_MULTISAMPLE_COUNT)sampleCount, SWR_MSAA_STANDARD_PATTERN, (inputCoverage > 0), 
+                        BEChooser<>::GetFunc((SWR_MULTISAMPLE_COUNT)sampleCount, SWR_MSAA_STANDARD_PATTERN, (SWR_INPUT_COVERAGE)inputCoverage, 
                                              (centroid > 0), false, (canEarlyZ > 0), (SWR_BACKEND_FUNCS)SWR_BACKEND_MSAA_SAMPLE_RATE);
                 }
             }

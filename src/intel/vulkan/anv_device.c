@@ -62,8 +62,7 @@ anv_physical_device_init(struct anv_physical_device *device,
 
    fd = open(path, O_RDWR | O_CLOEXEC);
    if (fd < 0)
-      return vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
-                       "failed to open %s: %m", path);
+      return vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
 
    device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
    device->instance = instance;
@@ -73,15 +72,14 @@ anv_physical_device_init(struct anv_physical_device *device,
 
    device->chipset_id = anv_gem_get_param(fd, I915_PARAM_CHIPSET_ID);
    if (!device->chipset_id) {
-      result = VK_ERROR_INITIALIZATION_FAILED;
+      result = vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
       goto fail;
    }
 
    device->name = brw_get_device_name(device->chipset_id);
    device->info = brw_get_device_info(device->chipset_id);
    if (!device->info) {
-      result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
-                         "failed to get device info");
+      result = vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
       goto fail;
    }
 
@@ -179,6 +177,12 @@ static const VkExtensionProperties global_extensions[] = {
 #ifdef VK_USE_PLATFORM_XCB_KHR
    {
       .extensionName = VK_KHR_XCB_SURFACE_EXTENSION_NAME,
+      .specVersion = 5,
+   },
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+   {
+      .extensionName = VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
       .specVersion = 5,
    },
 #endif
@@ -375,7 +379,7 @@ void anv_GetPhysicalDeviceFeatures(
       .independentBlend                         = true,
       .geometryShader                           = true,
       .tessellationShader                       = false,
-      .sampleRateShading                        = pdevice->info->gen >= 8,
+      .sampleRateShading                        = true,
       .dualSrcBlend                             = true,
       .logicOp                                  = true,
       .multiDrawIndirect                        = false,
@@ -524,9 +528,9 @@ void anv_GetPhysicalDeviceProperties(
       .maxTexelOffset                           = 7,
       .minTexelGatherOffset                     = -8,
       .maxTexelGatherOffset                     = 7,
-      .minInterpolationOffset                   = 0, /* FIXME */
-      .maxInterpolationOffset                   = 0, /* FIXME */
-      .subPixelInterpolationOffsetBits          = 0, /* FIXME */
+      .minInterpolationOffset                   = -0.5,
+      .maxInterpolationOffset                   = 0.4375,
+      .subPixelInterpolationOffsetBits          = 4,
       .maxFramebufferWidth                      = (1 << 14),
       .maxFramebufferHeight                     = (1 << 14),
       .maxFramebufferLayers                     = (1 << 10),
@@ -653,13 +657,15 @@ PFN_vkVoidFunction anv_GetInstanceProcAddr(
    return anv_lookup_entrypoint(pName);
 }
 
-/* The loader wants us to expose a second GetInstanceProcAddr function
- * to work around certain LD_PRELOAD issues seen in apps.
+/* With version 1+ of the loader interface the ICD should expose
+ * vk_icdGetInstanceProcAddr to work around certain LD_PRELOAD issues seen in apps.
  */
+PUBLIC
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(
     VkInstance                                  instance,
     const char*                                 pName);
 
+PUBLIC
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(
     VkInstance                                  instance,
     const char*                                 pName)
@@ -873,7 +879,8 @@ VkResult anv_CreateDevice(
                        &device->dynamic_state_block_pool);
 
    anv_block_pool_init(&device->instruction_block_pool, device, 128 * 1024);
-   anv_pipeline_cache_init(&device->default_pipeline_cache, device);
+   anv_state_pool_init(&device->instruction_state_pool,
+                       &device->instruction_block_pool);
 
    anv_block_pool_init(&device->surface_state_block_pool, device, 4096);
 
@@ -948,6 +955,7 @@ void anv_DestroyDevice(
    anv_bo_pool_finish(&device->batch_bo_pool);
    anv_state_pool_finish(&device->dynamic_state_pool);
    anv_block_pool_finish(&device->dynamic_state_block_pool);
+   anv_state_pool_finish(&device->instruction_state_pool);
    anv_block_pool_finish(&device->instruction_block_pool);
    anv_state_pool_finish(&device->surface_state_pool);
    anv_block_pool_finish(&device->surface_state_block_pool);
@@ -1789,24 +1797,4 @@ void anv_DestroyFramebuffer(
    ANV_FROM_HANDLE(anv_framebuffer, fb, _fb);
 
    anv_free2(&device->alloc, pAllocator, fb);
-}
-
-void vkCmdDbgMarkerBegin(
-    VkCommandBuffer                              commandBuffer,
-    const char*                                 pMarker)
-   __attribute__ ((visibility ("default")));
-
-void vkCmdDbgMarkerEnd(
-   VkCommandBuffer                              commandBuffer)
-   __attribute__ ((visibility ("default")));
-
-void vkCmdDbgMarkerBegin(
-    VkCommandBuffer                              commandBuffer,
-    const char*                                 pMarker)
-{
-}
-
-void vkCmdDbgMarkerEnd(
-    VkCommandBuffer                              commandBuffer)
-{
 }

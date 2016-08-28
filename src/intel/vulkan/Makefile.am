@@ -61,7 +61,9 @@ AM_CPPFLAGS = \
 	-I$(top_builddir)/src/intel \
 	-I$(top_srcdir)/src/intel
 
-AM_CFLAGS = -Wno-override-init -msse2
+AM_CFLAGS = \
+	$(VISIBILITY_CFLAGS) \
+	-Wno-override-init -msse2
 
 libanv_gen7_la_CFLAGS = $(AM_CFLAGS) -DGEN_VERSIONx10=70
 libanv_gen7_la_SOURCES = $(GEN7_FILES)
@@ -85,7 +87,8 @@ VULKAN_LIB_DEPS =
 if HAVE_PLATFORM_X11
 AM_CPPFLAGS += \
 	$(XCB_DRI3_CFLAGS) \
-	-DVK_USE_PLATFORM_XCB_KHR
+	-DVK_USE_PLATFORM_XCB_KHR \
+	-DVK_USE_PLATFORM_XLIB_KHR
 
 VULKAN_SOURCES += $(VULKAN_WSI_X11_FILES)
 VULKAN_LIB_DEPS += $(XCB_DRI3_LIBS)
@@ -138,20 +141,21 @@ anv_timestamp.h:
 	$(AM_V_GEN) echo "#define ANV_TIMESTAMP \"$(TIMESTAMP_CMD)\"" > $@
 
 BUILT_SOURCES = $(VULKAN_GENERATED_FILES)
-CLEANFILES = $(BUILT_SOURCES) dev_icd.json
+CLEANFILES = $(BUILT_SOURCES) dev_icd.json intel_icd.json
 EXTRA_DIST = \
 	$(top_srcdir)/include/vulkan/vk_icd.h \
 	anv_entrypoints_gen.py \
 	dev_icd.json.in \
 	intel_icd.json
 
-libvulkan_intel_la_LIBADD = $(VULKAN_LIB_DEPS)
+libvulkan_intel_la_LIBADD = $(VULKAN_LIB_DEPS) -lX11-xcb
 
 libvulkan_intel_la_LDFLAGS = \
 	-shared \
 	-module \
 	-no-undefined \
 	-avoid-version \
+	$(BSYMBOLIC) \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
 
@@ -166,9 +170,20 @@ dev_icd.json : dev_icd.json.in
 		-e "s#@build_libdir@#${abs_top_builddir}/${LIB_DIR}#" \
 		< $(srcdir)/dev_icd.json.in > $@
 
+if VULKAN_ICD_DRIVER_PATH
+ICD_DRIVER_PATH="${libdir}/libvulkan_intel.so"
+else
+ICD_DRIVER_PATH="libvulkan_intel.so"
+endif
+
+intel_icd.json : intel_icd.json.in
+	$(AM_V_GEN) $(SED) \
+		-e "s#@ICD_DRIVER_PATH@#${ICD_DRIVER_PATH}#" \
+		< $(srcdir)/intel_icd.json.in > $@
+
 # Libvulkan with dummy gem. Used for unit tests.
 libvulkan_test_la_SOURCES = $(VULKAN_GEM_STUB_FILES)
-libvulkan_test_la_LIBADD = $(VULKAN_LIB_DEPS)
+libvulkan_test_la_LIBADD = $(VULKAN_LIB_DEPS) -lX11-xcb
 
 include $(top_srcdir)/install-lib-links.mk
 
