@@ -35,6 +35,9 @@ genX(compute_pipeline_create)(
     VkPipeline*                                 pPipeline)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   const struct anv_physical_device *physical_device =
+      &device->instance->physicalDevice;
+   const struct gen_device_info *devinfo = &physical_device->info;
    struct anv_pipeline *pipeline;
    VkResult result;
 
@@ -85,9 +88,9 @@ genX(compute_pipeline_create)(
 
    pipeline->use_repclear = false;
 
-   anv_setup_pipeline_l3_config(pipeline);
-
    const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(pipeline);
+
+   anv_pipeline_setup_l3_config(pipeline, cs_prog_data->base.total_shared > 0);
 
    uint32_t group_size = cs_prog_data->local_size[0] *
       cs_prog_data->local_size[1] * cs_prog_data->local_size[2];
@@ -102,6 +105,8 @@ genX(compute_pipeline_create)(
       ALIGN(cs_prog_data->push.per_thread.regs * cs_prog_data->threads +
             cs_prog_data->push.cross_thread.regs, 2);
 
+   const uint32_t subslices = MAX2(physical_device->subslice_total, 1);
+
    anv_batch_emit(&pipeline->batch, GENX(MEDIA_VFE_STATE), vfe) {
       vfe.ScratchSpaceBasePointer = (struct anv_address) {
          .bo = anv_scratch_pool_alloc(device, &device->scratch_pool,
@@ -115,7 +120,8 @@ genX(compute_pipeline_create)(
 #else
       vfe.GPGPUMode              = true;
 #endif
-      vfe.MaximumNumberofThreads = device->info.max_cs_threads - 1;
+      vfe.MaximumNumberofThreads =
+         devinfo->max_cs_threads * subslices - 1;
       vfe.NumberofURBEntries     = GEN_GEN <= 7 ? 0 : 2;
       vfe.ResetGatewayTimer      = true;
 #if GEN_GEN <= 8

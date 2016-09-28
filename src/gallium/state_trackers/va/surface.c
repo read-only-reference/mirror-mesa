@@ -111,6 +111,12 @@ vlVaSyncSurface(VADriverContextP ctx, VASurfaceID render_target)
       return VA_STATUS_ERROR_INVALID_SURFACE;
    }
 
+   if (!surf->feedback) {
+      // No outstanding operation: nothing to do.
+      pipe_mutex_unlock(drv->mutex);
+      return VA_STATUS_SUCCESS;
+   }
+
    context = handle_table_get(drv->htab, surf->ctx);
    if (!context) {
       pipe_mutex_unlock(drv->mutex);
@@ -126,6 +132,7 @@ vlVaSyncSurface(VADriverContextP ctx, VASurfaceID render_target)
       if (frame_diff < 2)
          context->decoder->flush(context->decoder);
       context->decoder->get_feedback(context->decoder, surf->feedback, &(surf->coded_buf->coded_size));
+      surf->feedback = NULL;
    }
    pipe_mutex_unlock(drv->mutex);
    return VA_STATUS_SUCCESS;
@@ -321,10 +328,14 @@ vlVaPutSurface(VADriverContextP ctx, VASurfaceID surface_id, void* draw, short s
       return status;
    }
 
+   /* flush before calling flush_frontbuffer so that rendering is flushed
+    * to back buffer so the texture can be copied in flush_frontbuffer
+    */
+   drv->pipe->flush(drv->pipe, NULL, 0);
+
    screen->flush_frontbuffer(screen, tex, 0, 0,
                              vscreen->get_private(vscreen), NULL);
 
-   drv->pipe->flush(drv->pipe, NULL, 0);
 
    pipe_resource_reference(&tex, NULL);
    pipe_surface_reference(&surf_draw, NULL);
@@ -632,24 +643,26 @@ vlVaCreateSurfaces2(VADriverContextP ctx, unsigned int format,
 
    memset(&templat, 0, sizeof(templat));
 
+   templat.buffer_format = pscreen->get_video_param(
+      pscreen,
+      PIPE_VIDEO_PROFILE_UNKNOWN,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+      PIPE_VIDEO_CAP_PREFERED_FORMAT
+   );
+   templat.interlaced = pscreen->get_video_param(
+      pscreen,
+      PIPE_VIDEO_PROFILE_UNKNOWN,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+      PIPE_VIDEO_CAP_PREFERS_INTERLACED
+   );
+
    if (expected_fourcc) {
-      templat.buffer_format = VaFourccToPipeFormat(expected_fourcc);
-      templat.interlaced = 0;
-   } else {
-      templat.buffer_format = pscreen->get_video_param
-            (
-               pscreen,
-               PIPE_VIDEO_PROFILE_UNKNOWN,
-               PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-               PIPE_VIDEO_CAP_PREFERED_FORMAT
-               );
-      templat.interlaced = pscreen->get_video_param
-            (
-               pscreen,
-               PIPE_VIDEO_PROFILE_UNKNOWN,
-               PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-               PIPE_VIDEO_CAP_PREFERS_INTERLACED
-               );
+      enum pipe_format expected_format = VaFourccToPipeFormat(expected_fourcc);
+
+      if (expected_format != templat.buffer_format || memory_attibute)
+        templat.interlaced = 0;
+
+      templat.buffer_format = expected_format;
    }
 
    templat.chroma_format = ChromaToPipe(format);

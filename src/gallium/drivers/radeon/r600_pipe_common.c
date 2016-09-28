@@ -80,6 +80,63 @@ void radeon_shader_binary_clean(struct radeon_shader_binary *b)
  * pipe_context
  */
 
+void r600_gfx_write_fence(struct r600_common_context *ctx, struct r600_resource *buf,
+			  uint64_t va, uint32_t old_value, uint32_t new_value)
+{
+	struct radeon_winsys_cs *cs = ctx->gfx.cs;
+
+	if (ctx->chip_class == CIK) {
+		/* Two EOP events are required to make all engines go idle
+		 * (and optional cache flushes executed) before the timestamp
+		 * is written.
+		 */
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
+		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) |
+				EVENT_INDEX(5));
+		radeon_emit(cs, va);
+		radeon_emit(cs, (va >> 32) | EOP_DATA_SEL(1));
+		radeon_emit(cs, old_value); /* immediate data */
+		radeon_emit(cs, 0); /* unused */
+	}
+
+	radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
+	radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) |
+			EVENT_INDEX(5));
+	radeon_emit(cs, va);
+	radeon_emit(cs, (va >> 32) | EOP_DATA_SEL(1));
+	radeon_emit(cs, new_value); /* immediate data */
+	radeon_emit(cs, 0); /* unused */
+
+	r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_WRITE, RADEON_PRIO_QUERY);
+}
+
+unsigned r600_gfx_write_fence_dwords(struct r600_common_screen *screen)
+{
+	unsigned dwords = 6;
+
+	if (screen->chip_class == CIK)
+		dwords *= 2;
+
+	if (!screen->info.has_virtual_memory)
+		dwords += 2;
+
+	return dwords;
+}
+
+void r600_gfx_wait_fence(struct r600_common_context *ctx,
+			 uint64_t va, uint32_t ref, uint32_t mask)
+{
+	struct radeon_winsys_cs *cs = ctx->gfx.cs;
+
+	radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
+	radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
+	radeon_emit(cs, va);
+	radeon_emit(cs, va >> 32);
+	radeon_emit(cs, ref); /* reference value */
+	radeon_emit(cs, mask); /* mask */
+	radeon_emit(cs, 4); /* poll interval */
+}
+
 void r600_draw_rectangle(struct blitter_context *blitter,
 			 int x1, int y1, int x2, int y2, float depth,
 			 enum blitter_attrib_type type,
@@ -431,9 +488,8 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 			      struct r600_common_screen *rscreen,
 			      unsigned context_flags)
 {
-	util_slab_create(&rctx->pool_transfers,
-			 sizeof(struct r600_transfer), 64,
-			 UTIL_SLAB_SINGLETHREADED);
+	slab_create(&rctx->pool_transfers,
+			 sizeof(struct r600_transfer), 64);
 
 	rctx->screen = rscreen;
 	rctx->ws = rscreen->ws;
@@ -522,6 +578,9 @@ void r600_common_context_cleanup(struct r600_common_context *rctx)
 		r600_texture_reference(&rctx->dcc_stats[i].tex, NULL);
 	}
 
+	if (rctx->query_result_shader)
+		rctx->b.delete_compute_state(&rctx->b, rctx->query_result_shader);
+
 	if (rctx->gfx.cs)
 		rctx->ws->cs_destroy(rctx->gfx.cs);
 	if (rctx->dma.cs)
@@ -533,7 +592,7 @@ void r600_common_context_cleanup(struct r600_common_context *rctx)
 		u_upload_destroy(rctx->uploader);
 	}
 
-	util_slab_destroy(&rctx->pool_transfers);
+	slab_destroy(&rctx->pool_transfers);
 
 	if (rctx->allocator_zeroed_memory) {
 		u_suballocator_destroy(rctx->allocator_zeroed_memory);
@@ -823,7 +882,11 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 		if (rscreen->family <= CHIP_ARUBA) {
 			triple = "r600--";
 		} else {
-			triple = "amdgcn--";
+			if (HAVE_LLVM < 0x0400) {
+				triple = "amdgcn--";
+			} else {
+				triple = "amdgcn-mesa-mesa3d";
+			}
 		}
 		switch(rscreen->family) {
 		/* Clang < 3.6 is missing Hainan in its list of
@@ -1070,18 +1133,20 @@ static void r600_query_memory_info(struct pipe_screen *screen,
 
 	info->device_memory_evicted =
 		ws->query_value(ws, RADEON_NUM_BYTES_MOVED) / 1024;
-	/* Just return the number of evicted 64KB pages. */
-	info->nr_device_memory_evictions = info->device_memory_evicted / 64;
+
+	if (rscreen->info.drm_major == 3 && rscreen->info.drm_minor >= 4)
+		info->nr_device_memory_evictions =
+			ws->query_value(ws, RADEON_NUM_EVICTIONS);
+	else
+		/* Just return the number of evicted 64KB pages. */
+		info->nr_device_memory_evictions = info->device_memory_evicted / 64;
 }
 
 struct pipe_resource *r600_resource_create_common(struct pipe_screen *screen,
 						  const struct pipe_resource *templ)
 {
-	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
-
 	if (templ->target == PIPE_BUFFER) {
-		return r600_buffer_create(screen, templ,
-					  rscreen->info.gart_page_size);
+		return r600_buffer_create(screen, templ, 256);
 	} else {
 		return r600_texture_create(screen, templ);
 	}

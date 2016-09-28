@@ -113,7 +113,8 @@ static void send_cmd(struct ruvd_decoder *dec, unsigned cmd,
 {
 	int reloc_idx;
 
-	reloc_idx = dec->ws->cs_add_buffer(dec->cs, buf, usage, domain,
+	reloc_idx = dec->ws->cs_add_buffer(dec->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED,
+					   domain,
 					  RADEON_PRIO_UVD);
 	if (!dec->use_legacy) {
 		uint64_t addr;
@@ -122,6 +123,7 @@ static void send_cmd(struct ruvd_decoder *dec, unsigned cmd,
 		set_reg(dec, RUVD_GPCOM_VCPU_DATA0, addr);
 		set_reg(dec, RUVD_GPCOM_VCPU_DATA1, addr >> 32);
 	} else {
+		off += dec->ws->buffer_get_virtual_address(buf);
 		set_reg(dec, RUVD_GPCOM_VCPU_DATA0, off);
 		set_reg(dec, RUVD_GPCOM_VCPU_DATA1, reloc_idx * 4);
 	}

@@ -734,7 +734,7 @@ enum brw_predicate_state {
 
 struct shader_times;
 
-struct brw_l3_config;
+struct gen_l3_config;
 
 /**
  * brw_context is derived from gl_context.
@@ -747,7 +747,7 @@ struct brw_context
    {
       uint32_t (*update_renderbuffer_surface)(struct brw_context *brw,
                                               struct gl_renderbuffer *rb,
-                                              bool layered, unsigned unit,
+                                              uint32_t flags, unsigned unit,
                                               uint32_t surf_index);
       void (*emit_null_surface_state)(struct brw_context *brw,
                                       unsigned width,
@@ -1017,17 +1017,6 @@ struct brw_context
     */
    int num_samples;
 
-   /**
-    * Platform specific constants containing the maximum number of threads
-    * for each pipeline stage.
-    */
-   unsigned max_vs_threads;
-   unsigned max_hs_threads;
-   unsigned max_ds_threads;
-   unsigned max_gs_threads;
-   unsigned max_wm_threads;
-   unsigned max_cs_threads;
-
    /* BRW_NEW_URB_ALLOCATIONS:
     */
    struct {
@@ -1039,12 +1028,6 @@ struct brw_context
       GLuint sfsize;		/* setup data size in urb registers */
 
       bool constrained;
-
-      GLuint min_vs_entries;    /* Minimum number of VS entries */
-      GLuint max_vs_entries;	/* Maximum number of VS entries */
-      GLuint max_hs_entries;	/* Maximum number of HS entries */
-      GLuint max_ds_entries;	/* Maximum number of DS entries */
-      GLuint max_gs_entries;	/* Maximum number of GS entries */
 
       GLuint nr_vs_entries;
       GLuint nr_hs_entries;
@@ -1063,7 +1046,7 @@ struct brw_context
       GLuint cs_start;
       /**
        * URB size in the current configuration.  The units this is expressed
-       * in are somewhat inconsistent, see brw_device_info::urb::size.
+       * in are somewhat inconsistent, see gen_device_info::urb::size.
        *
        * FINISHME: Represent the URB size consistently in KB on all platforms.
        */
@@ -1317,7 +1300,7 @@ struct brw_context
    int baseinstance;
 
    struct {
-      const struct brw_l3_config *config;
+      const struct gen_l3_config *config;
    } l3;
 
    struct {
@@ -1333,8 +1316,18 @@ struct brw_context
 
    struct brw_fast_clear_state *fast_clear_state;
 
+   /* Array of flags telling if auxiliary buffer is disabled for corresponding
+    * renderbuffer. If draw_aux_buffer_disabled[i] is set then use of
+    * auxiliary buffer for gl_framebuffer::_ColorDrawBuffers[i] is
+    * disabled.
+    * This is needed in case the same underlying buffer is also configured
+    * to be sampled but with a format that the sampling engine can't treat
+    * compressed or fast cleared.
+    */
+   bool draw_aux_buffer_disabled[MAX_DRAW_BUFFERS];
+
    __DRIcontext *driContext;
-   struct intel_screen *intelScreen;
+   struct intel_screen *screen;
 };
 
 /*======================================================================
@@ -1351,7 +1344,7 @@ extern void intelInitClearFuncs(struct dd_function_table *functions);
 extern const char *const brw_vendor_string;
 
 extern const char *
-brw_get_renderer_string(const struct intel_screen *intelScreen);
+brw_get_renderer_string(const struct intel_screen *screen);
 
 enum {
    DRI_CONF_BO_REUSE_DISABLED,
@@ -1510,7 +1503,7 @@ void brw_fs_alloc_reg_sets(struct brw_compiler *compiler);
 void brw_vec4_alloc_reg_set(struct brw_compiler *compiler);
 
 /* brw_disasm.c */
-int brw_disassemble_inst(FILE *file, const struct brw_device_info *devinfo,
+int brw_disassemble_inst(FILE *file, const struct gen_device_info *devinfo,
                          struct brw_inst *inst, bool is_compacted);
 
 /* brw_vs.c */
@@ -1865,7 +1858,7 @@ gen9_use_linear_1d_layout(const struct brw_context *brw,
 
 /* brw_pipe_control.c */
 int brw_init_pipe_control(struct brw_context *brw,
-			  const struct brw_device_info *info);
+			  const struct gen_device_info *info);
 void brw_fini_pipe_control(struct brw_context *brw);
 
 void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);

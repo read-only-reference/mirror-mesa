@@ -147,7 +147,7 @@ brw_texture_offset(int *offsets, unsigned num_components)
 }
 
 const char *
-brw_instruction_name(const struct brw_device_info *devinfo, enum opcode op)
+brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 {
    switch (op) {
    case BRW_OPCODE_ILLEGAL ... BRW_OPCODE_NOP:
@@ -672,7 +672,7 @@ backend_shader::backend_shader(const struct brw_compiler *compiler,
 bool
 backend_reg::equals(const backend_reg &r) const
 {
-   return brw_regs_equal(this, &r) && reg_offset == r.reg_offset;
+   return brw_regs_equal(this, &r) && offset == r.offset;
 }
 
 bool
@@ -745,15 +745,6 @@ backend_reg::is_accumulator() const
 }
 
 bool
-backend_reg::in_range(const backend_reg &r, unsigned n) const
-{
-   return (file == r.file &&
-           nr == r.nr &&
-           reg_offset >= r.reg_offset &&
-           reg_offset < r.reg_offset + n);
-}
-
-bool
 backend_instruction::is_commutative() const
 {
    switch (opcode) {
@@ -777,7 +768,7 @@ backend_instruction::is_commutative() const
 }
 
 bool
-backend_instruction::is_3src(const struct brw_device_info *devinfo) const
+backend_instruction::is_3src(const struct gen_device_info *devinfo) const
 {
    return ::is_3src(devinfo, opcode);
 }
@@ -959,7 +950,7 @@ backend_instruction::reads_accumulator_implicitly() const
 }
 
 bool
-backend_instruction::writes_accumulator_implicitly(const struct brw_device_info *devinfo) const
+backend_instruction::writes_accumulator_implicitly(const struct gen_device_info *devinfo) const
 {
    return writes_accumulator ||
           (devinfo->gen < 6 &&
@@ -1154,7 +1145,7 @@ backend_shader::calculate_cfg()
  */
 uint32_t
 brw_assign_common_binding_table_offsets(gl_shader_stage stage,
-                                        const struct brw_device_info *devinfo,
+                                        const struct gen_device_info *devinfo,
                                         const struct gl_shader_program *shader_prog,
                                         const struct gl_program *prog,
                                         struct brw_stage_prog_data *stage_prog_data,
@@ -1322,7 +1313,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
                 unsigned *final_assembly_size,
                 char **error_str)
 {
-   const struct brw_device_info *devinfo = compiler->devinfo;
+   const struct gen_device_info *devinfo = compiler->devinfo;
    struct gl_linked_shader *shader =
       shader_prog->_LinkedShaders[MESA_SHADER_TESS_EVAL];
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_TESS_EVAL];

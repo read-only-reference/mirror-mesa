@@ -1198,6 +1198,7 @@ nir_tex_instr_dest_size(nir_tex_instr *instr)
          case GLSL_SAMPLER_DIM_MS:
          case GLSL_SAMPLER_DIM_RECT:
          case GLSL_SAMPLER_DIM_EXTERNAL:
+         case GLSL_SAMPLER_DIM_SUBPASS:
             ret = 2;
             break;
          case GLSL_SAMPLER_DIM_3D:
@@ -1328,6 +1329,8 @@ nir_tex_instr_src_index(nir_tex_instr *instr, nir_tex_src_type type)
 
    return -1;
 }
+
+void nir_tex_instr_remove_src(nir_tex_instr *tex, unsigned src_idx);
 
 typedef union {
    float f32[4];
@@ -2108,6 +2111,16 @@ nir_after_cf_node(nir_cf_node *node)
 }
 
 static inline nir_cursor
+nir_after_phis(nir_block *block)
+{
+   nir_foreach_instr(instr, block) {
+      if (instr->type != nir_instr_type_phi)
+         return nir_before_instr(instr);
+   }
+   return nir_after_block(block);
+}
+
+static inline nir_cursor
 nir_after_cf_node_and_phis(nir_cf_node *node)
 {
    if (node->type == nir_cf_node_block)
@@ -2116,11 +2129,7 @@ nir_after_cf_node_and_phis(nir_cf_node *node)
    nir_block *block = nir_cf_node_as_block(nir_cf_node_next(node));
    assert(block->cf_node.type == nir_cf_node_block);
 
-   nir_foreach_instr(instr, block) {
-      if (instr->type != nir_instr_type_phi)
-         return nir_before_instr(instr);
-   }
-   return nir_after_block(block);
+   return nir_after_phis(block);
 }
 
 static inline nir_cursor
@@ -2389,9 +2398,17 @@ void nir_assign_var_locations(struct exec_list *var_list, unsigned *size,
                               unsigned base_offset,
                               int (*type_size)(const struct glsl_type *));
 
+typedef enum {
+   /* If set, this forces all non-flat fragment shader inputs to be
+    * interpolated as if with the "sample" qualifier.  This requires
+    * nir_shader_compiler_options::use_interpolated_input_intrinsics.
+    */
+   nir_lower_io_force_sample_interpolation = (1 << 1),
+} nir_lower_io_options;
 void nir_lower_io(nir_shader *shader,
                   nir_variable_mode modes,
-                  int (*type_size)(const struct glsl_type *));
+                  int (*type_size)(const struct glsl_type *),
+                  nir_lower_io_options);
 nir_src *nir_get_io_offset_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_io_vertex_index_src(nir_intrinsic_instr *instr);
 
@@ -2402,10 +2419,10 @@ bool nir_remove_dead_variables(nir_shader *shader, nir_variable_mode modes);
 
 void nir_move_vec_src_uses_to_dest(nir_shader *shader);
 bool nir_lower_vec_to_movs(nir_shader *shader);
-void nir_lower_alu_to_scalar(nir_shader *shader);
+bool nir_lower_alu_to_scalar(nir_shader *shader);
 void nir_lower_load_const_to_scalar(nir_shader *shader);
 
-void nir_lower_phis_to_scalar(nir_shader *shader);
+bool nir_lower_phis_to_scalar(nir_shader *shader);
 void nir_lower_io_to_scalar(nir_shader *shader, nir_variable_mode mask);
 
 void nir_lower_samplers(nir_shader *shader,
@@ -2581,9 +2598,9 @@ bool nir_opt_dce(nir_shader *shader);
 
 bool nir_opt_dead_cf(nir_shader *shader);
 
-void nir_opt_gcm(nir_shader *shader);
+bool nir_opt_gcm(nir_shader *shader, bool value_number);
 
-bool nir_opt_peephole_select(nir_shader *shader);
+bool nir_opt_peephole_select(nir_shader *shader, unsigned limit);
 
 bool nir_opt_remove_phis(nir_shader *shader);
 

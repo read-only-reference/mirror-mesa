@@ -344,7 +344,8 @@ nvc0_clear_render_target(struct pipe_context *pipe,
       nvc0_resource_fence(res, NOUVEAU_BO_WR);
    }
 
-   IMMED_NVC0(push, NVC0_3D(COND_MODE), NVC0_3D_COND_MODE_ALWAYS);
+   if (!render_condition_enabled)
+      IMMED_NVC0(push, NVC0_3D(COND_MODE), NVC0_3D_COND_MODE_ALWAYS);
 
    BEGIN_NIC0(push, NVC0_3D(CLEAR_BUFFERS), sf->depth);
    for (z = 0; z < sf->depth; ++z) {
@@ -352,7 +353,8 @@ nvc0_clear_render_target(struct pipe_context *pipe,
                  (z << NVC0_3D_CLEAR_BUFFERS_LAYER__SHIFT));
    }
 
-   IMMED_NVC0(push, NVC0_3D(COND_MODE), nvc0->cond_condmode);
+   if (!render_condition_enabled)
+      IMMED_NVC0(push, NVC0_3D(COND_MODE), nvc0->cond_condmode);
 
    nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER;
 }
@@ -670,7 +672,8 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
    PUSH_DATA (push, dst->u.tex.first_layer);
    IMMED_NVC0(push, NVC0_3D(MULTISAMPLE_MODE), mt->ms_mode);
 
-   IMMED_NVC0(push, NVC0_3D(COND_MODE), NVC0_3D_COND_MODE_ALWAYS);
+   if (!render_condition_enabled)
+      IMMED_NVC0(push, NVC0_3D(COND_MODE), NVC0_3D_COND_MODE_ALWAYS);
 
    BEGIN_NIC0(push, NVC0_3D(CLEAR_BUFFERS), sf->depth);
    for (z = 0; z < sf->depth; ++z) {
@@ -678,7 +681,8 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
                  (z << NVC0_3D_CLEAR_BUFFERS_LAYER__SHIFT));
    }
 
-   IMMED_NVC0(push, NVC0_3D(COND_MODE), nvc0->cond_condmode);
+   if (!render_condition_enabled)
+      IMMED_NVC0(push, NVC0_3D(COND_MODE), nvc0->cond_condmode);
 
    nvc0->dirty_3d |= NVC0_NEW_3D_FRAMEBUFFER;
 }
@@ -832,11 +836,11 @@ nvc0_blitter_make_vp(struct nvc0_blitter *blit)
    };
    static const uint32_t code_gm107[] =
    {
-      0xfc0007e0, 0x001f8000, /* sched 0x7e0 0x7e0 0x7e0 */
+      0xfc0007e0, 0x001f8000, /* sched (st 0x0) (st 0x0) (st 0x0) */
       0x0807ff04, 0xefd8ff80, /* ld b64 $r4 a[0x80] 0x0 */
       0x0907ff00, 0xefd97f80, /* ld b96 $r0 a[0x90] 0x0 */
       0x0707ff04, 0xeff0ff80, /* st b64 a[0x70] $r4 0x0 */
-      0xfc0007e0, 0x00000000, /* sched 0x7e0 0x7e0 0x0 */
+      0xfc0007e0, 0x00000000, /* sched (st 0x0) (st 0x0) (st 0x0) */
       0x0807ff00, 0xeff17f80, /* st b96 a[0x80] $r0 0x0 */
       0x0007000f, 0xe3000000, /* exit */
    };

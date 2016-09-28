@@ -82,8 +82,8 @@ brw_codegen_tes_prog(struct brw_context *brw,
                      struct brw_tess_eval_program *tep,
                      struct brw_tes_prog_key *key)
 {
-   const struct brw_compiler *compiler = brw->intelScreen->compiler;
-   const struct brw_device_info *devinfo = brw->intelScreen->devinfo;
+   const struct brw_compiler *compiler = brw->screen->compiler;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct brw_stage_state *stage_state = &brw->tes.base;
    nir_shader *nir = tep->program.Base.nir;
    struct brw_tes_prog_data prog_data;
@@ -217,7 +217,7 @@ brw_codegen_tes_prog(struct brw_context *brw,
    /* Scratch space is used for register spilling */
    brw_alloc_stage_scratch(brw, stage_state,
                            prog_data.base.base.total_scratch,
-                           brw->max_ds_threads);
+                           devinfo->max_ds_threads);
 
    brw_upload_cache(&brw->cache, BRW_CACHE_TES_PROG,
                     key, sizeof(*key),
@@ -229,14 +229,47 @@ brw_codegen_tes_prog(struct brw_context *brw,
    return true;
 }
 
+void
+brw_tes_populate_key(struct brw_context *brw,
+                     struct brw_tes_prog_key *key)
+{
+
+   uint64_t per_vertex_slots = brw->tess_eval_program->Base.InputsRead;
+   uint32_t per_patch_slots = brw->tess_eval_program->Base.PatchInputsRead;
+
+   struct brw_tess_eval_program *tep =
+      (struct brw_tess_eval_program *) brw->tess_eval_program;
+   struct gl_program *prog = &tep->program.Base;
+
+   memset(key, 0, sizeof(*key));
+
+   key->program_string_id = tep->id;
+
+   /* The TCS may have additional outputs which aren't read by the
+    * TES (possibly for cross-thread communication).  These need to
+    * be stored in the Patch URB Entry as well.
+    */
+   if (brw->tess_ctrl_program) {
+      per_vertex_slots |= brw->tess_ctrl_program->Base.OutputsWritten;
+      per_patch_slots |= brw->tess_ctrl_program->Base.PatchOutputsWritten;
+   }
+
+   /* Ignore gl_TessLevelInner/Outer - we treat them as system values,
+    * not inputs, and they're always present in the URB entry regardless
+    * of whether or not we read them.
+    */
+   key->inputs_read = per_vertex_slots &
+      ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
+   key->patch_inputs_read = per_patch_slots;
+
+   /* _NEW_TEXTURE */
+   brw_populate_sampler_prog_key_data(&brw->ctx, prog, &key->tex);
+}
 
 void
-brw_upload_tes_prog(struct brw_context *brw,
-                    uint64_t per_vertex_slots,
-                    uint32_t per_patch_slots)
+brw_upload_tes_prog(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
-   struct gl_shader_program **current = ctx->_Shader->CurrentProgram;
+   struct gl_shader_program **current = brw->ctx._Shader->CurrentProgram;
    struct brw_stage_state *stage_state = &brw->tes.base;
    struct brw_tes_prog_key key;
    /* BRW_NEW_TESS_PROGRAMS */
@@ -248,22 +281,7 @@ brw_upload_tes_prog(struct brw_context *brw,
                         BRW_NEW_TESS_PROGRAMS))
       return;
 
-   struct gl_program *prog = &tep->program.Base;
-
-   memset(&key, 0, sizeof(key));
-
-   key.program_string_id = tep->id;
-
-   /* Ignore gl_TessLevelInner/Outer - we treat them as system values,
-    * not inputs, and they're always present in the URB entry regardless
-    * of whether or not we read them.
-    */
-   key.inputs_read = per_vertex_slots &
-      ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
-   key.patch_inputs_read = per_patch_slots;
-
-   /* _NEW_TEXTURE */
-   brw_populate_sampler_prog_key_data(ctx, prog, &key.tex);
+   brw_tes_populate_key(brw, &key);
 
    if (!brw_search_cache(&brw->cache, BRW_CACHE_TES_PROG,
                          &key, sizeof(key),

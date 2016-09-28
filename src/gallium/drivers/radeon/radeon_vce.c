@@ -51,6 +51,7 @@
 #define FW_50_17_3 ((50 << 24) | (17 << 16) | (3 << 8))
 #define FW_52_0_3 ((52 << 24) | (0 << 16) | (3 << 8))
 #define FW_52_4_3 ((52 << 24) | (4 << 16) | (3 << 8))
+#define FW_52_8_3 ((52 << 24) | (8 << 16) | (3 << 8))
 
 /**
  * flush commands to the hardware
@@ -488,6 +489,7 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 
 	case FW_52_0_3:
 	case FW_52_4_3:
+	case FW_52_8_3:
 		radeon_vce_52_init(enc);
 		get_pic_param = radeon_vce_52_get_param;
 		break;
@@ -522,6 +524,7 @@ bool rvce_is_fw_version_supported(struct r600_common_screen *rscreen)
 	case FW_50_17_3:
 	case FW_52_0_3:
 	case FW_52_4_3:
+	case FW_52_8_3:
 		return true;
 	default:
 		return false;
@@ -537,7 +540,8 @@ void rvce_add_buffer(struct rvce_encoder *enc, struct pb_buffer *buf,
 {
 	int reloc_idx;
 
-	reloc_idx = enc->ws->cs_add_buffer(enc->cs, buf, usage, domain, RADEON_PRIO_VCE);
+	reloc_idx = enc->ws->cs_add_buffer(enc->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED,
+					   domain, RADEON_PRIO_VCE);
 	if (enc->use_vm) {
 		uint64_t addr;
 		addr = enc->ws->buffer_get_virtual_address(buf);
@@ -545,6 +549,7 @@ void rvce_add_buffer(struct rvce_encoder *enc, struct pb_buffer *buf,
 		RVCE_CS(addr >> 32);
 		RVCE_CS(addr);
 	} else {
+		offset += enc->ws->buffer_get_virtual_address(buf);
 		RVCE_CS(reloc_idx * 4);
 		RVCE_CS(offset);
 	}

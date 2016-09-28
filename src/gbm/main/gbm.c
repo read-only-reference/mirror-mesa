@@ -45,12 +45,6 @@
 #include "gbmint.h"
 #include "backend.h"
 
-#define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
-
-static struct gbm_device *devices[16];
-
-static int device_num = 0;
-
 /** Returns the file description for the gbm device
  *
  * \return The fd that the struct gbm_device was created with
@@ -127,9 +121,6 @@ gbm_create_device(int fd)
       return NULL;
    }
 
-   if (device_num == 0)
-      memset(devices, 0, sizeof devices);
-
    gbm = _gbm_create_device(fd);
    if (gbm == NULL)
       return NULL;
@@ -137,9 +128,6 @@ gbm_create_device(int fd)
    gbm->dummy = gbm_create_device;
    gbm->stat = buf;
    gbm->refcount = 1;
-
-   if (device_num < ARRAY_SIZE(devices)-1)
-      devices[device_num++] = gbm;
 
    return gbm;
 }
@@ -216,7 +204,8 @@ gbm_bo_get_handle(struct gbm_bo *bo)
  * descriptor.
 
  * \param bo The buffer object
- * \return Returns a file descriptor referring  to the underlying buffer
+ * \return Returns a file descriptor referring to the underlying buffer or -1
+ * if an error occurs.
  */
 GBM_EXPORT int
 gbm_bo_get_fd(struct gbm_bo *bo)

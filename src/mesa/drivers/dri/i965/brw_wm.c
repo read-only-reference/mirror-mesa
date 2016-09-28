@@ -42,7 +42,7 @@
 #include "util/ralloc.h"
 
 static void
-assign_fs_binding_table_offsets(const struct brw_device_info *devinfo,
+assign_fs_binding_table_offsets(const struct gen_device_info *devinfo,
                                 const struct gl_shader_program *shader_prog,
                                 const struct gl_program *prog,
                                 const struct brw_wm_prog_key *key,
@@ -79,6 +79,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
                     struct brw_fragment_program *fp,
                     struct brw_wm_prog_key *key)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
    void *mem_ctx = ralloc_context(NULL);
    struct brw_wm_prog_data prog_data;
@@ -97,7 +98,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
    if (!prog)
       prog_data.base.use_alt_mode = true;
 
-   assign_fs_binding_table_offsets(brw->intelScreen->devinfo, prog,
+   assign_fs_binding_table_offsets(devinfo, prog,
                                    &fp->program.Base, key, &prog_data);
 
    /* Allocate the references to the uniforms that will end up in the
@@ -142,7 +143,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
    }
 
    char *error_str = NULL;
-   program = brw_compile_fs(brw->intelScreen->compiler, brw, mem_ctx,
+   program = brw_compile_fs(brw->screen->compiler, brw, mem_ctx,
                             key, &prog_data, fp->program.Base.nir,
                             &fp->program.Base, st_index8, st_index16,
                             true, brw->use_rep_send,
@@ -172,7 +173,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
 
    brw_alloc_stage_scratch(brw, &brw->wm.base,
                            prog_data.base.total_scratch,
-                           brw->max_wm_threads);
+                           devinfo->max_wm_threads);
 
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
       fprintf(stderr, "\n");
@@ -429,7 +430,7 @@ brw_wm_state_dirty(const struct brw_context *brw)
                           BRW_NEW_VUE_MAP_GEOM_OUT);
 }
 
-static void
+void
 brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
 {
    struct gl_context *ctx = &brw->ctx;

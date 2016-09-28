@@ -1866,6 +1866,9 @@ const struct function gl_core_functions_possible[] = {
    { "glMultiDrawArraysIndirectCountARB", 31, -1 },
    { "glMultiDrawElementsIndirectCountARB", 31, -1 },
 
+   /* GL_ARB_ES3_2_compatibility */
+   { "glPrimitiveBoundingBoxARB", 45, -1 },
+
    { NULL, 0, -1 }
 };
 
@@ -2609,6 +2612,17 @@ const struct function gles31_functions_possible[] = {
 
    /* GL_OES_primitive_bound_box */
    { "glPrimitiveBoundingBoxOES", 31, -1 },
+
+   /* GL_OES_viewport_array */
+   { "glViewportArrayvOES", 31, -1 },
+   { "glViewportIndexedfOES", 31, -1 },
+   { "glViewportIndexedfvOES", 31, -1 },
+   { "glScissorArrayvOES", 31, -1 },
+   { "glScissorIndexedOES", 31, -1 },
+   { "glScissorIndexedvOES", 31, -1 },
+   { "glDepthRangeArrayfvOES", 31, -1 },
+   { "glDepthRangeIndexedfOES", 31, -1 },
+   { "glGetFloati_vOES", 31, -1 },
 
    { NULL, 0, -1 },
  };

@@ -39,7 +39,7 @@
 #include <xf86drm.h>
 #include <stdio.h>
 #include <sys/stat.h>
-#include "amdgpu_id.h"
+#include "amd/common/amdgpu_id.h"
 
 #define CIK_TILE_MODE_COLOR_2D			14
 
@@ -368,6 +368,12 @@ fail:
    return false;
 }
 
+static void do_winsys_deinit(struct amdgpu_winsys *ws)
+{
+   AddrDestroy(ws->addrlib);
+   amdgpu_device_deinitialize(ws->dev);
+}
+
 static void amdgpu_winsys_destroy(struct radeon_winsys *rws)
 {
    struct amdgpu_winsys *ws = (struct amdgpu_winsys*)rws;
@@ -376,10 +382,10 @@ static void amdgpu_winsys_destroy(struct radeon_winsys *rws)
       util_queue_destroy(&ws->cs_queue);
 
    pipe_mutex_destroy(ws->bo_fence_lock);
+   pb_slabs_deinit(&ws->bo_slabs);
    pb_cache_deinit(&ws->bo_cache);
    pipe_mutex_destroy(ws->global_bo_list_lock);
-   AddrDestroy(ws->addrlib);
-   amdgpu_device_deinitialize(ws->dev);
+   do_winsys_deinit(ws);
    FREE(rws);
 }
 
@@ -527,22 +533,31 @@ amdgpu_winsys_create(int fd, radeon_screen_create_t screen_create)
 
    /* Create a new winsys. */
    ws = CALLOC_STRUCT(amdgpu_winsys);
-   if (!ws) {
-      pipe_mutex_unlock(dev_tab_mutex);
-      return NULL;
-   }
+   if (!ws)
+      goto fail;
 
    ws->dev = dev;
    ws->info.drm_major = drm_major;
    ws->info.drm_minor = drm_minor;
 
    if (!do_winsys_init(ws, fd))
-      goto fail;
+      goto fail_alloc;
 
    /* Create managers. */
    pb_cache_init(&ws->bo_cache, 500000, ws->check_vm ? 1.0f : 2.0f, 0,
                  (ws->info.vram_size + ws->info.gart_size) / 8,
                  amdgpu_bo_destroy, amdgpu_bo_can_reclaim);
+
+   if (!pb_slabs_init(&ws->bo_slabs,
+                      AMDGPU_SLAB_MIN_SIZE_LOG2, AMDGPU_SLAB_MAX_SIZE_LOG2,
+                      12, /* number of heaps (domain/flags combinations) */
+                      ws,
+                      amdgpu_bo_can_reclaim_slab,
+                      amdgpu_bo_slab_alloc,
+                      amdgpu_bo_slab_free))
+      goto fail_cache;
+
+   ws->info.min_alloc_size = 1 << AMDGPU_SLAB_MIN_SIZE_LOG2;
 
    /* init reference */
    pipe_reference_init(&ws->reference, 1);
@@ -587,9 +602,12 @@ amdgpu_winsys_create(int fd, radeon_screen_create_t screen_create)
 
    return &ws->base;
 
+fail_cache:
+   pb_cache_deinit(&ws->bo_cache);
+   do_winsys_deinit(ws);
+fail_alloc:
+   FREE(ws);
 fail:
    pipe_mutex_unlock(dev_tab_mutex);
-   pb_cache_deinit(&ws->bo_cache);
-   FREE(ws);
    return NULL;
 }

@@ -900,27 +900,6 @@ anv_cmd_clear_image(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
-void anv_CmdClearColorImage(
-    VkCommandBuffer                             commandBuffer,
-    VkImage                                     image_h,
-    VkImageLayout                               imageLayout,
-    const VkClearColorValue*                    pColor,
-    uint32_t                                    rangeCount,
-    const VkImageSubresourceRange*              pRanges)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_image, image, image_h);
-   struct anv_meta_saved_state saved_state;
-
-   meta_clear_begin(&saved_state, cmd_buffer);
-
-   anv_cmd_clear_image(cmd_buffer, image, imageLayout,
-                       (VkClearValue) { .color = *pColor },
-                       rangeCount, pRanges);
-
-   meta_clear_end(&saved_state, cmd_buffer);
-}
-
 void anv_CmdClearDepthStencilImage(
     VkCommandBuffer                             commandBuffer,
     VkImage                                     image_h,
@@ -1032,6 +1011,12 @@ void anv_CmdFillBuffer(
    struct anv_meta_saved_state saved_state;
 
    meta_clear_begin(&saved_state, cmd_buffer);
+
+   if (fillSize == VK_WHOLE_SIZE) {
+      fillSize = dst_buffer->size - dstOffset;
+      /* Make sure fillSize is a multiple of 4 */
+      fillSize -= fillSize & 3;
+   }
 
    VkFormat format;
    int bs;

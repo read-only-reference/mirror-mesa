@@ -116,6 +116,9 @@ glapi_libglapi_la_CPPFLAGS = \
 if HAVE_APPLEDRI
 glapi_libglapi_la_SOURCES += glapi/glapi_gentable.c
 endif
+if HAVE_WINDOWSDRI
+glapi_libglapi_la_SOURCES += glapi/glapi_gentable.c
+endif
 
 if HAVE_SHARED_GLAPI
 glapi_libglapi_la_SOURCES += $(MAPI_BRIDGE_FILES) glapi/glapi_mapi_tmp.h
@@ -207,6 +210,7 @@ GLES3_includedir = $(includedir)/GLES3
 GLES3_include_HEADERS = \
 	$(top_srcdir)/include/GLES3/gl3.h \
 	$(top_srcdir)/include/GLES3/gl31.h \
+	$(top_srcdir)/include/GLES3/gl32.h \
 	$(top_srcdir)/include/GLES3/gl3ext.h \
 	$(top_srcdir)/include/GLES3/gl3platform.h
 

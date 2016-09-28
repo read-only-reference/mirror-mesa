@@ -234,7 +234,7 @@ brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
 void
 brw_emit_depth_stall_flushes(struct brw_context *brw)
 {
-   assert(brw->gen >= 6 && brw->gen <= 9);
+   assert(brw->gen >= 6);
 
    /* Starting on BDW, these pipe controls are unnecessary.
     *
@@ -362,7 +362,7 @@ brw_emit_mi_flush(struct brw_context *brw)
 
 int
 brw_init_pipe_control(struct brw_context *brw,
-                      const struct brw_device_info *devinfo)
+                      const struct gen_device_info *devinfo)
 {
    if (devinfo->gen < 6)
       return 0;

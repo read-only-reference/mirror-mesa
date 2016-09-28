@@ -316,6 +316,16 @@ fail:
 /*
  * pipe_screen
  */
+static bool si_have_tgsi_compute(struct si_screen *sscreen)
+{
+	/* Old kernels disallowed some register writes for SI
+	 * that are used for indirect dispatches. */
+	return HAVE_LLVM >= 0x309 &&
+	       (sscreen->b.chip_class >= CIK ||
+		sscreen->b.info.drm_major == 3 ||
+		(sscreen->b.info.drm_major == 2 &&
+		 sscreen->b.info.drm_minor >= 45));
+}
 
 static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 {
@@ -448,11 +458,13 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FAKE_SW_MSAA:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_VERTEXID_NOBASE:
-	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 		return 0;
+
+	case PIPE_CAP_QUERY_BUFFER_OBJECT:
+		return si_have_tgsi_compute(sscreen);
 
 	case PIPE_CAP_DRAW_PARAMETERS:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT:
@@ -567,12 +579,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 		case PIPE_SHADER_CAP_SUPPORTED_IRS: {
 			int ir = 1 << PIPE_SHADER_IR_NATIVE;
 
-			/* Old kernels disallowed some register writes for SI
-			 * that are used for indirect dispatches. */
-			if (HAVE_LLVM >= 0x309 && (sscreen->b.chip_class >= CIK ||
-			                           sscreen->b.info.drm_major == 3 ||
-			                           (sscreen->b.info.drm_major == 2 &&
-			                            sscreen->b.info.drm_minor >= 45)))
+			if (si_have_tgsi_compute(sscreen))
 				ir |= 1 << PIPE_SHADER_IR_TGSI;
 
 			return ir;
@@ -817,6 +824,11 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	sscreen->use_monolithic_shaders =
 		HAVE_LLVM < 0x0308 ||
 		(sscreen->b.debug_flags & DBG_MONOLITHIC_SHADERS) != 0;
+
+	sscreen->b.barrier_flags.cp_to_L2 = SI_CONTEXT_INV_SMEM_L1 |
+					    SI_CONTEXT_INV_VMEM_L1 |
+					    SI_CONTEXT_INV_GLOBAL_L2;
+	sscreen->b.barrier_flags.compute_to_L2 = SI_CONTEXT_CS_PARTIAL_FLUSH;
 
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))
 		sscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;

@@ -45,6 +45,7 @@
 #include "compiler/shader_enums.h"
 #include "main/formats.h"       /* MESA_FORMAT_COUNT */
 #include "compiler/glsl/list.h"
+#include "util/bitscan.h"
 
 
 #ifdef __cplusplus
@@ -1929,6 +1930,7 @@ struct gl_program
    GLbitfield TexturesUsed[MAX_COMBINED_TEXTURE_IMAGE_UNITS];  /**< TEXTURE_x_BIT bitmask */
    GLbitfield SamplersUsed;   /**< Bitfield of which samplers are used */
    GLbitfield ShadowSamplers; /**< Texture units used for shadow sampling. */
+   GLbitfield ExternalSamplersUsed; /**< Texture units used for samplerExternalOES */
 
    GLboolean UsesGather; /**< Does this program use gather4 at all? */
 
@@ -2459,6 +2461,20 @@ struct gl_linked_shader
 
    struct gl_shader_info info;
 };
+
+static inline GLbitfield gl_external_samplers(struct gl_linked_shader *shader)
+{
+   GLbitfield external_samplers = 0;
+   GLbitfield mask = shader->active_samplers;
+
+   while (mask) {
+      int idx = u_bit_scan(&mask);
+      if (shader->SamplerTargets[idx] == TEXTURE_EXTERNAL_INDEX)
+         external_samplers |= (1 << idx);
+   }
+
+   return external_samplers;
+}
 
 /**
  * A GLSL shader object.
@@ -3871,6 +3887,7 @@ struct gl_extensions
    GLboolean ARB_shader_subroutine;
    GLboolean ARB_shader_texture_image_samples;
    GLboolean ARB_shader_texture_lod;
+   GLboolean ARB_shader_viewport_layer_array;
    GLboolean ARB_shading_language_packing;
    GLboolean ARB_shading_language_420pack;
    GLboolean ARB_shadow;
@@ -3951,12 +3968,14 @@ struct gl_extensions
    GLboolean OES_standard_derivatives;
    GLboolean OES_texture_buffer;
    GLboolean OES_texture_cube_map_array;
+   GLboolean OES_viewport_array;
    /* vendor extensions */
    GLboolean AMD_performance_monitor;
    GLboolean AMD_pinned_memory;
    GLboolean AMD_seamless_cubemap_per_texture;
    GLboolean AMD_vertex_shader_layer;
    GLboolean AMD_vertex_shader_viewport_index;
+   GLboolean ANDROID_extension_pack_es31a;
    GLboolean APPLE_object_purgeable;
    GLboolean ATI_meminfo;
    GLboolean ATI_texture_compression_3dc;

@@ -576,6 +576,16 @@ ConstantFolding::expr(Instruction *i,
          return;
       }
       break;
+   case OP_SUB:
+      switch (i->dType) {
+      case TYPE_F32: res.data.f32 = a->data.f32 - b->data.f32; break;
+      case TYPE_F64: res.data.f64 = a->data.f64 - b->data.f64; break;
+      case TYPE_S32:
+      case TYPE_U32: res.data.u32 = a->data.u32 - b->data.u32; break;
+      default:
+         return;
+      }
+      break;
    case OP_POW:
       switch (i->dType) {
       case TYPE_F32: res.data.f32 = pow(a->data.f32, b->data.f32); break;
@@ -768,6 +778,9 @@ ConstantFolding::expr(Instruction *i,
       }
       break;
    }
+   case OP_SHLADD:
+      res.data.u32 = (a->data.u32 << b->data.u32) + c->data.u32;
+      break;
    default:
       return;
    }
@@ -897,6 +910,14 @@ ConstantFolding::opnd3(Instruction *i, ImmediateValue &imm2)
          return;
       }
       break;
+   case OP_SHLADD:
+      if (imm2.isInteger(0)) {
+         i->op = OP_SHL;
+         i->setSrc(2, NULL);
+         foldCount++;
+         return;
+      }
+      break;
    default:
       return;
    }
@@ -905,6 +926,7 @@ ConstantFolding::opnd3(Instruction *i, ImmediateValue &imm2)
 void
 ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
 {
+   const Target *target = prog->getTarget();
    const int t = !s;
    const operation op = i->op;
    Instruction *newi = i;
@@ -1006,6 +1028,12 @@ ConstantFolding::opnd(Instruction *i, ImmediateValue &imm0, int s)
          i->src(1).mod = i->src(2).mod;
          i->setSrc(2, NULL);
          i->op = OP_ADD;
+      } else
+      if (s == 1 && !imm0.isNegative() && imm0.isPow2() &&
+          target->isOpSupported(i->op, i->dType)) {
+         i->op = OP_SHLADD;
+         imm0.applyLog2();
+         i->setSrc(1, new_ImmediateValue(prog, imm0.reg.data.u32));
       }
       break;
    case OP_ADD:

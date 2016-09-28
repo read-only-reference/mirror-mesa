@@ -76,6 +76,7 @@ struct si_state_rasterizer {
 	bool			clamp_fragment_color;
 	bool			rasterizer_discard;
 	bool			scissor_enable;
+	bool			clip_halfz;
 };
 
 struct si_dsa_stencil_ref_part {
@@ -123,7 +124,6 @@ union si_state {
 union si_state_atoms {
 	struct {
 		/* The order matters. */
-		struct r600_atom *cache_flush;
 		struct r600_atom *render_cond;
 		struct r600_atom *streamout_begin;
 		struct r600_atom *streamout_enable; /* must be after streamout_begin */
@@ -281,6 +281,11 @@ void si_set_mutable_tex_desc_fields(struct r600_texture *tex,
 				    unsigned base_level, unsigned first_level,
 				    unsigned block_width, bool is_stencil,
 				    uint32_t *state);
+void si_get_pipe_constant_buffer(struct si_context *sctx, uint shader,
+				 uint slot, struct pipe_constant_buffer *cbuf);
+void si_get_shader_buffers(struct si_context *sctx, uint shader,
+			   uint start_slot, uint count,
+			   struct pipe_shader_buffer *sbuf);
 void si_set_ring_buffer(struct pipe_context *ctx, uint slot,
 			struct pipe_resource *buffer,
 			unsigned stride, unsigned num_records,
@@ -342,7 +347,7 @@ void si_destroy_shader_cache(struct si_screen *sscreen);
 void si_init_shader_selector_async(void *job, int thread_index);
 
 /* si_state_draw.c */
-void si_emit_cache_flush(struct si_context *sctx, struct r600_atom *atom);
+void si_emit_cache_flush(struct si_context *sctx);
 void si_ce_pre_draw_synchronization(struct si_context *sctx);
 void si_ce_post_draw_synchronization(struct si_context *sctx);
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo);

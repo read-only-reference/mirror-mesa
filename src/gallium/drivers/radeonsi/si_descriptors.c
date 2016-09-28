@@ -410,10 +410,6 @@ static void si_set_sampler_view(struct si_context *sctx,
 		struct r600_texture *rtex = (struct r600_texture *)view->texture;
 		uint32_t *desc = descs->list + slot * 16;
 
-		si_sampler_view_add_buffer(sctx, view->texture,
-					   RADEON_USAGE_READ,
-					   rview->is_stencil_sampler, true);
-
 		pipe_sampler_view_reference(&views->views[slot], view);
 		memcpy(desc, rview->state, 8*4);
 
@@ -446,6 +442,12 @@ static void si_set_sampler_view(struct si_context *sctx,
 		}
 
 		views->enabled_mask |= 1u << slot;
+
+		/* Since this can flush, it must be done after enabled_mask is
+		 * updated. */
+		si_sampler_view_add_buffer(sctx, view->texture,
+					   RADEON_USAGE_READ,
+					   rview->is_stencil_sampler, true);
 	} else {
 		pipe_sampler_view_reference(&views->views[slot], NULL);
 		memcpy(descs->list + slot*16, null_texture_descriptor, 8*4);
@@ -627,9 +629,6 @@ static void si_set_shader_image(struct si_context *ctx,
 	if (&images->views[slot] != view)
 		util_copy_image_view(&images->views[slot], view);
 
-	si_sampler_view_add_buffer(ctx, &res->b.b,
-				   RADEON_USAGE_READWRITE, false, true);
-
 	if (res->b.b.target == PIPE_BUFFER) {
 		if (view->access & PIPE_IMAGE_ACCESS_WRITE)
 			si_mark_image_range_valid(view);
@@ -653,7 +652,8 @@ static void si_set_shader_image(struct si_context *ctx,
 		assert(tex->fmask.size == 0);
 
 		if (uses_dcc &&
-		    view->access & PIPE_IMAGE_ACCESS_WRITE) {
+		    (view->access & PIPE_IMAGE_ACCESS_WRITE ||
+		     !vi_dcc_formats_compatible(res->b.b.format, view->format))) {
 			/* If DCC can't be disabled, at least decompress it.
 			 * The decompression is relatively cheap if the surface
 			 * has been decompressed already.
@@ -701,6 +701,10 @@ static void si_set_shader_image(struct si_context *ctx,
 	images->enabled_mask |= 1u << slot;
 	descs->dirty_mask |= 1u << slot;
 	ctx->descriptors_dirty |= 1u << si_image_descriptors_idx(shader);
+
+	/* Since this can flush, it must be done after enabled_mask is updated. */
+	si_sampler_view_add_buffer(ctx, &res->b.b,
+				   RADEON_USAGE_READWRITE, false, true);
 }
 
 static void
@@ -830,6 +834,27 @@ static void si_buffer_resources_begin_new_cs(struct si_context *sctx,
 		radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 				      (struct r600_resource*)buffers->buffers[i],
 				      buffers->shader_usage, buffers->priority);
+	}
+}
+
+static void si_get_buffer_from_descriptors(struct si_buffer_resources *buffers,
+					   struct si_descriptors *descs,
+					   unsigned idx, struct pipe_resource **buf,
+					   unsigned *offset, unsigned *size)
+{
+	pipe_resource_reference(buf, buffers->buffers[idx]);
+	if (*buf) {
+		struct r600_resource *res = r600_resource(*buf);
+		const uint32_t *desc = descs->list + idx * 4;
+		uint64_t va;
+
+		*size = desc[2];
+
+		assert(G_008F04_STRIDE(desc[1]) == 0);
+		va = ((uint64_t)desc[1] << 32) | desc[0];
+
+		assert(va >= res->gpu_address && va + *size <= res->gpu_address + res->bo_size);
+		*offset = va - res->gpu_address;
 	}
 }
 
@@ -1058,6 +1083,16 @@ static void si_pipe_set_constant_buffer(struct pipe_context *ctx,
 			       slot, input);
 }
 
+void si_get_pipe_constant_buffer(struct si_context *sctx, uint shader,
+				 uint slot, struct pipe_constant_buffer *cbuf)
+{
+	cbuf->user_buffer = NULL;
+	si_get_buffer_from_descriptors(
+		&sctx->const_buffers[shader],
+		si_const_buffer_descriptors(sctx, shader),
+		slot, &cbuf->buffer, &cbuf->buffer_offset, &cbuf->buffer_size);
+}
+
 /* SHADER BUFFERS */
 
 static unsigned
@@ -1125,6 +1160,21 @@ static void si_set_shader_buffers(struct pipe_context *ctx,
 		descs->dirty_mask |= 1u << slot;
 		sctx->descriptors_dirty |=
 			1u << si_shader_buffer_descriptors_idx(shader);
+	}
+}
+
+void si_get_shader_buffers(struct si_context *sctx, uint shader,
+			   uint start_slot, uint count,
+			   struct pipe_shader_buffer *sbuf)
+{
+	struct si_buffer_resources *buffers = &sctx->shader_buffers[shader];
+	struct si_descriptors *descs = si_shader_buffer_descriptors(sctx, shader);
+
+	for (unsigned i = 0; i < count; ++i) {
+		si_get_buffer_from_descriptors(
+			buffers, descs, start_slot + i,
+			&sbuf[i].buffer, &sbuf[i].buffer_offset,
+			&sbuf[i].buffer_size);
 	}
 }
 
@@ -1427,15 +1477,14 @@ static void si_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource 
 {
 	struct si_context *sctx = (struct si_context*)ctx;
 	struct r600_resource *rbuffer = r600_resource(buf);
-	unsigned i, shader, alignment = rbuffer->buf->alignment;
+	unsigned i, shader;
 	uint64_t old_va = rbuffer->gpu_address;
 	unsigned num_elems = sctx->vertex_elements ?
 				       sctx->vertex_elements->count : 0;
 	struct si_sampler_view *view;
 
 	/* Reallocate the buffer in the same pipe_resource. */
-	r600_init_resource(&sctx->screen->b, rbuffer, rbuffer->b.b.width0,
-			   alignment);
+	r600_alloc_resource(&sctx->screen->b, rbuffer);
 
 	/* We changed the buffer, now we need to bind it where the old one
 	 * was bound. This consists of 2 things:
