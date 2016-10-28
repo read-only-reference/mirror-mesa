@@ -45,10 +45,12 @@ blorp_finish(struct blorp_context *blorp)
 
 void
 blorp_batch_init(struct blorp_context *blorp,
-                 struct blorp_batch *batch, void *driver_batch)
+                 struct blorp_batch *batch, void *driver_batch,
+                 enum blorp_batch_flags flags)
 {
    batch->blorp = blorp;
    batch->driver_batch = driver_batch;
+   batch->flags = flags;
 }
 
 void
@@ -64,6 +66,8 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
                             unsigned int level, unsigned int layer,
                             enum isl_format format, bool is_render_target)
 {
+   info->enabled = true;
+
    if (format == ISL_FORMAT_UNSUPPORTED)
       format = surf->surf->format;
 
@@ -161,21 +165,15 @@ nir_uniform_type_size(const struct glsl_type *type)
 }
 
 const unsigned *
-brw_blorp_compile_nir_shader(struct blorp_context *blorp, struct nir_shader *nir,
-                             const struct brw_wm_prog_key *wm_key,
-                             bool use_repclear,
-                             struct brw_blorp_prog_data *prog_data,
-                             unsigned *program_size)
+blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
+                 struct nir_shader *nir,
+                 const struct brw_wm_prog_key *wm_key,
+                 bool use_repclear,
+                 struct brw_blorp_prog_data *prog_data,
+                 unsigned *program_size)
 {
    const struct brw_compiler *compiler = blorp->compiler;
 
-   void *mem_ctx = ralloc_context(NULL);
-
-   /* Calling brw_preprocess_nir and friends is destructive and, if cloning is
-    * enabled, may end up completely replacing the nir_shader.  Therefore, we
-    * own it and might as well put it in our context for easy cleanup.
-    */
-   ralloc_steal(mem_ctx, nir);
    nir->options =
       compiler->glsl_compiler_options[MESA_SHADER_FRAGMENT].NirOptions;
 
@@ -207,9 +205,9 @@ brw_blorp_compile_nir_shader(struct blorp_context *blorp, struct nir_shader *nir
    nir_lower_io(nir, nir_var_uniform, nir_uniform_type_size, 0);
 
    const unsigned *program =
-      brw_compile_fs(compiler, blorp->driver_ctx, mem_ctx,
-                     wm_key, &wm_prog_data, nir,
-                     NULL, -1, -1, false, use_repclear, program_size, NULL);
+      brw_compile_fs(compiler, blorp->driver_ctx, mem_ctx, wm_key,
+                     &wm_prog_data, nir, NULL, -1, -1, false, use_repclear,
+                     NULL, program_size, NULL);
 
    /* Copy the relavent bits of wm_prog_data over into the blorp prog data */
    prog_data->dispatch_8 = wm_prog_data.dispatch_8;
@@ -220,7 +218,7 @@ brw_blorp_compile_nir_shader(struct blorp_context *blorp, struct nir_shader *nir
    prog_data->persample_msaa_dispatch = wm_prog_data.persample_dispatch;
    prog_data->flat_inputs = wm_prog_data.flat_inputs;
    prog_data->num_varying_inputs = wm_prog_data.num_varying_inputs;
-   prog_data->inputs_read = nir->info.inputs_read;
+   prog_data->inputs_read = nir->info->inputs_read;
 
    assert(wm_prog_data.base.nr_params == 0);
 

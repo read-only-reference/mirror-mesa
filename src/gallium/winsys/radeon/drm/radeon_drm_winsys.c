@@ -43,6 +43,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <radeon_surface.h>
 
 #ifndef RADEON_INFO_ACTIVE_CU_COUNT
@@ -372,7 +373,9 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
     ws->info.gart_size = gem_info.gart_size;
     ws->info.vram_size = gem_info.vram_size;
 
-    ws->info.max_alloc_size = MAX2(ws->info.vram_size, ws->info.gart_size);
+    /* Radeon allocates all buffers as contigous, which makes large allocations
+     * unlikely to succeed. */
+    ws->info.max_alloc_size = MAX2(ws->info.vram_size, ws->info.gart_size) * 0.7;
     if (ws->info.drm_minor < 40)
         ws->info.max_alloc_size = MIN2(ws->info.max_alloc_size, 256*1024*1024);
 
@@ -751,7 +754,7 @@ radeon_drm_winsys_create(int fd, radeon_screen_create_t screen_create)
         return NULL;
     }
 
-    ws->fd = dup(fd);
+    ws->fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
 
     if (!do_winsys_init(ws))
         goto fail1;

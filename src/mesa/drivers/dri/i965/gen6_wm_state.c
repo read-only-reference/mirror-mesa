@@ -42,14 +42,13 @@ gen6_upload_wm_push_constants(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->wm.base;
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct brw_fragment_program *fp =
-      brw_fragment_program_const(brw->fragment_program);
+   const struct brw_program *fp = brw_program_const(brw->fragment_program);
    /* BRW_NEW_FS_PROG_DATA */
-   const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
+   const struct brw_stage_prog_data *prog_data = brw->wm.base.prog_data;
 
    _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_FRAGMENT);
 
-   gen6_upload_push_constants(brw, &fp->program.Base, &prog_data->base,
+   gen6_upload_push_constants(brw, &fp->program, prog_data,
                               stage_state, AUB_TRACE_WM_CONSTANTS);
 
    if (brw->gen >= 7) {
@@ -241,7 +240,8 @@ upload_wm_state(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FS_PROG_DATA */
-   const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
+   const struct brw_wm_prog_data *prog_data =
+      brw_wm_prog_data(brw->wm.base.prog_data);
 
    /* _NEW_BUFFERS */
    const bool multisampled_fbo = _mesa_geometric_samples(ctx->DrawBuffer) > 1;

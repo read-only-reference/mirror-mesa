@@ -21,10 +21,13 @@
  * IN THE SOFTWARE.
  */
 
-#pragma once
+#ifndef DECODER_H
+#define DECODER_H
 
 #include <stdint.h>
 #include <stdbool.h>
+
+#include "common/gen_device_info.h"
 
 struct gen_spec;
 struct gen_group;
@@ -36,7 +39,9 @@ static inline uint32_t gen_make_gen(uint32_t major, uint32_t minor)
 }
 
 struct gen_group *gen_spec_find_struct(struct gen_spec *spec, const char *name);
-struct gen_spec *gen_spec_load(const char *filename);
+struct gen_spec *gen_spec_load(const struct gen_device_info *devinfo);
+struct gen_spec *gen_spec_load_from_path(const struct gen_device_info *devinfo,
+                                         const char *path);
 uint32_t gen_spec_get_gen(struct gen_spec *spec);
 struct gen_group *gen_spec_find_instruction(struct gen_spec *spec, const uint32_t *p);
 struct gen_group *gen_spec_find_register(struct gen_spec *spec, uint32_t offset);
@@ -99,3 +104,5 @@ void gen_field_iterator_init(struct gen_field_iterator *iter,
                              struct gen_group *group, const uint32_t *p);
 
 bool gen_field_iterator_next(struct gen_field_iterator *iter);
+
+#endif /* DECODER_H */

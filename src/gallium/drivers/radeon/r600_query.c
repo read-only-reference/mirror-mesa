@@ -338,7 +338,7 @@ static struct r600_resource *r600_new_query_buffer(struct r600_common_context *c
 	 * usage pattern.
 	 */
 	struct r600_resource *buf = (struct r600_resource*)
-		pipe_buffer_create(ctx->b.screen, PIPE_BIND_CUSTOM,
+		pipe_buffer_create(ctx->b.screen, 0,
 				   PIPE_USAGE_STAGING, buf_size);
 	if (!buf)
 		return NULL;
@@ -557,12 +557,8 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 		radeon_emit(cs, (va >> 32) & 0xFFFF);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) | EVENT_INDEX(5));
-		radeon_emit(cs, va);
-		radeon_emit(cs, (3 << 29) | ((va >> 32) & 0xFFFF));
-		radeon_emit(cs, 0);
-		radeon_emit(cs, 0);
+		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
+					 0, 3, NULL, va, 0, 0);
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -643,13 +639,8 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 		va += 8;
 		/* fall through */
 	case PIPE_QUERY_TIMESTAMP:
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) | EVENT_INDEX(5));
-		radeon_emit(cs, va);
-		radeon_emit(cs, (3 << 29) | ((va >> 32) & 0xFFFF));
-		radeon_emit(cs, 0);
-		radeon_emit(cs, 0);
-
+		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
+					 0, 3, NULL, va, 0, 0);
 		fence_va = va + 8;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS: {
@@ -671,7 +662,8 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 			RADEON_PRIO_QUERY);
 
 	if (fence_va)
-		r600_gfx_write_fence(ctx, query->buffer.buf, fence_va, 0, 0x80000000);
+		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0, 1,
+					 query->buffer.buf, fence_va, 0, 0x80000000);
 }
 
 static void r600_query_hw_emit_stop(struct r600_common_context *ctx,
@@ -1588,7 +1580,7 @@ void r600_query_init_backend_mask(struct r600_common_context *ctx)
 
 	/* create buffer for event data */
 	buffer = (struct r600_resource*)
-		pipe_buffer_create(ctx->b.screen, PIPE_BIND_CUSTOM,
+		pipe_buffer_create(ctx->b.screen, 0,
 				   PIPE_USAGE_STAGING, ctx->max_db*16);
 	if (!buffer)
 		goto err;

@@ -96,7 +96,7 @@ add_const_offset_to_base(nir_shader *nir, nir_variable_mode mode)
 }
 
 static bool
-remap_vs_attrs(nir_block *block, struct nir_shader_info *nir_info)
+remap_vs_attrs(nir_block *block, shader_info *nir_info)
 {
    nir_foreach_instr(instr, block) {
       if (instr->type != nir_instr_type_intrinsic)
@@ -191,7 +191,6 @@ remap_patch_urb_offsets(nir_block *block, nir_builder *b,
 
 void
 brw_nir_lower_vs_inputs(nir_shader *nir,
-                        const struct gen_device_info *devinfo,
                         bool is_scalar,
                         bool use_legacy_snorm_formula,
                         const uint8_t *vs_attrib_wa_flags)
@@ -221,7 +220,7 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
       nir_foreach_function(function, nir) {
          if (function->impl) {
             nir_foreach_block(block, function->impl) {
-               remap_vs_attrs(block, &nir->info);
+               remap_vs_attrs(block, nir->info);
             }
          }
       }
@@ -281,7 +280,8 @@ brw_nir_lower_tes_inputs(nir_shader *nir, const struct brw_vue_map *vue_map)
 }
 
 void
-brw_nir_lower_fs_inputs(nir_shader *nir,
+brw_nir_lower_fs_inputs(nir_shader *nir, struct brw_vue_map *vue_map,
+                        struct gl_program *prog,
                         const struct gen_device_info *devinfo,
                         const struct brw_wm_prog_key *key)
 {
@@ -312,6 +312,11 @@ brw_nir_lower_fs_inputs(nir_shader *nir,
       }
    }
 
+   if (devinfo->gen < 6) {
+      assert(prog); /* prog will be NULL when called from Vulkan */
+      brw_setup_vue_interpolation(vue_map, nir, prog, devinfo);
+   }
+
    nir_lower_io_options lower_io_options = 0;
    if (key->persample_interp)
       lower_io_options |= nir_lower_io_force_sample_interpolation;
@@ -328,16 +333,11 @@ void
 brw_nir_lower_vue_outputs(nir_shader *nir,
                           bool is_scalar)
 {
-   if (is_scalar) {
-      nir_assign_var_locations(&nir->outputs, &nir->num_outputs,
-                               VARYING_SLOT_VAR0,
-                               type_size_vec4_times_4);
-      nir_lower_io(nir, nir_var_shader_out, type_size_vec4_times_4, 0);
-   } else {
-      nir_foreach_variable(var, &nir->outputs)
-         var->data.driver_location = var->data.location;
-      nir_lower_io(nir, nir_var_shader_out, type_size_vec4, 0);
+   nir_foreach_variable(var, &nir->outputs) {
+      var->data.driver_location = var->data.location;
    }
+
+   nir_lower_io(nir, nir_var_shader_out, type_size_vec4, 0);
 }
 
 void
@@ -380,7 +380,7 @@ brw_nir_lower_fs_outputs(nir_shader *nir)
 void
 brw_nir_lower_cs_shared(nir_shader *nir)
 {
-   nir_assign_var_locations(&nir->shared, &nir->num_shared, 0,
+   nir_assign_var_locations(&nir->shared, &nir->num_shared,
                             type_size_scalar_bytes);
    nir_lower_io(nir, nir_var_shared, type_size_scalar_bytes, 0);
 }

@@ -103,6 +103,17 @@ egl_dri3_get_dri_context(struct loader_dri3_drawable *draw)
    return dri2_ctx->dri_context;
 }
 
+static __DRIscreen *
+egl_dri3_get_dri_screen(struct loader_dri3_drawable *draw)
+{
+   _EGLContext *ctx = _eglGetCurrentContext();
+   struct dri2_egl_context *dri2_ctx;
+   if (!ctx)
+      return NULL;
+   dri2_ctx = dri2_egl_context(ctx);
+   return dri2_egl_display(dri2_ctx->base.Resource.Display)->dri_screen;
+}
+
 static void
 egl_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
 {
@@ -112,13 +123,14 @@ egl_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
    dri2_flush_drawable_for_swapbuffers(disp, &dri3_surf->base);
 }
 
-static struct loader_dri3_vtable egl_dri3_vtable = {
+static const struct loader_dri3_vtable egl_dri3_vtable = {
    .get_swap_interval = egl_dri3_get_swap_interval,
    .clamp_swap_interval = egl_dri3_clamp_swap_interval,
    .set_swap_interval = egl_dri3_set_swap_interval,
    .set_drawable_size = egl_dri3_set_drawable_size,
    .in_current_context = egl_dri3_in_current_context,
    .get_dri_context = egl_dri3_get_dri_context,
+   .get_dri_screen = egl_dri3_get_dri_screen,
    .flush_drawable = egl_dri3_flush_drawable,
    .show_fps = NULL,
 };
@@ -129,9 +141,6 @@ dri3_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(surf);
 
    (void) drv;
-
-   if (!_eglPutSurface(surf))
-      return EGL_TRUE;
 
    loader_dri3_drawable_fini(&dri3_surf->loader_drawable);
 
@@ -528,7 +537,7 @@ dri3_x11_connect(struct dri2_egl_display *dri2_dpy)
 
    dri2_dpy->fd = loader_get_user_preferred_fd(dri2_dpy->fd, &dri2_dpy->is_different_gpu);
 
-   dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd, 0);
+   dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
    if (!dri2_dpy->driver_name) {
       _eglLog(_EGL_WARNING, "DRI3: No driver found");
       close(dri2_dpy->fd);

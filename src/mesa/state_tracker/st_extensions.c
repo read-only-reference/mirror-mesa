@@ -263,8 +263,6 @@ void st_init_limits(struct pipe_screen *screen,
          pc->MediumInt = pc->HighInt = pc->LowInt;
       }
 
-      options->EmitNoNoise = TRUE;
-
       /* TODO: make these more fine-grained if anyone needs it */
       options->MaxIfDepth =
          screen->get_shader_param(screen, sh,
@@ -272,8 +270,7 @@ void st_init_limits(struct pipe_screen *screen,
       options->EmitNoLoops =
          !screen->get_shader_param(screen, sh,
                                    PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH);
-      options->EmitNoFunctions =
-         !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_SUBROUTINES);
+      options->EmitNoFunctions = true;
       options->EmitNoMainReturn =
          !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_SUBROUTINES);
 
@@ -618,7 +615,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_texture_view),                 PIPE_CAP_SAMPLER_VIEW_TARGET              },
       { o(ARB_timer_query),                  PIPE_CAP_QUERY_TIMESTAMP                  },
       { o(ARB_transform_feedback2),          PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME       },
-      { o(ARB_transform_feedback3),          PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME       },
+      { o(ARB_transform_feedback3),          PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS },
 
       { o(EXT_blend_equation_separate),      PIPE_CAP_BLEND_EQUATION_SEPARATE          },
       { o(EXT_depth_bounds_test),            PIPE_CAP_DEPTH_BOUNDS_TEST                },
@@ -890,6 +887,13 @@ void st_init_extensions(struct pipe_screen *screen,
    if (consts->GLSLVersion >= 150 &&
        screen->get_param(screen, PIPE_CAP_TGSI_VS_LAYER_VIEWPORT)) {
       extensions->AMD_vertex_shader_layer = GL_TRUE;
+   }
+
+   if (consts->GLSLVersion >= 140) {
+      if (screen->get_param(screen, PIPE_CAP_TGSI_ARRAY_COMPONENTS) &&
+         screen->get_shader_param(screen, PIPE_SHADER_FRAGMENT,
+                                   PIPE_SHADER_CAP_PREFERRED_IR) == PIPE_SHADER_IR_TGSI)
+         extensions->ARB_enhanced_layouts = GL_TRUE;
    }
 
    if (consts->GLSLVersion >= 130) {
@@ -1196,8 +1200,32 @@ void st_init_extensions(struct pipe_screen *screen,
          extensions->ARB_compute_shader =
                                       extensions->ARB_shader_image_load_store &&
                                       extensions->ARB_shader_atomic_counters;
+
+         if (extensions->ARB_compute_shader) {
+            uint64_t max_variable_threads_per_block = 0;
+
+            screen->get_compute_param(screen, PIPE_SHADER_IR_TGSI,
+                                      PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK,
+                                      &max_variable_threads_per_block);
+
+            for (i = 0; i < 3; i++) {
+               /* Clamp the values to avoid having a local work group size
+                * greater than the maximum number of invocations.
+                */
+               consts->MaxComputeVariableGroupSize[i] =
+                  MIN2(consts->MaxComputeWorkGroupSize[i],
+                       max_variable_threads_per_block);
+            }
+            consts->MaxComputeVariableGroupInvocations =
+               max_variable_threads_per_block;
+
+            extensions->ARB_compute_variable_group_size =
+               max_variable_threads_per_block > 0;
+         }
       }
    }
+
+   extensions->KHR_robustness = extensions->ARB_robust_buffer_access_behavior;
 
    /* If we support ES 3.1, we support the ES3_1_compatibility ext. However
     * there's no clean way of telling whether we would support ES 3.1 from

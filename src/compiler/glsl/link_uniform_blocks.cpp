@@ -150,13 +150,7 @@ private:
        */
       const glsl_type *type_for_size = type;
       if (type->is_unsized_array()) {
-         if (!last_field) {
-            linker_error(prog, "unsized array `%s' definition: "
-                         "only last member of a shader storage block "
-                         "can be defined as unsized array",
-                         name);
-         }
-
+         assert(last_field);
          type_for_size = type->without_array();
       }
 
@@ -253,6 +247,7 @@ process_block_array(struct uniform_block_array_elements *ub_array, char **name,
 
       blocks[i].UniformBufferSize = 0;
       blocks[i]._Packing = gl_uniform_block_packing(type->interface_packing);
+      blocks[i]._RowMajor = type->get_interface_row_major();
 
       parcel->process(type, blocks[i].Name);
 
@@ -315,7 +310,7 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
    /* Allocate storage to hold all of the information related to uniform
     * blocks that can be queried through the API.
     */
-   struct gl_uniform_block *blocks = ralloc_array(mem_ctx, gl_uniform_block, num_blocks);
+   struct gl_uniform_block *blocks = rzalloc_array(mem_ctx, gl_uniform_block, num_blocks);
    gl_uniform_buffer_variable *variables =
       ralloc_array(blocks, gl_uniform_buffer_variable, num_variables);
 
@@ -360,6 +355,7 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
             blocks[i].UniformBufferSize = 0;
             blocks[i]._Packing =
                gl_uniform_block_packing(block_type->interface_packing);
+            blocks[i]._RowMajor = block_type->get_interface_row_major();
 
             parcel.process(block_type,
                            b->has_instance_name ? block_type->name : "");
@@ -490,6 +486,9 @@ link_uniform_blocks_are_compatible(const gl_uniform_block *a,
       return false;
 
    if (a->_Packing != b->_Packing)
+      return false;
+
+   if (a->_RowMajor != b->_RowMajor)
       return false;
 
    for (unsigned i = 0; i < a->NumUniforms; i++) {

@@ -133,6 +133,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 		goto fail;
 
 	rctx->screen = rscreen;
+	LIST_INITHEAD(&rctx->texture_buffers);
 
 	r600_init_blit_functions(rctx);
 
@@ -372,6 +373,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
+	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -383,6 +385,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
 		return rscreen->b.has_streamout ? 4 : 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
 		return rscreen->b.has_streamout ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:

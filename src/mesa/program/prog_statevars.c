@@ -373,14 +373,14 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index state[],
                COPY_4V(value, ctx->FragmentProgram.Parameters[idx]);
                return;
             case STATE_LOCAL:
-               if (!ctx->FragmentProgram.Current->Base.LocalParams) {
-                  ctx->FragmentProgram.Current->Base.LocalParams =
+               if (!ctx->FragmentProgram.Current->LocalParams) {
+                  ctx->FragmentProgram.Current->LocalParams =
                      calloc(MAX_PROGRAM_LOCAL_PARAMS, sizeof(float[4]));
-                  if (!ctx->FragmentProgram.Current->Base.LocalParams)
+                  if (!ctx->FragmentProgram.Current->LocalParams)
                      return;
                }
 
-               COPY_4V(value, ctx->FragmentProgram.Current->Base.LocalParams[idx]);
+               COPY_4V(value, ctx->FragmentProgram.Current->LocalParams[idx]);
                return;
             default:
                _mesa_problem(ctx, "Bad state switch in _mesa_fetch_state()");
@@ -399,14 +399,14 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index state[],
                COPY_4V(value, ctx->VertexProgram.Parameters[idx]);
                return;
             case STATE_LOCAL:
-               if (!ctx->VertexProgram.Current->Base.LocalParams) {
-                  ctx->VertexProgram.Current->Base.LocalParams =
+               if (!ctx->VertexProgram.Current->LocalParams) {
+                  ctx->VertexProgram.Current->LocalParams =
                      calloc(MAX_PROGRAM_LOCAL_PARAMS, sizeof(float[4]));
-                  if (!ctx->VertexProgram.Current->Base.LocalParams)
+                  if (!ctx->VertexProgram.Current->LocalParams)
                      return;
                }
 
-               COPY_4V(value, ctx->VertexProgram.Current->Base.LocalParams[idx]);
+               COPY_4V(value, ctx->VertexProgram.Current->LocalParams[idx]);
                return;
             default:
                _mesa_problem(ctx, "Bad state switch in _mesa_fetch_state()");
@@ -604,7 +604,7 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index state[],
 
       case STATE_TES_PATCH_VERTICES_IN:
          if (ctx->TessCtrlProgram._Current)
-            val[0].i = ctx->TessCtrlProgram._Current->VerticesOut;
+            val[0].i = ctx->TessCtrlProgram._Current->info.tcs.vertices_out;
          else
             val[0].i = ctx->TessCtrlProgram.patch_vertices;
          return;

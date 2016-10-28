@@ -601,10 +601,8 @@ void
 ir_to_mesa_visitor::visit(ir_variable *ir)
 {
    if (strcmp(ir->name, "gl_FragCoord") == 0) {
-      struct gl_fragment_program *fp = (struct gl_fragment_program *)this->prog;
-
-      fp->OriginUpperLeft = ir->data.origin_upper_left;
-      fp->PixelCenterInteger = ir->data.pixel_center_integer;
+      this->prog->OriginUpperLeft = ir->data.origin_upper_left;
+      this->prog->PixelCenterInteger = ir->data.pixel_center_integer;
    }
 
    if (ir->data.mode == ir_var_uniform && strncmp(ir->name, "gl_", 3) == 0) {
@@ -2926,8 +2924,7 @@ get_mesa_program(struct gl_context *ctx,
 
    /* Set the gl_FragDepth layout. */
    if (target == GL_FRAGMENT_PROGRAM_ARB) {
-      struct gl_fragment_program *fp = (struct gl_fragment_program *)prog;
-      fp->FragDepthLayout = shader_program->FragDepthLayout;
+      prog->info.fs.depth_layout = shader_program->FragDepthLayout;
    }
 
    _mesa_reference_program(ctx, &shader->Program, prog);
@@ -2997,8 +2994,7 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
 	 progress = lower_if_to_cond_assign(ir, options->MaxIfDepth) || progress;
 
-	 if (options->EmitNoNoise)
-	    progress = lower_noise(ir) || progress;
+         progress = lower_noise(ir) || progress;
 
 	 /* If there are forms of indirect addressing that the driver
 	  * cannot handle, perform the lowering pass.
@@ -3029,7 +3025,7 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       linked_prog = get_mesa_program(ctx, prog, prog->_LinkedShaders[i]);
 
       if (linked_prog) {
-         _mesa_copy_linked_program_data((gl_shader_stage) i, prog, linked_prog);
+         _mesa_copy_linked_program_data(prog, prog->_LinkedShaders[i]);
 
          if (!ctx->Driver.ProgramStringNotify(ctx,
                                               _mesa_shader_stage_to_program(i),

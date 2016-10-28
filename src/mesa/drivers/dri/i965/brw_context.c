@@ -31,6 +31,7 @@
   */
 
 
+#include "compiler/nir/nir.h"
 #include "main/api_exec.h"
 #include "main/context.h"
 #include "main/fbobject.h"
@@ -304,7 +305,7 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
    /* Resolve color buffers for non-coherent framebuffer fetch. */
    if (!ctx->Extensions.MESA_shader_framebuffer_fetch &&
        ctx->FragmentProgram._Current &&
-       ctx->FragmentProgram._Current->Base.OutputsRead) {
+       ctx->FragmentProgram._Current->info.outputs_read) {
       const struct gl_framebuffer *fb = ctx->DrawBuffer;
 
       for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
@@ -444,7 +445,7 @@ brw_init_driver_functions(struct brw_context *brw,
    intelInitBufferFuncs(functions);
    intelInitPixelFuncs(functions);
    intelInitBufferObjectFuncs(functions);
-   intel_init_syncobj_functions(functions);
+   brw_init_syncobj_functions(functions);
    brw_init_object_purgeable_functions(functions);
 
    brwInitFragProgFuncs( functions );
@@ -776,8 +777,9 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.MaxViewportHeight = 32768;
    }
 
-   /* ARB_viewport_array */
-   if (brw->gen >= 6 && ctx->API == API_OPENGL_CORE) {
+   /* ARB_viewport_array, OES_viewport_array */
+   if ((brw->gen >= 6 && ctx->API == API_OPENGL_CORE) ||
+       (brw->gen >= 8  && ctx->API == API_OPENGLES2)) {
       ctx->Const.MaxViewports = GEN6_NUM_VIEWPORTS;
       ctx->Const.ViewportSubpixelBits = 0;
 
@@ -1085,6 +1087,7 @@ brwCreateContext(gl_api api,
    brw->prim_restart.enable_cut_index = false;
    brw->gs.enabled = false;
    brw->sf.viewport_transform_enable = true;
+   brw->clip.viewport_count = 1;
 
    brw->predicate.state = BRW_PREDICATE_STATE_RENDER;
 
@@ -1104,8 +1107,10 @@ brwCreateContext(gl_api api,
       brw->perf_debug = true;
    }
 
-   if ((flags & __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS) != 0)
+   if ((flags & __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS) != 0) {
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT_ARB;
+      ctx->Const.RobustAccess = GL_TRUE;
+   }
 
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_init_shader_time(brw);

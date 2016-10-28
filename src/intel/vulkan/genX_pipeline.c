@@ -26,8 +26,8 @@
 #include "genxml/gen_macros.h"
 #include "genxml/genX_pack.h"
 
-VkResult
-genX(compute_pipeline_create)(
+static VkResult
+compute_pipeline_create(
     VkDevice                                    _device,
     struct anv_pipeline_cache *                 cache,
     const VkComputePipelineCreateInfo*          pCreateInfo,
@@ -43,7 +43,7 @@ genX(compute_pipeline_create)(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
 
-   pipeline = anv_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
+   pipeline = vk_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (pipeline == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -56,7 +56,7 @@ genX(compute_pipeline_create)(
    result = anv_reloc_list_init(&pipeline->batch_relocs,
                                 pAllocator ? pAllocator : &device->alloc);
    if (result != VK_SUCCESS) {
-      anv_free2(&device->alloc, pAllocator, pipeline);
+      vk_free2(&device->alloc, pAllocator, pipeline);
       return result;
    }
    pipeline->batch.next = pipeline->batch.start = pipeline->batch_data;
@@ -82,11 +82,9 @@ genX(compute_pipeline_create)(
                                     pCreateInfo->stage.pName,
                                     pCreateInfo->stage.pSpecializationInfo);
    if (result != VK_SUCCESS) {
-      anv_free2(&device->alloc, pAllocator, pipeline);
+      vk_free2(&device->alloc, pAllocator, pipeline);
       return result;
    }
-
-   pipeline->use_repclear = false;
 
    const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(pipeline);
 
@@ -132,6 +130,65 @@ genX(compute_pipeline_create)(
    }
 
    *pPipeline = anv_pipeline_to_handle(pipeline);
+
+   return VK_SUCCESS;
+}
+
+VkResult genX(CreateGraphicsPipelines)(
+    VkDevice                                    _device,
+    VkPipelineCache                             pipelineCache,
+    uint32_t                                    count,
+    const VkGraphicsPipelineCreateInfo*         pCreateInfos,
+    const VkAllocationCallbacks*                pAllocator,
+    VkPipeline*                                 pPipelines)
+{
+   ANV_FROM_HANDLE(anv_pipeline_cache, pipeline_cache, pipelineCache);
+
+   VkResult result = VK_SUCCESS;
+
+   unsigned i = 0;
+   for (; i < count; i++) {
+      result = genX(graphics_pipeline_create)(_device,
+                                              pipeline_cache,
+                                              &pCreateInfos[i],
+                                              pAllocator, &pPipelines[i]);
+      if (result != VK_SUCCESS) {
+         for (unsigned j = 0; j < i; j++) {
+            anv_DestroyPipeline(_device, pPipelines[j], pAllocator);
+         }
+
+         return result;
+      }
+   }
+
+   return VK_SUCCESS;
+}
+
+VkResult genX(CreateComputePipelines)(
+    VkDevice                                    _device,
+    VkPipelineCache                             pipelineCache,
+    uint32_t                                    count,
+    const VkComputePipelineCreateInfo*          pCreateInfos,
+    const VkAllocationCallbacks*                pAllocator,
+    VkPipeline*                                 pPipelines)
+{
+   ANV_FROM_HANDLE(anv_pipeline_cache, pipeline_cache, pipelineCache);
+
+   VkResult result = VK_SUCCESS;
+
+   unsigned i = 0;
+   for (; i < count; i++) {
+      result = compute_pipeline_create(_device, pipeline_cache,
+                                       &pCreateInfos[i],
+                                       pAllocator, &pPipelines[i]);
+      if (result != VK_SUCCESS) {
+         for (unsigned j = 0; j < i; j++) {
+            anv_DestroyPipeline(_device, pPipelines[j], pAllocator);
+         }
+
+         return result;
+      }
+   }
 
    return VK_SUCCESS;
 }

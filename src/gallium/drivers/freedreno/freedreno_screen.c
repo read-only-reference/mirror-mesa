@@ -138,6 +138,8 @@ fd_screen_destroy(struct pipe_screen *pscreen)
 
 	fd_bc_fini(&screen->batch_cache);
 
+	slab_destroy_parent(&screen->transfer_pool);
+
 	pipe_mutex_destroy(screen->lock);
 
 	free(screen);
@@ -285,6 +287,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
 	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -304,6 +307,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 			return PIPE_MAX_SO_BUFFERS;
 		return 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
 		if (is_ir3(screen))
 			return 1;
 		return 0;
@@ -695,6 +699,8 @@ fd_screen_create(struct fd_device *dev)
 
 	pscreen->fence_reference = fd_screen_fence_ref;
 	pscreen->fence_finish = fd_screen_fence_finish;
+
+	slab_create_parent(&screen->transfer_pool, sizeof(struct fd_transfer), 16);
 
 	util_format_s3tc_init();
 

@@ -390,7 +390,7 @@ handleVAEncPictureParameterBufferType(vlVaDriver *drv, vlVaContext *context, vlV
    context->desc.h264enc.frame_num = h264->frame_num;
    context->desc.h264enc.not_referenced = false;
    context->desc.h264enc.is_idr = (h264->pic_fields.bits.idr_pic_flag == 1);
-   context->desc.h264enc.pic_order_cnt = h264->CurrPic.TopFieldOrderCnt / 2;
+   context->desc.h264enc.pic_order_cnt = h264->CurrPic.TopFieldOrderCnt;
    if (context->desc.h264enc.is_idr)
       context->desc.h264enc.i_remain = 1;
    else
@@ -578,6 +578,9 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
    }
 
    context->decoder->end_frame(context->decoder, context->target, &context->desc.base);
+   if (context->decoder->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE &&
+       context->desc.h264enc.p_remain == 1)
+      context->decoder->flush(context->decoder);
    pipe_mutex_unlock(drv->mutex);
    return VA_STATUS_SUCCESS;
 }

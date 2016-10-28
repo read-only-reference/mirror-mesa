@@ -41,18 +41,17 @@ brw_upload_tes_pull_constants(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->tes.base;
 
    /* BRW_NEW_TESS_PROGRAMS */
-   struct brw_tess_eval_program *dp =
-      (struct brw_tess_eval_program *) brw->tess_eval_program;
+   struct brw_program *dp = (struct brw_program *) brw->tess_eval_program;
 
    if (!dp)
       return;
 
    /* BRW_NEW_TES_PROG_DATA */
-   const struct brw_stage_prog_data *prog_data = &brw->tes.prog_data->base.base;
+   const struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
 
    _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_EVAL);
    /* _NEW_PROGRAM_CONSTANTS */
-   brw_upload_pull_constants(brw, BRW_NEW_TES_CONSTBUF, &dp->program.Base,
+   brw_upload_pull_constants(brw, BRW_NEW_TES_CONSTBUF, &dp->program,
                              stage_state, prog_data);
 }
 
@@ -80,7 +79,7 @@ brw_upload_tes_ubo_surfaces(struct brw_context *brw)
       return;
 
    /* BRW_NEW_TES_PROG_DATA */
-   struct brw_stage_prog_data *prog_data = &brw->tes.prog_data->base.base;
+   struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
 
    brw_upload_ubo_surfaces(brw, prog->_LinkedShaders[MESA_SHADER_TESS_EVAL],
 			   &brw->tes.base, prog_data);
@@ -108,7 +107,7 @@ brw_upload_tes_abo_surfaces(struct brw_context *brw)
    if (prog) {
       /* BRW_NEW_TES_PROG_DATA */
       brw_upload_abo_surfaces(brw, prog->_LinkedShaders[MESA_SHADER_TESS_EVAL],
-                              &brw->tes.base, &brw->tes.prog_data->base.base);
+                              &brw->tes.base, brw->tes.base.prog_data);
    }
 }
 
@@ -134,7 +133,7 @@ brw_upload_tes_image_surfaces(struct brw_context *brw)
    if (prog) {
       /* BRW_NEW_TES_PROG_DATA, BRW_NEW_IMAGE_UNITS */
       brw_upload_image_surfaces(brw, prog->_LinkedShaders[MESA_SHADER_TESS_EVAL],
-                                &brw->tes.base, &brw->tes.prog_data->base.base);
+                                &brw->tes.base, brw->tes.base.prog_data);
    }
 }
 

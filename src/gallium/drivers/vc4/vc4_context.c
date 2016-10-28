@@ -70,6 +70,10 @@ static void
 vc4_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
+        struct vc4_resource *rsc = vc4_resource(prsc);
+
+        rsc->initialized_buffers = 0;
+
         struct hash_entry *entry = _mesa_hash_table_search(vc4->write_jobs,
                                                            prsc);
         if (!entry)
@@ -96,7 +100,7 @@ vc4_context_destroy(struct pipe_context *pctx)
         if (vc4->uploader)
                 u_upload_destroy(vc4->uploader);
 
-        slab_destroy(&vc4->transfer_pool);
+        slab_destroy_child(&vc4->transfer_pool);
 
         pipe_surface_reference(&vc4->framebuffer.cbufs[0], NULL);
         pipe_surface_reference(&vc4->framebuffer.zsbuf, NULL);
@@ -139,8 +143,7 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 
         vc4->fd = screen->fd;
 
-        slab_create(&vc4->transfer_pool, sizeof(struct vc4_transfer),
-                         16);
+        slab_create_child(&vc4->transfer_pool, &screen->transfer_pool);
         vc4->blitter = util_blitter_create(pctx);
         if (!vc4->blitter)
                 goto fail;

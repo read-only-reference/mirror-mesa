@@ -566,15 +566,15 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
 
       if (ctx->Extensions.ARB_vertex_program) {
          save->VertexProgramEnabled = ctx->VertexProgram.Enabled;
-         _mesa_reference_vertprog(ctx, &save->VertexProgram,
-				  ctx->VertexProgram.Current);
+         _mesa_reference_program(ctx, &save->VertexProgram,
+                                 ctx->VertexProgram.Current);
          _mesa_set_enable(ctx, GL_VERTEX_PROGRAM_ARB, GL_FALSE);
       }
 
       if (ctx->Extensions.ARB_fragment_program) {
          save->FragmentProgramEnabled = ctx->FragmentProgram.Enabled;
-         _mesa_reference_fragprog(ctx, &save->FragmentProgram,
-				  ctx->FragmentProgram.Current);
+         _mesa_reference_program(ctx, &save->FragmentProgram,
+                                 ctx->FragmentProgram.Current);
          _mesa_set_enable(ctx, GL_FRAGMENT_PROGRAM_ARB, GL_FALSE);
       }
 
@@ -729,7 +729,7 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
        */
       if (ctx->Color.ClampFragmentColor != GL_TRUE &&
           ctx->Extensions.ARB_color_buffer_float)
-	 _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
+         _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
    }
 
    if (state & MESA_META_CLAMP_VERTEX_COLOR) {
@@ -747,17 +747,17 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
       save->CondRenderMode = ctx->Query.CondRenderMode;
 
       if (ctx->Query.CondRenderQuery)
-	 _mesa_EndConditionalRender();
+         _mesa_EndConditionalRender();
    }
 
    if (state & MESA_META_SELECT_FEEDBACK) {
       save->RenderMode = ctx->RenderMode;
       if (ctx->RenderMode == GL_SELECT) {
-	 save->Select = ctx->Select; /* struct copy */
-	 _mesa_RenderMode(GL_RENDER);
+         save->Select = ctx->Select; /* struct copy */
+         _mesa_RenderMode(GL_RENDER);
       } else if (ctx->RenderMode == GL_FEEDBACK) {
-	 save->Feedback = ctx->Feedback; /* struct copy */
-	 _mesa_RenderMode(GL_RENDER);
+         save->Feedback = ctx->Feedback; /* struct copy */
+         _mesa_RenderMode(GL_RENDER);
       }
    }
 
@@ -945,17 +945,17 @@ _mesa_meta_end(struct gl_context *ctx)
       if (ctx->Extensions.ARB_vertex_program) {
          _mesa_set_enable(ctx, GL_VERTEX_PROGRAM_ARB,
                           save->VertexProgramEnabled);
-         _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, 
-                                  save->VertexProgram);
-	 _mesa_reference_vertprog(ctx, &save->VertexProgram, NULL);
+         _mesa_reference_program(ctx, &ctx->VertexProgram.Current,
+                                 save->VertexProgram);
+         _mesa_reference_program(ctx, &save->VertexProgram, NULL);
       }
 
       if (ctx->Extensions.ARB_fragment_program) {
          _mesa_set_enable(ctx, GL_FRAGMENT_PROGRAM_ARB,
                           save->FragmentProgramEnabled);
-         _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current,
-                                  save->FragmentProgram);
-	 _mesa_reference_fragprog(ctx, &save->FragmentProgram, NULL);
+         _mesa_reference_program(ctx, &ctx->FragmentProgram.Current,
+                                 save->FragmentProgram);
+         _mesa_reference_program(ctx, &save->FragmentProgram, NULL);
       }
 
       if (ctx->Extensions.ATI_fragment_shader) {
@@ -1046,11 +1046,11 @@ _mesa_meta_end(struct gl_context *ctx)
 
       /* restore texture objects for unit[0] only */
       for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
-	 if (ctx->Texture.Unit[0].CurrentTex[tgt] != save->CurrentTexture[tgt]) {
-	    FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-	    _mesa_reference_texobj(&ctx->Texture.Unit[0].CurrentTex[tgt],
-				   save->CurrentTexture[tgt]);
-	 }
+         if (ctx->Texture.Unit[0].CurrentTex[tgt] != save->CurrentTexture[tgt]) {
+            FLUSH_VERTICES(ctx, _NEW_TEXTURE);
+            _mesa_reference_texobj(&ctx->Texture.Unit[0].CurrentTex[tgt],
+                                   save->CurrentTexture[tgt]);
+         }
          _mesa_reference_texobj(&save->CurrentTexture[tgt], NULL);
       }
 
@@ -1127,17 +1127,17 @@ _mesa_meta_end(struct gl_context *ctx)
 
    if (state & MESA_META_CONDITIONAL_RENDER) {
       if (save->CondRenderQuery)
-	 _mesa_BeginConditionalRender(save->CondRenderQuery->Id,
-				      save->CondRenderMode);
+         _mesa_BeginConditionalRender(save->CondRenderQuery->Id,
+                                      save->CondRenderMode);
    }
 
    if (state & MESA_META_SELECT_FEEDBACK) {
       if (save->RenderMode == GL_SELECT) {
-	 _mesa_RenderMode(GL_SELECT);
-	 ctx->Select = save->Select;
+         _mesa_RenderMode(GL_SELECT);
+         ctx->Select = save->Select;
       } else if (save->RenderMode == GL_FEEDBACK) {
-	 _mesa_RenderMode(GL_FEEDBACK);
-	 ctx->Feedback = save->Feedback;
+         _mesa_RenderMode(GL_FEEDBACK);
+         ctx->Feedback = save->Feedback;
       }
    }
 
@@ -1429,17 +1429,17 @@ _mesa_meta_setup_drawpix_texture(struct gl_context *ctx,
                           tex->Width, tex->Height, 0, format, type, pixels);
       }
       else {
-	 struct gl_buffer_object *save_unpack_obj = NULL;
+         struct gl_buffer_object *save_unpack_obj = NULL;
 
-	 _mesa_reference_buffer_object(ctx, &save_unpack_obj,
-				       ctx->Unpack.BufferObj);
-	 _mesa_BindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+         _mesa_reference_buffer_object(ctx, &save_unpack_obj,
+                                       ctx->Unpack.BufferObj);
+         _mesa_BindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
          /* create empty texture */
          _mesa_TexImage2D(tex->Target, 0, tex->IntFormat,
                           tex->Width, tex->Height, 0, format, type, NULL);
-	 if (save_unpack_obj != NULL)
-	    _mesa_BindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB,
-				save_unpack_obj->Name);
+         if (save_unpack_obj != NULL)
+            _mesa_BindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB,
+                             save_unpack_obj->Name);
          /* load image */
          _mesa_TexSubImage2D(tex->Target, 0,
                              0, 0, width, height, format, type, pixels);
@@ -1703,16 +1703,16 @@ meta_clear(struct gl_context *ctx, GLbitfield buffers, bool glsl)
    int i;
 
    metaSave = (MESA_META_ALPHA_TEST |
-	       MESA_META_BLEND |
+               MESA_META_BLEND |
                MESA_META_COLOR_MASK |
-	       MESA_META_DEPTH_TEST |
-	       MESA_META_RASTERIZATION |
-	       MESA_META_SHADER |
-	       MESA_META_STENCIL_TEST |
-	       MESA_META_VERTEX |
-	       MESA_META_VIEWPORT |
-	       MESA_META_CLIP |
-	       MESA_META_CLAMP_FRAGMENT_COLOR |
+               MESA_META_DEPTH_TEST |
+               MESA_META_RASTERIZATION |
+               MESA_META_SHADER |
+               MESA_META_STENCIL_TEST |
+               MESA_META_VERTEX |
+               MESA_META_VIEWPORT |
+               MESA_META_CLIP |
+               MESA_META_CLAMP_FRAGMENT_COLOR |
                MESA_META_MULTISAMPLE |
                MESA_META_OCCLUSION_QUERY);
 
@@ -1750,7 +1750,7 @@ meta_clear(struct gl_context *ctx, GLbitfield buffers, bool glsl)
       z = invert_z(ctx->Depth.Clear);
    }
 
-   if (fb->_IntegerColor) {
+   if (fb->_IntegerBuffers) {
       assert(glsl);
       _mesa_meta_use_program(ctx, clear->IntegerShaderProg);
       _mesa_Uniform4iv(0, 1, ctx->Color.ClearColor.i);
@@ -2123,8 +2123,8 @@ _mesa_meta_DrawPixels(struct gl_context *ctx,
        * point.
        */
       if (ctx->Color.ClampFragmentColor != GL_TRUE &&
-	  ctx->Extensions.ARB_texture_float)
-	 texIntFormat = GL_RGBA32F;
+          ctx->Extensions.ARB_texture_float)
+         texIntFormat = GL_RGBA32F;
    }
    else if (_mesa_is_stencil_format(format)) {
       if (ctx->Extensions.ARB_fragment_program &&
@@ -2312,24 +2312,24 @@ alpha_test_raster_color(struct gl_context *ctx)
 
    switch (ctx->Color.AlphaFunc) {
       case GL_NEVER:
-	 return GL_FALSE;
+         return GL_FALSE;
       case GL_LESS:
-	 return alpha < ref;
+         return alpha < ref;
       case GL_EQUAL:
-	 return alpha == ref;
+         return alpha == ref;
       case GL_LEQUAL:
-	 return alpha <= ref;
+         return alpha <= ref;
       case GL_GREATER:
-	 return alpha > ref;
+         return alpha > ref;
       case GL_NOTEQUAL:
-	 return alpha != ref;
+         return alpha != ref;
       case GL_GEQUAL:
-	 return alpha >= ref;
+         return alpha >= ref;
       case GL_ALWAYS:
-	 return GL_TRUE;
+         return GL_TRUE;
       default:
-	 assert(0);
-	 return GL_FALSE;
+         assert(0);
+         return GL_FALSE;
    }
 }
 
@@ -2768,7 +2768,7 @@ get_temp_image_type(struct gl_context *ctx, mesa_format format)
          return GL_UNSIGNED_INT_24_8;
    default:
       _mesa_problem(ctx, "Unexpected format %d in get_temp_image_type()",
-		    baseFormat);
+                    baseFormat);
       return 0;
    }
 }
@@ -2917,7 +2917,7 @@ _mesa_meta_CopyTexSubImage(struct gl_context *ctx, GLuint dims,
     */
    _mesa_meta_begin(ctx, MESA_META_PIXEL_STORE | MESA_META_PIXEL_TRANSFER);
    ctx->Driver.ReadPixels(ctx, x, y, width, height,
-			  format, type, &ctx->Pack, buf);
+                          format, type, &ctx->Pack, buf);
    _mesa_meta_end(ctx);
 
    _mesa_update_state(ctx); /* to update pixel transfer state */
@@ -3024,10 +3024,6 @@ decompress_texture_image(struct gl_context *ctx,
    case GL_TEXTURE_1D:
    case GL_TEXTURE_1D_ARRAY:
       assert(!"No compressed 1D textures.");
-      return false;
-
-   case GL_TEXTURE_3D:
-      assert(!"No compressed 3D textures.");
       return false;
 
    case GL_TEXTURE_CUBE_MAP_ARRAY:
@@ -3204,8 +3200,8 @@ decompress_texture_image(struct gl_context *ctx,
       if (_mesa_need_luminance_to_rgb_conversion(baseTexFormat,
                                                  destBaseFormat) ||
           /* If we're reading back an RGB(A) texture (using glGetTexImage) as
-	   * luminance then we need to return L=tex(R).
-	   */
+           * luminance then we need to return L=tex(R).
+           */
           _mesa_need_rgb_to_luminance_conversion(baseTexFormat,
                                                  destBaseFormat)) {
          /* Green and blue must be zero */

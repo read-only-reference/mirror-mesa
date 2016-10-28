@@ -49,7 +49,7 @@ struct YYLTYPE;
  */
 class ast_node {
 public:
-   DECLARE_RALLOC_CXX_OPERATORS(ast_node);
+   DECLARE_LINEAR_ZALLOC_CXX_OPERATORS(ast_node);
 
    /**
     * Print an AST node in something approximating the original GLSL code
@@ -553,6 +553,11 @@ struct ast_type_qualifier {
           */
          unsigned local_size:3;
 
+	 /** \name Layout qualifiers for ARB_compute_variable_group_size. */
+	 /** \{ */
+	 unsigned local_size_variable:1;
+	 /** \} */
+
 	 /** \name Layout and memory qualifiers for ARB_shader_image_load_store. */
 	 /** \{ */
 	 unsigned early_fragment_tests:1;
@@ -770,7 +775,7 @@ class ast_declarator_list;
 
 class ast_struct_specifier : public ast_node {
 public:
-   ast_struct_specifier(const char *identifier,
+   ast_struct_specifier(void *lin_ctx, const char *identifier,
 			ast_declarator_list *declarator_list);
    virtual void print(void) const;
 

@@ -21,6 +21,9 @@
  * IN THE SOFTWARE.
  */
 
+#ifndef GENX_PIPELINE_UTIL_H
+#define GENX_PIPELINE_UTIL_H
+
 #include "common/gen_l3_config.h"
 #include "common/gen_sample_positions.h"
 #include "vk_format_info.h"
@@ -53,26 +56,14 @@ vertex_element_comp_control(enum isl_format format, unsigned comp)
 
 static void
 emit_vertex_input(struct anv_pipeline *pipeline,
-                  const VkPipelineVertexInputStateCreateInfo *info,
-                  const struct anv_graphics_pipeline_create_info *extra)
+                  const VkPipelineVertexInputStateCreateInfo *info)
 {
    const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
 
-   uint32_t elements;
-   if (extra && extra->disable_vs) {
-      /* If the VS is disabled, just assume the user knows what they're
-       * doing and apply the layout blindly.  This can only come from
-       * meta, so this *should* be safe.
-       */
-      elements = 0;
-      for (uint32_t i = 0; i < info->vertexAttributeDescriptionCount; i++)
-         elements |= (1 << info->pVertexAttributeDescriptions[i].location);
-   } else {
-      /* Pull inputs_read out of the VS prog data */
-      uint64_t inputs_read = vs_prog_data->inputs_read;
-      assert((inputs_read & ((1 << VERT_ATTRIB_GENERIC0) - 1)) == 0);
-      elements = inputs_read >> VERT_ATTRIB_GENERIC0;
-   }
+   /* Pull inputs_read out of the VS prog data */
+   const uint64_t inputs_read = vs_prog_data->inputs_read;
+   assert((inputs_read & ((1 << VERT_ATTRIB_GENERIC0) - 1)) == 0);
+   const uint32_t elements = inputs_read >> VERT_ATTRIB_GENERIC0;
 
 #if GEN_GEN >= 8
    /* On BDW+, we only need to allocate space for base ids.  Setting up
@@ -135,8 +126,8 @@ emit_vertex_input(struct anv_pipeline *pipeline,
        * VERTEX_BUFFER_STATE which we emit later.
        */
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_INSTANCING), vfi) {
-         vfi.InstancingEnable = pipeline->instancing_enable[desc->binding],
-         vfi.VertexElementIndex = slot,
+         vfi.InstancingEnable = pipeline->instancing_enable[desc->binding];
+         vfi.VertexElementIndex = slot;
          /* Vulkan so far doesn't have an instance divisor, so
           * this is always 1 (ignored if not instancing). */
          vfi.InstanceDataStepRate = 1;
@@ -485,14 +476,13 @@ emit_rs_state(struct anv_pipeline *pipeline,
               const VkPipelineRasterizationStateCreateInfo *rs_info,
               const VkPipelineMultisampleStateCreateInfo *ms_info,
               const struct anv_render_pass *pass,
-              const struct anv_subpass *subpass,
-              const struct anv_graphics_pipeline_create_info *extra)
+              const struct anv_subpass *subpass)
 {
    struct GENX(3DSTATE_SF) sf = {
       GENX(3DSTATE_SF_header),
    };
 
-   sf.ViewportTransformEnable = !(extra && extra->use_rectlist);
+   sf.ViewportTransformEnable = true;
    sf.StatisticsEnable = true;
    sf.TriangleStripListProvokingVertexSelect = 0;
    sf.LineStripListProvokingVertexSelect = 0;
@@ -525,7 +515,7 @@ emit_rs_state(struct anv_pipeline *pipeline,
    raster.CullMode = vk_to_gen_cullmode[rs_info->cullMode];
    raster.FrontFaceFillMode = vk_to_gen_fillmode[rs_info->polygonMode];
    raster.BackFaceFillMode = vk_to_gen_fillmode[rs_info->polygonMode];
-   raster.ScissorRectangleEnable = !(extra && extra->use_rectlist);
+   raster.ScissorRectangleEnable = true;
 
 #if GEN_GEN >= 9
    /* GEN9+ splits ViewportZClipTestEnable into near and far enable bits */
@@ -750,10 +740,7 @@ emit_ds_state(struct anv_pipeline *pipeline,
    };
 
    VkImageAspectFlags aspects = 0;
-   if (pass->attachments == NULL) {
-      /* This comes from meta.  Assume we have verything. */
-      aspects = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-   } else if (subpass->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+   if (subpass->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
       VkFormat depth_stencil_format =
          pass->attachments[subpass->depth_stencil_attachment].format;
       aspects = vk_format_aspects(depth_stencil_format);
@@ -929,13 +916,12 @@ emit_cb_state(struct anv_pipeline *pipeline,
 static void
 emit_3dstate_clip(struct anv_pipeline *pipeline,
                   const VkPipelineViewportStateCreateInfo *vp_info,
-                  const VkPipelineRasterizationStateCreateInfo *rs_info,
-                  const struct anv_graphics_pipeline_create_info *extra)
+                  const VkPipelineRasterizationStateCreateInfo *rs_info)
 {
    const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
    (void) wm_prog_data;
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_CLIP), clip) {
-      clip.ClipEnable               = !(extra && extra->use_rectlist);
+      clip.ClipEnable               = true;
       clip.EarlyCullEnable          = true;
       clip.APIMode                  = APIMODE_D3D,
       clip.ViewportXYClipTestEnable = true;
@@ -948,7 +934,7 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
 
       clip.MinimumPointWidth = 0.125;
       clip.MaximumPointWidth = 255.875;
-      clip.MaximumVPIndex    = vp_info->viewportCount - 1;
+      clip.MaximumVPIndex    = (vp_info ? vp_info->viewportCount : 1) - 1;
 
 #if GEN_GEN == 7
       clip.FrontWinding            = vk_to_gen_front_face[rs_info->frontFace];
@@ -969,3 +955,5 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
       so.RenderingDisable = rs_info->rasterizerDiscardEnable;
    }
 }
+
+#endif /* GENX_PIPELINE_UTIL_H */

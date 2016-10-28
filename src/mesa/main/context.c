@@ -678,6 +678,9 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    /* GL_ARB_robustness */
    consts->ResetStrategy = GL_NO_RESET_NOTIFICATION_ARB;
 
+   /* GL_KHR_robustness */
+   consts->RobustAccess = GL_FALSE;
+
    /* ES 3.0 or ARB_ES3_compatibility */
    consts->MaxElementIndex = 0xffffffffu;
 
@@ -721,6 +724,12 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->MaxTessPatchComponents = MAX_TESS_PATCH_COMPONENTS;
    consts->MaxTessControlTotalOutputComponents = MAX_TESS_CONTROL_TOTAL_OUTPUT_COMPONENTS;
    consts->PrimitiveRestartForPatches = false;
+
+   /** GL_ARB_compute_variable_group_size */
+   consts->MaxComputeVariableGroupSize[0] = 512;
+   consts->MaxComputeVariableGroupSize[1] = 512;
+   consts->MaxComputeVariableGroupSize[2] = 64;
+   consts->MaxComputeVariableGroupInvocations = 512;
 }
 
 
@@ -735,9 +744,9 @@ check_context_limits(struct gl_context *ctx)
 
    /* check that we don't exceed the size of various bitfields */
    assert(VARYING_SLOT_MAX <=
-	  (8 * sizeof(ctx->VertexProgram._Current->Base.OutputsWritten)));
+	  (8 * sizeof(ctx->VertexProgram._Current->info.outputs_written)));
    assert(VARYING_SLOT_MAX <=
-	  (8 * sizeof(ctx->FragmentProgram._Current->Base.InputsRead)));
+	  (8 * sizeof(ctx->FragmentProgram._Current->info.inputs_read)));
 
    /* shader-related checks */
    assert(ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxLocalParams <= MAX_PROGRAM_LOCAL_PARAMS);
@@ -1287,17 +1296,17 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_reference_framebuffer(&ctx->DrawBuffer, NULL);
    _mesa_reference_framebuffer(&ctx->ReadBuffer, NULL);
 
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, NULL);
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram._TnlProgram, NULL);
+   _mesa_reference_program(ctx, &ctx->VertexProgram.Current, NULL);
+   _mesa_reference_program(ctx, &ctx->VertexProgram._Current, NULL);
+   _mesa_reference_program(ctx, &ctx->VertexProgram._TnlProgram, NULL);
 
-   _mesa_reference_tesscprog(ctx, &ctx->TessCtrlProgram._Current, NULL);
-   _mesa_reference_tesseprog(ctx, &ctx->TessEvalProgram._Current, NULL);
-   _mesa_reference_geomprog(ctx, &ctx->GeometryProgram._Current, NULL);
+   _mesa_reference_program(ctx, &ctx->TessCtrlProgram._Current, NULL);
+   _mesa_reference_program(ctx, &ctx->TessEvalProgram._Current, NULL);
+   _mesa_reference_program(ctx, &ctx->GeometryProgram._Current, NULL);
 
-   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current, NULL);
-   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
-   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
+   _mesa_reference_program(ctx, &ctx->FragmentProgram.Current, NULL);
+   _mesa_reference_program(ctx, &ctx->FragmentProgram._Current, NULL);
+   _mesa_reference_program(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
 
    _mesa_reference_vao(ctx, &ctx->Array.VAO, NULL);
    _mesa_reference_vao(ctx, &ctx->Array.DefaultVAO, NULL);

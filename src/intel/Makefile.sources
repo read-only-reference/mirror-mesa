@@ -10,7 +10,8 @@ COMMON_FILES = \
 	common/gen_device_info.c \
 	common/gen_device_info.h \
 	common/gen_l3_config.c \
-	common/gen_l3_config.h
+	common/gen_l3_config.h \
+	common/gen_sample_positions.h
 
 GENXML_GENERATED_FILES = \
 	genxml/gen4_pack.h \
@@ -21,6 +22,13 @@ GENXML_GENERATED_FILES = \
 	genxml/gen75_pack.h \
 	genxml/gen8_pack.h \
 	genxml/gen9_pack.h
+
+AUBINATOR_GENERATED_FILES = \
+	genxml/gen6_xml.h \
+	genxml/gen7_xml.h \
+	genxml/gen75_xml.h \
+	genxml/gen8_xml.h \
+	genxml/gen9_xml.h
 
 ISL_FILES = \
 	isl/isl.c \

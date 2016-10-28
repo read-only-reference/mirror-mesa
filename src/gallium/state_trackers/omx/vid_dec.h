@@ -100,6 +100,8 @@ DERIVEDCLASS(vid_dec_PrivateType, omx_base_filter_PrivateType)
       struct { \
          unsigned temporal_id; \
          unsigned level_idc; \
+         unsigned pic_width_in_luma_samples; \
+         unsigned pic_height_in_luma_samples; \
          bool IdrPicFlag; \
          int slice_prev_poc; \
          void *ref_pic_set_list; \
@@ -127,6 +129,7 @@ DERIVEDCLASS(vid_dec_PrivateType, omx_base_filter_PrivateType)
    bool frame_started; \
    unsigned bytes_left; \
    const void *slice; \
+   bool disable_tunnel; \
    struct vl_compositor compositor; \
    struct vl_compositor_state cstate;
 ENDCLASS(vid_dec_PrivateType)

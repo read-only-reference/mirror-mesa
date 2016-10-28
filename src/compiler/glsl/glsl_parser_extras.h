@@ -76,7 +76,7 @@ struct _mesa_glsl_parse_state {
    _mesa_glsl_parse_state(struct gl_context *_ctx, gl_shader_stage stage,
                           void *mem_ctx);
 
-   DECLARE_RALLOC_CXX_OPERATORS(_mesa_glsl_parse_state);
+   DECLARE_RZALLOC_CXX_OPERATORS(_mesa_glsl_parse_state);
 
    /**
     * Generate a string representing the GLSL version currently being compiled
@@ -333,6 +333,8 @@ struct _mesa_glsl_parse_state {
    exec_list translation_unit;
    glsl_symbol_table *symbols;
 
+   void *linalloc;
+
    unsigned num_supported_versions;
    struct {
       unsigned ver;
@@ -403,6 +405,12 @@ struct _mesa_glsl_parse_state {
     * specified.  Otherwise ignored.
     */
    unsigned cs_input_local_size[3];
+
+   /**
+    * True if a compute shader input local variable size was specified using
+    * a layout directive as specified by ARB_compute_variable_group_size.
+    */
+   bool cs_input_local_size_variable_specified;
 
    /**
     * Output layout qualifiers from GLSL 1.50 (geometry shader controls),
@@ -576,6 +584,8 @@ struct _mesa_glsl_parse_state {
    bool ARB_arrays_of_arrays_warn;
    bool ARB_compute_shader_enable;
    bool ARB_compute_shader_warn;
+   bool ARB_compute_variable_group_size_enable;
+   bool ARB_compute_variable_group_size_warn;
    bool ARB_conservative_depth_enable;
    bool ARB_conservative_depth_warn;
    bool ARB_cull_distance_enable;

@@ -51,11 +51,11 @@ static void
 brw_nir_lower_uniforms(nir_shader *nir, bool is_scalar)
 {
    if (is_scalar) {
-      nir_assign_var_locations(&nir->uniforms, &nir->num_uniforms, 0,
+      nir_assign_var_locations(&nir->uniforms, &nir->num_uniforms,
                                type_size_scalar_bytes);
       nir_lower_io(nir, nir_var_uniform, type_size_scalar_bytes, 0);
    } else {
-      nir_assign_var_locations(&nir->uniforms, &nir->num_uniforms, 0,
+      nir_assign_var_locations(&nir->uniforms, &nir->num_uniforms,
                                type_size_vec4_bytes);
       nir_lower_io(nir, nir_var_uniform, type_size_vec4_bytes, 0);
    }
@@ -130,70 +130,38 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
    struct brw_context *brw = brw_context(ctx);
 
    switch (target) {
-   case GL_VERTEX_PROGRAM_ARB: {
-      struct brw_vertex_program *prog = CALLOC_STRUCT(brw_vertex_program);
+   case GL_VERTEX_PROGRAM_ARB:
+   case GL_TESS_CONTROL_PROGRAM_NV:
+   case GL_TESS_EVALUATION_PROGRAM_NV:
+   case GL_GEOMETRY_PROGRAM_NV:
+   case GL_COMPUTE_PROGRAM_NV: {
+      struct brw_program *prog = CALLOC_STRUCT(brw_program);
       if (prog) {
 	 prog->id = get_new_program_id(brw->screen);
 
-	 return _mesa_init_gl_program(&prog->program.Base, target, id);
+	 return _mesa_init_gl_program(&prog->program, target, id);
       }
       else
 	 return NULL;
    }
 
    case GL_FRAGMENT_PROGRAM_ARB: {
-      struct brw_fragment_program *prog = CALLOC_STRUCT(brw_fragment_program);
+      struct brw_program *prog;
+      if (brw->gen < 6) {
+         struct gen4_fragment_program *g4_prog =
+            CALLOC_STRUCT(gen4_fragment_program);
+         prog = &g4_prog->base;
+      } else {
+         prog = CALLOC_STRUCT(brw_program);
+      }
+
       if (prog) {
 	 prog->id = get_new_program_id(brw->screen);
 
-	 return _mesa_init_gl_program(&prog->program.Base, target, id);
+	 return _mesa_init_gl_program(&prog->program, target, id);
       }
       else
 	 return NULL;
-   }
-
-   case GL_GEOMETRY_PROGRAM_NV: {
-      struct brw_geometry_program *prog = CALLOC_STRUCT(brw_geometry_program);
-      if (prog) {
-         prog->id = get_new_program_id(brw->screen);
-
-         return _mesa_init_gl_program(&prog->program.Base, target, id);
-      } else {
-         return NULL;
-      }
-   }
-
-   case GL_TESS_CONTROL_PROGRAM_NV: {
-      struct brw_tess_ctrl_program *prog = CALLOC_STRUCT(brw_tess_ctrl_program);
-      if (prog) {
-         prog->id = get_new_program_id(brw->screen);
-
-         return _mesa_init_gl_program(&prog->program.Base, target, id);
-      } else {
-         return NULL;
-      }
-   }
-
-   case GL_TESS_EVALUATION_PROGRAM_NV: {
-      struct brw_tess_eval_program *prog = CALLOC_STRUCT(brw_tess_eval_program);
-      if (prog) {
-         prog->id = get_new_program_id(brw->screen);
-
-         return _mesa_init_gl_program(&prog->program.Base, target, id);
-      } else {
-         return NULL;
-      }
-   }
-
-   case GL_COMPUTE_PROGRAM_NV: {
-      struct brw_compute_program *prog = CALLOC_STRUCT(brw_compute_program);
-      if (prog) {
-         prog->id = get_new_program_id(brw->screen);
-
-         return _mesa_init_gl_program(&prog->program.Base, target, id);
-      } else {
-         return NULL;
-      }
    }
 
    default:
@@ -213,15 +181,16 @@ brwProgramStringNotify(struct gl_context *ctx,
 		       GLenum target,
 		       struct gl_program *prog)
 {
+   assert(target == GL_VERTEX_PROGRAM_ARB || !prog->IsPositionInvariant);
+
    struct brw_context *brw = brw_context(ctx);
    const struct brw_compiler *compiler = brw->screen->compiler;
 
    switch (target) {
    case GL_FRAGMENT_PROGRAM_ARB: {
-      struct gl_fragment_program *fprog = (struct gl_fragment_program *) prog;
-      struct brw_fragment_program *newFP = brw_fragment_program(fprog);
-      const struct brw_fragment_program *curFP =
-         brw_fragment_program_const(brw->fragment_program);
+      struct brw_program *newFP = brw_program(prog);
+      const struct brw_program *curFP =
+         brw_program_const(brw->fragment_program);
 
       if (newFP == curFP)
 	 brw->ctx.NewDriverState |= BRW_NEW_FRAGMENT_PROGRAM;
@@ -235,10 +204,9 @@ brwProgramStringNotify(struct gl_context *ctx,
       break;
    }
    case GL_VERTEX_PROGRAM_ARB: {
-      struct gl_vertex_program *vprog = (struct gl_vertex_program *) prog;
-      struct brw_vertex_program *newVP = brw_vertex_program(vprog);
-      const struct brw_vertex_program *curVP =
-         brw_vertex_program_const(brw->vertex_program);
+      struct brw_program *newVP = brw_program(prog);
+      const struct brw_program *curVP =
+         brw_program_const(brw->vertex_program);
 
       if (newVP == curVP)
 	 brw->ctx.NewDriverState |= BRW_NEW_VERTEX_PROGRAM;

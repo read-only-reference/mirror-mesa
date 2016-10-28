@@ -26,7 +26,6 @@
  */
 
 #include "si_pipe.h"
-#include "si_shader.h"
 #include "sid.h"
 #include "radeon/r600_cs.h"
 
@@ -36,7 +35,6 @@
 #include "util/u_hash.h"
 #include "util/u_memory.h"
 #include "util/u_prim.h"
-#include "util/u_simple_shaders.h"
 
 /* SHADER_CACHE */
 
@@ -329,13 +327,23 @@ static void si_set_tesseval_regs(struct si_screen *sscreen,
 		       S_028B6C_DISTRIBUTION_MODE(distribution_mode));
 }
 
+static struct si_pm4_state *si_get_shader_pm4_state(struct si_shader *shader)
+{
+	if (shader->pm4)
+		si_pm4_clear_state(shader->pm4);
+	else
+		shader->pm4 = CALLOC_STRUCT(si_pm4_state);
+
+	return shader->pm4;
+}
+
 static void si_shader_ls(struct si_shader *shader)
 {
 	struct si_pm4_state *pm4;
 	unsigned vgpr_comp_cnt;
 	uint64_t va;
 
-	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
+	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
 		return;
 
@@ -363,7 +371,7 @@ static void si_shader_hs(struct si_shader *shader)
 	struct si_pm4_state *pm4;
 	uint64_t va;
 
-	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
+	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
 		return;
 
@@ -391,8 +399,7 @@ static void si_shader_es(struct si_screen *sscreen, struct si_shader *shader)
 	uint64_t va;
 	unsigned oc_lds_en;
 
-	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
-
+	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
 		return;
 
@@ -467,8 +474,7 @@ static void si_shader_gs(struct si_shader *shader)
 	/* The GSVS_RING_ITEMSIZE register takes 15 bits */
 	assert(gsvs_itemsize < (1 << 15));
 
-	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
-
+	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
 		return;
 
@@ -525,8 +531,7 @@ static void si_shader_vs(struct si_screen *sscreen, struct si_shader *shader,
 	   shader->selector->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
 	bool enable_prim_id = si_vs_exports_prim_id(shader);
 
-	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
-
+	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
 		return;
 
@@ -688,9 +693,42 @@ static void si_shader_ps(struct si_shader *shader)
 	       G_0286CC_LINEAR_CENTER_ENA(input_ena) ||
 	       G_0286CC_LINEAR_CENTROID_ENA(input_ena) ||
 	       G_0286CC_LINE_STIPPLE_TEX_ENA(input_ena));
+	/* POS_W_FLOAT_ENA requires one of the perspective weights. */
+	assert(!G_0286CC_POS_W_FLOAT_ENA(input_ena) ||
+	       G_0286CC_PERSP_SAMPLE_ENA(input_ena) ||
+	       G_0286CC_PERSP_CENTER_ENA(input_ena) ||
+	       G_0286CC_PERSP_CENTROID_ENA(input_ena) ||
+	       G_0286CC_PERSP_PULL_MODEL_ENA(input_ena));
 
-	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
+	/* Validate interpolation optimization flags (read as implications). */
+	assert(!shader->key.ps.prolog.bc_optimize_for_persp ||
+	       (G_0286CC_PERSP_CENTER_ENA(input_ena) &&
+		G_0286CC_PERSP_CENTROID_ENA(input_ena)));
+	assert(!shader->key.ps.prolog.bc_optimize_for_linear ||
+	       (G_0286CC_LINEAR_CENTER_ENA(input_ena) &&
+		G_0286CC_LINEAR_CENTROID_ENA(input_ena)));
+	assert(!shader->key.ps.prolog.force_persp_center_interp ||
+	       (!G_0286CC_PERSP_SAMPLE_ENA(input_ena) &&
+		!G_0286CC_PERSP_CENTROID_ENA(input_ena)));
+	assert(!shader->key.ps.prolog.force_linear_center_interp ||
+	       (!G_0286CC_LINEAR_SAMPLE_ENA(input_ena) &&
+		!G_0286CC_LINEAR_CENTROID_ENA(input_ena)));
+	assert(!shader->key.ps.prolog.force_persp_sample_interp ||
+	       (!G_0286CC_PERSP_CENTER_ENA(input_ena) &&
+		!G_0286CC_PERSP_CENTROID_ENA(input_ena)));
+	assert(!shader->key.ps.prolog.force_linear_sample_interp ||
+	       (!G_0286CC_LINEAR_CENTER_ENA(input_ena) &&
+		!G_0286CC_LINEAR_CENTROID_ENA(input_ena)));
 
+	/* Validate cases when the optimizations are off (read as implications). */
+	assert(shader->key.ps.prolog.bc_optimize_for_persp ||
+	       !G_0286CC_PERSP_CENTER_ENA(input_ena) ||
+	       !G_0286CC_PERSP_CENTROID_ENA(input_ena));
+	assert(shader->key.ps.prolog.bc_optimize_for_linear ||
+	       !G_0286CC_LINEAR_CENTER_ENA(input_ena) ||
+	       !G_0286CC_LINEAR_CENTROID_ENA(input_ena));
+
+	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
 		return;
 
@@ -769,32 +807,11 @@ static void si_shader_ps(struct si_shader *shader)
 		       S_00B02C_EXTRA_LDS_SIZE(shader->config.lds_size) |
 		       S_00B02C_USER_SGPR(SI_PS_NUM_USER_SGPR) |
 		       S_00B32C_SCRATCH_EN(shader->config.scratch_bytes_per_wave > 0));
-
-	/* Prefer RE_Z if the shader is complex enough. The requirement is either:
-	 * - the shader uses at least 2 VMEM instructions, or
-	 * - the code size is at least 50 2-dword instructions or 100 1-dword
-	 *   instructions.
-	 *
-	 * Shaders with side effects that must execute independently of the
-	 * depth test require LATE_Z.
-	 */
-	if (info->writes_memory &&
-	    !info->properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL])
-		shader->z_order = V_02880C_LATE_Z;
-	else if (info->num_memory_instructions >= 2 ||
-	         shader->binary.code_size > 100*4)
-		shader->z_order = V_02880C_EARLY_Z_THEN_RE_Z;
-	else
-		shader->z_order = V_02880C_EARLY_Z_THEN_LATE_Z;
 }
 
 static void si_shader_init_pm4_state(struct si_screen *sscreen,
                                      struct si_shader *shader)
 {
-
-	if (shader->pm4)
-		si_pm4_free_state_simple(shader->pm4);
-
 	switch (shader->selector->type) {
 	case PIPE_SHADER_VERTEX:
 		if (shader->key.vs.as_ls)
@@ -828,8 +845,7 @@ static void si_shader_init_pm4_state(struct si_screen *sscreen,
 static unsigned si_get_alpha_test_func(struct si_context *sctx)
 {
 	/* Alpha-test should be disabled if colorbuffer 0 is integer. */
-	if (sctx->queued.named.dsa &&
-	    !sctx->framebuffer.cb0_is_integer)
+	if (sctx->queued.named.dsa)
 		return sctx->queued.named.dsa->alpha_func;
 
 	return PIPE_FUNC_ALWAYS;
@@ -940,8 +956,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 
 			if (sctx->queued.named.blend) {
 				key->ps.epilog.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
-							      rs->multisample_enable &&
-							      !sctx->framebuffer.cb0_is_integer;
+							      rs->multisample_enable;
 			}
 
 			key->ps.prolog.poly_stipple = rs->poly_stipple_enable && is_poly;
@@ -1199,6 +1214,12 @@ void si_init_shader_selector_async(void *job, int thread_index)
 			key.tcs.epilog.prim_mode = PIPE_PRIM_TRIANGLES;
 			break;
 		case PIPE_SHADER_FRAGMENT:
+			key.ps.prolog.bc_optimize_for_persp =
+				sel->info.uses_persp_center &&
+				sel->info.uses_persp_centroid;
+			key.ps.prolog.bc_optimize_for_linear =
+				sel->info.uses_linear_center &&
+				sel->info.uses_linear_centroid;
 			key.ps.epilog.alpha_func = PIPE_FUNC_ALWAYS;
 			for (i = 0; i < 8; i++)
 				if (sel->info.colors_written & (1 << i))
@@ -1334,12 +1355,38 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 		break;
 	}
 
-	if (sel->info.properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL])
-		sel->db_shader_control |= S_02880C_DEPTH_BEFORE_SHADER(1);
+	/* Z_ORDER, EXEC_ON_HIER_FAIL and EXEC_ON_NOOP should be set as following:
+	 *
+	 *   | early Z/S | writes_mem | allow_ReZ? |      Z_ORDER       | EXEC_ON_HIER_FAIL | EXEC_ON_NOOP
+	 * --|-----------|------------|------------|--------------------|-------------------|-------------
+	 * 1a|   false   |   false    |   true     | EarlyZ_Then_ReZ    |         0         |     0
+	 * 1b|   false   |   false    |   false    | EarlyZ_Then_LateZ  |         0         |     0
+	 * 2 |   false   |   true     |   n/a      |       LateZ        |         1         |     0
+	 * 3 |   true    |   false    |   n/a      | EarlyZ_Then_LateZ  |         0         |     0
+	 * 4 |   true    |   true     |   n/a      | EarlyZ_Then_LateZ  |         0         |     1
+	 *
+	 * In cases 3 and 4, HW will force Z_ORDER to EarlyZ regardless of what's set in the register.
+	 * In case 2, NOOP_CULL is a don't care field. In case 2, 3 and 4, ReZ doesn't make sense.
+	 *
+	 * Don't use ReZ without profiling !!!
+	 *
+	 * ReZ decreases performance by 15% in DiRT: Showdown on Ultra settings, which has pretty complex
+	 * shaders.
+	 */
+	if (sel->info.properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL]) {
+		/* Cases 3, 4. */
+		sel->db_shader_control |= S_02880C_DEPTH_BEFORE_SHADER(1) |
+					  S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z) |
+					  S_02880C_EXEC_ON_NOOP(sel->info.writes_memory);
+	} else if (sel->info.writes_memory) {
+		/* Case 2. */
+		sel->db_shader_control |= S_02880C_Z_ORDER(V_02880C_LATE_Z) |
+					  S_02880C_EXEC_ON_HIER_FAIL(1);
+	} else {
+		/* Case 1. */
+		sel->db_shader_control |= S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z);
+	}
 
-	if (sel->info.writes_memory)
-		sel->db_shader_control |= S_02880C_EXEC_ON_HIER_FAIL(1) |
-					  S_02880C_EXEC_ON_NOOP(1);
 	pipe_mutex_init(sel->mutex);
 	util_queue_fence_init(&sel->ready);
 
@@ -1520,7 +1567,7 @@ static unsigned si_get_ps_input_cntl(struct si_context *sctx,
 				     unsigned index, unsigned interpolate)
 {
 	struct tgsi_shader_info *vsinfo = &vs->selector->info;
-	unsigned j, ps_input_cntl = 0;
+	unsigned j, offset, ps_input_cntl = 0;
 
 	if (interpolate == TGSI_INTERPOLATE_CONSTANT ||
 	    (interpolate == TGSI_INTERPOLATE_COLOR && sctx->flatshade))
@@ -1535,7 +1582,20 @@ static unsigned si_get_ps_input_cntl(struct si_context *sctx,
 	for (j = 0; j < vsinfo->num_outputs; j++) {
 		if (name == vsinfo->output_semantic_name[j] &&
 		    index == vsinfo->output_semantic_index[j]) {
-			ps_input_cntl |= S_028644_OFFSET(vs->info.vs_output_param_offset[j]);
+			offset = vs->info.vs_output_param_offset[j];
+
+			if (offset <= EXP_PARAM_OFFSET_31) {
+				/* The input is loaded from parameter memory. */
+				ps_input_cntl |= S_028644_OFFSET(offset);
+			} else if (!G_028644_PT_SPRITE_TEX(ps_input_cntl)) {
+				/* The input is a DEFAULT_VAL constant. */
+				assert(offset >= EXP_PARAM_DEFAULT_VAL_0000 &&
+				       offset <= EXP_PARAM_DEFAULT_VAL_1111);
+
+				offset -= EXP_PARAM_DEFAULT_VAL_0000;
+				ps_input_cntl = S_028644_OFFSET(0x20) |
+						S_028644_DEFAULT_VAL(offset);
+			}
 			break;
 		}
 	}
@@ -1670,7 +1730,7 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 
 	if (update_esgs) {
 		pipe_resource_reference(&sctx->esgs_ring, NULL);
-		sctx->esgs_ring = pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
+		sctx->esgs_ring = pipe_buffer_create(sctx->b.b.screen, 0,
 						     PIPE_USAGE_DEFAULT,
 						     esgs_ring_size);
 		if (!sctx->esgs_ring)
@@ -1679,7 +1739,7 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 
 	if (update_gsvs) {
 		pipe_resource_reference(&sctx->gsvs_ring, NULL);
-		sctx->gsvs_ring = pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
+		sctx->gsvs_ring = pipe_buffer_create(sctx->b.b.screen, 0,
 						     PIPE_USAGE_DEFAULT,
 						     gsvs_ring_size);
 		if (!sctx->gsvs_ring)
@@ -1845,8 +1905,8 @@ static bool si_update_spi_tmpring_size(struct si_context *sctx)
 			/* Create a bigger scratch buffer */
 			r600_resource_reference(&sctx->scratch_buffer, NULL);
 
-			sctx->scratch_buffer =
-					si_resource_create_custom(&sctx->screen->b.b,
+			sctx->scratch_buffer = (struct r600_resource*)
+					pipe_buffer_create(&sctx->screen->b.b, 0,
 	                                PIPE_USAGE_DEFAULT, scratch_needed_size);
 			if (!sctx->scratch_buffer)
 				return false;
@@ -1948,7 +2008,7 @@ static void si_init_tess_factor_ring(struct si_context *sctx)
 	}
 
 	assert(!sctx->tf_ring);
-	sctx->tf_ring = pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
+	sctx->tf_ring = pipe_buffer_create(sctx->b.b.screen, 0,
 					   PIPE_USAGE_DEFAULT,
 					   32768 * sctx->screen->b.info.max_se);
 	if (!sctx->tf_ring)
@@ -1956,8 +2016,7 @@ static void si_init_tess_factor_ring(struct si_context *sctx)
 
 	assert(((sctx->tf_ring->width0 / 4) & C_030938_SIZE) == 0);
 
-	sctx->tess_offchip_ring = pipe_buffer_create(sctx->b.b.screen,
-	                                             PIPE_BIND_CUSTOM,
+	sctx->tess_offchip_ring = pipe_buffer_create(sctx->b.b.screen, 0,
 	                                             PIPE_USAGE_DEFAULT,
 	                                             max_offchip_buffers *
 	                                             sctx->screen->tess_offchip_block_dw_size * 4);
@@ -2176,8 +2235,7 @@ bool si_update_shaders(struct si_context *sctx)
 
 		db_shader_control =
 			sctx->ps_shader.cso->db_shader_control |
-			S_02880C_KILL_ENABLE(si_get_alpha_test_func(sctx) != PIPE_FUNC_ALWAYS) |
-			S_02880C_Z_ORDER(sctx->ps_shader.current->z_order);
+			S_02880C_KILL_ENABLE(si_get_alpha_test_func(sctx) != PIPE_FUNC_ALWAYS);
 
 		if (si_pm4_state_changed(sctx, ps) || si_pm4_state_changed(sctx, vs) ||
 		    sctx->sprite_coord_enable != rs->sprite_coord_enable ||

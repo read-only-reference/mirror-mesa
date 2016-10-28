@@ -21,7 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-#pragma once
+#ifndef ANV_PRIVATE_H
+#define ANV_PRIVATE_H
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -45,6 +46,8 @@
 #include "brw_compiler.h"
 #include "util/macros.h"
 #include "util/list.h"
+#include "util/u_vector.h"
+#include "util/vk_alloc.h"
 
 /* Pre-declarations needed for WSI entrypoints */
 struct wl_surface;
@@ -63,6 +66,8 @@ struct gen_l3_config;
 #include "brw_context.h"
 #include "isl/isl.h"
 
+#include "wsi_common.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -79,9 +84,6 @@ extern "C" {
 
 #define anv_noreturn __attribute__((__noreturn__))
 #define anv_printflike(a, b) __attribute__((__format__(__printf__, a, b)))
-
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 static inline uint32_t
 align_down_npot_u32(uint32_t v, uint32_t a)
@@ -124,7 +126,7 @@ anv_minify(uint32_t n, uint32_t levels)
    if (unlikely(n == 0))
       return 0;
    else
-      return MAX(n >> levels, 1);
+      return MAX2(n >> levels, 1);
 }
 
 static inline float
@@ -160,8 +162,6 @@ anv_clear_mask(uint32_t *inout_mask, uint32_t clear_mask)
    static_assert(sizeof(*src) == sizeof(*dest), ""); \
    memcpy((dest), (src), (count) * sizeof(*(src))); \
 })
-
-#define zero(x) (memset(&(x), 0, sizeof(x)))
 
 /* Define no kernel as 1, since that's an illegal offset for a kernel */
 #define NO_KERNEL 1
@@ -239,51 +239,6 @@ void anv_abortfv(const char *format, va_list va) anv_noreturn;
  * number of bytes in the queue is always head - tail, even in case of
  * wraparound.
  */
-
-struct anv_vector {
-   uint32_t head;
-   uint32_t tail;
-   uint32_t element_size;
-   uint32_t size;
-   void *data;
-};
-
-int anv_vector_init(struct anv_vector *queue, uint32_t element_size, uint32_t size);
-void *anv_vector_add(struct anv_vector *queue);
-void *anv_vector_remove(struct anv_vector *queue);
-
-static inline int
-anv_vector_length(struct anv_vector *queue)
-{
-   return (queue->head - queue->tail) / queue->element_size;
-}
-
-static inline void *
-anv_vector_head(struct anv_vector *vector)
-{
-   assert(vector->tail < vector->head);
-   return (void *)((char *)vector->data +
-                   ((vector->head - vector->element_size) &
-                    (vector->size - 1)));
-}
-
-static inline void *
-anv_vector_tail(struct anv_vector *vector)
-{
-   return (void *)((char *)vector->data + (vector->tail & (vector->size - 1)));
-}
-
-static inline void
-anv_vector_finish(struct anv_vector *queue)
-{
-   free(queue->data);
-}
-
-#define anv_vector_foreach(elem, queue)                                  \
-   static_assert(__builtin_types_compatible_p(__typeof__(queue), struct anv_vector *), ""); \
-   for (uint32_t __anv_vector_offset = (queue)->tail;                                \
-        elem = (queue)->data + (__anv_vector_offset & ((queue)->size - 1)), __anv_vector_offset < (queue)->head; \
-        __anv_vector_offset += (queue)->element_size)
 
 struct anv_bo {
    uint32_t gem_handle;
@@ -363,7 +318,7 @@ struct anv_block_pool {
     * Array of mmaps and gem handles owned by the block pool, reclaimed when
     * the block pool is destroyed.
     */
-   struct anv_vector mmap_cleanups;
+   struct u_vector mmap_cleanups;
 
    uint32_t block_size;
 
@@ -496,64 +451,7 @@ struct anv_bo *anv_scratch_pool_alloc(struct anv_device *device,
                                       gl_shader_stage stage,
                                       unsigned per_thread_scratch);
 
-void *anv_resolve_entrypoint(uint32_t index);
-
 extern struct anv_dispatch_table dtable;
-
-#define ANV_CALL(func) ({ \
-   if (dtable.func == NULL) { \
-      size_t idx = offsetof(struct anv_dispatch_table, func) / sizeof(void *); \
-      dtable.entrypoints[idx] = anv_resolve_entrypoint(idx); \
-   } \
-   dtable.func; \
-})
-
-static inline void *
-anv_alloc(const VkAllocationCallbacks *alloc,
-          size_t size, size_t align,
-          VkSystemAllocationScope scope)
-{
-   return alloc->pfnAllocation(alloc->pUserData, size, align, scope);
-}
-
-static inline void *
-anv_realloc(const VkAllocationCallbacks *alloc,
-            void *ptr, size_t size, size_t align,
-            VkSystemAllocationScope scope)
-{
-   return alloc->pfnReallocation(alloc->pUserData, ptr, size, align, scope);
-}
-
-static inline void
-anv_free(const VkAllocationCallbacks *alloc, void *data)
-{
-   alloc->pfnFree(alloc->pUserData, data);
-}
-
-static inline void *
-anv_alloc2(const VkAllocationCallbacks *parent_alloc,
-           const VkAllocationCallbacks *alloc,
-           size_t size, size_t align,
-           VkSystemAllocationScope scope)
-{
-   if (alloc)
-      return anv_alloc(alloc, size, align, scope);
-   else
-      return anv_alloc(parent_alloc, size, align, scope);
-}
-
-static inline void
-anv_free2(const VkAllocationCallbacks *parent_alloc,
-          const VkAllocationCallbacks *alloc,
-          void *data)
-{
-   if (alloc)
-      anv_free(alloc, data);
-   else
-      anv_free(parent_alloc, data);
-}
-
-struct anv_wsi_interaface;
 
 #define VK_ICD_WSI_PLATFORM_MAX 5
 
@@ -573,7 +471,7 @@ struct anv_physical_device {
     uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
 
-    struct anv_wsi_interface *                  wsi[VK_ICD_WSI_PLATFORM_MAX];
+    struct wsi_device                       wsi_device;
 };
 
 struct anv_instance {
@@ -588,69 +486,6 @@ struct anv_instance {
 
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
 void anv_finish_wsi(struct anv_physical_device *physical_device);
-
-struct anv_meta_state {
-   VkAllocationCallbacks alloc;
-
-   /**
-    * Use array element `i` for images with `2^i` samples.
-    */
-   struct {
-      /**
-       * Pipeline N is used to clear color attachment N of the current
-       * subpass.
-       *
-       * HACK: We use one pipeline per color attachment to work around the
-       * compiler's inability to dynamically set the render target index of
-       * the render target write message.
-       */
-      struct anv_pipeline *color_pipelines[MAX_RTS];
-
-      struct anv_pipeline *depth_only_pipeline;
-      struct anv_pipeline *stencil_only_pipeline;
-      struct anv_pipeline *depthstencil_pipeline;
-   } clear[1 + MAX_SAMPLES_LOG2];
-
-   struct {
-      VkRenderPass render_pass;
-
-      /** Pipeline that blits from a 1D image. */
-      VkPipeline pipeline_1d_src;
-
-      /** Pipeline that blits from a 2D image. */
-      VkPipeline pipeline_2d_src;
-
-      /** Pipeline that blits from a 3D image. */
-      VkPipeline pipeline_3d_src;
-
-      VkPipelineLayout                          pipeline_layout;
-      VkDescriptorSetLayout                     ds_layout;
-   } blit;
-
-   struct {
-      VkRenderPass render_pass;
-
-      VkPipelineLayout                          img_p_layout;
-      VkDescriptorSetLayout                     img_ds_layout;
-      VkPipelineLayout                          buf_p_layout;
-      VkDescriptorSetLayout                     buf_ds_layout;
-
-      /* Pipelines indexed by source and destination type.  See the
-       * blit2d_src_type and blit2d_dst_type enums in anv_meta_blit2d.c to
-       * see what these mean.
-       */
-      VkPipeline pipelines[2][3];
-   } blit2d;
-
-   struct {
-      /** Pipeline [i] resolves an image with 2^(i+1) samples.  */
-      VkPipeline                                pipelines[MAX_SAMPLES_LOG2];
-
-      VkRenderPass                              pass;
-      VkPipelineLayout                          pipeline_layout;
-      VkDescriptorSetLayout                     ds_layout;
-   } resolve;
-};
 
 struct anv_queue {
     VK_LOADER_DATA                              _loader_data;
@@ -710,8 +545,6 @@ struct anv_device {
     struct anv_state_pool                       surface_state_pool;
 
     struct anv_bo                               workaround_bo;
-
-    struct anv_meta_state                       meta_state;
 
     struct anv_pipeline_cache                   blorp_shader_cache;
     struct blorp_context                        blorp;
@@ -1310,13 +1143,13 @@ struct anv_cmd_buffer {
     *
     * initialized by anv_cmd_buffer_init_batch_bo_chain()
     */
-   struct anv_vector                            seen_bbos;
+   struct u_vector                            seen_bbos;
 
    /* A vector of int32_t's for every block of binding tables.
     *
     * initialized by anv_cmd_buffer_init_batch_bo_chain()
     */
-   struct anv_vector                            bt_blocks;
+   struct u_vector                            bt_blocks;
    uint32_t                                     bt_next;
    struct anv_reloc_list                        surface_relocs;
 
@@ -1358,11 +1191,15 @@ void anv_cmd_buffer_add_secondary(struct anv_cmd_buffer *primary,
                                   struct anv_cmd_buffer *secondary);
 void anv_cmd_buffer_prepare_execbuf(struct anv_cmd_buffer *cmd_buffer);
 
-VkResult anv_cmd_buffer_emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
-                                           unsigned stage, struct anv_state *bt_state);
-VkResult anv_cmd_buffer_emit_samplers(struct anv_cmd_buffer *cmd_buffer,
-                                      unsigned stage, struct anv_state *state);
-uint32_t anv_cmd_buffer_flush_descriptor_sets(struct anv_cmd_buffer *cmd_buffer);
+VkResult anv_cmd_buffer_reset(struct anv_cmd_buffer *cmd_buffer);
+
+VkResult
+anv_cmd_buffer_ensure_push_constants_size(struct anv_cmd_buffer *cmd_buffer,
+                                          gl_shader_stage stage, uint32_t size);
+#define anv_cmd_buffer_ensure_push_constant_field(cmd_buffer, stage, field) \
+   anv_cmd_buffer_ensure_push_constants_size(cmd_buffer, stage, \
+      (offsetof(struct anv_push_constants, field) + \
+       sizeof(cmd_buffer->state.push_constants[0]->field)))
 
 struct anv_state anv_cmd_buffer_emit_dynamic(struct anv_cmd_buffer *cmd_buffer,
                                              const void *data, uint32_t size, uint32_t alignment);
@@ -1389,13 +1226,8 @@ void gen8_cmd_buffer_emit_depth_viewport(struct anv_cmd_buffer *cmd_buffer,
                                          bool depth_clamp_enable);
 void gen7_cmd_buffer_emit_scissor(struct anv_cmd_buffer *cmd_buffer);
 
-void anv_cmd_buffer_emit_state_base_address(struct anv_cmd_buffer *cmd_buffer);
-
 void anv_cmd_state_setup_attachments(struct anv_cmd_buffer *cmd_buffer,
                                      const VkRenderPassBeginInfo *info);
-
-void anv_cmd_buffer_set_subpass(struct anv_cmd_buffer *cmd_buffer,
-                                  struct anv_subpass *subpass);
 
 struct anv_state
 anv_cmd_buffer_push_constants(struct anv_cmd_buffer *cmd_buffer,
@@ -1423,11 +1255,7 @@ struct anv_event {
    struct anv_state                             state;
 };
 
-struct nir_shader;
-
 struct anv_shader_module {
-   struct nir_shader *                          nir;
-
    unsigned char                                sha1[20];
    uint32_t                                     size;
    char                                         data[0];
@@ -1525,7 +1353,6 @@ struct anv_pipeline {
 
    struct anv_pipeline_layout *                 layout;
 
-   bool                                         use_repclear;
    bool                                         needs_data_cache;
 
    struct anv_shader_bin *                      shaders[MESA_SHADER_STAGES];
@@ -1593,23 +1420,10 @@ ANV_DECL_GET_PROG_DATA_FUNC(gs, MESA_SHADER_GEOMETRY)
 ANV_DECL_GET_PROG_DATA_FUNC(wm, MESA_SHADER_FRAGMENT)
 ANV_DECL_GET_PROG_DATA_FUNC(cs, MESA_SHADER_COMPUTE)
 
-struct anv_graphics_pipeline_create_info {
-   /**
-    * If non-negative, overrides the color attachment count of the pipeline's
-    * subpass.
-    */
-   int8_t color_attachment_count;
-
-   bool                                         use_repclear;
-   bool                                         disable_vs;
-   bool                                         use_rectlist;
-};
-
 VkResult
 anv_pipeline_init(struct anv_pipeline *pipeline, struct anv_device *device,
                   struct anv_pipeline_cache *cache,
                   const VkGraphicsPipelineCreateInfo *pCreateInfo,
-                  const struct anv_graphics_pipeline_create_info *extra,
                   const VkAllocationCallbacks *alloc);
 
 VkResult
@@ -1619,14 +1433,6 @@ anv_pipeline_compile_cs(struct anv_pipeline *pipeline,
                         struct anv_shader_module *module,
                         const char *entrypoint,
                         const VkSpecializationInfo *spec_info);
-
-VkResult
-anv_graphics_pipeline_create(VkDevice device,
-                             VkPipelineCache cache,
-                             const VkGraphicsPipelineCreateInfo *pCreateInfo,
-                             const struct anv_graphics_pipeline_create_info *extra,
-                             const VkAllocationCallbacks *alloc,
-                             VkPipeline *pPipeline);
 
 struct anv_format {
    enum isl_format isl_format:16;
@@ -1651,6 +1457,7 @@ anv_pipeline_setup_l3_config(struct anv_pipeline *pipeline, bool needs_slm);
  * Subsurface of an anv_image.
  */
 struct anv_surface {
+   /** Valid only if isl_surf::size > 0. */
    struct isl_surf isl;
 
    /**
@@ -1697,6 +1504,7 @@ struct anv_image {
 
       struct {
          struct anv_surface depth_surface;
+         struct anv_surface hiz_surface;
          struct anv_surface stencil_surface;
       };
    };
@@ -1724,10 +1532,10 @@ struct anv_image_view {
    struct anv_bo *bo;
    uint32_t offset; /**< Offset into bo. */
 
+   struct isl_view isl;
+
    VkImageAspectFlags aspect_mask;
    VkFormat vk_format;
-   uint32_t base_layer;
-   uint32_t base_mip;
    VkExtent3D extent; /**< Extent of VkImageViewCreateInfo::baseMipLevel. */
 
    /** RENDER_SURFACE_STATE when using image as a color render target. */
@@ -1760,11 +1568,15 @@ const struct anv_surface *
 anv_image_get_surface_for_aspect_mask(const struct anv_image *image,
                                       VkImageAspectFlags aspect_mask);
 
-void anv_image_view_init(struct anv_image_view *view,
-                         struct anv_device *device,
-                         const VkImageViewCreateInfo* pCreateInfo,
-                         struct anv_cmd_buffer *cmd_buffer,
-                         VkImageUsageFlags usage_mask);
+static inline bool
+anv_image_has_hiz(const struct anv_image *image)
+{
+   /* We must check the aspect because anv_image::hiz_surface belongs to
+    * a union.
+    */
+   return (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) &&
+          image->hiz_surface.isl.size > 0;
+}
 
 struct anv_buffer_view {
    enum isl_format format; /**< VkBufferViewCreateInfo::format */
@@ -1777,11 +1589,6 @@ struct anv_buffer_view {
 
    struct brw_image_param storage_image_param;
 };
-
-void anv_buffer_view_init(struct anv_buffer_view *view,
-                          struct anv_device *device,
-                          const VkBufferViewCreateInfo* pCreateInfo,
-                          struct anv_cmd_buffer *cmd_buffer);
 
 enum isl_format
 anv_isl_format_for_descriptor_type(VkDescriptorType type);
@@ -1873,8 +1680,6 @@ struct anv_render_pass {
    struct anv_subpass                           subpasses[0];
 };
 
-extern struct anv_render_pass anv_meta_dummy_renderpass;
-
 struct anv_query_pool_slot {
    uint64_t begin;
    uint64_t end;
@@ -1887,10 +1692,8 @@ struct anv_query_pool {
    struct anv_bo                                bo;
 };
 
-VkResult anv_device_init_meta(struct anv_device *device);
-void anv_device_finish_meta(struct anv_device *device);
-
-void *anv_lookup_entrypoint(const char *name);
+void *anv_lookup_entrypoint(const struct gen_device_info *devinfo,
+                            const char *name);
 
 void anv_dump_image_to_ppm(struct anv_device *device,
                            struct anv_image *image, unsigned miplevel,
@@ -2000,3 +1803,5 @@ ANV_DEFINE_STRUCT_CASTS(anv_common, VkImageMemoryBarrier)
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* ANV_PRIVATE_H */

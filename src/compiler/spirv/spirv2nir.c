@@ -37,19 +37,44 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+
+#define WORD_SIZE 4
 
 int main(int argc, char **argv)
 {
    int fd = open(argv[1], O_RDONLY);
-   off_t len = lseek(fd, 0, SEEK_END);
+   if (fd < 0)
+   {
+      fprintf(stderr, "Failed to open %s\n", argv[1]);
+      return 1;
+   }
 
-   assert(len % 4 == 0);
-   size_t word_count = len / 4;
+   off_t len = lseek(fd, 0, SEEK_END);
+   if (len % WORD_SIZE != 0)
+   {
+      fprintf(stderr, "File length isn't a multiple of the word size\n");
+      fprintf(stderr, "Are you sure this is a valid SPIR-V shader?\n");
+      close(fd);
+      return 1;
+   }
+
+   size_t word_count = len / WORD_SIZE;
 
    const void *map = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-   assert(map != NULL);
+   if (map == MAP_FAILED)
+   {
+      fprintf(stderr, "Failed to mmap the file: errno=%d, %s\n",
+              errno, strerror(errno));
+      close(fd);
+      return 1;
+   }
 
    nir_function *func = spirv_to_nir(map, word_count, NULL, 0,
                                      MESA_SHADER_FRAGMENT, "main", NULL);
    nir_print_shader(func->shader, stderr);
+
+   return 0;
 }

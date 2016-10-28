@@ -189,6 +189,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_QUERY_TIME_ELAPSED:
    case PIPE_CAP_OCCLUSION_QUERY:
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+   case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -240,6 +241,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
    case PIPE_CAP_TGSI_VOTE:
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
+   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
       return 1;
    case PIPE_CAP_COMPUTE:
       return (class_3d < GP100_3D_CLASS);
@@ -448,6 +450,12 @@ nvc0_screen_get_compute_param(struct pipe_screen *pscreen,
       RET(((uint64_t []) { 1024, 1024, 64 }));
    case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
       RET((uint64_t []) { 1024 });
+   case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
+      if (obj_class >= NVE4_COMPUTE_CLASS) {
+         RET((uint64_t []) { 1024 });
+      } else {
+         RET((uint64_t []) { 512 });
+      }
    case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE: /* g[] */
       RET((uint64_t []) { 1ULL << 40 });
    case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE: /* s[] */
@@ -995,49 +1003,6 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    PUSH_REFN (push, screen->uniform_bo, NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_WR);
 
-   for (i = 0; i < 5; ++i) {
-      /* TIC and TSC entries for each unit (nve4+ only) */
-      /* auxiliary constants (6 user clip planes, base instance id) */
-      BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
-      PUSH_DATA (push, NVC0_CB_AUX_SIZE);
-      PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
-      PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
-      BEGIN_NVC0(push, NVC0_3D(CB_BIND(i)), 1);
-      PUSH_DATA (push, (15 << 4) | 1);
-      if (screen->eng3d->oclass >= NVE4_3D_CLASS) {
-         unsigned j;
-         BEGIN_1IC0(push, NVC0_3D(CB_POS), 9);
-         PUSH_DATA (push, NVC0_CB_AUX_UNK_INFO);
-         for (j = 0; j < 8; ++j)
-            PUSH_DATA(push, j);
-      } else {
-         BEGIN_NVC0(push, NVC0_3D(TEX_LIMITS(i)), 1);
-         PUSH_DATA (push, 0x54);
-      }
-
-      /* MS sample coordinate offsets: these do not work with _ALT modes ! */
-      BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 2 * 8);
-      PUSH_DATA (push, NVC0_CB_AUX_MS_INFO);
-      PUSH_DATA (push, 0); /* 0 */
-      PUSH_DATA (push, 0);
-      PUSH_DATA (push, 1); /* 1 */
-      PUSH_DATA (push, 0);
-      PUSH_DATA (push, 0); /* 2 */
-      PUSH_DATA (push, 1);
-      PUSH_DATA (push, 1); /* 3 */
-      PUSH_DATA (push, 1);
-      PUSH_DATA (push, 2); /* 4 */
-      PUSH_DATA (push, 0);
-      PUSH_DATA (push, 3); /* 5 */
-      PUSH_DATA (push, 0);
-      PUSH_DATA (push, 2); /* 6 */
-      PUSH_DATA (push, 1);
-      PUSH_DATA (push, 3); /* 7 */
-      PUSH_DATA (push, 1);
-   }
-   BEGIN_NVC0(push, NVC0_3D(LINKED_TSC), 1);
-   PUSH_DATA (push, 0);
-
    /* return { 0.0, 0.0, 0.0, 0.0 } for out-of-bounds vtxbuf access */
    BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
    PUSH_DATA (push, 256);
@@ -1206,6 +1171,50 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    if (nvc0_screen_init_compute(screen))
       goto fail;
+
+   /* XXX: Compute and 3D are somehow aliased on Fermi. */
+   for (i = 0; i < 5; ++i) {
+      /* TIC and TSC entries for each unit (nve4+ only) */
+      /* auxiliary constants (6 user clip planes, base instance id) */
+      BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
+      PUSH_DATA (push, NVC0_CB_AUX_SIZE);
+      PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
+      PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
+      BEGIN_NVC0(push, NVC0_3D(CB_BIND(i)), 1);
+      PUSH_DATA (push, (15 << 4) | 1);
+      if (screen->eng3d->oclass >= NVE4_3D_CLASS) {
+         unsigned j;
+         BEGIN_1IC0(push, NVC0_3D(CB_POS), 9);
+         PUSH_DATA (push, NVC0_CB_AUX_UNK_INFO);
+         for (j = 0; j < 8; ++j)
+            PUSH_DATA(push, j);
+      } else {
+         BEGIN_NVC0(push, NVC0_3D(TEX_LIMITS(i)), 1);
+         PUSH_DATA (push, 0x54);
+      }
+
+      /* MS sample coordinate offsets: these do not work with _ALT modes ! */
+      BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 2 * 8);
+      PUSH_DATA (push, NVC0_CB_AUX_MS_INFO);
+      PUSH_DATA (push, 0); /* 0 */
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 1); /* 1 */
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 0); /* 2 */
+      PUSH_DATA (push, 1);
+      PUSH_DATA (push, 1); /* 3 */
+      PUSH_DATA (push, 1);
+      PUSH_DATA (push, 2); /* 4 */
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 3); /* 5 */
+      PUSH_DATA (push, 0);
+      PUSH_DATA (push, 2); /* 6 */
+      PUSH_DATA (push, 1);
+      PUSH_DATA (push, 3); /* 7 */
+      PUSH_DATA (push, 1);
+   }
+   BEGIN_NVC0(push, NVC0_3D(LINKED_TSC), 1);
+   PUSH_DATA (push, 0);
 
    PUSH_KICK (push);
 

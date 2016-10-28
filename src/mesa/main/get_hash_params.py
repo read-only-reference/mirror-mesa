@@ -217,10 +217,10 @@ descriptor=[
   [ "COLOR_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
   [ "COLOR_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR0].Type), NO_EXTRA" ],
   [ "COLOR_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR0].Stride), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_vertex_attrib_array, Enabled), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_attrib_array, Size), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY_TYPE", "LOC_CUSTOM, TYPE_ENUM, offsetof(struct gl_vertex_attrib_array, Type), NO_EXTRA" ],
-  [ "TEXTURE_COORD_ARRAY_STRIDE", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_attrib_array, Stride), NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_array_attributes, Enabled), NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_attributes, Size), NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY_TYPE", "LOC_CUSTOM, TYPE_ENUM, offsetof(struct gl_array_attributes, Type), NO_EXTRA" ],
+  [ "TEXTURE_COORD_ARRAY_STRIDE", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_attributes, Stride), NO_EXTRA" ],
 
 # GL_ARB_multitexture
   [ "MAX_TEXTURE_UNITS", "CONTEXT_INT(Const.MaxTextureUnits), NO_EXTRA" ],
@@ -236,9 +236,9 @@ descriptor=[
   [ "SAMPLE_ALPHA_TO_ONE_ARB", "CONTEXT_BOOL(Multisample.SampleAlphaToOne), NO_EXTRA" ],
 
 # GL_ARB_vertex_buffer_object
-  [ "VERTEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_POS].BufferObj), NO_EXTRA" ],
-  [ "NORMAL_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_NORMAL].BufferObj), NO_EXTRA" ],
-  [ "COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_COLOR0].BufferObj), NO_EXTRA" ],
+  [ "VERTEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_POS].BufferObj), NO_EXTRA" ],
+  [ "NORMAL_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_NORMAL].BufferObj), NO_EXTRA" ],
+  [ "COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_COLOR0].BufferObj), NO_EXTRA" ],
   [ "TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, NO_OFFSET, NO_EXTRA" ],
 
 # GL_OES_point_sprite
@@ -343,6 +343,7 @@ descriptor=[
   [ "BLEND_ADVANCED_COHERENT_KHR", "CONTEXT_BOOL(Color.BlendCoherent), extra_KHR_blend_equation_advanced_coherent" ],
 
 # GL_ARB_robustness / GL_KHR_robustness
+  [ "CONTEXT_ROBUST_ACCESS", "CONTEXT_ENUM(Const.RobustAccess), extra_KHR_robustness" ],
   [ "RESET_NOTIFICATION_STRATEGY_ARB", "CONTEXT_ENUM(Const.ResetStrategy), extra_KHR_robustness_or_GL" ],
 ]},
 
@@ -615,10 +616,10 @@ descriptor=[
   [ "PRIMITIVE_BOUNDING_BOX_ARB", "CONTEXT_FLOAT8(PrimitiveBoundingBox), extra_OES_primitive_bounding_box" ],
 
 # GL_ARB_viewport_array / GL_OES_viewport_array
-  [ "MAX_VIEWPORTS", "CONTEXT_INT(Const.MaxViewports), extra_ARB_viewport_array" ],
-  [ "VIEWPORT_SUBPIXEL_BITS", "CONTEXT_INT(Const.ViewportSubpixelBits), extra_ARB_viewport_array" ],
-  [ "VIEWPORT_BOUNDS_RANGE", "CONTEXT_FLOAT2(Const.ViewportBounds), extra_ARB_viewport_array" ],
-  [ "VIEWPORT_INDEX_PROVOKING_VERTEX", "CONTEXT_ENUM(Const.LayerAndVPIndexProvokingVertex), extra_ARB_viewport_array" ],
+  [ "MAX_VIEWPORTS", "CONTEXT_INT(Const.MaxViewports), extra_ARB_viewport_array_or_oes_viewport_array" ],
+  [ "VIEWPORT_SUBPIXEL_BITS", "CONTEXT_INT(Const.ViewportSubpixelBits), extra_ARB_viewport_array_or_oes_viewport_array" ],
+  [ "VIEWPORT_BOUNDS_RANGE", "CONTEXT_FLOAT2(Const.ViewportBounds), extra_ARB_viewport_array_or_oes_viewport_array" ],
+  [ "VIEWPORT_INDEX_PROVOKING_VERTEX", "CONTEXT_ENUM(Const.LayerAndVPIndexProvokingVertex), extra_ARB_viewport_array_or_oes_viewport_array" ],
 ]},
 
 { "apis": ["GL_CORE", "GLES32"], "params": [
@@ -833,10 +834,10 @@ descriptor=[
   [ "PRIMITIVE_RESTART_INDEX_NV", "CONTEXT_INT(Array.RestartIndex), extra_NV_primitive_restart" ],
 
 # GL_ARB_vertex_buffer_object
-  [ "INDEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_COLOR_INDEX].BufferObj), NO_EXTRA" ],
-  [ "EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_EDGEFLAG].BufferObj), NO_EXTRA" ],
-  [ "SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_COLOR1].BufferObj), NO_EXTRA" ],
-  [ "FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, VertexBinding[VERT_ATTRIB_FOG].BufferObj), NO_EXTRA" ],
+  [ "INDEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_COLOR_INDEX].BufferObj), NO_EXTRA" ],
+  [ "EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_EDGEFLAG].BufferObj), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_COLOR1].BufferObj), NO_EXTRA" ],
+  [ "FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_vertex_array_object, BufferBinding[VERT_ATTRIB_FOG].BufferObj), NO_EXTRA" ],
 
 # GL_ARB_vertex_program
 # == GL_VERTEX_PROGRAM_NV
@@ -890,7 +891,7 @@ descriptor=[
   [ "TEXTURE_CUBE_MAP_SEAMLESS", "CONTEXT_BOOL(Texture.CubeMapSeamless), extra_ARB_seamless_cube_map" ],
 
 # GL_EXT_texture_integer
-  [ "RGBA_INTEGER_MODE_EXT", "BUFFER_BOOL(_IntegerColor), extra_EXT_texture_integer_and_new_buffers" ],
+  [ "RGBA_INTEGER_MODE_EXT", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_texture_integer_and_new_buffers" ],
 
 # GL_ARB_transform_feedback3
   [ "MAX_TRANSFORM_FEEDBACK_BUFFERS", "CONTEXT_INT(Const.MaxTransformFeedbackBuffers), extra_ARB_transform_feedback3" ],
@@ -942,6 +943,9 @@ descriptor=[
 # GL_ARB_cull_distance
   [ "MAX_CULL_DISTANCES", "CONTEXT_INT(Const.MaxClipPlanes), extra_ARB_cull_distance" ],
   [ "MAX_COMBINED_CLIP_AND_CULL_DISTANCES", "CONTEXT_INT(Const.MaxClipPlanes), extra_ARB_cull_distance" ],
+
+# GL_ARB_compute_variable_group_size
+  [ "MAX_COMPUTE_VARIABLE_GROUP_INVOCATIONS_ARB", "CONTEXT_INT(Const.MaxComputeVariableGroupInvocations), extra_ARB_compute_variable_group_size" ],
 ]},
 
 # Enums restricted to OpenGL Core profile

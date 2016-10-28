@@ -43,12 +43,13 @@ brw_is_drawing_points(const struct brw_context *brw)
       return true;
    }
 
-   if (brw->gs.prog_data) {
+   if (brw->gs.base.prog_data) {
       /* BRW_NEW_GS_PROG_DATA */
-      return brw->gs.prog_data->output_topology == _3DPRIM_POINTLIST;
-   } else if (brw->tes.prog_data) {
+      return brw_gs_prog_data(brw->gs.base.prog_data)->output_topology ==
+             _3DPRIM_POINTLIST;
+   } else if (brw->tes.base.prog_data) {
       /* BRW_NEW_TES_PROG_DATA */
-      return brw->tes.prog_data->output_topology ==
+      return brw_tes_prog_data(brw->tes.base.prog_data)->output_topology ==
              BRW_TESS_OUTPUT_TOPOLOGY_POINT;
    } else {
       /* BRW_NEW_PRIMITIVE */
@@ -66,12 +67,13 @@ brw_is_drawing_lines(const struct brw_context *brw)
       return true;
    }
 
-   if (brw->gs.prog_data) {
+   if (brw->gs.base.prog_data) {
       /* BRW_NEW_GS_PROG_DATA */
-      return brw->gs.prog_data->output_topology == _3DPRIM_LINESTRIP;
-   } else if (brw->tes.prog_data) {
+      return brw_gs_prog_data(brw->gs.base.prog_data)->output_topology ==
+             _3DPRIM_LINESTRIP;
+   } else if (brw->tes.base.prog_data) {
       /* BRW_NEW_TES_PROG_DATA */
-      return brw->tes.prog_data->output_topology ==
+      return brw_tes_prog_data(brw->tes.base.prog_data)->output_topology ==
              BRW_TESS_OUTPUT_TOPOLOGY_LINE;
    } else {
       /* BRW_NEW_PRIMITIVE */
@@ -97,12 +99,13 @@ upload_clip_state(struct brw_context *brw)
    struct gl_framebuffer *fb = ctx->DrawBuffer;
 
    /* BRW_NEW_FS_PROG_DATA */
-   if (brw->wm.prog_data->barycentric_interp_modes &
+   if (brw_wm_prog_data(brw->wm.base.prog_data)->barycentric_interp_modes &
        BRW_BARYCENTRIC_NONPERSPECTIVE_BITS) {
       dw2 |= GEN6_CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE;
    }
 
-   dw1 |= brw->vs.prog_data->base.cull_distance_mask;
+   /* BRW_NEW_VS_PROG_DATA */
+   dw1 |= brw_vue_prog_data(brw->vs.base.prog_data)->cull_distance_mask;
 
    if (brw->gen >= 7)
       dw1 |= GEN7_CLIP_EARLY_CULL;
@@ -157,6 +160,9 @@ upload_clip_state(struct brw_context *brw)
 
    dw2 |= GEN6_CLIP_GB_TEST;
 
+   /* BRW_NEW_VIEWPORT_COUNT */
+   const unsigned viewport_count = brw->clip.viewport_count;
+
    /* We need to disable guardband clipping if the guardband (which we always
     * program to the maximum screen-space bounding box of 8K x 8K) will be
     * smaller than the viewport.
@@ -180,7 +186,7 @@ upload_clip_state(struct brw_context *brw)
     * "objects must have a screenspace bounding box not exceeding 8K in the X
     * or Y direction" restriction.  Instead, they're clipped.
     */
-   for (unsigned i = 0; i < ctx->Const.MaxViewports; i++) {
+   for (unsigned i = 0; i < viewport_count; i++) {
       if (ctx->ViewportArray[i].Width > 8192 ||
           ctx->ViewportArray[i].Height > 8192) {
          dw2 &= ~GEN6_CLIP_GB_TEST;
@@ -203,7 +209,7 @@ upload_clip_state(struct brw_context *brw)
       const float fb_width = (float)_mesa_geometric_width(fb);
       const float fb_height = (float)_mesa_geometric_height(fb);
 
-      for (unsigned i = 0; i < ctx->Const.MaxViewports; i++) {
+      for (unsigned i = 0; i < viewport_count; i++) {
          if (ctx->ViewportArray[i].X != 0 ||
              ctx->ViewportArray[i].Y != 0 ||
              ctx->ViewportArray[i].Width != fb_width ||
@@ -236,11 +242,6 @@ upload_clip_state(struct brw_context *brw)
    if (!brw_is_drawing_points(brw) && !brw_is_drawing_lines(brw))
       dw2 |= GEN6_CLIP_XY_TEST;
 
-   /* BRW_NEW_VUE_MAP_GEOM_OUT */
-   const int max_vp_index =
-      (brw->vue_map_geom_out.slots_valid & VARYING_BIT_VIEWPORT) != 0 ?
-      ctx->Const.MaxViewports : 1;
-
    BEGIN_BATCH(4);
    OUT_BATCH(_3DSTATE_CLIP << 16 | (4 - 2));
    OUT_BATCH(dw1);
@@ -250,7 +251,7 @@ upload_clip_state(struct brw_context *brw)
    OUT_BATCH(U_FIXED(0.125, 3) << GEN6_CLIP_MIN_POINT_WIDTH_SHIFT |
              U_FIXED(255.875, 3) << GEN6_CLIP_MAX_POINT_WIDTH_SHIFT |
              (_mesa_geometric_layers(fb) > 0 ? 0 : GEN6_CLIP_FORCE_ZERO_RTAINDEX) |
-             ((max_vp_index - 1) & GEN6_CLIP_MAX_VP_INDEX_MASK));
+             ((viewport_count - 1) & GEN6_CLIP_MAX_VP_INDEX_MASK));
    ADVANCE_BATCH();
 }
 
@@ -264,11 +265,12 @@ const struct brw_tracked_state gen6_clip_state = {
                BRW_NEW_CONTEXT |
                BRW_NEW_FS_PROG_DATA |
                BRW_NEW_GS_PROG_DATA |
+               BRW_NEW_VS_PROG_DATA |
                BRW_NEW_META_IN_PROGRESS |
                BRW_NEW_PRIMITIVE |
                BRW_NEW_RASTERIZER_DISCARD |
                BRW_NEW_TES_PROG_DATA |
-               BRW_NEW_VUE_MAP_GEOM_OUT,
+               BRW_NEW_VIEWPORT_COUNT,
    },
    .emit = upload_clip_state,
 };

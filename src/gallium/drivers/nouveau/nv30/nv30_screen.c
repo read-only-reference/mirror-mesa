@@ -119,6 +119,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR: /* XXX: yes? */
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+   case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_MIN_TEXEL_OFFSET:
    case PIPE_CAP_MAX_TEXEL_OFFSET:
    case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
@@ -201,6 +202,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
+   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:

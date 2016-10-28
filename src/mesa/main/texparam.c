@@ -807,7 +807,7 @@ _mesa_texture_parameterf(struct gl_context *ctx,
    }
 
    if (ctx->Driver.TexParameter && need_update) {
-      ctx->Driver.TexParameter(ctx, texObj, pname, &param);
+      ctx->Driver.TexParameter(ctx, texObj, pname);
    }
 }
 
@@ -874,7 +874,7 @@ _mesa_texture_parameterfv(struct gl_context *ctx,
    }
 
    if (ctx->Driver.TexParameter && need_update) {
-      ctx->Driver.TexParameter(ctx, texObj, pname, params);
+      ctx->Driver.TexParameter(ctx, texObj, pname);
    }
 }
 
@@ -919,8 +919,7 @@ _mesa_texture_parameteri(struct gl_context *ctx,
    }
 
    if (ctx->Driver.TexParameter && need_update) {
-      GLfloat fparam = (GLfloat) param;
-      ctx->Driver.TexParameter(ctx, texObj, pname, &fparam);
+      ctx->Driver.TexParameter(ctx, texObj, pname);
    }
 }
 
@@ -964,15 +963,7 @@ _mesa_texture_parameteriv(struct gl_context *ctx,
    }
 
    if (ctx->Driver.TexParameter && need_update) {
-      GLfloat fparams[4];
-      fparams[0] = INT_TO_FLOAT(params[0]);
-      if (pname == GL_TEXTURE_BORDER_COLOR ||
-          pname == GL_TEXTURE_CROP_RECT_OES) {
-         fparams[1] = INT_TO_FLOAT(params[1]);
-         fparams[2] = INT_TO_FLOAT(params[2]);
-         fparams[3] = INT_TO_FLOAT(params[3]);
-      }
-      ctx->Driver.TexParameter(ctx, texObj, pname, fparams);
+      ctx->Driver.TexParameter(ctx, texObj, pname);
    }
 }
 
@@ -1486,6 +1477,9 @@ invalid_pname:
 }
 
 
+/**
+ * Handle a glGetTexLevelParamteriv() call for a texture buffer.
+ */
 static void
 get_tex_level_parameter_buffer(struct gl_context *ctx,
                                const struct gl_texture_object *texObj,
@@ -1497,6 +1491,8 @@ get_tex_level_parameter_buffer(struct gl_context *ctx,
    GLenum internalFormat = texObj->BufferObjectFormat;
    GLenum baseFormat = _mesa_get_format_base_format(texFormat);
    const char *suffix = dsa ? "ture" : "";
+
+   assert(texObj->Target == GL_TEXTURE_BUFFER);
 
    if (!bo) {
       /* undefined texture buffer object */

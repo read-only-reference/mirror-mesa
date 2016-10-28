@@ -2585,6 +2585,20 @@ select_gles_precision(unsigned qual_precision,
                           type->name);
       }
    }
+
+
+   /* Section 4.1.7.3 (Atomic Counters) of the GLSL ES 3.10 spec says:
+    *
+    *    "The default precision of all atomic types is highp. It is an error to
+    *    declare an atomic type with a different precision or to specify the
+    *    default precision for an atomic type to be lowp or mediump."
+    */
+   if (type->base_type == GLSL_TYPE_ATOMIC_UINT &&
+       precision != ast_precision_high) {
+      _mesa_glsl_error(loc, state,
+                       "atomic_uint can only have highp precision qualifier");
+   }
+
    return precision;
 }
 
@@ -2972,14 +2986,10 @@ validate_interpolation_qualifier(struct _mesa_glsl_parse_state *state,
    if (state->is_version(130, 300)
        && var_type->contains_integer()
        && interpolation != INTERP_MODE_FLAT
-       && ((state->stage == MESA_SHADER_FRAGMENT && mode == ir_var_shader_in)
-           || (state->stage == MESA_SHADER_VERTEX && mode == ir_var_shader_out
-               && state->es_shader))) {
-      const char *shader_var_type = (state->stage == MESA_SHADER_VERTEX) ?
-         "vertex output" : "fragment input";
-      _mesa_glsl_error(loc, state, "if a %s is (or contains) "
-                       "an integer, then it must be qualified with 'flat'",
-                       shader_var_type);
+       && state->stage == MESA_SHADER_FRAGMENT
+       && mode == ir_var_shader_in) {
+      _mesa_glsl_error(loc, state, "if a fragment input is (or contains) "
+                       "an integer, then it must be qualified with 'flat'");
    }
 
    /* Double fragment inputs must be qualified with 'flat'.
@@ -4320,6 +4330,8 @@ handle_tess_ctrl_shader_output_decl(struct _mesa_glsl_parse_state *state,
    if (var->data.patch)
       return;
 
+   var->data.tess_varying_implicit_sized_array = var->type->is_unsized_array();
+
    validate_layout_qualifier_vertex_count(state, loc, var, num_vertices,
                                           &state->tcs_output_size,
                                           "tessellation control shader output");
@@ -4356,6 +4368,7 @@ handle_tess_shader_input_decl(struct _mesa_glsl_parse_state *state,
    if (var->type->is_unsized_array()) {
       var->type = glsl_type::get_array_instance(var->type->fields.array,
             state->Const.MaxPatchVertices);
+      var->data.tess_varying_implicit_sized_array = true;
    } else if (var->type->length != state->Const.MaxPatchVertices) {
       _mesa_glsl_error(&loc, state,
                        "per-vertex tessellation shader input arrays must be "
@@ -6626,8 +6639,8 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
     * the types to HIR.  This ensures that structure definitions embedded in
     * other structure definitions or in interface blocks are processed.
     */
-   glsl_struct_field *const fields = ralloc_array(state, glsl_struct_field,
-                                                  decl_count);
+   glsl_struct_field *const fields = rzalloc_array(state, glsl_struct_field,
+                                                   decl_count);
 
    bool first_member = true;
    bool first_member_has_explicit_location = false;
@@ -7506,6 +7519,8 @@ ast_interface_block::hir(exec_list *instructions,
       glsl_type::get_interface_instance(fields,
                                         num_variables,
                                         packing,
+                                        matrix_layout ==
+                                           GLSL_MATRIX_LAYOUT_ROW_MAJOR,
                                         this->block_name);
 
    unsigned component_size = block_type->contains_double() ? 8 : 4;
@@ -8037,6 +8052,20 @@ ast_cs_input_layout::hir(exec_list *instructions,
             return NULL;
          }
       }
+   }
+
+   /* The ARB_compute_variable_group_size spec says:
+    *
+    *     If a compute shader including a *local_size_variable* qualifier also
+    *     declares a fixed local group size using the *local_size_x*,
+    *     *local_size_y*, or *local_size_z* qualifiers, a compile-time error
+    *     results
+    */
+   if (state->cs_input_local_size_variable_specified) {
+      _mesa_glsl_error(&loc, state,
+                       "compute shader can't include both a variable and a "
+                       "fixed local group size");
+      return NULL;
    }
 
    state->cs_input_local_size_specified = true;

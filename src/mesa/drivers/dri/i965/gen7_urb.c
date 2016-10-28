@@ -189,7 +189,9 @@ static void
 upload_urb(struct brw_context *brw)
 {
    /* BRW_NEW_VS_PROG_DATA */
-   const unsigned vs_size = MAX2(brw->vs.prog_data->base.urb_entry_size, 1);
+   const struct brw_vue_prog_data *vs_vue_prog_data =
+      brw_vue_prog_data(brw->vs.base.prog_data);
+   const unsigned vs_size = MAX2(vs_vue_prog_data->urb_entry_size, 1);
    /* BRW_NEW_GEOMETRY_PROGRAM, BRW_NEW_GS_PROG_DATA */
    const bool gs_present = brw->geometry_program;
    /* BRW_NEW_TESS_PROGRAMS */
@@ -209,14 +211,20 @@ gen7_upload_urb(struct brw_context *brw, unsigned vs_size,
    /* BRW_NEW_VS_PROG_DATA */
    unsigned vs_entry_size_bytes = vs_size * 64;
    /* BRW_NEW_GEOMETRY_PROGRAM, BRW_NEW_GS_PROG_DATA */
-   unsigned gs_size = gs_present ? brw->gs.prog_data->base.urb_entry_size : 1;
+   const struct brw_vue_prog_data *gs_vue_prog_data =
+      brw_vue_prog_data(brw->gs.base.prog_data);
+   unsigned gs_size = gs_present ? gs_vue_prog_data->urb_entry_size : 1;
    unsigned gs_entry_size_bytes = gs_size * 64;
 
    /* BRW_NEW_TCS_PROG_DATA */
-   unsigned hs_size = tess_present ? brw->tcs.prog_data->base.urb_entry_size : 1;
+   const struct brw_vue_prog_data *tcs_vue_prog_data =
+      brw_vue_prog_data(brw->tcs.base.prog_data);
+   unsigned hs_size = tess_present ? tcs_vue_prog_data->urb_entry_size : 1;
    unsigned hs_entry_size_bytes = hs_size * 64;
    /* BRW_NEW_TES_PROG_DATA */
-   unsigned ds_size = tess_present ? brw->tes.prog_data->base.urb_entry_size : 1;
+   const struct brw_vue_prog_data *tes_vue_prog_data =
+      brw_vue_prog_data(brw->tes.base.prog_data);
+   unsigned ds_size = tess_present ? tes_vue_prog_data->urb_entry_size : 1;
    unsigned ds_entry_size_bytes = ds_size * 64;
 
    /* If we're just switching between programs with the same URB requirements,
@@ -313,14 +321,14 @@ gen7_upload_urb(struct brw_context *brw, unsigned vs_size,
          DIV_ROUND_UP(hs_granularity * hs_entry_size_bytes,
                       chunk_size_bytes);
       hs_wants =
-         DIV_ROUND_UP(devinfo->urb.max_hs_entries * hs_entry_size_bytes,
+         DIV_ROUND_UP(devinfo->urb.max_tcs_entries * hs_entry_size_bytes,
                       chunk_size_bytes) - hs_chunks;
 
       ds_chunks =
          DIV_ROUND_UP(devinfo->urb.min_ds_entries * ds_entry_size_bytes,
                       chunk_size_bytes);
       ds_wants =
-         DIV_ROUND_UP(devinfo->urb.max_ds_entries * ds_entry_size_bytes,
+         DIV_ROUND_UP(devinfo->urb.max_tes_entries * ds_entry_size_bytes,
                       chunk_size_bytes) - ds_chunks;
    }
 
@@ -378,8 +386,8 @@ gen7_upload_urb(struct brw_context *brw, unsigned vs_size,
     * than the maximum allowed amount, so correct for that.
     */
    nr_vs_entries = MIN2(nr_vs_entries, devinfo->urb.max_vs_entries);
-   nr_hs_entries = MIN2(nr_hs_entries, devinfo->urb.max_hs_entries);
-   nr_ds_entries = MIN2(nr_ds_entries, devinfo->urb.max_ds_entries);
+   nr_hs_entries = MIN2(nr_hs_entries, devinfo->urb.max_tcs_entries);
+   nr_ds_entries = MIN2(nr_ds_entries, devinfo->urb.max_tes_entries);
    nr_gs_entries = MIN2(nr_gs_entries, devinfo->urb.max_gs_entries);
 
    /* Ensure that we program a multiple of the granularity. */

@@ -73,7 +73,6 @@ brw_shader_precompile(struct gl_context *ctx,
 
 static void
 brw_lower_packing_builtins(struct brw_context *brw,
-                           gl_shader_stage shader_type,
                            exec_list *ir)
 {
    /* Gens < 7 don't have instructions to convert to or from half-precision,
@@ -105,7 +104,7 @@ process_glsl_ir(struct brw_context *brw,
    /* lower_packing_builtins() inserts arithmetic instructions, so it
     * must precede lower_instructions().
     */
-   brw_lower_packing_builtins(brw, shader->Stage, shader->ir);
+   brw_lower_packing_builtins(brw, shader->ir);
    do_mat_op_to_vec(shader->ir);
 
    unsigned instructions_to_lower = (DIV_TO_MUL_RCP |
@@ -227,11 +226,16 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
                                 0);
       if (!prog)
         return false;
+
+      _mesa_reference_program(ctx, &shader->Program, prog);
+
       prog->Parameters = _mesa_new_parameter_list();
 
-      _mesa_copy_linked_program_data((gl_shader_stage) stage, shProg, prog);
-
       process_glsl_ir(brw, shProg, shader);
+
+      do_set_program_inouts(shader->ir, prog, shader->Stage);
+
+      _mesa_copy_linked_program_data(shProg, shader);
 
       /* Make a pass over the IR to add state references for any built-in
        * uniforms that are used.  This has to be done now (during linking).
@@ -256,13 +260,9 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
          }
       }
 
-      do_set_program_inouts(shader->ir, prog, shader->Stage);
-
       prog->SamplersUsed = shader->active_samplers;
       prog->ShadowSamplers = shader->shadow_samplers;
       _mesa_update_shader_textures_used(shProg, prog);
-
-      _mesa_reference_program(ctx, &shader->Program, prog);
 
       brw_add_texrect_params(prog);
 

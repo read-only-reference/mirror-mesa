@@ -34,7 +34,6 @@ extern "C" {
 int type_size_scalar(const struct glsl_type *type);
 int type_size_vec4(const struct glsl_type *type);
 int type_size_dvec4(const struct glsl_type *type);
-int type_size_vec4_times_4(const struct glsl_type *type);
 int type_size_vs_input(const struct glsl_type *type);
 
 static inline int
@@ -99,14 +98,14 @@ nir_shader *brw_preprocess_nir(const struct brw_compiler *compiler,
 bool brw_nir_lower_intrinsics(nir_shader *nir,
                               struct brw_stage_prog_data *prog_data);
 void brw_nir_lower_vs_inputs(nir_shader *nir,
-                             const struct gen_device_info *devinfo,
                              bool is_scalar,
                              bool use_legacy_snorm_formula,
                              const uint8_t *vs_attrib_wa_flags);
 void brw_nir_lower_vue_inputs(nir_shader *nir, bool is_scalar,
                               const struct brw_vue_map *vue_map);
 void brw_nir_lower_tes_inputs(nir_shader *nir, const struct brw_vue_map *vue);
-void brw_nir_lower_fs_inputs(nir_shader *nir,
+void brw_nir_lower_fs_inputs(nir_shader *nir, struct brw_vue_map *vue_map,
+                             struct gl_program *prog,
                              const struct gen_device_info *devinfo,
                              const struct brw_wm_prog_key *key);
 void brw_nir_lower_vue_outputs(nir_shader *nir, bool is_scalar);

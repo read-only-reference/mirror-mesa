@@ -29,6 +29,7 @@
 
 #include <errno.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <xf86drm.h>
 
 #if ANDROID_VERSION >= 0x402
@@ -342,9 +343,6 @@ droid_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
-
-   if (!_eglPutSurface(surf))
-      return EGL_TRUE;
 
    droid_free_local_buffers(dri2_surf);
 
@@ -762,49 +760,47 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
       { HAL_PIXEL_FORMAT_RGB_888,   { 0xff, 0xff00, 0xff0000, 0x0 } },
       { HAL_PIXEL_FORMAT_RGB_565,   { 0xf800, 0x7e0, 0x1f, 0x0 } },
       { HAL_PIXEL_FORMAT_BGRA_8888, { 0xff0000, 0xff00, 0xff, 0xff000000 } },
-      { 0, { 0, 0, 0, 0 } }
    };
    EGLint config_attrs[] = {
      EGL_NATIVE_VISUAL_ID,   0,
      EGL_NATIVE_VISUAL_TYPE, 0,
      EGL_FRAMEBUFFER_TARGET_ANDROID, EGL_TRUE,
      EGL_RECORDABLE_ANDROID, EGL_TRUE,
-     EGL_MAX_PBUFFER_WIDTH, _EGL_MAX_PBUFFER_WIDTH,
-     EGL_MAX_PBUFFER_HEIGHT, _EGL_MAX_PBUFFER_HEIGHT,
      EGL_NONE
    };
+   unsigned int format_count[ARRAY_SIZE(visuals)] = { 0 };
    int count, i, j;
 
    count = 0;
-   for (i = 0; visuals[i].format; i++) {
-      int format_count = 0;
+   for (i = 0; dri2_dpy->driver_configs[i]; i++) {
+      const EGLint surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+      struct dri2_egl_config *dri2_conf;
+      unsigned int double_buffered = 0;
 
-      config_attrs[1] = visuals[i].format;
-      config_attrs[3] = visuals[i].format;
+      dri2_dpy->core->getConfigAttrib(dri2_dpy->driver_configs[i],
+         __DRI_ATTRIB_DOUBLE_BUFFER, &double_buffered);
 
-      for (j = 0; dri2_dpy->driver_configs[j]; j++) {
-         const EGLint surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
-         struct dri2_egl_config *dri2_conf;
-         unsigned int double_buffered = 0;
+      /* support only double buffered configs */
+      if (!double_buffered)
+         continue;
 
-         dri2_dpy->core->getConfigAttrib(dri2_dpy->driver_configs[j],
-            __DRI_ATTRIB_DOUBLE_BUFFER, &double_buffered);
+      for (j = 0; j < ARRAY_SIZE(visuals); j++) {
+         config_attrs[1] = visuals[j].format;
+         config_attrs[3] = visuals[j].format;
 
-         /* support only double buffered configs */
-         if (!double_buffered)
-            continue;
-
-         dri2_conf = dri2_add_config(dpy, dri2_dpy->driver_configs[j],
-               count + 1, surface_type, config_attrs, visuals[i].rgba_masks);
+         dri2_conf = dri2_add_config(dpy, dri2_dpy->driver_configs[i],
+               count + 1, surface_type, config_attrs, visuals[j].rgba_masks);
          if (dri2_conf) {
             count++;
-            format_count++;
+            format_count[j]++;
          }
       }
+   }
 
-      if (!format_count) {
+   for (i = 0; i < ARRAY_SIZE(format_count); i++) {
+      if (!format_count[i]) {
          _eglLog(_EGL_DEBUG, "No DRI config supports native format 0x%x",
-               visuals[i].format);
+                 visuals[i].format);
       }
    }
 
@@ -830,7 +826,7 @@ droid_open_device(void)
       fd = -1;
    }
 
-   return (fd >= 0) ? dup(fd) : -1;
+   return (fd >= 0) ? fcntl(fd, F_DUPFD_CLOEXEC, 3) : -1;
 }
 
 /* support versions < JellyBean */
@@ -885,11 +881,33 @@ static struct dri2_egl_display_vtbl droid_display_vtbl = {
    .get_dri_drawable = dri2_surface_get_dri_drawable,
 };
 
+static const __DRIdri2LoaderExtension droid_dri2_loader_extension = {
+   .base = { __DRI_DRI2_LOADER, 3 },
+
+   .getBuffers           = NULL,
+   .flushFrontBuffer     = droid_flush_front_buffer,
+   .getBuffersWithFormat = droid_get_buffers_with_format,
+};
+
 static const __DRIimageLoaderExtension droid_image_loader_extension = {
    .base = { __DRI_IMAGE_LOADER, 1 },
 
    .getBuffers          = droid_image_get_buffers,
    .flushFrontBuffer    = droid_flush_front_buffer,
+};
+
+static const __DRIextension *droid_dri2_loader_extensions[] = {
+   &droid_dri2_loader_extension.base,
+   &image_lookup_extension.base,
+   &use_invalidate.base,
+   NULL,
+};
+
+static const __DRIextension *droid_image_loader_extensions[] = {
+   &droid_image_loader_extension.base,
+   &image_lookup_extension.base,
+   &use_invalidate.base,
+   NULL,
 };
 
 EGLBoolean
@@ -914,7 +932,7 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
       goto cleanup_display;
    }
 
-   dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd, 0);
+   dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
    if (dri2_dpy->driver_name == NULL) {
       err = "DRI2: failed to get driver name";
       goto cleanup_device;
@@ -929,21 +947,10 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
 
    /* render nodes cannot use Gem names, and thus do not support
     * the __DRI_DRI2_LOADER extension */
-   if (!dri2_dpy->is_render_node) {
-      dri2_dpy->dri2_loader_extension.base.name = __DRI_DRI2_LOADER;
-      dri2_dpy->dri2_loader_extension.base.version = 3;
-      dri2_dpy->dri2_loader_extension.getBuffers = NULL;
-      dri2_dpy->dri2_loader_extension.flushFrontBuffer = droid_flush_front_buffer;
-      dri2_dpy->dri2_loader_extension.getBuffersWithFormat =
-        droid_get_buffers_with_format;
-      dri2_dpy->extensions[0] = &dri2_dpy->dri2_loader_extension.base;
-   } else {
-      dri2_dpy->extensions[0] = &droid_image_loader_extension.base;
-   }
-   dri2_dpy->extensions[1] = &use_invalidate.base;
-   dri2_dpy->extensions[2] = &image_lookup_extension.base;
-   dri2_dpy->extensions[3] = NULL;
-
+   if (!dri2_dpy->is_render_node)
+      dri2_dpy->loader_extensions = droid_dri2_loader_extensions;
+   else
+      dri2_dpy->loader_extensions = droid_image_loader_extensions;
 
    if (!dri2_create_screen(dpy)) {
       err = "DRI2: failed to create screen";
@@ -958,7 +965,6 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    dpy->Extensions.ANDROID_framebuffer_target = EGL_TRUE;
    dpy->Extensions.ANDROID_image_native_buffer = EGL_TRUE;
    dpy->Extensions.ANDROID_recordable = EGL_TRUE;
-   dpy->Extensions.KHR_image_base = EGL_TRUE;
 
    /* Fill vtbl last to prevent accidentally calling virtual function during
     * initialization.

@@ -143,6 +143,20 @@ lp_build_min_simple(struct lp_build_context *bld,
          intr_size = 128;
       }
    } else if (HAVE_LLVM < 0x0309 &&
+              util_cpu_caps.has_avx2 && type.length > 4) {
+      intr_size = 256;
+      switch (type.width) {
+      case 8:
+         intrinsic = type.sign ? "llvm.x86.avx2.pmins.b" : "llvm.x86.avx2.pminu.b";
+         break;
+      case 16:
+         intrinsic = type.sign ? "llvm.x86.avx2.pmins.w" : "llvm.x86.avx2.pminu.w";
+         break;
+      case 32:
+         intrinsic = type.sign ? "llvm.x86.avx2.pmins.d" : "llvm.x86.avx2.pminu.d";
+         break;
+      }
+   } else if (HAVE_LLVM < 0x0309 &&
               util_cpu_caps.has_sse2 && type.length >= 2) {
       intr_size = 128;
       if ((type.width == 8 || type.width == 16) &&
@@ -347,6 +361,20 @@ lp_build_max_simple(struct lp_build_context *bld,
          intr_size = 128;
       }
    } else if (HAVE_LLVM < 0x0309 &&
+              util_cpu_caps.has_avx2 && type.length > 4) {
+      intr_size = 256;
+      switch (type.width) {
+      case 8:
+         intrinsic = type.sign ? "llvm.x86.avx2.pmaxs.b" : "llvm.x86.avx2.pmaxu.b";
+         break;
+      case 16:
+         intrinsic = type.sign ? "llvm.x86.avx2.pmaxs.w" : "llvm.x86.avx2.pmaxu.w";
+         break;
+      case 32:
+         intrinsic = type.sign ? "llvm.x86.avx2.pmaxs.d" : "llvm.x86.avx2.pmaxu.d";
+         break;
+      }
+   } else if (HAVE_LLVM < 0x0309 &&
               util_cpu_caps.has_sse2 && type.length >= 2) {
       intr_size = 128;
       if ((type.width == 8 || type.width == 16) &&
@@ -526,18 +554,27 @@ lp_build_add(struct lp_build_context *bld,
       if(a == bld->one || b == bld->one)
         return bld->one;
 
-      if (type.width * type.length == 128 &&
-          !type.floating && !type.fixed) {
-         if(util_cpu_caps.has_sse2) {
-           if(type.width == 8)
-             intrinsic = type.sign ? "llvm.x86.sse2.padds.b" : "llvm.x86.sse2.paddus.b";
-           if(type.width == 16)
-             intrinsic = type.sign ? "llvm.x86.sse2.padds.w" : "llvm.x86.sse2.paddus.w";
-         } else if (util_cpu_caps.has_altivec) {
-           if(type.width == 8)
-              intrinsic = type.sign ? "llvm.ppc.altivec.vaddsbs" : "llvm.ppc.altivec.vaddubs";
-           if(type.width == 16)
-              intrinsic = type.sign ? "llvm.ppc.altivec.vaddshs" : "llvm.ppc.altivec.vadduhs";
+      if (!type.floating && !type.fixed) {
+         if (type.width * type.length == 128) {
+            if(util_cpu_caps.has_sse2) {
+              if(type.width == 8)
+                intrinsic = type.sign ? "llvm.x86.sse2.padds.b" : "llvm.x86.sse2.paddus.b";
+              if(type.width == 16)
+                intrinsic = type.sign ? "llvm.x86.sse2.padds.w" : "llvm.x86.sse2.paddus.w";
+            } else if (util_cpu_caps.has_altivec) {
+              if(type.width == 8)
+                 intrinsic = type.sign ? "llvm.ppc.altivec.vaddsbs" : "llvm.ppc.altivec.vaddubs";
+              if(type.width == 16)
+                 intrinsic = type.sign ? "llvm.ppc.altivec.vaddshs" : "llvm.ppc.altivec.vadduhs";
+            }
+         }
+         if (type.width * type.length == 256) {
+            if(util_cpu_caps.has_avx2) {
+              if(type.width == 8)
+                intrinsic = type.sign ? "llvm.x86.avx2.padds.b" : "llvm.x86.avx2.paddus.b";
+              if(type.width == 16)
+                intrinsic = type.sign ? "llvm.x86.avx2.padds.w" : "llvm.x86.avx2.paddus.w";
+            }
          }
       }
    
@@ -818,18 +855,27 @@ lp_build_sub(struct lp_build_context *bld,
       if(b == bld->one)
         return bld->zero;
 
-      if (type.width * type.length == 128 &&
-          !type.floating && !type.fixed) {
-         if (util_cpu_caps.has_sse2) {
-           if(type.width == 8)
-              intrinsic = type.sign ? "llvm.x86.sse2.psubs.b" : "llvm.x86.sse2.psubus.b";
-           if(type.width == 16)
-              intrinsic = type.sign ? "llvm.x86.sse2.psubs.w" : "llvm.x86.sse2.psubus.w";
-         } else if (util_cpu_caps.has_altivec) {
-           if(type.width == 8)
-              intrinsic = type.sign ? "llvm.ppc.altivec.vsubsbs" : "llvm.ppc.altivec.vsububs";
-           if(type.width == 16)
-              intrinsic = type.sign ? "llvm.ppc.altivec.vsubshs" : "llvm.ppc.altivec.vsubuhs";
+      if (!type.floating && !type.fixed) {
+         if (type.width * type.length == 128) {
+            if (util_cpu_caps.has_sse2) {
+              if(type.width == 8)
+                 intrinsic = type.sign ? "llvm.x86.sse2.psubs.b" : "llvm.x86.sse2.psubus.b";
+              if(type.width == 16)
+                 intrinsic = type.sign ? "llvm.x86.sse2.psubs.w" : "llvm.x86.sse2.psubus.w";
+            } else if (util_cpu_caps.has_altivec) {
+              if(type.width == 8)
+                 intrinsic = type.sign ? "llvm.ppc.altivec.vsubsbs" : "llvm.ppc.altivec.vsububs";
+              if(type.width == 16)
+                 intrinsic = type.sign ? "llvm.ppc.altivec.vsubshs" : "llvm.ppc.altivec.vsubuhs";
+            }
+         }
+         if (type.width * type.length == 256) {
+            if (util_cpu_caps.has_avx2) {
+              if(type.width == 8)
+                 intrinsic = type.sign ? "llvm.x86.avx2.psubs.b" : "llvm.x86.avx2.psubus.b";
+              if(type.width == 16)
+                 intrinsic = type.sign ? "llvm.x86.avx2.psubs.w" : "llvm.x86.avx2.psubus.w";
+            }
          }
       }
    
@@ -1000,14 +1046,14 @@ lp_build_mul(struct lp_build_context *bld,
       struct lp_type wide_type = lp_wider_type(type);
       LLVMValueRef al, ah, bl, bh, abl, abh, ab;
 
-      lp_build_unpack2(bld->gallivm, type, wide_type, a, &al, &ah);
-      lp_build_unpack2(bld->gallivm, type, wide_type, b, &bl, &bh);
+      lp_build_unpack2_native(bld->gallivm, type, wide_type, a, &al, &ah);
+      lp_build_unpack2_native(bld->gallivm, type, wide_type, b, &bl, &bh);
 
       /* PMULLW, PSRLW, PADDW */
       abl = lp_build_mul_norm(bld->gallivm, wide_type, al, bl);
       abh = lp_build_mul_norm(bld->gallivm, wide_type, ah, bh);
 
-      ab = lp_build_pack2(bld->gallivm, wide_type, type, abl, abh);
+      ab = lp_build_pack2_native(bld->gallivm, wide_type, type, abl, abh);
 
       return ab;
    }
@@ -1304,9 +1350,9 @@ lp_build_lerp(struct lp_build_context *bld,
 
       lp_build_context_init(&wide_bld, bld->gallivm, wide_type);
 
-      lp_build_unpack2(bld->gallivm, type, wide_type, x,  &xl,  &xh);
-      lp_build_unpack2(bld->gallivm, type, wide_type, v0, &v0l, &v0h);
-      lp_build_unpack2(bld->gallivm, type, wide_type, v1, &v1l, &v1h);
+      lp_build_unpack2_native(bld->gallivm, type, wide_type, x,  &xl,  &xh);
+      lp_build_unpack2_native(bld->gallivm, type, wide_type, v0, &v0l, &v0h);
+      lp_build_unpack2_native(bld->gallivm, type, wide_type, v1, &v1l, &v1h);
 
       /*
        * Lerp both halves.
@@ -1317,7 +1363,7 @@ lp_build_lerp(struct lp_build_context *bld,
       resl = lp_build_lerp_simple(&wide_bld, xl, v0l, v1l, flags);
       resh = lp_build_lerp_simple(&wide_bld, xh, v0h, v1h, flags);
 
-      res = lp_build_pack2(bld->gallivm, wide_type, type, resl, resh);
+      res = lp_build_pack2_native(bld->gallivm, wide_type, type, resl, resh);
    } else {
       res = lp_build_lerp_simple(bld, x, v0, v1, flags);
    }
@@ -1585,6 +1631,16 @@ lp_build_abs(struct lp_build_context *bld,
          return lp_build_intrinsic_unary(builder, "llvm.x86.ssse3.pabs.w.128", vec_type, a);
       case 32:
          return lp_build_intrinsic_unary(builder, "llvm.x86.ssse3.pabs.d.128", vec_type, a);
+      }
+   }
+   else if (type.width*type.length == 256 && util_cpu_caps.has_avx2) {
+      switch(type.width) {
+      case 8:
+         return lp_build_intrinsic_unary(builder, "llvm.x86.avx2.pabs.b", vec_type, a);
+      case 16:
+         return lp_build_intrinsic_unary(builder, "llvm.x86.avx2.pabs.w", vec_type, a);
+      case 32:
+         return lp_build_intrinsic_unary(builder, "llvm.x86.avx2.pabs.d", vec_type, a);
       }
    }
    else if (type.width*type.length == 256 && util_cpu_caps.has_ssse3 &&

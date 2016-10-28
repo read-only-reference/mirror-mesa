@@ -21,6 +21,7 @@
  * IN THE SOFTWARE.
  */
 
+#include "compiler/nir/nir.h"
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
@@ -34,7 +35,9 @@ upload_sbe(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FS_PROG_DATA */
-   uint32_t num_outputs = brw->wm.prog_data->num_varying_inputs;
+   const struct brw_wm_prog_data *wm_prog_data =
+      brw_wm_prog_data(brw->wm.base.prog_data);
+   uint32_t num_outputs = wm_prog_data->num_varying_inputs;
    uint16_t attr_overrides[VARYING_SLOT_MAX];
    uint32_t urb_entry_read_length;
    uint32_t urb_entry_read_offset;
@@ -92,8 +95,10 @@ upload_sbe(struct brw_context *brw)
       /* prepare the active component dwords */
       int input_index = 0;
       for (int attr = 0; attr < VARYING_SLOT_MAX; attr++) {
-         if (!(brw->fragment_program->Base.InputsRead & BITFIELD64_BIT(attr)))
+         if (!(brw->fragment_program->info.inputs_read &
+               BITFIELD64_BIT(attr))) {
             continue;
+         }
 
          assert(input_index < 32);
 
@@ -109,7 +114,7 @@ upload_sbe(struct brw_context *brw)
    OUT_BATCH(_3DSTATE_SBE << 16 | (sbe_cmd_length - 2));
    OUT_BATCH(dw1);
    OUT_BATCH(point_sprite_enables);
-   OUT_BATCH(brw->wm.prog_data->flat_inputs);
+   OUT_BATCH(wm_prog_data->flat_inputs);
    if (sbe_cmd_length >= 6) {
       OUT_BATCH(dw4);
       OUT_BATCH(dw5);

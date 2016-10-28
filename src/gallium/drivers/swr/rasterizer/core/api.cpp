@@ -55,6 +55,11 @@ static INLINE SWR_CONTEXT* GetContext(HANDLE hContext)
     return (SWR_CONTEXT*)hContext;
 }
 
+void WakeAllThreads(SWR_CONTEXT *pContext)
+{
+    pContext->FifosNotEmpty.notify_all();
+}
+
 //////////////////////////////////////////////////////////////////////////
 /// @brief Create SWR Context.
 /// @param pCreateInfo - pointer to creation info.
@@ -107,9 +112,12 @@ HANDLE SwrCreateContext(
     pContext->ppScratch = new uint8_t*[pContext->NumWorkerThreads];
     pContext->pStats = new SWR_STATS[pContext->NumWorkerThreads];
 
+#if defined(KNOB_ENABLE_AR)
     // Setup ArchRast thread contexts which includes +1 for API thread.
     pContext->pArContext = new HANDLE[pContext->NumWorkerThreads+1];
     pContext->pArContext[pContext->NumWorkerThreads] = ArchRast::CreateThreadContext();
+    _AR_EVENT(pContext->pArContext[pContext->NumWorkerThreads], ThreadStartApiEvent());
+#endif
 
     // Allocate scratch space for workers.
     ///@note We could lazily allocate this but its rather small amount of memory.
@@ -126,8 +134,11 @@ HANDLE SwrCreateContext(
         pContext->ppScratch[i] = (uint8_t*)AlignedMalloc(32 * sizeof(KILOBYTE), KNOB_SIMD_WIDTH * 4);
 #endif
 
+#if defined(KNOB_ENABLE_AR)
         // Initialize worker thread context for ArchRast.
         pContext->pArContext[i] = ArchRast::CreateThreadContext();
+        _AR_EVENT(pContext->pArContext[i], ThreadStartWorkerEvent());
+#endif
     }
 
     // State setup AFTER context is fully initialized
@@ -154,17 +165,14 @@ HANDLE SwrCreateContext(
 
     pCreateInfo->contextSaveSize = sizeof(API_STATE);
 
+    StartThreadPool(pContext, &pContext->threadPool);
+
     return (HANDLE)pContext;
 }
 
 void CopyState(DRAW_STATE& dst, const DRAW_STATE& src)
 {
     memcpy(&dst.state, &src.state, sizeof(API_STATE));
-}
-
-void WakeAllThreads(SWR_CONTEXT *pContext)
-{
-    pContext->FifosNotEmpty.notify_all();
 }
 
 template<bool IsDraw>
@@ -309,7 +317,10 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT *pContext, bool isSplitDraw = false)
 
         SWR_ASSERT(pCurDrawContext->pArena->IsEmpty() == true);
 
+        // Reset dependency
         pCurDrawContext->dependent = false;
+        pCurDrawContext->dependentFE = false;
+
         pCurDrawContext->pContext = pContext;
         pCurDrawContext->isCompute = false; // Dispatch has to set this to true.
 
@@ -377,7 +388,9 @@ void SwrDestroyContext(HANDLE hContext)
         AlignedFree(pContext->ppScratch[i]);
 #endif
 
+#if defined(KNOB_ENABLE_AR)
         ArchRast::DestroyThreadContext(pContext->pArContext[i]);
+#endif
     }
 
     delete[] pContext->ppScratch;
@@ -420,6 +433,10 @@ void SetupDefaultState(SWR_CONTEXT *pContext)
 
     pState->rastState.cullMode = SWR_CULLMODE_NONE;
     pState->rastState.frontWinding = SWR_FRONTWINDING_CCW;
+
+    pState->depthBoundsState.depthBoundsTestEnable = false;
+    pState->depthBoundsState.depthBoundsTestMinValue = 0.0f;
+    pState->depthBoundsState.depthBoundsTestMaxValue = 1.0f;
 }
 
 void SwrSync(HANDLE hContext, PFN_CALLBACK_FUNC pfnFunc, uint64_t userData, uint64_t userData2, uint64_t userData3)
@@ -624,6 +641,15 @@ void SwrSetBackendState(
     API_STATE* pState = GetDrawState(GetContext(hContext));
 
     pState->backendState = *pBEState;
+}
+
+void SwrSetDepthBoundsState(
+    HANDLE hContext,
+    SWR_DEPTH_BOUNDS_STATE *pDBState)
+{
+    API_STATE* pState = GetDrawState(GetContext(hContext));
+
+    pState->depthBoundsState = *pDBState;
 }
 
 void SwrSetPixelShaderState(
@@ -1090,6 +1116,7 @@ void DrawInstanced(
     DRAW_CONTEXT* pDC = GetDrawContext(pContext);
 
     AR_API_BEGIN(APIDraw, pDC->drawId);
+    AR_API_EVENT(DrawInstancedEvent(pDC->drawId, topology, numVertices, startVertex, numInstances, startInstance));
 
     uint32_t maxVertsPerDraw = MaxVertsPerDraw(pDC, numVertices, topology);
     uint32_t primsPerDraw = GetNumPrims(topology, maxVertsPerDraw);
@@ -1105,6 +1132,10 @@ void DrawInstanced(
     {
         pState->rastState.cullMode = SWR_CULLMODE_NONE;
         pState->forceFront = true;
+    }
+    else if (topology == TOP_RECT_LIST)
+    {
+        pState->rastState.cullMode = SWR_CULLMODE_NONE;
     }
 
     int draw = 0;
@@ -1211,7 +1242,7 @@ void DrawIndexedInstance(
     API_STATE* pState = &pDC->pState->state;
 
     AR_API_BEGIN(APIDrawIndexed, pDC->drawId);
-    AR_API_EVENT(DrawIndexedInstance(topology, numIndices, indexOffset, baseVertex, numInstances, startInstance));
+    AR_API_EVENT(DrawIndexedInstancedEvent(pDC->drawId, topology, numIndices, indexOffset, baseVertex, numInstances, startInstance));
 
     uint32_t maxIndicesPerDraw = MaxVertsPerDraw(pDC, numIndices, topology);
     uint32_t primsPerDraw = GetNumPrims(topology, maxIndicesPerDraw);
@@ -1240,6 +1271,10 @@ void DrawIndexedInstance(
     {
         pState->rastState.cullMode = SWR_CULLMODE_NONE;
         pState->forceFront = true;
+    }
+    else if (topology == TOP_RECT_LIST)
+    {
+        pState->rastState.cullMode = SWR_CULLMODE_NONE;
     }
 
     while (remainingIndices)
@@ -1413,7 +1448,7 @@ void SwrDispatch(
     DRAW_CONTEXT* pDC = GetDrawContext(pContext);
 
     AR_API_BEGIN(APIDispatch, pDC->drawId);
-
+    AR_API_EVENT(DispatchEvent(pDC->drawId, threadGroupCountX, threadGroupCountY, threadGroupCountZ));
     pDC->isCompute = true;      // This is a compute context.
 
     COMPUTE_DESC* pTaskData = (COMPUTE_DESC*)pDC->pArena->AllocAligned(sizeof(COMPUTE_DESC), 64);
@@ -1425,7 +1460,7 @@ void SwrDispatch(
     uint32_t totalThreadGroups = threadGroupCountX * threadGroupCountY * threadGroupCountZ;
     uint32_t dcIndex = pDC->drawId % KNOB_MAX_DRAWS_IN_FLIGHT;
     pDC->pDispatch = &pContext->pDispatchQueueArray[dcIndex];
-    pDC->pDispatch->initialize(totalThreadGroups, pTaskData);
+    pDC->pDispatch->initialize(totalThreadGroups, pTaskData, &ProcessComputeBE);
 
     QueueDispatch(pContext);
     AR_API_END(APIDispatch, threadGroupCountX * threadGroupCountY * threadGroupCountZ);
@@ -1435,7 +1470,7 @@ void SwrDispatch(
 // described by pState
 void SWR_API SwrStoreTiles(
     HANDLE hContext,
-    SWR_RENDERTARGET_ATTACHMENT attachment,
+    uint32_t attachmentMask,
     SWR_TILE_STATE postStoreTileState,
     const SWR_RECT& storeRect)
 {
@@ -1451,7 +1486,7 @@ void SWR_API SwrStoreTiles(
 
     pDC->FeWork.type = STORETILES;
     pDC->FeWork.pfnWork = ProcessStoreTiles;
-    pDC->FeWork.desc.storeTiles.attachment = attachment;
+    pDC->FeWork.desc.storeTiles.attachmentMask = attachmentMask;
     pDC->FeWork.desc.storeTiles.postStoreTileState = postStoreTileState;
     pDC->FeWork.desc.storeTiles.rect = storeRect;
     pDC->FeWork.desc.storeTiles.rect &= g_MaxScissorRect;
@@ -1570,7 +1605,11 @@ void SwrEnableStats(
 void SWR_API SwrEndFrame(
     HANDLE hContext)
 {
-    RDTSC_ENDFRAME();
     SWR_CONTEXT *pContext = GetContext(hContext);
+    DRAW_CONTEXT* pDC = GetDrawContext(pContext);
+
+    RDTSC_ENDFRAME();
+    AR_API_EVENT(FrameEndEvent(pContext->frameCount, pDC->drawId));
+
     pContext->frameCount++;
 }

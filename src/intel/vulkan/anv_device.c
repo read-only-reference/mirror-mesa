@@ -293,7 +293,7 @@ VkResult anv_CreateInstance(
          return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
    }
 
-   instance = anv_alloc2(&default_alloc, pAllocator, sizeof(*instance), 8,
+   instance = vk_alloc2(&default_alloc, pAllocator, sizeof(*instance), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
    if (!instance)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -333,7 +333,7 @@ void anv_DestroyInstance(
 
    _mesa_locale_fini();
 
-   anv_free(&instance->alloc, instance);
+   vk_free(&instance->alloc, instance);
 }
 
 VkResult anv_EnumeratePhysicalDevices(
@@ -385,6 +385,8 @@ VkResult anv_EnumeratePhysicalDevices(
    } else if (*pPhysicalDeviceCount >= 1) {
       pPhysicalDevices[0] = anv_physical_device_to_handle(&instance->physicalDevice);
       *pPhysicalDeviceCount = 1;
+   } else if (*pPhysicalDeviceCount < instance->physicalDeviceCount) {
+      return VK_INCOMPLETE;
    } else {
       *pPhysicalDeviceCount = 0;
    }
@@ -418,7 +420,7 @@ void anv_GetPhysicalDeviceFeatures(
       .largePoints                              = true,
       .alphaToOne                               = true,
       .multiViewport                            = true,
-      .samplerAnisotropy                        = false, /* FINISHME */
+      .samplerAnisotropy                        = true,
       .textureCompressionETC2                   = pdevice->info.gen >= 8 ||
                                                   pdevice->info.is_baytrail,
       .textureCompressionASTC_LDR               = pdevice->info.gen >= 9, /* FINISHME CHV */
@@ -572,7 +574,7 @@ void anv_GetPhysicalDeviceProperties(
       .storageImageSampleCounts                 = VK_SAMPLE_COUNT_1_BIT,
       .maxSampleMaskWords                       = 1,
       .timestampComputeAndGraphics              = false,
-      .timestampPeriod                          = time_stamp_base / (1000 * 1000 * 1000),
+      .timestampPeriod                          = time_stamp_base,
       .maxClipDistances                         = 0 /* FIXME */,
       .maxCullDistances                         = 0 /* FIXME */,
       .maxCombinedClipAndCullDistances          = 0 /* FIXME */,
@@ -680,7 +682,7 @@ PFN_vkVoidFunction anv_GetInstanceProcAddr(
     VkInstance                                  instance,
     const char*                                 pName)
 {
-   return anv_lookup_entrypoint(pName);
+   return anv_lookup_entrypoint(NULL, pName);
 }
 
 /* With version 1+ of the loader interface the ICD should expose
@@ -700,10 +702,11 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(
 }
 
 PFN_vkVoidFunction anv_GetDeviceProcAddr(
-    VkDevice                                    device,
+    VkDevice                                    _device,
     const char*                                 pName)
 {
-   return anv_lookup_entrypoint(pName);
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   return anv_lookup_entrypoint(&device->info, pName);
 }
 
 static VkResult
@@ -852,9 +855,7 @@ VkResult anv_CreateDevice(
          return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
    }
 
-   anv_set_dispatch_devinfo(&physical_device->info);
-
-   device = anv_alloc2(&physical_device->instance->alloc, pAllocator,
+   device = vk_alloc2(&physical_device->instance->alloc, pAllocator,
                        sizeof(*device), 8,
                        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
    if (!device)
@@ -940,10 +941,6 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_fd;
 
-   result = anv_device_init_meta(device);
-   if (result != VK_SUCCESS)
-      goto fail_fd;
-
    anv_device_init_blorp(device);
 
    anv_device_init_border_colors(device);
@@ -955,7 +952,7 @@ VkResult anv_CreateDevice(
  fail_fd:
    close(device->fd);
  fail_device:
-   anv_free(&device->alloc, device);
+   vk_free(&device->alloc, device);
 
    return result;
 }
@@ -969,8 +966,6 @@ void anv_DestroyDevice(
    anv_queue_finish(&device->queue);
 
    anv_device_finish_blorp(device);
-
-   anv_device_finish_meta(device);
 
 #ifdef HAVE_VALGRIND
    /* We only need to free these to prevent valgrind errors.  The backing
@@ -995,7 +990,7 @@ void anv_DestroyDevice(
 
    pthread_mutex_destroy(&device->mutex);
 
-   anv_free(&device->alloc, device);
+   vk_free(&device->alloc, device);
 }
 
 VkResult anv_EnumerateInstanceExtensionProperties(
@@ -1121,7 +1116,7 @@ VkResult anv_QueueWaitIdle(
 {
    ANV_FROM_HANDLE(anv_queue, queue, _queue);
 
-   return ANV_CALL(DeviceWaitIdle)(anv_device_to_handle(queue->device));
+   return anv_DeviceWaitIdle(anv_device_to_handle(queue->device));
 }
 
 VkResult anv_DeviceWaitIdle(
@@ -1180,7 +1175,7 @@ VkResult anv_AllocateMemory(
 
    /* FINISHME: Fail if allocation request exceeds heap size. */
 
-   mem = anv_alloc2(&device->alloc, pAllocator, sizeof(*mem), 8,
+   mem = vk_alloc2(&device->alloc, pAllocator, sizeof(*mem), 8,
                     VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (mem == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1199,7 +1194,7 @@ VkResult anv_AllocateMemory(
    return VK_SUCCESS;
 
  fail:
-   anv_free2(&device->alloc, pAllocator, mem);
+   vk_free2(&device->alloc, pAllocator, mem);
 
    return result;
 }
@@ -1221,7 +1216,7 @@ void anv_FreeMemory(
    if (mem->bo.gem_handle != 0)
       anv_gem_close(device, mem->bo.gem_handle);
 
-   anv_free2(&device->alloc, pAllocator, mem);
+   vk_free2(&device->alloc, pAllocator, mem);
 }
 
 VkResult anv_MapMemory(
@@ -1416,26 +1411,6 @@ VkResult anv_BindBufferMemory(
    } else {
       buffer->bo = NULL;
       buffer->offset = 0;
-   }
-
-   return VK_SUCCESS;
-}
-
-VkResult anv_BindImageMemory(
-    VkDevice                                    device,
-    VkImage                                     _image,
-    VkDeviceMemory                              _memory,
-    VkDeviceSize                                memoryOffset)
-{
-   ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
-   ANV_FROM_HANDLE(anv_image, image, _image);
-
-   if (mem) {
-      image->bo = &mem->bo;
-      image->offset = memoryOffset;
-   } else {
-      image->bo = NULL;
-      image->offset = 0;
    }
 
    return VK_SUCCESS;
@@ -1732,7 +1707,7 @@ VkResult anv_CreateBuffer(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
 
-   buffer = anv_alloc2(&device->alloc, pAllocator, sizeof(*buffer), 8,
+   buffer = vk_alloc2(&device->alloc, pAllocator, sizeof(*buffer), 8,
                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (buffer == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1755,7 +1730,7 @@ void anv_DestroyBuffer(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
 
-   anv_free2(&device->alloc, pAllocator, buffer);
+   vk_free2(&device->alloc, pAllocator, buffer);
 }
 
 void
@@ -1782,7 +1757,7 @@ void anv_DestroySampler(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_sampler, sampler, _sampler);
 
-   anv_free2(&device->alloc, pAllocator, sampler);
+   vk_free2(&device->alloc, pAllocator, sampler);
 }
 
 VkResult anv_CreateFramebuffer(
@@ -1798,7 +1773,7 @@ VkResult anv_CreateFramebuffer(
 
    size_t size = sizeof(*framebuffer) +
                  sizeof(struct anv_image_view *) * pCreateInfo->attachmentCount;
-   framebuffer = anv_alloc2(&device->alloc, pAllocator, size, 8,
+   framebuffer = vk_alloc2(&device->alloc, pAllocator, size, 8,
                             VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (framebuffer == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1826,5 +1801,5 @@ void anv_DestroyFramebuffer(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_framebuffer, fb, _fb);
 
-   anv_free2(&device->alloc, pAllocator, fb);
+   vk_free2(&device->alloc, pAllocator, fb);
 }

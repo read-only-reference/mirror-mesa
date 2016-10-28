@@ -22,7 +22,9 @@
   *
   */
 
-#pragma once
+#ifndef GEN_DEVICE_INFO_H
+#define GEN_DEVICE_INFO_H
+
 #include <stdbool.h>
 
 /**
@@ -94,8 +96,8 @@ struct gen_device_info
     */
    unsigned num_slices;
    unsigned max_vs_threads;   /**< Maximum Vertex Shader threads */
-   unsigned max_hs_threads;   /**< Maximum Hull Shader threads */
-   unsigned max_ds_threads;   /**< Maximum Domain Shader threads */
+   unsigned max_tcs_threads;  /**< Maximum Hull Shader threads */
+   unsigned max_tes_threads;  /**< Maximum Domain Shader threads */
    unsigned max_gs_threads;   /**< Maximum Geometry Shader threads. */
    /**
     * Theoretical maximum number of Pixel Shader threads.
@@ -135,13 +137,15 @@ struct gen_device_info
       unsigned size;
       unsigned min_vs_entries;
       unsigned max_vs_entries;
-      unsigned max_hs_entries;
+      unsigned max_tcs_entries;
       unsigned min_ds_entries;
-      unsigned max_ds_entries;
+      unsigned max_tes_entries;
       unsigned max_gs_entries;
    } urb;
    /** @} */
 };
 
-const bool gen_get_device_info(int devid, struct gen_device_info *devinfo);
+bool gen_get_device_info(int devid, struct gen_device_info *devinfo);
 const char *gen_get_device_name(int devid);
+
+#endif /* GEN_DEVICE_INFO_H */

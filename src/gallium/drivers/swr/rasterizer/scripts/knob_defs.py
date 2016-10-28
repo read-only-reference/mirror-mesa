@@ -22,6 +22,14 @@
 # Python source
 KNOBS = [
 
+    ['ENABLE_ASSERT_DIALOGS', {
+        'type'      : 'bool',
+        'default'   : 'true',
+        'desc'      : ['Use dialogs when asserts fire.',
+                       'Asserts are only enabled in debug builds'],
+        'category'  : 'debug',
+    }],
+
     ['SINGLE_THREADED', {
         'type'      : 'bool',
         'default'   : 'false',
@@ -146,11 +154,11 @@ KNOBS = [
     }],
 
 
-    ['BUCKETS_ENABLE_THREADVIZ', {
-        'type'      : 'bool',
-        'default'   : 'false',
-        'desc'      : ['Enable threadviz output.'],
-        'category'  : 'perf',
+    ['DEBUG_OUTPUT_DIR', {
+        'type'      : 'std::string',
+        'default'   : '/tmp/Rast/DebugOutput',
+        'desc'      : ['Output directory for debug data.'],
+        'category'  : 'debug',
     }],
 
     ['TOSS_DRAW', {

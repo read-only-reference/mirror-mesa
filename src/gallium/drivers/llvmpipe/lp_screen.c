@@ -200,6 +200,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
       return 2048;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+   case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
       return 1;
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return 0;
@@ -265,6 +266,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_FAKE_SW_MSAA:
       return 1;
    case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
       return 1;
 
    case PIPE_CAP_VENDOR_ID:
@@ -279,6 +281,12 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
       if (!os_get_total_physical_memory(&system_memory))
          return 0;
+
+      if (sizeof(void *) == 4)
+         /* Cap to 2 GB on 32 bits system. We do this because llvmpipe does
+          * eat application memory, which is quite limited on 32 bits. App
+          * shouldn't expect too much available memory. */
+         system_memory = MIN2(system_memory, 2048 << 20);
 
       return (int)(system_memory >> 20);
    }

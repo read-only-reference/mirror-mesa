@@ -56,14 +56,17 @@ PYTHON_GEN = $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)
 
 glapi_gen_mapi_deps := \
 	mapi_abi.py \
-	$(wildcard glapi/gen/*.xml) \
-	$(wildcard glapi/gen/*.py)
+	$(wildcard $(top_srcdir)/src/mapi/glapi/gen/*.xml) \
+	$(wildcard $(top_srcdir)/src/mapi/glapi/gen/*.py)
 
 if HAVE_SHARED_GLAPI
 BUILT_SOURCES += shared-glapi/glapi_mapi_tmp.h
 
 lib_LTLIBRARIES += shared-glapi/libglapi.la
 shared_glapi_libglapi_la_SOURCES = $(MAPI_GLAPI_FILES) shared-glapi/glapi_mapi_tmp.h
+shared_glapi_libglapi_la_CFLAGS = \
+	$(AM_CFLAGS) \
+	$(VISIBILITY_CFLAGS)
 shared_glapi_libglapi_la_CPPFLAGS = \
 	$(AM_CPPFLAGS) \
 	-DMAPI_MODE_GLAPI \

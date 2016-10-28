@@ -103,6 +103,9 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	if (!radeon_emitted(cs, ctx->b.initial_gfx_cs_size))
 		return;
 
+	if (r600_check_device_reset(&ctx->b))
+		return;
+
 	ctx->gfx_flush_in_progress = true;
 
 	r600_preflush_suspend_features(&ctx->b);
@@ -156,7 +159,7 @@ void si_begin_new_cs(struct si_context *ctx)
 		/* Create a buffer used for writing trace IDs and initialize it to 0. */
 		assert(!ctx->trace_buf);
 		ctx->trace_buf = (struct r600_resource*)
-				 pipe_buffer_create(ctx->b.b.screen, PIPE_BIND_CUSTOM,
+				 pipe_buffer_create(ctx->b.b.screen, 0,
 						    PIPE_USAGE_STAGING, 4);
 		if (ctx->trace_buf)
 			pipe_buffer_write_nooverlap(&ctx->b.b, &ctx->trace_buf->b.b,
@@ -231,7 +234,6 @@ void si_begin_new_cs(struct si_context *ctx)
 	ctx->last_gs_out_prim = -1;
 	ctx->last_prim = -1;
 	ctx->last_multi_vgt_param = -1;
-	ctx->last_ls_hs_config = -1;
 	ctx->last_rast_prim = -1;
 	ctx->last_sc_line_stipple = ~0;
 	ctx->last_vtx_reuse_depth = -1;

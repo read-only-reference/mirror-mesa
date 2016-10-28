@@ -137,7 +137,7 @@ struct SYNC_DESC
 
 struct STORE_TILES_DESC
 {
-    SWR_RENDERTARGET_ATTACHMENT attachment;
+    uint32_t attachmentMask;
     SWR_TILE_STATE postStoreTileState;
     SWR_RECT rect;
 };
@@ -161,7 +161,7 @@ enum WORK_TYPE
     SHUTDOWN,
 };
 
-struct BE_WORK
+OSALIGNSIMD(struct) BE_WORK
 {
     WORK_TYPE type;
     PFN_WORK_FUNC pfnWork;
@@ -286,6 +286,8 @@ OSALIGNLINE(struct) API_STATE
     // Backend state
     SWR_BACKEND_STATE       backendState;
 
+    SWR_DEPTH_BOUNDS_STATE  depthBoundsState;
+
     // PS - Pixel shader state
     SWR_PS_STATE            psState;
 
@@ -402,7 +404,8 @@ struct DRAW_CONTEXT
     CachingArena*   pArena;
 
     uint32_t        drawId;
-    bool            dependent;
+    bool            dependentFE;    // Frontend work is dependent on all previous FE
+    bool            dependent;      // Backend work is dependent on all previous BE
     bool            isCompute;      // Is this DC a compute context?
     bool            cleanupState;   // True if this is the last draw using an entry in the state ring.
     volatile bool   doneFE;         // Is FE work done for this draw?

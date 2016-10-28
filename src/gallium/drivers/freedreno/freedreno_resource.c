@@ -133,6 +133,9 @@ fd_try_shadow_resource(struct fd_context *ctx, struct fd_resource *rsc,
 	struct pipe_resource *prsc = &rsc->base.b;
 	bool fallback = false;
 
+	if (prsc->next)
+		return false;
+
 	/* TODO: somehow munge dimensions and format to copy unsupported
 	 * render target format to something that is supported?
 	 */
@@ -425,7 +428,7 @@ fd_resource_transfer_unmap(struct pipe_context *pctx,
 				   ptrans->box.x + ptrans->box.width);
 
 	pipe_resource_reference(&ptrans->resource, NULL);
-	slab_free_st(&ctx->transfer_pool, ptrans);
+	slab_free(&ctx->transfer_pool, ptrans);
 
 	free(trans->staging);
 }
@@ -451,7 +454,7 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 	DBG("prsc=%p, level=%u, usage=%x, box=%dx%d+%d,%d", prsc, level, usage,
 		box->width, box->height, box->x, box->y);
 
-	ptrans = slab_alloc_st(&ctx->transfer_pool);
+	ptrans = slab_alloc(&ctx->transfer_pool);
 	if (!ptrans)
 		return NULL;
 

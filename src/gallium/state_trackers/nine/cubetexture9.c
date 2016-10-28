@@ -111,7 +111,7 @@ NineCubeTexture9_ctor( struct NineCubeTexture9 *This,
         face_size = nine_format_get_size_and_offsets(pf, level_offsets,
                                                      EdgeLength, EdgeLength,
                                                      info->last_level);
-        This->managed_buffer = align_malloc(6 * face_size, 32);
+        This->managed_buffer = align_calloc(6 * face_size, 32);
         if (!This->managed_buffer)
             return E_OUTOFMEMORY;
     }
@@ -302,9 +302,9 @@ IDirect3DCubeTexture9Vtbl NineCubeTexture9_vtable = {
     (void *)NineUnknown_AddRef,
     (void *)NineUnknown_Release,
     (void *)NineUnknown_GetDevice, /* actually part of Resource9 iface */
-    (void *)NineResource9_SetPrivateData,
-    (void *)NineResource9_GetPrivateData,
-    (void *)NineResource9_FreePrivateData,
+    (void *)NineUnknown_SetPrivateData,
+    (void *)NineUnknown_GetPrivateData,
+    (void *)NineUnknown_FreePrivateData,
     (void *)NineResource9_SetPriority,
     (void *)NineResource9_GetPriority,
     (void *)NineBaseTexture9_PreLoad,

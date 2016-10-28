@@ -118,8 +118,8 @@ static const struct gen_device_info gen_device_info_ivb_gt1 = {
    GEN7_FEATURES, .is_ivybridge = true, .gt = 1,
    .num_slices = 1,
    .max_vs_threads = 36,
-   .max_hs_threads = 36,
-   .max_ds_threads = 36,
+   .max_tcs_threads = 36,
+   .max_tes_threads = 36,
    .max_gs_threads = 36,
    .max_wm_threads = 48,
    .max_cs_threads = 36,
@@ -127,9 +127,9 @@ static const struct gen_device_info gen_device_info_ivb_gt1 = {
       .size = 128,
       .min_vs_entries = 32,
       .max_vs_entries = 512,
-      .max_hs_entries = 32,
+      .max_tcs_entries = 32,
       .min_ds_entries = 10,
-      .max_ds_entries = 288,
+      .max_tes_entries = 288,
       .max_gs_entries = 192,
    },
 };
@@ -138,8 +138,8 @@ static const struct gen_device_info gen_device_info_ivb_gt2 = {
    GEN7_FEATURES, .is_ivybridge = true, .gt = 2,
    .num_slices = 1,
    .max_vs_threads = 128,
-   .max_hs_threads = 128,
-   .max_ds_threads = 128,
+   .max_tcs_threads = 128,
+   .max_tes_threads = 128,
    .max_gs_threads = 128,
    .max_wm_threads = 172,
    .max_cs_threads = 64,
@@ -147,9 +147,9 @@ static const struct gen_device_info gen_device_info_ivb_gt2 = {
       .size = 256,
       .min_vs_entries = 32,
       .max_vs_entries = 704,
-      .max_hs_entries = 64,
+      .max_tcs_entries = 64,
       .min_ds_entries = 10,
-      .max_ds_entries = 448,
+      .max_tes_entries = 448,
       .max_gs_entries = 320,
    },
 };
@@ -159,8 +159,8 @@ static const struct gen_device_info gen_device_info_byt = {
    .num_slices = 1,
    .has_llc = false,
    .max_vs_threads = 36,
-   .max_hs_threads = 36,
-   .max_ds_threads = 36,
+   .max_tcs_threads = 36,
+   .max_tes_threads = 36,
    .max_gs_threads = 36,
    .max_wm_threads = 48,
    .max_cs_threads = 32,
@@ -168,9 +168,9 @@ static const struct gen_device_info gen_device_info_byt = {
       .size = 128,
       .min_vs_entries = 32,
       .max_vs_entries = 512,
-      .max_hs_entries = 32,
+      .max_tcs_entries = 32,
       .min_ds_entries = 10,
-      .max_ds_entries = 288,
+      .max_tes_entries = 288,
       .max_gs_entries = 192,
    },
 };
@@ -185,8 +185,8 @@ static const struct gen_device_info gen_device_info_hsw_gt1 = {
    HSW_FEATURES, .gt = 1,
    .num_slices = 1,
    .max_vs_threads = 70,
-   .max_hs_threads = 70,
-   .max_ds_threads = 70,
+   .max_tcs_threads = 70,
+   .max_tes_threads = 70,
    .max_gs_threads = 70,
    .max_wm_threads = 102,
    .max_cs_threads = 70,
@@ -194,9 +194,9 @@ static const struct gen_device_info gen_device_info_hsw_gt1 = {
       .size = 128,
       .min_vs_entries = 32,
       .max_vs_entries = 640,
-      .max_hs_entries = 64,
+      .max_tcs_entries = 64,
       .min_ds_entries = 10,
-      .max_ds_entries = 384,
+      .max_tes_entries = 384,
       .max_gs_entries = 256,
    },
 };
@@ -205,8 +205,8 @@ static const struct gen_device_info gen_device_info_hsw_gt2 = {
    HSW_FEATURES, .gt = 2,
    .num_slices = 1,
    .max_vs_threads = 280,
-   .max_hs_threads = 256,
-   .max_ds_threads = 280,
+   .max_tcs_threads = 256,
+   .max_tes_threads = 280,
    .max_gs_threads = 256,
    .max_wm_threads = 204,
    .max_cs_threads = 70,
@@ -214,9 +214,9 @@ static const struct gen_device_info gen_device_info_hsw_gt2 = {
       .size = 256,
       .min_vs_entries = 64,
       .max_vs_entries = 1664,
-      .max_hs_entries = 128,
+      .max_tcs_entries = 128,
       .min_ds_entries = 10,
-      .max_ds_entries = 960,
+      .max_tes_entries = 960,
       .max_gs_entries = 640,
    },
 };
@@ -225,8 +225,8 @@ static const struct gen_device_info gen_device_info_hsw_gt3 = {
    HSW_FEATURES, .gt = 3,
    .num_slices = 2,
    .max_vs_threads = 280,
-   .max_hs_threads = 256,
-   .max_ds_threads = 280,
+   .max_tcs_threads = 256,
+   .max_tes_threads = 280,
    .max_gs_threads = 256,
    .max_wm_threads = 408,
    .max_cs_threads = 70,
@@ -234,9 +234,9 @@ static const struct gen_device_info gen_device_info_hsw_gt3 = {
       .size = 512,
       .min_vs_entries = 64,
       .max_vs_entries = 1664,
-      .max_hs_entries = 128,
+      .max_tcs_entries = 128,
       .min_ds_entries = 10,
-      .max_ds_entries = 960,
+      .max_tes_entries = 960,
       .max_gs_entries = 640,
    },
 };
@@ -251,8 +251,8 @@ static const struct gen_device_info gen_device_info_hsw_gt3 = {
    .supports_simd16_3src = true,                    \
    .has_surface_tile_offset = true,                 \
    .max_vs_threads = 504,                           \
-   .max_hs_threads = 504,                           \
-   .max_ds_threads = 504,                           \
+   .max_tcs_threads = 504,                          \
+   .max_tes_threads = 504,                          \
    .max_gs_threads = 504,                           \
    .max_wm_threads = 384
 
@@ -264,9 +264,9 @@ static const struct gen_device_info gen_device_info_bdw_gt1 = {
       .size = 192,
       .min_vs_entries = 64,
       .max_vs_entries = 2560,
-      .max_hs_entries = 504,
+      .max_tcs_entries = 504,
       .min_ds_entries = 34,
-      .max_ds_entries = 1536,
+      .max_tes_entries = 1536,
       .max_gs_entries = 960,
    }
 };
@@ -279,9 +279,9 @@ static const struct gen_device_info gen_device_info_bdw_gt2 = {
       .size = 384,
       .min_vs_entries = 64,
       .max_vs_entries = 2560,
-      .max_hs_entries = 504,
+      .max_tcs_entries = 504,
       .min_ds_entries = 34,
-      .max_ds_entries = 1536,
+      .max_tes_entries = 1536,
       .max_gs_entries = 960,
    }
 };
@@ -294,9 +294,9 @@ static const struct gen_device_info gen_device_info_bdw_gt3 = {
       .size = 384,
       .min_vs_entries = 64,
       .max_vs_entries = 2560,
-      .max_hs_entries = 504,
+      .max_tcs_entries = 504,
       .min_ds_entries = 34,
-      .max_ds_entries = 1536,
+      .max_tes_entries = 1536,
       .max_gs_entries = 960,
    }
 };
@@ -306,8 +306,8 @@ static const struct gen_device_info gen_device_info_chv = {
    .has_llc = false,
    .num_slices = 1,
    .max_vs_threads = 80,
-   .max_hs_threads = 80,
-   .max_ds_threads = 80,
+   .max_tcs_threads = 80,
+   .max_tes_threads = 80,
    .max_gs_threads = 80,
    .max_wm_threads = 128,
    .max_cs_threads = 6 * 7,
@@ -315,9 +315,9 @@ static const struct gen_device_info gen_device_info_chv = {
       .size = 192,
       .min_vs_entries = 34,
       .max_vs_entries = 640,
-      .max_hs_entries = 80,
+      .max_tcs_entries = 80,
       .min_ds_entries = 34,
-      .max_ds_entries = 384,
+      .max_tes_entries = 384,
       .max_gs_entries = 256,
    }
 };
@@ -333,17 +333,17 @@ static const struct gen_device_info gen_device_info_chv = {
    .has_surface_tile_offset = true,                 \
    .max_vs_threads = 336,                           \
    .max_gs_threads = 336,                           \
-   .max_hs_threads = 336,                           \
-   .max_ds_threads = 336,                           \
+   .max_tcs_threads = 336,                          \
+   .max_tes_threads = 336,                          \
    .max_wm_threads = 64 * 9,                        \
    .max_cs_threads = 56,                            \
    .urb = {                                         \
       .size = 384,                                  \
       .min_vs_entries = 64,                         \
       .max_vs_entries = 1856,                       \
-      .max_hs_entries = 672,                        \
+      .max_tcs_entries = 672,                       \
       .min_ds_entries = 34,                         \
-      .max_ds_entries = 1120,                       \
+      .max_tes_entries = 1120,                      \
       .max_gs_entries = 640,                        \
    }
 
@@ -385,8 +385,8 @@ static const struct gen_device_info gen_device_info_bxt = {
 
    .num_slices = 1,
    .max_vs_threads = 112,
-   .max_hs_threads = 112,
-   .max_ds_threads = 112,
+   .max_tcs_threads = 112,
+   .max_tes_threads = 112,
    .max_gs_threads = 112,
    .max_wm_threads = 64 * 3,
    .max_cs_threads = 6 * 6,
@@ -394,8 +394,8 @@ static const struct gen_device_info gen_device_info_bxt = {
       .size = 192,
       .min_vs_entries = 34,
       .max_vs_entries = 704,
-      .max_hs_entries = 256,
-      .max_ds_entries = 416,
+      .max_tcs_entries = 256,
+      .max_tes_entries = 416,
       .max_gs_entries = 256,
    }
 };
@@ -408,8 +408,8 @@ static const struct gen_device_info gen_device_info_bxt_2x6 = {
 
    .num_slices = 1,
    .max_vs_threads = 56, /* XXX: guess */
-   .max_hs_threads = 56, /* XXX: guess */
-   .max_ds_threads = 56,
+   .max_tcs_threads = 56, /* XXX: guess */
+   .max_tes_threads = 56,
    .max_gs_threads = 56,
    .max_wm_threads = 64 * 2,
    .max_cs_threads = 6 * 6,
@@ -417,8 +417,8 @@ static const struct gen_device_info gen_device_info_bxt_2x6 = {
       .size = 128,
       .min_vs_entries = 34,
       .max_vs_entries = 352,
-      .max_hs_entries = 128,
-      .max_ds_entries = 208,
+      .max_tcs_entries = 128,
+      .max_tes_entries = 208,
       .max_gs_entries = 128,
    }
 };
@@ -487,7 +487,7 @@ static const struct gen_device_info gen_device_info_kbl_gt4 = {
    .num_slices = 3,
 };
 
-const bool
+bool
 gen_get_device_info(int devid, struct gen_device_info *devinfo)
 {
    switch (devid) {

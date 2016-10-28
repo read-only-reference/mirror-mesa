@@ -69,7 +69,9 @@
 #define SI_SHADER_H
 
 #include <llvm-c/Core.h> /* LLVMModuleRef */
+#include <llvm-c/TargetMachine.h>
 #include "tgsi/tgsi_scan.h"
+#include "util/u_queue.h"
 #include "si_state.h"
 
 struct radeon_shader_binary;
@@ -127,7 +129,8 @@ enum {
 
 	/* CS only */
 	SI_SGPR_GRID_SIZE = SI_NUM_RESOURCE_SGPRS,
-	SI_CS_NUM_USER_SGPR = SI_SGPR_GRID_SIZE + 3
+	SI_SGPR_BLOCK_SIZE = SI_SGPR_GRID_SIZE + 3,
+	SI_CS_NUM_USER_SGPR = SI_SGPR_BLOCK_SIZE + 3
 };
 
 /* LLVM function parameter indices */
@@ -217,6 +220,7 @@ enum {
 
 	/* CS only parameters */
 	SI_PARAM_GRID_SIZE = SI_NUM_RESOURCE_PARAMS,
+	SI_PARAM_BLOCK_SIZE,
 	SI_PARAM_BLOCK_ID,
 	SI_PARAM_THREAD_ID,
 
@@ -411,6 +415,17 @@ struct si_shader_config {
 	unsigned			rsrc2;
 };
 
+enum {
+	/* SPI_PS_INPUT_CNTL_i.OFFSET[0:4] */
+	EXP_PARAM_OFFSET_0 = 0,
+	EXP_PARAM_OFFSET_31 = 31,
+	/* SPI_PS_INPUT_CNTL_i.DEFAULT_VAL[0:1] */
+	EXP_PARAM_DEFAULT_VAL_0000 = 64,
+	EXP_PARAM_DEFAULT_VAL_0001,
+	EXP_PARAM_DEFAULT_VAL_1110,
+	EXP_PARAM_DEFAULT_VAL_1111,
+};
+
 /* GCN-specific shader info. */
 struct si_shader_info {
 	ubyte			vs_output_param_offset[SI_MAX_VS_OUTPUTS];
@@ -435,7 +450,6 @@ struct si_shader {
 	struct r600_resource		*scratch_bo;
 	union si_shader_key		key;
 	bool				is_binary_shared;
-	unsigned			z_order;
 
 	/* The following data is all that's needed for binary shaders. */
 	struct radeon_shader_binary	binary;
@@ -455,38 +469,6 @@ struct si_shader_part {
 	struct radeon_shader_binary binary;
 	struct si_shader_config config;
 };
-
-static inline struct tgsi_shader_info *si_get_vs_info(struct si_context *sctx)
-{
-	if (sctx->gs_shader.cso)
-		return &sctx->gs_shader.cso->info;
-	else if (sctx->tes_shader.cso)
-		return &sctx->tes_shader.cso->info;
-	else if (sctx->vs_shader.cso)
-		return &sctx->vs_shader.cso->info;
-	else
-		return NULL;
-}
-
-static inline struct si_shader* si_get_vs_state(struct si_context *sctx)
-{
-	if (sctx->gs_shader.current)
-		return sctx->gs_shader.current->gs_copy_shader;
-	else if (sctx->tes_shader.current)
-		return sctx->tes_shader.current;
-	else
-		return sctx->vs_shader.current;
-}
-
-static inline bool si_vs_exports_prim_id(struct si_shader *shader)
-{
-	if (shader->selector->type == PIPE_SHADER_VERTEX)
-		return shader->key.vs.epilog.export_prim_id;
-	else if (shader->selector->type == PIPE_SHADER_TESS_EVAL)
-		return shader->key.tes.epilog.export_prim_id;
-	else
-		return false;
-}
 
 /* si_shader.c */
 int si_compile_tgsi_shader(struct si_screen *sscreen,

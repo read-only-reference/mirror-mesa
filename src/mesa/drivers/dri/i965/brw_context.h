@@ -211,7 +211,6 @@ enum brw_state_id {
    BRW_STATE_ATOMIC_BUFFER,
    BRW_STATE_IMAGE_UNITS,
    BRW_STATE_META_IN_PROGRESS,
-   BRW_STATE_INTERPOLATION_MAP,
    BRW_STATE_PUSH_CONSTANT_ALLOCATION,
    BRW_STATE_NUM_SAMPLES,
    BRW_STATE_TEXTURE_BUFFER,
@@ -226,6 +225,7 @@ enum brw_state_id {
    BRW_STATE_URB_SIZE,
    BRW_STATE_CC_STATE,
    BRW_STATE_BLORP,
+   BRW_STATE_VIEWPORT_COUNT,
    BRW_NUM_STATE_BITS
 };
 
@@ -294,6 +294,7 @@ enum brw_state_id {
 #define BRW_NEW_PROGRAM_CACHE           (1ull << BRW_STATE_PROGRAM_CACHE)
 #define BRW_NEW_STATE_BASE_ADDRESS      (1ull << BRW_STATE_STATE_BASE_ADDRESS)
 #define BRW_NEW_VUE_MAP_GEOM_OUT        (1ull << BRW_STATE_VUE_MAP_GEOM_OUT)
+#define BRW_NEW_VIEWPORT_COUNT          (1ull << BRW_STATE_VIEWPORT_COUNT)
 #define BRW_NEW_TRANSFORM_FEEDBACK      (1ull << BRW_STATE_TRANSFORM_FEEDBACK)
 #define BRW_NEW_RASTERIZER_DISCARD      (1ull << BRW_STATE_RASTERIZER_DISCARD)
 #define BRW_NEW_STATS_WM                (1ull << BRW_STATE_STATS_WM)
@@ -301,7 +302,6 @@ enum brw_state_id {
 #define BRW_NEW_ATOMIC_BUFFER           (1ull << BRW_STATE_ATOMIC_BUFFER)
 #define BRW_NEW_IMAGE_UNITS             (1ull << BRW_STATE_IMAGE_UNITS)
 #define BRW_NEW_META_IN_PROGRESS        (1ull << BRW_STATE_META_IN_PROGRESS)
-#define BRW_NEW_INTERPOLATION_MAP       (1ull << BRW_STATE_INTERPOLATION_MAP)
 #define BRW_NEW_PUSH_CONSTANT_ALLOCATION (1ull << BRW_STATE_PUSH_CONSTANT_ALLOCATION)
 #define BRW_NEW_NUM_SAMPLES             (1ull << BRW_STATE_NUM_SAMPLES)
 #define BRW_NEW_TEXTURE_BUFFER          (1ull << BRW_STATE_TEXTURE_BUFFER)
@@ -326,45 +326,25 @@ struct brw_state_flags {
    uint64_t brw;
 };
 
-/** Subclass of Mesa vertex program */
-struct brw_vertex_program {
-   struct gl_vertex_program program;
+
+/** Subclass of Mesa program */
+struct brw_program {
+   struct gl_program program;
    GLuint id;
 };
 
 
-/** Subclass of Mesa tessellation control program */
-struct brw_tess_ctrl_program {
-   struct gl_tess_ctrl_program program;
-   unsigned id;  /**< serial no. to identify tess ctrl progs, never re-used */
-};
+struct gen4_fragment_program {
+   struct brw_program base;
 
+   bool contains_flat_varying;
+   bool contains_noperspective_varying;
 
-/** Subclass of Mesa tessellation evaluation program */
-struct brw_tess_eval_program {
-   struct gl_tess_eval_program program;
-   unsigned id;  /**< serial no. to identify tess eval progs, never re-used */
-};
-
-
-/** Subclass of Mesa geometry program */
-struct brw_geometry_program {
-   struct gl_geometry_program program;
-   unsigned id;  /**< serial no. to identify geom progs, never re-used */
-};
-
-
-/** Subclass of Mesa fragment program */
-struct brw_fragment_program {
-   struct gl_fragment_program program;
-   GLuint id;  /**< serial no. to identify frag progs, never re-used */
-};
-
-
-/** Subclass of Mesa compute program */
-struct brw_compute_program {
-   struct gl_compute_program program;
-   unsigned id;  /**< serial no. to identify compute progs, never re-used */
+   /*
+    * Mapping of varying slots to interpolation modes.
+    * Used Gen4/5 by the clip|sf|wm stages.
+    */
+   unsigned char interp_mode[BRW_VARYING_SLOT_COUNT];
 };
 
 
@@ -381,32 +361,6 @@ struct brw_shader {
 #define BRW_FS_VARYING_INPUT_MASK \
    (BITFIELD64_RANGE(0, VARYING_SLOT_MAX) & \
     ~VARYING_BIT_POS & ~VARYING_BIT_FACE)
-
-
-/*
- * Mapping of VUE map slots to interpolation modes.
- */
-struct interpolation_mode_map {
-   unsigned char mode[BRW_VARYING_SLOT_COUNT];
-};
-
-static inline bool brw_any_flat_varyings(struct interpolation_mode_map *map)
-{
-   for (int i = 0; i < BRW_VARYING_SLOT_COUNT; i++)
-      if (map->mode[i] == INTERP_MODE_FLAT)
-         return true;
-
-   return false;
-}
-
-static inline bool brw_any_noperspective_varyings(struct interpolation_mode_map *map)
-{
-   for (int i = 0; i < BRW_VARYING_SLOT_COUNT; i++)
-      if (map->mode[i] == INTERP_MODE_NOPERSPECTIVE)
-         return true;
-
-   return false;
-}
 
 
 struct brw_sf_prog_data {
@@ -578,7 +532,7 @@ struct brw_vertex_buffer {
    GLuint step_rate;
 };
 struct brw_vertex_element {
-   const struct gl_client_array *glarray;
+   const struct gl_vertex_array *glarray;
 
    int buffer;
 
@@ -1004,12 +958,12 @@ struct brw_context
 
    /* Active vertex program:
     */
-   const struct gl_vertex_program *vertex_program;
-   const struct gl_geometry_program *geometry_program;
-   const struct gl_tess_ctrl_program *tess_ctrl_program;
-   const struct gl_tess_eval_program *tess_eval_program;
-   const struct gl_fragment_program *fragment_program;
-   const struct gl_compute_program *compute_program;
+   const struct gl_program *vertex_program;
+   const struct gl_program *geometry_program;
+   const struct gl_program *tess_ctrl_program;
+   const struct gl_program *tess_eval_program;
+   const struct gl_program *fragment_program;
+   const struct gl_program *compute_program;
 
    /**
     * Number of samples in ctx->DrawBuffer, updated by BRW_NEW_NUM_SAMPLES so
@@ -1094,12 +1048,10 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-      struct brw_vs_prog_data *prog_data;
    } vs;
 
    struct {
       struct brw_stage_state base;
-      struct brw_tcs_prog_data *prog_data;
 
       /**
        * True if the 3DSTATE_HS command most recently emitted to the 3D
@@ -1110,7 +1062,6 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-      struct brw_tes_prog_data *prog_data;
 
       /**
        * True if the 3DSTATE_DS command most recently emitted to the 3D
@@ -1121,7 +1072,6 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-      struct brw_gs_prog_data *prog_data;
 
       /**
        * True if the 3DSTATE_GS command most recently emitted to the 3D
@@ -1160,6 +1110,13 @@ struct brw_context
        * instead of vp_bo.
        */
       uint32_t vp_offset;
+
+      /**
+       * The number of viewports to use.  If gl_ViewportIndex is written,
+       * we can have up to ctx->Const.MaxViewports viewports.  If not,
+       * the viewport index is always 0, so we can only emit one.
+       */
+      uint8_t viewport_count;
    } clip;
 
 
@@ -1175,7 +1132,6 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-      struct brw_wm_prog_data *prog_data;
 
       GLuint render_surf;
 
@@ -1191,7 +1147,6 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-      struct brw_cs_prog_data *prog_data;
    } cs;
 
    /* RS hardware binding table */
@@ -1269,11 +1224,6 @@ struct brw_context
 
    uint32_t render_target_format[MESA_FORMAT_COUNT];
    bool format_supported_as_render_target[MESA_FORMAT_COUNT];
-
-   /* Interpolation modes, one byte per vue slot.
-    * Used Gen4/5 by the clip|sf|wm stages. Ignored on Gen6+.
-    */
-   struct interpolation_mode_map interpolation_mode;
 
    /* PrimitiveRestart */
    struct {
@@ -1511,7 +1461,7 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
 
 /* brw_draw_upload.c */
 unsigned brw_get_vertex_surface_type(struct brw_context *brw,
-                                     const struct gl_client_array *glarray);
+                                     const struct gl_vertex_array *glarray);
 
 static inline unsigned
 brw_get_index_type(GLenum type)
@@ -1594,8 +1544,8 @@ extern int intel_translate_compare_func(GLenum func);
 extern int intel_translate_stencil_op(GLenum op);
 extern int intel_translate_logic_op(GLenum opcode);
 
-/* intel_syncobj.c */
-void intel_init_syncobj_functions(struct dd_function_table *functions);
+/* brw_sync.c */
+void brw_init_syncobj_functions(struct dd_function_table *functions);
 
 /* gen6_sol.c */
 struct gl_transform_feedback_object *
@@ -1714,52 +1664,16 @@ brw_context( struct gl_context *ctx )
    return (struct brw_context *)ctx;
 }
 
-static inline struct brw_vertex_program *
-brw_vertex_program(struct gl_vertex_program *p)
+static inline struct brw_program *
+brw_program(struct gl_program *p)
 {
-   return (struct brw_vertex_program *) p;
+   return (struct brw_program *) p;
 }
 
-static inline const struct brw_vertex_program *
-brw_vertex_program_const(const struct gl_vertex_program *p)
+static inline const struct brw_program *
+brw_program_const(const struct gl_program *p)
 {
-   return (const struct brw_vertex_program *) p;
-}
-
-static inline struct brw_tess_ctrl_program *
-brw_tess_ctrl_program(struct gl_tess_ctrl_program *p)
-{
-   return (struct brw_tess_ctrl_program *) p;
-}
-
-static inline struct brw_tess_eval_program *
-brw_tess_eval_program(struct gl_tess_eval_program *p)
-{
-   return (struct brw_tess_eval_program *) p;
-}
-
-static inline struct brw_geometry_program *
-brw_geometry_program(struct gl_geometry_program *p)
-{
-   return (struct brw_geometry_program *) p;
-}
-
-static inline struct brw_fragment_program *
-brw_fragment_program(struct gl_fragment_program *p)
-{
-   return (struct brw_fragment_program *) p;
-}
-
-static inline const struct brw_fragment_program *
-brw_fragment_program_const(const struct gl_fragment_program *p)
-{
-   return (const struct brw_fragment_program *) p;
-}
-
-static inline struct brw_compute_program *
-brw_compute_program(struct gl_compute_program *p)
-{
-   return (struct brw_compute_program *) p;
+   return (const struct brw_program *) p;
 }
 
 /**

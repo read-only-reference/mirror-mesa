@@ -413,6 +413,14 @@ void SWR_API SwrSetBackendState(
     SWR_BACKEND_STATE *pState);
 
 //////////////////////////////////////////////////////////////////////////
+/// @brief Set depth bounds state
+/// @param hContext - Handle passed back from SwrCreateContext
+/// @param pState - Pointer to state.
+void SWR_API SwrSetDepthBoundsState(
+    HANDLE hContext,
+    SWR_DEPTH_BOUNDS_STATE *pState);
+
+//////////////////////////////////////////////////////////////////////////
 /// @brief Set pixel shader state
 /// @param hContext - Handle passed back from SwrCreateContext
 /// @param pState - Pointer to state.
@@ -543,7 +551,7 @@ enum SWR_TILE_STATE
 /// @todo Add a good description for what attachments are and when and why you would use the different SWR_TILE_STATEs.
 void SWR_API SwrStoreTiles(
     HANDLE hContext,
-    SWR_RENDERTARGET_ATTACHMENT attachment,
+    uint32_t attachmentMask,
     SWR_TILE_STATE postStoreTileState,
     const SWR_RECT& storeRect);
 
@@ -565,7 +573,7 @@ void SWR_API SwrClearRenderTarget(
     const SWR_RECT& clearRect);
 
 //////////////////////////////////////////////////////////////////////////
-/// @brief SwrSetRastyState
+/// @brief SwrSetRastState
 /// @param hContext - Handle passed back from SwrCreateContext
 /// @param pRastState - New SWR_RASTSTATE used for SwrDraw* commands
 void SWR_API SwrSetRastState(

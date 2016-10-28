@@ -21,7 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-#pragma once
+#ifndef BLORP_PRIV_H
+#define BLORP_PRIV_H
 
 #include <stdint.h>
 
@@ -52,6 +53,8 @@ enum blorp_fast_clear_op {
 
 struct brw_blorp_surface_info
 {
+   bool enabled;
+
    struct isl_surf surf;
    struct blorp_address addr;
 
@@ -179,7 +182,11 @@ struct blorp_params
    uint32_t y0;
    uint32_t x1;
    uint32_t y1;
+   float z;
+   uint8_t stencil_mask;
+   uint8_t stencil_ref;
    struct brw_blorp_surface_info depth;
+   struct brw_blorp_surface_info stencil;
    uint32_t depth_format;
    struct brw_blorp_surface_info src;
    struct brw_blorp_surface_info dst;
@@ -303,14 +310,17 @@ struct brw_blorp_blit_prog_key
 void brw_blorp_init_wm_prog_key(struct brw_wm_prog_key *wm_key);
 
 const unsigned *
-brw_blorp_compile_nir_shader(struct blorp_context *blorp, struct nir_shader *nir,
-                             const struct brw_wm_prog_key *wm_key,
-                             bool use_repclear,
-                             struct brw_blorp_prog_data *prog_data,
-                             unsigned *program_size);
+blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
+                 struct nir_shader *nir,
+                 const struct brw_wm_prog_key *wm_key,
+                 bool use_repclear,
+                 struct brw_blorp_prog_data *prog_data,
+                 unsigned *program_size);
 
 /** \} */
 
 #ifdef __cplusplus
 } /* end extern "C" */
 #endif /* __cplusplus */
+
+#endif /* BLORP_PRIV_H */

@@ -87,14 +87,14 @@ _mesa_init_program(struct gl_context *ctx)
    ctx->VertexProgram.PointSizeEnabled =
       (ctx->API == API_OPENGLES2) ? GL_TRUE : GL_FALSE;
    ctx->VertexProgram.TwoSideEnabled = GL_FALSE;
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current,
-                            ctx->Shared->DefaultVertexProgram);
+   _mesa_reference_program(ctx, &ctx->VertexProgram.Current,
+                           ctx->Shared->DefaultVertexProgram);
    assert(ctx->VertexProgram.Current);
    ctx->VertexProgram.Cache = _mesa_new_program_cache();
 
    ctx->FragmentProgram.Enabled = GL_FALSE;
-   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current,
-                            ctx->Shared->DefaultFragmentProgram);
+   _mesa_reference_program(ctx, &ctx->FragmentProgram.Current,
+                           ctx->Shared->DefaultFragmentProgram);
    assert(ctx->FragmentProgram.Current);
    ctx->FragmentProgram.Cache = _mesa_new_program_cache();
 
@@ -112,9 +112,9 @@ _mesa_init_program(struct gl_context *ctx)
 void
 _mesa_free_program_data(struct gl_context *ctx)
 {
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, NULL);
+   _mesa_reference_program(ctx, &ctx->VertexProgram.Current, NULL);
    _mesa_delete_program_cache(ctx, ctx->VertexProgram.Cache);
-   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current, NULL);
+   _mesa_reference_program(ctx, &ctx->FragmentProgram.Current, NULL);
    _mesa_delete_shader_cache(ctx, ctx->FragmentProgram.Cache);
 
    /* XXX probably move this stuff */
@@ -137,11 +137,11 @@ _mesa_free_program_data(struct gl_context *ctx)
 void
 _mesa_update_default_objects_program(struct gl_context *ctx)
 {
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current,
-                            ctx->Shared->DefaultVertexProgram);
+   _mesa_reference_program(ctx, &ctx->VertexProgram.Current,
+                           ctx->Shared->DefaultVertexProgram);
    assert(ctx->VertexProgram.Current);
 
-   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current,
+   _mesa_reference_program(ctx, &ctx->FragmentProgram.Current,
                             ctx->Shared->DefaultFragmentProgram);
    assert(ctx->FragmentProgram.Current);
 
@@ -215,29 +215,14 @@ struct gl_program *
 _mesa_new_program(struct gl_context *ctx, GLenum target, GLuint id)
 {
    switch (target) {
-   case GL_VERTEX_PROGRAM_ARB: { /* == GL_VERTEX_PROGRAM_NV */
-      struct gl_vertex_program *prog = CALLOC_STRUCT(gl_vertex_program);
-      return _mesa_init_gl_program(&prog->Base, target, id);
-   }
-   case GL_FRAGMENT_PROGRAM_ARB: {
-      struct gl_fragment_program *prog = CALLOC_STRUCT(gl_fragment_program);
-      return _mesa_init_gl_program(&prog->Base, target, id);
-   }
-   case GL_GEOMETRY_PROGRAM_NV: {
-      struct gl_geometry_program *prog = CALLOC_STRUCT(gl_geometry_program);
-      return _mesa_init_gl_program(&prog->Base, target, id);
-   }
-   case GL_TESS_CONTROL_PROGRAM_NV: {
-      struct gl_tess_ctrl_program *prog = CALLOC_STRUCT(gl_tess_ctrl_program);
-      return _mesa_init_gl_program(&prog->Base, target, id);
-   }
-   case GL_TESS_EVALUATION_PROGRAM_NV: {
-      struct gl_tess_eval_program *prog = CALLOC_STRUCT(gl_tess_eval_program);
-      return _mesa_init_gl_program(&prog->Base, target, id);
-   }
+   case GL_VERTEX_PROGRAM_ARB: /* == GL_VERTEX_PROGRAM_NV */
+   case GL_GEOMETRY_PROGRAM_NV:
+   case GL_TESS_CONTROL_PROGRAM_NV:
+   case GL_TESS_EVALUATION_PROGRAM_NV:
+   case GL_FRAGMENT_PROGRAM_ARB:
    case GL_COMPUTE_PROGRAM_NV: {
-      struct gl_compute_program *prog = CALLOC_STRUCT(gl_compute_program);
-      return _mesa_init_gl_program(&prog->Base, target, id);
+      struct gl_program *prog = CALLOC_STRUCT(gl_program);
+      return _mesa_init_gl_program(prog, target, id);
    }
    default:
       _mesa_problem(ctx, "bad target in _mesa_new_program");
@@ -514,7 +499,7 @@ _mesa_find_free_register(const GLboolean used[],
  */
 GLint
 _mesa_get_min_invocations_per_fragment(struct gl_context *ctx,
-                                       const struct gl_fragment_program *prog,
+                                       const struct gl_program *prog,
                                        bool ignore_sample_qualifier)
 {
    /* From ARB_sample_shading specification:
@@ -533,11 +518,11 @@ _mesa_get_min_invocations_per_fragment(struct gl_context *ctx,
        * "Use of the "sample" qualifier on a fragment shader input
        *  forces per-sample shading"
        */
-      if (prog->IsSample && !ignore_sample_qualifier)
+      if (prog->info.fs.uses_sample_qualifier && !ignore_sample_qualifier)
          return MAX2(_mesa_geometric_samples(ctx->DrawBuffer), 1);
 
-      if (prog->Base.SystemValuesRead & (SYSTEM_BIT_SAMPLE_ID |
-                                         SYSTEM_BIT_SAMPLE_POS))
+      if (prog->info.system_values_read & (SYSTEM_BIT_SAMPLE_ID |
+                                           SYSTEM_BIT_SAMPLE_POS))
          return MAX2(_mesa_geometric_samples(ctx->DrawBuffer), 1);
       else if (ctx->Multisample.SampleShading)
          return MAX2(ceil(ctx->Multisample.MinSampleShadingValue *

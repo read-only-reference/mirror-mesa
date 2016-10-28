@@ -28,6 +28,8 @@
 #ifndef _GBM_DRI_INTERNAL_H_
 #define _GBM_DRI_INTERNAL_H_
 
+#include <xf86drm.h>
+#include <string.h>
 #include <sys/mman.h>
 #include "gbmint.h"
 #include "c11/threads.h"
@@ -58,7 +60,7 @@ struct gbm_dri_device {
    const __DRIdri2LoaderExtension *loader;
 
    const __DRIconfig   **driver_configs;
-   const __DRIextension **extensions;
+   const __DRIextension **loader_extensions;
    const __DRIextension **driver_extensions;
 
    __DRIimage *(*lookup_image)(__DRIscreen *screen, void *image, void *data);

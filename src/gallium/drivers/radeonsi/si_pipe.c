@@ -22,11 +22,10 @@
  */
 
 #include "si_pipe.h"
-#include "si_shader.h"
 #include "si_public.h"
+#include "si_shader_internal.h"
 #include "sid.h"
 
-#include "radeon/radeon_llvm_emit.h"
 #include "radeon/radeon_uvd.h"
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
@@ -127,7 +126,7 @@ si_create_llvm_target_machine(struct si_screen *sscreen)
 {
 	const char *triple = "amdgcn--";
 
-	return LLVMCreateTargetMachine(radeon_llvm_get_r600_target(triple), triple,
+	return LLVMCreateTargetMachine(si_llvm_get_amdgpu_target(triple), triple,
 				       r600_get_llvm_processor_name(sscreen->b.family),
 #if HAVE_LLVM >= 0x0308
 				       sscreen->b.debug_flags & DBG_SI_SCHED ?
@@ -203,8 +202,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 		sctx->ce_suballocator =
 				u_suballocator_create(&sctx->b.b, 1024 * 1024,
-						      PIPE_BIND_CUSTOM,
-						      PIPE_USAGE_DEFAULT, false);
+						      0, PIPE_USAGE_DEFAULT, false);
 		if (!sctx->ce_suballocator)
 			goto fail;
 	}
@@ -218,7 +216,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 		goto fail;
 
 	sctx->border_color_buffer = (struct r600_resource*)
-		pipe_buffer_create(screen, PIPE_BIND_CUSTOM, PIPE_USAGE_DEFAULT,
+		pipe_buffer_create(screen, 0, PIPE_USAGE_DEFAULT,
 				   SI_MAX_BORDER_COLORS *
 				   sizeof(*sctx->border_color_table));
 	if (!sctx->border_color_buffer)
@@ -410,6 +408,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_CLEAR_TEXTURE:
 	case PIPE_CAP_CULL_DISTANCE:
+	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -438,9 +437,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return HAVE_LLVM >= 0x0309 ? 4 : 0;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		if (pscreen->get_shader_param(pscreen, PIPE_SHADER_COMPUTE,
-		                              PIPE_SHADER_CAP_SUPPORTED_IRS) &
-		    (1 << PIPE_SHADER_IR_TGSI))
+		if (si_have_tgsi_compute(sscreen))
 			return 430;
 		return HAVE_LLVM >= 0x0309 ? 420 :
 		       HAVE_LLVM >= 0x0307 ? 410 : 330;
@@ -481,6 +478,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
 		return sscreen->b.has_streamout ? 4 : 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
 		return sscreen->b.has_streamout ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
@@ -817,6 +815,9 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		(sscreen->b.chip_class == SI &&
 		 sscreen->b.info.pfp_fw_version >= 121 &&
 		 sscreen->b.info.me_fw_version >= 87);
+
+	sscreen->has_ds_bpermute = HAVE_LLVM >= 0x0309 &&
+				   sscreen->b.chip_class >= VI;
 
 	sscreen->b.has_cp_dma = true;
 	sscreen->b.has_streamout = true;

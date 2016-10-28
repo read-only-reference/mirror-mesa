@@ -272,7 +272,7 @@ anv_block_pool_init(struct anv_block_pool *pool,
    if (ftruncate(pool->fd, BLOCK_POOL_MEMFD_SIZE) == -1)
       return;
 
-   anv_vector_init(&pool->mmap_cleanups,
+   u_vector_init(&pool->mmap_cleanups,
                    round_to_power_of_two(sizeof(struct anv_mmap_cleanup)), 128);
 
    pool->state.next = 0;
@@ -289,14 +289,14 @@ anv_block_pool_finish(struct anv_block_pool *pool)
 {
    struct anv_mmap_cleanup *cleanup;
 
-   anv_vector_foreach(cleanup, &pool->mmap_cleanups) {
+   u_vector_foreach(cleanup, &pool->mmap_cleanups) {
       if (cleanup->map)
          munmap(cleanup->map, cleanup->size);
       if (cleanup->gem_handle)
          anv_gem_close(pool->device, cleanup->gem_handle);
    }
 
-   anv_vector_finish(&pool->mmap_cleanups);
+   u_vector_finish(&pool->mmap_cleanups);
 
    close(pool->fd);
 }
@@ -420,7 +420,7 @@ anv_block_pool_grow(struct anv_block_pool *pool, struct anv_block_state *state)
    assert(center_bo_offset >= pool->back_state.end);
    assert(size - center_bo_offset >= pool->state.end);
 
-   cleanup = anv_vector_add(&pool->mmap_cleanups);
+   cleanup = u_vector_add(&pool->mmap_cleanups);
    if (!cleanup)
       goto fail;
    *cleanup = ANV_MMAP_CLEANUP_INIT;
@@ -831,6 +831,7 @@ anv_bo_pool_alloc(struct anv_bo_pool *pool, struct anv_bo *bo, uint32_t size)
    if (anv_ptr_free_list_pop(&pool->free_list[bucket], &next_free_void)) {
       struct bo_pool_bo_link *next_free = next_free_void;
       *bo = VG_NOACCESS_READ(&next_free->bo);
+      assert(bo->gem_handle);
       assert(bo->map == next_free);
       assert(size <= bo->size);
 
@@ -949,8 +950,8 @@ anv_scratch_pool_alloc(struct anv_device *device, struct anv_scratch_pool *pool,
 
       uint32_t max_threads[] = {
          [MESA_SHADER_VERTEX]           = devinfo->max_vs_threads,
-         [MESA_SHADER_TESS_CTRL]        = devinfo->max_hs_threads,
-         [MESA_SHADER_TESS_EVAL]        = devinfo->max_ds_threads,
+         [MESA_SHADER_TESS_CTRL]        = devinfo->max_tcs_threads,
+         [MESA_SHADER_TESS_EVAL]        = devinfo->max_tes_threads,
          [MESA_SHADER_GEOMETRY]         = devinfo->max_gs_threads,
          [MESA_SHADER_FRAGMENT]         = devinfo->max_wm_threads,
          [MESA_SHADER_COMPUTE]          = scratch_ids_per_subslice * subslices,

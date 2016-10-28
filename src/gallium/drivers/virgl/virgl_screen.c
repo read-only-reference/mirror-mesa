@@ -148,6 +148,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+   case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
       return vscreen->caps.caps.v1.bset.streamout_pause_resume;
    case PIPE_CAP_START_INSTANCE:
       return vscreen->caps.caps.v1.bset.start_instance;
@@ -248,6 +249,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_WINDOW_RECTANGLES:
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
       return 0;
    case PIPE_CAP_VENDOR_ID:
       return 0x1af4;
@@ -547,6 +549,8 @@ virgl_destroy_screen(struct pipe_screen *screen)
    struct virgl_screen *vscreen = virgl_screen(screen);
    struct virgl_winsys *vws = vscreen->vws;
 
+   slab_destroy_parent(&vscreen->texture_transfer_pool);
+
    if (vws)
       vws->destroy(vws);
    FREE(vscreen);
@@ -580,6 +584,8 @@ virgl_create_screen(struct virgl_winsys *vws)
    vws->get_caps(vws, &screen->caps);
 
    screen->refcnt = 1;
+
+   slab_create_parent(&screen->texture_transfer_pool, sizeof(struct virgl_transfer), 16);
 
    util_format_s3tc_init();
    return &screen->base;

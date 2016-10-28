@@ -35,7 +35,8 @@
  *    - functions
  */
 
-#pragma once
+#ifndef ISL_H
+#define ISL_H
 
 #include <assert.h>
 #include <stdbool.h>
@@ -358,7 +359,7 @@ enum isl_format {
     * actual hardware formats *must* come before these in the list.
     */
 
-   /* Formats for color compression surfaces */
+   /* Formats for auxiliary surfaces */
    ISL_FORMAT_HIZ,
    ISL_FORMAT_MCS_2X,
    ISL_FORMAT_MCS_4X,
@@ -1030,6 +1031,8 @@ bool isl_format_supports_vertex_fetch(const struct gen_device_info *devinfo,
                                       enum isl_format format);
 bool isl_format_supports_lossless_compression(const struct gen_device_info *devinfo,
                                               enum isl_format format);
+bool isl_format_supports_multisampling(const struct gen_device_info *devinfo,
+                                       enum isl_format format);
 
 bool isl_format_has_unorm_channel(enum isl_format fmt) ATTRIBUTE_CONST;
 bool isl_format_has_snorm_channel(enum isl_format fmt) ATTRIBUTE_CONST;
@@ -1151,16 +1154,6 @@ isl_tiling_is_std_y(enum isl_tiling tiling)
 {
    return (1u << tiling) & ISL_TILING_STD_Y_MASK;
 }
-
-bool
-isl_tiling_get_info(const struct isl_device *dev,
-                    enum isl_tiling tiling,
-                    uint32_t format_bpb,
-                    struct isl_tile_info *info);
-bool
-isl_surf_choose_tiling(const struct isl_device *dev,
-                       const struct isl_surf_init_info *restrict info,
-                       enum isl_tiling *tiling);
 
 struct isl_extent2d ATTRIBUTE_CONST
 isl_get_interleaved_msaa_px_size_sa(uint32_t samples);
@@ -1485,3 +1478,5 @@ isl_surf_get_depth_format(const struct isl_device *dev,
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* ISL_H */

@@ -197,6 +197,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_INVALIDATE_BUFFER:
    case PIPE_CAP_STRING_MARKER:
    case PIPE_CAP_CULL_DISTANCE:
+   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
       return 1; /* class_3d >= NVA0_3D_CLASS; */
@@ -253,6 +254,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VOTE:
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+   case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -418,6 +420,8 @@ nv50_screen_get_compute_param(struct pipe_screen *pscreen,
       RET((uint32_t []) { 512 }); /* FIXME: arbitrary limit */
    case PIPE_COMPUTE_CAP_ADDRESS_BITS:
       RET((uint32_t []) { 32 });
+   case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
+      RET((uint64_t []) { 0 });
    default:
       return 0;
    }

@@ -39,7 +39,6 @@ genX(graphics_pipeline_create)(
     VkDevice                                    _device,
     struct anv_pipeline_cache *                 cache,
     const VkGraphicsPipelineCreateInfo*         pCreateInfo,
-    const struct anv_graphics_pipeline_create_info *extra,
     const VkAllocationCallbacks*                pAllocator,
     VkPipeline*                                 pPipeline)
 {
@@ -54,24 +53,24 @@ genX(graphics_pipeline_create)(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
 
-   pipeline = anv_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
+   pipeline = vk_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (pipeline == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
    result = anv_pipeline_init(pipeline, device, cache,
-                              pCreateInfo, extra, pAllocator);
+                              pCreateInfo, pAllocator);
    if (result != VK_SUCCESS) {
-      anv_free2(&device->alloc, pAllocator, pipeline);
+      vk_free2(&device->alloc, pAllocator, pipeline);
       return result;
    }
 
    assert(pCreateInfo->pVertexInputState);
-   emit_vertex_input(pipeline, pCreateInfo->pVertexInputState, extra);
+   emit_vertex_input(pipeline, pCreateInfo->pVertexInputState);
 
    assert(pCreateInfo->pRasterizationState);
    emit_rs_state(pipeline, pCreateInfo->pRasterizationState,
-                 pCreateInfo->pMultisampleState, pass, subpass, extra);
+                 pCreateInfo->pMultisampleState, pass, subpass);
 
    emit_ds_state(pipeline, pCreateInfo->pDepthStencilState, pass, subpass);
 
@@ -81,7 +80,7 @@ genX(graphics_pipeline_create)(
    emit_urb_setup(pipeline);
 
    emit_3dstate_clip(pipeline, pCreateInfo->pViewportState,
-                     pCreateInfo->pRasterizationState, extra);
+                     pCreateInfo->pRasterizationState);
    emit_3dstate_streamout(pipeline, pCreateInfo->pRasterizationState);
 
    emit_ms_state(pipeline, pCreateInfo->pMultisampleState);
@@ -107,7 +106,7 @@ genX(graphics_pipeline_create)(
       gen7_emit_vs_workaround_flush(brw);
 #endif
 
-   if (pipeline->vs_vec4 == NO_KERNEL || (extra && extra->disable_vs))
+   if (pipeline->vs_vec4 == NO_KERNEL)
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VS), vs);
    else
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VS), vs) {
@@ -133,7 +132,7 @@ genX(graphics_pipeline_create)(
 
    const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
 
-   if (pipeline->gs_kernel == NO_KERNEL || (extra && extra->disable_vs)) {
+   if (pipeline->gs_kernel == NO_KERNEL) {
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_GS), gs);
    } else {
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_GS), gs) {
@@ -202,6 +201,8 @@ genX(graphics_pipeline_create)(
 
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_PS), ps) {
          ps.KernelStartPointer0           = pipeline->ps_ksp0;
+         ps.KernelStartPointer1           = 0;
+         ps.KernelStartPointer2           = pipeline->ps_ksp0 + wm_prog_data->prog_offset_2;
 
          ps.ScratchSpaceBasePointer = (struct anv_address) {
             .bo = anv_scratch_pool_alloc(device, &device->scratch_pool,
@@ -230,14 +231,14 @@ genX(graphics_pipeline_create)(
             wm_prog_data->base.dispatch_grf_start_reg,
          ps.DispatchGRFStartRegisterforConstantSetupData1 = 0,
          ps.DispatchGRFStartRegisterforConstantSetupData2 =
-            wm_prog_data->dispatch_grf_start_reg_2,
+            wm_prog_data->dispatch_grf_start_reg_2;
 
          /* Haswell requires the sample mask to be set in this packet as well as
           * in 3DSTATE_SAMPLE_MASK; the values should match. */
          /* _NEW_BUFFERS, _NEW_MULTISAMPLE */
-
-         ps.KernelStartPointer1           = 0;
-         ps.KernelStartPointer2           = pipeline->ps_ksp0 + wm_prog_data->prog_offset_2;
+#if GEN_IS_HASWELL
+         ps.SampleMask                    = 0xff;
+#endif
       }
 
       uint32_t samples = pCreateInfo->pMultisampleState ?
@@ -268,7 +269,8 @@ genX(graphics_pipeline_create)(
 
          wm.MultisampleRasterizationMode        = samples > 1 ?
                                                   MSRASTMODE_ON_PATTERN : MSRASTMODE_OFF_PIXEL;
-         wm.MultisampleDispatchMode             = wm_prog_data->persample_dispatch ?
+         wm.MultisampleDispatchMode             = ((samples == 1) ||
+                                                   (samples > 1 && wm_prog_data->persample_dispatch)) ?
                                                   MSDISPMODE_PERSAMPLE : MSDISPMODE_PERPIXEL;
       }
    }

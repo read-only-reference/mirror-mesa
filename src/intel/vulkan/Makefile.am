@@ -49,6 +49,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/src \
 	-I$(top_srcdir)/src \
+	-I$(top_srcdir)/src/vulkan/wsi \
 	-I$(top_builddir)/src/compiler \
 	-I$(top_srcdir)/src/compiler \
 	-I$(top_builddir)/src/compiler/nir \
@@ -116,6 +117,7 @@ libvulkan_common_la_SOURCES = $(VULKAN_SOURCES)
 
 VULKAN_LIB_DEPS += \
 	libvulkan_common.la \
+	$(top_builddir)/src/vulkan/wsi/libvulkan_wsi.la \
 	$(top_builddir)/src/mesa/drivers/dri/i965/libi965_compiler.la \
 	$(top_builddir)/src/compiler/nir/libnir.la \
 	$(top_builddir)/src/util/libmesautil.la \
@@ -145,12 +147,12 @@ anv_timestamp.h:
 	$(AM_V_GEN) echo "#define ANV_TIMESTAMP \"$(TIMESTAMP_CMD)\"" > $@
 
 BUILT_SOURCES = $(VULKAN_GENERATED_FILES)
-CLEANFILES = $(BUILT_SOURCES) dev_icd.json intel_icd.json
+CLEANFILES = $(BUILT_SOURCES) dev_icd.json intel_icd.@host_cpu@.json
 EXTRA_DIST = \
 	$(top_srcdir)/include/vulkan/vk_icd.h \
 	anv_entrypoints_gen.py \
 	dev_icd.json.in \
-	intel_icd.json
+	intel_icd.json.in
 
 libvulkan_intel_la_LIBADD = $(VULKAN_LIB_DEPS)
 
@@ -165,7 +167,7 @@ libvulkan_intel_la_LDFLAGS = \
 
 
 icdconfdir = @VULKAN_ICD_INSTALL_DIR@
-icdconf_DATA = intel_icd.json
+icdconf_DATA = intel_icd.@host_cpu@.json
 # The following is used for development purposes, by setting VK_ICD_FILENAMES.
 noinst_DATA = dev_icd.json
 
@@ -174,15 +176,9 @@ dev_icd.json : dev_icd.json.in
 		-e "s#@build_libdir@#${abs_top_builddir}/${LIB_DIR}#" \
 		< $(srcdir)/dev_icd.json.in > $@
 
-if VULKAN_ICD_DRIVER_PATH
-ICD_DRIVER_PATH="${libdir}/libvulkan_intel.so"
-else
-ICD_DRIVER_PATH="libvulkan_intel.so"
-endif
-
-intel_icd.json : intel_icd.json.in
+intel_icd.@host_cpu@.json : intel_icd.json.in
 	$(AM_V_GEN) $(SED) \
-		-e "s#@ICD_DRIVER_PATH@#${ICD_DRIVER_PATH}#" \
+		-e "s#@install_libdir@#${libdir}#" \
 		< $(srcdir)/intel_icd.json.in > $@
 
 # Libvulkan with dummy gem. Used for unit tests.

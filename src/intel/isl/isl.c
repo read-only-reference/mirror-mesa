@@ -104,7 +104,7 @@ isl_device_get_sample_counts(struct isl_device *dev)
 /**
  * @param[out] info is written only on success
  */
-bool
+static bool
 isl_tiling_get_info(const struct isl_device *dev,
                     enum isl_tiling tiling,
                     uint32_t format_bpb,
@@ -229,18 +229,34 @@ isl_tiling_get_info(const struct isl_device *dev,
 /**
  * @param[out] tiling is set only on success
  */
-bool
+static bool
 isl_surf_choose_tiling(const struct isl_device *dev,
                        const struct isl_surf_init_info *restrict info,
                        enum isl_tiling *tiling)
 {
    isl_tiling_flags_t tiling_flags = info->tiling_flags;
 
+   /* HiZ surfaces always use the HiZ tiling */
+   if (info->usage & ISL_SURF_USAGE_HIZ_BIT) {
+      assert(info->format == ISL_FORMAT_HIZ);
+      assert(tiling_flags == ISL_TILING_HIZ_BIT);
+      *tiling = ISL_TILING_HIZ;
+      return true;
+   }
+
+   /* CCS surfaces always use the CCS tiling */
+   if (info->usage & ISL_SURF_USAGE_CCS_BIT) {
+      assert(isl_format_get_layout(info->format)->txc == ISL_TXC_CCS);
+      assert(tiling_flags == ISL_TILING_CCS_BIT);
+      *tiling = ISL_TILING_CCS;
+      return true;
+   }
+
    if (ISL_DEV_GEN(dev) >= 6) {
-      gen6_filter_tiling(dev, info, &tiling_flags);
+      isl_gen6_filter_tiling(dev, info, &tiling_flags);
    } else {
       isl_finishme("%s: gen%u", __func__, ISL_DEV_GEN(dev));
-      gen6_filter_tiling(dev, info, &tiling_flags);
+      isl_gen6_filter_tiling(dev, info, &tiling_flags);
    }
 
    #define CHOOSE(__tiling) \
@@ -264,8 +280,6 @@ isl_surf_choose_tiling(const struct isl_device *dev,
       CHOOSE(ISL_TILING_LINEAR);
    }
 
-   CHOOSE(ISL_TILING_CCS);
-   CHOOSE(ISL_TILING_HIZ);
    CHOOSE(ISL_TILING_Ys);
    CHOOSE(ISL_TILING_Yf);
    CHOOSE(ISL_TILING_Y0);
@@ -286,13 +300,13 @@ isl_choose_msaa_layout(const struct isl_device *dev,
                  enum isl_msaa_layout *msaa_layout)
 {
    if (ISL_DEV_GEN(dev) >= 8) {
-      return gen8_choose_msaa_layout(dev, info, tiling, msaa_layout);
+      return isl_gen8_choose_msaa_layout(dev, info, tiling, msaa_layout);
    } else if (ISL_DEV_GEN(dev) >= 7) {
-      return gen7_choose_msaa_layout(dev, info, tiling, msaa_layout);
+      return isl_gen7_choose_msaa_layout(dev, info, tiling, msaa_layout);
    } else if (ISL_DEV_GEN(dev) >= 6) {
-      return gen6_choose_msaa_layout(dev, info, tiling, msaa_layout);
+      return isl_gen6_choose_msaa_layout(dev, info, tiling, msaa_layout);
    } else {
-      return gen4_choose_msaa_layout(dev, info, tiling, msaa_layout);
+      return isl_gen4_choose_msaa_layout(dev, info, tiling, msaa_layout);
    }
 }
 
@@ -457,20 +471,20 @@ isl_choose_image_alignment_el(const struct isl_device *dev,
    }
 
    if (ISL_DEV_GEN(dev) >= 9) {
-      gen9_choose_image_alignment_el(dev, info, tiling, dim_layout,
-                                     msaa_layout, image_align_el);
+      isl_gen9_choose_image_alignment_el(dev, info, tiling, dim_layout,
+                                         msaa_layout, image_align_el);
    } else if (ISL_DEV_GEN(dev) >= 8) {
-      gen8_choose_image_alignment_el(dev, info, tiling, dim_layout,
-                                     msaa_layout, image_align_el);
+      isl_gen8_choose_image_alignment_el(dev, info, tiling, dim_layout,
+                                         msaa_layout, image_align_el);
    } else if (ISL_DEV_GEN(dev) >= 7) {
-      gen7_choose_image_alignment_el(dev, info, tiling, dim_layout,
-                                     msaa_layout, image_align_el);
+      isl_gen7_choose_image_alignment_el(dev, info, tiling, dim_layout,
+                                          msaa_layout, image_align_el);
    } else if (ISL_DEV_GEN(dev) >= 6) {
-      gen6_choose_image_alignment_el(dev, info, tiling, dim_layout,
-                                     msaa_layout, image_align_el);
+      isl_gen6_choose_image_alignment_el(dev, info, tiling, dim_layout,
+                                         msaa_layout, image_align_el);
    } else {
-      gen4_choose_image_alignment_el(dev, info, tiling, dim_layout,
-                                     msaa_layout, image_align_el);
+      isl_gen4_choose_image_alignment_el(dev, info, tiling, dim_layout,
+                                         msaa_layout, image_align_el);
    }
 }
 
@@ -540,7 +554,6 @@ isl_calc_phys_level0_extent_sa(const struct isl_device *dev,
       assert(info->height == 1);
       assert(info->depth == 1);
       assert(info->samples == 1);
-      assert(!isl_format_is_compressed(info->format));
 
       switch (dim_layout) {
       case ISL_DIM_LAYOUT_GEN4_3D:
@@ -549,8 +562,8 @@ isl_calc_phys_level0_extent_sa(const struct isl_device *dev,
       case ISL_DIM_LAYOUT_GEN9_1D:
       case ISL_DIM_LAYOUT_GEN4_2D:
          *phys_level0_sa = (struct isl_extent4d) {
-            .w = info->width,
-            .h = 1,
+            .w = isl_align_npot(info->width, fmtl->bw),
+            .h = fmtl->bh,
             .d = 1,
             .a = info->array_len,
          };
@@ -580,7 +593,8 @@ isl_calc_phys_level0_extent_sa(const struct isl_device *dev,
       case ISL_MSAA_LAYOUT_ARRAY:
          assert(info->depth == 1);
          assert(info->levels == 1);
-         assert(!isl_format_is_compressed(info->format));
+         assert(isl_format_supports_multisampling(dev->info, info->format));
+         assert(fmtl->bw == 1 && fmtl->bh == 1);
 
          *phys_level0_sa = (struct isl_extent4d) {
             .w = info->width,
@@ -593,7 +607,7 @@ isl_calc_phys_level0_extent_sa(const struct isl_device *dev,
       case ISL_MSAA_LAYOUT_INTERLEAVED:
          assert(info->depth == 1);
          assert(info->levels == 1);
-         assert(!isl_format_is_compressed(info->format));
+         assert(isl_format_supports_multisampling(dev->info, info->format));
 
          *phys_level0_sa = (struct isl_extent4d) {
             .w = info->width,
@@ -605,6 +619,9 @@ isl_calc_phys_level0_extent_sa(const struct isl_device *dev,
          isl_msaa_interleaved_scale_px_to_sa(info->samples,
                                              &phys_level0_sa->w,
                                              &phys_level0_sa->h);
+
+         phys_level0_sa->w = isl_align(phys_level0_sa->w, fmtl->bw);
+         phys_level0_sa->h = isl_align(phys_level0_sa->h, fmtl->bh);
          break;
       }
       break;
@@ -1298,16 +1315,72 @@ isl_surf_get_hiz_surf(const struct isl_device *dev,
    assert(surf->msaa_layout == ISL_MSAA_LAYOUT_NONE ||
           surf->msaa_layout == ISL_MSAA_LAYOUT_INTERLEAVED);
 
+   /* From the Broadwell PRM Vol. 7, "Hierarchical Depth Buffer":
+    *
+    *    "The Surface Type, Height, Width, Depth, Minimum Array Element, Render
+    *    Target View Extent, and Depth Coordinate Offset X/Y of the
+    *    hierarchical depth buffer are inherited from the depth buffer. The
+    *    height and width of the hierarchical depth buffer that must be
+    *    allocated are computed by the following formulas, where HZ is the
+    *    hierarchical depth buffer and Z is the depth buffer. The Z_Height,
+    *    Z_Width, and Z_Depth values given in these formulas are those present
+    *    in 3DSTATE_DEPTH_BUFFER incremented by one.
+    *
+    *    "The value of Z_Height and Z_Width must each be multiplied by 2 before
+    *    being applied to the table below if Number of Multisamples is set to
+    *    NUMSAMPLES_4. The value of Z_Height must be multiplied by 2 and
+    *    Z_Width must be multiplied by 4 before being applied to the table
+    *    below if Number of Multisamples is set to NUMSAMPLES_8."
+    *
+    * In the Sky Lake PRM, the second paragraph is replaced with this:
+    *
+    *    "The Z_Height and Z_Width values must equal those present in
+    *    3DSTATE_DEPTH_BUFFER incremented by one."
+    *
+    * In other words, on Sandy Bridge through Broadwell, each 128-bit HiZ
+    * block corresponds to a region of 8x4 samples in the primary depth
+    * surface.  On Sky Lake, on the other hand, each HiZ block corresponds to
+    * a region of 8x4 pixels in the primary depth surface regardless of the
+    * number of samples.  The dimensions of a HiZ block in both pixels and
+    * samples are given in the table below:
+    *
+    *                    | SNB - BDW |     SKL+
+    *              ------+-----------+-------------
+    *                1x  |  8 x 4 sa |   8 x 4 sa
+    *               MSAA |  8 x 4 px |   8 x 4 px
+    *              ------+-----------+-------------
+    *                2x  |  8 x 4 sa |  16 x 4 sa
+    *               MSAA |  4 x 4 px |   8 x 4 px
+    *              ------+-----------+-------------
+    *                4x  |  8 x 4 sa |  16 x 8 sa
+    *               MSAA |  4 x 2 px |   8 x 4 px
+    *              ------+-----------+-------------
+    *                8x  |  8 x 4 sa |  32 x 8 sa
+    *               MSAA |  2 x 2 px |   8 x 4 px
+    *              ------+-----------+-------------
+    *               16x  |    N/A    | 32 x 16 sa
+    *               MSAA |    N/A    |  8 x  4 px
+    *              ------+-----------+-------------
+    *
+    * There are a number of different ways that this discrepency could be
+    * handled.  The way we have chosen is to simply make MSAA HiZ have the
+    * same number of samples as the parent surface pre-Sky Lake and always be
+    * single-sampled on Sky Lake and above.  Since the block sizes of
+    * compressed formats are given in samples, this neatly handles everything
+    * without the need for additional HiZ formats with different block sizes
+    * on SKL+.
+    */
+   const unsigned samples = ISL_DEV_GEN(dev) >= 9 ? 1 : surf->samples;
+
    isl_surf_init(dev, hiz_surf,
-                 .dim = ISL_SURF_DIM_2D,
+                 .dim = surf->dim,
                  .format = ISL_FORMAT_HIZ,
                  .width = surf->logical_level0_px.width,
                  .height = surf->logical_level0_px.height,
-                 .depth = 1,
+                 .depth = surf->logical_level0_px.depth,
                  .levels = surf->levels,
                  .array_len = surf->logical_level0_px.array_len,
-                 /* On SKL+, HiZ is always single-sampled */
-                 .samples = ISL_DEV_GEN(dev) >= 9 ? 1 : surf->samples,
+                 .samples = samples,
                  .usage = ISL_SURF_USAGE_HIZ_BIT,
                  .tiling_flags = ISL_TILING_HIZ_BIT);
 }

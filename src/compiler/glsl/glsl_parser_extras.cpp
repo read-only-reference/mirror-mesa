@@ -67,6 +67,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->translation_unit.make_empty();
    this->symbols = new(mem_ctx) glsl_symbol_table;
 
+   this->linalloc = linear_alloc_parent(this, 0);
+
    this->info_log = ralloc_strdup(mem_ctx, "");
    this->error = false;
    this->loop_nesting_ast = NULL;
@@ -297,6 +299,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
           sizeof(this->atomic_counter_offsets));
    this->allow_extension_directive_midshader =
       ctx->Const.AllowGLSLExtensionDirectiveMidShader;
+
+   this->cs_input_local_size_variable_specified = false;
 }
 
 /**
@@ -590,6 +594,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_ES3_2_compatibility),
    EXT(ARB_arrays_of_arrays),
    EXT(ARB_compute_shader),
+   EXT(ARB_compute_variable_group_size),
    EXT(ARB_conservative_depth),
    EXT(ARB_cull_distance),
    EXT(ARB_derivative_control),
@@ -1630,7 +1635,7 @@ ast_struct_specifier::print(void) const
 }
 
 
-ast_struct_specifier::ast_struct_specifier(const char *identifier,
+ast_struct_specifier::ast_struct_specifier(void *lin_ctx, const char *identifier,
 					   ast_declarator_list *declarator_list)
 {
    if (identifier == NULL) {
@@ -1642,7 +1647,7 @@ ast_struct_specifier::ast_struct_specifier(const char *identifier,
       count = anon_count++;
       mtx_unlock(&mutex);
 
-      identifier = ralloc_asprintf(this, "#anon_struct_%04x", count);
+      identifier = linear_asprintf(lin_ctx, "#anon_struct_%04x", count);
    }
    name = identifier;
    this->declarations.push_degenerate_list_at_head(&declarator_list->link);
@@ -1675,6 +1680,7 @@ set_shader_inout_layout(struct gl_shader *shader,
    if (shader->Stage != MESA_SHADER_COMPUTE) {
       /* Should have been prevented by the parser. */
       assert(!state->cs_input_local_size_specified);
+      assert(!state->cs_input_local_size_variable_specified);
    }
 
    if (shader->Stage != MESA_SHADER_FRAGMENT) {
@@ -1790,6 +1796,9 @@ set_shader_inout_layout(struct gl_shader *shader,
          for (int i = 0; i < 3; i++)
             shader->info.Comp.LocalSize[i] = 0;
       }
+
+      shader->info.Comp.LocalSizeVariable =
+         state->cs_input_local_size_variable_specified;
       break;
 
    case MESA_SHADER_FRAGMENT:
@@ -1870,6 +1879,18 @@ add_builtin_defines(struct _mesa_glsl_parse_state *state,
    }
 }
 
+/* Implements parsing checks that we can't do during parsing */
+static void
+do_late_parsing_checks(struct _mesa_glsl_parse_state *state)
+{
+   if (state->stage == MESA_SHADER_COMPUTE && !state->has_compute_shader()) {
+      YYLTYPE loc;
+      memset(&loc, 0, sizeof(loc));
+      _mesa_glsl_error(&loc, state, "Compute shaders require "
+                       "GLSL 4.30 or GLSL ES 3.10");
+   }
+}
+
 void
 _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
                           bool dump_ast, bool dump_hir)
@@ -1889,6 +1910,7 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
      _mesa_glsl_lexer_ctor(state, source);
      _mesa_glsl_parse(state);
      _mesa_glsl_lexer_dtor(state);
+     do_late_parsing_checks(state);
    }
 
    if (dump_ast) {

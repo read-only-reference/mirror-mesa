@@ -94,7 +94,7 @@ assign_gs_binding_table_offsets(const struct gen_device_info *devinfo,
 bool
 brw_codegen_gs_prog(struct brw_context *brw,
                     struct gl_shader_program *prog,
-                    struct brw_geometry_program *gp,
+                    struct brw_program *gp,
                     struct brw_gs_prog_key *key)
 {
    struct brw_compiler *compiler = brw->screen->compiler;
@@ -106,8 +106,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
 
    memset(&prog_data, 0, sizeof(prog_data));
 
-   assign_gs_binding_table_offsets(devinfo, prog,
-                                   &gp->program.Base, &prog_data);
+   assign_gs_binding_table_offsets(devinfo, prog, &gp->program, &prog_data);
 
    /* Allocate the references to the uniforms that will end up in the
     * prog_data associated with the compiled program, and which will be freed
@@ -119,7 +118,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
     */
    struct gl_linked_shader *gs = prog->_LinkedShaders[MESA_SHADER_GEOMETRY];
    struct brw_shader *bgs = (struct brw_shader *) gs;
-   int param_count = gp->program.Base.nir->num_uniforms / 4;
+   int param_count = gp->program.nir->num_uniforms / 4;
 
    prog_data.base.base.param =
       rzalloc_array(NULL, const gl_constant_value *, param_count);
@@ -130,15 +129,15 @@ brw_codegen_gs_prog(struct brw_context *brw,
    prog_data.base.base.nr_params = param_count;
    prog_data.base.base.nr_image_params = gs->NumImages;
 
-   brw_nir_setup_glsl_uniforms(gp->program.Base.nir, prog, &gp->program.Base,
+   brw_nir_setup_glsl_uniforms(gp->program.nir, prog, &gp->program,
                                &prog_data.base.base,
                                compiler->scalar_stage[MESA_SHADER_GEOMETRY]);
 
-   GLbitfield64 outputs_written = gp->program.Base.OutputsWritten;
+   uint64_t outputs_written = gp->program.info.outputs_written;
 
    prog_data.base.cull_distance_mask =
-      ((1 << gp->program.Base.CullDistanceArraySize) - 1) <<
-      gp->program.Base.ClipDistanceArraySize;
+      ((1 << gp->program.CullDistanceArraySize) - 1) <<
+      gp->program.ClipDistanceArraySize;
 
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
@@ -191,7 +190,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
                     key, sizeof(*key),
                     program, program_size,
                     &prog_data, sizeof(prog_data),
-                    &stage_state->prog_offset, &brw->gs.prog_data);
+                    &stage_state->prog_offset, &brw->gs.base.prog_data);
    ralloc_free(mem_ctx);
 
    return true;
@@ -211,16 +210,14 @@ brw_gs_populate_key(struct brw_context *brw,
                     struct brw_gs_prog_key *key)
 {
    struct gl_context *ctx = &brw->ctx;
-   struct brw_geometry_program *gp =
-      (struct brw_geometry_program *) brw->geometry_program;
-   struct gl_program *prog = &gp->program.Base;
+   struct brw_program *gp = (struct brw_program *) brw->geometry_program;
 
    memset(key, 0, sizeof(*key));
 
    key->program_string_id = gp->id;
 
    /* _NEW_TEXTURE */
-   brw_populate_sampler_prog_key_data(ctx, prog, &key->tex);
+   brw_populate_sampler_prog_key_data(ctx, &gp->program, &key->tex);
 }
 
 void
@@ -231,8 +228,7 @@ brw_upload_gs_prog(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->gs.base;
    struct brw_gs_prog_key key;
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   struct brw_geometry_program *gp =
-      (struct brw_geometry_program *) brw->geometry_program;
+   struct brw_program *gp = (struct brw_program *) brw->geometry_program;
 
    if (!brw_gs_state_dirty(brw))
       return;
@@ -248,7 +244,6 @@ brw_upload_gs_prog(struct brw_context *brw)
       /* Other state atoms had better not try to access prog_data, since
        * there's no GS program.
        */
-      brw->gs.prog_data = NULL;
       brw->gs.base.prog_data = NULL;
 
       return;
@@ -258,13 +253,13 @@ brw_upload_gs_prog(struct brw_context *brw)
 
    if (!brw_search_cache(&brw->cache, BRW_CACHE_GS_PROG,
                          &key, sizeof(key),
-                         &stage_state->prog_offset, &brw->gs.prog_data)) {
+                         &stage_state->prog_offset,
+                         &brw->gs.base.prog_data)) {
       bool success = brw_codegen_gs_prog(brw, current[MESA_SHADER_GEOMETRY],
                                          gp, &key);
       assert(success);
       (void)success;
    }
-   brw->gs.base.prog_data = &brw->gs.prog_data->base.base;
 }
 
 bool
@@ -275,11 +270,10 @@ brw_gs_precompile(struct gl_context *ctx,
    struct brw_context *brw = brw_context(ctx);
    struct brw_gs_prog_key key;
    uint32_t old_prog_offset = brw->gs.base.prog_offset;
-   struct brw_gs_prog_data *old_prog_data = brw->gs.prog_data;
+   struct brw_stage_prog_data *old_prog_data = brw->gs.base.prog_data;
    bool success;
 
-   struct gl_geometry_program *gp = (struct gl_geometry_program *) prog;
-   struct brw_geometry_program *bgp = brw_geometry_program(gp);
+   struct brw_program *bgp = brw_program(prog);
 
    memset(&key, 0, sizeof(key));
 
@@ -289,7 +283,7 @@ brw_gs_precompile(struct gl_context *ctx,
    success = brw_codegen_gs_prog(brw, shader_prog, bgp, &key);
 
    brw->gs.base.prog_offset = old_prog_offset;
-   brw->gs.prog_data = old_prog_data;
+   brw->gs.base.prog_data = old_prog_data;
 
    return success;
 }

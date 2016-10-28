@@ -25,13 +25,11 @@
 #include "tgsi/tgsi_parse.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
-#include "radeon/r600_pipe_common.h"
 #include "radeon/radeon_elf_util.h"
 
 #include "amd_kernel_code_t.h"
 #include "radeon/r600_cs.h"
 #include "si_pipe.h"
-#include "si_shader.h"
 #include "sid.h"
 
 #define MAX_GLOBAL_BUFFERS 20
@@ -210,6 +208,7 @@ static void si_set_global_binding(
 static void si_initialize_compute(struct si_context *sctx)
 {
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
+	uint64_t bc_va;
 
 	radeon_set_sh_reg_seq(cs, R_00B810_COMPUTE_START_X, 3);
 	radeon_emit(cs, 0);
@@ -244,6 +243,22 @@ static void si_initialize_compute(struct si_context *sctx)
 		                  0x190 /* Default value */);
 	}
 
+	/* Set the pointer to border colors. */
+	bc_va = sctx->border_color_buffer->gpu_address;
+
+	if (sctx->b.chip_class >= CIK) {
+		radeon_set_uconfig_reg_seq(cs, R_030E00_TA_CS_BC_BASE_ADDR, 2);
+		radeon_emit(cs, bc_va >> 8);  /* R_030E00_TA_CS_BC_BASE_ADDR */
+		radeon_emit(cs, bc_va >> 40); /* R_030E04_TA_CS_BC_BASE_ADDR_HI */
+	} else {
+		if (sctx->screen->b.info.drm_major == 3 ||
+		    (sctx->screen->b.info.drm_major == 2 &&
+		     sctx->screen->b.info.drm_minor >= 48)) {
+			radeon_set_config_reg(cs, R_00950C_TA_CS_BC_BASE_ADDR,
+					      bc_va >> 8);
+		}
+	}
+
 	sctx->cs_shader_state.emitted_program = NULL;
 	sctx->cs_shader_state.initialized = true;
 }
@@ -261,9 +276,9 @@ static bool si_setup_compute_scratch_buffer(struct si_context *sctx,
 	if (scratch_bo_size < scratch_needed) {
 		r600_resource_reference(&sctx->compute_scratch_buffer, NULL);
 
-		sctx->compute_scratch_buffer =
-				si_resource_create_custom(&sctx->screen->b.b,
-                                PIPE_USAGE_DEFAULT, scratch_needed);
+		sctx->compute_scratch_buffer = (struct r600_resource*)
+			pipe_buffer_create(&sctx->screen->b.b, 0,
+					   PIPE_USAGE_DEFAULT, scratch_needed);
 
 		if (!sctx->compute_scratch_buffer)
 			return false;
@@ -591,11 +606,19 @@ static void si_setup_tgsi_grid(struct si_context *sctx,
 			radeon_emit(cs, 0);
 		}
 	} else {
+		struct si_compute *program = sctx->cs_shader_state.program;
+		bool variable_group_size =
+			program->shader.selector->info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0;
 
-		radeon_set_sh_reg_seq(cs, grid_size_reg, 3);
+		radeon_set_sh_reg_seq(cs, grid_size_reg, variable_group_size ? 6 : 3);
 		radeon_emit(cs, info->grid[0]);
 		radeon_emit(cs, info->grid[1]);
 		radeon_emit(cs, info->grid[2]);
+		if (variable_group_size) {
+			radeon_emit(cs, info->block[0]);
+			radeon_emit(cs, info->block[1]);
+			radeon_emit(cs, info->block[2]);
+		}
 	}
 }
 
@@ -678,7 +701,7 @@ static void si_launch_grid(
 
 		/* The hw doesn't read the indirect buffer via TC L2. */
 		if (r600_resource(info->indirect)->TC_L2_dirty) {
-			sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
 			r600_resource(info->indirect)->TC_L2_dirty = false;
 		}
 	}

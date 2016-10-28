@@ -98,6 +98,12 @@ vc4_screen_destroy(struct pipe_screen *pscreen)
 
         util_hash_table_destroy(screen->bo_handles);
         vc4_bufmgr_destroy(pscreen);
+        slab_destroy_parent(&screen->transfer_pool);
+
+#if USE_VC4_SIMULATOR
+        vc4_simulator_destroy(screen);
+#endif
+
         close(screen->fd);
         ralloc_free(pscreen);
 }
@@ -232,11 +238,13 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_WINDOW_RECTANGLES:
         case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
         case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+        case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
                 return 0;
 
                 /* Stream output. */
         case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+        case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
         case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
         case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
                 return 0;
@@ -521,14 +529,10 @@ static int handle_compare(void *key1, void *key2)
 static bool
 vc4_supports_branches(struct vc4_screen *screen)
 {
-#if USE_VC4_SIMULATOR
-        return true;
-#endif
-
         struct drm_vc4_get_param p = {
                 .param = DRM_VC4_PARAM_SUPPORTS_BRANCHES,
         };
-        int ret = drmIoctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &p);
+        int ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &p);
 
         if (ret != 0)
                 return false;
@@ -539,11 +543,6 @@ vc4_supports_branches(struct vc4_screen *screen)
 static bool
 vc4_get_chip_info(struct vc4_screen *screen)
 {
-#if USE_VC4_SIMULATOR
-        screen->v3d_ver = 21;
-        return true;
-#endif
-
         struct drm_vc4_get_param ident0 = {
                 .param = DRM_VC4_PARAM_V3D_IDENT0,
         };
@@ -552,7 +551,7 @@ vc4_get_chip_info(struct vc4_screen *screen)
         };
         int ret;
 
-        ret = drmIoctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &ident0);
+        ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &ident0);
         if (ret != 0) {
                 if (errno == EINVAL) {
                         /* Backwards compatibility with 2835 kernels which
@@ -566,7 +565,7 @@ vc4_get_chip_info(struct vc4_screen *screen)
                         return false;
                 }
         }
-        ret = drmIoctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &ident1);
+        ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &ident1);
         if (ret != 0) {
                 fprintf(stderr, "Couldn't get V3D IDENT1: %s\n",
                         strerror(errno));
@@ -613,6 +612,8 @@ vc4_screen_create(int fd)
 
         if (!vc4_get_chip_info(screen))
                 goto fail;
+
+        slab_create_parent(&screen->transfer_pool, sizeof(struct vc4_transfer), 16);
 
         vc4_fence_init(screen);
 

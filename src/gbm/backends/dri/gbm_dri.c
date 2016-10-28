@@ -439,19 +439,19 @@ dri_screen_create_dri2(struct gbm_dri_device *dri, char *driver_name)
       return ret;
    };
 
-   dri->extensions = gbm_dri_screen_extensions;
+   dri->loader_extensions = gbm_dri_screen_extensions;
 
    if (dri->dri2 == NULL)
       return -1;
 
    if (dri->dri2->base.version >= 4) {
       dri->screen = dri->dri2->createNewScreen2(0, dri->base.base.fd,
-                                                dri->extensions,
+                                                dri->loader_extensions,
                                                 dri->driver_extensions,
                                                 &dri->driver_configs, dri);
    } else {
       dri->screen = dri->dri2->createNewScreen(0, dri->base.base.fd,
-                                               dri->extensions,
+                                               dri->loader_extensions,
                                                &dri->driver_configs, dri);
    }
    if (dri->screen == NULL)
@@ -489,17 +489,17 @@ dri_screen_create_swrast(struct gbm_dri_device *dri)
       return ret;
    }
 
-   dri->extensions = gbm_dri_screen_extensions;
+   dri->loader_extensions = gbm_dri_screen_extensions;
 
    if (dri->swrast == NULL)
       return -1;
 
    if (dri->swrast->base.version >= 4) {
-      dri->screen = dri->swrast->createNewScreen2(0, dri->extensions,
+      dri->screen = dri->swrast->createNewScreen2(0, dri->loader_extensions,
                                                   dri->driver_extensions,
                                                   &dri->driver_configs, dri);
    } else {
-      dri->screen = dri->swrast->createNewScreen(0, dri->extensions,
+      dri->screen = dri->swrast->createNewScreen(0, dri->loader_extensions,
                                                  &dri->driver_configs, dri);
    }
    if (dri->screen == NULL)
@@ -516,7 +516,7 @@ dri_screen_create(struct gbm_dri_device *dri)
 {
    char *driver_name;
 
-   driver_name = loader_get_driver_for_fd(dri->base.base.fd, 0);
+   driver_name = loader_get_driver_for_fd(dri->base.base.fd);
    if (!driver_name)
       return -1;
 

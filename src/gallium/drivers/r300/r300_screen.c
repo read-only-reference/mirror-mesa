@@ -165,6 +165,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
         case PIPE_CAP_MAX_VERTEX_STREAMS:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+        case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
         case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
         case PIPE_CAP_COMPUTE:
@@ -223,6 +224,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_WINDOW_RECTANGLES:
         case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
         case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+        case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
             return 0;
 
         /* SWTCL-only features. */
@@ -676,6 +678,7 @@ static void r300_destroy_screen(struct pipe_screen* pscreen)
       return;
 
     pipe_mutex_destroy(r300screen->cmask_mutex);
+    slab_destroy_parent(&r300screen->pool_transfers);
 
     if (rws)
       rws->destroy(rws);
@@ -737,6 +740,8 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws)
     r300screen->screen.fence_finish = r300_fence_finish;
 
     r300_init_screen_resource_functions(r300screen);
+
+    slab_create_parent(&r300screen->pool_transfers, sizeof(struct pipe_transfer), 64);
 
     util_format_s3tc_init();
     pipe_mutex_init(r300screen->cmask_mutex);

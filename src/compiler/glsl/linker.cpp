@@ -1063,7 +1063,15 @@ cross_validate_globals(struct gl_shader_program *prog,
             return;
          }
 
-         if (prog->IsES && existing->data.precision != var->data.precision) {
+         /* Only in GLSL ES 3.10, the precision qualifier should not match
+          * between block members defined in matched block names within a
+          * shader interface.
+          *
+          * In GLSL ES 3.00 and ES 3.20, precision qualifier for each block
+          * member should match.
+          */
+         if (prog->IsES && (prog->Version != 310 || !var->get_interface_type()) &&
+             existing->data.precision != var->data.precision) {
             linker_error(prog, "declarations for %s `%s` have "
                          "mismatching precision qualifiers\n",
                          mode_string(var), var->name);
@@ -1505,9 +1513,10 @@ private:
       }
       glsl_interface_packing packing =
          (glsl_interface_packing) type->interface_packing;
+      bool row_major = (bool) type->interface_row_major;
       const glsl_type *new_ifc_type =
          glsl_type::get_interface_instance(fields, num_fields,
-                                           packing, type->name);
+                                           packing, row_major, type->name);
       delete [] fields;
       return new_ifc_type;
    }
@@ -1535,9 +1544,10 @@ private:
       }
       glsl_interface_packing packing =
          (glsl_interface_packing) ifc_type->interface_packing;
+      bool row_major = (bool) ifc_type->interface_row_major;
       const glsl_type *new_ifc_type =
          glsl_type::get_interface_instance(fields, num_fields, packing,
-                                           ifc_type->name);
+                                           row_major, ifc_type->name);
       delete [] fields;
       for (unsigned i = 0; i < num_fields; i++) {
          if (interface_vars[i] != NULL)
@@ -1988,6 +1998,8 @@ link_cs_input_layout_qualifiers(struct gl_shader_program *prog,
    for (int i = 0; i < 3; i++)
       linked_shader->info.Comp.LocalSize[i] = 0;
 
+   linked_shader->info.Comp.LocalSizeVariable = false;
+
    /* This function is called for all shader stages, but it only has an effect
     * for compute shaders.
     */
@@ -2022,6 +2034,20 @@ link_cs_input_layout_qualifiers(struct gl_shader_program *prog,
             linked_shader->info.Comp.LocalSize[i] =
                shader->info.Comp.LocalSize[i];
          }
+      } else if (shader->info.Comp.LocalSizeVariable) {
+         if (linked_shader->info.Comp.LocalSize[0] != 0) {
+            /* The ARB_compute_variable_group_size spec says:
+             *
+             *     If one compute shader attached to a program declares a
+             *     variable local group size and a second compute shader
+             *     attached to the same program declares a fixed local group
+             *     size, a link-time error results.
+             */
+            linker_error(prog, "compute shader defined with both fixed and "
+                         "variable local group size\n");
+            return;
+         }
+         linked_shader->info.Comp.LocalSizeVariable = true;
       }
    }
 
@@ -2029,12 +2055,17 @@ link_cs_input_layout_qualifiers(struct gl_shader_program *prog,
     * since we already know we're in the right type of shader program
     * for doing it.
     */
-   if (linked_shader->info.Comp.LocalSize[0] == 0) {
-      linker_error(prog, "compute shader didn't declare local size\n");
+   if (linked_shader->info.Comp.LocalSize[0] == 0 &&
+       !linked_shader->info.Comp.LocalSizeVariable) {
+      linker_error(prog, "compute shader must contain a fixed or a variable "
+                         "local group size\n");
       return;
    }
    for (int i = 0; i < 3; i++)
       prog->Comp.LocalSize[i] = linked_shader->info.Comp.LocalSize[i];
+
+   prog->Comp.LocalSizeVariable =
+      linked_shader->info.Comp.LocalSizeVariable;
 }
 
 
@@ -3553,6 +3584,7 @@ static gl_shader_variable *
 create_shader_variable(struct gl_shader_program *shProg,
                        const ir_variable *in,
                        const char *name, const glsl_type *type,
+                       const glsl_type *interface_type,
                        bool use_implicit_location, int location,
                        const glsl_type *outermost_struct_type)
 {
@@ -3610,7 +3642,7 @@ create_shader_variable(struct gl_shader_program *shProg,
 
    out->type = type;
    out->outermost_struct_type = outermost_struct_type;
-   out->interface_type = in->get_interface_type();
+   out->interface_type = interface_type;
    out->component = in->data.location_frac;
    out->index = in->data.index;
    out->patch = in->data.patch;
@@ -3622,8 +3654,21 @@ create_shader_variable(struct gl_shader_program *shProg,
    return out;
 }
 
+static const glsl_type *
+resize_to_max_patch_vertices(const struct gl_context *ctx,
+                             const glsl_type *type)
+{
+   if (!type)
+      return NULL;
+
+   return glsl_type::get_array_instance(type->fields.array,
+                                        ctx->Const.MaxPatchVertices);
+}
+
 static bool
-add_shader_variable(struct gl_shader_program *shProg, struct set *resource_set,
+add_shader_variable(const struct gl_context *ctx,
+                    struct gl_shader_program *shProg,
+                    struct set *resource_set,
                     unsigned stage_mask,
                     GLenum programInterface, ir_variable *var,
                     const char *name, const glsl_type *type,
@@ -3652,7 +3697,7 @@ add_shader_variable(struct gl_shader_program *shProg, struct set *resource_set,
       for (unsigned i = 0; i < type->length; i++) {
          const struct glsl_struct_field *field = &type->fields.structure[i];
          char *field_name = ralloc_asprintf(shProg, "%s.%s", name, field->name);
-         if (!add_shader_variable(shProg, resource_set,
+         if (!add_shader_variable(ctx, shProg, resource_set,
                                   stage_mask, programInterface,
                                   var, field_name, field->type,
                                   use_implicit_location, field_location,
@@ -3666,6 +3711,29 @@ add_shader_variable(struct gl_shader_program *shProg, struct set *resource_set,
    }
 
    default: {
+      const glsl_type *interface_type = var->get_interface_type();
+
+      /* Unsized (non-patch) TCS output/TES input arrays are implicitly
+       * sized to gl_MaxPatchVertices.  Internally, we shrink them to a
+       * smaller size.
+       *
+       * This can cause trouble with SSO programs.  Since the TCS declares
+       * the number of output vertices, we can always shrink TCS output
+       * arrays.  However, the TES might not be linked with a TCS, in
+       * which case it won't know the size of the patch.  In other words,
+       * the TCS and TES may disagree on the (smaller) array sizes.  This
+       * can result in the resource names differing across stages, causing
+       * SSO validation failures and other cascading issues.
+       *
+       * Expanding the array size to the full gl_MaxPatchVertices fixes
+       * these issues.  It's also what program interface queries expect,
+       * as that is the official size of the array.
+       */
+      if (var->data.tess_varying_implicit_sized_array) {
+         type = resize_to_max_patch_vertices(ctx, type);
+         interface_type = resize_to_max_patch_vertices(ctx, interface_type);
+      }
+
       /* Issue #16 of the ARB_program_interface_query spec says:
        *
        * "* If a variable is a member of an interface block without an
@@ -3678,8 +3746,7 @@ add_shader_variable(struct gl_shader_program *shProg, struct set *resource_set,
        */
       const char *prefixed_name = (var->data.from_named_ifc_block &&
                                    !is_gl_identifier(var->name))
-         ? ralloc_asprintf(shProg, "%s.%s", var->get_interface_type()->name,
-                           name)
+         ? ralloc_asprintf(shProg, "%s.%s", interface_type->name, name)
          : name;
 
       /* The ARB_program_interface_query spec says:
@@ -3690,6 +3757,7 @@ add_shader_variable(struct gl_shader_program *shProg, struct set *resource_set,
        */
       gl_shader_variable *sha_v =
          create_shader_variable(shProg, var, prefixed_name, type,
+                                interface_type,
                                 use_implicit_location, location,
                                 outermost_struct_type);
       if (!sha_v)
@@ -3702,7 +3770,8 @@ add_shader_variable(struct gl_shader_program *shProg, struct set *resource_set,
 }
 
 static bool
-add_interface_variables(struct gl_shader_program *shProg,
+add_interface_variables(const struct gl_context *ctx,
+                        struct gl_shader_program *shProg,
                         struct set *resource_set,
                         unsigned stage, GLenum programInterface)
 {
@@ -3753,7 +3822,7 @@ add_interface_variables(struct gl_shader_program *shProg,
          (stage == MESA_SHADER_VERTEX && var->data.mode == ir_var_shader_in) ||
          (stage == MESA_SHADER_FRAGMENT && var->data.mode == ir_var_shader_out);
 
-      if (!add_shader_variable(shProg, resource_set,
+      if (!add_shader_variable(ctx, shProg, resource_set,
                                1 << stage, programInterface,
                                var, var->name, var->type, vs_input_or_fs_output,
                                var->data.location - loc_bias))
@@ -3763,7 +3832,9 @@ add_interface_variables(struct gl_shader_program *shProg,
 }
 
 static bool
-add_packed_varyings(struct gl_shader_program *shProg, struct set *resource_set,
+add_packed_varyings(const struct gl_context *ctx,
+                    struct gl_shader_program *shProg,
+                    struct set *resource_set,
                     int stage, GLenum type)
 {
    struct gl_linked_shader *sh = shProg->_LinkedShaders[stage];
@@ -3789,7 +3860,7 @@ add_packed_varyings(struct gl_shader_program *shProg, struct set *resource_set,
          if (type == iface) {
             const int stage_mask =
                build_stageref(shProg, var->name, var->data.mode);
-            if (!add_shader_variable(shProg, resource_set,
+            if (!add_shader_variable(ctx, shProg, resource_set,
                                      stage_mask,
                                      iface, var, var->name, var->type, false,
                                      var->data.location - VARYING_SLOT_VAR0))
@@ -3801,7 +3872,9 @@ add_packed_varyings(struct gl_shader_program *shProg, struct set *resource_set,
 }
 
 static bool
-add_fragdata_arrays(struct gl_shader_program *shProg, struct set *resource_set)
+add_fragdata_arrays(const struct gl_context *ctx,
+                    struct gl_shader_program *shProg,
+                    struct set *resource_set)
 {
    struct gl_linked_shader *sh = shProg->_LinkedShaders[MESA_SHADER_FRAGMENT];
 
@@ -3813,7 +3886,7 @@ add_fragdata_arrays(struct gl_shader_program *shProg, struct set *resource_set)
       if (var) {
          assert(var->data.mode == ir_var_shader_out);
 
-         if (!add_shader_variable(shProg, resource_set,
+         if (!add_shader_variable(ctx, shProg, resource_set,
                                   1 << MESA_SHADER_FRAGMENT,
                                   GL_PROGRAM_OUTPUT, var, var->name, var->type,
                                   true, var->data.location - FRAG_RESULT_DATA0))
@@ -4072,24 +4145,24 @@ build_program_resource_list(struct gl_context *ctx,
 
    /* Program interface needs to expose varyings in case of SSO. */
    if (shProg->SeparateShader) {
-      if (!add_packed_varyings(shProg, resource_set,
+      if (!add_packed_varyings(ctx, shProg, resource_set,
                                input_stage, GL_PROGRAM_INPUT))
          return;
 
-      if (!add_packed_varyings(shProg, resource_set,
+      if (!add_packed_varyings(ctx, shProg, resource_set,
                                output_stage, GL_PROGRAM_OUTPUT))
          return;
    }
 
-   if (!add_fragdata_arrays(shProg, resource_set))
+   if (!add_fragdata_arrays(ctx, shProg, resource_set))
       return;
 
    /* Add inputs and outputs to the resource list. */
-   if (!add_interface_variables(shProg, resource_set,
+   if (!add_interface_variables(ctx, shProg, resource_set,
                                 input_stage, GL_PROGRAM_INPUT))
       return;
 
-   if (!add_interface_variables(shProg, resource_set,
+   if (!add_interface_variables(ctx, shProg, resource_set,
                                 output_stage, GL_PROGRAM_OUTPUT))
       return;
 
@@ -4452,8 +4525,8 @@ link_varyings_and_uniforms(unsigned first, unsigned last,
          return false;
       }
 
-      tfeedback_decls = ralloc_array(mem_ctx, tfeedback_decl,
-                                     num_tfeedback_decls);
+      tfeedback_decls = rzalloc_array(mem_ctx, tfeedback_decl,
+                                      num_tfeedback_decls);
       if (!parse_tfeedback_decls(ctx, prog, mem_ctx, num_tfeedback_decls,
                                  varying_names, tfeedback_decls))
          return false;

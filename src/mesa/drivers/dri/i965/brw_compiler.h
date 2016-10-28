@@ -34,7 +34,7 @@ extern "C" {
 
 struct ra_regs;
 struct nir_shader;
-struct brw_geometry_program;
+struct brw_program;
 union gl_constant_value;
 
 struct brw_compiler {
@@ -575,6 +575,12 @@ void brw_compute_tess_vue_map(struct brw_vue_map *const vue_map,
                               const GLbitfield64 slots_valid,
                               const GLbitfield is_patch);
 
+/* brw_interpolation_map.c */
+void brw_setup_vue_interpolation(struct brw_vue_map *vue_map,
+                                 struct nir_shader *nir,
+                                 struct gl_program *prog,
+                                 const struct gen_device_info *devinfo);
+
 enum shader_dispatch_mode {
    DISPATCH_MODE_4X1_SINGLE = 0,
    DISPATCH_MODE_4X2_DUAL_INSTANCE = 1,
@@ -731,6 +737,23 @@ struct brw_gs_prog_data
    unsigned char transform_feedback_swizzles[64 /* BRW_MAX_SOL_BINDINGS */];
 };
 
+#define DEFINE_PROG_DATA_DOWNCAST(stage)                       \
+static inline struct brw_##stage##_prog_data *                 \
+brw_##stage##_prog_data(struct brw_stage_prog_data *prog_data) \
+{                                                              \
+   return (struct brw_##stage##_prog_data *) prog_data;        \
+}
+DEFINE_PROG_DATA_DOWNCAST(vue)
+DEFINE_PROG_DATA_DOWNCAST(vs)
+DEFINE_PROG_DATA_DOWNCAST(tcs)
+DEFINE_PROG_DATA_DOWNCAST(tes)
+DEFINE_PROG_DATA_DOWNCAST(gs)
+DEFINE_PROG_DATA_DOWNCAST(wm)
+DEFINE_PROG_DATA_DOWNCAST(cs)
+DEFINE_PROG_DATA_DOWNCAST(ff_gs)
+DEFINE_PROG_DATA_DOWNCAST(clip)
+DEFINE_PROG_DATA_DOWNCAST(sf)
+#undef DEFINE_PROG_DATA_DOWNCAST
 
 /** @} */
 
@@ -817,7 +840,7 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
                int shader_time_index8,
                int shader_time_index16,
                bool allow_spilling,
-               bool use_rep_send,
+               bool use_rep_send, struct brw_vue_map *vue_map,
                unsigned *final_assembly_size,
                char **error_str);
 

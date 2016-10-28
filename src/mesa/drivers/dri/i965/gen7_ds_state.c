@@ -32,15 +32,14 @@ gen7_upload_tes_push_constants(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tes.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_tess_eval_program *tep =
-      (struct brw_tess_eval_program *) brw->tess_eval_program;
+   const struct brw_program *tep = brw_program_const(brw->tess_eval_program);
 
    if (tep) {
       /* BRW_NEW_TES_PROG_DATA */
-      const struct brw_stage_prog_data *prog_data = &brw->tes.prog_data->base.base;
+      const struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
       _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_EVAL);
-      gen6_upload_push_constants(brw, &tep->program.Base, prog_data,
-                                      stage_state, AUB_TRACE_VS_CONSTANTS);
+      gen6_upload_push_constants(brw, &tep->program, prog_data, stage_state,
+                                 AUB_TRACE_VS_CONSTANTS);
    }
 
    gen7_upload_constant_state(brw, stage_state, tep, _3DSTATE_CONSTANT_DS);
@@ -67,11 +66,13 @@ gen7_upload_ds_state(struct brw_context *brw)
    bool active = brw->tess_eval_program;
 
    /* BRW_NEW_TES_PROG_DATA */
-   const struct brw_tes_prog_data *tes_prog_data = brw->tes.prog_data;
-   const struct brw_vue_prog_data *vue_prog_data = &tes_prog_data->base;
-   const struct brw_stage_prog_data *prog_data = &vue_prog_data->base;
+   const struct brw_stage_prog_data *prog_data = stage_state->prog_data;
+   const struct brw_vue_prog_data *vue_prog_data =
+      brw_vue_prog_data(stage_state->prog_data);
+   const struct brw_tes_prog_data *tes_prog_data =
+      brw_tes_prog_data(stage_state->prog_data);
 
-   const unsigned thread_count = (devinfo->max_ds_threads - 1) <<
+   const unsigned thread_count = (devinfo->max_tes_threads - 1) <<
       (brw->is_haswell ? HSW_DS_MAX_THREADS_SHIFT : GEN7_DS_MAX_THREADS_SHIFT);
 
    if (active) {

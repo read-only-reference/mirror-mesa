@@ -102,8 +102,8 @@ brw_set_prim(struct brw_context *brw, const struct _mesa_prim *prim)
       brw->ctx.NewDriverState |= BRW_NEW_PRIMITIVE;
 
       if (reduced_prim[prim->mode] != brw->reduced_primitive) {
-	 brw->reduced_primitive = reduced_prim[prim->mode];
-	 brw->ctx.NewDriverState |= BRW_NEW_REDUCED_PRIMITIVE;
+         brw->reduced_primitive = reduced_prim[prim->mode];
+         brw->ctx.NewDriverState |= BRW_NEW_REDUCED_PRIMITIVE;
       }
    }
 }
@@ -285,7 +285,7 @@ brw_emit_prim(struct brw_context *brw,
 
 static void
 brw_merge_inputs(struct brw_context *brw,
-                 const struct gl_client_array *arrays[])
+                 const struct gl_vertex_array *arrays[])
 {
    const struct gl_context *ctx = &brw->ctx;
    GLuint i;
@@ -302,7 +302,7 @@ brw_merge_inputs(struct brw_context *brw,
    }
 
    if (brw->gen < 8 && !brw->is_haswell) {
-      GLbitfield64 mask = ctx->VertexProgram._Current->Base.InputsRead;
+      uint64_t mask = ctx->VertexProgram._Current->info.inputs_read;
       /* Prior to Haswell, the hardware can't natively support GL_FIXED or
        * 2_10_10_10_REV vertex formats.  Set appropriate workaround flags.
        */
@@ -420,7 +420,7 @@ brw_predraw_set_aux_buffers(struct brw_context *brw)
  */
 static void
 brw_try_draw_prims(struct gl_context *ctx,
-                   const struct gl_client_array *arrays[],
+                   const struct gl_vertex_array *arrays[],
                    const struct _mesa_prim *prims,
                    GLuint nr_prims,
                    const struct _mesa_index_buffer *ib,
@@ -452,15 +452,15 @@ brw_try_draw_prims(struct gl_context *ctx,
     * index.
     */
    brw->wm.base.sampler_count =
-      util_last_bit(ctx->FragmentProgram._Current->Base.SamplersUsed);
+      util_last_bit(ctx->FragmentProgram._Current->SamplersUsed);
    brw->gs.base.sampler_count = ctx->GeometryProgram._Current ?
-      util_last_bit(ctx->GeometryProgram._Current->Base.SamplersUsed) : 0;
+      util_last_bit(ctx->GeometryProgram._Current->SamplersUsed) : 0;
    brw->tes.base.sampler_count = ctx->TessEvalProgram._Current ?
-      util_last_bit(ctx->TessEvalProgram._Current->Base.SamplersUsed) : 0;
+      util_last_bit(ctx->TessEvalProgram._Current->SamplersUsed) : 0;
    brw->tcs.base.sampler_count = ctx->TessCtrlProgram._Current ?
-      util_last_bit(ctx->TessCtrlProgram._Current->Base.SamplersUsed) : 0;
+      util_last_bit(ctx->TessCtrlProgram._Current->SamplersUsed) : 0;
    brw->vs.base.sampler_count =
-      util_last_bit(ctx->VertexProgram._Current->Base.SamplersUsed);
+      util_last_bit(ctx->VertexProgram._Current->SamplersUsed);
 
    intel_prepare_render(brw);
    brw_predraw_set_aux_buffers(brw);
@@ -521,15 +521,17 @@ brw_try_draw_prims(struct gl_context *ctx,
       const int new_basevertex =
          prims[i].indexed ? prims[i].basevertex : prims[i].start;
       const int new_baseinstance = prims[i].base_instance;
+      const struct brw_vs_prog_data *vs_prog_data =
+         brw_vs_prog_data(brw->vs.base.prog_data);
       if (i > 0) {
          const bool uses_draw_parameters =
-            brw->vs.prog_data->uses_basevertex ||
-            brw->vs.prog_data->uses_baseinstance;
+            vs_prog_data->uses_basevertex ||
+            vs_prog_data->uses_baseinstance;
 
          if ((uses_draw_parameters && prims[i].is_indirect) ||
-             (brw->vs.prog_data->uses_basevertex &&
+             (vs_prog_data->uses_basevertex &&
               brw->draw.params.gl_basevertex != new_basevertex) ||
-             (brw->vs.prog_data->uses_baseinstance &&
+             (vs_prog_data->uses_baseinstance &&
               brw->draw.params.gl_baseinstance != new_baseinstance))
             brw->ctx.NewDriverState |= BRW_NEW_VERTICES;
       }
@@ -556,19 +558,19 @@ brw_try_draw_prims(struct gl_context *ctx,
       /* gl_DrawID always needs its own vertex buffer since it's not part of
        * the indirect parameter buffer. If the program uses gl_DrawID we need
        * to flag BRW_NEW_VERTICES. For the first iteration, we don't have
-       * valid brw->vs.prog_data, but we always flag BRW_NEW_VERTICES before
+       * valid vs_prog_data, but we always flag BRW_NEW_VERTICES before
        * the loop.
        */
       brw->draw.gl_drawid = prims[i].draw_id;
       drm_intel_bo_unreference(brw->draw.draw_id_bo);
       brw->draw.draw_id_bo = NULL;
-      if (i > 0 && brw->vs.prog_data->uses_drawid)
+      if (i > 0 && vs_prog_data->uses_drawid)
          brw->ctx.NewDriverState |= BRW_NEW_VERTICES;
 
       if (brw->gen < 6)
-	 brw_set_prim(brw, &prims[i]);
+         brw_set_prim(brw, &prims[i]);
       else
-	 gen6_set_prim(brw, &prims[i]);
+         gen6_set_prim(brw, &prims[i]);
 
 retry:
 
@@ -578,8 +580,8 @@ retry:
        * brw->ctx.NewDriverState.
        */
       if (brw->ctx.NewDriverState) {
-	 brw->no_batch_wrap = true;
-	 brw_upload_render_state(brw);
+         brw->no_batch_wrap = true;
+         brw_upload_render_state(brw);
       }
 
       brw_emit_prim(brw, &prims[i], brw->primitive, xfb_obj, stream);
@@ -587,17 +589,17 @@ retry:
       brw->no_batch_wrap = false;
 
       if (dri_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
-	 if (!fail_next) {
-	    intel_batchbuffer_reset_to_saved(brw);
-	    intel_batchbuffer_flush(brw);
-	    fail_next = true;
-	    goto retry;
-	 } else {
+         if (!fail_next) {
+            intel_batchbuffer_reset_to_saved(brw);
+            intel_batchbuffer_flush(brw);
+            fail_next = true;
+            goto retry;
+         } else {
             int ret = intel_batchbuffer_flush(brw);
             WARN_ONCE(ret == -ENOSPC,
                       "i965: Single primitive emit exceeded "
                       "available aperture space\n");
-	 }
+         }
       }
 
       /* Now that we know we haven't run out of aperture space, we can safely
@@ -629,7 +631,7 @@ brw_draw_prims(struct gl_context *ctx,
                struct gl_buffer_object *indirect)
 {
    struct brw_context *brw = brw_context(ctx);
-   const struct gl_client_array **arrays = ctx->Array._DrawArrays;
+   const struct gl_vertex_array **arrays = ctx->Array._DrawArrays;
    struct brw_transform_feedback_object *xfb_obj =
       (struct brw_transform_feedback_object *) gl_xfb_obj;
 

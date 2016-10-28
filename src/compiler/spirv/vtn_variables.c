@@ -35,7 +35,8 @@ vtn_access_chain_extend(struct vtn_builder *b, struct vtn_access_chain *old,
    struct vtn_access_chain *chain;
 
    unsigned new_len = old->length + new_ids;
-   chain = ralloc_size(b, sizeof(*chain) + new_len * sizeof(chain->link[0]));
+   /* TODO: don't use rzalloc */
+   chain = rzalloc_size(b, sizeof(*chain) + new_len * sizeof(chain->link[0]));
 
    chain->var = old->var;
    chain->length = new_len;
@@ -783,7 +784,7 @@ vtn_get_builtin_location(struct vtn_builder *b,
       *location = VARYING_SLOT_CLIP_DIST0; /* XXX CLIP_DIST1? */
       break;
    case SpvBuiltInCullDistance:
-      /* XXX figure this out */
+      *location = VARYING_SLOT_CULL_DIST0;
       break;
    case SpvBuiltInVertexIndex:
       *location = SYSTEM_VALUE_VERTEX_ID;
@@ -933,9 +934,9 @@ apply_var_decoration(struct vtn_builder *b, nir_variable *nir_var,
          nir_var->data.read_only = true;
 
          nir_constant *c = rzalloc(nir_var, nir_constant);
-         c->value.u[0] = b->shader->info.cs.local_size[0];
-         c->value.u[1] = b->shader->info.cs.local_size[1];
-         c->value.u[2] = b->shader->info.cs.local_size[2];
+         c->value.u[0] = b->shader->info->cs.local_size[0];
+         c->value.u[1] = b->shader->info->cs.local_size[1];
+         c->value.u[2] = b->shader->info->cs.local_size[2];
          nir_var->constant_initializer = c;
          break;
       }
@@ -1054,7 +1055,7 @@ var_decoration_cb(struct vtn_builder *b, struct vtn_value *val, int member,
          is_vertex_input = false;
          location += VARYING_SLOT_VAR0;
       } else {
-         assert(!"Location must be on input or output variable");
+         unreachable("Location must be on input or output variable");
       }
 
       if (vtn_var->var) {
@@ -1175,18 +1176,18 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
       case SpvStorageClassUniformConstant:
          if (without_array->block) {
             var->mode = vtn_variable_mode_ubo;
-            b->shader->info.num_ubos++;
+            b->shader->info->num_ubos++;
          } else if (without_array->buffer_block) {
             var->mode = vtn_variable_mode_ssbo;
-            b->shader->info.num_ssbos++;
+            b->shader->info->num_ssbos++;
          } else if (glsl_type_is_image(without_array->type)) {
             var->mode = vtn_variable_mode_image;
             nir_mode = nir_var_uniform;
-            b->shader->info.num_images++;
+            b->shader->info->num_images++;
          } else if (glsl_type_is_sampler(without_array->type)) {
             var->mode = vtn_variable_mode_sampler;
             nir_mode = nir_var_uniform;
-            b->shader->info.num_textures++;
+            b->shader->info->num_textures++;
          } else {
             assert(!"Invalid uniform variable type");
          }

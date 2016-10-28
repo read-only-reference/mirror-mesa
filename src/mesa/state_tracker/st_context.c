@@ -70,6 +70,7 @@
 #include "st_gen_mipmap.h"
 #include "st_pbo.h"
 #include "st_program.h"
+#include "st_sampler_view.h"
 #include "st_vdpau.h"
 #include "st_texture.h"
 #include "pipe/p_context.h"
@@ -261,7 +262,7 @@ void st_invalidate_state(struct gl_context * ctx, GLbitfield new_state)
                     ST_NEW_SAMPLERS |
                     ST_NEW_IMAGE_UNITS);
       if (ctx->FragmentProgram._Current &&
-          ctx->FragmentProgram._Current->Base.ExternalSamplersUsed) {
+          ctx->FragmentProgram._Current->ExternalSamplersUsed) {
          st->dirty |= ST_NEW_FS_STATE;
       }
    }

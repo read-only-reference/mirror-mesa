@@ -15,6 +15,9 @@ C_SOURCES := \
 	si_public.h \
 	si_shader.c \
 	si_shader.h \
+	si_shader_internal.h \
+	si_shader_tgsi_alu.c \
+	si_shader_tgsi_setup.c \
 	si_state.c \
 	si_state_draw.c \
 	si_state_shaders.c \

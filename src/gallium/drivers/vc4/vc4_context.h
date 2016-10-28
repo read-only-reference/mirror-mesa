@@ -30,6 +30,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "util/slab.h"
+#include "xf86drm.h"
 
 #define __user
 #include "vc4_drm.h"
@@ -297,7 +298,7 @@ struct vc4_context {
          */
         struct hash_table *write_jobs;
 
-        struct slab_mempool transfer_pool;
+        struct slab_child_pool transfer_pool;
         struct blitter_context *blitter;
 
         /** bitfield of VC4_DIRTY_* */
@@ -423,9 +424,22 @@ void vc4_program_init(struct pipe_context *pctx);
 void vc4_program_fini(struct pipe_context *pctx);
 void vc4_query_init(struct pipe_context *pctx);
 void vc4_simulator_init(struct vc4_screen *screen);
+void vc4_simulator_destroy(struct vc4_screen *screen);
 int vc4_simulator_flush(struct vc4_context *vc4,
                         struct drm_vc4_submit_cl *args,
                         struct vc4_job *job);
+int vc4_simulator_ioctl(int fd, unsigned long request, void *arg);
+void vc4_simulator_open_from_handle(int fd, uint32_t winsys_stride,
+                                    int handle, uint32_t size);
+
+static inline int
+vc4_ioctl(int fd, unsigned long request, void *arg)
+{
+        if (using_vc4_simulator)
+                return vc4_simulator_ioctl(fd, request, arg);
+        else
+                return drmIoctl(fd, request, arg);
+}
 
 void vc4_set_shader_uniform_dirty_flags(struct vc4_compiled_shader *shader);
 void vc4_write_uniforms(struct vc4_context *vc4,

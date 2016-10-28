@@ -27,9 +27,6 @@
 
 #include "sid.h"
 #include "si_pipe.h"
-#include "radeon/r600_cs.h"
-
-#include "util/u_format.h"
 
 static void cik_sdma_do_copy_buffer(struct si_context *ctx,
 				    struct pipe_resource *dst,
@@ -164,10 +161,6 @@ static bool cik_sdma_copy_texture(struct si_context *sctx,
 	assert(rsrc->surface.level[src_level].offset +
 	       src_slice_pitch * bpp * (srcz + src_box->depth) <=
 	       rsrc->resource.buf->size);
-
-	/* Test CIK with radeon and amdgpu before enabling this. */
-	if (sctx->b.chip_class == CIK)
-		return false;
 
 	if (!r600_prepare_for_dma_blit(&sctx->b, rdst, dst_level, dstx, dsty,
 					dstz, rsrc, src_level, src_box))
@@ -349,7 +342,7 @@ static bool cik_sdma_copy_texture(struct si_context *sctx,
 					      (tiled_x + copy_width) % granularity;
 
 		if (start_linear_address < 0 ||
-		    end_linear_address > linear->surface.bo_size)
+		    end_linear_address > linear->surface.surf_size)
 			return false;
 
 		/* Check requirements. */
@@ -519,12 +512,6 @@ static void cik_sdma_copy(struct pipe_context *ctx,
 		cik_sdma_copy_buffer(sctx, dst, src, dstx, src_box->x, src_box->width);
 		return;
 	}
-
-	/* Carrizo SDMA texture copying is very broken for some users.
-	 * https://bugs.freedesktop.org/show_bug.cgi?id=97029
-	 */
-	if (sctx->b.family == CHIP_CARRIZO)
-		goto fallback;
 
 	if (cik_sdma_copy_texture(sctx, dst, dst_level, dstx, dsty, dstz,
 				  src, src_level, src_box))

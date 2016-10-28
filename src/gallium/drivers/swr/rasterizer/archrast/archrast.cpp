@@ -25,12 +25,28 @@
 * @brief Definitions for archrast.
 *
 ******************************************************************************/
+#include <atomic>
+
 #include "common/os.h"
 #include "archrast/archrast.h"
 #include "archrast/eventmanager.h"
+#include "gen_ar_eventhandlerfile.h"
 
 namespace ArchRast
 {
+    //////////////////////////////////////////////////////////////////////////
+    /// @brief Event handler that saves stat events to event files. This
+    ///        handler filters out unwanted events.
+    class EventHandlerStatsFile : public EventHandlerFile
+    {
+    public:
+        EventHandlerStatsFile(uint32_t id) : EventHandlerFile(id) {}
+
+        // These are events that we're not interested in saving in stats event files.
+        virtual void handle(Start& event) {}
+        virtual void handle(End& event) {}
+    };
+
     static EventManager* FromHandle(HANDLE hThreadContext)
     {
         return reinterpret_cast<EventManager*>(hThreadContext);
@@ -39,8 +55,12 @@ namespace ArchRast
     // Construct an event manager and associate a handler with it.
     HANDLE CreateThreadContext()
     {
+        // Can we assume single threaded here?
+        static std::atomic<uint32_t> counter(0);
+        uint32_t id = counter.fetch_add(1);
+
         EventManager* pManager = new EventManager();
-        EventHandler* pHandler = new EventHandler();
+        EventHandler* pHandler = new EventHandlerStatsFile(id);
 
         if (pManager && pHandler)
         {

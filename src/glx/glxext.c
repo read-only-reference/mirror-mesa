@@ -599,7 +599,7 @@ __glXInitializeVisualConfigFromTags(struct glx_config * config, int count,
     *     GLXPbuffer drawables."
     */
    if (config->floatMode)
-      config->drawableType &= ~(GLX_WINDOW_BIT|GLX_PIXMAP_BIT);
+      config->drawableType &= GLX_PBUFFER_BIT;
 }
 
 static struct glx_config *
@@ -748,8 +748,11 @@ glx_screen_init(struct glx_screen *psc,
    psc->dpy = priv->dpy;
    psc->display = priv;
 
-   getVisualConfigs(psc, priv, screen);
-   getFBConfigs(psc, priv, screen);
+   if (!getVisualConfigs(psc, priv, screen))
+      return GL_FALSE;
+
+   if (!getFBConfigs(psc, priv, screen))
+      return GL_FALSE;
 
    return GL_TRUE;
 }

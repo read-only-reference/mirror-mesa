@@ -78,6 +78,7 @@
 #define DBG_NO_TGSI		(1 << 13)
 #define DBG_NO_ASM		(1 << 14)
 #define DBG_PREOPT_IR		(1 << 15)
+#define DBG_CHECK_IR		(1 << 16)
 /* gaps */
 #define DBG_TEST_DMA		(1 << 20)
 /* Bits 21-31 are reserved for the r600g driver. */
@@ -104,6 +105,8 @@
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 #define R600_MAX_VIEWPORTS        16
+
+#define SI_MAX_VARIABLE_THREADS_PER_BLOCK 1024
 
 enum r600_coherency {
 	R600_COHERENCY_NONE, /* no cache flushes needed */
@@ -180,6 +183,7 @@ struct r600_resource {
 	unsigned			bo_alignment;
 	enum radeon_bo_domain		domains;
 	enum radeon_bo_flag		flags;
+	unsigned			bind_history;
 
 	/* The buffer range which is initialized (with a write transfer,
 	 * streamout, DMA, or as a random access target). The rest of
@@ -228,19 +232,8 @@ struct r600_cmask_info {
 	uint64_t offset;
 	uint64_t size;
 	unsigned alignment;
-	unsigned pitch;
-	unsigned height;
-	unsigned xalign;
-	unsigned yalign;
 	unsigned slice_tile_max;
 	unsigned base_address_reg;
-};
-
-struct r600_htile_info {
-	unsigned pitch;
-	unsigned height;
-	unsigned xalign;
-	unsigned yalign;
 };
 
 struct r600_texture {
@@ -248,6 +241,7 @@ struct r600_texture {
 
 	uint64_t			size;
 	unsigned			num_level0_transfers;
+	enum pipe_format		db_render_format;
 	bool				is_depth;
 	bool				db_compatible;
 	bool				can_sample_z;
@@ -267,8 +261,8 @@ struct r600_texture {
 	unsigned			last_msaa_resolve_target_micro_mode;
 
 	/* Depth buffer compression and fast clear. */
-	struct r600_htile_info		htile;
 	struct r600_resource		*htile_buffer;
+	bool				tc_compatible_htile;
 	bool				depth_cleared; /* if it was cleared at least once */
 	float				depth_clear_value;
 	bool				stencil_cleared; /* if it was cleared at least once */
@@ -367,6 +361,8 @@ struct r600_common_screen {
 	uint64_t			debug_flags;
 	bool				has_cp_dma;
 	bool				has_streamout;
+
+	struct slab_parent_pool		pool_transfers;
 
 	/* Texture filter settings. */
 	int				force_aniso; /* -1 = disabled */
@@ -540,7 +536,7 @@ struct r600_common_context {
 
 	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_zeroed_memory;
-	struct slab_mempool	pool_transfers;
+	struct slab_child_pool		pool_transfers;
 
 	/* Current unaccounted memory usage. */
 	uint64_t			vram;
@@ -614,12 +610,8 @@ struct r600_common_context {
 		bool				query_active;
 	} dcc_stats[5];
 
-	/* The list of all texture buffer objects in this context.
-	 * This list is walked when a buffer is invalidated/reallocated and
-	 * the GPU addresses are updated. */
-	struct list_head		texture_buffers;
-
 	struct pipe_debug_callback	debug;
+	struct pipe_device_reset_callback device_reset_callback;
 
 	void				*query_result_shader;
 
@@ -700,8 +692,11 @@ r600_invalidate_resource(struct pipe_context *ctx,
 			 struct pipe_resource *resource);
 
 /* r600_common_pipe.c */
-void r600_gfx_write_fence(struct r600_common_context *ctx, struct r600_resource *buf,
-			  uint64_t va, uint32_t old_value, uint32_t new_value);
+void r600_gfx_write_event_eop(struct r600_common_context *ctx,
+			      unsigned event, unsigned event_flags,
+			      unsigned data_sel,
+			      struct r600_resource *buf, uint64_t va,
+			      uint32_t old_fence, uint32_t new_fence);
 unsigned r600_gfx_write_fence_dwords(struct r600_common_screen *screen);
 void r600_gfx_wait_fence(struct r600_common_context *ctx,
 			 uint64_t va, uint32_t ref, uint32_t mask);
@@ -718,9 +713,10 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 			      struct r600_common_screen *rscreen,
 			      unsigned context_flags);
 void r600_common_context_cleanup(struct r600_common_context *rctx);
-void r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resource *r);
 bool r600_can_dump_shader(struct r600_common_screen *rscreen,
 			  unsigned processor);
+bool r600_extra_shader_checks(struct r600_common_screen *rscreen,
+			      unsigned processor);
 void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_resource *dst,
 			      uint64_t offset, uint64_t size, unsigned value,
 			      enum r600_coherency coher);
@@ -733,6 +729,7 @@ void r600_dma_emit_wait_idle(struct r600_common_context *rctx);
 void radeon_save_cs(struct radeon_winsys *ws, struct radeon_winsys_cs *cs,
 		    struct radeon_saved_cs *saved);
 void radeon_clear_saved_cs(struct radeon_saved_cs *saved);
+bool r600_check_device_reset(struct r600_common_context *rctx);
 
 /* r600_gpu_load.c */
 void r600_gpu_load_kill_thread(struct r600_common_screen *rscreen);
@@ -855,6 +852,19 @@ static inline void
 r600_texture_reference(struct r600_texture **ptr, struct r600_texture *res)
 {
 	pipe_resource_reference((struct pipe_resource **)ptr, &res->resource.b.b);
+}
+
+static inline void
+r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resource *r)
+{
+	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
+	struct r600_resource *res = (struct r600_resource *)r;
+
+	if (res) {
+		/* Add memory usage for need_gfx_cs_space */
+		rctx->vram += res->vram_usage;
+		rctx->gtt += res->gart_usage;
+	}
 }
 
 static inline bool r600_get_strmout_en(struct r600_common_context *rctx)

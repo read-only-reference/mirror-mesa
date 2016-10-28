@@ -38,6 +38,11 @@
 #include <intrin.h>
 #include <cstdint>
 
+#if defined(MemoryFence)
+// Windows.h defines MemoryFence as _mm_mfence, but this conflicts with llvm::sys::MemoryFence
+#undef MemoryFence
+#endif
+
 #define OSALIGN(RWORD, WIDTH) __declspec(align(WIDTH)) RWORD
 #define THREAD __declspec(thread)
 #define INLINE __forceinline
@@ -211,6 +216,7 @@ void AlignedFree(void* p)
 #define sprintf_s sprintf
 #define strcpy_s(dst,size,src) strncpy(dst,src,size)
 #define GetCurrentProcessId getpid
+pid_t gettid(void);
 #define GetCurrentThreadId gettid
 
 #define CreateDirectory(name, pSecurity) mkdir(name, 0777)
@@ -240,7 +246,16 @@ typedef MEGABYTE    GIGABYTE[1024];
 
 #define OSALIGNLINE(RWORD) OSALIGN(RWORD, 64)
 #define OSALIGNSIMD(RWORD) OSALIGN(RWORD, KNOB_SIMD_BYTES)
+#if ENABLE_AVX512_SIMD16
+#define OSALIGNSIMD16(RWORD) OSALIGN(RWORD, KNOB_SIMD16_BYTES)
+#endif
 
 #include "common/swr_assert.h"
+
+#ifdef __GNUC__
+#define ATTR_UNUSED __attribute__((unused))
+#else
+#define ATTR_UNUSED
+#endif
 
 #endif//__SWR_OS_H__

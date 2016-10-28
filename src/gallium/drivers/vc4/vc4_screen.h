@@ -28,6 +28,7 @@
 #include "os/os_thread.h"
 #include "state_tracker/drm_driver.h"
 #include "util/list.h"
+#include "util/slab.h"
 
 struct vc4_bo;
 
@@ -46,6 +47,8 @@ struct vc4_bo;
 #define VC4_MAX_MIP_LEVELS 12
 #define VC4_MAX_TEXTURE_SAMPLERS 16
 
+struct vc4_simulator_file;
+
 struct vc4_screen {
         struct pipe_screen base;
         int fd;
@@ -54,15 +57,14 @@ struct vc4_screen {
 
         const char *name;
 
-        void *simulator_mem_base;
-        uint32_t simulator_mem_size;
-
         /** The last seqno we've completed a wait for.
          *
          * This lets us slightly optimize our waits by skipping wait syscalls
          * if we know the job's already done.
          */
         uint64_t finished_seqno;
+
+        struct slab_parent_pool transfer_pool;
 
         struct vc4_bo_cache {
                 /** List of struct vc4_bo freed, by age. */
@@ -83,6 +85,8 @@ struct vc4_screen {
         uint32_t bo_size;
         uint32_t bo_count;
         bool has_control_flow;
+
+        struct vc4_simulator_file *sim_file;
 };
 
 static inline struct vc4_screen *

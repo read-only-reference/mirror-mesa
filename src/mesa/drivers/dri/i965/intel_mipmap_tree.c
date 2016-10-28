@@ -1266,25 +1266,11 @@ intel_get_tile_masks(uint32_t tiling, uint32_t tr_mode, uint32_t cpp,
  */
 uint32_t
 intel_miptree_get_aligned_offset(const struct intel_mipmap_tree *mt,
-                                 uint32_t x, uint32_t y,
-                                 bool map_stencil_as_y_tiled)
+                                 uint32_t x, uint32_t y)
 {
    int cpp = mt->cpp;
    uint32_t pitch = mt->pitch;
    uint32_t tiling = mt->tiling;
-
-   if (map_stencil_as_y_tiled) {
-      tiling = I915_TILING_Y;
-
-      /* When mapping a W-tiled stencil buffer as Y-tiled, each 64-high W-tile
-       * gets transformed into a 32-high Y-tile.  Accordingly, the pitch of
-       * the resulting surface is twice the pitch of the original miptree,
-       * since each row in the Y-tiled view corresponds to two rows in the
-       * actual W-tiled surface.  So we need to correct the pitch before
-       * computing the offsets.
-       */
-      pitch *= 2;
-   }
 
    switch (tiling) {
    default:
@@ -1327,7 +1313,7 @@ intel_miptree_get_tile_offsets(const struct intel_mipmap_tree *mt,
    *tile_x = x & mask_x;
    *tile_y = y & mask_y;
 
-   return intel_miptree_get_aligned_offset(mt, x & ~mask_x, y & ~mask_y, false);
+   return intel_miptree_get_aligned_offset(mt, x & ~mask_x, y & ~mask_y);
 }
 
 static void
@@ -2852,12 +2838,6 @@ static bool
 can_blit_slice(struct intel_mipmap_tree *mt,
                unsigned int level, unsigned int slice)
 {
-   uint32_t image_x;
-   uint32_t image_y;
-   intel_miptree_get_image_offset(mt, level, slice, &image_x, &image_y);
-   if (image_x >= 32768 || image_y >= 32768)
-      return false;
-
    /* See intel_miptree_blit() for details on the 32k pitch limit. */
    if (mt->pitch >= 32768)
       return false;
@@ -3057,6 +3037,34 @@ get_isl_dim_layout(const struct gen_device_info *devinfo, uint32_t tiling,
    unreachable("Invalid texture target");
 }
 
+enum isl_tiling
+intel_miptree_get_isl_tiling(const struct intel_mipmap_tree *mt)
+{
+   if (mt->format == MESA_FORMAT_S_UINT8) {
+      return ISL_TILING_W;
+   } else {
+      switch (mt->tiling) {
+      case I915_TILING_NONE:
+         return ISL_TILING_LINEAR;
+      case I915_TILING_X:
+         return ISL_TILING_X;
+      case I915_TILING_Y:
+         switch (mt->tr_mode) {
+         case INTEL_MIPTREE_TRMODE_NONE:
+            return ISL_TILING_Y0;
+         case INTEL_MIPTREE_TRMODE_YF:
+            return ISL_TILING_Yf;
+         case INTEL_MIPTREE_TRMODE_YS:
+            return ISL_TILING_Ys;
+         default:
+            unreachable("Invalid tiled resource mode");
+         }
+      default:
+         unreachable("Invalid tiling mode");
+      }
+   }
+}
+
 void
 intel_miptree_get_isl_surf(struct brw_context *brw,
                            const struct intel_mipmap_tree *mt,
@@ -3082,38 +3090,15 @@ intel_miptree_get_isl_surf(struct brw_context *brw,
       surf->msaa_layout = ISL_MSAA_LAYOUT_NONE;
    }
 
+   surf->tiling = intel_miptree_get_isl_tiling(mt);
+
    if (mt->format == MESA_FORMAT_S_UINT8) {
-      surf->tiling = ISL_TILING_W;
       /* The ISL definition of row_pitch matches the surface state pitch field
        * a bit better than intel_mipmap_tree.  In particular, ISL incorporates
        * the factor of 2 for W-tiling in row_pitch.
        */
       surf->row_pitch = 2 * mt->pitch;
    } else {
-      switch (mt->tiling) {
-      case I915_TILING_NONE:
-         surf->tiling = ISL_TILING_LINEAR;
-         break;
-      case I915_TILING_X:
-         surf->tiling = ISL_TILING_X;
-         break;
-      case I915_TILING_Y:
-         switch (mt->tr_mode) {
-         case INTEL_MIPTREE_TRMODE_NONE:
-            surf->tiling = ISL_TILING_Y0;
-            break;
-         case INTEL_MIPTREE_TRMODE_YF:
-            surf->tiling = ISL_TILING_Yf;
-            break;
-         case INTEL_MIPTREE_TRMODE_YS:
-            surf->tiling = ISL_TILING_Ys;
-            break;
-         }
-         break;
-      default:
-         unreachable("Invalid tiling mode");
-      }
-
       surf->row_pitch = mt->pitch;
    }
 

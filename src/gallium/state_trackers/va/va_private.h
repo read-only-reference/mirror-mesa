@@ -141,7 +141,7 @@ PipeToProfile(enum pipe_video_profile profile)
    case PIPE_VIDEO_PROFILE_VC1_ADVANCED:
       return VAProfileVC1Advanced;
    case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
-      return VAProfileH264Baseline;
+      return VAProfileH264ConstrainedBaseline;
    case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
       return VAProfileH264Main;
    case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH:
@@ -183,7 +183,7 @@ ProfileToPipe(VAProfile profile)
       return PIPE_VIDEO_PROFILE_VC1_MAIN;
    case VAProfileVC1Advanced:
       return PIPE_VIDEO_PROFILE_VC1_ADVANCED;
-   case VAProfileH264Baseline:
+   case VAProfileH264ConstrainedBaseline:
       return PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE;
    case VAProfileH264Main:
       return PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN;
@@ -250,6 +250,7 @@ typedef struct {
    enum pipe_video_profile profile;
    enum pipe_video_entrypoint entrypoint;
    enum pipe_h264_enc_rate_control_method rc;
+   unsigned int rt_format;
 } vlVaConfig;
 
 typedef struct {

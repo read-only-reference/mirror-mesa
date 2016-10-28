@@ -388,8 +388,6 @@ ARL_instruction: ARL maskedAddrReg ',' scalarSrcReg
 
 VECTORop_instruction: VECTOR_OP maskedDstReg ',' swizzleSrcReg
 	{
-	   if ($1.Opcode == OPCODE_DDY)
-	      state->fragment.UsesDFdy = 1;
 	   $$ = asm_instruction_copy_ctor(& $1, & $2, & $4, NULL, NULL);
 	}
 	;
@@ -596,7 +594,7 @@ maskedDstReg: dstReg optionalMask
 		 YYERROR;
 	      }
 
-	      state->prog->OutputsWritten |= BITFIELD64_BIT($$.Index);
+              state->prog->info.outputs_written |= BITFIELD64_BIT($$.Index);
 	   }
 	}
 	;
@@ -726,7 +724,7 @@ extSwizSel: INTEGER
 srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
-	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+              _mesa_symbol_table_find_symbol(state->st, $1);
 
 	   free($1);
 
@@ -754,7 +752,7 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	      break;
 	   case at_attrib:
 	      set_src_reg(& $$, PROGRAM_INPUT, s->attrib_binding);
-	      state->prog->InputsRead |= BITFIELD64_BIT($$.Base.Index);
+              state->prog->info.inputs_read |= BITFIELD64_BIT($$.Base.Index);
 
 	      if (!validate_inputs(& @1, state)) {
 		 YYERROR;
@@ -769,7 +767,7 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	| attribBinding
 	{
 	   set_src_reg(& $$, PROGRAM_INPUT, $1);
-	   state->prog->InputsRead |= BITFIELD64_BIT($$.Base.Index);
+           state->prog->info.inputs_read |= BITFIELD64_BIT($$.Base.Index);
 
 	   if (!validate_inputs(& @1, state)) {
 	      YYERROR;
@@ -814,7 +812,7 @@ dstReg: resultBinding
 	| USED_IDENTIFIER /* temporaryReg | vertexResultReg */
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
-	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+              _mesa_symbol_table_find_symbol(state->st, $1);
 
 	   free($1);
 
@@ -843,7 +841,7 @@ dstReg: resultBinding
 progParamArray: USED_IDENTIFIER
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
-	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+              _mesa_symbol_table_find_symbol(state->st, $1);
 
 	   free($1);
 
@@ -916,7 +914,7 @@ addrRegNegOffset: INTEGER
 addrReg: USED_IDENTIFIER
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
-	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+              _mesa_symbol_table_find_symbol(state->st, $1);
 
 	   free($1);
 
@@ -2030,9 +2028,9 @@ legacyTexUnitNum: INTEGER
 ALIAS_statement: ALIAS IDENTIFIER '=' USED_IDENTIFIER
 	{
 	   struct asm_symbol *exist = (struct asm_symbol *)
-	      _mesa_symbol_table_find_symbol(state->st, 0, $2);
+              _mesa_symbol_table_find_symbol(state->st, $2);
 	   struct asm_symbol *target = (struct asm_symbol *)
-	      _mesa_symbol_table_find_symbol(state->st, 0, $4);
+              _mesa_symbol_table_find_symbol(state->st, $4);
 
 	   free($4);
 
@@ -2048,7 +2046,7 @@ ALIAS_statement: ALIAS IDENTIFIER '=' USED_IDENTIFIER
 		      "undefined variable binding in ALIAS statement");
 	      YYERROR;
 	   } else {
-	      _mesa_symbol_table_add_symbol(state->st, 0, $2, target);
+              _mesa_symbol_table_add_symbol(state->st, $2, target);
 	   }
 	}
 	;
@@ -2220,7 +2218,7 @@ set_src_reg_swz(struct asm_src_register *r, gl_register_file file, GLint index,
 int
 validate_inputs(struct YYLTYPE *locp, struct asm_parser_state *state)
 {
-   const GLbitfield64 inputs = state->prog->InputsRead | state->InputsBound;
+   const GLbitfield64 inputs = state->prog->info.inputs_read | state->InputsBound;
 
    if (((inputs & VERT_BIT_FF_ALL) & (inputs >> VERT_ATTRIB_GENERIC0)) != 0) {
       yyerror(locp, state, "illegal use of generic attribute and name attribute");
@@ -2237,7 +2235,7 @@ declare_variable(struct asm_parser_state *state, char *name, enum asm_type t,
 {
    struct asm_symbol *s = NULL;
    struct asm_symbol *exist = (struct asm_symbol *)
-      _mesa_symbol_table_find_symbol(state->st, 0, name);
+      _mesa_symbol_table_find_symbol(state->st, name);
 
 
    if (exist != NULL) {
@@ -2275,7 +2273,7 @@ declare_variable(struct asm_parser_state *state, char *name, enum asm_type t,
 	 break;
       }
 
-      _mesa_symbol_table_add_symbol(state->st, 0, s->name, s);
+      _mesa_symbol_table_add_symbol(state->st, s->name, s);
       s->next = state->sym;
       state->sym = s;
    }
@@ -2590,7 +2588,8 @@ _mesa_parse_arb_program(struct gl_context *ctx, GLenum target, const GLubyte *st
    state->prog->NumInstructions++;
 
    state->prog->NumParameters = state->prog->Parameters->NumParameters;
-   state->prog->NumAttributes = _mesa_bitcount_64(state->prog->InputsRead);
+   state->prog->NumAttributes =
+      _mesa_bitcount_64(state->prog->info.inputs_read);
 
    /*
     * Initialize native counts to logical counts.  The device driver may
