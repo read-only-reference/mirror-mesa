@@ -25,10 +25,12 @@
  * IN THE SOFTWARE.
  */
 
+#include <dlfcn.h>
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include "radv_private.h"
 #include "util/strtod.h"
 
@@ -40,9 +42,40 @@
 #include "ac_llvm_util.h"
 #include "vk_format.h"
 #include "sid.h"
-#include "radv_timestamp.h"
 #include "util/debug.h"
 struct radv_dispatch_table dtable;
+
+static int
+radv_get_function_timestamp(void *ptr, uint32_t* timestamp)
+{
+	Dl_info info;
+	struct stat st;
+	if (!dladdr(ptr, &info) || !info.dli_fname) {
+		return -1;
+	}
+	if (stat(info.dli_fname, &st)) {
+		return -1;
+	}
+	*timestamp = st.st_mtim.tv_sec;
+	return 0;
+}
+
+static int
+radv_device_get_cache_uuid(enum radeon_family family, void *uuid)
+{
+	uint32_t mesa_timestamp, llvm_timestamp;
+	uint16_t f = family;
+	memset(uuid, 0, VK_UUID_SIZE);
+	if (radv_get_function_timestamp(radv_device_get_cache_uuid, &mesa_timestamp) ||
+	    radv_get_function_timestamp(LLVMInitializeAMDGPUTargetInfo, &llvm_timestamp))
+		return -1;
+
+	memcpy(uuid, &mesa_timestamp, 4);
+	memcpy((char*)uuid + 4, &llvm_timestamp, 4);
+	memcpy((char*)uuid + 8, &f, 2);
+	snprintf((char*)uuid + 10, VK_UUID_SIZE - 10, "radv");
+	return 0;
+}
 
 static VkResult
 radv_physical_device_init(struct radv_physical_device *device,
@@ -89,8 +122,17 @@ radv_physical_device_init(struct radv_physical_device *device,
 		goto fail;
 	}
 
+	if (radv_device_get_cache_uuid(device->rad_info.family, device->uuid)) {
+		radv_finish_wsi(device);
+		device->ws->destroy(device->ws);
+		result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+				   "cannot generate UUID");
+		goto fail;
+	}
+
 	fprintf(stderr, "WARNING: radv is not a conformant vulkan implementation, testing use only.\n");
 	device->name = device->rad_info.name;
+	close(fd);
 	return VK_SUCCESS;
 
 fail:
@@ -113,21 +155,39 @@ static const VkExtensionProperties global_extensions[] = {
 #ifdef VK_USE_PLATFORM_XCB_KHR
 	{
 		.extensionName = VK_KHR_XCB_SURFACE_EXTENSION_NAME,
-		.specVersion = 5,
+		.specVersion = 6,
+	},
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+	{
+		.extensionName = VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
+		.specVersion = 6,
 	},
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
 	{
 		.extensionName = VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
-		.specVersion = 4,
+		.specVersion = 5,
 	},
 #endif
 };
 
 static const VkExtensionProperties device_extensions[] = {
 	{
+		.extensionName = VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME,
+		.specVersion = 1,
+	},
+	{
 		.extensionName = VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-		.specVersion = 67,
+		.specVersion = 68,
+	},
+	{
+		.extensionName = VK_AMD_DRAW_INDIRECT_COUNT_EXTENSION_NAME,
+		.specVersion = 1,
+	},
+	{
+		.extensionName = VK_AMD_NEGATIVE_VIEWPORT_HEIGHT_EXTENSION_NAME,
+		.specVersion = 1,
 	},
 };
 
@@ -326,7 +386,7 @@ void radv_GetPhysicalDeviceFeatures(
 		.largePoints                              = true,
 		.alphaToOne                               = true,
 		.multiViewport                            = false,
-		.samplerAnisotropy                        = false, /* FINISHME */
+		.samplerAnisotropy                        = true,
 		.textureCompressionETC2                   = false,
 		.textureCompressionASTC_LDR               = false,
 		.textureCompressionBC                     = true,
@@ -353,13 +413,6 @@ void radv_GetPhysicalDeviceFeatures(
 		.variableMultisampleRate                  = false,
 		.inheritedQueries                         = false,
 	};
-}
-
-void
-radv_device_get_cache_uuid(void *uuid)
-{
-	memset(uuid, 0, VK_UUID_SIZE);
-	snprintf(uuid, VK_UUID_SIZE, "radv-%s", RADV_TIMESTAMP);
 }
 
 void radv_GetPhysicalDeviceProperties(
@@ -418,7 +471,7 @@ void radv_GetPhysicalDeviceProperties(
 		.maxGeometryTotalOutputComponents         = 1024,
 		.maxFragmentInputComponents               = 128,
 		.maxFragmentOutputAttachments             = 8,
-		.maxFragmentDualSrcAttachments            = 2,
+		.maxFragmentDualSrcAttachments            = 1,
 		.maxFragmentCombinedOutputResources       = 8,
 		.maxComputeSharedMemorySize               = 32768,
 		.maxComputeWorkGroupCount                 = { 65535, 65535, 65535 },
@@ -492,7 +545,7 @@ void radv_GetPhysicalDeviceProperties(
 	};
 
 	strcpy(pProperties->deviceName, pdevice->name);
-	radv_device_get_cache_uuid(pProperties->pipelineCacheUUID);
+	memcpy(pProperties->pipelineCacheUUID, pdevice->uuid, VK_UUID_SIZE);
 }
 
 void radv_GetPhysicalDeviceQueueFamilyProperties(
@@ -561,13 +614,11 @@ void radv_GetPhysicalDeviceMemoryProperties(
 	};
 }
 
-static VkResult
+static void
 radv_queue_init(struct radv_device *device, struct radv_queue *queue)
 {
 	queue->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
 	queue->device = device;
-
-	return VK_SUCCESS;
 }
 
 static void
@@ -606,6 +657,7 @@ VkResult radv_CreateDevice(
 
 	device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
 	device->instance = physical_device->instance;
+	device->shader_stats_dump = false;
 
 	device->ws = physical_device->ws;
 	if (pAllocator)
@@ -628,6 +680,7 @@ VkResult radv_CreateDevice(
 	}
 	device->allow_fast_clears = env_var_as_boolean("RADV_FAST_CLEARS", false);
 	device->allow_dcc = !env_var_as_boolean("RADV_DCC_DISABLE", false);
+	device->shader_stats_dump = env_var_as_boolean("RADV_SHADER_STATS", false);
 
 	if (device->allow_fast_clears && device->allow_dcc)
 		radv_finishme("DCC fast clears have not been tested\n");
@@ -663,17 +716,15 @@ VkResult radv_EnumerateInstanceExtensionProperties(
 	uint32_t*                                   pPropertyCount,
 	VkExtensionProperties*                      pProperties)
 {
-	unsigned i;
 	if (pProperties == NULL) {
 		*pPropertyCount = ARRAY_SIZE(global_extensions);
 		return VK_SUCCESS;
 	}
 
-	for (i = 0; i < *pPropertyCount; i++)
-		memcpy(&pProperties[i], &global_extensions[i], sizeof(VkExtensionProperties));
+	*pPropertyCount = MIN2(*pPropertyCount, ARRAY_SIZE(global_extensions));
+	typed_memcpy(pProperties, global_extensions, *pPropertyCount);
 
-	*pPropertyCount = i;
-	if (i < ARRAY_SIZE(global_extensions))
+	if (*pPropertyCount < ARRAY_SIZE(global_extensions))
 		return VK_INCOMPLETE;
 
 	return VK_SUCCESS;
@@ -685,19 +736,17 @@ VkResult radv_EnumerateDeviceExtensionProperties(
 	uint32_t*                                   pPropertyCount,
 	VkExtensionProperties*                      pProperties)
 {
-	unsigned i;
-
 	if (pProperties == NULL) {
 		*pPropertyCount = ARRAY_SIZE(device_extensions);
 		return VK_SUCCESS;
 	}
 
-	for (i = 0; i < *pPropertyCount; i++)
-		memcpy(&pProperties[i], &device_extensions[i], sizeof(VkExtensionProperties));
+	*pPropertyCount = MIN2(*pPropertyCount, ARRAY_SIZE(device_extensions));
+	typed_memcpy(pProperties, device_extensions, *pPropertyCount);
 
-	*pPropertyCount = i;
-	if (i < ARRAY_SIZE(device_extensions))
+	if (*pPropertyCount < ARRAY_SIZE(device_extensions))
 		return VK_INCOMPLETE;
+
 	return VK_SUCCESS;
 }
 
@@ -1180,6 +1229,8 @@ VkResult radv_GetFenceStatus(VkDevice _device, VkFence _fence)
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	RADV_FROM_HANDLE(radv_fence, fence, _fence);
 
+	if (fence->signalled)
+		return VK_SUCCESS;
 	if (!fence->submitted)
 		return VK_NOT_READY;
 
@@ -1742,15 +1793,29 @@ radv_tex_bordercolor(VkBorderColor bcolor)
 	return 0;
 }
 
+static unsigned
+radv_tex_aniso_filter(unsigned filter)
+{
+	if (filter < 2)
+		return 0;
+	if (filter < 4)
+		return 1;
+	if (filter < 8)
+		return 2;
+	if (filter < 16)
+		return 3;
+	return 4;
+}
+
 static void
 radv_init_sampler(struct radv_device *device,
 		  struct radv_sampler *sampler,
 		  const VkSamplerCreateInfo *pCreateInfo)
 {
-	uint32_t max_aniso = 0;
-	uint32_t max_aniso_ratio = 0;//TODO
-	bool is_vi;
-	is_vi = (device->instance->physicalDevice.rad_info.chip_class >= VI);
+	uint32_t max_aniso = pCreateInfo->anisotropyEnable && pCreateInfo->maxAnisotropy > 1.0 ?
+					(uint32_t) pCreateInfo->maxAnisotropy : 0;
+	uint32_t max_aniso_ratio = radv_tex_aniso_filter(max_aniso);
+	bool is_vi = (device->instance->physicalDevice.rad_info.chip_class >= VI);
 
 	sampler->state[0] = (S_008F30_CLAMP_X(radv_tex_wrap(pCreateInfo->addressModeU)) |
 			     S_008F30_CLAMP_Y(radv_tex_wrap(pCreateInfo->addressModeV)) |
@@ -1758,10 +1823,13 @@ radv_init_sampler(struct radv_device *device,
 			     S_008F30_MAX_ANISO_RATIO(max_aniso_ratio) |
 			     S_008F30_DEPTH_COMPARE_FUNC(radv_tex_compare(pCreateInfo->compareOp)) |
 			     S_008F30_FORCE_UNNORMALIZED(pCreateInfo->unnormalizedCoordinates ? 1 : 0) |
+			     S_008F30_ANISO_THRESHOLD(max_aniso_ratio >> 1) |
+			     S_008F30_ANISO_BIAS(max_aniso_ratio) |
 			     S_008F30_DISABLE_CUBE_WRAP(0) |
 			     S_008F30_COMPAT_MODE(is_vi));
 	sampler->state[1] = (S_008F34_MIN_LOD(S_FIXED(CLAMP(pCreateInfo->minLod, 0, 15), 8)) |
-			     S_008F34_MAX_LOD(S_FIXED(CLAMP(pCreateInfo->maxLod, 0, 15), 8)));
+			     S_008F34_MAX_LOD(S_FIXED(CLAMP(pCreateInfo->maxLod, 0, 15), 8)) |
+			     S_008F34_PERF_MIP(max_aniso_ratio ? max_aniso_ratio + 6 : 0));
 	sampler->state[2] = (S_008F38_LOD_BIAS(S_FIXED(CLAMP(pCreateInfo->mipLodBias, -16, 16), 8)) |
 			     S_008F38_XY_MAG_FILTER(radv_tex_filter(pCreateInfo->magFilter, max_aniso)) |
 			     S_008F38_XY_MIN_FILTER(radv_tex_filter(pCreateInfo->minFilter, max_aniso)) |

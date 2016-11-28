@@ -239,6 +239,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
         case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
         case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
+        case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
                 return 0;
 
                 /* Stream output. */
@@ -402,6 +403,7 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return 32;
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
                 return 0;
         default:
                 fprintf(stderr, "unknown shader param %d\n", param);
@@ -417,6 +419,7 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
                                unsigned sample_count,
                                unsigned usage)
 {
+        struct vc4_screen *screen = vc4_screen(pscreen);
         unsigned retval = 0;
 
         if (sample_count > 1 && sample_count != VC4_MAX_SAMPLES)
@@ -486,7 +489,8 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
         }
 
         if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
-            vc4_tex_format_supported(format)) {
+            vc4_tex_format_supported(format) &&
+            (format != PIPE_FORMAT_ETC1_RGB8 || screen->has_etc1)) {
                 retval |= PIPE_BIND_SAMPLER_VIEW;
         }
 
@@ -527,10 +531,10 @@ static int handle_compare(void *key1, void *key2)
 }
 
 static bool
-vc4_supports_branches(struct vc4_screen *screen)
+vc4_has_feature(struct vc4_screen *screen, uint32_t feature)
 {
         struct drm_vc4_get_param p = {
-                .param = DRM_VC4_PARAM_SUPPORTS_BRANCHES,
+                .param = feature,
         };
         int ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_GET_PARAM, &p);
 
@@ -607,8 +611,12 @@ vc4_screen_create(int fd)
         pipe_mutex_init(screen->bo_handles_mutex);
         screen->bo_handles = util_hash_table_create(handle_hash, handle_compare);
 
-        if (vc4_supports_branches(screen))
-                screen->has_control_flow = true;
+        screen->has_control_flow =
+                vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_BRANCHES);
+        screen->has_etc1 =
+                vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_ETC1);
+        screen->has_threaded_fs =
+                vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_THREADED_FS);
 
         if (!vc4_get_chip_info(screen))
                 goto fail;

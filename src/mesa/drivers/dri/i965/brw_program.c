@@ -105,6 +105,8 @@ brw_create_nir(struct brw_context *brw,
    NIR_PASS(progress, nir, nir_lower_system_values);
    NIR_PASS_V(nir, brw_nir_lower_uniforms, is_scalar);
 
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+
    if (shader_prog) {
       NIR_PASS_V(nir, nir_lower_samplers, shader_prog);
       NIR_PASS_V(nir, nir_lower_atomics, shader_prog);
@@ -135,7 +137,7 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
    case GL_TESS_EVALUATION_PROGRAM_NV:
    case GL_GEOMETRY_PROGRAM_NV:
    case GL_COMPUTE_PROGRAM_NV: {
-      struct brw_program *prog = CALLOC_STRUCT(brw_program);
+      struct brw_program *prog = rzalloc(NULL, struct brw_program);
       if (prog) {
 	 prog->id = get_new_program_id(brw->screen);
 
@@ -149,10 +151,10 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
       struct brw_program *prog;
       if (brw->gen < 6) {
          struct gen4_fragment_program *g4_prog =
-            CALLOC_STRUCT(gen4_fragment_program);
+            rzalloc(NULL, struct gen4_fragment_program);
          prog = &g4_prog->base;
       } else {
-         prog = CALLOC_STRUCT(brw_program);
+         prog = rzalloc(NULL, struct brw_program);
       }
 
       if (prog) {
@@ -181,7 +183,7 @@ brwProgramStringNotify(struct gl_context *ctx,
 		       GLenum target,
 		       struct gl_program *prog)
 {
-   assert(target == GL_VERTEX_PROGRAM_ARB || !prog->IsPositionInvariant);
+   assert(target == GL_VERTEX_PROGRAM_ARB || !prog->arb.IsPositionInvariant);
 
    struct brw_context *brw = brw_context(ctx);
    const struct brw_compiler *compiler = brw->screen->compiler;
@@ -210,7 +212,7 @@ brwProgramStringNotify(struct gl_context *ctx,
 
       if (newVP == curVP)
 	 brw->ctx.NewDriverState |= BRW_NEW_VERTEX_PROGRAM;
-      if (newVP->program.IsPositionInvariant) {
+      if (newVP->program.arb.IsPositionInvariant) {
 	 _mesa_insert_mvp_code(ctx, &newVP->program);
       }
       newVP->id = get_new_program_id(brw->screen);
@@ -638,22 +640,11 @@ brw_stage_prog_data_free(const void *p)
 }
 
 void
-brw_dump_ir(const char *stage, struct gl_shader_program *shader_prog,
-            struct gl_linked_shader *shader, struct gl_program *prog)
+brw_dump_arb_asm(const char *stage, struct gl_program *prog)
 {
-   if (shader_prog) {
-      if (shader->ir) {
-         fprintf(stderr,
-                 "GLSL IR for native %s shader %d:\n",
-                 stage, shader_prog->Name);
-         _mesa_print_ir(stderr, shader->ir, NULL);
-         fprintf(stderr, "\n\n");
-      }
-   } else {
-      fprintf(stderr, "ARB_%s_program %d ir for native %s shader\n",
-              stage, prog->Id, stage);
-      _mesa_print_program(prog);
-   }
+   fprintf(stderr, "ARB_%s_program %d ir for native %s shader\n",
+           stage, prog->Id, stage);
+   _mesa_print_program(prog);
 }
 
 void

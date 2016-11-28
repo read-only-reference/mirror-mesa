@@ -200,6 +200,9 @@ void anv_DestroyDescriptorSetLayout(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_descriptor_set_layout, set_layout, _set_layout);
 
+   if (!set_layout)
+      return;
+
    vk_free2(&device->alloc, pAllocator, set_layout);
 }
 
@@ -282,6 +285,9 @@ void anv_DestroyPipelineLayout(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_pipeline_layout, pipeline_layout, _pipelineLayout);
 
+   if (!pipeline_layout)
+      return;
+
    vk_free2(&device->alloc, pAllocator, pipeline_layout);
 }
 
@@ -355,6 +361,9 @@ void anv_DestroyDescriptorPool(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_descriptor_pool, pool, _pool);
 
+   if (!pool)
+      return;
+
    anv_state_stream_finish(&pool->surface_state_stream);
    vk_free2(&device->alloc, pAllocator, pool);
 }
@@ -393,7 +402,7 @@ layout_size(const struct anv_descriptor_set_layout *layout)
 
 struct surface_state_free_list_entry {
    void *next;
-   uint32_t offset;
+   struct anv_state state;
 };
 
 VkResult
@@ -463,10 +472,9 @@ anv_descriptor_set_create(struct anv_device *device,
       struct anv_state state;
 
       if (entry) {
-         state.map = entry;
-         state.offset = entry->offset;
-         state.alloc_size = 64;
+         state = entry->state;
          pool->surface_state_free_list = entry->next;
+         assert(state.alloc_size == 64);
       } else {
          state = anv_state_stream_alloc(&pool->surface_state_stream, 64, 64);
       }
@@ -489,6 +497,7 @@ anv_descriptor_set_destroy(struct anv_device *device,
       struct surface_state_free_list_entry *entry =
          set->buffer_views[b].surface_state.map;
       entry->next = pool->surface_state_free_list;
+      entry->state = set->buffer_views[b].surface_state;
       pool->surface_state_free_list = entry;
    }
 
@@ -545,6 +554,9 @@ VkResult anv_FreeDescriptorSets(
 
    for (uint32_t i = 0; i < count; i++) {
       ANV_FROM_HANDLE(anv_descriptor_set, set, pDescriptorSets[i]);
+
+      if (!set)
+         continue;
 
       anv_descriptor_set_destroy(device, pool, set);
    }
@@ -605,6 +617,7 @@ void anv_UpdateDescriptorSets(
 
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+      case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             ANV_FROM_HANDLE(anv_image_view, iview,
                             write->pImageInfo[j].imageView);
@@ -627,10 +640,6 @@ void anv_UpdateDescriptorSets(
                .buffer_view = bview,
             };
          }
-         break;
-
-      case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
-         anv_finishme("input attachments not implemented");
          break;
 
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:

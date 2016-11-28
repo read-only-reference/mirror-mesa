@@ -73,10 +73,10 @@ brw_codegen_cs_prog(struct brw_context *brw,
    memset(&prog_data, 0, sizeof(prog_data));
 
    if (prog->Comp.SharedSize > 64 * 1024) {
-      prog->LinkStatus = false;
+      prog->data->LinkStatus = false;
       const char *error_str =
          "Compute shader used more than 64KB of shared variables";
-      ralloc_strcat(&prog->InfoLog, error_str);
+      ralloc_strcat(&prog->data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to link compute shader: %s\n", error_str);
 
       ralloc_free(mem_ctx);
@@ -103,9 +103,10 @@ brw_codegen_cs_prog(struct brw_context *brw,
    prog_data.base.pull_param =
       rzalloc_array(NULL, const gl_constant_value *, param_count);
    prog_data.base.image_param =
-      rzalloc_array(NULL, struct brw_image_param, cs->base.NumImages);
+      rzalloc_array(NULL, struct brw_image_param,
+                    cp->program.info.num_images);
    prog_data.base.nr_params = param_count;
-   prog_data.base.nr_image_params = cs->base.NumImages;
+   prog_data.base.nr_image_params = cp->program.info.num_images;
 
    brw_nir_setup_glsl_uniforms(cp->program.nir, prog, &cp->program,
                                &prog_data.base, true);
@@ -116,9 +117,6 @@ brw_codegen_cs_prog(struct brw_context *brw,
       start_time = get_time();
    }
 
-   if (unlikely(INTEL_DEBUG & DEBUG_CS))
-      brw_dump_ir("compute", prog, &cs->base, &cp->program);
-
    int st_index = -1;
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       st_index = brw_get_shader_time_index(brw, prog, &cp->program, ST_CS);
@@ -128,8 +126,8 @@ brw_codegen_cs_prog(struct brw_context *brw,
                             &prog_data, cp->program.nir, st_index,
                             &program_size, &error_str);
    if (program == NULL) {
-      prog->LinkStatus = false;
-      ralloc_strcat(&prog->InfoLog, error_str);
+      prog->data->LinkStatus = false;
+      ralloc_strcat(&prog->data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to compile compute shader: %s\n", error_str);
 
       ralloc_free(mem_ctx);
@@ -171,9 +169,6 @@ brw_codegen_cs_prog(struct brw_context *brw,
    brw_alloc_stage_scratch(brw, &brw->cs.base,
                            prog_data.base.total_scratch,
                            scratch_ids_per_subslice * subslices);
-
-   if (unlikely(INTEL_DEBUG & DEBUG_CS))
-      fprintf(stderr, "\n");
 
    brw_upload_cache(&brw->cache, BRW_CACHE_CS_PROG,
                     key, sizeof(*key),
@@ -228,7 +223,7 @@ brw_upload_cs_prog(struct brw_context *brw)
                          &brw->cs.base.prog_data)) {
       bool success =
          brw_codegen_cs_prog(brw,
-                             ctx->Shader.CurrentProgram[MESA_SHADER_COMPUTE],
+                             ctx->_Shader->CurrentProgram[MESA_SHADER_COMPUTE],
                              cp, &key);
       (void) success;
       assert(success);

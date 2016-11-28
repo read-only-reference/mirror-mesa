@@ -570,10 +570,10 @@ fail_link(struct gl_shader_program *prog, const char *fmt, ...)
 {
    va_list args;
    va_start(args, fmt);
-   ralloc_vasprintf_append(&prog->InfoLog, fmt, args);
+   ralloc_vasprintf_append(&prog->data->InfoLog, fmt, args);
    va_end(args);
 
-   prog->LinkStatus = GL_FALSE;
+   prog->data->LinkStatus = GL_FALSE;
 }
 
 static int
@@ -680,6 +680,10 @@ glsl_to_tgsi_visitor::emit_asm(ir_instruction *ir, unsigned op,
    inst->is_64bit_expanded = false;
    inst->ir = ir;
    inst->dead_mask = 0;
+   inst->tex_offsets = NULL;
+   inst->tex_offset_num_offset = 0;
+   inst->saturate = 0;
+   inst->tex_shadow = 0;
    /* default to float, for paths where this is not initialized
     * (since 0==UINT which is likely wrong):
     */
@@ -774,16 +778,15 @@ glsl_to_tgsi_visitor::emit_asm(ir_instruction *ir, unsigned op,
 
          int i = u_bit_scan(&writemask);
 
-         /* before emitting the instruction, see if we have to adjust store
+         /* before emitting the instruction, see if we have to adjust load / store
           * address */
-         if (i > 1 && inst->op == TGSI_OPCODE_STORE &&
+         if (i > 1 && (inst->op == TGSI_OPCODE_LOAD || inst->op == TGSI_OPCODE_STORE) &&
              addr.file == PROGRAM_UNDEFINED) {
             /* We have to advance the buffer address by 16 */
             addr = get_temp(glsl_type::uint_type);
             emit_asm(ir, TGSI_OPCODE_UADD, st_dst_reg(addr),
                      inst->src[0], st_src_reg_for_int(16));
          }
-
 
          /* first time use previous instruction */
          if (dinst == NULL) {
@@ -804,11 +807,10 @@ glsl_to_tgsi_visitor::emit_asm(ir_instruction *ir, unsigned op,
                dinst->dst[j].writemask = (i & 1) ? WRITEMASK_ZW : WRITEMASK_XY;
                dinst->dst[j].index = initial_dst_idx[j];
                if (i > 1) {
-                  if (dinst->op == TGSI_OPCODE_STORE) {
+                  if (dinst->op == TGSI_OPCODE_LOAD || dinst->op == TGSI_OPCODE_STORE)
                      dinst->src[0] = addr;
-                  } else {
+                  if (dinst->op != TGSI_OPCODE_STORE)
                      dinst->dst[j].index++;
-                  }
                }
             } else {
                /* if we aren't writing to a double, just get the bit of the initial writemask
@@ -3878,8 +3880,8 @@ glsl_to_tgsi_visitor::get_deref_offsets(ir_dereference *ir,
 
    if (opaque) {
       assert(location != 0xffffffff);
-      *base += this->shader_program->UniformStorage[location].opaque[shader].index;
-      *index += this->shader_program->UniformStorage[location].opaque[shader].index;
+      *base += this->shader_program->data->UniformStorage[location].opaque[shader].index;
+      *index += this->shader_program->data->UniformStorage[location].opaque[shader].index;
    }
 }
 
@@ -5381,8 +5383,18 @@ src_register(struct st_translate *t, const st_src_reg *reg)
 
    case PROGRAM_TEMPORARY:
    case PROGRAM_ARRAY:
-   case PROGRAM_OUTPUT:
       return ureg_src(dst_register(t, reg->file, reg->index, reg->array_id));
+
+   case PROGRAM_OUTPUT: {
+      struct ureg_dst dst = dst_register(t, reg->file, reg->index, reg->array_id);
+      assert(dst.WriteMask != 0);
+      unsigned shift = ffs(dst.WriteMask) - 1;
+      return ureg_swizzle(ureg_src(dst),
+                          shift,
+                          MIN2(shift + 1, 3),
+                          MIN2(shift + 2, 3),
+                          MIN2(shift + 3, 3));
+   }
 
    case PROGRAM_UNIFORM:
       assert(reg->index >= 0);
@@ -6405,7 +6417,6 @@ get_mesa_program_tgsi(struct gl_context *ctx,
 {
    glsl_to_tgsi_visitor* v;
    struct gl_program *prog;
-   GLenum target = _mesa_shader_stage_to_program(shader->Stage);
    struct gl_shader_compiler_options *options =
          &ctx->Const.ShaderCompilerOptions[shader->Stage];
    struct pipe_screen *pscreen = ctx->st->pipe->screen;
@@ -6413,11 +6424,7 @@ get_mesa_program_tgsi(struct gl_context *ctx,
 
    validate_ir_tree(shader->ir);
 
-   prog = ctx->Driver.NewProgram(ctx, target, shader_program->Name);
-   if (!prog)
-      return NULL;
-
-   _mesa_reference_program(ctx, &shader->Program, prog);
+   prog = shader->Program;
 
    prog->Parameters = _mesa_new_parameter_list();
    v = new glsl_to_tgsi_visitor();
@@ -6438,7 +6445,8 @@ get_mesa_program_tgsi(struct gl_context *ctx,
                                                prog->Parameters);
 
    /* Remove reads from output registers. */
-   lower_output_reads(shader->Stage, shader->ir);
+   if (!pscreen->get_param(pscreen, PIPE_CAP_TGSI_CAN_READ_OUTPUTS))
+      lower_output_reads(shader->Stage, shader->ir);
 
    /* Emit intermediate IR for main(). */
    visit_exec_list(shader->ir, v);
@@ -6499,9 +6507,6 @@ get_mesa_program_tgsi(struct gl_context *ctx,
       _mesa_log("\n\n");
    }
 
-   prog->Instructions = NULL;
-   prog->NumInstructions = 0;
-
    do_set_program_inouts(shader->ir, prog, shader->Stage);
    _mesa_copy_linked_program_data(shader_program, shader);
    shrink_array_declarations(v->inputs, v->num_inputs,
@@ -6540,8 +6545,9 @@ get_mesa_program_tgsi(struct gl_context *ctx,
     * program constant) has to happen before creating this linkage.
     */
    _mesa_associate_uniform_storage(ctx, shader_program, prog->Parameters);
-   if (!shader_program->LinkStatus) {
+   if (!shader_program->data->LinkStatus) {
       free_glsl_to_tgsi_visitor(v);
+      _mesa_reference_program(ctx, &shader->Program, NULL);
       return NULL;
    }
 
@@ -6612,7 +6618,7 @@ set_affected_state_flags(uint64_t *states,
    if (shader->NumShaderStorageBlocks)
       *states |= new_ssbos;
 
-   if (shader->NumAtomicBuffers)
+   if (prog->info.num_abos)
       *states |= new_atomics;
 }
 
@@ -6765,7 +6771,7 @@ GLboolean
 st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 {
    struct pipe_screen *pscreen = ctx->st->pipe->screen;
-   assert(prog->LinkStatus);
+   assert(prog->data->LinkStatus);
 
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       if (prog->_LinkedShaders[i] == NULL)
@@ -6781,6 +6787,8 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
                                                    PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED);
       bool have_dfrexp = pscreen->get_shader_param(pscreen, ptarget,
                                                    PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED);
+      unsigned if_threshold = pscreen->get_shader_param(pscreen, ptarget,
+                                                        PIPE_SHADER_CAP_LOWER_IF_THRESHOLD);
 
       /* If there are forms of indirect addressing that the driver
        * cannot handle, perform the lowering pass.
@@ -6862,7 +6870,9 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
                                            ctx->Const.NativeIntegers)
            || progress;
 
-         progress = lower_if_to_cond_assign(ir, options->MaxIfDepth) || progress;
+         progress = lower_if_to_cond_assign((gl_shader_stage)i, ir,
+                                            options->MaxIfDepth, if_threshold) ||
+                    progress;
 
       } while (progress);
 
@@ -6880,19 +6890,14 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       linked_prog = get_mesa_program(ctx, prog, prog->_LinkedShaders[i]);
 
       if (linked_prog) {
-         _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
-                                 linked_prog);
          if (!ctx->Driver.ProgramStringNotify(ctx,
                                               _mesa_shader_stage_to_program(i),
                                               linked_prog)) {
             _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
                                     NULL);
-            _mesa_reference_program(ctx, &linked_prog, NULL);
             return GL_FALSE;
          }
       }
-
-      _mesa_reference_program(ctx, &linked_prog, NULL);
    }
 
    return GL_TRUE;

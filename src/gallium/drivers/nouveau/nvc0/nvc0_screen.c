@@ -274,6 +274,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_PCI_DEVICE:
    case PIPE_CAP_PCI_FUNCTION:
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+   case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -374,6 +375,7 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return 1;
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
+   case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
       return 0;
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       return NVC0_MAX_BUFFERS;

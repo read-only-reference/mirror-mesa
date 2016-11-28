@@ -41,9 +41,6 @@ choose_isl_surf_usage(VkImageUsageFlags vk_usage,
 {
    isl_surf_usage_flags_t isl_usage = 0;
 
-   /* FINISHME: Support aux surfaces */
-   isl_usage |= ISL_SURF_USAGE_DISABLE_AUX_BIT;
-
    if (vk_usage & VK_IMAGE_USAGE_SAMPLED_BIT)
       isl_usage |= ISL_SURF_USAGE_TEXTURE_BIT;
 
@@ -62,7 +59,6 @@ choose_isl_surf_usage(VkImageUsageFlags vk_usage,
     */
    switch (aspect) {
    case VK_IMAGE_ASPECT_DEPTH_BIT:
-      isl_usage &= ~ISL_SURF_USAGE_DISABLE_AUX_BIT;
       isl_usage |= ISL_SURF_USAGE_DEPTH_BIT;
       break;
    case VK_IMAGE_ASPECT_STENCIL_BIT:
@@ -180,22 +176,53 @@ make_surface(const struct anv_device *dev,
 
    /* Add a HiZ surface to a depth buffer that will be used for rendering.
     */
-   if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT &&
-       (image->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
-
+   if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
       /* Allow the user to control HiZ enabling. Disable by default on gen7
        * because resolves are not currently implemented pre-BDW.
        */
-      if (!env_var_as_boolean("INTEL_VK_HIZ", dev->info.gen >= 8)) {
+      if (!(image->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+         /* It will never be used as an attachment, HiZ is pointless. */
+      } else if (!env_var_as_boolean("INTEL_VK_HIZ", dev->info.gen >= 8)) {
          anv_finishme("Implement gen7 HiZ");
       } else if (vk_info->mipLevels > 1) {
          anv_finishme("Test multi-LOD HiZ");
       } else if (dev->info.gen == 8 && vk_info->samples > 1) {
          anv_finishme("Test gen8 multisampled HiZ");
       } else {
+         assert(image->aux_surface.isl.size == 0);
          isl_surf_get_hiz_surf(&dev->isl_dev, &image->depth_surface.isl,
-                               &image->hiz_surface.isl);
-         add_surface(image, &image->hiz_surface);
+                               &image->aux_surface.isl);
+         add_surface(image, &image->aux_surface);
+      }
+   } else if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && vk_info->samples == 1) {
+      if (!unlikely(INTEL_DEBUG & DEBUG_NO_RBC)) {
+         assert(image->aux_surface.isl.size == 0);
+         ok = isl_surf_get_ccs_surf(&dev->isl_dev, &anv_surf->isl,
+                                    &image->aux_surface.isl);
+         if (ok) {
+            add_surface(image, &image->aux_surface);
+
+            /* For images created without MUTABLE_FORMAT_BIT set, we know that
+             * they will always be used with the original format.  In
+             * particular, they will always be used with a format that
+             * supports color compression.  This means that it's safe to just
+             * leave compression on at all times for these formats.
+             */
+            if (!(vk_info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
+                isl_format_supports_lossless_compression(&dev->info, format)) {
+               if (vk_info->usage & VK_IMAGE_USAGE_STORAGE_BIT) {
+                  /*
+                   * For now, we leave compression off for anything that may
+                   * be used as a storage image.  This is because accessing
+                   * storage images may involve ccs-incompatible views or even
+                   * untyped messages which don't support compression at all.
+                   */
+                  anv_finishme("Enable CCS for storage images");
+               } else {
+                  image->aux_usage = ISL_AUX_USAGE_CCS_E;
+               }
+            }
+         }
       }
    }
 
@@ -237,6 +264,7 @@ anv_image_create(VkDevice _device,
    image->samples = pCreateInfo->samples;
    image->usage = pCreateInfo->usage;
    image->tiling = pCreateInfo->tiling;
+   image->aux_usage = ISL_AUX_USAGE_NONE;
 
    uint32_t b;
    for_each_bit(b, image->aspects) {
@@ -275,8 +303,12 @@ anv_DestroyImage(VkDevice _device, VkImage _image,
                  const VkAllocationCallbacks *pAllocator)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_image, image, _image);
 
-   vk_free2(&device->alloc, pAllocator, anv_image_from_handle(_image));
+   if (!image)
+      return;
+
+   vk_free2(&device->alloc, pAllocator, image);
 }
 
 VkResult anv_BindImageMemory(
@@ -297,21 +329,23 @@ VkResult anv_BindImageMemory(
       image->offset = 0;
    }
 
-   if (anv_image_has_hiz(image)) {
+   if (image->aux_surface.isl.size > 0) {
 
       /* The offset and size must be a multiple of 4K or else the
        * anv_gem_mmap call below will return NULL.
        */
-      assert((image->offset + image->hiz_surface.offset) % 4096 == 0);
-      assert(image->hiz_surface.isl.size % 4096 == 0);
+      assert((image->offset + image->aux_surface.offset) % 4096 == 0);
+      assert(image->aux_surface.isl.size % 4096 == 0);
 
-      /* HiZ surfaces need to have their memory cleared to 0 before they
-       * can be used.  If we let it have garbage data, it can cause GPU
-       * hangs on some hardware.
+      /* Auxiliary surfaces need to have their memory cleared to 0 before they
+       * can be used.  For CCS surfaces, this puts them in the "resolved"
+       * state so they can be used with CCS enabled before we ever touch it
+       * from the GPU.  For HiZ, we need something valid or else we may get
+       * GPU hangs on some hardware and 0 works fine.
        */
       void *map = anv_gem_mmap(device, image->bo->gem_handle,
-                               image->offset + image->hiz_surface.offset,
-                               image->hiz_surface.isl.size,
+                               image->offset + image->aux_surface.offset,
+                               image->aux_surface.isl.size,
                                device->info.has_llc ? 0 : I915_MMAP_WC);
 
       /* If anv_gem_mmap returns NULL, it's likely that the kernel was
@@ -320,9 +354,9 @@ VkResult anv_BindImageMemory(
       if (map == NULL)
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-      memset(map, 0, image->hiz_surface.isl.size);
+      memset(map, 0, image->aux_surface.isl.size);
 
-      anv_gem_munmap(map, image->hiz_surface.isl.size);
+      anv_gem_munmap(map, image->aux_surface.isl.size);
    }
 
    return VK_SUCCESS;
@@ -487,7 +521,14 @@ anv_CreateImageView(VkDevice _device,
       iview->isl.usage = 0;
    }
 
-   if (image->usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
+   /* Input attachment surfaces for color or depth are allocated and filled
+    * out at BeginRenderPass time because they need compression information.
+    * Stencil image do not support compression so we just use the texture
+    * surface from the image view.
+    */
+   if (image->usage & VK_IMAGE_USAGE_SAMPLED_BIT ||
+       (image->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT &&
+        (iview->aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT))) {
       iview->sampler_surface_state = alloc_surface_state(device);
 
       struct isl_view view = iview->isl;
@@ -496,29 +537,14 @@ anv_CreateImageView(VkDevice _device,
                           iview->sampler_surface_state.map,
                           .surf = &surface->isl,
                           .view = &view,
+                          .aux_surf = &image->aux_surface.isl,
+                          .aux_usage = image->aux_usage,
                           .mocs = device->default_mocs);
 
       if (!device->info.has_llc)
          anv_state_clflush(iview->sampler_surface_state);
    } else {
       iview->sampler_surface_state.alloc_size = 0;
-   }
-
-   if (image->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) {
-      iview->color_rt_surface_state = alloc_surface_state(device);
-
-      struct isl_view view = iview->isl;
-      view.usage |= ISL_SURF_USAGE_RENDER_TARGET_BIT;
-      isl_surf_fill_state(&device->isl_dev,
-                          iview->color_rt_surface_state.map,
-                          .surf = &surface->isl,
-                          .view = &view,
-                          .mocs = device->default_mocs);
-
-      if (!device->info.has_llc)
-         anv_state_clflush(iview->color_rt_surface_state);
-   } else {
-      iview->color_rt_surface_state.alloc_size = 0;
    }
 
    /* NOTE: This one needs to go last since it may stomp isl_view.format */
@@ -535,6 +561,8 @@ anv_CreateImageView(VkDevice _device,
                              iview->storage_surface_state.map,
                              .surf = &surface->isl,
                              .view = &view,
+                             .aux_surf = &image->aux_surface.isl,
+                             .aux_usage = image->aux_usage,
                              .mocs = device->default_mocs);
       } else {
          anv_fill_buffer_surface_state(device, iview->storage_surface_state,
@@ -565,10 +593,8 @@ anv_DestroyImageView(VkDevice _device, VkImageView _iview,
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_image_view, iview, _iview);
 
-   if (iview->color_rt_surface_state.alloc_size > 0) {
-      anv_state_pool_free(&device->surface_state_pool,
-                          iview->color_rt_surface_state);
-   }
+   if (!iview)
+      return;
 
    if (iview->sampler_surface_state.alloc_size > 0) {
       anv_state_pool_free(&device->surface_state_pool,
@@ -654,6 +680,9 @@ anv_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_buffer_view, view, bufferView);
+
+   if (!view)
+      return;
 
    if (view->surface_state.alloc_size > 0)
       anv_state_pool_free(&device->surface_state_pool,

@@ -41,11 +41,6 @@
 #include "program/program.h"
 #include "program/prog_print.h"
 
-#ifdef _MSC_VER
-#include <stdlib.h>
-#define PATH_MAX _MAX_PATH
-#endif
-
 /**
  * Bind a program (make it current)
  * \note Called from the GL API dispatcher by both glBindProgramNV
@@ -274,13 +269,14 @@ get_local_param_pointer(struct gl_context *ctx, const char *func,
       return GL_FALSE;
    }
 
-   if (!prog->LocalParams) {
-      prog->LocalParams = calloc(maxParams, sizeof(float[4]));
-      if (!prog->LocalParams)
+   if (!prog->arb.LocalParams) {
+      prog->arb.LocalParams = rzalloc_array_size(prog, sizeof(float[4]),
+                                             maxParams);
+      if (!prog->arb.LocalParams)
          return GL_FALSE;
    }
 
-   *param = prog->LocalParams[index];
+   *param = prog->arb.LocalParams[index];
    return GL_TRUE;
 }
 
@@ -382,12 +378,12 @@ _mesa_ProgramStringARB(GLenum target, GLenum format, GLsizei len,
    const char *capture_path = _mesa_get_shader_capture_path();
    if (capture_path != NULL) {
       FILE *file;
-      char filename[PATH_MAX];
       const char *shader_type =
          target == GL_FRAGMENT_PROGRAM_ARB ? "fragment" : "vertex";
+      char *filename =
+         ralloc_asprintf(NULL, "%s/%cp-%u.shader_test",
+                         capture_path, shader_type[0], prog->Id);
 
-      _mesa_snprintf(filename, sizeof(filename), "%s/%cp-%u.shader_test",
-                     capture_path, shader_type[0], prog->Id);
       file = fopen(filename, "w");
       if (file) {
          fprintf(file,
@@ -397,6 +393,7 @@ _mesa_ProgramStringARB(GLenum target, GLenum format, GLsizei len,
       } else {
          _mesa_warning(ctx, "Failed to open %s", filename);
       }
+      ralloc_free(filename);
    }
 }
 
@@ -680,61 +677,61 @@ _mesa_GetProgramivARB(GLenum target, GLenum pname, GLint *params)
          *params = prog->Id;
          return;
       case GL_PROGRAM_INSTRUCTIONS_ARB:
-         *params = prog->NumInstructions;
+         *params = prog->arb.NumInstructions;
          return;
       case GL_MAX_PROGRAM_INSTRUCTIONS_ARB:
          *params = limits->MaxInstructions;
          return;
       case GL_PROGRAM_NATIVE_INSTRUCTIONS_ARB:
-         *params = prog->NumNativeInstructions;
+         *params = prog->arb.NumNativeInstructions;
          return;
       case GL_MAX_PROGRAM_NATIVE_INSTRUCTIONS_ARB:
          *params = limits->MaxNativeInstructions;
          return;
       case GL_PROGRAM_TEMPORARIES_ARB:
-         *params = prog->NumTemporaries;
+         *params = prog->arb.NumTemporaries;
          return;
       case GL_MAX_PROGRAM_TEMPORARIES_ARB:
          *params = limits->MaxTemps;
          return;
       case GL_PROGRAM_NATIVE_TEMPORARIES_ARB:
-         *params = prog->NumNativeTemporaries;
+         *params = prog->arb.NumNativeTemporaries;
          return;
       case GL_MAX_PROGRAM_NATIVE_TEMPORARIES_ARB:
          *params = limits->MaxNativeTemps;
          return;
       case GL_PROGRAM_PARAMETERS_ARB:
-         *params = prog->NumParameters;
+         *params = prog->arb.NumParameters;
          return;
       case GL_MAX_PROGRAM_PARAMETERS_ARB:
          *params = limits->MaxParameters;
          return;
       case GL_PROGRAM_NATIVE_PARAMETERS_ARB:
-         *params = prog->NumNativeParameters;
+         *params = prog->arb.NumNativeParameters;
          return;
       case GL_MAX_PROGRAM_NATIVE_PARAMETERS_ARB:
          *params = limits->MaxNativeParameters;
          return;
       case GL_PROGRAM_ATTRIBS_ARB:
-         *params = prog->NumAttributes;
+         *params = prog->arb.NumAttributes;
          return;
       case GL_MAX_PROGRAM_ATTRIBS_ARB:
          *params = limits->MaxAttribs;
          return;
       case GL_PROGRAM_NATIVE_ATTRIBS_ARB:
-         *params = prog->NumNativeAttributes;
+         *params = prog->arb.NumNativeAttributes;
          return;
       case GL_MAX_PROGRAM_NATIVE_ATTRIBS_ARB:
          *params = limits->MaxNativeAttribs;
          return;
       case GL_PROGRAM_ADDRESS_REGISTERS_ARB:
-         *params = prog->NumAddressRegs;
+         *params = prog->arb.NumAddressRegs;
          return;
       case GL_MAX_PROGRAM_ADDRESS_REGISTERS_ARB:
          *params = limits->MaxAddressRegs;
          return;
       case GL_PROGRAM_NATIVE_ADDRESS_REGISTERS_ARB:
-         *params = prog->NumNativeAddressRegs;
+         *params = prog->arb.NumNativeAddressRegs;
          return;
       case GL_MAX_PROGRAM_NATIVE_ADDRESS_REGISTERS_ARB:
          *params = limits->MaxNativeAddressRegs;
@@ -778,22 +775,22 @@ _mesa_GetProgramivARB(GLenum target, GLenum pname, GLint *params)
       const struct gl_program *fp = ctx->FragmentProgram.Current;
       switch (pname) {
          case GL_PROGRAM_ALU_INSTRUCTIONS_ARB:
-            *params = fp->NumNativeAluInstructions;
+            *params = fp->arb.NumNativeAluInstructions;
             return;
          case GL_PROGRAM_NATIVE_ALU_INSTRUCTIONS_ARB:
-            *params = fp->NumAluInstructions;
+            *params = fp->arb.NumAluInstructions;
             return;
          case GL_PROGRAM_TEX_INSTRUCTIONS_ARB:
-            *params = fp->NumTexInstructions;
+            *params = fp->arb.NumTexInstructions;
             return;
          case GL_PROGRAM_NATIVE_TEX_INSTRUCTIONS_ARB:
-            *params = fp->NumNativeTexInstructions;
+            *params = fp->arb.NumNativeTexInstructions;
             return;
          case GL_PROGRAM_TEX_INDIRECTIONS_ARB:
-            *params = fp->NumTexIndirections;
+            *params = fp->arb.NumTexIndirections;
             return;
          case GL_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB:
-            *params = fp->NumNativeTexIndirections;
+            *params = fp->arb.NumNativeTexIndirections;
             return;
          case GL_MAX_PROGRAM_ALU_INSTRUCTIONS_ARB:
             *params = limits->MaxAluInstructions;

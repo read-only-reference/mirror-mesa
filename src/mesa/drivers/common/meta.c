@@ -153,8 +153,9 @@ _mesa_meta_link_program_with_debug(struct gl_context *ctx,
 {
    _mesa_link_program(ctx, sh_prog);
 
-   if (!sh_prog->LinkStatus) {
-      _mesa_problem(ctx, "meta program link failed:\n%s", sh_prog->InfoLog);
+   if (!sh_prog->data->LinkStatus) {
+      _mesa_problem(ctx, "meta program link failed:\n%s",
+                    sh_prog->data->InfoLog);
    }
 }
 
@@ -3243,8 +3244,20 @@ _mesa_meta_GetTexSubImage(struct gl_context *ctx,
 
       for (slice = 0; slice < depth; slice++) {
          void *dst;
-         if (texImage->TexObject->Target == GL_TEXTURE_2D_ARRAY
-             || texImage->TexObject->Target == GL_TEXTURE_CUBE_MAP_ARRAY) {
+         /* Section 8.11.4 (Texture Image Queries) of the GL 4.5 spec says:
+          *
+          *    "For three-dimensional, two-dimensional array, cube map array,
+          *     and cube map textures pixel storage operations are applied as
+          *     if the image were two-dimensional, except that the additional
+          *     pixel storage state values PACK_IMAGE_HEIGHT and
+          *     PACK_SKIP_IMAGES are applied. The correspondence of texels to
+          *     memory locations is as defined for TexImage3D in section 8.5."
+          */
+         switch (texImage->TexObject->Target) {
+         case GL_TEXTURE_3D:
+         case GL_TEXTURE_2D_ARRAY:
+         case GL_TEXTURE_CUBE_MAP:
+         case GL_TEXTURE_CUBE_MAP_ARRAY: {
             /* Setup pixel packing.  SkipPixels and SkipRows will be applied
              * in the decompress_texture_image() function's call to
              * glReadPixels but we need to compute the dest slice's address
@@ -3255,9 +3268,11 @@ _mesa_meta_GetTexSubImage(struct gl_context *ctx,
             packing.SkipRows = 0;
             dst = _mesa_image_address3d(&packing, pixels, width, height,
                                         format, type, slice, 0, 0);
+            break;
          }
-         else {
+         default:
             dst = pixels;
+            break;
          }
          result = decompress_texture_image(ctx, texImage, slice,
                                            xoffset, yoffset, width, height,

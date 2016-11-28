@@ -419,6 +419,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
    case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
+   case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
       return 0;
    }
 
@@ -499,6 +500,7 @@ vgpu9_get_shader_param(struct pipe_screen *screen, unsigned shader,
       case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+      case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
          return 0;
       case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
          return 32;
@@ -561,6 +563,7 @@ vgpu9_get_shader_param(struct pipe_screen *screen, unsigned shader,
       case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+      case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
          return 0;
       case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
          return 32;
@@ -656,6 +659,7 @@ vgpu10_get_shader_param(struct pipe_screen *screen, unsigned shader,
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+   case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
       return 0;
    case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
       return 32;

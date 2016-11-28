@@ -25,6 +25,8 @@
 #ifndef SHADER_INFO_H
 #define SHADER_INFO_H
 
+#include "shader_enums.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -65,8 +67,11 @@ typedef struct shader_info {
    /* Whether or not this shader ever uses textureGather() */
    bool uses_texture_gather;
 
-   /* Whether or not this shader uses the gl_ClipDistance output */
-   bool uses_clip_distance_out;
+   /* The size of the gl_ClipDistance[] array, if declared. */
+   unsigned clip_distance_array_size;
+
+   /* The size of the gl_CullDistance[] array, if declared. */
+   unsigned cull_distance_array_size;
 
    /* Whether or not separate shader objects were used */
    bool separate_shader;
@@ -138,13 +143,6 @@ typedef struct shader_info {
       } tes;
    };
 } shader_info;
-
-struct gl_shader_program;
-struct gl_linked_shader;
-
-void
-copy_shader_info(const struct gl_shader_program *shader_prog,
-                 struct gl_linked_shader *sh);
 
 #ifdef __cplusplus
 }

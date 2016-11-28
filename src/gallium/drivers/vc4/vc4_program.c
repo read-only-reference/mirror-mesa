@@ -24,7 +24,7 @@
 
 #include <inttypes.h>
 #include "util/u_format.h"
-#include "util/u_hash.h"
+#include "util/crc32.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/ralloc.h"
@@ -65,6 +65,23 @@ resize_qreg_array(struct vc4_compile *c,
                 (*regs)[i] = c->undef;
 }
 
+static void
+ntq_emit_thrsw(struct vc4_compile *c)
+{
+        if (!c->fs_threaded)
+                return;
+
+        /* Always thread switch after each texture operation for now.
+         *
+         * We could do better by batching a bunch of texture fetches up and
+         * then doing one thread switch and collecting all their results
+         * afterward.
+         */
+        qir_emit_nondef(c, qir_inst(QOP_THRSW, c->undef,
+                                    c->undef, c->undef));
+        c->last_thrsw_at_top_level = (c->execute.file == QFILE_NULL);
+}
+
 static struct qreg
 indirect_uniform_load(struct vc4_compile *c, nir_intrinsic_instr *intr)
 {
@@ -103,8 +120,14 @@ indirect_uniform_load(struct vc4_compile *c, nir_intrinsic_instr *intr)
                                   qir_uniform_ui(c, (range->dst_offset +
                                                      range->size - 4)));
 
-        qir_TEX_DIRECT(c, indirect_offset, qir_uniform(c, QUNIFORM_UBO_ADDR, 0));
+        qir_ADD_dest(c, qir_reg(QFILE_TEX_S_DIRECT, 0),
+                     indirect_offset,
+                     qir_uniform(c, QUNIFORM_UBO_ADDR, 0));
+
         c->num_texture_samples++;
+
+        ntq_emit_thrsw(c);
+
         return qir_TEX_RESULT(c);
 }
 
@@ -361,7 +384,10 @@ ntq_emit_txf(struct vc4_compile *c, nir_tex_instr *instr)
         addr = qir_MAX(c, addr, qir_uniform_ui(c, 0));
         addr = qir_MIN(c, addr,  qir_uniform_ui(c, size - 4));
 
-        qir_TEX_DIRECT(c, addr, qir_uniform(c, QUNIFORM_TEXTURE_MSAA_ADDR, unit));
+        qir_ADD_dest(c, qir_reg(QFILE_TEX_S_DIRECT, 0),
+                     addr, qir_uniform(c, QUNIFORM_TEXTURE_MSAA_ADDR, unit));
+
+        ntq_emit_thrsw(c);
 
         struct qreg tex = qir_TEX_RESULT(c);
         c->num_texture_samples++;
@@ -417,6 +443,16 @@ ntq_emit_tex(struct vc4_compile *c, nir_tex_instr *instr)
                 }
         }
 
+        if (c->stage != QSTAGE_FRAG && !is_txl) {
+                /* From the GLSL 1.20 spec:
+                 *
+                 *     "If it is mip-mapped and running on the vertex shader,
+                 *      then the base texture is used."
+                 */
+                is_txl = true;
+                lod = qir_uniform_ui(c, 0);
+        }
+
         if (c->key->tex[unit].force_first_level) {
                 lod = qir_uniform(c, QUNIFORM_TEXTURE_FIRST_LEVEL, unit);
                 is_txl = true;
@@ -447,14 +483,20 @@ ntq_emit_tex(struct vc4_compile *c, nir_tex_instr *instr)
                                            unit | (is_txl << 16));
         }
 
+        struct qinst *tmu;
         if (instr->sampler_dim == GLSL_SAMPLER_DIM_CUBE) {
-                qir_TEX_R(c, r, texture_u[next_texture_u++]);
+                tmu = qir_MOV_dest(c, qir_reg(QFILE_TEX_R, 0), r);
+                tmu->src[qir_get_tex_uniform_src(tmu)] =
+                        texture_u[next_texture_u++];
         } else if (c->key->tex[unit].wrap_s == PIPE_TEX_WRAP_CLAMP_TO_BORDER ||
                    c->key->tex[unit].wrap_s == PIPE_TEX_WRAP_CLAMP ||
                    c->key->tex[unit].wrap_t == PIPE_TEX_WRAP_CLAMP_TO_BORDER ||
                    c->key->tex[unit].wrap_t == PIPE_TEX_WRAP_CLAMP) {
-                qir_TEX_R(c, qir_uniform(c, QUNIFORM_TEXTURE_BORDER_COLOR, unit),
-                          texture_u[next_texture_u++]);
+                tmu = qir_MOV_dest(c, qir_reg(QFILE_TEX_R, 0),
+                                   qir_uniform(c, QUNIFORM_TEXTURE_BORDER_COLOR,
+                                               unit));
+                tmu->src[qir_get_tex_uniform_src(tmu)] =
+                        texture_u[next_texture_u++];
         }
 
         if (c->key->tex[unit].wrap_s == PIPE_TEX_WRAP_CLAMP) {
@@ -465,14 +507,23 @@ ntq_emit_tex(struct vc4_compile *c, nir_tex_instr *instr)
                 t = qir_SAT(c, t);
         }
 
-        qir_TEX_T(c, t, texture_u[next_texture_u++]);
+        tmu = qir_MOV_dest(c, qir_reg(QFILE_TEX_T, 0), t);
+        tmu->src[qir_get_tex_uniform_src(tmu)] =
+                texture_u[next_texture_u++];
 
-        if (is_txl || is_txb)
-                qir_TEX_B(c, lod, texture_u[next_texture_u++]);
+        if (is_txl || is_txb) {
+                tmu = qir_MOV_dest(c, qir_reg(QFILE_TEX_B, 0), lod);
+                tmu->src[qir_get_tex_uniform_src(tmu)] =
+                        texture_u[next_texture_u++];
+        }
 
-        qir_TEX_S(c, s, texture_u[next_texture_u++]);
+        tmu = qir_MOV_dest(c, qir_reg(QFILE_TEX_S, 0), s);
+        tmu->src[qir_get_tex_uniform_src(tmu)] = texture_u[next_texture_u++];
 
         c->num_texture_samples++;
+
+        ntq_emit_thrsw(c);
+
         struct qreg tex = qir_TEX_RESULT(c);
 
         enum pipe_format format = c->key->tex[unit].format;
@@ -485,6 +536,15 @@ ntq_emit_tex(struct vc4_compile *c, nir_tex_instr *instr)
                 struct qreg u0 = qir_uniform_f(c, 0.0f);
                 struct qreg u1 = qir_uniform_f(c, 1.0f);
                 if (c->key->tex[unit].compare_mode) {
+                        /* From the GL_ARB_shadow spec:
+                         *
+                         *     "Let Dt (D subscript t) be the depth texture
+                         *      value, in the range [0, 1].  Let R be the
+                         *      interpolated texture coordinate clamped to the
+                         *      range [0, 1]."
+                         */
+                        compare = qir_SAT(c, compare);
+
                         switch (c->key->tex[unit].compare_func) {
                         case PIPE_FUNC_NEVER:
                                 depth_output = qir_uniform_f(c, 0.0f);
@@ -1411,7 +1471,7 @@ emit_vert_end(struct vc4_compile *c,
               struct vc4_varying_slot *fs_inputs,
               uint32_t num_fs_inputs)
 {
-        struct qreg rcp_w = qir_RCP(c, c->outputs[c->output_position_index + 3]);
+        struct qreg rcp_w = ntq_rcp(c, c->outputs[c->output_position_index + 3]);
 
         emit_stub_vpm_read(c);
 
@@ -2114,7 +2174,7 @@ count_nir_instrs(nir_shader *nir)
 
 static struct vc4_compile *
 vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
-                       struct vc4_key *key)
+               struct vc4_key *key, bool fs_threaded)
 {
         struct vc4_compile *c = qir_compile_init();
 
@@ -2124,6 +2184,7 @@ vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
         c->program_id = key->shader_state->program_id;
         c->variant_id =
                 p_atomic_inc_return(&key->shader_state->compiled_variant_count);
+        c->fs_threaded = fs_threaded;
 
         c->key = key;
         switch (stage) {
@@ -2241,6 +2302,17 @@ vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
 
         switch (stage) {
         case QSTAGE_FRAG:
+                /* FS threading requires that the thread execute
+                 * QPU_SIG_LAST_THREAD_SWITCH exactly once before terminating
+                 * (with no other THRSW afterwards, obviously).  If we didn't
+                 * fetch a texture at a top level block, this wouldn't be
+                 * true.
+                 */
+                if (c->fs_threaded && !c->last_thrsw_at_top_level) {
+                        c->failed = true;
+                        return c;
+                }
+
                 emit_frag_end(c);
                 break;
         case QSTAGE_VERT:
@@ -2385,7 +2457,7 @@ vc4_setup_compiled_fs_inputs(struct vc4_context *vc4, struct vc4_compile *c,
 
         memset(input_live, 0, sizeof(input_live));
         qir_for_each_inst_inorder(inst, c) {
-                for (int i = 0; i < qir_get_op_nsrc(inst->op); i++) {
+                for (int i = 0; i < qir_get_nsrc(inst); i++) {
                         if (inst->src[i].file == QFILE_VARY)
                                 input_live[inst->src[i].index] = true;
                 }
@@ -2441,12 +2513,16 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
 {
         struct hash_table *ht;
         uint32_t key_size;
+        bool try_threading;
+
         if (stage == QSTAGE_FRAG) {
                 ht = vc4->fs_cache;
                 key_size = sizeof(struct vc4_fs_key);
+                try_threading = vc4->screen->has_threaded_fs;
         } else {
                 ht = vc4->vs_cache;
                 key_size = sizeof(struct vc4_vs_key);
+                try_threading = false;
         }
 
         struct vc4_compiled_shader *shader;
@@ -2454,7 +2530,13 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
         if (entry)
                 return entry->data;
 
-        struct vc4_compile *c = vc4_shader_ntq(vc4, stage, key);
+        struct vc4_compile *c = vc4_shader_ntq(vc4, stage, key, try_threading);
+        /* If the FS failed to compile threaded, fall back to single threaded. */
+        if (try_threading && c->failed) {
+                qir_compile_destroy(c);
+                c = vc4_shader_ntq(vc4, stage, key, false);
+        }
+
         shader = rzalloc(NULL, struct vc4_compiled_shader);
 
         shader->program_id = vc4->next_compiled_program_id++;
@@ -2478,9 +2560,17 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
                 }
         }
 
-        copy_uniform_state_to_shader(shader, c);
-        shader->bo = vc4_bo_alloc_shader(vc4->screen, c->qpu_insts,
-                                         c->qpu_inst_count * sizeof(uint64_t));
+        shader->failed = c->failed;
+        if (c->failed) {
+                shader->failed = true;
+        } else {
+                copy_uniform_state_to_shader(shader, c);
+                shader->bo = vc4_bo_alloc_shader(vc4->screen, c->qpu_insts,
+                                                 c->qpu_inst_count *
+                                                 sizeof(uint64_t));
+        }
+
+        shader->fs_threaded = c->fs_threaded;
 
         /* Copy the compiler UBO range state to the compiled shader, dropping
          * out arrays that were never referenced by an indirect load.
@@ -2683,11 +2773,15 @@ vc4_update_compiled_vs(struct vc4_context *vc4, uint8_t prim_mode)
         }
 }
 
-void
+bool
 vc4_update_compiled_shaders(struct vc4_context *vc4, uint8_t prim_mode)
 {
         vc4_update_compiled_fs(vc4, prim_mode);
         vc4_update_compiled_vs(vc4, prim_mode);
+
+        return !(vc4->prog.cs->failed ||
+                 vc4->prog.vs->failed ||
+                 vc4->prog.fs->failed);
 }
 
 static uint32_t

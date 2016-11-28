@@ -2443,10 +2443,11 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilityInterpolationFunction:
       case SpvCapabilityMultiViewport:
       case SpvCapabilitySampleRateShading:
-         break;
-
       case SpvCapabilityClipDistance:
       case SpvCapabilityCullDistance:
+      case SpvCapabilityInputAttachment:
+         break;
+
       case SpvCapabilityGeometryStreams:
       case SpvCapabilityTessellation:
       case SpvCapabilityTessellationPointSize:
@@ -2463,7 +2464,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilityStorageImageMultisample:
       case SpvCapabilityImageCubeArray:
       case SpvCapabilityInt8:
-      case SpvCapabilityInputAttachment:
       case SpvCapabilitySparseResidency:
       case SpvCapabilityMinLod:
       case SpvCapabilityImageMSArray:

@@ -612,6 +612,8 @@ vc4_simulator_get_param_ioctl(int fd, struct drm_vc4_get_param *args)
 {
         switch (args->param) {
         case DRM_VC4_PARAM_SUPPORTS_BRANCHES:
+        case DRM_VC4_PARAM_SUPPORTS_ETC1:
+        case DRM_VC4_PARAM_SUPPORTS_THREADED_FS:
                 args->value = true;
                 return 0;
 
@@ -625,7 +627,7 @@ vc4_simulator_get_param_ioctl(int fd, struct drm_vc4_get_param *args)
 
         default:
                 fprintf(stderr, "Unknown DRM_IOCTL_VC4_GET_PARAM(%lld)\n",
-                        (long long)args->value);
+                        (long long)args->param);
                 abort();
         };
 }

@@ -52,11 +52,9 @@ struct si_shader_context {
 	struct si_screen *screen;
 
 	unsigned type; /* PIPE_SHADER_* specifies the type of shader. */
-	bool is_gs_copy_shader;
-	/* Whether to generate the optimized shader variant compiled as a whole
-	 * (without a prolog and epilog)
-	 */
-	bool is_monolithic;
+
+	/* Whether the prolog will be compiled separately. */
+	bool separate_prolog;
 
 	/** This function is responsible for initilizing the inputs array and will be
 	  * called once for each input declared in the TGSI shader.
@@ -180,11 +178,14 @@ LLVMValueRef si_llvm_bound_index(struct si_shader_context *ctx,
 				 unsigned num);
 
 void si_llvm_context_init(struct si_shader_context *ctx,
-			  const char *triple,
+			  struct si_screen *sscreen,
+			  struct si_shader *shader,
+			  LLVMTargetMachineRef tm,
 			  const struct tgsi_shader_info *info,
 			  const struct tgsi_token *tokens);
 
 void si_llvm_create_func(struct si_shader_context *ctx,
+			 const char *name,
 			 LLVMTypeRef *return_types, unsigned num_return_elems,
 			 LLVMTypeRef *ParamTypes, unsigned ParamCount);
 

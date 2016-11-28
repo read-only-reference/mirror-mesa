@@ -318,8 +318,8 @@ static bool calc_live_regs( struct i915_fragment_program *p )
     uint8_t live_components[I915_MAX_TEMPORARY] = { 0, };
     GLint i;
    
-    for (i = program->NumInstructions - 1; i >= 0; i--) {
-        struct prog_instruction *inst = &program->Instructions[i];
+    for (i = program->arb.NumInstructions - 1; i >= 0; i--) {
+        struct prog_instruction *inst = &program->arb.Instructions[i];
         int opArgs = _mesa_num_inst_src_regs(inst->Opcode);
         int a;
 
@@ -362,7 +362,7 @@ static GLuint get_live_regs( struct i915_fragment_program *p,
                              const struct prog_instruction *inst )
 {
     const struct gl_program *program = &p->FragProg;
-    GLuint nr = inst - program->Instructions;
+    GLuint nr = inst - program->arb.Instructions;
 
     return p->usedRegs[nr];
 }
@@ -383,7 +383,7 @@ static void
 upload_program(struct i915_fragment_program *p)
 {
    const struct gl_program *program = &p->FragProg;
-   const struct prog_instruction *inst = program->Instructions;
+   const struct prog_instruction *inst = program->arb.Instructions;
 
    if (INTEL_DEBUG & DEBUG_WM)
       _mesa_print_program(program);
@@ -402,9 +402,9 @@ upload_program(struct i915_fragment_program *p)
       return;
    }
 
-   if (program->NumInstructions > I915_MAX_INSN) {
+   if (program->arb.NumInstructions > I915_MAX_INSN) {
       i915_program_error(p, "Exceeded max instructions (%d out of %d)",
-			 program->NumInstructions, I915_MAX_INSN);
+                         program->arb.NumInstructions, I915_MAX_INSN);
       return;
    }
 
@@ -1148,13 +1148,13 @@ i915NewProgram(struct gl_context * ctx, GLenum target, GLuint id)
 {
    switch (target) {
    case GL_VERTEX_PROGRAM_ARB: {
-      struct gl_program *prog = CALLOC_STRUCT(gl_program);
+      struct gl_program *prog = rzalloc(NULL, struct gl_program);
       return _mesa_init_gl_program(prog, target, id);
    }
 
    case GL_FRAGMENT_PROGRAM_ARB:{
          struct i915_fragment_program *prog =
-            CALLOC_STRUCT(i915_fragment_program);
+            rzalloc(NULL, struct i915_fragment_program);
          if (prog) {
             i915_init_program(I915_CONTEXT(ctx), prog);
 

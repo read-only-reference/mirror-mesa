@@ -79,6 +79,7 @@
 #define DBG_NO_ASM		(1 << 14)
 #define DBG_PREOPT_IR		(1 << 15)
 #define DBG_CHECK_IR		(1 << 16)
+#define DBG_NO_OPT_VARIANT	(1 << 17)
 /* gaps */
 #define DBG_TEST_DMA		(1 << 20)
 /* Bits 21-31 are reserved for the r600g driver. */
@@ -306,7 +307,6 @@ struct r600_texture {
 
 struct r600_surface {
 	struct pipe_surface		base;
-	const struct radeon_surf_level	*level_info;
 
 	bool color_initialized;
 	bool depth_initialized;
@@ -380,6 +380,7 @@ struct r600_common_screen {
 	 * are loading shaders on demand. This is a monotonic counter.
 	 */
 	unsigned			num_shaders_created;
+	unsigned			num_shader_cache_hits;
 
 	/* GPU load thread. */
 	pipe_mutex			gpu_load_mutex;
@@ -569,6 +570,7 @@ struct r600_common_context {
 	unsigned			num_compute_calls;
 	unsigned			num_spill_compute_calls;
 	unsigned			num_dma_calls;
+	unsigned			num_cp_dma_calls;
 	unsigned			num_vs_flushes;
 	unsigned			num_ps_flushes;
 	unsigned			num_cs_flushes;

@@ -81,6 +81,7 @@ struct ac_shader_variant_info {
 			bool writes_stencil;
 			bool early_fragment_test;
 			bool writes_memory;
+			bool force_persample;
 		} fs;
 		struct {
 			unsigned block_size[3];
@@ -113,7 +114,3 @@ void ac_compile_nir_shader(LLVMTargetMachineRef tm,
 
 #define AC_USERDATA_CS_GRID_SIZE 10
 
-#ifdef __cplusplus
-extern "C"
-#endif
-void ac_add_attr_dereferenceable(LLVMValueRef val, uint64_t bytes);

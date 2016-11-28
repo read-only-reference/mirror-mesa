@@ -87,7 +87,7 @@ static const struct anv_format anv_formats[] = {
    fmt(VK_FORMAT_R8G8B8_SSCALED,          ISL_FORMAT_R8G8B8_SSCALED),
    fmt(VK_FORMAT_R8G8B8_UINT,             ISL_FORMAT_R8G8B8_UINT),
    fmt(VK_FORMAT_R8G8B8_SINT,             ISL_FORMAT_R8G8B8_SINT),
-   fmt(VK_FORMAT_R8G8B8_SRGB,             ISL_FORMAT_UNSUPPORTED), /* B8G8R8A8_UNORM_SRGB */
+   fmt(VK_FORMAT_R8G8B8_SRGB,             ISL_FORMAT_R8G8B8_UNORM_SRGB),
    fmt(VK_FORMAT_R8G8B8A8_UNORM,          ISL_FORMAT_R8G8B8A8_UNORM),
    fmt(VK_FORMAT_R8G8B8A8_SNORM,          ISL_FORMAT_R8G8B8A8_SNORM),
    fmt(VK_FORMAT_R8G8B8A8_USCALED,        ISL_FORMAT_R8G8B8A8_USCALED),
@@ -423,6 +423,10 @@ anv_physical_device_get_format_properties(struct anv_physical_device *physical_d
          tiled &= ~VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT &
                   ~VK_FORMAT_FEATURE_BLIT_DST_BIT;
       }
+
+      /* ASTC textures must be in Y-tiled memory */
+      if (isl_format_get_layout(linear_fmt.isl_format)->txc == ISL_TXC_ASTC)
+         linear = 0;
    }
 
    out_properties->linearTilingFeatures = linear;
@@ -462,6 +466,9 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties(
    uint32_t maxMipLevels;
    uint32_t maxArraySize;
    VkSampleCountFlags sampleCounts = VK_SAMPLE_COUNT_1_BIT;
+
+   if (anv_formats[format].isl_format == ISL_FORMAT_UNSUPPORTED)
+      goto unsupported;
 
    anv_physical_device_get_format_properties(physical_device, format,
                                              &format_props);
@@ -505,6 +512,17 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties(
       maxMipLevels = 12; /* log2(maxWidth) + 1 */
       maxArraySize = 1;
       break;
+   }
+
+   /* Our hardware doesn't support 1D compressed textures.
+    *    From the SKL PRM, RENDER_SURFACE_STATE::SurfaceFormat:
+    *    * This field cannot be a compressed (BC*, DXT*, FXT*, ETC*, EAC*) format
+    *       if the Surface Type is SURFTYPE_1D.
+    *    * This field cannot be ASTC format if the Surface Type is SURFTYPE_1D.
+    */
+   if (type == VK_IMAGE_TYPE_1D &&
+       isl_format_is_compressed(anv_formats[format].isl_format)) {
+       goto unsupported;
    }
 
    if (tiling == VK_IMAGE_TILING_OPTIMAL &&

@@ -254,13 +254,16 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
       tex_obj = intel_texture_object(ctx->Texture.Unit[i]._Current);
       if (!tex_obj || !tex_obj->mt)
 	 continue;
-      intel_miptree_all_slices_resolve_depth(brw, tex_obj->mt);
+      if (intel_miptree_sample_with_hiz(brw, tex_obj->mt))
+         intel_miptree_all_slices_resolve_hiz(brw, tex_obj->mt);
+      else
+         intel_miptree_all_slices_resolve_depth(brw, tex_obj->mt);
       /* Sampling engine understands lossless compression and resolving
        * those surfaces should be skipped for performance reasons.
        */
       const int flags = intel_texture_view_requires_resolve(brw, tex_obj) ?
                            0 : INTEL_MIPTREE_IGNORE_CCS_E;
-      intel_miptree_resolve_color(brw, tex_obj->mt, flags);
+      intel_miptree_all_slices_resolve_color(brw, tex_obj->mt, flags);
       brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
 
       if (tex_obj->base.StencilSampling ||
@@ -275,8 +278,8 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
          ctx->_Shader->CurrentProgram[i] ?
             ctx->_Shader->CurrentProgram[i]->_LinkedShaders[i] : NULL;
 
-      if (unlikely(shader && shader->NumImages)) {
-         for (unsigned j = 0; j < shader->NumImages; j++) {
+      if (unlikely(shader && shader->Program->info.num_images)) {
+         for (unsigned j = 0; j < shader->Program->info.num_images; j++) {
             struct gl_image_unit *u = &ctx->ImageUnits[shader->ImageUnits[j]];
             tex_obj = intel_texture_object(u->TexObj);
 
@@ -288,7 +291,7 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
                 * compressed surfaces need to be resolved prior to accessing
                 * them. Hence skip setting INTEL_MIPTREE_IGNORE_CCS_E.
                 */
-               intel_miptree_resolve_color(brw, tex_obj->mt, 0);
+               intel_miptree_all_slices_resolve_color(brw, tex_obj->mt, 0);
 
                if (intel_miptree_is_lossless_compressed(brw, tex_obj->mt) &&
                    intel_disable_rb_aux_buffer(brw, tex_obj->mt->bo)) {
@@ -313,8 +316,9 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
             intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
          if (irb &&
-             intel_miptree_resolve_color(brw, irb->mt,
-                                         INTEL_MIPTREE_IGNORE_CCS_E))
+             intel_miptree_resolve_color(
+                brw, irb->mt, irb->mt_level, irb->mt_layer, irb->layer_count,
+                INTEL_MIPTREE_IGNORE_CCS_E))
             brw_render_cache_set_check_flush(brw, irb->mt->bo);
       }
    }
@@ -345,7 +349,7 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
           * should be impossible to get here with such surfaces.
           */
          assert(!intel_miptree_is_lossless_compressed(brw, mt));
-         intel_miptree_resolve_color(brw, mt, 0);
+         intel_miptree_all_slices_resolve_color(brw, mt, 0);
          brw_render_cache_set_check_flush(brw, mt->bo);
       }
    }
@@ -498,7 +502,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       [MESA_SHADER_GEOMETRY] = brw->gen >= 6,
       [MESA_SHADER_FRAGMENT] = true,
       [MESA_SHADER_COMPUTE] =
-         (ctx->API == API_OPENGL_CORE &&
+         ((ctx->API == API_OPENGL_COMPAT || ctx->API == API_OPENGL_CORE) &&
           ctx->Const.MaxComputeWorkGroupSize[0] >= 1024) ||
          (ctx->API == API_OPENGLES2 &&
           ctx->Const.MaxComputeWorkGroupSize[0] >= 128) ||
@@ -532,10 +536,15 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.MaxTextureRectSize = 1 << 12;
    ctx->Const.MaxTextureMaxAnisotropy = 16.0;
    ctx->Const.StripTextureBorder = true;
-   if (brw->gen >= 7)
+   if (brw->gen >= 7) {
       ctx->Const.MaxProgramTextureGatherComponents = 4;
-   else if (brw->gen == 6)
+      ctx->Const.MinProgramTextureGatherOffset = -32;
+      ctx->Const.MaxProgramTextureGatherOffset = 31;
+   } else if (brw->gen == 6) {
       ctx->Const.MaxProgramTextureGatherComponents = 1;
+      ctx->Const.MinProgramTextureGatherOffset = -8;
+      ctx->Const.MaxProgramTextureGatherOffset = 7;
+   }
 
    ctx->Const.MaxUniformBlockSize = 65536;
 
@@ -1346,10 +1355,13 @@ intel_resolve_for_dri2_flush(struct brw_context *brw,
       rb = intel_get_renderbuffer(fb, buffers[i]);
       if (rb == NULL || rb->mt == NULL)
          continue;
-      if (rb->mt->num_samples <= 1)
-         intel_miptree_resolve_color(brw, rb->mt, 0);
-      else
+      if (rb->mt->num_samples <= 1) {
+         assert(rb->mt_layer == 0 && rb->mt_level == 0 &&
+                rb->layer_count == 1);
+         intel_miptree_resolve_color(brw, rb->mt, 0, 0, 1, 0);
+      } else {
          intel_renderbuffer_downsample(brw, rb);
+      }
    }
 }
 

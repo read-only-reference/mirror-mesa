@@ -178,7 +178,7 @@ enum brw_cache_id {
 };
 
 enum brw_state_id {
-   /* brw_cache_ids must come first - see brw_state_cache.c */
+   /* brw_cache_ids must come first - see brw_program_cache.c */
    BRW_STATE_URB_FENCE = BRW_MAX_CACHE,
    BRW_STATE_FRAGMENT_PROGRAM,
    BRW_STATE_GEOMETRY_PROGRAM,
@@ -252,8 +252,8 @@ enum brw_state_id {
 #define BRW_NEW_FS_PROG_DATA            (1ull << BRW_CACHE_FS_PROG)
 /* XXX: The BRW_NEW_BLORP_BLIT_PROG_DATA dirty bit is unused (as BLORP doesn't
  * use the normal state upload paths), but the cache is still used.  To avoid
- * polluting the brw_state_cache code with special cases, we retain the dirty
- * bit for now.  It should eventually be removed.
+ * polluting the brw_program_cache code with special cases, we retain the
+ * dirty bit for now.  It should eventually be removed.
  */
 #define BRW_NEW_BLORP_BLIT_PROG_DATA    (1ull << BRW_CACHE_BLORP_PROG)
 #define BRW_NEW_SF_PROG_DATA            (1ull << BRW_CACHE_SF_PROG)
@@ -535,7 +535,7 @@ struct brw_vertex_element {
    const struct gl_vertex_array *glarray;
 
    int buffer;
-
+   bool is_dual_slot;
    /** Offset of the first element within the buffer object */
    unsigned int offset;
 };
@@ -1510,11 +1510,12 @@ void brw_upload_ubo_surfaces(struct brw_context *brw,
                              struct brw_stage_state *stage_state,
                              struct brw_stage_prog_data *prog_data);
 void brw_upload_abo_surfaces(struct brw_context *brw,
-                             struct gl_linked_shader *shader,
+                             const struct gl_program *prog,
                              struct brw_stage_state *stage_state,
                              struct brw_stage_prog_data *prog_data);
 void brw_upload_image_surfaces(struct brw_context *brw,
                                struct gl_linked_shader *shader,
+                               const struct gl_program *prog,
                                struct brw_stage_state *stage_state,
                                struct brw_stage_prog_data *prog_data);
 
@@ -1711,6 +1712,26 @@ bool brw_lower_texture_gradients(struct brw_context *brw,
 
 extern const char * const conditional_modifier[16];
 extern const char *const pred_ctrl_align16[16];
+
+static inline bool
+brw_depth_writes_enabled(const struct brw_context *brw)
+{
+   const struct gl_context *ctx = &brw->ctx;
+
+   /* We consider depth writes disabled if the depth function is GL_EQUAL,
+    * because it would just overwrite the existing depth value with itself.
+    *
+    * These bonus depth writes not only use bandwidth, but they also can
+    * prevent early depth processing.  For example, if the pixel shader
+    * discards, the hardware must invoke the to determine whether or not
+    * to do the depth write.  If writes are disabled, we may still be able
+    * to do the depth test before the shader, and skip the shader execution.
+    *
+    * The Broadwell 3DSTATE_WM_DEPTH_STENCIL documentation also contains
+    * a programming note saying to disable depth writes for EQUAL.
+    */
+   return ctx->Depth.Test && ctx->Depth.Mask && ctx->Depth.Func != GL_EQUAL;
+}
 
 void
 brw_emit_depthbuffer(struct brw_context *brw);

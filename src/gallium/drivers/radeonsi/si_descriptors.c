@@ -394,7 +394,7 @@ void si_set_mutable_tex_desc_fields(struct r600_texture *tex,
 							     is_stencil));
 	state[4] |= S_008F20_PITCH(pitch - 1);
 
-	if (tex->dcc_offset && tex->surface.level[first_level].dcc_enabled) {
+	if (tex->dcc_offset && first_level < tex->surface.num_dcc_levels) {
 		state[6] |= S_008F28_COMPRESSION_EN(1);
 		state[7] = ((!tex->dcc_separate_buffer ? tex->resource.gpu_address : 0) +
 			    tex->dcc_offset +
@@ -669,7 +669,7 @@ static void si_set_shader_image(struct si_context *ctx,
 		unsigned level = view->u.tex.level;
 		unsigned width, height, depth;
 		bool uses_dcc = tex->dcc_offset &&
-				tex->surface.level[level].dcc_enabled;
+				level < tex->surface.num_dcc_levels;
 
 		assert(!tex->is_depth);
 		assert(tex->fmask.size == 0);
@@ -964,13 +964,35 @@ bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 		desc[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) |
 			  S_008F04_STRIDE(vb->stride);
 
-		if (sctx->b.chip_class <= CIK && vb->stride)
+		if (sctx->b.chip_class <= CIK && vb->stride) {
 			/* Round up by rounding down and adding 1 */
 			desc[2] = (vb->buffer->width0 - offset -
 				   sctx->vertex_elements->format_size[i]) /
 				  vb->stride + 1;
-		else
+		} else {
+			uint32_t size3;
+
 			desc[2] = vb->buffer->width0 - offset;
+
+			/* For attributes of size 3 with byte or short
+			 * components, we use a 4-component data format.
+			 *
+			 * As a consequence, we have to round the buffer size
+			 * up so that the hardware sees four components as
+			 * being inside the buffer if and only if the first
+			 * three components are in the buffer.
+			 *
+			 * Since the offset and stride are guaranteed to be
+			 * 4-byte aligned, this alignment will never cross the
+			 * winsys buffer boundary.
+			 */
+			size3 = (sctx->vertex_elements->fix_size3 >> (2 * i)) & 3;
+			if (vb->stride && size3) {
+				assert(offset % 4 == 0 && vb->stride % 4 == 0);
+				assert(size3 <= 2);
+				desc[2] = align(desc[2], size3 * 2);
+			}
+		}
 
 		desc[3] = sctx->vertex_elements->rsrc_word3[i];
 

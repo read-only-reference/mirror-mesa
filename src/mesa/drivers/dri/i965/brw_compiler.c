@@ -126,7 +126,6 @@ brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo)
       compiler->glsl_compiler_options[i].EmitNoMainReturn = true;
       compiler->glsl_compiler_options[i].EmitNoIndirectInput = true;
       compiler->glsl_compiler_options[i].EmitNoIndirectUniform = false;
-      compiler->glsl_compiler_options[i].LowerCombinedClipCullDistance = true;
 
       bool is_scalar = compiler->scalar_stage[i];
 
@@ -155,9 +154,6 @@ brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo)
 
    if (compiler->scalar_stage[MESA_SHADER_GEOMETRY])
       compiler->glsl_compiler_options[MESA_SHADER_GEOMETRY].EmitNoIndirectInput = false;
-
-   compiler->glsl_compiler_options[MESA_SHADER_COMPUTE]
-      .LowerShaderSharedVariables = true;
 
    return compiler;
 }

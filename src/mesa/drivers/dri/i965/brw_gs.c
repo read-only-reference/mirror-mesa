@@ -125,9 +125,10 @@ brw_codegen_gs_prog(struct brw_context *brw,
    prog_data.base.base.pull_param =
       rzalloc_array(NULL, const gl_constant_value *, param_count);
    prog_data.base.base.image_param =
-      rzalloc_array(NULL, struct brw_image_param, gs->NumImages);
+      rzalloc_array(NULL, struct brw_image_param,
+                    gp->program.info.num_images);
    prog_data.base.base.nr_params = param_count;
-   prog_data.base.base.nr_image_params = gs->NumImages;
+   prog_data.base.base.nr_image_params = gp->program.info.num_images;
 
    brw_nir_setup_glsl_uniforms(gp->program.nir, prog, &gp->program,
                                &prog_data.base.base,
@@ -135,16 +136,9 @@ brw_codegen_gs_prog(struct brw_context *brw,
 
    uint64_t outputs_written = gp->program.info.outputs_written;
 
-   prog_data.base.cull_distance_mask =
-      ((1 << gp->program.CullDistanceArraySize) - 1) <<
-      gp->program.ClipDistanceArraySize;
-
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
                        prog->SeparateShader);
-
-   if (unlikely(INTEL_DEBUG & DEBUG_GS))
-      brw_dump_ir("geometry", prog, gs, NULL);
 
    int st_index = -1;
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
@@ -163,7 +157,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
                      &prog_data, gs->Program->nir, prog,
                      st_index, &program_size, &error_str);
    if (program == NULL) {
-      ralloc_strcat(&prog->InfoLog, error_str);
+      ralloc_strcat(&prog->data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to compile geometry shader: %s\n", error_str);
 
       ralloc_free(mem_ctx);

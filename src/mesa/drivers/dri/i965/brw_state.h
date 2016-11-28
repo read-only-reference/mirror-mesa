@@ -217,25 +217,25 @@ brw_select_pipeline(struct brw_context *brw, enum brw_pipeline pipeline)
 }
 
 /***********************************************************************
- * brw_state_cache.c
+ * brw_program_cache.c
  */
 
 void brw_upload_cache(struct brw_cache *cache,
-		      enum brw_cache_id cache_id,
-		      const void *key,
-		      GLuint key_sz,
-		      const void *data,
-		      GLuint data_sz,
-		      const void *aux,
-		      GLuint aux_sz,
-		      uint32_t *out_offset, void *out_aux);
+                      enum brw_cache_id cache_id,
+                      const void *key,
+                      GLuint key_sz,
+                      const void *data,
+                      GLuint data_sz,
+                      const void *aux,
+                      GLuint aux_sz,
+                      uint32_t *out_offset, void *out_aux);
 
 bool brw_search_cache(struct brw_cache *cache,
-		      enum brw_cache_id cache_id,
-		      const void *key,
-		      GLuint key_size,
-		      uint32_t *inout_offset, void *inout_aux);
-void brw_state_cache_check_size( struct brw_context *brw );
+                      enum brw_cache_id cache_id,
+                      const void *key,
+                      GLuint key_size,
+                      uint32_t *inout_offset, void *inout_aux);
+void brw_program_cache_check_size(struct brw_context *brw);
 
 void brw_init_caches( struct brw_context *brw );
 void brw_destroy_caches( struct brw_context *brw );
@@ -266,7 +266,7 @@ GLuint translate_tex_target(GLenum target);
 
 GLuint translate_tex_format(struct brw_context *brw,
                             mesa_format mesa_format,
-			    GLenum srgb_decode);
+                            GLenum srgb_decode);
 
 int brw_get_texture_swizzle(const struct gl_context *ctx,
                             const struct gl_texture_object *t);
@@ -334,15 +334,6 @@ void brw_emit_sampler_state(struct brw_context *brw,
                             unsigned shadow_function,
                             bool non_normalized_coordinates,
                             uint32_t border_color_offset);
-
-void brw_update_sampler_state(struct brw_context *brw,
-                              GLenum target, bool tex_cube_map_seamless,
-                              GLfloat tex_unit_lod_bias,
-                              mesa_format format, GLenum base_format,
-                              bool is_integer_format,
-                              const struct gl_sampler_object *sampler,
-                              uint32_t *sampler_state,
-                              uint32_t batch_offset_for_sampler_state);
 
 /* gen6_wm_state.c */
 void

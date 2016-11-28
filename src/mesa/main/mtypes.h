@@ -1910,6 +1910,9 @@ typedef enum
  */
 struct gl_program
 {
+   /** FIXME: This must be first until we split shader_info from nir_shader */
+   struct shader_info info;
+
    mtx_t Mutex;
    GLuint Id;
    GLint RefCount;
@@ -1918,11 +1921,7 @@ struct gl_program
    GLenum Target;    /**< GL_VERTEX/FRAGMENT_PROGRAM_ARB, GL_GEOMETRY_PROGRAM_NV */
    GLenum Format;    /**< String encoding format */
 
-   struct prog_instruction *Instructions;
-
    struct nir_shader *nir;
-
-   struct shader_info info;
 
    GLbitfield64 SecondaryOutputsWritten; /**< Subset of OutputsWritten outputs written with non-zero index. */
    GLbitfield TexturesUsed[MAX_COMBINED_TEXTURE_IMAGE_UNITS];  /**< TEXTURE_x_BIT bitmask */
@@ -1941,50 +1940,62 @@ struct gl_program
    /** Named parameters, constants, etc. from program text */
    struct gl_program_parameter_list *Parameters;
 
-   /**
-    * Local parameters used by the program.
-    *
-    * It's dynamically allocated because it is rarely used (just
-    * assembly-style programs), and MAX_PROGRAM_LOCAL_PARAMS entries once it's
-    * allocated.
-    */
-   GLfloat (*LocalParams)[4];
-
    /** Map from sampler unit to texture unit (set by glUniform1i()) */
    GLubyte SamplerUnits[MAX_SAMPLERS];
 
-   /** Bitmask of which register files are read/written with indirect
-    * addressing.  Mask of (1 << PROGRAM_x) bits.
-    */
-   GLbitfield IndirectRegisterFiles;
+   union {
+      /** Fields used by GLSL programs */
+      struct {
+         struct gl_active_atomic_buffer **AtomicBuffers;
+      } sh;
 
-   /** Logical counts */
-   /*@{*/
-   GLuint NumInstructions;
-   GLuint NumTemporaries;
-   GLuint NumParameters;
-   GLuint NumAttributes;
-   GLuint NumAddressRegs;
-   GLuint NumAluInstructions;
-   GLuint NumTexInstructions;
-   GLuint NumTexIndirections;
-   /*@}*/
-   /** Native, actual h/w counts */
-   /*@{*/
-   GLuint NumNativeInstructions;
-   GLuint NumNativeTemporaries;
-   GLuint NumNativeParameters;
-   GLuint NumNativeAttributes;
-   GLuint NumNativeAddressRegs;
-   GLuint NumNativeAluInstructions;
-   GLuint NumNativeTexInstructions;
-   GLuint NumNativeTexIndirections;
-   /*@}*/
+      /** ARB assembly-style program fields */
+      struct {
+         struct prog_instruction *Instructions;
 
-   /** Used by ARB assembly-style programs. Can only be true for vertex
-    * programs.
-    */
-   GLboolean IsPositionInvariant;
+         /**
+          * Local parameters used by the program.
+          *
+          * It's dynamically allocated because it is rarely used (just
+          * assembly-style programs), and MAX_PROGRAM_LOCAL_PARAMS entries
+          * once it's allocated.
+          */
+         GLfloat (*LocalParams)[4];
+
+         /** Bitmask of which register files are read/written with indirect
+          * addressing.  Mask of (1 << PROGRAM_x) bits.
+          */
+         GLbitfield IndirectRegisterFiles;
+
+         /** Logical counts */
+         /*@{*/
+         GLuint NumInstructions;
+         GLuint NumTemporaries;
+         GLuint NumParameters;
+         GLuint NumAttributes;
+         GLuint NumAddressRegs;
+         GLuint NumAluInstructions;
+         GLuint NumTexInstructions;
+         GLuint NumTexIndirections;
+         /*@}*/
+         /** Native, actual h/w counts */
+         /*@{*/
+         GLuint NumNativeInstructions;
+         GLuint NumNativeTemporaries;
+         GLuint NumNativeParameters;
+         GLuint NumNativeAttributes;
+         GLuint NumNativeAddressRegs;
+         GLuint NumNativeAluInstructions;
+         GLuint NumNativeTexInstructions;
+         GLuint NumNativeTexIndirections;
+         /*@}*/
+
+         /** Used by ARB assembly-style programs. Can only be true for vertex
+          * programs.
+          */
+         GLboolean IsPositionInvariant;
+      } arb;
+   };
 };
 
 
@@ -2161,7 +2172,6 @@ struct gl_subroutine_function
  */
 struct gl_shader_info
 {
-   bool uses_builtin_functions;
    bool uses_gl_fragcoord;
    bool redeclares_gl_fragcoord;
    bool ARB_fragment_coord_conventions_enable;
@@ -2272,6 +2282,10 @@ struct gl_linked_shader
 {
    gl_shader_stage Stage;
 
+#ifdef DEBUG
+   unsigned SourceChecksum;
+#endif
+
    struct gl_program *Program;  /**< Post-compile assembly code */
 
    /**
@@ -2348,9 +2362,6 @@ struct gl_linked_shader
     */
    GLuint NumImages;
 
-   struct gl_active_atomic_buffer **AtomicBuffers;
-   unsigned NumAtomicBuffers;
-
    /**
      * Number of types for subroutine uniforms.
      */
@@ -2407,7 +2418,9 @@ struct gl_shader
    GLboolean CompileStatus;
    bool IsES;              /**< True if this shader uses GLSL ES */
 
-   GLuint SourceChecksum;       /**< for debug/logging purposes */
+#ifdef DEBUG
+   unsigned SourceChecksum;       /**< for debug/logging purposes */
+#endif
    const GLchar *Source;  /**< Source code string */
 
    GLchar *InfoLog;
@@ -2617,6 +2630,34 @@ struct gl_program_resource
 };
 
 /**
+ * A data structure to be shared by gl_shader_program and gl_program.
+ */
+struct gl_shader_program_data
+{
+   GLint RefCount;  /**< Reference count */
+
+   unsigned NumUniformStorage;
+   unsigned NumHiddenUniforms;
+   struct gl_uniform_storage *UniformStorage;
+
+   unsigned NumUniformBlocks;
+   struct gl_uniform_block *UniformBlocks;
+
+   unsigned NumShaderStorageBlocks;
+   struct gl_uniform_block *ShaderStorageBlocks;
+
+   struct gl_active_atomic_buffer *AtomicBuffers;
+   unsigned NumAtomicBuffers;
+
+   GLboolean LinkStatus;   /**< GL_LINK_STATUS */
+   GLboolean Validated;
+   GLchar *InfoLog;
+
+   /* Mask of stages this program was linked against */
+   unsigned linked_stages;
+};
+
+/**
  * A GLSL program object.
  * Basically a linked collection of vertex and fragment shaders.
  */
@@ -2748,10 +2789,8 @@ struct gl_shader_program
       bool LocalSizeVariable;
    } Comp;
 
-   /* post-link info: */
-   unsigned NumUniformStorage;
-   unsigned NumHiddenUniforms;
-   struct gl_uniform_storage *UniformStorage;
+   /** Data shared by gl_program and gl_shader_program */
+   struct gl_shader_program_data *data;
 
    /**
     * Mapping from GL uniform locations returned by \c glUniformLocation to
@@ -2775,12 +2814,6 @@ struct gl_shader_program
    unsigned LastClipDistanceArraySize;
    unsigned LastCullDistanceArraySize;
 
-   unsigned NumUniformBlocks;
-   struct gl_uniform_block *UniformBlocks;
-
-   unsigned NumShaderStorageBlocks;
-   struct gl_uniform_block *ShaderStorageBlocks;
-
    /**
     * Map of active uniform names to locations
     *
@@ -2791,14 +2824,8 @@ struct gl_shader_program
     */
    struct string_to_uint_map *UniformHash;
 
-   struct gl_active_atomic_buffer *AtomicBuffers;
-   unsigned NumAtomicBuffers;
-
-   GLboolean LinkStatus;   /**< GL_LINK_STATUS */
-   GLboolean Validated;
    GLboolean _Used;        /**< Ever used for drawing? */
    GLboolean SamplersValidated; /**< Samplers validated against texture units? */
-   GLchar *InfoLog;
 
    unsigned Version;       /**< GLSL version used for linking */
    bool IsES;              /**< True if this program uses GLSL ES */
@@ -2936,9 +2963,6 @@ struct gl_shader_compiler_options
 
    /** Clamp UBO and SSBO block indices so they don't go out-of-bounds. */
    GLboolean ClampBlockIndicesToArrayBounds;
-
-   GLboolean LowerShaderSharedVariables; /**< Lower compute shader shared
-                                          *   variable access to intrinsics. */
 
    const struct nir_shader_compiler_options *NirOptions;
 };
@@ -4681,7 +4705,8 @@ enum _debug
    DEBUG_SILENT                 = (1 << 0),
    DEBUG_ALWAYS_FLUSH		= (1 << 1),
    DEBUG_INCOMPLETE_TEXTURE     = (1 << 2),
-   DEBUG_INCOMPLETE_FBO         = (1 << 3)
+   DEBUG_INCOMPLETE_FBO         = (1 << 3),
+   DEBUG_CONTEXT                = (1 << 4)
 };
 
 #ifdef __cplusplus

@@ -125,7 +125,7 @@ process_glsl_ir(struct brw_context *brw,
     * if-statements need to be flattened.
     */
    if (brw->gen < 6)
-      lower_if_to_cond_assign(shader->ir, 16);
+      lower_if_to_cond_assign(shader->Stage, shader->ir, 16);
 
    do_lower_texture_projection(shader->ir);
    brw_lower_texture_gradients(brw, shader->ir);
@@ -221,19 +221,10 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       if (!shader)
          continue;
 
-      struct gl_program *prog =
-         ctx->Driver.NewProgram(ctx, _mesa_shader_stage_to_program(stage),
-                                0);
-      if (!prog)
-        return false;
-
-      _mesa_reference_program(ctx, &shader->Program, prog);
-
+      struct gl_program *prog = shader->Program;
       prog->Parameters = _mesa_new_parameter_list();
 
       process_glsl_ir(brw, shProg, shader);
-
-      do_set_program_inouts(shader->ir, prog, shader->Stage);
 
       _mesa_copy_linked_program_data(shProg, shader);
 
@@ -266,10 +257,18 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       brw_add_texrect_params(prog);
 
+      bool debug_enabled =
+         (INTEL_DEBUG & intel_debug_flag_for_shader_stage(shader->Stage));
+
+      if (debug_enabled && shader->ir) {
+         fprintf(stderr, "GLSL IR for native %s shader %d:\n",
+                 _mesa_shader_stage_to_string(shader->Stage), shProg->Name);
+         _mesa_print_ir(stderr, shader->ir, NULL);
+         fprintf(stderr, "\n\n");
+      }
+
       prog->nir = brw_create_nir(brw, shProg, prog, (gl_shader_stage) stage,
                                  compiler->scalar_stage[stage]);
-
-      _mesa_reference_program(ctx, &prog, NULL);
    }
 
    if ((ctx->_Shader->Flags & GLSL_DUMP) && shProg->Name != 0) {

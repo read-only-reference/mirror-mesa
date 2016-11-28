@@ -263,6 +263,14 @@ enum radeon_surf_mode {
     RADEON_SURF_MODE_2D = 3,
 };
 
+/* These are defined exactly like GB_TILE_MODEn.MICRO_TILE_MODE_NEW. */
+enum radeon_micro_mode {
+    RADEON_MICRO_MODE_DISPLAY = 0,
+    RADEON_MICRO_MODE_THIN = 1,
+    RADEON_MICRO_MODE_DEPTH = 2,
+    RADEON_MICRO_MODE_ROTATED = 3,
+};
+
 /* the first 16 bits are reserved for libdrm_radeon, don't use them */
 #define RADEON_SURF_SCANOUT                     (1 << 16)
 #define RADEON_SURF_ZBUFFER                     (1 << 17)
@@ -273,6 +281,7 @@ enum radeon_surf_mode {
 #define RADEON_SURF_DISABLE_DCC                 (1 << 22)
 #define RADEON_SURF_TC_COMPATIBLE_HTILE         (1 << 23)
 #define RADEON_SURF_IMPORTED                    (1 << 24)
+#define RADEON_SURF_OPTIMIZE_FOR_SPACE          (1 << 25)
 
 struct radeon_surf_level {
     uint64_t                    offset;
@@ -281,9 +290,7 @@ struct radeon_surf_level {
     uint64_t                    dcc_fast_clear_size;
     uint16_t                    nblk_x;
     uint16_t                    nblk_y;
-    uint32_t                    pitch_bytes;
     enum radeon_surf_mode       mode;
-    bool                        dcc_enabled;
 };
 
 struct radeon_surf {
@@ -291,6 +298,12 @@ struct radeon_surf {
     unsigned                    blk_w:4;
     unsigned                    blk_h:4;
     unsigned                    bpe:5;
+    /* Number of mipmap levels where DCC is enabled starting from level 0.
+     * Non-zero levels may be disabled due to alignment constraints, but not
+     * the first level.
+     */
+    unsigned                    num_dcc_levels:4;
+    unsigned                    is_linear:1;
     uint32_t                    flags;
 
     /* These are return values. Some of them can be set by the caller, but

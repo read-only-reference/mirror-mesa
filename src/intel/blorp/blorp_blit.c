@@ -67,13 +67,7 @@ brw_blorp_blit_vars_init(nir_builder *b, struct brw_blorp_blit_vars *v,
     assert(!key->use_kill || !(key->blend && key->blit_scaled));
 
 #define LOAD_INPUT(name, type)\
-   v->v_##name = nir_variable_create(b->shader, nir_var_shader_in, \
-                                     type, #name); \
-   v->v_##name->data.interpolation = INTERP_MODE_FLAT; \
-   v->v_##name->data.location = VARYING_SLOT_VAR0 + \
-      offsetof(struct brw_blorp_wm_inputs, name) / (4 * sizeof(float)); \
-   v->v_##name->data.location_frac = \
-      (offsetof(struct brw_blorp_wm_inputs, name) / sizeof(float)) % 4;
+   v->v_##name = BLORP_CREATE_NIR_INPUT(b->shader, name, type);
 
    LOAD_INPUT(discard_rect, glsl_vec4_type())
    LOAD_INPUT(rect_grid, glsl_vec4_type())
@@ -857,6 +851,66 @@ blorp_nir_manual_blend_bilinear(nir_builder *b, nir_ssa_def *pos,
                       frac_y);
 }
 
+/** Perform a color bit-cast operation
+ *
+ * For copy operations involving CCS, we may need to use different formats for
+ * the source and destination surfaces.  The two formats must both be UINT
+ * formats and must have the same size but may have different bit layouts.
+ * For instance, we may be copying from R8G8B8A8_UINT to R32_UINT or R32_UINT
+ * to R16G16_UINT.  This function generates code to shuffle bits around to get
+ * us from one to the other.
+ */
+static nir_ssa_def *
+bit_cast_color(struct nir_builder *b, nir_ssa_def *color,
+               const struct brw_blorp_blit_prog_key *key)
+{
+   assert(key->texture_data_type == nir_type_uint);
+
+   if (key->dst_bpc > key->src_bpc) {
+      nir_ssa_def *u = nir_ssa_undef(b, 1, 32);
+      nir_ssa_def *dst_chan[2] = { u, u };
+      unsigned shift = 0;
+      unsigned dst_idx = 0;
+      for (unsigned i = 0; i < 4; i++) {
+         nir_ssa_def *shifted = nir_ishl(b, nir_channel(b, color, i),
+                                            nir_imm_int(b, shift));
+         if (shift == 0) {
+            dst_chan[dst_idx] = shifted;
+         } else {
+            dst_chan[dst_idx] = nir_ior(b, dst_chan[dst_idx], shifted);
+         }
+
+         shift += key->src_bpc;
+         if (shift >= key->dst_bpc) {
+            dst_idx++;
+            shift = 0;
+         }
+      }
+
+      return nir_vec4(b, dst_chan[0], dst_chan[1], u, u);
+   } else {
+      assert(key->dst_bpc < key->src_bpc);
+
+      nir_ssa_def *mask = nir_imm_int(b, ~0u >> (32 - key->dst_bpc));
+
+      nir_ssa_def *dst_chan[4];
+      unsigned src_idx = 0;
+      unsigned shift = 0;
+      for (unsigned i = 0; i < 4; i++) {
+         dst_chan[i] = nir_iand(b, nir_ushr(b, nir_channel(b, color, src_idx),
+                                               nir_imm_int(b, shift)),
+                                   mask);
+         shift += key->dst_bpc;
+         if (shift >= key->src_bpc) {
+            src_idx++;
+            shift = 0;
+         }
+      }
+
+      return nir_vec4(b, dst_chan[0], dst_chan[1], dst_chan[2], dst_chan[3]);
+   }
+}
+
 /**
  * Generator for WM programs used in BLORP blits.
  *
@@ -1198,6 +1252,9 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
       }
    }
 
+   if (key->dst_bpc != key->src_bpc)
+      color = bit_cast_color(&b, color, key);
+
    if (key->dst_rgb) {
       /* The destination image is bound as a red texture three times as wide
        * as the actual image.  Our shader is effectively running one color
@@ -1237,7 +1294,7 @@ brw_blorp_get_blit_kernel(struct blorp_context *blorp,
 
    const unsigned *program;
    unsigned program_size;
-   struct brw_blorp_prog_data prog_data;
+   struct brw_wm_prog_data prog_data;
 
    nir_shader *nir = brw_blorp_build_nir_shader(blorp, mem_ctx, prog_key);
    struct brw_wm_prog_key wm_key;
@@ -1252,7 +1309,7 @@ brw_blorp_get_blit_kernel(struct blorp_context *blorp,
 
    blorp->upload_shader(blorp, prog_key, sizeof(*prog_key),
                         program, program_size,
-                        &prog_data, sizeof(prog_data),
+                        &prog_data.base, sizeof(prog_data),
                         &params->wm_prog_kernel, &params->wm_prog_data);
 
    ralloc_free(mem_ctx);
@@ -1347,22 +1404,19 @@ surf_convert_to_single_slice(const struct isl_device *isl_dev,
    uint32_t tile_x_px, tile_y_px;
    surf_get_intratile_offset_px(info, &tile_x_px, &tile_y_px);
 
-   /* TODO: Once this file gets converted to C, we shouls just use designated
-    * initializers.
-    */
-   struct isl_surf_init_info init_info = { 0, };
-
-   init_info.dim = ISL_SURF_DIM_2D;
-   init_info.format = info->surf.format;
-   init_info.width = slice_width_px + tile_x_px;
-   init_info.height = slice_height_px + tile_y_px;
-   init_info.depth = 1;
-   init_info.levels = 1;
-   init_info.array_len = 1;
-   init_info.samples = info->surf.samples;
-   init_info.min_pitch = info->surf.row_pitch;
-   init_info.usage = info->surf.usage;
-   init_info.tiling_flags = 1 << info->surf.tiling;
+   struct isl_surf_init_info init_info = {
+      .dim = ISL_SURF_DIM_2D,
+      .format = info->surf.format,
+      .width = slice_width_px + tile_x_px,
+      .height = slice_height_px + tile_y_px,
+      .depth = 1,
+      .levels = 1,
+      .array_len = 1,
+      .samples = info->surf.samples,
+      .min_pitch = info->surf.row_pitch,
+      .usage = info->surf.usage,
+      .tiling_flags = 1 << info->surf.tiling,
+   };
 
    isl_surf_init_s(isl_dev, &info->surf, &init_info);
    assert(info->surf.row_pitch == init_info.min_pitch);
@@ -1612,6 +1666,8 @@ do_blorp_blit(struct blorp_batch *batch,
       wm_prog_key->persample_msaa_dispatch = true;
    }
 
+   params->num_samples = params->dst.surf.samples;
+
    if (params->src.tile_x_sa || params->src.tile_y_sa) {
       assert(wm_prog_key->need_src_offset);
       surf_get_intratile_offset_px(&params->src,
@@ -1663,8 +1719,9 @@ blorp_blit(struct blorp_batch *batch,
    params.src.view.swizzle = src_swizzle;
    params.dst.view.swizzle = dst_swizzle;
 
-   struct brw_blorp_blit_prog_key wm_prog_key;
-   memset(&wm_prog_key, 0, sizeof(wm_prog_key));
+   struct brw_blorp_blit_prog_key wm_prog_key = {
+      .shader_type = BLORP_SHADER_TYPE_BLIT
+   };
 
    /* Scaled blitting or not. */
    wm_prog_key.blit_scaled =
@@ -1714,32 +1771,122 @@ blorp_blit(struct blorp_batch *batch,
 }
 
 static enum isl_format
-get_copy_format_for_bpb(unsigned bpb)
+get_copy_format_for_bpb(const struct isl_device *isl_dev, unsigned bpb)
 {
-   /* The choice of UNORM and UINT formats is very intentional here.  Most of
-    * the time, we want to use a UINT format to avoid any rounding error in
-    * the blit.  For stencil blits, R8_UINT is required by the hardware.
+   /* The choice of UNORM and UINT formats is very intentional here.  Most
+    * of the time, we want to use a UINT format to avoid any rounding error
+    * in the blit.  For stencil blits, R8_UINT is required by the hardware.
     * (It's the only format allowed in conjunction with W-tiling.)  Also we
     * intentionally use the 4-channel formats whenever we can.  This is so
-    * that, when we do a RGB <-> RGBX copy, the two formats will line up even
-    * though one of them is 3/4 the size of the other.  The choice of UNORM
-    * vs. UINT is also very intentional because Haswell doesn't handle 8 or
-    * 16-bit RGB UINT formats at all so we have to use UNORM there.
+    * that, when we do a RGB <-> RGBX copy, the two formats will line up
+    * even though one of them is 3/4 the size of the other.  The choice of
+    * UNORM vs. UINT is also very intentional because we don't have 8 or
+    * 16-bit RGB UINT formats until Sky Lake so we have to use UNORM there.
     * Fortunately, the only time we should ever use two different formats in
     * the table below is for RGB -> RGBA blits and so we will never have any
     * UNORM/UINT mismatch.
     */
-   switch (bpb) {
-   case 8:  return ISL_FORMAT_R8_UINT;
-   case 16: return ISL_FORMAT_R8G8_UINT;
-   case 24: return ISL_FORMAT_R8G8B8_UNORM;
-   case 32: return ISL_FORMAT_R8G8B8A8_UNORM;
-   case 48: return ISL_FORMAT_R16G16B16_UNORM;
-   case 64: return ISL_FORMAT_R16G16B16A16_UNORM;
-   case 96: return ISL_FORMAT_R32G32B32_UINT;
-   case 128:return ISL_FORMAT_R32G32B32A32_UINT;
+   if (ISL_DEV_GEN(isl_dev) >= 9) {
+      switch (bpb) {
+      case 8:  return ISL_FORMAT_R8_UINT;
+      case 16: return ISL_FORMAT_R8G8_UINT;
+      case 24: return ISL_FORMAT_R8G8B8_UINT;
+      case 32: return ISL_FORMAT_R8G8B8A8_UINT;
+      case 48: return ISL_FORMAT_R16G16B16_UINT;
+      case 64: return ISL_FORMAT_R16G16B16A16_UINT;
+      case 96: return ISL_FORMAT_R32G32B32_UINT;
+      case 128:return ISL_FORMAT_R32G32B32A32_UINT;
+      default:
+         unreachable("Unknown format bpb");
+      }
+   } else {
+      switch (bpb) {
+      case 8:  return ISL_FORMAT_R8_UINT;
+      case 16: return ISL_FORMAT_R8G8_UINT;
+      case 24: return ISL_FORMAT_R8G8B8_UNORM;
+      case 32: return ISL_FORMAT_R8G8B8A8_UNORM;
+      case 48: return ISL_FORMAT_R16G16B16_UNORM;
+      case 64: return ISL_FORMAT_R16G16B16A16_UNORM;
+      case 96: return ISL_FORMAT_R32G32B32_UINT;
+      case 128:return ISL_FORMAT_R32G32B32A32_UINT;
+      default:
+         unreachable("Unknown format bpb");
+      }
+   }
+}
+
+/** Returns a UINT format that is CCS-compatible with the given format
+ *
+ * The PRM's say absolutely nothing about how render compression works.  The
+ * only thing they provide is a list of formats on which it is and is not
+ * supported.  Empirical testing indicates that the compression is only based
+ * on the bit-layout of the format and the channel encoding doesn't matter.
+ * So, while texture views don't work in general, you can create a view as
+ * long as the bit-layout of the formats are the same.
+ *
+ * Fortunately, for every render compression capable format, the UINT format
+ * with the same bit layout also supports render compression.  This means that
+ * we only need to handle UINT formats for copy operations.  In order to do
+ * copies between formats with different bit layouts, we attach both with a
+ * UINT format and use bit_cast_color() to generate code to do the bit-cast
+ * operation between the two bit layouts.
+ */
+static enum isl_format
+get_ccs_compatible_uint_format(const struct isl_format_layout *fmtl)
+{
+   switch (fmtl->format) {
+   case ISL_FORMAT_R32G32B32A32_FLOAT:
+   case ISL_FORMAT_R32G32B32A32_SINT:
+   case ISL_FORMAT_R32G32B32A32_UINT:
+   case ISL_FORMAT_R32G32B32A32_UNORM:
+   case ISL_FORMAT_R32G32B32A32_SNORM:
+      return ISL_FORMAT_R32G32B32A32_UINT;
+
+   case ISL_FORMAT_R16G16B16A16_UNORM:
+   case ISL_FORMAT_R16G16B16A16_SNORM:
+   case ISL_FORMAT_R16G16B16A16_SINT:
+   case ISL_FORMAT_R16G16B16A16_UINT:
+   case ISL_FORMAT_R16G16B16A16_FLOAT:
+   case ISL_FORMAT_R16G16B16X16_UNORM:
+   case ISL_FORMAT_R16G16B16X16_FLOAT:
+      return ISL_FORMAT_R16G16B16A16_UINT;
+
+   case ISL_FORMAT_R32G32_FLOAT:
+   case ISL_FORMAT_R32G32_SINT:
+   case ISL_FORMAT_R32G32_UINT:
+   case ISL_FORMAT_R32G32_UNORM:
+   case ISL_FORMAT_R32G32_SNORM:
+      return ISL_FORMAT_R32G32_UINT;
+
+   case ISL_FORMAT_B8G8R8A8_UNORM:
+   case ISL_FORMAT_B8G8R8A8_UNORM_SRGB:
+   case ISL_FORMAT_R8G8B8A8_UNORM:
+   case ISL_FORMAT_R8G8B8A8_UNORM_SRGB:
+   case ISL_FORMAT_R8G8B8A8_SNORM:
+   case ISL_FORMAT_R8G8B8A8_SINT:
+   case ISL_FORMAT_R8G8B8A8_UINT:
+   case ISL_FORMAT_B8G8R8X8_UNORM:
+   case ISL_FORMAT_B8G8R8X8_UNORM_SRGB:
+   case ISL_FORMAT_R8G8B8X8_UNORM:
+   case ISL_FORMAT_R8G8B8X8_UNORM_SRGB:
+      return ISL_FORMAT_R8G8B8A8_UINT;
+
+   case ISL_FORMAT_R16G16_UNORM:
+   case ISL_FORMAT_R16G16_SNORM:
+   case ISL_FORMAT_R16G16_SINT:
+   case ISL_FORMAT_R16G16_UINT:
+   case ISL_FORMAT_R16G16_FLOAT:
+      return ISL_FORMAT_R16G16_UINT;
+
+   case ISL_FORMAT_R32_SINT:
+   case ISL_FORMAT_R32_UINT:
+   case ISL_FORMAT_R32_FLOAT:
+   case ISL_FORMAT_R32_UNORM:
+   case ISL_FORMAT_R32_SNORM:
+      return ISL_FORMAT_R32_UINT;
+
    default:
-      unreachable("Unknown format bpb");
+      unreachable("Not a compressible format");
    }
 }
 
@@ -1795,7 +1942,7 @@ surf_convert_to_uncompressed(const struct isl_device *isl_dev,
    info->tile_y_sa /= fmtl->bh;
 
    /* It's now an uncompressed surface so we need an uncompressed format */
-   info->surf.format = get_copy_format_for_bpb(fmtl->bpb);
+   info->surf.format = get_copy_format_for_bpb(isl_dev, fmtl->bpb);
 }
 
 static void
@@ -1815,8 +1962,14 @@ surf_fake_rgb_with_red(const struct isl_device *isl_dev,
    case ISL_FORMAT_R8G8B8_UNORM:
       red_format = ISL_FORMAT_R8_UNORM;
       break;
+   case ISL_FORMAT_R8G8B8_UINT:
+      red_format = ISL_FORMAT_R8_UINT;
+      break;
    case ISL_FORMAT_R16G16B16_UNORM:
       red_format = ISL_FORMAT_R16_UNORM;
+      break;
+   case ISL_FORMAT_R16G16B16_UINT:
+      red_format = ISL_FORMAT_R16_UINT;
       break;
    case ISL_FORMAT_R32G32B32_UINT:
       red_format = ISL_FORMAT_R32_UINT;
@@ -1842,6 +1995,7 @@ blorp_copy(struct blorp_batch *batch,
            uint32_t dst_x, uint32_t dst_y,
            uint32_t src_width, uint32_t src_height)
 {
+   const struct isl_device *isl_dev = batch->blorp->isl_dev;
    struct blorp_params params;
 
    if (src_width == 0 || src_height == 0)
@@ -1853,22 +2007,56 @@ blorp_copy(struct blorp_batch *batch,
    brw_blorp_surface_info_init(batch->blorp, &params.dst, dst_surf, dst_level,
                                dst_layer, ISL_FORMAT_UNSUPPORTED, true);
 
-   struct brw_blorp_blit_prog_key wm_prog_key;
-   memset(&wm_prog_key, 0, sizeof(wm_prog_key));
+   struct brw_blorp_blit_prog_key wm_prog_key = {
+      .shader_type = BLORP_SHADER_TYPE_BLIT
+   };
 
    const struct isl_format_layout *src_fmtl =
       isl_format_get_layout(params.src.surf.format);
    const struct isl_format_layout *dst_fmtl =
       isl_format_get_layout(params.dst.surf.format);
 
-   params.src.view.format = get_copy_format_for_bpb(src_fmtl->bpb);
+   assert(params.src.aux_usage == ISL_AUX_USAGE_NONE ||
+          params.src.aux_usage == ISL_AUX_USAGE_MCS ||
+          params.src.aux_usage == ISL_AUX_USAGE_CCS_E);
+   assert(params.dst.aux_usage == ISL_AUX_USAGE_NONE ||
+          params.dst.aux_usage == ISL_AUX_USAGE_MCS ||
+          params.dst.aux_usage == ISL_AUX_USAGE_CCS_E);
+
+   if (params.dst.aux_usage == ISL_AUX_USAGE_CCS_E) {
+      params.dst.view.format = get_ccs_compatible_uint_format(dst_fmtl);
+      if (params.src.aux_usage == ISL_AUX_USAGE_CCS_E) {
+         params.src.view.format = get_ccs_compatible_uint_format(src_fmtl);
+      } else if (src_fmtl->bpb == dst_fmtl->bpb) {
+         params.src.view.format = params.dst.view.format;
+      } else {
+         params.src.view.format =
+            get_copy_format_for_bpb(isl_dev, src_fmtl->bpb);
+      }
+   } else if (params.src.aux_usage == ISL_AUX_USAGE_CCS_E) {
+      params.src.view.format = get_ccs_compatible_uint_format(src_fmtl);
+      if (src_fmtl->bpb == dst_fmtl->bpb) {
+         params.dst.view.format = params.src.view.format;
+      } else {
+         params.dst.view.format =
+            get_copy_format_for_bpb(isl_dev, dst_fmtl->bpb);
+      }
+   } else {
+      params.dst.view.format = get_copy_format_for_bpb(isl_dev, dst_fmtl->bpb);
+      params.src.view.format = get_copy_format_for_bpb(isl_dev, src_fmtl->bpb);
+   }
+
+   wm_prog_key.src_bpc =
+      isl_format_get_layout(params.src.view.format)->channels.r.bits;
+   wm_prog_key.dst_bpc =
+      isl_format_get_layout(params.dst.view.format)->channels.r.bits;
+
    if (src_fmtl->bw > 1 || src_fmtl->bh > 1) {
       surf_convert_to_uncompressed(batch->blorp->isl_dev, &params.src,
                                    &src_x, &src_y, &src_width, &src_height);
       wm_prog_key.need_src_offset = true;
    }
 
-   params.dst.view.format = get_copy_format_for_bpb(dst_fmtl->bpb);
    if (dst_fmtl->bw > 1 || dst_fmtl->bh > 1) {
       surf_convert_to_uncompressed(batch->blorp->isl_dev, &params.dst,
                                    &dst_x, &dst_y, NULL, NULL);

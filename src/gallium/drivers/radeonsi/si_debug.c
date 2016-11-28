@@ -233,7 +233,8 @@ static void si_dump_reg(FILE *file, unsigned offset, uint32_t value,
 		}
 	}
 
-	fprintf(file, COLOR_YELLOW "0x%05x" COLOR_RESET " = 0x%08x", offset, value);
+	print_spaces(file, INDENT_PKT);
+	fprintf(file, COLOR_YELLOW "0x%05x" COLOR_RESET " <- 0x%08x\n", offset, value);
 }
 
 static void si_parse_set_reg_packet(FILE *f, uint32_t *ib, unsigned count,
@@ -366,6 +367,10 @@ static uint32_t *si_parse_packet3(FILE *f, uint32_t *ib, int *num_dw,
 		si_dump_reg(f, R_3F0_IB_BASE_LO, ib[1], ~0);
 		si_dump_reg(f, R_3F1_IB_BASE_HI, ib[2], ~0);
 		si_dump_reg(f, R_3F2_CONTROL, ib[3], ~0);
+		break;
+	case PKT3_CLEAR_STATE:
+	case PKT3_INCREMENT_DE_COUNTER:
+	case PKT3_PFP_SYNC_ME:
 		break;
 	case PKT3_NOP:
 		if (ib[0] == 0xffff1000) {

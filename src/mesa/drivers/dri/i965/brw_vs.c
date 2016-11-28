@@ -122,8 +122,7 @@ brw_codegen_vs_prog(struct brw_context *brw,
     */
    int param_count = vp->program.nir->num_uniforms / 4;
 
-   if (vs)
-      prog_data.base.base.nr_image_params = vs->base.NumImages;
+   prog_data.base.base.nr_image_params = vp->program.info.num_images;
 
    /* vec4_visitor::setup_uniform_clipplane_values() also uploads user clip
     * planes as uniforms.
@@ -151,14 +150,11 @@ brw_codegen_vs_prog(struct brw_context *brw,
    uint64_t outputs_written =
       brw_vs_outputs_written(brw, key, vp->program.info.outputs_written);
    prog_data.inputs_read = vp->program.info.inputs_read;
+   prog_data.double_inputs_read = vp->program.info.double_inputs_read;
 
    if (key->copy_edgeflag) {
       prog_data.inputs_read |= VERT_BIT_EDGEFLAG;
    }
-
-   prog_data.base.cull_distance_mask =
-      ((1 << vp->program.CullDistanceArraySize) - 1) <<
-      vp->program.ClipDistanceArraySize;
 
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
@@ -177,7 +173,8 @@ brw_codegen_vs_prog(struct brw_context *brw,
    }
 
    if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
-      brw_dump_ir("vertex", prog, vs ? &vs->base : NULL, &vp->program);
+      if (!prog)
+         brw_dump_arb_asm("vertex", &vp->program);
 
       fprintf(stderr, "VS Output ");
       brw_print_vue_map(stderr, &prog_data.base.vue_map);
@@ -197,8 +194,8 @@ brw_codegen_vs_prog(struct brw_context *brw,
                             st_index, &program_size, &error_str);
    if (program == NULL) {
       if (prog) {
-         prog->LinkStatus = false;
-         ralloc_strcat(&prog->InfoLog, error_str);
+         prog->data->LinkStatus = false;
+         ralloc_strcat(&prog->data->InfoLog, error_str);
       }
 
       _mesa_problem(NULL, "Failed to compile vertex shader: %s\n", error_str);

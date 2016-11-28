@@ -127,10 +127,15 @@ brw_math_function(enum opcode op)
    }
 }
 
-uint32_t
-brw_texture_offset(int *offsets, unsigned num_components)
+bool
+brw_texture_offset(int *offsets, unsigned num_components, uint32_t *offset_bits)
 {
-   if (!offsets) return 0;  /* nonconstant offset; caller will handle it. */
+   if (!offsets) return false;  /* nonconstant offset; caller will handle it. */
+
+   /* offset out of bounds; caller will handle it. */
+   for (unsigned i = 0; i < num_components; i++)
+      if (offsets[i] > 7 || offsets[i] < -8)
+         return false;
 
    /* Combine all three offsets into a single unsigned dword:
     *
@@ -138,12 +143,12 @@ brw_texture_offset(int *offsets, unsigned num_components)
     *    bits  7:4 - V Offset (Y component)
     *    bits  3:0 - R Offset (Z component)
     */
-   unsigned offset_bits = 0;
+   *offset_bits = 0;
    for (unsigned i = 0; i < num_components; i++) {
       const unsigned shift = 4 * (2 - i);
-      offset_bits |= (offsets[i] << shift) & (0xF << shift);
+      *offset_bits |= (offsets[i] << shift) & (0xF << shift);
    }
-   return offset_bits;
+   return true;
 }
 
 const char *
@@ -1224,16 +1229,16 @@ brw_assign_common_binding_table_offsets(gl_shader_stage stage,
       stage_prog_data->binding_table.gather_texture_start = 0xd0d0d0d0;
    }
 
-   if (shader && shader->NumAtomicBuffers) {
+   if (prog->info.num_abos) {
       stage_prog_data->binding_table.abo_start = next_binding_table_offset;
-      next_binding_table_offset += shader->NumAtomicBuffers;
+      next_binding_table_offset += prog->info.num_abos;
    } else {
       stage_prog_data->binding_table.abo_start = 0xd0d0d0d0;
    }
 
-   if (shader && shader->NumImages) {
+   if (prog->info.num_images) {
       stage_prog_data->binding_table.image_start = next_binding_table_offset;
-      next_binding_table_offset += shader->NumImages;
+      next_binding_table_offset += prog->info.num_images;
    } else {
       stage_prog_data->binding_table.image_start = 0xd0d0d0d0;
    }
@@ -1355,8 +1360,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
    nir->info->patch_inputs_read = key->patch_inputs_read;
 
    struct brw_vue_map input_vue_map;
-   brw_compute_tess_vue_map(&input_vue_map,
-                            nir->info->inputs_read & ~VARYING_BIT_PRIMITIVE_ID,
+   brw_compute_tess_vue_map(&input_vue_map, nir->info->inputs_read,
                             nir->info->patch_inputs_read);
 
    nir = brw_nir_apply_sampler_key(nir, devinfo, &key->tex, is_scalar);
@@ -1376,6 +1380,12 @@ brw_compile_tes(const struct brw_compiler *compiler,
          *error_str = ralloc_strdup(mem_ctx, "DS outputs exceed maximum size");
       return NULL;
    }
+
+   prog_data->base.clip_distance_mask =
+      ((1 << nir->info->clip_distance_array_size) - 1);
+   prog_data->base.cull_distance_mask =
+      ((1 << nir->info->cull_distance_array_size) - 1) <<
+      nir->info->clip_distance_array_size;
 
    /* URB entry sizes are stored as a multiple of 64 bytes. */
    prog_data->base.urb_entry_size = ALIGN(output_size_bytes, 64) / 64;

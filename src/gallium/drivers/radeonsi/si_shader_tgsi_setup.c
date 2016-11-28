@@ -22,6 +22,7 @@
  */
 
 #include "si_shader_internal.h"
+#include "si_pipe.h"
 #include "radeon/radeon_elf_util.h"
 
 #include "gallivm/lp_bld_const.h"
@@ -38,6 +39,7 @@
 #include "util/u_debug.h"
 
 #include <stdio.h>
+#include <llvm-c/Transforms/IPO.h>
 #include <llvm-c/Transforms/Scalar.h>
 
 /* Data for if/else/endif and bgnloop/endloop control flow structures.
@@ -1221,7 +1223,10 @@ static void emit_immediate(struct lp_build_tgsi_context *bld_base,
 	ctx->soa.num_immediates++;
 }
 
-void si_llvm_context_init(struct si_shader_context *ctx, const char *triple,
+void si_llvm_context_init(struct si_shader_context *ctx,
+			  struct si_screen *sscreen,
+			  struct si_shader *shader,
+			  LLVMTargetMachineRef tm,
 			  const struct tgsi_shader_info *info,
 			  const struct tgsi_token *tokens)
 {
@@ -1232,13 +1237,20 @@ void si_llvm_context_init(struct si_shader_context *ctx, const char *triple,
 	 * This should be enough for us to be able to pass our gallivm struct to the
 	 * helper functions in the gallivm module.
 	 */
-	memset(&ctx->gallivm, 0, sizeof (ctx->gallivm));
-	memset(&ctx->soa, 0, sizeof(ctx->soa));
+	memset(ctx, 0, sizeof(*ctx));
+	ctx->shader = shader;
+	ctx->screen = sscreen;
+	ctx->tm = tm;
+	ctx->type = info ? info->processor : -1;
+
 	ctx->gallivm.context = LLVMContextCreate();
 	ctx->gallivm.module = LLVMModuleCreateWithNameInContext("tgsi",
 						ctx->gallivm.context);
-	LLVMSetTarget(ctx->gallivm.module, triple);
-	ctx->gallivm.builder = LLVMCreateBuilderInContext(ctx->gallivm.context);
+	LLVMSetTarget(ctx->gallivm.module, "amdgcn--");
+
+	bool unsafe_fpmath = (sscreen->b.debug_flags & DBG_UNSAFE_MATH) != 0;
+	ctx->gallivm.builder = lp_create_builder(ctx->gallivm.context,
+						 unsafe_fpmath);
 
 	struct lp_build_tgsi_context *bld_base = &ctx->soa.bld_base;
 
@@ -1300,9 +1312,25 @@ void si_llvm_context_init(struct si_shader_context *ctx, const char *triple,
 	bld_base->op_actions[TGSI_OPCODE_ELSE].emit = else_emit;
 	bld_base->op_actions[TGSI_OPCODE_ENDIF].emit = endif_emit;
 	bld_base->op_actions[TGSI_OPCODE_ENDLOOP].emit = endloop_emit;
+
+	si_shader_context_init_alu(&ctx->soa.bld_base);
+
+	ctx->voidt = LLVMVoidTypeInContext(ctx->gallivm.context);
+	ctx->i1 = LLVMInt1TypeInContext(ctx->gallivm.context);
+	ctx->i8 = LLVMInt8TypeInContext(ctx->gallivm.context);
+	ctx->i32 = LLVMInt32TypeInContext(ctx->gallivm.context);
+	ctx->i64 = LLVMInt64TypeInContext(ctx->gallivm.context);
+	ctx->i128 = LLVMIntTypeInContext(ctx->gallivm.context, 128);
+	ctx->f32 = LLVMFloatTypeInContext(ctx->gallivm.context);
+	ctx->v16i8 = LLVMVectorType(ctx->i8, 16);
+	ctx->v2i32 = LLVMVectorType(ctx->i32, 2);
+	ctx->v4i32 = LLVMVectorType(ctx->i32, 4);
+	ctx->v4f32 = LLVMVectorType(ctx->f32, 4);
+	ctx->v8i32 = LLVMVectorType(ctx->i32, 8);
 }
 
 void si_llvm_create_func(struct si_shader_context *ctx,
+			 const char *name,
 			 LLVMTypeRef *return_types, unsigned num_return_elems,
 			 LLVMTypeRef *ParamTypes, unsigned ParamCount)
 {
@@ -1319,7 +1347,7 @@ void si_llvm_create_func(struct si_shader_context *ctx,
 	/* Setup the function */
 	ctx->return_type = ret_type;
 	main_fn_type = LLVMFunctionType(ret_type, ParamTypes, ParamCount, 0);
-	ctx->main_fn = LLVMAddFunction(ctx->gallivm.module, "main", main_fn_type);
+	ctx->main_fn = LLVMAddFunction(ctx->gallivm.module, name, main_fn_type);
 	main_fn_body = LLVMAppendBasicBlockInContext(ctx->gallivm.context,
 			ctx->main_fn, "main_body");
 	LLVMPositionBuilderAtEnd(ctx->gallivm.builder, main_fn_body);
@@ -1333,14 +1361,15 @@ void si_llvm_finalize_module(struct si_shader_context *ctx,
 	LLVMTargetLibraryInfoRef target_library_info;
 
 	/* Create the pass manager */
-	gallivm->passmgr = LLVMCreateFunctionPassManagerForModule(
-							gallivm->module);
+	gallivm->passmgr = LLVMCreatePassManager();
 
 	target_library_info = gallivm_create_target_library_info(triple);
 	LLVMAddTargetLibraryInfo(target_library_info, gallivm->passmgr);
 
 	if (run_verifier)
 		LLVMAddVerifierPass(gallivm->passmgr);
+
+	LLVMAddAlwaysInlinerPass(gallivm->passmgr);
 
 	/* This pass should eliminate all the load and store instructions */
 	LLVMAddPromoteMemoryToRegisterPass(gallivm->passmgr);
@@ -1353,9 +1382,7 @@ void si_llvm_finalize_module(struct si_shader_context *ctx,
 	LLVMAddInstructionCombiningPass(gallivm->passmgr);
 
 	/* Run the pass */
-	LLVMInitializeFunctionPassManager(gallivm->passmgr);
-	LLVMRunFunctionPassManager(gallivm->passmgr, ctx->main_fn);
-	LLVMFinalizeFunctionPassManager(gallivm->passmgr);
+	LLVMRunPassManager(gallivm->passmgr, ctx->gallivm.module);
 
 	LLVMDisposeBuilder(gallivm->builder);
 	LLVMDisposePassManager(gallivm->passmgr);

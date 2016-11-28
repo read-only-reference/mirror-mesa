@@ -42,7 +42,8 @@ struct si_compute {
 	struct si_shader shader;
 
 	struct pipe_resource *global_buffers[MAX_GLOBAL_BUFFERS];
-	bool use_code_object_v2;
+	unsigned use_code_object_v2 : 1;
+	unsigned variable_group_size : 1;
 };
 
 struct dispatch_packet {
@@ -125,6 +126,7 @@ static void *si_create_compute_state(
 		p_atomic_inc(&sscreen->b.num_shaders_created);
 
 		program->shader.selector = &sel;
+		program->shader.is_monolithic = true;
 
 		if (si_shader_create(sscreen, sctx->tm, &program->shader,
 		                     &sctx->b.debug)) {
@@ -147,7 +149,11 @@ static void *si_create_compute_state(
 			   S_00B84C_TGID_Z_EN(1) | S_00B84C_TIDIG_COMP_CNT(2) |
 			   S_00B84C_LDS_SIZE(shader->config.lds_size);
 
+		program->variable_group_size =
+			sel.info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0;
+
 		FREE(sel.tokens);
+		program->shader.selector = NULL;
 	} else {
 		const struct pipe_llvm_program_header *header;
 		const char *code;
@@ -165,7 +171,11 @@ static void *si_create_compute_state(
 		}
 		si_shader_dump(sctx->screen, &program->shader, &sctx->b.debug,
 			       PIPE_SHADER_COMPUTE, stderr);
-		si_shader_binary_upload(sctx->screen, &program->shader);
+		if (si_shader_binary_upload(sctx->screen, &program->shader) < 0) {
+			fprintf(stderr, "LLVM failed to upload shader\n");
+			FREE(program);
+			return NULL;
+		}
 	}
 
 	return program;
@@ -607,14 +617,12 @@ static void si_setup_tgsi_grid(struct si_context *sctx,
 		}
 	} else {
 		struct si_compute *program = sctx->cs_shader_state.program;
-		bool variable_group_size =
-			program->shader.selector->info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0;
 
-		radeon_set_sh_reg_seq(cs, grid_size_reg, variable_group_size ? 6 : 3);
+		radeon_set_sh_reg_seq(cs, grid_size_reg, program->variable_group_size ? 6 : 3);
 		radeon_emit(cs, info->grid[0]);
 		radeon_emit(cs, info->grid[1]);
 		radeon_emit(cs, info->grid[2]);
-		if (variable_group_size) {
+		if (program->variable_group_size) {
 			radeon_emit(cs, info->block[0]);
 			radeon_emit(cs, info->block[1]);
 			radeon_emit(cs, info->block[2]);

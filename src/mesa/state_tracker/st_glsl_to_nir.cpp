@@ -367,15 +367,10 @@ st_nir_get_mesa_program(struct gl_context *ctx,
                         struct gl_linked_shader *shader)
 {
    struct gl_program *prog;
-   GLenum target = _mesa_shader_stage_to_program(shader->Stage);
 
    validate_ir_tree(shader->ir);
 
-   prog = ctx->Driver.NewProgram(ctx, target, shader_program->Name);
-   if (!prog)
-      return NULL;
-
-   _mesa_reference_program(ctx, &shader->Program, prog);
+   prog = shader->Program;
 
    prog->Parameters = _mesa_new_parameter_list();
 
@@ -416,9 +411,6 @@ st_nir_get_mesa_program(struct gl_context *ctx,
       _mesa_print_ir(_mesa_get_log_file(), shader->ir, NULL);
       _mesa_log("\n\n");
    }
-
-   prog->Instructions = NULL;
-   prog->NumInstructions = 0;
 
    prog->SamplersUsed = shader->active_samplers;
    prog->ShadowSamplers = shader->shadow_samplers;

@@ -43,9 +43,6 @@ noinst_LTLIBRARIES = $(PER_GEN_LIBS)
 # The gallium includes are for the util/u_math.h include from main/macros.h
 
 AM_CPPFLAGS = \
-	$(INTEL_CFLAGS) \
-	$(VALGRIND_CFLAGS) \
-	$(DEFINES) \
 	-I$(top_srcdir)/include \
 	-I$(top_builddir)/src \
 	-I$(top_srcdir)/src \
@@ -61,6 +58,17 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/gallium/include \
 	-I$(top_builddir)/src/intel \
 	-I$(top_srcdir)/src/intel
+
+if HAVE_PLATFORM_WAYLAND
+AM_CPPFLAGS += \
+	-I$(top_builddir)/src/egl/wayland/wayland-drm \
+	-I$(top_srcdir)/src/egl/wayland/wayland-drm
+endif
+
+AM_CPPFLAGS += \
+	$(INTEL_CFLAGS) \
+	$(VALGRIND_CFLAGS) \
+	$(DEFINES)
 
 AM_CFLAGS = \
 	$(VISIBILITY_CFLAGS) \
@@ -100,8 +108,6 @@ endif
 
 if HAVE_PLATFORM_WAYLAND
 AM_CPPFLAGS += \
-	-I$(top_builddir)/src/egl/wayland/wayland-drm \
-	-I$(top_srcdir)/src/egl/wayland/wayland-drm \
 	$(WAYLAND_CFLAGS) \
 	-DVK_USE_PLATFORM_WAYLAND_KHR
 
@@ -139,12 +145,6 @@ anv_entrypoints.h : anv_entrypoints_gen.py $(vulkan_include_HEADERS)
 anv_entrypoints.c : anv_entrypoints_gen.py $(vulkan_include_HEADERS)
 	$(AM_V_GEN) cat $(vulkan_include_HEADERS) |\
 	$(PYTHON2) $(srcdir)/anv_entrypoints_gen.py code > $@
-
-.PHONY: anv_timestamp.h
-
-anv_timestamp.h:
-	@echo "Updating anv_timestamp.h"
-	$(AM_V_GEN) echo "#define ANV_TIMESTAMP \"$(TIMESTAMP_CMD)\"" > $@
 
 BUILT_SOURCES = $(VULKAN_GENERATED_FILES)
 CLEANFILES = $(BUILT_SOURCES) dev_icd.json intel_icd.@host_cpu@.json

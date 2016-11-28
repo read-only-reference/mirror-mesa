@@ -53,6 +53,7 @@
 #include "a2xx/fd2_screen.h"
 #include "a3xx/fd3_screen.h"
 #include "a4xx/fd4_screen.h"
+#include "a5xx/fd5_screen.h"
 
 #include "ir3/ir3_nir.h"
 
@@ -288,6 +289,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
 	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
 	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
+	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -499,6 +501,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return 32;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
 		return 0;
 	}
 	debug_printf("unknown shader param %d\n", param);
@@ -665,9 +668,18 @@ fd_screen_create(struct fd_device *dev)
 	case 430:
 		fd4_screen_init(pscreen);
 		break;
+	case 530:
+		fd5_screen_init(pscreen);
+		break;
 	default:
 		debug_printf("unsupported GPU: a%03d\n", screen->gpu_id);
 		goto fail;
+	}
+
+	if (screen->gpu_id >= 500) {
+		screen->gmem_alignment = 64;
+	} else {
+		screen->gmem_alignment = 32;
 	}
 
 	/* NOTE: don't enable reordering on a2xx, since completely untested.

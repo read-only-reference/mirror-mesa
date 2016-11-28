@@ -149,11 +149,9 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
       shader->info->label = ralloc_strdup(shader, shader_prog->Label);
    shader->info->num_textures = util_last_bit(sh->Program->SamplersUsed);
    shader->info->num_ubos = sh->NumUniformBlocks;
-   shader->info->num_abos = shader_prog->NumAtomicBuffers;
    shader->info->num_ssbos = sh->NumShaderStorageBlocks;
-   shader->info->num_images = sh->NumImages;
-   shader->info->uses_clip_distance_out =
-      sh->Program->ClipDistanceArraySize != 0;
+   shader->info->clip_distance_array_size = sh->Program->ClipDistanceArraySize;
+   shader->info->cull_distance_array_size = sh->Program->CullDistanceArraySize;
    shader->info->separate_shader = shader_prog->SeparateShader;
    shader->info->has_transform_feedback_varyings =
       shader_prog->TransformFeedback.NumVarying > 0;
@@ -331,6 +329,7 @@ nir_visitor::visit(ir_variable *ir)
    var->data.explicit_index = ir->data.explicit_index;
    var->data.explicit_binding = ir->data.explicit_binding;
    var->data.has_initializer = ir->data.has_initializer;
+   var->data.compact = false;
    var->data.location_frac = ir->data.location_frac;
 
    switch (ir->data.depth_layout) {

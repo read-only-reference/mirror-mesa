@@ -64,6 +64,7 @@ struct fd_screen {
 	uint32_t chip_id;        /* coreid:8 majorrev:8 minorrev:8 patch:8 */
 	uint32_t max_freq;
 	uint32_t max_rts;        /* max # of render targets */
+	uint32_t gmem_alignment;
 	bool has_timestamp;
 
 	void *compiler;          /* currently unused for a2xx */
@@ -111,6 +112,12 @@ static inline boolean
 is_a4xx(struct fd_screen *screen)
 {
 	return (screen->gpu_id >= 400) && (screen->gpu_id < 500);
+}
+
+static inline boolean
+is_a5xx(struct fd_screen *screen)
+{
+	return (screen->gpu_id >= 500) && (screen->gpu_id < 600);
 }
 
 /* is it using the ir3 compiler (shader isa introduced with a3xx)? */

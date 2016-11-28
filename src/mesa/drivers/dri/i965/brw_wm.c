@@ -107,8 +107,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
     * by the state cache.
     */
    int param_count = fp->program.nir->num_uniforms / 4;
-   if (fs)
-      prog_data.base.nr_image_params = fs->base.NumImages;
+   prog_data.base.nr_image_params = fp->program.info.num_images;
    /* The backend also sometimes adds params for texture size. */
    param_count += 2 * ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits;
    prog_data.base.param =
@@ -126,6 +125,9 @@ brw_codegen_wm_prog(struct brw_context *brw,
    } else {
       brw_nir_setup_arb_uniforms(fp->program.nir, &fp->program,
                                  &prog_data.base);
+
+      if (unlikely(INTEL_DEBUG & DEBUG_WM))
+         brw_dump_arb_asm("fragment", &fp->program);
    }
 
    if (unlikely(brw->perf_debug)) {
@@ -133,9 +135,6 @@ brw_codegen_wm_prog(struct brw_context *brw,
                     drm_intel_bo_busy(brw->batch.last_bo));
       start_time = get_time();
    }
-
-   if (unlikely(INTEL_DEBUG & DEBUG_WM))
-      brw_dump_ir("fragment", prog, fs ? &fs->base : NULL, &fp->program);
 
    int st_index8 = -1, st_index16 = -1;
    if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
@@ -152,8 +151,8 @@ brw_codegen_wm_prog(struct brw_context *brw,
 
    if (program == NULL) {
       if (prog) {
-         prog->LinkStatus = false;
-         ralloc_strcat(&prog->InfoLog, error_str);
+         prog->data->LinkStatus = false;
+         ralloc_strcat(&prog->data->InfoLog, error_str);
       }
 
       _mesa_problem(NULL, "Failed to compile fragment shader: %s\n", error_str);
@@ -177,7 +176,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
                            prog_data.base.total_scratch,
                            devinfo->max_wm_threads);
 
-   if (unlikely(INTEL_DEBUG & DEBUG_WM))
+   if (unlikely((INTEL_DEBUG & DEBUG_WM) && !prog))
       fprintf(stderr, "\n");
 
    brw_upload_cache(&brw->cache, BRW_CACHE_FS_PROG,
@@ -461,7 +460,7 @@ brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
       if (ctx->Depth.Test)
          lookup |= IZ_DEPTH_TEST_ENABLE_BIT;
 
-      if (ctx->Depth.Test && ctx->Depth.Mask) /* ?? */
+      if (brw_depth_writes_enabled(brw))
          lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
 
       /* _NEW_STENCIL | _NEW_BUFFERS */
@@ -528,7 +527,8 @@ brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
 
    /* _NEW_MULTISAMPLE, _NEW_COLOR, _NEW_BUFFERS */
    key->replicate_alpha = ctx->DrawBuffer->_NumColorDrawBuffers > 1 &&
-      (ctx->Multisample.SampleAlphaToCoverage || ctx->Color.AlphaEnabled);
+      (_mesa_is_alpha_test_enabled(ctx) ||
+       _mesa_is_alpha_to_coverage_enabled(ctx));
 
    /* _NEW_BUFFERS _NEW_MULTISAMPLE */
    /* Ignore sample qualifier while computing this flag. */
@@ -546,7 +546,6 @@ brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
                                          BRW_FS_VARYING_INPUT_MASK) > 16) {
       key->input_slots_valid = brw->vue_map_geom_out.slots_valid;
    }
-
 
    /* _NEW_COLOR | _NEW_BUFFERS */
    /* Pre-gen6, the hardware alpha test always used each render

@@ -69,7 +69,7 @@
 
 static uint32_t bin_width(struct fd_screen *screen)
 {
-	if (is_a4xx(screen))
+	if (is_a4xx(screen) || is_a5xx(screen))
 		return 1024;
 	if (is_a3xx(screen))
 		return 992;
@@ -109,7 +109,8 @@ calculate_tiles(struct fd_batch *batch)
 	struct fd_gmem_stateobj *gmem = &ctx->gmem;
 	struct pipe_scissor_state *scissor = &batch->max_scissor;
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
-	uint32_t gmem_size = ctx->screen->gmemsize_bytes;
+	const uint32_t gmem_alignment = ctx->screen->gmem_alignment;
+	const uint32_t gmem_size = ctx->screen->gmemsize_bytes;
 	uint32_t minx, miny, width, height;
 	uint32_t nbins_x = 1, nbins_y = 1;
 	uint32_t bin_w, bin_h;
@@ -146,21 +147,22 @@ calculate_tiles(struct fd_batch *batch)
 		width = pfb->width;
 		height = pfb->height;
 	} else {
-		minx = scissor->minx & ~31; /* round down to multiple of 32 */
-		miny = scissor->miny & ~31;
+		/* round down to multiple of alignment: */
+		minx = scissor->minx & ~(gmem_alignment - 1);
+		miny = scissor->miny & ~(gmem_alignment - 1);
 		width = scissor->maxx - minx;
 		height = scissor->maxy - miny;
 	}
 
-	bin_w = align(width, 32);
-	bin_h = align(height, 32);
+	bin_w = align(width, gmem_alignment);
+	bin_h = align(height, gmem_alignment);
 
 	/* first, find a bin width that satisfies the maximum width
 	 * restrictions:
 	 */
 	while (bin_w > max_width) {
 		nbins_x++;
-		bin_w = align(width / nbins_x, 32);
+		bin_w = align(width / nbins_x, gmem_alignment);
 	}
 
 	if (fd_mesa_debug & FD_DBG_MSGS) {
@@ -177,10 +179,10 @@ calculate_tiles(struct fd_batch *batch)
 	while (total_size(cbuf_cpp, zsbuf_cpp, bin_w, bin_h, gmem) > gmem_size) {
 		if (bin_w > bin_h) {
 			nbins_x++;
-			bin_w = align(width / nbins_x, 32);
+			bin_w = align(width / nbins_x, gmem_alignment);
 		} else {
 			nbins_y++;
-			bin_h = align(height / nbins_y, 32);
+			bin_h = align(height / nbins_y, gmem_alignment);
 		}
 	}
 
@@ -337,6 +339,9 @@ render_tiles(struct fd_batch *batch)
 		/* emit gmem2mem to transfer tile back to system memory: */
 		ctx->emit_tile_gmem2mem(batch, tile);
 	}
+
+	if (ctx->emit_tile_fini)
+		ctx->emit_tile_fini(batch);
 }
 
 static void

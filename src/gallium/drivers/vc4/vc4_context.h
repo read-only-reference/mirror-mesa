@@ -39,6 +39,13 @@
 #include "vc4_cl.h"
 #include "vc4_qir.h"
 
+#ifndef DRM_VC4_PARAM_SUPPORTS_ETC1
+#define DRM_VC4_PARAM_SUPPORTS_ETC1		4
+#endif
+#ifndef DRM_VC4_PARAM_SUPPORTS_THREADED_FS
+#define DRM_VC4_PARAM_SUPPORTS_THREADED_FS	5
+#endif
+
 #ifdef USE_VC4_SIMULATOR
 #define using_vc4_simulator true
 #else
@@ -156,6 +163,14 @@ struct vc4_compiled_shader {
         uint32_t color_inputs;
 
         bool disable_early_z;
+
+        /* Set if the compile failed, likely due to register allocation
+         * failure.  In this case, we have no shader to run and should not try
+         * to do any draws.
+         */
+        bool failed;
+
+        bool fs_threaded;
 
         uint8_t num_inputs;
 
@@ -312,11 +327,12 @@ struct vc4_context {
         uint64_t next_compiled_program_id;
 
         struct ra_regs *regs;
-        unsigned int reg_class_any;
-        unsigned int reg_class_a_or_b_or_acc;
+        unsigned int reg_class_any[2];
+        unsigned int reg_class_a_or_b[2];
+        unsigned int reg_class_a_or_b_or_acc[2];
         unsigned int reg_class_r0_r3;
-        unsigned int reg_class_r4_or_a;
-        unsigned int reg_class_a;
+        unsigned int reg_class_r4_or_a[2];
+        unsigned int reg_class_a[2];
 
         uint8_t prim_mode;
 
@@ -462,7 +478,7 @@ void vc4_flush_jobs_reading_resource(struct vc4_context *vc4,
 void vc4_emit_state(struct pipe_context *pctx);
 void vc4_generate_code(struct vc4_context *vc4, struct vc4_compile *c);
 struct qpu_reg *vc4_register_allocate(struct vc4_context *vc4, struct vc4_compile *c);
-void vc4_update_compiled_shaders(struct vc4_context *vc4, uint8_t prim_mode);
+bool vc4_update_compiled_shaders(struct vc4_context *vc4, uint8_t prim_mode);
 
 bool vc4_rt_format_supported(enum pipe_format f);
 bool vc4_rt_format_is_565(enum pipe_format f);

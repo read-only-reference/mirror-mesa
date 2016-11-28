@@ -37,7 +37,7 @@
 
 #include <algorithm>
 
-typedef void(*PFN_CLEAR_TILES)(DRAW_CONTEXT*, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t, DWORD[4], const SWR_RECT& rect);
+typedef void(*PFN_CLEAR_TILES)(DRAW_CONTEXT*, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t, uint32_t, DWORD[4], const SWR_RECT& rect);
 static PFN_CLEAR_TILES sClearTilesTable[NUM_SWR_FORMATS];
 
 //////////////////////////////////////////////////////////////////////////
@@ -73,7 +73,7 @@ void ProcessComputeBE(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t threadGroup
 
     state.pfnCsFunc(GetPrivateState(pDC), &csContext);
 
-    UPDATE_STAT(CsInvocations, state.totalThreadsInGroup);
+    UPDATE_STAT_BE(CsInvocations, state.totalThreadsInGroup);
 
     AR_END(BEDispatch, 1);
 }
@@ -134,7 +134,7 @@ void ClearRasterTile(uint8_t *pTileBuffer, simd16vector &value)
 
 #endif
 template<SWR_FORMAT format>
-INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t macroTile, DWORD clear[4], const SWR_RECT& rect)
+INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, uint32_t macroTile, uint32_t renderTargetArrayIndex, DWORD clear[4], const SWR_RECT& rect)
 {
     // convert clear color to hottile format
     // clear color is in RGBA float/uint32
@@ -204,7 +204,7 @@ INLINE void ClearMacroTile(DRAW_CONTEXT *pDC, SWR_RENDERTARGET_ATTACHMENT rt, ui
     const uint32_t macroTileRowStep = (KNOB_MACROTILE_X_DIM / KNOB_TILE_X_DIM) * rasterTileStep;
     const uint32_t pitch = (FormatTraits<format>::bpp * KNOB_MACROTILE_X_DIM / 8);
 
-    HOTTILE *pHotTile = pDC->pContext->pHotTileMgr->GetHotTile(pDC->pContext, pDC, macroTile, rt, true, numSamples);
+    HOTTILE *pHotTile = pDC->pContext->pHotTileMgr->GetHotTile(pDC->pContext, pDC, macroTile, rt, true, numSamples, renderTargetArrayIndex);
     uint32_t rasterTileStartOffset = (ComputeTileOffset2D< TilingTraits<SWR_TILE_SWRZ, FormatTraits<format>::bpp > >(pitch, clearTile.xmin, clearTile.ymin)) * numSamples;
     uint8_t* pRasterTileRow = pHotTile->pBuffer + rasterTileStartOffset; //(ComputeTileOffset2D< TilingTraits<SWR_TILE_SWRZ, FormatTraits<format>::bpp > >(pitch, x, y)) * numSamples;
 
@@ -237,33 +237,41 @@ void ProcessClearBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, vo
         SWR_MULTISAMPLE_COUNT sampleCount = pDC->pState->state.rastState.sampleCount;
         uint32_t numSamples = GetNumSamples(sampleCount);
 
-        SWR_ASSERT(pClear->flags.bits != 0); // shouldn't be here without a reason.
+        SWR_ASSERT(pClear->attachmentMask != 0); // shouldn't be here without a reason.
 
         AR_BEGIN(BEClear, pDC->drawId);
 
-        if (pClear->flags.mask & SWR_CLEAR_COLOR)
+        if (pClear->attachmentMask & SWR_ATTACHMENT_MASK_COLOR)
         {
-            HOTTILE *pHotTile = pContext->pHotTileMgr->GetHotTile(pContext, pDC, macroTile, SWR_ATTACHMENT_COLOR0, true, numSamples);
-            // All we want to do here is to mark the hot tile as being in a "needs clear" state.
-            pHotTile->clearData[0] = *(DWORD*)&(pClear->clearRTColor[0]);
-            pHotTile->clearData[1] = *(DWORD*)&(pClear->clearRTColor[1]);
-            pHotTile->clearData[2] = *(DWORD*)&(pClear->clearRTColor[2]);
-            pHotTile->clearData[3] = *(DWORD*)&(pClear->clearRTColor[3]);
-            pHotTile->state = HOTTILE_CLEAR;
+            unsigned long rt = 0;
+            uint32_t mask = pClear->attachmentMask & SWR_ATTACHMENT_MASK_COLOR;
+            while (_BitScanForward(&rt, mask))
+            {
+                mask &= ~(1 << rt);
+
+                HOTTILE *pHotTile = pContext->pHotTileMgr->GetHotTile(pContext, pDC, macroTile, (SWR_RENDERTARGET_ATTACHMENT)rt, true, numSamples, pClear->renderTargetArrayIndex);
+
+                // All we want to do here is to mark the hot tile as being in a "needs clear" state.
+                pHotTile->clearData[0] = *(DWORD*)&(pClear->clearRTColor[0]);
+                pHotTile->clearData[1] = *(DWORD*)&(pClear->clearRTColor[1]);
+                pHotTile->clearData[2] = *(DWORD*)&(pClear->clearRTColor[2]);
+                pHotTile->clearData[3] = *(DWORD*)&(pClear->clearRTColor[3]);
+                pHotTile->state = HOTTILE_CLEAR;
+            }
         }
 
-        if (pClear->flags.mask & SWR_CLEAR_DEPTH)
+        if (pClear->attachmentMask & SWR_ATTACHMENT_DEPTH_BIT)
         {
-            HOTTILE *pHotTile = pContext->pHotTileMgr->GetHotTile(pContext, pDC, macroTile, SWR_ATTACHMENT_DEPTH, true, numSamples);
+            HOTTILE *pHotTile = pContext->pHotTileMgr->GetHotTile(pContext, pDC, macroTile, SWR_ATTACHMENT_DEPTH, true, numSamples, pClear->renderTargetArrayIndex);
             pHotTile->clearData[0] = *(DWORD*)&pClear->clearDepth;
             pHotTile->state = HOTTILE_CLEAR;
         }
 
-        if (pClear->flags.mask & SWR_CLEAR_STENCIL)
+        if (pClear->attachmentMask & SWR_ATTACHMENT_STENCIL_BIT)
         {
-            HOTTILE *pHotTile = pContext->pHotTileMgr->GetHotTile(pContext, pDC, macroTile, SWR_ATTACHMENT_STENCIL, true, numSamples);
+            HOTTILE *pHotTile = pContext->pHotTileMgr->GetHotTile(pContext, pDC, macroTile, SWR_ATTACHMENT_STENCIL, true, numSamples, pClear->renderTargetArrayIndex);
 
-            pHotTile->clearData[0] = *(DWORD*)&pClear->clearStencil;
+            pHotTile->clearData[0] = pClear->clearStencil;
             pHotTile->state = HOTTILE_CLEAR;
         }
 
@@ -275,44 +283,44 @@ void ProcessClearBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, vo
         CLEAR_DESC *pClear = (CLEAR_DESC*)pUserData;
         AR_BEGIN(BEClear, pDC->drawId);
 
-        if (pClear->flags.mask & SWR_CLEAR_COLOR)
+        if (pClear->attachmentMask & SWR_ATTACHMENT_MASK_COLOR)
         {
-            /// @todo clear data should come in as RGBA32_FLOAT
             DWORD clearData[4];
-            float clearFloat[4];
-            clearFloat[0] = ((uint8_t*)(&pClear->clearRTColor))[0] / 255.0f;
-            clearFloat[1] = ((uint8_t*)(&pClear->clearRTColor))[1] / 255.0f;
-            clearFloat[2] = ((uint8_t*)(&pClear->clearRTColor))[2] / 255.0f;
-            clearFloat[3] = ((uint8_t*)(&pClear->clearRTColor))[3] / 255.0f;
-            clearData[0] = *(DWORD*)&clearFloat[0];
-            clearData[1] = *(DWORD*)&clearFloat[1];
-            clearData[2] = *(DWORD*)&clearFloat[2];
-            clearData[3] = *(DWORD*)&clearFloat[3];
+            clearData[0] = *(DWORD*)&(pClear->clearRTColor[0]);
+            clearData[1] = *(DWORD*)&(pClear->clearRTColor[1]);
+            clearData[2] = *(DWORD*)&(pClear->clearRTColor[2]);
+            clearData[3] = *(DWORD*)&(pClear->clearRTColor[3]);
 
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[KNOB_COLOR_HOT_TILE_FORMAT];
             SWR_ASSERT(pfnClearTiles != nullptr);
 
-            pfnClearTiles(pDC, SWR_ATTACHMENT_COLOR0, macroTile, clearData, pClear->rect);
+            unsigned long rt = 0;
+            uint32_t mask = pClear->attachmentMask & SWR_ATTACHMENT_MASK_COLOR;
+            while (_BitScanForward(&rt, mask))
+            {
+                mask &= ~(1 << rt);
+
+                pfnClearTiles(pDC, (SWR_RENDERTARGET_ATTACHMENT)rt, macroTile, pClear->renderTargetArrayIndex, clearData, pClear->rect);
+            }
         }
 
-        if (pClear->flags.mask & SWR_CLEAR_DEPTH)
+        if (pClear->attachmentMask & SWR_ATTACHMENT_DEPTH_BIT)
         {
             DWORD clearData[4];
             clearData[0] = *(DWORD*)&pClear->clearDepth;
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[KNOB_DEPTH_HOT_TILE_FORMAT];
             SWR_ASSERT(pfnClearTiles != nullptr);
 
-            pfnClearTiles(pDC, SWR_ATTACHMENT_DEPTH, macroTile, clearData, pClear->rect);
+            pfnClearTiles(pDC, SWR_ATTACHMENT_DEPTH, macroTile, pClear->renderTargetArrayIndex, clearData, pClear->rect);
         }
 
-        if (pClear->flags.mask & SWR_CLEAR_STENCIL)
+        if (pClear->attachmentMask & SWR_ATTACHMENT_STENCIL_BIT)
         {
-            uint32_t value = pClear->clearStencil;
             DWORD clearData[4];
-            clearData[0] = *(DWORD*)&value;
+            clearData[0] = pClear->clearStencil;
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[KNOB_STENCIL_HOT_TILE_FORMAT];
 
-            pfnClearTiles(pDC, SWR_ATTACHMENT_STENCIL, macroTile, clearData, pClear->rect);
+            pfnClearTiles(pDC, SWR_ATTACHMENT_STENCIL, macroTile, pClear->renderTargetArrayIndex, clearData, pClear->rect);
         }
 
         AR_END(BEClear, 1);
@@ -355,7 +363,7 @@ void ProcessStoreTileBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile
             PFN_CLEAR_TILES pfnClearTiles = sClearTilesTable[srcFormat];
             SWR_ASSERT(pfnClearTiles != nullptr);
 
-            pfnClearTiles(pDC, attachment, macroTile, pHotTile->clearData, pDesc->rect);
+            pfnClearTiles(pDC, attachment, macroTile, pHotTile->renderTargetArrayIndex, pHotTile->clearData, pDesc->rect);
         }
 
         if (pHotTile->state == HOTTILE_DIRTY || pDesc->postStoreTileState == (SWR_TILE_STATE)HOTTILE_DIRTY)
@@ -533,6 +541,7 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                     AR_BEGIN(BEEarlyDepthTest, pDC->drawId);
                     depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                                      psContext.vZ, pDepthBuffer, vCoverageMask, pStencilBuffer, &stencilPassMask);
+					AR_EVENT(EarlyDepthStencilInfoSingleSample(_simd_movemask_ps(depthPassMask), _simd_movemask_ps(vCoverageMask), _simd_movemask_ps(stencilPassMask)));
                     AR_END(BEEarlyDepthTest, 0);
 
                     // early-exit if no pixels passed depth or earlyZ is forced on
@@ -553,7 +562,7 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
 
                 // execute pixel shader
                 AR_BEGIN(BEPixelShader, pDC->drawId);
-                UPDATE_STAT(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(vCoverageMask)));
+                UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(vCoverageMask)));
                 state.psState.pfnPixelShader(GetPrivateState(pDC), &psContext);
                 AR_END(BEPixelShader, 0);
 
@@ -565,6 +574,7 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                     AR_BEGIN(BELateDepthTest, pDC->drawId);
                     depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                                         psContext.vZ, pDepthBuffer, vCoverageMask, pStencilBuffer, &stencilPassMask);
+					AR_EVENT(LateDepthStencilInfoSingleSample(_simd_movemask_ps(depthPassMask), _simd_movemask_ps(vCoverageMask), _simd_movemask_ps(stencilPassMask)));
                     AR_END(BELateDepthTest, 0);
 
                     if (!_simd_movemask_ps(depthPassMask))
@@ -578,7 +588,7 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
 
                 uint32_t statMask = _simd_movemask_ps(depthPassMask);
                 uint32_t statCount = _mm_popcnt_u32(statMask);
-                UPDATE_STAT(DepthPassCount, statCount);
+                UPDATE_STAT_BE(DepthPassCount, statCount);
 
                 // output merger
                 AR_BEGIN(BEOutputMerger, pDC->drawId);
@@ -742,6 +752,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                         AR_BEGIN(BEEarlyDepthTest, pDC->drawId);
                         depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                               psContext.vZ, pDepthSample, vCoverageMask, pStencilSample, &stencilPassMask);
+						AR_EVENT(EarlyDepthStencilInfoSampleRate(_simd_movemask_ps(depthPassMask), _simd_movemask_ps(vCoverageMask), _simd_movemask_ps(stencilPassMask)));
                         AR_END(BEEarlyDepthTest, 0);
 
                         // early-exit if no samples passed depth or earlyZ is forced on.
@@ -763,7 +774,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
 
                     // execute pixel shader
                     AR_BEGIN(BEPixelShader, pDC->drawId);
-                    UPDATE_STAT(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(vCoverageMask)));
+                    UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(vCoverageMask)));
                     state.psState.pfnPixelShader(GetPrivateState(pDC), &psContext);
                     AR_END(BEPixelShader, 0);
 
@@ -775,6 +786,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                         AR_BEGIN(BELateDepthTest, pDC->drawId);
                         depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                                               psContext.vZ, pDepthSample, vCoverageMask, pStencilSample, &stencilPassMask);
+						AR_EVENT(LateDepthStencilInfoSampleRate(_simd_movemask_ps(depthPassMask), _simd_movemask_ps(vCoverageMask), _simd_movemask_ps(stencilPassMask)));
                         AR_END(BELateDepthTest, 0);
 
                         if (!_simd_movemask_ps(depthPassMask))
@@ -790,7 +802,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
 
                     uint32_t statMask = _simd_movemask_ps(depthPassMask);
                     uint32_t statCount = _mm_popcnt_u32(statMask);
-                    UPDATE_STAT(DepthPassCount, statCount);
+                    UPDATE_STAT_BE(DepthPassCount, statCount);
 
                     // output merger
                     AR_BEGIN(BEOutputMerger, pDC->drawId);
@@ -922,7 +934,8 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
             if(T::bCanEarlyZ && !T::bForcedSampleCount)
             {
                 uint32_t depthPassCount = PixelRateZTest(activeLanes, psContext, BEEarlyDepthTest);
-                UPDATE_STAT(DepthPassCount, depthPassCount);
+                UPDATE_STAT_BE(DepthPassCount, depthPassCount);
+				AR_EVENT(EarlyDepthInfoPixelRate(depthPassCount, _simd_movemask_ps(activeLanes)));
             }
 
             // if we have no covered samples that passed depth at this point, go to next tile
@@ -944,7 +957,7 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
             // execute pixel shader
             AR_BEGIN(BEPixelShader, pDC->drawId);
             state.psState.pfnPixelShader(GetPrivateState(pDC), &psContext);
-            UPDATE_STAT(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(activeLanes)));
+            UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(activeLanes)));
             AR_END(BEPixelShader, 0);
 
             // update active lanes to remove any discarded or oMask'd pixels
@@ -955,7 +968,8 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
             if(!T::bCanEarlyZ && !T::bForcedSampleCount)
             {
                 uint32_t depthPassCount = PixelRateZTest(activeLanes, psContext, BELateDepthTest);
-                UPDATE_STAT(DepthPassCount, depthPassCount);
+                UPDATE_STAT_BE(DepthPassCount, depthPassCount);
+				AR_EVENT(LateDepthInfoPixelRate(depthPassCount, _simd_movemask_ps(activeLanes)));
             }
 
             // if we have no covered samples that passed depth at this point, skip OM and go to next tile
@@ -1134,13 +1148,14 @@ void BackendNullPS(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t y,
                     AR_BEGIN(BEEarlyDepthTest, pDC->drawId);
                     simdscalar depthPassMask = DepthStencilTest(&state, work.triFlags.frontFacing, work.triFlags.viewportIndex,
                         psContext.vZ, pDepthSample, vCoverageMask, pStencilSample, &stencilPassMask);
+					AR_EVENT(EarlyDepthStencilInfoNullPS(_simd_movemask_ps(depthPassMask), _simd_movemask_ps(vCoverageMask), _simd_movemask_ps(stencilPassMask)));
                     DepthStencilWrite(&state.vp[work.triFlags.viewportIndex], &state.depthStencilState, work.triFlags.frontFacing, psContext.vZ,
                         pDepthSample, depthPassMask, vCoverageMask, pStencilSample, stencilPassMask);
                     AR_END(BEEarlyDepthTest, 0);
 
                     uint32_t statMask = _simd_movemask_ps(depthPassMask);
                     uint32_t statCount = _mm_popcnt_u32(statMask);
-                    UPDATE_STAT(DepthPassCount, statCount);
+                    UPDATE_STAT_BE(DepthPassCount, statCount);
                 }
 
 Endtile:

@@ -191,7 +191,6 @@ static int compute_level(struct amdgpu_winsys *ws,
    surf_level = is_stencil ? &surf->stencil_level[level] : &surf->level[level];
    surf_level->offset = align64(surf->surf_size, AddrSurfInfoOut->baseAlign);
    surf_level->slice_size = AddrSurfInfoOut->sliceSize;
-   surf_level->pitch_bytes = AddrSurfInfoOut->pitch * (is_stencil ? 1 : surf->bpe);
    surf_level->nblk_x = AddrSurfInfoOut->pitch;
    surf_level->nblk_y = AddrSurfInfoOut->height;
 
@@ -218,7 +217,6 @@ static int compute_level(struct amdgpu_winsys *ws,
 
    /* Clear DCC fields at the beginning. */
    surf_level->dcc_offset = 0;
-   surf_level->dcc_enabled = false;
 
    /* The previous level's flag tells us if we can use DCC for this level. */
    if (AddrSurfInfoIn->flags.dccCompatible &&
@@ -236,7 +234,7 @@ static int compute_level(struct amdgpu_winsys *ws,
       if (ret == ADDR_OK) {
          surf_level->dcc_offset = surf->dcc_size;
          surf_level->dcc_fast_clear_size = AddrDccOut->dccFastClearSize;
-         surf_level->dcc_enabled = true;
+         surf->num_dcc_levels = level + 1;
          surf->dcc_size = surf_level->dcc_offset + AddrDccOut->dccRamSize;
          surf->dcc_alignment = MAX2(surf->dcc_alignment, AddrDccOut->dccRamBaseAlign);
       }
@@ -404,7 +402,10 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
     * requested, because TC-compatible HTILE requires 2D tiling.
     */
    AddrSurfInfoIn.flags.degrade4Space = !AddrSurfInfoIn.flags.tcCompatible &&
-                                        !(flags & RADEON_SURF_FMASK);
+                                        !AddrSurfInfoIn.flags.fmask &&
+                                        tex->nr_samples <= 1 &&
+                                        (flags & RADEON_SURF_OPTIMIZE_FOR_SPACE);
+   AddrSurfInfoIn.flags.opt4Space = AddrSurfInfoIn.flags.degrade4Space;
 
    /* DCC notes:
     * - If we add MSAA support, keep in mind that CB can't decompress 8bpp
@@ -488,6 +489,7 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
       }
    }
 
+   surf->num_dcc_levels = 0;
    surf->surf_size = 0;
    surf->dcc_size = 0;
    surf->dcc_alignment = 1;
@@ -567,6 +569,7 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
    if (surf->htile_size && tex->last_level)
 	   surf->htile_size *= 2;
 
+   surf->is_linear = surf->level[0].mode == RADEON_SURF_MODE_LINEAR_ALIGNED;
    return 0;
 }
 

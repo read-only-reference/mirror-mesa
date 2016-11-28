@@ -201,8 +201,6 @@ brw_codegen_tcs_prog(struct brw_context *brw,
     * padding around uniform values below vec4 size, so the worst case is that
     * every uniform is a float which gets padded to the size of a vec4.
     */
-   struct gl_linked_shader *tcs = shader_prog ?
-      shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL] : NULL;
    int param_count = nir->num_uniforms / 4;
 
    prog_data.base.base.param =
@@ -211,14 +209,15 @@ brw_codegen_tcs_prog(struct brw_context *brw,
       rzalloc_array(NULL, const gl_constant_value *, param_count);
    prog_data.base.base.nr_params = param_count;
 
-   if (tcs) {
+   if (tcp) {
       brw_assign_common_binding_table_offsets(MESA_SHADER_TESS_CTRL, devinfo,
                                               shader_prog, &tcp->program,
                                               &prog_data.base.base, 0);
 
       prog_data.base.base.image_param =
-         rzalloc_array(NULL, struct brw_image_param, tcs->NumImages);
-      prog_data.base.base.nr_image_params = tcs->NumImages;
+         rzalloc_array(NULL, struct brw_image_param,
+                       tcp->program.info.num_images);
+      prog_data.base.base.nr_image_params = tcp->program.info.num_images;
 
       brw_nir_setup_glsl_uniforms(nir, shader_prog, &tcp->program,
                                   &prog_data.base.base,
@@ -250,9 +249,6 @@ brw_codegen_tcs_prog(struct brw_context *brw,
       }
    }
 
-   if (unlikely(INTEL_DEBUG & DEBUG_TCS) && tcs)
-      brw_dump_ir("tessellation control", shader_prog, tcs, NULL);
-
    int st_index = -1;
    if (unlikely(INTEL_DEBUG & DEBUG_SHADER_TIME))
       st_index = brw_get_shader_time_index(brw, shader_prog, NULL, ST_TCS);
@@ -269,8 +265,8 @@ brw_codegen_tcs_prog(struct brw_context *brw,
                       &program_size, &error_str);
    if (program == NULL) {
       if (shader_prog) {
-         shader_prog->LinkStatus = false;
-         ralloc_strcat(&shader_prog->InfoLog, error_str);
+         shader_prog->data->LinkStatus = false;
+         ralloc_strcat(&shader_prog->data->InfoLog, error_str);
       }
 
       _mesa_problem(NULL, "Failed to compile tessellation control shader: "
@@ -281,6 +277,8 @@ brw_codegen_tcs_prog(struct brw_context *brw,
    }
 
    if (unlikely(brw->perf_debug)) {
+      struct gl_linked_shader *tcs = shader_prog ?
+         shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL] : NULL;
       struct brw_shader *btcs = (struct brw_shader *) tcs;
       if (btcs) {
          if (btcs->compiled_once) {

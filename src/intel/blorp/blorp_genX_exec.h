@@ -193,26 +193,35 @@ blorp_emit_input_varying_data(struct blorp_batch *batch,
    const unsigned vec4_size_in_bytes = 4 * sizeof(float);
    const unsigned max_num_varyings =
       DIV_ROUND_UP(sizeof(params->wm_inputs), vec4_size_in_bytes);
-   const unsigned num_varyings = params->wm_prog_data->num_varying_inputs;
+   const unsigned num_varyings =
+      params->wm_prog_data ? params->wm_prog_data->num_varying_inputs : 0;
 
-   *size = num_varyings * vec4_size_in_bytes;
+   *size = 16 + num_varyings * vec4_size_in_bytes;
 
-   const float *const inputs_src = (const float *)&params->wm_inputs;
-   float *inputs = blorp_alloc_vertex_buffer(batch, *size, addr);
+   const uint32_t *const inputs_src = (const uint32_t *)&params->wm_inputs;
+   uint32_t *inputs = blorp_alloc_vertex_buffer(batch, *size, addr);
 
-   /* Walk over the attribute slots, determine if the attribute is used by
-    * the program and when necessary copy the values from the input storage to
-    * the vertex data buffer.
-    */
-   for (unsigned i = 0; i < max_num_varyings; i++) {
-      const gl_varying_slot attr = VARYING_SLOT_VAR0 + i;
+   /* Copy in the VS inputs */
+   assert(sizeof(params->vs_inputs) == 16);
+   memcpy(inputs, &params->vs_inputs, sizeof(params->vs_inputs));
+   inputs += 4;
 
-      if (!(params->wm_prog_data->inputs_read & (1ull << attr)))
-         continue;
+   if (params->wm_prog_data) {
+      /* Walk over the attribute slots, determine if the attribute is used by
+       * the program and when necessary copy the values from the input storage
+       * to the vertex data buffer.
+       */
+      for (unsigned i = 0; i < max_num_varyings; i++) {
+         const gl_varying_slot attr = VARYING_SLOT_VAR0 + i;
 
-      memcpy(inputs, inputs_src + i * 4, vec4_size_in_bytes);
+         const int input_index = params->wm_prog_data->urb_setup[attr];
+         if (input_index < 0)
+            continue;
 
-      inputs += 4;
+         memcpy(inputs, inputs_src + i * 4, vec4_size_in_bytes);
+
+         inputs += 4;
+      }
    }
 }
 
@@ -222,8 +231,6 @@ blorp_emit_vertex_buffers(struct blorp_batch *batch,
 {
    struct GENX(VERTEX_BUFFER_STATE) vb[2];
    memset(vb, 0, sizeof(vb));
-
-   unsigned num_buffers = 1;
 
    uint32_t size;
    blorp_emit_vertex_data(batch, params, &vb[0].BufferStartingAddress, &size);
@@ -241,30 +248,26 @@ blorp_emit_vertex_buffers(struct blorp_batch *batch,
    vb[0].EndAddress.offset += size - 1;
 #endif
 
-   if (params->wm_prog_data && params->wm_prog_data->num_varying_inputs) {
-      blorp_emit_input_varying_data(batch, params,
-                                    &vb[1].BufferStartingAddress, &size);
-      vb[1].VertexBufferIndex = 1;
-      vb[1].BufferPitch = 0;
-      vb[1].VertexBufferMOCS = batch->blorp->mocs.vb;
+   blorp_emit_input_varying_data(batch, params,
+                                 &vb[1].BufferStartingAddress, &size);
+   vb[1].VertexBufferIndex = 1;
+   vb[1].BufferPitch = 0;
+   vb[1].VertexBufferMOCS = batch->blorp->mocs.vb;
 #if GEN_GEN >= 7
-      vb[1].AddressModifyEnable = true;
+   vb[1].AddressModifyEnable = true;
 #endif
 #if GEN_GEN >= 8
-      vb[1].BufferSize = size;
+   vb[1].BufferSize = size;
 #else
-      vb[1].BufferAccessType = INSTANCEDATA;
-      vb[1].EndAddress = vb[1].BufferStartingAddress;
-      vb[1].EndAddress.offset += size - 1;
+   vb[1].BufferAccessType = INSTANCEDATA;
+   vb[1].EndAddress = vb[1].BufferStartingAddress;
+   vb[1].EndAddress.offset += size - 1;
 #endif
-      num_buffers++;
-   }
 
-   const unsigned num_dwords =
-      1 + GENX(VERTEX_BUFFER_STATE_length) * num_buffers;
+   const unsigned num_dwords = 1 + GENX(VERTEX_BUFFER_STATE_length) * 2;
    uint32_t *dw = blorp_emitn(batch, GENX(3DSTATE_VERTEX_BUFFERS), num_dwords);
 
-   for (unsigned i = 0; i < num_buffers; i++) {
+   for (unsigned i = 0; i < 2; i++) {
       GENX(VERTEX_BUFFER_STATE_pack)(batch, dw, &vb[i]);
       dw += GENX(VERTEX_BUFFER_STATE_length);
    }
@@ -327,11 +330,11 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
     *
     * See the vertex element setup below.
     */
-   ve[0].VertexBufferIndex = 0;
+   ve[0].VertexBufferIndex = 1;
    ve[0].Valid = true;
    ve[0].SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT;
    ve[0].SourceElementOffset = 0;
-   ve[0].Component0Control = VFCOMP_STORE_0;
+   ve[0].Component0Control = VFCOMP_STORE_SRC;
 
    /* From Gen8 onwards hardware is no more instructed to overwrite components
     * using an element specifier. Instead one has separate 3DSTATE_VF_SGVS
@@ -342,8 +345,8 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
 #else
    ve[0].Component1Control = VFCOMP_STORE_IID;
 #endif
-   ve[0].Component2Control = VFCOMP_STORE_0;
-   ve[0].Component3Control = VFCOMP_STORE_0;
+   ve[0].Component2Control = VFCOMP_STORE_SRC;
+   ve[0].Component3Control = VFCOMP_STORE_SRC;
 
    ve[1].VertexBufferIndex = 0;
    ve[1].Valid = true;
@@ -358,7 +361,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
       ve[i + 2].VertexBufferIndex = 1;
       ve[i + 2].Valid = true;
       ve[i + 2].SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT;
-      ve[i + 2].SourceElementOffset = i * 4 * sizeof(float);
+      ve[i + 2].SourceElementOffset = 16 + i * 4 * sizeof(float);
       ve[i + 2].Component0Control = VFCOMP_STORE_SRC;
       ve[i + 2].Component1Control = VFCOMP_STORE_SRC;
       ve[i + 2].Component2Control = VFCOMP_STORE_SRC;
@@ -398,10 +401,39 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
 }
 
 static void
+blorp_emit_vs_config(struct blorp_batch *batch,
+                     const struct blorp_params *params)
+{
+   struct brw_vs_prog_data *vs_prog_data = params->vs_prog_data;
+
+   blorp_emit(batch, GENX(3DSTATE_VS), vs) {
+      if (vs_prog_data) {
+         vs.FunctionEnable = true;
+
+         vs.KernelStartPointer = params->vs_prog_kernel;
+
+         vs.DispatchGRFStartRegisterForURBData =
+            vs_prog_data->base.base.dispatch_grf_start_reg;
+         vs.VertexURBEntryReadLength =
+            vs_prog_data->base.urb_read_length;
+         vs.VertexURBEntryReadOffset = 0;
+
+         vs.MaximumNumberofThreads =
+            batch->blorp->isl_dev->info->max_vs_threads - 1;
+
+#if GEN_GEN >= 8
+         vs.SIMD8DispatchEnable =
+            vs_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8;
+#endif
+      }
+   }
+}
+
+static void
 blorp_emit_sf_config(struct blorp_batch *batch,
                      const struct blorp_params *params)
 {
-   const struct brw_blorp_prog_data *prog_data = params->wm_prog_data;
+   const struct brw_wm_prog_data *prog_data = params->wm_prog_data;
 
    /* 3DSTATE_SF
     *
@@ -455,7 +487,7 @@ blorp_emit_sf_config(struct blorp_batch *batch,
       sf.FrontFaceFillMode = FILL_MODE_SOLID;
       sf.BackFaceFillMode = FILL_MODE_SOLID;
 
-      sf.MultisampleRasterizationMode = params->dst.surf.samples > 1 ?
+      sf.MultisampleRasterizationMode = params->num_samples > 1 ?
          MSRASTMODE_ON_PATTERN : MSRASTMODE_OFF_PIXEL;
 
 #if GEN_GEN == 7
@@ -481,7 +513,7 @@ blorp_emit_sf_config(struct blorp_batch *batch,
       sf.FrontFaceFillMode = FILL_MODE_SOLID;
       sf.BackFaceFillMode = FILL_MODE_SOLID;
 
-      sf.MultisampleRasterizationMode = params->dst.surf.samples > 1 ?
+      sf.MultisampleRasterizationMode = params->num_samples > 1 ?
          MSRASTMODE_ON_PATTERN : MSRASTMODE_OFF_PIXEL;
 
       sf.VertexURBEntryReadOffset = 1;
@@ -502,7 +534,7 @@ static void
 blorp_emit_ps_config(struct blorp_batch *batch,
                      const struct blorp_params *params)
 {
-   const struct brw_blorp_prog_data *prog_data = params->wm_prog_data;
+   const struct brw_wm_prog_data *prog_data = params->wm_prog_data;
 
    /* Even when thread dispatch is disabled, max threads (dw5.25:31) must be
     * nonzero to prevent the GPU from hanging.  While the documentation doesn't
@@ -527,16 +559,16 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 
       if (prog_data) {
          ps.DispatchGRFStartRegisterForConstantSetupData0 =
-            prog_data->first_curbe_grf_0;
+            prog_data->base.dispatch_grf_start_reg;
          ps.DispatchGRFStartRegisterForConstantSetupData2 =
-            prog_data->first_curbe_grf_2;
+            prog_data->dispatch_grf_start_reg_2;
 
          ps._8PixelDispatchEnable = prog_data->dispatch_8;
          ps._16PixelDispatchEnable = prog_data->dispatch_16;
 
          ps.KernelStartPointer0 = params->wm_prog_kernel;
          ps.KernelStartPointer2 =
-            params->wm_prog_kernel + prog_data->ksp_offset_2;
+            params->wm_prog_kernel + prog_data->prog_offset_2;
       }
 
       /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
@@ -577,7 +609,7 @@ blorp_emit_ps_config(struct blorp_batch *batch,
       if (prog_data) {
          psx.PixelShaderValid = true;
          psx.AttributeEnable = prog_data->num_varying_inputs > 0;
-         psx.PixelShaderIsPerSample = prog_data->persample_msaa_dispatch;
+         psx.PixelShaderIsPerSample = prog_data->persample_dispatch;
       }
 
       if (params->src.enabled)
@@ -607,12 +639,12 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          wm.ThreadDispatchEnable = true;
 
       if (params->src.enabled)
-         wm.PixelShaderKillPixel = true;
+         wm.PixelShaderKillsPixel = true;
 
-      if (params->dst.surf.samples > 1) {
+      if (params->num_samples > 1) {
          wm.MultisampleRasterizationMode = MSRASTMODE_ON_PATTERN;
          wm.MultisampleDispatchMode =
-            (prog_data && prog_data->persample_msaa_dispatch) ?
+            (prog_data && prog_data->persample_dispatch) ?
             MSDISPMODE_PERSAMPLE : MSDISPMODE_PERPIXEL;
       } else {
          wm.MultisampleRasterizationMode = MSRASTMODE_OFF_PIXEL;
@@ -629,14 +661,14 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 #endif
 
       if (prog_data) {
-         ps.DispatchGRFStartRegisterforConstantSetupData0 =
-            prog_data->first_curbe_grf_0;
-         ps.DispatchGRFStartRegisterforConstantSetupData2 =
-            prog_data->first_curbe_grf_2;
+         ps.DispatchGRFStartRegisterForConstantSetupData0 =
+            prog_data->base.dispatch_grf_start_reg;
+         ps.DispatchGRFStartRegisterForConstantSetupData2 =
+            prog_data->dispatch_grf_start_reg_2;
 
          ps.KernelStartPointer0 = params->wm_prog_kernel;
          ps.KernelStartPointer2 =
-            params->wm_prog_kernel + prog_data->ksp_offset_2;
+            params->wm_prog_kernel + prog_data->prog_offset_2;
 
          ps._8PixelDispatchEnable = prog_data->dispatch_8;
          ps._16PixelDispatchEnable = prog_data->dispatch_16;
@@ -691,14 +723,14 @@ blorp_emit_ps_config(struct blorp_batch *batch,
       if (prog_data) {
          wm.ThreadDispatchEnable = true;
 
-         wm.DispatchGRFStartRegisterforConstantSetupData0 =
-            prog_data->first_curbe_grf_0;
-         wm.DispatchGRFStartRegisterforConstantSetupData2 =
-            prog_data->first_curbe_grf_2;
+         wm.DispatchGRFStartRegisterForConstantSetupData0 =
+            prog_data->base.dispatch_grf_start_reg;
+         wm.DispatchGRFStartRegisterForConstantSetupData2 =
+            prog_data->dispatch_grf_start_reg_2;
 
          wm.KernelStartPointer0 = params->wm_prog_kernel;
          wm.KernelStartPointer2 =
-            params->wm_prog_kernel + prog_data->ksp_offset_2;
+            params->wm_prog_kernel + prog_data->prog_offset_2;
 
          wm._8PixelDispatchEnable = prog_data->dispatch_8;
          wm._16PixelDispatchEnable = prog_data->dispatch_16;
@@ -708,13 +740,13 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 
       if (params->src.enabled) {
          wm.SamplerCount = 1; /* Up to 4 samplers */
-         wm.PixelShaderKillPixel = true; /* TODO: temporarily smash on */
+         wm.PixelShaderKillsPixel = true; /* TODO: temporarily smash on */
       }
 
-      if (params->dst.surf.samples > 1) {
+      if (params->num_samples > 1) {
          wm.MultisampleRasterizationMode = MSRASTMODE_ON_PATTERN;
          wm.MultisampleDispatchMode =
-            (prog_data && prog_data->persample_msaa_dispatch) ?
+            (prog_data && prog_data->persample_dispatch) ?
             MSDISPMODE_PERSAMPLE : MSDISPMODE_PERPIXEL;
       } else {
          wm.MultisampleRasterizationMode = MSRASTMODE_OFF_PIXEL;
@@ -995,28 +1027,13 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
    return offset;
 }
 
-struct surface_state_info {
-   unsigned num_dwords;
-   unsigned ss_align; /* Required alignment of RENDER_SURFACE_STATE in bytes */
-   unsigned reloc_dw;
-   unsigned aux_reloc_dw;
-};
-
-static const struct surface_state_info surface_state_infos[] = {
-   [6] = {6,  32, 1,  0},
-   [7] = {8,  32, 1,  6},
-   [8] = {13, 64, 8,  10},
-   [9] = {16, 64, 8,  10},
-};
-
 static void
 blorp_emit_surface_state(struct blorp_batch *batch,
                          const struct brw_blorp_surface_info *surface,
-                         uint32_t *state, uint32_t state_offset,
+                         void *state, uint32_t state_offset,
                          bool is_render_target)
 {
-   const struct surface_state_info ss_info = surface_state_infos[GEN_GEN];
-
+   const struct isl_device *isl_dev = batch->blorp->isl_dev;
    struct isl_surf surf = surface->surf;
 
    if (surf.dim == ISL_SURF_DIM_1D &&
@@ -1038,7 +1055,7 @@ blorp_emit_surface_state(struct blorp_batch *batch,
                        .aux_surf = &surface->aux_surf, .aux_usage = aux_usage,
                        .mocs = mocs, .clear_color = surface->clear_color);
 
-   blorp_surface_reloc(batch, state_offset + ss_info.reloc_dw * 4,
+   blorp_surface_reloc(batch, state_offset + isl_dev->ss.addr_offset,
                        surface->addr, 0);
 
    if (aux_usage != ISL_AUX_USAGE_NONE) {
@@ -1047,8 +1064,9 @@ blorp_emit_surface_state(struct blorp_batch *batch,
        * surface buffer addresses are always 4K page alinged.
        */
       assert((surface->aux_addr.offset & 0xfff) == 0);
-      blorp_surface_reloc(batch, state_offset + ss_info.aux_reloc_dw * 4,
-                          surface->aux_addr, state[ss_info.aux_reloc_dw]);
+      uint32_t *aux_addr = state + isl_dev->ss.aux_addr_offset;
+      blorp_surface_reloc(batch, state_offset + isl_dev->ss.aux_addr_offset,
+                          surface->aux_addr, *aux_addr);
    }
 }
 
@@ -1086,36 +1104,44 @@ static void
 blorp_emit_surface_states(struct blorp_batch *batch,
                           const struct blorp_params *params)
 {
+   const struct isl_device *isl_dev = batch->blorp->isl_dev;
    uint32_t bind_offset, surface_offsets[2];
    void *surface_maps[2];
 
-   const unsigned ss_size = GENX(RENDER_SURFACE_STATE_length) * 4;
-   const unsigned ss_align = GENX(RENDER_SURFACE_STATE_length) > 8 ? 64 : 32;
-
-   unsigned num_surfaces = 1 + params->src.enabled;
-   blorp_alloc_binding_table(batch, num_surfaces, ss_size, ss_align,
-                             &bind_offset, surface_offsets, surface_maps);
-
-   if (params->dst.enabled) {
-      blorp_emit_surface_state(batch, &params->dst,
-                               surface_maps[BLORP_RENDERBUFFER_BT_INDEX],
-                               surface_offsets[BLORP_RENDERBUFFER_BT_INDEX],
-                               true);
+   if (params->use_pre_baked_binding_table) {
+      bind_offset = params->pre_baked_binding_table_offset;
    } else {
-      assert(params->depth.enabled || params->stencil.enabled);
-      const struct brw_blorp_surface_info *surface =
-         params->depth.enabled ? &params->depth : &params->stencil;
-      blorp_emit_null_surface_state(batch, surface,
-                                    surface_maps[BLORP_RENDERBUFFER_BT_INDEX]);
-   }
+      unsigned num_surfaces = 1 + params->src.enabled;
+      blorp_alloc_binding_table(batch, num_surfaces,
+                                isl_dev->ss.size, isl_dev->ss.align,
+                                &bind_offset, surface_offsets, surface_maps);
 
-   if (params->src.enabled) {
-      blorp_emit_surface_state(batch, &params->src,
-                               surface_maps[BLORP_TEXTURE_BT_INDEX],
-                               surface_offsets[BLORP_TEXTURE_BT_INDEX], false);
+      if (params->dst.enabled) {
+         blorp_emit_surface_state(batch, &params->dst,
+                                  surface_maps[BLORP_RENDERBUFFER_BT_INDEX],
+                                  surface_offsets[BLORP_RENDERBUFFER_BT_INDEX],
+                                  true);
+      } else {
+         assert(params->depth.enabled || params->stencil.enabled);
+         const struct brw_blorp_surface_info *surface =
+            params->depth.enabled ? &params->depth : &params->stencil;
+         blorp_emit_null_surface_state(batch, surface,
+                                       surface_maps[BLORP_RENDERBUFFER_BT_INDEX]);
+      }
+
+      if (params->src.enabled) {
+         blorp_emit_surface_state(batch, &params->src,
+                                  surface_maps[BLORP_TEXTURE_BT_INDEX],
+                                  surface_offsets[BLORP_TEXTURE_BT_INDEX], false);
+      }
    }
 
 #if GEN_GEN >= 7
+   blorp_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_VS), bt);
+   blorp_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_HS), bt);
+   blorp_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_DS), bt);
+   blorp_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_GS), bt);
+
    blorp_emit(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_PS), bt) {
       bt.PointertoPSBindingTable = bind_offset;
    }
@@ -1174,10 +1200,8 @@ static void
 blorp_emit_3dstate_multisample(struct blorp_batch *batch,
                                const struct blorp_params *params)
 {
-   const unsigned samples = params->dst.surf.samples;
-
    blorp_emit(batch, GENX(3DSTATE_MULTISAMPLE), ms) {
-      ms.NumberofMultisamples       = __builtin_ffs(samples) - 1;
+      ms.NumberofMultisamples       = __builtin_ffs(params->num_samples) - 1;
 
 #if GEN_GEN >= 8
       /* The PRM says that this bit is valid only for DX9:
@@ -1190,7 +1214,7 @@ blorp_emit_3dstate_multisample(struct blorp_batch *batch,
 #elif GEN_GEN >= 7
       ms.PixelLocation              = PIXLOC_CENTER;
 
-      switch (samples) {
+      switch (params->num_samples) {
       case 1:
          GEN_SAMPLE_POS_1X(ms.Sample);
          break;
@@ -1312,7 +1336,7 @@ blorp_exec(struct blorp_batch *batch, const struct blorp_params *params)
    blorp_emit_3dstate_multisample(batch, params);
 
    blorp_emit(batch, GENX(3DSTATE_SAMPLE_MASK), mask) {
-      mask.SampleMask = (1 << params->dst.surf.samples) - 1;
+      mask.SampleMask = (1 << params->num_samples) - 1;
    }
 
    /* From the BSpec, 3D Pipeline > Geometry > Vertex Shader > State,
@@ -1325,7 +1349,7 @@ blorp_exec(struct blorp_batch *batch, const struct blorp_params *params)
     *
     * We've already done one at the start of the BLORP operation.
     */
-   blorp_emit(batch, GENX(3DSTATE_VS), vs);
+   blorp_emit_vs_config(batch, params);
 #if GEN_GEN >= 7
    blorp_emit(batch, GENX(3DSTATE_HS), hs);
    blorp_emit(batch, GENX(3DSTATE_TE), te);

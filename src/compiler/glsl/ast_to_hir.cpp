@@ -1001,17 +1001,20 @@ do_assignment(exec_list *instructions, struct _mesa_glsl_parse_state *state,
     * i = j += 1;
     */
    if (needs_rvalue) {
-      ir_variable *var = new(ctx) ir_variable(rhs->type, "assignment_tmp",
-                                              ir_var_temporary);
-      instructions->push_tail(var);
-      instructions->push_tail(assign(var, rhs));
-
+      ir_rvalue *rvalue;
       if (!error_emitted) {
-         ir_dereference_variable *deref_var = new(ctx) ir_dereference_variable(var);
-         instructions->push_tail(new(ctx) ir_assignment(lhs, deref_var));
-      }
-      ir_rvalue *rvalue = new(ctx) ir_dereference_variable(var);
+         ir_variable *var = new(ctx) ir_variable(rhs->type, "assignment_tmp",
+                                                 ir_var_temporary);
+         instructions->push_tail(var);
+         instructions->push_tail(assign(var, rhs));
 
+         ir_dereference_variable *deref_var =
+            new(ctx) ir_dereference_variable(var);
+         instructions->push_tail(new(ctx) ir_assignment(lhs, deref_var));
+         rvalue = new(ctx) ir_dereference_variable(var);
+      } else {
+         rvalue = ir_rvalue::error_value(ctx);
+      }
       *out_rvalue = rvalue;
    } else {
       if (!error_emitted)
@@ -7932,16 +7935,9 @@ ast_gs_input_layout::hir(exec_list *instructions,
 {
    YYLTYPE loc = this->get_location();
 
-   /* If any geometry input layout declaration preceded this one, make sure it
-    * was consistent with this one.
-    */
-   if (state->gs_input_prim_type_specified &&
-       state->in_qualifier->prim_type != this->prim_type) {
-      _mesa_glsl_error(&loc, state,
-                       "geometry shader input layout does not match"
-                       " previous declaration");
-      return NULL;
-   }
+   /* Should have been prevented by the parser. */
+   assert(!state->gs_input_prim_type_specified
+          || state->in_qualifier->prim_type == this->prim_type);
 
    /* If any shader inputs occurred before this declaration and specified an
     * array size, make sure the size they specified is consistent with the

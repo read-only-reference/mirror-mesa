@@ -1651,6 +1651,10 @@ _mesa_make_current( struct gl_context *newCtx,
 
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */
+      if (curCtx) {
+         _mesa_reference_framebuffer(&curCtx->WinSysDrawBuffer, NULL);
+         _mesa_reference_framebuffer(&curCtx->WinSysReadBuffer, NULL);
+      }
    }
    else {
       _glapi_set_dispatch(newCtx->CurrentDispatch);
@@ -1692,10 +1696,8 @@ _mesa_make_current( struct gl_context *newCtx,
           */
 	 newCtx->NewState |= _NEW_BUFFERS;
 
-         if (drawBuffer) {
-            _mesa_check_init_viewport(newCtx,
-                                      drawBuffer->Width, drawBuffer->Height);
-         }
+         _mesa_check_init_viewport(newCtx,
+                                   drawBuffer->Width, drawBuffer->Height);
       }
 
       if (newCtx->FirstTimeCurrent) {

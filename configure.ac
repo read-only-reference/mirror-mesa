@@ -74,7 +74,7 @@ LIBDRM_AMDGPU_REQUIRED=2.4.63
 LIBDRM_INTEL_REQUIRED=2.4.61
 LIBDRM_NVVIEUX_REQUIRED=2.4.66
 LIBDRM_NOUVEAU_REQUIRED=2.4.66
-LIBDRM_FREEDRENO_REQUIRED=2.4.68
+LIBDRM_FREEDRENO_REQUIRED=2.4.74
 LIBDRM_VC4_REQUIRED=2.4.69
 DRI2PROTO_REQUIRED=2.6
 DRI3PROTO_REQUIRED=1.0
@@ -823,8 +823,11 @@ if test "x$ax_pthread_ok" = xno; then
 fi
 dnl AX_PTHREADS leaves PTHREAD_LIBS empty for gcc and sets PTHREAD_CFLAGS
 dnl to -pthread, which causes problems if we need -lpthread to appear in
-dnl pkgconfig files.
-test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
+dnl pkgconfig files.  Since Android doesn't have a pthread lib, this check
+dnl is not valid for that platform.
+if test "x$android" = xno; then
+    test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
+fi
 
 dnl pthread-stubs is mandatory on targets where it exists
 case "$host_os" in
@@ -1358,7 +1361,6 @@ if test "x$with_sha1" = "x"; then
         AC_MSG_ERROR([Cannot enable shader cache (no SHA-1 implementation found)])
     fi
 fi
-AM_CONDITIONAL([ENABLE_SHADER_CACHE], [test x$enable_shader_cache = xyes])
 if test "x$enable_shader_cache" = "xyes"; then
    AC_DEFINE([ENABLE_SHADER_CACHE], [1], [Enable shader cache])
 fi
@@ -2056,6 +2058,7 @@ for plat in $egl_platforms; do
 		;;
 
 	android)
+		PKG_CHECK_MODULES([ANDROID], [cutils hardware sync])
 		;;
 
 	*)
@@ -2641,8 +2644,6 @@ AC_SUBST([XA_MINOR], $XA_MINOR)
 AC_SUBST([XA_TINY], $XA_TINY)
 AC_SUBST([XA_VERSION], "$XA_MAJOR.$XA_MINOR.$XA_TINY")
 
-AC_SUBST([TIMESTAMP_CMD], '`test $(SOURCE_DATE_EPOCH) && echo $(SOURCE_DATE_EPOCH) || date +%s`')
-
 AC_ARG_ENABLE(valgrind,
               [AS_HELP_STRING([--enable-valgrind],
                              [Build mesa with valgrind support (default: auto)])],
@@ -2682,7 +2683,6 @@ dnl Substitute the config
 AC_CONFIG_FILES([Makefile
 		src/Makefile
 		src/amd/Makefile
-		src/amd/common/Makefile
 		src/amd/vulkan/Makefile
 		src/compiler/Makefile
 		src/egl/Makefile

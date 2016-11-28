@@ -22,7 +22,6 @@
  */
 
 #include "si_pipe.h"
-#include "sid.h"
 #include "util/u_format.h"
 #include "util/u_surface.h"
 
@@ -429,7 +428,7 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 		/* disable levels without DCC */
 		for (int i = first_level; i <= last_level; i++) {
 			if (!rtex->dcc_offset ||
-			    !rtex->surface.level[i].dcc_enabled)
+			    i >= rtex->surface.num_dcc_levels)
 				level_mask &= ~(1 << i);
 		}
 	} else if (rtex->fmask.size) {
@@ -487,7 +486,9 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
-		assert(tex->cmask.size || tex->fmask.size || tex->dcc_offset);
+		/* CMASK or DCC can be discarded and we can still end up here. */
+		if (!tex->cmask.size && !tex->fmask.size && !tex->dcc_offset)
+			continue;
 
 		si_blit_decompress_color(&sctx->b.b, tex,
 					 view->u.tex.first_level, view->u.tex.last_level,
@@ -838,6 +839,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 			     const struct pipe_box *src_box)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct r600_texture *rsrc = (struct r600_texture*)src;
 	struct pipe_surface *dst_view, dst_templ;
 	struct pipe_sampler_view src_templ, *src_view;
 	unsigned dst_width, dst_height, src_width0, src_height0;
@@ -867,7 +869,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 
 	if (util_format_is_compressed(src->format) ||
 	    util_format_is_compressed(dst->format)) {
-		unsigned blocksize = util_format_get_blocksize(src->format);
+		unsigned blocksize = rsrc->surface.bpe;
 
 		if (blocksize == 8)
 			src_templ.format = PIPE_FORMAT_R16G16B16A16_UINT; /* 64-bit block */
@@ -909,7 +911,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 			sbox.width = util_format_get_nblocksx(src->format, src_box->width);
 			src_box = &sbox;
 		} else {
-			unsigned blocksize = util_format_get_blocksize(src->format);
+			unsigned blocksize = rsrc->surface.bpe;
 
 			switch (blocksize) {
 			case 1:
@@ -970,6 +972,7 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	struct si_context *sctx = (struct si_context*)ctx;
 	struct r600_texture *src = (struct r600_texture*)info->src.resource;
 	struct r600_texture *dst = (struct r600_texture*)info->dst.resource;
+	struct r600_texture *rtmp;
 	unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
 	unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
 	enum pipe_format format = info->src.format;
@@ -1011,7 +1014,7 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	    info->src.box.width == dst_width &&
 	    info->src.box.height == dst_height &&
 	    info->src.box.depth == 1 &&
-	    dst->surface.level[info->dst.level].mode >= RADEON_SURF_MODE_1D &&
+	    !dst->surface.is_linear &&
 	    (!dst->cmask.size || !dst->dirty_level_mask)) { /* dst cannot be fast-cleared */
 		/* Check the last constraint. */
 		if (src->surface.micro_tile_mode != dst->surface.micro_tile_mode) {
@@ -1029,7 +1032,7 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 		 * This is still the fastest codepath even with this clear.
 		 */
 		if (dst->dcc_offset &&
-		    dst->surface.level[info->dst.level].dcc_enabled) {
+		    info->dst.level < dst->surface.num_dcc_levels) {
 			vi_dcc_clear_level(&sctx->b, dst, info->dst.level,
 					   0xFFFFFFFF);
 			dst->dirty_level_mask &= ~(1 << info->dst.level);
@@ -1064,7 +1067,7 @@ resolve_to_temp:
 		      R600_RESOURCE_FLAG_DISABLE_DCC;
 
 	/* The src and dst microtile modes must be the same. */
-	if (src->surface.micro_tile_mode == V_009910_ADDR_SURF_DISPLAY_MICRO_TILING)
+	if (src->surface.micro_tile_mode == RADEON_MICRO_MODE_DISPLAY)
 		templ.bind = PIPE_BIND_SCANOUT;
 	else
 		templ.bind = 0;
@@ -1072,9 +1075,10 @@ resolve_to_temp:
 	tmp = ctx->screen->resource_create(ctx->screen, &templ);
 	if (!tmp)
 		return false;
+	rtmp = (struct r600_texture*)tmp;
 
-	assert(src->surface.micro_tile_mode ==
-	       ((struct r600_texture*)tmp)->surface.micro_tile_mode);
+	assert(!rtmp->surface.is_linear);
+	assert(src->surface.micro_tile_mode == rtmp->surface.micro_tile_mode);
 
 	/* resolve */
 	si_blitter_begin(ctx, SI_COLOR_RESOLVE |
@@ -1115,8 +1119,7 @@ static void si_blit(struct pipe_context *ctx,
 	 * resource_copy_region can't do this yet, because dma_copy calls it
 	 * on failure (recursion).
 	 */
-	if (rdst->surface.level[info->dst.level].mode ==
-	    RADEON_SURF_MODE_LINEAR_ALIGNED &&
+	if (rdst->surface.is_linear &&
 	    sctx->b.dma_copy &&
 	    util_can_blit_via_copy_region(info, false)) {
 		sctx->b.dma_copy(ctx, info->dst.resource, info->dst.level,

@@ -385,10 +385,25 @@ calculate_deps(struct schedule_state *state, struct schedule_node *n)
         switch (sig) {
         case QPU_SIG_SW_BREAKPOINT:
         case QPU_SIG_NONE:
-        case QPU_SIG_THREAD_SWITCH:
-        case QPU_SIG_LAST_THREAD_SWITCH:
         case QPU_SIG_SMALL_IMM:
         case QPU_SIG_LOAD_IMM:
+                break;
+
+        case QPU_SIG_THREAD_SWITCH:
+        case QPU_SIG_LAST_THREAD_SWITCH:
+                /* All accumulator contents and flags are undefined after the
+                 * switch.
+                 */
+                for (int i = 0; i < ARRAY_SIZE(state->last_r); i++)
+                        add_write_dep(state, &state->last_r[i], n);
+                add_write_dep(state, &state->last_sf, n);
+
+                /* Scoreboard-locking operations have to stay after the last
+                 * thread switch.
+                 */
+                add_write_dep(state, &state->last_tlb, n);
+
+                add_write_dep(state, &state->last_tmu_write, n);
                 break;
 
         case QPU_SIG_LOAD_TMU0:
@@ -453,6 +468,7 @@ struct choose_scoreboard {
         int last_sfu_write_tick;
         int last_uniforms_reset_tick;
         uint32_t last_waddr_a, last_waddr_b;
+        bool tlb_locked;
 };
 
 static bool
@@ -589,6 +605,14 @@ choose_instruction_to_schedule(struct choose_scoreboard *scoreboard,
                         if (prev_inst->uniform != -1 && n->uniform != -1)
                                 continue;
 
+                        /* Don't merge in something that will lock the TLB.
+                         * Hopwefully what we have in inst will release some
+                         * other instructions, allowing us to delay the
+                         * TLB-locking instruction until later.
+                         */
+                        if (!scoreboard->tlb_locked && qpu_inst_is_tlb(inst))
+                                continue;
+
                         inst = qpu_merge_inst(prev_inst->inst->inst, inst);
                         if (!inst)
                                 continue;
@@ -647,6 +671,9 @@ update_scoreboard_for_chosen(struct choose_scoreboard *scoreboard,
             waddr_mul == QPU_W_UNIFORMS_ADDRESS) {
                 scoreboard->last_uniforms_reset_tick = scoreboard->tick;
         }
+
+        if (qpu_inst_is_tlb(inst))
+                scoreboard->tlb_locked = true;
 }
 
 static void
@@ -678,6 +705,26 @@ static uint32_t waddr_latency(uint32_t waddr, uint64_t after)
 
         /* Apply some huge latency between texture fetch requests and getting
          * their results back.
+         *
+         * FIXME: This is actually pretty bogus.  If we do:
+         *
+         * mov tmu0_s, a
+         * <a bit of math>
+         * mov tmu0_s, b
+         * load_tmu0
+         * <more math>
+         * load_tmu0
+         *
+         * we count that as worse than
+         *
+         * mov tmu0_s, a
+         * mov tmu0_s, b
+         * <lots of math>
+         * load_tmu0
+         * <more math>
+         * load_tmu0
+         *
+         * because we associate the first load_tmu0 with the *second* tmu0_s.
          */
         if (waddr == QPU_W_TMU0_S) {
                 if (QPU_GET_FIELD(after, QPU_SIG) == QPU_SIG_LOAD_TMU0)
@@ -888,6 +935,16 @@ schedule_instructions(struct vc4_compile *c,
                         inst = qpu_NOP();
                         update_scoreboard_for_chosen(scoreboard, inst);
                         qpu_serialize_one_inst(c, inst);
+                        qpu_serialize_one_inst(c, inst);
+                        qpu_serialize_one_inst(c, inst);
+                } else if (QPU_GET_FIELD(inst, QPU_SIG) == QPU_SIG_THREAD_SWITCH ||
+                           QPU_GET_FIELD(inst, QPU_SIG) == QPU_SIG_LAST_THREAD_SWITCH) {
+                        /* The thread switch occurs after two delay slots.  We
+                         * should fit things in these slots, but we don't
+                         * currently.
+                         */
+                        inst = qpu_NOP();
+                        update_scoreboard_for_chosen(scoreboard, inst);
                         qpu_serialize_one_inst(c, inst);
                         qpu_serialize_one_inst(c, inst);
                 }

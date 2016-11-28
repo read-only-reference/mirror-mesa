@@ -101,7 +101,7 @@ vk_to_gen_tex_filter(VkFilter filter, bool anisotropyEnable)
    default:
       assert(!"Invalid filter");
    case VK_FILTER_NEAREST:
-      return MAPFILTER_NEAREST;
+      return anisotropyEnable ? MAPFILTER_ANISOTROPIC : MAPFILTER_NEAREST;
    case VK_FILTER_LINEAR:
       return anisotropyEnable ? MAPFILTER_ANISOTROPIC : MAPFILTER_LINEAR;
    }
@@ -167,6 +167,11 @@ VkResult genX(CreateSampler)(
    uint32_t border_color_offset = device->border_colors.offset +
                                   pCreateInfo->borderColor * 64;
 
+   bool enable_min_filter_addr_rounding =
+      pCreateInfo->minFilter != VK_FILTER_NEAREST;
+   bool enable_mag_filter_addr_rounding =
+      pCreateInfo->magFilter != VK_FILTER_NEAREST;
+
    struct GENX(SAMPLER_STATE) sampler_state = {
       .SamplerDisable = false,
       .TextureBorderColorMode = DX10OGL,
@@ -202,12 +207,12 @@ VkResult genX(CreateSampler)(
 #endif
 
       .MaximumAnisotropy = vk_to_gen_max_anisotropy(pCreateInfo->maxAnisotropy),
-      .RAddressMinFilterRoundingEnable = 0,
-      .RAddressMagFilterRoundingEnable = 0,
-      .VAddressMinFilterRoundingEnable = 0,
-      .VAddressMagFilterRoundingEnable = 0,
-      .UAddressMinFilterRoundingEnable = 0,
-      .UAddressMagFilterRoundingEnable = 0,
+      .RAddressMinFilterRoundingEnable = enable_min_filter_addr_rounding,
+      .RAddressMagFilterRoundingEnable = enable_mag_filter_addr_rounding,
+      .VAddressMinFilterRoundingEnable = enable_min_filter_addr_rounding,
+      .VAddressMagFilterRoundingEnable = enable_mag_filter_addr_rounding,
+      .UAddressMinFilterRoundingEnable = enable_min_filter_addr_rounding,
+      .UAddressMagFilterRoundingEnable = enable_mag_filter_addr_rounding,
       .TrilinearFilterQuality = 0,
       .NonnormalizedCoordinateEnable = pCreateInfo->unnormalizedCoordinates,
       .TCXAddressControlMode = vk_to_gen_tex_address[pCreateInfo->addressModeU],
