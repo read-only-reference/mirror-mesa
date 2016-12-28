@@ -167,11 +167,7 @@ enum {
 	SI_ES_RING_ESGS,
 	SI_GS_RING_ESGS,
 
-	SI_GS_RING_GSVS0,
-	SI_GS_RING_GSVS1,
-	SI_GS_RING_GSVS2,
-	SI_GS_RING_GSVS3,
-	SI_VS_RING_GSVS,
+	SI_RING_GSVS,
 
 	SI_VS_STREAMOUT_BUF0,
 	SI_VS_STREAMOUT_BUF1,
@@ -217,6 +213,8 @@ enum {
 struct si_descriptors {
 	/* The list of descriptors in malloc'd memory. */
 	uint32_t *list;
+	/* The list in mapped GPU memory. */
+	uint32_t *gpu_list;
 	/* The size of one descriptor. */
 	unsigned element_dw_size;
 	/* The maximum number of descriptors. */
@@ -245,7 +243,7 @@ struct si_descriptors {
 
 struct si_sampler_views {
 	struct pipe_sampler_view	*views[SI_NUM_SAMPLERS];
-	void				*sampler_states[SI_NUM_SAMPLERS];
+	struct si_sampler_state		*sampler_states[SI_NUM_SAMPLERS];
 
 	/* The i-th bit is set if that element is enabled (non-NULL resource). */
 	unsigned			enabled_mask;

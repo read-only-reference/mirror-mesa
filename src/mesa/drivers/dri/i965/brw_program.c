@@ -64,7 +64,7 @@ brw_nir_lower_uniforms(nir_shader *nir, bool is_scalar)
 nir_shader *
 brw_create_nir(struct brw_context *brw,
                const struct gl_shader_program *shader_prog,
-               const struct gl_program *prog,
+               struct gl_program *prog,
                gl_shader_stage stage,
                bool is_scalar)
 {
@@ -78,11 +78,13 @@ brw_create_nir(struct brw_context *brw,
    if (shader_prog) {
       nir = glsl_to_nir(shader_prog, stage, options);
       nir_remove_dead_variables(nir, nir_var_shader_in | nir_var_shader_out);
+      nir_lower_returns(nir);
+      nir_validate_shader(nir);
       NIR_PASS_V(nir, nir_lower_io_to_temporaries,
                  nir_shader_get_entrypoint(nir), true, false);
    } else {
       nir = prog_to_nir(prog, options);
-      NIR_PASS_V(nir, nir_convert_to_ssa); /* turn registers into SSA */
+      NIR_PASS_V(nir, nir_lower_regs_to_ssa); /* turn registers into SSA */
    }
    nir_validate_shader(nir);
 
@@ -106,6 +108,15 @@ brw_create_nir(struct brw_context *brw,
    NIR_PASS_V(nir, brw_nir_lower_uniforms, is_scalar);
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+
+   /* nir_shader may have been cloned so make sure shader_info is in sync */
+   if (nir->info != &prog->info) {
+      const char *name = prog->info.name;
+      const char *label = prog->info.label;
+      prog->info = *nir->info;
+      prog->info.name = name;
+      prog->info.label = label;
+   }
 
    if (shader_prog) {
       NIR_PASS_V(nir, nir_lower_samplers, shader_prog);
@@ -364,7 +375,6 @@ void brwInitFragProgFuncs( struct dd_function_table *functions )
    functions->DeleteProgram = brwDeleteProgram;
    functions->ProgramStringNotify = brwProgramStringNotify;
 
-   functions->NewShader = brw_new_shader;
    functions->LinkShader = brw_link_shader;
 
    functions->MemoryBarrier = brw_memory_barrier;

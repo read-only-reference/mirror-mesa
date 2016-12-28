@@ -569,6 +569,28 @@ latency_between(struct schedule_node *before, struct schedule_node *after)
             after->inst->op == QOP_TEX_RESULT)
                 return 100;
 
+        switch (before->inst->op) {
+        case QOP_RCP:
+        case QOP_RSQ:
+        case QOP_EXP2:
+        case QOP_LOG2:
+                for (int i = 0; i < qir_get_nsrc(after->inst); i++) {
+                        if (after->inst->src[i].file ==
+                            before->inst->dst.file &&
+                            after->inst->src[i].index ==
+                            before->inst->dst.index) {
+                                /* There are two QPU delay slots before we can
+                                 * read a math result, which could be up to 4
+                                 * QIR instructions if they packed well.
+                                 */
+                                return 4;
+                        }
+                }
+                break;
+        default:
+                break;
+        }
+
         return 1;
 }
 
@@ -593,7 +615,7 @@ compute_delay(struct schedule_node *n)
                                 compute_delay(n->children[i]);
                         n->delay = MAX2(n->delay,
                                         n->children[i]->delay +
-                                        latency_between(n, n->children[i]));
+                                        latency_between(n->children[i], n));
                 }
         }
 }
@@ -644,8 +666,8 @@ schedule_instructions(struct vc4_compile *c,
 
                         child->unblocked_time = MAX2(child->unblocked_time,
                                                      state->time +
-                                                     latency_between(chosen,
-                                                                     child));
+                                                     latency_between(child,
+                                                                     chosen));
                         child->parent_count--;
                         if (child->parent_count == 0)
                                 list_add(&child->link, &state->worklist);

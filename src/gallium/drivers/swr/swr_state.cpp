@@ -372,10 +372,9 @@ swr_delete_vs_state(struct pipe_context *pipe, void *vs)
    struct swr_vertex_shader *swr_vs = (swr_vertex_shader *)vs;
    FREE((void *)swr_vs->pipe.tokens);
    struct swr_screen *screen = swr_screen(pipe->screen);
-   if (!swr_is_fence_pending(screen->flush_fence))
-      swr_fence_submit(swr_context(pipe), screen->flush_fence);
-   swr_fence_finish(pipe->screen, NULL, screen->flush_fence, 0);
-   delete swr_vs;
+
+   /* Defer deletion of vs state */
+   swr_fence_work_delete_vs(screen->flush_fence, swr_vs);
 }
 
 static void *
@@ -412,10 +411,9 @@ swr_delete_fs_state(struct pipe_context *pipe, void *fs)
    struct swr_fragment_shader *swr_fs = (swr_fragment_shader *)fs;
    FREE((void *)swr_fs->pipe.tokens);
    struct swr_screen *screen = swr_screen(pipe->screen);
-   if (!swr_is_fence_pending(screen->flush_fence))
-      swr_fence_submit(swr_context(pipe), screen->flush_fence);
-   swr_fence_finish(pipe->screen, NULL, screen->flush_fence, 0);
-   delete swr_fs;
+
+   /* Defer deleton of fs state */
+   swr_fence_work_delete_fs(screen->flush_fence, swr_fs);
 }
 
 
@@ -494,6 +492,15 @@ swr_create_vertex_elements_state(struct pipe_context *pipe,
          const SWR_FORMAT_INFO &swr_desc = GetFormatInfo(
             mesa_to_swr_format(attribs[i].src_format));
          velems->stream_pitch[attribs[i].vertex_buffer_index] += swr_desc.Bpp;
+
+         if (attribs[i].instance_divisor != 0) {
+            velems->instanced_bufs |= 1U << attribs[i].vertex_buffer_index;
+            uint32_t *min_instance_div =
+               &velems->min_instance_div[attribs[i].vertex_buffer_index];
+            if (!*min_instance_div ||
+                attribs[i].instance_divisor < *min_instance_div)
+               *min_instance_div = attribs[i].instance_divisor;
+         }
       }
    }
 
@@ -870,12 +877,40 @@ swr_change_rt(struct swr_context *ctx,
    return need_fence;
 }
 
+static inline void
+swr_user_vbuf_range(const struct pipe_draw_info *info,
+                    const struct swr_vertex_element_state *velems,
+                    const struct pipe_vertex_buffer *vb,
+                    uint32_t i,
+                    uint32_t *totelems,
+                    uint32_t *base,
+                    uint32_t *size)
+{
+   /* FIXME: The size is too large - we don't access the full extra stride. */
+   unsigned elems;
+   if (velems->instanced_bufs & (1U << i)) {
+      elems = info->instance_count / velems->min_instance_div[i] + 1;
+      *totelems = info->start_instance + elems;
+      *base = info->start_instance * vb->stride;
+      *size = elems * vb->stride;
+   } else if (vb->stride) {
+      elems = info->max_index - info->min_index + 1;
+      *totelems = info->max_index + 1;
+      *base = info->min_index * vb->stride;
+      *size = elems * vb->stride;
+   } else {
+      *totelems = 1;
+      *base = 0;
+      *size = velems->stream_pitch[i];
+   }
+}
+
 void
 swr_update_derived(struct pipe_context *pipe,
                    const struct pipe_draw_info *p_draw_info)
 {
    struct swr_context *ctx = swr_context(pipe);
-   struct swr_screen *screen = swr_screen(ctx->pipe.screen);
+   struct swr_screen *screen = swr_screen(pipe->screen);
 
    /* Update screen->pipe to current pipe context. */
    if (screen->pipe != pipe)
@@ -1039,8 +1074,7 @@ swr_update_derived(struct pipe_context *pipe,
    /* Set vertex & index buffers */
    /* (using draw info if called by swr_draw_vbo) */
    if (ctx->dirty & SWR_NEW_VERTEX) {
-      uint32_t size, pitch, max_vertex, partial_inbounds, scratch_total;
-      const uint8_t *p_data;
+      uint32_t scratch_total;
       uint8_t *scratch = NULL;
 
       /* If being called by swr_draw_vbo, copy draw details */
@@ -1056,14 +1090,8 @@ swr_update_derived(struct pipe_context *pipe,
          if (!vb->user_buffer)
             continue;
 
-         if (vb->stride) {
-            size = (info.max_index - info.min_index + 1) * vb->stride;
-         } else {
-            /* pitch = 0, means constant value
-             * set size to 1 vertex */
-            size = ctx->velems->stream_pitch[i];
-         }
-
+         uint32_t elems, base, size;
+         swr_user_vbuf_range(&info, ctx->velems, vb, i, &elems, &base, &size);
          scratch_total += AlignUp(size, 4);
       }
 
@@ -1075,6 +1103,8 @@ swr_update_derived(struct pipe_context *pipe,
       /* vertex buffers */
       SWR_VERTEX_BUFFER_STATE swrVertexBuffers[PIPE_MAX_ATTRIBS];
       for (UINT i = 0; i < ctx->num_vertex_buffers; i++) {
+         uint32_t size, pitch, elems, partial_inbounds;
+         const uint8_t *p_data;
          struct pipe_vertex_buffer *vb = &ctx->vertex_buffer[i];
 
          pitch = vb->stride;
@@ -1083,7 +1113,7 @@ swr_update_derived(struct pipe_context *pipe,
              * size is based on buffer->width0 rather than info.max_index
              * to prevent having to validate VBO on each draw */
             size = vb->buffer->width0;
-            max_vertex = size / pitch;
+            elems = size / pitch;
             partial_inbounds = size % pitch;
 
             p_data = swr_resource_data(vb->buffer) + vb->buffer_offset;
@@ -1093,25 +1123,17 @@ swr_update_derived(struct pipe_context *pipe,
              * revalidate on each draw */
             post_update_dirty_flags |= SWR_NEW_VERTEX;
 
-            if (pitch) {
-               size = (info.max_index - info.min_index + 1) * pitch;
-            } else {
-               /* pitch = 0, means constant value
-                * set size to 1 vertex */
-               size = ctx->velems->stream_pitch[i];
-            }
-
-            max_vertex = info.max_index + 1;
+            uint32_t base;
+            swr_user_vbuf_range(&info, ctx->velems, vb, i, &elems, &base, &size);
             partial_inbounds = 0;
 
             /* Copy only needed vertices to scratch space */
             size = AlignUp(size, 4);
-            const void *ptr = (const uint8_t *) vb->user_buffer
-               + info.min_index * pitch;
+            const void *ptr = (const uint8_t *) vb->user_buffer + base;
             memcpy(scratch, ptr, size);
             ptr = scratch;
             scratch += size;
-            p_data = (const uint8_t *)ptr - info.min_index * pitch;
+            p_data = (const uint8_t *)ptr - base;
          }
 
          swrVertexBuffers[i] = {0};
@@ -1119,7 +1141,7 @@ swr_update_derived(struct pipe_context *pipe,
          swrVertexBuffers[i].pitch = pitch;
          swrVertexBuffers[i].pData = p_data;
          swrVertexBuffers[i].size = size;
-         swrVertexBuffers[i].maxVertex = max_vertex;
+         swrVertexBuffers[i].maxVertex = elems;
          swrVertexBuffers[i].partialInboundsSize = partial_inbounds;
       }
 
@@ -1129,6 +1151,8 @@ swr_update_derived(struct pipe_context *pipe,
       /* index buffer, if required (info passed in by swr_draw_vbo) */
       SWR_FORMAT index_type = R32_UINT; /* Default for non-indexed draws */
       if (info.indexed) {
+         const uint8_t *p_data;
+         uint32_t size, pitch;
          struct pipe_index_buffer *ib = &ctx->index_buffer;
 
          pitch = ib->index_size ? ib->index_size : sizeof(uint32_t);
@@ -1462,10 +1486,11 @@ swr_update_derived(struct pipe_context *pipe,
             continue;
          buffer.enable = true;
          buffer.pBuffer =
-            (uint32_t *)swr_resource_data(ctx->so_targets[i]->buffer);
+            (uint32_t *)(swr_resource_data(ctx->so_targets[i]->buffer) +
+                         ctx->so_targets[i]->buffer_offset);
          buffer.bufferSize = ctx->so_targets[i]->buffer_size >> 2;
          buffer.pitch = stream_output->stride[i];
-         buffer.streamOffset = ctx->so_targets[i]->buffer_offset >> 2;
+         buffer.streamOffset = 0;
 
          SwrSetSoBuffers(ctx->swrContext, &buffer, i);
       }
@@ -1544,7 +1569,7 @@ swr_set_so_targets(struct pipe_context *pipe,
    struct swr_context *swr = swr_context(pipe);
    uint32_t i;
 
-   assert(num_targets < MAX_SO_STREAMS);
+   assert(num_targets <= MAX_SO_STREAMS);
 
    for (i = 0; i < num_targets; i++) {
       pipe_so_target_reference(

@@ -12,10 +12,10 @@ The rules-ng-ng source files this header was generated from are:
 - /home/robclark/src/freedreno/envytools/rnndb/freedreno_copyright.xml  (   1572 bytes, from 2016-02-10 17:07:21)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/a2xx.xml          (  32907 bytes, from 2016-11-26 23:01:08)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_common.xml (  12025 bytes, from 2016-11-26 23:01:08)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_pm4.xml    (  22544 bytes, from 2016-11-26 23:01:08)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_pm4.xml    (  23277 bytes, from 2016-12-24 05:01:47)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  83840 bytes, from 2016-11-26 23:01:08)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a4xx.xml          ( 110765 bytes, from 2016-11-26 23:01:48)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a5xx.xml          (  90537 bytes, from 2016-11-29 17:10:44)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/a4xx.xml          ( 110757 bytes, from 2016-12-26 17:51:07)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/a5xx.xml          (  99224 bytes, from 2016-12-26 18:40:41)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/ocmem.xml         (   1773 bytes, from 2015-09-24 17:30:00)
 
 Copyright (C) 2013-2016 by the following authors:
@@ -67,10 +67,18 @@ enum vgt_event_type {
 	PERFCOUNTER_STOP = 24,
 	VS_FETCH_DONE = 27,
 	FACENESS_FLUSH = 28,
+	FLUSH_SO_0 = 17,
+	FLUSH_SO_1 = 18,
+	FLUSH_SO_2 = 19,
+	FLUSH_SO_3 = 20,
+	UNK_19 = 25,
 	UNK_1C = 28,
 	UNK_1D = 29,
 	BLIT = 30,
+	UNK_25 = 37,
 	UNK_26 = 38,
+	UNK_2C = 44,
+	UNK_2D = 45,
 };
 
 enum pc_di_primtype {
@@ -204,6 +212,7 @@ enum adreno_pm4_type3_packets {
 	CP_COMPUTE_CHECKPOINT = 110,
 	CP_MEM_TO_MEM = 115,
 	CP_BLIT = 44,
+	CP_UNK_39 = 57,
 	IN_IB_PREFETCH_END = 23,
 	IN_SUBBLK_PREFETCH = 31,
 	IN_INSTR_PREFETCH = 32,
@@ -247,13 +256,14 @@ enum a4xx_index_size {
 
 enum render_mode_cmd {
 	BYPASS = 1,
+	BINNING = 2,
 	GMEM = 3,
 	BLIT2D = 5,
 };
 
 enum cp_blit_cmd {
 	BLIT_OP_FILL = 0,
-	BLIT_OP_BLIT = 1,
+	BLIT_OP_COPY = 1,
 };
 
 #define REG_CP_LOAD_STATE_0					0x00000000
@@ -293,6 +303,7 @@ static inline uint32_t CP_LOAD_STATE_1_STATE_TYPE(enum adreno_state_type val)
 #define CP_LOAD_STATE_1_EXT_SRC_ADDR__SHIFT			2
 static inline uint32_t CP_LOAD_STATE_1_EXT_SRC_ADDR(uint32_t val)
 {
+	assert(!(val & 0x3));
 	return ((val >> 2) << CP_LOAD_STATE_1_EXT_SRC_ADDR__SHIFT) & CP_LOAD_STATE_1_EXT_SRC_ADDR__MASK;
 }
 

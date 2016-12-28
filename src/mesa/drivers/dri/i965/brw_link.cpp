@@ -128,27 +128,11 @@ process_glsl_ir(struct brw_context *brw,
       lower_if_to_cond_assign(shader->Stage, shader->ir, 16);
 
    do_lower_texture_projection(shader->ir);
-   brw_lower_texture_gradients(brw, shader->ir);
    do_vec_index_to_cond_assign(shader->ir);
    lower_vector_insert(shader->ir, true);
    lower_offset_arrays(shader->ir);
    lower_noise(shader->ir);
    lower_quadop_vector(shader->ir, false);
-
-   do_copy_propagation(shader->ir);
-
-   bool lowered_variable_indexing =
-      lower_variable_index_to_cond_assign(shader->Stage, shader->ir,
-                                          options->EmitNoIndirectInput,
-                                          options->EmitNoIndirectOutput,
-                                          options->EmitNoIndirectTemp,
-                                          options->EmitNoIndirectUniform);
-
-   if (unlikely(brw->perf_debug && lowered_variable_indexing)) {
-      perf_debug("Unsupported form of variable indexing in %s; falling "
-                 "back to very inefficient code generation\n",
-                 _mesa_shader_stage_to_abbrev(shader->Stage));
-   }
 
    bool progress;
    do {
@@ -160,12 +144,6 @@ process_glsl_ir(struct brw_context *brw,
             brw_do_channel_expressions(shader->ir);
          brw_do_vector_splitting(shader->ir);
       }
-
-      progress = do_lower_jumps(shader->ir, true, true,
-                                true, /* main return */
-                                false, /* continue */
-                                false /* loops */
-                                ) || progress;
 
       progress = do_common_optimization(shader->ir, true, true,
                                         options, ctx->Const.NativeIntegers) || progress;
@@ -196,17 +174,23 @@ process_glsl_ir(struct brw_context *brw,
    }
 }
 
-extern "C" struct gl_linked_shader *
-brw_new_shader(gl_shader_stage stage)
+static void
+unify_interfaces(struct shader_info **infos)
 {
-   struct brw_shader *shader;
+   struct shader_info *prev_info = NULL;
 
-   shader = rzalloc(NULL, struct brw_shader);
-   if (shader) {
-      shader->base.Stage = stage;
+   for (unsigned i = MESA_SHADER_VERTEX; i < MESA_SHADER_FRAGMENT; i++) {
+      if (!infos[i])
+         continue;
+
+      if (prev_info) {
+         prev_info->outputs_written |= infos[i]->inputs_read;
+         prev_info->patch_outputs_written |= infos[i]->patch_inputs_read;
+         infos[i]->inputs_read |= prev_info->outputs_written;
+         infos[i]->patch_inputs_read |= prev_info->patch_outputs_written;
+      }
+      prev_info = infos[i];
    }
-
-   return &shader->base;
 }
 
 extern "C" GLboolean
@@ -215,6 +199,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
    struct brw_context *brw = brw_context(ctx);
    const struct brw_compiler *compiler = brw->screen->compiler;
    unsigned int stage;
+   struct shader_info *infos[MESA_SHADER_STAGES] = { 0, };
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
       struct gl_linked_shader *shader = shProg->_LinkedShaders[stage];
@@ -227,29 +212,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       process_glsl_ir(brw, shProg, shader);
 
       _mesa_copy_linked_program_data(shProg, shader);
-
-      /* Make a pass over the IR to add state references for any built-in
-       * uniforms that are used.  This has to be done now (during linking).
-       * Code generation doesn't happen until the first time this shader is
-       * used for rendering.  Waiting until then to generate the parameters is
-       * too late.  At that point, the values for the built-in uniforms won't
-       * get sent to the shader.
-       */
-      foreach_in_list(ir_instruction, node, shader->ir) {
-         ir_variable *var = node->as_variable();
-
-         if ((var == NULL) || (var->data.mode != ir_var_uniform)
-             || (strncmp(var->name, "gl_", 3) != 0))
-            continue;
-
-         const ir_state_slot *const slots = var->get_state_slots();
-         assert(slots != NULL);
-
-         for (unsigned int i = 0; i < var->get_num_state_slots(); i++) {
-            _mesa_add_state_reference(prog->Parameters,
-                                      (gl_state_index *) slots[i].tokens);
-         }
-      }
 
       prog->SamplersUsed = shader->active_samplers;
       prog->ShadowSamplers = shader->shadow_samplers;
@@ -269,7 +231,35 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       prog->nir = brw_create_nir(brw, shProg, prog, (gl_shader_stage) stage,
                                  compiler->scalar_stage[stage]);
+      infos[stage] = prog->nir->info;
+
+      /* Make a pass over the IR to add state references for any built-in
+       * uniforms that are used.  This has to be done now (during linking).
+       * Code generation doesn't happen until the first time this shader is
+       * used for rendering.  Waiting until then to generate the parameters is
+       * too late.  At that point, the values for the built-in uniforms won't
+       * get sent to the shader.
+       */
+      nir_foreach_variable(var, &prog->nir->uniforms) {
+         if (strncmp(var->name, "gl_", 3) == 0) {
+            const nir_state_slot *const slots = var->state_slots;
+            assert(var->state_slots != NULL);
+
+            for (unsigned int i = 0; i < var->num_state_slots; i++) {
+               _mesa_add_state_reference(prog->Parameters,
+                                         (gl_state_index *)slots[i].tokens);
+            }
+         }
+      }
    }
+
+   /* The linker tries to dead code eliminate unused varying components,
+    * and make sure interfaces match.  But it isn't able to do so in all
+    * cases.  So, explicitly make the interfaces match by OR'ing together
+    * the inputs_read/outputs_written bitfields of adjacent stages.
+    */
+   if (!shProg->SeparateShader)
+      unify_interfaces(infos);
 
    if ((ctx->_Shader->Flags & GLSL_DUMP) && shProg->Name != 0) {
       for (unsigned i = 0; i < shProg->NumShaders; i++) {

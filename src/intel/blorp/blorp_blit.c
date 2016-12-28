@@ -28,6 +28,8 @@
 
 #define FILE_DEBUG_FLAG DEBUG_BLORP
 
+static const bool split_blorp_blit_debug = false;
+
 /**
  * Enum to specify the order of arguments in a sampler message
  */
@@ -1484,17 +1486,139 @@ surf_retile_w_to_y(const struct isl_device *isl_dev,
    info->tile_y_sa /= 2;
 }
 
+static bool
+can_shrink_surface(const struct brw_blorp_surface_info *surf)
+{
+   /* The current code doesn't support offsets into the aux buffers. This
+    * should be possible, but we need to make sure the offset is page
+    * aligned for both the surface and the aux buffer surface. Generally
+    * this mean using the page aligned offset for the aux buffer.
+    *
+    * Currently the cases where we must split the blit are limited to cases
+    * where we don't have a aux buffer.
+    */
+   if (surf->aux_addr.buffer != NULL)
+      return false;
+
+   /* We can't support splitting the blit for gen <= 7, because the qpitch
+    * size is calculated by the hardware based on the surface height for
+    * gen <= 7. In gen >= 8, the qpitch is controlled by the driver.
+    */
+   if (surf->surf.msaa_layout == ISL_MSAA_LAYOUT_ARRAY)
+      return false;
+
+   return true;
+}
+
+static bool
+can_shrink_surfaces(const struct blorp_params *params)
+{
+   return
+      can_shrink_surface(&params->src) &&
+      can_shrink_surface(&params->dst);
+}
+
+static unsigned
+get_max_surface_size(const struct gen_device_info *devinfo,
+                     const struct blorp_params *params)
+{
+   const unsigned max = devinfo->gen >= 7 ? 16384 : 8192;
+   if (split_blorp_blit_debug && can_shrink_surfaces(params))
+      return max >> 4; /* A smaller restriction when debug is enabled */
+   else
+      return max;
+}
+
+struct blt_axis {
+   double src0, src1, dst0, dst1;
+   bool mirror;
+};
+
+struct blt_coords {
+   struct blt_axis x, y;
+};
+
 static void
-do_blorp_blit(struct blorp_batch *batch,
-              struct blorp_params *params,
-              struct brw_blorp_blit_prog_key *wm_prog_key,
-              float src_x0, float src_y0,
-              float src_x1, float src_y1,
-              float dst_x0, float dst_y0,
-              float dst_x1, float dst_y1,
-              bool mirror_x, bool mirror_y)
+surf_fake_rgb_with_red(const struct isl_device *isl_dev,
+                       struct brw_blorp_surface_info *info,
+                       uint32_t *x, uint32_t *width)
+{
+   surf_convert_to_single_slice(isl_dev, info);
+
+   info->surf.logical_level0_px.width *= 3;
+   info->surf.phys_level0_sa.width *= 3;
+   *x *= 3;
+   *width *= 3;
+
+   enum isl_format red_format;
+   switch (info->view.format) {
+   case ISL_FORMAT_R8G8B8_UNORM:
+      red_format = ISL_FORMAT_R8_UNORM;
+      break;
+   case ISL_FORMAT_R8G8B8_UINT:
+      red_format = ISL_FORMAT_R8_UINT;
+      break;
+   case ISL_FORMAT_R16G16B16_UNORM:
+      red_format = ISL_FORMAT_R16_UNORM;
+      break;
+   case ISL_FORMAT_R16G16B16_UINT:
+      red_format = ISL_FORMAT_R16_UINT;
+      break;
+   case ISL_FORMAT_R32G32B32_UINT:
+      red_format = ISL_FORMAT_R32_UINT;
+      break;
+   default:
+      unreachable("Invalid RGB copy destination format");
+   }
+   assert(isl_format_get_layout(red_format)->channels.r.type ==
+          isl_format_get_layout(info->view.format)->channels.r.type);
+   assert(isl_format_get_layout(red_format)->channels.r.bits ==
+          isl_format_get_layout(info->view.format)->channels.r.bits);
+
+   info->surf.format = info->view.format = red_format;
+}
+
+static void
+fake_dest_rgb_with_red(const struct isl_device *dev,
+                       struct blorp_params *params,
+                       struct brw_blorp_blit_prog_key *wm_prog_key,
+                       struct blt_coords *coords)
+{
+   /* Handle RGB destinations for blorp_copy */
+   const struct isl_format_layout *dst_fmtl =
+      isl_format_get_layout(params->dst.surf.format);
+
+   if (dst_fmtl->bpb % 3 == 0) {
+      uint32_t dst_x = coords->x.dst0;
+      uint32_t dst_width = coords->x.dst1 - dst_x;
+      surf_fake_rgb_with_red(dev, &params->dst,
+                             &dst_x, &dst_width);
+      coords->x.dst0 = dst_x;
+      coords->x.dst1 = dst_x + dst_width;
+      wm_prog_key->dst_rgb = true;
+      wm_prog_key->need_dst_offset = true;
+   }
+}
+
+enum blit_shrink_status {
+   BLIT_NO_SHRINK = 0,
+   BLIT_WIDTH_SHRINK = 1,
+   BLIT_HEIGHT_SHRINK = 2,
+};
+
+/* Try to blit. If the surface parameters exceed the size allowed by hardware,
+ * then enum blit_shrink_status will be returned. If BLIT_NO_SHRINK is
+ * returned, then the blit was successful.
+ */
+static enum blit_shrink_status
+try_blorp_blit(struct blorp_batch *batch,
+               struct blorp_params *params,
+               struct brw_blorp_blit_prog_key *wm_prog_key,
+               struct blt_coords *coords)
 {
    const struct gen_device_info *devinfo = batch->blorp->isl_dev->info;
+
+   fake_dest_rgb_with_red(batch->blorp->isl_dev, params, wm_prog_key, coords);
 
    if (isl_format_has_sint_channel(params->src.view.format)) {
       wm_prog_key->texture_data_type = nir_type_int;
@@ -1519,15 +1643,19 @@ do_blorp_blit(struct blorp_batch *batch,
    /* Round floating point values to nearest integer to avoid "off by one texel"
     * kind of errors when blitting.
     */
-   params->x0 = params->wm_inputs.discard_rect.x0 = roundf(dst_x0);
-   params->y0 = params->wm_inputs.discard_rect.y0 = roundf(dst_y0);
-   params->x1 = params->wm_inputs.discard_rect.x1 = roundf(dst_x1);
-   params->y1 = params->wm_inputs.discard_rect.y1 = roundf(dst_y1);
+   params->x0 = params->wm_inputs.discard_rect.x0 = round(coords->x.dst0);
+   params->y0 = params->wm_inputs.discard_rect.y0 = round(coords->y.dst0);
+   params->x1 = params->wm_inputs.discard_rect.x1 = round(coords->x.dst1);
+   params->y1 = params->wm_inputs.discard_rect.y1 = round(coords->y.dst1);
 
    brw_blorp_setup_coord_transform(&params->wm_inputs.coord_transform[0],
-                                   src_x0, src_x1, dst_x0, dst_x1, mirror_x);
+                                   coords->x.src0, coords->x.src1,
+                                   coords->x.dst0, coords->x.dst1,
+                                   coords->x.mirror);
    brw_blorp_setup_coord_transform(&params->wm_inputs.coord_transform[1],
-                                   src_y0, src_y1, dst_y0, dst_y1, mirror_y);
+                                   coords->y.src0, coords->y.src1,
+                                   coords->y.dst0, coords->y.dst1,
+                                   coords->y.mirror);
 
    if (devinfo->gen > 6 &&
        params->dst.surf.msaa_layout == ISL_MSAA_LAYOUT_INTERLEAVED) {
@@ -1691,7 +1819,179 @@ do_blorp_blit(struct blorp_batch *batch,
 
    brw_blorp_get_blit_kernel(batch->blorp, params, wm_prog_key);
 
-   batch->blorp->exec(batch, params);
+   unsigned result = 0;
+   unsigned max_surface_size = get_max_surface_size(devinfo, params);
+   if (params->src.surf.logical_level0_px.width > max_surface_size ||
+       params->dst.surf.logical_level0_px.width > max_surface_size)
+      result |= BLIT_WIDTH_SHRINK;
+   if (params->src.surf.logical_level0_px.height > max_surface_size ||
+       params->dst.surf.logical_level0_px.height > max_surface_size)
+      result |= BLIT_HEIGHT_SHRINK;
+
+   if (result == 0) {
+      batch->blorp->exec(batch, params);
+   }
+
+   return result;
+}
+
+/* Adjust split blit source coordinates for the current destination
+ * coordinates.
+ */
+static void
+adjust_split_source_coords(const struct blt_axis *orig,
+                           struct blt_axis *split_coords,
+                           double scale)
+{
+   /* When scale is greater than 0, then we are growing from the start, so
+    * src0 uses delta0, and src1 uses delta1. When scale is less than 0, the
+    * source range shrinks from the end. In that case src0 is adjusted by
+    * delta1, and src1 is adjusted by delta0.
+    */
+   double delta0 = scale * (split_coords->dst0 - orig->dst0);
+   double delta1 = scale * (split_coords->dst1 - orig->dst1);
+   split_coords->src0 = orig->src0 + (scale >= 0.0 ? delta0 : delta1);
+   split_coords->src1 = orig->src1 + (scale >= 0.0 ? delta1 : delta0);
+}
+
+static const struct isl_extent2d
+get_px_size_sa(const struct isl_surf *surf)
+{
+   static const struct isl_extent2d one_to_one = { .w = 1, .h = 1 };
+
+   if (surf->msaa_layout != ISL_MSAA_LAYOUT_INTERLEAVED)
+      return one_to_one;
+   else
+      return isl_get_interleaved_msaa_px_size_sa(surf->samples);
+}
+
+static void
+shrink_surface_params(const struct isl_device *dev,
+                      struct brw_blorp_surface_info *info,
+                      double *x0, double *x1, double *y0, double *y1)
+{
+   uint32_t byte_offset, x_offset_sa, y_offset_sa, size;
+   struct isl_extent2d px_size_sa;
+   int adjust;
+
+   surf_convert_to_single_slice(dev, info);
+
+   px_size_sa = get_px_size_sa(&info->surf);
+
+   /* Because this gets called after we lower compressed images, the tile
+    * offsets may be non-zero and we need to incorporate them in our
+    * calculations.
+    */
+   x_offset_sa = (uint32_t)*x0 * px_size_sa.w + info->tile_x_sa;
+   y_offset_sa = (uint32_t)*y0 * px_size_sa.h + info->tile_y_sa;
+   isl_tiling_get_intratile_offset_sa(dev, info->surf.tiling,
+                                      info->surf.format, info->surf.row_pitch,
+                                      x_offset_sa, y_offset_sa,
+                                      &byte_offset,
+                                      &info->tile_x_sa, &info->tile_y_sa);
+
+   info->addr.offset += byte_offset;
+
+   adjust = (int)info->tile_x_sa / px_size_sa.w - (int)*x0;
+   *x0 += adjust;
+   *x1 += adjust;
+   info->tile_x_sa = 0;
+
+   adjust = (int)info->tile_y_sa / px_size_sa.h - (int)*y0;
+   *y0 += adjust;
+   *y1 += adjust;
+   info->tile_y_sa = 0;
+
+   size = MIN2((uint32_t)ceil(*x1), info->surf.logical_level0_px.width);
+   info->surf.logical_level0_px.width = size;
+   info->surf.phys_level0_sa.width = size * px_size_sa.w;
+
+   size = MIN2((uint32_t)ceil(*y1), info->surf.logical_level0_px.height);
+   info->surf.logical_level0_px.height = size;
+   info->surf.phys_level0_sa.height = size * px_size_sa.h;
+}
+
+static void
+shrink_surfaces(const struct isl_device *dev,
+                struct blorp_params *params,
+                struct brw_blorp_blit_prog_key *wm_prog_key,
+                struct blt_coords *coords)
+{
+   /* Shrink source surface */
+   shrink_surface_params(dev, &params->src, &coords->x.src0, &coords->x.src1,
+                         &coords->y.src0, &coords->y.src1);
+   wm_prog_key->need_src_offset = false;
+
+   /* Shrink destination surface */
+   shrink_surface_params(dev, &params->dst, &coords->x.dst0, &coords->x.dst1,
+                         &coords->y.dst0, &coords->y.dst1);
+   wm_prog_key->need_dst_offset = false;
+}
+
+static void
+do_blorp_blit(struct blorp_batch *batch,
+              const struct blorp_params *orig_params,
+              struct brw_blorp_blit_prog_key *wm_prog_key,
+              const struct blt_coords *orig)
+{
+   struct blorp_params params;
+   struct blt_coords blit_coords;
+   struct blt_coords split_coords = *orig;
+   double w = orig->x.dst1 - orig->x.dst0;
+   double h = orig->y.dst1 - orig->y.dst0;
+   double x_scale = (orig->x.src1 - orig->x.src0) / w;
+   double y_scale = (orig->y.src1 - orig->y.src0) / h;
+   if (orig->x.mirror)
+      x_scale = -x_scale;
+   if (orig->y.mirror)
+      y_scale = -y_scale;
+
+   bool x_done, y_done;
+   bool shrink = split_blorp_blit_debug && can_shrink_surfaces(orig_params);
+   do {
+      params = *orig_params;
+      blit_coords = split_coords;
+      if (shrink)
+         shrink_surfaces(batch->blorp->isl_dev, &params, wm_prog_key,
+                         &blit_coords);
+      enum blit_shrink_status result =
+         try_blorp_blit(batch, &params, wm_prog_key, &blit_coords);
+
+      if (result & BLIT_WIDTH_SHRINK) {
+         w /= 2.0;
+         assert(w >= 1.0);
+         split_coords.x.dst1 = MIN2(split_coords.x.dst0 + w, orig->x.dst1);
+         adjust_split_source_coords(&orig->x, &split_coords.x, x_scale);
+      }
+      if (result & BLIT_HEIGHT_SHRINK) {
+         h /= 2.0;
+         assert(h >= 1.0);
+         split_coords.y.dst1 = MIN2(split_coords.y.dst0 + h, orig->y.dst1);
+         adjust_split_source_coords(&orig->y, &split_coords.y, y_scale);
+      }
+
+      if (result != 0) {
+         assert(can_shrink_surfaces(orig_params));
+         shrink = true;
+         continue;
+      }
+
+      y_done = (orig->y.dst1 - split_coords.y.dst1 < 0.5);
+      x_done = y_done && (orig->x.dst1 - split_coords.x.dst1 < 0.5);
+      if (x_done) {
+         break;
+      } else if (y_done) {
+         split_coords.x.dst0 += w;
+         split_coords.x.dst1 = MIN2(split_coords.x.dst0 + w, orig->x.dst1);
+         split_coords.y.dst0 = orig->y.dst0;
+         split_coords.y.dst1 = MIN2(split_coords.y.dst0 + h, orig->y.dst1);
+         adjust_split_source_coords(&orig->x, &split_coords.x, x_scale);
+      } else {
+         split_coords.y.dst0 += h;
+         split_coords.y.dst1 = MIN2(split_coords.y.dst0 + h, orig->y.dst1);
+         adjust_split_source_coords(&orig->y, &split_coords.y, y_scale);
+      }
+   } while (true);
 }
 
 void
@@ -1764,10 +2064,24 @@ blorp_blit(struct blorp_batch *batch,
       minify(params.src.surf.logical_level0_px.height, src_level) *
       wm_prog_key.y_scale - 1.0f;
 
-   do_blorp_blit(batch, &params, &wm_prog_key,
-                 src_x0, src_y0, src_x1, src_y1,
-                 dst_x0, dst_y0, dst_x1, dst_y1,
-                 mirror_x, mirror_y);
+   struct blt_coords coords = {
+      .x = {
+         .src0 = src_x0,
+         .src1 = src_x1,
+         .dst0 = dst_x0,
+         .dst1 = dst_x1,
+         .mirror = mirror_x
+      },
+      .y = {
+         .src0 = src_y0,
+         .src1 = src_y1,
+         .dst0 = dst_y0,
+         .dst1 = dst_y1,
+         .mirror = mirror_y
+      }
+   };
+
+   do_blorp_blit(batch, &params, &wm_prog_key, &coords);
 }
 
 static enum isl_format
@@ -1945,46 +2259,6 @@ surf_convert_to_uncompressed(const struct isl_device *isl_dev,
    info->surf.format = get_copy_format_for_bpb(isl_dev, fmtl->bpb);
 }
 
-static void
-surf_fake_rgb_with_red(const struct isl_device *isl_dev,
-                       struct brw_blorp_surface_info *info,
-                       uint32_t *x, uint32_t *width)
-{
-   surf_convert_to_single_slice(isl_dev, info);
-
-   info->surf.logical_level0_px.width *= 3;
-   info->surf.phys_level0_sa.width *= 3;
-   *x *= 3;
-   *width *= 3;
-
-   enum isl_format red_format;
-   switch (info->view.format) {
-   case ISL_FORMAT_R8G8B8_UNORM:
-      red_format = ISL_FORMAT_R8_UNORM;
-      break;
-   case ISL_FORMAT_R8G8B8_UINT:
-      red_format = ISL_FORMAT_R8_UINT;
-      break;
-   case ISL_FORMAT_R16G16B16_UNORM:
-      red_format = ISL_FORMAT_R16_UNORM;
-      break;
-   case ISL_FORMAT_R16G16B16_UINT:
-      red_format = ISL_FORMAT_R16_UINT;
-      break;
-   case ISL_FORMAT_R32G32B32_UINT:
-      red_format = ISL_FORMAT_R32_UINT;
-      break;
-   default:
-      unreachable("Invalid RGB copy destination format");
-   }
-   assert(isl_format_get_layout(red_format)->channels.r.type ==
-          isl_format_get_layout(info->view.format)->channels.r.type);
-   assert(isl_format_get_layout(red_format)->channels.r.bits ==
-          isl_format_get_layout(info->view.format)->channels.r.bits);
-
-   info->surf.format = info->view.format = red_format;
-}
-
 void
 blorp_copy(struct blorp_batch *batch,
            const struct blorp_surf *src_surf,
@@ -2069,15 +2343,22 @@ blorp_copy(struct blorp_batch *batch,
    uint32_t dst_width = src_width;
    uint32_t dst_height = src_height;
 
-   if (dst_fmtl->bpb % 3 == 0) {
-      surf_fake_rgb_with_red(batch->blorp->isl_dev, &params.dst,
-                             &dst_x, &dst_width);
-      wm_prog_key.dst_rgb = true;
-      wm_prog_key.need_dst_offset = true;
-   }
+   struct blt_coords coords = {
+      .x = {
+         .src0 = src_x,
+         .src1 = src_x + src_width,
+         .dst0 = dst_x,
+         .dst1 = dst_x + dst_width,
+         .mirror = false
+      },
+      .y = {
+         .src0 = src_y,
+         .src1 = src_y + src_height,
+         .dst0 = dst_y,
+         .dst1 = dst_y + dst_height,
+         .mirror = false
+      }
+   };
 
-   do_blorp_blit(batch, &params, &wm_prog_key,
-                 src_x, src_y, src_x + src_width, src_y + src_height,
-                 dst_x, dst_y, dst_x + dst_width, dst_y + dst_height,
-                 false, false);
+   do_blorp_blit(batch, &params, &wm_prog_key, &coords);
 }

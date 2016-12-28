@@ -64,7 +64,7 @@ struct fd_screen {
 	uint32_t chip_id;        /* coreid:8 majorrev:8 minorrev:8 patch:8 */
 	uint32_t max_freq;
 	uint32_t max_rts;        /* max # of render targets */
-	uint32_t gmem_alignment;
+	uint32_t gmem_alignw, gmem_alignh;
 	bool has_timestamp;
 
 	void *compiler;          /* currently unused for a2xx */
@@ -124,7 +124,7 @@ is_a5xx(struct fd_screen *screen)
 static inline boolean
 is_ir3(struct fd_screen *screen)
 {
-	return is_a3xx(screen) || is_a4xx(screen);
+	return is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen);
 }
 
 #endif /* FREEDRENO_SCREEN_H_ */

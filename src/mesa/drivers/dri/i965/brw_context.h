@@ -226,6 +226,7 @@ enum brw_state_id {
    BRW_STATE_CC_STATE,
    BRW_STATE_BLORP,
    BRW_STATE_VIEWPORT_COUNT,
+   BRW_STATE_CONSERVATIVE_RASTERIZATION,
    BRW_NUM_STATE_BITS
 };
 
@@ -316,6 +317,7 @@ enum brw_state_id {
 #define BRW_NEW_URB_SIZE                (1ull << BRW_STATE_URB_SIZE)
 #define BRW_NEW_CC_STATE                (1ull << BRW_STATE_CC_STATE)
 #define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
+#define BRW_NEW_CONSERVATIVE_RASTERIZATION (1ull << BRW_STATE_CONSERVATIVE_RASTERIZATION)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -331,6 +333,8 @@ struct brw_state_flags {
 struct brw_program {
    struct gl_program program;
    GLuint id;
+
+   bool compiled_once;
 };
 
 
@@ -347,12 +351,6 @@ struct gen4_fragment_program {
    unsigned char interp_mode[BRW_VARYING_SLOT_COUNT];
 };
 
-
-struct brw_shader {
-   struct gl_linked_shader base;
-
-   bool compiled_once;
-};
 
 /**
  * Bitmask indicating which fragment shader inputs represent varyings (and
@@ -1707,8 +1705,6 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 }
 
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
-bool brw_lower_texture_gradients(struct brw_context *brw,
-                                 struct exec_list *instructions);
 
 extern const char * const conditional_modifier[16];
 extern const char *const pred_ctrl_align16[16];

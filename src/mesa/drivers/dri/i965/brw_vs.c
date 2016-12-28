@@ -97,12 +97,8 @@ brw_codegen_vs_prog(struct brw_context *brw,
    struct brw_vs_prog_data prog_data;
    struct brw_stage_prog_data *stage_prog_data = &prog_data.base.base;
    void *mem_ctx;
-   struct brw_shader *vs = NULL;
    bool start_busy = false;
    double start_time = 0;
-
-   if (prog)
-      vs = (struct brw_shader *) prog->_LinkedShaders[MESA_SHADER_VERTEX];
 
    memset(&prog_data, 0, sizeof(prog_data));
 
@@ -158,9 +154,7 @@ brw_codegen_vs_prog(struct brw_context *brw,
 
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
-                       prog ? prog->SeparateShader ||
-                              prog->_LinkedShaders[MESA_SHADER_TESS_EVAL]
-                            : false);
+                       vp->program.nir->info->separate_shader);
 
    if (0) {
       _mesa_fprint_program_opt(stderr, &vp->program, PROG_PRINT_DEBUG, true);
@@ -204,15 +198,15 @@ brw_codegen_vs_prog(struct brw_context *brw,
       return false;
    }
 
-   if (unlikely(brw->perf_debug) && vs) {
-      if (vs->compiled_once) {
+   if (unlikely(brw->perf_debug)) {
+      if (vp->compiled_once) {
          brw_vs_debug_recompile(brw, prog, key);
       }
       if (start_busy && !drm_intel_bo_busy(brw->batch.last_bo)) {
          perf_debug("VS compile took %.03f ms and stalled the GPU\n",
                     (get_time() - start_time) * 1000);
       }
-      vs->compiled_once = true;
+      vp->compiled_once = true;
    }
 
    /* Scratch space is used for register spilling */

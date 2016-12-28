@@ -209,19 +209,19 @@ vec4_tcs_visitor::emit_output_urb_read(const dst_reg &dst,
    /* Set up the message header to reference the proper parts of the URB */
    dst_reg header = dst_reg(this, glsl_type::uvec4_type);
    inst = emit(TCS_OPCODE_SET_OUTPUT_URB_OFFSETS, header,
-               brw_imm_ud(dst.writemask), indirect_offset);
+               brw_imm_ud(dst.writemask << first_component), indirect_offset);
    inst->force_writemask_all = true;
 
-   /* Read into a temporary, ignoring writemasking. */
    vec4_instruction *read = emit(VEC4_OPCODE_URB_READ, dst, src_reg(header));
    read->offset = base_offset;
    read->mlen = 1;
    read->base_mrf = -1;
 
    if (first_component) {
-      src_reg src = src_reg(dst);
-      src.swizzle = BRW_SWZ_COMP_INPUT(first_component);
-      emit(MOV(dst, src));
+      /* Read into a temporary and copy with a swizzle and writemask. */
+      read->dst = retype(dst_reg(this, glsl_type::ivec4_type), dst.type);
+      emit(MOV(dst, swizzle(src_reg(read->dst),
+                            BRW_SWZ_COMP_INPUT(first_component))));
    }
 }
 
@@ -461,18 +461,19 @@ brw_compile_tcs(const struct brw_compiler *compiler,
    nir->info->patch_outputs_written = key->patch_outputs_written;
 
    struct brw_vue_map input_vue_map;
-   brw_compute_vue_map(devinfo, &input_vue_map, nir->info->inputs_read, true);
+   brw_compute_vue_map(devinfo, &input_vue_map, nir->info->inputs_read,
+                       nir->info->separate_shader);
    brw_compute_tess_vue_map(&vue_prog_data->vue_map,
                             nir->info->outputs_written,
                             nir->info->patch_outputs_written);
 
-   nir = brw_nir_apply_sampler_key(nir, devinfo, &key->tex, is_scalar);
+   nir = brw_nir_apply_sampler_key(nir, compiler, &key->tex, is_scalar);
    brw_nir_lower_vue_inputs(nir, is_scalar, &input_vue_map);
    brw_nir_lower_tcs_outputs(nir, &vue_prog_data->vue_map);
    if (key->quads_workaround)
       brw_nir_apply_tcs_quads_workaround(nir);
 
-   nir = brw_postprocess_nir(nir, compiler->devinfo, is_scalar);
+   nir = brw_postprocess_nir(nir, compiler, is_scalar);
 
    if (is_scalar)
       prog_data->instances = DIV_ROUND_UP(nir->info->tcs.vertices_out, 8);

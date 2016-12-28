@@ -144,6 +144,8 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
    v2.run(sh->ir);
    visit_exec_list(sh->ir, &v1);
 
+   nir_lower_constant_initializers(shader, (nir_variable_mode)~0);
+
    shader->info->name = ralloc_asprintf(shader, "GLSL%d", shader_prog->Name);
    if (shader_prog->Label)
       shader->info->label = ralloc_strdup(shader, shader_prog->Label);
@@ -152,7 +154,6 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
    shader->info->num_ssbos = sh->NumShaderStorageBlocks;
    shader->info->clip_distance_array_size = sh->Program->ClipDistanceArraySize;
    shader->info->cull_distance_array_size = sh->Program->CullDistanceArraySize;
-   shader->info->separate_shader = shader_prog->SeparateShader;
    shader->info->has_transform_feedback_varyings =
       shader_prog->TransformFeedback.NumVarying > 0;
 
@@ -198,34 +199,51 @@ constant_copy(ir_constant *ir, void *mem_ctx)
 
    nir_constant *ret = ralloc(mem_ctx, nir_constant);
 
-   unsigned total_elems = ir->type->components();
+   const unsigned rows = ir->type->vector_elements;
+   const unsigned cols = ir->type->matrix_columns;
    unsigned i;
 
    ret->num_elements = 0;
    switch (ir->type->base_type) {
    case GLSL_TYPE_UINT:
-      for (i = 0; i < total_elems; i++)
-         ret->value.u[i] = ir->value.u[i];
+      /* Only float base types can be matrices. */
+      assert(cols == 1);
+
+      for (unsigned r = 0; r < rows; r++)
+         ret->values[0].u32[r] = ir->value.u[r];
+
       break;
 
    case GLSL_TYPE_INT:
-      for (i = 0; i < total_elems; i++)
-         ret->value.i[i] = ir->value.i[i];
+      /* Only float base types can be matrices. */
+      assert(cols == 1);
+
+      for (unsigned r = 0; r < rows; r++)
+         ret->values[0].i32[r] = ir->value.i[r];
+
       break;
 
    case GLSL_TYPE_FLOAT:
-      for (i = 0; i < total_elems; i++)
-         ret->value.f[i] = ir->value.f[i];
+      for (unsigned c = 0; c < cols; c++) {
+         for (unsigned r = 0; r < rows; r++)
+            ret->values[c].f32[r] = ir->value.f[c * rows + r];
+      }
       break;
 
    case GLSL_TYPE_DOUBLE:
-      for (i = 0; i < total_elems; i++)
-         ret->value.d[i] = ir->value.d[i];
+      for (unsigned c = 0; c < cols; c++) {
+         for (unsigned r = 0; r < rows; r++)
+            ret->values[c].f64[r] = ir->value.d[c * rows + r];
+      }
       break;
 
    case GLSL_TYPE_BOOL:
-      for (i = 0; i < total_elems; i++)
-         ret->value.b[i] = ir->value.b[i];
+      /* Only float base types can be matrices. */
+      assert(cols == 1);
+
+      for (unsigned r = 0; r < rows; r++)
+         ret->values[0].u32[r] = ir->value.b[r] ? NIR_TRUE : NIR_FALSE;
+
       break;
 
    case GLSL_TYPE_STRUCT:
@@ -325,10 +343,6 @@ nir_visitor::visit(ir_variable *ir)
    var->data.interpolation = ir->data.interpolation;
    var->data.origin_upper_left = ir->data.origin_upper_left;
    var->data.pixel_center_integer = ir->data.pixel_center_integer;
-   var->data.explicit_location = ir->data.explicit_location;
-   var->data.explicit_index = ir->data.explicit_index;
-   var->data.explicit_binding = ir->data.explicit_binding;
-   var->data.has_initializer = ir->data.has_initializer;
    var->data.compact = false;
    var->data.location_frac = ir->data.location_frac;
 
@@ -361,7 +375,6 @@ nir_visitor::visit(ir_variable *ir)
    var->data.image._volatile = ir->data.image_volatile;
    var->data.image.restrict_flag = ir->data.image_restrict;
    var->data.image.format = ir->data.image_format;
-   var->data.max_array_access = ir->data.max_array_access;
    var->data.fb_fetch_output = ir->data.fb_fetch_output;
 
    var->num_state_slots = ir->get_num_state_slots();
@@ -1165,8 +1178,7 @@ nir_visitor::visit(ir_assignment *ir)
       nir_intrinsic_instr_create(this->shader, nir_intrinsic_store_var);
    store->num_components = ir->lhs->type->vector_elements;
    nir_intrinsic_set_write_mask(store, ir->write_mask);
-   nir_deref *store_deref = nir_copy_deref(store, &lhs_deref->deref);
-   store->variables[0] = nir_deref_as_var(store_deref);
+   store->variables[0] = nir_deref_var_clone(lhs_deref, store);
    store->src[0] = nir_src_for_ssa(src);
 
    if (ir->condition) {
@@ -1884,7 +1896,7 @@ nir_visitor::visit(ir_texture *ir)
 
    if (ir->projector != NULL)
       num_srcs++;
-   if (ir->shadow_comparitor != NULL)
+   if (ir->shadow_comparator != NULL)
       num_srcs++;
    if (ir->offset != NULL)
       num_srcs++;
@@ -1932,10 +1944,10 @@ nir_visitor::visit(ir_texture *ir)
       src_number++;
    }
 
-   if (ir->shadow_comparitor != NULL) {
+   if (ir->shadow_comparator != NULL) {
       instr->src[src_number].src =
-         nir_src_for_ssa(evaluate_rvalue(ir->shadow_comparitor));
-      instr->src[src_number].src_type = nir_tex_src_comparitor;
+         nir_src_for_ssa(evaluate_rvalue(ir->shadow_comparator));
+      instr->src[src_number].src_type = nir_tex_src_comparator;
       src_number++;
    }
 

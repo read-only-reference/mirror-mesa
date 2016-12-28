@@ -124,7 +124,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
    nir_function *entry_point =
       spirv_to_nir(spirv, module->size / 4,
                    spec_entries, num_spec_entries,
-                   stage, entrypoint_name, nir_options);
+                   stage, entrypoint_name, NULL, nir_options);
    nir_shader *nir = entry_point->shader;
    assert(nir->stage == stage);
    nir_validate_shader(nir);
@@ -135,6 +135,13 @@ anv_shader_compile_to_nir(struct anv_device *device,
       nir_lower_wpos_center(nir);
       nir_validate_shader(nir);
    }
+
+   /* We have to lower away local constant initializers right before we
+    * inline functions.  That way they get properly initialized at the top
+    * of the function and not at the top of its caller.
+    */
+   nir_lower_constant_initializers(nir, nir_var_local);
+   nir_validate_shader(nir);
 
    nir_lower_returns(nir);
    nir_validate_shader(nir);
@@ -153,6 +160,12 @@ anv_shader_compile_to_nir(struct anv_device *device,
    nir_remove_dead_variables(nir, nir_var_shader_in);
    nir_remove_dead_variables(nir, nir_var_shader_out);
    nir_remove_dead_variables(nir, nir_var_system_value);
+   nir_validate_shader(nir);
+
+   /* Now that we've deleted all but the main function, we can go ahead and
+    * lower the rest of the constant initializers.
+    */
+   nir_lower_constant_initializers(nir, ~0);
    nir_validate_shader(nir);
 
    nir_propagate_invariant(nir);
@@ -176,16 +189,6 @@ anv_shader_compile_to_nir(struct anv_device *device,
       anv_nir_lower_input_attachments(nir);
 
    nir_shader_gather_info(nir, entry_point->impl);
-
-   nir_variable_mode indirect_mask = 0;
-   if (compiler->glsl_compiler_options[stage].EmitNoIndirectInput)
-      indirect_mask |= nir_var_shader_in;
-   if (compiler->glsl_compiler_options[stage].EmitNoIndirectOutput)
-      indirect_mask |= nir_var_shader_out;
-   if (compiler->glsl_compiler_options[stage].EmitNoIndirectTemp)
-      indirect_mask |= nir_var_local;
-
-   nir_lower_indirect_derefs(nir, indirect_mask);
 
    return nir;
 }

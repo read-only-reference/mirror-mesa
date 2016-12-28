@@ -363,8 +363,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 
    case FS_OPCODE_SET_SAMPLE_ID:
       return "set_sample_id";
-   case FS_OPCODE_SET_SIMD4X2_OFFSET:
-      return "set_simd4x2_offset";
 
    case FS_OPCODE_PACK_HALF_2x16_SPLIT:
       return "pack_half_2x16_split";
@@ -1363,10 +1361,10 @@ brw_compile_tes(const struct brw_compiler *compiler,
    brw_compute_tess_vue_map(&input_vue_map, nir->info->inputs_read,
                             nir->info->patch_inputs_read);
 
-   nir = brw_nir_apply_sampler_key(nir, devinfo, &key->tex, is_scalar);
+   nir = brw_nir_apply_sampler_key(nir, compiler, &key->tex, is_scalar);
    brw_nir_lower_tes_inputs(nir, &input_vue_map);
    brw_nir_lower_vue_outputs(nir, is_scalar);
-   nir = brw_postprocess_nir(nir, compiler->devinfo, is_scalar);
+   nir = brw_postprocess_nir(nir, compiler, is_scalar);
 
    brw_compute_vue_map(devinfo, &prog_data->base.vue_map,
                        nir->info->outputs_written,

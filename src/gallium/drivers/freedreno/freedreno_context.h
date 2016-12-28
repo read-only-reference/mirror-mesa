@@ -164,7 +164,7 @@ struct fd_context {
 	 */
 	struct fd_batch *batch;
 
-	uint32_t last_fence;
+	struct pipe_fence_handle *last_fence;
 
 	/* Are we in process of shadowing a resource? Used to detect recursion
 	 * in transfer_map, and skip unneeded synchronization.
@@ -261,6 +261,7 @@ struct fd_context {
 
 	/* optional, for GMEM bypass: */
 	void (*emit_sysmem_prep)(struct fd_batch *batch);
+	void (*emit_sysmem_fini)(struct fd_batch *batch);
 
 	/* draw: */
 	bool (*draw_vbo)(struct fd_context *ctx, const struct pipe_draw_info *info);

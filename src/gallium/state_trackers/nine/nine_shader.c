@@ -1573,6 +1573,13 @@ d3dsio_to_string( unsigned opcode )
 static HRESULT
 NineTranslateInstruction_Generic(struct shader_translator *);
 
+DECL_SPECIAL(NOP)
+{
+    /* Nothing to do. NOP was used to avoid hangs
+     * with very old d3d drivers. */
+    return D3D_OK;
+}
+
 DECL_SPECIAL(M4x4)
 {
     return NineTranslateInstruction_Mkxn(tx, 4, 4);
@@ -2863,7 +2870,7 @@ DECL_SPECIAL(COMMENT)
 
 struct sm1_op_info inst_table[] =
 {
-    _OPI(NOP, NOP, V(0,0), V(3,0), V(0,0), V(3,0), 0, 0, NULL), /* 0 */
+    _OPI(NOP, NOP, V(0,0), V(3,0), V(0,0), V(3,0), 0, 0, SPECIAL(NOP)), /* 0 */
     _OPI(MOV, MOV, V(0,0), V(3,0), V(0,0), V(3,0), 1, 1, NULL),
     _OPI(ADD, ADD, V(0,0), V(3,0), V(0,0), V(3,0), 1, 2, NULL), /* 2 */
     _OPI(SUB, SUB, V(0,0), V(3,0), V(0,0), V(3,0), 1, 2, NULL), /* 3 */
@@ -3457,13 +3464,12 @@ shader_add_ps_fog_stage(struct shader_translator *tx, struct ureg_src src_col)
       screen, info->type, PIPE_SHADER_CAP_##n)
 
 HRESULT
-nine_translate_shader(struct NineDevice9 *device, struct nine_shader_info *info)
+nine_translate_shader(struct NineDevice9 *device, struct nine_shader_info *info, struct pipe_context *pipe)
 {
     struct shader_translator *tx;
     HRESULT hr = D3D_OK;
     const unsigned processor = info->type;
     struct pipe_screen *screen = info->process_vertices ? device->screen_sw : device->screen;
-    struct pipe_context *pipe = info->process_vertices ? device->pipe_sw : device->pipe;
 
     user_assert(processor != ~0, D3DERR_INVALIDCALL);
 

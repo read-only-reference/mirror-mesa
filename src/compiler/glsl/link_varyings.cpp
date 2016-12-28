@@ -271,7 +271,7 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
     * OpenGLES 3.0 drivers, so we relax the checking in all cases.
     */
    if (false /* always skip the centroid check */ &&
-       prog->Version < (prog->IsES ? 310 : 430) &&
+       prog->data->Version < (prog->IsES ? 310 : 430) &&
        input->data.centroid != output->data.centroid) {
       linker_error(prog,
                    "%s shader output `%s' %s centroid qualifier, "
@@ -326,7 +326,7 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
     *     and fragment shaders must match."
     */
    if (input->data.invariant != output->data.invariant &&
-       prog->Version < (prog->IsES ? 300 : 430)) {
+       prog->data->Version < (prog->IsES ? 300 : 430)) {
       linker_error(prog,
                    "%s shader output `%s' %s invariant qualifier, "
                    "but %s shader input %s invariant qualifier\n",
@@ -348,7 +348,7 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
     *
     */
    if (input->data.interpolation != output->data.interpolation &&
-       prog->Version < 440) {
+       prog->data->Version < 440) {
       linker_error(prog,
                    "%s shader output `%s' specifies %s "
                    "interpolation qualifier, "
@@ -1063,7 +1063,8 @@ cmp_xfb_offset(const void * x_generic, const void * y_generic)
 
 /**
  * Store transform feedback location assignments into
- * prog->LinkedTransformFeedback based on the data stored in tfeedback_decls.
+ * prog->sh.LinkedTransformFeedback based on the data stored in
+ * tfeedback_decls.
  *
  * If an error occurs, the error is reported through linker_error() and false
  * is returned.
@@ -1081,11 +1082,9 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
    bool separate_attribs_mode =
       prog->TransformFeedback.BufferMode == GL_SEPARATE_ATTRIBS;
 
-   ralloc_free(prog->LinkedTransformFeedback.Varyings);
-   ralloc_free(prog->LinkedTransformFeedback.Outputs);
-
-   memset(&prog->LinkedTransformFeedback, 0,
-          sizeof(prog->LinkedTransformFeedback));
+   struct gl_program *xfb_prog = prog->xfb_program;
+   xfb_prog->sh.LinkedTransformFeedback =
+      rzalloc(xfb_prog, struct gl_transform_feedback_info);
 
    /* The xfb_offset qualifier does not have to be used in increasing order
     * however some drivers expect to receive the list of transform feedback
@@ -1095,9 +1094,8 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
       qsort(tfeedback_decls, num_tfeedback_decls, sizeof(*tfeedback_decls),
             cmp_xfb_offset);
 
-   prog->LinkedTransformFeedback.Varyings =
-      rzalloc_array(prog,
-                    struct gl_transform_feedback_varying_info,
+   xfb_prog->sh.LinkedTransformFeedback->Varyings =
+      rzalloc_array(xfb_prog, struct gl_transform_feedback_varying_info,
                     num_tfeedback_decls);
 
    unsigned num_outputs = 0;
@@ -1106,9 +1104,8 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
          num_outputs += tfeedback_decls[i].get_num_outputs();
    }
 
-   prog->LinkedTransformFeedback.Outputs =
-      rzalloc_array(prog,
-                    struct gl_transform_feedback_output,
+   xfb_prog->sh.LinkedTransformFeedback->Outputs =
+      rzalloc_array(xfb_prog, struct gl_transform_feedback_output,
                     num_outputs);
 
    unsigned num_buffers = 0;
@@ -1117,7 +1114,8 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
    if (!has_xfb_qualifiers && separate_attribs_mode) {
       /* GL_SEPARATE_ATTRIBS */
       for (unsigned i = 0; i < num_tfeedback_decls; ++i) {
-         if (!tfeedback_decls[i].store(ctx, prog, &prog->LinkedTransformFeedback,
+         if (!tfeedback_decls[i].store(ctx, prog,
+                                       xfb_prog->sh.LinkedTransformFeedback,
                                        num_buffers, num_buffers, num_outputs,
                                        NULL, has_xfb_qualifiers))
             return false;
@@ -1139,7 +1137,7 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
             if (prog->TransformFeedback.BufferStride[j]) {
                buffers |= 1 << j;
                explicit_stride[j] = true;
-               prog->LinkedTransformFeedback.Buffers[j].Stride =
+               xfb_prog->sh.LinkedTransformFeedback->Buffers[j].Stride =
                   prog->TransformFeedback.BufferStride[j] / 4;
             }
          }
@@ -1155,7 +1153,7 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
 
          if (tfeedback_decls[i].is_next_buffer_separator()) {
             if (!tfeedback_decls[i].store(ctx, prog,
-                                          &prog->LinkedTransformFeedback,
+                                          xfb_prog->sh.LinkedTransformFeedback,
                                           buffer, num_buffers, num_outputs,
                                           explicit_stride, has_xfb_qualifiers))
                return false;
@@ -1189,16 +1187,16 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
          buffers |= 1 << buffer;
 
          if (!tfeedback_decls[i].store(ctx, prog,
-                                       &prog->LinkedTransformFeedback,
+                                       xfb_prog->sh.LinkedTransformFeedback,
                                        buffer, num_buffers, num_outputs,
                                        explicit_stride, has_xfb_qualifiers))
             return false;
       }
    }
 
-   assert(prog->LinkedTransformFeedback.NumOutputs == num_outputs);
+   assert(xfb_prog->sh.LinkedTransformFeedback->NumOutputs == num_outputs);
 
-   prog->LinkedTransformFeedback.ActiveBuffers = buffers;
+   xfb_prog->sh.LinkedTransformFeedback->ActiveBuffers = buffers;
    return true;
 }
 
@@ -2234,7 +2232,7 @@ assign_varying_locations(struct gl_context *ctx,
 
          if (var && var->data.mode == ir_var_shader_in &&
              var->data.is_unmatched_generic_inout) {
-            if (!prog->IsES && prog->Version <= 120) {
+            if (!prog->IsES && prog->data->Version <= 120) {
                /* On page 25 (page 31 of the PDF) of the GLSL 1.20 spec:
                 *
                 *     Only those varying variables used (i.e. read) in

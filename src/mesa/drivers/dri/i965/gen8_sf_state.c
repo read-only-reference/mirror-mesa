@@ -319,6 +319,12 @@ upload_raster(struct brw_context *brw)
       }
    }
 
+   /* BRW_NEW_CONSERVATIVE_RASTERIZATION */
+   if (ctx->IntelConservativeRasterization) {
+      if (brw->gen >= 9)
+         dw1 |= GEN9_RASTER_CONSERVATIVE_RASTERIZATION_ENABLE;
+   }
+
    BEGIN_BATCH(5);
    OUT_BATCH(_3DSTATE_RASTER << 16 | (5 - 2));
    OUT_BATCH(dw1);
@@ -338,7 +344,8 @@ const struct brw_tracked_state gen8_raster_state = {
                _NEW_SCISSOR |
                _NEW_TRANSFORM,
       .brw   = BRW_NEW_BLORP |
-               BRW_NEW_CONTEXT,
+               BRW_NEW_CONTEXT |
+               BRW_NEW_CONSERVATIVE_RASTERIZATION,
    },
    .emit = upload_raster,
 };

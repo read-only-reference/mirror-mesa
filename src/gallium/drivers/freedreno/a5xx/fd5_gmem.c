@@ -96,7 +96,7 @@ emit_mrt(struct fd_ringbuffer *ring, unsigned nr_bufs,
 		OUT_RING(ring, A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT(format) |
 				A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(tile_mode) |
 				A5XX_RB_MRT_BUF_INFO_COLOR_SWAP(swap) |
-				0x800 | /* XXX 0x1000 for RECTLIST clear, 0x0 for BLIT.. */
+				COND(gmem, 0x800) | /* XXX 0x1000 for RECTLIST clear, 0x0 for BLIT.. */
 				COND(srgb, A5XX_RB_MRT_BUF_INFO_COLOR_SRGB));
 		OUT_RING(ring, A5XX_RB_MRT_PITCH(stride));
 		OUT_RING(ring, A5XX_RB_MRT_ARRAY_PITCH(size));
@@ -104,6 +104,7 @@ emit_mrt(struct fd_ringbuffer *ring, unsigned nr_bufs,
 			OUT_RING(ring, base);           /* RB_MRT[i].BASE_LO */
 			OUT_RING(ring, 0x00000000);     /* RB_MRT[i].BASE_HI */
 		} else {
+			debug_assert((offset + size) <= fd_bo_size(rsc->bo));
 			OUT_RELOCW(ring, rsc->bo, offset, 0, 0);  /* BASE_LO/HI */
 		}
 
@@ -286,12 +287,14 @@ emit_mem2gmem_surf(struct fd_batch *batch, uint32_t base,
 		struct pipe_surface *psurf, enum a5xx_blit_buf buf)
 {
 	struct fd_ringbuffer *ring = batch->gmem;
+	struct fd_gmem_stateobj *gmem = &batch->ctx->gmem;
 	struct fd_resource *rsc = fd_resource(psurf->texture);
-	struct fd_resource_slice *slice;
-
-	slice = fd_resource_slice(rsc, psurf->u.tex.level);
+	uint32_t stride, size;
 
 	debug_assert(psurf->u.tex.first_layer == psurf->u.tex.last_layer);
+
+	stride = gmem->bin_w * rsc->cpp;
+	size = stride * gmem->bin_h;
 
 	OUT_PKT4(ring, REG_A5XX_RB_BLIT_FLAG_DST_LO, 4);
 	OUT_RING(ring, 0x00000000);   /* RB_BLIT_FLAG_DST_LO */
@@ -303,8 +306,8 @@ emit_mem2gmem_surf(struct fd_batch *batch, uint32_t base,
 	OUT_RING(ring, 0x00000000);   /* RB_RESOLVE_CNTL_3 */
 	OUT_RING(ring, base);         /* RB_BLIT_DST_LO */
 	OUT_RING(ring, 0x00000000);   /* RB_BLIT_DST_HI */
-	OUT_RING(ring, A5XX_RB_BLIT_DST_PITCH(slice->pitch * rsc->cpp));
-	OUT_RING(ring, A5XX_RB_BLIT_DST_ARRAY_PITCH(slice->size0));
+	OUT_RING(ring, A5XX_RB_BLIT_DST_PITCH(stride));
+	OUT_RING(ring, A5XX_RB_BLIT_DST_ARRAY_PITCH(size));
 
 	OUT_PKT4(ring, REG_A5XX_RB_BLIT_CNTL, 1);
 	OUT_RING(ring, A5XX_RB_BLIT_CNTL_BUF(buf));
@@ -325,7 +328,7 @@ fd5_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 	 */
 
 	emit_mrt(ring, pfb->nr_cbufs, pfb->cbufs, NULL);
-	emit_zs(ring, pfb->zsbuf, NULL);
+//	emit_zs(ring, pfb->zsbuf, NULL);
 
 	OUT_PKT4(ring, REG_A5XX_RB_CNTL, 1);
 	OUT_RING(ring, A5XX_RB_CNTL_WIDTH(gmem->bin_w) |
@@ -348,10 +351,25 @@ fd5_emit_tile_mem2gmem(struct fd_batch *batch, struct fd_tile *tile)
 		struct fd_resource *rsc = fd_resource(pfb->zsbuf->texture);
 		// XXX BLIT_ZS vs BLIT_Z32 .. need some more cmdstream traces
 		// with z32_x24s8..
-		if (!rsc->stencil || (batch->restore & FD_BUFFER_DEPTH))
-			emit_mem2gmem_surf(batch, ctx->gmem.zsbuf_base[0], pfb->zsbuf, BLIT_ZS);
-		if (rsc->stencil && (batch->restore & FD_BUFFER_STENCIL))
-			emit_mem2gmem_surf(batch, ctx->gmem.zsbuf_base[1], pfb->zsbuf, BLIT_ZS);
+
+		// XXX hack import via BLIT_MRT0 instead of BLIT_ZS, since I don't
+		// know otherwise how to go from linear in sysmem to tiled in gmem.
+		// possibly we want to flip this around gmem2mem and keep depth
+		// tiled in sysmem (and fixup sampler state to assume tiled).. this
+		// might be required for doing depth/stencil in bypass mode?
+		struct fd_resource_slice *slice = fd_resource_slice(rsc, 0);
+		enum a5xx_color_fmt format =
+			fd5_pipe2color(fd_gmem_restore_format(pfb->zsbuf->format));
+
+		OUT_PKT4(ring, REG_A5XX_RB_MRT_BUF_INFO(0), 5);
+		OUT_RING(ring, A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT(format) |
+				A5XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(TILE5_LINEAR) |
+				A5XX_RB_MRT_BUF_INFO_COLOR_SWAP(WZYX));
+		OUT_RING(ring, A5XX_RB_MRT_PITCH(slice->pitch * rsc->cpp));
+		OUT_RING(ring, A5XX_RB_MRT_ARRAY_PITCH(slice->size0));
+		OUT_RELOCW(ring, rsc->bo, 0, 0, 0);  /* BASE_LO/HI */
+
+		emit_mem2gmem_surf(batch, ctx->gmem.zsbuf_base[0], pfb->zsbuf, BLIT_MRT0);
 	}
 }
 
@@ -464,8 +482,108 @@ fd5_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 static void
 fd5_emit_tile_fini(struct fd_batch *batch)
 {
-	fd5_cache_flush(batch, batch->gmem);
-	fd5_set_render_mode(batch->ctx, batch->gmem, BYPASS);
+	struct fd_ringbuffer *ring = batch->gmem;
+
+	OUT_PKT7(ring, CP_SKIP_IB2_ENABLE_GLOBAL, 1);
+	OUT_RING(ring, 0x0);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
+	OUT_RING(ring, UNK_26);
+
+	fd5_cache_flush(batch, ring);
+	fd5_set_render_mode(batch->ctx, ring, BYPASS);
+}
+
+static void
+fd5_emit_sysmem_prep(struct fd_batch *batch)
+{
+	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
+	struct fd_ringbuffer *ring = batch->gmem;
+
+	fd5_emit_restore(batch, ring);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
+	OUT_RING(ring, UNK_26);
+
+	OUT_PKT7(ring, CP_SKIP_IB2_ENABLE_GLOBAL, 1);
+	OUT_RING(ring, 0x0);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
+	OUT_RING(ring, UNK_19);
+
+	OUT_PKT4(ring, REG_A5XX_PC_POWER_CNTL, 1);
+	OUT_RING(ring, 0x00000003);   /* PC_POWER_CNTL */
+
+	OUT_PKT4(ring, REG_A5XX_VFD_POWER_CNTL, 1);
+	OUT_RING(ring, 0x00000003);   /* VFD_POWER_CNTL */
+
+	/* 0x10000000 for BYPASS.. 0x7c13c080 for GMEM: */
+	fd_wfi(batch, ring);
+	OUT_PKT4(ring, REG_A5XX_RB_CCU_CNTL, 1);
+	OUT_RING(ring, 0x10000000);   /* RB_CCU_CNTL */
+
+	OUT_PKT4(ring, REG_A5XX_GRAS_SC_WINDOW_SCISSOR_TL, 2);
+	OUT_RING(ring, A5XX_GRAS_SC_WINDOW_SCISSOR_TL_X(0) |
+			A5XX_GRAS_SC_WINDOW_SCISSOR_TL_Y(0));
+	OUT_RING(ring, A5XX_GRAS_SC_WINDOW_SCISSOR_BR_X(pfb->width - 1) |
+			A5XX_GRAS_SC_WINDOW_SCISSOR_BR_Y(pfb->height - 1));
+
+	OUT_PKT4(ring, REG_A5XX_RB_RESOLVE_CNTL_1, 2);
+	OUT_RING(ring, A5XX_RB_RESOLVE_CNTL_1_X(0) |
+			A5XX_RB_RESOLVE_CNTL_1_Y(0));
+	OUT_RING(ring, A5XX_RB_RESOLVE_CNTL_2_X(pfb->width - 1) |
+			A5XX_RB_RESOLVE_CNTL_2_Y(pfb->height - 1));
+
+	OUT_PKT4(ring, REG_A5XX_RB_WINDOW_OFFSET, 1);
+	OUT_RING(ring, A5XX_RB_WINDOW_OFFSET_X(0) |
+			A5XX_RB_WINDOW_OFFSET_Y(0));
+
+	OUT_PKT7(ring, CP_SET_VISIBILITY_OVERRIDE, 1);
+	OUT_RING(ring, 0x1);
+
+	OUT_PKT4(ring, REG_A5XX_RB_CNTL, 1);
+	OUT_RING(ring, A5XX_RB_CNTL_WIDTH(0) |
+			A5XX_RB_CNTL_HEIGHT(0) |
+			A5XX_RB_CNTL_BYPASS);
+
+	patch_draws(batch, IGNORE_VISIBILITY);
+
+	emit_zs(ring, pfb->zsbuf, NULL);
+	emit_mrt(ring, pfb->nr_cbufs, pfb->cbufs, NULL);
+
+	// TODO MSAA
+	OUT_PKT4(ring, REG_A5XX_TPL1_TP_RAS_MSAA_CNTL, 2);
+	OUT_RING(ring, A5XX_TPL1_TP_RAS_MSAA_CNTL_SAMPLES(MSAA_ONE));
+	OUT_RING(ring, A5XX_TPL1_TP_DEST_MSAA_CNTL_SAMPLES(MSAA_ONE) |
+			A5XX_TPL1_TP_DEST_MSAA_CNTL_MSAA_DISABLE);
+
+	OUT_PKT4(ring, REG_A5XX_RB_RAS_MSAA_CNTL, 2);
+	OUT_RING(ring, A5XX_RB_RAS_MSAA_CNTL_SAMPLES(MSAA_ONE));
+	OUT_RING(ring, A5XX_RB_DEST_MSAA_CNTL_SAMPLES(MSAA_ONE) |
+			A5XX_RB_DEST_MSAA_CNTL_MSAA_DISABLE);
+
+	OUT_PKT4(ring, REG_A5XX_GRAS_SC_RAS_MSAA_CNTL, 2);
+	OUT_RING(ring, A5XX_GRAS_SC_RAS_MSAA_CNTL_SAMPLES(MSAA_ONE));
+	OUT_RING(ring, A5XX_GRAS_SC_DEST_MSAA_CNTL_SAMPLES(MSAA_ONE) |
+			A5XX_GRAS_SC_DEST_MSAA_CNTL_MSAA_DISABLE);
+}
+
+static void
+fd5_emit_sysmem_fini(struct fd_batch *batch)
+{
+	struct fd5_context *fd5_ctx = fd5_context(batch->ctx);
+	struct fd_ringbuffer *ring = batch->gmem;
+
+	OUT_PKT7(ring, CP_SKIP_IB2_ENABLE_GLOBAL, 1);
+	OUT_RING(ring, 0x0);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
+	OUT_RING(ring, UNK_26);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, 4);
+	OUT_RING(ring, UNK_1D);
+	OUT_RELOCW(ring, fd5_ctx->blit_mem, 0, 0, 0);  /* ADDR_LO/HI */
+	OUT_RING(ring, 0x00000000);
 }
 
 void
@@ -479,4 +597,6 @@ fd5_gmem_init(struct pipe_context *pctx)
 	ctx->emit_tile_renderprep = fd5_emit_tile_renderprep;
 	ctx->emit_tile_gmem2mem = fd5_emit_tile_gmem2mem;
 	ctx->emit_tile_fini = fd5_emit_tile_fini;
+	ctx->emit_sysmem_prep = fd5_emit_sysmem_prep;
+	ctx->emit_sysmem_fini = fd5_emit_sysmem_fini;
 }

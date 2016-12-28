@@ -615,11 +615,10 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                        &c.input_vue_map, inputs_read,
                        shader->info->separate_shader);
 
-   shader = brw_nir_apply_sampler_key(shader, compiler->devinfo, &key->tex,
-                                      is_scalar);
+   shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, is_scalar);
    brw_nir_lower_vue_inputs(shader, is_scalar, &c.input_vue_map);
    brw_nir_lower_vue_outputs(shader, is_scalar);
-   shader = brw_postprocess_nir(shader, compiler->devinfo, is_scalar);
+   shader = brw_postprocess_nir(shader, compiler, is_scalar);
 
    prog_data->base.clip_distance_mask =
       ((1 << shader->info->clip_distance_array_size) - 1);
@@ -781,7 +780,13 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
    if (compiler->devinfo->gen >= 8)
       output_size_bytes += 32;
 
-   assert(output_size_bytes >= 1);
+   /* Shaders can technically set max_vertices = 0, at which point we
+    * may have a URB size of 0 bytes.  Nothing good can come from that,
+    * so enforce a minimum size.
+    */
+   if (output_size_bytes == 0)
+      output_size_bytes = 1;
+
    unsigned max_output_size_bytes = GEN7_MAX_GS_URB_ENTRY_SIZE_BYTES;
    if (compiler->devinfo->gen == 6)
       max_output_size_bytes = GEN6_MAX_GS_URB_ENTRY_SIZE_BYTES;

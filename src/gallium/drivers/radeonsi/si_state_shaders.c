@@ -468,15 +468,13 @@ static uint32_t si_vgt_gs_mode(struct si_shader_selector *sel)
 
 static void si_shader_gs(struct si_shader *shader)
 {
-	unsigned gs_vert_itemsize = shader->selector->gsvs_vertex_size;
-	unsigned gsvs_itemsize = shader->selector->max_gsvs_emit_size >> 2;
-	unsigned gs_num_invocations = shader->selector->gs_num_invocations;
+	struct si_shader_selector *sel = shader->selector;
+	const ubyte *num_components = sel->info.num_stream_output_components;
+	unsigned gs_num_invocations = sel->gs_num_invocations;
 	struct si_pm4_state *pm4;
 	uint64_t va;
-	unsigned max_stream = shader->selector->max_gs_stream;
-
-	/* The GSVS_RING_ITEMSIZE register takes 15 bits */
-	assert(gsvs_itemsize < (1 << 15));
+	unsigned max_stream = sel->max_gs_stream;
+	unsigned offset;
 
 	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
@@ -484,18 +482,27 @@ static void si_shader_gs(struct si_shader *shader)
 
 	si_pm4_set_reg(pm4, R_028A40_VGT_GS_MODE, si_vgt_gs_mode(shader->selector));
 
-	si_pm4_set_reg(pm4, R_028A60_VGT_GSVS_RING_OFFSET_1, gsvs_itemsize);
-	si_pm4_set_reg(pm4, R_028A64_VGT_GSVS_RING_OFFSET_2, gsvs_itemsize * ((max_stream >= 2) ? 2 : 1));
-	si_pm4_set_reg(pm4, R_028A68_VGT_GSVS_RING_OFFSET_3, gsvs_itemsize * ((max_stream >= 3) ? 3 : 1));
+	offset = num_components[0] * sel->gs_max_out_vertices;
+	si_pm4_set_reg(pm4, R_028A60_VGT_GSVS_RING_OFFSET_1, offset);
+	if (max_stream >= 1)
+		offset += num_components[1] * sel->gs_max_out_vertices;
+	si_pm4_set_reg(pm4, R_028A64_VGT_GSVS_RING_OFFSET_2, offset);
+	if (max_stream >= 2)
+		offset += num_components[2] * sel->gs_max_out_vertices;
+	si_pm4_set_reg(pm4, R_028A68_VGT_GSVS_RING_OFFSET_3, offset);
+	if (max_stream >= 3)
+		offset += num_components[3] * sel->gs_max_out_vertices;
+	si_pm4_set_reg(pm4, R_028AB0_VGT_GSVS_RING_ITEMSIZE, offset);
 
-	si_pm4_set_reg(pm4, R_028AB0_VGT_GSVS_RING_ITEMSIZE, gsvs_itemsize * (max_stream + 1));
+	/* The GSVS_RING_ITEMSIZE register takes 15 bits */
+	assert(offset < (1 << 15));
 
 	si_pm4_set_reg(pm4, R_028B38_VGT_GS_MAX_VERT_OUT, shader->selector->gs_max_out_vertices);
 
-	si_pm4_set_reg(pm4, R_028B5C_VGT_GS_VERT_ITEMSIZE, gs_vert_itemsize >> 2);
-	si_pm4_set_reg(pm4, R_028B60_VGT_GS_VERT_ITEMSIZE_1, (max_stream >= 1) ? gs_vert_itemsize >> 2 : 0);
-	si_pm4_set_reg(pm4, R_028B64_VGT_GS_VERT_ITEMSIZE_2, (max_stream >= 2) ? gs_vert_itemsize >> 2 : 0);
-	si_pm4_set_reg(pm4, R_028B68_VGT_GS_VERT_ITEMSIZE_3, (max_stream >= 3) ? gs_vert_itemsize >> 2 : 0);
+	si_pm4_set_reg(pm4, R_028B5C_VGT_GS_VERT_ITEMSIZE, num_components[0]);
+	si_pm4_set_reg(pm4, R_028B60_VGT_GS_VERT_ITEMSIZE_1, (max_stream >= 1) ? num_components[1] : 0);
+	si_pm4_set_reg(pm4, R_028B64_VGT_GS_VERT_ITEMSIZE_2, (max_stream >= 2) ? num_components[2] : 0);
+	si_pm4_set_reg(pm4, R_028B68_VGT_GS_VERT_ITEMSIZE_3, (max_stream >= 3) ? num_components[3] : 0);
 
 	si_pm4_set_reg(pm4, R_028B90_VGT_GS_INSTANCE_CNT,
 		       S_028B90_CNT(MIN2(gs_num_invocations, 127)) |
@@ -1954,7 +1961,7 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 	unsigned esgs_ring_size = max_gs_waves * 2 * wave_size *
 				  es->esgs_itemsize * gs->gs_input_verts_per_prim;
 	unsigned gsvs_ring_size = max_gs_waves * 2 * wave_size *
-				  gs->max_gsvs_emit_size * (gs->max_gs_stream + 1);
+				  gs->max_gsvs_emit_size;
 
 	min_esgs_ring_size = align(min_esgs_ring_size, alignment);
 	esgs_ring_size = align(esgs_ring_size, alignment);
@@ -2038,41 +2045,13 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 				   sctx->esgs_ring, 0, sctx->esgs_ring->width0,
 				   false, false, 0, 0, 0);
 	}
-	if (sctx->gsvs_ring)
-		si_set_ring_buffer(&sctx->b.b, SI_VS_RING_GSVS,
+	if (sctx->gsvs_ring) {
+		si_set_ring_buffer(&sctx->b.b, SI_RING_GSVS,
 				   sctx->gsvs_ring, 0, sctx->gsvs_ring->width0,
 				   false, false, 0, 0, 0);
+	}
+
 	return true;
-}
-
-static void si_update_gsvs_ring_bindings(struct si_context *sctx)
-{
-	unsigned gsvs_itemsize = sctx->gs_shader.cso->max_gsvs_emit_size;
-	uint64_t offset;
-
-	if (!sctx->gsvs_ring || gsvs_itemsize == sctx->last_gsvs_itemsize)
-		return;
-
-	sctx->last_gsvs_itemsize = gsvs_itemsize;
-
-	si_set_ring_buffer(&sctx->b.b, SI_GS_RING_GSVS0,
-			   sctx->gsvs_ring, gsvs_itemsize,
-			   64, true, true, 4, 16, 0);
-
-	offset = gsvs_itemsize * 64;
-	si_set_ring_buffer(&sctx->b.b, SI_GS_RING_GSVS1,
-			   sctx->gsvs_ring, gsvs_itemsize,
-			   64, true, true, 4, 16, offset);
-
-	offset = (gsvs_itemsize * 2) * 64;
-	si_set_ring_buffer(&sctx->b.b, SI_GS_RING_GSVS2,
-			   sctx->gsvs_ring, gsvs_itemsize,
-			   64, true, true, 4, 16, offset);
-
-	offset = (gsvs_itemsize * 3) * 64;
-	si_set_ring_buffer(&sctx->b.b, SI_GS_RING_GSVS3,
-			   sctx->gsvs_ring, gsvs_itemsize,
-			   64, true, true, 4, 16, offset);
 }
 
 /**
@@ -2464,8 +2443,6 @@ bool si_update_shaders(struct si_context *sctx)
 
 		if (!si_update_gs_ring_buffers(sctx))
 			return false;
-
-		si_update_gsvs_ring_bindings(sctx);
 	} else {
 		si_pm4_bind_state(sctx, gs, NULL);
 		si_pm4_bind_state(sctx, es, NULL);

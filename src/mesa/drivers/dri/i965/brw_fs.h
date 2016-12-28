@@ -133,11 +133,11 @@ public:
    bool opt_redundant_discard_jumps();
    bool opt_cse();
    bool opt_cse_local(bblock_t *block);
-   bool opt_copy_propagate();
+   bool opt_copy_propagation();
    bool try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry);
    bool try_constant_propagate(fs_inst *inst, acp_entry *entry);
-   bool opt_copy_propagate_local(void *mem_ctx, bblock_t *block,
-                                 exec_list *acp);
+   bool opt_copy_propagation_local(void *mem_ctx, bblock_t *block,
+                                   exec_list *acp);
    bool opt_drop_redundant_mov_to_flags();
    bool opt_register_renaming();
    bool register_coalesce();
@@ -421,7 +421,7 @@ private:
    void generate_uniform_pull_constant_load_gen7(fs_inst *inst,
                                                  struct brw_reg dst,
                                                  struct brw_reg surf_index,
-                                                 struct brw_reg offset);
+                                                 struct brw_reg payload);
    void generate_varying_pull_constant_load_gen4(fs_inst *inst,
                                                  struct brw_reg dst,
                                                  struct brw_reg index);
@@ -442,9 +442,6 @@ private:
                                struct brw_reg src0,
                                struct brw_reg src1);
 
-   void generate_set_simd4x2_offset(fs_inst *inst,
-                                    struct brw_reg dst,
-                                    struct brw_reg offset);
    void generate_discard_jump(fs_inst *inst);
 
    void generate_pack_half_2x16_split(fs_inst *inst,

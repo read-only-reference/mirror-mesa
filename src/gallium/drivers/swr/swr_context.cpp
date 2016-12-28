@@ -62,10 +62,6 @@ swr_create_surface(struct pipe_context *pipe,
          ps->u.tex.level = surf_tmpl->u.tex.level;
          ps->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
          ps->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
-         if (ps->u.tex.first_layer != ps->u.tex.last_layer) {
-            debug_printf("creating surface with multiple layers, rendering "
-                         "to first layer only\n");
-         }
       } else {
          /* setting width as number of elements should get us correct
           * renderbuffer width */
@@ -305,7 +301,10 @@ swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
       return;
    }
 
-   /* XXX turn off occlusion and streamout queries */
+   if (ctx->active_queries) {
+      SwrEnableStatsFE(ctx->swrContext, FALSE);
+      SwrEnableStatsBE(ctx->swrContext, FALSE);
+   }
 
    util_blitter_save_vertex_buffer_slot(ctx->blitter, ctx->vertex_buffer);
    util_blitter_save_vertex_elements(ctx->blitter, (void *)ctx->velems);
@@ -339,6 +338,11 @@ swr_blit(struct pipe_context *pipe, const struct pipe_blit_info *blit_info)
                                       ctx->render_cond_mode);
 
    util_blitter_blit(ctx->blitter, &info);
+
+   if (ctx->active_queries) {
+      SwrEnableStatsFE(ctx->swrContext, TRUE);
+      SwrEnableStatsBE(ctx->swrContext, TRUE);
+   }
 }
 
 
@@ -350,9 +354,6 @@ swr_destroy(struct pipe_context *pipe)
 
    if (ctx->blitter)
       util_blitter_destroy(ctx->blitter);
-
-   /* Idle core before deleting context */
-   SwrWaitForIdle(ctx->swrContext);
 
    for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
       pipe_surface_reference(&ctx->framebuffer.cbufs[i], NULL);
@@ -367,6 +368,10 @@ swr_destroy(struct pipe_context *pipe)
    for (unsigned i = 0; i < ARRAY_SIZE(ctx->sampler_views[0]); i++) {
       pipe_sampler_view_reference(&ctx->sampler_views[PIPE_SHADER_VERTEX][i], NULL);
    }
+
+   /* Idle core after destroying buffer resources, but before deleting
+    * context.  Destroying resources has potentially called StoreTiles.*/
+   SwrWaitForIdle(ctx->swrContext);
 
    if (ctx->swrContext)
       SwrDestroyContext(ctx->swrContext);

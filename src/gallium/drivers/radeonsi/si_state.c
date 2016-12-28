@@ -669,6 +669,7 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 	unsigned ucp_mask = clipdist_mask ? 0 : rs->clip_plane_enable & SIX_BITS;
 	unsigned culldist_mask = info->culldist_writemask << info->num_written_clipdistance;
 	unsigned total_mask;
+	bool misc_vec_ena;
 
 	if (vs->key.opt.hw_vs.clip_disable) {
 		assert(!info->culldist_writemask);
@@ -677,6 +678,18 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 	}
 	total_mask = clipdist_mask | culldist_mask;
 
+	/* Clip distances on points have no effect, so need to be implemented
+	 * as cull distances. This applies for the clipvertex case as well.
+	 *
+	 * Setting this for primitives other than points should have no adverse
+	 * effects.
+	 */
+	clipdist_mask &= rs->clip_plane_enable;
+	culldist_mask |= clipdist_mask;
+
+	misc_vec_ena = info->writes_psize || info->writes_edgeflag ||
+		       info->writes_layer || info->writes_viewport_index;
+
 	radeon_set_context_reg(cs, R_02881C_PA_CL_VS_OUT_CNTL,
 		S_02881C_USE_VTX_POINT_SIZE(info->writes_psize) |
 		S_02881C_USE_VTX_EDGE_FLAG(info->writes_edgeflag) |
@@ -684,13 +697,9 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 	        S_02881C_USE_VTX_VIEWPORT_INDX(info->writes_viewport_index) |
 		S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0F) != 0) |
 		S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xF0) != 0) |
-		S_02881C_VS_OUT_MISC_VEC_ENA(info->writes_psize ||
-					    info->writes_edgeflag ||
-					    info->writes_layer ||
-					     info->writes_viewport_index) |
-		S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(1) |
-		(rs->clip_plane_enable &
-		 clipdist_mask) | (culldist_mask << 8));
+		S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
+		S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(misc_vec_ena) |
+		clipdist_mask | (culldist_mask << 8));
 	radeon_set_context_reg(cs, R_028810_PA_CL_CLIP_CNTL,
 		rs->pa_cl_clip_cntl |
 		ucp_mask |
@@ -3247,6 +3256,9 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
 		}
 	}
 
+#ifdef DEBUG
+	rstate->magic = SI_SAMPLER_STATE_MAGIC;
+#endif
 	rstate->val[0] = (S_008F30_CLAMP_X(si_tex_wrap(state->wrap_s)) |
 			  S_008F30_CLAMP_Y(si_tex_wrap(state->wrap_t)) |
 			  S_008F30_CLAMP_Z(si_tex_wrap(state->wrap_r)) |
@@ -3303,6 +3315,12 @@ static void si_emit_sample_mask(struct si_context *sctx, struct r600_atom *atom)
 
 static void si_delete_sampler_state(struct pipe_context *ctx, void *state)
 {
+#ifdef DEBUG
+	struct si_sampler_state *s = state;
+
+	assert(s->magic == SI_SAMPLER_STATE_MAGIC);
+	s->magic = 0;
+#endif
 	free(state);
 }
 
@@ -3927,6 +3945,7 @@ static void si_init_config(struct si_context *sctx)
 		raster_config_1 = 0x0000002a;
 		break;
 	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
 		raster_config = 0x16000012;
 		raster_config_1 = 0x00000000;
 		break;

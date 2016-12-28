@@ -435,7 +435,7 @@ ntq_emit_tex(struct vc4_compile *c, nir_tex_instr *instr)
                         lod = ntq_get_src(c, instr->src[i].src, 0);
                         is_txl = true;
                         break;
-                case nir_tex_src_comparitor:
+                case nir_tex_src_comparator:
                         compare = ntq_get_src(c, instr->src[i].src, 0);
                         break;
                 default:
@@ -1540,6 +1540,10 @@ vc4_optimize_nir(struct nir_shader *s)
                 NIR_PASS(progress, s, nir_opt_algebraic);
                 NIR_PASS(progress, s, nir_opt_constant_folding);
                 NIR_PASS(progress, s, nir_opt_undef);
+                NIR_PASS(progress, s, nir_opt_loop_unroll,
+                         nir_var_shader_in |
+                         nir_var_shader_out |
+                         nir_var_local);
         } while (progress);
 }
 
@@ -1957,22 +1961,29 @@ ntq_emit_if(struct vc4_compile *c, nir_if *if_stmt)
 static void
 ntq_emit_jump(struct vc4_compile *c, nir_jump_instr *jump)
 {
+        struct qblock *jump_block;
         switch (jump->type) {
         case nir_jump_break:
-                qir_SF(c, c->execute);
-                qir_MOV_cond(c, QPU_COND_ZS, c->execute,
-                             qir_uniform_ui(c, c->loop_break_block->index));
+                jump_block = c->loop_break_block;
                 break;
-
         case nir_jump_continue:
-                qir_SF(c, c->execute);
-                qir_MOV_cond(c, QPU_COND_ZS, c->execute,
-                             qir_uniform_ui(c, c->loop_cont_block->index));
+                jump_block = c->loop_cont_block;
                 break;
-
-        case nir_jump_return:
-                unreachable("All returns shouold be lowered\n");
+        default:
+                unreachable("Unsupported jump type\n");
         }
+
+        qir_SF(c, c->execute);
+        qir_MOV_cond(c, QPU_COND_ZS, c->execute,
+                     qir_uniform_ui(c, jump_block->index));
+
+        /* Jump to the destination block if everyone has taken the jump. */
+        qir_SF(c, qir_SUB(c, c->execute, qir_uniform_ui(c, jump_block->index)));
+        qir_BRANCH(c, QPU_COND_BRANCH_ALL_ZS);
+        struct qblock *new_block = qir_new_block(c);
+        qir_link_blocks(c->cur_block, jump_block);
+        qir_link_blocks(c->cur_block, new_block);
+        qir_set_emit_block(c, new_block);
 }
 
 static void
@@ -2148,6 +2159,7 @@ static const nir_shader_compiler_options nir_options = {
         .lower_fsqrt = true,
         .lower_negate = true,
         .native_integers = true,
+        .max_unroll_iterations = 32,
 };
 
 const void *
@@ -2397,7 +2409,7 @@ vc4_shader_state_create(struct pipe_context *pctx,
         }
 
         NIR_PASS_V(s, nir_opt_global_to_local);
-        NIR_PASS_V(s, nir_convert_to_ssa);
+        NIR_PASS_V(s, nir_lower_regs_to_ssa);
         NIR_PASS_V(s, nir_normalize_cubemap_coords);
 
         NIR_PASS_V(s, nir_lower_load_const_to_scalar);

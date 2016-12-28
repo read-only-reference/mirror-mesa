@@ -35,6 +35,7 @@
 #include "util/u_inlines.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_format_s3tc.h"
+#include "util/u_string.h"
 
 #include "state_tracker/sw_winsys.h"
 
@@ -67,7 +68,11 @@ extern "C" {
 static const char *
 swr_get_name(struct pipe_screen *screen)
 {
-   return "SWR";
+   static char buf[100];
+   util_snprintf(buf, sizeof(buf), "SWR (LLVM %u.%u, %u bits)",
+                 HAVE_LLVM >> 8, HAVE_LLVM & 0xff,
+                 lp_native_vector_width );
+   return buf;
 }
 
 static const char *
@@ -166,7 +171,7 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return MAX_SO_STREAMS;
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-      return MAX_ATTRIBUTES;
+      return MAX_ATTRIBUTES * 4;
    case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
       return 1024;
@@ -232,7 +237,6 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_USER_VERTEX_BUFFERS:
    case PIPE_CAP_USER_INDEX_BUFFERS:
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
-   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_QUERY_TIMESTAMP:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
@@ -312,6 +316,8 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
    case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
    case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
+   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+   case PIPE_CAP_NATIVE_FENCE_FD:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -524,6 +530,15 @@ mesa_to_swr_format(enum pipe_format format)
       {PIPE_FORMAT_R8G8_SINT,              R8G8_SINT},
       {PIPE_FORMAT_R8G8B8_SINT,            R8G8B8_SINT},
       {PIPE_FORMAT_R8G8B8A8_SINT,          R8G8B8A8_SINT},
+
+      /* These formats are valid for vertex data, but should not be used
+       * for render targets.
+       */
+
+      {PIPE_FORMAT_R32_FIXED,              R32_SFIXED},
+      {PIPE_FORMAT_R32G32_FIXED,           R32G32_SFIXED},
+      {PIPE_FORMAT_R32G32B32_FIXED,        R32G32B32_SFIXED},
+      {PIPE_FORMAT_R32G32B32A32_FIXED,     R32G32B32A32_SFIXED},
 
       /* These formats have entries in SWR but don't have Load/StoreTile
        * implementations. That means these aren't renderable, and thus having
@@ -854,29 +869,28 @@ swr_resource_destroy(struct pipe_screen *p_screen, struct pipe_resource *pt)
    struct swr_resource *spr = swr_resource(pt);
    struct pipe_context *pipe = screen->pipe;
 
-   /* Only wait on fence if the resource is being used */
-   if (pipe && spr->status) {
-      /* But, if there's no fence pending, submit one.
-       * XXX: Remove once draw timestamps are implmented. */
-      if (!swr_is_fence_pending(screen->flush_fence))
-         swr_fence_submit(swr_context(pipe), screen->flush_fence);
-
-      swr_fence_finish(p_screen, NULL, screen->flush_fence, 0);
-      swr_resource_unused(pt);
-   }
-
-   /*
-    * Free resource primary surface.  If resource is display target, winsys
-    * manages the buffer and will free it on displaytarget_destroy.
-    */
    if (spr->display_target) {
-      /* display target */
+      /* If resource is display target, winsys manages the buffer and will
+       * free it on displaytarget_destroy. */
+      swr_fence_finish(p_screen, NULL, screen->flush_fence, 0);
+
       struct sw_winsys *winsys = screen->winsys;
       winsys->displaytarget_destroy(winsys, spr->display_target);
-   } else
-      AlignedFree(spr->swr.pBaseAddress);
 
-   AlignedFree(spr->secondary.pBaseAddress);
+   } else {
+      /* For regular resources, if the resource is being used, defer deletion
+       * (use aligned-free) */
+      if (pipe && spr->status) {
+         swr_resource_unused(pt);
+         swr_fence_work_free(screen->flush_fence,
+                             spr->swr.pBaseAddress, true);
+         swr_fence_work_free(screen->flush_fence, 
+                             spr->secondary.pBaseAddress, true);
+      } else {
+         AlignedFree(spr->swr.pBaseAddress);
+         AlignedFree(spr->secondary.pBaseAddress);
+      }
+   }
 
    FREE(spr);
 }
@@ -938,6 +952,11 @@ swr_create_screen_internal(struct sw_winsys *winsys)
 
    if (!getenv("KNOB_MAX_PRIMS_PER_DRAW")) {
       g_GlobalKnobs.MAX_PRIMS_PER_DRAW.Value(49152);
+   }
+
+   if (!lp_build_init()) {
+      FREE(screen);
+      return NULL;
    }
 
    screen->winsys = winsys;

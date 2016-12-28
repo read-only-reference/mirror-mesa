@@ -186,8 +186,7 @@ _vtn_local_load_store(struct vtn_builder *b, bool load, nir_deref_var *deref,
                                    nir_intrinsic_store_var;
 
       nir_intrinsic_instr *intrin = nir_intrinsic_instr_create(b->shader, op);
-      intrin->variables[0] =
-         nir_deref_as_var(nir_copy_deref(intrin, &deref->deref));
+      intrin->variables[0] = nir_deref_var_clone(deref, intrin);
       intrin->num_components = glsl_get_vector_elements(tail->type);
 
       if (load) {
@@ -819,7 +818,12 @@ vtn_get_builtin_location(struct vtn_builder *b,
       break;
    case SpvBuiltInLayer:
       *location = VARYING_SLOT_LAYER;
-      *mode = nir_var_shader_out;
+      if (b->shader->stage == MESA_SHADER_FRAGMENT)
+         *mode = nir_var_shader_in;
+      else if (b->shader->stage == MESA_SHADER_GEOMETRY)
+         *mode = nir_var_shader_out;
+      else
+         unreachable("invalid stage for SpvBuiltInLayer");
       break;
    case SpvBuiltInViewportIndex:
       *location = VARYING_SLOT_VIEWPORT;
@@ -926,7 +930,6 @@ apply_var_decoration(struct vtn_builder *b, nir_variable *nir_var,
       nir_var->data.location_frac = dec->literals[0];
       break;
    case SpvDecorationIndex:
-      nir_var->data.explicit_index = true;
       nir_var->data.index = dec->literals[0];
       break;
    case SpvDecorationBuiltIn: {
@@ -938,16 +941,15 @@ apply_var_decoration(struct vtn_builder *b, nir_variable *nir_var,
          nir_var->data.read_only = true;
 
          nir_constant *c = rzalloc(nir_var, nir_constant);
-         c->value.u[0] = b->shader->info->cs.local_size[0];
-         c->value.u[1] = b->shader->info->cs.local_size[1];
-         c->value.u[2] = b->shader->info->cs.local_size[2];
+         c->values[0].u32[0] = b->shader->info->cs.local_size[0];
+         c->values[0].u32[1] = b->shader->info->cs.local_size[1];
+         c->values[0].u32[2] = b->shader->info->cs.local_size[2];
          nir_var->constant_initializer = c;
          break;
       }
 
       nir_variable_mode mode = nir_var->data.mode;
       vtn_get_builtin_location(b, builtin, &nir_var->data.location, &mode);
-      nir_var->data.explicit_location = true;
       nir_var->data.mode = mode;
 
       if (builtin == SpvBuiltInFragCoord || builtin == SpvBuiltInSamplePosition)
@@ -1068,7 +1070,6 @@ var_decoration_cb(struct vtn_builder *b, struct vtn_value *val, int member,
       if (vtn_var->var) {
          /* This handles the member and lone variable cases */
          vtn_var->var->data.location = location;
-         vtn_var->var->data.explicit_location = true;
       } else {
          /* This handles the structure member case */
          assert(vtn_var->members);
@@ -1076,7 +1077,6 @@ var_decoration_cb(struct vtn_builder *b, struct vtn_value *val, int member,
             glsl_get_length(glsl_without_array(vtn_var->type->type));
          for (unsigned i = 0; i < length; i++) {
             vtn_var->members[i]->data.location = location;
-            vtn_var->members[i]->data.explicit_location = true;
             location +=
                glsl_count_attribute_slots(vtn_var->members[i]->interface_type,
                                           is_vertex_input);
@@ -1388,7 +1388,7 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
          struct vtn_value *link_val = vtn_untyped_value(b, w[i]);
          if (link_val->value_type == vtn_value_type_constant) {
             chain->link[idx].mode = vtn_access_mode_literal;
-            chain->link[idx].id = link_val->constant->value.u[0];
+            chain->link[idx].id = link_val->constant->values[0].u32[0];
          } else {
             chain->link[idx].mode = vtn_access_mode_id;
             chain->link[idx].id = w[i];

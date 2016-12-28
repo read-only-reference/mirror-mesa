@@ -28,7 +28,7 @@
 #include "glsl_symbol_table.h"
 #include "program.h"
 #include "util/string_to_uint_map.h"
-#include "ir_variable_refcount.h"
+#include "ir_array_refcount.h"
 
 /**
  * \file link_uniforms.cpp
@@ -194,8 +194,10 @@ program_resource_visitor::recursion(const glsl_type *t, char **name,
          record_type = t->fields.array;
 
       unsigned length = t->length;
+
       /* Shader storage block unsized arrays: add subscript [0] to variable
-       * names */
+       * names.
+       */
       if (t->is_unsized_array())
          length = 1;
 
@@ -470,8 +472,7 @@ public:
             }
          } else {
             for (unsigned i = 0; i < num_blks; i++) {
-               if (strcmp(var->get_interface_type()->name, blks[i].Name) ==
-                   0) {
+               if (strcmp(var->get_interface_type()->name, blks[i].Name) == 0) {
                   buffer_block_index = i;
                   break;
                }
@@ -623,7 +624,7 @@ private:
          uniform->opaque[shader_type].index = this->next_subroutine;
          uniform->opaque[shader_type].active = true;
 
-         prog->_LinkedShaders[shader_type]->NumSubroutineUniforms++;
+         prog->_LinkedShaders[shader_type]->Program->sh.NumSubroutineUniforms++;
 
          /* Increment the subroutine index by 1 for non-arrays and by the
           * number of array elements for arrays.
@@ -868,11 +869,11 @@ public:
 };
 
 static bool
-variable_is_referenced(ir_variable_refcount_visitor &v, ir_variable *var)
+variable_is_referenced(ir_array_refcount_visitor &v, ir_variable *var)
 {
-   ir_variable_refcount_entry *const entry = v.get_variable_entry(var);
+   ir_array_refcount_entry *const entry = v.get_variable_entry(var);
 
-   return entry->referenced_count > 0;
+   return entry->is_referenced;
 
 }
 
@@ -886,7 +887,7 @@ static void
 link_update_uniform_buffer_variables(struct gl_linked_shader *shader,
                                      unsigned stage)
 {
-   ir_variable_refcount_visitor v;
+   ir_array_refcount_visitor v;
 
    v.run(shader->ir);
 
@@ -905,7 +906,9 @@ link_update_uniform_buffer_variables(struct gl_linked_shader *shader,
          shader->UniformBlocks : shader->ShaderStorageBlocks;
 
       if (var->is_interface_instance()) {
-         if (variable_is_referenced(v, var)) {
+         const ir_array_refcount_entry *const entry = v.get_variable_entry(var);
+
+         if (entry->is_referenced) {
             /* Since this is an interface instance, the instance type will be
              * same as the array-stripped variable type.  If the variable type
              * is an array, then the block names will be suffixed with [0]
@@ -931,7 +934,9 @@ link_update_uniform_buffer_variables(struct gl_linked_shader *shader,
                 * be an array of instances, and all elements of the array need
                 * to be marked as referenced.
                 */
-               if (strncmp(begin, var->get_interface_type()->name, len) == 0) {
+               if (strncmp(begin, var->get_interface_type()->name, len) == 0 &&
+                   (!var->type->is_array() ||
+                    entry->is_linearized_index_referenced(blks[i]->linearized_array_index))) {
                   blks[i]->stageref |= 1U << stage;
                }
             }
@@ -1143,7 +1148,7 @@ link_setup_uniform_remap_tables(struct gl_context *ctx,
       unsigned mask = prog->data->linked_stages;
       while (mask) {
          const int j = u_bit_scan(&mask);
-         struct gl_linked_shader *sh = prog->_LinkedShaders[j];
+         struct gl_program *p = prog->_LinkedShaders[j]->Program;
 
          if (!prog->data->UniformStorage[i].opaque[j].active)
             continue;
@@ -1152,9 +1157,9 @@ link_setup_uniform_remap_tables(struct gl_context *ctx,
          for (unsigned k = 0; k < entries; k++) {
             unsigned element_loc =
                prog->data->UniformStorage[i].remap_location + k;
-            assert(sh->SubroutineUniformRemapTable[element_loc] ==
+            assert(p->sh.SubroutineUniformRemapTable[element_loc] ==
                    INACTIVE_UNIFORM_EXPLICIT_LOCATION);
-            sh->SubroutineUniformRemapTable[element_loc] =
+            p->sh.SubroutineUniformRemapTable[element_loc] =
                &prog->data->UniformStorage[i];
          }
       }
@@ -1175,24 +1180,24 @@ link_setup_uniform_remap_tables(struct gl_context *ctx,
       unsigned mask = prog->data->linked_stages;
       while (mask) {
          const int j = u_bit_scan(&mask);
-         struct gl_linked_shader *sh = prog->_LinkedShaders[j];
+         struct gl_program *p = prog->_LinkedShaders[j]->Program;
 
          if (!prog->data->UniformStorage[i].opaque[j].active)
             continue;
 
-         sh->SubroutineUniformRemapTable =
-            reralloc(sh,
-                     sh->SubroutineUniformRemapTable,
+         p->sh.SubroutineUniformRemapTable =
+            reralloc(p,
+                     p->sh.SubroutineUniformRemapTable,
                      gl_uniform_storage *,
-                     sh->NumSubroutineUniformRemapTable + entries);
+                     p->sh.NumSubroutineUniformRemapTable + entries);
 
          for (unsigned k = 0; k < entries; k++) {
-            sh->SubroutineUniformRemapTable[sh->NumSubroutineUniformRemapTable + k] =
+            p->sh.SubroutineUniformRemapTable[p->sh.NumSubroutineUniformRemapTable + k] =
                &prog->data->UniformStorage[i];
          }
          prog->data->UniformStorage[i].remap_location =
-            sh->NumSubroutineUniformRemapTable;
-         sh->NumSubroutineUniformRemapTable += entries;
+            p->sh.NumSubroutineUniformRemapTable;
+         p->sh.NumSubroutineUniformRemapTable += entries;
       }
    }
 }

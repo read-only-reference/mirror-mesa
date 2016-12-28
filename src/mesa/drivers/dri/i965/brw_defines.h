@@ -1119,7 +1119,6 @@ enum opcode {
    FS_OPCODE_MOV_DISPATCH_TO_FLAGS,
    FS_OPCODE_DISCARD_JUMP,
    FS_OPCODE_SET_SAMPLE_ID,
-   FS_OPCODE_SET_SIMD4X2_OFFSET,
    FS_OPCODE_PACK_HALF_2x16_SPLIT,
    FS_OPCODE_UNPACK_HALF_2x16_SPLIT_X,
    FS_OPCODE_UNPACK_HALF_2x16_SPLIT_Y,
@@ -1405,7 +1404,7 @@ enum fb_write_logical_srcs {
 enum tex_logical_srcs {
    /** Texture coordinates */
    TEX_LOGICAL_SRC_COORDINATE,
-   /** Shadow comparitor */
+   /** Shadow comparator */
    TEX_LOGICAL_SRC_SHADOW_C,
    /** dPdx if the operation takes explicit derivatives, otherwise LOD value */
    TEX_LOGICAL_SRC_LOD,
@@ -1669,6 +1668,12 @@ enum brw_message_target {
 #define BRW_DATAPORT_OWORD_BLOCK_2_OWORDS     2
 #define BRW_DATAPORT_OWORD_BLOCK_4_OWORDS     3
 #define BRW_DATAPORT_OWORD_BLOCK_8_OWORDS     4
+#define BRW_DATAPORT_OWORD_BLOCK_DWORDS(n)              \
+   ((n) == 4 ? BRW_DATAPORT_OWORD_BLOCK_1_OWORDLOW :    \
+    (n) == 8 ? BRW_DATAPORT_OWORD_BLOCK_2_OWORDS :      \
+    (n) == 16 ? BRW_DATAPORT_OWORD_BLOCK_4_OWORDS :     \
+    (n) == 32 ? BRW_DATAPORT_OWORD_BLOCK_8_OWORDS :     \
+    (abort(), ~0))
 
 #define BRW_DATAPORT_OWORD_DUAL_BLOCK_1OWORD     0
 #define BRW_DATAPORT_OWORD_DUAL_BLOCK_4OWORDS    2
@@ -2373,6 +2378,7 @@ enum brw_message_target {
 #define _3DSTATE_RASTER                         0x7850 /* GEN8+ */
 /* DW1 */
 # define GEN9_RASTER_VIEWPORT_Z_FAR_CLIP_TEST_ENABLE    (1 << 26)
+# define GEN9_RASTER_CONSERVATIVE_RASTERIZATION_ENABLE  (1 << 24)
 # define GEN8_RASTER_FRONT_WINDING_CCW                  (1 << 21)
 # define GEN8_RASTER_CULL_BOTH                          (0 << 16)
 # define GEN8_RASTER_CULL_NONE                          (1 << 16)

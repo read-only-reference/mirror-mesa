@@ -397,6 +397,8 @@ struct brw_wm_prog_data {
    bool computed_stencil;
 
    bool early_fragment_tests;
+   bool post_depth_coverage;
+   bool inner_coverage;
    bool dispatch_8;
    bool dispatch_16;
    bool dual_src_blend;

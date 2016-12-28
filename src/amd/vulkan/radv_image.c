@@ -674,7 +674,7 @@ radv_image_create(VkDevice _device,
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	const VkImageCreateInfo *pCreateInfo = create_info->vk_info;
 	struct radv_image *image = NULL;
-
+	bool can_cmask_dcc = false;
 	assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
 
 	radv_assert(pCreateInfo->mipLevels > 0);
@@ -698,6 +698,13 @@ radv_image_create(VkDevice _device,
 	image->samples = pCreateInfo->samples;
 	image->tiling = pCreateInfo->tiling;
 	image->usage = pCreateInfo->usage;
+
+	image->exclusive = pCreateInfo->sharingMode == VK_SHARING_MODE_EXCLUSIVE;
+	if (pCreateInfo->sharingMode == VK_SHARING_MODE_CONCURRENT) {
+		for (uint32_t i = 0; i < pCreateInfo->queueFamilyIndexCount; ++i)
+			image->queue_family_mask |= 1u << pCreateInfo->pQueueFamilyIndices[i];
+	}
+
 	radv_init_surface(device, &image->surface, create_info);
 
 	device->ws->surface_init(device->ws, &image->surface);
@@ -705,15 +712,18 @@ radv_image_create(VkDevice _device,
 	image->size = image->surface.bo_size;
 	image->alignment = image->surface.bo_alignment;
 
+	if (image->exclusive || image->queue_family_mask == 1)
+		can_cmask_dcc = true;
+
 	if ((pCreateInfo->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
-	    image->surface.dcc_size)
+	    image->surface.dcc_size && can_cmask_dcc)
 		radv_image_alloc_dcc(device, image);
 	else
 		image->surface.dcc_size = 0;
 
 	if ((pCreateInfo->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
 	    pCreateInfo->mipLevels == 1 &&
-	    !image->surface.dcc_size && image->extent.depth == 1)
+	    !image->surface.dcc_size && image->extent.depth == 1 && can_cmask_dcc)
 		radv_image_alloc_cmask(device, image);
 	if (image->samples > 1 && vk_format_is_color(pCreateInfo->format)) {
 		radv_image_alloc_fmask(device, image);
@@ -742,6 +752,7 @@ radv_image_view_init(struct radv_image_view *iview,
 {
 	RADV_FROM_HANDLE(radv_image, image, pCreateInfo->image);
 	const VkImageSubresourceRange *range = &pCreateInfo->subresourceRange;
+	uint32_t blk_w;
 	bool is_stencil = false;
 	switch (image->type) {
 	case VK_IMAGE_TYPE_1D:
@@ -779,6 +790,8 @@ radv_image_view_init(struct radv_image_view *iview,
 	iview->extent.height = round_up_u32(iview->extent.height * vk_format_get_blockheight(iview->vk_format),
 					    vk_format_get_blockheight(image->vk_format));
 
+	assert(image->surface.blk_w % vk_format_get_blockwidth(image->vk_format) == 0);
+	blk_w = image->surface.blk_w / vk_format_get_blockwidth(image->vk_format) * vk_format_get_blockwidth(iview->vk_format);
 	iview->base_layer = range->baseArrayLayer;
 	iview->layer_count = radv_get_layerCount(image, range);
 	iview->base_mip = range->baseMipLevel;
@@ -798,7 +811,7 @@ radv_image_view_init(struct radv_image_view *iview,
 	si_set_mutable_tex_desc_fields(device, image,
 				       is_stencil ? &image->surface.stencil_level[range->baseMipLevel] : &image->surface.level[range->baseMipLevel], range->baseMipLevel,
 				       range->baseMipLevel,
-				       image->surface.blk_w, is_stencil, iview->descriptor);
+				       blk_w, is_stencil, iview->descriptor);
 }
 
 void radv_image_set_optimal_micro_tile_mode(struct radv_device *device,
@@ -883,11 +896,19 @@ bool radv_layout_can_expclear(const struct radv_image *image,
 		layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 }
 
-bool radv_layout_has_cmask(const struct radv_image *image,
-			   VkImageLayout layout)
+bool radv_layout_can_fast_clear(const struct radv_image *image,
+			        VkImageLayout layout,
+			        unsigned queue_mask)
 {
-	return (layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL ||
-		layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	return layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+		queue_mask == (1u << RADV_QUEUE_GENERAL);
+}
+
+
+unsigned radv_image_queue_family_mask(const struct radv_image *image, int family) {
+	if (image->exclusive)
+		return 1u <<family;
+	return image->queue_family_mask;
 }
 
 VkResult

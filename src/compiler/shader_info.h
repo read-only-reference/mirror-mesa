@@ -32,6 +32,9 @@ extern "C" {
 #endif
 
 typedef struct shader_info {
+   /** The shader stage, such as MESA_SHADER_VERTEX. */
+   gl_shader_stage stage;
+
    const char *name;
 
    /* Descriptive name provided by the client; may be NULL */
@@ -117,12 +120,21 @@ typedef struct shader_info {
           */
          bool early_fragment_tests;
 
+         /**
+          * Defined by INTEL_conservative_rasterization.
+          */
+         bool inner_coverage;
+
+         bool post_depth_coverage;
+
          /** gl_FragDepth layout for ARB_conservative_depth. */
          enum gl_frag_depth_layout depth_layout;
       } fs;
 
       struct {
          unsigned local_size[3];
+
+         bool local_size_variable;
 
          /**
           * Size of shared variables accessed by the compute shader.

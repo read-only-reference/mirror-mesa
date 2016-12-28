@@ -178,14 +178,15 @@ static unsigned get_cpb_num(struct rvce_encoder *enc)
 	case 41:
 		dpb = 32768;
 		break;
-	default:
 	case 42:
 		dpb = 34816;
 		break;
 	case 50:
 		dpb = 110400;
 		break;
+	default:
 	case 51:
+	case 52:
 		dpb = 184320;
 		break;
 	}
@@ -412,7 +413,8 @@ struct pipe_video_codec *rvce_create_encoder(struct pipe_context *context,
 		enc->use_vui = true;
 	if (rscreen->info.family >= CHIP_TONGA &&
 	    rscreen->info.family != CHIP_STONEY &&
-	    rscreen->info.family != CHIP_POLARIS11)
+	    rscreen->info.family != CHIP_POLARIS11 &&
+	    rscreen->info.family != CHIP_POLARIS12)
 		enc->dual_pipe = true;
 	/* TODO enable B frame with dual instance */
 	if ((rscreen->info.family >= CHIP_TONGA) &&

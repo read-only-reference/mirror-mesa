@@ -2111,25 +2111,22 @@ fs_visitor::lower_constant_loads()
          if (pull_index == -1)
 	    continue;
 
-         const unsigned index = stage_prog_data->binding_table.pull_constants_start;
-         fs_reg dst;
-
-         if (type_sz(inst->src[i].type) <= 4)
-            dst = vgrf(glsl_type::float_type);
-         else
-            dst = vgrf(glsl_type::double_type);
-
          assert(inst->src[i].stride == 0);
 
-         const fs_builder ubld = ibld.exec_all().group(8, 0);
-         struct brw_reg offset = brw_imm_ud((unsigned)(pull_index * 4) & ~15);
+         const unsigned index = stage_prog_data->binding_table.pull_constants_start;
+         const unsigned block_sz = 64; /* Fetch one cacheline at a time. */
+         const fs_builder ubld = ibld.exec_all().group(block_sz / 4, 0);
+         const fs_reg dst = ubld.vgrf(BRW_REGISTER_TYPE_UD);
+         const unsigned base = pull_index * 4;
+
          ubld.emit(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
-                   dst, brw_imm_ud(index), offset);
+                   dst, brw_imm_ud(index), brw_imm_ud(base & ~(block_sz - 1)));
 
          /* Rewrite the instruction to use the temporary VGRF. */
          inst->src[i].file = VGRF;
          inst->src[i].nr = dst.nr;
-         inst->src[i].offset = (pull_index & 3) * 4 + inst->src[i].offset % 4;
+         inst->src[i].offset = (base & (block_sz - 1)) +
+                               inst->src[i].offset % 4;
 
          brw_mark_surface_used(prog_data, index);
       }
@@ -3202,44 +3199,18 @@ fs_visitor::lower_uniform_pull_constant_loads()
          continue;
 
       if (devinfo->gen >= 7) {
-         /* The offset arg is a vec4-aligned immediate byte offset. */
-         fs_reg const_offset_reg = inst->src[1];
-         assert(const_offset_reg.file == IMM &&
-                const_offset_reg.type == BRW_REGISTER_TYPE_UD);
-         assert(const_offset_reg.ud % 16 == 0);
+         const fs_builder ubld = fs_builder(this, block, inst).exec_all();
+         const fs_reg payload = ubld.group(8, 0).vgrf(BRW_REGISTER_TYPE_UD);
 
-         fs_reg payload, offset;
-         if (devinfo->gen >= 9) {
-            /* We have to use a message header on Skylake to get SIMD4x2
-             * mode.  Reserve space for the register.
-            */
-            offset = payload = fs_reg(VGRF, alloc.allocate(2));
-            offset.offset += REG_SIZE;
-            inst->mlen = 2;
-         } else {
-            offset = payload = fs_reg(VGRF, alloc.allocate(1));
-            inst->mlen = 1;
-         }
+         ubld.group(8, 0).MOV(payload,
+                              retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
+         ubld.group(1, 0).MOV(component(payload, 2),
+                              brw_imm_ud(inst->src[1].ud / 16));
 
-         /* This is actually going to be a MOV, but since only the first dword
-          * is accessed, we have a special opcode to do just that one.  Note
-          * that this needs to be an operation that will be considered a def
-          * by live variable analysis, or register allocation will explode.
-          */
-         fs_inst *setup = new(mem_ctx) fs_inst(FS_OPCODE_SET_SIMD4X2_OFFSET,
-                                               8, offset, const_offset_reg);
-         setup->force_writemask_all = true;
-
-         setup->ir = inst->ir;
-         setup->annotation = inst->annotation;
-         inst->insert_before(block, setup);
-
-         /* Similarly, this will only populate the first 4 channels of the
-          * result register (since we only use smear values from 0-3), but we
-          * don't tell the optimizer.
-          */
          inst->opcode = FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7;
          inst->src[1] = payload;
+         inst->header_size = 1;
+         inst->mlen = 1;
 
          invalidate_live_intervals();
       } else {
@@ -3833,8 +3804,8 @@ lower_sampler_logical_send_gen4(const fs_builder &bld, fs_inst *inst, opcode op,
    }
 
    if (has_lod) {
-      /* Bias/LOD with shadow comparitor is unsupported in SIMD16 -- *Without*
-       * shadow comparitor (including RESINFO) it's unsupported in SIMD8 mode.
+      /* Bias/LOD with shadow comparator is unsupported in SIMD16 -- *Without*
+       * shadow comparator (including RESINFO) it's unsupported in SIMD8 mode.
        */
       assert(shadow_c.file != BAD_FILE ? bld.dispatch_width() == 8 :
              bld.dispatch_width() == 16);
@@ -5691,7 +5662,7 @@ fs_visitor::optimize()
 
       OPT(opt_algebraic);
       OPT(opt_cse);
-      OPT(opt_copy_propagate);
+      OPT(opt_copy_propagation);
       OPT(opt_predicated_break, this);
       OPT(opt_cmod_propagation);
       OPT(dead_code_eliminate);
@@ -5715,7 +5686,7 @@ fs_visitor::optimize()
    }
 
    if (OPT(lower_d2x)) {
-      OPT(opt_copy_propagate);
+      OPT(opt_copy_propagation);
       OPT(dead_code_eliminate);
    }
 
@@ -5727,12 +5698,12 @@ fs_visitor::optimize()
    OPT(lower_logical_sends);
 
    if (progress) {
-      OPT(opt_copy_propagate);
+      OPT(opt_copy_propagation);
       /* Only run after logical send lowering because it's easier to implement
        * in terms of physical sends.
        */
       if (OPT(opt_zero_samples))
-         OPT(opt_copy_propagate);
+         OPT(opt_copy_propagation);
       /* Run after logical send lowering to give it a chance to CSE the
        * LOAD_PAYLOAD instructions created to construct the payloads of
        * e.g. texturing messages in cases where it wasn't possible to CSE the
@@ -5761,7 +5732,7 @@ fs_visitor::optimize()
    if (devinfo->gen <= 5 && OPT(lower_minmax)) {
       OPT(opt_cmod_propagation);
       OPT(opt_cse);
-      OPT(opt_copy_propagate);
+      OPT(opt_copy_propagation);
       OPT(dead_code_eliminate);
    }
 
@@ -6425,14 +6396,13 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
                char **error_str)
 {
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
-   shader = brw_nir_apply_sampler_key(shader, compiler->devinfo, &key->tex,
-                                      true);
+   shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, true);
    brw_nir_lower_fs_inputs(shader, vue_map, prog, compiler->devinfo, key);
    brw_nir_lower_fs_outputs(shader);
    if (!key->multisample_fbo)
       NIR_PASS_V(shader, demote_sample_qualifiers);
    NIR_PASS_V(shader, move_interpolation_to_top);
-   shader = brw_postprocess_nir(shader, compiler->devinfo, true);
+   shader = brw_postprocess_nir(shader, compiler, true);
 
    /* key->alpha_test_func means simulating alpha testing via discards,
     * so the shader definitely kills pixels.
@@ -6454,6 +6424,8 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
        shader->info->outputs_read);
 
    prog_data->early_fragment_tests = shader->info->fs.early_fragment_tests;
+   prog_data->post_depth_coverage = shader->info->fs.post_depth_coverage;
+   prog_data->inner_coverage = shader->info->fs.inner_coverage;
 
    prog_data->barycentric_interp_modes =
       brw_compute_barycentric_interp_modes(compiler->devinfo, shader);
@@ -6655,8 +6627,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
                char **error_str)
 {
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
-   shader = brw_nir_apply_sampler_key(shader, compiler->devinfo, &key->tex,
-                                      true);
+   shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, true);
    brw_nir_lower_cs_shared(shader);
    prog_data->base.total_shared += shader->num_shared;
 
@@ -6669,7 +6640,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
            (unsigned)4 * (prog_data->thread_local_id_index + 1));
 
    brw_nir_lower_intrinsics(shader, &prog_data->base);
-   shader = brw_postprocess_nir(shader, compiler->devinfo, true);
+   shader = brw_postprocess_nir(shader, compiler, true);
 
    prog_data->local_size[0] = shader->info->cs.local_size[0];
    prog_data->local_size[1] = shader->info->cs.local_size[1];

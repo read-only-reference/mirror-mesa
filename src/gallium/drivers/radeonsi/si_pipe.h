@@ -137,7 +137,12 @@ struct si_sampler_view {
 	bool is_stencil_sampler;
 };
 
+#define SI_SAMPLER_STATE_MAGIC 0x34f1c35a
+
 struct si_sampler_state {
+#ifdef DEBUG
+	unsigned			magic;
+#endif
 	uint32_t			val[4];
 };
 
@@ -322,7 +327,6 @@ struct si_context {
 	int			last_vtx_reuse_depth;
 	int			current_rast_prim; /* primitive type after TES, GS */
 	bool			gs_tri_strip_adj_fix;
-	unsigned		last_gsvs_itemsize;
 
 	/* Scratch buffer */
 	struct r600_resource	*scratch_buffer;

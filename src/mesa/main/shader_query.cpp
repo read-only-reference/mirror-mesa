@@ -686,31 +686,14 @@ _mesa_program_resource_find_index(struct gl_shader_program *shProg,
  * ambiguous in this regard.  However, either name can later be passed
  * to glGetUniformLocation (and related APIs), so there shouldn't be any
  * harm in always appending "[0]" to uniform array names.
- *
- * Geometry shader stage has different naming convention where the 'normal'
- * condition is an array, therefore for variables referenced in geometry
- * stage we do not add '[0]'.
- *
- * Note, that TCS outputs and TES inputs should not have index appended
- * either.
  */
 static bool
 add_index_to_name(struct gl_program_resource *res)
 {
-   bool add_index = !((res->Type == GL_PROGRAM_INPUT &&
-                       res->StageReferences & (1 << MESA_SHADER_GEOMETRY |
-                                               1 << MESA_SHADER_TESS_CTRL |
-                                               1 << MESA_SHADER_TESS_EVAL)) ||
-                      (res->Type == GL_PROGRAM_OUTPUT &&
-                       res->StageReferences & 1 << MESA_SHADER_TESS_CTRL));
-
    /* Transform feedback varyings have array index already appended
     * in their names.
     */
-   if (res->Type == GL_TRANSFORM_FEEDBACK_VARYING)
-      add_index = false;
-
-   return add_index;
+   return res->Type != GL_TRANSFORM_FEEDBACK_VARYING;
 }
 
 /* Get name length of a program resource. This consists of
@@ -1058,10 +1041,10 @@ get_buffer_property(struct gl_shader_program *shProg,
          *val = RESOURCE_XFB(res)->NumVaryings;
          return 1;
       case GL_ACTIVE_VARIABLES:
-         int i = 0;
-         for ( ; i < shProg->LinkedTransformFeedback.NumVarying; i++) {
-            unsigned index =
-               shProg->LinkedTransformFeedback.Varyings[i].BufferIndex;
+         struct gl_transform_feedback_info *linked_xfb =
+            shProg->xfb_program->sh.LinkedTransformFeedback;
+         for (int i = 0; i < linked_xfb->NumVarying; i++) {
+            unsigned index = linked_xfb->Varyings[i].BufferIndex;
             struct gl_program_resource *buf_res =
                _mesa_program_resource_find_index(shProg,
                                                  GL_TRANSFORM_FEEDBACK_BUFFER,
@@ -1265,7 +1248,7 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
       return 1;
    case GL_COMPATIBLE_SUBROUTINES: {
       const struct gl_uniform_storage *uni;
-      struct gl_linked_shader *sh;
+      struct gl_program *p;
       unsigned count, i;
       int j;
 
@@ -1278,10 +1261,10 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
          goto invalid_operation;
       uni = RESOURCE_UNI(res);
 
-      sh = shProg->_LinkedShaders[_mesa_shader_stage_from_subroutine_uniform(res->Type)];
+      p = shProg->_LinkedShaders[_mesa_shader_stage_from_subroutine_uniform(res->Type)]->Program;
       count = 0;
-      for (i = 0; i < sh->NumSubroutineFunctions; i++) {
-         struct gl_subroutine_function *fn = &sh->SubroutineFunctions[i];
+      for (i = 0; i < p->sh.NumSubroutineFunctions; i++) {
+         struct gl_subroutine_function *fn = &p->sh.SubroutineFunctions[i];
          for (j = 0; j < fn->num_compat_types; j++) {
             if (fn->types[j] == uni->type) {
                val[count++] = i;
@@ -1401,9 +1384,6 @@ validate_io(struct gl_shader_program *producer,
 
    bool valid = true;
 
-   void *name_buffer = NULL;
-   size_t name_buffer_size = 0;
-
    gl_shader_variable const **outputs =
       (gl_shader_variable const **) calloc(producer->NumProgramResourceList,
                                            sizeof(gl_shader_variable *));
@@ -1475,52 +1455,11 @@ validate_io(struct gl_shader_program *producer,
             }
          }
       } else {
-         char *consumer_name = consumer_var->name;
-
-         if (nonarray_stage_to_array_stage &&
-             consumer_var->interface_type != NULL &&
-             consumer_var->interface_type->is_array() &&
-             !is_gl_identifier(consumer_var->name)) {
-            const size_t name_len = strlen(consumer_var->name);
-
-            if (name_len >= name_buffer_size) {
-               free(name_buffer);
-
-               name_buffer_size = name_len + 1;
-               name_buffer = malloc(name_buffer_size);
-               if (name_buffer == NULL) {
-                  valid = false;
-                  goto out;
-               }
-            }
-
-            consumer_name = (char *) name_buffer;
-
-            char *s = strchr(consumer_var->name, '[');
-            if (s == NULL) {
-               valid = false;
-               goto out;
-            }
-
-            char *t = strchr(s, ']');
-            if (t == NULL) {
-               valid = false;
-               goto out;
-            }
-
-            assert(t[1] == '.' || t[1] == '[');
-
-            const ptrdiff_t base_name_len = s - consumer_var->name;
-
-            memcpy(consumer_name, consumer_var->name, base_name_len);
-            strcpy(consumer_name + base_name_len, t + 1);
-         }
-
          for (unsigned j = 0; j < num_outputs; j++) {
             const gl_shader_variable *const var = outputs[j];
 
             if (!var->explicit_location &&
-                strcmp(consumer_name, var->name) == 0) {
+                strcmp(consumer_var->name, var->name) == 0) {
                producer_var = var;
                match_index = j;
                break;
@@ -1583,21 +1522,29 @@ validate_io(struct gl_shader_program *producer,
        * find the producer variable that goes with the consumer variable.
        */
       if (nonarray_stage_to_array_stage) {
-         if (!consumer_var->type->is_array() ||
-             consumer_var->type->fields.array != producer_var->type) {
-            valid = false;
-            goto out;
-         }
-
          if (consumer_var->interface_type != NULL) {
+            /* the interface is the array; underlying types should match */
+            if (producer_var->type != consumer_var->type) {
+               valid = false;
+               goto out;
+            }
+
             if (!consumer_var->interface_type->is_array() ||
                 consumer_var->interface_type->fields.array != producer_var->interface_type) {
                valid = false;
                goto out;
             }
-         } else if (producer_var->interface_type != NULL) {
-            valid = false;
-            goto out;
+         } else {
+            if (producer_var->interface_type != NULL) {
+               valid = false;
+               goto out;
+            }
+
+            if (!consumer_var->type->is_array() ||
+                consumer_var->type->fields.array != producer_var->type) {
+               valid = false;
+               goto out;
+            }
          }
       } else {
          if (producer_var->type != consumer_var->type) {
@@ -1628,7 +1575,6 @@ validate_io(struct gl_shader_program *producer,
    }
 
  out:
-   free(name_buffer);
    free(outputs);
    return valid && num_outputs == 0;
 }

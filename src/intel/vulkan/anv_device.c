@@ -260,6 +260,10 @@ static const VkExtensionProperties device_extensions[] = {
       .extensionName = VK_KHR_SWAPCHAIN_EXTENSION_NAME,
       .specVersion = 68,
    },
+   {
+      .extensionName = VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME,
+      .specVersion = 1,
+   }
 };
 
 static void *
@@ -464,11 +468,11 @@ void anv_GetPhysicalDeviceFeatures(
       .pipelineStatisticsQuery                  = false,
       .fragmentStoresAndAtomics                 = true,
       .shaderTessellationAndGeometryPointSize   = true,
-      .shaderImageGatherExtended                = false,
+      .shaderImageGatherExtended                = true,
       .shaderStorageImageExtendedFormats        = true,
       .shaderStorageImageMultisample            = false,
       .shaderStorageImageReadWithoutFormat      = false,
-      .shaderStorageImageWriteWithoutFormat     = true,
+      .shaderStorageImageWriteWithoutFormat     = false,
       .shaderUniformBufferArrayDynamicIndexing  = true,
       .shaderSampledImageArrayDynamicIndexing   = true,
       .shaderStorageBufferArrayDynamicIndexing  = true,
@@ -578,8 +582,8 @@ void anv_GetPhysicalDeviceProperties(
       .viewportSubPixelBits                     = 13, /* We take a float? */
       .minMemoryMapAlignment                    = 4096, /* A page */
       .minTexelBufferOffsetAlignment            = 1,
-      .minUniformBufferOffsetAlignment          = 1,
-      .minStorageBufferOffsetAlignment          = 1,
+      .minUniformBufferOffsetAlignment          = 16,
+      .minStorageBufferOffsetAlignment          = 4,
       .minTexelOffset                           = -8,
       .maxTexelOffset                           = 7,
       .minTexelGatherOffset                     = -32,
@@ -642,7 +646,14 @@ void anv_GetPhysicalDeviceQueueFamilyProperties(
       return;
    }
 
-   assert(*pCount >= 1);
+   /* The spec implicitly allows the incoming count to be 0. From the Vulkan
+    * 1.0.38 spec, Section 4.1 Physical Devices:
+    *
+    *     If the value referenced by pQueueFamilyPropertyCount is not 0 [then
+    *     do stuff].
+    */
+   if (*pCount == 0)
+      return;
 
    *pQueueFamilyProperties = (VkQueueFamilyProperties) {
       .queueFlags = VK_QUEUE_GRAPHICS_BIT |
@@ -652,6 +663,8 @@ void anv_GetPhysicalDeviceQueueFamilyProperties(
       .timestampValidBits = 36, /* XXX: Real value here */
       .minImageTransferGranularity = (VkExtent3D) { 1, 1, 1 },
    };
+
+   *pCount = 1;
 }
 
 void anv_GetPhysicalDeviceMemoryProperties(
@@ -1242,11 +1255,8 @@ VkResult anv_AllocateMemory(
 
    assert(pAllocateInfo->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
 
-   if (pAllocateInfo->allocationSize == 0) {
-      /* Apparently, this is allowed */
-      *pMem = VK_NULL_HANDLE;
-      return VK_SUCCESS;
-   }
+   /* The Vulkan 1.0.33 spec says "allocationSize must be greater than 0". */
+   assert(pAllocateInfo->allocationSize > 0);
 
    /* We support exactly one memory heap. */
    assert(pAllocateInfo->memoryTypeIndex == 0 ||

@@ -187,7 +187,10 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	/* SI + AMDGPU + CE = GPU hang */
 	if (!(sscreen->b.debug_flags & DBG_NO_CE) && ws->cs_add_const_ib &&
-	    sscreen->b.chip_class != SI) {
+	    sscreen->b.chip_class != SI &&
+	    /* These can't use CE due to a power gating bug in the kernel. */
+	    sscreen->b.family != CHIP_CARRIZO &&
+	    sscreen->b.family != CHIP_STONEY) {
 		sctx->ce_ib = ws->cs_add_const_ib(sctx->b.gfx.cs);
 		if (!sctx->ce_ib)
 			goto fail;
@@ -459,6 +462,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
+	case PIPE_CAP_NATIVE_FENCE_FD:
 		return 0;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
@@ -730,6 +734,7 @@ static bool si_init_gs_info(struct si_screen *sscreen)
 	case CHIP_FIJI:
 	case CHIP_POLARIS10:
 	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
 		sscreen->gs_table_depth = 32;
 		return true;
 	default:
