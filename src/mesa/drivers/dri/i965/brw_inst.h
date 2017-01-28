@@ -283,8 +283,8 @@ brw_inst_set_jip(const struct gen_device_info *devinfo,
    if (devinfo->gen >= 8) {
       brw_inst_set_bits(inst, 127, 96, (uint32_t)value);
    } else {
-      assert(value <= (1 << 16) - 1);
-      assert(value > -(1 << 16));
+      assert(value <= (1 << 15) - 1);
+      assert(value >= -(1 << 15));
       brw_inst_set_bits(inst, 111, 96, (uint16_t)value);
    }
 }
@@ -625,6 +625,14 @@ brw_inst_set_imm_df(const struct gen_device_info *devinfo,
    (void) devinfo;
    dt.d = value;
    brw_inst_set_bits(insn, 127, 64, dt.u);
+}
+
+static inline void
+brw_inst_set_imm_uq(const struct gen_device_info *devinfo,
+                    brw_inst *insn, uint64_t value)
+{
+   (void) devinfo;
+   brw_inst_set_bits(insn, 127, 64, value);
 }
 
 /** @} */

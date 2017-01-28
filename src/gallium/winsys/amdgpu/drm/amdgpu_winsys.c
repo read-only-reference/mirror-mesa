@@ -100,7 +100,7 @@ static unsigned cik_get_num_tile_pipes(struct amdgpu_gpu_info *info)
 static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
 {
    struct amdgpu_buffer_size_alignments alignment_info = {};
-   struct amdgpu_heap_info vram, gtt;
+   struct amdgpu_heap_info vram, vram_vis, gtt;
    struct drm_amdgpu_info_hw_ip dma = {}, uvd = {}, vce = {};
    uint32_t vce_version = 0, vce_feature = 0, uvd_version = 0, uvd_feature = 0;
    uint32_t unused_feature;
@@ -135,6 +135,14 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    r = amdgpu_query_heap_info(ws->dev, AMDGPU_GEM_DOMAIN_VRAM, 0, &vram);
    if (r) {
       fprintf(stderr, "amdgpu: amdgpu_query_heap_info(vram) failed.\n");
+      goto fail;
+   }
+
+   r = amdgpu_query_heap_info(ws->dev, AMDGPU_GEM_DOMAIN_VRAM,
+                              AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED,
+                              &vram_vis);
+   if (r) {
+      fprintf(stderr, "amdgpu: amdgpu_query_heap_info(vram_vis) failed.\n");
       goto fail;
    }
 
@@ -322,6 +330,7 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    /* Set hardware information. */
    ws->info.gart_size = gtt.heap_size;
    ws->info.vram_size = vram.heap_size;
+   ws->info.vram_vis_size = vram_vis.heap_size;
    /* The kernel can split large buffers, so we can do large allocations. */
    ws->info.max_alloc_size = MAX2(ws->info.vram_size, ws->info.gart_size) * 0.9;
    /* convert the shader clock from KHz to MHz */
@@ -424,11 +433,15 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
       return ws->mapped_gtt;
    case RADEON_BUFFER_WAIT_TIME_NS:
       return ws->buffer_wait_time;
+   case RADEON_NUM_MAPPED_BUFFERS:
+      return ws->num_mapped_buffers;
    case RADEON_TIMESTAMP:
       amdgpu_query_info(ws->dev, AMDGPU_INFO_TIMESTAMP, 8, &retval);
       return retval;
-   case RADEON_NUM_CS_FLUSHES:
-      return ws->num_cs_flushes;
+   case RADEON_NUM_GFX_IBS:
+      return ws->num_gfx_IBs;
+   case RADEON_NUM_SDMA_IBS:
+      return ws->num_sdma_IBs;
    case RADEON_NUM_BYTES_MOVED:
       amdgpu_query_info(ws->dev, AMDGPU_INFO_NUM_BYTES_MOVED, 8, &retval);
       return retval;
@@ -437,6 +450,10 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
       return retval;
    case RADEON_VRAM_USAGE:
       amdgpu_query_heap_info(ws->dev, AMDGPU_GEM_DOMAIN_VRAM, 0, &heap);
+      return heap.heap_usage;
+   case RADEON_VRAM_VIS_USAGE:
+      amdgpu_query_heap_info(ws->dev, AMDGPU_GEM_DOMAIN_VRAM,
+                             AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED, &heap);
       return heap.heap_usage;
    case RADEON_GTT_USAGE:
       amdgpu_query_heap_info(ws->dev, AMDGPU_GEM_DOMAIN_GTT, 0, &heap);
@@ -475,8 +492,6 @@ static int compare_dev(void *key1, void *key2)
 {
    return key1 != key2;
 }
-
-DEBUG_GET_ONCE_BOOL_OPTION(thread, "RADEON_THREAD", true)
 
 static bool amdgpu_winsys_unref(struct radeon_winsys *rws)
 {
@@ -582,8 +597,11 @@ amdgpu_winsys_create(int fd, radeon_screen_create_t screen_create)
    pipe_mutex_init(ws->global_bo_list_lock);
    pipe_mutex_init(ws->bo_fence_lock);
 
-   if (sysconf(_SC_NPROCESSORS_ONLN) > 1 && debug_get_option_thread())
-      util_queue_init(&ws->cs_queue, "amdgpu_cs", 8, 1);
+   if (!util_queue_init(&ws->cs_queue, "amdgpu_cs", 8, 1)) {
+      amdgpu_winsys_destroy(&ws->base);
+      pipe_mutex_unlock(dev_tab_mutex);
+      return NULL;
+   }
 
    /* Create the screen at the end. The winsys must be initialized
     * completely.

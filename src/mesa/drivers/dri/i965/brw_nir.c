@@ -113,9 +113,7 @@ remap_vs_attrs(nir_block *block, shader_info *nir_info)
          int attr = intrin->const_index[0];
          int slot = _mesa_bitcount_64(nir_info->inputs_read &
                                       BITFIELD64_MASK(attr));
-         int dslot = _mesa_bitcount_64(nir_info->double_inputs_read &
-                                       BITFIELD64_MASK(attr));
-         intrin->const_index[0] = 4 * (slot + dslot);
+         intrin->const_index[0] = 4 * slot;
       }
    }
    return true;
@@ -141,9 +139,68 @@ remap_inputs_with_vue_map(nir_block *block, const struct brw_vue_map *vue_map)
 }
 
 static bool
-remap_patch_urb_offsets(nir_block *block, nir_builder *b,
-                        const struct brw_vue_map *vue_map)
+remap_tess_levels(nir_builder *b, nir_intrinsic_instr *intr,
+                  GLenum primitive_mode)
 {
+   const int location = nir_intrinsic_base(intr);
+   const unsigned component = nir_intrinsic_component(intr);
+   bool out_of_bounds;
+
+   if (location == VARYING_SLOT_TESS_LEVEL_INNER) {
+      switch (primitive_mode) {
+      case GL_QUADS:
+         /* gl_TessLevelInner[0..1] lives at DWords 3-2 (reversed). */
+         nir_intrinsic_set_base(intr, 0);
+         nir_intrinsic_set_component(intr, 3 - component);
+         out_of_bounds = false;
+         break;
+      case GL_TRIANGLES:
+         /* gl_TessLevelInner[0] lives at DWord 4. */
+         nir_intrinsic_set_base(intr, 1);
+         out_of_bounds = component > 0;
+         break;
+      case GL_ISOLINES:
+         out_of_bounds = true;
+         break;
+      default:
+         unreachable("Bogus tessellation domain");
+      }
+   } else if (location == VARYING_SLOT_TESS_LEVEL_OUTER) {
+      if (primitive_mode == GL_ISOLINES) {
+         /* gl_TessLevelOuter[0..1] lives at DWords 6-7 (in order). */
+         nir_intrinsic_set_base(intr, 1);
+         nir_intrinsic_set_component(intr, 2 + nir_intrinsic_component(intr));
+         out_of_bounds = component > 1;
+      } else {
+         /* Triangles use DWords 7-5 (reversed); Quads use 7-4 (reversed) */
+         nir_intrinsic_set_base(intr, 1);
+         nir_intrinsic_set_component(intr, 3 - nir_intrinsic_component(intr));
+         out_of_bounds = component == 3 && primitive_mode == GL_TRIANGLES;
+      }
+   } else {
+      return false;
+   }
+
+   if (out_of_bounds) {
+      if (nir_intrinsic_infos[intr->intrinsic].has_dest) {
+         b->cursor = nir_before_instr(&intr->instr);
+         nir_ssa_def *undef = nir_ssa_undef(b, 1, 32);
+         nir_ssa_def_rewrite_uses(&intr->dest.ssa, nir_src_for_ssa(undef));
+      }
+      nir_instr_remove(&intr->instr);
+   }
+
+   return true;
+}
+
+static bool
+remap_patch_urb_offsets(nir_block *block, nir_builder *b,
+                        const struct brw_vue_map *vue_map,
+                        GLenum tes_primitive_mode)
+{
+   const bool is_passthrough_tcs = b->shader->info->name &&
+      strcmp(b->shader->info->name, "passthrough") == 0;
+
    nir_foreach_instr_safe(instr, block) {
       if (instr->type != nir_instr_type_intrinsic)
          continue;
@@ -154,6 +211,11 @@ remap_patch_urb_offsets(nir_block *block, nir_builder *b,
 
       if ((stage == MESA_SHADER_TESS_CTRL && is_output(intrin)) ||
           (stage == MESA_SHADER_TESS_EVAL && is_input(intrin))) {
+
+         if (!is_passthrough_tcs &&
+             remap_tess_levels(b, intrin, tes_primitive_mode))
+            continue;
+
          int vue_slot = vue_map->varying_to_slot[intrin->const_index[0]];
          assert(vue_slot != -1);
          intrin->const_index[0] = vue_slot;
@@ -204,7 +266,7 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
     * loaded as one vec4 or dvec4 per element (or matrix column), depending on
     * whether it is a double-precision type or not.
     */
-   nir_lower_io(nir, nir_var_shader_in, type_size_vs_input, 0);
+   nir_lower_io(nir, nir_var_shader_in, type_size_vec4, 0);
 
    /* This pass needs actual constants */
    nir_opt_constant_folding(nir);
@@ -273,15 +335,15 @@ brw_nir_lower_tes_inputs(nir_shader *nir, const struct brw_vue_map *vue_map)
          nir_builder b;
          nir_builder_init(&b, function->impl);
          nir_foreach_block(block, function->impl) {
-            remap_patch_urb_offsets(block, &b, vue_map);
+            remap_patch_urb_offsets(block, &b, vue_map,
+                                    nir->info->tess.primitive_mode);
          }
       }
    }
 }
 
 void
-brw_nir_lower_fs_inputs(nir_shader *nir, struct brw_vue_map *vue_map,
-                        struct gl_program *prog,
+brw_nir_lower_fs_inputs(nir_shader *nir,
                         const struct gen_device_info *devinfo,
                         const struct brw_wm_prog_key *key)
 {
@@ -312,11 +374,6 @@ brw_nir_lower_fs_inputs(nir_shader *nir, struct brw_vue_map *vue_map,
       }
    }
 
-   if (devinfo->gen < 6) {
-      assert(prog); /* prog will be NULL when called from Vulkan */
-      brw_setup_vue_interpolation(vue_map, nir, prog, devinfo);
-   }
-
    nir_lower_io_options lower_io_options = 0;
    if (key->persample_interp)
       lower_io_options |= nir_lower_io_force_sample_interpolation;
@@ -341,7 +398,8 @@ brw_nir_lower_vue_outputs(nir_shader *nir,
 }
 
 void
-brw_nir_lower_tcs_outputs(nir_shader *nir, const struct brw_vue_map *vue_map)
+brw_nir_lower_tcs_outputs(nir_shader *nir, const struct brw_vue_map *vue_map,
+                          GLenum tes_primitive_mode)
 {
    nir_foreach_variable(var, &nir->outputs) {
       var->data.driver_location = var->data.location;
@@ -359,7 +417,7 @@ brw_nir_lower_tcs_outputs(nir_shader *nir, const struct brw_vue_map *vue_map)
          nir_builder b;
          nir_builder_init(&b, function->impl);
          nir_foreach_block(block, function->impl) {
-            remap_patch_urb_offsets(block, &b, vue_map);
+            remap_patch_urb_offsets(block, &b, vue_map, tes_primitive_mode);
          }
       }
    }
@@ -411,6 +469,7 @@ nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
    do {
       progress = false;
       OPT_V(nir_lower_vars_to_ssa);
+      OPT(nir_opt_copy_prop_vars);
 
       if (is_scalar) {
          OPT(nir_lower_alu_to_scalar);
@@ -554,11 +613,12 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    OPT(nir_opt_algebraic_late);
 
-   OPT(nir_lower_locals_to_regs);
-
    OPT_V(nir_lower_to_source_mods);
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);
+   OPT(nir_opt_move_comparisons);
+
+   OPT(nir_lower_locals_to_regs);
 
    if (unlikely(debug_enabled)) {
       /* Re-index SSA defs so we print more sensible numbers. */
@@ -644,7 +704,7 @@ brw_nir_apply_sampler_key(nir_shader *nir,
 }
 
 enum brw_reg_type
-brw_type_for_nir_type(nir_alu_type type)
+brw_type_for_nir_type(const struct gen_device_info *devinfo, nir_alu_type type)
 {
    switch (type) {
    case nir_type_uint:
@@ -661,11 +721,9 @@ brw_type_for_nir_type(nir_alu_type type)
    case nir_type_float64:
       return BRW_REGISTER_TYPE_DF;
    case nir_type_int64:
+      return devinfo->gen < 8 ? BRW_REGISTER_TYPE_DF : BRW_REGISTER_TYPE_Q;
    case nir_type_uint64:
-      /* TODO we should only see these in moves, so for now it's ok, but when
-       * we add actual 64-bit integer support we should fix this.
-       */
-      return BRW_REGISTER_TYPE_DF;
+      return devinfo->gen < 8 ? BRW_REGISTER_TYPE_DF : BRW_REGISTER_TYPE_UQ;
    default:
       unreachable("unknown type");
    }

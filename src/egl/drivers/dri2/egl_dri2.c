@@ -75,6 +75,14 @@
 #define DRM_FORMAT_GR88          fourcc_code('G', 'R', '8', '8') /* [15:0] G:R 8:8 little endian */
 #endif
 
+#ifndef DRM_FORMAT_R16
+#define DRM_FORMAT_R16           fourcc_code('R', '1', '6', ' ') /* [15:0] R 16 little endian */
+#endif
+
+#ifndef DRM_FORMAT_GR1616
+#define DRM_FORMAT_GR1616        fourcc_code('G', 'R', '3', '2') /* [31:0] R:G 16:16 little endian */
+#endif
+
 const __DRIuseInvalidateExtension use_invalidate = {
    .base = { __DRI_USE_INVALIDATE, 1 }
 };
@@ -914,6 +922,7 @@ dri2_display_release(_EGLDisplay *disp)
           wl_shm_destroy(dri2_dpy->wl_shm);
       wl_registry_destroy(dri2_dpy->wl_registry);
       wl_event_queue_destroy(dri2_dpy->wl_queue);
+      wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
       if (dri2_dpy->own_device) {
          wl_display_disconnect(dri2_dpy->wl_dpy);
       }
@@ -1548,9 +1557,9 @@ dri2_bind_tex_image(_EGLDriver *drv,
       assert(!"Unexpected texture target in dri2_bind_tex_image()");
    }
 
-   (*dri2_dpy->tex_buffer->setTexBuffer2)(dri2_ctx->dri_context,
-                                          target, format,
-                                          dri_drawable);
+   dri2_dpy->tex_buffer->setTexBuffer2(dri2_ctx->dri_context,
+                                       target, format,
+                                       dri_drawable);
 
    return EGL_TRUE;
 }
@@ -1581,9 +1590,8 @@ dri2_release_tex_image(_EGLDriver *drv,
 
    if (dri2_dpy->tex_buffer->base.version >= 3 &&
        dri2_dpy->tex_buffer->releaseTexBuffer != NULL) {
-      (*dri2_dpy->tex_buffer->releaseTexBuffer)(dri2_ctx->dri_context,
-                                                target,
-                                                dri_drawable);
+      dri2_dpy->tex_buffer->releaseTexBuffer(dri2_ctx->dri_context,
+                                             target, dri_drawable);
    }
 
    return EGL_TRUE;
@@ -1957,6 +1965,8 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
    case DRM_FORMAT_R8:
    case DRM_FORMAT_RG88:
    case DRM_FORMAT_GR88:
+   case DRM_FORMAT_R16:
+   case DRM_FORMAT_GR1616:
    case DRM_FORMAT_RGB332:
    case DRM_FORMAT_BGR233:
    case DRM_FORMAT_XRGB4444:

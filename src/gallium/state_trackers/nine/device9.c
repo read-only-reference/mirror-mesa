@@ -522,8 +522,7 @@ NineDevice9_ctor( struct NineDevice9 *This,
     nine_state_init_sw(This);
 
     ID3DPresentGroup_Release(This->present);
-    if (This->csmt_active)
-        nine_csmt_process(This);
+    nine_csmt_process(This);
 
     return D3D_OK;
 }
@@ -536,8 +535,13 @@ NineDevice9_dtor( struct NineDevice9 *This )
 
     DBG("This=%p\n", This);
 
-    /* Do not call nine_csmt_process here. The device is dead! */
+    /* Flush all pending commands to get refcount right,
+     * and properly release bound objects. It is ok to still
+     * execute commands while we are in device dtor, because
+     * we haven't released anything yet. Note that no pending
+     * command can increase the device refcount. */
     if (This->csmt_active && This->csmt_ctx) {
+        nine_csmt_process(This);
         nine_csmt_destroy(This, This->csmt_ctx);
         This->csmt_active = FALSE;
         This->csmt_ctx = NULL;
@@ -918,6 +922,7 @@ NineDevice9_Reset( struct NineDevice9 *This,
             break;
     }
 
+    nine_csmt_process(This);
     nine_state_clear(&This->state, TRUE);
     nine_context_clear(This);
 

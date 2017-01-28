@@ -72,6 +72,21 @@ struct gen_l3_config;
 extern "C" {
 #endif
 
+/* Allowing different clear colors requires us to perform a depth resolve at
+ * the end of certain render passes. This is because while slow clears store
+ * the clear color in the HiZ buffer, fast clears (without a resolve) don't.
+ * See the PRMs for examples describing when additional resolves would be
+ * necessary. To enable fast clears without requiring extra resolves, we set
+ * the clear value to a globally-defined one. We could allow different values
+ * if the user doesn't expect coherent data during or after a render passes
+ * (VK_ATTACHMENT_STORE_OP_DONT_CARE), but such users (aside from the CTS)
+ * don't seem to exist yet. In almost all Vulkan applications tested thus far,
+ * 1.0f seems to be the only value used. The only application that doesn't set
+ * this value does so through the usage of an seemingly uninitialized clear
+ * value.
+ */
+#define ANV_HZ_FC_VAL 1.0f
+
 #define MAX_VBS         32
 #define MAX_SETS         8
 #define MAX_RTS          8
@@ -80,9 +95,7 @@ extern "C" {
 #define MAX_PUSH_CONSTANTS_SIZE 128
 #define MAX_DYNAMIC_BUFFERS 16
 #define MAX_IMAGES 8
-#define MAX_SAMPLES_LOG2 4 /* SKL supports 16 samples */
 
-#define anv_noreturn __attribute__((__noreturn__))
 #define anv_printflike(a, b) __attribute__((__format__(__printf__, a, b)))
 
 static inline uint32_t
@@ -186,10 +199,30 @@ VkResult __vk_errorf(VkResult error, const char *file, int line, const char *for
 #ifdef DEBUG
 #define vk_error(error) __vk_errorf(error, __FILE__, __LINE__, NULL);
 #define vk_errorf(error, format, ...) __vk_errorf(error, __FILE__, __LINE__, format, ## __VA_ARGS__);
+#define anv_debug(format, ...) fprintf(stderr, "debug: " format, ##__VA_ARGS__)
 #else
 #define vk_error(error) error
 #define vk_errorf(error, format, ...) error
+#define anv_debug(format, ...)
 #endif
+
+/**
+ * Warn on ignored extension structs.
+ *
+ * The Vulkan spec requires us to ignore unsupported or unknown structs in
+ * a pNext chain.  In debug mode, emitting warnings for ignored structs may
+ * help us discover structs that we should not have ignored.
+ *
+ *
+ * From the Vulkan 1.0.38 spec:
+ *
+ *    Any component of the implementation (the loader, any enabled layers,
+ *    and drivers) must skip over, without processing (other than reading the
+ *    sType and pNext members) any chained structures with sType values not
+ *    defined by extensions supported by that component.
+ */
+#define anv_debug_ignored_stype(sType) \
+   anv_debug("debug: %s: ignored VkStructureType %u\n", __func__, (sType))
 
 void __anv_finishme(const char *file, int line, const char *format, ...)
    anv_printflike(3, 4);
@@ -227,9 +260,6 @@ void anv_loge_v(const char *format, va_list va);
 #else
 #define anv_validate if (0)
 #endif
-
-void anv_abortf(const char *format, ...) anv_noreturn anv_printflike(1, 2);
-void anv_abortfv(const char *format, va_list va) anv_noreturn;
 
 #define stub_return(v) \
    do { \
@@ -378,7 +408,7 @@ struct anv_fixed_size_state_pool {
 };
 
 #define ANV_MIN_STATE_SIZE_LOG2 6
-#define ANV_MAX_STATE_SIZE_LOG2 17
+#define ANV_MAX_STATE_SIZE_LOG2 20
 
 #define ANV_STATE_BUCKETS (ANV_MAX_STATE_SIZE_LOG2 - ANV_MIN_STATE_SIZE_LOG2 + 1)
 
@@ -479,8 +509,6 @@ struct anv_bo *anv_scratch_pool_alloc(struct anv_device *device,
                                       unsigned per_thread_scratch);
 
 extern struct anv_dispatch_table dtable;
-
-#define VK_ICD_WSI_PLATFORM_MAX 5
 
 struct anv_physical_device {
     VK_LOADER_DATA                              _loader_data;
@@ -1097,6 +1125,7 @@ struct anv_attachment_state {
    struct anv_state                             color_rt_state;
    struct anv_state                             input_att_state;
 
+   VkImageLayout                                current_layout;
    VkImageAspectFlags                           pending_clear_aspects;
    bool                                         fast_clear;
    VkClearValue                                 clear_value;
@@ -1465,7 +1494,7 @@ anv_pipeline_has_stage(const struct anv_pipeline *pipeline,
 
 #define ANV_DECL_GET_PROG_DATA_FUNC(prefix, stage)                   \
 static inline const struct brw_##prefix##_prog_data *                \
-get_##prefix##_prog_data(struct anv_pipeline *pipeline)              \
+get_##prefix##_prog_data(const struct anv_pipeline *pipeline)        \
 {                                                                    \
    if (anv_pipeline_has_stage(pipeline, stage)) {                    \
       return (const struct brw_##prefix##_prog_data *)               \
@@ -1476,9 +1505,22 @@ get_##prefix##_prog_data(struct anv_pipeline *pipeline)              \
 }
 
 ANV_DECL_GET_PROG_DATA_FUNC(vs, MESA_SHADER_VERTEX)
+ANV_DECL_GET_PROG_DATA_FUNC(tcs, MESA_SHADER_TESS_CTRL)
+ANV_DECL_GET_PROG_DATA_FUNC(tes, MESA_SHADER_TESS_EVAL)
 ANV_DECL_GET_PROG_DATA_FUNC(gs, MESA_SHADER_GEOMETRY)
 ANV_DECL_GET_PROG_DATA_FUNC(wm, MESA_SHADER_FRAGMENT)
 ANV_DECL_GET_PROG_DATA_FUNC(cs, MESA_SHADER_COMPUTE)
+
+static inline const struct brw_vue_prog_data *
+anv_pipeline_get_last_vue_prog_data(const struct anv_pipeline *pipeline)
+{
+   if (anv_pipeline_has_stage(pipeline, MESA_SHADER_GEOMETRY))
+      return &get_gs_prog_data(pipeline)->base;
+   else if (anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL))
+      return &get_tes_prog_data(pipeline)->base;
+   else
+      return &get_vs_prog_data(pipeline)->base;
+}
 
 VkResult
 anv_pipeline_init(struct anv_pipeline *pipeline, struct anv_device *device,
@@ -1568,11 +1610,29 @@ struct anv_image {
       };
    };
 
-   /** The aux usage for this surface when outside a render pass */
+   /**
+    * For color images, this is the aux usage for this image when not used as a
+    * color attachment.
+    * 
+    * For depth/stencil images, this is set to ISL_AUX_USAGE_HIZ if the image
+    * has a HiZ buffer.
+    */
    enum isl_aux_usage aux_usage;
 
    struct anv_surface aux_surface;
 };
+
+/* Returns true if a HiZ-enabled depth buffer can be sampled from. */
+static inline bool
+anv_can_sample_with_hiz(uint8_t gen, uint32_t samples)
+{
+   return gen >= 8 && samples == 1;
+}
+
+void
+anv_gen8_hiz_op_resolve(struct anv_cmd_buffer *cmd_buffer,
+                        const struct anv_image *image,
+                        enum blorp_hiz_op op);
 
 static inline uint32_t
 anv_get_layerCount(const struct anv_image *image,
@@ -1628,16 +1688,6 @@ VkResult anv_image_create(VkDevice _device,
 const struct anv_surface *
 anv_image_get_surface_for_aspect_mask(const struct anv_image *image,
                                       VkImageAspectFlags aspect_mask);
-
-static inline bool
-anv_image_has_hiz(const struct anv_image *image)
-{
-   /* We must check the aspect because anv_image::aux_surface may be used for
-    * any type of auxiliary surface, not just HiZ.
-    */
-   return (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) &&
-          image->aux_surface.isl.size > 0;
-}
 
 struct anv_buffer_view {
    enum isl_format format; /**< VkBufferViewCreateInfo::format */
@@ -1719,7 +1769,12 @@ struct anv_subpass {
    uint32_t                                     color_count;
    uint32_t *                                   color_attachments;
    uint32_t *                                   resolve_attachments;
+
+   /* TODO: Consider storing the depth/stencil VkAttachmentReference
+    * instead of its two structure members (below) individually.
+    */
    uint32_t                                     depth_stencil_attachment;
+   VkImageLayout                                depth_stencil_layout;
 
    /** Subpass has a depth/stencil self-dependency */
    bool                                         has_ds_self_dep;
@@ -1736,15 +1791,23 @@ enum anv_subpass_usage {
 };
 
 struct anv_render_pass_attachment {
+   /* TODO: Consider using VkAttachmentDescription instead of storing each of
+    * its members individually.
+    */
    VkFormat                                     format;
    uint32_t                                     samples;
    VkImageUsageFlags                            usage;
    VkAttachmentLoadOp                           load_op;
    VkAttachmentStoreOp                          store_op;
    VkAttachmentLoadOp                           stencil_load_op;
+   VkImageLayout                                initial_layout;
+   VkImageLayout                                final_layout;
 
    /* An array, indexed by subpass id, of how the attachment will be used. */
    enum anv_subpass_usage *                     subpass_usage;
+
+   /* The subpass id in which the attachment will be used last. */
+   uint32_t                                     last_subpass_idx;
 };
 
 struct anv_render_pass {
@@ -1785,6 +1848,11 @@ void anv_dump_finish(void);
 
 void anv_dump_add_framebuffer(struct anv_cmd_buffer *cmd_buffer,
                               struct anv_framebuffer *fb);
+
+struct anv_common {
+    VkStructureType sType;
+    struct anv_common *pNext;
+};
 
 #define ANV_DEFINE_HANDLE_CASTS(__anv_type, __VkType)                      \
                                                                            \
@@ -1842,14 +1910,6 @@ ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_query_pool, VkQueryPool)
 ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_render_pass, VkRenderPass)
 ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_sampler, VkSampler)
 ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_shader_module, VkShaderModule)
-
-#define ANV_DEFINE_STRUCT_CASTS(__anv_type, __VkType) \
-   \
-   static inline const __VkType * \
-   __anv_type ## _to_ ## __VkType(const struct __anv_type *__anv_obj) \
-   { \
-      return (const __VkType *) __anv_obj; \
-   }
 
 /* Gen-specific function declarations */
 #ifdef genX

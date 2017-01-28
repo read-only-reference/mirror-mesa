@@ -170,7 +170,7 @@ static void *si_create_compute_state(
 				     &program->shader.config, 0);
 		}
 		si_shader_dump(sctx->screen, &program->shader, &sctx->b.debug,
-			       PIPE_SHADER_COMPUTE, stderr);
+			       PIPE_SHADER_COMPUTE, stderr, true);
 		if (si_shader_binary_upload(sctx->screen, &program->shader) < 0) {
 			fprintf(stderr, "LLVM failed to upload shader\n");
 			FREE(program);
@@ -370,6 +370,18 @@ static bool si_switch_compute_shader(struct si_context *sctx,
 		radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 			      shader->scratch_bo, RADEON_USAGE_READWRITE,
 			      RADEON_PRIO_SCRATCH_BUFFER);
+	}
+
+	/* Prefetch the compute shader to TC L2.
+	 *
+	 * We should also prefetch graphics shaders if a compute dispatch was
+	 * the last command, and the compute shader if a draw call was the last
+	 * command. However, that would add more complexity and we're likely
+	 * to get a shader state change in that case anyway.
+	 */
+	if (sctx->b.chip_class >= CIK) {
+		cik_prefetch_TC_L2_async(sctx, &program->shader.bo->b.b,
+					 0, program->shader.bo->b.b.width0);
 	}
 
 	shader_va = shader->bo->gpu_address + offset;

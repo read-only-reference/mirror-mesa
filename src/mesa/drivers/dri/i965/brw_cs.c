@@ -36,7 +36,6 @@
 
 static void
 assign_cs_binding_table_offsets(const struct gen_device_info *devinfo,
-                                const struct gl_shader_program *shader_prog,
                                 const struct gl_program *prog,
                                 struct brw_cs_prog_data *prog_data)
 {
@@ -46,14 +45,12 @@ assign_cs_binding_table_offsets(const struct gen_device_info *devinfo,
    prog_data->binding_table.work_groups_start = next_binding_table_offset;
    next_binding_table_offset++;
 
-   brw_assign_common_binding_table_offsets(MESA_SHADER_COMPUTE, devinfo,
-                                           shader_prog, prog, &prog_data->base,
+   brw_assign_common_binding_table_offsets(devinfo, prog, &prog_data->base,
                                            next_binding_table_offset);
 }
 
 static bool
 brw_codegen_cs_prog(struct brw_context *brw,
-                    struct gl_shader_program *prog,
                     struct brw_program *cp,
                     struct brw_cs_prog_key *key)
 {
@@ -68,20 +65,20 @@ brw_codegen_cs_prog(struct brw_context *brw,
 
    memset(&prog_data, 0, sizeof(prog_data));
 
-   if (prog->Comp.SharedSize > 64 * 1024) {
-      prog->data->LinkStatus = false;
+   if (cp->program.info.cs.shared_size > 64 * 1024) {
+      cp->program.sh.data->LinkStatus = false;
       const char *error_str =
          "Compute shader used more than 64KB of shared variables";
-      ralloc_strcat(&prog->data->InfoLog, error_str);
+      ralloc_strcat(&cp->program.sh.data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to link compute shader: %s\n", error_str);
 
       ralloc_free(mem_ctx);
       return false;
    } else {
-      prog_data.base.total_shared = prog->Comp.SharedSize;
+      prog_data.base.total_shared = cp->program.info.cs.shared_size;
    }
 
-   assign_cs_binding_table_offsets(devinfo, prog, &cp->program, &prog_data);
+   assign_cs_binding_table_offsets(devinfo, &cp->program, &prog_data);
 
    /* Allocate the references to the uniforms that will end up in the
     * prog_data associated with the compiled program, and which will be freed
@@ -104,8 +101,8 @@ brw_codegen_cs_prog(struct brw_context *brw,
    prog_data.base.nr_params = param_count;
    prog_data.base.nr_image_params = cp->program.info.num_images;
 
-   brw_nir_setup_glsl_uniforms(cp->program.nir, prog, &cp->program,
-                               &prog_data.base, true);
+   brw_nir_setup_glsl_uniforms(cp->program.nir, &cp->program,&prog_data.base,
+                               true);
 
    if (unlikely(brw->perf_debug)) {
       start_busy = (brw->batch.last_bo &&
@@ -115,15 +112,15 @@ brw_codegen_cs_prog(struct brw_context *brw,
 
    int st_index = -1;
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-      st_index = brw_get_shader_time_index(brw, prog, &cp->program, ST_CS);
+      st_index = brw_get_shader_time_index(brw, &cp->program, ST_CS, true);
 
    char *error_str;
    program = brw_compile_cs(brw->screen->compiler, brw, mem_ctx, key,
                             &prog_data, cp->program.nir, st_index,
                             &program_size, &error_str);
    if (program == NULL) {
-      prog->data->LinkStatus = false;
-      ralloc_strcat(&prog->data->InfoLog, error_str);
+      cp->program.sh.data->LinkStatus = false;
+      ralloc_strcat(&cp->program.sh.data->InfoLog, error_str);
       _mesa_problem(NULL, "Failed to compile compute shader: %s\n", error_str);
 
       ralloc_free(mem_ctx);
@@ -217,10 +214,7 @@ brw_upload_cs_prog(struct brw_context *brw)
                          &key, sizeof(key),
                          &brw->cs.base.prog_offset,
                          &brw->cs.base.prog_data)) {
-      bool success =
-         brw_codegen_cs_prog(brw,
-                             ctx->_Shader->CurrentProgram[MESA_SHADER_COMPUTE],
-                             cp, &key);
+      bool success = brw_codegen_cs_prog(brw, cp, &key);
       (void) success;
       assert(success);
    }
@@ -228,9 +222,7 @@ brw_upload_cs_prog(struct brw_context *brw)
 
 
 bool
-brw_cs_precompile(struct gl_context *ctx,
-                  struct gl_shader_program *shader_prog,
-                  struct gl_program *prog)
+brw_cs_precompile(struct gl_context *ctx, struct gl_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_cs_prog_key key;
@@ -245,7 +237,7 @@ brw_cs_precompile(struct gl_context *ctx,
    uint32_t old_prog_offset = brw->cs.base.prog_offset;
    struct brw_stage_prog_data *old_prog_data = brw->cs.base.prog_data;
 
-   bool success = brw_codegen_cs_prog(brw, shader_prog, bcp, &key);
+   bool success = brw_codegen_cs_prog(brw, bcp, &key);
 
    brw->cs.base.prog_offset = old_prog_offset;
    brw->cs.base.prog_data = old_prog_data;

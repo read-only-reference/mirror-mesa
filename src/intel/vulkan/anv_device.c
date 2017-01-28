@@ -253,6 +253,10 @@ static const VkExtensionProperties global_extensions[] = {
       .specVersion = 5,
    },
 #endif
+   {
+      .extensionName = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
+      .specVersion = 1,
+   },
 };
 
 static const VkExtensionProperties device_extensions[] = {
@@ -263,7 +267,11 @@ static const VkExtensionProperties device_extensions[] = {
    {
       .extensionName = VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME,
       .specVersion = 1,
-   }
+   },
+   {
+      .extensionName = VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+      .specVersion = 1,
+   },
 };
 
 static void *
@@ -445,7 +453,7 @@ void anv_GetPhysicalDeviceFeatures(
       .imageCubeArray                           = true,
       .independentBlend                         = true,
       .geometryShader                           = true,
-      .tessellationShader                       = false,
+      .tessellationShader                       = true,
       .sampleRateShading                        = true,
       .dualSrcBlend                             = true,
       .logicOp                                  = true,
@@ -479,7 +487,7 @@ void anv_GetPhysicalDeviceFeatures(
       .shaderStorageImageArrayDynamicIndexing   = true,
       .shaderClipDistance                       = true,
       .shaderCullDistance                       = true,
-      .shaderFloat64                            = false,
+      .shaderFloat64                            = pdevice->info.gen >= 8,
       .shaderInt64                              = false,
       .shaderInt16                              = false,
       .shaderResourceMinLod                     = false,
@@ -491,6 +499,21 @@ void anv_GetPhysicalDeviceFeatures(
    pFeatures->vertexPipelineStoresAndAtomics =
       pdevice->compiler->scalar_stage[MESA_SHADER_VERTEX] &&
       pdevice->compiler->scalar_stage[MESA_SHADER_GEOMETRY];
+}
+
+void anv_GetPhysicalDeviceFeatures2KHR(
+    VkPhysicalDevice                            physicalDevice,
+    VkPhysicalDeviceFeatures2KHR*               pFeatures)
+{
+   anv_GetPhysicalDeviceFeatures(physicalDevice, &pFeatures->features);
+
+   for (struct anv_common *c = pFeatures->pNext; c != NULL; c = c->pNext) {
+      switch (c->sType) {
+      default:
+         anv_debug_ignored_stype(c->sType);
+         break;
+      }
+   }
 }
 
 void anv_GetPhysicalDeviceProperties(
@@ -544,14 +567,14 @@ void anv_GetPhysicalDeviceProperties(
       .maxVertexInputAttributeOffset            = 2047,
       .maxVertexInputBindingStride              = 2048,
       .maxVertexOutputComponents                = 128,
-      .maxTessellationGenerationLevel           = 0,
-      .maxTessellationPatchSize                 = 0,
-      .maxTessellationControlPerVertexInputComponents = 0,
-      .maxTessellationControlPerVertexOutputComponents = 0,
-      .maxTessellationControlPerPatchOutputComponents = 0,
-      .maxTessellationControlTotalOutputComponents = 0,
-      .maxTessellationEvaluationInputComponents = 0,
-      .maxTessellationEvaluationOutputComponents = 0,
+      .maxTessellationGenerationLevel           = 64,
+      .maxTessellationPatchSize                 = 32,
+      .maxTessellationControlPerVertexInputComponents = 128,
+      .maxTessellationControlPerVertexOutputComponents = 128,
+      .maxTessellationControlPerPatchOutputComponents = 128,
+      .maxTessellationControlTotalOutputComponents = 2048,
+      .maxTessellationEvaluationInputComponents = 128,
+      .maxTessellationEvaluationOutputComponents = 128,
       .maxGeometryShaderInvocations             = 32,
       .maxGeometryInputComponents               = 64,
       .maxGeometryOutputComponents              = 128,
@@ -623,7 +646,7 @@ void anv_GetPhysicalDeviceProperties(
    };
 
    *pProperties = (VkPhysicalDeviceProperties) {
-      .apiVersion = VK_MAKE_VERSION(1, 0, 5),
+      .apiVersion = VK_MAKE_VERSION(1, 0, 39),
       .driverVersion = 1,
       .vendorID = 0x8086,
       .deviceID = pdevice->chipset_id,
@@ -636,11 +659,42 @@ void anv_GetPhysicalDeviceProperties(
    memcpy(pProperties->pipelineCacheUUID, pdevice->uuid, VK_UUID_SIZE);
 }
 
+void anv_GetPhysicalDeviceProperties2KHR(
+    VkPhysicalDevice                            physicalDevice,
+    VkPhysicalDeviceProperties2KHR*             pProperties)
+{
+   anv_GetPhysicalDeviceProperties(physicalDevice, &pProperties->properties);
+
+   for (struct anv_common *c = pProperties->pNext; c != NULL; c = c->pNext) {
+      switch (c->sType) {
+      default:
+         anv_debug_ignored_stype(c->sType);
+         break;
+      }
+   }
+}
+
+static void
+anv_get_queue_family_properties(struct anv_physical_device *phys_dev,
+                                VkQueueFamilyProperties *props)
+{
+   *props = (VkQueueFamilyProperties) {
+      .queueFlags = VK_QUEUE_GRAPHICS_BIT |
+                    VK_QUEUE_COMPUTE_BIT |
+                    VK_QUEUE_TRANSFER_BIT,
+      .queueCount = 1,
+      .timestampValidBits = 36, /* XXX: Real value here */
+      .minImageTransferGranularity = (VkExtent3D) { 1, 1, 1 },
+   };
+}
+
 void anv_GetPhysicalDeviceQueueFamilyProperties(
     VkPhysicalDevice                            physicalDevice,
     uint32_t*                                   pCount,
     VkQueueFamilyProperties*                    pQueueFamilyProperties)
 {
+   ANV_FROM_HANDLE(anv_physical_device, phys_dev, physicalDevice);
+
    if (pQueueFamilyProperties == NULL) {
       *pCount = 1;
       return;
@@ -655,16 +709,47 @@ void anv_GetPhysicalDeviceQueueFamilyProperties(
    if (*pCount == 0)
       return;
 
-   *pQueueFamilyProperties = (VkQueueFamilyProperties) {
-      .queueFlags = VK_QUEUE_GRAPHICS_BIT |
-                    VK_QUEUE_COMPUTE_BIT |
-                    VK_QUEUE_TRANSFER_BIT,
-      .queueCount = 1,
-      .timestampValidBits = 36, /* XXX: Real value here */
-      .minImageTransferGranularity = (VkExtent3D) { 1, 1, 1 },
-   };
-
    *pCount = 1;
+   anv_get_queue_family_properties(phys_dev, pQueueFamilyProperties);
+}
+
+void anv_GetPhysicalDeviceQueueFamilyProperties2KHR(
+    VkPhysicalDevice                            physicalDevice,
+    uint32_t*                                   pQueueFamilyPropertyCount,
+    VkQueueFamilyProperties2KHR*                pQueueFamilyProperties)
+{
+
+   ANV_FROM_HANDLE(anv_physical_device, phys_dev, physicalDevice);
+
+   if (pQueueFamilyProperties == NULL) {
+      *pQueueFamilyPropertyCount = 1;
+      return;
+   }
+
+   /* The spec implicitly allows the incoming count to be 0. From the Vulkan
+    * 1.0.38 spec, Section 4.1 Physical Devices:
+    *
+    *     If the value referenced by pQueueFamilyPropertyCount is not 0 [then
+    *     do stuff].
+    */
+   if (*pQueueFamilyPropertyCount == 0)
+      return;
+
+   /* We support exactly one queue family. So need to traverse only the first
+    * array element's pNext chain.
+    */
+   *pQueueFamilyPropertyCount = 1;
+   anv_get_queue_family_properties(phys_dev,
+         &pQueueFamilyProperties->queueFamilyProperties);
+
+   for (struct anv_common *c = pQueueFamilyProperties->pNext;
+        c != NULL; c = c->pNext) {
+      switch (c->sType) {
+      default:
+         anv_debug_ignored_stype(c->sType);
+         break;
+      }
+   }
 }
 
 void anv_GetPhysicalDeviceMemoryProperties(
@@ -717,6 +802,23 @@ void anv_GetPhysicalDeviceMemoryProperties(
       .size = heap_size,
       .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
    };
+}
+
+void anv_GetPhysicalDeviceMemoryProperties2KHR(
+    VkPhysicalDevice                            physicalDevice,
+    VkPhysicalDeviceMemoryProperties2KHR*       pMemoryProperties)
+{
+   anv_GetPhysicalDeviceMemoryProperties(physicalDevice,
+                                         &pMemoryProperties->memoryProperties);
+
+   for (struct anv_common *c = pMemoryProperties->pNext;
+        c != NULL; c = c->pNext) {
+      switch (c->sType) {
+      default:
+         anv_debug_ignored_stype(c->sType);
+         break;
+      }
+   }
 }
 
 PFN_vkVoidFunction anv_GetInstanceProcAddr(
@@ -948,7 +1050,7 @@ VkResult anv_CreateDevice(
    anv_state_pool_init(&device->dynamic_state_pool,
                        &device->dynamic_state_block_pool);
 
-   anv_block_pool_init(&device->instruction_block_pool, device, 128 * 1024);
+   anv_block_pool_init(&device->instruction_block_pool, device, 1024 * 1024);
    anv_state_pool_init(&device->instruction_state_pool,
                        &device->instruction_block_pool);
 
@@ -2033,4 +2135,48 @@ void anv_DestroyFramebuffer(
       return;
 
    vk_free2(&device->alloc, pAllocator, fb);
+}
+
+/* vk_icd.h does not declare this function, so we declare it here to
+ * suppress Wmissing-prototypes.
+ */
+PUBLIC VKAPI_ATTR VkResult VKAPI_CALL
+vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t* pSupportedVersion);
+
+PUBLIC VKAPI_ATTR VkResult VKAPI_CALL
+vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t* pSupportedVersion)
+{
+   /* For the full details on loader interface versioning, see
+    * <https://github.com/KhronosGroup/Vulkan-LoaderAndValidationLayers/blob/master/loader/LoaderAndLayerInterface.md>.
+    * What follows is a condensed summary, to help you navigate the large and
+    * confusing official doc.
+    *
+    *   - Loader interface v0 is incompatible with later versions. We don't
+    *     support it.
+    *
+    *   - In loader interface v1:
+    *       - The first ICD entrypoint called by the loader is
+    *         vk_icdGetInstanceProcAddr(). The ICD must statically expose this
+    *         entrypoint.
+    *       - The ICD must statically expose no other Vulkan symbol unless it is
+    *         linked with -Bsymbolic.
+    *       - Each dispatchable Vulkan handle created by the ICD must be
+    *         a pointer to a struct whose first member is VK_LOADER_DATA. The
+    *         ICD must initialize VK_LOADER_DATA.loadMagic to ICD_LOADER_MAGIC.
+    *       - The loader implements vkCreate{PLATFORM}SurfaceKHR() and
+    *         vkDestroySurfaceKHR(). The ICD must be capable of working with
+    *         such loader-managed surfaces.
+    *
+    *    - Loader interface v2 differs from v1 in:
+    *       - The first ICD entrypoint called by the loader is
+    *         vk_icdNegotiateLoaderICDInterfaceVersion(). The ICD must
+    *         statically expose this entrypoint.
+    *
+    *    - Loader interface v3 differs from v2 in:
+    *        - The ICD must implement vkCreate{PLATFORM}SurfaceKHR(),
+    *          vkDestroySurfaceKHR(), and other API which uses VKSurfaceKHR,
+    *          because the loader no longer does so.
+    */
+   *pSupportedVersion = MIN2(*pSupportedVersion, 3u);
+   return VK_SUCCESS;
 }

@@ -400,6 +400,12 @@ enum pipe_flush_flags
 #define PIPE_BARRIER_ALL               ((1 << 12) - 1)
 
 /**
+ * Flags for pipe_context::texture_barrier.
+ */
+#define PIPE_TEXTURE_BARRIER_SAMPLER      (1 << 0)
+#define PIPE_TEXTURE_BARRIER_FRAMEBUFFER  (1 << 1)
+
+/**
  * Resource binding flags -- state tracker must specify in advance all
  * the ways a resource might be used.
  */
@@ -743,6 +749,10 @@ enum pipe_cap
    PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS,
    PIPE_CAP_TGSI_CAN_READ_OUTPUTS,
    PIPE_CAP_NATIVE_FENCE_FD,
+   PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY,
+   PIPE_CAP_TGSI_FS_FBFETCH,
+   PIPE_CAP_TGSI_MUL_ZERO_WINS,
+   PIPE_CAP_INT64,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)

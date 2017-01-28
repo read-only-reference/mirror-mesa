@@ -81,11 +81,14 @@ enum radeon_value_id {
     RADEON_MAPPED_VRAM,
     RADEON_MAPPED_GTT,
     RADEON_BUFFER_WAIT_TIME_NS,
+    RADEON_NUM_MAPPED_BUFFERS,
     RADEON_TIMESTAMP,
-    RADEON_NUM_CS_FLUSHES,
+    RADEON_NUM_GFX_IBS,
+    RADEON_NUM_SDMA_IBS,
     RADEON_NUM_BYTES_MOVED,
     RADEON_NUM_EVICTIONS,
     RADEON_VRAM_USAGE,
+    RADEON_VRAM_VIS_USAGE,
     RADEON_GTT_USAGE,
     RADEON_GPU_TEMPERATURE, /* DRM 2.42.0 */
     RADEON_CURRENT_SCLK,
@@ -182,6 +185,7 @@ struct radeon_info {
     uint32_t                    gart_page_size;
     uint64_t                    gart_size;
     uint64_t                    vram_size;
+    uint64_t                    vram_vis_size;
     uint64_t                    max_alloc_size;
     uint32_t                    min_alloc_size;
     bool                        has_dedicated_vram;

@@ -42,9 +42,35 @@ vertex_element_comp_control(enum isl_format format, unsigned comp)
    default: unreachable("Invalid component");
    }
 
+   /*
+    * Take in account hardware restrictions when dealing with 64-bit floats.
+    *
+    * From Broadwell spec, command reference structures, page 586:
+    *  "When SourceElementFormat is set to one of the *64*_PASSTHRU formats,
+    *   64-bit components are stored * in the URB without any conversion. In
+    *   this case, vertex elements must be written as 128 or 256 bits, with
+    *   VFCOMP_STORE_0 being used to pad the output as required. E.g., if
+    *   R64_PASSTHRU is used to copy a 64-bit Red component into the URB,
+    *   Component 1 must be specified as VFCOMP_STORE_0 (with Components 2,3
+    *   set to VFCOMP_NOSTORE) in order to output a 128-bit vertex element, or
+    *   Components 1-3 must be specified as VFCOMP_STORE_0 in order to output
+    *   a 256-bit vertex element. Likewise, use of R64G64B64_PASSTHRU requires
+    *   Component 3 to be specified as VFCOMP_STORE_0 in order to output a
+    *   256-bit vertex element."
+    */
    if (bits) {
       return VFCOMP_STORE_SRC;
-   } else if (comp < 3) {
+   } else if (comp >= 2 &&
+              !isl_format_layouts[format].channels.b.bits &&
+              isl_format_layouts[format].channels.r.type == ISL_RAW) {
+      /* When emitting 64-bit attributes, we need to write either 128 or 256
+       * bit chunks, using VFCOMP_NOSTORE when not writing the chunk, and
+       * VFCOMP_STORE_0 to pad the written chunk */
+      return VFCOMP_NOSTORE;
+   } else if (comp < 3 ||
+              isl_format_layouts[format].channels.r.type == ISL_RAW) {
+      /* Note we need to pad with value 0, not 1, due hardware restrictions
+       * (see comment above) */
       return VFCOMP_STORE_0;
    } else if (isl_format_layouts[format].channels.r.type == ISL_UINT ||
             isl_format_layouts[format].channels.r.type == ISL_SINT) {
@@ -64,8 +90,10 @@ emit_vertex_input(struct anv_pipeline *pipeline,
 
    /* Pull inputs_read out of the VS prog data */
    const uint64_t inputs_read = vs_prog_data->inputs_read;
+   const uint64_t double_inputs_read = vs_prog_data->double_inputs_read;
    assert((inputs_read & ((1 << VERT_ATTRIB_GENERIC0) - 1)) == 0);
    const uint32_t elements = inputs_read >> VERT_ATTRIB_GENERIC0;
+   const uint32_t elements_double = double_inputs_read >> VERT_ATTRIB_GENERIC0;
 
 #if GEN_GEN >= 8
    /* On BDW+, we only need to allocate space for base ids.  Setting up
@@ -83,13 +111,16 @@ emit_vertex_input(struct anv_pipeline *pipeline,
                                 vs_prog_data->uses_baseinstance;
 #endif
 
-   uint32_t elem_count = __builtin_popcount(elements) + needs_svgs_elem;
-   if (elem_count == 0)
+   uint32_t elem_count = __builtin_popcount(elements) -
+      __builtin_popcount(elements_double) / 2;
+
+   uint32_t total_elems = elem_count + needs_svgs_elem;
+   if (total_elems == 0)
       return;
 
    uint32_t *p;
 
-   const uint32_t num_dwords = 1 + elem_count * 2;
+   const uint32_t num_dwords = 1 + total_elems * 2;
    p = anv_batch_emitn(&pipeline->batch, num_dwords,
                        GENX(3DSTATE_VERTEX_ELEMENTS));
    memset(p + 1, 0, (num_dwords - 1) * 4);
@@ -107,7 +138,10 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       if ((elements & (1 << desc->location)) == 0)
          continue; /* Binding unused */
 
-      uint32_t slot = __builtin_popcount(elements & ((1 << desc->location) - 1));
+      uint32_t slot =
+         __builtin_popcount(elements & ((1 << desc->location) - 1)) -
+         DIV_ROUND_UP(__builtin_popcount(elements_double &
+                                        ((1 << desc->location) -1)), 2);
 
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = desc->binding,
@@ -137,7 +171,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
 #endif
    }
 
-   const uint32_t id_slot = __builtin_popcount(elements);
+   const uint32_t id_slot = elem_count;
    if (needs_svgs_elem) {
       /* From the Broadwell PRM for the 3D_Vertex_Component_Control enum:
        *    "Within a VERTEX_ELEMENT_STATE structure, if a Component
@@ -251,10 +285,7 @@ emit_urb_setup(struct anv_pipeline *pipeline)
 static void
 emit_3dstate_sbe(struct anv_pipeline *pipeline)
 {
-   const struct brw_vs_prog_data *vs_prog_data = get_vs_prog_data(pipeline);
-   const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
    const struct brw_wm_prog_data *wm_prog_data = get_wm_prog_data(pipeline);
-   const struct brw_vue_map *fs_input_map;
 
    if (!anv_pipeline_has_stage(pipeline, MESA_SHADER_FRAGMENT)) {
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_SBE), sbe);
@@ -264,10 +295,8 @@ emit_3dstate_sbe(struct anv_pipeline *pipeline)
       return;
    }
 
-   if (gs_prog_data)
-      fs_input_map = &gs_prog_data->base.vue_map;
-   else
-      fs_input_map = &vs_prog_data->base.vue_map;
+   const struct brw_vue_map *fs_input_map =
+      &anv_pipeline_get_last_vue_prog_data(pipeline)->vue_map;
 
    struct GENX(3DSTATE_SBE) sbe = {
       GENX(3DSTATE_SBE_header),
@@ -291,12 +320,20 @@ emit_3dstate_sbe(struct anv_pipeline *pipeline)
 #  define swiz sbe
 #endif
 
+   /* Skip the VUE header and position slots by default */
+   unsigned urb_entry_read_offset = 1;
    int max_source_attr = 0;
    for (int attr = 0; attr < VARYING_SLOT_MAX; attr++) {
       int input_index = wm_prog_data->urb_setup[attr];
 
       if (input_index < 0)
          continue;
+
+      /* gl_Layer is stored in the VUE header */
+      if (attr == VARYING_SLOT_LAYER) {
+         urb_entry_read_offset = 0;
+         continue;
+      }
 
       if (attr == VARYING_SLOT_PNTC) {
          sbe.PointSpriteTextureCoordinateEnable = 1 << input_index;
@@ -322,18 +359,22 @@ emit_3dstate_sbe(struct anv_pipeline *pipeline)
          swiz.Attribute[input_index].ComponentOverrideZ = true;
          swiz.Attribute[input_index].ComponentOverrideW = true;
       } else {
-         assert(slot >= 2);
-         const int source_attr = slot - 2;
-         max_source_attr = MAX2(max_source_attr, source_attr);
          /* We have to subtract two slots to accout for the URB entry output
           * read offset in the VS and GS stages.
           */
+         assert(slot >= 2);
+         const int source_attr = slot - 2 * urb_entry_read_offset;
+         max_source_attr = MAX2(max_source_attr, source_attr);
          swiz.Attribute[input_index].SourceAttribute = source_attr;
       }
    }
 
-   sbe.VertexURBEntryReadOffset = 1; /* Skip the VUE header and position slots */
+   sbe.VertexURBEntryReadOffset = urb_entry_read_offset;
    sbe.VertexURBEntryReadLength = DIV_ROUND_UP(max_source_attr + 1, 2);
+#if GEN_GEN >= 8
+   sbe.ForceVertexURBEntryReadOffset = true;
+   sbe.ForceVertexURBEntryReadLength = true;
+#endif
 
    uint32_t *dw = anv_batch_emit_dwords(&pipeline->batch,
                                         GENX(3DSTATE_SBE_length));
@@ -379,8 +420,16 @@ emit_rs_state(struct anv_pipeline *pipeline,
    sf.TriangleStripListProvokingVertexSelect = 0;
    sf.LineStripListProvokingVertexSelect = 0;
    sf.TriangleFanProvokingVertexSelect = 1;
-   sf.PointWidthSource = Vertex;
-   sf.PointWidth = 1.0;
+
+   const struct brw_vue_prog_data *last_vue_prog_data =
+      anv_pipeline_get_last_vue_prog_data(pipeline);
+
+   if (last_vue_prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) {
+      sf.PointWidthSource = Vertex;
+   } else {
+      sf.PointWidthSource = State;
+      sf.PointWidth = 1.0;
+   }
 
 #if GEN_GEN >= 8
    struct GENX(3DSTATE_RASTER) raster = {
@@ -805,19 +854,6 @@ emit_cb_state(struct anv_pipeline *pipeline,
    }
 }
 
-/**
- * Get the brw_vue_prog_data for the last stage which outputs VUEs.
- */
-static inline struct brw_vue_prog_data *
-get_last_vue_prog_data(struct anv_pipeline *pipeline)
-{
-   for (int s = MESA_SHADER_GEOMETRY; s >= 0; s--) {
-      if (pipeline->shaders[s])
-         return (struct brw_vue_prog_data *) pipeline->shaders[s]->prog_data;
-   }
-   return NULL;
-}
-
 static void
 emit_3dstate_clip(struct anv_pipeline *pipeline,
                   const VkPipelineViewportStateCreateInfo *vp_info,
@@ -845,7 +881,8 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
       clip.FrontWinding            = vk_to_gen_front_face[rs_info->frontFace];
       clip.CullMode                = vk_to_gen_cullmode[rs_info->cullMode];
       clip.ViewportZClipTestEnable = !pipeline->depth_clamp_enable;
-      const struct brw_vue_prog_data *last = get_last_vue_prog_data(pipeline);
+      const struct brw_vue_prog_data *last =
+         anv_pipeline_get_last_vue_prog_data(pipeline);
       if (last) {
          clip.UserClipDistanceClipTestEnableBitmask = last->clip_distance_mask;
          clip.UserClipDistanceCullTestEnableBitmask = last->cull_distance_mask;
@@ -961,6 +998,94 @@ emit_3dstate_vs(struct anv_pipeline *pipeline)
       vs.PerThreadScratchSpace   = get_scratch_space(vs_bin);
       vs.ScratchSpaceBasePointer =
          get_scratch_address(pipeline, MESA_SHADER_VERTEX, vs_bin);
+   }
+}
+
+static void
+emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
+{
+   if (!anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL)) {
+      anv_batch_emit(&pipeline->batch, GENX(3DSTATE_HS), hs);
+      anv_batch_emit(&pipeline->batch, GENX(3DSTATE_TE), te);
+      anv_batch_emit(&pipeline->batch, GENX(3DSTATE_DS), ds);
+      return;
+   }
+
+   const struct gen_device_info *devinfo = &pipeline->device->info;
+   const struct anv_shader_bin *tcs_bin =
+      pipeline->shaders[MESA_SHADER_TESS_CTRL];
+   const struct anv_shader_bin *tes_bin =
+      pipeline->shaders[MESA_SHADER_TESS_EVAL];
+
+   const struct brw_tcs_prog_data *tcs_prog_data = get_tcs_prog_data(pipeline);
+   const struct brw_tes_prog_data *tes_prog_data = get_tes_prog_data(pipeline);
+
+   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_HS), hs) {
+      hs.FunctionEnable = true;
+      hs.StatisticsEnable = true;
+      hs.KernelStartPointer = tcs_bin->kernel.offset;
+
+      hs.SamplerCount = get_sampler_count(tcs_bin);
+      hs.BindingTableEntryCount = get_binding_table_entry_count(tcs_bin);
+      hs.MaximumNumberofThreads = devinfo->max_tcs_threads - 1;
+      hs.IncludeVertexHandles = true;
+      hs.InstanceCount = tcs_prog_data->instances - 1;
+
+      hs.VertexURBEntryReadLength = 0;
+      hs.VertexURBEntryReadOffset = 0;
+      hs.DispatchGRFStartRegisterForURBData =
+         tcs_prog_data->base.base.dispatch_grf_start_reg;
+
+      hs.PerThreadScratchSpace = get_scratch_space(tcs_bin);
+      hs.ScratchSpaceBasePointer =
+         get_scratch_address(pipeline, MESA_SHADER_TESS_CTRL, tcs_bin);
+   }
+
+   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_TE), te) {
+      te.Partitioning = tes_prog_data->partitioning;
+      te.OutputTopology = tes_prog_data->output_topology;
+      te.TEDomain = tes_prog_data->domain;
+      te.TEEnable = true;
+      te.MaximumTessellationFactorOdd = 63.0;
+      te.MaximumTessellationFactorNotOdd = 64.0;
+   }
+
+   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_DS), ds) {
+      ds.FunctionEnable = true;
+      ds.StatisticsEnable = true;
+      ds.KernelStartPointer = tes_bin->kernel.offset;
+
+      ds.SamplerCount = get_sampler_count(tes_bin);
+      ds.BindingTableEntryCount = get_binding_table_entry_count(tes_bin);
+      ds.MaximumNumberofThreads = devinfo->max_tes_threads - 1;
+
+      ds.ComputeWCoordinateEnable =
+         tes_prog_data->domain == BRW_TESS_DOMAIN_TRI;
+
+      ds.PatchURBEntryReadLength = tes_prog_data->base.urb_read_length;
+      ds.PatchURBEntryReadOffset = 0;
+      ds.DispatchGRFStartRegisterForURBData =
+         tes_prog_data->base.base.dispatch_grf_start_reg;
+
+#if GEN_GEN >= 8
+      ds.VertexURBEntryOutputReadOffset = 1;
+      ds.VertexURBEntryOutputLength =
+         (tes_prog_data->base.vue_map.num_slots + 1) / 2 - 1;
+
+      ds.DispatchMode =
+         tes_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8 ?
+            DISPATCH_MODE_SIMD8_SINGLE_PATCH :
+            DISPATCH_MODE_SIMD4X2;
+
+      ds.UserClipDistanceClipTestEnableBitmask =
+         tes_prog_data->base.clip_distance_mask;
+      ds.UserClipDistanceCullTestEnableBitmask =
+         tes_prog_data->base.cull_distance_mask;
+#endif
+
+      ds.PerThreadScratchSpace = get_scratch_space(tes_bin);
+      ds.ScratchSpaceBasePointer =
+         get_scratch_address(pipeline, MESA_SHADER_TESS_EVAL, tes_bin);
    }
 }
 
@@ -1202,6 +1327,26 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
    }
 }
 
+static inline bool
+has_color_buffer_write_enabled(const struct anv_pipeline *pipeline)
+{
+   const struct anv_shader_bin *shader_bin =
+      pipeline->shaders[MESA_SHADER_FRAGMENT];
+   if (!shader_bin)
+      return false;
+
+   const struct anv_pipeline_bind_map *bind_map = &shader_bin->bind_map;
+   for (int i = 0; i < bind_map->surface_count; i++) {
+      if (bind_map->surface_to_descriptor[i].set !=
+          ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS)
+         continue;
+      if (bind_map->surface_to_descriptor[i].index != UINT8_MAX)
+         return true;
+   }
+
+   return false;
+}
+
 #if GEN_GEN >= 8
 static void
 emit_3dstate_ps_extra(struct anv_pipeline *pipeline,
@@ -1231,6 +1376,37 @@ emit_3dstate_ps_extra(struct anv_pipeline *pipeline,
        */
       ps.PixelShaderKillsPixel         = subpass->has_ds_self_dep ||
                                          wm_prog_data->uses_kill;
+
+      /* The stricter cross-primitive coherency guarantees that the hardware
+       * gives us with the "Accesses UAV" bit set for at least one shader stage
+       * and the "UAV coherency required" bit set on the 3DPRIMITIVE command are
+       * redundant within the current image, atomic counter and SSBO GL APIs,
+       * which all have very loose ordering and coherency requirements and
+       * generally rely on the application to insert explicit barriers when a
+       * shader invocation is expected to see the memory writes performed by the
+       * invocations of some previous primitive.  Regardless of the value of
+       * "UAV coherency required", the "Accesses UAV" bits will implicitly cause
+       * an in most cases useless DC flush when the lowermost stage with the bit
+       * set finishes execution.
+       *
+       * It would be nice to disable it, but in some cases we can't because on
+       * Gen8+ it also has an influence on rasterization via the PS UAV-only
+       * signal (which could be set independently from the coherency mechanism
+       * in the 3DSTATE_WM command on Gen7), and because in some cases it will
+       * determine whether the hardware skips execution of the fragment shader
+       * or not via the ThreadDispatchEnable signal.  However if we know that
+       * GEN8_PS_BLEND_HAS_WRITEABLE_RT is going to be set and
+       * GEN8_PSX_PIXEL_SHADER_NO_RT_WRITE is not set it shouldn't make any
+       * difference so we may just disable it here.
+       *
+       * Gen8 hardware tries to compute ThreadDispatchEnable for us but doesn't
+       * take into account KillPixels when no depth or stencil writes are
+       * enabled. In order for occlusion queries to work correctly with no
+       * attachments, we need to force-enable here.
+       */
+      if ((wm_prog_data->has_side_effects || wm_prog_data->uses_kill) &&
+          !has_color_buffer_write_enabled(pipeline))
+         ps.PixelShaderHasUAV = true;
 
 #if GEN_GEN >= 9
       ps.PixelShaderPullsBary    = wm_prog_data->pulls_bary;
@@ -1315,6 +1491,7 @@ genX(graphics_pipeline_create)(
 #endif
 
    emit_3dstate_vs(pipeline);
+   emit_3dstate_hs_te_ds(pipeline);
    emit_3dstate_gs(pipeline);
    emit_3dstate_sbe(pipeline);
    emit_3dstate_wm(pipeline, subpass, pCreateInfo->pMultisampleState);
@@ -1469,22 +1646,23 @@ VkResult genX(CreateGraphicsPipelines)(
 
    VkResult result = VK_SUCCESS;
 
-   unsigned i = 0;
-   for (; i < count; i++) {
+   unsigned i;
+   for (i = 0; i < count; i++) {
       result = genX(graphics_pipeline_create)(_device,
                                               pipeline_cache,
                                               &pCreateInfos[i],
                                               pAllocator, &pPipelines[i]);
-      if (result != VK_SUCCESS) {
-         for (unsigned j = 0; j < i; j++) {
-            anv_DestroyPipeline(_device, pPipelines[j], pAllocator);
-         }
 
-         return result;
-      }
+      /* Bail out on the first error as it is not obvious what error should be
+       * report upon 2 different failures. */
+      if (result != VK_SUCCESS)
+         break;
    }
 
-   return VK_SUCCESS;
+   for (; i < count; i++)
+      pPipelines[i] = VK_NULL_HANDLE;
+
+   return result;
 }
 
 VkResult genX(CreateComputePipelines)(
@@ -1499,19 +1677,20 @@ VkResult genX(CreateComputePipelines)(
 
    VkResult result = VK_SUCCESS;
 
-   unsigned i = 0;
-   for (; i < count; i++) {
+   unsigned i;
+   for (i = 0; i < count; i++) {
       result = compute_pipeline_create(_device, pipeline_cache,
                                        &pCreateInfos[i],
                                        pAllocator, &pPipelines[i]);
-      if (result != VK_SUCCESS) {
-         for (unsigned j = 0; j < i; j++) {
-            anv_DestroyPipeline(_device, pPipelines[j], pAllocator);
-         }
 
-         return result;
-      }
+      /* Bail out on the first error as it is not obvious what error should be
+       * report upon 2 different failures. */
+      if (result != VK_SUCCESS)
+         break;
    }
 
-   return VK_SUCCESS;
+   for (; i < count; i++)
+      pPipelines[i] = VK_NULL_HANDLE;
+
+   return result;
 }

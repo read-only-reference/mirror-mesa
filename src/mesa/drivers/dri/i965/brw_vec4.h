@@ -79,6 +79,11 @@ public:
       return dst_reg(brw_null_reg());
    }
 
+   dst_reg dst_null_df()
+   {
+      return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_DF));
+   }
+
    dst_reg dst_null_d()
    {
       return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
@@ -155,6 +160,13 @@ public:
    void opt_set_dependency_control();
    void opt_schedule_instructions();
    void convert_to_hw_regs();
+
+   bool is_supported_64bit_region(vec4_instruction *inst, unsigned arg);
+   bool lower_simd_width();
+   bool scalarize_df();
+   bool lower_64bit_mad_to_mul_add();
+   void apply_logical_swizzle(struct brw_reg *hw_reg,
+                              vec4_instruction *inst, int arg);
 
    vec4_instruction *emit(vec4_instruction *inst);
 
@@ -309,6 +321,18 @@ public:
    bool is_high_sampler(src_reg sampler);
 
    bool optimize_predicate(nir_alu_instr *instr, enum brw_predicate *predicate);
+
+   void emit_conversion_from_double(dst_reg dst, src_reg src, bool saturate,
+                                    brw_reg_type single_type);
+   void emit_conversion_to_double(dst_reg dst, src_reg src, bool saturate,
+                                  brw_reg_type single_type);
+
+   src_reg setup_imm_df(double v);
+
+   vec4_instruction *shuffle_64bit_data(dst_reg dst, src_reg src,
+                                        bool for_write,
+                                        bblock_t *block = NULL,
+                                        vec4_instruction *ref = NULL);
 
    virtual void emit_nir_code();
    virtual void nir_setup_uniforms();

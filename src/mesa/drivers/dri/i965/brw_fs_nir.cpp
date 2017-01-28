@@ -419,7 +419,7 @@ fs_visitor::optimize_extract_to_float(nir_alu_instr *instr,
       src0->op == nir_op_extract_i16 || src0->op == nir_op_extract_i8);
 
    fs_reg op0 = get_nir_src(src0->src[0].src);
-   op0.type = brw_type_for_nir_type(
+   op0.type = brw_type_for_nir_type(devinfo,
       (nir_alu_type)(nir_op_infos[src0->op].input_types[0] |
                      nir_src_bit_size(src0->src[0].src)));
    op0 = offset(op0, bld, src0->src[0].swizzle[0]);
@@ -554,14 +554,14 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    fs_inst *inst;
 
    fs_reg result = get_nir_dest(instr->dest.dest);
-   result.type = brw_type_for_nir_type(
+   result.type = brw_type_for_nir_type(devinfo,
       (nir_alu_type)(nir_op_infos[instr->op].output_type |
                      nir_dest_bit_size(instr->dest.dest)));
 
    fs_reg op[4];
    for (unsigned i = 0; i < nir_op_infos[instr->op].num_inputs; i++) {
       op[i] = get_nir_src(instr->src[i].src);
-      op[i].type = brw_type_for_nir_type(
+      op[i].type = brw_type_for_nir_type(devinfo,
          (nir_alu_type)(nir_op_infos[instr->op].input_types[i] |
                         nir_src_bit_size(instr->src[i].src)));
       op[i].abs = instr->src[i].abs;
@@ -653,6 +653,13 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_f2d:
    case nir_op_i2d:
    case nir_op_u2d:
+   case nir_op_f2i64:
+   case nir_op_f2u64:
+   case nir_op_i2i64:
+   case nir_op_i2u64:
+   case nir_op_u2i64:
+   case nir_op_u2u64:
+   case nir_op_b2i64:
       /* CHV PRM, vol07, 3D Media GPGPU Engine, Register Region Restrictions:
        *
        *    "When source or destination is 64b (...), regioning in Align1
@@ -666,7 +673,9 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
        * data elements aligned to 64-bit. This restriction does not apply to
        * BDW and later.
        */
-      if (devinfo->is_cherryview || devinfo->is_broxton) {
+      if (nir_dest_bit_size(instr->dest.dest) == 64 &&
+          nir_src_bit_size(instr->src[0].src) == 32 &&
+          (devinfo->is_cherryview || devinfo->is_broxton)) {
          fs_reg tmp = bld.vgrf(result.type, 1);
          tmp = subscript(tmp, op[0].type, 0);
          inst = bld.MOV(tmp, op[0]);
@@ -678,8 +687,12 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_d2f:
    case nir_op_d2i:
    case nir_op_d2u:
-      inst = bld.MOV(result, op[0]);
-      inst->saturate = instr->dest.saturate;
+      if (instr->op == nir_op_b2i64) {
+         bld.MOV(result, negate(op[0]));
+      } else {
+         inst = bld.MOV(result, op[0]);
+         inst->saturate = instr->dest.saturate;
+      }
       break;
 
    case nir_op_f2i:
@@ -688,7 +701,14 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       break;
 
    case nir_op_fsign: {
-      if (type_sz(op[0].type) < 8) {
+      if (op[0].abs) {
+         /* Straightforward since the source can be assumed to be
+          * non-negative.
+          */
+         set_condmod(BRW_CONDITIONAL_NZ, bld.MOV(result, op[0]));
+         set_predicate(BRW_PREDICATE_NORMAL, bld.MOV(result, brw_imm_f(1.0f)));
+
+      } else if (type_sz(op[0].type) < 8) {
          /* AND(val, 0x80000000) gives the sign bit.
           *
           * Predicated OR ORs 1.0 (0x3f800000) with the sign bit if val is not
@@ -839,7 +859,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       break;
 
    case nir_op_iadd:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
    case nir_op_fadd:
       inst = bld.ADD(result, op[0], op[1]);
       inst->saturate = instr->dest.saturate;
@@ -948,35 +967,48 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 
    case nir_op_ilt:
    case nir_op_ult:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
-      bld.CMP(result, op[0], op[1], BRW_CONDITIONAL_L);
-      break;
-
    case nir_op_ige:
    case nir_op_uge:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
-      bld.CMP(result, op[0], op[1], BRW_CONDITIONAL_GE);
-      break;
-
    case nir_op_ieq:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
-      bld.CMP(result, op[0], op[1], BRW_CONDITIONAL_Z);
-      break;
+   case nir_op_ine: {
+      fs_reg dest = result;
+      if (nir_src_bit_size(instr->src[0].src) > 32) {
+         dest = bld.vgrf(BRW_REGISTER_TYPE_UQ, 1);
+      }
 
-   case nir_op_ine:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
-      bld.CMP(result, op[0], op[1], BRW_CONDITIONAL_NZ);
+      brw_conditional_mod cond;
+      switch (instr->op) {
+      case nir_op_ilt:
+      case nir_op_ult:
+         cond = BRW_CONDITIONAL_L;
+         break;
+      case nir_op_ige:
+      case nir_op_uge:
+         cond = BRW_CONDITIONAL_GE;
+         break;
+      case nir_op_ieq:
+         cond = BRW_CONDITIONAL_Z;
+         break;
+      case nir_op_ine:
+         cond = BRW_CONDITIONAL_NZ;
+         break;
+      default:
+         unreachable("bad opcode");
+      }
+      bld.CMP(dest, op[0], op[1], cond);
+      if (nir_src_bit_size(instr->src[0].src) > 32) {
+         bld.MOV(result, subscript(dest, BRW_REGISTER_TYPE_UD, 0));
+      }
       break;
+   }
 
    case nir_op_inot:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       if (devinfo->gen >= 8) {
          op[0] = resolve_source_modifiers(op[0]);
       }
       bld.NOT(result, op[0]);
       break;
    case nir_op_ixor:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       if (devinfo->gen >= 8) {
          op[0] = resolve_source_modifiers(op[0]);
          op[1] = resolve_source_modifiers(op[1]);
@@ -984,7 +1016,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       bld.XOR(result, op[0], op[1]);
       break;
    case nir_op_ior:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       if (devinfo->gen >= 8) {
          op[0] = resolve_source_modifiers(op[0]);
          op[1] = resolve_source_modifiers(op[1]);
@@ -992,7 +1023,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       bld.OR(result, op[0], op[1]);
       break;
    case nir_op_iand:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       if (devinfo->gen >= 8) {
          op[0] = resolve_source_modifiers(op[0]);
          op[1] = resolve_source_modifiers(op[1]);
@@ -1130,7 +1160,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 
    case nir_op_imin:
    case nir_op_umin:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
    case nir_op_fmin:
       inst = bld.emit_minmax(result, op[0], op[1], BRW_CONDITIONAL_L);
       inst->saturate = instr->dest.saturate;
@@ -1138,7 +1167,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 
    case nir_op_imax:
    case nir_op_umax:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
    case nir_op_fmax:
       inst = bld.emit_minmax(result, op[0], op[1], BRW_CONDITIONAL_GE);
       inst->saturate = instr->dest.saturate;
@@ -1222,6 +1250,19 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       }
 
       if (instr->op == nir_op_unpack_double_2x32_split_x)
+         bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 0));
+      else
+         bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 1));
+      break;
+   }
+
+   case nir_op_pack_int_2x32_split:
+      bld.emit(FS_OPCODE_PACK, result, op[0], op[1]);
+      break;
+
+   case nir_op_unpack_int_2x32_split_x:
+   case nir_op_unpack_int_2x32_split_y: {
+      if (instr->op == nir_op_unpack_int_2x32_split_x)
          bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 0));
       else
          bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 1));
@@ -1317,15 +1358,12 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       unreachable("not reached: should have been lowered");
 
    case nir_op_ishl:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       bld.SHL(result, op[0], op[1]);
       break;
    case nir_op_ishr:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       bld.ASR(result, op[0], op[1]);
       break;
    case nir_op_ushr:
-      assert(nir_dest_bit_size(instr->dest.dest) < 64);
       bld.SHR(result, op[0], op[1]);
       break;
 
@@ -2520,78 +2558,7 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
          bld.MOV(patch_handle,
                  retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
-         if (imm_offset == 0) {
-            /* This is a read of gl_TessLevelInner[], which lives in the
-             * Patch URB header.  The layout depends on the domain.
-             */
-            dst.type = BRW_REGISTER_TYPE_F;
-            switch (tcs_key->tes_primitive_mode) {
-            case GL_QUADS: {
-               /* DWords 3-2 (reversed) */
-               fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_F, 4);
-
-               inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, tmp, patch_handle);
-               inst->offset = 0;
-               inst->mlen = 1;
-               inst->size_written = 4 * REG_SIZE;
-
-               /* dst.xy = tmp.wz */
-               bld.MOV(dst,                 offset(tmp, bld, 3));
-               bld.MOV(offset(dst, bld, 1), offset(tmp, bld, 2));
-               break;
-            }
-            case GL_TRIANGLES:
-               /* DWord 4; hardcode offset = 1 and size_written = REG_SIZE */
-               inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, dst, patch_handle);
-               inst->offset = 1;
-               inst->mlen = 1;
-               inst->size_written = REG_SIZE;
-               break;
-            case GL_ISOLINES:
-               /* All channels are undefined. */
-               break;
-            default:
-               unreachable("Bogus tessellation domain");
-            }
-         } else if (imm_offset == 1) {
-            /* This is a read of gl_TessLevelOuter[], which lives in the
-             * Patch URB header.  The layout depends on the domain.
-             */
-            dst.type = BRW_REGISTER_TYPE_F;
-
-            fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_F, 4);
-            inst = bld.emit(SHADER_OPCODE_URB_READ_SIMD8, tmp, patch_handle);
-            inst->offset = 1;
-            inst->mlen = 1;
-            inst->size_written = 4 * REG_SIZE;
-
-            /* Reswizzle: WZYX */
-            fs_reg srcs[4] = {
-               offset(tmp, bld, 3),
-               offset(tmp, bld, 2),
-               offset(tmp, bld, 1),
-               offset(tmp, bld, 0),
-            };
-
-            unsigned num_components;
-            switch (tcs_key->tes_primitive_mode) {
-            case GL_QUADS:
-               num_components = 4;
-               break;
-            case GL_TRIANGLES:
-               num_components = 3;
-               break;
-            case GL_ISOLINES:
-               /* Isolines are not reversed; swizzle .zw -> .xy */
-               srcs[0] = offset(tmp, bld, 2);
-               srcs[1] = offset(tmp, bld, 3);
-               num_components = 2;
-               break;
-            default:
-               unreachable("Bogus tessellation domain");
-            }
-            bld.LOAD_PAYLOAD(dst, srcs, num_components, 0);
-         } else {
+         {
             if (first_component != 0) {
                unsigned read_components =
                   instr->num_components + first_component;
@@ -2656,55 +2623,6 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
 
       if (indirect_offset.file != BAD_FILE) {
          srcs[header_regs++] = indirect_offset;
-      } else if (!is_passthrough_shader) {
-         if (imm_offset == 0) {
-            value.type = BRW_REGISTER_TYPE_F;
-
-            mask &= (1 << tesslevel_inner_components(tcs_key->tes_primitive_mode)) - 1;
-
-            /* This is a write to gl_TessLevelInner[], which lives in the
-             * Patch URB header.  The layout depends on the domain.
-             */
-            switch (tcs_key->tes_primitive_mode) {
-            case GL_QUADS:
-               /* gl_TessLevelInner[].xy lives at DWords 3-2 (reversed).
-                * We use an XXYX swizzle to reverse put .xy in the .wz
-                * channels, and use a .zw writemask.
-                */
-               mask = writemask_for_backwards_vector(mask);
-               swiz = BRW_SWIZZLE4(0, 0, 1, 0);
-               break;
-            case GL_TRIANGLES:
-               /* gl_TessLevelInner[].x lives at DWord 4, so we set the
-                * writemask to X and bump the URB offset by 1.
-                */
-               imm_offset = 1;
-               break;
-            case GL_ISOLINES:
-               /* Skip; gl_TessLevelInner[] doesn't exist for isolines. */
-               return;
-            default:
-               unreachable("Bogus tessellation domain");
-            }
-         } else if (imm_offset == 1) {
-            /* This is a write to gl_TessLevelOuter[] which lives in the
-             * Patch URB Header at DWords 4-7.  However, it's reversed, so
-             * instead of .xyzw we have .wzyx.
-             */
-            value.type = BRW_REGISTER_TYPE_F;
-
-            mask &= (1 << tesslevel_outer_components(tcs_key->tes_primitive_mode)) - 1;
-
-            if (tcs_key->tes_primitive_mode == GL_ISOLINES) {
-               /* Isolines .xy should be stored in .zw, in order. */
-               swiz = BRW_SWIZZLE4(0, 0, 0, 1);
-               mask <<= 2;
-            } else {
-               /* Other domains are reversed; store .wzyx instead of .xyzw */
-               swiz = BRW_SWIZZLE_WZYX;
-               mask = writemask_for_backwards_vector(mask);
-            }
-         }
       }
 
       if (mask == 0)
@@ -2848,48 +2766,6 @@ fs_visitor::nir_emit_tes_intrinsic(const fs_builder &bld,
       /* gl_TessCoord is part of the payload in g1-3 */
       for (unsigned i = 0; i < 3; i++) {
          bld.MOV(offset(dest, bld, i), fs_reg(brw_vec8_grf(1 + i, 0)));
-      }
-      break;
-
-   case nir_intrinsic_load_tess_level_outer:
-      /* When the TES reads gl_TessLevelOuter, we ensure that the patch header
-       * appears as a push-model input.  So, we can simply use the ATTR file
-       * rather than issuing URB read messages.  The data is stored in the
-       * high DWords in reverse order - DWord 7 contains .x, DWord 6 contains
-       * .y, and so on.
-       */
-      switch (tes_prog_data->domain) {
-      case BRW_TESS_DOMAIN_QUAD:
-         for (unsigned i = 0; i < 4; i++)
-            bld.MOV(offset(dest, bld, i), component(fs_reg(ATTR, 0), 7 - i));
-         break;
-      case BRW_TESS_DOMAIN_TRI:
-         for (unsigned i = 0; i < 3; i++)
-            bld.MOV(offset(dest, bld, i), component(fs_reg(ATTR, 0), 7 - i));
-         break;
-      case BRW_TESS_DOMAIN_ISOLINE:
-         for (unsigned i = 0; i < 2; i++)
-            bld.MOV(offset(dest, bld, i), component(fs_reg(ATTR, 0), 6 + i));
-         break;
-      }
-      break;
-
-   case nir_intrinsic_load_tess_level_inner:
-      /* When the TES reads gl_TessLevelInner, we ensure that the patch header
-       * appears as a push-model input.  So, we can simply use the ATTR file
-       * rather than issuing URB read messages.
-       */
-      switch (tes_prog_data->domain) {
-      case BRW_TESS_DOMAIN_QUAD:
-         bld.MOV(dest, component(fs_reg(ATTR, 0), 3));
-         bld.MOV(offset(dest, bld, 1), component(fs_reg(ATTR, 0), 2));
-         break;
-      case BRW_TESS_DOMAIN_TRI:
-         bld.MOV(dest, component(fs_reg(ATTR, 0), 4));
-         break;
-      case BRW_TESS_DOMAIN_ISOLINE:
-         /* ignore - value is undefined */
-         break;
       }
       break;
 
@@ -4656,7 +4532,7 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
       }
    }
 
-   fs_reg dst = bld.vgrf(brw_type_for_nir_type(instr->dest_type), 4);
+   fs_reg dst = bld.vgrf(brw_type_for_nir_type(devinfo, instr->dest_type), 4);
    fs_inst *inst = bld.emit(opcode, dst, srcs, ARRAY_SIZE(srcs));
    inst->offset = header_bits;
 
@@ -4813,7 +4689,7 @@ setup_imm_df(const fs_builder &bld, double v)
     * instruction allows to set the 64-bit immediate value.
     */
    if (devinfo->is_haswell) {
-      const fs_builder ubld = bld.exec_all();
+      const fs_builder ubld = bld.exec_all().group(1, 0);
       fs_reg dst = ubld.vgrf(BRW_REGISTER_TYPE_DF, 1);
       ubld.DIM(dst, brw_imm_df(v));
       return component(dst, 0);

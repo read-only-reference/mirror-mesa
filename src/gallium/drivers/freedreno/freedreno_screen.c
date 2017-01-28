@@ -78,6 +78,7 @@ static const struct debug_named_value debug_options[] = {
 		{"nir",       FD_DBG_NIR,    "Prefer NIR as native IR"},
 		{"reorder",   FD_DBG_REORDER,"Enable reordering for draws/blits"},
 		{"bstat",     FD_DBG_BSTAT,  "Print batch stats at context destroy"},
+		{"nogrow",    FD_DBG_NOGROW, "Disable \"growable\" cmdstream buffers, even if kernel supports it"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -176,10 +177,12 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
-	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
 		return 1;
+
+	case PIPE_CAP_VERTEXID_NOBASE:
+		return is_a3xx(screen) || is_a4xx(screen);
 
 	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 		return is_a4xx(screen) ? 0 : 1;
@@ -243,9 +246,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 		if (glsl120)
 			return 120;
-		// XXX temporary, avoid issues with glamor:
-		if (is_a5xx(screen))
-			return 120;
 		return is_ir3(screen) ? 140 : 120;
 
 	/* Unsupported features. */
@@ -295,6 +295,10 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
 	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
+	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
+	case PIPE_CAP_TGSI_FS_FBFETCH:
+	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
+	case PIPE_CAP_INT64:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:

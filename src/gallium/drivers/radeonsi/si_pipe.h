@@ -70,10 +70,6 @@
 					      SI_CONTEXT_FLUSH_AND_INV_DB | \
 					      SI_CONTEXT_FLUSH_AND_INV_DB_META)
 
-#define SI_ENCODE_TRACE_POINT(id)	(0xcafe0000 | ((id) & 0xffff))
-#define SI_IS_TRACE_POINT(x)		(((x) & 0xcafe0000) == 0xcafe0000)
-#define SI_GET_TRACE_POINT_ID(x)	((x) & 0xffff)
-
 #define SI_MAX_BORDER_COLORS	4096
 
 struct si_compute;
@@ -181,6 +177,7 @@ struct si_framebuffer {
 	unsigned			dirty_cbufs;
 	bool				dirty_zsbuf;
 	bool				any_dst_linear;
+	bool				do_update_surf_dirtiness;
 };
 
 struct si_clip_state {
@@ -207,6 +204,28 @@ struct si_shader_ctx_state {
 	struct si_shader		*current;
 };
 
+#define SI_NUM_VGT_PARAM_KEY_BITS 12
+#define SI_NUM_VGT_PARAM_STATES (1 << SI_NUM_VGT_PARAM_KEY_BITS)
+
+/* The IA_MULTI_VGT_PARAM key used to index the table of precomputed values.
+ * Some fields are set by state-change calls, most are set by draw_vbo.
+ */
+union si_vgt_param_key {
+	struct {
+		unsigned prim:4;
+		unsigned uses_instancing:1;
+		unsigned multi_instances_smaller_than_primgroup:1;
+		unsigned primitive_restart:1;
+		unsigned count_from_stream_output:1;
+		unsigned line_stipple_enabled:1;
+		unsigned uses_tess:1;
+		unsigned tcs_tes_uses_prim_id:1;
+		unsigned uses_gs:1;
+		unsigned _pad:32 - SI_NUM_VGT_PARAM_KEY_BITS;
+	} u;
+	uint32_t index;
+};
+
 struct si_context {
 	struct r600_common_context	b;
 	struct blitter_context		*blitter;
@@ -231,10 +250,12 @@ struct si_context {
 	union si_state_atoms		atoms;
 	unsigned			dirty_atoms; /* mask */
 	/* PM4 states (precomputed immutable states) */
+	unsigned			dirty_states;
 	union si_state			queued;
 	union si_state			emitted;
 
 	/* Atom declarations. */
+	struct r600_atom		prefetch_L2;
 	struct si_framebuffer		framebuffer;
 	struct si_sample_locs		msaa_sample_locs;
 	struct r600_atom		db_render_state;
@@ -272,6 +293,8 @@ struct si_context {
 	struct si_descriptors		vertex_buffers;
 	struct si_descriptors		descriptors[SI_NUM_DESCS];
 	unsigned			descriptors_dirty;
+	unsigned			shader_pointers_dirty;
+	unsigned			compressed_tex_shader_mask;
 	struct si_buffer_resources	rw_buffers;
 	struct si_buffer_resources	const_buffers[SI_NUM_SHADERS];
 	struct si_buffer_resources	shader_buffers[SI_NUM_SHADERS];
@@ -291,6 +314,7 @@ struct si_context {
 
 	/* Vertex and index buffers. */
 	bool				vertex_buffers_dirty;
+	bool				vertex_buffer_pointer_dirty;
 	struct pipe_index_buffer	index_buffer;
 	struct pipe_vertex_buffer	vertex_buffer[SI_NUM_VERTEX_BUFFERS];
 
@@ -324,13 +348,12 @@ struct si_context {
 	int			last_multi_vgt_param;
 	int			last_rast_prim;
 	unsigned		last_sc_line_stipple;
-	int			last_vtx_reuse_depth;
 	int			current_rast_prim; /* primitive type after TES, GS */
 	bool			gs_tri_strip_adj_fix;
 
 	/* Scratch buffer */
+	struct r600_atom	scratch_state;
 	struct r600_resource	*scratch_buffer;
-	bool			emit_scratch_reloc;
 	unsigned		scratch_waves;
 	unsigned		spi_tmpring_size;
 
@@ -354,6 +377,10 @@ struct si_context {
 
 	/* Other state */
 	bool need_check_render_feedback;
+
+	/* Precomputed IA_MULTI_VGT_PARAM */
+	union si_vgt_param_key  ia_multi_vgt_param_key;
+	unsigned		ia_multi_vgt_param[SI_NUM_VGT_PARAM_STATES];
 };
 
 /* cik_sdma.c */
@@ -372,9 +399,23 @@ void si_resource_copy_region(struct pipe_context *ctx,
 			     const struct pipe_box *src_box);
 
 /* si_cp_dma.c */
+#define SI_CPDMA_SKIP_CHECK_CS_SPACE	(1 << 0) /* don't call need_cs_space */
+#define SI_CPDMA_SKIP_SYNC_AFTER	(1 << 1) /* don't wait for DMA after the copy */
+#define SI_CPDMA_SKIP_SYNC_BEFORE	(1 << 2) /* don't wait for DMA before the copy (RAW hazards) */
+#define SI_CPDMA_SKIP_GFX_SYNC		(1 << 3) /* don't flush caches and don't wait for PS/CS */
+#define SI_CPDMA_SKIP_BO_LIST_UPDATE	(1 << 4) /* don't update the BO list */
+#define SI_CPDMA_SKIP_ALL (SI_CPDMA_SKIP_CHECK_CS_SPACE | \
+			   SI_CPDMA_SKIP_SYNC_AFTER | \
+			   SI_CPDMA_SKIP_SYNC_BEFORE | \
+			   SI_CPDMA_SKIP_GFX_SYNC | \
+			   SI_CPDMA_SKIP_BO_LIST_UPDATE)
+
 void si_copy_buffer(struct si_context *sctx,
 		    struct pipe_resource *dst, struct pipe_resource *src,
-		    uint64_t dst_offset, uint64_t src_offset, unsigned size);
+		    uint64_t dst_offset, uint64_t src_offset, unsigned size,
+		    unsigned user_flags);
+void cik_prefetch_TC_L2_async(struct si_context *sctx, struct pipe_resource *buf,
+			      uint64_t offset, unsigned size);
 void si_init_cp_dma_functions(struct si_context *sctx);
 
 /* si_debug.c */
@@ -419,7 +460,7 @@ static inline void
 si_set_atom_dirty(struct si_context *sctx,
 		  struct r600_atom *atom, bool dirty)
 {
-	unsigned bit = 1 << (atom->id - 1);
+	unsigned bit = 1 << atom->id;
 
 	if (dirty)
 		sctx->dirty_atoms |= bit;
@@ -431,7 +472,7 @@ static inline bool
 si_is_atom_dirty(struct si_context *sctx,
 		  struct r600_atom *atom)
 {
-	unsigned bit = 1 << (atom->id - 1);
+	unsigned bit = 1 << atom->id;
 
 	return sctx->dirty_atoms & bit;
 }

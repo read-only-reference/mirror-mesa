@@ -165,7 +165,7 @@ brw_depthbuffer_format(struct brw_context *brw)
  * packet.  If the 3 buffers don't agree on the drawing offset ANDed with this
  * mask, then we're in trouble.
  */
-void
+static void
 brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
                                 uint32_t depth_level,
                                 uint32_t depth_layer,
@@ -179,21 +179,7 @@ brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
       intel_get_tile_masks(depth_mt->tiling, depth_mt->tr_mode,
                            depth_mt->cpp,
                            &tile_mask_x, &tile_mask_y);
-
-      if (intel_miptree_level_has_hiz(depth_mt, depth_level)) {
-         uint32_t hiz_tile_mask_x, hiz_tile_mask_y;
-         intel_get_tile_masks(depth_mt->hiz_buf->mt->tiling,
-                              depth_mt->hiz_buf->mt->tr_mode,
-                              depth_mt->hiz_buf->mt->cpp,
-                              &hiz_tile_mask_x,
-                              &hiz_tile_mask_y);
-
-         /* Each HiZ row represents 2 rows of pixels */
-         hiz_tile_mask_y = hiz_tile_mask_y << 1 | 1;
-
-         tile_mask_x |= hiz_tile_mask_x;
-         tile_mask_y |= hiz_tile_mask_y;
-      }
+      assert(!intel_miptree_level_has_hiz(depth_mt, depth_level));
    }
 
    if (stencil_mt) {
@@ -645,11 +631,10 @@ brw_emit_depth_stencil_hiz(struct brw_context *brw,
       /* Emit hiz buffer. */
       if (hiz) {
          assert(depth_mt);
-         struct intel_mipmap_tree *hiz_mt = depth_mt->hiz_buf->mt;
 	 BEGIN_BATCH(3);
 	 OUT_BATCH((_3DSTATE_HIER_DEPTH_BUFFER << 16) | (3 - 2));
-	 OUT_BATCH(hiz_mt->pitch - 1);
-	 OUT_RELOC(hiz_mt->bo,
+	 OUT_BATCH(depth_mt->hiz_buf->aux_base.pitch - 1);
+	 OUT_RELOC(depth_mt->hiz_buf->aux_base.bo,
 		   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		   brw->depthstencil.hiz_offset);
 	 ADVANCE_BATCH();

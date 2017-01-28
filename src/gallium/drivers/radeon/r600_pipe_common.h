@@ -352,6 +352,44 @@ struct r600_surface {
 	unsigned db_preload_control;	/* EG and later */
 };
 
+struct r600_mmio_counter {
+	unsigned busy;
+	unsigned idle;
+};
+
+union r600_mmio_counters {
+	struct {
+		/* GRBM_STATUS */
+		struct r600_mmio_counter spi;
+		struct r600_mmio_counter gui;
+		struct r600_mmio_counter ta;
+		struct r600_mmio_counter gds;
+		struct r600_mmio_counter vgt;
+		struct r600_mmio_counter ia;
+		struct r600_mmio_counter sx;
+		struct r600_mmio_counter wd;
+		struct r600_mmio_counter bci;
+		struct r600_mmio_counter sc;
+		struct r600_mmio_counter pa;
+		struct r600_mmio_counter db;
+		struct r600_mmio_counter cp;
+		struct r600_mmio_counter cb;
+
+		/* SRBM_STATUS2 */
+		struct r600_mmio_counter sdma;
+
+		/* CP_STAT */
+		struct r600_mmio_counter pfp;
+		struct r600_mmio_counter meq;
+		struct r600_mmio_counter me;
+		struct r600_mmio_counter surf_sync;
+		struct r600_mmio_counter dma;
+		struct r600_mmio_counter scratch_ram;
+		struct r600_mmio_counter ce;
+	} named;
+	unsigned array[0];
+};
+
 struct r600_common_screen {
 	struct pipe_screen		b;
 	struct radeon_winsys		*ws;
@@ -385,8 +423,7 @@ struct r600_common_screen {
 	/* GPU load thread. */
 	pipe_mutex			gpu_load_mutex;
 	pipe_thread			gpu_load_thread;
-	unsigned			gpu_load_counter_busy;
-	unsigned			gpu_load_counter_idle;
+	union r600_mmio_counters	mmio_counters;
 	volatile unsigned		gpu_load_stop_thread; /* bool */
 
 	char				renderer_string[100];
@@ -394,24 +431,20 @@ struct r600_common_screen {
 	/* Performance counters. */
 	struct r600_perfcounters	*perfcounters;
 
-	/* If pipe_screen wants to re-emit the framebuffer state of all
-	 * contexts, it should atomically increment this. Each context will
-	 * compare this with its own last known value of the counter before
-	 * drawing and re-emit the framebuffer state accordingly.
+	/* If pipe_screen wants to recompute and re-emit the framebuffer,
+	 * sampler, and image states of all contexts, it should atomically
+	 * increment this.
+	 *
+	 * Each context will compare this with its own last known value of
+	 * the counter before drawing and re-emit the states accordingly.
 	 */
-	unsigned			dirty_fb_counter;
+	unsigned			dirty_tex_counter;
 
 	/* Atomically increment this counter when an existing texture's
 	 * metadata is enabled or disabled in a way that requires changing
 	 * contexts' compressed texture binding masks.
 	 */
 	unsigned			compressed_colortex_counter;
-
-	/* Atomically increment this counter when an existing texture's
-	 * backing buffer or tile mode parameters have changed that requires
-	 * recomputation of shader descriptors.
-	 */
-	unsigned			dirty_tex_descriptor_counter;
 
 	struct {
 		/* Context flags to set so that all writes from earlier jobs
@@ -531,9 +564,8 @@ struct r600_common_context {
 	unsigned			num_gfx_cs_flushes;
 	unsigned			initial_gfx_cs_size;
 	unsigned			gpu_reset_counter;
-	unsigned			last_dirty_fb_counter;
+	unsigned			last_dirty_tex_counter;
 	unsigned			last_compressed_colortex_counter;
-	unsigned			last_dirty_tex_descriptor_counter;
 
 	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_zeroed_memory;
@@ -561,9 +593,6 @@ struct r600_common_context {
 	int				num_perfect_occlusion_queries;
 	struct list_head		active_queries;
 	unsigned			num_cs_dw_queries_suspend;
-	/* Additional hardware info. */
-	unsigned			backend_mask;
-	unsigned			max_db; /* for OQ */
 	/* Misc stats. */
 	unsigned			num_draw_calls;
 	unsigned			num_spill_draw_calls;
@@ -574,6 +603,9 @@ struct r600_common_context {
 	unsigned			num_vs_flushes;
 	unsigned			num_ps_flushes;
 	unsigned			num_cs_flushes;
+	unsigned			num_fb_cache_flushes;
+	unsigned			num_L2_invalidates;
+	unsigned			num_L2_writebacks;
 	uint64_t			num_alloc_tex_transfer_bytes;
 	unsigned			last_tex_ps_draw_ratio; /* for query */
 
@@ -625,6 +657,9 @@ struct r600_common_context {
 			 struct pipe_resource *src,
 			 unsigned src_level,
 			 const struct pipe_box *src_box);
+
+	void (*dma_clear_buffer)(struct pipe_context *ctx, struct pipe_resource *dst,
+				 uint64_t offset, uint64_t size, unsigned value);
 
 	void (*clear_buffer)(struct pipe_context *ctx, struct pipe_resource *dst,
 			     uint64_t offset, uint64_t size, unsigned value,
@@ -720,14 +755,12 @@ bool r600_can_dump_shader(struct r600_common_screen *rscreen,
 bool r600_extra_shader_checks(struct r600_common_screen *rscreen,
 			      unsigned processor);
 void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_resource *dst,
-			      uint64_t offset, uint64_t size, unsigned value,
-			      enum r600_coherency coher);
+			      uint64_t offset, uint64_t size, unsigned value);
 struct pipe_resource *r600_resource_create_common(struct pipe_screen *screen,
 						  const struct pipe_resource *templ);
 const char *r600_get_llvm_processor_name(enum radeon_family family);
 void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 			 struct r600_resource *dst, struct r600_resource *src);
-void r600_dma_emit_wait_idle(struct r600_common_context *rctx);
 void radeon_save_cs(struct radeon_winsys *ws, struct radeon_winsys_cs *cs,
 		    struct radeon_saved_cs *saved);
 void radeon_clear_saved_cs(struct radeon_saved_cs *saved);
@@ -735,8 +768,9 @@ bool r600_check_device_reset(struct r600_common_context *rctx);
 
 /* r600_gpu_load.c */
 void r600_gpu_load_kill_thread(struct r600_common_screen *rscreen);
-uint64_t r600_gpu_load_begin(struct r600_common_screen *rscreen);
-unsigned r600_gpu_load_end(struct r600_common_screen *rscreen, uint64_t begin);
+uint64_t r600_begin_counter(struct r600_common_screen *rscreen, unsigned type);
+unsigned r600_end_counter(struct r600_common_screen *rscreen, unsigned type,
+			  uint64_t begin);
 
 /* r600_perfcounters.c */
 void r600_perfcounters_destroy(struct r600_common_screen *rscreen);
@@ -746,7 +780,7 @@ void r600_init_screen_query_functions(struct r600_common_screen *rscreen);
 void r600_query_init(struct r600_common_context *rctx);
 void r600_suspend_queries(struct r600_common_context *ctx);
 void r600_resume_queries(struct r600_common_context *ctx);
-void r600_query_init_backend_mask(struct r600_common_context *ctx);
+void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen);
 
 /* r600_streamout.c */
 void r600_streamout_buffers_dirty(struct r600_common_context *rctx);

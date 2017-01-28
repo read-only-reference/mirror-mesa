@@ -2005,6 +2005,15 @@ Perform a * b + c with no intermediate rounding step.
   dst.zw = src0.zw \times src1.zw + src2.zw
 
 
+.. opcode:: DDIV - Divide
+
+.. math::
+
+  dst.xy = \frac{src0.xy}{src1.xy}
+
+  dst.zw = \frac{src0.zw}{src1.zw}
+
+
 .. opcode:: DRCP - Reciprocal
 
 .. math::
@@ -2560,6 +2569,19 @@ Resource Access Opcodes
   image resources, .xyz will contain the width/height/layers of the
   image, while .w will contain the number of samples for multi-sampled
   images.
+
+.. opcode:: FBFETCH - Load data from framebuffer
+
+  Syntax: ``FBFETCH dst, output``
+
+  Example: ``FBFETCH TEMP[0], OUT[0]``
+
+  This is only valid on ``COLOR`` semantic outputs. Returns the color
+  of the current position in the framebuffer from before this fragment
+  shader invocation. May return the same value from multiple calls for
+  a particular output within a single invocation. Note that result may
+  be undefined if a fragment is drawn multiple times without a blend
+  barrier in between.
 
 
 .. _threadsyncopcodes:
@@ -3525,12 +3547,25 @@ Which shader stage will MOST LIKELY follow after this shader when the shader
 is bound. This is only a hint to the driver and doesn't have to be precise.
 Only set for VS and TES.
 
-TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH / HEIGHT / DEPTH
-"""""""""""""""""""""""""""""""""""""""""""""""""""
+CS_FIXED_BLOCK_WIDTH / HEIGHT / DEPTH
+"""""""""""""""""""""""""""""""""""""
 
 Threads per block in each dimension, if known at compile time. If the block size
 is known all three should be at least 1. If it is unknown they should all be set
 to 0 or not set.
+
+MUL_ZERO_WINS
+"""""""""""""
+
+The MUL TGSI operation (FP32 multiplication) will return 0 if either
+of the operands are equal to 0. That means that 0 * Inf = 0. This
+should be set the same way for an entire pipeline. Note that this
+applies not only to the literal MUL TGSI opcode, but all FP32
+multiplications implied by other operations, such as MAD, FMA, DP2,
+DP3, DP4, DPH, DST, LOG, LRP, XPD, and possibly others. If there is a
+mismatch between shaders, then it is unspecified whether this behavior
+will be enabled.
+
 
 Texture Sampling and Texture Formats
 ------------------------------------

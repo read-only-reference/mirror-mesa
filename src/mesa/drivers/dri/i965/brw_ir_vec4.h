@@ -111,6 +111,12 @@ offset(src_reg reg, unsigned width, unsigned delta)
    return byte_offset(reg, num_components * type_sz(reg.type) * delta);
 }
 
+static inline src_reg
+horiz_offset(src_reg reg, unsigned delta)
+{
+   return byte_offset(reg, delta * type_sz(reg.type));
+}
+
 /**
  * Reswizzle a given source register.
  * \sa brw_swizzle().
@@ -184,6 +190,12 @@ offset(dst_reg reg, unsigned width, unsigned delta)
    const unsigned stride = (reg.file == UNIFORM ? 0 : 4);
    const unsigned num_components = MAX2(width / 4 * stride, 4);
    return byte_offset(reg, num_components * type_sz(reg.type) * delta);
+}
+
+static inline dst_reg
+horiz_offset(dst_reg reg, unsigned delta)
+{
+   return byte_offset(reg, delta * type_sz(reg.type));
 }
 
 static inline dst_reg
@@ -279,6 +291,12 @@ public:
    bool can_do_writemask(const struct gen_device_info *devinfo);
    bool can_change_types() const;
    bool has_source_and_destination_hazard() const;
+
+   bool is_align1_partial_write()
+   {
+      return opcode == VEC4_OPCODE_SET_LOW_32BIT ||
+             opcode == VEC4_OPCODE_SET_HIGH_32BIT;
+   }
 
    bool reads_flag()
    {

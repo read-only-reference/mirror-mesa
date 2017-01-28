@@ -207,7 +207,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 	rctx->blitter->draw_rectangle = r600_draw_rectangle;
 
 	r600_begin_new_cs(rctx);
-	r600_query_init_backend_mask(&rctx->b); /* this emits commands and must be last */
 
 	rctx->dummy_pixel_shader =
 		util_make_fragment_cloneinput_shader(&rctx->b.b, 0,
@@ -286,6 +285,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
 	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
 	case PIPE_CAP_CLEAR_TEXTURE:
+	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 		return 1;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -376,6 +376,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
 	case PIPE_CAP_NATIVE_FENCE_FD:
+	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
+	case PIPE_CAP_TGSI_FS_FBFETCH:
+	case PIPE_CAP_INT64:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -732,5 +735,6 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	if (rscreen->b.debug_flags & DBG_TEST_DMA)
 		r600_test_dma(&rscreen->b);
 
+	r600_query_fix_enabled_rb_mask(&rscreen->b);
 	return &rscreen->b.b;
 }

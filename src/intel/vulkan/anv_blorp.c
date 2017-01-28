@@ -172,7 +172,8 @@ get_blorp_surf_for_anv_image(const struct anv_image *image,
                              enum isl_aux_usage aux_usage,
                              struct blorp_surf *blorp_surf)
 {
-   if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT)
+   if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT ||
+       aux_usage == ISL_AUX_USAGE_HIZ)
       aux_usage = ISL_AUX_USAGE_NONE;
 
    const struct anv_surface *surface =
@@ -857,7 +858,7 @@ void anv_CmdClearDepthStencilImage(
    struct blorp_surf depth, stencil;
    if (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
       get_blorp_surf_for_anv_image(image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                                   image->aux_usage, &depth);
+                                   ISL_AUX_USAGE_NONE, &depth);
    } else {
       memset(&depth, 0, sizeof(depth));
    }
@@ -1162,6 +1163,8 @@ void
 anv_cmd_buffer_clear_subpass(struct anv_cmd_buffer *cmd_buffer)
 {
    const struct anv_cmd_state *cmd_state = &cmd_buffer->state;
+   const VkRect2D render_area = cmd_buffer->state.render_area;
+
 
    if (!subpass_needs_clear(cmd_buffer))
       return;
@@ -1195,8 +1198,6 @@ anv_cmd_buffer_clear_subpass(struct anv_cmd_buffer *cmd_buffer)
       get_blorp_surf_for_anv_image(image, VK_IMAGE_ASPECT_COLOR_BIT,
                                    att_state->aux_usage, &surf);
       surf.clear_color = vk_to_isl_color(att_state->clear_value.color);
-
-      const VkRect2D render_area = cmd_buffer->state.render_area;
 
       if (att_state->fast_clear) {
          blorp_fast_clear(&batch, &surf, iview->isl.format,
@@ -1237,8 +1238,69 @@ anv_cmd_buffer_clear_subpass(struct anv_cmd_buffer *cmd_buffer)
          .clearValue = cmd_state->attachments[ds].clear_value,
       };
 
-      clear_depth_stencil_attachment(cmd_buffer, &batch,
-                                     &clear_att, 1, &clear_rect);
+
+      const uint8_t gen = cmd_buffer->device->info.gen;
+      bool clear_with_hiz = gen >= 8 && cmd_state->attachments[ds].aux_usage ==
+                            ISL_AUX_USAGE_HIZ;
+      const struct anv_image_view *iview = fb->attachments[ds];
+
+      if (clear_with_hiz) {
+         const bool clear_depth = clear_att.aspectMask &
+                                  VK_IMAGE_ASPECT_DEPTH_BIT;
+         const bool clear_stencil = clear_att.aspectMask &
+                                    VK_IMAGE_ASPECT_STENCIL_BIT;
+
+         /* Check against restrictions for depth buffer clearing. A great GPU
+          * performance benefit isn't expected when using the HZ sequence for
+          * stencil-only clears. Therefore, we don't emit a HZ op sequence for
+          * a stencil clear in addition to using the BLORP-fallback for depth.
+          */
+         if (clear_depth) {
+            if (!blorp_can_hiz_clear_depth(gen, iview->isl.format,
+                                           iview->image->samples,
+                                           render_area.offset.x,
+                                           render_area.offset.y,
+                                           render_area.offset.x +
+                                           render_area.extent.width,
+                                           render_area.offset.y +
+                                           render_area.extent.height)) {
+               clear_with_hiz = false;
+            } else if (clear_att.clearValue.depthStencil.depth !=
+                       ANV_HZ_FC_VAL) {
+               /* Don't enable fast depth clears for any color not equal to
+                * ANV_HZ_FC_VAL.
+                */
+               clear_with_hiz = false;
+            } else if (gen == 8 &&
+                       anv_can_sample_with_hiz(cmd_buffer->device->info.gen,
+                                               iview->image->samples)) {
+               /* Only gen9+ supports returning ANV_HZ_FC_VAL when sampling a
+                * fast-cleared portion of a HiZ buffer. Testing has revealed
+                * that Gen8 only supports returning 0.0f. Gens prior to gen8 do
+                * not support this feature at all.
+                */
+               clear_with_hiz = false;
+            }
+         }
+
+         if (clear_with_hiz) {
+            blorp_gen8_hiz_clear_attachments(&batch, iview->image->samples,
+                                             render_area.offset.x,
+                                             render_area.offset.y,
+                                             render_area.offset.x +
+                                             render_area.extent.width,
+                                             render_area.offset.y +
+                                             render_area.extent.height,
+                                             clear_depth, clear_stencil,
+                                             clear_att.clearValue.
+                                                depthStencil.stencil);
+         }
+      }
+
+      if (!clear_with_hiz) {
+         clear_depth_stencil_attachment(cmd_buffer, &batch,
+                                        &clear_att, 1, &clear_rect);
+      }
 
       cmd_state->attachments[ds].pending_clear_aspects = 0;
    }
@@ -1510,5 +1572,43 @@ anv_cmd_buffer_resolve_subpass(struct anv_cmd_buffer *cmd_buffer)
       anv_cmd_buffer_flush_attachments(cmd_buffer, SUBPASS_STAGE_RESOLVE);
    }
 
+   blorp_batch_finish(&batch);
+}
+
+void
+anv_gen8_hiz_op_resolve(struct anv_cmd_buffer *cmd_buffer,
+                        const struct anv_image *image,
+                        enum blorp_hiz_op op)
+{
+   assert(image);
+
+   /* Don't resolve depth buffers without an auxiliary HiZ buffer and
+    * don't perform such a resolve on gens that don't support it.
+    */
+   if (cmd_buffer->device->info.gen < 8 ||
+       image->aux_usage != ISL_AUX_USAGE_HIZ)
+      return;
+
+   assert(op == BLORP_HIZ_OP_HIZ_RESOLVE ||
+          op == BLORP_HIZ_OP_DEPTH_RESOLVE);
+
+   struct blorp_batch batch;
+   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
+
+   struct blorp_surf surf;
+   get_blorp_surf_for_anv_image(image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                                ISL_AUX_USAGE_NONE, &surf);
+
+   /* Manually add the aux HiZ surf */
+   surf.aux_surf = &image->aux_surface.isl,
+   surf.aux_addr = (struct blorp_address) {
+      .buffer = image->bo,
+      .offset = image->offset + image->aux_surface.offset,
+   };
+   surf.aux_usage = ISL_AUX_USAGE_HIZ;
+
+   surf.clear_color.u32[0] = (uint32_t) ANV_HZ_FC_VAL;
+
+   blorp_gen6_hiz_op(&batch, &surf, 0, 0, op);
    blorp_batch_finish(&batch);
 }

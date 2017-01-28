@@ -303,12 +303,92 @@ need_input_attachment_state(const struct anv_render_pass_attachment *att)
    if (!(att->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))
       return false;
 
-   /* We only allocate input attachment states for color and depth surfaces.
-    * Stencil doesn't allow compression so we can just use the texture surface
-    * state from the view
+   /* We only allocate input attachment states for color surfaces. Compression
+    * is not yet enabled for depth textures and stencil doesn't allow
+    * compression so we can just use the texture surface state from the view.
     */
-   return vk_format_is_color(att->format) || vk_format_has_depth(att->format);
+   return vk_format_is_color(att->format);
 }
+
+static enum isl_aux_usage
+layout_to_hiz_usage(VkImageLayout layout, uint8_t samples)
+{
+   switch (layout) {
+   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+      return ISL_AUX_USAGE_HIZ;
+   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+   case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+      if (anv_can_sample_with_hiz(GEN_GEN, samples))
+         return ISL_AUX_USAGE_HIZ;
+      /* Fall-through */
+   case VK_IMAGE_LAYOUT_GENERAL:
+      /* This buffer could be used as a source or destination in a transfer
+       * operation. Transfer operations current don't perform HiZ-enabled reads
+       * and writes.
+       */
+   default:
+      return ISL_AUX_USAGE_NONE;
+   }
+}
+
+/* Transitions a HiZ-enabled depth buffer from one layout to another. Unless
+ * the initial layout is undefined, the HiZ buffer and depth buffer will
+ * represent the same data at the end of this operation.
+ */
+static void
+transition_depth_buffer(struct anv_cmd_buffer *cmd_buffer,
+                        const struct anv_image *image,
+                        VkImageLayout initial_layout,
+                        VkImageLayout final_layout)
+{
+   assert(image);
+
+   if (image->aux_usage != ISL_AUX_USAGE_HIZ || final_layout == initial_layout)
+      return;
+
+   const bool hiz_enabled = layout_to_hiz_usage(initial_layout, image->samples) ==
+                            ISL_AUX_USAGE_HIZ;
+   const bool enable_hiz = layout_to_hiz_usage(final_layout, image->samples) ==
+                           ISL_AUX_USAGE_HIZ;
+
+   enum blorp_hiz_op hiz_op;
+   if (initial_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+      /* We've already initialized the aux HiZ buffer at BindImageMemory time,
+       * so there's no need to perform a HIZ resolve or clear to avoid GPU hangs.
+       * This initial layout indicates that the user doesn't care about the data
+       * that's currently in the buffer, so resolves are not necessary except
+       * for the special case noted below.
+       */
+      hiz_op = BLORP_HIZ_OP_NONE;
+   } else if (hiz_enabled && !enable_hiz) {
+      hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+   } else if (!hiz_enabled && enable_hiz) {
+      hiz_op = BLORP_HIZ_OP_HIZ_RESOLVE;
+   } else {
+      assert(hiz_enabled == enable_hiz);
+      /* If the same buffer will be used, no resolves are necessary except for
+       * the special case noted below.
+       */
+      hiz_op = BLORP_HIZ_OP_NONE;
+   }
+
+   if (hiz_op != BLORP_HIZ_OP_NONE)
+      anv_gen8_hiz_op_resolve(cmd_buffer, image, hiz_op);
+
+   /* Images that have sampling with HiZ enabled cause all shader sampling to
+    * load data with the HiZ buffer. Therefore, in the case of transitioning to
+    * the general layout - which currently routes all writes to the depth
+    * buffer - we must ensure that the HiZ buffer remains consistent with the
+    * depth buffer by performing an additional HIZ resolve if the operation
+    * required by this transition was not already a HiZ resolve.
+    */
+   if (final_layout == VK_IMAGE_LAYOUT_GENERAL &&
+       anv_can_sample_with_hiz(GEN_GEN, image->samples) &&
+       hiz_op != BLORP_HIZ_OP_HIZ_RESOLVE) {
+      anv_gen8_hiz_op_resolve(cmd_buffer, image, BLORP_HIZ_OP_HIZ_RESOLVE);
+   }
+}
+
 
 /**
  * Setup anv_cmd_state::attachments for vkCmdBeginRenderPass.
@@ -430,6 +510,7 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
             }
          }
 
+         state->attachments[i].current_layout = att->initial_layout;
          state->attachments[i].pending_clear_aspects = clear_aspects;
          if (clear_aspects)
             state->attachments[i].clear_value = begin->pClearValues[i];
@@ -459,23 +540,21 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
                                   state->attachments[i].aux_usage,
                                   state->attachments[i].color_rt_state);
          } else {
-            state->attachments[i].aux_usage = ISL_AUX_USAGE_NONE;
+            if (iview->image->aux_usage == ISL_AUX_USAGE_HIZ) {
+               state->attachments[i].aux_usage =
+                  layout_to_hiz_usage(att->initial_layout, iview->image->samples);
+            } else {
+               state->attachments[i].aux_usage = ISL_AUX_USAGE_NONE;
+            }
             state->attachments[i].input_aux_usage = ISL_AUX_USAGE_NONE;
          }
 
          if (need_input_attachment_state(&pass->attachments[i])) {
-            const struct isl_surf *surf;
-            if (att_aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
-               surf = &iview->image->color_surface.isl;
-            } else {
-               surf = &iview->image->depth_surface.isl;
-            }
-
             struct isl_view view = iview->isl;
             view.usage |= ISL_SURF_USAGE_TEXTURE_BIT;
             isl_surf_fill_state(isl_dev,
                                 state->attachments[i].input_att_state.map,
-                                .surf = surf,
+                                .surf = &iview->image->color_surface.isl,
                                 .view = &view,
                                 .aux_surf = &iview->image->aux_surface.isl,
                                 .aux_usage = state->attachments[i].input_aux_usage,
@@ -866,6 +945,13 @@ void genX(CmdPipelineBarrier)(
    for (uint32_t i = 0; i < imageMemoryBarrierCount; i++) {
       src_flags |= pImageMemoryBarriers[i].srcAccessMask;
       dst_flags |= pImageMemoryBarriers[i].dstAccessMask;
+      ANV_FROM_HANDLE(anv_image, image, pImageMemoryBarriers[i].image);
+      if (pImageMemoryBarriers[i].subresourceRange.aspectMask &
+          VK_IMAGE_ASPECT_DEPTH_BIT) {
+         transition_depth_buffer(cmd_buffer, image,
+                                 pImageMemoryBarriers[i].oldLayout,
+                                 pImageMemoryBarriers[i].newLayout);
+      }
    }
 
    enum anv_pipe_bits pipe_bits = 0;
@@ -1091,9 +1177,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
          assert(stage == MESA_SHADER_FRAGMENT);
-         if (desc->image_view->aspect_mask == VK_IMAGE_ASPECT_STENCIL_BIT) {
-            /* For stencil input attachments, we treat it like any old texture
-             * that a user may have bound.
+         if (desc->image_view->aspect_mask != VK_IMAGE_ASPECT_COLOR_BIT) {
+            /* For depth and stencil input attachments, we treat it like any
+             * old texture that a user may have bound.
              */
             surface_state = desc->image_view->sampler_surface_state;
             assert(surface_state.alloc_size);
@@ -1101,9 +1187,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
                                   desc->image_view->image->aux_usage,
                                   surface_state);
          } else {
-            /* For depth and color input attachments, we create the surface
-             * state at vkBeginRenderPass time so that we can include aux
-             * and clear color information.
+            /* For color input attachments, we create the surface state at
+             * vkBeginRenderPass time so that we can include aux and clear
+             * color information.
              */
             assert(binding->input_attachment_index < subpass->input_count);
             const unsigned subpass_att = binding->input_attachment_index;
@@ -2087,7 +2173,9 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
       anv_cmd_buffer_get_depth_stencil_view(cmd_buffer);
    const struct anv_image *image = iview ? iview->image : NULL;
    const bool has_depth = image && (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT);
-   const bool has_hiz = image != NULL && anv_image_has_hiz(image);
+   const uint32_t ds = cmd_buffer->state.subpass->depth_stencil_attachment;
+   const bool has_hiz = image != NULL &&
+      cmd_buffer->state.attachments[ds].aux_usage == ISL_AUX_USAGE_HIZ;
    const bool has_stencil =
       image && (image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT);
 
@@ -2103,12 +2191,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
             depth_stencil_surface_type(image->depth_surface.isl.dim);
          db.DepthWriteEnable              = true;
          db.StencilWriteEnable            = has_stencil;
-
-         if (cmd_buffer->state.pass->subpass_count == 1) {
-            db.HierarchicalDepthBufferEnable = has_hiz;
-         } else {
-            anv_finishme("Multiple-subpass HiZ not implemented");
-         }
+         db.HierarchicalDepthBufferEnable = has_hiz;
 
          db.SurfaceFormat = isl_surf_get_depth_format(&device->isl_dev,
                                                       &image->depth_surface.isl);
@@ -2123,14 +2206,17 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
          db.Height               = image->extent.height - 1;
          db.Width                = image->extent.width - 1;
          db.LOD                  = iview->isl.base_level;
-         db.Depth                = image->array_size - 1; /* FIXME: 3-D */
          db.MinimumArrayElement  = iview->isl.base_array_layer;
+
+         assert(image->depth_surface.isl.dim != ISL_SURF_DIM_3D);
+         db.Depth =
+         db.RenderTargetViewExtent =
+            iview->isl.array_len - iview->isl.base_array_layer - 1;
 
 #if GEN_GEN >= 8
          db.SurfaceQPitch =
             isl_surf_get_array_pitch_el_rows(&image->depth_surface.isl) >> 2;
 #endif
-         db.RenderTargetViewExtent = 1 - 1;
       }
    } else {
       /* Even when no depth buffer is present, the hardware requires that
@@ -2159,8 +2245,8 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
             db.SurfaceType       = SURFTYPE_2D;
          }
          db.SurfaceFormat        = D32_FLOAT;
-         db.Width                = fb->width - 1;
-         db.Height               = fb->height - 1;
+         db.Width                = MAX2(fb->width, 1) - 1;
+         db.Height               = MAX2(fb->height, 1) - 1;
          db.StencilWriteEnable   = has_stencil;
       }
    }
@@ -2188,7 +2274,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
           * 2-D images.  Prior to Sky Lake, this field is always in rows.
           */
          hdb.SurfaceQPitch =
-            isl_surf_get_array_pitch_el_rows(&image->aux_surface.isl) >> 2;
+            isl_surf_get_array_pitch_sa_rows(&image->aux_surface.isl) >> 2;
 #endif
       }
    } else {
@@ -2232,10 +2318,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CLEAR_PARAMS), cp) {
       if (has_hiz) {
          cp.DepthClearValueValid = true;
-         const uint32_t ds =
-            cmd_buffer->state.subpass->depth_stencil_attachment;
-         cp.DepthClearValue =
-            cmd_buffer->state.attachments[ds].clear_value.depthStencil.depth;
+         cp.DepthClearValue = ANV_HZ_FC_VAL;
       }
    }
 }
@@ -2248,9 +2331,22 @@ genX(cmd_buffer_set_subpass)(struct anv_cmd_buffer *cmd_buffer,
 
    cmd_buffer->state.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
 
+   const struct anv_image_view *iview =
+      anv_cmd_buffer_get_depth_stencil_view(cmd_buffer);
+
+   if (iview && iview->image->aux_usage == ISL_AUX_USAGE_HIZ) {
+      const uint32_t ds = subpass->depth_stencil_attachment;
+      transition_depth_buffer(cmd_buffer, iview->image,
+                              cmd_buffer->state.attachments[ds].current_layout,
+                              cmd_buffer->state.subpass->depth_stencil_layout);
+      cmd_buffer->state.attachments[ds].current_layout =
+         cmd_buffer->state.subpass->depth_stencil_layout;
+      cmd_buffer->state.attachments[ds].aux_usage =
+         layout_to_hiz_usage(cmd_buffer->state.subpass->depth_stencil_layout,
+                             iview->image->samples);
+   }
+
    cmd_buffer_emit_depth_stencil(cmd_buffer);
-   genX(cmd_buffer_emit_hz_op)(cmd_buffer, BLORP_HIZ_OP_HIZ_RESOLVE);
-   genX(cmd_buffer_emit_hz_op)(cmd_buffer, BLORP_HIZ_OP_DEPTH_CLEAR);
 
    anv_cmd_buffer_clear_subpass(cmd_buffer);
 }
@@ -2282,6 +2378,20 @@ void genX(CmdNextSubpass)(
 
    assert(cmd_buffer->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
+   const struct anv_image_view *iview =
+      anv_cmd_buffer_get_depth_stencil_view(cmd_buffer);
+
+   if (iview && iview->image->aux_usage == ISL_AUX_USAGE_HIZ) {
+      const uint32_t ds = cmd_buffer->state.subpass->depth_stencil_attachment;
+
+      if (cmd_buffer->state.subpass - cmd_buffer->state.pass->subpasses ==
+          cmd_buffer->state.pass->attachments[ds].last_subpass_idx) {
+         transition_depth_buffer(cmd_buffer, iview->image,
+                                 cmd_buffer->state.attachments[ds].current_layout,
+                                 cmd_buffer->state.pass->attachments[ds].final_layout);
+      }
+   }
+
    anv_cmd_buffer_resolve_subpass(cmd_buffer);
    genX(cmd_buffer_set_subpass)(cmd_buffer, cmd_buffer->state.subpass + 1);
 }
@@ -2291,7 +2401,20 @@ void genX(CmdEndRenderPass)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
 
-   genX(cmd_buffer_emit_hz_op)(cmd_buffer, BLORP_HIZ_OP_DEPTH_RESOLVE);
+   const struct anv_image_view *iview =
+      anv_cmd_buffer_get_depth_stencil_view(cmd_buffer);
+
+   if (iview && iview->image->aux_usage == ISL_AUX_USAGE_HIZ) {
+      const uint32_t ds = cmd_buffer->state.subpass->depth_stencil_attachment;
+
+      if (cmd_buffer->state.subpass - cmd_buffer->state.pass->subpasses ==
+          cmd_buffer->state.pass->attachments[ds].last_subpass_idx) {
+         transition_depth_buffer(cmd_buffer, iview->image,
+                                 cmd_buffer->state.attachments[ds].current_layout,
+                                 cmd_buffer->state.pass->attachments[ds].final_layout);
+      }
+   }
+
    anv_cmd_buffer_resolve_subpass(cmd_buffer);
 
 #ifndef NDEBUG

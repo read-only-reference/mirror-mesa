@@ -137,7 +137,7 @@ gbm_create_device(int fd)
  * \return The width of the allocated buffer object
  *
  */
-GBM_EXPORT unsigned int
+GBM_EXPORT uint32_t
 gbm_bo_get_width(struct gbm_bo *bo)
 {
    return bo->width;
@@ -148,7 +148,7 @@ gbm_bo_get_width(struct gbm_bo *bo)
  * \param bo The buffer object
  * \return The height of the allocated buffer object
  */
-GBM_EXPORT unsigned int
+GBM_EXPORT uint32_t
 gbm_bo_get_height(struct gbm_bo *bo)
 {
    return bo->height;
@@ -179,6 +179,17 @@ GBM_EXPORT uint32_t
 gbm_bo_get_format(struct gbm_bo *bo)
 {
    return bo->format;
+}
+
+/** Get the gbm device used to create the buffer object
+ *
+ * \param bo The buffer object
+ * \return Returns the gbm device with which the buffer object was created
+ */
+GBM_EXPORT struct gbm_device *
+gbm_bo_get_device(struct gbm_bo *bo)
+{
+	return bo->gbm;
 }
 
 /** Get the handle of the buffer object
@@ -230,17 +241,6 @@ GBM_EXPORT int
 gbm_bo_write(struct gbm_bo *bo, const void *buf, size_t count)
 {
    return bo->gbm->bo_write(bo, buf, count);
-}
-
-/** Get the gbm device used to create the buffer object
- *
- * \param bo The buffer object
- * \return Returns the gbm device with which the buffer object was created
- */
-GBM_EXPORT struct gbm_device *
-gbm_bo_get_device(struct gbm_bo *bo)
-{
-	return bo->gbm;
 }
 
 /** Set the user data associated with a buffer object

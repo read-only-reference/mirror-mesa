@@ -84,9 +84,49 @@ brw_vs_outputs_written(struct brw_context *brw, struct brw_vs_prog_key *key,
    return outputs_written;
 }
 
-bool
+static void
+brw_vs_debug_recompile(struct brw_context *brw, struct gl_program *prog,
+                       const struct brw_vs_prog_key *key)
+{
+   perf_debug("Recompiling vertex shader for program %d\n", prog->Id);
+
+   bool found = false;
+   const struct brw_vs_prog_key *old_key =
+      brw_find_previous_compile(&brw->cache, BRW_CACHE_VS_PROG,
+                                key->program_string_id);
+
+   if (!old_key) {
+      perf_debug("  Didn't find previous compile in the shader cache for "
+                 "debug\n");
+      return;
+   }
+
+   for (unsigned int i = 0; i < VERT_ATTRIB_MAX; i++) {
+      found |= key_debug(brw, "Vertex attrib w/a flags",
+                         old_key->gl_attrib_wa_flags[i],
+                         key->gl_attrib_wa_flags[i]);
+   }
+
+   found |= key_debug(brw, "legacy user clipping",
+                      old_key->nr_userclip_plane_consts,
+                      key->nr_userclip_plane_consts);
+
+   found |= key_debug(brw, "copy edgeflag",
+                      old_key->copy_edgeflag, key->copy_edgeflag);
+   found |= key_debug(brw, "PointCoord replace",
+                      old_key->point_coord_replace, key->point_coord_replace);
+   found |= key_debug(brw, "vertex color clamping",
+                      old_key->clamp_vertex_color, key->clamp_vertex_color);
+
+   found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
+
+   if (!found) {
+      perf_debug("  Something else\n");
+   }
+}
+
+static bool
 brw_codegen_vs_prog(struct brw_context *brw,
-                    struct gl_shader_program *prog,
                     struct brw_program *vp,
                     struct brw_vs_prog_key *key)
 {
@@ -103,14 +143,13 @@ brw_codegen_vs_prog(struct brw_context *brw,
    memset(&prog_data, 0, sizeof(prog_data));
 
    /* Use ALT floating point mode for ARB programs so that 0^0 == 1. */
-   if (!prog)
+   if (vp->program.is_arb_asm)
       stage_prog_data->use_alt_mode = true;
 
    mem_ctx = ralloc_context(NULL);
 
-   brw_assign_common_binding_table_offsets(MESA_SHADER_VERTEX, devinfo, prog,
-                                           &vp->program, &prog_data.base.base,
-                                           0);
+   brw_assign_common_binding_table_offsets(devinfo, &vp->program,
+                                           &prog_data.base.base, 0);
 
    /* Allocate the references to the uniforms that will end up in the
     * prog_data associated with the compiled program, and which will be freed
@@ -134,8 +173,8 @@ brw_codegen_vs_prog(struct brw_context *brw,
                     stage_prog_data->nr_image_params);
    stage_prog_data->nr_params = param_count;
 
-   if (prog) {
-      brw_nir_setup_glsl_uniforms(vp->program.nir, prog, &vp->program,
+   if (!vp->program.is_arb_asm) {
+      brw_nir_setup_glsl_uniforms(vp->program.nir, &vp->program,
                                   &prog_data.base.base,
                                   compiler->scalar_stage[MESA_SHADER_VERTEX]);
    } else {
@@ -167,16 +206,15 @@ brw_codegen_vs_prog(struct brw_context *brw,
    }
 
    if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
-      if (!prog)
+      if (vp->program.is_arb_asm)
          brw_dump_arb_asm("vertex", &vp->program);
-
-      fprintf(stderr, "VS Output ");
-      brw_print_vue_map(stderr, &prog_data.base.vue_map);
    }
 
    int st_index = -1;
-   if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-      st_index = brw_get_shader_time_index(brw, prog, &vp->program, ST_VS);
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
+      st_index = brw_get_shader_time_index(brw, &vp->program, ST_VS,
+                                           !vp->program.is_arb_asm);
+   }
 
    /* Emit GEN4 code.
     */
@@ -187,9 +225,9 @@ brw_codegen_vs_prog(struct brw_context *brw,
                             !_mesa_is_gles3(&brw->ctx),
                             st_index, &program_size, &error_str);
    if (program == NULL) {
-      if (prog) {
-         prog->data->LinkStatus = false;
-         ralloc_strcat(&prog->data->InfoLog, error_str);
+      if (!vp->program.is_arb_asm) {
+         vp->program.sh.data->LinkStatus = false;
+         ralloc_strcat(&vp->program.sh.data->InfoLog, error_str);
       }
 
       _mesa_problem(NULL, "Failed to compile vertex shader: %s\n", error_str);
@@ -200,7 +238,7 @@ brw_codegen_vs_prog(struct brw_context *brw,
 
    if (unlikely(brw->perf_debug)) {
       if (vp->compiled_once) {
-         brw_vs_debug_recompile(brw, prog, key);
+         brw_vs_debug_recompile(brw, &vp->program, key);
       }
       if (start_busy && !drm_intel_bo_busy(brw->batch.last_bo)) {
          perf_debug("VS compile took %.03f ms and stalled the GPU\n",
@@ -222,60 +260,6 @@ brw_codegen_vs_prog(struct brw_context *brw,
    ralloc_free(mem_ctx);
 
    return true;
-}
-
-void
-brw_vs_debug_recompile(struct brw_context *brw,
-                       struct gl_shader_program *prog,
-                       const struct brw_vs_prog_key *key)
-{
-   struct brw_cache_item *c = NULL;
-   const struct brw_vs_prog_key *old_key = NULL;
-   bool found = false;
-
-   perf_debug("Recompiling vertex shader for program %d\n", prog->Name);
-
-   for (unsigned int i = 0; i < brw->cache.size; i++) {
-      for (c = brw->cache.items[i]; c; c = c->next) {
-         if (c->cache_id == BRW_CACHE_VS_PROG) {
-            old_key = c->key;
-
-            if (old_key->program_string_id == key->program_string_id)
-               break;
-         }
-      }
-      if (c)
-         break;
-   }
-
-   if (!c) {
-      perf_debug("  Didn't find previous compile in the shader cache for "
-                 "debug\n");
-      return;
-   }
-
-   for (unsigned int i = 0; i < VERT_ATTRIB_MAX; i++) {
-      found |= key_debug(brw, "Vertex attrib w/a flags",
-                         old_key->gl_attrib_wa_flags[i],
-                         key->gl_attrib_wa_flags[i]);
-   }
-
-   found |= key_debug(brw, "legacy user clipping",
-                      old_key->nr_userclip_plane_consts,
-                      key->nr_userclip_plane_consts);
-
-   found |= key_debug(brw, "copy edgeflag",
-                      old_key->copy_edgeflag, key->copy_edgeflag);
-   found |= key_debug(brw, "PointCoord replace",
-                      old_key->point_coord_replace, key->point_coord_replace);
-   found |= key_debug(brw, "vertex color clamping",
-                      old_key->clamp_vertex_color, key->clamp_vertex_color);
-
-   found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
-
-   if (!found) {
-      perf_debug("  Something else\n");
-   }
 }
 
 static bool
@@ -310,7 +294,7 @@ brw_vs_populate_key(struct brw_context *brw,
 
    if (ctx->Transform.ClipPlanesEnabled != 0 &&
        (ctx->API == API_OPENGL_COMPAT || ctx->API == API_OPENGLES) &&
-       vp->program.ClipDistanceArraySize == 0) {
+       vp->program.info.clip_distance_array_size == 0) {
       key->nr_userclip_plane_consts =
          _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
    }
@@ -326,7 +310,7 @@ brw_vs_populate_key(struct brw_context *brw,
       }
    }
 
-   if (prog->nir->info->outputs_written &
+   if (prog->info.outputs_written &
        (VARYING_BIT_COL0 | VARYING_BIT_COL1 | VARYING_BIT_BFC0 |
         VARYING_BIT_BFC1)) {
       /* _NEW_LIGHT | _NEW_BUFFERS */
@@ -346,8 +330,6 @@ brw_vs_populate_key(struct brw_context *brw,
 void
 brw_upload_vs_prog(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
-   struct gl_shader_program **current = ctx->_Shader->CurrentProgram;
    struct brw_vs_prog_key key;
    /* BRW_NEW_VERTEX_PROGRAM */
    struct brw_program *vp = (struct brw_program *)brw->vertex_program;
@@ -360,17 +342,14 @@ brw_upload_vs_prog(struct brw_context *brw)
    if (!brw_search_cache(&brw->cache, BRW_CACHE_VS_PROG,
 			 &key, sizeof(key),
 			 &brw->vs.base.prog_offset, &brw->vs.base.prog_data)) {
-      bool success = brw_codegen_vs_prog(brw, current[MESA_SHADER_VERTEX],
-                                         vp, &key);
+      bool success = brw_codegen_vs_prog(brw, vp, &key);
       (void) success;
       assert(success);
    }
 }
 
 bool
-brw_vs_precompile(struct gl_context *ctx,
-                  struct gl_shader_program *shader_prog,
-                  struct gl_program *prog)
+brw_vs_precompile(struct gl_context *ctx, struct gl_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_vs_prog_key key;
@@ -385,11 +364,11 @@ brw_vs_precompile(struct gl_context *ctx,
    brw_setup_tex_for_precompile(brw, &key.tex, prog);
    key.program_string_id = bvp->id;
    key.clamp_vertex_color =
-      (prog->nir->info->outputs_written &
+      (prog->info.outputs_written &
        (VARYING_BIT_COL0 | VARYING_BIT_COL1 | VARYING_BIT_BFC0 |
         VARYING_BIT_BFC1));
 
-   success = brw_codegen_vs_prog(brw, shader_prog, bvp, &key);
+   success = brw_codegen_vs_prog(brw, bvp, &key);
 
    brw->vs.base.prog_offset = old_prog_offset;
    brw->vs.base.prog_data = old_prog_data;

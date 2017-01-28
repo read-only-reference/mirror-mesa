@@ -23,9 +23,11 @@ include Makefile.sources
 
 vulkan_includedir = $(includedir)/vulkan
 
-vulkan_include_HEADERS = \
+noinst_HEADERS = \
 	$(top_srcdir)/include/vulkan/vk_platform.h \
-	$(top_srcdir)/include/vulkan/vulkan.h \
+	$(top_srcdir)/include/vulkan/vulkan.h
+
+vulkan_include_HEADERS = \
 	$(top_srcdir)/include/vulkan/vulkan_intel.h
 
 lib_LTLIBRARIES = libvulkan_intel.la
@@ -138,12 +140,14 @@ VULKAN_LIB_DEPS += \
 nodist_EXTRA_libvulkan_intel_la_SOURCES = dummy.cpp
 libvulkan_intel_la_SOURCES = $(VULKAN_GEM_FILES)
 
-anv_entrypoints.h : anv_entrypoints_gen.py $(vulkan_include_HEADERS)
-	$(AM_V_GEN) cat $(vulkan_include_HEADERS) |\
+vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
+
+anv_entrypoints.h : anv_entrypoints_gen.py $(vulkan_api_xml)
+	$(AM_V_GEN) cat $(vulkan_api_xml) |\
 	$(PYTHON2) $(srcdir)/anv_entrypoints_gen.py header > $@
 
-anv_entrypoints.c : anv_entrypoints_gen.py $(vulkan_include_HEADERS)
-	$(AM_V_GEN) cat $(vulkan_include_HEADERS) |\
+anv_entrypoints.c : anv_entrypoints_gen.py $(vulkan_api_xml)
+	$(AM_V_GEN) cat $(vulkan_api_xml) |\
 	$(PYTHON2) $(srcdir)/anv_entrypoints_gen.py code > $@
 
 BUILT_SOURCES = $(VULKAN_GENERATED_FILES)
@@ -187,7 +191,7 @@ libvulkan_test_la_LIBADD = $(VULKAN_LIB_DEPS)
 
 include $(top_srcdir)/install-lib-links.mk
 
-noinst_HEADERS = \
+noinst_HEADERS += \
 	tests/state_pool_test_helper.h
 
 LDADD = \

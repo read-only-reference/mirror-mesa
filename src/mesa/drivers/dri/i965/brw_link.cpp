@@ -50,10 +50,10 @@ brw_shader_precompile(struct gl_context *ctx,
    struct gl_linked_shader *fs = sh_prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
    struct gl_linked_shader *cs = sh_prog->_LinkedShaders[MESA_SHADER_COMPUTE];
 
-   if (fs && !brw_fs_precompile(ctx, sh_prog, fs->Program))
+   if (fs && !brw_fs_precompile(ctx, fs->Program))
       return false;
 
-   if (gs && !brw_gs_precompile(ctx, sh_prog, gs->Program))
+   if (gs && !brw_gs_precompile(ctx, gs->Program))
       return false;
 
    if (tes && !brw_tes_precompile(ctx, sh_prog, tes->Program))
@@ -62,10 +62,10 @@ brw_shader_precompile(struct gl_context *ctx,
    if (tcs && !brw_tcs_precompile(ctx, sh_prog, tcs->Program))
       return false;
 
-   if (vs && !brw_vs_precompile(ctx, sh_prog, vs->Program))
+   if (vs && !brw_vs_precompile(ctx, vs->Program))
       return false;
 
-   if (cs && !brw_cs_precompile(ctx, sh_prog, cs->Program))
+   if (cs && !brw_cs_precompile(ctx, cs->Program))
       return false;
 
    return true;
@@ -120,6 +120,11 @@ process_glsl_ir(struct brw_context *brw,
    }
 
    lower_instructions(shader->ir, instructions_to_lower);
+   lower_64bit_integer_instructions(shader->ir,
+                                    MUL64 |
+                                    DIV64 |
+                                    MOD64 |
+                                    SIGN64);
 
    /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
     * if-statements need to be flattened.
@@ -184,9 +189,12 @@ unify_interfaces(struct shader_info **infos)
          continue;
 
       if (prev_info) {
-         prev_info->outputs_written |= infos[i]->inputs_read;
+         prev_info->outputs_written |= infos[i]->inputs_read &
+            ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
+         infos[i]->inputs_read |= prev_info->outputs_written &
+            ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
+
          prev_info->patch_outputs_written |= infos[i]->patch_inputs_read;
-         infos[i]->inputs_read |= prev_info->outputs_written;
          infos[i]->patch_inputs_read |= prev_info->patch_outputs_written;
       }
       prev_info = infos[i];
@@ -213,7 +221,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       _mesa_copy_linked_program_data(shProg, shader);
 
-      prog->SamplersUsed = shader->active_samplers;
       prog->ShadowSamplers = shader->shadow_samplers;
       _mesa_update_shader_textures_used(shProg, prog);
 

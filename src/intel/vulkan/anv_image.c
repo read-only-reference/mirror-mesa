@@ -75,8 +75,11 @@ choose_isl_surf_usage(VkImageUsageFlags vk_usage,
       isl_usage |= ISL_SURF_USAGE_TEXTURE_BIT;
    }
 
-   if (vk_usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
-      /* blorp implements transfers by rendering into the destination image. */
+   if (vk_usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT &&
+       aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+      /* blorp implements transfers by rendering into the destination image.
+       * Only request this with color images, as we deal with depth/stencil
+       * formats differently. */
       isl_usage |= ISL_SURF_USAGE_RENDER_TARGET_BIT;
    }
 
@@ -182,10 +185,26 @@ make_surface(const struct anv_device *dev,
        */
       if (!(image->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
          /* It will never be used as an attachment, HiZ is pointless. */
+      } else if (image->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) {
+         /* From the 1.0.37 spec:
+          *
+          *    "An attachment used as an input attachment and depth/stencil
+          *    attachment must be in either VK_IMAGE_LAYOUT_GENERAL or
+          *    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL."
+          *
+          * It will never have a layout of
+          * VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, so HiZ is
+          * currently pointless. If transfer operations learn to use the HiZ
+          * buffer, we can enable HiZ for VK_IMAGE_LAYOUT_GENERAL and support
+          * input attachments.
+          */
+         anv_finishme("Implement HiZ for input attachments");
       } else if (!env_var_as_boolean("INTEL_VK_HIZ", dev->info.gen >= 8)) {
          anv_finishme("Implement gen7 HiZ");
       } else if (vk_info->mipLevels > 1) {
          anv_finishme("Test multi-LOD HiZ");
+      } else if (vk_info->arrayLayers > 1) {
+         anv_finishme("Implement multi-arrayLayer HiZ clears and resolves");
       } else if (dev->info.gen == 8 && vk_info->samples > 1) {
          anv_finishme("Test gen8 multisampled HiZ");
       } else {
@@ -193,6 +212,7 @@ make_surface(const struct anv_device *dev,
          isl_surf_get_hiz_surf(&dev->isl_dev, &image->depth_surface.isl,
                                &image->aux_surface.isl);
          add_surface(image, &image->aux_surface);
+         image->aux_usage = ISL_AUX_USAGE_HIZ;
       }
    } else if (aspect == VK_IMAGE_ASPECT_COLOR_BIT && vk_info->samples == 1) {
       if (!unlikely(INTEL_DEBUG & DEBUG_NO_RBC)) {
@@ -509,7 +529,7 @@ anv_CreateImageView(VkDevice _device,
       .depth  = anv_minify(image->extent.depth , range->baseMipLevel),
    };
 
-   if (image->type == VK_IMAGE_TYPE_3D) {
+   if (pCreateInfo->viewType == VK_IMAGE_VIEW_TYPE_3D) {
       iview->isl.base_array_layer = 0;
       iview->isl.array_len = iview->extent.depth;
    }
@@ -521,14 +541,33 @@ anv_CreateImageView(VkDevice _device,
       iview->isl.usage = 0;
    }
 
-   /* Input attachment surfaces for color or depth are allocated and filled
+   /* If the HiZ buffer can be sampled from, set the constant clear color.
+    * If it cannot, disable the isl aux usage flag.
+    */
+   float red_clear_color = 0.0f;
+   enum isl_aux_usage surf_usage = image->aux_usage;
+   if (image->aux_usage == ISL_AUX_USAGE_HIZ) {
+      if (iview->aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT &&
+          anv_can_sample_with_hiz(device->info.gen, image->samples)) {
+         /* When a HiZ buffer is sampled on gen9+, ensure that
+          * the constant fast clear value is set in the surface state.
+          */
+         if (device->info.gen >= 9)
+            red_clear_color = ANV_HZ_FC_VAL;
+      } else {
+         surf_usage = ISL_AUX_USAGE_NONE;
+      }
+   }
+
+   /* Input attachment surfaces for color are allocated and filled
     * out at BeginRenderPass time because they need compression information.
-    * Stencil image do not support compression so we just use the texture
-    * surface from the image view.
+    * Compression is not yet enabled for depth textures and stencil doesn't
+    * allow compression so we can just use the texture surface state from the
+    * view.
     */
    if (image->usage & VK_IMAGE_USAGE_SAMPLED_BIT ||
        (image->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT &&
-        (iview->aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT))) {
+        !(iview->aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT))) {
       iview->sampler_surface_state = alloc_surface_state(device);
 
       struct isl_view view = iview->isl;
@@ -537,8 +576,9 @@ anv_CreateImageView(VkDevice _device,
                           iview->sampler_surface_state.map,
                           .surf = &surface->isl,
                           .view = &view,
+                          .clear_color.f32 = { red_clear_color,},
                           .aux_surf = &image->aux_surface.isl,
-                          .aux_usage = image->aux_usage,
+                          .aux_usage = surf_usage,
                           .mocs = device->default_mocs);
 
       if (!device->info.has_llc)
@@ -562,7 +602,7 @@ anv_CreateImageView(VkDevice _device,
                              .surf = &surface->isl,
                              .view = &view,
                              .aux_surf = &image->aux_surface.isl,
-                             .aux_usage = image->aux_usage,
+                             .aux_usage = surf_usage,
                              .mocs = device->default_mocs);
       } else {
          anv_fill_buffer_surface_state(device, iview->storage_surface_state,

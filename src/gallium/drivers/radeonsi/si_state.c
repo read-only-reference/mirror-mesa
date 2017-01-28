@@ -40,7 +40,7 @@ static void
 si_init_external_atom(struct si_context *sctx, struct r600_atom *atom,
 		      struct r600_atom **list_elem)
 {
-	atom->id = list_elem - sctx->atoms.array + 1;
+	atom->id = list_elem - sctx->atoms.array;
 	*list_elem = atom;
 }
 
@@ -50,7 +50,7 @@ void si_init_atom(struct si_context *sctx, struct r600_atom *atom,
 		  void (*emit_func)(struct si_context *ctx, struct r600_atom *state))
 {
 	atom->emit = (void*)emit_func;
-	atom->id = list_elem - sctx->atoms.array + 1; /* index+1 in the atom array */
+	atom->id = list_elem - sctx->atoms.array;
 	*list_elem = atom;
 }
 
@@ -717,8 +717,10 @@ static void si_update_poly_offset_state(struct si_context *sctx)
 {
 	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
 
-	if (!rs || !rs->uses_poly_offset || !sctx->framebuffer.state.zsbuf)
+	if (!rs || !rs->uses_poly_offset || !sctx->framebuffer.state.zsbuf) {
+		si_pm4_bind_state(sctx, poly_offset, NULL);
 		return;
+	}
 
 	/* Use the user format, not db_render_format, so that the polygon
 	 * offset behaves as expected by applications.
@@ -916,6 +918,8 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	si_update_poly_offset_state(sctx);
 
 	si_mark_atom_dirty(sctx, &sctx->clip_regs);
+	sctx->ia_multi_vgt_param_key.u.line_stipple_enabled =
+		rs->line_stipple_enable;
 	sctx->do_update_shaders = true;
 }
 
@@ -1363,11 +1367,17 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 		case PIPE_FORMAT_Z16_UNORM:
 			return V_008F14_IMG_DATA_FORMAT_16;
 		case PIPE_FORMAT_X24S8_UINT:
+		case PIPE_FORMAT_S8X24_UINT:
+			/*
+			 * Implemented as an 8_8_8_8 data format to fix texture
+			 * gathers in stencil sampling. This affects at least
+			 * GL45-CTS.texture_cube_map_array.sampling on VI.
+			 */
+			return V_008F14_IMG_DATA_FORMAT_8_8_8_8;
 		case PIPE_FORMAT_Z24X8_UNORM:
 		case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 			return V_008F14_IMG_DATA_FORMAT_8_24;
 		case PIPE_FORMAT_X8Z24_UNORM:
-		case PIPE_FORMAT_S8X24_UINT:
 		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
 			return V_008F14_IMG_DATA_FORMAT_24_8;
 		case PIPE_FORMAT_S8_UINT:
@@ -1697,17 +1707,12 @@ static uint32_t si_translate_buffer_dataformat(struct pipe_screen *screen,
 					       const struct util_format_description *desc,
 					       int first_non_void)
 {
-	unsigned type;
 	int i;
 
 	if (desc->format == PIPE_FORMAT_R11G11B10_FLOAT)
 		return V_008F0C_BUF_DATA_FORMAT_10_11_11;
 
 	assert(first_non_void >= 0);
-	type = desc->channel[first_non_void].type;
-
-	if (type == UTIL_FORMAT_TYPE_FIXED)
-		return V_008F0C_BUF_DATA_FORMAT_INVALID;
 
 	if (desc->nr_channels == 4 &&
 	    desc->channel[0].size == 10 &&
@@ -1746,14 +1751,6 @@ static uint32_t si_translate_buffer_dataformat(struct pipe_screen *screen,
 		}
 		break;
 	case 32:
-		/* From the Southern Islands ISA documentation about MTBUF:
-		 * 'Memory reads of data in memory that is 32 or 64 bits do not
-		 * undergo any format conversion.'
-		 */
-		if (type != UTIL_FORMAT_TYPE_FLOAT &&
-		    !desc->channel[first_non_void].pure_integer)
-			return V_008F0C_BUF_DATA_FORMAT_INVALID;
-
 		switch (desc->nr_channels) {
 		case 1:
 			return V_008F0C_BUF_DATA_FORMAT_32;
@@ -1781,18 +1778,21 @@ static uint32_t si_translate_buffer_numformat(struct pipe_screen *screen,
 
 	switch (desc->channel[first_non_void].type) {
 	case UTIL_FORMAT_TYPE_SIGNED:
-		if (desc->channel[first_non_void].normalized)
-			return V_008F0C_BUF_NUM_FORMAT_SNORM;
-		else if (desc->channel[first_non_void].pure_integer)
+	case UTIL_FORMAT_TYPE_FIXED:
+		if (desc->channel[first_non_void].size >= 32 ||
+		    desc->channel[first_non_void].pure_integer)
 			return V_008F0C_BUF_NUM_FORMAT_SINT;
+		else if (desc->channel[first_non_void].normalized)
+			return V_008F0C_BUF_NUM_FORMAT_SNORM;
 		else
 			return V_008F0C_BUF_NUM_FORMAT_SSCALED;
 		break;
 	case UTIL_FORMAT_TYPE_UNSIGNED:
-		if (desc->channel[first_non_void].normalized)
-			return V_008F0C_BUF_NUM_FORMAT_UNORM;
-		else if (desc->channel[first_non_void].pure_integer)
+		if (desc->channel[first_non_void].size >= 32 ||
+		    desc->channel[first_non_void].pure_integer)
 			return V_008F0C_BUF_NUM_FORMAT_UINT;
+		else if (desc->channel[first_non_void].normalized)
+			return V_008F0C_BUF_NUM_FORMAT_UNORM;
 		else
 			return V_008F0C_BUF_NUM_FORMAT_USCALED;
 		break;
@@ -2489,6 +2489,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 
 	sctx->need_check_render_feedback = true;
 	sctx->do_update_shaders = true;
+	sctx->framebuffer.do_update_surf_dirtiness = true;
 }
 
 static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom *atom)
@@ -2804,13 +2805,21 @@ si_make_texture_descriptor(struct si_screen *screen,
 	if (desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS) {
 		const unsigned char swizzle_xxxx[4] = {0, 0, 0, 0};
 		const unsigned char swizzle_yyyy[4] = {1, 1, 1, 1};
+		const unsigned char swizzle_wwww[4] = {3, 3, 3, 3};
 
 		switch (pipe_format) {
 		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-		case PIPE_FORMAT_X24S8_UINT:
 		case PIPE_FORMAT_X32_S8X24_UINT:
 		case PIPE_FORMAT_X8Z24_UNORM:
 			util_format_compose_swizzles(swizzle_yyyy, state_swizzle, swizzle);
+			break;
+		case PIPE_FORMAT_X24S8_UINT:
+			/*
+			 * X24S8 is implemented as an 8_8_8_8 data format, to
+			 * fix texture gathers. This affects at least
+			 * GL45-CTS.texture_cube_map_array.sampling on VI.
+			 */
+			util_format_compose_swizzles(swizzle_wwww, state_swizzle, swizzle);
 			break;
 		default:
 			util_format_compose_swizzles(swizzle_xxxx, state_swizzle, swizzle);
@@ -3333,6 +3342,7 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 				       const struct pipe_vertex_element *elements)
 {
 	struct si_vertex_element *v = CALLOC_STRUCT(si_vertex_element);
+	bool used[SI_NUM_VERTEX_BUFFERS] = {};
 	int i;
 
 	assert(count <= SI_MAX_ATTRIBS);
@@ -3342,13 +3352,26 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 	v->count = count;
 	for (i = 0; i < count; ++i) {
 		const struct util_format_description *desc;
+		const struct util_format_channel_description *channel;
 		unsigned data_format, num_format;
 		int first_non_void;
+		unsigned vbo_index = elements[i].vertex_buffer_index;
+
+		if (vbo_index >= SI_NUM_VERTEX_BUFFERS) {
+			FREE(v);
+			return NULL;
+		}
+
+		if (!used[vbo_index]) {
+			v->first_vb_use_mask |= 1 << i;
+			used[vbo_index] = true;
+		}
 
 		desc = util_format_description(elements[i].src_format);
 		first_non_void = util_format_get_first_non_void_channel(elements[i].src_format);
 		data_format = si_translate_buffer_dataformat(ctx->screen, desc, first_non_void);
 		num_format = si_translate_buffer_numformat(ctx->screen, desc, first_non_void);
+		channel = first_non_void >= 0 ? &desc->channel[first_non_void] : NULL;
 
 		v->rsrc_word3[i] = S_008F0C_DST_SEL_X(si_map_swizzle(desc->swizzle[0])) |
 				   S_008F0C_DST_SEL_Y(si_map_swizzle(desc->swizzle[1])) |
@@ -3363,12 +3386,37 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 		 */
 		if (data_format == V_008F0C_BUF_DATA_FORMAT_2_10_10_10) {
 			if (num_format == V_008F0C_BUF_NUM_FORMAT_SNORM) {
-				v->fix_fetch |= SI_FIX_FETCH_A2_SNORM << (2 * i);
+				v->fix_fetch |= (uint64_t)SI_FIX_FETCH_A2_SNORM << (4 * i);
 			} else if (num_format == V_008F0C_BUF_NUM_FORMAT_SSCALED) {
-				v->fix_fetch |= SI_FIX_FETCH_A2_SSCALED << (2 * i);
+				v->fix_fetch |= (uint64_t)SI_FIX_FETCH_A2_SSCALED << (4 * i);
 			} else if (num_format == V_008F0C_BUF_NUM_FORMAT_SINT) {
 				/* This isn't actually used in OpenGL. */
-				v->fix_fetch |= SI_FIX_FETCH_A2_SINT << (2 * i);
+				v->fix_fetch |= (uint64_t)SI_FIX_FETCH_A2_SINT << (4 * i);
+			}
+		} else if (channel && channel->type == UTIL_FORMAT_TYPE_FIXED) {
+			if (desc->swizzle[3] == PIPE_SWIZZLE_1)
+				v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBX_32_FIXED << (4 * i);
+			else
+				v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBA_32_FIXED << (4 * i);
+		} else if (channel && channel->size == 32 && !channel->pure_integer) {
+			if (channel->type == UTIL_FORMAT_TYPE_SIGNED) {
+				if (channel->normalized) {
+					if (desc->swizzle[3] == PIPE_SWIZZLE_1)
+						v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBX_32_SNORM << (4 * i);
+					else
+						v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBA_32_SNORM << (4 * i);
+				} else {
+					v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBA_32_SSCALED << (4 * i);
+				}
+			} else if (channel->type == UTIL_FORMAT_TYPE_UNSIGNED) {
+				if (channel->normalized) {
+					if (desc->swizzle[3] == PIPE_SWIZZLE_1)
+						v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBX_32_UNORM << (4 * i);
+					else
+						v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBA_32_UNORM << (4 * i);
+				} else {
+					v->fix_fetch |= (uint64_t)SI_FIX_FETCH_RGBA_32_USCALED << (4 * i);
+				}
 			}
 		}
 
@@ -3481,14 +3529,14 @@ static void si_set_tess_state(struct pipe_context *ctx,
 	pipe_resource_reference(&cb.buffer, NULL);
 }
 
-static void si_texture_barrier(struct pipe_context *ctx)
+static void si_texture_barrier(struct pipe_context *ctx, unsigned flags)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
 	sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
 			 SI_CONTEXT_INV_GLOBAL_L2 |
-			 SI_CONTEXT_FLUSH_AND_INV_CB |
-			 SI_CONTEXT_CS_PARTIAL_FLUSH;
+			 SI_CONTEXT_FLUSH_AND_INV_CB;
+	sctx->framebuffer.do_update_surf_dirtiness = true;
 }
 
 /* This only ensures coherency for shader image/buffer stores. */

@@ -81,12 +81,17 @@ struct gen_device_info;
 #define BRW_SWIZZLE_ZZZZ      BRW_SWIZZLE4(2,2,2,2)
 #define BRW_SWIZZLE_WWWW      BRW_SWIZZLE4(3,3,3,3)
 #define BRW_SWIZZLE_XYXY      BRW_SWIZZLE4(0,1,0,1)
+#define BRW_SWIZZLE_YXYX      BRW_SWIZZLE4(1,0,1,0)
 #define BRW_SWIZZLE_XZXZ      BRW_SWIZZLE4(0,2,0,2)
 #define BRW_SWIZZLE_YZXW      BRW_SWIZZLE4(1,2,0,3)
 #define BRW_SWIZZLE_YWYW      BRW_SWIZZLE4(1,3,1,3)
 #define BRW_SWIZZLE_ZXYW      BRW_SWIZZLE4(2,0,1,3)
 #define BRW_SWIZZLE_ZWZW      BRW_SWIZZLE4(2,3,2,3)
+#define BRW_SWIZZLE_WZWZ      BRW_SWIZZLE4(3,2,3,2)
 #define BRW_SWIZZLE_WZYX      BRW_SWIZZLE4(3,2,1,0)
+#define BRW_SWIZZLE_XXZZ      BRW_SWIZZLE4(0,0,2,2)
+#define BRW_SWIZZLE_YYWW      BRW_SWIZZLE4(1,1,3,3)
+#define BRW_SWIZZLE_YXWZ      BRW_SWIZZLE4(1,0,3,2)
 
 #define BRW_SWZ_COMP_INPUT(comp) (BRW_SWIZZLE_XYZW >> ((comp)*2))
 #define BRW_SWZ_COMP_OUTPUT(comp) (BRW_SWIZZLE_XYZW << ((comp)*2))
@@ -225,6 +230,14 @@ enum PACKED brw_reg_type {
 
 unsigned brw_reg_type_to_hw_type(const struct gen_device_info *devinfo,
                                  enum brw_reg_type type, enum brw_reg_file file);
+
+#define brw_element_size(devinfo, inst, operand)                             \
+   brw_hw_reg_type_to_size(devinfo,                                          \
+                           brw_inst_ ## operand ## _reg_type(devinfo, inst), \
+                           brw_inst_ ## operand ## _reg_file(devinfo, inst))
+unsigned brw_hw_reg_type_to_size(const struct gen_device_info *devinfo,
+                                 unsigned type, enum brw_reg_file file);
+
 const char *brw_reg_type_letters(unsigned brw_reg_type);
 uint32_t brw_swizzle_immediate(enum brw_reg_type type, uint32_t x, unsigned swz);
 
@@ -264,6 +277,7 @@ struct brw_reg {
 
       double df;
       uint64_t u64;
+      int64_t d64;
       float f;
       int   d;
       unsigned ud;
@@ -720,6 +734,12 @@ static inline struct brw_reg
 brw_vec16_grf(unsigned nr, unsigned subnr)
 {
    return brw_vec16_reg(BRW_GENERAL_REGISTER_FILE, nr, subnr);
+}
+
+static inline struct brw_reg
+brw_vecn_grf(unsigned width, unsigned nr, unsigned subnr)
+{
+   return brw_vecn_reg(width, BRW_GENERAL_REGISTER_FILE, nr, subnr);
 }
 
 

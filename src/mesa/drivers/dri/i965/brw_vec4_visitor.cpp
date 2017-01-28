@@ -46,7 +46,6 @@ vec4_instruction::vec4_instruction(enum opcode opcode, const dst_reg &dst,
    this->predicate = BRW_PREDICATE_NONE;
    this->predicate_inverse = false;
    this->target = 0;
-   this->size_written = (dst.file == BAD_FILE ? 0 : REG_SIZE);
    this->shadow_compare = false;
    this->ir = NULL;
    this->urb_write_flags = BRW_URB_WRITE_NO_FLAGS;
@@ -55,6 +54,10 @@ vec4_instruction::vec4_instruction(enum opcode opcode, const dst_reg &dst,
    this->mlen = 0;
    this->base_mrf = 0;
    this->offset = 0;
+   this->exec_size = 8;
+   this->group = 0;
+   this->size_written = (dst.file == BAD_FILE ?
+                         0 : this->exec_size * type_sz(dst.type));
    this->annotation = NULL;
 }
 
@@ -583,6 +586,8 @@ type_size_xvec4(const struct glsl_type *type, bool as_vec4)
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_BOOL:
    case GLSL_TYPE_DOUBLE:
+   case GLSL_TYPE_UINT64:
+   case GLSL_TYPE_INT64:
       if (type->is_matrix()) {
          const glsl_type *col_type = type->column_type();
          unsigned col_slots =
@@ -1440,13 +1445,23 @@ vec4_visitor::get_scratch_offset(bblock_t *block, vec4_instruction *inst,
       message_header_scale *= 16;
 
    if (reladdr) {
+      /* A vec4 is 16 bytes and a dvec4 is 32 bytes so for doubles we have
+       * to multiply the reladdr by 2. Notice that the reg_offset part
+       * is in units of 16 bytes and is used to select the low/high 16-byte
+       * chunk of a full dvec4, so we don't want to multiply that part.
+       */
       src_reg index = src_reg(this, glsl_type::int_type);
-
-      emit_before(block, inst, ADD(dst_reg(index), *reladdr,
-                                   brw_imm_d(reg_offset)));
-      emit_before(block, inst, MUL(dst_reg(index), index,
-                                   brw_imm_d(message_header_scale)));
-
+      if (type_sz(inst->dst.type) < 8) {
+         emit_before(block, inst, ADD(dst_reg(index), *reladdr,
+                                      brw_imm_d(reg_offset)));
+         emit_before(block, inst, MUL(dst_reg(index), index,
+                                      brw_imm_d(message_header_scale)));
+      } else {
+         emit_before(block, inst, MUL(dst_reg(index), *reladdr,
+                                      brw_imm_d(message_header_scale * 2)));
+         emit_before(block, inst, ADD(dst_reg(index), index,
+                                      brw_imm_d(reg_offset * message_header_scale)));
+      }
       return index;
    } else {
       return brw_imm_d(reg_offset * message_header_scale);
@@ -1469,7 +1484,18 @@ vec4_visitor::emit_scratch_read(bblock_t *block, vec4_instruction *inst,
    src_reg index = get_scratch_offset(block, inst, orig_src.reladdr,
                                       reg_offset);
 
-   emit_before(block, inst, SCRATCH_READ(temp, index));
+   if (type_sz(orig_src.type) < 8) {
+      emit_before(block, inst, SCRATCH_READ(temp, index));
+   } else {
+      dst_reg shuffled = dst_reg(this, glsl_type::dvec4_type);
+      dst_reg shuffled_float = retype(shuffled, BRW_REGISTER_TYPE_F);
+      emit_before(block, inst, SCRATCH_READ(shuffled_float, index));
+      index = get_scratch_offset(block, inst, orig_src.reladdr, reg_offset + 1);
+      vec4_instruction *last_read =
+         SCRATCH_READ(byte_offset(shuffled_float, REG_SIZE), index);
+      emit_before(block, inst, last_read);
+      shuffle_64bit_data(temp, src_reg(shuffled), false, block, last_read);
+   }
 }
 
 /**
@@ -1494,17 +1520,63 @@ vec4_visitor::emit_scratch_write(bblock_t *block, vec4_instruction *inst,
     * weren't initialized, it will confuse live interval analysis, which will
     * make spilling fail to make progress.
     */
-   const src_reg temp = swizzle(retype(src_reg(this, glsl_type::vec4_type),
+   bool is_64bit = type_sz(inst->dst.type) == 8;
+   const glsl_type *alloc_type =
+      is_64bit ? glsl_type::dvec4_type : glsl_type::vec4_type;
+   const src_reg temp = swizzle(retype(src_reg(this, alloc_type),
                                        inst->dst.type),
                                 brw_swizzle_for_mask(inst->dst.writemask));
-   dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0),
-				       inst->dst.writemask));
-   vec4_instruction *write = SCRATCH_WRITE(dst, temp, index);
-   if (inst->opcode != BRW_OPCODE_SEL)
-      write->predicate = inst->predicate;
-   write->ir = inst->ir;
-   write->annotation = inst->annotation;
-   inst->insert_after(block, write);
+
+   if (!is_64bit) {
+      dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0),
+				          inst->dst.writemask));
+      vec4_instruction *write = SCRATCH_WRITE(dst, temp, index);
+      if (inst->opcode != BRW_OPCODE_SEL)
+         write->predicate = inst->predicate;
+      write->ir = inst->ir;
+      write->annotation = inst->annotation;
+      inst->insert_after(block, write);
+   } else {
+      dst_reg shuffled = dst_reg(this, alloc_type);
+      vec4_instruction *last =
+         shuffle_64bit_data(shuffled, temp, true, block, inst);
+      src_reg shuffled_float = src_reg(retype(shuffled, BRW_REGISTER_TYPE_F));
+
+      uint8_t mask = 0;
+      if (inst->dst.writemask & WRITEMASK_X)
+         mask |= WRITEMASK_XY;
+      if (inst->dst.writemask & WRITEMASK_Y)
+         mask |= WRITEMASK_ZW;
+      if (mask) {
+         dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0), mask));
+
+         vec4_instruction *write = SCRATCH_WRITE(dst, shuffled_float, index);
+         if (inst->opcode != BRW_OPCODE_SEL)
+            write->predicate = inst->predicate;
+         write->ir = inst->ir;
+         write->annotation = inst->annotation;
+         last->insert_after(block, write);
+      }
+
+      mask = 0;
+      if (inst->dst.writemask & WRITEMASK_Z)
+         mask |= WRITEMASK_XY;
+      if (inst->dst.writemask & WRITEMASK_W)
+         mask |= WRITEMASK_ZW;
+      if (mask) {
+         dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0), mask));
+
+         src_reg index = get_scratch_offset(block, inst, inst->dst.reladdr,
+                                            reg_offset + 1);
+         vec4_instruction *write =
+            SCRATCH_WRITE(dst, byte_offset(shuffled_float, REG_SIZE), index);
+         if (inst->opcode != BRW_OPCODE_SEL)
+            write->predicate = inst->predicate;
+         write->ir = inst->ir;
+         write->annotation = inst->annotation;
+         last->insert_after(block, write);
+      }
+   }
 
    inst->dst.file = temp.file;
    inst->dst.nr = temp.nr;
@@ -1535,7 +1607,8 @@ vec4_visitor::emit_resolve_reladdr(int scratch_loc[], bblock_t *block,
 
    /* Now handle scratch access on src */
    if (src.file == VGRF && scratch_loc[src.nr] != -1) {
-      dst_reg temp = dst_reg(this, glsl_type::vec4_type);
+      dst_reg temp = dst_reg(this, type_sz(src.type) == 8 ?
+         glsl_type::dvec4_type : glsl_type::vec4_type);
       emit_scratch_read(block, inst, temp, src, scratch_loc[src.nr]);
       src.nr = temp.nr;
       src.offset %= REG_SIZE;
@@ -1631,33 +1704,57 @@ vec4_visitor::move_grf_array_access_to_scratch()
  */
 void
 vec4_visitor::emit_pull_constant_load(bblock_t *block, vec4_instruction *inst,
-				      dst_reg temp, src_reg orig_src,
+                                      dst_reg temp, src_reg orig_src,
                                       int base_offset, src_reg indirect)
 {
    assert(orig_src.offset % 16 == 0);
-   int reg_offset = base_offset + orig_src.offset / 16;
    const unsigned index = prog_data->base.binding_table.pull_constants_start;
 
-   src_reg offset;
-   if (indirect.file != BAD_FILE) {
-      offset = src_reg(this, glsl_type::uint_type);
-
-      emit_before(block, inst, ADD(dst_reg(offset), indirect,
-                                   brw_imm_ud(reg_offset * 16)));
-   } else if (devinfo->gen >= 8) {
-      /* Store the offset in a GRF so we can send-from-GRF. */
-      offset = src_reg(this, glsl_type::uint_type);
-      emit_before(block, inst, MOV(dst_reg(offset), brw_imm_ud(reg_offset * 16)));
-   } else {
-      offset = brw_imm_d(reg_offset * 16);
+   /* For 64bit loads we need to emit two 32-bit load messages and we also
+    * we need to shuffle the 32-bit data result into proper 64-bit data. To do
+    * that we emit the 32-bit loads into a temporary and we shuffle the result
+    * into the original destination.
+    */
+   dst_reg orig_temp = temp;
+   bool is_64bit = type_sz(orig_src.type) == 8;
+   if (is_64bit) {
+      assert(type_sz(temp.type) == 8);
+      dst_reg temp_df = dst_reg(this, glsl_type::dvec4_type);
+      temp = retype(temp_df, BRW_REGISTER_TYPE_F);
    }
 
-   emit_pull_constant_load_reg(temp,
-                               brw_imm_ud(index),
-                               offset,
-                               block, inst);
+   src_reg src = orig_src;
+   for (int i = 0; i < (is_64bit ? 2 : 1); i++) {
+      int reg_offset = base_offset + src.offset / 16;
+
+      src_reg offset;
+      if (indirect.file != BAD_FILE) {
+         offset = src_reg(this, glsl_type::uint_type);
+         emit_before(block, inst, ADD(dst_reg(offset), indirect,
+                                      brw_imm_ud(reg_offset * 16)));
+      } else if (devinfo->gen >= 8) {
+         /* Store the offset in a GRF so we can send-from-GRF. */
+         offset = src_reg(this, glsl_type::uint_type);
+         emit_before(block, inst, MOV(dst_reg(offset),
+                                      brw_imm_ud(reg_offset * 16)));
+      } else {
+         offset = brw_imm_d(reg_offset * 16);
+      }
+
+      emit_pull_constant_load_reg(byte_offset(temp, i * REG_SIZE),
+                                  brw_imm_ud(index),
+                                  offset,
+                                  block, inst);
+
+      src = byte_offset(src, 16);
+   }
 
    brw_mark_surface_used(&prog_data->base, index);
+
+   if (is_64bit) {
+      temp = retype(temp, BRW_REGISTER_TYPE_DF);
+      shuffle_64bit_data(orig_temp, src_reg(temp), false, block, inst);
+   }
 }
 
 /**

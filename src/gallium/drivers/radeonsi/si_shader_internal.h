@@ -28,6 +28,7 @@
 #include "gallivm/lp_bld_init.h"
 #include "gallivm/lp_bld_tgsi.h"
 #include "tgsi/tgsi_parse.h"
+#include "ac_llvm_util.h"
 
 #include <llvm-c/Core.h>
 #include <llvm-c/TargetMachine.h>
@@ -42,12 +43,14 @@ struct radeon_shader_binary;
 #define RADEON_LLVM_INITIAL_CF_DEPTH 4
 
 #define RADEON_LLVM_MAX_SYSTEM_VALUES 4
+#define RADEON_LLVM_MAX_ADDRS 16
 
 struct si_llvm_flow;
 
 struct si_shader_context {
-	struct lp_build_tgsi_soa_context soa;
+	struct lp_build_tgsi_context bld_base;
 	struct gallivm_state gallivm;
+	struct ac_llvm_context ac;
 	struct si_shader *shader;
 	struct si_screen *screen;
 
@@ -78,6 +81,7 @@ struct si_shader_context {
 	struct tgsi_full_declaration input_decls[RADEON_LLVM_MAX_INPUT_SLOTS];
 	LLVMValueRef inputs[RADEON_LLVM_MAX_INPUTS];
 	LLVMValueRef outputs[RADEON_LLVM_MAX_OUTPUTS][TGSI_NUM_CHANNELS];
+	LLVMValueRef addrs[RADEON_LLVM_MAX_ADDRS][TGSI_NUM_CHANNELS];
 
 	/** This pointer is used to contain the temporary values.
 	  * The amount of temporary used in tgsi can't be bound to a max value and
@@ -86,6 +90,9 @@ struct si_shader_context {
 	LLVMValueRef *temps;
 	unsigned temps_count;
 	LLVMValueRef system_values[RADEON_LLVM_MAX_SYSTEM_VALUES];
+
+	LLVMValueRef *imms;
+	unsigned imms_num;
 
 	struct si_llvm_flow *flow;
 	unsigned flow_depth;
@@ -113,11 +120,6 @@ struct si_shader_context {
 	int param_tes_patch_id;
 	int param_es2gs_offset;
 	int param_oc_lds;
-
-	/* Sets a bit if the dynamic HS control word was 0x80000000. The bit is
-	 * 0x800000 for VS, 0x1 for ES.
-	 */
-	int param_tess_offchip;
 
 	LLVMTargetMachineRef tm;
 
@@ -213,9 +215,5 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			LLVMValueRef dst[4]);
 
 void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base);
-void si_prepare_cube_coords(struct lp_build_tgsi_context *bld_base,
-			    struct lp_build_emit_data *emit_data,
-			    LLVMValueRef *coords_arg,
-			    LLVMValueRef *derivs_arg);
 
 #endif

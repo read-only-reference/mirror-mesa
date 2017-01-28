@@ -32,6 +32,8 @@
 #include "util/u_upload_mgr.h"
 #include "util/u_prim.h"
 
+#include "ac_debug.h"
+
 static unsigned si_conv_pipe_prim(unsigned mode)
 {
         static const unsigned prim_conv[] = {
@@ -259,13 +261,11 @@ static unsigned si_num_prims_for_vertices(const struct pipe_draw_info *info)
 	}
 }
 
-static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
-					  const struct pipe_draw_info *info,
-					  unsigned num_patches)
+static unsigned
+si_get_init_multi_vgt_param(struct si_screen *sscreen,
+			    union si_vgt_param_key *key)
 {
-	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
-	unsigned prim = info->mode;
-	unsigned primgroup_size = 128; /* recommended without a GS */
+	STATIC_ASSERT(sizeof(union si_vgt_param_key) == 4);
 	unsigned max_primgroup_in_wave = 2;
 
 	/* SWITCH_ON_EOP(0) is always preferable. */
@@ -275,35 +275,28 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 	bool partial_vs_wave = false;
 	bool partial_es_wave = false;
 
-	if (sctx->gs_shader.cso)
-		primgroup_size = 64; /* recommended with a GS */
-
-	if (sctx->tes_shader.cso) {
-		/* primgroup_size must be set to a multiple of NUM_PATCHES */
-		primgroup_size = num_patches;
-
+	if (key->u.uses_tess) {
 		/* SWITCH_ON_EOI must be set if PrimID is used. */
-		if ((sctx->tcs_shader.cso && sctx->tcs_shader.cso->info.uses_primid) ||
-		    sctx->tes_shader.cso->info.uses_primid)
+		if (key->u.tcs_tes_uses_prim_id)
 			ia_switch_on_eoi = true;
 
 		/* Bug with tessellation and GS on Bonaire and older 2 SE chips. */
-		if ((sctx->b.family == CHIP_TAHITI ||
-		     sctx->b.family == CHIP_PITCAIRN ||
-		     sctx->b.family == CHIP_BONAIRE) &&
-		    sctx->gs_shader.cso)
+		if ((sscreen->b.family == CHIP_TAHITI ||
+		     sscreen->b.family == CHIP_PITCAIRN ||
+		     sscreen->b.family == CHIP_BONAIRE) &&
+		    key->u.uses_gs)
 			partial_vs_wave = true;
 
 		/* Needed for 028B6C_DISTRIBUTION_MODE != 0 */
-		if (sctx->screen->has_distributed_tess) {
-			if (sctx->gs_shader.cso) {
+		if (sscreen->has_distributed_tess) {
+			if (key->u.uses_gs) {
 				partial_es_wave = true;
 
 				/* GPU hang workaround. */
-				if (sctx->b.family == CHIP_TONGA ||
-				    sctx->b.family == CHIP_FIJI ||
-				    sctx->b.family == CHIP_POLARIS10 ||
-				    sctx->b.family == CHIP_POLARIS11)
+				if (sscreen->b.family == CHIP_TONGA ||
+				    sscreen->b.family == CHIP_FIJI ||
+				    sscreen->b.family == CHIP_POLARIS10 ||
+				    sscreen->b.family == CHIP_POLARIS11)
 					partial_vs_wave = true;
 			} else {
 				partial_vs_wave = true;
@@ -312,13 +305,13 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 	}
 
 	/* This is a hardware requirement. */
-	if ((rs && rs->line_stipple_enable) ||
-	    (sctx->b.screen->debug_flags & DBG_SWITCH_ON_EOP)) {
+	if (key->u.line_stipple_enabled ||
+	    (sscreen->b.debug_flags & DBG_SWITCH_ON_EOP)) {
 		ia_switch_on_eop = true;
 		wd_switch_on_eop = true;
 	}
 
-	if (sctx->b.chip_class >= CIK) {
+	if (sscreen->b.chip_class >= CIK) {
 		/* WD_SWITCH_ON_EOP has no effect on GPUs with less than
 		 * 4 shader engines. Set 1 to pass the assertion below.
 		 * The other cases are hardware requirements.
@@ -326,24 +319,24 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 		 * Polaris supports primitive restart with WD_SWITCH_ON_EOP=0
 		 * for points, line strips, and tri strips.
 		 */
-		if (sctx->b.screen->info.max_se < 4 ||
-		    prim == PIPE_PRIM_POLYGON ||
-		    prim == PIPE_PRIM_LINE_LOOP ||
-		    prim == PIPE_PRIM_TRIANGLE_FAN ||
-		    prim == PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY ||
-		    (info->primitive_restart &&
-		     (sctx->b.family < CHIP_POLARIS10 ||
-		      (prim != PIPE_PRIM_POINTS &&
-		       prim != PIPE_PRIM_LINE_STRIP &&
-		       prim != PIPE_PRIM_TRIANGLE_STRIP))) ||
-		    info->count_from_stream_output)
+		if (sscreen->b.info.max_se < 4 ||
+		    key->u.prim == PIPE_PRIM_POLYGON ||
+		    key->u.prim == PIPE_PRIM_LINE_LOOP ||
+		    key->u.prim == PIPE_PRIM_TRIANGLE_FAN ||
+		    key->u.prim == PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY ||
+		    (key->u.primitive_restart &&
+		     (sscreen->b.family < CHIP_POLARIS10 ||
+		      (key->u.prim != PIPE_PRIM_POINTS &&
+		       key->u.prim != PIPE_PRIM_LINE_STRIP &&
+		       key->u.prim != PIPE_PRIM_TRIANGLE_STRIP))) ||
+		    key->u.count_from_stream_output)
 			wd_switch_on_eop = true;
 
 		/* Hawaii hangs if instancing is enabled and WD_SWITCH_ON_EOP is 0.
 		 * We don't know that for indirect drawing, so treat it as
 		 * always problematic. */
-		if (sctx->b.family == CHIP_HAWAII &&
-		    (info->indirect || info->instance_count > 1))
+		if (sscreen->b.family == CHIP_HAWAII &&
+		    key->u.uses_instancing)
 			wd_switch_on_eop = true;
 
 		/* Performance recommendation for 4 SE Gfx7-8 parts if
@@ -351,41 +344,26 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 		 * Assume indirect draws always use small instances.
 		 * This is needed for good VS wave utilization.
 		 */
-		if (sctx->b.chip_class <= VI &&
-		    sctx->b.screen->info.max_se >= 4 &&
-		    (info->indirect ||
-		     (info->instance_count > 1 &&
-		      si_num_prims_for_vertices(info) < primgroup_size)))
+		if (sscreen->b.chip_class <= VI &&
+		    sscreen->b.info.max_se == 4 &&
+		    key->u.multi_instances_smaller_than_primgroup)
 			wd_switch_on_eop = true;
 
 		/* Required on CIK and later. */
-		if (sctx->b.screen->info.max_se > 2 && !wd_switch_on_eop)
+		if (sscreen->b.info.max_se > 2 && !wd_switch_on_eop)
 			ia_switch_on_eoi = true;
 
 		/* Required by Hawaii and, for some special cases, by VI. */
 		if (ia_switch_on_eoi &&
-		    (sctx->b.family == CHIP_HAWAII ||
-		     (sctx->b.chip_class == VI &&
-		      (sctx->gs_shader.cso || max_primgroup_in_wave != 2))))
+		    (sscreen->b.family == CHIP_HAWAII ||
+		     (sscreen->b.chip_class == VI &&
+		      (key->u.uses_gs || max_primgroup_in_wave != 2))))
 			partial_vs_wave = true;
 
 		/* Instancing bug on Bonaire. */
-		if (sctx->b.family == CHIP_BONAIRE && ia_switch_on_eoi &&
-		    (info->indirect || info->instance_count > 1))
+		if (sscreen->b.family == CHIP_BONAIRE && ia_switch_on_eoi &&
+		    key->u.uses_instancing)
 			partial_vs_wave = true;
-
-		/* GS hw bug with single-primitive instances and SWITCH_ON_EOI.
-		 * The hw doc says all multi-SE chips are affected, but Vulkan
-		 * only applies it to Hawaii. Do what Vulkan does.
-		 */
-		if (sctx->b.family == CHIP_HAWAII &&
-		    sctx->gs_shader.cso &&
-		    ia_switch_on_eoi &&
-		    (info->indirect ||
-		     (info->instance_count > 1 &&
-		      si_num_prims_for_vertices(info) <= 1)))
-			sctx->b.flags |= SI_CONTEXT_VGT_FLUSH;
-
 
 		/* If the WD switch is false, the IA switch must be false too. */
 		assert(wd_switch_on_eop || !ia_switch_on_eop);
@@ -395,37 +373,92 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 	if (ia_switch_on_eoi)
 		partial_es_wave = true;
 
-	/* GS requirement. */
-	if (SI_GS_PER_ES / primgroup_size >= sctx->screen->gs_table_depth - 3)
-		partial_es_wave = true;
-
 	return S_028AA8_SWITCH_ON_EOP(ia_switch_on_eop) |
 		S_028AA8_SWITCH_ON_EOI(ia_switch_on_eoi) |
 		S_028AA8_PARTIAL_VS_WAVE_ON(partial_vs_wave) |
 		S_028AA8_PARTIAL_ES_WAVE_ON(partial_es_wave) |
-		S_028AA8_PRIMGROUP_SIZE(primgroup_size - 1) |
-		S_028AA8_WD_SWITCH_ON_EOP(sctx->b.chip_class >= CIK ? wd_switch_on_eop : 0) |
-		S_028AA8_MAX_PRIMGRP_IN_WAVE(sctx->b.chip_class >= VI ?
+		S_028AA8_WD_SWITCH_ON_EOP(sscreen->b.chip_class >= CIK ? wd_switch_on_eop : 0) |
+		S_028AA8_MAX_PRIMGRP_IN_WAVE(sscreen->b.chip_class >= VI ?
 					     max_primgroup_in_wave : 0);
 }
 
-static void si_emit_scratch_reloc(struct si_context *sctx)
+void si_init_ia_multi_vgt_param_table(struct si_context *sctx)
 {
-	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
+	for (int prim = 0; prim <= R600_PRIM_RECTANGLE_LIST; prim++)
+	for (int uses_instancing = 0; uses_instancing < 2; uses_instancing++)
+	for (int multi_instances = 0; multi_instances < 2; multi_instances++)
+	for (int primitive_restart = 0; primitive_restart < 2; primitive_restart++)
+	for (int count_from_so = 0; count_from_so < 2; count_from_so++)
+	for (int line_stipple = 0; line_stipple < 2; line_stipple++)
+	for (int uses_tess = 0; uses_tess < 2; uses_tess++)
+	for (int tess_uses_primid = 0; tess_uses_primid < 2; tess_uses_primid++)
+	for (int uses_gs = 0; uses_gs < 2; uses_gs++) {
+		union si_vgt_param_key key;
 
-	if (!sctx->emit_scratch_reloc)
-		return;
+		key.index = 0;
+		key.u.prim = prim;
+		key.u.uses_instancing = uses_instancing;
+		key.u.multi_instances_smaller_than_primgroup = multi_instances;
+		key.u.primitive_restart = primitive_restart;
+		key.u.count_from_stream_output = count_from_so;
+		key.u.line_stipple_enabled = line_stipple;
+		key.u.uses_tess = uses_tess;
+		key.u.tcs_tes_uses_prim_id = tess_uses_primid;
+		key.u.uses_gs = uses_gs;
 
-	radeon_set_context_reg(cs, R_0286E8_SPI_TMPRING_SIZE,
-			       sctx->spi_tmpring_size);
-
-	if (sctx->scratch_buffer) {
-		radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
-				      sctx->scratch_buffer, RADEON_USAGE_READWRITE,
-				      RADEON_PRIO_SCRATCH_BUFFER);
-
+		sctx->ia_multi_vgt_param[key.index] =
+			si_get_init_multi_vgt_param(sctx->screen, &key);
 	}
-	sctx->emit_scratch_reloc = false;
+}
+
+static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
+					  const struct pipe_draw_info *info,
+					  unsigned num_patches)
+{
+	union si_vgt_param_key key = sctx->ia_multi_vgt_param_key;
+	unsigned primgroup_size;
+	unsigned ia_multi_vgt_param;
+
+	if (sctx->tes_shader.cso) {
+		primgroup_size = num_patches; /* must be a multiple of NUM_PATCHES */
+	} else if (sctx->gs_shader.cso) {
+		primgroup_size = 64; /* recommended with a GS */
+	} else {
+		primgroup_size = 128; /* recommended without a GS and tess */
+	}
+
+	key.u.prim = info->mode;
+	key.u.uses_instancing = info->indirect || info->instance_count > 1;
+	key.u.multi_instances_smaller_than_primgroup =
+		info->indirect ||
+		(info->instance_count > 1 &&
+		 (info->count_from_stream_output ||
+		  si_num_prims_for_vertices(info) < primgroup_size));
+	key.u.primitive_restart = info->primitive_restart;
+	key.u.count_from_stream_output = info->count_from_stream_output != NULL;
+
+	ia_multi_vgt_param = sctx->ia_multi_vgt_param[key.index] |
+			     S_028AA8_PRIMGROUP_SIZE(primgroup_size - 1);
+
+	if (sctx->gs_shader.cso) {
+		/* GS requirement. */
+		if (SI_GS_PER_ES / primgroup_size >= sctx->screen->gs_table_depth - 3)
+			ia_multi_vgt_param |= S_028AA8_PARTIAL_ES_WAVE_ON(1);
+
+		/* GS hw bug with single-primitive instances and SWITCH_ON_EOI.
+		 * The hw doc says all multi-SE chips are affected, but Vulkan
+		 * only applies it to Hawaii. Do what Vulkan does.
+		 */
+		if (sctx->b.family == CHIP_HAWAII &&
+		    G_028AA8_SWITCH_ON_EOI(ia_multi_vgt_param) &&
+		    (info->indirect ||
+		     (info->instance_count > 1 &&
+		      (info->count_from_stream_output ||
+		       si_num_prims_for_vertices(info) <= 1))))
+			sctx->b.flags |= SI_CONTEXT_VGT_FLUSH;
+	}
+
+	return ia_multi_vgt_param;
 }
 
 /* rast_prim is the primitive type after GS. */
@@ -465,25 +498,6 @@ static void si_emit_draw_registers(struct si_context *sctx,
 	unsigned prim = si_conv_pipe_prim(info->mode);
 	unsigned gs_out_prim = si_conv_prim_to_gs_out(sctx->current_rast_prim);
 	unsigned ia_multi_vgt_param, num_patches = 0;
-
-	/* Polaris needs different VTX_REUSE_DEPTH settings depending on
-	 * whether the "fractional odd" tessellation spacing is used.
-	 */
-	if (sctx->b.family >= CHIP_POLARIS10) {
-		struct si_shader_selector *tes = sctx->tes_shader.cso;
-		unsigned vtx_reuse_depth = 30;
-
-		if (tes &&
-		    tes->info.properties[TGSI_PROPERTY_TES_SPACING] ==
-		    PIPE_TESS_SPACING_FRACTIONAL_ODD)
-			vtx_reuse_depth = 14;
-
-		if (vtx_reuse_depth != sctx->last_vtx_reuse_depth) {
-			radeon_set_context_reg(cs, R_028C58_VGT_VERTEX_REUSE_BLOCK_CNTL,
-					       vtx_reuse_depth);
-			sctx->last_vtx_reuse_depth = vtx_reuse_depth;
-		}
-	}
 
 	if (sctx->tes_shader.cso)
 		si_emit_derived_tess_state(sctx, info, &num_patches);
@@ -735,6 +749,9 @@ void si_emit_cache_flush(struct si_context *sctx)
 	struct radeon_winsys_cs *cs = rctx->gfx.cs;
 	uint32_t cp_coher_cntl = 0;
 
+	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_FRAMEBUFFER)
+		sctx->b.num_fb_cache_flushes++;
+
 	/* SI has a bug that it always flushes ICACHE and KCACHE if either
 	 * bit is set. An alternative way is to write SQC_CACHES, but that
 	 * doesn't seem to work reliably. Since the bug doesn't affect
@@ -845,13 +862,15 @@ void si_emit_cache_flush(struct si_context *sctx)
 	if (rctx->flags & SI_CONTEXT_INV_GLOBAL_L2 ||
 	    (rctx->chip_class <= CIK &&
 	     (rctx->flags & SI_CONTEXT_WRITEBACK_GLOBAL_L2))) {
-		/* Invalidate L1 & L2. (L1 is always invalidated)
+		/* Invalidate L1 & L2. (L1 is always invalidated on SI)
 		 * WB must be set on VI+ when TC_ACTION is set.
 		 */
 		si_emit_surface_sync(rctx, cp_coher_cntl |
 				     S_0085F0_TC_ACTION_ENA(1) |
+				     S_0085F0_TCL1_ACTION_ENA(1) |
 				     S_0301F0_TC_WB_ACTION_ENA(rctx->chip_class >= VI));
 		cp_coher_cntl = 0;
+		sctx->b.num_L2_invalidates++;
 	} else {
 		/* L1 invalidation and L2 writeback must be done separately,
 		 * because both operations can't be done together.
@@ -867,6 +886,7 @@ void si_emit_cache_flush(struct si_context *sctx)
 					     S_0301F0_TC_WB_ACTION_ENA(1) |
 					     S_0301F0_TC_NC_ACTION_ENA(1));
 			cp_coher_cntl = 0;
+			sctx->b.num_L2_writebacks++;
 		}
 		if (rctx->flags & SI_CONTEXT_INV_VMEM_L1) {
 			/* Invalidate per-CU VMEM L1. */
@@ -937,7 +957,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
 	struct pipe_index_buffer ib = {};
-	unsigned mask, dirty_fb_counter, dirty_tex_counter, rast_prim;
+	unsigned mask, dirty_tex_counter, rast_prim;
 
 	if (likely(!info->indirect)) {
 		/* SI-CI treat instance_count==0 as instance_count==1. There is
@@ -966,20 +986,15 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		return;
 	}
 
-	/* Re-emit the framebuffer state if needed. */
-	dirty_fb_counter = p_atomic_read(&sctx->b.screen->dirty_fb_counter);
-	if (unlikely(dirty_fb_counter != sctx->b.last_dirty_fb_counter)) {
-		sctx->b.last_dirty_fb_counter = dirty_fb_counter;
+	/* Recompute and re-emit the texture resource states if needed. */
+	dirty_tex_counter = p_atomic_read(&sctx->b.screen->dirty_tex_counter);
+	if (unlikely(dirty_tex_counter != sctx->b.last_dirty_tex_counter)) {
+		sctx->b.last_dirty_tex_counter = dirty_tex_counter;
 		sctx->framebuffer.dirty_cbufs |=
 			((1 << sctx->framebuffer.state.nr_cbufs) - 1);
 		sctx->framebuffer.dirty_zsbuf = true;
+		sctx->framebuffer.do_update_surf_dirtiness = true;
 		si_mark_atom_dirty(sctx, &sctx->framebuffer.atom);
-	}
-
-	/* Invalidate & recompute texture descriptors if needed. */
-	dirty_tex_counter = p_atomic_read(&sctx->b.screen->dirty_tex_descriptor_counter);
-	if (unlikely(dirty_tex_counter != sctx->b.last_dirty_tex_descriptor_counter)) {
-		sctx->b.last_dirty_tex_descriptor_counter = dirty_tex_counter;
 		si_update_all_texture_descriptors(sctx);
 	}
 
@@ -1083,22 +1098,21 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		r600_resource(ib.buffer)->TC_L2_dirty = false;
 	}
 
-	if (info->indirect && r600_resource(info->indirect)->TC_L2_dirty) {
-		sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-		r600_resource(info->indirect)->TC_L2_dirty = false;
-	}
-
-	if (info->indirect_params &&
-	    r600_resource(info->indirect_params)->TC_L2_dirty) {
-		sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-		r600_resource(info->indirect_params)->TC_L2_dirty = false;
-	}
-
-	/* Add buffer sizes for memory checking in need_cs_space. */
-	if (sctx->emit_scratch_reloc && sctx->scratch_buffer)
-		r600_context_add_resource_size(ctx, &sctx->scratch_buffer->b.b);
-	if (info->indirect)
+	if (info->indirect) {
+		/* Add the buffer size for memory checking in need_cs_space. */
 		r600_context_add_resource_size(ctx, info->indirect);
+
+		if (r600_resource(info->indirect)->TC_L2_dirty) {
+			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+			r600_resource(info->indirect)->TC_L2_dirty = false;
+		}
+
+		if (info->indirect_params &&
+		    r600_resource(info->indirect_params)->TC_L2_dirty) {
+			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+			r600_resource(info->indirect_params)->TC_L2_dirty = false;
+		}
+	}
 
 	si_need_cs_space(sctx);
 
@@ -1109,11 +1123,11 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	if (!si_upload_vertex_buffer_descriptors(sctx))
 		return;
 
-	/* Flushed caches prior to emitting states. */
+	/* Flush caches before the first state atom, which does L2 prefetches. */
 	if (sctx->b.flags)
 		si_emit_cache_flush(sctx);
 
-	/* Emit states. */
+	/* Emit state atoms. */
 	mask = sctx->dirty_atoms;
 	while (mask) {
 		struct r600_atom *atom = sctx->atoms.array[u_bit_scan(&mask)];
@@ -1122,15 +1136,25 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	}
 	sctx->dirty_atoms = 0;
 
-	si_pm4_emit_dirty(sctx);
-	si_emit_scratch_reloc(sctx);
+	/* Emit states. */
+	mask = sctx->dirty_states;
+	while (mask) {
+		unsigned i = u_bit_scan(&mask);
+		struct si_pm4_state *state = sctx->queued.array[i];
+
+		if (!state || sctx->emitted.array[i] == state)
+			continue;
+
+		si_pm4_emit(sctx, state);
+		sctx->emitted.array[i] = state;
+	}
+	sctx->dirty_states = 0;
+
 	si_emit_rasterizer_prim_state(sctx);
 	si_emit_draw_registers(sctx, info);
 
 	si_ce_pre_draw_synchronization(sctx);
-
 	si_emit_draw_packets(sctx, info, &ib);
-
 	si_ce_post_draw_synchronization(sctx);
 
 	if (sctx->trace_buf)
@@ -1145,32 +1169,35 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		sctx->b.flags |= SI_CONTEXT_VGT_STREAMOUT_SYNC;
 	}
 
-	/* Set the depth buffer as dirty. */
-	if (sctx->framebuffer.state.zsbuf) {
-		struct pipe_surface *surf = sctx->framebuffer.state.zsbuf;
-		struct r600_texture *rtex = (struct r600_texture *)surf->texture;
+	if (sctx->framebuffer.do_update_surf_dirtiness) {
+		/* Set the depth buffer as dirty. */
+		if (sctx->framebuffer.state.zsbuf) {
+			struct pipe_surface *surf = sctx->framebuffer.state.zsbuf;
+			struct r600_texture *rtex = (struct r600_texture *)surf->texture;
 
-		if (!rtex->tc_compatible_htile)
-			rtex->dirty_level_mask |= 1 << surf->u.tex.level;
-
-		if (rtex->surface.flags & RADEON_SURF_SBUFFER)
-			rtex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;
-	}
-	if (sctx->framebuffer.compressed_cb_mask) {
-		struct pipe_surface *surf;
-		struct r600_texture *rtex;
-		unsigned mask = sctx->framebuffer.compressed_cb_mask;
-
-		do {
-			unsigned i = u_bit_scan(&mask);
-			surf = sctx->framebuffer.state.cbufs[i];
-			rtex = (struct r600_texture*)surf->texture;
-
-			if (rtex->fmask.size)
+			if (!rtex->tc_compatible_htile)
 				rtex->dirty_level_mask |= 1 << surf->u.tex.level;
-			if (rtex->dcc_gather_statistics)
-				rtex->separate_dcc_dirty = true;
-		} while (mask);
+
+			if (rtex->surface.flags & RADEON_SURF_SBUFFER)
+				rtex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;
+		}
+		if (sctx->framebuffer.compressed_cb_mask) {
+			struct pipe_surface *surf;
+			struct r600_texture *rtex;
+			unsigned mask = sctx->framebuffer.compressed_cb_mask;
+
+			do {
+				unsigned i = u_bit_scan(&mask);
+				surf = sctx->framebuffer.state.cbufs[i];
+				rtex = (struct r600_texture*)surf->texture;
+
+				if (rtex->fmask.size)
+					rtex->dirty_level_mask |= 1 << surf->u.tex.level;
+				if (rtex->dcc_gather_statistics)
+					rtex->separate_dcc_dirty = true;
+			} while (mask);
+		}
+		sctx->framebuffer.do_update_surf_dirtiness = false;
 	}
 
 	pipe_resource_reference(&ib.buffer, NULL);
@@ -1194,5 +1221,5 @@ void si_trace_emit(struct si_context *sctx)
 	radeon_emit(cs, sctx->trace_buf->gpu_address >> 32);
 	radeon_emit(cs, sctx->trace_id);
 	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
-	radeon_emit(cs, SI_ENCODE_TRACE_POINT(sctx->trace_id));
+	radeon_emit(cs, AC_ENCODE_TRACE_POINT(sctx->trace_id));
 }

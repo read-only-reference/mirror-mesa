@@ -136,9 +136,8 @@ get_new_program_id(struct intel_screen *screen)
    return id;
 }
 
-static struct gl_program *brwNewProgram( struct gl_context *ctx,
-				      GLenum target,
-				      GLuint id )
+static struct gl_program *brwNewProgram(struct gl_context *ctx, GLenum target,
+                                        GLuint id, bool is_arb_asm)
 {
    struct brw_context *brw = brw_context(ctx);
 
@@ -152,26 +151,19 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
       if (prog) {
 	 prog->id = get_new_program_id(brw->screen);
 
-	 return _mesa_init_gl_program(&prog->program, target, id);
+         return _mesa_init_gl_program(&prog->program, target, id, is_arb_asm);
       }
       else
 	 return NULL;
    }
 
    case GL_FRAGMENT_PROGRAM_ARB: {
-      struct brw_program *prog;
-      if (brw->gen < 6) {
-         struct gen4_fragment_program *g4_prog =
-            rzalloc(NULL, struct gen4_fragment_program);
-         prog = &g4_prog->base;
-      } else {
-         prog = rzalloc(NULL, struct brw_program);
-      }
+      struct brw_program *prog = rzalloc(NULL, struct brw_program);
 
       if (prog) {
 	 prog->id = get_new_program_id(brw->screen);
 
-	 return _mesa_init_gl_program(&prog->program, target, id);
+         return _mesa_init_gl_program(&prog->program, target, id, is_arb_asm);
       }
       else
 	 return NULL;
@@ -185,6 +177,49 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
 static void brwDeleteProgram( struct gl_context *ctx,
 			      struct gl_program *prog )
 {
+   struct brw_context *brw = brw_context(ctx);
+
+   /* Beware!  prog's refcount has reached zero, and it's about to be freed.
+    *
+    * In brw_upload_pipeline_state(), we compare brw->foo_program to
+    * ctx->FooProgram._Current, and flag BRW_NEW_FOO_PROGRAM if the
+    * pointer has changed.
+    *
+    * We cannot leave brw->foo_program as a dangling pointer to the dead
+    * program.  malloc() may allocate the same memory for a new gl_program,
+    * causing us to see matching pointers...but totally different programs.
+    *
+    * We cannot set brw->foo_program to NULL, either.  If we've deleted the
+    * active program, Mesa may set ctx->FooProgram._Current to NULL.  That
+    * would cause us to see matching pointers (NULL == NULL), and fail to
+    * detect that a program has changed since our last draw.
+    *
+    * So, set it to a bogus gl_program pointer that will never match,
+    * causing us to properly reevaluate the state on our next draw.
+    *
+    * Getting this wrong causes heisenbugs which are very hard to catch,
+    * as you need a very specific allocation pattern to hit the problem.
+    */
+   static const struct gl_program deleted_program;
+
+   if (brw->vertex_program == prog)
+      brw->vertex_program = &deleted_program;
+
+   if (brw->tess_ctrl_program == prog)
+      brw->tess_ctrl_program = &deleted_program;
+
+   if (brw->tess_eval_program == prog)
+      brw->tess_eval_program = &deleted_program;
+
+   if (brw->geometry_program == prog)
+      brw->geometry_program = &deleted_program;
+
+   if (brw->fragment_program == prog)
+      brw->fragment_program = &deleted_program;
+
+   if (brw->compute_program == prog)
+      brw->compute_program = &deleted_program;
+
    _mesa_delete_program( ctx, prog );
 }
 
@@ -213,7 +248,7 @@ brwProgramStringNotify(struct gl_context *ctx,
 
       prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_FRAGMENT, true);
 
-      brw_fs_precompile(ctx, NULL, prog);
+      brw_fs_precompile(ctx, prog);
       break;
    }
    case GL_VERTEX_PROGRAM_ARB: {
@@ -237,7 +272,7 @@ brwProgramStringNotify(struct gl_context *ctx,
       prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_VERTEX,
                                  compiler->scalar_stage[MESA_SHADER_VERTEX]);
 
-      brw_vs_precompile(ctx, NULL, prog);
+      brw_vs_precompile(ctx, prog);
       break;
    }
    default:
@@ -605,29 +640,25 @@ brw_collect_and_report_shader_time(struct brw_context *brw)
  * change their lifetimes compared to normal operation.
  */
 int
-brw_get_shader_time_index(struct brw_context *brw,
-                          struct gl_shader_program *shader_prog,
-                          struct gl_program *prog,
-                          enum shader_time_shader_type type)
+brw_get_shader_time_index(struct brw_context *brw, struct gl_program *prog,
+                          enum shader_time_shader_type type, bool is_glsl_sh)
 {
    int shader_time_index = brw->shader_time.num_entries++;
    assert(shader_time_index < brw->shader_time.max_entries);
    brw->shader_time.types[shader_time_index] = type;
 
-   int id = shader_prog ? shader_prog->Name : prog->Id;
    const char *name;
-   if (id == 0) {
+   if (prog->Id == 0) {
       name = "ff";
-   } else if (!shader_prog) {
-      name = "prog";
-   } else if (shader_prog->Label) {
-      name = ralloc_strdup(brw->shader_time.names, shader_prog->Label);
+   } else if (is_glsl_sh) {
+      name = prog->info.label ?
+         ralloc_strdup(brw->shader_time.names, prog->info.label) : "glsl";
    } else {
-      name = "glsl";
+      name = "prog";
    }
 
    brw->shader_time.names[shader_time_index] = name;
-   brw->shader_time.ids[shader_time_index] = id;
+   brw->shader_time.ids[shader_time_index] = prog->Id;
 
    return shader_time_index;
 }

@@ -366,6 +366,13 @@ The integer capabilities:
   ARB_transform_feedback3.
 * ``PIPE_CAP_TGSI_CAN_READ_OUTPUTS``: Whether every TGSI shader stage can read
   from the output file.
+* ``PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY``: Tell the GLSL compiler to use
+  the minimum amount of optimizations just to be able to do all the linking
+  and lowering.
+* ``PIPE_CAP_TGSI_FS_FBFETCH``: Whether a fragment shader can use the FBFETCH
+  opcode to retrieve the current value in the framebuffer.
+* ``PIPE_CAP_TGSI_MUL_ZERO_WINS``: Whether TGSI shaders support the
+  ``TGSI_PROPERTY_MUL_ZERO_WINS`` shader property.
 
 
 .. _pipe_capf:
@@ -699,6 +706,20 @@ which isn't multisampled.
 **bind** bitmask of the PIPE_BIND flags.
 
 **flags** bitmask of PIPE_RESOURCE_FLAG flags.
+
+
+
+resource_changed
+^^^^^^^^^^^^^^^^
+
+Mark a resource as changed so derived internal resources will be recreated
+on next use.
+
+When importing external images that can't be directly used as texture sampler
+source, internal copies may have to be created that the hardware can sample
+from. When those resources are reimported, the image data may have changed, and
+the previously derived internal resources must be invalidated to avoid sampling
+from old copies.
 
 
 

@@ -612,6 +612,7 @@ nv50_ir::DataType Instruction::inferSrcType() const
    case TGSI_OPCODE_DNEG:
    case TGSI_OPCODE_DADD:
    case TGSI_OPCODE_DMUL:
+   case TGSI_OPCODE_DDIV:
    case TGSI_OPCODE_DMAX:
    case TGSI_OPCODE_DMIN:
    case TGSI_OPCODE_DSLT:
@@ -723,15 +724,12 @@ static nv50_ir::operation translateOpcode(uint opcode)
    NV50_IR_OPCODE_CASE(SGE, SET);
    NV50_IR_OPCODE_CASE(MAD, MAD);
    NV50_IR_OPCODE_CASE(FMA, FMA);
-   NV50_IR_OPCODE_CASE(SUB, SUB);
 
    NV50_IR_OPCODE_CASE(FLR, FLOOR);
    NV50_IR_OPCODE_CASE(ROUND, CVT);
    NV50_IR_OPCODE_CASE(EX2, EX2);
    NV50_IR_OPCODE_CASE(LG2, LG2);
    NV50_IR_OPCODE_CASE(POW, POW);
-
-   NV50_IR_OPCODE_CASE(ABS, ABS);
 
    NV50_IR_OPCODE_CASE(COS, COS);
    NV50_IR_OPCODE_CASE(DDX, DFDX);
@@ -813,6 +811,7 @@ static nv50_ir::operation translateOpcode(uint opcode)
    NV50_IR_OPCODE_CASE(DNEG, NEG);
    NV50_IR_OPCODE_CASE(DADD, ADD);
    NV50_IR_OPCODE_CASE(DMUL, MUL);
+   NV50_IR_OPCODE_CASE(DDIV, DIV);
    NV50_IR_OPCODE_CASE(DMAX, MAX);
    NV50_IR_OPCODE_CASE(DMIN, MIN);
    NV50_IR_OPCODE_CASE(DSLT, SET);
@@ -1167,6 +1166,9 @@ void Source::scanProperty(const struct tgsi_full_property *prop)
    case TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL:
       info->prop.fp.earlyFragTests = prop->u[0].Data;
       break;
+   case TGSI_PROPERTY_MUL_ZERO_WINS:
+      info->io.mul_zero_wins = prop->u[0].Data;
+      break;
    default:
       INFO("unhandled TGSI property %d\n", prop->Property.PropertyName);
       break;
@@ -1460,6 +1462,9 @@ bool Source::scanInstruction(const struct tgsi_full_instruction *inst)
    if (insn.getOpcode() == TGSI_OPCODE_BARRIER)
       info->numBarriers = 1;
 
+   if (insn.getOpcode() == TGSI_OPCODE_FBFETCH)
+      info->prop.fp.readsFramebuffer = true;
+
    if (insn.dstCount()) {
       Instruction::DstRegister dst = insn.getDst(0);
 
@@ -1575,6 +1580,7 @@ private:
    void handleTEX(Value *dst0[4], int R, int S, int L, int C, int Dx, int Dy);
    void handleTXF(Value *dst0[4], int R, int L_M);
    void handleTXQ(Value *dst0[4], enum TexQuery, int R);
+   void handleFBFETCH(Value *dst0[4]);
    void handleLIT(Value *dst0[4]);
    void handleUserClipPlanes();
 
@@ -2055,12 +2061,14 @@ Converter::buildDot(int dim)
    Value *src0 = fetchSrc(0, 0), *src1 = fetchSrc(1, 0);
    Value *dotp = getScratch();
 
-   mkOp2(OP_MUL, TYPE_F32, dotp, src0, src1);
+   mkOp2(OP_MUL, TYPE_F32, dotp, src0, src1)
+      ->dnz = info->io.mul_zero_wins;
 
    for (int c = 1; c < dim; ++c) {
       src0 = fetchSrc(0, c);
       src1 = fetchSrc(1, c);
-      mkOp3(OP_MAD, TYPE_F32, dotp, src0, src1, dotp);
+      mkOp3(OP_MAD, TYPE_F32, dotp, src0, src1, dotp)
+         ->dnz = info->io.mul_zero_wins;
    }
    return dotp;
 }
@@ -2279,6 +2287,40 @@ Converter::handleTXF(Value *dst[4], int R, int L_M)
          texi->offset[s][c].setInsn(texi);
       }
    }
+
+   bb->insertTail(texi);
+}
+
+void
+Converter::handleFBFETCH(Value *dst[4])
+{
+   TexInstruction *texi = new_TexInstruction(func, OP_TXF);
+   unsigned int c, d;
+
+   texi->tex.target = TEX_TARGET_2D_MS_ARRAY;
+   texi->tex.levelZero = 1;
+   texi->tex.useOffsets = 0;
+
+   for (c = 0, d = 0; c < 4; ++c) {
+      if (dst[c]) {
+         texi->setDef(d++, dst[c]);
+         texi->tex.mask |= 1 << c;
+      }
+   }
+
+   Value *x = mkOp1v(OP_RDSV, TYPE_F32, getScratch(), mkSysVal(SV_POSITION, 0));
+   Value *y = mkOp1v(OP_RDSV, TYPE_F32, getScratch(), mkSysVal(SV_POSITION, 1));
+   Value *z = mkOp1v(OP_RDSV, TYPE_U32, getScratch(), mkSysVal(SV_LAYER, 0));
+   Value *ms = mkOp1v(OP_RDSV, TYPE_U32, getScratch(), mkSysVal(SV_SAMPLE_INDEX, 0));
+
+   mkCvt(OP_CVT, TYPE_U32, x, TYPE_F32, x)->rnd = ROUND_Z;
+   mkCvt(OP_CVT, TYPE_U32, y, TYPE_F32, y)->rnd = ROUND_Z;
+   texi->setSrc(0, x);
+   texi->setSrc(1, y);
+   texi->setSrc(2, z);
+   texi->setSrc(3, ms);
+
+   texi->tex.r = texi->tex.s = -1;
 
    bb->insertTail(texi);
 }
@@ -2990,13 +3032,14 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
    case TGSI_OPCODE_SHL:
    case TGSI_OPCODE_ISHR:
    case TGSI_OPCODE_USHR:
-   case TGSI_OPCODE_SUB:
    case TGSI_OPCODE_XOR:
       FOR_EACH_DST_ENABLED_CHANNEL(0, c, tgsi) {
          src0 = fetchSrc(0, c);
          src1 = fetchSrc(1, c);
          geni = mkOp2(op, dstTy, dst0[c], src0, src1);
          geni->subOp = tgsi::opcodeToSubOp(tgsi.getOpcode());
+         if (op == OP_MUL && dstTy == TYPE_F32)
+            geni->dnz = info->io.mul_zero_wins;
       }
       break;
    case TGSI_OPCODE_MAD:
@@ -3007,11 +3050,12 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
          src0 = fetchSrc(0, c);
          src1 = fetchSrc(1, c);
          src2 = fetchSrc(2, c);
-         mkOp3(op, dstTy, dst0[c], src0, src1, src2);
+         geni = mkOp3(op, dstTy, dst0[c], src0, src1, src2);
+         if (dstTy == TYPE_F32)
+            geni->dnz = info->io.mul_zero_wins;
       }
       break;
    case TGSI_OPCODE_MOV:
-   case TGSI_OPCODE_ABS:
    case TGSI_OPCODE_CEIL:
    case TGSI_OPCODE_FLR:
    case TGSI_OPCODE_TRUNC:
@@ -3107,7 +3151,8 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
       if (dst0[1]) {
          mkOp1(OP_EX2, TYPE_F32, dst0[1], val1);
          mkOp1(OP_RCP, TYPE_F32, dst0[1], dst0[1]);
-         mkOp2(OP_MUL, TYPE_F32, dst0[1], dst0[1], src0);
+         mkOp2(OP_MUL, TYPE_F32, dst0[1], dst0[1], src0)
+            ->dnz = info->io.mul_zero_wins;
       }
       if (dst0[3])
          loadImm(dst0[3], 1.0f);
@@ -3140,7 +3185,8 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
       if (dst0[1]) {
          src0 = fetchSrc(0, 1);
          src1 = fetchSrc(1, 1);
-         mkOp2(OP_MUL, TYPE_F32, dst0[1], src0, src1);
+         mkOp2(OP_MUL, TYPE_F32, dst0[1], src0, src1)
+            ->dnz = info->io.mul_zero_wins;
       }
       if (dst0[2])
          mkMov(dst0[2], fetchSrc(0, 2));
@@ -3153,7 +3199,8 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
          src1 = fetchSrc(1, c);
          src2 = fetchSrc(2, c);
          mkOp3(OP_MAD, TYPE_F32, dst0[c],
-               mkOp2v(OP_SUB, TYPE_F32, getSSA(), src1, src2), src0, src2);
+               mkOp2v(OP_SUB, TYPE_F32, getSSA(), src1, src2), src0, src2)
+            ->dnz = info->io.mul_zero_wins;
       }
       break;
    case TGSI_OPCODE_LIT:
@@ -3165,12 +3212,14 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
             val0 = getSSA();
             src0 = fetchSrc(1, (c + 1) % 3);
             src1 = fetchSrc(0, (c + 2) % 3);
-            mkOp2(OP_MUL, TYPE_F32, val0, src0, src1);
+            mkOp2(OP_MUL, TYPE_F32, val0, src0, src1)
+               ->dnz = info->io.mul_zero_wins;
             mkOp1(OP_NEG, TYPE_F32, val0, val0);
 
             src0 = fetchSrc(0, (c + 1) % 3);
             src1 = fetchSrc(1, (c + 2) % 3);
-            mkOp3(OP_MAD, TYPE_F32, dst0[c], src0, src1, val0);
+            mkOp3(OP_MAD, TYPE_F32, dst0[c], src0, src1, val0)
+               ->dnz = info->io.mul_zero_wins;
          } else {
             loadImm(dst0[c], 1.0f);
          }
@@ -3325,6 +3374,9 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
       std::swap(dst0[0], dst0[2]);
       handleTXQ(dst0, TXQ_TYPE, 0);
       std::swap(dst0[0], dst0[2]);
+      break;
+   case TGSI_OPCODE_FBFETCH:
+      handleFBFETCH(dst0);
       break;
    case TGSI_OPCODE_F2I:
    case TGSI_OPCODE_F2U:
@@ -3750,6 +3802,7 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
    }
    case TGSI_OPCODE_DADD:
    case TGSI_OPCODE_DMUL:
+   case TGSI_OPCODE_DDIV:
    case TGSI_OPCODE_DMAX:
    case TGSI_OPCODE_DMIN:
       FOR_EACH_DST_ENABLED_CHANNEL(0, c, tgsi) {

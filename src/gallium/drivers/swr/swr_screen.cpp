@@ -39,10 +39,6 @@
 
 #include "state_tracker/sw_winsys.h"
 
-extern "C" {
-#include "gallivm/lp_bld_limits.h"
-}
-
 #include "jit_api.h"
 
 #include "memory/TilingFunctions.h"
@@ -318,6 +314,10 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_NATIVE_FENCE_FD:
+   case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
+   case PIPE_CAP_TGSI_FS_FBFETCH:
+   case PIPE_CAP_TGSI_MUL_ZERO_WINS:
+   case PIPE_CAP_INT64:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -539,6 +539,11 @@ mesa_to_swr_format(enum pipe_format format)
       {PIPE_FORMAT_R32G32_FIXED,           R32G32_SFIXED},
       {PIPE_FORMAT_R32G32B32_FIXED,        R32G32B32_SFIXED},
       {PIPE_FORMAT_R32G32B32A32_FIXED,     R32G32B32A32_SFIXED},
+
+      {PIPE_FORMAT_R64_FLOAT,              R64_FLOAT},
+      {PIPE_FORMAT_R64G64_FLOAT,           R64G64_FLOAT},
+      {PIPE_FORMAT_R64G64B64_FLOAT,        R64G64B64_FLOAT},
+      {PIPE_FORMAT_R64G64B64A64_FLOAT,     R64G64B64A64_FLOAT},
 
       /* These formats have entries in SWR but don't have Load/StoreTile
        * implementations. That means these aren't renderable, and thus having
@@ -878,18 +883,11 @@ swr_resource_destroy(struct pipe_screen *p_screen, struct pipe_resource *pt)
       winsys->displaytarget_destroy(winsys, spr->display_target);
 
    } else {
-      /* For regular resources, if the resource is being used, defer deletion
-       * (use aligned-free) */
-      if (pipe && spr->status) {
-         swr_resource_unused(pt);
-         swr_fence_work_free(screen->flush_fence,
-                             spr->swr.pBaseAddress, true);
-         swr_fence_work_free(screen->flush_fence, 
-                             spr->secondary.pBaseAddress, true);
-      } else {
-         AlignedFree(spr->swr.pBaseAddress);
-         AlignedFree(spr->secondary.pBaseAddress);
-      }
+      /* For regular resources, defer deletion */
+      swr_resource_unused(pt);
+      swr_fence_work_free(screen->flush_fence, spr->swr.pBaseAddress, true);
+      swr_fence_work_free(screen->flush_fence,
+                          spr->secondary.pBaseAddress, true);
    }
 
    FREE(spr);

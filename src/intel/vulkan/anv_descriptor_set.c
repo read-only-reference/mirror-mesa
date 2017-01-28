@@ -217,7 +217,7 @@ sha1_update_descriptor_set_layout(struct mesa_sha1 *ctx,
 
 /*
  * Pipeline layouts.  These have nothing to do with the pipeline.  They are
- * just muttiple descriptor set layouts pasted together
+ * just multiple descriptor set layouts pasted together
  */
 
 VkResult anv_CreatePipelineLayout(
@@ -329,18 +329,18 @@ VkResult anv_CreateDescriptorPool(
       }
    }
 
-   const size_t size =
-      sizeof(*pool) +
+   const size_t pool_size =
       pCreateInfo->maxSets * sizeof(struct anv_descriptor_set) +
       descriptor_count * sizeof(struct anv_descriptor) +
       buffer_count * sizeof(struct anv_buffer_view);
+   const size_t total_size = sizeof(*pool) + pool_size;
 
-   pool = vk_alloc2(&device->alloc, pAllocator, size, 8,
+   pool = vk_alloc2(&device->alloc, pAllocator, total_size, 8,
                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (!pool)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   pool->size = size;
+   pool->size = pool_size;
    pool->next = 0;
    pool->free_list = EMPTY;
 
@@ -432,8 +432,13 @@ anv_descriptor_set_create(struct anv_device *device,
       }
    }
 
-   if (set == NULL)
-      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+   if (set == NULL) {
+      if (pool->free_list != EMPTY) {
+         return vk_error(VK_ERROR_FRAGMENTED_POOL);
+      } else {
+         return vk_error(VK_ERROR_OUT_OF_POOL_MEMORY_KHR);
+      }
+   }
 
    set->size = size;
    set->layout = layout;
@@ -587,8 +592,13 @@ void anv_UpdateDescriptorSets(
       switch (write->descriptorType) {
       case VK_DESCRIPTOR_TYPE_SAMPLER:
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
-            ANV_FROM_HANDLE(anv_sampler, sampler,
-                            write->pImageInfo[j].sampler);
+            /* If this descriptor has an immutable sampler, we don't want to
+             * stomp on it.
+             */
+            struct anv_sampler *sampler =
+               bind_layout->immutable_samplers ?
+               bind_layout->immutable_samplers[j] :
+               anv_sampler_from_handle(write->pImageInfo[j].sampler);
 
             desc[j] = (struct anv_descriptor) {
                .type = VK_DESCRIPTOR_TYPE_SAMPLER,
@@ -601,17 +611,19 @@ void anv_UpdateDescriptorSets(
          for (uint32_t j = 0; j < write->descriptorCount; j++) {
             ANV_FROM_HANDLE(anv_image_view, iview,
                             write->pImageInfo[j].imageView);
-            ANV_FROM_HANDLE(anv_sampler, sampler,
-                            write->pImageInfo[j].sampler);
-
-            desc[j].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            desc[j].image_view = iview;
-
-            /* If this descriptor has an immutable sampler, we don't want
-             * to stomp on it.
+            /* If this descriptor has an immutable sampler, we don't want to
+             * stomp on it.
              */
-            if (sampler)
-               desc[j].sampler = sampler;
+            struct anv_sampler *sampler =
+               bind_layout->immutable_samplers ?
+               bind_layout->immutable_samplers[j] :
+               anv_sampler_from_handle(write->pImageInfo[j].sampler);
+
+            desc[j] = (struct anv_descriptor) {
+               .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+               .image_view = iview,
+               .sampler = sampler,
+            };
          }
          break;
 

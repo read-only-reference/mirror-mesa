@@ -338,20 +338,6 @@ struct brw_program {
 };
 
 
-struct gen4_fragment_program {
-   struct brw_program base;
-
-   bool contains_flat_varying;
-   bool contains_noperspective_varying;
-
-   /*
-    * Mapping of varying slots to interpolation modes.
-    * Used Gen4/5 by the clip|sf|wm stages.
-    */
-   unsigned char interp_mode[BRW_VARYING_SLOT_COUNT];
-};
-
-
 /**
  * Bitmask indicating which fragment shader inputs represent varyings (and
  * hence have to be delivered to the fragment shader by the SF/SBE stage).
@@ -466,25 +452,6 @@ struct brw_ff_gs_prog_data {
  * different entries.
  */
 #define SHADER_TIME_STRIDE 64
-
-struct brw_cache_item {
-   /**
-    * Effectively part of the key, cache_id identifies what kind of state
-    * buffer is involved, and also which dirty flag should set.
-    */
-   enum brw_cache_id cache_id;
-   /** 32-bit hash of the key data */
-   GLuint hash;
-   GLuint key_size;		/* for variable-sized keys */
-   GLuint aux_size;
-   const void *key;
-
-   uint32_t offset;
-   uint32_t size;
-
-   struct brw_cache_item *next;
-};
-
 
 struct brw_cache {
    struct brw_context *brw;
@@ -831,11 +798,6 @@ struct brw_context
    bool use_resource_streamer;
 
    /**
-    * Whether LRI can be used to write register values from the batch buffer.
-    */
-   bool can_do_pipelined_register_writes;
-
-   /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
     * on unlit pixels, causing incorrect values for derivatives near triangle
     * edges.  Enabling this flag causes the fragment shader to use
@@ -1170,43 +1132,6 @@ struct brw_context
       bool supported;
    } predicate;
 
-   struct {
-      /** A map from pipeline statistics counter IDs to MMIO addresses. */
-      const int *statistics_registers;
-
-      /** The number of active monitors using OA counters. */
-      unsigned oa_users;
-
-      /**
-       * A buffer object storing OA counter snapshots taken at the start and
-       * end of each batch (creating "bookends" around the batch).
-       */
-      drm_intel_bo *bookend_bo;
-
-      /** The number of snapshots written to bookend_bo. */
-      int bookend_snapshots;
-
-      /**
-       * An array of monitors whose results haven't yet been assembled based on
-       * the data in buffer objects.
-       *
-       * These may be active, or have already ended.  However, the results
-       * have not been requested.
-       */
-      struct brw_perf_monitor_object **unresolved;
-      int unresolved_elements;
-      int unresolved_array_size;
-
-      /**
-       * Mapping from a uint32_t offset within an OA snapshot to the ID of
-       * the counter which MI_REPORT_PERF_COUNT stores there.
-       */
-      const int *oa_snapshot_layout;
-
-      /** Number of 32-bit entries in a hardware counter snapshot. */
-      int entries_per_oa_snapshot;
-   } perfmon;
-
    int num_atoms[BRW_NUM_PIPELINES];
    const struct brw_tracked_state render_atoms[76];
    const struct brw_tracked_state compute_atoms[11];
@@ -1278,11 +1203,6 @@ struct brw_context
    struct intel_screen *screen;
 };
 
-/*======================================================================
- * brw_vtbl.c
- */
-void brwInitVtbl( struct brw_context *brw );
-
 /* brw_clear.c */
 extern void intelInitClearFuncs(struct dd_function_table *functions);
 
@@ -1326,12 +1246,6 @@ brw_meta_resolve_color(struct brw_context *brw,
 /*======================================================================
  * brw_misc_state.c
  */
-void brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
-                                     uint32_t depth_level,
-                                     uint32_t depth_layer,
-                                     struct intel_mipmap_tree *stencil_mt,
-                                     uint32_t *out_tile_mask_x,
-                                     uint32_t *out_tile_mask_y);
 void brw_workaround_depthstencil_alignment(struct brw_context *brw,
                                            GLbitfield clear_mask);
 
@@ -1429,9 +1343,9 @@ void brw_alloc_stage_scratch(struct brw_context *brw,
                              unsigned thread_count);
 void brw_init_shader_time(struct brw_context *brw);
 int brw_get_shader_time_index(struct brw_context *brw,
-                              struct gl_shader_program *shader_prog,
                               struct gl_program *prog,
-                              enum shader_time_shader_type type);
+                              enum shader_time_shader_type type,
+                              bool is_glsl_sh);
 void brw_collect_and_report_shader_time(struct brw_context *brw);
 void brw_destroy_shader_time(struct brw_context *brw);
 
@@ -1503,8 +1417,7 @@ brw_update_sol_surface(struct brw_context *brw,
                        struct gl_buffer_object *buffer_obj,
                        uint32_t *out_offset, unsigned num_vector_components,
                        unsigned stride_dwords, unsigned offset_dwords);
-void brw_upload_ubo_surfaces(struct brw_context *brw,
-			     struct gl_linked_shader *shader,
+void brw_upload_ubo_surfaces(struct brw_context *brw, struct gl_program *prog,
                              struct brw_stage_state *stage_state,
                              struct brw_stage_prog_data *prog_data);
 void brw_upload_abo_surfaces(struct brw_context *brw,
@@ -1512,7 +1425,6 @@ void brw_upload_abo_surfaces(struct brw_context *brw,
                              struct brw_stage_state *stage_state,
                              struct brw_stage_prog_data *prog_data);
 void brw_upload_image_surfaces(struct brw_context *brw,
-                               struct gl_linked_shader *shader,
                                const struct gl_program *prog,
                                struct brw_stage_state *stage_state,
                                struct brw_stage_prog_data *prog_data);
@@ -1521,12 +1433,6 @@ void brw_upload_image_surfaces(struct brw_context *brw,
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
 uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
-
-/* brw_performance_monitor.c */
-void brw_init_performance_monitors(struct brw_context *brw);
-void brw_dump_perf_monitors(struct brw_context *brw);
-void brw_perf_monitor_new_batch(struct brw_context *brw);
-void brw_perf_monitor_finish_batch(struct brw_context *brw);
 
 /* intel_buffer_objects.c */
 int brw_bo_map(struct brw_context *brw, drm_intel_bo *bo, int write_enable,

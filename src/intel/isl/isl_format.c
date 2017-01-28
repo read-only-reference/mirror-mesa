@@ -97,7 +97,7 @@ static const struct surface_format_info format_info[] = {
    SF( x,  x,  x,  x,  x,  x,  Y,  x,  x,    x,   R32G32B32A32_SSCALED)
    SF( x,  x,  x,  x,  x,  x,  Y,  x,  x,    x,   R32G32B32A32_USCALED)
    SF( x,  x,  x,  x,  x,  x, 75,  x,  x,    x,   R32G32B32A32_SFIXED)
-   SF( x,  x,  x,  x,  x,  x,  x,  x,  x,    x,   R64G64_PASSTHRU)
+   SF( x,  x,  x,  x,  x,  x, 80,  x,  x,    x,   R64G64_PASSTHRU)
    SF( Y, 50,  x,  x,  x,  x,  Y,  Y,  x,    x,   R32G32B32_FLOAT)
    SF( Y,  x,  x,  x,  x,  x,  Y,  Y,  x,    x,   R32G32B32_SINT)
    SF( Y,  x,  x,  x,  x,  x,  Y,  Y,  x,    x,   R32G32B32_UINT)
@@ -131,7 +131,7 @@ static const struct surface_format_info format_info[] = {
    SF( x,  x,  x,  x,  x,  x,  Y,  x,  x,    x,   R32G32_SSCALED)
    SF( x,  x,  x,  x,  x,  x,  Y,  x,  x,    x,   R32G32_USCALED)
    SF( x,  x,  x,  x,  x,  x, 75,  x,  x,    x,   R32G32_SFIXED)
-   SF( x,  x,  x,  x,  x,  x,  x,  x,  x,    x,   R64_PASSTHRU)
+   SF( x,  x,  x,  x,  x,  x, 80,  x,  x,    x,   R64_PASSTHRU)
    SF( Y,  Y,  x,  Y,  Y,  Y,  Y,  x, 60,   90,   B8G8R8A8_UNORM)
    SF( Y,  Y,  x,  x,  Y,  Y,  x,  x,  x,    x,   B8G8R8A8_UNORM_SRGB)
 /* smpl filt shad CK  RT  AB  VB  SO  color ccs_e */
@@ -217,7 +217,10 @@ static const struct surface_format_info format_info[] = {
    SF(50, 50,  x,  x,  x,  x,  x,  x,  x,    x,   P8A8_UNORM_PALETTE0)
    SF(50, 50,  x,  x,  x,  x,  x,  x,  x,    x,   P8A8_UNORM_PALETTE1)
    SF( x,  x,  x,  x,  x,  x,  x,  x,  x,    x,   A1B5G5R5_UNORM)
-   SF(90, 90,  x,  x, 90,  x,  x,  x,  x,    x,   A4B4G4R4_UNORM)
+   /* According to the PRM, A4B4G4R4_UNORM isn't supported until Sky Lake
+    * but empirical testing indicates that it works just fine on Broadwell.
+    */
+   SF(80, 80,  x,  x, 80,  x,  x,  x,  x,    x,   A4B4G4R4_UNORM)
    SF(90,  x,  x,  x,  x,  x,  x,  x,  x,    x,   L8A8_UINT)
    SF(90,  x,  x,  x,  x,  x,  x,  x,  x,    x,   L8A8_SINT)
    SF( Y,  Y,  x, 45,  Y,  Y,  Y,  x,  x,    x,   R8_UNORM)

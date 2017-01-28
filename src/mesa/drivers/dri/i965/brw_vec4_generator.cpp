@@ -106,6 +106,7 @@ generate_math2_gen4(struct brw_codegen *p,
 static void
 generate_tex(struct brw_codegen *p,
              struct brw_vue_prog_data *prog_data,
+             gl_shader_stage stage,
              vec4_instruction *inst,
              struct brw_reg dst,
              struct brw_reg src,
@@ -238,8 +239,16 @@ generate_tex(struct brw_codegen *p,
              */
             dw2 |= GEN9_SAMPLER_SIMD_MODE_EXTENSION_SIMD4X2;
 
-         if (dw2)
+         /* The VS, DS, and FS stages have the g0.2 payload delivered as 0,
+          * so header0.2 is 0 when g0 is copied.  The HS and GS stages do
+          * not, so we must set to to 0 to avoid setting undesirable bits
+          * in the message header.
+          */
+         if (dw2 ||
+             stage == MESA_SHADER_TESS_CTRL ||
+             stage == MESA_SHADER_GEOMETRY) {
             brw_MOV(p, get_element_ud(header, 2), brw_imm_ud(dw2));
+         }
 
          brw_adjust_sampler_state_pointer(p, header, sampler_index);
          brw_pop_insn_state(p);
@@ -832,13 +841,15 @@ generate_tcs_input_urb_offsets(struct brw_codegen *p,
       struct brw_reg addr = brw_address_reg(0);
 
       /* bottom half: m0.0 = g[1.0 + vertex.0]UD */
-      brw_ADD(p, addr, get_element_ud(vertex, 0), brw_imm_uw(0x8));
-      brw_SHL(p, addr, addr, brw_imm_ud(2));
+      brw_ADD(p, addr, retype(get_element_ud(vertex, 0), BRW_REGISTER_TYPE_UW),
+              brw_imm_uw(0x8));
+      brw_SHL(p, addr, addr, brw_imm_uw(2));
       brw_MOV(p, get_element_ud(dst, 0), deref_1ud(brw_indirect(0, 0), 0));
 
       /* top half: m0.1 = g[1.0 + vertex.4]UD */
-      brw_ADD(p, addr, get_element_ud(vertex, 4), brw_imm_uw(0x8));
-      brw_SHL(p, addr, addr, brw_imm_ud(2));
+      brw_ADD(p, addr, retype(get_element_ud(vertex, 4), BRW_REGISTER_TYPE_UW),
+              brw_imm_uw(0x8));
+      brw_SHL(p, addr, addr, brw_imm_uw(2));
       brw_MOV(p, get_element_ud(dst, 1), deref_1ud(brw_indirect(0, 0), 0));
    }
 
@@ -1511,6 +1522,16 @@ generate_code(struct brw_codegen *p,
       brw_set_default_saturate(p, inst->saturate);
       brw_set_default_mask_control(p, inst->force_writemask_all);
       brw_set_default_acc_write_control(p, inst->writes_accumulator);
+      brw_set_default_exec_size(p, cvt(inst->exec_size) - 1);
+
+      assert(inst->group % inst->exec_size == 0);
+      assert(inst->group % 8 == 0 ||
+             inst->dst.type == BRW_REGISTER_TYPE_DF ||
+             inst->src[0].type == BRW_REGISTER_TYPE_DF ||
+             inst->src[1].type == BRW_REGISTER_TYPE_DF ||
+             inst->src[2].type == BRW_REGISTER_TYPE_DF);
+      if (!inst->force_writemask_all)
+         brw_set_default_group(p, inst->group);
 
       assert(inst->base_mrf + inst->mlen <= BRW_MAX_MRF(devinfo->gen));
       assert(inst->mlen <= BRW_MAX_MSG_LENGTH);
@@ -1738,7 +1759,8 @@ generate_code(struct brw_codegen *p,
       case SHADER_OPCODE_TG4:
       case SHADER_OPCODE_TG4_OFFSET:
       case SHADER_OPCODE_SAMPLEINFO:
-         generate_tex(p, prog_data, inst, dst, src[0], src[1], src[2]);
+         generate_tex(p, prog_data, nir->stage,
+                      inst, dst, src[0], src[1], src[2]);
          break;
 
       case VS_OPCODE_URB_WRITE:
@@ -1905,6 +1927,100 @@ generate_code(struct brw_codegen *p,
          src[0].width = BRW_WIDTH_1;
          src[0].hstride = BRW_HORIZONTAL_STRIDE_0;
          brw_MOV(p, dst, src[0]);
+         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         break;
+      }
+
+      case VEC4_OPCODE_FROM_DOUBLE: {
+         assert(type_sz(src[0].type) == 8);
+         assert(type_sz(dst.type) == 4);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_1);
+
+         dst.hstride = BRW_HORIZONTAL_STRIDE_2;
+         dst.width = BRW_WIDTH_4;
+         src[0].vstride = BRW_VERTICAL_STRIDE_4;
+         src[0].width = BRW_WIDTH_4;
+         brw_MOV(p, dst, src[0]);
+
+         struct brw_reg dst_as_src = dst;
+         dst.hstride = BRW_HORIZONTAL_STRIDE_1;
+         dst.width = BRW_WIDTH_8;
+         brw_MOV(p, dst, dst_as_src);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         break;
+      }
+
+      case VEC4_OPCODE_TO_DOUBLE: {
+         assert(type_sz(src[0].type) == 4);
+         assert(type_sz(dst.type) == 8);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_1);
+
+         struct brw_reg tmp = retype(dst, src[0].type);
+         tmp.hstride = BRW_HORIZONTAL_STRIDE_2;
+         tmp.width = BRW_WIDTH_4;
+         src[0].vstride = BRW_VERTICAL_STRIDE_4;
+         src[0].hstride = BRW_HORIZONTAL_STRIDE_1;
+         src[0].width = BRW_WIDTH_4;
+         brw_MOV(p, tmp, src[0]);
+
+         tmp.vstride = BRW_VERTICAL_STRIDE_8;
+         tmp.hstride = BRW_HORIZONTAL_STRIDE_2;
+         tmp.width = BRW_WIDTH_4;
+         brw_MOV(p, dst, tmp);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         break;
+      }
+
+      case VEC4_OPCODE_PICK_LOW_32BIT:
+      case VEC4_OPCODE_PICK_HIGH_32BIT: {
+         /* Stores the low/high 32-bit of each 64-bit element in src[0] into
+          * dst using ALIGN1 mode and a <8,4,2>:UD region on the source.
+          */
+         assert(type_sz(src[0].type) == 8);
+         assert(type_sz(dst.type) == 4);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_1);
+
+         dst = retype(dst, BRW_REGISTER_TYPE_UD);
+         dst.hstride = BRW_HORIZONTAL_STRIDE_1;
+
+         src[0] = retype(src[0], BRW_REGISTER_TYPE_UD);
+         if (inst->opcode == VEC4_OPCODE_PICK_HIGH_32BIT)
+            src[0] = suboffset(src[0], 1);
+         src[0].vstride = BRW_VERTICAL_STRIDE_8;
+         src[0].width = BRW_WIDTH_4;
+         src[0].hstride = BRW_HORIZONTAL_STRIDE_2;
+         brw_MOV(p, dst, src[0]);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         break;
+      }
+
+      case VEC4_OPCODE_SET_LOW_32BIT:
+      case VEC4_OPCODE_SET_HIGH_32BIT: {
+         /* Reads consecutive 32-bit elements from src[0] and writes
+          * them to the low/high 32-bit of each 64-bit element in dst.
+          */
+         assert(type_sz(src[0].type) == 4);
+         assert(type_sz(dst.type) == 8);
+
+         brw_set_default_access_mode(p, BRW_ALIGN_1);
+
+         dst = retype(dst, BRW_REGISTER_TYPE_UD);
+         if (inst->opcode == VEC4_OPCODE_SET_HIGH_32BIT)
+            dst = suboffset(dst, 1);
+         dst.hstride = BRW_HORIZONTAL_STRIDE_2;
+
+         src[0] = retype(src[0], BRW_REGISTER_TYPE_UD);
+         src[0].vstride = BRW_VERTICAL_STRIDE_4;
+         src[0].width = BRW_WIDTH_4;
+         src[0].hstride = BRW_HORIZONTAL_STRIDE_1;
+         brw_MOV(p, dst, src[0]);
+
          brw_set_default_access_mode(p, BRW_ALIGN_16);
          break;
       }

@@ -462,6 +462,8 @@ type_size_scalar(const struct glsl_type *type)
    case GLSL_TYPE_BOOL:
       return type->components();
    case GLSL_TYPE_DOUBLE:
+   case GLSL_TYPE_UINT64:
+   case GLSL_TYPE_INT64:
       return type->components() * 2;
    case GLSL_TYPE_ARRAY:
       return type_size_scalar(type->fields.array) * type->length;
@@ -490,19 +492,6 @@ type_size_scalar(const struct glsl_type *type)
    }
 
    return 0;
-}
-
-/* Attribute arrays are loaded as one vec4 per element (or matrix column),
- * except for double-precision types, which are loaded as one dvec4.
- */
-extern "C" int
-type_size_vs_input(const struct glsl_type *type)
-{
-   if (type->is_double()) {
-      return type_size_dvec4(type);
-   } else {
-      return type_size_vec4(type);
-   }
 }
 
 /**
@@ -5938,15 +5927,15 @@ fs_visitor::run_tcs_single_patch()
    }
 
    /* Fix the disptach mask */
-   if (nir->info->tcs.vertices_out % 8) {
+   if (nir->info->tess.tcs_vertices_out % 8) {
       bld.CMP(bld.null_reg_ud(), invocation_id,
-              brw_imm_ud(nir->info->tcs.vertices_out), BRW_CONDITIONAL_L);
+              brw_imm_ud(nir->info->tess.tcs_vertices_out), BRW_CONDITIONAL_L);
       bld.IF(BRW_PREDICATE_NORMAL);
    }
 
    emit_nir_code();
 
-   if (nir->info->tcs.vertices_out % 8) {
+   if (nir->info->tess.tcs_vertices_out % 8) {
       bld.emit(BRW_OPCODE_ENDIF);
    }
 
@@ -6395,10 +6384,17 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
                unsigned *final_assembly_size,
                char **error_str)
 {
+   const struct gen_device_info *devinfo = compiler->devinfo;
+
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, true);
-   brw_nir_lower_fs_inputs(shader, vue_map, prog, compiler->devinfo, key);
+   brw_nir_lower_fs_inputs(shader, devinfo, key);
    brw_nir_lower_fs_outputs(shader);
+
+   if (devinfo->gen < 6) {
+      brw_setup_vue_interpolation(vue_map, shader, prog_data, devinfo);
+   }
+
    if (!key->multisample_fbo)
       NIR_PASS_V(shader, demote_sample_qualifiers);
    NIR_PASS_V(shader, move_interpolation_to_top);

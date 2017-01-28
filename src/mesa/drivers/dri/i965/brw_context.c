@@ -274,13 +274,12 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
 
    /* Resolve color for each active shader image. */
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
-      const struct gl_linked_shader *shader =
-         ctx->_Shader->CurrentProgram[i] ?
-            ctx->_Shader->CurrentProgram[i]->_LinkedShaders[i] : NULL;
+      const struct gl_program *prog = ctx->_Shader->CurrentProgram[i];
 
-      if (unlikely(shader && shader->Program->info.num_images)) {
-         for (unsigned j = 0; j < shader->Program->info.num_images; j++) {
-            struct gl_image_unit *u = &ctx->ImageUnits[shader->ImageUnits[j]];
+      if (unlikely(prog && prog->info.num_images)) {
+         for (unsigned j = 0; j < prog->info.num_images; j++) {
+            struct gl_image_unit *u =
+               &ctx->ImageUnits[prog->sh.ImageUnits[j]];
             tex_obj = intel_texture_object(u->TexObj);
 
             if (tex_obj && tex_obj->mt) {
@@ -468,7 +467,7 @@ brw_init_driver_functions(struct brw_context *brw,
 
    functions->NewTransformFeedback = brw_new_transform_feedback;
    functions->DeleteTransformFeedback = brw_delete_transform_feedback;
-   if (brw->screen->has_mi_math_and_lrr) {
+   if (can_do_mi_math_and_lrr(brw->screen)) {
       functions->BeginTransformFeedback = hsw_begin_transform_feedback;
       functions->EndTransformFeedback = hsw_end_transform_feedback;
       functions->PauseTransformFeedback = hsw_pause_transform_feedback;
@@ -608,7 +607,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       BRW_MAX_SOL_BINDINGS / BRW_MAX_SOL_BUFFERS;
 
    ctx->Const.AlwaysUseGetTransformFeedbackVertexCount =
-      !brw->screen->has_mi_math_and_lrr;
+      !can_do_mi_math_and_lrr(brw->screen);
 
    int max_samples;
    const int *msaa_modes = intel_supported_msaa_modes(brw->screen);
@@ -672,7 +671,7 @@ brw_initialize_context_constants(struct brw_context *brw)
    if (brw->gen >= 5 || brw->is_g4x)
       ctx->Const.MaxClipPlanes = 8;
 
-   ctx->Const.LowerTessLevel = true;
+   ctx->Const.GLSLTessLevelsAsInputs = true;
    ctx->Const.LowerTCSPatchVerticesIn = brw->gen >= 8;
    ctx->Const.LowerTESPatchVerticesIn = true;
    ctx->Const.PrimitiveRestartForPatches = true;
@@ -794,8 +793,7 @@ brw_initialize_context_constants(struct brw_context *brw)
    }
 
    /* ARB_viewport_array, OES_viewport_array */
-   if ((brw->gen >= 6 && ctx->API == API_OPENGL_CORE) ||
-       (brw->gen >= 8  && ctx->API == API_OPENGLES2)) {
+   if (brw->gen >= 6) {
       ctx->Const.MaxViewports = GEN6_NUM_VIEWPORTS;
       ctx->Const.ViewportSubpixelBits = 0;
 
@@ -909,6 +907,9 @@ brw_process_driconf_options(struct brw_context *brw)
 
    ctx->Const.ForceGLSLExtensionsWarn =
       driQueryOptionb(options, "force_glsl_extensions_warn");
+
+   ctx->Const.ForceGLSLVersion =
+      driQueryOptioni(options, "force_glsl_version");
 
    ctx->Const.DisableGLSLLineContinuations =
       driQueryOptionb(options, "disable_glsl_line_continuations");
@@ -1060,7 +1061,7 @@ brwCreateContext(gl_api api,
 
    intel_fbo_init(brw);
 
-   intel_batchbuffer_init(brw);
+   intel_batchbuffer_init(&brw->batch, brw->bufmgr, brw->has_llc);
 
    if (brw->gen >= 6) {
       /* Create a new hardware context.  Using a hardware context means that
@@ -1136,10 +1137,6 @@ brwCreateContext(gl_api api,
    _mesa_initialize_dispatch_tables(ctx);
    _mesa_initialize_vbo_vtxfmt(ctx);
 
-   if (ctx->Extensions.AMD_performance_monitor) {
-      brw_init_performance_monitors(brw);
-   }
-
    vbo_use_buffer_objects(ctx);
    vbo_always_unmap_buffers(ctx);
 
@@ -1203,7 +1200,7 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       _swrast_DestroyContext(&brw->ctx);
 
    brw_fini_pipe_control(brw);
-   intel_batchbuffer_free(brw);
+   intel_batchbuffer_free(&brw->batch);
 
    drm_intel_bo_unreference(brw->throttle_batch[1]);
    drm_intel_bo_unreference(brw->throttle_batch[0]);

@@ -532,6 +532,12 @@ type_size(const struct glsl_type *type)
             return 1;
       }
       break;
+   case GLSL_TYPE_UINT64:
+   case GLSL_TYPE_INT64:
+      if (type->vector_elements > 2)
+         return 2;
+      else
+         return 1;
    case GLSL_TYPE_ARRAY:
       assert(type->length > 0);
       return type_size(type->fields.array) * type->length;
@@ -1354,13 +1360,20 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       emit(ir, OPCODE_LRP, result_dst, op[2], op[1], op[0]);
       break;
 
+   case ir_triop_csel:
+      /* We assume that boolean true and false are 1.0 and 0.0.  OPCODE_CMP
+       * selects src1 if src0 is < 0, src2 otherwise.
+       */
+      op[0].negate = ~op[0].negate;
+      emit(ir, OPCODE_CMP, result_dst, op[0], op[1], op[2]);
+      break;
+
    case ir_binop_vector_extract:
    case ir_triop_fma:
    case ir_triop_bitfield_extract:
    case ir_triop_vector_insert:
    case ir_quadop_bitfield_insert:
    case ir_binop_ldexp:
-   case ir_triop_csel:
    case ir_binop_carry:
    case ir_binop_borrow:
    case ir_binop_imul_high:
@@ -1376,6 +1389,34 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
    case ir_unop_vote_any:
    case ir_unop_vote_all:
    case ir_unop_vote_eq:
+   case ir_unop_bitcast_u642d:
+   case ir_unop_bitcast_i642d:
+   case ir_unop_bitcast_d2u64:
+   case ir_unop_bitcast_d2i64:
+   case ir_unop_i642i:
+   case ir_unop_u642i:
+   case ir_unop_i642u:
+   case ir_unop_u642u:
+   case ir_unop_i642b:
+   case ir_unop_i642f:
+   case ir_unop_u642f:
+   case ir_unop_i642d:
+   case ir_unop_u642d:
+   case ir_unop_i2i64:
+   case ir_unop_u2i64:
+   case ir_unop_b2i64:
+   case ir_unop_f2i64:
+   case ir_unop_d2i64:
+   case ir_unop_i2u64:
+   case ir_unop_u2u64:
+   case ir_unop_f2u64:
+   case ir_unop_d2u64:
+   case ir_unop_u642i64:
+   case ir_unop_i642u64:
+   case ir_unop_pack_int_2x32:
+   case ir_unop_unpack_int_2x32:
+   case ir_unop_pack_uint_2x32:
+   case ir_unop_unpack_uint_2x32:
       assert(!"not supported");
       break;
 
@@ -2522,11 +2563,19 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
 	 unsigned columns = 0;
 	 int dmul = 4 * sizeof(float);
 	 switch (storage->type->base_type) {
+         case GLSL_TYPE_UINT64:
+	    if (storage->type->vector_elements > 2)
+               dmul *= 2;
+	    /* fallthrough */
 	 case GLSL_TYPE_UINT:
 	    assert(ctx->Const.NativeIntegers);
 	    format = uniform_native;
 	    columns = 1;
 	    break;
+         case GLSL_TYPE_INT64:
+	    if (storage->type->vector_elements > 2)
+               dmul *= 2;
+	    /* fallthrough */
 	 case GLSL_TYPE_INT:
 	    format =
 	       (ctx->Const.NativeIntegers) ? uniform_native : uniform_int_float;
@@ -2917,9 +2966,8 @@ get_mesa_program(struct gl_context *ctx,
 
    do_set_program_inouts(shader->ir, prog, shader->Stage);
 
-   prog->SamplersUsed = shader->active_samplers;
    prog->ShadowSamplers = shader->shadow_samplers;
-   prog->ExternalSamplersUsed = gl_external_samplers(shader);
+   prog->ExternalSamplersUsed = gl_external_samplers(prog);
    _mesa_update_shader_textures_used(shader_program, prog);
 
    /* Set the gl_FragDepth layout. */
@@ -2978,8 +3026,6 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 	 lower_instructions(ir, (MOD_TO_FLOOR | DIV_TO_MUL_RCP | EXP_TO_EXP2
 				 | LOG_TO_LOG2 | INT_DIV_TO_MUL_RCP
 				 | ((options->EmitNoPow) ? POW_TO_EXP2 : 0)));
-
-	 progress = do_lower_jumps(ir, true, true, options->EmitNoMainReturn, options->EmitNoCont, options->EmitNoLoops) || progress;
 
 	 progress = do_common_optimization(ir, true, true,
                                            options, ctx->Const.NativeIntegers)

@@ -412,6 +412,9 @@ struct brw_wm_prog_data {
    bool has_side_effects;
    bool pulls_bary;
 
+   bool contains_flat_varying;
+   bool contains_noperspective_varying;
+
    /**
     * Mask of which interpolation modes are required by the fragment shader.
     * Used in hardware setup on gen6+.
@@ -423,6 +426,11 @@ struct brw_wm_prog_data {
     * needed for setting up 3DSTATE_SF/SBE.
     */
    uint32_t flat_inputs;
+
+   /* Mapping of VUE slots to interpolation modes.
+    * Used by the Gen4-5 clip/sf/wm stages.
+    */
+   unsigned char interp_mode[65]; /* BRW_VARYING_SLOT_COUNT */
 
    /**
     * Map from gl_varying_slot to the position within the FS setup data
@@ -580,7 +588,7 @@ void brw_compute_tess_vue_map(struct brw_vue_map *const vue_map,
 /* brw_interpolation_map.c */
 void brw_setup_vue_interpolation(struct brw_vue_map *vue_map,
                                  struct nir_shader *nir,
-                                 struct gl_program *prog,
+                                 struct brw_wm_prog_data *prog_data,
                                  const struct gen_device_info *devinfo);
 
 enum shader_dispatch_mode {
@@ -711,11 +719,6 @@ struct brw_gs_prog_data
    int invocations;
 
    /**
-    * Gen6 transform feedback enabled flag.
-    */
-   bool gen6_xfb_enabled;
-
-   /**
     * Gen6: Provoking vertex convention for odd-numbered triangles
     * in tristrips.
     */
@@ -806,9 +809,10 @@ const unsigned *
 brw_compile_tes(const struct brw_compiler *compiler, void *log_data,
                 void *mem_ctx,
                 const struct brw_tes_prog_key *key,
+                const struct brw_vue_map *input_vue_map,
                 struct brw_tes_prog_data *prog_data,
                 const struct nir_shader *shader,
-                struct gl_shader_program *shader_prog,
+                struct gl_program *prog,
                 int shader_time_index,
                 unsigned *final_assembly_size,
                 char **error_str);
@@ -824,7 +828,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                const struct brw_gs_prog_key *key,
                struct brw_gs_prog_data *prog_data,
                const struct nir_shader *shader,
-               struct gl_shader_program *shader_prog,
+               struct gl_program *prog,
                int shader_time_index,
                unsigned *final_assembly_size,
                char **error_str);

@@ -236,12 +236,33 @@ enum {
 /* For VS shader key fix_fetch. */
 enum {
 	SI_FIX_FETCH_NONE = 0,
-	SI_FIX_FETCH_A2_SNORM = 1,
-	SI_FIX_FETCH_A2_SSCALED = 2,
-	SI_FIX_FETCH_A2_SINT = 3,
+	SI_FIX_FETCH_A2_SNORM,
+	SI_FIX_FETCH_A2_SSCALED,
+	SI_FIX_FETCH_A2_SINT,
+	SI_FIX_FETCH_RGBA_32_UNORM,
+	SI_FIX_FETCH_RGBX_32_UNORM,
+	SI_FIX_FETCH_RGBA_32_SNORM,
+	SI_FIX_FETCH_RGBX_32_SNORM,
+	SI_FIX_FETCH_RGBA_32_USCALED,
+	SI_FIX_FETCH_RGBA_32_SSCALED,
+	SI_FIX_FETCH_RGBA_32_FIXED,
+	SI_FIX_FETCH_RGBX_32_FIXED,
 };
 
 struct si_shader;
+
+/* State of the context creating the shader object. */
+struct si_compiler_ctx_state {
+	/* Should only be used by si_init_shader_selector_async and
+	 * si_build_shader_variant if thread_index == -1 (non-threaded). */
+	LLVMTargetMachineRef		tm;
+
+	/* Used if thread_index == -1 or if debug.async is true. */
+	struct pipe_debug_callback	debug;
+
+	/* Used for creating the log string for gallium/ddebug. */
+	bool				is_debug_context;
+};
 
 /* A shader selector is a gallium CSO and contains shader variants and
  * binaries for one TGSI program. This can be shared by multiple contexts.
@@ -249,12 +270,7 @@ struct si_shader;
 struct si_shader_selector {
 	struct si_screen	*screen;
 	struct util_queue_fence ready;
-
-	/* Should only be used by si_init_shader_selector_async
-	 * if thread_index == -1 (non-threaded). */
-	LLVMTargetMachineRef	tm;
-	struct pipe_debug_callback debug;
-	bool			is_debug_context;
+	struct si_compiler_ctx_state compiler_ctx_state;
 
 	pipe_mutex		mutex;
 	struct si_shader	*first_variant; /* immutable after the first variant */
@@ -425,8 +441,8 @@ struct si_shader_key {
 	/* Flags for monolithic compilation only. */
 	union {
 		struct {
-			/* One pair of bits for every input: SI_FIX_FETCH_* enums. */
-			uint32_t	fix_fetch;
+			/* One nibble for every input: SI_FIX_FETCH_* enums. */
+			uint64_t	fix_fetch;
 		} vs;
 		struct {
 			uint64_t	inputs_to_copy; /* for fixed-func TCS */
@@ -482,6 +498,8 @@ struct si_shader_info {
 };
 
 struct si_shader {
+	struct si_compiler_ctx_state	compiler_ctx_state;
+
 	struct si_shader_selector	*selector;
 	struct si_shader		*next_variant;
 
@@ -546,7 +564,7 @@ unsigned si_shader_io_get_unique_index2(unsigned name, unsigned index);
 int si_shader_binary_upload(struct si_screen *sscreen, struct si_shader *shader);
 void si_shader_dump(struct si_screen *sscreen, struct si_shader *shader,
 		    struct pipe_debug_callback *debug, unsigned processor,
-		    FILE *f);
+		    FILE *f, bool check_debug_option);
 void si_multiwave_lds_size_workaround(struct si_screen *sscreen,
 				      unsigned *lds_size);
 void si_shader_apply_scratch_relocs(struct si_context *sctx,

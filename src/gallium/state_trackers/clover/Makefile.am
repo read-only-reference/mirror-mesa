@@ -2,13 +2,12 @@ include Makefile.sources
 
 AM_CPPFLAGS = \
 	-I$(top_srcdir)/include \
+	-I$(top_builddir)/src \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/gallium/include \
 	-I$(top_srcdir)/src/gallium/drivers \
 	-I$(top_srcdir)/src/gallium/auxiliary \
-	-I$(top_srcdir)/src/gallium/winsys \
-	-I$(top_builddir)/src \
-	-I$(srcdir)
+	-I$(top_srcdir)/src/gallium/winsys
 
 if HAVE_CLOVER_ICD
 AM_CPPFLAGS += -DHAVE_CLOVER_ICD

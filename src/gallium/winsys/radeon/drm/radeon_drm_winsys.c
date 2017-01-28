@@ -372,6 +372,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
     }
     ws->info.gart_size = gem_info.gart_size;
     ws->info.vram_size = gem_info.vram_size;
+    ws->info.vram_vis_size = MIN2(gem_info.vram_visible, 256*1024*1024);
 
     /* Radeon allocates all buffers as contigous, which makes large allocations
      * unlikely to succeed. */
@@ -384,6 +385,9 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
                          &ws->info.max_shader_clock);
     ws->info.max_shader_clock /= 1000;
 
+    /* Default value. */
+    ws->info.enabled_rb_mask = u_bit_consecutive(0, ws->info.num_render_backends);
+    /* This fails on non-GCN or older kernels: */
     radeon_get_drm_value(ws->fd, RADEON_INFO_SI_BACKEND_ENABLED_MASK, NULL,
                          &ws->info.enabled_rb_mask);
 
@@ -614,6 +618,8 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
        return ws->mapped_gtt;
     case RADEON_BUFFER_WAIT_TIME_NS:
         return ws->buffer_wait_time;
+    case RADEON_NUM_MAPPED_BUFFERS:
+        return ws->num_mapped_buffers;
     case RADEON_TIMESTAMP:
         if (ws->info.drm_minor < 20 || ws->gen < DRV_R600) {
             assert(0);
@@ -623,13 +629,16 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
         radeon_get_drm_value(ws->fd, RADEON_INFO_TIMESTAMP, "timestamp",
                              (uint32_t*)&retval);
         return retval;
-    case RADEON_NUM_CS_FLUSHES:
-        return ws->num_cs_flushes;
+    case RADEON_NUM_GFX_IBS:
+        return ws->num_gfx_IBs;
+    case RADEON_NUM_SDMA_IBS:
+        return ws->num_sdma_IBs;
     case RADEON_NUM_BYTES_MOVED:
         radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_BYTES_MOVED,
                              "num-bytes-moved", (uint32_t*)&retval);
         return retval;
     case RADEON_NUM_EVICTIONS:
+    case RADEON_VRAM_VIS_USAGE:
         return 0; /* unimplemented */
     case RADEON_VRAM_USAGE:
         radeon_get_drm_value(ws->fd, RADEON_INFO_VRAM_USAGE,

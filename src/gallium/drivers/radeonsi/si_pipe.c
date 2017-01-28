@@ -33,7 +33,7 @@
 #include "../ddebug/dd_util.h"
 
 #define SI_LLVM_DEFAULT_FEATURES \
-	"+DumpCode,+vgpr-spilling,-fp32-denormals,+fp64-denormals,-xnack"
+	"+DumpCode,+vgpr-spilling,-fp32-denormals,-xnack"
 
 /*
  * pipe_context
@@ -234,6 +234,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	si_init_all_descriptors(sctx);
 	si_init_state_functions(sctx);
 	si_init_shader_functions(sctx);
+	si_init_ia_multi_vgt_param_table(sctx);
 
 	if (sctx->b.chip_class >= CIK)
 		cik_init_sdma_functions(sctx);
@@ -252,7 +253,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	/* these must be last */
 	si_begin_new_cs(sctx);
-	r600_query_init_backend_mask(&sctx->b); /* this emits commands and must be last */
 
 	/* CIK cannot unbind a constant buffer (S_BUFFER_LOAD doesn't skip loads
 	 * if NUM_RECORDS == 0). We need to use a dummy buffer instead. */
@@ -413,6 +413,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_CULL_DISTANCE:
 	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
+	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
+	case PIPE_CAP_INT64:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -463,6 +465,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 	case PIPE_CAP_NATIVE_FENCE_FD:
+	case PIPE_CAP_TGSI_FS_FBFETCH:
+	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 		return 0;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:

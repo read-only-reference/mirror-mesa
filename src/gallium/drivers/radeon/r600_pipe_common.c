@@ -43,6 +43,10 @@
 #define HAVE_LLVM 0
 #endif
 
+#ifndef MESA_LLVM_VERSION_PATCH
+#define MESA_LLVM_VERSION_PATCH 0
+#endif
+
 struct r600_multi_fence {
 	struct pipe_reference reference;
 	struct pipe_fence_handle *gfx;
@@ -220,10 +224,26 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	pipe_resource_reference(&buf, NULL);
 }
 
+static void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
+{
+	struct radeon_winsys_cs *cs = rctx->dma.cs;
+
+	/* NOP waits for idle on Evergreen and later. */
+	if (rctx->chip_class >= CIK)
+		radeon_emit(cs, 0x00000000); /* NOP */
+	else if (rctx->chip_class >= EVERGREEN)
+		radeon_emit(cs, 0xf0000000); /* NOP */
+	else {
+		/* TODO: R600-R700 should use the FENCE packet.
+		 * CS checker support is required. */
+	}
+}
+
 void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
                          struct r600_resource *dst, struct r600_resource *src)
 {
-	uint64_t vram = 0, gtt = 0;
+	uint64_t vram = ctx->dma.cs->used_vram;
+	uint64_t gtt = ctx->dma.cs->used_gart;
 
 	if (dst) {
 		vram += dst->vram_usage;
@@ -246,12 +266,34 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 
 	/* Flush if there's not enough space, or if the memory usage per IB
 	 * is too large.
+	 *
+	 * IBs using too little memory are limited by the IB submission overhead.
+	 * IBs using too much memory are limited by the kernel/TTM overhead.
+	 * Too long IBs create CPU-GPU pipeline bubbles and add latency.
+	 *
+	 * This heuristic makes sure that DMA requests are executed
+	 * very soon after the call is made and lowers memory usage.
+	 * It improves texture upload performance by keeping the DMA
+	 * engine busy while uploads are being submitted.
 	 */
+	num_dw++; /* for emit_wait_idle below */
 	if (!ctx->ws->cs_check_space(ctx->dma.cs, num_dw) ||
+	    ctx->dma.cs->used_vram + ctx->dma.cs->used_gart > 64 * 1024 * 1024 ||
 	    !radeon_cs_memory_below_limit(ctx->screen, ctx->dma.cs, vram, gtt)) {
 		ctx->dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
 		assert((num_dw + ctx->dma.cs->current.cdw) <= ctx->dma.cs->current.max_dw);
 	}
+
+	/* Wait for idle if either buffer has been used in the IB before to
+	 * prevent read-after-write hazards.
+	 */
+	if ((dst &&
+	     ctx->ws->cs_is_buffer_referenced(ctx->dma.cs, dst->buf,
+					      RADEON_USAGE_READWRITE)) ||
+	    (src &&
+	     ctx->ws->cs_is_buffer_referenced(ctx->dma.cs, src->buf,
+					      RADEON_USAGE_WRITE)))
+		r600_dma_emit_wait_idle(ctx);
 
 	/* If GPUVM is not supported, the CS checker needs 2 entries
 	 * in the buffer list per packet, which has to be done manually.
@@ -266,44 +308,9 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 						  RADEON_USAGE_READ,
 						  RADEON_PRIO_SDMA_BUFFER);
 	}
-}
 
-/* This is required to prevent read-after-write hazards. */
-void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
-{
-	struct radeon_winsys_cs *cs = rctx->dma.cs;
-
-	/* done at the end of DMA calls, so increment this. */
-	rctx->num_dma_calls++;
-
-	/* IBs using too little memory are limited by the IB submission overhead.
-	 * IBs using too much memory are limited by the kernel/TTM overhead.
-	 * Too long IBs create CPU-GPU pipeline bubbles and add latency.
-	 *
-	 * This heuristic makes sure that DMA requests are executed
-	 * very soon after the call is made and lowers memory usage.
-	 * It improves texture upload performance by keeping the DMA
-	 * engine busy while uploads are being submitted.
-	 */
-	if (cs->used_vram + cs->used_gart > 64 * 1024 * 1024) {
-		rctx->dma.flush(rctx, RADEON_FLUSH_ASYNC, NULL);
-		return;
-	}
-
-	r600_need_dma_space(rctx, 1, NULL, NULL);
-
-	if (!radeon_emitted(cs, 0)) /* empty queue */
-		return;
-
-	/* NOP waits for idle on Evergreen and later. */
-	if (rctx->chip_class >= CIK)
-		radeon_emit(cs, 0x00000000); /* NOP */
-	else if (rctx->chip_class >= EVERGREEN)
-		radeon_emit(cs, 0xf0000000); /* NOP */
-	else {
-		/* TODO: R600-R700 should use the FENCE packet.
-		 * CS checker support is required. */
-	}
+	/* this function is called before all DMA calls, so increment this. */
+	ctx->num_dma_calls++;
 }
 
 static void r600_memory_barrier(struct pipe_context *ctx, unsigned flags)
@@ -352,9 +359,9 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 	if (flags & PIPE_FLUSH_DEFERRED)
 		rflags |= RADEON_FLUSH_ASYNC;
 
-	if (rctx->dma.cs) {
+	/* DMA IBs are preambles to gfx IBs, therefore must be flushed first. */
+	if (rctx->dma.cs)
 		rctx->dma.flush(rctx, rflags, fence ? &sdma_fence : NULL);
-	}
 
 	if (!radeon_emitted(rctx->gfx.cs, rctx->initial_gfx_cs_size)) {
 		if (fence)
@@ -533,6 +540,16 @@ bool r600_check_device_reset(struct r600_common_context *rctx)
 	return true;
 }
 
+static void r600_dma_clear_buffer_fallback(struct pipe_context *ctx,
+					   struct pipe_resource *dst,
+					   uint64_t offset, uint64_t size,
+					   unsigned value)
+{
+	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
+
+	rctx->clear_buffer(ctx, dst, offset, size, value, R600_COHERENCY_NONE);
+}
+
 bool r600_common_context_init(struct r600_common_context *rctx,
 			      struct r600_common_screen *rscreen,
 			      unsigned context_flags)
@@ -544,13 +561,6 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->family = rscreen->family;
 	rctx->chip_class = rscreen->chip_class;
 
-	if (rscreen->chip_class >= CIK)
-		rctx->max_db = MAX2(8, rscreen->info.num_render_backends);
-	else if (rscreen->chip_class >= EVERGREEN)
-		rctx->max_db = 8;
-	else
-		rctx->max_db = 4;
-
 	rctx->b.invalidate_resource = r600_invalidate_resource;
 	rctx->b.transfer_map = u_transfer_map_vtbl;
 	rctx->b.transfer_flush_region = u_transfer_flush_region_vtbl;
@@ -559,6 +569,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->b.memory_barrier = r600_memory_barrier;
 	rctx->b.flush = r600_flush_from_st;
 	rctx->b.set_debug_callback = r600_set_debug_callback;
+	rctx->dma_clear_buffer = r600_dma_clear_buffer_fallback;
 
 	/* evergreen_compute.c has a special codepath for global buffers.
 	 * Everything else can use the direct path.
@@ -880,23 +891,17 @@ const char *r600_get_llvm_processor_name(enum radeon_family family)
 	case CHIP_TONGA: return "tonga";
 	case CHIP_ICELAND: return "iceland";
 	case CHIP_CARRIZO: return "carrizo";
-#if HAVE_LLVM <= 0x0307
-	case CHIP_FIJI: return "tonga";
-	case CHIP_STONEY: return "carrizo";
-#else
-	case CHIP_FIJI: return "fiji";
-	case CHIP_STONEY: return "stoney";
-#endif
-#if HAVE_LLVM <= 0x0308
-	case CHIP_POLARIS10: return "tonga";
-	case CHIP_POLARIS11: return "tonga";
-	case CHIP_POLARIS12: return "tonga";
-#else
-	case CHIP_POLARIS10: return "polaris10";
-	case CHIP_POLARIS11: return "polaris11";
-	case CHIP_POLARIS12: return "polaris11";
-#endif
-	default: return "";
+	case CHIP_FIJI:
+		return HAVE_LLVM >= 0x0308 ? "fiji" : "carrizo";
+	case CHIP_STONEY:
+		return HAVE_LLVM >= 0x0308 ? "stoney" : "carrizo";
+	case CHIP_POLARIS10:
+		return HAVE_LLVM >= 0x0309 ? "polaris10" : "carrizo";
+	case CHIP_POLARIS11:
+	case CHIP_POLARIS12: /* same as polaris11 */
+		return HAVE_LLVM >= 0x0309 ? "polaris11" : "carrizo";
+	default:
+		return "";
 	}
 }
 
@@ -1207,11 +1212,11 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		snprintf(kernel_version, sizeof(kernel_version),
 			 " / %s", uname_data.release);
 
-#if HAVE_LLVM
-	snprintf(llvm_string, sizeof(llvm_string),
-		 ", LLVM %i.%i.%i", (HAVE_LLVM >> 8) & 0xff,
-		 HAVE_LLVM & 0xff, MESA_LLVM_VERSION_PATCH);
-#endif
+	if (HAVE_LLVM > 0) {
+		snprintf(llvm_string, sizeof(llvm_string),
+			 ", LLVM %i.%i.%i", (HAVE_LLVM >> 8) & 0xff,
+			 HAVE_LLVM & 0xff, MESA_LLVM_VERSION_PATCH);
+	}
 
 	snprintf(rscreen->renderer_string, sizeof(rscreen->renderer_string),
 		 "%s (DRM %i.%i.%i%s%s)",
@@ -1267,6 +1272,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		printf("chip_class = %i\n", rscreen->info.chip_class);
 		printf("gart_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.gart_size, 1024*1024));
 		printf("vram_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_size, 1024*1024));
+		printf("vram_vis_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_vis_size, 1024*1024));
 		printf("max_alloc_size = %i MB\n",
 		       (int)DIV_ROUND_UP(rscreen->info.max_alloc_size, 1024*1024));
 		printf("has_virtual_memory = %i\n", rscreen->info.has_virtual_memory);
@@ -1295,6 +1301,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		printf("num_render_backends = %i\n", rscreen->info.num_render_backends);
 		printf("num_tile_pipes = %i\n", rscreen->info.num_tile_pipes);
 		printf("pipe_interleave_bytes = %i\n", rscreen->info.pipe_interleave_bytes);
+		printf("enabled_rb_mask = 0x%x\n", rscreen->info.enabled_rb_mask);
 	}
 	return true;
 }
@@ -1342,13 +1349,12 @@ bool r600_extra_shader_checks(struct r600_common_screen *rscreen, unsigned proce
 }
 
 void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_resource *dst,
-			      uint64_t offset, uint64_t size, unsigned value,
-			      enum r600_coherency coher)
+			      uint64_t offset, uint64_t size, unsigned value)
 {
 	struct r600_common_context *rctx = (struct r600_common_context*)rscreen->aux_context;
 
 	pipe_mutex_lock(rscreen->aux_context_lock);
-	rctx->clear_buffer(&rctx->b, dst, offset, size, value, coher);
+	rctx->dma_clear_buffer(&rctx->b, dst, offset, size, value);
 	rscreen->aux_context->flush(rscreen->aux_context, NULL, 0);
 	pipe_mutex_unlock(rscreen->aux_context_lock);
 }
