@@ -25,7 +25,6 @@
 #include "tgsi/tgsi_parse.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
-#include "radeon/radeon_elf_util.h"
 
 #include "amd_kernel_code_t.h"
 #include "radeon/r600_cs.h"
@@ -160,7 +159,7 @@ static void *si_create_compute_state(
 		header = cso->prog;
 		code = cso->prog + sizeof(struct pipe_llvm_program_header);
 
-		radeon_elf_read(code, header->num_bytes, &program->shader.binary);
+		ac_elf_read(code, header->num_bytes, &program->shader.binary);
 		if (program->use_code_object_v2) {
 			const amd_kernel_code_t *code_object =
 				si_compute_get_code_object(program, 0);
@@ -289,8 +288,10 @@ static bool si_setup_compute_scratch_buffer(struct si_context *sctx,
 		r600_resource_reference(&sctx->compute_scratch_buffer, NULL);
 
 		sctx->compute_scratch_buffer = (struct r600_resource*)
-			pipe_buffer_create(&sctx->screen->b.b, 0,
-					   PIPE_USAGE_DEFAULT, scratch_needed);
+			r600_aligned_buffer_create(&sctx->screen->b.b,
+						   R600_RESOURCE_FLAG_UNMAPPABLE,
+						   PIPE_USAGE_DEFAULT,
+						   scratch_needed, 256);
 
 		if (!sctx->compute_scratch_buffer)
 			return false;
@@ -503,9 +504,9 @@ static void si_setup_user_sgprs_co_v2(struct si_context *sctx,
 
 		dispatch.kernarg_address = kernel_args_va;
 
-		u_upload_data(sctx->b.uploader, 0, sizeof(dispatch), 256,
-				&dispatch, &dispatch_offset,
-				(struct pipe_resource**)&dispatch_buf);
+		u_upload_data(sctx->b.b.const_uploader, 0, sizeof(dispatch),
+                              256, &dispatch, &dispatch_offset,
+                              (struct pipe_resource**)&dispatch_buf);
 
 		if (!dispatch_buf) {
 			fprintf(stderr, "Error: Failed to allocate dispatch "
@@ -565,7 +566,8 @@ static void si_upload_compute_input(struct si_context *sctx,
 	/* The extra num_work_size_bytes are for work group / work item size information */
 	kernel_args_size = program->input_size + num_work_size_bytes;
 
-	u_upload_alloc(sctx->b.uploader, 0, kernel_args_size, 256,
+	u_upload_alloc(sctx->b.b.const_uploader, 0, kernel_args_size,
+		       sctx->screen->b.info.tcc_cache_line_size,
 		       &kernel_args_offset,
 		       (struct pipe_resource**)&input_buffer, &kernel_args_ptr);
 

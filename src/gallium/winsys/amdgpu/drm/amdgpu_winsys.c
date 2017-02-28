@@ -331,8 +331,10 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    ws->info.gart_size = gtt.heap_size;
    ws->info.vram_size = vram.heap_size;
    ws->info.vram_vis_size = vram_vis.heap_size;
-   /* The kernel can split large buffers, so we can do large allocations. */
-   ws->info.max_alloc_size = MAX2(ws->info.vram_size, ws->info.gart_size) * 0.9;
+   /* The kernel can split large buffers in VRAM but not in GTT, so large
+    * allocations can fail or cause buffer movement failures in the kernel.
+    */
+   ws->info.max_alloc_size = MIN2(ws->info.vram_size * 0.9, ws->info.gart_size * 0.7);
    /* convert the shader clock from KHz to MHz */
    ws->info.max_shader_clock = ws->amdinfo.max_engine_clk / 1000;
    ws->info.max_se = ws->amdinfo.num_shader_engines;
@@ -345,6 +347,7 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    ws->info.has_userptr = true;
    ws->info.num_render_backends = ws->amdinfo.rb_pipes;
    ws->info.clock_crystal_freq = ws->amdinfo.gpu_counter_freq;
+   ws->info.tcc_cache_line_size = 64; /* TC L2 line size on GCN */
    ws->info.num_tile_pipes = cik_get_num_tile_pipes(&ws->amdinfo);
    ws->info.pipe_interleave_bytes = 256 << ((ws->amdinfo.gb_addr_cfg >> 4) & 0x7);
    ws->info.has_virtual_memory = true;
@@ -465,6 +468,8 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
    case RADEON_GPU_RESET_COUNTER:
       assert(0);
       return 0;
+   case RADEON_CS_THREAD_TIME:
+      return util_queue_get_thread_time_nano(&ws->cs_queue, 0);
    }
    return 0;
 }

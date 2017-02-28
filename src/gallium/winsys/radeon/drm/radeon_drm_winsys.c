@@ -46,23 +46,6 @@
 #include <fcntl.h>
 #include <radeon_surface.h>
 
-#ifndef RADEON_INFO_ACTIVE_CU_COUNT
-#define RADEON_INFO_ACTIVE_CU_COUNT 0x20
-#endif
-
-#ifndef RADEON_INFO_CURRENT_GPU_TEMP
-#define RADEON_INFO_CURRENT_GPU_TEMP	0x21
-#define RADEON_INFO_CURRENT_GPU_SCLK	0x22
-#define RADEON_INFO_CURRENT_GPU_MCLK	0x23
-#define RADEON_INFO_READ_REG		0x24
-#endif
-
-#define RADEON_INFO_VA_UNMAP_WORKING	0x25
-
-#ifndef RADEON_INFO_GPU_RESET_COUNTER
-#define RADEON_INFO_GPU_RESET_COUNTER   0x26
-#endif
-
 static struct util_hash_table *fd_tab = NULL;
 pipe_static_mutex(fd_tab_mutex);
 
@@ -372,7 +355,12 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
     }
     ws->info.gart_size = gem_info.gart_size;
     ws->info.vram_size = gem_info.vram_size;
-    ws->info.vram_vis_size = MIN2(gem_info.vram_visible, 256*1024*1024);
+    ws->info.vram_vis_size = gem_info.vram_visible;
+    /* Older versions of the kernel driver reported incorrect values, and
+     * didn't support more than 256MB of visible VRAM anyway
+     */
+    if (ws->info.drm_minor < 49)
+        ws->info.vram_vis_size = MIN2(ws->info.vram_vis_size, 256*1024*1024);
 
     /* Radeon allocates all buffers as contigous, which makes large allocations
      * unlikely to succeed. */
@@ -536,6 +524,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
     ws->info.gfx_ib_pad_with_type2 = ws->info.chip_class <= SI ||
 				     (ws->info.family == CHIP_HAWAII &&
 				      ws->accel_working2 < 3);
+    ws->info.tcc_cache_line_size = 64; /* TC L2 line size on GCN */
 
     ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL;
 
@@ -664,6 +653,8 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
         radeon_get_drm_value(ws->fd, RADEON_INFO_GPU_RESET_COUNTER,
                              "gpu-reset-counter", (uint32_t*)&retval);
         return retval;
+    case RADEON_CS_THREAD_TIME:
+        return util_queue_get_thread_time_nano(&ws->cs_queue, 0);
     }
     return 0;
 }

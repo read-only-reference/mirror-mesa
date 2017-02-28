@@ -47,8 +47,10 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "util/u_blitter.h"
+#include "util/u_helpers.h"
 #include "util/u_memory.h"
 #include "util/u_prim.h"
+#include "util/u_upload_mgr.h"
 
 #include "hw/common.xml.h"
 
@@ -62,6 +64,9 @@ etna_context_destroy(struct pipe_context *pctx)
 
    if (ctx->blitter)
       util_blitter_destroy(ctx->blitter);
+
+   if (pctx->stream_uploader)
+      u_upload_destroy(pctx->stream_uploader);
 
    if (ctx->stream)
       etna_cmd_stream_del(ctx->stream);
@@ -130,6 +135,15 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
    draw_mode = translate_draw_mode(info->mode);
    if (draw_mode == ETNA_NO_MATCH) {
       BUG("Unsupported draw mode");
+      return;
+   }
+
+   /* Upload a user index buffer. */
+   struct pipe_index_buffer ibuffer_saved = {};
+   if (info->indexed && ctx->index_buffer.ib.user_buffer &&
+       !util_save_and_upload_index_buffer(pctx, info, &ctx->index_buffer.ib,
+                                          &ibuffer_saved)) {
+      BUG("Index buffer upload failed.");
       return;
    }
 
@@ -207,6 +221,8 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
       etna_resource(ctx->framebuffer.cbuf->texture)->seqno++;
    if (ctx->framebuffer.zsbuf)
       etna_resource(ctx->framebuffer.zsbuf->texture)->seqno++;
+   if (info->indexed && ibuffer_saved.user_buffer)
+      pctx->set_index_buffer(pctx, &ibuffer_saved);
 }
 
 static void
@@ -246,24 +262,40 @@ etna_cmd_stream_reset_notify(struct etna_cmd_stream *stream, void *priv)
    assert(LIST_IS_EMPTY(&ctx->used_resources));
 }
 
+static void
+etna_set_debug_callback(struct pipe_context *pctx,
+                        const struct pipe_debug_callback *cb)
+{
+   struct etna_context *ctx = etna_context(pctx);
+
+   if (cb)
+      ctx->debug = *cb;
+   else
+      memset(&ctx->debug, 0, sizeof(ctx->debug));
+}
+
 struct pipe_context *
 etna_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 {
    struct etna_context *ctx = CALLOC_STRUCT(etna_context);
    struct etna_screen *screen;
-   struct pipe_context *pctx = NULL;
+   struct pipe_context *pctx;
 
    if (ctx == NULL)
       return NULL;
+
+   pctx = &ctx->base;
+   pctx->priv = ctx;
+   pctx->screen = pscreen;
+   pctx->stream_uploader = u_upload_create_default(pctx);
+   if (!pctx->stream_uploader)
+      goto fail;
+   pctx->const_uploader = pctx->stream_uploader;
 
    screen = etna_screen(pscreen);
    ctx->stream = etna_cmd_stream_new(screen->pipe, 0x2000, &etna_cmd_stream_reset_notify, ctx);
    if (ctx->stream == NULL)
       goto fail;
-
-   pctx = &ctx->base;
-   pctx->priv = ctx;
-   pctx->screen = pscreen;
 
    /* context ctxate setup */
    ctx->specs = screen->specs;
@@ -279,6 +311,7 @@ etna_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    pctx->destroy = etna_context_destroy;
    pctx->draw_vbo = etna_draw_vbo;
    pctx->flush = etna_flush;
+   pctx->set_debug_callback = etna_set_debug_callback;
 
    /* creation of compile states */
    pctx->create_blend_state = etna_blend_state_create;

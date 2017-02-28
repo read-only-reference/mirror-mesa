@@ -137,8 +137,9 @@ static bool si_ce_upload(struct si_context *sctx, unsigned ce_offset, unsigned s
 			 unsigned *out_offset, struct r600_resource **out_buf) {
 	uint64_t va;
 
-	u_suballocator_alloc(sctx->ce_suballocator, size, 64, out_offset,
-			     (struct pipe_resource**)out_buf);
+	u_suballocator_alloc(sctx->ce_suballocator, size,
+			     sctx->screen->b.info.tcc_cache_line_size,
+			     out_offset, (struct pipe_resource**)out_buf);
 	if (!out_buf)
 			return false;
 
@@ -234,9 +235,10 @@ static bool si_upload_descriptors(struct si_context *sctx,
 	} else {
 		void *ptr;
 
-		u_upload_alloc(sctx->b.uploader, 0, list_size, 256,
-			&desc->buffer_offset,
-			(struct pipe_resource**)&desc->buffer, &ptr);
+		u_upload_alloc(sctx->b.b.const_uploader, 0, list_size,
+			       sctx->screen->b.info.tcc_cache_line_size,
+			       &desc->buffer_offset,
+			       (struct pipe_resource**)&desc->buffer, &ptr);
 		if (!desc->buffer)
 			return false; /* skip the draw call */
 
@@ -948,20 +950,23 @@ bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 	struct si_vertex_element *velems = sctx->vertex_elements;
 	struct si_descriptors *desc = &sctx->vertex_buffers;
 	unsigned i, count = velems->count;
+	unsigned desc_list_byte_size = velems->desc_list_byte_size;
 	uint64_t va;
 	uint32_t *ptr;
 
 	if (!sctx->vertex_buffers_dirty || !count || !velems)
 		return true;
 
-	unsigned fix_size3 = velems->fix_size3;
 	unsigned first_vb_use_mask = velems->first_vb_use_mask;
 
 	/* Vertex buffer descriptors are the only ones which are uploaded
 	 * directly through a staging buffer and don't go through
 	 * the fine-grained upload path.
 	 */
-	u_upload_alloc(sctx->b.uploader, 0, count * 16, 256, &desc->buffer_offset,
+	u_upload_alloc(sctx->b.b.const_uploader, 0,
+		       desc_list_byte_size,
+		       si_optimal_tcc_alignment(sctx, desc_list_byte_size),
+		       &desc->buffer_offset,
 		       (struct pipe_resource**)&desc->buffer, (void**)&ptr);
 	if (!desc->buffer)
 		return false;
@@ -970,7 +975,7 @@ bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 			      desc->buffer, RADEON_USAGE_READ,
 			      RADEON_PRIO_DESCRIPTORS);
 
-	assert(count <= SI_NUM_VERTEX_BUFFERS);
+	assert(count <= SI_MAX_ATTRIBS);
 
 	for (i = 0; i < count; i++) {
 		struct pipe_vertex_element *ve = &velems->elements[i];
@@ -1001,28 +1006,7 @@ bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 				   velems->format_size[i]) /
 				  vb->stride + 1;
 		} else {
-			uint32_t size3;
-
 			desc[2] = vb->buffer->width0 - offset;
-
-			/* For attributes of size 3 with byte or short
-			 * components, we use a 4-component data format.
-			 *
-			 * As a consequence, we have to round the buffer size
-			 * up so that the hardware sees four components as
-			 * being inside the buffer if and only if the first
-			 * three components are in the buffer.
-			 *
-			 * Since the offset and stride are guaranteed to be
-			 * 4-byte aligned, this alignment will never cross the
-			 * winsys buffer boundary.
-			 */
-			size3 = (fix_size3 >> (2 * i)) & 3;
-			if (vb->stride && size3) {
-				assert(offset % 4 == 0 && vb->stride % 4 == 0);
-				assert(size3 <= 2);
-				desc[2] = align(desc[2], size3 * 2);
-			}
 		}
 
 		desc[3] = velems->rsrc_word3[i];
@@ -1067,7 +1051,9 @@ void si_upload_const_buffer(struct si_context *sctx, struct r600_resource **rbuf
 {
 	void *tmp;
 
-	u_upload_alloc(sctx->b.uploader, 0, size, 256, const_offset,
+	u_upload_alloc(sctx->b.b.const_uploader, 0, size,
+		       si_optimal_tcc_alignment(sctx, size),
+		       const_offset,
 		       (struct pipe_resource**)rbuffer, &tmp);
 	if (*rbuffer)
 		util_memcpy_cpu_to_le32(tmp, ptr, size);

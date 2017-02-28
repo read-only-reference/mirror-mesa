@@ -33,11 +33,9 @@
 #include "util/u_inlines.h"
 #include "util/u_format.h"
 #include "util/u_atomic.h"
-
-extern "C" {
+#include "util/u_upload_mgr.h"
 #include "util/u_transfer.h"
 #include "util/u_surface.h"
-}
 
 #include "api.h"
 #include "backend.h"
@@ -369,6 +367,9 @@ swr_destroy(struct pipe_context *pipe)
       pipe_sampler_view_reference(&ctx->sampler_views[PIPE_SHADER_VERTEX][i], NULL);
    }
 
+   if (ctx->pipe.stream_uploader)
+      u_upload_destroy(ctx->pipe.stream_uploader);
+
    /* Idle core after destroying buffer resources, but before deleting
     * context.  Destroying resources has potentially called StoreTiles.*/
    SwrWaitForIdle(ctx->swrContext);
@@ -492,6 +493,11 @@ swr_create_context(struct pipe_screen *p_screen, void *priv, unsigned flags)
    swr_clear_init(&ctx->pipe);
    swr_draw_init(&ctx->pipe);
    swr_query_init(&ctx->pipe);
+
+   ctx->pipe.stream_uploader = u_upload_create_default(&ctx->pipe);
+   if (!ctx->pipe.stream_uploader)
+      goto fail;
+   ctx->pipe.const_uploader = ctx->pipe.stream_uploader;
 
    ctx->pipe.blit = swr_blit;
    ctx->blitter = util_blitter_create(&ctx->pipe);

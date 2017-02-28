@@ -62,6 +62,7 @@ static const struct debug_named_value debug_options[] = {
    {"flush_all",      ETNA_DBG_FLUSH_ALL, "Flush after every rendered primitive"},
    {"zero",           ETNA_DBG_ZERO, "Zero all resources after allocation"},
    {"draw_stall",     ETNA_DBG_DRAW_STALL, "Stall FE/PE after each rendered primitive"},
+   {"shaderdb",       ETNA_DBG_SHADERDB, "Enable shaderdb output"},
    DEBUG_NAMED_VALUE_END
 };
 
@@ -179,7 +180,6 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
-   case PIPE_CAP_USER_INDEX_BUFFERS:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
    case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
@@ -241,7 +241,9 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_TGSI_FS_FBFETCH:
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
+   case PIPE_CAP_DOUBLES:
    case PIPE_CAP_INT64:
+   case PIPE_CAP_INT64_DIVMOD:
       return 0;
 
    /* Stream output. */
@@ -415,7 +417,6 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return PIPE_SHADER_IR_TGSI;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
       return 4096;
-   case PIPE_SHADER_CAP_DOUBLES:
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
@@ -578,16 +579,6 @@ etna_get_specs(struct etna_screen *screen)
       DBG("could not get ETNA_GPU_PIXEL_PIPES");
       goto fail;
    }
-   if (val < 1 && val > ETNA_MAX_PIXELPIPES) {
-      if (val == 0) {
-         fprintf(stderr, "Warning: zero pixel pipes (update kernel?)\n");
-         val = 1;
-      } else {
-         fprintf(stderr, "Error: bad pixel pipes value %u\n",
-                 (unsigned int)val);
-         goto fail;
-      }
-   }
    screen->specs.pixel_pipes = val;
 
    if (etna_gpu_get_param(screen->gpu, ETNA_GPU_NUM_CONSTANTS, &val)) {
@@ -625,14 +616,30 @@ etna_get_specs(struct etna_screen *screen)
    screen->specs.has_new_sin_cos =
       VIV_FEATURE(screen, chipMinorFeatures3, HAS_FAST_TRANSCENDENTALS);
 
-   if (instruction_count > 256) { /* unified instruction memory? */
+   if (VIV_FEATURE(screen, chipMinorFeatures3, INSTRUCTION_CACHE)) {
+      /* GC3000 - this core is capable of loading shaders from
+       * memory. It can also run shaders from registers, as a fallback, but
+       * "max_instructions" does not have the correct value. It has place for
+       * 2*256 instructions just like GC2000, but the offsets are slightly
+       * different.
+       */
       screen->specs.vs_offset = 0xC000;
-      screen->specs.ps_offset = 0xD000; /* like vivante driver */
+      /* State 08000-0C000 mirrors 0C000-0E000, and the Vivante driver uses
+       * this mirror for writing PS instructions, probably safest to do the
+       * same.
+       */
+      screen->specs.ps_offset = 0x8000 + 0x1000;
       screen->specs.max_instructions = 256;
    } else {
-      screen->specs.vs_offset = 0x4000;
-      screen->specs.ps_offset = 0x6000;
-      screen->specs.max_instructions = instruction_count / 2;
+      if (instruction_count > 256) { /* unified instruction memory? */
+         screen->specs.vs_offset = 0xC000;
+         screen->specs.ps_offset = 0xD000; /* like vivante driver */
+         screen->specs.max_instructions = 256;
+      } else {
+         screen->specs.vs_offset = 0x4000;
+         screen->specs.ps_offset = 0x6000;
+         screen->specs.max_instructions = instruction_count / 2;
+      }
    }
 
    if (VIV_FEATURE(screen, chipMinorFeatures1, HALTI0)) {

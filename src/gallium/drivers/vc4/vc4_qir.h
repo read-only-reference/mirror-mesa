@@ -123,6 +123,7 @@ enum qop {
         QOP_SHR,
         QOP_ASR,
         QOP_MIN,
+        QOP_MIN_NOIMM,
         QOP_MAX,
         QOP_AND,
         QOP_OR,
@@ -461,6 +462,13 @@ struct vc4_compile {
         uint8_t vattr_sizes[8];
 
         /**
+         * Order in which the vattrs were loaded by the program, to arrange
+         * vattr_offsets[] in the program data appropriately.
+         */
+        uint8_t vpm_input_order[8];
+        uint8_t next_vpm_input;
+
+        /**
          * Array of the VARYING_SLOT_* of all FS QFILE_VARY reads.
          *
          * This includes those that aren't part of the VPM varyings, like
@@ -505,6 +513,7 @@ struct vc4_compile {
         struct qblock *cur_block;
         struct qblock *loop_cont_block;
         struct qblock *loop_break_block;
+        struct qblock *last_top_block;
 
         struct list_head qpu_inst_list;
 
@@ -725,6 +734,7 @@ QIR_ALU2(SHL)
 QIR_ALU2(SHR)
 QIR_ALU2(ASR)
 QIR_ALU2(MIN)
+QIR_ALU2(MIN_NOIMM)
 QIR_ALU2(MAX)
 QIR_ALU2(AND)
 QIR_ALU2(OR)

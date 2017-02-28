@@ -43,26 +43,16 @@
 #include "isl/isl.h"
 #include "blorp/blorp.h"
 
-#ifdef __cplusplus
-extern "C" {
-	/* Evil hack for using libdrm in a c++ compiler. */
-        #define virtual virt
-#endif
-
 #include <intel_bufmgr.h>
-#ifdef __cplusplus
-	#undef virtual
-}
-#endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include "intel_debug.h"
 #include "intel_screen.h"
 #include "intel_tex_obj.h"
 #include "intel_resolve_map.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 /* Glossary:
  *
  * URB - uniform resource buffer.  A mid-sized buffer which is
@@ -567,6 +557,12 @@ struct brw_transform_feedback_object {
    GLenum primitive_mode;
 
    /**
+    * The maximum number of vertices that we can write without overflowing
+    * any of the buffers currently being used for transform feedback.
+    */
+   unsigned max_index;
+
+   /**
     * Count of primitives generated during this transform feedback operation.
     *  @{
     */
@@ -654,6 +650,19 @@ enum brw_predicate_state {
 struct shader_times;
 
 struct gen_l3_config;
+
+enum brw_query_kind {
+   PIPELINE_STATS
+};
+
+struct brw_perf_query_info
+{
+   enum brw_query_kind kind;
+   const char *name;
+   struct brw_perf_query_counter *counters;
+   int n_counters;
+   size_t data_size;
+};
 
 /**
  * brw_context is derived from gl_context.
@@ -1132,6 +1141,13 @@ struct brw_context
       bool supported;
    } predicate;
 
+   struct {
+      struct brw_perf_query_info *queries;
+      int n_queries;
+
+      int n_active_pipeline_stats_queries;
+   } perfquery;
+
    int num_atoms[BRW_NUM_PIPELINES];
    const struct brw_tracked_state render_atoms[76];
    const struct brw_tracked_state compute_atoms[11];
@@ -1268,6 +1284,9 @@ void brw_write_timestamp(struct brw_context *brw, drm_intel_bo *bo, int idx);
 void brw_write_depth_count(struct brw_context *brw, drm_intel_bo *bo, int idx);
 
 /** hsw_queryobj.c */
+void hsw_overflow_result_to_gpr0(struct brw_context *brw,
+                                 struct brw_query_object *query,
+                                 int count);
 void hsw_init_queryobj_functions(struct dd_function_table *functions);
 
 /** brw_conditional_render.c */
@@ -1434,6 +1453,9 @@ bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
 uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
 
+/* brw_performance_query.c */
+void brw_init_performance_queries(struct brw_context *brw);
+
 /* intel_buffer_objects.c */
 int brw_bo_map(struct brw_context *brw, drm_intel_bo *bo, int write_enable,
                const char *bo_name);
@@ -1464,6 +1486,18 @@ brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 void
 brw_end_transform_feedback(struct gl_context *ctx,
                            struct gl_transform_feedback_object *obj);
+void
+brw_pause_transform_feedback(struct gl_context *ctx,
+                             struct gl_transform_feedback_object *obj);
+void
+brw_resume_transform_feedback(struct gl_context *ctx,
+                              struct gl_transform_feedback_object *obj);
+void
+brw_save_primitives_written_counters(struct brw_context *brw,
+                                     struct brw_transform_feedback_object *obj);
+void
+brw_compute_xfb_vertices_written(struct brw_context *brw,
+                                 struct brw_transform_feedback_object *obj);
 GLsizei
 brw_get_transform_feedback_vertex_count(struct gl_context *ctx,
                                         struct gl_transform_feedback_object *obj,

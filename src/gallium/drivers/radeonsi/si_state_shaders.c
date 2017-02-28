@@ -975,9 +975,8 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 				key->part.vs.prolog.instance_divisors[i] =
 					sctx->vertex_elements->elements[i].instance_divisor;
 
-			key->mono.vs.fix_fetch =
-				sctx->vertex_elements->fix_fetch &
-				u_bit_consecutive64(0, 4 * count);
+			memcpy(key->mono.vs.fix_fetch,
+			       sctx->vertex_elements->fix_fetch, count);
 		}
 		if (sctx->tes_shader.cso)
 			key->as_ls = 1;
@@ -993,6 +992,8 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 	case PIPE_SHADER_TESS_CTRL:
 		key->part.tcs.epilog.prim_mode =
 			sctx->tes_shader.cso->info.properties[TGSI_PROPERTY_TES_PRIM_MODE];
+		key->part.tcs.epilog.tes_reads_tess_factors =
+			sctx->tes_shader.cso->info.reads_tess_factors;
 
 		if (sel == sctx->fixed_func_tcs_shader.cso)
 			key->mono.tcs.inputs_to_copy = sctx->vs_shader.cso->outputs_written;
@@ -1052,13 +1053,16 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 		 * to the range supported by the type if a channel has less
 		 * than 16 bits and the export format is 16_ABGR.
 		 */
-		if (sctx->b.chip_class <= CIK && sctx->b.family != CHIP_HAWAII)
+		if (sctx->b.chip_class <= CIK && sctx->b.family != CHIP_HAWAII) {
 			key->part.ps.epilog.color_is_int8 = sctx->framebuffer.color_is_int8;
+			key->part.ps.epilog.color_is_int10 = sctx->framebuffer.color_is_int10;
+		}
 
 		/* Disable unwritten outputs (if WRITE_ALL_CBUFS isn't enabled). */
 		if (!key->part.ps.epilog.last_cbuf) {
 			key->part.ps.epilog.spi_shader_col_format &= sel->colors_written_4bit;
 			key->part.ps.epilog.color_is_int8 &= sel->info.colors_written;
+			key->part.ps.epilog.color_is_int10 &= sel->info.colors_written;
 		}
 
 		if (rs) {
@@ -1196,7 +1200,7 @@ again:
 	 * in a compiler thread.
 	 */
 	if (thread_index < 0)
-		util_queue_job_wait(&sel->ready);
+		util_queue_fence_wait(&sel->ready);
 
 	pipe_mutex_lock(sel->mutex);
 
@@ -1237,17 +1241,45 @@ again:
 	shader->key = *key;
 	shader->compiler_ctx_state = *compiler_state;
 
+	/* Compile the main shader part if it doesn't exist. This can happen
+	 * if the initial guess was wrong. */
+	struct si_shader **mainp = si_get_main_shader_part(sel, key);
+	bool is_pure_monolithic =
+		sscreen->use_monolithic_shaders ||
+		memcmp(&key->mono, &zeroed.mono, sizeof(key->mono)) != 0;
+
+	if (!*mainp && !is_pure_monolithic) {
+		struct si_shader *main_part = CALLOC_STRUCT(si_shader);
+
+		if (!main_part) {
+			FREE(shader);
+			pipe_mutex_unlock(sel->mutex);
+			return -ENOMEM; /* skip the draw call */
+		}
+
+		main_part->selector = sel;
+		main_part->key.as_es = key->as_es;
+		main_part->key.as_ls = key->as_ls;
+
+		if (si_compile_tgsi_shader(sscreen, compiler_state->tm,
+					   main_part, false,
+					   &compiler_state->debug) != 0) {
+			FREE(main_part);
+			FREE(shader);
+			pipe_mutex_unlock(sel->mutex);
+			return -ENOMEM; /* skip the draw call */
+		}
+		*mainp = main_part;
+	}
+
 	/* Monolithic-only shaders don't make a distinction between optimized
 	 * and unoptimized. */
 	shader->is_monolithic =
-		!sel->main_shader_part ||
-		sel->main_shader_part->key.as_ls != key->as_ls ||
-		sel->main_shader_part->key.as_es != key->as_es ||
-		memcmp(&key->opt, &zeroed.opt, sizeof(key->opt)) != 0 ||
-		memcmp(&key->mono, &zeroed.mono, sizeof(key->mono)) != 0;
+		is_pure_monolithic ||
+		memcmp(&key->opt, &zeroed.opt, sizeof(key->opt)) != 0;
 
 	shader->is_optimized =
-		!sscreen->use_monolithic_shaders &&
+		!is_pure_monolithic &&
 		memcmp(&key->opt, &zeroed.opt, sizeof(key->opt)) != 0;
 	if (shader->is_optimized)
 		util_queue_fence_init(&shader->optimized_ready);
@@ -1262,6 +1294,7 @@ again:
 
 	/* If it's an optimized shader, compile it asynchronously. */
 	if (shader->is_optimized &&
+	    !is_pure_monolithic &&
 	    thread_index < 0) {
 		/* Compile it asynchronously. */
 		util_queue_add_job(&sscreen->shader_compiler_queue,
@@ -1396,7 +1429,7 @@ void si_init_shader_selector_async(void *job, int thread_index)
 			}
 		}
 
-		sel->main_shader_part = shader;
+		*si_get_main_shader_part(sel, &shader->key) = shader;
 
 		/* Unset "outputs_written" flags for outputs converted to
 		 * DEFAULT_VAL, so that later inter-shader optimizations don't
@@ -1799,7 +1832,7 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
 static void si_delete_shader(struct si_context *sctx, struct si_shader *shader)
 {
 	if (shader->is_optimized) {
-		util_queue_job_wait(&shader->optimized_ready);
+		util_queue_fence_wait(&shader->optimized_ready);
 		util_queue_fence_destroy(&shader->optimized_ready);
 	}
 
@@ -1851,7 +1884,7 @@ static void si_delete_shader_selector(struct pipe_context *ctx, void *state)
 		[PIPE_SHADER_FRAGMENT] = &sctx->ps_shader,
 	};
 
-	util_queue_job_wait(&sel->ready);
+	util_queue_fence_wait(&sel->ready);
 
 	if (current_shader[sel->type]->cso == sel) {
 		current_shader[sel->type]->cso = NULL;
@@ -1866,6 +1899,10 @@ static void si_delete_shader_selector(struct pipe_context *ctx, void *state)
 
 	if (sel->main_shader_part)
 		si_delete_shader(sctx, sel->main_shader_part);
+	if (sel->main_shader_part_ls)
+		si_delete_shader(sctx, sel->main_shader_part_ls);
+	if (sel->main_shader_part_es)
+		si_delete_shader(sctx, sel->main_shader_part_es);
 	if (sel->gs_copy_shader)
 		si_delete_shader(sctx, sel->gs_copy_shader);
 
@@ -2048,18 +2085,22 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 
 	if (update_esgs) {
 		pipe_resource_reference(&sctx->esgs_ring, NULL);
-		sctx->esgs_ring = pipe_buffer_create(sctx->b.b.screen, 0,
-						     PIPE_USAGE_DEFAULT,
-						     esgs_ring_size);
+		sctx->esgs_ring =
+			r600_aligned_buffer_create(sctx->b.b.screen,
+						   R600_RESOURCE_FLAG_UNMAPPABLE,
+						   PIPE_USAGE_DEFAULT,
+						   esgs_ring_size, alignment);
 		if (!sctx->esgs_ring)
 			return false;
 	}
 
 	if (update_gsvs) {
 		pipe_resource_reference(&sctx->gsvs_ring, NULL);
-		sctx->gsvs_ring = pipe_buffer_create(sctx->b.b.screen, 0,
-						     PIPE_USAGE_DEFAULT,
-						     gsvs_ring_size);
+		sctx->gsvs_ring =
+			r600_aligned_buffer_create(sctx->b.b.screen,
+						   R600_RESOURCE_FLAG_UNMAPPABLE,
+						   PIPE_USAGE_DEFAULT,
+						   gsvs_ring_size, alignment);
 		if (!sctx->gsvs_ring)
 			return false;
 	}
@@ -2196,8 +2237,10 @@ static bool si_update_spi_tmpring_size(struct si_context *sctx)
 			r600_resource_reference(&sctx->scratch_buffer, NULL);
 
 			sctx->scratch_buffer = (struct r600_resource*)
-					pipe_buffer_create(&sctx->screen->b.b, 0,
-	                                PIPE_USAGE_DEFAULT, scratch_needed_size);
+				r600_aligned_buffer_create(&sctx->screen->b.b,
+							   R600_RESOURCE_FLAG_UNMAPPABLE,
+							   PIPE_USAGE_DEFAULT,
+							   scratch_needed_size, 256);
 			if (!sctx->scratch_buffer)
 				return false;
 
@@ -2269,7 +2312,9 @@ static bool si_update_spi_tmpring_size(struct si_context *sctx)
 
 static void si_init_tess_factor_ring(struct si_context *sctx)
 {
-	bool double_offchip_buffers = sctx->b.chip_class >= CIK;
+	bool double_offchip_buffers = sctx->b.chip_class >= CIK &&
+				      sctx->b.family != CHIP_CARRIZO &&
+				      sctx->b.family != CHIP_STONEY;
 	unsigned max_offchip_buffers_per_se = double_offchip_buffers ? 128 : 64;
 	unsigned max_offchip_buffers = max_offchip_buffers_per_se *
 				       sctx->screen->b.info.max_se;
@@ -2301,18 +2346,23 @@ static void si_init_tess_factor_ring(struct si_context *sctx)
 	}
 
 	assert(!sctx->tf_ring);
-	sctx->tf_ring = pipe_buffer_create(sctx->b.b.screen, 0,
-					   PIPE_USAGE_DEFAULT,
-					   32768 * sctx->screen->b.info.max_se);
+	sctx->tf_ring = r600_aligned_buffer_create(sctx->b.b.screen,
+						   R600_RESOURCE_FLAG_UNMAPPABLE,
+						   PIPE_USAGE_DEFAULT,
+						   32768 * sctx->screen->b.info.max_se,
+						   256);
 	if (!sctx->tf_ring)
 		return;
 
 	assert(((sctx->tf_ring->width0 / 4) & C_030938_SIZE) == 0);
 
-	sctx->tess_offchip_ring = pipe_buffer_create(sctx->b.b.screen, 0,
-	                                             PIPE_USAGE_DEFAULT,
-	                                             max_offchip_buffers *
-	                                             sctx->screen->tess_offchip_block_dw_size * 4);
+	sctx->tess_offchip_ring =
+		r600_aligned_buffer_create(sctx->b.b.screen,
+					   R600_RESOURCE_FLAG_UNMAPPABLE,
+					   PIPE_USAGE_DEFAULT,
+					   max_offchip_buffers *
+					   sctx->screen->tess_offchip_block_dw_size * 4,
+					   256);
 	if (!sctx->tess_offchip_ring)
 		return;
 

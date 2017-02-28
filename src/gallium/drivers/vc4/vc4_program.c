@@ -116,9 +116,9 @@ indirect_uniform_load(struct vc4_compile *c, nir_intrinsic_instr *intr)
 
         /* Clamp to [0, array size).  Note that MIN/MAX are signed. */
         indirect_offset = qir_MAX(c, indirect_offset, qir_uniform_ui(c, 0));
-        indirect_offset = qir_MIN(c, indirect_offset,
-                                  qir_uniform_ui(c, (range->dst_offset +
-                                                     range->size - 4)));
+        indirect_offset = qir_MIN_NOIMM(c, indirect_offset,
+                                        qir_uniform_ui(c, (range->dst_offset +
+                                                           range->size - 4)));
 
         qir_ADD_dest(c, qir_reg(QFILE_TEX_S_DIRECT, 0),
                      indirect_offset,
@@ -382,7 +382,7 @@ ntq_emit_txf(struct vc4_compile *c, nir_tex_instr *instr)
 
         /* Perform the clamping required by kernel validation. */
         addr = qir_MAX(c, addr, qir_uniform_ui(c, 0));
-        addr = qir_MIN(c, addr,  qir_uniform_ui(c, size - 4));
+        addr = qir_MIN_NOIMM(c, addr, qir_uniform_ui(c, size - 4));
 
         qir_ADD_dest(c, qir_reg(QFILE_TEX_S_DIRECT, 0),
                      addr, qir_uniform(c, QUNIFORM_TEXTURE_MSAA_ADDR, unit));
@@ -733,11 +733,14 @@ emit_vertex_input(struct vc4_compile *c, int attr)
 {
         enum pipe_format format = c->vs_key->attr_formats[attr];
         uint32_t attr_size = util_format_get_blocksize(format);
+        uint32_t vpm_attr = c->next_vpm_input++;
 
-        c->vattr_sizes[attr] = align(attr_size, 4);
+        c->vpm_input_order[vpm_attr] = attr;
+
+        c->vattr_sizes[vpm_attr] = align(attr_size, 4);
         for (int i = 0; i < align(attr_size, 4) / 4; i++) {
                 c->inputs[attr * 4 + i] =
-                        qir_MOV(c, qir_reg(QFILE_VPM, attr * 4 + i));
+                        qir_MOV(c, qir_reg(QFILE_VPM, vpm_attr * 4 + i));
                 c->num_inputs++;
         }
 }
@@ -1466,6 +1469,7 @@ emit_stub_vpm_read(struct vc4_compile *c)
         if (c->num_inputs)
                 return;
 
+        c->next_vpm_input++;
         c->vattr_sizes[0] = 4;
         (void)qir_MOV(c, qir_reg(QFILE_VPM, 0));
         c->num_inputs++;
@@ -1511,7 +1515,7 @@ emit_vert_end(struct vc4_compile *c,
 static void
 emit_coord_end(struct vc4_compile *c)
 {
-        struct qreg rcp_w = qir_RCP(c, c->outputs[c->output_position_index + 3]);
+        struct qreg rcp_w = ntq_rcp(c, c->outputs[c->output_position_index + 3]);
 
         emit_stub_vpm_read(c);
 
@@ -1550,64 +1554,6 @@ vc4_optimize_nir(struct nir_shader *s)
                          nir_var_shader_out |
                          nir_var_local);
         } while (progress);
-}
-
-static int
-driver_location_compare(const void *in_a, const void *in_b)
-{
-        const nir_variable *const *a = in_a;
-        const nir_variable *const *b = in_b;
-
-        return (*a)->data.driver_location - (*b)->data.driver_location;
-}
-
-static void
-ntq_setup_inputs(struct vc4_compile *c)
-{
-        unsigned num_entries = 0;
-        nir_foreach_variable(var, &c->s->inputs)
-                num_entries++;
-
-        nir_variable *vars[num_entries];
-
-        unsigned i = 0;
-        nir_foreach_variable(var, &c->s->inputs)
-                vars[i++] = var;
-
-        /* Sort the variables so that we emit the input setup in
-         * driver_location order.  This is required for VPM reads, whose data
-         * is fetched into the VPM in driver_location (TGSI register index)
-         * order.
-         */
-        qsort(&vars, num_entries, sizeof(*vars), driver_location_compare);
-
-        for (unsigned i = 0; i < num_entries; i++) {
-                nir_variable *var = vars[i];
-                unsigned array_len = MAX2(glsl_get_length(var->type), 1);
-                unsigned loc = var->data.driver_location;
-
-                assert(array_len == 1);
-                (void)array_len;
-                resize_qreg_array(c, &c->inputs, &c->inputs_array_size,
-                                  (loc + 1) * 4);
-
-                if (c->stage == QSTAGE_FRAG) {
-                        if (var->data.location == VARYING_SLOT_POS) {
-                                emit_fragcoord_input(c, loc);
-                        } else if (var->data.location == VARYING_SLOT_PNTC ||
-                                   (var->data.location >= VARYING_SLOT_VAR0 &&
-                                    (c->fs_key->point_sprite_mask &
-                                     (1 << (var->data.location -
-                                            VARYING_SLOT_VAR0))))) {
-                                c->inputs[loc * 4 + 0] = c->point_x;
-                                c->inputs[loc * 4 + 1] = c->point_y;
-                        } else {
-                                emit_fragment_input(c, loc, var->data.location);
-                        }
-                } else {
-                        emit_vertex_input(c, loc);
-                }
-        }
 }
 
 static void
@@ -1706,6 +1652,110 @@ ntq_emit_ssa_undef(struct vc4_compile *c, nir_ssa_undef_instr *instr)
 }
 
 static void
+ntq_emit_color_read(struct vc4_compile *c, nir_intrinsic_instr *instr)
+{
+        nir_const_value *const_offset = nir_src_as_const_value(instr->src[0]);
+        assert(const_offset->u32[0] == 0);
+
+        /* Reads of the per-sample color need to be done in
+         * order.
+         */
+        int sample_index = (nir_intrinsic_base(instr) -
+                            VC4_NIR_TLB_COLOR_READ_INPUT);
+        for (int i = 0; i <= sample_index; i++) {
+                if (c->color_reads[i].file == QFILE_NULL) {
+                        c->color_reads[i] =
+                                qir_TLB_COLOR_READ(c);
+                }
+        }
+        ntq_store_dest(c, &instr->dest, 0,
+                       qir_MOV(c, c->color_reads[sample_index]));
+}
+
+static void
+ntq_emit_load_input(struct vc4_compile *c, nir_intrinsic_instr *instr)
+{
+        assert(instr->num_components == 1);
+
+        nir_const_value *const_offset = nir_src_as_const_value(instr->src[0]);
+        assert(const_offset && "vc4 doesn't support indirect inputs");
+
+        if (c->stage == QSTAGE_FRAG &&
+            nir_intrinsic_base(instr) >= VC4_NIR_TLB_COLOR_READ_INPUT) {
+                ntq_emit_color_read(c, instr);
+                return;
+        }
+
+        /* Size our inputs array as far as this input.  Input arrays are
+         * small, and we don't have a shader_info field that tells us up front
+         * what the maximum driver_location is.
+         */
+        uint32_t loc = nir_intrinsic_base(instr) + const_offset->u32[0];
+        if ((loc + 1) * 4 > c->inputs_array_size) {
+                resize_qreg_array(c, &c->inputs, &c->inputs_array_size,
+                                  (loc + 1) * 4);
+        }
+
+        /* If we've already loaded this input, just return it.  This would
+         * happen for VPM loads, where we load an entire vertex attribute at
+         * once, or possibly also in the FS if we haven't CSEed away repeated
+         * loads.
+         */
+        int comp = nir_intrinsic_component(instr);
+        if (c->inputs[loc * 4 + comp].file != QFILE_NULL) {
+                ntq_store_dest(c, &instr->dest, 0,
+                               qir_MOV(c, c->inputs[loc * 4 + comp]));
+                return;
+        }
+
+        /* In the FS, we always have to fully drain our FS FIFO before
+         * terminating the shader.  For the VS we only have to drain whatever
+         * VPM setup we configure, but vc4_qpu_emit.c configures it for the
+         * entire vertex attribute space.  Because of this, we emit our lazy
+         * varying/VPM loads at the last top level basic block.
+         */
+        struct qblock *saved_cur_block = c->cur_block;
+        c->cur_block = c->last_top_block;
+
+        /* Look up the NIR variable for this input, so we can see how big the
+         * input is, or what sort of interpolation is necessary.
+         */
+        nir_variable *var = NULL;
+        nir_foreach_variable(search_var, &c->s->inputs) {
+                unsigned search_len = MAX2(glsl_get_length(search_var->type), 1);
+                unsigned search_loc = search_var->data.driver_location;
+
+                if (loc >= search_loc && loc < search_loc + search_len) {
+                        var = search_var;
+                        break;
+                }
+        }
+        assert(var);
+
+        if (c->stage == QSTAGE_FRAG) {
+                if (var->data.location == VARYING_SLOT_POS) {
+                        emit_fragcoord_input(c, loc);
+                } else if (var->data.location == VARYING_SLOT_PNTC ||
+                           (var->data.location >= VARYING_SLOT_VAR0 &&
+                            (c->fs_key->point_sprite_mask &
+                             (1 << (var->data.location -
+                                    VARYING_SLOT_VAR0))))) {
+                        c->inputs[loc * 4 + 0] = c->point_x;
+                        c->inputs[loc * 4 + 1] = c->point_y;
+                } else {
+                        emit_fragment_input(c, loc, var->data.location);
+                }
+        } else {
+                emit_vertex_input(c, loc);
+        }
+
+        c->cur_block = saved_cur_block;
+
+        ntq_store_dest(c, &instr->dest, 0,
+                       qir_MOV(c, c->inputs[loc * 4 + comp]));
+}
+
+static void
 ntq_emit_intrinsic(struct vc4_compile *c, nir_intrinsic_instr *instr)
 {
         nir_const_value *const_offset;
@@ -1782,31 +1832,7 @@ ntq_emit_intrinsic(struct vc4_compile *c, nir_intrinsic_instr *instr)
                 break;
 
         case nir_intrinsic_load_input:
-                assert(instr->num_components == 1);
-                const_offset = nir_src_as_const_value(instr->src[0]);
-                assert(const_offset && "vc4 doesn't support indirect inputs");
-                if (c->stage == QSTAGE_FRAG &&
-                    nir_intrinsic_base(instr) >= VC4_NIR_TLB_COLOR_READ_INPUT) {
-                        assert(const_offset->u32[0] == 0);
-                        /* Reads of the per-sample color need to be done in
-                         * order.
-                         */
-                        int sample_index = (nir_intrinsic_base(instr) -
-                                           VC4_NIR_TLB_COLOR_READ_INPUT);
-                        for (int i = 0; i <= sample_index; i++) {
-                                if (c->color_reads[i].file == QFILE_NULL) {
-                                        c->color_reads[i] =
-                                                qir_TLB_COLOR_READ(c);
-                                }
-                        }
-                        ntq_store_dest(c, &instr->dest, 0,
-                                       qir_MOV(c, c->color_reads[sample_index]));
-                } else {
-                        offset = nir_intrinsic_base(instr) + const_offset->u32[0];
-                        int comp = nir_intrinsic_component(instr);
-                        ntq_store_dest(c, &instr->dest, 0,
-                                       qir_MOV(c, c->inputs[offset * 4 + comp]));
-                }
+                ntq_emit_load_input(c, instr);
                 break;
 
         case nir_intrinsic_store_output:
@@ -1956,11 +1982,12 @@ ntq_emit_if(struct vc4_compile *c, nir_if *if_stmt)
         qir_link_blocks(c->cur_block, after_block);
 
         qir_set_emit_block(c, after_block);
-        if (was_top_level)
+        if (was_top_level) {
                 c->execute = c->undef;
-        else
+                c->last_top_block = c->cur_block;
+        } else {
                 ntq_activate_execute_for_block(c);
-
+        }
 }
 
 static void
@@ -2084,10 +2111,12 @@ ntq_emit_loop(struct vc4_compile *c, nir_loop *loop)
         qir_link_blocks(c->cur_block, c->loop_break_block);
 
         qir_set_emit_block(c, c->loop_break_block);
-        if (was_top_level)
+        if (was_top_level) {
                 c->execute = c->undef;
-        else
+                c->last_top_block = c->cur_block;
+        } else {
                 ntq_activate_execute_for_block(c);
+        }
 
         c->loop_break_block = save_loop_break_block;
         c->loop_cont_block = save_loop_cont_block;
@@ -2141,7 +2170,6 @@ nir_to_qir(struct vc4_compile *c)
         if (c->stage == QSTAGE_FRAG && c->s->info->fs.uses_discard)
                 c->discard = qir_MOV(c, qir_uniform_ui(c, 0));
 
-        ntq_setup_inputs(c);
         ntq_setup_outputs(c);
         ntq_setup_uniforms(c);
         ntq_setup_registers(c, &c->s->registers);
@@ -2567,14 +2595,17 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
         } else {
                 shader->num_inputs = c->num_inputs;
 
-                shader->vattr_offsets[0] = 0;
-                for (int i = 0; i < 8; i++) {
-                        shader->vattr_offsets[i + 1] =
-                                shader->vattr_offsets[i] + c->vattr_sizes[i];
+                uint8_t next_vattr_offset = 0;
+                for (int i = 0; i < c->next_vpm_input; i++) {
+                        if (!c->vattr_sizes[i])
+                                continue;
 
-                        if (c->vattr_sizes[i])
-                                shader->vattrs_live |= (1 << i);
+                        uint32_t nir_attr = c->vpm_input_order[i];
+                        shader->vattr_offsets[nir_attr] = next_vattr_offset;
+                        next_vattr_offset += c->vattr_sizes[i];
+                        shader->vattrs_live |= (1 << nir_attr);
                 }
+                shader->vattr_total_size = next_vattr_offset;
         }
 
         shader->failed = c->failed;
@@ -2699,8 +2730,7 @@ vc4_update_compiled_fs(struct vc4_context *vc4, uint8_t prim_mode)
         }
         if (job->msaa) {
                 key->msaa = vc4->rasterizer->base.multisample;
-                key->sample_coverage = (vc4->rasterizer->base.multisample &&
-                                        vc4->sample_mask != (1 << VC4_MAX_SAMPLES) - 1);
+                key->sample_coverage = (vc4->sample_mask != (1 << VC4_MAX_SAMPLES) - 1);
                 key->sample_alpha_to_coverage = vc4->blend->alpha_to_coverage;
                 key->sample_alpha_to_one = vc4->blend->alpha_to_one;
         }

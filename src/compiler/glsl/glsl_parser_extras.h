@@ -330,6 +330,11 @@ struct _mesa_glsl_parse_state {
              is_version(400, 320);
    }
 
+   bool has_shader_image_load_store() const
+   {
+      return ARB_shader_image_load_store_enable || is_version(420, 310);
+   }
+
    void process_version_directive(YYLTYPE *locp, int version,
                                   const char *ident);
 
@@ -348,6 +353,7 @@ struct _mesa_glsl_parse_state {
    } supported_versions[16];
 
    bool es_shader;
+   bool compat_shader;
    unsigned language_version;
    unsigned forced_language_version;
    bool zero_init;
@@ -740,6 +746,8 @@ struct _mesa_glsl_parse_state {
    bool EXT_clip_cull_distance_warn;
    bool EXT_draw_buffers_enable;
    bool EXT_draw_buffers_warn;
+   bool EXT_frag_depth_enable;
+   bool EXT_frag_depth_warn;
    bool EXT_geometry_point_size_enable;
    bool EXT_geometry_point_size_warn;
    bool EXT_geometry_shader_enable;

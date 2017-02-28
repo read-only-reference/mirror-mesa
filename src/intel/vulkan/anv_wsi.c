@@ -94,7 +94,7 @@ VkResult anv_GetPhysicalDeviceSurfaceSupportKHR(
 
    return iface->get_support(surface, &device->wsi_device,
                              &device->instance->alloc,
-                             queueFamilyIndex, pSupported);
+                             queueFamilyIndex, device->local_fd, false, pSupported);
 }
 
 VkResult anv_GetPhysicalDeviceSurfaceCapabilitiesKHR(
@@ -142,6 +142,8 @@ static VkResult
 x11_anv_wsi_image_create(VkDevice device_h,
                          const VkSwapchainCreateInfoKHR *pCreateInfo,
                          const VkAllocationCallbacks* pAllocator,
+                         bool different_gpu,
+                         bool linear,
                          VkImage *image_p,
                          VkDeviceMemory *memory_p,
                          uint32_t *size,
@@ -272,6 +274,7 @@ VkResult anv_CreateSwapchainKHR(
      alloc = &device->alloc;
    VkResult result = iface->create_swapchain(surface, _device,
                                              &device->instance->physicalDevice.wsi_device,
+                                             device->instance->physicalDevice.local_fd,
                                              pCreateInfo,
                                              alloc, &anv_wsi_image_fns,
                                              &swapchain);
@@ -350,21 +353,25 @@ VkResult anv_QueuePresentKHR(
     const VkPresentInfoKHR*                  pPresentInfo)
 {
    ANV_FROM_HANDLE(anv_queue, queue, _queue);
-   VkResult result;
+   VkResult result = VK_SUCCESS;
 
    for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
       ANV_FROM_HANDLE(wsi_swapchain, swapchain, pPresentInfo->pSwapchains[i]);
+      VkResult item_result;
 
       assert(anv_device_from_handle(swapchain->device) == queue->device);
 
       if (swapchain->fences[0] == VK_NULL_HANDLE) {
-         result = anv_CreateFence(anv_device_to_handle(queue->device),
+         item_result = anv_CreateFence(anv_device_to_handle(queue->device),
             &(VkFenceCreateInfo) {
                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
                .flags = 0,
             }, &swapchain->alloc, &swapchain->fences[0]);
-         if (result != VK_SUCCESS)
-            return result;
+         if (pPresentInfo->pResults != NULL)
+            pPresentInfo->pResults[i] = item_result;
+         result = result == VK_SUCCESS ? item_result : result;
+         if (item_result != VK_SUCCESS)
+            continue;
       } else {
          anv_ResetFences(anv_device_to_handle(queue->device),
                          1, &swapchain->fences[0]);
@@ -372,11 +379,14 @@ VkResult anv_QueuePresentKHR(
 
       anv_QueueSubmit(_queue, 0, NULL, swapchain->fences[0]);
 
-      result = swapchain->queue_present(swapchain,
-                                        pPresentInfo->pImageIndices[i]);
+      item_result = swapchain->queue_present(swapchain,
+                                             pPresentInfo->pImageIndices[i]);
       /* TODO: What if one of them returns OUT_OF_DATE? */
-      if (result != VK_SUCCESS)
-         return result;
+      if (pPresentInfo->pResults != NULL)
+         pPresentInfo->pResults[i] = item_result;
+      result = result == VK_SUCCESS ? item_result : result;
+      if (item_result != VK_SUCCESS)
+            continue;
 
       VkFence last = swapchain->fences[2];
       swapchain->fences[2] = swapchain->fences[1];

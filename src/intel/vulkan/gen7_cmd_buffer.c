@@ -90,8 +90,7 @@ gen7_cmd_buffer_emit_scissor(struct anv_cmd_buffer *cmd_buffer)
       ssp.ScissorRectPointer = scissor_state.offset;
    }
 
-   if (!cmd_buffer->device->info.has_llc)
-      anv_state_clflush(scissor_state);
+   anv_state_flush(cmd_buffer->device, scissor_state);
 }
 #endif
 
@@ -191,8 +190,7 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
          .BackfaceStencilReferenceValue = d->stencil_reference.back & 0xff,
       };
       GENX(COLOR_CALC_STATE_pack)(NULL, cc_state.map, &cc);
-      if (!cmd_buffer->device->info.has_llc)
-         anv_state_clflush(cc_state);
+      anv_state_flush(cmd_buffer->device, cc_state);
 
       anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CC_STATE_POINTERS), ccp) {
          ccp.ColorCalcStatePointer = cc_state.offset;
@@ -212,6 +210,10 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
 
          .BackfaceStencilTestMask = d->stencil_compare_mask.back & 0xff,
          .BackfaceStencilWriteMask = d->stencil_write_mask.back & 0xff,
+
+         .StencilBufferWriteEnable =
+            (d->stencil_write_mask.front || d->stencil_write_mask.back) &&
+            pipeline->writes_stencil,
       };
       GENX(DEPTH_STENCIL_STATE_pack)(NULL, depth_stencil_dw, &depth_stencil);
 
@@ -254,6 +256,13 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
    }
 
    cmd_buffer->state.dirty = 0;
+}
+
+void
+genX(cmd_buffer_enable_pma_fix)(struct anv_cmd_buffer *cmd_buffer,
+                                bool enable)
+{
+   /* The NP PMA fix doesn't exist on gen7 */
 }
 
 void genX(CmdSetEvent)(

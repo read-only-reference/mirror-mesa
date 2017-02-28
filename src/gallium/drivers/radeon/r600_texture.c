@@ -763,7 +763,9 @@ static void r600_texture_alloc_cmask_separate(struct r600_common_screen *rscreen
 	}
 
 	rtex->cmask_buffer = (struct r600_resource *)
-		r600_aligned_buffer_create(&rscreen->b, 0, PIPE_USAGE_DEFAULT,
+		r600_aligned_buffer_create(&rscreen->b,
+					   R600_RESOURCE_FLAG_UNMAPPABLE,
+					   PIPE_USAGE_DEFAULT,
 					   rtex->cmask.size,
 					   rtex->cmask.alignment);
 	if (rtex->cmask_buffer == NULL) {
@@ -874,7 +876,9 @@ static void r600_texture_allocate_htile(struct r600_common_screen *rscreen,
 		return;
 
 	rtex->htile_buffer = (struct r600_resource*)
-		r600_aligned_buffer_create(&rscreen->b, 0, PIPE_USAGE_DEFAULT,
+		r600_aligned_buffer_create(&rscreen->b,
+					   R600_RESOURCE_FLAG_UNMAPPABLE,
+					   PIPE_USAGE_DEFAULT,
 					   rtex->surface.htile_size,
 					   rtex->surface.htile_alignment);
 	if (rtex->htile_buffer == NULL) {
@@ -1434,6 +1438,7 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 	bool use_staging_texture = false;
 
 	assert(!(texture->flags & R600_RESOURCE_FLAG_TRANSFER));
+	assert(box->width && box->height && box->depth);
 
 	/* Depth textures use staging unconditionally. */
 	if (!rtex->is_depth) {
@@ -1456,8 +1461,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 		/* Tiled textures need to be converted into a linear texture for CPU
 		 * access. The staging texture is always linear and is placed in GART.
 		 *
-		 * Reading from VRAM is slow, always use the staging texture in
-		 * this case.
+		 * Reading from VRAM or GTT WC is slow, always use the staging
+		 * texture in this case.
 		 *
 		 * Use the staging texture for uploads if the underlying BO
 		 * is busy.
@@ -1465,8 +1470,9 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 		if (!rtex->surface.is_linear)
 			use_staging_texture = true;
 		else if (usage & PIPE_TRANSFER_READ)
-			use_staging_texture = (rtex->resource.domains &
-					       RADEON_DOMAIN_VRAM) != 0;
+			use_staging_texture =
+				rtex->resource.domains & RADEON_DOMAIN_VRAM ||
+				rtex->resource.flags & RADEON_FLAG_GTT_WC;
 		/* Write & linear only: */
 		else if (r600_rings_is_buffer_referenced(rctx, rtex->resource.buf,
 							 RADEON_USAGE_READWRITE) ||
@@ -2104,7 +2110,8 @@ static void vi_separate_dcc_try_enable(struct r600_common_context *rctx,
 		tex->last_dcc_separate_buffer = NULL;
 	} else {
 		tex->dcc_separate_buffer = (struct r600_resource*)
-			r600_aligned_buffer_create(rctx->b.screen, 0,
+			r600_aligned_buffer_create(rctx->b.screen,
+						   R600_RESOURCE_FLAG_UNMAPPABLE,
 						   PIPE_USAGE_DEFAULT,
 						   tex->surface.dcc_size,
 						   tex->surface.dcc_alignment);

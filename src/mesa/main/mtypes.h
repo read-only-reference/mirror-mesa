@@ -1860,6 +1860,23 @@ struct gl_perf_monitor_group
 
 
 /**
+ * A query object instance as described in INTEL_performance_query.
+ *
+ * NB: We want to keep this and the corresponding backend structure
+ * relatively lean considering that applications may expect to
+ * allocate enough objects to be able to query around all draw calls
+ * in a frame.
+ */
+struct gl_perf_query_object
+{
+   GLuint Id;          /**< hash table ID/name */
+   unsigned Used:1;    /**< has been used for 1 or more queries */
+   unsigned Active:1;  /**< inside Begin/EndPerfQuery */
+   unsigned Ready:1;   /**< result is ready? */
+};
+
+
+/**
  * Context state for AMD_performance_monitor.
  */
 struct gl_perf_monitor_state
@@ -1870,6 +1887,15 @@ struct gl_perf_monitor_state
 
    /** The table of all performance monitors. */
    struct _mesa_HashTable *Monitors;
+};
+
+
+/**
+ * Context state for INTEL_performance_query.
+ */
+struct gl_perf_query_state
+{
+   struct _mesa_HashTable *Objects; /**< The table of all performance query objects */
 };
 
 
@@ -2397,6 +2423,8 @@ struct gl_shader
 #endif
    const GLchar *Source;  /**< Source code string */
 
+   const GLchar *FallbackSource;  /**< Fallback string used by on-disk cache*/
+
    GLchar *InfoLog;
 
    unsigned Version;       /**< GLSL version used for linking */
@@ -2647,6 +2675,17 @@ struct gl_program_resource
 };
 
 /**
+ * Link status enum. linking_skipped is used to indicate linking
+ * was skipped due to the shader being loaded from the on-disk cache.
+ */
+enum gl_link_status
+{
+   linking_failure = 0,
+   linking_success,
+   linking_skipped
+};
+
+/**
  * A data structure to be shared by gl_shader_program and gl_program.
  */
 struct gl_shader_program_data
@@ -2673,11 +2712,13 @@ struct gl_shader_program_data
    unsigned NumUniformDataSlots;
    union gl_constant_value *UniformDataSlots;
 
+   bool cache_fallback;
+
    /** List of all active resources after linking. */
    struct gl_program_resource *ProgramResourceList;
    unsigned NumProgramResourceList;
 
-   GLboolean LinkStatus;   /**< GL_LINK_STATUS */
+   enum gl_link_status LinkStatus;   /**< GL_LINK_STATUS */
    GLboolean Validated;
    GLchar *InfoLog;
 
@@ -2864,6 +2905,8 @@ struct gl_pipeline_object
     */
    struct gl_program *CurrentProgram[MESA_SHADER_STAGES];
 
+   struct gl_shader_program *ReferencedPrograms[MESA_SHADER_STAGES];
+
    struct gl_program *_CurrentFragmentProgram;
 
    /**
@@ -2977,6 +3020,10 @@ struct gl_query_state
    /** GL_EXT_transform_feedback */
    struct gl_query_object *PrimitivesGenerated[MAX_VERTEX_STREAMS];
    struct gl_query_object *PrimitivesWritten[MAX_VERTEX_STREAMS];
+
+   /** GL_ARB_transform_feedback_overflow_query */
+   struct gl_query_object *TransformFeedbackOverflow[MAX_VERTEX_STREAMS];
+   struct gl_query_object *TransformFeedbackOverflowAny;
 
    /** GL_ARB_timer_query */
    struct gl_query_object *TimeElapsed;
@@ -3490,6 +3537,13 @@ struct gl_constants
    GLboolean AllowGLSLExtensionDirectiveMidShader;
 
    /**
+    * Allow creating a higher compat profile (version 3.1+) for apps that
+    * request it. Be careful when adding that driconf option because some
+    * features are unimplemented and might not work correctly.
+    */
+   GLboolean AllowHigherCompatVersion;
+
+   /**
     * Force uninitialized variables to default to zero.
     */
    GLboolean GLSLZeroInit;
@@ -3749,6 +3803,9 @@ struct gl_constants
 
    /** GL_OES_primitive_bounding_box */
    bool NoPrimitiveBoundingBoxOutput;
+
+   /** Used as an input for sha1 generation in the on-disk shader cache */
+   unsigned char *dri_config_options_sha1;
 };
 
 
@@ -3862,6 +3919,7 @@ struct gl_extensions
    GLboolean ARB_transform_feedback2;
    GLboolean ARB_transform_feedback3;
    GLboolean ARB_transform_feedback_instanced;
+   GLboolean ARB_transform_feedback_overflow_query;
    GLboolean ARB_uniform_buffer_object;
    GLboolean ARB_vertex_attrib_64bit;
    GLboolean ARB_vertex_program;
@@ -4494,6 +4552,7 @@ struct gl_context
    struct gl_transform_feedback_state TransformFeedback;
 
    struct gl_perf_monitor_state PerfMonitor;
+   struct gl_perf_query_state PerfQuery;
 
    struct gl_buffer_object *DrawIndirectBuffer; /** < GL_ARB_draw_indirect */
    struct gl_buffer_object *ParameterBuffer; /** < GL_ARB_indirect_parameters */

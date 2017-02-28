@@ -749,7 +749,8 @@ void si_emit_cache_flush(struct si_context *sctx)
 	struct radeon_winsys_cs *cs = rctx->gfx.cs;
 	uint32_t cp_coher_cntl = 0;
 
-	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_FRAMEBUFFER)
+	if (rctx->flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
+			   SI_CONTEXT_FLUSH_AND_INV_DB))
 		sctx->b.num_fb_cache_flushes++;
 
 	/* SI has a bug that it always flushes ICACHE and KCACHE if either
@@ -780,23 +781,18 @@ void si_emit_cache_flush(struct si_context *sctx)
 		if (rctx->chip_class == VI)
 			r600_gfx_write_event_eop(rctx, V_028A90_FLUSH_AND_INV_CB_DATA_TS,
 						 0, 0, NULL, 0, 0, 0);
+
+		/* Flush CMASK/FMASK/DCC. SURFACE_SYNC will wait for idle. */
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_META) | EVENT_INDEX(0));
 	}
 	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB) {
 		cp_coher_cntl |= S_0085F0_DB_ACTION_ENA(1) |
 				 S_0085F0_DB_DEST_BASE_ENA(1);
-	}
 
-	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_CB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
-		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_META) | EVENT_INDEX(0));
-		/* needed for wait for idle in SURFACE_SYNC */
-		assert(rctx->flags & SI_CONTEXT_FLUSH_AND_INV_CB);
-	}
-	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB_META) {
+		/* Flush HTILE. SURFACE_SYNC will wait for idle. */
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_DB_META) | EVENT_INDEX(0));
-		/* needed for wait for idle in SURFACE_SYNC */
-		assert(rctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB);
 	}
 
 	/* Wait for shader engines to go idle.
@@ -918,13 +914,59 @@ static void si_get_draw_start_count(struct si_context *sctx,
 				    unsigned *start, unsigned *count)
 {
 	if (info->indirect) {
-		struct r600_resource *indirect =
-			(struct r600_resource*)info->indirect;
-		int *data = r600_buffer_map_sync_with_rings(&sctx->b,
-					indirect, PIPE_TRANSFER_READ);
-                data += info->indirect_offset/sizeof(int);
-		*start = data[2];
-		*count = data[0];
+		unsigned indirect_count;
+		struct pipe_transfer *transfer;
+		unsigned begin, end;
+		unsigned map_size;
+		unsigned *data;
+
+		if (info->indirect_params) {
+			data = pipe_buffer_map_range(&sctx->b.b,
+					info->indirect_params,
+					info->indirect_params_offset,
+					sizeof(unsigned),
+					PIPE_TRANSFER_READ, &transfer);
+
+			indirect_count = *data;
+
+			pipe_buffer_unmap(&sctx->b.b, transfer);
+		} else {
+			indirect_count = info->indirect_count;
+		}
+
+		if (!indirect_count) {
+			*start = *count = 0;
+			return;
+		}
+
+		map_size = (indirect_count - 1) * info->indirect_stride + 3 * sizeof(unsigned);
+		data = pipe_buffer_map_range(&sctx->b.b, info->indirect,
+					     info->indirect_offset, map_size,
+					     PIPE_TRANSFER_READ, &transfer);
+
+		begin = UINT_MAX;
+		end = 0;
+
+		for (unsigned i = 0; i < indirect_count; ++i) {
+			unsigned count = data[0];
+			unsigned start = data[2];
+
+			if (count > 0) {
+				begin = MIN2(begin, start);
+				end = MAX2(end, start + count);
+			}
+
+			data += info->indirect_stride / sizeof(unsigned);
+		}
+
+		pipe_buffer_unmap(&sctx->b.b, transfer);
+
+		if (begin < end) {
+			*start = begin;
+			*count = end - begin;
+		} else {
+			*start = *count = 0;
+		}
 	} else {
 		*start = info->start;
 		*count = info->count;
@@ -1052,21 +1094,24 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		/* 8-bit indices are supported on VI. */
 		if (sctx->b.chip_class <= CIK && ib.index_size == 1) {
 			struct pipe_resource *out_buffer = NULL;
-			unsigned out_offset, start, count, start_offset;
+			unsigned out_offset, start, count, start_offset, size;
 			void *ptr;
 
 			si_get_draw_start_count(sctx, info, &start, &count);
-			start_offset = start * ib.index_size;
+			start_offset = start * 2;
+			size = count * 2;
 
-			u_upload_alloc(sctx->b.uploader, start_offset, count * 2, 256,
+			u_upload_alloc(ctx->stream_uploader, start_offset,
+				       size,
+				       si_optimal_tcc_alignment(sctx, size),
 				       &out_offset, &out_buffer, &ptr);
 			if (!out_buffer) {
 				pipe_resource_reference(&ib.buffer, NULL);
 				return;
 			}
 
-			util_shorten_ubyte_elts_to_userptr(&sctx->b.b, &ib, 0,
-							   ib.offset + start_offset,
+			util_shorten_ubyte_elts_to_userptr(&sctx->b.b, &ib, 0, 0,
+							   ib.offset + start,
 							   count, ptr);
 
 			pipe_resource_reference(&ib.buffer, NULL);
@@ -1081,21 +1126,22 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 			si_get_draw_start_count(sctx, info, &start, &count);
 			start_offset = start * ib.index_size;
 
-			u_upload_data(sctx->b.uploader, start_offset, count * ib.index_size,
-				      256, (char*)ib.user_buffer + start_offset,
+			u_upload_data(ctx->stream_uploader, start_offset,
+				      count * ib.index_size,
+				      sctx->screen->b.info.tcc_cache_line_size,
+				      (char*)ib.user_buffer + start_offset,
 				      &ib.offset, &ib.buffer);
 			if (!ib.buffer)
 				return;
 			/* info->start will be added by the drawing code */
 			ib.offset -= start_offset;
+		} else if (sctx->b.chip_class <= CIK &&
+			   r600_resource(ib.buffer)->TC_L2_dirty) {
+			/* VI reads index buffers through TC L2, so it doesn't
+			 * need this. */
+			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+			r600_resource(ib.buffer)->TC_L2_dirty = false;
 		}
-	}
-
-	/* VI reads index buffers through TC L2. */
-	if (info->indexed && sctx->b.chip_class <= CIK &&
-	    r600_resource(ib.buffer)->TC_L2_dirty) {
-		sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-		r600_resource(ib.buffer)->TC_L2_dirty = false;
 	}
 
 	if (info->indirect) {

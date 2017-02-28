@@ -100,6 +100,8 @@ blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
       surface_offsets[i] = surface_state.offset;
       surface_maps[i] = surface_state.map;
    }
+
+   anv_state_flush(cmd_buffer->device, bt_state);
 }
 
 static void *
@@ -116,6 +118,14 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    };
 
    return vb_state.map;
+}
+
+static void
+blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
+{
+   struct anv_device *device = batch->blorp->driver_ctx;
+   if (!device->info.has_llc)
+      anv_flush_range(start, size);
 }
 
 static void
@@ -153,6 +163,11 @@ genX(blorp_exec)(struct blorp_batch *batch,
    genX(flush_pipeline_select_3d)(cmd_buffer);
 
    genX(cmd_buffer_emit_gen7_depth_flush)(cmd_buffer);
+
+   /* BLORP doesn't do anything fancy with depth such as discards, so we want
+    * the PMA fix off.  Also, off is always the safe option.
+    */
+   genX(cmd_buffer_enable_pma_fix)(cmd_buffer, false);
 
    blorp_exec(batch, params);
 

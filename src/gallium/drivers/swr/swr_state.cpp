@@ -451,7 +451,7 @@ swr_create_vertex_elements_state(struct pipe_context *pipe,
 {
    struct swr_vertex_element_state *velems;
    assert(num_elements <= PIPE_MAX_ATTRIBS);
-   velems = CALLOC_STRUCT(swr_vertex_element_state);
+   velems = new swr_vertex_element_state;
    if (velems) {
       velems->fsState.bVertexIDOffsetEnable = true;
       velems->fsState.numAttribs = num_elements;
@@ -521,8 +521,10 @@ swr_bind_vertex_elements_state(struct pipe_context *pipe, void *velems)
 static void
 swr_delete_vertex_elements_state(struct pipe_context *pipe, void *velems)
 {
+   struct swr_vertex_element_state *swr_velems =
+      (struct swr_vertex_element_state *) velems;
    /* XXX Need to destroy fetch shader? */
-   FREE(velems);
+   delete swr_velems;
 }
 
 
@@ -1104,6 +1106,7 @@ swr_update_derived(struct pipe_context *pipe,
       SWR_VERTEX_BUFFER_STATE swrVertexBuffers[PIPE_MAX_ATTRIBS];
       for (UINT i = 0; i < ctx->num_vertex_buffers; i++) {
          uint32_t size, pitch, elems, partial_inbounds;
+         uint32_t min_vertex_index;
          const uint8_t *p_data;
          struct pipe_vertex_buffer *vb = &ctx->vertex_buffer[i];
 
@@ -1115,6 +1118,7 @@ swr_update_derived(struct pipe_context *pipe,
             size = vb->buffer->width0;
             elems = size / pitch;
             partial_inbounds = size % pitch;
+            min_vertex_index = 0;
 
             p_data = swr_resource_data(vb->buffer) + vb->buffer_offset;
          } else {
@@ -1126,6 +1130,7 @@ swr_update_derived(struct pipe_context *pipe,
             uint32_t base;
             swr_user_vbuf_range(&info, ctx->velems, vb, i, &elems, &base, &size);
             partial_inbounds = 0;
+            min_vertex_index = info.min_index;
 
             /* Copy only needed vertices to scratch space */
             size = AlignUp(size, 4);
@@ -1141,6 +1146,7 @@ swr_update_derived(struct pipe_context *pipe,
          swrVertexBuffers[i].pitch = pitch;
          swrVertexBuffers[i].pData = p_data;
          swrVertexBuffers[i].size = size;
+         swrVertexBuffers[i].minVertex = min_vertex_index;
          swrVertexBuffers[i].maxVertex = elems;
          swrVertexBuffers[i].partialInboundsSize = partial_inbounds;
       }

@@ -40,7 +40,6 @@ VULKAN_FILES := \
 	anv_pipeline.c \
 	anv_pipeline_cache.c \
 	anv_private.h \
-	anv_query.c \
 	anv_util.c \
 	anv_wsi.c \
 	vk_format_info.h
@@ -61,35 +60,26 @@ VULKAN_GENERATED_FILES := \
 	anv_entrypoints.c \
 	anv_entrypoints.h
 
+GENX_FILES := \
+	genX_blorp_exec.c \
+	genX_cmd_buffer.c \
+	genX_gpu_memcpy.c \
+	genX_pipeline.c \
+	genX_query.c \
+	genX_state.c
 
 GEN7_FILES := \
-	genX_cmd_buffer.c \
-	genX_blorp_exec.c \
-	genX_gpu_memcpy.c \
-	genX_pipeline.c \
 	gen7_cmd_buffer.c \
-	genX_state.c
+        $(GENX_FILES)
 
 GEN75_FILES := \
-	genX_cmd_buffer.c \
-	genX_blorp_exec.c \
-	genX_gpu_memcpy.c \
-	genX_pipeline.c \
 	gen7_cmd_buffer.c \
-	genX_state.c
+        $(GENX_FILES)
 
 GEN8_FILES := \
-	genX_cmd_buffer.c \
-	genX_blorp_exec.c \
-	genX_gpu_memcpy.c \
-	genX_pipeline.c \
 	gen8_cmd_buffer.c \
-	genX_state.c
+        $(GENX_FILES)
 
 GEN9_FILES := \
-	genX_cmd_buffer.c \
-	genX_blorp_exec.c \
-	genX_gpu_memcpy.c \
-	genX_pipeline.c \
 	gen8_cmd_buffer.c \
-	genX_state.c
+        $(GENX_FILES)

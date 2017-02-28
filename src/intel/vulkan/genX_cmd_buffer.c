@@ -55,8 +55,6 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
 {
    struct anv_device *device = cmd_buffer->device;
 
-/* XXX: Do we need this on more than just BDW? */
-#if (GEN_GEN >= 8)
    /* Emit a render target cache flush.
     *
     * This isn't documented anywhere in the PRM.  However, it seems to be
@@ -65,9 +63,10 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
     * clear depth, reset state base address, and then go render stuff.
     */
    anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
+      pc.DCFlushEnable = true;
       pc.RenderTargetCacheFlushEnable = true;
+      pc.CommandStreamerStallEnable = true;
    }
-#endif
 
    anv_batch_emit(&cmd_buffer->batch, GENX(STATE_BASE_ADDRESS), sba) {
       sba.GeneralStateBaseAddress = (struct anv_address) { NULL, 0 };
@@ -148,6 +147,8 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
     */
    anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
       pc.TextureCacheInvalidationEnable = true;
+      pc.ConstantCacheInvalidationEnable = true;
+      pc.StateCacheInvalidationEnable = true;
    }
 }
 
@@ -221,6 +222,11 @@ color_attachment_compute_aux_usage(struct anv_device *device,
       att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
       att_state->fast_clear = false;
       return;
+   } else if (iview->image->aux_usage == ISL_AUX_USAGE_MCS) {
+      att_state->aux_usage = ISL_AUX_USAGE_MCS;
+      att_state->input_aux_usage = ISL_AUX_USAGE_MCS;
+      att_state->fast_clear = false;
+      return;
    }
 
    assert(iview->image->aux_surface.isl.usage & ISL_SURF_USAGE_CCS_BIT);
@@ -265,13 +271,23 @@ color_attachment_compute_aux_usage(struct anv_device *device,
       att_state->fast_clear = false;
    }
 
-   if (isl_format_supports_lossless_compression(&device->info,
-                                                iview->isl.format)) {
+   /**
+    * TODO: Consider using a heuristic to determine if temporarily enabling
+    * CCS_E for this image view would be beneficial.
+    *
+    * While fast-clear resolves and partial resolves are fairly cheap in the
+    * case where you render to most of the pixels, full resolves are not
+    * because they potentially involve reading and writing the entire
+    * framebuffer.  If we can't texture with CCS_E, we should leave it off and
+    * limit ourselves to fast clears.
+    */
+   if (iview->image->aux_usage == ISL_AUX_USAGE_CCS_E) {
       att_state->aux_usage = ISL_AUX_USAGE_CCS_E;
       att_state->input_aux_usage = ISL_AUX_USAGE_CCS_E;
    } else if (att_state->fast_clear) {
       att_state->aux_usage = ISL_AUX_USAGE_CCS_D;
-      if (GEN_GEN >= 9) {
+      if (GEN_GEN >= 9 &&
+          !isl_format_supports_ccs_e(&device->info, iview->isl.format)) {
          /* From the Sky Lake PRM, RENDER_SURFACE_STATE::AuxiliarySurfaceMode:
           *
           *    "If Number of Multisamples is MULTISAMPLECOUNT_1, AUX_CCS_D
@@ -527,6 +543,7 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
 
             struct isl_view view = iview->isl;
             view.usage |= ISL_SURF_USAGE_RENDER_TARGET_BIT;
+            view.swizzle = anv_swizzle_for_render(view.swizzle);
             isl_surf_fill_state(isl_dev,
                                 state->attachments[i].color_rt_state.map,
                                 .surf = &iview->image->color_surface.isl,
@@ -567,8 +584,7 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
          }
       }
 
-      if (!cmd_buffer->device->info.has_llc)
-         anv_state_clflush(state->render_pass_states);
+      anv_state_flush(cmd_buffer->device, state->render_pass_states);
    }
 }
 
@@ -625,6 +641,11 @@ genX(EndCommandBuffer)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
 
+   /* We want every command buffer to start with the PMA fix in a known state,
+    * so we disable it at the end of the command buffer.
+    */
+   genX(cmd_buffer_enable_pma_fix)(cmd_buffer, false);
+
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 
    anv_cmd_buffer_end_batch_buffer(cmd_buffer);
@@ -641,6 +662,11 @@ genX(CmdExecuteCommands)(
    ANV_FROM_HANDLE(anv_cmd_buffer, primary, commandBuffer);
 
    assert(primary->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+
+   /* The secondary command buffers will assume that the PMA fix is disabled
+    * when they begin executing.  Make sure this is true.
+    */
+   genX(cmd_buffer_enable_pma_fix)(primary, false);
 
    for (uint32_t i = 0; i < commandBufferCount; i++) {
       ANV_FROM_HANDLE(anv_cmd_buffer, secondary, pCmdBuffers[i]);
@@ -1199,7 +1225,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
          break;
 
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
-         surface_state = desc->image_view->storage_surface_state;
+         surface_state = (binding->write_only)
+            ? desc->image_view->writeonly_storage_surface_state
+            : desc->image_view->storage_surface_state;
          assert(surface_state.alloc_size);
          add_image_view_relocs(cmd_buffer, desc->image_view,
                                desc->image_view->image->aux_usage,
@@ -1226,7 +1254,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
          break;
 
       case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
-         surface_state = desc->buffer_view->storage_surface_state;
+         surface_state = (binding->write_only)
+            ? desc->buffer_view->writeonly_storage_surface_state
+            : desc->buffer_view->storage_surface_state;
          assert(surface_state.alloc_size);
          add_surface_state_reloc(cmd_buffer, surface_state,
                                  desc->buffer_view->bo,
@@ -1249,8 +1279,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
    assert(image == map->image_count);
 
  out:
-   if (!cmd_buffer->device->info.has_llc)
-      anv_state_clflush(*bt_state);
+   anv_state_flush(cmd_buffer->device, *bt_state);
 
    return VK_SUCCESS;
 }
@@ -1307,8 +1336,7 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
              sampler->state, sizeof(sampler->state));
    }
 
-   if (!cmd_buffer->device->info.has_llc)
-      anv_state_clflush(*state);
+   anv_state_flush(cmd_buffer->device, *state);
 
    return VK_SUCCESS;
 }
@@ -1585,27 +1613,35 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
 }
 
 static void
-emit_base_vertex_instance_bo(struct anv_cmd_buffer *cmd_buffer,
-                             struct anv_bo *bo, uint32_t offset)
+emit_vertex_bo(struct anv_cmd_buffer *cmd_buffer,
+               struct anv_bo *bo, uint32_t offset,
+               uint32_t size, uint32_t index)
 {
    uint32_t *p = anv_batch_emitn(&cmd_buffer->batch, 5,
                                  GENX(3DSTATE_VERTEX_BUFFERS));
 
    GENX(VERTEX_BUFFER_STATE_pack)(&cmd_buffer->batch, p + 1,
       &(struct GENX(VERTEX_BUFFER_STATE)) {
-         .VertexBufferIndex = 32, /* Reserved for this */
+         .VertexBufferIndex = index,
          .AddressModifyEnable = true,
          .BufferPitch = 0,
 #if (GEN_GEN >= 8)
          .MemoryObjectControlState = GENX(MOCS),
          .BufferStartingAddress = { bo, offset },
-         .BufferSize = 8
+         .BufferSize = size
 #else
          .VertexBufferMemoryObjectControlState = GENX(MOCS),
          .BufferStartingAddress = { bo, offset },
-         .EndAddress = { bo, offset + 8 },
+         .EndAddress = { bo, offset + size },
 #endif
       });
+}
+
+static void
+emit_base_vertex_instance_bo(struct anv_cmd_buffer *cmd_buffer,
+                             struct anv_bo *bo, uint32_t offset)
+{
+   emit_vertex_bo(cmd_buffer, bo, offset, 8, ANV_SVGS_VB_INDEX);
 }
 
 static void
@@ -1618,11 +1654,25 @@ emit_base_vertex_instance(struct anv_cmd_buffer *cmd_buffer,
    ((uint32_t *)id_state.map)[0] = base_vertex;
    ((uint32_t *)id_state.map)[1] = base_instance;
 
-   if (!cmd_buffer->device->info.has_llc)
-      anv_state_clflush(id_state);
+   anv_state_flush(cmd_buffer->device, id_state);
 
    emit_base_vertex_instance_bo(cmd_buffer,
       &cmd_buffer->device->dynamic_state_block_pool.bo, id_state.offset);
+}
+
+static void
+emit_draw_index(struct anv_cmd_buffer *cmd_buffer, uint32_t draw_index)
+{
+   struct anv_state state =
+      anv_cmd_buffer_alloc_dynamic_state(cmd_buffer, 4, 4);
+
+   ((uint32_t *)state.map)[0] = draw_index;
+
+   anv_state_flush(cmd_buffer->device, state);
+
+   emit_vertex_bo(cmd_buffer,
+                  &cmd_buffer->device->dynamic_state_block_pool.bo,
+                  state.offset, 4, ANV_DRAWID_VB_INDEX);
 }
 
 void genX(CmdDraw)(
@@ -1640,6 +1690,8 @@ void genX(CmdDraw)(
 
    if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance(cmd_buffer, firstVertex, firstInstance);
+   if (vs_prog_data->uses_drawid)
+      emit_draw_index(cmd_buffer, 0);
 
    anv_batch_emit(&cmd_buffer->batch, GENX(3DPRIMITIVE), prim) {
       prim.VertexAccessType         = SEQUENTIAL;
@@ -1668,6 +1720,8 @@ void genX(CmdDrawIndexed)(
 
    if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance(cmd_buffer, vertexOffset, firstInstance);
+   if (vs_prog_data->uses_drawid)
+      emit_draw_index(cmd_buffer, 0);
 
    anv_batch_emit(&cmd_buffer->batch, GENX(3DPRIMITIVE), prim) {
       prim.VertexAccessType         = RANDOM;
@@ -1706,6 +1760,8 @@ void genX(CmdDrawIndirect)(
 
    if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance_bo(cmd_buffer, bo, bo_offset + 8);
+   if (vs_prog_data->uses_drawid)
+      emit_draw_index(cmd_buffer, 0);
 
    emit_lrm(&cmd_buffer->batch, GEN7_3DPRIM_VERTEX_COUNT, bo, bo_offset);
    emit_lrm(&cmd_buffer->batch, GEN7_3DPRIM_INSTANCE_COUNT, bo, bo_offset + 4);
@@ -1739,6 +1795,8 @@ void genX(CmdDrawIndexedIndirect)(
    /* TODO: We need to stomp base vertex to 0 somehow */
    if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance_bo(cmd_buffer, bo, bo_offset + 12);
+   if (vs_prog_data->uses_drawid)
+      emit_draw_index(cmd_buffer, 0);
 
    emit_lrm(&cmd_buffer->batch, GEN7_3DPRIM_VERTEX_COUNT, bo, bo_offset);
    emit_lrm(&cmd_buffer->batch, GEN7_3DPRIM_INSTANCE_COUNT, bo, bo_offset + 4);
@@ -1855,18 +1913,17 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
 
 #if GEN_GEN == 7
 
-static bool
+static VkResult
 verify_cmd_parser(const struct anv_device *device,
                   int required_version,
                   const char *function)
 {
    if (device->instance->physicalDevice.cmd_parser_version < required_version) {
-      vk_errorf(VK_ERROR_FEATURE_NOT_PRESENT,
-                "cmd parser version %d is required for %s",
-                required_version, function);
-      return false;
+      return vk_errorf(VK_ERROR_FEATURE_NOT_PRESENT,
+                       "cmd parser version %d is required for %s",
+                       required_version, function);
    } else {
-      return true;
+      return VK_SUCCESS;
    }
 }
 
@@ -1889,8 +1946,7 @@ void genX(CmdDispatch)(
       sizes[0] = x;
       sizes[1] = y;
       sizes[2] = z;
-      if (!cmd_buffer->device->info.has_llc)
-         anv_state_clflush(state);
+      anv_state_flush(cmd_buffer->device, state);
       cmd_buffer->state.num_workgroups_offset = state.offset;
       cmd_buffer->state.num_workgroups_bo =
          &cmd_buffer->device->dynamic_state_block_pool.bo;
@@ -1937,7 +1993,8 @@ void genX(CmdDispatchIndirect)(
    /* Linux 4.4 added command parser version 5 which allows the GPGPU
     * indirect dispatch registers to be written.
     */
-   if (!verify_cmd_parser(cmd_buffer->device, 5, "vkCmdDispatchIndirect"))
+   if (verify_cmd_parser(cmd_buffer->device, 5,
+                         "vkCmdDispatchIndirect") != VK_SUCCESS)
       return;
 #endif
 
@@ -2179,7 +2236,8 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    const bool has_stencil =
       image && (image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT);
 
-   /* FIXME: Implement the PMA stall W/A */
+   cmd_buffer->state.hiz_enabled = has_hiz;
+
    /* FIXME: Width and Height are wrong */
 
    genX(cmd_buffer_emit_gen7_depth_flush)(cmd_buffer);
@@ -2417,283 +2475,9 @@ void genX(CmdEndRenderPass)(
 
    anv_cmd_buffer_resolve_subpass(cmd_buffer);
 
+   cmd_buffer->state.hiz_enabled = false;
+
 #ifndef NDEBUG
    anv_dump_add_framebuffer(cmd_buffer, cmd_buffer->state.framebuffer);
 #endif
 }
-
-static void
-emit_ps_depth_count(struct anv_cmd_buffer *cmd_buffer,
-                    struct anv_bo *bo, uint32_t offset)
-{
-   anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
-      pc.DestinationAddressType  = DAT_PPGTT;
-      pc.PostSyncOperation       = WritePSDepthCount;
-      pc.DepthStallEnable        = true;
-      pc.Address                 = (struct anv_address) { bo, offset };
-
-      if (GEN_GEN == 9 && cmd_buffer->device->info.gt == 4)
-         pc.CommandStreamerStallEnable = true;
-   }
-}
-
-static void
-emit_query_availability(struct anv_cmd_buffer *cmd_buffer,
-                        struct anv_bo *bo, uint32_t offset)
-{
-   anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
-      pc.DestinationAddressType  = DAT_PPGTT;
-      pc.PostSyncOperation       = WriteImmediateData;
-      pc.Address                 = (struct anv_address) { bo, offset };
-      pc.ImmediateData           = 1;
-   }
-}
-
-void genX(CmdBeginQuery)(
-    VkCommandBuffer                             commandBuffer,
-    VkQueryPool                                 queryPool,
-    uint32_t                                    query,
-    VkQueryControlFlags                         flags)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_query_pool, pool, queryPool);
-
-   /* Workaround: When meta uses the pipeline with the VS disabled, it seems
-    * that the pipelining of the depth write breaks. What we see is that
-    * samples from the render pass clear leaks into the first query
-    * immediately after the clear. Doing a pipecontrol with a post-sync
-    * operation and DepthStallEnable seems to work around the issue.
-    */
-   if (cmd_buffer->state.need_query_wa) {
-      cmd_buffer->state.need_query_wa = false;
-      anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
-         pc.DepthCacheFlushEnable   = true;
-         pc.DepthStallEnable        = true;
-      }
-   }
-
-   switch (pool->type) {
-   case VK_QUERY_TYPE_OCCLUSION:
-      emit_ps_depth_count(cmd_buffer, &pool->bo,
-                          query * sizeof(struct anv_query_pool_slot));
-      break;
-
-   case VK_QUERY_TYPE_PIPELINE_STATISTICS:
-   default:
-      unreachable("");
-   }
-}
-
-void genX(CmdEndQuery)(
-    VkCommandBuffer                             commandBuffer,
-    VkQueryPool                                 queryPool,
-    uint32_t                                    query)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_query_pool, pool, queryPool);
-
-   switch (pool->type) {
-   case VK_QUERY_TYPE_OCCLUSION:
-      emit_ps_depth_count(cmd_buffer, &pool->bo,
-                          query * sizeof(struct anv_query_pool_slot) + 8);
-
-      emit_query_availability(cmd_buffer, &pool->bo,
-                              query * sizeof(struct anv_query_pool_slot) + 16);
-      break;
-
-   case VK_QUERY_TYPE_PIPELINE_STATISTICS:
-   default:
-      unreachable("");
-   }
-}
-
-#define TIMESTAMP 0x2358
-
-void genX(CmdWriteTimestamp)(
-    VkCommandBuffer                             commandBuffer,
-    VkPipelineStageFlagBits                     pipelineStage,
-    VkQueryPool                                 queryPool,
-    uint32_t                                    query)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_query_pool, pool, queryPool);
-   uint32_t offset = query * sizeof(struct anv_query_pool_slot);
-
-   assert(pool->type == VK_QUERY_TYPE_TIMESTAMP);
-
-   switch (pipelineStage) {
-   case VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:
-      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_REGISTER_MEM), srm) {
-         srm.RegisterAddress  = TIMESTAMP;
-         srm.MemoryAddress    = (struct anv_address) { &pool->bo, offset };
-      }
-      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_REGISTER_MEM), srm) {
-         srm.RegisterAddress  = TIMESTAMP + 4;
-         srm.MemoryAddress    = (struct anv_address) { &pool->bo, offset + 4 };
-      }
-      break;
-
-   default:
-      /* Everything else is bottom-of-pipe */
-      anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
-         pc.DestinationAddressType  = DAT_PPGTT;
-         pc.PostSyncOperation       = WriteTimestamp;
-         pc.Address = (struct anv_address) { &pool->bo, offset };
-
-         if (GEN_GEN == 9 && cmd_buffer->device->info.gt == 4)
-            pc.CommandStreamerStallEnable = true;
-      }
-      break;
-   }
-
-   emit_query_availability(cmd_buffer, &pool->bo, query + 16);
-}
-
-#if GEN_GEN > 7 || GEN_IS_HASWELL
-
-#define alu_opcode(v)   __gen_uint((v),  20, 31)
-#define alu_operand1(v) __gen_uint((v),  10, 19)
-#define alu_operand2(v) __gen_uint((v),   0,  9)
-#define alu(opcode, operand1, operand2) \
-   alu_opcode(opcode) | alu_operand1(operand1) | alu_operand2(operand2)
-
-#define OPCODE_NOOP      0x000
-#define OPCODE_LOAD      0x080
-#define OPCODE_LOADINV   0x480
-#define OPCODE_LOAD0     0x081
-#define OPCODE_LOAD1     0x481
-#define OPCODE_ADD       0x100
-#define OPCODE_SUB       0x101
-#define OPCODE_AND       0x102
-#define OPCODE_OR        0x103
-#define OPCODE_XOR       0x104
-#define OPCODE_STORE     0x180
-#define OPCODE_STOREINV  0x580
-
-#define OPERAND_R0   0x00
-#define OPERAND_R1   0x01
-#define OPERAND_R2   0x02
-#define OPERAND_R3   0x03
-#define OPERAND_R4   0x04
-#define OPERAND_SRCA 0x20
-#define OPERAND_SRCB 0x21
-#define OPERAND_ACCU 0x31
-#define OPERAND_ZF   0x32
-#define OPERAND_CF   0x33
-
-#define CS_GPR(n) (0x2600 + (n) * 8)
-
-static void
-emit_load_alu_reg_u64(struct anv_batch *batch, uint32_t reg,
-                      struct anv_bo *bo, uint32_t offset)
-{
-   anv_batch_emit(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
-      lrm.RegisterAddress  = reg,
-      lrm.MemoryAddress    = (struct anv_address) { bo, offset };
-   }
-   anv_batch_emit(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
-      lrm.RegisterAddress  = reg + 4;
-      lrm.MemoryAddress    = (struct anv_address) { bo, offset + 4 };
-   }
-}
-
-static void
-store_query_result(struct anv_batch *batch, uint32_t reg,
-                   struct anv_bo *bo, uint32_t offset, VkQueryResultFlags flags)
-{
-   anv_batch_emit(batch, GENX(MI_STORE_REGISTER_MEM), srm) {
-      srm.RegisterAddress  = reg;
-      srm.MemoryAddress    = (struct anv_address) { bo, offset };
-   }
-
-   if (flags & VK_QUERY_RESULT_64_BIT) {
-      anv_batch_emit(batch, GENX(MI_STORE_REGISTER_MEM), srm) {
-         srm.RegisterAddress  = reg + 4;
-         srm.MemoryAddress    = (struct anv_address) { bo, offset + 4 };
-      }
-   }
-}
-
-void genX(CmdCopyQueryPoolResults)(
-    VkCommandBuffer                             commandBuffer,
-    VkQueryPool                                 queryPool,
-    uint32_t                                    firstQuery,
-    uint32_t                                    queryCount,
-    VkBuffer                                    destBuffer,
-    VkDeviceSize                                destOffset,
-    VkDeviceSize                                destStride,
-    VkQueryResultFlags                          flags)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_query_pool, pool, queryPool);
-   ANV_FROM_HANDLE(anv_buffer, buffer, destBuffer);
-   uint32_t slot_offset, dst_offset;
-
-   if (flags & VK_QUERY_RESULT_WAIT_BIT) {
-      anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
-         pc.CommandStreamerStallEnable = true;
-         pc.StallAtPixelScoreboard     = true;
-      }
-   }
-
-   dst_offset = buffer->offset + destOffset;
-   for (uint32_t i = 0; i < queryCount; i++) {
-
-      slot_offset = (firstQuery + i) * sizeof(struct anv_query_pool_slot);
-      switch (pool->type) {
-      case VK_QUERY_TYPE_OCCLUSION:
-         emit_load_alu_reg_u64(&cmd_buffer->batch,
-                               CS_GPR(0), &pool->bo, slot_offset);
-         emit_load_alu_reg_u64(&cmd_buffer->batch,
-                               CS_GPR(1), &pool->bo, slot_offset + 8);
-
-         /* FIXME: We need to clamp the result for 32 bit. */
-
-         uint32_t *dw = anv_batch_emitn(&cmd_buffer->batch, 5, GENX(MI_MATH));
-         dw[1] = alu(OPCODE_LOAD, OPERAND_SRCA, OPERAND_R1);
-         dw[2] = alu(OPCODE_LOAD, OPERAND_SRCB, OPERAND_R0);
-         dw[3] = alu(OPCODE_SUB, 0, 0);
-         dw[4] = alu(OPCODE_STORE, OPERAND_R2, OPERAND_ACCU);
-         break;
-
-      case VK_QUERY_TYPE_TIMESTAMP:
-         emit_load_alu_reg_u64(&cmd_buffer->batch,
-                               CS_GPR(2), &pool->bo, slot_offset);
-         break;
-
-      default:
-         unreachable("unhandled query type");
-      }
-
-      store_query_result(&cmd_buffer->batch,
-                         CS_GPR(2), buffer->bo, dst_offset, flags);
-
-      if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) {
-         emit_load_alu_reg_u64(&cmd_buffer->batch, CS_GPR(0),
-                               &pool->bo, slot_offset + 16);
-         if (flags & VK_QUERY_RESULT_64_BIT)
-            store_query_result(&cmd_buffer->batch,
-                               CS_GPR(0), buffer->bo, dst_offset + 8, flags);
-         else
-            store_query_result(&cmd_buffer->batch,
-                               CS_GPR(0), buffer->bo, dst_offset + 4, flags);
-      }
-
-      dst_offset += destStride;
-   }
-}
-
-#else
-void genX(CmdCopyQueryPoolResults)(
-    VkCommandBuffer                             commandBuffer,
-    VkQueryPool                                 queryPool,
-    uint32_t                                    firstQuery,
-    uint32_t                                    queryCount,
-    VkBuffer                                    destBuffer,
-    VkDeviceSize                                destOffset,
-    VkDeviceSize                                destStride,
-    VkQueryResultFlags                          flags)
-{
-   anv_finishme("Queries not yet supported on Ivy Bridge");
-}
-#endif

@@ -23,7 +23,6 @@
 
 #include "si_shader_internal.h"
 #include "si_pipe.h"
-#include "radeon/radeon_elf_util.h"
 
 #include "gallivm/lp_bld_const.h"
 #include "gallivm/lp_bld_gather.h"
@@ -200,7 +199,7 @@ static void si_diagnostic_handler(LLVMDiagnosticInfoRef di, void *context)
  *
  * @returns 0 for success, 1 for failure
  */
-unsigned si_llvm_compile(LLVMModuleRef M, struct radeon_shader_binary *binary,
+unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
 			 LLVMTargetMachineRef tm,
 			 struct pipe_debug_callback *debug)
 {
@@ -238,7 +237,7 @@ unsigned si_llvm_compile(LLVMModuleRef M, struct radeon_shader_binary *binary,
 	buffer_size = LLVMGetBufferSize(out_buffer);
 	buffer_data = LLVMGetBufferStart(out_buffer);
 
-	radeon_elf_read(buffer_data, buffer_size, binary);
+	ac_elf_read(buffer_data, buffer_size, binary);
 
 	/* Clean up */
 	LLVMDisposeMemoryBuffer(out_buffer);
@@ -952,21 +951,6 @@ static void emit_declaration(struct lp_build_tgsi_context *bld_base,
 	}
 }
 
-LLVMValueRef si_llvm_saturate(struct lp_build_tgsi_context *bld_base,
-			      LLVMValueRef value)
-{
-	struct lp_build_emit_data clamp_emit_data;
-
-	memset(&clamp_emit_data, 0, sizeof(clamp_emit_data));
-	clamp_emit_data.arg_count = 3;
-	clamp_emit_data.args[0] = value;
-	clamp_emit_data.args[2] = bld_base->base.one;
-	clamp_emit_data.args[1] = bld_base->base.zero;
-
-	return lp_build_emit_llvm(bld_base, TGSI_OPCODE_CLAMP,
-				  &clamp_emit_data);
-}
-
 void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			const struct tgsi_full_instruction *inst,
 			const struct tgsi_opcode_info *info,
@@ -1003,7 +987,7 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 		if (tgsi_type_is_64bit(dtype) && (chan_index == 1 || chan_index == 3))
 			continue;
 		if (inst->Instruction.Saturate)
-			value = si_llvm_saturate(bld_base, value);
+			value = ac_emit_clamp(&ctx->ac, value);
 
 		if (reg->Register.File == TGSI_FILE_ADDRESS) {
 			temp_ptr = ctx->addrs[reg->Register.Index][chan_index];
@@ -1256,8 +1240,6 @@ void si_llvm_context_init(struct si_shader_context *ctx,
 			  const struct tgsi_token *tokens)
 {
 	struct lp_type type;
-	LLVMTargetDataRef data_layout = LLVMCreateTargetDataLayout(tm);
-	char *data_layout_str = LLVMCopyStringRepOfTargetData(data_layout);
 
 	/* Initialize the gallivm object:
 	 * We are only using the module, context, and builder fields of this struct.
@@ -1275,13 +1257,21 @@ void si_llvm_context_init(struct si_shader_context *ctx,
 						ctx->gallivm.context);
 	LLVMSetTarget(ctx->gallivm.module, "amdgcn--");
 
+#if HAVE_LLVM >= 0x0309
+	LLVMTargetDataRef data_layout = LLVMCreateTargetDataLayout(tm);
+	char *data_layout_str = LLVMCopyStringRepOfTargetData(data_layout);
 	LLVMSetDataLayout(ctx->gallivm.module, data_layout_str);
 	LLVMDisposeTargetData(data_layout);
 	LLVMDisposeMessage(data_layout_str);
+#endif
 
 	bool unsafe_fpmath = (sscreen->b.debug_flags & DBG_UNSAFE_MATH) != 0;
+	enum lp_float_mode float_mode =
+		unsafe_fpmath ? LP_FLOAT_MODE_UNSAFE_FP_MATH :
+				LP_FLOAT_MODE_NO_SIGNED_ZEROS_FP_MATH;
+
 	ctx->gallivm.builder = lp_create_builder(ctx->gallivm.context,
-						 unsafe_fpmath);
+						 float_mode);
 
 	ac_llvm_context_init(&ctx->ac, ctx->gallivm.context);
 	ctx->ac.module = ctx->gallivm.module;
@@ -1364,6 +1354,9 @@ void si_llvm_context_init(struct si_shader_context *ctx,
 	ctx->v4i32 = LLVMVectorType(ctx->i32, 4);
 	ctx->v4f32 = LLVMVectorType(ctx->f32, 4);
 	ctx->v8i32 = LLVMVectorType(ctx->i32, 8);
+
+	ctx->i32_0 = LLVMConstInt(ctx->i32, 0, 0);
+	ctx->i32_1 = LLVMConstInt(ctx->i32, 1, 0);
 }
 
 void si_llvm_create_func(struct si_shader_context *ctx,

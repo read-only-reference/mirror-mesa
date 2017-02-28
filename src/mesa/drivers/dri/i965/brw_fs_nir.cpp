@@ -644,6 +644,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    switch (instr->op) {
    case nir_op_i2f:
    case nir_op_u2f:
+   case nir_op_i642d:
+   case nir_op_u642d:
       if (optimize_extract_to_float(instr, result))
          return;
       inst = bld.MOV(result, op[0]);
@@ -653,13 +655,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_f2d:
    case nir_op_i2d:
    case nir_op_u2d:
-   case nir_op_f2i64:
-   case nir_op_f2u64:
-   case nir_op_i2i64:
-   case nir_op_i2u64:
-   case nir_op_u2i64:
-   case nir_op_u2u64:
-   case nir_op_b2i64:
       /* CHV PRM, vol07, 3D Media GPGPU Engine, Register Region Restrictions:
        *
        *    "When source or destination is 64b (...), regioning in Align1
@@ -684,9 +679,22 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
          break;
       }
       /* fallthrough */
+   case nir_op_f2i64:
+   case nir_op_f2u64:
+   case nir_op_i2i64:
+   case nir_op_i2u64:
+   case nir_op_u2i64:
+   case nir_op_u2u64:
+   case nir_op_b2i64:
    case nir_op_d2f:
    case nir_op_d2i:
    case nir_op_d2u:
+   case nir_op_i642f:
+   case nir_op_u642f:
+   case nir_op_u2i32:
+   case nir_op_i2i32:
+   case nir_op_u2u32:
+   case nir_op_i2u32:
       if (instr->op == nir_op_b2i64) {
          bld.MOV(result, negate(op[0]));
       } else {
@@ -1086,15 +1094,26 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_f2b:
       bld.CMP(result, op[0], brw_imm_f(0.0f), BRW_CONDITIONAL_NZ);
       break;
+
+   case nir_op_i642b:
    case nir_op_d2b: {
       /* two-argument instructions can't take 64-bit immediates */
-      fs_reg zero = vgrf(glsl_type::double_type);
+      fs_reg zero;
+      fs_reg tmp;
+
+      if (instr->op == nir_op_d2b) {
+         zero = vgrf(glsl_type::double_type);
+         tmp = vgrf(glsl_type::double_type);
+      } else {
+         zero = vgrf(glsl_type::int64_t_type);
+         tmp = vgrf(glsl_type::int64_t_type);
+      }
+
       bld.MOV(zero, setup_imm_df(bld, 0.0));
       /* A SIMD16 execution needs to be split in two instructions, so use
        * a vgrf instead of the flag register as dst so instruction splitting
        * works
        */
-      fs_reg tmp = vgrf(glsl_type::double_type);
       bld.CMP(tmp, op[0], zero, BRW_CONDITIONAL_NZ);
       bld.MOV(result, subscript(tmp, BRW_REGISTER_TYPE_UD, 0));
       break;
@@ -1193,76 +1212,13 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       inst->saturate = instr->dest.saturate;
       break;
 
-   case nir_op_pack_double_2x32_split:
-      /* Optimize the common case where we are re-packing a double with
-       * the result of a previous double unpack. In this case we can take the
-       * 32-bit value to use in the re-pack from the original double and bypass
-       * the unpack operation.
-       */
-      for (int i = 0; i < 2; i++) {
-         if (instr->src[i].src.is_ssa)
-            continue;
-
-         const nir_instr *parent_instr = instr->src[i].src.ssa->parent_instr;
-         if (parent_instr->type == nir_instr_type_alu)
-            continue;
-
-         const nir_alu_instr *alu_parent = nir_instr_as_alu(parent_instr);
-         if (alu_parent->op == nir_op_unpack_double_2x32_split_x ||
-             alu_parent->op == nir_op_unpack_double_2x32_split_y)
-            continue;
-
-         if (!alu_parent->src[0].src.is_ssa)
-            continue;
-
-         op[i] = get_nir_src(alu_parent->src[0].src);
-         op[i] = offset(retype(op[i], BRW_REGISTER_TYPE_DF), bld,
-                        alu_parent->src[0].swizzle[channel]);
-         if (alu_parent->op == nir_op_unpack_double_2x32_split_y)
-            op[i] = subscript(op[i], BRW_REGISTER_TYPE_UD, 1);
-         else
-            op[i] = subscript(op[i], BRW_REGISTER_TYPE_UD, 0);
-      }
+   case nir_op_pack_64_2x32_split:
       bld.emit(FS_OPCODE_PACK, result, op[0], op[1]);
       break;
 
-   case nir_op_unpack_double_2x32_split_x:
-   case nir_op_unpack_double_2x32_split_y: {
-      /* Optimize the common case where we are unpacking from a double we have
-       * previously packed. In this case we can just bypass the pack operation
-       * and source directly from its arguments.
-       */
-      unsigned index = (instr->op == nir_op_unpack_double_2x32_split_x) ? 0 : 1;
-      if (instr->src[0].src.is_ssa) {
-         nir_instr *parent_instr = instr->src[0].src.ssa->parent_instr;
-         if (parent_instr->type == nir_instr_type_alu) {
-            nir_alu_instr *alu_parent = nir_instr_as_alu(parent_instr);
-            if (alu_parent->op == nir_op_pack_double_2x32_split &&
-                alu_parent->src[index].src.is_ssa) {
-               op[0] = retype(get_nir_src(alu_parent->src[index].src),
-                              BRW_REGISTER_TYPE_UD);
-               op[0] =
-                  offset(op[0], bld, alu_parent->src[index].swizzle[channel]);
-               bld.MOV(result, op[0]);
-               break;
-            }
-         }
-      }
-
-      if (instr->op == nir_op_unpack_double_2x32_split_x)
-         bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 0));
-      else
-         bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 1));
-      break;
-   }
-
-   case nir_op_pack_int_2x32_split:
-      bld.emit(FS_OPCODE_PACK, result, op[0], op[1]);
-      break;
-
-   case nir_op_unpack_int_2x32_split_x:
-   case nir_op_unpack_int_2x32_split_y: {
-      if (instr->op == nir_op_unpack_int_2x32_split_x)
+   case nir_op_unpack_64_2x32_split_x:
+   case nir_op_unpack_64_2x32_split_y: {
+      if (instr->op == nir_op_unpack_64_2x32_split_x)
          bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 0));
       else
          bld.MOV(result, subscript(op[0], BRW_REGISTER_TYPE_UD, 1));
@@ -2074,7 +2030,7 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
           * we might read up to nir->info->gs.vertices_in registers.
           */
          bld.emit(SHADER_OPCODE_MOV_INDIRECT, icp_handle,
-                  fs_reg(brw_vec8_grf(first_icp_handle, 0)),
+                  retype(brw_vec8_grf(first_icp_handle, 0), icp_handle.type),
                   fs_reg(icp_offset_bytes),
                   brw_imm_ud(nir->info->gs.vertices_in * REG_SIZE));
       }
@@ -2105,7 +2061,7 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
           * we might read up to ceil(nir->info->gs.vertices_in / 8) registers.
           */
          bld.emit(SHADER_OPCODE_MOV_INDIRECT, icp_handle,
-                  fs_reg(brw_vec8_grf(first_icp_handle, 0)),
+                  retype(brw_vec8_grf(first_icp_handle, 0), icp_handle.type),
                   fs_reg(icp_offset_bytes),
                   brw_imm_ud(DIV_ROUND_UP(nir->info->gs.vertices_in, 8) *
                              REG_SIZE));
@@ -2445,7 +2401,7 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
 
          /* Start at g1.  We might read up to 4 registers. */
          bld.emit(SHADER_OPCODE_MOV_INDIRECT, icp_handle,
-                  fs_reg(brw_vec8_grf(1, 0)), vertex_offset_bytes,
+                  retype(brw_vec8_grf(1, 0), icp_handle.type), vertex_offset_bytes,
                   brw_imm_ud(4 * REG_SIZE));
       }
 
@@ -3859,31 +3815,30 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
          unsigned read_size = instr->const_index[1] -
             (instr->num_components - 1) * type_sz(dest.type);
 
-         fs_reg indirect_chv_high_32bit;
-         bool is_chv_bxt_64bit =
-            (devinfo->is_cherryview || devinfo->is_broxton) &&
-            type_sz(dest.type) == 8;
-         if (is_chv_bxt_64bit) {
-            indirect_chv_high_32bit = vgrf(glsl_type::uint_type);
-            /* Calculate indirect address to read high 32 bits */
-            bld.ADD(indirect_chv_high_32bit, indirect, brw_imm_ud(4));
-         }
+         bool supports_64bit_indirects =
+            !devinfo->is_cherryview && !devinfo->is_broxton;
 
-         for (unsigned j = 0; j < instr->num_components; j++) {
-            if (!is_chv_bxt_64bit) {
+         if (type_sz(dest.type) != 8 || supports_64bit_indirects) {
+            for (unsigned j = 0; j < instr->num_components; j++) {
                bld.emit(SHADER_OPCODE_MOV_INDIRECT,
                         offset(dest, bld, j), offset(src, bld, j),
                         indirect, brw_imm_ud(read_size));
-            } else {
-               bld.emit(SHADER_OPCODE_MOV_INDIRECT,
-                        subscript(offset(dest, bld, j), BRW_REGISTER_TYPE_UD, 0),
-                        offset(src, bld, j),
-                        indirect, brw_imm_ud(read_size));
-
-               bld.emit(SHADER_OPCODE_MOV_INDIRECT,
-                        subscript(offset(dest, bld, j), BRW_REGISTER_TYPE_UD, 1),
-                        offset(src, bld, j),
-                        indirect_chv_high_32bit, brw_imm_ud(read_size));
+            }
+         } else {
+            const unsigned num_mov_indirects =
+               type_sz(dest.type) / type_sz(BRW_REGISTER_TYPE_UD);
+            /* We read a little bit less per MOV INDIRECT, as they are now
+             * 32-bits ones instead of 64-bit. Fix read_size then.
+             */
+            const unsigned read_size_32bit = read_size -
+                (num_mov_indirects - 1) * type_sz(BRW_REGISTER_TYPE_UD);
+            for (unsigned j = 0; j < instr->num_components; j++) {
+               for (unsigned i = 0; i < num_mov_indirects; i++) {
+                  bld.emit(SHADER_OPCODE_MOV_INDIRECT,
+                           subscript(offset(dest, bld, j), BRW_REGISTER_TYPE_UD, i),
+                           subscript(offset(src, bld, j), BRW_REGISTER_TYPE_UD, i),
+                           indirect, brw_imm_ud(read_size_32bit));
+               }
             }
          }
       }

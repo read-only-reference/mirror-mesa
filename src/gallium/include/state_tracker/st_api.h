@@ -160,6 +160,7 @@ enum st_context_resource_type {
  */
 #define ST_FLUSH_FRONT                    (1 << 0)
 #define ST_FLUSH_END_OF_FRAME             (1 << 1)
+#define ST_FLUSH_WAIT                     (1 << 2)
 
 /**
  * Value to st_manager->get_param function.
@@ -245,7 +246,9 @@ struct st_config_options
    unsigned force_glsl_version;
    boolean force_s3tc_enable;
    boolean allow_glsl_extension_directive_midshader;
+   boolean allow_higher_compat_version;
    boolean glsl_zero_init;
+   unsigned char config_options_sha1[20];
 };
 
 /**

@@ -94,6 +94,7 @@ enum radeon_value_id {
     RADEON_CURRENT_SCLK,
     RADEON_CURRENT_MCLK,
     RADEON_GPU_RESET_COUNTER, /* DRM 2.43.0 */
+    RADEON_CS_THREAD_TIME,
 };
 
 /* Each group of four has the same priority. */
@@ -200,6 +201,7 @@ struct radeon_info {
     uint32_t                    ce_fw_version;
     uint32_t                    vce_harvest_config;
     uint32_t                    clock_crystal_freq;
+    uint32_t                    tcc_cache_line_size;
 
     /* Kernel info. */
     uint32_t                    drm_major; /* version */

@@ -158,6 +158,9 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.EXT_timer_query = true;
    }
 
+   if (brw->gen == 6)
+      ctx->Extensions.ARB_transform_feedback2 = true;
+
    if (brw->gen >= 6) {
       ctx->Extensions.ARB_blend_func_extended =
          !driQueryOptionb(&brw->optionCache, "disable_blend_func_extended");
@@ -181,6 +184,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.EXT_framebuffer_multisample = true;
       ctx->Extensions.EXT_framebuffer_multisample_blit_scaled = true;
       ctx->Extensions.EXT_transform_feedback = true;
+      ctx->Extensions.ARB_transform_feedback_overflow_query = true;
       ctx->Extensions.OES_depth_texture_cube_map = true;
       ctx->Extensions.OES_sample_variables = true;
 
@@ -278,6 +282,9 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.MESA_shader_framebuffer_fetch = true;
       ctx->Extensions.ARB_post_depth_coverage = true;
    }
+
+   if (brw->gen >= 6)
+      ctx->Extensions.INTEL_performance_query = true;
 
    if (ctx->API == API_OPENGL_CORE)
       ctx->Extensions.ARB_base_instance = true;

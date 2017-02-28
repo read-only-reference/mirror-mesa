@@ -43,6 +43,10 @@
 #define HAVE_LLVM 0
 #endif
 
+#if HAVE_LLVM >= 0x0306
+#include <llvm-c/TargetMachine.h>
+#endif
+
 #ifndef MESA_LLVM_VERSION_PATCH
 #define MESA_LLVM_VERSION_PATCH 0
 #endif
@@ -62,12 +66,12 @@ struct r600_multi_fence {
 /*
  * shader binary helpers.
  */
-void radeon_shader_binary_init(struct radeon_shader_binary *b)
+void radeon_shader_binary_init(struct ac_shader_binary *b)
 {
 	memset(b, 0, sizeof(*b));
 }
 
-void radeon_shader_binary_clean(struct radeon_shader_binary *b)
+void radeon_shader_binary_clean(struct ac_shader_binary *b)
 {
 	if (!b)
 		return;
@@ -193,7 +197,9 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	/* Upload vertices. The hw rectangle has only 3 vertices,
 	 * I guess the 4th one is derived from the first 3.
 	 * The vertex specification should match u_blitter's vertex element state. */
-	u_upload_alloc(rctx->uploader, 0, sizeof(float) * 24, 256, &offset, &buf, (void**)&vb);
+	u_upload_alloc(rctx->b.stream_uploader, 0, sizeof(float) * 24,
+		       rctx->screen->info.tcc_cache_line_size,
+                       &offset, &buf, (void**)&vb);
 	if (!buf)
 		return;
 
@@ -597,14 +603,18 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 
 	rctx->allocator_zeroed_memory =
 		u_suballocator_create(&rctx->b, rscreen->info.gart_page_size,
-				      0, PIPE_USAGE_DEFAULT, true);
+				      0, PIPE_USAGE_DEFAULT, 0, true);
 	if (!rctx->allocator_zeroed_memory)
 		return false;
 
-	rctx->uploader = u_upload_create(&rctx->b, 1024 * 1024,
-					PIPE_BIND_INDEX_BUFFER |
-					PIPE_BIND_CONSTANT_BUFFER, PIPE_USAGE_STREAM);
-	if (!rctx->uploader)
+	rctx->b.stream_uploader = u_upload_create(&rctx->b, 1024 * 1024,
+						  0, PIPE_USAGE_STREAM);
+	if (!rctx->b.stream_uploader)
+		return false;
+
+	rctx->b.const_uploader = u_upload_create(&rctx->b, 128 * 1024,
+						 0, PIPE_USAGE_DEFAULT);
+	if (!rctx->b.const_uploader)
 		return false;
 
 	rctx->ctx = rctx->ws->ctx_create(rctx->ws);
@@ -647,9 +657,10 @@ void r600_common_context_cleanup(struct r600_common_context *rctx)
 	if (rctx->ctx)
 		rctx->ws->ctx_destroy(rctx->ctx);
 
-	if (rctx->uploader) {
-		u_upload_destroy(rctx->uploader);
-	}
+	if (rctx->b.stream_uploader)
+		u_upload_destroy(rctx->b.stream_uploader);
+	if (rctx->b.const_uploader)
+		u_upload_destroy(rctx->b.const_uploader);
 
 	slab_destroy_child(&rctx->pool_transfers);
 
@@ -770,6 +781,41 @@ static const char* r600_get_chip_name(struct r600_common_screen *rscreen)
 	case CHIP_STONEY: return "AMD STONEY";
 	default: return "AMD unknown";
 	}
+}
+
+static void r600_disk_cache_create(struct r600_common_screen *rscreen)
+{
+	uint32_t mesa_timestamp;
+	if (disk_cache_get_function_timestamp(r600_disk_cache_create,
+					      &mesa_timestamp)) {
+		char *timestamp_str;
+		int res = -1;
+		if (rscreen->chip_class < SI) {
+			res = asprintf(&timestamp_str, "%u",mesa_timestamp);
+		}
+#if HAVE_LLVM >= 0x0306
+		else {
+			uint32_t llvm_timestamp;
+			if (disk_cache_get_function_timestamp(LLVMInitializeAMDGPUTargetInfo,
+							      &llvm_timestamp)) {
+				res = asprintf(&timestamp_str, "%u_%u",
+					       mesa_timestamp, llvm_timestamp);
+			}
+		}
+#endif
+		if (res != -1) {
+			rscreen->disk_shader_cache =
+				disk_cache_create(r600_get_chip_name(rscreen),
+						  timestamp_str);
+			free(timestamp_str);
+		}
+	}
+}
+
+static struct disk_cache *r600_get_disk_shader_cache(struct pipe_screen *pscreen)
+{
+	struct r600_common_screen *rscreen = (struct r600_common_screen*)pscreen;
+	return rscreen->disk_shader_cache;
 }
 
 static const char* r600_get_name(struct pipe_screen* pscreen)
@@ -1227,6 +1273,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->b.get_name = r600_get_name;
 	rscreen->b.get_vendor = r600_get_vendor;
 	rscreen->b.get_device_vendor = r600_get_device_vendor;
+	rscreen->b.get_disk_shader_cache = r600_get_disk_shader_cache;
 	rscreen->b.get_compute_param = r600_get_compute_param;
 	rscreen->b.get_paramf = r600_get_paramf;
 	rscreen->b.get_timestamp = r600_get_timestamp;
@@ -1251,6 +1298,8 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->family = rscreen->info.family;
 	rscreen->chip_class = rscreen->info.chip_class;
 	rscreen->debug_flags = debug_get_flags_option("R600_DEBUG", common_debug_options, 0);
+
+	r600_disk_cache_create(rscreen);
 
 	slab_create_parent(&rscreen->pool_transfers, sizeof(struct r600_transfer), 64);
 
@@ -1317,6 +1366,7 @@ void r600_destroy_common_screen(struct r600_common_screen *rscreen)
 
 	slab_destroy_parent(&rscreen->pool_transfers);
 
+	disk_cache_destroy(rscreen->disk_shader_cache);
 	rscreen->ws->destroy(rscreen->ws);
 	FREE(rscreen);
 }

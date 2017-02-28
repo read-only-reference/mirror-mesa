@@ -480,7 +480,22 @@ isl_choose_image_alignment_el(const struct isl_device *dev,
                               enum isl_msaa_layout msaa_layout,
                               struct isl_extent3d *image_align_el)
 {
-   if (info->format == ISL_FORMAT_HIZ) {
+   const struct isl_format_layout *fmtl = isl_format_get_layout(info->format);
+   if (fmtl->txc == ISL_TXC_MCS) {
+      assert(tiling == ISL_TILING_Y0);
+
+      /*
+       * IvyBrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
+       *
+       * Height, width, and layout of MCS buffer in this case must match with
+       * Render Target height, width, and layout. MCS buffer is tiledY.
+       *
+       * To avoid wasting memory, choose the smallest alignment possible:
+       * HALIGN_4 and VALIGN_4.
+       */
+      *image_align_el = isl_extent3d(4, 4, 1);
+      return;
+   } else if (info->format == ISL_FORMAT_HIZ) {
       assert(ISL_DEV_GEN(dev) >= 6);
       /* HiZ surfaces are always aligned to 16x8 pixels in the primary surface
        * which works out to 2x2 HiZ elments.
@@ -1323,7 +1338,7 @@ isl_surf_get_tile_info(const struct isl_device *dev,
    isl_tiling_get_info(dev, surf->tiling, fmtl->bpb, tile_info);
 }
 
-void
+bool
 isl_surf_get_hiz_surf(const struct isl_device *dev,
                       const struct isl_surf *surf,
                       struct isl_surf *hiz_surf)
@@ -1391,20 +1406,20 @@ isl_surf_get_hiz_surf(const struct isl_device *dev,
     */
    const unsigned samples = ISL_DEV_GEN(dev) >= 9 ? 1 : surf->samples;
 
-   isl_surf_init(dev, hiz_surf,
-                 .dim = surf->dim,
-                 .format = ISL_FORMAT_HIZ,
-                 .width = surf->logical_level0_px.width,
-                 .height = surf->logical_level0_px.height,
-                 .depth = surf->logical_level0_px.depth,
-                 .levels = surf->levels,
-                 .array_len = surf->logical_level0_px.array_len,
-                 .samples = samples,
-                 .usage = ISL_SURF_USAGE_HIZ_BIT,
-                 .tiling_flags = ISL_TILING_HIZ_BIT);
+   return isl_surf_init(dev, hiz_surf,
+                        .dim = surf->dim,
+                        .format = ISL_FORMAT_HIZ,
+                        .width = surf->logical_level0_px.width,
+                        .height = surf->logical_level0_px.height,
+                        .depth = surf->logical_level0_px.depth,
+                        .levels = surf->levels,
+                        .array_len = surf->logical_level0_px.array_len,
+                        .samples = samples,
+                        .usage = ISL_SURF_USAGE_HIZ_BIT,
+                        .tiling_flags = ISL_TILING_HIZ_BIT);
 }
 
-void
+bool
 isl_surf_get_mcs_surf(const struct isl_device *dev,
                       const struct isl_surf *surf,
                       struct isl_surf *mcs_surf)
@@ -1417,6 +1432,16 @@ isl_surf_get_mcs_surf(const struct isl_device *dev,
    assert(surf->levels == 1);
    assert(surf->logical_level0_px.depth == 1);
 
+   /* The "Auxiliary Surface Pitch" field in RENDER_SURFACE_STATE is only 9
+    * bits which means the maximum pitch of a compression surface is 512
+    * tiles or 64KB (since MCS is always Y-tiled).  Since a 16x MCS buffer is
+    * 64bpp, this gives us a maximum width of 8192 pixels.  We can create
+    * larger multisampled surfaces, we just can't compress them.   For 2x, 4x,
+    * and 8x, we have enough room for the full 16k supported by the hardware.
+    */
+   if (surf->samples == 16 && surf->logical_level0_px.width > 8192)
+      return false;
+
    enum isl_format mcs_format;
    switch (surf->samples) {
    case 2:  mcs_format = ISL_FORMAT_MCS_2X;  break;
@@ -1427,17 +1452,17 @@ isl_surf_get_mcs_surf(const struct isl_device *dev,
       unreachable("Invalid sample count");
    }
 
-   isl_surf_init(dev, mcs_surf,
-                 .dim = ISL_SURF_DIM_2D,
-                 .format = mcs_format,
-                 .width = surf->logical_level0_px.width,
-                 .height = surf->logical_level0_px.height,
-                 .depth = 1,
-                 .levels = 1,
-                 .array_len = surf->logical_level0_px.array_len,
-                 .samples = 1, /* MCS surfaces are really single-sampled */
-                 .usage = ISL_SURF_USAGE_MCS_BIT,
-                 .tiling_flags = ISL_TILING_Y0_BIT);
+   return isl_surf_init(dev, mcs_surf,
+                        .dim = ISL_SURF_DIM_2D,
+                        .format = mcs_format,
+                        .width = surf->logical_level0_px.width,
+                        .height = surf->logical_level0_px.height,
+                        .depth = 1,
+                        .levels = 1,
+                        .array_len = surf->logical_level0_px.array_len,
+                        .samples = 1, /* MCS surfaces are really single-sampled */
+                        .usage = ISL_SURF_USAGE_MCS_BIT,
+                        .tiling_flags = ISL_TILING_Y0_BIT);
 }
 
 bool
@@ -1491,19 +1516,17 @@ isl_surf_get_ccs_surf(const struct isl_device *dev,
       return false;
    }
 
-   isl_surf_init(dev, ccs_surf,
-                 .dim = surf->dim,
-                 .format = ccs_format,
-                 .width = surf->logical_level0_px.width,
-                 .height = surf->logical_level0_px.height,
-                 .depth = surf->logical_level0_px.depth,
-                 .levels = surf->levels,
-                 .array_len = surf->logical_level0_px.array_len,
-                 .samples = 1,
-                 .usage = ISL_SURF_USAGE_CCS_BIT,
-                 .tiling_flags = ISL_TILING_CCS_BIT);
-
-   return true;
+   return isl_surf_init(dev, ccs_surf,
+                        .dim = surf->dim,
+                        .format = ccs_format,
+                        .width = surf->logical_level0_px.width,
+                        .height = surf->logical_level0_px.height,
+                        .depth = surf->logical_level0_px.depth,
+                        .levels = surf->levels,
+                        .array_len = surf->logical_level0_px.array_len,
+                        .samples = 1,
+                        .usage = ISL_SURF_USAGE_CCS_BIT,
+                        .tiling_flags = ISL_TILING_CCS_BIT);
 }
 
 void

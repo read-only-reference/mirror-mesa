@@ -34,8 +34,11 @@
 
 #include <stdio.h>
 
+#include "amd/common/ac_binary.h"
+
 #include "radeon/radeon_winsys.h"
 
+#include "util/disk_cache.h"
 #include "util/u_blitter.h"
 #include "util/list.h"
 #include "util/u_range.h"
@@ -49,6 +52,7 @@
 #define R600_RESOURCE_FLAG_FLUSHED_DEPTH	(PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
 #define R600_RESOURCE_FLAG_FORCE_TILING		(PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
 #define R600_RESOURCE_FLAG_DISABLE_DCC		(PIPE_RESOURCE_FLAG_DRV_PRIV << 3)
+#define R600_RESOURCE_FLAG_UNMAPPABLE		(PIPE_RESOURCE_FLAG_DRV_PRIV << 4)
 
 #define R600_CONTEXT_STREAMOUT_FLUSH		(1u << 0)
 /* Pipeline & streamout query controls. */
@@ -126,45 +130,8 @@ struct r600_perfcounters;
 struct tgsi_shader_info;
 struct r600_qbo_state;
 
-struct radeon_shader_reloc {
-	char name[32];
-	uint64_t offset;
-};
-
-struct radeon_shader_binary {
-	/** Shader code */
-	unsigned char *code;
-	unsigned code_size;
-
-	/** Config/Context register state that accompanies this shader.
-	 * This is a stream of dword pairs.  First dword contains the
-	 * register address, the second dword contains the value.*/
-	unsigned char *config;
-	unsigned config_size;
-
-	/** The number of bytes of config information for each global symbol.
-	 */
-	unsigned config_size_per_symbol;
-
-	/** Constant data accessed by the shader.  This will be uploaded
-	 * into a constant buffer. */
-	unsigned char *rodata;
-	unsigned rodata_size;
-
-	/** List of symbol offsets for the shader */
-	uint64_t *global_symbol_offsets;
-	unsigned global_symbol_count;
-
-	struct radeon_shader_reloc *relocs;
-	unsigned reloc_count;
-
-	/** Disassembled shader in a string. */
-	char *disasm_string;
-	char *llvm_ir_string;
-};
-
-void radeon_shader_binary_init(struct radeon_shader_binary *b);
-void radeon_shader_binary_clean(struct radeon_shader_binary *b);
+void radeon_shader_binary_init(struct ac_shader_binary *b);
+void radeon_shader_binary_clean(struct ac_shader_binary *b);
 
 /* Only 32-bit buffer allocations are supported, gallium doesn't support more
  * at the moment.
@@ -315,6 +282,7 @@ struct r600_surface {
 	bool alphatest_bypass;
 	bool export_16bpc;
 	bool color_is_int8;
+	bool color_is_int10;
 
 	/* Color registers. */
 	unsigned cb_color_info;
@@ -359,6 +327,9 @@ struct r600_mmio_counter {
 
 union r600_mmio_counters {
 	struct {
+		/* For global GPU load including SDMA. */
+		struct r600_mmio_counter gpu;
+
 		/* GRBM_STATUS */
 		struct r600_mmio_counter spi;
 		struct r600_mmio_counter gui;
@@ -399,6 +370,8 @@ struct r600_common_screen {
 	uint64_t			debug_flags;
 	bool				has_cp_dma;
 	bool				has_streamout;
+
+	struct disk_cache		*disk_shader_cache;
 
 	struct slab_parent_pool		pool_transfers;
 
@@ -567,7 +540,6 @@ struct r600_common_context {
 	unsigned			last_dirty_tex_counter;
 	unsigned			last_compressed_colortex_counter;
 
-	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_zeroed_memory;
 	struct slab_child_pool		pool_transfers;
 
@@ -716,7 +688,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
 struct pipe_resource * r600_aligned_buffer_create(struct pipe_screen *screen,
-						  unsigned bind,
+						  unsigned flags,
 						  unsigned usage,
 						  unsigned size,
 						  unsigned alignment);

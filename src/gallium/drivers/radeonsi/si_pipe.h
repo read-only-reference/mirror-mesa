@@ -41,6 +41,8 @@
 #define SI_RESTART_INDEX_UNKNOWN INT_MIN
 #define SI_NUM_SMOOTH_AA_SAMPLES 8
 #define SI_GS_PER_ES 128
+/* Alignment for optimal CP DMA performance. */
+#define SI_CPDMA_ALIGNMENT	32
 
 /* Instruction cache. */
 #define SI_CONTEXT_INV_ICACHE		(R600_CONTEXT_PRIVATE_FLAG << 0)
@@ -53,9 +55,8 @@
 /* Write dirty L2 lines back to memory (shader and CP DMA stores), but don't
  * invalidate L2. SI-CIK can't do it, so they will do complete invalidation. */
 #define SI_CONTEXT_WRITEBACK_GLOBAL_L2	(R600_CONTEXT_PRIVATE_FLAG << 4)
+/* gaps */
 /* Framebuffer caches. */
-#define SI_CONTEXT_FLUSH_AND_INV_CB_META (R600_CONTEXT_PRIVATE_FLAG << 5)
-#define SI_CONTEXT_FLUSH_AND_INV_DB_META (R600_CONTEXT_PRIVATE_FLAG << 6)
 #define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 7)
 #define SI_CONTEXT_FLUSH_AND_INV_CB	(R600_CONTEXT_PRIVATE_FLAG << 8)
 /* Engine synchronization. */
@@ -64,11 +65,6 @@
 #define SI_CONTEXT_CS_PARTIAL_FLUSH	(R600_CONTEXT_PRIVATE_FLAG << 11)
 #define SI_CONTEXT_VGT_FLUSH		(R600_CONTEXT_PRIVATE_FLAG << 12)
 #define SI_CONTEXT_VGT_STREAMOUT_SYNC	(R600_CONTEXT_PRIVATE_FLAG << 13)
-
-#define SI_CONTEXT_FLUSH_AND_INV_FRAMEBUFFER (SI_CONTEXT_FLUSH_AND_INV_CB | \
-					      SI_CONTEXT_FLUSH_AND_INV_CB_META | \
-					      SI_CONTEXT_FLUSH_AND_INV_DB | \
-					      SI_CONTEXT_FLUSH_AND_INV_DB_META)
 
 #define SI_MAX_BORDER_COLORS	4096
 
@@ -173,7 +169,8 @@ struct si_framebuffer {
 	unsigned			spi_shader_col_format_alpha;
 	unsigned			spi_shader_col_format_blend;
 	unsigned			spi_shader_col_format_blend_alpha;
-	unsigned			color_is_int8; /* bitmask */
+	unsigned			color_is_int8;
+	unsigned			color_is_int10;
 	unsigned			dirty_cbufs;
 	bool				dirty_zsbuf;
 	bool				any_dst_linear;
@@ -422,7 +419,7 @@ void si_init_cp_dma_functions(struct si_context *sctx);
 void si_init_debug_functions(struct si_context *sctx);
 void si_check_vm_faults(struct r600_common_context *ctx,
 			struct radeon_saved_cs *saved, enum ring_type ring);
-bool si_replace_shader(unsigned num, struct radeon_shader_binary *binary);
+bool si_replace_shader(unsigned num, struct ac_shader_binary *binary);
 
 /* si_dma.c */
 void si_init_dma_functions(struct si_context *sctx);
@@ -514,6 +511,21 @@ static inline bool si_vs_exports_prim_id(struct si_shader *shader)
 		return shader->key.part.tes.epilog.export_prim_id;
 	else
 		return false;
+}
+
+static inline unsigned
+si_optimal_tcc_alignment(struct si_context *sctx, unsigned upload_size)
+{
+	unsigned alignment, tcc_cache_line_size;
+
+	/* If the upload size is less than the cache line size (e.g. 16, 32),
+	 * the whole thing will fit into a cache line if we align it to its size.
+	 * The idea is that multiple small uploads can share a cache line.
+	 * If the upload size is greater, align it to the cache line size.
+	 */
+	alignment = util_next_power_of_two(upload_size);
+	tcc_cache_line_size = sctx->screen->b.info.tcc_cache_line_size;
+	return MIN2(alignment, tcc_cache_line_size);
 }
 
 #endif

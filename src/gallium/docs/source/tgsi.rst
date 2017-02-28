@@ -246,19 +246,6 @@ This instruction replicates its result.
   dst.w = src0.w \times src1.w + src2.w
 
 
-.. opcode:: SUB - Subtract
-
-.. math::
-
-  dst.x = src0.x - src1.x
-
-  dst.y = src0.y - src1.y
-
-  dst.z = src0.z - src1.z
-
-  dst.w = src0.w - src1.w
-
-
 .. opcode:: LRP - Linear Interpolate
 
 .. math::
@@ -311,19 +298,6 @@ Perform a * b + c with no intermediate rounding step.
   dst.z = src.z - \lfloor src.z\rfloor
 
   dst.w = src.w - \lfloor src.w\rfloor
-
-
-.. opcode:: CLAMP - Clamp
-
-.. math::
-
-  dst.x = clamp(src0.x, src1.x, src2.x)
-
-  dst.y = clamp(src0.y, src1.y, src2.y)
-
-  dst.z = clamp(src0.z, src1.z, src2.z)
-
-  dst.w = clamp(src0.w, src1.w, src2.w)
 
 
 .. opcode:: FLR - Floor
@@ -389,19 +363,6 @@ This instruction replicates its result.
   dst.z = src0.x \times src1.y - src1.x \times src0.y
 
   dst.w = 1
-
-
-.. opcode:: ABS - Absolute
-
-.. math::
-
-  dst.x = |src.x|
-
-  dst.y = |src.y|
-
-  dst.z = |src.z|
-
-  dst.w = |src.w|
 
 
 .. opcode:: DPH - Homogeneous Dot Product
@@ -1842,7 +1803,10 @@ two-component vectors with doubled precision in each component.
 
 .. opcode:: DABS - Absolute
 
+.. math::
+
   dst.xy = |src0.xy|
+
   dst.zw = |src0.zw|
 
 .. opcode:: DADD - Add
@@ -2094,7 +2058,10 @@ two-component vectors with 64-bits in each component.
 
 .. opcode:: I64ABS - 64-bit Integer Absolute Value
 
+.. math::
+
   dst.xy = |src0.xy|
+
   dst.zw = |src0.zw|
 
 .. opcode:: I64NEG - 64-bit Integer Negate
@@ -2104,6 +2071,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = -src.xy
+
   dst.zw = -src.zw
 
 .. opcode:: I64SSG - 64-bit Integer Set Sign
@@ -2111,6 +2079,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = (src0.xy < 0) ? -1 : (src0.xy > 0) ? 1 : 0
+
   dst.zw = (src0.zw < 0) ? -1 : (src0.zw > 0) ? 1 : 0
 
 .. opcode:: U64ADD - 64-bit Integer Add
@@ -2118,6 +2087,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy + src1.xy
+
   dst.zw = src0.zw + src1.zw
 
 .. opcode:: U64MUL - 64-bit Integer Multiply
@@ -2125,6 +2095,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy * src1.xy
+
   dst.zw = src0.zw * src1.zw
 
 .. opcode:: U64SEQ - 64-bit Integer Set on Equal
@@ -2132,6 +2103,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.x = src0.xy == src1.xy ? \sim 0 : 0
+
   dst.z = src0.zw == src1.zw ? \sim 0 : 0
 
 .. opcode:: U64SNE - 64-bit Integer Set on Not Equal
@@ -2139,6 +2111,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.x = src0.xy != src1.xy ? \sim 0 : 0
+
   dst.z = src0.zw != src1.zw ? \sim 0 : 0
 
 .. opcode:: U64SLT - 64-bit Unsigned Integer Set on Less Than
@@ -2146,6 +2119,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.x = src0.xy < src1.xy ? \sim 0 : 0
+
   dst.z = src0.zw < src1.zw ? \sim 0 : 0
 
 .. opcode:: U64SGE - 64-bit Unsigned Integer Set on Greater Equal
@@ -2153,6 +2127,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.x = src0.xy >= src1.xy ? \sim 0 : 0
+
   dst.z = src0.zw >= src1.zw ? \sim 0 : 0
 
 .. opcode:: I64SLT - 64-bit Signed Integer Set on Less Than
@@ -2160,6 +2135,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.x = src0.xy < src1.xy ? \sim 0 : 0
+
   dst.z = src0.zw < src1.zw ? \sim 0 : 0
 
 .. opcode:: I64SGE - 64-bit Signed Integer Set on Greater Equal
@@ -2167,6 +2143,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.x = src0.xy >= src1.xy ? \sim 0 : 0
+
   dst.z = src0.zw >= src1.zw ? \sim 0 : 0
 
 .. opcode:: I64MIN - Minimum of 64-bit Signed Integers
@@ -2174,6 +2151,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = min(src0.xy, src1.xy)
+
   dst.zw = min(src0.zw, src1.zw)
 
 .. opcode:: U64MIN - Minimum of 64-bit Unsigned Integers
@@ -2181,6 +2159,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = min(src0.xy, src1.xy)
+
   dst.zw = min(src0.zw, src1.zw)
 
 .. opcode:: I64MAX - Maximum of 64-bit Signed Integers
@@ -2188,6 +2167,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = max(src0.xy, src1.xy)
+
   dst.zw = max(src0.zw, src1.zw)
 
 .. opcode:: U64MAX - Maximum of 64-bit Unsigned Integers
@@ -2195,6 +2175,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = max(src0.xy, src1.xy)
+
   dst.zw = max(src0.zw, src1.zw)
 
 .. opcode:: U64SHL - Shift Left 64-bit Unsigned Integer
@@ -2204,6 +2185,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy << (0x3f \& src1.x)
+
   dst.zw = src0.zw << (0x3f \& src1.y)
 
 .. opcode:: I64SHR - Arithmetic Shift Right (of 64-bit Signed Integer)
@@ -2213,6 +2195,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy >> (0x3f \& src1.x)
+
   dst.zw = src0.zw >> (0x3f \& src1.y)
 
 .. opcode:: U64SHR - Logical Shift Right (of 64-bit Unsigned Integer)
@@ -2222,6 +2205,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy >> (unsigned) (0x3f \& src1.x)
+
   dst.zw = src0.zw >> (unsigned) (0x3f \& src1.y)
 
 .. opcode:: I64DIV - 64-bit Signed Integer Division
@@ -2229,6 +2213,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy \ src1.xy
+
   dst.zw = src0.zw \ src1.zw
 
 .. opcode:: U64DIV - 64-bit Unsigned Integer Division
@@ -2236,6 +2221,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy \ src1.xy
+
   dst.zw = src0.zw \ src1.zw
 
 .. opcode:: U64MOD - 64-bit Unsigned Integer Remainder
@@ -2243,6 +2229,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy \bmod src1.xy
+
   dst.zw = src0.zw \bmod src1.zw
 
 .. opcode:: I64MOD - 64-bit Signed Integer Remainder
@@ -2250,6 +2237,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
   dst.xy = src0.xy \bmod src1.xy
+
   dst.zw = src0.zw \bmod src1.zw
 
 .. opcode:: F2U64 - Float to 64-bit Unsigned Int
@@ -2257,6 +2245,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (uint64_t) src0.x
+
    dst.zw = (uint64_t) src0.y
 
 .. opcode:: F2I64 - Float to 64-bit Int
@@ -2264,6 +2253,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (int64_t) src0.x
+
    dst.zw = (int64_t) src0.y
 
 .. opcode:: U2I64 - Unsigned Integer to 64-bit Integer
@@ -2273,6 +2263,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (uint64_t) src0.x
+
    dst.zw = (uint64_t) src0.y
 
 .. opcode:: I2I64 - Signed Integer to 64-bit Integer
@@ -2282,6 +2273,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (int64_t) src0.x
+
    dst.zw = (int64_t) src0.y
 
 .. opcode:: D2U64 - Double to 64-bit Unsigned Int
@@ -2289,6 +2281,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (uint64_t) src0.xy
+
    dst.zw = (uint64_t) src0.zw
 
 .. opcode:: D2I64 - Double to 64-bit Int
@@ -2296,6 +2289,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (int64_t) src0.xy
+
    dst.zw = (int64_t) src0.zw
 
 .. opcode:: U642F - 64-bit unsigned integer to float
@@ -2303,6 +2297,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.x = (float) src0.xy
+
    dst.y = (float) src0.zw
 
 .. opcode:: I642F - 64-bit Int to Float
@@ -2310,6 +2305,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.x = (float) src0.xy
+
    dst.y = (float) src0.zw
 
 .. opcode:: U642D - 64-bit unsigned integer to double
@@ -2317,6 +2313,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (double) src0.xy
+
    dst.zw = (double) src0.zw
 
 .. opcode:: I642D - 64-bit Int to double
@@ -2324,6 +2321,7 @@ two-component vectors with 64-bits in each component.
 .. math::
 
    dst.xy = (double) src0.xy
+
    dst.zw = (double) src0.zw
 
 .. _samplingopcodes:
@@ -3524,12 +3522,12 @@ If set to a non-zero value, this turns on point mode for the tessellator,
 which means that points will be generated instead of primitives.
 
 NUM_CLIPDIST_ENABLED
-""""""""""""""""
+""""""""""""""""""""
 
 How many clip distance scalar outputs are enabled.
 
 NUM_CULLDIST_ENABLED
-""""""""""""""""
+""""""""""""""""""""
 
 How many cull distance scalar outputs are enabled.
 

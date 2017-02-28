@@ -40,6 +40,10 @@
 #include "compiler/shader_info.h"
 #include <stdio.h>
 
+#ifdef DEBUG
+#include "util/debug.h"
+#endif /* DEBUG */
+
 #include "nir_opcodes.h"
 
 #ifdef __cplusplus
@@ -687,6 +691,12 @@ nir_get_nir_type_for_glsl_type(const struct glsl_type *type)
       break;
    case GLSL_TYPE_INT:
       return nir_type_int32;
+      break;
+   case GLSL_TYPE_UINT64:
+      return nir_type_uint64;
+      break;
+   case GLSL_TYPE_INT64:
+      return nir_type_int64;
       break;
    case GLSL_TYPE_FLOAT:
       return nir_type_float32;
@@ -2273,7 +2283,6 @@ void nir_validate_shader(nir_shader *shader);
 void nir_metadata_set_validation_flag(nir_shader *shader);
 void nir_metadata_check_validation_flag(nir_shader *shader);
 
-#include "util/debug.h"
 static inline bool
 should_clone_nir(void)
 {
@@ -2543,7 +2552,7 @@ typedef enum {
 } nir_lower_doubles_options;
 
 void nir_lower_doubles(nir_shader *shader, nir_lower_doubles_options options);
-void nir_lower_double_pack(nir_shader *shader);
+void nir_lower_64bit_pack(nir_shader *shader);
 
 bool nir_normalize_cubemap_coords(nir_shader *shader);
 

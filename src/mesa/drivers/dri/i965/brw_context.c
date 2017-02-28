@@ -208,8 +208,7 @@ intel_texture_view_requires_resolve(struct brw_context *brw,
 
    const uint32_t brw_format = brw_format_for_mesa_format(intel_tex->_Format);
 
-   if (isl_format_supports_lossless_compression(&brw->screen->devinfo,
-                                                brw_format))
+   if (isl_format_supports_ccs_e(&brw->screen->devinfo, brw_format))
       return false;
 
    perf_debug("Incompatible sampling format (%s) for rbc (%s)\n",
@@ -482,6 +481,10 @@ brw_init_driver_functions(struct brw_context *brw,
    } else {
       functions->BeginTransformFeedback = brw_begin_transform_feedback;
       functions->EndTransformFeedback = brw_end_transform_feedback;
+      functions->PauseTransformFeedback = brw_pause_transform_feedback;
+      functions->ResumeTransformFeedback = brw_resume_transform_feedback;
+      functions->GetTransformFeedbackVertexCount =
+         brw_get_transform_feedback_vertex_count;
    }
 
    if (brw->gen >= 6)
@@ -917,6 +920,9 @@ brw_process_driconf_options(struct brw_context *brw)
    ctx->Const.AllowGLSLExtensionDirectiveMidShader =
       driQueryOptionb(options, "allow_glsl_extension_directive_midshader");
 
+   ctx->Const.AllowHigherCompatVersion =
+      driQueryOptionb(options, "allow_higher_compat_version");
+
    ctx->Const.GLSLZeroInit = driQueryOptionb(options, "glsl_zero_init");
 
    brw->dual_color_blend_by_location =
@@ -1136,6 +1142,9 @@ brwCreateContext(gl_api api,
 
    _mesa_initialize_dispatch_tables(ctx);
    _mesa_initialize_vbo_vtxfmt(ctx);
+
+   if (ctx->Extensions.INTEL_performance_query)
+      brw_init_performance_queries(brw);
 
    vbo_use_buffer_objects(ctx);
    vbo_always_unmap_buffers(ctx);

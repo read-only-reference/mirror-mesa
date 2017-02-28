@@ -188,8 +188,9 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 				       r600_context_gfx_flush, rctx);
 	rctx->b.gfx.flush = r600_context_gfx_flush;
 
-	rctx->allocator_fetch_shader = u_suballocator_create(&rctx->b.b, 64 * 1024,
-							     0, PIPE_USAGE_DEFAULT, FALSE);
+	rctx->allocator_fetch_shader =
+		u_suballocator_create(&rctx->b.b, 64 * 1024,
+				      0, PIPE_USAGE_DEFAULT, 0, FALSE);
 	if (!rctx->allocator_fetch_shader)
 		goto fail;
 
@@ -260,7 +261,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-	case PIPE_CAP_USER_INDEX_BUFFERS:
 	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
@@ -379,6 +379,15 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
 	case PIPE_CAP_TGSI_FS_FBFETCH:
 	case PIPE_CAP_INT64:
+	case PIPE_CAP_INT64_DIVMOD:
+		return 0;
+
+	case PIPE_CAP_DOUBLES:
+		if (rscreen->b.family == CHIP_ARUBA ||
+		    rscreen->b.family == CHIP_CAYMAN ||
+		    rscreen->b.family == CHIP_CYPRESS ||
+		    rscreen->b.family == CHIP_HEMLOCK)
+			return 1;
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -555,7 +564,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
-	case PIPE_SHADER_CAP_DOUBLES:
 		if (rscreen->b.family == CHIP_ARUBA ||
 		    rscreen->b.family == CHIP_CAYMAN ||
 		    rscreen->b.family == CHIP_CYPRESS ||

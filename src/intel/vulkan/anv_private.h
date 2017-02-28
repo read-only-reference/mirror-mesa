@@ -68,10 +68,6 @@ struct gen_l3_config;
 
 #include "wsi_common.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* Allowing different clear colors requires us to perform a depth resolve at
  * the end of certain render passes. This is because while slow clears store
  * the clear color in the HiZ buffer, fast clears (without a resolve) don't.
@@ -87,7 +83,7 @@ extern "C" {
  */
 #define ANV_HZ_FC_VAL 1.0f
 
-#define MAX_VBS         32
+#define MAX_VBS         31
 #define MAX_SETS         8
 #define MAX_RTS          8
 #define MAX_VIEWPORTS   16
@@ -95,6 +91,9 @@ extern "C" {
 #define MAX_PUSH_CONSTANTS_SIZE 128
 #define MAX_DYNAMIC_BUFFERS 16
 #define MAX_IMAGES 8
+
+#define ANV_SVGS_VB_INDEX    MAX_VBS
+#define ANV_DRAWID_VB_INDEX (MAX_VBS + 1)
 
 #define anv_printflike(a, b) __attribute__((__format__(__printf__, a, b)))
 
@@ -442,17 +441,24 @@ anv_clflush_range(void *start, size_t size)
    void *p = (void *) (((uintptr_t) start) & ~CACHELINE_MASK);
    void *end = start + size;
 
-   __builtin_ia32_mfence();
    while (p < end) {
       __builtin_ia32_clflush(p);
       p += CACHELINE_SIZE;
    }
 }
 
-static void inline
-anv_state_clflush(struct anv_state state)
+static inline void
+anv_flush_range(void *start, size_t size)
 {
-   anv_clflush_range(state.map, state.alloc_size);
+   __builtin_ia32_mfence();
+   anv_clflush_range(start, size);
+}
+
+static inline void
+anv_invalidate_range(void *start, size_t size)
+{
+   anv_clflush_range(start, size);
+   __builtin_ia32_mfence();
 }
 
 VkResult anv_block_pool_init(struct anv_block_pool *pool,
@@ -508,8 +514,6 @@ struct anv_bo *anv_scratch_pool_alloc(struct anv_device *device,
                                       gl_shader_stage stage,
                                       unsigned per_thread_scratch);
 
-extern struct anv_dispatch_table dtable;
-
 struct anv_physical_device {
     VK_LOADER_DATA                              _loader_data;
 
@@ -529,6 +533,7 @@ struct anv_physical_device {
     uint8_t                                     uuid[VK_UUID_SIZE];
 
     struct wsi_device                       wsi_device;
+    int                                         local_fd;
 };
 
 struct anv_instance {
@@ -618,6 +623,15 @@ struct anv_device {
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
 };
+
+static void inline
+anv_state_flush(struct anv_device *device, struct anv_state state)
+{
+   if (device->info.has_llc)
+      return;
+
+   anv_flush_range(state.map, state.alloc_size);
+}
 
 void anv_device_init_blorp(struct anv_device *device);
 void anv_device_finish_blorp(struct anv_device *device);
@@ -774,20 +788,6 @@ _anv_combine_address(struct anv_batch *batch, void *location,
            VG(VALGRIND_CHECK_MEM_IS_DEFINED(_dst, __anv_cmd_length(cmd) * 4)); \
            _dst = NULL;                                                 \
          }))
-
-#define anv_state_pool_emit(pool, cmd, align, ...) ({                   \
-      const uint32_t __size = __anv_cmd_length(cmd) * 4;                \
-      struct anv_state __state =                                        \
-         anv_state_pool_alloc((pool), __size, align);                   \
-      struct cmd __template = {                                         \
-         __VA_ARGS__                                                    \
-      };                                                                \
-      __anv_cmd_pack(cmd)(NULL, __state.map, &__template);              \
-      VG(VALGRIND_CHECK_MEM_IS_DEFINED(__state.map, __anv_cmd_length(cmd) * 4)); \
-      if (!(pool)->block_pool->device->info.has_llc)                    \
-         anv_state_clflush(__state);                                    \
-      __state;                                                          \
-   })
 
 #define GEN7_MOCS (struct GEN7_MEMORY_OBJECT_CONTROL_STATE) {  \
    .GraphicsDataTypeGFDT                        = 0,           \
@@ -950,6 +950,9 @@ struct anv_pipeline_binding {
 
    /* Input attachment index (relative to the subpass) */
    uint8_t input_attachment_index;
+
+   /* For a storage image, whether it is write-only */
+   bool write_only;
 };
 
 struct anv_pipeline_layout {
@@ -1161,6 +1164,20 @@ struct anv_cmd_state {
    struct anv_state                             samplers[MESA_SHADER_STAGES];
    struct anv_dynamic_state                     dynamic;
    bool                                         need_query_wa;
+
+   /**
+    * Whether or not the gen8 PMA fix is enabled.  We ensure that, at the top
+    * of any command buffer it is disabled by disabling it in EndCommandBuffer
+    * and before invoking the secondary in ExecuteCommands.
+    */
+   bool                                         pma_fix_enabled;
+
+   /**
+    * Whether or not we know for certain that HiZ is enabled for the current
+    * subpass.  If, for whatever reason, we are unsure as to whether HiZ is
+    * enabled or not, this will be false.
+    */
+   bool                                         hiz_enabled;
 
    /**
     * Array length is anv_cmd_state::pass::attachment_count. Array content is
@@ -1465,7 +1482,12 @@ struct anv_pipeline {
 
    uint32_t                                     cs_right_mask;
 
+   bool                                         writes_depth;
+   bool                                         depth_test_enable;
+   bool                                         writes_stencil;
+   bool                                         stencil_test_enable;
    bool                                         depth_clamp_enable;
+   bool                                         kill_pixel;
 
    struct {
       uint32_t                                  sf[7];
@@ -1552,6 +1574,21 @@ anv_get_isl_format(const struct gen_device_info *devinfo, VkFormat vk_format,
    return anv_get_format(devinfo, vk_format, aspect, tiling).isl_format;
 }
 
+static inline struct isl_swizzle
+anv_swizzle_for_render(struct isl_swizzle swizzle)
+{
+   /* Sometimes the swizzle will have alpha map to one.  We do this to fake
+    * RGB as RGBA for texturing
+    */
+   assert(swizzle.a == ISL_CHANNEL_SELECT_ONE ||
+          swizzle.a == ISL_CHANNEL_SELECT_ALPHA);
+
+   /* But it doesn't matter what we render to that channel */
+   swizzle.a = ISL_CHANNEL_SELECT_ALPHA;
+
+   return swizzle;
+}
+
 void
 anv_pipeline_setup_l3_config(struct anv_pipeline *pipeline, bool needs_slm);
 
@@ -1613,7 +1650,7 @@ struct anv_image {
    /**
     * For color images, this is the aux usage for this image when not used as a
     * color attachment.
-    * 
+    *
     * For depth/stencil images, this is set to ISL_AUX_USAGE_HIZ if the image
     * has a HiZ buffer.
     */
@@ -1665,8 +1702,13 @@ struct anv_image_view {
    /** RENDER_SURFACE_STATE when using image as a sampler surface. */
    struct anv_state sampler_surface_state;
 
-   /** RENDER_SURFACE_STATE when using image as a storage image. */
+   /**
+    * RENDER_SURFACE_STATE when using image as a storage image. Separate states
+    * for write-only and readable, using the real format for write-only and the
+    * lowered format for readable.
+    */
    struct anv_state storage_surface_state;
+   struct anv_state writeonly_storage_surface_state;
 
    struct brw_image_param storage_image_param;
 };
@@ -1697,6 +1739,7 @@ struct anv_buffer_view {
 
    struct anv_state surface_state;
    struct anv_state storage_surface_state;
+   struct anv_state writeonly_storage_surface_state;
 
    struct brw_image_param storage_image_param;
 };
@@ -1849,11 +1892,6 @@ void anv_dump_finish(void);
 void anv_dump_add_framebuffer(struct anv_cmd_buffer *cmd_buffer,
                               struct anv_framebuffer *fb);
 
-struct anv_common {
-    VkStructureType sType;
-    struct anv_common *pNext;
-};
-
 #define ANV_DEFINE_HANDLE_CASTS(__anv_type, __VkType)                      \
                                                                            \
    static inline struct __anv_type *                                       \
@@ -1927,10 +1965,6 @@ ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_shader_module, VkShaderModule)
 #  define genX(x) gen9_##x
 #  include "anv_genX.h"
 #  undef genX
-#endif
-
-#ifdef __cplusplus
-}
 #endif
 
 #endif /* ANV_PRIVATE_H */
