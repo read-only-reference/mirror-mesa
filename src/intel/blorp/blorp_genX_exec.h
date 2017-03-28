@@ -27,7 +27,6 @@
 #include "blorp_priv.h"
 #include "common/gen_device_info.h"
 #include "common/gen_sample_positions.h"
-#include "intel_aub.h"
 
 /**
  * This file provides the blorp pipeline setup and execution functionality.
@@ -53,7 +52,6 @@ blorp_emit_reloc(struct blorp_batch *batch,
 
 static void *
 blorp_alloc_dynamic_state(struct blorp_batch *batch,
-                          enum aub_state_struct_type type,
                           uint32_t size,
                           uint32_t alignment,
                           uint32_t *offset);
@@ -110,14 +108,16 @@ _blorp_combine_address(struct blorp_batch *batch, void *location,
         _blorp_cmd_pack(cmd)(batch, (void *)_dst, &name),         \
         _dst = NULL)
 
-#define blorp_emitn(batch, cmd, n) ({                    \
-      uint32_t *_dw = blorp_emit_dwords(batch, n);       \
-      struct cmd template = {                            \
-         _blorp_cmd_header(cmd),                         \
-         .DWordLength = n - _blorp_cmd_length_bias(cmd), \
-      };                                                 \
-      _blorp_cmd_pack(cmd)(batch, _dw, &template);       \
-      _dw + 1; /* Array starts at dw[1] */               \
+#define blorp_emitn(batch, cmd, n) ({                       \
+      uint32_t *_dw = blorp_emit_dwords(batch, n);          \
+      if (_dw) {                                            \
+         struct cmd template = {                            \
+            _blorp_cmd_header(cmd),                         \
+            .DWordLength = n - _blorp_cmd_length_bias(cmd), \
+         };                                                 \
+         _blorp_cmd_pack(cmd)(batch, _dw, &template);       \
+      }                                                     \
+      _dw ? _dw + 1 : NULL; /* Array starts at dw[1] */     \
    })
 
 /* 3DSTATE_URB
@@ -274,6 +274,8 @@ blorp_emit_vertex_buffers(struct blorp_batch *batch,
 
    const unsigned num_dwords = 1 + GENX(VERTEX_BUFFER_STATE_length) * 2;
    uint32_t *dw = blorp_emitn(batch, GENX(3DSTATE_VERTEX_BUFFERS), num_dwords);
+   if (!dw)
+      return;
 
    for (unsigned i = 0; i < 2; i++) {
       GENX(VERTEX_BUFFER_STATE_pack)(batch, dw, &vb[i]);
@@ -379,6 +381,8 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    const unsigned num_dwords =
       1 + GENX(VERTEX_ELEMENT_STATE_length) * num_elements;
    uint32_t *dw = blorp_emitn(batch, GENX(3DSTATE_VERTEX_ELEMENTS), num_dwords);
+   if (!dw)
+      return;
 
    for (unsigned i = 0; i < num_elements; i++) {
       GENX(VERTEX_ELEMENT_STATE_pack)(batch, dw, &ve[i]);
@@ -910,7 +914,7 @@ blorp_emit_blend_state(struct blorp_batch *batch,
    }
 
    uint32_t offset;
-   void *state = blorp_alloc_dynamic_state(batch, AUB_TRACE_BLEND_STATE,
+   void *state = blorp_alloc_dynamic_state(batch,
                                            GENX(BLEND_STATE_length) * 4,
                                            64, &offset);
    GENX(BLEND_STATE_pack)(NULL, state, &blend);
@@ -945,7 +949,7 @@ blorp_emit_color_calc_state(struct blorp_batch *batch,
 #endif
 
    uint32_t offset;
-   void *state = blorp_alloc_dynamic_state(batch, AUB_TRACE_CC_STATE,
+   void *state = blorp_alloc_dynamic_state(batch,
                                            GENX(COLOR_CALC_STATE_length) * 4,
                                            64, &offset);
    GENX(COLOR_CALC_STATE_pack)(NULL, state, &cc);
@@ -1019,10 +1023,13 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
    uint32_t offset = 0;
    uint32_t *dw = blorp_emit_dwords(batch,
                                     GENX(3DSTATE_WM_DEPTH_STENCIL_length));
+   if (!dw)
+      return 0;
+
    GENX(3DSTATE_WM_DEPTH_STENCIL_pack)(NULL, dw, &ds);
 #else
    uint32_t offset;
-   void *state = blorp_alloc_dynamic_state(batch, AUB_TRACE_DEPTH_STENCIL_STATE,
+   void *state = blorp_alloc_dynamic_state(batch,
                                            GENX(DEPTH_STENCIL_STATE_length) * 4,
                                            64, &offset);
    GENX(DEPTH_STENCIL_STATE_pack)(NULL, state, &ds);
@@ -1192,7 +1199,7 @@ blorp_emit_sampler_state(struct blorp_batch *batch,
    };
 
    uint32_t offset;
-   void *state = blorp_alloc_dynamic_state(batch, AUB_TRACE_SAMPLER_STATE,
+   void *state = blorp_alloc_dynamic_state(batch,
                                            GENX(SAMPLER_STATE_length) * 4,
                                            32, &offset);
    GENX(SAMPLER_STATE_pack)(NULL, state, &sampler);
@@ -1340,7 +1347,7 @@ blorp_emit_viewport_state(struct blorp_batch *batch,
 {
    uint32_t cc_vp_offset;
 
-   void *state = blorp_alloc_dynamic_state(batch, AUB_TRACE_CC_VP_STATE,
+   void *state = blorp_alloc_dynamic_state(batch,
                                            GENX(CC_VIEWPORT_length) * 4, 32,
                                            &cc_vp_offset);
 

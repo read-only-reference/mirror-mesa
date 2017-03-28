@@ -107,6 +107,9 @@
 #define DBG_NO_CE		(1llu << 48)
 #define DBG_UNSAFE_MATH		(1llu << 49)
 #define DBG_NO_DCC_FB		(1llu << 50)
+#define DBG_TEST_VMFAULT_CP	(1llu << 51)
+#define DBG_TEST_VMFAULT_SDMA	(1llu << 52)
+#define DBG_TEST_VMFAULT_SHADER	(1llu << 53)
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 #define R600_MAX_VIEWPORTS        16
@@ -201,7 +204,7 @@ struct r600_cmask_info {
 	uint64_t size;
 	unsigned alignment;
 	unsigned slice_tile_max;
-	unsigned base_address_reg;
+	uint64_t base_address_reg;
 };
 
 struct r600_texture {
@@ -275,6 +278,10 @@ struct r600_texture {
 struct r600_surface {
 	struct pipe_surface		base;
 
+	/* These can vary with block-compressed textures. */
+	unsigned width0;
+	unsigned height0;
+
 	bool color_initialized;
 	bool depth_initialized;
 
@@ -283,6 +290,7 @@ struct r600_surface {
 	bool export_16bpc;
 	bool color_is_int8;
 	bool color_is_int10;
+	bool dcc_incompatible;
 
 	/* Color registers. */
 	unsigned cb_color_info;
@@ -293,6 +301,7 @@ struct r600_surface {
 	unsigned cb_color_pitch;	/* EG and later */
 	unsigned cb_color_slice;	/* EG and later */
 	unsigned cb_color_attrib;	/* EG and later */
+	unsigned cb_color_attrib2;	/* GFX9 and later */
 	unsigned cb_dcc_control;	/* VI and later */
 	unsigned cb_color_fmask;	/* CB_COLORn_FMASK (EG and later) or CB_COLORn_FRAG (r600) */
 	unsigned cb_color_fmask_slice;	/* EG and later */
@@ -306,17 +315,19 @@ struct r600_surface {
 	struct r600_resource *cb_buffer_cmask; /* Used for CMASK relocations. R600 only */
 
 	/* DB registers. */
+	uint64_t db_depth_base;		/* DB_Z_READ/WRITE_BASE (EG and later) or DB_DEPTH_BASE (r600) */
+	uint64_t db_stencil_base;	/* EG and later */
+	uint64_t db_htile_data_base;
 	unsigned db_depth_info;		/* R600 only, then SI and later */
 	unsigned db_z_info;		/* EG and later */
-	unsigned db_depth_base;		/* DB_Z_READ/WRITE_BASE (EG and later) or DB_DEPTH_BASE (r600) */
+	unsigned db_z_info2;		/* GFX9+ */
 	unsigned db_depth_view;
 	unsigned db_depth_size;
 	unsigned db_depth_slice;	/* EG and later */
-	unsigned db_stencil_base;	/* EG and later */
 	unsigned db_stencil_info;	/* EG and later */
+	unsigned db_stencil_info2;	/* GFX9+ */
 	unsigned db_prefetch_limit;	/* R600 only */
 	unsigned db_htile_surface;
-	unsigned db_htile_data_base;
 	unsigned db_preload_control;	/* EG and later */
 };
 
@@ -370,6 +381,8 @@ struct r600_common_screen {
 	uint64_t			debug_flags;
 	bool				has_cp_dma;
 	bool				has_streamout;
+	bool				has_rbplus;     /* if RB+ registers exist */
+	bool				rbplus_allowed; /* if RB+ is allowed */
 
 	struct disk_cache		*disk_shader_cache;
 
@@ -381,7 +394,7 @@ struct r600_common_screen {
 	/* Auxiliary context. Mainly used to initialize resources.
 	 * It must be locked prior to using and flushed before unlocking. */
 	struct pipe_context		*aux_context;
-	pipe_mutex			aux_context_lock;
+	mtx_t				aux_context_lock;
 
 	/* This must be in the screen, because UE4 uses one context for
 	 * compilation and another one for rendering.
@@ -394,8 +407,8 @@ struct r600_common_screen {
 	unsigned			num_shader_cache_hits;
 
 	/* GPU load thread. */
-	pipe_mutex			gpu_load_mutex;
-	pipe_thread			gpu_load_thread;
+	mtx_t				gpu_load_mutex;
+	thrd_t				gpu_load_thread;
 	union r600_mmio_counters	mmio_counters;
 	volatile unsigned		gpu_load_stop_thread; /* bool */
 
@@ -786,18 +799,23 @@ void r600_texture_get_cmask_info(struct r600_common_screen *rscreen,
 bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 				     struct pipe_resource *texture,
 				     struct r600_texture **staging);
-void r600_print_texture_info(struct r600_texture *rtex, FILE *f);
+void r600_print_texture_info(struct r600_common_screen *rscreen,
+			     struct r600_texture *rtex, FILE *f);
 struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ);
 bool vi_dcc_formats_compatible(enum pipe_format format1,
 			       enum pipe_format format2);
-void vi_dcc_disable_if_incompatible_format(struct r600_common_context *rctx,
+bool vi_dcc_formats_are_incompatible(struct pipe_resource *tex,
+				     unsigned level,
+				     enum pipe_format view_format);
+void vi_disable_dcc_if_incompatible_format(struct r600_common_context *rctx,
 					   struct pipe_resource *tex,
 					   unsigned level,
 					   enum pipe_format view_format);
 struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
 						struct pipe_resource *texture,
 						const struct pipe_surface *templ,
+						unsigned width0, unsigned height0,
 						unsigned width, unsigned height);
 unsigned r600_translate_colorswap(enum pipe_format format, bool do_endian_swap);
 void vi_separate_dcc_start_query(struct pipe_context *ctx,
@@ -946,6 +964,12 @@ r600_can_sample_zs(struct r600_texture *tex, bool stencil_sampler)
 {
 	return (stencil_sampler && tex->can_sample_s) ||
 	       (!stencil_sampler && tex->can_sample_z);
+}
+
+static inline bool
+vi_dcc_enabled(struct r600_texture *tex, unsigned level)
+{
+	return tex->dcc_offset && level < tex->surface.num_dcc_levels;
 }
 
 #define COMPUTE_DBG(rscreen, fmt, args...) \

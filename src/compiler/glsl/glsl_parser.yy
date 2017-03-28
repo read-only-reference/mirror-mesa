@@ -900,7 +900,7 @@ function_header:
       $$->return_type = $1;
       $$->identifier = $2;
 
-      if ($1->qualifier.flags.q.subroutine) {
+      if ($1->qualifier.is_subroutine_decl()) {
          /* add type for IDENTIFIER search */
          state->symbols->add_type($2, glsl_type::get_subroutine_instance($2));
       } else
@@ -1812,7 +1812,7 @@ subroutine_qualifier:
    | SUBROUTINE '(' subroutine_type_list ')'
    {
       memset(& $$, 0, sizeof($$));
-      $$.flags.q.subroutine_def = 1;
+      $$.flags.q.subroutine = 1;
       $$.subroutine_list = $3;
    }
    ;

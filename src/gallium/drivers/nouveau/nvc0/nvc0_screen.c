@@ -147,7 +147,9 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-      return 16; /* 256 for binding as RT, but that's not possible in GL */
+      if (class_3d < NVE4_3D_CLASS)
+         return 256; /* IMAGE bindings require alignment to 256 */
+      return 16;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
       return 16;
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
@@ -244,6 +246,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_DOUBLES:
    case PIPE_CAP_INT64:
+   case PIPE_CAP_TGSI_TEX_TXF_LZ:
       return 1;
    case PIPE_CAP_COMPUTE:
       return (class_3d < GP100_3D_CLASS);
@@ -282,6 +285,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_NATIVE_FENCE_FD:
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_INT64_DIVMOD:
+   case PIPE_CAP_TGSI_CLOCK:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -307,7 +311,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 }
 
 static int
-nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
+nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
+                             enum pipe_shader_type shader,
                              enum pipe_shader_cap param)
 {
    const uint16_t class_3d = nouveau_screen(pscreen)->class_3d;
@@ -362,8 +367,6 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
       return 1;
-   case PIPE_SHADER_CAP_MAX_PREDS:
-      return 0;
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return NVC0_CAP_MAX_PROGRAM_TEMPS;
    case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:

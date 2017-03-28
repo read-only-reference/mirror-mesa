@@ -212,22 +212,17 @@ brw_dispatch_compute_common(struct gl_context *ctx)
 
    brw->no_batch_wrap = false;
 
-   if (dri_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
+   if (drm_intel_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
       if (!fail_next) {
          intel_batchbuffer_reset_to_saved(brw);
          intel_batchbuffer_flush(brw);
          fail_next = true;
          goto retry;
       } else {
-         if (intel_batchbuffer_flush(brw) == -ENOSPC) {
-            static bool warned = false;
-
-            if (!warned) {
-               fprintf(stderr, "i965: Single compute shader dispatch "
-                       "exceeded available aperture space\n");
-               warned = true;
-            }
-         }
+         int ret = intel_batchbuffer_flush(brw);
+         WARN_ONCE(ret == -ENOSPC,
+                   "i965: Single compute shader dispatch "
+                   "exceeded available aperture space\n");
       }
    }
 

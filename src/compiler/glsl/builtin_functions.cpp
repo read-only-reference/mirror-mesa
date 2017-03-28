@@ -53,6 +53,26 @@
  *    name and parameters.
  */
 
+
+/**
+ * Unfortunately, some versions of MinGW produce bad code if this file
+ * is compiled with -O2 or -O3.  The resulting driver will crash in random
+ * places if the app uses GLSL.
+ * The work-around is to disable optimizations for just this file.  Luckily,
+ * this code is basically just executed once.
+ *
+ * MinGW 4.6.3 (in Ubuntu 13.10) does not have this bug.
+ * MinGW 5.3.1 (in Ubuntu 16.04) definitely has this bug.
+ * MinGW 6.2.0 (in Ubuntu 16.10) definitely has this bug.
+ * MinGW x.y.z - don't know.  Assume versions after 4.6.x are buggy
+ */
+
+#if defined(__MINGW32__) && ((__GNUC__ * 100) + __GNUC_MINOR >= 407)
+#warning "disabling optimizations for this file to work around compiler bug"
+#pragma GCC optimize("O1")
+#endif
+
+
 #include <stdarg.h>
 #include <stdio.h>
 #include "main/core.h" /* for struct gl_shader */
@@ -62,6 +82,7 @@
 #include "program/prog_instruction.h"
 #include <math.h>
 #include "builtin_functions.h"
+#include "util/hash_table.h"
 
 #define M_PIf   ((float) M_PI)
 #define M_PI_2f ((float) M_PI_2)
@@ -5946,7 +5967,7 @@ builtin_builder::_shader_clock(builtin_available_predicate avail,
 {
    MAKE_SIG(type, avail, 0);
 
-   ir_variable *retval = body.make_temp(type, "clock_retval");
+   ir_variable *retval = body.make_temp(glsl_type::uvec2_type, "clock_retval");
 
    body.emit(call(shader->symbols->get_function("__intrinsic_shader_clock"),
                   retval, sig->parameters));
@@ -6002,21 +6023,32 @@ ir_function_signature *
 _mesa_glsl_find_builtin_function(_mesa_glsl_parse_state *state,
                                  const char *name, exec_list *actual_parameters)
 {
-   ir_function_signature * s;
+   ir_function_signature *s;
    mtx_lock(&builtins_lock);
    s = builtins.find(state, name, actual_parameters);
    mtx_unlock(&builtins_lock);
-   return s;
+
+   if (s == NULL)
+      return NULL;
+
+   struct hash_table *ht =
+      _mesa_hash_table_create(NULL, _mesa_hash_pointer, _mesa_key_pointer_equal);
+   void *mem_ctx = state;
+   ir_function *f = s->function()->clone(mem_ctx, ht);
+   _mesa_hash_table_destroy(ht, NULL);
+
+   return f->matching_signature(state, actual_parameters, true);
 }
 
-ir_function *
-_mesa_glsl_find_builtin_function_by_name(const char *name)
+bool
+_mesa_glsl_has_builtin_function(const char *name)
 {
    ir_function *f;
    mtx_lock(&builtins_lock);
    f = builtins.shader->symbols->get_function(name);
    mtx_unlock(&builtins_lock);
-   return f;
+
+   return f != NULL;
 }
 
 gl_shader *

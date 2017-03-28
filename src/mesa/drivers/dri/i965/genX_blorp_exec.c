@@ -55,17 +55,10 @@ blorp_emit_reloc(struct blorp_batch *batch,
    struct brw_context *brw = batch->driver_batch;
 
    uint32_t offset = (char *)location - (char *)brw->batch.map;
-   if (brw->gen >= 8) {
-      return intel_batchbuffer_reloc64(&brw->batch, address.buffer, offset,
-                                       address.read_domains,
-                                       address.write_domain,
-                                       address.offset + delta);
-   } else {
-      return intel_batchbuffer_reloc(&brw->batch, address.buffer, offset,
-                                     address.read_domains,
-                                     address.write_domain,
-                                     address.offset + delta);
-   }
+   return intel_batchbuffer_reloc(&brw->batch, address.buffer, offset,
+                                  address.read_domains,
+                                  address.write_domain,
+                                  address.offset + delta);
 }
 
 static void
@@ -91,7 +84,6 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
 
 static void *
 blorp_alloc_dynamic_state(struct blorp_batch *batch,
-                          enum aub_state_struct_type type,
                           uint32_t size,
                           uint32_t alignment,
                           uint32_t *offset)
@@ -99,7 +91,7 @@ blorp_alloc_dynamic_state(struct blorp_batch *batch,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
 
-   return brw_state_batch(brw, type, size, alignment, offset);
+   return brw_state_batch(brw, size, alignment, offset);
 }
 
 static void
@@ -111,12 +103,12 @@ blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
 
-   uint32_t *bt_map = brw_state_batch(brw, AUB_TRACE_BINDING_TABLE,
+   uint32_t *bt_map = brw_state_batch(brw,
                                       num_entries * sizeof(uint32_t), 32,
                                       bt_offset);
 
    for (unsigned i = 0; i < num_entries; i++) {
-      surface_maps[i] = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
+      surface_maps[i] = brw_state_batch(brw,
                                         state_size, state_alignment,
                                         &(surface_offsets)[i]);
       bt_map[i] = surface_offsets[i];
@@ -131,8 +123,7 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    struct brw_context *brw = batch->driver_batch;
 
    uint32_t offset;
-   void *data = brw_state_batch(brw, AUB_TRACE_VERTEX_BUFFER,
-                                size, 32, &offset);
+   void *data = brw_state_batch(brw, size, 32, &offset);
 
    *addr = (struct blorp_address) {
       .buffer = brw->batch.bo,
@@ -212,9 +203,6 @@ retry:
    gen7_l3_state.emit(brw);
 #endif
 
-   if (brw->use_resource_streamer)
-      gen7_disable_hw_binding_tables(brw);
-
    brw_emit_depth_stall_flushes(brw);
 
 #if GEN_GEN == 8
@@ -244,7 +232,7 @@ retry:
     * map all the BOs into the GPU at batch exec time later.  If so, flush the
     * batch and try again with nothing else in the batch.
     */
-   if (dri_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
+   if (drm_intel_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
       if (!check_aperture_failed_once) {
          check_aperture_failed_once = true;
          intel_batchbuffer_reset_to_saved(brw);

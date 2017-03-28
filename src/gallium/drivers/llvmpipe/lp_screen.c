@@ -259,6 +259,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
       return 1;
    case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+   case PIPE_CAP_TGSI_TEX_TXF_LZ:
       return 0;
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
       return 1;
@@ -346,6 +347,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_TGSI_FS_FBFETCH:
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
+   case PIPE_CAP_TGSI_CLOCK:
       return 0;
    }
    /* should only get here on unhandled cases */
@@ -354,7 +356,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
 }
 
 static int
-llvmpipe_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_shader_cap param)
+llvmpipe_get_shader_param(struct pipe_screen *screen,
+                          enum pipe_shader_type shader,
+                          enum pipe_shader_cap param)
 {
    switch(shader)
    {
@@ -561,7 +565,7 @@ llvmpipe_destroy_screen( struct pipe_screen *_screen )
    if(winsys->destroy)
       winsys->destroy(winsys);
 
-   pipe_mutex_destroy(screen->rast_mutex);
+   mtx_destroy(&screen->rast_mutex);
 
    FREE(screen);
 }
@@ -668,7 +672,7 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
       FREE(screen);
       return NULL;
    }
-   pipe_mutex_init(screen->rast_mutex);
+   (void) mtx_init(&screen->rast_mutex, mtx_plain);
 
    util_format_s3tc_init();
 

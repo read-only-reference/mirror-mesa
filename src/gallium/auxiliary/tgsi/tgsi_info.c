@@ -54,7 +54,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 2, 0, 0, 0, 0, 0, COMP, "SLT", TGSI_OPCODE_SLT },
    { 1, 2, 0, 0, 0, 0, 0, COMP, "SGE", TGSI_OPCODE_SGE },
    { 1, 3, 0, 0, 0, 0, 0, COMP, "MAD", TGSI_OPCODE_MAD },
-   { 1, 2, 0, 0, 0, 0, 0, COMP, "", 17 }, /* removed */
+   { 1, 2, 1, 0, 0, 0, 0, OTHR, "TEX_LZ", TGSI_OPCODE_TEX_LZ },
    { 1, 3, 0, 0, 0, 0, 0, COMP, "LRP", TGSI_OPCODE_LRP },
    { 1, 3, 0, 0, 0, 0, 0, COMP, "FMA", TGSI_OPCODE_FMA },
    { 1, 1, 0, 0, 0, 0, 0, REPL, "SQRT", TGSI_OPCODE_SQRT },
@@ -62,7 +62,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 1, 0, 0, 0, 0, 0, COMP, "F2U64", TGSI_OPCODE_F2U64 },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "F2I64", TGSI_OPCODE_F2I64 },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "FRC", TGSI_OPCODE_FRC },
-   { 1, 3, 0, 0, 0, 0, 0, COMP, "", 25 }, /* removed */
+   { 1, 2, 1, 0, 0, 0, 0, OTHR, "TXF_LZ", TGSI_OPCODE_TXF_LZ },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "FLR", TGSI_OPCODE_FLR },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "ROUND", TGSI_OPCODE_ROUND },
    { 1, 1, 0, 0, 0, 0, 0, REPL, "EX2", TGSI_OPCODE_EX2 },
@@ -70,7 +70,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 2, 0, 0, 0, 0, 0, REPL, "POW", TGSI_OPCODE_POW },
    { 1, 2, 0, 0, 0, 0, 0, COMP, "XPD", TGSI_OPCODE_XPD },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "U2I64", TGSI_OPCODE_U2I64 },
-   { 1, 1, 0, 0, 0, 0, 0, COMP, "", 33 }, /* removed */
+   { 1, 0, 0, 0, 0, 0, 0, OTHR, "CLOCK", TGSI_OPCODE_CLOCK },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "I2I64", TGSI_OPCODE_I2I64 },
    { 1, 2, 0, 0, 0, 0, 0, REPL, "DPH", TGSI_OPCODE_DPH },
    { 1, 1, 0, 0, 0, 0, 0, REPL, "COS", TGSI_OPCODE_COS },
@@ -332,6 +332,8 @@ tgsi_get_processor_name( uint processor )
       return "tessellation control shader";
    case PIPE_SHADER_TESS_EVAL:
       return "tessellation evaluation shader";
+   case PIPE_SHADER_COMPUTE:
+      return "compute shader";
    default:
       return "unknown shader type!";
    }
@@ -476,6 +478,7 @@ tgsi_opcode_infer_src_type( uint opcode )
    switch (opcode) {
    case TGSI_OPCODE_UIF:
    case TGSI_OPCODE_TXF:
+   case TGSI_OPCODE_TXF_LZ:
    case TGSI_OPCODE_BREAKC:
    case TGSI_OPCODE_U2F:
    case TGSI_OPCODE_U2D:

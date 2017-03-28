@@ -112,6 +112,8 @@ emit_vertex_input(struct anv_pipeline *pipeline,
    const uint32_t num_dwords = 1 + total_elems * 2;
    p = anv_batch_emitn(&pipeline->batch, num_dwords,
                        GENX(3DSTATE_VERTEX_ELEMENTS));
+   if (!p)
+      return;
    memset(p + 1, 0, (num_dwords - 1) * 4);
 
    for (uint32_t i = 0; i < info->vertexAttributeDescriptionCount; i++) {
@@ -389,10 +391,14 @@ emit_3dstate_sbe(struct anv_pipeline *pipeline)
 
    uint32_t *dw = anv_batch_emit_dwords(&pipeline->batch,
                                         GENX(3DSTATE_SBE_length));
+   if (!dw)
+      return;
    GENX(3DSTATE_SBE_pack)(&pipeline->batch, dw, &sbe);
 
 #if GEN_GEN >= 8
    dw = anv_batch_emit_dwords(&pipeline->batch, GENX(3DSTATE_SBE_SWIZ_length));
+   if (!dw)
+      return;
    GENX(3DSTATE_SBE_SWIZ_pack)(&pipeline->batch, dw, &swiz);
 #endif
 }
@@ -489,9 +495,9 @@ emit_rs_state(struct anv_pipeline *pipeline,
    /* Gen7 requires that we provide the depth format in 3DSTATE_SF so that it
     * can get the depth offsets correct.
     */
-   if (subpass->depth_stencil_attachment < pass->attachment_count) {
+   if (subpass->depth_stencil_attachment.attachment < pass->attachment_count) {
       VkFormat vk_format =
-         pass->attachments[subpass->depth_stencil_attachment].format;
+         pass->attachments[subpass->depth_stencil_attachment.attachment].format;
       assert(vk_format_is_depth_or_stencil(vk_format));
       if (vk_format_aspects(vk_format) & VK_IMAGE_ASPECT_DEPTH_BIT) {
          enum isl_format isl_format =
@@ -807,9 +813,9 @@ emit_ds_state(struct anv_pipeline *pipeline,
    }
 
    VkImageAspectFlags ds_aspects = 0;
-   if (subpass->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+   if (subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED) {
       VkFormat depth_stencil_format =
-         pass->attachments[subpass->depth_stencil_attachment].format;
+         pass->attachments[subpass->depth_stencil_attachment.attachment].format;
       ds_aspects = vk_format_aspects(depth_stencil_format);
    }
 
@@ -896,7 +902,7 @@ emit_cb_state(struct anv_pipeline *pipeline,
       /* We can have at most 8 attachments */
       assert(i < 8);
 
-      if (binding->index >= info->attachmentCount)
+      if (info == NULL || binding->index >= info->attachmentCount)
          continue;
 
       assert(binding->binding == 0);
@@ -995,6 +1001,7 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
    (void) wm_prog_data;
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_CLIP), clip) {
       clip.ClipEnable               = true;
+      clip.StatisticsEnable         = true;
       clip.EarlyCullEnable          = true;
       clip.APIMode                  = APIMODE_D3D,
       clip.ViewportXYClipTestEnable = true;
@@ -1416,7 +1423,7 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
     * source blend factors.
     */
    bool dual_src_blend = false;
-   if (wm_prog_data->dual_src_blend) {
+   if (wm_prog_data->dual_src_blend && blend) {
       for (uint32_t i = 0; i < blend->attachmentCount; i++) {
          const VkPipelineColorBlendAttachmentState *bstate =
             &blend->pAttachments[i];
@@ -1563,6 +1570,14 @@ emit_3dstate_vf_topology(struct anv_pipeline *pipeline)
 #endif
 
 static void
+emit_3dstate_vf_statistics(struct anv_pipeline *pipeline)
+{
+   anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_STATISTICS), vfs) {
+      vfs.StatisticsEnable = true;
+   }
+}
+
+static void
 compute_kill_pixel(struct anv_pipeline *pipeline,
                    const VkPipelineMultisampleStateCreateInfo *ms_info,
                    const struct anv_subpass *subpass)
@@ -1668,10 +1683,11 @@ genX(graphics_pipeline_create)(
    emit_3dstate_ps_extra(pipeline, subpass);
    emit_3dstate_vf_topology(pipeline);
 #endif
+   emit_3dstate_vf_statistics(pipeline);
 
    *pPipeline = anv_pipeline_to_handle(pipeline);
 
-   return VK_SUCCESS;
+   return pipeline->batch.status;
 }
 
 static VkResult
@@ -1710,6 +1726,7 @@ compute_pipeline_create(
    pipeline->batch.next = pipeline->batch.start = pipeline->batch_data;
    pipeline->batch.end = pipeline->batch.start + sizeof(pipeline->batch_data);
    pipeline->batch.relocs = &pipeline->batch_relocs;
+   pipeline->batch.status = VK_SUCCESS;
 
    /* When we free the pipeline, we detect stages based on the NULL status
     * of various prog_data pointers.  Make them NULL by default.
@@ -1799,7 +1816,7 @@ compute_pipeline_create(
 
    *pPipeline = anv_pipeline_to_handle(pipeline);
 
-   return VK_SUCCESS;
+   return pipeline->batch.status;
 }
 
 VkResult genX(CreateGraphicsPipelines)(

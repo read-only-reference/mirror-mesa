@@ -59,7 +59,7 @@
 
 static boolean close_stream = FALSE;
 static FILE *stream = NULL;
-pipe_static_mutex(call_mutex);
+static mtx_t call_mutex = _MTX_INITIALIZER_NP;
 static long unsigned call_no = 0;
 static boolean dumping = FALSE;
 
@@ -302,12 +302,12 @@ boolean trace_dump_trace_enabled(void)
 
 void trace_dump_call_lock(void)
 {
-   pipe_mutex_lock(call_mutex);
+   mtx_lock(&call_mutex);
 }
 
 void trace_dump_call_unlock(void)
 {
-   pipe_mutex_unlock(call_mutex);
+   mtx_unlock(&call_mutex);
 }
 
 /*
@@ -331,24 +331,24 @@ boolean trace_dumping_enabled_locked(void)
 
 void trace_dumping_start(void)
 {
-   pipe_mutex_lock(call_mutex);
+   mtx_lock(&call_mutex);
    trace_dumping_start_locked();
-   pipe_mutex_unlock(call_mutex);
+   mtx_unlock(&call_mutex);
 }
 
 void trace_dumping_stop(void)
 {
-   pipe_mutex_lock(call_mutex);
+   mtx_lock(&call_mutex);
    trace_dumping_stop_locked();
-   pipe_mutex_unlock(call_mutex);
+   mtx_unlock(&call_mutex);
 }
 
 boolean trace_dumping_enabled(void)
 {
    boolean ret;
-   pipe_mutex_lock(call_mutex);
+   mtx_lock(&call_mutex);
    ret = trace_dumping_enabled_locked();
-   pipe_mutex_unlock(call_mutex);
+   mtx_unlock(&call_mutex);
    return ret;
 }
 
@@ -395,14 +395,14 @@ void trace_dump_call_end_locked(void)
 
 void trace_dump_call_begin(const char *klass, const char *method)
 {
-   pipe_mutex_lock(call_mutex);
+   mtx_lock(&call_mutex);
    trace_dump_call_begin_locked(klass, method);
 }
 
 void trace_dump_call_end(void)
 {
    trace_dump_call_end_locked();
-   pipe_mutex_unlock(call_mutex);
+   mtx_unlock(&call_mutex);
 }
 
 void trace_dump_arg_begin(const char *name)

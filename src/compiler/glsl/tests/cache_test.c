@@ -32,6 +32,7 @@
 #include <stdarg.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "util/mesa-sha1.h"
@@ -123,11 +124,11 @@ rmrf_local(const char *path)
    if (path == NULL || *path == '\0' || *path != '.')
       return -1;
 
-   return nftw(path, remove_entry, 64, FTW_DEPTH | FTW_PHYS | FTW_MOUNT);
+   return nftw(path, remove_entry, 64, FTW_DEPTH | FTW_PHYS);
 }
 
 static void
-check_timestamp_and_gpu_id_directories_created(const char *cache_dir)
+check_directories_created(const char *cache_dir)
 {
    bool sub_dirs_created = false;
 
@@ -143,7 +144,7 @@ check_timestamp_and_gpu_id_directories_created(const char *cache_dir)
       }
    }
 
-   expect_true(sub_dirs_created, "create timestamp and gpu ip sub dirs");
+   expect_true(sub_dirs_created, "create sub dirs");
 }
 
 #define CACHE_TEST_TMP "./cache-test-tmp"
@@ -184,9 +185,7 @@ test_disk_cache_create(void)
    cache = disk_cache_create("test", "make_check");
    expect_non_null(cache, "disk_cache_create with XDG_CACHE_HOME set");
 
-   check_timestamp_and_gpu_id_directories_created(CACHE_TEST_TMP
-                                                  "/xdg-cache-home"
-                                                  "/mesa/make_check/test");
+   check_directories_created(CACHE_TEST_TMP "/xdg-cache-home/mesa");
 
    disk_cache_destroy(cache);
 
@@ -203,15 +202,13 @@ test_disk_cache_create(void)
    cache = disk_cache_create("test", "make_check");
    expect_non_null(cache, "disk_cache_create with MESA_GLSL_CACHE_DIR set");
 
-   check_timestamp_and_gpu_id_directories_created(CACHE_TEST_TMP
-                                                  "/mesa-glsl-cache-dir"
-                                                  "/mesa/make_check/test");
+   check_directories_created(CACHE_TEST_TMP "/mesa-glsl-cache-dir/mesa");
 
    disk_cache_destroy(cache);
 }
 
 static bool
-does_cache_contain(struct disk_cache *cache, cache_key key)
+does_cache_contain(struct disk_cache *cache, const cache_key key)
 {
    void *result;
 
@@ -226,15 +223,31 @@ does_cache_contain(struct disk_cache *cache, cache_key key)
 }
 
 static void
+wait_until_file_written(struct disk_cache *cache, const cache_key key)
+{
+   struct timespec req;
+   struct timespec rem;
+
+   /* Set 100ms delay */
+   req.tv_sec = 0;
+   req.tv_nsec = 100000000;
+
+   unsigned retries = 0;
+   while (retries++ < 20) {
+      if (does_cache_contain(cache, key)) {
+         break;
+      }
+
+      nanosleep(&req, &rem);
+   }
+}
+
+static void
 test_put_and_get(void)
 {
    struct disk_cache *cache;
-   /* If the text of this blob is changed, then blob_key_byte_zero
-    * also needs to be updated.
-    */
    char blob[] = "This is a blob of thirty-seven bytes";
    uint8_t blob_key[20];
-   uint8_t blob_key_byte_zero = 0xca;
    char string[] = "While this string has thirty-four";
    uint8_t string_key[20];
    char *result;
@@ -245,7 +258,7 @@ test_put_and_get(void)
 
    cache = disk_cache_create("test", "make_check");
 
-   _mesa_sha1_compute(blob, sizeof(blob), blob_key);
+   disk_cache_compute_key(cache, blob, sizeof(blob), blob_key);
 
    /* Ensure that disk_cache_get returns nothing before anything is added. */
    result = disk_cache_get(cache, blob_key, &size);
@@ -255,6 +268,11 @@ test_put_and_get(void)
    /* Simple test of put and get. */
    disk_cache_put(cache, blob_key, blob, sizeof(blob));
 
+   /* disk_cache_put() hands things off to a thread give it some time to
+    * finish.
+    */
+   wait_until_file_written(cache, blob_key);
+
    result = disk_cache_get(cache, blob_key, &size);
    expect_equal_str(blob, result, "disk_cache_get of existing item (pointer)");
    expect_equal(size, sizeof(blob), "disk_cache_get of existing item (size)");
@@ -262,8 +280,13 @@ test_put_and_get(void)
    free(result);
 
    /* Test put and get of a second item. */
-   _mesa_sha1_compute(string, sizeof(string), string_key);
+   disk_cache_compute_key(cache, string, sizeof(string), string_key);
    disk_cache_put(cache, string_key, string, sizeof(string));
+
+   /* disk_cache_put() hands things off to a thread give it some time to
+    * finish.
+    */
+   wait_until_file_written(cache, string_key);
 
    result = disk_cache_get(cache, string_key, &size);
    expect_equal_str(result, string, "2nd disk_cache_get of existing item (pointer)");
@@ -296,12 +319,17 @@ test_put_and_get(void)
     * For this test, we force this signature to land in the same
     * directory as the original blob first written to the cache.
     */
-   _mesa_sha1_compute(one_KB, 1024, one_KB_key);
-   one_KB_key[0] = blob_key_byte_zero;
+   disk_cache_compute_key(cache, one_KB, 1024, one_KB_key);
+   one_KB_key[0] = blob_key[0];
 
    disk_cache_put(cache, one_KB_key, one_KB, 1024);
 
    free(one_KB);
+
+   /* disk_cache_put() hands things off to a thread give it some time to
+    * finish.
+    */
+   wait_until_file_written(cache, one_KB_key);
 
    result = disk_cache_get(cache, one_KB_key, &size);
    expect_non_null(result, "3rd disk_cache_get of existing item (pointer)");
@@ -309,9 +337,10 @@ test_put_and_get(void)
 
    free(result);
 
-   /* Ensure eviction happened by checking that only one of the two
-    * previously-added items can still be fetched.
+   /* Ensure eviction happened by checking that both of the previous
+    * cache itesm were evicted.
     */
+   bool contains_1KB_file = false;
    count = 0;
    if (does_cache_contain(cache, blob_key))
        count++;
@@ -319,6 +348,13 @@ test_put_and_get(void)
    if (does_cache_contain(cache, string_key))
        count++;
 
+   if (does_cache_contain(cache, one_KB_key)) {
+      count++;
+      contains_1KB_file = true;
+   }
+
+   expect_true(contains_1KB_file,
+               "disk_cache_put eviction last file == MAX_SIZE (1KB)");
    expect_equal(count, 1, "disk_cache_put eviction with MAX_SIZE=1K");
 
    /* Now increase the size to 1M, add back both items, and ensure all
@@ -331,6 +367,12 @@ test_put_and_get(void)
 
    disk_cache_put(cache, blob_key, blob, sizeof(blob));
    disk_cache_put(cache, string_key, string, sizeof(string));
+
+   /* disk_cache_put() hands things off to a thread give it some time to
+    * finish.
+    */
+   wait_until_file_written(cache, blob_key);
+   wait_until_file_written(cache, string_key);
 
    count = 0;
    if (does_cache_contain(cache, blob_key))
@@ -347,13 +389,19 @@ test_put_and_get(void)
    /* Finally, check eviction again after adding an object of size 1M. */
    one_MB = calloc(1024, 1024);
 
-   _mesa_sha1_compute(one_MB, 1024 * 1024, one_MB_key);
-   one_MB_key[0] = blob_key_byte_zero;;
+   disk_cache_compute_key(cache, one_MB, 1024 * 1024, one_MB_key);
+   one_MB_key[0] = blob_key[0];
 
    disk_cache_put(cache, one_MB_key, one_MB, 1024 * 1024);
 
    free(one_MB);
 
+   /* disk_cache_put() hands things off to a thread give it some time to
+    * finish.
+    */
+   wait_until_file_written(cache, one_MB_key);
+
+   bool contains_1MB_file = false;
    count = 0;
    if (does_cache_contain(cache, blob_key))
        count++;
@@ -364,7 +412,14 @@ test_put_and_get(void)
    if (does_cache_contain(cache, one_KB_key))
        count++;
 
-   expect_equal(count, 2, "eviction after overflow with MAX_SIZE=1M");
+   if (does_cache_contain(cache, one_MB_key)) {
+      count++;
+      contains_1MB_file = true;
+   }
+
+   expect_true(contains_1MB_file,
+               "disk_cache_put eviction last file == MAX_SIZE (1MB)");
+   expect_equal(count, 1, "eviction after overflow with MAX_SIZE=1M");
 
    disk_cache_destroy(cache);
 }
@@ -427,11 +482,6 @@ main(void)
 {
 #ifdef ENABLE_SHADER_CACHE
    int err;
-
-   /* While the shader cache is still experimental, this variable must
-    * be set or the cache does nothing.
-    */
-   setenv("MESA_GLSL_CACHE_ENABLE", "1", 1);
 
    test_disk_cache_create();
 

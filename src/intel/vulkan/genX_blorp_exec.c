@@ -57,13 +57,15 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
                     struct blorp_address address, uint32_t delta)
 {
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
-   anv_reloc_list_add(&cmd_buffer->surface_relocs, &cmd_buffer->pool->alloc,
-                      ss_offset, address.buffer, address.offset + delta);
+   VkResult result =
+      anv_reloc_list_add(&cmd_buffer->surface_relocs, &cmd_buffer->pool->alloc,
+                         ss_offset, address.buffer, address.offset + delta);
+   if (result != VK_SUCCESS)
+      anv_batch_set_error(&cmd_buffer->batch, result);
 }
 
 static void *
 blorp_alloc_dynamic_state(struct blorp_batch *batch,
-                          enum aub_state_struct_type type,
                           uint32_t size,
                           uint32_t alignment,
                           uint32_t *offset)
@@ -86,9 +88,13 @@ blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
 
    uint32_t state_offset;
-   struct anv_state bt_state =
+   struct anv_state bt_state;
+
+   VkResult result =
       anv_cmd_buffer_alloc_blorp_binding_table(cmd_buffer, num_entries,
-                                               &state_offset);
+                                               &state_offset, &bt_state);
+   if (result != VK_SUCCESS)
+      return;
 
    uint32_t *bt_map = bt_state.map;
    *bt_offset = bt_state.offset;
@@ -143,9 +149,6 @@ blorp_emit_urb_config(struct blorp_batch *batch, unsigned vs_entry_size)
                         entry_size);
 }
 
-void genX(blorp_exec)(struct blorp_batch *batch,
-                      const struct blorp_params *params);
-
 void
 genX(blorp_exec)(struct blorp_batch *batch,
                  const struct blorp_params *params)
@@ -168,6 +171,11 @@ genX(blorp_exec)(struct blorp_batch *batch,
     * the PMA fix off.  Also, off is always the safe option.
     */
    genX(cmd_buffer_enable_pma_fix)(cmd_buffer, false);
+
+   /* Disable VF statistics */
+   blorp_emit(batch, GENX(3DSTATE_VF_STATISTICS), vf) {
+      vf.StatisticsEnable = false;
+   }
 
    blorp_exec(batch, params);
 

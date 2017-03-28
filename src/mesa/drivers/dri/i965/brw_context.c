@@ -53,7 +53,6 @@
 #include "brw_context.h"
 #include "brw_defines.h"
 #include "brw_blorp.h"
-#include "brw_compiler.h"
 #include "brw_draw.h"
 #include "brw_state.h"
 
@@ -206,7 +205,7 @@ intel_texture_view_requires_resolve(struct brw_context *brw,
        !intel_miptree_is_lossless_compressed(brw, intel_tex->mt))
      return false;
 
-   const uint32_t brw_format = brw_format_for_mesa_format(intel_tex->_Format);
+   const uint32_t brw_format = brw_isl_format_for_mesa_format(intel_tex->_Format);
 
    if (isl_format_supports_ccs_e(&brw->screen->devinfo, brw_format))
       return false;
@@ -525,6 +524,21 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.MaxCombinedShaderOutputResources =
       MAX_IMAGE_UNITS + BRW_MAX_DRAW_BUFFERS;
 
+   /* The timestamp register we can read for glGetTimestamp() is
+    * sometimes only 32 bits, before scaling to nanoseconds (depending
+    * on kernel).
+    *
+    * Once scaled to nanoseconds the timestamp would roll over at a
+    * non-power-of-two, so an application couldn't use
+    * GL_QUERY_COUNTER_BITS to handle rollover correctly.  Instead, we
+    * report 36 bits and truncate at that (rolling over 5 times as
+    * often as the HW counter), and when the 32-bit counter rolls
+    * over, it happens to also be at a rollover in the reported value
+    * from near (1<<36) to 0.
+    *
+    * The low 32 bits rolls over in ~343 seconds.  Our 36-bit result
+    * rolls over every ~69 seconds.
+    */
    ctx->Const.QueryCounterBits.Timestamp = 36;
 
    ctx->Const.MaxTextureCoordUnits = 8; /* Mesa limit */
@@ -877,11 +891,11 @@ brw_process_driconf_options(struct brw_context *brw)
    case DRI_CONF_BO_REUSE_DISABLED:
       break;
    case DRI_CONF_BO_REUSE_ALL:
-      intel_bufmgr_gem_enable_reuse(brw->bufmgr);
+      drm_intel_bufmgr_gem_enable_reuse(brw->bufmgr);
       break;
    }
 
-   if (!driQueryOptionb(options, "hiz")) {
+   if (INTEL_DEBUG & DEBUG_NO_HIZ) {
        brw->has_hiz = false;
        /* On gen6, you can only do separate stencil with HIZ. */
        if (brw->gen == 6)
@@ -922,6 +936,9 @@ brw_process_driconf_options(struct brw_context *brw)
 
    ctx->Const.AllowHigherCompatVersion =
       driQueryOptionb(options, "allow_higher_compat_version");
+
+   ctx->Const.ForceGLSLAbsSqrt =
+      driQueryOptionb(options, "force_glsl_abs_sqrt");
 
    ctx->Const.GLSLZeroInit = driQueryOptionb(options, "glsl_zero_init");
 
@@ -1080,7 +1097,7 @@ brwCreateContext(gl_api api,
       brw->hw_ctx = drm_intel_gem_context_create(brw->bufmgr);
 
       if (!brw->hw_ctx) {
-         fprintf(stderr, "Gen6+ requires Kernel 3.6 or later.\n");
+         fprintf(stderr, "Failed to create hardware context.\n");
          intelDestroyContext(driContextPriv);
          return false;
       }
@@ -1115,10 +1132,6 @@ brwCreateContext(gl_api api,
    brw->predicate.state = BRW_PREDICATE_STATE_RENDER;
 
    brw->max_gtt_map_object_size = screen->max_gtt_map_object_size;
-
-   brw->use_resource_streamer = screen->has_resource_streamer &&
-      (env_var_as_boolean("INTEL_USE_HW_BT", false) ||
-       env_var_as_boolean("INTEL_USE_GATHER", false));
 
    ctx->VertexProgram._MaintainTnlProgram = true;
    ctx->FragmentProgram._MaintainTexEnvProgram = true;
@@ -1159,12 +1172,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       (struct brw_context *) driContextPriv->driverPrivate;
    struct gl_context *ctx = &brw->ctx;
 
-   /* Dump a final BMP in case the application doesn't call SwapBuffers */
-   if (INTEL_DEBUG & DEBUG_AUB) {
-      intel_batchbuffer_flush(brw);
-      aub_dump_bmp(&brw->ctx);
-   }
-
    _mesa_meta_free(&brw->ctx);
 
    if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
@@ -1192,10 +1199,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       drm_intel_bo_unreference(brw->gs.base.scratch_bo);
    if (brw->wm.base.scratch_bo)
       drm_intel_bo_unreference(brw->wm.base.scratch_bo);
-
-   gen7_reset_hw_bt_pool_offsets(brw);
-   drm_intel_bo_unreference(brw->hw_bt_pool.bo);
-   brw->hw_bt_pool.bo = NULL;
 
    drm_intel_gem_context_destroy(brw->hw_ctx);
 

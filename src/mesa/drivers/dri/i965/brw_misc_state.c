@@ -38,6 +38,7 @@
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
+#include "compiler/brw_eu_defines.h"
 
 #include "main/framebuffer.h"
 #include "main/fbobject.h"
@@ -176,7 +177,7 @@ brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
    uint32_t tile_mask_x = 0, tile_mask_y = 0;
 
    if (depth_mt) {
-      intel_get_tile_masks(depth_mt->tiling, depth_mt->tr_mode,
+      intel_get_tile_masks(depth_mt->tiling,
                            depth_mt->cpp,
                            &tile_mask_x, &tile_mask_y);
       assert(!intel_miptree_level_has_hiz(depth_mt, depth_level));
@@ -193,7 +194,6 @@ brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
       } else {
          uint32_t stencil_tile_mask_x, stencil_tile_mask_y;
          intel_get_tile_masks(stencil_mt->tiling,
-                              stencil_mt->tr_mode,
                               stencil_mt->cpp,
                               &stencil_tile_mask_x,
                               &stencil_tile_mask_y);
@@ -824,26 +824,6 @@ brw_emit_select_pipeline(struct brw_context *brw, enum brw_pipeline pipeline)
    const uint32_t _3DSTATE_PIPELINE_SELECT =
       is_965 ? CMD_PIPELINE_SELECT_965 : CMD_PIPELINE_SELECT_GM45;
 
-   if (brw->use_resource_streamer && pipeline != BRW_RENDER_PIPELINE) {
-      /* From "BXML » GT » MI » vol1a GPU Overview » [Instruction]
-       * PIPELINE_SELECT [DevBWR+]":
-       *
-       *   Project: HSW, BDW, CHV, SKL, BXT
-       *
-       *   Hardware Binding Tables are only supported for 3D
-       *   workloads. Resource streamer must be enabled only for 3D
-       *   workloads. Resource streamer must be disabled for Media and GPGPU
-       *   workloads.
-       */
-      BEGIN_BATCH(1);
-      OUT_BATCH(MI_RS_CONTROL | 0);
-      ADVANCE_BATCH();
-
-      gen7_disable_hw_binding_tables(brw);
-
-      /* XXX - Disable gather constant pool too when we start using it. */
-   }
-
    if (brw->gen >= 8 && brw->gen < 10) {
       /* From the Broadwell PRM, Volume 2a: Instructions, PIPELINE_SELECT:
        *
@@ -862,8 +842,9 @@ brw_emit_select_pipeline(struct brw_context *brw, enum brw_pipeline pipeline)
 
          brw->ctx.NewDriverState |= BRW_NEW_CC_STATE;
       }
+   }
 
-   } else if (brw->gen >= 6) {
+   if (brw->gen >= 6) {
       /* From "BXML » GT » MI » vol1a GPU Overview » [Instruction]
        * PIPELINE_SELECT [DevBWR+]":
        *
@@ -934,26 +915,6 @@ brw_emit_select_pipeline(struct brw_context *brw, enum brw_pipeline pipeline)
       OUT_BATCH(0);
       OUT_BATCH(0);
       ADVANCE_BATCH();
-   }
-
-   if (brw->use_resource_streamer && pipeline == BRW_RENDER_PIPELINE) {
-      /* From "BXML » GT » MI » vol1a GPU Overview » [Instruction]
-       * PIPELINE_SELECT [DevBWR+]":
-       *
-       *   Project: HSW, BDW, CHV, SKL, BXT
-       *
-       *   Hardware Binding Tables are only supported for 3D
-       *   workloads. Resource streamer must be enabled only for 3D
-       *   workloads. Resource streamer must be disabled for Media and GPGPU
-       *   workloads.
-       */
-      BEGIN_BATCH(1);
-      OUT_BATCH(MI_RS_CONTROL | 1);
-      ADVANCE_BATCH();
-
-      gen7_enable_hw_binding_tables(brw);
-
-      /* XXX - Re-enable gather constant pool here. */
    }
 }
 

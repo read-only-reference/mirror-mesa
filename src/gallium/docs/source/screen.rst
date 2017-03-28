@@ -374,6 +374,9 @@ The integer capabilities:
 * ``PIPE_CAP_INT64``: Whether 64-bit integer operations are supported.
 * ``PIPE_CAP_INT64_DIVMOD``: Whether 64-bit integer division/modulo
   operations are supported.
+* ``PIPE_CAP_TGSI_TEX_TXF_LZ``: Whether TEX_LZ and TXF_LZ opcodes are
+  supported.
+* ``PIPE_CAP_TGSI_CLOCK``: Whether the CLOCK opcode is supported.
 
 
 .. _pipe_capf:
@@ -432,7 +435,6 @@ file is still supported. In that case, the constbuf index is assumed
 to be 0.
 
 * ``PIPE_SHADER_CAP_MAX_TEMPS``: The maximum number of temporary registers.
-* ``PIPE_SHADER_CAP_MAX_PREDS``: The maximum number of predicate registers.
 * ``PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED``: Whether the continue opcode is supported.
 * ``PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR``: Whether indirect addressing
   of the input file is supported.

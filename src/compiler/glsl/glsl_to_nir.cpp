@@ -520,31 +520,19 @@ nir_visitor::visit(ir_function_signature *ir)
 void
 nir_visitor::visit(ir_loop *ir)
 {
-   nir_loop *loop = nir_loop_create(this->shader);
-   nir_builder_cf_insert(&b, &loop->cf_node);
-
-   b.cursor = nir_after_cf_list(&loop->body);
+   nir_push_loop(&b);
    visit_exec_list(&ir->body_instructions, this);
-   b.cursor = nir_after_cf_node(&loop->cf_node);
+   nir_pop_loop(&b, NULL);
 }
 
 void
 nir_visitor::visit(ir_if *ir)
 {
-   nir_src condition =
-      nir_src_for_ssa(evaluate_rvalue(ir->condition));
-
-   nir_if *if_stmt = nir_if_create(this->shader);
-   if_stmt->condition = condition;
-   nir_builder_cf_insert(&b, &if_stmt->cf_node);
-
-   b.cursor = nir_after_cf_list(&if_stmt->then_list);
+   nir_push_if(&b, evaluate_rvalue(ir->condition));
    visit_exec_list(&ir->then_instructions, this);
-
-   b.cursor = nir_after_cf_list(&if_stmt->else_list);
+   nir_push_else(&b, NULL);
    visit_exec_list(&ir->else_instructions, this);
-
-   b.cursor = nir_after_cf_node(&if_stmt->cf_node);
+   nir_pop_if(&b, NULL);
 }
 
 void
@@ -877,10 +865,11 @@ nir_visitor::visit(ir_call *ir)
 
          /* Set the intrinsic destination. */
          if (ir->return_deref) {
-            const nir_intrinsic_info *info =
-                    &nir_intrinsic_infos[instr->intrinsic];
+            unsigned num_components = ir->return_deref->type->vector_elements;
+            if (instr->intrinsic == nir_intrinsic_image_size)
+               instr->num_components = num_components;
             nir_ssa_dest_init(&instr->instr, &instr->dest,
-                              info->dest_components, 32, NULL);
+                              num_components, 32, NULL);
          }
 
          if (op == nir_intrinsic_image_size ||
@@ -1193,11 +1182,9 @@ nir_visitor::visit(ir_assignment *ir)
       copy->variables[1] = evaluate_deref(&copy->instr, ir->rhs);
 
       if (ir->condition) {
-         nir_if *if_stmt = nir_if_create(this->shader);
-         if_stmt->condition = nir_src_for_ssa(evaluate_rvalue(ir->condition));
-         nir_builder_cf_insert(&b, &if_stmt->cf_node);
-         nir_instr_insert_after_cf_list(&if_stmt->then_list, &copy->instr);
-         b.cursor = nir_after_cf_node(&if_stmt->cf_node);
+         nir_push_if(&b, evaluate_rvalue(ir->condition));
+         nir_builder_instr_insert(&b, &copy->instr);
+         nir_pop_if(&b, NULL);
       } else {
          nir_builder_instr_insert(&b, &copy->instr);
       }
@@ -1232,11 +1219,9 @@ nir_visitor::visit(ir_assignment *ir)
    store->src[0] = nir_src_for_ssa(src);
 
    if (ir->condition) {
-      nir_if *if_stmt = nir_if_create(this->shader);
-      if_stmt->condition = nir_src_for_ssa(evaluate_rvalue(ir->condition));
-      nir_builder_cf_insert(&b, &if_stmt->cf_node);
-      nir_instr_insert_after_cf_list(&if_stmt->then_list, &store->instr);
-      b.cursor = nir_after_cf_node(&if_stmt->cf_node);
+      nir_push_if(&b, evaluate_rvalue(ir->condition));
+      nir_builder_instr_insert(&b, &store->instr);
+      nir_pop_if(&b, NULL);
    } else {
       nir_builder_instr_insert(&b, &store->instr);
    }
@@ -1471,60 +1456,59 @@ nir_visitor::visit(ir_expression *ir)
    case ir_unop_exp2: result = nir_fexp2(&b, srcs[0]); break;
    case ir_unop_log2: result = nir_flog2(&b, srcs[0]); break;
    case ir_unop_i2f:
-      result = supports_ints ? nir_i2f(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
+      result = supports_ints ? nir_i2f32(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
       break;
    case ir_unop_u2f:
-      result = supports_ints ? nir_u2f(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
+      result = supports_ints ? nir_u2f32(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
       break;
    case ir_unop_b2f:
       result = supports_ints ? nir_b2f(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
       break;
-   case ir_unop_f2i:  result = nir_f2i(&b, srcs[0]);   break;
-   case ir_unop_f2u:  result = nir_f2u(&b, srcs[0]);   break;
-   case ir_unop_f2b:  result = nir_f2b(&b, srcs[0]);   break;
-   case ir_unop_i2b:  result = nir_i2b(&b, srcs[0]);   break;
-   case ir_unop_b2i:  result = nir_b2i(&b, srcs[0]);   break;
-   case ir_unop_b2i64:result = nir_b2i64(&b, srcs[0]); break;
-   case ir_unop_d2f:  result = nir_d2f(&b, srcs[0]);   break;
-   case ir_unop_f2d:  result = nir_f2d(&b, srcs[0]);   break;
-   case ir_unop_d2i:  result = nir_d2i(&b, srcs[0]);   break;
-   case ir_unop_d2u:  result = nir_d2u(&b, srcs[0]);   break;
-   case ir_unop_d2b:  result = nir_d2b(&b, srcs[0]);   break;
+   case ir_unop_f2i:
+   case ir_unop_f2u:
+   case ir_unop_f2b:
+   case ir_unop_i2b:
+   case ir_unop_b2i:
+   case ir_unop_b2i64:
+   case ir_unop_d2f:
+   case ir_unop_f2d:
+   case ir_unop_d2i:
+   case ir_unop_d2u:
+   case ir_unop_d2b:
    case ir_unop_i2d:
-      assert(supports_ints);
-      result = nir_i2d(&b, srcs[0]);
-      break;
    case ir_unop_u2d:
-      assert(supports_ints);
-      result = nir_u2d(&b, srcs[0]);
-      break;
-   case ir_unop_i642i: result = nir_i2i32(&b, srcs[0]);   break;
-   case ir_unop_i642u: result = nir_i2u32(&b, srcs[0]);   break;
-   case ir_unop_i642f: result = nir_i642f(&b, srcs[0]);   break;
-   case ir_unop_i642b: result = nir_i642b(&b, srcs[0]);   break;
-   case ir_unop_i642d: result = nir_i642d(&b, srcs[0]);   break;
-
-   case ir_unop_u642i: result = nir_u2i32(&b, srcs[0]);   break;
-   case ir_unop_u642u: result = nir_u2u32(&b, srcs[0]);   break;
-   case ir_unop_u642f: result = nir_u642f(&b, srcs[0]);   break;
-   case ir_unop_u642d: result = nir_u642d(&b, srcs[0]);   break;
-
-   case ir_unop_i2i64: result = nir_i2i64(&b, srcs[0]);   break;
-   case ir_unop_u2i64: result = nir_u2i64(&b, srcs[0]);   break;
+   case ir_unop_i642i:
+   case ir_unop_i642u:
+   case ir_unop_i642f:
+   case ir_unop_i642b:
+   case ir_unop_i642d:
+   case ir_unop_u642i:
+   case ir_unop_u642u:
+   case ir_unop_u642f:
+   case ir_unop_u642d:
+   case ir_unop_i2i64:
+   case ir_unop_u2i64:
    case ir_unop_f2i64:
    case ir_unop_d2i64:
-      result = nir_f2i64(&b, srcs[0]);
-      break;
-   case ir_unop_i2u64: result = nir_i2u64(&b, srcs[0]);   break;
-   case ir_unop_u2u64: result = nir_u2u64(&b, srcs[0]);   break;
+   case ir_unop_i2u64:
+   case ir_unop_u2u64:
    case ir_unop_f2u64:
    case ir_unop_d2u64:
-      result = nir_f2u64(&b, srcs[0]);
-      break;
    case ir_unop_i2u:
    case ir_unop_u2i:
    case ir_unop_i642u64:
-   case ir_unop_u642i64:
+   case ir_unop_u642i64: {
+      nir_alu_type src_type = nir_get_nir_type_for_glsl_base_type(types[0]);
+      nir_alu_type dst_type = nir_get_nir_type_for_glsl_base_type(out_type);
+      result = nir_build_alu(&b, nir_type_conversion_op(src_type, dst_type),
+                                 srcs[0], NULL, NULL, NULL);
+      /* b2i and b2f don't have fixed bit-size versions so the builder will
+       * just assume 32 and we have to fix it up here.
+       */
+      result->bit_size = nir_alu_type_get_type_size(dst_type);
+      break;
+   }
+
    case ir_unop_bitcast_i2f:
    case ir_unop_bitcast_f2i:
    case ir_unop_bitcast_u2f:

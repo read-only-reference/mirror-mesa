@@ -660,6 +660,15 @@ simdscalar vMask(int32_t mask)
 }
 
 INLINE
+simdscalari vMaski(int32_t mask)
+{
+    __m256i vec = _mm256_set1_epi32(mask);
+    const __m256i bit = _mm256_set_epi32(0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01);
+    vec = _simd_and_si(vec, bit);
+    return _simd_cmplt_epi32(_mm256_setzero_si256(), vec);
+}
+
+INLINE
 void _simd_mov(simdscalar &r, unsigned int rlane, simdscalar& s, unsigned int slane)
 {
     OSALIGNSIMD(float) rArray[KNOB_SIMD_WIDTH], sArray[KNOB_SIMD_WIDTH];
@@ -714,7 +723,7 @@ INLINE __m256i _simdemu_srli_epi32(__m256i a, uint32_t i)
 INLINE
 void _simdvec_transpose(simdvector &v)
 {
-    SWR_ASSERT(false, "Need to implement 8 wide version");
+    SWR_INVALID("Need to implement 8 wide version");
 }
 
 #else
@@ -1120,6 +1129,19 @@ static INLINE simdscalar InterpolateComponent(simdscalar vI, simdscalar vJ, cons
     vC = _simd_mul_ps(vk, vC);
     
     return vplaneps(vA, vB, vC, vI, vJ);
+}
+
+//////////////////////////////////////////////////////////////////////////
+/// @brief Interpolates a single component (flat shade).
+/// @param pInterpBuffer - pointer to attribute barycentric coeffs
+template<UINT Attrib, UINT Comp, UINT numComponents = 4>
+static INLINE simdscalar InterpolateComponentFlat(const float *pInterpBuffer)
+{
+    const float *pInterpA = &pInterpBuffer[Attrib * 3 * numComponents + 0 + Comp];
+
+    simdscalar vA = _simd_broadcast_ss(pInterpA);
+
+    return vA;
 }
 
 //////////////////////////////////////////////////////////////////////////

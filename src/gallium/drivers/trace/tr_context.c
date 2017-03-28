@@ -742,7 +742,7 @@ trace_context_set_sample_mask(struct pipe_context *_pipe,
 
 static void
 trace_context_set_constant_buffer(struct pipe_context *_pipe,
-                                  uint shader, uint index,
+                                  enum pipe_shader_type shader, uint index,
                                   const struct pipe_constant_buffer *constant_buffer)
 {
    struct trace_context *tr_ctx = trace_context(_pipe);
@@ -1496,8 +1496,6 @@ trace_context_buffer_subdata(struct pipe_context *_context,
    struct pipe_context *context = tr_context->pipe;
    struct pipe_box box;
 
-   assert(resource->screen == context->screen);
-
    trace_dump_call_begin("pipe_context", "buffer_subdata");
 
    trace_dump_arg(ptr, context);
@@ -1529,8 +1527,6 @@ trace_context_texture_subdata(struct pipe_context *_context,
 {
    struct trace_context *tr_context = trace_context(_context);
    struct pipe_context *context = tr_context->pipe;
-
-   assert(resource->screen == context->screen);
 
    trace_dump_call_begin("pipe_context", "texture_subdata");
 
@@ -1564,8 +1560,6 @@ trace_context_invalidate_resource(struct pipe_context *_context,
    struct trace_context *tr_context = trace_context(_context);
    struct pipe_context *context = tr_context->pipe;
 
-   assert(resource->screen == context->screen);
-
    trace_dump_call_begin("pipe_context", "invalidate_resource");
 
    trace_dump_arg(ptr, context);
@@ -1580,7 +1574,7 @@ static void
 trace_context_render_condition(struct pipe_context *_context,
                                struct pipe_query *query,
                                boolean condition,
-                               uint mode)
+                               enum pipe_render_cond_flag mode)
 {
    struct trace_context *tr_context = trace_context(_context);
    struct pipe_context *context = tr_context->pipe;

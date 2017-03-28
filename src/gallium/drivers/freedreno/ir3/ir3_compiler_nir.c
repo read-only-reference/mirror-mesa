@@ -722,16 +722,16 @@ emit_alu(struct ir3_compile *ctx, nir_alu_instr *alu)
 	}
 
 	switch (alu->op) {
-	case nir_op_f2i:
+	case nir_op_f2i32:
 		dst[0] = ir3_COV(b, src[0], TYPE_F32, TYPE_S32);
 		break;
-	case nir_op_f2u:
+	case nir_op_f2u32:
 		dst[0] = ir3_COV(b, src[0], TYPE_F32, TYPE_U32);
 		break;
-	case nir_op_i2f:
+	case nir_op_i2f32:
 		dst[0] = ir3_COV(b, src[0], TYPE_S32, TYPE_F32);
 		break;
-	case nir_op_u2f:
+	case nir_op_u2f32:
 		dst[0] = ir3_COV(b, src[0], TYPE_U32, TYPE_F32);
 		break;
 	case nir_op_imov:
@@ -2428,8 +2428,14 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	if (so->key.half_precision) {
 		for (i = 0; i < ir->noutputs; i++) {
 			struct ir3_instruction *out = ir->outputs[i];
+
 			if (!out)
 				continue;
+
+			/* if frag shader writes z, that needs to be full precision: */
+			if (so->outputs[i/4].slot == FRAG_RESULT_DEPTH)
+				continue;
+
 			out->regs[0]->flags |= IR3_REG_HALF;
 			/* output could be a fanout (ie. texture fetch output)
 			 * in which case we need to propagate the half-reg flag

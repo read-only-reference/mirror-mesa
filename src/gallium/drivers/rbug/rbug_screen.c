@@ -98,7 +98,8 @@ rbug_screen_get_param(struct pipe_screen *_screen,
 
 static int
 rbug_screen_get_shader_param(struct pipe_screen *_screen,
-                      unsigned shader, enum pipe_shader_cap param)
+                             enum pipe_shader_type shader,
+                             enum pipe_shader_cap param)
 {
    struct rbug_screen *rb_screen = rbug_screen(_screen);
    struct pipe_screen *screen = rb_screen->screen;
@@ -279,7 +280,7 @@ rbug_screen_create(struct pipe_screen *screen)
    if (!rb_screen)
       return screen;
 
-   pipe_mutex_init(rb_screen->list_mutex);
+   (void) mtx_init(&rb_screen->list_mutex, mtx_plain);
    make_empty_list(&rb_screen->contexts);
    make_empty_list(&rb_screen->resources);
    make_empty_list(&rb_screen->surfaces);

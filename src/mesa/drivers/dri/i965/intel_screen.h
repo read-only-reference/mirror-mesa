@@ -57,11 +57,6 @@ struct intel_screen
    int hw_has_timestamp;
 
    /**
-    * Does the kernel support resource streamer?
-    */
-   bool has_resource_streamer;
-
-   /**
     * Does the kernel support context reset notifications?
     */
    bool has_context_reset_notification;
@@ -77,7 +72,7 @@ struct intel_screen
 #define KERNEL_ALLOWS_HSW_SCRATCH1_AND_ROW_CHICKEN3 (1<<3)
 #define KERNEL_ALLOWS_COMPUTE_DISPATCH              (1<<4)
 
-   dri_bufmgr *bufmgr;
+   drm_intel_bufmgr *bufmgr;
 
    /**
     * A unique ID for shader programs.
@@ -123,7 +118,6 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
                  __DRIdrawable * driReadPriv);
 
 double get_time(void);
-void aub_dump_bmp(struct gl_context *ctx);
 
 const int*
 intel_supported_msaa_modes(const struct intel_screen  *screen);

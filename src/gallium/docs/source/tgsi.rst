@@ -28,9 +28,11 @@ Modifiers
 
 TGSI supports modifiers on inputs (as well as saturate modifier on instructions).
 
-For inputs which have a floating point type, both absolute value and negation
-modifiers are supported (with absolute value being applied first).
-TGSI_OPCODE_MOV is considered to have float input type for applying modifiers.
+For inputs which have a floating point type, both absolute value and
+negation modifiers are supported (with absolute value being applied
+first).  The only source of TGSI_OPCODE_MOV and the second and third
+sources of TGSI_OPCODE_UCMP are considered to have float type for
+applying modifiers.
 
 For inputs which have signed or unsigned type only the negate modifier is
 supported.
@@ -755,6 +757,29 @@ This instruction replicates its result.
   dst = src0.x \times src1.x + src0.y \times src1.y
 
 
+.. opcode:: TEX_LZ - Texture Lookup With LOD = 0
+
+  This is the same as TXL with LOD = 0. Like every texture opcode, it obeys
+  pipe_sampler_view::u.tex.first_level and pipe_sampler_state::min_lod.
+  There is no way to override those two in shaders.
+
+.. math::
+
+  coord.x = src0.x
+
+  coord.y = src0.y
+
+  coord.z = src0.z
+
+  coord.w = none
+
+  lod = 0
+
+  unit = src1
+
+  dst = texture\_sample(unit, coord, lod)
+
+
 .. opcode:: TXL - Texture Lookup With explicit LOD
 
   for cube map array textures, the explicit lod value
@@ -918,8 +943,16 @@ XXX doesn't look like most of the opcodes really belong here.
   four-component signed integer vector used to identify the single texel
   accessed. 3 components + level.  Just like texture instructions, an optional
   offset vector is provided, which is subject to various driver restrictions
-  (regarding range, source of offsets).
+  (regarding range, source of offsets). This instruction ignores the sampler
+  state.
+
   TXF(uint_vec coord, int_vec offset).
+
+
+.. opcode:: TXF_LZ - Texel Fetch
+
+  This is the same as TXF with level = 0. Like TXF, it obeys
+  pipe_sampler_view::u.tex.first_level.
 
 
 .. opcode:: TXQ - Texture Size Query
@@ -1004,6 +1037,20 @@ XXX doesn't look like most of the opcodes really belong here.
    coord = src0
 
    dst.xy = lodq(uint, coord);
+
+.. opcode:: CLOCK - retrieve the current shader time
+
+   Invoking this instruction multiple times in the same shader should
+   cause monotonically increasing values to be returned. The values
+   are implicitly 64-bit, so if fewer than 64 bits of precision are
+   available, to provide expected wraparound semantics, the value
+   should be shifted up so that the most significant bit of the time
+   is the most significant bit of the 64-bit value.
+
+.. math::
+
+   dst.xy = clock()
+
 
 Integer ISA
 ^^^^^^^^^^^^^^^^^^^^^^^^

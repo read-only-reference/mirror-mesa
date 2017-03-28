@@ -30,7 +30,7 @@
 #include "builder.h"
 #include "jit_api.h"
 #include "streamout_jit.h"
-#include "state_llvm.h"
+#include "gen_state_llvm.h"
 #include "llvm/IR/DataLayout.h"
 
 #include <sstream>
@@ -285,7 +285,7 @@ struct StreamOutJit : public Builder
         IRB()->SetInsertPoint(entry);
 
         // arguments
-        auto argitr = soFunc->getArgumentList().begin();
+        auto argitr = soFunc->arg_begin();
         Value* pSoCtx = &*argitr++;
         pSoCtx->setName("pSoCtx");
 

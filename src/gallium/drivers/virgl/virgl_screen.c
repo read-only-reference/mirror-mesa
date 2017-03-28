@@ -255,6 +255,8 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_INT64:
    case PIPE_CAP_INT64_DIVMOD:
+   case PIPE_CAP_TGSI_TEX_TXF_LZ:
+   case PIPE_CAP_TGSI_CLOCK:
       return 0;
    case PIPE_CAP_VENDOR_ID:
       return 0x1af4;
@@ -274,7 +276,9 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
 }
 
 static int
-virgl_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_shader_cap param)
+virgl_get_shader_param(struct pipe_screen *screen,
+                       enum pipe_shader_type shader,
+                       enum pipe_shader_cap param)
 {
    struct virgl_screen *vscreen = virgl_screen(screen);
    switch(shader)
@@ -307,8 +311,6 @@ virgl_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sh
          return vscreen->caps.caps.v1.max_uniform_blocks;
     //  case PIPE_SHADER_CAP_MAX_ADDRS:
      //    return 1;
-      case PIPE_SHADER_CAP_MAX_PREDS:
-         return 0;
       case PIPE_SHADER_CAP_SUBROUTINES:
          return 1;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:

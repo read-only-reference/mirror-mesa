@@ -166,7 +166,7 @@ make_surface(const struct anv_device *dev,
       .array_len = vk_info->arrayLayers,
       .samples = vk_info->samples,
       .min_alignment = 0,
-      .min_pitch = anv_info->stride,
+      .row_pitch = anv_info->stride,
       .usage = choose_isl_surf_usage(image->usage, aspect),
       .tiling_flags = tiling_flags);
 
@@ -180,34 +180,25 @@ make_surface(const struct anv_device *dev,
    /* Add a HiZ surface to a depth buffer that will be used for rendering.
     */
    if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
+      /* We don't advertise that depth buffers could be used as storage
+       * images.
+       */
+       assert(!(image->usage & VK_IMAGE_USAGE_STORAGE_BIT));
+
       /* Allow the user to control HiZ enabling. Disable by default on gen7
        * because resolves are not currently implemented pre-BDW.
        */
       if (!(image->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
          /* It will never be used as an attachment, HiZ is pointless. */
-      } else if (image->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) {
-         /* From the 1.0.37 spec:
-          *
-          *    "An attachment used as an input attachment and depth/stencil
-          *    attachment must be in either VK_IMAGE_LAYOUT_GENERAL or
-          *    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL."
-          *
-          * It will never have a layout of
-          * VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, so HiZ is
-          * currently pointless. If transfer operations learn to use the HiZ
-          * buffer, we can enable HiZ for VK_IMAGE_LAYOUT_GENERAL and support
-          * input attachments.
-          */
-         anv_finishme("Implement HiZ for input attachments");
-      } else if (!env_var_as_boolean("INTEL_VK_HIZ", dev->info.gen >= 8)) {
-         anv_finishme("Implement gen7 HiZ");
+      } else if (dev->info.gen == 7) {
+         anv_perf_warn("Implement gen7 HiZ");
       } else if (vk_info->mipLevels > 1) {
-         anv_finishme("Test multi-LOD HiZ");
+         anv_perf_warn("Enable multi-LOD HiZ");
       } else if (vk_info->arrayLayers > 1) {
-         anv_finishme("Implement multi-arrayLayer HiZ clears and resolves");
+         anv_perf_warn("Implement multi-arrayLayer HiZ clears and resolves");
       } else if (dev->info.gen == 8 && vk_info->samples > 1) {
-         anv_finishme("Test gen8 multisampled HiZ");
-      } else {
+         anv_perf_warn("Enable gen8 multisampled HiZ");
+      } else if (!unlikely(INTEL_DEBUG & DEBUG_NO_HIZ)) {
          assert(image->aux_surface.isl.size == 0);
          ok = isl_surf_get_hiz_surf(&dev->isl_dev, &image->depth_surface.isl,
                                     &image->aux_surface.isl);
@@ -344,13 +335,14 @@ VkResult anv_BindImageMemory(
    ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
    ANV_FROM_HANDLE(anv_image, image, _image);
 
-   if (mem) {
-      image->bo = &mem->bo;
-      image->offset = memoryOffset;
-   } else {
+   if (mem == NULL) {
       image->bo = NULL;
       image->offset = 0;
+      return VK_SUCCESS;
    }
+
+   image->bo = &mem->bo;
+   image->offset = memoryOffset;
 
    if (image->aux_surface.isl.size > 0) {
 
@@ -431,6 +423,139 @@ void anv_GetImageSubresourceLayout(
       assert(!"Invalid image aspect");
    }
 }
+
+/**
+ * This function determines the optimal buffer to use for device
+ * accesses given a VkImageLayout and other pieces of information needed to
+ * make that determination. This does not determine the optimal buffer to
+ * use during a resolve operation.
+ *
+ * NOTE: Some layouts do not support device access.
+ *
+ * @param devinfo The device information of the Intel GPU.
+ * @param image The image that may contain a collection of buffers.
+ * @param aspects The aspect(s) of the image to be accessed.
+ * @param layout The current layout of the image aspect(s).
+ *
+ * @return The primary buffer that should be used for the given layout.
+ */
+enum isl_aux_usage
+anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
+                        const struct anv_image * const image,
+                        const VkImageAspectFlags aspects,
+                        const VkImageLayout layout)
+{
+   /* Validate the inputs. */
+
+   /* The devinfo is needed as the optimal buffer varies across generations. */
+   assert(devinfo != NULL);
+
+   /* The layout of a NULL image is not properly defined. */
+   assert(image != NULL);
+
+   /* The aspects must be a subset of the image aspects. */
+   assert(aspects & image->aspects && aspects <= image->aspects);
+
+   /* Determine the optimal buffer. */
+
+   /* If there is no auxiliary surface allocated, we must use the one and only
+    * main buffer.
+    */
+   if (image->aux_surface.isl.size == 0)
+      return ISL_AUX_USAGE_NONE;
+
+   /* All images that use an auxiliary surface are required to be tiled. */
+   assert(image->tiling == VK_IMAGE_TILING_OPTIMAL);
+
+   /* On BDW+, when clearing the stencil aspect of a depth stencil image,
+    * the HiZ buffer allows us to record the clear with a relatively small
+    * number of packets. Prior to BDW, the HiZ buffer provides no known benefit
+    * to the stencil aspect.
+    */
+   if (devinfo->gen < 8 && aspects == VK_IMAGE_ASPECT_STENCIL_BIT)
+      return ISL_AUX_USAGE_NONE;
+
+   const bool color_aspect = aspects == VK_IMAGE_ASPECT_COLOR_BIT;
+
+   /* The following switch currently only handles depth stencil aspects.
+    * TODO: Handle the color aspect.
+    */
+   if (color_aspect)
+      return image->aux_usage;
+
+   switch (layout) {
+
+   /* Invalid Layouts */
+
+   /* According to the Vulkan Spec, the following layouts are valid only as
+    * initial layouts in a layout transition and don't support device access.
+    */
+   case VK_IMAGE_LAYOUT_UNDEFINED:
+   case VK_IMAGE_LAYOUT_PREINITIALIZED:
+   case VK_IMAGE_LAYOUT_RANGE_SIZE:
+   case VK_IMAGE_LAYOUT_MAX_ENUM:
+      unreachable("Invalid image layout for device access.");
+
+
+   /* Transfer Layouts
+    *
+    * This buffer could be a depth buffer used in a transfer operation. BLORP
+    * currently doesn't use HiZ for transfer operations so we must use the main
+    * buffer for this layout. TODO: Enable HiZ in BLORP.
+    */
+   case VK_IMAGE_LAYOUT_GENERAL:
+   case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+   case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+      return ISL_AUX_USAGE_NONE;
+
+
+   /* Sampling Layouts */
+   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+      assert(!color_aspect);
+      /* Fall-through */
+   case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+      if (anv_can_sample_with_hiz(devinfo, aspects, image->samples))
+         return ISL_AUX_USAGE_HIZ;
+      else
+         return ISL_AUX_USAGE_NONE;
+
+   case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+      assert(color_aspect);
+
+      /* On SKL+, the render buffer can be decompressed by the presentation
+       * engine. Support for this feature has not yet landed in the wider
+       * ecosystem. TODO: Update this code when support lands.
+       *
+       * From the BDW PRM, Vol 7, Render Target Resolve:
+       *
+       *    If the MCS is enabled on a non-multisampled render target, the
+       *    render target must be resolved before being used for other
+       *    purposes (display, texture, CPU lock) The clear value from
+       *    SURFACE_STATE is written into pixels in the render target
+       *    indicated as clear in the MCS.
+       *
+       * Pre-SKL, the render buffer must be resolved before being used for
+       * presentation. We can infer that the auxiliary buffer is not used.
+       */
+      return ISL_AUX_USAGE_NONE;
+
+
+   /* Rendering Layouts */
+   case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+      assert(color_aspect);
+      unreachable("Color images are not yet supported.");
+
+   case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+      assert(!color_aspect);
+      return ISL_AUX_USAGE_HIZ;
+   }
+
+   /* If the layout isn't recognized in the exhaustive switch above, the
+    * VkImageLayout value is not defined in vulkan.h.
+    */
+   unreachable("layout is not a VkImageLayout enumeration member.");
+}
+
 
 static struct anv_state
 alloc_surface_state(struct anv_device *device)
@@ -544,24 +669,6 @@ anv_CreateImageView(VkDevice _device,
       iview->isl.usage = 0;
    }
 
-   /* If the HiZ buffer can be sampled from, set the constant clear color.
-    * If it cannot, disable the isl aux usage flag.
-    */
-   float red_clear_color = 0.0f;
-   enum isl_aux_usage surf_usage = image->aux_usage;
-   if (image->aux_usage == ISL_AUX_USAGE_HIZ) {
-      if (iview->aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT &&
-          anv_can_sample_with_hiz(device->info.gen, image->samples)) {
-         /* When a HiZ buffer is sampled on gen9+, ensure that
-          * the constant fast clear value is set in the surface state.
-          */
-         if (device->info.gen >= 9)
-            red_clear_color = ANV_HZ_FC_VAL;
-      } else {
-         surf_usage = ISL_AUX_USAGE_NONE;
-      }
-   }
-
    /* Input attachment surfaces for color are allocated and filled
     * out at BeginRenderPass time because they need compression information.
     * Compression is not yet enabled for depth textures and stencil doesn't
@@ -572,6 +679,29 @@ anv_CreateImageView(VkDevice _device,
        (image->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT &&
         !(iview->aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT))) {
       iview->sampler_surface_state = alloc_surface_state(device);
+      iview->no_aux_sampler_surface_state = alloc_surface_state(device);
+
+      /* Sampling is performed in one of two buffer configurations in anv: with
+       * an auxiliary buffer or without it. Sampler states aren't always needed
+       * for both configurations, but are currently created unconditionally for
+       * simplicity.
+       *
+       * TODO: Consider allocating each surface state only when necessary.
+       */
+
+      /* Create a sampler state with the optimal aux_usage for sampling. This
+       * may use the aux_buffer.
+       */
+      const enum isl_aux_usage surf_usage =
+         anv_layout_to_aux_usage(&device->info, image, iview->aspect_mask,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+      /* If this is a HiZ buffer we can sample from with a programmable clear
+       * value (SKL+), define the clear value to the optimal constant.
+       */
+      const float red_clear_color = surf_usage == ISL_AUX_USAGE_HIZ &&
+                                    device->info.gen >= 9 ?
+                                    ANV_HZ_FC_VAL : 0.0f;
 
       struct isl_view view = iview->isl;
       view.usage |= ISL_SURF_USAGE_TEXTURE_BIT;
@@ -584,9 +714,18 @@ anv_CreateImageView(VkDevice _device,
                           .aux_usage = surf_usage,
                           .mocs = device->default_mocs);
 
+      /* Create a sampler state that only uses the main buffer. */
+      isl_surf_fill_state(&device->isl_dev,
+                          iview->no_aux_sampler_surface_state.map,
+                          .surf = &surface->isl,
+                          .view = &view,
+                          .mocs = device->default_mocs);
+
       anv_state_flush(device, iview->sampler_surface_state);
+      anv_state_flush(device, iview->no_aux_sampler_surface_state);
    } else {
       iview->sampler_surface_state.alloc_size = 0;
+      iview->no_aux_sampler_surface_state.alloc_size = 0;
    }
 
    /* NOTE: This one needs to go last since it may stomp isl_view.format */
@@ -605,7 +744,7 @@ anv_CreateImageView(VkDevice _device,
                           .surf = &surface->isl,
                           .view = &view,
                           .aux_surf = &image->aux_surface.isl,
-                          .aux_usage = surf_usage,
+                          .aux_usage = image->aux_usage,
                           .mocs = device->default_mocs);
 
       if (isl_has_matching_typed_storage_image_format(&device->info,
@@ -622,7 +761,7 @@ anv_CreateImageView(VkDevice _device,
                              .surf = &surface->isl,
                              .view = &view,
                              .aux_surf = &image->aux_surface.isl,
-                             .aux_usage = surf_usage,
+                             .aux_usage = image->aux_usage,
                              .mocs = device->default_mocs);
       } else {
          anv_fill_buffer_surface_state(device, iview->storage_surface_state,
@@ -699,8 +838,8 @@ anv_CreateBufferView(VkDevice _device,
    const uint32_t format_bs = isl_format_get_layout(view->format)->bpb / 8;
    view->bo = buffer->bo;
    view->offset = buffer->offset + pCreateInfo->offset;
-   view->range = pCreateInfo->range == VK_WHOLE_SIZE ?
-                 buffer->size - pCreateInfo->offset : pCreateInfo->range;
+   view->range = anv_buffer_get_range(buffer, pCreateInfo->offset,
+                                              pCreateInfo->range);
    view->range = align_down_npot_u32(view->range, format_bs);
 
    if (buffer->usage & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT) {

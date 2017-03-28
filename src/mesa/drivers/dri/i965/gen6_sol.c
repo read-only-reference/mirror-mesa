@@ -49,7 +49,7 @@ gen6_update_sol_surfaces(struct brw_context *brw)
    }
 
    for (int i = 0; i < BRW_MAX_SOL_BINDINGS; ++i) {
-      const int surf_index = SURF_INDEX_GEN6_SOL_BINDING(i);
+      const int surf_index = BRW_GEN6_SOL_BINDING_START + i;
       if (xfb_active && i < linked_xfb_info->NumOutputs) {
          unsigned buffer = linked_xfb_info->Outputs[i].OutputBuffer;
          unsigned buffer_offset =
@@ -131,8 +131,7 @@ brw_gs_upload_binding_table(struct brw_context *brw)
        * space for the binding table. Anyway, in this case we know that we only
        * use BRW_MAX_SOL_BINDINGS surfaces at most.
        */
-      bind = brw_state_batch(brw, AUB_TRACE_BINDING_TABLE,
-                             sizeof(uint32_t) * BRW_MAX_SOL_BINDINGS,
+      bind = brw_state_batch(brw, sizeof(uint32_t) * BRW_MAX_SOL_BINDINGS,
                              32, &brw->ff_gs.bind_bo_offset);
 
       /* BRW_NEW_SURFACES */
@@ -160,8 +159,7 @@ brw_gs_upload_binding_table(struct brw_context *brw)
       /* Might want to calculate nr_surfaces first, to avoid taking up so much
        * space for the binding table.
        */
-      bind = brw_state_batch(brw, AUB_TRACE_BINDING_TABLE,
-                             sizeof(uint32_t) * BRW_MAX_SURFACES,
+      bind = brw_state_batch(brw, sizeof(uint32_t) * BRW_MAX_SURFACES,
                              32, &brw->gs.base.bind_bo_offset);
 
       /* BRW_NEW_SURFACES */
@@ -286,9 +284,10 @@ brw_save_primitives_written_counters(struct brw_context *brw,
    const struct gl_context *ctx = &brw->ctx;
    const int streams = ctx->Const.MaxVertexStreams;
 
+   assert(obj->prim_count_bo != NULL);
+
    /* Check if there's enough space for a new pair of four values. */
-   if (obj->prim_count_bo != NULL &&
-       obj->prim_count_buffer_index + 2 * streams >= 4096 / sizeof(uint64_t)) {
+   if (obj->prim_count_buffer_index + 2 * streams >= 4096 / sizeof(uint64_t)) {
       /* Gather up the results so far and release the BO. */
       tally_prims_generated(brw, obj);
    }

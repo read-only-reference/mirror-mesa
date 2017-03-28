@@ -1431,10 +1431,10 @@ dri2_load_opencl_interop(struct dri_screen *screen)
 #if defined(RTLD_DEFAULT)
    bool success;
 
-   pipe_mutex_lock(screen->opencl_func_mutex);
+   mtx_lock(&screen->opencl_func_mutex);
 
    if (dri2_is_opencl_interop_loaded_locked(screen)) {
-      pipe_mutex_unlock(screen->opencl_func_mutex);
+      mtx_unlock(&screen->opencl_func_mutex);
       return true;
    }
 
@@ -1448,7 +1448,7 @@ dri2_load_opencl_interop(struct dri_screen *screen)
       dlsym(RTLD_DEFAULT, "opencl_dri_event_get_fence");
 
    success = dri2_is_opencl_interop_loaded_locked(screen);
-   pipe_mutex_unlock(screen->opencl_func_mutex);
+   mtx_unlock(&screen->opencl_func_mutex);
    return success;
 #else
    return false;
@@ -1930,7 +1930,7 @@ dri2_init_screen(__DRIscreen * sPriv)
 
    screen->sPriv = sPriv;
    screen->fd = sPriv->fd;
-   pipe_mutex_init(screen->opencl_func_mutex);
+   (void) mtx_init(&screen->opencl_func_mutex, mtx_plain);
 
    sPriv->driverPrivate = (void *)screen;
 

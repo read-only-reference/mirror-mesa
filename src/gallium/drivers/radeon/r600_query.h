@@ -113,7 +113,7 @@ enum {
 };
 
 struct r600_query_ops {
-	void (*destroy)(struct r600_common_context *, struct r600_query *);
+	void (*destroy)(struct r600_common_screen *, struct r600_query *);
 	bool (*begin)(struct r600_common_context *, struct r600_query *);
 	bool (*end)(struct r600_common_context *, struct r600_query *);
 	bool (*get_result)(struct r600_common_context *,
@@ -142,7 +142,7 @@ enum {
 };
 
 struct r600_query_hw_ops {
-	bool (*prepare_buffer)(struct r600_common_context *,
+	bool (*prepare_buffer)(struct r600_common_screen *,
 			       struct r600_query_hw *,
 			       struct r600_resource *);
 	void (*emit_start)(struct r600_common_context *,
@@ -152,7 +152,7 @@ struct r600_query_hw_ops {
 			  struct r600_query_hw *,
 			  struct r600_resource *buffer, uint64_t va);
 	void (*clear_result)(struct r600_query_hw *, union pipe_query_result *);
-	void (*add_result)(struct r600_common_context *ctx,
+	void (*add_result)(struct r600_common_screen *screen,
 			   struct r600_query_hw *, void *buffer,
 			   union pipe_query_result *result);
 };
@@ -187,9 +187,9 @@ struct r600_query_hw {
 	unsigned stream;
 };
 
-bool r600_query_hw_init(struct r600_common_context *rctx,
+bool r600_query_hw_init(struct r600_common_screen *rscreen,
 			struct r600_query_hw *query);
-void r600_query_hw_destroy(struct r600_common_context *rctx,
+void r600_query_hw_destroy(struct r600_common_screen *rscreen,
 			   struct r600_query *rquery);
 bool r600_query_hw_begin(struct r600_common_context *rctx,
 			 struct r600_query *rquery);

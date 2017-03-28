@@ -225,8 +225,8 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_STRING_MARKER:
         case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
         case PIPE_CAP_QUERY_BUFFER_OBJECT:
-	case PIPE_CAP_QUERY_MEMORY_INFO:
-	case PIPE_CAP_PCI_GROUP:
+        case PIPE_CAP_QUERY_MEMORY_INFO:
+        case PIPE_CAP_PCI_GROUP:
         case PIPE_CAP_PCI_BUS:
         case PIPE_CAP_PCI_DEVICE:
         case PIPE_CAP_PCI_FUNCTION:
@@ -246,6 +246,8 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_DOUBLES:
         case PIPE_CAP_INT64:
         case PIPE_CAP_INT64_DIVMOD:
+        case PIPE_CAP_TGSI_TEX_TXF_LZ:
+        case PIPE_CAP_TGSI_CLOCK:
                 return 0;
 
                 /* Stream output. */
@@ -344,8 +346,9 @@ vc4_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 }
 
 static int
-vc4_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
-                           enum pipe_shader_cap param)
+vc4_screen_get_shader_param(struct pipe_screen *pscreen,
+                            enum pipe_shader_type shader,
+                            enum pipe_shader_cap param)
 {
         if (shader != PIPE_SHADER_VERTEX &&
             shader != PIPE_SHADER_FRAGMENT) {
@@ -373,8 +376,6 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 return 16 * 1024 * sizeof(float);
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
                 return 1;
-        case PIPE_SHADER_CAP_MAX_PREDS:
-                return 0; /* nothing uses this */
         case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
                 return 0;
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -610,7 +611,7 @@ vc4_screen_create(int fd)
 
         screen->fd = fd;
         list_inithead(&screen->bo_cache.time_list);
-        pipe_mutex_init(screen->bo_handles_mutex);
+        (void) mtx_init(&screen->bo_handles_mutex, mtx_plain);
         screen->bo_handles = util_hash_table_create(handle_hash, handle_compare);
 
         screen->has_control_flow =

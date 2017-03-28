@@ -127,11 +127,11 @@ get_depth_format(struct anv_cmd_buffer *cmd_buffer)
    const struct anv_render_pass *pass = cmd_buffer->state.pass;
    const struct anv_subpass *subpass = cmd_buffer->state.subpass;
 
-   if (subpass->depth_stencil_attachment >= pass->attachment_count)
+   if (subpass->depth_stencil_attachment.attachment >= pass->attachment_count)
       return D16_UNORM;
 
    struct anv_render_pass_attachment *att =
-      &pass->attachments[subpass->depth_stencil_attachment];
+      &pass->attachments[subpass->depth_stencil_attachment.attachment];
 
    switch (att->format) {
    case VK_FORMAT_D16_UNORM:
@@ -270,7 +270,7 @@ void genX(CmdSetEvent)(
     VkEvent                                     event,
     VkPipelineStageFlags                        stageMask)
 {
-   stub();
+   anv_finishme("Implement events on gen7");
 }
 
 void genX(CmdResetEvent)(
@@ -278,7 +278,7 @@ void genX(CmdResetEvent)(
     VkEvent                                     event,
     VkPipelineStageFlags                        stageMask)
 {
-   stub();
+   anv_finishme("Implement events on gen7");
 }
 
 void genX(CmdWaitEvents)(
@@ -294,7 +294,7 @@ void genX(CmdWaitEvents)(
     uint32_t                                    imageMemoryBarrierCount,
     const VkImageMemoryBarrier*                 pImageMemoryBarriers)
 {
-   stub();
+   anv_finishme("Implement events on gen7");
 
    genX(CmdPipelineBarrier)(commandBuffer, srcStageMask, destStageMask,
                             false, /* byRegion */

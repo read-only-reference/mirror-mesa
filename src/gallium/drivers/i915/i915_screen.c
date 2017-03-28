@@ -107,7 +107,9 @@ i915_get_name(struct pipe_screen *screen)
 }
 
 static int
-i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_shader_cap cap)
+i915_get_shader_param(struct pipe_screen *screen,
+                      enum pipe_shader_type shader,
+                      enum pipe_shader_cap cap)
 {
    switch(shader) {
    case PIPE_SHADER_VERTEX:
@@ -144,8 +146,6 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
          return 1;
       case PIPE_SHADER_CAP_MAX_TEMPS:
          return 12; /* XXX: 12 -> 32 ? */
-      case PIPE_SHADER_CAP_MAX_PREDS:
-         return 0;
       case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
          return 0;
@@ -300,6 +300,8 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_DOUBLES:
    case PIPE_CAP_INT64:
    case PIPE_CAP_INT64_DIVMOD:
+   case PIPE_CAP_TGSI_TEX_TXF_LZ:
+   case PIPE_CAP_TGSI_CLOCK:
       return 0;
 
    case PIPE_CAP_MAX_VIEWPORTS:

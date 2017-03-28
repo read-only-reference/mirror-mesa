@@ -79,12 +79,13 @@ struct si_screen {
 	bool				has_distributed_tess;
 	bool				has_draw_indirect_multi;
 	bool				has_ds_bpermute;
+	bool				has_msaa_sample_loc_bug;
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
 	bool				use_monolithic_shaders;
 	bool				record_llvm_ir;
 
-	pipe_mutex			shader_parts_mutex;
+	mtx_t			shader_parts_mutex;
 	struct si_shader_part		*vs_prologs;
 	struct si_shader_part		*vs_epilogs;
 	struct si_shader_part		*tcs_epilogs;
@@ -104,7 +105,7 @@ struct si_screen {
 	 * - GS and CS aren't cached, but it's certainly possible to cache
 	 *   those as well.
 	 */
-	pipe_mutex			shader_cache_mutex;
+	mtx_t			shader_cache_mutex;
 	struct hash_table		*shader_cache;
 
 	/* Shader compiler queue for multithreaded compilation. */
@@ -123,10 +124,11 @@ struct si_sampler_view {
          * [4..7] = buffer descriptor */
 	uint32_t			state[8];
 	uint32_t			fmask_state[8];
-	const struct radeon_surf_level	*base_level_info;
+	const struct legacy_surf_level	*base_level_info;
 	unsigned			base_level;
 	unsigned			block_width;
 	bool is_stencil_sampler;
+	bool dcc_incompatible;
 };
 
 #define SI_SAMPLER_STATE_MAGIC 0x34f1c35a
@@ -259,6 +261,7 @@ struct si_context {
 	struct r600_atom		msaa_config;
 	struct si_sample_mask		sample_mask;
 	struct r600_atom		cb_render_state;
+	unsigned			last_cb_target_mask;
 	struct si_blend_color		blend_color;
 	struct r600_atom		clip_regs;
 	struct si_clip_state		clip_state;

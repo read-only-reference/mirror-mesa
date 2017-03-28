@@ -22,9 +22,7 @@
  */
 
 #include "brw_context.h"
-#include "brw_shader.h"
-#include "brw_fs.h"
-#include "brw_nir.h"
+#include "compiler/brw_nir.h"
 #include "brw_program.h"
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/ir_optimization.h"
@@ -120,11 +118,6 @@ process_glsl_ir(struct brw_context *brw,
    }
 
    lower_instructions(shader->ir, instructions_to_lower);
-   lower_64bit_integer_instructions(shader->ir,
-                                    MUL64 |
-                                    DIV64 |
-                                    MOD64 |
-                                    SIGN64);
 
    /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
     * if-statements need to be flattened.
@@ -223,8 +216,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       prog->ShadowSamplers = shader->shadow_samplers;
       _mesa_update_shader_textures_used(shProg, prog);
-
-      brw_add_texrect_params(prog);
 
       bool debug_enabled =
          (INTEL_DEBUG & intel_debug_flag_for_shader_stage(shader->Stage));

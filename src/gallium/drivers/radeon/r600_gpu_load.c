@@ -105,7 +105,7 @@ static void r600_update_mmio_counters(struct r600_common_screen *rscreen,
 	UPDATE_COUNTER(gui, GUI_ACTIVE);
 	gui_busy = GUI_ACTIVE(value);
 
-	if (rscreen->chip_class >= EVERGREEN) {
+	if (rscreen->chip_class >= CIK) {
 		/* SRBM_STATUS2 */
 		rscreen->ws->read_registers(rscreen->ws, SRBM_STATUS2, 1, &value);
 
@@ -132,7 +132,8 @@ static void r600_update_mmio_counters(struct r600_common_screen *rscreen,
 
 #undef UPDATE_COUNTER
 
-static PIPE_THREAD_ROUTINE(r600_gpu_load_thread, param)
+static int
+r600_gpu_load_thread(void *param)
 {
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)param;
 	const int period_us = 1000000 / SAMPLES_PER_SEC;
@@ -169,7 +170,7 @@ void r600_gpu_load_kill_thread(struct r600_common_screen *rscreen)
 		return;
 
 	p_atomic_inc(&rscreen->gpu_load_stop_thread);
-	pipe_thread_wait(rscreen->gpu_load_thread);
+	thrd_join(rscreen->gpu_load_thread, NULL);
 	rscreen->gpu_load_thread = 0;
 }
 
@@ -178,12 +179,12 @@ static uint64_t r600_read_mmio_counter(struct r600_common_screen *rscreen,
 {
 	/* Start the thread if needed. */
 	if (!rscreen->gpu_load_thread) {
-		pipe_mutex_lock(rscreen->gpu_load_mutex);
+		mtx_lock(&rscreen->gpu_load_mutex);
 		/* Check again inside the mutex. */
 		if (!rscreen->gpu_load_thread)
 			rscreen->gpu_load_thread =
-				pipe_thread_create(r600_gpu_load_thread, rscreen);
-		pipe_mutex_unlock(rscreen->gpu_load_mutex);
+				u_thread_create(r600_gpu_load_thread, rscreen);
+		mtx_unlock(&rscreen->gpu_load_mutex);
 	}
 
 	unsigned busy = p_atomic_read(&rscreen->mmio_counters.array[busy_index]);

@@ -29,6 +29,7 @@
 #include "radeon/radeon_uvd.h"
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
+#include "util/u_tests.h"
 #include "vl/vl_decoder.h"
 #include "../ddebug/dd_util.h"
 
@@ -128,10 +129,8 @@ si_create_llvm_target_machine(struct si_screen *sscreen)
 
 	return LLVMCreateTargetMachine(si_llvm_get_amdgpu_target(triple), triple,
 				       r600_get_llvm_processor_name(sscreen->b.family),
-#if HAVE_LLVM >= 0x0308
 				       sscreen->b.debug_flags & DBG_SI_SCHED ?
 					       SI_LLVM_DEFAULT_FEATURES ",+si-scheduler" :
-#endif
 					       SI_LLVM_DEFAULT_FEATURES,
 				       LLVMCodeGenLevelDefault,
 				       LLVMRelocDefault,
@@ -190,7 +189,10 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	    sscreen->b.chip_class != SI &&
 	    /* These can't use CE due to a power gating bug in the kernel. */
 	    sscreen->b.family != CHIP_CARRIZO &&
-	    sscreen->b.family != CHIP_STONEY) {
+	    sscreen->b.family != CHIP_STONEY &&
+	    /* Some CE bug is causing green screen corruption w/ MPV video
+	     * playback and occasional corruption w/ 3D. */
+	    sscreen->b.chip_class != GFX9) {
 		sctx->ce_ib = ws->cs_add_const_ib(sctx->b.gfx.cs);
 		if (!sctx->ce_ib)
 			goto fail;
@@ -417,13 +419,17 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
 	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
+	case PIPE_CAP_DOUBLES:
+	case PIPE_CAP_TGSI_TEX_TXF_LZ:
 		return 1;
 
-	case PIPE_CAP_DOUBLES:
-		return HAVE_LLVM >= 0x0307;
 	case PIPE_CAP_INT64:
 	case PIPE_CAP_INT64_DIVMOD:
+	case PIPE_CAP_TGSI_CLOCK:
 		return HAVE_LLVM >= 0x0309;
+
+	case PIPE_CAP_TGSI_VOTE:
+		return HAVE_LLVM >= 0x0400;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return !SI_BIG_ENDIAN && sscreen->b.info.has_userptr;
@@ -454,10 +460,11 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return HAVE_LLVM >= 0x0309 ? 4 : 0;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+		if (sscreen->b.chip_class >= GFX9)
+			return 140;
 		if (si_have_tgsi_compute(sscreen))
 			return 450;
-		return HAVE_LLVM >= 0x0309 ? 420 :
-		       HAVE_LLVM >= 0x0307 ? 410 : 330;
+		return HAVE_LLVM >= 0x0309 ? 420 : 410;
 
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		return MIN2(sscreen->b.info.max_alloc_size, INT_MAX);
@@ -480,7 +487,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
-	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 	case PIPE_CAP_NATIVE_FENCE_FD:
 	case PIPE_CAP_TGSI_FS_FBFETCH:
@@ -500,7 +506,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 30;
 
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-		return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
+		return sscreen->b.chip_class <= VI ?
+			PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600 : 0;
 
 	/* Stream output. */
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
@@ -568,7 +575,9 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	return 0;
 }
 
-static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
+static int si_get_shader_param(struct pipe_screen* pscreen,
+			       enum pipe_shader_type shader,
+			       enum pipe_shader_cap param)
 {
 	struct si_screen *sscreen = (struct si_screen *)pscreen;
 
@@ -576,12 +585,11 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	{
 	case PIPE_SHADER_FRAGMENT:
 	case PIPE_SHADER_VERTEX:
-	case PIPE_SHADER_GEOMETRY:
 		break;
+	case PIPE_SHADER_GEOMETRY:
 	case PIPE_SHADER_TESS_CTRL:
 	case PIPE_SHADER_TESS_EVAL:
-		/* LLVM 3.6.2 is required for tessellation because of bug fixes there */
-		if (HAVE_LLVM == 0x0306 && MESA_LLVM_VERSION_PATCH < 2)
+		if (sscreen->b.chip_class >= GFX9)
 			return 0;
 		break;
 	case PIPE_SHADER_COMPUTE:
@@ -666,7 +674,6 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 		return shader != PIPE_SHADER_GEOMETRY;
 
 	/* Unsupported boolean features. */
-	case PIPE_SHADER_CAP_MAX_PREDS:
 	case PIPE_SHADER_CAP_SUBROUTINES:
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
 	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
@@ -689,14 +696,10 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 	};
 	unsigned i;
 
-	if (!sscreen)
-		return;
-
 	if (!sscreen->b.ws->unref(sscreen->b.ws))
 		return;
 
-	if (util_queue_is_initialized(&sscreen->shader_compiler_queue))
-		util_queue_destroy(&sscreen->shader_compiler_queue);
+	util_queue_destroy(&sscreen->shader_compiler_queue);
 
 	for (i = 0; i < ARRAY_SIZE(sscreen->tm); i++)
 		if (sscreen->tm[i])
@@ -712,7 +715,7 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 			FREE(part);
 		}
 	}
-	pipe_mutex_destroy(sscreen->shader_parts_mutex);
+	mtx_destroy(&sscreen->shader_parts_mutex);
 	si_destroy_shader_cache(sscreen);
 	r600_destroy_common_screen(&sscreen->b);
 }
@@ -740,6 +743,7 @@ static bool si_init_gs_info(struct si_screen *sscreen)
 	case CHIP_POLARIS10:
 	case CHIP_POLARIS11:
 	case CHIP_POLARIS12:
+	case CHIP_VEGA10:
 		sscreen->gs_table_depth = 32;
 		return true;
 	default:
@@ -760,7 +764,9 @@ static void si_handle_env_var_force_family(struct si_screen *sscreen)
 			/* Override family and chip_class. */
 			sscreen->b.family = sscreen->b.info.family = i;
 
-			if (i >= CHIP_TONGA)
+			if (i >= CHIP_VEGA10)
+				sscreen->b.chip_class = sscreen->b.info.chip_class = GFX9;
+			else if (i >= CHIP_TONGA)
 				sscreen->b.chip_class = sscreen->b.info.chip_class = VI;
 			else if (i >= CHIP_BONAIRE)
 				sscreen->b.chip_class = sscreen->b.info.chip_class = CIK;
@@ -775,6 +781,37 @@ static void si_handle_env_var_force_family(struct si_screen *sscreen)
 
 	fprintf(stderr, "radeonsi: Unknown family: %s\n", family);
 	exit(1);
+}
+
+static void si_test_vmfault(struct si_screen *sscreen)
+{
+	struct pipe_context *ctx = sscreen->b.aux_context;
+	struct si_context *sctx = (struct si_context *)ctx;
+	struct pipe_resource *buf =
+		pipe_buffer_create(&sscreen->b.b, 0, PIPE_USAGE_DEFAULT, 64);
+
+	if (!buf) {
+		puts("Buffer allocation failed.");
+		exit(1);
+	}
+
+	r600_resource(buf)->gpu_address = 0; /* cause a VM fault */
+
+	if (sscreen->b.debug_flags & DBG_TEST_VMFAULT_CP) {
+		si_copy_buffer(sctx, buf, buf, 0, 4, 4, 0);
+		ctx->flush(ctx, NULL, 0);
+		puts("VM fault test: CP - done.");
+	}
+	if (sscreen->b.debug_flags & DBG_TEST_VMFAULT_SDMA) {
+		sctx->b.dma_clear_buffer(ctx, buf, 0, 4, 0);
+		ctx->flush(ctx, NULL, 0);
+		puts("VM fault test: SDMA - done.");
+	}
+	if (sscreen->b.debug_flags & DBG_TEST_VMFAULT_SHADER) {
+		util_test_constant_buffer(ctx, buf);
+		puts("VM fault test: Shader - done.");
+	}
+	exit(0);
 }
 
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
@@ -798,6 +835,17 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	if (!r600_common_screen_init(&sscreen->b, ws) ||
 	    !si_init_gs_info(sscreen) ||
 	    !si_init_shader_cache(sscreen)) {
+		FREE(sscreen);
+		return NULL;
+	}
+
+	/* Only enable as many threads as we have target machines and CPUs. */
+	num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+	num_compiler_threads = MIN2(num_cpus, ARRAY_SIZE(sscreen->tm));
+
+	if (!util_queue_init(&sscreen->shader_compiler_queue, "si_shader",
+			     32, num_compiler_threads)) {
+		si_destroy_shader_cache(sscreen);
 		FREE(sscreen);
 		return NULL;
 	}
@@ -832,11 +880,27 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	sscreen->has_ds_bpermute = HAVE_LLVM >= 0x0309 &&
 				   sscreen->b.chip_class >= VI;
 
+	sscreen->has_msaa_sample_loc_bug = (sscreen->b.family >= CHIP_POLARIS10 &&
+					    sscreen->b.family <= CHIP_POLARIS12) ||
+					   sscreen->b.family == CHIP_VEGA10;
+
 	sscreen->b.has_cp_dma = true;
 	sscreen->b.has_streamout = true;
-	pipe_mutex_init(sscreen->shader_parts_mutex);
+
+	/* Some chips have RB+ registers, but don't support RB+. Those must
+	 * always disable it.
+	 */
+	if (sscreen->b.family == CHIP_STONEY ||
+	    sscreen->b.chip_class >= GFX9) {
+		sscreen->b.has_rbplus = true;
+
+		sscreen->b.rbplus_allowed =
+			!(sscreen->b.debug_flags & DBG_NO_RB_PLUS) &&
+			sscreen->b.family == CHIP_STONEY;
+	}
+
+	(void) mtx_init(&sscreen->shader_parts_mutex, mtx_plain);
 	sscreen->use_monolithic_shaders =
-		HAVE_LLVM < 0x0308 ||
 		(sscreen->b.debug_flags & DBG_MONOLITHIC_SHADERS) != 0;
 
 	sscreen->b.barrier_flags.cp_to_L2 = SI_CONTEXT_INV_SMEM_L1 |
@@ -847,21 +911,19 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))
 		sscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
 
-	/* Only enable as many threads as we have target machines and CPUs. */
-	num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-	num_compiler_threads = MIN2(num_cpus, ARRAY_SIZE(sscreen->tm));
-
 	for (i = 0; i < num_compiler_threads; i++)
 		sscreen->tm[i] = si_create_llvm_target_machine(sscreen);
-
-	util_queue_init(&sscreen->shader_compiler_queue, "si_shader",
-                        32, num_compiler_threads);
 
 	/* Create the auxiliary context. This must be done last. */
 	sscreen->b.aux_context = sscreen->b.b.context_create(&sscreen->b.b, NULL, 0);
 
 	if (sscreen->b.debug_flags & DBG_TEST_DMA)
 		r600_test_dma(&sscreen->b);
+
+	if (sscreen->b.debug_flags & (DBG_TEST_VMFAULT_CP |
+				      DBG_TEST_VMFAULT_SDMA |
+				      DBG_TEST_VMFAULT_SHADER))
+		si_test_vmfault(sscreen);
 
 	return &sscreen->b.b;
 }

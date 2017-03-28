@@ -397,10 +397,6 @@ static int tgsi_is_supported(struct r600_shader_ctx *ctx)
 		R600_ERR("too many dst (%d)\n", i->Instruction.NumDstRegs);
 		return -EINVAL;
 	}
-	if (i->Instruction.Predicate) {
-		R600_ERR("predicate unsupported\n");
-		return -EINVAL;
-	}
 #if 0
 	if (i->Instruction.Label) {
 		R600_ERR("label unsupported\n");
@@ -1113,7 +1109,8 @@ static int allocate_system_value_inputs(struct r600_shader_ctx *ctx, int gpr_off
 
 				interpolate = ctx->info.input_interpolate[inst->Src[0].Register.Index];
 				k = eg_get_interpolator_index(interpolate, location);
-				ctx->eg_interpolators[k].enabled = true;
+				if (k >= 0)
+					ctx->eg_interpolators[k].enabled = true;
 			}
 		} else if (parse.FullToken.Token.Type == TGSI_TOKEN_TYPE_DECLARATION) {
 			struct tgsi_full_declaration *d = &parse.FullToken.FullDeclaration;
@@ -1209,7 +1206,8 @@ static int evergreen_gpr_count(struct r600_shader_ctx *ctx)
 
 				interpolate = ctx->info.input_interpolate[inst->Src[0].Register.Index];
 				k = eg_get_interpolator_index(interpolate, location);
-				ctx->eg_interpolators[k].enabled = true;
+				if (k >= 0)
+					ctx->eg_interpolators[k].enabled = true;
 			}
 		}
 	}
@@ -8646,14 +8644,15 @@ static void fc_set_mid(struct r600_shader_ctx *ctx, int fc_sp)
 
 static void fc_pushlevel(struct r600_shader_ctx *ctx, int type)
 {
-	ctx->bc->fc_sp++;
+	assert(ctx->bc->fc_sp < ARRAY_SIZE(ctx->bc->fc_stack));
 	ctx->bc->fc_stack[ctx->bc->fc_sp].type = type;
 	ctx->bc->fc_stack[ctx->bc->fc_sp].start = ctx->bc->cf_last;
+	ctx->bc->fc_sp++;
 }
 
 static void fc_poplevel(struct r600_shader_ctx *ctx)
 {
-	struct r600_cf_stack_entry *sp = &ctx->bc->fc_stack[ctx->bc->fc_sp];
+	struct r600_cf_stack_entry *sp = &ctx->bc->fc_stack[ctx->bc->fc_sp - 1];
 	free(sp->mid);
 	sp->mid = NULL;
 	sp->num_mid = 0;
@@ -8749,24 +8748,24 @@ static int tgsi_else(struct r600_shader_ctx *ctx)
 	r600_bytecode_add_cfinst(ctx->bc, CF_OP_ELSE);
 	ctx->bc->cf_last->pop_count = 1;
 
-	fc_set_mid(ctx, ctx->bc->fc_sp);
-	ctx->bc->fc_stack[ctx->bc->fc_sp].start->cf_addr = ctx->bc->cf_last->id;
+	fc_set_mid(ctx, ctx->bc->fc_sp - 1);
+	ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->cf_addr = ctx->bc->cf_last->id;
 	return 0;
 }
 
 static int tgsi_endif(struct r600_shader_ctx *ctx)
 {
 	pops(ctx, 1);
-	if (ctx->bc->fc_stack[ctx->bc->fc_sp].type != FC_IF) {
+	if (ctx->bc->fc_stack[ctx->bc->fc_sp - 1].type != FC_IF) {
 		R600_ERR("if/endif unbalanced in shader\n");
 		return -1;
 	}
 
-	if (ctx->bc->fc_stack[ctx->bc->fc_sp].mid == NULL) {
-		ctx->bc->fc_stack[ctx->bc->fc_sp].start->cf_addr = ctx->bc->cf_last->id + 2;
-		ctx->bc->fc_stack[ctx->bc->fc_sp].start->pop_count = 1;
+	if (ctx->bc->fc_stack[ctx->bc->fc_sp - 1].mid == NULL) {
+		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->cf_addr = ctx->bc->cf_last->id + 2;
+		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->pop_count = 1;
 	} else {
-		ctx->bc->fc_stack[ctx->bc->fc_sp].mid[0]->cf_addr = ctx->bc->cf_last->id + 2;
+		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].mid[0]->cf_addr = ctx->bc->cf_last->id + 2;
 	}
 	fc_poplevel(ctx);
 
@@ -8793,7 +8792,7 @@ static int tgsi_endloop(struct r600_shader_ctx *ctx)
 
 	r600_bytecode_add_cfinst(ctx->bc, CF_OP_LOOP_END);
 
-	if (ctx->bc->fc_stack[ctx->bc->fc_sp].type != FC_LOOP) {
+	if (ctx->bc->fc_stack[ctx->bc->fc_sp - 1].type != FC_LOOP) {
 		R600_ERR("loop/endloop in shader code are not paired.\n");
 		return -EINVAL;
 	}
@@ -8803,12 +8802,12 @@ static int tgsi_endloop(struct r600_shader_ctx *ctx)
 	   LOOP START point to CF after LOOP END
 	   BRK/CONT point to LOOP END CF
 	*/
-	ctx->bc->cf_last->cf_addr = ctx->bc->fc_stack[ctx->bc->fc_sp].start->id + 2;
+	ctx->bc->cf_last->cf_addr = ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->id + 2;
 
-	ctx->bc->fc_stack[ctx->bc->fc_sp].start->cf_addr = ctx->bc->cf_last->id + 2;
+	ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->cf_addr = ctx->bc->cf_last->id + 2;
 
-	for (i = 0; i < ctx->bc->fc_stack[ctx->bc->fc_sp].num_mid; i++) {
-		ctx->bc->fc_stack[ctx->bc->fc_sp].mid[i]->cf_addr = ctx->bc->cf_last->id;
+	for (i = 0; i < ctx->bc->fc_stack[ctx->bc->fc_sp - 1].num_mid; i++) {
+		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].mid[i]->cf_addr = ctx->bc->cf_last->id;
 	}
 	/* XXX add LOOPRET support */
 	fc_poplevel(ctx);
@@ -8823,7 +8822,7 @@ static int tgsi_loop_breakc(struct r600_shader_ctx *ctx)
 
 	for (fscp = ctx->bc->fc_sp; fscp > 0; fscp--)
 	{
-		if (FC_LOOP == ctx->bc->fc_stack[fscp].type)
+		if (FC_LOOP == ctx->bc->fc_stack[fscp - 1].type)
 			break;
 	}
 	if (fscp == 0) {
@@ -8842,14 +8841,14 @@ static int tgsi_loop_breakc(struct r600_shader_ctx *ctx)
 		r = r600_bytecode_add_cfinst(ctx->bc, CF_OP_LOOP_BREAK);
 		if (r)
 			return r;
-		fc_set_mid(ctx, fscp);
+		fc_set_mid(ctx, fscp - 1);
 
 		return tgsi_endif(ctx);
 	} else {
 		r = emit_logic_pred(ctx, ALU_OP2_PRED_SETE_INT, CF_OP_ALU_BREAK);
 		if (r)
 			return r;
-		fc_set_mid(ctx, fscp);
+		fc_set_mid(ctx, fscp - 1);
 	}
 
 	return 0;
@@ -8861,7 +8860,7 @@ static int tgsi_loop_brk_cont(struct r600_shader_ctx *ctx)
 
 	for (fscp = ctx->bc->fc_sp; fscp > 0; fscp--)
 	{
-		if (FC_LOOP == ctx->bc->fc_stack[fscp].type)
+		if (FC_LOOP == ctx->bc->fc_stack[fscp - 1].type)
 			break;
 	}
 
@@ -8872,7 +8871,7 @@ static int tgsi_loop_brk_cont(struct r600_shader_ctx *ctx)
 
 	r600_bytecode_add_cfinst(ctx->bc, ctx->inst_info->op);
 
-	fc_set_mid(ctx, fscp);
+	fc_set_mid(ctx, fscp - 1);
 
 	return 0;
 }

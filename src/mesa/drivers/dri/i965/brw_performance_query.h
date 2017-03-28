@@ -21,7 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-#pragma once
+#ifndef BRW_PERFORMANCE_QUERY_H
+#define BRW_PERFORMANCE_QUERY_H
 
 #include <stdint.h>
 
@@ -44,6 +45,15 @@ struct brw_perf_query_counter
    size_t offset;
    size_t size;
 
-   struct brw_pipeline_stat pipeline_stat;
+   union {
+      uint64_t (*oa_counter_read_uint64)(struct brw_context *brw,
+                                         const struct brw_perf_query_info *query,
+                                         uint64_t *accumulator);
+      float (*oa_counter_read_float)(struct brw_context *brw,
+                                     const struct brw_perf_query_info *query,
+                                     uint64_t *accumulator);
+      struct brw_pipeline_stat pipeline_stat;
+   };
 };
 
+#endif /* BRW_PERFORMANCE_QUERY_H */

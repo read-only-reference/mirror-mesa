@@ -53,6 +53,7 @@
 #include "radv_radeon_winsys.h"
 #include "ac_binary.h"
 #include "ac_nir_to_llvm.h"
+#include "radv_debug.h"
 #include "radv_descriptor_set.h"
 
 #include <llvm-c/TargetMachine.h>
@@ -98,18 +99,6 @@ enum radv_mem_type {
 	RADV_MEM_TYPE_VRAM_CPU_ACCESS,
 	RADV_MEM_TYPE_GTT_CACHED,
 	RADV_MEM_TYPE_COUNT
-};
-
-
-enum {
-	RADV_DEBUG_NO_FAST_CLEARS    =   0x1,
-	RADV_DEBUG_NO_DCC            =   0x2,
-	RADV_DEBUG_DUMP_SHADERS      =   0x4,
-	RADV_DEBUG_NO_CACHE          =   0x8,
-	RADV_DEBUG_DUMP_SHADER_STATS =  0x10,
-	RADV_DEBUG_NO_HIZ            =  0x20,
-	RADV_DEBUG_NO_COMPUTE_QUEUE  =  0x40,
-	RADV_DEBUG_UNSAFE_MATH       =  0x80,
 };
 
 #define radv_printflike(a, b) __attribute__((__format__(__printf__, a, b)))
@@ -470,12 +459,15 @@ struct radv_queue {
 	uint32_t compute_scratch_size;
 	uint32_t esgs_ring_size;
 	uint32_t gsvs_ring_size;
+	bool has_tess_rings;
 
 	struct radeon_winsys_bo *scratch_bo;
 	struct radeon_winsys_bo *descriptor_bo;
 	struct radeon_winsys_bo *compute_scratch_bo;
 	struct radeon_winsys_bo *esgs_ring_bo;
 	struct radeon_winsys_bo *gsvs_ring_bo;
+	struct radeon_winsys_bo *tess_factor_ring_bo;
+	struct radeon_winsys_bo *tess_offchip_ring_bo;
 	struct radeon_winsys_cs *initial_preamble_cs;
 	struct radeon_winsys_cs *continue_preamble_cs;
 };
@@ -498,6 +490,8 @@ struct radv_device {
 	uint64_t debug_flags;
 
 	bool llvm_supports_spill;
+	bool has_distributed_tess;
+	uint32_t tess_offchip_block_dw_size;
 	uint32_t scratch_waves;
 
 	uint32_t gs_table_depth;
@@ -519,6 +513,9 @@ struct radv_device {
 	uint32_t                                     *trace_id_ptr;
 
 	struct radv_physical_device                  *physical_device;
+
+	/* Backup in-memory cache to be used if the app doesn't provide one */
+	struct radv_pipeline_cache *                mem_cache;
 };
 
 struct radv_device_memory {
@@ -541,7 +538,6 @@ struct radv_descriptor_set {
 	const struct radv_descriptor_set_layout *layout;
 	uint32_t size;
 
-	struct radv_buffer_view *buffer_views;
 	struct radeon_winsys_bo *bo;
 	uint64_t va;
 	uint32_t *mapped_ptr;
@@ -566,6 +562,7 @@ struct radv_buffer {
 	VkDeviceSize                                 size;
 
 	VkBufferUsageFlags                           usage;
+	VkBufferCreateFlags                          flags;
 
 	/* Set when bound */
 	struct radeon_winsys_bo *                      bo;
@@ -598,16 +595,18 @@ enum radv_cmd_flush_bits {
 	RADV_CMD_FLAG_INV_VMEM_L1 = 1 << 2,
 	/* Used by everything except CB/DB, can be bypassed (SLC=1). Other names: TC L2 */
 	RADV_CMD_FLAG_INV_GLOBAL_L2 = 1 << 3,
+	/* Same as above, but only writes back and doesn't invalidate */
+	RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2 = 1 << 4,
 	/* Framebuffer caches */
-	RADV_CMD_FLAG_FLUSH_AND_INV_CB_META = 1 << 4,
-	RADV_CMD_FLAG_FLUSH_AND_INV_DB_META = 1 << 5,
-	RADV_CMD_FLAG_FLUSH_AND_INV_DB = 1 << 6,
-	RADV_CMD_FLAG_FLUSH_AND_INV_CB = 1 << 7,
+	RADV_CMD_FLAG_FLUSH_AND_INV_CB_META = 1 << 5,
+	RADV_CMD_FLAG_FLUSH_AND_INV_DB_META = 1 << 6,
+	RADV_CMD_FLAG_FLUSH_AND_INV_DB = 1 << 7,
+	RADV_CMD_FLAG_FLUSH_AND_INV_CB = 1 << 8,
 	/* Engine synchronization. */
-	RADV_CMD_FLAG_VS_PARTIAL_FLUSH = 1 << 8,
-	RADV_CMD_FLAG_PS_PARTIAL_FLUSH = 1 << 9,
-	RADV_CMD_FLAG_CS_PARTIAL_FLUSH = 1 << 10,
-	RADV_CMD_FLAG_VGT_FLUSH        = 1 << 11,
+	RADV_CMD_FLAG_VS_PARTIAL_FLUSH = 1 << 9,
+	RADV_CMD_FLAG_PS_PARTIAL_FLUSH = 1 << 10,
+	RADV_CMD_FLAG_CS_PARTIAL_FLUSH = 1 << 11,
+	RADV_CMD_FLAG_VGT_FLUSH        = 1 << 12,
 
 	RADV_CMD_FLUSH_AND_INV_FRAMEBUFFER = (RADV_CMD_FLAG_FLUSH_AND_INV_CB |
 					      RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
@@ -710,6 +709,7 @@ struct radv_cmd_state {
 struct radv_cmd_pool {
 	VkAllocationCallbacks                        alloc;
 	struct list_head                             cmd_buffers;
+	struct list_head                             free_cmd_buffers;
 	uint32_t queue_family_index;
 };
 
@@ -736,7 +736,7 @@ struct radv_cmd_buffer {
 	uint32_t queue_family_index;
 
 	uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
-	uint32_t dynamic_buffers[16 * MAX_DYNAMIC_BUFFERS];
+	uint32_t dynamic_buffers[4 * MAX_DYNAMIC_BUFFERS];
 	VkShaderStageFlags push_constant_stages;
 
 	struct radv_cmd_buffer_upload upload;
@@ -747,6 +747,7 @@ struct radv_cmd_buffer {
 	uint32_t compute_scratch_size_needed;
 	uint32_t esgs_ring_size_needed;
 	uint32_t gsvs_ring_size_needed;
+	bool tess_rings_needed;
 
 	int ring_offsets_idx; /* just used for verification */
 };
@@ -763,9 +764,11 @@ void cik_create_gfx_config(struct radv_device *device);
 void si_write_viewport(struct radeon_winsys_cs *cs, int first_vp,
 		       int count, const VkViewport *viewports);
 void si_write_scissors(struct radeon_winsys_cs *cs, int first,
-		       int count, const VkRect2D *scissors);
+		       int count, const VkRect2D *scissors,
+		       const VkViewport *viewports, bool can_use_guardband);
 uint32_t si_get_ia_multi_vgt_param(struct radv_cmd_buffer *cmd_buffer,
-				   bool instanced_or_indirect_draw, uint32_t draw_vertex_count);
+				   bool instanced_draw, bool indirect_draw,
+				   uint32_t draw_vertex_count);
 void si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
                             enum chip_class chip_class,
                             bool is_mec,
@@ -910,7 +913,6 @@ unsigned radv_format_meta_fs_key(VkFormat format);
 
 struct radv_raster_state {
 	uint32_t pa_cl_clip_cntl;
-	uint32_t pa_cl_vs_out_cntl;
 	uint32_t spi_interp_control;
 	uint32_t pa_su_point_size;
 	uint32_t pa_su_point_minmax;
@@ -932,6 +934,18 @@ struct radv_multisample_state {
 struct radv_prim_vertex_count {
 	uint8_t min;
 	uint8_t incr;
+};
+
+struct radv_tessellation_state {
+	uint32_t ls_hs_config;
+	uint32_t tcs_in_layout;
+	uint32_t tcs_out_layout;
+	uint32_t tcs_out_offsets;
+	uint32_t offchip_layout;
+	unsigned num_patches;
+	unsigned lds_size;
+	unsigned num_tcs_input_cp;
+	uint32_t tf_param;
 };
 
 struct radv_pipeline {
@@ -960,12 +974,21 @@ struct radv_pipeline {
 			struct radv_depth_stencil_state ds;
 			struct radv_raster_state raster;
 			struct radv_multisample_state ms;
+			struct radv_tessellation_state tess;
+			uint32_t db_shader_control;
+			uint32_t shader_z_format;
 			unsigned prim;
 			unsigned gs_out;
+			uint32_t vgt_gs_mode;
 			bool prim_restart_enable;
 			unsigned esgs_ring_size;
 			unsigned gsvs_ring_size;
+			uint32_t ps_input_cntl[32];
+			uint32_t ps_input_cntl_num;
+			uint32_t pa_cl_vs_out_cntl;
+			uint32_t vgt_shader_stages_en;
 			struct radv_prim_vertex_count prim_vertex_count;
+ 			bool can_use_guardband;
 		} graphics;
 	};
 
@@ -976,6 +999,11 @@ struct radv_pipeline {
 static inline bool radv_pipeline_has_gs(struct radv_pipeline *pipeline)
 {
 	return pipeline->shaders[MESA_SHADER_GEOMETRY] ? true : false;
+}
+
+static inline bool radv_pipeline_has_tess(struct radv_pipeline *pipeline)
+{
+	return pipeline->shaders[MESA_SHADER_TESS_EVAL] ? true : false;
 }
 
 struct radv_graphics_pipeline_create_info {
@@ -1068,6 +1096,7 @@ struct radv_image {
 	uint32_t samples; /**< VkImageCreateInfo::samples */
 	VkImageUsageFlags usage; /**< Superset of VkImageCreateInfo::usage. */
 	VkImageTiling tiling; /** VkImageCreateInfo::tiling */
+	VkImageCreateFlags flags; /** VkImageCreateInfo::flags */
 
 	VkDeviceSize size;
 	uint32_t alignment;
@@ -1079,14 +1108,12 @@ struct radv_image {
 	struct radeon_winsys_bo *bo;
 	VkDeviceSize offset;
 	uint32_t dcc_offset;
+	uint32_t htile_offset;
 	struct radeon_surf surface;
 
 	struct radv_fmask_info fmask;
 	struct radv_cmask_info cmask;
 	uint32_t clear_value_offset;
-
-	/* Depth buffer compression and fast clear. */
-	struct r600_htile_info htile;
 };
 
 bool radv_layout_has_htile(const struct radv_image *image,
@@ -1326,6 +1353,8 @@ struct radv_fence {
 	bool signalled;
 };
 
+struct radeon_winsys_sem;
+
 #define RADV_DEFINE_HANDLE_CASTS(__radv_type, __VkType)		\
 								\
 	static inline struct __radv_type *			\
@@ -1382,5 +1411,6 @@ RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_query_pool, VkQueryPool)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_render_pass, VkRenderPass)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_sampler, VkSampler)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_shader_module, VkShaderModule)
+RADV_DEFINE_NONDISP_HANDLE_CASTS(radeon_winsys_sem, VkSemaphore)
 
 #endif /* RADV_PRIVATE_H */

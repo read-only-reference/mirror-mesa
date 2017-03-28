@@ -25,6 +25,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include "genxml/genX_bits.h"
+
 #include "isl.h"
 #include "isl_gen4.h"
 #include "isl_gen6.h"
@@ -56,7 +58,7 @@ static const struct {
    [5] = {24, 32,  4},
    [6] = {24, 32,  4},
    [7] = {32, 32,  4, 24},
-   [8] = {52, 64, 32, 40},
+   [8] = {64, 64, 32, 40},
    [9] = {64, 64, 32, 40},
 };
 
@@ -995,65 +997,12 @@ isl_calc_array_pitch_el_rows(const struct isl_device *dev,
    return pitch_el_rows;
 }
 
-/**
- * Calculate the pitch of each surface row, in bytes.
- */
 static uint32_t
-isl_calc_linear_row_pitch(const struct isl_device *dev,
-                          const struct isl_surf_init_info *restrict info,
-                          const struct isl_extent2d *phys_slice0_sa)
+isl_calc_row_pitch_alignment(const struct isl_surf_init_info *surf_info,
+                             const struct isl_tile_info *tile_info)
 {
-   const struct isl_format_layout *fmtl = isl_format_get_layout(info->format);
-
-   uint32_t row_pitch = info->min_pitch;
-
-   /* First, align the surface to a cache line boundary, as the PRM explains
-    * below.
-    *
-    * From the Broadwell PRM >> Volume 5: Memory Views >> Common Surface
-    * Formats >> Surface Padding Requirements >> Render Target and Media
-    * Surfaces:
-    *
-    *    The data port accesses data (pixels) outside of the surface if they
-    *    are contained in the same cache request as pixels that are within the
-    *    surface. These pixels will not be returned by the requesting message,
-    *    however if these pixels lie outside of defined pages in the GTT,
-    *    a GTT error will result when the cache request is processed. In order
-    *    to avoid these GTT errors, “padding” at the bottom of the surface is
-    *    sometimes necessary.
-    *
-    * From the Broadwell PRM >> Volume 5: Memory Views >> Common Surface
-    * Formats >> Surface Padding Requirements >> Sampling Engine Surfaces:
-    *
-    *    The sampling engine accesses texels outside of the surface if they
-    *    are contained in the same cache line as texels that are within the
-    *    surface.  These texels will not participate in any calculation
-    *    performed by the sampling engine and will not affect the result of
-    *    any sampling engine operation, however if these texels lie outside of
-    *    defined pages in the GTT, a GTT error will result when the cache line
-    *    is accessed. In order to avoid these GTT errors, “padding” at the
-    *    bottom and right side of a sampling engine surface is sometimes
-    *    necessary.
-    *
-    *    It is possible that a cache line will straddle a page boundary if the
-    *    base address or pitch is not aligned. All pages included in the cache
-    *    lines that are part of the surface must map to valid GTT entries to
-    *    avoid errors. To determine the necessary padding on the bottom and
-    *    right side of the surface, refer to the table in  Alignment Unit Size
-    *    section for the i and j parameters for the surface format in use. The
-    *    surface must then be extended to the next multiple of the alignment
-    *    unit size in each dimension, and all texels contained in this
-    *    extended surface must have valid GTT entries.
-    *
-    *    For example, suppose the surface size is 15 texels by 10 texels and
-    *    the alignment parameters are i=4 and j=2. In this case, the extended
-    *    surface would be 16 by 10. Note that these calculations are done in
-    *    texels, and must be converted to bytes based on the surface format
-    *    being used to determine whether additional pages need to be defined.
-    */
-   assert(phys_slice0_sa->w % fmtl->bw == 0);
-   const uint32_t bs = fmtl->bpb / 8;
-   row_pitch = MAX(row_pitch, bs * (phys_slice0_sa->w / fmtl->bw));
+   if (tile_info->tiling != ISL_TILING_LINEAR)
+      return tile_info->phys_extent_B.width;
 
    /* From the Broadwel PRM >> Volume 2d: Command Reference: Structures >>
     * RENDER_SURFACE_STATE Surface Pitch (p349):
@@ -1069,15 +1018,150 @@ isl_calc_linear_row_pitch(const struct isl_device *dev,
     *    - For other linear surfaces, the pitch can be any multiple of
     *      bytes.
     */
-   if (info->usage & ISL_SURF_USAGE_RENDER_TARGET_BIT) {
-      if (isl_format_is_yuv(info->format)) {
-         row_pitch = isl_align_npot(row_pitch, 2 * bs);
+   const struct isl_format_layout *fmtl = isl_format_get_layout(surf_info->format);
+   const uint32_t bs = fmtl->bpb / 8;
+
+   if (surf_info->usage & ISL_SURF_USAGE_RENDER_TARGET_BIT) {
+      if (isl_format_is_yuv(surf_info->format)) {
+         return 2 * bs;
       } else  {
-         row_pitch = isl_align_npot(row_pitch, bs);
+         return bs;
       }
    }
 
-   return row_pitch;
+   return 1;
+}
+
+static uint32_t
+isl_calc_linear_min_row_pitch(const struct isl_device *dev,
+                              const struct isl_surf_init_info *info,
+                              const struct isl_extent2d *phys_slice0_sa,
+                              uint32_t alignment)
+{
+   const struct isl_format_layout *fmtl = isl_format_get_layout(info->format);
+   const uint32_t bs = fmtl->bpb / 8;
+
+   assert(phys_slice0_sa->w % fmtl->bw == 0);
+
+   return isl_align_npot(bs * (phys_slice0_sa->w / fmtl->bw), alignment);
+}
+
+static uint32_t
+isl_calc_tiled_min_row_pitch(const struct isl_device *dev,
+                             const struct isl_surf_init_info *surf_info,
+                             const struct isl_tile_info *tile_info,
+                             const struct isl_extent2d *phys_slice0_sa,
+                             uint32_t alignment)
+{
+   const struct isl_format_layout *fmtl = isl_format_get_layout(surf_info->format);
+
+   assert(fmtl->bpb % tile_info->format_bpb == 0);
+   assert(phys_slice0_sa->w % fmtl->bw == 0);
+
+   const uint32_t tile_el_scale = fmtl->bpb / tile_info->format_bpb;
+   const uint32_t total_w_el = phys_slice0_sa->width / fmtl->bw;
+   const uint32_t total_w_tl =
+      isl_align_div(total_w_el * tile_el_scale,
+                    tile_info->logical_extent_el.width);
+
+   assert(alignment == tile_info->phys_extent_B.width);
+   return total_w_tl * tile_info->phys_extent_B.width;
+}
+
+static uint32_t
+isl_calc_min_row_pitch(const struct isl_device *dev,
+                       const struct isl_surf_init_info *surf_info,
+                       const struct isl_tile_info *tile_info,
+                       const struct isl_extent2d *phys_slice0_sa,
+                       uint32_t alignment)
+{
+   if (tile_info->tiling == ISL_TILING_LINEAR) {
+      return isl_calc_linear_min_row_pitch(dev, surf_info, phys_slice0_sa,
+                                           alignment);
+   } else {
+      return isl_calc_tiled_min_row_pitch(dev, surf_info, tile_info,
+                                          phys_slice0_sa, alignment);
+   }
+}
+
+/**
+ * Is `pitch` in the valid range for a hardware bitfield, if the bitfield's
+ * size is `bits` bits?
+ *
+ * Hardware pitch fields are offset by 1. For example, if the size of
+ * RENDER_SURFACE_STATE::SurfacePitch is B bits, then the range of valid
+ * pitches is [1, 2^b] inclusive.  If the surface pitch is N, then
+ * RENDER_SURFACE_STATE::SurfacePitch must be set to N-1.
+ */
+static bool
+pitch_in_range(uint32_t n, uint32_t bits)
+{
+   assert(n != 0);
+   return likely(bits != 0 && 1 <= n && n <= (1 << bits));
+}
+
+static bool
+isl_calc_row_pitch(const struct isl_device *dev,
+                   const struct isl_surf_init_info *surf_info,
+                   const struct isl_tile_info *tile_info,
+                   enum isl_dim_layout dim_layout,
+                   const struct isl_extent2d *phys_slice0_sa,
+                   uint32_t *out_row_pitch)
+{
+   const uint32_t alignment =
+      isl_calc_row_pitch_alignment(surf_info, tile_info);
+
+   const uint32_t min_row_pitch =
+      isl_calc_min_row_pitch(dev, surf_info, tile_info, phys_slice0_sa,
+                             alignment);
+
+   uint32_t row_pitch = min_row_pitch;
+
+   if (surf_info->row_pitch != 0) {
+      row_pitch = surf_info->row_pitch;
+
+      if (row_pitch < min_row_pitch)
+         return false;
+
+      if (row_pitch % alignment != 0)
+         return false;
+   }
+
+   const uint32_t row_pitch_tiles = row_pitch / tile_info->phys_extent_B.width;
+
+   if (row_pitch == 0)
+      return false;
+
+   if (dim_layout == ISL_DIM_LAYOUT_GEN9_1D) {
+      /* SurfacePitch is ignored for this layout. */
+      goto done;
+   }
+
+   if ((surf_info->usage & (ISL_SURF_USAGE_RENDER_TARGET_BIT |
+                            ISL_SURF_USAGE_TEXTURE_BIT |
+                            ISL_SURF_USAGE_STORAGE_BIT)) &&
+       !pitch_in_range(row_pitch, RENDER_SURFACE_STATE_SurfacePitch_bits(dev->info)))
+      return false;
+
+   if ((surf_info->usage & (ISL_SURF_USAGE_CCS_BIT |
+                            ISL_SURF_USAGE_MCS_BIT)) &&
+       !pitch_in_range(row_pitch_tiles, RENDER_SURFACE_STATE_AuxiliarySurfacePitch_bits(dev->info)))
+      return false;
+
+   if ((surf_info->usage & ISL_SURF_USAGE_DEPTH_BIT) &&
+       !pitch_in_range(row_pitch, _3DSTATE_DEPTH_BUFFER_SurfacePitch_bits(dev->info)))
+      return false;
+
+   if ((surf_info->usage & ISL_SURF_USAGE_HIZ_BIT) &&
+       !pitch_in_range(row_pitch, _3DSTATE_HIER_DEPTH_BUFFER_SurfacePitch_bits(dev->info)))
+      return false;
+
+   if (surf_info->usage & ISL_SURF_USAGE_STENCIL_BIT)
+      isl_finishme("validate row pitch of stencil surfaces");
+
+ done:
+   *out_row_pitch = row_pitch;
+   return true;
 }
 
 /**
@@ -1252,9 +1336,13 @@ isl_surf_init_s(const struct isl_device *dev,
    uint32_t pad_bytes;
    isl_apply_surface_padding(dev, info, &tile_info, &total_h_el, &pad_bytes);
 
-   uint32_t row_pitch, size, base_alignment;
+   uint32_t row_pitch;
+   if (!isl_calc_row_pitch(dev, info, &tile_info, dim_layout,
+                           &phys_slice0_sa, &row_pitch))
+      return false;
+
+   uint32_t size, base_alignment;
    if (tiling == ISL_TILING_LINEAR) {
-      row_pitch = isl_calc_linear_row_pitch(dev, info, &phys_slice0_sa);
       size = row_pitch * total_h_el + pad_bytes;
 
       /* From the Broadwell PRM Vol 2d, RENDER_SURFACE_STATE::SurfaceBaseAddress:
@@ -1276,21 +1364,6 @@ isl_surf_init_s(const struct isl_device *dev,
       }
       base_alignment = isl_round_up_to_power_of_two(base_alignment);
    } else {
-      assert(fmtl->bpb % tile_info.format_bpb == 0);
-      const uint32_t tile_el_scale = fmtl->bpb / tile_info.format_bpb;
-
-      assert(phys_slice0_sa.w % fmtl->bw == 0);
-      const uint32_t total_w_el = phys_slice0_sa.width / fmtl->bw;
-      const uint32_t total_w_tl =
-         isl_align_div(total_w_el * tile_el_scale,
-                       tile_info.logical_extent_el.width);
-
-      row_pitch = total_w_tl * tile_info.phys_extent_B.width;
-      if (row_pitch < info->min_pitch) {
-         row_pitch = isl_align_npot(info->min_pitch,
-                                    tile_info.phys_extent_B.width);
-      }
-
       total_h_el += isl_align_div_npot(pad_bytes, row_pitch);
       const uint32_t total_h_tl =
          isl_align_div(total_h_el, tile_info.logical_extent_el.height);

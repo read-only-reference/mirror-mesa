@@ -52,7 +52,6 @@ static const char *tgsi_file_names[] =
    "SAMP",
    "ADDR",
    "IMM",
-   "PRED",
    "SV",
    "IMAGE",
    "SVIEW",
@@ -207,12 +206,14 @@ const char *tgsi_fs_coord_pixel_center_names[2] =
    "INTEGER"
 };
 
-const char *tgsi_immediate_type_names[4] =
+const char *tgsi_immediate_type_names[6] =
 {
    "FLT32",
    "UINT32",
    "INT32",
-   "FLT64"
+   "FLT64",
+   "UINT64",
+   "INT64",
 };
 
 const char *tgsi_memory_names[3] =

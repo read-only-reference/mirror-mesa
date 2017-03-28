@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <llvm-c/Transforms/IPO.h>
 #include <llvm-c/Transforms/Scalar.h>
+#include <llvm-c/Support.h>
 
 /* Data for if/else/endif and bgnloop/endloop control flow structures.
  */
@@ -120,18 +121,20 @@ void si_llvm_shader_type(LLVMValueRef F, unsigned type)
 static void init_amdgpu_target()
 {
 	gallivm_init_llvm_targets();
-#if HAVE_LLVM < 0x0307
-	LLVMInitializeR600TargetInfo();
-	LLVMInitializeR600Target();
-	LLVMInitializeR600TargetMC();
-	LLVMInitializeR600AsmPrinter();
-#else
 	LLVMInitializeAMDGPUTargetInfo();
 	LLVMInitializeAMDGPUTarget();
 	LLVMInitializeAMDGPUTargetMC();
 	LLVMInitializeAMDGPUAsmPrinter();
 
-#endif
+	if (HAVE_LLVM >= 0x0400) {
+		/*
+		 * Workaround for bug in llvm 4.0 that causes image intrinsics
+		 * to disappear.
+		 * https://reviews.llvm.org/D26348
+		 */
+		const char *argv[2] = {"mesa", "-simplifycfg-sink-common=false"};
+		LLVMParseCommandLineOptions(2, argv, NULL);
+	}
 }
 
 static once_flag init_amdgpu_target_once_flag = ONCE_FLAG_INIT;
@@ -831,7 +834,9 @@ static void emit_declaration(struct lp_build_tgsi_context *bld_base,
 			 *
 			 * LLVM 3.8 crashes with this.
 			 */
-			if (HAVE_LLVM >= 0x0309 && array_size > 16) {
+			if ((HAVE_LLVM >= 0x0309 && array_size > 16) ||
+			    /* TODO: VGPR indexing is buggy on GFX9. */
+			    ctx->screen->b.chip_class == GFX9) {
 				array_alloca = LLVMBuildAlloca(builder,
 					LLVMArrayType(bld_base->base.vec_type,
 						      array_size), "array");
@@ -987,7 +992,7 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 		if (tgsi_type_is_64bit(dtype) && (chan_index == 1 || chan_index == 3))
 			continue;
 		if (inst->Instruction.Saturate)
-			value = ac_emit_clamp(&ctx->ac, value);
+			value = ac_build_clamp(&ctx->ac, value);
 
 		if (reg->Register.File == TGSI_FILE_ADDRESS) {
 			temp_ptr = ctx->addrs[reg->Register.Index][chan_index];

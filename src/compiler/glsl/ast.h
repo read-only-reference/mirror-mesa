@@ -22,7 +22,6 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#pragma once
 #ifndef AST_H
 #define AST_H
 
@@ -607,7 +606,6 @@ struct ast_type_qualifier {
          /** \name Qualifiers for GL_ARB_shader_subroutine */
 	 /** \{ */
          unsigned subroutine:1;  /**< Is this marked 'subroutine' */
-         unsigned subroutine_def:1; /**< Is this marked 'subroutine' with a list of types */
 	 /** \} */
 
          /** \name Qualifiers for GL_KHR_blend_equation_advanced */
@@ -770,6 +768,11 @@ struct ast_type_qualifier {
     * Return true if and only if a memory qualifier is present.
     */
    bool has_memory() const;
+
+   /**
+    * Return true if the qualifier is a subroutine declaration.
+    */
+   bool is_subroutine_decl() const;
 
    bool merge_qualifier(YYLTYPE *loc,
 			_mesa_glsl_parse_state *state,

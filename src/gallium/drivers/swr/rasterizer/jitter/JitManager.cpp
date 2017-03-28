@@ -59,7 +59,7 @@
 
 #include "core/state.h"
 
-#include "state_llvm.h"
+#include "gen_state_llvm.h"
 
 #include <sstream>
 #if defined(_WIN32)
@@ -69,7 +69,8 @@
 #define INTEL_OUTPUT_DIR "c:\\Intel"
 #define SWR_OUTPUT_DIR INTEL_OUTPUT_DIR "\\SWR"
 #define JITTER_OUTPUT_DIR SWR_OUTPUT_DIR "\\Jitter"
-#endif
+#endif // _WIN32
+
 
 using namespace llvm;
 using namespace SwrJit;
@@ -105,15 +106,9 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
     std::unique_ptr<Module> newModule(new Module(fnName.str(), mContext));
     mpCurrentModule = newModule.get();
 
-    auto &&EB = EngineBuilder(std::move(newModule));
-    EB.setTargetOptions(tOpts);
-    EB.setOptLevel(CodeGenOpt::Aggressive);
-
     StringRef hostCPUName;
 
     hostCPUName = sys::getHostCPUName();
-
-    EB.setMCPU(hostCPUName);
 
 #if defined(_WIN32)
     // Needed for MCJIT on windows
@@ -122,7 +117,11 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
     mpCurrentModule->setTargetTriple(hostTriple.getTriple());
 #endif // _WIN32
 
-    mpExec = EB.create();
+    mpExec = EngineBuilder(std::move(newModule))
+        .setTargetOptions(tOpts)
+        .setOptLevel(CodeGenOpt::Aggressive)
+        .setMCPU(hostCPUName)
+        .create();
 
 #if LLVM_USE_INTEL_JITEVENTS
     JITEventListener *vTune = JITEventListener::createIntelJITEventListener();
@@ -196,6 +195,7 @@ bool JitManager::SetupModuleFromIR(const uint8_t *pIR, size_t length)
 
     SMDiagnostic Err;
     std::unique_ptr<Module> newModule = parseIR(pMem.get()->getMemBufferRef(), Err, mContext);
+
 
     SWR_REL_ASSERT(
         !(newModule == nullptr),

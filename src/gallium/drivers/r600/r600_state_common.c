@@ -187,6 +187,10 @@ static void r600_bind_blend_state_internal(struct r600_context *rctx,
 	if (update_cb) {
 		r600_mark_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
+	if (rctx->framebuffer.dual_src_blend != blend->dual_src_blend) {
+		rctx->framebuffer.dual_src_blend = blend->dual_src_blend;
+		r600_mark_atom_dirty(rctx, &rctx->framebuffer.atom);
+	}
 }
 
 static void r600_bind_blend_state(struct pipe_context *ctx, void *state)
@@ -1055,7 +1059,8 @@ void r600_constant_buffers_dirty(struct r600_context *rctx, struct r600_constbuf
 	}
 }
 
-static void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
+static void r600_set_constant_buffer(struct pipe_context *ctx,
+				     enum pipe_shader_type shader, uint index,
 				     const struct pipe_constant_buffer *input)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
@@ -1741,6 +1746,10 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 
 			u_upload_alloc(ctx->stream_uploader, start, count * 2,
                                        256, &out_offset, &out_buffer, &ptr);
+			if (unlikely(!ptr)) {
+				pipe_resource_reference(&ib.buffer, NULL);
+				return;
+			}
 
 			util_shorten_ubyte_elts_to_userptr(
 						&rctx->b.b, &ib, 0, 0, ib.offset + start, count, ptr);

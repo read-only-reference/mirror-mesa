@@ -30,7 +30,7 @@
 #include "util/mesa-sha1.h"
 #include "common/gen_l3_config.h"
 #include "anv_private.h"
-#include "brw_nir.h"
+#include "compiler/brw_nir.h"
 #include "anv_nir.h"
 #include "spirv/nir_spirv.h"
 
@@ -87,15 +87,13 @@ void anv_DestroyShaderModule(
  * we can't do that yet because we don't have the ability to copy nir.
  */
 static nir_shader *
-anv_shader_compile_to_nir(struct anv_device *device,
+anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
                           struct anv_shader_module *module,
                           const char *entrypoint_name,
                           gl_shader_stage stage,
                           const VkSpecializationInfo *spec_info)
 {
-   if (strcmp(entrypoint_name, "main") != 0) {
-      anv_finishme("Multiple shaders per module not really supported");
-   }
+   const struct anv_device *device = pipeline->device;
 
    const struct brw_compiler *compiler =
       device->instance->physicalDevice.compiler;
@@ -126,6 +124,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
 
    const struct nir_spirv_supported_extensions supported_ext = {
       .float64 = device->instance->physicalDevice.info.gen >= 8,
+      .int64 = device->instance->physicalDevice.info.gen >= 8,
       .tessellation = true,
       .draw_parameters = true,
       .image_write_without_format = true,
@@ -161,7 +160,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
               nir_var_shader_in | nir_var_shader_out | nir_var_system_value);
 
    if (stage == MESA_SHADER_FRAGMENT)
-      NIR_PASS_V(nir, nir_lower_wpos_center);
+      NIR_PASS_V(nir, nir_lower_wpos_center, pipeline->sample_shading_enable);
 
    /* Now that we've deleted all but the main function, we can go ahead and
     * lower the rest of the constant initializers.
@@ -307,14 +306,19 @@ populate_wm_prog_key(const struct anv_pipeline *pipeline,
                           info->pMultisampleState &&
                           info->pMultisampleState->alphaToCoverageEnable;
 
-   if (info->pMultisampleState && info->pMultisampleState->rasterizationSamples > 1) {
+   if (info->pMultisampleState) {
       /* We should probably pull this out of the shader, but it's fairly
        * harmless to compute it and then let dead-code take care of it.
        */
-      key->persample_interp =
-         (info->pMultisampleState->minSampleShading *
-          info->pMultisampleState->rasterizationSamples) > 1;
-      key->multisample_fbo = true;
+      if (info->pMultisampleState->rasterizationSamples > 1) {
+         key->persample_interp =
+            (info->pMultisampleState->minSampleShading *
+             info->pMultisampleState->rasterizationSamples) > 1;
+         key->multisample_fbo = true;
+      }
+
+      key->frag_coord_adds_sample_pos =
+         info->pMultisampleState->sampleShadingEnable;
    }
 }
 
@@ -336,7 +340,7 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
                      struct brw_stage_prog_data *prog_data,
                      struct anv_pipeline_bind_map *map)
 {
-   nir_shader *nir = anv_shader_compile_to_nir(pipeline->device,
+   nir_shader *nir = anv_shader_compile_to_nir(pipeline,
                                                module, entrypoint, stage,
                                                spec_info);
    if (nir == NULL)
@@ -354,9 +358,6 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
       assert(nir->num_uniforms <= MAX_PUSH_CONSTANTS_SIZE);
       prog_data->nr_params += MAX_PUSH_CONSTANTS_SIZE / sizeof(float);
    }
-
-   if (pipeline->layout && pipeline->layout->stage[stage].has_dynamic_offsets)
-      prog_data->nr_params += MAX_DYNAMIC_BUFFERS * 2;
 
    if (nir->info->num_images > 0) {
       prog_data->nr_params += nir->info->num_images * BRW_IMAGE_PARAM_SIZE;
@@ -388,9 +389,6 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
                &null_data->client_data[i * sizeof(float)];
       }
    }
-
-   /* Set up dynamic offsets */
-   anv_nir_apply_dynamic_offsets(pipeline, nir, prog_data);
 
    /* Apply the actual pipeline layout to UBOs, SSBOs, and textures */
    if (pipeline->layout)
@@ -1056,7 +1054,7 @@ copy_non_dynamic_state(struct anv_pipeline *pipeline,
     */
    bool uses_color_att = false;
    for (unsigned i = 0; i < subpass->color_count; ++i) {
-      if (subpass->color_attachments[i] != VK_ATTACHMENT_UNUSED) {
+      if (subpass->color_attachments[i].attachment != VK_ATTACHMENT_UNUSED) {
          uses_color_att = true;
          break;
       }
@@ -1084,7 +1082,7 @@ copy_non_dynamic_state(struct anv_pipeline *pipeline,
     *    against does not use a depth/stencil attachment.
     */
    if (!pCreateInfo->pRasterizationState->rasterizerDiscardEnable &&
-       subpass->depth_stencil_attachment != VK_ATTACHMENT_UNUSED) {
+       subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED) {
       assert(pCreateInfo->pDepthStencilState);
 
       if (states & (1 << VK_DYNAMIC_STATE_DEPTH_BOUNDS)) {
@@ -1122,6 +1120,7 @@ copy_non_dynamic_state(struct anv_pipeline *pipeline,
 static void
 anv_pipeline_validate_create_info(const VkGraphicsPipelineCreateInfo *info)
 {
+#ifdef DEBUG
    struct anv_render_pass *renderpass = NULL;
    struct anv_subpass *subpass = NULL;
 
@@ -1144,7 +1143,7 @@ anv_pipeline_validate_create_info(const VkGraphicsPipelineCreateInfo *info)
       assert(info->pViewportState);
       assert(info->pMultisampleState);
 
-      if (subpass && subpass->depth_stencil_attachment != VK_ATTACHMENT_UNUSED)
+      if (subpass && subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED)
          assert(info->pDepthStencilState);
 
       if (subpass && subpass->color_count > 0)
@@ -1161,6 +1160,7 @@ anv_pipeline_validate_create_info(const VkGraphicsPipelineCreateInfo *info)
          break;
       }
    }
+#endif
 }
 
 /**
@@ -1192,9 +1192,7 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
 {
    VkResult result;
 
-   anv_validate {
-      anv_pipeline_validate_create_info(pCreateInfo);
-   }
+   anv_pipeline_validate_create_info(pCreateInfo);
 
    if (alloc == NULL)
       alloc = &device->alloc;
@@ -1210,10 +1208,14 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
    pipeline->batch.next = pipeline->batch.start = pipeline->batch_data;
    pipeline->batch.end = pipeline->batch.start + sizeof(pipeline->batch_data);
    pipeline->batch.relocs = &pipeline->batch_relocs;
+   pipeline->batch.status = VK_SUCCESS;
 
    copy_non_dynamic_state(pipeline, pCreateInfo);
    pipeline->depth_clamp_enable = pCreateInfo->pRasterizationState &&
                                   pCreateInfo->pRasterizationState->depthClampEnable;
+
+   pipeline->sample_shading_enable = pCreateInfo->pMultisampleState &&
+                                     pCreateInfo->pMultisampleState->sampleShadingEnable;
 
    pipeline->needs_data_cache = false;
 

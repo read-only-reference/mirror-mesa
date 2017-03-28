@@ -27,6 +27,7 @@
 #ifdef ENABLE_SHADER_CACHE
 #include <dlfcn.h>
 #endif
+#include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/stat.h>
@@ -104,7 +105,7 @@ disk_cache_destroy(struct disk_cache *cache);
  * Remove the item in the cache under the name \key.
  */
 void
-disk_cache_remove(struct disk_cache *cache, cache_key key);
+disk_cache_remove(struct disk_cache *cache, const cache_key key);
 
 /**
  * Store an item in the cache under the name \key.
@@ -116,7 +117,7 @@ disk_cache_remove(struct disk_cache *cache, cache_key key);
  * evicted from the cache.
  */
 void
-disk_cache_put(struct disk_cache *cache, cache_key key,
+disk_cache_put(struct disk_cache *cache, const cache_key key,
                const void *data, size_t size);
 
 /**
@@ -133,7 +134,7 @@ disk_cache_put(struct disk_cache *cache, cache_key key,
  * caller should call free() it when finished.
  */
 void *
-disk_cache_get(struct disk_cache *cache, cache_key key, size_t *size);
+disk_cache_get(struct disk_cache *cache, const cache_key key, size_t *size);
 
 /**
  * Store the name \key within the cache, (without any associated data).
@@ -145,7 +146,7 @@ disk_cache_get(struct disk_cache *cache, cache_key key, size_t *size);
  * evicted from the cache.
  */
 void
-disk_cache_put_key(struct disk_cache *cache, cache_key key);
+disk_cache_put_key(struct disk_cache *cache, const cache_key key);
 
 /**
  * Test whether the name \key was previously recorded in the cache.
@@ -158,7 +159,14 @@ disk_cache_put_key(struct disk_cache *cache, cache_key key);
  * disk_cache_has_key() to return true for the same key.
  */
 bool
-disk_cache_has_key(struct disk_cache *cache, cache_key key);
+disk_cache_has_key(struct disk_cache *cache, const cache_key key);
+
+/**
+ * Compute the name \key from \data of given \size.
+ */
+void
+disk_cache_compute_key(struct disk_cache *cache, const void *data, size_t size,
+                       cache_key key);
 
 #else
 
@@ -174,34 +182,41 @@ disk_cache_destroy(struct disk_cache *cache) {
 }
 
 static inline void
-disk_cache_put(struct disk_cache *cache, cache_key key,
+disk_cache_put(struct disk_cache *cache, const cache_key key,
           const void *data, size_t size)
 {
    return;
 }
 
 static inline void
-disk_cache_remove(struct disk_cache *cache, cache_key key)
+disk_cache_remove(struct disk_cache *cache, const cache_key key)
 {
    return;
 }
 
 static inline uint8_t *
-disk_cache_get(struct disk_cache *cache, cache_key key, size_t *size)
+disk_cache_get(struct disk_cache *cache, const cache_key key, size_t *size)
 {
    return NULL;
 }
 
 static inline void
-disk_cache_put_key(struct disk_cache *cache, cache_key key)
+disk_cache_put_key(struct disk_cache *cache, const cache_key key)
 {
    return;
 }
 
 static inline bool
-disk_cache_has_key(struct disk_cache *cache, cache_key key)
+disk_cache_has_key(struct disk_cache *cache, const cache_key key)
 {
    return false;
+}
+
+static inline void
+disk_cache_compute_key(struct disk_cache *cache, const void *data, size_t size,
+                       const cache_key key)
+{
+   return;
 }
 
 #endif /* ENABLE_SHADER_CACHE */

@@ -43,9 +43,9 @@
 #include "brw_blorp.h"
 #include "brw_draw.h"
 #include "brw_defines.h"
+#include "compiler/brw_eu_defines.h"
 #include "brw_context.h"
 #include "brw_state.h"
-#include "brw_vs.h"
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
@@ -601,7 +601,7 @@ retry:
 
       brw->no_batch_wrap = false;
 
-      if (dri_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
+      if (drm_intel_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
          if (!fail_next) {
             intel_batchbuffer_reset_to_saved(brw);
             intel_batchbuffer_flush(brw);

@@ -142,7 +142,9 @@ fd_screen_destroy(struct pipe_screen *pscreen)
 
 	slab_destroy_parent(&screen->transfer_pool);
 
-	pipe_mutex_destroy(screen->lock);
+	mtx_destroy(&screen->lock);
+
+	ralloc_free(screen->compiler);
 
 	free(screen);
 }
@@ -294,18 +296,20 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
 	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
-	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
 	case PIPE_CAP_TGSI_FS_FBFETCH:
 	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 	case PIPE_CAP_DOUBLES:
 	case PIPE_CAP_INT64:
 	case PIPE_CAP_INT64_DIVMOD:
+	case PIPE_CAP_TGSI_TEX_TXF_LZ:
+	case PIPE_CAP_TGSI_CLOCK:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
 		return 1;
 
 	case PIPE_CAP_SHAREABLE_SHADERS:
+	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
 	/* manage the variants for these ourself, to avoid breaking precompile: */
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
@@ -430,7 +434,8 @@ fd_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 }
 
 static int
-fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
+fd_screen_get_shader_param(struct pipe_screen *pscreen,
+						   enum pipe_shader_type shader,
 		enum pipe_shader_cap param)
 {
 	struct fd_screen *screen = fd_screen(pscreen);
@@ -471,8 +476,6 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return ((is_a3xx(screen) || is_a4xx(screen) || is_a5xx(screen)) ? 4096 : 64) * sizeof(float[4]);
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return is_ir3(screen) ? 16 : 1;
-	case PIPE_SHADER_CAP_MAX_PREDS:
-		return 0; /* nothing uses this */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 		return 1;
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -705,7 +708,7 @@ fd_screen_create(struct fd_device *dev)
 
 	fd_bc_init(&screen->batch_cache);
 
-	pipe_mutex_init(screen->lock);
+	(void) mtx_init(&screen->lock, mtx_plain);
 
 	pscreen->destroy = fd_screen_destroy;
 	pscreen->get_param = fd_screen_get_param;

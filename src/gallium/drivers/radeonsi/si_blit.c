@@ -427,8 +427,7 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 
 		/* disable levels without DCC */
 		for (int i = first_level; i <= last_level; i++) {
-			if (!rtex->dcc_offset ||
-			    i >= rtex->surface.num_dcc_levels)
+			if (!vi_dcc_enabled(rtex, i))
 				level_mask &= ~(1 << i);
 		}
 	} else if (rtex->fmask.size) {
@@ -845,7 +844,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	struct pipe_surface *dst_view, dst_templ;
 	struct pipe_sampler_view src_templ, *src_view;
 	unsigned dst_width, dst_height, src_width0, src_height0;
-	unsigned src_force_level = 0;
+	unsigned dst_width0, dst_height0, src_force_level = 0;
 	struct pipe_box sbox, dstbox;
 
 	/* Handle buffers first. */
@@ -863,6 +862,8 @@ void si_resource_copy_region(struct pipe_context *ctx,
 
 	dst_width = u_minify(dst->width0, dst_level);
 	dst_height = u_minify(dst->height0, dst_level);
+	dst_width0 = dst->width0;
+	dst_height0 = dst->height0;
 	src_width0 = src->width0;
 	src_height0 = src->height0;
 
@@ -881,6 +882,8 @@ void si_resource_copy_region(struct pipe_context *ctx,
 
 		dst_width = util_format_get_nblocksx(dst->format, dst_width);
 		dst_height = util_format_get_nblocksy(dst->format, dst_height);
+		dst_width0 = util_format_get_nblocksx(dst->format, dst_width0);
+		dst_height0 = util_format_get_nblocksy(dst->format, dst_height0);
 		src_width0 = util_format_get_nblocksx(src->format, src_width0);
 		src_height0 = util_format_get_nblocksy(src->format, src_height0);
 
@@ -896,14 +899,13 @@ void si_resource_copy_region(struct pipe_context *ctx,
 		src_box = &sbox;
 
 		src_force_level = src_level;
-	} else if (!util_blitter_is_copy_supported(sctx->blitter, dst, src) ||
-		   /* also *8_SNORM has precision issues, use UNORM instead */
-		   util_format_is_snorm8(src->format)) {
+	} else if (!util_blitter_is_copy_supported(sctx->blitter, dst, src)) {
 		if (util_format_is_subsampled_422(src->format)) {
 			src_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
 			dst_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
 
 			dst_width = util_format_get_nblocksx(dst->format, dst_width);
+			dst_width0 = util_format_get_nblocksx(dst->format, dst_width0);
 			src_width0 = util_format_get_nblocksx(src->format, src_width0);
 
 			dstx = util_format_get_nblocksx(dst->format, dstx);
@@ -944,8 +946,14 @@ void si_resource_copy_region(struct pipe_context *ctx,
 		}
 	}
 
+	vi_disable_dcc_if_incompatible_format(&sctx->b, dst, dst_level,
+					      dst_templ.format);
+	vi_disable_dcc_if_incompatible_format(&sctx->b, src, src_level,
+					      src_templ.format);
+
 	/* Initialize the surface. */
 	dst_view = r600_create_surface_custom(ctx, dst, &dst_templ,
+					      dst_width0, dst_height0,
 					      dst_width, dst_height);
 
 	/* Initialize the sampler view. */
@@ -1033,8 +1041,12 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 		 * it's being overwritten anyway, clear it to uncompressed.
 		 * This is still the fastest codepath even with this clear.
 		 */
-		if (dst->dcc_offset &&
-		    info->dst.level < dst->surface.num_dcc_levels) {
+		if (vi_dcc_enabled(dst, info->dst.level)) {
+			/* TODO: Implement per-level DCC clears for GFX9. */
+			if (sctx->b.chip_class >= GFX9 &&
+			    info->dst.resource->last_level != 0)
+				goto resolve_to_temp;
+
 			vi_dcc_clear_level(&sctx->b, dst, info->dst.level,
 					   0xFFFFFFFF);
 			dst->dirty_level_mask &= ~(1 << info->dst.level);
@@ -1136,10 +1148,10 @@ static void si_blit(struct pipe_context *ctx,
 
 	/* The driver doesn't decompress resources automatically while
 	 * u_blitter is rendering. */
-	vi_dcc_disable_if_incompatible_format(&sctx->b, info->src.resource,
+	vi_disable_dcc_if_incompatible_format(&sctx->b, info->src.resource,
 					      info->src.level,
 					      info->src.format);
-	vi_dcc_disable_if_incompatible_format(&sctx->b, info->dst.resource,
+	vi_disable_dcc_if_incompatible_format(&sctx->b, info->dst.resource,
 					      info->dst.level,
 					      info->dst.format);
 	si_decompress_subresource(ctx, info->src.resource, info->mask,
@@ -1171,7 +1183,7 @@ static boolean si_generate_mipmap(struct pipe_context *ctx,
 
 	/* The driver doesn't decompress resources automatically while
 	 * u_blitter is rendering. */
-	vi_dcc_disable_if_incompatible_format(&sctx->b, tex, base_level,
+	vi_disable_dcc_if_incompatible_format(&sctx->b, tex, base_level,
 					      format);
 	si_decompress_subresource(ctx, tex, PIPE_MASK_RGBAZS,
 				  base_level, first_layer, last_layer);

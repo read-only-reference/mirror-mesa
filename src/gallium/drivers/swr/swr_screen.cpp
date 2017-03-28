@@ -243,6 +243,7 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CLIP_HALFZ:
    case PIPE_CAP_POLYGON_OFFSET_CLAMP:
    case PIPE_CAP_DEPTH_BOUNDS_TEST:
+   case PIPE_CAP_CLEAR_TEXTURE:
    case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
    case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
    case PIPE_CAP_CULL_DISTANCE:
@@ -283,7 +284,6 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
    case PIPE_CAP_SHAREABLE_SHADERS:
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
-   case PIPE_CAP_CLEAR_TEXTURE:
    case PIPE_CAP_DRAW_PARAMETERS:
    case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
    case PIPE_CAP_MULTI_DRAW_INDIRECT:
@@ -318,6 +318,8 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_INT64:
    case PIPE_CAP_INT64_DIVMOD:
+   case PIPE_CAP_TGSI_TEX_TXF_LZ:
+   case PIPE_CAP_TGSI_CLOCK:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -344,13 +346,15 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
 static int
 swr_get_shader_param(struct pipe_screen *screen,
-                     unsigned shader,
+                     enum pipe_shader_type shader,
                      enum pipe_shader_cap param)
 {
-   if (shader == PIPE_SHADER_VERTEX || shader == PIPE_SHADER_FRAGMENT)
+   if (shader == PIPE_SHADER_VERTEX ||
+       shader == PIPE_SHADER_FRAGMENT ||
+       shader == PIPE_SHADER_GEOMETRY)
       return gallivm_get_shader_param(param);
 
-   // Todo: geometry, tesselation, compute
+   // Todo: tesselation, compute
    return 0;
 }
 

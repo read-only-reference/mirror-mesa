@@ -55,6 +55,12 @@ build_id_find_nhdr_callback(struct dl_phdr_info *info, size_t size, void *data_)
 {
    struct callback_data *data = data_;
 
+   /* The first object visited by callback is the main program.
+    * Android's libc returns a NULL pointer for the first executable.
+    */
+   if (info->dlpi_name == NULL)
+      return 0;
+
    char *ptr = strstr(info->dlpi_name, data->filename);
    if (ptr == NULL || ptr[strlen(data->filename)] != '\0')
       return 0;
@@ -107,11 +113,10 @@ build_id_length(const struct build_id_note *note)
    return note->nhdr.n_descsz;
 }
 
-void
-build_id_read(const struct build_id_note *note,
-              unsigned char *build_id, size_t n)
+const uint8_t *
+build_id_data(const struct build_id_note *note)
 {
-   memcpy(build_id, note->build_id, n);
+   return note->build_id;
 }
 
 #endif

@@ -162,7 +162,7 @@ struct PA_STATE_OPT : public PA_STATE
     bool               nextReset{ false };
     bool               isStreaming{ false };
 
-    SIMDMASK tmpIndices{ 0 };            // temporary index store for unused virtual function
+    SIMDMASK           junkIndices  { 0 };          // temporary index store for unused virtual function
     
     PA_STATE_OPT() {}
     PA_STATE_OPT(DRAW_CONTEXT* pDC, uint32_t numPrims, uint8_t* pStream, uint32_t streamSizeInVerts,
@@ -235,8 +235,6 @@ struct PA_STATE_OPT : public PA_STATE
             this->reset = false;
         }
 
-        this->pfnPaFunc = this->pfnPaNextFunc;
-
         if (!HasWork())
         {
             morePrims = false;    // no more to do
@@ -259,7 +257,7 @@ struct PA_STATE_OPT : public PA_STATE
     SIMDMASK& GetNextVsIndices()
     {
         // unused in optimized PA, pass tmp buffer back
-        return tmpIndices;
+        return junkIndices;
     }
 
     bool GetNextStreamOutput()
@@ -292,12 +290,14 @@ struct PA_STATE_OPT : public PA_STATE
 
 #if ENABLE_AVX512_SIMD16
     void SetNextState_simd16(PA_STATE_OPT::PFN_PA_FUNC_SIMD16 pfnPaNextFunc_simd16,
+        PA_STATE_OPT::PFN_PA_FUNC pfnPaNextFunc,
         PA_STATE_OPT::PFN_PA_SINGLE_FUNC pfnPaNextSingleFunc,
         uint32_t numSimdPrims = 0,
         uint32_t numPrimsIncrement = 0,
         bool reset = false)
     {
         this->pfnPaNextFunc_simd16 = pfnPaNextFunc_simd16;
+        this->pfnPaNextFunc = pfnPaNextFunc;
         this->nextNumSimdPrims = numSimdPrims;
         this->nextNumPrimsIncrement = numPrimsIncrement;
         this->nextReset = reset;
@@ -346,12 +346,13 @@ INLINE void SetNextPaState(PA_STATE_OPT& pa, PA_STATE_OPT::PFN_PA_FUNC pfnPaNext
 
 #if ENABLE_AVX512_SIMD16
 INLINE void SetNextPaState_simd16(PA_STATE_OPT& pa, PA_STATE_OPT::PFN_PA_FUNC_SIMD16 pfnPaNextFunc_simd16,
+    PA_STATE_OPT::PFN_PA_FUNC pfnPaNextFunc,
     PA_STATE_OPT::PFN_PA_SINGLE_FUNC pfnPaNextSingleFunc,
     uint32_t numSimdPrims = 0,
     uint32_t numPrimsIncrement = 0,
     bool reset = false)
 {
-    return pa.SetNextState_simd16(pfnPaNextFunc_simd16, pfnPaNextSingleFunc, numSimdPrims, numPrimsIncrement, reset);
+    return pa.SetNextState_simd16(pfnPaNextFunc_simd16, pfnPaNextFunc, pfnPaNextSingleFunc, numSimdPrims, numPrimsIncrement, reset);
 }
 
 #endif
@@ -367,87 +368,6 @@ INLINE simd16vector& PaGetSimdVector_simd16(PA_STATE& pa, uint32_t index, uint32
 }
 
 #endif
-INLINE __m128 swizzleLane0(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpacklo_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpacklo_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpacklo_ps(tmp0, tmp1), 0);
-}
-
-INLINE __m128 swizzleLane1(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpacklo_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpacklo_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpackhi_ps(tmp0, tmp1), 0);
-}
-
-INLINE __m128 swizzleLane2(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpackhi_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpackhi_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpacklo_ps(tmp0, tmp1), 0);
-}
-
-INLINE __m128 swizzleLane3(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpackhi_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpackhi_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpackhi_ps(tmp0, tmp1), 0);
-}
-
-INLINE __m128 swizzleLane4(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpacklo_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpacklo_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpacklo_ps(tmp0, tmp1), 1);
-
-}
-
-INLINE __m128 swizzleLane5(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpacklo_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpacklo_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpackhi_ps(tmp0, tmp1), 1);
-}
-
-INLINE __m128 swizzleLane6(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpackhi_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpackhi_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpacklo_ps(tmp0, tmp1), 1);
-}
-
-INLINE __m128 swizzleLane7(const simdvector &a)
-{
-    simdscalar tmp0 = _mm256_unpackhi_ps(a.x, a.z);
-    simdscalar tmp1 = _mm256_unpackhi_ps(a.y, a.w);
-    return _mm256_extractf128_ps(_mm256_unpackhi_ps(tmp0, tmp1), 1);
-}
-
-INLINE __m128 swizzleLaneN(const simdvector &a, int lane)
-{
-    switch (lane) {
-    case 0:
-        return swizzleLane0(a);
-    case 1:
-        return swizzleLane1(a);
-    case 2:
-        return swizzleLane2(a);
-    case 3:
-        return swizzleLane3(a);
-    case 4:
-        return swizzleLane4(a);
-    case 5:
-        return swizzleLane5(a);
-    case 6:
-        return swizzleLane6(a);
-    case 7:
-        return swizzleLane7(a);
-    default:
-        return _mm_setzero_ps();
-    }
-}
-
 // Cut-aware primitive assembler.
 struct PA_STATE_CUT : public PA_STATE
 {
@@ -470,10 +390,15 @@ struct PA_STATE_CUT : public PA_STATE
     SIMDSCALARI vPrimId;                 // vector of prim ID
     bool needOffsets{ false };           // need to compute gather offsets for current SIMD
     uint32_t vertsPerPrim{ 0 };
-    SIMDVERTEX tmpVertex;                // temporary simdvertex for unimplemented API
     bool processCutVerts{ false };       // vertex indices with cuts should be processed as normal, otherwise they
                                          // are ignored.  Fetch shader sends invalid verts on cuts that should be ignored
                                          // while the GS sends valid verts for every index 
+
+    simdvector      junkVector;          // junk simdvector for unimplemented API
+#if ENABLE_AVX512_SIMD16
+    simd16vector    junkVector_simd16;   // junk simd16vector for unimplemented API
+#endif
+
     // Topology state tracking
     uint32_t vert[MAX_NUM_VERTS_PER_PRIM];
     uint32_t curIndex{ 0 };
@@ -555,8 +480,7 @@ struct PA_STATE_CUT : public PA_STATE
     {
         // unused
         SWR_ASSERT(0 && "Not implemented");
-        static simdvector junk;
-        return junk;
+        return junkVector;
     }
 
 #if ENABLE_AVX512_SIMD16
@@ -564,8 +488,7 @@ struct PA_STATE_CUT : public PA_STATE
     {
         // unused
         SWR_ASSERT(0 && "Not implemented");
-        static simd16vector junk;
-        return junk;
+        return junkVector_simd16;
     }
 
 #endif
@@ -757,7 +680,7 @@ struct PA_STATE_CUT : public PA_STATE
 #if USE_SIMD16_FRONTEND
                 simd16scalar temp = _simd16_i32gather_ps(pBase, offsets, 1);
 
-                verts[v].v[c] = useAlternateOffset ? temp.hi : temp.lo;
+                verts[v].v[c] = useAlternateOffset ? _simd16_extract_ps(temp, 1) : _simd16_extract_ps(temp, 0);
 #else
                 verts[v].v[c] = _simd_i32gather_ps(pBase, offsets, 1);
 #endif
@@ -806,8 +729,7 @@ struct PA_STATE_CUT : public PA_STATE
 #if USE_SIMD16_FRONTEND
                 verts[v].v[c] = _simd16_i32gather_ps(pBase, offsets, 1);
 #else
-                verts[v].v[c].lo = _simd_i32gather_ps(pBase, offsets, 1);
-                verts[v].v[c].hi = _simd_setzero_ps();
+                verts[v].v[c] = _simd16_insert_ps(_simd16_setzero_ps(), _simd_i32gather_ps(pBase, offsets, 1), 0);
 #endif
 
                 // move base to next component
@@ -1229,7 +1151,7 @@ struct PA_TESS : PA_STATE
             break;
 
         default:
-            SWR_ASSERT(0, "Invalid binTopology (%d) for %s", binTopology, __FUNCTION__);
+            SWR_INVALID("Invalid binTopology (%d) for %s", binTopology, __FUNCTION__);
             break;
         }
     }
@@ -1241,17 +1163,15 @@ struct PA_TESS : PA_STATE
 
     simdvector& GetSimdVector(uint32_t index, uint32_t slot)
     {
-        SWR_ASSERT(0, "%s NOT IMPLEMENTED", __FUNCTION__);
-        static simdvector junk;
-        return junk;
+        SWR_INVALID("%s NOT IMPLEMENTED", __FUNCTION__);
+        return junkVector;
     }
 
 #if ENABLE_AVX512_SIMD16
     simd16vector& GetSimdVector_simd16(uint32_t index, uint32_t slot)
     {
-        SWR_ASSERT(0, "%s NOT IMPLEMENTED", __FUNCTION__);
-        static simd16vector junk;
-        return junk;
+        SWR_INVALID("%s NOT IMPLEMENTED", __FUNCTION__);
+        return junkVector_simd16;
     }
 
 #endif
@@ -1309,7 +1229,7 @@ struct PA_TESS : PA_STATE
                     mask,
                     4 /* gcc doesn't like sizeof(float) */);
 
-                verts[i].v[c] = useAlternateOffset ? temp.hi : temp.lo;
+                verts[i].v[c] = useAlternateOffset ? _simd16_extract_ps(temp, 1) : _simd16_extract_ps(temp, 0);
 #else
                 verts[i].v[c] = _simd_mask_i32gather_ps(
                     _simd_setzero_ps(),
@@ -1358,13 +1278,13 @@ struct PA_TESS : PA_STATE
                     mask,
                     4 /* gcc doesn't like sizeof(float) */);
 #else
-                verts[i].v[c].lo = _simd_mask_i32gather_ps(
+                simdscalar temp = _simd_mask_i32gather_ps(
                     _simd_setzero_ps(),
                     pBase,
                     indices,
                     _simd_castsi_ps(mask),
                     4 /* gcc doesn't like sizeof(float) */);
-                verts[i].v[c].hi = _simd_setzero_ps();
+                verts[i].v[c] = _simd16_insert_ps(_simd16_setzero_ps(), temp, 0);
 #endif
                 pBase += m_attributeStrideInVectors * SIMD_WIDTH;
             }
@@ -1411,22 +1331,20 @@ struct PA_TESS : PA_STATE
 
     SIMDVERTEX& GetNextVsOutput()
     {
-        SWR_ASSERT(0, "%s", __FUNCTION__);
-        static SIMDVERTEX junk;
-        return junk;
+        SWR_NOT_IMPL;
+        return junkVertex;
     }
 
     bool GetNextStreamOutput()
     {
-        SWR_ASSERT(0, "%s", __FUNCTION__);
+        SWR_NOT_IMPL;
         return false;
     }
 
     SIMDMASK& GetNextVsIndices()
     {
-        SWR_ASSERT(0, "%s", __FUNCTION__);
-        static SIMDMASK junk;
-        return junk;
+        SWR_NOT_IMPL;
+        return junkIndices;
     }
 
     uint32_t NumPrims()
@@ -1434,7 +1352,10 @@ struct PA_TESS : PA_STATE
         return std::min<uint32_t>(m_numPrims, SIMD_WIDTH);
     }
 
-    void Reset() { SWR_ASSERT(0); };
+    void Reset()
+    {
+        SWR_NOT_IMPL;
+    }
 
     SIMDSCALARI GetPrimID(uint32_t startID)
     {
@@ -1455,6 +1376,13 @@ private:
     uint32_t            m_numVertsPerPrim = 0;
 
     SIMDSCALARI         m_vPrimId;
+
+    simdvector          junkVector;         // junk simdvector for unimplemented API
+#if ENABLE_AVX512_SIMD16
+    simd16vector        junkVector_simd16;  // junk simd16vector for unimplemented API
+#endif
+    SIMDVERTEX          junkVertex;         // junk SIMDVERTEX for unimplemented API
+    SIMDMASK            junkIndices;        // temporary index store for unused virtual function
 };
 
 // Primitive Assembler factory class, responsible for creating and initializing the correct assembler

@@ -106,7 +106,7 @@ gen7_upload_3dstate_so_decl_list(struct brw_context *brw,
       xfb_obj->program->sh.LinkedTransformFeedback;
    uint16_t so_decl[MAX_VERTEX_STREAMS][128];
    int buffer_mask[MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
-   int next_offset[MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
+   int next_offset[BRW_MAX_SOL_BUFFERS] = {0, 0, 0, 0};
    int decls[MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
    int max_decls = 0;
    STATIC_ASSERT(ARRAY_SIZE(so_decl[0]) >= MAX_PROGRAM_OUTPUTS);
@@ -352,10 +352,6 @@ gen7_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 
    assert(brw->gen == 7);
 
-   /* Reset the SO buffer offsets to 0. */
-   intel_batchbuffer_flush(brw);
-   brw->batch.needs_sol_reset = true;
-
    /* We're about to lose the information needed to compute the number of
     * vertices written during the last Begin/EndTransformFeedback section,
     * so we can't delay it any further.
@@ -369,6 +365,20 @@ gen7_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 
    /* Store the starting value of the SO_NUM_PRIMS_WRITTEN counters. */
    brw_save_primitives_written_counters(brw, brw_obj);
+
+   /* Reset the SO buffer offsets to 0. */
+   if (!can_do_pipelined_register_writes(brw->screen)) {
+      intel_batchbuffer_flush(brw);
+      brw->batch.needs_sol_reset = true;
+   } else {
+      for (int i = 0; i < 4; i++) {
+         BEGIN_BATCH(3);
+         OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
+         OUT_BATCH(GEN7_SO_WRITE_OFFSET(i));
+         OUT_BATCH(0);
+         ADVANCE_BATCH();
+      }
+   }
 
    brw_obj->primitive_mode = mode;
 }
