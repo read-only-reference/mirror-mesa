@@ -2361,7 +2361,7 @@
         <glx rop="138" handcode="client"/>
     </function>
 
-    <function name="Enable" es1="1.0" es2="2.0">
+    <function name="Enable" es1="1.0" es2="2.0" marshal="custom">
         <param name="cap" type="GLenum"/>
         <glx rop="139" handcode="client"/>
     </function>
@@ -8314,6 +8314,9 @@
 <!-- ARB extension 171 -->
 <xi:include href="ARB_pipeline_statistics_query.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
+<!-- ARB extension 172 -->
+<xi:include href="ARB_sparse_buffer.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
 <category name="es3.2">
     <!-- This should be in es_EXT, but this file is included first and
          the alias doesn't work otherwise. -->
@@ -10216,7 +10219,7 @@
 </category>
 
 <category name="GL_EXT_multi_draw_arrays" number="148">
-    <function name="MultiDrawArraysEXT" es1="1.0" es2="2.0" alias="MultiDrawArrays">
+    <function name="MultiDrawArraysEXT" es1="1.0" es2="2.0" exec="dynamic" alias="MultiDrawArrays">
         <param name="mode" type="GLenum"/>
         <param name="first" type="const GLint *"/>
         <param name="count" type="const GLsizei *"/>
@@ -12516,7 +12519,7 @@
 </category>
 
 <xi:include href="APPLE_object_purgeable.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
-<xi:include href="APPLE_vertex_array_object.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+<!-- Extension number 273 obsolete APPLE_vertex_array_object. -->
 
 <category name="GL_APPLE_ycbcr_422" number="275">
     <enum name="YCBCR_422_APPLE"                          value="0x85B9"/>
@@ -12838,6 +12841,10 @@
     <enum name="GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX" value="0x9049" />
     <enum name="GPU_MEMORY_INFO_EVICTION_COUNT_NVX"           value="0x904A" />
     <enum name="GPU_MEMORY_INFO_EVICTED_MEMORY_NVX"           value="0x904B" />
+</category>
+
+<category name="GL_NV_fill_rectangle" number="466">
+    <enum name="FILL_RECTANGLE_NV" value="0x933C"/>
 </category>
 
 <category name="GL_INTEL_conservative_rasterization" number="491">

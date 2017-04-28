@@ -84,13 +84,19 @@ struct amdgpu_cs_context {
    /* Buffers. */
    unsigned                    max_real_buffers;
    unsigned                    num_real_buffers;
+   struct amdgpu_cs_buffer     *real_buffers;
+
+   unsigned                    max_real_submit;
    amdgpu_bo_handle            *handles;
    uint8_t                     *flags;
-   struct amdgpu_cs_buffer     *real_buffers;
 
    unsigned                    num_slab_buffers;
    unsigned                    max_slab_buffers;
    struct amdgpu_cs_buffer     *slab_buffers;
+
+   unsigned                    num_sparse_buffers;
+   unsigned                    max_sparse_buffers;
+   struct amdgpu_cs_buffer     *sparse_buffers;
 
    int                         buffer_indices_hashlist[4096];
 
@@ -224,8 +230,9 @@ amdgpu_bo_is_referenced_by_cs_with_usage(struct amdgpu_cs *cs,
    if (index == -1)
       return false;
 
-   buffer = bo->bo ? &cs->csc->real_buffers[index]
-                   : &cs->csc->slab_buffers[index];
+   buffer = bo->bo ? &cs->csc->real_buffers[index] :
+            bo->sparse ? &cs->csc->sparse_buffers[index] :
+            &cs->csc->slab_buffers[index];
 
    return (buffer->usage & usage) != 0;
 }
@@ -238,6 +245,9 @@ amdgpu_bo_is_referenced_by_any_cs(struct amdgpu_winsys_bo *bo)
 
 bool amdgpu_fence_wait(struct pipe_fence_handle *fence, uint64_t timeout,
                        bool absolute);
+void amdgpu_add_fences(struct amdgpu_winsys_bo *bo,
+                       unsigned num_fences,
+                       struct pipe_fence_handle **fences);
 void amdgpu_cs_sync_flush(struct radeon_winsys_cs *rcs);
 void amdgpu_cs_init_functions(struct amdgpu_winsys *ws);
 void amdgpu_cs_submit_ib(void *job, int thread_index);

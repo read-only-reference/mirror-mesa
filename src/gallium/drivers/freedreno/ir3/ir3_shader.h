@@ -105,6 +105,57 @@ ir3_shader_key_equal(struct ir3_shader_key *a, struct ir3_shader_key *b)
 	return a->global == b->global;
 }
 
+/* will the two keys produce different lowering for a fragment shader? */
+static inline bool
+ir3_shader_key_changes_fs(struct ir3_shader_key *key, struct ir3_shader_key *last_key)
+{
+	if (last_key->has_per_samp || key->has_per_samp) {
+		if ((last_key->fsaturate_s != key->fsaturate_s) ||
+				(last_key->fsaturate_t != key->fsaturate_t) ||
+				(last_key->fsaturate_r != key->fsaturate_r) ||
+				(last_key->fastc_srgb != key->fastc_srgb))
+			return true;
+	}
+
+	if (last_key->fclamp_color != key->fclamp_color)
+		return true;
+
+	if (last_key->color_two_side != key->color_two_side)
+		return true;
+
+	if (last_key->half_precision != key->half_precision)
+		return true;
+
+	if (last_key->rasterflat != key->rasterflat)
+		return true;
+
+	if (last_key->ucp_enables != key->ucp_enables)
+		return true;
+
+	return false;
+}
+
+/* will the two keys produce different lowering for a vertex shader? */
+static inline bool
+ir3_shader_key_changes_vs(struct ir3_shader_key *key, struct ir3_shader_key *last_key)
+{
+	if (last_key->has_per_samp || key->has_per_samp) {
+		if ((last_key->vsaturate_s != key->vsaturate_s) ||
+				(last_key->vsaturate_t != key->vsaturate_t) ||
+				(last_key->vsaturate_r != key->vsaturate_r) ||
+				(last_key->vastc_srgb != key->vastc_srgb))
+			return true;
+	}
+
+	if (last_key->vclamp_color != key->vclamp_color)
+		return true;
+
+	if (last_key->ucp_enables != key->ucp_enables)
+		return true;
+
+	return false;
+}
+
 struct ir3_shader_variant {
 	struct fd_bo *bo;
 
@@ -267,8 +318,10 @@ uint64_t ir3_shader_outputs(const struct ir3_shader *so);
 
 struct fd_ringbuffer;
 struct fd_context;
-void ir3_emit_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
-		struct fd_context *ctx, const struct pipe_draw_info *info, uint32_t dirty);
+void ir3_emit_vs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
+		struct fd_context *ctx, const struct pipe_draw_info *info);
+void ir3_emit_fs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *ring,
+		struct fd_context *ctx);
 
 static inline const char *
 ir3_shader_stage(struct ir3_shader *shader)

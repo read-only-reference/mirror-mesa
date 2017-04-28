@@ -55,10 +55,10 @@ blorp_emit_reloc(struct blorp_batch *batch,
    struct brw_context *brw = batch->driver_batch;
 
    uint32_t offset = (char *)location - (char *)brw->batch.map;
-   return intel_batchbuffer_reloc(&brw->batch, address.buffer, offset,
-                                  address.read_domains,
-                                  address.write_domain,
-                                  address.offset + delta);
+   return brw_emit_reloc(&brw->batch, offset,
+                         address.buffer, address.offset + delta,
+                         address.read_domains,
+                         address.write_domain);
 }
 
 static void
@@ -67,11 +67,10 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
-   drm_intel_bo *bo = address.buffer;
+   struct brw_bo *bo = address.buffer;
 
-   drm_intel_bo_emit_reloc(brw->batch.bo, ss_offset,
-                           bo, address.offset + delta,
-                           address.read_domains, address.write_domain);
+   brw_emit_reloc(&brw->batch, ss_offset, bo, address.offset + delta,
+                  address.read_domains, address.write_domain);
 
    uint64_t reloc_val = bo->offset64 + address.offset + delta;
    void *reloc_ptr = (void *)brw->batch.map + ss_offset;
@@ -122,8 +121,20 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
 
+   /* From the Skylake PRM, 3DSTATE_VERTEX_BUFFERS:
+    *
+    *    "The VF cache needs to be invalidated before binding and then using
+    *    Vertex Buffers that overlap with any previously bound Vertex Buffer
+    *    (at a 64B granularity) since the last invalidation.  A VF cache
+    *    invalidate is performed by setting the "VF Cache Invalidation Enable"
+    *    bit in PIPE_CONTROL."
+    *
+    * This restriction first appears in the Skylake PRM but the internal docs
+    * also list it as being an issue on Broadwell.  In order to avoid this
+    * problem, we align all vertex buffer allocations to 64 bytes.
+    */
    uint32_t offset;
-   void *data = brw_state_batch(brw, size, 32, &offset);
+   void *data = brw_state_batch(brw, size, 64, &offset);
 
    *addr = (struct blorp_address) {
       .buffer = brw->batch.bo,
@@ -169,7 +180,7 @@ genX(blorp_exec)(struct blorp_batch *batch,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
    struct gl_context *ctx = &brw->ctx;
-   const uint32_t estimated_max_batch_usage = GEN_GEN >= 8 ? 1800 : 1500;
+   const uint32_t estimated_max_batch_usage = GEN_GEN >= 8 ? 1920 : 1500;
    bool check_aperture_failed_once = false;
 
    /* Flush the sampler and render caches.  We definitely need to flush the
@@ -188,7 +199,7 @@ genX(blorp_exec)(struct blorp_batch *batch,
 retry:
    intel_batchbuffer_require_space(brw, estimated_max_batch_usage, RENDER_RING);
    intel_batchbuffer_save_state(brw);
-   drm_intel_bo *saved_bo = brw->batch.bo;
+   struct brw_bo *saved_bo = brw->batch.bo;
    uint32_t saved_used = USED_BATCH(brw->batch);
    uint32_t saved_state_batch_offset = brw->batch.state_batch_offset;
 
@@ -232,7 +243,7 @@ retry:
     * map all the BOs into the GPU at batch exec time later.  If so, flush the
     * batch and try again with nothing else in the batch.
     */
-   if (drm_intel_bufmgr_check_aperture_space(&brw->batch.bo, 1)) {
+   if (!brw_batch_has_aperture_space(brw, 0)) {
       if (!check_aperture_failed_once) {
          check_aperture_failed_once = true;
          intel_batchbuffer_reset_to_saved(brw);
@@ -253,7 +264,7 @@ retry:
     */
    brw->ctx.NewDriverState |= BRW_NEW_BLORP;
    brw->no_depth_or_stencil = false;
-   brw->ib.type = -1;
+   brw->ib.index_size = -1;
 
    if (params->dst.enabled)
       brw_render_cache_set_add_bo(brw, params->dst.addr.buffer);

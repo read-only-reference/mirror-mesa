@@ -35,6 +35,7 @@
 #include "main/macros.h"
 #include "main/fbobject.h"
 #include "main/viewport.h"
+#include "intel_batchbuffer.h"
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
@@ -133,7 +134,6 @@ static void upload_sf_unit( struct brw_context *brw )
 {
    struct gl_context *ctx = &brw->ctx;
    struct brw_sf_unit_state *sf;
-   drm_intel_bo *bo = brw->batch.bo;
    int chipset_max_threads;
    bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
 
@@ -265,7 +265,7 @@ static void upload_sf_unit( struct brw_context *brw )
    /* _NEW_PROGRAM | _NEW_POINT */
    sf->sf7.use_point_size_state = !(ctx->VertexProgram.PointSizeEnabled ||
 				    ctx->Point._Attenuated);
-   sf->sf7.aa_line_distance_mode = 0;
+   sf->sf7.aa_line_distance_mode = brw->is_g4x || brw->gen == 5;
 
    /* might be BRW_NEW_PRIMITIVE if we have to adjust pv for polygons:
     * _NEW_LIGHT
@@ -291,12 +291,13 @@ static void upload_sf_unit( struct brw_context *brw )
     */
 
    /* Emit SF viewport relocation */
-   drm_intel_bo_emit_reloc(bo, (brw->sf.state_offset +
-				offsetof(struct brw_sf_unit_state, sf5)),
-			   brw->batch.bo, (brw->sf.vp_offset |
-					     sf->sf5.front_winding |
-					     (sf->sf5.viewport_transform << 1)),
-			   I915_GEM_DOMAIN_INSTRUCTION, 0);
+   brw_emit_reloc(&brw->batch,
+                  brw->sf.state_offset +
+		  offsetof(struct brw_sf_unit_state, sf5),
+                  brw->batch.bo,
+                  brw->sf.vp_offset | sf->sf5.front_winding |
+                  (sf->sf5.viewport_transform << 1),
+                  I915_GEM_DOMAIN_INSTRUCTION, 0);
 
    brw->ctx.NewDriverState |= BRW_NEW_GEN4_UNIT_STATE;
 }

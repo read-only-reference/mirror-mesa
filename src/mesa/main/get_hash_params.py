@@ -119,8 +119,8 @@ descriptor=[
 # GLSL:
   [ "MAX_CLIP_PLANES", "CONTEXT_INT(Const.MaxClipPlanes), NO_EXTRA" ],
 
-# GL_{APPLE,ARB,OES}_vertex_array_object
-  [ "VERTEX_ARRAY_BINDING_APPLE", "ARRAY_INT(Name), NO_EXTRA" ],
+# GL_{ARB,OES}_vertex_array_object
+  [ "VERTEX_ARRAY_BINDING", "ARRAY_INT(Name), NO_EXTRA" ],
 
 # GL_EXT_texture_filter_anisotropic
   [ "MAX_TEXTURE_MAX_ANISOTROPY_EXT", "CONTEXT_FLOAT(Const.MaxTextureMaxAnisotropy), extra_EXT_texture_filter_anisotropic" ],
@@ -949,6 +949,9 @@ descriptor=[
 
 # GL_ARB_compute_variable_group_size
   [ "MAX_COMPUTE_VARIABLE_GROUP_INVOCATIONS_ARB", "CONTEXT_INT(Const.MaxComputeVariableGroupInvocations), extra_ARB_compute_variable_group_size" ],
+
+# GL_ARB_sparse_buffer
+  [ "SPARSE_BUFFER_PAGE_SIZE_ARB", "CONTEXT_INT(Const.SparseBufferPageSize), extra_ARB_sparse_buffer" ],
 ]},
 
 # Enums restricted to OpenGL Core profile

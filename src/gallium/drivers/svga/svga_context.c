@@ -67,6 +67,11 @@ svga_destroy(struct pipe_context *pipe)
       }
    }
 
+   /* free depthstencil_disable state */
+   if (svga->depthstencil_disable) {
+      pipe->delete_depth_stencil_alpha_state(pipe, svga->depthstencil_disable);
+   }
+
    /* free HW constant buffers */
    for (shader = 0; shader < ARRAY_SIZE(svga->state.hw_draw.constbuf); shader++) {
       pipe_resource_reference(&svga->state.hw_draw.constbuf[shader], NULL);
@@ -236,6 +241,8 @@ svga_context_create(struct pipe_screen *screen, void *priv, unsigned flags)
    memset(&svga->state.hw_clear, 0xcd, sizeof(svga->state.hw_clear));
    memset(&svga->state.hw_clear.framebuffer, 0x0,
           sizeof(svga->state.hw_clear.framebuffer));
+   svga->state.hw_clear.num_rendertargets = 0;
+   svga->state.hw_clear.dsv = NULL;
 
    memset(&svga->state.hw_draw, 0xcd, sizeof(svga->state.hw_draw));
    memset(&svga->state.hw_draw.views, 0x0, sizeof(svga->state.hw_draw.views));
@@ -246,8 +253,7 @@ svga_context_create(struct pipe_screen *screen, void *priv, unsigned flags)
    memset(svga->state.hw_draw.sampler_views, 0,
           sizeof(svga->state.hw_draw.sampler_views));
    svga->state.hw_draw.num_views = 0;
-   svga->state.hw_draw.num_rendertargets = 0;
-   svga->state.hw_draw.dsv = NULL;
+   svga->state.hw_draw.rasterizer_discard = FALSE;
 
    /* Initialize the shader pointers */
    svga->state.hw_draw.vs = NULL;
@@ -289,6 +295,7 @@ svga_context_create(struct pipe_screen *screen, void *priv, unsigned flags)
 
    svga->dirty = ~0;
    svga->pred.query_id = SVGA3D_INVALID_ID;
+   svga->disable_rasterizer = FALSE;
 
    return &svga->pipe;
 
@@ -360,7 +367,7 @@ svga_context_flush(struct svga_context *svga,
 
    svga->hud.num_flushes++;
 
-   svga_screen_cache_flush(svgascreen, fence);
+   svga_screen_cache_flush(svgascreen, svga, fence);
 
    SVGA3D_ResetLastCommand(svga->swc);
 

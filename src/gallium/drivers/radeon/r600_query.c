@@ -97,6 +97,9 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_DRAW_CALLS:
 		query->begin_result = rctx->num_draw_calls;
 		break;
+	case R600_QUERY_PRIM_RESTART_CALLS:
+		query->begin_result = rctx->num_prim_restart_calls;
+		break;
 	case R600_QUERY_SPILL_DRAW_CALLS:
 		query->begin_result = rctx->num_spill_draw_calls;
 		break;
@@ -220,6 +223,9 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 		break;
 	case R600_QUERY_DRAW_CALLS:
 		query->end_result = rctx->num_draw_calls;
+		break;
+	case R600_QUERY_PRIM_RESTART_CALLS:
+		query->end_result = rctx->num_prim_restart_calls;
 		break;
 	case R600_QUERY_SPILL_DRAW_CALLS:
 		query->end_result = rctx->num_spill_draw_calls;
@@ -1761,6 +1767,7 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-shaders-created",	NUM_SHADERS_CREATED,	UINT64, CUMULATIVE),
 	X("num-shader-cache-hits",	NUM_SHADER_CACHE_HITS,	UINT64, CUMULATIVE),
 	X("draw-calls",			DRAW_CALLS,		UINT64, AVERAGE),
+	X("prim-restart-calls",		PRIM_RESTART_CALLS,	UINT64, AVERAGE),
 	X("spill-draw-calls",		SPILL_DRAW_CALLS,	UINT64, AVERAGE),
 	X("compute-calls",		COMPUTE_CALLS,		UINT64, AVERAGE),
 	X("spill-compute-calls",	SPILL_COMPUTE_CALLS,	UINT64, AVERAGE),
@@ -1799,6 +1806,10 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	XG(GPIN, "GPIN_003",		GPIN_NUM_SPI,		UINT, AVERAGE),
 	XG(GPIN, "GPIN_004",		GPIN_NUM_SE,		UINT, AVERAGE),
 
+	X("temperature",		GPU_TEMPERATURE,	UINT64, AVERAGE),
+	X("shader-clock",		CURRENT_GPU_SCLK,	HZ, AVERAGE),
+	X("memory-clock",		CURRENT_GPU_MCLK,	HZ, AVERAGE),
+
 	/* The following queries must be at the end of the list because their
 	 * availability is adjusted dynamically based on the DRM version. */
 	X("GPU-load",			GPU_LOAD,		UINT64, AVERAGE),
@@ -1823,10 +1834,6 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("GPU-dma-busy",		GPU_DMA_BUSY,		UINT64, AVERAGE),
 	X("GPU-scratch-ram-busy",	GPU_SCRATCH_RAM_BUSY,	UINT64, AVERAGE),
 	X("GPU-ce-busy",		GPU_CE_BUSY,		UINT64, AVERAGE),
-
-	X("temperature",		GPU_TEMPERATURE,	UINT64, AVERAGE),
-	X("shader-clock",		CURRENT_GPU_SCLK,	HZ, AVERAGE),
-	X("memory-clock",		CURRENT_GPU_MCLK,	HZ, AVERAGE),
 };
 
 #undef X
@@ -1839,9 +1846,9 @@ static unsigned r600_get_num_queries(struct r600_common_screen *rscreen)
 		return ARRAY_SIZE(r600_driver_query_list);
 	else if (rscreen->info.drm_major == 3) {
 		if (rscreen->chip_class >= VI)
-			return ARRAY_SIZE(r600_driver_query_list) - 3;
+			return ARRAY_SIZE(r600_driver_query_list);
 		else
-			return ARRAY_SIZE(r600_driver_query_list) - 10;
+			return ARRAY_SIZE(r600_driver_query_list) - 7;
 	}
 	else
 		return ARRAY_SIZE(r600_driver_query_list) - 25;

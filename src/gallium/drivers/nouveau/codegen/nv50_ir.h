@@ -470,6 +470,11 @@ enum SVSemantic
    SV_BASEINSTANCE,
    SV_DRAWID,
    SV_WORK_DIM,
+   SV_LANEMASK_EQ,
+   SV_LANEMASK_LT,
+   SV_LANEMASK_LE,
+   SV_LANEMASK_GT,
+   SV_LANEMASK_GE,
    SV_UNDEFINED,
    SV_LAST
 };
@@ -596,7 +601,6 @@ public:
 public:
    Modifier mod;
    int8_t indirect[2]; // >= 0 if relative to lvalue in insn->src(indirect[i])
-   uint8_t swizzle;
 
    bool usedAsPtr; // for printing
 

@@ -24,10 +24,13 @@
 #include "anv_private.h"
 #include "wsi_common.h"
 #include "vk_format_info.h"
+#include "util/vk_util.h"
 
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
 static const struct wsi_callbacks wsi_cbs = {
    .get_phys_device_format_properties = anv_GetPhysicalDeviceFormatProperties,
 };
+#endif
 
 VkResult
 anv_init_wsi(struct anv_physical_device *physical_device)
@@ -139,16 +142,16 @@ VkResult anv_GetPhysicalDeviceSurfacePresentModesKHR(
 
 
 static VkResult
-x11_anv_wsi_image_create(VkDevice device_h,
-                         const VkSwapchainCreateInfoKHR *pCreateInfo,
-                         const VkAllocationCallbacks* pAllocator,
-                         bool different_gpu,
-                         bool linear,
-                         VkImage *image_p,
-                         VkDeviceMemory *memory_p,
-                         uint32_t *size,
-                         uint32_t *offset,
-                         uint32_t *row_pitch, int *fd_p)
+anv_wsi_image_create(VkDevice device_h,
+                     const VkSwapchainCreateInfoKHR *pCreateInfo,
+                     const VkAllocationCallbacks* pAllocator,
+                     bool different_gpu,
+                     bool linear,
+                     VkImage *image_p,
+                     VkDeviceMemory *memory_p,
+                     uint32_t *size,
+                     uint32_t *offset,
+                     uint32_t *row_pitch, int *fd_p)
 {
    struct anv_device *device = anv_device_from_handle(device_h);
    VkImage image_h;
@@ -200,7 +203,13 @@ x11_anv_wsi_image_create(VkDevice device_h,
       goto fail_create_image;
 
    memory = anv_device_memory_from_handle(memory_h);
-   memory->bo.is_winsys_bo = true;
+
+   /* We need to set the WRITE flag on window system buffers so that GEM will
+    * know we're writing to them and synchronize uses on other rings (eg if
+    * the display server uses the blitter ring).
+    */
+   memory->bo->flags &= ~EXEC_OBJECT_ASYNC;
+   memory->bo->flags |= EXEC_OBJECT_WRITE;
 
    anv_BindImageMemory(device_h, image_h, memory_h, 0);
 
@@ -208,7 +217,7 @@ x11_anv_wsi_image_create(VkDevice device_h,
    assert(surface->isl.tiling == ISL_TILING_X);
 
    *row_pitch = surface->isl.row_pitch;
-   int ret = anv_gem_set_tiling(device, memory->bo.gem_handle,
+   int ret = anv_gem_set_tiling(device, memory->bo->gem_handle,
                                 surface->isl.row_pitch, I915_TILING_X);
    if (ret) {
       /* FINISHME: Choose a better error. */
@@ -217,7 +226,7 @@ x11_anv_wsi_image_create(VkDevice device_h,
       goto fail_alloc_memory;
    }
 
-   int fd = anv_gem_handle_to_fd(device, memory->bo.gem_handle);
+   int fd = anv_gem_handle_to_fd(device, memory->bo->gem_handle);
    if (fd == -1) {
       /* FINISHME: Choose a better error. */
       result = vk_errorf(VK_ERROR_OUT_OF_DEVICE_MEMORY,
@@ -240,10 +249,10 @@ fail_create_image:
 }
 
 static void
-x11_anv_wsi_image_free(VkDevice device,
-                       const VkAllocationCallbacks* pAllocator,
-                       VkImage image_h,
-                       VkDeviceMemory memory_h)
+anv_wsi_image_free(VkDevice device,
+                   const VkAllocationCallbacks* pAllocator,
+                   VkImage image_h,
+                   VkDeviceMemory memory_h)
 {
    anv_DestroyImage(device, image_h, pAllocator);
 
@@ -251,8 +260,8 @@ x11_anv_wsi_image_free(VkDevice device,
 }
 
 static const struct wsi_image_fns anv_wsi_image_fns = {
-   .create_wsi_image = x11_anv_wsi_image_create,
-   .free_wsi_image = x11_anv_wsi_image_free,
+   .create_wsi_image = anv_wsi_image_create,
+   .free_wsi_image = anv_wsi_image_free,
 };
 
 VkResult anv_CreateSwapchainKHR(
@@ -355,9 +364,16 @@ VkResult anv_QueuePresentKHR(
    ANV_FROM_HANDLE(anv_queue, queue, _queue);
    VkResult result = VK_SUCCESS;
 
+   const VkPresentRegionsKHR *regions =
+      vk_find_struct_const(pPresentInfo->pNext, PRESENT_REGIONS_KHR);
+
    for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
       ANV_FROM_HANDLE(wsi_swapchain, swapchain, pPresentInfo->pSwapchains[i]);
       VkResult item_result;
+
+      const VkPresentRegionKHR *region = NULL;
+      if (regions && regions->pRegions)
+         region = &regions->pRegions[i];
 
       assert(anv_device_from_handle(swapchain->device) == queue->device);
 
@@ -380,7 +396,8 @@ VkResult anv_QueuePresentKHR(
       anv_QueueSubmit(_queue, 0, NULL, swapchain->fences[0]);
 
       item_result = swapchain->queue_present(swapchain,
-                                             pPresentInfo->pImageIndices[i]);
+                                             pPresentInfo->pImageIndices[i],
+                                             region);
       /* TODO: What if one of them returns OUT_OF_DATE? */
       if (pPresentInfo->pResults != NULL)
          pPresentInfo->pResults[i] = item_result;

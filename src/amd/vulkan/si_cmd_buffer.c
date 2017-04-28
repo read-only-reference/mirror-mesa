@@ -504,22 +504,6 @@ get_viewport_xform(const VkViewport *viewport,
 	translate[2] = n;
 }
 
-static void
-get_viewport_xform_scissor(const VkRect2D *scissor,
-                           float scale[2], float translate[2])
-{
-	float x = scissor->offset.x;
-	float y = scissor->offset.y;
-	float half_width = 0.5f * scissor->extent.width;
-	float half_height = 0.5f * scissor->extent.height;
-
-	scale[0] = half_width;
-	translate[0] = half_width + x;
-	scale[1] = half_height;
-	translate[1] = half_height + y;
-
-}
-
 void
 si_write_viewport(struct radeon_winsys_cs *cs, int first_vp,
                   int count, const VkViewport *viewports)
@@ -579,26 +563,13 @@ static VkRect2D si_intersect_scissor(const VkRect2D *a, const VkRect2D *b) {
 	return ret;
 }
 
-static VkRect2D si_union_scissor(const VkRect2D *a, const VkRect2D *b) {
-	VkRect2D ret;
-	ret.offset.x = MIN2(a->offset.x, b->offset.x);
-	ret.offset.y = MIN2(a->offset.y, b->offset.y);
-	ret.extent.width = MAX2(a->offset.x + a->extent.width,
-	                        b->offset.x + b->extent.width) - ret.offset.x;
-	ret.extent.height = MAX2(a->offset.y + a->extent.height,
-	                         b->offset.y + b->extent.height) - ret.offset.y;
-	return ret;
-}
-
-
 void
 si_write_scissors(struct radeon_winsys_cs *cs, int first,
                   int count, const VkRect2D *scissors,
                   const VkViewport *viewports, bool can_use_guardband)
 {
 	int i;
-	VkRect2D merged;
-	float scale[2], translate[2], guardband_x = 1.0, guardband_y = 1.0;
+	float scale[3], translate[3], guardband_x = INFINITY, guardband_y = INFINITY;
 	const float max_range = 32767.0f;
 	assert(count);
 
@@ -607,10 +578,17 @@ si_write_scissors(struct radeon_winsys_cs *cs, int first,
 		VkRect2D viewport_scissor = si_scissor_from_viewport(viewports + i);
 		VkRect2D scissor = si_intersect_scissor(&scissors[i], &viewport_scissor);
 
-		if (i)
-			merged = si_union_scissor(&merged, &scissor);
-		else
-			merged = scissor;
+		get_viewport_xform(viewports + i, scale, translate);
+		scale[0] = abs(scale[0]);
+		scale[1] = abs(scale[1]);
+
+		if (scale[0] < 0.5)
+			scale[0] = 0.5;
+		if (scale[1] < 0.5)
+			scale[1] = 0.5;
+
+		guardband_x = MIN2(guardband_x, (max_range - abs(translate[0])) / scale[0]);
+		guardband_y = MIN2(guardband_y, (max_range - abs(translate[1])) / scale[1]);
 
 		radeon_emit(cs, S_028250_TL_X(scissor.offset.x) |
 			    S_028250_TL_Y(scissor.offset.y) |
@@ -618,18 +596,15 @@ si_write_scissors(struct radeon_winsys_cs *cs, int first,
 		radeon_emit(cs, S_028254_BR_X(scissor.offset.x + scissor.extent.width) |
 			    S_028254_BR_Y(scissor.offset.y + scissor.extent.height));
 	}
-
-	get_viewport_xform_scissor(&merged, scale, translate);
-
-	if (can_use_guardband) {
-		guardband_x = (max_range - abs(translate[0])) / scale[0];
-		guardband_y = (max_range - abs(translate[1])) / scale[1];
+	if (!can_use_guardband) {
+		guardband_x = 1.0;
+		guardband_y = 1.0;
 	}
 
 	radeon_set_context_reg_seq(cs, R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 4);
-	radeon_emit(cs, fui(guardband_x));
-	radeon_emit(cs, fui(1.0));
 	radeon_emit(cs, fui(guardband_y));
+	radeon_emit(cs, fui(1.0));
+	radeon_emit(cs, fui(guardband_x));
 	radeon_emit(cs, fui(1.0));
 }
 
@@ -1045,6 +1020,16 @@ static void si_emit_cp_dma_clear_buffer(struct radv_cmd_buffer *cmd_buffer,
 		radeon_emit(cs, 0);
 	}
 	radv_cmd_buffer_trace_emit(cmd_buffer);
+}
+
+void si_cp_dma_prefetch(struct radv_cmd_buffer *cmd_buffer, uint64_t va,
+                        unsigned size)
+{
+	uint64_t aligned_va = va & ~(CP_DMA_ALIGNMENT - 1);
+	uint64_t aligned_size = ((va + size + CP_DMA_ALIGNMENT -1) & ~(CP_DMA_ALIGNMENT - 1)) - aligned_va;
+
+	si_emit_cp_dma_copy_buffer(cmd_buffer, aligned_va, aligned_va,
+	                           aligned_size, CIK_CP_DMA_USE_L2);
 }
 
 static void si_cp_dma_prepare(struct radv_cmd_buffer *cmd_buffer, uint64_t byte_count,

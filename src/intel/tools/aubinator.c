@@ -95,12 +95,29 @@ valid_offset(uint32_t offset)
    return offset < gtt_end;
 }
 
+/**
+ * Set group variable size for groups with count="0".
+ *
+ * By default the group size is fixed and not needed because the struct
+ * describing a group knows the number of elements. However, for groups with
+ * count="0" we have a variable number of elements, and the struct describing
+ * the group only includes one of them. So we calculate the remaining size of
+ * the group based on the size we get here, and the offset after the last
+ * element added to the group.
+ */
+static void
+group_set_size(struct gen_group *strct, uint32_t size)
+{
+   if (strct->variable && strct->elem_size)
+      strct->group_size = size - (strct->variable_offset / 32);
+}
+
 static void
 decode_group(struct gen_group *strct, const uint32_t *p, int starting_dword)
 {
    uint64_t offset = option_print_offsets ? (void *) p - gtt : 0;
-   gen_print_group(outfile, strct, offset, p, starting_dword,
-                   option_color == COLOR_ALWAYS);
+
+   gen_print_group(outfile, strct, offset, p, option_color == COLOR_ALWAYS);
 }
 
 static void
@@ -683,17 +700,18 @@ static void
 parse_commands(struct gen_spec *spec, uint32_t *cmds, int size, int engine)
 {
    uint32_t *p, *end = cmds + size / 4;
-   unsigned int length, i;
+   int length, i;
    struct gen_group *inst;
 
    for (p = cmds; p < end; p += length) {
       inst = gen_spec_find_instruction(spec, p);
+      length = gen_group_get_length(inst, p);
+      assert(inst == NULL || length > 0);
+      length = MAX2(1, length);
       if (inst == NULL) {
          fprintf(outfile, "unknown instruction %08x\n", p[0]);
-         length = (p[0] & 0xff) + 2;
          continue;
       }
-      length = gen_group_get_length(inst, p);
 
       const char *color, *reset_color = NORMAL;
       uint64_t offset;
@@ -722,11 +740,14 @@ parse_commands(struct gen_spec *spec, uint32_t *cmds, int size, int engine)
               gen_group_get_name(inst), reset_color);
 
       if (option_full_decode) {
-         decode_group(inst, p, 1);
+         group_set_size(inst, length);
+         decode_group(inst, p, 0);
 
          for (i = 0; i < ARRAY_LENGTH(custom_handlers); i++) {
-            if (gen_group_get_opcode(inst) == custom_handlers[i].opcode)
+            if (gen_group_get_opcode(inst) == custom_handlers[i].opcode) {
                custom_handlers[i].handle(spec, p);
+               break;
+            }
          }
       }
 

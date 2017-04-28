@@ -353,6 +353,53 @@ vec4_visitor::get_indirect_offset(nir_intrinsic_instr *instr)
    return get_nir_src(*offset_src, BRW_REGISTER_TYPE_UD, 1);
 }
 
+static src_reg
+setup_imm_df(const vec4_builder &bld, double v)
+{
+   const gen_device_info *devinfo = bld.shader->devinfo;
+   assert(devinfo->gen >= 7);
+
+   if (devinfo->gen >= 8)
+      return brw_imm_df(v);
+
+   /* gen7.5 does not support DF immediates straighforward but the DIM
+    * instruction allows to set the 64-bit immediate value.
+    */
+   if (devinfo->is_haswell) {
+      const vec4_builder ubld = bld.exec_all();
+      const dst_reg dst = bld.vgrf(BRW_REGISTER_TYPE_DF);
+      ubld.DIM(dst, brw_imm_df(v));
+      return swizzle(src_reg(dst), BRW_SWIZZLE_XXXX);
+   }
+
+   /* gen7 does not support DF immediates */
+   union {
+      double d;
+      struct {
+         uint32_t i1;
+         uint32_t i2;
+      };
+   } di;
+
+   di.d = v;
+
+   /* Write the low 32-bit of the constant to the X:UD channel and the
+    * high 32-bit to the Y:UD channel to build the constant in a VGRF.
+    * We have to do this twice (offset 0 and offset 1), since a DF VGRF takes
+    * two SIMD8 registers in SIMD4x2 execution. Finally, return a swizzle
+    * XXXX so any access to the VGRF only reads the constant data in these
+    * channels.
+    */
+   const dst_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD, 2);
+   for (unsigned n = 0; n < 2; n++) {
+      const vec4_builder ubld = bld.exec_all().group(4, n);
+      ubld.MOV(writemask(offset(tmp, 8, n), WRITEMASK_X), brw_imm_ud(di.i1));
+      ubld.MOV(writemask(offset(tmp, 8, n), WRITEMASK_Y), brw_imm_ud(di.i2));
+   }
+
+   return swizzle(src_reg(retype(tmp, BRW_REGISTER_TYPE_DF)), BRW_SWIZZLE_XXXX);
+}
+
 void
 vec4_visitor::nir_emit_load_const(nir_load_const_instr *instr)
 {
@@ -366,6 +413,7 @@ vec4_visitor::nir_emit_load_const(nir_load_const_instr *instr)
       reg.type = BRW_REGISTER_TYPE_D;
    }
 
+   const vec4_builder ibld = vec4_builder(this).at_end();
    unsigned remaining = brw_writemask_for_size(instr->def.num_components);
 
    /* @FIXME: consider emitting vector operations to save some MOVs in
@@ -389,7 +437,7 @@ vec4_visitor::nir_emit_load_const(nir_load_const_instr *instr)
 
       reg.writemask = writemask;
       if (instr->def.bit_size == 64) {
-         emit(MOV(reg, setup_imm_df(instr->value.f64[i])));
+         emit(MOV(reg, setup_imm_df(ibld, instr->value.f64[i])));
       } else {
          emit(MOV(reg, brw_imm_d(instr->value.i32[i])));
       }
@@ -1183,15 +1231,28 @@ vec4_visitor::emit_conversion_from_double(dst_reg dst, src_reg src,
       return;
    }
 
+   enum opcode op;
+   switch (dst.type) {
+   case BRW_REGISTER_TYPE_D:
+      op = VEC4_OPCODE_DOUBLE_TO_D32;
+      break;
+   case BRW_REGISTER_TYPE_UD:
+      op = VEC4_OPCODE_DOUBLE_TO_U32;
+      break;
+   case BRW_REGISTER_TYPE_F:
+      op = VEC4_OPCODE_DOUBLE_TO_F32;
+      break;
+   default:
+      unreachable("Unknown conversion");
+   }
+
    dst_reg temp = dst_reg(this, glsl_type::dvec4_type);
    emit(MOV(temp, src));
-
    dst_reg temp2 = dst_reg(this, glsl_type::dvec4_type);
-   temp2 = retype(temp2, dst.type);
-   emit(VEC4_OPCODE_FROM_DOUBLE, temp2, src_reg(temp))
-      ->size_written = 2 * REG_SIZE;
+   emit(op, temp2, src_reg(temp));
 
-   vec4_instruction *inst = emit(MOV(dst, src_reg(temp2)));
+   emit(VEC4_OPCODE_PICK_LOW_32BIT, retype(temp2, dst.type), src_reg(temp2));
+   vec4_instruction *inst = emit(MOV(dst, src_reg(retype(temp2, dst.type))));
    inst->saturate = saturate;
 }
 
@@ -1205,53 +1266,6 @@ vec4_visitor::emit_conversion_to_double(dst_reg dst, src_reg src,
    emit(VEC4_OPCODE_TO_DOUBLE, tmp_dst, tmp_src);
    vec4_instruction *inst = emit(MOV(dst, src_reg(tmp_dst)));
    inst->saturate = saturate;
-}
-
-src_reg
-vec4_visitor::setup_imm_df(double v)
-{
-   assert(devinfo->gen >= 7);
-
-   if (devinfo->gen >= 8)
-      return brw_imm_df(v);
-
-   /* gen7.5 does not support DF immediates straighforward but the DIM
-    * instruction allows to set the 64-bit immediate value.
-    */
-   if (devinfo->is_haswell) {
-      dst_reg dst = retype(dst_reg(VGRF, alloc.allocate(2)), BRW_REGISTER_TYPE_DF);
-      emit(DIM(dst, brw_imm_df(v)))->force_writemask_all = true;
-      return swizzle(src_reg(retype(dst, BRW_REGISTER_TYPE_DF)), BRW_SWIZZLE_XXXX);
-   }
-
-   /* gen7 does not support DF immediates */
-   union {
-      double d;
-      struct {
-         uint32_t i1;
-         uint32_t i2;
-      };
-   } di;
-
-   di.d = v;
-
-   /* Write the low 32-bit of the constant to the X:UD channel and the
-    * high 32-bit to the Y:UD channel to build the constant in a VGRF.
-    * We have to do this twice (offset 0 and offset 1), since a DF VGRF takes
-    * two SIMD8 registers in SIMD4x2 execution. Finally, return a swizzle
-    * XXXX so any access to the VGRF only reads the constant data in these
-    * channels.
-    */
-   const dst_reg tmp =
-      retype(dst_reg(VGRF, alloc.allocate(2)), BRW_REGISTER_TYPE_UD);
-   for (int n = 0; n < 2; n++) {
-      emit(MOV(writemask(offset(tmp, 8, n), WRITEMASK_X), brw_imm_ud(di.i1)))
-         ->force_writemask_all = true;
-      emit(MOV(writemask(offset(tmp, 8, n), WRITEMASK_Y), brw_imm_ud(di.i2)))
-         ->force_writemask_all = true;
-   }
-
-   return swizzle(src_reg(retype(tmp, BRW_REGISTER_TYPE_DF)), BRW_SWIZZLE_XXXX);
 }
 
 void
@@ -1310,6 +1324,7 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
 
    case nir_op_iadd:
       assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      /* fall through */
    case nir_op_fadd:
       inst = emit(ADD(dst, op[0], op[1]));
       inst->saturate = instr->dest.saturate;
@@ -1540,6 +1555,7 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
    case nir_op_imin:
    case nir_op_umin:
       assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      /* fall through */
    case nir_op_fmin:
       inst = emit_minmax(BRW_CONDITIONAL_L, dst, op[0], op[1]);
       inst->saturate = instr->dest.saturate;
@@ -1548,6 +1564,7 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
    case nir_op_imax:
    case nir_op_umax:
       assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      /* fall through */
    case nir_op_fmax:
       inst = emit_minmax(BRW_CONDITIONAL_GE, dst, op[0], op[1]);
       inst->saturate = instr->dest.saturate;
@@ -2054,6 +2071,7 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
    case nir_op_iabs:
    case nir_op_ineg:
       assert(nir_dest_bit_size(instr->dest.dest) < 64);
+      /* fall through */
    case nir_op_fabs:
    case nir_op_fneg:
    case nir_op_fsat:

@@ -65,6 +65,7 @@ static const struct debug_named_value svga_debug_flags[] = {
    { "cache",       DEBUG_CACHE, NULL },
    { "streamout",   DEBUG_STREAMOUT, NULL },
    { "query",       DEBUG_QUERY, NULL },
+   { "samplers",    DEBUG_SAMPLERS, NULL },
    DEBUG_NAMED_VALUE_END
 };
 #endif
@@ -428,6 +429,10 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
    case PIPE_CAP_TGSI_CLOCK:
+   case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
+   case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
+   case PIPE_CAP_TGSI_BALLOT:
+   case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
       return 0;
    }
 
@@ -507,6 +512,7 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
       case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+      case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
          return 0;
       case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
          return 32;
@@ -567,6 +573,7 @@ vgpu9_get_shader_param(struct pipe_screen *screen,
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
       case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+      case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
          return 0;
       case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
          return 32;
@@ -661,6 +668,7 @@ vgpu10_get_shader_param(struct pipe_screen *screen,
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       return 0;
    case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
       return 32;
@@ -979,6 +987,13 @@ svga_screen_create(struct svga_winsys_screen *sws)
       svgascreen->hw_version = sws->get_hw_version(sws);
    } else {
       svgascreen->hw_version = SVGA3D_HWVERSION_WS65_B1;
+   }
+
+   if (svgascreen->hw_version < SVGA3D_HWVERSION_WS8_B1) {
+      /* too old for 3D acceleration */
+      debug_printf("Hardware version 0x%x is too old for accerated 3D\n",
+                   svgascreen->hw_version);
+      goto error2;
    }
 
    /*

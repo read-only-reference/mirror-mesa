@@ -486,7 +486,7 @@ struct r600_streamout {
 
 	/* External state which comes from the vertex shader,
 	 * it must be set explicitly when binding a shader. */
-	unsigned			*stride_in_dw;
+	uint16_t			*stride_in_dw;
 	unsigned			enabled_stream_buffers_mask; /* stream0 buffers0-3 in 4 LSB */
 
 	/* The state of VGT_STRMOUT_BUFFER_(CONFIG|EN). */
@@ -580,6 +580,7 @@ struct r600_common_context {
 	unsigned			num_cs_dw_queries_suspend;
 	/* Misc stats. */
 	unsigned			num_draw_calls;
+	unsigned			num_prim_restart_calls;
 	unsigned			num_spill_draw_calls;
 	unsigned			num_compute_calls;
 	unsigned			num_spill_compute_calls;

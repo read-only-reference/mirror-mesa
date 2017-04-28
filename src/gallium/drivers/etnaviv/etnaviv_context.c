@@ -73,6 +73,9 @@ etna_context_destroy(struct pipe_context *pctx)
 
    slab_destroy_child(&ctx->transfer_pool);
 
+   if (ctx->in_fence_fd != -1)
+      close(ctx->in_fence_fd);
+
    FREE(pctx);
 }
 
@@ -106,6 +109,37 @@ etna_update_state_for_draw(struct etna_context *ctx, const struct pipe_draw_info
    }
 }
 
+static bool
+etna_get_vs(struct etna_context *ctx, struct etna_shader_key key)
+{
+   const struct etna_shader_variant *old = ctx->shader.vs;
+
+   ctx->shader.vs = etna_shader_variant(ctx->shader.bind_vs, key, &ctx->debug);
+
+   if (!ctx->shader.vs)
+      return false;
+
+   if (old != ctx->shader.vs)
+      ctx->dirty |= ETNA_DIRTY_SHADER;
+
+   return true;
+}
+
+static bool
+etna_get_fs(struct etna_context *ctx, struct etna_shader_key key)
+{
+   const struct etna_shader_variant *old = ctx->shader.fs;
+
+   ctx->shader.fs = etna_shader_variant(ctx->shader.bind_fs, key, &ctx->debug);
+
+   if (!ctx->shader.fs)
+      return false;
+
+   if (old != ctx->shader.fs)
+      ctx->dirty |= ETNA_DIRTY_SHADER;
+
+   return true;
+}
 
 static void
 etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
@@ -114,6 +148,11 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
    struct pipe_framebuffer_state *pfb = &ctx->framebuffer_s;
    uint32_t draw_mode;
    unsigned i;
+
+   if (!info->count_from_stream_output && !info->indirect &&
+       !info->primitive_restart &&
+       !u_trim_pipe_prim(info->mode, (unsigned*)&info->count))
+      return;
 
    if (ctx->vertex_elements == NULL || ctx->vertex_elements->num_elements == 0)
       return; /* Nothing to do */
@@ -149,6 +188,20 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
    if (info->indexed && !ctx->index_buffer.FE_INDEX_STREAM_BASE_ADDR.bo) {
       BUG("Unsupported or no index buffer");
+      return;
+   }
+
+   struct etna_shader_key key = {};
+   struct etna_surface *cbuf = etna_surface(pfb->cbufs[0]);
+
+   if (cbuf) {
+      struct etna_resource *res = etna_resource(cbuf->base.texture);
+
+      key.frag_rb_swap = !!translate_rs_format_rb_swap(res->base.format);
+   }
+
+   if (!etna_get_vs(ctx, key) || !etna_get_fs(ctx, key)) {
+      BUG("compiled shaders are not okay");
       return;
    }
 
@@ -230,11 +283,14 @@ etna_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
            enum pipe_flush_flags flags)
 {
    struct etna_context *ctx = etna_context(pctx);
+   int out_fence_fd = -1;
 
-   etna_cmd_stream_flush(ctx->stream);
+   etna_cmd_stream_flush2(ctx->stream, ctx->in_fence_fd,
+			  (flags & PIPE_FLUSH_FENCE_FD) ? &out_fence_fd :
+			  NULL);
 
    if (fence)
-      *fence = etna_fence_create(pctx);
+      *fence = etna_fence_create(pctx, out_fence_fd);
 }
 
 static void
@@ -247,6 +303,9 @@ etna_cmd_stream_reset_notify(struct etna_cmd_stream *stream, void *priv)
    etna_set_state(stream, VIVS_GL_VERTEX_ELEMENT_CONFIG, 0x00000001);
    etna_set_state(stream, VIVS_RA_EARLY_DEPTH, 0x00000031);
    etna_set_state(stream, VIVS_PA_W_CLIP_LIMIT, 0x34000001);
+
+   /* Enable SINGLE_BUFFER for resolve, if supported */
+   etna_set_state(stream, VIVS_RS_SINGLE_BUFFER, COND(ctx->specs.single_buffer, VIVS_RS_SINGLE_BUFFER_ENABLE));
 
    ctx->dirty = ~0L;
 
@@ -308,10 +367,14 @@ etna_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    /*  Set sensible defaults for state */
    etna_cmd_stream_reset_notify(ctx->stream, ctx);
 
+   ctx->in_fence_fd = -1;
+
    pctx->destroy = etna_context_destroy;
    pctx->draw_vbo = etna_draw_vbo;
    pctx->flush = etna_flush;
    pctx->set_debug_callback = etna_set_debug_callback;
+   pctx->create_fence_fd = etna_create_fence_fd;
+   pctx->fence_server_sync = etna_fence_server_sync;
 
    /* creation of compile states */
    pctx->create_blend_state = etna_blend_state_create;

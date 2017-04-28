@@ -421,6 +421,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
 	case PIPE_CAP_DOUBLES:
 	case PIPE_CAP_TGSI_TEX_TXF_LZ:
+	case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
 		return 1;
 
 	case PIPE_CAP_INT64:
@@ -430,6 +431,9 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_TGSI_VOTE:
 		return HAVE_LLVM >= 0x0400;
+
+	case PIPE_CAP_TGSI_BALLOT:
+		return HAVE_LLVM >= 0x0500;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return !SI_BIG_ENDIAN && sscreen->b.info.has_userptr;
@@ -460,8 +464,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return HAVE_LLVM >= 0x0309 ? 4 : 0;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		if (sscreen->b.chip_class >= GFX9)
-			return 140;
 		if (si_have_tgsi_compute(sscreen))
 			return 450;
 		return HAVE_LLVM >= 0x0309 ? 420 : 410;
@@ -478,6 +480,16 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		       (sscreen->b.info.drm_major == 2 &&
 			sscreen->b.info.drm_minor < 50);
 
+	case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
+		/* Disable on SI due to VM faults in CP DMA. Enable once these
+		 * faults are mitigated in software.
+		 */
+		if (sscreen->b.chip_class >= CIK &&
+		    sscreen->b.info.drm_major == 3 &&
+		    sscreen->b.info.drm_minor >= 13)
+			return RADEON_SPARSE_PAGE_SIZE;
+		return 0;
+
 	/* Unsupported features. */
 	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
@@ -492,6 +504,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_FBFETCH:
 	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 	case PIPE_CAP_UMA:
+	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
 		return 0;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
@@ -585,12 +598,9 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	{
 	case PIPE_SHADER_FRAGMENT:
 	case PIPE_SHADER_VERTEX:
-		break;
 	case PIPE_SHADER_GEOMETRY:
 	case PIPE_SHADER_TESS_CTRL:
 	case PIPE_SHADER_TESS_EVAL:
-		if (sscreen->b.chip_class >= GFX9)
-			return 0;
 		break;
 	case PIPE_SHADER_COMPUTE:
 		switch (param) {
@@ -665,6 +675,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_INTEGERS:
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
+	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
 		return 1;
 
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -688,7 +699,6 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 	struct si_screen *sscreen = (struct si_screen *)pscreen;
 	struct si_shader_part *parts[] = {
 		sscreen->vs_prologs,
-		sscreen->vs_epilogs,
 		sscreen->tcs_epilogs,
 		sscreen->gs_prologs,
 		sscreen->ps_prologs,

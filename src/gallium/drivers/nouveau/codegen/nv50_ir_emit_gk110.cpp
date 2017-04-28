@@ -47,7 +47,7 @@ private:
 private:
    void emitForm_21(const Instruction *, uint32_t opc2, uint32_t opc1);
    void emitForm_C(const Instruction *, uint32_t opc, uint8_t ctg);
-   void emitForm_L(const Instruction *, uint32_t opc, uint8_t ctg, Modifier);
+   void emitForm_L(const Instruction *, uint32_t opc, uint8_t ctg, Modifier, int sCount = 3);
 
    void emitPredicate(const Instruction *);
 
@@ -134,6 +134,8 @@ private:
    void emitMEMBAR(const Instruction *);
 
    void emitFlow(const Instruction *);
+
+   void emitSHFL(const Instruction *);
 
    void emitVOTE(const Instruction *);
 
@@ -365,7 +367,7 @@ CodeEmitterGK110::setImmediate32(const Instruction *i, const int s,
 
 void
 CodeEmitterGK110::emitForm_L(const Instruction *i, uint32_t opc, uint8_t ctg,
-                             Modifier mod)
+                             Modifier mod, int sCount)
 {
    code[0] = ctg;
    code[1] = opc << 20;
@@ -374,7 +376,7 @@ CodeEmitterGK110::emitForm_L(const Instruction *i, uint32_t opc, uint8_t ctg,
 
    defId(i->def(0), 2);
 
-   for (int s = 0; s < 3 && i->srcExists(s); ++s) {
+   for (int s = 0; s < sCount && i->srcExists(s); ++s) {
       switch (i->src(s).getFile()) {
       case FILE_GPR:
          srcId(i->src(s), s ? 42 : 10);
@@ -487,25 +489,41 @@ CodeEmitterGK110::emitNOP(const Instruction *i)
 void
 CodeEmitterGK110::emitFMAD(const Instruction *i)
 {
-   assert(!isLIMM(i->src(1), TYPE_F32));
-
-   emitForm_21(i, 0x0c0, 0x940);
-
-   NEG_(34, 2);
-   SAT_(35);
-   RND_(36, F);
-   FTZ_(38);
-   DNZ_(39);
-
    bool neg1 = (i->src(0).mod ^ i->src(1).mod).neg();
 
-   if (code[0] & 0x1) {
-      if (neg1)
-         code[1] ^= 1 << 27;
-   } else
-   if (neg1) {
-      code[1] |= 1 << 19;
+   if (isLIMM(i->src(1), TYPE_F32)) {
+      assert(i->getDef(0)->reg.data.id == i->getSrc(2)->reg.data.id);
+
+      // last source is dst, so force 2 sources
+      emitForm_L(i, 0x600, 0x0, 0, 2);
+
+      if (i->flagsDef >= 0)
+         code[1] |= 1 << 23;
+
+      SAT_(3a);
+      NEG_(3c, 2);
+
+      if (neg1) {
+         code[1] |= 1 << 27;
+      }
+   } else {
+      emitForm_21(i, 0x0c0, 0x940);
+
+      NEG_(34, 2);
+      SAT_(35);
+      RND_(36, F);
+
+      if (code[0] & 0x1) {
+         if (neg1)
+            code[1] ^= 1 << 27;
+      } else
+      if (neg1) {
+         code[1] |= 1 << 19;
+      }
    }
+
+   FTZ_(38);
+   DNZ_(39);
 }
 
 void
@@ -1550,9 +1568,61 @@ CodeEmitterGK110::emitFlow(const Instruction *i)
 }
 
 void
+CodeEmitterGK110::emitSHFL(const Instruction *i)
+{
+   const ImmediateValue *imm;
+
+   code[0] = 0x00000002;
+   code[1] = 0x78800000 | (i->subOp << 1);
+
+   emitPredicate(i);
+
+   defId(i->def(0), 2);
+   srcId(i->src(0), 10);
+
+   switch (i->src(1).getFile()) {
+   case FILE_GPR:
+      srcId(i->src(1), 23);
+      break;
+   case FILE_IMMEDIATE:
+      imm = i->getSrc(1)->asImm();
+      assert(imm && imm->reg.data.u32 < 0x20);
+      code[0] |= imm->reg.data.u32 << 23;
+      code[0] |= 1 << 31;
+      break;
+   default:
+      assert(!"invalid src1 file");
+      break;
+   }
+
+   switch (i->src(2).getFile()) {
+   case FILE_GPR:
+      srcId(i->src(2), 42);
+      break;
+   case FILE_IMMEDIATE:
+      imm = i->getSrc(2)->asImm();
+      assert(imm && imm->reg.data.u32 < 0x2000);
+      code[1] |= imm->reg.data.u32 << 5;
+      code[1] |= 1;
+      break;
+   default:
+      assert(!"invalid src2 file");
+      break;
+   }
+
+   if (!i->defExists(1))
+      code[1] |= 7 << 19;
+   else {
+      assert(i->def(1).getFile() == FILE_PREDICATE);
+      defId(i->def(1), 51);
+   }
+}
+
+void
 CodeEmitterGK110::emitVOTE(const Instruction *i)
 {
-   assert(i->src(0).getFile() == FILE_PREDICATE);
+   const ImmediateValue *imm;
+   uint32_t u32;
 
    code[0] = 0x00000002;
    code[1] = 0x86c00000 | (i->subOp << 19);
@@ -1577,9 +1647,24 @@ CodeEmitterGK110::emitVOTE(const Instruction *i)
       code[0] |= 255 << 2;
    if (!(rp & 2))
       code[1] |= 7 << 16;
-   if (i->src(0).mod == Modifier(NV50_IR_MOD_NOT))
-      code[1] |= 1 << 13;
-   srcId(i->src(0), 42);
+
+   switch (i->src(0).getFile()) {
+   case FILE_PREDICATE:
+      if (i->src(0).mod == Modifier(NV50_IR_MOD_NOT))
+         code[0] |= 1 << 13;
+      srcId(i->src(0), 42);
+      break;
+   case FILE_IMMEDIATE:
+      imm = i->getSrc(0)->asImm();
+      assert(imm);
+      u32 = imm->reg.data.u32;
+      assert(u32 == 0 || u32 == 1);
+      code[1] |= (u32 == 1 ? 0x7 : 0xf) << 10;
+      break;
+   default:
+      assert(!"Unhandled src");
+      break;
+   }
 }
 
 void
@@ -2215,6 +2300,11 @@ CodeEmitterGK110::getSRegEncoding(const ValueRef& ref)
    case SV_NCTAID:        return 0x2d + SDATA(ref).sv.index;
    case SV_LBASE:         return 0x34;
    case SV_SBASE:         return 0x30;
+   case SV_LANEMASK_EQ:   return 0x38;
+   case SV_LANEMASK_LT:   return 0x39;
+   case SV_LANEMASK_LE:   return 0x3a;
+   case SV_LANEMASK_GT:   return 0x3b;
+   case SV_LANEMASK_GE:   return 0x3c;
    case SV_CLOCK:         return 0x50 + SDATA(ref).sv.index;
    default:
       assert(!"no sreg for system value");
@@ -2625,6 +2715,9 @@ CodeEmitterGK110::emitInstruction(Instruction *insn)
       break;
    case OP_CCTL:
       emitCCTL(insn);
+      break;
+   case OP_SHFL:
+      emitSHFL(insn);
       break;
    case OP_VOTE:
       emitVOTE(insn);

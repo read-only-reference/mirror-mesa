@@ -48,20 +48,6 @@ __isl_finishme(const char *file, int line, const char *fmt, ...)
    fprintf(stderr, "%s:%d: FINISHME: %s\n", file, line, buf);
 }
 
-static const struct {
-   uint8_t size;
-   uint8_t align;
-   uint8_t addr_offset;
-   uint8_t aux_addr_offset;
-} ss_infos[] = {
-   [4] = {24, 32,  4},
-   [5] = {24, 32,  4},
-   [6] = {24, 32,  4},
-   [7] = {32, 32,  4, 24},
-   [8] = {64, 64, 32, 40},
-   [9] = {64, 64, 32, 40},
-};
-
 void
 isl_device_init(struct isl_device *dev,
                 const struct gen_device_info *info,
@@ -84,10 +70,45 @@ isl_device_init(struct isl_device *dev,
    if (info->must_use_separate_stencil)
       assert(ISL_DEV_USE_SEPARATE_STENCIL(dev));
 
-   dev->ss.size = ss_infos[ISL_DEV_GEN(dev)].size;
-   dev->ss.align = ss_infos[ISL_DEV_GEN(dev)].align;
-   dev->ss.addr_offset = ss_infos[ISL_DEV_GEN(dev)].addr_offset;
-   dev->ss.aux_addr_offset = ss_infos[ISL_DEV_GEN(dev)].aux_addr_offset;
+   dev->ss.size = RENDER_SURFACE_STATE_length(info) * 4;
+   dev->ss.align = isl_align(dev->ss.size, 32);
+
+   assert(RENDER_SURFACE_STATE_SurfaceBaseAddress_start(info) % 8 == 0);
+   dev->ss.addr_offset =
+      RENDER_SURFACE_STATE_SurfaceBaseAddress_start(info) / 8;
+
+   /* The "Auxiliary Surface Base Address" field starts a bit higher up
+    * because the bottom 12 bits are used for other things.  Round down to
+    * the nearest dword before.
+    */
+   dev->ss.aux_addr_offset =
+      (RENDER_SURFACE_STATE_AuxiliarySurfaceBaseAddress_start(info) & ~31) / 8;
+
+   dev->ds.size =
+      _3DSTATE_DEPTH_BUFFER_length(info) * 4 +
+      _3DSTATE_STENCIL_BUFFER_length(info) * 4 +
+      _3DSTATE_HIER_DEPTH_BUFFER_length(info) * 4 +
+      _3DSTATE_CLEAR_PARAMS_length(info) * 4;
+
+   assert(_3DSTATE_DEPTH_BUFFER_SurfaceBaseAddress_start(info) % 8 == 0);
+   dev->ds.depth_offset =
+      _3DSTATE_DEPTH_BUFFER_SurfaceBaseAddress_start(info) / 8;
+
+   if (info->has_hiz_and_separate_stencil) {
+      assert(_3DSTATE_STENCIL_BUFFER_SurfaceBaseAddress_start(info) % 8 == 0);
+      dev->ds.stencil_offset =
+         _3DSTATE_DEPTH_BUFFER_length(info) * 4 +
+         _3DSTATE_STENCIL_BUFFER_SurfaceBaseAddress_start(info) / 8;
+
+      assert(_3DSTATE_HIER_DEPTH_BUFFER_SurfaceBaseAddress_start(info) % 8 == 0);
+      dev->ds.hiz_offset =
+         _3DSTATE_DEPTH_BUFFER_length(info) * 4 +
+         _3DSTATE_STENCIL_BUFFER_length(info) * 4 +
+         _3DSTATE_HIER_DEPTH_BUFFER_SurfaceBaseAddress_start(info) / 8;
+   } else {
+      dev->ds.stencil_offset = 0;
+      dev->ds.hiz_offset = 0;
+   }
 }
 
 /**
@@ -1683,6 +1704,73 @@ isl_buffer_fill_state_s(const struct isl_device *dev, void *state,
       break;
    case 9:
       isl_gen9_buffer_fill_state_s(state, info);
+      break;
+   default:
+      assert(!"Cannot fill surface state for this gen");
+   }
+}
+
+void
+isl_emit_depth_stencil_hiz_s(const struct isl_device *dev, void *batch,
+                             const struct isl_depth_stencil_hiz_emit_info *restrict info)
+{
+   if (info->depth_surf && info->stencil_surf) {
+      if (!dev->info->has_hiz_and_separate_stencil) {
+         assert(info->depth_surf == info->stencil_surf);
+         assert(info->depth_address == info->stencil_address);
+      }
+      assert(info->depth_surf->dim == info->stencil_surf->dim);
+   }
+
+   if (info->depth_surf) {
+      assert((info->depth_surf->usage & ISL_SURF_USAGE_DEPTH_BIT));
+      if (info->depth_surf->dim == ISL_SURF_DIM_3D) {
+         assert(info->view->base_array_layer + info->view->array_len <=
+                info->depth_surf->logical_level0_px.depth);
+      } else {
+         assert(info->view->base_array_layer + info->view->array_len <=
+                info->depth_surf->logical_level0_px.array_len);
+      }
+   }
+
+   if (info->stencil_surf) {
+      assert((info->stencil_surf->usage & ISL_SURF_USAGE_STENCIL_BIT));
+      if (info->stencil_surf->dim == ISL_SURF_DIM_3D) {
+         assert(info->view->base_array_layer + info->view->array_len <=
+                info->stencil_surf->logical_level0_px.depth);
+      } else {
+         assert(info->view->base_array_layer + info->view->array_len <=
+                info->stencil_surf->logical_level0_px.array_len);
+      }
+   }
+
+   switch (ISL_DEV_GEN(dev)) {
+   case 4:
+      if (ISL_DEV_IS_G4X(dev)) {
+         /* G45 surface state is the same as gen5 */
+         isl_gen5_emit_depth_stencil_hiz_s(dev, batch, info);
+      } else {
+         isl_gen4_emit_depth_stencil_hiz_s(dev, batch, info);
+      }
+      break;
+   case 5:
+      isl_gen5_emit_depth_stencil_hiz_s(dev, batch, info);
+      break;
+   case 6:
+      isl_gen6_emit_depth_stencil_hiz_s(dev, batch, info);
+      break;
+   case 7:
+      if (ISL_DEV_IS_HASWELL(dev)) {
+         isl_gen75_emit_depth_stencil_hiz_s(dev, batch, info);
+      } else {
+         isl_gen7_emit_depth_stencil_hiz_s(dev, batch, info);
+      }
+      break;
+   case 8:
+      isl_gen8_emit_depth_stencil_hiz_s(dev, batch, info);
+      break;
+   case 9:
+      isl_gen9_emit_depth_stencil_hiz_s(dev, batch, info);
       break;
    default:
       assert(!"Cannot fill surface state for this gen");

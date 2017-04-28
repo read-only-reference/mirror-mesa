@@ -235,6 +235,8 @@ verify_parameter_modes(_mesa_glsl_parse_state *state,
                              formal->name);
             return false;
          }
+
+         val->variable_referenced()->data.must_be_shader_input = 1;
       }
 
       /* Verify that 'out' and 'inout' actual parameters are lvalues. */
@@ -1504,8 +1506,7 @@ emit_inline_matrix_constructor(const glsl_type *type,
        * components with zero.
        */
       glsl_base_type param_base_type = first_param->type->base_type;
-      assert(param_base_type == GLSL_TYPE_FLOAT ||
-             param_base_type == GLSL_TYPE_DOUBLE);
+      assert(first_param->type->is_float() || first_param->type->is_double());
       ir_variable *rhs_var =
          new(ctx) ir_variable(glsl_type::get_instance(param_base_type, 4, 1),
                               "mat_ctor_vec",
@@ -1514,7 +1515,7 @@ emit_inline_matrix_constructor(const glsl_type *type,
 
       ir_constant_data zero;
       for (unsigned i = 0; i < 4; i++)
-         if (param_base_type == GLSL_TYPE_FLOAT)
+         if (first_param->type->is_float())
             zero.f[i] = 0.0;
          else
             zero.d[i] = 0.0;

@@ -76,7 +76,7 @@ static const struct debug_named_value debug_options[] = {
 		{"flush",     FD_DBG_FLUSH,  "Force flush after every draw"},
 		{"deqp",      FD_DBG_DEQP,   "Enable dEQP hacks"},
 		{"nir",       FD_DBG_NIR,    "Prefer NIR as native IR"},
-		{"reorder",   FD_DBG_REORDER,"Enable reordering for draws/blits"},
+		{"inorder",   FD_DBG_INORDER,"Disable reordering for draws/blits"},
 		{"bstat",     FD_DBG_BSTAT,  "Print batch stats at context destroy"},
 		{"nogrow",    FD_DBG_NOGROW, "Disable \"growable\" cmdstream buffers, even if kernel supports it"},
 		DEBUG_NAMED_VALUE_END
@@ -303,6 +303,10 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_INT64_DIVMOD:
 	case PIPE_CAP_TGSI_TEX_TXF_LZ:
 	case PIPE_CAP_TGSI_CLOCK:
+	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
+	case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
+	case PIPE_CAP_TGSI_BALLOT:
+	case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -516,6 +520,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
 		return 0;
 	}
 	debug_printf("unknown shader param %d\n", param);
@@ -704,7 +709,7 @@ fd_screen_create(struct fd_device *dev)
 	 * buffers would be too much otherwise.
 	 */
 	if ((screen->gpu_id >= 300) && (fd_device_version(dev) >= FD_VERSION_UNLIMITED_CMDS))
-		screen->reorder = !!(fd_mesa_debug & FD_DBG_REORDER);
+		screen->reorder = !(fd_mesa_debug & FD_DBG_INORDER);
 
 	fd_bc_init(&screen->batch_cache);
 

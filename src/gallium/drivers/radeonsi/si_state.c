@@ -796,6 +796,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	rs->uses_poly_offset = state->offset_point || state->offset_line ||
 			       state->offset_tri;
 	rs->clamp_fragment_color = state->clamp_fragment_color;
+	rs->clamp_vertex_color = state->clamp_vertex_color;
 	rs->flatshade = state->flatshade;
 	rs->sprite_coord_enable = state->sprite_coord_enable;
 	rs->rasterizer_discard = state->rasterizer_discard;
@@ -862,8 +863,6 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 				   state->fill_back != PIPE_POLYGON_MODE_FILL) |
 		S_028814_POLYMODE_FRONT_PTYPE(si_translate_fill(state->fill_front)) |
 		S_028814_POLYMODE_BACK_PTYPE(si_translate_fill(state->fill_back)));
-	si_pm4_set_reg(pm4, R_00B130_SPI_SHADER_USER_DATA_VS_0 +
-		       SI_SGPR_VS_STATE_BITS * 4, state->clamp_vertex_color);
 
 	/* Precalculate polygon offset states for 16-bit, 24-bit, and 32-bit zbuffers. */
 	for (i = 0; i < 3; i++) {
@@ -925,6 +924,9 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 		    sctx->framebuffer.nr_samples > 1)
 			si_mark_atom_dirty(sctx, &sctx->msaa_sample_locs.atom);
 	}
+
+	sctx->current_vs_state &= C_VS_STATE_CLAMP_VERTEX_COLOR;
+	sctx->current_vs_state |= S_VS_STATE_CLAMP_VERTEX_COLOR(rs->clamp_vertex_color);
 
 	r600_viewport_set_rast_deps(&sctx->b, rs->scissor_enable, rs->clip_halfz);
 
@@ -2974,7 +2976,40 @@ si_make_buffer_descriptor(struct si_screen *screen, struct r600_resource *buf,
 	num_records = size / stride;
 	num_records = MIN2(num_records, (buf->b.b.width0 - offset) / stride);
 
-	if (screen->b.chip_class == VI)
+	/* The NUM_RECORDS field has a different meaning depending on the chip,
+	 * instruction type, STRIDE, and SWIZZLE_ENABLE.
+	 *
+	 * SI-CIK:
+	 * - If STRIDE == 0, it's in byte units.
+	 * - If STRIDE != 0, it's in units of STRIDE, used with inst.IDXEN.
+	 *
+	 * VI:
+	 * - For SMEM and STRIDE == 0, it's in byte units.
+	 * - For SMEM and STRIDE != 0, it's in units of STRIDE.
+	 * - For VMEM and STRIDE == 0 or SWIZZLE_ENABLE == 0, it's in byte units.
+	 * - For VMEM and STRIDE != 0 and SWIZZLE_ENABLE == 1, it's in units of STRIDE.
+	 * NOTE: There is incompatibility between VMEM and SMEM opcodes due to SWIZZLE_-
+	 *       ENABLE. The workaround is to set STRIDE = 0 if SWIZZLE_ENABLE == 0 when
+	 *       using SMEM. This can be done in the shader by clearing STRIDE with s_and.
+	 *       That way the same descriptor can be used by both SMEM and VMEM.
+	 *
+	 * GFX9:
+	 * - For SMEM and STRIDE == 0, it's in byte units.
+	 * - For SMEM and STRIDE != 0, it's in units of STRIDE.
+	 * - For VMEM and inst.IDXEN == 0 or STRIDE == 0, it's in byte units.
+	 * - For VMEM and inst.IDXEN == 1 and STRIDE != 0, it's in units of STRIDE.
+	 */
+	if (screen->b.chip_class >= GFX9)
+		/* When vindex == 0, LLVM sets IDXEN = 0, thus changing units
+		 * from STRIDE to bytes. This works around it by setting
+		 * NUM_RECORDS to at least the size of one element, so that
+		 * the first element is readable when IDXEN == 0.
+		 *
+		 * TODO: Fix this in LLVM, but do we need a new intrinsic where
+		 *       IDXEN is enforced?
+		 */
+		num_records = num_records ? MAX2(num_records, stride) : 0;
+	else if (screen->b.chip_class == VI)
 		num_records *= stride;
 
 	state[4] = 0;
@@ -3154,7 +3189,8 @@ si_make_texture_descriptor(struct si_screen *screen,
 	if (!sampler &&
 	    (res->target == PIPE_TEXTURE_CUBE ||
 	     res->target == PIPE_TEXTURE_CUBE_ARRAY ||
-	     res->target == PIPE_TEXTURE_3D)) {
+	     (screen->b.chip_class <= VI &&
+	      res->target == PIPE_TEXTURE_3D))) {
 		/* For the purpose of shader images, treat cube maps and 3D
 		 * textures as 2D arrays. For 3D textures, the address
 		 * calculations for mipmaps are different, so we rely on the
@@ -3254,7 +3290,7 @@ si_make_texture_descriptor(struct si_screen *screen,
 				num_format = V_008F14_IMG_FMASK_32_8_8;
 				break;
 			default:
-				assert(0);
+				unreachable("invalid nr_samples");
 			}
 		} else {
 			switch (res->nr_samples) {
@@ -3268,7 +3304,7 @@ si_make_texture_descriptor(struct si_screen *screen,
 				data_format = V_008F14_IMG_DATA_FORMAT_FMASK32_S8_F8;
 				break;
 			default:
-				assert(0);
+				unreachable("invalid nr_samples");
 			}
 			num_format = V_008F14_IMG_NUM_FORMAT_UINT;
 		}
@@ -4295,14 +4331,17 @@ static void si_init_config(struct si_context *sctx)
 	si_pm4_set_reg(pm4, R_028A1C_VGT_HOS_MIN_TESS_LEVEL, fui(0));
 
 	/* FIXME calculate these values somehow ??? */
-	si_pm4_set_reg(pm4, R_028A54_VGT_GS_PER_ES, SI_GS_PER_ES);
-	si_pm4_set_reg(pm4, R_028A58_VGT_ES_PER_GS, 0x40);
+	if (sctx->b.chip_class <= VI) {
+		si_pm4_set_reg(pm4, R_028A54_VGT_GS_PER_ES, SI_GS_PER_ES);
+		si_pm4_set_reg(pm4, R_028A58_VGT_ES_PER_GS, 0x40);
+	}
 	si_pm4_set_reg(pm4, R_028A5C_VGT_GS_PER_VS, 0x2);
 
 	si_pm4_set_reg(pm4, R_028A8C_VGT_PRIMITIVEID_RESET, 0x0);
 	si_pm4_set_reg(pm4, R_028B28_VGT_STRMOUT_DRAW_OPAQUE_OFFSET, 0);
 
 	si_pm4_set_reg(pm4, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0);
+	si_pm4_set_reg(pm4, R_028AA0_VGT_INSTANCE_STEP_RATE_0, 1);
 	si_pm4_set_reg(pm4, R_028AB8_VGT_VTX_CNT_EN, 0x0);
 	if (sctx->b.chip_class < CIK)
 		si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, S_008A14_NUM_CLIP_SEQ(3) |
@@ -4446,20 +4485,20 @@ static void si_init_config(struct si_context *sctx)
 	}
 
 	if (sctx->b.chip_class >= CIK) {
-		/* If this is 0, Bonaire can hang even if GS isn't being used.
-		 * Other chips are unaffected. These are suboptimal values,
-		 * but we don't use on-chip GS.
-		 */
-		si_pm4_set_reg(pm4, R_028A44_VGT_GS_ONCHIP_CNTL,
-			       S_028A44_ES_VERTS_PER_SUBGRP(64) |
-			       S_028A44_GS_PRIMS_PER_SUBGRP(4));
-
 		if (sctx->b.chip_class >= GFX9) {
 			si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS, S_00B41C_CU_EN(0xffff));
 		} else {
 			si_pm4_set_reg(pm4, R_00B51C_SPI_SHADER_PGM_RSRC3_LS, S_00B51C_CU_EN(0xffff));
 			si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS, 0);
 			si_pm4_set_reg(pm4, R_00B31C_SPI_SHADER_PGM_RSRC3_ES, S_00B31C_CU_EN(0xffff));
+
+			/* If this is 0, Bonaire can hang even if GS isn't being used.
+			 * Other chips are unaffected. These are suboptimal values,
+			 * but we don't use on-chip GS.
+			 */
+			si_pm4_set_reg(pm4, R_028A44_VGT_GS_ONCHIP_CNTL,
+				       S_028A44_ES_VERTS_PER_SUBGRP(64) |
+				       S_028A44_GS_PRIMS_PER_SUBGRP(4));
 		}
 		si_pm4_set_reg(pm4, R_00B21C_SPI_SHADER_PGM_RSRC3_GS, S_00B21C_CU_EN(0xffff));
 

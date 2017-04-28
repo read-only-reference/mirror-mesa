@@ -45,6 +45,9 @@
 
 #include "state_tracker/drm_driver.h"
 
+#define ETNA_DRM_VERSION(major, minor) ((major) << 16 | (minor))
+#define ETNA_DRM_VERSION_FENCE_FD      ETNA_DRM_VERSION(1, 1)
+
 static const struct debug_named_value debug_options[] = {
    {"dbg_msgs",       ETNA_DBG_MSGS, "Print debug messages"},
    {"frame_msgs",     ETNA_DBG_FRAME_MSGS, "Print frame messages"},
@@ -137,6 +140,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TEXCOORD:
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
       return 1;
+   case PIPE_CAP_NATIVE_FENCE_FD:
+      return screen->drm_version >= ETNA_DRM_VERSION_FENCE_FD;
 
    /* Memory */
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -237,7 +242,6 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
-   case PIPE_CAP_NATIVE_FENCE_FD:
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_TGSI_FS_FBFETCH:
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
@@ -246,6 +250,10 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
    case PIPE_CAP_TGSI_CLOCK:
+   case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
+   case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
+   case PIPE_CAP_TGSI_BALLOT:
+   case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
       return 0;
 
    /* Stream output. */
@@ -430,6 +438,7 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       return 0;
    }
 
@@ -473,11 +482,8 @@ etna_screen_is_format_supported(struct pipe_screen *pscreen,
       return FALSE;
 
    if (usage & PIPE_BIND_RENDER_TARGET) {
-      /* If render target, must be RS-supported format that is not rb swapped.
-       * Exposing rb swapped (or other swizzled) formats for rendering would
-       * involve swizzing in the pixel shader.
-       */
-      if (translate_rs_format(format) != ETNA_NO_MATCH && !translate_rs_format_rb_swap(format)) {
+      /* if render target, must be RS-supported format */
+      if (translate_rs_format(format) != ETNA_NO_MATCH) {
          /* Validate MSAA; number of samples must be allowed, and render target
           * must have MSAA'able format. */
          if (sample_count > 1) {
@@ -674,6 +680,10 @@ etna_get_specs(struct etna_screen *screen)
    screen->specs.max_rendertarget_size =
       VIV_FEATURE(screen, chipMinorFeatures0, RENDERTARGET_8K) ? 8192 : 2048;
 
+   screen->specs.single_buffer = VIV_FEATURE(screen, chipMinorFeatures4, SINGLE_BUFFER);
+   if (screen->specs.single_buffer)
+      DBG("etnaviv: Single buffer mode enabled with %d pixel pipes\n", screen->specs.pixel_pipes);
+
    return true;
 
 fail:
@@ -731,6 +741,7 @@ etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
 {
    struct etna_screen *screen = CALLOC_STRUCT(etna_screen);
    struct pipe_screen *pscreen;
+   drmVersionPtr version;
    uint64_t val;
 
    if (!screen)
@@ -746,10 +757,15 @@ etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
       goto fail;
    }
 
+   version = drmGetVersion(screen->ro->gpu_fd);
+   screen->drm_version = ETNA_DRM_VERSION(version->version_major,
+                                          version->version_minor);
+   drmFreeVersion(version);
+
    etna_mesa_debug = debug_get_option_etna_mesa_debug();
 
-   /* FIXME: Disable tile status for stability at the moment */
-   etna_mesa_debug |= ETNA_DBG_NO_TS;
+   /* Disable autodisable for correct rendering with TS */
+   etna_mesa_debug |= ETNA_DBG_NO_AUTODISABLE;
 
    screen->pipe = etna_pipe_new(gpu, ETNA_PIPE_3D);
    if (!screen->pipe) {
@@ -798,6 +814,18 @@ etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
       goto fail;
    }
    screen->features[4] = val;
+
+   if (etna_gpu_get_param(screen->gpu, ETNA_GPU_FEATURES_5, &val)) {
+      DBG("could not get ETNA_GPU_FEATURES_5");
+      goto fail;
+   }
+   screen->features[5] = val;
+
+   if (etna_gpu_get_param(screen->gpu, ETNA_GPU_FEATURES_6, &val)) {
+      DBG("could not get ETNA_GPU_FEATURES_6");
+      goto fail;
+   }
+   screen->features[6] = val;
 
    if (!etna_get_specs(screen))
       goto fail;

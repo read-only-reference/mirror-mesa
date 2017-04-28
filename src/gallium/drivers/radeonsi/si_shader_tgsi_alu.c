@@ -501,7 +501,7 @@ static void emit_bfe(const struct lp_build_tgsi_action *action,
 		     struct lp_build_emit_data *emit_data)
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
-	struct gallivm_state *gallivm = bld_base->base.gallivm;
+	struct gallivm_state *gallivm = &ctx->gallivm;
 	LLVMBuilderRef builder = gallivm->builder;
 	LLVMValueRef bfe_sm5;
 	LLVMValueRef cond;
@@ -512,7 +512,7 @@ static void emit_bfe(const struct lp_build_tgsi_action *action,
 
 	/* Correct for GLSL semantics. */
 	cond = LLVMBuildICmp(builder, LLVMIntUGE, emit_data->args[2],
-			     lp_build_const_int32(gallivm, 32), "");
+			     LLVMConstInt(ctx->i32, 32, 0), "");
 	emit_data->output[emit_data->chan] =
 		LLVMBuildSelect(builder, cond, emit_data->args[0], bfe_sm5, "");
 }
@@ -697,7 +697,7 @@ static void emit_fdiv(const struct lp_build_tgsi_action *action,
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 
 	emit_data->output[emit_data->chan] =
-		LLVMBuildFDiv(bld_base->base.gallivm->builder,
+		LLVMBuildFDiv(ctx->gallivm.builder,
 			      emit_data->args[0], emit_data->args[1], "");
 
 	/* Use v_rcp_f32 instead of precise division. */

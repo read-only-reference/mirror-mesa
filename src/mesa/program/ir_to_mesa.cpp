@@ -1069,8 +1069,10 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       emit_scalar(ir, OPCODE_EX2, result_dst, op[0]);
       break;
    case ir_unop_exp:
+      assert(!"not reached: should be handled by exp_to_exp2");
+      break;
    case ir_unop_log:
-      assert(!"not reached: should be handled by ir_explog_to_explog2");
+      assert(!"not reached: should be handled by log_to_log2");
       break;
    case ir_unop_log2:
       emit_scalar(ir, OPCODE_LG2, result_dst, op[0]);
@@ -1387,9 +1389,6 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
    case ir_unop_dFdy_fine:
    case ir_unop_subroutine_to_int:
    case ir_unop_get_buffer_size:
-   case ir_unop_vote_any:
-   case ir_unop_vote_all:
-   case ir_unop_vote_eq:
    case ir_unop_bitcast_u642d:
    case ir_unop_bitcast_i642d:
    case ir_unop_bitcast_d2u64:
@@ -1898,7 +1897,7 @@ ir_to_mesa_visitor::visit(ir_constant *ir)
     * get lucky, copy propagation will eliminate the extra moves.
     */
 
-   if (ir->type->base_type == GLSL_TYPE_STRUCT) {
+   if (ir->type->is_record()) {
       src_reg temp_base = get_temp(ir->type);
       dst_reg temp = dst_reg(temp_base);
 
@@ -1947,7 +1946,7 @@ ir_to_mesa_visitor::visit(ir_constant *ir)
       dst_reg mat_column = dst_reg(mat);
 
       for (i = 0; i < ir->type->matrix_columns; i++) {
-	 assert(ir->type->base_type == GLSL_TYPE_FLOAT);
+	 assert(ir->type->is_float());
 	 values = &ir->value.f[i * ir->type->vector_elements];
 
 	 src = src_reg(PROGRAM_CONSTANT, -1, NULL);
@@ -3112,6 +3111,11 @@ _mesa_glsl_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
    if (prog->data->LinkStatus) {
+      /* Reset sampler validated to true, validation happens via the
+       * LinkShader call below.
+       */
+      prog->SamplersValidated = GL_TRUE;
+
       if (!ctx->Driver.LinkShader(ctx, prog)) {
          prog->data->LinkStatus = linking_failure;
       }

@@ -29,6 +29,7 @@
 #include "radeon/r600_pipe_common.h"
 #include "radeon/r600_cs.h"
 #include "r600_public.h"
+#include "pipe/p_defines.h"
 
 #include "util/u_suballoc.h"
 #include "util/list.h"
@@ -188,6 +189,7 @@ struct r600_framebuffer {
 	bool cb0_is_integer;
 	bool is_msaa_resolve;
 	bool dual_src_blend;
+	bool do_update_surf_dirtiness;
 };
 
 struct r600_sample_mask {
@@ -278,6 +280,7 @@ struct r600_rasterizer_state {
 	bool				scissor_enable;
 	bool				multisample_enable;
 	bool				clip_halfz;
+	bool				rasterizer_discard;
 };
 
 struct r600_poly_offset_state {
@@ -318,13 +321,12 @@ struct r600_pipe_shader_selector {
 
 	unsigned	num_shaders;
 
-	/* PIPE_SHADER_[VERTEX|FRAGMENT|...] */
-	unsigned	type;
+	enum pipe_shader_type	type;
 
 	/* geometry shader properties */
-	unsigned	gs_output_prim;
-	unsigned	gs_max_out_vertices;
-	unsigned	gs_num_invocations;
+	enum pipe_prim_type	gs_output_prim;
+	unsigned		gs_max_out_vertices;
+	unsigned		gs_num_invocations;
 
 	/* TCS/VS */
 	uint64_t        lds_patch_outputs_written_mask;
@@ -511,8 +513,10 @@ struct r600_context {
 	struct pipe_index_buffer	index_buffer;
 
 	/* Last draw state (-1 = unset). */
-	int				last_primitive_type; /* Last primitive type used in draw_vbo. */
-	int				last_start_instance;
+	enum pipe_prim_type		last_primitive_type; /* Last primitive type used in draw_vbo. */
+	enum pipe_prim_type		current_rast_prim; /* primitive type after TES, GS */
+	enum pipe_prim_type		last_rast_prim;
+	unsigned			last_start_instance;
 
 	void				*sb_context;
 	struct r600_isa		*isa;

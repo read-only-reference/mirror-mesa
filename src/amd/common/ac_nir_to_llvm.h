@@ -29,7 +29,7 @@
 #include "llvm-c/TargetMachine.h"
 #include "amd_family.h"
 #include "../vulkan/radv_descriptor_set.h"
-
+#include "ac_shader_info.h"
 #include "shader_enums.h"
 struct ac_shader_binary;
 struct ac_shader_config;
@@ -83,12 +83,13 @@ struct ac_userdata_info {
 enum ac_ud_index {
 	AC_UD_SCRATCH_RING_OFFSETS = 0,
 	AC_UD_PUSH_CONSTANTS = 1,
-	AC_UD_SHADER_START = 2,
+	AC_UD_INDIRECT_DESCRIPTOR_SETS = 2,
+	AC_UD_SHADER_START = 3,
 	AC_UD_VS_VERTEX_BUFFERS = AC_UD_SHADER_START,
 	AC_UD_VS_BASE_VERTEX_START_INSTANCE,
 	AC_UD_VS_LS_TCS_IN_LAYOUT,
 	AC_UD_VS_MAX_UD,
-	AC_UD_PS_SAMPLE_POS = AC_UD_SHADER_START,
+	AC_UD_PS_SAMPLE_POS_OFFSET = AC_UD_SHADER_START,
 	AC_UD_PS_MAX_UD,
 	AC_UD_CS_GRID_SIZE = AC_UD_SHADER_START,
 	AC_UD_CS_MAX_UD,
@@ -109,6 +110,7 @@ enum ac_ud_index {
 #define RING_GSVS_GS 4
 #define RING_HS_TESS_FACTOR 5
 #define RING_HS_TESS_OFFCHIP 6
+#define RING_PS_SAMPLE_POSITIONS 7
 
 // Match MAX_SETS from radv_descriptor_set.h
 #define AC_UD_MAX_SETS MAX_SETS
@@ -119,15 +121,14 @@ struct ac_userdata_locations {
 };
 
 struct ac_vs_output_info {
+	uint8_t	vs_output_param_offset[VARYING_SLOT_MAX];
 	uint8_t clip_dist_mask;
 	uint8_t cull_dist_mask;
+	uint8_t param_exports;
 	bool writes_pointsize;
 	bool writes_layer;
 	bool writes_viewport_index;
-	uint32_t prim_id_output;
-	uint32_t layer_output;
 	uint32_t export_mask;
-	unsigned param_exports;
 	unsigned pos_exports;
 };
 
@@ -137,10 +138,11 @@ struct ac_es_output_info {
 
 struct ac_shader_variant_info {
 	struct ac_userdata_locations user_sgprs_locs;
+	struct ac_shader_info info;
 	unsigned num_user_sgprs;
 	unsigned num_input_sgprs;
 	unsigned num_input_vgprs;
-
+	bool need_indirect_descriptor_sets;
 	union {
 		struct {
 			struct ac_vs_output_info outinfo;

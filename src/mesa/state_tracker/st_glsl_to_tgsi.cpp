@@ -346,8 +346,8 @@ public:
    int type; /**< GL_DOUBLE, GL_FLOAT, GL_INT, GL_BOOL, or GL_UNSIGNED_INT */
 };
 
-static st_src_reg undef_src = st_src_reg(PROGRAM_UNDEFINED, 0, GLSL_TYPE_ERROR);
-static st_dst_reg undef_dst = st_dst_reg(PROGRAM_UNDEFINED, SWIZZLE_NOOP, GLSL_TYPE_ERROR);
+static const st_src_reg undef_src = st_src_reg(PROGRAM_UNDEFINED, 0, GLSL_TYPE_ERROR);
+static const st_dst_reg undef_dst = st_dst_reg(PROGRAM_UNDEFINED, SWIZZLE_NOOP, GLSL_TYPE_ERROR);
 
 struct inout_decl {
    unsigned mesa_index;
@@ -484,6 +484,7 @@ public:
    void visit_membar_intrinsic(ir_call *);
    void visit_shared_intrinsic(ir_call *);
    void visit_image_intrinsic(ir_call *);
+   void visit_generic_intrinsic(ir_call *, unsigned op);
 
    st_src_reg result;
 
@@ -1661,8 +1662,10 @@ glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
       emit_scalar(ir, TGSI_OPCODE_EX2, result_dst, op[0]);
       break;
    case ir_unop_exp:
+      assert(!"not reached: should be handled by exp_to_exp2");
+      break;
    case ir_unop_log:
-      assert(!"not reached: should be handled by ir_explog_to_explog2");
+      assert(!"not reached: should be handled by log_to_log2");
       break;
    case ir_unop_log2:
       emit_scalar(ir, TGSI_OPCODE_LG2, result_dst, op[0]);
@@ -2223,7 +2226,7 @@ glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
                                        const_offset % 16 / 4,
                                        const_offset % 16 / 4);
 
-      if (ir->type->base_type == GLSL_TYPE_BOOL) {
+      if (ir->type->is_boolean()) {
          emit_asm(ir, TGSI_OPCODE_USNE, result_dst, cbuf, st_src_reg_for_int(0));
       } else {
          emit_asm(ir, TGSI_OPCODE_MOV, result_dst, cbuf);
@@ -2328,7 +2331,7 @@ glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
       break;
 
    case ir_binop_ldexp:
-      if (ir->operands[0]->type->base_type == GLSL_TYPE_DOUBLE) {
+      if (ir->operands[0]->type->is_double()) {
          emit_asm(ir, TGSI_OPCODE_DLDEXP, result_dst, op[0], op[1]);
       } else {
          assert(!"Invalid ldexp for non-double opcode in glsl_to_tgsi_visitor::visit()");
@@ -2358,15 +2361,6 @@ glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
       break;
    }
 
-   case ir_unop_vote_any:
-      emit_asm(ir, TGSI_OPCODE_VOTE_ANY, result_dst, op[0]);
-      break;
-   case ir_unop_vote_all:
-      emit_asm(ir, TGSI_OPCODE_VOTE_ALL, result_dst, op[0]);
-      break;
-   case ir_unop_vote_eq:
-      emit_asm(ir, TGSI_OPCODE_VOTE_EQ, result_dst, op[0]);
-      break;
    case ir_unop_u2i64:
    case ir_unop_u2u64:
    case ir_unop_b2i64: {
@@ -3080,7 +3074,7 @@ glsl_to_tgsi_visitor::emit_block_mov(ir_assignment *ir, const struct glsl_type *
                                      st_dst_reg *l, st_src_reg *r,
                                      st_src_reg *cond, bool cond_swap)
 {
-   if (type->base_type == GLSL_TYPE_STRUCT) {
+   if (type->is_record()) {
       for (unsigned int i = 0; i < type->length; i++) {
          emit_block_mov(ir, type->fields.structure[i].type, l, r,
                         cond, cond_swap);
@@ -3253,7 +3247,7 @@ glsl_to_tgsi_visitor::visit(ir_constant *ir)
     * aggregate constant and move each constant value into it.  If we
     * get lucky, copy propagation will eliminate the extra moves.
     */
-   if (ir->type->base_type == GLSL_TYPE_STRUCT) {
+   if (ir->type->is_record()) {
       st_src_reg temp_base = get_temp(ir->type);
       st_dst_reg temp = st_dst_reg(temp_base);
 
@@ -3903,6 +3897,28 @@ glsl_to_tgsi_visitor::visit_image_intrinsic(ir_call *ir)
 }
 
 void
+glsl_to_tgsi_visitor::visit_generic_intrinsic(ir_call *ir, unsigned op)
+{
+   ir->return_deref->accept(this);
+   st_dst_reg dst = st_dst_reg(this->result);
+
+   st_src_reg src[4] = { undef_src, undef_src, undef_src, undef_src };
+   unsigned num_src = 0;
+   foreach_in_list(ir_rvalue, param, &ir->actual_parameters) {
+      assert(num_src < ARRAY_SIZE(src));
+
+      this->result.file = PROGRAM_UNDEFINED;
+      param->accept(this);
+      assert(this->result.file != PROGRAM_UNDEFINED);
+
+      src[num_src] = this->result;
+      num_src++;
+   }
+
+   emit_asm(ir, op, dst, src[0], src[1], src[2], src[3]);
+}
+
+void
 glsl_to_tgsi_visitor::visit(ir_call *ir)
 {
    ir_function_signature *sig = ir->callee;
@@ -3973,15 +3989,28 @@ glsl_to_tgsi_visitor::visit(ir_call *ir)
       visit_image_intrinsic(ir);
       return;
 
-   case ir_intrinsic_shader_clock: {
-      ir->return_deref->accept(this);
-
-      st_dst_reg dst = st_dst_reg(this->result);
-      dst.writemask = TGSI_WRITEMASK_XY;
-
-      emit_asm(ir, TGSI_OPCODE_CLOCK, dst);
+   case ir_intrinsic_shader_clock:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_CLOCK);
       return;
-   }
+
+   case ir_intrinsic_vote_all:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_VOTE_ALL);
+      return;
+   case ir_intrinsic_vote_any:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_VOTE_ANY);
+      return;
+   case ir_intrinsic_vote_eq:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_VOTE_EQ);
+      return;
+   case ir_intrinsic_ballot:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_BALLOT);
+      return;
+   case ir_intrinsic_read_first_invocation:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_READ_FIRST);
+      return;
+   case ir_intrinsic_read_invocation:
+      visit_generic_intrinsic(ir, TGSI_OPCODE_READ_INVOC);
+      return;
 
    case ir_intrinsic_invalid:
    case ir_intrinsic_generic_load:
@@ -4235,7 +4264,7 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
       component = this->result;
       if (ir->offset) {
          ir->offset->accept(this);
-         if (ir->offset->type->base_type == GLSL_TYPE_ARRAY) {
+         if (ir->offset->type->is_array()) {
             const glsl_type *elt_type = ir->offset->type->fields.array;
             for (i = 0; i < ir->offset->type->length; i++) {
                offset[i] = this->result;
@@ -5438,6 +5467,22 @@ _mesa_sysval_to_semantic(unsigned sysval)
    case SYSTEM_VALUE_LOCAL_GROUP_SIZE:
       return TGSI_SEMANTIC_BLOCK_SIZE;
 
+   /* ARB_shader_ballot */
+   case SYSTEM_VALUE_SUBGROUP_SIZE:
+      return TGSI_SEMANTIC_SUBGROUP_SIZE;
+   case SYSTEM_VALUE_SUBGROUP_INVOCATION:
+      return TGSI_SEMANTIC_SUBGROUP_INVOCATION;
+   case SYSTEM_VALUE_SUBGROUP_EQ_MASK:
+      return TGSI_SEMANTIC_SUBGROUP_EQ_MASK;
+   case SYSTEM_VALUE_SUBGROUP_GE_MASK:
+      return TGSI_SEMANTIC_SUBGROUP_GE_MASK;
+   case SYSTEM_VALUE_SUBGROUP_GT_MASK:
+      return TGSI_SEMANTIC_SUBGROUP_GT_MASK;
+   case SYSTEM_VALUE_SUBGROUP_LE_MASK:
+      return TGSI_SEMANTIC_SUBGROUP_LE_MASK;
+   case SYSTEM_VALUE_SUBGROUP_LT_MASK:
+      return TGSI_SEMANTIC_SUBGROUP_LT_MASK;
+
    /* Unhandled */
    case SYSTEM_VALUE_LOCAL_INVOCATION_INDEX:
    case SYSTEM_VALUE_GLOBAL_INVOCATION_ID:
@@ -6612,6 +6657,7 @@ get_mesa_program_tgsi(struct gl_context *ctx,
          &ctx->Const.ShaderCompilerOptions[shader->Stage];
    struct pipe_screen *pscreen = ctx->st->pipe->screen;
    enum pipe_shader_type ptarget = st_shader_stage_to_ptarget(shader->Stage);
+   unsigned skip_merge_registers;
 
    validate_ir_tree(shader->ir);
 
@@ -6633,6 +6679,9 @@ get_mesa_program_tgsi(struct gl_context *ctx,
                                            PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED);
    v->has_tex_txf_lz = pscreen->get_param(pscreen,
                                           PIPE_CAP_TGSI_TEX_TXF_LZ);
+   skip_merge_registers =
+      pscreen->get_shader_param(pscreen, ptarget,
+                                PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS);
 
    _mesa_generate_parameters_list_for_uniforms(shader_program, shader,
                                                prog->Parameters);
@@ -6685,7 +6734,8 @@ get_mesa_program_tgsi(struct gl_context *ctx,
    while (v->eliminate_dead_code());
 
    v->merge_two_dsts();
-   v->merge_registers();
+   if (!skip_merge_registers)
+      v->merge_registers();
    v->renumber_registers();
 
    /* Write the END instruction. */

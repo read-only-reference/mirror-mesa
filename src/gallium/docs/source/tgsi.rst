@@ -1204,13 +1204,13 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
 
 .. math::
 
-  dst.x = src0.x \ src1.x
+  dst.x = \frac{src0.x}{src1.x}
 
-  dst.y = src0.y \ src1.y
+  dst.y = \frac{src0.y}{src1.y}
 
-  dst.z = src0.z \ src1.z
+  dst.z = \frac{src0.z}{src1.z}
 
-  dst.w = src0.w \ src1.w
+  dst.w = \frac{src0.w}{src1.w}
 
 
 .. opcode:: UDIV - Unsigned Integer Division
@@ -1219,13 +1219,13 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
 
 .. math::
 
-  dst.x = src0.x \ src1.x
+  dst.x = \frac{src0.x}{src1.x}
 
-  dst.y = src0.y \ src1.y
+  dst.y = \frac{src0.y}{src1.y}
 
-  dst.z = src0.z \ src1.z
+  dst.z = \frac{src0.z}{src1.z}
 
-  dst.w = src0.w \ src1.w
+  dst.w = \frac{src0.w}{src1.w}
 
 
 .. opcode:: UMOD - Unsigned Integer Remainder
@@ -1234,13 +1234,13 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
 
 .. math::
 
-  dst.x = src0.x \ src1.x
+  dst.x = src0.x \bmod src1.x
 
-  dst.y = src0.y \ src1.y
+  dst.y = src0.y \bmod src1.y
 
-  dst.z = src0.z \ src1.z
+  dst.z = src0.z \bmod src1.z
 
-  dst.w = src0.w \ src1.w
+  dst.w = src0.w \bmod src1.w
 
 
 .. opcode:: NOT - Bitwise Not
@@ -2259,17 +2259,17 @@ two-component vectors with 64-bits in each component.
 
 .. math::
 
-  dst.xy = src0.xy \ src1.xy
+  dst.xy = \frac{src0.xy}{src1.xy}
 
-  dst.zw = src0.zw \ src1.zw
+  dst.zw = \frac{src0.zw}{src1.zw}
 
 .. opcode:: U64DIV - 64-bit Unsigned Integer Division
 
 .. math::
 
-  dst.xy = src0.xy \ src1.xy
+  dst.xy = \frac{src0.xy}{src1.xy}
 
-  dst.zw = src0.zw \ src1.zw
+  dst.zw = \frac{src0.zw}{src1.zw}
 
 .. opcode:: U64MOD - 64-bit Unsigned Integer Remainder
 
@@ -2553,6 +2553,8 @@ after lookup.
 Resource Access Opcodes
 ^^^^^^^^^^^^^^^^^^^^^^^
 
+For these opcodes, the resource can be a BUFFER, IMAGE, or MEMORY.
+
 .. opcode:: LOAD - Fetch data from a shader buffer or image
 
                Syntax: ``LOAD dst, resource, address``
@@ -2704,8 +2706,8 @@ These opcodes provide atomic variants of some common arithmetic and
 logical operations.  In this context atomicity means that another
 concurrent memory access operation that affects the same memory
 location is guaranteed to be performed strictly before or after the
-entire execution of the atomic operation. The resource may be a buffer
-or an image. In the case of an image, the offset works the same as for
+entire execution of the atomic operation. The resource may be a BUFFER,
+IMAGE, or MEMORY.  In the case of an image, the offset works the same as for
 ``LOAD`` and ``STORE``, specified above. These atomic operations may
 only be used with 32-bit integer image formats.
 
@@ -2859,22 +2861,68 @@ only be used with 32-bit integer image formats.
   resource[offset] = (dst_x > src_x ? dst_x : src_x)
 
 
-.. _voteopcodes:
+.. _interlaneopcodes:
 
-Vote opcodes
-^^^^^^^^^^^^
+Inter-lane opcodes
+^^^^^^^^^^^^^^^^^^
 
-These opcodes compare the given value across the shader invocations
-running in the current SIMD group. The details of exactly which
-invocations get compared are implementation-defined, and it would be a
-correct implementation to only ever consider the current thread's
-value. (i.e. SIMD group of 1). The argument is treated as a boolean.
+These opcodes reduce the given value across the shader invocations
+running in the current SIMD group. Every thread in the subgroup will receive
+the same result. The BALLOT operations accept a single-channel argument that
+is treated as a boolean and produce a 64-bit value.
 
-.. opcode:: VOTE_ANY - Value is set in any of the current invocations
+.. opcode:: VOTE_ANY - Value is set in any of the active invocations
 
-.. opcode:: VOTE_ALL - Value is set in all of the current invocations
+  Syntax: ``VOTE_ANY dst, value``
 
-.. opcode:: VOTE_EQ - Value is the same in all of the current invocations
+  Example: ``VOTE_ANY TEMP[0].x, TEMP[1].x``
+
+
+.. opcode:: VOTE_ALL - Value is set in all of the active invocations
+
+  Syntax: ``VOTE_ALL dst, value``
+
+  Example: ``VOTE_ALL TEMP[0].x, TEMP[1].x``
+
+
+.. opcode:: VOTE_EQ - Value is the same in all of the active invocations
+
+  Syntax: ``VOTE_EQ dst, value``
+
+  Example: ``VOTE_EQ TEMP[0].x, TEMP[1].x``
+
+
+.. opcode:: BALLOT - Lanemask of whether the value is set in each active
+            invocation
+
+  Syntax: ``BALLOT dst, value``
+
+  Example: ``BALLOT TEMP[0].xy, TEMP[1].x``
+
+  When the argument is a constant true, this produces a bitmask of active
+  invocations. In fragment shaders, this can include helper invocations
+  (invocations whose outputs and writes to memory are discarded, but which
+  are used to compute derivatives).
+
+
+.. opcode:: READ_FIRST - Broadcast the value from the first active
+            invocation to all active lanes
+
+  Syntax: ``READ_FIRST dst, value``
+
+  Example: ``READ_FIRST TEMP[0], TEMP[1]``
+
+
+.. opcode:: READ_INVOC - Retrieve the value from the given invocation
+            (need not be uniform)
+
+  Syntax: ``READ_INVOC dst, value, invocation``
+
+  Example: ``READ_INVOC TEMP[0].xy, TEMP[1].xy, TEMP[2].x``
+
+  invocation.x controls the invocation number to read from for all channels.
+  The invocation number must be the same across all active invocations in a
+  sub-group; otherwise, the results are undefined.
 
 
 Explanation of symbols used
@@ -3164,6 +3212,11 @@ For geometry shaders, this semantic label indicates that an output
 contains the index of the viewport (and scissor) to use.
 This is an integer value, and only the X component is used.
 
+If PIPE_CAP_TGSI_VS_LAYER_VIEWPORT or PIPE_CAP_TGSI_TES_LAYER_VIEWPORT is
+supported, then this semantic label can also be used in vertex or
+tessellation evaluation shaders, respectively. Only the value written in the
+last vertex processing stage is used.
+
 
 TGSI_SEMANTIC_LAYER
 """""""""""""""""""
@@ -3172,6 +3225,11 @@ For geometry shaders, this semantic label indicates that an output
 contains the layer value to use for the color and depth/stencil surfaces.
 This is an integer value, and only the X component is used.
 (Also known as rendertarget array index.)
+
+If PIPE_CAP_TGSI_VS_LAYER_VIEWPORT or PIPE_CAP_TGSI_TES_LAYER_VIEWPORT is
+supported, then this semantic label can also be used in vertex or
+tessellation evaluation shaders, respectively. Only the value written in the
+last vertex processing stage is used.
 
 
 TGSI_SEMANTIC_CULLDIST
@@ -3382,6 +3440,57 @@ TGSI_SEMANTIC_THREAD_ID
 
 For compute shaders, this semantic indicates the (x, y, z) coordinates of the
 current thread inside of the block.
+
+
+TGSI_SEMANTIC_SUBGROUP_SIZE
+"""""""""""""""""""""""""""
+
+This semantic indicates the subgroup size for the current invocation. This is
+an integer of at most 64, as it indicates the width of lanemasks. It does not
+depend on the number of invocations that are active.
+
+
+TGSI_SEMANTIC_SUBGROUP_INVOCATION
+"""""""""""""""""""""""""""""""""
+
+The index of the current invocation within its subgroup.
+
+
+TGSI_SEMANTIC_SUBGROUP_EQ_MASK
+""""""""""""""""""""""""""""""
+
+A bit mask of ``bit index == TGSI_SEMANTIC_SUBGROUP_INVOCATION``, i.e.
+``1 << subgroup_invocation`` in arbitrary precision arithmetic.
+
+
+TGSI_SEMANTIC_SUBGROUP_GE_MASK
+""""""""""""""""""""""""""""""
+
+A bit mask of ``bit index >= TGSI_SEMANTIC_SUBGROUP_INVOCATION``, i.e.
+``((1 << (subgroup_size - subgroup_invocation)) - 1) << subgroup_invocation``
+in arbitrary precision arithmetic.
+
+
+TGSI_SEMANTIC_SUBGROUP_GT_MASK
+""""""""""""""""""""""""""""""
+
+A bit mask of ``bit index > TGSI_SEMANTIC_SUBGROUP_INVOCATION``, i.e.
+``((1 << (subgroup_size - subgroup_invocation - 1)) - 1) << (subgroup_invocation + 1)``
+in arbitrary precision arithmetic.
+
+
+TGSI_SEMANTIC_SUBGROUP_LE_MASK
+""""""""""""""""""""""""""""""
+
+A bit mask of ``bit index <= TGSI_SEMANTIC_SUBGROUP_INVOCATION``, i.e.
+``(1 << (subgroup_invocation + 1)) - 1`` in arbitrary precision arithmetic.
+
+
+TGSI_SEMANTIC_SUBGROUP_LT_MASK
+""""""""""""""""""""""""""""""
+
+A bit mask of ``bit index > TGSI_SEMANTIC_SUBGROUP_INVOCATION``, i.e.
+``(1 << subgroup_invocation) - 1`` in arbitrary precision arithmetic.
 
 
 Declaration Interpolate

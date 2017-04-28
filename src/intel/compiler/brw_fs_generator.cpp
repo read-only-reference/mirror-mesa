@@ -53,13 +53,14 @@ brw_file_from_reg(fs_reg *reg)
 }
 
 static struct brw_reg
-brw_reg_from_fs_reg(fs_inst *inst, fs_reg *reg, unsigned gen, bool compressed)
+brw_reg_from_fs_reg(const struct gen_device_info *devinfo, fs_inst *inst,
+                    fs_reg *reg, bool compressed)
 {
    struct brw_reg brw_reg;
 
    switch (reg->file) {
    case MRF:
-      assert((reg->nr & ~BRW_MRF_COMPR4) < BRW_MAX_MRF(gen));
+      assert((reg->nr & ~BRW_MRF_COMPR4) < BRW_MAX_MRF(devinfo->gen));
       /* Fallthrough */
    case VGRF:
       if (reg->stride == 0) {
@@ -92,6 +93,48 @@ brw_reg_from_fs_reg(fs_inst *inst, fs_reg *reg, unsigned gen, bool compressed)
          const unsigned width = MIN2(reg_width, phys_width);
          brw_reg = brw_vecn_reg(width, brw_file_from_reg(reg), reg->nr, 0);
          brw_reg = stride(brw_reg, width * reg->stride, width, reg->stride);
+
+         if (devinfo->gen == 7 && !devinfo->is_haswell) {
+            /* From the IvyBridge PRM (EU Changes by Processor Generation, page 13):
+             *  "Each DF (Double Float) operand uses an element size of 4 rather
+             *   than 8 and all regioning parameters are twice what the values
+             *   would be based on the true element size: ExecSize, Width,
+             *   HorzStride, and VertStride. Each DF operand uses a pair of
+             *   channels and all masking and swizzing should be adjusted
+             *   appropriately."
+             *
+             * From the IvyBridge PRM (Special Requirements for Handling Double
+             * Precision Data Types, page 71):
+             *  "In Align1 mode, all regioning parameters like stride, execution
+             *   size, and width must use the syntax of a pair of packed
+             *   floats. The offsets for these data types must be 64-bit
+             *   aligned. The execution size and regioning parameters are in terms
+             *   of floats."
+             *
+             * Summarized: when handling DF-typed arguments, ExecSize,
+             * VertStride, and Width must be doubled.
+             *
+             * It applies to BayTrail too.
+             */
+            if (type_sz(reg->type) == 8) {
+               brw_reg.width++;
+               if (brw_reg.vstride > 0)
+                  brw_reg.vstride++;
+               assert(brw_reg.hstride == BRW_HORIZONTAL_STRIDE_1);
+            }
+
+            /* When converting from DF->F, we set the destination stride to 2
+             * because each d2f conversion implicitly writes 2 floats, being
+             * the first one the converted value. IVB/BYT actually writes two
+             * F components per SIMD channel, and every other component is
+             * filled with garbage.
+             */
+            if (reg == &inst->dst && get_exec_type_size(inst) == 8 &&
+                type_sz(inst->dst.type) < 8) {
+               assert(brw_reg.hstride > BRW_HORIZONTAL_STRIDE_1);
+               brw_reg.hstride--;
+            }
+         }
       }
 
       brw_reg = retype(brw_reg, reg->type);
@@ -112,6 +155,19 @@ brw_reg_from_fs_reg(fs_inst *inst, fs_reg *reg, unsigned gen, bool compressed)
    case ATTR:
    case UNIFORM:
       unreachable("not reached");
+   }
+
+   /* On HSW+, scalar DF sources can be accessed using the normal <0,1,0>
+    * region, but on IVB and BYT DF regions must be programmed in terms of
+    * floats. A <0,2,1> region accomplishes this.
+    */
+   if (devinfo->gen == 7 && !devinfo->is_haswell &&
+       type_sz(reg->type) == 8 &&
+       brw_reg.vstride == BRW_VERTICAL_STRIDE_0 &&
+       brw_reg.width == BRW_WIDTH_1 &&
+       brw_reg.hstride == BRW_HORIZONTAL_STRIDE_0) {
+      brw_reg.width = BRW_WIDTH_2;
+      brw_reg.hstride = BRW_HORIZONTAL_STRIDE_1;
    }
 
    return brw_reg;
@@ -386,7 +442,7 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
       brw_MOV(p, dst, reg);
    } else {
       /* Prior to Broadwell, there are only 8 address registers. */
-      assert(inst->exec_size == 8 || devinfo->gen >= 8);
+      assert(inst->exec_size <= 8 || devinfo->gen >= 8);
 
       /* We use VxH indirect addressing, clobbering a0.0 through a0.7. */
       struct brw_reg addr = vec8(brw_address_reg(0));
@@ -424,7 +480,30 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
        * code, using it saves us 0 instructions and would require quite a bit
        * of case-by-case work.  It's just not worth it.
        */
-      brw_ADD(p, addr, indirect_byte_offset, brw_imm_uw(imm_byte_offset));
+      if (devinfo->gen >= 8 || devinfo->is_haswell || type_sz(reg.type) < 8) {
+         brw_ADD(p, addr, indirect_byte_offset, brw_imm_uw(imm_byte_offset));
+      } else {
+         /* IVB reads two address register components per channel for
+          * indirectly addressed 64-bit sources, so we need to initialize
+          * adjacent address components to consecutive dwords of the source
+          * region by emitting two separate ADD instructions.  Found
+          * empirically.
+          */
+         assert(inst->exec_size <= 4);
+         brw_push_insn_state(p);
+         brw_set_default_exec_size(p, cvt(inst->exec_size) - 1);
+
+         brw_ADD(p, spread(addr, 2), indirect_byte_offset,
+                 brw_imm_uw(imm_byte_offset));
+         brw_inst_set_no_dd_clear(devinfo, brw_last_inst, true);
+
+         brw_ADD(p, spread(suboffset(addr, 1), 2), indirect_byte_offset,
+                 brw_imm_uw(imm_byte_offset + 4));
+         brw_inst_set_no_dd_check(devinfo, brw_last_inst, true);
+
+         brw_pop_insn_state(p);
+      }
+
       struct brw_reg ind_src = brw_VxH_indirect(0, 0);
 
       brw_inst *mov = brw_MOV(p, dst, retype(ind_src, reg.type));
@@ -1585,9 +1664,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       brw_set_default_group(p, inst->group);
 
       for (unsigned int i = 0; i < inst->sources; i++) {
-         src[i] = brw_reg_from_fs_reg(inst, &inst->src[i], devinfo->gen,
-                                      compressed);
-
+         src[i] = brw_reg_from_fs_reg(devinfo, inst,
+                                      &inst->src[i], compressed);
 	 /* The accumulator result appears to get used for the
 	  * conditional modifier generation.  When negating a UD
 	  * value, there is a 33rd bit generated for the sign in the
@@ -1598,7 +1676,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 		inst->src[i].type != BRW_REGISTER_TYPE_UD ||
 		!inst->src[i].negate);
       }
-      dst = brw_reg_from_fs_reg(inst, &inst->dst, devinfo->gen, compressed);
+      dst = brw_reg_from_fs_reg(devinfo, inst,
+                                &inst->dst, compressed);
 
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_predicate_control(p, inst->predicate);
@@ -1607,7 +1686,14 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       brw_set_default_saturate(p, inst->saturate);
       brw_set_default_mask_control(p, inst->force_writemask_all);
       brw_set_default_acc_write_control(p, inst->writes_accumulator);
-      brw_set_default_exec_size(p, cvt(inst->exec_size) - 1);
+
+      unsigned exec_size = inst->exec_size;
+      if (devinfo->gen == 7 && !devinfo->is_haswell &&
+          (get_exec_type_size(inst) == 8 || type_sz(inst->dst.type) == 8)) {
+         exec_size *= 2;
+      }
+
+      brw_set_default_exec_size(p, cvt(exec_size) - 1);
 
       assert(inst->force_writemask_all || inst->exec_size >= 4);
       assert(inst->force_writemask_all || inst->group % inst->exec_size == 0);

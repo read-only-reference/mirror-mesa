@@ -517,8 +517,8 @@
     <field name="Post-Blend Color Clamp Enable" start="32" end="32" type="bool"/>
   </struct>
 
-  <struct name="BLEND_STATE" length="16">
-    <group count="8" start="0" size="64">
+  <struct name="BLEND_STATE" length="0">
+    <group count="0" start="0" size="64">
       <field name="Entry" start="0" end="63" type="BLEND_STATE_ENTRY"/>
     </group>
   </struct>
@@ -810,6 +810,69 @@
     <field name="TCX Address Control Mode" start="102" end="104" type="uint"/>
     <field name="TCY Address Control Mode" start="99" end="101" type="uint"/>
     <field name="TCZ Address Control Mode" start="96" end="98" type="uint"/>
+  </struct>
+
+  <struct name="MI_MATH_ALU_INSTRUCTION" length="1">
+    <field name="ALU Opcode" start="20" end="31" type="uint" prefix="MI_ALU">
+      <value name="NOOP" value="0x000"/>
+      <value name="LOAD" value="0x080"/>
+      <value name="LOADINV" value="0x480"/>
+      <value name="LOAD0" value="0x081"/>
+      <value name="LOAD1" value="0x481"/>
+      <value name="ADD" value="0x100"/>
+      <value name="SUB" value="0x101"/>
+      <value name="AND" value="0x102"/>
+      <value name="OR" value="0x103"/>
+      <value name="XOR" value="0x104"/>
+      <value name="STORE" value="0x180"/>
+      <value name="STOREINV" value="0x580"/>
+    </field>
+    <field name="Operand 1" start="10" end="19" type="uint" prefix="MI_ALU">
+      <value name="REG0" value="0x00"/>
+      <value name="REG1" value="0x01"/>
+      <value name="REG2" value="0x02"/>
+      <value name="REG3" value="0x03"/>
+      <value name="REG4" value="0x04"/>
+      <value name="REG5" value="0x05"/>
+      <value name="REG6" value="0x06"/>
+      <value name="REG7" value="0x07"/>
+      <value name="REG8" value="0x08"/>
+      <value name="REG9" value="0x09"/>
+      <value name="REG10" value="0x0a"/>
+      <value name="REG11" value="0x0b"/>
+      <value name="REG12" value="0x0c"/>
+      <value name="REG13" value="0x0d"/>
+      <value name="REG14" value="0x0e"/>
+      <value name="REG15" value="0x0f"/>
+      <value name="SRCA" value="0x20"/>
+      <value name="SRCB" value="0x21"/>
+      <value name="ACCU" value="0x31"/>
+      <value name="ZF" value="0x32"/>
+      <value name="CF" value="0x33"/>
+    </field>
+    <field name="Operand 2" start="0" end="9" type="uint" prefix="MI_ALU">
+      <value name="REG0" value="0x00"/>
+      <value name="REG1" value="0x01"/>
+      <value name="REG2" value="0x02"/>
+      <value name="REG3" value="0x03"/>
+      <value name="REG4" value="0x04"/>
+      <value name="REG5" value="0x05"/>
+      <value name="REG6" value="0x06"/>
+      <value name="REG7" value="0x07"/>
+      <value name="REG8" value="0x08"/>
+      <value name="REG9" value="0x09"/>
+      <value name="REG10" value="0x0a"/>
+      <value name="REG11" value="0x0b"/>
+      <value name="REG12" value="0x0c"/>
+      <value name="REG13" value="0x0d"/>
+      <value name="REG14" value="0x0e"/>
+      <value name="REG15" value="0x0f"/>
+      <value name="SRCA" value="0x20"/>
+      <value name="SRCB" value="0x21"/>
+      <value name="ACCU" value="0x31"/>
+      <value name="ZF" value="0x32"/>
+      <value name="CF" value="0x33"/>
+    </field>
   </struct>
 
   <instruction name="3DPRIMITIVE" bias="2" length="7">
@@ -2594,10 +2657,8 @@
     <field name="Command Type" start="29" end="31" type="uint" default="0"/>
     <field name="MI Command Opcode" start="23" end="28" type="uint" default="26"/>
     <field name="DWord Length" start="0" end="5" type="uint" default="0"/>
-    <field name="ALU INSTRUCTION 1" start="32" end="63" type="uint"/>
-    <field name="ALU INSTRUCTION 2" start="64" end="95" type="uint"/>
-    <group count="0" start="96" size="32">
-      <field name="ALU INSTRUCTION n" start="0" end="31" type="uint"/>
+    <group count="0" start="32" size="32">
+      <field name="Instruction" start="0" end="31" type="MI_MATH_ALU_INSTRUCTION"/>
     </group>
   </instruction>
 
@@ -2954,6 +3015,77 @@
     <field name="CS Invocation Count Report" start="0" end="63" type="uint"/>
   </register>
 
+  <register name="BCS_INSTDONE" length="1" num="0x2206c">
+    <field name="Ring Enable" start="0" end="0" type="bool"/>
+    <field name="Blitter IDLE" start="1" end="1" type="bool" default="1"/>
+    <field name="GAB IDLE" start="2" end="2" type="bool" default="1"/>
+    <field name="BCS Done" start="3" end="3" type="bool" default="1"/>
+  </register>
+
+  <register name="INSTDONE_1" length="1" num="0x206c">
+    <field name="PRB0 Ring Enable" start="0" end="0" type="bool"/>
+    <field name="VFG Done" start="1" end="1" type="bool"/>
+    <field name="VS Done" start="2" end="2" type="bool"/>
+    <field name="HS Done" start="3" end="3" type="bool"/>
+    <field name="TE Done" start="4" end="4" type="bool"/>
+    <field name="DS Done" start="5" end="5" type="bool"/>
+    <field name="GS Done" start="6" end="6" type="bool"/>
+    <field name="SOL Done" start="7" end="7" type="bool"/>
+    <field name="CL Done" start="8" end="8" type="bool"/>
+    <field name="SF Done" start="9" end="9" type="bool"/>
+    <field name="TDG Done" start="12" end="12" type="bool"/>
+    <field name="URBM Done" start="13" end="13" type="bool"/>
+    <field name="SVG Done" start="14" end="14" type="bool"/>
+    <field name="GAFS Done" start="15" end="15" type="bool"/>
+    <field name="VFE Done" start="16" end="16" type="bool"/>
+    <field name="TSG Done" start="17" end="17" type="bool"/>
+    <field name="GAFM Done" start="18" end="18" type="bool"/>
+    <field name="GAM Done" start="19" end="19" type="bool"/>
+    <field name="SDE Done" start="22" end="22" type="bool"/>
+    <field name="RCCFBC CS Done" start="23" end="23" type="bool"/>
+  </register>
+
+  <register name="VCS_INSTDONE" length="1" num="0x1206c">
+    <field name="Ring Enable" start="0" end="0" type="bool"/>
+    <field name="USB Done" start="1" end="1" type="uint" default="1"/>
+    <field name="QRC Done" start="2" end="2" type="uint" default="1"/>
+    <field name="SEC Done" start="3" end="3" type="uint" default="1"/>
+    <field name="MPC Done" start="4" end="4" type="uint" default="1"/>
+    <field name="VFT Done" start="5" end="5" type="uint" default="1"/>
+    <field name="BSP Done" start="6" end="6" type="uint" default="1"/>
+    <field name="VLF Done" start="7" end="7" type="uint" default="1"/>
+    <field name="VOP Done" start="8" end="8" type="uint" default="1"/>
+    <field name="VMC Done" start="9" end="9" type="uint" default="1"/>
+    <field name="VIP Done" start="10" end="10" type="uint" default="1"/>
+    <field name="VIT Done" start="11" end="11" type="uint" default="1"/>
+    <field name="VDS Done" start="12" end="12" type="uint" default="1"/>
+    <field name="VMX Done" start="13" end="13" type="uint" default="1"/>
+    <field name="VCP Done" start="14" end="14" type="uint" default="1"/>
+    <field name="VCD Done" start="15" end="15" type="uint" default="1"/>
+    <field name="VAD Done" start="16" end="16" type="uint" default="1"/>
+    <field name="VMD Done" start="17" end="17" type="uint" default="1"/>
+    <field name="VIS Done" start="18" end="18" type="uint" default="1"/>
+    <field name="VAC Done" start="19" end="19" type="uint" default="1"/>
+    <field name="VAM Done" start="20" end="20" type="uint" default="1"/>
+    <field name="JPG Done" start="21" end="21" type="uint" default="1"/>
+    <field name="VBP Done" start="22" end="22" type="uint" default="1"/>
+    <field name="VHR Done" start="23" end="23" type="uint" default="1"/>
+    <field name="VCI Done" start="24" end="24" type="uint" default="1"/>
+    <field name="VCR Done" start="25" end="25" type="uint" default="1"/>
+    <field name="VIN Done" start="26" end="26" type="uint" default="1"/>
+    <field name="VPR Done" start="27" end="27" type="uint" default="1"/>
+    <field name="VTQ Done" start="28" end="28" type="uint" default="1"/>
+    <field name="Reserved" start="29" end="29" type="uint" default="1"/>
+    <field name="VCS Done" start="30" end="30" type="uint" default="1"/>
+    <field name="GAC Done" start="31" end="31" type="uint" default="1"/>
+  </register>
+
+  <register name="VECS_INSTDONE" length="1" num="0x1a06c">
+    <field name="Ring Enable" start="0" end="0" type="bool"/>
+    <field name="VECS Done" start="30" end="30" type="uint" default="1"/>
+    <field name="GAM Done" start="31" end="31" type="uint" default="1"/>
+  </register>
+
   <register name="L3SQCREG1" length="1" num="0xb010">
     <field name="Convert DC_UC" start="24" end="24" type="uint"/>
     <field name="Convert IS_UC" start="25" end="25" type="uint"/>
@@ -3003,6 +3135,148 @@
 
   <register name="SO_WRITE_OFFSET3" length="1" num="0x528c">
     <field name="Write Offset" start="2" end="31" type="offset"/>
+  </register>
+
+  <register name="GFX_ARB_ERROR_RPT" length="1" num="0x40a0">
+    <field name="TLB Page Fault Error" start="0" end="0" type="bool"/>
+    <field name="Context Page Fault Error" start="1" end="1" type="bool"/>
+    <field name="Invalid Page Directory entry error" start="2" end="2" type="bool"/>
+    <field name="Hardware Status Page Fault Error" start="3" end="3" type="bool"/>
+    <field name="TLB Page VTD Translation Error" start="4" end="4" type="bool"/>
+    <field name="Context Page VTD Translation Error" start="5" end="5" type="bool"/>
+    <field name="Page Directory Entry VTD Translation Error" start="6" end="6" type="bool"/>
+    <field name="Hardware Status Page VTD Translation Error" start="7" end="7" type="bool"/>
+    <field name="Unloaded PD Error" start="8" end="8" type="bool"/>
+    <field name="Pending Page Faults" start="9" end="15" type="uint"/>
+  </register>
+
+  <register name="ERR_INT" length="1" num="0x44040">
+    <field name="Primary A GTT Fault Status" start="0" end="0" type="bool"/>
+    <field name="Primary B GTT Fault Status" start="1" end="1" type="bool"/>
+    <field name="Sprite A GTT Fault Status" start="2" end="2" type="bool"/>
+    <field name="Sprite B GTT Fault Status" start="3" end="3" type="bool"/>
+    <field name="Cursor A GTT Fault Status" start="4" end="4" type="bool"/>
+    <field name="Cursor B GTT Fault Status" start="5" end="5" type="bool"/>
+    <field name="Invalid page table entry data" start="6" end="6" type="bool"/>
+    <field name="Invalid GTT page table entry" start="7" end="7" type="bool"/>
+  </register>
+
+  <register name="BCS_FAULT_REG" length="1" num="0x4294">
+    <field name="Valid Bit" start="0" end="0" type="bool"/>
+    <field name="Fault Type" start="1" end="2" type="uint">
+      <value name="Page Fault" value="0"/>
+      <value name="Invalid PD Fault" value="1"/>
+      <value name="Unloaded PD Fault" value="2"/>
+      <value name="Invalid and Unloaded PD fault" value="3"/>
+    </field>
+    <field name= "SRCID of Fault" start="3" end="10" type="uint"/>
+    <field name="GTTSEL" start="11" end="1" type="uint">
+      <value name="PPGTT" value="0"/>
+      <value name="GGTT" value="1"/>
+    </field>
+    <field name="Virtual Address of Fault" start="12" end="31" type="address"/>
+  </register>
+
+  <register name="RCS_FAULT_REG" length="1" num="0x4094">
+    <field name="Valid Bit" start="0" end="0" type="bool"/>
+    <field name="Fault Type" start="1" end="2" type="uint">
+      <value name="Page Fault" value="0"/>
+      <value name="Invalid PD Fault" value="1"/>
+      <value name="Unloaded PD Fault" value="2"/>
+      <value name="Invalid and Unloaded PD fault" value="3"/>
+    </field>
+    <field name= "SRCID of Fault" start="3" end="10" type="uint"/>
+    <field name="GTTSEL" start="11" end="1" type="uint">
+      <value name="PPGTT" value="0"/>
+      <value name="GGTT" value="1"/>
+    </field>
+    <field name="Virtual Address of Fault" start="12" end="31" type="address"/>
+  </register>
+
+  <register name="VECS_FAULT_REG" length="1" num="0x4394">
+    <field name="Valid Bit" start="0" end="0" type="bool"/>
+    <field name="Fault Type" start="1" end="2" type="uint">
+      <value name="Page Fault" value="0"/>
+      <value name="Invalid PD Fault" value="1"/>
+      <value name="Unloaded PD Fault" value="2"/>
+      <value name="Invalid and Unloaded PD fault" value="3"/>
+    </field>
+    <field name= "SRCID of Fault" start="3" end="10" type="uint"/>
+    <field name="GTTSEL" start="11" end="1" type="uint">
+      <value name="PPGTT" value="0"/>
+      <value name="GGTT" value="1"/>
+    </field>
+    <field name="Virtual Address of Fault" start="12" end="31" type="address"/>
+  </register>
+
+  <register name="VCS_FAULT_REG" length="1" num="0x4194">
+    <field name="Valid Bit" start="0" end="0" type="bool"/>
+    <field name="Fault Type" start="1" end="2" type="uint">
+      <value name="Page Fault" value="0"/>
+      <value name="Invalid PD Fault" value="1"/>
+      <value name="Unloaded PD Fault" value="2"/>
+      <value name="Invalid and Unloaded PD fault" value="3"/>
+    </field>
+    <field name= "SRCID of Fault" start="3" end="10" type="uint"/>
+    <field name="GTTSEL" start="11" end="1" type="uint">
+      <value name="PPGTT" value="0"/>
+      <value name="GGTT" value="1"/>
+    </field>
+    <field name="Virtual Address of Fault" start="12" end="31" type="address"/>
+  </register>
+
+  <register name="BCS_RING_BUFFER_CTL" length="1" num="0x2203c">
+    <field name="Ring Buffer Enable" start="0" end="0" type="bool"/>
+    <field name="Automatic Report Head Pointer" start="1" end="2" type="uint">
+      <value name="MI_AUTOREPORT_OFF" value="0"/>
+      <value name="MI_AUTOREPORT_64KB" value="1"/>
+      <value name="MI_AUTOREPORT_4KB" value="2"/>
+      <value name="MI_AUTOREPORT_128KB" value="3"/>
+    </field>
+    <field name="Disable Register Accesses" start="8" end="8" type="bool"/>
+    <field name="Semaphore Wait" start="10" end="10" type="bool"/>
+    <field name="RBWait" start="11" end="11" type="bool"/>
+    <field name="Buffer Length (in pages - 1)" start="12" end="20" type="uint"/>
+  </register>
+
+  <register name="RCS_RING_BUFFER_CTL" length="1" num="0x203c">
+    <field name="Ring Buffer Enable" start="0" end="0" type="bool"/>
+    <field name="Automatic Report Head Pointer" start="1" end="2" type="uint">
+      <value name="MI_AUTOREPORT_OFF" value="0"/>
+      <value name="MI_AUTOREPORT_64KBMI_AUTOREPORT_4KB" value="1"/>
+      <value name="MI_AUTOREPORT_128KB" value="3"/>
+    </field>
+    <field name="Semaphore Wait" start="10" end="10" type="bool"/>
+    <field name="RBWait" start="11" end="11" type="bool"/>
+    <field name="Buffer Length (in pages - 1)" start="12" end="20" type="uint"/>
+  </register>
+
+  <register name="VECS_RING_BUFFER_CTL" length="1" num="0x1A03c">
+    <field name="Ring Buffer Enable" start="0" end="0" type="bool"/>
+    <field name="Automatic Report Head Pointer" start="1" end="2" type="uint">
+      <value name="MI_AUTOREPORT_OFF" value="0"/>
+      <value name="MI_AUTOREPORT_64KB" value="1"/>
+      <value name="MI_AUTOREPORT_4KB" value="2"/>
+      <value name="MI_AUTOREPORT_128KB" value="3"/>
+    </field>
+    <field name="Disable Register Accesses" start="8" end="8" type="bool"/>
+    <field name="Semaphore Wait" start="10" end="10" type="bool"/>
+    <field name="RBWait" start="11" end="11" type="bool"/>
+    <field name="Buffer Length (in pages - 1)" start="12" end="20" type="uint"/>
+  </register>
+
+  <register name="VCS_RING_BUFFER_CTL" length="1" num="0x1203c">
+    <field name="Ring Buffer Enable" start="0" end="0" type="bool"/>
+    <field name="Automatic Report Head Pointer" start="1" end="2" type="uint">
+      <value name="MI_AUTOREPORT_OFF" value="0"/>
+      <value name="MI_AUTOREPORT_64KB" value="1"/>
+      <value name="MI_AUTOREPORT_4KB" value="2"/>
+      <value name="MI_AUTOREPORT_128KB" value="3"/>
+    </field>
+    <field name="Disable Register Accesses" start="8" end="8" type="bool"/>
+    <field name="Semaphore Wait" start="10" end="10" type="bool"/>
+    <field name="RBWait" start="11" end="11" type="bool"/>
+    <field name="Buffer Length (in pages - 1)" start="12" end="20" type="uint"/>
   </register>
 
 </genxml>

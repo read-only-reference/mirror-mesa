@@ -32,7 +32,7 @@
 #include <GL/internal/dri_interface.h>
 
 #include "dri_util.h"
-#include "intel_bufmgr.h"
+#include "brw_bufmgr.h"
 #include "common/gen_device_info.h"
 #include "i915_drm.h"
 #include "xmlconfig.h"
@@ -49,6 +49,9 @@ struct intel_screen
    __DRIscreen *driScrnPriv;
 
    uint64_t max_gtt_map_object_size;
+
+   /** Bytes of aperture usage beyond which execbuf is likely to fail. */
+   uint64_t aperture_threshold;
 
    bool no_hw;
    bool hw_has_swizzling;
@@ -72,7 +75,7 @@ struct intel_screen
 #define KERNEL_ALLOWS_HSW_SCRATCH1_AND_ROW_CHICKEN3 (1<<3)
 #define KERNEL_ALLOWS_COMPUTE_DISPATCH              (1<<4)
 
-   drm_intel_bufmgr *bufmgr;
+   struct brw_bufmgr *bufmgr;
 
    /**
     * A unique ID for shader programs.

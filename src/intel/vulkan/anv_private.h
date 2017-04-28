@@ -269,6 +269,102 @@ void anv_loge_v(const char *format, va_list va);
 #define anv_assert(x)
 #endif
 
+/* A multi-pointer allocator
+ *
+ * When copying data structures from the user (such as a render pass), it's
+ * common to need to allocate data for a bunch of different things.  Instead
+ * of doing several allocations and having to handle all of the error checking
+ * that entails, it can be easier to do a single allocation.  This struct
+ * helps facilitate that.  The intended usage looks like this:
+ *
+ *    ANV_MULTIALLOC(ma)
+ *    anv_multialloc_add(&ma, &main_ptr, 1);
+ *    anv_multialloc_add(&ma, &substruct1, substruct1Count);
+ *    anv_multialloc_add(&ma, &substruct2, substruct2Count);
+ *
+ *    if (!anv_multialloc_alloc(&ma, pAllocator, VK_ALLOCATION_SCOPE_FOO))
+ *       return vk_error(VK_ERROR_OUT_OF_HOST_MEORY);
+ */
+struct anv_multialloc {
+    size_t size;
+    size_t align;
+
+    uint32_t ptr_count;
+    void **ptrs[8];
+};
+
+#define ANV_MULTIALLOC_INIT \
+   ((struct anv_multialloc) { 0, })
+
+#define ANV_MULTIALLOC(_name) \
+   struct anv_multialloc _name = ANV_MULTIALLOC_INIT
+
+__attribute__((always_inline))
+static inline void
+_anv_multialloc_add(struct anv_multialloc *ma,
+                    void **ptr, size_t size, size_t align)
+{
+   size_t offset = align_u64(ma->size, align);
+   ma->size = offset + size;
+   ma->align = MAX2(ma->align, align);
+
+   /* Store the offset in the pointer. */
+   *ptr = (void *)(uintptr_t)offset;
+
+   assert(ma->ptr_count < ARRAY_SIZE(ma->ptrs));
+   ma->ptrs[ma->ptr_count++] = ptr;
+}
+
+#define anv_multialloc_add(_ma, _ptr, _count) \
+   _anv_multialloc_add((_ma), (void **)(_ptr), \
+                       (_count) * sizeof(**(_ptr)), __alignof__(**(_ptr)))
+
+__attribute__((always_inline))
+static inline void *
+anv_multialloc_alloc(struct anv_multialloc *ma,
+                     const VkAllocationCallbacks *alloc,
+                     VkSystemAllocationScope scope)
+{
+   void *ptr = vk_alloc(alloc, ma->size, ma->align, scope);
+   if (!ptr)
+      return NULL;
+
+   /* Fill out each of the pointers with their final value.
+    *
+    *   for (uint32_t i = 0; i < ma->ptr_count; i++)
+    *      *ma->ptrs[i] = ptr + (uintptr_t)*ma->ptrs[i];
+    *
+    * Unfortunately, even though ma->ptr_count is basically guaranteed to be a
+    * constant, GCC is incapable of figuring this out and unrolling the loop
+    * so we have to give it a little help.
+    */
+   STATIC_ASSERT(ARRAY_SIZE(ma->ptrs) == 8);
+#define _ANV_MULTIALLOC_UPDATE_POINTER(_i) \
+   if ((_i) < ma->ptr_count) \
+      *ma->ptrs[_i] = ptr + (uintptr_t)*ma->ptrs[_i]
+   _ANV_MULTIALLOC_UPDATE_POINTER(0);
+   _ANV_MULTIALLOC_UPDATE_POINTER(1);
+   _ANV_MULTIALLOC_UPDATE_POINTER(2);
+   _ANV_MULTIALLOC_UPDATE_POINTER(3);
+   _ANV_MULTIALLOC_UPDATE_POINTER(4);
+   _ANV_MULTIALLOC_UPDATE_POINTER(5);
+   _ANV_MULTIALLOC_UPDATE_POINTER(6);
+   _ANV_MULTIALLOC_UPDATE_POINTER(7);
+#undef _ANV_MULTIALLOC_UPDATE_POINTER
+
+   return ptr;
+}
+
+__attribute__((always_inline))
+static inline void *
+anv_multialloc_alloc2(struct anv_multialloc *ma,
+                      const VkAllocationCallbacks *parent_alloc,
+                      const VkAllocationCallbacks *alloc,
+                      VkSystemAllocationScope scope)
+{
+   return anv_multialloc_alloc(ma, alloc ? alloc : parent_alloc, scope);
+}
+
 /**
  * A dynamically growable, circular buffer.  Elements are added at head and
  * removed from tail. head and tail are free-running uint32_t indices and we
@@ -295,11 +391,8 @@ struct anv_bo {
    uint64_t size;
    void *map;
 
-   /* We need to set the WRITE flag on winsys bos so GEM will know we're
-    * writing to them and synchronize uses on other rings (eg if the display
-    * server uses the blitter ring).
-    */
-   bool is_winsys_bo;
+   /** Flags to pass to the kernel through drm_i915_exec_object2::flags */
+   uint32_t flags;
 };
 
 static inline void
@@ -310,7 +403,7 @@ anv_bo_init(struct anv_bo *bo, uint32_t gem_handle, uint64_t size)
    bo->offset = -1;
    bo->size = size;
    bo->map = NULL;
-   bo->is_winsys_bo = false;
+   bo->flags = 0;
 }
 
 /* Represents a lock-free linked list of "free" things.  This is used by
@@ -511,6 +604,27 @@ struct anv_bo *anv_scratch_pool_alloc(struct anv_device *device,
                                       gl_shader_stage stage,
                                       unsigned per_thread_scratch);
 
+/** Implements a BO cache that ensures a 1-1 mapping of GEM BOs to anv_bos */
+struct anv_bo_cache {
+   struct hash_table *bo_map;
+   pthread_mutex_t mutex;
+};
+
+VkResult anv_bo_cache_init(struct anv_bo_cache *cache);
+void anv_bo_cache_finish(struct anv_bo_cache *cache);
+VkResult anv_bo_cache_alloc(struct anv_device *device,
+                            struct anv_bo_cache *cache,
+                            uint64_t size, struct anv_bo **bo);
+VkResult anv_bo_cache_import(struct anv_device *device,
+                             struct anv_bo_cache *cache,
+                             int fd, uint64_t size, struct anv_bo **bo);
+VkResult anv_bo_cache_export(struct anv_device *device,
+                             struct anv_bo_cache *cache,
+                             struct anv_bo *bo_in, int *fd_out);
+void anv_bo_cache_release(struct anv_device *device,
+                          struct anv_bo_cache *cache,
+                          struct anv_bo *bo);
+
 struct anv_physical_device {
     VK_LOADER_DATA                              _loader_data;
 
@@ -519,15 +633,27 @@ struct anv_physical_device {
     char                                        path[20];
     const char *                                name;
     struct gen_device_info                      info;
-    uint64_t                                    aperture_size;
+    /** Amount of "GPU memory" we want to advertise
+     *
+     * Clearly, this value is bogus since Intel is a UMA architecture.  On
+     * gen7 platforms, we are limited by GTT size unless we want to implement
+     * fine-grained tracking and GTT splitting.  On Broadwell and above we are
+     * practically unlimited.  However, we will never report more than 3/4 of
+     * the total system ram to try and avoid running out of RAM.
+     */
+    uint64_t                                    heap_size;
+    bool                                        supports_48bit_addresses;
     struct brw_compiler *                       compiler;
     struct isl_device                           isl_dev;
     int                                         cmd_parser_version;
+    bool                                        has_exec_async;
 
     uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
 
-    uint8_t                                     uuid[VK_UUID_SIZE];
+    uint8_t                                     pipeline_cache_uuid[VK_UUID_SIZE];
+    uint8_t                                     driver_uuid[VK_UUID_SIZE];
+    uint8_t                                     device_uuid[VK_UUID_SIZE];
 
     struct wsi_device                       wsi_device;
     int                                         local_fd;
@@ -595,6 +721,8 @@ struct anv_device {
 
     struct anv_bo_pool                          batch_bo_pool;
 
+    struct anv_bo_cache                         bo_cache;
+
     struct anv_block_pool                       dynamic_state_block_pool;
     struct anv_state_pool                       dynamic_state_pool;
 
@@ -637,6 +765,10 @@ void anv_device_finish_blorp(struct anv_device *device);
 VkResult anv_device_execbuf(struct anv_device *device,
                             struct drm_i915_gem_execbuffer2 *execbuf,
                             struct anv_bo **execbuf_bos);
+VkResult anv_device_query_status(struct anv_device *device);
+VkResult anv_device_bo_busy(struct anv_device *device, struct anv_bo *bo);
+VkResult anv_device_wait(struct anv_device *device, struct anv_bo *bo,
+                         int64_t timeout);
 
 void* anv_gem_mmap(struct anv_device *device,
                    uint32_t gem_handle, uint64_t offset, uint64_t size, uint32_t flags);
@@ -644,6 +776,7 @@ void anv_gem_munmap(void *p, uint64_t size);
 uint32_t anv_gem_create(struct anv_device *device, size_t size);
 void anv_gem_close(struct anv_device *device, uint32_t gem_handle);
 uint32_t anv_gem_userptr(struct anv_device *device, void *mem, size_t size);
+int anv_gem_busy(struct anv_device *device, uint32_t gem_handle);
 int anv_gem_wait(struct anv_device *device, uint32_t gem_handle, int64_t *timeout_ns);
 int anv_gem_execbuffer(struct anv_device *device,
                        struct drm_i915_gem_execbuffer2 *execbuf);
@@ -651,9 +784,14 @@ int anv_gem_set_tiling(struct anv_device *device, uint32_t gem_handle,
                        uint32_t stride, uint32_t tiling);
 int anv_gem_create_context(struct anv_device *device);
 int anv_gem_destroy_context(struct anv_device *device, int context);
+int anv_gem_get_context_param(int fd, int context, uint32_t param,
+                              uint64_t *value);
 int anv_gem_get_param(int fd, uint32_t param);
 bool anv_gem_get_bit6_swizzle(int fd, uint32_t tiling);
 int anv_gem_get_aperture(int fd, uint64_t *size);
+bool anv_gem_supports_48b_addresses(int fd);
+int anv_gem_gpu_get_reset_stats(struct anv_device *device,
+                                uint32_t *active, uint32_t *pending);
 int anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle);
 uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
@@ -847,7 +985,7 @@ _anv_combine_address(struct anv_batch *batch, void *location,
    }
 
 struct anv_device_memory {
-   struct anv_bo                                bo;
+   struct anv_bo *                              bo;
    uint32_t                                     type_index;
    VkDeviceSize                                 map_size;
    void *                                       map;
@@ -1184,6 +1322,65 @@ enum anv_pipe_bits {
    ANV_PIPE_DATA_CACHE_FLUSH_BIT | \
    ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT | \
    ANV_PIPE_INSTRUCTION_CACHE_INVALIDATE_BIT)
+
+static inline enum anv_pipe_bits
+anv_pipe_flush_bits_for_access_flags(VkAccessFlags flags)
+{
+   enum anv_pipe_bits pipe_bits = 0;
+
+   unsigned b;
+   for_each_bit(b, flags) {
+      switch ((VkAccessFlagBits)(1 << b)) {
+      case VK_ACCESS_SHADER_WRITE_BIT:
+         pipe_bits |= ANV_PIPE_DATA_CACHE_FLUSH_BIT;
+         break;
+      case VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:
+         pipe_bits |= ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT;
+         break;
+      case VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT:
+         pipe_bits |= ANV_PIPE_DEPTH_CACHE_FLUSH_BIT;
+         break;
+      case VK_ACCESS_TRANSFER_WRITE_BIT:
+         pipe_bits |= ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT;
+         pipe_bits |= ANV_PIPE_DEPTH_CACHE_FLUSH_BIT;
+         break;
+      default:
+         break; /* Nothing to do */
+      }
+   }
+
+   return pipe_bits;
+}
+
+static inline enum anv_pipe_bits
+anv_pipe_invalidate_bits_for_access_flags(VkAccessFlags flags)
+{
+   enum anv_pipe_bits pipe_bits = 0;
+
+   unsigned b;
+   for_each_bit(b, flags) {
+      switch ((VkAccessFlagBits)(1 << b)) {
+      case VK_ACCESS_INDIRECT_COMMAND_READ_BIT:
+      case VK_ACCESS_INDEX_READ_BIT:
+      case VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT:
+         pipe_bits |= ANV_PIPE_VF_CACHE_INVALIDATE_BIT;
+         break;
+      case VK_ACCESS_UNIFORM_READ_BIT:
+         pipe_bits |= ANV_PIPE_CONSTANT_CACHE_INVALIDATE_BIT;
+         pipe_bits |= ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT;
+         break;
+      case VK_ACCESS_SHADER_READ_BIT:
+      case VK_ACCESS_INPUT_ATTACHMENT_READ_BIT:
+      case VK_ACCESS_TRANSFER_READ_BIT:
+         pipe_bits |= ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT;
+         break;
+      default:
+         break; /* Nothing to do */
+      }
+   }
+
+   return pipe_bits;
+}
 
 struct anv_vertex_binding {
    struct anv_buffer *                          buffer;
@@ -2009,8 +2206,8 @@ struct anv_render_pass_attachment {
 struct anv_render_pass {
    uint32_t                                     attachment_count;
    uint32_t                                     subpass_count;
-   VkAttachmentReference *                      subpass_attachments;
-   enum anv_subpass_usage *                     subpass_usages;
+   /* An array of subpass_count+1 flushes, one per subpass boundary */
+   enum anv_pipe_bits *                         subpass_flushes;
    struct anv_render_pass_attachment *          attachments;
    struct anv_subpass                           subpasses[0];
 };

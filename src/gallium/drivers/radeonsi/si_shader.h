@@ -26,6 +26,73 @@
  *      Christian König <christian.koenig@amd.com>
  */
 
+/* The compiler middle-end architecture: Explaining (non-)monolithic shaders
+ * -------------------------------------------------------------------------
+ *
+ * Typically, there is one-to-one correspondence between API and HW shaders,
+ * that is, for every API shader, there is exactly one shader binary in
+ * the driver.
+ *
+ * The problem with that is that we also have to emulate some API states
+ * (e.g. alpha-test, and many others) in shaders too. The two obvious ways
+ * to deal with it are:
+ * - each shader has multiple variants for each combination of emulated states,
+ *   and the variants are compiled on demand, possibly relying on a shader
+ *   cache for good performance
+ * - patch shaders at the binary level
+ *
+ * This driver uses something completely different. The emulated states are
+ * usually implemented at the beginning or end of shaders. Therefore, we can
+ * split the shader into 3 parts:
+ * - prolog part (shader code dependent on states)
+ * - main part (the API shader)
+ * - epilog part (shader code dependent on states)
+ *
+ * Each part is compiled as a separate shader and the final binaries are
+ * concatenated. This type of shader is called non-monolithic, because it
+ * consists of multiple independent binaries. Creating a new shader variant
+ * is therefore only a concatenation of shader parts (binaries) and doesn't
+ * involve any compilation. The main shader parts are the only parts that are
+ * compiled when applications create shader objects. The prolog and epilog
+ * parts are compiled on the first use and saved, so that their binaries can
+ * be reused by many other shaders.
+ *
+ * One of the roles of the prolog part is to compute vertex buffer addresses
+ * for vertex shaders. A few of the roles of the epilog part are color buffer
+ * format conversions in pixel shaders that we have to do manually, and write
+ * tessellation factors in tessellation control shaders. The prolog and epilog
+ * have many other important responsibilities in various shader stages.
+ * They don't just "emulate legacy stuff".
+ *
+ * Monolithic shaders are shaders where the parts are combined before LLVM
+ * compilation, and the whole thing is compiled and optimized as one unit with
+ * one binary on the output. The result is the same as the non-monolithic
+ * shader, but the final code can be better, because LLVM can optimize across
+ * all shader parts. Monolithic shaders aren't usually used except for these
+ * special cases:
+ *
+ * 1) Some rarely-used states require modification of the main shader part
+ *    itself, and in such cases, only the monolithic shader variant is
+ *    compiled, and that's always done on the first use.
+ *
+ * 2) When we do cross-stage optimizations for separate shader objects and
+ *    e.g. eliminate unused shader varyings, the resulting optimized shader
+ *    variants are always compiled as monolithic shaders, and always
+ *    asynchronously (i.e. not stalling ongoing rendering). We call them
+ *    "optimized monolithic" shaders. The important property here is that
+ *    the non-monolithic unoptimized shader variant is always available for use
+ *    when the asynchronous compilation of the optimized shader is not done
+ *    yet.
+ *
+ * Starting with GFX9 chips, some shader stages are merged, and the number of
+ * shader parts per shader increased. The complete new list of shader parts is:
+ * - 1st shader: prolog part
+ * - 1st shader: main part
+ * - 2nd shader: prolog part
+ * - 2nd shader: main part
+ * - 2nd shader: epilog part
+ */
+
 /* How linking shader inputs and outputs between vertex, tessellation, and
  * geometry shaders works.
  *
@@ -80,6 +147,9 @@ struct ac_shader_binary;
 
 /* SGPR user data indices */
 enum {
+	/* GFX9 merged shaders have RW_BUFFERS among the first 8 system SGPRs,
+	 * and these two are used for other purposes.
+	 */
 	SI_SGPR_RW_BUFFERS,  /* rings (& stream-out, VS only) */
 	SI_SGPR_RW_BUFFERS_HI,
 	SI_SGPR_CONST_BUFFERS,
@@ -98,104 +168,63 @@ enum {
 	SI_SGPR_BASE_VERTEX,
 	SI_SGPR_START_INSTANCE,
 	SI_SGPR_DRAWID,
-	SI_ES_NUM_USER_SGPR,
-
-	/* hw VS only */
-	SI_SGPR_VS_STATE_BITS	= SI_ES_NUM_USER_SGPR,
+	SI_SGPR_VS_STATE_BITS,
 	SI_VS_NUM_USER_SGPR,
 
-	/* hw LS only */
-	SI_SGPR_LS_OUT_LAYOUT	= SI_ES_NUM_USER_SGPR,
-	SI_LS_NUM_USER_SGPR,
-
-	/* both TCS and TES */
-	SI_SGPR_TCS_OFFCHIP_LAYOUT = SI_NUM_RESOURCE_SGPRS,
+	/* TES */
+	SI_SGPR_TES_OFFCHIP_LAYOUT = SI_NUM_RESOURCE_SGPRS,
+	SI_SGPR_TES_OFFCHIP_ADDR_BASE64K,
 	SI_TES_NUM_USER_SGPR,
 
-	/* TCS only */
-	SI_SGPR_TCS_OUT_OFFSETS = SI_TES_NUM_USER_SGPR,
-	SI_SGPR_TCS_OUT_LAYOUT,
-	SI_SGPR_TCS_IN_LAYOUT,
-	SI_TCS_NUM_USER_SGPR,
+	/* GFX6-8: TCS only */
+	GFX6_SGPR_TCS_OFFCHIP_LAYOUT = SI_NUM_RESOURCE_SGPRS,
+	GFX6_SGPR_TCS_OUT_OFFSETS,
+	GFX6_SGPR_TCS_OUT_LAYOUT,
+	GFX6_SGPR_TCS_IN_LAYOUT,
+	GFX6_SGPR_TCS_OFFCHIP_ADDR_BASE64K,
+	GFX6_SGPR_TCS_FACTOR_ADDR_BASE64K,
+	GFX6_TCS_NUM_USER_SGPR,
+
+	/* GFX9: Merged LS-HS (VS-TCS) only. */
+	GFX9_SGPR_TCS_OFFCHIP_LAYOUT = SI_VS_NUM_USER_SGPR,
+	GFX9_SGPR_TCS_OUT_OFFSETS,
+	GFX9_SGPR_TCS_OUT_LAYOUT,
+	GFX9_SGPR_TCS_OFFCHIP_ADDR_BASE64K,
+	GFX9_SGPR_TCS_FACTOR_ADDR_BASE64K,
+	GFX9_SGPR_unused_to_align_the_next_pointer,
+	GFX9_SGPR_TCS_CONST_BUFFERS,
+	GFX9_SGPR_TCS_CONST_BUFFERS_HI,
+	GFX9_SGPR_TCS_SAMPLERS,  /* images & sampler states interleaved */
+	GFX9_SGPR_TCS_SAMPLERS_HI,
+	GFX9_SGPR_TCS_IMAGES,
+	GFX9_SGPR_TCS_IMAGES_HI,
+	GFX9_SGPR_TCS_SHADER_BUFFERS,
+	GFX9_SGPR_TCS_SHADER_BUFFERS_HI,
+	GFX9_TCS_NUM_USER_SGPR,
+
+	/* GFX9: Merged ES-GS (VS-GS or TES-GS). */
+	GFX9_SGPR_GS_CONST_BUFFERS = SI_VS_NUM_USER_SGPR,
+	GFX9_SGPR_GS_CONST_BUFFERS_HI,
+	GFX9_SGPR_GS_SAMPLERS,
+	GFX9_SGPR_GS_SAMPLERS_HI,
+	GFX9_SGPR_GS_IMAGES,
+	GFX9_SGPR_GS_IMAGES_HI,
+	GFX9_SGPR_GS_SHADER_BUFFERS,
+	GFX9_SGPR_GS_SHADER_BUFFERS_HI,
+	GFX9_GS_NUM_USER_SGPR,
 
 	/* GS limits */
-	SI_GS_NUM_USER_SGPR = SI_NUM_RESOURCE_SGPRS,
+	GFX6_GS_NUM_USER_SGPR = SI_NUM_RESOURCE_SGPRS,
 	SI_GSCOPY_NUM_USER_SGPR = SI_SGPR_RW_BUFFERS_HI + 1,
 
 	/* PS only */
 	SI_SGPR_ALPHA_REF	= SI_NUM_RESOURCE_SGPRS,
 	SI_PS_NUM_USER_SGPR,
-
-	/* CS only */
-	SI_SGPR_GRID_SIZE = SI_NUM_RESOURCE_SGPRS,
-	SI_SGPR_BLOCK_SIZE = SI_SGPR_GRID_SIZE + 3,
-	SI_CS_NUM_USER_SGPR = SI_SGPR_BLOCK_SIZE + 3
 };
 
 /* LLVM function parameter indices */
 enum {
-	SI_PARAM_RW_BUFFERS,
-	SI_PARAM_CONST_BUFFERS,
-	SI_PARAM_SAMPLERS,
-	SI_PARAM_IMAGES,
-	SI_PARAM_SHADER_BUFFERS,
-	SI_NUM_RESOURCE_PARAMS,
-
-	/* VS only parameters */
-	SI_PARAM_VERTEX_BUFFERS	= SI_NUM_RESOURCE_PARAMS,
-	SI_PARAM_BASE_VERTEX,
-	SI_PARAM_START_INSTANCE,
-	SI_PARAM_DRAWID,
-	/* [0] = clamp vertex color, VS as VS only */
-	SI_PARAM_VS_STATE_BITS,
-	/* same value as TCS_IN_LAYOUT, VS as LS only */
-	SI_PARAM_LS_OUT_LAYOUT = SI_PARAM_DRAWID + 1,
-	/* the other VS parameters are assigned dynamically */
-
-	/* Layout of TCS outputs in the offchip buffer
-	 *   [0:8] = the number of patches per threadgroup.
-	 *   [9:15] = the number of output vertices per patch.
-	 *   [16:31] = the offset of per patch attributes in the buffer in bytes.
-	 */
-	SI_PARAM_TCS_OFFCHIP_LAYOUT = SI_NUM_RESOURCE_PARAMS, /* for TCS & TES */
-
-	/* TCS only parameters. */
-
-	/* Offsets where TCS outputs and TCS patch outputs live in LDS:
-	 *   [0:15] = TCS output patch0 offset / 16, max = NUM_PATCHES * 32 * 32
-	 *   [16:31] = TCS output patch0 offset for per-patch / 16, max = NUM_PATCHES*32*32* + 32*32
-	 */
-	SI_PARAM_TCS_OUT_OFFSETS,
-
-	/* Layout of TCS outputs / TES inputs:
-	 *   [0:12] = stride between output patches in dwords, num_outputs * num_vertices * 4, max = 32*32*4
-	 *   [13:20] = stride between output vertices in dwords = num_inputs * 4, max = 32*4
-	 *   [26:31] = gl_PatchVerticesIn, max = 32
-	 */
-	SI_PARAM_TCS_OUT_LAYOUT,
-
-	/* Layout of LS outputs / TCS inputs
-	 *   [0:12] = stride between patches in dwords = num_inputs * num_vertices * 4, max = 32*32*4
-	 *   [13:20] = stride between vertices in dwords = num_inputs * 4, max = 32*4
-	 */
-	SI_PARAM_TCS_IN_LAYOUT,
-
-	SI_PARAM_TCS_OC_LDS,
-	SI_PARAM_TESS_FACTOR_OFFSET,
-	SI_PARAM_PATCH_ID,
-	SI_PARAM_REL_IDS,
-
-	/* GS only parameters */
-	SI_PARAM_GS2VS_OFFSET = SI_NUM_RESOURCE_PARAMS,
-	SI_PARAM_GS_WAVE_ID,
-	SI_PARAM_VTX0_OFFSET,
-	SI_PARAM_VTX1_OFFSET,
-	SI_PARAM_PRIMITIVE_ID,
-	SI_PARAM_VTX2_OFFSET,
-	SI_PARAM_VTX3_OFFSET,
-	SI_PARAM_VTX4_OFFSET,
-	SI_PARAM_VTX5_OFFSET,
-	SI_PARAM_GS_INSTANCE_ID,
+	SI_NUM_RESOURCE_PARAMS = 5,
 
 	/* PS only parameters */
 	SI_PARAM_ALPHA_REF = SI_NUM_RESOURCE_PARAMS,
@@ -217,14 +246,19 @@ enum {
 	SI_PARAM_SAMPLE_COVERAGE,
 	SI_PARAM_POS_FIXED_PT,
 
-	/* CS only parameters */
-	SI_PARAM_GRID_SIZE = SI_NUM_RESOURCE_PARAMS,
-	SI_PARAM_BLOCK_SIZE,
-	SI_PARAM_BLOCK_ID,
-	SI_PARAM_THREAD_ID,
-
 	SI_NUM_PARAMS = SI_PARAM_POS_FIXED_PT + 9, /* +8 for COLOR[0..1] */
 };
+
+/* Fields of driver-defined VS state SGPR. */
+/* Clamp vertex color output (only used in VS as VS). */
+#define S_VS_STATE_CLAMP_VERTEX_COLOR(x)	(((unsigned)(x) & 0x1) << 0)
+#define C_VS_STATE_CLAMP_VERTEX_COLOR		0xFFFFFFFE
+#define S_VS_STATE_INDEXED(x)			(((unsigned)(x) & 0x1) << 1)
+#define C_VS_STATE_INDEXED			0xFFFFFFFD
+#define S_VS_STATE_LS_OUT_PATCH_SIZE(x)		(((unsigned)(x) & 0x1FFF) << 8)
+#define C_VS_STATE_LS_OUT_PATCH_SIZE		0xFFE000FF
+#define S_VS_STATE_LS_OUT_VERTEX_SIZE(x)	(((unsigned)(x) & 0xFF) << 24)
+#define C_VS_STATE_LS_OUT_VERTEX_SIZE		0x00FFFFFF
 
 /* SI-specific system values. */
 enum {
@@ -274,6 +308,7 @@ struct si_compiler_ctx_state {
  * binaries for one TGSI program. This can be shared by multiple contexts.
  */
 struct si_shader_selector {
+	struct pipe_reference	reference;
 	struct si_screen	*screen;
 	struct util_queue_fence ready;
 	struct si_compiler_ctx_state compiler_ctx_state;
@@ -297,6 +332,7 @@ struct si_shader_selector {
 
 	/* PIPE_SHADER_[VERTEX|FRAGMENT|...] */
 	unsigned	type;
+	bool		vs_needs_prolog;
 
 	/* GS parameters. */
 	unsigned	esgs_itemsize;
@@ -332,20 +368,20 @@ struct si_shader_selector {
  * API shaders       VS | TCS | TES | GS |pass| PS
  * are compiled as:     |     |     |    |thru|
  *                      |     |     |    |    |
- * Only VS & PS:     VS | --  | --  | -- | -- | PS
- * With GS:          ES | --  | --  | GS | VS | PS
- * With Tessel.:     LS | HS  | VS  | -- | -- | PS
- * With both:        LS | HS  | ES  | GS | VS | PS
+ * Only VS & PS:     VS |     |     |    |    | PS
+ * GFX6 - with GS:   ES |     |     | GS | VS | PS
+ *      - with tess: LS | HS  | VS  |    |    | PS
+ *      - with both: LS | HS  | ES  | GS | VS | PS
+ * GFX9 - with GS:   -> |     |     | GS | VS | PS
+ *      - with tess: -> | HS  | VS  |    |    | PS
+ *      - with both: -> | HS  | ->  | GS | VS | PS
+ *
+ * -> = merged with the next stage
  */
 
 /* Common VS bits between the shader key and the prolog key. */
 struct si_vs_prolog_bits {
 	unsigned	instance_divisors[SI_MAX_ATTRIBS];
-};
-
-/* Common VS bits between the shader key and the epilog key. */
-struct si_vs_epilog_bits {
-	unsigned	export_prim_id:1; /* when PS needs it and GS is disabled */
 };
 
 /* Common TCS bits between the shader key and the epilog key. */
@@ -386,22 +422,25 @@ struct si_ps_epilog_bits {
 union si_shader_part_key {
 	struct {
 		struct si_vs_prolog_bits states;
-		unsigned	num_input_sgprs:5;
+		unsigned	num_input_sgprs:6;
+		/* For merged stages such as LS-HS, HS input VGPRs are first. */
+		unsigned	num_merged_next_stage_vgprs:3;
 		unsigned	last_input:4;
+		unsigned	as_ls:1;
+		/* Prologs for monolithic shaders shouldn't set EXEC. */
+		unsigned	is_monolithic:1;
 	} vs_prolog;
-	struct {
-		struct si_vs_epilog_bits states;
-		unsigned	prim_id_param_offset:5;
-	} vs_epilog;
 	struct {
 		struct si_tcs_epilog_bits states;
 	} tcs_epilog;
 	struct {
 		struct si_gs_prolog_bits states;
+		/* Prologs of monolithic shaders shouldn't set EXEC. */
+		unsigned	is_monolithic:1;
 	} gs_prolog;
 	struct {
 		struct si_ps_prolog_bits states;
-		unsigned	num_input_sgprs:5;
+		unsigned	num_input_sgprs:6;
 		unsigned	num_input_vgprs:5;
 		/* Color interpolation and two-side color selection. */
 		unsigned	colors_read:8; /* color input components read */
@@ -425,15 +464,15 @@ struct si_shader_key {
 	union {
 		struct {
 			struct si_vs_prolog_bits prolog;
-			struct si_vs_epilog_bits epilog;
 		} vs;
 		struct {
+			struct si_vs_prolog_bits ls_prolog; /* for merged LS-HS */
+			struct si_shader_selector *ls;   /* for merged LS-HS */
 			struct si_tcs_epilog_bits epilog;
 		} tcs; /* tessellation control shader */
 		struct {
-			struct si_vs_epilog_bits epilog; /* same as VS */
-		} tes; /* tessellation evaluation shader */
-		struct {
+			struct si_vs_prolog_bits vs_prolog; /* for merged ES-GS */
+			struct si_shader_selector *es;   /* for merged ES-GS */
 			struct si_gs_prolog_bits prolog;
 		} gs;
 		struct {
@@ -449,23 +488,29 @@ struct si_shader_key {
 	unsigned as_ls:1; /* local shader, which precedes TCS */
 
 	/* Flags for monolithic compilation only. */
-	union {
-		struct {
-			/* One byte for every input: SI_FIX_FETCH_* enums. */
-			uint8_t		fix_fetch[SI_MAX_ATTRIBS];
-		} vs;
-		struct {
-			uint64_t	inputs_to_copy; /* for fixed-func TCS */
-		} tcs;
+	struct {
+		/* One byte for every input: SI_FIX_FETCH_* enums. */
+		uint8_t		vs_fix_fetch[SI_MAX_ATTRIBS];
+		uint64_t	ff_tcs_inputs_to_copy; /* for fixed-func TCS */
+		/* When PS needs PrimID and GS is disabled. */
+		unsigned	vs_export_prim_id:1;
 	} mono;
 
 	/* Optimization flags for asynchronous compilation only. */
-	union {
+	struct {
 		struct {
 			uint64_t	kill_outputs; /* "get_unique_index" bits */
 			uint32_t	kill_outputs2; /* "get_unique_index2" bits */
 			unsigned	clip_disable:1;
 		} hw_vs; /* HW VS (it can be VS, TES, GS) */
+
+		/* For shaders where monolithic variants have better code.
+		 *
+		 * This is a flag that has no effect on code generation,
+		 * but forces monolithic shaders to be used as soon as
+		 * possible, because it's in the "opt" group.
+		 */
+		unsigned	prefer_mono:1;
 	} opt;
 };
 
@@ -484,18 +529,6 @@ struct si_shader_config {
 	unsigned			rsrc2;
 };
 
-enum {
-	/* SPI_PS_INPUT_CNTL_i.OFFSET[0:4] */
-	EXP_PARAM_OFFSET_0 = 0,
-	EXP_PARAM_OFFSET_31 = 31,
-	/* SPI_PS_INPUT_CNTL_i.DEFAULT_VAL[0:1] */
-	EXP_PARAM_DEFAULT_VAL_0000 = 64,
-	EXP_PARAM_DEFAULT_VAL_0001,
-	EXP_PARAM_DEFAULT_VAL_1110,
-	EXP_PARAM_DEFAULT_VAL_1111,
-	EXP_PARAM_UNDEFINED = 255,
-};
-
 /* GCN-specific shader info. */
 struct si_shader_info {
 	ubyte			vs_output_param_offset[SI_MAX_VS_OUTPUTS];
@@ -511,9 +544,12 @@ struct si_shader {
 	struct si_compiler_ctx_state	compiler_ctx_state;
 
 	struct si_shader_selector	*selector;
+	struct si_shader_selector	*previous_stage_sel; /* for refcounting */
 	struct si_shader		*next_variant;
 
 	struct si_shader_part		*prolog;
+	struct si_shader		*previous_stage; /* for GFX9 */
+	struct si_shader_part		*prolog2;
 	struct si_shader_part		*epilog;
 
 	struct si_pm4_state		*pm4;

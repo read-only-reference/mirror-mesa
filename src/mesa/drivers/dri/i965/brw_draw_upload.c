@@ -702,7 +702,7 @@ brw_prepare_vertices(struct brw_context *brw)
       const uint32_t range = buffer_range_end[i] - buffer_range_start[i];
 
       buffer->bo = intel_bufferobj_buffer(brw, enabled_buffer[i], start, range);
-      drm_intel_bo_reference(buffer->bo);
+      brw_bo_reference(buffer->bo);
    }
 
    /* If we need to upload all the arrays, then we can trim those arrays to
@@ -792,7 +792,7 @@ brw_prepare_shader_draw_parameters(struct brw_context *brw)
 uint32_t *
 brw_emit_vertex_buffer_state(struct brw_context *brw,
                              unsigned buffer_nr,
-                             drm_intel_bo *bo,
+                             struct brw_bo *bo,
                              unsigned start_offset,
                              unsigned end_offset,
                              unsigned stride,
@@ -1166,7 +1166,7 @@ brw_upload_indices(struct brw_context *brw)
    struct gl_context *ctx = &brw->ctx;
    const struct _mesa_index_buffer *index_buffer = brw->ib.ib;
    GLuint ib_size;
-   drm_intel_bo *old_bo = brw->ib.bo;
+   struct brw_bo *old_bo = brw->ib.bo;
    struct gl_buffer_object *bufferobj;
    GLuint offset;
    GLuint ib_type_size;
@@ -1174,7 +1174,7 @@ brw_upload_indices(struct brw_context *brw)
    if (index_buffer == NULL)
       return;
 
-   ib_type_size = _mesa_sizeof_type(index_buffer->type);
+   ib_type_size = index_buffer->index_size;
    ib_size = index_buffer->count ? ib_type_size * index_buffer->count :
                                    index_buffer->obj->Size;
    bufferobj = index_buffer->obj;
@@ -1210,14 +1210,14 @@ brw_upload_indices(struct brw_context *brw)
 
          ctx->Driver.UnmapBuffer(ctx, bufferobj, MAP_INTERNAL);
       } else {
-         drm_intel_bo *bo =
+         struct brw_bo *bo =
             intel_bufferobj_buffer(brw, intel_buffer_object(bufferobj),
                                    offset, ib_size);
          if (bo != brw->ib.bo) {
-            drm_intel_bo_unreference(brw->ib.bo);
+            brw_bo_unreference(brw->ib.bo);
             brw->ib.bo = bo;
             brw->ib.size = bufferobj->Size;
-            drm_intel_bo_reference(bo);
+            brw_bo_reference(bo);
          }
       }
    }
@@ -1231,8 +1231,8 @@ brw_upload_indices(struct brw_context *brw)
    if (brw->ib.bo != old_bo)
       brw->ctx.NewDriverState |= BRW_NEW_INDEX_BUFFER;
 
-   if (index_buffer->type != brw->ib.type) {
-      brw->ib.type = index_buffer->type;
+   if (index_buffer->index_size != brw->ib.index_size) {
+      brw->ib.index_size = index_buffer->index_size;
       brw->ctx.NewDriverState |= BRW_NEW_INDEX_BUFFER;
    }
 }
@@ -1264,7 +1264,7 @@ brw_emit_index_buffer(struct brw_context *brw)
    BEGIN_BATCH(3);
    OUT_BATCH(CMD_INDEX_BUFFER << 16 |
              cut_index_setting |
-             brw_get_index_type(index_buffer->type) |
+             brw_get_index_type(index_buffer->index_size) |
              1);
    OUT_RELOC(brw->ib.bo,
              I915_GEM_DOMAIN_VERTEX, 0,

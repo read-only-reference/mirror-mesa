@@ -165,6 +165,9 @@ swr_generate_fs_key(struct swr_jit_fs_key &key,
           sizeof(key.vs_output_semantic_idx));
 
    swr_generate_sampler_key(swr_fs->info, ctx, PIPE_SHADER_FRAGMENT, key);
+
+   key.poly_stipple_enable = ctx->rasterizer->poly_stipple_enable &&
+      ctx->poly_stipple.prim_is_poly;
 }
 
 void
@@ -222,6 +225,9 @@ struct BuilderSWR : public Builder {
    ~BuilderSWR() {
       gallivm_free_ir(gallivm);
    }
+
+   void WriteVS(Value *pVal, Value *pVsContext, Value *pVtxOutput,
+                unsigned slot, unsigned channel);
 
    struct gallivm_state *gallivm;
    PFN_VERTEX_FUNC CompileVS(struct swr_context *ctx, swr_jit_vs_key &key);
@@ -490,7 +496,6 @@ BuilderSWR::swr_gs_llvm_epilogue(const struct lp_build_tgsi_gs_iface *gs_base,
                         LLVMValueRef emitted_prims_vec)
 {
    swr_gs_llvm_iface *iface = (swr_gs_llvm_iface*)gs_base;
-   SWR_GS_STATE *pGS = iface->pGsState;
 
    IRB()->SetInsertPoint(unwrap(LLVMGetInsertBlock(gallivm->builder)));
 
@@ -655,6 +660,23 @@ swr_compile_gs(struct swr_context *ctx, swr_jit_gs_key &key)
    return func;
 }
 
+void
+BuilderSWR::WriteVS(Value *pVal, Value *pVsContext, Value *pVtxOutput, unsigned slot, unsigned channel)
+{
+#if USE_SIMD16_FRONTEND
+   // interleave the simdvertex components into the dest simd16vertex
+   //   slot16offset = slot8offset * 2
+   //   comp16offset = comp8offset * 2 + alternateOffset
+
+   Value *offset = LOAD(pVsContext, { 0, SWR_VS_CONTEXT_AlternateOffset });
+   Value *pOut = GEP(pVtxOutput, { C(0), C(0), C(slot * 2), offset } );
+   STORE(pVal, pOut, {channel * 2});
+#else
+   Value *pOut = GEP(pVtxOutput, {0, 0, slot});
+   STORE(pVal, pOut, {0, channel});
+#endif
+}
+
 PFN_VERTEX_FUNC
 BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
 {
@@ -750,7 +772,7 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
          uint32_t outSlot = attrib;
          if (swr_vs->info.base.output_semantic_name[attrib] == TGSI_SEMANTIC_PSIZE)
             outSlot = VERTEX_POINT_SIZE_SLOT;
-         STORE(val, vtxOutput, {0, 0, outSlot, channel});
+         WriteVS(val, pVsCtx, vtxOutput, outSlot, channel);
       }
    }
 
@@ -784,10 +806,10 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
                                              &swr_vs->info.base);
             if (val < 4) {
                LLVMValueRef dist = LLVMBuildLoad(gallivm->builder, outputs[cv][val], "");
-               STORE(unwrap(dist), vtxOutput, {0, 0, VERTEX_CLIPCULL_DIST_LO_SLOT, val});
+               WriteVS(unwrap(dist), pVsCtx, vtxOutput, VERTEX_CLIPCULL_DIST_LO_SLOT, val);
             } else {
                LLVMValueRef dist = LLVMBuildLoad(gallivm->builder, outputs[cv][val - 4], "");
-               STORE(unwrap(dist), vtxOutput, {0, 0, VERTEX_CLIPCULL_DIST_HI_SLOT, val - 4});
+               WriteVS(unwrap(dist), pVsCtx, vtxOutput, VERTEX_CLIPCULL_DIST_HI_SLOT, val - 4);
             }
             continue;
          }
@@ -805,9 +827,9 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
                                       FMUL(unwrap(cw), VBROADCAST(pw)))));
 
          if (val < 4)
-            STORE(dist, vtxOutput, {0, 0, VERTEX_CLIPCULL_DIST_LO_SLOT, val});
+            WriteVS(dist, pVsCtx, vtxOutput, VERTEX_CLIPCULL_DIST_LO_SLOT, val);
          else
-            STORE(dist, vtxOutput, {0, 0, VERTEX_CLIPCULL_DIST_HI_SLOT, val - 4});
+            WriteVS(dist, pVsCtx, vtxOutput, VERTEX_CLIPCULL_DIST_HI_SLOT, val - 4);
       }
    }
 
@@ -1100,17 +1122,58 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
    memset(&system_values, 0, sizeof(system_values));
 
    struct lp_build_mask_context mask;
+   bool uses_mask = false;
 
-   if (swr_fs->info.base.uses_kill) {
-      Value *mask_val = LOAD(pPS, {0, SWR_PS_CONTEXT_activeMask}, "activeMask");
+   if (swr_fs->info.base.uses_kill ||
+       key.poly_stipple_enable) {
+      Value *vActiveMask = NULL;
+      if (swr_fs->info.base.uses_kill) {
+         vActiveMask = LOAD(pPS, {0, SWR_PS_CONTEXT_activeMask}, "activeMask");
+      }
+      if (key.poly_stipple_enable) {
+         // first get fragment xy coords and clip to stipple bounds
+         Value *vXf = LOAD(pPS, {0, SWR_PS_CONTEXT_vX, PixelPositions_UL});
+         Value *vYf = LOAD(pPS, {0, SWR_PS_CONTEXT_vY, PixelPositions_UL});
+         Value *vXu = FP_TO_UI(vXf, mSimdInt32Ty);
+         Value *vYu = FP_TO_UI(vYf, mSimdInt32Ty);
+
+         // stipple pattern is 32x32, which means that one line of stipple
+         // is stored in one word:
+         // vXstipple is bit offset inside 32-bit stipple word
+         // vYstipple is word index is stipple array
+         Value *vXstipple = AND(vXu, VIMMED1(0x1f)); // & (32-1)
+         Value *vYstipple = AND(vYu, VIMMED1(0x1f)); // & (32-1)
+
+         // grab stipple pattern base address
+         Value *stipplePtr = GEP(hPrivateData, {0, swr_draw_context_polyStipple, 0});
+         stipplePtr = BITCAST(stipplePtr, mInt8PtrTy);
+
+         // peform a gather to grab stipple words for each lane
+         Value *vStipple = GATHERDD(VUNDEF_I(), stipplePtr, vYstipple,
+                                    VIMMED1(0xffffffff), C((char)4));
+
+         // create a mask with one bit corresponding to the x stipple
+         // and AND it with the pattern, to see if we have a bit
+         Value *vBitMask = LSHR(VIMMED1(0x80000000), vXstipple);
+         Value *vStippleMask = AND(vStipple, vBitMask);
+         vStippleMask = ICMP_NE(vStippleMask, VIMMED1(0));
+         vStippleMask = VMASK(vStippleMask);
+
+         if (swr_fs->info.base.uses_kill) {
+            vActiveMask = AND(vActiveMask, vStippleMask);
+         } else {
+            vActiveMask = vStippleMask;
+         }
+      }
       lp_build_mask_begin(
-         &mask, gallivm, lp_type_float_vec(32, 32 * 8), wrap(mask_val));
+         &mask, gallivm, lp_type_float_vec(32, 32 * 8), wrap(vActiveMask));
+      uses_mask = true;
    }
 
    lp_build_tgsi_soa(gallivm,
                      swr_fs->pipe.tokens,
                      lp_type_float_vec(32, 32 * 8),
-                     swr_fs->info.base.uses_kill ? &mask : NULL, // mask
+                     uses_mask ? &mask : NULL, // mask
                      wrap(consts_ptr),
                      wrap(const_sizes_ptr),
                      &system_values,
@@ -1173,13 +1236,13 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
    }
 
    LLVMValueRef mask_result = 0;
-   if (swr_fs->info.base.uses_kill) {
+   if (uses_mask) {
       mask_result = lp_build_mask_end(&mask);
    }
 
    IRB()->SetInsertPoint(unwrap(LLVMGetInsertBlock(gallivm->builder)));
 
-   if (swr_fs->info.base.uses_kill) {
+   if (uses_mask) {
       STORE(unwrap(mask_result), pPS, {0, SWR_PS_CONTEXT_activeMask});
    }
 

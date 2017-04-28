@@ -22,7 +22,7 @@
 include Makefile.sources
 include $(top_srcdir)/src/gallium/Automake.inc
 
-AM_CXXFLAGS = $(GALLIUM_DRIVER_CFLAGS) $(SWR_CXX11_CXXFLAGS)
+AM_CXXFLAGS = $(GALLIUM_DRIVER_CFLAGS) $(SWR_CXX14_CXXFLAGS)
 
 noinst_LTLIBRARIES = libmesaswr.la
 
@@ -32,7 +32,7 @@ COMMON_CXXFLAGS = \
 	-fno-strict-aliasing \
 	$(GALLIUM_DRIVER_CFLAGS) \
 	$(LLVM_CXXFLAGS) \
-	$(SWR_CXX11_CXXFLAGS) \
+	$(SWR_CXX14_CXXFLAGS) \
 	-I$(builddir)/rasterizer/codegen \
 	-I$(builddir)/rasterizer/jitter \
 	-I$(builddir)/rasterizer/archrast \
@@ -237,25 +237,9 @@ EXTRA_DIST = \
 	rasterizer/codegen/gen_llvm_types.py \
 	rasterizer/codegen/gen_archrast.py \
 	rasterizer/codegen/gen_backends.py \
+	rasterizer/codegen/gen_common.py \
 	rasterizer/codegen/gen_knobs.py \
 	rasterizer/codegen/knob_defs.py \
-	rasterizer/codegen/mako/ast.py \
-	rasterizer/codegen/mako/_ast_util.py \
-	rasterizer/codegen/mako/cache.py \
-	rasterizer/codegen/mako/cmd.py \
-	rasterizer/codegen/mako/codegen.py \
-	rasterizer/codegen/mako/compat.py \
-	rasterizer/codegen/mako/exceptions.py \
-	rasterizer/codegen/mako/filters.py \
-	rasterizer/codegen/mako/__init__.py \
-	rasterizer/codegen/mako/lexer.py \
-	rasterizer/codegen/mako/lookup.py \
-	rasterizer/codegen/mako/parsetree.py \
-	rasterizer/codegen/mako/pygen.py \
-	rasterizer/codegen/mako/pyparser.py \
-	rasterizer/codegen/mako/runtime.py \
-	rasterizer/codegen/mako/template.py \
-	rasterizer/codegen/mako/util.py \
 	rasterizer/codegen/templates/gen_ar_event.cpp \
 	rasterizer/codegen/templates/gen_ar_event.hpp \
 	rasterizer/codegen/templates/gen_ar_eventhandler.hpp \

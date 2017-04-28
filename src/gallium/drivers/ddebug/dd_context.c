@@ -151,6 +151,21 @@ dd_context_get_query_result(struct pipe_context *_pipe,
 }
 
 static void
+dd_context_get_query_result_resource(struct pipe_context *_pipe,
+                                     struct pipe_query *query,
+                                     boolean wait,
+                                     enum pipe_query_value_type result_type,
+                                     int index,
+                                     struct pipe_resource *resource,
+                                     unsigned offset)
+{
+   struct pipe_context *pipe = dd_context(_pipe)->pipe;
+
+   pipe->get_query_result_resource(pipe, dd_query_unwrap(query), wait,
+                                   result_type, index, resource, offset);
+}
+
+static void
 dd_context_set_active_query_state(struct pipe_context *_pipe, boolean enable)
 {
    struct pipe_context *pipe = dd_context(_pipe)->pipe;
@@ -691,6 +706,16 @@ dd_context_memory_barrier(struct pipe_context *_pipe, unsigned flags)
    pipe->memory_barrier(pipe, flags);
 }
 
+static bool
+dd_context_resource_commit(struct pipe_context *_pipe,
+                           struct pipe_resource *resource,
+                           unsigned level, struct pipe_box *box, bool commit)
+{
+   struct pipe_context *pipe = dd_context(_pipe)->pipe;
+
+   return pipe->resource_commit(pipe, resource, level, box, commit);
+}
+
 static void
 dd_context_get_sample_position(struct pipe_context *_pipe,
                                unsigned sample_count, unsigned sample_index,
@@ -775,6 +800,7 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    CTX_INIT(begin_query);
    CTX_INIT(end_query);
    CTX_INIT(get_query_result);
+   CTX_INIT(get_query_result_resource);
    CTX_INIT(set_active_query_state);
    CTX_INIT(create_blend_state);
    CTX_INIT(bind_blend_state);
@@ -839,6 +865,7 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    CTX_INIT(texture_subdata);
    CTX_INIT(texture_barrier);
    CTX_INIT(memory_barrier);
+   CTX_INIT(resource_commit);
    /* create_video_codec */
    /* create_video_buffer */
    /* set_compute_resources */

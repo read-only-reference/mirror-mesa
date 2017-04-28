@@ -52,7 +52,8 @@ etna_screen_resource_alloc_ts(struct pipe_screen *pscreen,
 
    /* TS only for level 0 -- XXX is this formula correct? */
    pixels = rsc->levels[0].layer_stride / util_format_get_blocksize(rsc->base.format);
-   ts_layer_stride = align(pixels * screen->specs.bits_per_tile / 0x80, 0x100);
+   ts_layer_stride = align(pixels * screen->specs.bits_per_tile / 0x80,
+                           0x100 * screen->specs.pixel_pipes);
    rt_ts_size = ts_layer_stride * rsc->base.array_size;
    if (rt_ts_size == 0)
       return true;
@@ -230,12 +231,9 @@ etna_resource_create(struct pipe_screen *pscreen,
 {
    struct etna_screen *screen = etna_screen(pscreen);
 
-   /* Figure out what tiling to use -- for now, assume that textures cannot be
-    * supertiled, and cannot be linear.
-    * There is a feature flag SUPERTILED_TEXTURE (not supported on any known hw)
-    * that may allow this, as well
-    * as LINEAR_TEXTURE_SUPPORT (supported on gc880 and gc2000 at least), but
-    * not sure how it works.
+   /* Figure out what tiling to use -- for now, assume that texture cannot be linear.
+    * there is a capability LINEAR_TEXTURE_SUPPORT (supported on gc880 and
+    * gc2000 at least), but not sure how it works.
     * Buffers always have LINEAR layout.
     */
    unsigned layout = ETNA_LAYOUT_LINEAR;
@@ -248,8 +246,14 @@ etna_resource_create(struct pipe_screen *pscreen,
       if (util_format_is_compressed(templat->format))
          layout = ETNA_LAYOUT_LINEAR;
    } else if (templat->target != PIPE_BUFFER) {
-      bool want_multitiled = screen->specs.pixel_pipes > 1;
+      bool want_multitiled = false;
       bool want_supertiled = screen->specs.can_supertile && !DBG_ENABLED(ETNA_DBG_NO_SUPERTILE);
+
+      /* When this GPU supports single-buffer rendering, don't ever enable
+       * multi-tiling. This replicates the blob behavior on GC3000.
+       */
+      if (!screen->specs.single_buffer)
+         want_multitiled = screen->specs.pixel_pipes > 1;
 
       /* Keep single byte blocksized resources as tiled, since we
        * are unable to use the RS blit to de-tile them. However,

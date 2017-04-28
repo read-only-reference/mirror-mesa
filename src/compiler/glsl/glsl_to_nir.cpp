@@ -308,6 +308,13 @@ constant_copy(ir_constant *ir, void *mem_ctx)
 void
 nir_visitor::visit(ir_variable *ir)
 {
+   /* TODO: In future we should switch to using the NIR lowering pass but for
+    * now just ignore these variables as GLSL IR should have lowered them.
+    * Anything remaining are just dead vars that weren't cleaned up.
+    */
+   if (ir->data.mode == ir_var_shader_shared)
+      return;
+
    nir_variable *var = ralloc(shader, nir_variable);
    var->type = ir->type;
    var->name = ralloc_strdup(var, ir->name);
@@ -930,7 +937,8 @@ nir_visitor::visit(ir_call *ir)
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_shader_clock:
-         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 32, NULL);
+         nir_ssa_dest_init(&instr->instr, &instr->dest, 2, 32, NULL);
+         instr->num_components = 2;
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_store_ssbo: {
@@ -984,7 +992,7 @@ nir_visitor::visit(ir_call *ir)
           * consider a true boolean to be ~0. Fix this up with a != 0
           * comparison.
           */
-         if (type->base_type == GLSL_TYPE_BOOL) {
+         if (type->is_boolean()) {
             nir_alu_instr *load_ssbo_compare =
                nir_alu_instr_create(shader, nir_op_ine);
             load_ssbo_compare->src[0].src.is_ssa = true;
@@ -1333,7 +1341,7 @@ nir_visitor::visit(ir_expression *ir)
        * a true boolean to be ~0. Fix this up with a != 0 comparison.
        */
 
-      if (ir->type->base_type == GLSL_TYPE_BOOL)
+      if (ir->type->is_boolean())
          this->result = nir_ine(&b, &load->dest.ssa, nir_imm_int(&b, 0));
 
       return;

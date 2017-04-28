@@ -112,7 +112,7 @@ fd_context_destroy(struct pipe_context *pctx)
 
 	DBG("");
 
-	if (ctx->screen->reorder)
+	if (ctx->screen->reorder && util_queue_is_initialized(&ctx->flush_queue))
 		util_queue_destroy(&ctx->flush_queue);
 
 	fd_batch_reference(&ctx->batch, NULL);  /* unref current batch */
@@ -121,7 +121,6 @@ fd_context_destroy(struct pipe_context *pctx)
 	fd_fence_ref(pctx->screen, &ctx->last_fence, NULL);
 
 	fd_prog_fini(pctx);
-	fd_hw_query_fini(pctx);
 
 	if (ctx->blitter)
 		util_blitter_destroy(ctx->blitter);
@@ -293,7 +292,6 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	fd_query_context_init(pctx);
 	fd_texture_init(pctx);
 	fd_state_init(pctx);
-	fd_hw_query_init(pctx);
 
 	ctx->blitter = util_blitter_create(pctx);
 	if (!ctx->blitter)
@@ -302,6 +300,9 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	ctx->primconvert = util_primconvert_create(pctx, ctx->primtype_mask);
 	if (!ctx->primconvert)
 		goto fail;
+
+	list_inithead(&ctx->hw_active_queries);
+	list_inithead(&ctx->acc_active_queries);
 
 	return pctx;
 

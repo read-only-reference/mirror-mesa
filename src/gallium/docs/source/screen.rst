@@ -377,6 +377,18 @@ The integer capabilities:
 * ``PIPE_CAP_TGSI_TEX_TXF_LZ``: Whether TEX_LZ and TXF_LZ opcodes are
   supported.
 * ``PIPE_CAP_TGSI_CLOCK``: Whether the CLOCK opcode is supported.
+* ``PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE``: Whether the
+  PIPE_POLYGON_MODE_FILL_RECTANGLE mode is supported for
+  ``pipe_rasterizer_state::fill_front`` and
+  ``pipe_rasterizer_state::fill_back``.
+* ``PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE``: The page size of sparse buffers in
+  bytes, or 0 if sparse buffers are not supported. The page size must be at
+  most 64KB.
+* ``PIPE_CAP_TGSI_BALLOT``: Whether the BALLOT and READ_* opcodes as well as
+  the SUBGROUP_* semantics are supported.
+* ``PIPE_CAP_TGSI_TES_LAYER_VIEWPORT``: Whether ``TGSI_SEMANTIC_LAYER`` and
+  ``TGSI_SEMANTIC_VIEWPORT_INDEX`` are supported as tessellation evaluation
+  shader outputs.
 
 
 .. _pipe_capf:
@@ -477,6 +489,9 @@ to be 0.
   cost than this value should be lowered by the state tracker for better
   performance. This is a tunable for the GLSL compiler and the behavior is
   specific to the compiler.
+* ``PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS``: Whether the merge registers
+  TGSI pass is skipped. This might reduce code size and register pressure if
+  the underlying driver has a real backend compiler.
 
 
 .. _pipe_compute_cap:
@@ -655,8 +670,6 @@ Determine if a resource in the given format can be used in a specific manner.
 the maximum allowed legal value is 32.
 
 **bindings** is a bitmask of :ref:`PIPE_BIND` flags.
-
-**geom_flags** is a bitmask of PIPE_TEXTURE_GEOM_x flags.
 
 Returns TRUE if all usages can be satisfied.
 

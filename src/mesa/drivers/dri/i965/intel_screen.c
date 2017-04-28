@@ -105,7 +105,7 @@ DRI_CONF_END
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
-#include "intel_bufmgr.h"
+#include "brw_bufmgr.h"
 #include "intel_fbo.h"
 #include "intel_mipmap_tree.h"
 #include "intel_screen.h"
@@ -294,7 +294,7 @@ static void
 intel_image_warn_if_unaligned(__DRIimage *image, const char *func)
 {
    uint32_t tiling, swizzle;
-   drm_intel_bo_get_tiling(image->bo, &tiling, &swizzle);
+   brw_bo_get_tiling(image->bo, &tiling, &swizzle);
 
    if (tiling != I915_TILING_NONE && (image->offset & 0xfff)) {
       _mesa_warning(NULL, "%s: offset 0x%08x not on tile boundary",
@@ -375,9 +375,9 @@ intel_setup_image_from_mipmap_tree(struct brw_context *brw, __DRIimage *image,
                                                   &image->tile_x,
                                                   &image->tile_y);
 
-   drm_intel_bo_unreference(image->bo);
+   brw_bo_unreference(image->bo);
    image->bo = mt->bo;
-   drm_intel_bo_reference(mt->bo);
+   brw_bo_reference(mt->bo);
 }
 
 static __DRIimage *
@@ -401,7 +401,7 @@ intel_create_image_from_name(__DRIscreen *dri_screen,
     image->width = width;
     image->height = height;
     image->pitch = pitch * cpp;
-    image->bo = drm_intel_bo_gem_create_from_name(screen->bufmgr, "image",
+    image->bo = brw_bo_gem_create_from_name(screen->bufmgr, "image",
                                                   name);
     if (!image->bo) {
        free(image);
@@ -437,9 +437,9 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
    image->format = rb->Format;
    image->offset = 0;
    image->data = loaderPrivate;
-   drm_intel_bo_unreference(image->bo);
+   brw_bo_unreference(image->bo);
    image->bo = irb->mt->bo;
-   drm_intel_bo_reference(irb->mt->bo);
+   brw_bo_reference(irb->mt->bo);
    image->width = rb->Width;
    image->height = rb->Height;
    image->pitch = irb->mt->pitch;
@@ -513,7 +513,7 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
 static void
 intel_destroy_image(__DRIimage *image)
 {
-   drm_intel_bo_unreference(image->bo);
+   brw_bo_unreference(image->bo);
    free(image);
 }
 
@@ -573,7 +573,6 @@ intel_create_image_common(__DRIscreen *dri_screen,
     */
    uint32_t tiling = I915_TILING_X;
    int cpp;
-   unsigned long pitch;
 
    /* Callers of this may specify a modifier, or a dri usage, but not both. The
     * newer modifier interface deprecates the older usage flags newer modifier
@@ -613,16 +612,15 @@ intel_create_image_common(__DRIscreen *dri_screen,
       return NULL;
 
    cpp = _mesa_get_format_bytes(image->format);
-   image->bo = drm_intel_bo_alloc_tiled(screen->bufmgr, "image",
-                                        width, height, cpp, &tiling,
-                                        &pitch, 0);
+   image->bo = brw_bo_alloc_tiled(screen->bufmgr, "image",
+                                  width, height, cpp, tiling,
+                                  &image->pitch, 0);
    if (image->bo == NULL) {
       free(image);
       return NULL;
    }
    image->width = width;
    image->height = height;
-   image->pitch = pitch;
    image->modifier = modifier;
 
    return image;
@@ -657,10 +655,10 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
       *value = image->pitch;
       return true;
    case __DRI_IMAGE_ATTRIB_HANDLE:
-      *value = image->bo->handle;
+      *value = image->bo->gem_handle;
       return true;
    case __DRI_IMAGE_ATTRIB_NAME:
-      return !drm_intel_bo_flink(image->bo, (uint32_t *) value);
+      return !brw_bo_flink(image->bo, (uint32_t *) value);
    case __DRI_IMAGE_ATTRIB_FORMAT:
       *value = image->dri_format;
       return true;
@@ -676,7 +674,7 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
       *value = image->planar_format->components;
       return true;
    case __DRI_IMAGE_ATTRIB_FD:
-      return !drm_intel_bo_gem_export_to_prime(image->bo, value);
+      return !brw_bo_gem_export_to_prime(image->bo, value);
    case __DRI_IMAGE_ATTRIB_FOURCC:
       return intel_lookup_fourcc(image->dri_format, value);
    case __DRI_IMAGE_ATTRIB_NUM_PLANES:
@@ -706,7 +704,7 @@ intel_dup_image(__DRIimage *orig_image, void *loaderPrivate)
    if (image == NULL)
       return NULL;
 
-   drm_intel_bo_reference(orig_image->bo);
+   brw_bo_reference(orig_image->bo);
    image->bo              = orig_image->bo;
    image->internal_format = orig_image->internal_format;
    image->planar_format   = orig_image->planar_format;
@@ -824,7 +822,7 @@ intel_create_image_from_fds(__DRIscreen *dri_screen,
          size = end;
    }
 
-   image->bo = drm_intel_bo_gem_create_from_prime(screen->bufmgr,
+   image->bo = brw_bo_gem_create_from_prime(screen->bufmgr,
                                                   fds[0], size);
    if (image->bo == NULL) {
       free(image);
@@ -916,7 +914,7 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
     }
 
     image->bo = parent->bo;
-    drm_intel_bo_reference(parent->bo);
+    brw_bo_reference(parent->bo);
 
     image->width = width;
     image->height = height;
@@ -950,6 +948,17 @@ static const __DRIimageExtension intelImageExtension = {
     .createImageWithModifiers           = intel_create_image_with_modifiers,
 };
 
+static uint64_t
+get_aperture_size(int fd)
+{
+   struct drm_i915_gem_get_aperture aperture;
+
+   if (drmIoctl(fd, DRM_IOCTL_I915_GEM_GET_APERTURE, &aperture) != 0)
+      return 0;
+
+   return aperture.aper_size;
+}
+
 static int
 brw_query_renderer_integer(__DRIscreen *dri_screen,
                            int param, unsigned int *value)
@@ -972,13 +981,8 @@ brw_query_renderer_integer(__DRIscreen *dri_screen,
        * assume that there's some fragmentation, and we start doing extra
        * flushing, etc.  That's the big cliff apps will care about.
        */
-      size_t aper_size;
-      size_t mappable_size;
-
-      drm_intel_get_aperture_sizes(dri_screen->fd, &mappable_size, &aper_size);
-
       const unsigned gpu_mappable_megabytes =
-         (aper_size / (1024 * 1024)) * 3 / 4;
+         screen->aperture_threshold / (1024 * 1024);
 
       const long system_memory_pages = sysconf(_SC_PHYS_PAGES);
       const long system_page_size = sysconf(_SC_PAGE_SIZE);
@@ -1103,7 +1107,7 @@ intelDestroyScreen(__DRIscreen * sPriv)
 {
    struct intel_screen *screen = sPriv->driverPrivate;
 
-   drm_intel_bufmgr_destroy(screen->bufmgr);
+   brw_bufmgr_destroy(screen->bufmgr);
    driDestroyOptionInfo(&screen->optionCache);
 
    ralloc_free(screen);
@@ -1158,11 +1162,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
 
    /* setup the hardware-based renderbuffers */
    rb = intel_create_renderbuffer(rgbFormat, num_samples);
-   _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &rb->Base.Base);
+   _mesa_attach_and_own_rb(fb, BUFFER_FRONT_LEFT, &rb->Base.Base);
 
    if (mesaVis->doubleBufferMode) {
       rb = intel_create_renderbuffer(rgbFormat, num_samples);
-      _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &rb->Base.Base);
+      _mesa_attach_and_own_rb(fb, BUFFER_BACK_LEFT, &rb->Base.Base);
    }
 
    /*
@@ -1176,10 +1180,10 @@ intelCreateBuffer(__DRIscreen *dri_screen,
       if (screen->devinfo.has_hiz_and_separate_stencil) {
          rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_X8_UINT,
                                                 num_samples);
-         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &rb->Base.Base);
+         _mesa_attach_and_own_rb(fb, BUFFER_DEPTH, &rb->Base.Base);
          rb = intel_create_private_renderbuffer(MESA_FORMAT_S_UINT8,
                                                 num_samples);
-         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &rb->Base.Base);
+         _mesa_attach_and_own_rb(fb, BUFFER_STENCIL, &rb->Base.Base);
       } else {
          /*
           * Use combined depth/stencil. Note that the renderbuffer is
@@ -1187,15 +1191,15 @@ intelCreateBuffer(__DRIscreen *dri_screen,
           */
          rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_S8_UINT,
                                                 num_samples);
-         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &rb->Base.Base);
-         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &rb->Base.Base);
+         _mesa_attach_and_own_rb(fb, BUFFER_DEPTH, &rb->Base.Base);
+         _mesa_attach_and_reference_rb(fb, BUFFER_STENCIL, &rb->Base.Base);
       }
    }
    else if (mesaVis->depthBits == 16) {
       assert(mesaVis->stencilBits == 0);
       rb = intel_create_private_renderbuffer(MESA_FORMAT_Z_UNORM16,
                                              num_samples);
-      _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &rb->Base.Base);
+      _mesa_attach_and_own_rb(fb, BUFFER_DEPTH, &rb->Base.Base);
    }
    else {
       assert(mesaVis->depthBits == 0);
@@ -1263,16 +1267,15 @@ intel_init_bufmgr(struct intel_screen *screen)
 {
    __DRIscreen *dri_screen = screen->driScrnPriv;
 
-   screen->no_hw = getenv("INTEL_NO_HW") != NULL;
+   if (getenv("INTEL_NO_HW") != NULL)
+      screen->no_hw = true;
 
-   screen->bufmgr = drm_intel_bufmgr_gem_init(dri_screen->fd, BATCH_SZ);
+   screen->bufmgr = brw_bufmgr_init(&screen->devinfo, dri_screen->fd, BATCH_SZ);
    if (screen->bufmgr == NULL) {
       fprintf(stderr, "[%s:%u] Error initializing buffer manager.\n",
 	      __func__, __LINE__);
       return false;
    }
-
-   drm_intel_bufmgr_gem_enable_fenced_relocs(screen->bufmgr);
 
    if (!intel_get_boolean(screen, I915_PARAM_HAS_WAIT_TIMEOUT)) {
       fprintf(stderr, "[%s: %u] Kernel 3.6 required.\n", __func__, __LINE__);
@@ -1285,20 +1288,19 @@ intel_init_bufmgr(struct intel_screen *screen)
 static bool
 intel_detect_swizzling(struct intel_screen *screen)
 {
-   drm_intel_bo *buffer;
-   unsigned long flags = 0;
-   unsigned long aligned_pitch;
+   struct brw_bo *buffer;
+   unsigned flags = 0;
+   uint32_t aligned_pitch;
    uint32_t tiling = I915_TILING_X;
    uint32_t swizzle_mode = 0;
 
-   buffer = drm_intel_bo_alloc_tiled(screen->bufmgr, "swizzle test",
-				     64, 64, 4,
-				     &tiling, &aligned_pitch, flags);
+   buffer = brw_bo_alloc_tiled(screen->bufmgr, "swizzle test",
+                               64, 64, 4, tiling, &aligned_pitch, flags);
    if (buffer == NULL)
       return false;
 
-   drm_intel_bo_get_tiling(buffer, &tiling, &swizzle_mode);
-   drm_intel_bo_unreference(buffer);
+   brw_bo_get_tiling(buffer, &tiling, &swizzle_mode);
+   brw_bo_unreference(buffer);
 
    if (swizzle_mode == I915_BIT_6_SWIZZLE_NONE)
       return false;
@@ -1318,13 +1320,13 @@ intel_detect_timestamp(struct intel_screen *screen)
     * More recent kernels offer an interface to read the full 36bits
     * everywhere.
     */
-   if (drm_intel_reg_read(screen->bufmgr, TIMESTAMP | 1, &dummy) == 0)
+   if (brw_reg_read(screen->bufmgr, TIMESTAMP | 1, &dummy) == 0)
       return 3;
 
    /* Determine if we have a 32bit or 64bit kernel by inspecting the
     * upper 32bits for a rapidly changing timestamp.
     */
-   if (drm_intel_reg_read(screen->bufmgr, TIMESTAMP, &last))
+   if (brw_reg_read(screen->bufmgr, TIMESTAMP, &last))
       return 0;
 
    upper = lower = 0;
@@ -1332,7 +1334,7 @@ intel_detect_timestamp(struct intel_screen *screen)
       /* The TIMESTAMP should change every 80ns, so several round trips
        * through the kernel should be enough to advance it.
        */
-      if (drm_intel_reg_read(screen->bufmgr, TIMESTAMP, &dummy))
+      if (brw_reg_read(screen->bufmgr, TIMESTAMP, &dummy))
          return 0;
 
       upper += (dummy >> 32) != (last >> 32);
@@ -1361,21 +1363,24 @@ static bool
 intel_detect_pipelined_register(struct intel_screen *screen,
                                 int reg, uint32_t expected_value, bool reset)
 {
-   drm_intel_bo *results, *bo;
+   if (screen->no_hw)
+      return false;
+
+   struct brw_bo *results, *bo;
    uint32_t *batch;
    uint32_t offset = 0;
    bool success = false;
 
    /* Create a zero'ed temporary buffer for reading our results */
-   results = drm_intel_bo_alloc(screen->bufmgr, "registers", 4096, 0);
+   results = brw_bo_alloc(screen->bufmgr, "registers", 4096, 0);
    if (results == NULL)
       goto err;
 
-   bo = drm_intel_bo_alloc(screen->bufmgr, "batchbuffer", 4096, 0);
+   bo = brw_bo_alloc(screen->bufmgr, "batchbuffer", 4096, 0);
    if (bo == NULL)
       goto err_results;
 
-   if (drm_intel_bo_map(bo, 1))
+   if (brw_bo_map(NULL, bo, 1))
       goto err_batch;
 
    batch = bo->virtual;
@@ -1388,11 +1393,14 @@ intel_detect_pipelined_register(struct intel_screen *screen,
    /* Save the register's value back to the buffer. */
    *batch++ = MI_STORE_REGISTER_MEM | (3 - 2);
    *batch++ = reg;
-   drm_intel_bo_emit_reloc(bo, (char *)batch -(char *)bo->virtual,
-                           results, offset*sizeof(uint32_t),
-                           I915_GEM_DOMAIN_INSTRUCTION,
-                           I915_GEM_DOMAIN_INSTRUCTION);
-   *batch++ = results->offset + offset*sizeof(uint32_t);
+   struct drm_i915_gem_relocation_entry reloc = {
+      .offset = (char *) batch - (char *) bo->virtual,
+      .delta = offset * sizeof(uint32_t),
+      .target_handle = results->gem_handle,
+      .read_domains = I915_GEM_DOMAIN_INSTRUCTION,
+      .write_domain = I915_GEM_DOMAIN_INSTRUCTION,
+   };
+   *batch++ = reloc.presumed_offset + reloc.delta;
 
    /* And afterwards clear the register */
    if (reset) {
@@ -1403,20 +1411,40 @@ intel_detect_pipelined_register(struct intel_screen *screen,
 
    *batch++ = MI_BATCH_BUFFER_END;
 
-   drm_intel_bo_mrb_exec(bo, ALIGN((char *)batch - (char *)bo->virtual, 8),
-                         NULL, 0, 0,
-                         I915_EXEC_RENDER);
+   struct drm_i915_gem_exec_object2 exec_objects[2] = {
+      {
+         .handle = results->gem_handle,
+      },
+      {
+         .handle = bo->gem_handle,
+         .relocation_count = 1,
+         .relocs_ptr = (uintptr_t) &reloc,
+      }
+   };
+
+   struct drm_i915_gem_execbuffer2 execbuf = {
+      .buffers_ptr = (uintptr_t) exec_objects,
+      .buffer_count = 2,
+      .batch_len = ALIGN((char *) batch - (char *) bo->virtual, 8),
+      .flags = I915_EXEC_RENDER,
+   };
+
+   /* Don't bother with error checking - if the execbuf fails, the
+    * value won't be written and we'll just report that there's no access.
+    */
+   __DRIscreen *dri_screen = screen->driScrnPriv;
+   drmIoctl(dri_screen->fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &execbuf);
 
    /* Check whether the value got written. */
-   if (drm_intel_bo_map(results, false) == 0) {
+   if (brw_bo_map(NULL, results, false) == 0) {
       success = *((uint32_t *)results->virtual + offset) == expected_value;
-      drm_intel_bo_unmap(results);
+      brw_bo_unmap(results);
    }
 
 err_batch:
-   drm_intel_bo_unreference(bo);
+   brw_bo_unreference(bo);
 err_results:
-   drm_intel_bo_unreference(results);
+   brw_bo_unreference(results);
 err:
    return success;
 }
@@ -1624,12 +1652,11 @@ set_max_gl_versions(struct intel_screen *screen)
       break;
    case 7:
       dri_screen->max_gl_core_version = 33;
-      if (screen->devinfo.is_haswell &&
-          can_do_pipelined_register_writes(screen)) {
+      if (can_do_pipelined_register_writes(screen)) {
          dri_screen->max_gl_core_version = 42;
-         if (can_do_compute_dispatch(screen))
+         if (screen->devinfo.is_haswell && can_do_compute_dispatch(screen))
             dri_screen->max_gl_core_version = 43;
-         if (can_do_mi_math_and_lrr(screen))
+         if (screen->devinfo.is_haswell && can_do_mi_math_and_lrr(screen))
             dri_screen->max_gl_core_version = 45;
       }
       dri_screen->max_gl_compat_version = 30;
@@ -1721,6 +1748,53 @@ shader_perf_log_mesa(void *data, const char *fmt, ...)
    va_end(args);
 }
 
+static int
+parse_devid_override(const char *devid_override)
+{
+   static const struct {
+      const char *name;
+      int pci_id;
+   } name_map[] = {
+      { "brw", 0x2a02 },
+      { "g4x", 0x2a42 },
+      { "ilk", 0x0042 },
+      { "snb", 0x0126 },
+      { "ivb", 0x016a },
+      { "hsw", 0x0d2e },
+      { "byt", 0x0f33 },
+      { "bdw", 0x162e },
+      { "skl", 0x1912 },
+      { "kbl", 0x5912 },
+   };
+
+   for (unsigned i = 0; i < ARRAY_SIZE(name_map); i++) {
+      if (!strcmp(name_map[i].name, devid_override))
+         return name_map[i].pci_id;
+   }
+
+   return strtod(devid_override, NULL);
+}
+
+/**
+ * Get the PCI ID for the device.  This can be overridden by setting the
+ * INTEL_DEVID_OVERRIDE environment variable to the desired ID.
+ *
+ * Returns -1 on ioctl failure.
+ */
+static int
+get_pci_device_id(struct intel_screen *screen)
+{
+   if (geteuid() == getuid()) {
+      char *devid_override = getenv("INTEL_DEVID_OVERRIDE");
+      if (devid_override) {
+         screen->no_hw = true;
+         return parse_devid_override(devid_override);
+      }
+   }
+
+   return intel_get_integer(screen, I915_PARAM_CHIPSET_ID);
+}
+
 /**
  * This is the driver specific part of the createNewScreen entry point.
  * Called when using DRI2.
@@ -1753,19 +1827,17 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    screen->driScrnPriv = dri_screen;
    dri_screen->driverPrivate = (void *) screen;
 
-   if (!intel_init_bufmgr(screen))
-       return NULL;
+   screen->deviceID = get_pci_device_id(screen);
 
-   screen->deviceID = drm_intel_bufmgr_gem_get_devid(screen->bufmgr);
    if (!gen_get_device_info(screen->deviceID, &screen->devinfo))
       return NULL;
+
+   if (!intel_init_bufmgr(screen))
+       return NULL;
 
    const struct gen_device_info *devinfo = &screen->devinfo;
 
    brw_process_intel_debug_variable();
-
-   if (INTEL_DEBUG & DEBUG_BUFMGR)
-      drm_intel_bufmgr_set_debug(screen->bufmgr, true);
 
    if ((INTEL_DEBUG & DEBUG_SHADER_TIME) && devinfo->gen < 7) {
       fprintf(stderr,
@@ -1779,7 +1851,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
        * Currently the entire (global) address space for all GTT maps is
        * limited to 64bits. That is all objects on the system that are
        * setup for GTT mmapping must fit within 64bits. An attempt to use
-       * one that exceeds the limit with fail in drm_intel_bo_map_gtt().
+       * one that exceeds the limit with fail in brw_bo_map_gtt().
        *
        * Long before we hit that limit, we will be practically limited by
        * that any single object must fit in physical memory (RAM). The upper
@@ -1806,6 +1878,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
        */
       screen->max_gtt_map_object_size = gtt_size / 4;
    }
+
+   screen->aperture_threshold = get_aperture_size(dri_screen->fd) * 3 / 4;
 
    screen->hw_has_swizzling = intel_detect_swizzling(screen);
    screen->hw_has_timestamp = intel_detect_timestamp(screen);
@@ -1927,6 +2001,30 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
       screen->kernel_features |= KERNEL_ALLOWS_SOL_OFFSET_WRITES;
    }
 
+   if (devinfo->gen >= 8 || screen->cmd_parser_version >= 2)
+      screen->kernel_features |= KERNEL_ALLOWS_PREDICATE_WRITES;
+
+   /* Haswell requires command parser version 4 in order to have L3
+    * atomic scratch1 and chicken3 bits
+    */
+   if (devinfo->is_haswell && screen->cmd_parser_version >= 4) {
+      screen->kernel_features |=
+         KERNEL_ALLOWS_HSW_SCRATCH1_AND_ROW_CHICKEN3;
+   }
+
+   /* Haswell requires command parser version 6 in order to write to the
+    * MI_MATH GPR registers, and version 7 in order to use
+    * MI_LOAD_REGISTER_REG (which all users of MI_MATH use).
+    */
+   if (devinfo->gen >= 8 ||
+       (devinfo->is_haswell && screen->cmd_parser_version >= 7)) {
+      screen->kernel_features |= KERNEL_ALLOWS_MI_MATH_AND_LRR;
+   }
+
+   /* Gen7 needs at least command parser version 5 to support compute */
+   if (devinfo->gen >= 8 || screen->cmd_parser_version >= 5)
+      screen->kernel_features |= KERNEL_ALLOWS_COMPUTE_DISPATCH;
+
    const char *force_msaa = getenv("INTEL_FORCE_MSAA");
    if (force_msaa) {
       screen->winsys_msaa_samples_override =
@@ -1958,30 +2056,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
          (ret != -1 || errno != EINVAL);
    }
 
-   if (devinfo->gen >= 8 || screen->cmd_parser_version >= 2)
-      screen->kernel_features |= KERNEL_ALLOWS_PREDICATE_WRITES;
-
-   /* Haswell requires command parser version 4 in order to have L3
-    * atomic scratch1 and chicken3 bits
-    */
-   if (devinfo->is_haswell && screen->cmd_parser_version >= 4) {
-      screen->kernel_features |=
-         KERNEL_ALLOWS_HSW_SCRATCH1_AND_ROW_CHICKEN3;
-   }
-
-   /* Haswell requires command parser version 6 in order to write to the
-    * MI_MATH GPR registers, and version 7 in order to use
-    * MI_LOAD_REGISTER_REG (which all users of MI_MATH use).
-    */
-   if (devinfo->gen >= 8 ||
-       (devinfo->is_haswell && screen->cmd_parser_version >= 7)) {
-      screen->kernel_features |= KERNEL_ALLOWS_MI_MATH_AND_LRR;
-   }
-
-   /* Gen7 needs at least command parser version 5 to support compute */
-   if (devinfo->gen >= 8 || screen->cmd_parser_version >= 5)
-      screen->kernel_features |= KERNEL_ALLOWS_COMPUTE_DISPATCH;
-
    dri_screen->extensions = !screen->has_context_reset_notification
       ? screenExtensions : intelRobustScreenExtensions;
 
@@ -1998,7 +2072,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
 
 struct intel_buffer {
    __DRIbuffer base;
-   drm_intel_bo *bo;
+   struct brw_bo *bo;
 };
 
 static __DRIbuffer *
@@ -2019,23 +2093,22 @@ intelAllocateBuffer(__DRIscreen *dri_screen,
    /* The front and back buffers are color buffers, which are X tiled. GEN9+
     * supports Y tiled and compressed buffers, but there is no way to plumb that
     * through to here. */
-   uint32_t tiling = I915_TILING_X;
-   unsigned long pitch;
+   uint32_t pitch;
    int cpp = format / 8;
-   intelBuffer->bo = drm_intel_bo_alloc_tiled(screen->bufmgr,
-                                              "intelAllocateBuffer",
-                                              width,
-                                              height,
-                                              cpp,
-                                              &tiling, &pitch,
-                                              BO_ALLOC_FOR_RENDER);
+   intelBuffer->bo = brw_bo_alloc_tiled(screen->bufmgr,
+                                        "intelAllocateBuffer",
+                                        width,
+                                        height,
+                                        cpp,
+                                        I915_TILING_X, &pitch,
+                                        BO_ALLOC_FOR_RENDER);
 
    if (intelBuffer->bo == NULL) {
 	   free(intelBuffer);
 	   return NULL;
    }
 
-   drm_intel_bo_flink(intelBuffer->bo, &intelBuffer->base.name);
+   brw_bo_flink(intelBuffer->bo, &intelBuffer->base.name);
 
    intelBuffer->base.attachment = attachment;
    intelBuffer->base.cpp = cpp;
@@ -2049,7 +2122,7 @@ intelReleaseBuffer(__DRIscreen *dri_screen, __DRIbuffer *buffer)
 {
    struct intel_buffer *intelBuffer = (struct intel_buffer *) buffer;
 
-   drm_intel_bo_unreference(intelBuffer->bo);
+   brw_bo_unreference(intelBuffer->bo);
    free(intelBuffer);
 }
 

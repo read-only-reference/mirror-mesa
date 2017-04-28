@@ -92,7 +92,19 @@ static const VkExtensionProperties instance_extensions[] = {
 
 static const VkExtensionProperties common_device_extensions[] = {
 	{
+		.extensionName = VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME,
+		.specVersion = 1,
+	},
+	{
+		.extensionName = VK_KHR_INCREMENTAL_PRESENT_EXTENSION_NAME,
+		.specVersion = 1,
+	},
+	{
 		.extensionName = VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+		.specVersion = 1,
+	},
+	{
+		.extensionName = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
 		.specVersion = 1,
 	},
 	{
@@ -471,7 +483,7 @@ void radv_GetPhysicalDeviceFeatures(
 		.textureCompressionASTC_LDR               = false,
 		.textureCompressionBC                     = true,
 		.occlusionQueryPrecise                    = true,
-		.pipelineStatisticsQuery                  = false,
+		.pipelineStatisticsQuery                  = true,
 		.vertexPipelineStoresAndAtomics           = true,
 		.fragmentStoresAndAtomics                 = true,
 		.shaderTessellationAndGeometryPointSize   = true,
@@ -490,8 +502,8 @@ void radv_GetPhysicalDeviceFeatures(
 		.shaderInt64                              = false,
 		.shaderInt16                              = false,
 		.sparseBinding                            = true,
-		.variableMultisampleRate                  = false,
-		.inheritedQueries                         = false,
+		.variableMultisampleRate                  = true,
+		.inheritedQueries                         = true,
 	};
 }
 
@@ -530,6 +542,20 @@ void radv_GetPhysicalDeviceProperties(
 {
 	RADV_FROM_HANDLE(radv_physical_device, pdevice, physicalDevice);
 	VkSampleCountFlags sample_counts = 0xf;
+
+	/* make sure that the entire descriptor set is addressable with a signed
+	 * 32-bit int. So the sum of all limits scaled by descriptor size has to
+	 * be at most 2 GiB. the combined image & samples object count as one of
+	 * both. This limit is for the pipeline layout, not for the set layout, but
+	 * there is no set limit, so we just set a pipeline limit. I don't think
+	 * any app is going to hit this soon. */
+	size_t max_descriptor_set_size = ((1ull << 31) - 16 * MAX_DYNAMIC_BUFFERS) /
+	          (32 /* uniform buffer, 32 due to potential space wasted on alignement */ +
+	           32 /* storage buffer, 32 due to potential space wasted on alignement */ +
+	           32 /* sampler, largest when combined with image */ +
+	           64 /* sampled image */ +
+	           64 /* storage image */);
+
 	VkPhysicalDeviceLimits limits = {
 		.maxImageDimension1D                      = (1 << 14),
 		.maxImageDimension2D                      = (1 << 14),
@@ -545,21 +571,21 @@ void radv_GetPhysicalDeviceProperties(
 		.bufferImageGranularity                   = 64, /* A cache line */
 		.sparseAddressSpaceSize                   = 0xffffffffu, /* buffer max size */
 		.maxBoundDescriptorSets                   = MAX_SETS,
-		.maxPerStageDescriptorSamplers            = 64,
-		.maxPerStageDescriptorUniformBuffers      = 64,
-		.maxPerStageDescriptorStorageBuffers      = 64,
-		.maxPerStageDescriptorSampledImages       = 64,
-		.maxPerStageDescriptorStorageImages       = 64,
-		.maxPerStageDescriptorInputAttachments    = 64,
-		.maxPerStageResources                     = 128,
-		.maxDescriptorSetSamplers                 = 256,
-		.maxDescriptorSetUniformBuffers           = 256,
-		.maxDescriptorSetUniformBuffersDynamic    = 256,
-		.maxDescriptorSetStorageBuffers           = 256,
-		.maxDescriptorSetStorageBuffersDynamic    = 256,
-		.maxDescriptorSetSampledImages            = 256,
-		.maxDescriptorSetStorageImages            = 256,
-		.maxDescriptorSetInputAttachments         = 256,
+		.maxPerStageDescriptorSamplers            = max_descriptor_set_size,
+		.maxPerStageDescriptorUniformBuffers      = max_descriptor_set_size,
+		.maxPerStageDescriptorStorageBuffers      = max_descriptor_set_size,
+		.maxPerStageDescriptorSampledImages       = max_descriptor_set_size,
+		.maxPerStageDescriptorStorageImages       = max_descriptor_set_size,
+		.maxPerStageDescriptorInputAttachments    = max_descriptor_set_size,
+		.maxPerStageResources                     = max_descriptor_set_size,
+		.maxDescriptorSetSamplers                 = max_descriptor_set_size,
+		.maxDescriptorSetUniformBuffers           = max_descriptor_set_size,
+		.maxDescriptorSetUniformBuffersDynamic    = MAX_DYNAMIC_BUFFERS / 2,
+		.maxDescriptorSetStorageBuffers           = max_descriptor_set_size,
+		.maxDescriptorSetStorageBuffersDynamic    = MAX_DYNAMIC_BUFFERS / 2,
+		.maxDescriptorSetSampledImages            = max_descriptor_set_size,
+		.maxDescriptorSetStorageImages            = max_descriptor_set_size,
+		.maxDescriptorSetInputAttachments         = max_descriptor_set_size,
 		.maxVertexInputAttributes                 = 32,
 		.maxVertexInputBindings                   = 32,
 		.maxVertexInputAttributeOffset            = 2047,
@@ -573,7 +599,7 @@ void radv_GetPhysicalDeviceProperties(
 		.maxTessellationControlTotalOutputComponents = 4096,
 		.maxTessellationEvaluationInputComponents = 128,
 		.maxTessellationEvaluationOutputComponents = 128,
-		.maxGeometryShaderInvocations             = 32,
+		.maxGeometryShaderInvocations             = 127,
 		.maxGeometryInputComponents               = 64,
 		.maxGeometryOutputComponents              = 128,
 		.maxGeometryOutputVertices                = 256,
@@ -626,8 +652,8 @@ void radv_GetPhysicalDeviceProperties(
 		.sampledImageStencilSampleCounts          = sample_counts,
 		.storageImageSampleCounts                 = VK_SAMPLE_COUNT_1_BIT,
 		.maxSampleMaskWords                       = 1,
-		.timestampComputeAndGraphics              = false,
-		.timestampPeriod                          = 100000.0 / pdevice->rad_info.clock_crystal_freq,
+		.timestampComputeAndGraphics              = true,
+		.timestampPeriod                          = 1000000.0 / pdevice->rad_info.clock_crystal_freq,
 		.maxClipDistances                         = 8,
 		.maxCullDistances                         = 8,
 		.maxCombinedClipAndCullDistances          = 8,
@@ -650,7 +676,7 @@ void radv_GetPhysicalDeviceProperties(
 		.deviceID = pdevice->rad_info.pci_id,
 		.deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
 		.limits = limits,
-		.sparseProperties = {0}, /* Broadwell doesn't do sparse. */
+		.sparseProperties = {0},
 	};
 
 	strcpy(pProperties->deviceName, pdevice->name);
@@ -661,7 +687,20 @@ void radv_GetPhysicalDeviceProperties2KHR(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceProperties2KHR             *pProperties)
 {
-	return radv_GetPhysicalDeviceProperties(physicalDevice, &pProperties->properties);
+	radv_GetPhysicalDeviceProperties(physicalDevice, &pProperties->properties);
+
+	vk_foreach_struct(ext, pProperties->pNext) {
+		switch (ext->sType) {
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR: {
+			VkPhysicalDevicePushDescriptorPropertiesKHR *properties =
+				(VkPhysicalDevicePushDescriptorPropertiesKHR *) ext;
+			properties->maxPushDescriptors = MAX_PUSH_DESCRIPTORS;
+			break;
+		}
+		default:
+			break;
+		}
+	}
 }
 
 static void radv_get_physical_device_queue_family_properties(
@@ -1188,6 +1227,7 @@ static void radv_dump_trace(struct radv_device *device,
 static void
 fill_geom_tess_rings(struct radv_queue *queue,
 		     uint32_t *map,
+		     bool add_sample_positions,
 		     uint32_t esgs_ring_size,
 		     struct radeon_winsys_bo *esgs_ring_bo,
 		     uint32_t gsvs_ring_size,
@@ -1315,6 +1355,18 @@ fill_geom_tess_rings(struct radv_queue *queue,
 		S_008F0C_ELEMENT_SIZE(0) |
 		S_008F0C_INDEX_STRIDE(0) |
 		S_008F0C_ADD_TID_ENABLE(false);
+	desc += 4;
+
+	/* add sample positions after all rings */
+	memcpy(desc, queue->device->sample_locations_1x, 8);
+	desc += 2;
+	memcpy(desc, queue->device->sample_locations_2x, 16);
+	desc += 4;
+	memcpy(desc, queue->device->sample_locations_4x, 32);
+	desc += 8;
+	memcpy(desc, queue->device->sample_locations_8x, 64);
+	desc += 16;
+	memcpy(desc, queue->device->sample_locations_16x, 128);
 }
 
 static unsigned
@@ -1374,6 +1426,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 		     uint32_t esgs_ring_size,
 		     uint32_t gsvs_ring_size,
 		     bool needs_tess_rings,
+		     bool needs_sample_positions,
                      struct radeon_winsys_cs **initial_preamble_cs,
                      struct radeon_winsys_cs **continue_preamble_cs)
 {
@@ -1385,13 +1438,17 @@ radv_get_preamble_cs(struct radv_queue *queue,
 	struct radeon_winsys_bo *tess_factor_ring_bo = NULL;
 	struct radeon_winsys_bo *tess_offchip_ring_bo = NULL;
 	struct radeon_winsys_cs *dest_cs[2] = {0};
-	bool add_tess_rings = false;
+	bool add_tess_rings = false, add_sample_positions = false;
 	unsigned tess_factor_ring_size = 0, tess_offchip_ring_size = 0;
 	unsigned max_offchip_buffers;
 	unsigned hs_offchip_param = 0;
 	if (!queue->has_tess_rings) {
 		if (needs_tess_rings)
 			add_tess_rings = true;
+	}
+	if (!queue->has_sample_positions) {
+		if (needs_sample_positions)
+			add_sample_positions = true;
 	}
 	tess_factor_ring_size = 32768 * queue->device->physical_device->rad_info.max_se;
 	hs_offchip_param = radv_get_hs_offchip_param(queue->device,
@@ -1403,7 +1460,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 	    compute_scratch_size <= queue->compute_scratch_size &&
 	    esgs_ring_size <= queue->esgs_ring_size &&
 	    gsvs_ring_size <= queue->gsvs_ring_size &&
-	    !add_tess_rings &&
+	    !add_tess_rings && !add_sample_positions &&
 	    queue->initial_preamble_cs) {
 		*initial_preamble_cs = queue->initial_preamble_cs;
 		*continue_preamble_cs = queue->continue_preamble_cs;
@@ -1485,11 +1542,14 @@ radv_get_preamble_cs(struct radv_queue *queue,
 	    esgs_ring_bo != queue->esgs_ring_bo ||
 	    gsvs_ring_bo != queue->gsvs_ring_bo ||
 	    tess_factor_ring_bo != queue->tess_factor_ring_bo ||
-	    tess_offchip_ring_bo != queue->tess_offchip_ring_bo) {
+	    tess_offchip_ring_bo != queue->tess_offchip_ring_bo || add_sample_positions) {
 		uint32_t size = 0;
 		if (gsvs_ring_bo || esgs_ring_bo ||
-		    tess_factor_ring_bo || tess_offchip_ring_bo)
+		    tess_factor_ring_bo || tess_offchip_ring_bo || add_sample_positions) {
 			size = 112; /* 2 dword + 2 padding + 4 dword * 6 */
+			if (add_sample_positions)
+				size += 256; /* 32+16+8+4+2+1 samples * 4 * 2 = 248 bytes. */
+		}
 		else if (scratch_bo)
 			size = 8; /* 2 dword */
 
@@ -1541,8 +1601,9 @@ radv_get_preamble_cs(struct radv_queue *queue,
 				map[1] = rsrc1;
 			}
 
-			if (esgs_ring_bo || gsvs_ring_bo || tess_factor_ring_bo || tess_offchip_ring_bo)
-				fill_geom_tess_rings(queue, map,
+			if (esgs_ring_bo || gsvs_ring_bo || tess_factor_ring_bo || tess_offchip_ring_bo ||
+			    add_sample_positions)
+				fill_geom_tess_rings(queue, map, add_sample_positions,
 						     esgs_ring_size, esgs_ring_bo,
 						     gsvs_ring_size, gsvs_ring_bo,
 						     tess_factor_ring_size, tess_factor_ring_bo,
@@ -1685,6 +1746,9 @@ radv_get_preamble_cs(struct radv_queue *queue,
 		queue->descriptor_bo = descriptor_bo;
 	}
 
+	if (add_sample_positions)
+		queue->has_sample_positions = true;
+
 	*initial_preamble_cs = queue->initial_preamble_cs;
 	*continue_preamble_cs = queue->continue_preamble_cs;
 	if (!scratch_size && !compute_scratch_size && !esgs_ring_size && !gsvs_ring_size)
@@ -1730,6 +1794,7 @@ VkResult radv_QueueSubmit(
 	VkResult result;
 	bool fence_emitted = false;
 	bool tess_rings_needed = false;
+	bool sample_positions_needed = false;
 
 	/* Do this first so failing to allocate scratch buffers can't result in
 	 * partially executed submissions. */
@@ -1744,11 +1809,13 @@ VkResult radv_QueueSubmit(
 			esgs_ring_size = MAX2(esgs_ring_size, cmd_buffer->esgs_ring_size_needed);
 			gsvs_ring_size = MAX2(gsvs_ring_size, cmd_buffer->gsvs_ring_size_needed);
 			tess_rings_needed |= cmd_buffer->tess_rings_needed;
+			sample_positions_needed |= cmd_buffer->sample_positions_needed;
 		}
 	}
 
 	result = radv_get_preamble_cs(queue, scratch_size, compute_scratch_size,
 	                              esgs_ring_size, gsvs_ring_size, tess_rings_needed,
+				      sample_positions_needed,
 	                              &initial_preamble_cs, &continue_preamble_cs);
 	if (result != VK_SUCCESS)
 		return result;
@@ -2679,6 +2746,7 @@ radv_initialise_ds_surface(struct radv_device *device,
 	unsigned format;
 	uint64_t va, s_offs, z_offs;
 	const struct radeon_surf_level *level_info = &iview->image->surface.level[level];
+	bool stencil_only = false;
 	memset(ds, 0, sizeof(*ds));
 	switch (iview->vk_format) {
 	case VK_FORMAT_D24_UNORM_S8_UINT:
@@ -2696,6 +2764,10 @@ radv_initialise_ds_surface(struct radv_device *device,
 		ds->pa_su_poly_offset_db_fmt_cntl = S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(-23) |
 			S_028B78_POLY_OFFSET_DB_IS_FLOAT_FMT(1);
 		ds->offset_scale = 1.0f;
+		break;
+	case VK_FORMAT_S8_UINT:
+		stencil_only = true;
+		level_info = &iview->image->surface.stencil_level[level];
 		break;
 	default:
 		break;
@@ -2730,6 +2802,9 @@ radv_initialise_ds_surface(struct radv_device *device,
 		unsigned tile_mode = info->si_tile_mode_array[tiling_index];
 		unsigned stencil_tile_mode = info->si_tile_mode_array[stencil_index];
 		unsigned macro_mode = info->cik_macrotile_mode_array[macro_index];
+
+		if (stencil_only)
+			tile_mode = stencil_tile_mode;
 
 		ds->db_depth_info |=
 			S_02803C_ARRAY_MODE(G_009910_ARRAY_MODE(tile_mode)) |

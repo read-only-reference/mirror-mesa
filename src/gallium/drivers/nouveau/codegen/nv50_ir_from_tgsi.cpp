@@ -450,6 +450,12 @@ static nv50_ir::SVSemantic translateSysVal(uint sysval)
    case TGSI_SEMANTIC_BASEINSTANCE: return nv50_ir::SV_BASEINSTANCE;
    case TGSI_SEMANTIC_DRAWID:     return nv50_ir::SV_DRAWID;
    case TGSI_SEMANTIC_WORK_DIM:   return nv50_ir::SV_WORK_DIM;
+   case TGSI_SEMANTIC_SUBGROUP_INVOCATION: return nv50_ir::SV_LANEID;
+   case TGSI_SEMANTIC_SUBGROUP_EQ_MASK: return nv50_ir::SV_LANEMASK_EQ;
+   case TGSI_SEMANTIC_SUBGROUP_LT_MASK: return nv50_ir::SV_LANEMASK_LT;
+   case TGSI_SEMANTIC_SUBGROUP_LE_MASK: return nv50_ir::SV_LANEMASK_LE;
+   case TGSI_SEMANTIC_SUBGROUP_GT_MASK: return nv50_ir::SV_LANEMASK_GT;
+   case TGSI_SEMANTIC_SUBGROUP_GE_MASK: return nv50_ir::SV_LANEMASK_GE;
    default:
       assert(0);
       return nv50_ir::SV_CLOCK;
@@ -971,6 +977,10 @@ static nv50_ir::operation translateOpcode(uint opcode)
    NV50_IR_OPCODE_CASE(VOTE_ALL, VOTE);
    NV50_IR_OPCODE_CASE(VOTE_ANY, VOTE);
    NV50_IR_OPCODE_CASE(VOTE_EQ, VOTE);
+
+   NV50_IR_OPCODE_CASE(BALLOT, VOTE);
+   NV50_IR_OPCODE_CASE(READ_INVOC, SHFL);
+   NV50_IR_OPCODE_CASE(READ_FIRST, SHFL);
 
    NV50_IR_OPCODE_CASE(END, EXIT);
 
@@ -1667,6 +1677,8 @@ private:
    Symbol *srcToSym(tgsi::Instruction::SrcRegister, int c);
    Symbol *dstToSym(tgsi::Instruction::DstRegister, int c);
 
+   bool isSubGroupMask(uint8_t semantic);
+
    bool handleInstruction(const struct tgsi_full_instruction *);
    void exportOutputs();
    inline Subroutine *getSubroutine(unsigned ip);
@@ -1996,6 +2008,21 @@ Converter::adjustTempIndex(int arrayId, int &idx, int &idx2d) const
    idx += it->second;
 }
 
+bool
+Converter::isSubGroupMask(uint8_t semantic)
+{
+   switch (semantic) {
+      case TGSI_SEMANTIC_SUBGROUP_EQ_MASK:
+      case TGSI_SEMANTIC_SUBGROUP_LT_MASK:
+      case TGSI_SEMANTIC_SUBGROUP_LE_MASK:
+      case TGSI_SEMANTIC_SUBGROUP_GT_MASK:
+      case TGSI_SEMANTIC_SUBGROUP_GE_MASK:
+         return true;
+      default:
+         return false;
+   }
+}
+
 Value *
 Converter::fetchSrc(tgsi::Instruction::SrcRegister src, int c, Value *ptr)
 {
@@ -2041,6 +2068,10 @@ Converter::fetchSrc(tgsi::Instruction::SrcRegister src, int c, Value *ptr)
       if (info->sv[idx].sn == TGSI_SEMANTIC_THREAD_ID &&
           info->prop.cp.numThreads[swz] == 1)
          return loadImm(NULL, 0u);
+      if (isSubGroupMask(info->sv[idx].sn) && swz > 0)
+         return loadImm(NULL, 0u);
+      if (info->sv[idx].sn == TGSI_SEMANTIC_SUBGROUP_SIZE)
+         return loadImm(NULL, 32u);
       ld = mkOp1(OP_RDSV, TYPE_U32, getSSA(), srcToSym(src, c));
       ld->perPatch = info->sv[idx].patch;
       return ld->getDef(0);
@@ -2125,6 +2156,7 @@ Converter::storeDst(const tgsi::Instruction::DstRegister dst, int c,
          /* Save the viewport index into a scratch register so that it can be
             exported at EMIT time */
          if (info->out[idx].sn == TGSI_SEMANTIC_VIEWPORT_INDEX &&
+             prog->getType() == Program::TYPE_GEOMETRY &&
              viewport != NULL)
             mkOp1(OP_MOV, TYPE_U32, viewport, val);
          else
@@ -3015,8 +3047,8 @@ Converter::handleINTERP(Value *dst[4])
       // and then convert to s32.
       Value *offs[2];
       for (c = 0; c < 2; c++) {
-         offs[c] = fetchSrc(1, c);
-         mkOp2(OP_MIN, TYPE_F32, offs[c], offs[c], loadImm(NULL, 0.4375f));
+         offs[c] = getScratch();
+         mkOp2(OP_MIN, TYPE_F32, offs[c], fetchSrc(1, c), loadImm(NULL, 0.4375f));
          mkOp2(OP_MAX, TYPE_F32, offs[c], offs[c], loadImm(NULL, -0.5f));
          mkOp2(OP_MUL, TYPE_F32, offs[c], offs[c], loadImm(NULL, 4096.0f));
          mkCvt(OP_CVT, TYPE_S32, offs[c], TYPE_F32, offs[c]);
@@ -3404,6 +3436,40 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
          mkCvt(OP_CVT, TYPE_U32, dst0[c], TYPE_U8, val0);
       }
       break;
+   case TGSI_OPCODE_BALLOT:
+      if (!tgsi.getDst(0).isMasked(0)) {
+         val0 = new_LValue(func, FILE_PREDICATE);
+         mkCmp(OP_SET, CC_NE, TYPE_U32, val0, TYPE_U32, fetchSrc(0, 0), zero);
+         mkOp1(op, TYPE_U32, dst0[0], val0)->subOp = NV50_IR_SUBOP_VOTE_ANY;
+      }
+      if (!tgsi.getDst(0).isMasked(1))
+         mkMov(dst0[1], zero, TYPE_U32);
+      break;
+   case TGSI_OPCODE_READ_FIRST:
+      // ReadFirstInvocationARB(src) is implemented as
+      // ReadInvocationARB(src, findLSB(ballot(true)))
+      val0 = getScratch();
+      mkOp1(OP_VOTE, TYPE_U32, val0, mkImm(1))->subOp = NV50_IR_SUBOP_VOTE_ANY;
+      mkOp2(OP_EXTBF, TYPE_U32, val0, val0, mkImm(0x2000))
+         ->subOp = NV50_IR_SUBOP_EXTBF_REV;
+      mkOp1(OP_BFIND, TYPE_U32, val0, val0)->subOp = NV50_IR_SUBOP_BFIND_SAMT;
+      src1 = val0;
+      /* fallthrough */
+   case TGSI_OPCODE_READ_INVOC:
+      if (tgsi.getOpcode() == TGSI_OPCODE_READ_INVOC)
+         src1 = fetchSrc(1, 0);
+      FOR_EACH_DST_ENABLED_CHANNEL(0, c, tgsi) {
+         geni = mkOp3(op, dstTy, dst0[c], fetchSrc(0, c), src1, mkImm(0x1f));
+         geni->subOp = NV50_IR_SUBOP_SHFL_IDX;
+      }
+      break;
+   case TGSI_OPCODE_CLOCK:
+      // Stick the 32-bit clock into the high dword of the logical result.
+      if (!tgsi.getDst(0).isMasked(0))
+         mkOp1(OP_MOV, TYPE_U32, dst0[0], zero);
+      if (!tgsi.getDst(0).isMasked(1))
+         mkOp1(OP_RDSV, TYPE_U32, dst0[1], mkSysVal(SV_CLOCK, 0))->fixed = 1;
+      break;
    case TGSI_OPCODE_KILL_IF:
       val0 = new_LValue(func, FILE_PREDICATE);
       mask = 0;
@@ -3761,16 +3827,17 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
    case TGSI_OPCODE_UBFE:
       FOR_EACH_DST_ENABLED_CHANNEL(0, c, tgsi) {
          src0 = fetchSrc(0, c);
+         val0 = getScratch();
          if (tgsi.getSrc(1).getFile() == TGSI_FILE_IMMEDIATE &&
              tgsi.getSrc(2).getFile() == TGSI_FILE_IMMEDIATE) {
-            src1 = loadImm(NULL, tgsi.getSrc(2).getValueU32(c, info) << 8 |
-                           tgsi.getSrc(1).getValueU32(c, info));
+            loadImm(val0, (tgsi.getSrc(2).getValueU32(c, info) << 8) |
+                    tgsi.getSrc(1).getValueU32(c, info));
          } else {
             src1 = fetchSrc(1, c);
             src2 = fetchSrc(2, c);
-            mkOp3(OP_INSBF, TYPE_U32, src1, src2, mkImm(0x808), src1);
+            mkOp3(OP_INSBF, TYPE_U32, val0, src2, mkImm(0x808), src1);
          }
-         mkOp2(OP_EXTBF, dstTy, dst0[c], src0, src1);
+         mkOp2(OP_EXTBF, dstTy, dst0[c], src0, val0);
       }
       break;
    case TGSI_OPCODE_BFI:
@@ -3779,16 +3846,18 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
          src1 = fetchSrc(1, c);
          src2 = fetchSrc(2, c);
          src3 = fetchSrc(3, c);
-         mkOp3(OP_INSBF, TYPE_U32, src2, src3, mkImm(0x808), src2);
-         mkOp3(OP_INSBF, TYPE_U32, dst0[c], src1, src2, src0);
+         val0 = getScratch();
+         mkOp3(OP_INSBF, TYPE_U32, val0, src3, mkImm(0x808), src2);
+         mkOp3(OP_INSBF, TYPE_U32, dst0[c], src1, val0, src0);
       }
       break;
    case TGSI_OPCODE_LSB:
       FOR_EACH_DST_ENABLED_CHANNEL(0, c, tgsi) {
          src0 = fetchSrc(0, c);
-         geni = mkOp2(OP_EXTBF, TYPE_U32, src0, src0, mkImm(0x2000));
+         val0 = getScratch();
+         geni = mkOp2(OP_EXTBF, TYPE_U32, val0, src0, mkImm(0x2000));
          geni->subOp = NV50_IR_SUBOP_EXTBF_REV;
-         geni = mkOp1(OP_BFIND, TYPE_U32, dst0[c], src0);
+         geni = mkOp1(OP_BFIND, TYPE_U32, dst0[c], val0);
          geni->subOp = NV50_IR_SUBOP_BFIND_SAMT;
       }
       break;

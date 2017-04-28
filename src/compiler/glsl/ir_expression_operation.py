@@ -180,7 +180,7 @@ constant_template_mul = mako.template.Template("""\
          for (unsigned j = 0; j < p; j++) {
             for (unsigned i = 0; i < n; i++) {
                for (unsigned k = 0; k < m; k++) {
-                  if (op[0]->type->base_type == GLSL_TYPE_DOUBLE)
+                  if (op[0]->type->is_double())
                      data.d[i+n*j] += op[0]->value.d[i+n*k]*op[1]->value.d[k+m*j];
                   else
                      data.f[i+n*j] += op[0]->value.f[i+n*k]*op[1]->value.f[k+m*j];
@@ -276,12 +276,9 @@ constant_template_vector = mako.template.Template("""\
 # This template is for ir_triop_lrp.
 constant_template_lrp = mako.template.Template("""\
    case ${op.get_enum_name()}: {
-      assert(op[0]->type->base_type == GLSL_TYPE_FLOAT ||
-             op[0]->type->base_type == GLSL_TYPE_DOUBLE);
-      assert(op[1]->type->base_type == GLSL_TYPE_FLOAT ||
-             op[1]->type->base_type == GLSL_TYPE_DOUBLE);
-      assert(op[2]->type->base_type == GLSL_TYPE_FLOAT ||
-             op[2]->type->base_type == GLSL_TYPE_DOUBLE);
+      assert(op[0]->type->is_float() || op[0]->type->is_double());
+      assert(op[1]->type->is_float() || op[1]->type->is_double());
+      assert(op[2]->type->is_float() || op[2]->type->is_double());
 
       unsigned c2_inc = op[2]->type->is_scalar() ? 0 : 1;
       for (unsigned c = 0, c2 = 0; c < components; c2 += c2_inc, c++) {
@@ -569,11 +566,6 @@ ir_expression_operation = [
    # operand0 is the unsized array's ir_value for the calculation
    # of its length.
    operation("ssbo_unsized_array_length", 1),
-
-   # Vote among threads on the value of the boolean argument.
-   operation("vote_any", 1),
-   operation("vote_all", 1),
-   operation("vote_eq", 1),
 
    # 64-bit integer packing ops.
    operation("pack_int_2x32", 1, printable_name="packInt2x32", source_types=(int_type,), dest_type=int64_type, c_expression="memcpy(&data.i64[0], &op[0]->value.i[0], sizeof(int64_t))", flags=frozenset((horizontal_operation, non_assign_operation))),

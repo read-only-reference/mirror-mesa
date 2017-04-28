@@ -1522,14 +1522,27 @@ generate_code(struct brw_codegen *p,
       brw_set_default_saturate(p, inst->saturate);
       brw_set_default_mask_control(p, inst->force_writemask_all);
       brw_set_default_acc_write_control(p, inst->writes_accumulator);
-      brw_set_default_exec_size(p, cvt(inst->exec_size) - 1);
 
       assert(inst->group % inst->exec_size == 0);
-      assert(inst->group % 8 == 0 ||
-             inst->dst.type == BRW_REGISTER_TYPE_DF ||
-             inst->src[0].type == BRW_REGISTER_TYPE_DF ||
-             inst->src[1].type == BRW_REGISTER_TYPE_DF ||
-             inst->src[2].type == BRW_REGISTER_TYPE_DF);
+      assert(inst->group % 4 == 0);
+
+      /* There are some instructions where the destination is 64-bit
+       * but we retype it to a smaller type. In that case, we cannot
+       * double the exec_size.
+       */
+      const bool is_df = (get_exec_type_size(inst) == 8 ||
+                          inst->dst.type == BRW_REGISTER_TYPE_DF) &&
+                         inst->opcode != VEC4_OPCODE_PICK_LOW_32BIT &&
+                         inst->opcode != VEC4_OPCODE_PICK_HIGH_32BIT &&
+                         inst->opcode != VEC4_OPCODE_SET_LOW_32BIT &&
+                         inst->opcode != VEC4_OPCODE_SET_HIGH_32BIT;
+
+      unsigned exec_size = inst->exec_size;
+      if (devinfo->gen == 7 && !devinfo->is_haswell && is_df)
+         exec_size *= 2;
+
+      brw_set_default_exec_size(p, cvt(exec_size) - 1);
+
       if (!inst->force_writemask_all)
          brw_set_default_group(p, inst->group);
 
@@ -1931,22 +1944,45 @@ generate_code(struct brw_codegen *p,
          break;
       }
 
-      case VEC4_OPCODE_FROM_DOUBLE: {
+      case VEC4_OPCODE_DOUBLE_TO_F32:
+      case VEC4_OPCODE_DOUBLE_TO_D32:
+      case VEC4_OPCODE_DOUBLE_TO_U32: {
          assert(type_sz(src[0].type) == 8);
-         assert(type_sz(dst.type) == 4);
+         assert(type_sz(dst.type) == 8);
+
+         brw_reg_type dst_type;
+
+         switch (inst->opcode) {
+         case VEC4_OPCODE_DOUBLE_TO_F32:
+            dst_type = BRW_REGISTER_TYPE_F;
+            break;
+         case VEC4_OPCODE_DOUBLE_TO_D32:
+            dst_type = BRW_REGISTER_TYPE_D;
+            break;
+         case VEC4_OPCODE_DOUBLE_TO_U32:
+            dst_type = BRW_REGISTER_TYPE_UD;
+            break;
+         default:
+            unreachable("Not supported conversion");
+         }
+         dst = retype(dst, dst_type);
 
          brw_set_default_access_mode(p, BRW_ALIGN_1);
 
-         dst.hstride = BRW_HORIZONTAL_STRIDE_2;
-         dst.width = BRW_WIDTH_4;
+         /* When converting from DF->F, we set destination's stride as 2 as an
+          * aligment requirement. But in IVB/BYT, each DF implicitly writes
+          * two floats, being the first one the converted value. So we don't
+          * need to explicitly set stride 2, but 1.
+          */
+         struct brw_reg spread_dst;
+         if (devinfo->gen == 7 && !devinfo->is_haswell)
+            spread_dst = stride(dst, 8, 4, 1);
+         else
+            spread_dst = stride(dst, 8, 4, 2);
+
          src[0].vstride = BRW_VERTICAL_STRIDE_4;
          src[0].width = BRW_WIDTH_4;
-         brw_MOV(p, dst, src[0]);
-
-         struct brw_reg dst_as_src = dst;
-         dst.hstride = BRW_HORIZONTAL_STRIDE_1;
-         dst.width = BRW_WIDTH_8;
-         brw_MOV(p, dst, dst_as_src);
+         brw_MOV(p, spread_dst, src[0]);
 
          brw_set_default_access_mode(p, BRW_ALIGN_16);
          break;
@@ -1958,18 +1994,7 @@ generate_code(struct brw_codegen *p,
 
          brw_set_default_access_mode(p, BRW_ALIGN_1);
 
-         struct brw_reg tmp = retype(dst, src[0].type);
-         tmp.hstride = BRW_HORIZONTAL_STRIDE_2;
-         tmp.width = BRW_WIDTH_4;
-         src[0].vstride = BRW_VERTICAL_STRIDE_4;
-         src[0].hstride = BRW_HORIZONTAL_STRIDE_1;
-         src[0].width = BRW_WIDTH_4;
-         brw_MOV(p, tmp, src[0]);
-
-         tmp.vstride = BRW_VERTICAL_STRIDE_8;
-         tmp.hstride = BRW_HORIZONTAL_STRIDE_2;
-         tmp.width = BRW_WIDTH_4;
-         brw_MOV(p, dst, tmp);
+         brw_MOV(p, dst, src[0]);
 
          brw_set_default_access_mode(p, BRW_ALIGN_16);
          break;

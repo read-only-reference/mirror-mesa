@@ -404,26 +404,28 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 		va += base_level_info->offset;
 	}
 
-	if (vi_dcc_enabled(tex, first_level)) {
-		meta_va = (!tex->dcc_separate_buffer ? tex->resource.gpu_address : 0) +
-			  tex->dcc_offset;
-
-		if (sscreen->b.chip_class <= VI)
-			meta_va += base_level_info->dcc_offset;
-	} else if (tex->tc_compatible_htile && !is_stencil) {
-		meta_va = tex->htile_buffer->gpu_address;
-	}
-
 	state[0] = va >> 8;
 	state[1] &= C_008F14_BASE_ADDRESS_HI;
 	state[1] |= S_008F14_BASE_ADDRESS_HI(va >> 40);
 
-	state[6] &= C_008F28_COMPRESSION_EN;
-	state[7] = 0;
+	if (sscreen->b.chip_class >= VI) {
+		state[6] &= C_008F28_COMPRESSION_EN;
+		state[7] = 0;
 
-	if (meta_va) {
-		state[6] |= S_008F28_COMPRESSION_EN(1);
-		state[7] = meta_va >> 8;
+		if (vi_dcc_enabled(tex, first_level)) {
+			meta_va = (!tex->dcc_separate_buffer ? tex->resource.gpu_address : 0) +
+				  tex->dcc_offset;
+
+			if (sscreen->b.chip_class <= VI)
+				meta_va += base_level_info->dcc_offset;
+		} else if (tex->tc_compatible_htile && !is_stencil) {
+			meta_va = tex->htile_buffer->gpu_address;
+		}
+
+		if (meta_va) {
+			state[6] |= S_008F28_COMPRESSION_EN(1);
+			state[7] = meta_va >> 8;
+		}
 	}
 
 	if (sscreen->b.chip_class >= GFX9) {
@@ -553,8 +555,16 @@ static void si_set_sampler_view(struct si_context *sctx,
 
 static bool is_compressed_colortex(struct r600_texture *rtex)
 {
-	return rtex->cmask.size || rtex->fmask.size ||
-	       (rtex->dcc_offset && rtex->dirty_level_mask);
+	return rtex->fmask.size ||
+	       (rtex->dirty_level_mask &&
+		(rtex->cmask.size || rtex->dcc_offset));
+}
+
+static bool depth_needs_decompression(struct r600_texture *rtex,
+				      struct si_sampler_view *sview)
+{
+	return rtex->db_compatible &&
+	       (!rtex->tc_compatible_htile || sview->is_stencil_sampler);
 }
 
 static void si_update_compressed_tex_shader_mask(struct si_context *sctx,
@@ -600,8 +610,7 @@ static void si_set_sampler_views(struct pipe_context *ctx,
 				(struct r600_texture*)views[i]->texture;
 			struct si_sampler_view *rview = (struct si_sampler_view *)views[i];
 
-			if (rtex->db_compatible &&
-			    (!rtex->tc_compatible_htile || rview->is_stencil_sampler)) {
+			if (depth_needs_decompression(rtex, rview)) {
 				samplers->depth_texture_mask |= 1u << slot;
 			} else {
 				samplers->depth_texture_mask &= ~(1u << slot);
@@ -747,8 +756,7 @@ static void si_set_shader_image(struct si_context *ctx,
 		si_make_buffer_descriptor(screen, res,
 					  view->format,
 					  view->u.buf.offset,
-					  view->u.buf.size,
-					  descs->list + slot * 8);
+					  view->u.buf.size, desc);
 		si_set_buf_desc_address(res, view->u.buf.offset, desc + 4);
 
 		images->compressed_colortex_mask &= ~(1 << slot);
@@ -757,7 +765,7 @@ static void si_set_shader_image(struct si_context *ctx,
 		static const unsigned char swizzle[4] = { 0, 1, 2, 3 };
 		struct r600_texture *tex = (struct r600_texture *)res;
 		unsigned level = view->u.tex.level;
-		unsigned width, height, depth;
+		unsigned width, height, depth, hw_level;
 		bool uses_dcc = vi_dcc_enabled(tex, level);
 
 		assert(!tex->is_depth);
@@ -786,20 +794,31 @@ static void si_set_shader_image(struct si_context *ctx,
 		    p_atomic_read(&tex->framebuffers_bound))
 			ctx->need_check_render_feedback = true;
 
-		/* Always force the base level to the selected level.
-		 *
-		 * This is required for 3D textures, where otherwise
-		 * selecting a single slice for non-layered bindings
-		 * fails. It doesn't hurt the other targets.
-		 */
-		width = u_minify(res->b.b.width0, level);
-		height = u_minify(res->b.b.height0, level);
-		depth = u_minify(res->b.b.depth0, level);
+		if (ctx->b.chip_class >= GFX9) {
+			/* Always set the base address. The swizzle modes don't
+			 * allow setting mipmap level offsets as the base.
+			 */
+			width = res->b.b.width0;
+			height = res->b.b.height0;
+			depth = res->b.b.depth0;
+			hw_level = level;
+		} else {
+			/* Always force the base level to the selected level.
+			 *
+			 * This is required for 3D textures, where otherwise
+			 * selecting a single slice for non-layered bindings
+			 * fails. It doesn't hurt the other targets.
+			 */
+			width = u_minify(res->b.b.width0, level);
+			height = u_minify(res->b.b.height0, level);
+			depth = u_minify(res->b.b.depth0, level);
+			hw_level = 0;
+		}
 
 		si_make_texture_descriptor(screen, tex,
 					   false, res->b.b.target,
 					   view->format, swizzle,
-					   0, 0,
+					   hw_level, hw_level,
 					   view->u.tex.first_layer,
 					   view->u.tex.last_layer,
 					   width, height, depth,
@@ -1828,8 +1847,12 @@ static void si_set_user_data_base(struct si_context *sctx,
 	if (*base != new_base) {
 		*base = new_base;
 
-		if (new_base)
+		if (new_base) {
 			si_mark_shader_pointers_dirty(sctx, shader);
+
+			if (shader == PIPE_SHADER_VERTEX)
+				sctx->last_vs_state = ~0;
+		}
 	}
 }
 
@@ -1903,16 +1926,21 @@ void si_emit_graphics_shader_userdata(struct si_context *sctx,
 				       R_00B030_SPI_SHADER_USER_DATA_PS_0);
 		si_emit_shader_pointer(sctx, descs,
 				       R_00B130_SPI_SHADER_USER_DATA_VS_0);
-		si_emit_shader_pointer(sctx, descs,
-				       R_00B330_SPI_SHADER_USER_DATA_ES_0);
 
-		/* GFX9 merged LS-HS and ES-GS. Only set RW_BUFFERS for ES and LS. */
 		if (sctx->b.chip_class >= GFX9) {
+			/* GFX9 merged LS-HS and ES-GS.
+			 * Set RW_BUFFERS in the special registers, so that
+			 * it's preloaded into s[0:1] instead of s[8:9].
+			 */
 			si_emit_shader_pointer(sctx, descs,
-					       R_00B430_SPI_SHADER_USER_DATA_LS_0);
+					       R_00B208_SPI_SHADER_USER_DATA_ADDR_LO_GS);
+			si_emit_shader_pointer(sctx, descs,
+					       R_00B408_SPI_SHADER_USER_DATA_ADDR_LO_HS);
 		} else {
 			si_emit_shader_pointer(sctx, descs,
 					       R_00B230_SPI_SHADER_USER_DATA_GS_0);
+			si_emit_shader_pointer(sctx, descs,
+					       R_00B330_SPI_SHADER_USER_DATA_ES_0);
 			si_emit_shader_pointer(sctx, descs,
 					       R_00B430_SPI_SHADER_USER_DATA_HS_0);
 		}
@@ -1963,7 +1991,14 @@ void si_init_all_descriptors(struct si_context *sctx)
 	int i;
 	unsigned ce_offset = 0;
 
+	STATIC_ASSERT(GFX9_SGPR_TCS_CONST_BUFFERS % 2 == 0);
+	STATIC_ASSERT(GFX9_SGPR_GS_CONST_BUFFERS % 2 == 0);
+
 	for (i = 0; i < SI_NUM_SHADERS; i++) {
+		bool gfx9_tcs = sctx->b.chip_class == GFX9 &&
+				i == PIPE_SHADER_TESS_CTRL;
+		bool gfx9_gs = sctx->b.chip_class == GFX9 &&
+			       i == PIPE_SHADER_GEOMETRY;
 		/* GFX9 has only 4KB of CE, while previous chips had 32KB.
 		 * Rarely used descriptors don't use CE RAM.
 		 */
@@ -1976,22 +2011,34 @@ void si_init_all_descriptors(struct si_context *sctx)
 
 		si_init_buffer_resources(&sctx->const_buffers[i],
 					 si_const_buffer_descriptors(sctx, i),
-					 SI_NUM_CONST_BUFFERS, SI_SGPR_CONST_BUFFERS,
+					 SI_NUM_CONST_BUFFERS,
+					 gfx9_tcs ? GFX9_SGPR_TCS_CONST_BUFFERS :
+					 gfx9_gs ? GFX9_SGPR_GS_CONST_BUFFERS :
+						   SI_SGPR_CONST_BUFFERS,
 					 RADEON_USAGE_READ, RADEON_PRIO_CONST_BUFFER,
 					 &ce_offset);
 		si_init_buffer_resources(&sctx->shader_buffers[i],
 					 si_shader_buffer_descriptors(sctx, i),
-					 SI_NUM_SHADER_BUFFERS, SI_SGPR_SHADER_BUFFERS,
+					 SI_NUM_SHADER_BUFFERS,
+					 gfx9_tcs ? GFX9_SGPR_TCS_SHADER_BUFFERS :
+					 gfx9_gs ? GFX9_SGPR_GS_SHADER_BUFFERS :
+						   SI_SGPR_SHADER_BUFFERS,
 					 RADEON_USAGE_READWRITE, RADEON_PRIO_SHADER_RW_BUFFER,
 					 shaderbufs_use_ce ? &ce_offset : NULL);
 
 		si_init_descriptors(si_sampler_descriptors(sctx, i),
-				    SI_SGPR_SAMPLERS, 16, SI_NUM_SAMPLERS,
+				    gfx9_tcs ? GFX9_SGPR_TCS_SAMPLERS :
+				    gfx9_gs ? GFX9_SGPR_GS_SAMPLERS :
+					      SI_SGPR_SAMPLERS,
+				    16, SI_NUM_SAMPLERS,
 				    null_texture_descriptor,
 				    samplers_use_ce ? &ce_offset : NULL);
 
 		si_init_descriptors(si_image_descriptors(sctx, i),
-				    SI_SGPR_IMAGES, 8, SI_NUM_IMAGES,
+				    gfx9_tcs ? GFX9_SGPR_TCS_IMAGES :
+				    gfx9_gs ? GFX9_SGPR_GS_IMAGES :
+					      SI_SGPR_IMAGES,
+				    8, SI_NUM_IMAGES,
 				    null_image_descriptor,
 				    images_use_ce ? &ce_offset : NULL);
 	}

@@ -469,6 +469,19 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 }
 
 static void
+si_decompress_color_texture(struct si_context *sctx, struct r600_texture *tex,
+			    unsigned first_level, unsigned last_level)
+{
+	/* CMASK or DCC can be discarded and we can still end up here. */
+	if (!tex->cmask.size && !tex->fmask.size && !tex->dcc_offset)
+		return;
+
+	si_blit_decompress_color(&sctx->b.b, tex, first_level, last_level, 0,
+				 util_max_layer(&tex->resource.b.b, first_level),
+				 false);
+}
+
+static void
 si_decompress_sampler_color_textures(struct si_context *sctx,
 				     struct si_textures_info *textures)
 {
@@ -485,14 +498,9 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
-		/* CMASK or DCC can be discarded and we can still end up here. */
-		if (!tex->cmask.size && !tex->fmask.size && !tex->dcc_offset)
-			continue;
 
-		si_blit_decompress_color(&sctx->b.b, tex,
-					 view->u.tex.first_level, view->u.tex.last_level,
-					 0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level),
-					 false);
+		si_decompress_color_texture(sctx, tex, view->u.tex.first_level,
+					    view->u.tex.last_level);
 	}
 }
 
@@ -513,14 +521,44 @@ si_decompress_image_color_textures(struct si_context *sctx,
 		assert(view->resource->target != PIPE_BUFFER);
 
 		tex = (struct r600_texture *)view->resource;
-		if (!tex->cmask.size && !tex->fmask.size && !tex->dcc_offset)
+
+		si_decompress_color_texture(sctx, tex, view->u.tex.level,
+					    view->u.tex.level);
+	}
+}
+
+static void si_check_render_feedback_texture(struct si_context *sctx,
+					     struct r600_texture *tex,
+					     unsigned first_level,
+					     unsigned last_level,
+					     unsigned first_layer,
+					     unsigned last_layer)
+{
+	bool render_feedback = false;
+
+	if (!tex->dcc_offset)
+		return;
+
+	for (unsigned j = 0; j < sctx->framebuffer.state.nr_cbufs; ++j) {
+		struct r600_surface * surf;
+
+		if (!sctx->framebuffer.state.cbufs[j])
 			continue;
 
-		si_blit_decompress_color(&sctx->b.b, tex,
-					 view->u.tex.level, view->u.tex.level,
-					 0, util_max_layer(&tex->resource.b.b, view->u.tex.level),
-					 false);
+		surf = (struct r600_surface*)sctx->framebuffer.state.cbufs[j];
+
+		if (tex == (struct r600_texture *)surf->base.texture &&
+		    surf->base.u.tex.level >= first_level &&
+		    surf->base.u.tex.level <= last_level &&
+		    surf->base.u.tex.first_layer <= last_layer &&
+		    surf->base.u.tex.last_layer >= first_layer) {
+			render_feedback = true;
+			break;
+		}
 	}
+
+	if (render_feedback)
+		r600_texture_disable_dcc(&sctx->b, tex);
 }
 
 static void si_check_render_feedback_textures(struct si_context *sctx,
@@ -531,7 +569,6 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 	while (mask) {
 		const struct pipe_sampler_view *view;
 		struct r600_texture *tex;
-		bool render_feedback = false;
 
 		unsigned i = u_bit_scan(&mask);
 
@@ -540,27 +577,12 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 			continue;
 
 		tex = (struct r600_texture *)view->texture;
-		if (!tex->dcc_offset)
-			continue;
 
-		for (unsigned j = 0; j < sctx->framebuffer.state.nr_cbufs; ++j) {
-			struct r600_surface * surf;
-
-			if (!sctx->framebuffer.state.cbufs[j])
-				continue;
-
-			surf = (struct r600_surface*)sctx->framebuffer.state.cbufs[j];
-
-			if (tex == (struct r600_texture*)surf->base.texture &&
-			    surf->base.u.tex.level >= view->u.tex.first_level &&
-			    surf->base.u.tex.level <= view->u.tex.last_level &&
-			    surf->base.u.tex.first_layer <= view->u.tex.last_layer &&
-			    surf->base.u.tex.last_layer >= view->u.tex.first_layer)
-				render_feedback = true;
-		}
-
-		if (render_feedback)
-			r600_texture_disable_dcc(&sctx->b, tex);
+		si_check_render_feedback_texture(sctx, tex,
+						 view->u.tex.first_level,
+						 view->u.tex.last_level,
+						 view->u.tex.first_layer,
+						 view->u.tex.last_layer);
 	}
 }
 
@@ -572,7 +594,6 @@ static void si_check_render_feedback_images(struct si_context *sctx,
 	while (mask) {
 		const struct pipe_image_view *view;
 		struct r600_texture *tex;
-		bool render_feedback = false;
 
 		unsigned i = u_bit_scan(&mask);
 
@@ -581,26 +602,12 @@ static void si_check_render_feedback_images(struct si_context *sctx,
 			continue;
 
 		tex = (struct r600_texture *)view->resource;
-		if (!tex->dcc_offset)
-			continue;
 
-		for (unsigned j = 0; j < sctx->framebuffer.state.nr_cbufs; ++j) {
-			struct r600_surface * surf;
-
-			if (!sctx->framebuffer.state.cbufs[j])
-				continue;
-
-			surf = (struct r600_surface*)sctx->framebuffer.state.cbufs[j];
-
-			if (tex == (struct r600_texture*)surf->base.texture &&
-			    surf->base.u.tex.level == view->u.tex.level &&
-			    surf->base.u.tex.first_layer <= view->u.tex.last_layer &&
-			    surf->base.u.tex.last_layer >= view->u.tex.first_layer)
-				render_feedback = true;
-		}
-
-		if (render_feedback)
-			r600_texture_disable_dcc(&sctx->b, tex);
+		si_check_render_feedback_texture(sctx, tex,
+						 view->u.tex.level,
+						 view->u.tex.level,
+						 view->u.tex.first_layer,
+						 view->u.tex.last_layer);
 	}
 }
 

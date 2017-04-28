@@ -260,7 +260,9 @@ vec4_instruction::can_do_writemask(const struct gen_device_info *devinfo)
 {
    switch (opcode) {
    case SHADER_OPCODE_GEN4_SCRATCH_READ:
-   case VEC4_OPCODE_FROM_DOUBLE:
+   case VEC4_OPCODE_DOUBLE_TO_F32:
+   case VEC4_OPCODE_DOUBLE_TO_D32:
+   case VEC4_OPCODE_DOUBLE_TO_U32:
    case VEC4_OPCODE_TO_DOUBLE:
    case VEC4_OPCODE_PICK_LOW_32BIT:
    case VEC4_OPCODE_PICK_HIGH_32BIT:
@@ -521,7 +523,9 @@ vec4_visitor::opt_reduce_swizzle()
          break;
 
       case VEC4_OPCODE_TO_DOUBLE:
-      case VEC4_OPCODE_FROM_DOUBLE:
+      case VEC4_OPCODE_DOUBLE_TO_F32:
+      case VEC4_OPCODE_DOUBLE_TO_D32:
+      case VEC4_OPCODE_DOUBLE_TO_U32:
       case VEC4_OPCODE_PICK_LOW_32BIT:
       case VEC4_OPCODE_PICK_HIGH_32BIT:
       case VEC4_OPCODE_SET_LOW_32BIT:
@@ -1065,6 +1069,13 @@ vec4_instruction::can_reswizzle(const struct gen_device_info *devinfo,
     * are not allowed.
     */
    if (devinfo->gen == 6 && is_math() && swizzle != BRW_SWIZZLE_XYZW)
+      return false;
+
+   /* We can't swizzle implicit accumulator access.  We'd have to
+    * reswizzle the producer of the accumulator value in addition
+    * to the consumer (i.e. both MUL and MACH).  Just skip this.
+    */
+   if (reads_accumulator_implicitly())
       return false;
 
    if (!can_do_writemask(devinfo) && dst_writemask != WRITEMASK_XYZW)
@@ -1984,6 +1995,7 @@ vec4_visitor::convert_to_hw_regs()
          case BAD_FILE:
             /* Probably unused. */
             reg = brw_null_reg();
+            reg = retype(reg, src.type);
             break;
 
          case MRF:
@@ -2034,6 +2046,7 @@ vec4_visitor::convert_to_hw_regs()
 
       case BAD_FILE:
          reg = brw_null_reg();
+         reg = retype(reg, dst.type);
          break;
 
       case IMM:
@@ -2114,6 +2127,16 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
             lowered_width = MIN2(lowered_width, 4);
       }
    }
+
+   /* IvyBridge can manage a maximum of 4 DFs per SIMD4x2 instruction, since
+    * it doesn't support compression in Align16 mode, no matter if it has
+    * force_writemask_all enabled or disabled (the latter is affected by the
+    * compressed instruction bug in gen7, which is another reason to enforce
+    * this limit).
+    */
+   if (devinfo->gen == 7 && !devinfo->is_haswell &&
+       (get_exec_type_size(inst) == 8 || type_sz(inst->dst.type) == 8))
+      lowered_width = MIN2(lowered_width, 4);
 
    return lowered_width;
 }
@@ -2243,7 +2266,9 @@ static bool
 is_align1_df(vec4_instruction *inst)
 {
    switch (inst->opcode) {
-   case VEC4_OPCODE_FROM_DOUBLE:
+   case VEC4_OPCODE_DOUBLE_TO_F32:
+   case VEC4_OPCODE_DOUBLE_TO_D32:
+   case VEC4_OPCODE_DOUBLE_TO_U32:
    case VEC4_OPCODE_TO_DOUBLE:
    case VEC4_OPCODE_PICK_LOW_32BIT:
    case VEC4_OPCODE_PICK_HIGH_32BIT:

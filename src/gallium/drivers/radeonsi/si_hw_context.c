@@ -108,6 +108,9 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	if (r600_check_device_reset(&ctx->b))
 		return;
 
+	if (ctx->screen->b.debug_flags & DBG_CHECK_VM)
+		flags &= ~RADEON_FLUSH_ASYNC;
+
 	/* If the state tracker is flushing the GFX IB, r600_flush_from_st is
 	 * responsible for flushing the DMA IB and merging the fences from both.
 	 * This code is only needed when the driver flushes the GFX IB
@@ -257,6 +260,7 @@ void si_begin_new_cs(struct si_context *ctx)
 	ctx->last_multi_vgt_param = -1;
 	ctx->last_rast_prim = -1;
 	ctx->last_sc_line_stipple = ~0;
+	ctx->last_vs_state = ~0;
 	ctx->last_ls = NULL;
 	ctx->last_tcs = NULL;
 	ctx->last_tes_sh_base = -1;

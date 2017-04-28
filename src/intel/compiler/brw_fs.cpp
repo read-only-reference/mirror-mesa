@@ -4529,11 +4529,16 @@ get_fpu_lowered_simd_width(const struct gen_device_info *devinfo,
     */
    if (devinfo->gen < 8) {
       for (unsigned i = 0; i < inst->sources; i++) {
+         /* IVB implements DF scalars as <0;2,1> regions. */
+         const bool is_scalar_exception = is_uniform(inst->src[i]) &&
+            (devinfo->is_haswell || type_sz(inst->src[i].type) != 8);
+         const bool is_packed_word_exception =
+            type_sz(inst->dst.type) == 4 && inst->dst.stride == 1 &&
+            type_sz(inst->src[i].type) == 2 && inst->src[i].stride == 1;
+
          if (inst->size_written > REG_SIZE &&
              inst->size_read(i) != 0 && inst->size_read(i) <= REG_SIZE &&
-             !is_uniform(inst->src[i]) &&
-             !(type_sz(inst->dst.type) == 4 && inst->dst.stride == 1 &&
-               type_sz(inst->src[i].type) == 2 && inst->src[i].stride == 1)) {
+             !is_scalar_exception && !is_packed_word_exception) {
             const unsigned reg_count = DIV_ROUND_UP(inst->size_written, REG_SIZE);
             max_width = MIN2(max_width, inst->exec_size / reg_count);
          }
@@ -4585,11 +4590,7 @@ get_fpu_lowered_simd_width(const struct gen_device_info *devinfo,
        !inst->force_writemask_all) {
       const unsigned channels_per_grf = inst->exec_size /
          DIV_ROUND_UP(inst->size_written, REG_SIZE);
-      unsigned exec_type_size = 0;
-      for (int i = 0; i < inst->sources; i++) {
-         if (inst->src[i].file != BAD_FILE)
-            exec_type_size = MAX2(exec_type_size, type_sz(inst->src[i].type));
-      }
+      const unsigned exec_type_size = get_exec_type_size(inst);
       assert(exec_type_size);
 
       /* The hardware shifts exactly 8 channels per compressed half of the
@@ -4597,6 +4598,15 @@ get_fpu_lowered_simd_width(const struct gen_device_info *devinfo,
        */
       if (channels_per_grf != (exec_type_size == 8 ? 4 : 8))
          max_width = MIN2(max_width, channels_per_grf);
+
+      /* Lower all non-force_writemask_all DF instructions to SIMD4 on IVB/BYT
+       * because HW applies the same channel enable signals to both halves of
+       * the compressed instruction which will be just wrong under
+       * non-uniform control flow.
+       */
+      if (devinfo->gen == 7 && !devinfo->is_haswell &&
+          (exec_type_size == 8 || type_sz(inst->dst.type) == 8))
+         max_width = MIN2(max_width, 4);
    }
 
    /* Only power-of-two execution sizes are representable in the instruction
@@ -4890,11 +4900,22 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
    case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
       return MIN2(8, inst->exec_size);
 
-   case SHADER_OPCODE_MOV_INDIRECT:
-      /* Prior to Broadwell, we only have 8 address subregisters */
+   case SHADER_OPCODE_MOV_INDIRECT: {
+      /* From IVB and HSW PRMs:
+       *
+       * "2.When the destination requires two registers and the sources are
+       *  indirect, the sources must use 1x1 regioning mode.
+       *
+       * In case of DF instructions in HSW/IVB, the exec_size is limited by
+       * the EU decompression logic not handling VxH indirect addressing
+       * correctly.
+       */
+      const unsigned max_size = (devinfo->gen >= 8 ? 2 : 1) * REG_SIZE;
+      /* Prior to Broadwell, we only have 8 address subregisters. */
       return MIN3(devinfo->gen >= 8 ? 16 : 8,
-                  2 * REG_SIZE / (inst->dst.stride * type_sz(inst->dst.type)),
+                  max_size / (inst->dst.stride * type_sz(inst->dst.type)),
                   inst->exec_size);
+   }
 
    case SHADER_OPCODE_LOAD_PAYLOAD: {
       const unsigned reg_count =
@@ -5693,11 +5714,6 @@ fs_visitor::optimize()
       OPT(dead_code_eliminate);
    }
 
-   if (OPT(lower_d2x)) {
-      OPT(opt_copy_propagation);
-      OPT(dead_code_eliminate);
-   }
-
    OPT(lower_simd_width);
 
    /* After SIMD lowering just in case we had to unroll the EOT send. */
@@ -5742,6 +5758,12 @@ fs_visitor::optimize()
       OPT(opt_cse);
       OPT(opt_copy_propagation);
       OPT(dead_code_eliminate);
+   }
+
+   if (OPT(lower_conversions)) {
+      OPT(opt_copy_propagation);
+      OPT(dead_code_eliminate);
+      OPT(lower_simd_width);
    }
 
    lower_uniform_pull_constant_loads();

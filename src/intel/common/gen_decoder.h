@@ -45,6 +45,7 @@ struct gen_spec *gen_spec_load_from_path(const struct gen_device_info *devinfo,
 uint32_t gen_spec_get_gen(struct gen_spec *spec);
 struct gen_group *gen_spec_find_instruction(struct gen_spec *spec, const uint32_t *p);
 struct gen_group *gen_spec_find_register(struct gen_spec *spec, uint32_t offset);
+struct gen_group *gen_spec_find_register_by_name(struct gen_spec *spec, const char *name);
 int gen_group_get_length(struct gen_group *group, const uint32_t *p);
 const char *gen_group_get_name(struct gen_group *group);
 uint32_t gen_group_get_opcode(struct gen_group *group);
@@ -58,7 +59,10 @@ struct gen_field_iterator {
    const uint32_t *p;
    int dword; /**< current field starts at &p[dword] */
    int i;
+   struct gen_field *field;
    bool print_colors;
+   bool repeat;
+   uint32_t addr_inc;
 };
 
 struct gen_group {
@@ -67,6 +71,10 @@ struct gen_group {
    int nfields;
    struct gen_field **fields;
    uint32_t group_offset, group_count;
+   uint32_t elem_size;
+   uint32_t variable_offset;
+   bool variable;
+   uint32_t group_size;
 
    uint32_t opcode_mask;
    uint32_t opcode;
@@ -133,6 +141,6 @@ bool gen_field_iterator_next(struct gen_field_iterator *iter);
 void gen_print_group(FILE *out,
                      struct gen_group *group,
                      uint64_t offset, const uint32_t *p,
-                     int starting_dword, bool color);
+                     bool color);
 
 #endif /* GEN_DECODER_H */

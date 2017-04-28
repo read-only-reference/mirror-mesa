@@ -510,7 +510,7 @@ static void StreamOut(
     uint32_t soVertsPerPrim = NumVertsPerPrim(pa.binTopology, false);
 
     // The pPrimData buffer is sparse in that we allocate memory for all 32 attributes for each vertex.
-    uint32_t primDataDwordVertexStride = (KNOB_NUM_ATTRIBUTES * sizeof(float) * 4) / sizeof(uint32_t);
+    uint32_t primDataDwordVertexStride = (SWR_VTX_NUM_SLOTS * sizeof(float) * 4) / sizeof(uint32_t);
 
     SWR_STREAMOUT_CONTEXT soContext = { 0 };
 
@@ -551,6 +551,7 @@ static void StreamOut(
 
                 _mm_store_ps((float*)pPrimDataAttrib, attrib[v]);
             }
+
             soMask &= ~(1 << slot);
         }
 
@@ -618,13 +619,13 @@ INLINE static T RoundDownEven(T value)
 ///
 /// attribCount will limit the vector copies to those attribs specified
 ///
-/// note: the stride between vertexes is determinded by KNOB_NUM_ATTRIBUTES
+/// note: the stride between vertexes is determinded by SWR_VTX_NUM_SLOTS
 ///
 void PackPairsOfSimdVertexIntoSimd16Vertex(simd16vertex *vertex_simd16, const simdvertex *vertex, uint32_t vertexCount, uint32_t attribCount)
 {
     SWR_ASSERT(vertex);
     SWR_ASSERT(vertex_simd16);
-    SWR_ASSERT(attribCount <= KNOB_NUM_ATTRIBUTES);
+    SWR_ASSERT(attribCount <= SWR_VTX_NUM_SLOTS);
 
     simd16vertex temp;
 
@@ -709,7 +710,7 @@ void ProcessStreamIdBuffer(uint32_t stream, uint8_t* pStreamIdBase, uint32_t num
             }
             curInputByte >>= 2;
         }
-        
+
         *pCutBuffer++ = outByte;
     }
 }
@@ -810,7 +811,7 @@ static void GeometryShaderStage(
             tlsGsContext.vert[i].attrib[attribSlot] = attrib[i];
         }
     }
-    
+
     // assemble position
     pa.Assemble(VERTEX_POSITION_SLOT, attrib);
     for (uint32_t i = 0; i < numVertsPerPrim; ++i)
@@ -890,7 +891,7 @@ static void GeometryShaderStage(
 
             uint8_t* pBase = pInstanceBase + instance * bufferInfo.vertexInstanceStride;
             uint8_t* pCutBase = pCutBufferBase + instance * bufferInfo.cutInstanceStride;
-            
+
             uint32_t numAttribs = state.feNumAttributes;
 
             for (uint32_t stream = 0; stream < MAX_SO_STREAMS; ++stream)
@@ -930,7 +931,7 @@ static void GeometryShaderStage(
                     tempVertex_simd16,
                     reinterpret_cast<const simdvertex *>(pBase),
                     numEmittedVerts,
-                    KNOB_NUM_ATTRIBUTES);
+                    SWR_VTX_NUM_SLOTS);
 
 #endif
 #if USE_SIMD16_FRONTEND
@@ -1345,10 +1346,6 @@ static void TessellationStages(
             const uint32_t numPrims_lo = std::min<uint32_t>(numPrims, KNOB_SIMD_WIDTH);
             const uint32_t numPrims_hi = std::max<uint32_t>(numPrims, KNOB_SIMD_WIDTH) - KNOB_SIMD_WIDTH;
 
-            const uint32_t primMask = GenMask(numPrims);
-            const uint32_t primMask_lo = primMask & 255;
-            const uint32_t primMask_hi = (primMask >> 8) & 255;
-
             const simd16scalari primID = _simd16_set1_epi32(dsContext.PrimitiveID);
             const simdscalari primID_lo = _simd16_extract_si(primID, 0);
             const simdscalari primID_hi = _simd16_extract_si(primID, 1);
@@ -1391,9 +1388,10 @@ static void TessellationStages(
 
                 if (HasRastT::value)
                 {
-                    simdvector      prim[3]; // Only deal with triangles, lines, or points
 #if USE_SIMD16_FRONTEND
-                    simd16vector    prim_simd16[3];
+                    simd16vector    prim_simd16[3]; // Only deal with triangles, lines, or points
+#else
+                    simdvector      prim[3];        // Only deal with triangles, lines, or points
 #endif
                     AR_BEGIN(FEPAAssemble, pDC->drawId);
                     bool assemble =
@@ -1408,7 +1406,7 @@ static void TessellationStages(
                     SWR_ASSERT(pfnClipFunc);
 #if USE_SIMD16_FRONTEND
                     tessPa.useAlternateOffset = false;
-                    pfnClipFunc(pDC, tessPa, workerId, prim_simd16, primMask, primID, _simd16_set1_epi32(0));
+                    pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID, _simd16_set1_epi32(0));
 #else
                     pfnClipFunc(pDC, tessPa, workerId, prim,
                         GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID), _simd_set1_epi32(0));
@@ -1421,8 +1419,20 @@ static void TessellationStages(
         } // while (tessPa.HasWork())
     } // for (uint32_t p = 0; p < numPrims; ++p)
 
+#if USE_SIMD16_FRONTEND
+    if (gt_pTessellationThreadData->pDSOutput != nullptr)
+    {
+        AlignedFree(gt_pTessellationThreadData->pDSOutput);
+        gt_pTessellationThreadData->pDSOutput = nullptr;
+    }
+    gt_pTessellationThreadData->numDSOutputVectors = 0;
+
+#endif
     TSDestroyCtx(tsCtx);
 }
+
+THREAD PA_STATE::SIMDVERTEX *pVertexStore = nullptr;
+THREAD uint32_t gVertexStoreSize = 0;
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief FE handler for SwrDraw.
@@ -1531,8 +1541,36 @@ void ProcessDraw(
         pSoPrimData = (uint32_t*)pDC->pArena->AllocAligned(4096, 16);
     }
 
+    const uint32_t vertexCount = NumVertsPerPrim(state.topology, state.gsState.gsEnable);
+
+    SWR_ASSERT(vertexCount <= MAX_NUM_VERTS_PER_PRIM);
+
+    // grow the vertex store for the PA as necessary
+    if (gVertexStoreSize < vertexCount)
+    {
+        if (pVertexStore != nullptr)
+        {
+            AlignedFree(pVertexStore);
+        }
+
+        while (gVertexStoreSize < vertexCount)
+        {
+#if USE_SIMD16_FRONTEND
+            gVertexStoreSize += 4;  // grow in chunks of 4 simd16vertex
+#else
+            gVertexStoreSize += 8;  // grow in chunks of 8 simdvertex
+#endif
+        }
+
+        SWR_ASSERT(gVertexStoreSize <= MAX_NUM_VERTS_PER_PRIM);
+
+        pVertexStore = reinterpret_cast<PA_STATE::SIMDVERTEX *>(AlignedMalloc(gVertexStoreSize * sizeof(pVertexStore[0]), 64));
+
+        SWR_ASSERT(pVertexStore != nullptr);
+    }
+
     // choose primitive assembler
-    PA_FACTORY<IsIndexedT, IsCutIndexEnabledT> paFactory(pDC, state.topology, work.numVerts);
+    PA_FACTORY<IsIndexedT, IsCutIndexEnabledT> paFactory(pDC, state.topology, work.numVerts, pVertexStore, gVertexStoreSize);
     PA_STATE& pa = paFactory.GetPA();
 
 #if USE_SIMD16_FRONTEND
@@ -1543,6 +1581,8 @@ void ProcessDraw(
 
     vsContext_lo.pVin = &vin_lo;
     vsContext_hi.pVin = &vin_hi;
+    vsContext_lo.AlternateOffset = 0;
+    vsContext_hi.AlternateOffset = 1;
 
     SWR_FETCH_CONTEXT   fetchInfo_lo = { 0 };
 
@@ -1612,20 +1652,18 @@ void ProcessDraw(
                 pvCutIndices_hi = &reinterpret_cast<simdmask *>(&pa.GetNextVsIndices())[1];
             }
 
-            simdvertex vout_lo;
-            simdvertex vout_hi;
-
-            vsContext_lo.pVout = &vout_lo;
-            vsContext_hi.pVout = &vout_hi;
-
             simd16vertex &vout = pa.GetNextVsOutput();
+
+            vsContext_lo.pVout = reinterpret_cast<simdvertex *>(&vout);
+            vsContext_hi.pVout = reinterpret_cast<simdvertex *>(&vout);
 
             if (i < endVertex)
             {
                 // 1. Execute FS/VS for a single SIMD.
                 AR_BEGIN(FEFetchShader, pDC->drawId);
                 state.pfnFetchFunc(fetchInfo_lo, vin_lo);
-                if ((i + KNOB_SIMD_WIDTH) < endVertex)
+
+                if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                 {
                     state.pfnFetchFunc(fetchInfo_hi, vin_hi);
                 }
@@ -1655,35 +1693,9 @@ void ProcessDraw(
                     AR_BEGIN(FEVertexShader, pDC->drawId);
                     state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
 
-                    // copy SIMD vout_lo to lo part of SIMD16 vout
-                    {
-                        const uint32_t attribCount = sizeof(vout.attrib) / sizeof(vout.attrib[0]);
-
-                        for (uint32_t i = 0; i < attribCount; i += 1)
-                        {
-                            for (uint32_t j = 0; j < 4; j += 1)
-                            {
-                                vout.attrib[i][j] = _simd16_insert_ps(_simd16_setzero_ps(), vout_lo.attrib[i][j], 0);
-                            }
-                        }
-                    }
-
-                    if ((i + KNOB_SIMD_WIDTH) < endVertex)
+                    if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                     {
                         state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_hi);
-
-                        // copy SIMD vout_hi to hi part of SIMD16 vout
-                        {
-                            const uint32_t attribCount = sizeof(vout.attrib) / sizeof(vout.attrib[0]);
-
-                            for (uint32_t i = 0; i < attribCount; i += 1)
-                            {
-                                for (uint32_t j = 0; j < 4; j += 1)
-                                {
-                                    vout.attrib[i][j] = _simd16_insert_ps(vout.attrib[i][j], vout_hi.attrib[i][j], 1);
-                                }
-                            }
-                        }
                     }
                     AR_END(FEVertexShader, 0);
 
@@ -1715,10 +1727,6 @@ void ProcessDraw(
                             const uint32_t numPrims = pa.NumPrims();
                             const uint32_t numPrims_lo = std::min<uint32_t>(numPrims, KNOB_SIMD_WIDTH);
                             const uint32_t numPrims_hi = std::max<uint32_t>(numPrims, KNOB_SIMD_WIDTH) - KNOB_SIMD_WIDTH;
-
-                            const uint32_t primMask = GenMask(numPrims);
-                            const uint32_t primMask_lo = primMask & 255;
-                            const uint32_t primMask_hi = (primMask >> 8) & 255;
 
                             const simd16scalari primID = pa.GetPrimID(work.startPrimID);
                             const simdscalari primID_lo = _simd16_extract_si(primID, 0);
@@ -1761,7 +1769,7 @@ void ProcessDraw(
                                         StreamOut(pDC, pa, workerId, pSoPrimData, numPrims_hi, 0);
                                     }
 #else
-                                    pa.useAlternateOffset = false;  // StreamOut() is SIMD16-compatible..
+                                    pa.useAlternateOffset = false;
                                     StreamOut(pDC, pa, workerId, pSoPrimData, 0);
 #endif
                                 }
@@ -1771,7 +1779,7 @@ void ProcessDraw(
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims_simd16);
 
                                     pa.useAlternateOffset = false;
-                                    pDC->pState->pfnProcessPrims_simd16(pDC, pa, workerId, prim_simd16, primMask, primID, _simd16_setzero_si());
+                                    pDC->pState->pfnProcessPrims_simd16(pDC, pa, workerId, prim_simd16, GenMask(numPrims), primID, _simd16_setzero_si());
                                 }
                             }
                         }

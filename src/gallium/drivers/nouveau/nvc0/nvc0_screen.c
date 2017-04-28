@@ -147,7 +147,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-      if (class_3d < NVE4_3D_CLASS)
+      if (class_3d < GM107_3D_CLASS)
          return 256; /* IMAGE bindings require alignment to 256 */
       return 16;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
@@ -247,15 +247,21 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_DOUBLES:
    case PIPE_CAP_INT64:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
-      return 1;
+   case PIPE_CAP_TGSI_CLOCK:
    case PIPE_CAP_COMPUTE:
-      return (class_3d < GP100_3D_CLASS);
+      return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return nouveau_screen(pscreen)->vram_domain & NOUVEAU_BO_VRAM ? 1 : 0;
    case PIPE_CAP_TGSI_FS_FBFETCH:
       return class_3d >= NVE4_3D_CLASS; /* needs testing on fermi */
+   case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
+   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
+   case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+      return class_3d >= GM200_3D_CLASS;
+   case PIPE_CAP_TGSI_BALLOT:
+      return class_3d >= NVE4_3D_CLASS;
 
    /* unsupported caps */
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
@@ -265,7 +271,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_VERTEXID_NOBASE:
@@ -285,7 +290,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_NATIVE_FENCE_FD:
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_INT64_DIVMOD:
-   case PIPE_CAP_TGSI_CLOCK:
+   case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -380,6 +385,8 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       return 1;
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+      return 1;
+   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       return 1;
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
@@ -680,9 +687,8 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    case 0x100:
    case 0x110:
    case 0x120:
-      return nve4_screen_compute_setup(screen, screen->base.pushbuf);
    case 0x130:
-      return 0;
+      return nve4_screen_compute_setup(screen, screen->base.pushbuf);
    default:
       return -1;
    }

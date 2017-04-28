@@ -108,6 +108,17 @@ gen_spec_find_register(struct gen_spec *spec, uint32_t offset)
    return NULL;
 }
 
+struct gen_group *
+gen_spec_find_register_by_name(struct gen_spec *spec, const char *name)
+{
+   for (int i = 0; i < spec->nregisters; i++) {
+      if (strcmp(spec->registers[i]->name, name) == 0)
+         return spec->registers[i];
+   }
+
+   return NULL;
+}
+
 struct gen_enum *
 gen_spec_find_enum(struct gen_spec *spec, const char *name)
 {
@@ -179,6 +190,8 @@ create_group(struct parser_context *ctx, const char *name, const char **atts)
    group->spec = ctx->spec;
    group->group_offset = 0;
    group->group_count = 0;
+   group->variable_offset = 0;
+   group->variable = false;
 
    return group;
 }
@@ -199,16 +212,22 @@ create_enum(struct parser_context *ctx, const char *name, const char **atts)
 
 static void
 get_group_offset_count(struct parser_context *ctx, const char *name,
-                       const char **atts, uint32_t *offset, uint32_t *count)
+                       const char **atts, uint32_t *offset, uint32_t *count,
+                       uint32_t *elem_size, bool *variable)
 {
    char *p;
    int i;
 
    for (i = 0; atts[i]; i += 2) {
-      if (strcmp(atts[i], "count") == 0)
+      if (strcmp(atts[i], "count") == 0) {
          *count = strtoul(atts[i + 1], &p, 0);
-      else if (strcmp(atts[i], "start") == 0)
+         if (*count == 0)
+            *variable = true;
+      } else if (strcmp(atts[i], "start") == 0) {
          *offset = strtoul(atts[i + 1], &p, 0);
+      } else if (strcmp(atts[i], "size") == 0) {
+         *elem_size = strtoul(atts[i + 1], &p, 0);
+      }
    }
    return;
 }
@@ -320,8 +339,11 @@ create_field(struct parser_context *ctx, const char **atts)
          field->start = ctx->group->group_offset+strtoul(atts[i + 1], &p, 0);
       else if (strcmp(atts[i], "end") == 0) {
          field->end = ctx->group->group_offset+strtoul(atts[i + 1], &p, 0);
-         if (ctx->group->group_offset)
+         if (ctx->group->group_offset) {
             ctx->group->group_offset = field->end+1;
+            if (ctx->group->variable)
+               ctx->group->variable_offset = ctx->group->group_offset;
+         }
       } else if (strcmp(atts[i], "type") == 0)
          field->type = string_to_type(ctx, atts[i + 1]);
       else if (strcmp(atts[i], "default") == 0 &&
@@ -389,7 +411,8 @@ start_element(void *data, const char *element_name, const char **atts)
       get_register_offset(atts, &ctx->group->register_offset);
    } else if (strcmp(element_name, "group") == 0) {
       get_group_offset_count(ctx, name, atts, &ctx->group->group_offset,
-                             &ctx->group->group_count);
+                             &ctx->group->group_count, &ctx->group->elem_size,
+                             &ctx->group->variable);
    } else if (strcmp(element_name, "field") == 0) {
       do {
          ctx->fields[ctx->nfields++] = create_field(ctx, atts);
@@ -681,20 +704,36 @@ gen_group_get_length(struct gen_group *group, const uint32_t *p)
 
    case 3: /* Render */ {
       uint32_t subtype = field(h, 27, 28);
+      uint32_t opcode = field(h, 24, 26);
       switch (subtype) {
       case 0:
-         return field(h, 0, 7) + 2;
+         if (opcode < 2)
+            return field(h, 0, 7) + 2;
+         else
+            return -1;
       case 1:
-         return 1;
-      case 2:
-         return 2;
+         if (opcode < 2)
+            return 1;
+         else
+            return -1;
+      case 2: {
+         if (opcode == 0)
+            return field(h, 0, 7) + 2;
+         else if (opcode < 3)
+            return field(h, 0, 15) + 2;
+         else
+            return -1;
+      }
       case 3:
-         return field(h, 0, 7) + 2;
+         if (opcode < 4)
+            return field(h, 0, 7) + 2;
+         else
+            return -1;
       }
    }
    }
 
-   unreachable("bad opcode");
+   return -1;
 }
 
 void
@@ -707,6 +746,8 @@ gen_field_iterator_init(struct gen_field_iterator *iter,
    iter->p = p;
    iter->i = 0;
    iter->print_colors = print_colors;
+   iter->repeat = false;
+   iter->addr_inc = 0;
 }
 
 static const char *
@@ -723,48 +764,55 @@ gen_get_enum_name(struct gen_enum *e, uint64_t value)
 bool
 gen_field_iterator_next(struct gen_field_iterator *iter)
 {
-   struct gen_field *f;
    union {
       uint64_t qw;
       float f;
    } v;
 
-   if (iter->i == iter->group->nfields)
-      return false;
+   if (iter->i == iter->group->nfields) {
+      if (iter->group->group_size > 0) {
+         int iter_length = iter->group->elem_size;
 
-   f = iter->group->fields[iter->i++];
-   iter->name = f->name;
-   iter->dword = f->start / 32;
+         iter->group->group_size -= iter_length / 32;
+         iter->addr_inc += iter_length;
+         iter->dword = (iter->field->start + iter->addr_inc) / 32;
+         return true;
+      }
+      return false;
+   }
+
+   iter->field = iter->group->fields[iter->i++];
+   iter->name = iter->field->name;
+   iter->dword = iter->field->start / 32;
    iter->struct_desc = NULL;
 
-   if ((f->end - f->start) > 32)
+   if ((iter->field->end - iter->field->start) > 32)
       v.qw = ((uint64_t) iter->p[iter->dword+1] << 32) | iter->p[iter->dword];
    else
       v.qw = iter->p[iter->dword];
 
    const char *enum_name = NULL;
 
-   switch (f->type.kind) {
+   switch (iter->field->type.kind) {
    case GEN_TYPE_UNKNOWN:
    case GEN_TYPE_INT: {
-      uint64_t value = field(v.qw, f->start, f->end);
-      snprintf(iter->value, sizeof(iter->value),
-               "%"PRId64, value);
-      enum_name = gen_get_enum_name(&f->inline_enum, value);
+      uint64_t value = field(v.qw, iter->field->start, iter->field->end);
+      snprintf(iter->value, sizeof(iter->value), "%"PRId64, value);
+      enum_name = gen_get_enum_name(&iter->field->inline_enum, value);
       break;
    }
    case GEN_TYPE_UINT: {
-      uint64_t value = field(v.qw, f->start, f->end);
-      snprintf(iter->value, sizeof(iter->value),
-               "%"PRIu64, value);
-      enum_name = gen_get_enum_name(&f->inline_enum, value);
+      uint64_t value = field(v.qw, iter->field->start, iter->field->end);
+      snprintf(iter->value, sizeof(iter->value), "%"PRIu64, value);
+      enum_name = gen_get_enum_name(&iter->field->inline_enum, value);
       break;
    }
    case GEN_TYPE_BOOL: {
       const char *true_string =
          iter->print_colors ? "\e[0;35mtrue\e[0m" : "true";
-      snprintf(iter->value, sizeof(iter->value),
-               "%s", field(v.qw, f->start, f->end) ? true_string : "false");
+      snprintf(iter->value, sizeof(iter->value), "%s",
+               field(v.qw, iter->field->start, iter->field->end) ?
+               true_string : "false");
       break;
    }
    case GEN_TYPE_FLOAT:
@@ -772,18 +820,20 @@ gen_field_iterator_next(struct gen_field_iterator *iter)
       break;
    case GEN_TYPE_ADDRESS:
    case GEN_TYPE_OFFSET:
-      snprintf(iter->value, sizeof(iter->value),
-               "0x%08"PRIx64, field_address(v.qw, f->start, f->end));
+      snprintf(iter->value, sizeof(iter->value), "0x%08"PRIx64,
+               field_address(v.qw, iter->field->start, iter->field->end));
       break;
    case GEN_TYPE_STRUCT:
-      snprintf(iter->value, sizeof(iter->value),
-               "<struct %s>", f->type.gen_struct->name);
+      snprintf(iter->value, sizeof(iter->value), "<struct %s>",
+               iter->field->type.gen_struct->name);
       iter->struct_desc =
-         gen_spec_find_struct(iter->group->spec, f->type.gen_struct->name);
+         gen_spec_find_struct(iter->group->spec,
+                              iter->field->type.gen_struct->name);
       break;
    case GEN_TYPE_UFIXED:
-      snprintf(iter->value, sizeof(iter->value),
-               "%f", (float) field(v.qw, f->start, f->end) / (1 << f->type.f));
+      snprintf(iter->value, sizeof(iter->value), "%f",
+               (float) field(v.qw, iter->field->start,
+                             iter->field->end) / (1 << iter->field->type.f));
       break;
    case GEN_TYPE_SFIXED:
       /* FIXME: Sign extend extracted field. */
@@ -792,10 +842,10 @@ gen_field_iterator_next(struct gen_field_iterator *iter)
    case GEN_TYPE_MBO:
        break;
    case GEN_TYPE_ENUM: {
-      uint64_t value = field(v.qw, f->start, f->end);
+      uint64_t value = field(v.qw, iter->field->start, iter->field->end);
       snprintf(iter->value, sizeof(iter->value),
                "%"PRId64, value);
-      enum_name = gen_get_enum_name(f->type.gen_enum, value);
+      enum_name = gen_get_enum_name(iter->field->type.gen_enum, value);
       break;
    }
    }
@@ -817,10 +867,23 @@ print_dword_header(FILE *outfile,
            offset + 4 * iter->dword, iter->p[iter->dword], iter->dword);
 }
 
+static bool
+is_header_field(struct gen_group *group, struct gen_field *field)
+{
+   uint32_t bits;
+
+   if (field->start >= 32)
+      return false;
+
+   bits = (1U << (field->end - field->start + 1)) - 1;
+   bits <<= field->start;
+
+   return (group->opcode_mask & bits) != 0;
+}
+
 void
 gen_print_group(FILE *outfile, struct gen_group *group,
-                uint64_t offset, const uint32_t *p,
-                int starting_dword, bool color)
+                uint64_t offset, const uint32_t *p, bool color)
 {
    struct gen_field_iterator iter;
    int last_dword = 0;
@@ -831,13 +894,13 @@ gen_print_group(FILE *outfile, struct gen_group *group,
          print_dword_header(outfile, &iter, offset);
          last_dword = iter.dword;
       }
-      if (iter.dword >= starting_dword) {
+      if (!is_header_field(group, iter.field)) {
          fprintf(outfile, "    %s: %s\n", iter.name, iter.value);
          if (iter.struct_desc) {
             uint64_t struct_offset = offset + 4 * iter.dword;
             print_dword_header(outfile, &iter, struct_offset);
             gen_print_group(outfile, iter.struct_desc, struct_offset,
-                            &p[iter.dword], 0, color);
+                            &p[iter.dword], color);
          }
       }
    }

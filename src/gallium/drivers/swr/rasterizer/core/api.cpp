@@ -143,9 +143,6 @@ HANDLE SwrCreateContext(
     // initialize hot tile manager
     pContext->pHotTileMgr = new HotTileMgr();
 
-    // initialize function pointer tables
-    InitClearTilesTable();
-
     // initialize callback functions
     pContext->pfnLoadTile = pCreateInfo->pfnLoadTile;
     pContext->pfnStoreTile = pCreateInfo->pfnStoreTile;
@@ -592,12 +589,16 @@ void SwrSetCsFunc(
     HANDLE hContext,
     PFN_CS_FUNC pfnCsFunc,
     uint32_t totalThreadsInGroup,
-    uint32_t totalSpillFillSize)
+    uint32_t totalSpillFillSize,
+    uint32_t scratchSpaceSizePerInstance,
+    uint32_t numInstances)
 {
     API_STATE* pState = GetDrawState(GetContext(hContext));
     pState->pfnCsFunc = pfnCsFunc;
     pState->totalThreadsInGroup = totalThreadsInGroup;
     pState->totalSpillFillSize = totalSpillFillSize;
+    pState->scratchSpaceSize = scratchSpaceSizePerInstance;
+    pState->scratchSpaceNumInstances = numInstances;
 }
 
 void SwrSetTsState(
@@ -788,12 +789,10 @@ extern PFN_BACKEND_FUNC gBackendSingleSample[SWR_INPUT_COVERAGE_COUNT][2][2];
 extern PFN_BACKEND_FUNC gBackendSampleRateTable[SWR_MULTISAMPLE_TYPE_COUNT][SWR_INPUT_COVERAGE_COUNT][2][2];
 void SetupPipeline(DRAW_CONTEXT *pDC)
 {
-    SWR_CONTEXT* pContext = pDC->pContext;
     DRAW_STATE* pState = pDC->pState;
     const SWR_RASTSTATE &rastState = pState->state.rastState;
     const SWR_PS_STATE &psState = pState->state.psState;
     BACKEND_FUNCS& backendFuncs = pState->backendFuncs;
-    const uint32_t forcedSampleCount = (rastState.forcedSampleCount) ? 1 : 0;
 
     // setup backend
     if (psState.pfnPixelShader == nullptr)
@@ -802,7 +801,8 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
     }
     else
     {
-        const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || rastState.forcedSampleCount) ? 1 : 0;
+        const uint32_t forcedSampleCount = (rastState.forcedSampleCount) ? 1 : 0;
+        const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || forcedSampleCount) ? 1 : 0;
         const uint32_t centroid = ((psState.barycentricsMask & SWR_BARYCENTRIC_CENTROID_MASK) > 0) ? 1 : 0;
         const uint32_t canEarlyZ = (psState.forceEarlyZ || (!psState.writesODepth && !psState.usesSourceDepth && !psState.usesUAV)) ? 1 : 0;
         SWR_BARYCENTRICS_MASK barycentricsMask = (SWR_BARYCENTRICS_MASK)psState.barycentricsMask;
@@ -815,7 +815,7 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
             {
                 // always need to generate I & J per sample for Z interpolation
                 barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_SAMPLE_MASK);
-                backendFuncs.pfnBackend = gBackendPixelRateTable[rastState.sampleCount][rastState.samplePattern][psState.inputCoverage]
+                backendFuncs.pfnBackend = gBackendPixelRateTable[rastState.sampleCount][rastState.bIsCenterPattern][psState.inputCoverage]
                                                                 [centroid][forcedSampleCount][canEarlyZ]
                     ;
             }
@@ -827,7 +827,7 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
             }
             break;
         case SWR_SHADING_RATE_SAMPLE:
-            SWR_ASSERT(rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN);
+            SWR_ASSERT(rastState.bIsCenterPattern != true);
             // always need to generate I & J per sample for Z interpolation
             barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_SAMPLE_MASK);
             backendFuncs.pfnBackend = gBackendSampleRateTable[rastState.sampleCount][psState.inputCoverage][centroid][canEarlyZ];
@@ -1630,6 +1630,7 @@ void SWR_API SwrEndFrame(
 {
     SWR_CONTEXT *pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC = GetDrawContext(pContext);
+    (void)pDC; // var used
 
     RDTSC_ENDFRAME();
     AR_API_EVENT(FrameEndEvent(pContext->frameCount, pDC->drawId));
@@ -1637,3 +1638,74 @@ void SWR_API SwrEndFrame(
     pContext->frameCount++;
 }
 
+void InitSimLoadTilesTable();
+void InitSimStoreTilesTable();
+void InitSimClearTilesTable();
+
+void InitClearTilesTable();
+void InitBackendFuncTables();
+
+//////////////////////////////////////////////////////////////////////////
+/// @brief Initialize swr backend and memory internal tables
+void SwrInit()
+{
+    InitSimLoadTilesTable();
+    InitSimStoreTilesTable();
+    InitSimClearTilesTable();
+
+    InitClearTilesTable();
+    InitBackendFuncTables();
+}
+
+
+void SwrGetInterface(SWR_INTERFACE &out_funcs)
+{
+    out_funcs.pfnSwrCreateContext = SwrCreateContext;
+    out_funcs.pfnSwrDestroyContext = SwrDestroyContext;
+    out_funcs.pfnSwrSaveState = SwrSaveState;
+    out_funcs.pfnSwrRestoreState = SwrRestoreState;
+    out_funcs.pfnSwrSync = SwrSync;
+    out_funcs.pfnSwrWaitForIdle = SwrWaitForIdle;
+    out_funcs.pfnSwrWaitForIdleFE = SwrWaitForIdleFE;
+    out_funcs.pfnSwrSetVertexBuffers = SwrSetVertexBuffers;
+    out_funcs.pfnSwrSetIndexBuffer = SwrSetIndexBuffer;
+    out_funcs.pfnSwrSetFetchFunc = SwrSetFetchFunc;
+    out_funcs.pfnSwrSetSoFunc = SwrSetSoFunc;
+    out_funcs.pfnSwrSetSoState = SwrSetSoState;
+    out_funcs.pfnSwrSetSoBuffers = SwrSetSoBuffers;
+    out_funcs.pfnSwrSetVertexFunc = SwrSetVertexFunc;
+    out_funcs.pfnSwrSetFrontendState = SwrSetFrontendState;
+    out_funcs.pfnSwrSetGsState = SwrSetGsState;
+    out_funcs.pfnSwrSetGsFunc = SwrSetGsFunc;
+    out_funcs.pfnSwrSetCsFunc = SwrSetCsFunc;
+    out_funcs.pfnSwrSetTsState = SwrSetTsState;
+    out_funcs.pfnSwrSetHsFunc = SwrSetHsFunc;
+    out_funcs.pfnSwrSetDsFunc = SwrSetDsFunc;
+    out_funcs.pfnSwrSetDepthStencilState = SwrSetDepthStencilState;
+    out_funcs.pfnSwrSetBackendState = SwrSetBackendState;
+    out_funcs.pfnSwrSetDepthBoundsState = SwrSetDepthBoundsState;
+    out_funcs.pfnSwrSetPixelShaderState = SwrSetPixelShaderState;
+    out_funcs.pfnSwrSetBlendState = SwrSetBlendState;
+    out_funcs.pfnSwrSetBlendFunc = SwrSetBlendFunc;
+    out_funcs.pfnSwrDraw = SwrDraw;
+    out_funcs.pfnSwrDrawInstanced = SwrDrawInstanced;
+    out_funcs.pfnSwrDrawIndexed = SwrDrawIndexed;
+    out_funcs.pfnSwrDrawIndexedInstanced = SwrDrawIndexedInstanced;
+    out_funcs.pfnSwrInvalidateTiles = SwrInvalidateTiles;
+    out_funcs.pfnSwrDiscardRect = SwrDiscardRect;
+    out_funcs.pfnSwrDispatch = SwrDispatch;
+    out_funcs.pfnSwrStoreTiles = SwrStoreTiles;
+    out_funcs.pfnSwrClearRenderTarget = SwrClearRenderTarget;
+    out_funcs.pfnSwrSetRastState = SwrSetRastState;
+    out_funcs.pfnSwrSetViewports = SwrSetViewports;
+    out_funcs.pfnSwrSetScissorRects = SwrSetScissorRects;
+    out_funcs.pfnSwrGetPrivateContextState = SwrGetPrivateContextState;
+    out_funcs.pfnSwrAllocDrawContextMemory = SwrAllocDrawContextMemory;
+    out_funcs.pfnSwrEnableStatsFE = SwrEnableStatsFE;
+    out_funcs.pfnSwrEnableStatsBE = SwrEnableStatsBE;
+    out_funcs.pfnSwrEndFrame = SwrEndFrame;
+    out_funcs.pfnSwrInit = SwrInit;
+    out_funcs.pfnSwrLoadHotTile = SwrLoadHotTile;
+    out_funcs.pfnSwrStoreHotTileToSurface = SwrStoreHotTileToSurface;
+    out_funcs.pfnSwrStoreHotTileClear = SwrStoreHotTileClear;
+}

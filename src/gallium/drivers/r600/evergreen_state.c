@@ -471,6 +471,7 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	rs->clip_halfz = state->clip_halfz;
 	rs->flatshade = state->flatshade;
 	rs->sprite_coord_enable = state->sprite_coord_enable;
+	rs->rasterizer_discard = state->rasterizer_discard;
 	rs->two_side = state->light_twoside;
 	rs->clip_plane_enable = state->clip_plane_enable;
 	rs->pa_sc_line_stipple = state->line_stipple_enable ?
@@ -1549,6 +1550,7 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	r600_mark_atom_dirty(rctx, &rctx->framebuffer.atom);
 
 	r600_set_sample_locations_constant_buffer(rctx);
+	rctx->framebuffer.do_update_surf_dirtiness = true;
 }
 
 static void evergreen_set_min_samples(struct pipe_context *ctx, unsigned min_samples)

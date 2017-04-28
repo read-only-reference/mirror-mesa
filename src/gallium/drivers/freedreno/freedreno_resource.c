@@ -51,23 +51,13 @@
 static void
 fd_invalidate_resource(struct fd_context *ctx, struct pipe_resource *prsc)
 {
-	int i;
-
 	/* Go through the entire state and see if the resource is bound
 	 * anywhere. If it is, mark the relevant state as dirty. This is called on
 	 * realloc_bo.
 	 */
 
-	/* Constbufs */
-	for (i = 1; i < PIPE_MAX_CONSTANT_BUFFERS && !(ctx->dirty & FD_DIRTY_CONSTBUF); i++) {
-		if (ctx->constbuf[PIPE_SHADER_VERTEX].cb[i].buffer == prsc)
-			ctx->dirty |= FD_DIRTY_CONSTBUF;
-		if (ctx->constbuf[PIPE_SHADER_FRAGMENT].cb[i].buffer == prsc)
-			ctx->dirty |= FD_DIRTY_CONSTBUF;
-	}
-
 	/* VBOs */
-	for (i = 0; i < ctx->vtx.vertexbuf.count && !(ctx->dirty & FD_DIRTY_VTXBUF); i++) {
+	for (unsigned i = 0; i < ctx->vtx.vertexbuf.count && !(ctx->dirty & FD_DIRTY_VTXBUF); i++) {
 		if (ctx->vtx.vertexbuf.vb[i].buffer == prsc)
 			ctx->dirty |= FD_DIRTY_VTXBUF;
 	}
@@ -76,14 +66,26 @@ fd_invalidate_resource(struct fd_context *ctx, struct pipe_resource *prsc)
 	if (ctx->indexbuf.buffer == prsc)
 		ctx->dirty |= FD_DIRTY_INDEXBUF;
 
-	/* Textures */
-	for (i = 0; i < ctx->verttex.num_textures && !(ctx->dirty & FD_DIRTY_VERTTEX); i++) {
-		if (ctx->verttex.textures[i] && (ctx->verttex.textures[i]->texture == prsc))
-			ctx->dirty |= FD_DIRTY_VERTTEX;
-	}
-	for (i = 0; i < ctx->fragtex.num_textures && !(ctx->dirty & FD_DIRTY_FRAGTEX); i++) {
-		if (ctx->fragtex.textures[i] && (ctx->fragtex.textures[i]->texture == prsc))
-			ctx->dirty |= FD_DIRTY_FRAGTEX;
+	/* per-shader-stage resources: */
+	for (unsigned stage = 0; stage < PIPE_SHADER_TYPES; stage++) {
+		/* Constbufs.. note that constbuf[0] is normal uniforms emitted in
+		 * cmdstream rather than by pointer..
+		 */
+		const unsigned num_ubos = util_last_bit(ctx->constbuf[stage].enabled_mask);
+		for (unsigned i = 1; i < num_ubos; i++) {
+			if (ctx->dirty_shader[stage] & FD_DIRTY_SHADER_CONST)
+				break;
+			if (ctx->constbuf[stage].cb[i].buffer == prsc)
+				ctx->dirty_shader[stage] |= FD_DIRTY_SHADER_CONST;
+		}
+
+		/* Textures */
+		for (unsigned i = 0; i < ctx->tex[stage].num_textures; i++) {
+			if (ctx->dirty_shader[stage] & FD_DIRTY_SHADER_TEX)
+				break;
+			if (ctx->tex[stage].textures[i] && (ctx->tex[stage].textures[i]->texture == prsc))
+				ctx->dirty_shader[stage] |= FD_DIRTY_SHADER_TEX;
+		}
 	}
 }
 
@@ -1079,16 +1081,17 @@ fd_blitter_pipe_begin(struct fd_context *ctx, bool render_cond, bool discard,
 	util_blitter_save_framebuffer(ctx->blitter,
 			ctx->batch ? &ctx->batch->framebuffer : NULL);
 	util_blitter_save_fragment_sampler_states(ctx->blitter,
-			ctx->fragtex.num_samplers,
-			(void **)ctx->fragtex.samplers);
+			ctx->tex[PIPE_SHADER_FRAGMENT].num_samplers,
+			(void **)ctx->tex[PIPE_SHADER_FRAGMENT].samplers);
 	util_blitter_save_fragment_sampler_views(ctx->blitter,
-			ctx->fragtex.num_textures, ctx->fragtex.textures);
+			ctx->tex[PIPE_SHADER_FRAGMENT].num_textures,
+			ctx->tex[PIPE_SHADER_FRAGMENT].textures);
 	if (!render_cond)
 		util_blitter_save_render_condition(ctx->blitter,
 			ctx->cond_query, ctx->cond_cond, ctx->cond_mode);
 
 	if (ctx->batch)
-		fd_hw_query_set_stage(ctx->batch, ctx->batch->draw, stage);
+		fd_batch_set_stage(ctx->batch, stage);
 
 	ctx->in_blit = discard;
 }
@@ -1097,7 +1100,7 @@ void
 fd_blitter_pipe_end(struct fd_context *ctx)
 {
 	if (ctx->batch)
-		fd_hw_query_set_stage(ctx->batch, ctx->batch->draw, FD_STAGE_NULL);
+		fd_batch_set_stage(ctx->batch, FD_STAGE_NULL);
 	ctx->in_blit = false;
 }
 

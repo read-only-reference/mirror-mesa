@@ -136,9 +136,9 @@ struct PA_STATE_OPT : public PA_STATE
     uint32_t primIDIncr{ 0 };            // how much to increment for each vector (typically vector / {1, 2})
     SIMDSCALARI primID;
 
-    typedef bool(*PFN_PA_FUNC)(PA_STATE_OPT& state, uint32_t slot, simdvector verts[]);
+    typedef bool(*PFN_PA_FUNC)(PA_STATE_OPT& pa, uint32_t slot, simdvector verts[]);
 #if ENABLE_AVX512_SIMD16
-    typedef bool(*PFN_PA_FUNC_SIMD16)(PA_STATE_OPT& state, uint32_t slot, simd16vector verts[]);
+    typedef bool(*PFN_PA_FUNC_SIMD16)(PA_STATE_OPT& pa, uint32_t slot, simd16vector verts[]);
 #endif
     typedef void(*PFN_PA_SINGLE_FUNC)(PA_STATE_OPT& pa, uint32_t slot, uint32_t primIndex, __m128 verts[]);
 
@@ -645,7 +645,9 @@ struct PA_STATE_CUT : public PA_STATE
         }
     }
 
-    bool Assemble(uint32_t slot, simdvector verts[])
+// disabling buffer overrun warning for this function for what appears to be a bug in MSVC 2017
+PRAGMA_WARNING_PUSH_DISABLE(4789)
+    bool Assemble(uint32_t slot, simdvector *verts)
     {
         // process any outstanding verts
         ProcessVerts();
@@ -692,6 +694,7 @@ struct PA_STATE_CUT : public PA_STATE
 
         return true;
     }
+PRAGMA_WARNING_POP()
 
 #if ENABLE_AVX512_SIMD16
     bool Assemble_simd16(uint32_t slot, simd16vector verts[])
@@ -1390,7 +1393,7 @@ private:
 template <typename IsIndexedT, typename IsCutIndexEnabledT>
 struct PA_FACTORY
 {
-    PA_FACTORY(DRAW_CONTEXT* pDC, PRIMITIVE_TOPOLOGY in_topo, uint32_t numVerts) : topo(in_topo)
+    PA_FACTORY(DRAW_CONTEXT* pDC, PRIMITIVE_TOPOLOGY in_topo, uint32_t numVerts, PA_STATE::SIMDVERTEX *pVertexStore, uint32_t vertexStoreSize) : topo(in_topo)
     {
 #if KNOB_ENABLE_CUT_AWARE_PA == TRUE
         const API_STATE& state = GetApiState(pDC);
@@ -1406,7 +1409,7 @@ struct PA_FACTORY
             memset(&indexStore, 0, sizeof(indexStore));
             uint32_t numAttribs = state.feNumAttributes;
 
-            new (&this->paCut) PA_STATE_CUT(pDC, (uint8_t*)&this->vertexStore[0], MAX_NUM_VERTS_PER_PRIM * PA_STATE::SIMD_WIDTH,
+            new (&this->paCut) PA_STATE_CUT(pDC, reinterpret_cast<uint8_t *>(pVertexStore), vertexStoreSize * PA_STATE::SIMD_WIDTH,
                 &this->indexStore[0], numVerts, numAttribs, state.topology, false);
             cutPA = true;
         }
@@ -1414,7 +1417,7 @@ struct PA_FACTORY
 #endif
         {
             uint32_t numPrims = GetNumPrims(in_topo, numVerts);
-            new (&this->paOpt) PA_STATE_OPT(pDC, numPrims, (uint8_t*)&this->vertexStore[0], MAX_NUM_VERTS_PER_PRIM * PA_STATE::SIMD_WIDTH, false);
+            new (&this->paOpt) PA_STATE_OPT(pDC, numPrims, reinterpret_cast<uint8_t *>(pVertexStore), vertexStoreSize * PA_STATE::SIMD_WIDTH, false);
             cutPA = false;
         }
 
@@ -1436,10 +1439,10 @@ struct PA_FACTORY
 
     PA_STATE_OPT paOpt;
     PA_STATE_CUT paCut;
+
     bool cutPA{ false };
 
     PRIMITIVE_TOPOLOGY topo{ TOP_UNKNOWN };
 
-    PA_STATE::SIMDVERTEX    vertexStore[MAX_NUM_VERTS_PER_PRIM];
     PA_STATE::SIMDMASK      indexStore[MAX_NUM_VERTS_PER_PRIM];
 };

@@ -34,6 +34,8 @@
 
 #include "anv_private.h"
 
+#include "util/hash_table.h"
+
 #ifdef HAVE_VALGRIND
 #define VG_NOACCESS_READ(__ptr) ({                       \
    VALGRIND_MAKE_MEM_DEFINED((__ptr), sizeof(*(__ptr))); \
@@ -475,8 +477,37 @@ anv_block_pool_grow(struct anv_block_pool *pool, struct anv_block_state *state)
     * values back into pool. */
    pool->map = map + center_bo_offset;
    pool->center_bo_offset = center_bo_offset;
+
+   /* For block pool BOs we have to be a bit careful about where we place them
+    * in the GTT.  There are two documented workarounds for state base address
+    * placement : Wa32bitGeneralStateOffset and Wa32bitInstructionBaseOffset
+    * which state that those two base addresses do not support 48-bit
+    * addresses and need to be placed in the bottom 32-bit range.
+    * Unfortunately, this is not quite accurate.
+    *
+    * The real problem is that we always set the size of our state pools in
+    * STATE_BASE_ADDRESS to 0xfffff (the maximum) even though the BO is most
+    * likely significantly smaller.  We do this because we do not no at the
+    * time we emit STATE_BASE_ADDRESS whether or not we will need to expand
+    * the pool during command buffer building so we don't actually have a
+    * valid final size.  If the address + size, as seen by STATE_BASE_ADDRESS
+    * overflows 48 bits, the GPU appears to treat all accesses to the buffer
+    * as being out of bounds and returns zero.  For dynamic state, this
+    * usually just leads to rendering corruptions, but shaders that are all
+    * zero hang the GPU immediately.
+    *
+    * The easiest solution to do is exactly what the bogus workarounds say to
+    * do: restrict these buffers to 32-bit addresses.  We could also pin the
+    * BO to some particular location of our choosing, but that's significantly
+    * more work than just not setting a flag.  So, we explicitly DO NOT set
+    * the EXEC_OBJECT_SUPPORTS_48B_ADDRESS flag and the kernel does all of the
+    * hard work for us.
+    */
    anv_bo_init(&pool->bo, gem_handle, size);
    pool->bo.map = map;
+
+   if (pool->device->instance->physicalDevice.has_exec_async)
+      pool->bo.flags |= EXEC_OBJECT_ASYNC;
 
 done:
    pthread_mutex_unlock(&pool->device->mutex);
@@ -732,7 +763,6 @@ anv_state_stream_finish(struct anv_state_stream *stream)
 
    struct anv_state_stream_block *next = stream->block;
    while (next != NULL) {
-      VG(VALGRIND_MAKE_MEM_DEFINED(next, sizeof(*next)));
       struct anv_state_stream_block sb = VG_NOACCESS_READ(next);
       VG(VALGRIND_MEMPOOL_FREE(stream, sb._vg_ptr));
       VG(VALGRIND_MAKE_MEM_UNDEFINED(next, block_size));
@@ -968,6 +998,25 @@ anv_scratch_pool_alloc(struct anv_device *device, struct anv_scratch_pool *pool,
 
    anv_bo_init_new(&bo->bo, device, size);
 
+   /* Even though the Scratch base pointers in 3DSTATE_*S are 64 bits, they
+    * are still relative to the general state base address.  When we emit
+    * STATE_BASE_ADDRESS, we set general state base address to 0 and the size
+    * to the maximum (1 page under 4GB).  This allows us to just place the
+    * scratch buffers anywhere we wish in the bottom 32 bits of address space
+    * and just set the scratch base pointer in 3DSTATE_*S using a relocation.
+    * However, in order to do so, we need to ensure that the kernel does not
+    * place the scratch BO above the 32-bit boundary.
+    *
+    * NOTE: Technically, it can't go "anywhere" because the top page is off
+    * limits.  However, when EXEC_OBJECT_SUPPORTS_48B_ADDRESS is set, the
+    * kernel allocates space using
+    *
+    *    end = min_t(u64, end, (1ULL << 32) - I915_GTT_PAGE_SIZE);
+    *
+    * so nothing will ever touch the top page.
+    */
+   bo->bo.flags &= ~EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+
    /* Set the exists last because it may be read by other threads */
    __sync_synchronize();
    bo->exists = true;
@@ -975,4 +1024,259 @@ anv_scratch_pool_alloc(struct anv_device *device, struct anv_scratch_pool *pool,
    pthread_mutex_unlock(&device->mutex);
 
    return &bo->bo;
+}
+
+struct anv_cached_bo {
+   struct anv_bo bo;
+
+   uint32_t refcount;
+};
+
+VkResult
+anv_bo_cache_init(struct anv_bo_cache *cache)
+{
+   cache->bo_map = _mesa_hash_table_create(NULL, _mesa_hash_pointer,
+                                           _mesa_key_pointer_equal);
+   if (!cache->bo_map)
+      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   if (pthread_mutex_init(&cache->mutex, NULL)) {
+      _mesa_hash_table_destroy(cache->bo_map, NULL);
+      return vk_errorf(VK_ERROR_OUT_OF_HOST_MEMORY,
+                       "pthread_mutex_init failed: %m");
+   }
+
+   return VK_SUCCESS;
+}
+
+void
+anv_bo_cache_finish(struct anv_bo_cache *cache)
+{
+   _mesa_hash_table_destroy(cache->bo_map, NULL);
+   pthread_mutex_destroy(&cache->mutex);
+}
+
+static struct anv_cached_bo *
+anv_bo_cache_lookup_locked(struct anv_bo_cache *cache, uint32_t gem_handle)
+{
+   struct hash_entry *entry =
+      _mesa_hash_table_search(cache->bo_map,
+                              (const void *)(uintptr_t)gem_handle);
+   if (!entry)
+      return NULL;
+
+   struct anv_cached_bo *bo = (struct anv_cached_bo *)entry->data;
+   assert(bo->bo.gem_handle == gem_handle);
+
+   return bo;
+}
+
+static struct anv_bo *
+anv_bo_cache_lookup(struct anv_bo_cache *cache, uint32_t gem_handle)
+{
+   pthread_mutex_lock(&cache->mutex);
+
+   struct anv_cached_bo *bo = anv_bo_cache_lookup_locked(cache, gem_handle);
+
+   pthread_mutex_unlock(&cache->mutex);
+
+   return bo ? &bo->bo : NULL;
+}
+
+VkResult
+anv_bo_cache_alloc(struct anv_device *device,
+                   struct anv_bo_cache *cache,
+                   uint64_t size, struct anv_bo **bo_out)
+{
+   struct anv_cached_bo *bo =
+      vk_alloc(&device->alloc, sizeof(struct anv_cached_bo), 8,
+               VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   if (!bo)
+      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   bo->refcount = 1;
+
+   /* The kernel is going to give us whole pages anyway */
+   size = align_u64(size, 4096);
+
+   VkResult result = anv_bo_init_new(&bo->bo, device, size);
+   if (result != VK_SUCCESS) {
+      vk_free(&device->alloc, bo);
+      return result;
+   }
+
+   assert(bo->bo.gem_handle);
+
+   pthread_mutex_lock(&cache->mutex);
+
+   _mesa_hash_table_insert(cache->bo_map,
+                           (void *)(uintptr_t)bo->bo.gem_handle, bo);
+
+   pthread_mutex_unlock(&cache->mutex);
+
+   *bo_out = &bo->bo;
+
+   return VK_SUCCESS;
+}
+
+VkResult
+anv_bo_cache_import(struct anv_device *device,
+                    struct anv_bo_cache *cache,
+                    int fd, uint64_t size, struct anv_bo **bo_out)
+{
+   pthread_mutex_lock(&cache->mutex);
+
+   /* The kernel is going to give us whole pages anyway */
+   size = align_u64(size, 4096);
+
+   uint32_t gem_handle = anv_gem_fd_to_handle(device, fd);
+   if (!gem_handle) {
+      pthread_mutex_unlock(&cache->mutex);
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX);
+   }
+
+   struct anv_cached_bo *bo = anv_bo_cache_lookup_locked(cache, gem_handle);
+   if (bo) {
+      if (bo->bo.size != size) {
+         pthread_mutex_unlock(&cache->mutex);
+         return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX);
+      }
+      __sync_fetch_and_add(&bo->refcount, 1);
+   } else {
+      /* For security purposes, we reject BO imports where the size does not
+       * match exactly.  This prevents a malicious client from passing a
+       * buffer to a trusted client, lying about the size, and telling the
+       * trusted client to try and texture from an image that goes
+       * out-of-bounds.  This sort of thing could lead to GPU hangs or worse
+       * in the trusted client.  The trusted client can protect itself against
+       * this sort of attack but only if it can trust the buffer size.
+       */
+      off_t import_size = lseek(fd, 0, SEEK_END);
+      if (import_size == (off_t)-1 || import_size != size) {
+         anv_gem_close(device, gem_handle);
+         pthread_mutex_unlock(&cache->mutex);
+         return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX);
+      }
+
+      bo = vk_alloc(&device->alloc, sizeof(struct anv_cached_bo), 8,
+                    VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+      if (!bo) {
+         anv_gem_close(device, gem_handle);
+         pthread_mutex_unlock(&cache->mutex);
+         return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+      }
+
+      bo->refcount = 1;
+
+      anv_bo_init(&bo->bo, gem_handle, size);
+
+      if (device->instance->physicalDevice.supports_48bit_addresses)
+         bo->bo.flags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+
+      if (device->instance->physicalDevice.has_exec_async)
+         bo->bo.flags |= EXEC_OBJECT_ASYNC;
+
+      _mesa_hash_table_insert(cache->bo_map, (void *)(uintptr_t)gem_handle, bo);
+   }
+
+   pthread_mutex_unlock(&cache->mutex);
+
+   /* From the Vulkan spec:
+    *
+    *    "Importing memory from a file descriptor transfers ownership of
+    *    the file descriptor from the application to the Vulkan
+    *    implementation. The application must not perform any operations on
+    *    the file descriptor after a successful import."
+    *
+    * If the import fails, we leave the file descriptor open.
+    */
+   close(fd);
+
+   *bo_out = &bo->bo;
+
+   return VK_SUCCESS;
+}
+
+VkResult
+anv_bo_cache_export(struct anv_device *device,
+                    struct anv_bo_cache *cache,
+                    struct anv_bo *bo_in, int *fd_out)
+{
+   assert(anv_bo_cache_lookup(cache, bo_in->gem_handle) == bo_in);
+   struct anv_cached_bo *bo = (struct anv_cached_bo *)bo_in;
+
+   int fd = anv_gem_handle_to_fd(device, bo->bo.gem_handle);
+   if (fd < 0)
+      return vk_error(VK_ERROR_TOO_MANY_OBJECTS);
+
+   *fd_out = fd;
+
+   return VK_SUCCESS;
+}
+
+static bool
+atomic_dec_not_one(uint32_t *counter)
+{
+   uint32_t old, val;
+
+   val = *counter;
+   while (1) {
+      if (val == 1)
+         return false;
+
+      old = __sync_val_compare_and_swap(counter, val, val - 1);
+      if (old == val)
+         return true;
+
+      val = old;
+   }
+}
+
+void
+anv_bo_cache_release(struct anv_device *device,
+                     struct anv_bo_cache *cache,
+                     struct anv_bo *bo_in)
+{
+   assert(anv_bo_cache_lookup(cache, bo_in->gem_handle) == bo_in);
+   struct anv_cached_bo *bo = (struct anv_cached_bo *)bo_in;
+
+   /* Try to decrement the counter but don't go below one.  If this succeeds
+    * then the refcount has been decremented and we are not the last
+    * reference.
+    */
+   if (atomic_dec_not_one(&bo->refcount))
+      return;
+
+   pthread_mutex_lock(&cache->mutex);
+
+   /* We are probably the last reference since our attempt to decrement above
+    * failed.  However, we can't actually know until we are inside the mutex.
+    * Otherwise, someone could import the BO between the decrement and our
+    * taking the mutex.
+    */
+   if (unlikely(__sync_sub_and_fetch(&bo->refcount, 1) > 0)) {
+      /* Turns out we're not the last reference.  Unlock and bail. */
+      pthread_mutex_unlock(&cache->mutex);
+      return;
+   }
+
+   struct hash_entry *entry =
+      _mesa_hash_table_search(cache->bo_map,
+                              (const void *)(uintptr_t)bo->bo.gem_handle);
+   assert(entry);
+   _mesa_hash_table_remove(cache->bo_map, entry);
+
+   if (bo->bo.map)
+      anv_gem_munmap(bo->bo.map, bo->bo.size);
+
+   anv_gem_close(device, bo->bo.gem_handle);
+
+   /* Don't unlock until we've actually closed the BO.  The whole point of
+    * the BO cache is to ensure that we correctly handle races with creating
+    * and releasing GEM handles and we don't want to let someone import the BO
+    * again between mutex unlock and closing the GEM handle.
+    */
+   pthread_mutex_unlock(&cache->mutex);
+
+   vk_free(&device->alloc, bo);
 }

@@ -248,6 +248,10 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_INT64_DIVMOD:
         case PIPE_CAP_TGSI_TEX_TXF_LZ:
         case PIPE_CAP_TGSI_CLOCK:
+        case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
+        case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
+        case PIPE_CAP_TGSI_BALLOT:
+        case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
                 return 0;
 
                 /* Stream output. */
@@ -407,6 +411,7 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
+        case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
                 return 0;
         default:
                 fprintf(stderr, "unknown shader param %d\n", param);
@@ -583,7 +588,7 @@ vc4_get_chip_info(struct vc4_screen *screen)
         uint32_t minor = (ident1.value >> 0) & 0xf;
         screen->v3d_ver = major * 10 + minor;
 
-        if (screen->v3d_ver != 21) {
+        if (screen->v3d_ver != 21 && screen->v3d_ver != 26) {
                 fprintf(stderr,
                         "V3D %d.%d not supported by this version of Mesa.\n",
                         screen->v3d_ver / 10,

@@ -30,6 +30,7 @@
 #include "common/os.h"
 #include "jit_api.h"
 #include "gen_state_llvm.h"
+#include "core/multisample.h"
 
 #include "gallivm/lp_bld_tgsi.h"
 #include "util/u_format.h"
@@ -39,6 +40,7 @@
 #include "util/u_helpers.h"
 #include "util/u_framebuffer.h"
 #include "util/u_viewport.h"
+#include "util/u_prim.h"
 
 #include "swr_state.h"
 #include "swr_context.h"
@@ -608,7 +610,7 @@ swr_set_polygon_stipple(struct pipe_context *pipe,
 {
    struct swr_context *ctx = swr_context(pipe);
 
-   ctx->poly_stipple = *stipple; /* struct copy */
+   ctx->poly_stipple.pipe = *stipple; /* struct copy */
    ctx->dirty |= SWR_NEW_STIPPLE;
 }
 
@@ -668,6 +670,9 @@ swr_set_framebuffer_state(struct pipe_context *pipe,
    if (changed) {
       util_copy_framebuffer_state(&ctx->framebuffer, fb);
 
+      /* 0 and 1 both indicate no msaa.  Core doesn't understand 0 samples */
+      ctx->framebuffer.samples = std::max((ubyte)1, ctx->framebuffer.samples);
+
       ctx->dirty |= SWR_NEW_FRAMEBUFFER;
    }
 }
@@ -683,6 +688,36 @@ swr_set_sample_mask(struct pipe_context *pipe, unsigned sample_mask)
       ctx->dirty |= SWR_NEW_RASTERIZER;
    }
 }
+
+/*
+ * MSAA fixed sample position table
+ * used by update_derived and get_sample_position
+ * (integer locations on a 16x16 grid)
+ */
+static const uint8_t swr_sample_positions[][2] =
+{ /* 1x*/ { 8, 8},
+  /* 2x*/ {12,12},{ 4, 4},
+  /* 4x*/ { 6, 2},{14, 6},{ 2,10},{10,14},
+  /* 8x*/ { 9, 5},{ 7,11},{13, 9},{ 5, 3},
+          { 3,13},{ 1, 7},{11,15},{15, 1},
+  /*16x*/ { 9, 9},{ 7, 5},{ 5,10},{12, 7},
+          { 3, 6},{10,13},{13,11},{11, 3},
+          { 6,14},{ 8, 1},{ 4, 2},{ 2,12},
+          { 0, 8},{15, 4},{14,15},{ 1, 0} };
+
+static void
+swr_get_sample_position(struct pipe_context *pipe,
+                        unsigned sample_count, unsigned sample_index,
+                        float *out_value)
+{
+   /* validate sample_count */
+   sample_count = GetNumSamples(GetSampleCount(sample_count));
+
+   const uint8_t *sample = swr_sample_positions[sample_count-1 + sample_index];
+   out_value[0] = sample[0] / 16.0f;
+   out_value[1] = sample[1] / 16.0f;
+}
+
 
 /*
  * Update resource in-use status
@@ -952,6 +987,17 @@ swr_user_vbuf_range(const struct pipe_draw_info *info,
    }
 }
 
+static void
+swr_update_poly_stipple(struct swr_context *ctx)
+{
+   struct swr_draw_context *pDC = &ctx->swrDC;
+
+   assert(sizeof(ctx->poly_stipple.pipe.stipple) == sizeof(pDC->polyStipple));
+   memcpy(pDC->polyStipple,
+          ctx->poly_stipple.pipe.stipple,
+          sizeof(ctx->poly_stipple.pipe.stipple));
+}
+
 void
 swr_update_derived(struct pipe_context *pipe,
                    const struct pipe_draw_info *p_draw_info)
@@ -1060,11 +1106,30 @@ swr_update_derived(struct pipe_context *pipe,
       rastState->pointSpriteTopOrigin =
          rasterizer->sprite_coord_mode == PIPE_SPRITE_COORD_UPPER_LEFT;
 
-      /* XXX TODO: Add multisample */
-      rastState->msaaRastEnable = false;
-      rastState->rastMode = SWR_MSAA_RASTMODE_OFF_PIXEL;
-      rastState->sampleCount = SWR_MULTISAMPLE_1X;
+      /* If SWR_MSAA_FORCE_ENABLE is set, turn msaa on */
+      if (screen->msaa_force_enable && !rasterizer->multisample) {
+         /* Force enable and use the value the surface was created with */
+         rasterizer->multisample = true;
+         fb->samples = swr_resource(fb->cbufs[0]->texture)->swr.numSamples;
+         fprintf(stderr,"msaa force enable: %d samples\n", fb->samples);
+      }
+
+      rastState->sampleCount = GetSampleCount(fb->samples);
       rastState->forcedSampleCount = false;
+      rastState->bIsCenterPattern = !rasterizer->multisample;
+      rastState->pixelLocation = SWR_PIXEL_LOCATION_CENTER;
+
+      /* Only initialize sample positions if msaa is enabled */
+      if (rasterizer->multisample) {
+         for (uint32_t i = 0; i < fb->samples; i++) {
+            const uint8_t *sample = swr_sample_positions[fb->samples-1 + i];
+            rastState->samplePositions.SetXi(i, sample[0] << 4);
+            rastState->samplePositions.SetYi(i, sample[1] << 4);
+            rastState->samplePositions.SetX (i, sample[0] / 16.0f);
+            rastState->samplePositions.SetY (i, sample[1] / 16.0f);
+         }
+         rastState->samplePositions.PrecalcSampleData(fb->samples);
+      }
 
       bool do_offset = false;
       switch (rasterizer->fill_front) {
@@ -1354,6 +1419,17 @@ swr_update_derived(struct pipe_context *pipe,
       }
    }
 
+   /* work around the fact that poly stipple also affects lines */
+   /* and points, since we rasterize them as triangles, too */
+   /* Has to be before fragment shader, since it sets SWR_NEW_FS */
+   if (p_draw_info) {
+      bool new_prim_is_poly = (u_reduced_prim(p_draw_info->mode) == PIPE_PRIM_TRIANGLES);
+      if (new_prim_is_poly != ctx->poly_stipple.prim_is_poly) {
+         ctx->dirty |= SWR_NEW_FS;
+         ctx->poly_stipple.prim_is_poly = new_prim_is_poly;
+      }
+   }
+
    /* FragmentShader */
    if (ctx->dirty & (SWR_NEW_FS |
                      SWR_NEW_VS |
@@ -1377,9 +1453,9 @@ swr_update_derived(struct pipe_context *pipe,
       psState.inputCoverage = SWR_INPUT_COVERAGE_NORMAL;
       psState.writesODepth = ctx->fs->info.base.writes_z;
       psState.usesSourceDepth = ctx->fs->info.base.reads_z;
-      psState.shadingRate = SWR_SHADING_RATE_PIXEL; // XXX
+      psState.shadingRate = SWR_SHADING_RATE_PIXEL;
       psState.numRenderTargets = ctx->framebuffer.nr_cbufs;
-      psState.posOffset = SWR_PS_POSITION_SAMPLE_NONE; // XXX msaa
+      psState.posOffset = SWR_PS_POSITION_SAMPLE_NONE;
       uint32_t barycentricsMask = 0;
 #if 0
       // when we switch to mesa-master
@@ -1509,6 +1585,7 @@ swr_update_derived(struct pipe_context *pipe,
 
    /* Blend State */
    if (ctx->dirty & (SWR_NEW_BLEND |
+                     SWR_NEW_RASTERIZER |
                      SWR_NEW_FRAMEBUFFER |
                      SWR_NEW_DEPTH_STENCIL_ALPHA)) {
       struct pipe_framebuffer_state *fb = &ctx->framebuffer;
@@ -1522,9 +1599,8 @@ swr_update_derived(struct pipe_context *pipe,
       blendState.alphaTestReference =
          *((uint32_t*)&ctx->depth_stencil->alpha.ref_value);
 
-      // XXX MSAA
-      blendState.sampleMask = 0;
-      blendState.sampleCount = SWR_MULTISAMPLE_1X;
+      blendState.sampleMask = ctx->sample_mask;
+      blendState.sampleCount = GetSampleCount(fb->samples);
 
       /* If there are no color buffers bound, disable writes on RT0
        * and skip loop */
@@ -1580,8 +1656,8 @@ swr_update_derived(struct pipe_context *pipe,
                 compileState.blendState.alphaBlendFunc);
             compileState.desc.alphaToCoverageEnable =
                ctx->blend->pipe.alpha_to_coverage;
-            compileState.desc.sampleMaskEnable = 0; // XXX
-            compileState.desc.numSamples = 1; // XXX
+            compileState.desc.sampleMaskEnable = (blendState.sampleMask != 0);
+            compileState.desc.numSamples = fb->samples;
 
             compileState.alphaTestFunction =
                swr_convert_depth_func(ctx->depth_stencil->alpha.func);
@@ -1608,7 +1684,7 @@ swr_update_derived(struct pipe_context *pipe,
    }
 
    if (ctx->dirty & SWR_NEW_STIPPLE) {
-      /* XXX What to do with this one??? SWR doesn't stipple */
+      swr_update_poly_stipple(ctx);
    }
 
    if (ctx->dirty & (SWR_NEW_VS | SWR_NEW_SO | SWR_NEW_RASTERIZER)) {
@@ -1783,6 +1859,7 @@ swr_state_init(struct pipe_context *pipe)
    pipe->set_stencil_ref = swr_set_stencil_ref;
 
    pipe->set_sample_mask = swr_set_sample_mask;
+   pipe->get_sample_position = swr_get_sample_position;
 
    pipe->create_stream_output_target = swr_create_so_target;
    pipe->stream_output_target_destroy = swr_destroy_so_target;

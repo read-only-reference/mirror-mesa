@@ -138,6 +138,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Const.GLSLVersion = 450;
    else if (brw->is_haswell && can_do_pipelined_register_writes(brw->screen))
       ctx->Const.GLSLVersion = 450;
+   else if (brw->gen >= 7 && can_do_pipelined_register_writes(brw->screen))
+      ctx->Const.GLSLVersion = 420;
    else if (brw->gen >= 6)
       ctx->Const.GLSLVersion = 330;
    else
@@ -208,16 +210,19 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_derivative_control = true;
       ctx->Extensions.ARB_framebuffer_no_attachments = true;
       ctx->Extensions.ARB_gpu_shader5 = true;
+      ctx->Extensions.ARB_gpu_shader_fp64 = true;
       ctx->Extensions.ARB_shader_atomic_counters = true;
       ctx->Extensions.ARB_shader_atomic_counter_ops = true;
       ctx->Extensions.ARB_shader_clock = true;
       ctx->Extensions.ARB_shader_image_load_store = true;
       ctx->Extensions.ARB_shader_image_size = true;
+      ctx->Extensions.ARB_shader_precision = true;
       ctx->Extensions.ARB_shader_texture_image_samples = true;
       ctx->Extensions.ARB_tessellation_shader = true;
       ctx->Extensions.ARB_texture_compression_bptc = true;
       ctx->Extensions.ARB_texture_view = true;
       ctx->Extensions.ARB_shader_storage_buffer_object = true;
+      ctx->Extensions.ARB_vertex_attrib_64bit = true;
       ctx->Extensions.EXT_shader_samples_identical = true;
       ctx->Extensions.OES_primitive_bounding_box = true;
       ctx->Extensions.OES_texture_buffer = true;
@@ -241,11 +246,8 @@ intelInitExtensions(struct gl_context *ctx)
    }
 
    if (brw->gen >= 8 || brw->is_haswell) {
-      ctx->Extensions.ARB_gpu_shader_fp64 = true;
-      ctx->Extensions.ARB_shader_precision = true;
       ctx->Extensions.ARB_stencil_texturing = true;
       ctx->Extensions.ARB_texture_stencil8 = true;
-      ctx->Extensions.ARB_vertex_attrib_64bit = true;
       ctx->Extensions.OES_geometry_shader = true;
       ctx->Extensions.OES_texture_cube_map_array = true;
       ctx->Extensions.OES_viewport_array = true;

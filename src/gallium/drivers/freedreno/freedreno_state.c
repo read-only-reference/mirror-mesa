@@ -109,7 +109,8 @@ fd_set_constant_buffer(struct pipe_context *pctx,
 
 	so->enabled_mask |= 1 << index;
 	so->dirty_mask |= 1 << index;
-	ctx->dirty |= FD_DIRTY_CONSTBUF;
+	ctx->dirty_shader[shader] |= FD_DIRTY_SHADER_CONST;
+	ctx->dirty |= FD_DIRTY_CONST;
 }
 
 static void
@@ -125,13 +126,13 @@ fd_set_framebuffer_state(struct pipe_context *pctx,
 		fd_batch_reference(&old_batch, ctx->batch);
 
 		if (likely(old_batch))
-			fd_hw_query_set_stage(old_batch, old_batch->draw, FD_STAGE_NULL);
+			fd_batch_set_stage(old_batch, FD_STAGE_NULL);
 
 		batch = fd_batch_from_fb(&ctx->screen->batch_cache, ctx, framebuffer);
 		fd_batch_reference(&ctx->batch, NULL);
 		fd_reset_wfi(batch);
 		ctx->batch = batch;
-		ctx->dirty = ~0;
+		fd_context_all_dirty(ctx);
 
 		if (old_batch && old_batch->blit && !old_batch->back_blit) {
 			/* for blits, there is not really much point in hanging on

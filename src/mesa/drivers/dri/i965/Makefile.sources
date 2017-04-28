@@ -2,6 +2,8 @@ i965_FILES = \
 	brw_binding_tables.c \
 	brw_blorp.c \
 	brw_blorp.h \
+	brw_bufmgr.c \
+	brw_bufmgr.h \
 	brw_cc.c \
 	brw_clear.c \
 	brw_clip.c \
@@ -26,8 +28,6 @@ i965_FILES = \
 	brw_ff_gs.c \
 	brw_ff_gs_emit.c \
 	brw_ff_gs.h \
-	brw_fs_channel_expressions.cpp \
-	brw_fs_vector_splitting.cpp \
 	brw_formatquery.c \
 	brw_gs.c \
 	brw_gs.h \
@@ -157,7 +157,8 @@ i965_FILES = \
 	intel_tex_validate.c \
 	intel_tiled_memcpy.c \
 	intel_tiled_memcpy.h \
-	intel_upload.c
+	intel_upload.c \
+	libdrm_macros.h
 
 i965_gen6_FILES = \
 	genX_blorp_exec.c

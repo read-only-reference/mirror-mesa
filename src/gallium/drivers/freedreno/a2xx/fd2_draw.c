@@ -116,6 +116,8 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 
 	emit_cacheflush(ring);
 
+	fd_context_all_clean(ctx);
+
 	return true;
 }
 
@@ -276,6 +278,18 @@ fd2_clear(struct fd_context *ctx, unsigned buffers,
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_RB_COPY_CONTROL));
 	OUT_RING(ring, 0x00000000);
+
+	ctx->dirty |= FD_DIRTY_ZSA |
+			FD_DIRTY_VIEWPORT |
+			FD_DIRTY_RASTERIZER |
+			FD_DIRTY_SAMPLE_MASK |
+			FD_DIRTY_PROG |
+			FD_DIRTY_CONST |
+			FD_DIRTY_BLEND |
+			FD_DIRTY_FRAMEBUFFER;
+
+	ctx->dirty_shader[PIPE_SHADER_VERTEX]   |= FD_DIRTY_SHADER_PROG;
+	ctx->dirty_shader[PIPE_SHADER_FRAGMENT] |= FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_CONST;
 }
 
 void

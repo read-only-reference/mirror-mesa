@@ -37,6 +37,7 @@
 #include "freedreno_context.h"
 #include "freedreno_state.h"
 #include "freedreno_resource.h"
+#include "freedreno_query_acc.h"
 #include "freedreno_query_hw.h"
 #include "freedreno_util.h"
 
@@ -64,6 +65,11 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 	struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
 	unsigned i, prims, buffers = 0;
+
+	if (!info->count_from_stream_output && !info->indirect &&
+	    !info->primitive_restart &&
+	    !u_trim_pipe_prim(info->mode, (unsigned*)&info->count))
+		return;
 
 	/* if we supported transform feedback, we'd have to disable this: */
 	if (((scissor->maxx - scissor->minx) *
@@ -95,7 +101,7 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
 	if (ctx->in_blit) {
 		fd_batch_reset(batch);
-		ctx->dirty = ~0;
+		fd_context_all_dirty(ctx);
 	}
 
 	batch->blit = ctx->in_blit;
@@ -104,7 +110,7 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	/* NOTE: needs to be before resource_written(batch->query_buf), otherwise
 	 * query_buf may not be created yet.
 	 */
-	fd_hw_query_set_stage(batch, batch->draw, FD_STAGE_DRAW);
+	fd_batch_set_stage(batch, FD_STAGE_DRAW);
 
 	/*
 	 * Figure out the buffers/features we need:
@@ -160,10 +166,10 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	resource_read(batch, ctx->indexbuf.buffer);
 
 	/* Mark textures as being read */
-	foreach_bit(i, ctx->verttex.valid_textures)
-		resource_read(batch, ctx->verttex.textures[i]->texture);
-	foreach_bit(i, ctx->fragtex.valid_textures)
-		resource_read(batch, ctx->fragtex.textures[i]->texture);
+	foreach_bit(i, ctx->tex[PIPE_SHADER_VERTEX].valid_textures)
+		resource_read(batch, ctx->tex[PIPE_SHADER_VERTEX].textures[i]->texture);
+	foreach_bit(i, ctx->tex[PIPE_SHADER_FRAGMENT].valid_textures)
+		resource_read(batch, ctx->tex[PIPE_SHADER_FRAGMENT].textures[i]->texture);
 
 	/* Mark streamout buffers as being written.. */
 	for (i = 0; i < ctx->streamout.num_targets; i++)
@@ -171,6 +177,9 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 			resource_written(batch, ctx->streamout.targets[i]->buffer);
 
 	resource_written(batch, batch->query_buf);
+
+	list_for_each_entry(struct fd_acc_query, aq, &ctx->acc_active_queries, node)
+		resource_written(batch, aq->prsc);
 
 	mtx_unlock(&ctx->screen->lock);
 
@@ -207,7 +216,7 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 		ctx->streamout.offsets[i] += info->count;
 
 	if (fd_mesa_debug & FD_DBG_DDRAW)
-		ctx->dirty = 0xffffffff;
+		fd_context_all_dirty(ctx);
 
 	fd_batch_check_size(batch);
 
@@ -307,7 +316,7 @@ fd_clear(struct pipe_context *pctx, unsigned buffers,
 
 	if (ctx->in_blit) {
 		fd_batch_reset(batch);
-		ctx->dirty = ~0;
+		fd_context_all_dirty(ctx);
 	}
 
 	/* for bookkeeping about which buffers have been cleared (and thus
@@ -348,6 +357,9 @@ fd_clear(struct pipe_context *pctx, unsigned buffers,
 
 	resource_written(batch, batch->query_buf);
 
+	list_for_each_entry(struct fd_acc_query, aq, &ctx->acc_active_queries, node)
+		resource_written(batch, aq->prsc);
+
 	mtx_unlock(&ctx->screen->lock);
 
 	DBG("%p: %x %ux%u depth=%f, stencil=%u (%s/%s)", batch, buffers,
@@ -363,21 +375,12 @@ fd_clear(struct pipe_context *pctx, unsigned buffers,
 		return;
 	}
 
-	fd_hw_query_set_stage(batch, batch->draw, FD_STAGE_CLEAR);
+	fd_batch_set_stage(batch, FD_STAGE_CLEAR);
 
 	ctx->clear(ctx, buffers, color, depth, stencil);
 
-	ctx->dirty |= FD_DIRTY_ZSA |
-			FD_DIRTY_VIEWPORT |
-			FD_DIRTY_RASTERIZER |
-			FD_DIRTY_SAMPLE_MASK |
-			FD_DIRTY_PROG |
-			FD_DIRTY_CONSTBUF |
-			FD_DIRTY_BLEND |
-			FD_DIRTY_FRAMEBUFFER;
-
 	if (fd_mesa_debug & FD_DBG_DCLEAR)
-		ctx->dirty = 0xffffffff;
+		fd_context_all_dirty(ctx);
 }
 
 static void

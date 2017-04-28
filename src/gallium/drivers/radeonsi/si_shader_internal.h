@@ -43,7 +43,7 @@ struct ac_shader_binary;
 
 #define RADEON_LLVM_INITIAL_CF_DEPTH 4
 
-#define RADEON_LLVM_MAX_SYSTEM_VALUES 4
+#define RADEON_LLVM_MAX_SYSTEM_VALUES 11
 #define RADEON_LLVM_MAX_ADDRS 16
 
 struct si_llvm_flow;
@@ -107,20 +107,99 @@ struct si_shader_context {
 	LLVMValueRef main_fn;
 	LLVMTypeRef return_type;
 
-	int param_streamout_config;
-	int param_streamout_write_index;
-	int param_streamout_offset[4];
+	/* Parameter indices for LLVMGetParam. */
+	int param_rw_buffers;
+	int param_const_buffers;
+	int param_samplers;
+	int param_images;
+	int param_shader_buffers;
+	/* Common inputs for merged shaders. */
+	int param_merged_wave_info;
+	int param_merged_scratch_offset;
+	/* API VS */
+	int param_vertex_buffers;
+	int param_base_vertex;
+	int param_start_instance;
+	int param_draw_id;
 	int param_vertex_id;
 	int param_rel_auto_id;
 	int param_vs_prim_id;
 	int param_instance_id;
 	int param_vertex_index0;
+	/* VS states and layout of LS outputs / TCS inputs at the end
+	 *   [0] = clamp vertex color
+	 *   [1] = indexed
+	 *   [8:20] = stride between patches in DW = num_inputs * num_vertices * 4
+	 *            max = 32*32*4 + 32*4
+	 *   [24:31] = stride between vertices in DW = num_inputs * 4
+	 *             max = 32*4
+	 */
+	int param_vs_state_bits;
+	/* HW VS */
+	int param_streamout_config;
+	int param_streamout_write_index;
+	int param_streamout_offset[4];
+
+	/* API TCS & TES */
+	/* Layout of TCS outputs in the offchip buffer
+	 * # 6 bits
+	 *   [0:5] = the number of patches per threadgroup, max = NUM_PATCHES (40)
+	 * # 6 bits
+	 *   [6:11] = the number of output vertices per patch, max = 32
+	 * # 20 bits
+	 *   [12:31] = the offset of per patch attributes in the buffer in bytes.
+	 *             max = NUM_PATCHES*32*32*16
+	 */
+	int param_tcs_offchip_layout;
+
+	/* API TCS */
+	/* Offsets where TCS outputs and TCS patch outputs live in LDS:
+	 *   [0:15] = TCS output patch0 offset / 16, max = NUM_PATCHES * 32 * 32
+	 *   [16:31] = TCS output patch0 offset for per-patch / 16
+	 *             max = (NUM_PATCHES + 1) * 32*32
+	 */
+	int param_tcs_out_lds_offsets;
+	/* Layout of TCS outputs / TES inputs:
+	 *   [0:12] = stride between output patches in DW, num_outputs * num_vertices * 4
+	 *            max = 32*32*4 + 32*4
+	 *   [13:20] = stride between output vertices in DW = num_inputs * 4
+	 *             max = 32*4
+	 *   [26:31] = gl_PatchVerticesIn, max = 32
+	 */
+	int param_tcs_out_lds_layout;
+	int param_tcs_offchip_addr_base64k;
+	int param_tcs_factor_addr_base64k;
+	int param_tcs_offchip_offset;
+	int param_tcs_factor_offset;
+	int param_tcs_patch_id;
+	int param_tcs_rel_ids;
+
+	/* API TES */
 	int param_tes_u;
 	int param_tes_v;
 	int param_tes_rel_patch_id;
 	int param_tes_patch_id;
+	/* HW ES */
 	int param_es2gs_offset;
-	int param_oc_lds;
+	/* API GS */
+	int param_gs2vs_offset;
+	int param_gs_wave_id; /* GFX6 */
+	int param_gs_vtx0_offset; /* in dwords (GFX6) */
+	int param_gs_vtx1_offset; /* in dwords (GFX6) */
+	int param_gs_prim_id;
+	int param_gs_vtx2_offset; /* in dwords (GFX6) */
+	int param_gs_vtx3_offset; /* in dwords (GFX6) */
+	int param_gs_vtx4_offset; /* in dwords (GFX6) */
+	int param_gs_vtx5_offset; /* in dwords (GFX6) */
+	int param_gs_instance_id;
+	int param_gs_vtx01_offset; /* in dwords (GFX9) */
+	int param_gs_vtx23_offset; /* in dwords (GFX9) */
+	int param_gs_vtx45_offset; /* in dwords (GFX9) */
+	/* CS */
+	int param_grid_size;
+	int param_block_size;
+	int param_block_id[3];
+	int param_thread_id;
 
 	LLVMTargetMachineRef tm;
 
@@ -182,10 +261,9 @@ LLVMValueRef si_llvm_bound_index(struct si_shader_context *ctx,
 
 void si_llvm_context_init(struct si_shader_context *ctx,
 			  struct si_screen *sscreen,
-			  struct si_shader *shader,
-			  LLVMTargetMachineRef tm,
-			  const struct tgsi_shader_info *info,
-			  const struct tgsi_token *tokens);
+			  LLVMTargetMachineRef tm);
+void si_llvm_context_set_tgsi(struct si_shader_context *ctx,
+			      struct si_shader *shader);
 
 void si_llvm_create_func(struct si_shader_context *ctx,
 			 const char *name,

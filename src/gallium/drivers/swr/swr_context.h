@@ -98,6 +98,8 @@ struct swr_draw_context {
 
    float userClipPlanes[PIPE_MAX_CLIP_PLANES][4];
 
+   uint32_t polyStipple[32];
+
    SWR_SURFACE_STATE renderTargets[SWR_NUM_ATTACHMENTS];
    void *pStats;
 };
@@ -127,7 +129,7 @@ struct swr_context {
    struct pipe_constant_buffer
       constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
    struct pipe_framebuffer_state framebuffer;
-   struct pipe_poly_stipple poly_stipple;
+   struct swr_poly_stipple poly_stipple;
    struct pipe_scissor_state scissor;
    SWR_RECT swr_scissor;
    struct pipe_sampler_view *
@@ -196,4 +198,7 @@ void swr_clear_init(struct pipe_context *pipe);
 void swr_draw_init(struct pipe_context *pipe);
 
 void swr_finish(struct pipe_context *pipe);
+
+void swr_do_msaa_resolve(struct pipe_resource *src_resource,
+                         struct pipe_resource *dst_resource);
 #endif

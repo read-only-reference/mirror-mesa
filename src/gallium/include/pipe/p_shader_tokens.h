@@ -199,6 +199,13 @@ enum tgsi_semantic {
    TGSI_SEMANTIC_BASEINSTANCE,
    TGSI_SEMANTIC_DRAWID,
    TGSI_SEMANTIC_WORK_DIM,    /**< opencl get_work_dim value */
+   TGSI_SEMANTIC_SUBGROUP_SIZE,
+   TGSI_SEMANTIC_SUBGROUP_INVOCATION,
+   TGSI_SEMANTIC_SUBGROUP_EQ_MASK,
+   TGSI_SEMANTIC_SUBGROUP_GE_MASK,
+   TGSI_SEMANTIC_SUBGROUP_GT_MASK,
+   TGSI_SEMANTIC_SUBGROUP_LE_MASK,
+   TGSI_SEMANTIC_SUBGROUP_LT_MASK,
    TGSI_SEMANTIC_COUNT,       /**< number of semantic values */
 };
 
@@ -404,7 +411,7 @@ struct tgsi_property_data {
 #define TGSI_OPCODE_BRK                 73
 #define TGSI_OPCODE_IF                  74
 #define TGSI_OPCODE_UIF                 75
-                                /* gap */
+#define TGSI_OPCODE_READ_INVOC          76
 #define TGSI_OPCODE_ELSE                77
 #define TGSI_OPCODE_ENDIF               78
 
@@ -418,7 +425,7 @@ struct tgsi_property_data {
 #define TGSI_OPCODE_NOT                 85
 #define TGSI_OPCODE_TRUNC               86
 #define TGSI_OPCODE_SHL                 87
-                                /* gap */
+#define TGSI_OPCODE_BALLOT              88
 #define TGSI_OPCODE_AND                 89
 #define TGSI_OPCODE_OR                  90
 #define TGSI_OPCODE_MOD                 91
@@ -436,7 +443,7 @@ struct tgsi_property_data {
 #define TGSI_OPCODE_TXQ_LZ              103 /* TXQ for mipmap level 0 */
 #define TGSI_OPCODE_TXQS                104
 #define TGSI_OPCODE_RESQ                105
-                                /* gap */
+#define TGSI_OPCODE_READ_FIRST          106
 #define TGSI_OPCODE_NOP                 107
 
 #define TGSI_OPCODE_FSEQ                108

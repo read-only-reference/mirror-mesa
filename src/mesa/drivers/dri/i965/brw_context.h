@@ -42,7 +42,7 @@
 #include "isl/isl.h"
 #include "blorp/blorp.h"
 
-#include <intel_bufmgr.h>
+#include <brw_bufmgr.h>
 
 #include "common/gen_debug.h"
 #include "intel_screen.h"
@@ -390,7 +390,7 @@ struct brw_cache {
    struct brw_context *brw;
 
    struct brw_cache_item **items;
-   drm_intel_bo *bo;
+   struct brw_bo *bo;
    GLuint size, n_items;
 
    uint32_t next_offset;
@@ -422,7 +422,7 @@ enum shader_time_shader_type {
 
 struct brw_vertex_buffer {
    /** Buffer object containing the uploaded vertex data */
-   drm_intel_bo *bo;
+   struct brw_bo *bo;
    uint32_t offset;
    uint32_t size;
    /** Byte stride between elements in the uploaded array */
@@ -442,7 +442,7 @@ struct brw_query_object {
    struct gl_query_object Base;
 
    /** Last query BO associated with this query. */
-   drm_intel_bo *bo;
+   struct brw_bo *bo;
 
    /** Last index in bo with query data for this object. */
    int last_index;
@@ -459,9 +459,9 @@ enum brw_gpu_ring {
 
 struct intel_batchbuffer {
    /** Current batchbuffer being queued up. */
-   drm_intel_bo *bo;
+   struct brw_bo *bo;
    /** Last BO submitted to the hardware.  Used for glFinish(). */
-   drm_intel_bo *last_bo;
+   struct brw_bo *last_bo;
 
 #ifdef DEBUG
    uint16_t emit, total;
@@ -477,9 +477,21 @@ struct intel_batchbuffer {
    bool needs_sol_reset;
    bool state_base_address_emitted;
 
+   struct drm_i915_gem_relocation_entry *relocs;
+   int reloc_count;
+   int reloc_array_size;
+   /** The validation list */
+   struct drm_i915_gem_exec_object2 *exec_objects;
+   struct brw_bo **exec_bos;
+   int exec_count;
+   int exec_array_size;
+   /** The amount of aperture space (in bytes) used by all exec_bos */
+   int aperture_space;
+
    struct {
       uint32_t *map_next;
       int reloc_count;
+      int exec_count;
    } saved;
 
    /** Map from batch offset to brw_state_batch data (with DEBUG_BATCH) */
@@ -492,7 +504,7 @@ struct brw_transform_feedback_object {
    struct gl_transform_feedback_object base;
 
    /** A buffer to hold SO_WRITE_OFFSET(n) values while paused. */
-   drm_intel_bo *offset_bo;
+   struct brw_bo *offset_bo;
 
    /** If true, SO_WRITE_OFFSET(n) should be reset to zero at next use. */
    bool zero_offsets;
@@ -511,7 +523,7 @@ struct brw_transform_feedback_object {
     *  @{
     */
    uint64_t prims_generated[BRW_MAX_XFB_STREAMS];
-   drm_intel_bo *prim_count_bo;
+   struct brw_bo *prim_count_bo;
    unsigned prim_count_buffer_index; /**< in number of uint64_t units */
    /** @} */
 
@@ -550,7 +562,7 @@ struct brw_stage_state
     * unless you're taking additional measures to synchronize thread execution
     * across slot size changes.
     */
-   drm_intel_bo *scratch_bo;
+   struct brw_bo *scratch_bo;
 
    /**
     * Scratch slot size allocated for each thread in the buffer object given
@@ -656,16 +668,16 @@ struct brw_context
 
    } vtbl;
 
-   drm_intel_bufmgr *bufmgr;
+   struct brw_bufmgr *bufmgr;
 
-   drm_intel_context *hw_ctx;
+   uint32_t hw_ctx;
 
    /** BO for post-sync nonzero writes for gen6 workaround. */
-   drm_intel_bo *workaround_bo;
+   struct brw_bo *workaround_bo;
    uint8_t pipe_controls_since_last_cs_stall;
 
    /**
-    * Set of drm_intel_bo * that have been rendered to within this batchbuffer
+    * Set of struct brw_bo * that have been rendered to within this batchbuffer
     * and would need flushing before being used from another cache domain that
     * isn't coherent with it (i.e. the sampler).
     */
@@ -683,7 +695,7 @@ struct brw_context
    bool no_batch_wrap;
 
    struct {
-      drm_intel_bo *bo;
+      struct brw_bo *bo;
       uint32_t next_offset;
    } upload;
 
@@ -696,7 +708,7 @@ struct brw_context
    bool front_buffer_dirty;
 
    /** Framerate throttling: @{ */
-   drm_intel_bo *throttle_batch[2];
+   struct brw_bo *throttle_batch[2];
 
    /* Limit the number of outstanding SwapBuffers by waiting for an earlier
     * frame of rendering to complete. This gives a very precise cap to the
@@ -810,7 +822,7 @@ struct brw_context
        * Buffer and offset used for GL_ARB_shader_draw_parameters
        * (for now, only gl_BaseVertex).
        */
-      drm_intel_bo *draw_params_bo;
+      struct brw_bo *draw_params_bo;
       uint32_t draw_params_offset;
 
       /**
@@ -819,7 +831,7 @@ struct brw_context
        * draw parameters.
        */
       int gl_drawid;
-      drm_intel_bo *draw_id_bo;
+      struct brw_bo *draw_id_bo;
       uint32_t draw_id_offset;
    } draw;
 
@@ -829,7 +841,7 @@ struct brw_context
        * an indirect call, and num_work_groups_offset is valid. Otherwise,
        * num_work_groups is set based on glDispatchCompute.
        */
-      drm_intel_bo *num_work_groups_bo;
+      struct brw_bo *num_work_groups_bo;
       GLintptr num_work_groups_offset;
       const GLuint *num_work_groups;
    } compute;
@@ -871,9 +883,9 @@ struct brw_context
       const struct _mesa_index_buffer *ib;
 
       /* Updates are signaled by BRW_NEW_INDEX_BUFFER. */
-      drm_intel_bo *bo;
+      struct brw_bo *bo;
       uint32_t size;
-      GLuint type;
+      unsigned index_size;
 
       /* Offset to index buffer index to use in CMD_3D_PRIM so that we can
        * avoid re-uploading the IB packet over and over if we're actually
@@ -959,7 +971,7 @@ struct brw_context
        * Pointer to the (intel_upload.c-generated) BO containing the uniforms
        * for upload to the CURBE.
        */
-      drm_intel_bo *curbe_bo;
+      struct brw_bo *curbe_bo;
       /** Offset within curbe_bo of space for current curbe entry */
       GLuint curbe_offset;
    } curbe;
@@ -1065,7 +1077,7 @@ struct brw_context
        * Buffer object used in place of multisampled null render targets on
        * Gen6.  See brw_emit_null_surface_state().
        */
-      drm_intel_bo *multisampled_null_render_target_bo;
+      struct brw_bo *multisampled_null_render_target_bo;
       uint32_t fast_clear_op;
 
       float offset_clamp;
@@ -1207,7 +1219,7 @@ struct brw_context
    } l3;
 
    struct {
-      drm_intel_bo *bo;
+      struct brw_bo *bo;
       const char **names;
       int *ids;
       enum shader_time_shader_type *types;
@@ -1297,8 +1309,8 @@ uint64_t brw_raw_timestamp_delta(struct brw_context *brw,
 
 /** gen6_queryobj.c */
 void gen6_init_queryobj_functions(struct dd_function_table *functions);
-void brw_write_timestamp(struct brw_context *brw, drm_intel_bo *bo, int idx);
-void brw_write_depth_count(struct brw_context *brw, drm_intel_bo *bo, int idx);
+void brw_write_timestamp(struct brw_context *brw, struct brw_bo *bo, int idx);
+void brw_write_depth_count(struct brw_context *brw, struct brw_bo *bo, int idx);
 
 /** hsw_queryobj.c */
 void hsw_overflow_result_to_gpr0(struct brw_context *brw,
@@ -1313,18 +1325,18 @@ bool brw_check_conditional_render(struct brw_context *brw);
 /** intel_batchbuffer.c */
 void brw_load_register_mem(struct brw_context *brw,
                            uint32_t reg,
-                           drm_intel_bo *bo,
+                           struct brw_bo *bo,
                            uint32_t read_domains, uint32_t write_domain,
                            uint32_t offset);
 void brw_load_register_mem64(struct brw_context *brw,
                              uint32_t reg,
-                             drm_intel_bo *bo,
+                             struct brw_bo *bo,
                              uint32_t read_domains, uint32_t write_domain,
                              uint32_t offset);
 void brw_store_register_mem32(struct brw_context *brw,
-                              drm_intel_bo *bo, uint32_t reg, uint32_t offset);
+                              struct brw_bo *bo, uint32_t reg, uint32_t offset);
 void brw_store_register_mem64(struct brw_context *brw,
-                              drm_intel_bo *bo, uint32_t reg, uint32_t offset);
+                              struct brw_bo *bo, uint32_t reg, uint32_t offset);
 void brw_load_register_imm32(struct brw_context *brw,
                              uint32_t reg, uint32_t imm);
 void brw_load_register_imm64(struct brw_context *brw,
@@ -1333,9 +1345,9 @@ void brw_load_register_reg(struct brw_context *brw, uint32_t src,
                            uint32_t dest);
 void brw_load_register_reg64(struct brw_context *brw, uint32_t src,
                              uint32_t dest);
-void brw_store_data_imm32(struct brw_context *brw, drm_intel_bo *bo,
+void brw_store_data_imm32(struct brw_context *brw, struct brw_bo *bo,
                           uint32_t offset, uint32_t imm);
-void brw_store_data_imm64(struct brw_context *brw, drm_intel_bo *bo,
+void brw_store_data_imm64(struct brw_context *brw, struct brw_bo *bo,
                           uint32_t offset, uint64_t imm);
 
 /*======================================================================
@@ -1360,7 +1372,7 @@ key_debug(struct brw_context *brw, const char *name, int a, int b)
 void brwInitFragProgFuncs( struct dd_function_table *functions );
 
 void brw_get_scratch_bo(struct brw_context *brw,
-			drm_intel_bo **scratch_bo, int size);
+			struct brw_bo **scratch_bo, int size);
 void brw_alloc_stage_scratch(struct brw_context *brw,
                              struct brw_stage_state *stage_state,
                              unsigned per_thread_size,
@@ -1389,23 +1401,12 @@ unsigned brw_get_vertex_surface_type(struct brw_context *brw,
                                      const struct gl_vertex_array *glarray);
 
 static inline unsigned
-brw_get_index_type(GLenum type)
+brw_get_index_type(unsigned index_size)
 {
-   assert((type == GL_UNSIGNED_BYTE)
-          || (type == GL_UNSIGNED_SHORT)
-          || (type == GL_UNSIGNED_INT));
-
-   /* The possible values for type are GL_UNSIGNED_BYTE (0x1401),
-    * GL_UNSIGNED_SHORT (0x1403), and GL_UNSIGNED_INT (0x1405) which we want
-    * to map to scale factors of 0, 1, and 2, respectively.  These scale
-    * factors are then left-shfited by 8 to be in the correct position in the
-    * CMD_INDEX_BUFFER packet.
-    *
-    * Subtracting 0x1401 gives 0, 2, and 4.  Shifting left by 7 afterwards
-    * gives 0x00000000, 0x00000100, and 0x00000200.  These just happen to be
-    * the values the need to be written in the CMD_INDEX_BUFFER packet.
+   /* The hw needs 0x00000000, 0x00000100, and 0x00000200 for ubyte, ushort,
+    * and uint, respectively.
     */
-   return (type - 0x1401) << 7;
+   return (index_size >> 1) << 8;
 }
 
 void brw_prepare_vertices(struct brw_context *brw);
@@ -1413,12 +1414,12 @@ void brw_prepare_vertices(struct brw_context *brw);
 /* brw_wm_surface_state.c */
 void brw_init_surface_formats(struct brw_context *brw);
 void brw_create_constant_surface(struct brw_context *brw,
-                                 drm_intel_bo *bo,
+                                 struct brw_bo *bo,
                                  uint32_t offset,
                                  uint32_t size,
                                  uint32_t *out_offset);
 void brw_create_buffer_surface(struct brw_context *brw,
-                               drm_intel_bo *bo,
+                               struct brw_bo *bo,
                                uint32_t offset,
                                uint32_t size,
                                uint32_t *out_offset);
@@ -1449,12 +1450,6 @@ uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
 
 /* brw_performance_query.c */
 void brw_init_performance_queries(struct brw_context *brw);
-
-/* intel_buffer_objects.c */
-int brw_bo_map(struct brw_context *brw, drm_intel_bo *bo, int write_enable,
-               const char *bo_name);
-int brw_bo_map_gtt(struct brw_context *brw, drm_intel_bo *bo,
-                   const char *bo_name);
 
 /* intel_extensions.c */
 extern void intelInitExtensions(struct gl_context *ctx);
@@ -1609,24 +1604,6 @@ brw_program_const(const struct gl_program *p)
    return (const struct brw_program *) p;
 }
 
-static inline uint32_t
-brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
-		  uint32_t prog_offset)
-{
-   if (brw->gen >= 5) {
-      /* Using state base address. */
-      return prog_offset;
-   }
-
-   drm_intel_bo_emit_reloc(brw->batch.bo,
-			   state_offset,
-			   brw->cache.bo,
-			   prog_offset,
-			   I915_GEM_DOMAIN_INSTRUCTION, 0);
-
-   return brw->cache.bo->offset64 + prog_offset;
-}
-
 static inline bool
 brw_depth_writes_enabled(const struct brw_context *brw)
 {
@@ -1711,7 +1688,7 @@ void brw_fini_pipe_control(struct brw_context *brw);
 
 void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
 void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
-                                 drm_intel_bo *bo, uint32_t offset,
+                                 struct brw_bo *bo, uint32_t offset,
                                  uint32_t imm_lower, uint32_t imm_upper);
 void brw_emit_mi_flush(struct brw_context *brw);
 void brw_emit_post_sync_nonzero_flush(struct brw_context *brw);

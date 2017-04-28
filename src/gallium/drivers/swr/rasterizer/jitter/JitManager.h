@@ -61,15 +61,9 @@
 
 #include "llvm/Analysis/Passes.h"
 
-#if HAVE_LLVM == 0x306
-#include "llvm/PassManager.h"
-using FunctionPassManager = llvm::FunctionPassManager;
-using PassManager = llvm::PassManager;
-#else
 #include "llvm/IR/LegacyPassManager.h"
 using FunctionPassManager = llvm::legacy::FunctionPassManager;
 using PassManager = llvm::legacy::PassManager;
-#endif
 
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -178,7 +172,6 @@ struct JitManager
     std::string mCore;
 
     void SetupNewModule();
-    bool SetupModuleFromIR(const uint8_t *pIR, size_t length);
 
     void DumpAsm(llvm::Function* pFunction, const char* fileName);
     static void DumpToFile(llvm::Function *f, const char *fileName);

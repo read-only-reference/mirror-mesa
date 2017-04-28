@@ -70,40 +70,57 @@ from operator import itemgetter
 #include "common/gen_device_info.h"
 #include "util/macros.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-% for _, field in sorted(fields.iteritems(), key=itemgetter(0)):
-
-/* ${field.container_name}::${field.name} */
-% for gen, bits in sorted(field.bits_by_gen.iteritems(), reverse=True):
-#define ${gen.prefix(field.token_name, padded=True)}    ${bits}
+<%def name="emit_per_gen_prop_func(item, prop)">
+%if item.has_prop(prop):
+% for gen, value in sorted(item.iter_prop(prop), reverse=True):
+#define ${gen.prefix(item.token_name)}_${prop}  ${value}
 % endfor
 
 static inline uint32_t ATTRIBUTE_PURE
-${field.token_name}(const struct gen_device_info *devinfo)
+${item.token_name}_${prop}(const struct gen_device_info *devinfo)
 {
    switch (devinfo->gen) {
-   case 9: return ${field.bits(9)};
-   case 8: return ${field.bits(8)};
+   case 9: return ${item.get_prop(prop, 9)};
+   case 8: return ${item.get_prop(prop, 8)};
    case 7:
       if (devinfo->is_haswell) {
-         return ${field.bits(7.5)};
+         return ${item.get_prop(prop, 7.5)};
       } else {
-         return ${field.bits(7)};
+         return ${item.get_prop(prop, 7)};
       }
-   case 6: return ${field.bits(6)};
-   case 5: return ${field.bits(5)};
+   case 6: return ${item.get_prop(prop, 6)};
+   case 5: return ${item.get_prop(prop, 5)};
    case 4:
       if (devinfo->is_g4x) {
-         return ${field.bits(4.5)};
+         return ${item.get_prop(prop, 4.5)};
       } else {
-         return ${field.bits(4)};
+         return ${item.get_prop(prop, 4)};
       }
    default:
       unreachable("Invalid hardware generation");
    }
 }
+%endif
+</%def>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+% for _, container in sorted(containers.iteritems(), key=itemgetter(0)):
+
+/* ${container.name} */
+
+${emit_per_gen_prop_func(container, 'length')}
+
+% for _, field in sorted(container.fields.iteritems(), key=itemgetter(0)):
+
+/* ${container.name}::${field.name} */
+
+${emit_per_gen_prop_func(field, 'bits')}
+
+${emit_per_gen_prop_func(field, 'start')}
+
+% endfor
 % endfor
 
 #ifdef __cplusplus
@@ -164,49 +181,106 @@ class Gen(object):
     def __eq__(self, other):
         return self.tenx == other.tenx
 
-    def prefix(self, token, padded=False):
+    def prefix(self, token):
         gen = self.tenx
-        pad = ''
 
         if gen % 10 == 0:
             gen //= 10
-            if padded:
-                pad = ' '
 
         if token[0] == '_':
             token = token[1:]
 
-        return 'GEN{}_{}{}'.format(gen, token, pad)
+        return 'GEN{}_{}'.format(gen, token)
+
+class Container(object):
+
+    def __init__(self, name):
+        self.name = name
+        self.token_name = safe_name(name)
+        self.length_by_gen = {}
+        self.fields = {}
+
+    def add_gen(self, gen, xml_attrs):
+        assert isinstance(gen, Gen)
+        if 'length' in xml_attrs:
+            self.length_by_gen[gen] = xml_attrs['length']
+
+    def get_field(self, field_name, create=False):
+        if field_name not in self.fields:
+            if create:
+                self.fields[field_name] = Field(self, field_name)
+            else:
+                return None
+        return self.fields[field_name]
+
+    def has_prop(self, prop):
+        if prop == 'length':
+            return bool(self.length_by_gen)
+        else:
+            raise ValueError('Invalid property: "{0}"'.format(prop))
+
+    def iter_prop(self, prop):
+        if prop == 'length':
+            return self.length_by_gen.iteritems()
+        else:
+            raise ValueError('Invalid property: "{0}"'.format(prop))
+
+    def get_prop(self, prop, gen):
+        if not isinstance(gen, Gen):
+            gen = Gen(gen)
+
+        if prop == 'length':
+            return self.length_by_gen.get(gen, 0)
+        else:
+            raise ValueError('Invalid property: "{0}"'.format(prop))
 
 class Field(object):
 
-    def __init__(self, container_name, name):
-        self.container_name = container_name
+    def __init__(self, container, name):
         self.name = name
-        self.token_name = safe_name('_'.join([self.container_name, self.name, 'bits']))
+        self.token_name = safe_name('_'.join([container.name, self.name]))
         self.bits_by_gen = {}
+        self.start_by_gen = {}
 
     def add_gen(self, gen, xml_attrs):
         assert isinstance(gen, Gen)
         start = int(xml_attrs['start'])
         end = int(xml_attrs['end'])
+        self.start_by_gen[gen] = start
         self.bits_by_gen[gen] = 1 + end - start
 
-    def bits(self, gen):
+    def has_prop(self, prop):
+        return True
+
+    def iter_prop(self, prop):
+        if prop == 'bits':
+            return self.bits_by_gen.iteritems()
+        elif prop == 'start':
+            return self.start_by_gen.iteritems()
+        else:
+            raise ValueError('Invalid property: "{0}"'.format(prop))
+
+    def get_prop(self, prop, gen):
         if not isinstance(gen, Gen):
             gen = Gen(gen)
-        return self.bits_by_gen.get(gen, 0)
+
+        if prop == 'bits':
+            return self.bits_by_gen.get(gen, 0)
+        elif prop == 'start':
+            return self.start_by_gen.get(gen, 0)
+        else:
+            raise ValueError('Invalid property: "{0}"'.format(prop))
 
 class XmlParser(object):
 
-    def __init__(self, fields):
+    def __init__(self, containers):
         self.parser = xml.parsers.expat.ParserCreate()
         self.parser.StartElementHandler = self.start_element
         self.parser.EndElementHandler = self.end_element
 
         self.gen = None
-        self.container_name = None
-        self.fields = fields
+        self.containers = containers
+        self.container = None
 
     def parse(self, filename):
         with open(filename) as f:
@@ -226,26 +300,27 @@ class XmlParser(object):
         if name == 'genxml':
             self.gen = None
         elif name in ('instruction', 'struct', 'register'):
-            self.container_name = None
+            self.container = None
         else:
             pass
 
     def start_container(self, attrs):
-        assert self.container_name is None
-        self.container_name = attrs['name']
+        assert self.container is None
+        name = attrs['name']
+        if name not in self.containers:
+            self.containers[name] = Container(name)
+        self.container = self.containers[name]
+        self.container.add_gen(self.gen, attrs)
 
     def start_field(self, attrs):
-        if self.container_name is None:
+        if self.container is None:
             return
 
         field_name = attrs.get('name', None)
         if not field_name:
             return
 
-        key = (self.container_name, field_name)
-        if key not in self.fields:
-            self.fields[key] = Field(self.container_name, field_name)
-        self.fields[key].add_gen(self.gen, attrs)
+        self.container.get_field(field_name, True).add_gen(self.gen, attrs)
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -268,14 +343,14 @@ def parse_args():
 def main():
     pargs = parse_args()
 
-    # Maps (container_name, field_name) => Field
-    fields = {}
+    # Maps name => Container
+    containers = {}
 
     for source in pargs.xml_sources:
-        XmlParser(fields).parse(source)
+        XmlParser(containers).parse(source)
 
     with open(pargs.output, 'wb') as f:
-        f.write(TEMPLATE.render(fields=fields, guard=pargs.cpp_guard))
+        f.write(TEMPLATE.render(containers=containers, guard=pargs.cpp_guard))
 
 if __name__ == '__main__':
     main()

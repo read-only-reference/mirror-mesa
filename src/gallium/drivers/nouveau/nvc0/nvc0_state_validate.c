@@ -605,8 +605,9 @@ nvc0_validate_min_samples(struct nvc0_context *nvc0)
       // have to do sample shading "to the max", otherwise there's no way to
       // tell which sets of samples are covered by the current invocation.
       // Similarly for reading the framebuffer.
-      if (nvc0->fragprog->fp.sample_mask_in ||
-          nvc0->fragprog->fp.reads_framebuffer)
+      if (nvc0->fragprog && (
+                nvc0->fragprog->fp.sample_mask_in ||
+                nvc0->fragprog->fp.reads_framebuffer))
          samples = util_framebuffer_get_num_samples(&nvc0->framebuffer);
       samples |= NVC0_3D_SAMPLE_SHADING_ENABLE;
    }
@@ -877,6 +878,9 @@ validate_list_3d[] = {
     { nvc0_validate_buffers,       NVC0_NEW_3D_BUFFERS },
     { nvc0_idxbuf_validate,        NVC0_NEW_3D_IDXBUF },
     { nvc0_tfb_validate,           NVC0_NEW_3D_TFB_TARGETS | NVC0_NEW_3D_GMTYPROG },
+    { nvc0_layer_validate,         NVC0_NEW_3D_VERTPROG |
+                                   NVC0_NEW_3D_TEVLPROG |
+                                   NVC0_NEW_3D_GMTYPROG },
     { nvc0_validate_driverconst,   NVC0_NEW_3D_DRIVERCONST },
 };
 

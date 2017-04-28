@@ -236,13 +236,6 @@ namespace SwrJit
         return UndefValue::get(VectorType::get(t, mVWidth));
     }
 
-    #if HAVE_LLVM == 0x306
-    Value *Builder::VINSERT(Value *vec, Value *val, uint64_t index)
-    {
-        return VINSERT(vec, val, C((int64_t)index));
-    }
-    #endif
-
     Value *Builder::VBROADCAST(Value *src)
     {
         // check if src is already a vector
@@ -282,6 +275,22 @@ namespace SwrJit
         for (auto i : indexList)
             indices.push_back(C(i));
         return GEPA(ptr, indices);
+    }
+
+    Value *Builder::IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<Value*> &indexList)
+    {
+        std::vector<Value*> indices;
+        for (auto i : indexList)
+            indices.push_back(i);
+        return IN_BOUNDS_GEP(ptr, indices);
+    }
+
+    Value *Builder::IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList)
+    {
+        std::vector<Value*> indices;
+        for (auto i : indexList)
+            indices.push_back(C(i));
+        return IN_BOUNDS_GEP(ptr, indices);
     }
 
     LoadInst *Builder::LOAD(Value *basePtr, const std::initializer_list<uint32_t> &indices, const llvm::Twine& name)
@@ -324,7 +333,6 @@ namespace SwrJit
         return CALLA(Callee, args);
     }
 
-    #if HAVE_LLVM > 0x306
     CallInst *Builder::CALL(Value *Callee, Value* arg)
     {
         std::vector<Value*> args;
@@ -348,7 +356,6 @@ namespace SwrJit
         args.push_back(arg3);
         return CALLA(Callee, args);
     }
-    #endif
 
     //////////////////////////////////////////////////////////////////////////
     Value *Builder::DEBUGTRAP()
@@ -504,11 +511,7 @@ namespace SwrJit
 
         // get a pointer to the first character in the constant string array
         std::vector<Constant*> geplist{C(0),C(0)};
-    #if HAVE_LLVM == 0x306
-        Constant *strGEP = ConstantExpr::getGetElementPtr(gvPtr,geplist,false);
-    #else
         Constant *strGEP = ConstantExpr::getGetElementPtr(nullptr, gvPtr,geplist,false);
-    #endif
 
         // insert the pointer to the format string in the argument vector
         printCallArgs[0] = strGEP;
@@ -1390,7 +1393,17 @@ namespace SwrJit
         IRB()->SetInsertPoint(&pFunc->getEntryBlock(),
                               pFunc->getEntryBlock().begin());
         Value* pAlloca = ALLOCA(pType);
-        IRB()->restoreIP(saveIP);
+        if (saveIP.isSet()) IRB()->restoreIP(saveIP);
+        return pAlloca;
+    }
+
+    Value* Builder::CreateEntryAlloca(Function* pFunc, Type* pType, Value* pArraySize)
+    {
+        auto saveIP = IRB()->saveIP();
+        IRB()->SetInsertPoint(&pFunc->getEntryBlock(),
+            pFunc->getEntryBlock().begin());
+        Value* pAlloca = ALLOCA(pType, pArraySize);
+        if (saveIP.isSet()) IRB()->restoreIP(saveIP);
         return pAlloca;
     }
 
@@ -1536,11 +1549,7 @@ namespace SwrJit
     Value* Builder::STACKSAVE()
     {
         Function* pfnStackSave = Intrinsic::getDeclaration(JM()->mpCurrentModule, Intrinsic::stacksave);
-    #if HAVE_LLVM == 0x306
-        return CALL(pfnStackSave);
-    #else
         return CALLA(pfnStackSave);
-    #endif
     }
 
     void Builder::STACKRESTORE(Value* pSaved)
@@ -1594,29 +1603,16 @@ namespace SwrJit
 
     Value *Builder::VEXTRACTI128(Value* a, Constant* imm8)
     {
-    #if HAVE_LLVM == 0x306
-        Function *func =
-            Intrinsic::getDeclaration(JM()->mpCurrentModule,
-                                      Intrinsic::x86_avx_vextractf128_si_256);
-        return CALL(func, {a, imm8});
-    #else
         bool flag = !imm8->isZeroValue();
         SmallVector<Constant*,8> idx;
         for (unsigned i = 0; i < mVWidth / 2; i++) {
             idx.push_back(C(flag ? i + mVWidth / 2 : i));
         }
         return VSHUFFLE(a, VUNDEF_I(), ConstantVector::get(idx));
-    #endif
     }
 
     Value *Builder::VINSERTI128(Value* a, Value* b, Constant* imm8)
     {
-    #if HAVE_LLVM == 0x306
-        Function *func =
-            Intrinsic::getDeclaration(JM()->mpCurrentModule,
-                                      Intrinsic::x86_avx_vinsertf128_si_256);
-        return CALL(func, {a, b, imm8});
-    #else
         bool flag = !imm8->isZeroValue();
         SmallVector<Constant*,8> idx;
         for (unsigned i = 0; i < mVWidth; i++) {
@@ -1632,7 +1628,6 @@ namespace SwrJit
             idx2.push_back(C(flag ? i + mVWidth / 2 : i));
         }
         return VSHUFFLE(a, inter, ConstantVector::get(idx2));
-    #endif
     }
 
     // rdtsc buckets macros
@@ -1680,4 +1675,45 @@ namespace SwrJit
         }
     }
 
+
+    uint32_t Builder::GetTypeSize(Type* pType)
+    {
+        if (pType->isStructTy())
+        {
+            uint32_t numElems = pType->getStructNumElements();
+            Type* pElemTy = pType->getStructElementType(0);
+            return numElems * GetTypeSize(pElemTy);
+        }
+
+        if (pType->isArrayTy())
+        {
+            uint32_t numElems = pType->getArrayNumElements();
+            Type* pElemTy = pType->getArrayElementType();
+            return numElems * GetTypeSize(pElemTy);
+        }
+
+        if (pType->isIntegerTy())
+        {
+            uint32_t bitSize = pType->getIntegerBitWidth();
+            return bitSize / 8;
+        }
+
+        if (pType->isFloatTy())
+        {
+            return 4;
+        }
+
+        if (pType->isHalfTy())
+        {
+            return 2;
+        }
+
+        if (pType->isDoubleTy())
+        {
+            return 8;
+        }
+
+        SWR_ASSERT(false, "Unimplemented type.");
+        return 0;
+    }
 }
