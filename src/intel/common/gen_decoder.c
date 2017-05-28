@@ -433,8 +433,8 @@ end_element(void *data, const char *name)
    struct gen_spec *spec = ctx->spec;
 
    if (strcmp(name, "instruction") == 0 ||
-      strcmp(name, "struct") == 0 ||
-      strcmp(name, "register") == 0) {
+       strcmp(name, "struct") == 0 ||
+       strcmp(name, "register") == 0) {
       size_t size = ctx->nfields * sizeof(ctx->fields[0]);
       struct gen_group *group = ctx->group;
 
@@ -446,8 +446,8 @@ end_element(void *data, const char *name)
 
       for (int i = 0; i < group->nfields; i++) {
          if (group->fields[i]->start >= 16 &&
-            group->fields[i]->end <= 31 &&
-            group->fields[i]->has_default) {
+             group->fields[i]->end <= 31 &&
+             group->fields[i]->has_default) {
             group->opcode_mask |=
                mask(group->fields[i]->start % 32, group->fields[i]->end % 32);
             group->opcode |=
@@ -648,11 +648,11 @@ gen_spec_load_from_path(const struct gen_device_info *devinfo,
    do {
       buf = XML_GetBuffer(ctx.parser, XML_BUFFER_SIZE);
       len = fread(buf, 1, XML_BUFFER_SIZE, input);
-      if (len < 0) {
+      if (len == 0) {
          fprintf(stderr, "fread: %m\n");
-         fclose(input);
-         free(filename);
-         return NULL;
+         free(ctx.spec);
+         ctx.spec = NULL;
+         goto end;
       }
       if (XML_ParseBuffer(ctx.parser, len, len == 0) == 0) {
          fprintf(stderr,
@@ -660,12 +660,13 @@ gen_spec_load_from_path(const struct gen_device_info *devinfo,
                  XML_GetCurrentLineNumber(ctx.parser),
                  XML_GetCurrentColumnNumber(ctx.parser),
                  XML_ErrorString(XML_GetErrorCode(ctx.parser)));
-         fclose(input);
-         free(filename);
-         return NULL;
+         free(ctx.spec);
+         ctx.spec = NULL;
+         goto end;
       }
    } while (len > 0);
 
+ end:
    XML_ParserFree(ctx.parser);
 
    fclose(input);
@@ -702,12 +703,19 @@ gen_group_get_length(struct gen_group *group, const uint32_t *p)
       break;
    }
 
+   case 2: /* BLT */ {
+      return field(h, 0, 7) + 2;
+   }
+
    case 3: /* Render */ {
       uint32_t subtype = field(h, 27, 28);
       uint32_t opcode = field(h, 24, 26);
+      uint16_t whole_opcode = field(h, 16, 31);
       switch (subtype) {
       case 0:
-         if (opcode < 2)
+         if (whole_opcode == 0x6104 /* PIPELINE_SELECT_965 */)
+            return 1;
+         else if (opcode < 2)
             return field(h, 0, 7) + 2;
          else
             return -1;
@@ -725,7 +733,9 @@ gen_group_get_length(struct gen_group *group, const uint32_t *p)
             return -1;
       }
       case 3:
-         if (opcode < 4)
+         if (whole_opcode == 0x780b)
+            return 1;
+         else if (opcode < 4)
             return field(h, 0, 7) + 2;
          else
             return -1;

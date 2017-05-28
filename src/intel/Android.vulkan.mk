@@ -206,6 +206,8 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := libvulkan_intel
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 
+LOCAL_LDFLAGS += -Wl,--build-id=sha1
+
 LOCAL_SRC_FILES := \
 	$(VULKAN_GEM_FILES)
 
@@ -231,7 +233,7 @@ LOCAL_WHOLE_STATIC_LIBRARIES := \
 	libmesa_intel_compiler \
 	libmesa_anv_entrypoints
 
-LOCAL_SHARED_LIBRARIES := libdrm
+LOCAL_SHARED_LIBRARIES := libdrm libz
 
 include $(MESA_COMMON_MK)
 include $(BUILD_SHARED_LIBRARY)

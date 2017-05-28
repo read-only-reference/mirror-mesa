@@ -686,7 +686,7 @@ void anv_CmdUpdateBuffer(
     * little data at the top to build its linked list.
     */
    const uint32_t max_update_size =
-      cmd_buffer->device->dynamic_state_block_pool.block_size - 64;
+      cmd_buffer->device->dynamic_state_pool.block_size - 64;
 
    assert(max_update_size < MAX_SURFACE_DIM * 4);
 
@@ -710,7 +710,7 @@ void anv_CmdUpdateBuffer(
       bs = gcd_pow2_u64(bs, copy_size);
 
       do_buffer_copy(&batch,
-                     &cmd_buffer->device->dynamic_state_block_pool.bo,
+                     &cmd_buffer->device->dynamic_state_pool.block_pool.bo,
                      tmp_data.offset,
                      dst_buffer->bo, dst_buffer->offset + dstOffset,
                      copy_size / bs, 1, bs);
@@ -999,6 +999,25 @@ clear_color_attachment(struct anv_cmd_buffer *cmd_buffer,
    union isl_color_value clear_color =
       vk_to_isl_color(attachment->clearValue.color);
 
+   /* If multiview is enabled we ignore baseArrayLayer and layerCount */
+   if (subpass->view_mask) {
+      uint32_t view_idx;
+      for_each_bit(view_idx, subpass->view_mask) {
+         for (uint32_t r = 0; r < rectCount; ++r) {
+            const VkOffset2D offset = pRects[r].rect.offset;
+            const VkExtent2D extent = pRects[r].rect.extent;
+            blorp_clear_attachments(batch, binding_table,
+                                    ISL_FORMAT_UNSUPPORTED, pass_att->samples,
+                                    view_idx, 1,
+                                    offset.x, offset.y,
+                                    offset.x + extent.width,
+                                    offset.y + extent.height,
+                                    true, clear_color, false, 0.0f, 0, 0);
+         }
+      }
+      return;
+   }
+
    for (uint32_t r = 0; r < rectCount; ++r) {
       const VkOffset2D offset = pRects[r].rect.offset;
       const VkExtent2D extent = pRects[r].rect.extent;
@@ -1046,6 +1065,28 @@ clear_depth_stencil_attachment(struct anv_cmd_buffer *cmd_buffer,
                                       &binding_table);
    if (result != VK_SUCCESS)
       return;
+
+   /* If multiview is enabled we ignore baseArrayLayer and layerCount */
+   if (subpass->view_mask) {
+      uint32_t view_idx;
+      for_each_bit(view_idx, subpass->view_mask) {
+         for (uint32_t r = 0; r < rectCount; ++r) {
+            const VkOffset2D offset = pRects[r].rect.offset;
+            const VkExtent2D extent = pRects[r].rect.extent;
+            VkClearDepthStencilValue value = attachment->clearValue.depthStencil;
+            blorp_clear_attachments(batch, binding_table,
+                                    depth_format, pass_att->samples,
+                                    view_idx, 1,
+                                    offset.x, offset.y,
+                                    offset.x + extent.width,
+                                    offset.y + extent.height,
+                                    false, color_value,
+                                    clear_depth, value.depth,
+                                    clear_stencil ? 0xff : 0, value.stencil);
+         }
+      }
+      return;
+   }
 
    for (uint32_t r = 0; r < rectCount; ++r) {
       const VkOffset2D offset = pRects[r].rect.offset;
@@ -1371,6 +1412,73 @@ void anv_CmdResolveImage(
    }
 
    blorp_batch_finish(&batch);
+}
+
+void
+anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
+                    const struct anv_image *image,
+                    const struct isl_view *view,
+                    const VkImageSubresourceRange *subresourceRange)
+{
+   assert(image->type == VK_IMAGE_TYPE_3D || image->extent.depth == 1);
+
+   struct blorp_batch batch;
+   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
+
+   struct blorp_surf surf;
+   get_blorp_surf_for_anv_image(image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                image->aux_usage, &surf);
+
+   /* From the Sky Lake PRM Vol. 7, "Render Target Fast Clear":
+    *
+    *    "After Render target fast clear, pipe-control with color cache
+    *    write-flush must be issued before sending any DRAW commands on
+    *    that render target."
+    *
+    * This comment is a bit cryptic and doesn't really tell you what's going
+    * or what's really needed.  It appears that fast clear ops are not
+    * properly synchronized with other drawing.  This means that we cannot
+    * have a fast clear operation in the pipe at the same time as other
+    * regular drawing operations.  We need to use a PIPE_CONTROL to ensure
+    * that the contents of the previous draw hit the render target before we
+    * resolve and then use a second PIPE_CONTROL after the resolve to ensure
+    * that it is completed before any additional drawing occurs.
+    */
+   cmd_buffer->state.pending_pipe_bits |=
+      ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
+
+   const uint32_t level_count =
+      view ? view->levels : anv_get_levelCount(image, subresourceRange);
+   for (uint32_t l = 0; l < level_count; l++) {
+      const uint32_t level =
+         (view ? view->base_level : subresourceRange->baseMipLevel) + l;
+
+      const VkExtent3D extent = {
+         .width = anv_minify(image->extent.width, level),
+         .height = anv_minify(image->extent.height, level),
+         .depth = anv_minify(image->extent.depth, level),
+      };
+
+      /* Blorp likes to treat 2D_ARRAY and 3D the same. */
+      uint32_t blorp_base_layer, blorp_layer_count;
+      if (view) {
+         blorp_base_layer = view->base_array_layer;
+         blorp_layer_count = view->array_len;
+      } else if (image->type == VK_IMAGE_TYPE_3D) {
+         blorp_base_layer = 0;
+         blorp_layer_count = extent.depth;
+      } else {
+         blorp_base_layer = subresourceRange->baseArrayLayer;
+         blorp_layer_count = anv_get_layerCount(image, subresourceRange);
+      }
+
+      blorp_fast_clear(&batch, &surf, surf.surf->format,
+                       level, blorp_base_layer, blorp_layer_count,
+                       0, 0, extent.width, extent.height);
+   }
+
+   cmd_buffer->state.pending_pipe_bits |=
+      ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
 }
 
 static void

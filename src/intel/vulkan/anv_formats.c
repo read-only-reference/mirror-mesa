@@ -179,8 +179,8 @@ static const struct anv_format anv_formats[] = {
    fmt(VK_FORMAT_D24_UNORM_S8_UINT,       ISL_FORMAT_R24_UNORM_X8_TYPELESS),
    fmt(VK_FORMAT_D32_SFLOAT_S8_UINT,      ISL_FORMAT_R32_FLOAT),
 
-   fmt(VK_FORMAT_BC1_RGB_UNORM_BLOCK,     ISL_FORMAT_DXT1_RGB),
-   fmt(VK_FORMAT_BC1_RGB_SRGB_BLOCK,      ISL_FORMAT_DXT1_RGB_SRGB),
+   swiz_fmt(VK_FORMAT_BC1_RGB_UNORM_BLOCK,     ISL_FORMAT_BC1_UNORM, RGB1),
+   swiz_fmt(VK_FORMAT_BC1_RGB_SRGB_BLOCK,      ISL_FORMAT_BC1_UNORM_SRGB, RGB1),
    fmt(VK_FORMAT_BC1_RGBA_UNORM_BLOCK,    ISL_FORMAT_BC1_UNORM),
    fmt(VK_FORMAT_BC1_RGBA_SRGB_BLOCK,     ISL_FORMAT_BC1_UNORM_SRGB),
    fmt(VK_FORMAT_BC2_UNORM_BLOCK,         ISL_FORMAT_BC2_UNORM),
@@ -715,7 +715,8 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2KHR(
    if (external_info && external_info->handleType != 0) {
       switch (external_info->handleType) {
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHX:
-         external_props->externalMemoryProperties = prime_fd_props;
+         if (external_props)
+            external_props->externalMemoryProperties = prime_fd_props;
          break;
       default:
          /* From the Vulkan 1.0.42 spec:

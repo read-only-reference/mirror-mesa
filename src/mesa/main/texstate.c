@@ -279,14 +279,12 @@ calculate_derived_texenv( struct gl_tex_env_combine_state *state,
 }
 
 
-
-
 /* GL_ARB_multitexture */
-void GLAPIENTRY
-_mesa_ActiveTexture(GLenum texture)
+static ALWAYS_INLINE void
+active_texture(GLenum texture, bool no_error)
 {
    const GLuint texUnit = texture - GL_TEXTURE0;
-   GLuint k;
+
    GET_CURRENT_CONTEXT(ctx);
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
@@ -296,14 +294,16 @@ _mesa_ActiveTexture(GLenum texture)
    if (ctx->Texture.CurrentUnit == texUnit)
       return;
 
-   k = _mesa_max_tex_unit(ctx);
+   if (!no_error) {
+      GLuint k = _mesa_max_tex_unit(ctx);
 
-   assert(k <= ARRAY_SIZE(ctx->Texture.Unit));
+      assert(k <= ARRAY_SIZE(ctx->Texture.Unit));
 
-   if (texUnit >= k) {
-      _mesa_error(ctx, GL_INVALID_ENUM, "glActiveTexture(texture=%s)",
-                  _mesa_enum_to_string(texture));
-      return;
+      if (texUnit >= k) {
+         _mesa_error(ctx, GL_INVALID_ENUM, "glActiveTexture(texture=%s)",
+                     _mesa_enum_to_string(texture));
+         return;
+      }
    }
 
    FLUSH_VERTICES(ctx, _NEW_TEXTURE_STATE);
@@ -313,6 +313,20 @@ _mesa_ActiveTexture(GLenum texture)
       /* update current stack pointer */
       ctx->CurrentStack = &ctx->TextureMatrixStack[texUnit];
    }
+}
+
+
+void GLAPIENTRY
+_mesa_ActiveTexture_no_error(GLenum texture)
+{
+   active_texture(texture, true);
+}
+
+
+void GLAPIENTRY
+_mesa_ActiveTexture(GLenum texture)
+{
+   active_texture(texture, false);
 }
 
 
@@ -620,9 +634,6 @@ update_single_program_texture(struct gl_context *ctx, struct gl_program *prog,
    struct gl_sampler_object *sampler;
    int unit;
 
-   if (!(prog->SamplersUsed & (1 << s)))
-      return NULL;
-
    unit = prog->SamplerUnits[s];
    texUnit = &ctx->Texture.Unit[unit];
 
@@ -676,16 +687,15 @@ update_program_texture_state(struct gl_context *ctx, struct gl_program **prog,
    int i;
 
    for (i = 0; i < MESA_SHADER_STAGES; i++) {
-      int s;
+      GLbitfield mask;
 
       if (!prog[i])
          continue;
 
-      /* We can't only do the shifting trick as the loop condition because if
-       * sampler 31 is active, the next iteration tries to shift by 32, which is
-       * undefined.
-       */
-      for (s = 0; s < MAX_SAMPLERS && (1 << s) <= prog[i]->SamplersUsed; s++) {
+      mask = prog[i]->SamplersUsed;
+
+      while (mask) {
+         const int s = u_bit_scan(&mask);
          struct gl_texture_object *texObj;
 
          texObj = update_single_program_texture(ctx, prog[i], s);

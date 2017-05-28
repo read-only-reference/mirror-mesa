@@ -337,6 +337,8 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
    case PIPE_CAP_TGSI_BALLOT:
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+   case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+   case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -891,6 +893,10 @@ swr_create_resolve_resource(struct pipe_screen *_screen,
 
       /* Attach it to the multisample resource */
       msaa_res->resolve_target = alt;
+
+      /* Hang resolve surface state off the multisample surface state to so
+       * StoreTiles knows where to resolve the surface. */
+      msaa_res->swr.pAuxBaseAddress =  (uint8_t *)&swr_resource(alt)->swr;
    }
 
    return true; /* success */
@@ -1009,13 +1015,9 @@ swr_flush_frontbuffer(struct pipe_screen *p_screen,
       SwrEndFrame(swr_context(pipe)->swrContext);
    }
 
-   /* Multisample surfaces need to be resolved before present */
+   /* Multisample resolved into resolve_target at flush with store_resource */
    if (pipe && spr->swr.numSamples > 1) {
       struct pipe_resource *resolve_target = spr->resolve_target;
-
-      /* Do an inline surface resolve into the resolve target resource
-       * XXX: This works, just not optimal. Work on using a pipelined blit. */
-      swr_do_msaa_resolve(resource, resolve_target);
 
       /* Once resolved, copy into display target */
       SWR_SURFACE_STATE *resolve = &swr_resource(resolve_target)->swr;

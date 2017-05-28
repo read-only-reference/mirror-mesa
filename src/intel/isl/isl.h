@@ -353,6 +353,20 @@ enum isl_format {
    ISL_FORMAT_ASTC_LDR_2D_10X10_FLT16 =                        630,
    ISL_FORMAT_ASTC_LDR_2D_12X10_FLT16 =                        638,
    ISL_FORMAT_ASTC_LDR_2D_12X12_FLT16 =                        639,
+   ISL_FORMAT_ASTC_HDR_2D_4X4_FLT16 =                          832,
+   ISL_FORMAT_ASTC_HDR_2D_5X4_FLT16 =                          840,
+   ISL_FORMAT_ASTC_HDR_2D_5X5_FLT16 =                          841,
+   ISL_FORMAT_ASTC_HDR_2D_6X5_FLT16 =                          849,
+   ISL_FORMAT_ASTC_HDR_2D_6X6_FLT16 =                          850,
+   ISL_FORMAT_ASTC_HDR_2D_8X5_FLT16 =                          865,
+   ISL_FORMAT_ASTC_HDR_2D_8X6_FLT16 =                          866,
+   ISL_FORMAT_ASTC_HDR_2D_8X8_FLT16 =                          868,
+   ISL_FORMAT_ASTC_HDR_2D_10X5_FLT16 =                         881,
+   ISL_FORMAT_ASTC_HDR_2D_10X6_FLT16 =                         882,
+   ISL_FORMAT_ASTC_HDR_2D_10X8_FLT16 =                         884,
+   ISL_FORMAT_ASTC_HDR_2D_10X10_FLT16 =                        886,
+   ISL_FORMAT_ASTC_HDR_2D_12X10_FLT16 =                        894,
+   ISL_FORMAT_ASTC_HDR_2D_12X12_FLT16 =                        895,
 
    /* The formats that follow are internal to ISL and as such don't have an
     * explicit number.  We'll just let the C compiler assign it for us.  Any
@@ -573,6 +587,21 @@ typedef uint64_t isl_surf_usage_flags_t;
 #define ISL_SURF_USAGE_HIZ_BIT                 (1u << 13)
 #define ISL_SURF_USAGE_MCS_BIT                 (1u << 14)
 #define ISL_SURF_USAGE_CCS_BIT                 (1u << 15)
+/** @} */
+
+/**
+ * @defgroup Channel Mask
+ *
+ * These #define values are chosen to match the values of
+ * RENDER_SURFACE_STATE::Color Buffer Component Write Disables
+ *
+ * @{
+ */
+typedef uint8_t isl_channel_mask_t;
+#define ISL_CHANNEL_BLUE_BIT  (1 << 0)
+#define ISL_CHANNEL_GREEN_BIT (1 << 1)
+#define ISL_CHANNEL_RED_BIT   (1 << 2)
+#define ISL_CHANNEL_ALPHA_BIT (1 << 3)
 /** @} */
 
 /**
@@ -994,6 +1023,11 @@ struct isl_surf_fill_state_info {
     * Valid values depend on hardware generation.
     */
    union isl_color_value clear_color;
+
+   /**
+    * Surface write disables for gen4-5
+    */
+   isl_channel_mask_t write_disables;
 
    /* Intra-tile offset */
    uint16_t x_offset_sa, y_offset_sa;

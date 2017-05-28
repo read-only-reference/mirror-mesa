@@ -89,39 +89,11 @@ emit_system_values_block(nir_block *block, fs_visitor *v)
          unreachable("should be lowered by lower_vertex_id().");
 
       case nir_intrinsic_load_vertex_id_zero_base:
-         assert(v->stage == MESA_SHADER_VERTEX);
-         reg = &v->nir_system_values[SYSTEM_VALUE_VERTEX_ID_ZERO_BASE];
-         if (reg->file == BAD_FILE)
-            *reg = *v->emit_vs_system_value(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE);
-         break;
-
       case nir_intrinsic_load_base_vertex:
-         assert(v->stage == MESA_SHADER_VERTEX);
-         reg = &v->nir_system_values[SYSTEM_VALUE_BASE_VERTEX];
-         if (reg->file == BAD_FILE)
-            *reg = *v->emit_vs_system_value(SYSTEM_VALUE_BASE_VERTEX);
-         break;
-
       case nir_intrinsic_load_instance_id:
-         assert(v->stage == MESA_SHADER_VERTEX);
-         reg = &v->nir_system_values[SYSTEM_VALUE_INSTANCE_ID];
-         if (reg->file == BAD_FILE)
-            *reg = *v->emit_vs_system_value(SYSTEM_VALUE_INSTANCE_ID);
-         break;
-
       case nir_intrinsic_load_base_instance:
-         assert(v->stage == MESA_SHADER_VERTEX);
-         reg = &v->nir_system_values[SYSTEM_VALUE_BASE_INSTANCE];
-         if (reg->file == BAD_FILE)
-            *reg = *v->emit_vs_system_value(SYSTEM_VALUE_BASE_INSTANCE);
-         break;
-
       case nir_intrinsic_load_draw_id:
-         assert(v->stage == MESA_SHADER_VERTEX);
-         reg = &v->nir_system_values[SYSTEM_VALUE_DRAW_ID];
-         if (reg->file == BAD_FILE)
-            *reg = *v->emit_vs_system_value(SYSTEM_VALUE_DRAW_ID);
-         break;
+         unreachable("should be lowered by brw_nir_lower_vs_inputs().");
 
       case nir_intrinsic_load_invocation_id:
          if (v->stage == MESA_SHADER_TESS_CTRL)
@@ -1853,7 +1825,7 @@ fs_visitor::emit_gs_vertex(const nir_src &vertex_count_nir_src,
     * be recorded by transform feedback, we can simply discard all geometry
     * bound to these streams when transform feedback is disabled.
     */
-   if (stream_id > 0 && !nir->info->has_transform_feedback_varyings)
+   if (stream_id > 0 && !nir->info.has_transform_feedback_varyings)
       return;
 
    /* If we're outputting 32 control data bits or less, then we can wait
@@ -1942,27 +1914,15 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
    nir_const_value *offset_const = nir_src_as_const_value(offset_src);
    const unsigned push_reg_count = gs_prog_data->base.urb_read_length * 8;
 
-   /* Offset 0 is the VUE header, which contains VARYING_SLOT_LAYER [.y],
-    * VARYING_SLOT_VIEWPORT [.z], and VARYING_SLOT_PSIZ [.w].  Only
-    * gl_PointSize is available as a GS input, however, so it must be that.
-    */
-   const bool is_point_size = (base_offset == 0);
-
    /* TODO: figure out push input layout for invocations == 1 */
    if (gs_prog_data->invocations == 1 &&
        offset_const != NULL && vertex_const != NULL &&
        4 * (base_offset + offset_const->u32[0]) < push_reg_count) {
       int imm_offset = (base_offset + offset_const->u32[0]) * 4 +
                        vertex_const->u32[0] * push_reg_count;
-      /* This input was pushed into registers. */
-      if (is_point_size) {
-         /* gl_PointSize comes in .w */
-         bld.MOV(dst, fs_reg(ATTR, imm_offset + 3, dst.type));
-      } else {
-         for (unsigned i = 0; i < num_components; i++) {
-            bld.MOV(offset(dst, bld, i),
-                    fs_reg(ATTR, imm_offset + i + first_component, dst.type));
-         }
+      for (unsigned i = 0; i < num_components; i++) {
+         bld.MOV(offset(dst, bld, i),
+                 fs_reg(ATTR, imm_offset + i + first_component, dst.type));
       }
       return;
    }
@@ -2008,12 +1968,12 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
 
          /* Use first_icp_handle as the base offset.  There is one register
           * of URB handles per vertex, so inform the register allocator that
-          * we might read up to nir->info->gs.vertices_in registers.
+          * we might read up to nir->info.gs.vertices_in registers.
           */
          bld.emit(SHADER_OPCODE_MOV_INDIRECT, icp_handle,
                   retype(brw_vec8_grf(first_icp_handle, 0), icp_handle.type),
                   fs_reg(icp_offset_bytes),
-                  brw_imm_ud(nir->info->gs.vertices_in * REG_SIZE));
+                  brw_imm_ud(nir->info.gs.vertices_in * REG_SIZE));
       }
    } else {
       assert(gs_prog_data->invocations > 1);
@@ -2039,12 +1999,12 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
 
          /* Use first_icp_handle as the base offset.  There is one DWord
           * of URB handles per vertex, so inform the register allocator that
-          * we might read up to ceil(nir->info->gs.vertices_in / 8) registers.
+          * we might read up to ceil(nir->info.gs.vertices_in / 8) registers.
           */
          bld.emit(SHADER_OPCODE_MOV_INDIRECT, icp_handle,
                   retype(brw_vec8_grf(first_icp_handle, 0), icp_handle.type),
                   fs_reg(icp_offset_bytes),
-                  brw_imm_ud(DIV_ROUND_UP(nir->info->gs.vertices_in, 8) *
+                  brw_imm_ud(DIV_ROUND_UP(nir->info.gs.vertices_in, 8) *
                              REG_SIZE));
       }
    }
@@ -2131,14 +2091,6 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
             indirect_offset = new_indirect;
          }
       }
-   }
-
-   if (is_point_size) {
-      /* Read the whole VUE header (because of alignment) and read .w. */
-      fs_reg tmp = bld.vgrf(dst.type, 4);
-      inst->dst = tmp;
-      inst->size_written = 4 * REG_SIZE;
-      bld.MOV(dst, offset(tmp, bld, 3));
    }
 }
 
@@ -2251,7 +2203,7 @@ fs_visitor::nir_emit_vs_intrinsic(const fs_builder &bld,
    }
 
    case nir_intrinsic_load_input: {
-      fs_reg src = fs_reg(ATTR, instr->const_index[0], dest.type);
+      fs_reg src = fs_reg(ATTR, nir_intrinsic_base(instr) * 4, dest.type);
       unsigned first_component = nir_intrinsic_component(instr);
       unsigned num_components = instr->num_components;
       enum brw_reg_type type = dest.type;
@@ -3849,7 +3801,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
           */
          brw_mark_surface_used(prog_data,
                                stage_prog_data->binding_table.ubo_start +
-                               nir->info->num_ubos - 1);
+                               nir->info.num_ubos - 1);
       }
 
       nir_const_value *const_offset = nir_src_as_const_value(instr->src[1]);
@@ -3919,7 +3871,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
           */
          brw_mark_surface_used(prog_data,
                                stage_prog_data->binding_table.ssbo_start +
-                               nir->info->num_ssbos - 1);
+                               nir->info.num_ssbos - 1);
       }
 
       fs_reg offset_reg;
@@ -3959,7 +3911,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
          brw_mark_surface_used(prog_data,
                                stage_prog_data->binding_table.ssbo_start +
-                               nir->info->num_ssbos - 1);
+                               nir->info.num_ssbos - 1);
       }
 
       /* Value */
@@ -4171,7 +4123,7 @@ fs_visitor::nir_emit_ssbo_atomic(const fs_builder &bld,
        */
       brw_mark_surface_used(prog_data,
                             stage_prog_data->binding_table.ssbo_start +
-                            nir->info->num_ssbos - 1);
+                            nir->info.num_ssbos - 1);
    }
 
    fs_reg offset = get_nir_src(instr->src[1]);

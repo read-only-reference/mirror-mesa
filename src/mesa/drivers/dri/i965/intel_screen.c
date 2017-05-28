@@ -89,6 +89,7 @@ DRI_CONF_BEGIN
       DRI_CONF_DISABLE_BLEND_FUNC_EXTENDED("false")
       DRI_CONF_DUAL_COLOR_BLEND_BY_LOCATION("false")
       DRI_CONF_ALLOW_GLSL_EXTENSION_DIRECTIVE_MIDSHADER("false")
+      DRI_CONF_ALLOW_GLSL_BUILTIN_VARIABLE_REDECLARATION("false")
       DRI_CONF_ALLOW_HIGHER_COMPAT_VERSION("false")
       DRI_CONF_FORCE_GLSL_ABS_SQRT("false")
 
@@ -290,6 +291,41 @@ static struct intel_image_format intel_image_formats[] = {
        { 0, 1, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } }
 };
 
+static const struct {
+   uint32_t tiling;
+   uint64_t modifier;
+} tiling_modifier_map[] = {
+   { .tiling = I915_TILING_NONE, .modifier = DRM_FORMAT_MOD_LINEAR },
+   { .tiling = I915_TILING_X, .modifier = I915_FORMAT_MOD_X_TILED },
+   { .tiling = I915_TILING_Y, .modifier = I915_FORMAT_MOD_Y_TILED },
+};
+
+static uint32_t
+modifier_to_tiling(uint64_t modifier)
+{
+   int i;
+
+   for (i = 0; i < ARRAY_SIZE(tiling_modifier_map); i++) {
+      if (tiling_modifier_map[i].modifier == modifier)
+         return tiling_modifier_map[i].tiling;
+   }
+
+   unreachable("modifier_to_tiling should only receive known modifiers");
+}
+
+static uint64_t
+tiling_to_modifier(uint32_t tiling)
+{
+   int i;
+
+   for (i = 0; i < ARRAY_SIZE(tiling_modifier_map); i++) {
+      if (tiling_modifier_map[i].tiling == tiling)
+         return tiling_modifier_map[i].modifier;
+   }
+
+   unreachable("tiling_to_modifier received unknown tiling mode");
+}
+
 static void
 intel_image_warn_if_unaligned(__DRIimage *image, const char *func)
 {
@@ -407,6 +443,7 @@ intel_create_image_from_name(__DRIscreen *dri_screen,
        free(image);
        return NULL;
     }
+    image->modifier = tiling_to_modifier(image->bo->tiling_mode);
 
     return image;
 }
@@ -435,6 +472,7 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
 
    image->internal_format = rb->InternalFormat;
    image->format = rb->Format;
+   image->modifier = tiling_to_modifier(irb->mt->tiling);
    image->offset = 0;
    image->data = loaderPrivate;
    brw_bo_unreference(image->bo);
@@ -496,6 +534,7 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
 
    image->internal_format = obj->Image[face][level]->InternalFormat;
    image->format = obj->Image[face][level]->TexFormat;
+   image->modifier = tiling_to_modifier(iobj->mt->tiling);
    image->data = loaderPrivate;
    intel_setup_image_from_mipmap_tree(brw, image, iobj->mt, level, zoffset);
    image->dri_format = driGLFormatToImageFormat(image->format);
@@ -568,10 +607,7 @@ intel_create_image_common(__DRIscreen *dri_screen,
 {
    __DRIimage *image;
    struct intel_screen *screen = dri_screen->driverPrivate;
-   /* Historically, X-tiled was the default, and so lack of modifier means
-    * X-tiled.
-    */
-   uint32_t tiling = I915_TILING_X;
+   uint32_t tiling;
    int cpp;
 
    /* Callers of this may specify a modifier, or a dri usage, but not both. The
@@ -581,21 +617,18 @@ intel_create_image_common(__DRIscreen *dri_screen,
    assert(!(use && count));
 
    uint64_t modifier = select_best_modifier(&screen->devinfo, modifiers, count);
-   switch (modifier) {
-   case I915_FORMAT_MOD_X_TILED:
-      assert(tiling == I915_TILING_X);
-      break;
-   case DRM_FORMAT_MOD_LINEAR:
-      tiling = I915_TILING_NONE;
-      break;
-   case I915_FORMAT_MOD_Y_TILED:
-      tiling = I915_TILING_Y;
-      break;
-   case DRM_FORMAT_MOD_INVALID:
+   if (modifier == DRM_FORMAT_MOD_INVALID) {
+      /* User requested specific modifiers, none of which work */
       if (modifiers)
          return NULL;
-   default:
-         break;
+
+      /* Historically, X-tiled was the default, and so lack of modifier means
+       * X-tiled.
+       */
+      tiling = I915_TILING_X;
+   } else {
+      /* select_best_modifier has found a modifier we support */
+      tiling = modifier_to_tiling(modifier);
    }
 
    if (use & __DRI_IMAGE_USE_CURSOR) {
@@ -710,6 +743,7 @@ intel_dup_image(__DRIimage *orig_image, void *loaderPrivate)
    image->planar_format   = orig_image->planar_format;
    image->dri_format      = orig_image->dri_format;
    image->format          = orig_image->format;
+   image->modifier        = orig_image->modifier;
    image->offset          = orig_image->offset;
    image->width           = orig_image->width;
    image->height          = orig_image->height;
@@ -828,6 +862,7 @@ intel_create_image_from_fds(__DRIscreen *dri_screen,
       free(image);
       return NULL;
    }
+   image->modifier = tiling_to_modifier(image->bo->tiling_mode);
 
    if (f->nplanes == 1) {
       image->offset = image->offsets[0];
@@ -915,6 +950,7 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
 
     image->bo = parent->bo;
     brw_bo_reference(parent->bo);
+    image->modifier = parent->modifier;
 
     image->width = width;
     image->height = height;
@@ -1116,7 +1152,11 @@ intelDestroyScreen(__DRIscreen * sPriv)
 
 
 /**
- * This is called when we need to set up GL rendering to a new X window.
+ * Create a gl_framebuffer and attach it to __DRIdrawable::driverPrivate.
+ *
+ *_This implements driDriverAPI::createNewDrawable, which the DRI layer calls
+ * when creating a EGLSurface, GLXDrawable, or GLXPixmap. Despite the name,
+ * this does not allocate GPU memory.
  */
 static GLboolean
 intelCreateBuffer(__DRIscreen *dri_screen,
@@ -1129,12 +1169,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
    mesa_format rgbFormat;
    unsigned num_samples =
       intel_quantize_num_samples(screen, mesaVis->samples);
-   struct gl_framebuffer *fb;
 
    if (isPixmap)
       return false;
 
-   fb = CALLOC_STRUCT(gl_framebuffer);
+   struct gl_framebuffer *fb = CALLOC_STRUCT(gl_framebuffer);
    if (!fb)
       return false;
 
@@ -1161,11 +1200,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
    }
 
    /* setup the hardware-based renderbuffers */
-   rb = intel_create_renderbuffer(rgbFormat, num_samples);
+   rb = intel_create_winsys_renderbuffer(rgbFormat, num_samples);
    _mesa_attach_and_own_rb(fb, BUFFER_FRONT_LEFT, &rb->Base.Base);
 
    if (mesaVis->doubleBufferMode) {
-      rb = intel_create_renderbuffer(rgbFormat, num_samples);
+      rb = intel_create_winsys_renderbuffer(rgbFormat, num_samples);
       _mesa_attach_and_own_rb(fb, BUFFER_BACK_LEFT, &rb->Base.Base);
    }
 
@@ -1992,6 +2031,14 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
                        &screen->cmd_parser_version) < 0) {
       /* Command parser does not exist - getparam is unrecognized */
       screen->cmd_parser_version = 0;
+   }
+
+   /* Kernel 4.13 retuired for exec object capture */
+#ifndef I915_PARAM_HAS_EXEC_CAPTURE
+#define I915_PARAM_HAS_EXEC_CAPTURE 45
+#endif
+   if (intel_get_boolean(screen, I915_PARAM_HAS_EXEC_CAPTURE)) {
+      screen->kernel_features |= KERNEL_ALLOWS_EXEC_CAPTURE;
    }
 
    if (!intel_detect_pipelined_so(screen)) {

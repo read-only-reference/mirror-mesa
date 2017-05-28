@@ -321,9 +321,12 @@ _mesa_get_uniform(struct gl_context *ctx, GLuint program, GLint location,
    }
 
    {
-      unsigned elements = (uni->type->is_sampler())
-	 ? 1 : uni->type->components();
-      const int dmul = uni->type->is_64bit() ? 2 : 1;
+      unsigned elements = uni->type->components();
+      /* XXX: Remove the sampler/image check workarounds when bindless is fully
+       * implemented.
+       */
+      const int dmul =
+         (uni->type->is_64bit() && !uni->type->is_sampler() && !uni->type->is_image()) ? 2 : 1;
       const int rmul = glsl_base_type_is_64bit(returnType) ? 2 : 1;
 
       /* Calculate the source base address *BEFORE* modifying elements to
@@ -648,10 +651,8 @@ _mesa_propagate_uniforms_to_driver_storage(struct gl_uniform_storage *uni,
 {
    unsigned i;
 
-   /* vector_elements and matrix_columns can be 0 for samplers.
-    */
-   const unsigned components = MAX2(1, uni->type->vector_elements);
-   const unsigned vectors = MAX2(1, uni->type->matrix_columns);
+   const unsigned components = uni->type->vector_elements;
+   const unsigned vectors = uni->type->matrix_columns;
    const int dmul = uni->type->is_64bit() ? 2 : 1;
 
    /* Store the data in the driver's requested type in the driver's storage
@@ -803,8 +804,7 @@ validate_uniform(GLint location, GLsizei count, const GLvoid *values,
    }
 
    /* Verify that the types are compatible. */
-   const unsigned components = uni->type->is_sampler()
-      ? 1 : uni->type->vector_elements;
+   const unsigned components = uni->type->vector_elements;
 
    if (components != src_components) {
       /* glUniformN() must match float/vecN type */
@@ -911,6 +911,15 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
 
    struct gl_uniform_storage *uni;
    if (_mesa_is_no_error_enabled(ctx)) {
+      /* From Seciton 7.6 (UNIFORM VARIABLES) of the OpenGL 4.5 spec:
+       *
+       *   "If the value of location is -1, the Uniform* commands will
+       *   silently ignore the data passed in, and the current uniform values
+       *   will not be changed.
+       */
+      if (location == -1)
+         return;
+
       uni = shProg->UniformRemapTable[location];
 
       /* The array index specified by the uniform location is just the
@@ -925,8 +934,7 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
          return;
    }
 
-   const unsigned components = uni->type->is_sampler()
-      ? 1 : uni->type->vector_elements;
+   const unsigned components = uni->type->vector_elements;
 
    /* Page 82 (page 96 of the PDF) of the OpenGL 2.1 spec says:
     *
@@ -949,19 +957,19 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
     */
    if (!uni->type->is_boolean()) {
       memcpy(&uni->storage[size_mul * components * offset], values,
-	     sizeof(uni->storage[0]) * components * count * size_mul);
+             sizeof(uni->storage[0]) * components * count * size_mul);
    } else {
       const union gl_constant_value *src =
-	 (const union gl_constant_value *) values;
+         (const union gl_constant_value *) values;
       union gl_constant_value *dst = &uni->storage[components * offset];
       const unsigned elems = components * count;
 
       for (unsigned i = 0; i < elems; i++) {
-	 if (basicType == GLSL_TYPE_FLOAT) {
+         if (basicType == GLSL_TYPE_FLOAT) {
             dst[i].i = src[i].f != 0.0f ? ctx->Const.UniformBooleanTrue : 0;
-	 } else {
+         } else {
             dst[i].i = src[i].i != 0    ? ctx->Const.UniformBooleanTrue : 0;
-	 }
+         }
       }
    }
 
@@ -972,14 +980,15 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
     */
    if (uni->type->is_sampler()) {
       bool flushed = false;
+
       shProg->SamplersValidated = GL_TRUE;
 
       for (int i = 0; i < MESA_SHADER_STAGES; i++) {
-	 struct gl_linked_shader *const sh = shProg->_LinkedShaders[i];
+         struct gl_linked_shader *const sh = shProg->_LinkedShaders[i];
 
-	 /* If the shader stage doesn't use the sampler uniform, skip this. */
-	 if (!uni->opaque[i].active)
-	    continue;
+         /* If the shader stage doesn't use the sampler uniform, skip this. */
+         if (!uni->opaque[i].active)
+            continue;
 
          bool changed = false;
          for (int j = 0; j < count; j++) {
@@ -990,17 +999,17 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
             }
          }
 
-	 if (changed) {
-	    if (!flushed) {
-	       FLUSH_VERTICES(ctx, _NEW_TEXTURE_OBJECT | _NEW_PROGRAM);
-	       flushed = true;
-	    }
+         if (changed) {
+            if (!flushed) {
+               FLUSH_VERTICES(ctx, _NEW_TEXTURE_OBJECT | _NEW_PROGRAM);
+               flushed = true;
+            }
 
             struct gl_program *const prog = sh->Program;
-	    _mesa_update_shader_textures_used(shProg, prog);
+            _mesa_update_shader_textures_used(shProg, prog);
             if (ctx->Driver.SamplerUniformChange)
-	       ctx->Driver.SamplerUniformChange(ctx, prog->Target, prog);
-	 }
+               ctx->Driver.SamplerUniformChange(ctx, prog->Target, prog);
+         }
       }
    }
 
@@ -1009,13 +1018,15 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
     */
    if (uni->type->is_image()) {
       for (int i = 0; i < MESA_SHADER_STAGES; i++) {
-	 if (uni->opaque[i].active) {
-            struct gl_linked_shader *sh = shProg->_LinkedShaders[i];
+         struct gl_linked_shader *sh = shProg->_LinkedShaders[i];
 
-            for (int j = 0; j < count; j++)
-               sh->Program->sh.ImageUnits[uni->opaque[i].index + offset + j] =
-                  ((GLint *) values)[j];
-         }
+         /* If the shader stage doesn't use the image uniform, skip this. */
+         if (!uni->opaque[i].active)
+            continue;
+
+         for (int j = 0; j < count; j++)
+            sh->Program->sh.ImageUnits[uni->opaque[i].index + offset + j] =
+               ((GLint *) values)[j];
       }
 
       ctx->NewDriverState |= ctx->DriverFlags.NewImageUnits;

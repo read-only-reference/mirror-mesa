@@ -186,7 +186,7 @@ vc4_emit_gl_shader_state(struct vc4_context *vc4,
                 struct pipe_vertex_element *elem = &vtx->pipe[i];
                 struct pipe_vertex_buffer *vb =
                         &vertexbuf->vb[elem->vertex_buffer_index];
-                struct vc4_resource *rsc = vc4_resource(vb->buffer);
+                struct vc4_resource *rsc = vc4_resource(vb->buffer.resource);
                 /* not vc4->dirty tracked: vc4->last_index_bias */
                 uint32_t offset = (vb->buffer_offset +
                                    elem->src_offset +
@@ -289,7 +289,6 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 		return;
 
         if (info->mode >= PIPE_PRIM_QUADS) {
-                util_primconvert_save_index_buffer(vc4->primconvert, &vc4->indexbuf);
                 util_primconvert_save_rasterizer_state(vc4->primconvert, &vc4->rasterizer->base);
                 util_primconvert_draw_vbo(vc4->primconvert, info);
                 perf_debug("Fallback conversion for %d %s vertices\n",
@@ -340,23 +339,24 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
          * definitions, up to but not including QUADS.
          */
         struct vc4_cl_out *bcl = cl_start(&job->bcl);
-        if (info->indexed) {
-                uint32_t offset = vc4->indexbuf.offset;
-                uint32_t index_size = vc4->indexbuf.index_size;
+        if (info->index_size) {
+                uint32_t index_size = info->index_size;
+                uint32_t offset = info->start * index_size;
                 struct pipe_resource *prsc;
-                if (vc4->indexbuf.index_size == 4) {
-                        prsc = vc4_get_shadow_index_buffer(pctx, &vc4->indexbuf,
+                if (info->index_size == 4) {
+                        prsc = vc4_get_shadow_index_buffer(pctx, info,
+                                                           offset,
                                                            info->count, &offset);
                         index_size = 2;
                 } else {
-                        if (vc4->indexbuf.user_buffer) {
+                        if (info->has_user_indices) {
                                 prsc = NULL;
                                 u_upload_data(vc4->uploader, 0,
                                               info->count * index_size, 4,
-                                              vc4->indexbuf.user_buffer,
+                                              info->index.user,
                                               &offset, &prsc);
                         } else {
-                                prsc = vc4->indexbuf.buffer;
+                                prsc = info->index.resource;
                         }
                 }
                 struct vc4_resource *rsc = vc4_resource(prsc);
@@ -373,7 +373,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 cl_u32(&bcl, vc4->max_index);
                 job->draw_calls_queued++;
 
-                if (vc4->indexbuf.index_size == 4 || vc4->indexbuf.user_buffer)
+                if (info->index_size == 4 || info->has_user_indices)
                         pipe_resource_reference(&prsc, NULL);
         } else {
                 uint32_t count = info->count;

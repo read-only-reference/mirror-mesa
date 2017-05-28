@@ -25,6 +25,10 @@
  * This file implements VkQueue, VkFence, and VkSemaphore
  */
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/eventfd.h>
+
 #include "anv_private.h"
 #include "util/vk_util.h"
 
@@ -161,7 +165,23 @@ VkResult anv_QueueSubmit(
          assert(cmd_buffer->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
          assert(!anv_batch_has_error(&cmd_buffer->batch));
 
-         result = anv_cmd_buffer_execbuf(device, cmd_buffer);
+         const VkSemaphore *in_semaphores = NULL, *out_semaphores = NULL;
+         uint32_t num_in_semaphores = 0, num_out_semaphores = 0;
+         if (j == 0) {
+            /* Only the first batch gets the in semaphores */
+            in_semaphores = pSubmits[i].pWaitSemaphores;
+            num_in_semaphores = pSubmits[i].waitSemaphoreCount;
+         }
+
+         if (j == pSubmits[i].commandBufferCount - 1) {
+            /* Only the last batch gets the out semaphores */
+            out_semaphores = pSubmits[i].pSignalSemaphores;
+            num_out_semaphores = pSubmits[i].signalSemaphoreCount;
+         }
+
+         result = anv_cmd_buffer_execbuf(device, cmd_buffer,
+                                         in_semaphores, num_in_semaphores,
+                                         out_semaphores, num_out_semaphores);
          if (result != VK_SUCCESS)
             goto out;
       }
@@ -193,7 +213,7 @@ out:
        * VK_ERROR_DEVICE_LOST to ensure that clients do not attempt to
        * submit the same job again to this device.
        */
-      result = VK_ERROR_DEVICE_LOST;
+      result = vk_errorf(VK_ERROR_DEVICE_LOST, "vkQueueSubmit() failed");
       device->lost = true;
 
       /* If we return VK_ERROR_DEVICE LOST here, we need to ensure that
@@ -493,23 +513,169 @@ done:
 // Queue semaphore functions
 
 VkResult anv_CreateSemaphore(
-    VkDevice                                    device,
+    VkDevice                                    _device,
     const VkSemaphoreCreateInfo*                pCreateInfo,
     const VkAllocationCallbacks*                pAllocator,
     VkSemaphore*                                pSemaphore)
 {
-   /* The DRM execbuffer ioctl always execute in-oder, even between different
-    * rings. As such, there's nothing to do for the user space semaphore.
-    */
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_semaphore *semaphore;
 
-   *pSemaphore = (VkSemaphore)1;
+   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+   semaphore = vk_alloc2(&device->alloc, pAllocator, sizeof(*semaphore), 8,
+                         VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   if (semaphore == NULL)
+      return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   const VkExportSemaphoreCreateInfoKHX *export =
+      vk_find_struct_const(pCreateInfo->pNext, EXPORT_SEMAPHORE_CREATE_INFO_KHX);
+    VkExternalSemaphoreHandleTypeFlagsKHX handleTypes =
+      export ? export->handleTypes : 0;
+
+   if (handleTypes == 0) {
+      /* The DRM execbuffer ioctl always execute in-oder so long as you stay
+       * on the same ring.  Since we don't expose the blit engine as a DMA
+       * queue, a dummy no-op semaphore is a perfectly valid implementation.
+       */
+      semaphore->permanent.type = ANV_SEMAPHORE_TYPE_DUMMY;
+   } else if (handleTypes & VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHX) {
+      assert(handleTypes == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHX);
+
+      semaphore->permanent.type = ANV_SEMAPHORE_TYPE_BO;
+      VkResult result = anv_bo_cache_alloc(device, &device->bo_cache,
+                                           4096, &semaphore->permanent.bo);
+      if (result != VK_SUCCESS) {
+         vk_free2(&device->alloc, pAllocator, semaphore);
+         return result;
+      }
+
+      /* If we're going to use this as a fence, we need to *not* have the
+       * EXEC_OBJECT_ASYNC bit set.
+       */
+      assert(!(semaphore->permanent.bo->flags & EXEC_OBJECT_ASYNC));
+   } else {
+      assert(!"Unknown handle type");
+      vk_free2(&device->alloc, pAllocator, semaphore);
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX);
+   }
+
+   semaphore->temporary.type = ANV_SEMAPHORE_TYPE_NONE;
+
+   *pSemaphore = anv_semaphore_to_handle(semaphore);
 
    return VK_SUCCESS;
 }
 
+static void
+anv_semaphore_impl_cleanup(struct anv_device *device,
+                           struct anv_semaphore_impl *impl)
+{
+   switch (impl->type) {
+   case ANV_SEMAPHORE_TYPE_NONE:
+   case ANV_SEMAPHORE_TYPE_DUMMY:
+      /* Dummy.  Nothing to do */
+      return;
+
+   case ANV_SEMAPHORE_TYPE_BO:
+      anv_bo_cache_release(device, &device->bo_cache, impl->bo);
+      return;
+   }
+
+   unreachable("Invalid semaphore type");
+}
+
 void anv_DestroySemaphore(
-    VkDevice                                    device,
-    VkSemaphore                                 semaphore,
+    VkDevice                                    _device,
+    VkSemaphore                                 _semaphore,
     const VkAllocationCallbacks*                pAllocator)
 {
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_semaphore, semaphore, _semaphore);
+
+   if (semaphore == NULL)
+      return;
+
+   anv_semaphore_impl_cleanup(device, &semaphore->temporary);
+   anv_semaphore_impl_cleanup(device, &semaphore->permanent);
+
+   vk_free2(&device->alloc, pAllocator, semaphore);
+}
+
+void anv_GetPhysicalDeviceExternalSemaphorePropertiesKHX(
+    VkPhysicalDevice                            physicalDevice,
+    const VkPhysicalDeviceExternalSemaphoreInfoKHX* pExternalSemaphoreInfo,
+    VkExternalSemaphorePropertiesKHX*           pExternalSemaphoreProperties)
+{
+   switch (pExternalSemaphoreInfo->handleType) {
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHX:
+      pExternalSemaphoreProperties->exportFromImportedHandleTypes =
+         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHX;
+      pExternalSemaphoreProperties->compatibleHandleTypes =
+         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHX;
+      pExternalSemaphoreProperties->externalSemaphoreFeatures =
+         VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT_KHX |
+         VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT_KHX;
+      break;
+
+   default:
+      pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
+      pExternalSemaphoreProperties->compatibleHandleTypes = 0;
+      pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
+   }
+}
+
+VkResult anv_ImportSemaphoreFdKHX(
+    VkDevice                                    _device,
+    const VkImportSemaphoreFdInfoKHX*           pImportSemaphoreFdInfo)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_semaphore, semaphore, pImportSemaphoreFdInfo->semaphore);
+
+   switch (pImportSemaphoreFdInfo->handleType) {
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHX: {
+      struct anv_bo *bo;
+      VkResult result = anv_bo_cache_import(device, &device->bo_cache,
+                                            pImportSemaphoreFdInfo->fd, 4096,
+                                            &bo);
+      if (result != VK_SUCCESS)
+         return result;
+
+      /* If we're going to use this as a fence, we need to *not* have the
+       * EXEC_OBJECT_ASYNC bit set.
+       */
+      assert(!(bo->flags & EXEC_OBJECT_ASYNC));
+
+      anv_semaphore_impl_cleanup(device, &semaphore->permanent);
+
+      semaphore->permanent.type = ANV_SEMAPHORE_TYPE_BO;
+      semaphore->permanent.bo = bo;
+
+      return VK_SUCCESS;
+   }
+
+   default:
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX);
+   }
+}
+
+VkResult anv_GetSemaphoreFdKHX(
+    VkDevice                                    _device,
+    VkSemaphore                                 _semaphore,
+    VkExternalSemaphoreHandleTypeFlagBitsKHX    handleType,
+    int*                                        pFd)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_semaphore, semaphore, _semaphore);
+
+   switch (semaphore->permanent.type) {
+   case ANV_SEMAPHORE_TYPE_BO:
+      return anv_bo_cache_export(device, &device->bo_cache,
+                                 semaphore->permanent.bo, pFd);
+
+   default:
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX);
+   }
+
+   return VK_SUCCESS;
 }

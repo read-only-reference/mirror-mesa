@@ -217,7 +217,7 @@ The integer capabilities:
   pipe_draw_info::indirect_stride and ::indirect_count
 * ``PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS``: Whether the driver supports
   taking the number of indirect draws from a separate parameter
-  buffer, see pipe_draw_info::indirect_params.
+  buffer, see pipe_draw_indirect_info::indirect_draw_count.
 * ``PIPE_CAP_TGSI_FS_FINE_DERIVATIVE``: Whether the fragment shader supports
   the FINE versions of DDX/DDY.
 * ``PIPE_CAP_VENDOR_ID``: The vendor ID of the underlying hardware. If it's
@@ -389,6 +389,9 @@ The integer capabilities:
 * ``PIPE_CAP_TGSI_TES_LAYER_VIEWPORT``: Whether ``TGSI_SEMANTIC_LAYER`` and
   ``TGSI_SEMANTIC_VIEWPORT_INDEX`` are supported as tessellation evaluation
   shader outputs.
+* ``PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX``: Whether a buffer with just
+  PIPE_BIND_CONSTANT_BUFFER can be legally passed to set_vertex_buffers.
+* ``PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION``: As the name says.
 
 
 .. _pipe_capf:

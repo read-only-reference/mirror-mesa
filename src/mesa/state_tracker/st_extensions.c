@@ -270,7 +270,6 @@ void st_init_limits(struct pipe_screen *screen,
       options->EmitNoLoops =
          !screen->get_shader_param(screen, sh,
                                    PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH);
-      options->EmitNoFunctions = true;
       options->EmitNoMainReturn =
          !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_SUBROUTINES);
 
@@ -464,6 +463,9 @@ void st_init_limits(struct pipe_screen *screen,
 
    c->SparseBufferPageSize =
       screen->get_param(screen, PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE);
+
+   c->AllowMappedBuffersDuringExecution =
+      screen->get_param(screen, PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION);
 }
 
 
@@ -890,6 +892,8 @@ void st_init_extensions(struct pipe_screen *screen,
 
    consts->ForceGLSLAbsSqrt = options->force_glsl_abs_sqrt;
 
+   consts->AllowGLSLBuiltinVariableRedeclaration = options->allow_glsl_builtin_variable_redeclaration;
+
    consts->dri_config_options_sha1 = options->config_options_sha1;
 
    if (consts->GLSLVersion >= 400)
@@ -925,7 +929,6 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->OES_depth_texture_cube_map = GL_TRUE;
       extensions->ARB_shading_language_420pack = GL_TRUE;
       extensions->ARB_texture_query_levels = GL_TRUE;
-      extensions->ARB_shader_subroutine = GL_TRUE;
 
       if (!options->disable_shader_bit_encoding) {
          extensions->ARB_shader_bit_encoding = GL_TRUE;

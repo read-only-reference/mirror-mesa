@@ -35,7 +35,13 @@
 #include <string.h>
 #include <stdbool.h>
 
+#if defined(HAVE_X11_PLATFORM)
 #include <X11/Xlib.h>
+#else
+#define XOpenDisplay(x) NULL
+#define XCloseDisplay(x)
+#define Display void
+#endif
 
 #include "os/os_thread.h"
 #include "util/u_memory.h"
@@ -97,7 +103,9 @@ struct vl_screen *omx_get_screen(void)
          if (!omx_display)
             goto error;
 
-         omx_screen = vl_dri2_screen_create(omx_display, 0);
+         omx_screen = vl_dri3_screen_create(omx_display, 0);
+         if (!omx_screen)
+            omx_screen = vl_dri2_screen_create(omx_display, 0);
          if (!omx_screen) {
             XCloseDisplay(omx_display);
             goto error;

@@ -264,10 +264,15 @@ droid_window_enqueue_buffer(_EGLDisplay *disp, struct dri2_egl_surface *dri2_sur
 }
 
 static void
-droid_window_cancel_buffer(_EGLDisplay *disp, struct dri2_egl_surface *dri2_surf)
+droid_window_cancel_buffer(struct dri2_egl_surface *dri2_surf)
 {
-   /* no cancel buffer? */
-   droid_window_enqueue_buffer(disp, dri2_surf);
+   int ret;
+
+   ret = dri2_surf->window->cancelBuffer(dri2_surf->window, dri2_surf->buffer, -1);
+   if (ret < 0) {
+      _eglLog(_EGL_WARNING, "ANativeWindow::cancelBuffer failed");
+      dri2_surf->base.Lost = EGL_TRUE;
+   }
 }
 
 static __DRIbuffer *
@@ -310,6 +315,7 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
 		    _EGLConfig *conf, void *native_window,
 		    const EGLint *attrib_list)
 {
+   __DRIcreateNewDrawableFunc createNewDrawable;
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_config *dri2_conf = dri2_egl_config(conf);
    struct dri2_egl_surface *dri2_surf;
@@ -351,11 +357,15 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
    if (!config)
       goto cleanup_surface;
 
-   dri2_surf->dri_drawable =
-      dri2_dpy->dri2->createNewDrawable(dri2_dpy->dri_screen, config,
-                                        dri2_surf);
+   if (dri2_dpy->image_driver)
+      createNewDrawable = dri2_dpy->image_driver->createNewDrawable;
+   else
+      createNewDrawable = dri2_dpy->dri2->createNewDrawable;
+
+   dri2_surf->dri_drawable = (*createNewDrawable)(dri2_dpy->dri_screen, config,
+                                                  dri2_surf);
    if (dri2_surf->dri_drawable == NULL) {
-      _eglError(EGL_BAD_ALLOC, "dri2->createNewDrawable");
+      _eglError(EGL_BAD_ALLOC, "createNewDrawable");
       goto cleanup_surface;
    }
 
@@ -399,7 +409,7 @@ droid_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 
    if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
       if (dri2_surf->buffer)
-         droid_window_cancel_buffer(disp, dri2_surf);
+         droid_window_cancel_buffer(dri2_surf);
 
       dri2_surf->window->common.decRef(&dri2_surf->window->common);
    }
@@ -426,12 +436,16 @@ droid_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 static int
 update_buffers(struct dri2_egl_surface *dri2_surf)
 {
+   if (dri2_surf->base.Lost)
+      return -1;
+
    if (dri2_surf->base.Type != EGL_WINDOW_BIT)
       return 0;
 
    /* try to dequeue the next back buffer */
    if (!dri2_surf->buffer && !droid_window_dequeue_buffer(dri2_surf)) {
       _eglLog(_EGL_WARNING, "Could not dequeue buffer from native window");
+      dri2_surf->base.Lost = EGL_TRUE;
       return -1;
    }
 
@@ -480,7 +494,7 @@ get_front_bo(struct dri2_egl_surface *dri2_surf, unsigned int format)
 }
 
 static int
-get_back_bo(struct dri2_egl_surface *dri2_surf, unsigned int format)
+get_back_bo(struct dri2_egl_surface *dri2_surf)
 {
    struct dri2_egl_display *dri2_dpy =
       dri2_egl_display(dri2_surf->base.Resource.Display);
@@ -580,7 +594,7 @@ droid_image_get_buffers(__DRIdrawable *driDrawable,
    }
 
    if (buffer_mask & __DRI_IMAGE_BUFFER_BACK) {
-      if (get_back_bo(dri2_surf, format) < 0)
+      if (get_back_bo(dri2_surf) < 0)
          return 0;
 
       if (dri2_surf->dri_image_back) {
@@ -619,10 +633,21 @@ droid_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
       if (dri2_surf->color_buffers[i].age > 0)
          dri2_surf->color_buffers[i].age++;
    }
-   dri2_surf->back->age = 1;
+
+   /* "XXX: we don't use get_back_bo() since it causes regressions in
+    * several dEQP tests.
+    */
+   if (dri2_surf->back)
+      dri2_surf->back->age = 1;
 
    dri2_flush_drawable_for_swapbuffers(disp, draw);
 
+   /* dri2_surf->buffer can be null even when no error has occured. For
+    * example, if the user has called no GL rendering commands since the
+    * previous eglSwapBuffers, then the driver may have not triggered
+    * a callback to ANativeWindow::dequeueBuffer, in which case
+    * dri2_surf->buffer remains null.
+    */
    if (dri2_surf->buffer)
       droid_window_enqueue_buffer(disp, dri2_surf);
 
@@ -970,10 +995,10 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
       int format;
       unsigned int rgba_masks[4];
    } visuals[] = {
-      { HAL_PIXEL_FORMAT_RGBA_8888, { 0xff, 0xff00, 0xff0000, 0xff000000 } },
-      { HAL_PIXEL_FORMAT_RGBX_8888, { 0xff, 0xff00, 0xff0000, 0x0 } },
-      { HAL_PIXEL_FORMAT_RGB_565,   { 0xf800, 0x7e0, 0x1f, 0x0 } },
-      { HAL_PIXEL_FORMAT_BGRA_8888, { 0xff0000, 0xff00, 0xff, 0xff000000 } },
+      { HAL_PIXEL_FORMAT_RGBA_8888, { 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000 } },
+      { HAL_PIXEL_FORMAT_RGBX_8888, { 0x000000ff, 0x0000ff00, 0x00ff0000, 0x00000000 } },
+      { HAL_PIXEL_FORMAT_RGB_565,   { 0x0000f800, 0x000007e0, 0x0000001f, 0x00000000 } },
+      { HAL_PIXEL_FORMAT_BGRA_8888, { 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 } },
    };
    EGLint config_attrs[] = {
      EGL_NATIVE_VISUAL_ID,   0,
@@ -1030,39 +1055,7 @@ droid_open_device(struct dri2_egl_display *dri2_dpy)
    return (fd >= 0) ? fcntl(fd, F_DUPFD_CLOEXEC, 3) : -1;
 }
 
-/* support versions < JellyBean */
-#ifndef ALOGW
-#define ALOGW LOGW
-#endif
-#ifndef ALOGD
-#define ALOGD LOGD
-#endif
-#ifndef ALOGI
-#define ALOGI LOGI
-#endif
-
-static void
-droid_log(EGLint level, const char *msg)
-{
-   switch (level) {
-   case _EGL_DEBUG:
-      ALOGD("%s", msg);
-      break;
-   case _EGL_INFO:
-      ALOGI("%s", msg);
-      break;
-   case _EGL_WARNING:
-      ALOGW("%s", msg);
-      break;
-   case _EGL_FATAL:
-      LOG_FATAL("%s", msg);
-      break;
-   default:
-      break;
-   }
-}
-
-static struct dri2_egl_display_vtbl droid_display_vtbl = {
+static const struct dri2_egl_display_vtbl droid_display_vtbl = {
    .authenticate = NULL,
    .create_window_surface = droid_create_window_surface,
    .create_pixmap_surface = dri2_fallback_create_pixmap_surface,
@@ -1118,19 +1111,18 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    const char *err;
    int ret;
 
-   _eglSetLogProc(droid_log);
-
    loader_set_logger(_eglLog);
 
    dri2_dpy = calloc(1, sizeof(*dri2_dpy));
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    ret = hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
                        (const hw_module_t **)&dri2_dpy->gralloc);
    if (ret) {
       err = "DRI2: failed to get gralloc module";
-      goto cleanup_display;
+      goto cleanup;
    }
 
    dpy->DriverData = (void *) dri2_dpy;
@@ -1138,37 +1130,46 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    dri2_dpy->fd = droid_open_device(dri2_dpy);
    if (dri2_dpy->fd < 0) {
       err = "DRI2: failed to open device";
-      goto cleanup_display;
+      goto cleanup;
    }
 
    dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
    if (dri2_dpy->driver_name == NULL) {
       err = "DRI2: failed to get driver name";
-      goto cleanup_device;
-   }
-
-   if (!dri2_load_driver(dpy)) {
-      err = "DRI2: failed to load driver";
-      goto cleanup_driver_name;
+      goto cleanup;
    }
 
    dri2_dpy->is_render_node = drmGetNodeTypeFromFd(dri2_dpy->fd) == DRM_NODE_RENDER;
 
    /* render nodes cannot use Gem names, and thus do not support
     * the __DRI_DRI2_LOADER extension */
-   if (!dri2_dpy->is_render_node)
+   if (!dri2_dpy->is_render_node) {
       dri2_dpy->loader_extensions = droid_dri2_loader_extensions;
-   else
+      if (!dri2_load_driver(dpy)) {
+         err = "DRI2: failed to load driver";
+         goto cleanup;
+      }
+   } else {
       dri2_dpy->loader_extensions = droid_image_loader_extensions;
+      if (!dri2_load_driver_dri3(dpy)) {
+         err = "DRI3: failed to load driver";
+         goto cleanup;
+      }
+   }
 
    if (!dri2_create_screen(dpy)) {
       err = "DRI2: failed to create screen";
-      goto cleanup_driver;
+      goto cleanup;
    }
+
+   if (!dri2_setup_extensions(dpy))
+      goto cleanup;
+
+   dri2_setup_screen(dpy);
 
    if (!droid_add_configs_for_visuals(drv, dpy)) {
       err = "DRI2: failed to add configs";
-      goto cleanup_screen;
+      goto cleanup;
    }
 
    dpy->Extensions.ANDROID_framebuffer_target = EGL_TRUE;
@@ -1183,17 +1184,7 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
 
    return EGL_TRUE;
 
-cleanup_screen:
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
-cleanup_driver:
-   dlclose(dri2_dpy->driver);
-cleanup_driver_name:
-   free(dri2_dpy->driver_name);
-cleanup_device:
-   close(dri2_dpy->fd);
-cleanup_display:
-   free(dri2_dpy);
-   dpy->DriverData = NULL;
-
+cleanup:
+   dri2_display_destroy(dpy);
    return _eglError(EGL_NOT_INITIALIZED, err);
 }

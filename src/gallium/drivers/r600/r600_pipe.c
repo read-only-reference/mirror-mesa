@@ -137,7 +137,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 
 	r600_init_blit_functions(rctx);
 
-	if (rscreen->b.info.has_uvd) {
+	if (rscreen->b.info.has_hw_decode) {
 		rctx->b.b.create_video_codec = r600_uvd_create_decoder;
 		rctx->b.b.create_video_buffer = r600_video_buffer_create;
 	} else {
@@ -286,6 +286,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
 	case PIPE_CAP_CLEAR_TEXTURE:
 	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
+	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
 		return 1;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:

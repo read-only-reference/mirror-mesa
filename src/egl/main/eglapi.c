@@ -89,7 +89,7 @@
 #include "c99_compat.h"
 #include "c11/threads.h"
 #include "GL/mesa_glinterop.h"
-#include "eglcompiler.h"
+#include "util/macros.h"
 
 #include "eglglobals.h"
 #include "eglcontext.h"
@@ -488,6 +488,7 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(EXT_buffer_age);
    _EGL_CHECK_EXTENSION(EXT_create_context_robustness);
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import);
+   _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import_modifiers);
    _EGL_CHECK_EXTENSION(EXT_swap_buffers_with_damage);
 
    _EGL_CHECK_EXTENSION(KHR_cl_event2);
@@ -827,6 +828,14 @@ eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
       if (draw_surf || read_surf)
          RETURN_EGL_ERROR(disp, EGL_BAD_MATCH, EGL_FALSE);
    }
+
+   /*    If a native window underlying either draw or read is no longer valid,
+    *    an EGL_BAD_NATIVE_WINDOW error is generated.
+    */
+   if (draw_surf && draw_surf->Lost)
+      RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_FALSE);
+   if (read_surf && read_surf->Lost)
+      RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_FALSE);
 
    ret = drv->API.MakeCurrent(drv, disp, draw_surf, read_surf, context);
 
@@ -1214,6 +1223,15 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
        surf != ctx->DrawSurface)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
    #endif
+
+   /* From the EGL 1.5 spec:
+    *
+    *    If eglSwapBuffers is called and the native window associated with
+    *    surface is no longer valid, an EGL_BAD_NATIVE_WINDOW error is
+    *    generated.
+    */
+   if (surf->Lost)
+      RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_WINDOW, EGL_FALSE);
 
    ret = drv->API.SwapBuffers(drv, disp, surf);
 
@@ -2115,7 +2133,8 @@ eglCreateWaylandBufferFromImageWL(EGLDisplay dpy, EGLImage image)
    _EGL_FUNC_START(disp, EGL_OBJECT_DISPLAY_KHR, NULL, EGL_FALSE);
 
    _EGL_CHECK_DISPLAY(disp, NULL, drv);
-   assert(disp->Extensions.WL_create_wayland_buffer_from_image);
+   if (!disp->Extensions.WL_create_wayland_buffer_from_image)
+      RETURN_EGL_EVAL(disp, NULL);
 
    img = _eglLookupImage(image, disp);
 
@@ -2366,6 +2385,44 @@ _eglFunctionCompare(const void *key, const void *elem)
    const char *procname = key;
    const struct _egl_entrypoint *entrypoint = elem;
    return strcmp(procname, entrypoint->name);
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats,
+                         EGLint *formats, EGLint *num_formats)
+{
+   _EGLDisplay *disp = _eglLockDisplay(dpy);
+   _EGLDriver *drv;
+   EGLBoolean ret;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+
+   _EGL_CHECK_DISPLAY(disp, EGL_FALSE, drv);
+
+   ret = drv->API.QueryDmaBufFormatsEXT(drv, disp, max_formats, formats,
+                                        num_formats);
+
+   RETURN_EGL_EVAL(disp, ret);
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
+                           EGLuint64KHR *modifiers, EGLBoolean *external_only,
+                           EGLint *num_modifiers)
+{
+   _EGLDisplay *disp = _eglLockDisplay(dpy);
+   _EGLDriver *drv;
+   EGLBoolean ret;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+
+   _EGL_CHECK_DISPLAY(disp, EGL_FALSE, drv);
+
+   ret = drv->API.QueryDmaBufModifiersEXT(drv, disp, format, max_modifiers,
+                                          modifiers, external_only,
+                                          num_modifiers);
+
+   RETURN_EGL_EVAL(disp, ret);
 }
 
 __eglMustCastToProperFunctionPointerType EGLAPIENTRY

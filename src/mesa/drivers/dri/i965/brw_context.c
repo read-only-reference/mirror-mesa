@@ -934,6 +934,9 @@ brw_process_driconf_options(struct brw_context *brw)
    ctx->Const.AllowGLSLExtensionDirectiveMidShader =
       driQueryOptionb(options, "allow_glsl_extension_directive_midshader");
 
+   ctx->Const.AllowGLSLBuiltinVariableRedeclaration =
+      driQueryOptionb(options, "allow_glsl_builtin_variable_redeclaration");
+
    ctx->Const.AllowHigherCompatVersion =
       driQueryOptionb(options, "allow_higher_compat_version");
 
@@ -1115,8 +1118,7 @@ brwCreateContext(gl_api api,
 
    brw_init_surface_formats(brw);
 
-   if (brw->gen >= 6)
-      brw_blorp_init(brw);
+   brw_blorp_init(brw);
 
    brw->urb.size = devinfo->urb.size;
 
@@ -1126,7 +1128,6 @@ brwCreateContext(gl_api api,
    brw->prim_restart.in_progress = false;
    brw->prim_restart.enable_cut_index = false;
    brw->gs.enabled = false;
-   brw->sf.viewport_transform_enable = true;
    brw->clip.viewport_count = 1;
 
    brw->predicate.state = BRW_PREDICATE_STATE_RENDER;
@@ -1409,7 +1410,7 @@ intel_update_dri2_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    struct gl_framebuffer *fb = drawable->driverPrivate;
    struct intel_renderbuffer *rb;
    __DRIbuffer *buffers = NULL;
-   int i, count;
+   int count;
    const char *region_name;
 
    /* Set this up front, so that in case our buffers get invalidated
@@ -1425,7 +1426,7 @@ intel_update_dri2_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    if (buffers == NULL)
       return;
 
-   for (i = 0; i < count; i++) {
+   for (int i = 0; i < count; i++) {
        switch (buffers[i].attachment) {
        case __DRI_BUFFER_FRONT_LEFT:
            rb = intel_get_renderbuffer(fb, BUFFER_FRONT_LEFT);
@@ -1738,7 +1739,7 @@ intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    struct intel_renderbuffer *front_rb;
    struct intel_renderbuffer *back_rb;
    struct __DRIimageList images;
-   unsigned int format;
+   mesa_format format;
    uint32_t buffer_mask = 0;
    int ret;
 
@@ -1778,6 +1779,7 @@ intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable)
                                 images.front,
                                 __DRI_IMAGE_BUFFER_FRONT);
    }
+
    if (images.image_mask & __DRI_IMAGE_BUFFER_BACK) {
       drawable->w = images.back->width;
       drawable->h = images.back->height;

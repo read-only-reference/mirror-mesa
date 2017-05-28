@@ -2547,6 +2547,16 @@ struct gl_shader
    bool origin_upper_left;
    bool pixel_center_integer;
 
+   /**
+    * Whether bindless_sampler/bindless_image, and respectively
+    * bound_sampler/bound_image are declared at global scope as defined by
+    * ARB_bindless_texture.
+    */
+   bool bindless_sampler;
+   bool bindless_image;
+   bool bound_sampler;
+   bool bound_image;
+
    /** Global xfb_stride out qualifier if any */
    GLuint TransformFeedbackBufferStride[MAX_FEEDBACK_BUFFERS];
 
@@ -2804,6 +2814,13 @@ struct gl_shader_program_data
 
    bool cache_fallback;
 
+   /* TODO: This used by Gallium drivers to skip the cache on tgsi fallback.
+    * All structures (gl_program, uniform storage, etc) will get recreated
+    * even though we have already loaded them from cache. Once the i965 cache
+    * lands we should switch to using the cache_fallback support.
+    */
+   bool skip_cache;
+
    /** List of all active resources after linking. */
    struct gl_program_resource *ProgramResourceList;
    unsigned NumProgramResourceList;
@@ -2967,6 +2984,7 @@ struct gl_shader_program
 #define GLSL_REPORT_ERRORS 0x40  /**< Print compilation errors */
 #define GLSL_DUMP_ON_ERROR 0x80 /**< Dump shaders to stderr on compile error */
 #define GLSL_CACHE_INFO 0x100 /**< Print debug information about shader cache */
+#define GLSL_CACHE_FALLBACK 0x200 /**< Force shader cache fallback paths */
 
 
 /**
@@ -2992,8 +3010,6 @@ struct gl_pipeline_object
    struct gl_program *CurrentProgram[MESA_SHADER_STAGES];
 
    struct gl_shader_program *ReferencedPrograms[MESA_SHADER_STAGES];
-
-   struct gl_program *_CurrentFragmentProgram;
 
    /**
     * Program used by glUniform calls.
@@ -3033,7 +3049,6 @@ struct gl_shader_compiler_options
 {
    /** Driver-selectable options: */
    GLboolean EmitNoLoops;
-   GLboolean EmitNoFunctions;
    GLboolean EmitNoCont;                  /**< Emit CONT opcode? */
    GLboolean EmitNoMainReturn;            /**< Emit CONT/RET opcodes? */
    GLboolean EmitNoPow;                   /**< Emit POW opcodes? */
@@ -3623,6 +3638,11 @@ struct gl_constants
    GLboolean AllowGLSLExtensionDirectiveMidShader;
 
    /**
+    * Allow GLSL built-in variables to be redeclared verbatim
+    */
+   GLboolean AllowGLSLBuiltinVariableRedeclaration;
+
+   /**
     * Allow creating a higher compat profile (version 3.1+) for apps that
     * request it. Be careful when adding that driconf option because some
     * features are unimplemented and might not work correctly.
@@ -3901,6 +3921,9 @@ struct gl_constants
 
    /** Used as an input for sha1 generation in the on-disk shader cache */
    unsigned char *dri_config_options_sha1;
+
+   /** When drivers are OK with mapped buffers during draw and other calls. */
+   bool AllowMappedBuffersDuringExecution;
 };
 
 
@@ -3920,6 +3943,7 @@ struct gl_extensions
    GLboolean ARB_ES3_2_compatibility;
    GLboolean ARB_arrays_of_arrays;
    GLboolean ARB_base_instance;
+   GLboolean ARB_bindless_texture;
    GLboolean ARB_blend_func_extended;
    GLboolean ARB_buffer_storage;
    GLboolean ARB_clear_texture;
@@ -3979,7 +4003,6 @@ struct gl_extensions
    GLboolean ARB_shader_precision;
    GLboolean ARB_shader_stencil_export;
    GLboolean ARB_shader_storage_buffer_object;
-   GLboolean ARB_shader_subroutine;
    GLboolean ARB_shader_texture_image_samples;
    GLboolean ARB_shader_texture_lod;
    GLboolean ARB_shader_viewport_layer_array;

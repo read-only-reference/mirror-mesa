@@ -583,16 +583,46 @@ vec4_visitor::split_uniform_registers()
    }
 }
 
+/* This function returns the register number where we placed the uniform */
+static int
+set_push_constant_loc(const int nr_uniforms, int *new_uniform_count,
+                      const int src, const int size, const int channel_size,
+                      int *new_loc, int *new_chan,
+                      int *new_chans_used)
+{
+   int dst;
+   /* Find the lowest place we can slot this uniform in. */
+   for (dst = 0; dst < nr_uniforms; dst++) {
+      if (ALIGN(new_chans_used[dst], channel_size) + size <= 4)
+         break;
+   }
+
+   assert(dst < nr_uniforms);
+
+   new_loc[src] = dst;
+   new_chan[src] = ALIGN(new_chans_used[dst], channel_size);
+   new_chans_used[dst] = ALIGN(new_chans_used[dst], channel_size) + size;
+
+   *new_uniform_count = MAX2(*new_uniform_count, dst + 1);
+   return dst;
+}
+
 void
 vec4_visitor::pack_uniform_registers()
 {
    uint8_t chans_used[this->uniforms];
    int new_loc[this->uniforms];
    int new_chan[this->uniforms];
+   bool is_aligned_to_dvec4[this->uniforms];
+   int new_chans_used[this->uniforms];
+   int channel_sizes[this->uniforms];
 
    memset(chans_used, 0, sizeof(chans_used));
    memset(new_loc, 0, sizeof(new_loc));
    memset(new_chan, 0, sizeof(new_chan));
+   memset(new_chans_used, 0, sizeof(new_chans_used));
+   memset(is_aligned_to_dvec4, 0, sizeof(is_aligned_to_dvec4));
+   memset(channel_sizes, 0, sizeof(channel_sizes));
 
    /* Find which uniform vectors are actually used by the program.  We
     * expect unused vector elements when we've moved array access out
@@ -622,7 +652,7 @@ vec4_visitor::pack_uniform_registers()
             continue;
 
          assert(type_sz(inst->src[i].type) % 4 == 0);
-         unsigned channel_size = type_sz(inst->src[i].type) / 4;
+         int channel_size = type_sz(inst->src[i].type) / 4;
 
          int reg = inst->src[i].nr;
          for (int c = 0; c < 4; c++) {
@@ -631,10 +661,15 @@ vec4_visitor::pack_uniform_registers()
 
             unsigned channel = BRW_GET_SWZ(inst->src[i].swizzle, c) + 1;
             unsigned used = MAX2(chans_used[reg], channel * channel_size);
-            if (used <= 4)
+            if (used <= 4) {
                chans_used[reg] = used;
-            else
+               channel_sizes[reg] = MAX2(channel_sizes[reg], channel_size);
+            } else {
+               is_aligned_to_dvec4[reg] = true;
+               is_aligned_to_dvec4[reg + 1] = true;
                chans_used[reg + 1] = used - 4;
+               channel_sizes[reg + 1] = MAX2(channel_sizes[reg + 1], channel_size);
+            }
          }
       }
 
@@ -659,42 +694,60 @@ vec4_visitor::pack_uniform_registers()
 
    int new_uniform_count = 0;
 
+   /* As the uniforms are going to be reordered, take the data from a temporary
+    * copy of the original param[].
+    */
+   gl_constant_value **param = ralloc_array(NULL, gl_constant_value*,
+                                            stage_prog_data->nr_params);
+   memcpy(param, stage_prog_data->param,
+          sizeof(gl_constant_value*) * stage_prog_data->nr_params);
+
    /* Now, figure out a packing of the live uniform vectors into our
-    * push constants.
+    * push constants. Start with dvec{3,4} because they are aligned to
+    * dvec4 size (2 vec4).
     */
    for (int src = 0; src < uniforms; src++) {
       int size = chans_used[src];
 
-      if (size == 0)
+      if (size == 0 || !is_aligned_to_dvec4[src])
          continue;
 
-      int dst;
-      /* Find the lowest place we can slot this uniform in. */
-      for (dst = 0; dst < src; dst++) {
-         if (chans_used[dst] + size <= 4)
-            break;
+      /* dvec3 are aligned to dvec4 size, apply the alignment of the size
+       * to 4 to avoid moving last component of a dvec3 to the available
+       * location at the end of a previous dvec3. These available locations
+       * could be filled by smaller variables in next loop.
+       */
+      size = ALIGN(size, 4);
+      int dst = set_push_constant_loc(uniforms, &new_uniform_count,
+                                      src, size, channel_sizes[src],
+                                      new_loc, new_chan,
+                                      new_chans_used);
+      /* Move the references to the data */
+      for (int j = 0; j < size; j++) {
+         stage_prog_data->param[dst * 4 + new_chan[src] + j] =
+            param[src * 4 + j];
       }
-
-      if (src == dst) {
-         new_loc[src] = dst;
-         new_chan[src] = 0;
-      } else {
-         new_loc[src] = dst;
-         new_chan[src] = chans_used[dst];
-
-         /* Move the references to the data */
-         for (int j = 0; j < size; j++) {
-            stage_prog_data->param[dst * 4 + new_chan[src] + j] =
-               stage_prog_data->param[src * 4 + j];
-         }
-
-         chans_used[dst] += size;
-         chans_used[src] = 0;
-      }
-
-      new_uniform_count = MAX2(new_uniform_count, dst + 1);
    }
 
+   /* Continue with the rest of data, which is aligned to vec4. */
+   for (int src = 0; src < uniforms; src++) {
+      int size = chans_used[src];
+
+      if (size == 0 || is_aligned_to_dvec4[src])
+         continue;
+
+      int dst = set_push_constant_loc(uniforms, &new_uniform_count,
+                                      src, size, channel_sizes[src],
+                                      new_loc, new_chan,
+                                      new_chans_used);
+      /* Move the references to the data */
+      for (int j = 0; j < size; j++) {
+         stage_prog_data->param[dst * 4 + new_chan[src] + j] =
+            param[src * 4 + j];
+      }
+   }
+
+   ralloc_free(param);
    this->uniforms = new_uniform_count;
 
    /* Now, update the instructions for our repacked uniforms. */
@@ -705,9 +758,9 @@ vec4_visitor::pack_uniform_registers()
          if (inst->src[i].file != UNIFORM)
             continue;
 
+         int chan = new_chan[src] / channel_sizes[src];
          inst->src[i].nr = new_loc[src];
-         inst->src[i].swizzle += BRW_SWIZZLE4(new_chan[src], new_chan[src],
-                                              new_chan[src], new_chan[src]);
+         inst->src[i].swizzle += BRW_SWIZZLE4(chan, chan, chan, chan);
       }
    }
 }
@@ -1677,102 +1730,25 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
 }
 
 
-static inline struct brw_reg
-attribute_to_hw_reg(int attr, brw_reg_type type, bool interleaved)
-{
-   struct brw_reg reg;
-
-   unsigned width = REG_SIZE / 2 / MAX2(4, type_sz(type));
-   if (interleaved) {
-      reg = stride(brw_vecn_grf(width, attr / 2, (attr % 2) * 4), 0, width, 1);
-   } else {
-      reg = brw_vecn_grf(width, attr, 0);
-   }
-
-   reg.type = type;
-   return reg;
-}
-
-
-/**
- * Replace each register of type ATTR in this->instructions with a reference
- * to a fixed HW register.
- *
- * If interleaved is true, then each attribute takes up half a register, with
- * register N containing attribute 2*N in its first half and attribute 2*N+1
- * in its second half (this corresponds to the payload setup used by geometry
- * shaders in "single" or "dual instanced" dispatch mode).  If interleaved is
- * false, then each attribute takes up a whole register, with register N
- * containing attribute N (this corresponds to the payload setup used by
- * vertex shaders, and by geometry shaders in "dual object" dispatch mode).
- */
-void
-vec4_visitor::lower_attributes_to_hw_regs(const int *attribute_map,
-                                          bool interleaved)
-{
-   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
-      for (int i = 0; i < 3; i++) {
-         if (inst->src[i].file != ATTR)
-            continue;
-
-         int grf = attribute_map[inst->src[i].nr +
-                                 inst->src[i].offset / REG_SIZE];
-         assert(inst->src[i].offset % REG_SIZE == 0);
-
-         /* All attributes used in the shader need to have been assigned a
-          * hardware register by the caller
-          */
-         assert(grf != 0);
-
-         struct brw_reg reg =
-            attribute_to_hw_reg(grf, inst->src[i].type, interleaved);
-         reg.swizzle = inst->src[i].swizzle;
-         if (inst->src[i].abs)
-            reg = brw_abs(reg);
-         if (inst->src[i].negate)
-            reg = negate(reg);
-
-         inst->src[i] = reg;
-      }
-   }
-}
-
 int
 vec4_vs_visitor::setup_attributes(int payload_reg)
 {
-   int nr_attributes;
-   int attribute_map[VERT_ATTRIB_MAX + 2];
-   memset(attribute_map, 0, sizeof(attribute_map));
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
+      for (int i = 0; i < 3; i++) {
+         if (inst->src[i].file == ATTR) {
+            assert(inst->src[i].offset % REG_SIZE == 0);
+            int grf = payload_reg + inst->src[i].nr +
+                      inst->src[i].offset / REG_SIZE;
 
-   nr_attributes = 0;
-   GLbitfield64 vs_inputs = vs_prog_data->inputs_read;
-   while (vs_inputs) {
-      GLuint first = ffsll(vs_inputs) - 1;
-      int needed_slots =
-         (vs_prog_data->double_inputs_read & BITFIELD64_BIT(first)) ? 2 : 1;
-      for (int c = 0; c < needed_slots; c++) {
-         attribute_map[first + c] = payload_reg + nr_attributes;
-         nr_attributes++;
-         vs_inputs &= ~BITFIELD64_BIT(first + c);
+            struct brw_reg reg = brw_vec8_grf(grf, 0);
+            reg.swizzle = inst->src[i].swizzle;
+            reg.type = inst->src[i].type;
+            reg.abs = inst->src[i].abs;
+            reg.negate = inst->src[i].negate;
+            inst->src[i] = reg;
+         }
       }
    }
-
-   /* VertexID is stored by the VF as the last vertex element, but we
-    * don't represent it with a flag in inputs_read, so we call it
-    * VERT_ATTRIB_MAX.
-    */
-   if (vs_prog_data->uses_vertexid || vs_prog_data->uses_instanceid ||
-       vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance) {
-      attribute_map[VERT_ATTRIB_MAX] = payload_reg + nr_attributes;
-      nr_attributes++;
-   }
-
-   if (vs_prog_data->uses_drawid) {
-      attribute_map[VERT_ATTRIB_MAX + 1] = payload_reg + nr_attributes;
-      nr_attributes++;
-   }
-
-   lower_attributes_to_hw_regs(attribute_map, false /* interleaved */);
 
    return payload_reg + vs_prog_data->nr_attribute_slots;
 }
@@ -1948,6 +1924,24 @@ vec4_visitor::emit_shader_time_write(int shader_time_subindex, src_reg value)
    inst->mlen = 2;
 }
 
+static bool
+is_align1_df(vec4_instruction *inst)
+{
+   switch (inst->opcode) {
+   case VEC4_OPCODE_DOUBLE_TO_F32:
+   case VEC4_OPCODE_DOUBLE_TO_D32:
+   case VEC4_OPCODE_DOUBLE_TO_U32:
+   case VEC4_OPCODE_TO_DOUBLE:
+   case VEC4_OPCODE_PICK_LOW_32BIT:
+   case VEC4_OPCODE_PICK_HIGH_32BIT:
+   case VEC4_OPCODE_SET_LOW_32BIT:
+   case VEC4_OPCODE_SET_HIGH_32BIT:
+      return true;
+   default:
+      return false;
+   }
+}
+
 void
 vec4_visitor::convert_to_hw_regs()
 {
@@ -1957,9 +1951,7 @@ vec4_visitor::convert_to_hw_regs()
          struct brw_reg reg;
          switch (src.file) {
          case VGRF: {
-            const unsigned type_size = type_sz(src.type);
-            const unsigned width = REG_SIZE / 2 / MAX2(4, type_size);
-            reg = byte_offset(brw_vecn_grf(width, src.nr, 0), src.offset);
+            reg = byte_offset(brw_vecn_grf(4, src.nr, 0), src.offset);
             reg.type = src.type;
             reg.abs = src.abs;
             reg.negate = src.negate;
@@ -1967,12 +1959,11 @@ vec4_visitor::convert_to_hw_regs()
          }
 
          case UNIFORM: {
-            const unsigned width = REG_SIZE / 2 / MAX2(4, type_sz(src.type));
             reg = stride(byte_offset(brw_vec4_grf(
                                         prog_data->base.dispatch_grf_start_reg +
                                         src.nr / 2, src.nr % 2 * 4),
                                      src.offset),
-                         0, width, 1);
+                         0, 4, 1);
             reg.type = src.type;
             reg.abs = src.abs;
             reg.negate = src.negate;
@@ -2005,6 +1996,20 @@ vec4_visitor::convert_to_hw_regs()
 
          apply_logical_swizzle(&reg, inst, i);
          src = reg;
+
+         /* From IVB PRM, vol4, part3, "General Restrictions on Regioning
+          * Parameters":
+          *
+          *   "If ExecSize = Width and HorzStride ≠ 0, VertStride must be set
+          *    to Width * HorzStride."
+          *
+          * We can break this rule with DF sources on DF align1
+          * instructions, because the exec_size would be 4 and width is 4.
+          * As we know we are not accessing to next GRF, it is safe to
+          * set vstride to the formula given by the rule itself.
+          */
+         if (is_align1_df(inst) && (cvt(inst->exec_size) - 1) == src.width)
+            src.vstride = src.width + src.hstride;
       }
 
       if (inst->is_3src(devinfo)) {
@@ -2262,24 +2267,6 @@ vec4_visitor::lower_simd_width()
    return progress;
 }
 
-static bool
-is_align1_df(vec4_instruction *inst)
-{
-   switch (inst->opcode) {
-   case VEC4_OPCODE_DOUBLE_TO_F32:
-   case VEC4_OPCODE_DOUBLE_TO_D32:
-   case VEC4_OPCODE_DOUBLE_TO_U32:
-   case VEC4_OPCODE_TO_DOUBLE:
-   case VEC4_OPCODE_PICK_LOW_32BIT:
-   case VEC4_OPCODE_PICK_HIGH_32BIT:
-   case VEC4_OPCODE_SET_LOW_32BIT:
-   case VEC4_OPCODE_SET_HIGH_32BIT:
-      return true;
-   default:
-      return false;
-   }
-}
-
 static brw_predicate
 scalarize_predicate(brw_predicate predicate, unsigned writemask)
 {
@@ -2513,6 +2500,11 @@ vec4_visitor::apply_logical_swizzle(struct brw_reg *hw_reg,
    assert(brw_is_single_value_swizzle(reg.swizzle) ||
           is_supported_64bit_region(inst, arg));
 
+   /* Apply the region <2, 2, 1> for GRF or <0, 2, 1> for uniforms, as align16
+    * HW can only do 32-bit swizzle channels.
+    */
+   hw_reg->width = BRW_WIDTH_2;
+
    if (is_supported_64bit_region(inst, arg) &&
        !is_gen7_supported_64bit_swizzle(inst, arg)) {
       /* Supported 64-bit swizzles are those such that their first two
@@ -2604,7 +2596,7 @@ vec4_visitor::run()
       if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {  \
          char filename[64];                                            \
          snprintf(filename, 64, "%s-%s-%02d-%02d-" #pass,              \
-                  stage_abbrev, nir->info->name, iteration, pass_num); \
+                  stage_abbrev, nir->info.name, iteration, pass_num); \
                                                                        \
          backend_shader::dump_instructions(filename);                  \
       }                                                                \
@@ -2617,7 +2609,7 @@ vec4_visitor::run()
    if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
       char filename[64];
       snprintf(filename, 64, "%s-%s-00-00-start",
-               stage_abbrev, nir->info->name);
+               stage_abbrev, nir->info.name);
 
       backend_shader::dump_instructions(filename);
    }
@@ -2755,25 +2747,44 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_VERTEX];
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, is_scalar);
-   brw_nir_lower_vs_inputs(shader, is_scalar,
-                           use_legacy_snorm_formula, key->gl_attrib_wa_flags);
-   brw_nir_lower_vue_outputs(shader, is_scalar);
-   shader = brw_postprocess_nir(shader, compiler, is_scalar);
 
    const unsigned *assembly = NULL;
 
+   if (prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_EDGE] != -1) {
+      /* If the output VUE map contains VARYING_SLOT_EDGE then we need to copy
+       * the edge flag from VERT_ATTRIB_EDGEFLAG.  This will be done
+       * automatically by brw_vec4_visitor::emit_urb_slot but we need to
+       * ensure that prog_data->inputs_read is accurate.
+       *
+       * In order to make late NIR passes aware of the change, we actually
+       * whack shader->info.inputs_read instead.  This is safe because we just
+       * made a copy of the shader.
+       */
+      assert(!is_scalar);
+      assert(key->copy_edgeflag);
+      shader->info.inputs_read |= VERT_BIT_EDGEFLAG;
+   }
+
+   prog_data->inputs_read = shader->info.inputs_read;
+   prog_data->double_inputs_read = shader->info.double_inputs_read;
+
+   brw_nir_lower_vs_inputs(shader, use_legacy_snorm_formula,
+                           key->gl_attrib_wa_flags);
+   brw_nir_lower_vue_outputs(shader, is_scalar);
+   shader = brw_postprocess_nir(shader, compiler, is_scalar);
+
    prog_data->base.clip_distance_mask =
-      ((1 << shader->info->clip_distance_array_size) - 1);
+      ((1 << shader->info.clip_distance_array_size) - 1);
    prog_data->base.cull_distance_mask =
-      ((1 << shader->info->cull_distance_array_size) - 1) <<
-      shader->info->clip_distance_array_size;
+      ((1 << shader->info.cull_distance_array_size) - 1) <<
+      shader->info.clip_distance_array_size;
 
    unsigned nr_attribute_slots = _mesa_bitcount_64(prog_data->inputs_read);
 
    /* gl_VertexID and gl_InstanceID are system values, but arrive via an
     * incoming vertex attribute.  So, add an extra slot.
     */
-   if (shader->info->system_values_read &
+   if (shader->info.system_values_read &
        (BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX) |
         BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE) |
         BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) |
@@ -2781,14 +2792,31 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       nr_attribute_slots++;
    }
 
+   if (shader->info.system_values_read &
+       BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX))
+      prog_data->uses_basevertex = true;
+
+   if (shader->info.system_values_read &
+       BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE))
+      prog_data->uses_baseinstance = true;
+
+   if (shader->info.system_values_read &
+       BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE))
+      prog_data->uses_vertexid = true;
+
+   if (shader->info.system_values_read &
+       BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID))
+      prog_data->uses_instanceid = true;
+
    /* gl_DrawID has its very own vec4 */
-   if (shader->info->system_values_read &
+   if (shader->info.system_values_read &
        BITFIELD64_BIT(SYSTEM_VALUE_DRAW_ID)) {
+      prog_data->uses_drawid = true;
       nr_attribute_slots++;
    }
 
    unsigned nr_attributes = nr_attribute_slots -
-      DIV_ROUND_UP(_mesa_bitcount_64(shader->info->double_inputs_read), 2);
+      DIV_ROUND_UP(_mesa_bitcount_64(shader->info.double_inputs_read), 2);
 
    /* The 3DSTATE_VS documentation lists the lower bound on "Vertex URB Entry
     * Read Length" as 1 in vec4 mode, and 0 in SIMD8 mode.  Empirically, in
@@ -2842,9 +2870,9 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       if (INTEL_DEBUG & DEBUG_VS) {
          const char *debug_name =
             ralloc_asprintf(mem_ctx, "%s vertex shader %s",
-                            shader->info->label ? shader->info->label :
+                            shader->info.label ? shader->info.label :
                                "unnamed",
-                            shader->info->name);
+                            shader->info.name);
 
          g.enable_debug(debug_name);
       }

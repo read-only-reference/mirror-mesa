@@ -47,6 +47,10 @@
 
 #include "nir_opcodes.h"
 
+#if defined(_WIN32) && !defined(snprintf)
+#define snprintf _snprintf
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -1859,7 +1863,7 @@ typedef struct nir_shader {
    const struct nir_shader_compiler_options *options;
 
    /** Various bits of compile-time information about a given shader */
-   struct shader_info *info;
+   struct shader_info info;
 
    /** list of global variables in the shader (nir_variable) */
    struct exec_list globals;
@@ -2546,6 +2550,7 @@ void nir_lower_bitmap(nir_shader *shader, const nir_lower_bitmap_options *option
 
 bool nir_lower_atomics(nir_shader *shader,
                        const struct gl_shader_program *shader_program);
+bool nir_lower_atomics_to_ssbo(nir_shader *shader, unsigned ssbo_offset);
 bool nir_lower_to_source_mods(nir_shader *shader);
 
 bool nir_lower_gs_intrinsics(nir_shader *shader);

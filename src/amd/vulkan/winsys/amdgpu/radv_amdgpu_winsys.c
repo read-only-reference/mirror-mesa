@@ -107,6 +107,7 @@ get_chip_name(enum radeon_family family)
 	case CHIP_FIJI: return "AMD RADV FIJI";
 	case CHIP_POLARIS10: return "AMD RADV POLARIS10";
 	case CHIP_POLARIS11: return "AMD RADV POLARIS11";
+	case CHIP_POLARIS12: return "AMD RADV POLARIS12";
 	case CHIP_STONEY: return "AMD RADV STONEY";
 	default: return "AMD RADV unknown";
 	}
@@ -271,6 +272,10 @@ do_winsys_init(struct radv_amdgpu_winsys *ws, int fd)
 		ws->family = FAMILY_VI;
 		ws->rev_id = VI_POLARIS11_M_A0;
 		break;
+	case CHIP_POLARIS12:
+		ws->family = FAMILY_VI;
+		ws->rev_id = VI_POLARIS12_V_A0;
+		break;
 	default:
 		fprintf(stderr, "amdgpu: Unknown family.\n");
 		goto fail;
@@ -342,7 +347,6 @@ static void radv_amdgpu_winsys_destroy(struct radeon_winsys *rws)
 {
 	struct radv_amdgpu_winsys *ws = (struct radv_amdgpu_winsys*)rws;
 
-	ws->base.buffer_destroy(ws->fence_bo);
 	AddrDestroy(ws->addrlib);
 	amdgpu_device_deinitialize(ws->dev);
 	FREE(rws);
@@ -381,14 +385,6 @@ radv_amdgpu_winsys_create(int fd, uint32_t debug_flags)
 	radv_amdgpu_cs_init_functions(ws);
 	radv_amdgpu_surface_init_functions(ws);
 
-	assert(AMDGPU_HW_IP_NUM * MAX_RINGS_PER_TYPE * sizeof(uint64_t) <= 4096);
-	ws->fence_bo = ws->base.buffer_create(&ws->base, 4096, 8,
-	                                      RADEON_DOMAIN_GTT,
-	                                      RADEON_FLAG_CPU_ACCESS);
-	if (ws->fence_bo)
-		ws->fence_map = (uint64_t*)ws->base.buffer_map(ws->fence_bo);
-	if (ws->fence_map)
-		memset(ws->fence_map, 0, 4096);
 	return &ws->base;
 
 winsys_fail:

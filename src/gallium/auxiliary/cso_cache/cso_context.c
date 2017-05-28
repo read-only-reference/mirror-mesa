@@ -349,8 +349,6 @@ void cso_destroy_context( struct cso_context *ctx )
    unsigned i;
 
    if (ctx->pipe) {
-      ctx->pipe->set_index_buffer(ctx->pipe, NULL);
-
       ctx->pipe->bind_blend_state( ctx->pipe, NULL );
       ctx->pipe->bind_rasterizer_state( ctx->pipe, NULL );
 
@@ -408,8 +406,8 @@ void cso_destroy_context( struct cso_context *ctx )
    util_unreference_framebuffer_state(&ctx->fb);
    util_unreference_framebuffer_state(&ctx->fb_saved);
 
-   pipe_resource_reference(&ctx->aux_vertex_buffer_current.buffer, NULL);
-   pipe_resource_reference(&ctx->aux_vertex_buffer_saved.buffer, NULL);
+   pipe_vertex_buffer_unreference(&ctx->aux_vertex_buffer_current);
+   pipe_vertex_buffer_unreference(&ctx->aux_vertex_buffer_saved);
 
    for (i = 0; i < PIPE_SHADER_TYPES; i++) {
       pipe_resource_reference(&ctx->aux_constbuf_current[i].buffer, NULL);
@@ -1150,15 +1148,9 @@ void cso_set_vertex_buffers(struct cso_context *ctx,
          const struct pipe_vertex_buffer *vb =
                buffers + (ctx->aux_vertex_buffer_index - start_slot);
 
-         pipe_resource_reference(&ctx->aux_vertex_buffer_current.buffer,
-                                 vb->buffer);
-         memcpy(&ctx->aux_vertex_buffer_current, vb,
-                sizeof(struct pipe_vertex_buffer));
-      }
-      else {
-         pipe_resource_reference(&ctx->aux_vertex_buffer_current.buffer,
-                                 NULL);
-         ctx->aux_vertex_buffer_current.user_buffer = NULL;
+         pipe_vertex_buffer_reference(&ctx->aux_vertex_buffer_current, vb);
+      } else {
+         pipe_vertex_buffer_unreference(&ctx->aux_vertex_buffer_current);
       }
    }
 
@@ -1175,10 +1167,8 @@ cso_save_aux_vertex_buffer_slot(struct cso_context *ctx)
       return;
    }
 
-   pipe_resource_reference(&ctx->aux_vertex_buffer_saved.buffer,
-                           ctx->aux_vertex_buffer_current.buffer);
-   memcpy(&ctx->aux_vertex_buffer_saved, &ctx->aux_vertex_buffer_current,
-          sizeof(struct pipe_vertex_buffer));
+   pipe_vertex_buffer_reference(&ctx->aux_vertex_buffer_saved,
+                                &ctx->aux_vertex_buffer_current);
 }
 
 static void
@@ -1193,7 +1183,7 @@ cso_restore_aux_vertex_buffer_slot(struct cso_context *ctx)
 
    cso_set_vertex_buffers(ctx, ctx->aux_vertex_buffer_index, 1,
                           &ctx->aux_vertex_buffer_saved);
-   pipe_resource_reference(&ctx->aux_vertex_buffer_saved.buffer, NULL);
+   pipe_vertex_buffer_unreference(&ctx->aux_vertex_buffer_saved);
 }
 
 unsigned cso_get_aux_vertex_buffer_slot(struct cso_context *ctx)
@@ -1703,20 +1693,6 @@ cso_restore_state(struct cso_context *cso)
 
 
 /* drawing */
-
-void
-cso_set_index_buffer(struct cso_context *cso,
-                     const struct pipe_index_buffer *ib)
-{
-   struct u_vbuf *vbuf = cso->vbuf;
-
-   if (vbuf) {
-      u_vbuf_set_index_buffer(vbuf, ib);
-   } else {
-      struct pipe_context *pipe = cso->pipe;
-      pipe->set_index_buffer(pipe, ib);
-   }
-}
 
 void
 cso_draw_vbo(struct cso_context *cso,

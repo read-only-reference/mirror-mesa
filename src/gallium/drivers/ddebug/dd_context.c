@@ -353,6 +353,8 @@ dd_context_create_compute_state(struct pipe_context *_pipe,
       return NULL;
    hstate->cso = pipe->create_compute_state(pipe, state);
 
+   hstate->state.shader.type = state->ir_type;
+
    if (state->ir_type == PIPE_SHADER_IR_TGSI)
       hstate->state.shader.tokens = tgsi_dup_tokens(state->prog);
 
@@ -573,17 +575,6 @@ dd_context_set_vertex_buffers(struct pipe_context *_pipe,
    safe_memcpy(&dctx->draw_state.vertex_buffers[start], buffers,
                sizeof(buffers[0]) * num_buffers);
    pipe->set_vertex_buffers(pipe, start, num_buffers, buffers);
-}
-
-static void
-dd_context_set_index_buffer(struct pipe_context *_pipe,
-                            const struct pipe_index_buffer *ib)
-{
-   struct dd_context *dctx = dd_context(_pipe);
-   struct pipe_context *pipe = dctx->pipe;
-
-   safe_memcpy(&dctx->draw_state.index_buffer, ib, sizeof(*ib));
-   pipe->set_index_buffer(pipe, ib);
 }
 
 static void
@@ -850,7 +841,6 @@ dd_context_create(struct dd_screen *dscreen, struct pipe_context *pipe)
    CTX_INIT(set_shader_buffers);
    CTX_INIT(set_shader_images);
    CTX_INIT(set_vertex_buffers);
-   CTX_INIT(set_index_buffer);
    CTX_INIT(create_stream_output_target);
    CTX_INIT(stream_output_target_destroy);
    CTX_INIT(set_stream_output_targets);

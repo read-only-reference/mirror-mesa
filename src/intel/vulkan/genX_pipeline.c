@@ -155,9 +155,12 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_INSTANCING), vfi) {
          vfi.InstancingEnable = pipeline->instancing_enable[desc->binding];
          vfi.VertexElementIndex = slot;
-         /* Vulkan so far doesn't have an instance divisor, so
-          * this is always 1 (ignored if not instancing). */
-         vfi.InstanceDataStepRate = 1;
+         /* Our implementation of VK_KHX_multiview uses instancing to draw
+          * the different views.  If the client asks for instancing, we
+          * need to use the Instance Data Step Rate to ensure that we
+          * repeat the client's per-instance data once for each view.
+          */
+         vfi.InstanceDataStepRate = anv_subpass_view_count(pipeline->subpass);
       }
 #endif
    }
@@ -549,6 +552,7 @@ emit_ms_state(struct anv_pipeline *pipeline,
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_MULTISAMPLE), ms) {
       ms.NumberofMultisamples       = log2_samples;
 
+      ms.PixelLocation              = CENTER;
 #if GEN_GEN >= 8
       /* The PRM says that this bit is valid only for DX9:
        *
@@ -556,9 +560,7 @@ emit_ms_state(struct anv_pipeline *pipeline,
        *    should not have any effect by setting or not setting this bit.
        */
       ms.PixelPositionOffsetEnable  = false;
-      ms.PixelLocation              = CENTER;
 #else
-      ms.PixelLocation              = PIXLOC_CENTER;
 
       switch (samples) {
       case 1:
@@ -1060,7 +1062,8 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
       }
 #else
       clip.NonPerspectiveBarycentricEnable = wm_prog_data ?
-         (wm_prog_data->barycentric_interp_modes & 0x38) != 0 : 0;
+         (wm_prog_data->barycentric_interp_modes &
+          BRW_BARYCENTRIC_NONPERSPECTIVE_BITS) != 0 : 0;
 #endif
    }
 }
@@ -1132,7 +1135,7 @@ emit_3dstate_vs(struct anv_pipeline *pipeline)
    assert(anv_pipeline_has_stage(pipeline, MESA_SHADER_VERTEX));
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VS), vs) {
-      vs.FunctionEnable       = true;
+      vs.Enable               = true;
       vs.StatisticsEnable     = true;
       vs.KernelStartPointer   = vs_bin->kernel.offset;
 #if GEN_GEN >= 8
@@ -1192,7 +1195,7 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
    const struct brw_tes_prog_data *tes_prog_data = get_tes_prog_data(pipeline);
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_HS), hs) {
-      hs.FunctionEnable = true;
+      hs.Enable = true;
       hs.StatisticsEnable = true;
       hs.KernelStartPointer = tcs_bin->kernel.offset;
 
@@ -1222,7 +1225,7 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline)
    }
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_DS), ds) {
-      ds.FunctionEnable = true;
+      ds.Enable = true;
       ds.StatisticsEnable = true;
       ds.KernelStartPointer = tes_bin->kernel.offset;
 
@@ -1275,7 +1278,7 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
    const struct brw_gs_prog_data *gs_prog_data = get_gs_prog_data(pipeline);
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_GS), gs) {
-      gs.FunctionEnable          = true;
+      gs.Enable                  = true;
       gs.StatisticsEnable        = true;
       gs.KernelStartPointer      = gs_bin->kernel.offset;
       gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
@@ -1300,11 +1303,7 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
       gs.ControlDataFormat       = gs_prog_data->control_data_format;
       gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
       gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
-#if GEN_GEN >= 8 || GEN_IS_HASWELL
       gs.ReorderMode             = TRAILING;
-#else
-      gs.ReorderEnable           = true;
-#endif
 
 #if GEN_GEN >= 8
       gs.ExpectedVertexCount     = gs_prog_data->vertices_in;

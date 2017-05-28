@@ -80,9 +80,6 @@ brw_upload_gs_unit(struct brw_context *brw)
    if (brw->gen == 5)
       gs->thread4.rendering_enable = 1;
 
-   if (unlikely(INTEL_DEBUG & DEBUG_STATS))
-      gs->thread4.stats_enable = 1;
-
    /* BRW_NEW_VIEWPORT_COUNT */
    gs->gs6.max_vp_index = brw->clip.viewport_count - 1;
 
@@ -94,7 +91,7 @@ const struct brw_tracked_state brw_gs_unit = {
       .mesa  = 0,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
-               BRW_NEW_CURBE_OFFSETS |
+               BRW_NEW_PUSH_CONSTANT_ALLOCATION |
                BRW_NEW_FF_GS_PROG_DATA |
                BRW_NEW_PROGRAM_CACHE |
                BRW_NEW_URB_FENCE |

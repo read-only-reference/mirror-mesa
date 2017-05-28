@@ -403,7 +403,7 @@ fd4_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			struct pipe_vertex_element *elem = &vtx->vtx->pipe[i];
 			const struct pipe_vertex_buffer *vb =
 					&vtx->vertexbuf.vb[elem->vertex_buffer_index];
-			struct fd_resource *rsc = fd_resource(vb->buffer);
+			struct fd_resource *rsc = fd_resource(vb->buffer.resource);
 			enum pipe_format pfmt = elem->src_format;
 			enum a4xx_vtx_fmt fmt = fd4_pipe2vtx(pfmt);
 			bool switchnext = (i != last) ||
@@ -600,7 +600,7 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			fd4_rasterizer_stateobj(ctx->rasterizer);
 		uint32_t val = rast->pc_prim_vtx_cntl;
 
-		if (info->indexed && info->primitive_restart)
+		if (info->index_size && info->primitive_restart)
 			val |= A4XX_PC_PRIM_VTX_CNTL_PRIMITIVE_RESTART;
 
 		val |= COND(vp->writes_psize, A4XX_PC_PRIM_VTX_CNTL_PSIZE);

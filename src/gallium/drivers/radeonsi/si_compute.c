@@ -29,28 +29,8 @@
 #include "amd_kernel_code_t.h"
 #include "radeon/r600_cs.h"
 #include "si_pipe.h"
+#include "si_compute.h"
 #include "sid.h"
-
-#define MAX_GLOBAL_BUFFERS 22
-
-struct si_compute {
-	struct si_screen *screen;
-	struct tgsi_token *tokens;
-	struct util_queue_fence ready;
-	struct si_compiler_ctx_state compiler_ctx_state;
-
-	unsigned ir_type;
-	unsigned local_size;
-	unsigned private_size;
-	unsigned input_size;
-	struct si_shader shader;
-
-	struct pipe_resource *global_buffers[MAX_GLOBAL_BUFFERS];
-	unsigned use_code_object_v2 : 1;
-	unsigned variable_group_size : 1;
-	unsigned uses_grid_size:1;
-	unsigned uses_block_size:1;
-};
 
 struct dispatch_packet {
 	uint16_t header;
@@ -120,6 +100,9 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	sel.tokens = program->tokens;
 	sel.type = PIPE_SHADER_COMPUTE;
 	sel.local_size = program->local_size;
+	si_get_active_slot_masks(&sel.info,
+				 &program->active_const_and_shader_buffers,
+				 &program->active_samplers_and_images);
 
 	program->shader.selector = &sel;
 	program->shader.is_monolithic = true;
@@ -225,7 +208,24 @@ static void *si_create_compute_state(
 static void si_bind_compute_state(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
-	sctx->cs_shader_state.program = (struct si_compute*)state;
+	struct si_compute *program = (struct si_compute*)state;
+
+	sctx->cs_shader_state.program = program;
+	if (!program)
+		return;
+
+	/* Wait because we need active slot usage masks. */
+	if (program->ir_type == PIPE_SHADER_IR_TGSI)
+		util_queue_fence_wait(&program->ready);
+
+	si_set_active_descriptors(sctx,
+				  SI_DESCS_FIRST_COMPUTE +
+				  SI_SHADER_DESCS_CONST_AND_SHADER_BUFFERS,
+				  program->active_const_and_shader_buffers);
+	si_set_active_descriptors(sctx,
+				  SI_DESCS_FIRST_COMPUTE +
+				  SI_SHADER_DESCS_SAMPLERS_AND_IMAGES,
+				  program->active_samplers_and_images);
 }
 
 static void si_set_global_binding(
@@ -342,7 +342,7 @@ static bool si_setup_compute_scratch_buffer(struct si_context *sctx,
 	if (sctx->compute_scratch_buffer != shader->scratch_bo && scratch_needed) {
 		uint64_t scratch_va = sctx->compute_scratch_buffer->gpu_address;
 
-		si_shader_apply_scratch_relocs(sctx, shader, config, scratch_va);
+		si_shader_apply_scratch_relocs(shader, scratch_va);
 
 		if (si_shader_binary_upload(sctx->screen, shader))
 			return false;
@@ -773,12 +773,9 @@ static void si_launch_grid(
 		sctx->b.flags |= SI_CONTEXT_PS_PARTIAL_FLUSH |
 				 SI_CONTEXT_CS_PARTIAL_FLUSH;
 
-	if (program->ir_type == PIPE_SHADER_IR_TGSI) {
-		util_queue_fence_wait(&program->ready);
-
-		if (program->shader.compilation_failed)
-			return;
-	}
+	if (program->ir_type == PIPE_SHADER_IR_TGSI &&
+	    program->shader.compilation_failed)
+		return;
 
 	si_decompress_compute_textures(sctx);
 

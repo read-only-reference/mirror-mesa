@@ -389,7 +389,7 @@ static bool r600_can_disable_dcc(struct r600_texture *rtex)
 {
 	/* We can't disable DCC if it can be written by another process. */
 	return rtex->dcc_offset &&
-	       (!rtex->resource.is_shared ||
+	       (!rtex->resource.b.is_shared ||
 		!(rtex->resource.external_usage & PIPE_HANDLE_USAGE_WRITE));
 }
 
@@ -466,7 +466,7 @@ static void r600_degrade_tile_mode_to_linear(struct r600_common_context *rctx,
 	if (rctx->chip_class < SI)
 		return;
 
-	if (rtex->resource.is_shared ||
+	if (rtex->resource.b.is_shared ||
 	    rtex->surface.is_linear)
 		return;
 
@@ -530,13 +530,15 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
                                        unsigned usage)
 {
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
-	struct r600_common_context *rctx = (struct r600_common_context*)
-					   (ctx ? ctx : rscreen->aux_context);
+	struct r600_common_context *rctx;
 	struct r600_resource *res = (struct r600_resource*)resource;
 	struct r600_texture *rtex = (struct r600_texture*)resource;
 	struct radeon_bo_metadata metadata;
 	bool update_metadata = false;
 	unsigned stride, offset, slice_size;
+
+	ctx = threaded_context_unwrap_sync(ctx);
+	rctx = (struct r600_common_context*)(ctx ? ctx : rscreen->aux_context);
 
 	/* This is not supported now, but it might be required for OpenCL
 	 * interop in the future.
@@ -568,7 +570,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		}
 
 		/* Set metadata. */
-		if (!res->is_shared || update_metadata) {
+		if (!res->b.is_shared || update_metadata) {
 			r600_texture_init_metadata(rscreen, rtex, &metadata);
 			if (rscreen->query_opaque_metadata)
 				rscreen->query_opaque_metadata(rscreen, rtex,
@@ -578,7 +580,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		}
 	}
 
-	if (res->is_shared) {
+	if (res->b.is_shared) {
 		/* USAGE_EXPLICIT_FLUSH must be cleared if at least one user
 		 * doesn't set it.
 		 */
@@ -586,7 +588,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		if (!(usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH))
 			res->external_usage &= ~PIPE_HANDLE_USAGE_EXPLICIT_FLUSH;
 	} else {
-		res->is_shared = true;
+		res->b.is_shared = true;
 		res->external_usage = usage;
 	}
 
@@ -1430,7 +1432,7 @@ static struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen
 	if (!rtex)
 		return NULL;
 
-	rtex->resource.is_shared = true;
+	rtex->resource.b.is_shared = true;
 	rtex->resource.external_usage = usage;
 
 	if (rscreen->apply_opaque_metadata)
@@ -1548,7 +1550,7 @@ static bool r600_can_invalidate_texture(struct r600_common_screen *rscreen,
 {
 	/* r600g doesn't react to dirty_tex_descriptor_counter */
 	return rscreen->chip_class >= SI &&
-		!rtex->resource.is_shared &&
+		!rtex->resource.b.is_shared &&
 		!(transfer_usage & PIPE_TRANSFER_READ) &&
 		rtex->resource.b.b.last_level == 0 &&
 		util_texrange_covers_whole_level(&rtex->resource.b.b, 0,
@@ -1646,10 +1648,10 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 	trans = CALLOC_STRUCT(r600_transfer);
 	if (!trans)
 		return NULL;
-	pipe_resource_reference(&trans->transfer.resource, texture);
-	trans->transfer.level = level;
-	trans->transfer.usage = usage;
-	trans->transfer.box = *box;
+	pipe_resource_reference(&trans->b.b.resource, texture);
+	trans->b.b.level = level;
+	trans->b.b.usage = usage;
+	trans->b.b.box = *box;
 
 	if (rtex->is_depth) {
 		struct r600_texture *staging_depth;
@@ -1691,8 +1693,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 
 			/* Just get the strides. */
 			r600_texture_get_offset(rctx->screen, staging_depth, level, NULL,
-						&trans->transfer.stride,
-						&trans->transfer.layer_stride);
+						&trans->b.b.stride,
+						&trans->b.b.layer_stride);
 		} else {
 			/* XXX: only readback the rectangle which is being mapped? */
 			/* XXX: when discard is true, no need to read back from depth texture */
@@ -1709,8 +1711,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 
 			offset = r600_texture_get_offset(rctx->screen, staging_depth,
 							 level, box,
-							 &trans->transfer.stride,
-							 &trans->transfer.layer_stride);
+							 &trans->b.b.stride,
+							 &trans->b.b.layer_stride);
 		}
 
 		trans->staging = (struct r600_resource*)staging_depth;
@@ -1735,8 +1737,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 
 		/* Just get the strides. */
 		r600_texture_get_offset(rctx->screen, staging, 0, NULL,
-					&trans->transfer.stride,
-					&trans->transfer.layer_stride);
+					&trans->b.b.stride,
+					&trans->b.b.layer_stride);
 
 		if (usage & PIPE_TRANSFER_READ)
 			r600_copy_to_staging_texture(ctx, trans);
@@ -1747,8 +1749,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 	} else {
 		/* the resource is mapped directly */
 		offset = r600_texture_get_offset(rctx->screen, rtex, level, box,
-						 &trans->transfer.stride,
-						 &trans->transfer.layer_stride);
+						 &trans->b.b.stride,
+						 &trans->b.b.layer_stride);
 		buf = &rtex->resource;
 	}
 
@@ -1758,7 +1760,7 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 		return NULL;
 	}
 
-	*ptransfer = &trans->transfer;
+	*ptransfer = &trans->b.b;
 	return map + offset;
 }
 
@@ -2255,7 +2257,7 @@ static void vi_separate_dcc_try_enable(struct r600_common_context *rctx,
 	/* The intent is to use this with shared displayable back buffers,
 	 * but it's not strictly limited only to them.
 	 */
-	if (!tex->resource.is_shared ||
+	if (!tex->resource.b.is_shared ||
 	    !(tex->resource.external_usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH) ||
 	    tex->resource.b.b.target != PIPE_TEXTURE_2D ||
 	    tex->resource.b.b.last_level > 0 ||
@@ -2522,7 +2524,7 @@ void vi_dcc_clear_level(struct r600_common_context *rctx,
 static void si_set_optimal_micro_tile_mode(struct r600_common_screen *rscreen,
 					   struct r600_texture *rtex)
 {
-	if (rtex->resource.is_shared ||
+	if (rtex->resource.b.is_shared ||
 	    rtex->resource.b.b.nr_samples <= 1 ||
 	    rtex->surface.micro_tile_mode == rtex->last_msaa_resolve_target_micro_mode)
 		return;
@@ -2672,7 +2674,7 @@ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 		 * because there is no way to communicate the clear color among
 		 * all clients
 		 */
-		if (tex->resource.is_shared &&
+		if (tex->resource.b.is_shared &&
 		    !(tex->resource.external_usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH))
 			continue;
 
@@ -2720,8 +2722,15 @@ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 
 			vi_dcc_clear_level(rctx, tex, 0, reset_value);
 
-			if (clear_words_needed)
-				tex->dirty_level_mask |= 1 << fb->cbufs[i]->u.tex.level;
+			unsigned level_bit = 1 << fb->cbufs[i]->u.tex.level;
+			if (clear_words_needed) {
+				bool need_compressed_update = !tex->dirty_level_mask;
+
+				tex->dirty_level_mask |= level_bit;
+
+				if (need_compressed_update)
+					p_atomic_inc(&rctx->screen->compressed_colortex_counter);
+			}
 			tex->separate_dcc_dirty = true;
 		} else {
 			/* 128-bit formats are unusupported */
@@ -2744,7 +2753,12 @@ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 					   tex->cmask.offset, tex->cmask.size, 0,
 					   R600_COHERENCY_CB_META);
 
+			bool need_compressed_update = !tex->dirty_level_mask;
+
 			tex->dirty_level_mask |= 1 << fb->cbufs[i]->u.tex.level;
+
+			if (need_compressed_update)
+				p_atomic_inc(&rctx->screen->compressed_colortex_counter);
 		}
 
 		/* We can change the micro tile mode before a full clear. */

@@ -102,6 +102,7 @@ struct _egl_extensions
    EGLBoolean EXT_buffer_age;
    EGLBoolean EXT_create_context_robustness;
    EGLBoolean EXT_image_dma_buf_import;
+   EGLBoolean EXT_image_dma_buf_import_modifiers;
    EGLBoolean EXT_swap_buffers_with_damage;
 
    EGLBoolean KHR_cl_event2;
@@ -151,6 +152,7 @@ struct _egl_display
    struct {
       EGLBoolean TestOnly;    /**< Driver should not set fields when true */
       EGLBoolean UseFallback; /**< Use fallback driver (sw or less features) */
+      void *Platform;         /**< Platform-specific options */
    } Options;
 
    /* these fields are set by the driver during init */

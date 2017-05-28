@@ -59,7 +59,6 @@
 #include <system/window.h>
 #include <hardware/gralloc.h>
 #include <gralloc_drm_handle.h>
-#include <cutils/log.h>
 
 #endif /* HAVE_ANDROID_PLATFORM */
 
@@ -257,6 +256,10 @@ struct dri2_egl_surface
    struct wl_egl_window  *wl_win;
    int                    dx;
    int                    dy;
+   struct wl_event_queue *wl_queue;
+   struct wl_surface     *wl_surface_wrapper;
+   struct wl_display     *wl_dpy_wrapper;
+   struct wl_drm         *wl_drm_wrapper;
    struct wl_callback    *throttle_callback;
    int                    format;
 #endif
@@ -362,6 +365,9 @@ dri2_load_driver_dri3(_EGLDisplay *disp);
 EGLBoolean
 dri2_create_screen(_EGLDisplay *disp);
 
+EGLBoolean
+dri2_setup_extensions(_EGLDisplay *disp);
+
 __DRIdrawable *
 dri2_surface_get_dri_drawable(_EGLSurface *surf);
 
@@ -427,5 +433,8 @@ dri2_set_WL_bind_wayland_display(_EGLDriver *drv, _EGLDisplay *disp)
    }
 #endif
 }
+
+void
+dri2_display_destroy(_EGLDisplay *disp);
 
 #endif /* EGL_DRI2_INCLUDED */

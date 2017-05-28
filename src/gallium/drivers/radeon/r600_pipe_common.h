@@ -45,6 +45,7 @@
 #include "util/slab.h"
 #include "util/u_suballoc.h"
 #include "util/u_transfer.h"
+#include "util/u_threaded_context.h"
 
 #define ATI_VENDOR_ID 0x1002
 
@@ -140,7 +141,7 @@ void radeon_shader_binary_clean(struct ac_shader_binary *b);
  * at the moment.
  */
 struct r600_resource {
-	struct u_resource		b;
+	struct threaded_resource	b;
 
 	/* Winsys objects. */
 	struct pb_buffer		*buf;
@@ -179,12 +180,11 @@ struct r600_resource {
 	bool				TC_L2_dirty;
 
 	/* Whether the resource has been exported via resource_get_handle. */
-	bool				is_shared;
 	unsigned			external_usage; /* PIPE_HANDLE_USAGE_* */
 };
 
 struct r600_transfer {
-	struct pipe_transfer		transfer;
+	struct threaded_transfer	b;
 	struct r600_resource		*staging;
 	unsigned			offset;
 };
@@ -553,8 +553,10 @@ struct r600_common_context {
 	unsigned			last_dirty_tex_counter;
 	unsigned			last_compressed_colortex_counter;
 
+	struct threaded_context		*tc;
 	struct u_suballocator		*allocator_zeroed_memory;
 	struct slab_child_pool		pool_transfers;
+	struct slab_child_pool		pool_transfers_unsync; /* for threaded_context */
 
 	/* Current unaccounted memory usage. */
 	uint64_t			vram;
@@ -665,6 +667,12 @@ struct r600_common_context {
 	 * the buffer is bound, including all resource descriptors. */
 	void (*invalidate_buffer)(struct pipe_context *ctx, struct pipe_resource *buf);
 
+	/* Update all resource bindings where the buffer is bound, including
+	 * all resource descriptors. This is invalidate_buffer without
+	 * the invalidation. */
+	void (*rebind_buffer)(struct pipe_context *ctx, struct pipe_resource *buf,
+			      uint64_t old_gpu_address);
+
 	/* Enable or disable occlusion queries. */
 	void (*set_occlusion_query_state)(struct pipe_context *ctx, bool enable);
 
@@ -682,7 +690,7 @@ struct r600_common_context {
 				enum ring_type ring);
 };
 
-/* r600_buffer.c */
+/* r600_buffer_common.c */
 bool r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
 				     struct pb_buffer *buf,
 				     enum radeon_bo_usage usage);
@@ -713,6 +721,9 @@ r600_buffer_from_user_memory(struct pipe_screen *screen,
 void
 r600_invalidate_resource(struct pipe_context *ctx,
 			 struct pipe_resource *resource);
+void r600_replace_buffer_storage(struct pipe_context *ctx,
+				 struct pipe_resource *dst,
+				 struct pipe_resource *src);
 
 /* r600_common_pipe.c */
 void r600_gfx_write_event_eop(struct r600_common_context *ctx,

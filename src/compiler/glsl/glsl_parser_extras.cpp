@@ -305,8 +305,16 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
           sizeof(this->atomic_counter_offsets));
    this->allow_extension_directive_midshader =
       ctx->Const.AllowGLSLExtensionDirectiveMidShader;
+   this->allow_builtin_variable_redeclaration =
+      ctx->Const.AllowGLSLBuiltinVariableRedeclaration;
 
    this->cs_input_local_size_variable_specified = false;
+
+   /* ARB_bindless_texture */
+   this->bindless_sampler_specified = false;
+   this->bindless_image_specified = false;
+   this->bound_sampler_specified = false;
+   this->bound_image_specified = false;
 }
 
 /**
@@ -607,6 +615,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_ES3_1_compatibility),
    EXT(ARB_ES3_2_compatibility),
    EXT(ARB_arrays_of_arrays),
+   EXT(ARB_bindless_texture),
    EXT(ARB_compute_shader),
    EXT(ARB_compute_variable_group_size),
    EXT(ARB_conservative_depth),
@@ -1848,6 +1857,11 @@ set_shader_inout_layout(struct gl_shader *shader,
       /* Nothing to do. */
       break;
    }
+
+   shader->bindless_sampler = state->bindless_sampler_specified;
+   shader->bindless_image = state->bindless_image_specified;
+   shader->bound_sampler = state->bound_sampler_specified;
+   shader->bound_image = state->bound_image_specified;
 }
 
 extern "C" {

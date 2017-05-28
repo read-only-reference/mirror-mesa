@@ -431,13 +431,14 @@ intel_nop_alloc_storage(struct gl_context * ctx, struct gl_renderbuffer *rb,
 }
 
 /**
- * Create a new intel_renderbuffer which corresponds to an on-screen window,
- * not a user-created renderbuffer.
+ * Create an intel_renderbuffer for a __DRIdrawable. This function is
+ * unrelated to GL renderbuffers (that is, those created by
+ * glGenRenderbuffers).
  *
  * \param num_samples must be quantized.
  */
 struct intel_renderbuffer *
-intel_create_renderbuffer(mesa_format format, unsigned num_samples)
+intel_create_winsys_renderbuffer(mesa_format format, unsigned num_samples)
 {
    struct intel_renderbuffer *irb;
    struct gl_renderbuffer *rb;
@@ -469,7 +470,7 @@ intel_create_renderbuffer(mesa_format format, unsigned num_samples)
 
 /**
  * Private window-system buffers (as opposed to ones shared with the display
- * server created with intel_create_renderbuffer()) are most similar in their
+ * server created with intel_create_winsys_renderbuffer()) are most similar in their
  * handling to user-created renderbuffers, but they have a resize handler that
  * may be called at intel_update_renderbuffers() time.
  *
@@ -480,7 +481,7 @@ intel_create_private_renderbuffer(mesa_format format, unsigned num_samples)
 {
    struct intel_renderbuffer *irb;
 
-   irb = intel_create_renderbuffer(format, num_samples);
+   irb = intel_create_winsys_renderbuffer(format, num_samples);
    irb->Base.Base.AllocStorage = intel_alloc_private_renderbuffer_storage;
 
    return irb;
@@ -886,6 +887,22 @@ intel_blit_framebuffer(struct gl_context *ctx,
    if (!_mesa_check_conditional_render(ctx))
       return;
 
+   if (brw->gen < 6) {
+      /* On gen4-5, try BLT first.
+       *
+       * Gen4-5 have a single ring for both 3D and BLT operations, so there's
+       * no inter-ring synchronization issues like on Gen6+.  It is apparently
+       * faster than using the 3D pipeline.  Original Gen4 also has to rebase
+       * and copy miptree slices in order to render to unaligned locations.
+       */
+      mask = intel_blit_framebuffer_with_blitter(ctx, readFb, drawFb,
+                                                 srcX0, srcY0, srcX1, srcY1,
+                                                 dstX0, dstY0, dstX1, dstY1,
+                                                 mask);
+      if (mask == 0x0)
+         return;
+   }
+
    mask = brw_blorp_framebuffer(brw, readFb, drawFb,
                                 srcX0, srcY0, srcX1, srcY1,
                                 dstX0, dstY0, dstX1, dstY1,
@@ -909,51 +926,6 @@ intel_blit_framebuffer(struct gl_context *ctx,
                                               srcX0, srcY0, srcX1, srcY1,
                                               dstX0, dstY0, dstX1, dstY1,
                                               mask);
-   if (mask == 0x0)
-      return;
-
-   _swrast_BlitFramebuffer(ctx, readFb, drawFb,
-                           srcX0, srcY0, srcX1, srcY1,
-                           dstX0, dstY0, dstX1, dstY1,
-                           mask, filter);
-}
-
-/**
- * Gen4-5 implementation of glBlitFrameBuffer().
- *
- * Tries BLT, Meta, then swrast.
- *
- * Gen4-5 have a single ring for both 3D and BLT operations, so there's no
- * inter-ring synchronization issues like on Gen6+.  It is apparently faster
- * than using the 3D pipeline.  Original Gen4 also has to rebase and copy
- * miptree slices in order to render to unaligned locations.
- */
-static void
-gen4_blit_framebuffer(struct gl_context *ctx,
-                      struct gl_framebuffer *readFb,
-                      struct gl_framebuffer *drawFb,
-                      GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                      GLbitfield mask, GLenum filter)
-{
-   /* Page 679 of OpenGL 4.4 spec says:
-    * "Added BlitFramebuffer to commands affected by conditional rendering in
-    *  section 10.10 (Bug 9562)."
-    */
-   if (!_mesa_check_conditional_render(ctx))
-      return;
-
-   mask = intel_blit_framebuffer_with_blitter(ctx, readFb, drawFb,
-                                              srcX0, srcY0, srcX1, srcY1,
-                                              dstX0, dstY0, dstX1, dstY1,
-                                              mask);
-   if (mask == 0x0)
-      return;
-
-   mask = _mesa_meta_BlitFramebuffer(ctx, readFb, drawFb,
-                                     srcX0, srcY0, srcX1, srcY1,
-                                     dstX0, dstY0, dstX1, dstY1,
-                                     mask, filter);
    if (mask == 0x0)
       return;
 
@@ -1110,10 +1082,7 @@ intel_fbo_init(struct brw_context *brw)
    dd->UnmapRenderbuffer = intel_unmap_renderbuffer;
    dd->RenderTexture = intel_render_texture;
    dd->ValidateFramebuffer = intel_validate_framebuffer;
-   if (brw->gen >= 6)
-      dd->BlitFramebuffer = intel_blit_framebuffer;
-   else
-      dd->BlitFramebuffer = gen4_blit_framebuffer;
+   dd->BlitFramebuffer = intel_blit_framebuffer;
    dd->EGLImageTargetRenderbufferStorage =
       intel_image_target_renderbuffer_storage;
 

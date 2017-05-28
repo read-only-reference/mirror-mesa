@@ -926,12 +926,15 @@ radv_emit_fb_ds_state(struct radv_cmd_buffer *cmd_buffer,
 		      VkImageLayout layout)
 {
 	uint32_t db_z_info = ds->db_z_info;
+	uint32_t db_stencil_info = ds->db_stencil_info;
 
-	if (!radv_layout_has_htile(image, layout))
+	if (!radv_layout_has_htile(image, layout,
+	                           radv_image_queue_family_mask(image,
+	                                                        cmd_buffer->queue_family_index,
+	                                                        cmd_buffer->queue_family_index))) {
 		db_z_info &= C_028040_TILE_SURFACE_ENABLE;
-
-	if (!radv_layout_can_expclear(image, layout))
-		db_z_info &= C_028040_ALLOW_EXPCLEAR & C_028044_ALLOW_EXPCLEAR;
+		db_stencil_info |= S_028044_TILE_STENCIL_DISABLE(1);
+	}
 
 	radeon_set_context_reg(cmd_buffer->cs, R_028008_DB_DEPTH_VIEW, ds->db_depth_view);
 	radeon_set_context_reg(cmd_buffer->cs, R_028014_DB_HTILE_DATA_BASE, ds->db_htile_data_base);
@@ -939,7 +942,7 @@ radv_emit_fb_ds_state(struct radv_cmd_buffer *cmd_buffer,
 	radeon_set_context_reg_seq(cmd_buffer->cs, R_02803C_DB_DEPTH_INFO, 9);
 	radeon_emit(cmd_buffer->cs, ds->db_depth_info);	/* R_02803C_DB_DEPTH_INFO */
 	radeon_emit(cmd_buffer->cs, db_z_info);			/* R_028040_DB_Z_INFO */
-	radeon_emit(cmd_buffer->cs, ds->db_stencil_info);	/* R_028044_DB_STENCIL_INFO */
+	radeon_emit(cmd_buffer->cs, db_stencil_info);	        /* R_028044_DB_STENCIL_INFO */
 	radeon_emit(cmd_buffer->cs, ds->db_z_read_base);	/* R_028048_DB_Z_READ_BASE */
 	radeon_emit(cmd_buffer->cs, ds->db_stencil_read_base);	/* R_02804C_DB_STENCIL_READ_BASE */
 	radeon_emit(cmd_buffer->cs, ds->db_z_write_base);	/* R_028050_DB_Z_WRITE_BASE */
@@ -950,36 +953,6 @@ radv_emit_fb_ds_state(struct radv_cmd_buffer *cmd_buffer,
 	radeon_set_context_reg(cmd_buffer->cs, R_028ABC_DB_HTILE_SURFACE, ds->db_htile_surface);
 	radeon_set_context_reg(cmd_buffer->cs, R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL,
 			       ds->pa_su_poly_offset_db_fmt_cntl);
-}
-
-/*
- * To hw resolve multisample images both src and dst need to have the same
- * micro tiling mode. However we don't always know in advance when creating
- * the images. This function gets called if we have a resolve attachment,
- * and tests if the attachment image has the same tiling mode, then it
- * checks if the generated framebuffer data has the same tiling mode, and
- * updates it if not.
- */
-static void radv_set_optimal_micro_tile_mode(struct radv_device *device,
-					     struct radv_attachment_info *att,
-					     uint32_t micro_tile_mode)
-{
-	struct radv_image *image = att->attachment->image;
-	uint32_t tile_mode_index;
-	if (image->surface.nsamples <= 1)
-		return;
-
-	if (image->surface.micro_tile_mode != micro_tile_mode) {
-		radv_image_set_optimal_micro_tile_mode(device, image, micro_tile_mode);
-	}
-
-	if (att->cb.micro_tile_mode != micro_tile_mode) {
-		tile_mode_index = image->surface.tiling_index[0];
-
-		att->cb.cb_color_attrib &= C_028C74_TILE_MODE_INDEX;
-		att->cb.cb_color_attrib |= S_028C74_TILE_MODE_INDEX(tile_mode_index);
-		att->cb.micro_tile_mode = micro_tile_mode;
-	}
 }
 
 void
@@ -1110,21 +1083,11 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 	int i;
 	struct radv_framebuffer *framebuffer = cmd_buffer->state.framebuffer;
 	const struct radv_subpass *subpass = cmd_buffer->state.subpass;
-	int dst_resolve_micro_tile_mode = -1;
 
-	if (subpass->has_resolve) {
-		uint32_t a = subpass->resolve_attachments[0].attachment;
-		const struct radv_image *image = framebuffer->attachments[a].attachment->image;
-		dst_resolve_micro_tile_mode = image->surface.micro_tile_mode;
-	}
 	for (i = 0; i < subpass->color_count; ++i) {
 		int idx = subpass->color_attachments[i].attachment;
 		struct radv_attachment_info *att = &framebuffer->attachments[idx];
 
-		if (dst_resolve_micro_tile_mode != -1) {
-			radv_set_optimal_micro_tile_mode(cmd_buffer->device,
-							 att, dst_resolve_micro_tile_mode);
-		}
 		cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, att->attachment->bo, 8);
 
 		assert(att->attachment->aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT);
@@ -1143,6 +1106,12 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 		struct radv_attachment_info *att = &framebuffer->attachments[idx];
 		struct radv_image *image = att->attachment->image;
 		cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, att->attachment->bo, 8);
+		uint32_t queue_mask = radv_image_queue_family_mask(image,
+		                                                   cmd_buffer->queue_family_index,
+		                                                   cmd_buffer->queue_family_index);
+		/* We currently don't support writing decompressed HTILE */
+		assert(radv_layout_has_htile(image, layout, queue_mask) ==
+		       radv_layout_is_htile_compressed(image, layout, queue_mask));
 
 		radv_emit_fb_ds_state(cmd_buffer, &att->ds, image, layout);
 
@@ -1191,6 +1160,15 @@ static void
 radv_cmd_buffer_flush_dynamic_state(struct radv_cmd_buffer *cmd_buffer)
 {
 	struct radv_dynamic_state *d = &cmd_buffer->state.dynamic;
+
+	if (G_028810_DX_RASTERIZATION_KILL(cmd_buffer->state.pipeline->graphics.raster.pa_cl_clip_cntl))
+		return;
+
+	if (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_DYNAMIC_VIEWPORT))
+		radv_emit_viewport(cmd_buffer);
+
+	if (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_DYNAMIC_SCISSOR | RADV_CMD_DIRTY_DYNAMIC_VIEWPORT))
+		radv_emit_scissor(cmd_buffer);
 
 	if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_DYNAMIC_LINE_WIDTH) {
 		unsigned width = cmd_buffer->state.dynamic.line_width * 8;
@@ -1386,6 +1364,10 @@ radv_flush_descriptors(struct radv_cmd_buffer *cmd_buffer,
 		radv_flush_indirect_descriptor_sets(cmd_buffer, pipeline);
 	}
 
+	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws,
+	                                                   cmd_buffer->cs,
+	                                                   MAX_SETS * MESA_SHADER_STAGES * 4);
+
 	for (i = 0; i < MAX_SETS; i++) {
 		if (!(cmd_buffer->state.descriptors_dirty & (1u << i)))
 			continue;
@@ -1397,6 +1379,7 @@ radv_flush_descriptors(struct radv_cmd_buffer *cmd_buffer,
 	}
 	cmd_buffer->state.descriptors_dirty = 0;
 	cmd_buffer->state.push_descriptors_dirty = false;
+	assert(cmd_buffer->cs->cdw <= cdw_max);
 }
 
 static void
@@ -1425,6 +1408,8 @@ radv_flush_constants(struct radv_cmd_buffer *cmd_buffer,
 	va = cmd_buffer->device->ws->buffer_get_va(cmd_buffer->upload.upload_bo);
 	va += offset;
 
+	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws,
+	                                                   cmd_buffer->cs, MESA_SHADER_STAGES * 4);
 	if (stages & VK_SHADER_STAGE_VERTEX_BIT)
 		radv_emit_userdata_address(cmd_buffer, pipeline, MESA_SHADER_VERTEX,
 					   AC_UD_PUSH_CONSTANTS, va);
@@ -1450,6 +1435,7 @@ radv_flush_constants(struct radv_cmd_buffer *cmd_buffer,
 					   AC_UD_PUSH_CONSTANTS, va);
 
 	cmd_buffer->push_constant_stages &= ~stages;
+	assert(cmd_buffer->cs->cdw <= cdw_max);
 }
 
 static void radv_emit_primitive_reset_state(struct radv_cmd_buffer *cmd_buffer,
@@ -1535,12 +1521,6 @@ radv_cmd_buffer_flush_state(struct radv_cmd_buffer *cmd_buffer,
 
 	if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_RENDER_TARGETS)
 		radv_emit_framebuffer_state(cmd_buffer);
-
-	if (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_DYNAMIC_VIEWPORT))
-		radv_emit_viewport(cmd_buffer);
-
-	if (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_DYNAMIC_SCISSOR | RADV_CMD_DIRTY_DYNAMIC_VIEWPORT))
-		radv_emit_scissor(cmd_buffer);
 
 	ia_multi_vgt_param = si_get_ia_multi_vgt_param(cmd_buffer, instanced_draw, indirect_draw, draw_vertex_count);
 	if (cmd_buffer->state.last_ia_multi_vgt_param != ia_multi_vgt_param) {
@@ -1961,6 +1941,8 @@ void radv_bind_descriptor_set(struct radv_cmd_buffer *cmd_buffer,
 			      unsigned idx)
 {
 	struct radeon_winsys *ws = cmd_buffer->device->ws;
+
+	assert(!(set->layout->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR));
 
 	cmd_buffer->state.descriptors[idx] = set;
 	cmd_buffer->state.descriptors_dirty |= (1u << idx);
@@ -2997,10 +2979,16 @@ void radv_CmdEndRenderPass(
 	cmd_buffer->state.framebuffer = NULL;
 }
 
-
+/*
+ * For HTILE we have the following interesting clear words:
+ *   0x0000030f: Uncompressed.
+ *   0xfffffff0: Clear depth to 1.0
+ *   0x00000000: Clear depth to 0.0
+ */
 static void radv_initialize_htile(struct radv_cmd_buffer *cmd_buffer,
                                   struct radv_image *image,
-                                  const VkImageSubresourceRange *range)
+                                  const VkImageSubresourceRange *range,
+                                  uint32_t clear_word)
 {
 	assert(range->baseMipLevel == 0);
 	assert(range->levelCount == 1 || range->levelCount == VK_REMAINING_ARRAY_LAYERS);
@@ -3012,7 +3000,7 @@ static void radv_initialize_htile(struct radv_cmd_buffer *cmd_buffer,
 	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB |
 	                                RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 
-	radv_fill_buffer(cmd_buffer, image->bo, offset, size, 0xffffffff);
+	radv_fill_buffer(cmd_buffer, image->bo, offset, size, clear_word);
 
 	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META |
 	                                RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
@@ -3024,27 +3012,27 @@ static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffe
 					       struct radv_image *image,
 					       VkImageLayout src_layout,
 					       VkImageLayout dst_layout,
+					       unsigned src_queue_mask,
+					       unsigned dst_queue_mask,
 					       const VkImageSubresourceRange *range,
 					       VkImageAspectFlags pending_clears)
 {
 	if (dst_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
 	    (pending_clears & vk_format_aspects(image->vk_format)) == vk_format_aspects(image->vk_format) &&
 	    cmd_buffer->state.render_area.offset.x == 0 && cmd_buffer->state.render_area.offset.y == 0 &&
-	    cmd_buffer->state.render_area.extent.width == image->extent.width &&
-	    cmd_buffer->state.render_area.extent.height == image->extent.height) {
+	    cmd_buffer->state.render_area.extent.width == image->info.width &&
+	    cmd_buffer->state.render_area.extent.height == image->info.height) {
 		/* The clear will initialize htile. */
 		return;
 	} else if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
-	           radv_layout_has_htile(image, dst_layout)) {
+	           radv_layout_has_htile(image, dst_layout, dst_queue_mask)) {
 		/* TODO: merge with the clear if applicable */
-		radv_initialize_htile(cmd_buffer, image, range);
-	} else if (!radv_layout_has_htile(image, src_layout) &&
-	           radv_layout_has_htile(image, dst_layout)) {
-		radv_initialize_htile(cmd_buffer, image, range);
-	} else if ((radv_layout_has_htile(image, src_layout) &&
-	            !radv_layout_has_htile(image, dst_layout)) ||
-	           (radv_layout_is_htile_compressed(image, src_layout) &&
-	            !radv_layout_is_htile_compressed(image, dst_layout))) {
+		radv_initialize_htile(cmd_buffer, image, range, 0);
+	} else if (!radv_layout_is_htile_compressed(image, src_layout, src_queue_mask) &&
+	           radv_layout_is_htile_compressed(image, dst_layout, dst_queue_mask)) {
+		radv_initialize_htile(cmd_buffer, image, range, 0xffffffff);
+	} else if (radv_layout_is_htile_compressed(image, src_layout, src_queue_mask) &&
+	           !radv_layout_is_htile_compressed(image, dst_layout, dst_queue_mask)) {
 		VkImageSubresourceRange local_range = *range;
 		local_range.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 		local_range.baseMipLevel = 0;
@@ -3160,7 +3148,9 @@ static void radv_handle_image_transition(struct radv_cmd_buffer *cmd_buffer,
 
 	if (image->surface.htile_size)
 		radv_handle_depth_image_transition(cmd_buffer, image, src_layout,
-						   dst_layout, range, pending_clears);
+						   dst_layout, src_queue_mask,
+						   dst_queue_mask, range,
+						   pending_clears);
 
 	if (image->cmask.size)
 		radv_handle_cmask_image_transition(cmd_buffer, image, src_layout,

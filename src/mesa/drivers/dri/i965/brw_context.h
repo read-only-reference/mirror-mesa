@@ -173,7 +173,6 @@ enum brw_state_id {
    BRW_STATE_GEOMETRY_PROGRAM,
    BRW_STATE_TESS_PROGRAMS,
    BRW_STATE_VERTEX_PROGRAM,
-   BRW_STATE_CURBE_OFFSETS,
    BRW_STATE_REDUCED_PRIMITIVE,
    BRW_STATE_PATCH_PRIMITIVE,
    BRW_STATE_PRIMITIVE,
@@ -259,7 +258,6 @@ enum brw_state_id {
 #define BRW_NEW_GEOMETRY_PROGRAM        (1ull << BRW_STATE_GEOMETRY_PROGRAM)
 #define BRW_NEW_TESS_PROGRAMS           (1ull << BRW_STATE_TESS_PROGRAMS)
 #define BRW_NEW_VERTEX_PROGRAM          (1ull << BRW_STATE_VERTEX_PROGRAM)
-#define BRW_NEW_CURBE_OFFSETS           (1ull << BRW_STATE_CURBE_OFFSETS)
 #define BRW_NEW_REDUCED_PRIMITIVE       (1ull << BRW_STATE_REDUCED_PRIMITIVE)
 #define BRW_NEW_PATCH_PRIMITIVE         (1ull << BRW_STATE_PATCH_PRIMITIVE)
 #define BRW_NEW_PRIMITIVE               (1ull << BRW_STATE_PRIMITIVE)
@@ -327,27 +325,6 @@ struct brw_program {
 };
 
 
-struct brw_sf_prog_data {
-   GLuint urb_read_length;
-   GLuint total_grf;
-
-   /* Each vertex may have upto 12 attributes, 4 components each,
-    * except WPOS which requires only 2.  (11*4 + 2) == 44 ==> 11
-    * rows.
-    *
-    * Actually we use 4 for each, so call it 12 rows.
-    */
-   GLuint urb_entry_size;
-};
-
-
-struct brw_clip_prog_data {
-   GLuint curb_read_length;	/* user planes? */
-   GLuint clip_mode;
-   GLuint urb_read_length;
-   GLuint total_grf;
-};
-
 struct brw_ff_gs_prog_data {
    GLuint urb_read_length;
    GLuint total_grf;
@@ -396,7 +373,6 @@ struct brw_cache {
    uint32_t next_offset;
    bool bo_used_by_gpu;
 };
-
 
 /* Considered adding a member to this struct to document which flags
  * an update might raise so that ordering of the state atoms can be
@@ -956,8 +932,7 @@ struct brw_context
    } urb;
 
 
-   /* BRW_NEW_CURBE_OFFSETS:
-    */
+   /* BRW_NEW_PUSH_CONSTANT_ALLOCATION */
    struct {
       GLuint wm_start;  /**< pos of first wm const in CURBE buffer */
       GLuint wm_size;   /**< number of float[4] consts, multiple of 16 */
@@ -1065,7 +1040,6 @@ struct brw_context
       uint32_t prog_offset;
       uint32_t state_offset;
       uint32_t vp_offset;
-      bool viewport_transform_enable;
    } sf;
 
    struct {
@@ -1187,7 +1161,7 @@ struct brw_context
    const struct brw_tracked_state render_atoms[76];
    const struct brw_tracked_state compute_atoms[11];
 
-   uint32_t render_target_format[MESA_FORMAT_COUNT];
+   enum isl_format render_target_format[MESA_FORMAT_COUNT];
    bool format_supported_as_render_target[MESA_FORMAT_COUNT];
 
    /* PrimitiveRestart */
@@ -1387,6 +1361,8 @@ void brw_destroy_shader_time(struct brw_context *brw);
 
 /* brw_urb.c
  */
+void brw_calculate_urb_fence(struct brw_context *brw, unsigned csize,
+                             unsigned vsize, unsigned sfsize);
 void brw_upload_urb_fence(struct brw_context *brw);
 
 /* brw_curbe.c
@@ -1403,16 +1379,15 @@ unsigned brw_get_vertex_surface_type(struct brw_context *brw,
 static inline unsigned
 brw_get_index_type(unsigned index_size)
 {
-   /* The hw needs 0x00000000, 0x00000100, and 0x00000200 for ubyte, ushort,
-    * and uint, respectively.
+   /* The hw needs 0x00, 0x01, and 0x02 for ubyte, ushort, and uint,
+    * respectively.
     */
-   return (index_size >> 1) << 8;
+   return index_size >> 1;
 }
 
 void brw_prepare_vertices(struct brw_context *brw);
 
 /* brw_wm_surface_state.c */
-void brw_init_surface_formats(struct brw_context *brw);
 void brw_create_constant_surface(struct brw_context *brw,
                                  struct brw_bo *bo,
                                  uint32_t offset,
@@ -1444,6 +1419,7 @@ void brw_upload_image_surfaces(struct brw_context *brw,
                                struct brw_stage_prog_data *prog_data);
 
 /* brw_surface_formats.c */
+void brw_init_surface_formats(struct brw_context *brw);
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
 uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
@@ -1538,15 +1514,6 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
                           int dstX0, int dstY0,
                           int width, int height);
 
-/* gen6_multisample_state.c */
-unsigned
-gen6_determine_sample_mask(struct brw_context *brw);
-
-void
-gen6_emit_3dstate_multisample(struct brw_context *brw,
-                              unsigned num_samples);
-void
-gen6_emit_3dstate_sample_mask(struct brw_context *brw, unsigned mask);
 void
 gen6_get_sample_position(struct gl_context *ctx,
                          struct gl_framebuffer *fb,

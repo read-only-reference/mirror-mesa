@@ -42,7 +42,7 @@
 
 static void
 draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		struct fd5_emit *emit)
+		struct fd5_emit *emit, unsigned index_offset)
 {
 	const struct pipe_draw_info *info = emit->info;
 	enum pc_di_primtype primtype = ctx->primtypes[info->mode];
@@ -53,17 +53,17 @@ draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		fd5_emit_vertex_bufs(ring, emit);
 
 	OUT_PKT4(ring, REG_A5XX_VFD_INDEX_OFFSET, 2);
-	OUT_RING(ring, info->indexed ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
+	OUT_RING(ring, info->index_size ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
 	OUT_RING(ring, info->start_instance);   /* ??? UNKNOWN_2209 */
 
 	OUT_PKT4(ring, REG_A5XX_PC_RESTART_INDEX, 1);
 	OUT_RING(ring, info->primitive_restart ? /* PC_RESTART_INDEX */
 			info->restart_index : 0xffffffff);
 
-	fd5_emit_render_cntl(ctx, false);
+	fd5_emit_render_cntl(ctx, false, emit->key.binning_pass);
 	fd5_draw_emit(ctx->batch, ring, primtype,
 			emit->key.binning_pass ? IGNORE_VISIBILITY : USE_VISIBILITY,
-			info);
+			info, index_offset);
 }
 
 /* fixup dirty shader state in case some "unrelated" (from the state-
@@ -92,7 +92,8 @@ fixup_shader_state(struct fd_context *ctx, struct ir3_shader_key *key)
 }
 
 static bool
-fd5_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
+fd5_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
+             unsigned index_offset)
 {
 	struct fd5_context *fd5_ctx = fd5_context(ctx);
 	struct fd5_emit emit = {
@@ -136,14 +137,14 @@ fd5_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 	emit.key.binning_pass = false;
 	emit.dirty = dirty;
 
-	draw_impl(ctx, ctx->batch->draw, &emit);
+	draw_impl(ctx, ctx->batch->draw, &emit, index_offset);
 
-//	/* and now binning pass: */
-//	emit.key.binning_pass = true;
-//	emit.dirty = dirty & ~(FD_DIRTY_BLEND);
-//	emit.vp = NULL;   /* we changed key so need to refetch vp */
-//	emit.fp = NULL;
-//	draw_impl(ctx, ctx->batch->binning, &emit);
+	/* and now binning pass: */
+	emit.key.binning_pass = true;
+	emit.dirty = dirty & ~(FD_DIRTY_BLEND);
+	emit.vp = NULL;   /* we changed key so need to refetch vp */
+	emit.fp = NULL;
+	draw_impl(ctx, ctx->batch->binning, &emit, index_offset);
 
 	if (emit.streamout_mask) {
 		struct fd_ringbuffer *ring = ctx->batch->draw;
@@ -161,13 +162,29 @@ fd5_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 	return true;
 }
 
-static void
+static bool is_z32(enum pipe_format format)
+{
+	switch (format) {
+	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+	case PIPE_FORMAT_Z32_UNORM:
+	case PIPE_FORMAT_Z32_FLOAT:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool
 fd5_clear(struct fd_context *ctx, unsigned buffers,
 		const union pipe_color_union *color, double depth, unsigned stencil)
 {
 	struct fd_ringbuffer *ring = ctx->batch->draw;
 	struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
 	struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
+
+	if ((buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) &&
+			is_z32(pfb->zsbuf->format))
+		return false;
 
 	/* TODO handle scissor.. or fallback to slow-clear? */
 
@@ -176,7 +193,7 @@ fd5_clear(struct fd_context *ctx, unsigned buffers,
 	ctx->batch->max_scissor.maxx = MAX2(ctx->batch->max_scissor.maxx, scissor->maxx);
 	ctx->batch->max_scissor.maxy = MAX2(ctx->batch->max_scissor.maxy, scissor->maxy);
 
-	fd5_emit_render_cntl(ctx, true);
+	fd5_emit_render_cntl(ctx, true, false);
 
 	if (buffers & PIPE_CLEAR_COLOR) {
 		for (int i = 0; i < pfb->nr_cbufs; i++) {
@@ -271,6 +288,8 @@ fd5_clear(struct fd_context *ctx, unsigned buffers,
 	/* disable fast clear to not interfere w/ gmem->mem, etc.. */
 	OUT_PKT4(ring, REG_A5XX_RB_CLEAR_CNTL, 1);
 	OUT_RING(ring, 0x00000000);   /* RB_CLEAR_CNTL */
+
+	return true;
 }
 
 void

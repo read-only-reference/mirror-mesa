@@ -619,9 +619,6 @@ static void si_set_blend_color(struct pipe_context *ctx,
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
-	if (memcmp(&sctx->blend_color.state, state, sizeof(*state)) == 0)
-		return;
-
 	sctx->blend_color.state = *state;
 	si_mark_atom_dirty(sctx, &sctx->blend_color.atom);
 }
@@ -717,9 +714,11 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 		ucp_mask |
 		S_028810_CLIP_DISABLE(window_space));
 
-	/* reuse needs to be set off if we write oViewport */
-	radeon_set_context_reg(cs, R_028AB4_VGT_REUSE_OFF,
-			       S_028AB4_REUSE_OFF(info->writes_viewport_index));
+	if (sctx->b.chip_class <= VI) {
+		/* reuse needs to be set off if we write oViewport */
+		radeon_set_context_reg(cs, R_028AB4_VGT_REUSE_OFF,
+				       S_028AB4_REUSE_OFF(info->writes_viewport_index));
+	}
 }
 
 /*
@@ -3842,57 +3841,21 @@ static void si_set_vertex_buffers(struct pipe_context *ctx,
 		for (i = 0; i < count; i++) {
 			const struct pipe_vertex_buffer *src = buffers + i;
 			struct pipe_vertex_buffer *dsti = dst + i;
+			struct pipe_resource *buf = src->buffer.resource;
 
-			if (unlikely(src->user_buffer)) {
-				/* Zero-stride attribs only. */
-				assert(src->stride == 0);
-
-				/* Assume that the user_buffer comes from
-				 * gl_current_attrib, which implies it has
-				 * 4 * 8 bytes (for dvec4 attributes).
-				 *
-				 * Use const_uploader to upload into VRAM directly.
-				 */
-				u_upload_data(sctx->b.b.const_uploader, 0, 32, 32,
-					      src->user_buffer,
-					      &dsti->buffer_offset,
-					      &dsti->buffer);
-				dsti->stride = 0;
-			} else {
-				struct pipe_resource *buf = src->buffer;
-
-				pipe_resource_reference(&dsti->buffer, buf);
-				dsti->buffer_offset = src->buffer_offset;
-				dsti->stride = src->stride;
-				r600_context_add_resource_size(ctx, buf);
-				if (buf)
-					r600_resource(buf)->bind_history |= PIPE_BIND_VERTEX_BUFFER;
-			}
+			pipe_resource_reference(&dsti->buffer.resource, buf);
+			dsti->buffer_offset = src->buffer_offset;
+			dsti->stride = src->stride;
+			r600_context_add_resource_size(ctx, buf);
+			if (buf)
+				r600_resource(buf)->bind_history |= PIPE_BIND_VERTEX_BUFFER;
 		}
 	} else {
 		for (i = 0; i < count; i++) {
-			pipe_resource_reference(&dst[i].buffer, NULL);
+			pipe_resource_reference(&dst[i].buffer.resource, NULL);
 		}
 	}
 	sctx->vertex_buffers_dirty = true;
-}
-
-static void si_set_index_buffer(struct pipe_context *ctx,
-				const struct pipe_index_buffer *ib)
-{
-	struct si_context *sctx = (struct si_context *)ctx;
-
-	if (ib) {
-		struct pipe_resource *buf = ib->buffer;
-
-		pipe_resource_reference(&sctx->index_buffer.buffer, buf);
-	        memcpy(&sctx->index_buffer, ib, sizeof(*ib));
-		r600_context_add_resource_size(ctx, buf);
-		if (buf)
-			r600_resource(buf)->bind_history |= PIPE_BIND_INDEX_BUFFER;
-	} else {
-		pipe_resource_reference(&sctx->index_buffer.buffer, NULL);
-	}
 }
 
 /*
@@ -4049,7 +4012,6 @@ void si_init_state_functions(struct si_context *sctx)
 	sctx->b.b.bind_vertex_elements_state = si_bind_vertex_elements;
 	sctx->b.b.delete_vertex_elements_state = si_delete_vertex_element;
 	sctx->b.b.set_vertex_buffers = si_set_vertex_buffers;
-	sctx->b.b.set_index_buffer = si_set_index_buffer;
 
 	sctx->b.b.texture_barrier = si_texture_barrier;
 	sctx->b.b.memory_barrier = si_memory_barrier;
@@ -4342,6 +4304,8 @@ static void si_init_config(struct si_context *sctx)
 
 	si_pm4_set_reg(pm4, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0);
 	si_pm4_set_reg(pm4, R_028AA0_VGT_INSTANCE_STEP_RATE_0, 1);
+	if (sctx->b.chip_class >= GFX9)
+		si_pm4_set_reg(pm4, R_028AB4_VGT_REUSE_OFF, 0);
 	si_pm4_set_reg(pm4, R_028AB8_VGT_VTX_CNT_EN, 0x0);
 	if (sctx->b.chip_class < CIK)
 		si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, S_008A14_NUM_CLIP_SEQ(3) |
@@ -4564,15 +4528,33 @@ static void si_init_config(struct si_context *sctx)
 		      RADEON_PRIO_BORDER_COLORS);
 
 	if (sctx->b.chip_class >= GFX9) {
-		si_pm4_set_reg(pm4, R_028060_DB_DFSM_CONTROL, 0);
+		unsigned num_se = sscreen->b.info.max_se;
+		unsigned pc_lines = 0;
+
+		switch (sctx->b.family) {
+		case CHIP_VEGA10:
+			pc_lines = 4096;
+			break;
+		case CHIP_RAVEN:
+			pc_lines = 1024;
+			break;
+		default:
+			assert(0);
+		}
+
+		si_pm4_set_reg(pm4, R_028060_DB_DFSM_CONTROL,
+			       S_028060_PUNCHOUT_MODE(V_028060_FORCE_OFF));
 		si_pm4_set_reg(pm4, R_028064_DB_RENDER_FILTER, 0);
 		/* TODO: We can use this to disable RBs for rendering to GART: */
 		si_pm4_set_reg(pm4, R_02835C_PA_SC_TILE_STEERING_OVERRIDE, 0);
 		si_pm4_set_reg(pm4, R_02883C_PA_SU_OVER_RASTERIZATION_CNTL, 0);
 		/* TODO: Enable the binner: */
 		si_pm4_set_reg(pm4, R_028C44_PA_SC_BINNER_CNTL_0,
-			       S_028C44_BINNING_MODE(V_028C44_DISABLE_BINNING_USE_LEGACY_SC));
-		si_pm4_set_reg(pm4, R_028C48_PA_SC_BINNER_CNTL_1, 0);
+			       S_028C44_BINNING_MODE(V_028C44_DISABLE_BINNING_USE_LEGACY_SC) |
+			       S_028C44_DISABLE_START_OF_PRIM(1));
+		si_pm4_set_reg(pm4, R_028C48_PA_SC_BINNER_CNTL_1,
+			       S_028C48_MAX_ALLOC_COUNT(MIN2(128, pc_lines / (4 * num_se))) |
+			       S_028C48_MAX_PRIM_PER_BATCH(1023));
 		si_pm4_set_reg(pm4, R_028C4C_PA_SC_CONSERVATIVE_RASTERIZATION_CNTL,
 			       S_028C4C_NULL_SQUAD_AA_MASK_ENABLE(1));
 		si_pm4_set_reg(pm4, R_030968_VGT_INSTANCE_BASE_ID, 0);

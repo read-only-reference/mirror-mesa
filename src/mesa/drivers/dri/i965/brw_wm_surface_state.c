@@ -389,7 +389,9 @@ brw_get_texture_swizzle(const struct gl_context *ctx,
    case GL_RED:
    case GL_RG:
    case GL_RGB:
-      if (_mesa_get_format_bits(img->TexFormat, GL_ALPHA_BITS) > 0)
+      if (_mesa_get_format_bits(img->TexFormat, GL_ALPHA_BITS) > 0 ||
+          img->TexFormat == MESA_FORMAT_RGB_DXT1 ||
+          img->TexFormat == MESA_FORMAT_SRGB_DXT1)
          swizzles[3] = SWIZZLE_ONE;
       break;
    }
@@ -984,7 +986,7 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
    struct intel_mipmap_tree *mt = irb->mt;
    uint32_t *surf;
    uint32_t tile_x, tile_y;
-   uint32_t format = 0;
+   enum isl_format format;
    uint32_t offset;
    /* _NEW_BUFFERS */
    mesa_format rb_format = _mesa_get_render_format(ctx, intel_rb_format(irb));
@@ -1170,7 +1172,7 @@ update_renderbuffer_read_surfaces(struct brw_context *brw)
          uint32_t *surf_offset = &brw->wm.base.surf_offset[surf_index];
 
          if (irb) {
-            const unsigned format = brw->render_target_format[
+            const enum isl_format format = brw->render_target_format[
                _mesa_get_render_format(ctx, intel_rb_format(irb))];
             assert(isl_format_supports_sampling(&brw->screen->devinfo,
                                                 format));
@@ -1303,15 +1305,15 @@ brw_update_texture_surfaces(struct brw_context *brw)
     * allows the surface format to be overriden for only the
     * gather4 messages. */
    if (brw->gen < 8) {
-      if (vs && vs->nir->info->uses_texture_gather)
+      if (vs && vs->nir->info.uses_texture_gather)
          update_stage_texture_surfaces(brw, vs, &brw->vs.base, true, 0);
-      if (tcs && tcs->nir->info->uses_texture_gather)
+      if (tcs && tcs->nir->info.uses_texture_gather)
          update_stage_texture_surfaces(brw, tcs, &brw->tcs.base, true, 0);
-      if (tes && tes->nir->info->uses_texture_gather)
+      if (tes && tes->nir->info.uses_texture_gather)
          update_stage_texture_surfaces(brw, tes, &brw->tes.base, true, 0);
-      if (gs && gs->nir->info->uses_texture_gather)
+      if (gs && gs->nir->info.uses_texture_gather)
          update_stage_texture_surfaces(brw, gs, &brw->gs.base, true, 0);
-      if (fs && fs->nir->info->uses_texture_gather)
+      if (fs && fs->nir->info.uses_texture_gather)
          update_stage_texture_surfaces(brw, fs, &brw->wm.base, true, 0);
    }
 
@@ -1356,7 +1358,7 @@ brw_update_cs_texture_surfaces(struct brw_context *brw)
     * gather4 messages.
     */
    if (brw->gen < 8) {
-      if (cs && cs->nir->info->uses_texture_gather)
+      if (cs && cs->nir->info.uses_texture_gather)
          update_stage_texture_surfaces(brw, cs, &brw->cs.base, true, 0);
    }
 
@@ -1443,7 +1445,7 @@ brw_upload_wm_ubo_surfaces(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    /* _NEW_PROGRAM */
-   struct gl_program *prog = ctx->_Shader->_CurrentFragmentProgram;
+   struct gl_program *prog = ctx->FragmentProgram._Current;
 
    /* BRW_NEW_FS_PROG_DATA */
    brw_upload_ubo_surfaces(brw, prog, &brw->wm.base, brw->wm.base.prog_data);

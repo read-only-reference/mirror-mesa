@@ -35,6 +35,7 @@ MAX_API_VERSION = 1.0
 SUPPORTED_EXTENSIONS = [
     'VK_KHR_descriptor_update_template',
     'VK_KHR_get_physical_device_properties2',
+    'VK_KHR_get_surface_capabilities2',
     'VK_KHR_incremental_present',
     'VK_KHR_maintenance1',
     'VK_KHR_push_descriptor',
@@ -48,6 +49,10 @@ SUPPORTED_EXTENSIONS = [
     'VK_KHX_external_memory',
     'VK_KHX_external_memory_capabilities',
     'VK_KHX_external_memory_fd',
+    'VK_KHX_external_semaphore',
+    'VK_KHX_external_semaphore_capabilities',
+    'VK_KHX_external_semaphore_fd',
+    'VK_KHX_multiview',
 ]
 
 # We generate a static hash table for entry point lookup

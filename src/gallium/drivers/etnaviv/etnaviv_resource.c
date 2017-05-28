@@ -180,7 +180,7 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
                         &paddingY, &halign);
    assert(paddingX && paddingY);
 
-   if (templat->bind != PIPE_BUFFER) {
+   if (templat->target != PIPE_BUFFER) {
       unsigned min_paddingY = 4 * screen->specs.pixel_pipes;
       if (paddingY < min_paddingY)
          paddingY = min_paddingY;
@@ -247,7 +247,7 @@ etna_resource_create(struct pipe_screen *pscreen,
          layout = ETNA_LAYOUT_LINEAR;
    } else if (templat->target != PIPE_BUFFER) {
       bool want_multitiled = false;
-      bool want_supertiled = screen->specs.can_supertile && !DBG_ENABLED(ETNA_DBG_NO_SUPERTILE);
+      bool want_supertiled = screen->specs.can_supertile;
 
       /* When this GPU supports single-buffer rendering, don't ever enable
        * multi-tiling. This replicates the blob behavior on GC3000.
@@ -286,11 +286,7 @@ etna_resource_changed(struct pipe_screen *pscreen, struct pipe_resource *prsc)
 {
    struct etna_resource *res = etna_resource(prsc);
 
-   /* Make sure texture is older than the imported renderable buffer,
-    * so etna_update_sampler_source will copy the pixel data again.
-    */
-   if (res->texture)
-      etna_resource(res->texture)->seqno = res->seqno - 1;
+   res->seqno++;
 }
 
 static void
@@ -305,7 +301,7 @@ etna_resource_destroy(struct pipe_screen *pscreen, struct pipe_resource *prsc)
       etna_bo_del(rsc->ts_bo);
 
    if (rsc->scanout)
-      renderonly_scanout_destroy(rsc->scanout);
+      renderonly_scanout_destroy(rsc->scanout, etna_screen(pscreen)->ro);
 
    list_delinit(&rsc->list);
 

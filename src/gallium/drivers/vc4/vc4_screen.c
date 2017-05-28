@@ -27,6 +27,7 @@
 #include "pipe/p_screen.h"
 #include "pipe/p_state.h"
 
+#include "util/u_cpu_detect.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_format.h"
@@ -252,6 +253,8 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
         case PIPE_CAP_TGSI_BALLOT:
         case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
                 return 0;
 
                 /* Stream output. */
@@ -629,6 +632,8 @@ vc4_screen_create(int fd)
         if (!vc4_get_chip_info(screen))
                 goto fail;
 
+        util_cpu_detect();
+
         slab_create_parent(&screen->transfer_pool, sizeof(struct vc4_transfer), 16);
 
         vc4_fence_init(screen);
@@ -654,58 +659,4 @@ fail:
         close(fd);
         ralloc_free(pscreen);
         return NULL;
-}
-
-boolean
-vc4_screen_bo_get_handle(struct pipe_screen *pscreen,
-                         struct vc4_bo *bo,
-                         unsigned stride,
-                         struct winsys_handle *whandle)
-{
-        whandle->stride = stride;
-
-        /* If we're passing some reference to our BO out to some other part of
-         * the system, then we can't do any optimizations about only us being
-         * the ones seeing it (like BO caching or shadow update avoidance).
-         */
-        bo->private = false;
-
-        switch (whandle->type) {
-        case DRM_API_HANDLE_TYPE_SHARED:
-                return vc4_bo_flink(bo, &whandle->handle);
-        case DRM_API_HANDLE_TYPE_KMS:
-                whandle->handle = bo->handle;
-                return TRUE;
-        case DRM_API_HANDLE_TYPE_FD:
-                whandle->handle = vc4_bo_get_dmabuf(bo);
-                return whandle->handle != -1;
-        }
-
-        return FALSE;
-}
-
-struct vc4_bo *
-vc4_screen_bo_from_handle(struct pipe_screen *pscreen,
-                          struct winsys_handle *whandle)
-{
-        struct vc4_screen *screen = vc4_screen(pscreen);
-
-        if (whandle->offset != 0) {
-                fprintf(stderr,
-                        "Attempt to import unsupported winsys offset %u\n",
-                        whandle->offset);
-                return NULL;
-        }
-
-        switch (whandle->type) {
-        case DRM_API_HANDLE_TYPE_SHARED:
-                return vc4_bo_open_name(screen, whandle->handle, whandle->stride);
-        case DRM_API_HANDLE_TYPE_FD:
-                return vc4_bo_open_dmabuf(screen, whandle->handle, whandle->stride);
-        default:
-                fprintf(stderr,
-                        "Attempt to import unsupported handle type %d\n",
-                        whandle->type);
-                return NULL;
-        }
 }

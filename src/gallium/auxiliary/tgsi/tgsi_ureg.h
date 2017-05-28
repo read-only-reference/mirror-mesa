@@ -555,6 +555,7 @@ ureg_tex_insn(struct ureg_program *ureg,
               const struct ureg_dst *dst,
               unsigned nr_dst,
               unsigned target,
+              unsigned return_type,
               const struct tgsi_texture_offset *texoffsets,
               unsigned nr_offset,
               const struct ureg_src *src,
@@ -596,7 +597,7 @@ ureg_emit_label(struct ureg_program *ureg,
 void
 ureg_emit_texture(struct ureg_program *ureg,
                   unsigned insn_token,
-                  unsigned target, unsigned num_offsets);
+                  unsigned target, unsigned return_type, unsigned num_offsets);
 
 void
 ureg_emit_texture_offset(struct ureg_program *ureg,
@@ -748,6 +749,7 @@ static inline void ureg_##op( struct ureg_program *ureg,                \
                               struct ureg_src src1 )                    \
 {                                                                       \
    unsigned opcode = TGSI_OPCODE_##op;                                  \
+   unsigned return_type = TGSI_RETURN_TYPE_UNKNOWN;                     \
    struct ureg_emit_insn_result insn;                                   \
    if (ureg_dst_is_empty(dst))                                          \
       return;                                                           \
@@ -756,30 +758,8 @@ static inline void ureg_##op( struct ureg_program *ureg,                \
                          dst.Saturate,                                  \
                          1,                                             \
                          2);                                            \
-   ureg_emit_texture( ureg, insn.extended_token, target, 0 );		\
-   ureg_emit_dst( ureg, dst );                                          \
-   ureg_emit_src( ureg, src0 );                                         \
-   ureg_emit_src( ureg, src1 );                                         \
-   ureg_fixup_insn_size( ureg, insn.insn_token );                       \
-}
-
-#define OP12_SAMPLE( op )                                               \
-static inline void ureg_##op( struct ureg_program *ureg,                \
-                              struct ureg_dst dst,                      \
-                              struct ureg_src src0,                     \
-                              struct ureg_src src1 )                    \
-{                                                                       \
-   unsigned opcode = TGSI_OPCODE_##op;                                  \
-   unsigned target = TGSI_TEXTURE_UNKNOWN;                              \
-   struct ureg_emit_insn_result insn;                                   \
-   if (ureg_dst_is_empty(dst))                                          \
-      return;                                                           \
-   insn = ureg_emit_insn(ureg,                                          \
-                         opcode,                                        \
-                         dst.Saturate,                                  \
-                         1,                                             \
-                         2);                                            \
-   ureg_emit_texture( ureg, insn.extended_token, target, 0 );           \
+   ureg_emit_texture( ureg, insn.extended_token, target,                \
+                      return_type, 0 );                                 \
    ureg_emit_dst( ureg, dst );                                          \
    ureg_emit_src( ureg, src0 );                                         \
    ureg_emit_src( ureg, src1 );                                         \
@@ -809,31 +789,6 @@ static inline void ureg_##op( struct ureg_program *ureg,                \
    ureg_fixup_insn_size( ureg, insn.insn_token );                       \
 }
 
-#define OP13_SAMPLE( op )                                               \
-static inline void ureg_##op( struct ureg_program *ureg,                \
-                              struct ureg_dst dst,                      \
-                              struct ureg_src src0,                     \
-                              struct ureg_src src1,                     \
-                              struct ureg_src src2 )                    \
-{                                                                       \
-   unsigned opcode = TGSI_OPCODE_##op;                                  \
-   unsigned target = TGSI_TEXTURE_UNKNOWN;                              \
-   struct ureg_emit_insn_result insn;                                   \
-   if (ureg_dst_is_empty(dst))                                          \
-      return;                                                           \
-   insn = ureg_emit_insn(ureg,                                          \
-                         opcode,                                        \
-                         dst.Saturate,                                  \
-                         1,                                             \
-                         3);                                            \
-   ureg_emit_texture( ureg, insn.extended_token, target, 0 );           \
-   ureg_emit_dst( ureg, dst );                                          \
-   ureg_emit_src( ureg, src0 );                                         \
-   ureg_emit_src( ureg, src1 );                                         \
-   ureg_emit_src( ureg, src2 );                                         \
-   ureg_fixup_insn_size( ureg, insn.insn_token );                       \
-}
-
 #define OP14_TEX( op )                                                  \
 static inline void ureg_##op( struct ureg_program *ureg,                \
                               struct ureg_dst dst,                      \
@@ -844,6 +799,7 @@ static inline void ureg_##op( struct ureg_program *ureg,                \
                               struct ureg_src src3 )                    \
 {                                                                       \
    unsigned opcode = TGSI_OPCODE_##op;                                  \
+   unsigned return_type = TGSI_RETURN_TYPE_UNKNOWN;                     \
    struct ureg_emit_insn_result insn;                                   \
    if (ureg_dst_is_empty(dst))                                          \
       return;                                                           \
@@ -852,122 +808,13 @@ static inline void ureg_##op( struct ureg_program *ureg,                \
                          dst.Saturate,                                  \
                          1,                                             \
                          4);                                            \
-   ureg_emit_texture( ureg, insn.extended_token, target, 0 );		\
+   ureg_emit_texture( ureg, insn.extended_token, target,                \
+                      return_type, 0 );                                 \
    ureg_emit_dst( ureg, dst );                                          \
    ureg_emit_src( ureg, src0 );                                         \
    ureg_emit_src( ureg, src1 );                                         \
    ureg_emit_src( ureg, src2 );                                         \
    ureg_emit_src( ureg, src3 );                                         \
-   ureg_fixup_insn_size( ureg, insn.insn_token );                       \
-}
-
-#define OP14_SAMPLE( op )                                               \
-static inline void ureg_##op( struct ureg_program *ureg,                \
-                              struct ureg_dst dst,                      \
-                              struct ureg_src src0,                     \
-                              struct ureg_src src1,                     \
-                              struct ureg_src src2,                     \
-                              struct ureg_src src3 )                    \
-{                                                                       \
-   unsigned opcode = TGSI_OPCODE_##op;                                  \
-   unsigned target = TGSI_TEXTURE_UNKNOWN;                              \
-   struct ureg_emit_insn_result insn;                                   \
-   if (ureg_dst_is_empty(dst))                                          \
-      return;                                                           \
-   insn = ureg_emit_insn(ureg,                                          \
-                         opcode,                                        \
-                         dst.Saturate,                                  \
-                         1,                                             \
-                         4);                                            \
-   ureg_emit_texture( ureg, insn.extended_token, target, 0 );           \
-   ureg_emit_dst( ureg, dst );                                          \
-   ureg_emit_src( ureg, src0 );                                         \
-   ureg_emit_src( ureg, src1 );                                         \
-   ureg_emit_src( ureg, src2 );                                         \
-   ureg_emit_src( ureg, src3 );                                         \
-   ureg_fixup_insn_size( ureg, insn.insn_token );                       \
-}
-
-
-#define OP14( op )                                                      \
-static inline void ureg_##op( struct ureg_program *ureg,                \
-                              struct ureg_dst dst,                      \
-                              struct ureg_src src0,                     \
-                              struct ureg_src src1,                     \
-                              struct ureg_src src2,                     \
-                              struct ureg_src src3 )                    \
-{                                                                       \
-   unsigned opcode = TGSI_OPCODE_##op;                                  \
-   struct ureg_emit_insn_result insn;                                   \
-   if (ureg_dst_is_empty(dst))                                          \
-      return;                                                           \
-   insn = ureg_emit_insn(ureg,                                          \
-                         opcode,                                        \
-                         dst.Saturate,                                  \
-                         1,                                             \
-                         4);                                            \
-   ureg_emit_dst( ureg, dst );                                          \
-   ureg_emit_src( ureg, src0 );                                         \
-   ureg_emit_src( ureg, src1 );                                         \
-   ureg_emit_src( ureg, src2 );                                         \
-   ureg_emit_src( ureg, src3 );                                         \
-   ureg_fixup_insn_size( ureg, insn.insn_token );                       \
-}
-
-
-#define OP15( op )                                                      \
-static inline void ureg_##op( struct ureg_program *ureg,                \
-                              struct ureg_dst dst,                      \
-                              struct ureg_src src0,                     \
-                              struct ureg_src src1,                     \
-                              struct ureg_src src2,                     \
-                              struct ureg_src src3,                     \
-                              struct ureg_src src4 )                    \
-{                                                                       \
-   unsigned opcode = TGSI_OPCODE_##op;                                  \
-   struct ureg_emit_insn_result insn;                                   \
-   if (ureg_dst_is_empty(dst))                                          \
-      return;                                                           \
-   insn = ureg_emit_insn(ureg,                                          \
-                         opcode,                                        \
-                         dst.Saturate,                                  \
-                         1,                                             \
-                         5);                                            \
-   ureg_emit_dst( ureg, dst );                                          \
-   ureg_emit_src( ureg, src0 );                                         \
-   ureg_emit_src( ureg, src1 );                                         \
-   ureg_emit_src( ureg, src2 );                                         \
-   ureg_emit_src( ureg, src3 );                                         \
-   ureg_emit_src( ureg, src4 );                                         \
-   ureg_fixup_insn_size( ureg, insn.insn_token );                       \
-}
-
-#define OP15_SAMPLE( op )                                               \
-static inline void ureg_##op( struct ureg_program *ureg,                \
-                              struct ureg_dst dst,                      \
-                              struct ureg_src src0,                     \
-                              struct ureg_src src1,                     \
-                              struct ureg_src src2,                     \
-                              struct ureg_src src3,                     \
-                              struct ureg_src src4 )                    \
-{                                                                       \
-   unsigned opcode = TGSI_OPCODE_##op;                                  \
-   unsigned target = TGSI_TEXTURE_UNKNOWN;                              \
-   struct ureg_emit_insn_result insn;                                   \
-   if (ureg_dst_is_empty(dst))                                          \
-      return;                                                           \
-   insn = ureg_emit_insn(ureg,                                          \
-                         opcode,                                        \
-                         dst.Saturate,                                  \
-                         1,                                             \
-                         5);                                            \
-   ureg_emit_texture( ureg, insn.extended_token, target, 0 );           \
-   ureg_emit_dst( ureg, dst );                                          \
-   ureg_emit_src( ureg, src0 );                                         \
-   ureg_emit_src( ureg, src1 );                                         \
-   ureg_emit_src( ureg, src2 );                                         \
-   ureg_emit_src( ureg, src3 );                                         \
-   ureg_emit_src( ureg, src4 );                                         \
    ureg_fixup_insn_size( ureg, insn.insn_token );                       \
 }
 

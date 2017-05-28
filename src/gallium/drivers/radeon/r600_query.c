@@ -73,6 +73,7 @@ static enum radeon_value_id winsys_id_from_type(unsigned type)
 	case R600_QUERY_NUM_SDMA_IBS: return RADEON_NUM_SDMA_IBS;
 	case R600_QUERY_NUM_BYTES_MOVED: return RADEON_NUM_BYTES_MOVED;
 	case R600_QUERY_NUM_EVICTIONS: return RADEON_NUM_EVICTIONS;
+	case R600_QUERY_NUM_VRAM_CPU_PAGE_FAULTS: return RADEON_NUM_VRAM_CPU_PAGE_FAULTS;
 	case R600_QUERY_VRAM_USAGE: return RADEON_VRAM_USAGE;
 	case R600_QUERY_VRAM_VIS_USAGE: return RADEON_VRAM_VIS_USAGE;
 	case R600_QUERY_GTT_USAGE: return RADEON_GTT_USAGE;
@@ -133,6 +134,15 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_NUM_L2_WRITEBACKS:
 		query->begin_result = rctx->num_L2_writebacks;
 		break;
+	case R600_QUERY_TC_OFFLOADED_SLOTS:
+		query->begin_result = rctx->tc ? rctx->tc->num_offloaded_slots : 0;
+		break;
+	case R600_QUERY_TC_DIRECT_SLOTS:
+		query->begin_result = rctx->tc ? rctx->tc->num_direct_slots : 0;
+		break;
+	case R600_QUERY_TC_NUM_SYNCS:
+		query->begin_result = rctx->tc ? rctx->tc->num_syncs : 0;
+		break;
 	case R600_QUERY_REQUESTED_VRAM:
 	case R600_QUERY_REQUESTED_GTT:
 	case R600_QUERY_MAPPED_VRAM:
@@ -151,7 +161,8 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_NUM_GFX_IBS:
 	case R600_QUERY_NUM_SDMA_IBS:
 	case R600_QUERY_NUM_BYTES_MOVED:
-	case R600_QUERY_NUM_EVICTIONS: {
+	case R600_QUERY_NUM_EVICTIONS:
+	case R600_QUERY_NUM_VRAM_CPU_PAGE_FAULTS: {
 		enum radeon_value_id ws_id = winsys_id_from_type(query->b.type);
 		query->begin_result = rctx->ws->query_value(rctx->ws, ws_id);
 		break;
@@ -159,6 +170,11 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_CS_THREAD_BUSY:
 		ws_id = winsys_id_from_type(query->b.type);
 		query->begin_result = rctx->ws->query_value(rctx->ws, ws_id);
+		query->begin_time = os_time_get_nano();
+		break;
+	case R600_QUERY_GALLIUM_THREAD_BUSY:
+		query->begin_result =
+			rctx->tc ? util_queue_get_thread_time_nano(&rctx->tc->queue, 0) : 0;
 		query->begin_time = os_time_get_nano();
 		break;
 	case R600_QUERY_GPU_LOAD:
@@ -260,6 +276,15 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 	case R600_QUERY_NUM_L2_WRITEBACKS:
 		query->end_result = rctx->num_L2_writebacks;
 		break;
+	case R600_QUERY_TC_OFFLOADED_SLOTS:
+		query->end_result = rctx->tc ? rctx->tc->num_offloaded_slots : 0;
+		break;
+	case R600_QUERY_TC_DIRECT_SLOTS:
+		query->end_result = rctx->tc ? rctx->tc->num_direct_slots : 0;
+		break;
+	case R600_QUERY_TC_NUM_SYNCS:
+		query->end_result = rctx->tc ? rctx->tc->num_syncs : 0;
+		break;
 	case R600_QUERY_REQUESTED_VRAM:
 	case R600_QUERY_REQUESTED_GTT:
 	case R600_QUERY_MAPPED_VRAM:
@@ -275,7 +300,8 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 	case R600_QUERY_NUM_GFX_IBS:
 	case R600_QUERY_NUM_SDMA_IBS:
 	case R600_QUERY_NUM_BYTES_MOVED:
-	case R600_QUERY_NUM_EVICTIONS: {
+	case R600_QUERY_NUM_EVICTIONS:
+	case R600_QUERY_NUM_VRAM_CPU_PAGE_FAULTS: {
 		enum radeon_value_id ws_id = winsys_id_from_type(query->b.type);
 		query->end_result = rctx->ws->query_value(rctx->ws, ws_id);
 		break;
@@ -283,6 +309,11 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 	case R600_QUERY_CS_THREAD_BUSY:
 		ws_id = winsys_id_from_type(query->b.type);
 		query->end_result = rctx->ws->query_value(rctx->ws, ws_id);
+		query->end_time = os_time_get_nano();
+		break;
+	case R600_QUERY_GALLIUM_THREAD_BUSY:
+		query->end_result =
+			rctx->tc ? util_queue_get_thread_time_nano(&rctx->tc->queue, 0) : 0;
 		query->end_time = os_time_get_nano();
 		break;
 	case R600_QUERY_GPU_LOAD:
@@ -354,12 +385,15 @@ static bool r600_query_sw_get_result(struct r600_common_context *rctx,
 		return true;
 	case PIPE_QUERY_GPU_FINISHED: {
 		struct pipe_screen *screen = rctx->b.screen;
-		result->b = screen->fence_finish(screen, &rctx->b, query->fence,
+		struct pipe_context *ctx = rquery->b.flushed ? NULL : &rctx->b;
+
+		result->b = screen->fence_finish(screen, ctx, query->fence,
 						 wait ? PIPE_TIMEOUT_INFINITE : 0);
 		return result->b;
 	}
 
 	case R600_QUERY_CS_THREAD_BUSY:
+	case R600_QUERY_GALLIUM_THREAD_BUSY:
 		result->u64 = (query->end_result - query->begin_result) * 100 /
 			      (query->end_time - query->begin_time);
 		return true;
@@ -669,8 +703,25 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 		radeon_emit(cs, va >> 32);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
-		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
-					 0, 3, NULL, va, 0, 0);
+		if (ctx->chip_class >= SI) {
+			/* Write the timestamp from the CP not waiting for
+			 * outstanding draws (top-of-pipe).
+			 */
+			radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
+			radeon_emit(cs, COPY_DATA_COUNT_SEL |
+					COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) |
+					COPY_DATA_DST_SEL(COPY_DATA_MEM_ASYNC));
+			radeon_emit(cs, 0);
+			radeon_emit(cs, 0);
+			radeon_emit(cs, va);
+			radeon_emit(cs, va >> 32);
+		} else {
+			/* Write the timestamp after the last draw is done.
+			 * (bottom-of-pipe)
+			 */
+			r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
+						 0, 3, NULL, va, 0, 0);
+		}
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -1212,12 +1263,16 @@ bool r600_query_hw_get_result(struct r600_common_context *rctx,
 	query->ops->clear_result(query, result);
 
 	for (qbuf = &query->buffer; qbuf; qbuf = qbuf->previous) {
+		unsigned usage = PIPE_TRANSFER_READ |
+				 (wait ? 0 : PIPE_TRANSFER_DONTBLOCK);
 		unsigned results_base = 0;
 		void *map;
 
-		map = r600_buffer_map_sync_with_rings(rctx, qbuf->buf,
-						      PIPE_TRANSFER_READ |
-						      (wait ? 0 : PIPE_TRANSFER_DONTBLOCK));
+		if (rquery->b.flushed)
+			map = rctx->ws->buffer_map(qbuf->buf->buf, NULL, usage);
+		else
+			map = r600_buffer_map_sync_with_rings(rctx, qbuf->buf, usage);
+
 		if (!map)
 			return false;
 
@@ -1779,7 +1834,11 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-fb-cache-flushes",	NUM_FB_CACHE_FLUSHES,	UINT64, AVERAGE),
 	X("num-L2-invalidates",		NUM_L2_INVALIDATES,	UINT64, AVERAGE),
 	X("num-L2-writebacks",		NUM_L2_WRITEBACKS,	UINT64, AVERAGE),
+	X("tc-offloaded-slots",		TC_OFFLOADED_SLOTS,     UINT64, AVERAGE),
+	X("tc-direct-slots",		TC_DIRECT_SLOTS,	UINT64, AVERAGE),
+	X("tc-num-syncs",		TC_NUM_SYNCS,		UINT64, AVERAGE),
 	X("CS-thread-busy",		CS_THREAD_BUSY,		UINT64, AVERAGE),
+	X("gallium-thread-busy",	GALLIUM_THREAD_BUSY,	UINT64, AVERAGE),
 	X("requested-VRAM",		REQUESTED_VRAM,		BYTES, AVERAGE),
 	X("requested-GTT",		REQUESTED_GTT,		BYTES, AVERAGE),
 	X("mapped-VRAM",		MAPPED_VRAM,		BYTES, AVERAGE),
@@ -1790,6 +1849,7 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-SDMA-IBs",		NUM_SDMA_IBS,		UINT64, AVERAGE),
 	X("num-bytes-moved",		NUM_BYTES_MOVED,	BYTES, CUMULATIVE),
 	X("num-evictions",		NUM_EVICTIONS,		UINT64, CUMULATIVE),
+	X("VRAM-CPU-page-faults",	NUM_VRAM_CPU_PAGE_FAULTS, UINT64, CUMULATIVE),
 	X("VRAM-usage",			VRAM_USAGE,		BYTES, AVERAGE),
 	X("VRAM-vis-usage",		VRAM_VIS_USAGE,		BYTES, AVERAGE),
 	X("GTT-usage",			GTT_USAGE,		BYTES, AVERAGE),

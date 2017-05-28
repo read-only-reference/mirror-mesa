@@ -145,6 +145,11 @@ struct ac_shader_binary;
 
 #define SI_MAX_VS_OUTPUTS	40
 
+/* Shader IO unique indices are supported for TGSI_SEMANTIC_GENERIC with an
+ * index smaller than this.
+ */
+#define SI_MAX_IO_GENERIC       46
+
 /* SGPR user data indices */
 enum {
 	/* GFX9 merged shaders have RW_BUFFERS among the first 8 system SGPRs,
@@ -152,14 +157,10 @@ enum {
 	 */
 	SI_SGPR_RW_BUFFERS,  /* rings (& stream-out, VS only) */
 	SI_SGPR_RW_BUFFERS_HI,
-	SI_SGPR_CONST_BUFFERS,
-	SI_SGPR_CONST_BUFFERS_HI,
-	SI_SGPR_SAMPLERS,  /* images & sampler states interleaved */
-	SI_SGPR_SAMPLERS_HI,
-	SI_SGPR_IMAGES,
-	SI_SGPR_IMAGES_HI,
-	SI_SGPR_SHADER_BUFFERS,
-	SI_SGPR_SHADER_BUFFERS_HI,
+	SI_SGPR_CONST_AND_SHADER_BUFFERS,
+	SI_SGPR_CONST_AND_SHADER_BUFFERS_HI,
+	SI_SGPR_SAMPLERS_AND_IMAGES,
+	SI_SGPR_SAMPLERS_AND_IMAGES_HI,
 	SI_NUM_RESOURCE_SGPRS,
 
 	/* all VS variants */
@@ -192,25 +193,17 @@ enum {
 	GFX9_SGPR_TCS_OFFCHIP_ADDR_BASE64K,
 	GFX9_SGPR_TCS_FACTOR_ADDR_BASE64K,
 	GFX9_SGPR_unused_to_align_the_next_pointer,
-	GFX9_SGPR_TCS_CONST_BUFFERS,
-	GFX9_SGPR_TCS_CONST_BUFFERS_HI,
-	GFX9_SGPR_TCS_SAMPLERS,  /* images & sampler states interleaved */
-	GFX9_SGPR_TCS_SAMPLERS_HI,
-	GFX9_SGPR_TCS_IMAGES,
-	GFX9_SGPR_TCS_IMAGES_HI,
-	GFX9_SGPR_TCS_SHADER_BUFFERS,
-	GFX9_SGPR_TCS_SHADER_BUFFERS_HI,
+	GFX9_SGPR_TCS_CONST_AND_SHADER_BUFFERS,
+	GFX9_SGPR_TCS_CONST_AND_SHADER_BUFFERS_HI,
+	GFX9_SGPR_TCS_SAMPLERS_AND_IMAGES,
+	GFX9_SGPR_TCS_SAMPLERS_AND_IMAGES_HI,
 	GFX9_TCS_NUM_USER_SGPR,
 
 	/* GFX9: Merged ES-GS (VS-GS or TES-GS). */
-	GFX9_SGPR_GS_CONST_BUFFERS = SI_VS_NUM_USER_SGPR,
-	GFX9_SGPR_GS_CONST_BUFFERS_HI,
-	GFX9_SGPR_GS_SAMPLERS,
-	GFX9_SGPR_GS_SAMPLERS_HI,
-	GFX9_SGPR_GS_IMAGES,
-	GFX9_SGPR_GS_IMAGES_HI,
-	GFX9_SGPR_GS_SHADER_BUFFERS,
-	GFX9_SGPR_GS_SHADER_BUFFERS_HI,
+	GFX9_SGPR_GS_CONST_AND_SHADER_BUFFERS = SI_VS_NUM_USER_SGPR,
+	GFX9_SGPR_GS_CONST_AND_SHADER_BUFFERS_HI,
+	GFX9_SGPR_GS_SAMPLERS_AND_IMAGES,
+	GFX9_SGPR_GS_SAMPLERS_AND_IMAGES_HI,
 	GFX9_GS_NUM_USER_SGPR,
 
 	/* GS limits */
@@ -224,7 +217,7 @@ enum {
 
 /* LLVM function parameter indices */
 enum {
-	SI_NUM_RESOURCE_PARAMS = 5,
+	SI_NUM_RESOURCE_PARAMS = 3,
 
 	/* PS only parameters */
 	SI_PARAM_ALPHA_REF = SI_NUM_RESOURCE_PARAMS,
@@ -356,11 +349,13 @@ struct si_shader_selector {
 	unsigned local_size;
 
 	uint64_t	outputs_written;	/* "get_unique_index" bits */
-	uint32_t	patch_outputs_written;	/* "get_unique_index" bits */
-	uint32_t	outputs_written2;	/* "get_unique_index2" bits */
+	uint32_t	patch_outputs_written;	/* "get_unique_index_patch" bits */
 
 	uint64_t	inputs_read;		/* "get_unique_index" bits */
-	uint32_t	inputs_read2;		/* "get_unique_index2" bits */
+
+	/* bitmasks of used descriptor slots */
+	uint32_t	active_const_and_shader_buffers;
+	uint64_t	active_samplers_and_images;
 };
 
 /* Valid shader configurations:
@@ -500,7 +495,6 @@ struct si_shader_key {
 	struct {
 		struct {
 			uint64_t	kill_outputs; /* "get_unique_index" bits */
-			uint32_t	kill_outputs2; /* "get_unique_index2" bits */
 			unsigned	clip_disable:1;
 		} hw_vs; /* HW VS (it can be VS, TES, GS) */
 
@@ -596,33 +590,23 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 int si_shader_create(struct si_screen *sscreen, LLVMTargetMachineRef tm,
 		     struct si_shader *shader,
 		     struct pipe_debug_callback *debug);
-int si_compile_llvm(struct si_screen *sscreen,
-		    struct ac_shader_binary *binary,
-		    struct si_shader_config *conf,
-		    LLVMTargetMachineRef tm,
-		    LLVMModuleRef mod,
-		    struct pipe_debug_callback *debug,
-		    unsigned processor,
-		    const char *name);
 void si_shader_destroy(struct si_shader *shader);
+unsigned si_shader_io_get_unique_index_patch(unsigned semantic_name, unsigned index);
 unsigned si_shader_io_get_unique_index(unsigned semantic_name, unsigned index);
-unsigned si_shader_io_get_unique_index2(unsigned name, unsigned index);
 int si_shader_binary_upload(struct si_screen *sscreen, struct si_shader *shader);
-void si_shader_dump(struct si_screen *sscreen, struct si_shader *shader,
+void si_shader_dump(struct si_screen *sscreen, const struct si_shader *shader,
 		    struct pipe_debug_callback *debug, unsigned processor,
 		    FILE *f, bool check_debug_option);
 void si_multiwave_lds_size_workaround(struct si_screen *sscreen,
 				      unsigned *lds_size);
-void si_shader_apply_scratch_relocs(struct si_context *sctx,
-			struct si_shader *shader,
-			struct si_shader_config *config,
-			uint64_t scratch_va);
+void si_shader_apply_scratch_relocs(struct si_shader *shader,
+				    uint64_t scratch_va);
 void si_shader_binary_read_config(struct ac_shader_binary *binary,
 				  struct si_shader_config *conf,
 				  unsigned symbol_offset);
 unsigned si_get_spi_shader_z_format(bool writes_z, bool writes_stencil,
 				    bool writes_samplemask);
-const char *si_get_shader_name(struct si_shader *shader, unsigned processor);
+const char *si_get_shader_name(const struct si_shader *shader, unsigned processor);
 
 /* Inline helpers. */
 

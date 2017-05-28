@@ -47,12 +47,6 @@
 #include "swr_state.h"
 #include "swr_screen.h"
 
-#if HAVE_LLVM < 0x0500
-namespace llvm {
-typedef AttributeSet AttributeList;
-}
-#endif
-
 using namespace SwrJit;
 using namespace llvm;
 
@@ -376,8 +370,13 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
 
     IRB()->SetInsertPoint(unwrap(LLVMGetInsertBlock(gallivm->builder)));
 
+#if USE_SIMD16_FRONTEND
+    const uint32_t simdVertexStride = sizeof(simdvertex) * 2;
+    const uint32_t numSimdBatches = (pGS->maxNumVerts + (mVWidth * 2) - 1) / (mVWidth * 2);
+#else
     const uint32_t simdVertexStride = sizeof(simdvertex);
-    const uint32_t numSimdBatches = (pGS->maxNumVerts + 7) / 8;
+    const uint32_t numSimdBatches = (pGS->maxNumVerts + mVWidth - 1) / mVWidth;
+#endif
     const uint32_t inputPrimStride = numSimdBatches * simdVertexStride;
 
     Value *pStream = LOAD(iface->pGsCtx, { 0, SWR_GS_CONTEXT_pStream });
@@ -394,8 +393,14 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
           inputPrimStride * 6,
           inputPrimStride * 7 } );
 
-    Value *vVertexSlot = ASHR(unwrap(emitted_vertices_vec), 3);
-    Value *vSimdSlot = AND(unwrap(emitted_vertices_vec), 7);
+#if USE_SIMD16_FRONTEND
+    const uint32_t simdShift = log2(mVWidth * 2);
+    Value *vSimdSlot = AND(unwrap(emitted_vertices_vec), (mVWidth * 2) - 1);
+#else
+    const uint32_t simdShift = log2(mVWidth);
+    Value *vSimdSlot = AND(unwrap(emitted_vertices_vec), mVWidth - 1);
+#endif
+    Value *vVertexSlot = ASHR(unwrap(emitted_vertices_vec), simdShift);
 
     for (uint32_t attrib = 0; attrib < iface->num_outputs; ++attrib) {
        uint32_t attribSlot = attrib;
@@ -406,10 +411,17 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
        else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_LAYER)
           attribSlot = VERTEX_RTAI_SLOT;
 
+#if USE_SIMD16_FRONTEND
+       Value *vOffsetsAttrib =
+          ADD(vOffsets, MUL(vVertexSlot, VIMMED1((uint32_t)sizeof(simdvertex) * 2)));
+       vOffsetsAttrib =
+          ADD(vOffsetsAttrib, VIMMED1((uint32_t)(attribSlot*sizeof(simdvector) * 2)));
+#else
        Value *vOffsetsAttrib =
           ADD(vOffsets, MUL(vVertexSlot, VIMMED1((uint32_t)sizeof(simdvertex))));
        vOffsetsAttrib =
           ADD(vOffsetsAttrib, VIMMED1((uint32_t)(attribSlot*sizeof(simdvector))));
+#endif
        vOffsetsAttrib =
           ADD(vOffsetsAttrib, MUL(vSimdSlot, VIMMED1((uint32_t)sizeof(float))));
 
@@ -422,8 +434,13 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
 
           MASKED_SCATTER(vData, vPtrs, 32, vMask1);
 
+#if USE_SIMD16_FRONTEND
+          vOffsetsAttrib =
+             ADD(vOffsetsAttrib, VIMMED1((uint32_t)sizeof(simdscalar) * 2));
+#else
           vOffsetsAttrib =
              ADD(vOffsetsAttrib, VIMMED1((uint32_t)sizeof(simdscalar)));
+#endif
        }
     }
 }
@@ -533,8 +550,6 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
 
    AttrBuilder attrBuilder;
    attrBuilder.addStackAlignmentAttr(JM()->mVWidth * sizeof(float));
-   AttributeList attrSet = AttributeList::get(
-      JM()->mContext, AttributeList::FunctionIndex, attrBuilder);
 
    std::vector<Type *> gsArgs{PointerType::get(Gen_swr_draw_context(JM()), 0),
                               PointerType::get(Gen_SWR_GS_CONTEXT(JM()), 0)};
@@ -546,7 +561,13 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "GS",
                                      JM()->mpCurrentModule);
-   pFunction->addAttributes(AttributeList::FunctionIndex, attrSet);
+#if HAVE_LLVM < 0x0500
+   AttributeSet attrSet = AttributeSet::get(
+      JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
+   pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
+#else
+   pFunction->addAttributes(AttributeList::FunctionIndex, attrBuilder);
+#endif
 
    BasicBlock *block = BasicBlock::Create(JM()->mContext, "entry", pFunction);
    IRB()->SetInsertPoint(block);
@@ -689,8 +710,6 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
 
    AttrBuilder attrBuilder;
    attrBuilder.addStackAlignmentAttr(JM()->mVWidth * sizeof(float));
-   AttributeList attrSet = AttributeList::get(
-      JM()->mContext, AttributeList::FunctionIndex, attrBuilder);
 
    std::vector<Type *> vsArgs{PointerType::get(Gen_swr_draw_context(JM()), 0),
                               PointerType::get(Gen_SWR_VS_CONTEXT(JM()), 0)};
@@ -702,7 +721,13 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "VS",
                                      JM()->mpCurrentModule);
-   pFunction->addAttributes(AttributeList::FunctionIndex, attrSet);
+#if HAVE_LLVM < 0x0500
+   AttributeSet attrSet = AttributeSet::get(
+      JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
+   pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
+#else
+   pFunction->addAttributes(AttributeList::FunctionIndex, attrBuilder);
+#endif
 
    BasicBlock *block = BasicBlock::Create(JM()->mContext, "entry", pFunction);
    IRB()->SetInsertPoint(block);
@@ -900,8 +925,6 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
 
    AttrBuilder attrBuilder;
    attrBuilder.addStackAlignmentAttr(JM()->mVWidth * sizeof(float));
-   AttributeList attrSet = AttributeList::get(
-      JM()->mContext, AttributeList::FunctionIndex, attrBuilder);
 
    std::vector<Type *> fsArgs{PointerType::get(Gen_swr_draw_context(JM()), 0),
                               PointerType::get(Gen_SWR_PS_CONTEXT(JM()), 0)};
@@ -912,7 +935,13 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "FS",
                                      JM()->mpCurrentModule);
-   pFunction->addAttributes(AttributeList::FunctionIndex, attrSet);
+#if HAVE_LLVM < 0x0500
+   AttributeSet attrSet = AttributeSet::get(
+      JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
+   pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
+#else
+   pFunction->addAttributes(AttributeList::FunctionIndex, attrBuilder);
+#endif
 
    BasicBlock *block = BasicBlock::Create(JM()->mContext, "entry", pFunction);
    IRB()->SetInsertPoint(block);

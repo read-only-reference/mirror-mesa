@@ -217,7 +217,7 @@ union si_vgt_param_key {
 		unsigned count_from_stream_output:1;
 		unsigned line_stipple_enabled:1;
 		unsigned uses_tess:1;
-		unsigned tcs_tes_uses_prim_id:1;
+		unsigned tess_uses_prim_id:1;
 		unsigned uses_gs:1;
 		unsigned _pad:32 - SI_NUM_VGT_PARAM_KEY_BITS;
 	} u;
@@ -236,6 +236,9 @@ struct si_context {
 
 	struct radeon_winsys_cs		*ce_ib;
 	struct radeon_winsys_cs		*ce_preamble_ib;
+	struct r600_resource		*ce_ram_saved_buffer;
+	unsigned			ce_ram_saved_offset;
+	unsigned			total_ce_ram_allocated;
 	bool				ce_need_synchronization;
 	struct u_suballocator		*ce_suballocator;
 
@@ -295,8 +298,7 @@ struct si_context {
 	unsigned			shader_pointers_dirty;
 	unsigned			compressed_tex_shader_mask;
 	struct si_buffer_resources	rw_buffers;
-	struct si_buffer_resources	const_buffers[SI_NUM_SHADERS];
-	struct si_buffer_resources	shader_buffers[SI_NUM_SHADERS];
+	struct si_buffer_resources	const_and_shader_buffers[SI_NUM_SHADERS];
 	struct si_textures_info		samplers[SI_NUM_SHADERS];
 	struct si_images_info		images[SI_NUM_SHADERS];
 
@@ -314,7 +316,6 @@ struct si_context {
 	/* Vertex and index buffers. */
 	bool				vertex_buffers_dirty;
 	bool				vertex_buffer_pointer_dirty;
-	struct pipe_index_buffer	index_buffer;
 	struct pipe_vertex_buffer	vertex_buffer[SI_NUM_VERTEX_BUFFERS];
 
 	/* MSAA config state. */

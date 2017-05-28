@@ -23,6 +23,14 @@ DECODER_FILES = \
 COMPILER_FILES = \
 	compiler/brw_cfg.cpp \
 	compiler/brw_cfg.h \
+	compiler/brw_clip.h \
+	compiler/brw_clip_line.c \
+	compiler/brw_clip_point.c \
+	compiler/brw_clip_tri.c \
+	compiler/brw_clip_unfilled.c \
+	compiler/brw_clip_util.c \
+	compiler/brw_compile_clip.c \
+	compiler/brw_compile_sf.c \
 	compiler/brw_compiler.c \
 	compiler/brw_compiler.h \
 	compiler/brw_dead_control_flow.cpp \
@@ -197,6 +205,7 @@ VULKAN_FILES := \
 	vulkan/anv_nir.h \
 	vulkan/anv_nir_apply_pipeline_layout.c \
 	vulkan/anv_nir_lower_input_attachments.c \
+	vulkan/anv_nir_lower_multiview.c \
 	vulkan/anv_nir_lower_push_constants.c \
 	vulkan/anv_pass.c \
 	vulkan/anv_pipeline.c \

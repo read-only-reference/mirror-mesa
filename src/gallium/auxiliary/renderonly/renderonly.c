@@ -29,11 +29,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <sys/ioctl.h>
 #include <xf86drm.h>
 
 #include "state_tracker/drm_driver.h"
 #include "pipe/p_screen.h"
+#include "util/u_inlines.h"
 #include "util/u_memory.h"
 
 struct renderonly *
@@ -65,8 +65,16 @@ renderonly_scanout_for_prime(struct pipe_resource *rsc, struct renderonly *ro)
 }
 
 void
-renderonly_scanout_destroy(struct renderonly_scanout *scanout)
+renderonly_scanout_destroy(struct renderonly_scanout *scanout,
+			   struct renderonly *ro)
 {
+   struct drm_mode_destroy_dumb destroy_dumb = { };
+
+   pipe_resource_reference(&scanout->prime, NULL);
+   if (ro->kms_fd != -1) {
+      destroy_dumb.handle = scanout->handle;
+      drmIoctl(ro->kms_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_dumb);
+   }
    FREE(scanout);
 }
 
@@ -90,7 +98,7 @@ renderonly_create_kms_dumb_buffer_for_resource(struct pipe_resource *rsc,
       return NULL;
 
    /* create dumb buffer at scanout GPU */
-   err = ioctl(ro->kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_dumb);
+   err = drmIoctl(ro->kms_fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_dumb);
    if (err < 0) {
       fprintf(stderr, "DRM_IOCTL_MODE_CREATE_DUMB failed: %s\n",
             strerror(errno));
@@ -109,12 +117,15 @@ renderonly_create_kms_dumb_buffer_for_resource(struct pipe_resource *rsc,
    }
 
    /* import dumb buffer */
+   memset(&handle, 0, sizeof(handle));
    handle.type = DRM_API_HANDLE_TYPE_FD;
    handle.handle = prime_fd;
    handle.stride = create_dumb.pitch;
 
    scanout->prime = screen->resource_from_handle(screen, rsc,
          &handle, PIPE_HANDLE_USAGE_READ_WRITE);
+
+   close(prime_fd);
 
    if (!scanout->prime) {
       fprintf(stderr, "failed to create resource_from_handle: %s\n", strerror(errno));
@@ -125,7 +136,7 @@ renderonly_create_kms_dumb_buffer_for_resource(struct pipe_resource *rsc,
 
 free_dumb:
    destroy_dumb.handle = scanout->handle;
-   ioctl(ro->kms_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_dumb);
+   drmIoctl(ro->kms_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_dumb);
 
 free_scanout:
    FREE(scanout);

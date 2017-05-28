@@ -28,9 +28,7 @@
 #ifndef R600_QUERY_H
 #define R600_QUERY_H
 
-#include "pipe/p_defines.h"
-#include "pipe/p_state.h"
-#include "util/list.h"
+#include "util/u_threaded_context.h"
 
 struct pipe_context;
 struct pipe_query;
@@ -56,7 +54,11 @@ enum {
 	R600_QUERY_NUM_FB_CACHE_FLUSHES,
 	R600_QUERY_NUM_L2_INVALIDATES,
 	R600_QUERY_NUM_L2_WRITEBACKS,
+	R600_QUERY_TC_OFFLOADED_SLOTS,
+	R600_QUERY_TC_DIRECT_SLOTS,
+	R600_QUERY_TC_NUM_SYNCS,
 	R600_QUERY_CS_THREAD_BUSY,
+	R600_QUERY_GALLIUM_THREAD_BUSY,
 	R600_QUERY_REQUESTED_VRAM,
 	R600_QUERY_REQUESTED_GTT,
 	R600_QUERY_MAPPED_VRAM,
@@ -67,6 +69,7 @@ enum {
 	R600_QUERY_NUM_SDMA_IBS,
 	R600_QUERY_NUM_BYTES_MOVED,
 	R600_QUERY_NUM_EVICTIONS,
+	R600_QUERY_NUM_VRAM_CPU_PAGE_FAULTS,
 	R600_QUERY_VRAM_USAGE,
 	R600_QUERY_VRAM_VIS_USAGE,
 	R600_QUERY_GTT_USAGE,
@@ -129,6 +132,7 @@ struct r600_query_ops {
 };
 
 struct r600_query {
+	struct threaded_query b;
 	struct r600_query_ops *ops;
 
 	/* The type of query */

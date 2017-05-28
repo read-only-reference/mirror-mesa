@@ -233,42 +233,16 @@ build_cube_intrinsic(struct ac_llvm_context *ctx,
 		     LLVMValueRef in[3],
 		     struct cube_selection_coords *out)
 {
-	LLVMBuilderRef builder = ctx->builder;
+	LLVMTypeRef f32 = ctx->f32;
 
-	if (HAVE_LLVM >= 0x0309) {
-		LLVMTypeRef f32 = ctx->f32;
-
-		out->stc[1] = ac_build_intrinsic(ctx, "llvm.amdgcn.cubetc",
-					f32, in, 3, AC_FUNC_ATTR_READNONE);
-		out->stc[0] = ac_build_intrinsic(ctx, "llvm.amdgcn.cubesc",
-					f32, in, 3, AC_FUNC_ATTR_READNONE);
-		out->ma = ac_build_intrinsic(ctx, "llvm.amdgcn.cubema",
-					f32, in, 3, AC_FUNC_ATTR_READNONE);
-		out->id = ac_build_intrinsic(ctx, "llvm.amdgcn.cubeid",
-					f32, in, 3, AC_FUNC_ATTR_READNONE);
-	} else {
-		LLVMValueRef c[4] = {
-			in[0],
-			in[1],
-			in[2],
-			LLVMGetUndef(LLVMTypeOf(in[0]))
-		};
-		LLVMValueRef vec = ac_build_gather_values(ctx, c, 4);
-
-		LLVMValueRef tmp =
-			ac_build_intrinsic(ctx, "llvm.AMDGPU.cube",
-					   LLVMTypeOf(vec), &vec, 1,
-					   AC_FUNC_ATTR_READNONE);
-
-		out->stc[1] = LLVMBuildExtractElement(builder, tmp,
-				LLVMConstInt(ctx->i32, 0, 0), "");
-		out->stc[0] = LLVMBuildExtractElement(builder, tmp,
-				LLVMConstInt(ctx->i32, 1, 0), "");
-		out->ma = LLVMBuildExtractElement(builder, tmp,
-				LLVMConstInt(ctx->i32, 2, 0), "");
-		out->id = LLVMBuildExtractElement(builder, tmp,
-				LLVMConstInt(ctx->i32, 3, 0), "");
-	}
+	out->stc[1] = ac_build_intrinsic(ctx, "llvm.amdgcn.cubetc",
+					 f32, in, 3, AC_FUNC_ATTR_READNONE);
+	out->stc[0] = ac_build_intrinsic(ctx, "llvm.amdgcn.cubesc",
+					 f32, in, 3, AC_FUNC_ATTR_READNONE);
+	out->ma = ac_build_intrinsic(ctx, "llvm.amdgcn.cubema",
+				     f32, in, 3, AC_FUNC_ATTR_READNONE);
+	out->id = ac_build_intrinsic(ctx, "llvm.amdgcn.cubeid",
+				     f32, in, 3, AC_FUNC_ATTR_READNONE);
 }
 
 /**
@@ -558,7 +532,7 @@ ac_build_buffer_store_dword(struct ac_llvm_context *ctx,
 			    bool has_add_tid)
 {
 	/* TODO: Fix stores with ADD_TID and remove the "has_add_tid" flag. */
-	if (HAVE_LLVM >= 0x0309 && !has_add_tid) {
+	if (!has_add_tid) {
 		/* Split 3 channel stores, becase LLVM doesn't support 3-channel
 		 * intrinsics. */
 		if (num_channels == 3) {
@@ -659,114 +633,89 @@ ac_build_buffer_load(struct ac_llvm_context *ctx,
 		     unsigned inst_offset,
 		     unsigned glc,
 		     unsigned slc,
-		     bool readonly_memory)
+		     bool can_speculate,
+		     bool allow_smem)
 {
+	LLVMValueRef offset = LLVMConstInt(ctx->i32, inst_offset, 0);
+	if (voffset)
+		offset = LLVMBuildAdd(ctx->builder, offset, voffset, "");
+	if (soffset)
+		offset = LLVMBuildAdd(ctx->builder, offset, soffset, "");
+
+	/* TODO: VI and later generations can use SMEM with GLC=1.*/
+	if (allow_smem && !glc && !slc) {
+		assert(vindex == NULL);
+
+		LLVMValueRef result[4];
+
+		for (int i = 0; i < num_channels; i++) {
+			if (i) {
+				offset = LLVMBuildAdd(ctx->builder, offset,
+						      LLVMConstInt(ctx->i32, 4, 0), "");
+			}
+			LLVMValueRef args[2] = {rsrc, offset};
+			result[i] = ac_build_intrinsic(ctx, "llvm.SI.load.const.v4i32",
+						       ctx->f32, args, 2,
+						       AC_FUNC_ATTR_READNONE |
+						       AC_FUNC_ATTR_LEGACY);
+		}
+		if (num_channels == 1)
+			return result[0];
+
+		if (num_channels == 3)
+			result[num_channels++] = LLVMGetUndef(ctx->f32);
+		return ac_build_gather_values(ctx, result, num_channels);
+	}
+
 	unsigned func = CLAMP(num_channels, 1, 3) - 1;
 
-	if (HAVE_LLVM >= 0x309) {
-		LLVMValueRef args[] = {
-			LLVMBuildBitCast(ctx->builder, rsrc, ctx->v4i32, ""),
-			vindex ? vindex : LLVMConstInt(ctx->i32, 0, 0),
-			LLVMConstInt(ctx->i32, inst_offset, 0),
-			LLVMConstInt(ctx->i1, glc, 0),
-			LLVMConstInt(ctx->i1, slc, 0)
-		};
+	LLVMValueRef args[] = {
+		LLVMBuildBitCast(ctx->builder, rsrc, ctx->v4i32, ""),
+		vindex ? vindex : LLVMConstInt(ctx->i32, 0, 0),
+		offset,
+		LLVMConstInt(ctx->i1, glc, 0),
+		LLVMConstInt(ctx->i1, slc, 0)
+	};
 
-		LLVMTypeRef types[] = {ctx->f32, LLVMVectorType(ctx->f32, 2),
-		                       ctx->v4f32};
-		const char *type_names[] = {"f32", "v2f32", "v4f32"};
-		char name[256];
+	LLVMTypeRef types[] = {ctx->f32, LLVMVectorType(ctx->f32, 2),
+			       ctx->v4f32};
+	const char *type_names[] = {"f32", "v2f32", "v4f32"};
+	char name[256];
 
-		if (voffset) {
-			args[2] = LLVMBuildAdd(ctx->builder, args[2], voffset,
-			                       "");
-		}
+	snprintf(name, sizeof(name), "llvm.amdgcn.buffer.load.%s",
+		 type_names[func]);
 
-		if (soffset) {
-			args[2] = LLVMBuildAdd(ctx->builder, args[2], soffset,
-			                       "");
-		}
-
-		snprintf(name, sizeof(name), "llvm.amdgcn.buffer.load.%s",
-		         type_names[func]);
-
-		return ac_build_intrinsic(ctx, name, types[func], args,
-					  ARRAY_SIZE(args),
-					  /* READNONE means writes can't
-					   * affect it, while READONLY means
-					   * that writes can affect it. */
-					  readonly_memory && HAVE_LLVM >= 0x0400 ?
-						  AC_FUNC_ATTR_READNONE :
-						  AC_FUNC_ATTR_READONLY);
-	} else {
-		LLVMValueRef args[] = {
-			LLVMBuildBitCast(ctx->builder, rsrc, ctx->v16i8, ""),
-			voffset ? voffset : vindex,
-			soffset,
-			LLVMConstInt(ctx->i32, inst_offset, 0),
-			LLVMConstInt(ctx->i32, voffset ? 1 : 0, 0), // offen
-			LLVMConstInt(ctx->i32, vindex ? 1 : 0, 0), //idxen
-			LLVMConstInt(ctx->i32, glc, 0),
-			LLVMConstInt(ctx->i32, slc, 0),
-			LLVMConstInt(ctx->i32, 0, 0), // TFE
-		};
-
-		LLVMTypeRef types[] = {ctx->i32, LLVMVectorType(ctx->i32, 2),
-		                       ctx->v4i32};
-		const char *type_names[] = {"i32", "v2i32", "v4i32"};
-		const char *arg_type = "i32";
-		char name[256];
-
-		if (voffset && vindex) {
-			LLVMValueRef vaddr[] = {vindex, voffset};
-
-			arg_type = "v2i32";
-			args[1] = ac_build_gather_values(ctx, vaddr, 2);
-		}
-
-		snprintf(name, sizeof(name), "llvm.SI.buffer.load.dword.%s.%s",
-		         type_names[func], arg_type);
-
-		return ac_build_intrinsic(ctx, name, types[func], args,
-					  ARRAY_SIZE(args), AC_FUNC_ATTR_READONLY);
-	}
+	return ac_build_intrinsic(ctx, name, types[func], args,
+				  ARRAY_SIZE(args),
+				  /* READNONE means writes can't affect it, while
+				   * READONLY means that writes can affect it. */
+				  can_speculate && HAVE_LLVM >= 0x0400 ?
+					  AC_FUNC_ATTR_READNONE :
+					  AC_FUNC_ATTR_READONLY);
 }
 
 LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 					 LLVMValueRef rsrc,
 					 LLVMValueRef vindex,
 					 LLVMValueRef voffset,
-					 bool readonly_memory)
+					 bool can_speculate)
 {
-	if (HAVE_LLVM >= 0x0309) {
-		LLVMValueRef args [] = {
-			LLVMBuildBitCast(ctx->builder, rsrc, ctx->v4i32, ""),
-			vindex,
-			voffset,
-			LLVMConstInt(ctx->i1, 0, 0), /* glc */
-			LLVMConstInt(ctx->i1, 0, 0), /* slc */
-		};
-
-		return ac_build_intrinsic(ctx,
-					  "llvm.amdgcn.buffer.load.format.v4f32",
-					  ctx->v4f32, args, ARRAY_SIZE(args),
-					  /* READNONE means writes can't
-					   * affect it, while READONLY means
-					   * that writes can affect it. */
-					  readonly_memory && HAVE_LLVM >= 0x0400 ?
-						  AC_FUNC_ATTR_READNONE :
-						  AC_FUNC_ATTR_READONLY);
-	}
-
-	LLVMValueRef args[] = {
-		rsrc,
-		voffset,
+	LLVMValueRef args [] = {
+		LLVMBuildBitCast(ctx->builder, rsrc, ctx->v4i32, ""),
 		vindex,
+		voffset,
+		LLVMConstInt(ctx->i1, 0, 0), /* glc */
+		LLVMConstInt(ctx->i1, 0, 0), /* slc */
 	};
-	return ac_build_intrinsic(ctx, "llvm.SI.vs.load.input",
-				  ctx->v4f32, args, 3,
-				  AC_FUNC_ATTR_READNONE |
-				  AC_FUNC_ATTR_LEGACY);
+
+	return ac_build_intrinsic(ctx,
+				  "llvm.amdgcn.buffer.load.format.v4f32",
+				  ctx->v4f32, args, ARRAY_SIZE(args),
+				  /* READNONE means writes can't affect it, while
+				   * READONLY means that writes can affect it. */
+				  can_speculate && HAVE_LLVM >= 0x0400 ?
+					  AC_FUNC_ATTR_READNONE :
+					  AC_FUNC_ATTR_READONLY);
 }
 
 /**
@@ -1250,28 +1199,47 @@ void ac_get_image_intr_name(const char *base_name,
 #define AC_EXP_TARGET (HAVE_LLVM >= 0x0500 ? 0 : 3)
 #define AC_EXP_OUT0 (HAVE_LLVM >= 0x0500 ? 2 : 5)
 
+enum ac_ir_type {
+	AC_IR_UNDEF,
+	AC_IR_CONST,
+	AC_IR_VALUE,
+};
+
+struct ac_vs_exp_chan
+{
+	LLVMValueRef value;
+	float const_float;
+	enum ac_ir_type type;
+};
+
+struct ac_vs_exp_inst {
+	unsigned offset;
+	LLVMValueRef inst;
+	struct ac_vs_exp_chan chan[4];
+};
+
+struct ac_vs_exports {
+	unsigned num;
+	struct ac_vs_exp_inst exp[VARYING_SLOT_MAX];
+};
+
 /* Return true if the PARAM export has been eliminated. */
 static bool ac_eliminate_const_output(uint8_t *vs_output_param_offset,
 				      uint32_t num_outputs,
-				      LLVMValueRef inst, unsigned offset)
+				      struct ac_vs_exp_inst *exp)
 {
 	unsigned i, default_val; /* SPI_PS_INPUT_CNTL_i.DEFAULT_VAL */
 	bool is_zero[4] = {}, is_one[4] = {};
 
 	for (i = 0; i < 4; i++) {
-		LLVMBool loses_info;
-		LLVMValueRef p = LLVMGetOperand(inst, AC_EXP_OUT0 + i);
-
 		/* It's a constant expression. Undef outputs are eliminated too. */
-		if (LLVMIsUndef(p)) {
+		if (exp->chan[i].type == AC_IR_UNDEF) {
 			is_zero[i] = true;
 			is_one[i] = true;
-		} else if (LLVMIsAConstantFP(p)) {
-			double a = LLVMConstRealGetDouble(p, &loses_info);
-
-			if (a == 0)
+		} else if (exp->chan[i].type == AC_IR_CONST) {
+			if (exp->chan[i].const_float == 0)
 				is_zero[i] = true;
-			else if (a == 1)
+			else if (exp->chan[i].const_float == 1)
 				is_one[i] = true;
 			else
 				return false; /* other constant */
@@ -1288,11 +1256,11 @@ static bool ac_eliminate_const_output(uint8_t *vs_output_param_offset,
 		return false;
 
 	/* The PARAM export can be represented as DEFAULT_VAL. Kill it. */
-	LLVMInstructionEraseFromParent(inst);
+	LLVMInstructionEraseFromParent(exp->inst);
 
 	/* Change OFFSET to DEFAULT_VAL. */
 	for (i = 0; i < num_outputs; i++) {
-		if (vs_output_param_offset[i] == offset) {
+		if (vs_output_param_offset[i] == exp->offset) {
 			vs_output_param_offset[i] =
 				AC_EXP_PARAM_DEFAULT_VAL_0000 + default_val;
 			break;
@@ -1301,17 +1269,85 @@ static bool ac_eliminate_const_output(uint8_t *vs_output_param_offset,
 	return true;
 }
 
-struct ac_vs_exports {
-	unsigned num;
-	unsigned offset[VARYING_SLOT_MAX];
-	LLVMValueRef inst[VARYING_SLOT_MAX];
-};
+static bool ac_eliminate_duplicated_output(uint8_t *vs_output_param_offset,
+					   uint32_t num_outputs,
+					   struct ac_vs_exports *processed,
+				           struct ac_vs_exp_inst *exp)
+{
+	unsigned p, copy_back_channels = 0;
 
-void ac_eliminate_const_vs_outputs(struct ac_llvm_context *ctx,
-				   LLVMValueRef main_fn,
-				   uint8_t *vs_output_param_offset,
-				   uint32_t num_outputs,
-				   uint8_t *num_param_exports)
+	/* See if the output is already in the list of processed outputs.
+	 * The LLVMValueRef comparison relies on SSA.
+	 */
+	for (p = 0; p < processed->num; p++) {
+		bool different = false;
+
+		for (unsigned j = 0; j < 4; j++) {
+			struct ac_vs_exp_chan *c1 = &processed->exp[p].chan[j];
+			struct ac_vs_exp_chan *c2 = &exp->chan[j];
+
+			/* Treat undef as a match. */
+			if (c2->type == AC_IR_UNDEF)
+				continue;
+
+			/* If c1 is undef but c2 isn't, we can copy c2 to c1
+			 * and consider the instruction duplicated.
+			 */
+			if (c1->type == AC_IR_UNDEF) {
+				copy_back_channels |= 1 << j;
+				continue;
+			}
+
+			/* Test whether the channels are not equal. */
+			if (c1->type != c2->type ||
+			    (c1->type == AC_IR_CONST &&
+			     c1->const_float != c2->const_float) ||
+			    (c1->type == AC_IR_VALUE &&
+			     c1->value != c2->value)) {
+				different = true;
+				break;
+			}
+		}
+		if (!different)
+			break;
+
+		copy_back_channels = 0;
+	}
+	if (p == processed->num)
+		return false;
+
+	/* If a match was found, but the matching export has undef where the new
+	 * one has a normal value, copy the normal value to the undef channel.
+	 */
+	struct ac_vs_exp_inst *match = &processed->exp[p];
+
+	while (copy_back_channels) {
+		unsigned chan = u_bit_scan(&copy_back_channels);
+
+		assert(match->chan[chan].type == AC_IR_UNDEF);
+		LLVMSetOperand(match->inst, AC_EXP_OUT0 + chan,
+			       exp->chan[chan].value);
+		match->chan[chan] = exp->chan[chan];
+	}
+
+	/* The PARAM export is duplicated. Kill it. */
+	LLVMInstructionEraseFromParent(exp->inst);
+
+	/* Change OFFSET to the matching export. */
+	for (unsigned i = 0; i < num_outputs; i++) {
+		if (vs_output_param_offset[i] == exp->offset) {
+			vs_output_param_offset[i] = match->offset;
+			break;
+		}
+	}
+	return true;
+}
+
+void ac_optimize_vs_outputs(struct ac_llvm_context *ctx,
+			    LLVMValueRef main_fn,
+			    uint8_t *vs_output_param_offset,
+			    uint32_t num_outputs,
+			    uint8_t *num_param_exports)
 {
 	LLVMBasicBlockRef bb;
 	bool removed_any = false;
@@ -1327,6 +1363,7 @@ void ac_eliminate_const_vs_outputs(struct ac_llvm_context *ctx,
 		while (inst) {
 			LLVMValueRef cur = inst;
 			inst = LLVMGetNextInstruction(inst);
+			struct ac_vs_exp_inst exp;
 
 			if (LLVMGetInstructionOpcode(cur) != LLVMCall)
 				continue;
@@ -1353,14 +1390,37 @@ void ac_eliminate_const_vs_outputs(struct ac_llvm_context *ctx,
 
 			target -= V_008DFC_SQ_EXP_PARAM;
 
-			/* Eliminate constant value PARAM exports. */
+			/* Parse the instruction. */
+			memset(&exp, 0, sizeof(exp));
+			exp.offset = target;
+			exp.inst = cur;
+
+			for (unsigned i = 0; i < 4; i++) {
+				LLVMValueRef v = LLVMGetOperand(cur, AC_EXP_OUT0 + i);
+
+				exp.chan[i].value = v;
+
+				if (LLVMIsUndef(v)) {
+					exp.chan[i].type = AC_IR_UNDEF;
+				} else if (LLVMIsAConstantFP(v)) {
+					LLVMBool loses_info;
+					exp.chan[i].type = AC_IR_CONST;
+					exp.chan[i].const_float =
+						LLVMConstRealGetDouble(v, &loses_info);
+				} else {
+					exp.chan[i].type = AC_IR_VALUE;
+				}
+			}
+
+			/* Eliminate constant and duplicated PARAM exports. */
 			if (ac_eliminate_const_output(vs_output_param_offset,
-						      num_outputs, cur, target)) {
+						      num_outputs, &exp) ||
+			    ac_eliminate_duplicated_output(vs_output_param_offset,
+							   num_outputs, &exports,
+							   &exp)) {
 				removed_any = true;
 			} else {
-				exports.offset[exports.num] = target;
-				exports.inst[exports.num] = cur;
-				exports.num++;
+				exports.exp[exports.num++] = exp;
 			}
 		}
 		bb = LLVMGetNextBasicBlock(bb);
@@ -1370,30 +1430,30 @@ void ac_eliminate_const_vs_outputs(struct ac_llvm_context *ctx,
 	 * This is done by renumbering all PARAM exports.
 	 */
 	if (removed_any) {
-		uint8_t current_offset[VARYING_SLOT_MAX];
-		unsigned new_count = 0;
+		uint8_t old_offset[VARYING_SLOT_MAX];
 		unsigned out, i;
 
 		/* Make a copy of the offsets. We need the old version while
 		 * we are modifying some of them. */
-		memcpy(current_offset, vs_output_param_offset,
-		       sizeof(current_offset));
+		memcpy(old_offset, vs_output_param_offset,
+		       sizeof(old_offset));
 
 		for (i = 0; i < exports.num; i++) {
-			unsigned offset = exports.offset[i];
+			unsigned offset = exports.exp[i].offset;
 
+			/* Update vs_output_param_offset. Multiple outputs can
+			 * have the same offset.
+			 */
 			for (out = 0; out < num_outputs; out++) {
-				if (current_offset[out] != offset)
-					continue;
-
-				LLVMSetOperand(exports.inst[i], AC_EXP_TARGET,
-					       LLVMConstInt(ctx->i32,
-							    V_008DFC_SQ_EXP_PARAM + new_count, 0));
-				vs_output_param_offset[out] = new_count;
-				new_count++;
-				break;
+				if (old_offset[out] == offset)
+					vs_output_param_offset[out] = i;
 			}
+
+			/* Change the PARAM offset in the instruction. */
+			LLVMSetOperand(exports.exp[i].inst, AC_EXP_TARGET,
+				       LLVMConstInt(ctx->i32,
+						    V_008DFC_SQ_EXP_PARAM + i, 0));
 		}
-		*num_param_exports = new_count;
+		*num_param_exports = exports.num;
 	}
 }

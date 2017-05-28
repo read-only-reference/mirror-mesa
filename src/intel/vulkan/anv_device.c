@@ -98,6 +98,113 @@ anv_compute_heap_size(int fd, uint64_t *heap_size)
 }
 
 static VkResult
+anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
+{
+   /* The kernel query only tells us whether or not the kernel supports the
+    * EXEC_OBJECT_SUPPORTS_48B_ADDRESS flag and not whether or not the
+    * hardware has actual 48bit address support.
+    */
+   device->supports_48bit_addresses =
+      (device->info.gen >= 8) && anv_gem_supports_48b_addresses(fd);
+
+   uint64_t heap_size;
+   VkResult result = anv_compute_heap_size(fd, &heap_size);
+   if (result != VK_SUCCESS)
+      return result;
+
+   if (heap_size <= 3ull * (1ull << 30)) {
+      /* In this case, everything fits nicely into the 32-bit address space,
+       * so there's no need for supporting 48bit addresses on client-allocated
+       * memory objects.
+       */
+      device->memory.heap_count = 1;
+      device->memory.heaps[0] = (struct anv_memory_heap) {
+         .size = heap_size,
+         .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+         .supports_48bit_addresses = false,
+      };
+   } else {
+      /* Not everything will fit nicely into a 32-bit address space.  In this
+       * case we need a 64-bit heap.  Advertise a small 32-bit heap and a
+       * larger 48-bit heap.  If we're in this case, then we have a total heap
+       * size larger than 3GiB which most likely means they have 8 GiB of
+       * video memory and so carving off 1 GiB for the 32-bit heap should be
+       * reasonable.
+       */
+      const uint64_t heap_size_32bit = 1ull << 30;
+      const uint64_t heap_size_48bit = heap_size - heap_size_32bit;
+
+      assert(device->supports_48bit_addresses);
+
+      device->memory.heap_count = 2;
+      device->memory.heaps[0] = (struct anv_memory_heap) {
+         .size = heap_size_48bit,
+         .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+         .supports_48bit_addresses = true,
+      };
+      device->memory.heaps[1] = (struct anv_memory_heap) {
+         .size = heap_size_32bit,
+         .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
+         .supports_48bit_addresses = false,
+      };
+   }
+
+   uint32_t type_count = 0;
+   for (uint32_t heap = 0; heap < device->memory.heap_count; heap++) {
+      uint32_t valid_buffer_usage = ~0;
+
+      /* There appears to be a hardware issue in the VF cache where it only
+       * considers the bottom 32 bits of memory addresses.  If you happen to
+       * have two vertex buffers which get placed exactly 4 GiB apart and use
+       * them in back-to-back draw calls, you can get collisions.  In order to
+       * solve this problem, we require vertex and index buffers be bound to
+       * memory allocated out of the 32-bit heap.
+       */
+      if (device->memory.heaps[heap].supports_48bit_addresses) {
+         valid_buffer_usage &= ~(VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+      }
+
+      if (device->info.has_llc) {
+         /* Big core GPUs share LLC with the CPU and thus one memory type can be
+          * both cached and coherent at the same time.
+          */
+         device->memory.types[type_count++] = (struct anv_memory_type) {
+            .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                             VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+            .heapIndex = heap,
+            .valid_buffer_usage = valid_buffer_usage,
+         };
+      } else {
+         /* The spec requires that we expose a host-visible, coherent memory
+          * type, but Atom GPUs don't share LLC. Thus we offer two memory types
+          * to give the application a choice between cached, but not coherent and
+          * coherent but uncached (WC though).
+          */
+         device->memory.types[type_count++] = (struct anv_memory_type) {
+            .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            .heapIndex = heap,
+            .valid_buffer_usage = valid_buffer_usage,
+         };
+         device->memory.types[type_count++] = (struct anv_memory_type) {
+            .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                             VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+            .heapIndex = heap,
+            .valid_buffer_usage = valid_buffer_usage,
+         };
+      }
+   }
+   device->memory.type_count = type_count;
+
+   return VK_SUCCESS;
+}
+
+static VkResult
 anv_physical_device_init_uuids(struct anv_physical_device *device)
 {
    const struct build_id_note *note = build_id_find_nhdr("libvulkan_intel.so");
@@ -225,9 +332,7 @@ anv_physical_device_init(struct anv_physical_device *device,
       goto fail;
    }
 
-   device->supports_48bit_addresses = anv_gem_supports_48b_addresses(fd);
-
-   result = anv_compute_heap_size(fd, &device->heap_size);
+   result = anv_physical_device_init_heaps(device, fd);
    if (result != VK_SUCCESS)
       goto fail;
 
@@ -306,6 +411,10 @@ static const VkExtensionProperties global_extensions[] = {
       .specVersion = 1,
    },
    {
+      .extensionName = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
       .extensionName = VK_KHR_SURFACE_EXTENSION_NAME,
       .specVersion = 25,
    },
@@ -329,6 +438,10 @@ static const VkExtensionProperties global_extensions[] = {
 #endif
    {
       .extensionName = VK_KHX_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHX_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
       .specVersion = 1,
    },
 };
@@ -368,6 +481,18 @@ static const VkExtensionProperties device_extensions[] = {
    },
    {
       .extensionName = VK_KHX_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHX_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHX_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHX_MULTIVIEW_EXTENSION_NAME,
       .specVersion = 1,
    },
 };
@@ -494,7 +619,7 @@ anv_enumerate_devices(struct anv_instance *instance)
 
    instance->physicalDeviceCount = 0;
 
-   max_devices = drmGetDevices2(0, devices, sizeof(devices));
+   max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
    if (max_devices < 1)
       return VK_ERROR_INCOMPATIBLE_DRIVER;
 
@@ -510,6 +635,7 @@ anv_enumerate_devices(struct anv_instance *instance)
             break;
       }
    }
+   drmFreeDevices(devices, max_devices);
 
    if (result == VK_SUCCESS)
       instance->physicalDeviceCount = 1;
@@ -560,7 +686,7 @@ void anv_GetPhysicalDeviceFeatures(
       .sampleRateShading                        = true,
       .dualSrcBlend                             = true,
       .logicOp                                  = true,
-      .multiDrawIndirect                        = false,
+      .multiDrawIndirect                        = true,
       .drawIndirectFirstInstance                = true,
       .depthClamp                               = true,
       .depthBiasClamp                           = true,
@@ -612,6 +738,15 @@ void anv_GetPhysicalDeviceFeatures2KHR(
 
    vk_foreach_struct(ext, pFeatures->pNext) {
       switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES_KHX: {
+         VkPhysicalDeviceMultiviewFeaturesKHX *features =
+            (VkPhysicalDeviceMultiviewFeaturesKHX *)ext;
+         features->multiview = true;
+         features->multiviewGeometryShader = true;
+         features->multiviewTessellationShader = true;
+         break;
+      }
+
       default:
          anv_debug_ignored_stype(ext->sType);
          break;
@@ -789,6 +924,14 @@ void anv_GetPhysicalDeviceProperties2KHR(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES_KHX: {
+         VkPhysicalDeviceMultiviewPropertiesKHX *properties =
+            (VkPhysicalDeviceMultiviewPropertiesKHX *)ext;
+         properties->maxMultiviewViewCount = 16;
+         properties->maxMultiviewInstanceIndex = UINT32_MAX / 16;
+         break;
+      }
+
       default:
          anv_debug_ignored_stype(ext->sType);
          break;
@@ -842,44 +985,21 @@ void anv_GetPhysicalDeviceMemoryProperties(
 {
    ANV_FROM_HANDLE(anv_physical_device, physical_device, physicalDevice);
 
-   if (physical_device->info.has_llc) {
-      /* Big core GPUs share LLC with the CPU and thus one memory type can be
-       * both cached and coherent at the same time.
-       */
-      pMemoryProperties->memoryTypeCount = 1;
-      pMemoryProperties->memoryTypes[0] = (VkMemoryType) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-         .heapIndex = 0,
-      };
-   } else {
-      /* The spec requires that we expose a host-visible, coherent memory
-       * type, but Atom GPUs don't share LLC. Thus we offer two memory types
-       * to give the application a choice between cached, but not coherent and
-       * coherent but uncached (WC though).
-       */
-      pMemoryProperties->memoryTypeCount = 2;
-      pMemoryProperties->memoryTypes[0] = (VkMemoryType) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-         .heapIndex = 0,
-      };
-      pMemoryProperties->memoryTypes[1] = (VkMemoryType) {
-         .propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                          VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-         .heapIndex = 0,
+   pMemoryProperties->memoryTypeCount = physical_device->memory.type_count;
+   for (uint32_t i = 0; i < physical_device->memory.type_count; i++) {
+      pMemoryProperties->memoryTypes[i] = (VkMemoryType) {
+         .propertyFlags = physical_device->memory.types[i].propertyFlags,
+         .heapIndex     = physical_device->memory.types[i].heapIndex,
       };
    }
 
-   pMemoryProperties->memoryHeapCount = 1;
-   pMemoryProperties->memoryHeaps[0] = (VkMemoryHeap) {
-      .size = physical_device->heap_size,
-      .flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
-   };
+   pMemoryProperties->memoryHeapCount = physical_device->memory.heap_count;
+   for (uint32_t i = 0; i < physical_device->memory.heap_count; i++) {
+      pMemoryProperties->memoryHeaps[i] = (VkMemoryHeap) {
+         .size    = physical_device->memory.heaps[i].size,
+         .flags   = physical_device->memory.heaps[i].flags,
+      };
+   }
 }
 
 void anv_GetPhysicalDeviceMemoryProperties2KHR(
@@ -950,7 +1070,7 @@ anv_state_pool_emit_data(struct anv_state_pool *pool, size_t size, size_t align,
    state = anv_state_pool_alloc(pool, size, align);
    memcpy(state.map, p, size);
 
-   anv_state_flush(pool->block_pool->device, state);
+   anv_state_flush(pool->block_pool.device, state);
 
    return state;
 }
@@ -1076,29 +1196,17 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_batch_bo_pool;
 
-   result = anv_block_pool_init(&device->dynamic_state_block_pool, device,
-                                16384);
+   result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384);
    if (result != VK_SUCCESS)
       goto fail_bo_cache;
 
-   anv_state_pool_init(&device->dynamic_state_pool,
-                       &device->dynamic_state_block_pool);
-
-   result = anv_block_pool_init(&device->instruction_block_pool, device,
-                                1024 * 1024);
+   result = anv_state_pool_init(&device->instruction_state_pool, device, 16384);
    if (result != VK_SUCCESS)
       goto fail_dynamic_state_pool;
 
-   anv_state_pool_init(&device->instruction_state_pool,
-                       &device->instruction_block_pool);
-
-   result = anv_block_pool_init(&device->surface_state_block_pool, device,
-                                4096);
+   result = anv_state_pool_init(&device->surface_state_pool, device, 4096);
    if (result != VK_SUCCESS)
       goto fail_instruction_state_pool;
-
-   anv_state_pool_init(&device->surface_state_pool,
-                       &device->surface_state_block_pool);
 
    result = anv_bo_init_new(&device->workaround_bo, device, 1024);
    if (result != VK_SUCCESS)
@@ -1144,13 +1252,10 @@ VkResult anv_CreateDevice(
    anv_gem_close(device, device->workaround_bo.gem_handle);
  fail_surface_state_pool:
    anv_state_pool_finish(&device->surface_state_pool);
-   anv_block_pool_finish(&device->surface_state_block_pool);
  fail_instruction_state_pool:
    anv_state_pool_finish(&device->instruction_state_pool);
-   anv_block_pool_finish(&device->instruction_block_pool);
  fail_dynamic_state_pool:
    anv_state_pool_finish(&device->dynamic_state_pool);
-   anv_block_pool_finish(&device->dynamic_state_block_pool);
  fail_bo_cache:
    anv_bo_cache_finish(&device->bo_cache);
  fail_batch_bo_pool:
@@ -1194,11 +1299,8 @@ void anv_DestroyDevice(
    anv_gem_close(device, device->workaround_bo.gem_handle);
 
    anv_state_pool_finish(&device->surface_state_pool);
-   anv_block_pool_finish(&device->surface_state_block_pool);
    anv_state_pool_finish(&device->instruction_state_pool);
-   anv_block_pool_finish(&device->instruction_block_pool);
    anv_state_pool_finish(&device->dynamic_state_pool);
-   anv_block_pool_finish(&device->dynamic_state_block_pool);
 
    anv_bo_cache_finish(&device->bo_cache);
 
@@ -1398,12 +1500,6 @@ anv_bo_init_new(struct anv_bo *bo, struct anv_device *device, uint64_t size)
 
    anv_bo_init(bo, gem_handle, size);
 
-   if (device->instance->physicalDevice.supports_48bit_addresses)
-      bo->flags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
-
-   if (device->instance->physicalDevice.has_exec_async)
-      bo->flags |= EXEC_OBJECT_ASYNC;
-
    return VK_SUCCESS;
 }
 
@@ -1414,6 +1510,7 @@ VkResult anv_AllocateMemory(
     VkDeviceMemory*                             pMem)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_physical_device *pdevice = &device->instance->physicalDevice;
    struct anv_device_memory *mem;
    VkResult result = VK_SUCCESS;
 
@@ -1421,10 +1518,6 @@ VkResult anv_AllocateMemory(
 
    /* The Vulkan 1.0.33 spec says "allocationSize must be greater than 0". */
    assert(pAllocateInfo->allocationSize > 0);
-
-   /* We support exactly one memory heap. */
-   assert(pAllocateInfo->memoryTypeIndex == 0 ||
-          (!device->info.has_llc && pAllocateInfo->memoryTypeIndex < 2));
 
    /* The kernel relocation API has a limitation of a 32-bit delta value
     * applied to the address before it is written which, in spite of it being
@@ -1453,7 +1546,8 @@ VkResult anv_AllocateMemory(
    if (mem == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   mem->type_index = pAllocateInfo->memoryTypeIndex;
+   assert(pAllocateInfo->memoryTypeIndex < pdevice->memory.type_count);
+   mem->type = &pdevice->memory.types[pAllocateInfo->memoryTypeIndex];
    mem->map = NULL;
    mem->map_size = 0;
 
@@ -1482,6 +1576,13 @@ VkResult anv_AllocateMemory(
       if (result != VK_SUCCESS)
          goto fail;
    }
+
+   assert(mem->type->heapIndex < pdevice->memory.heap_count);
+   if (pdevice->memory.heaps[mem->type->heapIndex].supports_48bit_addresses)
+      mem->bo->flags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+
+   if (pdevice->has_exec_async)
+      mem->bo->flags |= EXEC_OBJECT_ASYNC;
 
    *pMem = anv_device_memory_to_handle(mem);
 
@@ -1578,7 +1679,9 @@ VkResult anv_MapMemory(
     * userspace. */
 
    uint32_t gem_flags = 0;
-   if (!device->info.has_llc && mem->type_index == 0)
+
+   if (!device->info.has_llc &&
+       (mem->type->propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
       gem_flags |= I915_MMAP_WC;
 
    /* GEM will fail to map if the offset isn't 4k-aligned.  Round down. */
@@ -1675,6 +1778,7 @@ void anv_GetBufferMemoryRequirements(
 {
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
    ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_physical_device *pdevice = &device->instance->physicalDevice;
 
    /* The Vulkan spec (git aaed022) says:
     *
@@ -1682,13 +1786,17 @@ void anv_GetBufferMemoryRequirements(
     *    supported memory type for the resource. The bit `1<<i` is set if and
     *    only if the memory type `i` in the VkPhysicalDeviceMemoryProperties
     *    structure for the physical device is supported.
-    *
-    * We support exactly one memory type on LLC, two on non-LLC.
     */
-   pMemoryRequirements->memoryTypeBits = device->info.has_llc ? 1 : 3;
+   uint32_t memory_types = 0;
+   for (uint32_t i = 0; i < pdevice->memory.type_count; i++) {
+      uint32_t valid_usage = pdevice->memory.types[i].valid_buffer_usage;
+      if ((valid_usage & buffer->usage) == buffer->usage)
+         memory_types |= (1u << i);
+   }
 
    pMemoryRequirements->size = buffer->size;
    pMemoryRequirements->alignment = 16;
+   pMemoryRequirements->memoryTypeBits = memory_types;
 }
 
 void anv_GetImageMemoryRequirements(
@@ -1698,6 +1806,7 @@ void anv_GetImageMemoryRequirements(
 {
    ANV_FROM_HANDLE(anv_image, image, _image);
    ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_physical_device *pdevice = &device->instance->physicalDevice;
 
    /* The Vulkan spec (git aaed022) says:
     *
@@ -1706,12 +1815,13 @@ void anv_GetImageMemoryRequirements(
     *    only if the memory type `i` in the VkPhysicalDeviceMemoryProperties
     *    structure for the physical device is supported.
     *
-    * We support exactly one memory type on LLC, two on non-LLC.
+    * All types are currently supported for images.
     */
-   pMemoryRequirements->memoryTypeBits = device->info.has_llc ? 1 : 3;
+   uint32_t memory_types = (1ull << pdevice->memory.type_count) - 1;
 
    pMemoryRequirements->size = image->size;
    pMemoryRequirements->alignment = image->alignment;
+   pMemoryRequirements->memoryTypeBits = memory_types;
 }
 
 void anv_GetImageSparseMemoryRequirements(
@@ -1741,6 +1851,7 @@ VkResult anv_BindBufferMemory(
    ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
 
    if (mem) {
+      assert((buffer->usage & mem->type->valid_buffer_usage) == buffer->usage);
       buffer->bo = mem->bo;
       buffer->offset = memoryOffset;
    } else {

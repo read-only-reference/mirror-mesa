@@ -302,24 +302,6 @@ vc4_set_vertex_buffers(struct pipe_context *pctx,
 }
 
 static void
-vc4_set_index_buffer(struct pipe_context *pctx,
-                     const struct pipe_index_buffer *ib)
-{
-        struct vc4_context *vc4 = vc4_context(pctx);
-
-        if (ib) {
-                pipe_resource_reference(&vc4->indexbuf.buffer, ib->buffer);
-                vc4->indexbuf.index_size = ib->index_size;
-                vc4->indexbuf.offset = ib->offset;
-                vc4->indexbuf.user_buffer = ib->user_buffer;
-        } else {
-                pipe_resource_reference(&vc4->indexbuf.buffer, NULL);
-        }
-
-        vc4->dirty |= VC4_DIRTY_INDEXBUF;
-}
-
-static void
 vc4_blend_state_bind(struct pipe_context *pctx, void *hwcso)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
@@ -575,7 +557,7 @@ vc4_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
              (cso->u.tex.first_level != cso->u.tex.last_level)) ||
             rsc->vc4_format == VC4_TEXTURE_TYPE_RGBA32R) {
                 struct vc4_resource *shadow_parent = vc4_resource(prsc);
-                struct pipe_resource tmpl = shadow_parent->base.b;
+                struct pipe_resource tmpl = shadow_parent->base;
                 struct vc4_resource *clone;
 
                 tmpl.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
@@ -590,7 +572,7 @@ vc4_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                 }
                 rsc = vc4_resource(prsc);
                 clone = vc4_resource(prsc);
-                clone->shadow_parent = &shadow_parent->base.b;
+                clone->shadow_parent = &shadow_parent->base;
                 /* Flag it as needing update of the contents from the parent. */
                 clone->writes = shadow_parent->writes - 1;
 
@@ -670,7 +652,6 @@ vc4_state_init(struct pipe_context *pctx)
         pctx->set_viewport_states = vc4_set_viewport_states;
 
         pctx->set_vertex_buffers = vc4_set_vertex_buffers;
-        pctx->set_index_buffer = vc4_set_index_buffer;
 
         pctx->create_blend_state = vc4_create_blend_state;
         pctx->bind_blend_state = vc4_blend_state_bind;

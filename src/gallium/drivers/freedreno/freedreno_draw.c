@@ -85,18 +85,26 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 	if (!fd_supported_prim(ctx, info->mode)) {
 		if (ctx->streamout.num_targets > 0)
 			debug_error("stream-out with emulated prims");
-		util_primconvert_save_index_buffer(ctx->primconvert, &ctx->indexbuf);
 		util_primconvert_save_rasterizer_state(ctx->primconvert, ctx->rasterizer);
 		util_primconvert_draw_vbo(ctx->primconvert, info);
 		return;
 	}
 
 	/* Upload a user index buffer. */
-	struct pipe_index_buffer ibuffer_saved = {};
-	if (info->indexed && ctx->indexbuf.user_buffer &&
-	    !util_save_and_upload_index_buffer(pctx, info, &ctx->indexbuf,
-					       &ibuffer_saved)) {
-		return;
+	struct pipe_resource *indexbuf = NULL;
+	unsigned index_offset = 0;
+	struct pipe_draw_info new_info;
+	if (info->index_size) {
+		if (info->has_user_indices) {
+			if (!util_upload_index_buffer(pctx, info, &indexbuf, &index_offset))
+				return;
+			new_info = *info;
+			new_info.index.resource = indexbuf;
+			new_info.has_user_indices = false;
+			info = &new_info;
+		} else {
+			indexbuf = info->index.resource;
+		}
 	}
 
 	if (ctx->in_blit) {
@@ -151,6 +159,12 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 			batch->gmem_reason |= FD_GMEM_BLEND_ENABLED;
 	}
 
+	/* Mark SSBOs as being written.. we don't actually know which ones are
+	 * read vs written, so just assume the worst
+	 */
+	foreach_bit(i, ctx->shaderbuf[PIPE_SHADER_FRAGMENT].enabled_mask)
+		resource_read(batch, ctx->shaderbuf[PIPE_SHADER_FRAGMENT].sb[i].buffer);
+
 	foreach_bit(i, ctx->constbuf[PIPE_SHADER_VERTEX].enabled_mask)
 		resource_read(batch, ctx->constbuf[PIPE_SHADER_VERTEX].cb[i].buffer);
 	foreach_bit(i, ctx->constbuf[PIPE_SHADER_FRAGMENT].enabled_mask)
@@ -158,12 +172,12 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
 	/* Mark VBOs as being read */
 	foreach_bit(i, ctx->vtx.vertexbuf.enabled_mask) {
-		assert(!ctx->vtx.vertexbuf.vb[i].user_buffer);
-		resource_read(batch, ctx->vtx.vertexbuf.vb[i].buffer);
+		assert(!ctx->vtx.vertexbuf.vb[i].is_user_buffer);
+		resource_read(batch, ctx->vtx.vertexbuf.vb[i].buffer.resource);
 	}
 
 	/* Mark index buffer as being read */
-	resource_read(batch, ctx->indexbuf.buffer);
+	resource_read(batch, indexbuf);
 
 	/* Mark textures as being read */
 	foreach_bit(i, ctx->tex[PIPE_SHADER_VERTEX].valid_textures)
@@ -209,7 +223,7 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 		util_format_short_name(pipe_surface_format(pfb->cbufs[0])),
 		util_format_short_name(pipe_surface_format(pfb->zsbuf)));
 
-	if (ctx->draw_vbo(ctx, info))
+	if (ctx->draw_vbo(ctx, info, index_offset))
 		batch->needs_flush = true;
 
 	for (i = 0; i < ctx->streamout.num_targets; i++)
@@ -220,8 +234,8 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
 	fd_batch_check_size(batch);
 
-	if (info->indexed && ibuffer_saved.user_buffer)
-           pctx->set_index_buffer(pctx, &ibuffer_saved);
+	if (info == &new_info)
+		pipe_resource_reference(&indexbuf, NULL);
 }
 
 /* Generic clear implementation (partially) using u_blitter: */
@@ -280,7 +294,7 @@ fd_blitter_clear(struct pipe_context *pctx, unsigned buffers,
 		.max_index = 1,
 		.instance_count = 1,
 	};
-	ctx->draw_vbo(ctx, &info);
+	ctx->draw_vbo(ctx, &info, 0);
 
 	util_blitter_restore_constant_buffer_state(blitter);
 	util_blitter_restore_vertex_states(blitter);
@@ -370,17 +384,22 @@ fd_clear(struct pipe_context *pctx, unsigned buffers,
 	/* if per-gen backend doesn't implement ctx->clear() generic
 	 * blitter clear:
 	 */
-	if (!ctx->clear) {
-		fd_blitter_clear(pctx, buffers, color, depth, stencil);
-		return;
+	bool fallback = true;
+
+	if (ctx->clear) {
+		fd_batch_set_stage(batch, FD_STAGE_CLEAR);
+
+		if (ctx->clear(ctx, buffers, color, depth, stencil)) {
+			if (fd_mesa_debug & FD_DBG_DCLEAR)
+				fd_context_all_dirty(ctx);
+
+			fallback = false;
+		}
 	}
 
-	fd_batch_set_stage(batch, FD_STAGE_CLEAR);
-
-	ctx->clear(ctx, buffers, color, depth, stencil);
-
-	if (fd_mesa_debug & FD_DBG_DCLEAR)
-		fd_context_all_dirty(ctx);
+	if (fallback) {
+		fd_blitter_clear(pctx, buffers, color, depth, stencil);
+	}
 }
 
 static void
@@ -402,6 +421,49 @@ fd_clear_depth_stencil(struct pipe_context *pctx, struct pipe_surface *ps,
 			buffers, depth, stencil, x, y, w, h);
 }
 
+static void
+fd_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
+{
+	struct fd_context *ctx = fd_context(pctx);
+	struct fd_batch *batch, *save_batch = NULL;
+	unsigned i;
+
+	/* TODO maybe we don't want to allocate and flush a batch each time?
+	 * We could use a special bogus (ie. won't match any fb state) key
+	 * in the batch-case for compute shaders, and rely on the rest of
+	 * the dependency tracking mechanism to tell us when the compute
+	 * batch needs to be flushed?
+	 */
+	batch = fd_bc_alloc_batch(&ctx->screen->batch_cache, ctx);
+	fd_batch_reference(&save_batch, ctx->batch);
+	fd_batch_reference(&ctx->batch, batch);
+
+	mtx_lock(&ctx->screen->lock);
+
+	/* Mark SSBOs as being written.. we don't actually know which ones are
+	 * read vs written, so just assume the worst
+	 */
+	foreach_bit(i, ctx->shaderbuf[PIPE_SHADER_COMPUTE].enabled_mask)
+		resource_read(batch, ctx->shaderbuf[PIPE_SHADER_COMPUTE].sb[i].buffer);
+
+	/* UBO's are read */
+	foreach_bit(i, ctx->constbuf[PIPE_SHADER_COMPUTE].enabled_mask)
+		resource_read(batch, ctx->constbuf[PIPE_SHADER_COMPUTE].cb[i].buffer);
+
+	/* Mark textures as being read */
+	foreach_bit(i, ctx->tex[PIPE_SHADER_COMPUTE].valid_textures)
+		resource_read(batch, ctx->tex[PIPE_SHADER_COMPUTE].textures[i]->texture);
+
+	mtx_unlock(&ctx->screen->lock);
+
+	ctx->launch_grid(ctx, info);
+
+	fd_gmem_flush_compute(batch);
+
+	fd_batch_reference(&ctx->batch, save_batch);
+	fd_batch_reference(&save_batch, NULL);
+}
+
 void
 fd_draw_init(struct pipe_context *pctx)
 {
@@ -409,4 +471,8 @@ fd_draw_init(struct pipe_context *pctx)
 	pctx->clear = fd_clear;
 	pctx->clear_render_target = fd_clear_render_target;
 	pctx->clear_depth_stencil = fd_clear_depth_stencil;
+
+	if (has_compute(fd_screen(pctx->screen))) {
+		pctx->launch_grid = fd_launch_grid;
+	}
 }

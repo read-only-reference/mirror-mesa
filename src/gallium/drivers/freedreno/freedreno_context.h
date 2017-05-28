@@ -72,6 +72,12 @@ struct fd_constbuf_stateobj {
 	uint32_t dirty_mask;
 };
 
+struct fd_shaderbuf_stateobj {
+	struct pipe_shader_buffer sb[PIPE_MAX_SHADER_BUFFERS];
+	uint32_t enabled_mask;
+	uint32_t dirty_mask;
+};
+
 struct fd_vertexbuf_stateobj {
 	struct pipe_vertex_buffer vb[PIPE_MAX_ATTRIBS];
 	unsigned count;
@@ -120,7 +126,7 @@ enum fd_dirty_3d_state {
 	FD_DIRTY_VIEWPORT    = BIT(8),
 	FD_DIRTY_VTXSTATE    = BIT(9),
 	FD_DIRTY_VTXBUF      = BIT(10),
-	FD_DIRTY_INDEXBUF    = BIT(11),
+
 	FD_DIRTY_SCISSOR     = BIT(12),
 	FD_DIRTY_STREAMOUT   = BIT(13),
 	FD_DIRTY_UCP         = BIT(14),
@@ -142,6 +148,7 @@ enum fd_dirty_shader_state {
 	FD_DIRTY_SHADER_PROG  = BIT(0),
 	FD_DIRTY_SHADER_CONST = BIT(1),
 	FD_DIRTY_SHADER_TEX   = BIT(2),
+	FD_DIRTY_SHADER_SSBO  = BIT(3),
 };
 
 struct fd_context {
@@ -239,7 +246,7 @@ struct fd_context {
 	 * means we'd always have to recalc tiles ever batch)
 	 */
 	struct fd_gmem_stateobj gmem;
-	struct fd_vsc_pipe      pipe[8];
+	struct fd_vsc_pipe      pipe[16];
 	struct fd_tile          tile[512];
 
 	/* which state objects need to be re-emit'd: */
@@ -248,6 +255,7 @@ struct fd_context {
 	/* per shader-stage dirty status: */
 	enum fd_dirty_shader_state dirty_shader[PIPE_SHADER_TYPES];
 
+	void *compute;
 	struct pipe_blend_state *blend;
 	struct pipe_rasterizer_state *rasterizer;
 	struct pipe_depth_stencil_alpha_state *zsa;
@@ -264,7 +272,7 @@ struct fd_context {
 	struct pipe_poly_stipple stipple;
 	struct pipe_viewport_state viewport;
 	struct fd_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
-	struct pipe_index_buffer indexbuf;
+	struct fd_shaderbuf_stateobj shaderbuf[PIPE_SHADER_TYPES];
 	struct fd_streamout_stateobj streamout;
 	struct pipe_clip_state ucp;
 
@@ -287,9 +295,13 @@ struct fd_context {
 	void (*emit_sysmem_fini)(struct fd_batch *batch);
 
 	/* draw: */
-	bool (*draw_vbo)(struct fd_context *ctx, const struct pipe_draw_info *info);
-	void (*clear)(struct fd_context *ctx, unsigned buffers,
+	bool (*draw_vbo)(struct fd_context *ctx, const struct pipe_draw_info *info,
+                         unsigned index_offset);
+	bool (*clear)(struct fd_context *ctx, unsigned buffers,
 			const union pipe_color_union *color, double depth, unsigned stencil);
+
+	/* compute: */
+	void (*launch_grid)(struct fd_context *ctx, const struct pipe_grid_info *info);
 
 	/* constant emit:  (note currently not used/needed for a2xx) */
 	void (*emit_const)(struct fd_ringbuffer *ring, enum shader_t type,
@@ -368,8 +380,16 @@ static inline void
 fd_context_all_clean(struct fd_context *ctx)
 {
 	ctx->dirty = 0;
-	for (unsigned i = 0; i < PIPE_SHADER_TYPES; i++)
+	for (unsigned i = 0; i < PIPE_SHADER_TYPES; i++) {
+		/* don't mark compute state as clean, since it is not emitted
+		 * during normal draw call.  The places that call _all_dirty(),
+		 * it is safe to mark compute state dirty as well, but the
+		 * inverse is not true.
+		 */
+		if (i == PIPE_SHADER_COMPUTE)
+			continue;
 		ctx->dirty_shader[i] = 0;
+	}
 }
 
 static inline struct pipe_scissor_state *

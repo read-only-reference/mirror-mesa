@@ -210,7 +210,7 @@ fd_context_setup_common_vbos(struct fd_context *ctx)
 			}});
 	ctx->solid_vbuf_state.vertexbuf.count = 1;
 	ctx->solid_vbuf_state.vertexbuf.vb[0].stride = 12;
-	ctx->solid_vbuf_state.vertexbuf.vb[0].buffer = ctx->solid_vbuf;
+	ctx->solid_vbuf_state.vertexbuf.vb[0].buffer.resource = ctx->solid_vbuf;
 
 	/* setup blit_vbuf_state: */
 	ctx->blit_vbuf_state.vtx = pctx->create_vertex_elements_state(
@@ -225,9 +225,9 @@ fd_context_setup_common_vbos(struct fd_context *ctx)
 			}});
 	ctx->blit_vbuf_state.vertexbuf.count = 2;
 	ctx->blit_vbuf_state.vertexbuf.vb[0].stride = 8;
-	ctx->blit_vbuf_state.vertexbuf.vb[0].buffer = ctx->blit_texcoord_vbuf;
+	ctx->blit_vbuf_state.vertexbuf.vb[0].buffer.resource = ctx->blit_texcoord_vbuf;
 	ctx->blit_vbuf_state.vertexbuf.vb[1].stride = 12;
-	ctx->blit_vbuf_state.vertexbuf.vb[1].buffer = ctx->solid_vbuf;
+	ctx->blit_vbuf_state.vertexbuf.vb[1].buffer.resource = ctx->solid_vbuf;
 }
 
 void
@@ -277,13 +277,7 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 		goto fail;
 	pctx->const_uploader = pctx->stream_uploader;
 
-	/* TODO what about compute?  Ideally it creates it's own independent
-	 * batches per compute job (since it isn't using tiling, so no point
-	 * in getting involved with the re-ordering madness)..
-	 */
-	if (!screen->reorder) {
-		ctx->batch = fd_bc_alloc_batch(&screen->batch_cache, ctx);
-	}
+	ctx->batch = fd_bc_alloc_batch(&screen->batch_cache, ctx);
 
 	slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
 
