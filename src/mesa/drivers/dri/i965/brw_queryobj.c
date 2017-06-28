@@ -47,7 +47,7 @@ brw_timebase_scale(struct brw_context *brw, uint64_t gpu_timestamp)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   return (double)gpu_timestamp * devinfo->timebase_scale;
+   return (1000000000ull * gpu_timestamp) / devinfo->timestamp_frequency;
 }
 
 /* As best we know currently, the Gen HW timestamps are 36bits across
@@ -97,7 +97,7 @@ brw_write_timestamp(struct brw_context *brw, struct brw_bo *query_bo, int idx)
       flags |= PIPE_CONTROL_CS_STALL;
 
    brw_emit_pipe_control_write(brw, flags,
-                               query_bo, idx * sizeof(uint64_t), 0, 0);
+                               query_bo, idx * sizeof(uint64_t), 0);
 }
 
 /**
@@ -111,9 +111,16 @@ brw_write_depth_count(struct brw_context *brw, struct brw_bo *query_bo, int idx)
    if (brw->gen == 9 && brw->gt == 4)
       flags |= PIPE_CONTROL_CS_STALL;
 
+   if (brw->gen >= 10) {
+      /* "Driver must program PIPE_CONTROL with only Depth Stall Enable bit set
+       * prior to programming a PIPE_CONTROL with Write PS Depth Count Post sync
+       * operation."
+       */
+      brw_emit_pipe_control_flush(brw, PIPE_CONTROL_DEPTH_STALL);
+   }
+
    brw_emit_pipe_control_write(brw, flags,
-                               query_bo, idx * sizeof(uint64_t),
-                               0, 0);
+                               query_bo, idx * sizeof(uint64_t), 0);
 }
 
 /**
@@ -146,8 +153,7 @@ brw_queryobj_get_results(struct gl_context *ctx,
       }
    }
 
-   brw_bo_map(brw, query->bo, false);
-   results = query->bo->virtual;
+   results = brw_bo_map(brw, query->bo, MAP_READ);
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED_EXT:
       /* The query BO contains the starting and ending timestamps.

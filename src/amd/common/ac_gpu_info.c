@@ -34,6 +34,8 @@
 #include <xf86drm.h>
 #include <amdgpu_drm.h>
 
+#include <amdgpu.h>
+
 #define CIK_TILE_MODE_COLOR_2D			14
 
 #define CIK__GB_TILE_MODE__PIPE_CONFIG(x)        (((x) >> 6) & 0x1f)
@@ -249,7 +251,6 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	info->max_shader_clock = amdinfo->max_engine_clk / 1000;
 	info->max_se = amdinfo->num_shader_engines;
 	info->max_sh_per_se = amdinfo->num_shader_arrays_per_engine;
-	info->has_hw_decode = uvd.available_rings != 0;
 	info->has_hw_decode =
 		(uvd.available_rings != 0) || (vcn_dec.available_rings != 0);
 	info->uvd_fw_version =

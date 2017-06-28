@@ -97,7 +97,7 @@ XSHMFENCE_REQUIRED=1.1
 XVMC_REQUIRED=1.0.6
 PYTHON_MAKO_REQUIRED=0.8.0
 LIBSENSORS_REQUIRED=4.0.0
-ZLIB_REQUIRED=1.2.8
+ZLIB_REQUIRED=1.2.3
 
 dnl LLVM versions
 LLVM_REQUIRED_GALLIUM=3.3.0
@@ -766,6 +766,13 @@ if test "x$enable_asm" = xyes; then
             ;;
         esac
         ;;
+    powerpc64le)
+        case "$host_os" in
+        linux*)
+            asm_arch=ppc64le
+            ;;
+        esac
+        ;;
     esac
 
     case "$asm_arch" in
@@ -780,6 +787,10 @@ if test "x$enable_asm" = xyes; then
     sparc)
         DEFINES="$DEFINES -DUSE_SPARC_ASM"
         AC_MSG_RESULT([yes, sparc])
+        ;;
+    ppc64le)
+        DEFINES="$DEFINES -DUSE_PPC64LE_ASM"
+        AC_MSG_RESULT([yes, ppc64le])
         ;;
     *)
         AC_MSG_RESULT([no, platform not supported])
@@ -837,6 +848,11 @@ dnl is not valid for that platform.
 if test "x$android" = xno; then
     test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
 fi
+dnl According to the manual when using pthreads, one should add -pthread to
+dnl both compile and link-time arguments.
+dnl In practise that should be sufficient for all platforms, since any
+dnl platforms build with GCC and Clang support the flag.
+PTHREAD_LIBS="$PTHREAD_LIBS -pthread"
 
 dnl pthread-stubs is mandatory on BSD platforms, due to the nature of the
 dnl project. Even then there's a notable issue as described in the project README
@@ -851,8 +867,6 @@ esac
 
 if test "x$pthread_stubs_possible" = xyes; then
     PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs >= 0.4)
-    AC_SUBST(PTHREADSTUBS_CFLAGS)
-    AC_SUBST(PTHREADSTUBS_LIBS)
 fi
 
 dnl SELinux awareness.
@@ -1066,16 +1080,12 @@ AC_SUBST([LLVM_INCLUDEDIR])
 dnl
 dnl libunwind
 dnl
+PKG_CHECK_EXISTS(libunwind, [HAVE_LIBUNWIND=yes], [HAVE_LIBUNWIND=no])
 AC_ARG_ENABLE([libunwind],
     [AS_HELP_STRING([--enable-libunwind],
             [Use libunwind for backtracing (default: auto)])],
         [LIBUNWIND="$enableval"],
-        [LIBUNWIND="auto"])
-
-PKG_CHECK_EXISTS(libunwind, [HAVE_LIBUNWIND=yes], [HAVE_LIBUNWIND=no])
-if test "x$LIBUNWIND" = "xauto"; then
-    LIBUNWIND="$HAVE_LIBUNWIND"
-fi
+        [LIBUNWIND="$HAVE_LIBUNWIND"])
 
 if test "x$LIBUNWIND" = "xyes"; then
     PKG_CHECK_MODULES(LIBUNWIND, libunwind)
@@ -1240,7 +1250,7 @@ GALLIUM_DRIVERS_DEFAULT="r300,r600,svga,swrast"
 AC_ARG_WITH([gallium-drivers],
     [AS_HELP_STRING([--with-gallium-drivers@<:@=DIRS...@:>@],
         [comma delimited Gallium drivers list, e.g.
-        "i915,nouveau,r300,r600,radeonsi,freedreno,svga,swrast,swr,vc4,virgl,etnaviv,imx"
+        "i915,nouveau,r300,r600,radeonsi,freedreno,pl111,svga,swrast,swr,vc4,virgl,etnaviv,imx"
         @<:@default=r300,r600,svga,swrast@:>@])],
     [with_gallium_drivers="$withval"],
     [with_gallium_drivers="$GALLIUM_DRIVERS_DEFAULT"])
@@ -1831,12 +1841,11 @@ if test -n "$with_dri_drivers"; then
         xi915)
             require_libdrm "i915"
             HAVE_I915_DRI=yes
-            PKG_CHECK_MODULES([INTEL], [libdrm >= $LIBDRM_INTEL_REQUIRED libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
+            PKG_CHECK_MODULES([I915], [libdrm >= $LIBDRM_INTEL_REQUIRED libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
             ;;
         xi965)
             require_libdrm "i965"
             HAVE_I965_DRI=yes
-            PKG_CHECK_MODULES([INTEL], [libdrm >= $LIBDRM_INTEL_REQUIRED libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
             ;;
         xnouveau)
             require_libdrm "nouveau"
@@ -1948,7 +1957,6 @@ if test -n "$with_vulkan_drivers"; then
         case "x$driver" in
         xintel)
             require_libdrm "ANV"
-            PKG_CHECK_MODULES([INTEL], [libdrm >= $LIBDRM_INTEL_REQUIRED libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
             require_x11_dri3 "ANV"
             HAVE_INTEL_VULKAN=yes
             ;;
@@ -2419,7 +2427,7 @@ if test -n "$with_gallium_drivers"; then
             ;;
         xi915)
             HAVE_GALLIUM_I915=yes
-            PKG_CHECK_MODULES([INTEL], [libdrm >= $LIBDRM_INTEL_REQUIRED libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
+            PKG_CHECK_MODULES([I915], [libdrm >= $LIBDRM_INTEL_REQUIRED libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
             require_libdrm "Gallium i915"
             ;;
         xr300)
@@ -2476,10 +2484,10 @@ if test -n "$with_gallium_drivers"; then
         xswr)
             llvm_require_version $LLVM_REQUIRED_SWR "swr"
 
-            swr_require_cxx_feature_flags "C++14" "__cplusplus >= 201402L" \
-                "-std=c++14" \
-                SWR_CXX14_CXXFLAGS
-            AC_SUBST([SWR_CXX14_CXXFLAGS])
+            swr_require_cxx_feature_flags "C++11" "__cplusplus >= 201103L" \
+                ",-std=c++11" \
+                SWR_CXX11_CXXFLAGS
+            AC_SUBST([SWR_CXX11_CXXFLAGS])
 
             swr_require_cxx_feature_flags "AVX" "defined(__AVX__)" \
                 ",-mavx,-march=core-avx" \
@@ -2502,6 +2510,9 @@ if test -n "$with_gallium_drivers"; then
                               [USE_VC4_SIMULATOR=yes;
                                DEFINES="$DEFINES -DUSE_VC4_SIMULATOR"],
                               [USE_VC4_SIMULATOR=no])
+            ;;
+        xpl111)
+            HAVE_GALLIUM_PL111=yes
             ;;
         xvirgl)
             HAVE_GALLIUM_VIRGL=yes
@@ -2530,6 +2541,10 @@ dnl We need to validate some needed dependencies for renderonly drivers.
 
 if test "x$HAVE_GALLIUM_ETNAVIV" != xyes -a "x$HAVE_GALLIUM_IMX" = xyes  ; then
     AC_MSG_ERROR([Building with imx requires etnaviv])
+fi
+
+if test "x$HAVE_GALLIUM_VC4" != xyes -a "x$HAVE_GALLIUM_PL111" = xyes  ; then
+    AC_MSG_ERROR([Building with pl111 requires vc4])
 fi
 
 dnl
@@ -2596,6 +2611,7 @@ fi
 
 AM_CONDITIONAL(HAVE_GALLIUM_SVGA, test "x$HAVE_GALLIUM_SVGA" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_I915, test "x$HAVE_GALLIUM_I915" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_PL111, test "x$HAVE_GALLIUM_PL111" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_R300, test "x$HAVE_GALLIUM_R300" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_R600, test "x$HAVE_GALLIUM_R600" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_RADEONSI, test "x$HAVE_GALLIUM_RADEONSI" = xyes)
@@ -2635,8 +2651,7 @@ AM_CONDITIONAL(HAVE_SWRAST_DRI, test x$HAVE_SWRAST_DRI = xyes)
 AM_CONDITIONAL(HAVE_RADEON_VULKAN, test "x$HAVE_RADEON_VULKAN" = xyes)
 AM_CONDITIONAL(HAVE_INTEL_VULKAN, test "x$HAVE_INTEL_VULKAN" = xyes)
 
-AM_CONDITIONAL(HAVE_AMD_DRIVERS, test "x$HAVE_GALLIUM_R600" = xyes -o \
-                                      "x$HAVE_GALLIUM_RADEONSI" = xyes -o \
+AM_CONDITIONAL(HAVE_AMD_DRIVERS, test "x$HAVE_GALLIUM_RADEONSI" = xyes -o \
                                       "x$HAVE_RADEON_VULKAN" = xyes)
 
 AM_CONDITIONAL(HAVE_INTEL_DRIVERS, test "x$HAVE_INTEL_VULKAN" = xyes -o \
@@ -2659,6 +2674,7 @@ AM_CONDITIONAL(HAVE_COMMON_OSMESA, test "x$enable_osmesa" = xyes -o \
 AM_CONDITIONAL(HAVE_X86_ASM, test "x$asm_arch" = xx86 -o "x$asm_arch" = xx86_64)
 AM_CONDITIONAL(HAVE_X86_64_ASM, test "x$asm_arch" = xx86_64)
 AM_CONDITIONAL(HAVE_SPARC_ASM, test "x$asm_arch" = xsparc)
+AM_CONDITIONAL(HAVE_PPC64LE_ASM, test "x$asm_arch" = xppc64le)
 
 AC_SUBST([NINE_MAJOR], 1)
 AC_SUBST([NINE_MINOR], 0)
@@ -2730,6 +2746,7 @@ AC_CONFIG_FILES([Makefile
 		src/Makefile
 		src/amd/Makefile
 		src/amd/vulkan/Makefile
+		src/broadcom/Makefile
 		src/compiler/Makefile
 		src/egl/Makefile
 		src/egl/main/egl.pc
@@ -2745,6 +2762,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/drivers/llvmpipe/Makefile
 		src/gallium/drivers/noop/Makefile
 		src/gallium/drivers/nouveau/Makefile
+		src/gallium/drivers/pl111/Makefile
 		src/gallium/drivers/r300/Makefile
 		src/gallium/drivers/r600/Makefile
 		src/gallium/drivers/radeon/Makefile
@@ -2790,6 +2808,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/winsys/freedreno/drm/Makefile
 		src/gallium/winsys/i915/drm/Makefile
 		src/gallium/winsys/nouveau/drm/Makefile
+		src/gallium/winsys/pl111/drm/Makefile
 		src/gallium/winsys/radeon/drm/Makefile
 		src/gallium/winsys/amdgpu/drm/Makefile
 		src/gallium/winsys/svga/drm/Makefile

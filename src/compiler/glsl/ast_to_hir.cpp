@@ -2359,7 +2359,10 @@ ast_type_specifier::glsl_type(const char **name,
 {
    const struct glsl_type *type;
 
-   type = state->symbols->get_type(this->type_name);
+   if (structure)
+      type = structure->type;
+   else
+      type = state->symbols->get_type(this->type_name);
    *name = this->type_name;
 
    YYLTYPE loc = this->get_location();
@@ -3245,6 +3248,9 @@ apply_explicit_location(const struct ast_type_qualifier *qual,
                        "compute shader variables cannot be given "
                        "explicit locations");
       return;
+   default:
+      fail = true;
+      break;
    };
 
    if (fail) {
@@ -3276,7 +3282,7 @@ apply_explicit_location(const struct ast_type_qualifier *qual,
             ? (qual_location + FRAG_RESULT_DATA0)
             : (qual_location + VARYING_SLOT_VAR0);
          break;
-      case MESA_SHADER_COMPUTE:
+      default:
          assert(!"Unexpected shader type");
          break;
       }
@@ -4088,6 +4094,8 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
          break;
       case MESA_SHADER_COMPUTE:
          /* Invariance isn't meaningful in compute shaders. */
+         break;
+      default:
          break;
       }
    }
@@ -7402,9 +7410,10 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
          }
 
          /* Memory qualifiers are allowed on buffer and image variables, while
-          * the format qualifier is only accept for images.
+          * the format qualifier is only accepted for images.
           */
-         if (var_mode == ir_var_shader_storage || field_type->is_image()) {
+         if (var_mode == ir_var_shader_storage ||
+             field_type->without_array()->is_image()) {
             /* For readonly and writeonly qualifiers the field definition,
              * if set, overwrites the layout qualifier.
              */
@@ -7431,9 +7440,10 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
             fields[i].memory_restrict = qual->flags.q.restrict_flag ||
                                         (layout && layout->flags.q.restrict_flag);
 
-            if (field_type->is_image()) {
+            if (field_type->without_array()->is_image()) {
                if (qual->flags.q.explicit_image_format) {
-                  if (qual->image_base_type != field_type->sampled_type) {
+                  if (qual->image_base_type !=
+                      field_type->without_array()->sampled_type) {
                      _mesa_glsl_error(&loc, state, "format qualifier doesn't "
                                       "match the base data type of the image");
                   }
@@ -7497,13 +7507,12 @@ ast_struct_specifier::hir(exec_list *instructions,
 
    validate_identifier(this->name, loc, state);
 
-   const glsl_type *t =
-      glsl_type::get_record_instance(fields, decl_count, this->name);
+   type = glsl_type::get_record_instance(fields, decl_count, this->name);
 
-   if (!state->symbols->add_type(name, t)) {
+   if (!type->is_anonymous() && !state->symbols->add_type(name, type)) {
       const glsl_type *match = state->symbols->get_type(name);
       /* allow struct matching for desktop GL - older UE4 does this */
-      if (match != NULL && state->is_version(130, 0) && match->record_compare(t, false))
+      if (match != NULL && state->is_version(130, 0) && match->record_compare(type, false))
          _mesa_glsl_warning(& loc, state, "struct `%s' previously defined", name);
       else
          _mesa_glsl_error(& loc, state, "struct `%s' previously defined", name);
@@ -7512,7 +7521,7 @@ ast_struct_specifier::hir(exec_list *instructions,
                                      const glsl_type *,
                                      state->num_user_structures + 1);
       if (s != NULL) {
-         s[state->num_user_structures] = t;
+         s[state->num_user_structures] = type;
          state->user_structures = s;
          state->num_user_structures++;
       }

@@ -584,15 +584,16 @@ brw_prepare_vertices(struct brw_context *brw)
 	    ptr = glarray->Ptr;
 	 }
 	 else if (interleaved != glarray->StrideB ||
+                  glarray->InstanceDivisor != 0 ||
                   glarray->Ptr < ptr ||
                   (uintptr_t)(glarray->Ptr - ptr) + glarray->_ElementSize > interleaved)
 	 {
             /* If our stride is different from the first attribute's stride,
-             * or if the first attribute's stride didn't cover our element,
-             * disable the interleaved upload optimization.  The second case
-             * can most commonly occur in cases where there is a single vertex
-             * and, for example, the data is stored on the application's
-             * stack.
+             * or if we are using an instance divisor or if the first
+             * attribute's stride didn't cover our element, disable the
+             * interleaved upload optimization.  The second case can most
+             * commonly occur in cases where there is a single vertex and, for
+             * example, the data is stored on the application's stack.
              *
              * NOTE: This will also disable the optimization in cases where
              * the data is in a different order than the array indices.
@@ -647,6 +648,7 @@ brw_prepare_vertices(struct brw_context *brw)
 				 buffer, interleaved);
 	 buffer->offset -= delta * interleaved;
          buffer->size += delta * interleaved;
+         buffer->step_rate = 0;
 
 	 for (i = 0; i < nr_uploads; i++) {
 	    /* Then, just point upload[i] at upload[0]'s buffer. */
@@ -709,7 +711,6 @@ brw_prepare_shader_draw_parameters(struct brw_context *brw)
 static void
 brw_upload_indices(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
    const struct _mesa_index_buffer *index_buffer = brw->ib.ib;
    GLuint ib_size;
    struct brw_bo *old_bo = brw->ib.bo;
@@ -736,35 +737,14 @@ brw_upload_indices(struct brw_context *brw)
    } else {
       offset = (GLuint) (unsigned long) index_buffer->ptr;
 
-      /* If the index buffer isn't aligned to its element size, we have to
-       * rebase it into a temporary.
-       */
-      if ((ib_type_size - 1) & offset) {
-         perf_debug("copying index buffer to a temporary to work around "
-                    "misaligned offset %d\n", offset);
-
-         GLubyte *map = ctx->Driver.MapBufferRange(ctx,
-                                                   offset,
-                                                   ib_size,
-                                                   GL_MAP_READ_BIT,
-                                                   bufferobj,
-                                                   MAP_INTERNAL);
-
-         intel_upload_data(brw, map, ib_size, ib_type_size,
-                           &brw->ib.bo, &offset);
-         brw->ib.size = brw->ib.bo->size;
-
-         ctx->Driver.UnmapBuffer(ctx, bufferobj, MAP_INTERNAL);
-      } else {
-         struct brw_bo *bo =
-            intel_bufferobj_buffer(brw, intel_buffer_object(bufferobj),
-                                   offset, ib_size);
-         if (bo != brw->ib.bo) {
-            brw_bo_unreference(brw->ib.bo);
-            brw->ib.bo = bo;
-            brw->ib.size = bufferobj->Size;
-            brw_bo_reference(bo);
-         }
+      struct brw_bo *bo =
+         intel_bufferobj_buffer(brw, intel_buffer_object(bufferobj),
+                                offset, ib_size);
+      if (bo != brw->ib.bo) {
+         brw_bo_unreference(brw->ib.bo);
+         brw->ib.bo = bo;
+         brw->ib.size = bufferobj->Size;
+         brw_bo_reference(bo);
       }
    }
 

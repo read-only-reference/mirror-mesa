@@ -155,6 +155,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return true; /* VIV_FEATURE(priv->dev, chipMinorFeatures1,
                       NON_POWER_OF_TWO); */
 
+   case PIPE_CAP_TEXTURE_SWIZZLE:
    case PIPE_CAP_PRIMITIVE_RESTART:
       return VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
 
@@ -164,7 +165,6 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    /* Unsupported features. */
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
-   case PIPE_CAP_TEXTURE_SWIZZLE: /* XXX supported on gc2000 */
    case PIPE_CAP_COMPUTE: /* XXX supported on gc2000 */
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS: /* only one colorbuffer supported, so mixing makes no sense */
    case PIPE_CAP_CONDITIONAL_RENDER: /* no occlusion queries */
@@ -256,6 +256,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+   case PIPE_CAP_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_BINDLESS_TEXTURE:
       return 0;
 
    /* Stream output. */
@@ -343,6 +345,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 static float
 etna_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 {
+   struct etna_screen *screen = etna_screen(pscreen);
+
    switch (param) {
    case PIPE_CAPF_MAX_LINE_WIDTH:
    case PIPE_CAPF_MAX_LINE_WIDTH_AA:
@@ -352,7 +356,7 @@ etna_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
    case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
       return 16.0f;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-      return 16.0f;
+      return util_last_bit(screen->specs.max_texture_size);
    case PIPE_CAPF_GUARD_BAND_LEFT:
    case PIPE_CAPF_GUARD_BAND_TOP:
    case PIPE_CAPF_GUARD_BAND_RIGHT:
@@ -455,13 +459,28 @@ etna_screen_get_timestamp(struct pipe_screen *pscreen)
 }
 
 static bool
-gpu_supports_texure_format(struct etna_screen *screen, uint32_t fmt)
+gpu_supports_texure_format(struct etna_screen *screen, uint32_t fmt,
+                           enum pipe_format format)
 {
+   bool supported = true;
+
    if (fmt == TEXTURE_FORMAT_ETC1)
-      return VIV_FEATURE(screen, chipFeatures, ETC1_TEXTURE_COMPRESSION);
+      supported = VIV_FEATURE(screen, chipFeatures, ETC1_TEXTURE_COMPRESSION);
 
    if (fmt >= TEXTURE_FORMAT_DXT1 && fmt <= TEXTURE_FORMAT_DXT4_DXT5)
-      return VIV_FEATURE(screen, chipFeatures, DXT_TEXTURE_COMPRESSION);
+      supported = VIV_FEATURE(screen, chipFeatures, DXT_TEXTURE_COMPRESSION);
+
+   if (fmt & EXT_FORMAT)
+      supported = VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
+
+   if (util_format_is_snorm(format))
+      supported = VIV_FEATURE(screen, chipMinorFeatures2, HALTI1);
+
+   if (!supported)
+      return false;
+
+   if (texture_format_needs_swiz(format))
+      return VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
 
    return true;
 }
@@ -507,7 +526,7 @@ etna_screen_is_format_supported(struct pipe_screen *pscreen,
    if (usage & PIPE_BIND_SAMPLER_VIEW) {
       uint32_t fmt = translate_texture_format(format);
 
-      if (!gpu_supports_texure_format(screen, fmt))
+      if (!gpu_supports_texure_format(screen, fmt, format))
          fmt = ETNA_NO_MATCH;
 
       if (sample_count < 2 && fmt != ETNA_NO_MATCH)

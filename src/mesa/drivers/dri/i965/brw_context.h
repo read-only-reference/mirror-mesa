@@ -47,7 +47,6 @@
 #include "common/gen_debug.h"
 #include "intel_screen.h"
 #include "intel_tex_obj.h"
-#include "intel_resolve_map.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -368,6 +367,7 @@ struct brw_cache {
 
    struct brw_cache_item **items;
    struct brw_bo *bo;
+   void *map;
    GLuint size, n_items;
 
    uint32_t next_offset;
@@ -576,7 +576,11 @@ enum brw_predicate_state {
    /* In this case whether to draw or not depends on the result of an
     * MI_PREDICATE command so the predicate enable bit needs to be checked.
     */
-   BRW_PREDICATE_STATE_USE_BIT
+   BRW_PREDICATE_STATE_USE_BIT,
+   /* In this case, either MI_PREDICATE doesn't exist or we lack the
+    * necessary kernel features to use it.  Stall for the query result.
+    */
+   BRW_PREDICATE_STATE_STALL_FOR_QUERY,
 };
 
 struct shader_times;
@@ -642,6 +646,17 @@ struct brw_context
                                      uint32_t width, uint32_t height,
                                      uint32_t tile_x, uint32_t tile_y);
 
+      /**
+       * Emit an MI_REPORT_PERF_COUNT command packet.
+       *
+       * This asks the GPU to write a report of the current OA counter values
+       * into @bo at the given offset and containing the given @report_id
+       * which we can cross-reference when parsing the report (gen7+ only).
+       */
+      void (*emit_mi_report_perf_count)(struct brw_context *brw,
+                                        struct brw_bo *bo,
+                                        uint32_t offset_in_bytes,
+                                        uint32_t report_id);
    } vtbl;
 
    struct brw_bufmgr *bufmgr;
@@ -672,6 +687,7 @@ struct brw_context
 
    struct {
       struct brw_bo *bo;
+      void *map;
       uint32_t next_offset;
    } upload;
 
@@ -748,8 +764,6 @@ struct brw_context
    bool has_negative_rhw_bug;
    bool has_pln;
    bool no_simd8;
-   bool use_rep_send;
-   bool use_resource_streamer;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -759,6 +773,13 @@ struct brw_context
     * fragment shader instructions.
     */
    bool needs_unlit_centroid_workaround;
+
+   /** Derived stencil states. */
+   bool stencil_enabled;
+   bool stencil_two_sided;
+   bool stencil_write_enabled;
+   /** Derived polygon state. */
+   bool polygon_front_bit; /**< 0=GL_CCW, 1=GL_CW */
 
    struct isl_device isl_dev;
 
@@ -965,22 +986,10 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-
-      /**
-       * True if the 3DSTATE_HS command most recently emitted to the 3D
-       * pipeline enabled the HS; false otherwise.
-       */
-      bool enabled;
    } tcs;
 
    struct {
       struct brw_stage_state base;
-
-      /**
-       * True if the 3DSTATE_DS command most recently emitted to the 3D
-       * pipeline enabled the DS; false otherwise.
-       */
-      bool enabled;
    } tes;
 
    struct {
@@ -1088,6 +1097,9 @@ struct brw_context
          uint64_t timestamp_frequency; /** $GpuTimestampFrequency */
          uint64_t n_eus;               /** $EuCoresTotalCount */
          uint64_t n_eu_slices;         /** $EuSlicesTotalCount */
+         uint64_t n_eu_sub_slices;     /** $EuSubslicesTotalCount */
+         uint64_t eu_threads_count;    /** $EuThreadsCount */
+         uint64_t slice_mask;          /** $SliceMask */
          uint64_t subslice_mask;       /** $SubsliceMask */
          uint64_t gt_min_freq;         /** $GpuMinFrequency */
          uint64_t gt_max_freq;         /** $GpuMaxFrequency */
@@ -1161,8 +1173,8 @@ struct brw_context
    const struct brw_tracked_state render_atoms[76];
    const struct brw_tracked_state compute_atoms[11];
 
-   enum isl_format render_target_format[MESA_FORMAT_COUNT];
-   bool format_supported_as_render_target[MESA_FORMAT_COUNT];
+   const enum isl_format *mesa_to_isl_render_format;
+   const bool *mesa_format_supports_render;
 
    /* PrimitiveRestart */
    struct {
@@ -1175,12 +1187,11 @@ struct brw_context
     * brw_workaround_depthstencil_alignment().
     */
    struct {
-      struct intel_mipmap_tree *depth_mt;
-      struct intel_mipmap_tree *stencil_mt;
-
       /* Inter-tile (page-aligned) byte offsets. */
-      uint32_t depth_offset, hiz_offset, stencil_offset;
-      /* Intra-tile x,y offsets for drawing to depth/stencil/hiz */
+      uint32_t depth_offset;
+      /* Intra-tile x,y offsets for drawing to combined depth-stencil. Only
+       * used for Gen < 6.
+       */
       uint32_t tile_x, tile_y;
    } depthstencil;
 
@@ -1419,6 +1430,7 @@ void brw_upload_image_surfaces(struct brw_context *brw,
                                struct brw_stage_prog_data *prog_data);
 
 /* brw_surface_formats.c */
+void intel_screen_init_surface_formats(struct intel_screen *screen);
 void brw_init_surface_formats(struct brw_context *brw);
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
@@ -1633,9 +1645,6 @@ gen8_emit_depth_stencil_hiz(struct brw_context *brw,
                             uint32_t width, uint32_t height,
                             uint32_t tile_x, uint32_t tile_y);
 
-void gen8_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-                   unsigned int level, unsigned int layer, enum blorp_hiz_op op);
-
 uint32_t get_hw_prim_for_gl_prim(int mode);
 
 void
@@ -1656,7 +1665,8 @@ void brw_fini_pipe_control(struct brw_context *brw);
 void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
 void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
                                  struct brw_bo *bo, uint32_t offset,
-                                 uint32_t imm_lower, uint32_t imm_upper);
+                                 uint64_t imm);
+void brw_emit_end_of_pipe_sync(struct brw_context *brw, uint32_t flags);
 void brw_emit_mi_flush(struct brw_context *brw);
 void brw_emit_post_sync_nonzero_flush(struct brw_context *brw);
 void brw_emit_depth_stall_flushes(struct brw_context *brw);

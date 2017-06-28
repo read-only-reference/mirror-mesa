@@ -365,6 +365,8 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
     /* Radeon allocates all buffers as contigous, which makes large allocations
      * unlikely to succeed. */
     ws->info.max_alloc_size = MAX2(ws->info.vram_size, ws->info.gart_size) * 0.7;
+    if (ws->info.has_dedicated_vram)
+        ws->info.max_alloc_size = MIN2(ws->info.vram_size * 0.7, ws->info.max_alloc_size);
     if (ws->info.drm_minor < 40)
         ws->info.max_alloc_size = MIN2(ws->info.max_alloc_size, 256*1024*1024);
 
@@ -733,7 +735,8 @@ static int handle_compare(void *key1, void *key2)
 }
 
 PUBLIC struct radeon_winsys *
-radeon_drm_winsys_create(int fd, radeon_screen_create_t screen_create)
+radeon_drm_winsys_create(int fd, unsigned flags,
+			 radeon_screen_create_t screen_create)
 {
     struct radeon_drm_winsys *ws;
 
@@ -821,14 +824,14 @@ radeon_drm_winsys_create(int fd, radeon_screen_create_t screen_create)
     ws->info.gart_page_size = sysconf(_SC_PAGESIZE);
 
     if (ws->num_cpus > 1 && debug_get_option_thread())
-        util_queue_init(&ws->cs_queue, "radeon_cs", 8, 1);
+        util_queue_init(&ws->cs_queue, "radeon_cs", 8, 1, 0);
 
     /* Create the screen at the end. The winsys must be initialized
      * completely.
      *
      * Alternatively, we could create the screen based on "ws->gen"
      * and link all drivers into one binary blob. */
-    ws->base.screen = screen_create(&ws->base);
+    ws->base.screen = screen_create(&ws->base, flags);
     if (!ws->base.screen) {
         radeon_winsys_destroy(&ws->base);
         mtx_unlock(&fd_tab_mutex);

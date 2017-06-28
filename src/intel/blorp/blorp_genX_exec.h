@@ -27,6 +27,7 @@
 #include "blorp_priv.h"
 #include "common/gen_device_info.h"
 #include "common/gen_sample_positions.h"
+#include "genxml/gen_macros.h"
 
 /**
  * This file provides the blorp pipeline setup and execution functionality.
@@ -59,6 +60,11 @@ static void *
 blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
                           struct blorp_address *addr);
 
+#if GEN_GEN >= 8
+static struct blorp_address
+blorp_get_workaround_page(struct blorp_batch *batch);
+#endif
+
 static void
 blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
                           unsigned state_size, unsigned state_alignment,
@@ -81,8 +87,6 @@ blorp_emit_pipeline(struct blorp_batch *batch,
                     const struct blorp_params *params);
 
 /***** BEGIN blorp_exec implementation ******/
-
-#include "genxml/gen_macros.h"
 
 static uint64_t
 _blorp_combine_address(struct blorp_batch *batch, void *location,
@@ -531,7 +535,7 @@ blorp_emit_sampler_state(struct blorp_batch *batch,
       sampler.VAddressMagFilterRoundingEnable = true;
       sampler.UAddressMinFilterRoundingEnable = true;
       sampler.UAddressMagFilterRoundingEnable = true;
-#if GEN_GEN >= 6
+#if GEN_GEN > 6
       sampler.NonnormalizedCoordinateEnable = true;
 #endif
    }
@@ -1384,20 +1388,48 @@ blorp_emit_depth_stencil_config(struct blorp_batch *batch,
       if (info.hiz_usage == ISL_AUX_USAGE_HIZ) {
          info.hiz_surf = &params->depth.aux_surf;
 
+         struct blorp_address hiz_address = params->depth.aux_addr;
+#if GEN_GEN == 6
+         /* Sandy bridge hardware does not technically support mipmapped HiZ.
+          * However, we have a special layout that allows us to make it work
+          * anyway by manually offsetting to the specified miplevel.
+          */
+         assert(info.hiz_surf->dim_layout == ISL_DIM_LAYOUT_GEN6_STENCIL_HIZ);
+         uint32_t offset_B;
+         isl_surf_get_image_offset_B_tile_sa(info.hiz_surf,
+                                             info.view->base_level, 0, 0,
+                                             &offset_B, NULL, NULL);
+         hiz_address.offset += offset_B;
+#endif
+
          info.hiz_address =
             blorp_emit_reloc(batch, dw + isl_dev->ds.hiz_offset / 4,
-                             params->depth.aux_addr, 0);
+                             hiz_address, 0);
 
-         info.depth_clear_value = params->depth.clear_color.u32[0];
+         info.depth_clear_value = params->depth.clear_color.f32[0];
       }
    }
 
    if (params->stencil.enabled) {
       info.stencil_surf = &params->stencil.surf;
 
+      struct blorp_address stencil_address = params->stencil.addr;
+#if GEN_GEN == 6
+      /* Sandy bridge hardware does not technically support mipmapped stencil.
+       * However, we have a special layout that allows us to make it work
+       * anyway by manually offsetting to the specified miplevel.
+       */
+      assert(info.stencil_surf->dim_layout == ISL_DIM_LAYOUT_GEN6_STENCIL_HIZ);
+      uint32_t offset_B;
+      isl_surf_get_image_offset_B_tile_sa(info.stencil_surf,
+                                          info.view->base_level, 0, 0,
+                                          &offset_B, NULL, NULL);
+      stencil_address.offset += offset_B;
+#endif
+
       info.stencil_address =
          blorp_emit_reloc(batch, dw + isl_dev->ds.stencil_offset / 4,
-                          params->stencil.addr, 0);
+                          stencil_address, 0);
    }
 
    isl_emit_depth_stencil_hiz_s(isl_dev, dw, &info);
@@ -1438,11 +1470,14 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
          hzp.StencilBufferClearEnable = params->stencil.enabled;
          hzp.DepthBufferClearEnable = params->depth.enabled;
          hzp.StencilClearValue = params->stencil_ref;
+         hzp.FullSurfaceDepthandStencilClear = params->full_surface_hiz_op;
          break;
       case BLORP_HIZ_OP_DEPTH_RESOLVE:
+         assert(params->full_surface_hiz_op);
          hzp.DepthBufferResolveEnable = true;
          break;
       case BLORP_HIZ_OP_HIZ_RESOLVE:
+         assert(params->full_surface_hiz_op);
          hzp.HierarchicalDepthBufferResolveEnable = true;
          break;
       case BLORP_HIZ_OP_NONE:
@@ -1469,17 +1504,10 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
     */
    blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
       pc.PostSyncOperation = WriteImmediateData;
+      pc.Address = blorp_get_workaround_page(batch);
    }
 
    blorp_emit(batch, GENX(3DSTATE_WM_HZ_OP), hzp);
-
-   /* Perform depth clear specific flushing */
-   if (params->hiz_op == BLORP_HIZ_OP_DEPTH_CLEAR && params->depth.enabled) {
-      blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
-         pc.DepthStallEnable = true;
-         pc.DepthCacheFlushEnable = true;
-      }
-   }
 }
 #endif
 

@@ -80,15 +80,15 @@ INLINE void ProcessAttributes(
         if (IsSwizzledT::value)
         {
             SWR_ATTRIB_SWIZZLE attribSwizzle = backendState.swizzleMap[i];
-            inputSlot = VERTEX_ATTRIB_START_SLOT + attribSwizzle.sourceAttrib;
+            inputSlot = backendState.vertexAttribOffset + attribSwizzle.sourceAttrib;
 
         }
         else
         {
-            inputSlot = VERTEX_ATTRIB_START_SLOT + i;
+            inputSlot = backendState.vertexAttribOffset + i;
         }
 
-        __m128 attrib[3];    // triangle attribs (always 4 wide)
+        simd4scalar attrib[3];    // triangle attribs (always 4 wide)
         float* pAttribStart = pBuffer;
 
         if (HasConstantInterpT::value || IsDegenerate::value)
@@ -128,7 +128,7 @@ INLINE void ProcessAttributes(
 
                 for (uint32_t i = 0; i < NumVertsT::value; ++i)
                 {
-                    _mm_store_ps(pBuffer, attrib[vid]);
+                    SIMD128::store_ps(pBuffer, attrib[vid]);
                     pBuffer += 4;
                 }
             }
@@ -138,7 +138,7 @@ INLINE void ProcessAttributes(
 
                 for (uint32_t i = 0; i < NumVertsT::value; ++i)
                 {
-                    _mm_store_ps(pBuffer, attrib[i]);
+                    SIMD128::store_ps(pBuffer, attrib[i]);
                     pBuffer += 4;
                 }
             }
@@ -149,7 +149,7 @@ INLINE void ProcessAttributes(
 
             for (uint32_t i = 0; i < NumVertsT::value; ++i)
             {
-                _mm_store_ps(pBuffer, attrib[i]);
+                SIMD128::store_ps(pBuffer, attrib[i]);
                 pBuffer += 4;
             }
         }
@@ -160,7 +160,7 @@ INLINE void ProcessAttributes(
         // effect of the missing vertices in the triangle interpolation.
         for (uint32_t v = NumVertsT::value; v < 3; ++v)
         {
-            _mm_store_ps(pBuffer, attrib[NumVertsT::value - 1]);
+            SIMD128::store_ps(pBuffer, attrib[NumVertsT::value - 1]);
             pBuffer += 4;
         }
 
@@ -279,8 +279,7 @@ struct GatherScissors_simd16<16>
 {
     static void Gather(const SWR_RECT* pScissorsInFixedPoint, const uint32_t* pViewportIndex,
         simd16scalari &scisXmin, simd16scalari &scisYmin,
-        simd16scalari &scisXmax, simd16scalari &scisYmax)
-    {
+        simd16scalari &scisXmax, simd16scalari &scisYmax) {
         scisXmin = _simd16_set_epi32(pScissorsInFixedPoint[pViewportIndex[0]].xmin,
             pScissorsInFixedPoint[pViewportIndex[1]].xmin,
             pScissorsInFixedPoint[pViewportIndex[2]].xmin,
@@ -390,14 +389,14 @@ void ProcessUserClipDist(PA_STATE& pa, uint32_t primIndex, uint8_t clipDistMask,
         uint32_t clipAttribSlot = clipSlot == 0 ?
             VERTEX_CLIPCULL_DIST_LO_SLOT : VERTEX_CLIPCULL_DIST_HI_SLOT;
 
-        __m128 primClipDist[3];
+        simd4scalar primClipDist[3];
         pa.AssembleSingle(clipAttribSlot, primIndex, primClipDist);
 
         float vertClipDist[NumVerts];
         for (uint32_t e = 0; e < NumVerts; ++e)
         {
             OSALIGNSIMD(float) aVertClipDist[4];
-            _mm_store_ps(aVertClipDist, primClipDist[e]);
+            SIMD128::store_ps(aVertClipDist, primClipDist[e]);
             vertClipDist[e] = aVertClipDist[clipComp];
         };
 
@@ -434,8 +433,7 @@ void BinTriangles(
     uint32_t workerId,
     simdvector tri[3],
     uint32_t triMask,
-    simdscalari primID,
-    simdscalari viewportIdx)
+    simdscalari primID)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
 
@@ -444,12 +442,26 @@ void BinTriangles(
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_FRONTEND_STATE& feState = state.frontendState;
-    const SWR_GS_STATE& gsState = state.gsState;
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
     simdscalar vRecipW0 = _simd_set1_ps(1.0f);
     simdscalar vRecipW1 = _simd_set1_ps(1.0f);
     simdscalar vRecipW2 = _simd_set1_ps(1.0f);
+
+    // Read viewport array index if needed
+    simdscalari viewportIdx = _simd_set1_epi32(0);
+    if (state.backendState.readViewportArrayIndex)
+    {
+        simdvector vpiAttrib[3];
+        pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
+
+        // OOB indices => forced to zero.
+        simdscalari vpai = _simd_castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+        vpai = _simd_max_epi32(_simd_setzero_si(), vpai);
+        simdscalari vNumViewports = _simd_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+        simdscalari vClearMask = _simd_cmplt_epi32(vpai, vNumViewports);
+        viewportIdx = _simd_and_si(vClearMask, vpai);
+    }
 
     if (feState.vpTransformDisable)
     {
@@ -478,7 +490,7 @@ void BinTriangles(
         tri[2].v[2] = _simd_mul_ps(tri[2].v[2], vRecipW2);
 
         // Viewport transform to screen space coords
-        if (state.gsState.emitsViewportArrayIndex)
+        if (state.backendState.readViewportArrayIndex)
         {
             viewportTransform<3>(tri, state.vpMatrices, viewportIdx);
         }
@@ -612,13 +624,14 @@ void BinTriangles(
             (SWR_INPUT_COVERAGE)pDC->pState->state.psState.inputCoverage, EdgeValToEdgeState(ALL_EDGES_VALID), (state.scissorsTileAligned == false));
     }
 
+    simdBBox bbox;
+
     if (!triMask)
     {
         goto endBinTriangles;
     }
 
     // Calc bounding box of triangles
-    simdBBox bbox;
     calcBoundingBoxIntVertical<CT>(tri, vXi, vYi, bbox);
 
     // determine if triangle falls between pixel centers and discard
@@ -660,28 +673,30 @@ void BinTriangles(
     // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
     // Gather the AOS effective scissor rects based on the per-prim VP index.
     /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
-    simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
-    if (state.gsState.emitsViewportArrayIndex)
     {
-        GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
-            scisXmin, scisYmin, scisXmax, scisYmax);
-    }
-    else // broadcast fast path for non-VPAI case.
-    {
-        scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
-        scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
-        scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
-        scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
-    }
+        simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
+        if (state.backendState.readViewportArrayIndex)
+        {
+            GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                scisXmin, scisYmin, scisXmax, scisYmax);
+        }
+        else // broadcast fast path for non-VPAI case.
+        {
+            scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+            scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+            scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+            scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+        }
 
-    // Make triangle bbox inclusive
-    bbox.xmax = _simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1));
-    bbox.ymax = _simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1));
+        // Make triangle bbox inclusive
+        bbox.xmax = _simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1));
+        bbox.ymax = _simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1));
 
-    bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
-    bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
-    bbox.xmax = _simd_min_epi32(bbox.xmax, scisXmax);
-    bbox.ymax = _simd_min_epi32(bbox.ymax, scisYmax);
+        bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
+        bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
+        bbox.xmax = _simd_min_epi32(bbox.xmax, scisXmax);
+        bbox.ymax = _simd_min_epi32(bbox.ymax, scisYmax);
+    }
 
     if (CT::IsConservativeT::value)
     {
@@ -755,7 +770,7 @@ endBinTriangles:
 
     // transpose verts needed for backend
     /// @todo modify BE to take non-transformed verts
-    __m128 vHorizX[8], vHorizY[8], vHorizZ[8], vHorizW[8];
+    simd4scalar vHorizX[8], vHorizY[8], vHorizZ[8], vHorizW[8];
     vTranspose3x8(vHorizX, tri[0].x, tri[1].x, tri[2].x);
     vTranspose3x8(vHorizY, tri[0].y, tri[1].y, tri[2].y);
     vTranspose3x8(vHorizZ, tri[0].z, tri[1].z, tri[2].z);
@@ -763,12 +778,12 @@ endBinTriangles:
 
     // store render target array index
     OSALIGNSIMD(uint32_t) aRTAI[KNOB_SIMD_WIDTH];
-    if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+    if (state.backendState.readRenderTargetArrayIndex)
     {
         simdvector vRtai[3];
-        pa.Assemble(VERTEX_RTAI_SLOT, vRtai);
+        pa.Assemble(VERTEX_SGV_SLOT, vRtai);
         simdscalari vRtaii;
-        vRtaii = _simd_castps_si(vRtai[0].x);
+        vRtaii = _simd_castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
         _simd_store_si((simdscalari*)aRTAI, vRtaii);
     }
     else
@@ -809,7 +824,6 @@ endBinTriangles:
         TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
         desc.triFlags.frontFacing = state.forceFront ? 1 : ((frontFaceMask >> triIndex) & 1);
-        desc.triFlags.primID = pPrimID[triIndex];
         desc.triFlags.renderTargetArrayIndex = aRTAI[triIndex];
         desc.triFlags.viewportIndex = pViewportIndex[triIndex];
 
@@ -825,10 +839,10 @@ endBinTriangles:
         // store triangle vertex data
         desc.pTriBuffer = (float*)pArena->AllocAligned(4 * 4 * sizeof(float), 16);
 
-        _mm_store_ps(&desc.pTriBuffer[0], vHorizX[triIndex]);
-        _mm_store_ps(&desc.pTriBuffer[4], vHorizY[triIndex]);
-        _mm_store_ps(&desc.pTriBuffer[8], vHorizZ[triIndex]);
-        _mm_store_ps(&desc.pTriBuffer[12], vHorizW[triIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[0], vHorizX[triIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[4], vHorizY[triIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[8], vHorizZ[triIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[12], vHorizW[triIndex]);
 
         // store user clip distances
         if (rastState.clipDistanceMask)
@@ -858,14 +872,13 @@ endBinTriangles:
 
 #if USE_SIMD16_FRONTEND
 template <typename CT>
-void SIMDAPI BinTriangles_simd16(
+void SIMDCALL BinTriangles_simd16(
     DRAW_CONTEXT *pDC,
     PA_STATE& pa,
     uint32_t workerId,
     simd16vector tri[3],
     uint32_t triMask,
-    simd16scalari primID,
-    simd16scalari viewportIdx)
+    simd16scalari primID)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
 
@@ -874,13 +887,26 @@ void SIMDAPI BinTriangles_simd16(
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_FRONTEND_STATE& feState = state.frontendState;
-    const SWR_GS_STATE& gsState = state.gsState;
 
     MacroTileMgr *pTileMgr = pDC->pTileMgr;
 
     simd16scalar vRecipW0 = _simd16_set1_ps(1.0f);
     simd16scalar vRecipW1 = _simd16_set1_ps(1.0f);
     simd16scalar vRecipW2 = _simd16_set1_ps(1.0f);
+    
+    simd16scalari viewportIdx = _simd16_set1_epi32(0);
+    if (state.backendState.readViewportArrayIndex)
+    {
+        simd16vector vpiAttrib[3];
+        pa.Assemble_simd16(VERTEX_SGV_SLOT, vpiAttrib);
+
+        // OOB indices => forced to zero.
+        simd16scalari vpai = _simd16_castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+        vpai = _simd16_max_epi32(_simd16_setzero_si(), vpai);
+        simd16scalari vNumViewports = _simd16_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+        simd16scalari vClearMask = _simd16_cmplt_epi32(vpai, vNumViewports);
+        viewportIdx = _simd16_and_si(vClearMask, vpai);
+    }
 
     if (feState.vpTransformDisable)
     {
@@ -909,7 +935,7 @@ void SIMDAPI BinTriangles_simd16(
         tri[2].v[2] = _simd16_mul_ps(tri[2].v[2], vRecipW2);
 
         // Viewport transform to screen space coords
-        if (state.gsState.emitsViewportArrayIndex)
+        if (state.backendState.readViewportArrayIndex)
         {
             viewportTransform<3>(tri, state.vpMatrices, viewportIdx);
         }
@@ -1100,25 +1126,31 @@ void SIMDAPI BinTriangles_simd16(
     // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
     // Gather the AOS effective scissor rects based on the per-prim VP index.
     /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
-    simd16scalari scisXmin, scisYmin, scisXmax, scisYmax;
-
-    if (state.gsState.emitsViewportArrayIndex)
     {
-        GatherScissors_simd16<KNOB_SIMD16_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
-            scisXmin, scisYmin, scisXmax, scisYmax);
-    }
-    else // broadcast fast path for non-VPAI case.
-    {
-        scisXmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmin);
-        scisYmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymin);
-        scisXmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmax);
-        scisYmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymax);
-    }
+        simd16scalari scisXmin, scisYmin, scisXmax, scisYmax;
 
-    bbox.xmin = _simd16_max_epi32(bbox.xmin, scisXmin);
-    bbox.ymin = _simd16_max_epi32(bbox.ymin, scisYmin);
-    bbox.xmax = _simd16_min_epi32(_simd16_sub_epi32(bbox.xmax, _simd16_set1_epi32(1)), scisXmax);
-    bbox.ymax = _simd16_min_epi32(_simd16_sub_epi32(bbox.ymax, _simd16_set1_epi32(1)), scisYmax);
+        if (state.backendState.readViewportArrayIndex)
+        {
+            GatherScissors_simd16<KNOB_SIMD16_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                scisXmin, scisYmin, scisXmax, scisYmax);
+        }
+        else // broadcast fast path for non-VPAI case.
+        {
+            scisXmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+            scisYmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+            scisXmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+            scisYmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+        }
+
+        // Make triangle bbox inclusive
+        bbox.xmax = _simd16_sub_epi32(bbox.xmax, _simd16_set1_epi32(1));
+        bbox.ymax = _simd16_sub_epi32(bbox.ymax, _simd16_set1_epi32(1));
+
+        bbox.xmin = _simd16_max_epi32(bbox.xmin, scisXmin);
+        bbox.ymin = _simd16_max_epi32(bbox.ymin, scisYmin);
+        bbox.xmax = _simd16_min_epi32(bbox.xmax, scisXmax);
+        bbox.ymax = _simd16_min_epi32(bbox.ymax, scisYmax);
+    }
 
     if (CT::IsConservativeT::value)
     {
@@ -1193,10 +1225,10 @@ endBinTriangles:
 
     // transpose verts needed for backend
     /// @todo modify BE to take non-transformed verts
-    __m128 vHorizX[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
-    __m128 vHorizY[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
-    __m128 vHorizZ[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
-    __m128 vHorizW[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizX[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizY[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizZ[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizW[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
 
     vTranspose3x8(vHorizX[0], _simd16_extract_ps(tri[0].x, 0), _simd16_extract_ps(tri[1].x, 0), _simd16_extract_ps(tri[2].x, 0));
     vTranspose3x8(vHorizY[0], _simd16_extract_ps(tri[0].y, 0), _simd16_extract_ps(tri[1].y, 0), _simd16_extract_ps(tri[2].y, 0));
@@ -1210,12 +1242,12 @@ endBinTriangles:
 
     // store render target array index
     OSALIGNSIMD16(uint32_t) aRTAI[KNOB_SIMD16_WIDTH];
-    if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+    if (state.backendState.readRenderTargetArrayIndex)
     {
         simd16vector vRtai[3];
-        pa.Assemble_simd16(VERTEX_RTAI_SLOT, vRtai);
+        pa.Assemble_simd16(VERTEX_SGV_SLOT, vRtai);
         simd16scalari vRtaii;
-        vRtaii = _simd16_castps_si(vRtai[0].x);
+        vRtaii = _simd16_castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
         _simd16_store_si(reinterpret_cast<simd16scalari *>(aRTAI), vRtaii);
     }
     else
@@ -1257,7 +1289,6 @@ endBinTriangles:
         TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
         desc.triFlags.frontFacing = state.forceFront ? 1 : ((frontFaceMask >> triIndex) & 1);
-        desc.triFlags.primID = pPrimID[triIndex];
         desc.triFlags.renderTargetArrayIndex = aRTAI[triIndex];
         desc.triFlags.viewportIndex = pViewportIndex[triIndex];
 
@@ -1364,7 +1395,6 @@ void BinPostSetupPoints(
     simdvector& primVerts = prim[0];
 
     const API_STATE& state = GetApiState(pDC);
-    const SWR_GS_STATE& gsState = state.gsState;
     const SWR_RASTSTATE& rastState = state.rastState;
     const uint32_t *pViewportIndex = (uint32_t *)&viewportIdx;
 
@@ -1421,11 +1451,11 @@ void BinPostSetupPoints(
 
         // store render target array index
         OSALIGNSIMD(uint32_t) aRTAI[KNOB_SIMD_WIDTH];
-        if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+        if (state.backendState.readRenderTargetArrayIndex)
         {
             simdvector vRtai;
-            pa.Assemble(VERTEX_RTAI_SLOT, &vRtai);
-            simdscalari vRtaii = _simd_castps_si(vRtai.x);
+            pa.Assemble(VERTEX_SGV_SLOT, &vRtai);
+            simdscalari vRtaii = _simd_castps_si(vRtai[VERTEX_SGV_RTAI_COMP]);
             _simd_store_si((simdscalari*)aRTAI, vRtaii);
         }
         else
@@ -1451,7 +1481,6 @@ void BinPostSetupPoints(
 
             // points are always front facing
             desc.triFlags.frontFacing = 1;
-            desc.triFlags.primID = pPrimID[primIndex];
             desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
             desc.triFlags.viewportIndex = pViewportIndex[primIndex];
 
@@ -1499,8 +1528,8 @@ void BinPostSetupPoints(
         if (rastState.pointParam)
         {
             simdvector size[3];
-            pa.Assemble(VERTEX_POINT_SIZE_SLOT, size);
-            vPointSize = size[0].x;
+            pa.Assemble(VERTEX_SGV_SLOT, size);
+            vPointSize = size[0][VERTEX_SGV_POINT_SIZE_COMP];
         }
         else
         {
@@ -1522,24 +1551,26 @@ void BinPostSetupPoints(
         // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
         // Gather the AOS effective scissor rects based on the per-prim VP index.
         /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
-        simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
-        if (state.gsState.emitsViewportArrayIndex)
         {
-            GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
-                scisXmin, scisYmin, scisXmax, scisYmax);
-        }
-        else // broadcast fast path for non-VPAI case.
-        {
-            scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
-            scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
-            scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
-            scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
-        }
+            simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
+            if (state.backendState.readViewportArrayIndex)
+            {
+                GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                    scisXmin, scisYmin, scisXmax, scisYmax);
+            }
+            else // broadcast fast path for non-VPAI case.
+            {
+                scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+                scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+                scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+                scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+            }
 
-        bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
-        bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
-        bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
-        bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
+            bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
+            bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
+            bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
+            bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
+        }
 
         // Cull bloated points completely outside scissor
         simdscalari maskOutsideScissorX = _simd_cmpgt_epi32(bbox.xmin, bbox.xmax);
@@ -1562,11 +1593,11 @@ void BinPostSetupPoints(
 
         // store render target array index
         OSALIGNSIMD(uint32_t) aRTAI[KNOB_SIMD_WIDTH];
-        if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+        if (state.backendState.readRenderTargetArrayIndex)
         {
             simdvector vRtai[2];
-            pa.Assemble(VERTEX_RTAI_SLOT, vRtai);
-            simdscalari vRtaii = _simd_castps_si(vRtai[0].x);
+            pa.Assemble(VERTEX_SGV_SLOT, vRtai);
+            simdscalari vRtaii = _simd_castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
             _simd_store_si((simdscalari*)aRTAI, vRtaii);
         }
         else
@@ -1601,7 +1632,6 @@ void BinPostSetupPoints(
             TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
             desc.triFlags.frontFacing = 1;
-            desc.triFlags.primID = pPrimID[primIndex];
             desc.triFlags.pointSize = aPointSize[primIndex];
             desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
             desc.triFlags.viewportIndex = pViewportIndex[primIndex];
@@ -1672,14 +1702,28 @@ void BinPoints(
     uint32_t workerId,
     simdvector prim[3],
     uint32_t primMask,
-    simdscalari primID,
-    simdscalari viewportIdx)
+    simdscalari primID)
 {
     simdvector& primVerts = prim[0];
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_FRONTEND_STATE& feState = state.frontendState;
     const SWR_RASTSTATE& rastState = state.rastState;
+
+    // Read back viewport index if required
+    simdscalari viewportIdx = _simd_set1_epi32(0);
+    if (state.backendState.readViewportArrayIndex)
+    {
+        simdvector vpiAttrib[1];
+        pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
+        simdscalari vpai = _simd_castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+
+        // OOB indices => forced to zero.
+        vpai = _simd_max_epi32(_simd_setzero_si(), vpai);
+        simdscalari vNumViewports = _simd_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+        simdscalari vClearMask = _simd_cmplt_epi32(vpai, vNumViewports);
+        viewportIdx = _simd_and_si(vClearMask, vpai);
+    }
 
     if (!feState.vpTransformDisable)
     {
@@ -1690,7 +1734,7 @@ void BinPoints(
         primVerts.z = _simd_mul_ps(primVerts.z, vRecipW0);
 
         // viewport transform to screen coords
-        if (state.gsState.emitsViewportArrayIndex)
+        if (state.backendState.readViewportArrayIndex)
         {
             viewportTransform<1>(&primVerts, state.vpMatrices, viewportIdx);
         }
@@ -1732,7 +1776,6 @@ void BinPostSetupPoints_simd16(
     simd16vector& primVerts = prim[0];
 
     const API_STATE& state = GetApiState(pDC);
-    const SWR_GS_STATE& gsState = state.gsState;
     const SWR_RASTSTATE& rastState = state.rastState;
     const uint32_t *pViewportIndex = (uint32_t *)&viewportIdx;
 
@@ -1793,11 +1836,11 @@ void BinPostSetupPoints_simd16(
 
         // store render target array index
         OSALIGNSIMD16(uint32_t) aRTAI[KNOB_SIMD16_WIDTH];
-        if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+        if (state.backendState.readRenderTargetArrayIndex)
         {
             simd16vector vRtai;
-            pa.Assemble_simd16(VERTEX_RTAI_SLOT, &vRtai);
-            simd16scalari vRtaii = _simd16_castps_si(vRtai.x);
+            pa.Assemble_simd16(VERTEX_SGV_SLOT, &vRtai);
+            simd16scalari vRtaii = _simd16_castps_si(vRtai[VERTEX_SGV_RTAI_COMP]);
             _simd16_store_si(reinterpret_cast<simd16scalari *>(aRTAI), vRtaii);
         }
         else
@@ -1823,7 +1866,6 @@ void BinPostSetupPoints_simd16(
 
             // points are always front facing
             desc.triFlags.frontFacing = 1;
-            desc.triFlags.primID = pPrimID[primIndex];
             desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
             desc.triFlags.viewportIndex = pViewportIndex[primIndex];
 
@@ -1873,8 +1915,8 @@ void BinPostSetupPoints_simd16(
         if (rastState.pointParam)
         {
             simd16vector size[3];
-            pa.Assemble_simd16(VERTEX_POINT_SIZE_SLOT, size);
-            vPointSize = size[0].x;
+            pa.Assemble_simd16(VERTEX_SGV_SLOT, size);
+            vPointSize = size[0][VERTEX_SGV_POINT_SIZE_COMP];
         }
         else
         {
@@ -1898,24 +1940,26 @@ void BinPostSetupPoints_simd16(
         // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
         // Gather the AOS effective scissor rects based on the per-prim VP index.
         /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
-        simd16scalari scisXmin, scisYmin, scisXmax, scisYmax;
-        if (state.gsState.emitsViewportArrayIndex)
         {
-            GatherScissors_simd16<KNOB_SIMD16_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
-                scisXmin, scisYmin, scisXmax, scisYmax);
-        }
-        else // broadcast fast path for non-VPAI case.
-        {
-            scisXmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmin);
-            scisYmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymin);
-            scisXmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmax);
-            scisYmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymax);
-        }
+            simd16scalari scisXmin, scisYmin, scisXmax, scisYmax;
+            if (state.backendState.readViewportArrayIndex)
+            {
+                GatherScissors_simd16<KNOB_SIMD16_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                    scisXmin, scisYmin, scisXmax, scisYmax);
+            }
+            else // broadcast fast path for non-VPAI case.
+            {
+                scisXmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+                scisYmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+                scisXmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+                scisYmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+            }
 
-        bbox.xmin = _simd16_max_epi32(bbox.xmin, scisXmin);
-        bbox.ymin = _simd16_max_epi32(bbox.ymin, scisYmin);
-        bbox.xmax = _simd16_min_epi32(_simd16_sub_epi32(bbox.xmax, _simd16_set1_epi32(1)), scisXmax);
-        bbox.ymax = _simd16_min_epi32(_simd16_sub_epi32(bbox.ymax, _simd16_set1_epi32(1)), scisYmax);
+            bbox.xmin = _simd16_max_epi32(bbox.xmin, scisXmin);
+            bbox.ymin = _simd16_max_epi32(bbox.ymin, scisYmin);
+            bbox.xmax = _simd16_min_epi32(_simd16_sub_epi32(bbox.xmax, _simd16_set1_epi32(1)), scisXmax);
+            bbox.ymax = _simd16_min_epi32(_simd16_sub_epi32(bbox.ymax, _simd16_set1_epi32(1)), scisYmax);
+        }
 
         // Cull bloated points completely outside scissor
         simd16scalari maskOutsideScissorX = _simd16_cmpgt_epi32(bbox.xmin, bbox.xmax);
@@ -1939,11 +1983,11 @@ void BinPostSetupPoints_simd16(
 
         // store render target array index
         OSALIGNSIMD16(uint32_t) aRTAI[KNOB_SIMD16_WIDTH];
-        if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+        if (state.backendState.readRenderTargetArrayIndex)
         {
             simd16vector vRtai[2];
-            pa.Assemble_simd16(VERTEX_RTAI_SLOT, vRtai);
-            simd16scalari vRtaii = _simd16_castps_si(vRtai[0].x);
+            pa.Assemble_simd16(VERTEX_SGV_SLOT, vRtai);
+            simd16scalari vRtaii = _simd16_castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
             _simd16_store_si(reinterpret_cast<simd16scalari *>(aRTAI), vRtaii);
         }
         else
@@ -1978,7 +2022,6 @@ void BinPostSetupPoints_simd16(
             TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
             desc.triFlags.frontFacing = 1;
-            desc.triFlags.primID = pPrimID[primIndex];
             desc.triFlags.pointSize = aPointSize[primIndex];
             desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
             desc.triFlags.viewportIndex = pViewportIndex[primIndex];
@@ -2036,20 +2079,34 @@ void BinPostSetupPoints_simd16(
     AR_END(FEBinPoints, 1);
 }
 
-void SIMDAPI BinPoints_simd16(
+void SIMDCALL BinPoints_simd16(
     DRAW_CONTEXT *pDC,
     PA_STATE& pa,
     uint32_t workerId,
     simd16vector prim[3],
     uint32_t primMask,
-    simd16scalari primID,
-    simd16scalari viewportIdx)
+    simd16scalari primID)
 {
     simd16vector& primVerts = prim[0];
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_FRONTEND_STATE& feState = state.frontendState;
     const SWR_RASTSTATE& rastState = state.rastState;
+
+    // Read back viewport index if required
+    simd16scalari viewportIdx = _simd16_set1_epi32(0);
+    if (state.backendState.readViewportArrayIndex)
+    {
+        simd16vector vpiAttrib[1];
+        pa.Assemble_simd16(VERTEX_SGV_SLOT, vpiAttrib);
+
+        // OOB indices => forced to zero.
+        simd16scalari vpai = _simd16_castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+        vpai = _simd16_max_epi32(_simd16_setzero_si(), vpai)
+        simd16scalari vNumViewports = _simd16_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+        simd16scalari vClearMask = _simd16_cmplt_epi32(vpai, vNumViewports);
+        viewportIdx = _simd16_and_si(vClearMask, vpai);
+    }
 
     if (!feState.vpTransformDisable)
     {
@@ -2061,7 +2118,7 @@ void SIMDAPI BinPoints_simd16(
         primVerts.z = _simd16_mul_ps(primVerts.z, vRecipW0);
 
         // viewport transform to screen coords
-        if (state.gsState.emitsViewportArrayIndex)
+        if (state.backendState.readViewportArrayIndex)
         {
             viewportTransform<1>(&primVerts, state.vpMatrices, viewportIdx);
         }
@@ -2111,7 +2168,6 @@ void BinPostSetupLines(
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
-    const SWR_GS_STATE& gsState = state.gsState;
 
     // Select attribute processor
     PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(2,
@@ -2119,6 +2175,8 @@ void BinPostSetupLines(
 
     simdscalar& vRecipW0 = recipW[0];
     simdscalar& vRecipW1 = recipW[1];
+
+    simd4scalar vHorizX[8], vHorizY[8], vHorizZ[8], vHorizW[8];
 
     // convert to fixed point
     simdscalari vXi[2], vYi[2];
@@ -2166,24 +2224,26 @@ void BinPostSetupLines(
     bbox.ymax = _simd_blendv_epi32(bloatBox.ymax, bbox.ymax, vYmajorMask);
 
     // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
-    simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
-    if (state.gsState.emitsViewportArrayIndex)
     {
-        GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
-            scisXmin, scisYmin, scisXmax, scisYmax);
-    }
-    else // broadcast fast path for non-VPAI case.
-    {
-        scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
-        scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
-        scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
-        scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
-    }
+        simdscalari scisXmin, scisYmin, scisXmax, scisYmax;
+        if (state.backendState.readViewportArrayIndex)
+        {
+            GatherScissors<KNOB_SIMD_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                scisXmin, scisYmin, scisXmax, scisYmax);
+        }
+        else // broadcast fast path for non-VPAI case.
+        {
+            scisXmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+            scisYmin = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+            scisXmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+            scisYmax = _simd_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+        }
 
-    bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
-    bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
-    bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
-    bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
+        bbox.xmin = _simd_max_epi32(bbox.xmin, scisXmin);
+        bbox.ymin = _simd_max_epi32(bbox.ymin, scisYmin);
+        bbox.xmax = _simd_min_epi32(_simd_sub_epi32(bbox.xmax, _simd_set1_epi32(1)), scisXmax);
+        bbox.ymax = _simd_min_epi32(_simd_sub_epi32(bbox.ymax, _simd_set1_epi32(1)), scisYmax);
+    }
 
     // Cull prims completely outside scissor
     {
@@ -2213,7 +2273,6 @@ void BinPostSetupLines(
 
     // transpose verts needed for backend
     /// @todo modify BE to take non-transformed verts
-    __m128 vHorizX[8], vHorizY[8], vHorizZ[8], vHorizW[8];
     vTranspose3x8(vHorizX, prim[0].x, prim[1].x, vUnused);
     vTranspose3x8(vHorizY, prim[0].y, prim[1].y, vUnused);
     vTranspose3x8(vHorizZ, prim[0].z, prim[1].z, vUnused);
@@ -2221,11 +2280,11 @@ void BinPostSetupLines(
 
     // store render target array index
     OSALIGNSIMD(uint32_t) aRTAI[KNOB_SIMD_WIDTH];
-    if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+    if (state.backendState.readRenderTargetArrayIndex)
     {
         simdvector vRtai[2];
-        pa.Assemble(VERTEX_RTAI_SLOT, vRtai);
-        simdscalari vRtaii = _simd_castps_si(vRtai[0].x);
+        pa.Assemble(VERTEX_SGV_SLOT, vRtai);
+        simdscalari vRtaii = _simd_castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
         _simd_store_si((simdscalari*)aRTAI, vRtaii);
     }
     else
@@ -2246,7 +2305,6 @@ void BinPostSetupLines(
         TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
         desc.triFlags.frontFacing = 1;
-        desc.triFlags.primID = pPrimID[primIndex];
         desc.triFlags.yMajor = (yMajorMask >> primIndex) & 1;
         desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
         desc.triFlags.viewportIndex = pViewportIndex[primIndex];
@@ -2263,10 +2321,10 @@ void BinPostSetupLines(
 
         // store line vertex data
         desc.pTriBuffer = (float*)pArena->AllocAligned(4 * 4 * sizeof(float), 16);
-        _mm_store_ps(&desc.pTriBuffer[0], vHorizX[primIndex]);
-        _mm_store_ps(&desc.pTriBuffer[4], vHorizY[primIndex]);
-        _mm_store_ps(&desc.pTriBuffer[8], vHorizZ[primIndex]);
-        _mm_store_ps(&desc.pTriBuffer[12], vHorizW[primIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[0], vHorizX[primIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[4], vHorizY[primIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[8], vHorizZ[primIndex]);
+        SIMD128::store_ps(&desc.pTriBuffer[12], vHorizW[primIndex]);
 
         // store user clip distances
         if (rastState.clipDistanceMask)
@@ -2315,7 +2373,6 @@ void BinPostSetupLines_simd16(
 
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
-    const SWR_GS_STATE& gsState = state.gsState;
 
     // Select attribute processor
     PFN_PROCESS_ATTRIBUTES pfnProcessAttribs = GetProcessAttributesFunc(2,
@@ -2371,25 +2428,27 @@ void BinPostSetupLines_simd16(
     bbox.ymax = _simd16_blendv_epi32(bloatBox.ymax, bbox.ymax, vYmajorMask);
 
     // Intersect with scissor/viewport. Subtract 1 ULP in x.8 fixed point since xmax/ymax edge is exclusive.
-    simd16scalari scisXmin, scisYmin, scisXmax, scisYmax;
-
-    if (state.gsState.emitsViewportArrayIndex)
     {
-        GatherScissors_simd16<KNOB_SIMD16_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
-            scisXmin, scisYmin, scisXmax, scisYmax);
-    }
-    else // broadcast fast path for non-VPAI case.
-    {
-        scisXmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmin);
-        scisYmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymin);
-        scisXmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmax);
-        scisYmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymax);
-    }
+        simd16scalari scisXmin, scisYmin, scisXmax, scisYmax;
 
-    bbox.xmin = _simd16_max_epi32(bbox.xmin, scisXmin);
-    bbox.ymin = _simd16_max_epi32(bbox.ymin, scisYmin);
-    bbox.xmax = _simd16_min_epi32(_simd16_sub_epi32(bbox.xmax, _simd16_set1_epi32(1)), scisXmax);
-    bbox.ymax = _simd16_min_epi32(_simd16_sub_epi32(bbox.ymax, _simd16_set1_epi32(1)), scisYmax);
+        if (state.backendState.readViewportArrayIndex)
+        {
+            GatherScissors_simd16<KNOB_SIMD16_WIDTH>::Gather(&state.scissorsInFixedPoint[0], pViewportIndex,
+                scisXmin, scisYmin, scisXmax, scisYmax);
+        }
+        else // broadcast fast path for non-VPAI case.
+        {
+            scisXmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmin);
+            scisYmin = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymin);
+            scisXmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].xmax);
+            scisYmax = _simd16_set1_epi32(state.scissorsInFixedPoint[0].ymax);
+        }
+
+        bbox.xmin = _simd16_max_epi32(bbox.xmin, scisXmin);
+        bbox.ymin = _simd16_max_epi32(bbox.ymin, scisYmin);
+        bbox.xmax = _simd16_min_epi32(_simd16_sub_epi32(bbox.xmax, _simd16_set1_epi32(1)), scisXmax);
+        bbox.ymax = _simd16_min_epi32(_simd16_sub_epi32(bbox.ymax, _simd16_set1_epi32(1)), scisYmax);
+    }
 
     // Cull prims completely outside scissor
     {
@@ -2422,10 +2481,10 @@ void BinPostSetupLines_simd16(
 
     // transpose verts needed for backend
     /// @todo modify BE to take non-transformed verts
-    __m128 vHorizX[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
-    __m128 vHorizY[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
-    __m128 vHorizZ[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
-    __m128 vHorizW[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizX[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizY[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizZ[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
+    simd4scalar vHorizW[2][KNOB_SIMD_WIDTH]; // KNOB_SIMD16_WIDTH
 
     vTranspose3x8(vHorizX[0], _simd16_extract_ps(prim[0].x, 0), _simd16_extract_ps(prim[1].x, 0), unused);
     vTranspose3x8(vHorizY[0], _simd16_extract_ps(prim[0].y, 0), _simd16_extract_ps(prim[1].y, 0), unused);
@@ -2439,11 +2498,11 @@ void BinPostSetupLines_simd16(
 
     // store render target array index
     OSALIGNSIMD16(uint32_t) aRTAI[KNOB_SIMD16_WIDTH];
-    if (gsState.gsEnable && gsState.emitsRenderTargetArrayIndex)
+    if (state.backendState.readRenderTargetArrayIndex)
     {
         simd16vector vRtai[2];
-        pa.Assemble_simd16(VERTEX_RTAI_SLOT, vRtai);
-        simd16scalari vRtaii = _simd16_castps_si(vRtai[0].x);
+        pa.Assemble_simd16(VERTEX_SGV_SLOT, vRtai);
+        simd16scalari vRtaii = _simd16_castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
         _simd16_store_si(reinterpret_cast<simd16scalari *>(aRTAI), vRtaii);
     }
     else
@@ -2464,7 +2523,6 @@ void BinPostSetupLines_simd16(
         TRIANGLE_WORK_DESC &desc = work.desc.tri;
 
         desc.triFlags.frontFacing = 1;
-        desc.triFlags.primID = pPrimID[primIndex];
         desc.triFlags.yMajor = (yMajorMask >> primIndex) & 1;
         desc.triFlags.renderTargetArrayIndex = aRTAI[primIndex];
         desc.triFlags.viewportIndex = pViewportIndex[primIndex];
@@ -2537,14 +2595,27 @@ void BinLines(
     uint32_t workerId,
     simdvector prim[],
     uint32_t primMask,
-    simdscalari primID,
-    simdscalari viewportIdx)
+    simdscalari primID)
 {
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_FRONTEND_STATE& feState = state.frontendState;
 
     simdscalar vRecipW[2] = { _simd_set1_ps(1.0f), _simd_set1_ps(1.0f) };
+
+    simdscalari viewportIdx = _simd_set1_epi32(0);
+    if (state.backendState.readViewportArrayIndex)
+    {
+        simdvector vpiAttrib[2];
+        pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
+        simdscalari vpai = _simd_castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+        vpai = _simd_max_epi32(_simd_setzero_si(), vpai);
+
+        // OOB indices => forced to zero.
+        simdscalari vNumViewports = _simd_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+        simdscalari vClearMask = _simd_cmplt_epi32(vpai, vNumViewports);
+        viewportIdx = _simd_and_si(vClearMask, vpai);
+    }
 
     if (!feState.vpTransformDisable)
     {
@@ -2562,7 +2633,7 @@ void BinLines(
         prim[1].v[2] = _simd_mul_ps(prim[1].v[2], vRecipW[1]);
 
         // viewport transform to screen coords
-        if (state.gsState.emitsViewportArrayIndex)
+        if (state.backendState.readViewportArrayIndex)
         {
             viewportTransform<2>(prim, state.vpMatrices, viewportIdx);
         }
@@ -2592,20 +2663,33 @@ void BinLines(
 }
 
 #if USE_SIMD16_FRONTEND
-void SIMDAPI BinLines_simd16(
+void SIMDCALL BinLines_simd16(
     DRAW_CONTEXT *pDC,
     PA_STATE& pa,
     uint32_t workerId,
     simd16vector prim[3],
     uint32_t primMask,
-    simd16scalari primID,
-    simd16scalari viewportIdx)
+    simd16scalari primID)
 {
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_FRONTEND_STATE& feState = state.frontendState;
 
     simd16scalar vRecipW[2] = { _simd16_set1_ps(1.0f), _simd16_set1_ps(1.0f) };
+
+    simd16scalari viewportIdx = _simd16_set1_epi32(0);
+    if (state.backendState.readViewportArrayIndex)
+    {
+        simd16vector vpiAttrib[2];
+        pa.Assemble_simd16(VERTEX_SGV_SLOT, vpiAttrib);
+
+        // OOB indices => forced to zero.
+        simd16scalari vpai = _simd16_castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+        vpai = _simd16_max_epi32(_simd16_setzero_si(), vpai);
+        simd16scalari vNumViewports = _simd16_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+        simd16scalari vClearMask = _simd16_cmplt_epi32(vpai, vNumViewports);
+        viewportIdx = _simd16_and_si(vClearMask, vpai);
+    }
 
     if (!feState.vpTransformDisable)
     {
@@ -2623,7 +2707,7 @@ void SIMDAPI BinLines_simd16(
         prim[1].v[2] = _simd16_mul_ps(prim[1].v[2], vRecipW[1]);
 
         // viewport transform to screen coords
-        if (state.gsState.emitsViewportArrayIndex)
+        if (state.backendState.readViewportArrayIndex)
         {
             viewportTransform<2>(prim, state.vpMatrices, viewportIdx);
         }

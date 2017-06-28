@@ -106,6 +106,9 @@ brw_wm_debug_recompile(struct brw_context *brw, struct gl_program *prog,
                       old_key->alpha_test_func, key->alpha_test_func);
    found |= key_debug(brw, "mrt alpha test reference value",
                       old_key->alpha_test_ref, key->alpha_test_ref);
+   found |= key_debug(brw, "force dual color blending",
+                      old_key->force_dual_color_blend,
+                      key->force_dual_color_blend);
 
    found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
 
@@ -188,7 +191,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
    program = brw_compile_fs(brw->screen->compiler, brw, mem_ctx,
                             key, &prog_data, fp->program.nir,
                             &fp->program, st_index8, st_index16,
-                            true, brw->use_rep_send, vue_map,
+                            true, false, vue_map,
                             &program_size, &error_str);
 
    if (program == NULL) {
@@ -267,6 +270,10 @@ brw_debug_recompile_sampler_key(struct brw_context *brw,
    found |= key_debug(brw, "yx_xuxv image bound",
                       old_key->yx_xuxv_image_mask,
                       key->yx_xuxv_image_mask);
+   found |= key_debug(brw, "xy_uxvx image bound",
+                      old_key->xy_uxvx_image_mask,
+                      key->xy_uxvx_image_mask);
+
 
    for (unsigned int i = 0; i < MAX_SAMPLERS; i++) {
       found |= key_debug(brw, "textureGather workarounds",
@@ -409,6 +416,9 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
             case __DRI_IMAGE_COMPONENTS_Y_XUXV:
                key->yx_xuxv_image_mask |= 1 << s;
                break;
+            case __DRI_IMAGE_COMPONENTS_Y_UXVX:
+               key->xy_uxvx_image_mask |= 1 << s;
+               break;
             default:
                break;
             }
@@ -471,7 +481,7 @@ brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
          lookup |= BRW_WM_IZ_DEPTH_WRITE_ENABLE_BIT;
 
       /* _NEW_STENCIL | _NEW_BUFFERS */
-      if (ctx->Stencil._Enabled) {
+      if (brw->stencil_enabled) {
          lookup |= BRW_WM_IZ_STENCIL_TEST_ENABLE_BIT;
 
          if (ctx->Stencil.WriteMask[0] ||

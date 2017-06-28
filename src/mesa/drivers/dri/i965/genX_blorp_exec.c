@@ -150,6 +150,19 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    return data;
 }
 
+#if GEN_GEN >= 8
+static struct blorp_address
+blorp_get_workaround_page(struct blorp_batch *batch)
+{
+   assert(batch->blorp->driver_ctx == batch->driver_batch);
+   struct brw_context *brw = batch->driver_batch;
+
+   return (struct blorp_address) {
+      .buffer = brw->workaround_bo,
+   };
+}
+#endif
+
 static void
 blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
 {
@@ -188,7 +201,7 @@ genX(blorp_exec)(struct blorp_batch *batch,
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;
    struct gl_context *ctx = &brw->ctx;
-   const uint32_t estimated_max_batch_usage = GEN_GEN >= 8 ? 1920 : 1500;
+   const uint32_t estimated_max_batch_usage = GEN_GEN >= 8 ? 1920 : 1700;
    bool check_aperture_failed_once = false;
 
    /* Flush the sampler and render caches.  We definitely need to flush the
@@ -273,7 +286,8 @@ retry:
     * rendering tracks for GL.
     */
    brw->ctx.NewDriverState |= BRW_NEW_BLORP;
-   brw->no_depth_or_stencil = false;
+   brw->no_depth_or_stencil = !params->depth.enabled &&
+                              !params->stencil.enabled;
    brw->ib.index_size = -1;
 
    if (params->dst.enabled)

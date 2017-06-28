@@ -64,12 +64,14 @@ uint32_t tex_mocs[] = {
    [7] = GEN7_MOCS_L3,
    [8] = BDW_MOCS_WB,
    [9] = SKL_MOCS_WB,
+   [10] = CNL_MOCS_WB,
 };
 
 uint32_t rb_mocs[] = {
    [7] = GEN7_MOCS_L3,
    [8] = BDW_MOCS_PTE,
    [9] = SKL_MOCS_PTE,
+   [10] = CNL_MOCS_PTE,
 };
 
 static void
@@ -89,7 +91,8 @@ brw_emit_surface_state(struct brw_context *brw,
    surf.dim = get_isl_surf_dim(target);
 
    const enum isl_dim_layout dim_layout =
-      get_isl_dim_layout(&brw->screen->devinfo, mt->tiling, target);
+      get_isl_dim_layout(&brw->screen->devinfo, mt->tiling, target,
+                         mt->array_layout);
 
    if (surf.dim_layout != dim_layout) {
       /* The layout of the specified texture target is not compatible with the
@@ -134,26 +137,30 @@ brw_emit_surface_state(struct brw_context *brw,
    union isl_color_value clear_color = { .u32 = { 0, 0, 0, 0 } };
 
    struct brw_bo *aux_bo;
-   struct isl_surf *aux_surf = NULL, aux_surf_s;
+   struct isl_surf *aux_surf = NULL;
    uint64_t aux_offset = 0;
    enum isl_aux_usage aux_usage = ISL_AUX_USAGE_NONE;
    if ((mt->mcs_buf || intel_miptree_sample_with_hiz(brw, mt)) &&
        !(flags & INTEL_AUX_BUFFER_DISABLED)) {
-      intel_miptree_get_aux_isl_surf(brw, mt, &aux_surf_s, &aux_usage);
-      aux_surf = &aux_surf_s;
+      aux_usage = intel_miptree_get_aux_isl_usage(brw, mt);
 
       if (mt->mcs_buf) {
+         aux_surf = &mt->mcs_buf->surf;
+
+         assert(mt->mcs_buf->offset == 0);
          aux_bo = mt->mcs_buf->bo;
          aux_offset = mt->mcs_buf->bo->offset64 + mt->mcs_buf->offset;
       } else {
-         aux_bo = mt->hiz_buf->aux_base.bo;
-         aux_offset = mt->hiz_buf->aux_base.bo->offset64;
+         aux_surf = &mt->hiz_buf->surf;
+
+         aux_bo = mt->hiz_buf->bo;
+         aux_offset = mt->hiz_buf->bo->offset64;
       }
 
       /* We only really need a clear color if we also have an auxiliary
        * surface.  Without one, it does nothing.
        */
-      clear_color = intel_miptree_get_isl_clear_color(brw, mt);
+      clear_color = mt->fast_clear_color;
    }
 
    void *state = brw_state_batch(brw,
@@ -204,7 +211,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    assert(brw_render_target_supported(brw, rb));
 
    mesa_format rb_format = _mesa_get_render_format(ctx, intel_rb_format(irb));
-   if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
+   if (unlikely(!brw->mesa_format_supports_render[rb_format])) {
       _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
                     __func__, _mesa_get_format_name(rb_format));
    }
@@ -215,7 +222,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
       MAX2(irb->mt->num_samples, 1) : 1;
 
    struct isl_view view = {
-      .format = brw->render_target_format[rb_format],
+      .format = brw->mesa_to_isl_render_format[rb_format],
       .base_level = irb->mt_level - irb->mt->first_level,
       .levels = 1,
       .base_array_layer = irb->mt_layer / layer_multiplier,
@@ -557,8 +564,8 @@ brw_update_texture_surface(struct gl_context *ctx,
                                 brw_get_texture_swizzle(&brw->ctx, obj));
 
       mesa_format mesa_fmt = plane == 0 ? intel_obj->_Format : mt->format;
-      unsigned format = translate_tex_format(brw, mesa_fmt,
-                                             sampler->sRGBDecode);
+      enum isl_format format = translate_tex_format(brw, mesa_fmt,
+                                                    sampler->sRGBDecode);
 
       /* Implement gen6 and gen7 gather work-around */
       bool need_green_to_blue = false;
@@ -686,7 +693,7 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
    uint32_t size = tObj->BufferSize;
    struct brw_bo *bo = NULL;
    mesa_format format = tObj->_BufferObjectFormat;
-   uint32_t brw_format = brw_isl_format_for_mesa_format(format);
+   const enum isl_format isl_format = brw_isl_format_for_mesa_format(format);
    int texel_size = _mesa_get_format_bytes(format);
 
    if (intel_obj) {
@@ -712,14 +719,14 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
     */
    size = MIN2(size, ctx->Const.MaxTextureBufferSize * (unsigned) texel_size);
 
-   if (brw_format == 0 && format != MESA_FORMAT_RGBA_FLOAT32) {
+   if (isl_format == ISL_FORMAT_UNSUPPORTED) {
       _mesa_problem(NULL, "bad format %s for texture buffer\n",
 		    _mesa_get_format_name(format));
    }
 
    brw_emit_buffer_surface_state(brw, surf_offset, bo,
                                  tObj->BufferOffset,
-                                 brw_format,
+                                 isl_format,
                                  size,
                                  texel_size,
                                  false /* rw */);
@@ -1006,14 +1013,15 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
 	  * miptree and render into that.
 	  */
 	 intel_renderbuffer_move_to_temp(brw, irb, false);
-	 mt = irb->mt;
+	 assert(irb->align_wa_mt);
+	 mt = irb->align_wa_mt;
       }
    }
 
    surf = brw_state_batch(brw, 6 * 4, 32, &offset);
 
-   format = brw->render_target_format[rb_format];
-   if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
+   format = brw->mesa_to_isl_render_format[rb_format];
+   if (unlikely(!brw->mesa_format_supports_render[rb_format])) {
       _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
                     __func__, _mesa_get_format_name(rb_format));
    }
@@ -1172,7 +1180,7 @@ update_renderbuffer_read_surfaces(struct brw_context *brw)
          uint32_t *surf_offset = &brw->wm.base.surf_offset[surf_index];
 
          if (irb) {
-            const enum isl_format format = brw->render_target_format[
+            const enum isl_format format = brw->mesa_to_isl_render_format[
                _mesa_get_render_format(ctx, intel_rb_format(irb))];
             assert(isl_format_supports_sampling(&brw->screen->devinfo,
                                                 format));
@@ -1587,7 +1595,7 @@ static uint32_t
 get_image_format(struct brw_context *brw, mesa_format format, GLenum access)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   uint32_t hw_format = brw_isl_format_for_mesa_format(format);
+   enum isl_format hw_format = brw_isl_format_for_mesa_format(format);
    if (access == GL_WRITE_ONLY) {
       return hw_format;
    } else if (isl_has_matching_typed_storage_image_format(devinfo, hw_format)) {
@@ -1752,12 +1760,12 @@ update_image_surface(struct brw_context *brw,
             };
 
             const int surf_index = surf_offset - &brw->wm.base.surf_offset[0];
-            const bool unresolved = intel_miptree_has_color_unresolved(
-                                       mt, view.base_level, view.levels,
-                                       view.base_array_layer, view.array_len);
-            const int flags = unresolved ? 0 : INTEL_AUX_BUFFER_DISABLED;
-            brw_emit_surface_state(brw, mt, flags, mt->target, view,
-                                   tex_mocs[brw->gen],
+            assert(!intel_miptree_has_color_unresolved(mt,
+                                                       view.base_level, 1,
+                                                       view.base_array_layer,
+                                                       view.array_len));
+            brw_emit_surface_state(brw, mt, INTEL_AUX_BUFFER_DISABLED,
+                                   mt->target, view, tex_mocs[brw->gen],
                                    surf_offset, surf_index,
                                    I915_GEM_DOMAIN_SAMPLER,
                                    access == GL_READ_ONLY ? 0 :

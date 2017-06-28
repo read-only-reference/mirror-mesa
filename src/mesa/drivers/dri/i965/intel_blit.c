@@ -172,8 +172,7 @@ get_blit_intratile_offset_el(const struct brw_context *brw,
                              uint32_t *y_offset_el)
 {
    enum isl_tiling tiling = intel_miptree_get_isl_tiling(mt);
-   isl_tiling_get_intratile_offset_el(&brw->isl_dev,
-                                      tiling, mt->cpp, mt->pitch,
+   isl_tiling_get_intratile_offset_el(tiling, mt->cpp * 8, mt->pitch,
                                       total_x_offset_el, total_y_offset_el,
                                       base_address_offset,
                                       x_offset_el, y_offset_el);
@@ -325,10 +324,8 @@ intel_miptree_blit(struct brw_context *brw,
    /* The blitter has no idea about HiZ or fast color clears, so we need to
     * resolve the miptrees before we do anything.
     */
-   intel_miptree_slice_resolve_depth(brw, src_mt, src_level, src_slice);
-   intel_miptree_slice_resolve_depth(brw, dst_mt, dst_level, dst_slice);
-   intel_miptree_resolve_color(brw, src_mt, src_level, src_slice, 1, 0);
-   intel_miptree_resolve_color(brw, dst_mt, dst_level, dst_slice, 1, 0);
+   intel_miptree_access_raw(brw, src_mt, src_level, src_slice, false);
+   intel_miptree_access_raw(brw, dst_mt, dst_level, dst_slice, true);
 
    if (src_flip)
       src_y = minify(src_mt->physical_height0, src_level - src_mt->first_level) - src_y - height;
@@ -383,10 +380,8 @@ intel_miptree_copy(struct brw_context *brw,
    /* The blitter has no idea about HiZ or fast color clears, so we need to
     * resolve the miptrees before we do anything.
     */
-   intel_miptree_slice_resolve_depth(brw, src_mt, src_level, src_slice);
-   intel_miptree_slice_resolve_depth(brw, dst_mt, dst_level, dst_slice);
-   intel_miptree_resolve_color(brw, src_mt, src_level, src_slice, 1, 0);
-   intel_miptree_resolve_color(brw, dst_mt, dst_level, dst_slice, 1, 0);
+   intel_miptree_access_raw(brw, src_mt, src_level, src_slice, false);
+   intel_miptree_access_raw(brw, dst_mt, dst_level, dst_slice, true);
 
    uint32_t src_image_x, src_image_y;
    intel_miptree_get_image_offset(src_mt, src_level, src_slice,

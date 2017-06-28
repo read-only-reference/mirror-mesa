@@ -85,6 +85,7 @@
 #define DBG_PREOPT_IR		(1 << 15)
 #define DBG_CHECK_IR		(1 << 16)
 #define DBG_NO_OPT_VARIANT	(1 << 17)
+#define DBG_FS_CORRECT_DERIVS_AFTER_KILL (1 << 18)
 /* gaps */
 #define DBG_TEST_DMA		(1 << 20)
 /* Bits 21-31 are reserved for the r600g driver. */
@@ -181,6 +182,10 @@ struct r600_resource {
 
 	/* Whether the resource has been exported via resource_get_handle. */
 	unsigned			external_usage; /* PIPE_HANDLE_USAGE_* */
+
+	/* Whether this resource is referenced by bindless handles. */
+	bool				texture_handle_allocated;
+	bool				image_handle_allocated;
 };
 
 struct r600_transfer {
@@ -232,7 +237,7 @@ struct r600_texture {
 	unsigned			last_msaa_resolve_target_micro_mode;
 
 	/* Depth buffer compression and fast clear. */
-	struct r600_resource		*htile_buffer;
+	uint64_t			htile_offset;
 	bool				tc_compatible_htile;
 	bool				depth_cleared; /* if it was cleared at least once */
 	float				depth_clear_value;
@@ -591,9 +596,11 @@ struct r600_common_context {
 	unsigned			num_vs_flushes;
 	unsigned			num_ps_flushes;
 	unsigned			num_cs_flushes;
-	unsigned			num_fb_cache_flushes;
+	unsigned			num_cb_cache_flushes;
+	unsigned			num_db_cache_flushes;
 	unsigned			num_L2_invalidates;
 	unsigned			num_L2_writebacks;
+	unsigned			num_resident_handles;
 	uint64_t			num_alloc_tex_transfer_bytes;
 	unsigned			last_tex_ps_draw_ratio; /* for query */
 
@@ -739,7 +746,7 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 			 enum blitter_attrib_type type,
 			 const union pipe_color_union *attrib);
 bool r600_common_screen_init(struct r600_common_screen *rscreen,
-			     struct radeon_winsys *ws);
+			     struct radeon_winsys *ws, unsigned flags);
 void r600_destroy_common_screen(struct r600_common_screen *rscreen);
 void r600_preflush_suspend_features(struct r600_common_context *ctx);
 void r600_postflush_resume_features(struct r600_common_context *ctx);
@@ -842,7 +849,7 @@ void vi_dcc_clear_level(struct r600_common_context *rctx,
 void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 				   struct pipe_framebuffer_state *fb,
 				   struct r600_atom *fb_state,
-				   unsigned *buffers, unsigned *dirty_cbufs,
+				   unsigned *buffers, ubyte *dirty_cbufs,
 				   const union pipe_color_union *color);
 bool r600_texture_disable_dcc(struct r600_common_context *rctx,
 			      struct r600_texture *rtex);

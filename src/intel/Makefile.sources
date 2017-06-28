@@ -117,6 +117,12 @@ COMPILER_FILES = \
 COMPILER_GENERATED_FILES = \
 	compiler/brw_nir_trig_workarounds.c
 
+DRM_INTEL_FILES = \
+	drm/drm.h \
+	drm/drm_fourcc.h \
+	drm/drm_mode.h \
+	drm/i915_drm.h
+
 GENXML_XML_FILES = \
 	genxml/gen4.xml \
 	genxml/gen45.xml \
@@ -125,7 +131,8 @@ GENXML_XML_FILES = \
 	genxml/gen7.xml \
 	genxml/gen75.xml \
 	genxml/gen8.xml \
-	genxml/gen9.xml
+	genxml/gen9.xml \
+	genxml/gen10.xml
 
 GENXML_GENERATED_PACK_FILES = \
 	genxml/gen4_pack.h \
@@ -135,7 +142,8 @@ GENXML_GENERATED_PACK_FILES = \
 	genxml/gen7_pack.h \
 	genxml/gen75_pack.h \
 	genxml/gen8_pack.h \
-	genxml/gen9_pack.h
+	genxml/gen9_pack.h \
+	genxml/gen10_pack.h
 
 GENXML_GENERATED_FILES = \
 	$(GENXML_GENERATED_PACK_FILES) \
@@ -184,6 +192,10 @@ ISL_GEN8_FILES = \
 ISL_GEN9_FILES = \
 	isl/isl_gen9.c \
 	isl/isl_gen9.h \
+	isl/isl_emit_depth_stencil.c \
+	isl/isl_surface_state.c
+
+ISL_GEN10_FILES = \
 	isl/isl_emit_depth_stencil.c \
 	isl/isl_surface_state.c
 
@@ -253,5 +265,9 @@ VULKAN_GEN8_FILES := \
 	$(VULKAN_GENX_FILES)
 
 VULKAN_GEN9_FILES := \
+	vulkan/gen8_cmd_buffer.c \
+	$(VULKAN_GENX_FILES)
+
+VULKAN_GEN10_FILES := \
 	vulkan/gen8_cmd_buffer.c \
 	$(VULKAN_GENX_FILES)

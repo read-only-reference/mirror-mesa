@@ -48,8 +48,8 @@
 
 #include "main/mtypes.h"
 #include "isl/isl.h"
+#include "blorp/blorp.h"
 #include "brw_bufmgr.h"
-#include "intel_resolve_map.h"
 #include <GL/internal/dri_interface.h>
 
 #ifdef __cplusplus
@@ -59,7 +59,6 @@ extern "C" {
 struct brw_context;
 struct intel_renderbuffer;
 
-struct intel_resolve_map;
 struct intel_texture_image;
 
 /**
@@ -251,16 +250,41 @@ enum miptree_array_layout {
     *   +---+
     */
    ALL_SLICES_AT_EACH_LOD,
-};
 
-enum intel_aux_disable {
-   INTEL_AUX_DISABLE_NONE = 0,
-   INTEL_AUX_DISABLE_HIZ  = 1 << 1,
-   INTEL_AUX_DISABLE_MCS  = 1 << 2,
-   INTEL_AUX_DISABLE_CCS  = 1 << 3,
-   INTEL_AUX_DISABLE_ALL  = INTEL_AUX_DISABLE_HIZ |
-                            INTEL_AUX_DISABLE_MCS |
-                            INTEL_AUX_DISABLE_CCS
+   /* On Sandy Bridge, HiZ and stencil buffers work the same as on Ivy Bridge
+    * except that they don't technically support mipmapping.  That does not,
+    * however, stop us from doing it.  As far as Sandy Bridge hardware is
+    * concerned, HiZ and stencil always operates on a single miplevel 2D
+    * (possibly array) image.  The dimensions of that image are NOT minified.
+    *
+    * In order to implement HiZ and stencil on Sandy Bridge, we create one
+    * full-sized 2D (possibly array) image for every LOD with every image
+    * aligned to a page boundary.  In order to save memory, we pretend that
+    * the width of each miplevel is minified and we place LOD1 and above below
+    * LOD0 but horizontally adjacent to each other.  When considered as
+    * full-sized images, LOD1 and above technically overlap.  However, since
+    * we only write to part of that image, the hardware will never notice the
+    * overlap.
+    *
+    * This layout looks something like this:
+    *
+    *   +---------+
+    *   |         |
+    *   |         |
+    *   +---------+
+    *   |         |
+    *   |         |
+    *   +---------+
+    *
+    *   +----+ +-+ .
+    *   |    | +-+
+    *   +----+
+    *
+    *   +----+ +-+ .
+    *   |    | +-+
+    *   +----+
+    */
+   GEN6_HIZ_STENCIL,
 };
 
 /**
@@ -273,6 +297,8 @@ enum intel_aux_disable {
  */
 struct intel_miptree_aux_buffer
 {
+   struct isl_surf surf;
+
    /**
     * Buffer object containing the pixel data.
     *
@@ -318,23 +344,11 @@ struct intel_miptree_aux_buffer
     */
    uint32_t qpitch;
 };
-/**
- * The HiZ buffer requires extra attributes on earlier GENs. This is easily
- * contained within an intel_mipmap_tree. To make sure we do not abuse this, we
- * keep the hiz datastructure separate.
- */
-struct intel_miptree_hiz_buffer
-{
-   struct intel_miptree_aux_buffer aux_base;
-
-   /**
-    * Hiz miptree. Used only by Gen6.
-    */
-   struct intel_mipmap_tree *mt;
-};
 
 struct intel_mipmap_tree
 {
+   struct isl_surf surf;
+
    /**
     * Buffer object containing the surface.
     *
@@ -516,15 +530,6 @@ struct intel_mipmap_tree
    GLuint total_width;
    GLuint total_height;
 
-   /**
-    * The depth value used during the most recent fast depth clear performed
-    * on the surface. This field is invalid only if surface has never
-    * underwent a fast depth clear.
-    *
-    * @see 3DSTATE_CLEAR_PARAMS.DepthClearValue
-    */
-   uint32_t depth_clear_value;
-
    /* Includes image offset tables: */
    struct intel_mipmap_level level[MAX_TEXTURE_LEVELS];
 
@@ -546,27 +551,36 @@ struct intel_mipmap_tree
     * To allocate the hiz buffer, use intel_miptree_alloc_hiz().
     *
     * To determine if hiz is enabled, do not check this pointer. Instead, use
-    * intel_miptree_slice_has_hiz().
+    * intel_miptree_level_has_hiz().
     */
-   struct intel_miptree_hiz_buffer *hiz_buf;
+   struct intel_miptree_aux_buffer *hiz_buf;
 
    /**
-    * \brief Maps of miptree slices to needed resolves.
+    * \brief The type of auxiliary compression used by this miptree.
     *
-    * hiz_map is used only when the miptree has a child HiZ miptree.
-    *
-    * Let \c mt be a depth miptree with HiZ enabled. Then the resolve map is
-    * \c mt->hiz_map. The resolve map of the child HiZ miptree, \c
-    * mt->hiz_mt->hiz_map, is unused.
-    *
-    *
-    * color_resolve_map is used only when the miptree uses fast clear (Gen7+)
-    * lossless compression (Gen9+). It should be noted that absence in the
-    * map means implicitly RESOLVED state. If item is found it always
-    * indicates state other than RESOLVED.
+    * This describes the type of auxiliary compression that is intended to be
+    * used by this miptree.  An aux usage of ISL_AUX_USAGE_NONE means that
+    * auxiliary compression is permanently disabled.  An aux usage other than
+    * ISL_AUX_USAGE_NONE does not imply that the auxiliary buffer has actually
+    * been allocated nor does it imply that auxiliary compression will always
+    * be enabled for this surface.  For instance, with CCS_D, we may allocate
+    * the CCS on-the-fly and it may not be used for texturing if the miptree
+    * is fully resolved.
     */
-   struct exec_list hiz_map; /* List of intel_resolve_map. */
-   struct exec_list color_resolve_map; /* List of intel_resolve_map. */
+   enum isl_aux_usage aux_usage;
+
+   /**
+    * \brief Whether or not this miptree supports fast clears.
+    */
+   bool supports_fast_clear;
+
+   /**
+    * \brief Maps miptree slices to their current aux state
+    *
+    * This two-dimensional array is indexed as [level][layer] and stores an
+    * aux state for each slice.
+    */
+   enum isl_aux_state **aux_state;
 
    /**
     * \brief Stencil miptree for depthstencil textures.
@@ -610,32 +624,10 @@ struct intel_mipmap_tree
    struct intel_mipmap_tree *plane[2];
 
    /**
-    * The SURFACE_STATE bits associated with the last fast color clear to this
-    * color mipmap tree, if any.
-    *
-    * Prior to GEN9 there is a single bit for RGBA clear values which gives you
-    * the option of 2^4 clear colors. Each bit determines if the color channel
-    * is fully saturated or unsaturated (Cherryview does add a 32b value per
-    * channel, but it is globally applied instead of being part of the render
-    * surface state). Starting with GEN9, the surface state accepts a 32b value
-    * for each color channel.
-    *
-    * @see RENDER_SURFACE_STATE.RedClearColor
-    * @see RENDER_SURFACE_STATE.GreenClearColor
-    * @see RENDER_SURFACE_STATE.BlueClearColor
-    * @see RENDER_SURFACE_STATE.AlphaClearColor
+    * Fast clear color for this surface.  For depth surfaces, the clear value
+    * is stored as a float32 in the red component.
     */
-   union {
-      uint32_t fast_clear_color_value;
-      union gl_color_union gen9_fast_clear_color;
-   };
-
-   /**
-    * Disable allocation of auxiliary buffers, such as the HiZ buffer and MCS
-    * buffer. This is useful for sharing the miptree bo with an external client
-    * that doesn't understand auxiliary buffers.
-    */
-   enum intel_aux_disable aux_disable;
+   union isl_color_value fast_clear_color;
 
    /**
     * Tells if the underlying buffer is to be also consumed by entities other
@@ -654,25 +646,12 @@ intel_miptree_is_lossless_compressed(const struct brw_context *brw,
                                      const struct intel_mipmap_tree *mt);
 
 bool
-intel_tiling_supports_non_msrt_mcs(const struct brw_context *brw,
-                                   unsigned tiling);
-
-bool
-intel_miptree_supports_non_msrt_fast_clear(struct brw_context *brw,
-                                           const struct intel_mipmap_tree *mt);
-
-bool
-intel_miptree_supports_lossless_compressed(struct brw_context *brw,
-                                           const struct intel_mipmap_tree *mt);
-
-bool
-intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
-                                 struct intel_mipmap_tree *mt,
-                                 bool is_lossless_compressed);
+intel_miptree_alloc_ccs(struct brw_context *brw,
+                        struct intel_mipmap_tree *mt);
 
 enum {
    MIPTREE_LAYOUT_ACCELERATED_UPLOAD       = 1 << 0,
-   MIPTREE_LAYOUT_FORCE_ALL_SLICE_AT_LOD   = 1 << 1,
+   MIPTREE_LAYOUT_GEN6_HIZ_STENCIL         = 1 << 1,
    MIPTREE_LAYOUT_FOR_BO                   = 1 << 2,
    MIPTREE_LAYOUT_DISABLE_AUX              = 1 << 3,
    MIPTREE_LAYOUT_FORCE_HALIGN16           = 1 << 4,
@@ -735,19 +714,10 @@ mesa_format
 intel_lower_compressed_format(struct brw_context *brw, mesa_format format);
 
 /** \brief Assert that the level and layer are valid for the miptree. */
-static inline void
+void
 intel_miptree_check_level_layer(const struct intel_mipmap_tree *mt,
                                 uint32_t level,
-                                uint32_t layer)
-{
-   (void) mt;
-   (void) level;
-   (void) layer;
-
-   assert(level >= mt->first_level);
-   assert(level <= mt->last_level);
-   assert(layer < mt->level[level].depth);
-}
+                                uint32_t layer);
 
 void intel_miptree_reference(struct intel_mipmap_tree **dst,
                              struct intel_mipmap_tree *src);
@@ -769,7 +739,7 @@ get_isl_surf_dim(GLenum target);
 
 enum isl_dim_layout
 get_isl_dim_layout(const struct gen_device_info *devinfo, uint32_t tiling,
-                   GLenum target);
+                   GLenum target, enum miptree_array_layout array_layout);
 
 enum isl_tiling
 intel_miptree_get_isl_tiling(const struct intel_mipmap_tree *mt);
@@ -778,15 +748,10 @@ void
 intel_miptree_get_isl_surf(struct brw_context *brw,
                            const struct intel_mipmap_tree *mt,
                            struct isl_surf *surf);
-void
-intel_miptree_get_aux_isl_surf(struct brw_context *brw,
-                               const struct intel_mipmap_tree *mt,
-                               struct isl_surf *surf,
-                               enum isl_aux_usage *usage);
 
-union isl_color_value
-intel_miptree_get_isl_clear_color(struct brw_context *brw,
-                                  const struct intel_mipmap_tree *mt);
+enum isl_aux_usage
+intel_miptree_get_aux_isl_usage(const struct brw_context *brw,
+                                const struct intel_mipmap_tree *mt);
 
 void
 intel_get_image_dims(struct gl_texture_image *image,
@@ -818,6 +783,13 @@ void intel_miptree_set_image_offset(struct intel_mipmap_tree *mt,
                                     GLuint img, GLuint x, GLuint y);
 
 void
+intel_miptree_copy_slice(struct brw_context *brw,
+                         struct intel_mipmap_tree *src_mt,
+                         unsigned src_level, unsigned src_layer,
+                         struct intel_mipmap_tree *dst_mt,
+                         unsigned dst_level, unsigned dst_layer);
+
+void
 intel_miptree_copy_teximage(struct brw_context *brw,
                             struct intel_texture_image *intelImage,
                             struct intel_mipmap_tree *dst_mt, bool invalidate);
@@ -830,10 +802,6 @@ intel_miptree_copy_teximage(struct brw_context *brw,
  * functions on a miptree without HiZ. In that case, each function is a no-op.
  */
 
-bool
-intel_miptree_wants_hiz_buffer(struct brw_context *brw,
-			       struct intel_mipmap_tree *mt);
-
 /**
  * \brief Allocate the miptree's embedded HiZ miptree.
  * \see intel_mipmap_tree:hiz_mt
@@ -844,100 +812,144 @@ intel_miptree_alloc_hiz(struct brw_context *brw,
 			struct intel_mipmap_tree *mt);
 
 bool
-intel_miptree_level_has_hiz(struct intel_mipmap_tree *mt, uint32_t level);
-
-void
-intel_miptree_slice_set_needs_hiz_resolve(struct intel_mipmap_tree *mt,
-                                          uint32_t level,
-					  uint32_t depth);
-void
-intel_miptree_slice_set_needs_depth_resolve(struct intel_mipmap_tree *mt,
-                                            uint32_t level,
-					    uint32_t depth);
-
-void
-intel_miptree_set_all_slices_need_depth_resolve(struct intel_mipmap_tree *mt,
-                                                uint32_t level);
-
-/**
- * \return false if no resolve was needed
- */
-bool
-intel_miptree_slice_resolve_hiz(struct brw_context *brw,
-				struct intel_mipmap_tree *mt,
-				unsigned int level,
-				unsigned int depth);
-
-/**
- * \return false if no resolve was needed
- */
-bool
-intel_miptree_slice_resolve_depth(struct brw_context *brw,
-				  struct intel_mipmap_tree *mt,
-				  unsigned int level,
-				  unsigned int depth);
-
-/**
- * \return false if no resolve was needed
- */
-bool
-intel_miptree_all_slices_resolve_hiz(struct brw_context *brw,
-				     struct intel_mipmap_tree *mt);
-
-/**
- * \return false if no resolve was needed
- */
-bool
-intel_miptree_all_slices_resolve_depth(struct brw_context *brw,
-				       struct intel_mipmap_tree *mt);
+intel_miptree_level_has_hiz(const struct intel_mipmap_tree *mt, uint32_t level);
 
 /**\}*/
-
-enum intel_fast_clear_state
-intel_miptree_get_fast_clear_state(const struct intel_mipmap_tree *mt,
-                                   unsigned level, unsigned layer);
-
-void
-intel_miptree_set_fast_clear_state(const struct brw_context *brw,
-                                   struct intel_mipmap_tree *mt,
-                                   unsigned level,
-                                   unsigned first_layer,
-                                   unsigned num_layers,
-                                   enum intel_fast_clear_state new_state);
 
 bool
 intel_miptree_has_color_unresolved(const struct intel_mipmap_tree *mt,
                                    unsigned start_level, unsigned num_levels,
                                    unsigned start_layer, unsigned num_layers);
 
-/**
- * Update the fast clear state for a miptree to indicate that it has been used
- * for rendering.
- */
-void
-intel_miptree_used_for_rendering(const struct brw_context *brw,
-                                 struct intel_mipmap_tree *mt, unsigned level,
-                                 unsigned start_layer, unsigned num_layers);
 
-/**
- * Flag values telling color resolve pass which special types of buffers
- * can be ignored.
+#define INTEL_REMAINING_LAYERS UINT32_MAX
+#define INTEL_REMAINING_LEVELS UINT32_MAX
+
+/** Prepare a miptree for access
  *
- * INTEL_MIPTREE_IGNORE_CCS_E:   Lossless compressed (single-sample
- *                               compression scheme since gen9)
+ * This function should be called prior to any access to miptree in order to
+ * perform any needed resolves.
+ *
+ * \param[in]  start_level    The first mip level to be accessed
+ *
+ * \param[in]  num_levels     The number of miplevels to be accessed or
+ *                            INTEL_REMAINING_LEVELS to indicate every level
+ *                            above start_level will be accessed
+ *
+ * \param[in]  start_layer    The first array slice or 3D layer to be accessed
+ *
+ * \param[in]  num_layers     The number of array slices or 3D layers be
+ *                            accessed or INTEL_REMAINING_LAYERS to indicate
+ *                            every layer above start_layer will be accessed
+ *
+ * \param[in]  aux_supported  Whether or not the access will support the
+ *                            miptree's auxiliary compression format;  this
+ *                            must be false for uncompressed miptrees
+ *
+ * \param[in]  fast_clear_supported Whether or not the access will support
+ *                                  fast clears in the miptree's auxiliary
+ *                                  compression format
  */
-#define INTEL_MIPTREE_IGNORE_CCS_E (1 << 0)
+void
+intel_miptree_prepare_access(struct brw_context *brw,
+                             struct intel_mipmap_tree *mt,
+                             uint32_t start_level, uint32_t num_levels,
+                             uint32_t start_layer, uint32_t num_layers,
+                             bool aux_supported, bool fast_clear_supported);
 
-bool
-intel_miptree_resolve_color(struct brw_context *brw,
-                            struct intel_mipmap_tree *mt, unsigned level,
-                            unsigned start_layer, unsigned num_layers,
-                            int flags);
+/** Complete a write operation
+ *
+ * This function should be called after any operation writes to a miptree.
+ * This will update the miptree's compression state so that future resolves
+ * happen correctly.  Technically, this function can be called before the
+ * write occurs but the caller must ensure that they don't interlace
+ * intel_miptree_prepare_access and intel_miptree_finish_write calls to
+ * overlapping layer/level ranges.
+ *
+ * \param[in]  level             The mip level that was written
+ *
+ * \param[in]  start_layer       The first array slice or 3D layer written
+ *
+ * \param[in]  num_layers        The number of array slices or 3D layers
+ *                               written or INTEL_REMAINING_LAYERS to indicate
+ *                               every layer above start_layer was written
+ *
+ * \param[in]  written_with_aux  Whether or not the write was done with
+ *                               auxiliary compression enabled
+ */
+void
+intel_miptree_finish_write(struct brw_context *brw,
+                           struct intel_mipmap_tree *mt, uint32_t level,
+                           uint32_t start_layer, uint32_t num_layers,
+                           bool written_with_aux);
+
+/** Get the auxiliary compression state of a miptree slice */
+enum isl_aux_state
+intel_miptree_get_aux_state(const struct intel_mipmap_tree *mt,
+                            uint32_t level, uint32_t layer);
+
+/** Set the auxiliary compression state of a miptree slice range
+ *
+ * This function directly sets the auxiliary compression state of a slice
+ * range of a miptree.  It only modifies data structures and does not do any
+ * resolves.  This should only be called by code which directly performs
+ * compression operations such as fast clears and resolves.  Most code should
+ * use intel_miptree_prepare_access or intel_miptree_finish_write.
+ */
+void
+intel_miptree_set_aux_state(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt, uint32_t level,
+                            uint32_t start_layer, uint32_t num_layers,
+                            enum isl_aux_state aux_state);
+
+/**
+ * Prepare a miptree for raw access
+ *
+ * This helper prepares the miptree for access that knows nothing about any
+ * sort of compression whatsoever.  This is useful when mapping the surface or
+ * using it with the blitter.
+ */
+static inline void
+intel_miptree_access_raw(struct brw_context *brw,
+                         struct intel_mipmap_tree *mt,
+                         uint32_t level, uint32_t layer,
+                         bool write)
+{
+   intel_miptree_prepare_access(brw, mt, level, 1, layer, 1, false, false);
+   if (write)
+      intel_miptree_finish_write(brw, mt, level, layer, 1, false);
+}
 
 void
-intel_miptree_all_slices_resolve_color(struct brw_context *brw,
-                                       struct intel_mipmap_tree *mt,
-                                       int flags);
+intel_miptree_prepare_texture(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt,
+                              mesa_format view_format,
+                              bool *aux_supported_out);
+void
+intel_miptree_prepare_image(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt);
+void
+intel_miptree_prepare_fb_fetch(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt, uint32_t level,
+                               uint32_t start_layer, uint32_t num_layers);
+void
+intel_miptree_prepare_render(struct brw_context *brw,
+                             struct intel_mipmap_tree *mt, uint32_t level,
+                             uint32_t start_layer, uint32_t layer_count,
+                             bool srgb_enabled);
+void
+intel_miptree_finish_render(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt, uint32_t level,
+                            uint32_t start_layer, uint32_t layer_count);
+void
+intel_miptree_prepare_depth(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt, uint32_t level,
+                            uint32_t start_layer, uint32_t layer_count);
+void
+intel_miptree_finish_depth(struct brw_context *brw,
+                           struct intel_mipmap_tree *mt, uint32_t level,
+                           uint32_t start_layer, uint32_t layer_count,
+                           bool depth_written);
 
 void
 intel_miptree_make_shareable(struct brw_context *brw,
@@ -993,10 +1005,6 @@ intel_miptree_unmap(struct brw_context *brw,
 		    struct intel_mipmap_tree *mt,
 		    unsigned int level,
 		    unsigned int slice);
-
-void
-intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-	       unsigned int level, unsigned int layer, enum blorp_hiz_op op);
 
 bool
 intel_miptree_sample_with_hiz(struct brw_context *brw,

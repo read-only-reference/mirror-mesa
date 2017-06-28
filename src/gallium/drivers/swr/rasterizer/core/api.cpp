@@ -680,7 +680,7 @@ void SwrSetBlendFunc(
 // update guardband multipliers for the viewport
 void updateGuardbands(API_STATE *pState)
 {
-    uint32_t numGbs = pState->gsState.emitsRenderTargetArrayIndex ? KNOB_NUM_VIEWPORTS_SCISSORS : 1;
+    uint32_t numGbs = pState->backendState.readViewportArrayIndex ? KNOB_NUM_VIEWPORTS_SCISSORS : 1;
 
     for(uint32_t i = 0; i < numGbs; ++i)
     {
@@ -736,7 +736,7 @@ void SwrSetScissorRects(
 void SetupMacroTileScissors(DRAW_CONTEXT *pDC)
 {
     API_STATE *pState = &pDC->pState->state;
-    uint32_t numScissors = pState->gsState.emitsViewportArrayIndex ? KNOB_NUM_VIEWPORTS_SCISSORS : 1;
+    uint32_t numScissors = pState->backendState.readViewportArrayIndex ? KNOB_NUM_VIEWPORTS_SCISSORS : 1;
     pState->scissorsTileAligned = true;
 
     for (uint32_t index = 0; index < numScissors; ++index)
@@ -784,9 +784,6 @@ void SetupMacroTileScissors(DRAW_CONTEXT *pDC)
 
 
 // templated backend function tables
-extern PFN_BACKEND_FUNC gBackendNullPs[SWR_MULTISAMPLE_TYPE_COUNT];
-extern PFN_BACKEND_FUNC gBackendSingleSample[SWR_INPUT_COVERAGE_COUNT][2][2];
-extern PFN_BACKEND_FUNC gBackendSampleRateTable[SWR_MULTISAMPLE_TYPE_COUNT][SWR_INPUT_COVERAGE_COUNT][2][2];
 
 void SetupPipeline(DRAW_CONTEXT *pDC)
 {
@@ -838,7 +835,9 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
             break;
         }
     }
-    
+
+    SWR_ASSERT(backendFuncs.pfnBackend);
+
     PFN_PROCESS_PRIMS pfnBinner;
 #if USE_SIMD16_FRONTEND
     PFN_PROCESS_PRIMS_SIMD16 pfnBinner_simd16;
@@ -1652,6 +1651,7 @@ void SwrInit()
 
     InitClearTilesTable();
     InitBackendFuncTables();
+    InitRasterizerFunctions();
 }
 
 void SwrGetInterface(SWR_INTERFACE &out_funcs)

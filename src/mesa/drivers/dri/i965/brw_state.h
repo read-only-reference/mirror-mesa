@@ -53,18 +53,11 @@ extern const struct brw_tracked_state brw_cs_pull_constants;
 extern const struct brw_tracked_state brw_constant_buffer;
 extern const struct brw_tracked_state brw_curbe_offsets;
 extern const struct brw_tracked_state brw_invariant_state;
-extern const struct brw_tracked_state brw_fs_samplers;
 extern const struct brw_tracked_state brw_gs_unit;
 extern const struct brw_tracked_state brw_binding_table_pointers;
 extern const struct brw_tracked_state brw_depthbuffer;
 extern const struct brw_tracked_state brw_recalculate_urb_fence;
-extern const struct brw_tracked_state brw_sf_unit;
 extern const struct brw_tracked_state brw_sf_vp;
-extern const struct brw_tracked_state brw_vs_samplers;
-extern const struct brw_tracked_state brw_tcs_samplers;
-extern const struct brw_tracked_state brw_tes_samplers;
-extern const struct brw_tracked_state brw_gs_samplers;
-extern const struct brw_tracked_state brw_cs_samplers;
 extern const struct brw_tracked_state brw_cs_texture_surfaces;
 extern const struct brw_tracked_state brw_vs_ubo_surfaces;
 extern const struct brw_tracked_state brw_vs_abo_surfaces;
@@ -131,6 +124,9 @@ void brw_upload_binding_table(struct brw_context *brw,
 void brw_upload_invariant_state(struct brw_context *brw);
 uint32_t
 brw_depthbuffer_format(struct brw_context *brw);
+
+uint32_t
+brw_convert_depth_value(mesa_format format, float value);
 
 void brw_upload_state_base_address(struct brw_context *brw);
 
@@ -205,14 +201,13 @@ uint32_t brw_state_batch_size(struct brw_context *brw, uint32_t offset);
 void gen4_init_vtable_surface_functions(struct brw_context *brw);
 uint32_t brw_get_surface_tiling_bits(uint32_t tiling);
 uint32_t brw_get_surface_num_multisamples(unsigned num_samples);
-
-uint32_t brw_isl_format_for_mesa_format(mesa_format mesa_format);
+enum isl_format brw_isl_format_for_mesa_format(mesa_format mesa_format);
 
 GLuint translate_tex_target(GLenum target);
 
-GLuint translate_tex_format(struct brw_context *brw,
-                            mesa_format mesa_format,
-                            GLenum srgb_decode);
+enum isl_format translate_tex_format(struct brw_context *brw,
+                                     mesa_format mesa_format,
+                                     GLenum srgb_decode);
 
 int brw_get_texture_swizzle(const struct gl_context *ctx,
                             const struct gl_texture_object *t);
@@ -359,6 +354,7 @@ void gen7_init_atoms(struct brw_context *brw);
 void gen75_init_atoms(struct brw_context *brw);
 void gen8_init_atoms(struct brw_context *brw);
 void gen9_init_atoms(struct brw_context *brw);
+void gen10_init_atoms(struct brw_context *brw);
 
 void upload_gs_state_for_tf(struct brw_context *brw);
 
@@ -403,6 +399,14 @@ void upload_gs_state_for_tf(struct brw_context *brw);
 #define SKL_MOCS_WB  (2 << 1)
 /* TC=LLC/eLLC, LeCC=PTE, LRUM=3, L3CC=WB */
 #define SKL_MOCS_PTE (1 << 1)
+
+/* Cannonlake: MOCS is now an index into an array of 62 different caching
+ * configurations programmed by the kernel.
+ */
+/* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */
+#define CNL_MOCS_WB  (2 << 1)
+/* TC=LLC/eLLC, LeCC=PTE, LRUM=3, L3CC=WB */
+#define CNL_MOCS_PTE (1 << 1)
 
 #ifdef __cplusplus
 }

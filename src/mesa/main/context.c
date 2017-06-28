@@ -133,6 +133,7 @@
 #include "varray.h"
 #include "version.h"
 #include "viewport.h"
+#include "texturebindless.h"
 #include "program/program.h"
 #include "math/m_matrix.h"
 #include "main/dispatch.h" /* for _gloffset_COUNT */
@@ -855,6 +856,7 @@ init_attrib_groups(struct gl_context *ctx)
    _mesa_init_transform_feedback( ctx );
    _mesa_init_varray( ctx );
    _mesa_init_viewport( ctx );
+   _mesa_init_resident_handles( ctx );
 
    if (!_mesa_init_texture( ctx ))
       return GL_FALSE;
@@ -1339,6 +1341,7 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_free_transform_feedback(ctx);
    _mesa_free_performance_monitors(ctx);
    _mesa_free_performance_queries(ctx);
+   _mesa_free_resident_handles(ctx);
 
    _mesa_reference_buffer_object(ctx, &ctx->Pack.BufferObj, NULL);
    _mesa_reference_buffer_object(ctx, &ctx->Unpack.BufferObj, NULL);
@@ -1831,20 +1834,6 @@ _mesa_record_error(struct gl_context *ctx, GLenum error)
 
 
 /**
- * Flush commands and wait for completion.
- */
-void
-_mesa_finish(struct gl_context *ctx)
-{
-   FLUSH_VERTICES( ctx, 0 );
-   FLUSH_CURRENT( ctx, 0 );
-   if (ctx->Driver.Finish) {
-      ctx->Driver.Finish(ctx);
-   }
-}
-
-
-/**
  * Flush commands.
  */
 void
@@ -1860,7 +1849,7 @@ _mesa_flush(struct gl_context *ctx)
 
 
 /**
- * Execute glFinish().
+ * Flush commands and wait for completion.
  *
  * Calls the #ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH macro and the
  * dd_function_table::Finish driver callback, if not NULL.
@@ -1870,7 +1859,13 @@ _mesa_Finish(void)
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
-   _mesa_finish(ctx);
+
+   FLUSH_VERTICES(ctx, 0);
+   FLUSH_CURRENT(ctx, 0);
+
+   if (ctx->Driver.Finish) {
+      ctx->Driver.Finish(ctx);
+   }
 }
 
 

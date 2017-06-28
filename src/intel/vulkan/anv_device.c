@@ -35,7 +35,7 @@
 #include "util/debug.h"
 #include "util/build_id.h"
 #include "util/mesa-sha1.h"
-#include "util/vk_util.h"
+#include "vk_util.h"
 
 #include "genxml/gen7_pack.h"
 
@@ -293,7 +293,7 @@ anv_physical_device_init(struct anv_physical_device *device,
       fprintf(stderr, "WARNING: Ivy Bridge Vulkan support is incomplete\n");
    } else if (device->info.gen == 7 && device->info.is_baytrail) {
       fprintf(stderr, "WARNING: Bay Trail Vulkan support is incomplete\n");
-   } else if (device->info.gen >= 8) {
+   } else if (device->info.gen >= 8 && device->info.gen <= 9) {
       /* Broadwell, Cherryview, Skylake, Broxton, Kabylake is as fully
        * supported as anything */
    } else {
@@ -359,8 +359,9 @@ anv_physical_device_init(struct anv_physical_device *device,
 
    if (device->info.is_cherryview &&
        device->subslice_total > 0 && device->eu_total > 0) {
-      /* Logical CS threads = EUs per subslice * 7 threads per EU */
-      uint32_t max_cs_threads = device->eu_total / device->subslice_total * 7;
+      /* Logical CS threads = EUs per subslice * num threads per EU */
+      uint32_t max_cs_threads =
+         device->eu_total / device->subslice_total * device->info.num_thread_per_eu;
 
       /* Fuse configurations may give more threads than expected, never less. */
       if (max_cs_threads > device->info.max_cs_threads)
@@ -765,6 +766,9 @@ void anv_GetPhysicalDeviceProperties(
    const uint32_t max_raw_buffer_sz = devinfo->gen >= 7 ?
                                       (1ul << 30) : (1ul << 27);
 
+   const uint32_t max_samplers = (devinfo->gen >= 8 || devinfo->is_haswell) ?
+                                 128 : 16;
+
    VkSampleCountFlags sample_counts =
       isl_device_get_sample_counts(&pdevice->isl_dev);
 
@@ -783,13 +787,13 @@ void anv_GetPhysicalDeviceProperties(
       .bufferImageGranularity                   = 64, /* A cache line */
       .sparseAddressSpaceSize                   = 0,
       .maxBoundDescriptorSets                   = MAX_SETS,
-      .maxPerStageDescriptorSamplers            = 64,
+      .maxPerStageDescriptorSamplers            = max_samplers,
       .maxPerStageDescriptorUniformBuffers      = 64,
       .maxPerStageDescriptorStorageBuffers      = 64,
-      .maxPerStageDescriptorSampledImages       = 64,
+      .maxPerStageDescriptorSampledImages       = max_samplers,
       .maxPerStageDescriptorStorageImages       = 64,
       .maxPerStageDescriptorInputAttachments    = 64,
-      .maxPerStageResources                     = 128,
+      .maxPerStageResources                     = 250,
       .maxDescriptorSetSamplers                 = 256,
       .maxDescriptorSetUniformBuffers           = 256,
       .maxDescriptorSetUniformBuffersDynamic    = MAX_DYNAMIC_BUFFERS / 2,
@@ -865,7 +869,7 @@ void anv_GetPhysicalDeviceProperties(
       .storageImageSampleCounts                 = VK_SAMPLE_COUNT_1_BIT,
       .maxSampleMaskWords                       = 1,
       .timestampComputeAndGraphics              = false,
-      .timestampPeriod                          = devinfo->timebase_scale,
+      .timestampPeriod                          = 1000000000ull / devinfo->timestamp_frequency,
       .maxClipDistances                         = 8,
       .maxCullDistances                         = 8,
       .maxCombinedClipAndCullDistances          = 8,
@@ -883,7 +887,7 @@ void anv_GetPhysicalDeviceProperties(
 
    *pProperties = (VkPhysicalDeviceProperties) {
       .apiVersion = VK_MAKE_VERSION(1, 0, 42),
-      .driverVersion = 1,
+      .driverVersion = vk_get_driver_version(),
       .vendorID = 0x8086,
       .deviceID = pdevice->chipset_id,
       .deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
@@ -1228,6 +1232,9 @@ VkResult anv_CreateDevice(
       break;
    case 9:
       result = gen9_init_device_state(device);
+      break;
+   case 10:
+      result = gen10_init_device_state(device);
       break;
    default:
       /* Shouldn't get here as we don't create physical devices for any other

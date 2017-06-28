@@ -208,7 +208,7 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
    struct etna_bo *bo = etna_bo_new(screen->dev, size, flags);
    if (unlikely(bo == NULL)) {
       BUG("Problem allocating video memory for resource");
-      return NULL;
+      goto free_rsc;
    }
 
    rsc->bo = bo;
@@ -223,6 +223,10 @@ etna_resource_alloc(struct pipe_screen *pscreen, unsigned layout,
    }
 
    return &rsc->base;
+
+free_rsc:
+   FREE(rsc);
+   return NULL;
 }
 
 static struct pipe_resource *
@@ -352,6 +356,8 @@ etna_resource_from_handle(struct pipe_screen *pscreen,
 
    level->padded_width = align(level->width, paddingX);
    level->padded_height = align(level->height, paddingY);
+   level->layer_stride = level->stride * util_format_get_nblocksy(prsc->format,
+                                                                  level->padded_height);
 
    /* The DDX must give us a BO which conforms to our padding size.
     * The stride of the BO must be greater or equal to our padded
@@ -401,7 +407,8 @@ etna_resource_get_handle(struct pipe_screen *pscreen,
 {
    struct etna_resource *rsc = etna_resource(prsc);
 
-   if (renderonly_get_handle(rsc->scanout, handle))
+   if (handle->type == DRM_API_HANDLE_TYPE_KMS &&
+       renderonly_get_handle(rsc->scanout, handle))
       return TRUE;
 
    return etna_screen_bo_get_handle(pscreen, rsc->bo, rsc->levels[0].stride,
@@ -426,22 +433,6 @@ etna_resource_used(struct etna_context *ctx, struct pipe_resource *prsc,
    list_delinit(&rsc->list);
    list_addtail(&rsc->list, &ctx->used_resources);
    rsc->pending_ctx = ctx;
-}
-
-void
-etna_resource_wait(struct pipe_context *pctx, struct etna_resource *rsc)
-{
-   if (rsc->status & ETNA_PENDING_WRITE) {
-      struct pipe_fence_handle *fence;
-      struct pipe_screen *pscreen = pctx->screen;
-
-      pctx->flush(pctx, &fence, 0);
-
-      if (!pscreen->fence_finish(pscreen, pctx, fence, 5000000000ULL))
-         BUG("fence timed out (hung GPU?)");
-
-      pscreen->fence_reference(pscreen, &fence, NULL);
-   }
 }
 
 void

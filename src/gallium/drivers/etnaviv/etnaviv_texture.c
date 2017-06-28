@@ -120,6 +120,9 @@ etna_update_sampler_source(struct pipe_sampler_view *view)
       etna_copy_resource(view->context, res->texture, view->texture, 0,
                          view->texture->last_level);
       etna_resource(res->texture)->seqno = res->seqno;
+   } else if (etna_resource_needs_flush(res)) {
+      etna_copy_resource(view->context, view->texture, view->texture, 0, 0);
+      res->flush_seqno = res->seqno;
    }
 }
 
@@ -158,6 +161,11 @@ etna_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
    struct etna_sampler_view *sv = CALLOC_STRUCT(etna_sampler_view);
    struct etna_resource *res = etna_resource(prsc);
    struct etna_context *ctx = etna_context(pctx);
+   const uint32_t format = translate_texture_format(so->format);
+   const bool ext = !!(format & EXT_FORMAT);
+   const uint32_t swiz = get_texture_swiz(so->format, so->swizzle_r,
+                                          so->swizzle_g, so->swizzle_b,
+                                          so->swizzle_a);
 
    if (!sv)
       return NULL;
@@ -188,8 +196,7 @@ etna_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
    sv->base.context = pctx;
 
    /* merged with sampler state */
-   sv->TE_SAMPLER_CONFIG0 =
-      VIVS_TE_SAMPLER_CONFIG0_FORMAT(translate_texture_format(sv->base.format));
+   sv->TE_SAMPLER_CONFIG0 = COND(!ext, VIVS_TE_SAMPLER_CONFIG0_FORMAT(format));
    sv->TE_SAMPLER_CONFIG0_MASK = 0xffffffff;
 
    switch (sv->base.target) {
@@ -212,11 +219,8 @@ etna_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
       return NULL;
    }
 
-   sv->TE_SAMPLER_CONFIG1 = VIVS_TE_SAMPLER_CONFIG1_SWIZZLE_R(so->swizzle_r) |
-                            VIVS_TE_SAMPLER_CONFIG1_SWIZZLE_G(so->swizzle_g) |
-                            VIVS_TE_SAMPLER_CONFIG1_SWIZZLE_B(so->swizzle_b) |
-                            VIVS_TE_SAMPLER_CONFIG1_SWIZZLE_A(so->swizzle_a) |
-                            VIVS_TE_SAMPLER_CONFIG1_HALIGN(res->halign);
+   sv->TE_SAMPLER_CONFIG1 = COND(ext, VIVS_TE_SAMPLER_CONFIG1_FORMAT_EXT(format)) |
+                            VIVS_TE_SAMPLER_CONFIG1_HALIGN(res->halign) | swiz;
    sv->TE_SAMPLER_SIZE = VIVS_TE_SAMPLER_SIZE_WIDTH(res->base.width0) |
                          VIVS_TE_SAMPLER_SIZE_HEIGHT(res->base.height0);
    sv->TE_SAMPLER_LOG_SIZE =

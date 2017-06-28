@@ -139,9 +139,9 @@
 #include <llvm-c/TargetMachine.h>
 #include "tgsi/tgsi_scan.h"
 #include "util/u_queue.h"
-#include "si_state.h"
 
-struct ac_shader_binary;
+#include "ac_binary.h"
+#include "si_state.h"
 
 #define SI_MAX_VS_OUTPUTS	40
 
@@ -326,6 +326,9 @@ struct si_shader_selector {
 	/* PIPE_SHADER_[VERTEX|FRAGMENT|...] */
 	unsigned	type;
 	bool		vs_needs_prolog;
+	unsigned	pa_cl_vs_out_cntl;
+	ubyte		clipdist_mask;
+	ubyte		culldist_mask;
 
 	/* GS parameters. */
 	unsigned	esgs_itemsize;
@@ -336,6 +339,7 @@ struct si_shader_selector {
 	unsigned	max_gs_stream; /* count - 1 */
 	unsigned	gsvs_vertex_size;
 	unsigned	max_gsvs_emit_size;
+	unsigned	enabled_streamout_buffer_mask;
 
 	/* PS parameters. */
 	unsigned	color_attr_index[2];
@@ -374,9 +378,21 @@ struct si_shader_selector {
  * -> = merged with the next stage
  */
 
+/* Use the byte alignment for all following structure members for optimal
+ * shader key memory footprint.
+ */
+#pragma pack(push, 1)
+
 /* Common VS bits between the shader key and the prolog key. */
 struct si_vs_prolog_bits {
-	unsigned	instance_divisors[SI_MAX_ATTRIBS];
+	/* - If neither "is_one" nor "is_fetched" has a bit set, the instance
+	 *   divisor is 0.
+	 * - If "is_one" has a bit set, the instance divisor is 1.
+	 * - If "is_fetched" has a bit set, the instance divisor will be loaded
+	 *   from the constant buffer.
+	 */
+	uint16_t	instance_divisor_is_one;     /* bitmask of inputs */
+	uint16_t	instance_divisor_is_fetched; /* bitmask of inputs */
 };
 
 /* Common TCS bits between the shader key and the epilog key. */
@@ -486,17 +502,19 @@ struct si_shader_key {
 	struct {
 		/* One byte for every input: SI_FIX_FETCH_* enums. */
 		uint8_t		vs_fix_fetch[SI_MAX_ATTRIBS];
-		uint64_t	ff_tcs_inputs_to_copy; /* for fixed-func TCS */
-		/* When PS needs PrimID and GS is disabled. */
-		unsigned	vs_export_prim_id:1;
+
+		union {
+			uint64_t	ff_tcs_inputs_to_copy; /* for fixed-func TCS */
+			/* When PS needs PrimID and GS is disabled. */
+			unsigned	vs_export_prim_id:1;
+		} u;
 	} mono;
 
 	/* Optimization flags for asynchronous compilation only. */
 	struct {
-		struct {
-			uint64_t	kill_outputs; /* "get_unique_index" bits */
-			unsigned	clip_disable:1;
-		} hw_vs; /* HW VS (it can be VS, TES, GS) */
+		/* For HW VS (it can be VS, TES, GS) */
+		uint64_t	kill_outputs; /* "get_unique_index" bits */
+		unsigned	clip_disable:1;
 
 		/* For shaders where monolithic variants have better code.
 		 *
@@ -507,6 +525,9 @@ struct si_shader_key {
 		unsigned	prefer_mono:1;
 	} opt;
 };
+
+/* Restore the pack alignment to default. */
+#pragma pack(pop)
 
 struct si_shader_config {
 	unsigned			num_sgprs;
@@ -620,6 +641,18 @@ si_get_main_shader_part(struct si_shader_selector *sel,
 	if (key->as_es)
 		return &sel->main_shader_part_es;
 	return &sel->main_shader_part;
+}
+
+static inline bool
+si_shader_uses_bindless_samplers(struct si_shader_selector *selector)
+{
+	return selector ? selector->info.uses_bindless_samplers : false;
+}
+
+static inline bool
+si_shader_uses_bindless_images(struct si_shader_selector *selector)
+{
+	return selector ? selector->info.uses_bindless_images : false;
 }
 
 #endif

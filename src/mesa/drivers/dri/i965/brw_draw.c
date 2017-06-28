@@ -372,13 +372,26 @@ brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
       front_irb->need_downsample = true;
    if (back_irb)
       back_irb->need_downsample = true;
-   if (depth_irb && brw_depth_writes_enabled(brw)) {
-      intel_renderbuffer_att_set_needs_depth_resolve(depth_att);
-      brw_render_cache_set_add_bo(brw, depth_irb->mt->bo);
+   if (depth_irb) {
+      bool depth_written = brw_depth_writes_enabled(brw);
+      if (depth_att->Layered) {
+         intel_miptree_finish_depth(brw, depth_irb->mt,
+                                    depth_irb->mt_level,
+                                    depth_irb->mt_layer,
+                                    depth_irb->layer_count,
+                                    depth_written);
+      } else {
+         intel_miptree_finish_depth(brw, depth_irb->mt,
+                                    depth_irb->mt_level,
+                                    depth_irb->mt_layer, 1,
+                                    depth_written);
+      }
+      if (depth_written)
+         brw_render_cache_set_add_bo(brw, depth_irb->mt->bo);
    }
 
    if (ctx->Extensions.ARB_stencil_texturing &&
-       stencil_irb && ctx->Stencil._WriteEnabled) {
+       stencil_irb && brw->stencil_write_enabled) {
       brw_render_cache_set_add_bo(brw, stencil_irb->mt->bo);
    }
 
@@ -390,41 +403,58 @@ brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
          continue;
      
       brw_render_cache_set_add_bo(brw, irb->mt->bo);
-      intel_miptree_used_for_rendering(
-         brw, irb->mt, irb->mt_level, irb->mt_layer, irb->layer_count);
+      intel_miptree_finish_render(brw, irb->mt, irb->mt_level,
+                                  irb->mt_layer, irb->layer_count);
    }
 }
 
 static void
-brw_predraw_set_aux_buffers(struct brw_context *brw)
+intel_renderbuffer_move_temp_back(struct brw_context *brw,
+                                  struct intel_renderbuffer *irb)
 {
-   if (brw->gen < 9)
+   if (irb->align_wa_mt == NULL)
       return;
 
+   brw_render_cache_set_check_flush(brw, irb->align_wa_mt->bo);
+
+   intel_miptree_copy_slice(brw, irb->align_wa_mt, 0, 0,
+                            irb->mt,
+                            irb->Base.Base.TexImage->Level, irb->mt_layer);
+
+   intel_miptree_reference(&irb->align_wa_mt, NULL);
+
+   /* Finally restore the x,y to correspond to full miptree. */
+   intel_renderbuffer_set_draw_offset(irb);
+
+   /* Make sure render surface state gets re-emitted with updated miptree. */
+   brw->NewGLState |= _NEW_BUFFERS;
+}
+
+static void
+brw_postdraw_reconcile_align_wa_slices(struct brw_context *brw)
+{
    struct gl_context *ctx = &brw->ctx;
    struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+   struct intel_renderbuffer *depth_irb =
+      intel_get_renderbuffer(fb, BUFFER_DEPTH);
+   struct intel_renderbuffer *stencil_irb =
+      intel_get_renderbuffer(fb, BUFFER_STENCIL);
+
+   if (depth_irb && depth_irb->align_wa_mt)
+      intel_renderbuffer_move_temp_back(brw, depth_irb);
+
+   if (stencil_irb && stencil_irb->align_wa_mt)
+      intel_renderbuffer_move_temp_back(brw, stencil_irb);
 
    for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
       struct intel_renderbuffer *irb =
          intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
-      if (!irb) {
+      if (!irb || irb->align_wa_mt == NULL)
          continue;
-      }
 
-      /* For layered rendering non-compressed fast cleared buffers need to be
-       * resolved. Surface state can carry only one fast color clear value
-       * while each layer may have its own fast clear color value. For
-       * compressed buffers color value is available in the color buffer.
-       */
-      if (irb->layer_count > 1 &&
-          !(irb->mt->aux_disable & INTEL_AUX_DISABLE_CCS) &&
-          !intel_miptree_is_lossless_compressed(brw, irb->mt)) {
-         assert(brw->gen >= 8);
-
-         intel_miptree_resolve_color(brw, irb->mt, irb->mt_level,
-                                     irb->mt_layer, irb->layer_count, 0);
-      }
+      intel_renderbuffer_move_temp_back(brw, irb);
    }
 }
 
@@ -476,7 +506,6 @@ brw_try_draw_prims(struct gl_context *ctx,
       util_last_bit(ctx->VertexProgram._Current->SamplersUsed);
 
    intel_prepare_render(brw);
-   brw_predraw_set_aux_buffers(brw);
 
    /* This workaround has to happen outside of brw_upload_render_state()
     * because it may flush the batchbuffer for a blit, affecting the state
@@ -626,6 +655,7 @@ retry:
       intel_batchbuffer_flush(brw);
 
    brw_program_cache_check_size(brw);
+   brw_postdraw_reconcile_align_wa_slices(brw);
    brw_postdraw_set_buffers_need_resolve(brw);
 
    return;

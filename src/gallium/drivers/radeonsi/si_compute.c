@@ -108,6 +108,8 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	program->shader.is_monolithic = true;
 	program->uses_grid_size = sel.info.uses_grid_size;
 	program->uses_block_size = sel.info.uses_block_size;
+	program->uses_bindless_samplers = sel.info.uses_bindless_samplers;
+	program->uses_bindless_images = sel.info.uses_bindless_images;
 
 	if (si_shader_create(program->screen, tm, &program->shader, debug)) {
 		program->shader.compilation_failed = true;
@@ -262,11 +264,6 @@ static void si_initialize_compute(struct si_context *sctx)
 {
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	uint64_t bc_va;
-
-	radeon_set_sh_reg_seq(cs, R_00B810_COMPUTE_START_X, 3);
-	radeon_emit(cs, 0);
-	radeon_emit(cs, 0);
-	radeon_emit(cs, 0);
 
 	radeon_set_sh_reg_seq(cs, R_00B858_COMPUTE_STATIC_THREAD_MGMT_SE0, 2);
 	/* R_00B858_COMPUTE_STATIC_THREAD_MGMT_SE0 / SE1 */
@@ -721,6 +718,13 @@ static void si_emit_dispatch_packets(struct si_context *sctx,
 	radeon_emit(cs, S_00B820_NUM_THREAD_FULL(info->block[1]));
 	radeon_emit(cs, S_00B824_NUM_THREAD_FULL(info->block[2]));
 
+	unsigned dispatch_initiator =
+		S_00B800_COMPUTE_SHADER_EN(1) |
+		S_00B800_FORCE_START_AT_000(1) |
+		/* If the KMD allows it (there is a KMD hw register for it),
+		 * allow launching waves out-of-order. (same as Vulkan) */
+		S_00B800_ORDER_MODE(sctx->b.chip_class >= CIK);
+
 	if (info->indirect) {
 		uint64_t base_va = r600_resource(info->indirect)->gpu_address;
 
@@ -737,14 +741,14 @@ static void si_emit_dispatch_packets(struct si_context *sctx,
 		radeon_emit(cs, PKT3(PKT3_DISPATCH_INDIRECT, 1, render_cond_bit) |
 		                PKT3_SHADER_TYPE_S(1));
 		radeon_emit(cs, info->indirect_offset);
-		radeon_emit(cs, 1);
+		radeon_emit(cs, dispatch_initiator);
 	} else {
 		radeon_emit(cs, PKT3(PKT3_DISPATCH_DIRECT, 3, render_cond_bit) |
 		                PKT3_SHADER_TYPE_S(1));
 		radeon_emit(cs, info->grid[0]);
 		radeon_emit(cs, info->grid[1]);
 		radeon_emit(cs, info->grid[2]);
-		radeon_emit(cs, 1);
+		radeon_emit(cs, dispatch_initiator);
 	}
 }
 
@@ -786,8 +790,9 @@ static void si_launch_grid(
 	if (info->indirect) {
 		r600_context_add_resource_size(ctx, info->indirect);
 
-		/* The hw doesn't read the indirect buffer via TC L2. */
-		if (r600_resource(info->indirect)->TC_L2_dirty) {
+		/* Indirect buffers use TC L2 on GFX9, but not older hw. */
+		if (sctx->b.chip_class <= VI &&
+		    r600_resource(info->indirect)->TC_L2_dirty) {
 			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
 			r600_resource(info->indirect)->TC_L2_dirty = false;
 		}
@@ -860,7 +865,8 @@ static void si_delete_compute_state(struct pipe_context *ctx, void* state){
 	}
 
 	if (program->ir_type == PIPE_SHADER_IR_TGSI) {
-		util_queue_fence_wait(&program->ready);
+		util_queue_drop_job(&sctx->screen->shader_compiler_queue,
+				    &program->ready);
 		util_queue_fence_destroy(&program->ready);
 	}
 

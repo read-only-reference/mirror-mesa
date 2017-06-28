@@ -154,6 +154,8 @@ st_NewTextureObject(struct gl_context * ctx, GLuint name, GLenum target)
    DBG("%s\n", __func__);
    _mesa_initialize_texture_object(ctx, &obj->base, name, target);
 
+   obj->needs_validation = true;
+
    return &obj->base;
 }
 
@@ -605,6 +607,8 @@ st_AllocTextureImageBuffer(struct gl_context *ctx,
    DBG("%s\n", __func__);
 
    assert(!stImage->pt); /* xxx this might be wrong */
+
+   stObj->needs_validation = true;
 
    etc_fallback_allocate(st, stImage);
 
@@ -2465,25 +2469,18 @@ st_finalize_texture(struct gl_context *ctx,
          stObj->lastLevel = stObj->base._MaxLevel;
    }
 
-   if (tObj->Target == GL_TEXTURE_BUFFER) {
-      struct st_buffer_object *st_obj = st_buffer_object(tObj->BufferObject);
-
-      if (!st_obj) {
-         pipe_resource_reference(&stObj->pt, NULL);
-         st_texture_release_all_sampler_views(st, stObj);
-         return GL_TRUE;
-      }
-
-      if (st_obj->buffer != stObj->pt) {
-         pipe_resource_reference(&stObj->pt, st_obj->buffer);
-         st_texture_release_all_sampler_views(st, stObj);
-      }
-      return GL_TRUE;
-
-   }
-
    firstImage = st_texture_image_const(stObj->base.Image[cubeMapFace][stObj->base.BaseLevel]);
    assert(firstImage);
+
+   /* Skip the loop over images in the common case of no images having
+    * changed.  But if the GL_BASE_LEVEL or GL_MAX_LEVEL change to something we
+    * haven't looked at, then we do need to look at those new images.
+    */
+   if (!stObj->needs_validation &&
+       stObj->base.BaseLevel >= stObj->validated_first_level &&
+       stObj->lastLevel <= stObj->validated_last_level) {
+      return GL_TRUE;
+   }
 
    /* If both firstImage and stObj point to a texture which can contain
     * all active images, favour firstImage.  Note that because of the
@@ -2545,6 +2542,18 @@ st_finalize_texture(struct gl_context *ctx,
             if (stObj->base.Target == GL_TEXTURE_CUBE_MAP ||
                 stObj->base.Target == GL_TEXTURE_CUBE_MAP_ARRAY)
                ptHeight = ptWidth;
+         }
+
+         /* At this point, the texture may be incomplete (mismatched cube
+          * face sizes, for example).  If that's the case, give up, but
+          * don't return GL_FALSE as that would raise an incorrect
+          * GL_OUT_OF_MEMORY error.  See Piglit fbo-incomplete-texture-03 test.
+          */
+         if (!stObj->base._BaseComplete) {
+            _mesa_test_texobj_completeness(ctx, &stObj->base);
+            if (!stObj->base._BaseComplete) {
+               return TRUE;
+            }
          }
       }
 
@@ -2631,6 +2640,10 @@ st_finalize_texture(struct gl_context *ctx,
       }
    }
 
+   stObj->validated_first_level = stObj->base.BaseLevel;
+   stObj->validated_last_level = stObj->lastLevel;
+   stObj->needs_validation = false;
+
    return GL_TRUE;
 }
 
@@ -2711,6 +2724,11 @@ st_AllocTextureStorage(struct gl_context *ctx,
          etc_fallback_allocate(st, stImage);
       }
    }
+
+   /* The texture is in a validated state, so no need to check later. */
+   stObj->needs_validation = false;
+   stObj->validated_first_level = 0;
+   stObj->validated_last_level = levels - 1;
 
    return GL_TRUE;
 }
@@ -2810,6 +2828,11 @@ st_TextureView(struct gl_context *ctx,
     */
    st_texture_release_all_sampler_views(st, tex);
 
+   /* The texture is in a validated state, so no need to check later. */
+   tex->needs_validation = false;
+   tex->validated_first_level = 0;
+   tex->validated_last_level = numLevels - 1;
+
    return GL_TRUE;
 }
 
@@ -2880,6 +2903,85 @@ st_TexParameter(struct gl_context *ctx,
 }
 
 
+static GLuint64
+st_NewTextureHandle(struct gl_context *ctx, struct gl_texture_object *texObj,
+                    struct gl_sampler_object *sampObj)
+{
+   struct st_context *st = st_context(ctx);
+   struct st_texture_object *stObj = st_texture_object(texObj);
+   struct pipe_context *pipe = st->pipe;
+   struct pipe_sampler_view *view;
+   struct pipe_sampler_state sampler = {0};
+
+   if (texObj->Target != GL_TEXTURE_BUFFER) {
+      if (!st_finalize_texture(ctx, pipe, texObj, 0))
+         return 0;
+
+      st_convert_sampler(st, texObj, sampObj, &sampler);
+      view = st_get_texture_sampler_view_from_stobj(st, stObj, sampObj, 0);
+   } else {
+      view = st_get_buffer_sampler_view_from_stobj(st, stObj);
+   }
+
+   return pipe->create_texture_handle(pipe, view, &sampler);
+}
+
+
+static void
+st_DeleteTextureHandle(struct gl_context *ctx, GLuint64 handle)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+
+   pipe->delete_texture_handle(pipe, handle);
+}
+
+
+static void
+st_MakeTextureHandleResident(struct gl_context *ctx, GLuint64 handle,
+                             bool resident)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+
+   pipe->make_texture_handle_resident(pipe, handle, resident);
+}
+
+
+static GLuint64
+st_NewImageHandle(struct gl_context *ctx, struct gl_image_unit *imgObj)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+   struct pipe_image_view image;
+
+   st_convert_image(st, imgObj, &image);
+
+   return pipe->create_image_handle(pipe, &image);
+}
+
+
+static void
+st_DeleteImageHandle(struct gl_context *ctx, GLuint64 handle)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+
+   pipe->delete_image_handle(pipe, handle);
+}
+
+
+static void
+st_MakeImageHandleResident(struct gl_context *ctx, GLuint64 handle,
+                           GLenum access, bool resident)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+
+   pipe->make_image_handle_resident(pipe, handle, access, resident);
+}
+
+
 void
 st_init_texture_functions(struct dd_function_table *functions)
 {
@@ -2914,4 +3016,12 @@ st_init_texture_functions(struct dd_function_table *functions)
    functions->ClearTexSubImage = st_ClearTexSubImage;
 
    functions->TexParameter = st_TexParameter;
+
+   /* bindless functions */
+   functions->NewTextureHandle = st_NewTextureHandle;
+   functions->DeleteTextureHandle = st_DeleteTextureHandle;
+   functions->MakeTextureHandleResident = st_MakeTextureHandleResident;
+   functions->NewImageHandle = st_NewImageHandle;
+   functions->DeleteImageHandle = st_DeleteImageHandle;
+   functions->MakeImageHandleResident = st_MakeImageHandleResident;
 }

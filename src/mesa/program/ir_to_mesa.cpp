@@ -2420,6 +2420,7 @@ public:
    void process(ir_variable *var)
    {
       this->idx = -1;
+      this->var = var;
       this->program_resource_visitor::process(var);
       var->data.param_index = this->idx;
    }
@@ -2433,6 +2434,7 @@ private:
    struct gl_shader_program *shader_program;
    struct gl_program_parameter_list *params;
    int idx;
+   ir_variable *var;
    gl_shader_stage shader_type;
 };
 
@@ -2445,48 +2447,18 @@ add_uniform_to_shader::visit_field(const glsl_type *type, const char *name,
                                    const enum glsl_interface_packing,
                                    bool /* last_field */)
 {
-   /* atomics don't get real storage */
-   if (type->contains_atomic())
+   /* opaque types don't use storage in the param list unless they are
+    * bindless samplers or images.
+    */
+   if (type->contains_opaque() && !var->data.bindless)
       return;
-
-   gl_register_file file;
-   if (type->without_array()->is_sampler()) {
-      file = PROGRAM_SAMPLER;
-   } else {
-      file = PROGRAM_UNIFORM;
-   }
 
    int index = _mesa_lookup_parameter_index(params, name);
    if (index < 0) {
       unsigned size = type_size(type) * 4;
 
-      index = _mesa_add_parameter(params, file, name, size, type->gl_type,
-				  NULL, NULL);
-
-      /* Sampler uniform values are stored in prog->SamplerUnits,
-       * and the entry in that array is selected by this index we
-       * store in ParameterValues[].
-       */
-      if (file == PROGRAM_SAMPLER) {
-	 unsigned location;
-	 const bool found =
-	    this->shader_program->UniformHash->get(location,
-						   params->Parameters[index].Name);
-	 assert(found);
-
-	 if (!found)
-	    return;
-
-	 struct gl_uniform_storage *storage =
-            &this->shader_program->data->UniformStorage[location];
-
-         assert(storage->type->is_sampler() &&
-                storage->opaque[shader_type].active);
-
-	 for (unsigned int j = 0; j < size / 4; j++)
-            params->ParameterValues[index + j][0].f =
-               storage->opaque[shader_type].index + j;
-      }
+      index = _mesa_add_parameter(params, PROGRAM_UNIFORM, name, size,
+                                  type->gl_type, NULL, NULL);
    }
 
    /* The first part of the uniform that's processed determines the base
@@ -2527,9 +2499,12 @@ _mesa_generate_parameters_list_for_uniforms(struct gl_shader_program
 void
 _mesa_associate_uniform_storage(struct gl_context *ctx,
                                 struct gl_shader_program *shader_program,
-                                struct gl_program_parameter_list *params,
+                                struct gl_program *prog,
                                 bool propagate_to_storage)
 {
+   struct gl_program_parameter_list *params = prog->Parameters;
+   gl_shader_stage shader_type = prog->info.stage;
+
    /* After adding each uniform to the parameter list, connect the storage for
     * the parameter with the tracking structure used by the API for the
     * uniform.
@@ -2610,6 +2585,30 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
          _mesa_uniform_attach_driver_storage(storage, dmul * columns, dmul,
                                              format,
                                              &params->ParameterValues[i]);
+
+         /* When a bindless sampler/image is bound to a texture/image unit, we
+          * have to overwrite the constant value by the resident handle
+          * directly in the constant buffer before the next draw. One solution
+          * is to keep track a pointer to the base of the data.
+          */
+         if (storage->is_bindless && (prog->sh.NumBindlessSamplers ||
+                                      prog->sh.NumBindlessImages)) {
+            unsigned array_elements = MAX2(1, storage->array_elements);
+
+            for (unsigned j = 0; j < array_elements; ++j) {
+               unsigned unit = storage->opaque[shader_type].index + j;
+
+               if (storage->type->without_array()->is_sampler()) {
+                  assert(unit >= 0 && unit < prog->sh.NumBindlessSamplers);
+                  prog->sh.BindlessSamplers[unit].data =
+                     &params->ParameterValues[i] + j;
+               } else if (storage->type->without_array()->is_image()) {
+                  assert(unit >= 0 && unit < prog->sh.NumBindlessImages);
+                  prog->sh.BindlessImages[unit].data =
+                     &params->ParameterValues[i] + j;
+               }
+            }
+         }
 
          /* After attaching the driver's storage to the uniform, propagate any
           * data from the linker's backing store.  This will cause values from
@@ -2977,8 +2976,7 @@ get_mesa_program(struct gl_context *ctx,
     * prog->ParameterValues to get reallocated (e.g., anything that adds a
     * program constant) has to happen before creating this linkage.
     */
-   _mesa_associate_uniform_storage(ctx, shader_program, prog->Parameters,
-                                   true);
+   _mesa_associate_uniform_storage(ctx, shader_program, prog, true);
    if (!shader_program->data->LinkStatus) {
       goto fail_exit;
    }

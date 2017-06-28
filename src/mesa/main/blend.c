@@ -157,20 +157,6 @@ validate_blend_factors(struct gl_context *ctx, const char *func,
 }
 
 
-/**
- * Specify the blending operation.
- *
- * \param sfactor source factor operator.
- * \param dfactor destination factor operator.
- *
- * \sa glBlendFunc, glBlendFuncSeparateEXT
- */
-void GLAPIENTRY
-_mesa_BlendFunc( GLenum sfactor, GLenum dfactor )
-{
-   _mesa_BlendFuncSeparate(sfactor, dfactor, sfactor, dfactor);
-}
-
 static GLboolean
 blend_factor_is_dual_src(GLenum factor)
 {
@@ -203,6 +189,107 @@ num_buffers(const struct gl_context *ctx)
 }
 
 
+/* Returns true if there was no change */
+static bool
+skip_blend_state_update(const struct gl_context *ctx,
+                        GLenum sfactorRGB, GLenum dfactorRGB,
+                        GLenum sfactorA, GLenum dfactorA)
+{
+   /* Check if we're really changing any state.  If not, return early. */
+   if (ctx->Color._BlendFuncPerBuffer) {
+      const unsigned numBuffers = num_buffers(ctx);
+
+      /* Check all per-buffer states */
+      for (unsigned buf = 0; buf < numBuffers; buf++) {
+         if (ctx->Color.Blend[buf].SrcRGB != sfactorRGB ||
+             ctx->Color.Blend[buf].DstRGB != dfactorRGB ||
+             ctx->Color.Blend[buf].SrcA != sfactorA ||
+             ctx->Color.Blend[buf].DstA != dfactorA) {
+            return false;
+         }
+      }
+   }
+   else {
+      /* only need to check 0th per-buffer state */
+      if (ctx->Color.Blend[0].SrcRGB != sfactorRGB ||
+          ctx->Color.Blend[0].DstRGB != dfactorRGB ||
+          ctx->Color.Blend[0].SrcA != sfactorA ||
+          ctx->Color.Blend[0].DstA != dfactorA) {
+         return false;
+      }
+   }
+
+   return true;
+}
+
+
+static void
+blend_func_separate(struct gl_context *ctx,
+                    GLenum sfactorRGB, GLenum dfactorRGB,
+                    GLenum sfactorA, GLenum dfactorA)
+{
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewBlend ? 0 : _NEW_COLOR);
+   ctx->NewDriverState |= ctx->DriverFlags.NewBlend;
+
+   const unsigned numBuffers = num_buffers(ctx);
+   for (unsigned buf = 0; buf < numBuffers; buf++) {
+      ctx->Color.Blend[buf].SrcRGB = sfactorRGB;
+      ctx->Color.Blend[buf].DstRGB = dfactorRGB;
+      ctx->Color.Blend[buf].SrcA = sfactorA;
+      ctx->Color.Blend[buf].DstA = dfactorA;
+   }
+
+   update_uses_dual_src(ctx, 0);
+   for (unsigned buf = 1; buf < numBuffers; buf++) {
+      ctx->Color.Blend[buf]._UsesDualSrc = ctx->Color.Blend[0]._UsesDualSrc;
+   }
+
+   ctx->Color._BlendFuncPerBuffer = GL_FALSE;
+
+   if (ctx->Driver.BlendFuncSeparate) {
+      ctx->Driver.BlendFuncSeparate(ctx, sfactorRGB, dfactorRGB,
+                                    sfactorA, dfactorA);
+   }
+}
+
+
+/**
+ * Specify the blending operation.
+ *
+ * \param sfactor source factor operator.
+ * \param dfactor destination factor operator.
+ *
+ * \sa glBlendFunc, glBlendFuncSeparateEXT
+ */
+void GLAPIENTRY
+_mesa_BlendFunc( GLenum sfactor, GLenum dfactor )
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   if (skip_blend_state_update(ctx, sfactor, dfactor, sfactor, dfactor))
+      return;
+
+   if (!validate_blend_factors(ctx, "glBlendFunc",
+                               sfactor, dfactor, sfactor, dfactor)) {
+      return;
+   }
+
+   blend_func_separate(ctx, sfactor, dfactor, sfactor, dfactor);
+}
+
+
+void GLAPIENTRY
+_mesa_BlendFunc_no_error(GLenum sfactor, GLenum dfactor)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   if (skip_blend_state_update(ctx, sfactor, dfactor, sfactor, dfactor))
+      return;
+
+   blend_func_separate(ctx, sfactor, dfactor, sfactor, dfactor);
+}
+
+
 /**
  * Set the separate blend source/dest factors for all draw buffers.
  *
@@ -216,9 +303,6 @@ _mesa_BlendFuncSeparate( GLenum sfactorRGB, GLenum dfactorRGB,
                             GLenum sfactorA, GLenum dfactorA )
 {
    GET_CURRENT_CONTEXT(ctx);
-   const unsigned numBuffers = num_buffers(ctx);
-   unsigned buf;
-   bool changed = false;
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glBlendFuncSeparate %s %s %s %s\n",
@@ -227,30 +311,9 @@ _mesa_BlendFuncSeparate( GLenum sfactorRGB, GLenum dfactorRGB,
                   _mesa_enum_to_string(sfactorA),
                   _mesa_enum_to_string(dfactorA));
 
-   /* Check if we're really changing any state.  If not, return early. */
-   if (ctx->Color._BlendFuncPerBuffer) {
-      /* Check all per-buffer states */
-      for (buf = 0; buf < numBuffers; buf++) {
-         if (ctx->Color.Blend[buf].SrcRGB != sfactorRGB ||
-             ctx->Color.Blend[buf].DstRGB != dfactorRGB ||
-             ctx->Color.Blend[buf].SrcA != sfactorA ||
-             ctx->Color.Blend[buf].DstA != dfactorA) {
-            changed = true;
-            break;
-         }
-      }
-   }
-   else {
-      /* only need to check 0th per-buffer state */
-      if (ctx->Color.Blend[0].SrcRGB != sfactorRGB ||
-          ctx->Color.Blend[0].DstRGB != dfactorRGB ||
-          ctx->Color.Blend[0].SrcA != sfactorA ||
-          ctx->Color.Blend[0].DstA != dfactorA) {
-         changed = true;
-      }
-   }
 
-   if (!changed)
+
+   if (skip_blend_state_update(ctx, sfactorRGB, dfactorRGB, sfactorA, dfactorA))
       return;
 
    if (!validate_blend_factors(ctx, "glBlendFuncSeparate",
@@ -259,26 +322,20 @@ _mesa_BlendFuncSeparate( GLenum sfactorRGB, GLenum dfactorRGB,
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   blend_func_separate(ctx, sfactorRGB, dfactorRGB, sfactorA, dfactorA);
+}
 
-   for (buf = 0; buf < numBuffers; buf++) {
-      ctx->Color.Blend[buf].SrcRGB = sfactorRGB;
-      ctx->Color.Blend[buf].DstRGB = dfactorRGB;
-      ctx->Color.Blend[buf].SrcA = sfactorA;
-      ctx->Color.Blend[buf].DstA = dfactorA;
-   }
 
-   update_uses_dual_src(ctx, 0);
-   for (buf = 1; buf < numBuffers; buf++) {
-      ctx->Color.Blend[buf]._UsesDualSrc = ctx->Color.Blend[0]._UsesDualSrc;
-   }
+void GLAPIENTRY
+_mesa_BlendFuncSeparate_no_error(GLenum sfactorRGB, GLenum dfactorRGB,
+                                 GLenum sfactorA, GLenum dfactorA)
+{
+   GET_CURRENT_CONTEXT(ctx);
 
-   ctx->Color._BlendFuncPerBuffer = GL_FALSE;
+   if (skip_blend_state_update(ctx, sfactorRGB, dfactorRGB, sfactorA, dfactorA))
+      return;
 
-   if (ctx->Driver.BlendFuncSeparate) {
-      ctx->Driver.BlendFuncSeparate(ctx, sfactorRGB, dfactorRGB,
-                                    sfactorA, dfactorA);
-   }
+   blend_func_separate(ctx, sfactorRGB, dfactorRGB, sfactorA, dfactorA);
 }
 
 
@@ -331,7 +388,8 @@ blend_func_separatei(GLuint buf, GLenum sfactorRGB, GLenum dfactorRGB,
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewBlend ? 0 : _NEW_COLOR);
+   ctx->NewDriverState |= ctx->DriverFlags.NewBlend;
 
    ctx->Color.Blend[buf].SrcRGB = sfactorRGB;
    ctx->Color.Blend[buf].DstRGB = dfactorRGB;
@@ -477,7 +535,7 @@ _mesa_BlendEquation( GLenum mode )
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   _mesa_flush_vertices_for_blend_state(ctx);
 
    for (buf = 0; buf < numBuffers; buf++) {
       ctx->Color.Blend[buf].EquationRGB = mode;
@@ -519,7 +577,7 @@ _mesa_BlendEquationiARB(GLuint buf, GLenum mode)
        ctx->Color.Blend[buf].EquationA == mode)
       return;  /* no change */
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   _mesa_flush_vertices_for_blend_state(ctx);
    ctx->Color.Blend[buf].EquationRGB = mode;
    ctx->Color.Blend[buf].EquationA = mode;
    ctx->Color._BlendEquationPerBuffer = GL_TRUE;
@@ -585,7 +643,7 @@ _mesa_BlendEquationSeparate( GLenum modeRGB, GLenum modeA )
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   _mesa_flush_vertices_for_blend_state(ctx);
 
    for (buf = 0; buf < numBuffers; buf++) {
       ctx->Color.Blend[buf].EquationRGB = modeRGB;
@@ -607,7 +665,7 @@ blend_equation_separatei(struct gl_context *ctx, GLuint buf, GLenum modeRGB,
        ctx->Color.Blend[buf].EquationA == modeA)
       return;  /* no change */
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   _mesa_flush_vertices_for_blend_state(ctx);
    ctx->Color.Blend[buf].EquationRGB = modeRGB;
    ctx->Color.Blend[buf].EquationA = modeA;
    ctx->Color._BlendEquationPerBuffer = GL_TRUE;
@@ -691,7 +749,8 @@ _mesa_BlendColor( GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha )
    if (TEST_EQ_4V(tmp, ctx->Color.BlendColorUnclamped))
       return;
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewBlendColor ? 0 : _NEW_COLOR);
+   ctx->NewDriverState |= ctx->DriverFlags.NewBlendColor;
    COPY_4FV( ctx->Color.BlendColorUnclamped, tmp );
 
    ctx->Color.BlendColor[0] = CLAMP(tmp[0], 0.0F, 1.0F);
@@ -735,7 +794,8 @@ _mesa_AlphaFunc( GLenum func, GLclampf ref )
    case GL_NOTEQUAL:
    case GL_GEQUAL:
    case GL_ALWAYS:
-      FLUSH_VERTICES(ctx, _NEW_COLOR);
+      FLUSH_VERTICES(ctx, ctx->DriverFlags.NewAlphaTest ? 0 : _NEW_COLOR);
+      ctx->NewDriverState |= ctx->DriverFlags.NewAlphaTest;
       ctx->Color.AlphaFunc = func;
       ctx->Color.AlphaRefUnclamped = ref;
       ctx->Color.AlphaRef = CLAMP(ref, 0.0F, 1.0F);
@@ -748,6 +808,21 @@ _mesa_AlphaFunc( GLenum func, GLclampf ref )
       _mesa_error( ctx, GL_INVALID_ENUM, "glAlphaFunc(func)" );
       return;
    }
+}
+
+
+static void
+logic_op(struct gl_context *ctx, GLenum opcode)
+{
+   if (ctx->Color.LogicOp == opcode)
+      return;
+
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewLogicOp ? 0 : _NEW_COLOR);
+   ctx->NewDriverState |= ctx->DriverFlags.NewLogicOp;
+   ctx->Color.LogicOp = opcode;
+
+   if (ctx->Driver.LogicOpcode)
+      ctx->Driver.LogicOpcode(ctx, opcode);
 }
 
 
@@ -792,14 +867,15 @@ _mesa_LogicOp( GLenum opcode )
 	 return;
    }
 
-   if (ctx->Color.LogicOp == opcode)
-      return;
+   logic_op(ctx, opcode);
+}
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
-   ctx->Color.LogicOp = opcode;
 
-   if (ctx->Driver.LogicOpcode)
-      ctx->Driver.LogicOpcode( ctx, opcode );
+void GLAPIENTRY
+_mesa_LogicOp_no_error(GLenum opcode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   logic_op(ctx, opcode);
 }
 
 
@@ -811,7 +887,8 @@ _mesa_IndexMask( GLuint mask )
    if (ctx->Color.IndexMask == mask)
       return;
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewColorMask ? 0 : _NEW_COLOR);
+   ctx->NewDriverState |= ctx->DriverFlags.NewColorMask;
    ctx->Color.IndexMask = mask;
 }
 
@@ -855,7 +932,8 @@ _mesa_ColorMask( GLboolean red, GLboolean green,
    for (i = 0; i < ctx->Const.MaxDrawBuffers; i++) {
       if (!TEST_EQ_4V(tmp, ctx->Color.ColorMask[i])) {
          if (!flushed) {
-            FLUSH_VERTICES(ctx, _NEW_COLOR);
+            FLUSH_VERTICES(ctx, ctx->DriverFlags.NewColorMask ? 0 : _NEW_COLOR);
+            ctx->NewDriverState |= ctx->DriverFlags.NewColorMask;
          }
          flushed = GL_TRUE;
          COPY_4UBV(ctx->Color.ColorMask[i], tmp);
@@ -897,7 +975,8 @@ _mesa_ColorMaski( GLuint buf, GLboolean red, GLboolean green,
    if (TEST_EQ_4V(tmp, ctx->Color.ColorMask[buf]))
       return;
 
-   FLUSH_VERTICES(ctx, _NEW_COLOR);
+   FLUSH_VERTICES(ctx, ctx->DriverFlags.NewColorMask ? 0 : _NEW_COLOR);
+   ctx->NewDriverState |= ctx->DriverFlags.NewColorMask;
    COPY_4UBV(ctx->Color.ColorMask[buf], tmp);
 }
 

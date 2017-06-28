@@ -130,6 +130,10 @@ DRI_CONF_OPT_BEGIN_B(force_glsl_abs_sqrt, def) \
         DRI_CONF_DESC(en,gettext("Force computing the absolute value for sqrt() and inversesqrt()")) \
 DRI_CONF_OPT_END
 
+#define DRI_CONF_GLSL_CORRECT_DERIVATIVES_AFTER_DISCARD(def) \
+DRI_CONF_OPT_BEGIN_B(glsl_correct_derivatives_after_discard, def) \
+        DRI_CONF_DESC(en,gettext("Implicit and explicit derivatives after a discard behave as if the discard didn't happen")) \
+DRI_CONF_OPT_END
 
 
 /**
@@ -326,6 +330,16 @@ DRI_CONF_OPT_END
 #define DRI_CONF_MESA_GLTHREAD(def) \
 DRI_CONF_OPT_BEGIN_B(mesa_glthread, def) \
         DRI_CONF_DESC(en,gettext("Enable offloading GL driver work to a separate thread")) \
+DRI_CONF_OPT_END
+
+#define DRI_CONF_DISABLE_EXT_BUFFER_AGE(def) \
+DRI_CONF_OPT_BEGIN_B(glx_disable_ext_buffer_age, def) \
+   DRI_CONF_DESC(en, gettext("Disable the GLX_EXT_buffer_age extension")) \
+DRI_CONF_OPT_END
+
+#define DRI_CONF_DISABLE_OML_SYNC_CONTROL(def) \
+DRI_CONF_OPT_BEGIN_B(glx_disable_oml_sync_control, def) \
+   DRI_CONF_DESC(en, gettext("Disable the GLX_OML_sync_control extension")) \
 DRI_CONF_OPT_END
 
 

@@ -788,7 +788,14 @@ static const char* r600_get_device_vendor(struct pipe_screen* pscreen)
 	return "AMD";
 }
 
-static const char* r600_get_chip_name(struct r600_common_screen *rscreen)
+static const char *r600_get_marketing_name(struct radeon_winsys *ws)
+{
+	if (!ws->get_chip_name)
+		return NULL;
+	return ws->get_chip_name(ws);
+}
+
+static const char *r600_get_family_name(const struct r600_common_screen *rscreen)
 {
 	switch (rscreen->info.family) {
 	case CHIP_R600: return "AMD R600";
@@ -867,7 +874,7 @@ static void r600_disk_cache_create(struct r600_common_screen *rscreen)
 #endif
 		if (res != -1) {
 			rscreen->disk_shader_cache =
-				disk_cache_create(r600_get_chip_name(rscreen),
+				disk_cache_create(r600_get_family_name(rscreen),
 						  timestamp_str,
 						  rscreen->debug_flags);
 			free(timestamp_str);
@@ -1315,12 +1322,19 @@ struct pipe_resource *r600_resource_create_common(struct pipe_screen *screen,
 }
 
 bool r600_common_screen_init(struct r600_common_screen *rscreen,
-			     struct radeon_winsys *ws)
+			     struct radeon_winsys *ws, unsigned flags)
 {
-	char llvm_string[32] = {}, kernel_version[128] = {};
+	char family_name[32] = {}, llvm_string[32] = {}, kernel_version[128] = {};
 	struct utsname uname_data;
+	const char *chip_name;
 
 	ws->query_info(ws, &rscreen->info);
+	rscreen->ws = ws;
+
+	if ((chip_name = r600_get_marketing_name(ws)))
+		snprintf(family_name, sizeof(family_name), "%s / ", r600_get_family_name(rscreen));
+	else
+		chip_name = r600_get_family_name(rscreen);
 
 	if (uname(&uname_data) == 0)
 		snprintf(kernel_version, sizeof(kernel_version),
@@ -1333,8 +1347,8 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	}
 
 	snprintf(rscreen->renderer_string, sizeof(rscreen->renderer_string),
-		 "%s (DRM %i.%i.%i%s%s)",
-		 r600_get_chip_name(rscreen), rscreen->info.drm_major,
+		 "%s (%sDRM %i.%i.%i%s%s)",
+		 chip_name, family_name, rscreen->info.drm_major,
 		 rscreen->info.drm_minor, rscreen->info.drm_patchlevel,
 		 kernel_version, llvm_string);
 
@@ -1362,12 +1376,16 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	r600_init_screen_texture_functions(rscreen);
 	r600_init_screen_query_functions(rscreen);
 
-	rscreen->ws = ws;
 	rscreen->family = rscreen->info.family;
 	rscreen->chip_class = rscreen->info.chip_class;
 	rscreen->debug_flags = debug_get_flags_option("R600_DEBUG", common_debug_options, 0);
 	rscreen->has_rbplus = false;
 	rscreen->rbplus_allowed = false;
+
+	/* Set the flag in debug_flags, so that the shader cache takes it
+	 * into account. */
+	if (flags & PIPE_SCREEN_ENABLE_CORRECT_TGSI_DERIVATIVES_AFTER_KILL)
+		rscreen->debug_flags |= DBG_FS_CORRECT_DERIVS_AFTER_KILL;
 
 	r600_disk_cache_create(rscreen);
 
@@ -1387,7 +1405,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	if (rscreen->debug_flags & DBG_INFO) {
 		printf("pci_id = 0x%x\n", rscreen->info.pci_id);
 		printf("family = %i (%s)\n", rscreen->info.family,
-		       r600_get_chip_name(rscreen));
+		       r600_get_family_name(rscreen));
 		printf("chip_class = %i\n", rscreen->info.chip_class);
 		printf("gart_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.gart_size, 1024*1024));
 		printf("vram_size = %i MB\n", (int)DIV_ROUND_UP(rscreen->info.vram_size, 1024*1024));

@@ -100,6 +100,7 @@ vc4_screen_destroy(struct pipe_screen *pscreen)
         util_hash_table_destroy(screen->bo_handles);
         vc4_bufmgr_destroy(pscreen);
         slab_destroy_parent(&screen->transfer_pool);
+        free(screen->ro);
 
 #if USE_VC4_SIMULATOR
         vc4_simulator_destroy(screen);
@@ -127,6 +128,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_MULTISAMPLE:
         case PIPE_CAP_TEXTURE_SWIZZLE:
         case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
+        case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
                 return 1;
 
                 /* lying for GL 2.0 */
@@ -254,7 +256,8 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_BALLOT:
         case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
 	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
-	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+        case PIPE_CAP_POST_DEPTH_COVERAGE:
+        case PIPE_CAP_BINDLESS_TEXTURE:
                 return 0;
 
                 /* Stream output. */
@@ -603,7 +606,7 @@ vc4_get_chip_info(struct vc4_screen *screen)
 }
 
 struct pipe_screen *
-vc4_screen_create(int fd)
+vc4_screen_create(int fd, struct renderonly *ro)
 {
         struct vc4_screen *screen = rzalloc(NULL, struct vc4_screen);
         struct pipe_screen *pscreen;
@@ -618,6 +621,15 @@ vc4_screen_create(int fd)
         pscreen->is_format_supported = vc4_screen_is_format_supported;
 
         screen->fd = fd;
+        if (ro) {
+                screen->ro = renderonly_dup(ro);
+                if (!screen->ro) {
+                        fprintf(stderr, "Failed to dup renderonly object\n");
+                        ralloc_free(screen);
+                        return NULL;
+                }
+        }
+
         list_inithead(&screen->bo_cache.time_list);
         (void) mtx_init(&screen->bo_handles_mutex, mtx_plain);
         screen->bo_handles = util_hash_table_create(handle_hash, handle_compare);

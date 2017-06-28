@@ -102,6 +102,9 @@ static void si_emit_derived_tess_state(struct si_context *sctx,
 	 * It would be wrong to think that TCS = TES. */
 	struct si_shader_selector *tcs =
 		sctx->tcs_shader.cso ? sctx->tcs_shader.cso : sctx->tes_shader.cso;
+	unsigned tess_uses_primid = sctx->ia_multi_vgt_param_key.u.tess_uses_prim_id;
+	bool has_primid_instancing_bug = sctx->b.chip_class == SI &&
+					 sctx->b.screen->info.max_se == 1;
 	unsigned tes_sh_base = sctx->shader_userdata.sh_base[PIPE_SHADER_TESS_EVAL];
 	unsigned num_tcs_input_cp = info->vertices_per_patch;
 	unsigned num_tcs_output_cp, num_tcs_inputs, num_tcs_outputs;
@@ -128,7 +131,9 @@ static void si_emit_derived_tess_state(struct si_context *sctx,
 	if (sctx->last_ls == ls_current &&
 	    sctx->last_tcs == tcs &&
 	    sctx->last_tes_sh_base == tes_sh_base &&
-	    sctx->last_num_tcs_input_cp == num_tcs_input_cp) {
+	    sctx->last_num_tcs_input_cp == num_tcs_input_cp &&
+	    (!has_primid_instancing_bug ||
+	     (sctx->last_tess_uses_primid == tess_uses_primid))) {
 		*num_patches = sctx->last_num_patches;
 		return;
 	}
@@ -137,6 +142,7 @@ static void si_emit_derived_tess_state(struct si_context *sctx,
 	sctx->last_tcs = tcs;
 	sctx->last_tes_sh_base = tes_sh_base;
 	sctx->last_num_tcs_input_cp = num_tcs_input_cp;
+	sctx->last_tess_uses_primid = tess_uses_primid;
 
 	/* This calculates how shader inputs and outputs among VS, TCS, and TES
 	 * are laid out in LDS. */
@@ -169,8 +175,12 @@ static void si_emit_derived_tess_state(struct si_context *sctx,
 
 	/* Make sure that the data fits in LDS. This assumes the shaders only
 	 * use LDS for the inputs and outputs.
+	 *
+	 * While CIK can use 64K per threadgroup, there is a hang on Stoney
+	 * with 2 CUs if we use more than 32K. The closed Vulkan driver also
+	 * uses 32K at most on all GCN chips.
 	 */
-	hardware_lds_size = sctx->b.chip_class >= CIK ? 65536 : 32768;
+	hardware_lds_size = 32768;
 	*num_patches = MIN2(*num_patches, hardware_lds_size / (input_patch_size +
 	                                                       output_patch_size));
 
@@ -190,21 +200,20 @@ static void si_emit_derived_tess_state(struct si_context *sctx,
 		 */
 		unsigned one_wave = 64 / MAX2(num_tcs_input_cp, num_tcs_output_cp);
 		*num_patches = MIN2(*num_patches, one_wave);
-
-		if (sctx->screen->b.info.max_se == 1) {
-			/* The VGT HS block increments the patch ID unconditionally
-			 * within a single threadgroup. This results in incorrect
-			 * patch IDs when instanced draws are used.
-			 *
-			 * The intended solution is to restrict threadgroups to
-			 * a single instance by setting SWITCH_ON_EOI, which
-			 * should cause IA to split instances up. However, this
-			 * doesn't work correctly on SI when there is no other
-			 * SE to switch to.
-			 */
-			*num_patches = 1;
-		}
 	}
+
+	/* The VGT HS block increments the patch ID unconditionally
+	 * within a single threadgroup. This results in incorrect
+	 * patch IDs when instanced draws are used.
+	 *
+	 * The intended solution is to restrict threadgroups to
+	 * a single instance by setting SWITCH_ON_EOI, which
+	 * should cause IA to split instances up. However, this
+	 * doesn't work correctly on SI when there is no other
+	 * SE to switch to.
+	 */
+	if (has_primid_instancing_bug)
+		*num_patches = 1;
 
 	sctx->last_num_patches = *num_patches;
 
@@ -852,9 +861,10 @@ void si_emit_cache_flush(struct si_context *sctx)
 	uint32_t flush_cb_db = rctx->flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
 					      SI_CONTEXT_FLUSH_AND_INV_DB);
 
-	if (rctx->flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
-			   SI_CONTEXT_FLUSH_AND_INV_DB))
-		sctx->b.num_fb_cache_flushes++;
+	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_CB)
+		sctx->b.num_cb_cache_flushes++;
+	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB)
+		sctx->b.num_db_cache_flushes++;
 
 	/* SI has a bug that it always flushes ICACHE and KCACHE if either
 	 * bit is set. An alternative way is to write SQC_CACHES, but that
@@ -944,9 +954,8 @@ void si_emit_cache_flush(struct si_context *sctx)
 	 * wait for idle on GFX9. We have to use a TS event.
 	 */
 	if (sctx->b.chip_class >= GFX9 && flush_cb_db) {
-		struct r600_resource *rbuf = NULL;
 		uint64_t va;
-		unsigned offset = 0, tc_flags, cb_db_event;
+		unsigned tc_flags, cb_db_event;
 
 		/* Set the CB/DB flush event. */
 		switch (flush_cb_db) {
@@ -962,38 +971,33 @@ void si_emit_cache_flush(struct si_context *sctx)
 		}
 
 		/* TC    | TC_WB         = invalidate L2 data
-		 * TC_MD | TC_WB         = invalidate L2 metadata
+		 * TC_MD | TC_WB         = invalidate L2 metadata (DCC, etc.)
 		 * TC    | TC_WB | TC_MD = invalidate L2 data & metadata
-		 *
-		 * The metadata cache must always be invalidated for coherency
-		 * between CB/DB and shaders. (metadata = HTILE, CMASK, DCC)
-		 *
-		 * TC must be invalidated on GFX9 only if the CB/DB surface is
-		 * not pipe-aligned. If the surface is RB-aligned, it might not
-		 * strictly be pipe-aligned since RB alignment takes precendence.
 		 */
-		tc_flags = EVENT_TC_WB_ACTION_ENA |
-			   EVENT_TC_MD_ACTION_ENA;
+		tc_flags = 0;
 
 		/* Ideally flush TC together with CB/DB. */
 		if (rctx->flags & SI_CONTEXT_INV_GLOBAL_L2) {
 			tc_flags |= EVENT_TC_ACTION_ENA |
+				    EVENT_TC_WB_ACTION_ENA |
 				    EVENT_TCL1_ACTION_ENA;
 
 			/* Clear the flags. */
 			rctx->flags &= ~(SI_CONTEXT_INV_GLOBAL_L2 |
 					 SI_CONTEXT_WRITEBACK_GLOBAL_L2 |
 					 SI_CONTEXT_INV_VMEM_L1);
+			sctx->b.num_L2_invalidates++;
 		}
 
-		/* Allocate memory for the fence. */
-		u_suballocator_alloc(rctx->allocator_zeroed_memory, 4, 4,
-				     &offset, (struct pipe_resource**)&rbuf);
-		va = rbuf->gpu_address + offset;
+		/* Do the flush (enqueue the event and wait for it). */
+		va = sctx->wait_mem_scratch->gpu_address;
+		sctx->wait_mem_number++;
 
 		r600_gfx_write_event_eop(rctx, cb_db_event, tc_flags, 1,
-					 rbuf, va, 0, 1);
-		r600_gfx_wait_fence(rctx, va, 1, 0xffffffff);
+					 sctx->wait_mem_scratch, va,
+					 sctx->wait_mem_number - 1,
+					 sctx->wait_mem_number);
+		r600_gfx_wait_fence(rctx, va, sctx->wait_mem_number, 0xffffffff);
 	}
 
 	/* Make sure ME is idle (it executes most packets) before continuing.
@@ -1309,15 +1313,18 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		/* Add the buffer size for memory checking in need_cs_space. */
 		r600_context_add_resource_size(ctx, indirect->buffer);
 
-		if (r600_resource(indirect->buffer)->TC_L2_dirty) {
-			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-			r600_resource(indirect->buffer)->TC_L2_dirty = false;
-		}
+		/* Indirect buffers use TC L2 on GFX9, but not older hw. */
+		if (sctx->b.chip_class <= VI) {
+			if (r600_resource(indirect->buffer)->TC_L2_dirty) {
+				sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+				r600_resource(indirect->buffer)->TC_L2_dirty = false;
+			}
 
-		if (indirect->indirect_draw_count &&
-		    r600_resource(indirect->indirect_draw_count)->TC_L2_dirty) {
-			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-			r600_resource(indirect->indirect_draw_count)->TC_L2_dirty = false;
+			if (indirect->indirect_draw_count &&
+			    r600_resource(indirect->indirect_draw_count)->TC_L2_dirty) {
+				sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+				r600_resource(indirect->indirect_draw_count)->TC_L2_dirty = false;
+			}
 		}
 	}
 
@@ -1391,8 +1398,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 			struct pipe_surface *surf = sctx->framebuffer.state.zsbuf;
 			struct r600_texture *rtex = (struct r600_texture *)surf->texture;
 
-			if (!rtex->tc_compatible_htile)
-				rtex->dirty_level_mask |= 1 << surf->u.tex.level;
+			rtex->dirty_level_mask |= 1 << surf->u.tex.level;
 
 			if (rtex->surface.flags & RADEON_SURF_SBUFFER)
 				rtex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;

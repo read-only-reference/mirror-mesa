@@ -632,8 +632,16 @@ builtin_variable_generator::generate_constants()
    add_const("gl_MaxDrawBuffers", state->Const.MaxDrawBuffers);
 
    /* Max uniforms/varyings: GLSL ES counts these in units of vectors; desktop
-    * GL counts them in units of "components" or "floats".
+    * GL counts them in units of "components" or "floats" and also in units
+    * of vectors since GL 4.1
     */
+   if (!state->es_shader) {
+      add_const("gl_MaxFragmentUniformComponents",
+                state->Const.MaxFragmentUniformComponents);
+      add_const("gl_MaxVertexUniformComponents",
+                state->Const.MaxVertexUniformComponents);
+   }
+
    if (state->is_version(410, 100)) {
       add_const("gl_MaxVertexUniformVectors",
                 state->Const.MaxVertexUniformComponents / 4);
@@ -661,16 +669,10 @@ builtin_variable_generator::generate_constants()
                    state->Const.MaxDualSourceDrawBuffers);
       }
    } else {
-      add_const("gl_MaxVertexUniformComponents",
-                state->Const.MaxVertexUniformComponents);
-
       /* Note: gl_MaxVaryingFloats was deprecated in GLSL 1.30+, but not
        * removed
        */
       add_const("gl_MaxVaryingFloats", state->ctx->Const.MaxVarying * 4);
-
-      add_const("gl_MaxFragmentUniformComponents",
-                state->Const.MaxFragmentUniformComponents);
    }
 
    /* Texel offsets were introduced in ARB_shading_language_420pack (which
@@ -1324,6 +1326,8 @@ builtin_variable_generator::add_varying(int slot, const glsl_type *type,
    case MESA_SHADER_COMPUTE:
       /* Compute shaders don't have varyings. */
       break;
+   default:
+      break;
    }
 }
 
@@ -1460,6 +1464,8 @@ _mesa_glsl_initialize_variables(exec_list *instructions,
       break;
    case MESA_SHADER_COMPUTE:
       gen.generate_cs_special_vars();
+      break;
+   default:
       break;
    }
 }

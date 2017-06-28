@@ -443,6 +443,8 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+   case PIPE_CAP_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_BINDLESS_TEXTURE:
       return 0;
    }
 
@@ -914,6 +916,8 @@ svga_get_driver_query_info(struct pipe_screen *screen,
             PIPE_DRIVER_QUERY_TYPE_UINT64),
       QUERY("num-generate-mipmap", SVGA_QUERY_NUM_GENERATE_MIPMAP,
             PIPE_DRIVER_QUERY_TYPE_UINT64),
+      QUERY("num-failed-allocations", SVGA_QUERY_NUM_FAILED_ALLOCATIONS,
+            PIPE_DRIVER_QUERY_TYPE_UINT64),
    };
 #undef QUERY
 
@@ -1140,18 +1144,18 @@ svga_screen_create(struct svga_winsys_screen *sws)
       get_bool_cap(sws, SVGA3D_DEVCAP_LINE_STIPPLE, FALSE);
 
    svgascreen->maxLineWidth =
-      get_float_cap(sws, SVGA3D_DEVCAP_MAX_LINE_WIDTH, 1.0f);
+      MAX2(1.0, get_float_cap(sws, SVGA3D_DEVCAP_MAX_LINE_WIDTH, 1.0f));
 
    svgascreen->maxLineWidthAA =
-      get_float_cap(sws, SVGA3D_DEVCAP_MAX_AA_LINE_WIDTH, 1.0f);
+      MAX2(1.0, get_float_cap(sws, SVGA3D_DEVCAP_MAX_AA_LINE_WIDTH, 1.0f));
 
    if (0) {
       debug_printf("svga: haveProvokingVertex %u\n",
                    svgascreen->haveProvokingVertex);
       debug_printf("svga: haveLineStip %u  "
-                   "haveLineSmooth %u  maxLineWidth %f\n",
+                   "haveLineSmooth %u  maxLineWidth %.2f  maxLineWidthAA %.2f\n",
                    svgascreen->haveLineStipple, svgascreen->haveLineSmooth,
-                   svgascreen->maxLineWidth);
+                   svgascreen->maxLineWidth, svgascreen->maxLineWidthAA);
       debug_printf("svga: maxPointSize %g\n", svgascreen->maxPointSize);
       debug_printf("svga: msaa samples mask: 0x%x\n", svgascreen->ms_samples);
    }

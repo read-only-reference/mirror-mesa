@@ -136,18 +136,22 @@ unsigned si_shader_io_get_unique_index(unsigned semantic_name, unsigned index)
 	switch (semantic_name) {
 	case TGSI_SEMANTIC_POSITION:
 		return 0;
-	case TGSI_SEMANTIC_PSIZE:
-		return 1;
-	case TGSI_SEMANTIC_CLIPDIST:
-		assert(index <= 1);
-		return 2 + index;
 	case TGSI_SEMANTIC_GENERIC:
+		/* Since some shader stages use the the highest used IO index
+		 * to determine the size to allocate for inputs/outputs
+		 * (in LDS, tess and GS rings). GENERIC should be placed right
+		 * after POSITION to make that size as small as possible.
+		 */
 		if (index < SI_MAX_IO_GENERIC)
-			return 4 + index;
+			return 1 + index;
 
 		assert(!"invalid generic index");
 		return 0;
-
+	case TGSI_SEMANTIC_PSIZE:
+		return SI_MAX_IO_GENERIC + 1;
+	case TGSI_SEMANTIC_CLIPDIST:
+		assert(index <= 1);
+		return SI_MAX_IO_GENERIC + 2 + index;
 	case TGSI_SEMANTIC_FOG:
 		return SI_MAX_IO_GENERIC + 4;
 	case TGSI_SEMANTIC_LAYER:
@@ -308,7 +312,7 @@ get_tcs_out_current_patch_data_offset(struct si_shader_context *ctx)
 
 static LLVMValueRef get_instance_index_for_fetch(
 	struct si_shader_context *ctx,
-	unsigned param_start_instance, unsigned divisor)
+	unsigned param_start_instance, LLVMValueRef divisor)
 {
 	struct gallivm_state *gallivm = &ctx->gallivm;
 
@@ -316,9 +320,8 @@ static LLVMValueRef get_instance_index_for_fetch(
 					   ctx->param_instance_id);
 
 	/* The division must be done before START_INSTANCE is added. */
-	if (divisor > 1)
-		result = LLVMBuildUDiv(gallivm->builder, result,
-				LLVMConstInt(ctx->i32, divisor, 0), "");
+	if (divisor != ctx->i32_1)
+		result = LLVMBuildUDiv(gallivm->builder, result, divisor, "");
 
 	return LLVMBuildAdd(gallivm->builder, result,
 			    LLVMGetParam(ctx->main_fn, param_start_instance), "");
@@ -1363,11 +1366,6 @@ static void declare_input_fs(
 		interp_param = LLVMGetParam(ctx->main_fn, interp_param_idx);
 	}
 
-	if (decl->Semantic.Name == TGSI_SEMANTIC_COLOR &&
-	    decl->Interp.Interpolate == TGSI_INTERPOLATE_COLOR &&
-	    ctx->shader->key.part.ps.prolog.flatshade_colors)
-		interp_param = NULL; /* load the constant color */
-
 	interp_fs_input(ctx, input_index, decl->Semantic.Name,
 			decl->Semantic.Index, shader->selector->info.num_inputs,
 			shader->selector->info.colors_read, interp_param,
@@ -2290,7 +2288,7 @@ static void si_llvm_export_vs(struct lp_build_tgsi_context *bld_base,
 				break;
 			/* fall through */
 		default:
-			if (shader->key.opt.hw_vs.kill_outputs &
+			if (shader->key.opt.kill_outputs &
 			    (1ull << si_shader_io_get_unique_index(semantic_name, semantic_index)))
 				export_param = false;
 		}
@@ -2322,14 +2320,14 @@ handle_semantic:
 			target = V_008DFC_SQ_EXP_POS;
 			break;
 		case TGSI_SEMANTIC_CLIPDIST:
-			if (shader->key.opt.hw_vs.clip_disable) {
+			if (shader->key.opt.clip_disable) {
 				semantic_name = TGSI_SEMANTIC_GENERIC;
 				goto handle_semantic;
 			}
 			target = V_008DFC_SQ_EXP_POS + 2 + semantic_index;
 			break;
 		case TGSI_SEMANTIC_CLIPVERTEX:
-			if (shader->key.opt.hw_vs.clip_disable)
+			if (shader->key.opt.clip_disable)
 				continue;
 			si_llvm_emit_clipvertex(bld_base, pos_args, outputs[i].values);
 			continue;
@@ -2493,7 +2491,7 @@ static void si_copy_tcs_inputs(struct lp_build_tgsi_context *bld_base)
 	lds_base = get_tcs_in_current_patch_offset(ctx);
 	lds_base = LLVMBuildAdd(gallivm->builder, lds_base, lds_vertex_offset, "");
 
-	inputs = ctx->shader->key.mono.ff_tcs_inputs_to_copy;
+	inputs = ctx->shader->key.mono.u.ff_tcs_inputs_to_copy;
 	while (inputs) {
 		unsigned i = u_bit_scan64(&inputs);
 
@@ -3020,7 +3018,7 @@ static void si_llvm_emit_vs_epilogue(struct lp_build_tgsi_context *bld_base)
 		si_llvm_emit_streamout(ctx, outputs, i, 0);
 
 	/* Export PrimitiveID. */
-	if (ctx->shader->key.mono.vs_export_prim_id) {
+	if (ctx->shader->key.mono.u.vs_export_prim_id) {
 		outputs[i].semantic_name = TGSI_SEMANTIC_PRIMID;
 		outputs[i].semantic_index = 0;
 		outputs[i].values[0] = bitcast(bld_base, TGSI_TYPE_FLOAT,
@@ -3249,6 +3247,9 @@ static void si_llvm_return_fs_outputs(struct lp_build_tgsi_context *bld_base)
 	LLVMValueRef color[8][4] = {};
 	LLVMValueRef depth = NULL, stencil = NULL, samplemask = NULL;
 	LLVMValueRef ret;
+
+	if (ctx->postponed_kill)
+		ac_build_kill(&ctx->ac, LLVMBuildLoad(builder, ctx->postponed_kill, ""));
 
 	/* Read the output values. */
 	for (i = 0; i < info->num_outputs; i++) {
@@ -3523,18 +3524,41 @@ static void build_interp_intrinsic(const struct lp_build_tgsi_action *action,
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	struct si_shader *shader = ctx->shader;
 	struct gallivm_state *gallivm = &ctx->gallivm;
+	const struct tgsi_shader_info *info = &shader->selector->info;
 	LLVMValueRef interp_param;
 	const struct tgsi_full_instruction *inst = emit_data->inst;
-	int input_index = inst->Src[0].Register.Index;
+	const struct tgsi_full_src_register *input = &inst->Src[0];
+	int input_base, input_array_size;
 	int chan;
 	int i;
-	LLVMValueRef attr_number;
 	LLVMValueRef params = LLVMGetParam(ctx->main_fn, SI_PARAM_PRIM_MASK);
+	LLVMValueRef array_idx;
 	int interp_param_idx;
-	unsigned interp = shader->selector->info.input_interpolate[input_index];
+	unsigned interp;
 	unsigned location;
 
-	assert(inst->Src[0].Register.File == TGSI_FILE_INPUT);
+	assert(input->Register.File == TGSI_FILE_INPUT);
+
+	if (input->Register.Indirect) {
+		unsigned array_id = input->Indirect.ArrayID;
+
+		if (array_id) {
+			input_base = info->input_array_first[array_id];
+			input_array_size = info->input_array_last[array_id] - input_base + 1;
+		} else {
+			input_base = inst->Src[0].Register.Index;
+			input_array_size = info->num_inputs - input_base;
+		}
+
+		array_idx = get_indirect_index(ctx, &input->Indirect,
+					       input->Register.Index - input_base);
+	} else {
+		input_base = inst->Src[0].Register.Index;
+		input_array_size = 1;
+		array_idx = ctx->i32_0;
+	}
+
+	interp = shader->selector->info.input_interpolate[input_base];
 
 	if (inst->Instruction.Opcode == TGSI_OPCODE_INTERP_OFFSET ||
 	    inst->Instruction.Opcode == TGSI_OPCODE_INTERP_SAMPLE)
@@ -3549,8 +3573,6 @@ static void build_interp_intrinsic(const struct lp_build_tgsi_action *action,
 		interp_param = LLVMGetParam(ctx->main_fn, interp_param_idx);
 	else
 		interp_param = NULL;
-
-	attr_number = LLVMConstInt(ctx->i32, input_index, 0);
 
 	if (inst->Instruction.Opcode == TGSI_OPCODE_INTERP_OFFSET ||
 	    inst->Instruction.Opcode == TGSI_OPCODE_INTERP_SAMPLE) {
@@ -3590,28 +3612,45 @@ static void build_interp_intrinsic(const struct lp_build_tgsi_action *action,
 		interp_param = lp_build_gather_values(gallivm, ij_out, 2);
 	}
 
+	if (interp_param) {
+		interp_param = LLVMBuildBitCast(gallivm->builder,
+			interp_param, LLVMVectorType(ctx->f32, 2), "");
+	}
+
 	for (chan = 0; chan < 4; chan++) {
 		LLVMValueRef llvm_chan;
+		LLVMValueRef gather = LLVMGetUndef(LLVMVectorType(ctx->f32, input_array_size));
 		unsigned schan;
 
 		schan = tgsi_util_get_full_src_register_swizzle(&inst->Src[0], chan);
 		llvm_chan = LLVMConstInt(ctx->i32, schan, 0);
 
-		if (interp_param) {
-			interp_param = LLVMBuildBitCast(gallivm->builder,
-				interp_param, LLVMVectorType(ctx->f32, 2), "");
-			LLVMValueRef i = LLVMBuildExtractElement(
-				gallivm->builder, interp_param, ctx->i32_0, "");
-			LLVMValueRef j = LLVMBuildExtractElement(
-				gallivm->builder, interp_param, ctx->i32_1, "");
-			emit_data->output[chan] = ac_build_fs_interp(&ctx->ac,
-				llvm_chan, attr_number, params,
-				i, j);
-		} else {
-			emit_data->output[chan] = ac_build_fs_interp_mov(&ctx->ac,
-				LLVMConstInt(ctx->i32, 2, 0), /* P0 */
-				llvm_chan, attr_number, params);
+		for (unsigned i = 0; i < input_array_size; ++i) {
+			LLVMValueRef attr_number = LLVMConstInt(ctx->i32, input_base + i, false);
+			LLVMValueRef v;
+
+			if (interp_param) {
+				interp_param = LLVMBuildBitCast(gallivm->builder,
+					interp_param, LLVMVectorType(ctx->f32, 2), "");
+				LLVMValueRef i = LLVMBuildExtractElement(
+					gallivm->builder, interp_param, ctx->i32_0, "");
+				LLVMValueRef j = LLVMBuildExtractElement(
+					gallivm->builder, interp_param, ctx->i32_1, "");
+				v = ac_build_fs_interp(&ctx->ac,
+					llvm_chan, attr_number, params,
+					i, j);
+			} else {
+				v = ac_build_fs_interp_mov(&ctx->ac,
+					LLVMConstInt(ctx->i32, 2, 0), /* P0 */
+					llvm_chan, attr_number, params);
+			}
+
+			gather = LLVMBuildInsertElement(gallivm->builder,
+				gather, v, LLVMConstInt(ctx->i32, i, false), "");
 		}
+
+		emit_data->output[chan] = LLVMBuildExtractElement(
+			gallivm->builder, gather, array_idx, "");
 	}
 }
 
@@ -4756,12 +4795,6 @@ int si_shader_binary_upload(struct si_screen *sscreen, struct si_shader *shader)
 	       !mainb->rodata_size);
 	assert(!epilog || !epilog->rodata_size);
 
-	/* GFX9 can fetch at most 128 bytes past the end of the shader.
-	 * Prevent VM faults.
-	 */
-	if (sscreen->b.chip_class >= GFX9)
-		bo_size += 128;
-
 	r600_resource_reference(&shader->bo, NULL);
 	shader->bo = (struct r600_resource*)
 		     pipe_buffer_create(&sscreen->b.b, 0,
@@ -5248,12 +5281,10 @@ static void si_dump_shader_key_vs(const struct si_shader_key *key,
 				  const struct si_vs_prolog_bits *prolog,
 				  const char *prefix, FILE *f)
 {
-	fprintf(f, "  %s.instance_divisors = {", prefix);
-	for (int i = 0; i < ARRAY_SIZE(prolog->instance_divisors); i++) {
-		fprintf(f, !i ? "%u" : ", %u",
-			prolog->instance_divisors[i]);
-	}
-	fprintf(f, "}\n");
+	fprintf(f, "  %s.instance_divisor_is_one = %u\n",
+		prefix, prolog->instance_divisor_is_one);
+	fprintf(f, "  %s.instance_divisor_is_fetched = %u\n",
+		prefix, prolog->instance_divisor_is_fetched);
 
 	fprintf(f, "  mono.vs.fix_fetch = {");
 	for (int i = 0; i < SI_MAX_ATTRIBS; i++)
@@ -5274,8 +5305,8 @@ static void si_dump_shader_key(unsigned processor, const struct si_shader *shade
 				      "part.vs.prolog", f);
 		fprintf(f, "  as_es = %u\n", key->as_es);
 		fprintf(f, "  as_ls = %u\n", key->as_ls);
-		fprintf(f, "  mono.vs_export_prim_id = %u\n",
-			key->mono.vs_export_prim_id);
+		fprintf(f, "  mono.u.vs_export_prim_id = %u\n",
+			key->mono.u.vs_export_prim_id);
 		break;
 
 	case PIPE_SHADER_TESS_CTRL:
@@ -5284,13 +5315,13 @@ static void si_dump_shader_key(unsigned processor, const struct si_shader *shade
 					      "part.tcs.ls_prolog", f);
 		}
 		fprintf(f, "  part.tcs.epilog.prim_mode = %u\n", key->part.tcs.epilog.prim_mode);
-		fprintf(f, "  mono.ff_tcs_inputs_to_copy = 0x%"PRIx64"\n", key->mono.ff_tcs_inputs_to_copy);
+		fprintf(f, "  mono.u.ff_tcs_inputs_to_copy = 0x%"PRIx64"\n", key->mono.u.ff_tcs_inputs_to_copy);
 		break;
 
 	case PIPE_SHADER_TESS_EVAL:
 		fprintf(f, "  as_es = %u\n", key->as_es);
-		fprintf(f, "  mono.vs_export_prim_id = %u\n",
-			key->mono.vs_export_prim_id);
+		fprintf(f, "  mono.u.vs_export_prim_id = %u\n",
+			key->mono.u.vs_export_prim_id);
 		break;
 
 	case PIPE_SHADER_GEOMETRY:
@@ -5336,8 +5367,8 @@ static void si_dump_shader_key(unsigned processor, const struct si_shader *shade
 	     processor == PIPE_SHADER_TESS_EVAL ||
 	     processor == PIPE_SHADER_VERTEX) &&
 	    !key->as_es && !key->as_ls) {
-		fprintf(f, "  opt.hw_vs.kill_outputs = 0x%"PRIx64"\n", key->opt.hw_vs.kill_outputs);
-		fprintf(f, "  opt.hw_vs.clip_disable = %u\n", key->opt.hw_vs.clip_disable);
+		fprintf(f, "  opt.kill_outputs = 0x%"PRIx64"\n", key->opt.kill_outputs);
+		fprintf(f, "  opt.clip_disable = %u\n", key->opt.clip_disable);
 	}
 }
 
@@ -5525,6 +5556,12 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		}
 	}
 
+	if (ctx->type == PIPE_SHADER_FRAGMENT && sel->info.uses_kill &&
+	    ctx->screen->b.debug_flags & DBG_FS_CORRECT_DERIVS_AFTER_KILL) {
+		/* This is initialized to 0.0 = not kill. */
+		ctx->postponed_kill = lp_build_alloca(&ctx->gallivm, ctx->f32, "");
+	}
+
 	if (!lp_build_tgsi_llvm(bld_base, sel->tokens)) {
 		fprintf(stderr, "Failed to translate shader from TGSI to LLVM\n");
 		return false;
@@ -5563,10 +5600,12 @@ static void si_get_vs_prolog_key(const struct tgsi_shader_info *info,
 		key->vs_prolog.num_merged_next_stage_vgprs = 5;
 	}
 
-	/* Set the instanceID flag. */
-	for (unsigned i = 0; i < info->num_inputs; i++)
-		if (key->vs_prolog.states.instance_divisors[i])
-			shader_out->info.uses_instanceid = true;
+	/* Enable loading the InstanceID VGPR. */
+	uint16_t input_mask = u_bit_consecutive(0, info->num_inputs);
+
+	if ((key->vs_prolog.states.instance_divisor_is_one |
+	     key->vs_prolog.states.instance_divisor_is_fetched) & input_mask)
+		shader_out->info.uses_instanceid = true;
 }
 
 /**
@@ -6487,6 +6526,21 @@ out:
 	return result;
 }
 
+static LLVMValueRef si_prolog_get_rw_buffers(struct si_shader_context *ctx)
+{
+	struct gallivm_state *gallivm = &ctx->gallivm;
+	LLVMValueRef ptr[2], list;
+
+	/* Get the pointer to rw buffers. */
+	ptr[0] = LLVMGetParam(ctx->main_fn, SI_SGPR_RW_BUFFERS);
+	ptr[1] = LLVMGetParam(ctx->main_fn, SI_SGPR_RW_BUFFERS_HI);
+	list = lp_build_gather_values(gallivm, ptr, 2);
+	list = LLVMBuildBitCast(gallivm->builder, list, ctx->i64, "");
+	list = LLVMBuildIntToPtr(gallivm->builder, list,
+				 si_const_array(ctx->v4i32, SI_NUM_RW_BUFFERS), "");
+	return list;
+}
+
 /**
  * Build the vertex shader prolog function.
  *
@@ -6569,11 +6623,33 @@ static void si_build_vs_prolog_function(struct si_shader_context *ctx,
 	}
 
 	/* Compute vertex load indices from instance divisors. */
+	LLVMValueRef instance_divisor_constbuf = NULL;
+
+	if (key->vs_prolog.states.instance_divisor_is_fetched) {
+		LLVMValueRef list = si_prolog_get_rw_buffers(ctx);
+		LLVMValueRef buf_index =
+			LLVMConstInt(ctx->i32, SI_VS_CONST_INSTANCE_DIVISORS, 0);
+		instance_divisor_constbuf =
+			ac_build_indexed_load_const(&ctx->ac, list, buf_index);
+	}
+
 	for (i = 0; i <= key->vs_prolog.last_input; i++) {
-		unsigned divisor = key->vs_prolog.states.instance_divisors[i];
+		bool divisor_is_one =
+			key->vs_prolog.states.instance_divisor_is_one & (1u << i);
+		bool divisor_is_fetched =
+			key->vs_prolog.states.instance_divisor_is_fetched & (1u << i);
 		LLVMValueRef index;
 
-		if (divisor) {
+		if (divisor_is_one || divisor_is_fetched) {
+			LLVMValueRef divisor = ctx->i32_1;
+
+			if (divisor_is_fetched) {
+				divisor = buffer_load_const(ctx, instance_divisor_constbuf,
+							    LLVMConstInt(ctx->i32, i * 4, 0));
+				divisor = LLVMBuildBitCast(gallivm->builder, divisor,
+							   ctx->i32, "");
+			}
+
 			/* InstanceID / Divisor + StartInstance */
 			index = get_instance_index_for_fetch(ctx,
 							     user_sgpr_base +
@@ -6826,15 +6902,7 @@ static void si_build_ps_prolog_function(struct si_shader_context *ctx,
 		/* POS_FIXED_PT is always last. */
 		unsigned pos = key->ps_prolog.num_input_sgprs +
 			       key->ps_prolog.num_input_vgprs - 1;
-		LLVMValueRef ptr[2], list;
-
-		/* Get the pointer to rw buffers. */
-		ptr[0] = LLVMGetParam(func, SI_SGPR_RW_BUFFERS);
-		ptr[1] = LLVMGetParam(func, SI_SGPR_RW_BUFFERS_HI);
-		list = lp_build_gather_values(gallivm, ptr, 2);
-		list = LLVMBuildBitCast(gallivm->builder, list, ctx->i64, "");
-		list = LLVMBuildIntToPtr(gallivm->builder, list,
-					  si_const_array(ctx->v4i32, SI_NUM_RW_BUFFERS), "");
+		LLVMValueRef list = si_prolog_get_rw_buffers(ctx);
 
 		si_llvm_emit_polygon_stipple(ctx, list, pos);
 	}

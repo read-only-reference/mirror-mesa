@@ -168,6 +168,7 @@ struct brw_sampler_prog_key_data {
    uint32_t y_u_v_image_mask;
    uint32_t y_uv_image_mask;
    uint32_t yx_xuxv_image_mask;
+   uint32_t xy_uxvx_image_mask;
 };
 
 /**
@@ -1156,7 +1157,7 @@ brw_stage_has_packed_dispatch(const struct gen_device_info *devinfo,
     * to do a full test run with brw_fs_test_dispatch_packing() hooked up to
     * the NIR front-end before changing this assertion.
     */
-   assert(devinfo->gen <= 9);
+   assert(devinfo->gen <= 10);
 
    switch (stage) {
    case MESA_SHADER_FRAGMENT: {

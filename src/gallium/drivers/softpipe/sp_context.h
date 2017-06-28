@@ -148,11 +148,9 @@ struct softpipe_context {
    /** Derived from scissor and surface bounds: */
    struct pipe_scissor_state cliprect[PIPE_MAX_VIEWPORTS];
 
-   unsigned line_stipple_counter;
-
    /** Conditional query object and mode */
    struct pipe_query *render_cond_query;
-   uint render_cond_mode;
+   enum pipe_render_cond_flag render_cond_mode;
    boolean render_cond_cond;
 
    /** Polygon stipple items */

@@ -34,7 +34,9 @@
 
 
 #include "glheader.h"
+#include "context.h"
 #include "formats.h"
+#include "extensions.h"
 
 struct gl_context;
 struct gl_framebuffer;
@@ -43,11 +45,16 @@ struct gl_framebuffer;
 extern void GLAPIENTRY
 _mesa_BlendFunc( GLenum sfactor, GLenum dfactor );
 
+extern void GLAPIENTRY
+_mesa_BlendFunc_no_error(GLenum sfactor, GLenum dfactor);
 
 extern void GLAPIENTRY
 _mesa_BlendFuncSeparate( GLenum sfactorRGB, GLenum dfactorRGB,
                             GLenum sfactorA, GLenum dfactorA );
 
+extern void GLAPIENTRY
+_mesa_BlendFuncSeparate_no_error(GLenum sfactorRGB, GLenum dfactorRGB,
+                                 GLenum sfactorA, GLenum dfactorA);
 
 extern void GLAPIENTRY
 _mesa_BlendFunciARB_no_error(GLuint buf, GLenum sfactor, GLenum dfactor);
@@ -96,6 +103,10 @@ _mesa_LogicOp( GLenum opcode );
 
 
 extern void GLAPIENTRY
+_mesa_LogicOp_no_error(GLenum opcode);
+
+
+extern void GLAPIENTRY
 _mesa_IndexMask( GLuint mask );
 
 extern void GLAPIENTRY
@@ -135,5 +146,23 @@ _mesa_get_render_format(const struct gl_context *ctx, mesa_format format);
 
 extern void  
 _mesa_init_color( struct gl_context * ctx );
+
+
+static inline void
+_mesa_flush_vertices_for_blend_state(struct gl_context *ctx)
+{
+   /* The advanced blend mode needs _NEW_COLOR to update the state constant,
+    * so we have to set it. This is inefficient.
+    * This should only be done for states that affect the state constant.
+    * It shouldn't be done for other blend states.
+    */
+   if (_mesa_has_KHR_blend_equation_advanced(ctx) ||
+       !ctx->DriverFlags.NewBlend) {
+      FLUSH_VERTICES(ctx, _NEW_COLOR);
+   } else {
+      FLUSH_VERTICES(ctx, 0);
+   }
+   ctx->NewDriverState |= ctx->DriverFlags.NewBlend;
+}
 
 #endif

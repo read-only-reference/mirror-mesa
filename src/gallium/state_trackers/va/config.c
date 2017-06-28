@@ -29,6 +29,7 @@
 #include "pipe/p_screen.h"
 
 #include "util/u_video.h"
+#include "util/u_memory.h"
 
 #include "vl/vl_winsys.h"
 
@@ -100,6 +101,8 @@ vlVaQueryConfigEntrypoints(VADriverContextP ctx, VAProfile profile,
 
    if (num_entrypoints == 0)
       return VA_STATUS_ERROR_UNSUPPORTED_PROFILE;
+
+   assert(*num_entrypoints <= ctx->max_entrypoints);
 
    return VA_STATUS_SUCCESS;
 }

@@ -525,6 +525,8 @@ _mesa_bind_pipeline(struct gl_context *ctx,
     *     considered current."
     */
    if (&ctx->Shader != ctx->_Shader) {
+      FLUSH_VERTICES(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
+
       if (pipe != NULL) {
          /* Bound the pipeline to the current program and
           * restore the pipeline state
@@ -535,8 +537,6 @@ _mesa_bind_pipeline(struct gl_context *ctx,
          _mesa_reference_pipeline_object(ctx, &ctx->_Shader,
                                          ctx->Pipeline.Default);
       }
-
-      FLUSH_VERTICES(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
 
       for (i = 0; i < MESA_SHADER_STAGES; i++) {
          struct gl_program *prog = ctx->_Shader->CurrentProgram[i];
@@ -603,20 +603,12 @@ static void
 create_program_pipelines(struct gl_context *ctx, GLsizei n, GLuint *pipelines,
                          bool dsa)
 {
-   const char *func;
+   const char *func = dsa ? "glCreateProgramPipelines" : "glGenProgramPipelines";
    GLuint first;
    GLint i;
 
-   func = dsa ? "glCreateProgramPipelines" : "glGenProgramPipelines";
-
-   if (n < 0) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "%s (n < 0)", func);
+   if (!pipelines)
       return;
-   }
-
-   if (!pipelines) {
-      return;
-   }
 
    first = _mesa_HashFindFreeKeyBlock(ctx->Pipeline.Objects, n);
 
@@ -638,7 +630,27 @@ create_program_pipelines(struct gl_context *ctx, GLsizei n, GLuint *pipelines,
       save_pipeline_object(ctx, obj);
       pipelines[i] = first + i;
    }
+}
 
+static void
+create_program_pipelines_err(struct gl_context *ctx, GLsizei n,
+                             GLuint *pipelines, bool dsa)
+{
+   const char *func = dsa ? "glCreateProgramPipelines" : "glGenProgramPipelines";
+
+   if (n < 0) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "%s (n < 0)", func);
+      return;
+   }
+
+   create_program_pipelines(ctx, n, pipelines, dsa);
+}
+
+void GLAPIENTRY
+_mesa_GenProgramPipelines_no_error(GLsizei n, GLuint *pipelines)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   create_program_pipelines(ctx, n, pipelines, false);
 }
 
 void GLAPIENTRY
@@ -649,7 +661,14 @@ _mesa_GenProgramPipelines(GLsizei n, GLuint *pipelines)
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGenProgramPipelines(%d, %p)\n", n, pipelines);
 
-   create_program_pipelines(ctx, n, pipelines, false);
+   create_program_pipelines_err(ctx, n, pipelines, false);
+}
+
+void GLAPIENTRY
+_mesa_CreateProgramPipelines_no_error(GLsizei n, GLuint *pipelines)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   create_program_pipelines(ctx, n, pipelines, true);
 }
 
 void GLAPIENTRY
@@ -660,7 +679,7 @@ _mesa_CreateProgramPipelines(GLsizei n, GLuint *pipelines)
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glCreateProgramPipelines(%d, %p)\n", n, pipelines);
 
-   create_program_pipelines(ctx, n, pipelines, true);
+   create_program_pipelines_err(ctx, n, pipelines, true);
 }
 
 /**

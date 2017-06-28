@@ -56,10 +56,23 @@ intel_miptree_create_for_teximage(struct brw_context *brw,
 {
    GLuint lastLevel;
    int width, height, depth;
+   unsigned old_width = 0, old_height = 0, old_depth = 0;
    const struct intel_mipmap_tree *old_mt = intelObj->mt;
    const unsigned level = intelImage->base.Base.Level;
 
    intel_get_image_dims(&intelImage->base.Base, &width, &height, &depth);
+
+   if (old_mt && old_mt->surf.size > 0) {
+      old_width = old_mt->surf.logical_level0_px.width;
+      old_height = old_mt->surf.logical_level0_px.height;
+      old_depth = old_mt->surf.dim == ISL_SURF_DIM_3D ?
+                     old_mt->surf.logical_level0_px.depth :
+                     old_mt->surf.logical_level0_px.array_len;
+   } else if (old_mt) {
+      old_width = old_mt->logical_width0;
+      old_height = old_mt->logical_height0;
+      old_depth = old_mt->logical_depth0;
+   }
 
    DBG("%s\n", __func__);
 
@@ -72,19 +85,19 @@ intel_miptree_create_for_teximage(struct brw_context *brw,
       assert(level == 0);
       break;
    case GL_TEXTURE_3D:
-      depth = old_mt ? get_base_dim(old_mt->logical_depth0, depth, level) :
+      depth = old_mt ? get_base_dim(old_depth, depth, level) :
                        depth << level;
       /* Fall through */
    case GL_TEXTURE_2D:
    case GL_TEXTURE_2D_ARRAY:
    case GL_TEXTURE_CUBE_MAP:
    case GL_TEXTURE_CUBE_MAP_ARRAY:
-      height = old_mt ? get_base_dim(old_mt->logical_height0, height, level) :
+      height = old_mt ? get_base_dim(old_height, height, level) :
                         height << level;
       /* Fall through */
    case GL_TEXTURE_1D:
    case GL_TEXTURE_1D_ARRAY:
-      width = old_mt ? get_base_dim(old_mt->logical_width0, width, level) :
+      width = old_mt ? get_base_dim(old_width, width, level) :
                        width << level;
       break;
    default:
@@ -251,15 +264,33 @@ static struct intel_mipmap_tree *
 create_mt_for_dri_image(struct brw_context *brw,
                         GLenum target, __DRIimage *image)
 {
+   struct gl_context *ctx = &brw->ctx;
    struct intel_mipmap_tree *mt;
    uint32_t draw_x, draw_y;
+   mesa_format format = image->format;
+
+   if (!ctx->TextureFormatSupported[format]) {
+      /* The texture storage paths in core Mesa detect if the driver does not
+       * support the user-requested format, and then searches for a
+       * fallback format. The DRIimage code bypasses core Mesa, though. So we
+       * do the fallbacks here for important formats.
+       *
+       * We must support DRM_FOURCC_XBGR8888 textures because the Android
+       * framework produces HAL_PIXEL_FORMAT_RGBX8888 winsys surfaces, which
+       * the Chrome OS compositor consumes as dma_buf EGLImages.
+       */
+      format = _mesa_format_fallback_rgbx_to_rgba(format);
+   }
+
+   if (!ctx->TextureFormatSupported[format])
+      return NULL;
 
    /* Disable creation of the texture's aux buffers because the driver exposes
     * no EGL API to manage them. That is, there is no API for resolving the aux
     * buffer's content to the main buffer nor for invalidating the aux buffer's
     * content.
     */
-   mt = intel_miptree_create_for_bo(brw, image->bo, image->format,
+   mt = intel_miptree_create_for_bo(brw, image->bo, format,
                                     0, image->width, image->height, 1,
                                     image->pitch,
                                     MIPTREE_LAYOUT_DISABLE_AUX);
@@ -469,8 +500,6 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
    /* The miptree's buffer. */
    struct brw_bo *bo;
 
-   int error = 0;
-
    uint32_t cpp;
    mem_copy_fn mem_copy = NULL;
 
@@ -520,10 +549,24 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
       return false;
    }
 
+   /* tiled_to_linear() assumes that if the object is swizzled, it is using
+    * I915_BIT6_SWIZZLE_9_10 for X and I915_BIT6_SWIZZLE_9 for Y.  This is only
+    * true on gen5 and above.
+    *
+    * The killer on top is that some gen4 have an L-shaped swizzle mode, where
+    * parts of the memory aren't swizzled at all. Userspace just can't handle
+    * that.
+    */
+   if (brw->gen < 5 && brw->has_swizzling)
+      return false;
+
+   int level = texImage->Level + texImage->TexObject->MinLevel;
+
    /* Since we are going to write raw data to the miptree, we need to resolve
     * any pending fast color clears before we start.
     */
-   intel_miptree_all_slices_resolve_color(brw, image->mt, 0);
+   assert(image->mt->logical_depth0 == 1);
+   intel_miptree_access_raw(brw, image->mt, level, 0, true);
 
    bo = image->mt->bo;
 
@@ -532,8 +575,8 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
       intel_batchbuffer_flush(brw);
    }
 
-   error = brw_bo_map(brw, bo, false /* write enable */);
-   if (error) {
+   void *map = brw_bo_map(brw, bo, MAP_READ | MAP_RAW);
+   if (map == NULL) {
       DBG("%s: failed to map bo\n", __func__);
       return false;
    }
@@ -548,8 +591,6 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
        packing->Alignment, packing->RowLength, packing->SkipPixels,
        packing->SkipRows);
 
-   int level = texImage->Level + texImage->TexObject->MinLevel;
-
    /* Adjust x and y offset based on miplevel */
    xoffset += image->mt->level[level].level_x;
    yoffset += image->mt->level[level].level_y;
@@ -558,7 +599,7 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
       xoffset * cpp, (xoffset + width) * cpp,
       yoffset, yoffset + height,
       pixels - (ptrdiff_t) yoffset * dst_pitch - (ptrdiff_t) xoffset * cpp,
-      bo->virtual,
+      map,
       dst_pitch, image->mt->pitch,
       brw->has_swizzling,
       image->mt->tiling,

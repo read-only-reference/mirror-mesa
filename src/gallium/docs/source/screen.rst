@@ -392,6 +392,10 @@ The integer capabilities:
 * ``PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX``: Whether a buffer with just
   PIPE_BIND_CONSTANT_BUFFER can be legally passed to set_vertex_buffers.
 * ``PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION``: As the name says.
+* ``PIPE_CAP_POST_DEPTH_COVERAGE``: whether
+  ``TGSI_PROPERTY_FS_POST_DEPTH_COVERAGE`` is supported.
+* ``PIPE_CAP_BINDLESS_TEXTURE``: Whether bindless texture operations are
+  supported.
 
 
 .. _pipe_capf:
@@ -622,16 +626,25 @@ get_name
 
 Returns an identifying name for the screen.
 
+The returned string should remain valid and immutable for the lifetime of
+pipe_screen.
+
 get_vendor
 ^^^^^^^^^^
 
 Returns the screen vendor.
+
+The returned string should remain valid and immutable for the lifetime of
+pipe_screen.
 
 get_device_vendor
 ^^^^^^^^^^^^^^^^^
 
 Returns the actual vendor of the device driving the screen
 (as opposed to the driver vendor).
+
+The returned string should remain valid and immutable for the lifetime of
+pipe_screen.
 
 .. _get_param:
 

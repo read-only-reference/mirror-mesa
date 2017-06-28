@@ -128,6 +128,12 @@ swr_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    /* Set up frontend state
     * XXX setup provokingVertex & topologyProvokingVertex */
    SWR_FRONTEND_STATE feState = {0};
+
+   feState.vsVertexSize =
+      VERTEX_ATTRIB_START_SLOT +
+      + ctx->vs->info.base.num_outputs
+      - (ctx->vs->info.base.writes_position ? 1 : 0);
+
    if (ctx->rasterizer->flatshade_first) {
       feState.provokingVertex = {1, 0, 0};
    } else {
@@ -213,6 +219,25 @@ swr_finish(struct pipe_context *pipe)
    swr_flush(pipe, &fence, 0);
    swr_fence_finish(pipe->screen, NULL, fence, 0);
    swr_fence_reference(pipe->screen, &fence, NULL);
+}
+
+/*
+ * Invalidate tiles so they can be reloaded back when needed
+ */
+void
+swr_invalidate_render_target(struct pipe_context *pipe,
+                             uint32_t attachment,
+                             uint16_t width, uint16_t height)
+{
+   struct swr_context *ctx = swr_context(pipe);
+
+   /* grab the rect from the passed in arguments */
+   swr_update_draw_context(ctx);
+   SWR_RECT full_rect =
+      {0, 0, (int32_t)width, (int32_t)height};
+   SwrInvalidateTiles(ctx->swrContext,
+                      1 << attachment,
+                      full_rect);
 }
 
 

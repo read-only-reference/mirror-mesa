@@ -43,9 +43,7 @@ i965_FILES = \
 	brw_primitive_restart.c \
 	brw_queryobj.c \
 	brw_reset.c \
-	brw_sampler_state.c \
 	brw_sf.c \
-	brw_sf_state.c \
 	brw_state_batch.c \
 	brw_state.h \
 	brw_state_upload.c \
@@ -67,6 +65,7 @@ i965_FILES = \
 	brw_wm.h \
 	brw_wm_state.c \
 	brw_wm_surface_state.c \
+	gen4_blorp_exec.h \
 	gen6_clip_state.c \
 	gen6_constant_state.c \
 	gen6_depth_state.c \
@@ -108,8 +107,6 @@ i965_FILES = \
 	intel_pixel_draw.c \
 	intel_pixel.h \
 	intel_pixel_read.c \
-	intel_resolve_map.c \
-	intel_resolve_map.h \
 	intel_screen.c \
 	intel_screen.h \
 	intel_state.c \
@@ -157,6 +154,28 @@ i965_gen9_FILES = \
 	genX_blorp_exec.c \
 	genX_state_upload.c
 
+i965_gen10_FILES = \
+	genX_blorp_exec.c \
+	genX_state_upload.c
+
 i965_oa_GENERATED_FILES = \
 	brw_oa_hsw.h \
-	brw_oa_hsw.c
+	brw_oa_hsw.c \
+	brw_oa_bdw.h \
+	brw_oa_bdw.c \
+	brw_oa_chv.h \
+	brw_oa_chv.c \
+	brw_oa_sklgt2.h \
+	brw_oa_sklgt2.c \
+	brw_oa_sklgt3.h \
+	brw_oa_sklgt3.c \
+	brw_oa_sklgt4.h \
+	brw_oa_sklgt4.c \
+	brw_oa_bxt.h \
+	brw_oa_bxt.c \
+	brw_oa_kblgt2.h \
+	brw_oa_kblgt2.c \
+	brw_oa_kblgt3.h \
+	brw_oa_kblgt3.c \
+	brw_oa_glk.h \
+	brw_oa_glk.c

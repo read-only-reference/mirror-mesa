@@ -315,7 +315,7 @@ static void radv_pick_resolve_method_images(struct radv_image *src_image,
 
 {
 	if (dest_image->surface.micro_tile_mode != src_image->surface.micro_tile_mode) {
-		if (dest_image->surface.level[0].dcc_enabled)
+		if (dest_image->surface.num_dcc_levels > 0)
 			*method = RESOLVE_FRAGMENT;
 		else
 			*method = RESOLVE_COMPUTE;
@@ -458,8 +458,7 @@ void radv_CmdResolveImage(
 							     .baseArrayLayer = src_base_layer + layer,
 							     .layerCount = 1,
 						     },
-							     },
-					     cmd_buffer, VK_IMAGE_USAGE_SAMPLED_BIT);
+					     });
 
 			struct radv_image_view dest_iview;
 			radv_image_view_init(&dest_iview, cmd_buffer->device,
@@ -475,8 +474,7 @@ void radv_CmdResolveImage(
 							     .baseArrayLayer = dest_base_layer + layer,
 							     .layerCount = 1,
 						     },
-							     },
-					     cmd_buffer, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+					      });
 
 			VkFramebuffer fb_h;
 			radv_CreateFramebuffer(device_h,

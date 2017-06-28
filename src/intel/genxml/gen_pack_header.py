@@ -8,6 +8,7 @@ import xml.parsers.expat
 import re
 import sys
 import copy
+import textwrap
 
 license =  """/*
  * Copyright (C) 2016 Intel Corporation
@@ -467,13 +468,13 @@ class Group(object):
 
             if dw.size == 32:
                 if dw.address:
-                    print("   dw[%d] = __gen_combine_address(data, &dw[%d], values->%s, %s);" % (index, index, dw.address.name, v))
+                    print("   dw[%d] = __gen_combine_address(data, &dw[%d], values->%s, %s);" % (index, index, dw.address.name + field.dim, v))
                 continue
 
             if dw.address:
                 v_address = "v%d_address" % index
                 print("   const uint64_t %s =\n      __gen_combine_address(data, &dw[%d], values->%s, %s);" %
-                      (v_address, index, dw.address.name, v))
+                      (v_address, index, dw.address.name + field.dim, v))
                 v = v_address
 
             print("   dw[%d] = %s;" % (index, v))
@@ -578,8 +579,12 @@ class Parser(object):
 
     def emit_pack_function(self, name, group):
         name = self.gen_prefix(name)
-        print("static inline void\n%s_pack(__gen_user_data *data, void * restrict dst,\n%sconst struct %s * restrict values)\n{" %
-              (name, ' ' * (len(name) + 6), name))
+        print(textwrap.dedent("""\
+            static inline void
+            %s_pack(__attribute__((unused)) __gen_user_data *data,
+                  %s__attribute__((unused)) void * restrict dst,
+                  %s__attribute__((unused)) const struct %s * restrict values)
+            {""") % (name, ' ' * len(name), ' ' * len(name), name))
 
         (dwords, length) = group.collect_dwords_and_length()
         if length:

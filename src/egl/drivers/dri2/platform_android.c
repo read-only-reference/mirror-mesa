@@ -64,9 +64,7 @@ static const struct droid_yuv_format droid_yuv_formats[] = {
 static int
 get_fourcc_yuv(int native, int is_ycrcb, int chroma_step)
 {
-   int i;
-
-   for (i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
+   for (int i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
       if (droid_yuv_formats[i].native == native &&
           droid_yuv_formats[i].is_ycrcb == is_ycrcb &&
           droid_yuv_formats[i].chroma_step == chroma_step)
@@ -78,9 +76,7 @@ get_fourcc_yuv(int native, int is_ycrcb, int chroma_step)
 static bool
 is_yuv(int native)
 {
-   int i;
-
-   for (i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
+   for (int i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
       if (droid_yuv_formats[i].native == native)
          return true;
 
@@ -299,9 +295,8 @@ droid_free_local_buffers(struct dri2_egl_surface *dri2_surf)
 {
    struct dri2_egl_display *dri2_dpy =
       dri2_egl_display(dri2_surf->base.Resource.Display);
-   int i;
 
-   for (i = 0; i < ARRAY_SIZE(dri2_surf->local_buffers); i++) {
+   for (int i = 0; i < ARRAY_SIZE(dri2_surf->local_buffers); i++) {
       if (dri2_surf->local_buffers[i]) {
          dri2_dpy->dri2->releaseBuffer(dri2_dpy->dri_screen,
                dri2_surf->local_buffers[i]);
@@ -614,10 +609,10 @@ droid_query_buffer_age(_EGLDriver *drv,
 
    if (update_buffers(dri2_surf) < 0) {
       _eglError(EGL_BAD_ALLOC, "droid_query_buffer_age");
-      return 0;
+      return -1;
    }
 
-   return dri2_surf->back->age;
+   return dri2_surf->back ? dri2_surf->back->age : 0;
 }
 
 static EGLBoolean
@@ -655,6 +650,43 @@ droid_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 
    return EGL_TRUE;
 }
+
+#if ANDROID_API_LEVEL >= 23
+static EGLBoolean
+droid_set_damage_region(_EGLDriver *drv,
+                        _EGLDisplay *disp,
+                        _EGLSurface *draw, const EGLint* rects, EGLint n_rects)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
+   android_native_rect_t* droid_rects = NULL;
+   int ret;
+
+   if (n_rects == 0)
+      return EGL_TRUE;
+
+   droid_rects = malloc(n_rects * sizeof(android_native_rect_t));
+   if (droid_rects == NULL)
+     return _eglError(EGL_BAD_ALLOC, "eglSetDamageRegionKHR");
+
+   for (EGLint num_drects = 0; num_drects < n_rects; num_drects++) {
+      EGLint i = num_drects * 4;
+      droid_rects[num_drects].left = rects[i];
+      droid_rects[num_drects].bottom = rects[i + 1];
+      droid_rects[num_drects].right = rects[i] + rects[i + 2];
+      droid_rects[num_drects].top = rects[i + 1] + rects[i + 3];
+   }
+
+   /*
+    * XXX/TODO: Need to check for other return values
+    */
+
+   ret = native_window_set_surface_damage(dri2_surf->window, droid_rects, n_rects);
+   free(droid_rects);
+
+   return ret == 0 ? EGL_TRUE : EGL_FALSE;
+}
+#endif
 
 static _EGLImage *
 droid_create_image_from_prime_fd_yuv(_EGLDisplay *disp, _EGLContext *ctx,
@@ -713,7 +745,7 @@ droid_create_image_from_prime_fd_yuv(_EGLDisplay *disp, _EGLContext *ctx,
    }
 
    if (ycbcr.chroma_step == 2) {
-      /* Semi-planar Y + CbCr or Y + CbCr format. */
+      /* Semi-planar Y + CbCr or Y + CrCb format. */
       const EGLint attr_list_2plane[] = {
          EGL_WIDTH, buf->width,
          EGL_HEIGHT, buf->height,
@@ -809,10 +841,7 @@ droid_create_image_from_name(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   if (!_eglInitImage(&dri2_img->base, disp)) {
-      free(dri2_img);
-      return NULL;
-   }
+   _eglInitImage(&dri2_img->base, disp);
 
    dri2_img->dri_image =
       dri2_dpy->image->createImageFromName(dri2_dpy->dri_screen,
@@ -912,10 +941,10 @@ static int
 droid_get_buffers_parse_attachments(struct dri2_egl_surface *dri2_surf,
                                     unsigned int *attachments, int count)
 {
-   int num_buffers = 0, i;
+   int num_buffers = 0;
 
    /* fill dri2_surf->buffers */
-   for (i = 0; i < count * 2; i += 2) {
+   for (int i = 0; i < count * 2; i += 2) {
       __DRIbuffer *buf, *local;
 
       assert(num_buffers < ARRAY_SIZE(dri2_surf->buffers));
@@ -1000,42 +1029,60 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
       { HAL_PIXEL_FORMAT_RGB_565,   { 0x0000f800, 0x000007e0, 0x0000001f, 0x00000000 } },
       { HAL_PIXEL_FORMAT_BGRA_8888, { 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 } },
    };
-   EGLint config_attrs[] = {
-     EGL_NATIVE_VISUAL_ID,   0,
-     EGL_NATIVE_VISUAL_TYPE, 0,
-     EGL_FRAMEBUFFER_TARGET_ANDROID, EGL_TRUE,
-     EGL_RECORDABLE_ANDROID, EGL_TRUE,
-     EGL_NONE
-   };
+
    unsigned int format_count[ARRAY_SIZE(visuals)] = { 0 };
-   int count, i, j;
+   int config_count = 0;
 
-   count = 0;
-   for (i = 0; dri2_dpy->driver_configs[i]; i++) {
-      const EGLint surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
-      struct dri2_egl_config *dri2_conf;
+   /* The nesting of loops is significant here. Also significant is the order
+    * of the HAL pixel formats. Many Android apps (such as Google's official
+    * NDK GLES2 example app), and even portions the core framework code (such
+    * as SystemServiceManager in Nougat), incorrectly choose their EGLConfig.
+    * They neglect to match the EGLConfig's EGL_NATIVE_VISUAL_ID against the
+    * window's native format, and instead choose the first EGLConfig whose
+    * channel sizes match those of the native window format while ignoring the
+    * channel *ordering*.
+    *
+    * We can detect such buggy clients in logcat when they call
+    * eglCreateSurface, by detecting the mismatch between the EGLConfig's
+    * format and the window's format.
+    *
+    * As a workaround, we generate EGLConfigs such that all EGLConfigs for HAL
+    * pixel format i precede those for HAL pixel format i+1. In my
+    * (chadversary) testing on Android Nougat, this was good enough to pacify
+    * the buggy clients.
+    */
+   for (int i = 0; i < ARRAY_SIZE(visuals); i++) {
+      for (int j = 0; dri2_dpy->driver_configs[j]; j++) {
+         const EGLint surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
 
-      for (j = 0; j < ARRAY_SIZE(visuals); j++) {
-         config_attrs[1] = visuals[j].format;
-         config_attrs[3] = visuals[j].format;
+         const EGLint config_attrs[] = {
+           EGL_NATIVE_VISUAL_ID,   visuals[i].format,
+           EGL_NATIVE_VISUAL_TYPE, visuals[i].format,
+           EGL_FRAMEBUFFER_TARGET_ANDROID, EGL_TRUE,
+           EGL_RECORDABLE_ANDROID, EGL_TRUE,
+           EGL_NONE
+         };
 
-         dri2_conf = dri2_add_config(dpy, dri2_dpy->driver_configs[i],
-               count + 1, surface_type, config_attrs, visuals[j].rgba_masks);
+         struct dri2_egl_config *dri2_conf =
+            dri2_add_config(dpy, dri2_dpy->driver_configs[j],
+                            config_count + 1, surface_type, config_attrs,
+                            visuals[i].rgba_masks);
          if (dri2_conf) {
-            count++;
-            format_count[j]++;
+            if (dri2_conf->base.ConfigID == config_count + 1)
+               config_count++;
+            format_count[i]++;
          }
       }
    }
 
-   for (i = 0; i < ARRAY_SIZE(format_count); i++) {
+   for (int i = 0; i < ARRAY_SIZE(format_count); i++) {
       if (!format_count[i]) {
          _eglLog(_EGL_DEBUG, "No DRI config supports native format 0x%x",
                  visuals[i].format);
       }
    }
 
-   return (count != 0);
+   return (config_count != 0);
 }
 
 static int
@@ -1066,6 +1113,11 @@ static const struct dri2_egl_display_vtbl droid_display_vtbl = {
    .swap_buffers = droid_swap_buffers,
    .swap_buffers_with_damage = dri2_fallback_swap_buffers_with_damage,
    .swap_buffers_region = dri2_fallback_swap_buffers_region,
+#if ANDROID_API_LEVEL >= 23
+   .set_damage_region = droid_set_damage_region,
+#else
+   .set_damage_region = dri2_fallback_set_damage_region,
+#endif
    .post_sub_buffer = dri2_fallback_post_sub_buffer,
    .copy_buffers = dri2_fallback_copy_buffers,
    .query_buffer_age = droid_query_buffer_age,
@@ -1176,6 +1228,9 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    dpy->Extensions.ANDROID_image_native_buffer = EGL_TRUE;
    dpy->Extensions.ANDROID_recordable = EGL_TRUE;
    dpy->Extensions.EXT_buffer_age = EGL_TRUE;
+#if ANDROID_API_LEVEL >= 23
+   dpy->Extensions.KHR_partial_update = EGL_TRUE;
+#endif
 
    /* Fill vtbl last to prevent accidentally calling virtual function during
     * initialization.

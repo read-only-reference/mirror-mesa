@@ -60,8 +60,10 @@ brw_upload_initial_gpu_state(struct brw_context *brw)
 
    brw_upload_invariant_state(brw);
 
-   /* Recommended optimization for Victim Cache eviction in pixel backend. */
-   if (brw->gen >= 9) {
+   if (brw->gen == 9) {
+      /* Recommended optimizations for Victim Cache eviction and floating
+       * point blending.
+       */
       BEGIN_BATCH(3);
       OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
       OUT_BATCH(GEN7_CACHE_MODE_1);
@@ -136,7 +138,9 @@ void brw_init_state( struct brw_context *brw )
 
    brw_init_caches(brw);
 
-   if (brw->gen >= 9)
+   if (brw->gen >= 10)
+      gen10_init_atoms(brw);
+   else if (brw->gen >= 9)
       gen9_init_atoms(brw);
    else if (brw->gen >= 8)
       gen8_init_atoms(brw);
@@ -248,7 +252,6 @@ static struct dirty_bit_map mesa_bits[] = {
    DEFINE_BIT(_NEW_TRACK_MATRIX),
    DEFINE_BIT(_NEW_PROGRAM),
    DEFINE_BIT(_NEW_PROGRAM_CONSTANTS),
-   DEFINE_BIT(_NEW_BUFFER_OBJECT),
    DEFINE_BIT(_NEW_FRAG_CLAMP),
    /* Avoid sign extension problems. */
    {(unsigned) _NEW_VARYING_VP_INPUTS, "_NEW_VARYING_VP_INPUTS", 0},

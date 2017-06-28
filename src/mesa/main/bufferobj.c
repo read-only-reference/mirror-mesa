@@ -1229,6 +1229,16 @@ _mesa_buffer_unmap_all_mappings(struct gl_context *ctx,
 /**********************************************************************/
 
 void GLAPIENTRY
+_mesa_BindBuffer_no_error(GLenum target, GLuint buffer)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   struct gl_buffer_object **bindTarget = get_buffer_target(ctx, target);
+   bind_buffer_object(ctx, bindTarget, buffer);
+}
+
+
+void GLAPIENTRY
 _mesa_BindBuffer(GLenum target, GLuint buffer)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -1406,25 +1416,13 @@ _mesa_DeleteBuffers(GLsizei n, const GLuint *ids)
  * driver internals.
  */
 static void
-create_buffers(GLsizei n, GLuint *buffers, bool dsa)
+create_buffers(struct gl_context *ctx, GLsizei n, GLuint *buffers, bool dsa)
 {
-   GET_CURRENT_CONTEXT(ctx);
    GLuint first;
    struct gl_buffer_object *buf;
 
-   const char *func = dsa ? "glCreateBuffers" : "glGenBuffers";
-
-   if (MESA_VERBOSE & VERBOSE_API)
-      _mesa_debug(ctx, "%s(%d)\n", func, n);
-
-   if (n < 0) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "%s(n %d < 0)", func, n);
+   if (!buffers)
       return;
-   }
-
-   if (!buffers) {
-      return;
-   }
 
    /*
     * This must be atomic (generation and allocation of buffer object IDs)
@@ -1443,7 +1441,7 @@ create_buffers(GLsizei n, GLuint *buffers, bool dsa)
          assert(ctx->Driver.NewBufferObject);
          buf = ctx->Driver.NewBufferObject(ctx, buffers[i]);
          if (!buf) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "%s", func);
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCreateBuffers");
             _mesa_HashUnlockMutex(ctx->Shared->BufferObjects);
             return;
          }
@@ -1457,6 +1455,23 @@ create_buffers(GLsizei n, GLuint *buffers, bool dsa)
    _mesa_HashUnlockMutex(ctx->Shared->BufferObjects);
 }
 
+
+static void
+create_buffers_err(struct gl_context *ctx, GLsizei n, GLuint *buffers, bool dsa)
+{
+   const char *func = dsa ? "glCreateBuffers" : "glGenBuffers";
+
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "%s(%d)\n", func, n);
+
+   if (n < 0) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "%s(n %d < 0)", func, n);
+      return;
+   }
+
+   create_buffers(ctx, n, buffers, dsa);
+}
+
 /**
  * Generate a set of unique buffer object IDs and store them in \c buffers.
  *
@@ -1464,9 +1479,18 @@ create_buffers(GLsizei n, GLuint *buffers, bool dsa)
  * \param buffers  Array of \c n locations to store the IDs.
  */
 void GLAPIENTRY
+_mesa_GenBuffers_no_error(GLsizei n, GLuint *buffers)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   create_buffers(ctx, n, buffers, false);
+}
+
+
+void GLAPIENTRY
 _mesa_GenBuffers(GLsizei n, GLuint *buffers)
 {
-   create_buffers(n, buffers, false);
+   GET_CURRENT_CONTEXT(ctx);
+   create_buffers_err(ctx, n, buffers, false);
 }
 
 /**
@@ -1476,9 +1500,18 @@ _mesa_GenBuffers(GLsizei n, GLuint *buffers)
  * \param buffers  Array of \c n locations to store the IDs.
  */
 void GLAPIENTRY
+_mesa_CreateBuffers_no_error(GLsizei n, GLuint *buffers)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   create_buffers(ctx, n, buffers, true);
+}
+
+
+void GLAPIENTRY
 _mesa_CreateBuffers(GLsizei n, GLuint *buffers)
 {
-   create_buffers(n, buffers, true);
+   GET_CURRENT_CONTEXT(ctx);
+   create_buffers_err(ctx, n, buffers, true);
 }
 
 
@@ -1552,7 +1585,7 @@ validate_buffer_storage(struct gl_context *ctx,
       return false;
    }
 
-   if (bufObj->Immutable) {
+   if (bufObj->Immutable || bufObj->HandleAllocated) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "%s(immutable)", func);
       return false;
    }
@@ -1569,7 +1602,7 @@ buffer_storage(struct gl_context *ctx, struct gl_buffer_object *bufObj,
    /* Unmap the existing buffer.  We'll replace it now.  Not an error. */
    _mesa_buffer_unmap_all_mappings(ctx, bufObj);
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFER_OBJECT);
+   FLUSH_VERTICES(ctx, 0);
 
    bufObj->Written = GL_TRUE;
    bufObj->Immutable = GL_TRUE;
@@ -1716,7 +1749,7 @@ _mesa_buffer_data(struct gl_context *ctx, struct gl_buffer_object *bufObj,
       return;
    }
 
-   if (bufObj->Immutable) {
+   if (bufObj->Immutable || bufObj->HandleAllocated) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "%s(immutable)", func);
       return;
    }
@@ -1724,7 +1757,7 @@ _mesa_buffer_data(struct gl_context *ctx, struct gl_buffer_object *bufObj,
    /* Unmap the existing buffer.  We'll replace it now.  Not an error. */
    _mesa_buffer_unmap_all_mappings(ctx, bufObj);
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFER_OBJECT);
+   FLUSH_VERTICES(ctx, 0);
 
    bufObj->Written = GL_TRUE;
    bufObj->MinMaxCacheDirty = true;
@@ -4237,6 +4270,25 @@ _mesa_BindBuffersBase(GLenum target, GLuint first, GLsizei count,
    }
 }
 
+static ALWAYS_INLINE void
+invalidate_buffer_subdata(struct gl_context *ctx,
+                          struct gl_buffer_object *bufObj, GLintptr offset,
+                          GLsizeiptr length)
+{
+   if (ctx->Driver.InvalidateBufferSubData)
+      ctx->Driver.InvalidateBufferSubData(ctx, bufObj, offset, length);
+}
+
+void GLAPIENTRY
+_mesa_InvalidateBufferSubData_no_error(GLuint buffer, GLintptr offset,
+                                       GLsizeiptr length)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   struct gl_buffer_object *bufObj = _mesa_lookup_bufferobj(ctx, buffer);
+   invalidate_buffer_subdata(ctx, bufObj, offset, length);
+}
+
 void GLAPIENTRY
 _mesa_InvalidateBufferSubData(GLuint buffer, GLintptr offset,
                               GLsizeiptr length)
@@ -4286,8 +4338,16 @@ _mesa_InvalidateBufferSubData(GLuint buffer, GLintptr offset,
       return;
    }
 
-   if (ctx->Driver.InvalidateBufferSubData)
-      ctx->Driver.InvalidateBufferSubData(ctx, bufObj, offset, length);
+   invalidate_buffer_subdata(ctx, bufObj, offset, length);
+}
+
+void GLAPIENTRY
+_mesa_InvalidateBufferData_no_error(GLuint buffer)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   struct gl_buffer_object *bufObj =_mesa_lookup_bufferobj(ctx, buffer);
+   invalidate_buffer_subdata(ctx, bufObj, 0, bufObj->Size);
 }
 
 void GLAPIENTRY
@@ -4324,8 +4384,7 @@ _mesa_InvalidateBufferData(GLuint buffer)
       return;
    }
 
-   if (ctx->Driver.InvalidateBufferSubData)
-      ctx->Driver.InvalidateBufferSubData(ctx, bufObj, 0, bufObj->Size);
+   invalidate_buffer_subdata(ctx, bufObj, 0, bufObj->Size);
 }
 
 static void

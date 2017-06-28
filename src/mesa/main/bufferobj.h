@@ -156,13 +156,22 @@ _mesa_ClearBufferSubData_sw(struct gl_context *ctx,
  * API functions
  */
 void GLAPIENTRY
+_mesa_BindBuffer_no_error(GLenum target, GLuint buffer);
+
+void GLAPIENTRY
 _mesa_BindBuffer(GLenum target, GLuint buffer);
 
 void GLAPIENTRY
 _mesa_DeleteBuffers(GLsizei n, const GLuint * buffer);
 
 void GLAPIENTRY
+_mesa_GenBuffers_no_error(GLsizei n, GLuint *buffers);
+
+void GLAPIENTRY
 _mesa_GenBuffers(GLsizei n, GLuint *buffers);
+
+void GLAPIENTRY
+_mesa_CreateBuffers_no_error(GLsizei n, GLuint *buffers);
 
 void GLAPIENTRY
 _mesa_CreateBuffers(GLsizei n, GLuint *buffers);
@@ -338,9 +347,17 @@ _mesa_BindBuffersRange(GLenum target, GLuint first, GLsizei count,
 void GLAPIENTRY
 _mesa_BindBuffersBase(GLenum target, GLuint first, GLsizei count,
                       const GLuint *buffers);
+
+void GLAPIENTRY
+_mesa_InvalidateBufferSubData_no_error(GLuint buffer, GLintptr offset,
+                                       GLsizeiptr length);
+
 void GLAPIENTRY
 _mesa_InvalidateBufferSubData(GLuint buffer, GLintptr offset,
                               GLsizeiptr length);
+
+void GLAPIENTRY
+_mesa_InvalidateBufferData_no_error(GLuint buffer);
 
 void GLAPIENTRY
 _mesa_InvalidateBufferData(GLuint buffer);

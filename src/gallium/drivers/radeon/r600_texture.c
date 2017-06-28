@@ -240,10 +240,7 @@ static int r600_init_surface(struct r600_common_screen *rscreen,
 		bpe = 4; /* stencil is allocated separately on evergreen */
 	} else {
 		bpe = util_format_get_blocksize(ptex->format);
-		/* align byte per element on dword */
-		if (bpe == 3) {
-			bpe = 4;
-		}
+		assert(util_is_power_of_two(bpe));
 	}
 
 	if (!is_flushed_depth && is_depth) {
@@ -512,7 +509,7 @@ static void r600_degrade_tile_mode_to_linear(struct r600_common_context *rctx,
 	rtex->cb_color_info = new_tex->cb_color_info;
 	rtex->cmask = new_tex->cmask; /* needed even without CMASK */
 
-	assert(!rtex->htile_buffer);
+	assert(!rtex->htile_offset);
 	assert(!rtex->cmask.size);
 	assert(!rtex->fmask.size);
 	assert(!rtex->dcc_offset);
@@ -615,7 +612,6 @@ static void r600_texture_destroy(struct pipe_screen *screen,
 
 	r600_texture_reference(&rtex->flushed_depth_texture, NULL);
 
-	r600_resource_reference(&rtex->htile_buffer, NULL);
 	if (rtex->cmask_buffer != &rtex->resource) {
 	    r600_resource_reference(&rtex->cmask_buffer, NULL);
 	}
@@ -932,33 +928,14 @@ static void r600_texture_get_htile_size(struct r600_common_screen *rscreen,
 static void r600_texture_allocate_htile(struct r600_common_screen *rscreen,
 					struct r600_texture *rtex)
 {
-	uint32_t clear_value;
-
-	if (rscreen->chip_class >= GFX9 || rtex->tc_compatible_htile) {
-		clear_value = 0x0000030F;
-	} else {
+	if (rscreen->chip_class <= VI && !rtex->tc_compatible_htile)
 		r600_texture_get_htile_size(rscreen, rtex);
-		clear_value = 0;
-	}
 
 	if (!rtex->surface.htile_size)
 		return;
 
-	rtex->htile_buffer = (struct r600_resource*)
-		r600_aligned_buffer_create(&rscreen->b,
-					   R600_RESOURCE_FLAG_UNMAPPABLE,
-					   PIPE_USAGE_DEFAULT,
-					   rtex->surface.htile_size,
-					   rtex->surface.htile_alignment);
-	if (rtex->htile_buffer == NULL) {
-		/* this is not a fatal error as we can still keep rendering
-		 * without htile buffer */
-		R600_ERR("Failed to create buffer object for htile buffer.\n");
-	} else {
-		r600_screen_clear_buffer(rscreen, &rtex->htile_buffer->b.b,
-					 0, rtex->surface.htile_size,
-					 clear_value);
-	}
+	rtex->htile_offset = align(rtex->size, rtex->surface.htile_alignment);
+	rtex->size = rtex->htile_offset + rtex->surface.htile_size;
 }
 
 void r600_print_texture_info(struct r600_common_screen *rscreen,
@@ -1007,11 +984,12 @@ void r600_print_texture_info(struct r600_common_screen *rscreen,
 				rtex->surface.u.gfx9.cmask.pipe_aligned);
 		}
 
-		if (rtex->htile_buffer) {
-			fprintf(f, "  HTile: size=%u, alignment=%u, "
+		if (rtex->htile_offset) {
+			fprintf(f, "  HTile: offset=%"PRIu64", size=%"PRIu64", alignment=%u, "
 				"rb_aligned=%u, pipe_aligned=%u\n",
-				rtex->htile_buffer->b.b.width0,
-				rtex->htile_buffer->buf->alignment,
+				rtex->htile_offset,
+				rtex->surface.htile_size,
+				rtex->surface.htile_alignment,
 				rtex->surface.u.gfx9.htile.rb_aligned,
 				rtex->surface.u.gfx9.htile.pipe_aligned);
 		}
@@ -1054,10 +1032,11 @@ void r600_print_texture_info(struct r600_common_screen *rscreen,
 			rtex->cmask.offset, rtex->cmask.size, rtex->cmask.alignment,
 			rtex->cmask.slice_tile_max);
 
-	if (rtex->htile_buffer)
-		fprintf(f, "  HTile: size=%u, alignment=%u, TC_compatible = %u\n",
-			rtex->htile_buffer->b.b.width0,
-			rtex->htile_buffer->buf->alignment,
+	if (rtex->htile_offset)
+		fprintf(f, "  HTile: offset=%"PRIu64", size=%"PRIu64", "
+			"alignment=%u, TC_compatible = %u\n",
+			rtex->htile_offset, rtex->surface.htile_size,
+			rtex->surface.htile_alignment,
 			rtex->tc_compatible_htile);
 
 	if (rtex->dcc_offset) {
@@ -1245,6 +1224,17 @@ r600_texture_create_object(struct pipe_screen *screen,
 					 rtex->cmask.offset, rtex->cmask.size,
 					 0xCCCCCCCC);
 	}
+	if (rtex->htile_offset) {
+		uint32_t clear_value = 0;
+
+		if (rscreen->chip_class >= GFX9 || rtex->tc_compatible_htile)
+			clear_value = 0x0000030F;
+
+		r600_screen_clear_buffer(rscreen, &rtex->resource.b.b,
+					 rtex->htile_offset,
+					 rtex->surface.htile_size,
+					 clear_value);
+	}
 
 	/* Initialize DCC only if the texture is not being imported. */
 	if (!buf && rtex->dcc_offset) {
@@ -1281,6 +1271,8 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 {
 	const struct util_format_description *desc = util_format_description(templ->format);
 	bool force_tiling = templ->flags & R600_RESOURCE_FLAG_FORCE_TILING;
+	bool is_depth_stencil = util_format_is_depth_or_stencil(templ->format) &&
+				!(templ->flags & R600_RESOURCE_FLAG_FLUSHED_DEPTH);
 
 	/* MSAA resources must be 2D tiled. */
 	if (templ->nr_samples > 1)
@@ -1289,6 +1281,14 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 	/* Transfer resources should be linear. */
 	if (templ->flags & R600_RESOURCE_FLAG_TRANSFER)
 		return RADEON_SURF_MODE_LINEAR_ALIGNED;
+
+	/* Avoid Z/S decompress blits by forcing TC-compatible HTILE on VI,
+	 * which requires 2D tiling.
+	 */
+	if (rscreen->chip_class == VI &&
+	    is_depth_stencil &&
+	    (templ->flags & PIPE_RESOURCE_FLAG_TEXTURING_MORE_LIKELY))
+		return RADEON_SURF_MODE_2D;
 
 	/* r600g: force tiling on TEXTURE_2D and TEXTURE_3D compute resources. */
 	if (rscreen->chip_class >= R600 && rscreen->chip_class <= CAYMAN &&
@@ -1300,9 +1300,9 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 	/* Handle common candidates for the linear mode.
 	 * Compressed textures and DB surfaces must always be tiled.
 	 */
-	if (!force_tiling && !util_format_is_compressed(templ->format) &&
-	    (!util_format_is_depth_or_stencil(templ->format) ||
-	     templ->flags & R600_RESOURCE_FLAG_FLUSHED_DEPTH)) {
+	if (!force_tiling &&
+	    !is_depth_stencil &&
+	    !util_format_is_compressed(templ->format)) {
 		if (rscreen->debug_flags & DBG_NO_TILING)
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
@@ -1967,6 +1967,8 @@ static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
 	unsigned level = templ->u.tex.level;
 	unsigned width = u_minify(tex->width0, level);
 	unsigned height = u_minify(tex->height0, level);
+	unsigned width0 = tex->width0;
+	unsigned height0 = tex->height0;
 
 	if (tex->target != PIPE_BUFFER && templ->format != tex->format) {
 		const struct util_format_description *tex_desc
@@ -1985,11 +1987,14 @@ static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
 
 			width = nblks_x * templ_desc->block.width;
 			height = nblks_y * templ_desc->block.height;
+
+			width0 = util_format_get_nblocksx(tex->format, width0);
+			height0 = util_format_get_nblocksy(tex->format, height0);
 		}
 	}
 
 	return r600_create_surface_custom(pipe, tex, templ,
-					  tex->width0, tex->height0,
+					  width0, height0,
 					  width, height);
 }
 
@@ -2406,6 +2411,14 @@ static bool vi_get_fast_clear_parameters(enum pipe_format surface_format,
 	bool main_value = false;
 	bool extra_value = false;
 	int extra_channel;
+
+	/* This is needed to get the correct DCC clear value for luminance formats.
+	 * 1) Get the linear format (because the next step can't handle L8_SRGB).
+	 * 2) Convert luminance to red. (the real hw format for luminance)
+	 */
+	surface_format = util_format_linear(surface_format);
+	surface_format = util_format_luminance_to_red(surface_format);
+
 	const struct util_format_description *desc = util_format_description(surface_format);
 
 	if (desc->block.bits == 128 &&
@@ -2424,7 +2437,8 @@ static bool vi_get_fast_clear_parameters(enum pipe_format surface_format,
 
 	if (surface_format == PIPE_FORMAT_R11G11B10_FLOAT ||
 	    surface_format == PIPE_FORMAT_B5G6R5_UNORM ||
-	    surface_format == PIPE_FORMAT_B5G6R5_SRGB) {
+	    surface_format == PIPE_FORMAT_B5G6R5_SRGB ||
+	    util_format_is_alpha(surface_format)) {
 		extra_channel = -1;
 	} else if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN) {
 		if(r600_translate_colorswap(surface_format, false) <= 1)
@@ -2628,7 +2642,7 @@ static void si_set_optimal_micro_tile_mode(struct r600_common_screen *rscreen,
 void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 				   struct pipe_framebuffer_state *fb,
 				   struct r600_atom *fb_state,
-				   unsigned *buffers, unsigned *dirty_cbufs,
+				   unsigned *buffers, ubyte *dirty_cbufs,
 				   const union pipe_color_union *color)
 {
 	int i;
@@ -2707,10 +2721,6 @@ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 		if (vi_dcc_enabled(tex, 0)) {
 			uint32_t reset_value;
 			bool clear_words_needed;
-
-			/* TODO: fix DCC clear */
-			if (rctx->chip_class >= GFX9)
-				continue;
 
 			if (rctx->screen->debug_flags & DBG_NO_DCC_CLEAR)
 				continue;

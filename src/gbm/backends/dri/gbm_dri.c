@@ -354,15 +354,6 @@ dri_open_driver(struct gbm_dri_device *dri)
       /* not need continue to loop all paths once the driver is found */
       if (dri->driver != NULL)
          break;
-
-#ifdef ANDROID
-      snprintf(path, sizeof path, "%.*s/gallium_dri.so", len, p);
-      dri->driver = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-      if (dri->driver == NULL)
-         sprintf("failed to open %s: %s\n", path, dlerror());
-      else
-         break;
-#endif
    }
 
    if (dri->driver == NULL) {
@@ -932,6 +923,60 @@ gbm_dri_bo_import(struct gbm_device *gbm,
       break;
    }
 
+   case GBM_BO_IMPORT_FD_MODIFIER:
+   {
+      struct gbm_import_fd_modifier_data *fd_data = buffer;
+      unsigned int error;
+      int fourcc;
+
+      /* Import with modifier requires createImageFromDmaBufs2 */
+      if (dri->image == NULL || dri->image->base.version < 15 ||
+          dri->image->createImageFromDmaBufs2 == NULL) {
+         errno = ENOSYS;
+         return NULL;
+      }
+
+      switch(fd_data->format) {
+      case GBM_FORMAT_RGB565:
+         fourcc = __DRI_IMAGE_FOURCC_RGB565;
+         break;
+      case GBM_FORMAT_ARGB8888:
+      case GBM_BO_FORMAT_ARGB8888:
+         fourcc = __DRI_IMAGE_FOURCC_ARGB8888;
+         break;
+      case GBM_FORMAT_XRGB8888:
+      case GBM_BO_FORMAT_XRGB8888:
+         fourcc = __DRI_IMAGE_FOURCC_XRGB8888;
+         break;
+      case GBM_FORMAT_ABGR8888:
+         fourcc = __DRI_IMAGE_FOURCC_ABGR8888;
+         break;
+      case GBM_FORMAT_XBGR8888:
+         fourcc = __DRI_IMAGE_FOURCC_XBGR8888;
+         break;
+      default:
+         errno = EINVAL;
+         return NULL;
+      }
+
+      image = dri->image->createImageFromDmaBufs2(dri->screen, fd_data->width,
+                                                  fd_data->height, fourcc,
+                                                  fd_data->modifier,
+                                                  fd_data->fds,
+                                                  fd_data->num_fds,
+                                                  fd_data->strides,
+                                                  fd_data->offsets,
+                                                  0, 0, 0, 0,
+                                                  &error, NULL);
+      if (image == NULL) {
+         errno = ENOSYS;
+         return NULL;
+      }
+
+      gbm_format = fd_data->format;
+      break;
+   }
+
    default:
       errno = ENOSYS;
       return NULL;
@@ -1013,7 +1058,7 @@ create_dumb(struct gbm_device *gbm,
    is_cursor = (usage & GBM_BO_USE_CURSOR) != 0 &&
       format == GBM_FORMAT_ARGB8888;
    is_scanout = (usage & GBM_BO_USE_SCANOUT) != 0 &&
-      format == GBM_FORMAT_XRGB8888;
+      (format == GBM_FORMAT_XRGB8888 || format == GBM_FORMAT_XBGR8888);
    if (!is_cursor && !is_scanout) {
       errno = EINVAL;
       return NULL;

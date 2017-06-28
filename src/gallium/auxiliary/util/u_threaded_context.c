@@ -67,7 +67,6 @@ static void
 tc_batch_check(struct tc_batch *batch)
 {
    tc_assert(batch->sentinel == TC_SENTINEL);
-   tc_assert(batch->sentinel2 == TC_SENTINEL);
    tc_assert(batch->num_total_call_slots <= TC_CALLS_PER_BATCH);
 }
 
@@ -429,7 +428,7 @@ tc_call_render_condition(struct pipe_context *pipe, union tc_payload *payload)
 static void
 tc_render_condition(struct pipe_context *_pipe,
                     struct pipe_query *query, boolean condition,
-                    uint mode)
+                    enum pipe_render_cond_flag mode)
 {
    struct threaded_context *tc = threaded_context(_pipe);
    struct tc_render_condition *p =
@@ -598,7 +597,7 @@ tc_call_set_constant_buffer(struct pipe_context *pipe, union tc_payload *payload
 
 static void
 tc_set_constant_buffer(struct pipe_context *_pipe,
-                       uint shader, uint index,
+                       enum pipe_shader_type shader, uint index,
                        const struct pipe_constant_buffer *cb)
 {
    struct threaded_context *tc = threaded_context(_pipe);
@@ -846,7 +845,8 @@ tc_call_set_shader_buffers(struct pipe_context *pipe, union tc_payload *payload)
 }
 
 static void
-tc_set_shader_buffers(struct pipe_context *_pipe, unsigned shader,
+tc_set_shader_buffers(struct pipe_context *_pipe,
+                      enum pipe_shader_type shader,
                       unsigned start, unsigned count,
                       const struct pipe_shader_buffer *buffers)
 {
@@ -1082,6 +1082,128 @@ tc_stream_output_target_destroy(struct pipe_context *_pipe,
    struct pipe_context *pipe = threaded_context(_pipe)->pipe;
 
    pipe->stream_output_target_destroy(pipe, target);
+}
+
+
+/********************************************************************
+ * bindless
+ */
+
+static uint64_t
+tc_create_texture_handle(struct pipe_context *_pipe,
+                         struct pipe_sampler_view *view,
+                         const struct pipe_sampler_state *state)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   struct pipe_context *pipe = tc->pipe;
+
+   tc_sync(tc);
+   return pipe->create_texture_handle(pipe, view, state);
+}
+
+static void
+tc_call_delete_texture_handle(struct pipe_context *pipe,
+                              union tc_payload *payload)
+{
+   pipe->delete_texture_handle(pipe, payload->handle);
+}
+
+static void
+tc_delete_texture_handle(struct pipe_context *_pipe, uint64_t handle)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   union tc_payload *payload =
+      tc_add_small_call(tc, TC_CALL_delete_texture_handle);
+
+   payload->handle = handle;
+}
+
+struct tc_make_texture_handle_resident
+{
+   uint64_t handle;
+   bool resident;
+};
+
+static void
+tc_call_make_texture_handle_resident(struct pipe_context *pipe,
+                                     union tc_payload *payload)
+{
+   struct tc_make_texture_handle_resident *p =
+      (struct tc_make_texture_handle_resident *)payload;
+
+   pipe->make_texture_handle_resident(pipe, p->handle, p->resident);
+}
+
+static void
+tc_make_texture_handle_resident(struct pipe_context *_pipe, uint64_t handle,
+                                bool resident)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   struct tc_make_texture_handle_resident *p =
+      tc_add_struct_typed_call(tc, TC_CALL_make_texture_handle_resident,
+                               tc_make_texture_handle_resident);
+
+   p->handle = handle;
+   p->resident = resident;
+}
+
+static uint64_t
+tc_create_image_handle(struct pipe_context *_pipe,
+                       const struct pipe_image_view *image)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   struct pipe_context *pipe = tc->pipe;
+
+   tc_sync(tc);
+   return pipe->create_image_handle(pipe, image);
+}
+
+static void
+tc_call_delete_image_handle(struct pipe_context *pipe,
+                            union tc_payload *payload)
+{
+   pipe->delete_image_handle(pipe, payload->handle);
+}
+
+static void
+tc_delete_image_handle(struct pipe_context *_pipe, uint64_t handle)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   union tc_payload *payload =
+      tc_add_small_call(tc, TC_CALL_delete_image_handle);
+
+   payload->handle = handle;
+}
+
+struct tc_make_image_handle_resident
+{
+   uint64_t handle;
+   unsigned access;
+   bool resident;
+};
+
+static void
+tc_call_make_image_handle_resident(struct pipe_context *pipe,
+                                     union tc_payload *payload)
+{
+   struct tc_make_image_handle_resident *p =
+      (struct tc_make_image_handle_resident *)payload;
+
+   pipe->make_image_handle_resident(pipe, p->handle, p->access, p->resident);
+}
+
+static void
+tc_make_image_handle_resident(struct pipe_context *_pipe, uint64_t handle,
+                              unsigned access, bool resident)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   struct tc_make_image_handle_resident *p =
+      tc_add_struct_typed_call(tc, TC_CALL_make_image_handle_resident,
+                               tc_make_image_handle_resident);
+
+   p->handle = handle;
+   p->access = access;
+   p->resident = resident;
 }
 
 
@@ -2125,7 +2247,7 @@ tc_destroy(struct pipe_context *_pipe)
 
    slab_destroy_child(&tc->pool_transfers);
    pipe->destroy(pipe);
-   FREE(tc);
+   os_free_aligned(tc);
 }
 
 static const tc_execute execute_func[TC_NUM_CALLS] = {
@@ -2165,11 +2287,19 @@ threaded_context_create(struct pipe_context *pipe,
    if (!debug_get_bool_option("GALLIUM_THREAD", util_cpu_caps.nr_cpus > 1))
       return pipe;
 
-   tc = CALLOC_STRUCT(threaded_context);
+   tc = os_malloc_aligned(sizeof(struct threaded_context), 16);
    if (!tc) {
       pipe->destroy(pipe);
       return NULL;
    }
+   memset(tc, 0, sizeof(*tc));
+
+   assert((uintptr_t)tc % 16 == 0);
+   /* These should be static asserts, but they don't work with MSVC */
+   assert(offsetof(struct threaded_context, batch_slots) % 16 == 0);
+   assert(offsetof(struct threaded_context, batch_slots[0].call) % 16 == 0);
+   assert(offsetof(struct threaded_context, batch_slots[0].call[1]) % 16 == 0);
+   assert(offsetof(struct threaded_context, batch_slots[1].call) % 16 == 0);
 
    /* The driver context isn't wrapped, so set its "priv" to NULL. */
    pipe->priv = NULL;
@@ -2195,12 +2325,11 @@ threaded_context_create(struct pipe_context *pipe,
     * from the queue before being executed, so keep one tc_batch slot for that
     * execution. Also, keep one unused slot for an unflushed batch.
     */
-   if (!util_queue_init(&tc->queue, "gallium_drv", TC_MAX_BATCHES - 2, 1))
+   if (!util_queue_init(&tc->queue, "gallium_drv", TC_MAX_BATCHES - 2, 1, 0))
       goto fail;
 
    for (unsigned i = 0; i < TC_MAX_BATCHES; i++) {
       tc->batch_slots[i].sentinel = TC_SENTINEL;
-      tc->batch_slots[i].sentinel2 = TC_SENTINEL;
       tc->batch_slots[i].pipe = pipe;
       util_queue_fence_init(&tc->batch_slots[i].fence);
    }
@@ -2311,6 +2440,12 @@ threaded_context_create(struct pipe_context *pipe,
    CTX_INIT(create_fence_fd);
    CTX_INIT(fence_server_sync);
    CTX_INIT(get_timestamp);
+   CTX_INIT(create_texture_handle);
+   CTX_INIT(delete_texture_handle);
+   CTX_INIT(make_texture_handle_resident);
+   CTX_INIT(create_image_handle);
+   CTX_INIT(delete_image_handle);
+   CTX_INIT(make_image_handle_resident);
 #undef CTX_INIT
 
    if (out)

@@ -46,8 +46,9 @@
 #include "compiler/brw_compiler.h"
 #include "util/macros.h"
 #include "util/list.h"
+#include "util/u_atomic.h"
 #include "util/u_vector.h"
-#include "util/vk_alloc.h"
+#include "vk_alloc.h"
 
 /* Pre-declarations needed for WSI entrypoints */
 struct wl_surface;
@@ -1018,6 +1019,17 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       .IndextoMOCSTables                           = 1  \
    }
 
+/* Cannonlake MOCS defines are duplicates of Skylake MOCS defines. */
+#define GEN10_MOCS (struct GEN10_MEMORY_OBJECT_CONTROL_STATE) {  \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */              \
+      .IndextoMOCSTables                           = 2         \
+   }
+
+#define GEN10_MOCS_PTE {                                 \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */       \
+      .IndextoMOCSTables                           = 1  \
+   }
+
 struct anv_device_memory {
    struct anv_bo *                              bo;
    struct anv_memory_type *                     type;
@@ -1851,14 +1863,14 @@ static inline void
 anv_shader_bin_ref(struct anv_shader_bin *shader)
 {
    assert(shader && shader->ref_cnt >= 1);
-   __sync_fetch_and_add(&shader->ref_cnt, 1);
+   p_atomic_inc(&shader->ref_cnt);
 }
 
 static inline void
 anv_shader_bin_unref(struct anv_device *device, struct anv_shader_bin *shader)
 {
    assert(shader && shader->ref_cnt >= 1);
-   if (__sync_fetch_and_add(&shader->ref_cnt, -1) == 1)
+   if (p_atomic_dec_zero(&shader->ref_cnt))
       anv_shader_bin_destroy(device, shader);
 }
 
@@ -2071,6 +2083,35 @@ struct anv_image {
    struct anv_surface aux_surface;
 };
 
+/* Returns the number of auxiliary buffer levels attached to an image. */
+static inline uint8_t
+anv_image_aux_levels(const struct anv_image * const image)
+{
+   assert(image);
+   return image->aux_surface.isl.size > 0 ? image->aux_surface.isl.levels : 0;
+}
+
+/* Returns the number of auxiliary buffer layers attached to an image. */
+static inline uint32_t
+anv_image_aux_layers(const struct anv_image * const image,
+                     const uint8_t miplevel)
+{
+   assert(image);
+
+   /* The miplevel must exist in the main buffer. */
+   assert(miplevel < image->levels);
+
+   if (miplevel >= anv_image_aux_levels(image)) {
+      /* There are no layers with auxiliary data because the miplevel has no
+       * auxiliary data.
+       */
+      return 0;
+   } else {
+      return MAX2(image->aux_surface.isl.logical_level0_px.array_len,
+                  image->aux_surface.isl.logical_level0_px.depth >> miplevel);
+   }
+}
+
 /* Returns true if a HiZ-enabled depth buffer can be sampled from. */
 static inline bool
 anv_can_sample_with_hiz(const struct gen_device_info * const devinfo,
@@ -2087,12 +2128,18 @@ void
 anv_gen8_hiz_op_resolve(struct anv_cmd_buffer *cmd_buffer,
                         const struct anv_image *image,
                         enum blorp_hiz_op op);
+void
+anv_ccs_resolve(struct anv_cmd_buffer * const cmd_buffer,
+                const struct anv_state surface_state,
+                const struct anv_image * const image,
+                const uint8_t level, const uint32_t layer_count,
+                const enum blorp_fast_clear_op op);
 
 void
 anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
                     const struct anv_image *image,
-                    const struct isl_view *view,
-                    const VkImageSubresourceRange *subresourceRange);
+                    const uint32_t base_level, const uint32_t level_count,
+                    const uint32_t base_layer, uint32_t layer_count);
 
 enum isl_aux_usage
 anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
@@ -2412,6 +2459,9 @@ ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_shader_module, VkShaderModule)
 #  include "anv_genX.h"
 #  undef genX
 #  define genX(x) gen9_##x
+#  include "anv_genX.h"
+#  undef genX
+#  define genX(x) gen10_##x
 #  include "anv_genX.h"
 #  undef genX
 #endif

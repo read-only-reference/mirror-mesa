@@ -76,6 +76,7 @@ static void check_program_state( struct st_context *st )
    struct gl_program *new_gp = ctx->GeometryProgram._Current;
    struct gl_program *new_fp = ctx->FragmentProgram._Current;
    uint64_t dirty = 0;
+   unsigned num_viewports = 1;
 
    /* Flag states used by both new and old shaders to unbind shader resources
     * properly when transitioning to shaders that don't use them.
@@ -115,8 +116,24 @@ static void check_program_state( struct st_context *st )
          dirty |= st_fragment_program(new_fp)->affected_states;
    }
 
+   /* Find out the number of viewports. This determines how many scissors
+    * and viewport states we need to update.
+    */
+   struct gl_program *last_prim_shader = new_gp ? new_gp :
+                                         new_tep ? new_tep : new_vp;
+   if (last_prim_shader &&
+       last_prim_shader->info.outputs_written & VARYING_BIT_VIEWPORT)
+      num_viewports = ctx->Const.MaxViewports;
+
+   if (st->state.num_viewports != num_viewports) {
+      st->state.num_viewports = num_viewports;
+      dirty |= ST_NEW_VIEWPORT;
+
+      if (ctx->Scissor.EnableFlags & u_bit_consecutive(0, num_viewports))
+         dirty |= ST_NEW_SCISSOR;
+   }
+
    st->dirty |= dirty;
-   st->gfx_shaders_may_be_dirty = false;
 }
 
 static void check_attrib_edgeflag(struct st_context *st)
@@ -171,7 +188,11 @@ void st_validate_state( struct st_context *st, enum st_pipeline pipeline )
       if (st->ctx->API == API_OPENGL_COMPAT)
          check_attrib_edgeflag(st);
 
-      check_program_state(st);
+      if (st->gfx_shaders_may_be_dirty) {
+         check_program_state(st);
+         st->gfx_shaders_may_be_dirty = false;
+      }
+
       st_manager_validate_framebuffers(st);
 
       pipeline_mask = ST_PIPELINE_RENDER_STATE_MASK;
