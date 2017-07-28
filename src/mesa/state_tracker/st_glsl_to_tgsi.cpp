@@ -52,7 +52,6 @@
 #include "st_program.h"
 #include "st_mesa_to_tgsi.h"
 #include "st_format.h"
-#include "st_glsl_types.h"
 #include "st_nir.h"
 #include "st_shader_cache.h"
 
@@ -85,6 +84,13 @@ static int swizzle_for_type(const glsl_type *type, int component = 0)
 
    swizzle += component * MAKE_SWIZZLE4(1, 1, 1, 1);
    return swizzle;
+}
+
+static unsigned is_precise(const ir_variable *ir)
+{
+   if (!ir)
+      return 0;
+   return ir->data.precise || ir->data.invariant;
 }
 
 /**
@@ -296,6 +302,7 @@ public:
    ir_instruction *ir;
 
    unsigned op:8; /**< TGSI opcode */
+   unsigned precise:1;
    unsigned saturate:1;
    unsigned is_64bit_expanded:1;
    unsigned sampler_base:5;
@@ -435,6 +442,7 @@ public:
    bool have_fma;
    bool use_shared_memory;
    bool has_tex_txf_lz;
+   bool precise;
 
    variable_storage *find_variable_storage(ir_variable *var);
 
@@ -691,6 +699,7 @@ glsl_to_tgsi_visitor::emit_asm(ir_instruction *ir, unsigned op,
    STATIC_ASSERT(TGSI_OPCODE_LAST <= 255);
 
    inst->op = op;
+   inst->precise = this->precise;
    inst->info = tgsi_get_opcode_info(op);
    inst->dst[0] = dst;
    inst->dst[1] = dst1;
@@ -1228,13 +1237,13 @@ glsl_to_tgsi_visitor::st_src_reg_for_type(enum glsl_base_type type, int val)
 static int
 attrib_type_size(const struct glsl_type *type, bool is_vs_input)
 {
-   return st_glsl_attrib_type_size(type, is_vs_input);
+   return type->count_attribute_slots(is_vs_input);
 }
 
 static int
 type_size(const struct glsl_type *type)
 {
-   return st_glsl_type_size(type);
+   return type->count_attribute_slots(false);
 }
 
 /**
@@ -1547,7 +1556,7 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
 
    /* Quick peephole: Emit MAD(a, b, c) instead of ADD(MUL(a, b), c)
     */
-   if (ir->operation == ir_binop_add) {
+   if (!this->precise && ir->operation == ir_binop_add) {
       if (try_emit_mad(ir, 1))
          return;
       if (try_emit_mad(ir, 0))
@@ -3147,6 +3156,8 @@ glsl_to_tgsi_visitor::visit(ir_assignment *ir)
    st_dst_reg l;
    st_src_reg r;
 
+   /* all generated instructions need to be flaged as precise */
+   this->precise = is_precise(ir->lhs->variable_referenced());
    ir->rhs->accept(this);
    r = this->result;
 
@@ -3238,6 +3249,7 @@ glsl_to_tgsi_visitor::visit(ir_assignment *ir)
    } else {
       emit_block_mov(ir, ir->rhs->type, &l, &r, NULL, false);
    }
+   this->precise = 0;
 }
 
 
@@ -3777,7 +3789,7 @@ get_image_qualifiers(ir_dereference *ir, const glsl_type **type,
       for (unsigned i = 0; i < struct_type->length; i++) {
          if (!strcmp(struct_type->fields.structure[i].name,
                      deref_record->field)) {
-            *type = struct_type->fields.structure[i].type;
+            *type = struct_type->fields.structure[i].type->without_array();
             *memory_coherent =
                struct_type->fields.structure[i].memory_coherent;
             *memory_volatile =
@@ -5948,7 +5960,7 @@ compile_tgsi_instruction(struct st_translate *t,
    case TGSI_OPCODE_IF:
    case TGSI_OPCODE_UIF:
       assert(num_dst == 0);
-      ureg_insn(ureg, inst->op, NULL, 0, src, num_src);
+      ureg_insn(ureg, inst->op, NULL, 0, src, num_src, inst->precise);
       return;
 
    case TGSI_OPCODE_TEX:
@@ -6052,14 +6064,14 @@ compile_tgsi_instruction(struct st_translate *t,
 
    case TGSI_OPCODE_SCS:
       dst[0] = ureg_writemask(dst[0], TGSI_WRITEMASK_XY);
-      ureg_insn(ureg, inst->op, dst, num_dst, src, num_src);
+      ureg_insn(ureg, inst->op, dst, num_dst, src, num_src, inst->precise);
       break;
 
    default:
       ureg_insn(ureg,
                 inst->op,
                 dst, num_dst,
-                src, num_src);
+                src, num_src, inst->precise);
       break;
    }
 }
@@ -6747,27 +6759,8 @@ st_translate_program(
 
       for (i = program->shader->Stage+1; i <= MESA_SHADER_FRAGMENT; i++) {
          if (program->shader_program->_LinkedShaders[i]) {
-            unsigned next;
-
-            switch (i) {
-            case MESA_SHADER_TESS_CTRL:
-               next = PIPE_SHADER_TESS_CTRL;
-               break;
-            case MESA_SHADER_TESS_EVAL:
-               next = PIPE_SHADER_TESS_EVAL;
-               break;
-            case MESA_SHADER_GEOMETRY:
-               next = PIPE_SHADER_GEOMETRY;
-               break;
-            case MESA_SHADER_FRAGMENT:
-               next = PIPE_SHADER_FRAGMENT;
-               break;
-            default:
-               assert(0);
-               continue;
-            }
-
-            ureg_set_next_shader_processor(ureg, next);
+            ureg_set_next_shader_processor(
+                  ureg, pipe_shader_type_from_mesa((gl_shader_stage)i));
             break;
          }
       }

@@ -129,6 +129,7 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
       .draw_parameters = true,
       .image_write_without_format = true,
       .multiview = true,
+      .variable_pointers = true,
    };
 
    nir_function *entry_point =
@@ -587,6 +588,10 @@ merge_tess_info(struct shader_info *tes_info,
           tcs_info->tess.spacing == tes_info->tess.spacing);
    tes_info->tess.spacing |= tcs_info->tess.spacing;
 
+   assert(tcs_info->tess.primitive_mode == 0 ||
+          tes_info->tess.primitive_mode == 0 ||
+          tcs_info->tess.primitive_mode == tes_info->tess.primitive_mode);
+   tes_info->tess.primitive_mode |= tcs_info->tess.primitive_mode;
    tes_info->tess.ccw |= tcs_info->tess.ccw;
    tes_info->tess.point_mode |= tcs_info->tess.point_mode;
 }
@@ -1326,7 +1331,7 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
       const VkVertexInputAttributeDescription *desc =
          &vi_info->pVertexAttributeDescriptions[i];
 
-      if (inputs_read & (1 << (VERT_ATTRIB_GENERIC0 + desc->location)))
+      if (inputs_read & (1ull << (VERT_ATTRIB_GENERIC0 + desc->location)))
          pipeline->vb_used |= 1 << desc->binding;
    }
 

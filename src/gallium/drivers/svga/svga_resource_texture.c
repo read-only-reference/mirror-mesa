@@ -128,7 +128,7 @@ svga_transfer_dma(struct svga_context *svga,
 
       if (transfer == SVGA3D_READ_HOST_VRAM) {
          svga_context_flush(svga, &fence);
-         sws->fence_finish(sws, fence, 0);
+         sws->fence_finish(sws, fence, PIPE_TIMEOUT_INFINITE, 0);
          sws->fence_reference(sws, &fence, NULL);
       }
    }
@@ -187,7 +187,7 @@ svga_transfer_dma(struct svga_context *svga,
 
          if (transfer == SVGA3D_READ_HOST_VRAM) {
             svga_context_flush(svga, &fence);
-            sws->fence_finish(sws, fence, 0);
+            sws->fence_finish(sws, fence, PIPE_TIMEOUT_INFINITE, 0);
 
             hw = sws->buffer_map(sws, st->hwbuf, PIPE_TRANSFER_READ);
             assert(hw);
@@ -1539,6 +1539,9 @@ svga_texture_transfer_unmap_upload(struct svga_context *svga,
 boolean
 svga_texture_device_format_has_alpha(struct pipe_resource *texture)
 {
+   /* the svga_texture() call below is invalid for PIPE_BUFFER resources */
+   assert(texture->target != PIPE_BUFFER);
+
    enum svga3d_block_desc block_desc =
       svga3dsurface_get_desc(svga_texture(texture)->key.format)->block_desc;
 

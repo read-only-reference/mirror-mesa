@@ -97,6 +97,7 @@ struct legacy_surf_layout {
     unsigned                    depth_adjusted:1;
     unsigned                    stencil_adjusted:1;
 
+    uint8_t                     tile_swizzle;
     struct legacy_surf_level    level[RADEON_SURF_MAX_LEVELS];
     struct legacy_surf_level    stencil_level[RADEON_SURF_MAX_LEVELS];
     uint8_t                     tiling_index[RADEON_SURF_MAX_LEVELS];
@@ -194,6 +195,7 @@ struct ac_surf_info {
 	uint32_t width;
 	uint32_t height;
 	uint32_t depth;
+	uint32_t surf_index;
 	uint8_t samples;
 	uint8_t levels;
 	uint16_t array_size;
@@ -206,7 +208,8 @@ struct ac_surf_config {
 };
 
 ADDR_HANDLE amdgpu_addr_create(const struct radeon_info *info,
-			       const struct amdgpu_gpu_info *amdinfo);
+			       const struct amdgpu_gpu_info *amdinfo,
+			       uint64_t *max_alignment);
 
 int ac_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *info,
 		       const struct ac_surf_config * config,

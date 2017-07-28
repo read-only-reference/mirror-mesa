@@ -108,7 +108,9 @@ st_update_fp( struct st_context *st )
    if (st->shader_has_one_variant[MESA_SHADER_FRAGMENT] &&
        !stfp->ati_fs && /* ATI_fragment_shader always has multiple variants */
        !stfp->Base.ExternalSamplersUsed && /* external samplers need variants */
-       stfp->variants) {
+       stfp->variants &&
+       !stfp->variants->key.drawpixels &&
+       !stfp->variants->key.bitmap) {
       shader = stfp->variants->driver_shader;
    } else {
       memset(&key, 0, sizeof(key));
@@ -233,7 +235,7 @@ st_update_tcp(struct st_context *st)
 {
    void *shader = st_update_common_program(st,
                                            st->ctx->TessCtrlProgram._Current,
-                                           MESA_SHADER_TESS_CTRL, &st->tcp);
+                                           PIPE_SHADER_TESS_CTRL, &st->tcp);
    cso_set_tessctrl_shader_handle(st->cso_context, shader);
 }
 
@@ -243,7 +245,7 @@ st_update_tep(struct st_context *st)
 {
    void *shader = st_update_common_program(st,
                                            st->ctx->TessEvalProgram._Current,
-                                           MESA_SHADER_TESS_EVAL, &st->tep);
+                                           PIPE_SHADER_TESS_EVAL, &st->tep);
    cso_set_tesseval_shader_handle(st->cso_context, shader);
 }
 

@@ -836,7 +836,7 @@ radv_emit_fragment_shader(struct radv_cmd_buffer *cmd_buffer,
 	radeon_set_context_reg(cmd_buffer->cs, R_0286D0_SPI_PS_INPUT_ADDR,
 			       ps->config.spi_ps_input_addr);
 
-	if (ps->info.fs.force_persample)
+	if (ps->info.info.ps.force_persample)
 		spi_baryc_cntl |= S_0286E0_POS_FLOAT_LOCATION(2);
 
 	radeon_set_context_reg(cmd_buffer->cs, R_0286D8_SPI_PS_IN_CONTROL,
@@ -1117,6 +1117,35 @@ radv_load_depth_clear_regs(struct radv_cmd_buffer *cmd_buffer,
 	radeon_emit(cmd_buffer->cs, 0);
 }
 
+/*
+ *with DCC some colors don't require CMASK elimiation before being
+ * used as a texture. This sets a predicate value to determine if the
+ * cmask eliminate is required.
+ */
+void
+radv_set_dcc_need_cmask_elim_pred(struct radv_cmd_buffer *cmd_buffer,
+				  struct radv_image *image,
+				  bool value)
+{
+	uint64_t pred_val = value;
+	uint64_t va = cmd_buffer->device->ws->buffer_get_va(image->bo);
+	va += image->offset + image->dcc_pred_offset;
+
+	if (!image->surface.dcc_size)
+		return;
+
+	cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, image->bo, 8);
+
+	radeon_emit(cmd_buffer->cs, PKT3(PKT3_WRITE_DATA, 4, 0));
+	radeon_emit(cmd_buffer->cs, S_370_DST_SEL(V_370_MEM_ASYNC) |
+				    S_370_WR_CONFIRM(1) |
+				    S_370_ENGINE_SEL(V_370_PFP));
+	radeon_emit(cmd_buffer->cs, va);
+	radeon_emit(cmd_buffer->cs, va >> 32);
+	radeon_emit(cmd_buffer->cs, pred_val);
+	radeon_emit(cmd_buffer->cs, pred_val >> 32);
+}
+
 void
 radv_set_color_clear_regs(struct radv_cmd_buffer *cmd_buffer,
 			  struct radv_image *image,
@@ -1159,7 +1188,7 @@ radv_load_color_clear_regs(struct radv_cmd_buffer *cmd_buffer,
 	uint32_t reg = R_028C8C_CB_COLOR0_CLEAR_WORD0 + idx * 0x3c;
 	cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, image->bo, 8);
 
-	radeon_emit(cmd_buffer->cs, PKT3(PKT3_COPY_DATA, 4, 0));
+	radeon_emit(cmd_buffer->cs, PKT3(PKT3_COPY_DATA, 4, cmd_buffer->state.predicating));
 	radeon_emit(cmd_buffer->cs, COPY_DATA_SRC_SEL(COPY_DATA_MEM) |
 				    COPY_DATA_DST_SEL(COPY_DATA_REG) |
 				    COPY_DATA_COUNT_SEL);
@@ -1168,7 +1197,7 @@ radv_load_color_clear_regs(struct radv_cmd_buffer *cmd_buffer,
 	radeon_emit(cmd_buffer->cs, reg >> 2);
 	radeon_emit(cmd_buffer->cs, 0);
 
-	radeon_emit(cmd_buffer->cs, PKT3(PKT3_PFP_SYNC_ME, 0, 0));
+	radeon_emit(cmd_buffer->cs, PKT3(PKT3_PFP_SYNC_ME, 0, cmd_buffer->state.predicating));
 	radeon_emit(cmd_buffer->cs, 0);
 }
 
@@ -1179,7 +1208,13 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 	struct radv_framebuffer *framebuffer = cmd_buffer->state.framebuffer;
 	const struct radv_subpass *subpass = cmd_buffer->state.subpass;
 
-	for (i = 0; i < subpass->color_count; ++i) {
+	for (i = 0; i < 8; ++i) {
+		if (i >= subpass->color_count || subpass->color_attachments[i].attachment == VK_ATTACHMENT_UNUSED) {
+			radeon_set_context_reg(cmd_buffer->cs, R_028C70_CB_COLOR0_INFO + i * 0x3C,
+				       S_028C70_FORMAT(V_028C70_COLOR_INVALID));
+			continue;
+		}
+
 		int idx = subpass->color_attachments[i].attachment;
 		struct radv_attachment_info *att = &framebuffer->attachments[idx];
 
@@ -1190,10 +1225,6 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 
 		radv_load_color_clear_regs(cmd_buffer, att->attachment->image, i);
 	}
-
-	for (i = subpass->color_count; i < 8; i++)
-		radeon_set_context_reg(cmd_buffer->cs, R_028C70_CB_COLOR0_INFO + i * 0x3C,
-				       S_028C70_FORMAT(V_028C70_COLOR_INVALID));
 
 	if(subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED) {
 		int idx = subpass->depth_stencil_attachment.attachment;
@@ -1768,8 +1799,9 @@ radv_cmd_buffer_set_subpass(struct radv_cmd_buffer *cmd_buffer,
 		radv_subpass_barrier(cmd_buffer, &subpass->start_barrier);
 
 		for (unsigned i = 0; i < subpass->color_count; ++i) {
-			radv_handle_subpass_image_transition(cmd_buffer,
-							subpass->color_attachments[i]);
+			if (subpass->color_attachments[i].attachment != VK_ATTACHMENT_UNUSED)
+				radv_handle_subpass_image_transition(cmd_buffer,
+				                                     subpass->color_attachments[i]);
 		}
 
 		for (unsigned i = 0; i < subpass->input_count; ++i) {
@@ -1824,6 +1856,9 @@ radv_cmd_state_setup_attachments(struct radv_cmd_buffer *cmd_buffer,
 			if ((att_aspects & VK_IMAGE_ASPECT_DEPTH_BIT) &&
 			    att->load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
 				clear_aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+				if ((att_aspects & VK_IMAGE_ASPECT_STENCIL_BIT) &&
+				    att->stencil_load_op == VK_ATTACHMENT_LOAD_OP_DONT_CARE)
+					clear_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
 			}
 			if ((att_aspects & VK_IMAGE_ASPECT_STENCIL_BIT) &&
 			    att->stencil_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR) {
@@ -2639,10 +2674,10 @@ void radv_CmdDraw(
 	if (cmd_buffer->state.pipeline->graphics.vtx_emit_num == 3)
 		radeon_emit(cmd_buffer->cs, 0);
 
-	radeon_emit(cmd_buffer->cs, PKT3(PKT3_NUM_INSTANCES, 0, 0));
+	radeon_emit(cmd_buffer->cs, PKT3(PKT3_NUM_INSTANCES, 0, cmd_buffer->state.predicating));
 	radeon_emit(cmd_buffer->cs, instanceCount);
 
-	radeon_emit(cmd_buffer->cs, PKT3(PKT3_DRAW_INDEX_AUTO, 1, 0));
+	radeon_emit(cmd_buffer->cs, PKT3(PKT3_DRAW_INDEX_AUTO, 1, cmd_buffer->state.predicating));
 	radeon_emit(cmd_buffer->cs, vertexCount);
 	radeon_emit(cmd_buffer->cs, V_0287F0_DI_SRC_SEL_AUTO_INDEX |
 		    S_0287F0_USE_OPAQUE(0));
@@ -3294,6 +3329,7 @@ static void write_event(struct radv_cmd_buffer *cmd_buffer,
 	 * the stage mask. */
 
 	si_cs_emit_write_event_eop(cs,
+				   cmd_buffer->state.predicating,
 				   cmd_buffer->device->physical_device->rad_info.chip_class,
 				   false,
 				   EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0,
@@ -3345,7 +3381,7 @@ void radv_CmdWaitEvents(VkCommandBuffer commandBuffer,
 
 		MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 7);
 
-		si_emit_wait_fence(cs, va, 1, 0xffffffff);
+		si_emit_wait_fence(cs, false, va, 1, 0xffffffff);
 		assert(cmd_buffer->cs->cdw <= cdw_max);
 	}
 

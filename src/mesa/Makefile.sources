@@ -436,7 +436,6 @@ STATETRACKER_FILES = \
 	state_tracker/st_atom_tess.c \
 	state_tracker/st_atom_texture.c \
 	state_tracker/st_atom_viewport.c \
-	state_tracker/st_cache.h \
 	state_tracker/st_cb_bitmap.c \
 	state_tracker/st_cb_bitmap.h \
 	state_tracker/st_cb_bitmap_shader.c \
@@ -508,8 +507,6 @@ STATETRACKER_FILES = \
 	state_tracker/st_glsl_to_nir.cpp \
 	state_tracker/st_glsl_to_tgsi.cpp \
 	state_tracker/st_glsl_to_tgsi.h \
-	state_tracker/st_glsl_types.cpp \
-	state_tracker/st_glsl_types.h \
 	state_tracker/st_manager.c \
 	state_tracker/st_manager.h \
 	state_tracker/st_mesa_to_tgsi.c \

@@ -62,7 +62,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* Radeon configuration
  */
-#include "xmlpool.h"
+#include "util/xmlpool.h"
 
 #define DRI_CONF_COMMAND_BUFFER_SIZE(def,min,max) \
 DRI_CONF_OPT_BEGIN_V(command_buffer_size,int,def, # min ":" # max ) \
@@ -78,7 +78,6 @@ DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
         DRI_CONF_MAX_TEXTURE_UNITS(3,2,3)
         DRI_CONF_HYPERZ("false")
         DRI_CONF_COMMAND_BUFFER_SIZE(8, 8, 32)
@@ -106,7 +105,6 @@ DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
         DRI_CONF_MAX_TEXTURE_UNITS(6,2,6)
         DRI_CONF_HYPERZ("false")
         DRI_CONF_COMMAND_BUFFER_SIZE(8, 8, 32)
@@ -544,6 +542,7 @@ static const __DRIextension *radeon_screen_extensions[] = {
     &radeonFlushExtension.base,
     &radeonImageExtension.base,
     &radeonRendererQueryExtension.base,
+    &dri2NoErrorExtension.base,
     NULL
 };
 

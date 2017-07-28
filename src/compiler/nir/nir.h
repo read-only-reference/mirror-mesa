@@ -1821,6 +1821,9 @@ typedef struct nir_shader_compiler_options {
    bool lower_extract_byte;
    bool lower_extract_word;
 
+   bool lower_vote_trivial;
+   bool lower_subgroup_masks;
+
    /**
     * Does the driver support real 32-bit integers?  (Otherwise, integers
     * are simulated by floats.)
@@ -1839,6 +1842,8 @@ typedef struct nir_shader_compiler_options {
     * information must be inferred from the list of input nir_variables.
     */
    bool use_interpolated_input_intrinsics;
+
+   unsigned max_subgroup_size;
 
    unsigned max_unroll_iterations;
 } nir_shader_compiler_options;
@@ -2206,6 +2211,8 @@ void nir_instr_move_src(nir_instr *dest_instr, nir_src *dest, nir_src *src);
 void nir_if_rewrite_condition(nir_if *if_stmt, nir_src new_src);
 void nir_instr_rewrite_dest(nir_instr *instr, nir_dest *dest,
                             nir_dest new_dest);
+void nir_instr_rewrite_deref(nir_instr *instr, nir_deref_var **deref,
+                             nir_deref_var *new_deref);
 
 void nir_ssa_dest_init(nir_instr *instr, nir_dest *dest,
                        unsigned num_components, unsigned bit_size,
@@ -2308,11 +2315,22 @@ should_clone_nir(void)
 
    return should_clone;
 }
+
+static inline bool
+should_print_nir(void)
+{
+   static int should_print = -1;
+   if (should_print < 0)
+      should_print = env_var_as_boolean("NIR_PRINT", false);
+
+   return should_print;
+}
 #else
 static inline void nir_validate_shader(nir_shader *shader) { (void) shader; }
 static inline void nir_metadata_set_validation_flag(nir_shader *shader) { (void) shader; }
 static inline void nir_metadata_check_validation_flag(nir_shader *shader) { (void) shader; }
 static inline bool should_clone_nir(void) { return false; }
+static inline bool should_print_nir(void) { return false; }
 #endif /* DEBUG */
 
 #define _PASS(nir, do_pass) do {                                     \
@@ -2327,14 +2345,22 @@ static inline bool should_clone_nir(void) { return false; }
 
 #define NIR_PASS(progress, nir, pass, ...) _PASS(nir,                \
    nir_metadata_set_validation_flag(nir);                            \
+   if (should_print_nir())                                           \
+      printf("%s\n", #pass);                                         \
    if (pass(nir, ##__VA_ARGS__)) {                                   \
       progress = true;                                               \
+      if (should_print_nir())                                        \
+         nir_print_shader(nir, stdout);                              \
       nir_metadata_check_validation_flag(nir);                       \
    }                                                                 \
 )
 
 #define NIR_PASS_V(nir, pass, ...) _PASS(nir,                        \
+   if (should_print_nir())                                           \
+      printf("%s\n", #pass);                                         \
    pass(nir, ##__VA_ARGS__);                                         \
+   if (should_print_nir())                                           \
+      nir_print_shader(nir, stdout);                                 \
 )
 
 void nir_calc_dominance_impl(nir_function_impl *impl);
@@ -2410,12 +2436,14 @@ bool nir_move_vec_src_uses_to_dest(nir_shader *shader);
 bool nir_lower_vec_to_movs(nir_shader *shader);
 bool nir_lower_alu_to_scalar(nir_shader *shader);
 bool nir_lower_load_const_to_scalar(nir_shader *shader);
-
+bool nir_lower_read_invocation_to_scalar(nir_shader *shader);
 bool nir_lower_phis_to_scalar(nir_shader *shader);
 void nir_lower_io_to_scalar(nir_shader *shader, nir_variable_mode mask);
 
 bool nir_lower_samplers(nir_shader *shader,
                         const struct gl_shader_program *shader_program);
+bool nir_lower_samplers_as_deref(nir_shader *shader,
+                                 const struct gl_shader_program *shader_program);
 
 bool nir_lower_system_values(nir_shader *shader);
 
@@ -2553,6 +2581,7 @@ void nir_lower_bitmap(nir_shader *shader, const nir_lower_bitmap_options *option
 bool nir_lower_atomics(nir_shader *shader,
                        const struct gl_shader_program *shader_program);
 bool nir_lower_atomics_to_ssbo(nir_shader *shader, unsigned ssbo_offset);
+bool nir_lower_uniforms_to_ubo(nir_shader *shader);
 bool nir_lower_to_source_mods(nir_shader *shader);
 
 bool nir_lower_gs_intrinsics(nir_shader *shader);
@@ -2624,6 +2653,8 @@ bool nir_opt_dead_cf(nir_shader *shader);
 bool nir_opt_gcm(nir_shader *shader, bool value_number);
 
 bool nir_opt_if(nir_shader *shader);
+
+bool nir_opt_intrinsics(nir_shader *shader);
 
 bool nir_opt_loop_unroll(nir_shader *shader, nir_variable_mode indirect_mask);
 

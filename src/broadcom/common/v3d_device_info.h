@@ -1,8 +1,5 @@
 /*
- * Copyright (C) 2005-2007  Brian Paul   All Rights Reserved.
- * Copyright (C) 2008  VMware, Inc.   All Rights Reserved.
- * Copyright © 2010 Intel Corporation
- * Copyright © 2011 Bryan Cain
+ * Copyright © 2016 Broadcom
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -20,25 +17,23 @@
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
  * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
  */
 
-#ifndef __ST_GLSL_TYPES_H__
-#define __ST_GLSL_TYPES_H__
+#ifndef V3D_CHIP_H
+#define V3D_CHIP_H
 
-#include "compiler/glsl_types.h"
+#include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
+/**
+ * Struct for tracking features of the V3D chip. This is where we'll store
+ * boolean flags for features in a specific version, but for now it's just the
+ * version
+ */
+struct v3d_device_info {
+        /** Simple V3D version: major * 10 + minor */
+        uint8_t ver;
+};
+
 #endif
-
-int st_glsl_attrib_type_size(const struct glsl_type *type, bool is_vs_input);
-int st_glsl_type_size(const struct glsl_type *type);
-
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* __ST_GLSL_TYPES_H__ */

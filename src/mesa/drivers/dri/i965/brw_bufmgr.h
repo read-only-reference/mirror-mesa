@@ -124,12 +124,18 @@ struct brw_bo {
    bool reusable;
 
    /**
+    * Boolean of whether this buffer has been shared with an external client.
+    */
+   bool external;
+
+   /**
     * Boolean of whether this buffer is cache coherent
     */
    bool cache_coherent;
 };
 
 #define BO_ALLOC_FOR_RENDER (1<<0)
+#define BO_ALLOC_ZEROED     (1<<1)
 
 /**
  * Allocate a buffer object.
@@ -212,14 +218,11 @@ MUST_CHECK void *brw_bo_map(struct brw_context *brw, struct brw_bo *bo, unsigned
  * Reduces the refcount on the userspace mapping of the buffer
  * object.
  */
-static int brw_bo_unmap(struct brw_bo *bo) { return 0; }
+static inline int brw_bo_unmap(struct brw_bo *bo) { return 0; }
 
 /** Write data into an object. */
 int brw_bo_subdata(struct brw_bo *bo, uint64_t offset,
                    uint64_t size, const void *data);
-/** Read data from an object. */
-int brw_bo_get_subdata(struct brw_bo *bo, uint64_t offset,
-                       uint64_t size, void *data);
 /**
  * Waits for rendering to an object by the GPU to have completed.
  *
@@ -227,7 +230,7 @@ int brw_bo_get_subdata(struct brw_bo *bo, uint64_t offset,
  * bo_subdata, etc.  It is merely a way for the driver to implement
  * glFinish.
  */
-void brw_bo_wait_rendering(struct brw_context *brw, struct brw_bo *bo);
+void brw_bo_wait_rendering(struct brw_bo *bo);
 
 /**
  * Tears down the buffer manager instance.

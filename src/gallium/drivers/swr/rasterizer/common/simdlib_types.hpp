@@ -262,7 +262,7 @@ namespace SIMDImpl
 
     namespace SIMD512Impl
     {
-#if !defined(_MM_K0_REG)
+#if !defined(__AVX512F__)
         // Define AVX512 types if not included via immintrin.h.
         // All data members of these types are ONLY to viewed
         // in a debugger.  Do NOT access them via code!
@@ -293,7 +293,7 @@ namespace SIMDImpl
         using __mmask16 = uint16_t;
 #endif
 
-#if SIMD_ARCH >= SIMD_ARCH_AVX512
+#if defined(__INTEL_COMPILER) || (SIMD_ARCH >= SIMD_ARCH_AVX512)
 #define SIMD_ALIGNMENT_BYTES 64
 #else
 #define SIMD_ALIGNMENT_BYTES 32

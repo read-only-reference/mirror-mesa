@@ -76,6 +76,7 @@ struct radeon_info {
 	uint32_t                    drm_minor;
 	uint32_t                    drm_patchlevel;
 	bool                        has_userptr;
+	bool                        has_syncobj;
 
 	/* Shader cores. */
 	uint32_t                    r600_max_quad_pipes; /* wave size / 16 */
@@ -95,6 +96,7 @@ struct radeon_info {
 	uint32_t                    pipe_interleave_bytes;
 	uint32_t                    enabled_rb_mask; /* GCN harvest config */
 
+	uint64_t                    max_alignment; /* from addrlib */
 	/* Tile modes. */
 	uint32_t                    si_tile_mode_array[32];
 	uint32_t                    cik_macrotile_mode_array[16];

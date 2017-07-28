@@ -192,20 +192,19 @@ svga_init_shader_key_common(const struct svga_context *svga,
                             struct svga_compile_key *key)
 {
    unsigned i, idx = 0;
-   const enum pipe_swizzle *swizzle_tab;
 
    assert(shader < ARRAY_SIZE(svga->curr.num_sampler_views));
 
    /* In case the number of samplers and sampler_views doesn't match,
     * loop over the lower of the two counts.
     */
-   key->num_textures = MIN2(svga->curr.num_sampler_views[shader],
+   key->num_textures = MAX2(svga->curr.num_sampler_views[shader],
                             svga->curr.num_samplers[shader]);
 
    for (i = 0; i < key->num_textures; i++) {
       struct pipe_sampler_view *view = svga->curr.sampler_views[shader][i];
       const struct svga_sampler_state *sampler = svga->curr.sampler[shader][i];
-      if (view && sampler) {
+      if (view) {
          assert(view->texture);
          assert(view->texture->target < (1 << 4)); /* texture_target:4 */
 
@@ -224,27 +223,35 @@ svga_init_shader_key_common(const struct svga_context *svga,
             }
          }
 
-         if (!sampler->normalized_coords) {
-            assert(idx < (1 << 5));  /* width_height_idx:5 bitfield */
-            key->tex[i].width_height_idx = idx++;
-            key->tex[i].unnormalized = TRUE;
-            ++key->num_unnormalized_coords;
-         }
-
-         swizzle_tab = (!util_format_has_alpha(view->format) &&
-                        svga_texture_device_format_has_alpha(view->texture)) ?
-            set_alpha : copy_alpha;
-
          /* If we have a non-alpha view into an svga3d surface with an
           * alpha channel, then explicitly set the alpha channel to 1
           * when sampling. Note that we need to check the
           * actual device format to cover also imported surface cases.
           */
+         const enum pipe_swizzle *swizzle_tab =
+            (view->texture->target != PIPE_BUFFER &&
+             !util_format_has_alpha(view->format) &&
+             svga_texture_device_format_has_alpha(view->texture)) ?
+            set_alpha : copy_alpha;
 
          key->tex[i].swizzle_r = swizzle_tab[view->swizzle_r];
          key->tex[i].swizzle_g = swizzle_tab[view->swizzle_g];
          key->tex[i].swizzle_b = swizzle_tab[view->swizzle_b];
          key->tex[i].swizzle_a = swizzle_tab[view->swizzle_a];
+      }
+
+      if (sampler) {
+         if (!sampler->normalized_coords) {
+            assert(idx < (1 << 5));  /* width_height_idx:5 bitfield */
+            key->tex[i].width_height_idx = idx++;
+            key->tex[i].unnormalized = TRUE;
+            ++key->num_unnormalized_coords;
+
+            if (sampler->magfilter == SVGA3D_TEX_FILTER_NEAREST ||
+                sampler->minfilter == SVGA3D_TEX_FILTER_NEAREST) {
+                key->tex[i].texel_bias = TRUE;
+            }
+         }
       }
    }
 }

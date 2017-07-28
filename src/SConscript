@@ -7,6 +7,7 @@ Import('*')
 if env['platform'] == 'windows':
     SConscript('getopt/SConscript')
 
+SConscript('util/xmlpool/SConscript')
 SConscript('util/SConscript')
 SConscript('compiler/SConscript')
 
@@ -24,7 +25,7 @@ def write_git_sha1_h_file(filename):
 
     tempfile = "git_sha1.h.tmp"
     with open(tempfile, "w") as f:
-        args = [ 'sh', Dir('#').abspath + '/git_sha1_gen.sh' ]
+        args = [ 'sh', Dir('#').abspath + '/bin/git_sha1_gen.sh' ]
         try:
             subprocess.Popen(args, stdout=f).wait()
         except:

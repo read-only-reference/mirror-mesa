@@ -214,6 +214,7 @@ enum brw_state_id {
    BRW_STATE_BLORP,
    BRW_STATE_VIEWPORT_COUNT,
    BRW_STATE_CONSERVATIVE_RASTERIZATION,
+   BRW_STATE_DRAW_CALL,
    BRW_NUM_STATE_BITS
 };
 
@@ -304,6 +305,7 @@ enum brw_state_id {
 #define BRW_NEW_CC_STATE                (1ull << BRW_STATE_CC_STATE)
 #define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
 #define BRW_NEW_CONSERVATIVE_RASTERIZATION (1ull << BRW_STATE_CONSERVATIVE_RASTERIZATION)
+#define BRW_NEW_DRAW_CALL               (1ull << BRW_STATE_DRAW_CALL)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -371,7 +373,6 @@ struct brw_cache {
    GLuint size, n_items;
 
    uint32_t next_offset;
-   bool bo_used_by_gpu;
 };
 
 /* Considered adding a member to this struct to document which flags
@@ -456,11 +457,13 @@ struct intel_batchbuffer {
    struct drm_i915_gem_relocation_entry *relocs;
    int reloc_count;
    int reloc_array_size;
+
    /** The validation list */
-   struct drm_i915_gem_exec_object2 *exec_objects;
+   struct drm_i915_gem_exec_object2 *validation_list;
    struct brw_bo **exec_bos;
    int exec_count;
    int exec_array_size;
+
    /** The amount of aperture space (in bytes) used by all exec_bos */
    int aperture_space;
 
@@ -552,7 +555,8 @@ struct brw_stage_state
    /** Offset in the batchbuffer to Gen4-5 pipelined state (VS/WM/GS_STATE). */
    uint32_t state_offset;
 
-   uint32_t push_const_offset; /* Offset in the batchbuffer */
+   struct brw_bo *push_const_bo; /* NULL if using the batchbuffer */
+   uint32_t push_const_offset; /* Offset in the push constant BO or batch */
    int push_const_size; /* in 256-bit register increments */
 
    /* Binding table: pointers to SURFACE_STATE entries. */
@@ -562,6 +566,9 @@ struct brw_stage_state
    /** SAMPLER_STATE count and table offset */
    uint32_t sampler_count;
    uint32_t sampler_offset;
+
+   /** Need to re-emit 3DSTATE_CONSTANT_XS? */
+   bool push_constants_dirty;
 };
 
 enum brw_predicate_state {
@@ -1249,6 +1256,8 @@ enum {
 void intel_update_renderbuffers(__DRIcontext *context,
                                 __DRIdrawable *drawable);
 void intel_prepare_render(struct brw_context *brw);
+
+void brw_predraw_resolve_inputs(struct brw_context *brw);
 
 void intel_resolve_for_dri2_flush(struct brw_context *brw,
                                   __DRIdrawable *drawable);

@@ -36,7 +36,9 @@
 #include "brw_bufmgr.h"
 #include "common/gen_device_info.h"
 #include "i915_drm.h"
-#include "xmlconfig.h"
+#include "util/xmlconfig.h"
+
+#include "isl/isl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +61,8 @@ struct intel_screen
    bool has_exec_fence; /**< I915_PARAM_HAS_EXEC_FENCE */
 
    int hw_has_timestamp;
+
+   struct isl_device isl_dev;
 
    /**
     * Does the kernel support context reset notifications?
