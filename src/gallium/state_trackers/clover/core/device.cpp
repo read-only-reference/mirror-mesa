@@ -20,6 +20,7 @@
 // OTHER DEALINGS IN THE SOFTWARE.
 //
 
+#include <unistd.h>
 #include "core/device.hpp"
 #include "core/platform.hpp"
 #include "pipe/p_screen.h"
@@ -42,7 +43,7 @@ namespace {
 
 device::device(clover::platform &platform, pipe_loader_device *ldev) :
    platform(platform), ldev(ldev) {
-   pipe = pipe_loader_create_screen(ldev, 0);
+   pipe = pipe_loader_create_screen(ldev);
    if (!pipe || !pipe->get_param(pipe, PIPE_CAP_COMPUTE)) {
       if (pipe)
          pipe->destroy(pipe);
@@ -194,6 +195,11 @@ device::has_unified_memory() const {
    return pipe->get_param(pipe, PIPE_CAP_UMA);
 }
 
+cl_uint
+device::mem_base_addr_align() const {
+   return sysconf(_SC_PAGESIZE);
+}
+
 std::vector<size_t>
 device::max_block_size() const {
    auto v = get_compute_param<uint64_t>(pipe, ir_format(),
@@ -239,4 +245,14 @@ device::ir_target() const {
 enum pipe_endian
 device::endianness() const {
    return (enum pipe_endian)pipe->get_param(pipe, PIPE_CAP_ENDIANNESS);
+}
+
+std::string
+device::device_version() const {
+    return "1.1";
+}
+
+std::string
+device::device_clc_version() const {
+    return "1.1";
 }

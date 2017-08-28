@@ -86,6 +86,7 @@ typedef uint32_t xcb_window_t;
 #define MAX_SAMPLES_LOG2 4
 #define NUM_META_FS_KEYS 13
 #define RADV_MAX_DRM_DEVICES 8
+#define MAX_VIEWS        8
 
 #define NUM_DEPTH_CLEAR_PIPELINES 3
 
@@ -267,6 +268,7 @@ struct radv_physical_device {
 	struct radeon_info rad_info;
 	char                                        path[20];
 	const char *                                name;
+	uint8_t                                     driver_uuid[VK_UUID_SIZE];
 	uint8_t                                     device_uuid[VK_UUID_SIZE];
 	uint8_t                                     cache_uuid[VK_UUID_SIZE];
 
@@ -433,8 +435,6 @@ struct radv_meta_state {
 		VkPipelineLayout                          p_layout;
 
 		struct {
-			VkRenderPass srgb_render_pass;
-			VkPipeline   srgb_pipeline;
 			VkRenderPass render_pass[NUM_META_FS_KEYS];
 			VkPipeline   pipeline[NUM_META_FS_KEYS];
 		} rc[MAX_SAMPLES_LOG2];
@@ -444,7 +444,7 @@ struct radv_meta_state {
 		VkPipeline                                decompress_pipeline;
 		VkPipeline                                resummarize_pipeline;
 		VkRenderPass                              pass;
-	} depth_decomp;
+	} depth_decomp[1 + MAX_SAMPLES_LOG2];
 
 	struct {
 		VkPipeline                                cmask_eliminate_pipeline;
@@ -548,7 +548,14 @@ struct radv_device {
 	/* Backup in-memory cache to be used if the app doesn't provide one */
 	struct radv_pipeline_cache *                mem_cache;
 
+	/*
+	 * use different counters so MSAA MRTs get consecutive surface indices,
+	 * even if MASK is allocated in between.
+	 */
 	uint32_t image_mrt_offset_counter;
+	uint32_t fmask_mrt_offset_counter;
+	struct list_head shader_slabs;
+	mtx_t shader_slab_mutex;
 };
 
 struct radv_device_memory {
@@ -746,6 +753,7 @@ void radv_dynamic_state_copy(struct radv_dynamic_state *dest,
  */
 struct radv_attachment_state {
 	VkImageAspectFlags                           pending_clear_aspects;
+	uint32_t                                     cleared_views;
 	VkClearValue                                 clear_value;
 	VkImageLayout                                current_layout;
 };
@@ -825,7 +833,7 @@ struct radv_cmd_buffer {
 	bool tess_rings_needed;
 	bool sample_positions_needed;
 
-	bool record_fail;
+	VkResult record_result;
 
 	int ring_offsets_idx; /* just used for verification */
 	uint32_t gfx9_fence_offset;
@@ -950,14 +958,14 @@ struct radv_shader_module {
 	char                                         data[0];
 };
 
-union ac_shader_variant_key;
+struct ac_shader_variant_key;
 
 void
 radv_hash_shader(unsigned char *hash, struct radv_shader_module *module,
 		 const char *entrypoint,
 		 const VkSpecializationInfo *spec_info,
 		 const struct radv_pipeline_layout *layout,
-		 const union ac_shader_variant_key *key,
+		 const struct ac_shader_variant_key *key,
 		 uint32_t is_geom_copy_shader);
 
 static inline gl_shader_stage
@@ -981,16 +989,34 @@ mesa_to_vk_shader_stage(gl_shader_stage mesa_stage)
 	     stage = __builtin_ffs(__tmp) - 1, __tmp;			\
 	     __tmp &= ~(1 << (stage)))
 
+
+struct radv_shader_slab {
+	struct list_head slabs;
+	struct list_head shaders;
+	struct radeon_winsys_bo *bo;
+	uint64_t size;
+	char *ptr;
+};
+
 struct radv_shader_variant {
 	uint32_t ref_count;
 
 	struct radeon_winsys_bo *bo;
+	uint64_t bo_offset;
 	struct ac_shader_config config;
 	struct ac_shader_variant_info info;
 	unsigned rsrc1;
 	unsigned rsrc2;
 	uint32_t code_size;
+
+	struct list_head slab_list;
 };
+
+
+void *radv_alloc_shader_memory(struct radv_device *device,
+                              struct radv_shader_variant *shader);
+
+void radv_destroy_shader_slabs(struct radv_device *device);
 
 struct radv_depth_stencil_state {
 	uint32_t db_depth_control;
@@ -1002,7 +1028,7 @@ struct radv_depth_stencil_state {
 struct radv_blend_state {
 	uint32_t cb_color_control;
 	uint32_t cb_target_mask;
-	uint32_t sx_mrt0_blend_opt[8];
+	uint32_t sx_mrt_blend_opt[8];
 	uint32_t cb_blend_control[8];
 
 	uint32_t spi_shader_col_format;
@@ -1173,6 +1199,7 @@ struct radv_fmask_info {
 	unsigned bank_height;
 	unsigned slice_tile_max;
 	unsigned tile_mode_index;
+	unsigned tile_swizzle;
 };
 
 struct radv_cmask_info {
@@ -1280,6 +1307,7 @@ struct radv_image_view {
 	uint32_t base_layer;
 	uint32_t layer_count;
 	uint32_t base_mip;
+	uint32_t level_count;
 	VkExtent3D extent; /**< Extent of VkImageViewCreateInfo::baseMipLevel. */
 
 	uint32_t descriptor[8];
@@ -1438,6 +1466,8 @@ struct radv_subpass {
 	bool                                         has_resolve;
 
 	struct radv_subpass_barrier                  start_barrier;
+
+	uint32_t                                     view_mask;
 };
 
 struct radv_render_pass_attachment {
@@ -1447,6 +1477,7 @@ struct radv_render_pass_attachment {
 	VkAttachmentLoadOp                           stencil_load_op;
 	VkImageLayout                                initial_layout;
 	VkImageLayout                                final_layout;
+	uint32_t                                     view_mask;
 };
 
 struct radv_render_pass {

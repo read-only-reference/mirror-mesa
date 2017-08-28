@@ -67,13 +67,14 @@
 #define		COPY_DATA_WR_CONFIRM		(1 << 20)
 #define PKT3_EVENT_WRITE                       0x46
 #define PKT3_EVENT_WRITE_EOP                   0x47
+#define         EOP_INT_SEL(x)                          ((x) << 24)
+#define			EOP_INT_SEL_NONE			0
+#define			EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM	3
 #define         EOP_DATA_SEL(x)                         ((x) << 29)
-		/* 0 - discard
-		 * 1 - send low 32bit data
-		 * 2 - send 64bit data
-		 * 3 - send 64bit GPU counter value
-		 * 4 - send 64bit sys counter value
-		 */
+#define			EOP_DATA_SEL_DISCARD		0
+#define			EOP_DATA_SEL_VALUE_32BIT	1
+#define			EOP_DATA_SEL_VALUE_64BIT	2
+#define			EOP_DATA_SEL_TIMESTAMP		3
 #define PKT3_RELEASE_MEM                       0x49 /* GFX9+ */
 #define PKT3_SET_CONFIG_REG		       0x68
 #define PKT3_SET_CONTEXT_REG		       0x69
@@ -117,6 +118,7 @@
 #define PREDICATION_OP_CLEAR 0x0
 #define PREDICATION_OP_ZPASS 0x1
 #define PREDICATION_OP_PRIMCOUNT 0x2
+#define PREDICATION_OP_BOOL64 0x3
 #define PRED_OP(x) ((x) << 16)
 #define PREDICATION_CONTINUE (1 << 31)
 #define PREDICATION_HINT_WAIT (0 << 12)

@@ -42,6 +42,7 @@ struct r600_resource;
 
 enum {
 	R600_QUERY_DRAW_CALLS = PIPE_QUERY_DRIVER_SPECIFIC,
+	R600_QUERY_DECOMPRESS_CALLS,
 	R600_QUERY_MRT_DRAW_CALLS,
 	R600_QUERY_PRIM_RESTART_CALLS,
 	R600_QUERY_SPILL_DRAW_CALLS,
@@ -99,9 +100,8 @@ enum {
 	R600_QUERY_GPU_MEQ_BUSY,
 	R600_QUERY_GPU_ME_BUSY,
 	R600_QUERY_GPU_SURF_SYNC_BUSY,
-	R600_QUERY_GPU_DMA_BUSY,
+	R600_QUERY_GPU_CP_DMA_BUSY,
 	R600_QUERY_GPU_SCRATCH_RAM_BUSY,
-	R600_QUERY_GPU_CE_BUSY,
 	R600_QUERY_NUM_COMPILATIONS,
 	R600_QUERY_NUM_SHADERS_CREATED,
 	R600_QUERY_BACK_BUFFER_PS_DRAW_RATIO,
@@ -194,6 +194,10 @@ struct r600_query_hw {
 	struct list_head list;
 	/* For transform feedback: which stream the query is for */
 	unsigned stream;
+
+	/* Workaround via compute shader */
+	struct r600_resource *workaround_buf;
+	unsigned workaround_offset;
 };
 
 bool r600_query_hw_init(struct r600_common_screen *rscreen,

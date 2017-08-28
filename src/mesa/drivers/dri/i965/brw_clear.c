@@ -107,8 +107,9 @@ brw_fast_clear_depth(struct gl_context *ctx)
       intel_get_renderbuffer(fb, BUFFER_DEPTH);
    struct intel_mipmap_tree *mt = depth_irb->mt;
    struct gl_renderbuffer_attachment *depth_att = &fb->Attachment[BUFFER_DEPTH];
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   if (brw->gen < 6)
+   if (devinfo->gen < 6)
       return false;
 
    if (!intel_renderbuffer_has_hiz(depth_irb))
@@ -149,7 +150,7 @@ brw_fast_clear_depth(struct gl_context *ctx)
        *        width of the map (LOD0) is not multiple of 16, fast clear
        *        optimization must be disabled.
        */
-      if (brw->gen == 6 &&
+      if (devinfo->gen == 6 &&
           (minify(mt->surf.phys_level0_sa.width,
                   depth_irb->mt_level - mt->first_level) % 16) != 0)
 	 return false;
@@ -159,12 +160,22 @@ brw_fast_clear_depth(struct gl_context *ctx)
       break;
    }
 
+   /* Quantize the clear value to what can be stored in the actual depth
+    * buffer.  This makes the following check more accurate because it now
+    * checks if the actual depth bits will match.  It also prevents us from
+    * getting a too-accurate depth value during depth testing or when sampling
+    * with HiZ enabled.
+    */
+   float clear_value =
+      mt->format == MESA_FORMAT_Z_FLOAT32 ? ctx->Depth.Clear :
+      (unsigned)(ctx->Depth.Clear * fb->_DepthMax) / (float)fb->_DepthMax;
+
    const uint32_t num_layers = depth_att->Layered ? depth_irb->layer_count : 1;
 
    /* If we're clearing to a new clear value, then we need to resolve any clear
     * flags out of the HiZ buffer into the real depth buffer.
     */
-   if (mt->fast_clear_color.f32[0] != ctx->Depth.Clear) {
+   if (mt->fast_clear_color.f32[0] != clear_value) {
       for (uint32_t level = mt->first_level; level <= mt->last_level; level++) {
          if (!intel_miptree_level_has_hiz(mt, level))
             continue;
@@ -201,7 +212,7 @@ brw_fast_clear_depth(struct gl_context *ctx)
          }
       }
 
-      mt->fast_clear_color.f32[0] = ctx->Depth.Clear;
+      mt->fast_clear_color.f32[0] = clear_value;
    }
 
    bool need_clear = false;
@@ -254,6 +265,7 @@ brw_clear(struct gl_context *ctx, GLbitfield mask)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_framebuffer *fb = ctx->DrawBuffer;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    bool partial_clear = ctx->Scissor.EnableFlags && !noop_scissor(fb);
 
    if (!_mesa_check_conditional_render(ctx))
@@ -288,7 +300,7 @@ brw_clear(struct gl_context *ctx, GLbitfield mask)
       mask &= ~BUFFER_BITS_COLOR;
    }
 
-   if (brw->gen >= 6 && (mask & BUFFER_BITS_DEPTH_STENCIL)) {
+   if (devinfo->gen >= 6 && (mask & BUFFER_BITS_DEPTH_STENCIL)) {
       brw_blorp_clear_depth_stencil(brw, fb, mask, partial_clear);
       debug_mask("blorp depth/stencil", mask & BUFFER_BITS_DEPTH_STENCIL);
       mask &= ~BUFFER_BITS_DEPTH_STENCIL;

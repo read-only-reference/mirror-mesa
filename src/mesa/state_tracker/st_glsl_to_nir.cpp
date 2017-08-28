@@ -35,7 +35,6 @@
 #include "main/errors.h"
 #include "main/shaderapi.h"
 #include "main/uniforms.h"
-#include "util/string_to_uint_map.h"
 
 #include "st_context.h"
 #include "st_program.h"
@@ -44,6 +43,7 @@
 #include "compiler/glsl_types.h"
 #include "compiler/glsl/glsl_to_nir.h"
 #include "compiler/glsl/ir.h"
+#include "compiler/glsl/string_to_uint_map.h"
 
 
 static int
@@ -227,7 +227,7 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
                gl_shader_stage stage)
 {
    struct pipe_screen *pscreen = st->pipe->screen;
-   enum pipe_shader_type ptarget = st_shader_stage_to_ptarget(stage);
+   enum pipe_shader_type ptarget = pipe_shader_type_from_mesa(stage);
    const nir_shader_compiler_options *options;
    nir_shader *nir;
 
@@ -400,7 +400,7 @@ st_nir_get_mesa_program(struct gl_context *ctx,
    do_set_program_inouts(shader->ir, prog, shader->Stage);
 
    _mesa_copy_linked_program_data(shader_program, shader);
-   _mesa_generate_parameters_list_for_uniforms(shader_program, shader,
+   _mesa_generate_parameters_list_for_uniforms(ctx, shader_program, shader,
                                                prog->Parameters);
 
    /* Make a pass over the IR to add state references for any built-in

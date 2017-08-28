@@ -205,7 +205,8 @@ clGetDeviceInfo(cl_device_id d_dev, cl_device_info param,
       break;
 
    case CL_DEVICE_MEM_BASE_ADDR_ALIGN:
-      buf.as_scalar<cl_uint>() = 128 * 8;
+      buf.as_scalar<cl_uint>() = 8 *
+         std::max(dev.mem_base_addr_align(), (cl_uint) sizeof(cl_long) * 16);
       break;
 
    case CL_DEVICE_MIN_DATA_TYPE_ALIGN_SIZE:
@@ -314,7 +315,7 @@ clGetDeviceInfo(cl_device_id d_dev, cl_device_info param,
       break;
 
    case CL_DEVICE_VERSION:
-      buf.as_string() = "OpenCL 1.1 Mesa " PACKAGE_VERSION
+      buf.as_string() = "OpenCL " + dev.device_version() + " Mesa " PACKAGE_VERSION
 #ifdef MESA_GIT_SHA1
                         " (" MESA_GIT_SHA1 ")"
 #endif
@@ -368,7 +369,7 @@ clGetDeviceInfo(cl_device_id d_dev, cl_device_info param,
       break;
 
    case CL_DEVICE_OPENCL_C_VERSION:
-      buf.as_string() = "OpenCL C 1.1 ";
+      buf.as_string() = "OpenCL C " + dev.device_clc_version() + " ";
       break;
 
    case CL_DEVICE_PRINTF_BUFFER_SIZE:

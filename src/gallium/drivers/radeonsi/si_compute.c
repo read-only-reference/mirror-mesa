@@ -151,6 +151,7 @@ static void *si_create_compute_state(
 	struct si_screen *sscreen = (struct si_screen *)ctx->screen;
 	struct si_compute *program = CALLOC_STRUCT(si_compute);
 
+	pipe_reference_init(&program->reference, 1);
 	program->screen = (struct si_screen *)ctx->screen;
 	program->ir_type = cso->ir_type;
 	program->local_size = cso->req_local_mem;
@@ -781,6 +782,11 @@ static void si_launch_grid(
 	    program->shader.compilation_failed)
 		return;
 
+	if (sctx->b.last_num_draw_calls != sctx->b.num_draw_calls) {
+		si_update_fb_dirtiness_after_rendering(sctx);
+		sctx->b.last_num_draw_calls = sctx->b.num_draw_calls;
+	}
+
 	si_decompress_compute_textures(sctx);
 
 	/* Add buffer sizes for memory checking in need_cs_space. */
@@ -800,6 +806,9 @@ static void si_launch_grid(
 
 	si_need_cs_space(sctx);
 
+	if (sctx->b.log)
+		si_log_compute_state(sctx, sctx->b.log);
+
 	if (!sctx->cs_shader_state.initialized)
 		si_initialize_compute(sctx);
 
@@ -811,7 +820,7 @@ static void si_launch_grid(
 		return;
 
 	si_upload_compute_shader_descriptors(sctx);
-	si_emit_compute_shader_userdata(sctx);
+	si_emit_compute_shader_pointers(sctx);
 
 	if (si_is_atom_dirty(sctx, sctx->atoms.s.render_cond)) {
 		sctx->atoms.s.render_cond->emit(&sctx->b,
@@ -840,11 +849,10 @@ static void si_launch_grid(
 	if (program->ir_type == PIPE_SHADER_IR_TGSI)
 		si_setup_tgsi_grid(sctx, info);
 
-	si_ce_pre_draw_synchronization(sctx);
-
 	si_emit_dispatch_packets(sctx, info);
 
-	si_ce_post_draw_synchronization(sctx);
+	if (unlikely(sctx->current_saved_cs))
+		si_trace_emit(sctx);
 
 	sctx->compute_is_busy = true;
 	sctx->b.num_compute_calls++;
@@ -855,20 +863,24 @@ static void si_launch_grid(
 		sctx->b.flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
 }
 
+void si_destroy_compute(struct si_compute *program)
+{
+	if (program->ir_type == PIPE_SHADER_IR_TGSI) {
+		util_queue_drop_job(&program->screen->shader_compiler_queue,
+				    &program->ready);
+		util_queue_fence_destroy(&program->ready);
+	}
+
+	si_shader_destroy(&program->shader);
+	FREE(program);
+}
 
 static void si_delete_compute_state(struct pipe_context *ctx, void* state){
 	struct si_compute *program = (struct si_compute *)state;
 	struct si_context *sctx = (struct si_context*)ctx;
 
-	if (!state) {
+	if (!state)
 		return;
-	}
-
-	if (program->ir_type == PIPE_SHADER_IR_TGSI) {
-		util_queue_drop_job(&sctx->screen->shader_compiler_queue,
-				    &program->ready);
-		util_queue_fence_destroy(&program->ready);
-	}
 
 	if (program == sctx->cs_shader_state.program)
 		sctx->cs_shader_state.program = NULL;
@@ -876,8 +888,7 @@ static void si_delete_compute_state(struct pipe_context *ctx, void* state){
 	if (program == sctx->cs_shader_state.emitted_program)
 		sctx->cs_shader_state.emitted_program = NULL;
 
-	si_shader_destroy(&program->shader);
-	FREE(program);
+	si_compute_reference(&program, NULL);
 }
 
 static void si_set_compute_resources(struct pipe_context * ctx_,

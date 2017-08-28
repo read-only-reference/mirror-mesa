@@ -89,7 +89,7 @@ radv_hash_shader(unsigned char *hash, struct radv_shader_module *module,
 		 const char *entrypoint,
 		 const VkSpecializationInfo *spec_info,
 		 const struct radv_pipeline_layout *layout,
-		 const union ac_shader_variant_key *key,
+		 const struct ac_shader_variant_key *key,
 		 uint32_t is_geom_copy_shader)
 {
 	struct mesa_sha1 ctx;
@@ -117,6 +117,9 @@ radv_pipeline_cache_search_unlocked(struct radv_pipeline_cache *cache,
 {
 	const uint32_t mask = cache->table_size - 1;
 	const uint32_t start = (*(uint32_t *) sha1);
+
+	if (cache->table_size == 0)
+		return NULL;
 
 	for (uint32_t i = 0; i < cache->table_size; i++) {
 		const uint32_t index = (start + i) & mask;
@@ -168,6 +171,7 @@ radv_create_shader_variant_from_pipeline_cache(struct radv_device *device,
 		if (!variant)
 			return NULL;
 
+		variant->code_size = entry->code_size;
 		variant->config = entry->config;
 		variant->info = entry->variant_info;
 		variant->rsrc1 = entry->rsrc1;
@@ -175,12 +179,8 @@ radv_create_shader_variant_from_pipeline_cache(struct radv_device *device,
 		variant->code_size = entry->code_size;
 		variant->ref_count = 1;
 
-		variant->bo = device->ws->buffer_create(device->ws, entry->code_size, 256,
-						RADEON_DOMAIN_VRAM, RADEON_FLAG_CPU_ACCESS);
-
-		void *ptr = device->ws->buffer_map(variant->bo);
+		void *ptr = radv_alloc_shader_memory(device, variant);
 		memcpy(ptr, entry->code, entry->code_size);
-		device->ws->buffer_unmap(variant->bo);
 
 		entry->variant = variant;
 	}

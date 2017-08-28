@@ -282,85 +282,50 @@ esac
 
 AM_CONDITIONAL(HAVE_ANDROID, test "x$android" = xyes)
 
-dnl Add flags for gcc and g++
-if test "x$GCC" = xyes; then
-    CFLAGS="$CFLAGS -Wall"
+dnl
+dnl Check compiler flags
+dnl
+AX_CHECK_COMPILE_FLAG([-Wall],                                 [CFLAGS="$CFLAGS -Wall"])
+AX_CHECK_COMPILE_FLAG([-Werror=implicit-function-declaration], [CFLAGS="$CFLAGS -Werror=implicit-function-declaration"])
+AX_CHECK_COMPILE_FLAG([-Werror=missing-prototypes],            [CFLAGS="$CFLAGS -Werror=missing-prototypes"])
+AX_CHECK_COMPILE_FLAG([-Wmissing-prototypes],                  [CFLAGS="$CFLAGS -Wmissing-prototypes"])
+AX_CHECK_COMPILE_FLAG([-fno-math-errno],                       [CFLAGS="$CFLAGS -fno-math-errno"])
+AX_CHECK_COMPILE_FLAG([-fno-trapping-math],                    [CFLAGS="$CFLAGS -fno-trapping-math"])
+AX_CHECK_COMPILE_FLAG([-fvisibility=hidden],                   [VISIBILITY_CFLAGS="-fvisibility=hidden"])
 
+dnl
+dnl Check C++ compiler flags
+dnl
+AC_LANG_PUSH([C++])
+AX_CHECK_COMPILE_FLAG([-Wall],                                 [CXXFLAGS="$CXXFLAGS -Wall"])
+AX_CHECK_COMPILE_FLAG([-fno-math-errno],                       [CXXFLAGS="$CXXFLAGS -fno-math-errno"])
+AX_CHECK_COMPILE_FLAG([-fno-trapping-math],                    [CXXFLAGS="$CXXFLAGS -fno-trapping-math"])
+AX_CHECK_COMPILE_FLAG([-fvisibility=hidden],                   [VISIBILITY_CXXFLAGS="-fvisibility=hidden"])
+AC_LANG_POP([C++])
+
+# Flags to help ensure that certain portions of the code -- and only those
+# portions -- can be built with MSVC:
+# - src/util, src/gallium/auxiliary, rc/gallium/drivers/llvmpipe, and
+# - non-Linux/Posix OpenGL portions needs to build on MSVC 2013 (which
+#   supports most of C99)
+# - the rest has no compiler compiler restrictions
+AX_CHECK_COMPILE_FLAG([-Werror=pointer-arith],                 [MSVC2013_COMPAT_CFLAGS="-Werror=pointer-arith"])
+AX_CHECK_COMPILE_FLAG([-Werror=vla],                           [MSVC2013_COMPAT_CFLAGS="-Werror=vla"])
+AC_LANG_PUSH([C++])
+AX_CHECK_COMPILE_FLAG([-Werror=pointer-arith],                 [MSVC2013_COMPAT_CXXFLAGS="-Werror=pointer-arith"])
+AX_CHECK_COMPILE_FLAG([-Werror=vla],                           [MSVC2013_COMPAT_CXXFLAGS="-Werror=vla"])
+AC_LANG_POP([C++])
+
+AC_SUBST([MSVC2013_COMPAT_CFLAGS])
+AC_SUBST([MSVC2013_COMPAT_CXXFLAGS])
+
+if test "x$GCC" = xyes; then
     if test "x$USE_GNU99" = xyes; then
         CFLAGS="$CFLAGS -std=gnu99"
     else
         CFLAGS="$CFLAGS -std=c99"
     fi
-
-    # Enable -Werror=implicit-function-declaration and
-    # -Werror=missing-prototypes, if available, or otherwise, just
-    # -Wmissing-prototypes.  This is particularly useful to avoid
-    # generating a loadable driver module that has undefined symbols.
-    save_CFLAGS="$CFLAGS"
-    AC_MSG_CHECKING([whether $CC supports -Werror=missing-prototypes])
-    CFLAGS="$CFLAGS -Werror=implicit-function-declaration"
-    CFLAGS="$CFLAGS -Werror=missing-prototypes"
-    AC_LINK_IFELSE([AC_LANG_PROGRAM()],
-                   AC_MSG_RESULT([yes]),
-                   [CFLAGS="$save_CFLAGS -Wmissing-prototypes";
-                    AC_MSG_RESULT([no])])
-
-    # Enable -fvisibility=hidden if using a gcc that supports it
-    save_CFLAGS="$CFLAGS"
-    AC_MSG_CHECKING([whether $CC supports -fvisibility=hidden])
-    VISIBILITY_CFLAGS="-fvisibility=hidden"
-    CFLAGS="$CFLAGS $VISIBILITY_CFLAGS"
-    AC_LINK_IFELSE([AC_LANG_PROGRAM()], AC_MSG_RESULT([yes]),
-                   [VISIBILITY_CFLAGS=""; AC_MSG_RESULT([no])])
-
-    # Restore CFLAGS; VISIBILITY_CFLAGS are added to it where needed.
-    CFLAGS=$save_CFLAGS
-
-    # We don't want floating-point math functions to set errno or trap
-    CFLAGS="$CFLAGS -fno-math-errno -fno-trapping-math"
-
-    # Flags to help ensure that certain portions of the code -- and only those
-    # portions -- can be built with MSVC:
-    # - src/util, src/gallium/auxiliary, rc/gallium/drivers/llvmpipe, and
-    # - non-Linux/Posix OpenGL portions needs to build on MSVC 2013 (which
-    #   supports most of C99)
-    # - the rest has no compiler compiler restrictions
-    MSVC2013_COMPAT_CFLAGS="-Werror=pointer-arith"
-    MSVC2013_COMPAT_CXXFLAGS="-Werror=pointer-arith"
-
-    # Enable -Werror=vla if compiler supports it
-    save_CFLAGS="$CFLAGS"
-    AC_MSG_CHECKING([whether $CC supports -Werror=vla])
-    CFLAGS="$CFLAGS -Werror=vla"
-    AC_LINK_IFELSE([AC_LANG_PROGRAM()],
-                   [MSVC2013_COMPAT_CFLAGS="$MSVC2013_COMPAT_CFLAGS -Werror=vla";
-                    MSVC2013_COMPAT_CXXFLAGS="$MSVC2013_COMPAT_CXXFLAGS -Werror=vla";
-                    AC_MSG_RESULT([yes])],
-                    AC_MSG_RESULT([no]))
-    CFLAGS="$save_CFLAGS"
 fi
-if test "x$GXX" = xyes; then
-    CXXFLAGS="$CXXFLAGS -Wall"
-
-    # Enable -fvisibility=hidden if using a gcc that supports it
-    save_CXXFLAGS="$CXXFLAGS"
-    AC_MSG_CHECKING([whether $CXX supports -fvisibility=hidden])
-    VISIBILITY_CXXFLAGS="-fvisibility=hidden"
-    CXXFLAGS="$CXXFLAGS $VISIBILITY_CXXFLAGS"
-    AC_LANG_PUSH([C++])
-    AC_LINK_IFELSE([AC_LANG_PROGRAM()], AC_MSG_RESULT([yes]),
-                   [VISIBILITY_CXXFLAGS="" ; AC_MSG_RESULT([no])])
-    AC_LANG_POP([C++])
-
-    # Restore CXXFLAGS; VISIBILITY_CXXFLAGS are added to it where needed.
-    CXXFLAGS=$save_CXXFLAGS
-
-    # We don't want floating-point math functions to set errno or trap
-    CXXFLAGS="$CXXFLAGS -fno-math-errno -fno-trapping-math"
-fi
-
-AC_SUBST([MSVC2013_COMPAT_CFLAGS])
-AC_SUBST([MSVC2013_COMPAT_CXXFLAGS])
 
 dnl even if the compiler appears to support it, using visibility attributes isn't
 dnl going to do anything useful currently on cygwin apart from emit lots of warnings
@@ -373,6 +338,10 @@ esac
 
 AC_SUBST([VISIBILITY_CFLAGS])
 AC_SUBST([VISIBILITY_CXXFLAGS])
+
+AX_CHECK_COMPILE_FLAG([-Wno-override-init],                    [WNO_OVERRIDE_INIT="-Wno-override-init"])         # gcc
+AX_CHECK_COMPILE_FLAG([-Wno-initializer-overrides],            [WNO_OVERRIDE_INIT="-Wno-initializer-overrides"]) # clang
+AC_SUBST([WNO_OVERRIDE_INIT])
 
 dnl
 dnl Optional flags, check for compiler support
@@ -773,6 +742,20 @@ if test "x$enable_asm" = xyes; then
             ;;
         esac
         ;;
+    aarch64)
+        case "$host_os" in
+        linux*)
+            asm_arch=aarch64
+            ;;
+        esac
+        ;;
+    arm)
+        case "$host_os" in
+        linux*)
+            asm_arch=arm
+            ;;
+        esac
+        ;;
     esac
 
     case "$asm_arch" in
@@ -791,6 +774,14 @@ if test "x$enable_asm" = xyes; then
     ppc64le)
         DEFINES="$DEFINES -DUSE_PPC64LE_ASM"
         AC_MSG_RESULT([yes, ppc64le])
+        ;;
+    aarch64)
+        DEFINES="$DEFINES -DUSE_AARCH64_ASM"
+        AC_MSG_RESULT([yes, aarch64])
+        ;;
+    arm)
+        DEFINES="$DEFINES -DUSE_ARM_ASM"
+        AC_MSG_RESULT([yes, arm])
         ;;
     *)
         AC_MSG_RESULT([no, platform not supported])
@@ -1791,6 +1782,11 @@ if test "x$with_dri_drivers" = xno; then
     with_dri_drivers=''
 fi
 
+# Check for expat
+PKG_CHECK_MODULES([EXPAT], [expat],,
+    [PKG_CHECK_MODULES([EXPAT], [expat21])]
+)
+
 dnl If $with_dri_drivers is yes, drivers will be added through
 dnl platform checks. Set DEFINES and LIB_DEPS
 if test "x$enable_dri" = xyes; then
@@ -1823,15 +1819,6 @@ if test "x$enable_dri" = xyes; then
     if test "x$with_dri_drivers" = "xyes"; then
         with_dri_drivers="i915 i965 nouveau r200 radeon swrast"
     fi
-
-    # Check for expat
-    PKG_CHECK_MODULES([EXPAT], [expat], [],
-        # expat version 2.0 and earlier do not provide expat.pc
-        [AC_CHECK_HEADER([expat.h],[],
-                         [AC_MSG_ERROR([Expat headers required for DRI not found])])
-         AC_CHECK_LIB([expat],[XML_ParserCreate],[],
-                     [AC_MSG_ERROR([Expat library required for DRI not found])])
-         EXPAT_LIBS="-lexpat"])
 
     # put all the necessary libs together
     DRI_LIB_DEPS="$DRI_LIB_DEPS $SELINUX_LIBS $LIBDRM_LIBS $EXPAT_LIBS -lm $PTHREAD_LIBS $DLOPEN_LIBS"
@@ -2511,7 +2498,7 @@ if test -n "$with_gallium_drivers"; then
             AC_SUBST([SWR_CXX11_CXXFLAGS])
 
             swr_require_cxx_feature_flags "AVX" "defined(__AVX__)" \
-                ",-mavx,-march=core-avx" \
+                ",-target-cpu=sandybridge,-mavx,-march=core-avx,-tp=sandybridge" \
                 SWR_AVX_CXXFLAGS
             AC_SUBST([SWR_AVX_CXXFLAGS])
 
@@ -2523,21 +2510,21 @@ if test -n "$with_gallium_drivers"; then
                     ;;
                 xavx2)
                     swr_require_cxx_feature_flags "AVX2" "defined(__AVX2__)" \
-                        ",-mavx2 -mfma -mbmi2 -mf16c,-march=core-avx2" \
+                        ",-target-cpu=haswell,-mavx2 -mfma -mbmi2 -mf16c,-march=core-avx2,-tp=haswell" \
                         SWR_AVX2_CXXFLAGS
                     AC_SUBST([SWR_AVX2_CXXFLAGS])
                     HAVE_SWR_AVX2=yes
                     ;;
                 xknl)
                     swr_require_cxx_feature_flags "KNL" "defined(__AVX512F__) && defined(__AVX512ER__)" \
-                        ",-march=knl,-xMIC-AVX512" \
+                        ",-target-cpu=mic-knl,-march=knl,-xMIC-AVX512" \
                         SWR_KNL_CXXFLAGS
                     AC_SUBST([SWR_KNL_CXXFLAGS])
                     HAVE_SWR_KNL=yes
                     ;;
                 xskx)
                     swr_require_cxx_feature_flags "SKX" "defined(__AVX512F__) && defined(__AVX512BW__)" \
-                        ",-march=skylake-avx512,-xCORE-AVX512" \
+                        ",-target-cpu=x86-skylake,-march=skylake-avx512,-xCORE-AVX512" \
                         SWR_SKX_CXXFLAGS
                     AC_SUBST([SWR_SKX_CXXFLAGS])
                     HAVE_SWR_SKX=yes
@@ -2551,7 +2538,7 @@ if test -n "$with_gallium_drivers"; then
             if test "x$HAVE_SWR_AVX" != xyes -a \
                     "x$HAVE_SWR_AVX2" != xyes -a \
                     "x$HAVE_SWR_KNL" != xyes -a \
-                    "x$HAVE_SWR_SKX" != xyes -a; then
+                    "x$HAVE_SWR_SKX" != xyes; then
                AC_MSG_ERROR([swr enabled but no swr architectures selected])
             fi
 
@@ -2629,35 +2616,37 @@ if test "x$enable_llvm" = xyes; then
     fi
     LLVM_LIBS="`$LLVM_CONFIG --libs ${LLVM_COMPONENTS}`"
 
-    dnl llvm-config may not give the right answer when llvm is a built as a
-    dnl single shared library, so we must work the library name out for
-    dnl ourselves.
-    dnl (See https://llvm.org/bugs/show_bug.cgi?id=6823)
     if test "x$enable_llvm_shared_libs" = xyes; then
-        dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
-        LLVM_SO_NAME=LLVM-`$LLVM_CONFIG --version`
-        AS_IF([test -f "$LLVM_LIBDIR/lib$LLVM_SO_NAME.$IMP_LIB_EXT"], [llvm_have_one_so=yes])
+        if test $LLVM_VERSION_MAJOR -lt 4 -o "`$LLVM_CONFIG --shared-mode ${LLVM_COMPONENTS}`" = static; then
+            dnl llvm-config may not give the right answer when llvm is a built as a
+            dnl single shared library, so we must work the library name out for
+            dnl ourselves.
+            dnl (See https://llvm.org/bugs/show_bug.cgi?id=6823)
+            dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
+            LLVM_SO_NAME=LLVM-`$LLVM_CONFIG --version`
+            AS_IF([test -f "$LLVM_LIBDIR/lib$LLVM_SO_NAME.$IMP_LIB_EXT"], [llvm_have_one_so=yes])
 
-        if test "x$llvm_have_one_so" = xyes; then
-            dnl LLVM was built using auto*, so there is only one shared object.
-            LLVM_LIBS="-l$LLVM_SO_NAME"
-        else
-            dnl If LLVM was built with CMake, there will be one shared object per
-            dnl component.
-            AS_IF([test ! -f "$LLVM_LIBDIR/libLLVMTarget.$IMP_LIB_EXT"],
-                    [AC_MSG_ERROR([Could not find llvm shared libraries:
-	Please make sure you have built llvm with the --enable-shared option
-	and that your llvm libraries are installed in $LLVM_LIBDIR
-	If you have installed your llvm libraries to a different directory you
-	can use the --with-llvm-prefix= configure flag to specify this directory.
-	NOTE: Mesa is attempting to use llvm shared libraries by default.
-	If you do not want to build with llvm shared libraries and instead want to
-	use llvm static libraries then add --disable-llvm-shared-libs to your configure
-	invocation and rebuild.])])
+            if test "x$llvm_have_one_so" = xyes; then
+               dnl LLVM was built using auto*, so there is only one shared object.
+               LLVM_LIBS="-l$LLVM_SO_NAME"
+            else
+                dnl If LLVM was built with CMake, there will be one shared object per
+                dnl component.
+                AS_IF([test ! -f "$LLVM_LIBDIR/libLLVMTarget.$IMP_LIB_EXT"],
+                      [AC_MSG_ERROR([Could not find llvm shared libraries:
+                       Please make sure you have built llvm with the --enable-shared option
+                       and that your llvm libraries are installed in $LLVM_LIBDIR
+                       If you have installed your llvm libraries to a different directory you
+                       can use the --with-llvm-prefix= configure flag to specify this directory.
+                       NOTE: Mesa is attempting to use llvm shared libraries by default.
+                       If you do not want to build with llvm shared libraries and instead want to
+                       use llvm static libraries then add --disable-llvm-shared-libs to your configure
+                       invocation and rebuild.])])
 
-           dnl We don't need to update LLVM_LIBS in this case because the LLVM
-           dnl install uses a shared object for each component and we have
-           dnl already added all of these objects to LLVM_LIBS.
+                dnl We don't need to update LLVM_LIBS in this case because the LLVM
+                dnl install uses a shared object for each component and we have
+                dnl already added all of these objects to LLVM_LIBS.
+            fi
         fi
     else
         AC_MSG_WARN([Building mesa with statically linked LLVM may cause compilation issues])
@@ -2735,6 +2724,8 @@ AM_CONDITIONAL(HAVE_X86_ASM, test "x$asm_arch" = xx86 -o "x$asm_arch" = xx86_64)
 AM_CONDITIONAL(HAVE_X86_64_ASM, test "x$asm_arch" = xx86_64)
 AM_CONDITIONAL(HAVE_SPARC_ASM, test "x$asm_arch" = xsparc)
 AM_CONDITIONAL(HAVE_PPC64LE_ASM, test "x$asm_arch" = xppc64le)
+AM_CONDITIONAL(HAVE_AARCH64_ASM, test "x$asm_arch" = xaarch64)
+AM_CONDITIONAL(HAVE_ARM_ASM, test "x$asm_arch" = xarm)
 
 AC_SUBST([NINE_MAJOR], 1)
 AC_SUBST([NINE_MINOR], 0)
@@ -2920,6 +2911,8 @@ AC_OUTPUT
 # source file
 $SED -i -e 's/brw_blorp.cpp/brw_blorp.c/' src/mesa/drivers/dri/i965/.deps/brw_blorp.Plo
 
+rm -f src/compiler/spirv/spirv_info.lo
+echo "# dummy" > src/compiler/spirv/.deps/spirv_info.Plo
 
 dnl
 dnl Output some configuration info for the user

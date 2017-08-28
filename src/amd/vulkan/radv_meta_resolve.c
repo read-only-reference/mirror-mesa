@@ -382,6 +382,11 @@ void radv_CmdResolveImage(
 	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
 
 	assert(src_image->info.samples > 1);
+	if (src_image->info.samples <= 1) {
+		/* this causes GPU hangs if we get past here */
+		fprintf(stderr, "radv: Illegal resolve operation (src not multisampled), will hang GPU.");
+		return;
+	}
 	assert(dest_image->info.samples == 1);
 
 	if (src_image->info.samples >= 16) {
@@ -607,13 +612,6 @@ radv_cmd_buffer_resolve_subpass(struct radv_cmd_buffer *cmd_buffer)
 
 		radv_cmd_buffer_set_subpass(cmd_buffer, &resolve_subpass, false);
 
-		/* Subpass resolves must respect the render area. We can ignore the
-		 * render area here because vkCmdBeginRenderPass set the render area
-		 * with 3DSTATE_DRAWING_RECTANGLE.
-		 *
-		 * XXX(chadv): Does the hardware really respect
-		 * 3DSTATE_DRAWING_RECTANGLE when draing a 3DPRIM_RECTLIST?
-		 */
 		emit_resolve(cmd_buffer,
 			     &(VkOffset2D) { 0, 0 },
 			     &(VkExtent2D) { fb->width, fb->height });

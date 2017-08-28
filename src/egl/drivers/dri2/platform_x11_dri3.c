@@ -45,35 +45,6 @@ loader_drawable_to_egl_surface(struct loader_dri3_drawable *draw) {
    return (struct dri3_egl_surface *)(((void*) draw) - offset);
 }
 
-static int
-egl_dri3_get_swap_interval(struct loader_dri3_drawable *draw)
-{
-   struct dri3_egl_surface *dri3_surf = loader_drawable_to_egl_surface(draw);
-
-   return dri3_surf->base.SwapInterval;
-}
-
-static int
-egl_dri3_clamp_swap_interval(struct loader_dri3_drawable *draw, int interval)
-{
-   struct dri3_egl_surface *dri3_surf = loader_drawable_to_egl_surface(draw);
-
-   if (interval > dri3_surf->base.Config->MaxSwapInterval)
-      interval = dri3_surf->base.Config->MaxSwapInterval;
-   else if (interval < dri3_surf->base.Config->MinSwapInterval)
-      interval = dri3_surf->base.Config->MinSwapInterval;
-
-   return interval;
-}
-
-static void
-egl_dri3_set_swap_interval(struct loader_dri3_drawable *draw, int interval)
-{
-   struct dri3_egl_surface *dri3_surf = loader_drawable_to_egl_surface(draw);
-
-   dri3_surf->base.SwapInterval = interval;
-}
-
 static void
 egl_dri3_set_drawable_size(struct loader_dri3_drawable *draw,
                            int width, int height)
@@ -104,17 +75,6 @@ egl_dri3_get_dri_context(struct loader_dri3_drawable *draw)
    return dri2_ctx->dri_context;
 }
 
-static __DRIscreen *
-egl_dri3_get_dri_screen(struct loader_dri3_drawable *draw)
-{
-   _EGLContext *ctx = _eglGetCurrentContext();
-   struct dri2_egl_context *dri2_ctx;
-   if (!ctx)
-      return NULL;
-   dri2_ctx = dri2_egl_context(ctx);
-   return dri2_egl_display(dri2_ctx->base.Resource.Display)->dri_screen;
-}
-
 static void
 egl_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
 {
@@ -125,13 +85,9 @@ egl_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
 }
 
 static const struct loader_dri3_vtable egl_dri3_vtable = {
-   .get_swap_interval = egl_dri3_get_swap_interval,
-   .clamp_swap_interval = egl_dri3_clamp_swap_interval,
-   .set_swap_interval = egl_dri3_set_swap_interval,
    .set_drawable_size = egl_dri3_set_drawable_size,
    .in_current_context = egl_dri3_in_current_context,
    .get_dri_context = egl_dri3_get_dri_context,
-   .get_dri_screen = egl_dri3_get_dri_screen,
    .flush_drawable = egl_dri3_flush_drawable,
    .show_fps = NULL,
 };
@@ -156,6 +112,7 @@ dri3_set_swap_interval(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf,
 {
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(surf);
 
+   dri3_surf->base.SwapInterval = interval;
    loader_dri3_set_swap_interval(&dri3_surf->loader_drawable, interval);
 
    return EGL_TRUE;
@@ -171,9 +128,6 @@ dri3_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
    struct dri3_egl_surface *dri3_surf;
    const __DRIconfig *dri_config;
    xcb_drawable_t drawable;
-
-   STATIC_ASSERT(sizeof(uintptr_t) == sizeof(native_surface));
-   drawable = (uintptr_t) native_surface;
 
    (void) drv;
 
@@ -191,6 +145,9 @@ dri3_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
       xcb_create_pixmap(dri2_dpy->conn, conf->BufferSize,
                         drawable, dri2_dpy->screen->root,
                         dri3_surf->base.Width, dri3_surf->base.Height);
+   } else {
+      STATIC_ASSERT(sizeof(uintptr_t) == sizeof(native_surface));
+      drawable = (uintptr_t) native_surface;
    }
 
    dri_config = dri2_get_dri_config(dri2_conf, type,
@@ -269,7 +226,7 @@ dri3_create_pbuffer_surface(_EGLDriver *drv, _EGLDisplay *disp,
                                 _EGLConfig *conf, const EGLint *attrib_list)
 {
    return dri3_create_surface(drv, disp, EGL_PBUFFER_BIT, conf,
-                              XCB_WINDOW_NONE, attrib_list);
+                              NULL, attrib_list);
 }
 
 static EGLBoolean
@@ -444,6 +401,14 @@ dri3_get_dri_drawable(_EGLSurface *surf)
    return dri3_surf->loader_drawable.dri_drawable;
 }
 
+static void
+dri3_close_screen_notify(_EGLDisplay *dpy)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+
+   loader_dri3_close_screen(dri2_dpy->dri_screen);
+}
+
 struct dri2_egl_display_vtbl dri3_x11_display_vtbl = {
    .authenticate = dri3_authenticate,
    .create_window_surface = dri3_create_window_surface,
@@ -463,6 +428,7 @@ struct dri2_egl_display_vtbl dri3_x11_display_vtbl = {
    .create_wayland_buffer_from_image = dri2_fallback_create_wayland_buffer_from_image,
    .get_sync_values = dri3_get_sync_values,
    .get_dri_drawable = dri3_get_dri_drawable,
+   .close_screen_notify = dri3_close_screen_notify,
 };
 
 EGLBoolean

@@ -158,6 +158,7 @@ brw_emit_prim(struct brw_context *brw,
               struct brw_transform_feedback_object *xfb_obj,
               unsigned stream)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    int verts_per_instance;
    int vertex_access_type;
    int indirect_flag;
@@ -169,20 +170,20 @@ brw_emit_prim(struct brw_context *brw,
    int base_vertex_location = prim->basevertex;
 
    if (prim->indexed) {
-      vertex_access_type = brw->gen >= 7 ?
+      vertex_access_type = devinfo->gen >= 7 ?
          GEN7_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM :
          GEN4_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM;
       start_vertex_location += brw->ib.start_vertex_offset;
       base_vertex_location += brw->vb.start_vertex_bias;
    } else {
-      vertex_access_type = brw->gen >= 7 ?
+      vertex_access_type = devinfo->gen >= 7 ?
          GEN7_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL :
          GEN4_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL;
       start_vertex_location += brw->vb.start_vertex_bias;
    }
 
    /* We only need to trim the primitive count on pre-Gen6. */
-   if (brw->gen < 6)
+   if (devinfo->gen < 6)
       verts_per_instance = trim(prim->mode, prim->count);
    else
       verts_per_instance = prim->count;
@@ -205,7 +206,6 @@ brw_emit_prim(struct brw_context *brw,
 
       brw_load_register_mem(brw, GEN7_3DPRIM_VERTEX_COUNT,
                             xfb_obj->prim_count_bo,
-                            I915_GEM_DOMAIN_VERTEX, 0,
                             stream * sizeof(uint32_t));
       BEGIN_BATCH(9);
       OUT_BATCH(MI_LOAD_REGISTER_IMM | (9 - 2));
@@ -227,25 +227,19 @@ brw_emit_prim(struct brw_context *brw,
       indirect_flag = GEN7_3DPRIM_INDIRECT_PARAMETER_ENABLE;
 
       brw_load_register_mem(brw, GEN7_3DPRIM_VERTEX_COUNT, bo,
-                            I915_GEM_DOMAIN_VERTEX, 0,
                             prim->indirect_offset + 0);
       brw_load_register_mem(brw, GEN7_3DPRIM_INSTANCE_COUNT, bo,
-                            I915_GEM_DOMAIN_VERTEX, 0,
                             prim->indirect_offset + 4);
 
       brw_load_register_mem(brw, GEN7_3DPRIM_START_VERTEX, bo,
-                            I915_GEM_DOMAIN_VERTEX, 0,
                             prim->indirect_offset + 8);
       if (prim->indexed) {
          brw_load_register_mem(brw, GEN7_3DPRIM_BASE_VERTEX, bo,
-                               I915_GEM_DOMAIN_VERTEX, 0,
                                prim->indirect_offset + 12);
          brw_load_register_mem(brw, GEN7_3DPRIM_START_INSTANCE, bo,
-                               I915_GEM_DOMAIN_VERTEX, 0,
                                prim->indirect_offset + 16);
       } else {
          brw_load_register_mem(brw, GEN7_3DPRIM_START_INSTANCE, bo,
-                               I915_GEM_DOMAIN_VERTEX, 0,
                                prim->indirect_offset + 12);
          BEGIN_BATCH(3);
          OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
@@ -257,9 +251,9 @@ brw_emit_prim(struct brw_context *brw,
       indirect_flag = 0;
    }
 
-   BEGIN_BATCH(brw->gen >= 7 ? 7 : 6);
+   BEGIN_BATCH(devinfo->gen >= 7 ? 7 : 6);
 
-   if (brw->gen >= 7) {
+   if (devinfo->gen >= 7) {
       const int predicate_enable =
          (brw->predicate.state == BRW_PREDICATE_STATE_USE_BIT)
          ? GEN7_3DPRIM_PREDICATE_ENABLE : 0;
@@ -287,6 +281,7 @@ static void
 brw_merge_inputs(struct brw_context *brw,
                  const struct gl_vertex_array *arrays[])
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    const struct gl_context *ctx = &brw->ctx;
    GLuint i;
 
@@ -301,7 +296,7 @@ brw_merge_inputs(struct brw_context *brw,
       brw->vb.inputs[i].glarray = arrays[i];
    }
 
-   if (brw->gen < 8 && !brw->is_haswell) {
+   if (devinfo->gen < 8 && !devinfo->is_haswell) {
       uint64_t mask = ctx->VertexProgram._Current->info.inputs_read;
       /* Prior to Haswell, the hardware can't natively support GL_FIXED or
        * 2_10_10_10_REV vertex formats.  Set appropriate workaround flags.
@@ -368,6 +363,7 @@ intel_disable_rb_aux_buffer(struct brw_context *brw, const struct brw_bo *bo)
 void
 brw_predraw_resolve_inputs(struct brw_context *brw)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
    struct intel_texture_object *tex_obj;
 
@@ -391,10 +387,10 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
       intel_miptree_prepare_texture(brw, tex_obj->mt, view_format,
                                     &aux_supported);
 
-      if (!aux_supported && brw->gen >= 9 &&
+      if (!aux_supported && devinfo->gen >= 9 &&
           intel_disable_rb_aux_buffer(brw, tex_obj->mt->bo)) {
          perf_debug("Sampling renderbuffer with non-compressible format - "
-                    "turning off compression");
+                    "turning off compression\n");
       }
 
       brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
@@ -421,7 +417,7 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
                if (tex_obj->mt->aux_usage == ISL_AUX_USAGE_CCS_E &&
                    intel_disable_rb_aux_buffer(brw, tex_obj->mt->bo)) {
                   perf_debug("Using renderbuffer as shader image - turning "
-                             "off lossless compression");
+                             "off lossless compression\n");
                }
 
                brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
@@ -538,7 +534,7 @@ brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
 
       if (!irb)
          continue;
-     
+
       brw_render_cache_set_add_bo(brw, irb->mt->bo);
       intel_miptree_finish_render(brw, irb->mt, irb->mt_level,
                                   irb->mt_layer, irb->layer_count,
@@ -614,6 +610,7 @@ brw_try_draw_prims(struct gl_context *ctx,
                    struct gl_buffer_object *indirect)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    GLuint i;
    bool fail_next = false;
 
@@ -760,7 +757,7 @@ brw_try_draw_prims(struct gl_context *ctx,
       if (i > 0 && vs_prog_data->uses_drawid)
          brw->ctx.NewDriverState |= BRW_NEW_VERTICES;
 
-      if (brw->gen < 6)
+      if (devinfo->gen < 6)
          brw_set_prim(brw, &prims[i]);
       else
          gen6_set_prim(brw, &prims[i]);

@@ -358,9 +358,6 @@ enum pipe_flush_flags
  * Flags for pipe_context::dump_debug_state.
  */
 #define PIPE_DUMP_DEVICE_STATUS_REGISTERS    (1 << 0)
-#define PIPE_DUMP_CURRENT_STATES             (1 << 1)
-#define PIPE_DUMP_CURRENT_SHADERS            (1 << 2)
-#define PIPE_DUMP_LAST_COMMAND_BUFFER        (1 << 3)
 
 /**
  * Create a compute-only context. Use in pipe_screen::context_create.
@@ -389,12 +386,6 @@ enum pipe_flush_flags
  * enabled)
  */
 #define PIPE_CONTEXT_PREFER_THREADED   (1 << 3)
-
-/**
- * Implicit and explicit derivatives after KILL behave as if KILL didn't
- * happen.
- */
-#define PIPE_SCREEN_ENABLE_CORRECT_TGSI_DERIVATIVES_AFTER_KILL (1 << 0)
 
 
 /**
@@ -546,6 +537,7 @@ enum pipe_query_type {
    PIPE_QUERY_PRIMITIVES_EMITTED,
    PIPE_QUERY_SO_STATISTICS,
    PIPE_QUERY_SO_OVERFLOW_PREDICATE,
+   PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE,
    PIPE_QUERY_GPU_FINISHED,
    PIPE_QUERY_PIPELINE_STATISTICS,
    PIPE_QUERY_TYPES,
@@ -781,6 +773,8 @@ enum pipe_cap
    PIPE_CAP_POST_DEPTH_COVERAGE,
    PIPE_CAP_BINDLESS_TEXTURE,
    PIPE_CAP_NIR_SAMPLERS_AS_DEREF,
+   PIPE_CAP_QUERY_SO_OVERFLOW,
+   PIPE_CAP_MEMOBJ,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)
@@ -952,6 +946,7 @@ union pipe_query_result
 {
    /* PIPE_QUERY_OCCLUSION_PREDICATE */
    /* PIPE_QUERY_SO_OVERFLOW_PREDICATE */
+   /* PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE */
    /* PIPE_QUERY_GPU_FINISHED */
    boolean b;
 
@@ -1066,6 +1061,7 @@ enum pipe_debug_type
    PIPE_DEBUG_TYPE_CONFORMANCE,
 };
 
+#define PIPE_UUID_SIZE 16
 
 #ifdef __cplusplus
 }

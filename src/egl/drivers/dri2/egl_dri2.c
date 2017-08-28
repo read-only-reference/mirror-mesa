@@ -46,7 +46,6 @@
 #endif
 #include <GL/gl.h>
 #include <GL/internal/dri_interface.h>
-#include "GL/mesa_glinterop.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -61,6 +60,7 @@
 #endif
 
 #include "egl_dri2.h"
+#include "GL/mesa_glinterop.h"
 #include "loader/loader.h"
 #include "util/u_atomic.h"
 #include "util/u_vector.h"
@@ -435,6 +435,7 @@ static const struct dri2_extension_match optional_core_extensions[] = {
    { __DRI2_FENCE, 1, offsetof(struct dri2_egl_display, fence) },
    { __DRI2_RENDERER_QUERY, 1, offsetof(struct dri2_egl_display, rendererQuery) },
    { __DRI2_INTEROP, 1, offsetof(struct dri2_egl_display, interop) },
+   { __DRI_IMAGE, 1, offsetof(struct dri2_egl_display, image) },
    { NULL, 0, 0 }
 };
 
@@ -676,7 +677,8 @@ dri2_setup_screen(_EGLDisplay *disp)
       disp->Extensions.KHR_wait_sync = EGL_TRUE;
       if (dri2_dpy->fence->get_fence_from_cl_event)
          disp->Extensions.KHR_cl_event2 = EGL_TRUE;
-      if (dri2_dpy->fence->base.version >= 2) {
+      if (dri2_dpy->fence->base.version >= 2 &&
+          dri2_dpy->fence->get_capabilities) {
          unsigned capabilities =
             dri2_dpy->fence->get_capabilities(dri2_dpy->dri_screen);
          disp->Extensions.ANDROID_native_fence_sync =
@@ -725,6 +727,41 @@ dri2_setup_screen(_EGLDisplay *disp)
          disp->Extensions.EXT_image_dma_buf_import_modifiers = EGL_TRUE;
       }
 #endif
+   }
+}
+
+void
+dri2_setup_swap_interval(_EGLDisplay *disp, int max_swap_interval)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   GLint vblank_mode = DRI_CONF_VBLANK_DEF_INTERVAL_1;
+
+   /* Allow driconf to override applications.*/
+   if (dri2_dpy->config)
+      dri2_dpy->config->configQueryi(dri2_dpy->dri_screen,
+                                     "vblank_mode", &vblank_mode);
+   switch (vblank_mode) {
+   case DRI_CONF_VBLANK_NEVER:
+      dri2_dpy->min_swap_interval = 0;
+      dri2_dpy->max_swap_interval = 0;
+      dri2_dpy->default_swap_interval = 0;
+      break;
+   case DRI_CONF_VBLANK_ALWAYS_SYNC:
+      dri2_dpy->min_swap_interval = 1;
+      dri2_dpy->max_swap_interval = max_swap_interval;
+      dri2_dpy->default_swap_interval = 1;
+      break;
+   case DRI_CONF_VBLANK_DEF_INTERVAL_0:
+      dri2_dpy->min_swap_interval = 0;
+      dri2_dpy->max_swap_interval = max_swap_interval;
+      dri2_dpy->default_swap_interval = 0;
+      break;
+   default:
+   case DRI_CONF_VBLANK_DEF_INTERVAL_1:
+      dri2_dpy->min_swap_interval = 0;
+      dri2_dpy->max_swap_interval = max_swap_interval;
+      dri2_dpy->default_swap_interval = 1;
+      break;
    }
 }
 
@@ -868,17 +905,13 @@ dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp)
       return EGL_FALSE;
    }
 
-   if (ret) {
-      dri2_dpy = dri2_egl_display(disp);
+   if (!ret)
+      return EGL_FALSE;
 
-      if (!dri2_dpy) {
-         return EGL_FALSE;
-      }
+   dri2_dpy = dri2_egl_display(disp);
+   dri2_dpy->ref_count++;
 
-      dri2_dpy->ref_count++;
-   }
-
-   return ret;
+   return EGL_TRUE;
 }
 
 /**
@@ -909,8 +942,11 @@ dri2_display_destroy(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-   if (dri2_dpy->own_dri_screen)
+   if (dri2_dpy->own_dri_screen) {
+      if (dri2_dpy->vtbl->close_screen_notify)
+         dri2_dpy->vtbl->close_screen_notify(disp);
       dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
+   }
    if (dri2_dpy->fd >= 0)
       close(dri2_dpy->fd);
    if (dri2_dpy->driver)
@@ -944,9 +980,12 @@ dri2_display_destroy(_EGLDisplay *disp)
           zwp_linux_dmabuf_v1_destroy(dri2_dpy->wl_dmabuf);
       if (dri2_dpy->wl_shm)
           wl_shm_destroy(dri2_dpy->wl_shm);
-      wl_registry_destroy(dri2_dpy->wl_registry);
-      wl_event_queue_destroy(dri2_dpy->wl_queue);
-      wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
+      if (dri2_dpy->wl_registry)
+         wl_registry_destroy(dri2_dpy->wl_registry);
+      if (dri2_dpy->wl_queue)
+         wl_event_queue_destroy(dri2_dpy->wl_queue);
+      if (dri2_dpy->wl_dpy_wrapper)
+         wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
       u_vector_finish(&dri2_dpy->wl_modifiers.argb8888);
       u_vector_finish(&dri2_dpy->wl_modifiers.xrgb8888);
       u_vector_finish(&dri2_dpy->wl_modifiers.rgb565);
@@ -970,6 +1009,40 @@ dri2_display_destroy(_EGLDisplay *disp)
    }
    free(dri2_dpy);
    disp->DriverData = NULL;
+}
+
+__DRIbuffer *
+dri2_egl_surface_alloc_local_buffer(struct dri2_egl_surface *dri2_surf,
+                                    unsigned int att, unsigned int format)
+{
+   struct dri2_egl_display *dri2_dpy =
+      dri2_egl_display(dri2_surf->base.Resource.Display);
+
+   if (att >= ARRAY_SIZE(dri2_surf->local_buffers))
+      return NULL;
+
+   if (!dri2_surf->local_buffers[att]) {
+      dri2_surf->local_buffers[att] =
+         dri2_dpy->dri2->allocateBuffer(dri2_dpy->dri_screen, att, format,
+                                        dri2_surf->base.Width, dri2_surf->base.Height);
+   }
+
+   return dri2_surf->local_buffers[att];
+}
+
+void
+dri2_egl_surface_free_local_buffers(struct dri2_egl_surface *dri2_surf)
+{
+   struct dri2_egl_display *dri2_dpy =
+      dri2_egl_display(dri2_surf->base.Resource.Display);
+
+   for (int i = 0; i < ARRAY_SIZE(dri2_surf->local_buffers); i++) {
+      if (dri2_surf->local_buffers[i]) {
+         dri2_dpy->dri2->releaseBuffer(dri2_dpy->dri_screen,
+                                       dri2_surf->local_buffers[i]);
+         dri2_surf->local_buffers[i] = NULL;
+      }
+   }
 }
 
 /**
@@ -1455,6 +1528,8 @@ dri2_swap_interval(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf,
                    EGLint interval)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+   if (!dri2_dpy->vtbl->swap_interval)
+      return EGL_TRUE;
    return dri2_dpy->vtbl->swap_interval(drv, dpy, surf, interval);
 }
 
@@ -2117,6 +2192,24 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
       return 0;
    }
 
+   for (unsigned i = plane_n; i < DMA_BUF_MAX_PLANES; i++) {
+      /**
+       * The modifiers extension spec says:
+       *
+       * "Modifiers may modify any attribute of a buffer import, including
+       *  but not limited to adding extra planes to a format which
+       *  otherwise does not have those planes. As an example, a modifier
+       *  may add a plane for an external compression buffer to a
+       *  single-plane format. The exact meaning and effect of any
+       *  modifier is canonically defined by drm_fourcc.h, not as part of
+       *  this extension."
+       */
+      if (attrs->DMABufPlaneModifiersLo[i].IsPresent &&
+          attrs->DMABufPlaneModifiersHi[i].IsPresent) {
+         plane_n = i + 1;
+      }
+   }
+
    /**
      * The spec says:
      *
@@ -2143,25 +2236,7 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
    for (unsigned i = plane_n; i < DMA_BUF_MAX_PLANES; ++i) {
       if (attrs->DMABufPlaneFds[i].IsPresent ||
           attrs->DMABufPlaneOffsets[i].IsPresent ||
-          attrs->DMABufPlanePitches[i].IsPresent ||
-          attrs->DMABufPlaneModifiersLo[i].IsPresent ||
-          attrs->DMABufPlaneModifiersHi[i].IsPresent) {
-
-         /**
-          * The modifiers extension spec says:
-          *
-          * "Modifiers may modify any attribute of a buffer import, including
-          *  but not limited to adding extra planes to a format which
-          *  otherwise does not have those planes. As an example, a modifier
-          *  may add a plane for an external compression buffer to a
-          *  single-plane format. The exact meaning and effect of any
-          *  modifier is canonically defined by drm_fourcc.h, not as part of
-          *  this extension."
-          */
-         if (attrs->DMABufPlaneModifiersLo[i].IsPresent &&
-             attrs->DMABufPlaneModifiersHi[i].IsPresent)
-            continue;
-
+          attrs->DMABufPlanePitches[i].IsPresent) {
          _eglError(EGL_BAD_ATTRIBUTE, "too many plane attributes");
          return 0;
       }

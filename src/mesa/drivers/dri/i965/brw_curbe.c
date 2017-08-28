@@ -195,6 +195,7 @@ static const GLfloat fixed_plane[6][4] = {
 static void
 brw_upload_constant_buffer(struct brw_context *brw)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_PUSH_CONSTANT_ALLOCATION */
    const GLuint sz = brw->curbe.total_size;
@@ -301,8 +302,7 @@ emit:
       OUT_BATCH(0);
    } else {
       OUT_BATCH((CMD_CONST_BUFFER << 16) | (1 << 8) | (2 - 2));
-      OUT_RELOC(brw->curbe.curbe_bo,
-		I915_GEM_DOMAIN_INSTRUCTION, 0,
+      OUT_RELOC(brw->curbe.curbe_bo, 0,
 		(brw->curbe.total_size - 1) + brw->curbe.curbe_offset);
    }
    ADVANCE_BATCH();
@@ -324,7 +324,7 @@ emit:
     *
     * BRW_NEW_FRAGMENT_PROGRAM
     */
-   if (brw->gen == 4 && !brw->is_g4x &&
+   if (devinfo->gen == 4 && !devinfo->is_g4x &&
        (brw->fragment_program->info.inputs_read & (1 << VARYING_SLOT_POS))) {
       BEGIN_BATCH(2);
       OUT_BATCH(_3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP << 16 | (2 - 2));
@@ -347,4 +347,3 @@ const struct brw_tracked_state brw_constant_buffer = {
    },
    .emit = brw_upload_constant_buffer,
 };
-

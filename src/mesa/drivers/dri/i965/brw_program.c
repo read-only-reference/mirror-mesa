@@ -138,38 +138,15 @@ static struct gl_program *brwNewProgram(struct gl_context *ctx, GLenum target,
                                         GLuint id, bool is_arb_asm)
 {
    struct brw_context *brw = brw_context(ctx);
+   struct brw_program *prog = rzalloc(NULL, struct brw_program);
 
-   switch (target) {
-   case GL_VERTEX_PROGRAM_ARB:
-   case GL_TESS_CONTROL_PROGRAM_NV:
-   case GL_TESS_EVALUATION_PROGRAM_NV:
-   case GL_GEOMETRY_PROGRAM_NV:
-   case GL_COMPUTE_PROGRAM_NV: {
-      struct brw_program *prog = rzalloc(NULL, struct brw_program);
-      if (prog) {
-	 prog->id = get_new_program_id(brw->screen);
+   if (prog) {
+      prog->id = get_new_program_id(brw->screen);
 
-         return _mesa_init_gl_program(&prog->program, target, id, is_arb_asm);
-      }
-      else
-	 return NULL;
+      return _mesa_init_gl_program(&prog->program, target, id, is_arb_asm);
    }
 
-   case GL_FRAGMENT_PROGRAM_ARB: {
-      struct brw_program *prog = rzalloc(NULL, struct brw_program);
-
-      if (prog) {
-	 prog->id = get_new_program_id(brw->screen);
-
-         return _mesa_init_gl_program(&prog->program, target, id, is_arb_asm);
-      }
-      else
-	 return NULL;
-   }
-
-   default:
-      unreachable("Unsupported target in brwNewProgram()");
-   }
+   return NULL;
 }
 
 static void brwDeleteProgram( struct gl_context *ctx,
@@ -287,10 +264,11 @@ static void
 brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    unsigned bits = (PIPE_CONTROL_DATA_CACHE_FLUSH |
                     PIPE_CONTROL_NO_WRITE |
                     PIPE_CONTROL_CS_STALL);
-   assert(brw->gen >= 7 && brw->gen <= 10);
+   assert(devinfo->gen >= 7 && devinfo->gen <= 10);
 
    if (barriers & (GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT |
                    GL_ELEMENT_ARRAY_BARRIER_BIT |
@@ -314,7 +292,7 @@ brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
    /* Typed surface messages are handled by the render cache on IVB, so we
     * need to flush it too.
     */
-   if (brw->gen == 7 && !brw->is_haswell)
+   if (devinfo->gen == 7 && !devinfo->is_haswell)
       bits |= PIPE_CONTROL_RENDER_TARGET_FLUSH;
 
    brw_emit_pipe_control_flush(brw, bits);
@@ -324,9 +302,10 @@ static void
 brw_blend_barrier(struct gl_context *ctx)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    if (!ctx->Extensions.MESA_shader_framebuffer_fetch) {
-      if (brw->gen >= 6) {
+      if (devinfo->gen >= 6) {
          brw_emit_pipe_control_flush(brw,
                                      PIPE_CONTROL_RENDER_TARGET_FLUSH |
                                      PIPE_CONTROL_CS_STALL);
@@ -667,7 +646,8 @@ brw_setup_tex_for_precompile(struct brw_context *brw,
                              struct brw_sampler_prog_key_data *tex,
                              struct gl_program *prog)
 {
-   const bool has_shader_channel_select = brw->is_haswell || brw->gen >= 8;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   const bool has_shader_channel_select = devinfo->is_haswell || devinfo->gen >= 8;
    unsigned sampler_count = util_last_bit(prog->SamplersUsed);
    for (unsigned i = 0; i < sampler_count; i++) {
       if (!has_shader_channel_select && (prog->ShadowSamplers & (1 << i))) {

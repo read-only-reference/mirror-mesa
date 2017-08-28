@@ -25,6 +25,7 @@
 
 #include <GL/gl.h>
 #include <GL/internal/dri_interface.h>
+#include <drm_fourcc.h>
 
 #include "intel_batchbuffer.h"
 #include "intel_image.h"
@@ -59,15 +60,21 @@ intel_miptree_alloc_aux(struct brw_context *brw,
                         struct intel_mipmap_tree *mt);
 
 static bool
-is_mcs_supported(const struct brw_context *brw, mesa_format format,
-                 uint32_t layout_flags)
+intel_miptree_supports_mcs(struct brw_context *brw,
+                           const struct intel_mipmap_tree *mt)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   /* MCS compression only applies to multisampled miptrees */
+   if (mt->surf.samples <= 1)
+      return false;
+
    /* Prior to Gen7, all MSAA surfaces used IMS layout. */
-   if (brw->gen < 7)
+   if (devinfo->gen < 7)
       return false;
 
    /* In Gen7, IMS layout is only used for depth and stencil buffers. */
-   switch (_mesa_get_format_base_format(format)) {
+   switch (_mesa_get_format_base_format(mt->format)) {
    case GL_DEPTH_COMPONENT:
    case GL_STENCIL_INDEX:
    case GL_DEPTH_STENCIL:
@@ -84,12 +91,7 @@ is_mcs_supported(const struct brw_context *brw, mesa_format format,
        * would require converting between CMS and UMS MSAA layouts on the fly,
        * which is expensive.
        */
-      if (brw->gen == 7 && _mesa_get_format_datatype(format) == GL_INT) {
-         return false;
-      } else if (layout_flags & MIPTREE_LAYOUT_DISABLE_AUX) {
-         /* We can't use the CMS layout because it uses an aux buffer, the MCS
-          * buffer. So fallback to UMS, which is identical to CMS without the
-          * MCS. */
+      if (devinfo->gen == 7 && _mesa_get_format_datatype(mt->format) == GL_INT) {
          return false;
       } else {
          return true;
@@ -101,6 +103,8 @@ static bool
 intel_tiling_supports_ccs(const struct brw_context *brw,
                           enum isl_tiling tiling)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    /* From the Ivy Bridge PRM, Vol2 Part1 11.7 "MCS Buffer for Render
     * Target(s)", beneath the "Fast Color Clear" bullet (p326):
     *
@@ -108,9 +112,9 @@ intel_tiling_supports_ccs(const struct brw_context *brw,
     *
     * Gen9 changes the restriction to Y-tile only.
     */
-   if (brw->gen >= 9)
+   if (devinfo->gen >= 9)
       return tiling == ISL_TILING_Y0;
-   else if (brw->gen >= 7)
+   else if (devinfo->gen >= 7)
       return tiling != ISL_TILING_LINEAR;
    else
       return false;
@@ -141,8 +145,10 @@ static bool
 intel_miptree_supports_ccs(struct brw_context *brw,
                            const struct intel_mipmap_tree *mt)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    /* MCS support does not exist prior to Gen7 */
-   if (brw->gen < 7)
+   if (devinfo->gen < 7)
       return false;
 
    /* This function applies only to non-multisampled render targets. */
@@ -192,7 +198,7 @@ intel_miptree_supports_ccs(struct brw_context *brw,
     * surfaces are supported with MCS buffer layout with these alignments in
     * the RT space: Horizontal Alignment = 128 and Vertical Alignment = 64.
     */
-   if (brw->gen < 8 && (mip_mapped || arrayed))
+   if (devinfo->gen < 8 && (mip_mapped || arrayed))
       return false;
 
    /* There's no point in using an MCS buffer if the surface isn't in a
@@ -208,7 +214,9 @@ static bool
 intel_tiling_supports_hiz(const struct brw_context *brw,
                           enum isl_tiling tiling)
 {
-   if (brw->gen < 6)
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   if (devinfo->gen < 6)
       return false;
 
    return tiling == ISL_TILING_Y0;
@@ -237,7 +245,9 @@ static bool
 intel_miptree_supports_ccs_e(struct brw_context *brw,
                              const struct intel_mipmap_tree *mt)
 {
-   if (brw->gen < 9)
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   if (devinfo->gen < 9)
       return false;
 
    /* For now compression is only enabled for integer formats even though
@@ -303,16 +313,14 @@ unwind:
 static bool
 needs_separate_stencil(const struct brw_context *brw,
                        struct intel_mipmap_tree *mt,
-                       mesa_format format, uint32_t layout_flags)
+                       mesa_format format)
 {
-
-   if (layout_flags & MIPTREE_LAYOUT_FOR_BO)
-      return false;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    if (_mesa_get_format_base_format(format) != GL_DEPTH_STENCIL)
       return false;
 
-   if (brw->must_use_separate_stencil)
+   if (devinfo->must_use_separate_stencil)
       return true;
 
    return brw->has_separate_stencil &&
@@ -329,8 +337,7 @@ intel_miptree_choose_aux_usage(struct brw_context *brw,
 {
    assert(mt->aux_usage == ISL_AUX_USAGE_NONE);
 
-   const unsigned no_flags = 0;
-   if (mt->surf.samples > 1 && is_mcs_supported(brw, mt->format, no_flags)) {
+   if (intel_miptree_supports_mcs(brw, mt)) {
       assert(mt->surf.msaa_layout == ISL_MSAA_LAYOUT_ARRAY);
       mt->aux_usage = ISL_AUX_USAGE_MCS;
    } else if (intel_tiling_supports_ccs(brw, mt->surf.tiling) &&
@@ -361,10 +368,12 @@ intel_miptree_choose_aux_usage(struct brw_context *brw,
 mesa_format
 intel_lower_compressed_format(struct brw_context *brw, mesa_format format)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    /* No need to lower ETC formats on these platforms,
     * they are supported natively.
     */
-   if (brw->gen >= 8 || brw->is_baytrail)
+   if (devinfo->gen >= 8 || devinfo->is_baytrail)
       return format;
 
    switch (format) {
@@ -402,7 +411,7 @@ brw_get_num_logical_layers(const struct intel_mipmap_tree *mt, unsigned level)
       return mt->surf.logical_level0_px.array_len;
 }
 
-static unsigned
+UNUSED static unsigned
 get_num_phys_layers(const struct isl_surf *surf, unsigned level)
 {
    /* In case of physical dimensions one needs to consider also the layout.
@@ -500,11 +509,13 @@ static bool
 need_to_retile_as_x(const struct brw_context *brw, uint64_t size,
                     enum isl_tiling tiling)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    /* If the BO is too large to fit in the aperture, we need to use the
     * BLT engine to support it.  Prior to Sandybridge, the BLT paths can't
     * handle Y-tiling, so we need to fall back to X.
     */
-   if (brw->gen < 6 && size >= brw->max_gtt_map_object_size &&
+   if (devinfo->gen < 6 && size >= brw->max_gtt_map_object_size &&
        tiling == ISL_TILING_Y0)
       return true;
 
@@ -552,7 +563,7 @@ make_surface(struct brw_context *brw, GLenum target, mesa_format format,
       .array_len = target == GL_TEXTURE_3D ? 1 : depth0,
       .samples = num_samples,
       .row_pitch = row_pitch,
-      .usage = isl_usage_flags, 
+      .usage = isl_usage_flags,
       .tiling_flags = tiling_flags,
    };
 
@@ -602,6 +613,7 @@ make_surface(struct brw_context *brw, GLenum target, mesa_format format,
    mt->aux_state = NULL;
    mt->cpp = isl_format_get_layout(mt->surf.format)->bpb / 8;
    mt->compressed = _mesa_is_format_compressed(format);
+   mt->drm_modifier = DRM_FORMAT_MOD_INVALID;
 
    return mt;
 
@@ -624,24 +636,14 @@ make_separate_stencil_surface(struct brw_context *brw,
                                  mt->surf.samples, ISL_TILING_W_BIT,
                                  ISL_SURF_USAGE_STENCIL_BIT |
                                  ISL_SURF_USAGE_TEXTURE_BIT,
-                                 BO_ALLOC_FOR_RENDER, 0, NULL);
+                                 BO_ALLOC_BUSY, 0, NULL);
 
    if (!mt->stencil_mt)
       return false;
-   
+
    mt->stencil_mt->r8stencil_needs_update = true;
 
    return true;
-}
-
-static bool
-force_linear_tiling(uint32_t layout_flags)
-{
-   /* ANY includes NONE and Y bit. */
-   if (layout_flags & MIPTREE_LAYOUT_TILING_Y)
-      return false;
-
-   return layout_flags & MIPTREE_LAYOUT_TILING_NONE;
 }
 
 static struct intel_mipmap_tree *
@@ -654,41 +656,43 @@ miptree_create(struct brw_context *brw,
                GLuint height0,
                GLuint depth0,
                GLuint num_samples,
-               uint32_t layout_flags)
+               enum intel_miptree_create_flags flags)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    if (format == MESA_FORMAT_S_UINT8)
       return make_surface(brw, target, format, first_level, last_level,
                           width0, height0, depth0, num_samples,
                           ISL_TILING_W_BIT,
                           ISL_SURF_USAGE_STENCIL_BIT |
                           ISL_SURF_USAGE_TEXTURE_BIT,
-                          BO_ALLOC_FOR_RENDER,
+                          BO_ALLOC_BUSY,
                           0,
                           NULL);
 
    const GLenum base_format = _mesa_get_format_base_format(format);
    if ((base_format == GL_DEPTH_COMPONENT ||
         base_format == GL_DEPTH_STENCIL) &&
-       !force_linear_tiling(layout_flags)) {
+       !(flags & MIPTREE_CREATE_LINEAR)) {
       /* Fix up the Z miptree format for how we're splitting out separate
        * stencil.  Gen7 expects there to be no stencil bits in its depth buffer.
        */
       const mesa_format depth_only_format =
          intel_depth_format_for_depthstencil_format(format);
       struct intel_mipmap_tree *mt = make_surface(
-         brw, target, brw->gen >= 6 ? depth_only_format : format,
+         brw, target, devinfo->gen >= 6 ? depth_only_format : format,
          first_level, last_level,
          width0, height0, depth0, num_samples, ISL_TILING_Y0_BIT,
          ISL_SURF_USAGE_DEPTH_BIT | ISL_SURF_USAGE_TEXTURE_BIT,
-         BO_ALLOC_FOR_RENDER, 0, NULL);
+         BO_ALLOC_BUSY, 0, NULL);
 
-      if (needs_separate_stencil(brw, mt, format, layout_flags) &&
+      if (needs_separate_stencil(brw, mt, format) &&
           !make_separate_stencil_surface(brw, mt)) {
          intel_miptree_release(&mt);
          return NULL;
       }
 
-      if (!(layout_flags & MIPTREE_LAYOUT_DISABLE_AUX))
+      if (!(flags & MIPTREE_CREATE_NO_AUX))
          intel_miptree_choose_aux_usage(brw, mt);
 
       return mt;
@@ -702,15 +706,14 @@ miptree_create(struct brw_context *brw,
 
    etc_format = (format != tex_format) ? tex_format : MESA_FORMAT_NONE;
 
-   assert((layout_flags & MIPTREE_LAYOUT_FOR_BO) == 0);
-   if (layout_flags & MIPTREE_LAYOUT_ACCELERATED_UPLOAD)
-      alloc_flags |= BO_ALLOC_FOR_RENDER;
+   if (flags & MIPTREE_CREATE_BUSY)
+      alloc_flags |= BO_ALLOC_BUSY;
 
-   isl_tiling_flags_t tiling_flags = force_linear_tiling(layout_flags) ?
+   isl_tiling_flags_t tiling_flags = (flags & MIPTREE_CREATE_LINEAR) ?
       ISL_TILING_LINEAR_BIT : ISL_TILING_ANY_MASK;
 
    /* TODO: This used to be because there wasn't BLORP to handle Y-tiling. */
-   if (brw->gen < 6)
+   if (devinfo->gen < 6)
       tiling_flags &= ~ISL_TILING_Y0_BIT;
 
    struct intel_mipmap_tree *mt = make_surface(
@@ -726,10 +729,7 @@ miptree_create(struct brw_context *brw,
 
    mt->etc_format = etc_format;
 
-   if (layout_flags & MIPTREE_LAYOUT_FOR_SCANOUT)
-      mt->bo->cache_coherent = false;
-
-   if (!(layout_flags & MIPTREE_LAYOUT_DISABLE_AUX))
+   if (!(flags & MIPTREE_CREATE_NO_AUX))
       intel_miptree_choose_aux_usage(brw, mt);
 
    return mt;
@@ -745,7 +745,7 @@ intel_miptree_create(struct brw_context *brw,
                      GLuint height0,
                      GLuint depth0,
                      GLuint num_samples,
-                     uint32_t layout_flags)
+                     enum intel_miptree_create_flags flags)
 {
    assert(num_samples > 0);
 
@@ -753,7 +753,7 @@ intel_miptree_create(struct brw_context *brw,
                                      brw, target, format,
                                      first_level, last_level,
                                      width0, height0, depth0, num_samples,
-                                     layout_flags);
+                                     flags);
    if (!mt)
       return NULL;
 
@@ -776,8 +776,9 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                             uint32_t height,
                             uint32_t depth,
                             int pitch,
-                            uint32_t layout_flags)
+                            enum intel_miptree_create_flags flags)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct intel_mipmap_tree *mt;
    uint32_t tiling, swizzle;
    const GLenum target = depth > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
@@ -788,14 +789,16 @@ intel_miptree_create_for_bo(struct brw_context *brw,
       const mesa_format depth_only_format =
          intel_depth_format_for_depthstencil_format(format);
       mt = make_surface(brw, target,
-                        brw->gen >= 6 ? depth_only_format : format,
+                        devinfo->gen >= 6 ? depth_only_format : format,
                         0, 0, width, height, depth, 1, ISL_TILING_Y0_BIT,
                         ISL_SURF_USAGE_DEPTH_BIT | ISL_SURF_USAGE_TEXTURE_BIT,
-                        BO_ALLOC_FOR_RENDER, pitch, bo);
+                        BO_ALLOC_BUSY, pitch, bo);
+      if (!mt)
+         return NULL;
 
       brw_bo_reference(bo);
 
-      if (!(layout_flags & MIPTREE_LAYOUT_DISABLE_AUX))
+      if (!(flags & MIPTREE_CREATE_NO_AUX))
          intel_miptree_choose_aux_usage(brw, mt);
 
       return mt;
@@ -805,7 +808,7 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                         ISL_TILING_W_BIT,
                         ISL_SURF_USAGE_STENCIL_BIT |
                         ISL_SURF_USAGE_TEXTURE_BIT,
-                        BO_ALLOC_FOR_RENDER, pitch, bo);
+                        BO_ALLOC_BUSY, pitch, bo);
       if (!mt)
          return NULL;
 
@@ -831,8 +834,7 @@ intel_miptree_create_for_bo(struct brw_context *brw,
    /* The BO already has a tiling format and we shouldn't confuse the lower
     * layers by making it try to find a tiling format again.
     */
-   assert((layout_flags & MIPTREE_LAYOUT_TILING_ANY) == 0);
-   assert((layout_flags & MIPTREE_LAYOUT_TILING_NONE) == 0);
+   assert((flags & MIPTREE_CREATE_LINEAR) == 0);
 
    mt = make_surface(brw, target, format,
                      0, 0, width, height, depth, 1,
@@ -847,8 +849,14 @@ intel_miptree_create_for_bo(struct brw_context *brw,
    mt->bo = bo;
    mt->offset = offset;
 
-   if (!(layout_flags & MIPTREE_LAYOUT_DISABLE_AUX))
+   if (!(flags & MIPTREE_CREATE_NO_AUX)) {
       intel_miptree_choose_aux_usage(brw, mt);
+
+      if (!intel_miptree_alloc_aux(brw, mt)) {
+         intel_miptree_release(&mt);
+         return NULL;
+      }
+   }
 
    return mt;
 }
@@ -857,7 +865,7 @@ static struct intel_mipmap_tree *
 miptree_create_for_planar_image(struct brw_context *brw,
                                 __DRIimage *image, GLenum target)
 {
-   struct intel_image_format *f = image->planar_format;
+   const struct intel_image_format *f = image->planar_format;
    struct intel_mipmap_tree *planar_mt = NULL;
 
    for (int i = 0; i < f->nplanes; i++) {
@@ -877,7 +885,7 @@ miptree_create_for_planar_image(struct brw_context *brw,
                                      image->offsets[index],
                                      width, height, 1,
                                      image->strides[index],
-                                     MIPTREE_LAYOUT_DISABLE_AUX);
+                                     MIPTREE_CREATE_NO_AUX);
       if (mt == NULL)
          return NULL;
 
@@ -889,7 +897,60 @@ miptree_create_for_planar_image(struct brw_context *brw,
          planar_mt->plane[i - 1] = mt;
    }
 
+   planar_mt->drm_modifier = image->modifier;
+
    return planar_mt;
+}
+
+static bool
+create_ccs_buf_for_image(struct brw_context *brw,
+                         __DRIimage *image,
+                         struct intel_mipmap_tree *mt,
+                         enum isl_aux_state initial_state)
+{
+   struct isl_surf temp_ccs_surf;
+
+   /* CCS is only supported for very simple miptrees */
+   assert(image->aux_offset != 0 && image->aux_pitch != 0);
+   assert(image->tile_x == 0 && image->tile_y == 0);
+   assert(mt->surf.samples == 1);
+   assert(mt->surf.levels == 1);
+   assert(mt->surf.logical_level0_px.depth == 1);
+   assert(mt->surf.logical_level0_px.array_len == 1);
+   assert(mt->first_level == 0);
+   assert(mt->last_level == 0);
+
+   /* We shouldn't already have a CCS */
+   assert(!mt->mcs_buf);
+
+   if (!isl_surf_get_ccs_surf(&brw->isl_dev, &mt->surf, &temp_ccs_surf,
+                              image->aux_pitch))
+      return false;
+
+   assert(image->aux_offset < image->bo->size);
+   assert(temp_ccs_surf.size <= image->bo->size - image->aux_offset);
+
+   mt->mcs_buf = calloc(sizeof(*mt->mcs_buf), 1);
+   if (mt->mcs_buf == NULL)
+      return false;
+
+   mt->aux_state = create_aux_state_map(mt, initial_state);
+   if (!mt->aux_state) {
+      free(mt->mcs_buf);
+      mt->mcs_buf = NULL;
+      return false;
+   }
+
+   mt->mcs_buf->bo = image->bo;
+   brw_bo_reference(image->bo);
+
+   mt->mcs_buf->offset = image->aux_offset;
+   mt->mcs_buf->size = image->bo->size - image->aux_offset;
+   mt->mcs_buf->pitch = image->aux_pitch;
+   mt->mcs_buf->qpitch = 0;
+   mt->mcs_buf->surf = temp_ccs_surf;
+
+   return true;
 }
 
 struct intel_mipmap_tree *
@@ -898,11 +959,14 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
                                    enum isl_colorspace colorspace,
                                    bool is_winsys_image)
 {
-   if (image->planar_format && image->planar_format->nplanes > 0) {
+   if (image->planar_format && image->planar_format->nplanes > 1) {
       assert(colorspace == ISL_COLORSPACE_NONE ||
              colorspace == ISL_COLORSPACE_YUV);
       return miptree_create_for_planar_image(brw, image, target);
    }
+
+   if (image->planar_format)
+      assert(image->planar_format->planes[0].dri_format == image->dri_format);
 
    mesa_format format = image->format;
    switch (colorspace) {
@@ -938,15 +1002,25 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
    if (!brw->ctx.TextureFormatSupported[format])
       return NULL;
 
+   const struct isl_drm_modifier_info *mod_info =
+      isl_drm_modifier_get_info(image->modifier);
+
+   enum intel_miptree_create_flags mt_create_flags = 0;
+
    /* If this image comes in from a window system, we have different
     * requirements than if it comes in via an EGL import operation.  Window
     * system images can use any form of auxiliary compression we wish because
     * they get "flushed" before being handed off to the window system and we
-    * have the opportunity to do resolves.  Window system buffers also may be
-    * used for scanout so we need to flag that appropriately.
+    * have the opportunity to do resolves.  Non window-system images, on the
+    * other hand, have no resolve point so we can't have aux without a
+    * modifier.
     */
-   const uint32_t mt_layout_flags =
-      is_winsys_image ? MIPTREE_LAYOUT_FOR_SCANOUT : MIPTREE_LAYOUT_DISABLE_AUX;
+   if (!is_winsys_image)
+      mt_create_flags |= MIPTREE_CREATE_NO_AUX;
+
+   /* If we have a modifier which specifies aux, don't create one yet */
+   if (mod_info && mod_info->aux_usage != ISL_AUX_USAGE_NONE)
+      mt_create_flags |= MIPTREE_CREATE_NO_AUX;
 
    /* Disable creation of the texture's aux buffers because the driver exposes
     * no EGL API to manage them. That is, there is no API for resolving the aux
@@ -956,19 +1030,21 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
    struct intel_mipmap_tree *mt =
       intel_miptree_create_for_bo(brw, image->bo, format,
                                   image->offset, image->width, image->height, 1,
-                                  image->pitch, mt_layout_flags);
+                                  image->pitch, mt_create_flags);
    if (mt == NULL)
       return NULL;
 
    mt->target = target;
    mt->level[0].level_x = image->tile_x;
    mt->level[0].level_y = image->tile_y;
+   mt->drm_modifier = image->modifier;
 
    /* From "OES_EGL_image" error reporting. We report GL_INVALID_OPERATION
     * for EGL images from non-tile aligned sufaces in gen4 hw and earlier which has
     * trouble resolving back to destination image due to alignment issues.
     */
-   if (!brw->has_surface_tile_offset) {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   if (!devinfo->has_surface_tile_offset) {
       uint32_t draw_x, draw_y;
       intel_miptree_get_tile_offsets(mt, 0, 0, &draw_x, &draw_y);
 
@@ -979,10 +1055,36 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
       }
    }
 
-   if (!intel_miptree_alloc_aux(brw, mt)) {
-      intel_miptree_release(&mt);
-      return NULL;
+   if (mod_info && mod_info->aux_usage != ISL_AUX_USAGE_NONE) {
+      assert(mod_info->aux_usage == ISL_AUX_USAGE_CCS_E);
+
+      mt->aux_usage = mod_info->aux_usage;
+      /* If we are a window system buffer, then we can support fast-clears
+       * even if the modifier doesn't support them by doing a partial resolve
+       * as part of the flush operation.
+       */
+      mt->supports_fast_clear =
+         is_winsys_image || mod_info->supports_clear_color;
+
+      /* We don't know the actual state of the surface when we get it but we
+       * can make a pretty good guess based on the modifier.  What we do know
+       * for sure is that it isn't in the AUX_INVALID state, so we just assume
+       * a worst case of compression.
+       */
+      enum isl_aux_state initial_state =
+         mod_info->supports_clear_color ? ISL_AUX_STATE_COMPRESSED_CLEAR :
+                                          ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
+
+      if (!create_ccs_buf_for_image(brw, image, mt, initial_state)) {
+         intel_miptree_release(&mt);
+         return NULL;
+      }
    }
+
+   /* Don't assume coherency for imported EGLimages.  We don't know what
+    * external clients are going to do with it.  They may scan it out.
+    */
+   image->bo->cache_coherent = false;
 
    return mt;
 }
@@ -1059,12 +1161,10 @@ intel_miptree_create_for_renderbuffer(struct brw_context *brw,
    struct intel_mipmap_tree *mt;
    uint32_t depth = 1;
    GLenum target = num_samples > 1 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
-   const uint32_t layout_flags = MIPTREE_LAYOUT_ACCELERATED_UPLOAD |
-                                 MIPTREE_LAYOUT_TILING_ANY;
 
    mt = intel_miptree_create(brw, target, format, 0, 0,
                              width, height, depth, num_samples,
-                             layout_flags);
+                             MIPTREE_CREATE_BUSY);
    if (!mt)
       goto fail;
 
@@ -1595,7 +1695,9 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
                         struct intel_mipmap_tree *mt,
                         GLuint num_samples)
 {
-   assert(brw->gen >= 7); /* MCS only used on Gen7+ */
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   assert(devinfo->gen >= 7); /* MCS only used on Gen7+ */
    assert(mt->mcs_buf == NULL);
    assert(mt->aux_usage == ISL_AUX_USAGE_MCS);
 
@@ -1666,14 +1768,14 @@ intel_miptree_alloc_ccs(struct brw_context *brw,
     * fast-clear operation.  In that case, being hot in caches more useful.
     */
    const uint32_t alloc_flags = mt->aux_usage == ISL_AUX_USAGE_CCS_E ?
-                                BO_ALLOC_ZEROED : BO_ALLOC_FOR_RENDER;
+                                BO_ALLOC_ZEROED : BO_ALLOC_BUSY;
    mt->mcs_buf = intel_alloc_aux_buffer(brw, "ccs-miptree",
                                         &temp_ccs_surf, alloc_flags, mt);
    if (!mt->mcs_buf) {
       free(aux_state);
       return false;
    }
-  
+
    mt->aux_state = aux_state;
 
    return true;
@@ -1689,10 +1791,12 @@ intel_miptree_level_enable_hiz(struct brw_context *brw,
                                struct intel_mipmap_tree *mt,
                                uint32_t level)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    assert(mt->hiz_buf);
    assert(mt->surf.size > 0);
 
-   if (brw->gen >= 8 || brw->is_haswell) {
+   if (devinfo->gen >= 8 || devinfo->is_haswell) {
       uint32_t width = minify(mt->surf.phys_level0_sa.width, level);
       uint32_t height = minify(mt->surf.phys_level0_sa.height, level);
 
@@ -1731,7 +1835,7 @@ intel_miptree_alloc_hiz(struct brw_context *brw,
       isl_surf_get_hiz_surf(&brw->isl_dev, &mt->surf, &temp_hiz_surf);
    assert(ok);
 
-   const uint32_t alloc_flags = BO_ALLOC_FOR_RENDER;
+   const uint32_t alloc_flags = BO_ALLOC_BUSY;
    mt->hiz_buf = intel_alloc_aux_buffer(brw, "hiz-miptree",
                                         &temp_hiz_surf, alloc_flags, mt);
 
@@ -1802,10 +1906,12 @@ bool
 intel_miptree_sample_with_hiz(struct brw_context *brw,
                               struct intel_mipmap_tree *mt)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    /* It's unclear how well supported sampling from the hiz buffer is on GEN8,
     * so keep things conservative for now and never enable it unless we're SKL+.
     */
-   if (brw->gen < 9) {
+   if (devinfo->gen < 9) {
       return false;
    }
 
@@ -1916,12 +2022,13 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
                                   const struct intel_mipmap_tree *mt,
                                   unsigned level, unsigned layer)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    if (!mt->mcs_buf)
       return;
 
    /* Fast color clear is supported for mipmapped surfaces only on Gen8+. */
-   assert(brw->gen >= 8 ||
+   assert(devinfo->gen >= 8 ||
           (level == 0 && mt->first_level == 0 && mt->last_level == 0));
 
    /* Compression of arrayed msaa surfaces is supported. */
@@ -1929,7 +2036,7 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
       return;
 
    /* Fast color clear is supported for non-msaa arrays only on Gen8+. */
-   assert(brw->gen >= 8 ||
+   assert(devinfo->gen >= 8 ||
           (layer == 0 &&
            mt->surf.logical_level0_px.depth == 1 &&
            mt->surf.logical_level0_px.array_len == 1));
@@ -2491,7 +2598,20 @@ intel_miptree_texture_aux_usage(struct brw_context *brw,
 
    case ISL_AUX_USAGE_CCS_D:
    case ISL_AUX_USAGE_CCS_E:
-      if (mt->mcs_buf && can_texture_with_ccs(brw, mt, view_format))
+      if (!mt->mcs_buf) {
+         assert(mt->aux_usage == ISL_AUX_USAGE_CCS_D);
+         return ISL_AUX_USAGE_NONE;
+      }
+
+      /* If we don't have any unresolved color, report an aux usage of
+       * ISL_AUX_USAGE_NONE.  This way, texturing won't even look at the
+       * aux surface and we can save some bandwidth.
+       */
+      if (!intel_miptree_has_color_unresolved(mt, 0, INTEL_REMAINING_LEVELS,
+                                              0, INTEL_REMAINING_LAYERS))
+         return ISL_AUX_USAGE_NONE;
+
+      if (can_texture_with_ccs(brw, mt, view_format))
          return ISL_AUX_USAGE_CCS_E;
       break;
 
@@ -2663,6 +2783,37 @@ intel_miptree_finish_depth(struct brw_context *brw,
    }
 }
 
+void
+intel_miptree_prepare_external(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt)
+{
+   enum isl_aux_usage aux_usage = ISL_AUX_USAGE_NONE;
+   bool supports_fast_clear = false;
+
+   const struct isl_drm_modifier_info *mod_info =
+      isl_drm_modifier_get_info(mt->drm_modifier);
+
+   if (mod_info && mod_info->aux_usage != ISL_AUX_USAGE_NONE) {
+      /* CCS_E is the only supported aux for external images and it's only
+       * supported on very simple images.
+       */
+      assert(mod_info->aux_usage == ISL_AUX_USAGE_CCS_E);
+      assert(_mesa_is_format_color_format(mt->format));
+      assert(mt->first_level == 0 && mt->last_level == 0);
+      assert(mt->surf.logical_level0_px.depth == 1);
+      assert(mt->surf.logical_level0_px.array_len == 1);
+      assert(mt->surf.samples == 1);
+      assert(mt->mcs_buf != NULL);
+
+      aux_usage = mod_info->aux_usage;
+      supports_fast_clear = mod_info->supports_clear_color;
+   }
+
+   intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
+                                0, INTEL_REMAINING_LAYERS,
+                                aux_usage, supports_fast_clear);
+}
+
 /**
  * Make it possible to share the BO backing the given miptree with another
  * process or another miptree.
@@ -2719,6 +2870,7 @@ intel_miptree_make_shareable(struct brw_context *brw,
    }
 
    mt->aux_usage = ISL_AUX_USAGE_NONE;
+   mt->supports_fast_clear = false;
 }
 
 
@@ -2819,16 +2971,18 @@ void
 intel_update_r8stencil(struct brw_context *brw,
                        struct intel_mipmap_tree *mt)
 {
-   assert(brw->gen >= 7);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   assert(devinfo->gen >= 7);
    struct intel_mipmap_tree *src =
       mt->format == MESA_FORMAT_S_UINT8 ? mt : mt->stencil_mt;
-   if (!src || brw->gen >= 8 || !src->r8stencil_needs_update)
+   if (!src || devinfo->gen >= 8 || !src->r8stencil_needs_update)
       return;
 
    assert(src->surf.size > 0);
 
    if (!mt->r8stencil_mt) {
-      assert(brw->gen > 6); /* Handle MIPTREE_LAYOUT_GEN6_HIZ_STENCIL */
+      assert(devinfo->gen > 6); /* Handle MIPTREE_LAYOUT_GEN6_HIZ_STENCIL */
       mt->r8stencil_mt = make_surface(
                             brw,
                             src->target,
@@ -2842,7 +2996,7 @@ intel_update_r8stencil(struct brw_context *brw,
                             src->surf.samples,
                             ISL_TILING_Y0_BIT,
                             ISL_SURF_USAGE_TEXTURE_BIT,
-                            BO_ALLOC_FOR_RENDER, 0, NULL);
+                            BO_ALLOC_BUSY, 0, NULL);
       assert(mt->r8stencil_mt);
    }
 
@@ -2952,7 +3106,7 @@ intel_miptree_map_blit(struct brw_context *brw,
                                          /* last_level */ 0,
                                          map->w, map->h, 1,
                                          /* samples */ 1,
-                                         MIPTREE_LAYOUT_TILING_NONE);
+                                         MIPTREE_CREATE_LINEAR);
 
    if (!map->linear_mt) {
       fprintf(stderr, "Failed to allocate blit temporary\n");
@@ -3420,7 +3574,9 @@ use_intel_mipree_map_blit(struct brw_context *brw,
                           unsigned int level,
                           unsigned int slice)
 {
-   if (brw->has_llc &&
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   if (devinfo->has_llc &&
       /* It's probably not worth swapping to the blit ring because of
        * all the overhead involved.
        */
@@ -3428,9 +3584,9 @@ use_intel_mipree_map_blit(struct brw_context *brw,
        !mt->compressed &&
        (mt->surf.tiling == ISL_TILING_X ||
         /* Prior to Sandybridge, the blitter can't handle Y tiling */
-        (brw->gen >= 6 && mt->surf.tiling == ISL_TILING_Y0) ||
+        (devinfo->gen >= 6 && mt->surf.tiling == ISL_TILING_Y0) ||
         /* Fast copy blit on skl+ supports all tiling formats. */
-        brw->gen >= 9) &&
+        devinfo->gen >= 9) &&
        can_blit_slice(mt, level, slice))
       return true;
 

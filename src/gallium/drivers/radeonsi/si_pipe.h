@@ -29,6 +29,7 @@
 #include "si_shader.h"
 
 #include "util/u_dynarray.h"
+#include "util/u_idalloc.h"
 
 #ifdef PIPE_ARCH_BIG_ENDIAN
 #define SI_BIG_ENDIAN 1
@@ -57,7 +58,10 @@
 /* Write dirty L2 lines back to memory (shader and CP DMA stores), but don't
  * invalidate L2. SI-CIK can't do it, so they will do complete invalidation. */
 #define SI_CONTEXT_WRITEBACK_GLOBAL_L2	(R600_CONTEXT_PRIVATE_FLAG << 4)
-/* gaps */
+/* Writeback & invalidate the L2 metadata cache. It can only be coupled with
+ * a CB or DB flush. */
+#define SI_CONTEXT_INV_L2_METADATA	(R600_CONTEXT_PRIVATE_FLAG << 5)
+/* gap */
 /* Framebuffer caches. */
 #define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 7)
 #define SI_CONTEXT_FLUSH_AND_INV_CB	(R600_CONTEXT_PRIVATE_FLAG << 8)
@@ -67,6 +71,14 @@
 #define SI_CONTEXT_CS_PARTIAL_FLUSH	(R600_CONTEXT_PRIVATE_FLAG << 11)
 #define SI_CONTEXT_VGT_FLUSH		(R600_CONTEXT_PRIVATE_FLAG << 12)
 #define SI_CONTEXT_VGT_STREAMOUT_SYNC	(R600_CONTEXT_PRIVATE_FLAG << 13)
+
+#define SI_PREFETCH_VBO_DESCRIPTORS	(1 << 0)
+#define SI_PREFETCH_LS			(1 << 1)
+#define SI_PREFETCH_HS			(1 << 2)
+#define SI_PREFETCH_ES			(1 << 3)
+#define SI_PREFETCH_GS			(1 << 4)
+#define SI_PREFETCH_VS			(1 << 5)
+#define SI_PREFETCH_PS			(1 << 6)
 
 #define SI_MAX_BORDER_COLORS	4096
 #define SIX_BITS		0x3F
@@ -79,6 +91,7 @@ struct si_screen {
 	struct r600_common_screen	b;
 	unsigned			gs_table_depth;
 	unsigned			tess_offchip_block_dw_size;
+	bool				has_clear_state;
 	bool				has_distributed_tess;
 	bool				has_draw_indirect_multi;
 	bool				has_ds_bpermute;
@@ -188,6 +201,8 @@ struct si_framebuffer {
 	ubyte				dirty_cbufs;
 	bool				dirty_zsbuf;
 	bool				any_dst_linear;
+	bool				CB_has_shader_readable_metadata;
+	bool				DB_has_shader_readable_metadata;
 };
 
 struct si_clip_state {
@@ -237,26 +252,30 @@ union si_vgt_param_key {
 	uint32_t index;
 };
 
-struct si_bindless_descriptor
-{
-	struct pb_slab_entry		entry;
-	struct r600_resource		*buffer;
-	unsigned			offset;
-	uint32_t			desc_list[16];
-	bool				dirty;
-};
-
 struct si_texture_handle
 {
-	struct si_bindless_descriptor	*desc;
+	unsigned			desc_slot;
+	bool				desc_dirty;
 	struct pipe_sampler_view	*view;
 	struct si_sampler_state		sstate;
 };
 
 struct si_image_handle
 {
-	struct si_bindless_descriptor	*desc;
+	unsigned			desc_slot;
+	bool				desc_dirty;
 	struct pipe_image_view		view;
+};
+
+struct si_saved_cs {
+	struct pipe_reference	reference;
+	struct si_context	*ctx;
+	struct radeon_saved_cs	gfx;
+	struct r600_resource	*trace_buf;
+	unsigned		trace_id;
+
+	unsigned		gfx_last_dw;
+	bool			flushed;
 };
 
 struct si_context {
@@ -272,14 +291,7 @@ struct si_context {
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
 	struct r600_resource		*wait_mem_scratch;
 	unsigned			wait_mem_number;
-
-	struct radeon_winsys_cs		*ce_ib;
-	struct radeon_winsys_cs		*ce_preamble_ib;
-	struct r600_resource		*ce_ram_saved_buffer;
-	struct u_suballocator		*ce_suballocator;
-	unsigned			ce_ram_saved_offset;
-	uint16_t			total_ce_ram_allocated;
-	bool				ce_need_synchronization:1;
+	uint16_t			prefetch_L2_mask;
 
 	bool				gfx_flush_in_progress:1;
 	bool				compute_is_busy:1;
@@ -293,7 +305,6 @@ struct si_context {
 	union si_state			emitted;
 
 	/* Atom declarations. */
-	struct r600_atom		prefetch_L2;
 	struct si_framebuffer		framebuffer;
 	struct si_sample_locs		msaa_sample_locs;
 	struct r600_atom		db_render_state;
@@ -304,7 +315,7 @@ struct si_context {
 	struct si_blend_color		blend_color;
 	struct r600_atom		clip_regs;
 	struct si_clip_state		clip_state;
-	struct si_shader_data		shader_userdata;
+	struct si_shader_data		shader_pointers;
 	struct si_stencil_ref		stencil_ref;
 	struct r600_atom		spi_map;
 
@@ -410,10 +421,7 @@ struct si_context {
 
 	/* Debug state. */
 	bool			is_debug;
-	struct radeon_saved_cs	last_gfx;
-	struct r600_resource	*last_trace_buf;
-	struct r600_resource	*trace_buf;
-	unsigned		trace_id;
+	struct si_saved_cs	*current_saved_cs;
 	uint64_t		dmesg_timestamp;
 	unsigned		apitrace_call_number;
 
@@ -425,12 +433,13 @@ struct si_context {
 	union si_vgt_param_key  ia_multi_vgt_param_key;
 	unsigned		ia_multi_vgt_param[SI_NUM_VGT_PARAM_STATES];
 
-	/* Slab allocator for bindless descriptors. */
-	struct pb_slabs		bindless_descriptor_slabs;
-
 	/* Bindless descriptors. */
-	struct util_dynarray	bindless_descriptors;
+	struct si_descriptors	bindless_descriptors;
+	struct util_idalloc	bindless_used_slots;
+	unsigned		num_bindless_descriptors;
 	bool			bindless_descriptors_dirty;
+	bool			graphics_bindless_pointer_dirty;
+	bool			compute_bindless_pointer_dirty;
 
 	/* Allocated bindless handles */
 	struct hash_table	*tex_handles;
@@ -483,9 +492,14 @@ void si_copy_buffer(struct si_context *sctx,
 		    unsigned user_flags);
 void cik_prefetch_TC_L2_async(struct si_context *sctx, struct pipe_resource *buf,
 			      uint64_t offset, unsigned size);
+void cik_emit_prefetch_L2(struct si_context *sctx);
 void si_init_cp_dma_functions(struct si_context *sctx);
 
 /* si_debug.c */
+void si_auto_log_cs(void *data, struct u_log_context *log);
+void si_log_hw_flush(struct si_context *sctx);
+void si_log_draw_state(struct si_context *sctx, struct u_log_context *log);
+void si_log_compute_state(struct si_context *sctx, struct u_log_context *log);
 void si_init_debug_functions(struct si_context *sctx);
 void si_check_vm_faults(struct r600_common_context *ctx,
 			struct radeon_saved_cs *saved, enum ring_type ring);
@@ -495,6 +509,7 @@ bool si_replace_shader(unsigned num, struct ac_shader_binary *binary);
 void si_init_dma_functions(struct si_context *sctx);
 
 /* si_hw_context.c */
+void si_destroy_saved_cs(struct si_saved_cs *scs);
 void si_context_gfx_flush(void *context, unsigned flags,
 			  struct pipe_fence_handle **fence);
 void si_begin_new_cs(struct si_context *ctx);
@@ -590,6 +605,59 @@ si_optimal_tcc_alignment(struct si_context *sctx, unsigned upload_size)
 	alignment = util_next_power_of_two(upload_size);
 	tcc_cache_line_size = sctx->screen->b.info.tcc_cache_line_size;
 	return MIN2(alignment, tcc_cache_line_size);
+}
+
+static inline void
+si_saved_cs_reference(struct si_saved_cs **dst, struct si_saved_cs *src)
+{
+	if (pipe_reference(&(*dst)->reference, &src->reference))
+		si_destroy_saved_cs(*dst);
+
+	*dst = src;
+}
+
+static inline void
+si_make_CB_shader_coherent(struct si_context *sctx, unsigned num_samples,
+			   bool shaders_read_metadata)
+{
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB |
+			 SI_CONTEXT_INV_VMEM_L1;
+
+	if (sctx->b.chip_class >= GFX9) {
+		/* Single-sample color is coherent with shaders on GFX9, but
+		 * L2 metadata must be flushed if shaders read metadata.
+		 * (DCC, CMASK).
+		 */
+		if (num_samples >= 2)
+			sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+		else if (shaders_read_metadata)
+			sctx->b.flags |= SI_CONTEXT_INV_L2_METADATA;
+	} else {
+		/* SI-CI-VI */
+		sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+	}
+}
+
+static inline void
+si_make_DB_shader_coherent(struct si_context *sctx, unsigned num_samples,
+			   bool include_stencil, bool shaders_read_metadata)
+{
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB |
+			 SI_CONTEXT_INV_VMEM_L1;
+
+	if (sctx->b.chip_class >= GFX9) {
+		/* Single-sample depth (not stencil) is coherent with shaders
+		 * on GFX9, but L2 metadata must be flushed if shaders read
+		 * metadata.
+		 */
+		if (num_samples >= 2 || include_stencil)
+			sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+		else if (shaders_read_metadata)
+			sctx->b.flags |= SI_CONTEXT_INV_L2_METADATA;
+	} else {
+		/* SI-CI-VI */
+		sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+	}
 }
 
 #endif

@@ -2900,6 +2900,9 @@ static void si_set_ls_return_value_for_tcs(struct si_shader_context *ctx)
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_wave_info, 3);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_tcs_factor_offset, 4);
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_scratch_offset, 5);
+	ret = si_insert_input_ptr_as_2xi32(ctx, ret,
+		ctx->param_bindless_samplers_and_images,
+		8 + SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES);
 
 	ret = si_insert_input_ret(ctx, ret, ctx->param_vs_state_bits,
 				  8 + SI_SGPR_VS_STATE_BITS);
@@ -2938,6 +2941,9 @@ static void si_set_es_return_value_for_gs(struct si_shader_context *ctx)
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_wave_info, 3);
 
 	ret = si_insert_input_ret(ctx, ret, ctx->param_merged_scratch_offset, 5);
+	ret = si_insert_input_ptr_as_2xi32(ctx, ret,
+		ctx->param_bindless_samplers_and_images,
+		8 + SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES);
 
 	unsigned desc_param = ctx->param_vs_state_bits + 1;
 	ret = si_insert_input_ptr_as_2xi32(ctx, ret, desc_param,
@@ -3591,7 +3597,7 @@ static void si_llvm_emit_ddxy(
 
 	val = LLVMBuildBitCast(gallivm->builder, emit_data->args[0], ctx->i32, "");
 	val = ac_build_ddxy(&ctx->ac, ctx->screen->has_ds_bpermute,
-			    mask, idx, ctx->lds, val);
+			    mask, idx, val);
 	emit_data->output[emit_data->chan] = val;
 }
 
@@ -4249,6 +4255,8 @@ static void declare_default_desc_pointers(struct si_shader_context *ctx,
 {
 	ctx->param_rw_buffers = add_arg(fninfo, ARG_SGPR,
 		si_const_array(ctx->v4i32, SI_NUM_RW_BUFFERS));
+	ctx->param_bindless_samplers_and_images = add_arg(fninfo, ARG_SGPR,
+		si_const_array(ctx->v8i32, 0));
 	declare_per_stage_desc_pointers(ctx, fninfo, true);
 }
 
@@ -4305,8 +4313,6 @@ enum {
 
 static void create_function(struct si_shader_context *ctx)
 {
-	struct lp_build_tgsi_context *bld_base = &ctx->bld_base;
-	struct gallivm_state *gallivm = &ctx->gallivm;
 	struct si_shader *shader = ctx->shader;
 	struct si_function_info fninfo;
 	LLVMTypeRef returns[16+32*4];
@@ -4390,6 +4396,10 @@ static void create_function(struct si_shader_context *ctx)
 
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
+
+		ctx->param_bindless_samplers_and_images =
+			add_arg(&fninfo, ARG_SGPR, si_const_array(ctx->v8i32, 0));
+
 		declare_per_stage_desc_pointers(ctx, &fninfo,
 						ctx->type == PIPE_SHADER_VERTEX);
 		declare_vs_specific_input_sgprs(ctx, &fninfo);
@@ -4444,6 +4454,10 @@ static void create_function(struct si_shader_context *ctx)
 
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
 		add_arg(&fninfo, ARG_SGPR, ctx->i32); /* unused */
+
+		ctx->param_bindless_samplers_and_images =
+			add_arg(&fninfo, ARG_SGPR, si_const_array(ctx->v8i32, 0));
+
 		declare_per_stage_desc_pointers(ctx, &fninfo,
 						(ctx->type == PIPE_SHADER_VERTEX ||
 						 ctx->type == PIPE_SHADER_TESS_EVAL));
@@ -4634,20 +4648,6 @@ static void create_function(struct si_shader_context *ctx)
 
 	assert(shader->info.num_input_vgprs >= num_prolog_vgprs);
 	shader->info.num_input_vgprs -= num_prolog_vgprs;
-
-	if (!ctx->screen->has_ds_bpermute &&
-	    bld_base->info &&
-	    (bld_base->info->opcode_count[TGSI_OPCODE_DDX] > 0 ||
-	     bld_base->info->opcode_count[TGSI_OPCODE_DDY] > 0 ||
-	     bld_base->info->opcode_count[TGSI_OPCODE_DDX_FINE] > 0 ||
-	     bld_base->info->opcode_count[TGSI_OPCODE_DDY_FINE] > 0 ||
-	     bld_base->info->opcode_count[TGSI_OPCODE_INTERP_OFFSET] > 0 ||
-	     bld_base->info->opcode_count[TGSI_OPCODE_INTERP_SAMPLE] > 0))
-		ctx->lds =
-			LLVMAddGlobalInAddressSpace(gallivm->module,
-						    LLVMArrayType(ctx->i32, 64),
-						    "ddxy_lds",
-						    LOCAL_ADDR_SPACE);
 
 	if (shader->key.as_ls ||
 	    ctx->type == PIPE_SHADER_TESS_CTRL ||
@@ -5036,7 +5036,18 @@ static void si_shader_dump_stats(struct si_screen *sscreen,
 	unsigned code_size = si_get_shader_binary_size(shader);
 	unsigned lds_increment = sscreen->b.chip_class >= CIK ? 512 : 256;
 	unsigned lds_per_wave = 0;
-	unsigned max_simd_waves = 10;
+	unsigned max_simd_waves;
+
+	switch (sscreen->b.family) {
+	/* These always have 8 waves: */
+	case CHIP_POLARIS10:
+	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
+		max_simd_waves = 8;
+		break;
+	default:
+		max_simd_waves = 10;
+	}
 
 	/* Compute LDS usage for PS. */
 	switch (processor) {
@@ -6902,6 +6913,7 @@ static void si_build_tcs_epilog_function(struct si_shader_context *ctx,
 		add_arg(&fninfo, ARG_SGPR, ctx->i64);
 		add_arg(&fninfo, ARG_SGPR, ctx->i64);
 		add_arg(&fninfo, ARG_SGPR, ctx->i64);
+		add_arg(&fninfo, ARG_SGPR, ctx->i64);
 		add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		add_arg(&fninfo, ARG_SGPR, ctx->i32);
@@ -6912,6 +6924,7 @@ static void si_build_tcs_epilog_function(struct si_shader_context *ctx,
 		ctx->param_tcs_offchip_addr_base64k = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_tcs_factor_addr_base64k = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 	} else {
+		add_arg(&fninfo, ARG_SGPR, ctx->i64);
 		add_arg(&fninfo, ARG_SGPR, ctx->i64);
 		add_arg(&fninfo, ARG_SGPR, ctx->i64);
 		add_arg(&fninfo, ARG_SGPR, ctx->i64);
@@ -7263,6 +7276,7 @@ static void si_build_ps_epilog_function(struct si_shader_context *ctx,
 
 	/* Declare input SGPRs. */
 	ctx->param_rw_buffers = add_arg(&fninfo, ARG_SGPR, ctx->i64);
+	ctx->param_bindless_samplers_and_images = add_arg(&fninfo, ARG_SGPR, ctx->i64);
 	ctx->param_const_and_shader_buffers = add_arg(&fninfo, ARG_SGPR, ctx->i64);
 	ctx->param_samplers_and_images = add_arg(&fninfo, ARG_SGPR, ctx->i64);
 	add_arg_checked(&fninfo, ARG_SGPR, ctx->f32, SI_PARAM_ALPHA_REF);

@@ -43,14 +43,6 @@
 #include "utils.h"
 #include "util/xmlpool.h"
 
-#ifndef DRM_FORMAT_MOD_INVALID
-#define DRM_FORMAT_MOD_INVALID ((1ULL<<56) - 1)
-#endif
-
-#ifndef DRM_FORMAT_MOD_LINEAR
-#define DRM_FORMAT_MOD_LINEAR 0
-#endif
-
 static const __DRIconfigOptionsExtension brw_config_options = {
    .base = { __DRI_CONFIG_OPTIONS, 1 },
    .xml =
@@ -187,7 +179,7 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
     .flush_with_flags   = intel_dri2_flush_with_flags,
 };
 
-static struct intel_image_format intel_image_formats[] = {
+static const struct intel_image_format intel_image_formats[] = {
    { __DRI_IMAGE_FOURCC_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
 
@@ -302,13 +294,42 @@ static const struct {
    { .modifier = DRM_FORMAT_MOD_LINEAR       , .since_gen = 1 },
    { .modifier = I915_FORMAT_MOD_X_TILED     , .since_gen = 1 },
    { .modifier = I915_FORMAT_MOD_Y_TILED     , .since_gen = 6 },
+   { .modifier = I915_FORMAT_MOD_Y_TILED_CCS , .since_gen = 9 },
 };
 
 static bool
 modifier_is_supported(const struct gen_device_info *devinfo,
+                      const struct intel_image_format *fmt, int dri_format,
                       uint64_t modifier)
 {
+   const struct isl_drm_modifier_info *modinfo =
+      isl_drm_modifier_get_info(modifier);
    int i;
+
+   /* ISL had better know about the modifier */
+   if (!modinfo)
+      return false;
+
+   if (modinfo->aux_usage == ISL_AUX_USAGE_CCS_E) {
+      /* If INTEL_DEBUG=norbc is set, don't support any CCS_E modifiers */
+      if (unlikely(INTEL_DEBUG & DEBUG_NO_RBC))
+         return false;
+
+      /* CCS_E is not supported for planar images */
+      if (fmt && fmt->nplanes > 1)
+         return false;
+
+      if (fmt) {
+         assert(dri_format == 0);
+         dri_format = fmt->planes[0].dri_format;
+      }
+
+      mesa_format format = driImageFormatToGLFormat(dri_format);
+      format = _mesa_get_srgb_format_linear(format);
+      if (!isl_format_supports_ccs_e(devinfo,
+                                     brw_isl_format_for_mesa_format(format)))
+         return false;
+   }
 
    for (i = 0; i < ARRAY_SIZE(supported_modifiers); i++) {
       if (supported_modifiers[i].modifier != modifier)
@@ -346,19 +367,15 @@ intel_image_warn_if_unaligned(__DRIimage *image, const char *func)
    }
 }
 
-static struct intel_image_format *
+static const struct intel_image_format *
 intel_image_format_lookup(int fourcc)
 {
-   struct intel_image_format *f = NULL;
-
    for (unsigned i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
-      if (intel_image_formats[i].fourcc == fourcc) {
-	 f = &intel_image_formats[i];
-	 break;
-      }
+      if (intel_image_formats[i].fourcc == fourcc)
+         return &intel_image_formats[i];
    }
 
-   return f;
+   return NULL;
 }
 
 static boolean intel_lookup_fourcc(int dri_format, int *fourcc)
@@ -573,6 +590,7 @@ enum modifier_priority {
    MODIFIER_PRIORITY_LINEAR,
    MODIFIER_PRIORITY_X,
    MODIFIER_PRIORITY_Y,
+   MODIFIER_PRIORITY_Y_CCS,
 };
 
 const uint64_t priority_to_modifier[] = {
@@ -580,20 +598,25 @@ const uint64_t priority_to_modifier[] = {
    [MODIFIER_PRIORITY_LINEAR] = DRM_FORMAT_MOD_LINEAR,
    [MODIFIER_PRIORITY_X] = I915_FORMAT_MOD_X_TILED,
    [MODIFIER_PRIORITY_Y] = I915_FORMAT_MOD_Y_TILED,
+   [MODIFIER_PRIORITY_Y_CCS] = I915_FORMAT_MOD_Y_TILED_CCS,
 };
 
 static uint64_t
 select_best_modifier(struct gen_device_info *devinfo,
+                     int dri_format,
                      const uint64_t *modifiers,
                      const unsigned count)
 {
    enum modifier_priority prio = MODIFIER_PRIORITY_INVALID;
 
    for (int i = 0; i < count; i++) {
-      if (!modifier_is_supported(devinfo, modifiers[i]))
+      if (!modifier_is_supported(devinfo, NULL, dri_format, modifiers[i]))
          continue;
 
       switch (modifiers[i]) {
+      case I915_FORMAT_MOD_Y_TILED_CCS:
+         prio = MAX2(prio, MODIFIER_PRIORITY_Y_CCS);
+         break;
       case I915_FORMAT_MOD_Y_TILED:
          prio = MAX2(prio, MODIFIER_PRIORITY_Y);
          break;
@@ -643,7 +666,8 @@ intel_create_image_common(__DRIscreen *dri_screen,
    if (modifier == DRM_FORMAT_MOD_INVALID) {
       if (modifiers) {
          /* User requested specific modifiers */
-         modifier = select_best_modifier(&screen->devinfo, modifiers, count);
+         modifier = select_best_modifier(&screen->devinfo, format,
+                                         modifiers, count);
          if (modifier == DRM_FORMAT_MOD_INVALID)
             return NULL;
       } else {
@@ -681,11 +705,29 @@ intel_create_image_common(__DRIscreen *dri_screen,
       return NULL;
    }
 
-   /* We request that the bufmgr zero because, if a buffer gets re-used from
-    * the pool, we don't want to leak random garbage from our process to some
-    * other.
+   struct isl_surf aux_surf;
+   if (mod_info->aux_usage == ISL_AUX_USAGE_CCS_E) {
+      ok = isl_surf_get_ccs_surf(&screen->isl_dev, &surf, &aux_surf, 0);
+      if (!ok) {
+         free(image);
+         return NULL;
+      }
+   } else {
+      assert(mod_info->aux_usage == ISL_AUX_USAGE_NONE);
+      aux_surf.size = 0;
+   }
+
+   /* We request that the bufmgr zero the buffer for us for two reasons:
+    *
+    *  1) If a buffer gets re-used from the pool, we don't want to leak random
+    *     garbage from our process to some other.
+    *
+    *  2) For images with CCS_E, we want to ensure that the CCS starts off in
+    *     a valid state.  A CCS value of 0 indicates that the given block is
+    *     in the pass-through state which is what we want.
     */
-   image->bo = brw_bo_alloc_tiled(screen->bufmgr, "image", surf.size,
+   image->bo = brw_bo_alloc_tiled(screen->bufmgr, "image",
+                                  surf.size + aux_surf.size,
                                   isl_tiling_to_i915_tiling(mod_info->tiling),
                                   surf.row_pitch, BO_ALLOC_ZEROED);
    if (image->bo == NULL) {
@@ -696,6 +738,11 @@ intel_create_image_common(__DRIscreen *dri_screen,
    image->height = height;
    image->pitch = surf.row_pitch;
    image->modifier = modifier;
+
+   if (aux_surf.size) {
+      image->aux_offset = surf.size;
+      image->aux_pitch = aux_surf.row_pitch;
+   }
 
    return image;
 }
@@ -752,7 +799,7 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
    case __DRI_IMAGE_ATTRIB_FOURCC:
       return intel_lookup_fourcc(image->dri_format, value);
    case __DRI_IMAGE_ATTRIB_NUM_PLANES:
-      *value = 1;
+      *value = isl_drm_modifier_has_aux(image->modifier) ? 2 : 1;
       return true;
    case __DRI_IMAGE_ATTRIB_OFFSET:
       *value = image->offset;
@@ -818,7 +865,7 @@ intel_create_image_from_names(__DRIscreen *dri_screen,
                               int *strides, int *offsets,
                               void *loaderPrivate)
 {
-    struct intel_image_format *f = NULL;
+    const struct intel_image_format *f = NULL;
     __DRIimage *image;
     int i, index;
 
@@ -855,7 +902,7 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
                                    void *loaderPrivate)
 {
    struct intel_screen *screen = dri_screen->driverPrivate;
-   struct intel_image_format *f;
+   const struct intel_image_format *f;
    __DRIimage *image;
    int i, index;
    bool ok;
@@ -868,7 +915,7 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
       return NULL;
 
    if (modifier != DRM_FORMAT_MOD_INVALID &&
-       !modifier_is_supported(&screen->devinfo, modifier))
+       !modifier_is_supported(&screen->devinfo, f, 0, modifier))
       return NULL;
 
    if (f->nplanes == 1)
@@ -911,18 +958,18 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
    else
       image->modifier = tiling_to_modifier(image->bo->tiling_mode);
 
+   const struct isl_drm_modifier_info *mod_info =
+      isl_drm_modifier_get_info(image->modifier);
+
    int size = 0;
+   struct isl_surf surf;
    for (i = 0; i < f->nplanes; i++) {
       index = f->planes[i].buffer_index;
       image->offsets[index] = offsets[index];
       image->strides[index] = strides[index];
 
-      const struct isl_drm_modifier_info *mod_info =
-         isl_drm_modifier_get_info(image->modifier);
-
       mesa_format format = driImageFormatToGLFormat(f->planes[i].dri_format);
 
-      struct isl_surf surf;
       ok = isl_surf_init(&screen->isl_dev, &surf,
                          .dim = ISL_SURF_DIM_2D,
                          .format = brw_isl_format_for_mesa_format(format),
@@ -946,6 +993,46 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
       const int end = offsets[index] + surf.size;
       if (size < end)
          size = end;
+   }
+
+   if (mod_info->aux_usage == ISL_AUX_USAGE_CCS_E) {
+      /* Even though we initialize surf in the loop above, we know that
+       * anything with CCS_E will have exactly one plane so surf is properly
+       * initialized when we get here.
+       */
+      assert(f->nplanes == 1);
+
+      image->aux_offset = offsets[1];
+      image->aux_pitch = strides[1];
+
+      /* Scanout hardware requires that the CCS be placed after the main
+       * surface in memory.  We consider any CCS that is placed any earlier in
+       * memory to be invalid and reject it.
+       *
+       * At some point in the future, this restriction may be relaxed if the
+       * hardware becomes less strict but we may need a new modifier for that.
+       */
+      assert(size > 0);
+      if (image->aux_offset < size) {
+         brw_bo_unreference(image->bo);
+         free(image);
+         return NULL;
+      }
+
+      struct isl_surf aux_surf;
+      ok = isl_surf_get_ccs_surf(&screen->isl_dev, &surf, &aux_surf,
+                                 image->aux_pitch);
+      if (!ok) {
+         brw_bo_unreference(image->bo);
+         free(image);
+         return NULL;
+      }
+
+      const int end = image->aux_offset + aux_surf.size;
+      if (size < end)
+         size = end;
+   } else {
+      assert(mod_info->aux_usage == ISL_AUX_USAGE_NONE);
    }
 
    /* Check that the requested image actually fits within the BO. 'size'
@@ -992,7 +1079,7 @@ intel_create_image_from_dma_bufs2(__DRIscreen *dri_screen,
                                   void *loaderPrivate)
 {
    __DRIimage *image;
-   struct intel_image_format *f = intel_image_format_lookup(fourcc);
+   const struct intel_image_format *f = intel_image_format_lookup(fourcc);
 
    if (!f) {
       *error = __DRI_IMAGE_ERROR_BAD_MATCH;
@@ -1075,7 +1162,7 @@ intel_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
                               int *count)
 {
    struct intel_screen *screen = _screen->driverPrivate;
-   struct intel_image_format *f;
+   const struct intel_image_format *f;
    int num_mods = 0, i;
 
    f = intel_image_format_lookup(fourcc);
@@ -1084,7 +1171,7 @@ intel_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
 
    for (i = 0; i < ARRAY_SIZE(supported_modifiers); i++) {
       uint64_t modifier = supported_modifiers[i].modifier;
-      if (!modifier_is_supported(&screen->devinfo, modifier))
+      if (!modifier_is_supported(&screen->devinfo, f, 0, modifier))
          continue;
 
       num_mods++;
@@ -1117,33 +1204,46 @@ static __DRIimage *
 intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
 {
     int width, height, offset, stride, dri_format, index;
-    struct intel_image_format *f;
+    const struct intel_image_format *f;
     __DRIimage *image;
 
-    if (parent == NULL || parent->planar_format == NULL)
-        return NULL;
+    if (parent == NULL) {
+       return NULL;
+    } else if (parent->planar_format == NULL) {
+       const bool is_aux =
+          isl_drm_modifier_has_aux(parent->modifier) && plane == 1;
+       if (!is_aux)
+          return NULL;
 
-    f = parent->planar_format;
+       width = parent->width;
+       height = parent->height;
+       dri_format = parent->dri_format;
+       offset = parent->aux_offset;
+       stride = parent->aux_pitch;
+    } else {
+       /* Planar formats don't support aux buffers/images */
+       assert(!isl_drm_modifier_has_aux(parent->modifier));
+       f = parent->planar_format;
 
-    if (plane >= f->nplanes)
-        return NULL;
+       if (plane >= f->nplanes)
+          return NULL;
 
-    width = parent->width >> f->planes[plane].width_shift;
-    height = parent->height >> f->planes[plane].height_shift;
-    dri_format = f->planes[plane].dri_format;
-    index = f->planes[plane].buffer_index;
-    offset = parent->offsets[index];
-    stride = parent->strides[index];
+       width = parent->width >> f->planes[plane].width_shift;
+       height = parent->height >> f->planes[plane].height_shift;
+       dri_format = f->planes[plane].dri_format;
+       index = f->planes[plane].buffer_index;
+       offset = parent->offsets[index];
+       stride = parent->strides[index];
+
+       if (offset + height * stride > parent->bo->size) {
+          _mesa_warning(NULL, "intel_create_sub_image: subimage out of bounds");
+          return NULL;
+       }
+    }
 
     image = intel_allocate_image(parent->screen, dri_format, loaderPrivate);
     if (image == NULL)
        return NULL;
-
-    if (offset + height * stride > parent->bo->size) {
-       _mesa_warning(NULL, "intel_create_sub_image: subimage out of bounds");
-       free(image);
-       return NULL;
-    }
 
     image->bo = parent->bo;
     brw_bo_reference(parent->bo);
@@ -1778,11 +1878,10 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 
    /* GLX_SWAP_COPY_OML is not supported due to page flipping. */
    static const GLenum back_buffer_modes[] = {
-       GLX_SWAP_UNDEFINED_OML, GLX_NONE,
+      __DRI_ATTRIB_SWAP_UNDEFINED, __DRI_ATTRIB_SWAP_NONE
    };
 
    static const uint8_t singlesample_samples[1] = {0};
-   static const uint8_t multisample_samples[2]  = {4, 8};
 
    struct intel_screen *screen = dri_screen->driverPrivate;
    const struct gen_device_info *devinfo = &screen->devinfo;
@@ -1866,6 +1965,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
       __DRIconfig **new_configs;
       const int num_depth_stencil_bits = 2;
       int num_msaa_modes = 0;
+      const uint8_t *multisample_samples = NULL;
 
       depth_bits[0] = 0;
       stencil_bits[0] = 0;
@@ -1878,10 +1978,23 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
          stencil_bits[1] = 8;
       }
 
-      if (devinfo->gen >= 7)
-         num_msaa_modes = 2;
-      else if (devinfo->gen == 6)
-         num_msaa_modes = 1;
+      if (devinfo->gen >= 9) {
+         static const uint8_t multisample_samples_gen9[] = {2, 4, 8, 16};
+         multisample_samples = multisample_samples_gen9;
+         num_msaa_modes = ARRAY_SIZE(multisample_samples_gen9);
+      } else if (devinfo->gen == 8) {
+         static const uint8_t multisample_samples_gen8[] = {2, 4, 8};
+         multisample_samples = multisample_samples_gen8;
+         num_msaa_modes = ARRAY_SIZE(multisample_samples_gen8);
+      } else if (devinfo->gen == 7) {
+         static const uint8_t multisample_samples_gen7[] = {4, 8};
+         multisample_samples = multisample_samples_gen7;
+         num_msaa_modes = ARRAY_SIZE(multisample_samples_gen7);
+      } else if (devinfo->gen == 6) {
+         static const uint8_t multisample_samples_gen6[] = {4};
+         multisample_samples = multisample_samples_gen6;
+         num_msaa_modes = ARRAY_SIZE(multisample_samples_gen6);
+      }
 
       new_configs = driCreateConfigs(formats[i],
                                      depth_bits,
@@ -2267,11 +2380,12 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    }
 
    /* Kernel 4.13 retuired for exec object capture */
-#ifndef I915_PARAM_HAS_EXEC_CAPTURE
-#define I915_PARAM_HAS_EXEC_CAPTURE 45
-#endif
    if (intel_get_boolean(screen, I915_PARAM_HAS_EXEC_CAPTURE)) {
       screen->kernel_features |= KERNEL_ALLOWS_EXEC_CAPTURE;
+   }
+
+   if (intel_get_boolean(screen, I915_PARAM_HAS_EXEC_BATCH_FIRST)) {
+      screen->kernel_features |= KERNEL_ALLOWS_EXEC_BATCH_FIRST;
    }
 
    if (!intel_detect_pipelined_so(screen)) {
@@ -2384,7 +2498,7 @@ intelAllocateBuffer(__DRIscreen *dri_screen,
                                            height,
                                            cpp,
                                            I915_TILING_X, &pitch,
-                                           BO_ALLOC_FOR_RENDER);
+                                           BO_ALLOC_BUSY);
 
    if (intelBuffer->bo == NULL) {
 	   free(intelBuffer);

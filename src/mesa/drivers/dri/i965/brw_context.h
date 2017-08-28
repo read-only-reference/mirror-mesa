@@ -215,6 +215,7 @@ enum brw_state_id {
    BRW_STATE_VIEWPORT_COUNT,
    BRW_STATE_CONSERVATIVE_RASTERIZATION,
    BRW_STATE_DRAW_CALL,
+   BRW_STATE_FAST_CLEAR_COLOR,
    BRW_NUM_STATE_BITS
 };
 
@@ -306,6 +307,7 @@ enum brw_state_id {
 #define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
 #define BRW_NEW_CONSERVATIVE_RASTERIZATION (1ull << BRW_STATE_CONSERVATIVE_RASTERIZATION)
 #define BRW_NEW_DRAW_CALL               (1ull << BRW_STATE_DRAW_CALL)
+#define BRW_NEW_FAST_CLEAR_COLOR        (1ull << BRW_STATE_FAST_CLEAR_COLOR)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -451,12 +453,14 @@ struct intel_batchbuffer {
 
    uint32_t state_batch_offset;
    enum brw_gpu_ring ring;
+   bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
 
    struct drm_i915_gem_relocation_entry *relocs;
    int reloc_count;
    int reloc_array_size;
+   unsigned int valid_reloc_flags;
 
    /** The validation list */
    struct drm_i915_gem_exec_object2 *validation_list;
@@ -629,16 +633,6 @@ struct brw_context
 
    struct
    {
-      uint32_t (*update_renderbuffer_surface)(struct brw_context *brw,
-                                              struct gl_renderbuffer *rb,
-                                              uint32_t flags, unsigned unit,
-                                              uint32_t surf_index);
-      void (*emit_null_surface_state)(struct brw_context *brw,
-                                      unsigned width,
-                                      unsigned height,
-                                      unsigned samples,
-                                      uint32_t *out_offset);
-
       /**
        * Send the appropriate state packets to configure depth, stencil, and
        * HiZ buffers (i965+ only)
@@ -752,34 +746,9 @@ struct brw_context
 
    uint64_t max_gtt_map_object_size;
 
-   int gen;
-   int gt;
-
-   bool is_g4x;
-   bool is_baytrail;
-   bool is_haswell;
-   bool is_cherryview;
-   bool is_broxton;
-
    bool has_hiz;
    bool has_separate_stencil;
-   bool must_use_separate_stencil;
-   bool has_llc;
    bool has_swizzling;
-   bool has_surface_tile_offset;
-   bool has_compr4;
-   bool has_negative_rhw_bug;
-   bool has_pln;
-   bool no_simd8;
-
-   /**
-    * Some versions of Gen hardware don't do centroid interpolation correctly
-    * on unlit pixels, causing incorrect values for derivatives near triangle
-    * edges.  Enabling this flag causes the fragment shader to use
-    * non-centroid interpolation for unlit pixels, at the expense of two extra
-    * fragment shader instructions.
-    */
-   bool needs_unlit_centroid_workaround;
 
    /** Derived stencil states. */
    bool stencil_enabled;
@@ -1320,12 +1289,10 @@ bool brw_check_conditional_render(struct brw_context *brw);
 void brw_load_register_mem(struct brw_context *brw,
                            uint32_t reg,
                            struct brw_bo *bo,
-                           uint32_t read_domains, uint32_t write_domain,
                            uint32_t offset);
 void brw_load_register_mem64(struct brw_context *brw,
                              uint32_t reg,
                              struct brw_bo *bo,
-                             uint32_t read_domains, uint32_t write_domain,
                              uint32_t offset);
 void brw_store_register_mem32(struct brw_context *brw,
                               struct brw_bo *bo, uint32_t reg, uint32_t offset);

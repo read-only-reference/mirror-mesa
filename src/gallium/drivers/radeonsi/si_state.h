@@ -141,7 +141,6 @@ union si_state {
 union si_state_atoms {
 	struct {
 		/* The order matters. */
-		struct r600_atom *prefetch_L2;
 		struct r600_atom *render_cond;
 		struct r600_atom *streamout_begin;
 		struct r600_atom *streamout_enable; /* must be after streamout_begin */
@@ -154,7 +153,7 @@ union si_state_atoms {
 		struct r600_atom *blend_color;
 		struct r600_atom *clip_regs;
 		struct r600_atom *clip_state;
-		struct r600_atom *shader_userdata;
+		struct r600_atom *shader_pointers;
 		struct r600_atom *scissors;
 		struct r600_atom *viewports;
 		struct r600_atom *stencil_ref;
@@ -196,13 +195,12 @@ enum {
  * are contiguous:
  *
  *  0 - rw buffers
- *  1 - vertex const buffers
- *  2 - vertex shader buffers
+ *  1 - vertex const and shader buffers
+ *  2 - vertex samplers and images
+ *  3 - fragment const and shader buffer
  *   ...
- *  5 - fragment const buffers
- *   ...
- *  21 - compute const buffers
- *   ...
+ *  11 - compute const and shader buffers
+ *  12 - compute samplers and images
  */
 enum {
 	SI_SHADER_DESCS_CONST_AND_SHADER_BUFFERS,
@@ -225,8 +223,6 @@ struct si_descriptors {
 	uint32_t *list;
 	/* The list in mapped GPU memory. */
 	uint32_t *gpu_list;
-	/* Slots that have been changed and need to be uploaded. */
-	uint64_t dirty_mask;
 
 	/* The buffer where the descriptors have been uploaded. */
 	struct r600_resource *buffer;
@@ -235,28 +231,13 @@ struct si_descriptors {
 	/* The size of one descriptor. */
 	ubyte element_dw_size;
 	/* The maximum number of descriptors. */
-	ubyte num_elements;
-
-	/* Offset in CE RAM */
-	uint16_t ce_offset;
-
-	/* Slots allocated in CE RAM. If we get active slots outside of this
-	 * range, direct uploads to memory will be used instead. This basically
-	 * governs switching between onchip (CE) and offchip (upload) modes.
-	 */
-	ubyte first_ce_slot;
-	ubyte num_ce_slots;
+	uint32_t num_elements;
 
 	/* Slots that are used by currently-bound shaders.
-	 * With CE: It determines which slots are dumped to L2.
-	 *          It doesn't skip uploads to CE RAM.
-	 * Without CE: It determines which slots are uploaded.
+	 * It determines which slots are uploaded.
 	 */
-	ubyte first_active_slot;
-	ubyte num_active_slots;
-
-	/* Whether CE is used to upload this descriptor array. */
-	bool uses_ce;
+	uint32_t first_active_slot;
+	uint32_t num_active_slots;
 
 	/* The SGPR index where the 64-bit pointer to the descriptor array will
 	 * be stored. */
@@ -289,6 +270,9 @@ struct si_buffer_resources {
 #define si_pm4_state_changed(sctx, member) \
 	((sctx)->queued.named.member != (sctx)->emitted.named.member)
 
+#define si_pm4_state_enabled_and_changed(sctx, member) \
+	((sctx)->queued.named.member && si_pm4_state_changed(sctx, member))
+
 #define si_pm4_bind_state(sctx, member, value) \
 	do { \
 		(sctx)->queued.named.member = (value); \
@@ -305,9 +289,6 @@ struct si_buffer_resources {
 	} while(0)
 
 /* si_descriptors.c */
-void si_ce_save_all_descriptors_at_ib_end(struct si_context* sctx);
-void si_ce_restore_all_descriptors_at_ib_start(struct si_context *sctx);
-void si_ce_enable_loads(struct radeon_winsys_cs *ib);
 void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 				    struct r600_texture *tex,
 				    const struct legacy_surf_level *base_level_info,
@@ -337,9 +318,9 @@ void si_upload_const_buffer(struct si_context *sctx, struct r600_resource **rbuf
 void si_update_all_texture_descriptors(struct si_context *sctx);
 void si_shader_change_notify(struct si_context *sctx);
 void si_update_needs_color_decompress_masks(struct si_context *sctx);
-void si_emit_graphics_shader_userdata(struct si_context *sctx,
+void si_emit_graphics_shader_pointers(struct si_context *sctx,
                                       struct r600_atom *atom);
-void si_emit_compute_shader_userdata(struct si_context *sctx);
+void si_emit_compute_shader_pointers(struct si_context *sctx);
 void si_set_rw_buffer(struct si_context *sctx,
 		      uint slot, const struct pipe_constant_buffer *input);
 void si_set_active_descriptors(struct si_context *sctx, unsigned desc_idx,
@@ -399,8 +380,6 @@ void si_get_active_slot_masks(const struct tgsi_shader_info *info,
 /* si_state_draw.c */
 void si_init_ia_multi_vgt_param_table(struct si_context *sctx);
 void si_emit_cache_flush(struct si_context *sctx);
-void si_ce_pre_draw_synchronization(struct si_context *sctx);
-void si_ce_post_draw_synchronization(struct si_context *sctx);
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo);
 void si_trace_emit(struct si_context *sctx);
 

@@ -29,6 +29,8 @@
 #include "os/os_time.h"
 #include "tgsi/tgsi_text.h"
 
+#define R600_MAX_STREAMS 4
+
 struct r600_hw_query_params {
 	unsigned start_offset;
 	unsigned end_offset;
@@ -98,6 +100,9 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 		break;
 	case R600_QUERY_DRAW_CALLS:
 		query->begin_result = rctx->num_draw_calls;
+		break;
+	case R600_QUERY_DECOMPRESS_CALLS:
+		query->begin_result = rctx->num_decompress_calls;
 		break;
 	case R600_QUERY_MRT_DRAW_CALLS:
 		query->begin_result = rctx->num_mrt_draw_calls;
@@ -212,9 +217,8 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_GPU_MEQ_BUSY:
 	case R600_QUERY_GPU_ME_BUSY:
 	case R600_QUERY_GPU_SURF_SYNC_BUSY:
-	case R600_QUERY_GPU_DMA_BUSY:
+	case R600_QUERY_GPU_CP_DMA_BUSY:
 	case R600_QUERY_GPU_SCRATCH_RAM_BUSY:
-	case R600_QUERY_GPU_CE_BUSY:
 		query->begin_result = r600_begin_counter(rctx->screen,
 							 query->b.type);
 		break;
@@ -255,6 +259,9 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 		break;
 	case R600_QUERY_DRAW_CALLS:
 		query->end_result = rctx->num_draw_calls;
+		break;
+	case R600_QUERY_DECOMPRESS_CALLS:
+		query->end_result = rctx->num_decompress_calls;
 		break;
 	case R600_QUERY_MRT_DRAW_CALLS:
 		query->end_result = rctx->num_mrt_draw_calls;
@@ -366,9 +373,8 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 	case R600_QUERY_GPU_MEQ_BUSY:
 	case R600_QUERY_GPU_ME_BUSY:
 	case R600_QUERY_GPU_SURF_SYNC_BUSY:
-	case R600_QUERY_GPU_DMA_BUSY:
+	case R600_QUERY_GPU_CP_DMA_BUSY:
 	case R600_QUERY_GPU_SCRATCH_RAM_BUSY:
-	case R600_QUERY_GPU_CE_BUSY:
 		query->end_result = r600_end_counter(rctx->screen,
 						     query->b.type,
 						     query->begin_result);
@@ -503,6 +509,7 @@ void r600_query_hw_destroy(struct r600_common_screen *rscreen,
 	}
 
 	r600_resource_reference(&query->buffer.buf, NULL);
+	r600_resource_reference(&query->workaround_buf, NULL);
 	FREE(rquery);
 }
 
@@ -654,6 +661,12 @@ static struct pipe_query *r600_query_hw_create(struct r600_common_screen *rscree
 		query->num_cs_dw_end = 6;
 		query->stream = index;
 		break;
+	case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
+		/* NumPrimitivesWritten, PrimitiveStorageNeeded. */
+		query->result_size = 32 * R600_MAX_STREAMS;
+		query->num_cs_dw_begin = 6 * R600_MAX_STREAMS;
+		query->num_cs_dw_end = 6 * R600_MAX_STREAMS;
+		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		/* 11 values on EG, 8 on R600. */
 		query->result_size = (rscreen->chip_class >= EVERGREEN ? 11 : 8) * 16;
@@ -702,15 +715,24 @@ static void r600_update_occlusion_query_state(struct r600_common_context *rctx,
 	}
 }
 
-static unsigned event_type_for_stream(struct r600_query_hw *query)
+static unsigned event_type_for_stream(unsigned stream)
 {
-	switch (query->stream) {
+	switch (stream) {
 	default:
 	case 0: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS;
 	case 1: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS1;
 	case 2: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS2;
 	case 3: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS3;
 	}
+}
+
+static void emit_sample_streamout(struct radeon_winsys_cs *cs, uint64_t va,
+				  unsigned stream)
+{
+	radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
+	radeon_emit(cs, EVENT_TYPE(event_type_for_stream(stream)) | EVENT_INDEX(3));
+	radeon_emit(cs, va);
+	radeon_emit(cs, va >> 32);
 }
 
 static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
@@ -732,10 +754,11 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 	case PIPE_QUERY_PRIMITIVES_GENERATED:
 	case PIPE_QUERY_SO_STATISTICS:
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(event_type_for_stream(query)) | EVENT_INDEX(3));
-		radeon_emit(cs, va);
-		radeon_emit(cs, va >> 32);
+		emit_sample_streamout(cs, va, query->stream);
+		break;
+	case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
+		for (unsigned stream = 0; stream < R600_MAX_STREAMS; ++stream)
+			emit_sample_streamout(cs, va + 32 * stream, stream);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		if (ctx->chip_class >= SI) {
@@ -755,7 +778,8 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 			 * (bottom-of-pipe)
 			 */
 			r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
-						 0, 3, NULL, va, 0, 0);
+						 0, EOP_DATA_SEL_TIMESTAMP,
+						 NULL, va, 0, query->b.type);
 		}
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
@@ -827,18 +851,21 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 	case PIPE_QUERY_PRIMITIVES_GENERATED:
 	case PIPE_QUERY_SO_STATISTICS:
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
-		va += query->result_size/2;
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(event_type_for_stream(query)) | EVENT_INDEX(3));
-		radeon_emit(cs, va);
-		radeon_emit(cs, va >> 32);
+		va += 16;
+		emit_sample_streamout(cs, va, query->stream);
+		break;
+	case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
+		va += 16;
+		for (unsigned stream = 0; stream < R600_MAX_STREAMS; ++stream)
+			emit_sample_streamout(cs, va + 32 * stream, stream);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		va += 8;
 		/* fall through */
 	case PIPE_QUERY_TIMESTAMP:
 		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
-					 0, 3, NULL, va, 0, 0);
+					 0, EOP_DATA_SEL_TIMESTAMP, NULL, va,
+					 0, query->b.type);
 		fence_va = va + 8;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS: {
@@ -860,8 +887,10 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 			RADEON_PRIO_QUERY);
 
 	if (fence_va)
-		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0, 1,
-					 query->buffer.buf, fence_va, 0, 0x80000000);
+		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0,
+					 EOP_DATA_SEL_VALUE_32BIT,
+					 query->buffer.buf, fence_va, 0x80000000,
+					 query->b.type);
 }
 
 static void r600_query_hw_emit_stop(struct r600_common_context *ctx,
@@ -891,45 +920,81 @@ static void r600_query_hw_emit_stop(struct r600_common_context *ctx,
 	r600_update_prims_generated_query_state(ctx, query->b.type, -1);
 }
 
+static void emit_set_predicate(struct r600_common_context *ctx,
+			       struct r600_resource *buf, uint64_t va,
+			       uint32_t op)
+{
+	struct radeon_winsys_cs *cs = ctx->gfx.cs;
+
+	if (ctx->chip_class >= GFX9) {
+		radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 2, 0));
+		radeon_emit(cs, op);
+		radeon_emit(cs, va);
+		radeon_emit(cs, va >> 32);
+	} else {
+		radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 1, 0));
+		radeon_emit(cs, va);
+		radeon_emit(cs, op | ((va >> 32) & 0xFF));
+	}
+	r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_READ,
+			RADEON_PRIO_QUERY);
+}
+
 static void r600_emit_query_predication(struct r600_common_context *ctx,
 					struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = ctx->gfx.cs;
 	struct r600_query_hw *query = (struct r600_query_hw *)ctx->render_cond;
 	struct r600_query_buffer *qbuf;
 	uint32_t op;
-	bool flag_wait;
+	bool flag_wait, invert;
 
 	if (!query)
 		return;
 
+	invert = ctx->render_cond_invert;
 	flag_wait = ctx->render_cond_mode == PIPE_RENDER_COND_WAIT ||
 		    ctx->render_cond_mode == PIPE_RENDER_COND_BY_REGION_WAIT;
 
-	switch (query->b.type) {
-	case PIPE_QUERY_OCCLUSION_COUNTER:
-	case PIPE_QUERY_OCCLUSION_PREDICATE:
-		op = PRED_OP(PREDICATION_OP_ZPASS);
-		break;
-	case PIPE_QUERY_PRIMITIVES_EMITTED:
-	case PIPE_QUERY_PRIMITIVES_GENERATED:
-	case PIPE_QUERY_SO_STATISTICS:
-	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
-		op = PRED_OP(PREDICATION_OP_PRIMCOUNT);
-		break;
-	default:
-		assert(0);
-		return;
+	if (query->workaround_buf) {
+		op = PRED_OP(PREDICATION_OP_BOOL64);
+	} else {
+		switch (query->b.type) {
+		case PIPE_QUERY_OCCLUSION_COUNTER:
+		case PIPE_QUERY_OCCLUSION_PREDICATE:
+			op = PRED_OP(PREDICATION_OP_ZPASS);
+			break;
+		case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
+		case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
+			op = PRED_OP(PREDICATION_OP_PRIMCOUNT);
+			invert = !invert;
+			break;
+		default:
+			assert(0);
+			return;
+		}
 	}
 
 	/* if true then invert, see GL_ARB_conditional_render_inverted */
-	if (ctx->render_cond_invert)
-		op |= PREDICATION_DRAW_NOT_VISIBLE; /* Draw if not visable/overflow */
+	if (invert)
+		op |= PREDICATION_DRAW_NOT_VISIBLE; /* Draw if not visible or overflow */
 	else
-		op |= PREDICATION_DRAW_VISIBLE; /* Draw if visable/overflow */
+		op |= PREDICATION_DRAW_VISIBLE; /* Draw if visible or no overflow */
+
+	/* Use the value written by compute shader as a workaround. Note that
+	 * the wait flag does not apply in this predication mode.
+	 *
+	 * The shader outputs the result value to L2. Workarounds only affect VI
+	 * and later, where the CP reads data from L2, so we don't need an
+	 * additional flush.
+	 */
+	if (query->workaround_buf) {
+		uint64_t va = query->workaround_buf->gpu_address + query->workaround_offset;
+		emit_set_predicate(ctx, query->workaround_buf, va, op);
+		return;
+	}
 
 	op |= flag_wait ? PREDICATION_HINT_WAIT : PREDICATION_HINT_NOWAIT_DRAW;
-	
+
 	/* emit predicate packets for all data blocks */
 	for (qbuf = &query->buffer; qbuf; qbuf = qbuf->previous) {
 		unsigned results_base = 0;
@@ -938,22 +1003,19 @@ static void r600_emit_query_predication(struct r600_common_context *ctx,
 		while (results_base < qbuf->results_end) {
 			uint64_t va = va_base + results_base;
 
-			if (ctx->chip_class >= GFX9) {
-				radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 2, 0));
-				radeon_emit(cs, op);
-				radeon_emit(cs, va);
-				radeon_emit(cs, va >> 32);
-			} else {
-				radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 1, 0));
-				radeon_emit(cs, va);
-				radeon_emit(cs, op | ((va >> 32) & 0xFF));
-			}
-			r600_emit_reloc(ctx, &ctx->gfx, qbuf->buf, RADEON_USAGE_READ,
-					RADEON_PRIO_QUERY);
-			results_base += query->result_size;
+			if (query->b.type == PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE) {
+				for (unsigned stream = 0; stream < R600_MAX_STREAMS; ++stream) {
+					emit_set_predicate(ctx, qbuf->buf, va + 32 * stream, op);
 
-			/* set CONTINUE bit for all packets except the first */
-			op |= PREDICATION_CONTINUE;
+					/* set CONTINUE bit for all packets except the first */
+					op |= PREDICATION_CONTINUE;
+				}
+			} else {
+				emit_set_predicate(ctx, qbuf->buf, va, op);
+				op |= PREDICATION_CONTINUE;
+			}
+
+			results_base += query->result_size;
 		}
 	}
 }
@@ -1027,6 +1089,8 @@ bool r600_query_hw_begin(struct r600_common_context *rctx,
 
 	if (!(query->flags & R600_QUERY_HW_FLAG_BEGIN_RESUMES))
 		r600_query_hw_reset_buffers(rctx, query);
+
+	r600_resource_reference(&query->workaround_buf, NULL);
 
 	r600_query_hw_emit_start(rctx, query);
 	if (!query->buffer.buf)
@@ -1105,6 +1169,19 @@ static void r600_get_hw_query_params(struct r600_common_context *rctx,
 		params->start_offset = 8 - index * 8;
 		params->end_offset = 24 - index * 8;
 		params->fence_offset = params->end_offset + 4;
+		break;
+	case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
+		params->pair_count = R600_MAX_STREAMS;
+		params->pair_stride = 32;
+	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
+		params->start_offset = 0;
+		params->end_offset = 16;
+
+		/* We can re-use the high dword of the last 64-bit value as a
+		 * fence: it is initialized as 0, and the high bit is set by
+		 * the write of the streamout stats event.
+		 */
+		params->fence_offset = rquery->result_size - 4;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 	{
@@ -1191,6 +1268,14 @@ static void r600_query_hw_add_result(struct r600_common_screen *rscreen,
 		result->b = result->b ||
 			r600_query_read_result(buffer, 2, 6, true) !=
 			r600_query_read_result(buffer, 0, 4, true);
+		break;
+	case PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE:
+		for (unsigned stream = 0; stream < R600_MAX_STREAMS; ++stream) {
+			result->b = result->b ||
+				r600_query_read_result(buffer, 2, 6, true) !=
+				r600_query_read_result(buffer, 0, 4, true);
+			buffer = (char *)buffer + 32;
+		}
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		if (rscreen->chip_class >= EVERGREEN) {
@@ -1349,6 +1434,7 @@ bool r600_query_hw_get_result(struct r600_common_context *rctx,
  *         32: apply timestamp conversion
  *         64: store full 64 bits result
  *        128: store signed 32 bits result
+ *        256: SO_OVERFLOW mode: take the difference of two successive half-pairs
  *  1.x = fence_offset
  *  1.y = pair_stride
  *  1.z = pair_count
@@ -1379,6 +1465,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 		"IMM[1] UINT32 {1, 2, 4, 8}\n"
 		"IMM[2] UINT32 {16, 32, 64, 128}\n"
 		"IMM[3] UINT32 {1000000, 0, %u, 0}\n" /* for timestamp conversion */
+		"IMM[4] UINT32 {256, 0, 0, 0}\n"
 
 		"AND TEMP[5], CONST[0].wwww, IMM[2].xxxx\n"
 		"UIF TEMP[5]\n"
@@ -1429,11 +1516,25 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 					"UMAD TEMP[5].x, TEMP[1].yyyy, CONST[1].yyyy, TEMP[5].xxxx\n"
 					"LOAD TEMP[2].xy, BUFFER[0], TEMP[5].xxxx\n"
 
-					"UADD TEMP[5].x, TEMP[5].xxxx, CONST[0].xxxx\n"
-					"LOAD TEMP[3].xy, BUFFER[0], TEMP[5].xxxx\n"
+					"UADD TEMP[5].y, TEMP[5].xxxx, CONST[0].xxxx\n"
+					"LOAD TEMP[3].xy, BUFFER[0], TEMP[5].yyyy\n"
 
-					"U64ADD TEMP[3].xy, TEMP[3], -TEMP[2]\n"
-					"U64ADD TEMP[0].xy, TEMP[0], TEMP[3]\n"
+					"U64ADD TEMP[4].xy, TEMP[3], -TEMP[2]\n"
+
+					"AND TEMP[5].z, CONST[0].wwww, IMM[4].xxxx\n"
+					"UIF TEMP[5].zzzz\n"
+						/* Load second start/end half-pair and
+						 * take the difference
+						 */
+						"UADD TEMP[5].xy, TEMP[5], IMM[1].wwww\n"
+						"LOAD TEMP[2].xy, BUFFER[0], TEMP[5].xxxx\n"
+						"LOAD TEMP[3].xy, BUFFER[0], TEMP[5].yyyy\n"
+
+						"U64ADD TEMP[3].xy, TEMP[3], -TEMP[2]\n"
+						"U64ADD TEMP[4].xy, TEMP[4], -TEMP[3]\n"
+					"ENDIF\n"
+
+					"U64ADD TEMP[0].xy, TEMP[0], TEMP[4]\n"
 
 					/* Increment pair index */
 					"UADD TEMP[1].y, TEMP[1].yyyy, IMM[1].xxxx\n"
@@ -1478,7 +1579,7 @@ static void r600_create_query_result_shader(struct r600_common_context *rctx)
 					/* Convert to boolean */
 					"AND TEMP[4], CONST[0].wwww, IMM[1].wwww\n"
 					"UIF TEMP[4]\n"
-						"U64SNE TEMP[0].x, TEMP[0].xyxy, IMM[0].xxxx\n"
+						"U64SNE TEMP[0].x, TEMP[0].xyxy, IMM[4].zwzw\n"
 						"AND TEMP[0].x, TEMP[0].xxxx, IMM[1].xxxx\n"
 						"MOV TEMP[0].y, IMM[0].xxxx\n"
 					"ENDIF\n"
@@ -1610,9 +1711,11 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 	consts.config = 0;
 	if (index < 0)
 		consts.config |= 4;
-	if (query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE ||
-	    query->b.type == PIPE_QUERY_SO_OVERFLOW_PREDICATE)
+	if (query->b.type == PIPE_QUERY_OCCLUSION_PREDICATE)
 		consts.config |= 8;
+	else if (query->b.type == PIPE_QUERY_SO_OVERFLOW_PREDICATE ||
+		 query->b.type == PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE)
+		consts.config |= 8 | 256;
 	else if (query->b.type == PIPE_QUERY_TIMESTAMP ||
 		 query->b.type == PIPE_QUERY_TIME_ELAPSED)
 		consts.config |= 32;
@@ -1695,16 +1798,56 @@ static void r600_render_condition(struct pipe_context *ctx,
 	struct r600_query_buffer *qbuf;
 	struct r600_atom *atom = &rctx->render_cond_atom;
 
-	rctx->render_cond = query;
-	rctx->render_cond_invert = condition;
-	rctx->render_cond_mode = mode;
-
 	/* Compute the size of SET_PREDICATION packets. */
 	atom->num_dw = 0;
 	if (query) {
-		for (qbuf = &rquery->buffer; qbuf; qbuf = qbuf->previous)
-			atom->num_dw += (qbuf->results_end / rquery->result_size) * 5;
+		bool needs_workaround = false;
+
+		/* There is a firmware regression in VI which causes successive
+		 * SET_PREDICATION packets to give the wrong answer for
+		 * non-inverted stream overflow predication.
+		 */
+		if (rctx->chip_class >= VI && !condition &&
+		    (rquery->b.type == PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE ||
+		     (rquery->b.type == PIPE_QUERY_SO_OVERFLOW_PREDICATE &&
+		      (rquery->buffer.previous ||
+		       rquery->buffer.results_end > rquery->result_size)))) {
+			needs_workaround = true;
+		}
+
+		if (needs_workaround && !rquery->workaround_buf) {
+			bool old_force_off = rctx->render_cond_force_off;
+			rctx->render_cond_force_off = true;
+
+			u_suballocator_alloc(
+				rctx->allocator_zeroed_memory, 8, 8,
+				&rquery->workaround_offset,
+				(struct pipe_resource **)&rquery->workaround_buf);
+
+			/* Reset to NULL to avoid a redundant SET_PREDICATION
+			 * from launching the compute grid.
+			 */
+			rctx->render_cond = NULL;
+
+			ctx->get_query_result_resource(
+				ctx, query, true, PIPE_QUERY_TYPE_U64, 0,
+				&rquery->workaround_buf->b.b, rquery->workaround_offset);
+
+			atom->num_dw = 5;
+
+			rctx->render_cond_force_off = old_force_off;
+		} else {
+			for (qbuf = &rquery->buffer; qbuf; qbuf = qbuf->previous)
+				atom->num_dw += (qbuf->results_end / rquery->result_size) * 5;
+
+			if (rquery->b.type == PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE)
+				atom->num_dw *= R600_MAX_STREAMS;
+		}
 	}
+
+	rctx->render_cond = query;
+	rctx->render_cond_invert = condition;
+	rctx->render_cond_mode = mode;
 
 	rctx->set_atom_dirty(rctx, atom, query != NULL);
 }
@@ -1857,6 +2000,7 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-shaders-created",	NUM_SHADERS_CREATED,	UINT64, CUMULATIVE),
 	X("num-shader-cache-hits",	NUM_SHADER_CACHE_HITS,	UINT64, CUMULATIVE),
 	X("draw-calls",			DRAW_CALLS,		UINT64, AVERAGE),
+	X("decompress-calls",		DECOMPRESS_CALLS,	UINT64, AVERAGE),
 	X("MRT-draw-calls",		MRT_DRAW_CALLS,		UINT64, AVERAGE),
 	X("prim-restart-calls",		PRIM_RESTART_CALLS,	UINT64, AVERAGE),
 	X("spill-draw-calls",		SPILL_DRAW_CALLS,	UINT64, AVERAGE),
@@ -1930,9 +2074,8 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("GPU-meq-busy",		GPU_MEQ_BUSY,		UINT64, AVERAGE),
 	X("GPU-me-busy",		GPU_ME_BUSY,		UINT64, AVERAGE),
 	X("GPU-surf-sync-busy",		GPU_SURF_SYNC_BUSY,	UINT64, AVERAGE),
-	X("GPU-dma-busy",		GPU_DMA_BUSY,		UINT64, AVERAGE),
+	X("GPU-cp-dma-busy",		GPU_CP_DMA_BUSY,	UINT64, AVERAGE),
 	X("GPU-scratch-ram-busy",	GPU_SCRATCH_RAM_BUSY,	UINT64, AVERAGE),
-	X("GPU-ce-busy",		GPU_CE_BUSY,		UINT64, AVERAGE),
 };
 
 #undef X
