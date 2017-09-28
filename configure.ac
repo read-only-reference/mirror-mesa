@@ -379,8 +379,21 @@ int main() {
 }]])], GCC_ATOMIC_BUILTINS_SUPPORTED=1)
 if test "x$GCC_ATOMIC_BUILTINS_SUPPORTED" = x1; then
     DEFINES="$DEFINES -DUSE_GCC_ATOMIC_BUILTINS"
+    dnl On some platforms, new-style atomics need a helper library
+    AC_MSG_CHECKING(whether -latomic is needed)
+    AC_LINK_IFELSE([AC_LANG_SOURCE([[
+    #include <stdint.h>
+    uint64_t v;
+    int main() {
+        return (int)__atomic_load_n(&v, __ATOMIC_ACQUIRE);
+    }]])], GCC_ATOMIC_BUILTINS_NEED_LIBATOMIC=no, GCC_ATOMIC_BUILTINS_NEED_LIBATOMIC=yes)
+    AC_MSG_RESULT($GCC_ATOMIC_BUILTINS_NEED_LIBATOMIC)
+    if test "x$GCC_ATOMIC_BUILTINS_NEED_LIBATOMIC" = xyes; then
+        LIBATOMIC_LIBS="-latomic"
+    fi
 fi
 AM_CONDITIONAL([GCC_ATOMIC_BUILTINS_SUPPORTED], [test x$GCC_ATOMIC_BUILTINS_SUPPORTED = x1])
+AC_SUBST([LIBATOMIC_LIBS])
 
 dnl Check if host supports 64-bit atomics
 dnl note that lack of support usually results in link (not compile) error
@@ -795,6 +808,27 @@ AC_CHECK_HEADER([sys/sysctl.h], [DEFINES="$DEFINES -DHAVE_SYS_SYSCTL_H"])
 AC_CHECK_FUNC([strtof], [DEFINES="$DEFINES -DHAVE_STRTOF"])
 AC_CHECK_FUNC([mkostemp], [DEFINES="$DEFINES -DHAVE_MKOSTEMP"])
 
+AC_MSG_CHECKING([whether strtod has locale support])
+AC_LINK_IFELSE([AC_LANG_SOURCE([[
+    #define _GNU_SOURCE
+    #include <stdlib.h>
+    #include <locale.h>
+    #ifdef HAVE_XLOCALE_H
+    #include <xlocale.h>
+    #endif
+    int main() {
+       locale_t loc = newlocale(LC_CTYPE_MASK, "C", NULL);
+       const char *s = "1.0";
+       char *end;
+       double d = strtod_l(s, end, loc);
+       float f = strtof_l(s, end, loc);
+       freelocale(loc);
+       return 0;
+    }]])],
+  [DEFINES="$DEFINES -DHAVE_STRTOD_L"];
+   AC_MSG_RESULT([yes]),
+   AC_MSG_RESULT([no]))
+
 dnl Check to see if dlopen is in default libraries (like Solaris, which
 dnl has it in libc), or if libdl is needed to get it.
 AC_CHECK_FUNC([dlopen], [DEFINES="$DEFINES -DHAVE_DLOPEN"],
@@ -1207,9 +1241,14 @@ AC_ARG_ENABLE([vdpau],
    [enable_vdpau=auto])
 AC_ARG_ENABLE([omx],
    [AS_HELP_STRING([--enable-omx],
-         [enable OpenMAX library @<:@default=disabled@:>@])],
-   [enable_omx="$enableval"],
-   [enable_omx=no])
+         [DEPRECATED: Use --enable-omx-bellagio instead @<:@default=auto@:>@])],
+   [AC_MSG_ERROR([--enable-omx is deprecated. Use --enable-omx-bellagio instead.])],
+   [])
+AC_ARG_ENABLE([omx-bellagio],
+   [AS_HELP_STRING([--enable-omx-bellagio],
+         [enable OpenMAX Bellagio library @<:@default=disabled@:>@])],
+   [enable_omx_bellagio="$enableval"],
+   [enable_omx_bellagio=no])
 AC_ARG_ENABLE([va],
    [AS_HELP_STRING([--enable-va],
          [enable va library @<:@default=auto@:>@])],
@@ -1260,7 +1299,7 @@ if test "x$enable_opengl" = xno -a \
         "x$enable_xa" = xno -a \
         "x$enable_xvmc" = xno -a \
         "x$enable_vdpau" = xno -a \
-        "x$enable_omx" = xno -a \
+        "x$enable_omx_bellagio" = xno -a \
         "x$enable_va" = xno -a \
         "x$enable_opencl" = xno; then
     AC_MSG_ERROR([at least one API should be enabled])
@@ -1684,7 +1723,8 @@ for plat in $platforms; do
     case "$plat" in
     wayland)
 
-        PKG_CHECK_MODULES([WAYLAND], [wayland-client >= $WAYLAND_REQUIRED wayland-server >= $WAYLAND_REQUIRED])
+        PKG_CHECK_MODULES([WAYLAND_CLIENT], [wayland-client >= $WAYLAND_REQUIRED])
+        PKG_CHECK_MODULES([WAYLAND_SERVER], [wayland-server >= $WAYLAND_REQUIRED])
 
         if test "x$WAYLAND_SCANNER" = "x:"; then
                 AC_MSG_ERROR([wayland-scanner is needed to compile the wayland platform])
@@ -1692,7 +1732,7 @@ for plat in $platforms; do
         if test "x$have_wayland_protocols" = xno; then
                 AC_MSG_ERROR([wayland-protocols >= $WAYLAND_PROTOCOLS_REQUIRED is needed to compile the wayland platform])
         fi
-        DEFINES="$DEFINES -DHAVE_WAYLAND_PLATFORM"
+        DEFINES="$DEFINES -DHAVE_WAYLAND_PLATFORM -DWL_HIDE_DEPRECATED"
         ;;
 
     x11)
@@ -2105,8 +2145,8 @@ if test -n "$with_gallium_drivers" -a "x$with_gallium_drivers" != xswrast; then
         PKG_CHECK_EXISTS([vdpau >= $VDPAU_REQUIRED], [enable_vdpau=yes], [enable_vdpau=no])
     fi
 
-    if test "x$enable_omx" = xauto -a "x$have_omx_platform" = xyes; then
-        PKG_CHECK_EXISTS([libomxil-bellagio >= $LIBOMXIL_BELLAGIO_REQUIRED], [enable_omx=yes], [enable_omx=no])
+    if test "x$enable_omx_bellagio" = xauto -a "x$have_omx_platform" = xyes; then
+        PKG_CHECK_EXISTS([libomxil-bellagio >= $LIBOMXIL_BELLAGIO_REQUIRED], [enable_omx_bellagio=yes], [enable_omx_bellagio=no])
     fi
 
     if test "x$enable_va" = xauto -a "x$have_va_platform" = xyes; then
@@ -2117,7 +2157,7 @@ fi
 if test "x$enable_dri" = xyes -o \
         "x$enable_xvmc" = xyes -o \
         "x$enable_vdpau" = xyes -o \
-        "x$enable_omx" = xyes -o \
+        "x$enable_omx_bellagio" = xyes -o \
         "x$enable_va" = xyes; then
     need_gallium_vl=yes
 fi
@@ -2125,7 +2165,7 @@ AM_CONDITIONAL(NEED_GALLIUM_VL, test "x$need_gallium_vl" = xyes)
 
 if test "x$enable_xvmc" = xyes -o \
         "x$enable_vdpau" = xyes -o \
-        "x$enable_omx" = xyes -o \
+        "x$enable_omx_bellagio" = xyes -o \
         "x$enable_va" = xyes; then
     PKG_CHECK_MODULES([VL], [x11-xcb xcb xcb-dri2 >= $XCBDRI2_REQUIRED])
     need_gallium_vl_winsys=yes
@@ -2151,14 +2191,14 @@ if test "x$enable_vdpau" = xyes; then
 fi
 AM_CONDITIONAL(HAVE_ST_VDPAU, test "x$enable_vdpau" = xyes)
 
-if test "x$enable_omx" = xyes; then
+if test "x$enable_omx_bellagio" = xyes; then
     if test "x$have_omx_platform" != xyes; then
         AC_MSG_ERROR([OMX requires at least one of the x11 or drm platforms])
     fi
-    PKG_CHECK_MODULES([OMX], [libomxil-bellagio >= $LIBOMXIL_BELLAGIO_REQUIRED])
-    gallium_st="$gallium_st omx"
+    PKG_CHECK_MODULES([OMX_BELLAGIO], [libomxil-bellagio >= $LIBOMXIL_BELLAGIO_REQUIRED])
+    gallium_st="$gallium_st omx_bellagio"
 fi
-AM_CONDITIONAL(HAVE_ST_OMX, test "x$enable_omx" = xyes)
+AM_CONDITIONAL(HAVE_ST_OMX_BELLAGIO, test "x$enable_omx_bellagio" = xyes)
 
 if test "x$enable_va" = xyes; then
     if test "x$have_va_platform" != xyes; then
@@ -2320,15 +2360,15 @@ AC_ARG_WITH([vdpau-libdir],
     [VDPAU_LIB_INSTALL_DIR='${libdir}/vdpau'])
 AC_SUBST([VDPAU_LIB_INSTALL_DIR])
 
-dnl Directory for OMX libs
+dnl Directory for OMX_BELLAGIO libs
 
-AC_ARG_WITH([omx-libdir],
-    [AS_HELP_STRING([--with-omx-libdir=DIR],
-        [directory for the OMX libraries])],
-    [OMX_LIB_INSTALL_DIR="$withval"],
-    [OMX_LIB_INSTALL_DIR=`$PKG_CONFIG --exists libomxil-bellagio && \
-                          $PKG_CONFIG --define-variable=libdir=\$libdir --variable=pluginsdir libomxil-bellagio`])
-AC_SUBST([OMX_LIB_INSTALL_DIR])
+AC_ARG_WITH([omx-bellagio-libdir],
+    [AS_HELP_STRING([--with-omx-bellagio-libdir=DIR],
+        [directory for the OMX_BELLAGIO libraries])],
+    [OMX_BELLAGIO_LIB_INSTALL_DIR="$withval"],
+    [OMX_BELLAGIO_LIB_INSTALL_DIR=`$PKG_CONFIG --exists libomxil-bellagio && \
+                                   $PKG_CONFIG --define-variable=libdir=\$libdir --variable=pluginsdir libomxil-bellagio`])
+AC_SUBST([OMX_BELLAGIO_LIB_INSTALL_DIR])
 
 dnl Directory for VA libs
 
@@ -2664,8 +2704,7 @@ AM_CONDITIONAL(HAVE_GALLIUM_PL111, test "x$HAVE_GALLIUM_PL111" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_R300, test "x$HAVE_GALLIUM_R300" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_R600, test "x$HAVE_GALLIUM_R600" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_RADEONSI, test "x$HAVE_GALLIUM_RADEONSI" = xyes)
-AM_CONDITIONAL(HAVE_GALLIUM_RADEON_COMMON, test "x$HAVE_GALLIUM_R600" = xyes -o \
-                                                "x$HAVE_GALLIUM_RADEONSI" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_RADEON_COMMON, test "x$HAVE_GALLIUM_RADEONSI" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_NOUVEAU, test "x$HAVE_GALLIUM_NOUVEAU" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_FREEDRENO, test "x$HAVE_GALLIUM_FREEDRENO" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_ETNAVIV, test "x$HAVE_GALLIUM_ETNAVIV" = xyes)
@@ -2831,7 +2870,7 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/state_trackers/dri/Makefile
                  src/gallium/state_trackers/glx/xlib/Makefile
                  src/gallium/state_trackers/nine/Makefile
-                 src/gallium/state_trackers/omx/Makefile
+                 src/gallium/state_trackers/omx_bellagio/Makefile
                  src/gallium/state_trackers/osmesa/Makefile
                  src/gallium/state_trackers/va/Makefile
                  src/gallium/state_trackers/vdpau/Makefile
@@ -2841,7 +2880,7 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/targets/d3dadapter9/d3d.pc
                  src/gallium/targets/dri/Makefile
                  src/gallium/targets/libgl-xlib/Makefile
-                 src/gallium/targets/omx/Makefile
+                 src/gallium/targets/omx-bellagio/Makefile
                  src/gallium/targets/opencl/Makefile
                  src/gallium/targets/opencl/mesa.icd
                  src/gallium/targets/osmesa/Makefile
@@ -2900,8 +2939,10 @@ AC_CONFIG_FILES([Makefile
                  src/mesa/drivers/osmesa/osmesa.pc
                  src/mesa/drivers/x11/Makefile
                  src/mesa/main/tests/Makefile
+                 src/mesa/state_tracker/tests/Makefile
                  src/util/Makefile
                  src/util/tests/hash_table/Makefile
+                 src/util/tests/string_buffer/Makefile
                  src/util/xmlpool/Makefile
                  src/vulkan/Makefile])
 

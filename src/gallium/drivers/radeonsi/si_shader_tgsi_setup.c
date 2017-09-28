@@ -842,7 +842,7 @@ static void emit_declaration(struct lp_build_tgsi_context *bld_base,
 	{
 		unsigned idx;
 		for (idx = decl->Range.First; idx <= decl->Range.Last; idx++) {
-			ctx->load_system_value(ctx, idx, decl);
+			si_load_system_value(ctx, idx, decl);
 		}
 	}
 	break;
@@ -870,7 +870,7 @@ static void emit_declaration(struct lp_build_tgsi_context *bld_base,
 	}
 
 	case TGSI_FILE_MEMORY:
-		ctx->declare_memory_region(ctx, decl);
+		si_declare_compute_memory(ctx, decl);
 		break;
 
 	default:
@@ -881,16 +881,16 @@ static void emit_declaration(struct lp_build_tgsi_context *bld_base,
 void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			const struct tgsi_full_instruction *inst,
 			const struct tgsi_opcode_info *info,
+			unsigned index,
 			LLVMValueRef dst[4])
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	struct gallivm_state *gallivm = &ctx->gallivm;
-	const struct tgsi_full_dst_register *reg = &inst->Dst[0];
+	const struct tgsi_full_dst_register *reg = &inst->Dst[index];
 	LLVMBuilderRef builder = ctx->gallivm.builder;
 	LLVMValueRef temp_ptr, temp_ptr2 = NULL;
-	unsigned chan, chan_index;
 	bool is_vec_store = false;
-	enum tgsi_opcode_type dtype = tgsi_opcode_infer_dst_type(inst->Instruction.Opcode);
+	enum tgsi_opcode_type dtype = tgsi_opcode_infer_dst_type(inst->Instruction.Opcode, index);
 
 	if (dst[0]) {
 		LLVMTypeKind k = LLVMGetTypeKind(LLVMTypeOf(dst[0]));
@@ -899,16 +899,20 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 
 	if (is_vec_store) {
 		LLVMValueRef values[4] = {};
-		TGSI_FOR_EACH_DST0_ENABLED_CHANNEL(inst, chan) {
+		uint32_t writemask = reg->Register.WriteMask;
+		while (writemask) {
+			unsigned chan = u_bit_scan(&writemask);
 			LLVMValueRef index = LLVMConstInt(ctx->i32, chan, 0);
 			values[chan]  = LLVMBuildExtractElement(gallivm->builder,
 							dst[0], index, "");
 		}
-		bld_base->emit_store(bld_base, inst, info, values);
+		bld_base->emit_store(bld_base, inst, info, index, values);
 		return;
 	}
 
-	TGSI_FOR_EACH_DST0_ENABLED_CHANNEL( inst, chan_index ) {
+	uint32_t writemask = reg->Register.WriteMask;
+	while (writemask) {
+		unsigned chan_index = u_bit_scan(&writemask);
 		LLVMValueRef value = dst[chan_index];
 
 		if (tgsi_type_is_64bit(dtype) && (chan_index == 1 || chan_index == 3))
@@ -1193,7 +1197,7 @@ void si_llvm_context_init(struct si_shader_context *ctx,
 	ctx->gallivm.builder = lp_create_builder(ctx->gallivm.context,
 						 float_mode);
 
-	ac_llvm_context_init(&ctx->ac, ctx->gallivm.context);
+	ac_llvm_context_init(&ctx->ac, ctx->gallivm.context, sscreen->b.chip_class);
 	ctx->ac.module = ctx->gallivm.module;
 	ctx->ac.builder = ctx->gallivm.builder;
 
@@ -1388,7 +1392,7 @@ void si_llvm_optimize_module(struct si_shader_context *ctx)
 
 	/* Dump LLVM IR before any optimization passes */
 	if (ctx->screen->b.debug_flags & DBG_PREOPT_IR &&
-	    r600_can_dump_shader(&ctx->screen->b, ctx->type))
+	    si_can_dump_shader(&ctx->screen->b, ctx->type))
 		LLVMDumpModule(ctx->gallivm.module);
 
 	/* Create the pass manager */
@@ -1397,7 +1401,7 @@ void si_llvm_optimize_module(struct si_shader_context *ctx)
 	target_library_info = gallivm_create_target_library_info(triple);
 	LLVMAddTargetLibraryInfo(target_library_info, gallivm->passmgr);
 
-	if (r600_extra_shader_checks(&ctx->screen->b, ctx->type))
+	if (si_extra_shader_checks(&ctx->screen->b, ctx->type))
 		LLVMAddVerifierPass(gallivm->passmgr);
 
 	LLVMAddAlwaysInlinerPass(gallivm->passmgr);

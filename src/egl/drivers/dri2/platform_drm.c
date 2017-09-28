@@ -110,7 +110,7 @@ dri2_drm_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
       return NULL;
    }
 
-   if (!_eglInitSurface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list))
+   if (!dri2_init_surface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list, false))
       goto cleanup_surf;
 
    surf = gbm_dri_surface(surface);
@@ -178,6 +178,7 @@ dri2_drm_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 
    dri2_egl_surface_free_local_buffers(dri2_surf);
 
+   dri2_fini_surface(surf);
    free(surf);
 
    return EGL_TRUE;
@@ -632,7 +633,6 @@ static const struct dri2_egl_display_vtbl dri2_drm_display_vtbl = {
    .create_pbuffer_surface = dri2_fallback_create_pbuffer_surface,
    .destroy_surface = dri2_drm_destroy_surface,
    .create_image = dri2_drm_create_image_khr,
-   .swap_interval = dri2_fallback_swap_interval,
    .swap_buffers = dri2_drm_swap_buffers,
    .swap_buffers_with_damage = dri2_fallback_swap_buffers_with_damage,
    .swap_buffers_region = dri2_fallback_swap_buffers_region,

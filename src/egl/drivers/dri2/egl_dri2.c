@@ -25,8 +25,6 @@
  *    Kristian Høgsberg <krh@bitplanet.net>
  */
 
-#define WL_HIDE_DEPRECATED
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -629,6 +627,18 @@ dri2_setup_screen(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    unsigned int api_mask;
+
+   /*
+    * EGL 1.5 specification defines the default value to 1. Moreover,
+    * eglSwapInterval() is required to clamp requested value to the supported
+    * range. Since the default value is implicitly assumed to be supported,
+    * use it as both minimum and maximum for the platforms that do not allow
+    * changing the interval. Platforms, which allow it (e.g. x11, wayland)
+    * override these values already.
+    */
+   dri2_dpy->min_swap_interval = 1;
+   dri2_dpy->max_swap_interval = 1;
+   dri2_dpy->default_swap_interval = 1;
 
    if (dri2_dpy->image_driver) {
       api_mask = dri2_dpy->image_driver->getAPIMask(dri2_dpy->dri_screen);
@@ -1388,6 +1398,45 @@ dri2_destroy_context(_EGLDriver *drv, _EGLDisplay *disp, _EGLContext *ctx)
    return EGL_TRUE;
 }
 
+EGLBoolean
+dri2_init_surface(_EGLSurface *surf, _EGLDisplay *dpy, EGLint type,
+        _EGLConfig *conf, const EGLint *attrib_list, EGLBoolean enable_out_fence)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+
+   dri2_surf->out_fence_fd = -1;
+   dri2_surf->enable_out_fence = false;
+   if (dri2_dpy->fence && dri2_dpy->fence->base.version >= 2 &&
+       dri2_dpy->fence->get_capabilities &&
+       (dri2_dpy->fence->get_capabilities(dri2_dpy->dri_screen) &
+        __DRI_FENCE_CAP_NATIVE_FD)) {
+      dri2_surf->enable_out_fence = enable_out_fence;
+   }
+
+   return _eglInitSurface(surf, dpy, type, conf, attrib_list);
+}
+
+static void
+dri2_surface_set_out_fence_fd( _EGLSurface *surf, int fence_fd)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+
+   if (dri2_surf->out_fence_fd >= 0)
+      close(dri2_surf->out_fence_fd);
+
+   dri2_surf->out_fence_fd = fence_fd;
+}
+
+void
+dri2_fini_surface(_EGLSurface *surf)
+{
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+
+   dri2_surface_set_out_fence_fd(surf, -1);
+   dri2_surf->enable_out_fence = false;
+}
+
 static EGLBoolean
 dri2_destroy_surface(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
@@ -1397,6 +1446,28 @@ dri2_destroy_surface(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
       return EGL_TRUE;
 
    return dri2_dpy->vtbl->destroy_surface(drv, dpy, surf);
+}
+
+static void
+dri2_surf_update_fence_fd(_EGLContext *ctx,
+                          _EGLDisplay *dpy, _EGLSurface *surf)
+{
+   __DRIcontext *dri_ctx = dri2_egl_context(ctx)->dri_context;
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+   int fence_fd = -1;
+   void *fence;
+
+   if (!dri2_surf->enable_out_fence)
+      return;
+
+   fence = dri2_dpy->fence->create_fence_fd(dri_ctx, -1);
+   if (fence) {
+      fence_fd = dri2_dpy->fence->get_fence_fd(dri2_dpy->dri_screen,
+                                               fence);
+      dri2_dpy->fence->destroy_fence(dri2_dpy->dri_screen, fence);
+   }
+   dri2_surface_set_out_fence_fd(surf, fence_fd);
 }
 
 /**
@@ -1435,6 +1506,9 @@ dri2_make_current(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *dsurf,
 
    if (old_ctx) {
       __DRIcontext *old_cctx = dri2_egl_context(old_ctx)->dri_context;
+
+      if (old_dsurf)
+         dri2_surf_update_fence_fd(old_ctx, disp, old_dsurf);
       dri2_dpy->core->unbindContext(old_cctx);
    }
 
@@ -1573,6 +1647,10 @@ static EGLBoolean
 dri2_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+   _EGLContext *ctx = _eglGetCurrentContext();
+
+   if (ctx && surf)
+      dri2_surf_update_fence_fd(ctx, dpy, surf);
    return dri2_dpy->vtbl->swap_buffers(drv, dpy, surf);
 }
 
@@ -1582,6 +1660,10 @@ dri2_swap_buffers_with_damage(_EGLDriver *drv, _EGLDisplay *dpy,
                               const EGLint *rects, EGLint n_rects)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+   _EGLContext *ctx = _eglGetCurrentContext();
+
+   if (ctx && surf)
+      dri2_surf_update_fence_fd(ctx, dpy, surf);
    return dri2_dpy->vtbl->swap_buffers_with_damage(drv, dpy, surf,
                                                    rects, n_rects);
 }

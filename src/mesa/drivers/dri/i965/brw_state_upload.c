@@ -353,7 +353,7 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_VIEWPORT_COUNT),
    DEFINE_BIT(BRW_NEW_CONSERVATIVE_RASTERIZATION),
    DEFINE_BIT(BRW_NEW_DRAW_CALL),
-   DEFINE_BIT(BRW_NEW_FAST_CLEAR_COLOR),
+   DEFINE_BIT(BRW_NEW_AUX_STATE),
    {0, 0, 0}
 };
 
@@ -380,7 +380,7 @@ brw_print_dirty_count(struct dirty_bit_map *bit_map)
 static inline void
 brw_upload_tess_programs(struct brw_context *brw)
 {
-   if (brw->tess_eval_program) {
+   if (brw->programs[MESA_SHADER_TESS_EVAL]) {
       brw_upload_tcs_prog(brw);
       brw_upload_tes_prog(brw);
    } else {
@@ -400,10 +400,13 @@ brw_upload_programs(struct brw_context *brw,
       brw_upload_vs_prog(brw);
       brw_upload_tess_programs(brw);
 
-      if (devinfo->gen < 6)
-         brw_upload_ff_gs_prog(brw);
-      else
+      if (brw->programs[MESA_SHADER_GEOMETRY]) {
          brw_upload_gs_prog(brw);
+      } else {
+         brw->gs.base.prog_data = NULL;
+         if (devinfo->gen < 7)
+            brw_upload_ff_gs_prog(brw);
+      }
 
       /* Update the VUE map for data exiting the GS stage of the pipeline.
        * This comes from the last enabled shader stage.
@@ -411,9 +414,9 @@ brw_upload_programs(struct brw_context *brw,
       GLbitfield64 old_slots = brw->vue_map_geom_out.slots_valid;
       bool old_separate = brw->vue_map_geom_out.separate;
       struct brw_vue_prog_data *vue_prog_data;
-      if (brw->geometry_program)
+      if (brw->programs[MESA_SHADER_GEOMETRY])
          vue_prog_data = brw_vue_prog_data(brw->gs.base.prog_data);
-      else if (brw->tess_eval_program)
+      else if (brw->programs[MESA_SHADER_TESS_EVAL])
          vue_prog_data = brw_vue_prog_data(brw->tes.base.prog_data);
       else
          vue_prog_data = brw_vue_prog_data(brw->vs.base.prog_data);
@@ -477,41 +480,45 @@ brw_upload_pipeline_state(struct brw_context *brw,
 
    brw_select_pipeline(brw, pipeline);
 
-   if (0) {
+   if (unlikely(INTEL_DEBUG & DEBUG_REEMIT)) {
       /* Always re-emit all state. */
       brw->NewGLState = ~0;
       ctx->NewDriverState = ~0ull;
    }
 
    if (pipeline == BRW_RENDER_PIPELINE) {
-      if (brw->fragment_program != ctx->FragmentProgram._Current) {
-         brw->fragment_program = ctx->FragmentProgram._Current;
+      if (brw->programs[MESA_SHADER_FRAGMENT] !=
+          ctx->FragmentProgram._Current) {
+         brw->programs[MESA_SHADER_FRAGMENT] = ctx->FragmentProgram._Current;
          brw->ctx.NewDriverState |= BRW_NEW_FRAGMENT_PROGRAM;
       }
 
-      if (brw->tess_eval_program != ctx->TessEvalProgram._Current) {
-         brw->tess_eval_program = ctx->TessEvalProgram._Current;
+      if (brw->programs[MESA_SHADER_TESS_EVAL] !=
+          ctx->TessEvalProgram._Current) {
+         brw->programs[MESA_SHADER_TESS_EVAL] = ctx->TessEvalProgram._Current;
          brw->ctx.NewDriverState |= BRW_NEW_TESS_PROGRAMS;
       }
 
-      if (brw->tess_ctrl_program != ctx->TessCtrlProgram._Current) {
-         brw->tess_ctrl_program = ctx->TessCtrlProgram._Current;
+      if (brw->programs[MESA_SHADER_TESS_CTRL] !=
+          ctx->TessCtrlProgram._Current) {
+         brw->programs[MESA_SHADER_TESS_CTRL] = ctx->TessCtrlProgram._Current;
          brw->ctx.NewDriverState |= BRW_NEW_TESS_PROGRAMS;
       }
 
-      if (brw->geometry_program != ctx->GeometryProgram._Current) {
-         brw->geometry_program = ctx->GeometryProgram._Current;
+      if (brw->programs[MESA_SHADER_GEOMETRY] !=
+          ctx->GeometryProgram._Current) {
+         brw->programs[MESA_SHADER_GEOMETRY] = ctx->GeometryProgram._Current;
          brw->ctx.NewDriverState |= BRW_NEW_GEOMETRY_PROGRAM;
       }
 
-      if (brw->vertex_program != ctx->VertexProgram._Current) {
-         brw->vertex_program = ctx->VertexProgram._Current;
+      if (brw->programs[MESA_SHADER_VERTEX] != ctx->VertexProgram._Current) {
+         brw->programs[MESA_SHADER_VERTEX] = ctx->VertexProgram._Current;
          brw->ctx.NewDriverState |= BRW_NEW_VERTEX_PROGRAM;
       }
    }
 
-   if (brw->compute_program != ctx->ComputeProgram._Current) {
-      brw->compute_program = ctx->ComputeProgram._Current;
+   if (brw->programs[MESA_SHADER_COMPUTE] != ctx->ComputeProgram._Current) {
+      brw->programs[MESA_SHADER_COMPUTE] = ctx->ComputeProgram._Current;
       brw->ctx.NewDriverState |= BRW_NEW_COMPUTE_PROGRAM;
    }
 

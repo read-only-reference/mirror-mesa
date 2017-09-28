@@ -123,6 +123,7 @@
 #include "shared.h"
 #include "shaderobj.h"
 #include "shaderimage.h"
+#include "util/debug.h"
 #include "util/disk_cache.h"
 #include "util/strtod.h"
 #include "stencil.h"
@@ -138,6 +139,7 @@
 #include "math/m_matrix.h"
 #include "main/dispatch.h" /* for _gloffset_COUNT */
 #include "macros.h"
+#include "git_sha1.h"
 
 #ifdef USE_SPARC_ASM
 #include "sparc/sparc.h"
@@ -398,10 +400,13 @@ one_time_init( struct gl_context *ctx )
 
       atexit(one_time_fini);
 
-#if defined(DEBUG) && defined(__DATE__) && defined(__TIME__)
+#if defined(DEBUG)
       if (MESA_VERBOSE != 0) {
-         _mesa_debug(ctx, "Mesa %s DEBUG build %s %s\n",
-                     PACKAGE_VERSION, __DATE__, __TIME__);
+         _mesa_debug(ctx, "Mesa " PACKAGE_VERSION " DEBUG build"
+#ifdef MESA_GIT_SHA1
+                     " (" MESA_GIT_SHA1 ")"
+#endif
+                     "\n");
       }
 #endif
    }
@@ -1213,7 +1218,7 @@ _mesa_initialize_context(struct gl_context *ctx,
    /* KHR_no_error is likely to crash, overflow memory, etc if an application
     * has errors so don't enable it for setuid processes.
     */
-   if (getenv("MESA_NO_ERROR")) {
+   if (env_var_as_boolean("MESA_NO_ERROR", false)) {
 #if !defined(_WIN32)
       if (geteuid() == getuid())
 #endif
@@ -1323,6 +1328,8 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_reference_program(ctx, &ctx->FragmentProgram.Current, NULL);
    _mesa_reference_program(ctx, &ctx->FragmentProgram._Current, NULL);
    _mesa_reference_program(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
+
+   _mesa_reference_program(ctx, &ctx->ComputeProgram._Current, NULL);
 
    _mesa_reference_vao(ctx, &ctx->Array.VAO, NULL);
    _mesa_reference_vao(ctx, &ctx->Array.DefaultVAO, NULL);

@@ -215,7 +215,7 @@ enum brw_state_id {
    BRW_STATE_VIEWPORT_COUNT,
    BRW_STATE_CONSERVATIVE_RASTERIZATION,
    BRW_STATE_DRAW_CALL,
-   BRW_STATE_FAST_CLEAR_COLOR,
+   BRW_STATE_AUX,
    BRW_NUM_STATE_BITS
 };
 
@@ -307,7 +307,7 @@ enum brw_state_id {
 #define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
 #define BRW_NEW_CONSERVATIVE_RASTERIZATION (1ull << BRW_STATE_CONSERVATIVE_RASTERIZATION)
 #define BRW_NEW_DRAW_CALL               (1ull << BRW_STATE_DRAW_CALL)
-#define BRW_NEW_FAST_CLEAR_COLOR        (1ull << BRW_STATE_FAST_CLEAR_COLOR)
+#define BRW_NEW_AUX_STATE               (1ull << BRW_STATE_AUX)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -436,11 +436,19 @@ enum brw_gpu_ring {
    BLT_RING,
 };
 
+struct brw_reloc_list {
+   struct drm_i915_gem_relocation_entry *relocs;
+   int reloc_count;
+   int reloc_array_size;
+};
+
 struct intel_batchbuffer {
    /** Current batchbuffer being queued up. */
    struct brw_bo *bo;
    /** Last BO submitted to the hardware.  Used for glFinish(). */
    struct brw_bo *last_bo;
+   /** Current statebuffer being queued up. */
+   struct brw_bo *state_bo;
 
 #ifdef DEBUG
    uint16_t emit, total;
@@ -448,18 +456,18 @@ struct intel_batchbuffer {
    uint16_t reserved_space;
    uint32_t *map_next;
    uint32_t *map;
-   uint32_t *cpu_map;
-#define BATCH_SZ (8192*sizeof(uint32_t))
+   uint32_t *batch_cpu_map;
+   uint32_t *state_cpu_map;
+   uint32_t *state_map;
+   uint32_t state_used;
 
-   uint32_t state_batch_offset;
    enum brw_gpu_ring ring;
    bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
 
-   struct drm_i915_gem_relocation_entry *relocs;
-   int reloc_count;
-   int reloc_array_size;
+   struct brw_reloc_list batch_relocs;
+   struct brw_reloc_list state_relocs;
    unsigned int valid_reloc_flags;
 
    /** The validation list */
@@ -473,7 +481,8 @@ struct intel_batchbuffer {
 
    struct {
       uint32_t *map_next;
-      int reloc_count;
+      int batch_reloc_count;
+      int state_reloc_count;
       int exec_count;
    } saved;
 
@@ -770,9 +779,6 @@ struct brw_context
 
    struct brw_cache cache;
 
-   /** IDs for meta stencil blit shader programs. */
-   struct gl_shader_program *meta_stencil_blit_programs[2];
-
    /* Whether a meta-operation is in progress. */
    bool meta_in_progress;
 
@@ -869,12 +875,7 @@ struct brw_context
 
    /* Active vertex program:
     */
-   const struct gl_program *vertex_program;
-   const struct gl_program *geometry_program;
-   const struct gl_program *tess_ctrl_program;
-   const struct gl_program *tess_eval_program;
-   const struct gl_program *fragment_program;
-   const struct gl_program *compute_program;
+   struct gl_program *programs[MESA_SHADER_STAGES];
 
    /**
     * Number of samples in ctx->DrawBuffer, updated by BRW_NEW_NUM_SAMPLES so
@@ -1511,7 +1512,6 @@ void
 gen6_set_sample_maps(struct gl_context *ctx);
 
 /* gen8_multisample_state.c */
-void gen8_emit_3dstate_multisample(struct brw_context *brw, unsigned num_samp);
 void gen8_emit_3dstate_sample_pattern(struct brw_context *brw);
 
 /* gen7_urb.c */

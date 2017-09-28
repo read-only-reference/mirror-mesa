@@ -115,7 +115,7 @@ brw_codegen_gs_prog(struct brw_context *brw,
    brw_nir_analyze_ubo_ranges(compiler, gp->program.nir,
                               prog_data.base.base.ubo_ranges);
 
-   uint64_t outputs_written = gp->program.info.outputs_written;
+   uint64_t outputs_written = gp->program.nir->info.outputs_written;
 
    brw_compute_vue_map(devinfo,
                        &prog_data.base.vue_map, outputs_written,
@@ -185,7 +185,8 @@ brw_gs_populate_key(struct brw_context *brw,
                     struct brw_gs_prog_key *key)
 {
    struct gl_context *ctx = &brw->ctx;
-   struct brw_program *gp = (struct brw_program *) brw->geometry_program;
+   struct brw_program *gp =
+      (struct brw_program *) brw->programs[MESA_SHADER_GEOMETRY];
 
    memset(key, 0, sizeof(*key));
 
@@ -198,30 +199,14 @@ brw_gs_populate_key(struct brw_context *brw,
 void
 brw_upload_gs_prog(struct brw_context *brw)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct brw_stage_state *stage_state = &brw->gs.base;
    struct brw_gs_prog_key key;
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   struct brw_program *gp = (struct brw_program *) brw->geometry_program;
+   struct brw_program *gp =
+      (struct brw_program *) brw->programs[MESA_SHADER_GEOMETRY];
 
    if (!brw_gs_state_dirty(brw))
       return;
-
-   if (gp == NULL) {
-      /* No geometry shader.  Vertex data just passes straight through. */
-      if (devinfo->gen == 6 &&
-          (brw->ctx.NewDriverState & BRW_NEW_TRANSFORM_FEEDBACK)) {
-         gen6_brw_upload_ff_gs_prog(brw);
-         return;
-      }
-
-      /* Other state atoms had better not try to access prog_data, since
-       * there's no GS program.
-       */
-      brw->gs.base.prog_data = NULL;
-
-      return;
-   }
 
    brw_gs_populate_key(brw, &key);
 

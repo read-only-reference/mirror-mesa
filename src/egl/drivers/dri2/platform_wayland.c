@@ -42,6 +42,7 @@
 #include "egl_dri2.h"
 #include "egl_dri2_fallbacks.h"
 #include "loader.h"
+#include "util/debug.h"
 #include "util/u_vector.h"
 #include "eglglobals.h"
 
@@ -142,7 +143,7 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
       return NULL;
    }
 
-   if (!_eglInitSurface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list))
+   if (!dri2_init_surface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list, false))
       goto cleanup_surf;
 
    if (dri2_dpy->wl_dmabuf || dri2_dpy->wl_drm) {
@@ -295,6 +296,7 @@ dri2_wl_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
       wl_proxy_wrapper_destroy(dri2_surf->wl_drm_wrapper);
    wl_event_queue_destroy(dri2_surf->wl_queue);
 
+   dri2_fini_surface(surf);
    free(surf);
 
    return EGL_TRUE;
@@ -1449,7 +1451,7 @@ create_tmpfile_cloexec(char *tmpname)
 static int
 os_create_anonymous_file(off_t size)
 {
-   static const char template[] = "/mesa-shared-XXXXXX";
+   static const char templ[] = "/mesa-shared-XXXXXX";
    const char *path;
    char *name;
    int fd;
@@ -1461,12 +1463,12 @@ os_create_anonymous_file(off_t size)
       return -1;
    }
 
-   name = malloc(strlen(path) + sizeof(template));
+   name = malloc(strlen(path) + sizeof(templ));
    if (!name)
       return -1;
 
    strcpy(name, path);
-   strcat(name, template);
+   strcat(name, templ);
 
    fd = create_tmpfile_cloexec(name);
 
@@ -1940,7 +1942,7 @@ dri2_initialize_wayland(_EGLDriver *drv, _EGLDisplay *disp)
 {
    EGLBoolean initialized = EGL_TRUE;
 
-   int hw_accel = (getenv("LIBGL_ALWAYS_SOFTWARE") == NULL);
+   bool hw_accel = !env_var_as_boolean("LIBGL_ALWAYS_SOFTWARE", false);
 
    if (hw_accel) {
       if (!dri2_initialize_wayland_drm(drv, disp)) {

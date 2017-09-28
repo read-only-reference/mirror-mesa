@@ -61,9 +61,9 @@
 /* Writeback & invalidate the L2 metadata cache. It can only be coupled with
  * a CB or DB flush. */
 #define SI_CONTEXT_INV_L2_METADATA	(R600_CONTEXT_PRIVATE_FLAG << 5)
-/* gap */
 /* Framebuffer caches. */
-#define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 7)
+#define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 6)
+#define SI_CONTEXT_FLUSH_AND_INV_DB_META (R600_CONTEXT_PRIVATE_FLAG << 7)
 #define SI_CONTEXT_FLUSH_AND_INV_CB	(R600_CONTEXT_PRIVATE_FLAG << 8)
 /* Engine synchronization. */
 #define SI_CONTEXT_VS_PARTIAL_FLUSH	(R600_CONTEXT_PRIVATE_FLAG << 9)
@@ -94,8 +94,12 @@ struct si_screen {
 	bool				has_clear_state;
 	bool				has_distributed_tess;
 	bool				has_draw_indirect_multi;
-	bool				has_ds_bpermute;
+	bool				has_out_of_order_rast;
+	bool				assume_no_z_fights;
+	bool				commutative_blend_add;
 	bool				has_msaa_sample_loc_bug;
+	bool				dpbb_allowed;
+	bool				dfsm_allowed;
 	bool				llvm_has_working_vgpr_indexing;
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
@@ -153,6 +157,7 @@ struct si_sampler_view {
 	ubyte				base_level;
 	ubyte				block_width;
 	bool is_stencil_sampler;
+	bool is_integer;
 	bool dcc_incompatible;
 };
 
@@ -163,6 +168,8 @@ struct si_sampler_state {
 	unsigned			magic;
 #endif
 	uint32_t			val[4];
+	uint32_t			integer_val[4];
+	uint32_t			upgraded_depth_val[4];
 };
 
 struct si_cs_shader_state {
@@ -308,6 +315,7 @@ struct si_context {
 	struct si_framebuffer		framebuffer;
 	struct si_sample_locs		msaa_sample_locs;
 	struct r600_atom		db_render_state;
+	struct r600_atom		dpbb_state;
 	struct r600_atom		msaa_config;
 	struct si_sample_mask		sample_mask;
 	struct r600_atom		cb_render_state;
@@ -386,6 +394,7 @@ struct si_context {
 
 	/* Emitted draw state. */
 	bool			gs_tri_strip_adj_fix:1;
+	bool			ls_vgpr_fix:1;
 	int			last_index_size;
 	int			last_base_vertex;
 	int			last_start_instance;

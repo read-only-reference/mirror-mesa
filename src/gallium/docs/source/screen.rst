@@ -404,6 +404,8 @@ The integer capabilities:
   for a driver that does not support multiple output streams (i.e.,
   ``PIPE_CAP_MAX_VERTEX_STREAMS`` is 1), both query types are identical.
 * ``PIPE_CAP_MEMOBJ``: Whether operations on memory objects are supported.
+* ``PIPE_CAP_LOAD_CONSTBUF``: True if the driver supports TGSI_OPCODE_LOAD use
+  with constant buffers.
 
 
 .. _pipe_capf:
@@ -446,20 +448,15 @@ support different features.
 * ``PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE``: The maximum size per constant buffer in bytes.
 * ``PIPE_SHADER_CAP_MAX_CONST_BUFFERS``: Maximum number of constant buffers that can be bound
   to any shader stage using ``set_constant_buffer``. If 0 or 1, the pipe will
-  only permit binding one constant buffer per shader, and the shaders will
-  not permit two-dimensional access to constants.
+  only permit binding one constant buffer per shader.
 
 If a value greater than 0 is returned, the driver can have multiple
-constant buffers bound to shader stages. The CONST register file can
-be accessed with two-dimensional indices, like in the example below.
+constant buffers bound to shader stages. The CONST register file is
+accessed with two-dimensional indices, like in the example below.
 
 DCL CONST[0][0..7]       # declare first 8 vectors of constbuf 0
 DCL CONST[3][0]          # declare first vector of constbuf 3
 MOV OUT[0], CONST[0][3]  # copy vector 3 of constbuf 0
-
-For backwards compatibility, one-dimensional access to CONST register
-file is still supported. In that case, the constbuf index is assumed
-to be 0.
 
 * ``PIPE_SHADER_CAP_MAX_TEMPS``: The maximum number of temporary registers.
 * ``PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED``: Whether the continue opcode is supported.
@@ -475,6 +472,9 @@ to be 0.
   BGNSUB, ENDSUB, CAL, and RET, including RET in the main block.
 * ``PIPE_SHADER_CAP_INTEGERS``: Whether integer opcodes are supported.
   If unsupported, only float opcodes are supported.
+* ``PIPE_SHADER_CAP_INT64_ATOMICS``: Whether int64 atomic opcodes are supported. The device needs to support add, sub, swap, cmpswap, and, or, xor, min, and max.
+* ``PIPE_SHADER_CAP_FP16``: Whether half precision floating-point opcodes are supported.
+   If unsupported, half precision ops need to be lowered to full precision.
 * ``PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS``: The maximum number of texture
   samplers.
 * ``PIPE_SHADER_CAP_PREFERRED_IR``: Preferred representation of the
@@ -485,6 +485,7 @@ to be 0.
   is supported. If it is, DTRUNC/DCEIL/DFLR/DROUND opcodes may be used.
 * ``PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED``: Whether DFRACEXP and
   DLDEXP are supported.
+* ``PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED``: Whether LDEXP is supported.
 * ``PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED``: Whether FMA and DFMA (doubles only)
   are supported.
 * ``PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE``: Whether the driver doesn't
@@ -670,7 +671,7 @@ get_paramf
 
 Get a floating-point screen parameter.
 
-**param** is one of the :ref:`PIPE_CAP` names.
+**param** is one of the :ref:`PIPE_CAPF` names.
 
 context_create
 ^^^^^^^^^^^^^^
@@ -739,9 +740,9 @@ For cube maps this must be 6, for other textures 1.
 **nr_samples** the nr of msaa samples. 0 (or 1) specifies a resource
 which isn't multisampled.
 
-**usage** one of the PIPE_USAGE flags.
+**usage** one of the :ref:`PIPE_USAGE` flags.
 
-**bind** bitmask of the PIPE_BIND flags.
+**bind** bitmask of the :ref:`PIPE_BIND` flags.
 
 **flags** bitmask of PIPE_RESOURCE_FLAG flags.
 

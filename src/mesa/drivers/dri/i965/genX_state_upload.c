@@ -75,17 +75,6 @@ struct brw_address {
    uint32_t offset;
 };
 
-static uint64_t
-emit_reloc(struct brw_context *brw,
-           void *location, struct brw_address address, uint32_t delta)
-{
-   uint32_t offset = (char *) location - (char *) brw->batch.map;
-
-   return brw_emit_reloc(&brw->batch, offset, address.bo,
-                         address.offset + delta,
-                         address.reloc_flags);
-}
-
 #define __gen_address_type struct brw_address
 #define __gen_user_data struct brw_context
 
@@ -93,10 +82,25 @@ static uint64_t
 __gen_combine_address(struct brw_context *brw, void *location,
                       struct brw_address address, uint32_t delta)
 {
+   struct intel_batchbuffer *batch = &brw->batch;
+   uint32_t offset;
+
    if (address.bo == NULL) {
       return address.offset + delta;
    } else {
-      return emit_reloc(brw, location, address, delta);
+      if (GEN_GEN < 6 && brw_ptr_in_state_buffer(batch, location)) {
+         offset = (char *) location - (char *) brw->batch.state_map;
+         return brw_state_reloc(batch, offset, address.bo,
+                                address.offset + delta,
+                                address.reloc_flags);
+      }
+
+      assert(!brw_ptr_in_state_buffer(batch, location));
+
+      offset = (char *) location - (char *) brw->batch.map;
+      return brw_batch_reloc(batch, offset, address.bo,
+                             address.offset + delta,
+                             address.reloc_flags);
    }
 }
 
@@ -1015,6 +1019,9 @@ genX(calculate_attr_overrides)(const struct brw_context *brw,
    /* _NEW_POINT */
    const struct gl_point_attrib *point = &ctx->Point;
 
+   /* BRW_NEW_FRAGMENT_PROGRAM */
+   const struct gl_program *fp = brw->programs[MESA_SHADER_FRAGMENT];
+
    /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *wm_prog_data =
       brw_wm_prog_data(brw->wm.base.prog_data);
@@ -1022,16 +1029,14 @@ genX(calculate_attr_overrides)(const struct brw_context *brw,
 
    *point_sprite_enables = 0;
 
-   /* BRW_NEW_FRAGMENT_PROGRAM
-    *
-    * If the fragment shader reads VARYING_SLOT_LAYER, then we need to pass in
+   /* If the fragment shader reads VARYING_SLOT_LAYER, then we need to pass in
     * the full vertex header.  Otherwise, we can program the SF to start
     * reading at an offset of 1 (2 varying slots) to skip unnecessary data:
     * - VARYING_SLOT_PSIZ and BRW_VARYING_SLOT_NDC on gen4-5
     * - VARYING_SLOT_{PSIZ,LAYER} and VARYING_SLOT_POS on gen6+
     */
 
-   bool fs_needs_vue_header = brw->fragment_program->info.inputs_read &
+   bool fs_needs_vue_header = fp->info.inputs_read &
       (VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT);
 
    *urb_entry_read_offset = fs_needs_vue_header ? 0 : 1;
@@ -1278,7 +1283,7 @@ genX(upload_clip_state)(struct brw_context *brw)
       clip.GuardbandClipTestEnable = true;
 
       clip.ClipperViewportStatePointer =
-         ro_bo(brw->batch.bo, brw->clip.vp_offset);
+         ro_bo(brw->batch.state_bo, brw->clip.vp_offset);
 
       clip.ScreenSpaceViewportXMin = -1;
       clip.ScreenSpaceViewportXMax = 1;
@@ -1494,7 +1499,8 @@ genX(upload_sf)(struct brw_context *brw)
        * something loaded through the GPE (L2 ISC), so it's INSTRUCTION
        * domain.
        */
-      sf.SetupViewportStateOffset = ro_bo(brw->batch.bo, brw->sf.vp_offset);
+      sf.SetupViewportStateOffset =
+         ro_bo(brw->batch.state_bo, brw->sf.vp_offset);
 
       sf.PointRasterizationRule = RASTRULE_UPPER_RIGHT;
 
@@ -1708,7 +1714,7 @@ brw_color_buffer_write_enabled(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct gl_program *fp = brw->fragment_program;
+   const struct gl_program *fp = brw->programs[MESA_SHADER_FRAGMENT];
    unsigned i;
 
    /* _NEW_BUFFERS */
@@ -1787,7 +1793,7 @@ genX(upload_wm)(struct brw_context *brw)
 
       if (stage_state->sampler_count)
          wm.SamplerStatePointer =
-            ro_bo(brw->batch.bo, stage_state->sampler_offset);
+            ro_bo(brw->batch.state_bo, stage_state->sampler_offset);
 #if GEN_GEN == 5
       if (wm_prog_data->prog_offset_2)
          wm.GRFRegisterCount2 = wm_prog_data->reg_blocks_2;
@@ -2080,7 +2086,7 @@ genX(upload_vs_state)(struct brw_context *brw)
 
       vs.StatisticsEnable = false;
       vs.SamplerStatePointer =
-         ro_bo(brw->batch.bo, stage_state->sampler_offset);
+         ro_bo(brw->batch.state_bo, stage_state->sampler_offset);
 #endif
 
 #if GEN_GEN == 5
@@ -2519,8 +2525,9 @@ genX(upload_gs_state)(struct brw_context *brw)
    UNUSED struct gl_context *ctx = &brw->ctx;
    UNUSED const struct gen_device_info *devinfo = &brw->screen->devinfo;
    const struct brw_stage_state *stage_state = &brw->gs.base;
+   const struct gl_program *gs_prog = brw->programs[MESA_SHADER_GEOMETRY];
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   bool active = GEN_GEN >= 6 && brw->geometry_program;
+   bool active = GEN_GEN >= 6 && gs_prog;
 
    /* BRW_NEW_GS_PROG_DATA */
    struct brw_stage_prog_data *stage_prog_data = stage_state->prog_data;
@@ -2616,7 +2623,7 @@ genX(upload_gs_state)(struct brw_context *brw)
 
 #if GEN_GEN < 7
          gs.SOStatisticsEnable = true;
-         if (brw->geometry_program->info.has_transform_feedback_varyings)
+         if (gs_prog->info.has_transform_feedback_varyings)
             gs.SVBIPayloadEnable = true;
 
          /* GEN6_GS_SPF_MODE and GEN6_GS_VECTOR_MASK_ENABLE are enabled as it
@@ -3134,8 +3141,9 @@ genX(upload_vs_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->vs.base;
 
-   /* _BRW_NEW_VERTEX_PROGRAM */
-   const struct brw_program *vp = brw_program_const(brw->vertex_program);
+   /* BRW_NEW_VERTEX_PROGRAM */
+   const struct brw_program *vp =
+      brw_program_const(brw->programs[MESA_SHADER_VERTEX]);
    /* BRW_NEW_VS_PROG_DATA */
    const struct brw_stage_prog_data *prog_data = brw->vs.base.prog_data;
 
@@ -3161,7 +3169,8 @@ genX(upload_gs_push_constants)(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->gs.base;
 
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   const struct brw_program *gp = brw_program_const(brw->geometry_program);
+   const struct brw_program *gp =
+      brw_program_const(brw->programs[MESA_SHADER_GEOMETRY]);
 
    if (gp) {
       /* BRW_NEW_GS_PROG_DATA */
@@ -3189,7 +3198,8 @@ genX(upload_wm_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->wm.base;
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct brw_program *fp = brw_program_const(brw->fragment_program);
+   const struct brw_program *fp =
+      brw_program_const(brw->programs[MESA_SHADER_FRAGMENT]);
    /* BRW_NEW_FS_PROG_DATA */
    const struct brw_stage_prog_data *prog_data = brw->wm.base.prog_data;
 
@@ -3324,7 +3334,8 @@ genX(upload_color_calc_state)(struct brw_context *brw)
 
       cc.StatisticsEnable = brw->stats_wm;
 
-      cc.CCViewportStatePointer = ro_bo(brw->batch.bo, brw->cc.vp_offset);
+      cc.CCViewportStatePointer =
+         ro_bo(brw->batch.state_bo, brw->cc.vp_offset);
 #else
       /* _NEW_COLOR */
       cc.BlendConstantColorRed = ctx->Color.BlendColorUnclamped[0];
@@ -3383,6 +3394,8 @@ static void
 genX(upload_sbe)(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
+   /* BRW_NEW_FRAGMENT_PROGRAM */
+   UNUSED const struct gl_program *fp = brw->programs[MESA_SHADER_FRAGMENT];
    /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *wm_prog_data =
       brw_wm_prog_data(brw->wm.base.prog_data);
@@ -3445,10 +3458,8 @@ genX(upload_sbe)(struct brw_context *brw)
       /* prepare the active component dwords */
       int input_index = 0;
       for (int attr = 0; attr < VARYING_SLOT_MAX; attr++) {
-         if (!(brw->fragment_program->info.inputs_read &
-               BITFIELD64_BIT(attr))) {
+         if (!(fp->info.inputs_read & BITFIELD64_BIT(attr)))
             continue;
-         }
 
          assert(input_index < 32);
 
@@ -3994,7 +4005,7 @@ static void
 upload_te_state(struct brw_context *brw)
 {
    /* BRW_NEW_TESS_PROGRAMS */
-   bool active = brw->tess_eval_program;
+   bool active = brw->programs[MESA_SHADER_TESS_EVAL];
 
    /* BRW_NEW_TES_PROG_DATA */
    const struct brw_tes_prog_data *tes_prog_data =
@@ -4032,7 +4043,8 @@ genX(upload_tes_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tes.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_program *tep = brw_program_const(brw->tess_eval_program);
+   const struct brw_program *tep =
+      brw_program_const(brw->programs[MESA_SHADER_TESS_EVAL]);
 
    if (tep) {
       /* BRW_NEW_TES_PROG_DATA */
@@ -4058,8 +4070,9 @@ genX(upload_tcs_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tcs.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_program *tcp = brw_program_const(brw->tess_ctrl_program);
-   bool active = brw->tess_eval_program;
+   const struct brw_program *tcp =
+      brw_program_const(brw->programs[MESA_SHADER_TESS_CTRL]);
+   bool active = brw->programs[MESA_SHADER_TESS_EVAL];
 
    if (active) {
       /* BRW_NEW_TCS_PROG_DATA */
@@ -5015,13 +5028,12 @@ genX(update_sampler_state)(struct brw_context *brw,
                                  texObj->StencilSampling,
                                  &border_color_offset);
    }
-   if (GEN_GEN < 6) {
+#if GEN_GEN < 6
       samp_st.BorderColorPointer =
-         brw_emit_reloc(&brw->batch, batch_offset_for_sampler_state + 8,
-                        brw->batch.bo, border_color_offset, 0);
-   } else {
+         ro_bo(brw->batch.state_bo, border_color_offset);
+#else
       samp_st.BorderColorPointer = border_color_offset;
-   }
+#endif
 
 #if GEN_GEN >= 8
    samp_st.LODPreClampMode = CLAMP_MODE_OGL;
@@ -5108,7 +5120,7 @@ static void
 genX(upload_fs_samplers)(struct brw_context *brw)
 {
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   struct gl_program *fs = (struct gl_program *) brw->fragment_program;
+   struct gl_program *fs = brw->programs[MESA_SHADER_FRAGMENT];
    genX(upload_sampler_state_table)(brw, fs, &brw->wm.base);
 }
 
@@ -5126,7 +5138,7 @@ static void
 genX(upload_vs_samplers)(struct brw_context *brw)
 {
    /* BRW_NEW_VERTEX_PROGRAM */
-   struct gl_program *vs = (struct gl_program *) brw->vertex_program;
+   struct gl_program *vs = brw->programs[MESA_SHADER_VERTEX];
    genX(upload_sampler_state_table)(brw, vs, &brw->vs.base);
 }
 
@@ -5145,7 +5157,7 @@ static void
 genX(upload_gs_samplers)(struct brw_context *brw)
 {
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   struct gl_program *gs = (struct gl_program *) brw->geometry_program;
+   struct gl_program *gs = brw->programs[MESA_SHADER_GEOMETRY];
    if (!gs)
       return;
 
@@ -5169,7 +5181,7 @@ static void
 genX(upload_tcs_samplers)(struct brw_context *brw)
 {
    /* BRW_NEW_TESS_PROGRAMS */
-   struct gl_program *tcs = (struct gl_program *) brw->tess_ctrl_program;
+   struct gl_program *tcs = brw->programs[MESA_SHADER_TESS_CTRL];
    if (!tcs)
       return;
 
@@ -5192,7 +5204,7 @@ static void
 genX(upload_tes_samplers)(struct brw_context *brw)
 {
    /* BRW_NEW_TESS_PROGRAMS */
-   struct gl_program *tes = (struct gl_program *) brw->tess_eval_program;
+   struct gl_program *tes = brw->programs[MESA_SHADER_TESS_EVAL];
    if (!tes)
       return;
 
@@ -5215,7 +5227,7 @@ static void
 genX(upload_cs_samplers)(struct brw_context *brw)
 {
    /* BRW_NEW_COMPUTE_PROGRAM */
-   struct gl_program *cs = (struct gl_program *) brw->compute_program;
+   struct gl_program *cs = brw->programs[MESA_SHADER_COMPUTE];
    if (!cs)
       return;
 

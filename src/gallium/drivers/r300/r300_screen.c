@@ -245,6 +245,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
         case PIPE_CAP_QUERY_SO_OVERFLOW:
         case PIPE_CAP_MEMOBJ:
+        case PIPE_CAP_LOAD_CONSTBUF:
             return 0;
 
         /* SWTCL-only features. */
@@ -353,8 +354,11 @@ static int r300_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
+        case PIPE_SHADER_CAP_INT64_ATOMICS:
+        case PIPE_SHADER_CAP_FP16:
         case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+        case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
@@ -412,10 +416,13 @@ static int r300_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
+        case PIPE_SHADER_CAP_FP16:
+        case PIPE_SHADER_CAP_INT64_ATOMICS:
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
         case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+        case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:

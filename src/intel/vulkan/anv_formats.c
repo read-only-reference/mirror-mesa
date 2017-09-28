@@ -74,7 +74,8 @@ static const struct anv_format anv_formats[] = {
    fmt(VK_FORMAT_R8_SSCALED,              ISL_FORMAT_R8_SSCALED),
    fmt(VK_FORMAT_R8_UINT,                 ISL_FORMAT_R8_UINT),
    fmt(VK_FORMAT_R8_SINT,                 ISL_FORMAT_R8_SINT),
-   fmt(VK_FORMAT_R8_SRGB,                 ISL_FORMAT_UNSUPPORTED),
+   swiz_fmt(VK_FORMAT_R8_SRGB,            ISL_FORMAT_L8_UNORM_SRGB,
+                                          _ISL_SWIZZLE(RED, ZERO, ZERO, ONE)),
    fmt(VK_FORMAT_R8G8_UNORM,              ISL_FORMAT_R8G8_UNORM),
    fmt(VK_FORMAT_R8G8_SNORM,              ISL_FORMAT_R8G8_SNORM),
    fmt(VK_FORMAT_R8G8_USCALED,            ISL_FORMAT_R8G8_USCALED),
@@ -253,7 +254,7 @@ static const struct anv_format anv_formats[] = {
 static bool
 format_supported(VkFormat vk_format)
 {
-   if (vk_format > ARRAY_SIZE(anv_formats))
+   if (vk_format >= ARRAY_SIZE(anv_formats))
       return false;
 
    return anv_formats[vk_format].isl_format != ISL_FORMAT_UNSUPPORTED;
@@ -730,7 +731,8 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2KHR(
           *    vkGetPhysicalDeviceImageFormatProperties2KHR returns
           *    VK_ERROR_FORMAT_NOT_SUPPORTED.
           */
-         result = vk_errorf(VK_ERROR_FORMAT_NOT_SUPPORTED,
+         result = vk_errorf(physical_device->instance, physical_device,
+                            VK_ERROR_FORMAT_NOT_SUPPORTED,
                             "unsupported VkExternalMemoryTypeFlagBitsKHR 0x%x",
                             external_info->handleType);
          goto fail;

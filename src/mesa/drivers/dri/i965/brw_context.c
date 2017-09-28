@@ -282,7 +282,6 @@ brw_init_driver_functions(struct brw_context *brw,
 
    intelInitTextureFuncs(functions);
    intelInitTextureImageFuncs(functions);
-   intelInitTextureSubImageFuncs(functions);
    intelInitTextureCopyImageFuncs(functions);
    intelInitCopyImageFuncs(functions);
    intelInitClearFuncs(functions);
@@ -635,7 +634,8 @@ brw_initialize_context_constants(struct brw_context *brw)
    if (devinfo->gen >= 6) {
       ctx->Const.MaxVarying = 32;
       ctx->Const.Program[MESA_SHADER_VERTEX].MaxOutputComponents = 128;
-      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxInputComponents = 64;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxInputComponents =
+         compiler->scalar_stage[MESA_SHADER_GEOMETRY] ? 128 : 64;
       ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxOutputComponents = 128;
       ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxInputComponents = 128;
       ctx->Const.Program[MESA_SHADER_TESS_CTRL].MaxInputComponents = 128;
@@ -935,7 +935,7 @@ brwCreateContext(gl_api api,
 
    intel_fbo_init(brw);
 
-   intel_batchbuffer_init(screen, &brw->batch);
+   intel_batchbuffer_init(brw);
 
    if (devinfo->gen >= 6) {
       /* Create a new hardware context.  Using a hardware context means that

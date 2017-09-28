@@ -88,7 +88,7 @@ static void si_destroy_context(struct pipe_context *context)
 	if (sctx->blitter)
 		util_blitter_destroy(sctx->blitter);
 
-	r600_common_context_cleanup(&sctx->b);
+	si_common_context_cleanup(&sctx->b);
 
 	LLVMDisposeTargetMachine(sctx->tm);
 
@@ -145,7 +145,7 @@ si_create_llvm_target_machine(struct si_screen *sscreen)
 		 sscreen->b.debug_flags & DBG_SI_SCHED ? ",+si-scheduler" : "");
 
 	return LLVMCreateTargetMachine(ac_get_llvm_target(triple), triple,
-				       r600_get_llvm_processor_name(sscreen->b.family),
+				       si_get_llvm_processor_name(sscreen->b.family),
 				       features,
 				       LLVMCodeGenLevelDefault,
 				       LLVMRelocDefault,
@@ -185,7 +185,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
 	sctx->is_debug = (flags & PIPE_CONTEXT_DEBUG) != 0;
 
-	if (!r600_common_context_init(&sctx->b, &sscreen->b, flags))
+	if (!si_common_context_init(&sctx->b, &sscreen->b, flags))
 		goto fail;
 
 	if (sscreen->b.info.drm_major == 3)
@@ -243,7 +243,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->blitter = util_blitter_create(&sctx->b.b);
 	if (sctx->blitter == NULL)
 		goto fail;
-	sctx->blitter->draw_rectangle = r600_draw_rectangle;
+	sctx->blitter->draw_rectangle = si_draw_rectangle;
 
 	sctx->sample_mask.sample_mask = 0xffff;
 
@@ -271,7 +271,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	 * if NUM_RECORDS == 0). We need to use a dummy buffer instead. */
 	if (sctx->b.chip_class == CIK) {
 		sctx->null_const_buf.buffer =
-			r600_aligned_buffer_create(screen,
+			si_aligned_buffer_create(screen,
 						   R600_RESOURCE_FLAG_UNMAPPABLE,
 						   PIPE_USAGE_DEFAULT, 16,
 						   sctx->screen->b.info.tcc_cache_line_size);
@@ -371,12 +371,11 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen,
 
 	/* When shaders are logged to stderr, asynchronous compilation is
 	 * disabled too. */
-	if (sscreen->b.debug_flags & (DBG_VS | DBG_TCS | DBG_TES | DBG_GS |
-				      DBG_PS | DBG_CS))
+	if (sscreen->b.debug_flags & DBG_ALL_SHADERS)
 		return ctx;
 
 	return threaded_context_create(ctx, &sscreen->b.pool_transfers,
-				       r600_replace_buffer_storage,
+				       si_replace_buffer_storage,
 				       &((struct si_context*)ctx)->b.tc);
 }
 
@@ -487,6 +486,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
 	case PIPE_CAP_QUERY_SO_OVERFLOW:
 	case PIPE_CAP_MEMOBJ:
+	case PIPE_CAP_LOAD_CONSTBUF:
 		return 1;
 
 	case PIPE_CAP_INT64:
@@ -742,10 +742,14 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
 	case PIPE_SHADER_CAP_INTEGERS:
+	case PIPE_SHADER_CAP_INT64_ATOMICS:
+	case PIPE_SHADER_CAP_FP16:
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
 	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
 	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
+	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 		return 1;
 
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -765,7 +769,6 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	/* Unsupported boolean features. */
 	case PIPE_SHADER_CAP_SUBROUTINES:
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
-	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 		return 0;
 	}
 	return 0;
@@ -833,13 +836,13 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 			struct si_shader_part *part = parts[i];
 
 			parts[i] = part->next;
-			radeon_shader_binary_clean(&part->binary);
+			si_radeon_shader_binary_clean(&part->binary);
 			FREE(part);
 		}
 	}
 	mtx_destroy(&sscreen->shader_parts_mutex);
 	si_destroy_shader_cache(sscreen);
-	r600_destroy_common_screen(&sscreen->b);
+	si_destroy_common_screen(&sscreen->b);
 }
 
 static bool si_init_gs_info(struct si_screen *sscreen)
@@ -883,7 +886,7 @@ static void si_handle_env_var_force_family(struct si_screen *sscreen)
 		return;
 
 	for (i = CHIP_TAHITI; i < CHIP_LAST; i++) {
-		if (!strcmp(family, r600_get_llvm_processor_name(i))) {
+		if (!strcmp(family, si_get_llvm_processor_name(i))) {
 			/* Override family and chip_class. */
 			sscreen->b.family = sscreen->b.info.family = i;
 
@@ -967,7 +970,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	sscreen->b.b.get_compiler_options = si_get_compiler_options;
 	sscreen->b.b.get_device_uuid = radeonsi_get_device_uuid;
 	sscreen->b.b.get_driver_uuid = radeonsi_get_driver_uuid;
-	sscreen->b.b.resource_create = r600_resource_create_common;
+	sscreen->b.b.resource_create = si_resource_create_common;
 
 	si_init_screen_state_functions(sscreen);
 
@@ -980,7 +983,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	if (driQueryOptionb(config->options, "radeonsi_enable_sisched"))
 		sscreen->b.debug_flags |= DBG_SI_SCHED;
 
-	if (!r600_common_screen_init(&sscreen->b, ws) ||
+	if (!si_common_screen_init(&sscreen->b, ws) ||
 	    !si_init_gs_info(sscreen) ||
 	    !si_init_shader_cache(sscreen)) {
 		FREE(sscreen);
@@ -1045,11 +1048,22 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		 sscreen->b.info.pfp_fw_version >= 79 &&
 		 sscreen->b.info.me_fw_version >= 142);
 
-	sscreen->has_ds_bpermute = sscreen->b.chip_class >= VI;
+	sscreen->has_out_of_order_rast = sscreen->b.chip_class >= VI &&
+					 sscreen->b.info.max_se >= 2 &&
+					 !(sscreen->b.debug_flags & DBG_NO_OUT_OF_ORDER);
+	sscreen->assume_no_z_fights =
+		driQueryOptionb(config->options, "radeonsi_assume_no_z_fights");
+	sscreen->commutative_blend_add =
+		driQueryOptionb(config->options, "radeonsi_commutative_blend_add");
 	sscreen->has_msaa_sample_loc_bug = (sscreen->b.family >= CHIP_POLARIS10 &&
 					    sscreen->b.family <= CHIP_POLARIS12) ||
 					   sscreen->b.family == CHIP_VEGA10 ||
 					   sscreen->b.family == CHIP_RAVEN;
+	sscreen->dpbb_allowed = sscreen->b.chip_class >= GFX9 &&
+				!(sscreen->b.debug_flags & DBG_NO_DPBB);
+	sscreen->dfsm_allowed = sscreen->dpbb_allowed &&
+				!(sscreen->b.debug_flags & DBG_NO_DFSM);
+
 	/* While it would be nice not to have this flag, we are constrained
 	 * by the reality that LLVM 5.0 doesn't have working VGPR indexing
 	 * on GFX9.
@@ -1078,13 +1092,15 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	sscreen->b.barrier_flags.cp_to_L2 = SI_CONTEXT_INV_SMEM_L1 |
 					    SI_CONTEXT_INV_VMEM_L1;
-	if (sscreen->b.chip_class <= VI)
+	if (sscreen->b.chip_class <= VI) {
 		sscreen->b.barrier_flags.cp_to_L2 |= SI_CONTEXT_INV_GLOBAL_L2;
+		sscreen->b.barrier_flags.L2_to_cp |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+	}
 
 	sscreen->b.barrier_flags.compute_to_L2 = SI_CONTEXT_CS_PARTIAL_FLUSH;
 
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))
-		sscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
+		sscreen->b.debug_flags |= DBG_ALL_SHADERS;
 
 	for (i = 0; i < num_compiler_threads; i++)
 		sscreen->tm[i] = si_create_llvm_target_machine(sscreen);
@@ -1095,7 +1111,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	sscreen->b.aux_context = si_create_context(&sscreen->b.b, 0);
 
 	if (sscreen->b.debug_flags & DBG_TEST_DMA)
-		r600_test_dma(&sscreen->b);
+		si_test_dma(&sscreen->b);
 
 	if (sscreen->b.debug_flags & (DBG_TEST_VMFAULT_CP |
 				      DBG_TEST_VMFAULT_SDMA |

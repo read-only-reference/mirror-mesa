@@ -132,7 +132,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_QUERY_TIMESTAMP:
       return 1;
    case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
-      return 0;
+      return 1;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return 1;
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
@@ -252,7 +252,6 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
       return 4;
    case PIPE_CAP_TEXTURE_GATHER_SM5:
-   case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_SAMPLE_SHADING:
    case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
       return 0;
@@ -265,6 +264,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_FAKE_SW_MSAA:
       return 1;
+   case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
    case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
    case PIPE_CAP_DOUBLES:
@@ -359,6 +359,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_BINDLESS_TEXTURE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
    case PIPE_CAP_MEMOBJ:
+   case PIPE_CAP_LOAD_CONSTBUF:
       return 0;
    }
    /* should only get here on unhandled cases */

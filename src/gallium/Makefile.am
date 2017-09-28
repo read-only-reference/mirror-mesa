@@ -42,7 +42,7 @@ if HAVE_GALLIUM_R300
 SUBDIRS += drivers/r300
 endif
 
-## radeon - linked into r600 and radeonsi
+## radeon - linked into radeonsi
 if HAVE_GALLIUM_RADEON_COMMON
 SUBDIRS += drivers/radeon
 endif
@@ -149,8 +149,8 @@ if HAVE_GALLIUM_XLIB_GLX
 SUBDIRS += state_trackers/glx/xlib targets/libgl-xlib
 endif
 
-if HAVE_ST_OMX
-SUBDIRS += state_trackers/omx targets/omx
+if HAVE_ST_OMX_BELLAGIO
+SUBDIRS += state_trackers/omx_bellagio targets/omx-bellagio
 endif
 
 if HAVE_GALLIUM_OSMESA

@@ -152,6 +152,7 @@ ISL_FILES = \
 	isl/isl.h \
 	isl/isl_drm.c \
 	isl/isl_format.c \
+	isl/isl_genX_priv.h \
 	isl/isl_priv.h \
 	isl/isl_storage_image.c
 
@@ -205,6 +206,7 @@ VULKAN_FILES := \
 	vulkan/anv_batch_chain.c \
 	vulkan/anv_blorp.c \
 	vulkan/anv_cmd_buffer.c \
+	vulkan/anv_debug_report.c \
 	vulkan/anv_descriptor_set.c \
 	vulkan/anv_device.c \
 	vulkan/anv_dump.c \

@@ -324,6 +324,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
 	case PIPE_CAP_QUERY_SO_OVERFLOW:
 	case PIPE_CAP_MEMOBJ:
+	case PIPE_CAP_LOAD_CONSTBUF:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -517,6 +518,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 	case PIPE_SHADER_CAP_SUBROUTINES:
 	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
 		return 0;
@@ -526,6 +528,10 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 		if (glsl120)
 			return 0;
 		return is_ir3(screen) ? 1 : 0;
+	case PIPE_SHADER_CAP_INT64_ATOMICS:
+		return 0;
+	case PIPE_SHADER_CAP_FP16:
+		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
 		return 16;

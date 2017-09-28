@@ -19,7 +19,10 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-SUBDIRS = xmlpool . tests/hash_table
+SUBDIRS = . \
+	xmlpool \
+	tests/hash_table \
+	tests/string_buffer
 
 include Makefile.sources
 
@@ -48,7 +51,8 @@ libmesautil_la_SOURCES = \
 
 libmesautil_la_LIBADD = \
 	$(CLOCK_LIB) \
-	$(ZLIB_LIBS)
+	$(ZLIB_LIBS) \
+	$(LIBATOMIC_LIBS)
 
 libxmlconfig_la_SOURCES = $(XMLCONFIG_FILES)
 libxmlconfig_la_CFLAGS = \
@@ -62,6 +66,7 @@ libxmlconfig_la_LIBADD = $(EXPAT_LIBS) -lm
 
 sysconf_DATA = drirc
 
+u_atomic_test_LDADD = libmesautil.la
 roundeven_test_LDADD = -lm
 
 check_PROGRAMS = u_atomic_test roundeven_test

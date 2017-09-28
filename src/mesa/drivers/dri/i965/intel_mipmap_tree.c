@@ -570,11 +570,14 @@ make_surface(struct brw_context *brw, GLenum target, mesa_format format,
    if (!isl_surf_init_s(&brw->isl_dev, &mt->surf, &init_info))
       goto fail;
 
-   /* In case caller doesn't specifically request Y-tiling (needed
-    * unconditionally for depth), check for corner cases needing special
-    * treatment.
+   /* Depth surfaces are always Y-tiled and stencil is always W-tiled, although
+    * on gen7 platforms we also need to create Y-tiled copies of stencil for
+    * texturing since the hardware can't sample from W-tiled surfaces. For
+    * everything else, check for corner cases needing special treatment.
     */
-   if (tiling_flags & ~ISL_TILING_Y0_BIT) {
+   bool is_depth_stencil =
+      mt->surf.usage & (ISL_SURF_USAGE_STENCIL_BIT | ISL_SURF_USAGE_DEPTH_BIT);
+   if (!is_depth_stencil) {
       if (need_to_retile_as_linear(brw, mt->surf.row_pitch,
                                    mt->surf.tiling, mt->surf.samples)) {
          init_info.tiling_flags = 1u << ISL_TILING_LINEAR;
@@ -1072,8 +1075,7 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
        * a worst case of compression.
        */
       enum isl_aux_state initial_state =
-         mod_info->supports_clear_color ? ISL_AUX_STATE_COMPRESSED_CLEAR :
-                                          ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
+         isl_drm_modifier_get_default_aux_state(image->modifier);
 
       if (!create_ccs_buf_for_image(brw, image, mt, initial_state)) {
          intel_miptree_release(&mt);
@@ -2548,8 +2550,12 @@ intel_miptree_set_aux_state(struct brw_context *brw,
       assert(intel_miptree_level_has_hiz(mt, level));
    }
 
-   for (unsigned a = 0; a < num_layers; a++)
-      mt->aux_state[level][start_layer + a] = aux_state;
+   for (unsigned a = 0; a < num_layers; a++) {
+      if (mt->aux_state[level][start_layer + a] != aux_state) {
+         mt->aux_state[level][start_layer + a] = aux_state;
+         brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
+      }
+   }
 }
 
 /* On Gen9 color buffers may be compressed by the hardware (lossless
@@ -2851,6 +2857,7 @@ intel_miptree_make_shareable(struct brw_context *brw,
        */
       free(mt->aux_state);
       mt->aux_state = NULL;
+      brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
    }
 
    if (mt->hiz_buf) {
@@ -2867,6 +2874,7 @@ intel_miptree_make_shareable(struct brw_context *brw,
        */
       free(mt->aux_state);
       mt->aux_state = NULL;
+      brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
    }
 
    mt->aux_usage = ISL_AUX_USAGE_NONE;

@@ -80,7 +80,6 @@ LIBGLSL_FILES = \
 	glsl/list.h \
 	glsl/loop_analysis.cpp \
 	glsl/loop_analysis.h \
-	glsl/loop_controls.cpp \
 	glsl/loop_unroll.cpp \
 	glsl/lower_blend_equation_advanced.cpp \
 	glsl/lower_buffer_access.cpp \
@@ -203,6 +202,7 @@ NIR_FILES = \
 	nir/nir_instr_set.h \
 	nir/nir_intrinsics.c \
 	nir/nir_intrinsics.h \
+	nir/nir_linking_helpers.c \
 	nir/nir_liveness.c \
 	nir/nir_loop_analyze.c \
 	nir/nir_loop_analyze.h \

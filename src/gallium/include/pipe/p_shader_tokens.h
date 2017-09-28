@@ -74,6 +74,7 @@ enum tgsi_file_type {
    TGSI_FILE_SAMPLER_VIEW,
    TGSI_FILE_BUFFER,
    TGSI_FILE_MEMORY,
+   TGSI_FILE_CONSTBUF,
    TGSI_FILE_COUNT,      /**< how many TGSI_FILE_ types */
 };
 
@@ -358,7 +359,7 @@ struct tgsi_property_data {
 #define TGSI_OPCODE_LRP                 18
 #define TGSI_OPCODE_FMA                 19
 #define TGSI_OPCODE_SQRT                20
-/* gap */
+#define TGSI_OPCODE_LDEXP               21
 #define TGSI_OPCODE_F2U64               22
 #define TGSI_OPCODE_F2I64               23
 #define TGSI_OPCODE_FRC                 24
@@ -606,7 +607,9 @@ struct tgsi_property_data {
 
 #define TGSI_OPCODE_DDIV                248
 
-#define TGSI_OPCODE_LAST                249
+#define TGSI_OPCODE_LOD                 249
+
+#define TGSI_OPCODE_LAST                250
 
 /**
  * Opcode is the operation code to execute. A given operation defines the

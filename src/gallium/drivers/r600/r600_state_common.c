@@ -2030,7 +2030,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 
 			rtex->dirty_level_mask |= 1 << surf->u.tex.level;
 
-			if (rtex->surface.flags & RADEON_SURF_SBUFFER)
+			if (rtex->surface.has_stencil)
 				rtex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;
 		}
 		if (rctx->framebuffer.compressed_cb_mask) {
@@ -2284,6 +2284,8 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		format = PIPE_FORMAT_A4R4_UNORM;
 
 	desc = util_format_description(format);
+	if (!desc)
+		goto out_unknown;
 
 	/* Depth and stencil swizzling is handled separately. */
 	if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS) {
@@ -2650,6 +2652,8 @@ uint32_t r600_translate_colorformat(enum chip_class chip, enum pipe_format forma
 	const struct util_format_description *desc = util_format_description(format);
 	int channel = util_format_get_first_non_void_channel(format);
 	bool is_float;
+	if (!desc)
+		return ~0U;
 
 #define HAS_SIZE(x,y,z,w) \
 	(desc->channel[0].size == (x) && desc->channel[1].size == (y) && \
@@ -2910,13 +2914,6 @@ static void r600_set_active_query_state(struct pipe_context *ctx, boolean enable
 	}
 }
 
-static void r600_set_occlusion_query_state(struct pipe_context *ctx, bool enable)
-{
-	struct r600_context *rctx = (struct r600_context*)ctx;
-
-	r600_mark_atom_dirty(rctx, &rctx->db_misc_state.atom);
-}
-
 static void r600_need_gfx_cs_space(struct pipe_context *ctx, unsigned num_dw,
                                    bool include_draw_vbo)
 {
@@ -2965,6 +2962,5 @@ void r600_init_common_state_functions(struct r600_context *rctx)
 	rctx->b.b.set_active_query_state = r600_set_active_query_state;
 	rctx->b.b.draw_vbo = r600_draw_vbo;
 	rctx->b.invalidate_buffer = r600_invalidate_buffer;
-	rctx->b.set_occlusion_query_state = r600_set_occlusion_query_state;
 	rctx->b.need_gfx_cs_space = r600_need_gfx_cs_space;
 }

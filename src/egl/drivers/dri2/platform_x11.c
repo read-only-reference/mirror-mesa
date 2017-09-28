@@ -40,6 +40,7 @@
 #endif
 #include <sys/types.h>
 #include <sys/stat.h>
+#include "util/debug.h"
 #include "util/macros.h"
 
 #include "egl_dri2.h"
@@ -232,7 +233,7 @@ dri2_x11_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
       return NULL;
    }
    
-   if (!_eglInitSurface(&dri2_surf->base, disp, type, conf, attrib_list))
+   if (!dri2_init_surface(&dri2_surf->base, disp, type, conf, attrib_list, false))
       goto cleanup_surf;
 
    dri2_surf->region = XCB_NONE;
@@ -394,6 +395,7 @@ dri2_x11_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
    if (surf->Type == EGL_PBUFFER_BIT)
       xcb_free_pixmap (dri2_dpy->conn, dri2_surf->drawable);
 
+   dri2_fini_surface(surf);
    free(surf);
 
    return EGL_TRUE;
@@ -1129,7 +1131,6 @@ static const struct dri2_egl_display_vtbl dri2_x11_swrast_display_vtbl = {
    .create_pbuffer_surface = dri2_x11_create_pbuffer_surface,
    .destroy_surface = dri2_x11_destroy_surface,
    .create_image = dri2_create_image_khr,
-   .swap_interval = dri2_fallback_swap_interval,
    .swap_buffers = dri2_x11_swap_buffers,
    .set_damage_region = dri2_fallback_set_damage_region,
    .swap_buffers_region = dri2_fallback_swap_buffers_region,
@@ -1273,6 +1274,7 @@ dri2_x11_setup_swap_interval(_EGLDisplay *disp)
     */
    dri2_dpy->min_swap_interval = 0;
    dri2_dpy->max_swap_interval = 0;
+   dri2_dpy->default_swap_interval = 0;
 
    if (!dri2_dpy->swap_available)
       return;
@@ -1289,6 +1291,7 @@ static const __DRIextension *dri3_image_loader_extensions[] = {
    &dri3_image_loader_extension.base,
    &image_lookup_extension.base,
    &use_invalidate.base,
+   &background_callable_extension.base,
    NULL,
 };
 
@@ -1385,6 +1388,7 @@ static const __DRIextension *dri2_loader_extensions_old[] = {
 static const __DRIextension *dri2_loader_extensions[] = {
    &dri2_loader_extension.base,
    &image_lookup_extension.base,
+   &use_invalidate.base,
    &background_callable_extension.base,
    NULL,
 };
@@ -1456,9 +1460,9 @@ dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp)
 {
    EGLBoolean initialized = EGL_FALSE;
 
-   if (!getenv("LIBGL_ALWAYS_SOFTWARE")) {
+   if (!env_var_as_boolean("LIBGL_ALWAYS_SOFTWARE", false)) {
 #ifdef HAVE_DRI3
-      if (!getenv("LIBGL_DRI3_DISABLE"))
+      if (!env_var_as_boolean("LIBGL_DRI3_DISABLE", false))
          initialized = dri2_initialize_x11_dri3(drv, disp);
 #endif
 

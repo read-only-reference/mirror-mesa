@@ -51,7 +51,8 @@ enum radeon_bo_flag { /* bitfield */
 	RADEON_FLAG_GTT_WC =        (1 << 0),
 	RADEON_FLAG_CPU_ACCESS =    (1 << 1),
 	RADEON_FLAG_NO_CPU_ACCESS = (1 << 2),
-	RADEON_FLAG_VIRTUAL =       (1 << 3)
+	RADEON_FLAG_VIRTUAL =       (1 << 3),
+	RADEON_FLAG_VA_UNCACHED =   (1 << 4),
 };
 
 enum radeon_bo_usage { /* bitfield */
@@ -132,9 +133,11 @@ struct radeon_bo_metadata {
 };
 
 uint32_t syncobj_handle;
-struct radeon_winsys_bo;
 struct radeon_winsys_fence;
 
+struct radeon_winsys_bo {
+	uint64_t va;
+};
 struct radv_winsys_sem_counts {
 	uint32_t syncobj_count;
 	uint32_t sem_count;
@@ -155,6 +158,11 @@ struct radeon_winsys {
 	void (*query_info)(struct radeon_winsys *ws,
 			   struct radeon_info *info);
 
+	bool (*read_registers)(struct radeon_winsys *ws, unsigned reg_offset,
+			       unsigned num_registers, uint32_t *out);
+
+	const char *(*get_chip_name)(struct radeon_winsys *ws);
+
 	struct radeon_winsys_bo *(*buffer_create)(struct radeon_winsys *ws,
 						  uint64_t size,
 						  unsigned alignment,
@@ -173,8 +181,6 @@ struct radeon_winsys {
 			      int *fd);
 
 	void (*buffer_unmap)(struct radeon_winsys_bo *bo);
-
-	uint64_t (*buffer_get_va)(struct radeon_winsys_bo *bo);
 
 	void (*buffer_set_metadata)(struct radeon_winsys_bo *bo,
 				    struct radeon_bo_metadata *md);
@@ -255,6 +261,11 @@ static inline void radeon_emit_array(struct radeon_winsys_cs *cs,
 {
 	memcpy(cs->buf + cs->cdw, values, count * 4);
 	cs->cdw += count;
+}
+
+static inline uint64_t radv_buffer_get_va(struct radeon_winsys_bo *bo)
+{
+	return bo->va;
 }
 
 #endif /* RADV_RADEON_WINSYS_H */

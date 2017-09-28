@@ -275,6 +275,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
    case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
+   case PIPE_CAP_LOAD_CONSTBUF:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -344,6 +345,8 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen,
       return 1;
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 1;
+   case PIPE_SHADER_CAP_INT64_ATOMICS:
+   case PIPE_SHADER_CAP_FP16:
    case PIPE_SHADER_CAP_SUBROUTINES:
       return 0; /* please inline, or provide function declarations */
    case PIPE_SHADER_CAP_INTEGERS:
@@ -360,6 +363,7 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen,
       return 32;
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:

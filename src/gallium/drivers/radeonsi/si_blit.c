@@ -350,7 +350,7 @@ si_decompress_depth(struct si_context *sctx,
 	 */
 	if (copy_planes &&
 	    (tex->flushed_depth_texture ||
-	     r600_init_flushed_depth_texture(&sctx->b.b, &tex->resource.b.b, NULL))) {
+	     si_init_flushed_depth_texture(&sctx->b.b, &tex->resource.b.b, NULL))) {
 		struct r600_texture *dst = tex->flushed_depth_texture;
 		unsigned fully_copied_levels;
 		unsigned levels = 0;
@@ -470,8 +470,10 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 			     "Decompress Color (levels %u - %u, mask 0x%x)\n\n",
 			     first_level, last_level, level_mask);
 
-	if (rtex->dcc_offset && need_dcc_decompress) {
+	if (need_dcc_decompress) {
 		custom_blend = sctx->custom_blend_dcc_decompress;
+
+		assert(rtex->dcc_offset);
 
 		/* disable levels without DCC */
 		for (int i = first_level; i <= last_level; i++) {
@@ -621,7 +623,7 @@ static void si_check_render_feedback_texture(struct si_context *sctx,
 	}
 
 	if (render_feedback)
-		r600_texture_disable_dcc(&sctx->b, tex);
+		si_texture_disable_dcc(&sctx->b, tex);
 }
 
 static void si_check_render_feedback_textures(struct si_context *sctx,
@@ -835,7 +837,7 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 		zsbuf ? (struct r600_texture*)zsbuf->texture : NULL;
 
 	if (buffers & PIPE_CLEAR_COLOR) {
-		evergreen_do_fast_color_clear(&sctx->b, fb,
+		si_do_fast_color_clear(&sctx->b, fb,
 					      &sctx->framebuffer.atom, &buffers,
 					      &sctx->framebuffer.dirty_cbufs,
 					      color);
@@ -973,7 +975,7 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 	if (rtex->db_compatible) {
 		planes &= PIPE_MASK_Z | PIPE_MASK_S;
 
-		if (!(rtex->surface.flags & RADEON_SURF_SBUFFER))
+		if (!rtex->surface.has_stencil)
 			planes &= ~PIPE_MASK_S;
 
 		/* If we've rendered into the framebuffer and it's a blitting
@@ -1175,7 +1177,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 					      src_templ.format);
 
 	/* Initialize the surface. */
-	dst_view = r600_create_surface_custom(ctx, dst, &dst_templ,
+	dst_view = si_create_surface_custom(ctx, dst, &dst_templ,
 					      dst_width0, dst_height0,
 					      dst_width, dst_height);
 

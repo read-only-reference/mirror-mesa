@@ -38,10 +38,13 @@ create_pass(struct radv_device *device,
 	const VkAllocationCallbacks *alloc = &device->meta_state.alloc;
 	VkAttachmentDescription attachment;
 
+	attachment.flags = 0;
 	attachment.format = VK_FORMAT_D32_SFLOAT_S8_UINT;
 	attachment.samples = samples;
 	attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 	attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
 	attachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 	attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -334,6 +337,7 @@ static void radv_process_depth_image_inplace(struct radv_cmd_buffer *cmd_buffer,
 				     &(VkImageViewCreateInfo) {
 					     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
 					     .image = radv_image_to_handle(image),
+					     .viewType = radv_meta_get_view_type(image),
 					     .format = image->vk_format,
 					     .subresourceRange = {
 						     .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,

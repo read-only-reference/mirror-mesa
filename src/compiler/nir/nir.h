@@ -192,6 +192,16 @@ typedef struct nir_variable {
       unsigned invariant:1;
 
       /**
+       * When separate shader programs are enabled, only input/outputs between
+       * the stages of a multi-stage separate program can be safely removed
+       * from the shader interface. Other input/outputs must remains active.
+       *
+       * This is also used to make sure xfb varyings that are unused by the
+       * fragment shader are not removed.
+       */
+      unsigned always_active_io:1;
+
+      /**
        * Interpolation mode for shader inputs / outputs
        *
        * \sa glsl_interp_mode
@@ -220,7 +230,7 @@ typedef struct nir_variable {
        * be tightly packed.  In other words, consecutive array elements
        * should be stored one component apart, rather than one slot apart.
        */
-      bool compact:1;
+      unsigned compact:1;
 
       /**
        * Whether this is a fragment shader output implicitly initialized with
@@ -2406,6 +2416,9 @@ void nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint);
 
 void nir_assign_var_locations(struct exec_list *var_list, unsigned *size,
                               int (*type_size)(const struct glsl_type *));
+
+/* Some helpers to do very simple linking */
+bool nir_remove_unused_varyings(nir_shader *producer, nir_shader *consumer);
 
 typedef enum {
    /* If set, this forces all non-flat fragment shader inputs to be

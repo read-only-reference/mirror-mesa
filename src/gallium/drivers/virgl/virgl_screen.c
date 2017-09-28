@@ -268,6 +268,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
    case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
+   case PIPE_CAP_LOAD_CONSTBUF:
       return 0;
    case PIPE_CAP_VENDOR_ID:
       return 0x1af4;
@@ -334,6 +335,8 @@ virgl_get_shader_param(struct pipe_screen *screen,
          return 4096 * sizeof(float[4]);
       case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+      case PIPE_SHADER_CAP_INT64_ATOMICS:
+      case PIPE_SHADER_CAP_FP16:
       default:
          return 0;
       }

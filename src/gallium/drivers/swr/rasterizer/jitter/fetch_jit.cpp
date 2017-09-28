@@ -222,6 +222,18 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
         default: SWR_INVALID("Unsupported index type"); vIndices = nullptr; break;
     }
 
+    if(fetchState.bForceSequentialAccessEnable)
+    {
+        Value* pOffsets = C({ 0, 1, 2, 3, 4, 5, 6, 7 });
+
+        // VertexData buffers are accessed sequentially, the index is equal to the vertex number
+        vIndices = VBROADCAST(LOAD(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_StartVertex }));
+        vIndices = ADD(vIndices, pOffsets);
+#if USE_SIMD16_SHADERS
+        vIndices2 = ADD(vIndices, VIMMED1(8));
+#endif
+    }
+
     Value* vVertexId = vIndices;
 #if USE_SIMD16_SHADERS
     Value* vVertexId2 = vIndices2;
@@ -356,11 +368,16 @@ void FetchJit::JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* str
 
         vectors.clear();
 
+        if (fetchState.bInstanceIDOffsetEnable)
+        {
+            SWR_ASSERT((0), "TODO: Fill out more once driver sends this down");
+        }
+
         Value *vCurIndices;
         Value *startOffset;
         if(ied.InstanceEnable)
         {
-            Value* stepRate = C(ied.InstanceDataStepRate);
+            Value* stepRate = C(ied.InstanceAdvancementState);
 
             // prevent a div by 0 for 0 step rate
             Value* isNonZeroStep = ICMP_UGT(stepRate, C(0));
@@ -375,6 +392,10 @@ void FetchJit::JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* str
             vCurIndices = VBROADCAST(calcInstance);
 
             startOffset = startInstance;
+        }
+        else if (ied.InstanceStrideEnable)
+        {
+            SWR_ASSERT((0), "TODO: Fill out more once driver sends this down.");
         }
         else
         {
@@ -821,11 +842,19 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
             minVertex = LOAD(minVertex);
         }
 
+        if (fetchState.bInstanceIDOffsetEnable)
+        {
+            // the InstanceID (curInstance) value is offset by StartInstanceLocation
+            curInstance = ADD(curInstance, startInstance);
+        }
+
         Value *vCurIndices;
         Value *startOffset;
+        Value *vInstanceStride = VIMMED1(0);
+
         if(ied.InstanceEnable)
         {
-            Value* stepRate = C(ied.InstanceDataStepRate);
+            Value* stepRate = C(ied.InstanceAdvancementState);
 
             // prevent a div by 0 for 0 step rate
             Value* isNonZeroStep = ICMP_UGT(stepRate, C(0));
@@ -841,9 +870,21 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
 
             startOffset = startInstance;
         }
+        else if (ied.InstanceStrideEnable)
+        {
+            // grab the instance advancement state, determines stride in bytes from one instance to the next
+            Value* stepRate = C(ied.InstanceAdvancementState);
+            vInstanceStride = VBROADCAST(MUL(curInstance, stepRate));
+
+            // offset indices by baseVertex
+            vCurIndices = ADD(vIndices, vBaseVertex);
+
+            startOffset = startVertex;
+            SWR_ASSERT((0), "TODO: Fill out more once driver sends this down.");
+        }
         else
         {
-            // offset indices by baseVertex            
+            // offset indices by baseVertex
             vCurIndices = ADD(vIndices, vBaseVertex);
 
             startOffset = startVertex;
@@ -910,6 +951,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         // calculate the actual offsets into the VB
         Value* vOffsets = MUL(vCurIndices, vStride);
         vOffsets = ADD(vOffsets, vAlignmentOffsets);
+
+        // if instance stride enable is:
+        //  true  - add product of the instanceID and advancement state to the offst into the VB
+        //  false - value of vInstanceStride has been initialialized to zero
+        vOffsets = ADD(vOffsets, vInstanceStride);
 
         // Packing and component control 
         ComponentEnable compMask = (ComponentEnable)ied.ComponentPacking;
@@ -1005,7 +1051,12 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 Value *vMask = vGatherMask;
 
                                 // Gather a SIMD of vertices
-                                vVertexElements[currentVertexElement++] = GATHERPS(gatherSrc, pStreamBase, vOffsets, vMask, C((char)1));
+                                // APIs allow a 4GB range for offsets
+                                // However, GATHERPS uses signed 32-bit offsets, so only a 2GB range :(
+                                // But, we know that elements must be aligned for FETCH. :)
+                                // Right shift the offset by a bit and then scale by 2 to remove the sign extension.
+                                Value* vShiftedOffsets = VPSRLI(vOffsets, C(1));
+                                vVertexElements[currentVertexElement++] = GATHERPS(gatherSrc, pStreamBase, vShiftedOffsets, vMask, C((char)2));
                             }
                             else
                             {

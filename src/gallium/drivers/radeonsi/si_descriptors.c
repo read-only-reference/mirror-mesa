@@ -379,6 +379,20 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 	}
 }
 
+static void si_set_sampler_state_desc(struct si_sampler_state *sstate,
+				      struct si_sampler_view *sview,
+				      struct r600_texture *tex,
+				      uint32_t *desc)
+{
+	if (sview && sview->is_integer)
+		memcpy(desc, sstate->integer_val, 4*4);
+	else if (tex && tex->upgraded_depth &&
+		 (!sview || !sview->is_stencil_sampler))
+		memcpy(desc, sstate->upgraded_depth_val, 4*4);
+	else
+		memcpy(desc, sstate->val, 4*4);
+}
+
 static void si_set_sampler_view_desc(struct si_context *sctx,
 				     struct si_sampler_view *sview,
 				     struct si_sampler_state *sstate,
@@ -390,7 +404,7 @@ static void si_set_sampler_view_desc(struct si_context *sctx,
 
 	if (unlikely(!is_buffer && sview->dcc_incompatible)) {
 		if (vi_dcc_enabled(rtex, view->u.tex.first_level))
-			if (!r600_texture_disable_dcc(&sctx->b, rtex))
+			if (!si_texture_disable_dcc(&sctx->b, rtex))
 				sctx->b.decompress_dcc(&sctx->b.b, rtex);
 
 		sview->dcc_incompatible = false;
@@ -423,7 +437,9 @@ static void si_set_sampler_view_desc(struct si_context *sctx,
 		memcpy(desc + 8, null_texture_descriptor, 4*4);
 
 		if (sstate)
-			memcpy(desc + 12, sstate->val, 4*4);
+			si_set_sampler_state_desc(sstate, sview,
+						  is_buffer ? NULL : rtex,
+						  desc + 12);
 	}
 }
 
@@ -465,8 +481,8 @@ static void si_set_sampler_view(struct si_context *sctx,
 		memcpy(desc + 8, null_texture_descriptor, 4*4);
 		/* Re-set the sampler state if we are transitioning from FMASK. */
 		if (views->sampler_states[slot])
-			memcpy(desc + 12,
-			       views->sampler_states[slot]->val, 4*4);
+			si_set_sampler_state_desc(views->sampler_states[slot], NULL, NULL,
+						  desc + 12);
 
 		views->enabled_mask &= ~(1u << slot);
 	}
@@ -674,7 +690,7 @@ static void si_set_shader_image_desc(struct si_context *ctx,
 			 * The decompression is relatively cheap if the surface
 			 * has been decompressed already.
 			 */
-			if (!r600_texture_disable_dcc(&ctx->b, tex))
+			if (!si_texture_disable_dcc(&ctx->b, tex))
 				ctx->b.decompress_dcc(&ctx->b.b, tex);
 		}
 
@@ -845,13 +861,21 @@ static void si_bind_sampler_states(struct pipe_context *ctx,
 		/* If FMASK is bound, don't overwrite it.
 		 * The sampler state will be set after FMASK is unbound.
 		 */
-		if (samplers->views.views[slot] &&
-		    samplers->views.views[slot]->texture &&
-		    samplers->views.views[slot]->texture->target != PIPE_BUFFER &&
-		    ((struct r600_texture*)samplers->views.views[slot]->texture)->fmask.size)
+		struct si_sampler_view *sview =
+			(struct si_sampler_view *)samplers->views.views[slot];
+
+		struct r600_texture *tex = NULL;
+
+		if (sview && sview->base.texture &&
+		    sview->base.texture->target != PIPE_BUFFER)
+			tex = (struct r600_texture *)sview->base.texture;
+
+		if (tex && tex->fmask.size)
 			continue;
 
-		memcpy(desc->list + desc_slot * 16 + 12, sstates[i]->val, 4*4);
+		si_set_sampler_state_desc(sstates[i], sview, tex,
+					  desc->list + desc_slot * 16 + 12);
+
 		sctx->descriptors_dirty |= 1u << si_sampler_and_image_descriptors_idx(shader);
 	}
 }
@@ -1404,7 +1428,7 @@ static void si_set_streamout_targets(struct pipe_context *ctx,
 	 */
 
 	/* Set the VGT regs. */
-	r600_set_streamout_targets(ctx, num_targets, targets, offsets);
+	si_common_set_streamout_targets(ctx, num_targets, targets, offsets);
 
 	/* Set the shader resources.*/
 	for (i = 0; i < num_targets; i++) {
@@ -1636,10 +1660,10 @@ static void si_rebind_buffer(struct pipe_context *ctx, struct pipe_resource *buf
 
 			/* Update the streamout state. */
 			if (sctx->b.streamout.begin_emitted)
-				r600_emit_streamout_end(&sctx->b);
+				si_emit_streamout_end(&sctx->b);
 			sctx->b.streamout.append_bitmask =
 					sctx->b.streamout.enabled_mask;
-			r600_streamout_buffers_dirty(&sctx->b);
+			si_streamout_buffers_dirty(&sctx->b);
 		}
 	}
 
@@ -1795,7 +1819,7 @@ static void si_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource 
 	uint64_t old_va = rbuffer->gpu_address;
 
 	/* Reallocate the buffer in the same pipe_resource. */
-	r600_alloc_resource(&sctx->screen->b, rbuffer);
+	si_alloc_resource(&sctx->screen->b, rbuffer);
 
 	si_rebind_buffer(ctx, buf, old_va);
 }
