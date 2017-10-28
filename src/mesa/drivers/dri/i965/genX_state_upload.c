@@ -1029,17 +1029,13 @@ genX(calculate_attr_overrides)(const struct brw_context *brw,
 
    *point_sprite_enables = 0;
 
-   /* If the fragment shader reads VARYING_SLOT_LAYER, then we need to pass in
-    * the full vertex header.  Otherwise, we can program the SF to start
-    * reading at an offset of 1 (2 varying slots) to skip unnecessary data:
-    * - VARYING_SLOT_PSIZ and BRW_VARYING_SLOT_NDC on gen4-5
-    * - VARYING_SLOT_{PSIZ,LAYER} and VARYING_SLOT_POS on gen6+
-    */
+   int first_slot =
+      brw_compute_first_urb_slot_required(fp->info.inputs_read,
+                                          &brw->vue_map_geom_out);
 
-   bool fs_needs_vue_header = fp->info.inputs_read &
-      (VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT);
-
-   *urb_entry_read_offset = fs_needs_vue_header ? 0 : 1;
+   /* Each URB offset packs two varying slots */
+   assert(first_slot % 2 == 0);
+   *urb_entry_read_offset = first_slot / 2;
 
    /* From the Ivybridge PRM, Vol 2 Part 1, 3DSTATE_SBE,
     * description of dw10 Point Sprite Texture Coordinate Enable:
@@ -3078,7 +3074,7 @@ genX(upload_push_constant_packets)(struct brw_context *brw)
 
                const struct gl_uniform_block *block =
                   prog->sh.UniformBlocks[range->block];
-               const struct gl_uniform_buffer_binding *binding =
+               const struct gl_buffer_binding *binding =
                   &ctx->UniformBufferBindings[block->Binding];
 
                if (binding->BufferObject == ctx->Shared->NullBufferObj) {
@@ -3121,9 +3117,8 @@ genX(upload_push_constant_packets)(struct brw_context *brw)
       }
 
       stage_state->push_constants_dirty = false;
+      brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
    }
-
-   brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
 }
 
 const struct brw_tracked_state genX(push_constant_packets) = {
@@ -3142,13 +3137,11 @@ genX(upload_vs_push_constants)(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->vs.base;
 
    /* BRW_NEW_VERTEX_PROGRAM */
-   const struct brw_program *vp =
-      brw_program_const(brw->programs[MESA_SHADER_VERTEX]);
+   const struct gl_program *vp = brw->programs[MESA_SHADER_VERTEX];
    /* BRW_NEW_VS_PROG_DATA */
    const struct brw_stage_prog_data *prog_data = brw->vs.base.prog_data;
 
-   _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_VERTEX);
-   gen6_upload_push_constants(brw, &vp->program, prog_data, stage_state);
+   gen6_upload_push_constants(brw, vp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(vs_push_constants) = {
@@ -3169,16 +3162,12 @@ genX(upload_gs_push_constants)(struct brw_context *brw)
    struct brw_stage_state *stage_state = &brw->gs.base;
 
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   const struct brw_program *gp =
-      brw_program_const(brw->programs[MESA_SHADER_GEOMETRY]);
+   const struct gl_program *gp = brw->programs[MESA_SHADER_GEOMETRY];
 
-   if (gp) {
-      /* BRW_NEW_GS_PROG_DATA */
-      struct brw_stage_prog_data *prog_data = brw->gs.base.prog_data;
+   /* BRW_NEW_GS_PROG_DATA */
+   struct brw_stage_prog_data *prog_data = brw->gs.base.prog_data;
 
-      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_GEOMETRY);
-      gen6_upload_push_constants(brw, &gp->program, prog_data, stage_state);
-   }
+   gen6_upload_push_constants(brw, gp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(gs_push_constants) = {
@@ -3198,14 +3187,11 @@ genX(upload_wm_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->wm.base;
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct brw_program *fp =
-      brw_program_const(brw->programs[MESA_SHADER_FRAGMENT]);
+   const struct gl_program *fp = brw->programs[MESA_SHADER_FRAGMENT];
    /* BRW_NEW_FS_PROG_DATA */
    const struct brw_stage_prog_data *prog_data = brw->wm.base.prog_data;
 
-   _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_FRAGMENT);
-
-   gen6_upload_push_constants(brw, &fp->program, prog_data, stage_state);
+   gen6_upload_push_constants(brw, fp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(wm_push_constants) = {
@@ -3456,15 +3442,9 @@ genX(upload_sbe)(struct brw_context *brw)
 
 #if GEN_GEN >= 9
       /* prepare the active component dwords */
-      int input_index = 0;
-      for (int attr = 0; attr < VARYING_SLOT_MAX; attr++) {
-         if (!(fp->info.inputs_read & BITFIELD64_BIT(attr)))
-            continue;
-
-         assert(input_index < 32);
-
+      const int num_inputs = urb_entry_read_length * 2;
+      for (int input_index = 0; input_index < num_inputs; input_index++) {
          sbe.AttributeActiveComponentFormat[input_index] = ACTIVE_COMPONENT_XYZW;
-         ++input_index;
       }
 #endif
    }
@@ -3880,7 +3860,6 @@ genX(upload_ps)(struct brw_context *brw)
       else
          ps.PositionXYOffsetSelect = POSOFFSET_NONE;
 
-      ps.RenderTargetFastClearEnable = brw->wm.fast_clear_op;
       ps._8PixelDispatchEnable = prog_data->dispatch_8;
       ps._16PixelDispatchEnable = prog_data->dispatch_16;
       ps.DispatchGRFStartRegisterForConstantSetupData0 =
@@ -4043,15 +4022,11 @@ genX(upload_tes_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tes.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_program *tep =
-      brw_program_const(brw->programs[MESA_SHADER_TESS_EVAL]);
+   const struct gl_program *tep = brw->programs[MESA_SHADER_TESS_EVAL];
 
-   if (tep) {
-      /* BRW_NEW_TES_PROG_DATA */
-      const struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
-      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_EVAL);
-      gen6_upload_push_constants(brw, &tep->program, prog_data, stage_state);
-   }
+   /* BRW_NEW_TES_PROG_DATA */
+   const struct brw_stage_prog_data *prog_data = brw->tes.base.prog_data;
+   gen6_upload_push_constants(brw, tep, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(tes_push_constants) = {
@@ -4070,17 +4045,12 @@ genX(upload_tcs_push_constants)(struct brw_context *brw)
 {
    struct brw_stage_state *stage_state = &brw->tcs.base;
    /* BRW_NEW_TESS_PROGRAMS */
-   const struct brw_program *tcp =
-      brw_program_const(brw->programs[MESA_SHADER_TESS_CTRL]);
-   bool active = brw->programs[MESA_SHADER_TESS_EVAL];
+   const struct gl_program *tcp = brw->programs[MESA_SHADER_TESS_CTRL];
 
-   if (active) {
-      /* BRW_NEW_TCS_PROG_DATA */
-      const struct brw_stage_prog_data *prog_data = brw->tcs.base.prog_data;
+   /* BRW_NEW_TCS_PROG_DATA */
+   const struct brw_stage_prog_data *prog_data = brw->tcs.base.prog_data;
 
-      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_CTRL);
-      gen6_upload_push_constants(brw, &tcp->program, prog_data, stage_state);
-   }
+   gen6_upload_push_constants(brw, tcp, prog_data, stage_state);
 }
 
 static const struct brw_tracked_state genX(tcs_push_constants) = {
@@ -4100,6 +4070,68 @@ static const struct brw_tracked_state genX(tcs_push_constants) = {
 /* ---------------------------------------------------------------------- */
 
 #if GEN_GEN >= 7
+static void
+genX(upload_cs_push_constants)(struct brw_context *brw)
+{
+   struct brw_stage_state *stage_state = &brw->cs.base;
+
+   /* BRW_NEW_COMPUTE_PROGRAM */
+   const struct gl_program *cp = brw->programs[MESA_SHADER_COMPUTE];
+
+   if (cp) {
+      /* BRW_NEW_CS_PROG_DATA */
+      struct brw_cs_prog_data *cs_prog_data =
+         brw_cs_prog_data(brw->cs.base.prog_data);
+
+      _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_COMPUTE);
+      brw_upload_cs_push_constants(brw, cp, cs_prog_data, stage_state);
+   }
+}
+
+const struct brw_tracked_state genX(cs_push_constants) = {
+   .dirty = {
+      .mesa = _NEW_PROGRAM_CONSTANTS,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_COMPUTE_PROGRAM |
+             BRW_NEW_CS_PROG_DATA,
+   },
+   .emit = genX(upload_cs_push_constants),
+};
+
+/**
+ * Creates a new CS constant buffer reflecting the current CS program's
+ * constants, if needed by the CS program.
+ */
+static void
+genX(upload_cs_pull_constants)(struct brw_context *brw)
+{
+   struct brw_stage_state *stage_state = &brw->cs.base;
+
+   /* BRW_NEW_COMPUTE_PROGRAM */
+   struct brw_program *cp =
+      (struct brw_program *) brw->programs[MESA_SHADER_COMPUTE];
+
+   /* BRW_NEW_CS_PROG_DATA */
+   const struct brw_stage_prog_data *prog_data = brw->cs.base.prog_data;
+
+   _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_COMPUTE);
+   /* _NEW_PROGRAM_CONSTANTS */
+   brw_upload_pull_constants(brw, BRW_NEW_SURFACES, &cp->program,
+                             stage_state, prog_data);
+}
+
+const struct brw_tracked_state genX(cs_pull_constants) = {
+   .dirty = {
+      .mesa = _NEW_PROGRAM_CONSTANTS,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_COMPUTE_PROGRAM |
+             BRW_NEW_CS_PROG_DATA,
+   },
+   .emit = genX(upload_cs_pull_constants),
+};
+
 static void
 genX(upload_cs_state)(struct brw_context *brw)
 {
@@ -4204,7 +4236,7 @@ genX(upload_cs_state)(struct brw_context *brw)
    const struct GENX(INTERFACE_DESCRIPTOR_DATA) idd = {
       .KernelStartPointer = brw->cs.base.prog_offset,
       .SamplerStatePointer = stage_state->sampler_offset,
-      .SamplerCount = DIV_ROUND_UP(stage_state->sampler_count, 4) >> 2,
+      .SamplerCount = DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4),
       .BindingTablePointer = stage_state->bind_bo_offset,
       .ConstantURBEntryReadLength = cs_prog_data->push.per_thread.regs,
       .NumberofThreadsinGPGPUThreadGroup = cs_prog_data->threads,
@@ -5601,8 +5633,8 @@ genX(init_atoms)(struct brw_context *brw)
    {
       &gen7_l3_state,
       &brw_cs_image_surfaces,
-      &gen7_cs_push_constants,
-      &brw_cs_pull_constants,
+      &genX(cs_push_constants),
+      &genX(cs_pull_constants),
       &brw_cs_ubo_surfaces,
       &brw_cs_abo_surfaces,
       &brw_cs_texture_surfaces,

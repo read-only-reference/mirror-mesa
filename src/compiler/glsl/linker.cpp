@@ -1255,21 +1255,11 @@ interstage_cross_validate_uniform_blocks(struct gl_shader_program *prog,
  * Populates a shaders symbol table with all global declarations
  */
 static void
-populate_symbol_table(gl_linked_shader *sh)
+populate_symbol_table(gl_linked_shader *sh, glsl_symbol_table *symbols)
 {
    sh->symbols = new(sh) glsl_symbol_table;
 
-   foreach_in_list(ir_instruction, inst, sh->ir) {
-      ir_variable *var;
-      ir_function *func;
-
-      if ((func = inst->as_function()) != NULL) {
-         sh->symbols->add_function(func);
-      } else if ((var = inst->as_variable()) != NULL) {
-         if (var->data.mode != ir_var_temporary)
-            sh->symbols->add_variable(var);
-      }
-   }
+   _mesa_glsl_copy_symbols_from_table(sh->ir, symbols, sh->symbols);
 }
 
 
@@ -2288,7 +2278,7 @@ link_intrastage_shaders(void *mem_ctx,
 
    link_bindless_layout_qualifiers(prog, shader_list, num_shaders);
 
-   populate_symbol_table(linked);
+   populate_symbol_table(linked, shader_list[0]->symbols);
 
    /* The pointer to the main function in the final linked shader (i.e., the
     * copy of the original shader that contained the main function).
@@ -2373,6 +2363,9 @@ link_intrastage_shaders(void *mem_ctx,
 
    if (ctx->Const.VertexID_is_zero_based)
       lower_vertex_id(linked);
+
+   if (ctx->Const.LowerCsDerivedVariables)
+      lower_cs_derived(linked);
 
 #ifdef DEBUG
    /* Compute the source checksum. */
@@ -4657,8 +4650,7 @@ link_varyings_and_uniforms(unsigned first, unsigned last,
                              ctx->Const.UseSTD430AsDefaultPacking);
 
       if (i == MESA_SHADER_COMPUTE)
-         lower_shared_reference(prog->_LinkedShaders[i],
-                                &prog->Comp.SharedSize);
+         lower_shared_reference(ctx, prog, prog->_LinkedShaders[i]);
 
       lower_vector_derefs(prog->_LinkedShaders[i]);
       do_vec_index_to_swizzle(prog->_LinkedShaders[i]->ir);
@@ -4930,7 +4922,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       if (!prog->data->LinkStatus)
          goto done;
 
-      cross_validate_outputs_to_inputs(prog,
+      cross_validate_outputs_to_inputs(ctx, prog,
                                        prog->_LinkedShaders[prev],
                                        prog->_LinkedShaders[i]);
       if (!prog->data->LinkStatus)
@@ -4938,6 +4930,16 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 
       prev = i;
    }
+
+   /* The cross validation of outputs/inputs above validates explicit locations
+    * but for SSO programs we need to do this also for the inputs in the
+    * first stage and outputs of the last stage included in the program, since
+    * there is no cross validation for these.
+    */
+   if (prog->SeparateShader)
+      validate_sso_explicit_locations(ctx, prog,
+                                      (gl_shader_stage) first,
+                                      (gl_shader_stage) last);
 
    /* Cross-validate uniform blocks between shader stages */
    validate_interstage_uniform_blocks(prog, prog->_LinkedShaders);

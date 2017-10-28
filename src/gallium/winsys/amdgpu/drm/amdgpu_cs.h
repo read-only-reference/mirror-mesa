@@ -73,6 +73,7 @@ struct amdgpu_ib {
    unsigned                used_ib_space;
    unsigned                max_ib_size;
    uint32_t                *ptr_ib_size;
+   bool                    ptr_ib_size_inside_ib;
    enum ib_type            ib_type;
 };
 
@@ -139,7 +140,10 @@ struct amdgpu_cs {
 
 struct amdgpu_fence {
    struct pipe_reference reference;
+   /* If ctx == NULL, this fence is syncobj-based. */
+   uint32_t syncobj;
 
+   struct amdgpu_winsys *ws;
    struct amdgpu_ctx *ctx;  /* submission context */
    struct amdgpu_cs_fence fence;
    uint64_t *user_fence_cpu_address;
@@ -150,9 +154,17 @@ struct amdgpu_fence {
    volatile int signalled;              /* bool (int for atomicity) */
 };
 
+static inline bool amdgpu_fence_is_syncobj(struct amdgpu_fence *fence)
+{
+   return fence->ctx == NULL;
+}
+
 static inline void amdgpu_ctx_unref(struct amdgpu_ctx *ctx)
 {
    if (p_atomic_dec_zero(&ctx->refcount)) {
+      if (ctx->ws->reserve_vmid)
+         amdgpu_vm_unreserve_vmid(ctx->ctx, 0);
+
       amdgpu_cs_ctx_free(ctx->ctx);
       amdgpu_bo_free(ctx->user_fence_bo);
       FREE(ctx);
@@ -166,8 +178,14 @@ static inline void amdgpu_fence_reference(struct pipe_fence_handle **dst,
    struct amdgpu_fence *rsrc = (struct amdgpu_fence *)src;
 
    if (pipe_reference(&(*rdst)->reference, &rsrc->reference)) {
-      amdgpu_ctx_unref((*rdst)->ctx);
-      FREE(*rdst);
+      struct amdgpu_fence *fence = *rdst;
+
+      if (amdgpu_fence_is_syncobj(fence))
+         amdgpu_cs_destroy_syncobj(fence->ws->dev, fence->syncobj);
+      else
+         amdgpu_ctx_unref(fence->ctx);
+
+      FREE(fence);
    }
    *rdst = rsrc;
 }

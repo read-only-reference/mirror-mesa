@@ -28,6 +28,26 @@
  * \file nir_opt_intrinsics.c
  */
 
+static nir_ssa_def *
+high_subgroup_mask(nir_builder *b,
+                   nir_ssa_def *count,
+                   uint64_t base_mask)
+{
+   /* group_mask could probably be calculated more efficiently but we want to
+    * be sure not to shift by 64 if the subgroup size is 64 because the GLSL
+    * shift operator is undefined in that case. In any case if we were worried
+    * about efficency this should probably be done further down because the
+    * subgroup size is likely to be known at compile time.
+    */
+   nir_ssa_def *subgroup_size = nir_load_subgroup_size(b);
+   nir_ssa_def *all_bits = nir_imm_int64(b, ~0ull);
+   nir_ssa_def *shift = nir_isub(b, nir_imm_int(b, 64), subgroup_size);
+   nir_ssa_def *group_mask = nir_ushr(b, all_bits, shift);
+   nir_ssa_def *higher_bits = nir_ishl(b, nir_imm_int64(b, base_mask), count);
+
+   return nir_iand(b, higher_bits, group_mask);
+}
+
 static bool
 opt_intrinsics_impl(nir_function_impl *impl)
 {
@@ -95,10 +115,10 @@ opt_intrinsics_impl(nir_function_impl *impl)
                replacement = nir_ishl(&b, nir_imm_int64(&b, 1ull), count);
                break;
             case nir_intrinsic_load_subgroup_ge_mask:
-               replacement = nir_ishl(&b, nir_imm_int64(&b, ~0ull), count);
+               replacement = high_subgroup_mask(&b, count, ~0ull);
                break;
             case nir_intrinsic_load_subgroup_gt_mask:
-               replacement = nir_ishl(&b, nir_imm_int64(&b, ~1ull), count);
+               replacement = high_subgroup_mask(&b, count, ~1ull);
                break;
             case nir_intrinsic_load_subgroup_le_mask:
                replacement = nir_inot(&b, nir_ishl(&b, nir_imm_int64(&b, ~1ull), count));
@@ -121,8 +141,6 @@ opt_intrinsics_impl(nir_function_impl *impl)
          nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
                                   nir_src_for_ssa(replacement));
          nir_instr_remove(instr);
-         nir_metadata_preserve(impl, nir_metadata_block_index |
-                                     nir_metadata_dominance);
          progress = true;
       }
    }
@@ -136,9 +154,15 @@ nir_opt_intrinsics(nir_shader *shader)
    bool progress = false;
 
    nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= opt_intrinsics_impl(function->impl);
+      if (!function->impl)
+         continue;
+
+      if (opt_intrinsics_impl(function->impl)) {
+         progress = true;
+         nir_metadata_preserve(function->impl, nir_metadata_block_index |
+                                               nir_metadata_dominance);
+      }
    }
 
-   return false;
+   return progress;
 }

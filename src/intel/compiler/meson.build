@@ -73,7 +73,7 @@ libintel_compiler_files = files(
   'brw_nir_analyze_boolean_resolves.c',
   'brw_nir_analyze_ubo_ranges.c',
   'brw_nir_attribute_workarounds.c',
-  'brw_nir_intrinsics.c',
+  'brw_nir_lower_cs_intrinsics.c',
   'brw_nir_opt_peephole_ffma.c',
   'brw_nir_tcs_workarounds.c',
   'brw_packed_float.c',
@@ -122,7 +122,7 @@ brw_nir_trig = custom_target(
   output : 'brw_nir_trig_workarounds.c',
   command : [prog_python2, '@INPUT@', '-p',
              join_paths(meson.source_root(), 'src/compiler/nir/')],
-  depend_files : files('../../compiler/nir/nir_algebraic.py'),
+  depend_files : nir_algebraic_py,
   capture : true,
 )
 
@@ -146,9 +146,9 @@ if with_tests
       [t, nir_opcodes_h, ir_expression_operation_h],
       'test_@0@.cpp'.format(t),
       include_directories : [inc_common, inc_intel],
-      link_with : [libgtest, libintel_compiler, libintel_common, libnir,
-                   libmesa_util, libisl],
-      dependencies : [dep_thread, dep_dl],
+      link_with : [libintel_compiler, libintel_common, libnir, libmesa_util,
+                   libisl],
+      dependencies : [dep_thread, dep_dl, idep_gtest],
     )
     test(t, _exe)
   endforeach

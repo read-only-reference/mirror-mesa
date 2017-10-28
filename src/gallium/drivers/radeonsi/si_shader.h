@@ -161,7 +161,7 @@ enum {
 	SI_SGPR_RW_BUFFERS_HI,
 	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES,
 	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES_HI,
-	SI_SGPR_CONST_AND_SHADER_BUFFERS,
+	SI_SGPR_CONST_AND_SHADER_BUFFERS, /* or just a constant buffer 0 pointer */
 	SI_SGPR_CONST_AND_SHADER_BUFFERS_HI,
 	SI_SGPR_SAMPLERS_AND_IMAGES,
 	SI_SGPR_SAMPLERS_AND_IMAGES_HI,
@@ -175,6 +175,8 @@ enum {
 	SI_SGPR_DRAWID,
 	SI_SGPR_VS_STATE_BITS,
 	SI_VS_NUM_USER_SGPR,
+
+	SI_SGPR_VS_BLIT_DATA = SI_SGPR_CONST_AND_SHADER_BUFFERS,
 
 	/* TES */
 	SI_SGPR_TES_OFFCHIP_LAYOUT = SI_NUM_RESOURCE_SGPRS,
@@ -263,6 +265,16 @@ enum {
 	TGSI_SEMANTIC_DEFAULT_TESSINNER_SI,
 };
 
+enum {
+	/* Use a property enum that VS wouldn't use. */
+	TGSI_PROPERTY_VS_BLIT_SGPRS = TGSI_PROPERTY_FS_COORD_ORIGIN,
+
+	/* These represent the number of SGPRs the shader uses. */
+	SI_VS_BLIT_SGPRS_POS = 3,
+	SI_VS_BLIT_SGPRS_POS_COLOR = 7,
+	SI_VS_BLIT_SGPRS_POS_TEXCOORD = 9,
+};
+
 /* For VS shader key fix_fetch. */
 enum {
 	SI_FIX_FETCH_NONE = 0,
@@ -332,6 +344,7 @@ struct si_shader_selector {
 	/* PIPE_SHADER_[VERTEX|FRAGMENT|...] */
 	unsigned	type;
 	bool		vs_needs_prolog;
+	bool		force_correct_derivs_after_kill;
 	unsigned	pa_cl_vs_out_cntl;
 	ubyte		clipdist_mask;
 	ubyte		culldist_mask;

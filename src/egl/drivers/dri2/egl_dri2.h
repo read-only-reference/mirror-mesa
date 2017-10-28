@@ -44,7 +44,7 @@
 
 #ifdef HAVE_WAYLAND_PLATFORM
 #include <wayland-client.h>
-#include "wayland-egl-priv.h"
+#include "wayland-egl-backend.h"
 /* forward declarations of protocol elements */
 struct zwp_linux_dmabuf_v1;
 #endif
@@ -78,15 +78,6 @@ struct zwp_linux_dmabuf_v1;
 #include "util/u_vector.h"
 
 struct wl_buffer;
-
-struct dri2_egl_driver
-{
-   _EGLDriver base;
-
-   void *handle;
-   _EGLProc (*get_proc_address)(const char *procname);
-   void (*glFlush)(void);
-};
 
 struct dri2_egl_display_vtbl {
    int (*authenticate)(_EGLDisplay *disp, uint32_t id);

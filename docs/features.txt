@@ -224,7 +224,7 @@ GL 4.5, GLSL 4.50 -- all DONE: nvc0, radeonsi
 GL 4.6, GLSL 4.60
 
   GL_ARB_gl_spirv                                       in progress (Nicolai Hähnle, Ian Romanick)
-  GL_ARB_indirect_parameters                            DONE (nvc0, radeonsi)
+  GL_ARB_indirect_parameters                            DONE (i965/gen7+, nvc0, radeonsi)
   GL_ARB_pipeline_statistics_query                      DONE (i965, nvc0, radeonsi, llvmpipe, softpipe, swr)
   GL_ARB_polygon_offset_clamp                           DONE (i965, nv50, nvc0, r600, radeonsi, llvmpipe, swr)
   GL_ARB_shader_atomic_counter_ops                      DONE (i965/gen7+, nvc0, radeonsi, softpipe)
@@ -233,7 +233,7 @@ GL 4.6, GLSL 4.60
   GL_ARB_spirv_extensions                               in progress (Nicolai Hähnle, Ian Romanick)
   GL_ARB_texture_filter_anisotropic                     DONE (i965, nv50, nvc0, r600, radeonsi, softpipe (*), llvmpipe (*))
   GL_ARB_transform_feedback_overflow_query              DONE (i965/gen6+, radeonsi, llvmpipe, softpipe)
-  GL_KHR_no_error                                       started (Timothy Arceri)
+  GL_KHR_no_error                                       DONE (all drivers)
 
 (*) softpipe and llvmpipe advertise 16x anisotropy but simply ignore the setting
 
@@ -313,13 +313,19 @@ Khronos, ARB, and OES extensions that are not part of any OpenGL or OpenGL ES ve
   GL_ARB_sparse_texture2                                not started
   GL_ARB_sparse_texture_clamp                           not started
   GL_ARB_texture_filter_minmax                          not started
+  GL_EXT_memory_object                                  DONE (radeonsi)
+  GL_EXT_memory_object_fd                               DONE (radeonsi)
+  GL_EXT_memory_object_win32                            not started
+  GL_EXT_semaphore                                      not started
+  GL_EXT_semaphore_fd                                   not started
+  GL_EXT_semaphore_win32                                not started
   GL_KHR_blend_equation_advanced_coherent               DONE (i965/gen9+)
   GL_KHR_texture_compression_astc_hdr                   DONE (i965/bxt)
   GL_KHR_texture_compression_astc_sliced_3d             DONE (i965/gen9+)
   GL_OES_depth_texture_cube_map                         DONE (all drivers that support GLSL 1.30+)
   GL_OES_EGL_image                                      DONE (all drivers)
   GL_OES_EGL_image_external_essl3                       not started
-  GL_OES_required_internalformat                        not started - GLES2 extension based on OpenGL ES 3.0 feature
+  GL_OES_required_internalformat                        DONE (all drivers)
   GL_OES_surfaceless_context                            DONE (all drivers)
   GL_OES_texture_compression_astc                       DONE (core only)
   GL_OES_texture_float                                  DONE (i965, r300, r600, radeonsi, nv30, nv50, nvc0, softpipe, llvmpipe)

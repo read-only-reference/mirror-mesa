@@ -101,6 +101,7 @@ libanv_files = files(
   'anv_nir_lower_input_attachments.c',
   'anv_nir_lower_multiview.c',
   'anv_nir_lower_push_constants.c',
+  'anv_nir_lower_ycbcr_textures.c',
   'anv_pass.c',
   'anv_pipeline.c',
   'anv_pipeline_cache.c',
@@ -135,7 +136,7 @@ libanv_common = static_library(
   include_directories : [inc_common, inc_intel, inc_compiler, inc_drm_uapi,
                          inc_vulkan_util, inc_vulkan_wsi],
   c_args : [c_vis_args, no_override_init_args, '-msse2', anv_flags],
-  dependencies : [dep_valgrind],
+  dependencies : [dep_valgrind, anv_deps, dep_libdrm],
 )
 
 libvulkan_intel = shared_library(

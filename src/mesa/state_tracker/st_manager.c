@@ -190,6 +190,8 @@ st_framebuffer_validate(struct st_framebuffer *stfb,
    if (stfb->iface_stamp == new_stamp)
       return;
 
+   memset(textures, 0, stfb->num_statts * sizeof(textures[0]));
+
    /* validate the fb */
    do {
       if (!stfb->iface->validate(&st->iface, stfb->iface, stfb->statts,
@@ -694,7 +696,7 @@ st_context_teximage(struct st_context_iface *stctxi,
    stObj = st_texture_object(texObj);
    /* switch to surface based */
    if (!stObj->surface_based) {
-      _mesa_clear_texture_object(ctx, texObj);
+      _mesa_clear_texture_object(ctx, texObj, NULL);
       stObj->surface_based = GL_TRUE;
    }
 
@@ -1166,7 +1168,7 @@ get_version(struct pipe_screen *screen,
    _mesa_init_extensions(&extensions);
 
    st_init_limits(screen, &consts, &extensions);
-   st_init_extensions(screen, &consts, &extensions, options, GL_TRUE);
+   st_init_extensions(screen, &consts, &extensions, options);
 
    return _mesa_get_version(&extensions, &consts, api);
 }

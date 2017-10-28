@@ -53,14 +53,27 @@ fs_visitor::nir_setup_outputs()
    if (stage == MESA_SHADER_TESS_CTRL || stage == MESA_SHADER_FRAGMENT)
       return;
 
+   unsigned vec4s[VARYING_SLOT_TESS_MAX] = { 0, };
+
+   /* Calculate the size of output registers in a separate pass, before
+    * allocating them.  With ARB_enhanced_layouts, multiple output variables
+    * may occupy the same slot, but have different type sizes.
+    */
    nir_foreach_variable(var, &nir->outputs) {
-      const unsigned vec4s =
+      const int loc = var->data.driver_location;
+      const unsigned var_vec4s =
          var->data.compact ? DIV_ROUND_UP(glsl_get_length(var->type), 4)
                            : type_size_vec4(var->type);
-      fs_reg reg = bld.vgrf(BRW_REGISTER_TYPE_F, 4 * vec4s);
-      for (unsigned i = 0; i < vec4s; i++) {
-         if (outputs[var->data.driver_location + i].file == BAD_FILE)
-            outputs[var->data.driver_location + i] = offset(reg, bld, 4 * i);
+      vec4s[loc] = MAX2(vec4s[loc], var_vec4s);
+   }
+
+   nir_foreach_variable(var, &nir->outputs) {
+      const int loc = var->data.driver_location;
+      if (outputs[loc].file == BAD_FILE) {
+         fs_reg reg = bld.vgrf(BRW_REGISTER_TYPE_F, 4 * vec4s[loc]);
+         for (unsigned i = 0; i < vec4s[loc]; i++) {
+            outputs[loc + i] = offset(reg, bld, 4 * i);
+         }
       }
    }
 }
@@ -214,6 +227,65 @@ fs_visitor::nir_emit_system_values()
    }
 }
 
+/*
+ * Returns a type based on a reference_type (word, float, half-float) and a
+ * given bit_size.
+ *
+ * Reference BRW_REGISTER_TYPE are HF,F,DF,W,D,UW,UD.
+ *
+ * @FIXME: 64-bit return types are always DF on integer types to maintain
+ * compability with uses of DF previously to the introduction of int64
+ * support.
+ */
+static brw_reg_type
+brw_reg_type_from_bit_size(const unsigned bit_size,
+                           const brw_reg_type reference_type)
+{
+   switch(reference_type) {
+   case BRW_REGISTER_TYPE_HF:
+   case BRW_REGISTER_TYPE_F:
+   case BRW_REGISTER_TYPE_DF:
+      switch(bit_size) {
+      case 16:
+         return BRW_REGISTER_TYPE_HF;
+      case 32:
+         return BRW_REGISTER_TYPE_F;
+      case 64:
+         return BRW_REGISTER_TYPE_DF;
+      default:
+         unreachable("Invalid bit size");
+      }
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_D:
+   case BRW_REGISTER_TYPE_Q:
+      switch(bit_size) {
+      case 16:
+         return BRW_REGISTER_TYPE_W;
+      case 32:
+         return BRW_REGISTER_TYPE_D;
+      case 64:
+         return BRW_REGISTER_TYPE_DF;
+      default:
+         unreachable("Invalid bit size");
+      }
+   case BRW_REGISTER_TYPE_UW:
+   case BRW_REGISTER_TYPE_UD:
+   case BRW_REGISTER_TYPE_UQ:
+      switch(bit_size) {
+      case 16:
+         return BRW_REGISTER_TYPE_UW;
+      case 32:
+         return BRW_REGISTER_TYPE_UD;
+      case 64:
+         return BRW_REGISTER_TYPE_DF;
+      default:
+         unreachable("Invalid bit size");
+      }
+   default:
+      unreachable("Unknown type");
+   }
+}
+
 void
 fs_visitor::nir_emit_impl(nir_function_impl *impl)
 {
@@ -227,7 +299,7 @@ fs_visitor::nir_emit_impl(nir_function_impl *impl)
          reg->num_array_elems == 0 ? 1 : reg->num_array_elems;
       unsigned size = array_elems * reg->num_components;
       const brw_reg_type reg_type =
-         reg->bit_size == 32 ? BRW_REGISTER_TYPE_F : BRW_REGISTER_TYPE_DF;
+         brw_reg_type_from_bit_size(reg->bit_size, BRW_REGISTER_TYPE_F);
       nir_locals[reg->index] = bld.vgrf(reg_type, size);
    }
 
@@ -693,53 +765,21 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
           *
           * - 2-src instructions can't operate with 64-bit immediates
           * - The sign is encoded in the high 32-bit of each DF
-          * - CMP with DF requires special handling in SIMD16
           * - We need to produce a DF result.
           */
 
-         /* 2-src instructions can't have 64-bit immediates, so put 0.0 in
-          * a register and compare with that.
-          */
-         fs_reg tmp = vgrf(glsl_type::double_type);
-         bld.MOV(tmp, setup_imm_df(bld, 0.0));
+         fs_reg zero = vgrf(glsl_type::double_type);
+         bld.MOV(zero, setup_imm_df(bld, 0.0));
+         bld.CMP(bld.null_reg_df(), op[0], zero, BRW_CONDITIONAL_NZ);
 
-         /* A direct DF CMP using the flag register (null dst) won't work in
-          * SIMD16 because the CMP will be split in two by lower_simd_width,
-          * resulting in two CMP instructions with the same dst (NULL),
-          * leading to dead code elimination of the first one. In SIMD8,
-          * however, there is no need to split the CMP and we can save some
-          * work.
-          */
-         fs_reg dst_tmp = vgrf(glsl_type::double_type);
-         bld.CMP(dst_tmp, op[0], tmp, BRW_CONDITIONAL_NZ);
+         bld.MOV(result, zero);
 
-         /* In SIMD16 we want to avoid using a NULL dst register with DF CMP,
-          * so we store the result of the comparison in a vgrf instead and
-          * then we generate a UD comparison from that that won't have to
-          * be split by lower_simd_width. This is what NIR does to handle
-          * double comparisons in the general case.
-          */
-         if (bld.dispatch_width() == 16 ) {
-            fs_reg dst_tmp_ud = retype(dst_tmp, BRW_REGISTER_TYPE_UD);
-            bld.MOV(dst_tmp_ud, subscript(dst_tmp, BRW_REGISTER_TYPE_UD, 0));
-            bld.CMP(bld.null_reg_ud(),
-                    dst_tmp_ud, brw_imm_ud(0), BRW_CONDITIONAL_NZ);
-         }
+         fs_reg r = subscript(result, BRW_REGISTER_TYPE_UD, 1);
+         bld.AND(r, subscript(op[0], BRW_REGISTER_TYPE_UD, 1),
+                 brw_imm_ud(0x80000000u));
 
-         /* Get the high 32-bit of each double component where the sign is */
-         fs_reg result_int = retype(result, BRW_REGISTER_TYPE_UD);
-         bld.MOV(result_int, subscript(op[0], BRW_REGISTER_TYPE_UD, 1));
-
-         /* Get the sign bit */
-         bld.AND(result_int, result_int, brw_imm_ud(0x80000000u));
-
-         /* Add 1.0 to the sign, predicated to skip the case of op[0] == 0.0 */
-         inst = bld.OR(result_int, result_int, brw_imm_ud(0x3f800000u));
-         inst->predicate = BRW_PREDICATE_NORMAL;
-
-         /* Convert from 32-bit float to 64-bit double */
-         result.type = BRW_REGISTER_TYPE_DF;
-         inst = bld.MOV(result, retype(result_int, BRW_REGISTER_TYPE_F));
+         set_predicate(BRW_PREDICATE_NORMAL,
+                       bld.OR(r, r, brw_imm_ud(0x3ff00000u)));
 
          if (instr->dest.saturate) {
             inst = bld.MOV(result, result);
@@ -1267,14 +1307,36 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       unreachable("not reached: should have been lowered");
 
    case nir_op_ishl:
-      bld.SHL(result, op[0], op[1]);
-      break;
    case nir_op_ishr:
-      bld.ASR(result, op[0], op[1]);
+   case nir_op_ushr: {
+      fs_reg shift_count = op[1];
+
+      if (devinfo->is_cherryview || gen_device_info_is_9lp(devinfo)) {
+         if (op[1].file == VGRF &&
+             (result.type == BRW_REGISTER_TYPE_Q ||
+              result.type == BRW_REGISTER_TYPE_UQ)) {
+            shift_count = fs_reg(VGRF, alloc.allocate(dispatch_width / 4),
+                                 BRW_REGISTER_TYPE_UD);
+            shift_count.stride = 2;
+            bld.MOV(shift_count, op[1]);
+         }
+      }
+
+      switch (instr->op) {
+      case nir_op_ishl:
+         bld.SHL(result, op[0], shift_count);
+         break;
+      case nir_op_ishr:
+         bld.ASR(result, op[0], shift_count);
+         break;
+      case nir_op_ushr:
+         bld.SHR(result, op[0], shift_count);
+         break;
+      default:
+         unreachable("not reached");
+      }
       break;
-   case nir_op_ushr:
-      bld.SHR(result, op[0], op[1]);
-      break;
+   }
 
    case nir_op_pack_half_2x16_split:
       bld.emit(FS_OPCODE_PACK_HALF_2x16_SPLIT, result, op[0], op[1]);
@@ -1338,7 +1400,7 @@ fs_visitor::nir_emit_load_const(const fs_builder &bld,
                                 nir_load_const_instr *instr)
 {
    const brw_reg_type reg_type =
-      instr->def.bit_size == 32 ? BRW_REGISTER_TYPE_D : BRW_REGISTER_TYPE_DF;
+      brw_reg_type_from_bit_size(instr->def.bit_size, BRW_REGISTER_TYPE_D);
    fs_reg reg = bld.vgrf(reg_type, instr->def.num_components);
 
    switch (instr->def.bit_size) {
@@ -1366,8 +1428,8 @@ fs_visitor::get_nir_src(const nir_src &src)
    fs_reg reg;
    if (src.is_ssa) {
       if (src.ssa->parent_instr->type == nir_instr_type_ssa_undef) {
-         const brw_reg_type reg_type = src.ssa->bit_size == 32 ?
-            BRW_REGISTER_TYPE_D : BRW_REGISTER_TYPE_DF;
+         const brw_reg_type reg_type =
+            brw_reg_type_from_bit_size(src.ssa->bit_size, BRW_REGISTER_TYPE_D);
          reg = bld.vgrf(reg_type, src.ssa->num_components);
       } else {
          reg = nir_ssa_values[src.ssa->index];
@@ -1401,7 +1463,7 @@ fs_visitor::get_nir_dest(const nir_dest &dest)
 {
    if (dest.is_ssa) {
       const brw_reg_type reg_type =
-         dest.ssa.bit_size == 32 ? BRW_REGISTER_TYPE_F : BRW_REGISTER_TYPE_DF;
+         brw_reg_type_from_bit_size(dest.ssa.bit_size, BRW_REGISTER_TYPE_F);
       nir_ssa_values[dest.ssa.index] =
          bld.vgrf(reg_type, dest.ssa.num_components);
       return nir_ssa_values[dest.ssa.index];
@@ -2675,17 +2737,22 @@ fs_visitor::nir_emit_tes_intrinsic(const fs_builder &bld,
          /* Arbitrarily only push up to 32 vec4 slots worth of data,
           * which is 16 registers (since each holds 2 vec4 slots).
           */
+         unsigned slot_count = 1;
+         if (type_sz(dest.type) == 8 && instr->num_components > 2)
+            slot_count++;
+
          const unsigned max_push_slots = 32;
-         if (imm_offset < max_push_slots) {
+         if (imm_offset + slot_count <= max_push_slots) {
             fs_reg src = fs_reg(ATTR, imm_offset / 2, dest.type);
             for (int i = 0; i < instr->num_components; i++) {
                unsigned comp = 16 / type_sz(dest.type) * (imm_offset % 2) +
                   i + first_component;
                bld.MOV(offset(dest, bld, i), component(src, comp));
             }
+
             tes_prog_data->base.urb_read_length =
                MAX2(tes_prog_data->base.urb_read_length,
-                    DIV_ROUND_UP(imm_offset + 1, 2));
+                    DIV_ROUND_UP(imm_offset + slot_count, 2));
          } else {
             /* Replicate the patch handle to all enabled channels */
             const fs_reg srcs[] = {
@@ -3450,9 +3517,7 @@ fs_visitor::nir_emit_cs_intrinsic(const fs_builder &bld,
        * expected by our 32-bit write messages.
        */
       unsigned type_size = 4;
-      unsigned bit_size = instr->src[0].is_ssa ?
-         instr->src[0].ssa->bit_size : instr->src[0].reg.reg->bit_size;
-      if (bit_size == 64) {
+      if (nir_src_bit_size(instr->src[0]) == 64) {
          type_size = 8;
          fs_reg tmp =
            fs_reg(VGRF, alloc.allocate(alloc.sizes[val_reg.nr]), val_reg.type);
@@ -3957,9 +4022,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
        * expected by our 32-bit write messages.
        */
       unsigned type_size = 4;
-      unsigned bit_size = instr->src[0].is_ssa ?
-         instr->src[0].ssa->bit_size : instr->src[0].reg.reg->bit_size;
-      if (bit_size == 64) {
+      if (nir_src_bit_size(instr->src[0]) == 64) {
          type_size = 8;
          fs_reg tmp =
            fs_reg(VGRF, alloc.allocate(alloc.sizes[val_reg.nr]), val_reg.type);
@@ -4024,9 +4087,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
       unsigned num_components = instr->num_components;
       unsigned first_component = nir_intrinsic_component(instr);
-      unsigned bit_size = instr->src[0].is_ssa ?
-         instr->src[0].ssa->bit_size : instr->src[0].reg.reg->bit_size;
-      if (bit_size == 64) {
+      if (nir_src_bit_size(instr->src[0]) == 64) {
          fs_reg tmp =
             fs_reg(VGRF, alloc.allocate(2 * num_components),
                    BRW_REGISTER_TYPE_F);
@@ -4526,15 +4587,6 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
    }
    default:
       unreachable("unknown texture opcode");
-   }
-
-   /* TXS and TXL require a LOD but not everything we implement using those
-    * two opcodes provides one.  Provide a default LOD of 0.
-    */
-   if ((opcode == SHADER_OPCODE_TXS_LOGICAL ||
-        opcode == SHADER_OPCODE_TXL_LOGICAL) &&
-       srcs[TEX_LOGICAL_SRC_LOD].file == BAD_FILE) {
-      srcs[TEX_LOGICAL_SRC_LOD] = brw_imm_ud(0u);
    }
 
    if (instr->op == nir_texop_tg4) {

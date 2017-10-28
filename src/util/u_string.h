@@ -38,8 +38,10 @@
 #if !defined(XF86_LIBC_H)
 #include <stdio.h>
 #endif
+#include <stdlib.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <string.h>
 
 #include "util/macros.h" // PRINTFLIKE
 
@@ -201,6 +203,7 @@ util_strstr(const char *haystack, const char *needle)
 
 
 #define util_strcasecmp stricmp
+#define util_strdup _strdup
 
 #else
 
@@ -215,6 +218,7 @@ util_strstr(const char *haystack, const char *needle)
 #define util_strncat strncat
 #define util_strstr strstr
 #define util_strcasecmp strcasecmp
+#define util_strdup strdup
 
 #endif
 

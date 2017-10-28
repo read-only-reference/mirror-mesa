@@ -54,14 +54,12 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
-	util_blitter_save_vertex_buffer_slot(sctx->blitter, sctx->vertex_buffer);
-	util_blitter_save_vertex_elements(sctx->blitter, sctx->vertex_elements);
 	util_blitter_save_vertex_shader(sctx->blitter, sctx->vs_shader.cso);
 	util_blitter_save_tessctrl_shader(sctx->blitter, sctx->tcs_shader.cso);
 	util_blitter_save_tesseval_shader(sctx->blitter, sctx->tes_shader.cso);
 	util_blitter_save_geometry_shader(sctx->blitter, sctx->gs_shader.cso);
-	util_blitter_save_so_targets(sctx->blitter, sctx->b.streamout.num_targets,
-				     (struct pipe_stream_output_target**)sctx->b.streamout.targets);
+	util_blitter_save_so_targets(sctx->blitter, sctx->streamout.num_targets,
+				     (struct pipe_stream_output_target**)sctx->streamout.targets);
 	util_blitter_save_rasterizer(sctx->blitter, sctx->queued.named.rasterizer);
 
 	if (op & SI_SAVE_FRAGMENT_STATE) {
@@ -70,8 +68,7 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 		util_blitter_save_stencil_ref(sctx->blitter, &sctx->stencil_ref.state);
 		util_blitter_save_fragment_shader(sctx->blitter, sctx->ps_shader.cso);
 		util_blitter_save_sample_mask(sctx->blitter, sctx->sample_mask.sample_mask);
-		util_blitter_save_viewport(sctx->blitter, &sctx->b.viewports.states[0]);
-		util_blitter_save_scissor(sctx->blitter, &sctx->b.scissors.states[0]);
+		util_blitter_save_scissor(sctx->blitter, &sctx->scissors.states[0]);
 	}
 
 	if (op & SI_SAVE_FRAMEBUFFER)
@@ -80,10 +77,10 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 	if (op & SI_SAVE_TEXTURES) {
 		util_blitter_save_fragment_sampler_states(
 			sctx->blitter, 2,
-			(void**)sctx->samplers[PIPE_SHADER_FRAGMENT].views.sampler_states);
+			(void**)sctx->samplers[PIPE_SHADER_FRAGMENT].sampler_states);
 
 		util_blitter_save_fragment_sampler_views(sctx->blitter, 2,
-			sctx->samplers[PIPE_SHADER_FRAGMENT].views.views);
+			sctx->samplers[PIPE_SHADER_FRAGMENT].views);
 	}
 
 	if (op & SI_DISABLE_RENDER_COND)
@@ -95,6 +92,12 @@ static void si_blitter_end(struct pipe_context *ctx)
 	struct si_context *sctx = (struct si_context *)ctx;
 
 	sctx->b.render_cond_force_off = false;
+
+	/* Restore shader pointers because the VS blit shader changed all
+	 * non-global VS user SGPRs. */
+	sctx->shader_pointers_dirty |= SI_DESCS_SHADER_MASK(VERTEX);
+	sctx->vertex_buffer_pointer_dirty = true;
+	si_mark_atom_dirty(sctx, &sctx->shader_pointers.atom);
 }
 
 static unsigned u_max_sample(struct pipe_resource *r)
@@ -421,7 +424,7 @@ si_decompress_depth(struct si_context *sctx,
 
 static void
 si_decompress_sampler_depth_textures(struct si_context *sctx,
-				     struct si_textures_info *textures)
+				     struct si_samplers *textures)
 {
 	unsigned i;
 	unsigned mask = textures->needs_depth_decompress_mask;
@@ -433,7 +436,7 @@ si_decompress_sampler_depth_textures(struct si_context *sctx,
 
 		i = u_bit_scan(&mask);
 
-		view = textures->views.views[i];
+		view = textures->views[i];
 		assert(view);
 		sview = (struct si_sampler_view*)view;
 
@@ -548,7 +551,7 @@ si_decompress_color_texture(struct si_context *sctx, struct r600_texture *tex,
 
 static void
 si_decompress_sampler_color_textures(struct si_context *sctx,
-				     struct si_textures_info *textures)
+				     struct si_samplers *textures)
 {
 	unsigned i;
 	unsigned mask = textures->needs_color_decompress_mask;
@@ -559,7 +562,7 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 
 		i = u_bit_scan(&mask);
 
-		view = textures->views.views[i];
+		view = textures->views[i];
 		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
@@ -571,7 +574,7 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 
 static void
 si_decompress_image_color_textures(struct si_context *sctx,
-				   struct si_images_info *images)
+				   struct si_images *images)
 {
 	unsigned i;
 	unsigned mask = images->needs_color_decompress_mask;
@@ -627,9 +630,9 @@ static void si_check_render_feedback_texture(struct si_context *sctx,
 }
 
 static void si_check_render_feedback_textures(struct si_context *sctx,
-                                              struct si_textures_info *textures)
+                                              struct si_samplers *textures)
 {
-	uint32_t mask = textures->views.enabled_mask;
+	uint32_t mask = textures->enabled_mask;
 
 	while (mask) {
 		const struct pipe_sampler_view *view;
@@ -637,7 +640,7 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 
 		unsigned i = u_bit_scan(&mask);
 
-		view = textures->views.views[i];
+		view = textures->views[i];
 		if(view->texture->target == PIPE_BUFFER)
 			continue;
 
@@ -652,7 +655,7 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 }
 
 static void si_check_render_feedback_images(struct si_context *sctx,
-                                            struct si_images_info *images)
+                                            struct si_images *images)
 {
 	uint32_t mask = images->enabled_mask;
 
@@ -771,7 +774,7 @@ static void si_decompress_resident_images(struct si_context *sctx)
 	}
 }
 
-static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
+void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
 {
 	unsigned compressed_colortex_counter, mask;
 
@@ -814,16 +817,6 @@ static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask
 	}
 
 	si_check_render_feedback(sctx);
-}
-
-void si_decompress_graphics_textures(struct si_context *sctx)
-{
-	si_decompress_textures(sctx, u_bit_consecutive(0, SI_NUM_GRAPHICS_SHADERS));
-}
-
-void si_decompress_compute_textures(struct si_context *sctx)
-{
-	si_decompress_textures(sctx, 1 << PIPE_SHADER_COMPUTE);
 }
 
 static void si_clear(struct pipe_context *ctx, unsigned buffers,
@@ -902,6 +895,21 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 			si_mark_atom_dirty(sctx, &sctx->framebuffer.atom); /* updates DB_STENCIL_CLEAR */
 			sctx->db_stencil_clear = true;
 			si_mark_atom_dirty(sctx, &sctx->db_render_state);
+		}
+
+		/* TODO: Find out what's wrong here. Fast depth clear leads to
+		 * corruption in ARK: Survival Evolved, but that may just be
+		 * a coincidence and the root cause is elsewhere.
+		 *
+		 * The corruption can be fixed by putting the DB flush before
+		 * or after the depth clear. (surprisingly)
+		 *
+		 * https://bugs.freedesktop.org/show_bug.cgi?id=102955 (apitrace)
+		 *
+		 * This hack decreases back-to-back ClearDepth performance.
+		 */
+		if (sctx->screen->clear_db_cache_before_clear) {
+			sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB;
 		}
 	}
 
@@ -1391,7 +1399,7 @@ static void si_blit(struct pipe_context *ctx,
 				  info->src.box.z,
 				  info->src.box.z + info->src.box.depth - 1);
 
-	if (sctx->screen->b.debug_flags & DBG_FORCE_DMA &&
+	if (sctx->screen->b.debug_flags & DBG(FORCE_DMA) &&
 	    util_try_blit_via_copy_region(ctx, info))
 		return;
 

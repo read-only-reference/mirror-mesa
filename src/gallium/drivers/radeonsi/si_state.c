@@ -209,10 +209,10 @@ static void si_emit_cb_render_state(struct si_context *sctx, struct r600_atom *a
 				break;
 
 			case V_028C70_COLOR_32:
-				if (swap == V_0280A0_SWAP_STD &&
+				if (swap == V_028C70_SWAP_STD &&
 				    spi_format == V_028714_SPI_SHADER_32_R)
 					sx_ps_downconvert |= V_028754_SX_RT_EXPORT_32_R << (i * 4);
-				else if (swap == V_0280A0_SWAP_ALT_REV &&
+				else if (swap == V_028C70_SWAP_ALT_REV &&
 					 spi_format == V_028714_SPI_SHADER_32_AR)
 					sx_ps_downconvert |= V_028754_SX_RT_EXPORT_32_A << (i * 4);
 				break;
@@ -224,8 +224,8 @@ static void si_emit_cb_render_state(struct si_context *sctx, struct r600_atom *a
 				    spi_format == V_028714_SPI_SHADER_SNORM16_ABGR ||
 				    spi_format == V_028714_SPI_SHADER_UINT16_ABGR ||
 				    spi_format == V_028714_SPI_SHADER_SINT16_ABGR) {
-					if (swap == V_0280A0_SWAP_STD ||
-					    swap == V_0280A0_SWAP_STD_REV)
+					if (swap == V_028C70_SWAP_STD ||
+					    swap == V_028C70_SWAP_STD_REV)
 						sx_ps_downconvert |= V_028754_SX_RT_EXPORT_16_16_GR << (i * 4);
 					else
 						sx_ps_downconvert |= V_028754_SX_RT_EXPORT_16_16_AR << (i * 4);
@@ -858,6 +858,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	rs->line_stipple_enable = state->line_stipple_enable;
 	rs->poly_stipple_enable = state->poly_stipple_enable;
 	rs->line_smooth = state->line_smooth;
+	rs->line_width = state->line_width;
 	rs->poly_smooth = state->poly_smooth;
 	rs->uses_poly_offset = state->offset_point || state->offset_line ||
 			       state->offset_tri;
@@ -897,13 +898,15 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 		psize_min = state->point_size;
 		psize_max = state->point_size;
 	}
+	rs->max_point_size = psize_max;
+
 	/* Divide by two, because 0.5 = 1 pixel. */
 	si_pm4_set_reg(pm4, R_028A04_PA_SU_POINT_MINMAX,
 			S_028A04_MIN_SIZE(si_pack_float_12p4(psize_min/2)) |
 			S_028A04_MAX_SIZE(si_pack_float_12p4(psize_max/2)));
 
-	tmp = (unsigned)state->line_width * 8;
-	si_pm4_set_reg(pm4, R_028A08_PA_SU_LINE_CNTL, S_028A08_WIDTH(tmp));
+	si_pm4_set_reg(pm4, R_028A08_PA_SU_LINE_CNTL,
+		       S_028A08_WIDTH(si_pack_float_12p4(state->line_width/2)));
 	si_pm4_set_reg(pm4, R_028A48_PA_SC_MODE_CNTL_0,
 		       S_028A48_LINE_STIPPLE_ENABLE(state->line_stipple_enable) |
 		       S_028A48_MSAA_ENABLE(state->multisample ||
@@ -1003,10 +1006,22 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	sctx->current_vs_state &= C_VS_STATE_CLAMP_VERTEX_COLOR;
 	sctx->current_vs_state |= S_VS_STATE_CLAMP_VERTEX_COLOR(rs->clamp_vertex_color);
 
-	si_viewport_set_rast_deps(&sctx->b, rs->scissor_enable, rs->clip_halfz);
-
 	si_pm4_bind_state(sctx, rasterizer, rs);
 	si_update_poly_offset_state(sctx);
+
+	if (!old_rs ||
+	    (old_rs->scissor_enable != rs->scissor_enable ||
+	     old_rs->line_width != rs->line_width ||
+	     old_rs->max_point_size != rs->max_point_size)) {
+		sctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+		si_mark_atom_dirty(sctx, &sctx->scissors.atom);
+	}
+
+	if (!old_rs ||
+	    old_rs->clip_halfz != rs->clip_halfz) {
+		sctx->viewports.depth_range_dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+		si_mark_atom_dirty(sctx, &sctx->viewports.atom);
+	}
 
 	if (!old_rs ||
 	    old_rs->clip_plane_enable != rs->clip_plane_enable ||
@@ -1491,6 +1506,8 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 			}
 		} else if (HAS_SIZE(5,5,5,1)) {
 			return V_028C70_COLOR_1_5_5_5;
+		} else if (HAS_SIZE(1,5,5,5)) {
+			return V_028C70_COLOR_5_5_5_1;
 		} else if (HAS_SIZE(10,10,10,2)) {
 			return V_028C70_COLOR_2_10_10_10;
 		}
@@ -1697,10 +1714,6 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 		if (!enable_compressed_formats)
 			goto out_unknown;
 
-		if (!util_format_s3tc_enabled) {
-			goto out_unknown;
-		}
-
 		switch (format) {
 		case PIPE_FORMAT_DXT1_RGB:
 		case PIPE_FORMAT_DXT1_RGBA:
@@ -1752,6 +1765,12 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 			    desc->channel[2].size == 5 &&
 			    desc->channel[3].size == 1) {
 				return V_008F14_IMG_DATA_FORMAT_1_5_5_5;
+			}
+			if (desc->channel[0].size == 1 &&
+			    desc->channel[1].size == 5 &&
+			    desc->channel[2].size == 5 &&
+			    desc->channel[3].size == 5) {
+				return V_008F14_IMG_DATA_FORMAT_5_5_5_1;
 			}
 			if (desc->channel[0].size == 10 &&
 			    desc->channel[1].size == 10 &&
@@ -2636,21 +2655,17 @@ void si_update_fb_dirtiness_after_rendering(struct si_context *sctx)
 		if (rtex->surface.has_stencil)
 			rtex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;
 	}
-	if (sctx->framebuffer.compressed_cb_mask) {
-		struct pipe_surface *surf;
-		struct r600_texture *rtex;
-		unsigned mask = sctx->framebuffer.compressed_cb_mask;
 
-		do {
-			unsigned i = u_bit_scan(&mask);
-			surf = sctx->framebuffer.state.cbufs[i];
-			rtex = (struct r600_texture*)surf->texture;
+	unsigned compressed_cb_mask = sctx->framebuffer.compressed_cb_mask;
+	while (compressed_cb_mask) {
+		unsigned i = u_bit_scan(&compressed_cb_mask);
+		struct pipe_surface *surf = sctx->framebuffer.state.cbufs[i];
+		struct r600_texture *rtex = (struct r600_texture*)surf->texture;
 
-			if (rtex->fmask.size)
-				rtex->dirty_level_mask |= 1 << surf->u.tex.level;
-			if (rtex->dcc_gather_statistics)
-				rtex->separate_dcc_dirty = true;
-		} while (mask);
+		if (rtex->fmask.size)
+			rtex->dirty_level_mask |= 1 << surf->u.tex.level;
+		if (rtex->dcc_gather_statistics)
+			rtex->separate_dcc_dirty = true;
 	}
 }
 
@@ -2879,19 +2894,19 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 		/* Set sample locations as fragment shader constants. */
 		switch (sctx->framebuffer.nr_samples) {
 		case 1:
-			constbuf.user_buffer = sctx->b.sample_locations_1x;
+			constbuf.user_buffer = sctx->sample_locations_1x;
 			break;
 		case 2:
-			constbuf.user_buffer = sctx->b.sample_locations_2x;
+			constbuf.user_buffer = sctx->sample_locations_2x;
 			break;
 		case 4:
-			constbuf.user_buffer = sctx->b.sample_locations_4x;
+			constbuf.user_buffer = sctx->sample_locations_4x;
 			break;
 		case 8:
-			constbuf.user_buffer = sctx->b.sample_locations_8x;
+			constbuf.user_buffer = sctx->sample_locations_8x;
 			break;
 		case 16:
-			constbuf.user_buffer = sctx->b.sample_locations_16x;
+			constbuf.user_buffer = sctx->sample_locations_16x;
 			break;
 		default:
 			R600_ERR("Requested an invalid number of samples %i.\n",
@@ -3184,7 +3199,7 @@ static void si_emit_msaa_sample_locs(struct si_context *sctx,
 
 	if (nr_samples != sctx->msaa_sample_locs.nr_samples) {
 		sctx->msaa_sample_locs.nr_samples = nr_samples;
-		si_common_emit_msaa_sample_locs(cs, nr_samples);
+		si_emit_sample_locations(cs, nr_samples);
 	}
 
 	if (sctx->b.family >= CHIP_POLARIS10) {
@@ -3296,10 +3311,68 @@ static void si_emit_msaa_config(struct si_context *sctx, struct r600_atom *atom)
 		S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1) |
 		S_028A4C_FORCE_EOV_REZ_ENABLE(1);
 
-	si_common_emit_msaa_config(cs, sctx->framebuffer.nr_samples,
-				sctx->ps_iter_samples,
-				sctx->smoothing_enabled ? SI_NUM_SMOOTH_AA_SAMPLES : 0,
-				sc_mode_cntl_1);
+	int setup_samples = sctx->framebuffer.nr_samples > 1 ? sctx->framebuffer.nr_samples :
+			    sctx->smoothing_enabled ? SI_NUM_SMOOTH_AA_SAMPLES : 0;
+
+	/* Required by OpenGL line rasterization.
+	 *
+	 * TODO: We should also enable perpendicular endcaps for AA lines,
+	 *       but that requires implementing line stippling in the pixel
+	 *       shader. SC can only do line stippling with axis-aligned
+	 *       endcaps.
+	 */
+	unsigned sc_line_cntl = S_028BDC_DX10_DIAMOND_TEST_ENA(1);
+
+	if (setup_samples > 1) {
+		/* distance from the pixel center, indexed by log2(nr_samples) */
+		static unsigned max_dist[] = {
+			0, /* unused */
+			4, /* 2x MSAA */
+			6, /* 4x MSAA */
+			7, /* 8x MSAA */
+			8, /* 16x MSAA */
+		};
+		unsigned log_samples = util_logbase2(setup_samples);
+		unsigned log_ps_iter_samples =
+			util_logbase2(util_next_power_of_two(sctx->ps_iter_samples));
+
+		radeon_set_context_reg_seq(cs, R_028BDC_PA_SC_LINE_CNTL, 2);
+		radeon_emit(cs, sc_line_cntl |
+			    S_028BDC_EXPAND_LINE_WIDTH(1)); /* CM_R_028BDC_PA_SC_LINE_CNTL */
+		radeon_emit(cs, S_028BE0_MSAA_NUM_SAMPLES(log_samples) |
+			    S_028BE0_MAX_SAMPLE_DIST(max_dist[log_samples]) |
+			    S_028BE0_MSAA_EXPOSED_SAMPLES(log_samples)); /* CM_R_028BE0_PA_SC_AA_CONFIG */
+
+		if (sctx->framebuffer.nr_samples > 1) {
+			radeon_set_context_reg(cs, R_028804_DB_EQAA,
+					       S_028804_MAX_ANCHOR_SAMPLES(log_samples) |
+					       S_028804_PS_ITER_SAMPLES(log_ps_iter_samples) |
+					       S_028804_MASK_EXPORT_NUM_SAMPLES(log_samples) |
+					       S_028804_ALPHA_TO_MASK_NUM_SAMPLES(log_samples) |
+					       S_028804_HIGH_QUALITY_INTERSECTIONS(1) |
+					       S_028804_STATIC_ANCHOR_ASSOCIATIONS(1));
+			radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
+					       S_028A4C_PS_ITER_SAMPLE(sctx->ps_iter_samples > 1) |
+					       sc_mode_cntl_1);
+		} else if (sctx->smoothing_enabled) {
+			radeon_set_context_reg(cs, R_028804_DB_EQAA,
+					       S_028804_HIGH_QUALITY_INTERSECTIONS(1) |
+					       S_028804_STATIC_ANCHOR_ASSOCIATIONS(1) |
+					       S_028804_OVERRASTERIZATION_AMOUNT(log_samples));
+			radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
+					       sc_mode_cntl_1);
+		}
+	} else {
+		radeon_set_context_reg_seq(cs, R_028BDC_PA_SC_LINE_CNTL, 2);
+		radeon_emit(cs, sc_line_cntl); /* CM_R_028BDC_PA_SC_LINE_CNTL */
+		radeon_emit(cs, 0); /* CM_R_028BE0_PA_SC_AA_CONFIG */
+
+		radeon_set_context_reg(cs, R_028804_DB_EQAA,
+				       S_028804_HIGH_QUALITY_INTERSECTIONS(1) |
+				       S_028804_STATIC_ANCHOR_ASSOCIATIONS(1));
+		radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
+				       sc_mode_cntl_1);
+	}
 
 	/* GFX9: Flush DFSM when the AA mode changes. */
 	if (sctx->screen->dfsm_allowed) {
@@ -4400,10 +4473,10 @@ static void si_init_config(struct si_context *sctx);
 void si_init_state_functions(struct si_context *sctx)
 {
 	si_init_external_atom(sctx, &sctx->b.render_cond_atom, &sctx->atoms.s.render_cond);
-	si_init_external_atom(sctx, &sctx->b.streamout.begin_atom, &sctx->atoms.s.streamout_begin);
-	si_init_external_atom(sctx, &sctx->b.streamout.enable_atom, &sctx->atoms.s.streamout_enable);
-	si_init_external_atom(sctx, &sctx->b.scissors.atom, &sctx->atoms.s.scissors);
-	si_init_external_atom(sctx, &sctx->b.viewports.atom, &sctx->atoms.s.viewports);
+	si_init_external_atom(sctx, &sctx->streamout.begin_atom, &sctx->atoms.s.streamout_begin);
+	si_init_external_atom(sctx, &sctx->streamout.enable_atom, &sctx->atoms.s.streamout_enable);
+	si_init_external_atom(sctx, &sctx->scissors.atom, &sctx->atoms.s.scissors);
+	si_init_external_atom(sctx, &sctx->viewports.atom, &sctx->atoms.s.viewports);
 
 	si_init_atom(sctx, &sctx->framebuffer.atom, &sctx->atoms.s.framebuffer, si_emit_framebuffer_state);
 	si_init_atom(sctx, &sctx->msaa_sample_locs.atom, &sctx->atoms.s.msaa_sample_locs, si_emit_msaa_sample_locs);
@@ -4440,7 +4513,6 @@ void si_init_state_functions(struct si_context *sctx)
 	sctx->b.b.set_stencil_ref = si_set_stencil_ref;
 
 	sctx->b.b.set_framebuffer_state = si_set_framebuffer_state;
-	sctx->b.b.get_sample_position = si_get_sample_position;
 
 	sctx->b.b.create_sampler_state = si_create_sampler_state;
 	sctx->b.b.delete_sampler_state = si_delete_sampler_state;
@@ -4922,11 +4994,15 @@ static void si_init_config(struct si_context *sctx)
 
 	if (sctx->b.chip_class >= CIK) {
 		if (sctx->b.chip_class >= GFX9) {
-			si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS, S_00B41C_CU_EN(0xffff));
+			si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS,
+				       S_00B41C_CU_EN(0xffff) | S_00B41C_WAVE_LIMIT(0x3F));
 		} else {
-			si_pm4_set_reg(pm4, R_00B51C_SPI_SHADER_PGM_RSRC3_LS, S_00B51C_CU_EN(0xffff));
-			si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS, 0);
-			si_pm4_set_reg(pm4, R_00B31C_SPI_SHADER_PGM_RSRC3_ES, S_00B31C_CU_EN(0xffff));
+			si_pm4_set_reg(pm4, R_00B51C_SPI_SHADER_PGM_RSRC3_LS,
+				       S_00B51C_CU_EN(0xffff) | S_00B51C_WAVE_LIMIT(0x3F));
+			si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS,
+				       S_00B41C_WAVE_LIMIT(0x3F));
+			si_pm4_set_reg(pm4, R_00B31C_SPI_SHADER_PGM_RSRC3_ES,
+				       S_00B31C_CU_EN(0xffff) | S_00B31C_WAVE_LIMIT(0x3F));
 
 			/* If this is 0, Bonaire can hang even if GS isn't being used.
 			 * Other chips are unaffected. These are suboptimal values,
@@ -4936,7 +5012,8 @@ static void si_init_config(struct si_context *sctx)
 				       S_028A44_ES_VERTS_PER_SUBGRP(64) |
 				       S_028A44_GS_PRIMS_PER_SUBGRP(4));
 		}
-		si_pm4_set_reg(pm4, R_00B21C_SPI_SHADER_PGM_RSRC3_GS, S_00B21C_CU_EN(0xffff));
+		si_pm4_set_reg(pm4, R_00B21C_SPI_SHADER_PGM_RSRC3_GS,
+			       S_00B21C_CU_EN(0xffff) | S_00B21C_WAVE_LIMIT(0x3F));
 
 		/* Compute LATE_ALLOC_VS.LIMIT. */
 		unsigned num_cu_per_sh = sscreen->b.info.num_good_compute_units /
@@ -4968,10 +5045,12 @@ static void si_init_config(struct si_context *sctx)
 
 		/* VS can't execute on one CU if the limit is > 2. */
 		si_pm4_set_reg(pm4, R_00B118_SPI_SHADER_PGM_RSRC3_VS,
-			       S_00B118_CU_EN(late_alloc_limit > 2 ? 0xfffe : 0xffff));
+			       S_00B118_CU_EN(late_alloc_limit > 2 ? 0xfffe : 0xffff) |
+			       S_00B118_WAVE_LIMIT(0x3F));
 		si_pm4_set_reg(pm4, R_00B11C_SPI_SHADER_LATE_ALLOC_VS,
 			       S_00B11C_LIMIT(late_alloc_limit));
-		si_pm4_set_reg(pm4, R_00B01C_SPI_SHADER_PGM_RSRC3_PS, S_00B01C_CU_EN(0xffff));
+		si_pm4_set_reg(pm4, R_00B01C_SPI_SHADER_PGM_RSRC3_PS,
+			       S_00B01C_CU_EN(0xffff) | S_00B01C_WAVE_LIMIT(0x3F));
 	}
 
 	if (sctx->b.chip_class >= VI) {

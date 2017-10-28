@@ -74,7 +74,7 @@ AC_SUBST([OPENCL_VERSION])
 # in the first entry.
 LIBDRM_REQUIRED=2.4.75
 LIBDRM_RADEON_REQUIRED=2.4.71
-LIBDRM_AMDGPU_REQUIRED=2.4.82
+LIBDRM_AMDGPU_REQUIRED=2.4.86
 LIBDRM_INTEL_REQUIRED=2.4.75
 LIBDRM_NVVIEUX_REQUIRED=2.4.66
 LIBDRM_NOUVEAU_REQUIRED=2.4.66
@@ -101,7 +101,7 @@ ZLIB_REQUIRED=1.2.3
 
 dnl LLVM versions
 LLVM_REQUIRED_GALLIUM=3.3.0
-LLVM_REQUIRED_OPENCL=3.6.0
+LLVM_REQUIRED_OPENCL=3.9.0
 LLVM_REQUIRED_R600=3.9.0
 LLVM_REQUIRED_RADEONSI=3.9.0
 LLVM_REQUIRED_RADV=3.9.0
@@ -606,16 +606,7 @@ dnl Check if linker supports version scripts
 dnl
 AC_MSG_CHECKING([if the linker supports version-scripts])
 save_LDFLAGS=$LDFLAGS
-LDFLAGS="$LDFLAGS -Wl,--version-script=conftest.map"
-cat > conftest.map <<EOF
-VERSION_1 {
-     global:
-         main;
-
-     local:
-         *;
-};
-EOF
+LDFLAGS="$LDFLAGS -Wl,--version-script=$srcdir/build-support/conftest.map"
 AC_LINK_IFELSE(
     [AC_LANG_SOURCE([int main() { return 0;}])],
     [have_ld_version_script=yes;AC_MSG_RESULT(yes)],
@@ -628,12 +619,7 @@ dnl Check if linker supports dynamic list files
 dnl
 AC_MSG_CHECKING([if the linker supports --dynamic-list])
 save_LDFLAGS=$LDFLAGS
-LDFLAGS="$LDFLAGS -Wl,--dynamic-list=conftest.dyn"
-cat > conftest.dyn <<EOF
-{
-	radeon_drm_winsys_create;
-};
-EOF
+LDFLAGS="$LDFLAGS -Wl,--dynamic-list=$srcdir/build-support/conftest.dyn"
 AC_LINK_IFELSE(
     [AC_LANG_SOURCE([int main() { return 0;}])],
     [have_ld_dynamic_list=yes;AC_MSG_RESULT(yes)],
@@ -831,9 +817,9 @@ AC_LINK_IFELSE([AC_LANG_SOURCE([[
 
 dnl Check to see if dlopen is in default libraries (like Solaris, which
 dnl has it in libc), or if libdl is needed to get it.
-AC_CHECK_FUNC([dlopen], [DEFINES="$DEFINES -DHAVE_DLOPEN"],
+AC_CHECK_FUNC([dlopen], [],
     [AC_CHECK_LIB([dl], [dlopen],
-       [DEFINES="$DEFINES -DHAVE_DLOPEN"; DLOPEN_LIBS="-ldl"])])
+       [DLOPEN_LIBS="-ldl"])])
 AC_SUBST([DLOPEN_LIBS])
 
 dnl Check if that library also has dladdr
@@ -955,6 +941,15 @@ llvm_add_component() {
     fi
 }
 
+llvm_add_optional_component() {
+    new_llvm_component=$1
+    driver_name=$2
+
+    if $LLVM_CONFIG --components | grep -iqw $new_llvm_component ; then
+        LLVM_COMPONENTS="${LLVM_COMPONENTS} ${new_llvm_component}"
+    fi
+}
+
 llvm_add_default_components() {
     driver_name=$1
 
@@ -965,9 +960,7 @@ llvm_add_default_components() {
     llvm_add_component "mcjit" $driver_name
 
     # Optional default components
-    if $LLVM_CONFIG --components | grep -iqw inteljitevents ; then
-        LLVM_COMPONENTS="$LLVM_COMPONENTS inteljitevents"
-    fi
+    llvm_add_optional_component "inteljitevents" $driver_name
 }
 
 llvm_add_target() {
@@ -1280,7 +1273,7 @@ GALLIUM_DRIVERS_DEFAULT="r300,r600,svga,swrast"
 AC_ARG_WITH([gallium-drivers],
     [AS_HELP_STRING([--with-gallium-drivers@<:@=DIRS...@:>@],
         [comma delimited Gallium drivers list, e.g.
-        "i915,nouveau,r300,r600,radeonsi,freedreno,pl111,svga,swrast,swr,vc4,virgl,etnaviv,imx"
+        "i915,nouveau,r300,r600,radeonsi,freedreno,pl111,svga,swrast,swr,vc4,vc5,virgl,etnaviv,imx"
         @<:@default=r300,r600,svga,swrast@:>@])],
     [with_gallium_drivers="$withval"],
     [with_gallium_drivers="$GALLIUM_DRIVERS_DEFAULT"])
@@ -2294,13 +2287,16 @@ if test "x$enable_opencl" = xyes; then
 
     llvm_add_default_components "opencl"
     llvm_add_component "all-targets" "opencl"
+    llvm_add_component "coverage" "opencl"
     llvm_add_component "linker" "opencl"
     llvm_add_component "instrumentation" "opencl"
     llvm_add_component "ipo" "opencl"
     llvm_add_component "irreader" "opencl"
+    llvm_add_component "lto" "opencl"
     llvm_add_component "option" "opencl"
     llvm_add_component "objcarcopts" "opencl"
     llvm_add_component "profiledata" "opencl"
+    llvm_add_optional_component "coroutines" "opencl"
 
     dnl Check for Clang internal headers
     if test -z "$CLANG_LIBDIR"; then
@@ -2414,12 +2410,13 @@ dnl Surfaceless is an alternative for the last one.
 dnl
 require_basic_egl() {
     case "$with_platforms" in
-        *drm*|*surfaceless*)
+        *drm*|*surfaceless*|*android*)
             ;;
         *)
             AC_MSG_ERROR([$1 requires one of these:
                   1) --with-platforms=drm (X, Wayland, offscreen rendering based on DRM)
                   2) --with-platforms=surfaceless (offscreen only)
+                  3) --with-platforms=android (Android only)
                   Recommended options: drm,x11])
             ;;
     esac
@@ -2593,6 +2590,14 @@ if test -n "$with_gallium_drivers"; then
                                DEFINES="$DEFINES -DUSE_VC4_SIMULATOR"],
                               [USE_VC4_SIMULATOR=no])
             ;;
+        xvc5)
+            HAVE_GALLIUM_VC5=yes
+
+            PKG_CHECK_MODULES([VC5_SIMULATOR], [v3dv3],
+                              [USE_VC5_SIMULATOR=yes;
+                               DEFINES="$DEFINES -DUSE_VC5_SIMULATOR"],
+                              [AC_MSG_ERROR([vc5 requires the simulator])])
+            ;;
         xpl111)
             HAVE_GALLIUM_PL111=yes
             ;;
@@ -2634,6 +2639,39 @@ if test "x$HAVE_GALLIUM_VC4" != xyes -a "x$HAVE_GALLIUM_PL111" = xyes  ; then
     AC_MSG_ERROR([Building with pl111 requires vc4])
 fi
 
+
+detect_old_buggy_llvm() {
+    dnl llvm-config may not give the right answer when llvm is a built as a
+    dnl single shared library, so we must work the library name out for
+    dnl ourselves.
+    dnl (See https://llvm.org/bugs/show_bug.cgi?id=6823)
+    dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
+    LLVM_SO_NAME=LLVM-`$LLVM_CONFIG --version`
+    AS_IF([test -f "$LLVM_LIBDIR/lib$LLVM_SO_NAME.$IMP_LIB_EXT"], [llvm_have_one_so=yes])
+
+    if test "x$llvm_have_one_so" = xyes; then
+        dnl LLVM was built using auto*, so there is only one shared object.
+        LLVM_LIBS="-l$LLVM_SO_NAME"
+    else
+        dnl If LLVM was built with CMake, there will be one shared object per
+        dnl component.
+        AS_IF([test ! -f "$LLVM_LIBDIR/libLLVMTarget.$IMP_LIB_EXT"],
+               [AC_MSG_ERROR([Could not find llvm shared libraries:
+                Please make sure you have built llvm with the --enable-shared option
+                and that your llvm libraries are installed in $LLVM_LIBDIR
+                If you have installed your llvm libraries to a different directory you
+                can use the --with-llvm-prefix= configure flag to specify this directory.
+                NOTE: Mesa is attempting to use llvm shared libraries by default.
+                If you do not want to build with llvm shared libraries and instead want to
+                use llvm static libraries then add --disable-llvm-shared-libs to your configure
+                invocation and rebuild.])])
+
+        dnl We don't need to update LLVM_LIBS in this case because the LLVM
+        dnl install uses a shared object for each component and we have
+        dnl already added all of these objects to LLVM_LIBS.
+    fi
+}
+
 dnl
 dnl Set defines and buildtime variables only when using LLVM.
 dnl
@@ -2651,49 +2689,28 @@ if test "x$enable_llvm" = xyes; then
     dnl this was causing the same libraries to be appear multiple times
     dnl in LLVM_LIBS.
 
-    if ! $LLVM_CONFIG --libs ${LLVM_COMPONENTS} >/dev/null; then
-       AC_MSG_ERROR([Calling ${LLVM_CONFIG} failed])
-    fi
-    LLVM_LIBS="`$LLVM_CONFIG --libs ${LLVM_COMPONENTS}`"
-
-    if test "x$enable_llvm_shared_libs" = xyes; then
-        if test $LLVM_VERSION_MAJOR -lt 4 -o "`$LLVM_CONFIG --shared-mode ${LLVM_COMPONENTS}`" = static; then
-            dnl llvm-config may not give the right answer when llvm is a built as a
-            dnl single shared library, so we must work the library name out for
-            dnl ourselves.
-            dnl (See https://llvm.org/bugs/show_bug.cgi?id=6823)
-            dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
-            LLVM_SO_NAME=LLVM-`$LLVM_CONFIG --version`
-            AS_IF([test -f "$LLVM_LIBDIR/lib$LLVM_SO_NAME.$IMP_LIB_EXT"], [llvm_have_one_so=yes])
-
-            if test "x$llvm_have_one_so" = xyes; then
-               dnl LLVM was built using auto*, so there is only one shared object.
-               LLVM_LIBS="-l$LLVM_SO_NAME"
-            else
-                dnl If LLVM was built with CMake, there will be one shared object per
-                dnl component.
-                AS_IF([test ! -f "$LLVM_LIBDIR/libLLVMTarget.$IMP_LIB_EXT"],
-                      [AC_MSG_ERROR([Could not find llvm shared libraries:
-                       Please make sure you have built llvm with the --enable-shared option
-                       and that your llvm libraries are installed in $LLVM_LIBDIR
-                       If you have installed your llvm libraries to a different directory you
-                       can use the --with-llvm-prefix= configure flag to specify this directory.
-                       NOTE: Mesa is attempting to use llvm shared libraries by default.
-                       If you do not want to build with llvm shared libraries and instead want to
-                       use llvm static libraries then add --disable-llvm-shared-libs to your configure
-                       invocation and rebuild.])])
-
-                dnl We don't need to update LLVM_LIBS in this case because the LLVM
-                dnl install uses a shared object for each component and we have
-                dnl already added all of these objects to LLVM_LIBS.
-            fi
+    if test $LLVM_VERSION_MAJOR -ge 4 -o $LLVM_VERSION_MAJOR -eq 3 -a $LLVM_VERSION_MINOR -ge 9; then
+        if test "x$enable_llvm_shared_libs" = xyes; then
+            LLVM_LIBS="`$LLVM_CONFIG --link-shared --libs ${LLVM_COMPONENTS}`"
+        else
+            dnl Invoking llvm-config with both -libs and --system-libs produces the
+            dnl two separate lines - each for the set of libraries.
+		dnl Call the program twice, effectively folding them into a single line.
+            LLVM_LIBS="`$LLVM_CONFIG --link-static --libs ${LLVM_COMPONENTS}`"
+            dnl We need to link to llvm system libs when using static libs
+            LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --link-static --system-libs`"
         fi
     else
-        AC_MSG_WARN([Building mesa with statically linked LLVM may cause compilation issues])
-        dnl We need to link to llvm system libs when using static libs
-        dnl However, only llvm 3.5+ provides --system-libs
-        if test $LLVM_VERSION_MAJOR -ge 4 -o $LLVM_VERSION_MAJOR -eq 3 -a $LLVM_VERSION_MINOR -ge 5; then
-            LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --system-libs`"
+        LLVM_LIBS="`$LLVM_CONFIG --libs ${LLVM_COMPONENTS}`"
+        if test "x$enable_llvm_shared_libs" = xyes; then
+            detect_old_buggy_llvm
+        else
+            AC_MSG_WARN([Building mesa with statically linked LLVM may cause compilation issues])
+            dnl We need to link to llvm system libs when using static libs
+            dnl However, only llvm 3.5+ provides --system-libs
+            if test $LLVM_VERSION_MAJOR -ge 4 -o $LLVM_VERSION_MAJOR -eq 3 -a $LLVM_VERSION_MINOR -ge 5; then
+                LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --system-libs`"
+            fi
         fi
     fi
 fi
@@ -2716,6 +2733,7 @@ AM_CONDITIONAL(HAVE_GALLIUM_SWRAST, test "x$HAVE_GALLIUM_SOFTPIPE" = xyes -o \
                                          "x$HAVE_GALLIUM_LLVMPIPE" = xyes -o \
                                          "x$HAVE_GALLIUM_SWR" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VC4, test "x$HAVE_GALLIUM_VC4" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_VC5, test "x$HAVE_GALLIUM_VC5" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VIRGL, test "x$HAVE_GALLIUM_VIRGL" = xyes)
 
 AM_CONDITIONAL(HAVE_GALLIUM_STATIC_TARGETS, test "x$enable_shared_pipe_drivers" = xno)
@@ -2742,6 +2760,9 @@ AM_CONDITIONAL(HAVE_INTEL_VULKAN, test "x$HAVE_INTEL_VULKAN" = xyes)
 AM_CONDITIONAL(HAVE_AMD_DRIVERS, test "x$HAVE_GALLIUM_RADEONSI" = xyes -o \
                                       "x$HAVE_RADEON_VULKAN" = xyes)
 
+AM_CONDITIONAL(HAVE_BROADCOM_DRIVERS, test "x$HAVE_GALLIUM_VC4" = xyes -o \
+                                      "x$HAVE_GALLIUM_VC5" = xyes)
+
 AM_CONDITIONAL(HAVE_INTEL_DRIVERS, test "x$HAVE_INTEL_VULKAN" = xyes -o \
                                         "x$HAVE_I965_DRI" = xyes)
 
@@ -2752,6 +2773,7 @@ AM_CONDITIONAL(NEED_WINSYS_XLIB, test "x$enable_glx" = xgallium-xlib)
 AM_CONDITIONAL(HAVE_GALLIUM_COMPUTE, test x$enable_opencl = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_LLVM, test "x$enable_llvm" = xyes)
 AM_CONDITIONAL(USE_VC4_SIMULATOR, test x$USE_VC4_SIMULATOR = xyes)
+AM_CONDITIONAL(USE_VC5_SIMULATOR, test x$USE_VC5_SIMULATOR = xyes)
 
 AM_CONDITIONAL(HAVE_LIBDRM, test "x$have_libdrm" = xyes)
 AM_CONDITIONAL(HAVE_OSMESA, test "x$enable_osmesa" = xyes)
@@ -2865,6 +2887,7 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/drivers/etnaviv/Makefile
                  src/gallium/drivers/imx/Makefile
                  src/gallium/drivers/vc4/Makefile
+                 src/gallium/drivers/vc5/Makefile
                  src/gallium/drivers/virgl/Makefile
                  src/gallium/state_trackers/clover/Makefile
                  src/gallium/state_trackers/dri/Makefile
@@ -2908,6 +2931,7 @@ AC_CONFIG_FILES([Makefile
                  src/gallium/winsys/sw/wrapper/Makefile
                  src/gallium/winsys/sw/xlib/Makefile
                  src/gallium/winsys/vc4/drm/Makefile
+                 src/gallium/winsys/vc5/drm/Makefile
                  src/gallium/winsys/virgl/drm/Makefile
                  src/gallium/winsys/virgl/vtest/Makefile
                  src/gbm/Makefile

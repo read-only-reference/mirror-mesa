@@ -113,6 +113,14 @@ static int convert_fourcc(int format, int *dri_components_p)
       format = __DRI_IMAGE_FORMAT_GR88;
       dri_components = __DRI_IMAGE_COMPONENTS_RG;
       break;
+   case __DRI_IMAGE_FOURCC_R16:
+      format = __DRI_IMAGE_FORMAT_R16;
+      dri_components = __DRI_IMAGE_COMPONENTS_R;
+      break;
+   case __DRI_IMAGE_FOURCC_GR1616:
+      format = __DRI_IMAGE_FORMAT_GR1616;
+      dri_components = __DRI_IMAGE_COMPONENTS_RG;
+      break;
    /*
     * For multi-planar YUV formats, we return the format of the first
     * plane only.  Since there is only one caller which supports multi-
@@ -195,6 +203,12 @@ static enum pipe_format dri2_format_to_pipe_format (int format)
       break;
    case __DRI_IMAGE_FORMAT_GR88:
       pf = PIPE_FORMAT_RG88_UNORM;
+      break;
+   case __DRI_IMAGE_FORMAT_R16:
+      pf = PIPE_FORMAT_R16_UNORM;
+      break;
+   case __DRI_IMAGE_FORMAT_GR1616:
+      pf = PIPE_FORMAT_R16G16_UNORM;
       break;
    default:
       pf = PIPE_FORMAT_NONE;
@@ -1272,15 +1286,29 @@ dri2_dup_image(__DRIimage *image, void *loaderPrivate)
 static GLboolean
 dri2_validate_usage(__DRIimage *image, unsigned int use)
 {
-   /*
-    * Gallium drivers are bad at adding usages to the resources
-    * once opened again in another process, which is the main use
-    * case for this, so we have to lie.
+   if (!image || !image->texture)
+      return false;
+
+   struct pipe_screen *screen = image->texture->screen;
+   if (!screen->check_resource_capability)
+      return true;
+
+   /* We don't want to check these:
+    *   __DRI_IMAGE_USE_SHARE (all images are shareable)
+    *   __DRI_IMAGE_USE_BACKBUFFER (all images support this)
     */
-   if (image != NULL)
-      return GL_TRUE;
-   else
-      return GL_FALSE;
+   unsigned bind = 0;
+   if (use & __DRI_IMAGE_USE_SCANOUT)
+      bind |= PIPE_BIND_SCANOUT;
+   if (use & __DRI_IMAGE_USE_LINEAR)
+      bind |= PIPE_BIND_LINEAR;
+   if (use & __DRI_IMAGE_USE_CURSOR)
+      bind |= PIPE_BIND_CURSOR;
+
+   if (!bind)
+      return true;
+
+   return screen->check_resource_capability(screen, image->texture, bind);
 }
 
 static __DRIimage *
@@ -1561,7 +1589,7 @@ dri2_get_capabilities(__DRIscreen *_screen)
 
 /* The extension is modified during runtime if DRI_PRIME is detected */
 static __DRIimageExtension dri2ImageExtension = {
-    .base = { __DRI_IMAGE, 15 },
+    .base = { __DRI_IMAGE, 17 },
 
     .createImageFromName          = dri2_create_image_from_name,
     .createImageFromRenderbuffer  = dri2_create_image_from_renderbuffer,
@@ -1579,6 +1607,12 @@ static __DRIimageExtension dri2ImageExtension = {
     .getCapabilities              = dri2_get_capabilities,
     .mapImage                     = dri2_map_image,
     .unmapImage                   = dri2_unmap_image,
+    .createImageWithModifiers     = NULL,
+    .createImageFromDmaBufs2      = NULL,
+    .queryDmaBufFormats           = NULL,
+    .queryDmaBufModifiers         = NULL,
+    .queryDmaBufFormatModifierAttribs = NULL,
+    .createImageFromRenderbuffer2 = dri2_create_image_from_renderbuffer2,
 };
 
 static const __DRIrobustnessExtension dri2Robustness = {

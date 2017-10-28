@@ -26,6 +26,7 @@
 #include "intel_image.h"
 #include "intel_tiled_memcpy.h"
 #include "brw_context.h"
+#include "brw_blorp.h"
 
 #define FILE_DEBUG_FLAG DEBUG_TEXTURE
 
@@ -127,6 +128,28 @@ intel_miptree_create_for_teximage(struct brw_context *brw,
                                flags);
 }
 
+static bool
+intel_texsubimage_blorp(struct brw_context *brw, GLuint dims,
+                        struct gl_texture_image *tex_image,
+                        unsigned x, unsigned y, unsigned z,
+                        unsigned width, unsigned height, unsigned depth,
+                        GLenum format, GLenum type, const void *pixels,
+                        const struct gl_pixelstore_attrib *packing)
+{
+   struct intel_texture_image *intel_image = intel_texture_image(tex_image);
+   const unsigned mt_level = tex_image->Level + tex_image->TexObject->MinLevel;
+   const unsigned mt_z = tex_image->TexObject->MinLayer + tex_image->Face + z;
+
+   /* The blorp path can't understand crazy format hackery */
+   if (_mesa_base_tex_format(&brw->ctx, tex_image->InternalFormat) !=
+       _mesa_get_format_base_format(tex_image->TexFormat))
+      return false;
+
+   return brw_blorp_upload_miptree(brw, intel_image->mt, tex_image->TexFormat,
+                                   mt_level, x, y, mt_z, width, height, depth,
+                                   tex_image->TexObject->Target, format, type,
+                                   pixels, packing);
+}
 
 /**
  * \brief A fast path for glTexImage and glTexSubImage.
@@ -293,20 +316,28 @@ intel_upload_tex(struct gl_context * ctx,
                  const GLvoid * pixels,
                  const struct gl_pixelstore_attrib *packing)
 {
+   struct brw_context *brw = brw_context(ctx);
    struct intel_mipmap_tree *mt = intel_texture_image(texImage)->mt;
    bool ok;
+
+   /* Check that there is actually data to store. */
+   if (pixels == NULL && !_mesa_is_bufferobj(packing->BufferObj))
+      return;
 
    bool tex_busy = mt && brw_bo_busy(mt->bo);
 
    if (mt && mt->format == MESA_FORMAT_S_UINT8)
       mt->r8stencil_needs_update = true;
 
-   ok = _mesa_meta_pbo_TexSubImage(ctx, dims, texImage,
+   if (_mesa_is_bufferobj(packing->BufferObj) || tex_busy ||
+       mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
+      ok = intel_texsubimage_blorp(brw, dims, texImage,
                                    xoffset, yoffset, zoffset,
                                    width, height, depth, format, type,
-                                   pixels, tex_busy, packing);
-   if (ok)
-      return;
+                                   pixels, packing);
+      if (ok)
+         return;
+   }
 
    ok = intel_texsubimage_tiled_memcpy(ctx, dims, texImage,
                                        xoffset, yoffset, zoffset,
@@ -410,6 +441,8 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
    struct intel_renderbuffer *rb;
    struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
+   mesa_format texFormat = MESA_FORMAT_NONE;
+   struct intel_mipmap_tree *mt;
    GLenum internal_format = 0;
 
    texObj = _mesa_get_current_tex_object(ctx, target);
@@ -429,20 +462,33 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
       return;
 
    if (rb->mt->cpp == 4) {
-      if (texture_format == __DRI_TEXTURE_FORMAT_RGB)
+      if (texture_format == __DRI_TEXTURE_FORMAT_RGB) {
          internal_format = GL_RGB;
-      else
+         texFormat = MESA_FORMAT_B8G8R8X8_UNORM;
+      }
+      else {
          internal_format = GL_RGBA;
+         texFormat = MESA_FORMAT_B8G8R8A8_UNORM;
+      }
    } else if (rb->mt->cpp == 2) {
-      /* This is 565 */
       internal_format = GL_RGB;
+      texFormat = MESA_FORMAT_B5G6R5_UNORM;
    }
 
-   intel_miptree_prepare_external(brw, rb->mt);
+   intel_miptree_make_shareable(brw, rb->mt);
+   mt = intel_miptree_create_for_bo(brw, rb->mt->bo, texFormat, 0,
+                                    rb->Base.Base.Width,
+                                    rb->Base.Base.Height,
+                                    1, rb->mt->surf.row_pitch,
+                                    MIPTREE_CREATE_DEFAULT);
+   if (mt == NULL)
+       return;
+   mt->target = target;
 
    _mesa_lock_texture(&brw->ctx, texObj);
    texImage = _mesa_get_tex_image(ctx, texObj, target, 0);
-   intel_set_texture_image_mt(brw, texImage, internal_format, rb->mt);
+   intel_set_texture_image_mt(brw, texImage, internal_format, mt);
+   intel_miptree_release(&mt);
    _mesa_unlock_texture(&brw->ctx, texObj);
 }
 
@@ -524,8 +570,8 @@ intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
       return;
    }
 
-   mt = intel_miptree_create_for_dri_image(brw, image, target,
-                                           ISL_COLORSPACE_NONE, false);
+   mt = intel_miptree_create_for_dri_image(brw, image, target, image->format,
+                                           false);
    if (mt == NULL)
       return;
 
@@ -537,6 +583,31 @@ intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
       image->internal_format : _mesa_get_format_base_format(mt->format);
    intel_set_texture_image_mt(brw, texImage, internal_format, mt);
    intel_miptree_release(&mt);
+}
+
+static bool
+intel_gettexsubimage_blorp(struct brw_context *brw,
+                           struct gl_texture_image *tex_image,
+                           unsigned x, unsigned y, unsigned z,
+                           unsigned width, unsigned height, unsigned depth,
+                           GLenum format, GLenum type, const void *pixels,
+                           const struct gl_pixelstore_attrib *packing)
+{
+   struct intel_texture_image *intel_image = intel_texture_image(tex_image);
+   const unsigned mt_level = tex_image->Level + tex_image->TexObject->MinLevel;
+   const unsigned mt_z = tex_image->TexObject->MinLayer + tex_image->Face + z;
+
+   /* The blorp path can't understand crazy format hackery */
+   if (_mesa_base_tex_format(&brw->ctx, tex_image->InternalFormat) !=
+       _mesa_get_format_base_format(tex_image->TexFormat))
+      return false;
+
+   return brw_blorp_download_miptree(brw, intel_image->mt,
+                                     tex_image->TexFormat, SWIZZLE_XYZW,
+                                     mt_level, x, y, mt_z,
+                                     width, height, depth,
+                                     tex_image->TexObject->Target,
+                                     format, type, false, pixels, packing);
 }
 
 /**
@@ -688,18 +759,11 @@ intel_get_tex_sub_image(struct gl_context *ctx,
    DBG("%s\n", __func__);
 
    if (_mesa_is_bufferobj(ctx->Pack.BufferObj)) {
-      if (_mesa_meta_pbo_GetTexSubImage(ctx, 3, texImage,
-                                        xoffset, yoffset, zoffset,
-                                        width, height, depth, format, type,
-                                        pixels, &ctx->Pack)) {
-         /* Flush to guarantee coherency between the render cache and other
-          * caches the PBO could potentially be bound to after this point.
-          * See the related comment in intelReadPixels() for a more detailed
-          * explanation.
-          */
-         brw_emit_mi_flush(brw);
+      if (intel_gettexsubimage_blorp(brw, texImage,
+                                     xoffset, yoffset, zoffset,
+                                     width, height, depth, format, type,
+                                     pixels, &ctx->Pack))
          return;
-      }
 
       perf_debug("%s: fallback to CPU mapping in PBO case\n", __func__);
    }

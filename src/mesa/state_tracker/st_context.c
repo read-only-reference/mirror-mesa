@@ -313,9 +313,11 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe,
    st->can_bind_const_buffer_as_vertex =
       screen->get_param(screen, PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX);
 
-   /* Drivers still have to upload zero-stride vertex attribs manually
-    * with the GL core profile, but they don't have to deal with any complex
-    * user vertex buffer uploads.
+   /* st/mesa always uploads zero-stride vertex attribs, and other user
+    * vertex buffers are only possible with a compatibility profile.
+    * So tell the u_vbuf module that user VBOs are not possible with the Core
+    * profile, so that u_vbuf is bypassed completely if there is nothing else
+    * to do.
     */
    unsigned vbuf_flags =
       ctx->API == API_OPENGL_CORE ? U_VBUF_FLAG_NO_USER_VBOS : 0;
@@ -406,7 +408,7 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe,
    /* GL limits and extensions */
    st_init_limits(pipe->screen, &ctx->Const, &ctx->Extensions);
    st_init_extensions(pipe->screen, &ctx->Const,
-                      &ctx->Extensions, &st->options, ctx->Mesa_DXTn);
+                      &ctx->Extensions, &st->options);
 
    if (st_have_perfmon(st)) {
       ctx->Extensions.AMD_performance_monitor = GL_TRUE;
@@ -489,6 +491,7 @@ static void st_init_driver_flags(struct st_context *st)
 
    f->NewArray = ST_NEW_VERTEX_ARRAYS;
    f->NewRasterizerDiscard = ST_NEW_RASTERIZER;
+   f->NewTileRasterOrder = ST_NEW_RASTERIZER;
    f->NewUniformBuffer = ST_NEW_UNIFORM_BUFFER;
    f->NewDefaultTessLevels = ST_NEW_TESS_STATE;
 

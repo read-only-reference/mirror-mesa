@@ -264,6 +264,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
    case PIPE_CAP_LOAD_CONSTBUF:
+   case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
+   case PIPE_CAP_TILE_RASTER_ORDER:
       return 0;
 
    /* Stream output. */
@@ -317,8 +319,9 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    /* Timer queries. */
    case PIPE_CAP_QUERY_TIME_ELAPSED:
-   case PIPE_CAP_OCCLUSION_QUERY:
       return 0;
+   case PIPE_CAP_OCCLUSION_QUERY:
+      return VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
    case PIPE_CAP_QUERY_TIMESTAMP:
       return 1;
    case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
@@ -478,6 +481,9 @@ gpu_supports_texure_format(struct etna_screen *screen, uint32_t fmt,
 
    if (fmt >= TEXTURE_FORMAT_DXT1 && fmt <= TEXTURE_FORMAT_DXT4_DXT5)
       supported = VIV_FEATURE(screen, chipFeatures, DXT_TEXTURE_COMPRESSION);
+
+   if (util_format_is_srgb(format))
+      supported = VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
 
    if (fmt & EXT_FORMAT) {
       supported = VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
@@ -700,6 +706,8 @@ etna_get_specs(struct etna_screen *screen)
       VIV_FEATURE(screen, chipMinorFeatures1, NON_POWER_OF_TWO);
    screen->specs.has_new_transcendentals =
       VIV_FEATURE(screen, chipMinorFeatures3, HAS_FAST_TRANSCENDENTALS);
+   screen->specs.has_halti2_instructions =
+      VIV_FEATURE(screen, chipMinorFeatures4, HALTI2);
 
    if (VIV_FEATURE(screen, chipMinorFeatures3, INSTRUCTION_CACHE)) {
       /* GC3000 - this core is capable of loading shaders from

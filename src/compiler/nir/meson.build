@@ -90,11 +90,13 @@ files_libnir = files(
   'nir_instr_set.h',
   'nir_intrinsics.c',
   'nir_intrinsics.h',
+  'nir_linking_helpers.c',
   'nir_liveness.c',
   'nir_loop_analyze.c',
   'nir_loop_analyze.h',
   'nir_lower_64bit_packing.c',
   'nir_lower_alu_to_scalar.c',
+  'nir_lower_alpha_test.c',
   'nir_lower_atomics.c',
   'nir_lower_atomics_to_ssbo.c',
   'nir_lower_bitmap.c',
@@ -191,14 +193,16 @@ libnir = static_library(
   build_by_default : false,
 )
 
+nir_algebraic_py = files('nir_algebraic.py')
+
 if with_tests
   nir_control_flow_test = executable(
     'nir_control_flow_test',
     [files('tests/control_flow_tests.cpp'), nir_opcodes_h],
     c_args : [c_vis_args, c_msvc_compat_args, no_override_init_args],
     include_directories : [inc_common],
-    dependencies : [dep_thread],
-    link_with : [libmesa_util, libnir, libgtest],
+    dependencies : [dep_thread, idep_gtest],
+    link_with : [libmesa_util, libnir],
   )
 
   test('nir_control_flow', nir_control_flow_test)

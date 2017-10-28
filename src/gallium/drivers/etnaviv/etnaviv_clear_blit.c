@@ -130,7 +130,7 @@ etna_blit_clear_color(struct pipe_context *pctx, struct pipe_surface *dst,
       }
 
       surf->level->ts_valid = true;
-      ctx->dirty |= ETNA_DIRTY_TS;
+      ctx->dirty |= ETNA_DIRTY_TS | ETNA_DIRTY_DERIVE_TS;
    } else if (unlikely(new_clear_value != surf->level->clear_value)) { /* Queue normal RS clear for non-TS surfaces */
       /* If clear color changed, re-generate stored command */
       etna_rs_gen_clear_surface(ctx, surf, new_clear_value);
@@ -189,7 +189,7 @@ etna_blit_clear_zs(struct pipe_context *pctx, struct pipe_surface *dst,
       }
 
       surf->level->ts_valid = true;
-      ctx->dirty |= ETNA_DIRTY_TS;
+      ctx->dirty |= ETNA_DIRTY_TS | ETNA_DIRTY_DERIVE_TS;
    } else {
       if (unlikely(new_clear_value != surf->level->clear_value)) { /* Queue normal RS clear for non-TS surfaces */
          /* If clear depth value changed, re-generate stored command */
@@ -591,6 +591,7 @@ etna_try_rs_blit(struct pipe_context *pctx,
       .source = src->bo,
       .source_offset = src_offset,
       .source_stride = src_lev->stride,
+      .source_padded_width = src_lev->padded_width,
       .source_padded_height = src_lev->padded_height,
       .dest_format = translate_rs_format(dst_format),
       .dest_tiling = dst->layout,
@@ -611,6 +612,7 @@ etna_try_rs_blit(struct pipe_context *pctx,
    resource_written(ctx, &dst->base);
    dst->seqno++;
    dst->levels[blit_info->dst.level].ts_valid = false;
+   ctx->dirty |= ETNA_DIRTY_DERIVE_TS;
 
    return TRUE;
 

@@ -134,6 +134,7 @@ struct si_shader_context {
 	 *             max = 32*4
 	 */
 	int param_vs_state_bits;
+	int param_vs_blit_inputs;
 	/* HW VS */
 	int param_streamout_config;
 	int param_streamout_write_index;
@@ -208,7 +209,6 @@ struct si_shader_context {
 	LLVMValueRef esgs_ring;
 	LLVMValueRef gsvs_ring[4];
 
-	LLVMValueRef lds;
 	LLVMValueRef invoc0_tess_factors[6]; /* outer[4], inner[2] */
 	LLVMValueRef gs_next_vertex[4];
 	LLVMValueRef postponed_kill;
@@ -301,7 +301,7 @@ void si_emit_waitcnt(struct si_shader_context *ctx, unsigned simm16);
 
 LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 				   const struct tgsi_ind_register *ind,
-				   int rel_index);
+				   unsigned addr_mul, int rel_index);
 LLVMValueRef si_get_bounded_indirect_index(struct si_shader_context *ctx,
 					   const struct tgsi_ind_register *ind,
 					   int rel_index, unsigned num);

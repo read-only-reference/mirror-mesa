@@ -330,6 +330,12 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 		request.flags |= AMDGPU_GEM_CREATE_NO_CPU_ACCESS;
 	if (flags & RADEON_FLAG_GTT_WC)
 		request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
+	if (!(flags & RADEON_FLAG_IMPLICIT_SYNC) && ws->info.drm_minor >= 22)
+		request.flags |= AMDGPU_GEM_CREATE_EXPLICIT_SYNC;
+	if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING && ws->info.drm_minor >= 20) {
+		bo->is_local = true;
+		request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
+	}
 
 	/* this won't do anything on pre 4.9 kernels */
 	if (ws->zero_all_vram_allocs && (initial_domain & RADEON_DOMAIN_VRAM))
@@ -345,7 +351,7 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 
 
 	uint32_t va_flags = 0;
-	if (flags & RADEON_FLAG_VA_UNCACHED)
+	if ((flags & RADEON_FLAG_VA_UNCACHED) && ws->info.chip_class >= GFX9)
 		va_flags |= AMDGPU_VM_MTYPE_UC;
 	r = radv_amdgpu_bo_va_op(ws->dev, buf_handle, 0, size, va, va_flags, AMDGPU_VA_OP_MAP);
 	if (r)

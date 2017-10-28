@@ -88,27 +88,36 @@ brw_wm_debug_recompile(struct brw_context *brw, struct gl_program *prog,
                       old_key->stats_wm, key->stats_wm);
    found |= key_debug(brw, "flat shading",
                       old_key->flat_shade, key->flat_shade);
-   found |= key_debug(brw, "per-sample interpolation",
-                      old_key->persample_interp, key->persample_interp);
    found |= key_debug(brw, "number of color buffers",
                       old_key->nr_color_regions, key->nr_color_regions);
    found |= key_debug(brw, "MRT alpha test or alpha-to-coverage",
                       old_key->replicate_alpha, key->replicate_alpha);
    found |= key_debug(brw, "fragment color clamping",
                       old_key->clamp_fragment_color, key->clamp_fragment_color);
+   found |= key_debug(brw, "per-sample interpolation",
+                      old_key->persample_interp, key->persample_interp);
    found |= key_debug(brw, "multisampled FBO",
                       old_key->multisample_fbo, key->multisample_fbo);
+   found |= key_debug(brw, "frag coord adds sample pos",
+                      old_key->frag_coord_adds_sample_pos,
+                      key->frag_coord_adds_sample_pos);
    found |= key_debug(brw, "line smoothing",
                       old_key->line_aa, key->line_aa);
+   found |= key_debug(brw, "high quality derivatives",
+                      old_key->high_quality_derivatives,
+                      key->high_quality_derivatives);
+   found |= key_debug(brw, "force dual color blending",
+                      old_key->force_dual_color_blend,
+                      key->force_dual_color_blend);
+   found |= key_debug(brw, "coherent fb fetch",
+                      old_key->coherent_fb_fetch, key->coherent_fb_fetch);
+
    found |= key_debug(brw, "input slots valid",
                       old_key->input_slots_valid, key->input_slots_valid);
    found |= key_debug(brw, "mrt alpha test function",
                       old_key->alpha_test_func, key->alpha_test_func);
    found |= key_debug(brw, "mrt alpha test reference value",
                       old_key->alpha_test_ref, key->alpha_test_ref);
-   found |= key_debug(brw, "force dual color blending",
-                      old_key->force_dual_color_blend,
-                      key->force_dual_color_blend);
 
    found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
 
@@ -129,7 +138,6 @@ brw_codegen_wm_prog(struct brw_context *brw,
                     struct brw_vue_map *vue_map)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   struct gl_context *ctx = &brw->ctx;
    void *mem_ctx = ralloc_context(NULL);
    struct brw_wm_prog_data prog_data;
    const GLuint *program;
@@ -145,30 +153,13 @@ brw_codegen_wm_prog(struct brw_context *brw,
 
    assign_fs_binding_table_offsets(devinfo, &fp->program, key, &prog_data);
 
-   /* Allocate the references to the uniforms that will end up in the
-    * prog_data associated with the compiled program, and which will be freed
-    * by the state cache.
-    */
-   int param_count = fp->program.nir->num_uniforms / 4;
-   prog_data.base.nr_image_params = fp->program.info.num_images;
-   /* The backend also sometimes adds params for texture size. */
-   param_count += 2 * ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits;
-   prog_data.base.param =
-      rzalloc_array(NULL, const gl_constant_value *, param_count);
-   prog_data.base.pull_param =
-      rzalloc_array(NULL, const gl_constant_value *, param_count);
-   prog_data.base.image_param =
-      rzalloc_array(NULL, struct brw_image_param,
-                    prog_data.base.nr_image_params);
-   prog_data.base.nr_params = param_count;
-
    if (!fp->program.is_arb_asm) {
-      brw_nir_setup_glsl_uniforms(fp->program.nir, &fp->program,
+      brw_nir_setup_glsl_uniforms(mem_ctx, fp->program.nir, &fp->program,
                                   &prog_data.base, true);
       brw_nir_analyze_ubo_ranges(brw->screen->compiler, fp->program.nir,
                                  prog_data.base.ubo_ranges);
    } else {
-      brw_nir_setup_arb_uniforms(fp->program.nir, &fp->program,
+      brw_nir_setup_arb_uniforms(mem_ctx, fp->program.nir, &fp->program,
                                  &prog_data.base);
 
       if (unlikely(INTEL_DEBUG & DEBUG_WM))
@@ -226,6 +217,9 @@ brw_codegen_wm_prog(struct brw_context *brw,
    if (unlikely((INTEL_DEBUG & DEBUG_WM) && fp->program.is_arb_asm))
       fprintf(stderr, "\n");
 
+   /* The param and pull_param arrays will be freed by the shader cache. */
+   ralloc_steal(NULL, prog_data.base.param);
+   ralloc_steal(NULL, prog_data.base.pull_param);
    brw_upload_cache(&brw->cache, BRW_CACHE_FS_PROG,
                     key, sizeof(struct brw_wm_prog_key),
                     program, program_size,
@@ -527,6 +521,7 @@ brw_wm_populate_key(struct brw_context *brw, struct brw_wm_prog_key *key)
 
    /* _NEW_HINT */
    key->high_quality_derivatives =
+      prog->info.uses_fddx_fddy &&
       ctx->Hint.FragmentShaderDerivative == GL_NICEST;
 
    if (devinfo->gen < 6)

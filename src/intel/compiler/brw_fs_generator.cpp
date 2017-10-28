@@ -402,7 +402,6 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
       brw_inst_set_cond_modifier(p->devinfo, brw_last_inst, BRW_CONDITIONAL_NZ);
 
       int jmp = brw_JMPI(p, brw_imm_ud(0), BRW_PREDICATE_NORMAL) - p->store;
-      brw_inst_set_exec_size(p->devinfo, brw_last_inst, BRW_EXECUTE_1);
       {
          /* Don't send AA data */
          fire_fb_write(inst, offset(payload, 1), implied_header, inst->mlen-1);
@@ -1639,6 +1638,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
        * and empirically this affects CHV as well.
        */
       if (devinfo->gen >= 8 &&
+          devinfo->gen <= 9 &&
           p->nr_insn > 1 &&
           brw_inst_opcode(devinfo, brw_last_inst) == BRW_OPCODE_MATH &&
           brw_inst_math_function(devinfo, brw_last_inst) == BRW_MATH_FUNCTION_POW &&
@@ -1728,13 +1728,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case BRW_OPCODE_MAD:
          assert(devinfo->gen >= 6);
-	 brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_MAD(p, dst, src[0], src[1], src[2]);
 	 break;
 
       case BRW_OPCODE_LRP:
          assert(devinfo->gen >= 6);
-	 brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_LRP(p, dst, src[0], src[1], src[2]);
 	 break;
 
@@ -1798,27 +1800,25 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 	 break;
       case BRW_OPCODE_BFREV:
          assert(devinfo->gen >= 7);
-         /* BFREV only supports UD type for src and dst. */
          brw_BFREV(p, retype(dst, BRW_REGISTER_TYPE_UD),
-                      retype(src[0], BRW_REGISTER_TYPE_UD));
+                   retype(src[0], BRW_REGISTER_TYPE_UD));
          break;
       case BRW_OPCODE_FBH:
          assert(devinfo->gen >= 7);
-         /* FBH only supports UD type for dst. */
-         brw_FBH(p, retype(dst, BRW_REGISTER_TYPE_UD), src[0]);
+         brw_FBH(p, retype(dst, src[0].type), src[0]);
          break;
       case BRW_OPCODE_FBL:
          assert(devinfo->gen >= 7);
-         /* FBL only supports UD type for dst. */
-         brw_FBL(p, retype(dst, BRW_REGISTER_TYPE_UD), src[0]);
+         brw_FBL(p, retype(dst, BRW_REGISTER_TYPE_UD),
+                 retype(src[0], BRW_REGISTER_TYPE_UD));
          break;
       case BRW_OPCODE_LZD:
          brw_LZD(p, dst, src[0]);
          break;
       case BRW_OPCODE_CBIT:
          assert(devinfo->gen >= 7);
-         /* CBIT only supports UD type for dst. */
-         brw_CBIT(p, retype(dst, BRW_REGISTER_TYPE_UD), src[0]);
+         brw_CBIT(p, retype(dst, BRW_REGISTER_TYPE_UD),
+                  retype(src[0], BRW_REGISTER_TYPE_UD));
          break;
       case BRW_OPCODE_ADDC:
          assert(devinfo->gen >= 7);
@@ -1834,7 +1834,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case BRW_OPCODE_BFE:
          assert(devinfo->gen >= 7);
-         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFE(p, dst, src[0], src[1], src[2]);
          break;
 
@@ -1844,7 +1845,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
          break;
       case BRW_OPCODE_BFI2:
          assert(devinfo->gen >= 7);
-         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFI2(p, dst, src[0], src[1], src[2]);
          break;
 

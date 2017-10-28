@@ -61,8 +61,6 @@ DRI_CONF_BEGIN
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_QUALITY
-      DRI_CONF_FORCE_S3TC_ENABLE("false")
-
       DRI_CONF_PRECISE_TRIG("false")
 
       DRI_CONF_OPT_BEGIN(clamp_max_samples, int, -1)
@@ -1373,6 +1371,19 @@ brw_query_renderer_integer(__DRIscreen *dri_screen,
    case __DRI2_RENDERER_HAS_TEXTURE_3D:
       value[0] = 1;
       return 0;
+   case __DRI2_RENDERER_HAS_CONTEXT_PRIORITY:
+      value[0] = 0;
+      if (brw_hw_context_set_priority(screen->bufmgr,
+				      0, BRW_CONTEXT_HIGH_PRIORITY) == 0)
+         value[0] |= __DRI2_RENDERER_HAS_CONTEXT_PRIORITY_HIGH;
+      if (brw_hw_context_set_priority(screen->bufmgr,
+				      0, BRW_CONTEXT_LOW_PRIORITY) == 0)
+         value[0] |= __DRI2_RENDERER_HAS_CONTEXT_PRIORITY_LOW;
+      /* reset to default last, just in case */
+      if (brw_hw_context_set_priority(screen->bufmgr,
+				      0, BRW_CONTEXT_MEDIUM_PRIORITY) == 0)
+         value[0] |= __DRI2_RENDERER_HAS_CONTEXT_PRIORITY_MEDIUM;
+      return 0;
    default:
       return driQueryRendererIntegerCommon(dri_screen, param, value);
    }
@@ -1979,7 +1990,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    /* Generate the minimum possible set of configs that include an
     * accumulation buffer.
     */
-   for (unsigned i = 0; i < ARRAY_SIZE(formats); i++) {
+   for (unsigned i = 0; i < num_formats; i++) {
       __DRIconfig **new_configs;
 
       if (formats[i] == MESA_FORMAT_B5G6R5_UNORM) {
@@ -2011,7 +2022,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
     * supported.  Singlebuffer configs are not supported because no one wants
     * them.
     */
-   for (unsigned i = 0; i < ARRAY_SIZE(formats); i++) {
+   for (unsigned i = 0; i < num_formats; i++) {
       if (devinfo->gen < 6)
          break;
 
@@ -2197,8 +2208,11 @@ parse_devid_override(const char *devid_override)
       { "hsw", 0x0d2e },
       { "byt", 0x0f33 },
       { "bdw", 0x162e },
+      { "chv", 0x22B3 },
       { "skl", 0x1912 },
+      { "bxt", 0x5A85 },
       { "kbl", 0x5912 },
+      { "glk", 0x3185 },
       { "cnl", 0x5a52 },
    };
 
@@ -2509,12 +2523,24 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    screen->compiler = brw_compiler_create(screen, devinfo);
    screen->compiler->shader_debug_log = shader_debug_log_mesa;
    screen->compiler->shader_perf_log = shader_perf_log_mesa;
-   screen->compiler->constant_buffer_0_is_relative = devinfo->gen < 8;
+   screen->compiler->constant_buffer_0_is_relative = true;
+   screen->compiler->supports_pull_constants = true;
 
    screen->has_exec_fence =
      intel_get_boolean(screen, I915_PARAM_HAS_EXEC_FENCE);
 
    intel_screen_init_surface_formats(screen);
+
+   if (INTEL_DEBUG & (DEBUG_BATCH | DEBUG_SUBMIT)) {
+      unsigned int caps = intel_get_integer(screen, I915_PARAM_HAS_SCHEDULER);
+      if (caps) {
+         fprintf(stderr, "Kernel scheduler detected: %08x\n", caps);
+         if (caps & I915_SCHEDULER_CAP_PRIORITY)
+            fprintf(stderr, "  - User priority sorting enabled\n");
+         if (caps & I915_SCHEDULER_CAP_PREEMPTION)
+            fprintf(stderr, "  - Preemption enabled\n");
+      }
+   }
 
    return (const __DRIconfig**) intel_screen_make_configs(dri_screen);
 }

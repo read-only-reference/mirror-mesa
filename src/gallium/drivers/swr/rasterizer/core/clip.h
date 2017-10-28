@@ -561,7 +561,7 @@ public:
 
 #if defined(_DEBUG)
         // TODO: need to increase stack size, allocating SIMD16-widened transposedPrims causes stack overflow in debug builds
-        SIMDVERTEX_T<SIMD_T> *transposedPrims = reinterpret_cast<SIMDVERTEX_T<SIMD_T> *>(malloc(sizeof(SIMDVERTEX_T<SIMD_T>) * 2));
+        SIMDVERTEX_T<SIMD_T> *transposedPrims = reinterpret_cast<SIMDVERTEX_T<SIMD_T> *>(AlignedMalloc(sizeof(SIMDVERTEX_T<SIMD_T>) * 2, 64));
 
 #else
         SIMDVERTEX_T<SIMD_T> transposedPrims[2];
@@ -641,7 +641,7 @@ public:
                 }
             }
 
-            PA_STATE_OPT clipPA(pDC, numEmittedPrims, reinterpret_cast<uint8_t *>(&transposedPrims[0]), numEmittedVerts, SWR_VTX_NUM_SLOTS, true, clipTopology);
+            PA_STATE_OPT clipPA(pDC, numEmittedPrims, reinterpret_cast<uint8_t *>(&transposedPrims[0]), numEmittedVerts, SWR_VTX_NUM_SLOTS, true, NumVertsPerPrim, clipTopology);
 
             static const uint32_t primMaskMap[] = { 0x0, 0x1, 0x3, 0x7, 0xf, 0x1f, 0x3f, 0x7f };
 
@@ -667,7 +667,7 @@ public:
         }
 
 #if defined(_DEBUG)
-        free(transposedPrims);
+        AlignedFree(transposedPrims);
 
 #endif
         // update global pipeline stat
@@ -687,15 +687,21 @@ public:
         UPDATE_STAT_FE(CInvocations, numInvoc);
 
         // Read back viewport index if required
-        typename SIMD_T::Integer viewportIdx = SIMD_T::set1_epi32(0);
+        typename SIMD_T::Integer viewportIdx = SIMD_T::setzero_si();
+        typename SIMD_T::Vec4 vpiAttrib[NumVertsPerPrim];
+        typename SIMD_T::Integer vpai = SIMD_T::setzero_si();
 
         if (state.backendState.readViewportArrayIndex)
         {
-            typename SIMD_T::Vec4 vpiAttrib[NumVertsPerPrim];
             pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
 
+            vpai = SIMD_T::castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
+        }
+
+
+        if (state.backendState.readViewportArrayIndex) // VPAIOffsets are guaranteed 0-15 -- no OOB issues if they are offsets from 0 
+        {
             // OOB indices => forced to zero.
-            typename SIMD_T::Integer vpai = SIMD_T::castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
             vpai = SIMD_T::max_epi32(vpai, SIMD_T::setzero_si());
             typename SIMD_T::Integer vNumViewports = SIMD_T::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
             typename SIMD_T::Integer vClearMask = SIMD_T::cmplt_epi32(vpai, vNumViewports);

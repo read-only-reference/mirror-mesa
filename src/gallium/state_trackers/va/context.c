@@ -88,7 +88,10 @@ static struct VADriverVTable vtable =
    &vlVaCreateSurfaces2,
    &vlVaQuerySurfaceAttributes,
    &vlVaAcquireBufferHandle,
-   &vlVaReleaseBufferHandle
+   &vlVaReleaseBufferHandle,
+#if 0
+   &vlVaExportSurfaceHandle,
+#endif
 };
 
 static struct VADriverVTableVPP vtable_vpp =

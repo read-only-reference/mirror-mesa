@@ -407,7 +407,7 @@ struct intel_mipmap_tree *
 intel_miptree_create_for_dri_image(struct brw_context *brw,
                                    __DRIimage *image,
                                    GLenum target,
-                                   enum isl_colorspace colorspace,
+                                   mesa_format format,
                                    bool is_winsys_image);
 
 bool
@@ -503,7 +503,7 @@ intel_miptree_copy_slice(struct brw_context *brw,
 void
 intel_miptree_copy_teximage(struct brw_context *brw,
                             struct intel_texture_image *intelImage,
-                            struct intel_mipmap_tree *dst_mt, bool invalidate);
+                            struct intel_mipmap_tree *dst_mt);
 
 /**
  * \name Miptree HiZ functions
@@ -640,28 +640,30 @@ void
 intel_miptree_prepare_texture(struct brw_context *brw,
                               struct intel_mipmap_tree *mt,
                               enum isl_format view_format,
-                              bool *aux_supported_out);
+                              uint32_t start_level, uint32_t num_levels,
+                              uint32_t start_layer, uint32_t num_layers,
+                              bool disable_aux);
 void
 intel_miptree_prepare_image(struct brw_context *brw,
                             struct intel_mipmap_tree *mt);
-void
-intel_miptree_prepare_fb_fetch(struct brw_context *brw,
-                               struct intel_mipmap_tree *mt, uint32_t level,
-                               uint32_t start_layer, uint32_t num_layers);
+
 enum isl_aux_usage
 intel_miptree_render_aux_usage(struct brw_context *brw,
                                struct intel_mipmap_tree *mt,
-                               bool srgb_enabled, bool blend_enabled);
+                               enum isl_format render_format,
+                               bool blend_enabled);
 void
 intel_miptree_prepare_render(struct brw_context *brw,
                              struct intel_mipmap_tree *mt, uint32_t level,
                              uint32_t start_layer, uint32_t layer_count,
-                             bool srgb_enabled, bool blend_enabled);
+                             enum isl_format render_format,
+                             bool blend_enabled);
 void
 intel_miptree_finish_render(struct brw_context *brw,
                             struct intel_mipmap_tree *mt, uint32_t level,
                             uint32_t start_layer, uint32_t layer_count,
-                            bool srgb_enabled, bool blend_enabled);
+                            enum isl_format render_format,
+                            bool blend_enabled);
 void
 intel_miptree_prepare_depth(struct brw_context *brw,
                             struct intel_mipmap_tree *mt, uint32_t level,

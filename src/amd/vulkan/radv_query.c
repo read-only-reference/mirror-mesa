@@ -519,8 +519,6 @@ VkResult radv_device_init_meta_query_state(struct radv_device *device)
 	struct radv_shader_module occlusion_cs = { .nir = NULL };
 	struct radv_shader_module pipeline_statistics_cs = { .nir = NULL };
 
-	zero(device->meta_state.query);
-
 	occlusion_cs.nir = build_occlusion_query_shader(device);
 	pipeline_statistics_cs.nir = build_pipeline_statistics_query_shader(device);
 
@@ -651,9 +649,12 @@ static void radv_query_shader(struct radv_cmd_buffer *cmd_buffer,
                               uint32_t pipeline_stats_mask, uint32_t avail_offset)
 {
 	struct radv_device *device = cmd_buffer->device;
-	struct radv_meta_saved_compute_state saved_state;
+	struct radv_meta_saved_state saved_state;
 
-	radv_meta_save_compute(&saved_state, cmd_buffer, 16);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_COMPUTE_PIPELINE |
+		       RADV_META_SAVE_CONSTANTS |
+		       RADV_META_SAVE_DESCRIPTORS);
 
 	struct radv_buffer dst_buffer = {
 		.bo = dst_bo,
@@ -737,7 +738,7 @@ static void radv_query_shader(struct radv_cmd_buffer *cmd_buffer,
 	                                RADV_CMD_FLAG_INV_VMEM_L1 |
 	                                RADV_CMD_FLAG_CS_PARTIAL_FLUSH;
 
-	radv_meta_restore_compute(&saved_state, cmd_buffer);
+	radv_meta_restore(&saved_state, cmd_buffer);
 }
 
 VkResult radv_CreateQueryPool(
@@ -779,7 +780,7 @@ VkResult radv_CreateQueryPool(
 		size += 4 * pCreateInfo->queryCount;
 
 	pool->bo = device->ws->buffer_create(device->ws, size,
-					     64, RADEON_DOMAIN_GTT, 0);
+					     64, RADEON_DOMAIN_GTT, RADEON_FLAG_NO_INTERPROCESS_SHARING);
 
 	if (!pool->bo) {
 		vk_free2(&device->alloc, pAllocator, pool);
@@ -1057,16 +1058,18 @@ void radv_CmdResetQueryPool(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
-	uint64_t va = radv_buffer_get_va(pool->bo);
+	struct radv_cmd_state *state = &cmd_buffer->state;
 
-	cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, pool->bo, 8);
+	state->flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
+					      firstQuery * pool->stride,
+					      queryCount * pool->stride, 0);
 
-	si_cp_dma_clear_buffer(cmd_buffer, va + firstQuery * pool->stride,
-			       queryCount * pool->stride, 0);
 	if (pool->type == VK_QUERY_TYPE_TIMESTAMP ||
-	    pool->type == VK_QUERY_TYPE_PIPELINE_STATISTICS)
-		si_cp_dma_clear_buffer(cmd_buffer, va + pool->availability_offset + firstQuery * 4,
-		                       queryCount * 4, 0);
+	    pool->type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
+		state->flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
+						      pool->availability_offset + firstQuery * 4,
+						      queryCount * 4, 0);
+	}
 }
 
 void radv_CmdBeginQuery(
@@ -1152,7 +1155,7 @@ void radv_CmdEndQuery(
 					   false,
 					   cmd_buffer->device->physical_device->rad_info.chip_class,
 					   false,
-					   EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0,
+					   V_028A90_BOTTOM_OF_PIPE_TS, 0,
 					   1, avail_va, 0, 1);
 		break;
 	default:

@@ -371,7 +371,7 @@ intel_batchbuffer_require_space(struct brw_context *brw, GLuint sz,
 
    const unsigned batch_used = USED_BATCH(*batch) * 4;
    if (batch_used + sz >= BATCH_SZ) {
-      if (!brw->no_batch_wrap) {
+      if (!batch->no_wrap) {
          intel_batchbuffer_flush(brw);
       } else {
          const unsigned new_size =
@@ -631,7 +631,7 @@ brw_finish_batch(struct brw_context *brw)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   brw->no_batch_wrap = true;
+   brw->batch.no_wrap = true;
 
    /* Capture the closing pipeline statistics register values necessary to
     * support query objects (in the non-hardware context world).
@@ -675,7 +675,7 @@ brw_finish_batch(struct brw_context *brw)
       intel_batchbuffer_emit_dword(&brw->batch, MI_NOOP);
    }
 
-   brw->no_batch_wrap = false;
+   brw->batch.no_wrap = false;
 }
 
 static void
@@ -891,7 +891,7 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
       return 0;
 
    /* Check that we didn't just wrap our batchbuffer at a bad time. */
-   assert(!brw->no_batch_wrap);
+   assert(!brw->batch.no_wrap);
 
    brw_finish_batch(brw);
    intel_upload_finish(brw);
@@ -1048,7 +1048,7 @@ brw_state_batch(struct brw_context *brw,
    uint32_t offset = ALIGN(batch->state_used, alignment);
 
    if (offset + size >= STATE_SZ) {
-      if (!brw->no_batch_wrap) {
+      if (!batch->no_wrap) {
          intel_batchbuffer_flush(brw);
          offset = ALIGN(batch->state_used, alignment);
       } else {
@@ -1200,9 +1200,7 @@ brw_store_register_mem64(struct brw_context *brw,
 void
 brw_load_register_imm32(struct brw_context *brw, uint32_t reg, uint32_t imm)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 6);
+   assert(brw->screen->devinfo.gen >= 6);
 
    BEGIN_BATCH(3);
    OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
@@ -1217,9 +1215,7 @@ brw_load_register_imm32(struct brw_context *brw, uint32_t reg, uint32_t imm)
 void
 brw_load_register_imm64(struct brw_context *brw, uint32_t reg, uint64_t imm)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 6);
+   assert(brw->screen->devinfo.gen >= 6);
 
    BEGIN_BATCH(5);
    OUT_BATCH(MI_LOAD_REGISTER_IMM | (5 - 2));
@@ -1236,9 +1232,7 @@ brw_load_register_imm64(struct brw_context *brw, uint32_t reg, uint64_t imm)
 void
 brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 8 || devinfo->is_haswell);
+   assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 
    BEGIN_BATCH(3);
    OUT_BATCH(MI_LOAD_REGISTER_REG | (3 - 2));
@@ -1253,9 +1247,7 @@ brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
 void
 brw_load_register_reg64(struct brw_context *brw, uint32_t src, uint32_t dest)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-
-   assert(devinfo->gen >= 8 || devinfo->is_haswell);
+   assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 
    BEGIN_BATCH(6);
    OUT_BATCH(MI_LOAD_REGISTER_REG | (3 - 2));

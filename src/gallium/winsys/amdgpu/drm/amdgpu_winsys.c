@@ -73,6 +73,7 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
 
    ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL;
    ws->debug_all_bos = debug_get_option_all_bos();
+   ws->reserve_vmid = strstr(debug_get_option("R600_DEBUG", ""), "reserve_vmid") != NULL;
 
    return true;
 
@@ -145,6 +146,8 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
       return ws->num_sdma_IBs;
    case RADEON_GFX_BO_LIST_COUNTER:
       return ws->gfx_bo_list_counter;
+   case RADEON_GFX_IB_SIZE_COUNTER:
+      return ws->gfx_ib_size_counter;
    case RADEON_NUM_BYTES_MOVED:
       amdgpu_query_info(ws->dev, AMDGPU_INFO_NUM_BYTES_MOVED, 8, &retval);
       return retval;

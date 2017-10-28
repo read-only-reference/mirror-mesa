@@ -24,7 +24,10 @@
 #include "main/context.h"
 #include "main/teximage.h"
 #include "main/blend.h"
+#include "main/bufferobj.h"
+#include "main/enums.h"
 #include "main/fbobject.h"
+#include "main/image.h"
 #include "main/renderbuffer.h"
 #include "main/glformats.h"
 
@@ -33,6 +36,7 @@
 #include "brw_defines.h"
 #include "brw_meta_util.h"
 #include "brw_state.h"
+#include "intel_buffer_objects.h"
 #include "intel_fbo.h"
 #include "common/gen_debug.h"
 
@@ -311,7 +315,8 @@ brw_blorp_blit_miptrees(struct brw_context *brw,
       src_format = dst_format = MESA_FORMAT_R_FLOAT32;
    }
 
-   enum isl_format src_isl_format = brw_isl_format_for_mesa_format(src_format);
+   enum isl_format src_isl_format =
+      brw_blorp_to_isl_format(brw, src_format, false);
    enum isl_aux_usage src_aux_usage =
       intel_miptree_texture_aux_usage(brw, src_mt, src_isl_format);
    /* We do format workarounds for some depth formats so we can't reliably
@@ -324,8 +329,10 @@ brw_blorp_blit_miptrees(struct brw_context *brw,
    intel_miptree_prepare_access(brw, src_mt, src_level, 1, src_layer, 1,
                                 src_aux_usage, src_clear_supported);
 
+   enum isl_format dst_isl_format =
+      brw_blorp_to_isl_format(brw, dst_format, true);
    enum isl_aux_usage dst_aux_usage =
-      intel_miptree_render_aux_usage(brw, dst_mt, encode_srgb, false);
+      intel_miptree_render_aux_usage(brw, dst_mt, dst_isl_format, false);
    const bool dst_clear_supported = dst_aux_usage != ISL_AUX_USAGE_NONE;
    intel_miptree_prepare_access(brw, dst_mt, dst_level, 1, dst_layer, 1,
                                 dst_aux_usage, dst_clear_supported);
@@ -347,10 +354,9 @@ brw_blorp_blit_miptrees(struct brw_context *brw,
    struct blorp_batch batch;
    blorp_batch_init(&brw->blorp, &batch, brw, 0);
    blorp_blit(&batch, &src_surf, src_level, src_layer,
-              brw_blorp_to_isl_format(brw, src_format, false), src_isl_swizzle,
+              src_isl_format, src_isl_swizzle,
               &dst_surf, dst_level, dst_layer,
-              brw_blorp_to_isl_format(brw, dst_format, true),
-              ISL_SWIZZLE_IDENTITY,
+              dst_isl_format, ISL_SWIZZLE_IDENTITY,
               src_x0, src_y0, src_x1, src_y1,
               dst_x0, dst_y0, dst_x1, dst_y1,
               filter, mirror_x, mirror_y);
@@ -601,6 +607,14 @@ try_blorp_blit(struct brw_context *brw,
    return true;
 }
 
+static void
+apply_y_flip(int *y0, int *y1, int height)
+{
+   int tmp = height - *y0;
+   *y0 = height - *y1;
+   *y1 = tmp;
+}
+
 bool
 brw_blorp_copytexsubimage(struct brw_context *brw,
                           struct gl_renderbuffer *src_rb,
@@ -672,13 +686,9 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
    /* Account for the fact that in the system framebuffer, the origin is at
     * the lower left.
     */
-   bool mirror_y = false;
-   if (_mesa_is_winsys_fbo(ctx->ReadBuffer)) {
-      GLint tmp = src_rb->Height - srcY0;
-      srcY0 = src_rb->Height - srcY1;
-      srcY1 = tmp;
-      mirror_y = true;
-   }
+   bool mirror_y = _mesa_is_winsys_fbo(ctx->ReadBuffer);
+   if (mirror_y)
+      apply_y_flip(&srcY0, &srcY1, src_rb->Height);
 
    /* Account for face selection and texture view MinLayer */
    int dst_slice = slice + dst_image->TexObject->MinLayer + dst_image->Face;
@@ -754,6 +764,366 @@ brw_blorp_framebuffer(struct brw_context *brw,
    return mask;
 }
 
+static struct brw_bo *
+blorp_get_client_bo(struct brw_context *brw,
+                    unsigned w, unsigned h, unsigned d,
+                    GLenum target, GLenum format, GLenum type,
+                    const void *pixels,
+                    const struct gl_pixelstore_attrib *packing,
+                    uint32_t *offset_out, uint32_t *row_stride_out,
+                    uint32_t *image_stride_out, bool read_only)
+{
+   /* Account for SKIP_PIXELS, SKIP_ROWS, ALIGNMENT, and SKIP_IMAGES */
+   const GLuint dims = _mesa_get_texture_dimensions(target);
+   const uint32_t first_pixel = _mesa_image_offset(dims, packing, w, h,
+                                                   format, type, 0, 0, 0);
+   const uint32_t last_pixel =  _mesa_image_offset(dims, packing, w, h,
+                                                   format, type,
+                                                   d - 1, h - 1, w);
+   const uint32_t stride = _mesa_image_row_stride(packing, w, format, type);
+   const uint32_t cpp = _mesa_bytes_per_pixel(format, type);
+   const uint32_t size = last_pixel - first_pixel;
+
+   *row_stride_out = stride;
+   *image_stride_out = _mesa_image_image_stride(packing, w, h, format, type);
+
+   if (_mesa_is_bufferobj(packing->BufferObj)) {
+      const uint32_t offset = first_pixel + (intptr_t)pixels;
+      if (!read_only && ((offset % cpp) || (stride % cpp))) {
+         perf_debug("Bad PBO alignment; fallback to CPU mapping\n");
+         return NULL;
+      }
+
+      /* This is a user-provided PBO. We just need to get the BO out */
+      struct intel_buffer_object *intel_pbo =
+         intel_buffer_object(packing->BufferObj);
+      struct brw_bo *bo =
+         intel_bufferobj_buffer(brw, intel_pbo, offset, size, !read_only);
+
+      /* We take a reference to the BO so that the caller can just always
+       * unref without having to worry about whether it's a user PBO or one
+       * we created.
+       */
+      brw_bo_reference(bo);
+
+      *offset_out = offset;
+      return bo;
+   } else {
+      /* Someone should have already checked that there is data to upload. */
+      assert(pixels);
+
+      /* Creating a temp buffer currently only works for upload */
+      assert(read_only);
+
+      /* This is not a user-provided PBO.  Instead, pixels is a pointer to CPU
+       * data which we need to copy into a BO.
+       */
+      struct brw_bo *bo =
+         brw_bo_alloc(brw->bufmgr, "tmp_tex_subimage_src", size, 64);
+      if (bo == NULL) {
+         perf_debug("intel_texsubimage: temp bo creation failed: size = %u\n",
+                    size);
+         return NULL;
+      }
+
+      if (brw_bo_subdata(bo, 0, size, pixels + first_pixel)) {
+         perf_debug("intel_texsubimage: temp bo upload failed\n");
+         brw_bo_unreference(bo);
+         return NULL;
+      }
+
+      *offset_out = 0;
+      return bo;
+   }
+}
+
+/* Consider all the restrictions and determine the format of the source. */
+static mesa_format
+blorp_get_client_format(struct brw_context *brw,
+                        GLenum format, GLenum type,
+                        const struct gl_pixelstore_attrib *packing)
+{
+   if (brw->ctx._ImageTransferState)
+      return MESA_FORMAT_NONE;
+
+   if (packing->SwapBytes || packing->LsbFirst || packing->Invert) {
+      perf_debug("intel_texsubimage_blorp: unsupported gl_pixelstore_attrib\n");
+      return MESA_FORMAT_NONE;
+   }
+
+   if (format != GL_RED &&
+       format != GL_RG &&
+       format != GL_RGB &&
+       format != GL_BGR &&
+       format != GL_RGBA &&
+       format != GL_BGRA &&
+       format != GL_ALPHA &&
+       format != GL_RED_INTEGER &&
+       format != GL_RG_INTEGER &&
+       format != GL_RGB_INTEGER &&
+       format != GL_BGR_INTEGER &&
+       format != GL_RGBA_INTEGER &&
+       format != GL_BGRA_INTEGER) {
+      perf_debug("intel_texsubimage_blorp: %s not supported",
+                 _mesa_enum_to_string(format));
+      return MESA_FORMAT_NONE;
+   }
+
+   return _mesa_tex_format_from_format_and_type(&brw->ctx, format, type);
+}
+
+static bool
+need_signed_unsigned_int_conversion(mesa_format src_format,
+                                    mesa_format dst_format)
+{
+   const GLenum src_type = _mesa_get_format_datatype(src_format);
+   const GLenum dst_type = _mesa_get_format_datatype(dst_format);
+   return (src_type == GL_INT && dst_type == GL_UNSIGNED_INT) ||
+          (src_type == GL_UNSIGNED_INT && dst_type == GL_INT);
+}
+
+bool
+brw_blorp_upload_miptree(struct brw_context *brw,
+                         struct intel_mipmap_tree *dst_mt,
+                         mesa_format dst_format,
+                         uint32_t level, uint32_t x, uint32_t y, uint32_t z,
+                         uint32_t width, uint32_t height, uint32_t depth,
+                         GLenum target, GLenum format, GLenum type,
+                         const void *pixels,
+                         const struct gl_pixelstore_attrib *packing)
+{
+   const mesa_format src_format =
+      blorp_get_client_format(brw, format, type, packing);
+   if (src_format == MESA_FORMAT_NONE)
+      return false;
+
+   if (!brw->mesa_format_supports_render[dst_format]) {
+      perf_debug("intel_texsubimage: can't use %s as render target\n",
+                 _mesa_get_format_name(dst_format));
+      return false;
+   }
+
+   /* This function relies on blorp_blit to upload the pixel data to the
+    * miptree.  But, blorp_blit doesn't support signed to unsigned or
+    * unsigned to signed integer conversions.
+    */
+   if (need_signed_unsigned_int_conversion(src_format, dst_format))
+      return false;
+
+   uint32_t src_offset, src_row_stride, src_image_stride;
+   struct brw_bo *src_bo =
+      blorp_get_client_bo(brw, width, height, depth,
+                          target, format, type, pixels, packing,
+                          &src_offset, &src_row_stride,
+                          &src_image_stride, true);
+   if (src_bo == NULL)
+      return false;
+
+   /* Now that source is offset to correct starting point, adjust the
+    * given dimensions to treat 1D arrays as 2D.
+    */
+   if (target == GL_TEXTURE_1D_ARRAY) {
+      assert(depth == 1);
+      assert(z == 0);
+      depth = height;
+      height = 1;
+      z = y;
+      y = 0;
+      src_image_stride = src_row_stride;
+   }
+
+   intel_miptree_check_level_layer(dst_mt, level, z + depth - 1);
+
+   bool result = false;
+
+   /* Blit slice-by-slice creating a single-slice miptree for each layer. Even
+    * in case of linear buffers hardware wants image arrays to be aligned by
+    * four rows. This way hardware only gets one image at a time and any
+    * source alignment will do.
+    */
+   for (unsigned i = 0; i < depth; ++i) {
+      struct intel_mipmap_tree *src_mt = intel_miptree_create_for_bo(
+                                            brw, src_bo, src_format,
+                                            src_offset + i * src_image_stride,
+                                            width, height, 1,
+                                            src_row_stride, 0);
+
+      if (!src_mt) {
+         perf_debug("intel_texsubimage: miptree creation for src failed\n");
+         goto err;
+      }
+
+      /* In case exact match is needed, copy using equivalent UINT formats
+       * preventing hardware from changing presentation for SNORM -1.
+       */
+      if (src_mt->format == dst_format) {
+         brw_blorp_copy_miptrees(brw, src_mt, 0, 0,
+                                 dst_mt, level, z + i,
+                                 0, 0, x, y, width, height);
+      } else {
+         brw_blorp_blit_miptrees(brw, src_mt, 0, 0,
+                                 src_format, SWIZZLE_XYZW,
+                                 dst_mt, level, z + i,
+                                 dst_format,
+                                 0, 0, width, height,
+                                 x, y, x + width, y + height,
+                                 GL_NEAREST, false, false, false, false);
+      }
+
+      intel_miptree_release(&src_mt);
+   }
+
+   result = true;
+
+err:
+   brw_bo_unreference(src_bo);
+
+   return result;
+}
+
+bool
+brw_blorp_download_miptree(struct brw_context *brw,
+                           struct intel_mipmap_tree *src_mt,
+                           mesa_format src_format, uint32_t src_swizzle,
+                           uint32_t level, uint32_t x, uint32_t y, uint32_t z,
+                           uint32_t width, uint32_t height, uint32_t depth,
+                           GLenum target, GLenum format, GLenum type,
+                           bool y_flip, const void *pixels,
+                           const struct gl_pixelstore_attrib *packing)
+{
+   const mesa_format dst_format =
+      blorp_get_client_format(brw, format, type, packing);
+   if (dst_format == MESA_FORMAT_NONE)
+      return false;
+
+   if (!brw->mesa_format_supports_render[dst_format]) {
+      perf_debug("intel_texsubimage: can't use %s as render target\n",
+                 _mesa_get_format_name(dst_format));
+      return false;
+   }
+
+   /* This function relies on blorp_blit to download the pixel data from the
+    * miptree. But, blorp_blit doesn't support signed to unsigned or unsigned
+    * to signed integer conversions.
+    */
+   if (need_signed_unsigned_int_conversion(src_format, dst_format))
+      return false;
+
+   /* We can't fetch from LUMINANCE or intensity as that would require a
+    * non-trivial swizzle.
+    */
+   switch (_mesa_get_format_base_format(src_format)) {
+   case GL_LUMINANCE:
+   case GL_LUMINANCE_ALPHA:
+   case GL_INTENSITY:
+      return false;
+   default:
+      break;
+   }
+
+   /* This pass only works for PBOs */
+   assert(_mesa_is_bufferobj(packing->BufferObj));
+
+   uint32_t dst_offset, dst_row_stride, dst_image_stride;
+   struct brw_bo *dst_bo =
+      blorp_get_client_bo(brw, width, height, depth,
+                          target, format, type, pixels, packing,
+                          &dst_offset, &dst_row_stride,
+                          &dst_image_stride, false);
+   if (dst_bo == NULL)
+      return false;
+
+   /* Now that source is offset to correct starting point, adjust the
+    * given dimensions to treat 1D arrays as 2D.
+    */
+   if (target == GL_TEXTURE_1D_ARRAY) {
+      assert(depth == 1);
+      assert(z == 0);
+      depth = height;
+      height = 1;
+      z = y;
+      y = 0;
+      dst_image_stride = dst_row_stride;
+   }
+
+   intel_miptree_check_level_layer(src_mt, level, z + depth - 1);
+
+   int y0 = y;
+   int y1 = y + height;
+   if (y_flip) {
+      apply_y_flip(&y0, &y1, minify(src_mt->surf.phys_level0_sa.height,
+                                    level - src_mt->first_level));
+   }
+
+   bool result = false;
+
+   /* Blit slice-by-slice creating a single-slice miptree for each layer. Even
+    * in case of linear buffers hardware wants image arrays to be aligned by
+    * four rows. This way hardware only gets one image at a time and any
+    * source alignment will do.
+    */
+   for (unsigned i = 0; i < depth; ++i) {
+      struct intel_mipmap_tree *dst_mt = intel_miptree_create_for_bo(
+                                            brw, dst_bo, dst_format,
+                                            dst_offset + i * dst_image_stride,
+                                            width, height, 1,
+                                            dst_row_stride, 0);
+
+      if (!dst_mt) {
+         perf_debug("intel_texsubimage: miptree creation for src failed\n");
+         goto err;
+      }
+
+      /* In case exact match is needed, copy using equivalent UINT formats
+       * preventing hardware from changing presentation for SNORM -1.
+       */
+      if (dst_mt->format == src_format && !y_flip &&
+          src_swizzle == SWIZZLE_XYZW) {
+         brw_blorp_copy_miptrees(brw, src_mt, level, z + i,
+                                 dst_mt, 0, 0,
+                                 x, y, 0, 0, width, height);
+      } else {
+         brw_blorp_blit_miptrees(brw, src_mt, level, z + i,
+                                 src_format, src_swizzle,
+                                 dst_mt, 0, 0, dst_format,
+                                 x, y0, x + width, y1,
+                                 0, 0, width, height,
+                                 GL_NEAREST, false, y_flip, false, false);
+      }
+
+      intel_miptree_release(&dst_mt);
+   }
+
+   result = true;
+
+   /* As we implement PBO transfers by binding the user-provided BO as a
+    * fake framebuffer and rendering to it.  This breaks the invariant of the
+    * GL that nothing is able to render to a BO, causing nondeterministic
+    * corruption issues because the render cache is not coherent with a
+    * number of other caches that the BO could potentially be bound to
+    * afterwards.
+    *
+    * This could be solved in the same way that we guarantee texture
+    * coherency after a texture is attached to a framebuffer and
+    * rendered to, but that would involve checking *all* BOs bound to
+    * the pipeline for the case we need to emit a cache flush due to
+    * previous rendering to any of them -- Including vertex, index,
+    * uniform, atomic counter, shader image, transform feedback,
+    * indirect draw buffers, etc.
+    *
+    * That would increase the per-draw call overhead even though it's
+    * very unlikely that any of the BOs bound to the pipeline has been
+    * rendered to via a PBO at any point, so it seems better to just
+    * flush here unconditionally.
+    */
+   brw_emit_mi_flush(brw);
+
+err:
+   brw_bo_unreference(dst_bo);
+
+   return result;
+}
+
 static bool
 set_write_disables(const struct intel_renderbuffer *irb,
                    const GLubyte *color_mask, bool *color_write_disable)
@@ -789,6 +1159,7 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
    mesa_format format = irb->Base.Base.Format;
    if (!encode_srgb && _mesa_get_format_color_encoding(format) == GL_SRGB)
       format = _mesa_get_srgb_format_linear(format);
+   enum isl_format isl_format = brw->mesa_to_isl_render_format[format];
 
    x0 = fb->_Xmin;
    x1 = fb->_Xmax;
@@ -887,8 +1258,7 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
 
       struct blorp_batch batch;
       blorp_batch_init(&brw->blorp, &batch, brw, 0);
-      blorp_fast_clear(&batch, &surf,
-                       brw->mesa_to_isl_render_format[format],
+      blorp_fast_clear(&batch, &surf, isl_format,
                        level, irb->mt_layer, num_layers,
                        x0, y0, x1, y1);
       blorp_batch_finish(&batch);
@@ -907,9 +1277,9 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
           irb->mt, irb->mt_level, irb->mt_layer, num_layers);
 
       enum isl_aux_usage aux_usage =
-         intel_miptree_render_aux_usage(brw, irb->mt, encode_srgb, false);
+         intel_miptree_render_aux_usage(brw, irb->mt, isl_format, false);
       intel_miptree_prepare_render(brw, irb->mt, level, irb->mt_layer,
-                                   num_layers, encode_srgb, false);
+                                   num_layers, isl_format, false);
 
       struct isl_surf isl_tmp[2];
       struct blorp_surf surf;
@@ -921,16 +1291,14 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
 
       struct blorp_batch batch;
       blorp_batch_init(&brw->blorp, &batch, brw, 0);
-      blorp_clear(&batch, &surf,
-                  brw->mesa_to_isl_render_format[format],
-                  ISL_SWIZZLE_IDENTITY,
+      blorp_clear(&batch, &surf, isl_format, ISL_SWIZZLE_IDENTITY,
                   level, irb->mt_layer, num_layers,
                   x0, y0, x1, y1,
                   clear_color, color_write_disable);
       blorp_batch_finish(&batch);
 
       intel_miptree_finish_render(brw, irb->mt, level, irb->mt_layer,
-                                  num_layers, encode_srgb, false);
+                                  num_layers, isl_format, false);
    }
 
    return;

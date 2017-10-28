@@ -61,7 +61,8 @@ radv_init_trace(struct radv_device *device)
 
 	device->trace_bo = ws->buffer_create(ws, TRACE_BO_SIZE, 8,
 					     RADEON_DOMAIN_VRAM,
-					     RADEON_FLAG_CPU_ACCESS);
+					     RADEON_FLAG_CPU_ACCESS|
+					     RADEON_FLAG_NO_INTERPROCESS_SHARING);
 	if (!device->trace_bo)
 		return false;
 
@@ -495,8 +496,19 @@ radv_dump_shader(struct radv_pipeline *pipeline,
 	if (!shader)
 		return;
 
-	fprintf(f, "%s:\n%s\n\n", radv_get_shader_name(shader, stage),
-		shader->disasm_string);
+	fprintf(f, "%s:\n\n", radv_get_shader_name(shader, stage));
+
+	if (shader->spirv) {
+		fprintf(f, "SPIRV:\n");
+		radv_print_spirv(shader->spirv, shader->spirv_size, f);
+	}
+
+	if (shader->nir) {
+		fprintf(f, "NIR:\n");
+		nir_print_shader(shader->nir, f);
+	}
+
+	fprintf(stderr, "DISASM:\n%s\n", shader->disasm_string);
 
 	radv_shader_dump_stats(pipeline->device, shader, stage, f);
 }
@@ -588,7 +600,7 @@ radv_dump_enabled_options(struct radv_device *device, FILE *f)
 
 	fprintf(f, "Enabled debug options: ");
 
-	mask = device->debug_flags;
+	mask = device->instance->debug_flags;
 	while (mask) {
 		int i = u_bit_scan64(&mask);
 		fprintf(f, "%s, ", radv_get_debug_option_name(i));
@@ -694,7 +706,7 @@ radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_winsys_cs *cs)
 }
 
 void
-radv_print_spirv(struct radv_shader_module *module, FILE *fp)
+radv_print_spirv(uint32_t *data, uint32_t size, FILE *fp)
 {
 	char path[] = "/tmp/fileXXXXXX";
 	char line[2048], command[128];
@@ -706,7 +718,7 @@ radv_print_spirv(struct radv_shader_module *module, FILE *fp)
 	if (fd < 0)
 		return;
 
-	if (write(fd, module->data, module->size) == -1)
+	if (write(fd, data, size) == -1)
 		goto fail;
 
 	sprintf(command, "spirv-dis %s", path);

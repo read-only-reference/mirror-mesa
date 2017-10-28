@@ -92,6 +92,7 @@ enum radeon_value_id {
     RADEON_NUM_GFX_IBS,
     RADEON_NUM_SDMA_IBS,
     RADEON_GFX_BO_LIST_COUNTER, /* number of BOs submitted in gfx IBs */
+    RADEON_GFX_IB_SIZE_COUNTER,
     RADEON_NUM_BYTES_MOVED,
     RADEON_NUM_EVICTIONS,
     RADEON_NUM_VRAM_CPU_PAGE_FAULTS,
@@ -595,6 +596,18 @@ struct radeon_winsys {
      */
     void (*fence_reference)(struct pipe_fence_handle **dst,
                             struct pipe_fence_handle *src);
+
+    /**
+     * Create a new fence object corresponding to the given sync_file.
+     */
+    struct pipe_fence_handle *(*fence_import_sync_file)(struct radeon_winsys *ws,
+							int fd);
+
+    /**
+     * Return a sync_file FD corresponding to the given fence object.
+     */
+    int (*fence_export_sync_file)(struct radeon_winsys *ws,
+				  struct pipe_fence_handle *fence);
 
     /**
      * Initialize surface

@@ -694,6 +694,9 @@ brw_initialize_context_constants(struct brw_context *brw)
     */
    if (devinfo->gen >= 7)
       ctx->Const.UseSTD430AsDefaultPacking = true;
+
+   if (!(ctx->Const.ContextFlags & GL_CONTEXT_FLAG_DEBUG_BIT))
+      ctx->Const.AllowMappedBuffersDuringExecution = true;
 }
 
 static void
@@ -817,14 +820,15 @@ brw_process_driconf_options(struct brw_context *brw)
 
 GLboolean
 brwCreateContext(gl_api api,
-	         const struct gl_config *mesaVis,
-		 __DRIcontext *driContextPriv,
+                 const struct gl_config *mesaVis,
+                 __DRIcontext *driContextPriv,
                  unsigned major_version,
                  unsigned minor_version,
                  uint32_t flags,
                  bool notify_reset,
+                 unsigned priority,
                  unsigned *dri_ctx_error,
-	         void *sharedContextPrivate)
+                 void *sharedContextPrivate)
 {
    struct gl_context *shareCtx = (struct gl_context *) sharedContextPrivate;
    struct intel_screen *screen = driContextPriv->driScreenPriv->driverPrivate;
@@ -952,6 +956,24 @@ brwCreateContext(gl_api api,
          intelDestroyContext(driContextPriv);
          return false;
       }
+
+      int hw_priority = BRW_CONTEXT_MEDIUM_PRIORITY;
+      switch (priority) {
+      case __DRI_CTX_PRIORITY_LOW:
+         hw_priority = BRW_CONTEXT_LOW_PRIORITY;
+         break;
+      case __DRI_CTX_PRIORITY_HIGH:
+         hw_priority = BRW_CONTEXT_HIGH_PRIORITY;
+         break;
+      }
+      if (hw_priority != I915_CONTEXT_DEFAULT_PRIORITY &&
+          brw_hw_context_set_priority(brw->bufmgr, brw->hw_ctx, hw_priority)) {
+         fprintf(stderr,
+		 "Failed to set priority [%d:%d] for hardware context.\n",
+                 priority, hw_priority);
+         intelDestroyContext(driContextPriv);
+         return false;
+      }
    }
 
    if (brw_init_pipe_control(brw, devinfo)) {
@@ -1039,16 +1061,18 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    brw_draw_destroy(brw);
 
    brw_bo_unreference(brw->curbe.curbe_bo);
-   if (brw->vs.base.scratch_bo)
-      brw_bo_unreference(brw->vs.base.scratch_bo);
-   if (brw->tcs.base.scratch_bo)
-      brw_bo_unreference(brw->tcs.base.scratch_bo);
-   if (brw->tes.base.scratch_bo)
-      brw_bo_unreference(brw->tes.base.scratch_bo);
-   if (brw->gs.base.scratch_bo)
-      brw_bo_unreference(brw->gs.base.scratch_bo);
-   if (brw->wm.base.scratch_bo)
-      brw_bo_unreference(brw->wm.base.scratch_bo);
+
+   brw_bo_unreference(brw->vs.base.scratch_bo);
+   brw_bo_unreference(brw->tcs.base.scratch_bo);
+   brw_bo_unreference(brw->tes.base.scratch_bo);
+   brw_bo_unreference(brw->gs.base.scratch_bo);
+   brw_bo_unreference(brw->wm.base.scratch_bo);
+
+   brw_bo_unreference(brw->vs.base.push_const_bo);
+   brw_bo_unreference(brw->tcs.base.push_const_bo);
+   brw_bo_unreference(brw->tes.base.push_const_bo);
+   brw_bo_unreference(brw->gs.base.push_const_bo);
+   brw_bo_unreference(brw->wm.base.push_const_bo);
 
    brw_destroy_hw_context(brw->bufmgr, brw->hw_ctx);
 
@@ -1596,21 +1620,9 @@ intel_update_image_buffer(struct brw_context *intel,
    if (last_mt && last_mt->bo == buffer->bo)
       return;
 
-   enum isl_colorspace colorspace;
-   switch (_mesa_get_format_color_encoding(intel_rb_format(rb))) {
-   case GL_SRGB:
-      colorspace = ISL_COLORSPACE_SRGB;
-      break;
-   case GL_LINEAR:
-      colorspace = ISL_COLORSPACE_LINEAR;
-      break;
-   default:
-      unreachable("Invalid color encoding");
-   }
-
    struct intel_mipmap_tree *mt =
       intel_miptree_create_for_dri_image(intel, buffer, GL_TEXTURE_2D,
-                                         colorspace, true);
+                                         intel_rb_format(rb), true);
    if (!mt)
       return;
 

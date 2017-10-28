@@ -465,6 +465,7 @@ struct intel_batchbuffer {
    bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
+   bool no_wrap;
 
    struct brw_reloc_list batch_relocs;
    struct brw_reloc_list state_relocs;
@@ -580,6 +581,8 @@ struct brw_stage_state
    uint32_t sampler_count;
    uint32_t sampler_offset;
 
+   struct brw_image_param image_param[BRW_MAX_IMAGES];
+
    /** Need to re-emit 3DSTATE_CONSTANT_XS? */
    bool push_constants_dirty;
 };
@@ -693,7 +696,6 @@ struct brw_context
    uint32_t reset_count;
 
    struct intel_batchbuffer batch;
-   bool no_batch_wrap;
 
    struct {
       struct brw_bo *bo;
@@ -812,6 +814,14 @@ struct brw_context
       int gl_drawid;
       struct brw_bo *draw_id_bo;
       uint32_t draw_id_offset;
+
+      /**
+       * Pointer to the the buffer storing the indirect draw parameters. It
+       * currently only stores the number of requested draw calls but more
+       * parameters could potentially be added.
+       */
+      struct brw_bo *draw_params_count_bo;
+      uint32_t draw_params_count_offset;
    } draw;
 
    struct {
@@ -1031,14 +1041,11 @@ struct brw_context
    struct {
       struct brw_stage_state base;
 
-      GLuint render_surf;
-
       /**
        * Buffer object used in place of multisampled null render targets on
        * Gen6.  See brw_emit_null_surface_state().
        */
       struct brw_bo *multisampled_null_render_target_bo;
-      uint32_t fast_clear_op;
 
       float offset_clamp;
    } wm;
@@ -1227,20 +1234,21 @@ void intel_update_renderbuffers(__DRIcontext *context,
                                 __DRIdrawable *drawable);
 void intel_prepare_render(struct brw_context *brw);
 
-void brw_predraw_resolve_inputs(struct brw_context *brw);
+void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering);
 
 void intel_resolve_for_dri2_flush(struct brw_context *brw,
                                   __DRIdrawable *drawable);
 
 GLboolean brwCreateContext(gl_api api,
-		      const struct gl_config *mesaVis,
-		      __DRIcontext *driContextPriv,
-                      unsigned major_version,
-                      unsigned minor_version,
-                      uint32_t flags,
-                      bool notify_reset,
-                      unsigned *error,
-		      void *sharedContextPrivate);
+                           const struct gl_config *mesaVis,
+                           __DRIcontext *driContextPriv,
+                           unsigned major_version,
+                           unsigned minor_version,
+                           uint32_t flags,
+                           bool notify_reset,
+                           unsigned priority,
+                           unsigned *error,
+                           void *sharedContextPrivate);
 
 /*======================================================================
  * brw_misc_state.c

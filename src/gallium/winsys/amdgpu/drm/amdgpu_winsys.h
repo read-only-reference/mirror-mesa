@@ -69,6 +69,7 @@ struct amdgpu_winsys {
    uint64_t num_sdma_IBs;
    uint64_t num_mapped_buffers;
    uint64_t gfx_bo_list_counter;
+   uint64_t gfx_ib_size_counter;
 
    struct radeon_info info;
 
@@ -80,6 +81,7 @@ struct amdgpu_winsys {
 
    bool check_vm;
    bool debug_all_bos;
+   bool reserve_vmid;
 
    /* List of all allocated buffers */
    mtx_t global_bo_list_lock;
