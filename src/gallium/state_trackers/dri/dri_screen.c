@@ -81,6 +81,8 @@ dri_fill_st_options(struct dri_screen *screen)
    options->glsl_zero_init = driQueryOptionb(optionCache, "glsl_zero_init");
    options->force_glsl_abs_sqrt =
       driQueryOptionb(optionCache, "force_glsl_abs_sqrt");
+   options->allow_glsl_cross_stage_interpolation_mismatch =
+      driQueryOptionb(optionCache, "allow_glsl_cross_stage_interpolation_mismatch");
 
    driComputeOptionsSha1(optionCache, options->config_options_sha1);
 }
@@ -219,7 +221,7 @@ dri_fill_in_modes(struct dri_screen *screen)
    if (dri_loader_get_cap(screen, DRI_LOADER_CAP_RGBA_ORDERING))
       num_formats = ARRAY_SIZE(mesa_formats);
    else
-      num_formats = 5;
+      num_formats = ARRAY_SIZE(mesa_formats) - 2;
 
    /* Add configs. */
    for (format = 0; format < num_formats; format++) {

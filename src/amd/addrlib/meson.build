@@ -38,11 +38,9 @@ files_addrlib = files(
   'gfx9/coord.h',
   'gfx9/gfx9addrlib.cpp',
   'gfx9/gfx9addrlib.h',
-  'gfx9/rbmap.cpp',
-  'gfx9/rbmap.h',
+  'amdgpu_asic_addr.h',
   'inc/chip/gfx9/gfx9_gb_reg.h',
   'inc/chip/r800/si_gb_reg.h',
-  'inc/lnx_common_defs.h',
   'r800/chip/si_ci_vi_merged_enum.h',
   'r800/ciaddrlib.cpp',
   'r800/ciaddrlib.h',
@@ -59,5 +57,4 @@ libamdgpu_addrlib = static_library(
     'core', 'inc/chip/gfx9', 'inc/chip/r800', 'gfx9/chip', 'r800/chip',
     '../common', '../../'),
   cpp_args : [cpp_vis_args, '-DBRAHMA_BUILD=1'],
-  build_by_default : false,
 )

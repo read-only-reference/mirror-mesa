@@ -160,6 +160,8 @@ files_libfreedreno = files(
   'a5xx/fd5_format.h',
   'a5xx/fd5_gmem.c',
   'a5xx/fd5_gmem.h',
+  'a5xx/fd5_image.c',
+  'a5xx/fd5_image.h',
   'a5xx/fd5_program.c',
   'a5xx/fd5_program.h',
   'a5xx/fd5_query.c',
@@ -186,6 +188,7 @@ files_libfreedreno = files(
   'ir3/ir3_nir.c',
   'ir3/ir3_nir.h',
   'ir3/ir3_nir_lower_if_else.c',
+  'ir3/ir3_nir_lower_tg4_to_tex.c',
   'ir3/ir3_print.c',
   'ir3/ir3_ra.c',
   'ir3/ir3_sched.c',
@@ -205,14 +208,23 @@ libfreedreno = static_library(
   c_args : [c_vis_args],
   cpp_args : [cpp_vis_args],
   dependencies : [dep_libdrm, dep_libdrm_freedreno],
-  build_by_default : false,
 )
 
 ir3_compiler = executable(
   'ir3_compiler',
   'ir3/ir3_cmdline.c',
   include_directories : freedreno_includes,
-  dependencies : [dep_libdrm, dep_libdrm_freedreno],
-  link_with : [libfreedreno, libgallium, libmesa_util],
-  build_by_default : false,
+  dependencies : [
+    dep_libdrm,
+    dep_libdrm_freedreno,
+    dependency('threads'),
+  ],
+  link_with : [
+    libfreedreno,
+    libgallium,
+    libnir,
+    libglsl_standalone,
+    libmesa_util,
+  ],
+  build_by_default : true,
 )

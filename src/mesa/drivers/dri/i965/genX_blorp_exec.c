@@ -60,7 +60,7 @@ blorp_emit_reloc(struct blorp_batch *batch,
    uint32_t offset;
 
    if (GEN_GEN < 6 && brw_ptr_in_state_buffer(&brw->batch, location)) {
-      offset = (char *)location - (char *)brw->batch.state_map;
+      offset = (char *)location - (char *)brw->batch.state.map;
       return brw_state_reloc(&brw->batch, offset,
                              address.buffer, address.offset + delta,
                              address.reloc_flags);
@@ -68,7 +68,7 @@ blorp_emit_reloc(struct blorp_batch *batch,
 
    assert(!brw_ptr_in_state_buffer(&brw->batch, location));
 
-   offset = (char *)location - (char *)brw->batch.map;
+   offset = (char *)location - (char *)brw->batch.batch.map;
    return brw_batch_reloc(&brw->batch, offset,
                           address.buffer, address.offset + delta,
                           address.reloc_flags);
@@ -86,13 +86,26 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
       brw_state_reloc(&brw->batch, ss_offset, bo, address.offset + delta,
                       address.reloc_flags);
 
-   void *reloc_ptr = (void *)brw->batch.state_map + ss_offset;
+   void *reloc_ptr = (void *)brw->batch.state.map + ss_offset;
 #if GEN_GEN >= 8
    *(uint64_t *)reloc_ptr = reloc_val;
 #else
    *(uint32_t *)reloc_ptr = reloc_val;
 #endif
 }
+
+#if GEN_GEN >= 7
+static struct blorp_address
+blorp_get_surface_base_address(struct blorp_batch *batch)
+{
+   assert(batch->blorp->driver_ctx == batch->driver_batch);
+   struct brw_context *brw = batch->driver_batch;
+   return (struct blorp_address) {
+      .buffer = brw->batch.state.bo,
+      .offset = 0,
+   };
+}
+#endif
 
 static void *
 blorp_alloc_dynamic_state(struct blorp_batch *batch,
@@ -150,8 +163,18 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
    void *data = brw_state_batch(brw, size, 64, &offset);
 
    *addr = (struct blorp_address) {
-      .buffer = brw->batch.state_bo,
+      .buffer = brw->batch.state.bo,
       .offset = offset,
+
+#if GEN_GEN == 10
+      .mocs = CNL_MOCS_WB,
+#elif GEN_GEN == 9
+      .mocs = SKL_MOCS_WB,
+#elif GEN_GEN == 8
+      .mocs = BDW_MOCS_WB,
+#elif GEN_GEN == 7
+      .mocs = GEN7_MOCS_L3,
+#endif
    };
 
    return data;
@@ -215,8 +238,13 @@ genX(blorp_exec)(struct blorp_batch *batch,
     * data.
     */
    if (params->src.enabled)
-      brw_render_cache_set_check_flush(brw, params->src.addr.buffer);
-   brw_render_cache_set_check_flush(brw, params->dst.addr.buffer);
+      brw_cache_flush_for_read(brw, params->src.addr.buffer);
+   if (params->dst.enabled)
+      brw_cache_flush_for_render(brw, params->dst.addr.buffer);
+   if (params->depth.enabled)
+      brw_cache_flush_for_depth(brw, params->depth.addr.buffer);
+   if (params->stencil.enabled)
+      brw_cache_flush_for_depth(brw, params->stencil.addr.buffer);
 
    brw_select_pipeline(brw, BRW_RENDER_PIPELINE);
 
@@ -283,9 +311,9 @@ retry:
    brw->ib.index_size = -1;
 
    if (params->dst.enabled)
-      brw_render_cache_set_add_bo(brw, params->dst.addr.buffer);
+      brw_render_cache_add_bo(brw, params->dst.addr.buffer);
    if (params->depth.enabled)
-      brw_render_cache_set_add_bo(brw, params->depth.addr.buffer);
+      brw_depth_cache_add_bo(brw, params->depth.addr.buffer);
    if (params->stencil.enabled)
-      brw_render_cache_set_add_bo(brw, params->stencil.addr.buffer);
+      brw_depth_cache_add_bo(brw, params->stencil.addr.buffer);
 }

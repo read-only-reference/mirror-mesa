@@ -37,6 +37,7 @@ files_mesa_util = files(
   'format_r11g11b10f.h',
   'format_rgb9e5.h',
   'format_srgb.h',
+  'futex.h',
   'half_float.c',
   'half_float.h',
   'hash_table.c',
@@ -45,6 +46,8 @@ files_mesa_util = files(
   'macros.h',
   'mesa-sha1.c',
   'mesa-sha1.h',
+  'os_time.c',
+  'os_time.h',
   'sha1/sha1.c',
   'sha1/sha1.h',
   'ralloc.c',
@@ -59,6 +62,7 @@ files_mesa_util = files(
   'set.c',
   'set.h',
   'simple_list.h',
+  'simple_mtx.h',
   'slab.c',
   'slab.h',
   'string_buffer.c',
@@ -130,8 +134,17 @@ if with_tests
     dependencies : [dep_m],
   )
 
+  mesa_sha1_test = executable(
+    'mesa-sha1_test',
+    files('mesa-sha1_test.c'),
+    include_directories : inc_common,
+    link_with : libmesa_util,
+    c_args : [c_msvc_compat_args],
+  )
+
   test('u_atomic', u_atomic_test)
   test('roundeven', roundeven_test)
+  test('mesa-sha1', mesa_sha1_test)
 
   subdir('tests/hash_table')
   subdir('tests/string_buffer')

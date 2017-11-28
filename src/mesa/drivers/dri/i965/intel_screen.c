@@ -81,6 +81,7 @@ DRI_CONF_BEGIN
       DRI_CONF_DUAL_COLOR_BLEND_BY_LOCATION("false")
       DRI_CONF_ALLOW_GLSL_EXTENSION_DIRECTIVE_MIDSHADER("false")
       DRI_CONF_ALLOW_GLSL_BUILTIN_VARIABLE_REDECLARATION("false")
+      DRI_CONF_ALLOW_GLSL_CROSS_STAGE_INTERPOLATION_MISMATCH("false")
       DRI_CONF_ALLOW_HIGHER_COMPAT_VERSION("false")
       DRI_CONF_FORCE_GLSL_ABS_SQRT("false")
 
@@ -755,6 +756,67 @@ intel_create_image(__DRIscreen *dri_screen,
                                loaderPrivate);
 }
 
+static void *
+intel_map_image(__DRIcontext *context, __DRIimage *image,
+                int x0, int y0, int width, int height,
+                unsigned int flags, int *stride, void **map_info)
+{
+   struct brw_context *brw = NULL;
+   struct brw_bo *bo = NULL;
+   void *raw_data = NULL;
+   GLuint pix_w = 1;
+   GLuint pix_h = 1;
+   GLint pix_bytes = 1;
+
+   if (!context || !image || !stride || !map_info || *map_info)
+      return NULL;
+
+   if (x0 < 0 || x0 >= image->width || width > image->width - x0)
+      return NULL;
+
+   if (y0 < 0 || y0 >= image->height || height > image->height - y0)
+      return NULL;
+
+   if (flags & MAP_INTERNAL_MASK)
+      return NULL;
+
+   brw = context->driverPrivate;
+   bo = image->bo;
+
+   assert(brw);
+   assert(bo);
+
+   /* DRI flags and GL_MAP.*_BIT flags are the same, so just pass them on. */
+   raw_data = brw_bo_map(brw, bo, flags);
+   if (!raw_data)
+      return NULL;
+
+   _mesa_get_format_block_size(image->format, &pix_w, &pix_h);
+   pix_bytes = _mesa_get_format_bytes(image->format);
+
+   assert(pix_w);
+   assert(pix_h);
+   assert(pix_bytes > 0);
+
+   raw_data += (x0 / pix_w) * pix_bytes + (y0 / pix_h) * image->pitch;
+
+   brw_bo_reference(bo);
+
+   *stride = image->pitch;
+   *map_info = bo;
+
+   return raw_data;
+}
+
+static void
+intel_unmap_image(__DRIcontext *context, __DRIimage *image, void *map_info)
+{
+   struct brw_bo *bo = map_info;
+
+   brw_bo_unmap(bo);
+   brw_bo_unreference(bo);
+}
+
 static __DRIimage *
 intel_create_image_with_modifiers(__DRIscreen *dri_screen,
                                   int width, int height, int format,
@@ -774,7 +836,7 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
       *value = image->pitch;
       return true;
    case __DRI_IMAGE_ATTRIB_HANDLE:
-      *value = image->bo->gem_handle;
+      *value = brw_bo_export_gem_handle(image->bo);
       return true;
    case __DRI_IMAGE_ATTRIB_NAME:
       return !brw_bo_flink(image->bo, (uint32_t *) value);
@@ -1305,8 +1367,8 @@ static const __DRIimageExtension intelImageExtension = {
     .createImageFromDmaBufs             = intel_create_image_from_dma_bufs,
     .blitImage                          = NULL,
     .getCapabilities                    = NULL,
-    .mapImage                           = NULL,
-    .unmapImage                         = NULL,
+    .mapImage                           = intel_map_image,
+    .unmapImage                         = intel_unmap_image,
     .createImageWithModifiers           = intel_create_image_with_modifiers,
     .createImageFromDmaBufs2            = intel_create_image_from_dma_bufs2,
     .queryDmaBufFormats                 = intel_query_dma_buf_formats,
@@ -1384,6 +1446,9 @@ brw_query_renderer_integer(__DRIscreen *dri_screen,
 				      0, BRW_CONTEXT_MEDIUM_PRIORITY) == 0)
          value[0] |= __DRI2_RENDERER_HAS_CONTEXT_PRIORITY_MEDIUM;
       return 0;
+   case __DRI2_RENDERER_HAS_FRAMEBUFFER_SRGB:
+      value[0] = 1;
+      return 0;
    default:
       return driQueryRendererIntegerCommon(dri_screen, param, value);
    }
@@ -1431,6 +1496,7 @@ static const __DRIextension *screenExtensions[] = {
     &intelRendererQueryExtension.base,
     &dri2ConfigQueryExtension.base,
     &dri2NoErrorExtension.base,
+    &dri2FlushControlExtension.base,
     NULL
 };
 
@@ -1441,6 +1507,7 @@ static const __DRIextension *intelRobustScreenExtensions[] = {
     &intelImageExtension.base,
     &intelRendererQueryExtension.base,
     &dri2ConfigQueryExtension.base,
+    &dri2FlushControlExtension.base,
     &dri2Robustness.base,
     &dri2NoErrorExtension.base,
     NULL
@@ -1544,13 +1611,18 @@ intelCreateBuffer(__DRIscreen *dri_screen,
       fb->Visual.sRGBCapable = true;
    }
 
+   /* mesaVis->sRGBCapable was set, user is asking for sRGB */
+   bool srgb_cap_set = mesaVis->redBits >= 8 && mesaVis->sRGBCapable;
+
    /* setup the hardware-based renderbuffers */
    rb = intel_create_winsys_renderbuffer(screen, rgbFormat, num_samples);
    _mesa_attach_and_own_rb(fb, BUFFER_FRONT_LEFT, &rb->Base.Base);
+   rb->need_srgb = srgb_cap_set;
 
    if (mesaVis->doubleBufferMode) {
       rb = intel_create_winsys_renderbuffer(screen, rgbFormat, num_samples);
       _mesa_attach_and_own_rb(fb, BUFFER_BACK_LEFT, &rb->Base.Base);
+      rb->need_srgb = srgb_cap_set;
    }
 
    /*
@@ -1911,6 +1983,8 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
       MESA_FORMAT_B8G8R8A8_UNORM,
       MESA_FORMAT_B8G8R8X8_UNORM,
 
+      MESA_FORMAT_B8G8R8A8_SRGB,
+
       /* The 32-bit RGBA format must not precede the 32-bit BGRA format.
        * Likewise for RGBX and BGRX.  Otherwise, the GLX client and the GLX
        * server may disagree on which format the GLXFBConfig represents,
@@ -1950,7 +2024,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    if (intel_loader_get_cap(dri_screen, DRI_LOADER_CAP_RGBA_ORDERING))
       num_formats = ARRAY_SIZE(formats);
    else
-      num_formats = 3;
+      num_formats = ARRAY_SIZE(formats) - 2; /* all - RGBA_ORDERING formats */
 
    /* Generate singlesample configs without accumulation buffer. */
    for (unsigned i = 0; i < num_formats; i++) {
@@ -2129,14 +2203,9 @@ set_max_gl_versions(struct intel_screen *screen)
 /**
  * Return the revision (generally the revid field of the PCI header) of the
  * graphics device.
- *
- * XXX: This function is useful to keep around even if it is not currently in
- * use. It is necessary for new platforms and revision specific workarounds or
- * features. Please don't remove it so that we know it at least continues to
- * build.
  */
-static __attribute__((__unused__)) int
-brw_get_revision(int fd)
+int
+intel_device_get_revision(int fd)
 {
    struct drm_i915_getparam gp;
    int revision;

@@ -1,4 +1,5 @@
 # Copyright © 2017 Dylan Baker
+# Copyright © 2017 Intel Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -27,63 +28,90 @@ subdir('drivers/ddebug')
 subdir('drivers/noop')
 subdir('drivers/trace')
 subdir('drivers/rbug')
-subdir('drivers/radeon')
-subdir('drivers/radeonsi')
-subdir('drivers/nouveau')
-subdir('drivers/freedreno')
-subdir('drivers/softpipe')
-if with_gallium_vc4
-  subdir('drivers/vc4')
-endif
-if with_gallium_vc5
-  subdir('drivers/vc5')
-endif
-if with_gallium_etnaviv
-  subdir('drivers/etnaviv')
-endif
-subdir('drivers/llvmpipe')
 subdir('winsys/sw/null')
 subdir('winsys/sw/dri')
 subdir('winsys/sw/kms-dri')
 subdir('winsys/sw/wrapper')
-if with_gallium_vc4
+if with_gallium_softpipe
+  subdir('drivers/softpipe')
+  if with_llvm
+    subdir('drivers/llvmpipe')
+  endif
+endif
+if with_gallium_r300 or with_gallium_radeonsi or with_gallium_r600
+  subdir('winsys/radeon/drm')
+endif
+if with_gallium_r300
+  subdir('drivers/r300')
+endif
+if with_gallium_r600
+  subdir('drivers/r600')
+endif
+if with_gallium_radeonsi
+  subdir('drivers/radeon')
+  subdir('drivers/radeonsi')
+  subdir('winsys/amdgpu/drm')
+endif
+if with_gallium_nouveau
+  subdir('drivers/nouveau')
+  subdir('winsys/nouveau/drm')
+endif
+if with_gallium_freedreno
+  subdir('drivers/freedreno')
+  subdir('winsys/freedreno/drm')
+endif
+if with_gallium_pl111
   subdir('winsys/pl111/drm')
 endif
-subdir('winsys/radeon/drm')
-subdir('winsys/amdgpu/drm')
-subdir('winsys/nouveau/drm')
-subdir('winsys/freedreno/drm')
 if with_gallium_vc4
+  subdir('drivers/vc4')
   subdir('winsys/vc4/drm')
 endif
 if with_gallium_vc5
+  subdir('drivers/vc5')
   subdir('winsys/vc5/drm')
 endif
 if with_gallium_etnaviv
+  subdir('drivers/etnaviv')
   subdir('winsys/etnaviv/drm')
 endif
 if with_gallium_imx
   subdir('winsys/imx/drm')
 endif
-subdir('state_trackers/dri')
+if with_gallium_i915
+  subdir('winsys/i915/drm')
+  subdir('drivers/i915')
+endif
+if with_gallium_svga
+  subdir('drivers/svga')
+  subdir('winsys/svga/drm')
+endif
+if with_gallium_virgl
+  subdir('drivers/virgl')
+  subdir('winsys/virgl/drm')
+  subdir('winsys/virgl/vtest')
+endif
+if with_dri
+  subdir('state_trackers/dri')
+endif
 if with_osmesa == 'gallium'
   subdir('state_trackers/osmesa')
 endif
-# TODO: i915
-# TODO: SVGA
-# TODO: r300
-# TODO: r600
+if with_glx == 'gallium-xlib'
+  subdir('winsys/sw/xlib')
+  subdir('state_trackers/glx/xlib')
+endif
 # TODO: SWR
-# TODO: virgl
-# TODO: winsys/sw/xlib
 # TODO: clover
-if with_dri and with_gallium
+if with_dri
   subdir('targets/dri')
 endif
 if with_osmesa == 'gallium'
   subdir('targets/osmesa')
 endif
-# TODO: xlib-glx
+if with_glx == 'gallium-xlib'
+  subdir('targets/libgl-xlib')
+endif
 # TODO: OMX
 # TODO: VA
 # TODO: vdpau

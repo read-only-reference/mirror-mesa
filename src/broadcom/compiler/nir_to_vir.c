@@ -380,9 +380,11 @@ ntq_emit_tex(struct v3d_compile *c, nir_tex_instr *instr)
                         p0_unpacked.bias_supplied = true;
                         break;
                 case nir_tex_src_lod:
-                        /* XXX: Needs base level addition */
                         coords[next_coord++] =
-                                ntq_get_src(c, instr->src[i].src, 0);
+                                vir_FADD(c,
+                                         ntq_get_src(c, instr->src[i].src, 0),
+                                         vir_uniform(c, QUNIFORM_TEXTURE_FIRST_LEVEL,
+                                                     unit));
 
                         if (instr->op != nir_texop_txf &&
                             instr->op != nir_texop_tg4) {
@@ -477,14 +479,35 @@ ntq_emit_tex(struct v3d_compile *c, nir_tex_instr *instr)
                         STATIC_ASSERT(PIPE_SWIZZLE_X == 0);
                         chan = return_values[i / 2];
 
-                        enum v3d_qpu_input_unpack unpack;
-                        if (i & 1)
-                                unpack = V3D_QPU_UNPACK_H;
-                        else
-                                unpack = V3D_QPU_UNPACK_L;
+                        if (nir_alu_type_get_base_type(instr->dest_type) ==
+                            nir_type_float) {
+                                enum v3d_qpu_input_unpack unpack;
+                                if (i & 1)
+                                        unpack = V3D_QPU_UNPACK_H;
+                                else
+                                        unpack = V3D_QPU_UNPACK_L;
 
-                        chan = vir_FMOV(c, chan);
-                        vir_set_unpack(c->defs[chan.index], 0, unpack);
+                                chan = vir_FMOV(c, chan);
+                                vir_set_unpack(c->defs[chan.index], 0, unpack);
+                        } else {
+                                /* If we're unpacking the low field, shift it
+                                 * up to the top first.
+                                 */
+                                if ((i & 1) == 0) {
+                                        chan = vir_SHL(c, chan,
+                                                       vir_uniform_ui(c, 16));
+                                }
+
+                                /* Do proper sign extension to a 32-bit int. */
+                                if (nir_alu_type_get_base_type(instr->dest_type) ==
+                                    nir_type_int) {
+                                        chan = vir_ASR(c, chan,
+                                                       vir_uniform_ui(c, 16));
+                                } else {
+                                        chan = vir_SHR(c, chan,
+                                                       vir_uniform_ui(c, 16));
+                                }
+                        }
                 } else {
                         chan = vir_MOV(c, return_values[i]);
                 }
@@ -1044,6 +1067,12 @@ emit_frag_end(struct v3d_compile *c)
         }
         */
 
+        bool has_any_tlb_color_write = false;
+        for (int rt = 0; rt < c->fs_key->nr_cbufs; rt++) {
+                if (c->output_color_var[rt])
+                        has_any_tlb_color_write = true;
+        }
+
         if (c->output_position_index != -1) {
                 struct qinst *inst = vir_MOV_dest(c,
                                                   vir_reg(QFILE_TLBU, 0),
@@ -1054,7 +1083,17 @@ emit_frag_end(struct v3d_compile *c)
                                        TLB_TYPE_DEPTH |
                                        TLB_DEPTH_TYPE_PER_PIXEL |
                                        0xffffff00);
-        } else if (c->s->info.fs.uses_discard) {
+        } else if (c->s->info.fs.uses_discard || !has_any_tlb_color_write) {
+                /* Emit passthrough Z if it needed to be delayed until shader
+                 * end due to potential discards.
+                 *
+                 * Since (single-threaded) fragment shaders always need a TLB
+                 * write, emit passthrouh Z if we didn't have any color
+                 * buffers and flag us as potentially discarding, so that we
+                 * can use Z as the TLB write.
+                 */
+                c->s->info.fs.uses_discard = true;
+
                 struct qinst *inst = vir_MOV_dest(c,
                                                   vir_reg(QFILE_TLBU, 0),
                                                   vir_reg(QFILE_NULL, 0));

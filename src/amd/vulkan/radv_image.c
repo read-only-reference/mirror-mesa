@@ -155,7 +155,8 @@ radv_init_surface(struct radv_device *device,
             (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR) ||
             pCreateInfo->mipLevels > 1 || pCreateInfo->arrayLayers > 1 ||
             device->physical_device->rad_info.chip_class < VI ||
-            create_info->scanout || (device->instance->debug_flags & RADV_DEBUG_NO_DCC))
+            create_info->scanout || (device->instance->debug_flags & RADV_DEBUG_NO_DCC) ||
+	    pCreateInfo->samples >= 2)
 		surface->flags |= RADEON_SURF_DISABLE_DCC;
 	if (create_info->scanout)
 		surface->flags |= RADEON_SURF_SCANOUT;
@@ -805,6 +806,16 @@ radv_image_alloc_htile(struct radv_image *image)
 static inline bool
 radv_image_can_enable_dcc_or_cmask(struct radv_image *image)
 {
+	if (image->info.samples <= 1 &&
+	    image->info.width <= 512 && image->info.height <= 512) {
+		/* Do not enable CMASK or DCC for small surfaces where the cost
+		 * of the eliminate pass can be higher than the benefit of fast
+		 * clear. RadeonSI does this, but the image threshold is
+		 * different.
+		 */
+		return false;
+	}
+
 	return image->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT &&
 	       (image->exclusive || image->queue_family_mask == 1);
 }
@@ -863,12 +874,11 @@ radv_image_create(VkDevice _device,
 	radv_assert(pCreateInfo->extent.height > 0);
 	radv_assert(pCreateInfo->extent.depth > 0);
 
-	image = vk_alloc2(&device->alloc, alloc, sizeof(*image), 8,
-			    VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+	image = vk_zalloc2(&device->alloc, alloc, sizeof(*image), 8,
+			   VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 	if (!image)
 		return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-	memset(image, 0, sizeof(*image));
 	image->type = pCreateInfo->imageType;
 	image->info.width = pCreateInfo->extent.width;
 	image->info.height = pCreateInfo->extent.height;
@@ -957,15 +967,12 @@ radv_image_view_make_descriptor(struct radv_image_view *iview,
 	bool is_stencil = iview->aspect_mask == VK_IMAGE_ASPECT_STENCIL_BIT;
 	uint32_t blk_w;
 	uint32_t *descriptor;
-	uint32_t *fmask_descriptor;
 	uint32_t hw_level = 0;
 
 	if (is_storage_image) {
 		descriptor = iview->storage_descriptor;
-		fmask_descriptor = iview->storage_fmask_descriptor;
 	} else {
 		descriptor = iview->descriptor;
-		fmask_descriptor = iview->fmask_descriptor;
 	}
 
 	assert(image->surface.blk_w % vk_format_get_blockwidth(image->vk_format) == 0);
@@ -984,7 +991,7 @@ radv_image_view_make_descriptor(struct radv_image_view *iview,
 				   iview->extent.height,
 				   iview->extent.depth,
 				   descriptor,
-				   fmask_descriptor);
+				   descriptor + 8);
 
 	const struct legacy_surf_level *base_level_info = NULL;
 	if (device->physical_device->rad_info.chip_class <= GFX9) {
@@ -1160,11 +1167,11 @@ void radv_GetImageSubresourceLayout(
 		if (image->type == VK_IMAGE_TYPE_3D)
 			pLayout->size *= u_minify(image->info.depth, level);
 	} else {
-		pLayout->offset = surface->u.legacy.level[level].offset + surface->u.legacy.level[level].slice_size * layer;
+		pLayout->offset = surface->u.legacy.level[level].offset + (uint64_t)surface->u.legacy.level[level].slice_size_dw * 4 * layer;
 		pLayout->rowPitch = surface->u.legacy.level[level].nblk_x * surface->bpe;
-		pLayout->arrayPitch = surface->u.legacy.level[level].slice_size;
-		pLayout->depthPitch = surface->u.legacy.level[level].slice_size;
-		pLayout->size = surface->u.legacy.level[level].slice_size;
+		pLayout->arrayPitch = (uint64_t)surface->u.legacy.level[level].slice_size_dw * 4;
+		pLayout->depthPitch = (uint64_t)surface->u.legacy.level[level].slice_size_dw * 4;
+		pLayout->size = (uint64_t)surface->u.legacy.level[level].slice_size_dw * 4;
 		if (image->type == VK_IMAGE_TYPE_3D)
 			pLayout->size *= u_minify(image->info.depth, level);
 	}

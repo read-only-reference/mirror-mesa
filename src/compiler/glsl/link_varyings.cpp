@@ -189,7 +189,8 @@ process_xfb_layout_qualifiers(void *mem_ctx, const gl_linked_shader *sh,
  * matching input to another stage.
  */
 static void
-cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
+cross_validate_types_and_qualifiers(struct gl_context *ctx,
+                                    struct gl_shader_program *prog,
                                     const ir_variable *input,
                                     const ir_variable *output,
                                     gl_shader_stage consumer_stage,
@@ -343,17 +344,30 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
    }
    if (input_interpolation != output_interpolation &&
        prog->data->Version < 440) {
-      linker_error(prog,
-                   "%s shader output `%s' specifies %s "
-                   "interpolation qualifier, "
-                   "but %s shader input specifies %s "
-                   "interpolation qualifier\n",
-                   _mesa_shader_stage_to_string(producer_stage),
-                   output->name,
-                   interpolation_string(output->data.interpolation),
-                   _mesa_shader_stage_to_string(consumer_stage),
-                   interpolation_string(input->data.interpolation));
-      return;
+      if (!ctx->Const.AllowGLSLCrossStageInterpolationMismatch) {
+         linker_error(prog,
+                      "%s shader output `%s' specifies %s "
+                      "interpolation qualifier, "
+                      "but %s shader input specifies %s "
+                      "interpolation qualifier\n",
+                      _mesa_shader_stage_to_string(producer_stage),
+                      output->name,
+                      interpolation_string(output->data.interpolation),
+                      _mesa_shader_stage_to_string(consumer_stage),
+                      interpolation_string(input->data.interpolation));
+         return;
+      } else {
+         linker_warning(prog,
+                        "%s shader output `%s' specifies %s "
+                        "interpolation qualifier, "
+                        "but %s shader input specifies %s "
+                        "interpolation qualifier\n",
+                        _mesa_shader_stage_to_string(producer_stage),
+                        output->name,
+                        interpolation_string(output->data.interpolation),
+                        _mesa_shader_stage_to_string(consumer_stage),
+                        interpolation_string(input->data.interpolation));
+      }
    }
 }
 
@@ -361,7 +375,8 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
  * Validate front and back color outputs against single color input
  */
 static void
-cross_validate_front_and_back_color(struct gl_shader_program *prog,
+cross_validate_front_and_back_color(struct gl_context *ctx,
+                                    struct gl_shader_program *prog,
                                     const ir_variable *input,
                                     const ir_variable *front_color,
                                     const ir_variable *back_color,
@@ -369,11 +384,11 @@ cross_validate_front_and_back_color(struct gl_shader_program *prog,
                                     gl_shader_stage producer_stage)
 {
    if (front_color != NULL && front_color->data.assigned)
-      cross_validate_types_and_qualifiers(prog, input, front_color,
+      cross_validate_types_and_qualifiers(ctx, prog, input, front_color,
                                           consumer_stage, producer_stage);
 
    if (back_color != NULL && back_color->data.assigned)
-      cross_validate_types_and_qualifiers(prog, input, back_color,
+      cross_validate_types_and_qualifiers(ctx, prog, input, back_color,
                                           consumer_stage, producer_stage);
 }
 
@@ -566,9 +581,10 @@ validate_explicit_variable_location(struct gl_context *ctx,
       return false;
    }
 
-   if (type->without_array()->is_interface()) {
-      for (unsigned i = 0; i < type->without_array()->length; i++) {
-         glsl_struct_field *field = &type->fields.structure[i];
+   const glsl_type *type_without_array = type->without_array();
+   if (type_without_array->is_interface()) {
+      for (unsigned i = 0; i < type_without_array->length; i++) {
+         glsl_struct_field *field = &type_without_array->fields.structure[i];
          unsigned field_location = field->location -
             (field->patch ? VARYING_SLOT_PATCH0 : VARYING_SLOT_VAR0);
          if (!check_location_aliasing(explicit_locations, var,
@@ -709,7 +725,7 @@ cross_validate_outputs_to_inputs(struct gl_context *ctx,
          const ir_variable *const back_color =
             parameters.get_variable("gl_BackColor");
 
-         cross_validate_front_and_back_color(prog, input,
+         cross_validate_front_and_back_color(ctx, prog, input,
                                              front_color, back_color,
                                              consumer->Stage, producer->Stage);
       } else if (strcmp(input->name, "gl_SecondaryColor") == 0 && input->data.used) {
@@ -719,7 +735,7 @@ cross_validate_outputs_to_inputs(struct gl_context *ctx,
          const ir_variable *const back_color =
             parameters.get_variable("gl_BackSecondaryColor");
 
-         cross_validate_front_and_back_color(prog, input,
+         cross_validate_front_and_back_color(ctx, prog, input,
                                              front_color, back_color,
                                              consumer->Stage, producer->Stage);
       } else {
@@ -769,7 +785,7 @@ cross_validate_outputs_to_inputs(struct gl_context *ctx,
              */
             if (!(input->get_interface_type() &&
                   output->get_interface_type()))
-               cross_validate_types_and_qualifiers(prog, input, output,
+               cross_validate_types_and_qualifiers(ctx, prog, input, output,
                                                    consumer->Stage,
                                                    producer->Stage);
          } else {
@@ -1316,9 +1332,12 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
     * however some drivers expect to receive the list of transform feedback
     * declarations in order so sort it now for convenience.
     */
-   if (has_xfb_qualifiers)
+   if (has_xfb_qualifiers) {
       qsort(tfeedback_decls, num_tfeedback_decls, sizeof(*tfeedback_decls),
             cmp_xfb_offset);
+   } else {
+      xfb_prog->sh.LinkedTransformFeedback->api_enabled = true;
+   }
 
    xfb_prog->sh.LinkedTransformFeedback->Varyings =
       rzalloc_array(xfb_prog, struct gl_transform_feedback_varying_info,
@@ -1361,7 +1380,6 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
       if (has_xfb_qualifiers) {
          for (unsigned j = 0; j < MAX_FEEDBACK_BUFFERS; j++) {
             if (prog->TransformFeedback.BufferStride[j]) {
-               buffers |= 1 << j;
                explicit_stride[j] = true;
                xfb_prog->sh.LinkedTransformFeedback->Buffers[j].Stride =
                   prog->TransformFeedback.BufferStride[j] / 4;
@@ -1386,10 +1404,24 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
             num_buffers++;
             buffer_stream_id = -1;
             continue;
-         } else if (tfeedback_decls[i].is_varying()) {
+         }
+
+         if (has_xfb_qualifiers) {
+            buffer = tfeedback_decls[i].get_buffer();
+         } else {
+            buffer = num_buffers;
+         }
+
+         if (tfeedback_decls[i].is_varying()) {
             if (buffer_stream_id == -1)  {
                /* First varying writing to this buffer: remember its stream */
                buffer_stream_id = (int) tfeedback_decls[i].get_stream_id();
+
+               /* Only mark a buffer as active when there is a varying
+                * attached to it. This behaviour is based on a revised version
+                * of section 13.2.2 of the GL 4.6 spec.
+                */
+               buffers |= 1 << buffer;
             } else if (buffer_stream_id !=
                        (int) tfeedback_decls[i].get_stream_id()) {
                /* Varying writes to the same buffer from a different stream */
@@ -1404,13 +1436,6 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
                return false;
             }
          }
-
-         if (has_xfb_qualifiers) {
-            buffer = tfeedback_decls[i].get_buffer();
-         } else {
-            buffer = num_buffers;
-         }
-         buffers |= 1 << buffer;
 
          if (!tfeedback_decls[i].store(ctx, prog,
                                        xfb_prog->sh.LinkedTransformFeedback,

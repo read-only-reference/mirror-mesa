@@ -551,6 +551,8 @@ struct anv_block_state {
 struct anv_block_pool {
    struct anv_device *device;
 
+   uint64_t bo_flags;
+
    struct anv_bo bo;
 
    /* The offset from the start of the bo to the "center" of the block
@@ -649,7 +651,8 @@ struct anv_state_stream {
  */
 VkResult anv_block_pool_init(struct anv_block_pool *pool,
                              struct anv_device *device,
-                             uint32_t initial_size);
+                             uint32_t initial_size,
+                             uint64_t bo_flags);
 void anv_block_pool_finish(struct anv_block_pool *pool);
 int32_t anv_block_pool_alloc(struct anv_block_pool *pool,
                              uint32_t block_size);
@@ -658,7 +661,8 @@ int32_t anv_block_pool_alloc_back(struct anv_block_pool *pool,
 
 VkResult anv_state_pool_init(struct anv_state_pool *pool,
                              struct anv_device *device,
-                             uint32_t block_size);
+                             uint32_t block_size,
+                             uint64_t bo_flags);
 void anv_state_pool_finish(struct anv_state_pool *pool);
 struct anv_state anv_state_pool_alloc(struct anv_state_pool *pool,
                                       uint32_t state_size, uint32_t alignment);
@@ -678,10 +682,13 @@ struct anv_state anv_state_stream_alloc(struct anv_state_stream *stream,
 struct anv_bo_pool {
    struct anv_device *device;
 
+   uint64_t bo_flags;
+
    void *free_list[16];
 };
 
-void anv_bo_pool_init(struct anv_bo_pool *pool, struct anv_device *device);
+void anv_bo_pool_init(struct anv_bo_pool *pool, struct anv_device *device,
+                      uint64_t bo_flags);
 void anv_bo_pool_finish(struct anv_bo_pool *pool);
 VkResult anv_bo_pool_alloc(struct anv_bo_pool *pool, struct anv_bo *bo,
                            uint32_t size);
@@ -766,6 +773,7 @@ struct anv_physical_device {
     struct isl_device                           isl_dev;
     int                                         cmd_parser_version;
     bool                                        has_exec_async;
+    bool                                        has_exec_capture;
     bool                                        has_exec_fence;
     bool                                        has_syncobj;
     bool                                        has_syncobj_wait;
@@ -1552,12 +1560,12 @@ anv_pipe_invalidate_bits_for_access_flags(VkAccessFlags flags)
    return pipe_bits;
 }
 
-#define VK_IMAGE_ASPECT_ANY_COLOR_BIT (         \
+#define VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV (         \
    VK_IMAGE_ASPECT_COLOR_BIT | \
    VK_IMAGE_ASPECT_PLANE_0_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_1_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
-#define VK_IMAGE_ASPECT_PLANES_BITS ( \
+#define VK_IMAGE_ASPECT_PLANES_BITS_ANV ( \
    VK_IMAGE_ASPECT_PLANE_0_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_1_BIT_KHR | \
    VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
@@ -2253,7 +2261,7 @@ static inline VkImageAspectFlags
 anv_plane_to_aspect(VkImageAspectFlags image_aspects,
                     uint32_t plane)
 {
-   if (image_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT) {
+   if (image_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
       if (_mesa_bitcount(image_aspects) > 1)
          return VK_IMAGE_ASPECT_PLANE_0_BIT_KHR << plane;
       return VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2280,7 +2288,7 @@ anv_get_format_planes(VkFormat vk_format)
 
 struct anv_format_plane
 anv_get_format_plane(const struct gen_device_info *devinfo, VkFormat vk_format,
-                     VkImageAspectFlags aspect, VkImageTiling tiling);
+                     VkImageAspectFlagBits aspect, VkImageTiling tiling);
 
 static inline enum isl_format
 anv_get_isl_format(const struct gen_device_info *devinfo, VkFormat vk_format,
@@ -2480,6 +2488,33 @@ anv_fast_clear_state_entry_size(const struct anv_device *device)
    return device->isl_dev.ss.clear_value_size + 4;
 }
 
+static inline struct anv_address
+anv_image_get_clear_color_addr(const struct anv_device *device,
+                               const struct anv_image *image,
+                               VkImageAspectFlagBits aspect,
+                               unsigned level)
+{
+   uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+   return (struct anv_address) {
+      .bo = image->planes[plane].bo,
+      .offset = image->planes[plane].bo_offset +
+                image->planes[plane].fast_clear_state_offset +
+                anv_fast_clear_state_entry_size(device) * level,
+   };
+}
+
+static inline struct anv_address
+anv_image_get_needs_resolve_addr(const struct anv_device *device,
+                                 const struct anv_image *image,
+                                 VkImageAspectFlagBits aspect,
+                                 unsigned level)
+{
+   struct anv_address addr =
+      anv_image_get_clear_color_addr(device, image, aspect, level);
+   addr.offset += device->isl_dev.ss.clear_value_size;
+   return addr;
+}
+
 /* Returns true if a HiZ-enabled depth buffer can be sampled from. */
 static inline bool
 anv_can_sample_with_hiz(const struct gen_device_info * const devinfo,
@@ -2500,10 +2535,10 @@ anv_gen8_hiz_op_resolve(struct anv_cmd_buffer *cmd_buffer,
                         enum blorp_hiz_op op);
 void
 anv_ccs_resolve(struct anv_cmd_buffer * const cmd_buffer,
-                const struct anv_state surface_state,
                 const struct anv_image * const image,
                 VkImageAspectFlagBits aspect,
-                const uint8_t level, const uint32_t layer_count,
+                const uint8_t level,
+                const uint32_t start_layer, const uint32_t layer_count,
                 const enum blorp_fast_clear_op op);
 
 void
@@ -2547,7 +2582,7 @@ anv_image_expand_aspects(const struct anv_image *image,
    /* If the underlying image has color plane aspects and
     * VK_IMAGE_ASPECT_COLOR_BIT has been requested, then return the aspects of
     * the underlying image. */
-   if ((image->aspects & VK_IMAGE_ASPECT_PLANES_BITS) != 0 &&
+   if ((image->aspects & VK_IMAGE_ASPECT_PLANES_BITS_ANV) != 0 &&
        aspects == VK_IMAGE_ASPECT_COLOR_BIT)
       return image->aspects;
 
@@ -2562,8 +2597,8 @@ anv_image_aspects_compatible(VkImageAspectFlags aspects1,
       return true;
 
    /* Only 1 color aspects are compatibles. */
-   if ((aspects1 & VK_IMAGE_ASPECT_ANY_COLOR_BIT) != 0 &&
-       (aspects2 & VK_IMAGE_ASPECT_ANY_COLOR_BIT) != 0 &&
+   if ((aspects1 & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) != 0 &&
+       (aspects2 & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) != 0 &&
        _mesa_bitcount(aspects1) == _mesa_bitcount(aspects2))
       return true;
 

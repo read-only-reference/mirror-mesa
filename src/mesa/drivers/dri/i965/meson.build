@@ -34,6 +34,7 @@ files_i965 = files(
   'brw_cs.h',
   'brw_curbe.c',
   'brw_defines.h',
+  'brw_disk_cache.c',
   'brw_draw.c',
   'brw_draw.h',
   'brw_draw_upload.c',
@@ -155,7 +156,7 @@ oa_generator = generator(
 
 i965_oa_sources = []
 foreach hw : ['hsw', 'bdw', 'chv', 'sklgt2', 'sklgt3', 'sklgt4', 'bxt',
-              'kblgt2', 'kblgt3', 'glk']
+              'kblgt2', 'kblgt3', 'glk', 'cflgt2', 'cflgt3']
   _xml = 'brw_oa_@0@.xml'.format(hw)
   i965_oa_sources += oa_generator.process(_xml, extra_args : hw)
 endforeach

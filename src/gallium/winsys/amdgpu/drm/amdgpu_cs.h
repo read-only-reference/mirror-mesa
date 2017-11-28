@@ -24,10 +24,6 @@
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
  */
-/*
- * Authors:
- *      Marek Olšák <maraeo@gmail.com>
- */
 
 #ifndef AMDGPU_CS_H
 #define AMDGPU_CS_H
@@ -148,9 +144,11 @@ struct amdgpu_fence {
    struct amdgpu_cs_fence fence;
    uint64_t *user_fence_cpu_address;
 
-   /* If the fence is unknown due to an IB still being submitted
-    * in the other thread. */
-   volatile int submission_in_progress; /* bool (int for atomicity) */
+   /* If the fence has been submitted. This is unsignalled for deferred fences
+    * (cs->next_fence) and while an IB is still being submitted in the submit
+    * thread. */
+   struct util_queue_fence submitted;
+
    volatile int signalled;              /* bool (int for atomicity) */
 };
 
@@ -162,9 +160,6 @@ static inline bool amdgpu_fence_is_syncobj(struct amdgpu_fence *fence)
 static inline void amdgpu_ctx_unref(struct amdgpu_ctx *ctx)
 {
    if (p_atomic_dec_zero(&ctx->refcount)) {
-      if (ctx->ws->reserve_vmid)
-         amdgpu_vm_unreserve_vmid(ctx->ctx, 0);
-
       amdgpu_cs_ctx_free(ctx->ctx);
       amdgpu_bo_free(ctx->user_fence_bo);
       FREE(ctx);
@@ -185,6 +180,7 @@ static inline void amdgpu_fence_reference(struct pipe_fence_handle **dst,
       else
          amdgpu_ctx_unref(fence->ctx);
 
+      util_queue_fence_destroy(&fence->submitted);
       FREE(fence);
    }
    *rdst = rsrc;

@@ -89,7 +89,7 @@ __gen_combine_address(struct brw_context *brw, void *location,
       return address.offset + delta;
    } else {
       if (GEN_GEN < 6 && brw_ptr_in_state_buffer(batch, location)) {
-         offset = (char *) location - (char *) brw->batch.state_map;
+         offset = (char *) location - (char *) brw->batch.state.map;
          return brw_state_reloc(batch, offset, address.bo,
                                 address.offset + delta,
                                 address.reloc_flags);
@@ -97,7 +97,7 @@ __gen_combine_address(struct brw_context *brw, void *location,
 
       assert(!brw_ptr_in_state_buffer(batch, location));
 
-      offset = (char *) location - (char *) brw->batch.map;
+      offset = (char *) location - (char *) brw->batch.batch.map;
       return brw_batch_reloc(batch, offset, address.bo,
                              address.offset + delta,
                              address.reloc_flags);
@@ -1279,7 +1279,7 @@ genX(upload_clip_state)(struct brw_context *brw)
       clip.GuardbandClipTestEnable = true;
 
       clip.ClipperViewportStatePointer =
-         ro_bo(brw->batch.state_bo, brw->clip.vp_offset);
+         ro_bo(brw->batch.state.bo, brw->clip.vp_offset);
 
       clip.ScreenSpaceViewportXMin = -1;
       clip.ScreenSpaceViewportXMax = 1;
@@ -1496,7 +1496,7 @@ genX(upload_sf)(struct brw_context *brw)
        * domain.
        */
       sf.SetupViewportStateOffset =
-         ro_bo(brw->batch.state_bo, brw->sf.vp_offset);
+         ro_bo(brw->batch.state.bo, brw->sf.vp_offset);
 
       sf.PointRasterizationRule = RASTRULE_UPPER_RIGHT;
 
@@ -1626,6 +1626,16 @@ genX(upload_sf)(struct brw_context *brw)
          sf.SmoothPointEnable = true;
 #endif
 
+#if GEN_GEN == 10
+      /* _NEW_BUFFERS
+       * Smooth Point Enable bit MUST not be set when NUM_MULTISAMPLES > 1.
+       */
+      const bool multisampled_fbo =
+         _mesa_geometric_samples(ctx->DrawBuffer) > 1;
+      if (multisampled_fbo)
+         sf.SmoothPointEnable = false;
+#endif
+
 #if GEN_IS_G4X || GEN_GEN >= 5
       sf.AALineDistanceMode = AALINEDISTANCE_TRUE;
 #endif
@@ -1681,7 +1691,8 @@ static const struct brw_tracked_state genX(sf_state) = {
                _NEW_POINT |
                _NEW_PROGRAM |
                (GEN_GEN >= 6 ? _NEW_MULTISAMPLE : 0) |
-               (GEN_GEN <= 7 ? _NEW_BUFFERS | _NEW_POLYGON : 0),
+               (GEN_GEN <= 7 ? _NEW_BUFFERS | _NEW_POLYGON : 0) |
+               (GEN_GEN == 10 ? _NEW_BUFFERS : 0),
       .brw   = BRW_NEW_BLORP |
                BRW_NEW_VUE_MAP_GEOM_OUT |
                (GEN_GEN <= 5 ? BRW_NEW_BATCH |
@@ -1789,7 +1800,7 @@ genX(upload_wm)(struct brw_context *brw)
 
       if (stage_state->sampler_count)
          wm.SamplerStatePointer =
-            ro_bo(brw->batch.state_bo, stage_state->sampler_offset);
+            ro_bo(brw->batch.state.bo, stage_state->sampler_offset);
 #if GEN_GEN == 5
       if (wm_prog_data->prog_offset_2)
          wm.GRFRegisterCount2 = wm_prog_data->reg_blocks_2;
@@ -2082,7 +2093,7 @@ genX(upload_vs_state)(struct brw_context *brw)
 
       vs.StatisticsEnable = false;
       vs.SamplerStatePointer =
-         ro_bo(brw->batch.state_bo, stage_state->sampler_offset);
+         ro_bo(brw->batch.state.bo, stage_state->sampler_offset);
 #endif
 
 #if GEN_GEN == 5
@@ -3321,7 +3332,7 @@ genX(upload_color_calc_state)(struct brw_context *brw)
       cc.StatisticsEnable = brw->stats_wm;
 
       cc.CCViewportStatePointer =
-         ro_bo(brw->batch.state_bo, brw->cc.vp_offset);
+         ro_bo(brw->batch.state.bo, brw->cc.vp_offset);
 #else
       /* _NEW_COLOR */
       cc.BlendConstantColorRed = ctx->Color.BlendColorUnclamped[0];
@@ -4278,16 +4289,16 @@ static const struct brw_tracked_state genX(cs_state) = {
 static void
 genX(upload_raster)(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
+   const struct gl_context *ctx = &brw->ctx;
 
    /* _NEW_BUFFERS */
-   bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
+   const bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
 
    /* _NEW_POLYGON */
-   struct gl_polygon_attrib *polygon = &ctx->Polygon;
+   const struct gl_polygon_attrib *polygon = &ctx->Polygon;
 
    /* _NEW_POINT */
-   struct gl_point_attrib *point = &ctx->Point;
+   const struct gl_point_attrib *point = &ctx->Point;
 
    brw_batch_emit(brw, GENX(3DSTATE_RASTER), raster) {
       if (brw->polygon_front_bit == render_to_fbo)
@@ -4311,7 +4322,7 @@ genX(upload_raster)(struct brw_context *brw)
          raster.CullMode = CULLMODE_NONE;
       }
 
-      point->SmoothFlag = raster.SmoothPointEnable;
+      raster.SmoothPointEnable = point->SmoothFlag;
 
       raster.DXMultisampleRasterizationEnable =
          _mesa_is_multisample_enabled(ctx);
@@ -4350,6 +4361,16 @@ genX(upload_raster)(struct brw_context *brw)
 
       /* _NEW_LINE */
       raster.AntialiasingEnable = ctx->Line.SmoothFlag;
+
+#if GEN_GEN == 10
+      /* _NEW_BUFFERS
+       * Antialiasing Enable bit MUST not be set when NUM_MULTISAMPLES > 1.
+       */
+      const bool multisampled_fbo =
+         _mesa_geometric_samples(ctx->DrawBuffer) > 1;
+      if (multisampled_fbo)
+         raster.AntialiasingEnable = false;
+#endif
 
       /* _NEW_SCISSOR */
       raster.ScissorRectangleEnable = ctx->Scissor.EnableFlags;
@@ -5062,7 +5083,7 @@ genX(update_sampler_state)(struct brw_context *brw,
    }
 #if GEN_GEN < 6
       samp_st.BorderColorPointer =
-         ro_bo(brw->batch.state_bo, border_color_offset);
+         ro_bo(brw->batch.state.bo, border_color_offset);
 #else
       samp_st.BorderColorPointer = border_color_offset;
 #endif
@@ -5345,8 +5366,6 @@ genX(init_atoms)(struct brw_context *brw)
 
       /* Command packets:
        */
-      &brw_invariant_state,
-
       &brw_binding_table_pointers,
       &genX(blend_constant_color),
 
@@ -5462,19 +5481,14 @@ genX(init_atoms)(struct brw_context *brw)
        */
       &brw_vs_pull_constants,
       &brw_vs_ubo_surfaces,
-      &brw_vs_abo_surfaces,
       &brw_tcs_pull_constants,
       &brw_tcs_ubo_surfaces,
-      &brw_tcs_abo_surfaces,
       &brw_tes_pull_constants,
       &brw_tes_ubo_surfaces,
-      &brw_tes_abo_surfaces,
       &brw_gs_pull_constants,
       &brw_gs_ubo_surfaces,
-      &brw_gs_abo_surfaces,
       &brw_wm_pull_constants,
       &brw_wm_ubo_surfaces,
-      &brw_wm_abo_surfaces,
       &gen6_renderbuffer_surfaces,
       &brw_renderbuffer_read_surfaces,
       &brw_texture_surfaces,
@@ -5554,19 +5568,14 @@ genX(init_atoms)(struct brw_context *brw)
        */
       &brw_vs_pull_constants,
       &brw_vs_ubo_surfaces,
-      &brw_vs_abo_surfaces,
       &brw_tcs_pull_constants,
       &brw_tcs_ubo_surfaces,
-      &brw_tcs_abo_surfaces,
       &brw_tes_pull_constants,
       &brw_tes_ubo_surfaces,
-      &brw_tes_abo_surfaces,
       &brw_gs_pull_constants,
       &brw_gs_ubo_surfaces,
-      &brw_gs_abo_surfaces,
       &brw_wm_pull_constants,
       &brw_wm_ubo_surfaces,
-      &brw_wm_abo_surfaces,
       &gen6_renderbuffer_surfaces,
       &brw_renderbuffer_read_surfaces,
       &brw_texture_surfaces,
@@ -5636,7 +5645,6 @@ genX(init_atoms)(struct brw_context *brw)
       &genX(cs_push_constants),
       &genX(cs_pull_constants),
       &brw_cs_ubo_surfaces,
-      &brw_cs_abo_surfaces,
       &brw_cs_texture_surfaces,
       &brw_cs_work_groups_surface,
       &genX(cs_samplers),

@@ -113,6 +113,18 @@ anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
    if (result != VK_SUCCESS)
       return result;
 
+   if (heap_size > (2ull << 30) && !device->supports_48bit_addresses) {
+      /* When running with an overridden PCI ID, we may get a GTT size from
+       * the kernel that is greater than 2 GiB but the execbuf check for 48bit
+       * address support can still fail.  Just clamp the address space size to
+       * 2 GiB if we don't have 48-bit support.
+       */
+      intel_logw("%s:%d: The kernel reported a GTT size larger than 2 GiB but "
+                        "not support for 48-bit addresses",
+                        __FILE__, __LINE__);
+      heap_size = 2ull << 30;
+   }
+
    if (heap_size <= 3ull * (1ull << 30)) {
       /* In this case, everything fits nicely into the 32-bit address space,
        * so there's no need for supporting 48bit addresses on client-allocated
@@ -350,6 +362,7 @@ anv_physical_device_init(struct anv_physical_device *device,
       goto fail;
 
    device->has_exec_async = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_ASYNC);
+   device->has_exec_capture = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_CAPTURE);
    device->has_exec_fence = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE);
    device->has_syncobj = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE_ARRAY);
    device->has_syncobj_wait = device->has_syncobj &&
@@ -1199,21 +1212,33 @@ VkResult anv_CreateDevice(
    }
    pthread_condattr_destroy(&condattr);
 
-   anv_bo_pool_init(&device->batch_bo_pool, device);
+   uint64_t bo_flags =
+      (physical_device->supports_48bit_addresses ? EXEC_OBJECT_SUPPORTS_48B_ADDRESS : 0) |
+      (physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0) |
+      (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0);
+
+   anv_bo_pool_init(&device->batch_bo_pool, device, bo_flags);
 
    result = anv_bo_cache_init(&device->bo_cache);
    if (result != VK_SUCCESS)
       goto fail_batch_bo_pool;
 
-   result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384);
+   /* For the state pools we explicitly disable 48bit. */
+   bo_flags = physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0;
+
+   result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384,
+                                bo_flags);
    if (result != VK_SUCCESS)
       goto fail_bo_cache;
 
-   result = anv_state_pool_init(&device->instruction_state_pool, device, 16384);
+   result = anv_state_pool_init(&device->instruction_state_pool, device, 16384,
+                                bo_flags |
+                                (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0));
    if (result != VK_SUCCESS)
       goto fail_dynamic_state_pool;
 
-   result = anv_state_pool_init(&device->surface_state_pool, device, 4096);
+   result = anv_state_pool_init(&device->surface_state_pool, device, 4096,
+                                bo_flags);
    if (result != VK_SUCCESS)
       goto fail_instruction_state_pool;
 

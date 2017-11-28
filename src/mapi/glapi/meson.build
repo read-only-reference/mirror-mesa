@@ -18,13 +18,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+subdir('gen')
+
 inc_glapi = include_directories('.')
 
 static_glapi_files = []
 static_glapi_args = []
 
-if with_appledri or with_windowsdri
-  static_glapi_files += files('glapi_gentable.c')
+if ['apple', 'windows'].contains(with_dri_platform)
+  static_glapi_files += [glapi_gentable_c, glapitable_h]
 endif
 
 if with_shared_glapi

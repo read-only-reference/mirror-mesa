@@ -103,6 +103,7 @@ struct _egl_extensions
    EGLBoolean EXT_create_context_robustness;
    EGLBoolean EXT_image_dma_buf_import;
    EGLBoolean EXT_image_dma_buf_import_modifiers;
+   EGLBoolean EXT_pixel_format_float;
    EGLBoolean EXT_swap_buffers_with_damage;
 
    unsigned int IMG_context_priority;
@@ -112,6 +113,7 @@ struct _egl_extensions
 
    EGLBoolean KHR_cl_event2;
    EGLBoolean KHR_config_attribs;
+   EGLBoolean KHR_context_flush_control;
    EGLBoolean KHR_create_context;
    EGLBoolean KHR_fence_sync;
    EGLBoolean KHR_get_all_proc_addresses;
@@ -264,7 +266,7 @@ _eglIsResourceLinked(_EGLResource *res)
 
 #ifdef HAVE_X11_PLATFORM
 _EGLDisplay*
-_eglGetX11Display(Display *native_display, const EGLint *attrib_list);
+_eglGetX11Display(Display *native_display, const EGLAttrib *attrib_list);
 #endif
 
 #ifdef HAVE_DRM_PLATFORM
@@ -272,7 +274,7 @@ struct gbm_device;
 
 _EGLDisplay*
 _eglGetGbmDisplay(struct gbm_device *native_display,
-                  const EGLint *attrib_list);
+                  const EGLAttrib *attrib_list);
 #endif
 
 #ifdef HAVE_WAYLAND_PLATFORM
@@ -280,13 +282,13 @@ struct wl_display;
 
 _EGLDisplay*
 _eglGetWaylandDisplay(struct wl_display *native_display,
-                      const EGLint *attrib_list);
+                      const EGLAttrib *attrib_list);
 #endif
 
 #ifdef HAVE_SURFACELESS_PLATFORM
 _EGLDisplay*
 _eglGetSurfacelessDisplay(void *native_display,
-                          const EGLint *attrib_list);
+                          const EGLAttrib *attrib_list);
 #endif
 
 #ifdef __cplusplus

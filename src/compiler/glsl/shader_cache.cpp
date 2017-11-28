@@ -499,7 +499,7 @@ read_uniforms(struct blob_reader *metadata, struct gl_shader_program *prog)
    prog->data->NumUniformStorage = blob_read_uint32(metadata);
    prog->data->NumUniformDataSlots = blob_read_uint32(metadata);
 
-   uniforms = rzalloc_array(prog, struct gl_uniform_storage,
+   uniforms = rzalloc_array(prog->data, struct gl_uniform_storage,
                             prog->data->NumUniformStorage);
    prog->data->UniformStorage = uniforms;
 
@@ -955,7 +955,7 @@ read_program_resource_list(struct blob_reader *metadata,
    prog->data->NumProgramResourceList = blob_read_uint32(metadata);
 
    prog->data->ProgramResourceList =
-      ralloc_array(prog, gl_program_resource,
+      ralloc_array(prog->data, gl_program_resource,
                    prog->data->NumProgramResourceList);
 
    for (unsigned i = 0; i < prog->data->NumProgramResourceList; i++) {
@@ -985,7 +985,7 @@ write_shader_parameters(struct blob *metadata,
       blob_write_bytes(metadata, param->StateIndexes,
                        sizeof(param->StateIndexes));
 
-      i += (param->Size + 3) / 4;
+      i++;
    }
 
    blob_write_bytes(metadata, params->ParameterValues,
@@ -1014,7 +1014,7 @@ read_shader_parameters(struct blob_reader *metadata,
       _mesa_add_parameter(params, type, name, size, data_type,
                           NULL, state_indexes);
 
-      i += (size + 3) / 4;
+      i++;
    }
 
    blob_copy_bytes(metadata, (uint8_t *) params->ParameterValues,
@@ -1061,7 +1061,18 @@ write_shader_metadata(struct blob *metadata, gl_linked_shader *shader)
                        sizeof(struct gl_bindless_image) - ptr_size);
    }
 
+   blob_write_bytes(metadata, &glprog->sh.fs.BlendSupport,
+                    sizeof(glprog->sh.fs.BlendSupport));
+
    write_shader_parameters(metadata, glprog->Parameters);
+
+   assert((glprog->driver_cache_blob == NULL) ==
+          (glprog->driver_cache_blob_size == 0));
+   blob_write_uint32(metadata, (uint32_t)glprog->driver_cache_blob_size);
+   if (glprog->driver_cache_blob_size > 0) {
+      blob_write_bytes(metadata, glprog->driver_cache_blob,
+                       glprog->driver_cache_blob_size);
+   }
 }
 
 static void
@@ -1114,8 +1125,19 @@ read_shader_metadata(struct blob_reader *metadata,
       }
    }
 
+   blob_copy_bytes(metadata, (uint8_t *) &glprog->sh.fs.BlendSupport,
+                   sizeof(glprog->sh.fs.BlendSupport));
+
    glprog->Parameters = _mesa_new_parameter_list();
    read_shader_parameters(metadata, glprog->Parameters);
+
+   glprog->driver_cache_blob_size = (size_t)blob_read_uint32(metadata);
+   if (glprog->driver_cache_blob_size > 0) {
+      glprog->driver_cache_blob =
+         (uint8_t*)ralloc_size(glprog, glprog->driver_cache_blob_size);
+      blob_copy_bytes(metadata, glprog->driver_cache_blob,
+                      glprog->driver_cache_blob_size);
+   }
 }
 
 static void
@@ -1277,7 +1299,7 @@ shader_cache_read_program_metadata(struct gl_context *ctx,
       return false;
 
    struct disk_cache *cache = ctx->Cache;
-   if (!cache || prog->data->cache_fallback || prog->data->skip_cache)
+   if (!cache)
       return false;
 
    /* Include bindings when creating sha1. These bindings change the resulting

@@ -34,7 +34,7 @@ if with_gles2
     subdir : 'GLES2',
   )
   install_headers(
-    'GLES3/gl3.h', 'GLES3/gl32.h', 'GLES3/gl32.h', 'GLES3/gl3ext.h',
+    'GLES3/gl3.h', 'GLES3/gl31.h', 'GLES3/gl32.h', 'GLES3/gl3ext.h',
     'GLES3/gl3platform.h',
     subdir : 'GLES3',
   )
@@ -52,7 +52,7 @@ if with_opengl
 endif
 
 if with_glx != 'disabled'
-  install_headers('GL/glx.h', 'GL/glext.h', 'GL/glx_mangle.h', subdir : 'GL')
+  install_headers('GL/glx.h', 'GL/glxext.h', 'GL/glx_mangle.h', subdir : 'GL')
 endif
 
 if with_osmesa != 'none'

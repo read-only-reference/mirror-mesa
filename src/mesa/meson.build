@@ -19,15 +19,10 @@
 # SOFTWARE.
 
 # TODO: main/tests
-# TODO: xlib_glx
-# TODO: osmesa
-# TODO: asm_offsets
 
 subdir('program')
 subdir('main')
 
-# program files
-# program nir files
 # files shared between classic mesa and gallium mesa
 files_libmesa_common = files(
   'program/arbprogparse.c',
@@ -597,9 +592,6 @@ files_libmesa_gallium = files(
   'state_tracker/st_vdpau.h',
 )
 
-# TODO: sse41
-libmesa_sse41 = []
-
 matypes_h = []
 if with_asm_arch == 'x86' or with_asm_arch == 'x86_64'
   gen_matypes = executable(
@@ -697,6 +689,17 @@ files_libmesa_common += [
   sha1_h,
 ]
 
+if with_sse41
+  libmesa_sse41 = static_library(
+    'mesa_sse41',
+    files('main/streaming-load-memcpy.c', 'main/sse_minmax.c'),
+    c_args : [c_vis_args, c_msvc_compat_args, sse41_args],
+    include_directories : inc_common,
+  )
+else
+  libmesa_sse41 = []
+endif
+
 libmesa_classic = static_library(
   'mesa_classic',
   [files_libmesa_common, files_libmesa_classic],
@@ -720,6 +723,9 @@ libmesa_gallium = static_library(
 subdir('drivers/dri')
 if with_osmesa == 'classic'
   subdir('drivers/osmesa')
+endif
+if with_glx == 'xlib'
+  subdir('drivers/x11')
 endif
 if with_tests
   subdir('main/tests')

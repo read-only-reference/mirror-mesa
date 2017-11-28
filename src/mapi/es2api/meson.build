@@ -20,7 +20,7 @@
 
 es2_glapi_mapi_tmp_h = custom_target(
   'es2_glapi_mapi_tmp.h',
-  input : ['../mapi_abi.py', gl_and_es_api_files],
+  input : [mapi_abi_py, gl_and_es_api_files],
   output : 'glapi_mapi_tmp.h',
   command : [prog_python2, '@INPUT0@', '--printer', 'es2api', '@INPUT1@'],
   depend_files : api_xml_files,
@@ -36,7 +36,7 @@ libgles2 = shared_library(
   include_directories : [inc_src, inc_include, inc_mapi],
   link_with : libglapi,
   dependencies : [dep_thread, dep_libdrm, dep_m, dep_dl],
-  version : '2',
+  version : '2.0.0',
   install : true,
 )
 

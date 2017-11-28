@@ -45,12 +45,6 @@ struct blorp_context {
 
    const struct brw_compiler *compiler;
 
-   struct {
-      uint32_t tex;
-      uint32_t rb;
-      uint32_t vb;
-   } mocs;
-
    bool (*lookup_shader)(struct blorp_context *blorp,
                          const void *key, uint32_t key_size,
                          uint32_t *kernel_out, void *prog_data_out);
@@ -94,6 +88,7 @@ struct blorp_address {
    void *buffer;
    unsigned reloc_flags;
    uint32_t offset;
+   uint32_t mocs;
 };
 
 struct blorp_surf
@@ -106,6 +101,14 @@ struct blorp_surf
    enum isl_aux_usage aux_usage;
 
    union isl_color_value clear_color;
+
+   /**
+    * If set (bo != NULL), clear_color is ignored and the actual clear color
+    * is fetched from this address.  On gen7-8, this is all of dword 7 of
+    * RENDER_SURFACE_STATE and is the responsibility of the caller to ensure
+    * that it contains a swizzle of RGBA and resource min LOD of 0.
+    */
+   struct blorp_address clear_color_addr;
 };
 
 void
@@ -195,20 +198,10 @@ enum blorp_fast_clear_op {
 
 void
 blorp_ccs_resolve(struct blorp_batch *batch,
-                  struct blorp_surf *surf, uint32_t level, uint32_t layer,
+                  struct blorp_surf *surf, uint32_t level,
+                  uint32_t start_layer, uint32_t num_layers,
                   enum isl_format format,
                   enum blorp_fast_clear_op resolve_op);
-
-/* Resolves subresources of the image subresource range specified in the
- * binding table.
- */
-void
-blorp_ccs_resolve_attachment(struct blorp_batch *batch,
-                             const uint32_t binding_table_offset,
-                             struct blorp_surf * const surf,
-                             const uint32_t level, const uint32_t num_layers,
-                             const enum isl_format format,
-                             const enum blorp_fast_clear_op resolve_op);
 
 void
 blorp_mcs_partial_resolve(struct blorp_batch *batch,
