@@ -34,14 +34,20 @@ enum brw_reg_type
 brw_type_for_base_type(const struct glsl_type *type)
 {
    switch (type->base_type) {
+   case GLSL_TYPE_FLOAT16:
+      return BRW_REGISTER_TYPE_HF;
    case GLSL_TYPE_FLOAT:
       return BRW_REGISTER_TYPE_F;
    case GLSL_TYPE_INT:
    case GLSL_TYPE_BOOL:
    case GLSL_TYPE_SUBROUTINE:
       return BRW_REGISTER_TYPE_D;
+   case GLSL_TYPE_INT16:
+      return BRW_REGISTER_TYPE_W;
    case GLSL_TYPE_UINT:
       return BRW_REGISTER_TYPE_UD;
+   case GLSL_TYPE_UINT16:
+      return BRW_REGISTER_TYPE_UW;
    case GLSL_TYPE_ARRAY:
       return brw_type_for_base_type(type->fields.array);
    case GLSL_TYPE_STRUCT:
@@ -287,6 +293,15 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
    case SHADER_OPCODE_MEMORY_FENCE:
       return "memory_fence";
 
+   case SHADER_OPCODE_BYTE_SCATTERED_READ:
+      return "byte_scattered_read";
+   case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
+      return "byte_scattered_read_logical";
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+      return "byte_scattered_write";
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
+      return "byte_scattered_write_logical";
+
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return "load_payload";
    case FS_OPCODE_PACK:
@@ -315,6 +330,9 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "find_live_channel";
    case SHADER_OPCODE_BROADCAST:
       return "broadcast";
+
+   case SHADER_OPCODE_GET_BUFFER_SIZE:
+      return "get_buffer_size";
 
    case VEC4_OPCODE_MOV_BYTES:
       return "mov_bytes";
@@ -357,9 +375,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "pixel_x";
    case FS_OPCODE_PIXEL_Y:
       return "pixel_y";
-
-   case FS_OPCODE_GET_BUFFER_SIZE:
-      return "fs_get_buffer_size";
 
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return "uniform_pull_const";
@@ -406,9 +421,6 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
 
    case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
       return "set_simd4x2_header_gen9";
-
-   case VS_OPCODE_GET_BUFFER_SIZE:
-      return "vs_get_buffer_size";
 
    case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
       return "unpack_flags_simd4x2";
@@ -476,6 +488,9 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "tes_add_indirect_urb_offset";
    case TES_OPCODE_GET_PRIMITIVE_ID:
       return "tes_get_primitive_id";
+
+   case SHADER_OPCODE_RND_MODE:
+      return "rnd_mode";
    }
 
    unreachable("not reached");
@@ -954,6 +969,8 @@ backend_instruction::has_side_effects() const
    case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+   case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
    case SHADER_OPCODE_TYPED_ATOMIC:
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
@@ -968,6 +985,7 @@ backend_instruction::has_side_effects() const
    case SHADER_OPCODE_BARRIER:
    case TCS_OPCODE_URB_WRITE:
    case TCS_OPCODE_RELEASE_INPUT:
+   case SHADER_OPCODE_RND_MODE:
       return true;
    default:
       return eot;
@@ -982,6 +1000,8 @@ backend_instruction::is_volatile() const
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_READ_LOGICAL:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ:
+   case SHADER_OPCODE_BYTE_SCATTERED_READ_LOGICAL:
    case SHADER_OPCODE_URB_READ_SIMD8:
    case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
    case VEC4_OPCODE_URB_READ:

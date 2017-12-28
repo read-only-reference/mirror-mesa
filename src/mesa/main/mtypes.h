@@ -98,8 +98,8 @@ struct st_context;
 struct gl_uniform_storage;
 struct prog_instruction;
 struct gl_program_parameter_list;
+struct gl_shader_spirv_data;
 struct set;
-struct set_entry;
 struct vbo_context;
 /*@}*/
 
@@ -2390,10 +2390,14 @@ struct ati_fragment_shader
    GLubyte numArithInstr[2];
    GLubyte regsAssigned[2];
    GLubyte NumPasses;         /**< 1 or 2 */
+   /** Current compile stage: 0 setup pass1, 1 arith pass1, 2 setup pass2, 3 arith pass2 */
    GLubyte cur_pass;
    GLubyte last_optype;
    GLboolean interpinp1;
    GLboolean isValid;
+   /** Array of 2 bit values for each tex unit to remember whether
+    * STR or STQ swizzle was used
+    */
    GLuint swizzlerq;
    struct gl_program *Program;
 };
@@ -2646,6 +2650,9 @@ struct gl_shader
    GLuint TransformFeedbackBufferStride[MAX_FEEDBACK_BUFFERS];
 
    struct gl_shader_info info;
+
+   /* ARB_gl_spirv related data */
+   struct gl_shader_spirv_data *spirv_data;
 };
 
 
@@ -2886,6 +2893,17 @@ struct gl_shader_program_data
    /* Shader cache variables used during restore */
    unsigned NumUniformDataSlots;
    union gl_constant_value *UniformDataSlots;
+
+   /* Used to hold initial uniform values for program binary restores.
+    *
+    * From the ARB_get_program_binary spec:
+    *
+    *    "A successful call to ProgramBinary will reset all uniform
+    *    variables to their initial values. The initial value is either
+    *    the value of the variable's initializer as specified in the
+    *    original shader source, or 0 if no initializer was present.
+    */
+   union gl_constant_value *UniformDataDefaults;
 
    GLboolean Validated;
 
@@ -3296,6 +3314,14 @@ struct gl_shared_state
    /** EXT_external_objects */
    struct _mesa_HashTable *MemoryObjects;
 
+   /**
+    * Some context in this share group was affected by a disjoint
+    * operation. This operation can be anything that has effects on
+    * values of timer queries in such manner that they become invalid for
+    * performance metrics. As example gpu reset, counter overflow or gpu
+    * frequency changes.
+    */
+   bool DisjointOperation;
 };
 
 
@@ -3578,7 +3604,6 @@ struct gl_program_constants
    /* GL_ARB_shader_storage_buffer_object */
    GLuint MaxShaderStorageBlocks;
 };
-
 
 /**
  * Constants which may be overridden by device driver during context creation
@@ -4013,6 +4038,9 @@ struct gl_constants
 
    /** When drivers are OK with mapped buffers during draw and other calls. */
    bool AllowMappedBuffersDuringExecution;
+
+   /** GL_ARB_get_program_binary */
+   GLuint NumProgramBinaryFormats;
 };
 
 
@@ -4062,6 +4090,7 @@ struct gl_extensions
    GLboolean ARB_enhanced_layouts;
    GLboolean ARB_explicit_attrib_location;
    GLboolean ARB_explicit_uniform_location;
+   GLboolean ARB_gl_spirv;
    GLboolean ARB_gpu_shader5;
    GLboolean ARB_gpu_shader_fp64;
    GLboolean ARB_gpu_shader_int64;
@@ -4143,6 +4172,7 @@ struct gl_extensions
    GLboolean EXT_blend_func_separate;
    GLboolean EXT_blend_minmax;
    GLboolean EXT_depth_bounds_test;
+   GLboolean EXT_disjoint_timer_query;
    GLboolean EXT_draw_buffers2;
    GLboolean EXT_framebuffer_multisample;
    GLboolean EXT_framebuffer_multisample_blit_scaled;
@@ -4961,7 +4991,8 @@ struct gl_context
    /** \name Derived state */
    GLbitfield _ImageTransferState;/**< bitwise-or of IMAGE_*_BIT flags */
    GLfloat _EyeZDir[3];
-   GLfloat _ModelViewInvScale;
+   GLfloat _ModelViewInvScale; /* may be for model- or eyespace lighting */
+   GLfloat _ModelViewInvScaleEyespace; /* always factor defined in spec */
    GLboolean _NeedEyeCoords;
    GLboolean _ForceEyeCoords; 
 

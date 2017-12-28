@@ -40,6 +40,7 @@
 #include "util/ralloc.h"
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/glsl_to_nir.h"
+#include "compiler/nir/nir_serialize.h"
 
 #include "brw_program.h"
 #include "brw_context.h"
@@ -367,9 +368,13 @@ brw_alloc_stage_scratch(struct brw_context *brw,
        *
        * According to the other driver team, this applies to compute shaders
        * as well.  This is not currently documented at all.
+       *
+       * brw->screen->subslice_total is the TOTAL number of subslices
+       * and we wish to view that there are 4 subslices per slice
+       * instead of the actual number of subslices per slice.
        */
       if (devinfo->gen >= 9)
-         subslices = 4;
+         subslices = 4 * brw->screen->devinfo.num_slices;
 
       /* WaCSScratchSize:hsw
        *
@@ -784,4 +789,37 @@ brw_assign_common_binding_table_offsets(const struct gen_device_info *devinfo,
 
    assert(next_binding_table_offset <= BRW_MAX_SURFACES);
    return next_binding_table_offset;
+}
+
+void
+brw_program_serialize_nir(struct gl_context *ctx, struct gl_program *prog)
+{
+   struct blob writer;
+   blob_init(&writer);
+   nir_serialize(&writer, prog->nir);
+   prog->driver_cache_blob = ralloc_size(NULL, writer.size);
+   memcpy(prog->driver_cache_blob, writer.data, writer.size);
+   prog->driver_cache_blob_size = writer.size;
+   blob_finish(&writer);
+}
+
+void
+brw_program_deserialize_nir(struct gl_context *ctx, struct gl_program *prog,
+                            gl_shader_stage stage)
+{
+   if (!prog->nir) {
+      assert(prog->driver_cache_blob && prog->driver_cache_blob_size > 0);
+      const struct nir_shader_compiler_options *options =
+         ctx->Const.ShaderCompilerOptions[stage].NirOptions;
+      struct blob_reader reader;
+      blob_reader_init(&reader, prog->driver_cache_blob,
+                       prog->driver_cache_blob_size);
+      prog->nir = nir_deserialize(NULL, options, &reader);
+   }
+
+   if (prog->driver_cache_blob) {
+      ralloc_free(prog->driver_cache_blob);
+      prog->driver_cache_blob = NULL;
+      prog->driver_cache_blob_size = 0;
+   }
 }

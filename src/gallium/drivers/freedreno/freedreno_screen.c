@@ -79,6 +79,9 @@ static const struct debug_named_value debug_options[] = {
 		{"bstat",     FD_DBG_BSTAT,  "Print batch stats at context destroy"},
 		{"nogrow",    FD_DBG_NOGROW, "Disable \"growable\" cmdstream buffers, even if kernel supports it"},
 		{"lrz",       FD_DBG_LRZ,    "Enable experimental LRZ support (a5xx+)"},
+		{"noindirect",FD_DBG_NOINDR, "Disable hw indirect draws (emulate on CPU)"},
+		{"noblit",    FD_DBG_NOBLIT, "Disable blitter (fallback to generic blit path)"},
+		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -245,10 +248,17 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
-	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_TEXTURE_QUERY_LOD:
 		return is_a4xx(screen) || is_a5xx(screen);
+
+	case PIPE_CAP_START_INSTANCE:
+		/* Note that a5xx can do this, it just can't (at least with
+		 * current firmware) do draw_indirect with base_instance.
+		 * Since draw_indirect is needed sooner (gles31 and gl40 vs
+		 * gl42), hide base_instance on a5xx.  :-/
+		 */
+		return is_a4xx(screen);
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 64;
@@ -331,6 +341,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
 		return 0;
+
+	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+		return screen->priority_mask;
 
 	case PIPE_CAP_DRAW_INDIRECT:
 		if (is_a4xx(screen) || is_a5xx(screen))
@@ -831,6 +844,14 @@ fd_screen_create(struct fd_device *dev)
 			((major & 0xff) << 16) | ((core & 0xff) << 24);
 	}
 	screen->chip_id = val;
+
+	if (fd_pipe_get_param(screen->pipe, FD_NR_RINGS, &val)) {
+		DBG("could not get # of rings");
+		screen->priority_mask = 0;
+	} else {
+		/* # of rings equates to number of unique priority values: */
+		screen->priority_mask = (1 << val) - 1;
+	}
 
 	DBG("Pipe Info:");
 	DBG(" GPU-id:          %d", screen->gpu_id);

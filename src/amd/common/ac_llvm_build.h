@@ -74,13 +74,14 @@ struct ac_llvm_context {
 	LLVMValueRef empty_md;
 
 	enum chip_class chip_class;
+	enum radeon_family family;
 
 	LLVMValueRef lds;
 };
 
 void
 ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
-		     enum chip_class chip_class);
+		     enum chip_class chip_class, enum radeon_family family);
 
 unsigned ac_get_type_size(LLVMTypeRef type);
 
@@ -111,6 +112,10 @@ LLVMValueRef ac_build_vote_all(struct ac_llvm_context *ctx, LLVMValueRef value);
 LLVMValueRef ac_build_vote_any(struct ac_llvm_context *ctx, LLVMValueRef value);
 
 LLVMValueRef ac_build_vote_eq(struct ac_llvm_context *ctx, LLVMValueRef value);
+
+LLVMValueRef
+ac_build_varying_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
+			       unsigned value_count, unsigned component);
 
 LLVMValueRef
 ac_build_gather_values_extended(struct ac_llvm_context *ctx,
@@ -281,6 +286,8 @@ void ac_build_kill_if_false(struct ac_llvm_context *ctx, LLVMValueRef i1);
 LLVMValueRef ac_build_bfe(struct ac_llvm_context *ctx, LLVMValueRef input,
 			  LLVMValueRef offset, LLVMValueRef width,
 			  bool is_signed);
+
+void ac_build_waitcnt(struct ac_llvm_context *ctx, unsigned simm16);
 
 void ac_get_image_intr_name(const char *base_name,
 			    LLVMTypeRef data_type,

@@ -43,7 +43,23 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, struct ac_shader_info *info)
 		info->vs.needs_instance_id = true;
 		break;
 	case nir_intrinsic_load_num_work_groups:
-		info->cs.grid_components_used = instr->num_components;
+		info->cs.uses_grid_size = true;
+		break;
+	case nir_intrinsic_load_local_invocation_id:
+	case nir_intrinsic_load_work_group_id: {
+		unsigned mask = nir_ssa_def_components_read(&instr->dest.ssa);
+		while (mask) {
+			unsigned i = u_bit_scan(&mask);
+
+			if (instr->intrinsic == nir_intrinsic_load_work_group_id)
+				info->cs.uses_block_id[i] = true;
+			else
+				info->cs.uses_thread_id[i] = true;
+		}
+		break;
+	}
+	case nir_intrinsic_load_local_invocation_index:
+		info->cs.uses_local_invocation_idx = true;
 		break;
 	case nir_intrinsic_load_sample_id:
 		info->ps.force_persample = true;
@@ -132,12 +148,11 @@ ac_nir_shader_info_pass(struct nir_shader *nir,
 {
 	struct nir_function *func = (struct nir_function *)exec_list_get_head(&nir->functions);
 
-	info->needs_push_constants = true;
-	if (!options->layout)
-		info->needs_push_constants = false;
-	else if (!options->layout->push_constant_size &&
-		 !options->layout->dynamic_offset_count)
-		info->needs_push_constants = false;
+	info->needs_push_constants = false;
+	if ((options->layout->push_constant_size &&
+	     options->layout->push_constant_stages & (1 << nir->info.stage)) ||
+	    options->layout->dynamic_offset_count)
+		info->needs_push_constants = true;
 
 	nir_foreach_variable(variable, &nir->inputs)
 		gather_info_input_decl(nir, options, variable, info);

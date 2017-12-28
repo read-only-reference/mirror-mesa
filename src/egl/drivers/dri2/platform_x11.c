@@ -704,7 +704,6 @@ dri2_x11_connect(struct dri2_egl_display *dri2_dpy)
 
    if (dri2_dpy->driver_name == NULL) {
       close(dri2_dpy->fd);
-      free(dri2_dpy->driver_name);
       free(connect);
       return EGL_FALSE;
    }
@@ -1460,7 +1459,7 @@ dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp)
 {
    EGLBoolean initialized = EGL_FALSE;
 
-   if (!disp->Options.UseFallback) {
+   if (!disp->Options.ForceSoftware) {
 #ifdef HAVE_DRI3
       if (!env_var_as_boolean("LIBGL_DRI3_DISABLE", false))
          initialized = dri2_initialize_x11_dri3(drv, disp);

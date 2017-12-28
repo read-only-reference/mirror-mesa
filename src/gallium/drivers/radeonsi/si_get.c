@@ -227,7 +227,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 		if (sscreen->debug_flags & DBG(NIR))
-			return 140; /* no geometry and tessellation shaders yet */
+			return 150; /* no tessellation shaders yet */
 		if (si_have_tgsi_compute(sscreen))
 			return 450;
 		return 420;
@@ -274,6 +274,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_POST_DEPTH_COVERAGE:
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
 		return 0;
 
 	case PIPE_CAP_NATIVE_FENCE_FD:
@@ -452,6 +453,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		if (sscreen->debug_flags & DBG(NIR) &&
 		    (shader == PIPE_SHADER_VERTEX ||
+		     shader == PIPE_SHADER_GEOMETRY ||
 		     shader == PIPE_SHADER_FRAGMENT))
 			return PIPE_SHADER_IR_NIR;
 		return PIPE_SHADER_IR_TGSI;

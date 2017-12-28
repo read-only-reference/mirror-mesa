@@ -301,6 +301,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
 		return 1;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -332,7 +333,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 		if (family >= CHIP_CEDAR)
-		   return 420;
+		   return 430;
 		/* pre-evergreen geom shaders need newer kernel */
 		if (rscreen->b.info.drm_minor >= 37)
 		   return 330;
@@ -382,11 +383,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
 	case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
 	case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
-	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
-	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
@@ -412,6 +411,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
 		return 0;
 
 	case PIPE_CAP_DOUBLES:
@@ -423,6 +423,11 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 0;
 	case PIPE_CAP_CULL_DISTANCE:
 		return 1;
+
+	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
+		if (family >= CHIP_CEDAR)
+			return 256;
+		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
 		if (family >= CHIP_CEDAR)
@@ -598,6 +603,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 			return PIPE_SHADER_IR_TGSI;
 		}
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
+		if (rscreen->b.family >= CHIP_CEDAR)
+			return (1 << PIPE_SHADER_IR_TGSI);
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 		if (rscreen->b.family == CHIP_ARUBA ||
@@ -609,13 +616,13 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
 	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
 		return 0;
+	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		if (rscreen->b.family >= CHIP_CEDAR &&
-		    (shader == PIPE_SHADER_FRAGMENT))
+		    (shader == PIPE_SHADER_FRAGMENT || shader == PIPE_SHADER_COMPUTE))
 		    return 8;
 		return 0;
 	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:

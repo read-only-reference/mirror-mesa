@@ -2749,38 +2749,6 @@ Fake_glXReleaseBuffersMESA( Display *dpy, GLXDrawable d )
 
 
 
-/*** GLX_MESA_set_3dfx_mode ***/
-
-static Bool
-Fake_glXSet3DfxModeMESA( int mode )
-{
-   return XMesaSetFXmode( mode );
-}
-
-
-
-/*** GLX_NV_vertex_array range ***/
-static void *
-Fake_glXAllocateMemoryNV( GLsizei size,
-                          GLfloat readFrequency,
-                          GLfloat writeFrequency,
-                          GLfloat priority )
-{
-   (void) size;
-   (void) readFrequency;
-   (void) writeFrequency;
-   (void) priority;
-   return NULL;
-}
-
-
-static void 
-Fake_glXFreeMemoryNV( GLvoid *pointer )
-{
-   (void) pointer;
-}
-
-
 /*** GLX_MESA_agp_offset ***/
 
 static GLuint
@@ -2836,7 +2804,8 @@ Fake_glXCreateContextAttribs(Display *dpy, GLXFBConfig config,
          profileFlags = attrib_list[i + 1];
          break;
       default:
-         fprintf(stderr, "Bad attribute in glXCreateContextAttribs()\n");
+         _mesa_warning(NULL, "Unexpected attribute 0x%x in "
+                       "glXCreateContextAttribs()\n", attrib_list[i]);
          return 0;
       }
    }
@@ -3005,16 +2974,6 @@ _mesa_GetGLXDispatchTable(void)
 
    /*** GLX_MESA_pixmap_colormap ***/
    glx.CreateGLXPixmapMESA = Fake_glXCreateGLXPixmapMESA;
-
-   /*** GLX_MESA_set_3dfx_mode ***/
-   glx.Set3DfxModeMESA = Fake_glXSet3DfxModeMESA;
-
-   /*** GLX_NV_vertex_array_range ***/
-   glx.AllocateMemoryNV = Fake_glXAllocateMemoryNV;
-   glx.FreeMemoryNV = Fake_glXFreeMemoryNV;
-
-   /*** GLX_MESA_agp_offset ***/
-   glx.GetAGPOffsetMESA = Fake_glXGetAGPOffsetMESA;
 
    /*** GLX_EXT_texture_from_pixmap ***/
    glx.BindTexImageEXT = Fake_glXBindTexImageEXT;

@@ -1341,9 +1341,32 @@ glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
    st_dst_reg result_dst;
 
    int vector_elements = ir->operands[0]->type->vector_elements;
-   if (ir->operands[1]) {
+   if (ir->operands[1] &&
+       ir->operation != ir_binop_interpolate_at_offset &&
+       ir->operation != ir_binop_interpolate_at_sample) {
+      st_src_reg *swz_op = NULL;
+      if (vector_elements > ir->operands[1]->type->vector_elements) {
+         assert(ir->operands[1]->type->vector_elements == 1);
+         swz_op = &op[1];
+      } else if (vector_elements < ir->operands[1]->type->vector_elements) {
+         assert(ir->operands[0]->type->vector_elements == 1);
+         swz_op = &op[0];
+      }
+      if (swz_op) {
+         uint16_t swizzle_x = GET_SWZ(swz_op->swizzle, 0);
+         swz_op->swizzle = MAKE_SWIZZLE4(swizzle_x, swizzle_x,
+                                         swizzle_x, swizzle_x);
+      }
       vector_elements = MAX2(vector_elements,
                              ir->operands[1]->type->vector_elements);
+   }
+   if (ir->operands[2] &&
+       ir->operands[2]->type->vector_elements != vector_elements) {
+      /* This can happen with ir_triop_lrp, i.e. glsl mix */
+      assert(ir->operands[2]->type->vector_elements == 1);
+      uint16_t swizzle_x = GET_SWZ(op[2].swizzle, 0);
+      op[2].swizzle = MAKE_SWIZZLE4(swizzle_x, swizzle_x,
+                                    swizzle_x, swizzle_x);
    }
 
    this->result.file = PROGRAM_UNDEFINED;
@@ -6231,6 +6254,7 @@ st_translate_program(
 
    ASSERT_BITFIELD_SIZE(st_src_reg, type, GLSL_TYPE_ERROR);
    ASSERT_BITFIELD_SIZE(st_dst_reg, type, GLSL_TYPE_ERROR);
+   ASSERT_BITFIELD_SIZE(glsl_to_tgsi_instruction, tex_type, GLSL_TYPE_ERROR);
    ASSERT_BITFIELD_SIZE(glsl_to_tgsi_instruction, image_format, PIPE_FORMAT_COUNT);
    ASSERT_BITFIELD_SIZE(glsl_to_tgsi_instruction, tex_target,
                         (gl_texture_index) (NUM_TEXTURE_TARGETS - 1));
@@ -6901,6 +6925,7 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    struct pipe_screen *pscreen = ctx->st->pipe->screen;
    assert(prog->data->LinkStatus);
 
+   bool use_nir = false;
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       if (prog->_LinkedShaders[i] == NULL)
          continue;
@@ -6919,6 +6944,12 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
                                                   PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED);
       unsigned if_threshold = pscreen->get_shader_param(pscreen, ptarget,
                                                         PIPE_SHADER_CAP_LOWER_IF_THRESHOLD);
+
+      enum pipe_shader_ir preferred_ir = (enum pipe_shader_ir)
+         pscreen->get_shader_param(pscreen, ptarget,
+                                   PIPE_SHADER_CAP_PREFERRED_IR);
+      if (preferred_ir == PIPE_SHADER_IR_NIR)
+         use_nir = true;
 
       /* If there are forms of indirect addressing that the driver
        * cannot handle, perform the lowering pass.
@@ -7023,24 +7054,17 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
    build_program_resource_list(ctx, prog);
 
+   if (use_nir)
+      return st_link_nir(ctx, prog);
+
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       struct gl_linked_shader *shader = prog->_LinkedShaders[i];
       if (shader == NULL)
          continue;
 
-      enum pipe_shader_type ptarget =
-         pipe_shader_type_from_mesa(shader->Stage);
-      enum pipe_shader_ir preferred_ir = (enum pipe_shader_ir)
-         pscreen->get_shader_param(pscreen, ptarget,
-                                   PIPE_SHADER_CAP_PREFERRED_IR);
-
-      struct gl_program *linked_prog = NULL;
-      if (preferred_ir == PIPE_SHADER_IR_NIR) {
-         linked_prog = st_nir_get_mesa_program(ctx, prog, shader);
-      } else {
-         linked_prog = get_mesa_program_tgsi(ctx, prog, shader);
-         st_set_prog_affected_state_flags(linked_prog);
-      }
+      struct gl_program *linked_prog =
+         get_mesa_program_tgsi(ctx, prog, shader);
+      st_set_prog_affected_state_flags(linked_prog);
 
       if (linked_prog) {
          if (!ctx->Driver.ProgramStringNotify(ctx,

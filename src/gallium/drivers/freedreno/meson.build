@@ -36,6 +36,8 @@ files_libfreedreno = files(
   'freedreno_batch.h',
   'freedreno_batch_cache.c',
   'freedreno_batch_cache.h',
+  'freedreno_blitter.c',
+  'freedreno_blitter.h',
   'freedreno_context.c',
   'freedreno_context.h',
   'freedreno_draw.c',
@@ -148,6 +150,8 @@ files_libfreedreno = files(
   'a5xx/a5xx.xml.h',
   'a5xx/fd5_blend.c',
   'a5xx/fd5_blend.h',
+  'a5xx/fd5_blitter.c',
+  'a5xx/fd5_blitter.h',
   'a5xx/fd5_compute.c',
   'a5xx/fd5_compute.h',
   'a5xx/fd5_context.c',
@@ -201,13 +205,28 @@ freedreno_includes = [
   include_directories('ir3')
 ]
 
+freedreno_c_args = []
+if cc.has_argument('-Wpacked-bitfield-compat')
+  freedreno_c_args += '-Wno-packed-bitfield-compat'
+endif
+
+freedreno_cpp_args = []
+if cpp.has_argument('-Wpacked-bitfield-compat')
+  freedreno_cpp_args += '-Wno-packed-bitfield-compat'
+endif
+
 libfreedreno = static_library(
   'freedreno',
   [files_libfreedreno, ir3_nir_trig_c, nir_opcodes_h],
   include_directories : freedreno_includes,
-  c_args : [c_vis_args],
-  cpp_args : [cpp_vis_args],
+  c_args : [freedreno_c_args, c_vis_args],
+  cpp_args : [freedreno_cpp_args, cpp_vis_args],
   dependencies : [dep_libdrm, dep_libdrm_freedreno],
+)
+
+driver_freedreno = declare_dependency(
+  compile_args : '-DGALLIUM_FREEDRENO',
+  link_with : [libfreedrenowinsys, libfreedreno],
 )
 
 ir3_compiler = executable(
@@ -217,7 +236,8 @@ ir3_compiler = executable(
   dependencies : [
     dep_libdrm,
     dep_libdrm_freedreno,
-    dependency('threads'),
+    dep_thread,
+    dep_lmsensors,
   ],
   link_with : [
     libfreedreno,

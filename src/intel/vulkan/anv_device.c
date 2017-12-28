@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <xf86drm.h>
+#include <drm_fourcc.h>
 
 #include "anv_private.h"
 #include "util/strtod.h"
@@ -370,6 +371,19 @@ anv_physical_device_init(struct anv_physical_device *device,
 
    bool swizzled = anv_gem_get_bit6_swizzle(fd, I915_TILING_X);
 
+   /* Starting with Gen10, the timestamp frequency of the command streamer may
+    * vary from one part to another. We can query the value from the kernel.
+    */
+   if (device->info.gen >= 10) {
+      int timestamp_frequency =
+         anv_gem_get_param(fd, I915_PARAM_CS_TIMESTAMP_FREQUENCY);
+
+      if (timestamp_frequency < 0)
+         intel_logw("Kernel 4.16-rc1+ required to properly query CS timestamp frequency");
+      else
+         device->info.timestamp_frequency = timestamp_frequency;
+   }
+
    /* GENs prior to 8 do not support EU/Subslice info */
    if (device->info.gen >= 8) {
       device->subslice_total = anv_gem_get_param(fd, I915_PARAM_SUBSLICE_TOTAL);
@@ -405,6 +419,7 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->compiler->shader_debug_log = compiler_debug_log;
    device->compiler->shader_perf_log = compiler_perf_log;
    device->compiler->supports_pull_constants = false;
+   device->compiler->constant_buffer_0_is_relative = true;
 
    isl_device_init(&device->isl_dev, &device->info, swizzled);
 
@@ -714,7 +729,7 @@ void anv_GetPhysicalDeviceFeatures2KHR(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTER_FEATURES_KHR: {
          VkPhysicalDeviceVariablePointerFeaturesKHR *features = (void *)ext;
          features->variablePointersStorageBuffer = true;
-         features->variablePointers = false;
+         features->variablePointers = true;
          break;
       }
 
@@ -722,6 +737,17 @@ void anv_GetPhysicalDeviceFeatures2KHR(
          VkPhysicalDeviceSamplerYcbcrConversionFeaturesKHR *features =
             (VkPhysicalDeviceSamplerYcbcrConversionFeaturesKHR *) ext;
          features->samplerYcbcrConversion = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES_KHR: {
+         VkPhysicalDevice16BitStorageFeaturesKHR *features =
+            (VkPhysicalDevice16BitStorageFeaturesKHR *)ext;
+
+         features->storageBuffer16BitAccess = false;
+         features->uniformAndStorageBuffer16BitAccess = false;
+         features->storagePushConstant16 = false;
+         features->storageInputOutput16 = false;
          break;
       }
 
@@ -822,7 +848,8 @@ void anv_GetPhysicalDeviceProperties(
       .viewportSubPixelBits                     = 13, /* We take a float? */
       .minMemoryMapAlignment                    = 4096, /* A page */
       .minTexelBufferOffsetAlignment            = 1,
-      .minUniformBufferOffsetAlignment          = 16,
+      /* We need 16 for UBO block reads to work and 32 for push UBOs */
+      .minUniformBufferOffsetAlignment          = 32,
       .minStorageBufferOffsetAlignment          = 4,
       .minTexelOffset                           = -8,
       .maxTexelOffset                           = 7,
@@ -1224,7 +1251,8 @@ VkResult anv_CreateDevice(
       goto fail_batch_bo_pool;
 
    /* For the state pools we explicitly disable 48bit. */
-   bo_flags = physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0;
+   bo_flags = (physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0) |
+              (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0);
 
    result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384,
                                 bo_flags);
@@ -1232,8 +1260,7 @@ VkResult anv_CreateDevice(
       goto fail_bo_cache;
 
    result = anv_state_pool_init(&device->instruction_state_pool, device, 16384,
-                                bo_flags |
-                                (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0));
+                                bo_flags);
    if (result != VK_SUCCESS)
       goto fail_dynamic_state_pool;
 
@@ -1563,11 +1590,11 @@ VkResult anv_AllocateMemory(
     * ignored.
     */
    if (fd_info && fd_info->handleType) {
-      /* At the moment, we only support the OPAQUE_FD memory type which is
-       * just a GEM buffer.
-       */
+      /* At the moment, we support only the below handle types. */
       assert(fd_info->handleType ==
-             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
+               VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR ||
+             fd_info->handleType ==
+               VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
 
       result = anv_bo_cache_import(device, &device->bo_cache,
                                    fd_info->fd, &mem->bo);
@@ -1612,14 +1639,57 @@ VkResult anv_AllocateMemory(
                                   &mem->bo);
       if (result != VK_SUCCESS)
          goto fail;
+
+      const VkMemoryDedicatedAllocateInfoKHR *dedicated_info =
+         vk_find_struct_const(pAllocateInfo->pNext, MEMORY_DEDICATED_ALLOCATE_INFO_KHR);
+      if (dedicated_info && dedicated_info->image != VK_NULL_HANDLE) {
+         ANV_FROM_HANDLE(anv_image, image, dedicated_info->image);
+
+         /* For images using modifiers, we require a dedicated allocation
+          * and we set the BO tiling to match the tiling of the underlying
+          * modifier.  This is a bit unfortunate as this is completely
+          * pointless for Vulkan.  However, GL needs to be able to map things
+          * so it needs the tiling to be set.  The only way to do this in a
+          * non-racy way is to set the tiling in the creator of the BO so that
+          * makes it our job.
+          *
+          * One of these days, once the GL driver learns to not map things
+          * through the GTT in random places, we can drop this and start
+          * allowing multiple modified images in the same BO.
+          */
+         if (image->drm_format_mod != DRM_FORMAT_MOD_INVALID) {
+            assert(isl_drm_modifier_get_info(image->drm_format_mod)->tiling ==
+                   image->planes[0].surface.isl.tiling);
+            const uint32_t i915_tiling =
+               isl_tiling_to_i915_tiling(image->planes[0].surface.isl.tiling);
+            int ret = anv_gem_set_tiling(device, mem->bo->gem_handle,
+                                         image->planes[0].surface.isl.row_pitch,
+                                         i915_tiling);
+            if (ret) {
+               anv_bo_cache_release(device, &device->bo_cache, mem->bo);
+               return vk_errorf(device->instance, NULL,
+                                VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                                "failed to set BO tiling: %m");
+            }
+         }
+      }
    }
 
    assert(mem->type->heapIndex < pdevice->memory.heap_count);
    if (pdevice->memory.heaps[mem->type->heapIndex].supports_48bit_addresses)
       mem->bo->flags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
 
-   if (pdevice->has_exec_async)
+   const struct wsi_memory_allocate_info *wsi_info =
+      vk_find_struct_const(pAllocateInfo->pNext, WSI_MEMORY_ALLOCATE_INFO_MESA);
+   if (wsi_info && wsi_info->implicit_sync) {
+      /* We need to set the WRITE flag on window system buffers so that GEM
+       * will know we're writing to them and synchronize uses on other rings
+       * (eg if the display server uses the blitter ring).
+       */
+      mem->bo->flags |= EXEC_OBJECT_WRITE;
+   } else if (pdevice->has_exec_async) {
       mem->bo->flags |= EXEC_OBJECT_ASYNC;
+   }
 
    *pMem = anv_device_memory_to_handle(mem);
 
@@ -1641,26 +1711,38 @@ VkResult anv_GetMemoryFdKHR(
 
    assert(pGetFdInfo->sType == VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR);
 
-   /* We support only one handle type. */
-   assert(pGetFdInfo->handleType ==
-          VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
+   assert(pGetFdInfo->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR ||
+          pGetFdInfo->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
 
    return anv_bo_cache_export(dev, &dev->bo_cache, mem->bo, pFd);
 }
 
 VkResult anv_GetMemoryFdPropertiesKHR(
-    VkDevice                                    device_h,
+    VkDevice                                    _device,
     VkExternalMemoryHandleTypeFlagBitsKHR       handleType,
     int                                         fd,
     VkMemoryFdPropertiesKHR*                    pMemoryFdProperties)
 {
-   /* The valid usage section for this function says:
-    *
-    *    "handleType must not be one of the handle types defined as opaque."
-    *
-    * Since we only handle opaque handles for now, there are no FD properties.
-    */
-   return VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR;
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_physical_device *pdevice = &device->instance->physicalDevice;
+
+   switch (handleType) {
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
+      /* dma-buf can be imported as any memory type */
+      pMemoryFdProperties->memoryTypeBits =
+         (1 << pdevice->memory.type_count) - 1;
+      return VK_SUCCESS;
+
+   default:
+      /* The valid usage section for this function says:
+       *
+       *    "handleType must not be one of the handle types defined as
+       *    opaque."
+       *
+       * So opaque handle types fall into the default "unsupported" case.
+       */
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR);
+   }
 }
 
 void anv_FreeMemory(
@@ -1833,8 +1915,15 @@ void anv_GetBufferMemoryRequirements(
          memory_types |= (1u << i);
    }
 
+   /* Base alignment requirement of a cache line */
+   uint32_t alignment = 16;
+
+   /* We need an alignment of 32 for pushing UBOs */
+   if (buffer->usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
+      alignment = MAX2(alignment, 32);
+
    pMemoryRequirements->size = buffer->size;
-   pMemoryRequirements->alignment = 16;
+   pMemoryRequirements->alignment = alignment;
    pMemoryRequirements->memoryTypeBits = memory_types;
 }
 
@@ -1892,14 +1981,15 @@ void anv_GetImageMemoryRequirements2KHR(
     const VkImageMemoryRequirementsInfo2KHR*    pInfo,
     VkMemoryRequirements2KHR*                   pMemoryRequirements)
 {
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_image, image, pInfo->image);
+
    anv_GetImageMemoryRequirements(_device, pInfo->image,
                                   &pMemoryRequirements->memoryRequirements);
 
    vk_foreach_struct_const(ext, pInfo->pNext) {
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO_KHR: {
-         ANV_FROM_HANDLE(anv_image, image, pInfo->image);
-         ANV_FROM_HANDLE(anv_device, device, _device);
          struct anv_physical_device *pdevice = &device->instance->physicalDevice;
          const VkImagePlaneMemoryRequirementsInfoKHR *plane_reqs =
             (const VkImagePlaneMemoryRequirementsInfoKHR *) ext;
@@ -1937,8 +2027,17 @@ void anv_GetImageMemoryRequirements2KHR(
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS_KHR: {
          VkMemoryDedicatedRequirementsKHR *requirements = (void *)ext;
-         requirements->prefersDedicatedAllocation = VK_FALSE;
-         requirements->requiresDedicatedAllocation = VK_FALSE;
+         if (image->drm_format_mod != DRM_FORMAT_MOD_INVALID) {
+            /* Require a dedicated allocation for images with modifiers.
+             *
+             * See also anv_AllocateMemory.
+             */
+            requirements->prefersDedicatedAllocation = VK_TRUE;
+            requirements->requiresDedicatedAllocation = VK_TRUE;
+         } else {
+            requirements->prefersDedicatedAllocation = VK_FALSE;
+            requirements->requiresDedicatedAllocation = VK_FALSE;
+         }
          break;
       }
 

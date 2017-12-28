@@ -132,20 +132,24 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
       }
    }
 
-   const struct nir_spirv_supported_extensions supported_ext = {
-      .float64 = device->instance->physicalDevice.info.gen >= 8,
-      .int64 = device->instance->physicalDevice.info.gen >= 8,
-      .tessellation = true,
-      .draw_parameters = true,
-      .image_write_without_format = true,
-      .multiview = true,
-      .variable_pointers = true,
+   struct spirv_to_nir_options spirv_options = {
+      .lower_workgroup_access_to_offsets = true,
+      .caps = {
+         .float64 = device->instance->physicalDevice.info.gen >= 8,
+         .int64 = device->instance->physicalDevice.info.gen >= 8,
+         .tessellation = true,
+         .draw_parameters = true,
+         .image_write_without_format = true,
+         .multiview = true,
+         .variable_pointers = true,
+         .storage_16bit = device->instance->physicalDevice.info.gen >= 8,
+      },
    };
 
    nir_function *entry_point =
       spirv_to_nir(spirv, module->size / 4,
                    spec_entries, num_spec_entries,
-                   stage, entrypoint_name, &supported_ext, nir_options);
+                   stage, entrypoint_name, &spirv_options, nir_options);
    nir_shader *nir = entry_point->shader;
    assert(nir->info.stage == stage);
    nir_validate_shader(nir);
@@ -385,6 +389,9 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
                      struct brw_stage_prog_data *prog_data,
                      struct anv_pipeline_bind_map *map)
 {
+   const struct brw_compiler *compiler =
+      pipeline->device->instance->physicalDevice.compiler;
+
    nir_shader *nir = anv_shader_compile_to_nir(pipeline, mem_ctx,
                                                module, entrypoint, stage,
                                                spec_info);
@@ -398,10 +405,8 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
    if (stage != MESA_SHADER_COMPUTE)
       NIR_PASS_V(nir, anv_nir_lower_multiview, pipeline->subpass->view_mask);
 
-   if (stage == MESA_SHADER_COMPUTE) {
-      NIR_PASS_V(nir, brw_nir_lower_cs_shared);
+   if (stage == MESA_SHADER_COMPUTE)
       prog_data->total_shared = nir->num_shared;
-   }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
@@ -435,6 +440,9 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
    /* Apply the actual pipeline layout to UBOs, SSBOs, and textures */
    if (pipeline->layout)
       anv_nir_apply_pipeline_layout(pipeline, nir, prog_data, map);
+
+   if (stage != MESA_SHADER_COMPUTE)
+      brw_nir_analyze_ubo_ranges(compiler, nir, prog_data->ubo_ranges);
 
    assert(nir->num_uniforms == prog_data->nr_params * 4);
 
@@ -870,13 +878,51 @@ anv_pipeline_compile_fs(struct anv_pipeline *pipeline,
       }
 
       unsigned num_rts = 0;
-      struct anv_pipeline_binding rt_bindings[8];
+      const int max_rt = FRAG_RESULT_DATA7 - FRAG_RESULT_DATA0 + 1;
+      struct anv_pipeline_binding rt_bindings[max_rt];
       nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+      int rt_to_bindings[max_rt];
+      memset(rt_to_bindings, -1, sizeof(rt_to_bindings));
+      bool rt_used[max_rt];
+      memset(rt_used, 0, sizeof(rt_used));
+
+      /* Flag used render targets */
       nir_foreach_variable_safe(var, &nir->outputs) {
          if (var->data.location < FRAG_RESULT_DATA0)
             continue;
 
-         unsigned rt = var->data.location - FRAG_RESULT_DATA0;
+         const unsigned rt = var->data.location - FRAG_RESULT_DATA0;
+         /* Out-of-bounds */
+         if (rt >= key.nr_color_regions)
+            continue;
+
+         const unsigned array_len =
+            glsl_type_is_array(var->type) ? glsl_get_length(var->type) : 1;
+         assert(rt + array_len <= max_rt);
+
+         for (unsigned i = 0; i < array_len; i++)
+            rt_used[rt + i] = true;
+      }
+
+      /* Set new, compacted, location */
+      for (unsigned i = 0; i < max_rt; i++) {
+         if (!rt_used[i])
+            continue;
+
+         rt_to_bindings[i] = num_rts;
+         rt_bindings[rt_to_bindings[i]] = (struct anv_pipeline_binding) {
+            .set = ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS,
+            .binding = 0,
+            .index = i,
+         };
+         num_rts++;
+      }
+
+      nir_foreach_variable_safe(var, &nir->outputs) {
+         if (var->data.location < FRAG_RESULT_DATA0)
+            continue;
+
+         const unsigned rt = var->data.location - FRAG_RESULT_DATA0;
          if (rt >= key.nr_color_regions) {
             /* Out-of-bounds, throw it away */
             var->data.mode = nir_var_local;
@@ -885,22 +931,9 @@ anv_pipeline_compile_fs(struct anv_pipeline *pipeline,
             continue;
          }
 
-         /* Give it a new, compacted, location */
-         var->data.location = FRAG_RESULT_DATA0 + num_rts;
-
-         unsigned array_len =
-            glsl_type_is_array(var->type) ? glsl_get_length(var->type) : 1;
-         assert(num_rts + array_len <= 8);
-
-         for (unsigned i = 0; i < array_len; i++) {
-            rt_bindings[num_rts + i] = (struct anv_pipeline_binding) {
-               .set = ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS,
-               .binding = 0,
-               .index = rt + i,
-            };
-         }
-
-         num_rts += array_len;
+         /* Give it the new location */
+         assert(rt_to_bindings[rt] != -1);
+         var->data.location = rt_to_bindings[rt] + FRAG_RESULT_DATA0;
       }
 
       if (num_rts == 0) {
@@ -913,7 +946,7 @@ anv_pipeline_compile_fs(struct anv_pipeline *pipeline,
          num_rts = 1;
       }
 
-      assert(num_rts <= 8);
+      assert(num_rts <= max_rt);
       map.surface_to_descriptor -= num_rts;
       map.surface_count += num_rts;
       assert(map.surface_count <= 256);

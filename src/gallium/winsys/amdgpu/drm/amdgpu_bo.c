@@ -386,7 +386,9 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    unsigned va_gap_size;
    int r;
 
-   assert(initial_domain & RADEON_DOMAIN_VRAM_GTT);
+   /* VRAM or GTT must be specified, but not both at the same time. */
+   assert(util_bitcount(initial_domain & RADEON_DOMAIN_VRAM_GTT) == 1);
+
    bo = CALLOC_STRUCT(amdgpu_winsys_bo);
    if (!bo) {
       return NULL;
@@ -402,13 +404,24 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    if (initial_domain & RADEON_DOMAIN_GTT)
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
 
+   /* If VRAM is just stolen system memory, allow both VRAM and
+    * GTT, whichever has free space. If a buffer is evicted from
+    * VRAM to GTT, it will stay there.
+    *
+    * DRM 3.6.0 has good BO move throttling, so we can allow VRAM-only
+    * placements even with a low amount of stolen VRAM.
+    */
+   if (!ws->info.has_dedicated_vram && ws->info.drm_minor < 6)
+      request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
+
    if (flags & RADEON_FLAG_NO_CPU_ACCESS)
       request.flags |= AMDGPU_GEM_CREATE_NO_CPU_ACCESS;
    if (flags & RADEON_FLAG_GTT_WC)
       request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
-   if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+   /* TODO: Enable this once the kernel handles it efficiently. */
+   /*if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
        ws->info.drm_minor >= 20)
-      request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
+      request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;*/
 
    r = amdgpu_bo_alloc(ws->dev, &request, &buf_handle);
    if (r) {
@@ -427,7 +440,14 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    if (r)
       goto error_va_alloc;
 
-   r = amdgpu_bo_va_op(buf_handle, 0, size, va, 0, AMDGPU_VA_OP_MAP);
+   unsigned vm_flags = AMDGPU_VM_PAGE_READABLE |
+                       AMDGPU_VM_PAGE_EXECUTABLE;
+
+   if (!(flags & RADEON_FLAG_READ_ONLY))
+       vm_flags |= AMDGPU_VM_PAGE_WRITEABLE;
+
+   r = amdgpu_bo_va_op_raw(ws->dev, buf_handle, 0, size, va, vm_flags,
+			   AMDGPU_VA_OP_MAP);
    if (r)
       goto error_va_map;
 
@@ -1150,6 +1170,9 @@ amdgpu_bo_create(struct radeon_winsys *rws,
    /* NO_CPU_ACCESS is valid with VRAM only. */
    assert(domain == RADEON_DOMAIN_VRAM || !(flags & RADEON_FLAG_NO_CPU_ACCESS));
 
+   /* Sparse buffers must have NO_CPU_ACCESS set. */
+   assert(!(flags & RADEON_FLAG_SPARSE) || flags & RADEON_FLAG_NO_CPU_ACCESS);
+
    /* Sub-allocate small buffers from slabs. */
    if (!(flags & (RADEON_FLAG_NO_SUBALLOC | RADEON_FLAG_SPARSE)) &&
        size <= (1 << AMDGPU_SLAB_MAX_SIZE_LOG2) &&
@@ -1181,8 +1204,6 @@ no_slab:
 
    if (flags & RADEON_FLAG_SPARSE) {
       assert(RADEON_SPARSE_PAGE_SIZE % alignment == 0);
-
-      flags |= RADEON_FLAG_NO_CPU_ACCESS;
 
       return amdgpu_bo_sparse_create(ws, size, domain, flags);
    }

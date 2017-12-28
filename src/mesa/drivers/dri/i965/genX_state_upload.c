@@ -34,9 +34,6 @@
 #include "main/state.h"
 
 #include "brw_context.h"
-#if GEN_GEN == 6
-#include "brw_defines.h"
-#endif
 #include "brw_draw.h"
 #include "brw_multisample_state.h"
 #include "brw_state.h"
@@ -3298,7 +3295,8 @@ genX(upload_multisample_state)(struct brw_context *brw)
 
 static const struct brw_tracked_state genX(multisample_state) = {
    .dirty = {
-      .mesa = _NEW_MULTISAMPLE,
+      .mesa = _NEW_MULTISAMPLE |
+              (GEN_GEN == 10 ? _NEW_BUFFERS : 0),
       .brw = BRW_NEW_BLORP |
              BRW_NEW_CONTEXT |
              BRW_NEW_NUM_SAMPLES,
@@ -4171,30 +4169,49 @@ genX(upload_cs_state)(struct brw_context *brw)
    uint32_t *bind = brw_state_batch(brw, prog_data->binding_table.size_bytes,
                                     32, &stage_state->bind_bo_offset);
 
+   /* The MEDIA_VFE_STATE documentation for Gen8+ says:
+    *
+    * "A stalling PIPE_CONTROL is required before MEDIA_VFE_STATE unless
+    *  the only bits that are changed are scoreboard related: Scoreboard
+    *  Enable, Scoreboard Type, Scoreboard Mask, Scoreboard * Delta. For
+    *  these scoreboard related states, a MEDIA_STATE_FLUSH is sufficient."
+    *
+    * Earlier generations say "MI_FLUSH" instead of "stalling PIPE_CONTROL",
+    * but MI_FLUSH isn't really a thing, so we assume they meant PIPE_CONTROL.
+    */
+   brw_emit_pipe_control_flush(brw, PIPE_CONTROL_CS_STALL);
+
    brw_batch_emit(brw, GENX(MEDIA_VFE_STATE), vfe) {
       if (prog_data->total_scratch) {
-         uint32_t bo_offset;
+         uint32_t per_thread_scratch_value;
 
          if (GEN_GEN >= 8) {
             /* Broadwell's Per Thread Scratch Space is in the range [0, 11]
              * where 0 = 1k, 1 = 2k, 2 = 4k, ..., 11 = 2M.
              */
-            bo_offset = ffs(stage_state->per_thread_scratch) - 11;
+            per_thread_scratch_value = ffs(stage_state->per_thread_scratch) - 11;
          } else if (GEN_IS_HASWELL) {
             /* Haswell's Per Thread Scratch Space is in the range [0, 10]
              * where 0 = 2k, 1 = 4k, 2 = 8k, ..., 10 = 2M.
              */
-            bo_offset = ffs(stage_state->per_thread_scratch) - 12;
+            per_thread_scratch_value = ffs(stage_state->per_thread_scratch) - 12;
          } else {
             /* Earlier platforms use the range [0, 11] to mean [1kB, 12kB]
              * where 0 = 1kB, 1 = 2kB, 2 = 3kB, ..., 11 = 12kB.
              */
-            bo_offset = stage_state->per_thread_scratch / 1024 - 1;
+            per_thread_scratch_value = stage_state->per_thread_scratch / 1024 - 1;
          }
-         vfe.ScratchSpaceBasePointer =
-            rw_bo(stage_state->scratch_bo, bo_offset);
+         vfe.ScratchSpaceBasePointer = rw_bo(stage_state->scratch_bo, 0);
+         vfe.PerThreadScratchSpace = per_thread_scratch_value;
       }
 
+      /* If brw->screen->subslice_total is greater than one, then
+       * devinfo->max_cs_threads stores number of threads per sub-slice;
+       * thus we need to multiply by that number by subslices to get
+       * the actual maximum number of threads; the -1 is because the HW
+       * has a bias of 1 (would not make sense to say the maximum number
+       * of threads is 0).
+       */
       const uint32_t subslices = MAX2(brw->screen->subslice_total, 1);
       vfe.MaximumNumberofThreads = devinfo->max_cs_threads * subslices - 1;
       vfe.NumberofURBEntries = GEN_GEN >= 8 ? 2 : 0;

@@ -513,7 +513,7 @@ static void r600_reallocate_texture_inplace(struct r600_common_context *rctx,
 
 			u_box_3d(0, 0, 0,
 				 u_minify(templ.width0, i), u_minify(templ.height0, i),
-				 util_max_layer(&templ, i) + 1, &box);
+				 util_num_layers(&templ, i), &box);
 
 			rctx->dma_copy(&rctx->b, &new_tex->resource.b.b, i, 0, 0, 0,
 				       &rtex->resource.b.b, i, &box);
@@ -582,7 +582,7 @@ static void si_query_opaque_metadata(struct si_screen *sscreen,
 		PIPE_SWIZZLE_W
 	};
 	uint32_t desc[8], i;
-	bool is_array = util_resource_is_array_texture(res);
+	bool is_array = util_texture_is_array(res->target);
 
 	/* DRM 2.x.x doesn't support this. */
 	if (sscreen->info.drm_major != 3)
@@ -673,6 +673,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 	struct radeon_bo_metadata metadata;
 	bool update_metadata = false;
 	unsigned stride, offset, slice_size;
+	bool flush = false;
 
 	ctx = threaded_context_unwrap_sync(ctx);
 	rctx = (struct r600_common_context*)(ctx ? ctx : sscreen->aux_context);
@@ -692,7 +693,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 			assert(!res->b.is_shared);
 			r600_reallocate_texture_inplace(rctx, rtex,
 							PIPE_BIND_SHARED, false);
-			rctx->b.flush(&rctx->b, NULL, 0);
+			flush = true;
 			assert(res->b.b.bind & PIPE_BIND_SHARED);
 			assert(res->flags & RADEON_FLAG_NO_SUBALLOC);
 			assert(!(res->flags & RADEON_FLAG_NO_INTERPROCESS_SHARING));
@@ -704,14 +705,19 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		 * access.
 		 */
 		if (usage & PIPE_HANDLE_USAGE_WRITE && rtex->dcc_offset) {
-			if (si_texture_disable_dcc(rctx, rtex))
+			if (si_texture_disable_dcc(rctx, rtex)) {
 				update_metadata = true;
+				/* si_texture_disable_dcc flushes the context */
+				flush = false;
+			}
 		}
 
 		if (!(usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH) &&
 		    (rtex->cmask.size || rtex->dcc_offset)) {
 			/* Eliminate fast clear (both CMASK and DCC) */
 			r600_eliminate_fast_color_clear(rctx, rtex);
+			/* eliminate_fast_color_clear flushes the context */
+			flush = false;
 
 			/* Disable CMASK if flush_resource isn't going
 			 * to be called.
@@ -740,8 +746,11 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 			slice_size = (uint64_t)rtex->surface.u.legacy.level[0].slice_size_dw * 4;
 		}
 	} else {
+		/* Buffer exports are for the OpenCL interop. */
 		/* Move a suballocated buffer into a non-suballocated allocation. */
-		if (sscreen->ws->buffer_is_suballocated(res->buf)) {
+		if (sscreen->ws->buffer_is_suballocated(res->buf) ||
+		    /* A DMABUF export always fails if the BO is local. */
+		    rtex->resource.flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) {
 			assert(!res->b.is_shared);
 
 			/* Allocate a new buffer with PIPE_BIND_SHARED. */
@@ -758,6 +767,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 			u_box_1d(0, newb->width0, &box);
 			rctx->b.resource_copy_region(&rctx->b, newb, 0, 0, 0, 0,
 						     &res->b.b, 0, &box);
+			flush = true;
 			/* Move the new buffer storage to the old pipe_resource. */
 			si_replace_buffer_storage(&rctx->b, &res->b.b, newb);
 			pipe_resource_reference(&newb, NULL);
@@ -771,6 +781,9 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		stride = 0;
 		slice_size = 0;
 	}
+
+	if (flush)
+		rctx->b.flush(&rctx->b, NULL, 0);
 
 	if (res->b.is_shared) {
 		/* USAGE_EXPLICIT_FLUSH must be cleared if at least one user
@@ -922,7 +935,7 @@ void si_texture_get_cmask_info(struct si_screen *sscreen,
 		out->slice_tile_max -= 1;
 
 	out->alignment = MAX2(256, base_align);
-	out->size = (util_max_layer(&rtex->resource.b.b, 0) + 1) *
+	out->size = util_num_layers(&rtex->resource.b.b, 0) *
 		    align(slice_bytes, base_align);
 }
 
@@ -1001,7 +1014,7 @@ static void r600_texture_get_htile_size(struct si_screen *sscreen,
 
 	rtex->surface.htile_alignment = base_align;
 	rtex->surface.htile_size =
-		(util_max_layer(&rtex->resource.b.b, 0) + 1) *
+		util_num_layers(&rtex->resource.b.b, 0) *
 		align(slice_bytes, base_align);
 }
 
@@ -1320,7 +1333,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Texture %ix%ix%i, %i levels, %i samples, %s\n",
 			rtex->resource.gpu_address,
 			rtex->resource.gpu_address + rtex->resource.buf->size,
-			base->width0, base->height0, util_max_layer(base, 0)+1, base->last_level+1,
+			base->width0, base->height0, util_num_layers(base, 0), base->last_level+1,
 			base->nr_samples ? base->nr_samples : 1, util_format_short_name(base->format));
 	}
 

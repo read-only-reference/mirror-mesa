@@ -168,6 +168,14 @@ TODO: document the other workarounds.
             <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
         </application>
 
+        <application name="Steamroll" executable="Steamroll-Linux-Shipping">
+            <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
+        </application>
+
+        <application name="Refunct" executable="Refunct-Linux-Shipping">
+            <option name="allow_glsl_cross_stage_interpolation_mismatch" value="true"/>
+        </application>
+
         <!-- The GL thread whitelist is below, workarounds are above.
              Keep it that way. -->
 
@@ -256,6 +264,9 @@ TODO: document the other workarounds.
             <option name="mesa_glthread" value="true"/>
         </application>
         <application name="Spec Ops: The Line (64-bit)" executable="specops">
+            <option name="mesa_glthread" value="true"/>
+        </application>
+        <application name="Mount and Blade Warband" executable="mb_warband_linux">
             <option name="mesa_glthread" value="true"/>
         </application>
     </device>

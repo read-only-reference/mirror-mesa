@@ -196,19 +196,22 @@ radv_shader_compile_to_nir(struct radv_device *device,
 					spec_entries[i].data32 = *(const uint32_t *)data;
 			}
 		}
-		const struct nir_spirv_supported_extensions supported_ext = {
-			.draw_parameters = true,
-			.float64 = true,
-			.image_read_without_format = true,
-			.image_write_without_format = true,
-			.tessellation = true,
-			.int64 = true,
-			.multiview = true,
-			.variable_pointers = true,
+		const struct spirv_to_nir_options spirv_options = {
+			.caps = {
+				.draw_parameters = true,
+				.float64 = true,
+				.image_read_without_format = true,
+				.image_write_without_format = true,
+				.tessellation = true,
+				.int64 = true,
+				.multiview = true,
+				.variable_pointers = true,
+			},
 		};
 		entry_point = spirv_to_nir(spirv, module->size / 4,
 					   spec_entries, num_spec_entries,
-					   stage, entrypoint_name, &supported_ext, &nir_options);
+					   stage, entrypoint_name,
+					   &spirv_options, &nir_options);
 		nir = entry_point->shader;
 		assert(nir->info.stage == stage);
 		nir_validate_shader(nir);
@@ -389,13 +392,18 @@ radv_fill_shader_variant(struct radv_device *device,
 		break;
 	case MESA_SHADER_FRAGMENT:
 		break;
-	case MESA_SHADER_COMPUTE:
+	case MESA_SHADER_COMPUTE: {
+		struct ac_shader_info *info = &variant->info.info;
 		variant->rsrc2 |=
-			S_00B84C_TGID_X_EN(1) | S_00B84C_TGID_Y_EN(1) |
-			S_00B84C_TGID_Z_EN(1) | S_00B84C_TIDIG_COMP_CNT(2) |
-			S_00B84C_TG_SIZE_EN(1) |
+			S_00B84C_TGID_X_EN(info->cs.uses_block_id[0]) |
+			S_00B84C_TGID_Y_EN(info->cs.uses_block_id[1]) |
+			S_00B84C_TGID_Z_EN(info->cs.uses_block_id[2]) |
+			S_00B84C_TIDIG_COMP_CNT(info->cs.uses_thread_id[2] ? 2 :
+						info->cs.uses_thread_id[1] ? 1 : 0) |
+			S_00B84C_TG_SIZE_EN(info->cs.uses_local_invocation_idx) |
 			S_00B84C_LDS_SIZE(variant->config.lds_size);
 		break;
+	}
 	default:
 		unreachable("unsupported shader type");
 		break;
@@ -429,7 +437,7 @@ shader_variant_create(struct radv_device *device,
 		      unsigned *code_size_out)
 {
 	enum radeon_family chip_family = device->physical_device->rad_info.family;
-	bool dump_shaders = device->instance->debug_flags & RADV_DEBUG_DUMP_SHADERS;
+	bool dump_shaders = radv_can_dump_shader(device, module);
 	enum ac_target_machine_options tm_options = 0;
 	struct radv_shader_variant *variant;
 	struct ac_shader_binary binary;

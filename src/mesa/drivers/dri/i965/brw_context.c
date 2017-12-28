@@ -329,6 +329,13 @@ brw_init_driver_functions(struct brw_context *brw,
 
    if (devinfo->gen >= 6)
       functions->GetSamplePosition = gen6_get_sample_position;
+
+   /* GL_ARB_get_program_binary */
+   brw_program_binary_init(brw->screen->deviceID);
+   functions->GetProgramBinaryDriverSHA1 = brw_get_program_binary_driver_sha1;
+   functions->ProgramBinarySerializeDriverBlob = brw_program_serialize_nir;
+   functions->ProgramBinaryDeserializeDriverBlob =
+      brw_deserialize_program_binary;
 }
 
 static void
@@ -696,6 +703,9 @@ brw_initialize_context_constants(struct brw_context *brw)
 
    if (!(ctx->Const.ContextFlags & GL_CONTEXT_FLAG_DEBUG_BIT))
       ctx->Const.AllowMappedBuffersDuringExecution = true;
+
+   /* GL_ARB_get_program_binary */
+   ctx->Const.NumProgramBinaryFormats = 1;
 }
 
 static void
@@ -1010,6 +1020,13 @@ brwCreateContext(gl_api api,
       *dri_ctx_error = __DRI_CTX_ERROR_NO_MEMORY;
       intelDestroyContext(driContextPriv);
       return false;
+   }
+
+   if (devinfo->gen == 10) {
+      fprintf(stderr,
+              "WARNING: i965 does not fully support Gen10 yet.\n"
+              "Instability or lower performance might occur.\n");
+
    }
 
    brw_init_state(brw);

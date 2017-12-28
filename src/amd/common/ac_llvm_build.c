@@ -47,11 +47,12 @@
  */
 void
 ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
-		     enum chip_class chip_class)
+		     enum chip_class chip_class, enum radeon_family family)
 {
 	LLVMValueRef args[1];
 
 	ctx->chip_class = chip_class;
+	ctx->family = family;
 
 	ctx->context = context;
 	ctx->module = NULL;
@@ -371,6 +372,28 @@ ac_build_vote_eq(struct ac_llvm_context *ctx, LLVMValueRef value)
 }
 
 LLVMValueRef
+ac_build_varying_gather_values(struct ac_llvm_context *ctx, LLVMValueRef *values,
+			       unsigned value_count, unsigned component)
+{
+	LLVMValueRef vec = NULL;
+
+	if (value_count == 1) {
+		return values[component];
+	} else if (!value_count)
+		unreachable("value_count is 0");
+
+	for (unsigned i = component; i < value_count + component; i++) {
+		LLVMValueRef value = values[i];
+
+		if (!i)
+			vec = LLVMGetUndef( LLVMVectorType(LLVMTypeOf(value), value_count));
+		LLVMValueRef index = LLVMConstInt(ctx->i32, i - component, false);
+		vec = LLVMBuildInsertElement(ctx->builder, vec, value, index, "");
+	}
+	return vec;
+}
+
+LLVMValueRef
 ac_build_gather_values_extended(struct ac_llvm_context *ctx,
 				LLVMValueRef *values,
 				unsigned value_count,
@@ -417,6 +440,7 @@ ac_build_fdiv(struct ac_llvm_context *ctx,
 {
 	LLVMValueRef ret = LLVMBuildFDiv(ctx->builder, num, den, "");
 
+	/* Use v_rcp_f32 instead of precise division. */
 	if (!LLVMIsConstant(ret))
 		LLVMSetMetadata(ret, ctx->fpmath_md_kind, ctx->fpmath_md_2p5_ulp);
 	return ret;
@@ -1457,6 +1481,15 @@ LLVMValueRef ac_build_bfe(struct ac_llvm_context *ctx, LLVMValueRef input,
 				  ctx->i32, args, 3,
 				  AC_FUNC_ATTR_READNONE |
 				  AC_FUNC_ATTR_LEGACY);
+}
+
+void ac_build_waitcnt(struct ac_llvm_context *ctx, unsigned simm16)
+{
+	LLVMValueRef args[1] = {
+		LLVMConstInt(ctx->i32, simm16, false),
+	};
+	ac_build_intrinsic(ctx, "llvm.amdgcn.s.waitcnt",
+			   ctx->voidt, args, 1, 0);
 }
 
 void ac_get_image_intr_name(const char *base_name,

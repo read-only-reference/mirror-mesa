@@ -268,7 +268,7 @@ void si_llvm_dispose(struct si_shader_context *ctx);
 void si_llvm_optimize_module(struct si_shader_context *ctx);
 
 LLVMValueRef si_llvm_emit_fetch_64bit(struct lp_build_tgsi_context *bld_base,
-				      enum tgsi_opcode_type type,
+				      LLVMTypeRef type,
 				      LLVMValueRef ptr,
 				      LLVMValueRef ptr2);
 
@@ -276,6 +276,12 @@ LLVMValueRef si_llvm_emit_fetch(struct lp_build_tgsi_context *bld_base,
 				const struct tgsi_full_src_register *reg,
 				enum tgsi_opcode_type type,
 				unsigned swizzle);
+
+LLVMValueRef si_llvm_load_input_gs(struct ac_shader_abi *abi,
+				   unsigned input_index,
+				   unsigned vtx_offset_param,
+				   LLVMTypeRef type,
+				   unsigned swizzle);
 
 void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			const struct tgsi_full_instruction *inst,
@@ -287,8 +293,6 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 #define NOOP_WAITCNT 0xf7f
 #define LGKM_CNT 0x07f
 #define VM_CNT 0xf70
-
-void si_emit_waitcnt(struct si_shader_context *ctx, unsigned simm16);
 
 LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 				   const struct tgsi_ind_register *ind,
@@ -325,5 +329,14 @@ void si_llvm_load_input_fs(
 	LLVMValueRef out[4]);
 
 bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir);
+
+LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
+				  unsigned location,
+				  unsigned driver_location,
+				  unsigned component,
+				  unsigned num_components,
+				  unsigned vertex_index,
+				  unsigned const_index,
+				  LLVMTypeRef type);
 
 #endif
