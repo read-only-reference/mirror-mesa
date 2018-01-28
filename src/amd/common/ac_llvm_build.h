@@ -35,6 +35,7 @@ extern "C" {
 #endif
 
 enum {
+	AC_CONST_ADDR_SPACE = 2, /* CONST is the only address space that selects SMEM loads */
 	AC_LOCAL_ADDR_SPACE = 3,
 };
 
@@ -61,8 +62,12 @@ struct ac_llvm_context {
 
 	LLVMValueRef i32_0;
 	LLVMValueRef i32_1;
+	LLVMValueRef i64_0;
+	LLVMValueRef i64_1;
 	LLVMValueRef f32_0;
 	LLVMValueRef f32_1;
+	LLVMValueRef f64_0;
+	LLVMValueRef f64_1;
 	LLVMValueRef i1true;
 	LLVMValueRef i1false;
 
@@ -82,6 +87,14 @@ struct ac_llvm_context {
 void
 ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
 		     enum chip_class chip_class, enum radeon_family family);
+
+int
+ac_get_llvm_num_components(LLVMValueRef value);
+
+LLVMValueRef
+ac_llvm_extract_elem(struct ac_llvm_context *ac,
+		     LLVMValueRef value,
+		     int index);
 
 unsigned ac_get_type_size(LLVMTypeRef type);
 
@@ -202,6 +215,7 @@ LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 					 LLVMValueRef rsrc,
 					 LLVMValueRef vindex,
 					 LLVMValueRef voffset,
+					 unsigned num_channels,
 					 bool can_speculate);
 
 LLVMValueRef
@@ -236,7 +250,10 @@ LLVMValueRef ac_build_imsb(struct ac_llvm_context *ctx,
 LLVMValueRef ac_build_umsb(struct ac_llvm_context *ctx,
 			  LLVMValueRef arg,
 			  LLVMTypeRef dst_type);
-
+LLVMValueRef ac_build_fmin(struct ac_llvm_context *ctx, LLVMValueRef a,
+			   LLVMValueRef b);
+LLVMValueRef ac_build_fmax(struct ac_llvm_context *ctx, LLVMValueRef a,
+			   LLVMValueRef b);
 LLVMValueRef ac_build_umin(struct ac_llvm_context *ctx, LLVMValueRef a, LLVMValueRef b);
 LLVMValueRef ac_build_clamp(struct ac_llvm_context *ctx, LLVMValueRef value);
 
@@ -311,6 +328,9 @@ void ac_lds_store(struct ac_llvm_context *ctx,
 LLVMValueRef ac_find_lsb(struct ac_llvm_context *ctx,
 			 LLVMTypeRef dst_type,
 			 LLVMValueRef src0);
+
+LLVMTypeRef ac_array_in_const_addr_space(LLVMTypeRef elem_type);
+
 #ifdef __cplusplus
 }
 #endif

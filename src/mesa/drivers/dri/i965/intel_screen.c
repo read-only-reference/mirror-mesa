@@ -41,6 +41,7 @@
 #include "compiler/nir/nir.h"
 
 #include "utils.h"
+#include "util/disk_cache.h"
 #include "util/xmlpool.h"
 
 static const __DRIconfigOptionsExtension brw_config_options = {
@@ -92,6 +93,7 @@ DRI_CONF_BEGIN
 
    DRI_CONF_SECTION_MISCELLANEOUS
       DRI_CONF_GLSL_ZERO_INIT("false")
+      DRI_CONF_ALLOW_RGB10_CONFIGS("false")
    DRI_CONF_SECTION_END
 DRI_CONF_END
 };
@@ -179,6 +181,12 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
 };
 
 static const struct intel_image_format intel_image_formats[] = {
+   { __DRI_IMAGE_FOURCC_ARGB2101010, __DRI_IMAGE_COMPONENTS_RGBA, 1,
+     { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB2101010, 4 } } },
+
+   { __DRI_IMAGE_FOURCC_XRGB2101010, __DRI_IMAGE_COMPONENTS_RGB, 1,
+     { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB2101010, 4 } } },
+
    { __DRI_IMAGE_FOURCC_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
 
@@ -1025,7 +1033,16 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
 
    image->planar_format = f;
 
-   image->bo = brw_bo_gem_create_from_prime(screen->bufmgr, fds[0]);
+   if (modifier != DRM_FORMAT_MOD_INVALID) {
+      const struct isl_drm_modifier_info *mod_info =
+         isl_drm_modifier_get_info(modifier);
+      uint32_t tiling = isl_tiling_to_i915_tiling(mod_info->tiling);
+      image->bo = brw_bo_gem_create_from_prime_tiled(screen->bufmgr, fds[0],
+                                                     tiling, strides[0]);
+   } else {
+      image->bo = brw_bo_gem_create_from_prime(screen->bufmgr, fds[0]);
+   }
+
    if (image->bo == NULL) {
       free(image);
       return NULL;
@@ -1496,7 +1513,6 @@ static const __DRIextension *screenExtensions[] = {
     &intelRendererQueryExtension.base,
     &dri2ConfigQueryExtension.base,
     &dri2NoErrorExtension.base,
-    &dri2FlushControlExtension.base,
     NULL
 };
 
@@ -1507,7 +1523,6 @@ static const __DRIextension *intelRobustScreenExtensions[] = {
     &intelImageExtension.base,
     &intelRendererQueryExtension.base,
     &dri2ConfigQueryExtension.base,
-    &dri2FlushControlExtension.base,
     &dri2Robustness.base,
     &dri2NoErrorExtension.base,
     NULL
@@ -1558,6 +1573,8 @@ intelDestroyScreen(__DRIscreen * sPriv)
    brw_bufmgr_destroy(screen->bufmgr);
    driDestroyOptionInfo(&screen->optionCache);
 
+   disk_cache_destroy(screen->disk_cache);
+
    ralloc_free(screen);
    sPriv->driverPrivate = NULL;
 }
@@ -1596,7 +1613,13 @@ intelCreateBuffer(__DRIscreen *dri_screen,
       fb->Visual.samples = num_samples;
    }
 
-   if (mesaVis->redBits == 5) {
+   if (mesaVis->redBits == 10 && mesaVis->alphaBits > 0) {
+      rgbFormat = mesaVis->redMask == 0x3ff00000 ? MESA_FORMAT_B10G10R10A2_UNORM
+                                                 : MESA_FORMAT_R10G10B10A2_UNORM;
+   } else if (mesaVis->redBits == 10) {
+      rgbFormat = mesaVis->redMask == 0x3ff00000 ? MESA_FORMAT_B10G10R10X2_UNORM
+                                                 : MESA_FORMAT_R10G10B10X2_UNORM;
+   } else if (mesaVis->redBits == 5) {
       rgbFormat = mesaVis->redMask == 0x1f ? MESA_FORMAT_R5G6B5_UNORM
                                            : MESA_FORMAT_B5G6R5_UNORM;
    } else if (mesaVis->sRGBCapable) {
@@ -2006,6 +2029,10 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 
       MESA_FORMAT_B8G8R8A8_SRGB,
 
+      /* For 10 bpc, 30 bit depth framebuffers. */
+      MESA_FORMAT_B10G10R10A2_UNORM,
+      MESA_FORMAT_B10G10R10X2_UNORM,
+
       /* The 32-bit RGBA format must not precede the 32-bit BGRA format.
        * Likewise for RGBX and BGRX.  Otherwise, the GLX client and the GLX
        * server may disagree on which format the GLXFBConfig represents,
@@ -2047,10 +2074,19 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    else
       num_formats = ARRAY_SIZE(formats) - 2; /* all - RGBA_ORDERING formats */
 
+   /* Shall we expose 10 bpc formats? */
+   bool allow_rgb10_configs = driQueryOptionb(&screen->optionCache,
+                                              "allow_rgb10_configs");
+
    /* Generate singlesample configs without accumulation buffer. */
    for (unsigned i = 0; i < num_formats; i++) {
       __DRIconfig **new_configs;
       int num_depth_stencil_bits = 2;
+
+      if (!allow_rgb10_configs &&
+          (formats[i] == MESA_FORMAT_B10G10R10A2_UNORM ||
+           formats[i] == MESA_FORMAT_B10G10R10X2_UNORM))
+         continue;
 
       /* Starting with DRI2 protocol version 1.1 we can request a depth/stencil
        * buffer that has a different number of bits per pixel than the color
@@ -2088,6 +2124,11 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    for (unsigned i = 0; i < num_formats; i++) {
       __DRIconfig **new_configs;
 
+      if (!allow_rgb10_configs &&
+          (formats[i] == MESA_FORMAT_B10G10R10A2_UNORM ||
+          formats[i] == MESA_FORMAT_B10G10R10X2_UNORM))
+         continue;
+
       if (formats[i] == MESA_FORMAT_B5G6R5_UNORM) {
          depth_bits[0] = 16;
          stencil_bits[0] = 0;
@@ -2120,6 +2161,11 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    for (unsigned i = 0; i < num_formats; i++) {
       if (devinfo->gen < 6)
          break;
+
+      if (!allow_rgb10_configs &&
+          (formats[i] == MESA_FORMAT_B10G10R10A2_UNORM ||
+          formats[i] == MESA_FORMAT_B10G10R10X2_UNORM))
+         continue;
 
       __DRIconfig **new_configs;
       const int num_depth_stencil_bits = 2;
@@ -2361,7 +2407,12 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
       return NULL;
    }
    /* parse information in __driConfigOptions */
-   driParseOptionInfo(&screen->optionCache, brw_config_options.xml);
+   driOptionCache options;
+   memset(&options, 0, sizeof(options));
+
+   driParseOptionInfo(&options, brw_config_options.xml);
+   driParseConfigFiles(&screen->optionCache, &options, dri_screen->myNum, "i965");
+   driDestroyOptionCache(&options);
 
    screen->driScrnPriv = dri_screen;
    dri_screen->driverPrivate = (void *) screen;
@@ -2634,6 +2685,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
             fprintf(stderr, "  - Preemption enabled\n");
       }
    }
+
+   brw_disk_cache_init(screen);
 
    return (const __DRIconfig**) intel_screen_make_configs(dri_screen);
 }

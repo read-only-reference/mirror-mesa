@@ -88,7 +88,7 @@ st_nir_assign_vs_in_locations(struct gl_program *prog, nir_shader *nir)
       if ((prog->info.inputs_read & BITFIELD64_BIT(attr)) != 0) {
          input_to_index[attr] = num_inputs;
          num_inputs++;
-         if ((prog->info.double_inputs_read & BITFIELD64_BIT(attr)) != 0) {
+         if ((prog->info.vs.double_inputs_read & BITFIELD64_BIT(attr)) != 0) {
             /* add placeholder for second part of a double attribute */
             num_inputs++;
          }
@@ -139,8 +139,12 @@ st_nir_assign_var_locations(struct exec_list *var_list, unsigned *size,
       }
 
       bool processed = false;
-      if (var->data.patch) {
-         unsigned patch_loc = var->data.location - VARYING_SLOT_VAR0;
+      if (var->data.patch &&
+          var->data.location != VARYING_SLOT_TESS_LEVEL_INNER &&
+          var->data.location != VARYING_SLOT_TESS_LEVEL_OUTER &&
+          var->data.location != VARYING_SLOT_BOUNDING_BOX0 &&
+          var->data.location != VARYING_SLOT_BOUNDING_BOX1) {
+         unsigned patch_loc = var->data.location - VARYING_SLOT_PATCH0;
          if (processed_patch_locs & (1 << patch_loc))
             processed = true;
 
@@ -238,18 +242,10 @@ st_nir_assign_uniform_locations(struct gl_program *prog,
          continue;
 
       if (uniform->type->is_sampler() || uniform->type->is_image()) {
-         unsigned val = 0;
-         bool found = shader_program->UniformHash->get(val, uniform->name);
          if (uniform->type->is_sampler())
             loc = shaderidx++;
          else
             loc = imageidx++;
-         assert(found);
-         (void) found; /* silence unused var warning */
-         /* this ensure that nir_lower_samplers looks at the correct
-          * shader_program->UniformStorage[location]:
-          */
-         uniform->data.location = val;
       } else if (strncmp(uniform->name, "gl_", 3) == 0) {
          const gl_state_index *const stateTokens = (gl_state_index *)uniform->state_slots[0].tokens;
          /* This state reference has already been setup by ir_to_mesa, but we'll
@@ -273,6 +269,10 @@ st_nir_opts(nir_shader *nir)
    bool progress;
    do {
       progress = false;
+
+      NIR_PASS_V(nir, nir_lower_vars_to_ssa);
+      NIR_PASS_V(nir, nir_lower_alu_to_scalar);
+      NIR_PASS_V(nir, nir_lower_phis_to_scalar);
 
       NIR_PASS_V(nir, nir_lower_64bit_pack);
       NIR_PASS(progress, nir, nir_copy_prop);
@@ -308,20 +308,34 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
                struct gl_shader_program *shader_program,
                gl_shader_stage stage)
 {
-   struct pipe_screen *pscreen = st->pipe->screen;
-   enum pipe_shader_type ptarget = pipe_shader_type_from_mesa(stage);
-   const nir_shader_compiler_options *options;
-
-   assert(pscreen->get_compiler_options);   /* drivers using NIR must implement this */
-
-   options = (const nir_shader_compiler_options *)
-      pscreen->get_compiler_options(pscreen, PIPE_SHADER_IR_NIR, ptarget);
+   const nir_shader_compiler_options *options =
+      st->ctx->Const.ShaderCompilerOptions[prog->info.stage].NirOptions;
    assert(options);
 
    if (prog->nir)
       return prog->nir;
 
    nir_shader *nir = glsl_to_nir(shader_program, stage, options);
+
+   nir_variable_mode mask =
+      (nir_variable_mode) (nir_var_shader_in | nir_var_shader_out);
+   nir_remove_dead_variables(nir, mask);
+
+   if (options->lower_all_io_to_temps ||
+       nir->info.stage == MESA_SHADER_VERTEX ||
+       nir->info.stage == MESA_SHADER_GEOMETRY) {
+      NIR_PASS_V(nir, nir_lower_io_to_temporaries,
+                 nir_shader_get_entrypoint(nir),
+                 true, true);
+   } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      NIR_PASS_V(nir, nir_lower_io_to_temporaries,
+                 nir_shader_get_entrypoint(nir),
+                 true, false);
+   }
+
+   NIR_PASS_V(nir, nir_lower_global_vars_to_local);
+   NIR_PASS_V(nir, nir_split_var_copies);
+   NIR_PASS_V(nir, nir_lower_var_copies);
 
    st_nir_opts(nir);
 
@@ -457,6 +471,8 @@ st_nir_get_mesa_program(struct gl_context *ctx,
                         struct gl_linked_shader *shader)
 {
    struct st_context *st = st_context(ctx);
+   const nir_shader_compiler_options *options =
+      ctx->Const.ShaderCompilerOptions[shader->Program->info.stage].NirOptions;
    struct gl_program *prog;
 
    validate_ir_tree(shader->ir);
@@ -485,13 +501,6 @@ st_nir_get_mesa_program(struct gl_context *ctx,
 
    set_st_program(prog, shader_program, nir);
    prog->nir = nir;
-
-   NIR_PASS_V(nir, nir_lower_io_to_temporaries,
-              nir_shader_get_entrypoint(nir),
-              true, true);
-   NIR_PASS_V(nir, nir_lower_global_vars_to_local);
-   NIR_PASS_V(nir, nir_split_var_copies);
-   NIR_PASS_V(nir, nir_lower_var_copies);
 }
 
 static void
@@ -658,11 +667,18 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
                 struct gl_shader_program *shader_program, nir_shader *nir)
 {
    struct pipe_screen *screen = st->pipe->screen;
+   const nir_shader_compiler_options *options =
+      st->ctx->Const.ShaderCompilerOptions[prog->info.stage].NirOptions;
 
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
-   if (nir->info.stage != MESA_SHADER_TESS_CTRL)
-      NIR_PASS_V(nir, nir_lower_io_arrays_to_elements_no_indirects);
+   if (options->lower_all_io_to_temps ||
+       nir->info.stage == MESA_SHADER_VERTEX ||
+       nir->info.stage == MESA_SHADER_GEOMETRY) {
+      NIR_PASS_V(nir, nir_lower_io_arrays_to_elements_no_indirects, false);
+   } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      NIR_PASS_V(nir, nir_lower_io_arrays_to_elements_no_indirects, true);
+   }
 
    if (nir->info.stage == MESA_SHADER_VERTEX) {
       /* Needs special handling so drvloc matches the vbo state: */
@@ -675,7 +691,9 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
                                   &nir->num_outputs,
                                   nir->info.stage);
       st_nir_fixup_varying_slots(st, &nir->outputs);
-   } else if (nir->info.stage == MESA_SHADER_GEOMETRY) {
+   } else if (nir->info.stage == MESA_SHADER_GEOMETRY ||
+              nir->info.stage == MESA_SHADER_TESS_CTRL ||
+              nir->info.stage == MESA_SHADER_TESS_EVAL) {
       sort_varyings(&nir->inputs);
       st_nir_assign_var_locations(&nir->inputs,
                                   &nir->num_inputs,

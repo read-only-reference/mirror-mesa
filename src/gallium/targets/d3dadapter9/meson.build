@@ -47,7 +47,7 @@ endif
 
 libgallium_nine = shared_library(
   'd3dadapter9',
-  files('description.c', 'getproc.c', 'drm.c'),
+  [files('description.c', 'getproc.c', 'drm.c'), xmlpool_options_h],
   include_directories : [
     inc_include, inc_src, inc_loader, inc_mapi, inc_mesa, inc_util,
     inc_dri_common, inc_gallium, inc_gallium_aux, inc_gallium_winsys,
@@ -64,10 +64,11 @@ libgallium_nine = shared_library(
     gallium_nine_link_with,
   ],
   dependencies : [
-    dep_selinux, dep_expat, dep_libdrm, dep_llvm, dep_lmsensors,
+    dep_selinux, dep_expat, dep_libdrm, dep_llvm,
     driver_swrast, driver_r300, driver_r600, driver_radeonsi, driver_nouveau,
     driver_i915, driver_svga,
   ],
+  name_prefix : '',
   version : '.'.join(nine_version),
   install : true,
   install_dir : d3d_drivers_path,

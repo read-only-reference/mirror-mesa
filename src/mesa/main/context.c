@@ -227,7 +227,7 @@ _mesa_create_visual( GLboolean dbFlag,
                      GLint accumGreenBits,
                      GLint accumBlueBits,
                      GLint accumAlphaBits,
-                     GLint numSamples )
+                     GLuint numSamples )
 {
    struct gl_config *vis = CALLOC_STRUCT(gl_config);
    if (vis) {
@@ -269,7 +269,7 @@ _mesa_initialize_visual( struct gl_config *vis,
                          GLint accumGreenBits,
                          GLint accumBlueBits,
                          GLint accumAlphaBits,
-                         GLint numSamples )
+                         GLuint numSamples )
 {
    assert(vis);
 
@@ -1583,7 +1583,7 @@ handle_first_current(struct gl_context *ctx)
     */
    if (!ctx->HasConfig && _mesa_is_desktop_gl(ctx)) {
       if (ctx->DrawBuffer != _mesa_get_incomplete_framebuffer()) {
-         GLenum buffer;
+         GLenum16 buffer;
 
          if (ctx->DrawBuffer->Visual.doubleBufferMode)
             buffer = GL_BACK;
@@ -1829,31 +1829,6 @@ _mesa_get_dispatch(struct gl_context *ctx)
 /** \name Miscellaneous functions                                     */
 /**********************************************************************/
 /*@{*/
-
-/**
- * Record an error.
- *
- * \param ctx GL context.
- * \param error error code.
- *
- * Records the given error code and call the driver's dd_function_table::Error
- * function if defined.
- *
- * \sa
- * This is called via _mesa_error().
- */
-void
-_mesa_record_error(struct gl_context *ctx, GLenum error)
-{
-   if (!ctx)
-      return;
-
-   if (ctx->ErrorValue == GL_NO_ERROR) {
-      ctx->ErrorValue = error;
-   }
-}
-
-
 /**
  * Flush commands.
  */

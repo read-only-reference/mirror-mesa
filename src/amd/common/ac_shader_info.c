@@ -24,13 +24,15 @@
 #include "ac_shader_info.h"
 #include "ac_nir_to_llvm.h"
 
-static void mark_sampler_desc(nir_variable *var, struct ac_shader_info *info)
+static void mark_sampler_desc(const nir_variable *var,
+			      struct ac_shader_info *info)
 {
 	info->desc_set_used_mask = (1 << var->data.descriptor_set);
 }
 
 static void
-gather_intrinsic_info(nir_intrinsic_instr *instr, struct ac_shader_info *info)
+gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
+		      struct ac_shader_info *info)
 {
 	switch (instr->intrinsic) {
 	case nir_intrinsic_interp_var_at_sample:
@@ -70,6 +72,15 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, struct ac_shader_info *info)
 	case nir_intrinsic_load_view_index:
 		info->needs_multiview_view_index = true;
 		break;
+	case nir_intrinsic_load_invocation_id:
+		info->uses_invocation_id = true;
+		break;
+	case nir_intrinsic_load_primitive_id:
+		info->uses_prim_id = true;
+		break;
+	case nir_intrinsic_load_push_constant:
+		info->loads_push_constants = true;
+		break;
 	case nir_intrinsic_vulkan_resource_index:
 		info->desc_set_used_mask |= (1 << nir_intrinsic_desc_set(instr));
 		break;
@@ -93,15 +104,43 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, struct ac_shader_info *info)
 		    dim == GLSL_SAMPLER_DIM_SUBPASS_MS)
 			info->ps.uses_input_attachments = true;
 		mark_sampler_desc(instr->variables[0]->var, info);
+
+		if (nir_intrinsic_image_store ||
+		    nir_intrinsic_image_atomic_add ||
+		    nir_intrinsic_image_atomic_min ||
+		    nir_intrinsic_image_atomic_max ||
+		    nir_intrinsic_image_atomic_and ||
+		    nir_intrinsic_image_atomic_or ||
+		    nir_intrinsic_image_atomic_xor ||
+		    nir_intrinsic_image_atomic_exchange ||
+		    nir_intrinsic_image_atomic_comp_swap) {
+			if (nir->info.stage == MESA_SHADER_FRAGMENT)
+				info->ps.writes_memory = true;
+		}
 		break;
 	}
+	case nir_intrinsic_store_ssbo:
+	case nir_intrinsic_ssbo_atomic_add:
+	case nir_intrinsic_ssbo_atomic_imin:
+	case nir_intrinsic_ssbo_atomic_umin:
+	case nir_intrinsic_ssbo_atomic_imax:
+	case nir_intrinsic_ssbo_atomic_umax:
+	case nir_intrinsic_ssbo_atomic_and:
+	case nir_intrinsic_ssbo_atomic_or:
+	case nir_intrinsic_ssbo_atomic_xor:
+	case nir_intrinsic_ssbo_atomic_exchange:
+	case nir_intrinsic_ssbo_atomic_comp_swap:
+		if (nir->info.stage == MESA_SHADER_FRAGMENT)
+			info->ps.writes_memory = true;
+		break;
 	default:
 		break;
 	}
 }
 
 static void
-gather_tex_info(nir_tex_instr *instr, struct ac_shader_info *info)
+gather_tex_info(const nir_shader *nir, const nir_tex_instr *instr,
+		struct ac_shader_info *info)
 {
 	if (instr->sampler)
 		mark_sampler_desc(instr->sampler->var, info);
@@ -110,15 +149,16 @@ gather_tex_info(nir_tex_instr *instr, struct ac_shader_info *info)
 }
 
 static void
-gather_info_block(nir_block *block, struct ac_shader_info *info)
+gather_info_block(const nir_shader *nir, const nir_block *block,
+		  struct ac_shader_info *info)
 {
 	nir_foreach_instr(instr, block) {
 		switch (instr->type) {
 		case nir_instr_type_intrinsic:
-			gather_intrinsic_info(nir_instr_as_intrinsic(instr), info);
+			gather_intrinsic_info(nir, nir_instr_as_intrinsic(instr), info);
 			break;
 		case nir_instr_type_tex:
-			gather_tex_info(nir_instr_as_tex(instr), info);
+			gather_tex_info(nir, nir_instr_as_tex(instr), info);
 			break;
 		default:
 			break;
@@ -127,9 +167,7 @@ gather_info_block(nir_block *block, struct ac_shader_info *info)
 }
 
 static void
-gather_info_input_decl(nir_shader *nir,
-		       const struct ac_nir_compiler_options *options,
-		       nir_variable *var,
+gather_info_input_decl(const nir_shader *nir, const nir_variable *var,
 		       struct ac_shader_info *info)
 {
 	switch (nir->info.stage) {
@@ -142,22 +180,20 @@ gather_info_input_decl(nir_shader *nir,
 }
 
 void
-ac_nir_shader_info_pass(struct nir_shader *nir,
+ac_nir_shader_info_pass(const struct nir_shader *nir,
 			const struct ac_nir_compiler_options *options,
 			struct ac_shader_info *info)
 {
-	struct nir_function *func = (struct nir_function *)exec_list_get_head(&nir->functions);
+	struct nir_function *func =
+		(struct nir_function *)exec_list_get_head_const(&nir->functions);
 
-	info->needs_push_constants = false;
-	if ((options->layout->push_constant_size &&
-	     options->layout->push_constant_stages & (1 << nir->info.stage)) ||
-	    options->layout->dynamic_offset_count)
-		info->needs_push_constants = true;
+	if (options->layout->dynamic_offset_count)
+		info->loads_push_constants = true;
 
 	nir_foreach_variable(variable, &nir->inputs)
-		gather_info_input_decl(nir, options, variable, info);
+		gather_info_input_decl(nir, variable, info);
 
 	nir_foreach_block(block, func->impl) {
-		gather_info_block(block, info);
+		gather_info_block(nir, block, info);
 	}
 }

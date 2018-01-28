@@ -112,39 +112,48 @@ libxmlconfig = static_library(
   files_xmlconfig,
   include_directories : inc_common,
   dependencies : [dep_expat, dep_m],
-  c_args : [c_msvc_compat_args, c_vis_args,
-            '-DSYSCONFDIR="@0@"'.format(get_option('sysconfdir'))],
+  c_args : [
+    c_msvc_compat_args, c_vis_args,
+    '-DSYSCONFDIR="@0@"'.format(
+      join_paths(get_option('prefix'), get_option('sysconfdir'))
+    ),
+  ],
   build_by_default : false,
 )
 
 if with_tests
-  u_atomic_test = executable(
-    'u_atomic_test',
-    files('u_atomic_test.c'),
-    include_directories : inc_common,
-    link_with : libmesa_util,
-    c_args : [c_msvc_compat_args],
+  test(
+    'u_atomic',
+    executable(
+      'u_atomic_test',
+      files('u_atomic_test.c'),
+      include_directories : inc_common,
+      link_with : libmesa_util,
+      c_args : [c_msvc_compat_args],
+    )
   )
 
-  roundeven_test = executable(
-    'roundeven_test',
-    files('roundeven_test.c'),
-    include_directories : inc_common,
-    c_args : [c_msvc_compat_args],
-    dependencies : [dep_m],
+  test(
+    'roundeven',
+    executable(
+      'roundeven_test',
+      files('roundeven_test.c'),
+      include_directories : inc_common,
+      c_args : [c_msvc_compat_args],
+      dependencies : [dep_m],
+    )
   )
 
-  mesa_sha1_test = executable(
-    'mesa-sha1_test',
-    files('mesa-sha1_test.c'),
-    include_directories : inc_common,
-    link_with : libmesa_util,
-    c_args : [c_msvc_compat_args],
+  test(
+    'mesa-sha1',
+    executable(
+      'mesa-sha1_test',
+      files('mesa-sha1_test.c'),
+      include_directories : inc_common,
+      link_with : libmesa_util,
+      c_args : [c_msvc_compat_args],
+    )
   )
-
-  test('u_atomic', u_atomic_test)
-  test('roundeven', roundeven_test)
-  test('mesa-sha1', mesa_sha1_test)
 
   subdir('tests/hash_table')
   subdir('tests/string_buffer')

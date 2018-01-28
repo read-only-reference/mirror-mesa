@@ -287,8 +287,6 @@ fs_generator::fire_fb_write(fs_inst *inst,
     * messages set "Render Target Index" to 0.  Using a different binding
     * table index would make it impossible to use headerless messages.
     */
-   assert(prog_data->binding_table.render_target_start == 0);
-
    const uint32_t surf_index = inst->target;
 
    bool last_render_target = inst->eot ||
@@ -427,8 +425,8 @@ fs_generator::generate_fb_read(fs_inst *inst, struct brw_reg dst,
 {
    assert(inst->size_written % REG_SIZE == 0);
    struct brw_wm_prog_data *prog_data = brw_wm_prog_data(this->prog_data);
-   const unsigned surf_index =
-      prog_data->binding_table.render_target_start + inst->target;
+   /* We assume that render targets start at binding table index 0. */
+   const unsigned surf_index = inst->target;
 
    gen9_fb_READ(p, dst, payload, surf_index,
                 inst->header_size, inst->size_written / REG_SIZE,
@@ -1758,13 +1756,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case BRW_OPCODE_MAD:
          assert(devinfo->gen >= 6);
-	 brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_MAD(p, dst, src[0], src[1], src[2]);
 	 break;
 
       case BRW_OPCODE_LRP:
          assert(devinfo->gen >= 6);
-	 brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_LRP(p, dst, src[0], src[1], src[2]);
 	 break;
 
@@ -1862,7 +1862,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case BRW_OPCODE_BFE:
          assert(devinfo->gen >= 7);
-         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFE(p, dst, src[0], src[1], src[2]);
          break;
 
@@ -1872,7 +1873,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
          break;
       case BRW_OPCODE_BFI2:
          assert(devinfo->gen >= 7);
-         brw_set_default_access_mode(p, BRW_ALIGN_16);
+         if (devinfo->gen < 10)
+            brw_set_default_access_mode(p, BRW_ALIGN_16);
          brw_BFI2(p, dst, src[0], src[1], src[2]);
          break;
 

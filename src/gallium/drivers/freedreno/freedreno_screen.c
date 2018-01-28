@@ -82,6 +82,7 @@ static const struct debug_named_value debug_options[] = {
 		{"noindirect",FD_DBG_NOINDR, "Disable hw indirect draws (emulate on CPU)"},
 		{"noblit",    FD_DBG_NOBLIT, "Disable blitter (fallback to generic blit path)"},
 		{"hiprio",    FD_DBG_HIPRIO, "Force high-priority context"},
+		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -166,10 +167,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	/* Supported features (boolean caps). */
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
-	case PIPE_CAP_TWO_SIDED_STENCIL:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
-	case PIPE_CAP_TEXTURE_SHADOW_MAP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -190,9 +189,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_VERTEXID_NOBASE:
 		return is_a3xx(screen) || is_a4xx(screen);
-
-	case PIPE_CAP_USER_CONSTANT_BUFFERS:
-		return is_a4xx(screen) ? 0 : 1;
 
 	case PIPE_CAP_COMPUTE:
 		return has_compute(screen);
@@ -340,6 +336,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+	case PIPE_CAP_FENCE_SIGNAL:
 		return 0;
 
 	case PIPE_CAP_CONTEXT_PRIORITY_MASK:

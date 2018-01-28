@@ -63,28 +63,36 @@
 #define R600_CONTEXT_PS_PARTIAL_FLUSH		(R600_CONTEXT_PRIVATE_FLAG << 8)
 #define R600_CONTEXT_WAIT_3D_IDLE		(R600_CONTEXT_PRIVATE_FLAG << 9)
 #define R600_CONTEXT_WAIT_CP_DMA_IDLE		(R600_CONTEXT_PRIVATE_FLAG << 10)
+#define R600_CONTEXT_CS_PARTIAL_FLUSH           (R600_CONTEXT_PRIVATE_FLAG << 11)
 
 /* the number of CS dwords for flushing and drawing */
 #define R600_MAX_FLUSH_CS_DWORDS	18
 #define R600_MAX_DRAW_CS_DWORDS		58
 #define R600_MAX_PFP_SYNC_ME_DWORDS	16
 
-#define R600_MAX_USER_CONST_BUFFERS 13
+#define EG_MAX_ATOMIC_BUFFERS 8
+
+#define R600_MAX_USER_CONST_BUFFERS 15
 #define R600_MAX_DRIVER_CONST_BUFFERS 3
 #define R600_MAX_CONST_BUFFERS (R600_MAX_USER_CONST_BUFFERS + R600_MAX_DRIVER_CONST_BUFFERS)
-
-#define EG_MAX_ATOMIC_BUFFERS 8
+#define R600_MAX_HW_CONST_BUFFERS 16
 
 /* start driver buffers after user buffers */
 #define R600_BUFFER_INFO_CONST_BUFFER (R600_MAX_USER_CONST_BUFFERS)
 #define R600_UCP_SIZE (4*4*8)
 #define R600_CS_BLOCK_GRID_SIZE (8 * 4)
+#define R600_TCS_DEFAULT_LEVELS_SIZE (6 * 4)
 #define R600_BUFFER_INFO_OFFSET (R600_UCP_SIZE)
 
+/*
+ * We only access this buffer through vtx clauses hence it's fine to exist
+ * at index beyond 15.
+ */
 #define R600_LDS_INFO_CONST_BUFFER (R600_MAX_USER_CONST_BUFFERS + 1)
 /*
  * Note GS doesn't use a constant buffer binding, just a resource index,
- * so it's fine to have it exist at index 16.
+ * so it's fine to have it exist at index beyond 15. I.e. it's not actually
+ * a const buffer, just a buffer resource.
  */
 #define R600_GS_RING_CONST_BUFFER (R600_MAX_USER_CONST_BUFFERS + 2)
 /* Currently R600_MAX_CONST_BUFFERS just fits on the hw, which has a limit
@@ -145,8 +153,8 @@ struct r600_cb_misc_state {
 	unsigned blend_colormask; /* 8*4 bits for 8 RGBA colorbuffers */
 	unsigned nr_cbufs;
 	unsigned nr_ps_color_outputs;
-	unsigned nr_image_rats;
-	unsigned nr_buffer_rats;
+	unsigned image_rat_enabled_mask;
+	unsigned buffer_rat_enabled_mask;
 	bool multiwrite;
 	bool dual_src_blend;
 };
@@ -394,10 +402,11 @@ struct r600_shader_driver_constants_info {
 	/* currently 128 bytes for UCP/samplepos + sampler buffer constants */
 	uint32_t			*constants;
 	uint32_t			alloc_size;
-	bool				vs_ucp_dirty;
 	bool				texture_const_dirty;
+	bool				vs_ucp_dirty;
 	bool				ps_sample_pos_dirty;
 	bool                            cs_block_grid_size_dirty;
+	bool				tcs_default_levels_dirty;
 };
 
 struct r600_constbuf_state
@@ -578,7 +587,6 @@ struct r600_context {
 	float sample_positions[4 * 16];
 	float tess_state[8];
 	uint32_t cs_block_grid_sizes[8]; /* 3 for grid + 1 pad, 3 for block  + 1 pad*/
-	bool tess_state_dirty;
 	struct r600_pipe_shader_selector *last_ls;
 	struct r600_pipe_shader_selector *last_tcs;
 	unsigned last_num_tcs_input_cp;
@@ -693,6 +701,9 @@ void evergreen_init_color_surface_rat(struct r600_context *rctx,
 					struct r600_surface *surf);
 void evergreen_update_db_shader_control(struct r600_context * rctx);
 bool evergreen_adjust_gprs(struct r600_context *rctx);
+
+uint32_t evergreen_construct_rat_mask(struct r600_context *rctx, struct r600_cb_misc_state *a,
+				      unsigned nr_cbufs);
 /* r600_blit.c */
 void r600_init_blit_functions(struct r600_context *rctx);
 void r600_decompress_depth_textures(struct r600_context *rctx,

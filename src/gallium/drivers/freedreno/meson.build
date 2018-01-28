@@ -22,8 +22,10 @@ ir3_nir_trig_c = custom_target(
   'ir3_nir_trig.c',
   input : 'ir3/ir3_nir_trig.py',
   output : 'ir3_nir_trig.c',
-  command : [prog_python2, '@INPUT@', '-p',
-             join_paths(meson.source_root(), 'src/compiler/nir/')],
+  command : [
+    prog_python2, '@INPUT@',
+    '-p', join_paths(meson.source_root(), 'src/compiler/nir/'),
+  ],
   capture : true,
   depend_files : nir_algebraic_py,
 )
@@ -172,6 +174,8 @@ files_libfreedreno = files(
   'a5xx/fd5_query.h',
   'a5xx/fd5_rasterizer.c',
   'a5xx/fd5_rasterizer.h',
+  'a5xx/fd5_resource.c',
+  'a5xx/fd5_resource.h',
   'a5xx/fd5_screen.c',
   'a5xx/fd5_screen.h',
   'a5xx/fd5_texture.c',
@@ -201,7 +205,7 @@ files_libfreedreno = files(
 )
 
 freedreno_includes = [
-  inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_nir,
+  inc_src, inc_include, inc_gallium, inc_gallium_aux,
   include_directories('ir3')
 ]
 
@@ -217,11 +221,11 @@ endif
 
 libfreedreno = static_library(
   'freedreno',
-  [files_libfreedreno, ir3_nir_trig_c, nir_opcodes_h],
+  [files_libfreedreno, ir3_nir_trig_c],
   include_directories : freedreno_includes,
   c_args : [freedreno_c_args, c_vis_args],
   cpp_args : [freedreno_cpp_args, cpp_vis_args],
-  dependencies : [dep_libdrm, dep_libdrm_freedreno],
+  dependencies : [dep_libdrm, dep_libdrm_freedreno, idep_nir_headers],
 )
 
 driver_freedreno = declare_dependency(
@@ -237,12 +241,11 @@ ir3_compiler = executable(
     dep_libdrm,
     dep_libdrm_freedreno,
     dep_thread,
-    dep_lmsensors,
+    idep_nir,
   ],
   link_with : [
     libfreedreno,
     libgallium,
-    libnir,
     libglsl_standalone,
     libmesa_util,
   ],

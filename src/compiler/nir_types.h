@@ -102,6 +102,8 @@ glsl_get_bit_size(const struct glsl_type *type)
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_INT64:
    case GLSL_TYPE_UINT64:
+   case GLSL_TYPE_IMAGE:
+   case GLSL_TYPE_SAMPLER:
       return 64;
 
    default:
@@ -136,6 +138,7 @@ const struct glsl_type *glsl_double_type(void);
 const struct glsl_type *glsl_vec_type(unsigned n);
 const struct glsl_type *glsl_dvec_type(unsigned n);
 const struct glsl_type *glsl_vec4_type(void);
+const struct glsl_type *glsl_uvec4_type(void);
 const struct glsl_type *glsl_int_type(void);
 const struct glsl_type *glsl_uint_type(void);
 const struct glsl_type *glsl_int64_t_type(void);

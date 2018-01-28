@@ -169,14 +169,11 @@ struct si_shader_context {
 	int param_tcs_factor_addr_base64k;
 	int param_tcs_offchip_offset;
 	int param_tcs_factor_offset;
-	int param_tcs_patch_id;
-	int param_tcs_rel_ids;
 
 	/* API TES */
 	int param_tes_u;
 	int param_tes_v;
 	int param_tes_rel_patch_id;
-	int param_tes_patch_id;
 	/* HW ES */
 	int param_es2gs_offset;
 	/* API GS */
@@ -277,11 +274,27 @@ LLVMValueRef si_llvm_emit_fetch(struct lp_build_tgsi_context *bld_base,
 				enum tgsi_opcode_type type,
 				unsigned swizzle);
 
+LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi,
+				   LLVMValueRef vertex_index,
+				   LLVMValueRef param_index,
+				   unsigned const_index,
+				   unsigned location,
+				   unsigned driver_location,
+				   unsigned component,
+				   unsigned num_components,
+				   bool is_patch,
+				   bool is_compact,
+				   bool load_input);
+
 LLVMValueRef si_llvm_load_input_gs(struct ac_shader_abi *abi,
 				   unsigned input_index,
 				   unsigned vtx_offset_param,
 				   LLVMTypeRef type,
 				   unsigned swizzle);
+
+LLVMValueRef si_nir_lookup_interp_param(struct ac_shader_abi *abi,
+					enum glsl_interp_mode interp,
+					unsigned location);
 
 void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			const struct tgsi_full_instruction *inst,
@@ -300,8 +313,6 @@ LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 LLVMValueRef si_get_bounded_indirect_index(struct si_shader_context *ctx,
 					   const struct tgsi_ind_register *ind,
 					   int rel_index, unsigned num);
-
-LLVMTypeRef si_const_array(LLVMTypeRef elem_type, int num_elements);
 
 void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base);
 void si_shader_context_init_mem(struct si_shader_context *ctx);

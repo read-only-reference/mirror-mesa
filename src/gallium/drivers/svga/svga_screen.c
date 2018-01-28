@@ -191,8 +191,6 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
       return 1;
-   case PIPE_CAP_TWO_SIDED_STENCIL:
-      return 1;
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
       /*
        * "In virtually every OpenGL implementation and hardware,
@@ -214,16 +212,12 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return sws->have_vgpu10;
-   case PIPE_CAP_TEXTURE_SHADOW_MAP:
-      return 1;
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
       return 0;
    case PIPE_CAP_USER_VERTEX_BUFFERS:
       return 0;
-   case PIPE_CAP_USER_CONSTANT_BUFFERS:
-      return 1;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
 
@@ -460,6 +454,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
    case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
    case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+   case PIPE_CAP_FENCE_SIGNAL:
       return 0;
    }
 
@@ -845,6 +840,8 @@ svga_get_driver_query_info(struct pipe_screen *screen,
             PIPE_DRIVER_QUERY_TYPE_UINT64),
       QUERY("num-failed-allocations", SVGA_QUERY_NUM_FAILED_ALLOCATIONS,
             PIPE_DRIVER_QUERY_TYPE_UINT64),
+      QUERY("num-commands-per-draw", SVGA_QUERY_NUM_COMMANDS_PER_DRAW,
+            PIPE_DRIVER_QUERY_TYPE_FLOAT),
    };
 #undef QUERY
 

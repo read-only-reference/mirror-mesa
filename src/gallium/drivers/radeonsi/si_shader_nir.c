@@ -83,6 +83,9 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_instance_id:
 			info->uses_instanceid = 1;
 			break;
+		case nir_intrinsic_load_invocation_id:
+			info->uses_invocationid = true;
+			break;
 		case nir_intrinsic_load_vertex_id:
 			info->uses_vertexid = 1;
 			break;
@@ -94,6 +97,13 @@ static void scan_instruction(struct tgsi_shader_info *info,
 			break;
 		case nir_intrinsic_load_primitive_id:
 			info->uses_primid = 1;
+			break;
+		case nir_intrinsic_load_sample_mask_in:
+			info->reads_samplemask = true;
+			break;
+		case nir_intrinsic_load_tess_level_inner:
+		case nir_intrinsic_load_tess_level_outer:
+			info->reads_tess_factors = true;
 			break;
 		case nir_intrinsic_image_store:
 		case nir_intrinsic_image_atomic_add:
@@ -117,10 +127,93 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_ssbo_atomic_comp_swap:
 			info->writes_memory = true;
 			break;
+		case nir_intrinsic_load_var: {
+			nir_variable *var = intr->variables[0]->var;
+			nir_variable_mode mode = var->data.mode;
+			enum glsl_base_type base_type =
+				glsl_get_base_type(glsl_without_array(var->type));
+
+			if (mode == nir_var_shader_in) {
+				switch (var->data.interpolation) {
+				case INTERP_MODE_NONE:
+					if (glsl_base_type_is_integer(base_type))
+						break;
+
+					/* fall-through */
+				case INTERP_MODE_SMOOTH:
+					if (var->data.sample)
+						info->uses_persp_sample = true;
+					else if (var->data.centroid)
+						info->uses_persp_centroid = true;
+					else
+						info->uses_persp_center = true;
+					break;
+
+				case INTERP_MODE_NOPERSPECTIVE:
+					if (var->data.sample)
+						info->uses_linear_sample = true;
+					else if (var->data.centroid)
+						info->uses_linear_centroid = true;
+					else
+						info->uses_linear_center = true;
+					break;
+				}
+			}
+			break;
+		}
+		case nir_intrinsic_interp_var_at_centroid:
+		case nir_intrinsic_interp_var_at_sample:
+		case nir_intrinsic_interp_var_at_offset: {
+			enum glsl_interp_mode interp =
+				intr->variables[0]->var->data.interpolation;
+			switch (interp) {
+			case INTERP_MODE_SMOOTH:
+			case INTERP_MODE_NONE:
+				if (intr->intrinsic == nir_intrinsic_interp_var_at_centroid)
+					info->uses_persp_opcode_interp_centroid = true;
+				else if (intr->intrinsic == nir_intrinsic_interp_var_at_sample)
+					info->uses_persp_opcode_interp_sample = true;
+				else
+					info->uses_persp_opcode_interp_offset = true;
+				break;
+			case INTERP_MODE_NOPERSPECTIVE:
+				if (intr->intrinsic == nir_intrinsic_interp_var_at_centroid)
+					info->uses_linear_opcode_interp_centroid = true;
+				else if (intr->intrinsic == nir_intrinsic_interp_var_at_sample)
+					info->uses_linear_opcode_interp_sample = true;
+				else
+					info->uses_linear_opcode_interp_offset = true;
+				break;
+			case INTERP_MODE_FLAT:
+				break;
+			default:
+				unreachable("Unsupported interpoation type");
+			}
+			break;
+		}
 		default:
 			break;
 		}
 	}
+}
+
+void si_nir_scan_tess_ctrl(const struct nir_shader *nir,
+			   const struct tgsi_shader_info *info,
+			   struct tgsi_tessctrl_info *out)
+{
+	memset(out, 0, sizeof(*out));
+
+	if (nir->info.stage != MESA_SHADER_TESS_CTRL)
+		return;
+
+	/* Initial value = true. Here the pass will accumulate results from
+	 * multiple segments surrounded by barriers. If tess factors aren't
+	 * written at all, it's a shader bug and we don't care if this will be
+	 * true.
+	 */
+	out->tessfactors_are_def_in_all_invocs = true;
+
+	/* TODO: Implement scanning of tess factors, see tgsi backend. */
 }
 
 void si_nir_scan_shader(const struct nir_shader *nir,
@@ -131,11 +224,35 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 
 	assert(nir->info.stage == MESA_SHADER_VERTEX ||
 	       nir->info.stage == MESA_SHADER_GEOMETRY ||
+	       nir->info.stage == MESA_SHADER_TESS_CTRL ||
+	       nir->info.stage == MESA_SHADER_TESS_EVAL ||
 	       nir->info.stage == MESA_SHADER_FRAGMENT);
 
 	info->processor = pipe_shader_type_from_mesa(nir->info.stage);
 	info->num_tokens = 2; /* indicate that the shader is non-empty */
 	info->num_instructions = 2;
+
+	if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
+		info->properties[TGSI_PROPERTY_TCS_VERTICES_OUT] =
+			nir->info.tess.tcs_vertices_out;
+	}
+
+	if (nir->info.stage == MESA_SHADER_TESS_EVAL) {
+		if (nir->info.tess.primitive_mode == GL_ISOLINES)
+			info->properties[TGSI_PROPERTY_TES_PRIM_MODE] = PIPE_PRIM_LINES;
+		else
+			info->properties[TGSI_PROPERTY_TES_PRIM_MODE] = nir->info.tess.primitive_mode;
+
+		STATIC_ASSERT((TESS_SPACING_EQUAL + 1) % 3 == PIPE_TESS_SPACING_EQUAL);
+		STATIC_ASSERT((TESS_SPACING_FRACTIONAL_ODD + 1) % 3 ==
+			      PIPE_TESS_SPACING_FRACTIONAL_ODD);
+		STATIC_ASSERT((TESS_SPACING_FRACTIONAL_EVEN + 1) % 3 ==
+			      PIPE_TESS_SPACING_FRACTIONAL_EVEN);
+
+		info->properties[TGSI_PROPERTY_TES_SPACING] = (nir->info.tess.spacing + 1) % 3;
+		info->properties[TGSI_PROPERTY_TES_VERTEX_ORDER_CW] = !nir->info.tess.ccw;
+		info->properties[TGSI_PROPERTY_TES_POINT_MODE] = nir->info.tess.point_mode;
+	}
 
 	if (nir->info.stage == MESA_SHADER_GEOMETRY) {
 		info->properties[TGSI_PROPERTY_GS_INPUT_PRIM] = nir->info.gs.input_primitive;
@@ -149,18 +266,27 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	unsigned num_inputs = 0;
 	nir_foreach_variable(variable, &nir->inputs) {
 		unsigned semantic_name, semantic_index;
-		unsigned attrib_count = glsl_count_attribute_slots(variable->type,
+
+		const struct glsl_type *type = variable->type;
+		if (nir_is_per_vertex_io(variable, nir->info.stage)) {
+			assert(glsl_type_is_array(type));
+			type = glsl_get_array_element(type);
+		}
+
+		unsigned attrib_count = glsl_count_attribute_slots(type,
 								   nir->info.stage == MESA_SHADER_VERTEX);
 
 		/* Vertex shader inputs don't have semantics. The state
 		 * tracker has already mapped them to attributes via
 		 * variable->data.driver_location.
 		 */
-		if (nir->info.stage == MESA_SHADER_VERTEX)
+		if (nir->info.stage == MESA_SHADER_VERTEX) {
+			if (glsl_type_is_dual_slot(variable->type))
+				num_inputs += 2;
+			else
+				num_inputs++;
 			continue;
-
-		assert(nir->info.stage != MESA_SHADER_FRAGMENT ||
-		       (attrib_count == 1 && "not implemented"));
+		}
 
 		/* Fragment shader position is a system value. */
 		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
@@ -174,83 +300,74 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		}
 
 		i = variable->data.driver_location;
-		if (processed_inputs & ((uint64_t)1 << i))
-			continue;
 
-		processed_inputs |= ((uint64_t)1 << i);
-		num_inputs++;
+		for (unsigned j = 0; j < attrib_count; j++, i++) {
 
-		tgsi_get_gl_varying_semantic(variable->data.location, true,
-					     &semantic_name, &semantic_index);
+			if (processed_inputs & ((uint64_t)1 << i))
+				continue;
 
-		info->input_semantic_name[i] = semantic_name;
-		info->input_semantic_index[i] = semantic_index;
+			processed_inputs |= ((uint64_t)1 << i);
+			num_inputs++;
 
-		if (variable->data.sample)
-			info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_SAMPLE;
-		else if (variable->data.centroid)
-			info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_CENTROID;
-		else
-			info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_CENTER;
+			tgsi_get_gl_varying_semantic(variable->data.location + j, true,
+						     &semantic_name, &semantic_index);
 
-		enum glsl_base_type base_type =
-			glsl_get_base_type(glsl_without_array(variable->type));
+			info->input_semantic_name[i] = semantic_name;
+			info->input_semantic_index[i] = semantic_index;
 
-		switch (variable->data.interpolation) {
-		case INTERP_MODE_NONE:
-			if (glsl_base_type_is_integer(base_type)) {
+			if (semantic_name == TGSI_SEMANTIC_PRIMID)
+				info->uses_primid = true;
+
+			if (variable->data.sample)
+				info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_SAMPLE;
+			else if (variable->data.centroid)
+				info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_CENTROID;
+			else
+				info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_CENTER;
+
+			enum glsl_base_type base_type =
+				glsl_get_base_type(glsl_without_array(variable->type));
+
+			switch (variable->data.interpolation) {
+			case INTERP_MODE_NONE:
+				if (glsl_base_type_is_integer(base_type)) {
+					info->input_interpolate[i] = TGSI_INTERPOLATE_CONSTANT;
+					break;
+				}
+
+				if (semantic_name == TGSI_SEMANTIC_COLOR) {
+					info->input_interpolate[i] = TGSI_INTERPOLATE_COLOR;
+					break;
+				}
+				/* fall-through */
+
+			case INTERP_MODE_SMOOTH:
+				assert(!glsl_base_type_is_integer(base_type));
+
+				info->input_interpolate[i] = TGSI_INTERPOLATE_PERSPECTIVE;
+				break;
+
+			case INTERP_MODE_NOPERSPECTIVE:
+				assert(!glsl_base_type_is_integer(base_type));
+
+				info->input_interpolate[i] = TGSI_INTERPOLATE_LINEAR;
+				break;
+
+			case INTERP_MODE_FLAT:
 				info->input_interpolate[i] = TGSI_INTERPOLATE_CONSTANT;
 				break;
 			}
 
-			if (semantic_name == TGSI_SEMANTIC_COLOR) {
-				info->input_interpolate[i] = TGSI_INTERPOLATE_COLOR;
-				goto persp_locations;
-			}
-			/* fall-through */
-		case INTERP_MODE_SMOOTH:
-			assert(!glsl_base_type_is_integer(base_type));
-
-			info->input_interpolate[i] = TGSI_INTERPOLATE_PERSPECTIVE;
-
-		persp_locations:
-			if (variable->data.sample)
-				info->uses_persp_sample = true;
-			else if (variable->data.centroid)
-				info->uses_persp_centroid = true;
-			else
-				info->uses_persp_center = true;
-			break;
-
-		case INTERP_MODE_NOPERSPECTIVE:
-			assert(!glsl_base_type_is_integer(base_type));
-
-			info->input_interpolate[i] = TGSI_INTERPOLATE_LINEAR;
-
-			if (variable->data.sample)
-				info->uses_linear_sample = true;
-			else if (variable->data.centroid)
-				info->uses_linear_centroid = true;
-			else
-				info->uses_linear_center = true;
-			break;
-
-		case INTERP_MODE_FLAT:
-			info->input_interpolate[i] = TGSI_INTERPOLATE_CONSTANT;
-			break;
+			/* TODO make this more precise */
+			if (variable->data.location == VARYING_SLOT_COL0)
+				info->colors_read |= 0x0f;
+			else if (variable->data.location == VARYING_SLOT_COL1)
+				info->colors_read |= 0xf0;
 		}
-
-		/* TODO make this more precise */
-		if (variable->data.location == VARYING_SLOT_COL0)
-			info->colors_read |= 0x0f;
-		else if (variable->data.location == VARYING_SLOT_COL1)
-			info->colors_read |= 0xf0;
 	}
 
-	if (nir->info.stage != MESA_SHADER_VERTEX)
-		info->num_inputs = num_inputs;
-	else
-		info->num_inputs = nir->num_inputs;
+	info->num_inputs = num_inputs;
+
 
 	i = 0;
 	uint64_t processed_outputs = 0;
@@ -261,6 +378,11 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		if (nir->info.stage == MESA_SHADER_FRAGMENT) {
 			tgsi_get_gl_frag_result_semantic(variable->data.location,
 				&semantic_name, &semantic_index);
+
+			/* Adjust for dual source blending */
+			if (variable->data.index > 0) {
+				semantic_index++;
+			}
 		} else {
 			tgsi_get_gl_varying_semantic(variable->data.location, true,
 						     &semantic_name, &semantic_index);
@@ -349,6 +471,20 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 				info->writes_position = true;
 			break;
 		}
+
+		if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
+			switch (semantic_name) {
+			case TGSI_SEMANTIC_PATCH:
+				info->reads_perpatch_outputs = true;
+			break;
+			case TGSI_SEMANTIC_TESSINNER:
+			case TGSI_SEMANTIC_TESSOUTER:
+				info->reads_tessfactor_outputs = true;
+			break;
+			default:
+				info->reads_pervertex_outputs = true;
+			}
+		}
 	}
 
 	info->num_outputs = num_outputs;
@@ -435,6 +571,15 @@ si_lower_nir(struct si_shader_selector* sel)
 	};
 	NIR_PASS_V(sel->nir, nir_lower_tex, &lower_tex_options);
 
+	const nir_lower_subgroups_options subgroups_options = {
+		.subgroup_size = 64,
+		.ballot_bit_size = 32,
+		.lower_to_scalar = true,
+		.lower_subgroup_masks = true,
+		.lower_vote_trivial = false,
+	};
+	NIR_PASS_V(sel->nir, nir_lower_subgroups, &subgroups_options);
+
 	bool progress;
 	do {
 		progress = false;
@@ -467,9 +612,10 @@ si_lower_nir(struct si_shader_selector* sel)
 
 static void declare_nir_input_vs(struct si_shader_context *ctx,
 				 struct nir_variable *variable,
+				 unsigned input_index,
 				 LLVMValueRef out[4])
 {
-	si_llvm_load_input_vs(ctx, variable->data.driver_location / 4, out);
+	si_llvm_load_input_vs(ctx, input_index, out);
 }
 
 static void declare_nir_input_fs(struct si_shader_context *ctx,
@@ -508,6 +654,42 @@ LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
 	}
 
 	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
+}
+
+LLVMValueRef
+si_nir_lookup_interp_param(struct ac_shader_abi *abi,
+			   enum glsl_interp_mode interp, unsigned location)
+{
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	int interp_param_idx = -1;
+
+	switch (interp) {
+	case INTERP_MODE_FLAT:
+		return NULL;
+	case INTERP_MODE_SMOOTH:
+	case INTERP_MODE_NONE:
+		if (location == INTERP_CENTER)
+			interp_param_idx = SI_PARAM_PERSP_CENTER;
+		else if (location == INTERP_CENTROID)
+			interp_param_idx = SI_PARAM_PERSP_CENTROID;
+		else if (location == INTERP_SAMPLE)
+			interp_param_idx = SI_PARAM_PERSP_SAMPLE;
+		break;
+	case INTERP_MODE_NOPERSPECTIVE:
+		if (location == INTERP_CENTER)
+			interp_param_idx = SI_PARAM_LINEAR_CENTER;
+		else if (location == INTERP_CENTROID)
+			interp_param_idx = SI_PARAM_LINEAR_CENTROID;
+		else if (location == INTERP_SAMPLE)
+			interp_param_idx = SI_PARAM_LINEAR_SAMPLE;
+		break;
+	default:
+		assert(!"Unhandled interpolation mode.");
+		return NULL;
+	}
+
+	return interp_param_idx != -1 ?
+		LLVMGetParam(ctx->main_fn, interp_param_idx) : NULL;
 }
 
 static LLVMValueRef
@@ -557,6 +739,16 @@ si_nir_load_sampler_desc(struct ac_shader_abi *abi,
 	return si_load_sampler_desc(ctx, list, index, desc_type);
 }
 
+static void bitcast_inputs(struct si_shader_context *ctx,
+			   LLVMValueRef data[4],
+			   unsigned input_idx)
+{
+	for (unsigned chan = 0; chan < 4; chan++) {
+		ctx->inputs[input_idx + chan] =
+			LLVMBuildBitCast(ctx->ac.builder, data[chan], ctx->ac.i32, "");
+	}
+}
+
 bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 {
 	struct tgsi_shader_info *info = &ctx->shader->selector->info;
@@ -569,27 +761,35 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 									   nir->info.stage == MESA_SHADER_VERTEX);
 			unsigned input_idx = variable->data.driver_location;
 
-			assert(attrib_count == 1);
-
 			LLVMValueRef data[4];
 			unsigned loc = variable->data.location;
 
-			/* Packed components share the same location so skip
-			 * them if we have already processed the location.
-			 */
-			if (processed_inputs & ((uint64_t)1 << loc))
-				continue;
+			for (unsigned i = 0; i < attrib_count; i++) {
+				/* Packed components share the same location so skip
+				 * them if we have already processed the location.
+				 */
+				if (processed_inputs & ((uint64_t)1 << loc)) {
+					input_idx += 4;
+					continue;
+				}
 
-			if (nir->info.stage == MESA_SHADER_VERTEX)
-				declare_nir_input_vs(ctx, variable, data);
-			else if (nir->info.stage == MESA_SHADER_FRAGMENT)
-				declare_nir_input_fs(ctx, variable, input_idx / 4, data);
+				if (nir->info.stage == MESA_SHADER_VERTEX) {
+					declare_nir_input_vs(ctx, variable, input_idx / 4, data);
+					bitcast_inputs(ctx, data, input_idx);
+					if (glsl_type_is_dual_slot(variable->type)) {
+						input_idx += 4;
+						declare_nir_input_vs(ctx, variable, input_idx / 4, data);
+						bitcast_inputs(ctx, data, input_idx);
+					}
+				} else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+					declare_nir_input_fs(ctx, variable, input_idx / 4, data);
+					bitcast_inputs(ctx, data, input_idx);
+				}
 
-			for (unsigned chan = 0; chan < 4; chan++) {
-				ctx->inputs[input_idx + chan] =
-					LLVMBuildBitCast(ctx->ac.builder, data[chan], ctx->ac.i32, "");
+				processed_inputs |= ((uint64_t)1 << loc);
+				loc++;
+				input_idx += 4;
 			}
-			processed_inputs |= ((uint64_t)1 << loc);
 		}
 	}
 

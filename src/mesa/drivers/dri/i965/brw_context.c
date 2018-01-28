@@ -46,7 +46,7 @@
 #include "main/stencil.h"
 #include "main/state.h"
 
-#include "vbo/vbo_context.h"
+#include "vbo/vbo.h"
 
 #include "drivers/common/driverfuncs.h"
 #include "drivers/common/meta.h"
@@ -73,6 +73,7 @@
 #include "tnl/t_pipeline.h"
 #include "util/ralloc.h"
 #include "util/debug.h"
+#include "util/disk_cache.h"
 #include "isl/isl.h"
 
 /***************************************
@@ -537,8 +538,6 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.MaxClipPlanes = 8;
 
    ctx->Const.GLSLTessLevelsAsInputs = true;
-   ctx->Const.LowerTCSPatchVerticesIn = devinfo->gen >= 8;
-   ctx->Const.LowerTESPatchVerticesIn = true;
    ctx->Const.PrimitiveRestartForPatches = true;
 
    ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeInstructions = 16 * 1024;
@@ -864,7 +863,7 @@ brwCreateContext(gl_api api,
 
    if (ctx_config->attribute_mask &
        ~(__DRIVER_CONTEXT_ATTRIB_RESET_STRATEGY |
-         __DRIVER_CONTEXT_ATTRIB_RELEASE_BEHAVIOR)) {
+         __DRIVER_CONTEXT_ATTRIB_PRIORITY)) {
       *dri_ctx_error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
       return false;
    }
@@ -872,20 +871,6 @@ brwCreateContext(gl_api api,
    bool notify_reset =
       ((ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_RESET_STRATEGY) &&
        ctx_config->reset_strategy != __DRI_CTX_RESET_NO_NOTIFICATION);
-
-   GLenum release_behavior = GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH;
-   if (ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_RELEASE_BEHAVIOR) {
-      switch (ctx_config->release_behavior) {
-      case __DRI_CTX_RELEASE_BEHAVIOR_NONE:
-         release_behavior = GL_NONE;
-         break;
-      case __DRI_CTX_RELEASE_BEHAVIOR_FLUSH:
-         break;
-      default:
-         *dri_ctx_error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
-         return false;
-      }
-   }
 
    struct brw_context *brw = rzalloc(NULL, struct brw_context);
    if (!brw) {
@@ -1066,8 +1051,6 @@ brwCreateContext(gl_api api,
       ctx->Const.RobustAccess = GL_TRUE;
    }
 
-   ctx->Const.ContextReleaseBehavior = release_behavior;
-
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_init_shader_time(brw);
 
@@ -1083,7 +1066,7 @@ brwCreateContext(gl_api api,
    vbo_use_buffer_objects(ctx);
    vbo_always_unmap_buffers(ctx);
 
-   brw_disk_cache_init(brw);
+   brw->ctx.Cache = brw->screen->disk_cache;
 
    return true;
 }
@@ -1584,6 +1567,9 @@ intel_process_dri2_buffer(struct brw_context *brw,
       return;
    }
 
+   uint32_t tiling, swizzle;
+   brw_bo_get_tiling(bo, &tiling, &swizzle);
+
    struct intel_mipmap_tree *mt =
       intel_miptree_create_for_bo(brw,
                                   bo,
@@ -1593,6 +1579,7 @@ intel_process_dri2_buffer(struct brw_context *brw,
                                   drawable->h,
                                   1,
                                   buffer->pitch,
+                                  isl_tiling_from_i915_tiling(tiling),
                                   MIPTREE_CREATE_DEFAULT);
    if (!mt) {
       brw_bo_unreference(bo);

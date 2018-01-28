@@ -557,6 +557,7 @@ struct si_shader_config {
 	unsigned			spilled_vgprs;
 	unsigned			private_mem_vgprs;
 	unsigned			lds_size;
+	unsigned			max_simd_waves;
 	unsigned			spi_ps_input_ena;
 	unsigned			spi_ps_input_addr;
 	unsigned			float_mode;
@@ -640,6 +641,8 @@ int si_shader_binary_upload(struct si_screen *sscreen, struct si_shader *shader)
 void si_shader_dump(struct si_screen *sscreen, const struct si_shader *shader,
 		    struct pipe_debug_callback *debug, unsigned processor,
 		    FILE *f, bool check_debug_option);
+void si_shader_dump_stats_for_shader_db(const struct si_shader *shader,
+					struct pipe_debug_callback *debug);
 void si_multiwave_lds_size_workaround(struct si_screen *sscreen,
 				      unsigned *lds_size);
 void si_shader_apply_scratch_relocs(struct si_shader *shader,
@@ -652,6 +655,9 @@ const char *si_get_shader_name(const struct si_shader *shader, unsigned processo
 /* si_shader_nir.c */
 void si_nir_scan_shader(const struct nir_shader *nir,
 			struct tgsi_shader_info *info);
+void si_nir_scan_tess_ctrl(const struct nir_shader *nir,
+			   const struct tgsi_shader_info *info,
+			   struct tgsi_tessctrl_info *out);
 void si_lower_nir(struct si_shader_selector *sel);
 
 /* Inline helpers. */

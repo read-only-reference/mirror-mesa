@@ -32,5 +32,6 @@
 #include "freedreno_context.h"
 
 void fd5_blitter_blit(struct fd_context *ctx, const struct pipe_blit_info *info);
+unsigned fd5_tile_mode(const struct pipe_resource *tmpl);
 
 #endif /* FD5_BLIT_H_ */

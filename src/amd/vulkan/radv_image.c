@@ -116,7 +116,8 @@ radv_init_surface(struct radv_device *device,
 		    pCreateInfo->mipLevels <= 1 &&
 		    device->physical_device->rad_info.chip_class >= VI &&
 		    ((pCreateInfo->format == VK_FORMAT_D32_SFLOAT ||
-		      pCreateInfo->format == VK_FORMAT_D32_SFLOAT_S8_UINT) ||
+		      /* for some reason TC compat with 4/8 samples breaks some cts tests - disable for now */
+		      (pCreateInfo->samples < 4 && pCreateInfo->format == VK_FORMAT_D32_SFLOAT_S8_UINT)) ||
 		     (device->physical_device->rad_info.chip_class >= GFX9 &&
 		      pCreateInfo->format == VK_FORMAT_D16_UNORM)))
 			surface->flags |= RADEON_SURF_TC_COMPATIBLE_HTILE;
@@ -923,29 +924,34 @@ radv_image_create(VkDevice _device,
 	image->size = image->surface.surf_size;
 	image->alignment = image->surface.surf_alignment;
 
-	/* Try to enable DCC first. */
-	if (radv_image_can_enable_dcc(image)) {
-		radv_image_alloc_dcc(image);
-	} else {
-		/* When DCC cannot be enabled, try CMASK. */
-		image->surface.dcc_size = 0;
-		if (radv_image_can_enable_cmask(image)) {
-			radv_image_alloc_cmask(device, image);
-		}
-	}
-
-	/* Try to enable FMASK for multisampled images. */
-	if (radv_image_can_enable_fmask(image)) {
-		radv_image_alloc_fmask(device, image);
-	} else {
-		/* Otherwise, try to enable HTILE for depth surfaces. */
-		if (radv_image_can_enable_htile(image) &&
-		    !(device->instance->debug_flags & RADV_DEBUG_NO_HIZ)) {
-			radv_image_alloc_htile(image);
-			image->tc_compatible_htile = image->surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE;
+	if (!create_info->no_metadata_planes) {
+		/* Try to enable DCC first. */
+		if (radv_image_can_enable_dcc(image)) {
+			radv_image_alloc_dcc(image);
 		} else {
-			image->surface.htile_size = 0;
+			/* When DCC cannot be enabled, try CMASK. */
+			image->surface.dcc_size = 0;
+			if (radv_image_can_enable_cmask(image)) {
+				radv_image_alloc_cmask(device, image);
+			}
 		}
+
+		/* Try to enable FMASK for multisampled images. */
+		if (radv_image_can_enable_fmask(image)) {
+			radv_image_alloc_fmask(device, image);
+		} else {
+			/* Otherwise, try to enable HTILE for depth surfaces. */
+			if (radv_image_can_enable_htile(image) &&
+			    !(device->instance->debug_flags & RADV_DEBUG_NO_HIZ)) {
+				radv_image_alloc_htile(image);
+				image->tc_compatible_htile = image->surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE;
+			} else {
+				image->surface.htile_size = 0;
+			}
+		}
+	} else {
+		image->surface.dcc_size = 0;
+		image->surface.htile_size = 0;
 	}
 
 	if (pCreateInfo->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) {
@@ -1063,10 +1069,55 @@ radv_image_view_init(struct radv_image_view *iview,
 	}
 
 	if (iview->vk_format != image->vk_format) {
-		iview->extent.width = round_up_u32(iview->extent.width * vk_format_get_blockwidth(iview->vk_format),
-						   vk_format_get_blockwidth(image->vk_format));
-		iview->extent.height = round_up_u32(iview->extent.height * vk_format_get_blockheight(iview->vk_format),
-						    vk_format_get_blockheight(image->vk_format));
+		unsigned view_bw = vk_format_get_blockwidth(iview->vk_format);
+		unsigned view_bh = vk_format_get_blockheight(iview->vk_format);
+		unsigned img_bw = vk_format_get_blockwidth(image->vk_format);
+		unsigned img_bh = vk_format_get_blockheight(image->vk_format);
+
+		iview->extent.width = round_up_u32(iview->extent.width * view_bw, img_bw);
+		iview->extent.height = round_up_u32(iview->extent.height * view_bh, img_bh);
+
+		/* Comment ported from amdvlk -
+		 * If we have the following image:
+		 *              Uncompressed pixels   Compressed block sizes (4x4)
+		 *      mip0:       22 x 22                   6 x 6
+		 *      mip1:       11 x 11                   3 x 3
+		 *      mip2:        5 x  5                   2 x 2
+		 *      mip3:        2 x  2                   1 x 1
+		 *      mip4:        1 x  1                   1 x 1
+		 *
+		 * On GFX9 the descriptor is always programmed with the WIDTH and HEIGHT of the base level and the HW is
+		 * calculating the degradation of the block sizes down the mip-chain as follows (straight-up
+		 * divide-by-two integer math):
+		 *      mip0:  6x6
+		 *      mip1:  3x3
+		 *      mip2:  1x1
+		 *      mip3:  1x1
+		 *
+		 * This means that mip2 will be missing texels.
+		 *
+		 * Fix this by calculating the base mip's width and height, then convert that, and round it
+		 * back up to get the level 0 size.
+		 * Clamp the converted size between the original values, and next power of two, which
+		 * means we don't oversize the image.
+		 */
+		 if (device->physical_device->rad_info.chip_class >= GFX9 &&
+		     vk_format_is_compressed(image->vk_format) &&
+		     !vk_format_is_compressed(iview->vk_format)) {
+			 unsigned rounded_img_w = util_next_power_of_two(iview->extent.width);
+			 unsigned rounded_img_h = util_next_power_of_two(iview->extent.height);
+			 unsigned lvl_width  = radv_minify(image->info.width , range->baseMipLevel);
+			 unsigned lvl_height = radv_minify(image->info.height, range->baseMipLevel);
+
+			 lvl_width = round_up_u32(lvl_width * view_bw, img_bw);
+			 lvl_height = round_up_u32(lvl_height * view_bh, img_bh);
+
+			 lvl_width <<= range->baseMipLevel;
+			 lvl_height <<= range->baseMipLevel;
+
+			 iview->extent.width = CLAMP(lvl_width, iview->extent.width, rounded_img_w);
+			 iview->extent.height = CLAMP(lvl_height, iview->extent.height, rounded_img_h);
+		 }
 	}
 
 	iview->base_layer = range->baseArrayLayer;
@@ -1142,6 +1193,15 @@ radv_CreateImage(VkDevice device,
 		 const VkAllocationCallbacks *pAllocator,
 		 VkImage *pImage)
 {
+#ifdef ANDROID
+	const VkNativeBufferANDROID *gralloc_info =
+		vk_find_struct_const(pCreateInfo->pNext, NATIVE_BUFFER_ANDROID);
+
+	if (gralloc_info)
+		return radv_image_from_gralloc(device, pCreateInfo, gralloc_info,
+		                              pAllocator, pImage);
+#endif
+
 	const struct wsi_image_create_info *wsi_info =
 		vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
 	bool scanout = wsi_info && wsi_info->scanout;
@@ -1167,6 +1227,9 @@ radv_DestroyImage(VkDevice _device, VkImage _image,
 
 	if (image->flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT)
 		device->ws->buffer_destroy(image->bo);
+
+	if (image->owned_memory != VK_NULL_HANDLE)
+		radv_FreeMemory(_device, image->owned_memory, pAllocator);
 
 	vk_free2(&device->alloc, pAllocator, image);
 }

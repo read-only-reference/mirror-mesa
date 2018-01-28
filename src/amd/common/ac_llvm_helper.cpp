@@ -35,6 +35,7 @@
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallSite.h>
+#include <llvm/IR/IRBuilder.h>
 
 #if HAVE_LLVM < 0x0500
 namespace llvm {
@@ -59,8 +60,7 @@ bool ac_is_sgpr_param(LLVMValueRef arg)
 	llvm::Argument *A = llvm::unwrap<llvm::Argument>(arg);
 	llvm::AttributeList AS = A->getParent()->getAttributes();
 	unsigned ArgNo = A->getArgNo();
-	return AS.hasAttribute(ArgNo + 1, llvm::Attribute::ByVal) ||
-	       AS.hasAttribute(ArgNo + 1, llvm::Attribute::InReg);
+	return AS.hasAttribute(ArgNo + 1, llvm::Attribute::InReg);
 }
 
 LLVMValueRef ac_llvm_get_called_value(LLVMValueRef call)
@@ -79,4 +79,33 @@ bool ac_llvm_is_function(LLVMValueRef v)
 #else
 	return llvm::isa<llvm::Function>(llvm::unwrap(v));
 #endif
+}
+
+LLVMBuilderRef ac_create_builder(LLVMContextRef ctx,
+				 enum ac_float_mode float_mode)
+{
+	LLVMBuilderRef builder = LLVMCreateBuilderInContext(ctx);
+
+#if HAVE_LLVM >= 0x0308
+	llvm::FastMathFlags flags;
+
+	switch (float_mode) {
+	case AC_FLOAT_MODE_DEFAULT:
+		break;
+	case AC_FLOAT_MODE_NO_SIGNED_ZEROS_FP_MATH:
+		flags.setNoSignedZeros();
+		llvm::unwrap(builder)->setFastMathFlags(flags);
+		break;
+	case AC_FLOAT_MODE_UNSAFE_FP_MATH:
+#if HAVE_LLVM >= 0x0600
+		flags.setFast();
+#else
+		flags.setUnsafeAlgebra();
+#endif
+		llvm::unwrap(builder)->setFastMathFlags(flags);
+		break;
+	}
+#endif
+
+	return builder;
 }

@@ -147,7 +147,7 @@ lower_res_reindex_intrinsic(nir_intrinsic_instr *intrin,
     * array elements are sequential.  A resource_reindex just turns into an
     * add of the two indices.
     */
-   assert(intrin->src[0].is_ssa && intrin->src[0].is_ssa);
+   assert(intrin->src[0].is_ssa && intrin->src[1].is_ssa);
    nir_ssa_def *new_index = nir_iadd(b, intrin->src[0].ssa,
                                         intrin->src[1].ssa);
 
@@ -326,11 +326,11 @@ setup_vec4_uniform_value(uint32_t *params, uint32_t offset, unsigned n)
 
 void
 anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
+                              struct anv_pipeline_layout *layout,
                               nir_shader *shader,
                               struct brw_stage_prog_data *prog_data,
                               struct anv_pipeline_bind_map *map)
 {
-   struct anv_pipeline_layout *layout = pipeline->layout;
    gl_shader_stage stage = shader->info.stage;
 
    struct apply_pipeline_layout_state state = {

@@ -568,7 +568,8 @@ cik_create_gfx_config(struct radv_device *device)
 						     cs->cdw * 4, 4096,
 						     RADEON_DOMAIN_GTT,
 						     RADEON_FLAG_CPU_ACCESS|
-						     RADEON_FLAG_NO_INTERPROCESS_SHARING);
+						     RADEON_FLAG_NO_INTERPROCESS_SHARING |
+						     RADEON_FLAG_READ_ONLY);
 	if (!device->gfx_init)
 		goto fail;
 
@@ -673,7 +674,8 @@ si_write_scissors(struct radeon_winsys_cs *cs, int first,
 	int i;
 	float scale[3], translate[3], guardband_x = INFINITY, guardband_y = INFINITY;
 	const float max_range = 32767.0f;
-	assert(count);
+	if (!count)
+		return;
 
 	radeon_set_context_reg_seq(cs, R_028250_PA_SC_VPORT_SCISSOR_0_TL + first * 4 * 2, count * 2);
 	for (i = 0; i < count; i++) {
@@ -739,21 +741,21 @@ si_get_ia_multi_vgt_param(struct radv_cmd_buffer *cmd_buffer,
 	bool ia_switch_on_eop = false;
 	bool ia_switch_on_eoi = false;
 	bool partial_vs_wave = false;
-	bool partial_es_wave = cmd_buffer->state.pipeline->graphics.partial_es_wave;
+	bool partial_es_wave = cmd_buffer->state.pipeline->graphics.ia_multi_vgt_param.partial_es_wave;
 	bool multi_instances_smaller_than_primgroup;
 
 	multi_instances_smaller_than_primgroup = indirect_draw;
 	if (!multi_instances_smaller_than_primgroup && instanced_draw) {
 		uint32_t num_prims = radv_prims_for_vertices(&cmd_buffer->state.pipeline->graphics.prim_vertex_count, draw_vertex_count);
-		if (num_prims < cmd_buffer->state.pipeline->graphics.primgroup_size)
+		if (num_prims < cmd_buffer->state.pipeline->graphics.ia_multi_vgt_param.primgroup_size)
 			multi_instances_smaller_than_primgroup = true;
 	}
 
-	ia_switch_on_eoi = cmd_buffer->state.pipeline->graphics.ia_switch_on_eoi;
-	partial_vs_wave = cmd_buffer->state.pipeline->graphics.partial_vs_wave;
+	ia_switch_on_eoi = cmd_buffer->state.pipeline->graphics.ia_multi_vgt_param.ia_switch_on_eoi;
+	partial_vs_wave = cmd_buffer->state.pipeline->graphics.ia_multi_vgt_param.partial_vs_wave;
 
 	if (chip_class >= CIK) {
-		wd_switch_on_eop = cmd_buffer->state.pipeline->graphics.wd_switch_on_eop;
+		wd_switch_on_eop = cmd_buffer->state.pipeline->graphics.ia_multi_vgt_param.wd_switch_on_eop;
 
 		/* Hawaii hangs if instancing is enabled and WD_SWITCH_ON_EOP is 0.
 		 * We don't know that for indirect drawing, so treat it as
@@ -813,7 +815,7 @@ si_get_ia_multi_vgt_param(struct radv_cmd_buffer *cmd_buffer,
 		}
 	}
 
-	return cmd_buffer->state.pipeline->graphics.base_ia_multi_vgt_param |
+	return cmd_buffer->state.pipeline->graphics.ia_multi_vgt_param.base |
 		S_028AA8_SWITCH_ON_EOP(ia_switch_on_eop) |
 		S_028AA8_SWITCH_ON_EOI(ia_switch_on_eoi) |
 		S_028AA8_PARTIAL_VS_WAVE_ON(partial_vs_wave) |
@@ -915,7 +917,6 @@ si_emit_acquire_mem(struct radeon_winsys_cs *cs,
 
 void
 si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
-		       bool predicated,
                        enum chip_class chip_class,
 		       uint32_t *flush_cnt,
 		       uint64_t flush_va,
@@ -946,7 +947,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 			/* Necessary for DCC */
 			if (chip_class >= VI) {
 				si_cs_emit_write_event_eop(cs,
-							   predicated,
+							   false,
 							   chip_class,
 							   is_mec,
 							   V_028A90_FLUSH_AND_INV_CB_DATA_TS,
@@ -960,12 +961,12 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 	}
 
 	if (flush_bits & RADV_CMD_FLAG_FLUSH_AND_INV_CB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, predicated));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_META) | EVENT_INDEX(0));
 	}
 
 	if (flush_bits & RADV_CMD_FLAG_FLUSH_AND_INV_DB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, predicated));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_DB_META) | EVENT_INDEX(0));
 	}
 
@@ -978,7 +979,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 	}
 
 	if (flush_bits & RADV_CMD_FLAG_CS_PARTIAL_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, predicated));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_CS_PARTIAL_FLUSH) | EVENT_INDEX(4));
 	}
 
@@ -1005,24 +1006,27 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 #else
 		cb_db_event = V_028A90_CACHE_FLUSH_AND_INV_TS_EVENT;
 #endif
-		/* TC    | TC_WB         = invalidate L2 data
-		 * TC_MD | TC_WB         = invalidate L2 metadata
-		 * TC    | TC_WB | TC_MD = invalidate L2 data & metadata
+		/* These are the only allowed combinations. If you need to
+		 * do multiple operations at once, do them separately.
+		 * All operations that invalidate L2 also seem to invalidate
+		 * metadata. Volatile (VOL) and WC flushes are not listed here.
 		 *
-		 * The metadata cache must always be invalidated for coherency
-		 * between CB/DB and shaders. (metadata = HTILE, CMASK, DCC)
-		 *
-		 * TC must be invalidated on GFX9 only if the CB/DB surface is
-		 * not pipe-aligned. If the surface is RB-aligned, it might not
-		 * strictly be pipe-aligned since RB alignment takes precendence.
+		 * TC    | TC_WB         = writeback & invalidate L2 & L1
+		 * TC    | TC_WB | TC_NC = writeback & invalidate L2 for MTYPE == NC
+		 *         TC_WB | TC_NC = writeback L2 for MTYPE == NC
+		 * TC            | TC_NC = invalidate L2 for MTYPE == NC
+		 * TC    | TC_MD         = writeback & invalidate L2 metadata (DCC, etc.)
+		 * TCL1                  = invalidate L1
 		 */
-		tc_flags = EVENT_TC_WB_ACTION_ENA |
-			   EVENT_TC_MD_ACTION_ENA;
+		tc_flags = EVENT_TC_ACTION_ENA |
+		           EVENT_TC_MD_ACTION_ENA;
 
 		/* Ideally flush TC together with CB/DB. */
 		if (flush_bits & RADV_CMD_FLAG_INV_GLOBAL_L2) {
-			tc_flags |= EVENT_TC_ACTION_ENA |
-				    EVENT_TCL1_ACTION_ENA;
+			/* Writeback and invalidate everything in L2 & L1. */
+			tc_flags = EVENT_TC_ACTION_ENA |
+			           EVENT_TC_WB_ACTION_ENA;
+
 
 			/* Clear the flags. */
 		        flush_bits &= ~(RADV_CMD_FLAG_INV_GLOBAL_L2 |
@@ -1032,14 +1036,14 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 		assert(flush_cnt);
 		uint32_t old_fence = (*flush_cnt)++;
 
-		si_cs_emit_write_event_eop(cs, predicated, chip_class, false, cb_db_event, tc_flags, 1,
+		si_cs_emit_write_event_eop(cs, false, chip_class, false, cb_db_event, tc_flags, 1,
 					   flush_va, old_fence, *flush_cnt);
-		si_emit_wait_fence(cs, predicated, flush_va, *flush_cnt, 0xffffffff);
+		si_emit_wait_fence(cs, false, flush_va, *flush_cnt, 0xffffffff);
 	}
 
 	/* VGT state sync */
 	if (flush_bits & RADV_CMD_FLAG_VGT_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, predicated));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
 	}
 
@@ -1052,13 +1056,13 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 			    RADV_CMD_FLAG_INV_GLOBAL_L2 |
 			    RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2))) &&
 	    !is_mec) {
-		radeon_emit(cs, PKT3(PKT3_PFP_SYNC_ME, 0, predicated));
+		radeon_emit(cs, PKT3(PKT3_PFP_SYNC_ME, 0, 0));
 		radeon_emit(cs, 0);
 	}
 
 	if ((flush_bits & RADV_CMD_FLAG_INV_GLOBAL_L2) ||
 	    (chip_class <= CIK && (flush_bits & RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2))) {
-		si_emit_acquire_mem(cs, is_mec, predicated, chip_class >= GFX9,
+		si_emit_acquire_mem(cs, is_mec, false, chip_class >= GFX9,
 				    cp_coher_cntl |
 				    S_0085F0_TC_ACTION_ENA(1) |
 				    S_0085F0_TCL1_ACTION_ENA(1) |
@@ -1072,7 +1076,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 			 *
 			 * WB doesn't work without NC.
 			 */
-			si_emit_acquire_mem(cs, is_mec, predicated,
+			si_emit_acquire_mem(cs, is_mec, false,
 					    chip_class >= GFX9,
 					    cp_coher_cntl |
 					    S_0301F0_TC_WB_ACTION_ENA(1) |
@@ -1081,7 +1085,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 		}
 		if (flush_bits & RADV_CMD_FLAG_INV_VMEM_L1) {
 			si_emit_acquire_mem(cs, is_mec,
-					    predicated, chip_class >= GFX9,
+					    false, chip_class >= GFX9,
 					    cp_coher_cntl |
 					    S_0085F0_TCL1_ACTION_ENA(1));
 			cp_coher_cntl = 0;
@@ -1092,7 +1096,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 	 * Therefore, it should be last. Done in PFP.
 	 */
 	if (cp_coher_cntl)
-		si_emit_acquire_mem(cs, is_mec, predicated, chip_class >= GFX9, cp_coher_cntl);
+		si_emit_acquire_mem(cs, is_mec, false, chip_class >= GFX9, cp_coher_cntl);
 }
 
 void
@@ -1122,7 +1126,6 @@ si_emit_cache_flush(struct radv_cmd_buffer *cmd_buffer)
 		ptr = &cmd_buffer->gfx9_fence_idx;
 	}
 	si_cs_emit_cache_flush(cmd_buffer->cs,
-			       cmd_buffer->state.predicating,
 	                       cmd_buffer->device->physical_device->rad_info.chip_class,
 			       ptr, va,
 	                       radv_cmd_buffer_uses_mec(cmd_buffer),

@@ -22,53 +22,32 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+
 /**
- * \file vbo_context.h
- * \brief VBO builder module datatypes and definitions.
- * \author Keith Whitwell
+ * Types, functions, etc which are private to the VBO module.
  */
 
 
-/**
- * \mainpage The VBO builder module
- *
- * This module hooks into the GL dispatch table and catches all vertex
- * building and drawing commands, such as glVertex3f, glBegin and
- * glDrawArrays.  The module stores all incoming vertex data as arrays
- * in GL vertex buffer objects (VBOs), and translates all drawing
- * commands into calls to a driver supplied DrawPrimitives() callback.
- *
- * The module captures both immediate mode and display list drawing,
- * and manages the allocation, reference counting and deallocation of
- * vertex buffer objects itself.
- * 
- * The DrawPrimitives() callback can be either implemented by the
- * driver itself or hooked to the tnl module's _tnl_draw_primitives()
- * function for hardware without tnl capablilties or during fallbacks.
- */
+#ifndef VBO_PRIVATE_H
+#define VBO_PRIVATE_H
 
 
-#ifndef _VBO_CONTEXT_H
-#define _VBO_CONTEXT_H
+#include "vbo/vbo_attrib.h"
+#include "vbo/vbo_exec.h"
+#include "vbo/vbo_save.h"
+#include "main/mtypes.h"
 
-#include "vbo.h"
-#include "vbo_attrib.h"
-#include "vbo_exec.h"
-#include "vbo_save.h"
 
-#include "main/api_arrayelt.h"
-#include "main/macros.h"
+struct _glapi_table;
+struct _mesa_prim;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 struct vbo_context {
    struct gl_vertex_array currval[VBO_ATTRIB_MAX];
-   
+
    /** Map VERT_ATTRIB_x to VBO_ATTRIB_y */
-   GLuint map_vp_none[VERT_ATTRIB_MAX];
-   GLuint map_vp_arb[VERT_ATTRIB_MAX];
+   GLubyte map_vp_none[VERT_ATTRIB_MAX];
+   GLubyte map_vp_arb[VERT_ATTRIB_MAX];
 
    struct vbo_exec_context exec;
    struct vbo_save_context save;
@@ -86,81 +65,38 @@ struct vbo_context {
 };
 
 
-static inline struct vbo_context *vbo_context(struct gl_context *ctx) 
+static inline struct vbo_context *
+vbo_context(struct gl_context *ctx)
 {
    return ctx->vbo_context;
 }
 
 
-static inline void
-vbo_exec_invalidate_state(struct gl_context *ctx)
-{
-   struct vbo_context *vbo = vbo_context(ctx);
-   struct vbo_exec_context *exec = &vbo->exec;
-
-   if (ctx->NewState & (_NEW_PROGRAM | _NEW_ARRAY)) {
-      if (!exec->validating)
-         exec->array.recalculate_inputs = GL_TRUE;
-
-      _ae_invalidate_state(ctx);
-   }
-
-   if (ctx->NewState & _NEW_EVAL)
-      exec->eval.recalculate_maps = GL_TRUE;
-}
+/**
+ * Current vertex processing mode: fixed function vs. shader.
+ * In reality, fixed function is probably implemented by a shader but that's
+ * not what we care about here.
+ */
+enum vp_mode {
+   VP_FF,    /**< legacy / fixed function */
+   VP_SHADER /**< ARB vertex program or GLSL vertex shader */
+};
 
 
 /**
- * Return VP_x token to indicate whether we're running fixed-function
- * vertex transformation, an NV vertex program or ARB vertex program/shader.
+ * Get current vertex processing mode (fixed function vs. shader).
  */
 static inline enum vp_mode
-get_program_mode( struct gl_context *ctx )
+get_vp_mode( struct gl_context *ctx )
 {
    if (!ctx->VertexProgram._Current)
-      return VP_NONE;
+      return VP_FF;
    else if (ctx->VertexProgram._Current == ctx->VertexProgram._TnlProgram)
-      return VP_NONE;
+      return VP_FF;
    else
-      return VP_ARB;
+      return VP_SHADER;
 }
 
-
-/**
- * This is called by glBegin, glDrawArrays and glDrawElements (and
- * variations of those calls).  When we transition from immediate mode
- * drawing to array drawing we need to invalidate the array state.
- *
- * glBegin/End builds vertex arrays.  Those arrays may look identical
- * to glDrawArrays arrays except that the position of the elements may
- * be different.  For example, arrays of (position3v, normal3f) vs. arrays
- * of (normal3f, position3f).  So we need to make sure we notify drivers
- * that arrays may be changing.
- */
-static inline void
-vbo_draw_method(struct vbo_context *vbo, gl_draw_method method)
-{
-   struct gl_context *ctx = vbo->exec.ctx;
-
-   if (ctx->Array.DrawMethod != method) {
-      switch (method) {
-      case DRAW_ARRAYS:
-         ctx->Array._DrawArrays = vbo->exec.array.inputs;
-         break;
-      case DRAW_BEGIN_END:
-         ctx->Array._DrawArrays = vbo->exec.vtx.inputs;
-         break;
-      case DRAW_DISPLAY_LIST:
-         ctx->Array._DrawArrays = vbo->save.inputs;
-         break;
-      default:
-         assert(0);
-      }
-
-      ctx->NewDriverState |= ctx->DriverFlags.NewArray;
-      ctx->Array.DrawMethod = method;
-   }
-}
 
 /**
  * Return if format is integer. The immediate mode commands only emit floats
@@ -178,7 +114,7 @@ vbo_attrtype_to_integer_flag(GLenum format)
    case GL_UNSIGNED_INT64_ARB:
       return GL_TRUE;
    default:
-      assert(0);
+      unreachable("Bad vertex attribute type");
       return GL_FALSE;
    }
 }
@@ -195,10 +131,11 @@ vbo_attrtype_to_double_flag(GLenum format)
    case GL_DOUBLE:
       return GL_TRUE;
    default:
-      assert(0);
+      unreachable("Bad vertex attribute type");
       return GL_FALSE;
    }
 }
+
 
 /**
  * Return default component values for the given format.
@@ -218,7 +155,7 @@ vbo_get_default_vals_as_union(GLenum format)
    case GL_UNSIGNED_INT:
       return (fi_type *)default_int;
    default:
-      assert(0);
+      unreachable("Bad vertex format");
       return NULL;
    }
 }
@@ -244,8 +181,14 @@ vbo_compute_max_verts(const struct vbo_exec_context *exec)
 }
 
 
-#ifdef __cplusplus
-} // extern "C"
-#endif
+void
+vbo_try_prim_conversion(struct _mesa_prim *p);
 
-#endif
+bool
+vbo_can_merge_prims(const struct _mesa_prim *p0, const struct _mesa_prim *p1);
+
+void
+vbo_merge_prims(struct _mesa_prim *p0, const struct _mesa_prim *p1);
+
+
+#endif /* VBO_PRIVATE_H */

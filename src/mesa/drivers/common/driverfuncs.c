@@ -101,7 +101,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->TestProxyTexImage = _mesa_test_proxy_teximage;
    driver->CompressedTexImage = _mesa_store_compressed_teximage;
    driver->CompressedTexSubImage = _mesa_store_compressed_texsubimage;
-   driver->GetCompressedTexSubImage = _mesa_GetCompressedTexSubImage_sw;
    driver->BindTexture = NULL;
    driver->NewTextureObject = _mesa_new_texture_object;
    driver->DeleteTexture = _mesa_delete_texture_object;
@@ -278,7 +277,7 @@ _mesa_init_driver_state(struct gl_context *ctx)
    }
 
    ctx->Driver.LineWidth(ctx, ctx->Line.Width);
-   ctx->Driver.LogicOpcode(ctx, ctx->Color.LogicOp);
+   ctx->Driver.LogicOpcode(ctx, ctx->Color._LogicOp);
    ctx->Driver.PointSize(ctx, ctx->Point.Size);
    ctx->Driver.PolygonStipple(ctx, (const GLubyte *) ctx->PolygonStipple);
    ctx->Driver.Scissor(ctx);

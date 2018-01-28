@@ -485,6 +485,13 @@ static INLINE simdscalari GenerateMask(uint32_t numItemsRemaining)
     return _simd_castps_si(_simd_vmask_ps(mask));
 }
 
+static INLINE simd16scalari GenerateMask16(uint32_t numItemsRemaining)
+{
+    uint32_t numActive = (numItemsRemaining >= KNOB_SIMD16_WIDTH) ? KNOB_SIMD16_WIDTH : numItemsRemaining;
+    uint32_t mask = (numActive > 0) ? ((1 << numActive) - 1) : 0;
+    return _simd16_castps_si(_simd16_vmask_ps(mask));
+}
+
 //////////////////////////////////////////////////////////////////////////
 /// @brief StreamOut - Streams vertex data out to SO buffers.
 ///        Generally, we are only streaming out a SIMDs worth of triangles.
@@ -1025,31 +1032,31 @@ static void GeometryShaderStage(
                                 simdscalari vPrimId = _simd_set1_epi32(pPrimitiveId[inputPrim]);
 
                                 // Gather data from the SVG if provided.
-                                simdscalari vViewportIdx = SIMD16::setzero_si();
-                                simdscalari vRtIdx = SIMD16::setzero_si();
-                                SIMD8::Vec4 svgAttrib[4];
+                                simdscalari vViewportIdx = SIMD::setzero_si();
+                                simdscalari vRtIdx = SIMD::setzero_si();
+                                SIMD::Vec4 svgAttrib[4];
 
                                 if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
                                 {
-                                    tessPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                                    gsPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
                                 }
 
 
                                 if (state.backendState.readViewportArrayIndex)
                                 {
-                                    vViewportIdx = SIMD8::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+                                    vViewportIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
 
                                     // OOB VPAI indices => forced to zero.
-                                    vViewportIdx = SIMD8::max_epi32(vViewportIdx, SIMD8::setzero_si());
-                                    simd16scalari vNumViewports = SIMD8::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-                                    simd16scalari vClearMask = SIMD8::cmplt_epi32(vViewportIdx, vNumViewports);
-                                    vViewportIdx = SIMD8::and_si(vClearMask, vViewportIdx);
-                                    tessPa.viewportArrayActive = true;
+                                    vViewportIdx = SIMD::max_epi32(vViewportIdx, SIMD::setzero_si());
+                                    simdscalari vNumViewports = SIMD::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                    simdscalari vClearMask = SIMD::cmplt_epi32(vViewportIdx, vNumViewports);
+                                    vViewportIdx = SIMD::and_si(vClearMask, vViewportIdx);
+                                    gsPa.viewportArrayActive = true;
                                 }
                                 if (state.backendState.readRenderTargetArrayIndex)
                                 {
-                                    vRtIdx = SIMD8::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
-                                    tessPa.rtArrayActive = true;
+                                    vRtIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                                    gsPa.rtArrayActive = true;
                                 }
 
                                 pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId, vViewportIdx, vRtIdx);
@@ -1430,9 +1437,9 @@ static void TessellationStages(
                     }
 #else
                     // Gather data from the SVG if provided.
-                    simdscalari vViewportIdx = SIMD16::setzero_si();
-                    simdscalari vRtIdx = SIMD16::setzero_si();
-                    SIMD8::Vec4 svgAttrib[4];
+                    simdscalari vViewportIdx = SIMD::setzero_si();
+                    simdscalari vRtIdx = SIMD::setzero_si();
+                    SIMD::Vec4 svgAttrib[4];
 
                     if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
                     {
@@ -1441,18 +1448,18 @@ static void TessellationStages(
 
                     if (state.backendState.readViewportArrayIndex)
                     {
-                        vViewportIdx = SIMD8::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+                        vViewportIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
 
                         // OOB VPAI indices => forced to zero.
-                        vViewportIdx = SIMD8::max_epi32(vViewportIdx, SIMD8::setzero_si());
-                        simd16scalari vNumViewports = SIMD8::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-                        simd16scalari vClearMask = SIMD8::cmplt_epi32(vViewportIdx, vNumViewports);
-                        vViewportIdx = SIMD8::and_si(vClearMask, vViewportIdx);
+                        vViewportIdx = SIMD::max_epi32(vViewportIdx, SIMD::setzero_si());
+                        simdscalari vNumViewports = SIMD::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                        simdscalari vClearMask = SIMD::cmplt_epi32(vViewportIdx, vNumViewports);
+                        vViewportIdx = SIMD::and_si(vClearMask, vViewportIdx);
                         tessPa.viewportArrayActive = true;
                     }
                     if (state.backendState.readRenderTargetArrayIndex)
                     {
-                        vRtIdx = SIMD8::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                        vRtIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
                         tessPa.rtArrayActive = true;
                     }
                     pfnClipFunc(pDC, tessPa, workerId, prim,
@@ -1720,22 +1727,24 @@ void ProcessDraw(
                 // 1. Execute FS/VS for a single SIMD.
                 AR_BEGIN(FEFetchShader, pDC->drawId);
 #if USE_SIMD16_SHADERS
-                state.pfnFetchFunc(fetchInfo_lo, vin);
+                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_lo, vin);
 #else
-                state.pfnFetchFunc(fetchInfo_lo, vin_lo);
+                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_lo, vin_lo);
 
                 if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                 {
-                    state.pfnFetchFunc(fetchInfo_hi, vin_hi);
+                    state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_hi, vin_hi);
                 }
 #endif
                 AR_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
 #if USE_SIMD16_SHADERS
-#if 0
-                vsContext_lo.VertexID = _simd16_extract(fetchInfo_lo.VertexID, 0);
-                vsContext_hi.VertexID = _simd16_extract(fetchInfo_lo.VertexID, 1);
+#if USE_SIMD16_VS
+                vsContext_lo.VertexID16 = _simd16_insert_si(
+                    vsContext_lo.VertexID16, fetchInfo_lo.VertexID, 0);
+                vsContext_lo.VertexID16 = _simd16_insert_si(
+                    vsContext_lo.VertexID16, fetchInfo_lo.VertexID2, 1);
 #else
                 vsContext_lo.VertexID = fetchInfo_lo.VertexID;
                 vsContext_hi.VertexID = fetchInfo_lo.VertexID2;
@@ -1746,20 +1755,19 @@ void ProcessDraw(
 #endif
 
                 // Setup active mask for vertex shader.
+#if USE_SIMD16_VS
+                vsContext_lo.mask16 = GenerateMask16(endVertex - i);
+#else
                 vsContext_lo.mask = GenerateMask(endVertex - i);
                 vsContext_hi.mask = GenerateMask(endVertex - (i + KNOB_SIMD_WIDTH));
+#endif
 
                 // forward cut mask to the PA
                 if (IsIndexedT::value)
                 {
 #if USE_SIMD16_SHADERS
-#if 0
-                    *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(_simd16_extract(fetchInfo_lo.CutMask, 0)));
-                    *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(_simd16_extract(fetchInfo_lo.CutMask, 1)));
-#else
                     *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask));
                     *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask2));
-#endif
 #else
                     *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask));
                     *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_hi.CutMask));
@@ -1773,12 +1781,16 @@ void ProcessDraw(
 #endif
                 {
                     AR_BEGIN(FEVertexShader, pDC->drawId);
+#if USE_SIMD16_VS
+                    state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
+#else
                     state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
 
                     if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                     {
                         state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_hi);
                     }
+#endif
                     AR_END(FEVertexShader, 0);
 
                     UPDATE_STAT_FE(VsInvocations, GetNumInvocations(i, endVertex));
@@ -1968,7 +1980,7 @@ void ProcessDraw(
 
                 // 1. Execute FS/VS for a single SIMD.
                 AR_BEGIN(FEFetchShader, pDC->drawId);
-                state.pfnFetchFunc(fetchInfo, vout);
+                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo, vout);
                 AR_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
@@ -2041,30 +2053,30 @@ void ProcessDraw(
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims);
 
                                     // Gather data from the SVG if provided.
-                                    simdscalari vViewportIdx = SIMD16::setzero_si();
-                                    simdscalari vRtIdx = SIMD16::setzero_si();
-                                    SIMD8::Vec4 svgAttrib[4];
+                                    simdscalari vViewportIdx = SIMD::setzero_si();
+                                    simdscalari vRtIdx = SIMD::setzero_si();
+                                    SIMD::Vec4 svgAttrib[4];
 
                                     if (state.backendState.readViewportArrayIndex || state.backendState.readRenderTargetArrayIndex)
                                     {
-                                        tessPa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
+                                        pa.Assemble(VERTEX_SGV_SLOT, svgAttrib);
                                     }
 
                                     if (state.backendState.readViewportArrayIndex)
                                     {
-                                        vViewportIdx = SIMD8::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
+                                        vViewportIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_VAI_COMP]);
 
                                         // OOB VPAI indices => forced to zero.
-                                        vViewportIdx = SIMD8::max_epi32(vViewportIdx, SIMD8::setzero_si());
-                                        simd16scalari vNumViewports = SIMD8::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-                                        simd16scalari vClearMask = SIMD8::cmplt_epi32(vViewportIdx, vNumViewports);
-                                        vViewportIdx = SIMD8::and_si(vClearMask, vViewportIdx);
-                                        tessPa.viewportArrayActive = true;
+                                        vViewportIdx = SIMD::max_epi32(vViewportIdx, SIMD::setzero_si());
+                                        simdscalari vNumViewports = SIMD::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
+                                        simdscalari vClearMask = SIMD::cmplt_epi32(vViewportIdx, vNumViewports);
+                                        vViewportIdx = SIMD::and_si(vClearMask, vViewportIdx);
+                                        pa.viewportArrayActive = true;
                                     }
                                     if (state.backendState.readRenderTargetArrayIndex)
                                     {
-                                        vRtIdx = SIMD8::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
-                                        tessPa.rtArrayActive = true;
+                                        vRtIdx = SIMD::castps_si(svgAttrib[0][VERTEX_SGV_RTAI_COMP]);
+                                        pa.rtArrayActive = true;
                                     }
 
                                     pDC->pState->pfnProcessPrims(pDC, pa, workerId, prim,

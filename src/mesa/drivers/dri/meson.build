@@ -46,10 +46,13 @@ if dri_drivers != []
     'mesa_dri_drivers',
     dummy_cpp,  # see meson #2180
     link_whole : dri_drivers,
-    link_with : [libmegadriver_stub, libdricommon, libxmlconfig, libglapi,
-                 libmesa_util, libnir, libmesa_classic],
-    dependencies : [dep_selinux, dep_libdrm, dep_expat, dep_m, dep_thread,
-                    dep_dl],
+    link_with : [
+      libmegadriver_stub, libdricommon, libxmlconfig, libglapi, libmesa_util,
+      libmesa_classic,
+    ],
+    dependencies : [
+      dep_selinux, dep_libdrm, dep_expat, dep_m, dep_thread, dep_dl, idep_nir,
+    ],
     link_args : ['-Wl,--build-id=sha1', ld_args_bsymbolic, ld_args_gc_sections],
   )
 
@@ -64,12 +67,17 @@ endif
 # This needs to be installed if any dri drivers (including gallium dri drivers)
 # are built.
 if with_dri
+  dri_req_private = []
+  if dep_libdrm.found()
+    dri_req_private = ['libdrm >= 2.4.75']  # FIXME: don't hardcode this
+  endif
+
   pkg.generate(
     name : 'dri',
     filebase : 'dri',
     description : 'Direct Rendering Infrastructure',
     version : meson.project_version(),
     variables : ['dridriverdir=${prefix}/' + dri_drivers_path],
-    requires_private : ['libdrm >= 2.4.75'],  # FIXME: don't hardcode this
+    requires_private : dri_req_private,
   )
 endif

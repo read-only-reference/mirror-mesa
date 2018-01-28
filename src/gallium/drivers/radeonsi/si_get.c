@@ -96,12 +96,10 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	switch (param) {
 	/* Supported features (boolean caps). */
 	case PIPE_CAP_ACCELERATED:
-	case PIPE_CAP_TWO_SIDED_STENCIL:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
 	case PIPE_CAP_OCCLUSION_QUERY:
-	case PIPE_CAP_TEXTURE_SHADOW_MAP:
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
@@ -121,7 +119,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_INDEP_BLEND_FUNC:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
-	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
@@ -226,8 +223,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 4;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		if (sscreen->debug_flags & DBG(NIR))
-			return 150; /* no tessellation shaders yet */
 		if (si_have_tgsi_compute(sscreen))
 			return 450;
 		return 420;
@@ -277,8 +272,11 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
 		return 0;
 
+	case PIPE_CAP_FENCE_SIGNAL:
+		return sscreen->info.has_syncobj;
+
 	case PIPE_CAP_NATIVE_FENCE_FD:
-		return sscreen->info.has_sync_file;
+		return sscreen->info.has_fence_to_handle;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 		return si_have_tgsi_compute(sscreen);
@@ -451,10 +449,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		return 32;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
-		if (sscreen->debug_flags & DBG(NIR) &&
-		    (shader == PIPE_SHADER_VERTEX ||
-		     shader == PIPE_SHADER_GEOMETRY ||
-		     shader == PIPE_SHADER_FRAGMENT))
+		if (sscreen->debug_flags & DBG(NIR))
 			return PIPE_SHADER_IR_NIR;
 		return PIPE_SHADER_IR_TGSI;
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
@@ -504,6 +499,7 @@ static const struct nir_shader_compiler_options nir_options = {
 	.vertex_id_zero_based = true,
 	.lower_scmp = true,
 	.lower_flrp32 = true,
+	.lower_flrp64 = true,
 	.lower_fsat = true,
 	.lower_fdiv = true,
 	.lower_sub = true,

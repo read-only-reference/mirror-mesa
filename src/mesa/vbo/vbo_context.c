@@ -25,21 +25,25 @@
  *    Keith Whitwell <keithw@vmware.com>
  */
 
-#include "main/imports.h"
 #include "main/mtypes.h"
-#include "main/api_arrayelt.h"
 #include "main/bufferobj.h"
 #include "math/m_eval.h"
+#include "main/vtxfmt.h"
+#include "main/api_arrayelt.h"
 #include "vbo.h"
-#include "vbo_context.h"
+#include "vbo_private.h"
 
 
-static GLuint check_size( const GLfloat *attr )
+static GLuint
+check_size(const GLfloat *attr)
 {
-   if (attr[3] != 1.0F) return 4;
-   if (attr[2] != 0.0F) return 3;
-   if (attr[1] != 0.0F) return 2;
-   return 1;		
+   if (attr[3] != 1.0F)
+      return 4;
+   if (attr[2] != 0.0F)
+      return 3;
+   if (attr[1] != 0.0F)
+      return 2;
+   return 1;
 }
 
 
@@ -47,19 +51,19 @@ static GLuint check_size( const GLfloat *attr )
  * Helper for initializing a vertex array.
  */
 static void
-init_array(struct gl_context *ctx, struct gl_vertex_array *cl,
+init_array(struct gl_context *ctx, struct gl_vertex_array *array,
            unsigned size, const void *pointer)
 {
-   memset(cl, 0, sizeof(*cl));
+   memset(array, 0, sizeof(*array));
 
-   cl->Size = size;
-   cl->Type = GL_FLOAT;
-   cl->Format = GL_RGBA;
-   cl->StrideB = 0;
-   cl->_ElementSize = cl->Size * sizeof(GLfloat);
-   cl->Ptr = pointer;
+   array->Size = size;
+   array->Type = GL_FLOAT;
+   array->Format = GL_RGBA;
+   array->StrideB = 0;
+   array->_ElementSize = array->Size * sizeof(GLfloat);
+   array->Ptr = pointer;
 
-   _mesa_reference_buffer_object(ctx, &cl->BufferObj,
+   _mesa_reference_buffer_object(ctx, &array->BufferObj,
                                  ctx->Shared->NullBufferObj);
 }
 
@@ -68,7 +72,8 @@ init_array(struct gl_context *ctx, struct gl_vertex_array *cl,
  * Set up the vbo->currval arrays to point at the context's current
  * vertex attributes (with strides = 0).
  */
-static void init_legacy_currval(struct gl_context *ctx)
+static void
+init_legacy_currval(struct gl_context *ctx)
 {
    struct vbo_context *vbo = vbo_context(ctx);
    GLuint i;
@@ -77,29 +82,31 @@ static void init_legacy_currval(struct gl_context *ctx)
     * attribute:
     */
    for (i = 0; i < VERT_ATTRIB_FF_MAX; i++) {
-      struct gl_vertex_array *cl = &vbo->currval[VERT_ATTRIB_FF(i)];
+      struct gl_vertex_array *array = &vbo->currval[VERT_ATTRIB_FF(i)];
 
-      init_array(ctx, cl,
+      init_array(ctx, array,
                  check_size(ctx->Current.Attrib[i]),
                  ctx->Current.Attrib[i]);
    }
 }
 
 
-static void init_generic_currval(struct gl_context *ctx)
+static void
+init_generic_currval(struct gl_context *ctx)
 {
    struct vbo_context *vbo = vbo_context(ctx);
    GLuint i;
 
    for (i = 0; i < VERT_ATTRIB_GENERIC_MAX; i++) {
-      struct gl_vertex_array *cl = &vbo->currval[VBO_ATTRIB_GENERIC0 + i];
+      struct gl_vertex_array *array = &vbo->currval[VBO_ATTRIB_GENERIC0 + i];
 
-      init_array(ctx, cl, 1, ctx->Current.Attrib[VERT_ATTRIB_GENERIC0 + i]);
+      init_array(ctx, array, 1, ctx->Current.Attrib[VERT_ATTRIB_GENERIC0 + i]);
    }
 }
 
 
-static void init_mat_currval(struct gl_context *ctx)
+static void
+init_mat_currval(struct gl_context *ctx)
 {
    struct vbo_context *vbo = vbo_context(ctx);
    GLuint i;
@@ -108,7 +115,7 @@ static void init_mat_currval(struct gl_context *ctx)
     * attribute:
     */
    for (i = 0; i < MAT_ATTRIB_MAX; i++) {
-      struct gl_vertex_array *cl =
+      struct gl_vertex_array *array =
          &vbo->currval[VBO_ATTRIB_MAT_FRONT_AMBIENT + i];
       unsigned size;
 
@@ -129,7 +136,7 @@ static void init_mat_currval(struct gl_context *ctx)
          break;
       }
 
-      init_array(ctx, cl, size, ctx->Light.Material.Attrib[i]);
+      init_array(ctx, array, size, ctx->Light.Material.Attrib[i]);
    }
 }
 
@@ -176,7 +183,35 @@ vbo_draw_indirect_prims(struct gl_context *ctx,
 }
 
 
-GLboolean _vbo_CreateContext( struct gl_context *ctx )
+void
+_vbo_install_exec_vtxfmt(struct gl_context *ctx)
+{
+   struct vbo_context *vbo = vbo_context(ctx);
+
+   _mesa_install_exec_vtxfmt(ctx, &vbo->exec.vtxfmt);
+}
+
+
+void
+vbo_exec_invalidate_state(struct gl_context *ctx)
+{
+   struct vbo_context *vbo = vbo_context(ctx);
+   struct vbo_exec_context *exec = &vbo->exec;
+
+   if (ctx->NewState & (_NEW_PROGRAM | _NEW_ARRAY)) {
+      if (!exec->validating)
+         exec->array.recalculate_inputs = GL_TRUE;
+
+      _ae_invalidate_state(ctx);
+   }
+
+   if (ctx->NewState & _NEW_EVAL)
+      exec->eval.recalculate_maps = GL_TRUE;
+}
+
+
+GLboolean
+_vbo_CreateContext(struct gl_context *ctx)
 {
    struct vbo_context *vbo = CALLOC_STRUCT(vbo_context);
 
@@ -185,13 +220,13 @@ GLboolean _vbo_CreateContext( struct gl_context *ctx )
    /* Initialize the arrayelt helper
     */
    if (!ctx->aelt_context &&
-       !_ae_create_context( ctx )) {
+       !_ae_create_context(ctx)) {
       return GL_FALSE;
    }
 
-   init_legacy_currval( ctx );
-   init_generic_currval( ctx );
-   init_mat_currval( ctx );
+   init_legacy_currval(ctx);
+   init_generic_currval(ctx);
+   init_mat_currval(ctx);
    vbo_set_indirect_draw_func(ctx, vbo_draw_indirect_prims);
 
    /* Build mappings from VERT_ATTRIB -> VBO_ATTRIB depending on type
@@ -200,16 +235,19 @@ GLboolean _vbo_CreateContext( struct gl_context *ctx )
    {
       GLuint i;
 
+      /* make sure all VBO_ATTRIB_ values can fit in an unsigned byte */
+      STATIC_ASSERT(VBO_ATTRIB_MAX <= 255);
+
       /* identity mapping */
-      for (i = 0; i < ARRAY_SIZE(vbo->map_vp_none); i++) 
-	 vbo->map_vp_none[i] = i;
+      for (i = 0; i < ARRAY_SIZE(vbo->map_vp_none); i++)
+         vbo->map_vp_none[i] = i;
       /* map material attribs to generic slots */
       for (i = 0; i < MAT_ATTRIB_MAX; i++)
-	 vbo->map_vp_none[VERT_ATTRIB_GENERIC(i)]
+         vbo->map_vp_none[VERT_ATTRIB_GENERIC(i)]
             = VBO_ATTRIB_MAT_FRONT_AMBIENT + i;
 
       for (i = 0; i < ARRAY_SIZE(vbo->map_vp_arb); i++)
-	 vbo->map_vp_arb[i] = i;
+         vbo->map_vp_arb[i] = i;
    }
 
 
@@ -217,9 +255,9 @@ GLboolean _vbo_CreateContext( struct gl_context *ctx )
     * will pretty much be permanently installed, which means that the
     * vtxfmt mechanism can be removed now.
     */
-   vbo_exec_init( ctx );
+   vbo_exec_init(ctx);
    if (ctx->API == API_OPENGL_COMPAT)
-      vbo_save_init( ctx );
+      vbo_save_init(ctx);
 
    _math_init_eval();
 
@@ -227,12 +265,13 @@ GLboolean _vbo_CreateContext( struct gl_context *ctx )
 }
 
 
-void _vbo_DestroyContext( struct gl_context *ctx )
+void
+_vbo_DestroyContext(struct gl_context *ctx)
 {
    struct vbo_context *vbo = vbo_context(ctx);
 
    if (ctx->aelt_context) {
-      _ae_destroy_context( ctx );
+      _ae_destroy_context(ctx);
       ctx->aelt_context = NULL;
    }
 
@@ -252,15 +291,17 @@ void _vbo_DestroyContext( struct gl_context *ctx )
 }
 
 
-void vbo_set_draw_func(struct gl_context *ctx, vbo_draw_func func)
+void
+vbo_set_draw_func(struct gl_context *ctx, vbo_draw_func func)
 {
    struct vbo_context *vbo = vbo_context(ctx);
    vbo->draw_prims = func;
 }
 
 
-void vbo_set_indirect_draw_func(struct gl_context *ctx,
-                                vbo_indirect_draw_func func)
+void
+vbo_set_indirect_draw_func(struct gl_context *ctx,
+                           vbo_indirect_draw_func func)
 {
    struct vbo_context *vbo = vbo_context(ctx);
    vbo->draw_indirect_prims = func;

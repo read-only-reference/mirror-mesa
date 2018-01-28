@@ -51,7 +51,7 @@
 #include "texobj.h"
 #include "texstate.h"
 #include "varray.h"
-#include "vbo/vbo_context.h"
+#include "vbo/vbo.h"
 #include "viewport.h"
 #include "blend.h"
 
@@ -357,7 +357,7 @@ _mesa_update_state_locked( struct gl_context *ctx )
    }
 
    if (new_state & _NEW_ARRAY)
-      _mesa_update_vao_client_arrays(ctx, ctx->Array.VAO);
+      _mesa_update_vao_derived_arrays(ctx, ctx->Array.VAO);
 
  out:
    new_prog_state |= update_program_constants(ctx);

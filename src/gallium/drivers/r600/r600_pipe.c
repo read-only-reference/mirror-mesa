@@ -249,11 +249,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
 	case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
-	case PIPE_CAP_TWO_SIDED_STENCIL:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
 	case PIPE_CAP_OCCLUSION_QUERY:
-	case PIPE_CAP_TEXTURE_SHADOW_MAP:
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
@@ -274,7 +272,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
@@ -353,6 +350,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
 	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
+	case PIPE_CAP_TGSI_CLOCK:
+	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
+	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 		return family >= CHIP_CEDAR ? 1 : 0;
 	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
 		return family >= CHIP_CEDAR ? 4 : 0;
@@ -385,11 +385,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_STRING_MARKER:
-	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
-	case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
 	case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
 	case PIPE_CAP_NATIVE_FENCE_FD:
 	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
@@ -397,7 +395,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_INT64:
 	case PIPE_CAP_INT64_DIVMOD:
 	case PIPE_CAP_TGSI_TEX_TXF_LZ:
-	case PIPE_CAP_TGSI_CLOCK:
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
 	case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
 	case PIPE_CAP_TGSI_BALLOT:
@@ -412,6 +409,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
 	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+	case PIPE_CAP_FENCE_SIGNAL:
 		return 0;
 
 	case PIPE_CAP_DOUBLES:
@@ -762,7 +760,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
 		R600_CONTEXT_INV_VERTEX_CACHE |
 		R600_CONTEXT_INV_TEX_CACHE |
 		R600_CONTEXT_INV_CONST_CACHE;
-	rscreen->b.barrier_flags.compute_to_L2 = R600_CONTEXT_PS_PARTIAL_FLUSH;
+	rscreen->b.barrier_flags.compute_to_L2 = R600_CONTEXT_CS_PARTIAL_FLUSH | R600_CONTEXT_FLUSH_AND_INV;
 
 	rscreen->global_pool = compute_memory_pool_new(rscreen);
 

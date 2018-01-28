@@ -327,7 +327,6 @@ files_libmesa_common = files(
   'vbo/vbo_attrib.h',
   'vbo/vbo_attrib_tmp.h',
   'vbo/vbo_context.c',
-  'vbo/vbo_context.h',
   'vbo/vbo_exec_api.c',
   'vbo/vbo_exec_array.c',
   'vbo/vbo_exec.c',
@@ -536,6 +535,8 @@ files_libmesa_gallium = files(
   'state_tracker/st_cb_readpixels.h',
   'state_tracker/st_cb_strings.c',
   'state_tracker/st_cb_strings.h',
+  'state_tracker/st_cb_semaphoreobjects.c',
+  'state_tracker/st_cb_semaphoreobjects.h',
   'state_tracker/st_cb_syncobj.c',
   'state_tracker/st_cb_syncobj.h',
   'state_tracker/st_cb_texturebarrier.c',
@@ -687,7 +688,6 @@ files_libmesa_common += [
   main_marshal_generated_h,
   main_dispatch_h,
   ir_expression_operation_h,
-  nir_opcodes_h,
   main_remap_helper_h,
   matypes_h,
   sha1_h,
@@ -711,6 +711,7 @@ libmesa_classic = static_library(
   cpp_args : [cpp_vis_args, cpp_msvc_compat_args],
   include_directories : [inc_common, include_directories('main')],
   link_with : [libglsl, libmesa_sse41],
+  dependencies : idep_nir_headers,
   build_by_default : false,
 )
 
@@ -721,6 +722,7 @@ libmesa_gallium = static_library(
   cpp_args : [cpp_vis_args, cpp_msvc_compat_args],
   include_directories : [inc_common, include_directories('main')],
   link_with : [libglsl, libmesa_sse41],
+  dependencies : [idep_nir_headers, dep_vdpau],
   build_by_default : false,
 )
 

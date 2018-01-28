@@ -205,7 +205,6 @@ void
 loader_dri3_set_swap_interval(struct loader_dri3_drawable *draw, int interval)
 {
    draw->swap_interval = interval;
-   dri3_update_num_back(draw);
 }
 
 /** dri3_free_render_buffer
@@ -377,15 +376,13 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
             draw->flipping = false;
             break;
          }
-         dri3_update_num_back(draw);
 
          if (draw->vtable->show_fps)
             draw->vtable->show_fps(draw, ce->ust);
 
          draw->ust = ce->ust;
          draw->msc = ce->msc;
-      } else {
-         draw->recv_msc_serial = ce->serial;
+      } else if (ce->serial == draw->eid) {
          draw->notify_ust = ce->ust;
          draw->notify_msc = ce->msc;
       }
@@ -402,7 +399,8 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
             buf->busy = 0;
 
          if (buf && draw->num_back <= b && b < LOADER_DRI3_MAX_BACK &&
-             draw->cur_blit_source != b) {
+             draw->cur_blit_source != b &&
+             !buf->busy) {
             dri3_free_render_buffer(draw, buf);
             draw->buffers[b] = NULL;
          }
@@ -453,28 +451,29 @@ loader_dri3_wait_for_msc(struct loader_dri3_drawable *draw,
                          int64_t divisor, int64_t remainder,
                          int64_t *ust, int64_t *msc, int64_t *sbc)
 {
-   uint32_t msc_serial;
-
-   msc_serial = ++draw->send_msc_serial;
-   xcb_present_notify_msc(draw->conn,
-                          draw->drawable,
-                          msc_serial,
-                          target_msc,
-                          divisor,
-                          remainder);
+   xcb_void_cookie_t cookie = xcb_present_notify_msc(draw->conn,
+                                                     draw->drawable,
+                                                     draw->eid,
+                                                     target_msc,
+                                                     divisor,
+                                                     remainder);
+   xcb_generic_event_t *ev;
+   unsigned full_sequence;
 
    mtx_lock(&draw->mtx);
    xcb_flush(draw->conn);
 
    /* Wait for the event */
-   if (draw->special_event) {
-      while ((int32_t) (msc_serial - draw->recv_msc_serial) > 0) {
-         if (!dri3_wait_for_event_locked(draw)) {
-            mtx_unlock(&draw->mtx);
-            return false;
-         }
+   do {
+      ev = xcb_wait_for_special_event(draw->conn, draw->special_event);
+      if (!ev) {
+         mtx_unlock(&draw->mtx);
+         return false;
       }
-   }
+
+      full_sequence = ev->full_sequence;
+      dri3_handle_present_event(draw, (void *) ev);
+   } while (full_sequence != cookie.sequence || draw->notify_msc < target_msc);
 
    *ust = draw->notify_ust;
    *msc = draw->notify_msc;
@@ -537,6 +536,7 @@ dri3_find_back(struct loader_dri3_drawable *draw)
    /* Check whether we need to reuse the current back buffer as new back.
     * In that case, wait until it's not busy anymore.
     */
+   dri3_update_num_back(draw);
    num_to_consider = draw->num_back;
    if (!loader_dri3_have_image_blit(draw) && draw->cur_blit_source != -1) {
       num_to_consider = 1;
@@ -1018,6 +1018,8 @@ image_format_to_fourcc(int format)
    case __DRI_IMAGE_FORMAT_ARGB8888: return __DRI_IMAGE_FOURCC_ARGB8888;
    case __DRI_IMAGE_FORMAT_ABGR8888: return __DRI_IMAGE_FOURCC_ABGR8888;
    case __DRI_IMAGE_FORMAT_XBGR8888: return __DRI_IMAGE_FOURCC_XBGR8888;
+   case __DRI_IMAGE_FORMAT_XRGB2101010: return __DRI_IMAGE_FOURCC_XRGB2101010;
+   case __DRI_IMAGE_FORMAT_ARGB2101010: return __DRI_IMAGE_FOURCC_ARGB2101010;
    }
    return 0;
 }

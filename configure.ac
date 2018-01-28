@@ -906,6 +906,7 @@ AC_CHECK_FUNC([posix_memalign], [DEFINES="$DEFINES -DHAVE_POSIX_MEMALIGN"])
 
 dnl Check for zlib
 PKG_CHECK_MODULES([ZLIB], [zlib >= $ZLIB_REQUIRED])
+DEFINES="$DEFINES -DHAVE_ZLIB"
 
 dnl Check for pthreads
 AX_PTHREAD
@@ -1597,7 +1598,7 @@ fi
 AC_ARG_ENABLE([driglx-direct],
     [AS_HELP_STRING([--disable-driglx-direct],
         [disable direct rendering in GLX and EGL for DRI \
-            @<:@default=auto@:>@])],
+            @<:@default=enabled@:>@])],
     [driglx_direct="$enableval"],
     [driglx_direct="yes"])
 
@@ -2639,6 +2640,11 @@ if test -n "$with_gallium_drivers"; then
                AC_MSG_ERROR([swr enabled but no swr architectures selected])
             fi
 
+            # test if more than one swr arch configured
+            if test `echo $swr_archs | wc -w` -eq 1; then
+                HAVE_SWR_BUILTIN=yes
+            fi
+
             HAVE_GALLIUM_SWR=yes
             ;;
         xvc4)
@@ -2688,6 +2694,7 @@ AM_CONDITIONAL(HAVE_SWR_AVX, test "x$HAVE_SWR_AVX" = xyes)
 AM_CONDITIONAL(HAVE_SWR_AVX2, test "x$HAVE_SWR_AVX2" = xyes)
 AM_CONDITIONAL(HAVE_SWR_KNL, test "x$HAVE_SWR_KNL" = xyes)
 AM_CONDITIONAL(HAVE_SWR_SKX, test "x$HAVE_SWR_SKX" = xyes)
+AM_CONDITIONAL(HAVE_SWR_BUILTIN, test "x$HAVE_SWR_BUILTIN" = xyes)
 
 dnl We need to validate some needed dependencies for renderonly drivers.
 
@@ -2772,6 +2779,18 @@ if test "x$enable_llvm" = xyes; then
                 LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --system-libs`"
             fi
         fi
+    fi
+
+    dnl The gallium-xlib GLX and gallium OSMesa targets directly embed the
+    dnl swr/llvmpipe driver into the final binary.  Adding LLVM_LIBS results in 
+    dnl the LLVM library propagated in the Libs.private of the respective .pc
+    dnl file which ensures complete dependency information when statically
+    dnl linking.
+    if test "x$enable_glx" == xgallium-xlib; then
+        GL_PC_LIB_PRIV="$GL_PC_LIB_PRIV $LLVM_LIBS"
+    fi
+    if test "x$enable_gallium_osmesa" = xyes; then
+        OSMESA_PC_LIB_PRIV="$OSMESA_PC_LIB_PRIV $LLVM_LIBS"
     fi
 fi
 
@@ -3152,7 +3171,11 @@ fi
 
 echo ""
 if test "x$HAVE_GALLIUM_SWR" != x; then
-    echo "        SWR archs:       $swr_archs"
+    if test "x$HAVE_SWR_BUILTIN" = xyes; then
+        echo "        SWR archs:       $swr_archs (builtin)"
+    else
+        echo "        SWR archs:       $swr_archs"
+    fi
 fi
 
 dnl Libraries

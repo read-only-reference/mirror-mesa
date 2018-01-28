@@ -473,7 +473,9 @@ struct brw_reloc_list {
 struct brw_growing_bo {
    struct brw_bo *bo;
    uint32_t *map;
-   uint32_t *cpu_map;
+   struct brw_bo *partial_bo;
+   uint32_t *partial_bo_map;
+   unsigned partial_bytes;
 };
 
 struct intel_batchbuffer {
@@ -492,6 +494,7 @@ struct intel_batchbuffer {
    uint32_t state_used;
 
    enum brw_gpu_ring ring;
+   bool use_shadow_copy;
    bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
@@ -523,6 +526,36 @@ struct intel_batchbuffer {
 
 #define BRW_MAX_XFB_STREAMS 4
 
+struct brw_transform_feedback_counter {
+   /**
+    * Index of the first entry of this counter within the primitive count BO.
+    * An entry is considered to be an N-tuple of 64bit values, where N is the
+    * number of vertex streams supported by the platform.
+    */
+   unsigned bo_start;
+
+   /**
+    * Index one past the last entry of this counter within the primitive
+    * count BO.
+    */
+   unsigned bo_end;
+
+   /**
+    * Primitive count values accumulated while this counter was active,
+    * excluding any entries buffered between \c bo_start and \c bo_end, which
+    * haven't been accounted for yet.
+    */
+   uint64_t accum[BRW_MAX_XFB_STREAMS];
+};
+
+static inline void
+brw_reset_transform_feedback_counter(
+   struct brw_transform_feedback_counter *counter)
+{
+   counter->bo_start = counter->bo_end;
+   memset(&counter->accum, 0, sizeof(counter->accum));
+}
+
 struct brw_transform_feedback_object {
    struct gl_transform_feedback_object base;
 
@@ -541,14 +574,18 @@ struct brw_transform_feedback_object {
     */
    unsigned max_index;
 
+   struct brw_bo *prim_count_bo;
+
    /**
     * Count of primitives generated during this transform feedback operation.
-    *  @{
     */
-   uint64_t prims_generated[BRW_MAX_XFB_STREAMS];
-   struct brw_bo *prim_count_bo;
-   unsigned prim_count_buffer_index; /**< in number of uint64_t units */
-   /** @} */
+   struct brw_transform_feedback_counter counter;
+
+   /**
+    * Count of primitives generated during the previous transform feedback
+    * operation.  Used to implement DrawTransformFeedback().
+    */
+   struct brw_transform_feedback_counter previous_counter;
 
    /**
     * Number of vertices written between last Begin/EndTransformFeedback().
@@ -730,7 +767,7 @@ struct brw_context
     * and would need flushing before being used from another cache domain that
     * isn't coherent with it (i.e. the sampler).
     */
-   struct set *render_cache;
+   struct hash_table *render_cache;
 
    /**
     * Set of struct brw_bo * that have been used as a depth buffer within this
@@ -943,7 +980,7 @@ struct brw_context
     * Number of samples in ctx->DrawBuffer, updated by BRW_NEW_NUM_SAMPLES so
     * that we don't have to reemit that state every time we change FBOs.
     */
-   int num_samples;
+   unsigned int num_samples;
 
    /* BRW_NEW_URB_ALLOCATIONS:
     */
@@ -1253,15 +1290,11 @@ struct brw_context
 
    struct brw_fast_clear_state *fast_clear_state;
 
-   /* Array of flags telling if auxiliary buffer is disabled for corresponding
-    * renderbuffer. If draw_aux_buffer_disabled[i] is set then use of
-    * auxiliary buffer for gl_framebuffer::_ColorDrawBuffers[i] is
-    * disabled.
-    * This is needed in case the same underlying buffer is also configured
-    * to be sampled but with a format that the sampling engine can't treat
-    * compressed or fast cleared.
+   /* Array of aux usages to use for drawing.  Aux usage for render targets is
+    * a bit more complex than simply calling a single function so we need some
+    * way of passing it form brw_draw.c to surface state setup.
     */
-   bool draw_aux_buffer_disabled[MAX_DRAW_BUFFERS];
+   enum isl_aux_usage draw_aux_usage[MAX_DRAW_BUFFERS];
 
    __DRIcontext *driContext;
    struct intel_screen *screen;
@@ -1287,7 +1320,8 @@ void intel_update_renderbuffers(__DRIcontext *context,
                                 __DRIdrawable *drawable);
 void intel_prepare_render(struct brw_context *brw);
 
-void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering);
+void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
+                                bool *draw_aux_buffer_disabled);
 
 void intel_resolve_for_dri2_flush(struct brw_context *brw,
                                   __DRIdrawable *drawable);
@@ -1465,7 +1499,6 @@ extern void intelInitExtensions(struct gl_context *ctx);
 extern int intel_translate_shadow_compare_func(GLenum func);
 extern int intel_translate_compare_func(GLenum func);
 extern int intel_translate_stencil_op(GLenum op);
-extern int intel_translate_logic_op(GLenum opcode);
 
 /* brw_sync.c */
 void brw_init_syncobj_functions(struct dd_function_table *functions);
@@ -1491,9 +1524,6 @@ brw_resume_transform_feedback(struct gl_context *ctx,
 void
 brw_save_primitives_written_counters(struct brw_context *brw,
                                      struct brw_transform_feedback_object *obj);
-void
-brw_compute_xfb_vertices_written(struct brw_context *brw,
-                                 struct brw_transform_feedback_object *obj);
 GLsizei
 brw_get_transform_feedback_vertex_count(struct gl_context *ctx,
                                         struct gl_transform_feedback_object *obj,
