@@ -138,7 +138,7 @@ static GLboolean check_active_shininess( struct gl_context *ctx,
        (key->light_color_material_mask & (1 << attr)))
       return GL_TRUE;
 
-   if (key->varying_vp_inputs & VERT_BIT_GENERIC(attr))
+   if (key->varying_vp_inputs & VERT_BIT_MAT(attr))
       return GL_TRUE;
 
    if (ctx->Light.Material.Attrib[attr][0] != 0.0F)
@@ -235,7 +235,8 @@ static void make_state_key( struct gl_context *ctx, struct state_key *key )
       | ctx->Texture._TexMatEnabled | ctx->Point.CoordReplace;
    while (mask) {
       const int i = u_bit_scan(&mask);
-      struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
+      struct gl_fixedfunc_texture_unit *texUnit =
+         &ctx->Texture.FixedFuncUnit[i];
 
       if (ctx->Point.PointSprite)
 	 if (ctx->Point.CoordReplace & (1u << i))
@@ -412,7 +413,7 @@ static struct ureg register_param5(struct tnl_program *p,
 				   GLint s3,
                                    GLint s4)
 {
-   gl_state_index tokens[STATE_LENGTH];
+   gl_state_index16 tokens[STATE_LENGTH];
    GLint idx;
    tokens[0] = s0;
    tokens[1] = s1;
@@ -851,7 +852,8 @@ static void set_material_flags( struct tnl_program *p )
 	 p->color_materials = p->state->light_color_material_mask;
    }
 
-   p->materials |= (p->state->varying_vp_inputs >> VERT_ATTRIB_GENERIC0);
+   p->materials |= ((p->state->varying_vp_inputs & VERT_BIT_MAT_ALL)
+                    >> VERT_ATTRIB_MAT(0));
 }
 
 
@@ -866,7 +868,7 @@ static struct ureg get_material( struct tnl_program *p, GLuint side,
       /* Put material values in the GENERIC slots -- they are not used
        * for anything in fixed function mode.
        */
-      return register_input( p, attrib + VERT_ATTRIB_GENERIC0 );
+      return register_input( p, VERT_ATTRIB_MAT(attrib) );
    }
    else
       return register_param3( p, STATE_MATERIAL, side, property );

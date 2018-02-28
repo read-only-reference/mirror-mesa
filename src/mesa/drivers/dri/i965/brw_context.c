@@ -76,6 +76,8 @@
 #include "util/disk_cache.h"
 #include "isl/isl.h"
 
+#include "common/gen_defines.h"
+
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -302,6 +304,8 @@ brw_init_driver_functions(struct brw_context *brw,
       gen4_init_queryobj_functions(functions);
    brw_init_compute_functions(functions);
    brw_init_conditional_render_functions(functions);
+
+   functions->GenerateMipmap = brw_generate_mipmap;
 
    functions->QueryInternalFormat = brw_query_internal_format;
 
@@ -980,14 +984,14 @@ brwCreateContext(gl_api api,
          return false;
       }
 
-      int hw_priority = BRW_CONTEXT_MEDIUM_PRIORITY;
+      int hw_priority = GEN_CONTEXT_MEDIUM_PRIORITY;
       if (ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_PRIORITY) {
          switch (ctx_config->priority) {
          case __DRI_CTX_PRIORITY_LOW:
-            hw_priority = BRW_CONTEXT_LOW_PRIORITY;
+            hw_priority = GEN_CONTEXT_LOW_PRIORITY;
             break;
          case __DRI_CTX_PRIORITY_HIGH:
-            hw_priority = BRW_CONTEXT_HIGH_PRIORITY;
+            hw_priority = GEN_CONTEXT_HIGH_PRIORITY;
             break;
          }
       }
@@ -1007,9 +1011,9 @@ brwCreateContext(gl_api api,
       return false;
    }
 
-   if (devinfo->gen == 10) {
+   if (devinfo->gen == 11) {
       fprintf(stderr,
-              "WARNING: i965 does not fully support Gen10 yet.\n"
+              "WARNING: i965 does not fully support Gen11 yet.\n"
               "Instability or lower performance might occur.\n");
 
    }
@@ -1283,6 +1287,21 @@ intel_resolve_for_dri2_flush(struct brw_context *brw,
          intel_miptree_prepare_external(brw, rb->mt);
       } else {
          intel_renderbuffer_downsample(brw, rb);
+
+         /* Call prepare_external on the single-sample miptree to do any
+          * needed resolves prior to handing it off to the window system.
+          * This is needed in the case that rb->singlesample_mt is Y-tiled
+          * with CCS_E enabled but without I915_FORMAT_MOD_Y_TILED_CCS_E.  In
+          * this case, the MSAA resolve above will write compressed data into
+          * rb->singlesample_mt.
+          *
+          * TODO: Some day, if we decide to care about the tiny performance
+          * hit we're taking by doing the MSAA resolve and then a CCS resolve,
+          * we could detect this case and just allocate the single-sampled
+          * miptree without aux.  However, that would be a lot of plumbing and
+          * this is a rather exotic case so it's not really worth it.
+          */
+         intel_miptree_prepare_external(brw, rb->singlesample_mt);
       }
    }
 }

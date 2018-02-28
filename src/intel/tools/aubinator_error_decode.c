@@ -65,7 +65,8 @@ print_head(unsigned int reg)
 static void
 print_register(struct gen_spec *spec, const char *name, uint32_t reg)
 {
-   struct gen_group *reg_spec = gen_spec_find_register_by_name(spec, name);
+   struct gen_group *reg_spec =
+      name ? gen_spec_find_register_by_name(spec, name) : NULL;
 
    if (reg_spec) {
       gen_print_group(stdout, reg_spec, 0, &reg, 0,
@@ -386,7 +387,7 @@ get_gen_batch_bo(void *user_data, uint64_t address)
 {
    for (int s = 0; s < MAX_SECTIONS; s++) {
       if (sections[s].gtt_offset <= address &&
-          address < sections[s].gtt_offset + sections[s].count) {
+          address < sections[s].gtt_offset + sections[s].count * 4) {
          return (struct gen_batch_decode_bo) {
             .addr = sections[s].gtt_offset,
             .map = sections[s].data,

@@ -249,6 +249,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_CLOCK:
         case PIPE_CAP_TGSI_TEX_TXF_LZ:
         case PIPE_CAP_NATIVE_FENCE_FD:
+        case PIPE_CAP_FENCE_SIGNAL:
         case PIPE_CAP_TGSI_MUL_ZERO_WINS:
         case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
         case PIPE_CAP_QUERY_SO_OVERFLOW:
@@ -258,6 +259,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
         case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
         case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+	case PIPE_CAP_CONSTBUF0_FLAGS:
                 return 0;
 
                 /* Geometry shader output, unsupported. */
@@ -331,11 +333,6 @@ vc5_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
                 return 0.0f;
         case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
                 return 16.0f;
-        case PIPE_CAPF_GUARD_BAND_LEFT:
-        case PIPE_CAPF_GUARD_BAND_TOP:
-        case PIPE_CAPF_GUARD_BAND_RIGHT:
-        case PIPE_CAPF_GUARD_BAND_BOTTOM:
-                return 0.0f;
         default:
                 fprintf(stderr, "unknown paramf %d\n", param);
                 return 0;
@@ -429,7 +426,6 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
                                unsigned usage)
 {
         struct vc5_screen *screen = vc5_screen(pscreen);
-        unsigned retval = 0;
 
         if (sample_count > 1 && sample_count != VC5_MAX_SAMPLES)
                 return FALSE;
@@ -485,49 +481,39 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
                 case PIPE_FORMAT_R8G8B8_SSCALED:
                 case PIPE_FORMAT_R8G8_SSCALED:
                 case PIPE_FORMAT_R8_SSCALED:
-                        retval |= PIPE_BIND_VERTEX_BUFFER;
                         break;
                 default:
-                        break;
+                        return FALSE;
                 }
         }
 
         if ((usage & PIPE_BIND_RENDER_TARGET) &&
-            vc5_rt_format_supported(&screen->devinfo, format)) {
-                retval |= PIPE_BIND_RENDER_TARGET;
+            !vc5_rt_format_supported(&screen->devinfo, format)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
-            vc5_tex_format_supported(&screen->devinfo, format)) {
-                retval |= PIPE_BIND_SAMPLER_VIEW;
+            !vc5_tex_format_supported(&screen->devinfo, format)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_DEPTH_STENCIL) &&
-            (format == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
-             format == PIPE_FORMAT_X8Z24_UNORM ||
-             format == PIPE_FORMAT_Z16_UNORM ||
-             format == PIPE_FORMAT_Z32_FLOAT ||
-             format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT)) {
-                retval |= PIPE_BIND_DEPTH_STENCIL;
+            !(format == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
+              format == PIPE_FORMAT_X8Z24_UNORM ||
+              format == PIPE_FORMAT_Z16_UNORM ||
+              format == PIPE_FORMAT_Z32_FLOAT ||
+              format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_INDEX_BUFFER) &&
-            (format == PIPE_FORMAT_I8_UINT ||
-             format == PIPE_FORMAT_I16_UINT ||
-             format == PIPE_FORMAT_I32_UINT)) {
-                retval |= PIPE_BIND_INDEX_BUFFER;
+            !(format == PIPE_FORMAT_I8_UINT ||
+              format == PIPE_FORMAT_I16_UINT ||
+              format == PIPE_FORMAT_I32_UINT)) {
+                return FALSE;
         }
 
-#if 0
-        if (retval != usage) {
-                fprintf(stderr,
-                        "not supported: format=%s, target=%d, sample_count=%d, "
-                        "usage=0x%x, retval=0x%x\n", util_format_name(format),
-                        target, sample_count, usage, retval);
-        }
-#endif
-
-        return retval == usage;
+        return TRUE;
 }
 
 #define PTR_TO_UINT(x) ((unsigned)((intptr_t)(x)))

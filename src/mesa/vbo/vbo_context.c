@@ -30,6 +30,8 @@
 #include "math/m_eval.h"
 #include "main/vtxfmt.h"
 #include "main/api_arrayelt.h"
+#include "main/arrayobj.h"
+#include "main/varray.h"
 #include "vbo.h"
 #include "vbo_private.h"
 
@@ -140,15 +142,19 @@ init_mat_currval(struct gl_context *ctx)
    }
 }
 
+
+/**
+ * Fallback for when a driver does not call vbo_set_indirect_draw_func().
+ */
 static void
 vbo_draw_indirect_prims(struct gl_context *ctx,
                         GLuint mode,
-                        struct gl_buffer_object *indirect_data,
+                        struct gl_buffer_object *indirect_buffer,
                         GLsizeiptr indirect_offset,
                         unsigned draw_count,
                         unsigned stride,
-                        struct gl_buffer_object *indirect_params,
-                        GLsizeiptr indirect_params_offset,
+                        struct gl_buffer_object *indirect_draw_count_buffer,
+                        GLsizeiptr indirect_draw_count_offset,
                         const struct _mesa_index_buffer *ib)
 {
    struct vbo_context *vbo = vbo_context(ctx);
@@ -160,7 +166,7 @@ vbo_draw_indirect_prims(struct gl_context *ctx,
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "gl%sDraw%sIndirect%s",
                   (draw_count > 1) ? "Multi" : "",
                   ib ? "Elements" : "Arrays",
-                  indirect_params ? "CountARB" : "");
+                  indirect_buffer ? "CountARB" : "");
       return;
    }
 
@@ -174,10 +180,13 @@ vbo_draw_indirect_prims(struct gl_context *ctx,
       prim[i].draw_id = i;
    }
 
+   /* This should always be true at this time */
+   assert(indirect_buffer == ctx->DrawIndirectBuffer);
+
    vbo->draw_prims(ctx, prim, draw_count,
                    ib, false, 0, ~0,
                    NULL, 0,
-                   ctx->DrawIndirectBuffer);
+                   indirect_buffer);
 
    free(prim);
 }
@@ -199,11 +208,15 @@ vbo_exec_invalidate_state(struct gl_context *ctx)
    struct vbo_exec_context *exec = &vbo->exec;
 
    if (ctx->NewState & (_NEW_PROGRAM | _NEW_ARRAY)) {
-      if (!exec->validating)
-         exec->array.recalculate_inputs = GL_TRUE;
+      exec->array.recalculate_inputs = GL_TRUE;
 
       _ae_invalidate_state(ctx);
    }
+   /* If _mesa_update_state is called in a non draw code path,
+    * changes in the VAO need to be captured.
+    */
+   if (ctx->Array.VAO->NewArrays)
+      exec->array.recalculate_inputs = GL_TRUE;
 
    if (ctx->NewState & _NEW_EVAL)
       exec->eval.recalculate_maps = GL_TRUE;
@@ -227,29 +240,11 @@ _vbo_CreateContext(struct gl_context *ctx)
    init_legacy_currval(ctx);
    init_generic_currval(ctx);
    init_mat_currval(ctx);
+   _vbo_init_inputs(&vbo->draw_arrays);
    vbo_set_indirect_draw_func(ctx, vbo_draw_indirect_prims);
 
-   /* Build mappings from VERT_ATTRIB -> VBO_ATTRIB depending on type
-    * of vertex program active.
-    */
-   {
-      GLuint i;
-
-      /* make sure all VBO_ATTRIB_ values can fit in an unsigned byte */
-      STATIC_ASSERT(VBO_ATTRIB_MAX <= 255);
-
-      /* identity mapping */
-      for (i = 0; i < ARRAY_SIZE(vbo->map_vp_none); i++)
-         vbo->map_vp_none[i] = i;
-      /* map material attribs to generic slots */
-      for (i = 0; i < MAT_ATTRIB_MAX; i++)
-         vbo->map_vp_none[VERT_ATTRIB_GENERIC(i)]
-            = VBO_ATTRIB_MAT_FRONT_AMBIENT + i;
-
-      for (i = 0; i < ARRAY_SIZE(vbo->map_vp_arb); i++)
-         vbo->map_vp_arb[i] = i;
-   }
-
+   /* make sure all VBO_ATTRIB_ values can fit in an unsigned byte */
+   STATIC_ASSERT(VBO_ATTRIB_MAX <= 255);
 
    /* Hook our functions into exec and compile dispatch tables.  These
     * will pretty much be permanently installed, which means that the
@@ -258,6 +253,11 @@ _vbo_CreateContext(struct gl_context *ctx)
    vbo_exec_init(ctx);
    if (ctx->API == API_OPENGL_COMPAT)
       vbo_save_init(ctx);
+
+   vbo->VAO = _mesa_new_vao(ctx, ~((GLuint)0));
+   /* The exec VAO assumes to have all arributes bound to binding 0 */
+   for (unsigned i = 0; i < VERT_ATTRIB_MAX; ++i)
+      _mesa_vertex_attrib_binding(ctx, vbo->VAO, i, 0, false);
 
    _math_init_eval();
 
@@ -285,6 +285,7 @@ _vbo_DestroyContext(struct gl_context *ctx)
       vbo_exec_destroy(ctx);
       if (ctx->API == API_OPENGL_COMPAT)
          vbo_save_destroy(ctx);
+      _mesa_reference_vao(ctx, &vbo->VAO, NULL);
       free(vbo);
       ctx->vbo_context = NULL;
    }

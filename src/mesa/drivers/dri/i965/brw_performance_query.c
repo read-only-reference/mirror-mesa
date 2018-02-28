@@ -1720,7 +1720,8 @@ read_file_uint64(const char *file, uint64_t *val)
     fd = open(file, 0);
     if (fd < 0)
 	return false;
-    n = read(fd, buf, sizeof (buf) - 1);
+    while ((n = read(fd, buf, sizeof (buf) - 1)) < 0 &&
+           errno == EINTR);
     close(fd);
     if (n < 0)
 	return false;
@@ -1832,21 +1833,8 @@ kernel_has_dynamic_config_support(struct brw_context *brw,
 
       /* Look for the test config, which we know we can't replace. */
       if (read_file_uint64(config_path, &config_id) && config_id == 1) {
-         uint32_t mux_regs[] = { 0x9888 /* NOA_WRITE */, 0x0 };
-         struct drm_i915_perf_oa_config config;
-
-         memset(&config, 0, sizeof(config));
-
-         memcpy(config.uuid, query->guid, sizeof(config.uuid));
-
-         config.n_mux_regs = 1;
-         config.mux_regs_ptr = (uintptr_t) mux_regs;
-
-         if (ioctl(screen->fd, DRM_IOCTL_I915_PERF_REMOVE_CONFIG, &config_id) < 0 &&
-             errno == ENOENT)
-            return true;
-
-         break;
+         return drmIoctl(screen->fd, DRM_IOCTL_I915_PERF_REMOVE_CONFIG,
+                         &config_id) < 0 && errno == ENOENT;
       }
    }
 
@@ -1871,6 +1859,7 @@ init_oa_configs(struct brw_context *brw, const char *sysfs_dev_dir)
 
       /* Don't recreate already loaded configs. */
       if (read_file_uint64(config_path, &config_id)) {
+         DBG("metric set: %s (already loaded)\n", query->guid);
          register_oa_config(brw, query, config_id);
          continue;
       }
@@ -1888,7 +1877,7 @@ init_oa_configs(struct brw_context *brw, const char *sysfs_dev_dir)
       config.n_flex_regs = query->n_flex_regs;
       config.flex_regs_ptr = (uintptr_t) query->flex_regs;
 
-      ret = ioctl(screen->fd, DRM_IOCTL_I915_PERF_ADD_CONFIG, &config);
+      ret = drmIoctl(screen->fd, DRM_IOCTL_I915_PERF_ADD_CONFIG, &config);
       if (ret < 0) {
          DBG("Failed to load \"%s\" (%s) metrics set in kernel: %s\n",
              query->name, query->guid, strerror(errno));
@@ -1896,6 +1885,7 @@ init_oa_configs(struct brw_context *brw, const char *sysfs_dev_dir)
       }
 
       register_oa_config(brw, query, config_id);
+      DBG("metric set: %s (added)\n", query->guid);
    }
 }
 

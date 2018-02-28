@@ -41,7 +41,13 @@ option(
   'dri-drivers-path',
   type : 'string',
   value : '',
-  description : 'Location of dri drivers. Default: $libdir/dri.'
+  description : 'Location to install dri drivers. Default: $libdir/dri.'
+)
+option(
+  'dri-search-path',
+  type : 'string',
+  value : '',
+  description : 'Locations to search for dri drivers, passed as colon separated list. Default: dri-drivers-path.'
 )
 option(
   'gallium-drivers',
@@ -273,4 +279,10 @@ option(
   type : 'string',
   value : 'avx,avx2',
   description : 'Comma delemited swr architectures. choices : avx,avx2,knl,skx'
+)
+option(
+  'tools',
+  type : 'string',
+  value : '',
+  description : 'Comma delimited list of tools to build. choices : freedreno,glsl,intel,nir,nouveau or all'
 )

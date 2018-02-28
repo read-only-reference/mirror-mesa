@@ -285,7 +285,7 @@ handle_media_interface_descriptor_load(struct gen_batch_decode_ctx *ctx,
    for (int i = 0; i < descriptor_count; i++) {
       fprintf(ctx->fp, "descriptor %d: %08x\n", i, descriptor_offset);
 
-      ctx_print_group(ctx, inst, desc_addr, desc_map);
+      ctx_print_group(ctx, desc, desc_addr, desc_map);
 
       gen_field_iterator_init(&iter, desc, desc_map, 0, false);
       uint64_t ksp;
@@ -452,8 +452,8 @@ decode_single_ksp(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
       strcmp(inst->name,   "GS_STATE") == 0 ? "geometry shader" :
       strcmp(inst->name,   "SF_STATE") == 0 ? "strips and fans shader" :
       strcmp(inst->name, "CLIP_STATE") == 0 ? "clip shader" :
-      strcmp(inst->name, "3DSTATE_DS") == 0 ? "tessellation control shader" :
-      strcmp(inst->name, "3DSTATE_HS") == 0 ? "tessellation evaluation shader" :
+      strcmp(inst->name, "3DSTATE_DS") == 0 ? "tessellation evaluation shader" :
+      strcmp(inst->name, "3DSTATE_HS") == 0 ? "tessellation control shader" :
       strcmp(inst->name, "3DSTATE_VS") == 0 ? (is_simd8 ? "SIMD8 vertex shader" : "vec4 vertex shader") :
       strcmp(inst->name, "3DSTATE_GS") == 0 ? (is_simd8 ? "SIMD8 geometry shader" : "vec4 geometry shader") :
       NULL;

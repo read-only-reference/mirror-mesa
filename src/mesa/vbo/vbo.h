@@ -119,6 +119,44 @@ void
 vbo_save_EndCallList(struct gl_context *ctx);
 
 
+/**
+ * For indirect array drawing:
+ *
+ *    typedef struct {
+ *       GLuint count;
+ *       GLuint primCount;
+ *       GLuint first;
+ *       GLuint baseInstance; // in GL 4.2 and later, must be zero otherwise
+ *    } DrawArraysIndirectCommand;
+ *
+ * For indirect indexed drawing:
+ *
+ *    typedef struct {
+ *       GLuint count;
+ *       GLuint primCount;
+ *       GLuint firstIndex;
+ *       GLint  baseVertex;
+ *       GLuint baseInstance; // in GL 4.2 and later, must be zero otherwise
+ *    } DrawElementsIndirectCommand;
+ */
+
+
+/**
+ * Draw a number of primitives.
+ * \param prims  array [nr_prims] describing what to draw (prim type,
+ *               vertex count, first index, instance count, etc).
+ * \param ib  index buffer for indexed drawing, NULL for array drawing
+ * \param index_bounds_valid  are min_index and max_index valid?
+ * \param min_index  lowest vertex index used
+ * \param max_index  highest vertex index used
+ * \param tfb_vertcount  if non-null, indicates which transform feedback
+ *                       object has the vertex count.
+ * \param tfb_stream  If called via DrawTransformFeedbackStream, specifies the
+ *                    vertex stream buffer from which to get the vertex count.
+ * \param indirect  If any prims are indirect, this specifies the buffer
+ *                  to find the "DrawArrays/ElementsIndirectCommand" data.
+ *                  This may be deprecated in the future
+ */
 typedef void (*vbo_draw_func)(struct gl_context *ctx,
                               const struct _mesa_prim *prims,
                               GLuint nr_prims,
@@ -127,10 +165,26 @@ typedef void (*vbo_draw_func)(struct gl_context *ctx,
                               GLuint min_index,
                               GLuint max_index,
                               struct gl_transform_feedback_object *tfb_vertcount,
-                              unsigned stream,
+                              unsigned tfb_stream,
                               struct gl_buffer_object *indirect);
 
 
+/**
+ * Draw a primitive, getting the vertex count, instance count, start
+ * vertex, etc. from a buffer object.
+ * \param mode  GL_POINTS, GL_LINES, GL_TRIANGLE_STRIP, etc.
+ * \param indirect_data  buffer to get "DrawArrays/ElementsIndirectCommand" data
+ * \param indirect_offset  offset of first primitive in indrect_data buffer
+ * \param draw_count  number of primitives to draw
+ * \param stride  stride, in bytes, between "DrawArrays/ElementsIndirectCommand"
+ *                objects
+ * \param indirect_draw_count_buffer  if non-NULL specifies a buffer to get the
+ *                                    real draw_count value.  Used for
+ *                                    GL_ARB_indirect_parameters.
+ * \param indirect_draw_count_offset  offset to the draw_count value in
+ *                                    indirect_draw_count_buffer
+ * \param ib  index buffer for indexed drawing, NULL otherwise.
+ */
 typedef void (*vbo_indirect_draw_func)(
    struct gl_context *ctx,
    GLuint mode,
@@ -138,8 +192,8 @@ typedef void (*vbo_indirect_draw_func)(
    GLsizeiptr indirect_offset,
    unsigned draw_count,
    unsigned stride,
-   struct gl_buffer_object *indirect_params,
-   GLsizeiptr indirect_params_offset,
+   struct gl_buffer_object *indirect_draw_count_buffer,
+   GLsizeiptr indirect_draw_count_offset,
    const struct _mesa_index_buffer *ib);
 
 
@@ -173,17 +227,6 @@ vbo_split_prims(struct gl_context *ctx,
 
 
 void
-vbo_rebase_prims(struct gl_context *ctx,
-                 const struct gl_vertex_array *arrays[],
-                 const struct _mesa_prim *prim,
-                 GLuint nr_prims,
-                 const struct _mesa_index_buffer *ib,
-                 GLuint min_index,
-                 GLuint max_index,
-                 vbo_draw_func draw);
-
-
-void
 vbo_delete_minmax_cache(struct gl_buffer_object *bufferObj);
 
 void
@@ -210,6 +253,42 @@ vbo_sw_primitive_restart(struct gl_context *ctx,
                          GLuint nr_prims,
                          const struct _mesa_index_buffer *ib,
                          struct gl_buffer_object *indirect);
+
+
+/**
+ * Utility that tracks and updates the current array entries.
+ */
+struct vbo_inputs
+{
+   /**
+    * Array of inputs to be set to the _DrawArrays pointer.
+    * The array contains pointers into the _DrawVAO and to the vbo modules
+    * current values. The array of pointers is updated incrementally
+    * based on the current and vertex_processing_mode values below.
+    */
+   const struct gl_vertex_array *inputs[VERT_ATTRIB_MAX];
+   /** Those VERT_BIT_'s where the inputs array point to current values. */
+   GLbitfield current;
+   /** Store which aliasing current values - generics or materials - are set. */
+   gl_vertex_processing_mode vertex_processing_mode;
+};
+
+
+/**
+ * Initialize inputs.
+ */
+void
+_vbo_init_inputs(struct vbo_inputs *inputs);
+
+
+/**
+ * Update the gl_vertex_array array inside the vbo_inputs structure
+ * provided the current _VPMode, the provided vao and
+ * the vao's enabled arrays filtered by the filter bitmask.
+ */
+void
+_vbo_update_inputs(struct gl_context *ctx, struct vbo_inputs *inputs);
+
 
 void GLAPIENTRY
 _es_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);

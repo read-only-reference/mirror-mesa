@@ -36,6 +36,7 @@ libvulkan_util_la_SOURCES = $(VULKAN_UTIL_SOURCES)
 AM_CPPFLAGS = \
 	$(DEFINES) \
 	-I$(top_srcdir)/include \
+	-I$(top_srcdir)/include/drm-uapi \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/vulkan/util \
 	-I$(top_srcdir)/src/gallium/auxiliary \
@@ -57,7 +58,6 @@ AM_CPPFLAGS += \
 VULKAN_WSI_SOURCES += $(VULKAN_WSI_X11_FILES)
 endif
 
-BUILT_SOURCES += $(VULKAN_WSI_WAYLAND_GENERATED_FILES)
 CLEANFILES = $(BUILT_SOURCES)
 
 WL_DRM_XML = $(top_srcdir)/src/egl/wayland/wayland-drm/wayland-drm.xml
@@ -70,7 +70,21 @@ wsi/wayland-drm-client-protocol.h : $(WL_DRM_XML)
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(WAYLAND_SCANNER) client-header < $< > $@
 
+WL_DMABUF_XML = $(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml
+
+wsi/linux-dmabuf-unstable-v1-protocol.c : $(WL_DMABUF_XML)
+	$(MKDIR_GEN)
+	$(AM_V_GEN)$(WAYLAND_SCANNER) code < $< > $@
+
+wsi/linux-dmabuf-unstable-v1-client-protocol.h : $(WL_DMABUF_XML)
+	$(MKDIR_GEN)
+	$(AM_V_GEN)$(WAYLAND_SCANNER) client-header < $< > $@
+
 if HAVE_PLATFORM_WAYLAND
+wsi/linux-dmabuf-unstable-v1-protocol.lo: wsi/linux-dmabuf-unstable-v1-client-protocol.h
+wsi/wayland-drm-protocol.lo: wsi/wayland-drm-client-protocol.h
+wsi/wsi_common_wayland.lo: wsi/linux-dmabuf-unstable-v1-client-protocol.h wsi/wayland-drm-client-protocol.h
+
 AM_CPPFLAGS += \
 	-I$(top_builddir)/src/vulkan/wsi \
 	$(WAYLAND_CLIENT_CFLAGS) \

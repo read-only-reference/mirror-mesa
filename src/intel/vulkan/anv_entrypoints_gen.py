@@ -43,7 +43,8 @@ LAYERS = [
     'gen75',
     'gen8',
     'gen9',
-    'gen10'
+    'gen10',
+    'gen11',
 ]
 
 TEMPLATE_H = Template("""\
@@ -224,7 +225,7 @@ anv_entrypoint_is_enabled(int index, uint32_t core_version,
       return ${e.core_version.c_vk_version()} <= core_version;
    % elif e.extension:
       % if e.extension.type == 'instance':
-      return instance->${e.extension.name[3:]};
+      return !device && instance->${e.extension.name[3:]};
       % else:
       return !device || device->${e.extension.name[3:]};
       % endif
@@ -246,6 +247,9 @@ anv_resolve_entrypoint(const struct gen_device_info *devinfo, uint32_t index)
 
    const struct anv_dispatch_table *genX_table;
    switch (devinfo->gen) {
+   case 11:
+      genX_table = &gen11_dispatch_table;
+      break;
    case 10:
       genX_table = &gen10_dispatch_table;
       break;

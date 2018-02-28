@@ -117,8 +117,7 @@ static void si_destroy_context(struct pipe_context *context)
 
 	pipe_resource_reference(&sctx->esgs_ring, NULL);
 	pipe_resource_reference(&sctx->gsvs_ring, NULL);
-	pipe_resource_reference(&sctx->tf_ring, NULL);
-	pipe_resource_reference(&sctx->tess_offchip_ring, NULL);
+	pipe_resource_reference(&sctx->tess_rings, NULL);
 	pipe_resource_reference(&sctx->null_const_buf.buffer, NULL);
 	r600_resource_reference(&sctx->border_color_buffer, NULL);
 	free(sctx->border_color_table);
@@ -357,7 +356,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	if (sctx->b.chip_class == CIK) {
 		sctx->null_const_buf.buffer =
 			si_aligned_buffer_create(screen,
-						   R600_RESOURCE_FLAG_UNMAPPABLE,
+						 R600_RESOURCE_FLAG_32BIT,
 						   PIPE_USAGE_DEFAULT, 16,
 						   sctx->screen->info.tcc_cache_line_size);
 		if (!sctx->null_const_buf.buffer)
@@ -587,7 +586,7 @@ static void si_test_vmfault(struct si_screen *sscreen)
 	struct pipe_context *ctx = sscreen->aux_context;
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct pipe_resource *buf =
-		pipe_buffer_create(&sscreen->b, 0, PIPE_USAGE_DEFAULT, 64);
+		pipe_buffer_create_const0(&sscreen->b, 0, PIPE_USAGE_DEFAULT, 64);
 
 	if (!buf) {
 		puts("Buffer allocation failed.");
@@ -619,10 +618,6 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 	if (sscreen->debug_flags & DBG_ALL_SHADERS)
 		return;
 
-	/* TODO: remove this once gallium supports a nir cache */
-	if (sscreen->debug_flags & DBG(NIR))
-		return;
-
 	uint32_t mesa_timestamp;
 	if (disk_cache_get_function_timestamp(si_disk_cache_create,
 					      &mesa_timestamp)) {
@@ -638,11 +633,18 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 
 		if (res != -1) {
 			/* These flags affect shader compilation. */
-			uint64_t shader_debug_flags =
-				sscreen->debug_flags &
-				(DBG(FS_CORRECT_DERIVS_AFTER_KILL) |
-				 DBG(SI_SCHED) |
-				 DBG(UNSAFE_MATH));
+			#define ALL_FLAGS (DBG(FS_CORRECT_DERIVS_AFTER_KILL) | \
+					   DBG(SI_SCHED) | \
+					   DBG(UNSAFE_MATH) | \
+					   DBG(NIR))
+			uint64_t shader_debug_flags = sscreen->debug_flags &
+						      ALL_FLAGS;
+
+			/* Add the high bits of 32-bit addresses, which affects
+			 * how 32-bit addresses are expanded to 64 bits.
+			 */
+			STATIC_ASSERT(ALL_FLAGS <= UINT_MAX);
+			shader_debug_flags |= (uint64_t)sscreen->info.address32_hi << 32;
 
 			sscreen->disk_shader_cache =
 				disk_cache_create(si_get_family_name(sscreen),
@@ -746,11 +748,45 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	if (!debug_get_bool_option("RADEON_DISABLE_PERFCOUNTERS", false))
 		si_init_perfcounters(sscreen);
 
+	/* Determine tessellation ring info. */
+	bool double_offchip_buffers = sscreen->info.chip_class >= CIK &&
+				      sscreen->info.family != CHIP_CARRIZO &&
+				      sscreen->info.family != CHIP_STONEY;
+	/* This must be one less than the maximum number due to a hw limitation.
+	 * Various hardware bugs in SI, CIK, and GFX9 need this.
+	 */
+	unsigned max_offchip_buffers_per_se = double_offchip_buffers ? 127 : 63;
+	unsigned max_offchip_buffers = max_offchip_buffers_per_se *
+				       sscreen->info.max_se;
+	unsigned offchip_granularity;
+
 	/* Hawaii has a bug with offchip buffers > 256 that can be worked
 	 * around by setting 4K granularity.
 	 */
-	sscreen->tess_offchip_block_dw_size =
-		sscreen->info.family == CHIP_HAWAII ? 4096 : 8192;
+	if (sscreen->info.family == CHIP_HAWAII) {
+		sscreen->tess_offchip_block_dw_size = 4096;
+		offchip_granularity = V_03093C_X_4K_DWORDS;
+	} else {
+		sscreen->tess_offchip_block_dw_size = 8192;
+		offchip_granularity = V_03093C_X_8K_DWORDS;
+	}
+
+	sscreen->tess_factor_ring_size = 32768 * sscreen->info.max_se;
+	assert(((sscreen->tess_factor_ring_size / 4) & C_030938_SIZE) == 0);
+	sscreen->tess_offchip_ring_size = max_offchip_buffers *
+					  sscreen->tess_offchip_block_dw_size * 4;
+
+	if (sscreen->info.chip_class >= CIK) {
+		if (sscreen->info.chip_class >= VI)
+			--max_offchip_buffers;
+		sscreen->vgt_hs_offchip_param =
+			S_03093C_OFFCHIP_BUFFERING(max_offchip_buffers) |
+			S_03093C_OFFCHIP_GRANULARITY(offchip_granularity);
+	} else {
+		assert(offchip_granularity == V_03093C_X_8K_DWORDS);
+		sscreen->vgt_hs_offchip_param =
+			S_0089B0_OFFCHIP_BUFFERING(max_offchip_buffers);
+	}
 
 	/* The mere presense of CLEAR_STATE in the IB causes random GPU hangs
 	 * on SI. */

@@ -572,6 +572,8 @@ blorp_emit_vs_config(struct blorp_batch *batch,
                      const struct blorp_params *params)
 {
    struct brw_vs_prog_data *vs_prog_data = params->vs_prog_data;
+   assert(!vs_prog_data || GEN_GEN < 11 ||
+          vs_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8);
 
    blorp_emit(batch, GENX(3DSTATE_VS), vs) {
       if (vs_prog_data) {
@@ -738,11 +740,12 @@ blorp_emit_ps_config(struct blorp_batch *batch,
             params->wm_prog_kernel + prog_data->prog_offset_2;
       }
 
-      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
-       * it implicitly scales for different GT levels (which have some # of
-       * PSDs).
+      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64
+       * for pre Gen11 and 128 for gen11+; On gen11+ If a programmed value is
+       * k, it implies 2(k+1) threads. It implicitly scales for different GT
+       * levels (which have some # of PSDs).
        *
-       * In Gen8 the format is U8-2 whereas in Gen9 it is U8-1.
+       * In Gen8 the format is U8-2 whereas in Gen9+ it is U9-1.
        */
       if (GEN_GEN >= 9)
          ps.MaximumNumberofThreadsPerPSD = 64 - 1;
@@ -750,21 +753,21 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          ps.MaximumNumberofThreadsPerPSD = 64 - 2;
 
       switch (params->fast_clear_op) {
-      case BLORP_FAST_CLEAR_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
 #if GEN_GEN >= 9
-      case BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL:
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
          ps.RenderTargetResolveType = RESOLVE_PARTIAL;
          break;
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ps.RenderTargetResolveType = RESOLVE_FULL;
          break;
 #else
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ps.RenderTargetResolveEnable = true;
          break;
 #endif
-      case BLORP_FAST_CLEAR_OP_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          ps.RenderTargetFastClearEnable = true;
          break;
       default:
@@ -787,16 +790,16 @@ blorp_emit_ps_config(struct blorp_batch *batch,
 
    blorp_emit(batch, GENX(3DSTATE_WM), wm) {
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          wm.DepthBufferClear = true;
          break;
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          wm.DepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          wm.HierarchicalDepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
       default:
          unreachable("not reached");
@@ -852,12 +855,12 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          ps.SamplerCount = 1; /* Up to 4 samplers */
 
       switch (params->fast_clear_op) {
-      case BLORP_FAST_CLEAR_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ps.RenderTargetResolveEnable = true;
          break;
-      case BLORP_FAST_CLEAR_OP_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          ps.RenderTargetFastClearEnable = true;
          break;
       default:
@@ -872,16 +875,16 @@ blorp_emit_ps_config(struct blorp_batch *batch,
          batch->blorp->isl_dev->info->max_wm_threads - 1;
 
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          wm.DepthBufferClear = true;
          break;
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          wm.DepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          wm.HierarchicalDepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_NONE:
          break;
       default:
          unreachable("not reached");
@@ -1014,7 +1017,7 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
       ds.DepthBufferWriteEnable = true;
 
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_NONE:
          ds.DepthTestEnable = true;
          ds.DepthTestFunction = COMPAREFUNCTION_ALWAYS;
          break;
@@ -1024,15 +1027,17 @@ blorp_emit_depth_stencil_state(struct blorp_batch *batch,
        *   - 7.5.3.2 Depth Buffer Resolve
        *   - 7.5.3.3 Hierarchical Depth Buffer Resolve
        */
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          ds.DepthTestEnable = true;
          ds.DepthTestFunction = COMPAREFUNCTION_NEVER;
          break;
 
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_FAST_CLEAR:
+      case ISL_AUX_OP_AMBIGUATE:
          ds.DepthTestEnable = false;
          break;
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
+         unreachable("Invalid HIZ op");
       }
    }
 
@@ -1389,7 +1394,7 @@ blorp_emit_surface_states(struct blorp_batch *batch,
       }
    }
 
-#if GEN_GEN >= 7 && GEN_GEN <= 10
+#if GEN_GEN >= 7
    if (has_indirect_clear_color) {
       /* Updating a surface state object may require that the state cache be
        * invalidated. From the SKL PRM, Shared Functions -> State -> State
@@ -1522,7 +1527,7 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
     * requested.
     */
    if (params->stencil.enabled)
-      assert(params->hiz_op == BLORP_HIZ_OP_DEPTH_CLEAR);
+      assert(params->hiz_op == ISL_AUX_OP_FAST_CLEAR);
 
    /* From the BDW PRM Volume 2, 3DSTATE_WM_HZ_OP:
     *
@@ -1547,21 +1552,22 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
 
    blorp_emit(batch, GENX(3DSTATE_WM_HZ_OP), hzp) {
       switch (params->hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_CLEAR:
+      case ISL_AUX_OP_FAST_CLEAR:
          hzp.StencilBufferClearEnable = params->stencil.enabled;
          hzp.DepthBufferClearEnable = params->depth.enabled;
          hzp.StencilClearValue = params->stencil_ref;
          hzp.FullSurfaceDepthandStencilClear = params->full_surface_hiz_op;
          break;
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          assert(params->full_surface_hiz_op);
          hzp.DepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          assert(params->full_surface_hiz_op);
          hzp.HierarchicalDepthBufferResolveEnable = true;
          break;
-      case BLORP_HIZ_OP_NONE:
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
+      case ISL_AUX_OP_NONE:
          unreachable("Invalid HIZ op");
       }
 
@@ -1605,7 +1611,7 @@ static void
 blorp_exec(struct blorp_batch *batch, const struct blorp_params *params)
 {
 #if GEN_GEN >= 8
-   if (params->hiz_op != BLORP_HIZ_OP_NONE) {
+   if (params->hiz_op != ISL_AUX_OP_NONE) {
       blorp_emit_gen8_hiz_op(batch, params);
       return;
    }

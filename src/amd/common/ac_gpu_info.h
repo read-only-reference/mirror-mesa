@@ -57,6 +57,7 @@ struct radeon_info {
 	uint64_t                    vram_vis_size;
 	uint64_t                    max_alloc_size;
 	uint32_t                    min_alloc_size;
+	uint32_t                    address32_hi;
 	bool                        has_dedicated_vram;
 	bool                        has_virtual_memory;
 	bool                        gfx_ib_pad_with_type2;
@@ -65,6 +66,7 @@ struct radeon_info {
 	uint32_t                    num_compute_rings;
 	uint32_t                    uvd_fw_version;
 	uint32_t                    vce_fw_version;
+	bool                        uvd_enc_supported;
 	uint32_t                    me_fw_version;
 	uint32_t                    me_fw_feature;
 	uint32_t                    pfp_fw_version;

@@ -37,6 +37,7 @@
 #include "util/build_id.h"
 #include "util/mesa-sha1.h"
 #include "vk_util.h"
+#include "common/gen_defines.h"
 
 #include "genxml/gen7_pack.h"
 
@@ -294,10 +295,18 @@ anv_physical_device_init(struct anv_physical_device *device,
    assert(strlen(path) < ARRAY_SIZE(device->path));
    strncpy(device->path, path, ARRAY_SIZE(device->path));
 
-   device->chipset_id = anv_gem_get_param(fd, I915_PARAM_CHIPSET_ID);
-   if (!device->chipset_id) {
-      result = vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
-      goto fail;
+   device->no_hw = getenv("INTEL_NO_HW") != NULL;
+
+   const int pci_id_override = gen_get_pci_device_id_override();
+   if (pci_id_override < 0) {
+      device->chipset_id = anv_gem_get_param(fd, I915_PARAM_CHIPSET_ID);
+      if (!device->chipset_id) {
+         result = vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
+         goto fail;
+      }
+   } else {
+      device->chipset_id = pci_id_override;
+      device->no_hw = true;
    }
 
    device->name = gen_get_device_name(device->chipset_id);
@@ -312,11 +321,8 @@ anv_physical_device_init(struct anv_physical_device *device,
       intel_logw("Ivy Bridge Vulkan support is incomplete");
    } else if (device->info.gen == 7 && device->info.is_baytrail) {
       intel_logw("Bay Trail Vulkan support is incomplete");
-   } else if (device->info.gen >= 8 && device->info.gen <= 9) {
-      /* Broadwell, Cherryview, Skylake, Broxton, Kabylake, Coffelake is as
-       * fully supported as anything */
-   } else if (device->info.gen == 10) {
-      intel_logw("Cannonlake Vulkan support is alpha");
+   } else if (device->info.gen >= 8 && device->info.gen <= 10) {
+      /* Gen8-10 fully supported */
    } else {
       result = vk_errorf(device->instance, device,
                          VK_ERROR_INCOMPATIBLE_DRIVER,
@@ -368,6 +374,9 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->has_syncobj = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE_ARRAY);
    device->has_syncobj_wait = device->has_syncobj &&
                               anv_gem_supports_syncobj_wait(fd);
+
+   if (anv_gem_has_context_priority(fd))
+      device->has_context_priority = true;
 
    bool swizzled = anv_gem_get_bit6_swizzle(fd, I915_TILING_X);
 
@@ -1319,6 +1328,23 @@ anv_device_init_dispatch(struct anv_device *device)
    }
 }
 
+static int
+vk_priority_to_gen(int priority)
+{
+   switch (priority) {
+   case VK_QUEUE_GLOBAL_PRIORITY_LOW_EXT:
+      return GEN_CONTEXT_LOW_PRIORITY;
+   case VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT:
+      return GEN_CONTEXT_MEDIUM_PRIORITY;
+   case VK_QUEUE_GLOBAL_PRIORITY_HIGH_EXT:
+      return GEN_CONTEXT_HIGH_PRIORITY;
+   case VK_QUEUE_GLOBAL_PRIORITY_REALTIME_EXT:
+      return GEN_CONTEXT_REALTIME_PRIORITY;
+   default:
+      unreachable("Invalid priority");
+   }
+}
+
 VkResult anv_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -1331,7 +1357,7 @@ VkResult anv_CreateDevice(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
 
-   struct anv_device_extension_table enabled_extensions;
+   struct anv_device_extension_table enabled_extensions = { };
    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
       int idx;
       for (idx = 0; idx < ANV_DEVICE_EXTENSION_COUNT; idx++) {
@@ -1362,6 +1388,15 @@ VkResult anv_CreateDevice(
       }
    }
 
+   /* Check if client specified queue priority. */
+   const VkDeviceQueueGlobalPriorityCreateInfoEXT *queue_priority =
+      vk_find_struct_const(pCreateInfo->pQueueCreateInfos[0].pNext,
+                           DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_EXT);
+
+   VkQueueGlobalPriorityEXT priority =
+      queue_priority ? queue_priority->globalPriority :
+         VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT;
+
    device = vk_alloc2(&physical_device->instance->alloc, pAllocator,
                        sizeof(*device), 8,
                        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
@@ -1371,6 +1406,7 @@ VkResult anv_CreateDevice(
    device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
    device->instance = physical_device->instance;
    device->chipset_id = physical_device->chipset_id;
+   device->no_hw = physical_device->no_hw;
    device->lost = false;
 
    if (pAllocator)
@@ -1389,6 +1425,21 @@ VkResult anv_CreateDevice(
    if (device->context_id == -1) {
       result = vk_error(VK_ERROR_INITIALIZATION_FAILED);
       goto fail_fd;
+   }
+
+   /* As per spec, the driver implementation may deny requests to acquire
+    * a priority above the default priority (MEDIUM) if the caller does not
+    * have sufficient privileges. In this scenario VK_ERROR_NOT_PERMITTED_EXT
+    * is returned.
+    */
+   if (physical_device->has_context_priority) {
+      int err = anv_gem_set_context_param(device->fd, device->context_id,
+                                          I915_CONTEXT_PARAM_PRIORITY,
+                                          vk_priority_to_gen(priority));
+      if (err != 0 && priority > VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_EXT) {
+         result = vk_error(VK_ERROR_NOT_PERMITTED_EXT);
+         goto fail_fd;
+      }
    }
 
    device->info = physical_device->info;
@@ -1484,6 +1535,9 @@ VkResult anv_CreateDevice(
       break;
    case 10:
       result = gen10_init_device_state(device);
+      break;
+   case 11:
+      result = gen11_init_device_state(device);
       break;
    default:
       /* Shouldn't get here as we don't create physical devices for any other
@@ -1835,21 +1889,10 @@ VkResult anv_AllocateMemory(
       if (dedicated_info && dedicated_info->image != VK_NULL_HANDLE) {
          ANV_FROM_HANDLE(anv_image, image, dedicated_info->image);
 
-         /* For images using modifiers, we require a dedicated allocation
-          * and we set the BO tiling to match the tiling of the underlying
-          * modifier.  This is a bit unfortunate as this is completely
-          * pointless for Vulkan.  However, GL needs to be able to map things
-          * so it needs the tiling to be set.  The only way to do this in a
-          * non-racy way is to set the tiling in the creator of the BO so that
-          * makes it our job.
-          *
-          * One of these days, once the GL driver learns to not map things
-          * through the GTT in random places, we can drop this and start
-          * allowing multiple modified images in the same BO.
+         /* Some legacy (non-modifiers) consumers need the tiling to be set on
+          * the BO.  In this case, we have a dedicated allocation.
           */
-         if (image->drm_format_mod != DRM_FORMAT_MOD_INVALID) {
-            assert(isl_drm_modifier_get_info(image->drm_format_mod)->tiling ==
-                   image->planes[0].surface.isl.tiling);
+         if (image->needs_set_tiling) {
             const uint32_t i915_tiling =
                isl_tiling_to_i915_tiling(image->planes[0].surface.isl.tiling);
             int ret = anv_gem_set_tiling(device, mem->bo->gem_handle,
@@ -2217,8 +2260,9 @@ void anv_GetImageMemoryRequirements2KHR(
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS_KHR: {
          VkMemoryDedicatedRequirementsKHR *requirements = (void *)ext;
-         if (image->drm_format_mod != DRM_FORMAT_MOD_INVALID) {
-            /* Require a dedicated allocation for images with modifiers.
+         if (image->needs_set_tiling) {
+            /* If we need to set the tiling for external consumers, we need a
+             * dedicated allocation.
              *
              * See also anv_AllocateMemory.
              */

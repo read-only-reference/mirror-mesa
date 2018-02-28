@@ -280,6 +280,7 @@ static const struct brw_tracked_state genX(line_stipple) = {
    .emit = genX(upload_line_stipple),
 };
 
+#if GEN_GEN < 8
 /* Constant single cliprect for framebuffer object or DRI2 drawing */
 static void
 genX(upload_drawing_rect)(struct brw_context *brw)
@@ -303,6 +304,7 @@ static const struct brw_tracked_state genX(drawing_rect) = {
    },
    .emit = genX(upload_drawing_rect),
 };
+#endif
 
 static uint32_t *
 genX(emit_vertex_buffer_state)(struct brw_context *brw,
@@ -334,7 +336,9 @@ genX(emit_vertex_buffer_state)(struct brw_context *brw,
 #endif
 #endif
 
-#if GEN_GEN == 10
+#if GEN_GEN == 11
+      .VertexBufferMOCS = ICL_MOCS_WB,
+#elif GEN_GEN == 10
       .VertexBufferMOCS = CNL_MOCS_WB,
 #elif GEN_GEN == 9
       .VertexBufferMOCS = SKL_MOCS_WB,
@@ -365,7 +369,7 @@ is_passthru_format(uint32_t format)
 
 UNUSED static int
 uploads_needed(uint32_t format,
-	       bool is_dual_slot)
+               bool is_dual_slot)
 {
    if (!is_passthru_format(format))
       return 1;
@@ -409,14 +413,14 @@ downsize_format_if_needed(uint32_t format,
     */
    switch (format) {
    case ISL_FORMAT_R64_PASSTHRU:
-      return !upload ? ISL_FORMAT_R32G32_FLOAT
-                     : ISL_FORMAT_R32_FLOAT;
+      return upload == 0 ? ISL_FORMAT_R32G32_FLOAT
+                         : ISL_FORMAT_R32_FLOAT;
    case ISL_FORMAT_R64G64_PASSTHRU:
-      return !upload ? ISL_FORMAT_R32G32B32A32_FLOAT
-                     : ISL_FORMAT_R32_FLOAT;
+      return upload == 0 ? ISL_FORMAT_R32G32B32A32_FLOAT
+                         : ISL_FORMAT_R32_FLOAT;
    case ISL_FORMAT_R64G64B64_PASSTHRU:
-      return !upload ? ISL_FORMAT_R32G32B32A32_FLOAT
-                     : ISL_FORMAT_R32G32_FLOAT;
+      return upload == 0 ? ISL_FORMAT_R32G32B32A32_FLOAT
+                         : ISL_FORMAT_R32G32_FLOAT;
    case ISL_FORMAT_R64G64B64A64_PASSTHRU:
       return ISL_FORMAT_R32G32B32A32_FLOAT;
    default:
@@ -507,26 +511,13 @@ genX(emit_vertices)(struct brw_context *brw)
    } else {
       brw_batch_emit(brw, GENX(3DSTATE_VF_SGVS), vfs);
    }
+#endif
 
-   /* Normally we don't need an element for the SGVS attribute because the
-    * 3DSTATE_VF_SGVS instruction lets you store the generated attribute in an
-    * element that is past the list in 3DSTATE_VERTEX_ELEMENTS. However if
-    * we're using draw parameters then we need an element for the those
-    * values.  Additionally if there is an edge flag element then the SGVS
-    * can't be inserted past that so we need a dummy element to ensure that
-    * the edge flag is the last one.
-    */
-   const bool needs_sgvs_element = (vs_prog_data->uses_basevertex ||
-                                    vs_prog_data->uses_baseinstance ||
-                                    ((vs_prog_data->uses_instanceid ||
-                                      vs_prog_data->uses_vertexid)
-                                     && uses_edge_flag));
-#else
    const bool needs_sgvs_element = (vs_prog_data->uses_basevertex ||
                                     vs_prog_data->uses_baseinstance ||
                                     vs_prog_data->uses_instanceid ||
                                     vs_prog_data->uses_vertexid);
-#endif
+
    unsigned nr_elements =
       brw->vb.nr_enabled + needs_sgvs_element + vs_prog_data->uses_drawid;
 
@@ -635,7 +626,7 @@ genX(emit_vertices)(struct brw_context *brw)
       uint32_t comp2 = VFCOMP_STORE_SRC;
       uint32_t comp3 = VFCOMP_STORE_SRC;
       const unsigned num_uploads = GEN_GEN < 8 ?
-	 uploads_needed(format, input->is_dual_slot) : 1;
+         uploads_needed(format, input->is_dual_slot) : 1;
 
 #if GEN_GEN >= 8
       /* From the BDW PRM, Volume 2d, page 588 (VERTEX_ELEMENT_STATE):
@@ -1751,10 +1742,7 @@ brw_color_buffer_write_enabled(struct brw_context *brw)
       /* _NEW_COLOR */
       if (rb && (outputs_written & BITFIELD64_BIT(FRAG_RESULT_COLOR) ||
                  outputs_written & BITFIELD64_BIT(FRAG_RESULT_DATA0 + i)) &&
-          (ctx->Color.ColorMask[i][0] ||
-           ctx->Color.ColorMask[i][1] ||
-           ctx->Color.ColorMask[i][2] ||
-           ctx->Color.ColorMask[i][3])) {
+          GET_COLORMASK(ctx->Color.ColorMask, i)) {
          return true;
       }
    }
@@ -2064,6 +2052,8 @@ genX(upload_vs_state)(struct brw_context *brw)
 
    assert(vue_prog_data->dispatch_mode == DISPATCH_MODE_SIMD8 ||
           vue_prog_data->dispatch_mode == DISPATCH_MODE_4X2_DUAL_OBJECT);
+   assert(GEN_GEN < 11 ||
+          vue_prog_data->dispatch_mode == DISPATCH_MODE_SIMD8);
 
 #if GEN_GEN == 6
    /* From the BSpec, 3D Pipeline > Geometry > Vertex Shader > State,
@@ -2481,24 +2471,28 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
 #elif GEN_GEN >= 8
       /* _NEW_VIEWPORT | _NEW_BUFFERS: Screen Space Viewport
        * The hardware will take the intersection of the drawing rectangle,
-       * scissor rectangle, and the viewport extents. We don't need to be
-       * smart, and can therefore just program the viewport extents.
+       * scissor rectangle, and the viewport extents.  However, emitting
+       * 3DSTATE_DRAWING_RECTANGLE is expensive since it requires a full
+       * pipeline stall so we're better off just being a little more clever
+       * with our viewport so we can emit it once at context creation time.
        */
+      const float viewport_Xmin = MAX2(ctx->ViewportArray[i].X, 0);
+      const float viewport_Ymin = MAX2(ctx->ViewportArray[i].Y, 0);
       const float viewport_Xmax =
-         ctx->ViewportArray[i].X + ctx->ViewportArray[i].Width;
+         MIN2(ctx->ViewportArray[i].X + ctx->ViewportArray[i].Width, fb_width);
       const float viewport_Ymax =
-         ctx->ViewportArray[i].Y + ctx->ViewportArray[i].Height;
+         MIN2(ctx->ViewportArray[i].Y + ctx->ViewportArray[i].Height, fb_height);
 
       if (render_to_fbo) {
-         sfv.XMinViewPort = ctx->ViewportArray[i].X;
+         sfv.XMinViewPort = viewport_Xmin;
          sfv.XMaxViewPort = viewport_Xmax - 1;
-         sfv.YMinViewPort = ctx->ViewportArray[i].Y;
+         sfv.YMinViewPort = viewport_Ymin;
          sfv.YMaxViewPort = viewport_Ymax - 1;
       } else {
-         sfv.XMinViewPort = ctx->ViewportArray[i].X;
+         sfv.XMinViewPort = viewport_Xmin;
          sfv.XMaxViewPort = viewport_Xmax - 1;
          sfv.YMinViewPort = fb_height - viewport_Ymax;
-         sfv.YMaxViewPort = fb_height - ctx->ViewportArray[i].Y - 1;
+         sfv.YMaxViewPort = fb_height - viewport_Ymin - 1;
       }
 #endif
 
@@ -2993,10 +2987,10 @@ genX(upload_blend_state)(struct brw_context *brw)
          entry.PostBlendColorClampEnable = true;
          entry.ColorClampRange = COLORCLAMP_RTFORMAT;
 
-         entry.WriteDisableRed   = !ctx->Color.ColorMask[i][0];
-         entry.WriteDisableGreen = !ctx->Color.ColorMask[i][1];
-         entry.WriteDisableBlue  = !ctx->Color.ColorMask[i][2];
-         entry.WriteDisableAlpha = !ctx->Color.ColorMask[i][3];
+         entry.WriteDisableRed   = !GET_COLORMASK_BIT(ctx->Color.ColorMask, i, 0);
+         entry.WriteDisableGreen = !GET_COLORMASK_BIT(ctx->Color.ColorMask, i, 1);
+         entry.WriteDisableBlue  = !GET_COLORMASK_BIT(ctx->Color.ColorMask, i, 2);
+         entry.WriteDisableAlpha = !GET_COLORMASK_BIT(ctx->Color.ColorMask, i, 3);
 
 #if GEN_GEN >= 8
          GENX(BLEND_STATE_ENTRY_pack)(NULL, &blend_map[1 + i * 2], &entry);
@@ -3831,11 +3825,12 @@ genX(upload_ps)(struct brw_context *brw)
       ps.SampleMask = genX(determine_sample_mask(brw));
 #endif
 
-      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
-       * it implicitly scales for different GT levels (which have some # of
-       * PSDs).
+      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64
+       * for pre Gen11 and 128 for gen11+; On gen11+ If a programmed value is
+       * k, it implies 2(k+1) threads. It implicitly scales for different GT
+       * levels (which have some # of PSDs).
        *
-       * In Gen8 the format is U8-2 whereas in Gen9 it is U8-1.
+       * In Gen8 the format is U8-2 whereas in Gen9+ it is U9-1.
        */
 #if GEN_GEN >= 9
       ps.MaximumNumberofThreadsPerPSD = 64 - 1;
@@ -3980,6 +3975,9 @@ genX(upload_ds_state)(struct brw_context *brw)
    if (!tes_prog_data) {
       brw_batch_emit(brw, GENX(3DSTATE_DS), ds);
    } else {
+      assert(GEN_GEN < 11 ||
+             vue_prog_data->dispatch_mode == DISPATCH_MODE_SIMD8);
+
       brw_batch_emit(brw, GENX(3DSTATE_DS), ds) {
          INIT_THREAD_DISPATCH_FIELDS(ds, Patch);
 
@@ -4236,8 +4234,10 @@ genX(upload_cs_state)(struct brw_context *brw)
       const uint32_t subslices = MAX2(brw->screen->subslice_total, 1);
       vfe.MaximumNumberofThreads = devinfo->max_cs_threads * subslices - 1;
       vfe.NumberofURBEntries = GEN_GEN >= 8 ? 2 : 0;
+#if GEN_GEN < 11
       vfe.ResetGatewayTimer =
          Resettingrelativetimerandlatchingtheglobaltimestamp;
+#endif
 #if GEN_GEN < 9
       vfe.BypassGatewayControl = BypassingOpenGatewayCloseGatewayprotocol;
 #endif
@@ -5657,8 +5657,6 @@ genX(init_atoms)(struct brw_context *brw)
       &genX(polygon_stipple_offset),
 
       &genX(line_stipple),
-
-      &genX(drawing_rect),
 
       &genX(vf_topology),
 

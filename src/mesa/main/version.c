@@ -580,11 +580,11 @@ _mesa_get_version(const struct gl_extensions *extensions,
 {
    switch (api) {
    case API_OPENGL_COMPAT:
-      /* Disable GLSL 1.40 and later for legacy contexts.
-       * This disallows creation of the GL 3.1 compatibility context. */
+      /* Disable higher GLSL versions for legacy contexts.
+       * This disallows creation of higher compatibility contexts. */
       if (!consts->AllowHigherCompatVersion) {
-         if (consts->GLSLVersion > 130) {
-            consts->GLSLVersion = 130;
+         if (consts->GLSLVersion > 140) {
+            consts->GLSLVersion = 140;
          }
       }
       /* fall through */
@@ -607,7 +607,7 @@ void
 _mesa_compute_version(struct gl_context *ctx)
 {
    if (ctx->Version)
-      return;
+      goto done;
 
    ctx->Version = _mesa_get_version(&ctx->Extensions, &ctx->Const, ctx->API);
    ctx->Extensions.Version = ctx->Version;
@@ -615,7 +615,7 @@ _mesa_compute_version(struct gl_context *ctx)
    /* Make sure that the GLSL version lines up with the GL version. In some
     * cases it can be too high, e.g. if an extension is missing.
     */
-   if (ctx->API == API_OPENGL_CORE) {
+   if (_mesa_is_desktop_gl(ctx) && ctx->Version >= 31) {
       switch (ctx->Version) {
       case 31:
          ctx->Const.GLSLVersion = 140;
@@ -651,6 +651,10 @@ _mesa_compute_version(struct gl_context *ctx)
       create_version_string(ctx, "OpenGL ES ");
       break;
    }
+
+done:
+   if (ctx->API == API_OPENGL_COMPAT && ctx->Version >= 31)
+      ctx->Extensions.ARB_compatibility = GL_TRUE;
 }
 
 
@@ -664,4 +668,68 @@ void
 _mesa_get_device_uuid(struct gl_context *ctx, GLint *uuid)
 {
    ctx->Driver.GetDeviceUuid(ctx, (char*) uuid);
+}
+
+/**
+ * Get the i-th GLSL version string.  If index=0, return the most recent
+ * supported version.
+ * \param ctx context to query
+ * \param index  which version string to return, or -1 if none
+ * \param versionOut returns the vesrion string
+ * \return total number of shading language versions.
+ */
+int
+_mesa_get_shading_language_version(const struct gl_context *ctx,
+                                   int index,
+                                   char **versionOut)
+{
+   int n = 0;
+
+#define GLSL_VERSION(S) \
+   if (n++ == index) \
+      *versionOut = S
+
+   /* GLSL core */
+   if (ctx->Const.GLSLVersion >= 460)
+      GLSL_VERSION("460");
+   if (ctx->Const.GLSLVersion >= 450)
+      GLSL_VERSION("450");
+   if (ctx->Const.GLSLVersion >= 440)
+      GLSL_VERSION("440");
+   if (ctx->Const.GLSLVersion >= 430)
+      GLSL_VERSION("430");
+   if (ctx->Const.GLSLVersion >= 420)
+      GLSL_VERSION("420");
+   if (ctx->Const.GLSLVersion >= 410)
+      GLSL_VERSION("410");
+   if (ctx->Const.GLSLVersion >= 400)
+      GLSL_VERSION("400");
+   if (ctx->Const.GLSLVersion >= 330)
+      GLSL_VERSION("330");
+   if (ctx->Const.GLSLVersion >= 150)
+      GLSL_VERSION("150");
+   if (ctx->Const.GLSLVersion >= 140)
+      GLSL_VERSION("140");
+   if (ctx->Const.GLSLVersion >= 130)
+      GLSL_VERSION("130");
+   if (ctx->Const.GLSLVersion >= 120)
+      GLSL_VERSION("120");
+   /* The GL spec says to return the empty string for GLSL 1.10 */
+   if (ctx->Const.GLSLVersion >= 110)
+      GLSL_VERSION("");
+
+   /* GLSL es */
+   if ((ctx->API == API_OPENGLES2 && ctx->Version >= 32) ||
+        ctx->Extensions.ARB_ES3_2_compatibility)
+      GLSL_VERSION("320 es");
+   if (_mesa_is_gles31(ctx) || ctx->Extensions.ARB_ES3_1_compatibility)
+      GLSL_VERSION("310 es");
+   if (_mesa_is_gles3(ctx) || ctx->Extensions.ARB_ES3_compatibility)
+      GLSL_VERSION("300 es");
+   if (ctx->API == API_OPENGLES2 || ctx->Extensions.ARB_ES2_compatibility)
+      GLSL_VERSION("100");
+
+#undef GLSL_VERSION
+
+   return n;
 }

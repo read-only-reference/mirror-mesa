@@ -38,6 +38,10 @@
 #define AMDGPU_GEM_CREATE_VM_ALWAYS_VALID (1 << 6)
 #endif
 
+#ifndef AMDGPU_VA_RANGE_HIGH
+#define AMDGPU_VA_RANGE_HIGH	0x2
+#endif
+
 /* Set to 1 for verbose output showing committed sparse buffer ranges. */
 #define DEBUG_SPARSE_COMMITS 0
 
@@ -437,7 +441,9 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    if (size > ws->info.pte_fragment_size)
 	   alignment = MAX2(alignment, ws->info.pte_fragment_size);
    r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-                             size + va_gap_size, alignment, 0, &va, &va_handle, 0);
+                             size + va_gap_size, alignment, 0, &va, &va_handle,
+                             (flags & RADEON_FLAG_32BIT ? AMDGPU_VA_RANGE_32_BIT : 0) |
+			     AMDGPU_VA_RANGE_HIGH);
    if (r)
       goto error_va_alloc;
 
@@ -895,7 +901,8 @@ amdgpu_bo_sparse_create(struct amdgpu_winsys *ws, uint64_t size,
    va_gap_size = ws->check_vm ? 4 * RADEON_SPARSE_PAGE_SIZE : 0;
    r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
                              map_size + va_gap_size, RADEON_SPARSE_PAGE_SIZE,
-                             0, &bo->va, &bo->u.sparse.va_handle, 0);
+                             0, &bo->va, &bo->u.sparse.va_handle,
+			     AMDGPU_VA_RANGE_HIGH);
    if (r)
       goto error_va_alloc;
 
@@ -1289,7 +1296,8 @@ static struct pb_buffer *amdgpu_bo_from_handle(struct radeon_winsys *rws,
       goto error_query;
 
    r = amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-                             result.alloc_size, 1 << 20, 0, &va, &va_handle, 0);
+                             result.alloc_size, 1 << 20, 0, &va, &va_handle,
+			     AMDGPU_VA_RANGE_HIGH);
    if (r)
       goto error_query;
 
@@ -1388,19 +1396,23 @@ static struct pb_buffer *amdgpu_bo_from_ptr(struct radeon_winsys *rws,
     struct amdgpu_winsys_bo *bo;
     uint64_t va;
     amdgpu_va_handle va_handle;
+    /* Avoid failure when the size is not page aligned */
+    uint64_t aligned_size = align64(size, ws->info.gart_page_size);
 
     bo = CALLOC_STRUCT(amdgpu_winsys_bo);
     if (!bo)
         return NULL;
 
-    if (amdgpu_create_bo_from_user_mem(ws->dev, pointer, size, &buf_handle))
+    if (amdgpu_create_bo_from_user_mem(ws->dev, pointer,
+                                       aligned_size, &buf_handle))
         goto error;
 
     if (amdgpu_va_range_alloc(ws->dev, amdgpu_gpu_va_range_general,
-                              size, 1 << 12, 0, &va, &va_handle, 0))
+                              aligned_size, 1 << 12, 0, &va, &va_handle,
+			      AMDGPU_VA_RANGE_HIGH))
         goto error_va_alloc;
 
-    if (amdgpu_bo_va_op(buf_handle, 0, size, va, 0, AMDGPU_VA_OP_MAP))
+    if (amdgpu_bo_va_op(buf_handle, 0, aligned_size, va, 0, AMDGPU_VA_OP_MAP))
         goto error_va_map;
 
     /* Initialize it. */
@@ -1416,7 +1428,7 @@ static struct pb_buffer *amdgpu_bo_from_ptr(struct radeon_winsys *rws,
     bo->initial_domain = RADEON_DOMAIN_GTT;
     bo->unique_id = __sync_fetch_and_add(&ws->next_bo_unique_id, 1);
 
-    ws->allocated_gtt += align64(bo->base.size, ws->info.gart_page_size);
+    ws->allocated_gtt += aligned_size;
 
     amdgpu_add_buffer_to_global_list(bo);
 

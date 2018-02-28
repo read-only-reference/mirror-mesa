@@ -1,4 +1,5 @@
 # Copyright © 2017 Dylan Baker
+# Copyright © 2018 Intel Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -29,7 +30,6 @@ gallium_dri_c_args = [
   '-DGALLIUME_TRACE',
 ]
 gallium_dri_ld_args = []
-gallium_dri_link_with = []
 gallium_dri_link_depends = []
 gallium_dri_drivers = []
 
@@ -42,16 +42,9 @@ if with_ld_dynamic_list
   gallium_dri_link_depends += files('../dri-vdpau.dyn')
 endif
 
-if with_dri
-  gallium_dri_link_with += libswdri
-endif
-if with_gallium_drisw_kms
-  gallium_dri_link_with += libswkmsdri
-endif
-
 libgallium_dri = shared_library(
   'gallium_dri',
-  files('target.c'),
+  [files('target.c'), xmlpool_options_h],
   include_directories : [
     inc_common, inc_util, inc_dri_common, inc_gallium_drivers,
     inc_gallium_winsys, include_directories('../../state_trackers/dri'),
@@ -63,7 +56,7 @@ libgallium_dri = shared_library(
   link_with : [
     libmesa_gallium, libdricommon, libmegadriver_stub, libdri, libgalliumvl,
     libgallium, libddebug, libnoop, librbug, libtrace, libglapi,
-    libpipe_loader_static, libws_null, libwsw,  gallium_dri_link_with,
+    libpipe_loader_static, libws_null, libwsw, libswdri, libswkmsdri,
   ],
   dependencies : [
     dep_selinux, dep_expat, dep_libdrm, dep_llvm, dep_thread,

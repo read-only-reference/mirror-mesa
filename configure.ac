@@ -74,7 +74,7 @@ AC_SUBST([OPENCL_VERSION])
 # in the first entry.
 LIBDRM_REQUIRED=2.4.75
 LIBDRM_RADEON_REQUIRED=2.4.71
-LIBDRM_AMDGPU_REQUIRED=2.4.89
+LIBDRM_AMDGPU_REQUIRED=2.4.90
 LIBDRM_INTEL_REQUIRED=2.4.75
 LIBDRM_NVVIEUX_REQUIRED=2.4.66
 LIBDRM_NOUVEAU_REQUIRED=2.4.66
@@ -103,9 +103,9 @@ dnl LLVM versions
 LLVM_REQUIRED_GALLIUM=3.3.0
 LLVM_REQUIRED_OPENCL=3.9.0
 LLVM_REQUIRED_R600=3.9.0
-LLVM_REQUIRED_RADEONSI=3.9.0
-LLVM_REQUIRED_RADV=3.9.0
-LLVM_REQUIRED_SWR=3.9.0
+LLVM_REQUIRED_RADEONSI=4.0.0
+LLVM_REQUIRED_RADV=4.0.0
+LLVM_REQUIRED_SWR=4.0.0
 
 dnl Check for progs
 AC_PROG_CPP
@@ -116,6 +116,7 @@ dnl other CC/CXX flags related help
 AC_ARG_VAR([CXX11_CXXFLAGS], [Compiler flag to enable C++11 support (only needed if not
                               enabled by default and different  from -std=c++11)])
 AM_PROG_CC_C_O
+AC_PROG_NM
 AM_PROG_AS
 AX_CHECK_GNU_MAKE
 AC_CHECK_PROGS([PYTHON2], [python2.7 python2 python])
@@ -686,6 +687,19 @@ LDFLAGS=$save_LDFLAGS
 AM_CONDITIONAL(HAVE_LD_DYNAMIC_LIST, test "$have_ld_dynamic_list" = "yes")
 
 dnl
+dnl OSX linker does not support build-id
+dnl
+case "$host_os" in
+darwin*)
+    LD_BUILD_ID=""
+    ;;
+*)
+    LD_BUILD_ID="-Wl,--build-id=sha1"
+    ;;
+esac
+AC_SUBST([LD_BUILD_ID])
+
+dnl
 dnl compatibility symlinks
 dnl
 case "$host_os" in
@@ -926,10 +940,10 @@ dnl In practise that should be sufficient for all platforms, since any
 dnl platforms build with GCC and Clang support the flag.
 PTHREAD_LIBS="$PTHREAD_LIBS -pthread"
 
-dnl pthread-stubs is mandatory on BSD platforms, due to the nature of the
+dnl pthread-stubs is mandatory on some BSD platforms, due to the nature of the
 dnl project. Even then there's a notable issue as described in the project README
 case "$host_os" in
-linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu*)
+linux* | cygwin* | darwin* | solaris* | *-gnu* | gnu* | openbsd*)
     pthread_stubs_possible="no"
     ;;
 * )
@@ -1270,10 +1284,10 @@ AC_ARG_ENABLE([xa],
     [enable_xa=no])
 AC_ARG_ENABLE([gbm],
    [AS_HELP_STRING([--enable-gbm],
-         [enable gbm library @<:@default=yes except cygwin@:>@])],
+         [enable gbm library @<:@default=yes except cygwin and macOS@:>@])],
    [enable_gbm="$enableval"],
    [case "$host_os" in
-       cygwin*)
+       cygwin* | darwin*)
           enable_gbm=no
           ;;
        *)
@@ -1757,19 +1771,6 @@ if test "x$with_platforms" = xauto; then
     with_platforms=$with_egl_platforms
 fi
 
-PKG_CHECK_MODULES([WAYLAND_SCANNER], [wayland-scanner],
-        WAYLAND_SCANNER=`$PKG_CONFIG --variable=wayland_scanner wayland-scanner`,
-        WAYLAND_SCANNER='')
-if test "x$WAYLAND_SCANNER" = x; then
-    AC_PATH_PROG([WAYLAND_SCANNER], [wayland-scanner], [:])
-fi
-
-PKG_CHECK_EXISTS([wayland-protocols >= $WAYLAND_PROTOCOLS_REQUIRED], [have_wayland_protocols=yes], [have_wayland_protocols=no])
-if test "x$have_wayland_protocols" = xyes; then
-    ac_wayland_protocols_pkgdatadir=`$PKG_CONFIG --variable=pkgdatadir wayland-protocols`
-fi
-AC_SUBST(WAYLAND_PROTOCOLS_DATADIR, $ac_wayland_protocols_pkgdatadir)
-
 # Do per platform setups and checks
 platforms=`IFS=', '; echo $with_platforms`
 for plat in $platforms; do
@@ -1778,12 +1779,18 @@ for plat in $platforms; do
 
         PKG_CHECK_MODULES([WAYLAND_CLIENT], [wayland-client >= $WAYLAND_REQUIRED])
         PKG_CHECK_MODULES([WAYLAND_SERVER], [wayland-server >= $WAYLAND_REQUIRED])
+        PKG_CHECK_MODULES([WAYLAND_PROTOCOLS], [wayland-protocols >= $WAYLAND_PROTOCOLS_REQUIRED])
+        WAYLAND_PROTOCOLS_DATADIR=`$PKG_CONFIG --variable=pkgdatadir wayland-protocols`
+
+        PKG_CHECK_MODULES([WAYLAND_SCANNER], [wayland-scanner],
+                          WAYLAND_SCANNER=`$PKG_CONFIG --variable=wayland_scanner wayland-scanner`,
+                          WAYLAND_SCANNER='')
+        if test "x$WAYLAND_SCANNER" = x; then
+            AC_PATH_PROG([WAYLAND_SCANNER], [wayland-scanner], [:])
+        fi
 
         if test "x$WAYLAND_SCANNER" = "x:"; then
                 AC_MSG_ERROR([wayland-scanner is needed to compile the wayland platform])
-        fi
-        if test "x$have_wayland_protocols" = xno; then
-                AC_MSG_ERROR([wayland-protocols >= $WAYLAND_PROTOCOLS_REQUIRED is needed to compile the wayland platform])
         fi
         DEFINES="$DEFINES -DHAVE_WAYLAND_PLATFORM -DWL_HIDE_DEPRECATED"
         ;;
@@ -1819,6 +1826,7 @@ for plat in $platforms; do
         ;;
     esac
 done
+AC_SUBST([WAYLAND_PROTOCOLS_DATADIR])
 
 if test "x$enable_glx" != xno; then
     if ! echo "$platforms" | grep -q 'x11'; then
@@ -2682,8 +2690,8 @@ if test -n "$with_gallium_drivers"; then
 fi
 
 # XXX: Keep in sync with LLVM_REQUIRED_SWR
-AM_CONDITIONAL(SWR_INVALID_LLVM_VERSION, test "x$LLVM_VERSION" != x3.9.0 -a \
-                                              "x$LLVM_VERSION" != x3.9.1)
+AM_CONDITIONAL(SWR_INVALID_LLVM_VERSION, test "x$LLVM_VERSION" != x4.0.0 -a \
+                                              "x$LLVM_VERSION" != x4.0.1)
 
 if test "x$enable_llvm" = "xyes" -a "$with_gallium_drivers"; then
     llvm_require_version $LLVM_REQUIRED_GALLIUM "gallium"

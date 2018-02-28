@@ -267,7 +267,6 @@ struct pipe_shader_state
    /* TODO move tokens into union. */
    const struct tgsi_token *tokens;
    union {
-      void *llvm;
       void *native;
       void *nir;
    } ir;
@@ -782,8 +781,9 @@ struct pipe_blit_info
 struct pipe_grid_info
 {
    /**
-    * For drivers that use PIPE_SHADER_IR_LLVM as their prefered IR, this value
-    * will be the index of the kernel in the opencl.kernels metadata list.
+    * For drivers that use PIPE_SHADER_IR_NATIVE as their prefered IR, this
+    * value will be the index of the kernel in the opencl.kernels metadata
+    * list.
     */
    uint32_t pc;
 

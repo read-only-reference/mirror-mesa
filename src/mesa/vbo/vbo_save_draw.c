@@ -26,6 +26,8 @@
  *    Keith Whitwell <keithw@vmware.com>
  */
 
+#include <stdbool.h>
+#include "main/arrayobj.h"
 #include "main/glheader.h"
 #include "main/bufferobj.h"
 #include "main/context.h"
@@ -127,109 +129,14 @@ playback_copy_to_current(struct gl_context *ctx,
 
 
 /**
- * Treat the vertex storage as a VBO, define vertex arrays pointing
- * into it:
+ * Set the appropriate VAO to draw.
  */
 static void
 bind_vertex_list(struct gl_context *ctx,
                  const struct vbo_save_vertex_list *node)
 {
-   struct vbo_context *vbo = vbo_context(ctx);
-   struct vbo_save_context *save = &vbo->save;
-   struct gl_vertex_array *arrays = save->arrays;
-   GLuint buffer_offset = node->buffer_offset;
-   const GLubyte *map;
-   GLuint attr;
-   GLubyte node_attrsz[VBO_ATTRIB_MAX];  /* copy of node->attrsz[] */
-   GLenum16 node_attrtype[VBO_ATTRIB_MAX];  /* copy of node->attrtype[] */
-   GLbitfield varying_inputs = 0x0;
-
-   STATIC_ASSERT(sizeof(node_attrsz) == sizeof(node->attrsz));
-   memcpy(node_attrsz, node->attrsz, sizeof(node->attrsz));
-   STATIC_ASSERT(sizeof(node_attrtype) == sizeof(node->attrtype));
-   memcpy(node_attrtype, node->attrtype, sizeof(node->attrtype));
-
-   if (aligned_vertex_buffer_offset(node)) {
-      /* The vertex size is an exact multiple of the buffer offset.
-       * This means that we can use zero-based vertex attribute pointers
-       * and specify the start of the primitive with the _mesa_prim::start
-       * field.  This results in issuing several draw calls with identical
-       * vertex attribute information.  This can result in fewer state
-       * changes in drivers.  In particular, the Gallium CSO module will
-       * filter out redundant vertex buffer changes.
-       */
-      buffer_offset = 0;
-   }
-
-   /* Install the default (ie Current) attributes first */
-   for (attr = 0; attr < VERT_ATTRIB_FF_MAX; attr++) {
-      save->inputs[attr] = &vbo->currval[VBO_ATTRIB_POS + attr];
-   }
-
-   /* Overlay other active attributes */
-   switch (get_vp_mode(ctx)) {
-   case VP_FF:
-      /* Point the generic attributes at the legacy material values */
-      for (attr = 0; attr < MAT_ATTRIB_MAX; attr++) {
-         save->inputs[VERT_ATTRIB_GENERIC(attr)] =
-            &vbo->currval[VBO_ATTRIB_MAT_FRONT_AMBIENT+attr];
-      }
-      map = vbo->map_vp_none;
-      break;
-   case VP_SHADER:
-      for (attr = 0; attr < VERT_ATTRIB_GENERIC_MAX; attr++) {
-         save->inputs[VERT_ATTRIB_GENERIC(attr)] =
-            &vbo->currval[VBO_ATTRIB_GENERIC0+attr];
-      }
-      map = vbo->map_vp_arb;
-
-      /* check if VERT_ATTRIB_POS is not read but VERT_BIT_GENERIC0 is read.
-       * In that case we effectively need to route the data from
-       * glVertexAttrib(0, val) calls to feed into the GENERIC0 input.
-       */
-      const GLbitfield64 inputs_read =
-         ctx->VertexProgram._Current->info.inputs_read;
-      if ((inputs_read & VERT_BIT_POS) == 0 &&
-          (inputs_read & VERT_BIT_GENERIC0)) {
-         save->inputs[VERT_ATTRIB_GENERIC0] = save->inputs[0];
-         node_attrsz[VERT_ATTRIB_GENERIC0] = node_attrsz[0];
-         node_attrtype[VERT_ATTRIB_GENERIC0] = node_attrtype[0];
-         node_attrsz[0] = 0;
-      }
-      break;
-   default:
-      unreachable("Bad vertex program mode");
-   }
-
-   for (attr = 0; attr < VERT_ATTRIB_MAX; attr++) {
-      const GLuint src = map[attr];
-
-      if (node_attrsz[src]) {
-         struct gl_vertex_array *array = &arrays[attr];
-
-         /* override the default array set above */
-         save->inputs[attr] = array;
-
-         array->Ptr = (const GLubyte *) NULL + buffer_offset;
-         array->Size = node_attrsz[src];
-         array->StrideB = node->vertex_size * sizeof(GLfloat);
-         array->Type = node_attrtype[src];
-         array->Integer = vbo_attrtype_to_integer_flag(node_attrtype[src]);
-         array->Format = GL_RGBA;
-         array->_ElementSize = array->Size * sizeof(GLfloat);
-         _mesa_reference_buffer_object(ctx,
-                                       &array->BufferObj,
-                                       node->vertex_store->bufferobj);
-
-         assert(array->BufferObj->Name);
-
-         buffer_offset += node_attrsz[src] * sizeof(GLfloat);
-         varying_inputs |= VERT_BIT(attr);
-      }
-   }
-
-   _mesa_set_varying_vp_inputs(ctx, varying_inputs);
-   ctx->NewDriverState |= ctx->DriverFlags.NewArray;
+   const gl_vertex_processing_mode mode = ctx->VertexProgram._VPMode;
+   _mesa_set_draw_vao(ctx, node->VAO[mode], _vbo_get_vao_filter(mode));
 }
 
 
@@ -307,6 +214,9 @@ vbo_save_playback_vertex_list(struct gl_context *ctx, void *data)
          goto end;
       }
 
+      bind_vertex_list(ctx, node);
+
+      /* Need that at least one time. */
       if (ctx->NewState)
          _mesa_update_state(ctx);
 
@@ -320,25 +230,22 @@ vbo_save_playback_vertex_list(struct gl_context *ctx, void *data)
          return;
       }
 
-      bind_vertex_list(ctx, node);
+      /* Finally update the inputs array */
+      _vbo_update_inputs(ctx, &vbo->draw_arrays);
+      _mesa_set_drawing_arrays(ctx, vbo->draw_arrays.inputs);
 
-      _mesa_set_drawing_arrays(ctx, vbo->save.inputs);
-
-      /* Again...
-       */
-      if (ctx->NewState)
-         _mesa_update_state(ctx);
+      assert(ctx->NewState == 0);
 
       if (node->vertex_count > 0) {
          GLuint min_index = node->start_vertex;
          GLuint max_index = min_index + node->vertex_count - 1;
-         vbo_context(ctx)->draw_prims(ctx,
-                                      node->prims,
-                                      node->prim_count,
-                                      NULL,
-                                      GL_TRUE,
-                                      min_index, max_index,
-                                      NULL, 0, NULL);
+         vbo->draw_prims(ctx,
+                         node->prims,
+                         node->prim_count,
+                         NULL,
+                         GL_TRUE,
+                         min_index, max_index,
+                         NULL, 0, NULL);
       }
    }
 

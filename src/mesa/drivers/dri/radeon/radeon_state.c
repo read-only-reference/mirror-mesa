@@ -504,10 +504,10 @@ static void radeonColorMask( struct gl_context *ctx,
      return;
 
    mask = radeonPackColor( rrb->cpp,
-			   ctx->Color.ColorMask[0][RCOMP],
-			   ctx->Color.ColorMask[0][GCOMP],
-			   ctx->Color.ColorMask[0][BCOMP],
-			   ctx->Color.ColorMask[0][ACOMP] );
+			   GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 0),
+			   GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 1),
+			   GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 2),
+			   GET_COLORMASK_BIT(ctx->Color.ColorMask, 0, 3) );
 
    if ( rmesa->hw.msk.cmd[MSK_RB3D_PLANEMASK] != mask ) {
       RADEON_STATECHANGE( rmesa, msk );
@@ -1890,7 +1890,7 @@ static void update_texturematrix( struct gl_context *ctx )
 	 if (needMatrix) {
 	    rmesa->NeedTexMatrix |= 1 << unit;
 	    radeonUploadTexMatrix( rmesa, unit,
-			!ctx->Texture.Unit[unit].TexGenEnabled );
+			!ctx->Texture.FixedFuncUnit[unit].TexGenEnabled );
 	 }
       }
    }

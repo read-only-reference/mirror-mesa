@@ -195,7 +195,6 @@ files_libfreedreno = files(
   'ir3/ir3_legalize.c',
   'ir3/ir3_nir.c',
   'ir3/ir3_nir.h',
-  'ir3/ir3_nir_lower_if_else.c',
   'ir3/ir3_nir_lower_tg4_to_tex.c',
   'ir3/ir3_print.c',
   'ir3/ir3_ra.c',
@@ -231,6 +230,7 @@ libfreedreno = static_library(
 driver_freedreno = declare_dependency(
   compile_args : '-DGALLIUM_FREEDRENO',
   link_with : [libfreedrenowinsys, libfreedreno],
+  dependencies : idep_nir,
 )
 
 ir3_compiler = executable(
@@ -249,5 +249,6 @@ ir3_compiler = executable(
     libglsl_standalone,
     libmesa_util,
   ],
-  build_by_default : true,
+  build_by_default : with_tools.contains('freedreno'),
+  install : with_tools.contains('freedreno'),
 )

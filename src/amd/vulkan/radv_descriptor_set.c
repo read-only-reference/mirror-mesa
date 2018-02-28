@@ -518,7 +518,7 @@ VkResult radv_AllocateDescriptorSets(
 
 	VkResult result = VK_SUCCESS;
 	uint32_t i;
-	struct radv_descriptor_set *set;
+	struct radv_descriptor_set *set = NULL;
 
 	/* allocate a set of buffers for each shader to contain descriptors */
 	for (i = 0; i < pAllocateInfo->descriptorSetCount; i++) {
@@ -847,6 +847,7 @@ VkResult radv_CreateDescriptorUpdateTemplateKHR(VkDevice _device,
 		return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
 	templ->entry_count = entry_count;
+	templ->bind_point = pCreateInfo->pipelineBindPoint;
 
 	for (i = 0; i < entry_count; i++) {
 		const VkDescriptorUpdateTemplateEntryKHR *entry = &pCreateInfo->pDescriptorUpdateEntries[i];

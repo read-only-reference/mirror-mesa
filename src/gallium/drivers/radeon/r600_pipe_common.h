@@ -54,6 +54,7 @@ struct si_context;
 #define R600_RESOURCE_FLAG_DISABLE_DCC		(PIPE_RESOURCE_FLAG_DRV_PRIV << 3)
 #define R600_RESOURCE_FLAG_UNMAPPABLE		(PIPE_RESOURCE_FLAG_DRV_PRIV << 4)
 #define R600_RESOURCE_FLAG_READ_ONLY		(PIPE_RESOURCE_FLAG_DRV_PRIV << 5)
+#define R600_RESOURCE_FLAG_32BIT		(PIPE_RESOURCE_FLAG_DRV_PRIV << 6)
 
 /* Debug flags. */
 enum {
@@ -598,6 +599,10 @@ void si_texture_get_fmask_info(struct si_screen *sscreen,
 void si_texture_get_cmask_info(struct si_screen *sscreen,
 			       struct r600_texture *rtex,
 			       struct r600_cmask_info *out);
+void si_eliminate_fast_color_clear(struct r600_common_context *rctx,
+				   struct r600_texture *rtex);
+void si_texture_discard_cmask(struct si_screen *sscreen,
+			      struct r600_texture *rtex);
 bool si_init_flushed_depth_texture(struct pipe_context *ctx,
 				   struct pipe_resource *texture,
 				   struct r600_texture **staging);

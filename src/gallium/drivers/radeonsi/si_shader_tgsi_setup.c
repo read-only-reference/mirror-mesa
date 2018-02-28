@@ -851,7 +851,7 @@ static void emit_declaration(struct lp_build_tgsi_context *bld_base,
 	}
 
 	case TGSI_FILE_MEMORY:
-		si_declare_compute_memory(ctx, decl);
+		si_tgsi_declare_compute_memory(ctx, decl);
 		break;
 
 	default:
@@ -1194,13 +1194,6 @@ void si_llvm_context_init(struct si_shader_context *ctx,
 	bld_base->emit_declaration = emit_declaration;
 	bld_base->emit_immediate = emit_immediate;
 
-	/* metadata allowing 2.5 ULP */
-	ctx->fpmath_md_kind = LLVMGetMDKindIDInContext(ctx->ac.context,
-						       "fpmath", 6);
-	LLVMValueRef arg = LLVMConstReal(ctx->ac.f32, 2.5);
-	ctx->fpmath_md_2p5_ulp = LLVMMDNodeInContext(ctx->ac.context,
-						     &arg, 1);
-
 	bld_base->op_actions[TGSI_OPCODE_BGNLOOP].emit = bgnloop_emit;
 	bld_base->op_actions[TGSI_OPCODE_BRK].emit = brk_emit;
 	bld_base->op_actions[TGSI_OPCODE_CONT].emit = cont_emit;
@@ -1260,7 +1253,16 @@ void si_llvm_context_set_tgsi(struct si_shader_context *ctx,
 	ctx->temps = NULL;
 	ctx->temps_count = 0;
 
-	if (!info || !tokens)
+	if (!info)
+		return;
+
+	ctx->num_const_buffers = util_last_bit(info->const_buffers_declared);
+	ctx->num_shader_buffers = util_last_bit(info->shader_buffers_declared);
+
+	ctx->num_samplers = util_last_bit(info->samplers_declared);
+	ctx->num_images = util_last_bit(info->images_declared);
+
+	if (!tokens)
 		return;
 
 	if (info->array_max[TGSI_FILE_TEMPORARY] > 0) {
@@ -1288,11 +1290,6 @@ void si_llvm_context_set_tgsi(struct si_shader_context *ctx,
 	ctx->bld_base.emit_fetch_funcs[TGSI_FILE_TEMPORARY] = si_llvm_emit_fetch;
 	ctx->bld_base.emit_fetch_funcs[TGSI_FILE_OUTPUT] = si_llvm_emit_fetch;
 	ctx->bld_base.emit_fetch_funcs[TGSI_FILE_SYSTEM_VALUE] = fetch_system_value;
-
-	ctx->num_const_buffers = util_last_bit(info->const_buffers_declared);
-	ctx->num_shader_buffers = util_last_bit(info->shader_buffers_declared);
-	ctx->num_samplers = util_last_bit(info->samplers_declared);
-	ctx->num_images = util_last_bit(info->images_declared);
 }
 
 void si_llvm_create_func(struct si_shader_context *ctx,
@@ -1385,10 +1382,8 @@ void si_llvm_optimize_module(struct si_shader_context *ctx)
 	LLVMAddLICMPass(gallivm->passmgr);
 	LLVMAddAggressiveDCEPass(gallivm->passmgr);
 	LLVMAddCFGSimplificationPass(gallivm->passmgr);
-#if HAVE_LLVM >= 0x0400
 	/* This is recommended by the instruction combining pass. */
 	LLVMAddEarlyCSEMemSSAPass(gallivm->passmgr);
-#endif
 	LLVMAddInstructionCombiningPass(gallivm->passmgr);
 
 	/* Run the pass */

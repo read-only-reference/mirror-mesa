@@ -3070,7 +3070,7 @@ fs_visitor::emit_repclear_shader()
                .MOV(vec4(brw_message_reg(color_mrf)), fs_reg(reg));
    }
 
-   fs_inst *write;
+   fs_inst *write = NULL;
    if (key->nr_color_regions == 1) {
       write = bld.emit(FS_OPCODE_REP_FB_WRITE);
       write->saturate = key->clamp_fragment_color;
@@ -3549,11 +3549,7 @@ fs_visitor::lower_integer_multiplication()
               inst->dst.type != BRW_REGISTER_TYPE_UD))
             continue;
 
-         /* Gen8's MUL instruction can do a 32-bit x 32-bit -> 32-bit
-          * operation directly, but CHV/BXT cannot.
-          */
-         if (devinfo->gen >= 8 &&
-             !devinfo->is_cherryview && !gen_device_info_is_9lp(devinfo))
+         if (devinfo->has_integer_dword_mul)
             continue;
 
          if (inst->src[1].file == IMM &&

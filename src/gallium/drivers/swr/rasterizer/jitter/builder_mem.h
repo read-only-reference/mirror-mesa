@@ -34,7 +34,12 @@ Value *GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList);
 Value *IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<Value*> &indexList);
 Value *IN_BOUNDS_GEP(Value* ptr, const std::initializer_list<uint32_t> &indexList);
 
-LoadInst *LOAD(Value *BasePtr, const std::initializer_list<uint32_t> &offset, const llvm::Twine& name = "");
+virtual LoadInst* LOAD(Value *Ptr, const char *Name);
+virtual LoadInst* LOAD(Value *Ptr, const Twine &Name = "");
+virtual LoadInst* LOAD(Type *Ty, Value *Ptr, const Twine &Name = "");
+virtual LoadInst* LOAD(Value *Ptr, bool isVolatile, const Twine &Name = "");
+virtual LoadInst* LOAD(Value *BasePtr, const std::initializer_list<uint32_t> &offset, const llvm::Twine& Name = "");
+
 LoadInst *LOADV(Value *BasePtr, const std::initializer_list<Value*> &offset, const llvm::Twine& name = "");
 StoreInst *STORE(Value *Val, Value *BasePtr, const std::initializer_list<uint32_t> &offset);
 StoreInst *STOREV(Value *Val, Value *BasePtr, const std::initializer_list<Value*> &offset);
@@ -44,19 +49,23 @@ Value *MASKLOADD(Value* src, Value* mask);
 void Gather4(const SWR_FORMAT format, Value* pSrcBase, Value* byteOffsets,
     Value* mask, Value* vGatherComponents[], bool bPackedOutput);
 
-virtual Value *GATHERPS(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1, Value *pDrawContext = nullptr);
+virtual Value* OFFSET_TO_NEXT_COMPONENT(Value* base, Constant *offset);
+
+virtual Value *GATHERPS(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
 Value *GATHERPS_16(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
 
-void GATHER4PS(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
+virtual void GATHER4PS(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
     Value* mask, Value* vGatherComponents[], bool bPackedOutput);
 
-Value *GATHERDD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
+virtual Value *GATHERDD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
 Value *GATHERDD_16(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
 
-void GATHER4DD(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
+virtual void GATHER4DD(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
     Value* mask, Value* vGatherComponents[], bool bPackedOutput);
 
 Value *GATHERPD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
+
+Value *GATHER_PTR(Value* pVecSrcPtr, Value* pVecMask, Value* pVecPassthru);
 
 void SCATTERPS(Value* pDst, Value* vSrc, Value* vOffsets, Value* vMask);
 
@@ -71,3 +80,4 @@ Value* pScatterStackSrc{ nullptr };
 Value* pScatterStackOffsets{ nullptr };
 
 
+virtual Value* TRANSLATE_ADDRESS(Value* address) { return address; }

@@ -269,6 +269,26 @@ isl_tiling_get_info(enum isl_tiling tiling,
 }
 
 bool
+isl_color_value_is_zero(union isl_color_value value,
+                        enum isl_format format)
+{
+   const struct isl_format_layout *fmtl = isl_format_get_layout(format);
+
+#define RETURN_FALSE_IF_NOT_0(c, i) \
+   if (fmtl->channels.c.bits && value.u32[i] != 0) \
+      return false
+
+   RETURN_FALSE_IF_NOT_0(r, 0);
+   RETURN_FALSE_IF_NOT_0(g, 1);
+   RETURN_FALSE_IF_NOT_0(b, 2);
+   RETURN_FALSE_IF_NOT_0(a, 3);
+
+#undef RETURN_FALSE_IF_NOT_0
+
+   return true;
+}
+
+bool
 isl_color_value_is_zero_one(union isl_color_value value,
                             enum isl_format format)
 {
@@ -1483,7 +1503,7 @@ isl_surf_init_s(const struct isl_device *dev,
        */
       if (size > (uint64_t) 1 << 31)
          return false;
-   } else {
+   } else if (ISL_DEV_GEN(dev) < 11) {
       /* From the Skylake PRM Vol 5, Maximum Surface Size in Bytes:
        *    "In addition to restrictions on maximum height, width, and depth,
        *     surfaces are also restricted to a maximum size of 2^38 bytes.
@@ -1491,6 +1511,10 @@ isl_surf_init_s(const struct isl_device *dev,
        *     of the base address."
        */
       if (size > (uint64_t) 1 << 38)
+         return false;
+   } else {
+      /* gen11+ platforms raised this limit to 2^44 bytes. */
+      if (size > (uint64_t) 1 << 44)
          return false;
    }
 
@@ -1773,6 +1797,9 @@ isl_surf_get_ccs_surf(const struct isl_device *dev,
       break;                                       \
    case 10:                                        \
       isl_gen10_##func(__VA_ARGS__);               \
+      break;                                       \
+   case 11:                                        \
+      isl_gen11_##func(__VA_ARGS__);               \
       break;                                       \
    default:                                        \
       assert(!"Unknown hardware generation");      \

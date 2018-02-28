@@ -57,6 +57,7 @@
 #include "ac_gpu_info.h"
 #include "ac_surface.h"
 #include "radv_descriptor_set.h"
+#include "radv_extensions.h"
 
 #include <llvm-c/TargetMachine.h>
 
@@ -254,7 +255,11 @@ void radv_loge_v(const char *format, va_list va);
 		return;					\
 	} while (0)
 
-void *radv_lookup_entrypoint(const char *name);
+void *radv_lookup_entrypoint_unchecked(const char *name);
+void *radv_lookup_entrypoint_checked(const char *name,
+                                    uint32_t core_version,
+                                    const struct radv_instance_extension_table *instance,
+                                    const struct radv_device_extension_table *device);
 
 struct radv_physical_device {
 	VK_LOADER_DATA                              _loader_data;
@@ -285,6 +290,8 @@ struct radv_physical_device {
 
 	VkPhysicalDeviceMemoryProperties memory_properties;
 	enum radv_mem_type mem_type_indices[RADV_MEM_TYPE_COUNT];
+
+	struct radv_device_extension_table supported_extensions;
 };
 
 struct radv_instance {
@@ -300,6 +307,8 @@ struct radv_instance {
 	uint64_t perftest_flags;
 
 	struct vk_debug_report_instance             debug_report_callbacks;
+
+	struct radv_instance_extension_table enabled_extensions;
 };
 
 VkResult radv_init_wsi(struct radv_physical_device *physical_device);
@@ -569,8 +578,7 @@ struct radv_queue {
 	struct radeon_winsys_bo *compute_scratch_bo;
 	struct radeon_winsys_bo *esgs_ring_bo;
 	struct radeon_winsys_bo *gsvs_ring_bo;
-	struct radeon_winsys_bo *tess_factor_ring_bo;
-	struct radeon_winsys_bo *tess_offchip_ring_bo;
+	struct radeon_winsys_bo *tess_rings_bo;
 	struct radeon_winsys_cs *initial_preamble_cs;
 	struct radeon_winsys_cs *initial_full_flush_preamble_cs;
 	struct radeon_winsys_cs *continue_preamble_cs;
@@ -636,6 +644,8 @@ struct radv_device {
 
 	/* For detecting VM faults reported by dmesg. */
 	uint64_t dmesg_timestamp;
+
+	struct radv_device_extension_table enabled_extensions;
 };
 
 struct radv_device_memory {
@@ -646,6 +656,7 @@ struct radv_device_memory {
 	uint32_t                                     type_index;
 	VkDeviceSize                                 map_size;
 	void *                                       map;
+	void *                                       user_ptr;
 };
 
 
@@ -720,11 +731,11 @@ struct radv_descriptor_update_template_entry {
 
 struct radv_descriptor_update_template {
 	uint32_t entry_count;
+	VkPipelineBindPoint bind_point;
 	struct radv_descriptor_update_template_entry entry[0];
 };
 
 struct radv_buffer {
-	struct radv_device *                          device;
 	VkDeviceSize                                 size;
 
 	VkBufferUsageFlags                           usage;
@@ -882,13 +893,20 @@ struct radv_attachment_state {
 	VkImageLayout                                current_layout;
 };
 
+struct radv_descriptor_state {
+	struct radv_descriptor_set *sets[MAX_SETS];
+	uint32_t dirty;
+	uint32_t valid;
+	struct radv_push_descriptor_set push_set;
+	bool push_dirty;
+};
+
 struct radv_cmd_state {
 	/* Vertex descriptors */
 	bool                                          vb_prefetch_dirty;
 	uint64_t                                      vb_va;
 	unsigned                                      vb_size;
 
-	bool                                          push_descriptors_dirty;
 	bool predicating;
 	uint32_t                                      dirty;
 
@@ -916,8 +934,6 @@ struct radv_cmd_state {
 	enum radv_cmd_flush_bits                     flush_bits;
 	unsigned                                     active_occlusion_queries;
 	float					     offset_scale;
-	uint32_t                                      descriptors_dirty;
-	uint32_t                                      valid_descriptors;
 	uint32_t                                      trace_id;
 	uint32_t                                      last_ia_multi_vgt_param;
 
@@ -968,9 +984,9 @@ struct radv_cmd_buffer {
 	uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
 	uint32_t dynamic_buffers[4 * MAX_DYNAMIC_BUFFERS];
 	VkShaderStageFlags push_constant_stages;
-	struct radv_push_descriptor_set push_descriptors;
 	struct radv_descriptor_set meta_push_descriptors;
-	struct radv_descriptor_set *descriptors[MAX_SETS];
+
+	struct radv_descriptor_state descriptors[VK_PIPELINE_BIND_POINT_RANGE_SIZE];
 
 	struct radv_cmd_buffer_upload upload;
 
@@ -1075,6 +1091,15 @@ void radv_cmd_buffer_trace_emit(struct radv_cmd_buffer *cmd_buffer);
 bool radv_get_memory_fd(struct radv_device *device,
 			struct radv_device_memory *memory,
 			int *pFD);
+
+static inline struct radv_descriptor_state *
+radv_get_descriptors_state(struct radv_cmd_buffer *cmd_buffer,
+			   VkPipelineBindPoint bind_point)
+{
+	assert(bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS ||
+	       bind_point == VK_PIPELINE_BIND_POINT_COMPUTE);
+	return &cmd_buffer->descriptors[bind_point];
+}
 
 /*
  * Takes x,y,z as exact numbers of invocations, instead of blocks.
@@ -1597,6 +1622,7 @@ VkResult radv_alloc_sem_info(struct radv_winsys_sem_info *sem_info,
 void radv_free_sem_info(struct radv_winsys_sem_info *sem_info);
 
 void radv_set_descriptor_set(struct radv_cmd_buffer *cmd_buffer,
+			     VkPipelineBindPoint bind_point,
 			     struct radv_descriptor_set *set,
 			     unsigned idx);
 

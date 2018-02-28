@@ -27,11 +27,13 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include "main/arrayobj.h"
 #include "main/glheader.h"
 #include "main/bufferobj.h"
 #include "main/context.h"
 #include "main/enums.h"
 #include "main/state.h"
+#include "main/varray.h"
 #include "main/vtxfmt.h"
 
 #include "vbo_noop.h"
@@ -172,108 +174,73 @@ static void
 vbo_exec_bind_arrays(struct gl_context *ctx)
 {
    struct vbo_context *vbo = vbo_context(ctx);
+   struct gl_vertex_array_object *vao = vbo->VAO;
    struct vbo_exec_context *exec = &vbo->exec;
-   struct gl_vertex_array *arrays = exec->vtx.arrays;
-   const GLubyte *map;
-   GLuint attr;
-   GLbitfield varying_inputs = 0x0;
-   bool swap_pos = false;
 
-   /* Install the default (ie Current) attributes first */
-   for (attr = 0; attr < VERT_ATTRIB_FF_MAX; attr++) {
-      exec->vtx.inputs[attr] = &vbo->currval[VBO_ATTRIB_POS+attr];
+   GLintptr buffer_offset;
+   if (_mesa_is_bufferobj(exec->vtx.bufferobj)) {
+      assert(exec->vtx.bufferobj->Mappings[MAP_INTERNAL].Pointer);
+      buffer_offset = exec->vtx.bufferobj->Mappings[MAP_INTERNAL].Offset;
+   } else {
+      /* Ptr into ordinary app memory */
+      buffer_offset = (GLbyte *)exec->vtx.buffer_map - (GLbyte *)NULL;
    }
 
-   /* Overlay other active attributes */
-   switch (get_vp_mode(exec->ctx)) {
-   case VP_FF:
-      /* Point the generic attributes at the legacy material values */
-      for (attr = 0; attr < MAT_ATTRIB_MAX; attr++) {
-         assert(VERT_ATTRIB_GENERIC(attr) < ARRAY_SIZE(exec->vtx.inputs));
-         exec->vtx.inputs[VERT_ATTRIB_GENERIC(attr)] =
-            &vbo->currval[VBO_ATTRIB_MAT_FRONT_AMBIENT+attr];
-      }
-      map = vbo->map_vp_none;
-      break;
-   case VP_SHADER:
-      for (attr = 0; attr < VERT_ATTRIB_GENERIC_MAX; attr++) {
-         assert(VERT_ATTRIB_GENERIC(attr) < ARRAY_SIZE(exec->vtx.inputs));
-         exec->vtx.inputs[VERT_ATTRIB_GENERIC(attr)] =
-            &vbo->currval[VBO_ATTRIB_GENERIC0+attr];
-      }
-      map = vbo->map_vp_arb;
+   const gl_vertex_processing_mode mode = ctx->VertexProgram._VPMode;
 
-      /* check if VERT_ATTRIB_POS is not read but VERT_BIT_GENERIC0 is read.
-       * In that case we effectively need to route the data from
-       * glVertexAttrib(0, val) calls to feed into the GENERIC0 input.
-       * The original state gets essentially restored below.
-       */
-      const GLbitfield64 inputs_read =
-         ctx->VertexProgram._Current->info.inputs_read;
-      if ((inputs_read & VERT_BIT_POS) == 0 &&
-          (inputs_read & VERT_BIT_GENERIC0)) {
-         swap_pos = true;
-         exec->vtx.inputs[VERT_ATTRIB_GENERIC0] = exec->vtx.inputs[0];
-         exec->vtx.attrsz[VERT_ATTRIB_GENERIC0] = exec->vtx.attrsz[0];
-         exec->vtx.attrtype[VERT_ATTRIB_GENERIC0] = exec->vtx.attrtype[0];
-         exec->vtx.attrptr[VERT_ATTRIB_GENERIC0] = exec->vtx.attrptr[0];
-         exec->vtx.attrsz[0] = 0;
-      }
-      break;
-   default:
-      unreachable("Bad vertex program mode");
+   /* Compute the bitmasks of vao_enabled arrays */
+   GLbitfield vao_enabled = _vbo_get_vao_enabled_from_vbo(mode, exec->vtx.enabled);
+
+   /* At first disable arrays no longer needed */
+   GLbitfield mask = vao->_Enabled & ~vao_enabled;
+   while (mask) {
+      const int vao_attr = u_bit_scan(&mask);
+      _mesa_disable_vertex_array_attrib(ctx, vao, vao_attr, false);
    }
+   assert((~vao_enabled & vao->_Enabled) == 0);
 
-   for (attr = 0; attr < VERT_ATTRIB_MAX ; attr++) {
-      const GLuint src = map[attr];
+   /* Bind the buffer object */
+   _mesa_bind_vertex_buffer(ctx, vao, 0, exec->vtx.bufferobj, buffer_offset,
+                            exec->vtx.vertex_size*sizeof(GLfloat), false);
 
-      if (exec->vtx.attrsz[src]) {
-         GLsizeiptr offset = (GLbyte *)exec->vtx.attrptr[src] -
-            (GLbyte *)exec->vtx.vertex;
-
-         /* override the default array set above */
-         assert(attr < ARRAY_SIZE(exec->vtx.inputs));
-         assert(attr < ARRAY_SIZE(exec->vtx.arrays)); /* arrays[] */
-         exec->vtx.inputs[attr] = &arrays[attr];
-
-         if (_mesa_is_bufferobj(exec->vtx.bufferobj)) {
-            /* a real buffer obj: Ptr is an offset, not a pointer */
-            assert(exec->vtx.bufferobj->Mappings[MAP_INTERNAL].Pointer);
-            assert(offset >= 0);
-            arrays[attr].Ptr = (GLubyte *)
-               exec->vtx.bufferobj->Mappings[MAP_INTERNAL].Offset + offset;
-         }
-         else {
-            /* Ptr into ordinary app memory */
-            arrays[attr].Ptr = (GLubyte *)exec->vtx.buffer_map + offset;
-         }
-         arrays[attr].Size = exec->vtx.attrsz[src];
-         arrays[attr].StrideB = exec->vtx.vertex_size * sizeof(GLfloat);
-         arrays[attr].Type = exec->vtx.attrtype[src];
-         arrays[attr].Integer =
-               vbo_attrtype_to_integer_flag(exec->vtx.attrtype[src]);
-         arrays[attr].Format = GL_RGBA;
-         arrays[attr]._ElementSize = arrays[attr].Size * sizeof(GLfloat);
-         _mesa_reference_buffer_object(ctx,
-                                       &arrays[attr].BufferObj,
-                                       exec->vtx.bufferobj);
-
-         varying_inputs |= VERT_BIT(attr);
-      }
-   }
-
-   /* In case we swapped the position and generic0 attribute.
-    * Restore the original setting of the vtx.* variables.
-    * They are still needed with the original order and settings in case
-    * of a split primitive.
+   /* Retrieve the mapping from VBO_ATTRIB to VERT_ATTRIB space
+    * Note that the position/generic0 aliasing is done in the VAO.
     */
-   if (swap_pos) {
-      exec->vtx.attrsz[0] = exec->vtx.attrsz[VERT_ATTRIB_GENERIC0];
-      exec->vtx.attrsz[VERT_ATTRIB_GENERIC0] = 0;
-   }
+   const GLubyte *const vao_to_vbo_map = _vbo_attribute_alias_map[mode];
+   /* Now set the enabled arrays */
+   mask = vao_enabled;
+   while (mask) {
+      const int vao_attr = u_bit_scan(&mask);
+      const GLubyte vbo_attr = vao_to_vbo_map[vao_attr];
 
-   _mesa_set_varying_vp_inputs(ctx, varying_inputs);
+      const GLubyte size = exec->vtx.attrsz[vbo_attr];
+      const GLenum16 type = exec->vtx.attrtype[vbo_attr];
+      const GLuint offset = (GLuint)((GLbyte *)exec->vtx.attrptr[vbo_attr] -
+                                     (GLbyte *)exec->vtx.vertex);
+
+      /* Set and enable */
+      _vbo_set_attrib_format(ctx, vao, vao_attr, buffer_offset,
+                             size, type, offset);
+      if ((vao->_Enabled & VERT_BIT(vao_attr)) == 0)
+         _mesa_enable_vertex_array_attrib(ctx, vao, vao_attr, false);
+
+      /* The vao is initially created with all bindings set to 0. */
+      assert(vao->VertexAttrib[vao_attr].BufferBindingIndex == 0);
+   }
+   assert(vao_enabled == vao->_Enabled);
+   assert(!_mesa_is_bufferobj(exec->vtx.bufferobj) ||
+          (vao_enabled & ~vao->VertexAttribBufferMask) == 0);
+
+   _mesa_update_vao_derived_arrays(ctx, vao);
+   vao->NewArrays = 0;
+
+   _mesa_set_draw_vao(ctx, vao, _vbo_get_vao_filter(mode));
+   /* The exec VAO is not immutable, so we need to set manually */
    ctx->NewDriverState |= ctx->DriverFlags.NewArray;
+
+   _mesa_set_drawing_arrays(ctx, vbo->draw_arrays.inputs);
+   /* Finally update the inputs array */
+   _vbo_update_inputs(ctx, &vbo->draw_arrays);
 }
 
 
@@ -424,6 +391,8 @@ vbo_exec_vtx_flush(struct vbo_exec_context *exec, GLboolean keepUnmapped)
             _mesa_update_state(ctx);
 
          vbo_exec_vtx_unmap(exec);
+
+         assert(ctx->NewState == 0);
 
          if (0)
             printf("%s %d %d\n", __func__, exec->vtx.prim_count,

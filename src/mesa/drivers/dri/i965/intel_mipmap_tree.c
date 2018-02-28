@@ -1308,7 +1308,8 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
    if (mt->etc_format != MESA_FORMAT_NONE)
       mt_format = mt->etc_format;
 
-   if (image->TexFormat != mt_format)
+   if (_mesa_get_srgb_format_linear(image->TexFormat) !=
+       _mesa_get_srgb_format_linear(mt_format))
       return false;
 
    intel_get_image_dims(image, &width, &height, &depth);
@@ -1547,7 +1548,8 @@ intel_miptree_copy_slice(struct brw_context *brw,
    assert(src_layer < get_num_phys_layers(&src_mt->surf,
                                           src_level - src_mt->first_level));
 
-   assert(src_mt->format == dst_mt->format);
+   assert(_mesa_get_srgb_format_linear(src_mt->format) ==
+          _mesa_get_srgb_format_linear(dst_mt->format));
 
    if (dst_mt->compressed) {
       unsigned int i, j;
@@ -1652,7 +1654,7 @@ intel_miptree_init_mcs(struct brw_context *brw,
     *
     * Note: the clear value for MCS buffers is all 1's, so we memset to 0xff.
     */
-   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE);
+   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE | MAP_RAW);
    if (unlikely(map == NULL)) {
       fprintf(stderr, "Failed to map mcs buffer into GTT\n");
       brw_bo_unreference(mt->mcs_buf->bo);
@@ -1911,10 +1913,7 @@ intel_miptree_sample_with_hiz(struct brw_context *brw,
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   /* It's unclear how well supported sampling from the hiz buffer is on GEN8,
-    * so keep things conservative for now and never enable it unless we're SKL+.
-    */
-   if (devinfo->gen < 9) {
+   if (!devinfo->has_sample_with_hiz) {
       return false;
    }
 
@@ -2046,7 +2045,7 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
    (void)layer;
 }
 
-static enum blorp_fast_clear_op
+static enum isl_aux_op
 get_ccs_d_resolve_op(enum isl_aux_state aux_state,
                      enum isl_aux_usage aux_usage,
                      bool fast_clear_supported)
@@ -2061,12 +2060,12 @@ get_ccs_d_resolve_op(enum isl_aux_state aux_state,
    case ISL_AUX_STATE_CLEAR:
    case ISL_AUX_STATE_PARTIAL_CLEAR:
       if (!ccs_supported)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_PASS_THROUGH:
-      return BLORP_FAST_CLEAR_OP_NONE;
+      return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_RESOLVED:
    case ISL_AUX_STATE_AUX_INVALID:
@@ -2078,7 +2077,7 @@ get_ccs_d_resolve_op(enum isl_aux_state aux_state,
    unreachable("Invalid aux state for CCS_D");
 }
 
-static enum blorp_fast_clear_op
+static enum isl_aux_op
 get_ccs_e_resolve_op(enum isl_aux_state aux_state,
                      enum isl_aux_usage aux_usage,
                      bool fast_clear_supported)
@@ -2095,28 +2094,28 @@ get_ccs_e_resolve_op(enum isl_aux_state aux_state,
    case ISL_AUX_STATE_CLEAR:
    case ISL_AUX_STATE_PARTIAL_CLEAR:
       if (fast_clear_supported)
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
       else if (aux_usage == ISL_AUX_USAGE_CCS_E)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL;
+         return ISL_AUX_OP_PARTIAL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
 
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_CCS_E)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
       else if (!fast_clear_supported)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL;
+         return ISL_AUX_OP_PARTIAL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_CCS_E)
-         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+         return ISL_AUX_OP_FULL_RESOLVE;
       else
-         return BLORP_FAST_CLEAR_OP_NONE;
+         return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_PASS_THROUGH:
-      return BLORP_FAST_CLEAR_OP_NONE;
+      return ISL_AUX_OP_NONE;
 
    case ISL_AUX_STATE_RESOLVED:
    case ISL_AUX_STATE_AUX_INVALID:
@@ -2135,7 +2134,7 @@ intel_miptree_prepare_ccs_access(struct brw_context *brw,
 {
    enum isl_aux_state aux_state = intel_miptree_get_aux_state(mt, level, layer);
 
-   enum blorp_fast_clear_op resolve_op;
+   enum isl_aux_op resolve_op;
    if (mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
       resolve_op = get_ccs_e_resolve_op(aux_state, aux_usage,
                                         fast_clear_supported);
@@ -2145,12 +2144,12 @@ intel_miptree_prepare_ccs_access(struct brw_context *brw,
                                         fast_clear_supported);
    }
 
-   if (resolve_op != BLORP_FAST_CLEAR_OP_NONE) {
+   if (resolve_op != ISL_AUX_OP_NONE) {
       intel_miptree_check_color_resolve(brw, mt, level, layer);
       brw_blorp_resolve_color(brw, mt, level, layer, resolve_op);
 
       switch (resolve_op) {
-      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+      case ISL_AUX_OP_FULL_RESOLVE:
          /* The CCS full resolve operation destroys the CCS and sets it to the
           * pass-through state.  (You can also think of this as being both a
           * resolve and an ambiguate in one operation.)
@@ -2159,7 +2158,7 @@ intel_miptree_prepare_ccs_access(struct brw_context *brw,
                                      ISL_AUX_STATE_PASS_THROUGH);
          break;
 
-      case BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL:
+      case ISL_AUX_OP_PARTIAL_RESOLVE:
          intel_miptree_set_aux_state(brw, mt, level, layer, 1,
                                      ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
          break;
@@ -2308,17 +2307,17 @@ intel_miptree_prepare_hiz_access(struct brw_context *brw,
 {
    assert(aux_usage == ISL_AUX_USAGE_NONE || aux_usage == ISL_AUX_USAGE_HIZ);
 
-   enum blorp_hiz_op hiz_op = BLORP_HIZ_OP_NONE;
+   enum isl_aux_op hiz_op = ISL_AUX_OP_NONE;
    switch (intel_miptree_get_aux_state(mt, level, layer)) {
    case ISL_AUX_STATE_CLEAR:
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_HIZ || !fast_clear_supported)
-         hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+         hiz_op = ISL_AUX_OP_FULL_RESOLVE;
       break;
 
    case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
       if (aux_usage != ISL_AUX_USAGE_HIZ)
-         hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+         hiz_op = ISL_AUX_OP_FULL_RESOLVE;
       break;
 
    case ISL_AUX_STATE_PASS_THROUGH:
@@ -2327,23 +2326,23 @@ intel_miptree_prepare_hiz_access(struct brw_context *brw,
 
    case ISL_AUX_STATE_AUX_INVALID:
       if (aux_usage == ISL_AUX_USAGE_HIZ)
-         hiz_op = BLORP_HIZ_OP_HIZ_RESOLVE;
+         hiz_op = ISL_AUX_OP_AMBIGUATE;
       break;
 
    case ISL_AUX_STATE_PARTIAL_CLEAR:
       unreachable("Invalid HiZ state");
    }
 
-   if (hiz_op != BLORP_HIZ_OP_NONE) {
+   if (hiz_op != ISL_AUX_OP_NONE) {
       intel_hiz_exec(brw, mt, level, layer, 1, hiz_op);
 
       switch (hiz_op) {
-      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+      case ISL_AUX_OP_FULL_RESOLVE:
          intel_miptree_set_aux_state(brw, mt, level, layer, 1,
                                      ISL_AUX_STATE_RESOLVED);
          break;
 
-      case BLORP_HIZ_OP_HIZ_RESOLVE:
+      case ISL_AUX_OP_AMBIGUATE:
          /* The HiZ resolve operation is actually an ambiguate */
          intel_miptree_set_aux_state(brw, mt, level, layer, 1,
                                      ISL_AUX_STATE_PASS_THROUGH);
@@ -2795,6 +2794,25 @@ intel_miptree_prepare_external(struct brw_context *brw,
    intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
                                 0, INTEL_REMAINING_LAYERS,
                                 aux_usage, supports_fast_clear);
+}
+
+void
+intel_miptree_finish_external(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt)
+{
+   if (!mt->mcs_buf)
+      return;
+
+   /* We don't know the actual aux state of the aux surface.  The previous
+    * owner could have given it to us in a number of different states.
+    * Because we don't know the aux state, we reset the aux state to the
+    * least common denominator of possible valid states.
+    */
+   enum isl_aux_state default_aux_state =
+      isl_drm_modifier_get_default_aux_state(mt->drm_modifier);
+   assert(mt->last_level == mt->first_level);
+   intel_miptree_set_aux_state(brw, mt, 0, 0, INTEL_REMAINING_LAYERS,
+                               default_aux_state);
 }
 
 /**

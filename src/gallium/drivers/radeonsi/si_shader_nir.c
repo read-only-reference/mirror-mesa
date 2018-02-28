@@ -86,6 +86,27 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_invocation_id:
 			info->uses_invocationid = true;
 			break;
+		case nir_intrinsic_load_num_work_groups:
+			info->uses_grid_size = true;
+			break;
+		case nir_intrinsic_load_local_group_size:
+			/* The block size is translated to IMM with a fixed block size. */
+			if (info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0)
+				info->uses_block_size = true;
+			break;
+		case nir_intrinsic_load_local_invocation_id:
+		case nir_intrinsic_load_work_group_id: {
+			unsigned mask = nir_ssa_def_components_read(&intr->dest.ssa);
+			while (mask) {
+				unsigned i = u_bit_scan(&mask);
+
+				if (intr->intrinsic == nir_intrinsic_load_work_group_id)
+					info->uses_block_id[i] = true;
+				else
+					info->uses_thread_id[i] = true;
+			}
+			break;
+		}
 		case nir_intrinsic_load_vertex_id:
 			info->uses_vertexid = 1;
 			break;
@@ -222,12 +243,6 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	nir_function *func;
 	unsigned i;
 
-	assert(nir->info.stage == MESA_SHADER_VERTEX ||
-	       nir->info.stage == MESA_SHADER_GEOMETRY ||
-	       nir->info.stage == MESA_SHADER_TESS_CTRL ||
-	       nir->info.stage == MESA_SHADER_TESS_EVAL ||
-	       nir->info.stage == MESA_SHADER_FRAGMENT);
-
 	info->processor = pipe_shader_type_from_mesa(nir->info.stage);
 	info->num_tokens = 2; /* indicate that the shader is non-empty */
 	info->num_instructions = 2;
@@ -261,6 +276,42 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		info->properties[TGSI_PROPERTY_GS_INVOCATIONS] = nir->info.gs.invocations;
 	}
 
+	if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+		info->properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL] =
+			nir->info.fs.early_fragment_tests | nir->info.fs.post_depth_coverage;
+		info->properties[TGSI_PROPERTY_FS_POST_DEPTH_COVERAGE] = nir->info.fs.post_depth_coverage;
+
+		if (nir->info.fs.pixel_center_integer) {
+			info->properties[TGSI_PROPERTY_FS_COORD_PIXEL_CENTER] =
+				TGSI_FS_COORD_PIXEL_CENTER_INTEGER;
+		}
+
+		if (nir->info.fs.depth_layout != FRAG_DEPTH_LAYOUT_NONE) {
+			switch (nir->info.fs.depth_layout) {
+			case FRAG_DEPTH_LAYOUT_ANY:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_ANY;
+				break;
+			case FRAG_DEPTH_LAYOUT_GREATER:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_GREATER;
+				break;
+			case FRAG_DEPTH_LAYOUT_LESS:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_LESS;
+				break;
+			case FRAG_DEPTH_LAYOUT_UNCHANGED:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_UNCHANGED;
+				break;
+			default:
+				unreachable("Unknow depth layout");
+			}
+		}
+	}
+
+	if (nir->info.stage == MESA_SHADER_COMPUTE) {
+		info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] = nir->info.cs.local_size[0];
+		info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT] = nir->info.cs.local_size[1];
+		info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH] = nir->info.cs.local_size[2];
+	}
+
 	i = 0;
 	uint64_t processed_inputs = 0;
 	unsigned num_inputs = 0;
@@ -276,14 +327,22 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		unsigned attrib_count = glsl_count_attribute_slots(type,
 								   nir->info.stage == MESA_SHADER_VERTEX);
 
+		i = variable->data.driver_location;
+
 		/* Vertex shader inputs don't have semantics. The state
 		 * tracker has already mapped them to attributes via
 		 * variable->data.driver_location.
 		 */
 		if (nir->info.stage == MESA_SHADER_VERTEX) {
-			if (glsl_type_is_dual_slot(variable->type))
+			/* TODO: gather the actual input useage and remove this. */
+			info->input_usage_mask[i] = TGSI_WRITEMASK_XYZW;
+
+			if (glsl_type_is_dual_slot(variable->type)) {
 				num_inputs += 2;
-			else
+
+				/* TODO: gather the actual input useage and remove this. */
+				info->input_usage_mask[i+1] = TGSI_WRITEMASK_XYZW;
+			} else
 				num_inputs++;
 			continue;
 		}
@@ -298,8 +357,6 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 			num_inputs++;
 			continue;
 		}
-
-		i = variable->data.driver_location;
 
 		for (unsigned j = 0; j < attrib_count; j++, i++) {
 
@@ -389,20 +446,34 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		}
 
 		i = variable->data.driver_location;
-		if (processed_outputs & ((uint64_t)1 << i))
-			continue;
-
-		processed_outputs |= ((uint64_t)1 << i);
-		num_outputs++;
-
-		info->output_semantic_name[i] = semantic_name;
-		info->output_semantic_index[i] = semantic_index;
-		info->output_usagemask[i] = TGSI_WRITEMASK_XYZW;
 
 		unsigned num_components = 4;
 		unsigned vector_elements = glsl_get_vector_elements(glsl_without_array(variable->type));
 		if (vector_elements)
 			num_components = vector_elements;
+
+		if (glsl_type_is_64bit(glsl_without_array(variable->type)))
+			num_components = MIN2(num_components * 2, 4);
+
+		ubyte usagemask = 0;
+		for (unsigned j = 0; j < num_components; j++) {
+			switch (j + variable->data.location_frac) {
+				case 0:
+					usagemask |= TGSI_WRITEMASK_X;
+					break;
+				case 1:
+					usagemask |= TGSI_WRITEMASK_Y;
+					break;
+				case 2:
+					usagemask |= TGSI_WRITEMASK_Z;
+					break;
+				case 3:
+					usagemask |= TGSI_WRITEMASK_W;
+					break;
+				default:
+					unreachable("error calculating component index");
+			}
+		}
 
 		unsigned gs_out_streams;
 		if (variable->data.stream & (1u << 31)) {
@@ -419,22 +490,38 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		unsigned streamz = (gs_out_streams >> 4) & 3;
 		unsigned streamw = (gs_out_streams >> 6) & 3;
 
-		if (info->output_usagemask[i] & TGSI_WRITEMASK_X) {
+		if (usagemask & TGSI_WRITEMASK_X) {
+			info->output_usagemask[i] |= TGSI_WRITEMASK_X;
 			info->output_streams[i] |= streamx;
 			info->num_stream_output_components[streamx]++;
 		}
-		if (info->output_usagemask[i] & TGSI_WRITEMASK_Y) {
+		if (usagemask & TGSI_WRITEMASK_Y) {
+			info->output_usagemask[i] |= TGSI_WRITEMASK_Y;
 			info->output_streams[i] |= streamy << 2;
 			info->num_stream_output_components[streamy]++;
 		}
-		if (info->output_usagemask[i] & TGSI_WRITEMASK_Z) {
+		if (usagemask & TGSI_WRITEMASK_Z) {
+			info->output_usagemask[i] |= TGSI_WRITEMASK_Z;
 			info->output_streams[i] |= streamz << 4;
 			info->num_stream_output_components[streamz]++;
 		}
-		if (info->output_usagemask[i] & TGSI_WRITEMASK_W) {
+		if (usagemask & TGSI_WRITEMASK_W) {
+			info->output_usagemask[i] |= TGSI_WRITEMASK_W;
 			info->output_streams[i] |= streamw << 6;
 			info->num_stream_output_components[streamw]++;
 		}
+
+		/* make sure we only count this location once against the
+		 * num_outputs counter.
+		 */
+		if (processed_outputs & ((uint64_t)1 << i))
+			continue;
+
+		processed_outputs |= ((uint64_t)1 << i);
+		num_outputs++;
+
+		info->output_semantic_name[i] = semantic_name;
+		info->output_semantic_index[i] = semantic_index;
 
 		switch (semantic_name) {
 		case TGSI_SEMANTIC_PRIMID:
@@ -484,6 +571,12 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 			default:
 				info->reads_pervertex_outputs = true;
 			}
+		}
+
+		unsigned loc = variable->data.location;
+		if (loc == FRAG_RESULT_COLOR &&
+		    nir->info.outputs_written & (1ull << loc)) {
+			info->properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS] = true;
 		}
 	}
 
@@ -573,7 +666,7 @@ si_lower_nir(struct si_shader_selector* sel)
 
 	const nir_lower_subgroups_options subgroups_options = {
 		.subgroup_size = 64,
-		.ballot_bit_size = 32,
+		.ballot_bit_size = 64,
 		.lower_to_scalar = true,
 		.lower_subgroup_masks = true,
 		.lower_vote_trivial = false,
@@ -800,7 +893,11 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 	ctx->num_samplers = util_last_bit(info->samplers_declared);
 	ctx->num_images = util_last_bit(info->images_declared);
 
-	ac_nir_translate(&ctx->ac, &ctx->abi, nir, NULL);
+	if (ctx->shader->selector->local_size) {
+		assert(nir->info.stage == MESA_SHADER_COMPUTE);
+		si_declare_compute_memory(ctx);
+	}
+	ac_nir_translate(&ctx->ac, &ctx->abi, nir);
 
 	return true;
 }

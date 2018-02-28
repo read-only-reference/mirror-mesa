@@ -287,6 +287,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
         case PIPE_CAP_CONTEXT_PRIORITY_MASK:
         case PIPE_CAP_FENCE_SIGNAL:
+	case PIPE_CAP_CONSTBUF0_FLAGS:
                 return 0;
 
                 /* Stream output. */
@@ -372,11 +373,6 @@ vc4_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
         case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
                 return 0.0f;
         case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-                return 0.0f;
-        case PIPE_CAPF_GUARD_BAND_LEFT:
-        case PIPE_CAPF_GUARD_BAND_TOP:
-        case PIPE_CAPF_GUARD_BAND_RIGHT:
-        case PIPE_CAPF_GUARD_BAND_BOTTOM:
                 return 0.0f;
         default:
                 fprintf(stderr, "unknown paramf %d\n", param);
@@ -468,7 +464,6 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
                                unsigned usage)
 {
         struct vc4_screen *screen = vc4_screen(pscreen);
-        unsigned retval = 0;
 
         if (sample_count > 1 && sample_count != VC4_MAX_SAMPLES)
                 return FALSE;
@@ -524,46 +519,36 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
                 case PIPE_FORMAT_R8G8B8_SSCALED:
                 case PIPE_FORMAT_R8G8_SSCALED:
                 case PIPE_FORMAT_R8_SSCALED:
-                        retval |= PIPE_BIND_VERTEX_BUFFER;
                         break;
                 default:
-                        break;
+                        return FALSE;
                 }
         }
 
         if ((usage & PIPE_BIND_RENDER_TARGET) &&
-            vc4_rt_format_supported(format)) {
-                retval |= PIPE_BIND_RENDER_TARGET;
+            !vc4_rt_format_supported(format)) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
-            vc4_tex_format_supported(format) &&
-            (format != PIPE_FORMAT_ETC1_RGB8 || screen->has_etc1)) {
-                retval |= PIPE_BIND_SAMPLER_VIEW;
+            (!vc4_tex_format_supported(format) ||
+             (format == PIPE_FORMAT_ETC1_RGB8 && !screen->has_etc1))) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_DEPTH_STENCIL) &&
-            (format == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
-             format == PIPE_FORMAT_X8Z24_UNORM)) {
-                retval |= PIPE_BIND_DEPTH_STENCIL;
+            format != PIPE_FORMAT_S8_UINT_Z24_UNORM &&
+            format != PIPE_FORMAT_X8Z24_UNORM) {
+                return FALSE;
         }
 
         if ((usage & PIPE_BIND_INDEX_BUFFER) &&
-            (format == PIPE_FORMAT_I8_UINT ||
-             format == PIPE_FORMAT_I16_UINT)) {
-                retval |= PIPE_BIND_INDEX_BUFFER;
+            format != PIPE_FORMAT_I8_UINT &&
+            format != PIPE_FORMAT_I16_UINT) {
+                return FALSE;
         }
 
-#if 0
-        if (retval != usage) {
-                fprintf(stderr,
-                        "not supported: format=%s, target=%d, sample_count=%d, "
-                        "usage=0x%x, retval=0x%x\n", util_format_name(format),
-                        target, sample_count, usage, retval);
-        }
-#endif
-
-        return retval == usage;
+        return TRUE;
 }
 
 static void
