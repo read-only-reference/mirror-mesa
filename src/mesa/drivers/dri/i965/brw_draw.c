@@ -34,6 +34,7 @@
 #include "main/macros.h"
 #include "main/transformfeedback.h"
 #include "main/framebuffer.h"
+#include "main/varray.h"
 #include "tnl/tnl.h"
 #include "vbo/vbo.h"
 #include "swrast/swrast.h"
@@ -277,7 +278,7 @@ brw_emit_prim(struct brw_context *brw,
 
 static void
 brw_merge_inputs(struct brw_context *brw,
-                 const struct gl_vertex_array *arrays[])
+                 const struct gl_vertex_array *arrays)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
    const struct gl_context *ctx = &brw->ctx;
@@ -291,7 +292,7 @@ brw_merge_inputs(struct brw_context *brw,
 
    for (i = 0; i < VERT_ATTRIB_MAX; i++) {
       brw->vb.inputs[i].buffer = -1;
-      brw->vb.inputs[i].glarray = arrays[i];
+      brw->vb.inputs[i].glarray = &arrays[i];
    }
 
    if (devinfo->gen < 8 && !devinfo->is_haswell) {
@@ -300,14 +301,16 @@ brw_merge_inputs(struct brw_context *brw,
        * 2_10_10_10_REV vertex formats.  Set appropriate workaround flags.
        */
       while (mask) {
+         const struct gl_array_attributes *glattrib;
          uint8_t wa_flags = 0;
 
          i = u_bit_scan64(&mask);
+         glattrib = brw->vb.inputs[i].glarray->VertexAttrib;
 
-         switch (brw->vb.inputs[i].glarray->Type) {
+         switch (glattrib->Type) {
 
          case GL_FIXED:
-            wa_flags = brw->vb.inputs[i].glarray->Size;
+            wa_flags = glattrib->Size;
             break;
 
          case GL_INT_2_10_10_10_REV:
@@ -315,12 +318,12 @@ brw_merge_inputs(struct brw_context *brw,
             /* fallthough */
 
          case GL_UNSIGNED_INT_2_10_10_10_REV:
-            if (brw->vb.inputs[i].glarray->Format == GL_BGRA)
+            if (glattrib->Format == GL_BGRA)
                wa_flags |= BRW_ATTRIB_WA_BGRA;
 
-            if (brw->vb.inputs[i].glarray->Normalized)
+            if (glattrib->Normalized)
                wa_flags |= BRW_ATTRIB_WA_NORMALIZE;
-            else if (!brw->vb.inputs[i].glarray->Integer)
+            else if (!glattrib->Integer)
                wa_flags |= BRW_ATTRIB_WA_SCALE;
 
             break;
@@ -689,7 +692,7 @@ brw_postdraw_reconcile_align_wa_slices(struct brw_context *brw)
 
 static void
 brw_prepare_drawing(struct gl_context *ctx,
-                    const struct gl_vertex_array *arrays[],
+                    const struct gl_vertex_array *arrays,
                     const struct _mesa_index_buffer *ib,
                     bool index_bounds_valid,
                     GLuint min_index,
@@ -776,7 +779,7 @@ brw_finish_drawing(struct gl_context *ctx)
  */
 static void
 brw_draw_single_prim(struct gl_context *ctx,
-                     const struct gl_vertex_array *arrays[],
+                     const struct gl_vertex_array *arrays,
                      const struct _mesa_prim *prim,
                      unsigned prim_id,
                      struct brw_transform_feedback_object *xfb_obj,
@@ -911,13 +914,13 @@ retry:
 
 
 static bool
-all_varyings_in_vbos(const struct gl_vertex_array *arrays[])
+all_varyings_in_vbos(const struct gl_vertex_array *arrays)
 {
    GLuint i;
 
    for (i = 0; i < VERT_ATTRIB_MAX; i++)
-      if (arrays[i]->StrideB &&
-          arrays[i]->BufferObj->Name == 0)
+      if (arrays[i].BufferBinding->Stride &&
+          arrays[i].BufferBinding->BufferObj->Name == 0)
          return false;
 
    return true;
@@ -939,10 +942,15 @@ brw_draw_prims(struct gl_context *ctx,
 {
    unsigned i;
    struct brw_context *brw = brw_context(ctx);
-   const struct gl_vertex_array **arrays = ctx->Array._DrawArrays;
+   const struct gl_vertex_array *arrays;
    int predicate_state = brw->predicate.state;
    struct brw_transform_feedback_object *xfb_obj =
       (struct brw_transform_feedback_object *) gl_xfb_obj;
+
+   /* The initial pushdown of the inputs array into the drivers */
+   _mesa_set_drawing_arrays(ctx, brw->vb.draw_arrays.inputs);
+   arrays = ctx->Array._DrawArrays;
+   _vbo_update_inputs(ctx, &brw->vb.draw_arrays);
 
    if (!brw_check_conditional_render(brw))
       return;
@@ -961,8 +969,8 @@ brw_draw_prims(struct gl_context *ctx,
                  _mesa_enum_to_string(ctx->RenderMode));
       _swsetup_Wakeup(ctx);
       _tnl_wakeup(ctx);
-      _tnl_draw_prims(ctx, prims, nr_prims, ib,
-                      index_bounds_valid, min_index, max_index, NULL, 0, NULL);
+      _tnl_draw(ctx, prims, nr_prims, ib,
+                index_bounds_valid, min_index, max_index, NULL, 0, NULL);
       return;
    }
 
@@ -1073,14 +1081,19 @@ brw_draw_indirect_prims(struct gl_context *ctx,
 }
 
 void
-brw_draw_init(struct brw_context *brw)
+brw_init_draw_functions(struct dd_function_table *functions)
 {
-   struct gl_context *ctx = &brw->ctx;
-
    /* Register our drawing function:
     */
-   vbo_set_draw_func(ctx, brw_draw_prims);
-   vbo_set_indirect_draw_func(ctx, brw_draw_indirect_prims);
+   functions->Draw = brw_draw_prims;
+   functions->DrawIndirect = brw_draw_indirect_prims;
+}
+
+void
+brw_draw_init(struct brw_context *brw)
+{
+   /* Keep our list of gl_vertex_array inputs */
+   _vbo_init_inputs(&brw->vb.draw_arrays);
 
    for (int i = 0; i < VERT_ATTRIB_MAX; i++)
       brw->vb.inputs[i].buffer = -1;

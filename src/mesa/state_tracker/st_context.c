@@ -382,7 +382,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
 
    st_init_atoms(st);
    st_init_clear(st);
-   st_init_draw(st);
    st_init_pbo_helpers(st);
 
    /* Choose texture target for glDrawPixels, glBitmap, renderbuffers */
@@ -433,6 +432,9 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    if (no_error)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_NO_ERROR_BIT_KHR;
 
+   ctx->Const.PackedDriverUniformStorage =
+      screen->get_param(screen, PIPE_CAP_PACKED_UNIFORMS);
+
    st->has_stencil_export =
       screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT);
    st->has_shader_model3 = screen->get_param(screen, PIPE_CAP_SM3);
@@ -468,7 +470,7 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       ? true : false;
 
    /* GL limits and extensions */
-   st_init_limits(pipe->screen, &ctx->Const, &ctx->Extensions);
+   st_init_limits(pipe->screen, &ctx->Const, &ctx->Extensions, ctx->API);
    st_init_extensions(pipe->screen, &ctx->Const,
                       &ctx->Extensions, &st->options, ctx->API);
 
@@ -547,6 +549,9 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
 
    /* Initialize context's winsys buffers list */
    LIST_INITHEAD(&st->winsys_buffers);
+
+   /* Keep our list of gl_vertex_array inputs */
+   _vbo_init_inputs(&st->draw_arrays);
 
    return st;
 }
@@ -712,6 +717,7 @@ st_init_driver_functions(struct pipe_screen *screen,
    _mesa_init_shader_object_functions(functions);
    _mesa_init_sampler_object_functions(functions);
 
+   st_init_draw_functions(functions);
    st_init_blit_functions(functions);
    st_init_bufferobject_functions(screen, functions);
    st_init_clear_functions(functions);

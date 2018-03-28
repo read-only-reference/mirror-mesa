@@ -59,7 +59,7 @@ extern "C" {
 #define BITFIELD_BIT(b)      ((GLbitfield)1 << (b))
 /** Set all bits up to excluding bit b */
 #define BITFIELD_MASK(b)      \
-   ((b) == 32 ? (~(GLbitfield)0) : BITFIELD_BIT(b) - 1)
+   ((b) == 32 ? (~(GLbitfield)0) : BITFIELD_BIT((b) % 32) - 1)
 /** Set count bits starting from bit b  */
 #define BITFIELD_RANGE(b, count) \
    (BITFIELD_MASK((b) + (count)) & ~BITFIELD_MASK(b))
@@ -1504,29 +1504,6 @@ struct gl_pixelstore_attrib
 
 
 /**
- * Vertex array information which is derived from gl_array_attributes
- * and gl_vertex_buffer_binding information.  Used by the VBO module and
- * device drivers.
- */
-struct gl_vertex_array
-{
-   /** if NULL, vertex data are in user memory */
-   struct gl_buffer_object *BufferObj;
-   /** Pointer into user memory, or offset into the BufferObj */
-   const GLubyte *Ptr;
-   GLsizei StrideB;		/**< actual stride in bytes */
-   GLuint InstanceDivisor;      /**< GL_ARB_instanced_arrays */
-   GLenum16 Type;               /**< datatype: GL_FLOAT, GL_INT, etc */
-   GLenum16 Format;             /**< default: GL_RGBA, but may be GL_BGRA */
-   unsigned Size:4;             /**< components per element (1,2,3,4) */
-   unsigned _ElementSize:8;     /**< in bytes, up to 4*sizeof(GLdouble) */
-   unsigned Normalized:1;       /**< GL_ARB_vertex_program */
-   unsigned Integer:1;          /**< Integer-valued? */
-   unsigned Doubles:1;          /**< doubles not converted to floats */
-};
-
-
-/**
  * Enum for defining the mapping for the position/generic0 attribute.
  *
  * Do not change the order of the values as these are used as
@@ -1590,6 +1567,20 @@ struct gl_vertex_buffer_binding
 
 
 /**
+ * Vertex array information which is derived from gl_array_attributes
+ * and gl_vertex_buffer_binding information.  Used by the VBO module and
+ * device drivers.
+ */
+struct gl_vertex_array
+{
+   /** Vertex attribute array */
+   const struct gl_array_attributes *VertexAttrib;
+   /** Vertex buffer binding */
+   const struct gl_vertex_buffer_binding *BufferBinding;
+};
+
+
+/**
  * A representation of "Vertex Array Objects" (VAOs) from OpenGL 3.1+ /
  * the GL_ARB_vertex_array_object extension.
  */
@@ -1613,14 +1604,6 @@ struct gl_vertex_array_object
     * Is used for dlist VAOs.
     */
    bool SharedAndImmutable;
-
-   /**
-    * Derived vertex attribute arrays
-    *
-    * This is a legacy data structure created from gl_array_attributes and
-    * gl_vertex_buffer_binding, only used by the VBO module at this time.
-    */
-   struct gl_vertex_array _VertexArray[VERT_ATTRIB_MAX];
 
    /** Vertex attribute arrays */
    struct gl_array_attributes VertexAttrib[VERT_ATTRIB_MAX];
@@ -1724,7 +1707,7 @@ struct gl_array_attrib
     * Vertex arrays as consumed by a driver.
     * The array pointer is set up only by the VBO module.
     */
-   const struct gl_vertex_array **_DrawArrays; /**< 0..VERT_ATTRIB_MAX-1 */
+   const struct gl_vertex_array *_DrawArrays; /**< 0..VERT_ATTRIB_MAX-1 */
 
    /** Legal array datatypes and the API for which they have been computed */
    GLbitfield LegalTypesMask;
@@ -1878,9 +1861,6 @@ struct gl_transform_feedback_buffer
 /** Post-link transform feedback info. */
 struct gl_transform_feedback_info
 {
-   /* Was xfb enabled via the api or in shader layout qualifiers */
-   bool api_enabled;
-
    unsigned NumOutputs;
 
    /* Bitmask of active buffer indices. */
@@ -2671,6 +2651,14 @@ struct gl_linked_shader
    struct exec_list *packed_varyings;
    struct exec_list *fragdata_arrays;
    struct glsl_symbol_table *symbols;
+
+   /**
+    * ARB_gl_spirv related data.
+    *
+    * This is actually a reference to the gl_shader::spirv_data, which
+    * stores information that is also needed during linking.
+    */
+   struct gl_shader_spirv_data *spirv_data;
 };
 
 
@@ -4152,6 +4140,12 @@ struct gl_constants
 
    /** GL_ARB_get_program_binary */
    GLuint NumProgramBinaryFormats;
+
+   /** Is the drivers uniform storage packed or padded to 16 bytes. */
+   bool PackedDriverUniformStorage;
+
+   /** GL_ARB_gl_spirv */
+   struct spirv_supported_capabilities SpirVCapabilities;
 };
 
 

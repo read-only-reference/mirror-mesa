@@ -481,7 +481,21 @@ v3dX(emit_rcl)(struct vc5_job *job)
 
                 /* XXX: Early D/S clear */
 
-                config.early_z_disable = !job->uses_early_z;
+                switch (job->first_ez_state) {
+                case VC5_EZ_UNDECIDED:
+                case VC5_EZ_LT_LE:
+                        config.early_z_disable = false;
+                        config.early_z_test_and_update_direction =
+                                EARLY_Z_DIRECTION_LT_LE;
+                        break;
+                case VC5_EZ_GT_GE:
+                        config.early_z_disable = false;
+                        config.early_z_test_and_update_direction =
+                                EARLY_Z_DIRECTION_GT_GE;
+                        break;
+                case VC5_EZ_DISABLED:
+                        config.early_z_disable = true;
+                }
 
                 config.image_width_pixels = job->draw_width;
                 config.image_height_pixels = job->draw_height;
@@ -696,8 +710,13 @@ v3dX(emit_rcl)(struct vc5_job *job)
         uint32_t supertile_h_in_pixels = job->tile_height * supertile_h;
         uint32_t min_x_supertile = job->draw_min_x / supertile_w_in_pixels;
         uint32_t min_y_supertile = job->draw_min_y / supertile_h_in_pixels;
-        uint32_t max_x_supertile = (job->draw_max_x - 1) / supertile_w_in_pixels;
-        uint32_t max_y_supertile = (job->draw_max_y - 1) / supertile_h_in_pixels;
+
+        uint32_t max_x_supertile = 0;
+        uint32_t max_y_supertile = 0;
+        if (job->draw_max_x != 0 && job->draw_max_y != 0) {
+                max_x_supertile = (job->draw_max_x - 1) / supertile_w_in_pixels;
+                max_y_supertile = (job->draw_max_y - 1) / supertile_h_in_pixels;
+        }
 
         for (int y = min_y_supertile; y <= max_y_supertile; y++) {
                 for (int x = min_x_supertile; x <= max_x_supertile; x++) {

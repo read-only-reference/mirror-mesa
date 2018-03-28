@@ -369,7 +369,7 @@ nir_visitor::visit(ir_variable *ir)
       /* Mark all the locations that require two slots */
       if (shader->info.stage == MESA_SHADER_VERTEX &&
           glsl_type_is_dual_slot(glsl_without_array(var->type))) {
-         for (uint i = 0; i < glsl_count_attribute_slots(var->type, true); i++) {
+         for (unsigned i = 0; i < glsl_count_attribute_slots(var->type, true); i++) {
             uint64_t bitfield = BITFIELD64_BIT(var->data.location + i);
             shader->info.vs.double_inputs |= bitfield;
          }
@@ -434,6 +434,7 @@ nir_visitor::visit(ir_variable *ir)
    var->data.index = ir->data.index;
    var->data.descriptor_set = 0;
    var->data.binding = ir->data.binding;
+   var->data.bindless = ir->data.bindless;
    var->data.offset = ir->data.offset;
    var->data.image.read_only = ir->data.memory_read_only;
    var->data.image.write_only = ir->data.memory_write_only;
@@ -445,8 +446,8 @@ nir_visitor::visit(ir_variable *ir)
 
    var->num_state_slots = ir->get_num_state_slots();
    if (var->num_state_slots > 0) {
-      var->state_slots = ralloc_array(var, nir_state_slot,
-                                      var->num_state_slots);
+      var->state_slots = rzalloc_array(var, nir_state_slot,
+                                       var->num_state_slots);
 
       ir_state_slot *state_slots = ir->get_state_slots();
       for (unsigned i = 0; i < var->num_state_slots; i++) {
@@ -667,43 +668,43 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_atomic_counter_comp_swap_var;
          break;
       case ir_intrinsic_image_load:
-         op = nir_intrinsic_image_load;
+         op = nir_intrinsic_image_var_load;
          break;
       case ir_intrinsic_image_store:
-         op = nir_intrinsic_image_store;
+         op = nir_intrinsic_image_var_store;
          break;
       case ir_intrinsic_image_atomic_add:
-         op = nir_intrinsic_image_atomic_add;
+         op = nir_intrinsic_image_var_atomic_add;
          break;
       case ir_intrinsic_image_atomic_min:
-         op = nir_intrinsic_image_atomic_min;
+         op = nir_intrinsic_image_var_atomic_min;
          break;
       case ir_intrinsic_image_atomic_max:
-         op = nir_intrinsic_image_atomic_max;
+         op = nir_intrinsic_image_var_atomic_max;
          break;
       case ir_intrinsic_image_atomic_and:
-         op = nir_intrinsic_image_atomic_and;
+         op = nir_intrinsic_image_var_atomic_and;
          break;
       case ir_intrinsic_image_atomic_or:
-         op = nir_intrinsic_image_atomic_or;
+         op = nir_intrinsic_image_var_atomic_or;
          break;
       case ir_intrinsic_image_atomic_xor:
-         op = nir_intrinsic_image_atomic_xor;
+         op = nir_intrinsic_image_var_atomic_xor;
          break;
       case ir_intrinsic_image_atomic_exchange:
-         op = nir_intrinsic_image_atomic_exchange;
+         op = nir_intrinsic_image_var_atomic_exchange;
          break;
       case ir_intrinsic_image_atomic_comp_swap:
-         op = nir_intrinsic_image_atomic_comp_swap;
+         op = nir_intrinsic_image_var_atomic_comp_swap;
          break;
       case ir_intrinsic_memory_barrier:
          op = nir_intrinsic_memory_barrier;
          break;
       case ir_intrinsic_image_size:
-         op = nir_intrinsic_image_size;
+         op = nir_intrinsic_image_var_size;
          break;
       case ir_intrinsic_image_samples:
-         op = nir_intrinsic_image_samples;
+         op = nir_intrinsic_image_var_samples;
          break;
       case ir_intrinsic_ssbo_store:
          op = nir_intrinsic_store_ssbo;
@@ -814,7 +815,7 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_vote_all;
          break;
       case ir_intrinsic_vote_eq:
-         op = nir_intrinsic_vote_eq;
+         op = nir_intrinsic_vote_ieq;
          break;
       case ir_intrinsic_ballot:
          op = nir_intrinsic_ballot;
@@ -872,18 +873,18 @@ nir_visitor::visit(ir_call *ir)
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
-      case nir_intrinsic_image_load:
-      case nir_intrinsic_image_store:
-      case nir_intrinsic_image_atomic_add:
-      case nir_intrinsic_image_atomic_min:
-      case nir_intrinsic_image_atomic_max:
-      case nir_intrinsic_image_atomic_and:
-      case nir_intrinsic_image_atomic_or:
-      case nir_intrinsic_image_atomic_xor:
-      case nir_intrinsic_image_atomic_exchange:
-      case nir_intrinsic_image_atomic_comp_swap:
-      case nir_intrinsic_image_samples:
-      case nir_intrinsic_image_size: {
+      case nir_intrinsic_image_var_load:
+      case nir_intrinsic_image_var_store:
+      case nir_intrinsic_image_var_atomic_add:
+      case nir_intrinsic_image_var_atomic_min:
+      case nir_intrinsic_image_var_atomic_max:
+      case nir_intrinsic_image_var_atomic_and:
+      case nir_intrinsic_image_var_atomic_or:
+      case nir_intrinsic_image_var_atomic_xor:
+      case nir_intrinsic_image_var_atomic_exchange:
+      case nir_intrinsic_image_var_atomic_comp_swap:
+      case nir_intrinsic_image_var_samples:
+      case nir_intrinsic_image_var_size: {
          nir_ssa_undef_instr *instr_undef =
             nir_ssa_undef_instr_create(shader, 1, 32);
          nir_builder_instr_insert(&b, &instr_undef->instr);
@@ -900,14 +901,14 @@ nir_visitor::visit(ir_call *ir)
          /* Set the intrinsic destination. */
          if (ir->return_deref) {
             unsigned num_components = ir->return_deref->type->vector_elements;
-            if (instr->intrinsic == nir_intrinsic_image_size)
+            if (instr->intrinsic == nir_intrinsic_image_var_size)
                instr->num_components = num_components;
             nir_ssa_dest_init(&instr->instr, &instr->dest,
                               num_components, 32, NULL);
          }
 
-         if (op == nir_intrinsic_image_size ||
-             op == nir_intrinsic_image_samples) {
+         if (op == nir_intrinsic_image_var_size ||
+             op == nir_intrinsic_image_var_samples) {
             nir_builder_instr_insert(&b, &instr->instr);
             break;
          }
@@ -1163,8 +1164,9 @@ nir_visitor::visit(ir_call *ir)
       }
       case nir_intrinsic_vote_any:
       case nir_intrinsic_vote_all:
-      case nir_intrinsic_vote_eq: {
+      case nir_intrinsic_vote_ieq: {
          nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 32, NULL);
+         instr->num_components = 1;
 
          ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
          instr->src[0] = nir_src_for_ssa(evaluate_rvalue(value));
@@ -1611,6 +1613,8 @@ nir_visitor::visit(ir_expression *ir)
    case ir_unop_ceil:  result = nir_fceil(&b, srcs[0]); break;
    case ir_unop_floor: result = nir_ffloor(&b, srcs[0]); break;
    case ir_unop_fract: result = nir_ffract(&b, srcs[0]); break;
+   case ir_unop_frexp_exp: result = nir_frexp_exp(&b, srcs[0]); break;
+   case ir_unop_frexp_sig: result = nir_frexp_sig(&b, srcs[0]); break;
    case ir_unop_round_even: result = nir_fround_even(&b, srcs[0]); break;
    case ir_unop_sin:   result = nir_fsin(&b, srcs[0]); break;
    case ir_unop_cos:   result = nir_fcos(&b, srcs[0]); break;

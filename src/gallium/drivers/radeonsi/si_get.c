@@ -75,6 +75,7 @@ const char *si_get_family_name(const struct si_screen *sscreen)
 	case CHIP_POLARIS12: return "AMD POLARIS12";
 	case CHIP_STONEY: return "AMD STONEY";
 	case CHIP_VEGA10: return "AMD VEGA10";
+	case CHIP_VEGA12: return "AMD VEGA12";
 	case CHIP_RAVEN: return "AMD RAVEN";
 	default: return "AMD unknown";
 	}
@@ -249,6 +250,11 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		    sscreen->info.drm_major == 3 &&
 		    sscreen->info.drm_minor >= 13)
 			return RADEON_SPARSE_PAGE_SIZE;
+		return 0;
+
+	case PIPE_CAP_PACKED_UNIFORMS:
+		if (sscreen->debug_flags & DBG(NIR))
+			return 1;
 		return 0;
 
 	/* Unsupported features. */

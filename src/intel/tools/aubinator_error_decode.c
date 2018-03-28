@@ -120,7 +120,7 @@ static int ring_name_to_class(const char *ring_name,
       [VECS] = "vecs",
    };
    for (size_t i = 0; i < ARRAY_SIZE(class_names); i++) {
-      if (strcmp(ring_name, class_names[i]))
+      if (strncmp(ring_name, class_names[i], strlen(class_names[i])))
          continue;
 
       *class = i;
@@ -539,6 +539,18 @@ read_data_file(FILE *file)
             if (reg_name)
                print_register(spec, reg_name, reg);
          }
+
+         matched = sscanf(line, "  SC_INSTDONE: 0x%08x\n", &reg);
+         if (matched == 1)
+            print_register(spec, "SC_INSTDONE", reg);
+
+         matched = sscanf(line, "  SAMPLER_INSTDONE[%*d][%*d]: 0x%08x\n", &reg);
+         if (matched == 1)
+            print_register(spec, "SAMPLER_INSTDONE", reg);
+
+         matched = sscanf(line, "  ROW_INSTDONE[%*d][%*d]: 0x%08x\n", &reg);
+         if (matched == 1)
+            print_register(spec, "ROW_INSTDONE", reg);
 
          matched = sscanf(line, "  INSTDONE1: 0x%08x\n", &reg);
          if (matched == 1)

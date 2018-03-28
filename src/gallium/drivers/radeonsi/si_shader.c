@@ -1487,19 +1487,18 @@ static void store_output_tcs(struct lp_build_tgsi_context *bld_base,
 }
 
 static void si_nir_store_output_tcs(struct ac_shader_abi *abi,
+				    const struct nir_variable *var,
 				    LLVMValueRef vertex_index,
 				    LLVMValueRef param_index,
 				    unsigned const_index,
-				    unsigned location,
-				    unsigned driver_location,
 				    LLVMValueRef src,
-				    unsigned component,
-				    bool is_patch,
-				    bool is_compact,
 				    unsigned writemask)
 {
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	struct tgsi_shader_info *info = &ctx->shader->selector->info;
+	const unsigned component = var->data.location_frac;
+	const bool is_patch = var->data.patch;
+	unsigned driver_location = var->data.driver_location;
 	LLVMValueRef dw_addr, stride;
 	LLVMValueRef buffer, base, addr;
 	LLVMValueRef values[4];
@@ -1680,6 +1679,30 @@ LLVMValueRef si_llvm_load_input_gs(struct ac_shader_abi *abi,
 		return si_llvm_emit_fetch_64bit(bld_base, type, value, value2);
 	}
 	return LLVMBuildBitCast(ctx->ac.builder, value, type, "");
+}
+
+static LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
+					 unsigned location,
+					 unsigned driver_location,
+					 unsigned component,
+					 unsigned num_components,
+					 unsigned vertex_index,
+					 unsigned const_index,
+					 LLVMTypeRef type)
+{
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+
+	LLVMValueRef value[4];
+	for (unsigned i = component; i < num_components + component; i++) {
+		unsigned offset = i;
+		if (llvm_type_is_64bit(ctx, type))
+			offset *= 2;
+
+		value[i] = si_llvm_load_input_gs(&ctx->abi, driver_location  / 4,
+						 vertex_index, type, offset);
+	}
+
+	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
 }
 
 static LLVMValueRef fetch_input_gs(
@@ -2403,12 +2426,25 @@ static LLVMValueRef fetch_constant(
 		 * addresses generates horrible VALU code with very high
 		 * VGPR usage and very low SIMD occupancy.
 		 */
-		ptr = LLVMBuildPtrToInt(ctx->ac.builder, ptr, ctx->i64, "");
-		ptr = LLVMBuildBitCast(ctx->ac.builder, ptr, ctx->v2i32, "");
+		ptr = LLVMBuildPtrToInt(ctx->ac.builder, ptr, ctx->ac.intptr, "");
+
+		LLVMValueRef desc0, desc1;
+		if (HAVE_32BIT_POINTERS) {
+			desc0 = ptr;
+			desc1 = LLVMConstInt(ctx->i32,
+					     S_008F04_BASE_ADDRESS_HI(ctx->screen->info.address32_hi), 0);
+		} else {
+			ptr = LLVMBuildBitCast(ctx->ac.builder, ptr, ctx->v2i32, "");
+			desc0 = LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_0, "");
+			desc1 = LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_1, "");
+			/* Mask out all bits except BASE_ADDRESS_HI. */
+			desc1 = LLVMBuildAnd(ctx->ac.builder, desc1,
+					     LLVMConstInt(ctx->i32, ~C_008F04_BASE_ADDRESS_HI, 0), "");
+		}
 
 		LLVMValueRef desc_elems[] = {
-			LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_0, ""),
-			LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_1, ""),
+			desc0,
+			desc1,
 			LLVMConstInt(ctx->i32, (sel->info.const_file_max[0] + 1) * 16, 0),
 			LLVMConstInt(ctx->i32,
 				S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
@@ -4432,12 +4468,16 @@ static void si_create_function(struct si_shader_context *ctx,
 			*fninfo->assign[i] = LLVMGetParam(ctx->main_fn, i);
 	}
 
-	si_llvm_add_attribute(ctx->main_fn, "amdgpu-32bit-address-high-bits",
-			      ctx->screen->info.address32_hi);
+	if (ctx->screen->info.address32_hi) {
+		ac_llvm_add_target_dep_function_attr(ctx->main_fn,
+						     "amdgpu-32bit-address-high-bits",
+						     ctx->screen->info.address32_hi);
+	}
 
 	if (max_workgroup_size) {
-		si_llvm_add_attribute(ctx->main_fn, "amdgpu-max-work-group-size",
-				      max_workgroup_size);
+		ac_llvm_add_target_dep_function_attr(ctx->main_fn,
+						     "amdgpu-max-work-group-size",
+						     max_workgroup_size);
 	}
 	LLVMAddTargetDependentFunctionAttr(ctx->main_fn,
 					   "no-signed-zeros-fp-math",
@@ -4979,17 +5019,17 @@ static void create_function(struct si_shader_context *ctx)
 	/* Reserve register locations for VGPR inputs the PS prolog may need. */
 	if (ctx->type == PIPE_SHADER_FRAGMENT &&
 	    ctx->separate_prolog) {
-		si_llvm_add_attribute(ctx->main_fn,
-				      "InitialPSInputAddr",
-				      S_0286D0_PERSP_SAMPLE_ENA(1) |
-				      S_0286D0_PERSP_CENTER_ENA(1) |
-				      S_0286D0_PERSP_CENTROID_ENA(1) |
-				      S_0286D0_LINEAR_SAMPLE_ENA(1) |
-				      S_0286D0_LINEAR_CENTER_ENA(1) |
-				      S_0286D0_LINEAR_CENTROID_ENA(1) |
-				      S_0286D0_FRONT_FACE_ENA(1) |
-				      S_0286D0_ANCILLARY_ENA(1) |
-				      S_0286D0_POS_FIXED_PT_ENA(1));
+		ac_llvm_add_target_dep_function_attr(ctx->main_fn,
+						     "InitialPSInputAddr",
+						     S_0286D0_PERSP_SAMPLE_ENA(1) |
+						     S_0286D0_PERSP_CENTER_ENA(1) |
+						     S_0286D0_PERSP_CENTROID_ENA(1) |
+						     S_0286D0_LINEAR_SAMPLE_ENA(1) |
+						     S_0286D0_LINEAR_CENTER_ENA(1) |
+						     S_0286D0_LINEAR_CENTROID_ENA(1) |
+						     S_0286D0_FRONT_FACE_ENA(1) |
+						     S_0286D0_ANCILLARY_ENA(1) |
+						     S_0286D0_POS_FIXED_PT_ENA(1));
 	}
 
 	shader->info.num_input_sgprs = 0;
@@ -5957,32 +5997,6 @@ static void si_optimize_vs_outputs(struct si_shader_context *ctx)
 			       &shader->info.nr_param_exports);
 }
 
-static void si_count_scratch_private_memory(struct si_shader_context *ctx)
-{
-	ctx->shader->config.private_mem_vgprs = 0;
-
-	/* Process all LLVM instructions. */
-	LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(ctx->main_fn);
-	while (bb) {
-		LLVMValueRef next = LLVMGetFirstInstruction(bb);
-
-		while (next) {
-			LLVMValueRef inst = next;
-			next = LLVMGetNextInstruction(next);
-
-			if (LLVMGetInstructionOpcode(inst) != LLVMAlloca)
-				continue;
-
-			LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(inst));
-			/* No idea why LLVM aligns allocas to 4 elements. */
-			unsigned alignment = LLVMGetAlignment(inst);
-			unsigned dw_size = align(ac_get_type_size(type) / 4, alignment);
-			ctx->shader->config.private_mem_vgprs += dw_size;
-		}
-		bb = LLVMGetNextBasicBlock(bb);
-	}
-}
-
 static void si_init_exec_from_input(struct si_shader_context *ctx,
 				    unsigned param, unsigned bitoffset)
 {
@@ -6060,6 +6074,7 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		ctx->abi.lookup_interp_param = si_nir_lookup_interp_param;
 		ctx->abi.load_sample_position = load_sample_position;
 		ctx->abi.load_sample_mask_in = load_sample_mask_in;
+		ctx->abi.emit_kill = si_llvm_emit_kill;
 		break;
 	case PIPE_SHADER_COMPUTE:
 		ctx->abi.load_local_group_size = get_block_size;
@@ -6929,8 +6944,10 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 	si_optimize_vs_outputs(&ctx);
 
 	if ((debug && debug->debug_message) ||
-	    si_can_dump_shader(sscreen, ctx.type))
-		si_count_scratch_private_memory(&ctx);
+	    si_can_dump_shader(sscreen, ctx.type)) {
+		ctx.shader->config.private_mem_vgprs =
+			ac_count_scratch_private_memory(ctx.main_fn);
+	}
 
 	/* Compile to bytecode. */
 	r = si_compile_llvm(sscreen, &shader->binary, &shader->config, tm,
@@ -7788,8 +7805,8 @@ static void si_build_ps_epilog_function(struct si_shader_context *ctx,
 	/* Create the function. */
 	si_create_function(ctx, "ps_epilog", NULL, 0, &fninfo, 0);
 	/* Disable elimination of unused inputs. */
-	si_llvm_add_attribute(ctx->main_fn,
-				  "InitialPSInputAddr", 0xffffff);
+	ac_llvm_add_target_dep_function_attr(ctx->main_fn,
+					     "InitialPSInputAddr", 0xffffff);
 
 	/* Process colors. */
 	unsigned vgpr = fninfo.num_sgpr_params;
@@ -7954,6 +7971,11 @@ static bool si_shader_select_ps_parts(struct si_screen *sscreen,
 void si_multiwave_lds_size_workaround(struct si_screen *sscreen,
 				      unsigned *lds_size)
 {
+	/* If tessellation is all offchip and on-chip GS isn't used, this
+	 * workaround is not needed.
+	 */
+	return;
+
 	/* SPI barrier management bug:
 	 *   Make sure we have at least 4k of LDS in use to avoid the bug.
 	 *   It applies to workgroup sizes of more than one wavefront.

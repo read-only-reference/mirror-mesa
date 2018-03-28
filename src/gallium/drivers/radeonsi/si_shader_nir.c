@@ -21,8 +21,8 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "si_shader.h"
 #include "si_shader_internal.h"
+#include "si_pipe.h"
 
 #include "ac_nir_to_llvm.h"
 
@@ -31,12 +31,6 @@
 #include "compiler/nir/nir.h"
 #include "compiler/nir_types.h"
 
-
-static int
-type_size(const struct glsl_type *type)
-{
-   return glsl_count_attribute_slots(type, false);
-}
 
 static void scan_instruction(struct tgsi_shader_info *info,
 			     nir_instr *instr)
@@ -62,6 +56,9 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		if (!tex->texture) {
 			info->samplers_declared |=
 				u_bit_consecutive(tex->sampler_index, 1);
+		} else {
+			if (tex->texture->var->data.bindless)
+				info->uses_bindless_samplers = true;
 		}
 
 		switch (tex->op) {
@@ -126,15 +123,15 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_tess_level_outer:
 			info->reads_tess_factors = true;
 			break;
-		case nir_intrinsic_image_store:
-		case nir_intrinsic_image_atomic_add:
-		case nir_intrinsic_image_atomic_min:
-		case nir_intrinsic_image_atomic_max:
-		case nir_intrinsic_image_atomic_and:
-		case nir_intrinsic_image_atomic_or:
-		case nir_intrinsic_image_atomic_xor:
-		case nir_intrinsic_image_atomic_exchange:
-		case nir_intrinsic_image_atomic_comp_swap:
+		case nir_intrinsic_image_var_store:
+		case nir_intrinsic_image_var_atomic_add:
+		case nir_intrinsic_image_var_atomic_min:
+		case nir_intrinsic_image_var_atomic_max:
+		case nir_intrinsic_image_var_atomic_and:
+		case nir_intrinsic_image_var_atomic_or:
+		case nir_intrinsic_image_var_atomic_xor:
+		case nir_intrinsic_image_var_atomic_exchange:
+		case nir_intrinsic_image_var_atomic_comp_swap:
 		case nir_intrinsic_store_ssbo:
 		case nir_intrinsic_ssbo_atomic_add:
 		case nir_intrinsic_ssbo_atomic_imin:
@@ -432,32 +429,48 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	nir_foreach_variable(variable, &nir->outputs) {
 		unsigned semantic_name, semantic_index;
 
-		if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-			tgsi_get_gl_frag_result_semantic(variable->data.location,
-				&semantic_name, &semantic_index);
-
-			/* Adjust for dual source blending */
-			if (variable->data.index > 0) {
-				semantic_index++;
-			}
-		} else {
-			tgsi_get_gl_varying_semantic(variable->data.location, true,
-						     &semantic_name, &semantic_index);
-		}
-
 		i = variable->data.driver_location;
 
-		unsigned num_components = 4;
-		unsigned vector_elements = glsl_get_vector_elements(glsl_without_array(variable->type));
-		if (vector_elements)
-			num_components = vector_elements;
+		const struct glsl_type *type = variable->type;
+		if (nir_is_per_vertex_io(variable, nir->info.stage)) {
+			assert(glsl_type_is_array(type));
+			type = glsl_get_array_element(type);
+		}
 
-		if (glsl_type_is_64bit(glsl_without_array(variable->type)))
-			num_components = MIN2(num_components * 2, 4);
+		unsigned attrib_count = glsl_count_attribute_slots(type, false);
+		for (unsigned k = 0; k < attrib_count; k++, i++) {
 
-		ubyte usagemask = 0;
-		for (unsigned j = 0; j < num_components; j++) {
-			switch (j + variable->data.location_frac) {
+			if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+				tgsi_get_gl_frag_result_semantic(variable->data.location + k,
+					&semantic_name, &semantic_index);
+
+				/* Adjust for dual source blending */
+				if (variable->data.index > 0) {
+					semantic_index++;
+				}
+			} else {
+				tgsi_get_gl_varying_semantic(variable->data.location + k, true,
+							     &semantic_name, &semantic_index);
+			}
+
+			unsigned num_components = 4;
+			unsigned vector_elements = glsl_get_vector_elements(glsl_without_array(variable->type));
+			if (vector_elements)
+				num_components = vector_elements;
+
+			unsigned component = variable->data.location_frac;
+			if (glsl_type_is_64bit(glsl_without_array(variable->type))) {
+				if (glsl_type_is_dual_slot(glsl_without_array(variable->type)) && k % 2) {
+					num_components = (num_components * 2) - 4;
+					component = 0;
+				} else {
+					num_components = MIN2(num_components * 2, 4);
+				}
+			}
+
+			ubyte usagemask = 0;
+			for (unsigned j = component; j < num_components + component; j++) {
+				switch (j) {
 				case 0:
 					usagemask |= TGSI_WRITEMASK_X;
 					break;
@@ -472,110 +485,112 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 					break;
 				default:
 					unreachable("error calculating component index");
+				}
 			}
-		}
 
-		unsigned gs_out_streams;
-		if (variable->data.stream & (1u << 31)) {
-			gs_out_streams = variable->data.stream & ~(1u << 31);
-		} else {
-			assert(variable->data.stream < 4);
-			gs_out_streams = 0;
-			for (unsigned j = 0; j < num_components; ++j)
-				gs_out_streams |= variable->data.stream << (2 * (variable->data.location_frac + j));
-		}
+			unsigned gs_out_streams;
+			if (variable->data.stream & (1u << 31)) {
+				gs_out_streams = variable->data.stream & ~(1u << 31);
+			} else {
+				assert(variable->data.stream < 4);
+				gs_out_streams = 0;
+				for (unsigned j = 0; j < num_components; ++j)
+					gs_out_streams |= variable->data.stream << (2 * (component + j));
+			}
 
-		unsigned streamx = gs_out_streams & 3;
-		unsigned streamy = (gs_out_streams >> 2) & 3;
-		unsigned streamz = (gs_out_streams >> 4) & 3;
-		unsigned streamw = (gs_out_streams >> 6) & 3;
+			unsigned streamx = gs_out_streams & 3;
+			unsigned streamy = (gs_out_streams >> 2) & 3;
+			unsigned streamz = (gs_out_streams >> 4) & 3;
+			unsigned streamw = (gs_out_streams >> 6) & 3;
 
-		if (usagemask & TGSI_WRITEMASK_X) {
-			info->output_usagemask[i] |= TGSI_WRITEMASK_X;
-			info->output_streams[i] |= streamx;
-			info->num_stream_output_components[streamx]++;
-		}
-		if (usagemask & TGSI_WRITEMASK_Y) {
-			info->output_usagemask[i] |= TGSI_WRITEMASK_Y;
-			info->output_streams[i] |= streamy << 2;
-			info->num_stream_output_components[streamy]++;
-		}
-		if (usagemask & TGSI_WRITEMASK_Z) {
-			info->output_usagemask[i] |= TGSI_WRITEMASK_Z;
-			info->output_streams[i] |= streamz << 4;
-			info->num_stream_output_components[streamz]++;
-		}
-		if (usagemask & TGSI_WRITEMASK_W) {
-			info->output_usagemask[i] |= TGSI_WRITEMASK_W;
-			info->output_streams[i] |= streamw << 6;
-			info->num_stream_output_components[streamw]++;
-		}
+			if (usagemask & TGSI_WRITEMASK_X) {
+				info->output_usagemask[i] |= TGSI_WRITEMASK_X;
+				info->output_streams[i] |= streamx;
+				info->num_stream_output_components[streamx]++;
+			}
+			if (usagemask & TGSI_WRITEMASK_Y) {
+				info->output_usagemask[i] |= TGSI_WRITEMASK_Y;
+				info->output_streams[i] |= streamy << 2;
+				info->num_stream_output_components[streamy]++;
+			}
+			if (usagemask & TGSI_WRITEMASK_Z) {
+				info->output_usagemask[i] |= TGSI_WRITEMASK_Z;
+				info->output_streams[i] |= streamz << 4;
+				info->num_stream_output_components[streamz]++;
+			}
+			if (usagemask & TGSI_WRITEMASK_W) {
+				info->output_usagemask[i] |= TGSI_WRITEMASK_W;
+				info->output_streams[i] |= streamw << 6;
+				info->num_stream_output_components[streamw]++;
+			}
 
-		/* make sure we only count this location once against the
-		 * num_outputs counter.
-		 */
-		if (processed_outputs & ((uint64_t)1 << i))
-			continue;
+			/* make sure we only count this location once against
+			 * the num_outputs counter.
+			 */
+			if (processed_outputs & ((uint64_t)1 << i))
+				continue;
 
-		processed_outputs |= ((uint64_t)1 << i);
-		num_outputs++;
+			processed_outputs |= ((uint64_t)1 << i);
+			num_outputs++;
 
-		info->output_semantic_name[i] = semantic_name;
-		info->output_semantic_index[i] = semantic_index;
+			info->output_semantic_name[i] = semantic_name;
+			info->output_semantic_index[i] = semantic_index;
 
-		switch (semantic_name) {
-		case TGSI_SEMANTIC_PRIMID:
-			info->writes_primid = true;
-			break;
-		case TGSI_SEMANTIC_VIEWPORT_INDEX:
-			info->writes_viewport_index = true;
-			break;
-		case TGSI_SEMANTIC_LAYER:
-			info->writes_layer = true;
-			break;
-		case TGSI_SEMANTIC_PSIZE:
-			info->writes_psize = true;
-			break;
-		case TGSI_SEMANTIC_CLIPVERTEX:
-			info->writes_clipvertex = true;
-			break;
-		case TGSI_SEMANTIC_COLOR:
-			info->colors_written |= 1 << semantic_index;
-			break;
-		case TGSI_SEMANTIC_STENCIL:
-			info->writes_stencil = true;
-			break;
-		case TGSI_SEMANTIC_SAMPLEMASK:
-			info->writes_samplemask = true;
-			break;
-		case TGSI_SEMANTIC_EDGEFLAG:
-			info->writes_edgeflag = true;
-			break;
-		case TGSI_SEMANTIC_POSITION:
-			if (info->processor == PIPE_SHADER_FRAGMENT)
-				info->writes_z = true;
-			else
-				info->writes_position = true;
-			break;
-		}
-
-		if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
 			switch (semantic_name) {
-			case TGSI_SEMANTIC_PATCH:
-				info->reads_perpatch_outputs = true;
-			break;
-			case TGSI_SEMANTIC_TESSINNER:
-			case TGSI_SEMANTIC_TESSOUTER:
-				info->reads_tessfactor_outputs = true;
-			break;
-			default:
-				info->reads_pervertex_outputs = true;
+			case TGSI_SEMANTIC_PRIMID:
+				info->writes_primid = true;
+				break;
+			case TGSI_SEMANTIC_VIEWPORT_INDEX:
+				info->writes_viewport_index = true;
+				break;
+			case TGSI_SEMANTIC_LAYER:
+				info->writes_layer = true;
+				break;
+			case TGSI_SEMANTIC_PSIZE:
+				info->writes_psize = true;
+				break;
+			case TGSI_SEMANTIC_CLIPVERTEX:
+				info->writes_clipvertex = true;
+				break;
+			case TGSI_SEMANTIC_COLOR:
+				info->colors_written |= 1 << semantic_index;
+				break;
+			case TGSI_SEMANTIC_STENCIL:
+				info->writes_stencil = true;
+				break;
+			case TGSI_SEMANTIC_SAMPLEMASK:
+				info->writes_samplemask = true;
+				break;
+			case TGSI_SEMANTIC_EDGEFLAG:
+				info->writes_edgeflag = true;
+				break;
+			case TGSI_SEMANTIC_POSITION:
+				if (info->processor == PIPE_SHADER_FRAGMENT)
+					info->writes_z = true;
+				else
+					info->writes_position = true;
+				break;
+			}
+
+			if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
+				switch (semantic_name) {
+				case TGSI_SEMANTIC_PATCH:
+					info->reads_perpatch_outputs = true;
+				break;
+				case TGSI_SEMANTIC_TESSINNER:
+				case TGSI_SEMANTIC_TESSOUTER:
+					info->reads_tessfactor_outputs = true;
+				break;
+				default:
+					info->reads_pervertex_outputs = true;
+				}
 			}
 		}
 
 		unsigned loc = variable->data.location;
 		if (loc == FRAG_RESULT_COLOR &&
 		    nir->info.outputs_written & (1ull << loc)) {
+			assert(attrib_count == 1);
 			info->properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS] = true;
 		}
 	}
@@ -650,10 +665,6 @@ si_lower_nir(struct si_shader_selector* sel)
 	 * - ensure constant offsets for texture instructions are folded
 	 *   and copy-propagated
 	 */
-	NIR_PASS_V(sel->nir, nir_lower_io, nir_var_uniform, type_size,
-		   (nir_lower_io_options)0);
-	NIR_PASS_V(sel->nir, nir_lower_uniforms_to_ubo);
-
 	NIR_PASS_V(sel->nir, nir_lower_returns);
 	NIR_PASS_V(sel->nir, nir_lower_vars_to_ssa);
 	NIR_PASS_V(sel->nir, nir_lower_alu_to_scalar);
@@ -670,8 +681,11 @@ si_lower_nir(struct si_shader_selector* sel)
 		.lower_to_scalar = true,
 		.lower_subgroup_masks = true,
 		.lower_vote_trivial = false,
+		.lower_vote_eq_to_ballot = true,
 	};
 	NIR_PASS_V(sel->nir, nir_lower_subgroups, &subgroups_options);
+
+	ac_lower_indirect_derefs(sel->nir, sel->screen->info.chip_class);
 
 	bool progress;
 	do {
@@ -729,26 +743,6 @@ static void declare_nir_input_fs(struct si_shader_context *ctx,
 	si_llvm_load_input_fs(ctx, input_index, out);
 }
 
-LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
-				  unsigned location,
-				  unsigned driver_location,
-				  unsigned component,
-				  unsigned num_components,
-				  unsigned vertex_index,
-				  unsigned const_index,
-				  LLVMTypeRef type)
-{
-	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
-
-	LLVMValueRef value[4];
-	for (unsigned i = component; i < num_components + component; i++) {
-		value[i] = si_llvm_load_input_gs(&ctx->abi, driver_location  / 4,
-						 vertex_index, type, i);
-	}
-
-	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
-}
-
 LLVMValueRef
 si_nir_lookup_interp_param(struct ac_shader_abi *abi,
 			   enum glsl_interp_mode interp, unsigned location)
@@ -790,7 +784,7 @@ si_nir_load_sampler_desc(struct ac_shader_abi *abi,
 		         unsigned descriptor_set, unsigned base_index,
 		         unsigned constant_index, LLVMValueRef dynamic_index,
 		         enum ac_descriptor_type desc_type, bool image,
-			 bool write)
+			 bool write, bool bindless)
 {
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	LLVMBuilderRef builder = ctx->ac.builder;
@@ -861,7 +855,7 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 				/* Packed components share the same location so skip
 				 * them if we have already processed the location.
 				 */
-				if (processed_inputs & ((uint64_t)1 << loc)) {
+				if (processed_inputs & ((uint64_t)1 << (loc + i))) {
 					input_idx += 4;
 					continue;
 				}
@@ -879,8 +873,7 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 					bitcast_inputs(ctx, data, input_idx);
 				}
 
-				processed_inputs |= ((uint64_t)1 << loc);
-				loc++;
+				processed_inputs |= ((uint64_t)1 << (loc + i));
 				input_idx += 4;
 			}
 		}

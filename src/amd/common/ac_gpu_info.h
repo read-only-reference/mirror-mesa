@@ -55,6 +55,8 @@ struct radeon_info {
 	uint64_t                    gart_size;
 	uint64_t                    vram_size;
 	uint64_t                    vram_vis_size;
+	unsigned                    gds_size;
+	unsigned                    gds_gfx_partition_size;
 	uint64_t                    max_alloc_size;
 	uint32_t                    min_alloc_size;
 	uint32_t                    address32_hi;
@@ -62,6 +64,7 @@ struct radeon_info {
 	bool                        has_virtual_memory;
 	bool                        gfx_ib_pad_with_type2;
 	bool                        has_hw_decode;
+	unsigned                    ib_start_alignment;
 	uint32_t                    num_sdma_rings;
 	uint32_t                    num_compute_rings;
 	uint32_t                    uvd_fw_version;
@@ -86,6 +89,7 @@ struct radeon_info {
 	bool                        has_syncobj_wait_for_submit;
 	bool                        has_fence_to_handle;
 	bool                        has_ctx_priority;
+	bool                        has_local_buffers;
 
 	/* Shader cores. */
 	uint32_t                    r600_max_quad_pipes; /* wave size / 16 */

@@ -138,11 +138,18 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
          .float64 = device->instance->physicalDevice.info.gen >= 8,
          .int64 = device->instance->physicalDevice.info.gen >= 8,
          .tessellation = true,
+         .device_group = true,
          .draw_parameters = true,
          .image_write_without_format = true,
          .multiview = true,
          .variable_pointers = true,
          .storage_16bit = device->instance->physicalDevice.info.gen >= 8,
+         .subgroup_arithmetic = true,
+         .subgroup_basic = true,
+         .subgroup_ballot = true,
+         .subgroup_quad = true,
+         .subgroup_shuffle = true,
+         .subgroup_vote = true,
       },
    };
 
@@ -494,7 +501,6 @@ anv_pipeline_add_compiled_stage(struct anv_pipeline *pipeline,
                                 struct anv_shader_bin *shader)
 {
    pipeline->shaders[stage] = shader;
-   pipeline->active_stages |= mesa_to_vk_shader_stage(stage);
 }
 
 static VkResult
@@ -1042,6 +1048,8 @@ anv_pipeline_compile_cs(struct anv_pipeline *pipeline,
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
       }
 
+      NIR_PASS_V(nir, anv_nir_add_base_work_group_id, &prog_data);
+
       anv_fill_binding_table(&prog_data.base, 1);
 
       const unsigned *shader_code =
@@ -1325,10 +1333,17 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
    const VkPipelineShaderStageCreateInfo *pStages[MESA_SHADER_STAGES] = {};
    struct anv_shader_module *modules[MESA_SHADER_STAGES] = {};
    for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
-      gl_shader_stage stage = ffs(pCreateInfo->pStages[i].stage) - 1;
+      VkShaderStageFlagBits vk_stage = pCreateInfo->pStages[i].stage;
+      gl_shader_stage stage = vk_to_mesa_shader_stage(vk_stage);
       pStages[stage] = &pCreateInfo->pStages[i];
       modules[stage] = anv_shader_module_from_handle(pStages[stage]->module);
+      pipeline->active_stages |= vk_stage;
    }
+
+   if (pipeline->active_stages & VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
+      pipeline->active_stages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+
+   assert(pipeline->active_stages & VK_SHADER_STAGE_VERTEX_BIT);
 
    if (modules[MESA_SHADER_VERTEX]) {
       result = anv_pipeline_compile_vs(pipeline, cache, pCreateInfo,
@@ -1340,13 +1355,15 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
    }
 
    if (modules[MESA_SHADER_TESS_EVAL]) {
-      anv_pipeline_compile_tcs_tes(pipeline, cache, pCreateInfo,
-                                   modules[MESA_SHADER_TESS_CTRL],
-                                   pStages[MESA_SHADER_TESS_CTRL]->pName,
-                                   pStages[MESA_SHADER_TESS_CTRL]->pSpecializationInfo,
-                                   modules[MESA_SHADER_TESS_EVAL],
-                                   pStages[MESA_SHADER_TESS_EVAL]->pName,
-                                   pStages[MESA_SHADER_TESS_EVAL]->pSpecializationInfo);
+      result = anv_pipeline_compile_tcs_tes(pipeline, cache, pCreateInfo,
+                                            modules[MESA_SHADER_TESS_CTRL],
+                                            pStages[MESA_SHADER_TESS_CTRL]->pName,
+                                            pStages[MESA_SHADER_TESS_CTRL]->pSpecializationInfo,
+                                            modules[MESA_SHADER_TESS_EVAL],
+                                            pStages[MESA_SHADER_TESS_EVAL]->pName,
+                                            pStages[MESA_SHADER_TESS_EVAL]->pSpecializationInfo);
+      if (result != VK_SUCCESS)
+         goto compile_fail;
    }
 
    if (modules[MESA_SHADER_GEOMETRY]) {
@@ -1367,7 +1384,7 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
          goto compile_fail;
    }
 
-   assert(pipeline->active_stages & VK_SHADER_STAGE_VERTEX_BIT);
+   assert(pipeline->shaders[MESA_SHADER_VERTEX]);
 
    anv_pipeline_setup_l3_config(pipeline, false);
 

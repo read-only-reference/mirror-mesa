@@ -364,8 +364,11 @@ endif
 EXTRA_DIST = \
 	SConscript \
 	meson.build \
+	rasterizer/jitter/meson.build \
 	rasterizer/codegen/meson.build \
+	rasterizer/core/backends/meson.build \
 	rasterizer/archrast/events.proto \
+	rasterizer/archrast/events_private.proto \
 	rasterizer/codegen/gen_llvm_ir_macros.py \
 	rasterizer/codegen/gen_llvm_types.py \
 	rasterizer/codegen/gen_archrast.py \

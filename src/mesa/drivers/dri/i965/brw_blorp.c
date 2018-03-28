@@ -428,12 +428,27 @@ brw_blorp_copy_miptrees(struct brw_context *brw,
    blorp_surf_for_miptree(brw, &dst_surf, dst_mt, dst_aux_usage, true,
                           &dst_level, dst_layer, 1, &tmp_surfs[1]);
 
+   /* The hardware seems to have issues with having a two different format
+    * views of the same texture in the sampler cache at the same time.  It's
+    * unclear exactly what the issue is but it hurts glCopyImageSubData
+    * particularly badly because it does a lot of format reinterprets.  We
+    * badly need better understanding of the issue and a better fix but this
+    * works for now and fixes CTS tests.
+    *
+    * TODO: Remove this hack!
+    */
+   brw_emit_pipe_control_flush(brw, PIPE_CONTROL_CS_STALL |
+                                    PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE);
+
    struct blorp_batch batch;
    blorp_batch_init(&brw->blorp, &batch, brw, 0);
    blorp_copy(&batch, &src_surf, src_level, src_layer,
               &dst_surf, dst_level, dst_layer,
               src_x, src_y, dst_x, dst_y, src_width, src_height);
    blorp_batch_finish(&batch);
+
+   brw_emit_pipe_control_flush(brw, PIPE_CONTROL_CS_STALL |
+                                    PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE);
 
    intel_miptree_finish_write(brw, dst_mt, dst_level, dst_layer, 1,
                               dst_aux_usage);
@@ -812,7 +827,7 @@ blorp_get_client_bo(struct brw_context *brw,
        * data which we need to copy into a BO.
        */
       struct brw_bo *bo =
-         brw_bo_alloc(brw->bufmgr, "tmp_tex_subimage_src", size, 64);
+         brw_bo_alloc(brw->bufmgr, "tmp_tex_subimage_src", size);
       if (bo == NULL) {
          perf_debug("intel_texsubimage: temp bo creation failed: size = %u\n",
                     size);
@@ -1213,6 +1228,11 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       }
    }
 
+   /* FINISHME: Debug and enable fast clears */
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   if (devinfo->gen >= 11)
+      can_fast_clear = false;
+
    if (can_fast_clear) {
       const enum isl_aux_state aux_state =
          intel_miptree_get_aux_state(irb->mt, irb->mt_level, irb->mt_layer);
@@ -1411,8 +1431,8 @@ brw_blorp_clear_depth_stencil(struct brw_context *brw,
       } else {
          level = irb->mt_level;
          start_layer = irb->mt_layer;
-         num_layers = fb->MaxNumLayers ? irb->layer_count : 1;
       }
+      num_layers = fb->MaxNumLayers ? irb->layer_count : 1;
 
       stencil_mask = ctx->Stencil.WriteMask[0] & 0xff;
 

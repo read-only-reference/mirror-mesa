@@ -250,6 +250,12 @@ typedef struct nir_variable {
       unsigned fb_fetch_output:1;
 
       /**
+       * Non-zero if this variable is considered bindless as defined by
+       * ARB_bindless_texture.
+       */
+      unsigned bindless:1;
+
+      /**
        * \brief Layout qualifier for gl_FragDepth.
        *
        * This is not equal to \c ir_depth_layout_none if and only if this
@@ -626,9 +632,21 @@ nir_src_bit_size(nir_src src)
 }
 
 static inline unsigned
+nir_src_num_components(nir_src src)
+{
+   return src.is_ssa ? src.ssa->num_components : src.reg.reg->num_components;
+}
+
+static inline unsigned
 nir_dest_bit_size(nir_dest dest)
 {
    return dest.is_ssa ? dest.ssa.bit_size : dest.reg.reg->bit_size;
+}
+
+static inline unsigned
+nir_dest_num_components(nir_dest dest)
+{
+   return dest.is_ssa ? dest.ssa.num_components : dest.reg.reg->num_components;
 }
 
 void nir_src_copy(nir_src *dest, const nir_src *src, void *instr_or_if);
@@ -735,6 +753,10 @@ nir_get_nir_type_for_glsl_base_type(enum glsl_base_type base_type)
    case GLSL_TYPE_INT16:
       return nir_type_int16;
       break;
+   case GLSL_TYPE_UINT8:
+      return nir_type_uint8;
+   case GLSL_TYPE_INT8:
+      return nir_type_int8;
    case GLSL_TYPE_UINT64:
       return nir_type_uint64;
       break;
@@ -941,16 +963,7 @@ typedef struct {
    struct nir_function *callee;
 } nir_call_instr;
 
-#define INTRINSIC(name, num_srcs, src_components, has_dest, dest_components, \
-                  num_variables, num_indices, idx0, idx1, idx2, flags) \
-   nir_intrinsic_##name,
-
-#define LAST_INTRINSIC(name) nir_last_intrinsic = nir_intrinsic_##name,
-
-typedef enum {
 #include "nir_intrinsics.h"
-   nir_num_intrinsics = nir_last_intrinsic + 1
-} nir_intrinsic_op;
 
 #define NIR_INTRINSIC_MAX_CONST_INDEX 3
 
@@ -1081,6 +1094,16 @@ typedef enum {
     */
    NIR_INTRINSIC_INTERP_MODE = 9,
 
+   /**
+    * A binary nir_op to use when performing a reduction or scan operation
+    */
+   NIR_INTRINSIC_REDUCTION_OP = 10,
+
+   /**
+    * Cluster size for reduction operations
+    */
+   NIR_INTRINSIC_CLUSTER_SIZE = 11,
+
    NIR_INTRINSIC_NUM_INDEX_FLAGS,
 
 } nir_intrinsic_index_flag;
@@ -1149,6 +1172,8 @@ INTRINSIC_IDX_ACCESSORS(desc_set, DESC_SET, unsigned)
 INTRINSIC_IDX_ACCESSORS(binding, BINDING, unsigned)
 INTRINSIC_IDX_ACCESSORS(component, COMPONENT, unsigned)
 INTRINSIC_IDX_ACCESSORS(interp_mode, INTERP_MODE, unsigned)
+INTRINSIC_IDX_ACCESSORS(reduction_op, REDUCTION_OP, unsigned)
+INTRINSIC_IDX_ACCESSORS(cluster_size, CLUSTER_SIZE, unsigned)
 
 /**
  * \group texture information
@@ -1888,6 +1913,8 @@ typedef struct nir_shader_compiler_options {
 
    bool lower_cs_local_index_from_id;
 
+   bool lower_device_index_to_zero;
+
    /**
     * Should nir_lower_io() create load_interpolated_input intrinsics?
     *
@@ -2049,6 +2076,8 @@ bool nir_deref_foreach_leaf(nir_deref_var *deref,
 
 nir_load_const_instr *
 nir_deref_get_const_initializer_load(nir_shader *shader, nir_deref_var *deref);
+
+nir_const_value nir_alu_binop_identity(nir_op binop, unsigned bit_size);
 
 /**
  * NIR Cursors and Instruction Insertion API
@@ -2245,7 +2274,21 @@ nir_instr_insert_after_cf_list(struct exec_list *list, nir_instr *after)
    nir_instr_insert(nir_after_cf_list(list), after);
 }
 
-void nir_instr_remove(nir_instr *instr);
+void nir_instr_remove_v(nir_instr *instr);
+
+static inline nir_cursor
+nir_instr_remove(nir_instr *instr)
+{
+   nir_cursor cursor;
+   nir_instr *prev = nir_instr_prev(instr);
+   if (prev) {
+      cursor = nir_after_instr(prev);
+   } else {
+      cursor = nir_before_block(instr->block);
+   }
+   nir_instr_remove_v(instr);
+   return cursor;
+}
 
 /** @} */
 
@@ -2541,7 +2584,10 @@ typedef struct nir_lower_subgroups_options {
    uint8_t ballot_bit_size;
    bool lower_to_scalar:1;
    bool lower_vote_trivial:1;
+   bool lower_vote_eq_to_ballot:1;
    bool lower_subgroup_masks:1;
+   bool lower_shuffle:1;
+   bool lower_quad:1;
 } nir_lower_subgroups_options;
 
 bool nir_lower_subgroups(nir_shader *shader,
@@ -2687,9 +2733,9 @@ typedef struct nir_lower_bitmap_options {
 void nir_lower_bitmap(nir_shader *shader, const nir_lower_bitmap_options *options);
 
 bool nir_lower_atomics(nir_shader *shader,
-                       const struct gl_shader_program *shader_program);
+                       const struct gl_shader_program *shader_program,
+                       bool use_binding_as_idx);
 bool nir_lower_atomics_to_ssbo(nir_shader *shader, unsigned ssbo_offset);
-bool nir_lower_uniforms_to_ubo(nir_shader *shader);
 bool nir_lower_to_source_mods(nir_shader *shader);
 
 bool nir_lower_gs_intrinsics(nir_shader *shader);
@@ -2767,6 +2813,8 @@ bool nir_opt_intrinsics(nir_shader *shader);
 bool nir_opt_loop_unroll(nir_shader *shader, nir_variable_mode indirect_mask);
 
 bool nir_opt_move_comparisons(nir_shader *shader);
+
+bool nir_opt_move_load_ubo(nir_shader *shader);
 
 bool nir_opt_peephole_select(nir_shader *shader, unsigned limit);
 

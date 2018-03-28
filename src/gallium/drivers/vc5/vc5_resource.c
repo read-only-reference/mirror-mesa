@@ -22,6 +22,7 @@
  * IN THE SOFTWARE.
  */
 
+#include "pipe/p_defines.h"
 #include "util/u_blit.h"
 #include "util/u_memory.h"
 #include "util/u_format.h"
@@ -37,10 +38,6 @@
 #include "vc5_resource.h"
 #include "vc5_tiling.h"
 #include "broadcom/cle/v3d_packet_v33_pack.h"
-
-#ifndef DRM_FORMAT_MOD_INVALID
-#define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
-#endif
 
 static void
 vc5_debug_resource_layout(struct vc5_resource *rsc, const char *caller)
@@ -393,9 +390,14 @@ vc5_setup_slices(struct vc5_resource *rsc)
         uint32_t width = prsc->width0;
         uint32_t height = prsc->height0;
         uint32_t depth = prsc->depth0;
-        uint32_t pot_width = util_next_power_of_two(width);
-        uint32_t pot_height = util_next_power_of_two(height);
-        uint32_t pot_depth = util_next_power_of_two(depth);
+        /* Note that power-of-two padding is based on level 1.  These are not
+         * equivalent to just util_next_power_of_two(dimension), because at a
+         * level 0 dimension of 9, the level 1 power-of-two padded value is 4,
+         * not 8.
+         */
+        uint32_t pot_width = 2 * util_next_power_of_two(u_minify(width, 1));
+        uint32_t pot_height = 2 * util_next_power_of_two(u_minify(height, 1));
+        uint32_t pot_depth = 2 * util_next_power_of_two(u_minify(depth, 1));
         uint32_t offset = 0;
         uint32_t utile_w = vc5_utile_width(rsc->cpp);
         uint32_t utile_h = vc5_utile_height(rsc->cpp);

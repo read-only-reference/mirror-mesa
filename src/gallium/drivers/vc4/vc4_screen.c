@@ -288,6 +288,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_CONTEXT_PRIORITY_MASK:
         case PIPE_CAP_FENCE_SIGNAL:
 	case PIPE_CAP_CONSTBUF0_FLAGS:
+        case PIPE_CAP_PACKED_UNIFORMS:
                 return 0;
 
                 /* Stream output. */
@@ -680,6 +681,8 @@ vc4_screen_create(int fd, struct renderonly *ro)
                 vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_THREADED_FS);
         screen->has_madvise =
                 vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_MADVISE);
+        screen->has_perfmon_ioctl =
+                vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_PERFMON);
 
         if (!vc4_get_chip_info(screen))
                 goto fail;
@@ -705,6 +708,11 @@ vc4_screen_create(int fd, struct renderonly *ro)
         pscreen->get_device_vendor = vc4_screen_get_vendor;
         pscreen->get_compiler_options = vc4_screen_get_compiler_options;
         pscreen->query_dmabuf_modifiers = vc4_screen_query_dmabuf_modifiers;
+
+        if (screen->has_perfmon_ioctl) {
+                pscreen->get_driver_query_group_info = vc4_get_driver_query_group_info;
+                pscreen->get_driver_query_info = vc4_get_driver_query_info;
+        }
 
         return pscreen;
 

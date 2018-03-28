@@ -37,6 +37,7 @@
 #include "main/uniforms.h"
 
 #include "st_context.h"
+#include "st_glsl_types.h"
 #include "st_program.h"
 
 #include "compiler/nir/nir.h"
@@ -127,9 +128,12 @@ st_nir_assign_var_locations(struct exec_list *var_list, unsigned *size,
 {
    unsigned location = 0;
    unsigned assigned_locations[VARYING_SLOT_TESS_MAX];
-   uint64_t processed_locs = 0;
-   uint32_t processed_patch_locs = 0;
+   uint64_t processed_locs[2] = {0};
 
+   const int base = stage == MESA_SHADER_FRAGMENT ?
+      (int) FRAG_RESULT_DATA0 : (int) VARYING_SLOT_VAR0;
+
+   int UNUSED last_loc = 0;
    nir_foreach_variable(var, var_list) {
 
       const struct glsl_type *type = var->type;
@@ -138,36 +142,61 @@ st_nir_assign_var_locations(struct exec_list *var_list, unsigned *size,
          type = glsl_get_array_element(type);
       }
 
+      unsigned var_size = type_size(type);
+
+      /* Builtins don't allow component packing so we only need to worry about
+       * user defined varyings sharing the same location.
+       */
       bool processed = false;
-      if (var->data.patch &&
-          var->data.location != VARYING_SLOT_TESS_LEVEL_INNER &&
-          var->data.location != VARYING_SLOT_TESS_LEVEL_OUTER &&
-          var->data.location != VARYING_SLOT_BOUNDING_BOX0 &&
-          var->data.location != VARYING_SLOT_BOUNDING_BOX1) {
-         unsigned patch_loc = var->data.location - VARYING_SLOT_PATCH0;
-         if (processed_patch_locs & (1 << patch_loc))
-            processed = true;
+      if (var->data.location >= base) {
+         unsigned glsl_location = var->data.location - base;
 
-         processed_patch_locs |= (1 << patch_loc);
-      } else {
-         if (processed_locs & ((uint64_t)1 << var->data.location))
-            processed = true;
-
-         processed_locs |= ((uint64_t)1 << var->data.location);
+         for (unsigned i = 0; i < var_size; i++) {
+            if (processed_locs[var->data.index] &
+                ((uint64_t)1 << (glsl_location + i)))
+               processed = true;
+            else
+               processed_locs[var->data.index] |=
+                  ((uint64_t)1 << (glsl_location + i));
+         }
       }
 
       /* Because component packing allows varyings to share the same location
        * we may have already have processed this location.
        */
-      if (processed && var->data.location >= VARYING_SLOT_VAR0) {
-         var->data.driver_location = assigned_locations[var->data.location];
+      if (processed) {
+         unsigned driver_location = assigned_locations[var->data.location];
+         var->data.driver_location = driver_location;
          *size += type_size(type);
+
+         /* An array may be packed such that is crosses multiple other arrays
+          * or variables, we need to make sure we have allocated the elements
+          * consecutively if the previously proccessed var was shorter than
+          * the current array we are processing.
+          *
+          * NOTE: The code below assumes the var list is ordered in ascending
+          * location order.
+          */
+         assert(last_loc <= var->data.location);
+         last_loc = var->data.location;
+         unsigned last_slot_location = driver_location + var_size;
+         if (last_slot_location > location) {
+            unsigned num_unallocated_slots = last_slot_location - location;
+            unsigned first_unallocated_slot = var_size - num_unallocated_slots;
+            for (unsigned i = first_unallocated_slot; i < num_unallocated_slots; i++) {
+               assigned_locations[var->data.location + i] = location;
+               location++;
+            }
+         }
          continue;
       }
 
-      assigned_locations[var->data.location] = location;
+      for (unsigned i = 0; i < var_size; i++) {
+         assigned_locations[var->data.location + i] = location + i;
+      }
+
       var->data.driver_location = location;
-      location += type_size(type);
+      location += var_size;
    }
 
    *size += location;
@@ -222,7 +251,8 @@ st_nir_lookup_parameter_index(const struct gl_program_parameter_list *params,
 }
 
 static void
-st_nir_assign_uniform_locations(struct gl_program *prog,
+st_nir_assign_uniform_locations(struct gl_context *ctx,
+                                struct gl_program *prog,
                                 struct gl_shader_program *shader_program,
                                 struct exec_list *uniform_list, unsigned *size)
 {
@@ -241,7 +271,8 @@ st_nir_assign_uniform_locations(struct gl_program *prog,
           uniform->interface_type != NULL)
          continue;
 
-      if (uniform->type->is_sampler() || uniform->type->is_image()) {
+      if (!uniform->data.bindless &&
+          (uniform->type->is_sampler() || uniform->type->is_image())) {
          if (uniform->type->is_sampler())
             loc = shaderidx++;
          else
@@ -251,7 +282,21 @@ st_nir_assign_uniform_locations(struct gl_program *prog,
          /* This state reference has already been setup by ir_to_mesa, but we'll
           * get the same index back here.
           */
-         loc = _mesa_add_state_reference(prog->Parameters, stateTokens);
+
+         unsigned comps;
+         const struct glsl_type *type = glsl_without_array(uniform->type);
+         if (glsl_type_is_struct(type)) {
+            comps = 4;
+         } else {
+            comps = glsl_get_vector_elements(type);
+         }
+
+         if (ctx->Const.PackedDriverUniformStorage) {
+            loc = _mesa_add_sized_state_reference(prog->Parameters,
+                                                  stateTokens, comps, false);
+         } else {
+            loc = _mesa_add_state_reference(prog->Parameters, stateTokens);
+         }
       } else {
          loc = st_nir_lookup_parameter_index(prog->Parameters, uniform->name);
       }
@@ -363,9 +408,26 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
          const nir_state_slot *const slots = var->state_slots;
          assert(var->state_slots != NULL);
 
+         const struct glsl_type *type = glsl_without_array(var->type);
          for (unsigned int i = 0; i < var->num_state_slots; i++) {
-            _mesa_add_state_reference(prog->Parameters,
-                                      slots[i].tokens);
+            unsigned comps;
+            if (glsl_type_is_struct(type)) {
+               /* Builtin struct require specical handling for now we just
+                * make all members vec4. See st_nir_lower_builtin.
+                */
+               comps = 4;
+            } else {
+               comps = glsl_get_vector_elements(type);
+            }
+
+            if (st->ctx->Const.PackedDriverUniformStorage) {
+               _mesa_add_sized_state_reference(prog->Parameters,
+                                               slots[i].tokens,
+                                               comps, false);
+            } else {
+               _mesa_add_state_reference(prog->Parameters,
+                                         slots[i].tokens);
+            }
          }
       }
    }
@@ -385,7 +447,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
    st_set_prog_affected_state_flags(prog);
 
    NIR_PASS_V(nir, st_nir_lower_builtin);
-   NIR_PASS_V(nir, nir_lower_atomics, shader_program);
+   NIR_PASS_V(nir, nir_lower_atomics, shader_program, true);
 
    if (st->ctx->_Shader->Flags & GLSL_DUMP) {
       _mesa_log("\n");
@@ -721,8 +783,14 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
    NIR_PASS_V(nir, nir_lower_atomics_to_ssbo,
          st->ctx->Const.Program[nir->info.stage].MaxAtomicBuffers);
 
-   st_nir_assign_uniform_locations(prog, shader_program,
+   st_nir_assign_uniform_locations(st->ctx, prog, shader_program,
                                    &nir->uniforms, &nir->num_uniforms);
+
+   if (st->ctx->Const.PackedDriverUniformStorage) {
+      NIR_PASS_V(nir, nir_lower_io, nir_var_uniform, st_glsl_type_dword_size,
+                 (nir_lower_io_options)0);
+      NIR_PASS_V(nir, st_nir_lower_uniforms_to_ubo, prog->Parameters);
+   }
 
    if (screen->get_param(screen, PIPE_CAP_NIR_SAMPLERS_AS_DEREF))
       NIR_PASS_V(nir, nir_lower_samplers_as_deref, shader_program);

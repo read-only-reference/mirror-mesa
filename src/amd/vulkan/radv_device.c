@@ -44,6 +44,7 @@
 #include "vk_format.h"
 #include "sid.h"
 #include "gfx9d.h"
+#include "addrlib/gfx9/chip/gfx9_enum.h"
 #include "util/debug.h"
 
 static int
@@ -100,7 +101,8 @@ radv_get_device_name(enum radeon_family family, char *name, size_t name_len)
 	case CHIP_POLARIS11: chip_string = "AMD RADV POLARIS11"; break;
 	case CHIP_POLARIS12: chip_string = "AMD RADV POLARIS12"; break;
 	case CHIP_STONEY: chip_string = "AMD RADV STONEY"; break;
-	case CHIP_VEGA10: chip_string = "AMD RADV VEGA"; break;
+	case CHIP_VEGA10: chip_string = "AMD RADV VEGA10"; break;
+	case CHIP_VEGA12: chip_string = "AMD RADV VEGA12"; break;
 	case CHIP_RAVEN: chip_string = "AMD RADV RAVEN"; break;
 	default: chip_string = "AMD RADV unknown"; break;
 	}
@@ -280,7 +282,9 @@ radv_physical_device_init(struct radv_physical_device *device,
 	disk_cache_format_hex_id(buf, device->cache_uuid, VK_UUID_SIZE * 2);
 	device->disk_cache = disk_cache_create(device->name, buf, shader_env_flags);
 
-	fprintf(stderr, "WARNING: radv is not a conformant vulkan implementation, testing use only.\n");
+	if (device->rad_info.chip_class < VI ||
+	    device->rad_info.chip_class > GFX9)
+		fprintf(stderr, "WARNING: radv is not a conformant vulkan implementation, testing use only.\n");
 
 	radv_get_driver_uuid(&device->device_uuid);
 	radv_get_device_uuid(&device->rad_info, &device->device_uuid);
@@ -288,7 +292,8 @@ radv_physical_device_init(struct radv_physical_device *device,
 	if (device->rad_info.family == CHIP_STONEY ||
 	    device->rad_info.chip_class >= GFX9) {
 		device->has_rbplus = true;
-		device->rbplus_allowed = device->rad_info.family == CHIP_STONEY;
+		device->rbplus_allowed = device->rad_info.family == CHIP_STONEY ||
+					 device->rad_info.family == CHIP_VEGA12;
 	}
 
 	/* The mere presense of CLEAR_STATE in the IB causes random GPU hangs
@@ -443,7 +448,7 @@ VkResult radv_CreateInstance(
 	}
 
 	if (VK_MAKE_VERSION(1, 0, 0) > client_version ||
-	    client_version > VK_MAKE_VERSION(1, 0, 0xfff)) {
+	    client_version > VK_MAKE_VERSION(1, 1, 0xfff)) {
 		return vk_errorf(VK_ERROR_INCOMPATIBLE_DRIVER,
 				 "Client requested version %d.%d.%d",
 				 VK_VERSION_MAJOR(client_version),
@@ -592,6 +597,35 @@ VkResult radv_EnumeratePhysicalDevices(
 	                                                             : VK_SUCCESS;
 }
 
+VkResult radv_EnumeratePhysicalDeviceGroups(
+    VkInstance                                  _instance,
+    uint32_t*                                   pPhysicalDeviceGroupCount,
+    VkPhysicalDeviceGroupProperties*            pPhysicalDeviceGroupProperties)
+{
+	RADV_FROM_HANDLE(radv_instance, instance, _instance);
+	VkResult result;
+
+	if (instance->physicalDeviceCount < 0) {
+		result = radv_enumerate_devices(instance);
+		if (result != VK_SUCCESS &&
+		    result != VK_ERROR_INCOMPATIBLE_DRIVER)
+			return result;
+	}
+
+	if (!pPhysicalDeviceGroupProperties) {
+		*pPhysicalDeviceGroupCount = instance->physicalDeviceCount;
+	} else {
+		*pPhysicalDeviceGroupCount = MIN2(*pPhysicalDeviceGroupCount, instance->physicalDeviceCount);
+		for (unsigned i = 0; i < *pPhysicalDeviceGroupCount; ++i) {
+			pPhysicalDeviceGroupProperties[i].physicalDeviceCount = 1;
+			pPhysicalDeviceGroupProperties[i].physicalDevices[0] = radv_physical_device_to_handle(instance->physicalDevices + i);
+			pPhysicalDeviceGroupProperties[i].subsetAllocation = false;
+		}
+	}
+	return *pPhysicalDeviceGroupCount < instance->physicalDeviceCount ? VK_INCOMPLETE
+	                                                                  : VK_SUCCESS;
+}
+
 void radv_GetPhysicalDeviceFeatures(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceFeatures*                   pFeatures)
@@ -647,7 +681,7 @@ void radv_GetPhysicalDeviceFeatures(
 	};
 }
 
-void radv_GetPhysicalDeviceFeatures2KHR(
+void radv_GetPhysicalDeviceFeatures2(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceFeatures2KHR               *pFeatures)
 {
@@ -659,11 +693,38 @@ void radv_GetPhysicalDeviceFeatures2KHR(
 			features->variablePointers = false;
 			break;
 		}
-		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES_KHX: {
-			VkPhysicalDeviceMultiviewFeaturesKHX *features = (VkPhysicalDeviceMultiviewFeaturesKHX*)ext;
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES_KHR: {
+			VkPhysicalDeviceMultiviewFeaturesKHR *features = (VkPhysicalDeviceMultiviewFeaturesKHR*)ext;
 			features->multiview = true;
 			features->multiviewGeometryShader = true;
 			features->multiviewTessellationShader = true;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETER_FEATURES: {
+			VkPhysicalDeviceShaderDrawParameterFeatures *features =
+			    (VkPhysicalDeviceShaderDrawParameterFeatures*)ext;
+			features->shaderDrawParameters = true;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES: {
+			VkPhysicalDeviceProtectedMemoryFeatures *features =
+			    (VkPhysicalDeviceProtectedMemoryFeatures*)ext;
+			features->protectedMemory = false;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES: {
+			VkPhysicalDevice16BitStorageFeatures *features =
+			    (VkPhysicalDevice16BitStorageFeatures*)ext;
+			features->storageBuffer16BitAccess = false;
+			features->uniformAndStorageBuffer16BitAccess = false;
+			features->storagePushConstant16 = false;
+			features->storageInputOutput16 = false;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES: {
+			VkPhysicalDeviceSamplerYcbcrConversionFeatures *features =
+			    (VkPhysicalDeviceSamplerYcbcrConversionFeatures*)ext;
+			features->samplerYcbcrConversion = false;
 			break;
 		}
 		default:
@@ -717,9 +778,9 @@ void radv_GetPhysicalDeviceProperties(
 		.maxPerStageResources                     = max_descriptor_set_size,
 		.maxDescriptorSetSamplers                 = max_descriptor_set_size,
 		.maxDescriptorSetUniformBuffers           = max_descriptor_set_size,
-		.maxDescriptorSetUniformBuffersDynamic    = MAX_DYNAMIC_BUFFERS / 2,
+		.maxDescriptorSetUniformBuffersDynamic    = MAX_DYNAMIC_UNIFORM_BUFFERS,
 		.maxDescriptorSetStorageBuffers           = max_descriptor_set_size,
-		.maxDescriptorSetStorageBuffersDynamic    = MAX_DYNAMIC_BUFFERS / 2,
+		.maxDescriptorSetStorageBuffersDynamic    = MAX_DYNAMIC_STORAGE_BUFFERS,
 		.maxDescriptorSetSampledImages            = max_descriptor_set_size,
 		.maxDescriptorSetStorageImages            = max_descriptor_set_size,
 		.maxDescriptorSetInputAttachments         = max_descriptor_set_size,
@@ -820,7 +881,7 @@ void radv_GetPhysicalDeviceProperties(
 	memcpy(pProperties->pipelineCacheUUID, pdevice->cache_uuid, VK_UUID_SIZE);
 }
 
-void radv_GetPhysicalDeviceProperties2KHR(
+void radv_GetPhysicalDeviceProperties2(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceProperties2KHR             *pProperties)
 {
@@ -842,8 +903,8 @@ void radv_GetPhysicalDeviceProperties2KHR(
 			properties->deviceLUIDValid = false;
 			break;
 		}
-		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES_KHX: {
-			VkPhysicalDeviceMultiviewPropertiesKHX *properties = (VkPhysicalDeviceMultiviewPropertiesKHX*)ext;
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES_KHR: {
+			VkPhysicalDeviceMultiviewPropertiesKHR *properties = (VkPhysicalDeviceMultiviewPropertiesKHR*)ext;
 			properties->maxMultiviewViewCount = MAX_VIEWS;
 			properties->maxMultiviewInstanceIndex = INT_MAX;
 			break;
@@ -864,6 +925,33 @@ void radv_GetPhysicalDeviceProperties2KHR(
 			VkPhysicalDeviceExternalMemoryHostPropertiesEXT *properties =
 			    (VkPhysicalDeviceExternalMemoryHostPropertiesEXT *) ext;
 			properties->minImportedHostPointerAlignment = 4096;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES: {
+			VkPhysicalDeviceSubgroupProperties *properties =
+			    (VkPhysicalDeviceSubgroupProperties*)ext;
+			properties->subgroupSize = 64;
+			properties->supportedStages = VK_SHADER_STAGE_ALL;
+			properties->supportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
+			properties->quadOperationsInAllStages = false;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES: {
+			VkPhysicalDeviceMaintenance3Properties *properties =
+			    (VkPhysicalDeviceMaintenance3Properties*)ext;
+			/* Make sure everything is addressable by a signed 32-bit int, and
+			 * our largest descriptors are 96 bytes. */
+			properties->maxPerSetDescriptors = (1ull << 31) / 96;
+			/* Our buffer size fields allow only this much */
+			properties->maxMemoryAllocationSize = 0xFFFFFFFFull;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES_EXT: {
+			VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *properties =
+				(VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *)ext;
+			/* GFX6-8 only support single channel min/max filter. */
+			properties->filterMinmaxImageComponentMapping = pdevice->rad_info.chip_class >= GFX9;
+			properties->filterMinmaxSingleComponentFormats = true;
 			break;
 		}
 		default:
@@ -941,7 +1029,7 @@ void radv_GetPhysicalDeviceQueueFamilyProperties(
 	assert(*pCount <= 3);
 }
 
-void radv_GetPhysicalDeviceQueueFamilyProperties2KHR(
+void radv_GetPhysicalDeviceQueueFamilyProperties2(
 	VkPhysicalDevice                            physicalDevice,
 	uint32_t*                                   pCount,
 	VkQueueFamilyProperties2KHR                *pQueueFamilyProperties)
@@ -969,7 +1057,7 @@ void radv_GetPhysicalDeviceMemoryProperties(
 	*pMemoryProperties = physical_device->memory_properties;
 }
 
-void radv_GetPhysicalDeviceMemoryProperties2KHR(
+void radv_GetPhysicalDeviceMemoryProperties2(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceMemoryProperties2KHR       *pMemoryProperties)
 {
@@ -1029,6 +1117,7 @@ radv_get_queue_global_priority(const VkDeviceQueueGlobalPriorityCreateInfoEXT *p
 static int
 radv_queue_init(struct radv_device *device, struct radv_queue *queue,
 		uint32_t queue_family_index, int idx,
+		VkDeviceQueueCreateFlags flags,
 		const VkDeviceQueueGlobalPriorityCreateInfoEXT *global_priority)
 {
 	queue->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
@@ -1036,6 +1125,7 @@ radv_queue_init(struct radv_device *device, struct radv_queue *queue,
 	queue->queue_family_index = queue_family_index;
 	queue->queue_idx = idx;
 	queue->priority = radv_get_queue_global_priority(global_priority);
+	queue->flags = flags;
 
 	queue->hw_ctx = device->ws->ctx_create(device->ws, queue->priority);
 	if (!queue->hw_ctx)
@@ -1095,6 +1185,7 @@ radv_device_init_gs_info(struct radv_device *device)
 	case CHIP_POLARIS11:
 	case CHIP_POLARIS12:
 	case CHIP_VEGA10:
+	case CHIP_VEGA12:
 	case CHIP_RAVEN:
 		device->gs_table_depth = 32;
 		return;
@@ -1189,7 +1280,9 @@ VkResult radv_CreateDevice(
 		device->queue_count[qfi] = queue_create->queueCount;
 
 		for (unsigned q = 0; q < queue_create->queueCount; q++) {
-			result = radv_queue_init(device, &device->queues[qfi][q], qfi, q, global_priority);
+			result = radv_queue_init(device, &device->queues[qfi][q],
+						 qfi, q, queue_create->flags,
+						 global_priority);
 			if (result != VK_SUCCESS)
 				goto fail;
 		}
@@ -1223,8 +1316,7 @@ VkResult radv_CreateDevice(
 	device->scratch_waves = MAX2(32 * physical_device->rad_info.num_good_compute_units,
 				     max_threads_per_block / 64);
 
-	device->dispatch_initiator = S_00B800_COMPUTE_SHADER_EN(1) |
-				     S_00B800_FORCE_START_AT_000(1);
+	device->dispatch_initiator = S_00B800_COMPUTE_SHADER_EN(1);
 
 	if (device->physical_device->rad_info.chip_class >= CIK) {
 		/* If the KMD allows it (there is a KMD hw register for it),
@@ -1242,10 +1334,15 @@ VkResult radv_CreateDevice(
 		device->physical_device->rad_info.max_se >= 2;
 
 	if (getenv("RADV_TRACE_FILE")) {
+		const char *filename = getenv("RADV_TRACE_FILE");
+
 		keep_shader_info = true;
 
 		if (!radv_init_trace(device))
 			goto fail;
+
+		fprintf(stderr, "Trace file will be dumped to %s\n", filename);
+		radv_dump_enabled_options(device, stderr);
 	}
 
 	device->keep_shader_info = keep_shader_info;
@@ -1372,15 +1469,44 @@ VkResult radv_EnumerateDeviceLayerProperties(
 	return vk_error(VK_ERROR_LAYER_NOT_PRESENT);
 }
 
+void radv_GetDeviceQueue2(
+	VkDevice                                    _device,
+	const VkDeviceQueueInfo2*                   pQueueInfo,
+	VkQueue*                                    pQueue)
+{
+	RADV_FROM_HANDLE(radv_device, device, _device);
+	struct radv_queue *queue;
+
+	queue = &device->queues[pQueueInfo->queueFamilyIndex][pQueueInfo->queueIndex];
+	if (pQueueInfo->flags != queue->flags) {
+		/* From the Vulkan 1.1.70 spec:
+		 *
+		 * "The queue returned by vkGetDeviceQueue2 must have the same
+		 * flags value from this structure as that used at device
+		 * creation time in a VkDeviceQueueCreateInfo instance. If no
+		 * matching flags were specified at device creation time then
+		 * pQueue will return VK_NULL_HANDLE."
+		 */
+		*pQueue = VK_NULL_HANDLE;
+		return;
+	}
+
+	*pQueue = radv_queue_to_handle(queue);
+}
+
 void radv_GetDeviceQueue(
 	VkDevice                                    _device,
 	uint32_t                                    queueFamilyIndex,
 	uint32_t                                    queueIndex,
 	VkQueue*                                    pQueue)
 {
-	RADV_FROM_HANDLE(radv_device, device, _device);
+	const VkDeviceQueueInfo2 info = (VkDeviceQueueInfo2) {
+		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
+		.queueFamilyIndex = queueFamilyIndex,
+		.queueIndex = queueIndex
+	};
 
-	*pQueue = radv_queue_to_handle(&device->queues[queueFamilyIndex][queueIndex]);
+	radv_GetDeviceQueue2(_device, &info, pQueue);
 }
 
 static void
@@ -2567,7 +2693,7 @@ void radv_GetBufferMemoryRequirements(
 	pMemoryRequirements->size = align64(buffer->size, pMemoryRequirements->alignment);
 }
 
-void radv_GetBufferMemoryRequirements2KHR(
+void radv_GetBufferMemoryRequirements2(
 	VkDevice                                     device,
 	const VkBufferMemoryRequirementsInfo2KHR*    pInfo,
 	VkMemoryRequirements2KHR*                    pMemoryRequirements)
@@ -2604,7 +2730,7 @@ void radv_GetImageMemoryRequirements(
 	pMemoryRequirements->alignment = image->alignment;
 }
 
-void radv_GetImageMemoryRequirements2KHR(
+void radv_GetImageMemoryRequirements2(
 	VkDevice                                    device,
 	const VkImageMemoryRequirementsInfo2KHR*    pInfo,
 	VkMemoryRequirements2KHR*                   pMemoryRequirements)
@@ -2638,7 +2764,7 @@ void radv_GetImageSparseMemoryRequirements(
 	stub();
 }
 
-void radv_GetImageSparseMemoryRequirements2KHR(
+void radv_GetImageSparseMemoryRequirements2(
 	VkDevice                                    device,
 	const VkImageSparseMemoryRequirementsInfo2KHR* pInfo,
 	uint32_t*                                   pSparseMemoryRequirementCount,
@@ -2655,9 +2781,9 @@ void radv_GetDeviceMemoryCommitment(
 	*pCommittedMemoryInBytes = 0;
 }
 
-VkResult radv_BindBufferMemory2KHR(VkDevice device,
-                                   uint32_t bindInfoCount,
-                                   const VkBindBufferMemoryInfoKHR *pBindInfos)
+VkResult radv_BindBufferMemory2(VkDevice device,
+                                uint32_t bindInfoCount,
+                                const VkBindBufferMemoryInfoKHR *pBindInfos)
 {
 	for (uint32_t i = 0; i < bindInfoCount; ++i) {
 		RADV_FROM_HANDLE(radv_device_memory, mem, pBindInfos[i].memory);
@@ -2686,12 +2812,12 @@ VkResult radv_BindBufferMemory(
 		.memoryOffset = memoryOffset
 	};
 
-	return radv_BindBufferMemory2KHR(device, 1, &info);
+	return radv_BindBufferMemory2(device, 1, &info);
 }
 
-VkResult radv_BindImageMemory2KHR(VkDevice device,
-                                  uint32_t bindInfoCount,
-                                  const VkBindImageMemoryInfoKHR *pBindInfos)
+VkResult radv_BindImageMemory2(VkDevice device,
+                               uint32_t bindInfoCount,
+                               const VkBindImageMemoryInfoKHR *pBindInfos)
 {
 	for (uint32_t i = 0; i < bindInfoCount; ++i) {
 		RADV_FROM_HANDLE(radv_device_memory, mem, pBindInfos[i].memory);
@@ -2722,7 +2848,7 @@ VkResult radv_BindImageMemory(
 		.memoryOffset = memoryOffset
 	};
 
-	return radv_BindImageMemory2KHR(device, 1, &info);
+	return radv_BindImageMemory2(device, 1, &info);
 }
 
 
@@ -2890,17 +3016,32 @@ void radv_DestroyFence(
 	vk_free2(&device->alloc, pAllocator, fence);
 }
 
+
+static uint64_t radv_get_current_time()
+{
+	struct timespec tv;
+	clock_gettime(CLOCK_MONOTONIC, &tv);
+	return tv.tv_nsec + tv.tv_sec*1000000000ull;
+}
+
 static uint64_t radv_get_absolute_timeout(uint64_t timeout)
 {
-	uint64_t current_time;
-	struct timespec tv;
-
-	clock_gettime(CLOCK_MONOTONIC, &tv);
-	current_time = tv.tv_nsec + tv.tv_sec*1000000000ull;
+	uint64_t current_time = radv_get_current_time();
 
 	timeout = MIN2(UINT64_MAX - current_time, timeout);
 
 	return current_time + timeout;
+}
+
+
+static bool radv_all_fences_plain_and_submitted(uint32_t fenceCount, const VkFence *pFences)
+{
+	for (uint32_t i = 0; i < fenceCount; ++i) {
+		RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
+		if (fence->syncobj || fence->temp_syncobj || (!fence->signalled && !fence->submitted))
+			return false;
+	}
+	return true;
 }
 
 VkResult radv_WaitForFences(
@@ -2913,8 +3054,55 @@ VkResult radv_WaitForFences(
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	timeout = radv_get_absolute_timeout(timeout);
 
+	if (device->always_use_syncobj) {
+		uint32_t *handles = malloc(sizeof(uint32_t) * fenceCount);
+		if (!handles)
+			return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+
+		for (uint32_t i = 0; i < fenceCount; ++i) {
+			RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
+			handles[i] = fence->temp_syncobj ? fence->temp_syncobj : fence->syncobj;
+		}
+
+		bool success = device->ws->wait_syncobj(device->ws, handles, fenceCount, waitAll, timeout);
+
+		free(handles);
+		return success ? VK_SUCCESS : VK_TIMEOUT;
+	}
+
 	if (!waitAll && fenceCount > 1) {
-		fprintf(stderr, "radv: WaitForFences without waitAll not implemented yet\n");
+		/* Not doing this by default for waitAll, due to needing to allocate twice. */
+		if (device->physical_device->rad_info.drm_minor >= 10 && radv_all_fences_plain_and_submitted(fenceCount, pFences)) {
+			uint32_t wait_count = 0;
+			struct radeon_winsys_fence **fences = malloc(sizeof(struct radeon_winsys_fence *) * fenceCount);
+			if (!fences)
+				return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+
+			for (uint32_t i = 0; i < fenceCount; ++i) {
+				RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
+
+				if (fence->signalled) {
+					free(fences);
+					return VK_SUCCESS;
+				}
+
+				fences[wait_count++] = fence->fence;
+			}
+
+			bool success = device->ws->fences_wait(device->ws, fences, wait_count,
+							       waitAll, timeout - radv_get_current_time());
+
+			free(fences);
+			return success ? VK_SUCCESS : VK_TIMEOUT;
+		}
+
+		while(radv_get_current_time() <= timeout) {
+			for (uint32_t i = 0; i < fenceCount; ++i) {
+				if (radv_GetFenceStatus(_device, pFences[i]) == VK_SUCCESS)
+					return VK_SUCCESS;
+			}
+		}
+		return VK_TIMEOUT;
 	}
 
 	for (uint32_t i = 0; i < fenceCount; ++i) {
@@ -2922,13 +3110,13 @@ VkResult radv_WaitForFences(
 		bool expired = false;
 
 		if (fence->temp_syncobj) {
-			if (!device->ws->wait_syncobj(device->ws, fence->temp_syncobj, timeout))
+			if (!device->ws->wait_syncobj(device->ws, &fence->temp_syncobj, 1, true, timeout))
 				return VK_TIMEOUT;
 			continue;
 		}
 
 		if (fence->syncobj) {
-			if (!device->ws->wait_syncobj(device->ws, fence->syncobj, timeout))
+			if (!device->ws->wait_syncobj(device->ws, &fence->syncobj, 1, true, timeout))
 				return VK_TIMEOUT;
 			continue;
 		}
@@ -2936,8 +3124,17 @@ VkResult radv_WaitForFences(
 		if (fence->signalled)
 			continue;
 
-		if (!fence->submitted)
-			return VK_TIMEOUT;
+		if (!fence->submitted) {
+			while(radv_get_current_time() <= timeout && !fence->submitted)
+				/* Do nothing */;
+
+			if (!fence->submitted)
+				return VK_TIMEOUT;
+
+			/* Recheck as it may have been set by submitting operations. */
+			if (fence->signalled)
+				continue;
+		}
 
 		expired = device->ws->fence_wait(device->ws, fence->fence, true, timeout);
 		if (!expired)
@@ -2980,12 +3177,12 @@ VkResult radv_GetFenceStatus(VkDevice _device, VkFence _fence)
 	RADV_FROM_HANDLE(radv_fence, fence, _fence);
 
 	if (fence->temp_syncobj) {
-			bool success = device->ws->wait_syncobj(device->ws, fence->temp_syncobj, 0);
+			bool success = device->ws->wait_syncobj(device->ws, &fence->temp_syncobj, 1, true, 0);
 			return success ? VK_SUCCESS : VK_NOT_READY;
 	}
 
 	if (fence->syncobj) {
-			bool success = device->ws->wait_syncobj(device->ws, fence->syncobj, 0);
+			bool success = device->ws->wait_syncobj(device->ws, &fence->syncobj, 1, true, 0);
 			return success ? VK_SUCCESS : VK_NOT_READY;
 	}
 
@@ -3412,6 +3609,45 @@ radv_initialise_color_surface(struct radv_device *device,
 	}
 }
 
+static unsigned
+radv_calc_decompress_on_z_planes(struct radv_device *device,
+				 struct radv_image_view *iview)
+{
+	unsigned max_zplanes = 0;
+
+	assert(iview->image->tc_compatible_htile);
+
+	if (device->physical_device->rad_info.chip_class >= GFX9) {
+		/* Default value for 32-bit depth surfaces. */
+		max_zplanes = 4;
+
+		if (iview->vk_format == VK_FORMAT_D16_UNORM &&
+		    iview->image->info.samples > 1)
+			max_zplanes = 2;
+
+		max_zplanes = max_zplanes + 1;
+	} else {
+		if (iview->vk_format == VK_FORMAT_D16_UNORM) {
+			/* Do not enable Z plane compression for 16-bit depth
+			 * surfaces because isn't supported on GFX8. Only
+			 * 32-bit depth surfaces are supported by the hardware.
+			 * This allows to maintain shader compatibility and to
+			 * reduce the number of depth decompressions.
+			 */
+			max_zplanes = 1;
+		} else {
+			if (iview->image->info.samples <= 1)
+				max_zplanes = 5;
+			else if (iview->image->info.samples <= 4)
+				max_zplanes = 3;
+			else
+				max_zplanes = 2;
+		}
+	}
+
+	return max_zplanes;
+}
+
 static void
 radv_initialise_ds_surface(struct radv_device *device,
 			   struct radv_ds_buffer_info *ds,
@@ -3482,14 +3718,11 @@ radv_initialise_ds_surface(struct radv_device *device,
 			ds->db_z_info |= S_028038_TILE_SURFACE_ENABLE(1);
 
 			if (iview->image->tc_compatible_htile) {
-				unsigned max_zplanes = 4;
+				unsigned max_zplanes =
+					radv_calc_decompress_on_z_planes(device, iview);
 
-				if (iview->vk_format == VK_FORMAT_D16_UNORM  &&
-				    iview->image->info.samples > 1)
-					max_zplanes = 2;
-
-				ds->db_z_info |= S_028038_DECOMPRESS_ON_N_ZPLANES(max_zplanes + 1) |
-					  S_028038_ITERATE_FLUSH(1);
+				ds->db_z_info |= S_028038_DECOMPRESS_ON_N_ZPLANES(max_zplanes) |
+						 S_028038_ITERATE_FLUSH(1);
 				ds->db_stencil_info |= S_02803C_ITERATE_FLUSH(1);
 			}
 
@@ -3567,14 +3800,11 @@ radv_initialise_ds_surface(struct radv_device *device,
 			ds->db_htile_surface = S_028ABC_FULL_CACHE(1);
 
 			if (iview->image->tc_compatible_htile) {
-				ds->db_htile_surface |= S_028ABC_TC_COMPATIBLE(1);
+				unsigned max_zplanes =
+					radv_calc_decompress_on_z_planes(device, iview);
 
-				if (iview->image->info.samples <= 1)
-					ds->db_z_info |= S_028040_DECOMPRESS_ON_N_ZPLANES(5);
-				else if (iview->image->info.samples <= 4)
-					ds->db_z_info |= S_028040_DECOMPRESS_ON_N_ZPLANES(3);
-				else
-					ds->db_z_info|= S_028040_DECOMPRESS_ON_N_ZPLANES(2);
+				ds->db_htile_surface |= S_028ABC_TC_COMPATIBLE(1);
+				ds->db_z_info |= S_028040_DECOMPRESS_ON_N_ZPLANES(max_zplanes);
 			}
 		}
 	}
@@ -3744,6 +3974,22 @@ radv_tex_aniso_filter(unsigned filter)
 	return 4;
 }
 
+static unsigned
+radv_tex_filter_mode(VkSamplerReductionModeEXT mode)
+{
+	switch (mode) {
+	case VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT:
+		return SQ_IMG_FILTER_MODE_BLEND;
+	case VK_SAMPLER_REDUCTION_MODE_MIN_EXT:
+		return SQ_IMG_FILTER_MODE_MIN;
+	case VK_SAMPLER_REDUCTION_MODE_MAX_EXT:
+		return SQ_IMG_FILTER_MODE_MAX;
+	default:
+		break;
+	}
+	return 0;
+}
+
 static void
 radv_init_sampler(struct radv_device *device,
 		  struct radv_sampler *sampler,
@@ -3753,6 +3999,13 @@ radv_init_sampler(struct radv_device *device,
 					(uint32_t) pCreateInfo->maxAnisotropy : 0;
 	uint32_t max_aniso_ratio = radv_tex_aniso_filter(max_aniso);
 	bool is_vi = (device->physical_device->rad_info.chip_class >= VI);
+	unsigned filter_mode = SQ_IMG_FILTER_MODE_BLEND;
+
+	const struct VkSamplerReductionModeCreateInfoEXT *sampler_reduction =
+		vk_find_struct_const(pCreateInfo->pNext,
+				     SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT);
+	if (sampler_reduction)
+		filter_mode = radv_tex_filter_mode(sampler_reduction->reductionMode);
 
 	sampler->state[0] = (S_008F30_CLAMP_X(radv_tex_wrap(pCreateInfo->addressModeU)) |
 			     S_008F30_CLAMP_Y(radv_tex_wrap(pCreateInfo->addressModeV)) |
@@ -3763,7 +4016,8 @@ radv_init_sampler(struct radv_device *device,
 			     S_008F30_ANISO_THRESHOLD(max_aniso_ratio >> 1) |
 			     S_008F30_ANISO_BIAS(max_aniso_ratio) |
 			     S_008F30_DISABLE_CUBE_WRAP(0) |
-			     S_008F30_COMPAT_MODE(is_vi));
+			     S_008F30_COMPAT_MODE(is_vi) |
+			     S_008F30_FILTER_MODE(filter_mode));
 	sampler->state[1] = (S_008F34_MIN_LOD(S_FIXED(CLAMP(pCreateInfo->minLod, 0, 15), 8)) |
 			     S_008F34_MAX_LOD(S_FIXED(CLAMP(pCreateInfo->maxLod, 0, 15), 8)) |
 			     S_008F34_PERF_MIP(max_aniso_ratio ? max_aniso_ratio + 6 : 0));
@@ -4009,7 +4263,7 @@ VkResult radv_GetSemaphoreFdKHR(VkDevice _device,
 	return VK_SUCCESS;
 }
 
-void radv_GetPhysicalDeviceExternalSemaphorePropertiesKHR(
+void radv_GetPhysicalDeviceExternalSemaphoreProperties(
 	VkPhysicalDevice                            physicalDevice,
 	const VkPhysicalDeviceExternalSemaphoreInfoKHR* pExternalSemaphoreInfo,
 	VkExternalSemaphorePropertiesKHR*           pExternalSemaphoreProperties)
@@ -4098,7 +4352,7 @@ VkResult radv_GetFenceFdKHR(VkDevice _device,
 	return VK_SUCCESS;
 }
 
-void radv_GetPhysicalDeviceExternalFencePropertiesKHR(
+void radv_GetPhysicalDeviceExternalFenceProperties(
 	VkPhysicalDevice                            physicalDevice,
 	const VkPhysicalDeviceExternalFenceInfoKHR* pExternalFenceInfo,
 	VkExternalFencePropertiesKHR*           pExternalFenceProperties)
@@ -4154,4 +4408,20 @@ radv_DebugReportMessageEXT(VkInstance _instance,
 	RADV_FROM_HANDLE(radv_instance, instance, _instance);
 	vk_debug_report(&instance->debug_report_callbacks, flags, objectType,
 	                object, location, messageCode, pLayerPrefix, pMessage);
+}
+
+void
+radv_GetDeviceGroupPeerMemoryFeatures(
+    VkDevice                                    device,
+    uint32_t                                    heapIndex,
+    uint32_t                                    localDeviceIndex,
+    uint32_t                                    remoteDeviceIndex,
+    VkPeerMemoryFeatureFlags*                   pPeerMemoryFeatures)
+{
+	assert(localDeviceIndex == remoteDeviceIndex);
+
+	*pPeerMemoryFeatures = VK_PEER_MEMORY_FEATURE_COPY_SRC_BIT |
+	                       VK_PEER_MEMORY_FEATURE_COPY_DST_BIT |
+	                       VK_PEER_MEMORY_FEATURE_GENERIC_SRC_BIT |
+	                       VK_PEER_MEMORY_FEATURE_GENERIC_DST_BIT;
 }

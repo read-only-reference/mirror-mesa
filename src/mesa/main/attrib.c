@@ -1507,7 +1507,6 @@ copy_array_object(struct gl_context *ctx,
    /* skip RefCount */
 
    for (i = 0; i < ARRAY_SIZE(src->VertexAttrib); i++) {
-      _mesa_copy_vertex_array(ctx, &dest->_VertexArray[i], &src->_VertexArray[i]);
       _mesa_copy_vertex_attrib_array(ctx, &dest->VertexAttrib[i], &src->VertexAttrib[i]);
       _mesa_copy_vertex_buffer_binding(ctx, &dest->BufferBinding[i], &src->BufferBinding[i]);
    }
@@ -1516,6 +1515,7 @@ copy_array_object(struct gl_context *ctx,
    dest->_Enabled = src->_Enabled;
    /* The bitmask of bound VBOs needs to match the VertexBinding array */
    dest->VertexAttribBufferMask = src->VertexAttribBufferMask;
+   dest->_AttributeMapMode = src->_AttributeMapMode;
    dest->NewArrays = src->NewArrays;
 }
 

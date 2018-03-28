@@ -130,8 +130,16 @@ struct vc5_uncompiled_shader {
         struct pipe_shader_state base;
         uint32_t num_tf_outputs;
         struct v3d_varying_slot *tf_outputs;
-        uint16_t tf_specs[PIPE_MAX_SO_BUFFERS];
+        uint16_t tf_specs[16];
+        uint16_t tf_specs_psiz[16];
         uint32_t num_tf_specs;
+
+        /**
+         * Flag for if the NIR in this shader originally came from TGSI.  If
+         * so, we need to do some fixups at compile time, due to missing
+         * information in TGSI that exists in NIR.
+         */
+        bool was_tgsi;
 };
 
 struct vc5_compiled_shader {
@@ -154,6 +162,9 @@ struct vc5_compiled_shader {
 struct vc5_program_stateobj {
         struct vc5_uncompiled_shader *bind_vs, *bind_fs;
         struct vc5_compiled_shader *cs, *vs, *fs;
+
+        struct vc5_bo *spill_bo;
+        int spill_size_per_thread;
 };
 
 struct vc5_constbuf_stateobj {
@@ -186,6 +197,13 @@ struct vc5_streamout_stateobj {
 struct vc5_job_key {
         struct pipe_surface *cbufs[4];
         struct pipe_surface *zsbuf;
+};
+
+enum vc5_ez_state {
+        VC5_EZ_UNDECIDED = 0,
+        VC5_EZ_GT_GE,
+        VC5_EZ_LT_LE,
+        VC5_EZ_DISABLED,
 };
 
 /**
@@ -283,7 +301,22 @@ struct vc5_job {
          */
         bool oq_enabled;
 
-        bool uses_early_z;
+        /**
+         * Set when a packet enabling TF on all further primitives has been
+         * emitted.
+         */
+        bool tf_enabled;
+
+        /**
+         * Current EZ state for drawing. Updated at the start of draw after
+         * we've decided on the shader being rendered.
+         */
+        enum vc5_ez_state ez_state;
+        /**
+         * The first EZ state that was used for drawing with a decided EZ
+         * direction (so either UNDECIDED, GT, or LT).
+         */
+        enum vc5_ez_state first_ez_state;
 
         /**
          * Number of draw calls (not counting full buffer clears) queued in
@@ -412,7 +445,7 @@ struct vc5_rasterizer_state {
 struct vc5_depth_stencil_alpha_state {
         struct pipe_depth_stencil_alpha_state base;
 
-        bool early_z_enable;
+        enum vc5_ez_state ez_state;
 
         /** Uniforms for stencil state.
          *
