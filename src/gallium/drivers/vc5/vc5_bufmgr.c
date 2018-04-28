@@ -348,6 +348,12 @@ vc5_bo_open_handle(struct vc5_screen *screen,
         bo->name = "winsys";
         bo->private = false;
 
+#ifdef USE_VC5_SIMULATOR
+        vc5_simulator_open_from_handle(screen->fd, winsys_stride,
+                                       bo->handle, bo->size);
+        bo->map = malloc(bo->size);
+#endif
+
         struct drm_vc5_get_bo_offset get = {
                 .handle = handle,
         };
@@ -355,16 +361,12 @@ vc5_bo_open_handle(struct vc5_screen *screen,
         if (ret) {
                 fprintf(stderr, "Failed to get BO offset: %s\n",
                         strerror(errno));
+                free(bo->map);
                 free(bo);
                 return NULL;
         }
         bo->offset = get.offset;
-
-#ifdef USE_VC5_SIMULATOR
-        vc5_simulator_open_from_handle(screen->fd, winsys_stride,
-                                       bo->handle, bo->size);
-        bo->map = malloc(bo->size);
-#endif
+        assert(bo->offset != 0);
 
         util_hash_table_set(screen->bo_handles, (void *)(uintptr_t)handle, bo);
 
@@ -448,48 +450,6 @@ vc5_bo_flink(struct vc5_bo *bo, uint32_t *name)
         bo->private = false;
         *name = flink.name;
 
-        return true;
-}
-
-static int vc5_wait_seqno_ioctl(int fd, uint64_t seqno, uint64_t timeout_ns)
-{
-        struct drm_vc5_wait_seqno wait = {
-                .seqno = seqno,
-                .timeout_ns = timeout_ns,
-        };
-        int ret = vc5_ioctl(fd, DRM_IOCTL_VC5_WAIT_SEQNO, &wait);
-        if (ret == -1)
-                return -errno;
-        else
-                return 0;
-
-}
-
-bool
-vc5_wait_seqno(struct vc5_screen *screen, uint64_t seqno, uint64_t timeout_ns,
-               const char *reason)
-{
-        if (screen->finished_seqno >= seqno)
-                return true;
-
-        if (unlikely(V3D_DEBUG & V3D_DEBUG_PERF) && timeout_ns && reason) {
-                if (vc5_wait_seqno_ioctl(screen->fd, seqno, 0) == -ETIME) {
-                        fprintf(stderr, "Blocking on seqno %lld for %s\n",
-                                (long long)seqno, reason);
-                }
-        }
-
-        int ret = vc5_wait_seqno_ioctl(screen->fd, seqno, timeout_ns);
-        if (ret) {
-                if (ret != -ETIME) {
-                        fprintf(stderr, "wait failed: %d\n", ret);
-                        abort();
-                }
-
-                return false;
-        }
-
-        screen->finished_seqno = seqno;
         return true;
 }
 

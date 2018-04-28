@@ -61,7 +61,7 @@ namespace ArchRast
         //@todo:: Change this to numPatches. Assumed: 1 patch per prim. If holds, its fine.
     };
 
-    struct GSStats
+    struct GSStateInfo
     {
         uint32_t inputPrimCount;
         uint32_t primGeneratedCount;
@@ -73,6 +73,18 @@ namespace ArchRast
         uint32_t rasterTiles = 0;
     };
 
+    struct CullStats
+    {
+        uint32_t degeneratePrimCount = 0;
+        uint32_t backfacePrimCount = 0;
+    };
+
+    struct AlphaStats
+    {
+        uint32_t alphaTestCount = 0;
+        uint32_t alphaBlendCount = 0;
+    };
+
     //////////////////////////////////////////////////////////////////////////
     /// @brief Event handler that handles API thread events. This is shared
     ///        between the API and its caller (e.g. driver shim) but typically
@@ -81,7 +93,35 @@ namespace ArchRast
     class EventHandlerApiStats : public EventHandlerFile
     {
     public:
-        EventHandlerApiStats(uint32_t id) : EventHandlerFile(id) {}
+        EventHandlerApiStats(uint32_t id) : EventHandlerFile(id) {
+#if defined(_WIN32)
+            // Attempt to copy the events.proto file to the ArchRast output dir. It's common for tools to place the events.proto file
+            // in the DEBUG_OUTPUT_DIR when launching AR. If it exists, this will attempt to copy it the first time we get here to package
+            // it with the stats. Otherwise, the user would need to specify the events.proto location when parsing the stats in post.
+            std::stringstream eventsProtoSrcFilename, eventsProtoDstFilename;
+            eventsProtoSrcFilename << KNOB_DEBUG_OUTPUT_DIR << "\\events.proto" << std::ends;
+            eventsProtoDstFilename << mOutputDir.substr(0, mOutputDir.size() - 1) << "\\events.proto" << std::ends;
+
+            // If event.proto already exists, we're done; else do the copy
+            struct stat buf; // Use a Posix stat for file existence check
+            if (!stat(eventsProtoDstFilename.str().c_str(), &buf) == 0) {
+                // Now check to make sure the events.proto source exists
+                if (stat(eventsProtoSrcFilename.str().c_str(), &buf) == 0) {
+                    std::ifstream srcFile;
+                    srcFile.open(eventsProtoSrcFilename.str().c_str(), std::ios::binary);
+                    if (srcFile.is_open())
+                    {
+                        // Just do a binary buffer copy
+                        std::ofstream dstFile;
+                        dstFile.open(eventsProtoDstFilename.str().c_str(), std::ios::binary);
+                        dstFile << srcFile.rdbuf();
+                        dstFile.close();
+                    }
+                    srcFile.close();
+                }
+            }
+#endif
+        }
 
         virtual void Handle(const DrawInstancedEvent& event)
         {
@@ -109,7 +149,10 @@ namespace ArchRast
     class EventHandlerWorkerStats : public EventHandlerFile
     {
     public:
-        EventHandlerWorkerStats(uint32_t id) : EventHandlerFile(id), mNeedFlush(false) {}
+        EventHandlerWorkerStats(uint32_t id) : EventHandlerFile(id), mNeedFlush(false)
+        {
+            memset(mShaderStats, 0, sizeof(mShaderStats));
+        }
 
         virtual void Handle(const EarlyDepthStencilInfoSingleSample& event)
         {
@@ -143,7 +186,7 @@ namespace ArchRast
             mDSSampleRate.earlyStencilTestFailCount += _mm_popcnt_u32((!event.data.stencilPassMask) & event.data.coverageMask);
 
             //earlyZ test single and multi sample
-            mDSCombined.earlyZTestPassCount  += _mm_popcnt_u32(event.data.depthPassMask);
+            mDSCombined.earlyZTestPassCount += _mm_popcnt_u32(event.data.depthPassMask);
             mDSCombined.earlyZTestFailCount += _mm_popcnt_u32((!event.data.depthPassMask) & event.data.coverageMask);
 
             //earlyStencil test single and multi sample
@@ -245,10 +288,50 @@ namespace ArchRast
             mClipper.trivialAcceptCount += _mm_popcnt_u32(event.data.validMask & ~event.data.clipMask);
         }
 
+        struct ShaderStats
+        {
+            uint32_t numInstExecuted;
+        };
+
+        virtual void Handle(const VSStats& event)
+        {
+            mShaderStats[SHADER_VERTEX].numInstExecuted += event.data.numInstExecuted;
+        }
+
+        virtual void Handle(const GSStats& event)
+        {
+            mShaderStats[SHADER_GEOMETRY].numInstExecuted += event.data.numInstExecuted;
+        }
+
+        virtual void Handle(const DSStats& event)
+        {
+            mShaderStats[SHADER_DOMAIN].numInstExecuted += event.data.numInstExecuted;
+        }
+
+        virtual void Handle(const HSStats& event)
+        {
+            mShaderStats[SHADER_HULL].numInstExecuted += event.data.numInstExecuted;
+        }
+
+        virtual void Handle(const PSStats& event)
+        {
+            mShaderStats[SHADER_PIXEL].numInstExecuted += event.data.numInstExecuted;
+            mNeedFlush = true;
+        }
+
+        virtual void Handle(const CSStats& event)
+        {
+            mShaderStats[SHADER_COMPUTE].numInstExecuted += event.data.numInstExecuted;
+            mNeedFlush = true;
+        }
+
         // Flush cached events for this draw
         virtual void FlushDraw(uint32_t drawId)
         {
             if (mNeedFlush == false) return;
+
+            EventHandlerFile::Handle(PSInfo(drawId, mShaderStats[SHADER_PIXEL].numInstExecuted));
+            EventHandlerFile::Handle(CSInfo(drawId, mShaderStats[SHADER_COMPUTE].numInstExecuted));
 
             //singleSample
             EventHandlerFile::Handle(EarlyZSingleSample(drawId, mDSSingleSample.earlyZTestPassCount, mDSSingleSample.earlyZTestFailCount));
@@ -280,7 +363,12 @@ namespace ArchRast
             // Rasterized Subspans
             EventHandlerFile::Handle(RasterTiles(drawId, rastStats.rasterTiles));
 
-            //Reset Internal Counters
+            // Alpha Subspans
+            EventHandlerFile::Handle(AlphaEvent(drawId, mAlphaStats.alphaTestCount, mAlphaStats.alphaBlendCount));
+
+            // Primitive Culling
+            EventHandlerFile::Handle(CullEvent(drawId, mCullStats.backfacePrimCount, mCullStats.degeneratePrimCount));
+
             mDSSingleSample = {};
             mDSSampleRate = {};
             mDSCombined = {};
@@ -288,6 +376,12 @@ namespace ArchRast
             mDSNullPS = {};
 
             rastStats = {};
+            mCullStats = {};
+            mAlphaStats = {};
+
+            mShaderStats[SHADER_PIXEL] = {};
+            mShaderStats[SHADER_COMPUTE] = {};
+
             mNeedFlush = false;
         }
 
@@ -303,6 +397,16 @@ namespace ArchRast
             EventHandlerFile::Handle(GSInputPrims(event.data.drawId, mGS.inputPrimCount));
             EventHandlerFile::Handle(GSPrimsGen(event.data.drawId, mGS.primGeneratedCount));
             EventHandlerFile::Handle(GSVertsInput(event.data.drawId, mGS.vertsInput));
+
+            EventHandlerFile::Handle(VSInfo(event.data.drawId, mShaderStats[SHADER_VERTEX].numInstExecuted));
+            EventHandlerFile::Handle(HSInfo(event.data.drawId, mShaderStats[SHADER_HULL].numInstExecuted));
+            EventHandlerFile::Handle(DSInfo(event.data.drawId, mShaderStats[SHADER_DOMAIN].numInstExecuted));
+            EventHandlerFile::Handle(GSInfo(event.data.drawId, mShaderStats[SHADER_GEOMETRY].numInstExecuted));
+
+            mShaderStats[SHADER_VERTEX] = {};
+            mShaderStats[SHADER_HULL] = {};
+            mShaderStats[SHADER_DOMAIN] = {};
+            mShaderStats[SHADER_GEOMETRY] = {};
 
             //Reset Internal Counters
             mClipper = {};
@@ -327,6 +431,18 @@ namespace ArchRast
             rastStats.rasterTiles += event.data.rasterTiles;
         }
 
+        virtual void Handle(const CullInfoEvent& event)
+        {
+            mCullStats.degeneratePrimCount += _mm_popcnt_u32(event.data.validMask ^ (event.data.validMask & ~event.data.degeneratePrimMask));
+            mCullStats.backfacePrimCount   += _mm_popcnt_u32(event.data.validMask ^ (event.data.validMask & ~event.data.backfacePrimMask));
+        }
+
+        virtual void Handle(const AlphaInfoEvent& event)
+        {
+            mAlphaStats.alphaTestCount  += event.data.alphaTestEnable;
+            mAlphaStats.alphaBlendCount += event.data.alphaBlendEnable;
+        }
+
     protected:
         bool mNeedFlush;
         // Per draw stats
@@ -338,8 +454,12 @@ namespace ArchRast
         DepthStencilStats mDSOmZ = {};
         CStats mClipper = {};
         TEStats mTS = {};
-        GSStats mGS = {};
+        GSStateInfo mGS = {};
         RastStats rastStats = {};
+        CullStats mCullStats = {};
+        AlphaStats mAlphaStats = {};
+
+        ShaderStats mShaderStats[NUM_SHADER_TYPES];
 
     };
 

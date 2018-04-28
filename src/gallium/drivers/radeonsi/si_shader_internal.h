@@ -1,5 +1,6 @@
 /*
  * Copyright 2016 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -178,7 +179,7 @@ struct si_shader_context {
 	/* CS */
 	int param_block_size;
 
-	LLVMTargetMachineRef tm;
+	struct si_compiler *compiler;
 
 	/* Preloaded descriptors. */
 	LLVMValueRef esgs_ring;
@@ -220,7 +221,7 @@ si_shader_context_from_abi(struct ac_shader_abi *abi)
 }
 
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
-			 LLVMTargetMachineRef tm,
+			 struct si_compiler *compiler,
 			 struct pipe_debug_callback *debug);
 
 LLVMTypeRef tgsi2llvmtype(struct lp_build_tgsi_context *bld_base,
@@ -235,7 +236,7 @@ LLVMValueRef si_llvm_bound_index(struct si_shader_context *ctx,
 
 void si_llvm_context_init(struct si_shader_context *ctx,
 			  struct si_screen *sscreen,
-			  LLVMTargetMachineRef tm);
+			  struct si_compiler *compiler);
 void si_llvm_context_set_tgsi(struct si_shader_context *ctx,
 			      struct si_shader *shader);
 
@@ -300,6 +301,7 @@ LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 LLVMValueRef si_get_bounded_indirect_index(struct si_shader_context *ctx,
 					   const struct tgsi_ind_register *ind,
 					   int rel_index, unsigned num);
+LLVMValueRef si_get_sample_id(struct si_shader_context *ctx);
 
 void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base);
 void si_shader_context_init_mem(struct si_shader_context *ctx);
@@ -328,5 +330,9 @@ void si_llvm_load_input_fs(
 	LLVMValueRef out[4]);
 
 bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir);
+
+LLVMValueRef si_unpack_param(struct si_shader_context *ctx,
+			     unsigned param, unsigned rshift,
+			     unsigned bitwidth);
 
 #endif

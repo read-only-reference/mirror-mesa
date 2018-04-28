@@ -94,7 +94,7 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
 #endif
 }
 
-#if GEN_GEN >= 7 && GEN_GEN <= 10
+#if GEN_GEN >= 7 && GEN_GEN < 10
 static struct blorp_address
 blorp_get_surface_base_address(struct blorp_batch *batch)
 {
@@ -240,6 +240,20 @@ genX(blorp_exec)(struct blorp_batch *batch,
    struct brw_context *brw = batch->driver_batch;
    struct gl_context *ctx = &brw->ctx;
    bool check_aperture_failed_once = false;
+
+#if GEN_GEN >= 11
+   /* The PIPE_CONTROL command description says:
+    *
+    * "Whenever a Binding Table Index (BTI) used by a Render Taget Message
+    *  points to a different RENDER_SURFACE_STATE, SW must issue a Render
+    *  Target Cache Flush by enabling this bit. When render target flush
+    *  is set due to new association of BTI, PS Scoreboard Stall bit must
+    *  be set in this packet."
+   */
+   brw_emit_pipe_control_flush(brw,
+                               PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                               PIPE_CONTROL_STALL_AT_SCOREBOARD);
+#endif
 
    /* Flush the sampler and render caches.  We definitely need to flush the
     * sampler cache so that we get updated contents from the render cache for

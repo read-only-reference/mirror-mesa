@@ -213,10 +213,17 @@ radv_shader_compile_to_nir(struct radv_device *device,
 				.tessellation = true,
 				.int64 = true,
 				.multiview = true,
+				.subgroup_ballot = true,
 				.subgroup_basic = true,
+				.subgroup_quad = true,
+				.subgroup_shuffle = true,
+				.subgroup_vote = true,
 				.variable_pointers = true,
 				.gcn_shader = true,
 				.trinary_minmax = true,
+				.shader_viewport_index_layer = true,
+				.descriptor_array_dynamic_indexing = true,
+				.runtime_descriptor_array = true,
 			},
 		};
 		entry_point = spirv_to_nir(spirv, module->size / 4,
@@ -282,7 +289,8 @@ radv_shader_compile_to_nir(struct radv_device *device,
 			.lower_to_scalar = 1,
 			.lower_subgroup_masks = 1,
 			.lower_shuffle = 1,
-			.lower_quad =  1,
+			.lower_shuffle_to_32bit = 1,
+			.lower_vote_eq_to_ballot = 1,
 		});
 
 	radv_optimize_nir(nir);
@@ -483,7 +491,7 @@ shader_variant_create(struct radv_device *device,
 		tm_options |= AC_TM_SUPPORTS_SPILL;
 	if (device->instance->perftest_flags & RADV_PERFTEST_SISCHED)
 		tm_options |= AC_TM_SISCHED;
-	tm = ac_create_target_machine(chip_family, tm_options);
+	tm = ac_create_target_machine(chip_family, tm_options, NULL);
 
 	if (gs_copy_shader) {
 		assert(shader_count == 1);
@@ -596,15 +604,6 @@ radv_get_shader_name(struct radv_shader_variant *var, gl_shader_stage stage)
 	};
 }
 
-static uint32_t
-get_total_sgprs(struct radv_device *device)
-{
-	if (device->physical_device->rad_info.chip_class >= VI)
-		return 800;
-	else
-		return 512;
-}
-
 static void
 generate_shader_stats(struct radv_device *device,
 		      struct radv_shader_variant *variant,
@@ -616,16 +615,7 @@ generate_shader_stats(struct radv_device *device,
 	unsigned max_simd_waves;
 	unsigned lds_per_wave = 0;
 
-	switch (device->physical_device->rad_info.family) {
-	/* These always have 8 waves: */
-	case CHIP_POLARIS10:
-	case CHIP_POLARIS11:
-	case CHIP_POLARIS12:
-		max_simd_waves = 8;
-		break;
-	default:
-		max_simd_waves = 10;
-	}
+	max_simd_waves = ac_get_max_simd_waves(device->physical_device->rad_info.family);
 
 	conf = &variant->config;
 
@@ -636,10 +626,14 @@ generate_shader_stats(struct radv_device *device,
 	}
 
 	if (conf->num_sgprs)
-		max_simd_waves = MIN2(max_simd_waves, get_total_sgprs(device) / conf->num_sgprs);
+		max_simd_waves =
+			MIN2(max_simd_waves,
+			     radv_get_num_physical_sgprs(device->physical_device) / conf->num_sgprs);
 
 	if (conf->num_vgprs)
-		max_simd_waves = MIN2(max_simd_waves, 256 / conf->num_vgprs);
+		max_simd_waves =
+			MIN2(max_simd_waves,
+			     RADV_NUM_PHYSICAL_VGPRS / conf->num_vgprs);
 
 	/* LDS is 64KB per CU (4 SIMDs), divided into 16KB blocks per SIMD
 	 * that PS can use.
@@ -718,8 +712,8 @@ radv_GetShaderInfoAMD(VkDevice _device,
 
 			VkShaderStatisticsInfoAMD statistics = {};
 			statistics.shaderStageMask = shaderStage;
-			statistics.numPhysicalVgprs = 256;
-			statistics.numPhysicalSgprs = get_total_sgprs(device);
+			statistics.numPhysicalVgprs = RADV_NUM_PHYSICAL_VGPRS;
+			statistics.numPhysicalSgprs = radv_get_num_physical_sgprs(device->physical_device);
 			statistics.numAvailableSgprs = statistics.numPhysicalSgprs;
 
 			if (stage == MESA_SHADER_COMPUTE) {

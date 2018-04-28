@@ -84,18 +84,18 @@ struct pipe_video_buffer *si_video_buffer_create(struct pipe_context *pipe,
 			continue;
 
 		surfaces[i] = & resources[i]->surface;
-		pbs[i] = &resources[i]->resource.buf;
+		pbs[i] = &resources[i]->buffer.buf;
 	}
 
-	si_vid_join_surfaces(&ctx->b, pbs, surfaces);
+	si_vid_join_surfaces(ctx, pbs, surfaces);
 
 	for (i = 0; i < VL_NUM_COMPONENTS; ++i) {
 		if (!resources[i])
 			continue;
 
 		/* reset the address */
-		resources[i]->resource.gpu_address = ctx->b.ws->buffer_get_virtual_address(
-			resources[i]->resource.buf);
+		resources[i]->buffer.gpu_address = ctx->ws->buffer_get_virtual_address(
+			resources[i]->buffer.buf);
 	}
 
 	vidtemplate.height *= array_size;
@@ -122,7 +122,7 @@ static struct pb_buffer* si_uvd_set_dtb(struct ruvd_msg *msg, struct vl_video_bu
 
 	si_uvd_set_dt_surfaces(msg, &luma->surface, (chroma) ? &chroma->surface : NULL, type);
 
-	return luma->resource.buf;
+	return luma->buffer.buf;
 }
 
 /* get the radeon resources for VCE */
@@ -133,7 +133,7 @@ static void si_vce_get_buffer(struct pipe_resource *resource,
 	struct r600_texture *res = (struct r600_texture *)resource;
 
 	if (handle)
-		*handle = res->resource.buf;
+		*handle = res->buffer.buf;
 
 	if (surface)
 		*surface = &res->surface;
@@ -146,16 +146,16 @@ struct pipe_video_codec *si_uvd_create_decoder(struct pipe_context *context,
 					       const struct pipe_video_codec *templ)
 {
 	struct si_context *ctx = (struct si_context *)context;
-	bool vcn = (ctx->b.family == CHIP_RAVEN) ? true : false;
+	bool vcn = (ctx->family == CHIP_RAVEN) ? true : false;
 
 	if (templ->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
 		if (vcn) {
-			return radeon_create_encoder(context, templ, ctx->b.ws, si_vce_get_buffer);
+			return radeon_create_encoder(context, templ, ctx->ws, si_vce_get_buffer);
 		} else {
 			if (u_reduce_video_profile(templ->profile) == PIPE_VIDEO_FORMAT_HEVC)
-				return radeon_uvd_create_encoder(context, templ, ctx->b.ws, si_vce_get_buffer);
+				return radeon_uvd_create_encoder(context, templ, ctx->ws, si_vce_get_buffer);
 			else
-				return si_vce_create_encoder(context, templ, ctx->b.ws, si_vce_get_buffer);
+				return si_vce_create_encoder(context, templ, ctx->ws, si_vce_get_buffer);
 		}
 	}
 

@@ -36,6 +36,7 @@
 #include <stdbool.h>
 #include "main/macros.h"
 #include "main/mtypes.h"
+#include "main/errors.h"
 #include "vbo/vbo.h"
 #include "brw_structs.h"
 #include "brw_pipe_control.h"
@@ -680,7 +681,8 @@ struct gen_l3_config;
 
 enum brw_query_kind {
    OA_COUNTERS,
-   PIPELINE_STATS
+   OA_COUNTERS_RAW,
+   PIPELINE_STATS,
 };
 
 struct brw_perf_query_register_prog {
@@ -886,8 +888,12 @@ struct brw_context
 
    struct {
       struct {
-         /** The value of gl_BaseVertex for the current _mesa_prim. */
-         int gl_basevertex;
+         /**
+          * Either the value of gl_BaseVertex for indexed draw calls or the
+          * value of the argument <first> for non-indexed draw calls for the
+          * current _mesa_prim.
+          */
+         int firstvertex;
 
          /** The value of gl_BaseInstance for the current _mesa_prim. */
          int gl_baseinstance;

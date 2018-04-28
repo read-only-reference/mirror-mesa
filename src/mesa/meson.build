@@ -18,8 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# TODO: main/tests
-
 subdir('program')
 subdir('main')
 
@@ -65,8 +63,6 @@ files_libmesa_common = files(
   'main/api_exec.h',
   'main/api_loopback.c',
   'main/api_loopback.h',
-  'main/api_validate.c',
-  'main/api_validate.h',
   'main/arbprogram.c',
   'main/arbprogram.h',
   'main/arrayobj.c',
@@ -106,7 +102,6 @@ files_libmesa_common = files(
   'main/convolve.h',
   'main/copyimage.c',
   'main/copyimage.h',
-  'main/core.h',
   'main/cpuinfo.c',
   'main/cpuinfo.h',
   'main/dd.h',
@@ -122,6 +117,8 @@ files_libmesa_common = files(
   'main/drawpix.h',
   'main/drawtex.c',
   'main/drawtex.h',
+  'main/draw_validate.c',
+  'main/draw_validate.h',
   'main/enable.c',
   'main/enable.h',
   'main/enums.h',
@@ -190,6 +187,7 @@ files_libmesa_common = files(
   'main/mipmap.h',
   'main/mm.c',
   'main/mm.h',
+  'main/menums.h',
   'main/mtypes.h',
   'main/multisample.c',
   'main/multisample.h',
@@ -734,6 +732,6 @@ endif
 if with_glx == 'xlib'
   subdir('drivers/x11')
 endif
-if with_tests
+if with_tests and dri_drivers != []
   subdir('main/tests')
 endif

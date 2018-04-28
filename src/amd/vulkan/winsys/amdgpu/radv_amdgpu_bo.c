@@ -33,6 +33,8 @@
 #include <amdgpu.h>
 #include <amdgpu_drm.h>
 #include <inttypes.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include "util/u_atomic.h"
 
@@ -345,7 +347,8 @@ radv_amdgpu_winsys_bo_create(struct radeon_winsys *_ws,
 		request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
 	if (!(flags & RADEON_FLAG_IMPLICIT_SYNC) && ws->info.drm_minor >= 22)
 		request.flags |= AMDGPU_GEM_CREATE_EXPLICIT_SYNC;
-	if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING && ws->info.drm_minor >= 20 && ws->use_local_bos) {
+	if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+	    ws->info.has_local_buffers && ws->use_local_bos) {
 		bo->base.is_local = true;
 		request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
 	}
@@ -498,6 +501,7 @@ radv_amdgpu_winsys_bo_from_fd(struct radeon_winsys *_ws,
 	bo->size = result.alloc_size;
 	bo->is_shared = true;
 	bo->ws = ws;
+	bo->ref_count = 1;
 	radv_amdgpu_add_buffer_to_global_list(bo);
 	return (struct radeon_winsys_bo *)bo;
 error_va_map:

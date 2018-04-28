@@ -152,33 +152,24 @@ brw_emit_surface_state(struct brw_context *brw,
 
    union isl_color_value clear_color = { .u32 = { 0, 0, 0, 0 } };
 
-   struct brw_bo *aux_bo;
+   struct brw_bo *aux_bo = NULL;
    struct isl_surf *aux_surf = NULL;
    uint64_t aux_offset = 0;
-   switch (aux_usage) {
-   case ISL_AUX_USAGE_MCS:
-   case ISL_AUX_USAGE_CCS_D:
-   case ISL_AUX_USAGE_CCS_E:
-      aux_surf = &mt->mcs_buf->surf;
-      aux_bo = mt->mcs_buf->bo;
-      aux_offset = mt->mcs_buf->offset;
-      break;
-
-   case ISL_AUX_USAGE_HIZ:
-      aux_surf = &mt->hiz_buf->surf;
-      aux_bo = mt->hiz_buf->bo;
-      aux_offset = 0;
-      break;
-
-   case ISL_AUX_USAGE_NONE:
-      break;
-   }
+   struct brw_bo *clear_bo = NULL;
+   uint32_t clear_offset = 0;
 
    if (aux_usage != ISL_AUX_USAGE_NONE) {
+      aux_surf = &mt->aux_buf->surf;
+      aux_bo = mt->aux_buf->bo;
+      aux_offset = mt->aux_buf->offset;
+
       /* We only really need a clear color if we also have an auxiliary
        * surface.  Without one, it does nothing.
        */
-      clear_color = mt->fast_clear_color;
+      clear_color =
+         intel_miptree_get_clear_color(devinfo, mt, view.format,
+                                       view.usage & ISL_SURF_USAGE_TEXTURE_BIT,
+                                       &clear_bo, &clear_offset);
    }
 
    void *state = brw_state_batch(brw,
@@ -194,6 +185,8 @@ brw_emit_surface_state(struct brw_context *brw,
                        .aux_address = aux_offset,
                        .mocs = brw_get_bo_mocs(devinfo, mt->bo),
                        .clear_color = clear_color,
+                       .use_clear_address = clear_bo != NULL,
+                       .clear_address = clear_offset,
                        .x_offset_sa = tile_x, .y_offset_sa = tile_y);
    if (aux_surf) {
       /* On gen7 and prior, the upper 20 bits of surface state DWORD 6 are the
@@ -222,6 +215,17 @@ brw_emit_surface_state(struct brw_context *brw,
                                      reloc_flags);
 
       }
+   }
+
+   if (clear_bo != NULL) {
+      /* Make sure the offset is aligned with a cacheline. */
+      assert((clear_offset & 0x3f) == 0);
+      uint32_t *clear_address =
+            state + brw->isl_dev.ss.clear_color_state_offset;
+      *clear_address = brw_state_reloc(&brw->batch,
+                                       *surf_offset +
+                                       brw->isl_dev.ss.clear_color_state_offset,
+                                       clear_bo, *clear_address, reloc_flags);
    }
 }
 

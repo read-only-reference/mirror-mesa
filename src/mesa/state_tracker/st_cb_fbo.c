@@ -714,13 +714,10 @@ st_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
  * created FBOs.
  */
 static void
-st_DrawBuffers(struct gl_context *ctx, GLsizei count, const GLenum *buffers)
+st_DrawBufferAllocate(struct gl_context *ctx)
 {
    struct st_context *st = st_context(ctx);
    struct gl_framebuffer *fb = ctx->DrawBuffer;
-
-   (void) count;
-   (void) buffers;
 
    if (_mesa_is_winsys_fbo(fb)) {
       GLuint i;
@@ -737,8 +734,8 @@ st_DrawBuffers(struct gl_context *ctx, GLsizei count, const GLenum *buffers)
 
 
 /**
- * Called via glReadBuffer.  As with st_DrawBuffers, we use this function
- * to check if we need to allocate a renderbuffer on demand.
+ * Called via glReadBuffer.  As with st_DrawBufferAllocate, we use this
+ * function to check if we need to allocate a renderbuffer on demand.
  */
 static void
 st_ReadBuffer(struct gl_context *ctx, GLenum buffer)
@@ -869,7 +866,7 @@ st_init_fbo_functions(struct dd_function_table *functions)
    functions->FinishRenderTexture = st_finish_render_texture;
    functions->ValidateFramebuffer = st_validate_framebuffer;
 
-   functions->DrawBuffers = st_DrawBuffers;
+   functions->DrawBufferAllocate = st_DrawBufferAllocate;
    functions->ReadBuffer = st_ReadBuffer;
 
    functions->MapRenderbuffer = st_MapRenderbuffer;

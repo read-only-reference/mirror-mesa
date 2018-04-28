@@ -64,7 +64,7 @@ dump_validation_list(struct intel_batchbuffer *batch)
       uint64_t flags = batch->validation_list[i].flags;
       assert(batch->validation_list[i].handle ==
              batch->exec_bos[i]->gem_handle);
-      fprintf(stderr, "[%2d]: %2d %-14s %p %s%-7s @ 0x%016llu%s (%"PRIu64"B)\n",
+      fprintf(stderr, "[%2d]: %2d %-14s %p %s%-7s @ 0x%016llx%s (%"PRIu64"B)\n",
               i,
               batch->validation_list[i].handle,
               batch->exec_bos[i]->name,
@@ -191,7 +191,7 @@ recreate_growing_buffer(struct brw_context *brw,
    struct brw_bufmgr *bufmgr = screen->bufmgr;
 
    grow->bo = brw_bo_alloc(bufmgr, name, size);
-   grow->bo->kflags = can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
+   grow->bo->kflags |= can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
    grow->partial_bo = NULL;
    grow->partial_bo_map = NULL;
    grow->partial_bytes = 0;
@@ -360,8 +360,11 @@ grow_buffer(struct brw_context *brw,
       /* We can't safely use realloc, as it may move the existing buffer,
        * breaking existing pointers the caller may still be using.  Just
        * malloc a new copy and memcpy it like the normal BO path.
+       *
+       * Use bo->size rather than new_size because the bufmgr may have
+       * rounded up the size, and we want the shadow size to match.
        */
-      grow->map = malloc(new_size);
+      grow->map = malloc(new_bo->size);
    } else {
       grow->map = brw_bo_map(brw, new_bo, MAP_READ | MAP_WRITE);
    }
@@ -1079,7 +1082,7 @@ brw_batch_references(struct intel_batchbuffer *batch, struct brw_bo *bo)
 static uint64_t
 emit_reloc(struct intel_batchbuffer *batch,
            struct brw_reloc_list *rlist, uint32_t offset,
-           struct brw_bo *target, uint32_t target_offset,
+           struct brw_bo *target, int32_t target_offset,
            unsigned int reloc_flags)
 {
    assert(target != NULL);

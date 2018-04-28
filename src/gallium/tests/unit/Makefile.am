@@ -14,7 +14,6 @@ AM_CPPFLAGS = \
 LDADD = \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
 	$(top_builddir)/src/util/libmesautil.la \
-	$(top_builddir)/src/gallium/drivers/trace/libtrace.la \
 	$(top_builddir)/src/gallium/winsys/sw/null/libws_null.la \
 	$(top_builddir)/src/gallium/drivers/softpipe/libsoftpipe.la \
 	$(GALLIUM_COMMON_LIB_DEPS)
@@ -33,3 +32,5 @@ u_format_test_SOURCES = u_format_test.c
 u_format_compatible_test_SOURCES = u_format_compatible_test.c
 
 translate_test_SOURCES = translate_test.c
+
+EXTRA_DIST = meson.build

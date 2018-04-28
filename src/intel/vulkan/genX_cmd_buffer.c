@@ -200,6 +200,17 @@ add_image_view_relocs(struct anv_cmd_buffer *cmd_buffer,
       if (result != VK_SUCCESS)
          anv_batch_set_error(&cmd_buffer->batch, result);
    }
+
+   if (state.clear_address) {
+      VkResult result =
+         anv_reloc_list_add(&cmd_buffer->surface_relocs,
+                            &cmd_buffer->pool->alloc,
+                            state.state.offset +
+                            isl_dev->ss.clear_color_state_offset,
+                            image->planes[image_plane].bo, state.clear_address);
+      if (result != VK_SUCCESS)
+         anv_batch_set_error(&cmd_buffer->batch, result);
+   }
 }
 
 static void
@@ -272,20 +283,8 @@ color_attachment_compute_aux_usage(struct anv_device * device,
    assert(iview->image->planes[0].aux_surface.isl.usage &
           (ISL_SURF_USAGE_CCS_BIT | ISL_SURF_USAGE_MCS_BIT));
 
-   const struct isl_format_layout *view_fmtl =
-      isl_format_get_layout(iview->planes[0].isl.format);
    union isl_color_value clear_color = {};
-
-#define COPY_CLEAR_COLOR_CHANNEL(c, i) \
-   if (view_fmtl->channels.c.bits) \
-      clear_color.u32[i] = att_state->clear_value.color.uint32[i]
-
-   COPY_CLEAR_COLOR_CHANNEL(r, 0);
-   COPY_CLEAR_COLOR_CHANNEL(g, 1);
-   COPY_CLEAR_COLOR_CHANNEL(b, 2);
-   COPY_CLEAR_COLOR_CHANNEL(a, 3);
-
-#undef COPY_CLEAR_COLOR_CHANNEL
+   anv_clear_color_from_att_state(&clear_color, att_state, iview);
 
    att_state->clear_color_is_zero_one =
       isl_color_value_is_zero_one(clear_color, iview->planes[0].isl.format);
@@ -751,7 +750,7 @@ anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
       resolve_op = ISL_AUX_OP_FULL_RESOLVE;
 
    anv_image_ccs_op(cmd_buffer, image, aspect, level,
-                    array_layer, 1, resolve_op, true);
+                    array_layer, 1, resolve_op, NULL, true);
 }
 
 static void
@@ -771,7 +770,7 @@ anv_cmd_predicated_mcs_resolve(struct anv_cmd_buffer *cmd_buffer,
                                      resolve_op, fast_clear_supported);
 
    anv_image_mcs_op(cmd_buffer, image, aspect,
-                    array_layer, 1, resolve_op, true);
+                    array_layer, 1, resolve_op, NULL, true);
 #else
    unreachable("MCS resolves are unsupported on Ivybridge and Bay Trail");
 #endif
@@ -826,35 +825,36 @@ init_fast_clear_color(struct anv_cmd_buffer *cmd_buffer,
     */
    struct anv_address addr =
       anv_image_get_clear_color_addr(cmd_buffer->device, image, aspect);
-   unsigned i = 0;
-   for (; i < cmd_buffer->device->isl_dev.ss.clear_value_size; i += 4) {
-      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
-         sdi.Address = addr;
 
-         if (GEN_GEN >= 9) {
+   if (GEN_GEN >= 9) {
+      for (unsigned i = 0; i < 4; i++) {
+         anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+            sdi.Address = addr;
+            sdi.Address.offset += i * 4;
             /* MCS buffers on SKL+ can only have 1/0 clear colors. */
             assert(image->samples > 1);
             sdi.ImmediateData = 0;
-         } else if (GEN_VERSIONx10 >= 75) {
+         }
+      }
+   } else {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address = addr;
+         if (GEN_GEN >= 8 || GEN_IS_HASWELL) {
             /* Pre-SKL, the dword containing the clear values also contains
              * other fields, so we need to initialize those fields to match the
              * values that would be in a color attachment.
              */
-            assert(i == 0);
             sdi.ImmediateData = ISL_CHANNEL_SELECT_RED   << 25 |
                                 ISL_CHANNEL_SELECT_GREEN << 22 |
                                 ISL_CHANNEL_SELECT_BLUE  << 19 |
                                 ISL_CHANNEL_SELECT_ALPHA << 16;
-         }  else if (GEN_VERSIONx10 == 70) {
+         } else if (GEN_GEN == 7) {
             /* On IVB, the dword containing the clear values also contains
              * other fields that must be zero or can be zero.
              */
-            assert(i == 0);
             sdi.ImmediateData = 0;
          }
       }
-
-      addr.offset += 4;
    }
 }
 
@@ -1026,7 +1026,7 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
 
             anv_image_ccs_op(cmd_buffer, image, aspect, level,
                              base_layer, level_layer_count,
-                             ISL_AUX_OP_AMBIGUATE, false);
+                             ISL_AUX_OP_AMBIGUATE, NULL, false);
 
             if (image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E) {
                set_image_compressed_bit(cmd_buffer, image, aspect,
@@ -1044,7 +1044,7 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
          assert(base_level == 0 && level_count == 1);
          anv_image_mcs_op(cmd_buffer, image, aspect,
                           base_layer, layer_count,
-                          ISL_AUX_OP_FAST_CLEAR, false);
+                          ISL_AUX_OP_FAST_CLEAR, NULL, false);
       }
       return;
    }
@@ -1248,10 +1248,13 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
 
          struct anv_image_view *iview = framebuffer->attachments[i];
          anv_assert(iview->vk_format == att->format);
-         anv_assert(iview->n_planes == 1);
+
+         const uint32_t num_layers = iview->planes[0].isl.array_len;
+         state->attachments[i].pending_clear_views = (1 << num_layers) - 1;
 
          union isl_color_value clear_color = { .u32 = { 0, } };
          if (att_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
+            anv_assert(iview->n_planes == 1);
             assert(att_aspects == VK_IMAGE_ASPECT_COLOR_BIT);
             color_attachment_compute_aux_usage(cmd_buffer->device,
                                                state, i, begin->renderArea,
@@ -2670,7 +2673,8 @@ void genX(CmdDraw)(
 
    genX(cmd_buffer_flush_state)(cmd_buffer);
 
-   if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+   if (vs_prog_data->uses_firstvertex ||
+       vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance(cmd_buffer, firstVertex, firstInstance);
    if (vs_prog_data->uses_drawid)
       emit_draw_index(cmd_buffer, 0);
@@ -2708,7 +2712,8 @@ void genX(CmdDrawIndexed)(
 
    genX(cmd_buffer_flush_state)(cmd_buffer);
 
-   if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+   if (vs_prog_data->uses_firstvertex ||
+       vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance(cmd_buffer, vertexOffset, firstInstance);
    if (vs_prog_data->uses_drawid)
       emit_draw_index(cmd_buffer, 0);
@@ -2847,7 +2852,8 @@ void genX(CmdDrawIndirect)(
       struct anv_bo *bo = buffer->bo;
       uint32_t bo_offset = buffer->offset + offset;
 
-      if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+      if (vs_prog_data->uses_firstvertex ||
+          vs_prog_data->uses_baseinstance)
          emit_base_vertex_instance_bo(cmd_buffer, bo, bo_offset + 8);
       if (vs_prog_data->uses_drawid)
          emit_draw_index(cmd_buffer, i);
@@ -2886,7 +2892,8 @@ void genX(CmdDrawIndexedIndirect)(
       uint32_t bo_offset = buffer->offset + offset;
 
       /* TODO: We need to stomp base vertex to 0 somehow */
-      if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+      if (vs_prog_data->uses_firstvertex ||
+          vs_prog_data->uses_baseinstance)
          emit_base_vertex_instance_bo(cmd_buffer, bo, bo_offset + 12);
       if (vs_prog_data->uses_drawid)
          emit_draw_index(cmd_buffer, i);
@@ -3414,6 +3421,42 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    cmd_buffer->state.hiz_enabled = info.hiz_usage == ISL_AUX_USAGE_HIZ;
 }
 
+/**
+ * This ANDs the view mask of the current subpass with the pending clear
+ * views in the attachment to get the mask of views active in the subpass
+ * that still need to be cleared.
+ */
+static inline uint32_t
+get_multiview_subpass_clear_mask(const struct anv_cmd_state *cmd_state,
+                                 const struct anv_attachment_state *att_state)
+{
+   return cmd_state->subpass->view_mask & att_state->pending_clear_views;
+}
+
+static inline bool
+do_first_layer_clear(const struct anv_cmd_state *cmd_state,
+                     const struct anv_attachment_state *att_state)
+{
+   if (!cmd_state->subpass->view_mask)
+      return true;
+
+   uint32_t pending_clear_mask =
+      get_multiview_subpass_clear_mask(cmd_state, att_state);
+
+   return pending_clear_mask & 1;
+}
+
+static inline bool
+current_subpass_is_last_for_attachment(const struct anv_cmd_state *cmd_state,
+                                       uint32_t att_idx)
+{
+   const uint32_t last_subpass_idx =
+      cmd_state->pass->attachments[att_idx].last_subpass_idx;
+   const struct anv_subpass *last_subpass =
+      &cmd_state->pass->subpasses[last_subpass_idx];
+   return last_subpass == cmd_state->subpass;
+}
+
 static void
 cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
                          uint32_t subpass_id)
@@ -3451,6 +3494,8 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
 
    VkRect2D render_area = cmd_buffer->state.render_area;
    struct anv_framebuffer *fb = cmd_buffer->state.framebuffer;
+
+   bool is_multiview = subpass->view_mask != 0;
 
    for (uint32_t i = 0; i < subpass->attachment_count; ++i) {
       const uint32_t a = subpass->attachments[i].attachment;
@@ -3519,24 +3564,29 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
          uint32_t base_clear_layer = iview->planes[0].isl.base_array_layer;
          uint32_t clear_layer_count = fb->layers;
 
-         if (att_state->fast_clear) {
+         if (att_state->fast_clear &&
+             do_first_layer_clear(cmd_state, att_state)) {
             /* We only support fast-clears on the first layer */
             assert(iview->planes[0].isl.base_level == 0);
             assert(iview->planes[0].isl.base_array_layer == 0);
 
+            union isl_color_value clear_color = {};
+            anv_clear_color_from_att_state(&clear_color, att_state, iview);
             if (iview->image->samples == 1) {
                anv_image_ccs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                0, 0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+                                0, 0, 1, ISL_AUX_OP_FAST_CLEAR,
+                                &clear_color,
+                                false);
             } else {
                anv_image_mcs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+                                0, 1, ISL_AUX_OP_FAST_CLEAR,
+                                &clear_color,
+                                false);
             }
             base_clear_layer++;
             clear_layer_count--;
-
-            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
-                                         image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                         true /* copy from ss */);
+            if (is_multiview)
+               att_state->pending_clear_views &= ~1;
 
             if (att_state->clear_color_is_zero) {
                /* This image has the auxiliary buffer enabled. We can mark the
@@ -3554,7 +3604,39 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
             }
          }
 
-         if (clear_layer_count > 0) {
+         /* From the VkFramebufferCreateInfo spec:
+          *
+          * "If the render pass uses multiview, then layers must be one and each
+          *  attachment requires a number of layers that is greater than the
+          *  maximum bit index set in the view mask in the subpasses in which it
+          *  is used."
+          *
+          * So if multiview is active we ignore the number of layers in the
+          * framebuffer and instead we honor the view mask from the subpass.
+          */
+         if (is_multiview) {
+            assert(image->n_planes == 1);
+            uint32_t pending_clear_mask =
+               get_multiview_subpass_clear_mask(cmd_state, att_state);
+
+            uint32_t layer_idx;
+            for_each_bit(layer_idx, pending_clear_mask) {
+               uint32_t layer =
+                  iview->planes[0].isl.base_array_layer + layer_idx;
+
+               anv_image_clear_color(cmd_buffer, image,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     att_state->aux_usage,
+                                     iview->planes[0].isl.format,
+                                     iview->planes[0].isl.swizzle,
+                                     iview->planes[0].isl.base_level,
+                                     layer, 1,
+                                     render_area,
+                                     vk_to_isl_color(att_state->clear_value.color));
+            }
+
+            att_state->pending_clear_views &= ~pending_clear_mask;
+         } else if (clear_layer_count > 0) {
             assert(image->n_planes == 1);
             anv_image_clear_color(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
                                   att_state->aux_usage,
@@ -3567,7 +3649,7 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
          }
       } else if (att_state->pending_clear_aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
                                                      VK_IMAGE_ASPECT_STENCIL_BIT)) {
-         if (att_state->fast_clear) {
+         if (att_state->fast_clear && !is_multiview) {
             /* We currently only support HiZ for single-layer images */
             if (att_state->pending_clear_aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
                assert(iview->image->planes[0].aux_usage == ISL_AUX_USAGE_HIZ);
@@ -3582,6 +3664,26 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
                                 iview->planes[0].isl.base_array_layer,
                                 fb->layers, render_area,
                                 att_state->clear_value.depthStencil.stencil);
+         } else if (is_multiview) {
+            uint32_t pending_clear_mask =
+              get_multiview_subpass_clear_mask(cmd_state, att_state);
+
+            uint32_t layer_idx;
+            for_each_bit(layer_idx, pending_clear_mask) {
+               uint32_t layer =
+                  iview->planes[0].isl.base_array_layer + layer_idx;
+
+               anv_image_clear_depth_stencil(cmd_buffer, image,
+                                             att_state->pending_clear_aspects,
+                                             att_state->aux_usage,
+                                             iview->planes[0].isl.base_level,
+                                             layer, 1,
+                                             render_area,
+                                             att_state->clear_value.depthStencil.depth,
+                                             att_state->clear_value.depthStencil.stencil);
+            }
+
+            att_state->pending_clear_views &= ~pending_clear_mask;
          } else {
             anv_image_clear_depth_stencil(cmd_buffer, image,
                                           att_state->pending_clear_aspects,
@@ -3596,7 +3698,8 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
          assert(att_state->pending_clear_aspects == 0);
       }
 
-      if ((att_state->pending_load_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) &&
+      if (GEN_GEN < 10 &&
+          (att_state->pending_load_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) &&
           image->planes[0].aux_surface.isl.size > 0 &&
           iview->planes[0].isl.base_level == 0 &&
           iview->planes[0].isl.base_array_layer == 0) {
@@ -3656,7 +3759,16 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
          }
       }
 
-      att_state->pending_clear_aspects = 0;
+      /* If multiview is enabled, then we are only done clearing when we no
+       * longer have pending layers to clear, or when we have processed the
+       * last subpass that uses this attachment.
+       */
+      if (!is_multiview ||
+          att_state->pending_clear_views == 0 ||
+          current_subpass_is_last_for_attachment(cmd_state, a)) {
+         att_state->pending_clear_aspects = 0;
+      }
+
       att_state->pending_load_aspects = 0;
    }
 

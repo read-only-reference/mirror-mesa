@@ -1,5 +1,6 @@
 /*
  * Copyright 2017 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -70,10 +71,11 @@ const char *si_get_family_name(const struct si_screen *sscreen)
 	case CHIP_ICELAND: return "AMD ICELAND";
 	case CHIP_CARRIZO: return "AMD CARRIZO";
 	case CHIP_FIJI: return "AMD FIJI";
+	case CHIP_STONEY: return "AMD STONEY";
 	case CHIP_POLARIS10: return "AMD POLARIS10";
 	case CHIP_POLARIS11: return "AMD POLARIS11";
 	case CHIP_POLARIS12: return "AMD POLARIS12";
-	case CHIP_STONEY: return "AMD STONEY";
+	case CHIP_VEGAM: return "AMD VEGAM";
 	case CHIP_VEGA10: return "AMD VEGA10";
 	case CHIP_VEGA12: return "AMD VEGA12";
 	case CHIP_RAVEN: return "AMD RAVEN";
@@ -191,6 +193,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
 	case PIPE_CAP_TGSI_VOTE:
+	case PIPE_CAP_TGSI_FS_FBFETCH:
 		return 1;
 
 	case PIPE_CAP_TGSI_BALLOT:
@@ -212,7 +215,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		       sscreen->info.drm_major == 3;
 
         case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
-                return R600_MAP_BUFFER_ALIGNMENT;
+                return SI_MAP_BUFFER_ALIGNMENT;
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -267,7 +270,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
-	case PIPE_CAP_TGSI_FS_FBFETCH:
 	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 	case PIPE_CAP_UMA:
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
@@ -281,7 +283,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return sscreen->info.has_syncobj;
 
 	case PIPE_CAP_CONSTBUF0_FLAGS:
-		return R600_RESOURCE_FLAG_32BIT;
+		return SI_RESOURCE_FLAG_32BIT;
 
 	case PIPE_CAP_NATIVE_FENCE_FD:
 		return sscreen->info.has_fence_to_handle;
@@ -475,12 +477,19 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 		/* TODO: Indirect indexing of GS inputs is unimplemented. */
-		return shader != PIPE_SHADER_GEOMETRY &&
-		       (sscreen->llvm_has_working_vgpr_indexing ||
-			/* TCS and TES load inputs directly from LDS or
-			 * offchip memory, so indirect indexing is trivial. */
-			shader == PIPE_SHADER_TESS_CTRL ||
-			shader == PIPE_SHADER_TESS_EVAL);
+		if (shader == PIPE_SHADER_GEOMETRY)
+			return 0;
+
+		if (shader == PIPE_SHADER_VERTEX &&
+		    !sscreen->llvm_has_working_vgpr_indexing)
+			return 0;
+
+		/* TCS and TES load inputs directly from LDS or offchip
+		 * memory, so indirect indexing is always supported.
+		 * PS has to support indirect indexing, because we can't
+		 * lower that to TEMPs for INTERP instructions.
+		 */
+		return 1;
 
 	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 		return sscreen->llvm_has_working_vgpr_indexing ||
@@ -647,6 +656,10 @@ static int si_get_video_param(struct pipe_screen *screen,
 				return false;
 			}
 			return true;
+		case PIPE_VIDEO_FORMAT_VP9:
+			if (sscreen->info.family < CHIP_RAVEN)
+				return false;
+			return true;
 		default:
 			return false;
 		}
@@ -657,7 +670,8 @@ static int si_get_video_param(struct pipe_screen *screen,
 	case PIPE_VIDEO_CAP_MAX_HEIGHT:
 		return (sscreen->info.family < CHIP_TONGA) ? 1152 : 4096;
 	case PIPE_VIDEO_CAP_PREFERED_FORMAT:
-		if (profile == PIPE_VIDEO_PROFILE_HEVC_MAIN_10)
+		if (profile == PIPE_VIDEO_PROFILE_HEVC_MAIN_10 ||
+		    profile == PIPE_VIDEO_PROFILE_VP9_PROFILE2)
 			return PIPE_FORMAT_P016;
 		else
 			return PIPE_FORMAT_NV12;
@@ -669,6 +683,8 @@ static int si_get_video_param(struct pipe_screen *screen,
 		if (format == PIPE_VIDEO_FORMAT_HEVC)
 			return false; //The firmware doesn't support interlaced HEVC.
 		else if (format == PIPE_VIDEO_FORMAT_JPEG)
+			return false;
+		else if (format == PIPE_VIDEO_FORMAT_VP9)
 			return false;
 		return true;
 	}
@@ -945,32 +961,29 @@ static struct disk_cache *si_get_disk_shader_cache(struct pipe_screen *pscreen)
 static void si_init_renderer_string(struct si_screen *sscreen)
 {
 	struct radeon_winsys *ws = sscreen->ws;
-	char family_name[32] = {}, llvm_string[32] = {}, kernel_version[128] = {};
+	char family_name[32] = {}, kernel_version[128] = {};
 	struct utsname uname_data;
 
 	const char *chip_name = si_get_marketing_name(ws);
 
 	if (chip_name)
-		snprintf(family_name, sizeof(family_name), "%s / ",
+		snprintf(family_name, sizeof(family_name), "%s, ",
 			 si_get_family_name(sscreen) + 4);
 	else
 		chip_name = si_get_family_name(sscreen);
 
 	if (uname(&uname_data) == 0)
 		snprintf(kernel_version, sizeof(kernel_version),
-			 " / %s", uname_data.release);
-
-	if (HAVE_LLVM > 0) {
-		snprintf(llvm_string, sizeof(llvm_string),
-			 ", LLVM %i.%i.%i", (HAVE_LLVM >> 8) & 0xff,
-			 HAVE_LLVM & 0xff, MESA_LLVM_VERSION_PATCH);
-	}
+			 ", %s", uname_data.release);
 
 	snprintf(sscreen->renderer_string, sizeof(sscreen->renderer_string),
-		 "%s (%sDRM %i.%i.%i%s%s)",
+		 "%s (%sDRM %i.%i.%i%s, LLVM %i.%i.%i)",
 		 chip_name, family_name, sscreen->info.drm_major,
 		 sscreen->info.drm_minor, sscreen->info.drm_patchlevel,
-		 kernel_version, llvm_string);
+		 kernel_version,
+		 (HAVE_LLVM >> 8) & 0xff,
+		 HAVE_LLVM & 0xff,
+		 MESA_LLVM_VERSION_PATCH);
 }
 
 void si_init_screen_get_functions(struct si_screen *sscreen)

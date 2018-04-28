@@ -564,10 +564,11 @@ vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
       val->ssa->def = nir_fne(&b->nb, src[0], src[0]);
       break;
 
-   case SpvOpIsInf:
-      val->ssa->def = nir_ieq(&b->nb, nir_fabs(&b->nb, src[0]),
-                                      nir_imm_float(&b->nb, INFINITY));
+   case SpvOpIsInf: {
+      nir_ssa_def *inf = nir_imm_floatN_t(&b->nb, INFINITY, src[0]->bit_size);
+      val->ssa->def = nir_ieq(&b->nb, nir_fabs(&b->nb, src[0]), inf);
       break;
+   }
 
    case SpvOpFUnordEqual:
    case SpvOpFUnordNotEqual:
@@ -596,23 +597,18 @@ vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
       break;
    }
 
-   case SpvOpFOrdEqual:
-   case SpvOpFOrdNotEqual:
-   case SpvOpFOrdLessThan:
-   case SpvOpFOrdGreaterThan:
-   case SpvOpFOrdLessThanEqual:
-   case SpvOpFOrdGreaterThanEqual: {
+   case SpvOpFOrdNotEqual: {
+      /* For all the SpvOpFOrd* comparisons apart from NotEqual, the value
+       * from the ALU will probably already be false if the operands are not
+       * ordered so we don’t need to handle it specially.
+       */
       bool swap;
       unsigned src_bit_size = glsl_get_bit_size(vtn_src[0]->type);
       unsigned dst_bit_size = glsl_get_bit_size(type);
       nir_op op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap,
                                                   src_bit_size, dst_bit_size);
 
-      if (swap) {
-         nir_ssa_def *tmp = src[0];
-         src[0] = src[1];
-         src[1] = tmp;
-      }
+      assert(!swap);
 
       val->ssa->def =
          nir_iand(&b->nb,

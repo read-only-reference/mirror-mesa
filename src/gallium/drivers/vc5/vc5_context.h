@@ -82,6 +82,7 @@ void vc5_job_add_bo(struct vc5_job *job, struct vc5_bo *bo);
 #define VC5_DIRTY_FS_INPUTS     (1 << 26)
 #define VC5_DIRTY_STREAMOUT     (1 << 27)
 #define VC5_DIRTY_OQ            (1 << 28)
+#define VC5_DIRTY_CENTROID_FLAGS (1 << 29)
 
 #define VC5_MAX_FS_INPUTS 64
 
@@ -367,8 +368,8 @@ struct vc5_context {
         /** Maximum index buffer valid for the current shader_rec. */
         uint32_t max_index;
 
-        /** Seqno of the last CL flush's job. */
-        uint64_t last_emit_seqno;
+        /** Sync object that our RCL will update as its out_sync. */
+        uint32_t out_sync;
 
         struct u_upload_mgr *uploader;
 
@@ -548,6 +549,8 @@ void vc5_get_internal_type_bpp_for_output_format(const struct v3d_device_info *d
 void vc5_init_query_functions(struct vc5_context *vc5);
 void vc5_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info);
 void vc5_blitter_save(struct vc5_context *vc5);
+
+struct vc5_fence *vc5_fence_create(struct vc5_context *vc5);
 
 #ifdef v3dX
 #  include "v3dx_context.h"

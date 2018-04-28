@@ -69,6 +69,7 @@ public:
 
     bool AVX2(void) { return bForceAVX ? 0 : InstructionSet::AVX2(); }
     bool AVX512F(void) { return (bForceAVX | bForceAVX2) ? 0 : InstructionSet::AVX512F(); }
+    bool AVX512ER(void) { return (bForceAVX | bForceAVX2) ? 0 : InstructionSet::AVX512ER(); }
     bool BMI2(void) { return bForceAVX ? 0 : InstructionSet::BMI2(); }
 
 private:
@@ -142,32 +143,12 @@ struct JitManager
 
     uint32_t                mVWidth;
 
+    bool                    mUsingAVX512 = false;
 
-    // Built in types.
-    llvm::Type*             mInt8Ty;
-    llvm::Type*             mInt32Ty;
-    llvm::Type*             mInt64Ty;
-    llvm::Type*             mFP32Ty;
-
-    llvm::Type*             mSimtFP32Ty;
-    llvm::Type*             mSimtInt32Ty;
-
-    llvm::Type*             mSimdVectorInt32Ty;
-    llvm::Type*             mSimdVectorTy;
-
-#if USE_SIMD16_SHADERS
-    llvm::Type*             mSimd16FP32Ty;
-    llvm::Type*             mSimd16Int32Ty;
-
-    llvm::Type*             mSimd16VectorFP32Ty;
-    llvm::Type*             mSimd16VectorInt32Ty;
-
-#endif
     // fetch shader types
     llvm::FunctionType*     mFetchShaderTy;
 
     JitInstructionSet       mArch;
-    std::string             mCore;
 
     // Debugging support
     std::unordered_map<llvm::StructType*, llvm::DIType*> mDebugStructMap;

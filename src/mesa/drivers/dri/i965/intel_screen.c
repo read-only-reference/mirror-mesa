@@ -388,10 +388,16 @@ intel_image_format_lookup(int fourcc)
    return NULL;
 }
 
-static boolean intel_lookup_fourcc(int dri_format, int *fourcc)
+static boolean
+intel_image_get_fourcc(__DRIimage *image, int *fourcc)
 {
+   if (image->planar_format) {
+      *fourcc = image->planar_format->fourcc;
+      return true;
+   }
+
    for (unsigned i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
-      if (intel_image_formats[i].planes[0].dri_format == dri_format) {
+      if (intel_image_formats[i].planes[0].dri_format == image->dri_format) {
          *fourcc = intel_image_formats[i].fourcc;
          return true;
       }
@@ -578,6 +584,7 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
    intel_setup_image_from_mipmap_tree(brw, image, iobj->mt, level, zoffset);
    image->dri_format = driGLFormatToImageFormat(image->format);
    image->has_depthstencil = iobj->mt->stencil_mt? true : false;
+   image->planar_format = iobj->planar_format;
    if (image->dri_format == MESA_FORMAT_NONE) {
       *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
       free(image);
@@ -869,7 +876,7 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
    case __DRI_IMAGE_ATTRIB_FD:
       return !brw_bo_gem_export_to_prime(image->bo, value);
    case __DRI_IMAGE_ATTRIB_FOURCC:
-      return intel_lookup_fourcc(image->dri_format, value);
+      return intel_image_get_fourcc(image, value);
    case __DRI_IMAGE_ATTRIB_NUM_PLANES:
       if (isl_drm_modifier_has_aux(image->modifier)) {
          assert(!image->planar_format || image->planar_format->nplanes == 1);
@@ -1255,12 +1262,14 @@ intel_query_dma_buf_formats(__DRIscreen *screen, int max,
    int i, j = 0;
 
    if (max == 0) {
-      *count = ARRAY_SIZE(intel_image_formats) - 1; /* not SARGB */
+      /* Note, sRGB formats not included. */
+      *count = ARRAY_SIZE(intel_image_formats) - 2;
       return true;
    }
 
    for (i = 0; i < (ARRAY_SIZE(intel_image_formats)) && j < max; i++) {
-     if (intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SARGB8888)
+     if (intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SARGB8888 ||
+         intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SABGR8888)
        continue;
      formats[j++] = intel_image_formats[i].fourcc;
    }
@@ -1821,24 +1830,18 @@ intel_init_bufmgr(struct intel_screen *screen)
 static bool
 intel_detect_swizzling(struct intel_screen *screen)
 {
-   struct brw_bo *buffer;
-   unsigned flags = 0;
-   uint32_t aligned_pitch;
    uint32_t tiling = I915_TILING_X;
    uint32_t swizzle_mode = 0;
-
-   buffer = brw_bo_alloc_tiled_2d(screen->bufmgr, "swizzle test",
-                                  64, 64, 4, tiling, &aligned_pitch, flags);
+   struct brw_bo *buffer =
+      brw_bo_alloc_tiled(screen->bufmgr, "swizzle test", 32768,
+                         tiling, 512, 0);
    if (buffer == NULL)
       return false;
 
    brw_bo_get_tiling(buffer, &tiling, &swizzle_mode);
    brw_bo_unreference(buffer);
 
-   if (swizzle_mode == I915_BIT_6_SWIZZLE_NONE)
-      return false;
-   else
-      return true;
+   return swizzle_mode != I915_BIT_6_SWIZZLE_NONE;
 }
 
 static int
@@ -2084,6 +2087,8 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 
       /* Required by Android, for HAL_PIXEL_FORMAT_RGBX_8888. */
       MESA_FORMAT_R8G8B8X8_UNORM,
+
+      MESA_FORMAT_R8G8B8A8_SRGB,
    };
 
    /* GLX_SWAP_COPY_OML is not supported due to page flipping. */
@@ -2103,7 +2108,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    if (intel_loader_get_cap(dri_screen, DRI_LOADER_CAP_RGBA_ORDERING))
       num_formats = ARRAY_SIZE(formats);
    else
-      num_formats = ARRAY_SIZE(formats) - 2; /* all - RGBA_ORDERING formats */
+      num_formats = ARRAY_SIZE(formats) - 3; /* all - RGBA_ORDERING formats */
 
    /* Shall we expose 10 bpc formats? */
    bool allow_rgb10_configs = driQueryOptionb(&screen->optionCache,

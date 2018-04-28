@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2016 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -120,6 +120,11 @@ HANDLE SwrCreateContext(
         pContext->apiThreadInfo.bindAPIThread0          = true;
         pContext->apiThreadInfo.numAPIReservedThreads   = 1;
         pContext->apiThreadInfo.numAPIThreadsPerCore    = 1;
+    }
+
+    if (pCreateInfo->pWorkerPrivateState)
+    {
+        pContext->workerPrivateState = *pCreateInfo->pWorkerPrivateState;
     }
 
     memset(&pContext->WaitLock, 0, sizeof(pContext->WaitLock));
@@ -971,14 +976,14 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
 
     if (pState->state.soState.soEnable)
     {
-        uint32_t streamMasks = 0;
+        uint64_t streamMasks = 0;
         for (uint32_t i = 0; i < 4; ++i)
         {
             streamMasks |= pState->state.soState.streamMasks[i];
         }
 
         DWORD maxAttrib;
-        if (_BitScanReverse(&maxAttrib, streamMasks))
+        if (_BitScanReverse64(&maxAttrib, streamMasks))
         {
             pState->state.feNumAttributes = std::max(pState->state.feNumAttributes, (uint32_t)(maxAttrib + 1));
         }
@@ -1321,8 +1326,8 @@ void DrawIndexedInstance(
     }
 
     int draw = 0;
-    uint8_t *pIB = (uint8_t*)pState->indexBuffer.pIndices;
-    pIB += (uint64_t)indexOffset * (uint64_t)indexSize;
+    gfxptr_t xpIB = pState->indexBuffer.xpIndices;
+    xpIB += (uint64_t)indexOffset * (uint64_t)indexSize;
 
     pState->topology = topology;
     pState->forceFront = false;
@@ -1360,7 +1365,7 @@ void DrawIndexedInstance(
             pDC->pState->pfnProcessPrims != nullptr);
         pDC->FeWork.desc.draw.pDC = pDC;
         pDC->FeWork.desc.draw.numIndices = numIndicesForDraw;
-        pDC->FeWork.desc.draw.pIB = (int*)pIB;
+        pDC->FeWork.desc.draw.xpIB = xpIB;
         pDC->FeWork.desc.draw.type = pDC->pState->state.indexBuffer.format;
 
         pDC->FeWork.desc.draw.numInstances = numInstances;
@@ -1376,7 +1381,7 @@ void DrawIndexedInstance(
         AR_API_EVENT(DrawIndexedInstancedEvent(pDC->drawId, topology, numIndicesForDraw, indexOffset, baseVertex,
             numInstances, startInstance, pState->tsState.tsEnable, pState->gsState.gsEnable, pState->soState.soEnable, pState->gsState.outputTopology, draw));
 
-        pIB += maxIndicesPerDraw * indexSize;
+        xpIB += maxIndicesPerDraw * indexSize;
         remainingIndices -= numIndicesForDraw;
         draw++;
     }

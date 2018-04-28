@@ -58,23 +58,8 @@ compiler_perf_log(void *data, const char *fmt, ...)
 }
 
 static VkResult
-anv_compute_heap_size(int fd, uint64_t *heap_size)
+anv_compute_heap_size(int fd, uint64_t gtt_size, uint64_t *heap_size)
 {
-   uint64_t gtt_size;
-   if (anv_gem_get_context_param(fd, 0, I915_CONTEXT_PARAM_GTT_SIZE,
-                                 &gtt_size) == -1) {
-      /* If, for whatever reason, we can't actually get the GTT size from the
-       * kernel (too old?) fall back to the aperture size.
-       */
-      anv_perf_warn(NULL, NULL,
-                    "Failed to get I915_CONTEXT_PARAM_GTT_SIZE: %m");
-
-      if (anv_gem_get_aperture(fd, &gtt_size) == -1) {
-         return vk_errorf(NULL, NULL, VK_ERROR_INITIALIZATION_FAILED,
-                          "failed to get aperture size: %m");
-      }
-   }
-
    /* Query the total ram from the system */
    struct sysinfo info;
    sysinfo(&info);
@@ -103,15 +88,26 @@ anv_compute_heap_size(int fd, uint64_t *heap_size)
 static VkResult
 anv_physical_device_init_heaps(struct anv_physical_device *device, int fd)
 {
-   /* The kernel query only tells us whether or not the kernel supports the
-    * EXEC_OBJECT_SUPPORTS_48B_ADDRESS flag and not whether or not the
-    * hardware has actual 48bit address support.
-    */
-   device->supports_48bit_addresses =
-      (device->info.gen >= 8) && anv_gem_supports_48b_addresses(fd);
+   uint64_t gtt_size;
+   if (anv_gem_get_context_param(fd, 0, I915_CONTEXT_PARAM_GTT_SIZE,
+                                 &gtt_size) == -1) {
+      /* If, for whatever reason, we can't actually get the GTT size from the
+       * kernel (too old?) fall back to the aperture size.
+       */
+      anv_perf_warn(NULL, NULL,
+                    "Failed to get I915_CONTEXT_PARAM_GTT_SIZE: %m");
+
+      if (anv_gem_get_aperture(fd, &gtt_size) == -1) {
+         return vk_errorf(NULL, NULL, VK_ERROR_INITIALIZATION_FAILED,
+                          "failed to get aperture size: %m");
+      }
+   }
+
+   device->supports_48bit_addresses = (device->info.gen >= 8) &&
+      gtt_size > (4ULL << 30 /* GiB */);
 
    uint64_t heap_size = 0;
-   VkResult result = anv_compute_heap_size(fd, &heap_size);
+   VkResult result = anv_compute_heap_size(fd, gtt_size, &heap_size);
    if (result != VK_SUCCESS)
       return result;
 
@@ -323,6 +319,8 @@ anv_physical_device_init(struct anv_physical_device *device,
       intel_logw("Bay Trail Vulkan support is incomplete");
    } else if (device->info.gen >= 8 && device->info.gen <= 10) {
       /* Gen8-10 fully supported */
+   } else if (device->info.gen == 11) {
+      intel_logw("Vulkan is not yet fully supported on gen11.");
    } else {
       result = vk_errorf(device->instance, device,
                          VK_ERROR_INCOMPATIBLE_DRIVER,
@@ -1422,6 +1420,20 @@ vk_priority_to_gen(int priority)
    }
 }
 
+static void
+anv_device_init_hiz_clear_batch(struct anv_device *device)
+{
+   anv_bo_init_new(&device->hiz_clear_bo, device, 4096);
+   uint32_t *map = anv_gem_mmap(device, device->hiz_clear_bo.gem_handle,
+                                0, 4096, 0);
+
+   union isl_color_value hiz_clear = { .u32 = { 0, } };
+   hiz_clear.f32[0] = ANV_HZ_FC_VAL;
+
+   memcpy(map, hiz_clear.u32, sizeof(hiz_clear.u32));
+   anv_gem_munmap(map, device->hiz_clear_bo.size);
+}
+
 VkResult anv_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -1602,6 +1614,9 @@ VkResult anv_CreateDevice(
 
    anv_device_init_trivial_batch(device);
 
+   if (device->info.gen >= 10)
+      anv_device_init_hiz_clear_batch(device);
+
    anv_scratch_pool_init(device, &device->scratch_pool);
 
    anv_queue_init(device, &device->queue);
@@ -1695,6 +1710,8 @@ void anv_DestroyDevice(
    anv_gem_close(device, device->workaround_bo.gem_handle);
 
    anv_gem_close(device, device->trivial_batch_bo.gem_handle);
+   if (device->info.gen >= 10)
+      anv_gem_close(device, device->hiz_clear_bo.gem_handle);
 
    anv_state_pool_finish(&device->surface_state_pool);
    anv_state_pool_finish(&device->instruction_state_pool);

@@ -1,5 +1,6 @@
 /*
  * Copyright 2017 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -123,6 +124,15 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_tess_level_outer:
 			info->reads_tess_factors = true;
 			break;
+		case nir_intrinsic_image_var_load:
+		case nir_intrinsic_image_var_size:
+		case nir_intrinsic_image_var_samples: {
+			nir_variable *var = intr->variables[0]->var;
+			if (var->data.bindless)
+				info->uses_bindless_images = true;
+
+			break;
+		}
 		case nir_intrinsic_image_var_store:
 		case nir_intrinsic_image_var_atomic_add:
 		case nir_intrinsic_image_var_atomic_min:
@@ -131,7 +141,13 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_image_var_atomic_or:
 		case nir_intrinsic_image_var_atomic_xor:
 		case nir_intrinsic_image_var_atomic_exchange:
-		case nir_intrinsic_image_var_atomic_comp_swap:
+		case nir_intrinsic_image_var_atomic_comp_swap: {
+			nir_variable *var = intr->variables[0]->var;
+			if (var->data.bindless)
+				info->uses_bindless_images = true;
+
+			/* fall-through */
+		}
 		case nir_intrinsic_store_ssbo:
 		case nir_intrinsic_ssbo_atomic_add:
 		case nir_intrinsic_ssbo_atomic_imin:
@@ -243,6 +259,9 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	info->processor = pipe_shader_type_from_mesa(nir->info.stage);
 	info->num_tokens = 2; /* indicate that the shader is non-empty */
 	info->num_instructions = 2;
+
+	info->properties[TGSI_PROPERTY_NEXT_SHADER] =
+		pipe_shader_type_from_mesa(nir->info.next_stage);
 
 	if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
 		info->properties[TGSI_PROPERTY_TCS_VERTICES_OUT] =
@@ -588,7 +607,8 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		}
 
 		unsigned loc = variable->data.location;
-		if (loc == FRAG_RESULT_COLOR &&
+		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+		    loc == FRAG_RESULT_COLOR &&
 		    nir->info.outputs_written & (1ull << loc)) {
 			assert(attrib_count == 1);
 			info->properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS] = true;
@@ -597,22 +617,96 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 
 	info->num_outputs = num_outputs;
 
+	struct set *ubo_set = _mesa_set_create(NULL, _mesa_hash_pointer,
+					       _mesa_key_pointer_equal);
+
+	/* Intialise const_file_max[0] */
+	info->const_file_max[0] = -1;
+
+	unsigned ubo_idx = 1;
 	nir_foreach_variable(variable, &nir->uniforms) {
 		const struct glsl_type *type = variable->type;
 		enum glsl_base_type base_type =
 			glsl_get_base_type(glsl_without_array(type));
 		unsigned aoa_size = MAX2(1, glsl_get_aoa_size(type));
 
+		/* Gather buffers declared bitmasks. Note: radeonsi doesn't
+		 * really use the mask (other than ubo_idx == 1 for regular
+		 * uniforms) its really only used for getting the buffer count
+		 * so we don't need to worry about the ordering.
+		 */
+		if (variable->interface_type != NULL) {
+			if (variable->data.mode == nir_var_uniform) {
+
+				unsigned block_count;
+				if (base_type != GLSL_TYPE_INTERFACE) {
+					struct set_entry *entry =
+						_mesa_set_search(ubo_set, variable->interface_type);
+
+					/* Check if we have already processed
+					 * a member from this ubo.
+					 */
+					if (entry)
+						continue;
+
+					block_count = 1;
+				} else {
+					block_count = aoa_size;
+				}
+
+				info->const_buffers_declared |= u_bit_consecutive(ubo_idx, block_count);
+				ubo_idx += block_count;
+
+				_mesa_set_add(ubo_set, variable->interface_type);
+			}
+
+			if (variable->data.mode == nir_var_shader_storage) {
+				/* TODO: make this more accurate */
+				info->shader_buffers_declared =
+					u_bit_consecutive(0, SI_NUM_SHADER_BUFFERS);
+			}
+
+			continue;
+		}
+
 		/* We rely on the fact that nir_lower_samplers_as_deref has
 		 * eliminated struct dereferences.
 		 */
-		if (base_type == GLSL_TYPE_SAMPLER)
-			info->samplers_declared |=
-				u_bit_consecutive(variable->data.binding, aoa_size);
-		else if (base_type == GLSL_TYPE_IMAGE)
-			info->images_declared |=
-				u_bit_consecutive(variable->data.binding, aoa_size);
+		if (base_type == GLSL_TYPE_SAMPLER) {
+			if (variable->data.bindless) {
+				info->const_buffers_declared |= 1;
+				info->const_file_max[0] +=
+					glsl_count_attribute_slots(type, false);
+			} else {
+				info->samplers_declared |=
+					u_bit_consecutive(variable->data.binding, aoa_size);
+			}
+		} else if (base_type == GLSL_TYPE_IMAGE) {
+			if (variable->data.bindless) {
+				info->const_buffers_declared |= 1;
+				info->const_file_max[0] +=
+					glsl_count_attribute_slots(type, false);
+			} else {
+				info->images_declared |=
+					u_bit_consecutive(variable->data.binding, aoa_size);
+			}
+		} else if (base_type != GLSL_TYPE_ATOMIC_UINT) {
+			if (strncmp(variable->name, "state.", 6) == 0 ||
+			    strncmp(variable->name, "gl_", 3) == 0) {
+				/* FIXME: figure out why piglit tests with builtin
+				 * uniforms are failing without this.
+				 */
+				info->const_buffers_declared =
+					u_bit_consecutive(0, SI_NUM_CONST_BUFFERS);
+			} else {
+				info->const_buffers_declared |= 1;
+				info->const_file_max[0] +=
+					glsl_count_attribute_slots(type, false);
+			}
+		}
 	}
+
+	_mesa_set_destroy(ubo_set, NULL);
 
 	info->num_written_clipdistance = nir->info.clip_distance_array_size;
 	info->num_written_culldistance = nir->info.cull_distance_array_size;
@@ -621,10 +715,6 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 
 	if (info->processor == PIPE_SHADER_FRAGMENT)
 		info->uses_kill = nir->info.fs.uses_discard;
-
-	/* TODO make this more accurate */
-	info->const_buffers_declared = u_bit_consecutive(0, SI_NUM_CONST_BUFFERS);
-	info->shader_buffers_declared = u_bit_consecutive(0, SI_NUM_SHADER_BUFFERS);
 
 	func = (struct nir_function *)exec_list_get_head_const(&nir->functions);
 	nir_foreach_block(block, func->impl) {
@@ -640,6 +730,13 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 void
 si_lower_nir(struct si_shader_selector* sel)
 {
+	/* Disable const buffer fast path for old LLVM versions */
+	if (sel->screen->info.chip_class == SI && HAVE_LLVM < 0x0600 &&
+	    sel->info.const_buffers_declared == 1 &&
+	    sel->info.shader_buffers_declared == 0) {
+		sel->info.const_buffers_declared |= 0x2;
+	}
+
 	/* Adjust the driver location of inputs and outputs. The state tracker
 	 * interprets them as slots, while the ac/nir backend interprets them
 	 * as individual components.
@@ -789,14 +886,12 @@ si_nir_load_sampler_desc(struct ac_shader_abi *abi,
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	LLVMBuilderRef builder = ctx->ac.builder;
 	LLVMValueRef list = LLVMGetParam(ctx->main_fn, ctx->param_samplers_and_images);
-	LLVMValueRef index = dynamic_index;
+	LLVMValueRef index;
 
 	assert(!descriptor_set);
 
-	if (!index)
-		index = ctx->ac.i32_0;
-
-	index = LLVMBuildAdd(builder, index,
+	dynamic_index = dynamic_index ? dynamic_index : ctx->ac.i32_0;
+	index = LLVMBuildAdd(builder, dynamic_index,
 			     LLVMConstInt(ctx->ac.i32, base_index + constant_index, false),
 			     "");
 

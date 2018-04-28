@@ -164,11 +164,9 @@ driCreateNewScreen2(int scrn, int fd,
 
     api = API_OPENGL_COMPAT;
     if (_mesa_override_gl_version_contextless(&consts, &api, &version)) {
-       if (api == API_OPENGL_CORE) {
-          psp->max_gl_core_version = version;
-       } else {
+       psp->max_gl_core_version = version;
+       if (api == API_OPENGL_COMPAT)
           psp->max_gl_compat_version = version;
-       }
     }
 
     psp->api_mask = 0;
@@ -380,6 +378,16 @@ driCreateContextAttribs(__DRIscreen *screen, int api,
 	    return NULL;
 	}
     }
+
+    /* The specific Mesa driver may not support the GL_ARB_compatibilty
+     * extension or the compatibility profile.  In that case, we treat an
+     * API_OPENGL_COMPAT 3.1 as API_OPENGL_CORE. We reject API_OPENGL_COMPAT
+     * 3.2+ in any case.
+     */
+    if (mesa_api == API_OPENGL_COMPAT &&
+        ctx_config.major_version == 3 && ctx_config.minor_version == 1 &&
+        screen->max_gl_compat_version < 31)
+       mesa_api = API_OPENGL_CORE;
 
     if (mesa_api == API_OPENGL_COMPAT
         && ((ctx_config.major_version > 3)
@@ -892,6 +900,8 @@ driGLFormatToImageFormat(mesa_format format)
       return __DRI_IMAGE_FORMAT_GR88;
    case MESA_FORMAT_NONE:
       return __DRI_IMAGE_FORMAT_NONE;
+   case MESA_FORMAT_R8G8B8A8_SRGB:
+      return __DRI_IMAGE_FORMAT_SABGR8;
    case MESA_FORMAT_B8G8R8A8_SRGB:
       return __DRI_IMAGE_FORMAT_SARGB8;
    default:
@@ -929,6 +939,8 @@ driImageFormatToGLFormat(uint32_t image_format)
       return MESA_FORMAT_R16G16_UNORM;
    case __DRI_IMAGE_FORMAT_SARGB8:
       return MESA_FORMAT_B8G8R8A8_SRGB;
+   case __DRI_IMAGE_FORMAT_SABGR8:
+      return MESA_FORMAT_R8G8B8A8_SRGB;
    case __DRI_IMAGE_FORMAT_NONE:
       return MESA_FORMAT_NONE;
    default:
