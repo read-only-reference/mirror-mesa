@@ -154,6 +154,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 4; /* XXX could easily be supported */
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
+   case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       return 120;
 
    case PIPE_CAP_NPOT_TEXTURES:
@@ -273,6 +274,12 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONTEXT_PRIORITY_MASK:
    case PIPE_CAP_FENCE_SIGNAL:
    case PIPE_CAP_CONSTBUF0_FLAGS:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
    case PIPE_CAP_PACKED_UNIFORMS:
       return 0;
 
@@ -374,6 +381,10 @@ etna_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
       return 16.0f;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return util_last_bit(screen->specs.max_texture_size);
+   case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
+   case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
+   case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
+      return 0.0f;
    }
 
    debug_printf("unknown paramf %d", param);
@@ -845,9 +856,9 @@ etna_screen_bo_from_handle(struct pipe_screen *pscreen,
    struct etna_screen *screen = etna_screen(pscreen);
    struct etna_bo *bo;
 
-   if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+   if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
       bo = etna_bo_from_name(screen->dev, whandle->handle);
-   } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+   } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
       bo = etna_bo_from_dmabuf(screen->dev, whandle->handle);
    } else {
       DBG("Attempt to import unsupported handle type %d", whandle->type);

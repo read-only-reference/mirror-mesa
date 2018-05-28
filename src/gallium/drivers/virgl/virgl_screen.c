@@ -133,6 +133,8 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return vscreen->caps.caps.v1.glsl_level;
+   case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
+      return MIN2(vscreen->caps.caps.v1.glsl_level, 140);
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
       return 0;
    case PIPE_CAP_COMPUTE:
@@ -198,21 +200,27 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v1.bset.has_sample_shading;
    case PIPE_CAP_CULL_DISTANCE:
       return vscreen->caps.caps.v1.bset.has_cull;
+   case PIPE_CAP_MAX_VERTEX_STREAMS:
+      return vscreen->caps.caps.v1.glsl_level >= 400 ? 4 : 1;
+   case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+      return vscreen->caps.caps.v1.bset.conditional_render_inverted;
+   case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+      return vscreen->caps.caps.v1.bset.derivative_control;
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+      return vscreen->caps.caps.v1.bset.polygon_offset_clamp;
+   case PIPE_CAP_QUERY_SO_OVERFLOW:
+      return vscreen->caps.caps.v1.bset.transform_feedback_overflow_query;
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
-   case PIPE_CAP_MAX_VERTEX_STREAMS:
    case PIPE_CAP_MULTI_DRAW_INDIRECT:
    case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-   case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
-   case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
    case PIPE_CAP_CLIP_HALFZ:
    case PIPE_CAP_VERTEXID_NOBASE:
-   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -265,7 +273,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_POST_DEPTH_COVERAGE:
    case PIPE_CAP_BINDLESS_TEXTURE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
-   case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
    case PIPE_CAP_LOAD_CONSTBUF:
    case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
@@ -276,6 +283,12 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_FENCE_SIGNAL:
    case PIPE_CAP_CONSTBUF0_FLAGS:
    case PIPE_CAP_PACKED_UNIFORMS:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
       return 0;
    case PIPE_CAP_VENDOR_ID:
       return 0x1af4;
@@ -373,6 +386,10 @@ virgl_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
       return 16.0;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return vscreen->caps.caps.v2.max_texture_lod_bias;
+   case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
+   case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
+   case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
+      return 0.0f;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAPF %d query\n", param);

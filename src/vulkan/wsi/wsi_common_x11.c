@@ -1043,7 +1043,8 @@ x11_image_init(VkDevice device_h, struct x11_swapchain *chain,
    uint32_t bpp = 32;
 
    if (chain->base.use_prime_blit) {
-      result = wsi_create_prime_image(&chain->base, pCreateInfo, &image->base);
+      bool use_modifier = num_tranches > 0;
+      result = wsi_create_prime_image(&chain->base, pCreateInfo, use_modifier, &image->base);
    } else {
       result = wsi_create_native_image(&chain->base, pCreateInfo,
                                        num_tranches, num_modifiers, modifiers,
@@ -1420,10 +1421,10 @@ fail_init_images:
    for (uint32_t j = 0; j < image; j++)
       x11_image_finish(chain, pAllocator, &chain->images[j]);
 
-fail_register:
    for (int i = 0; i < ARRAY_SIZE(modifiers); i++)
       vk_free(pAllocator, modifiers[i]);
 
+fail_register:
    xcb_unregister_for_special_event(chain->conn, chain->special_event);
 
    wsi_swapchain_finish(&chain->base);

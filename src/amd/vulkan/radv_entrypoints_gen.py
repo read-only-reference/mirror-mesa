@@ -116,7 +116,7 @@ struct string_map_entry {
    uint32_t num;
 };
 
-/* We use a big string constant to avoid lots of reloctions from the entry
+/* We use a big string constant to avoid lots of relocations from the entry
  * point table to lots of little strings. The entries in the entry point table
  * store the index into this big string.
  */
@@ -205,7 +205,7 @@ radv_entrypoint_is_enabled(int index, uint32_t core_version,
    % if not e.device_command:
       if (device) return false;
    % endif
-   % if e.name == 'vkCreateInstance' or e.name == 'vkEnumerateInstanceExtensionProperties' or e.name == 'vkEnumerateInstanceLayerProperties':
+   % if e.name == 'vkCreateInstance' or e.name == 'vkEnumerateInstanceExtensionProperties' or e.name == 'vkEnumerateInstanceLayerProperties' or e.name == 'vkEnumerateInstanceVersion':
       return !device;
    % elif e.core_version:
       return instance && ${e.core_version.c_vk_version()} <= core_version;

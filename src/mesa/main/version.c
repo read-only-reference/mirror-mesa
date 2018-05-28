@@ -128,7 +128,9 @@ create_version_string(struct gl_context *ctx, const char *prefix)
 		     ,
 		     prefix,
 		     ctx->Version / 10, ctx->Version % 10,
-		     (ctx->API == API_OPENGL_CORE) ? " (Core Profile)" : ""
+		     (ctx->API == API_OPENGL_CORE) ? " (Core Profile)" :
+                     (ctx->API == API_OPENGL_COMPAT && ctx->Version >= 32) ?
+                        " (Compatibility Profile)" : ""
 		     );
    }
 }
@@ -588,9 +590,7 @@ _mesa_get_version(const struct gl_extensions *extensions,
       /* Disable higher GLSL versions for legacy contexts.
        * This disallows creation of higher compatibility contexts. */
       if (!consts->AllowHigherCompatVersion) {
-         if (consts->GLSLVersion > 140) {
-            consts->GLSLVersion = 140;
-         }
+         consts->GLSLVersion = consts->GLSLVersionCompat;
       }
       /* fall through */
    case API_OPENGL_CORE:

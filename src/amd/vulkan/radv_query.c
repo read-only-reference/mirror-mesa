@@ -753,7 +753,7 @@ VkResult radv_CreateQueryPool(
 					       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 
 	if (!pool)
-		return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+		return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
 
 	switch(pCreateInfo->queryType) {
@@ -783,7 +783,7 @@ VkResult radv_CreateQueryPool(
 
 	if (!pool->bo) {
 		vk_free2(&device->alloc, pAllocator, pool);
-		return vk_error(VK_ERROR_OUT_OF_DEVICE_MEMORY);
+		return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 	}
 
 	pool->ptr = device->ws->buffer_map(pool->bo);
@@ -791,7 +791,7 @@ VkResult radv_CreateQueryPool(
 	if (!pool->ptr) {
 		device->ws->buffer_destroy(pool->bo);
 		vk_free2(&device->alloc, pAllocator, pool);
-		return vk_error(VK_ERROR_OUT_OF_DEVICE_MEMORY);
+		return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 	}
 	memset(pool->ptr, 0, pool->size);
 
@@ -1140,12 +1140,12 @@ static void emit_end_query(struct radv_cmd_buffer *cmd_buffer,
 
 		cmd_buffer->state.active_occlusion_queries--;
 		if (cmd_buffer->state.active_occlusion_queries == 0) {
+			radv_set_db_count_control(cmd_buffer);
+
 			/* Reset the perfect occlusion queries hint now that no
 			 * queries are active.
 			 */
 			cmd_buffer->state.perfect_occlusion_queries_enabled = false;
-
-			radv_set_db_count_control(cmd_buffer);
 		}
 
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -1204,25 +1204,6 @@ void radv_CmdBeginQuery(
 	va += pool->stride * query;
 
 	emit_begin_query(cmd_buffer, va, pool->type, flags);
-
-	/*
-	 * For multiview we have to emit a query for each bit in the mask,
-	 * however the first query we emit will get the totals for all the
-	 * operations, so we don't want to get a real value in the other
-	 * queries. This emits a fake begin/end sequence so the waiting
-	 * code gets a completed query value and doesn't hang, but the
-	 * query returns 0.
-	 */
-	if (cmd_buffer->state.subpass && cmd_buffer->state.subpass->view_mask) {
-		uint64_t avail_va = va + pool->availability_offset + 4 * query;
-
-		for (unsigned i = 0; i < util_bitcount(cmd_buffer->state.subpass->view_mask); i++) {
-			va += pool->stride;
-			avail_va += 4;
-			emit_begin_query(cmd_buffer, va, pool->type, flags);
-			emit_end_query(cmd_buffer, va, avail_va, pool->type);
-		}
-	}
 }
 
 
@@ -1241,6 +1222,26 @@ void radv_CmdEndQuery(
 	 * currently be active, which means the BO is already in the list.
 	 */
 	emit_end_query(cmd_buffer, va, avail_va, pool->type);
+
+	/*
+	 * For multiview we have to emit a query for each bit in the mask,
+	 * however the first query we emit will get the totals for all the
+	 * operations, so we don't want to get a real value in the other
+	 * queries. This emits a fake begin/end sequence so the waiting
+	 * code gets a completed query value and doesn't hang, but the
+	 * query returns 0.
+	 */
+	if (cmd_buffer->state.subpass && cmd_buffer->state.subpass->view_mask) {
+		uint64_t avail_va = va + pool->availability_offset + 4 * query;
+
+
+		for (unsigned i = 1; i < util_bitcount(cmd_buffer->state.subpass->view_mask); i++) {
+			va += pool->stride;
+			avail_va += 4;
+			emit_begin_query(cmd_buffer, va, pool->type, 0);
+			emit_end_query(cmd_buffer, va, avail_va, pool->type);
+		}
+	}
 }
 
 void radv_CmdWriteTimestamp(

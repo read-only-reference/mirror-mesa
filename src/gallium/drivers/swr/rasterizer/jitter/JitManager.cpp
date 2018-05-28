@@ -545,7 +545,11 @@ static inline uint32_t ComputeModuleCRC(const llvm::Module* M)
     std::string bitcodeBuffer;
     raw_string_ostream bitcodeStream(bitcodeBuffer);
 
+#if LLVM_VERSION_MAJOR >= 7
+    llvm::WriteBitcodeToFile(*M, bitcodeStream);
+#else
     llvm::WriteBitcodeToFile(M, bitcodeStream);
+#endif
     //M->print(bitcodeStream, nullptr, false);
 
     bitcodeStream.flush();
@@ -575,7 +579,6 @@ int ExecUnhookedProcess(const std::string& CmdLine, std::string* pStdOut, std::s
 {
     return ExecCmd(CmdLine, "", pStdOut, pStdErr);
 }
-
 
 /// notifyObjectCompiled - Provides a pointer to compiled code for Module M.
 void JitCache::notifyObjectCompiled(const llvm::Module *M, llvm::MemoryBufferRef Obj)

@@ -365,6 +365,11 @@ typedef enum
    OPCODE_UNIFORM_3UIV,
    OPCODE_UNIFORM_4UIV,
 
+   /* OpenGL 4.0 / GL_ARB_tessellation_shader */
+   OPCODE_PATCH_PARAMETER_I,
+   OPCODE_PATCH_PARAMETER_FV_INNER,
+   OPCODE_PATCH_PARAMETER_FV_OUTER,
+
    /* OpenGL 4.2 / GL_ARB_separate_shader_objects */
    OPCODE_USE_PROGRAM_STAGES,
    OPCODE_PROGRAM_UNIFORM_1F,
@@ -487,6 +492,15 @@ typedef enum
 
    /* EXT_window_rectangles */
    OPCODE_WINDOW_RECTANGLES,
+
+   /* NV_conservative_raster */
+   OPCODE_SUBPIXEL_PRECISION_BIAS,
+
+   /* NV_conservative_raster_dilate */
+   OPCODE_CONSERVATIVE_RASTER_PARAMETER_F,
+
+   /* NV_conservative_raster_pre_snap_triangles */
+   OPCODE_CONSERVATIVE_RASTER_PARAMETER_I,
 
    /* The following three are meta instructions */
    OPCODE_ERROR,                /* raise compiled-in error */
@@ -3263,6 +3277,54 @@ save_Ortho(GLdouble left, GLdouble right,
 
 
 static void GLAPIENTRY
+save_PatchParameteri(GLenum pname, const GLint value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = alloc_instruction(ctx, OPCODE_PATCH_PARAMETER_I, 2);
+   if (n) {
+      n[1].e = pname;
+      n[2].i = value;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_PatchParameteri(ctx->Exec, (pname, value));
+   }
+}
+
+
+static void GLAPIENTRY
+save_PatchParameterfv(GLenum pname, const GLfloat *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+
+   if (pname == GL_PATCH_DEFAULT_OUTER_LEVEL) {
+      n = alloc_instruction(ctx, OPCODE_PATCH_PARAMETER_FV_OUTER, 5);
+   } else {
+      assert(pname == GL_PATCH_DEFAULT_INNER_LEVEL);
+      n = alloc_instruction(ctx, OPCODE_PATCH_PARAMETER_FV_INNER, 3);
+   }
+   if (n) {
+      n[1].e = pname;
+      if (pname == GL_PATCH_DEFAULT_OUTER_LEVEL) {
+         n[2].f = params[0];
+         n[3].f = params[1];
+         n[4].f = params[2];
+         n[5].f = params[3];
+      } else {
+         n[2].f = params[0];
+         n[3].f = params[1];
+      }
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_PatchParameterfv(ctx->Exec, (pname, params));
+   }
+}
+
+
+static void GLAPIENTRY
 save_PixelMapfv(GLenum map, GLint mapsize, const GLfloat *values)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -3475,14 +3537,6 @@ save_PolygonOffset(GLfloat factor, GLfloat units)
    }
 }
 
-
-static void GLAPIENTRY
-save_PolygonOffsetEXT(GLfloat factor, GLfloat bias)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   /* XXX mult by DepthMaxF here??? */
-   save_PolygonOffset(factor, ctx->DrawBuffer->_DepthMaxF * bias);
-}
 
 static void GLAPIENTRY
 save_PolygonOffsetClampEXT(GLfloat factor, GLfloat units, GLfloat clamp)
@@ -6587,7 +6641,7 @@ save_Uniform1ui(GLint location, GLuint x)
       n[2].i = x;
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform1ui(ctx->Exec, (location, x));*/
+      CALL_Uniform1ui(ctx->Exec, (location, x));
    }
 }
 
@@ -6604,7 +6658,7 @@ save_Uniform2ui(GLint location, GLuint x, GLuint y)
       n[3].i = y;
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform2ui(ctx->Exec, (location, x, y));*/
+      CALL_Uniform2ui(ctx->Exec, (location, x, y));
    }
 }
 
@@ -6622,7 +6676,7 @@ save_Uniform3ui(GLint location, GLuint x, GLuint y, GLuint z)
       n[4].i = z;
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform3ui(ctx->Exec, (location, x, y, z));*/
+      CALL_Uniform3ui(ctx->Exec, (location, x, y, z));
    }
 }
 
@@ -6641,7 +6695,7 @@ save_Uniform4ui(GLint location, GLuint x, GLuint y, GLuint z, GLuint w)
       n[5].i = w;
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform4ui(ctx->Exec, (location, x, y, z, w));*/
+      CALL_Uniform4ui(ctx->Exec, (location, x, y, z, w));
    }
 }
 
@@ -6660,7 +6714,7 @@ save_Uniform1uiv(GLint location, GLsizei count, const GLuint *v)
       save_pointer(&n[3], memdup(v, count * 1 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform1uiv(ctx->Exec, (location, count, v));*/
+      CALL_Uniform1uiv(ctx->Exec, (location, count, v));
    }
 }
 
@@ -6677,7 +6731,7 @@ save_Uniform2uiv(GLint location, GLsizei count, const GLuint *v)
       save_pointer(&n[3], memdup(v, count * 2 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform2uiv(ctx->Exec, (location, count, v));*/
+      CALL_Uniform2uiv(ctx->Exec, (location, count, v));
    }
 }
 
@@ -6694,7 +6748,7 @@ save_Uniform3uiv(GLint location, GLsizei count, const GLuint *v)
       save_pointer(&n[3], memdup(v, count * 3 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform3uiv(ctx->Exec, (location, count, v));*/
+      CALL_Uniform3uiv(ctx->Exec, (location, count, v));
    }
 }
 
@@ -6711,7 +6765,7 @@ save_Uniform4uiv(GLint location, GLsizei count, const GLuint *v)
       save_pointer(&n[3], memdup(v, count * 4 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
-      /*CALL_Uniform4uiv(ctx->Exec, (location, count, v));*/
+      CALL_Uniform4uiv(ctx->Exec, (location, count, v));
    }
 }
 
@@ -7928,6 +7982,59 @@ save_WindowRectanglesEXT(GLenum mode, GLsizei count, const GLint *box)
    }
 }
 
+
+/** GL_NV_conservative_raster */
+static void GLAPIENTRY
+save_SubpixelPrecisionBiasNV(GLuint xbits, GLuint ybits)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = alloc_instruction(ctx, OPCODE_SUBPIXEL_PRECISION_BIAS, 2);
+   if (n) {
+      n[1].ui = xbits;
+      n[2].ui = ybits;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_SubpixelPrecisionBiasNV(ctx->Exec, (xbits, ybits));
+   }
+}
+
+/** GL_NV_conservative_raster_dilate */
+static void GLAPIENTRY
+save_ConservativeRasterParameterfNV(GLenum pname, GLfloat param)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = alloc_instruction(ctx, OPCODE_CONSERVATIVE_RASTER_PARAMETER_F, 2);
+   if (n) {
+      n[1].e = pname;
+      n[2].f = param;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_ConservativeRasterParameterfNV(ctx->Exec, (pname, param));
+   }
+}
+
+/** GL_NV_conservative_raster_pre_snap_triangles */
+static void GLAPIENTRY
+save_ConservativeRasterParameteriNV(GLenum pname, GLint param)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = alloc_instruction(ctx, OPCODE_CONSERVATIVE_RASTER_PARAMETER_I, 2);
+   if (n) {
+      n[1].e = pname;
+      n[2].i = param;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_ConservativeRasterParameteriNV(ctx->Exec, (pname, param));
+   }
+}
+
+
 /**
  * Save an error-generating command into display list.
  *
@@ -8347,6 +8454,27 @@ execute_list(struct gl_context *ctx, GLuint list)
          case OPCODE_PASSTHROUGH:
             CALL_PassThrough(ctx->Exec, (n[1].f));
             break;
+         case OPCODE_PATCH_PARAMETER_I:
+            CALL_PatchParameteri(ctx->Exec, (n[1].e, n[2].i));
+            break;
+         case OPCODE_PATCH_PARAMETER_FV_INNER:
+            {
+               GLfloat params[2];
+               params[0] = n[2].f;
+               params[1] = n[3].f;
+               CALL_PatchParameterfv(ctx->Exec, (n[1].e, params));
+            }
+            break;
+         case OPCODE_PATCH_PARAMETER_FV_OUTER:
+            {
+               GLfloat params[4];
+               params[0] = n[2].f;
+               params[1] = n[3].f;
+               params[2] = n[4].f;
+               params[3] = n[5].f;
+               CALL_PatchParameterfv(ctx->Exec, (n[1].e, params));
+            }
+            break;
          case OPCODE_PIXEL_MAP:
             CALL_PixelMapfv(ctx->Exec,
                             (n[1].e, n[2].i, get_pointer(&n[3])));
@@ -8723,34 +8851,29 @@ execute_list(struct gl_context *ctx, GLuint list)
             CALL_Uniform4iv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
             break;
          case OPCODE_UNIFORM_1UI:
-            /*CALL_Uniform1uiARB(ctx->Exec, (n[1].i, n[2].i));*/
+            CALL_Uniform1ui(ctx->Exec, (n[1].i, n[2].i));
             break;
          case OPCODE_UNIFORM_2UI:
-            /*CALL_Uniform2uiARB(ctx->Exec, (n[1].i, n[2].i, n[3].i));*/
+            CALL_Uniform2ui(ctx->Exec, (n[1].i, n[2].i, n[3].i));
             break;
          case OPCODE_UNIFORM_3UI:
-            /*CALL_Uniform3uiARB(ctx->Exec, (n[1].i, n[2].i, n[3].i, n[4].i));*/
+            CALL_Uniform3ui(ctx->Exec, (n[1].i, n[2].i, n[3].i, n[4].i));
             break;
          case OPCODE_UNIFORM_4UI:
-            /*CALL_Uniform4uiARB(ctx->Exec,
-                              (n[1].i, n[2].i, n[3].i, n[4].i, n[5].i));
-            */
+            CALL_Uniform4ui(ctx->Exec,
+                            (n[1].i, n[2].i, n[3].i, n[4].i, n[5].i));
             break;
          case OPCODE_UNIFORM_1UIV:
-            /*CALL_Uniform1uivARB(ctx->Exec, (n[1].i, n[2].i,
-                                              get_pointer(&n[3])));*/
+            CALL_Uniform1uiv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
             break;
          case OPCODE_UNIFORM_2UIV:
-            /*CALL_Uniform2uivARB(ctx->Exec, (n[1].i, n[2].i,
-                                              get_pointer(&n[3])));*/
+            CALL_Uniform2uiv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
             break;
          case OPCODE_UNIFORM_3UIV:
-            /*CALL_Uniform3uivARB(ctx->Exec, (n[1].i, n[2].i,
-                                              get_pointer(&n[3])));*/
+            CALL_Uniform3uiv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
             break;
          case OPCODE_UNIFORM_4UIV:
-            /*CALL_Uniform4uivARB(ctx->Exec, (n[1].i, n[2].i,
-                                              get_pointer(&n[3])));*/
+            CALL_Uniform4uiv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
             break;
          case OPCODE_UNIFORM_MATRIX22:
             CALL_UniformMatrix2fv(ctx->Exec,
@@ -9135,6 +9258,21 @@ execute_list(struct gl_context *ctx, GLuint list)
          case OPCODE_WINDOW_RECTANGLES:
             CALL_WindowRectanglesEXT(
                   ctx->Exec, (n[1].e, n[2].si, get_pointer(&n[3])));
+            break;
+
+         /* GL_NV_conservative_raster */
+         case OPCODE_SUBPIXEL_PRECISION_BIAS:
+            CALL_SubpixelPrecisionBiasNV(ctx->Exec, (n[1].ui, n[2].ui));
+            break;
+
+         /* GL_NV_conservative_raster_dilate */
+         case OPCODE_CONSERVATIVE_RASTER_PARAMETER_F:
+            CALL_ConservativeRasterParameterfNV(ctx->Exec, (n[1].e, n[2].f));
+            break;
+
+         /* GL_NV_conservative_raster_pre_snap_triangles */
+         case OPCODE_CONSERVATIVE_RASTER_PARAMETER_I:
+            CALL_ConservativeRasterParameteriNV(ctx->Exec, (n[1].e, n[2].i));
             break;
 
          case OPCODE_CONTINUE:
@@ -9767,9 +9905,6 @@ _mesa_initialize_save_table(const struct gl_context *ctx)
    SET_BlendColorEXT(table, save_BlendColorEXT);
 #endif
 
-   /* 3. GL_EXT_polygon_offset */
-   SET_PolygonOffsetEXT(table, save_PolygonOffsetEXT);
-
    /* 6. GL_EXT_texture3d */
 #if 0
    SET_CopyTexSubImage3DEXT(table, save_CopyTexSubImage3D);
@@ -9785,6 +9920,10 @@ _mesa_initialize_save_table(const struct gl_context *ctx)
    /* 54. GL_EXT_point_parameters */
    SET_PointParameterf(table, save_PointParameterfEXT);
    SET_PointParameterfv(table, save_PointParameterfvEXT);
+
+   /* 91. GL_ARB_tessellation_shader */
+   SET_PatchParameteri(table, save_PatchParameteri);
+   SET_PatchParameterfv(table, save_PatchParameterfv);
 
    /* 173. GL_EXT_blend_func_separate */
    SET_BlendFuncSeparate(table, save_BlendFuncSeparateEXT);
@@ -9931,7 +10070,6 @@ _mesa_initialize_save_table(const struct gl_context *ctx)
    SET_ClearBufferuiv(table, save_ClearBufferuiv);
    SET_ClearBufferfv(table, save_ClearBufferfv);
    SET_ClearBufferfi(table, save_ClearBufferfi);
-#if 0
    SET_Uniform1ui(table, save_Uniform1ui);
    SET_Uniform2ui(table, save_Uniform2ui);
    SET_Uniform3ui(table, save_Uniform3ui);
@@ -9940,16 +10078,6 @@ _mesa_initialize_save_table(const struct gl_context *ctx)
    SET_Uniform2uiv(table, save_Uniform2uiv);
    SET_Uniform3uiv(table, save_Uniform3uiv);
    SET_Uniform4uiv(table, save_Uniform4uiv);
-#else
-   (void) save_Uniform1ui;
-   (void) save_Uniform2ui;
-   (void) save_Uniform3ui;
-   (void) save_Uniform4ui;
-   (void) save_Uniform1uiv;
-   (void) save_Uniform2uiv;
-   (void) save_Uniform3uiv;
-   (void) save_Uniform4uiv;
-#endif
 
    /* These are: */
    SET_BeginTransformFeedback(table, save_BeginTransformFeedback);
@@ -10049,6 +10177,15 @@ _mesa_initialize_save_table(const struct gl_context *ctx)
 
    /* GL_EXT_window_rectangles */
    SET_WindowRectanglesEXT(table, save_WindowRectanglesEXT);
+
+   /* GL_NV_conservative_raster */
+   SET_SubpixelPrecisionBiasNV(table, save_SubpixelPrecisionBiasNV);
+
+   /* GL_NV_conservative_raster_dilate */
+   SET_ConservativeRasterParameterfNV(table, save_ConservativeRasterParameterfNV);
+
+   /* GL_NV_conservative_raster_pre_snap_triangles */
+   SET_ConservativeRasterParameteriNV(table, save_ConservativeRasterParameteriNV);
 }
 
 

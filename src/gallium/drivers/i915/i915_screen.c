@@ -283,6 +283,12 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
    case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
    case PIPE_CAP_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
       return 0;
 
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
@@ -336,6 +342,7 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
       return 64;
 
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
+   case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       return 120;
 
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -434,6 +441,13 @@ i915_get_paramf(struct pipe_screen *screen, enum pipe_capf cap)
 
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 16.0;
+
+   case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
+      /* fall-through */
+   case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
+      /* fall-through */
+   case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
+      return 0.0f;
 
    default:
       debug_printf("%s: Unknown cap %u.\n", __FUNCTION__, cap);

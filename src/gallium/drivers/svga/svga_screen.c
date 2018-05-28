@@ -167,6 +167,13 @@ svga_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 15.0;
 
+   case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
+      /* fall-through */
+   case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
+      /* fall-through */
+   case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
+      return 0.0f;
+
    }
 
    debug_printf("Unexpected PIPE_CAPF_ query %u\n", param);
@@ -271,6 +278,9 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return sws->have_vgpu10 ? 330 : 120;
 
+   case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
+      return sws->have_vgpu10 ? 140 : 120;
+
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return 0;
 
@@ -373,6 +383,12 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PCI_DEVICE:
    case PIPE_CAP_PCI_FUNCTION:
    case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
+   case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
       return 0;
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 64;
