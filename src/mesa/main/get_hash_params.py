@@ -564,6 +564,12 @@ descriptor=[
   # GL_NUM_SHADING_LANGUAGE_VERSIONS
   [ "NUM_SHADING_LANGUAGE_VERSIONS", "LOC_CUSTOM, TYPE_INT, 0, extra_version_43" ],
 
+  # GL_ARB_sample_locations
+  [ "SAMPLE_LOCATION_SUBPIXEL_BITS_ARB", "LOC_CUSTOM, TYPE_UINT, 0, extra_ARB_sample_locations" ],
+  [ "SAMPLE_LOCATION_PIXEL_GRID_WIDTH_ARB", "LOC_CUSTOM, TYPE_UINT, 0, extra_ARB_sample_locations" ],
+  [ "SAMPLE_LOCATION_PIXEL_GRID_HEIGHT_ARB", "LOC_CUSTOM, TYPE_UINT, 0, extra_ARB_sample_locations" ],
+  [ "PROGRAMMABLE_SAMPLE_LOCATION_TABLE_SIZE_ARB", "LOC_CUSTOM, TYPE_UINT, 0, extra_ARB_sample_locations" ],
+
 # GL_ARB_draw_indirect / GLES 3.1
   [ "DRAW_INDIRECT_BUFFER_BINDING", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_draw_indirect" ],
 
@@ -969,17 +975,13 @@ descriptor=[
 
 # GL_ARB_sparse_buffer
   [ "SPARSE_BUFFER_PAGE_SIZE_ARB", "CONTEXT_INT(Const.SparseBufferPageSize), extra_ARB_sparse_buffer" ],
-]},
 
-# Enums restricted to OpenGL Core profile
-{ "apis": ["GL_CORE"], "params": [
 # GL_ARB_shader_subroutine
   [ "MAX_SUBROUTINES", "CONST(MAX_SUBROUTINES), NO_EXTRA" ],
   [ "MAX_SUBROUTINE_UNIFORM_LOCATIONS", "CONST(MAX_SUBROUTINE_UNIFORM_LOCATIONS), NO_EXTRA" ],
 
 # GL_ARB_indirect_parameters
   [ "PARAMETER_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_indirect_parameters" ],
-
-]}
+]},
 
 ]

@@ -1,32 +1,32 @@
 /****************************************************************************
-* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice (including the next
-* paragraph) shall be included in all copies or substantial portions of the
-* Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-* IN THE SOFTWARE.
-*
-* @file builder_gfx_mem.cpp
-*
-* @brief Definition of the gfx mem builder
-*
-* Notes:
-*
-******************************************************************************/
+ * Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ * @file builder_gfx_mem.cpp
+ *
+ * @brief Definition of the gfx mem builder
+ *
+ * Notes:
+ *
+ ******************************************************************************/
 #include "jit_pch.hpp"
 #include "builder.h"
 #include "common/rdtsc_buckets.h"
@@ -37,12 +37,12 @@ namespace SwrJit
 {
     using namespace llvm;
 
-    BuilderGfxMem::BuilderGfxMem(JitManager* pJitMgr) :
-        Builder(pJitMgr)
+    BuilderGfxMem::BuilderGfxMem(JitManager* pJitMgr) : Builder(pJitMgr)
     {
-        mpTranslationFuncTy = nullptr;
-        mpfnTranslateGfxAddress = nullptr;
-        mpParamSimDC = nullptr;
+        mpTranslationFuncTy             = nullptr;
+        mpfnTranslateGfxAddressForRead  = nullptr;
+        mpfnTranslateGfxAddressForWrite = nullptr;
+        mpParamSimDC                    = nullptr;
 
     }
 
@@ -52,7 +52,8 @@ namespace SwrJit
 
     void BuilderGfxMem::AssertGFXMemoryParams(Value* ptr, Builder::JIT_MEM_CLIENT usage)
     {
-        SWR_ASSERT(!(ptr->getType() == mInt64Ty && usage == MEM_CLIENT_INTERNAL), "Internal memory should not be gfxptr_t.");
+        SWR_ASSERT(!(ptr->getType() == mInt64Ty && usage == MEM_CLIENT_INTERNAL),
+                   "Internal memory should not be gfxptr_t.");
     }
 
 
@@ -64,10 +65,14 @@ namespace SwrJit
     /// @param vIndices - SIMD wide value of VB byte offsets
     /// @param vMask - SIMD wide mask that controls whether to access memory or the src values
     /// @param scale - value to scale indices by
-    Value* BuilderGfxMem::GATHERPS(Value* vSrc, Value* pBase, Value* vIndices, Value* vMask,
-                                   uint8_t scale, JIT_MEM_CLIENT usage)
+    Value* BuilderGfxMem::GATHERPS(Value*         vSrc,
+                                   Value*         pBase,
+                                   Value*         vIndices,
+                                   Value*         vMask,
+                                   uint8_t        scale,
+                                   JIT_MEM_CLIENT usage)
     {
-        // address may be coming in as 64bit int now so get the pointer
+       // address may be coming in as 64bit int now so get the pointer
         if (pBase->getType() == mInt64Ty)
         {
             pBase = INT_TO_PTR(pBase, PointerType::get(mInt8Ty, 0));
@@ -85,8 +90,12 @@ namespace SwrJit
     /// @param vIndices - SIMD wide value of VB byte offsets
     /// @param vMask - SIMD wide mask that controls whether to access memory or the src values
     /// @param scale - value to scale indices by
-    Value* BuilderGfxMem::GATHERDD(Value* vSrc, Value* pBase, Value* vIndices, Value* vMask,
-                                   uint8_t scale, JIT_MEM_CLIENT usage)
+    Value* BuilderGfxMem::GATHERDD(Value*         vSrc,
+                                   Value*         pBase,
+                                   Value*         vIndices,
+                                   Value*         vMask,
+                                   uint8_t        scale,
+                                   JIT_MEM_CLIENT usage)
     {
 
         // address may be coming in as 64bit int now so get the pointer
@@ -97,6 +106,19 @@ namespace SwrJit
 
         Value* vGather = Builder::GATHERDD(vSrc, pBase, vIndices, vMask, scale);
         return vGather;
+    }
+
+    void BuilderGfxMem::SCATTERPS(
+        Value* pDst, Value* vSrc, Value* vOffsets, Value* vMask, JIT_MEM_CLIENT usage)
+    {
+
+        // address may be coming in as 64bit int now so get the pointer
+        if (pDst->getType() == mInt64Ty)
+        {
+            pDst = INT_TO_PTR(pDst, PointerType::get(mInt8Ty, 0));
+        }
+
+        Builder::SCATTERPS(pDst, vSrc, vOffsets, vMask, usage);
     }
 
 
@@ -123,7 +145,8 @@ namespace SwrJit
         return Builder::GEP(Ptr, indexList);
     }
 
-    Value* BuilderGfxMem::GEP(Value* Ptr, const std::initializer_list<uint32_t>& indexList, Type* Ty)
+    Value*
+    BuilderGfxMem::GEP(Value* Ptr, const std::initializer_list<uint32_t>& indexList, Type* Ty)
     {
         Ptr = TranslationHelper(Ptr, Ty);
         return Builder::GEP(Ptr, indexList);
@@ -144,7 +167,7 @@ namespace SwrJit
         return Ptr;
     }
 
-    LoadInst* BuilderGfxMem::LOAD(Value* Ptr, const char *Name, Type *Ty, JIT_MEM_CLIENT usage)
+    LoadInst* BuilderGfxMem::LOAD(Value* Ptr, const char* Name, Type* Ty, JIT_MEM_CLIENT usage)
     {
         AssertGFXMemoryParams(Ptr, usage);
 
@@ -152,7 +175,7 @@ namespace SwrJit
         return Builder::LOAD(Ptr, Name);
     }
 
-    LoadInst* BuilderGfxMem::LOAD(Value* Ptr, const Twine &Name, Type *Ty, JIT_MEM_CLIENT usage)
+    LoadInst* BuilderGfxMem::LOAD(Value* Ptr, const Twine& Name, Type* Ty, JIT_MEM_CLIENT usage)
     {
         AssertGFXMemoryParams(Ptr, usage);
 
@@ -160,7 +183,9 @@ namespace SwrJit
         return Builder::LOAD(Ptr, Name);
     }
 
-    LoadInst* BuilderGfxMem::LOAD(Value* Ptr, bool isVolatile, const Twine &Name, Type *Ty, JIT_MEM_CLIENT usage)
+
+    LoadInst* BuilderGfxMem::LOAD(
+        Value* Ptr, bool isVolatile, const Twine& Name, Type* Ty, JIT_MEM_CLIENT usage)
     {
         AssertGFXMemoryParams(Ptr, usage);
 
@@ -168,7 +193,11 @@ namespace SwrJit
         return Builder::LOAD(Ptr, isVolatile, Name);
     }
 
-    LoadInst* BuilderGfxMem::LOAD(Value* BasePtr, const std::initializer_list<uint32_t> &offset, const llvm::Twine& name, Type *Ty, JIT_MEM_CLIENT usage)
+    LoadInst* BuilderGfxMem::LOAD(Value*                                 BasePtr,
+                                  const std::initializer_list<uint32_t>& offset,
+                                  const llvm::Twine&                     name,
+                                  Type*                                  Ty,
+                                  JIT_MEM_CLIENT                         usage)
     {
         AssertGFXMemoryParams(BasePtr, usage);
 
@@ -176,7 +205,7 @@ namespace SwrJit
         if (BasePtr->getType() == mInt64Ty)
         {
             SWR_ASSERT(Ty);
-            BasePtr = INT_TO_PTR(BasePtr, Ty, name);
+            BasePtr          = INT_TO_PTR(BasePtr, Ty, name);
             bNeedTranslation = true;
         }
         std::vector<Value*> valIndices;
@@ -193,7 +222,14 @@ namespace SwrJit
         return LOAD(BasePtr, name, Ty, usage);
     }
 
-    CallInst* BuilderGfxMem::MASKED_LOAD(Value* Ptr, unsigned Align, Value* Mask, Value* PassThru, const Twine &Name, Type *Ty, JIT_MEM_CLIENT usage)
+
+    CallInst* BuilderGfxMem::MASKED_LOAD(Value*         Ptr,
+                                         unsigned       Align,
+                                         Value*         Mask,
+                                         Value*         PassThru,
+                                         const Twine&   Name,
+                                         Type*          Ty,
+                                         JIT_MEM_CLIENT usage)
     {
         AssertGFXMemoryParams(Ptr, usage);
 
@@ -201,7 +237,10 @@ namespace SwrJit
         return Builder::MASKED_LOAD(Ptr, Align, Mask, PassThru, Name, Ty, usage);
     }
 
-    Value* BuilderGfxMem::TranslateGfxAddress(Value* xpGfxAddress, Type* PtrTy, const Twine &Name, JIT_MEM_CLIENT /* usage */)
+    Value* BuilderGfxMem::TranslateGfxAddressForRead(Value*       xpGfxAddress,
+                                                     Type*        PtrTy,
+                                                     const Twine& Name,
+                                                     JIT_MEM_CLIENT /* usage */)
     {
         if (PtrTy == nullptr)
         {
@@ -209,4 +248,17 @@ namespace SwrJit
         }
         return INT_TO_PTR(xpGfxAddress, PtrTy, Name);
     }
-}
+
+    Value* BuilderGfxMem::TranslateGfxAddressForWrite(Value*       xpGfxAddress,
+                                                      Type*        PtrTy,
+                                                      const Twine& Name,
+                                                      JIT_MEM_CLIENT /* usage */)
+    {
+        if (PtrTy == nullptr)
+        {
+            PtrTy = mInt8PtrTy;
+        }
+        return INT_TO_PTR(xpGfxAddress, PtrTy, Name);
+    }
+
+} // namespace SwrJit

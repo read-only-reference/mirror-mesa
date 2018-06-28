@@ -646,6 +646,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_query_buffer_object),          PIPE_CAP_QUERY_BUFFER_OBJECT              },
       { o(ARB_robust_buffer_access_behavior), PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR   },
       { o(ARB_sample_shading),               PIPE_CAP_SAMPLE_SHADING                   },
+      { o(ARB_sample_locations),             PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS    },
       { o(ARB_seamless_cube_map),            PIPE_CAP_SEAMLESS_CUBE_MAP                },
       { o(ARB_shader_ballot),                PIPE_CAP_TGSI_BALLOT                      },
       { o(ARB_shader_clock),                 PIPE_CAP_TGSI_CLOCK                       },
@@ -900,7 +901,6 @@ void st_init_extensions(struct pipe_screen *screen,
    extensions->EXT_texture_env_dot3 = GL_TRUE;
 
    extensions->ATI_fragment_shader = GL_TRUE;
-   extensions->ATI_separate_stencil = GL_TRUE;
    extensions->ATI_texture_env_combine3 = GL_TRUE;
 
    extensions->MESA_pack_invert = GL_TRUE;
@@ -1133,6 +1133,12 @@ void st_init_extensions(struct pipe_screen *screen,
    if (options->allow_glsl_extension_directive_midshader)
       consts->AllowGLSLExtensionDirectiveMidShader = GL_TRUE;
 
+   if (options->allow_glsl_builtin_const_expression)
+      consts->AllowGLSLBuiltinConstantExpression = GL_TRUE;
+
+   if (options->allow_glsl_relaxed_es)
+      consts->AllowGLSLRelaxedES = GL_TRUE;
+
    consts->MinMapBufferAlignment =
       screen->get_param(screen, PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT);
 
@@ -1204,11 +1210,14 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->ARB_framebuffer_no_attachments = GL_TRUE;
 
    /* GL_ARB_ES3_compatibility.
-    *
-    * Assume that ES3 is supported if GLSL 3.30 is supported.
-    * (OpenGL 3.3 is a requirement for that extension.)
+    * Check requirements for GLSL ES 3.00.
     */
-   if (GLSLVersion >= 330 &&
+   if (GLSLVersion >= 130 &&
+       extensions->ARB_uniform_buffer_object &&
+       extensions->ARB_shader_bit_encoding &&
+       extensions->NV_primitive_restart &&
+       screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
+                                PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS) >= 16 &&
        /* Requirements for ETC2 emulation. */
        screen->is_format_supported(screen, PIPE_FORMAT_R8G8B8A8_UNORM,
                                    PIPE_TEXTURE_2D, 0,

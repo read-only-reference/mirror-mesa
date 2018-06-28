@@ -37,7 +37,7 @@
 
 static void
 si_write_harvested_raster_configs(struct radv_physical_device *physical_device,
-                                  struct radeon_winsys_cs *cs,
+                                  struct radeon_cmdbuf *cs,
 				  unsigned raster_config,
 				  unsigned raster_config_1)
 {
@@ -81,7 +81,7 @@ si_write_harvested_raster_configs(struct radv_physical_device *physical_device,
 
 static void
 si_emit_compute(struct radv_physical_device *physical_device,
-                struct radeon_winsys_cs *cs)
+                struct radeon_cmdbuf *cs)
 {
 	radeon_set_sh_reg_seq(cs, R_00B810_COMPUTE_START_X, 3);
 	radeon_emit(cs, 0);
@@ -135,7 +135,7 @@ static unsigned radv_pack_float_12p4(float x)
 
 static void
 si_set_raster_config(struct radv_physical_device *physical_device,
-		     struct radeon_winsys_cs *cs)
+		     struct radeon_cmdbuf *cs)
 {
 	unsigned num_rb = MIN2(physical_device->rad_info.num_render_backends, 16);
 	unsigned rb_mask = physical_device->rad_info.enabled_rb_mask;
@@ -163,7 +163,7 @@ si_set_raster_config(struct radv_physical_device *physical_device,
 
 static void
 si_emit_config(struct radv_physical_device *physical_device,
-	       struct radeon_winsys_cs *cs)
+	       struct radeon_cmdbuf *cs)
 {
 	int i;
 
@@ -399,7 +399,7 @@ void si_init_config(struct radv_cmd_buffer *cmd_buffer)
 void
 cik_create_gfx_config(struct radv_device *device)
 {
-	struct radeon_winsys_cs *cs = device->ws->cs_create(device->ws, RING_GFX);
+	struct radeon_cmdbuf *cs = device->ws->cs_create(device->ws, RING_GFX);
 	if (!cs)
 		return;
 
@@ -456,7 +456,7 @@ get_viewport_xform(const VkViewport *viewport,
 }
 
 void
-si_write_viewport(struct radeon_winsys_cs *cs, int first_vp,
+si_write_viewport(struct radeon_cmdbuf *cs, int first_vp,
                   int count, const VkViewport *viewports)
 {
 	int i;
@@ -515,7 +515,7 @@ static VkRect2D si_intersect_scissor(const VkRect2D *a, const VkRect2D *b) {
 }
 
 void
-si_write_scissors(struct radeon_winsys_cs *cs, int first,
+si_write_scissors(struct radeon_cmdbuf *cs, int first,
                   int count, const VkRect2D *scissors,
                   const VkViewport *viewports, bool can_use_guardband)
 {
@@ -672,8 +672,7 @@ si_get_ia_multi_vgt_param(struct radv_cmd_buffer *cmd_buffer,
 
 }
 
-void si_cs_emit_write_event_eop(struct radeon_winsys_cs *cs,
-				bool predicated,
+void si_cs_emit_write_event_eop(struct radeon_cmdbuf *cs,
 				enum chip_class chip_class,
 				bool is_mec,
 				unsigned event, unsigned event_flags,
@@ -686,11 +685,17 @@ void si_cs_emit_write_event_eop(struct radeon_winsys_cs *cs,
 		EVENT_INDEX(5) |
 		event_flags;
 	unsigned is_gfx8_mec = is_mec && chip_class < GFX9;
+	unsigned sel = EOP_DATA_SEL(data_sel);
+
+	/* Wait for write confirmation before writing data, but don't send
+	 * an interrupt. */
+	if (data_sel != EOP_DATA_SEL_DISCARD)
+		sel |= EOP_INT_SEL(EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM);
 
 	if (chip_class >= GFX9 || is_gfx8_mec) {
-		radeon_emit(cs, PKT3(PKT3_RELEASE_MEM, is_gfx8_mec ? 5 : 6, predicated));
+		radeon_emit(cs, PKT3(PKT3_RELEASE_MEM, is_gfx8_mec ? 5 : 6, false));
 		radeon_emit(cs, op);
-		radeon_emit(cs, EOP_DATA_SEL(data_sel));
+		radeon_emit(cs, sel);
 		radeon_emit(cs, va);            /* address lo */
 		radeon_emit(cs, va >> 32);      /* address hi */
 		radeon_emit(cs, new_fence);     /* immediate data lo */
@@ -704,30 +709,29 @@ void si_cs_emit_write_event_eop(struct radeon_winsys_cs *cs,
 			 * (and optional cache flushes executed) before the timestamp
 			 * is written.
 			 */
-			radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, predicated));
+			radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, false));
 			radeon_emit(cs, op);
 			radeon_emit(cs, va);
-			radeon_emit(cs, ((va >> 32) & 0xffff) | EOP_DATA_SEL(data_sel));
+			radeon_emit(cs, ((va >> 32) & 0xffff) | sel);
 			radeon_emit(cs, old_fence); /* immediate data */
 			radeon_emit(cs, 0); /* unused */
 		}
 
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, predicated));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, false));
 		radeon_emit(cs, op);
 		radeon_emit(cs, va);
-		radeon_emit(cs, ((va >> 32) & 0xffff) | EOP_DATA_SEL(data_sel));
+		radeon_emit(cs, ((va >> 32) & 0xffff) | sel);
 		radeon_emit(cs, new_fence); /* immediate data */
 		radeon_emit(cs, 0); /* unused */
 	}
 }
 
 void
-si_emit_wait_fence(struct radeon_winsys_cs *cs,
-		   bool predicated,
+si_emit_wait_fence(struct radeon_cmdbuf *cs,
 		   uint64_t va, uint32_t ref,
 		   uint32_t mask)
 {
-	radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, predicated));
+	radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, false));
 	radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
 	radeon_emit(cs, va);
 	radeon_emit(cs, va >> 32);
@@ -737,15 +741,14 @@ si_emit_wait_fence(struct radeon_winsys_cs *cs,
 }
 
 static void
-si_emit_acquire_mem(struct radeon_winsys_cs *cs,
+si_emit_acquire_mem(struct radeon_cmdbuf *cs,
                     bool is_mec,
-		    bool predicated,
 		    bool is_gfx9,
                     unsigned cp_coher_cntl)
 {
 	if (is_mec || is_gfx9) {
 		uint32_t hi_val = is_gfx9 ? 0xffffff : 0xff;
-		radeon_emit(cs, PKT3(PKT3_ACQUIRE_MEM, 5, predicated) |
+		radeon_emit(cs, PKT3(PKT3_ACQUIRE_MEM, 5, false) |
 		                            PKT3_SHADER_TYPE_S(is_mec));
 		radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
 		radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
@@ -755,7 +758,7 @@ si_emit_acquire_mem(struct radeon_winsys_cs *cs,
 		radeon_emit(cs, 0x0000000A);      /* POLL_INTERVAL */
 	} else {
 		/* ACQUIRE_MEM is only required on a compute ring. */
-		radeon_emit(cs, PKT3(PKT3_SURFACE_SYNC, 3, predicated));
+		radeon_emit(cs, PKT3(PKT3_SURFACE_SYNC, 3, false));
 		radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
 		radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
 		radeon_emit(cs, 0);               /* CP_COHER_BASE */
@@ -764,7 +767,7 @@ si_emit_acquire_mem(struct radeon_winsys_cs *cs,
 }
 
 void
-si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
+si_cs_emit_cache_flush(struct radeon_cmdbuf *cs,
                        enum chip_class chip_class,
 		       uint32_t *flush_cnt,
 		       uint64_t flush_va,
@@ -795,11 +798,12 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 			/* Necessary for DCC */
 			if (chip_class >= VI) {
 				si_cs_emit_write_event_eop(cs,
-							   false,
 							   chip_class,
 							   is_mec,
 							   V_028A90_FLUSH_AND_INV_CB_DATA_TS,
-							   0, 0, 0, 0, 0);
+							   0,
+							   EOP_DATA_SEL_DISCARD,
+							   0, 0, 0);
 			}
 		}
 		if (flush_bits & RADV_CMD_FLAG_FLUSH_AND_INV_DB) {
@@ -834,26 +838,9 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 	if (chip_class >= GFX9 && flush_cb_db) {
 		unsigned cb_db_event, tc_flags;
 
-#if 0
-		/* This breaks a bunch of:
-		   dEQP-VK.renderpass.dedicated_allocation.formats.d32_sfloat_s8_uint.input*.
-		   use the big hammer always.
-		*/
 		/* Set the CB/DB flush event. */
-		switch (flush_cb_db) {
-		case RADV_CMD_FLAG_FLUSH_AND_INV_CB:
-			cb_db_event = V_028A90_FLUSH_AND_INV_CB_DATA_TS;
-			break;
-		case RADV_CMD_FLAG_FLUSH_AND_INV_DB:
-			cb_db_event = V_028A90_FLUSH_AND_INV_DB_DATA_TS;
-			break;
-		default:
-			/* both CB & DB */
-			cb_db_event = V_028A90_CACHE_FLUSH_AND_INV_TS_EVENT;
-		}
-#else
 		cb_db_event = V_028A90_CACHE_FLUSH_AND_INV_TS_EVENT;
-#endif
+
 		/* These are the only allowed combinations. If you need to
 		 * do multiple operations at once, do them separately.
 		 * All operations that invalidate L2 also seem to invalidate
@@ -884,9 +871,10 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 		assert(flush_cnt);
 		uint32_t old_fence = (*flush_cnt)++;
 
-		si_cs_emit_write_event_eop(cs, false, chip_class, false, cb_db_event, tc_flags, 1,
+		si_cs_emit_write_event_eop(cs, chip_class, false, cb_db_event, tc_flags,
+					   EOP_DATA_SEL_VALUE_32BIT,
 					   flush_va, old_fence, *flush_cnt);
-		si_emit_wait_fence(cs, false, flush_va, *flush_cnt, 0xffffffff);
+		si_emit_wait_fence(cs, flush_va, *flush_cnt, 0xffffffff);
 	}
 
 	/* VGT state sync */
@@ -910,7 +898,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 
 	if ((flush_bits & RADV_CMD_FLAG_INV_GLOBAL_L2) ||
 	    (chip_class <= CIK && (flush_bits & RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2))) {
-		si_emit_acquire_mem(cs, is_mec, false, chip_class >= GFX9,
+		si_emit_acquire_mem(cs, is_mec, chip_class >= GFX9,
 				    cp_coher_cntl |
 				    S_0085F0_TC_ACTION_ENA(1) |
 				    S_0085F0_TCL1_ACTION_ENA(1) |
@@ -924,7 +912,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 			 *
 			 * WB doesn't work without NC.
 			 */
-			si_emit_acquire_mem(cs, is_mec, false,
+			si_emit_acquire_mem(cs, is_mec,
 					    chip_class >= GFX9,
 					    cp_coher_cntl |
 					    S_0301F0_TC_WB_ACTION_ENA(1) |
@@ -933,7 +921,7 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 		}
 		if (flush_bits & RADV_CMD_FLAG_INV_VMEM_L1) {
 			si_emit_acquire_mem(cs, is_mec,
-					    false, chip_class >= GFX9,
+					    chip_class >= GFX9,
 					    cp_coher_cntl |
 					    S_0085F0_TCL1_ACTION_ENA(1));
 			cp_coher_cntl = 0;
@@ -944,7 +932,17 @@ si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 	 * Therefore, it should be last. Done in PFP.
 	 */
 	if (cp_coher_cntl)
-		si_emit_acquire_mem(cs, is_mec, false, chip_class >= GFX9, cp_coher_cntl);
+		si_emit_acquire_mem(cs, is_mec, chip_class >= GFX9, cp_coher_cntl);
+
+	if (flush_bits & RADV_CMD_FLAG_START_PIPELINE_STATS) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_PIPELINESTAT_START) |
+			        EVENT_INDEX(0));
+	} else if (flush_bits & RADV_CMD_FLAG_STOP_PIPELINE_STATS) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_PIPELINESTAT_STOP) |
+			        EVENT_INDEX(0));
+	}
 }
 
 void
@@ -1039,7 +1037,7 @@ static void si_emit_cp_dma(struct radv_cmd_buffer *cmd_buffer,
 			   uint64_t dst_va, uint64_t src_va,
 			   unsigned size, unsigned flags)
 {
-	struct radeon_winsys_cs *cs = cmd_buffer->cs;
+	struct radeon_cmdbuf *cs = cmd_buffer->cs;
 	uint32_t header = 0, command = 0;
 
 	assert(size);
@@ -1317,7 +1315,7 @@ unsigned radv_cayman_get_maxdist(int log_samples)
 	return max_dist[log_samples];
 }
 
-void radv_cayman_emit_msaa_sample_locs(struct radeon_winsys_cs *cs, int nr_samples)
+void radv_cayman_emit_msaa_sample_locs(struct radeon_cmdbuf *cs, int nr_samples)
 {
 	switch (nr_samples) {
 	default:

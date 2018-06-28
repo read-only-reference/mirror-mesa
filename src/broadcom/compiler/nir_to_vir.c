@@ -755,6 +755,10 @@ ntq_emit_alu(struct v3d_compile *c, nir_alu_instr *instr)
                 result = vir_NOT(c, src[0]);
                 break;
 
+        case nir_op_ufind_msb:
+                result = vir_SUB(c, vir_uniform_ui(c, 31), vir_CLZ(c, src[0]));
+                break;
+
         case nir_op_imul:
                 result = vir_UMUL(c, src[0], src[1]);
                 break;
@@ -853,6 +857,13 @@ ntq_emit_alu(struct v3d_compile *c, nir_alu_instr *instr)
                 result = vir_FDY(c, src[0]);
                 break;
 
+        case nir_op_uadd_carry:
+                vir_PF(c, vir_ADD(c, src[0], src[1]), V3D_QPU_PF_PUSHC);
+                result = vir_MOV(c, vir_SEL(c, V3D_QPU_COND_IFA,
+                                            vir_uniform_ui(c, ~0),
+                                            vir_uniform_ui(c, 0)));
+                break;
+
         default:
                 fprintf(stderr, "unknown NIR ALU inst: ");
                 nir_print_instr(&instr->instr, stderr);
@@ -909,6 +920,16 @@ emit_frag_end(struct v3d_compile *c)
                         has_any_tlb_color_write = true;
         }
 
+        if (c->fs_key->sample_alpha_to_coverage && c->output_color_var[0]) {
+                struct nir_variable *var = c->output_color_var[0];
+                struct qreg *color = &c->outputs[var->data.driver_location * 4];
+
+                vir_SETMSF_dest(c, vir_reg(QFILE_NULL, 0),
+                                vir_AND(c,
+                                        vir_MSF(c),
+                                        vir_FTOC(c, color[3])));
+        }
+
         if (c->output_position_index != -1) {
                 struct qinst *inst = vir_MOV_dest(c,
                                                   vir_reg(QFILE_TLBU, 0),
@@ -919,7 +940,9 @@ emit_frag_end(struct v3d_compile *c)
                                        TLB_TYPE_DEPTH |
                                        TLB_DEPTH_TYPE_PER_PIXEL |
                                        0xffffff00);
-        } else if (c->s->info.fs.uses_discard || !has_any_tlb_color_write) {
+        } else if (c->s->info.fs.uses_discard ||
+                   c->fs_key->sample_alpha_to_coverage ||
+                   !has_any_tlb_color_write) {
                 /* Emit passthrough Z if it needed to be delayed until shader
                  * end due to potential discards.
                  *
@@ -958,6 +981,9 @@ emit_frag_end(struct v3d_compile *c)
                 conf |= TLB_SAMPLE_MODE_PER_PIXEL;
                 conf |= (7 - rt) << TLB_RENDER_TARGET_SHIFT;
 
+                if (c->fs_key->swap_color_rb & (1 << rt))
+                        num_components = MAX2(num_components, 3);
+
                 assert(num_components != 0);
                 switch (glsl_get_base_type(var->type)) {
                 case GLSL_TYPE_UINT:
@@ -986,7 +1012,7 @@ emit_frag_end(struct v3d_compile *c)
                         struct qreg b = color[2];
                         struct qreg a = color[3];
 
-                        if (c->fs_key->f32_color_rb) {
+                        if (c->fs_key->f32_color_rb & (1 << rt)) {
                                 conf |= TLB_TYPE_F32_COLOR;
                                 conf |= ((num_components - 1) <<
                                          TLB_VEC_SIZE_MINUS_1_SHIFT);
@@ -1349,7 +1375,7 @@ ntq_setup_outputs(struct v3d_compile *c)
                 assert(array_len == 1);
                 (void)array_len;
 
-                for (int i = 0; i < glsl_get_vector_elements(var->type); i++) {
+                for (int i = 0; i < 4; i++) {
                         add_output(c, loc + var->data.location_frac + i,
                                    var->data.location,
                                    var->data.location_frac + i);
@@ -1894,8 +1920,11 @@ const nir_shader_compiler_options v3d_nir_options = {
         .lower_all_io_to_temps = true,
         .lower_extract_byte = true,
         .lower_extract_word = true,
-        .lower_bitfield_insert = true,
-        .lower_bitfield_extract = true,
+        .lower_bfm = true,
+        .lower_bitfield_insert_to_shifts = true,
+        .lower_bitfield_extract_to_shifts = true,
+        .lower_bitfield_reverse = true,
+        .lower_bit_count = true,
         .lower_pack_unorm_2x16 = true,
         .lower_pack_snorm_2x16 = true,
         .lower_pack_unorm_4x8 = true,
@@ -1903,12 +1932,15 @@ const nir_shader_compiler_options v3d_nir_options = {
         .lower_unpack_unorm_4x8 = true,
         .lower_unpack_snorm_4x8 = true,
         .lower_fdiv = true,
+        .lower_find_lsb = true,
         .lower_ffma = true,
         .lower_flrp32 = true,
         .lower_fpow = true,
         .lower_fsat = true,
         .lower_fsqrt = true,
+        .lower_ifind_msb = true,
         .lower_ldexp = true,
+        .lower_mul_high = true,
         .native_integers = true,
 };
 
@@ -1986,9 +2018,10 @@ vir_emit_last_thrsw(struct v3d_compile *c)
                 c->last_thrsw->is_last_thrsw = true;
 }
 
-/* There's a flag in the shader for "centroid W used in addition to center W",
- * so we need to walk the program after VIR optimization to see if both are
- * used.
+/* There's a flag in the shader for "center W is needed for reasons other than
+ * non-centroid varyings", so we just walk the program after VIR optimization
+ * to see if it's used.  It should be harmless to set even if we only use
+ * center W for varyings.
  */
 static void
 vir_check_payload_w(struct v3d_compile *c)
@@ -1996,19 +2029,11 @@ vir_check_payload_w(struct v3d_compile *c)
         if (c->s->info.stage != MESA_SHADER_FRAGMENT)
                 return;
 
-        bool any_centroid = false;
-        for (int i = 0; i < ARRAY_SIZE(c->centroid_flags); i++) {
-                if (c->centroid_flags[i])
-                        any_centroid = true;
-        }
-        if (!any_centroid)
-                return;
-
         vir_for_each_inst_inorder(inst, c) {
                 for (int i = 0; i < vir_get_nsrc(inst); i++) {
                         if (inst->src[i].file == QFILE_REG &&
                             inst->src[i].index == 0) {
-                                c->uses_centroid_and_center_w = true;
+                                c->uses_center_w = true;
                                 return;
                         }
                 }

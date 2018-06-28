@@ -696,8 +696,6 @@ _mesa_validate_DrawElements(struct gl_context *ctx,
                             GLenum mode, GLsizei count, GLenum type,
                             const GLvoid *indices)
 {
-   FLUSH_CURRENT(ctx, 0);
-
    return validate_DrawElements_common(ctx, mode, count, type, indices,
                                        "glDrawElements");
 }
@@ -715,8 +713,6 @@ _mesa_validate_MultiDrawElements(struct gl_context *ctx,
                                  GLsizei primcount)
 {
    GLsizei i;
-
-   FLUSH_CURRENT(ctx, 0);
 
    /*
     * Section 2.3.1 (Errors) of the OpenGL 4.5 (Core Profile) spec says:
@@ -780,8 +776,6 @@ _mesa_validate_DrawRangeElements(struct gl_context *ctx, GLenum mode,
                                  GLsizei count, GLenum type,
                                  const GLvoid *indices)
 {
-   FLUSH_CURRENT(ctx, 0);
-
    if (end < start) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glDrawRangeElements(end<start)");
       return GL_FALSE;
@@ -895,8 +889,6 @@ static bool
 validate_draw_arrays(struct gl_context *ctx, const char *func,
                      GLenum mode, GLsizei count, GLsizei numInstances)
 {
-   FLUSH_CURRENT(ctx, 0);
-
    if (count < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE, "%s(count)", func);
       return false;
@@ -971,8 +963,6 @@ _mesa_validate_MultiDrawArrays(struct gl_context *ctx, GLenum mode,
 {
    int i;
 
-   FLUSH_CURRENT(ctx, 0);
-
    if (!_mesa_valid_prim_mode(ctx, mode, "glMultiDrawArrays"))
       return false;
 
@@ -1018,8 +1008,6 @@ _mesa_validate_DrawElementsInstanced(struct gl_context *ctx,
                                      GLenum mode, GLsizei count, GLenum type,
                                      const GLvoid *indices, GLsizei numInstances)
 {
-   FLUSH_CURRENT(ctx, 0);
-
    if (numInstances < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE,
                   "glDrawElementsInstanced(numInstances=%d)", numInstances);
@@ -1039,8 +1027,6 @@ _mesa_validate_DrawTransformFeedback(struct gl_context *ctx,
                                      GLuint stream,
                                      GLsizei numInstances)
 {
-   FLUSH_CURRENT(ctx, 0);
-
    if (!_mesa_valid_prim_mode(ctx, mode, "glDrawTransformFeedback*(mode)")) {
       return GL_FALSE;
    }
@@ -1206,10 +1192,10 @@ valid_draw_indirect_elements(struct gl_context *ctx,
    return valid_draw_indirect(ctx, mode, indirect, size, name);
 }
 
-static inline GLboolean
-valid_draw_indirect_multi(struct gl_context *ctx,
-                          GLsizei primcount, GLsizei stride,
-                          const char *name)
+GLboolean
+_mesa_valid_draw_indirect_multi(struct gl_context *ctx,
+                                GLsizei primcount, GLsizei stride,
+                                const char *name)
 {
 
    /* From the ARB_multi_draw_indirect specification:
@@ -1244,8 +1230,6 @@ _mesa_validate_DrawArraysIndirect(struct gl_context *ctx,
 {
    const unsigned drawArraysNumParams = 4;
 
-   FLUSH_CURRENT(ctx, 0);
-
    return valid_draw_indirect(ctx, mode,
                               indirect, drawArraysNumParams * sizeof(GLuint),
                               "glDrawArraysIndirect");
@@ -1257,8 +1241,6 @@ _mesa_validate_DrawElementsIndirect(struct gl_context *ctx,
                                     const GLvoid *indirect)
 {
    const unsigned drawElementsNumParams = 5;
-
-   FLUSH_CURRENT(ctx, 0);
 
    return valid_draw_indirect_elements(ctx, mode, type,
                                        indirect, drawElementsNumParams * sizeof(GLuint),
@@ -1274,13 +1256,11 @@ _mesa_validate_MultiDrawArraysIndirect(struct gl_context *ctx,
    GLsizeiptr size = 0;
    const unsigned drawArraysNumParams = 4;
 
-   FLUSH_CURRENT(ctx, 0);
-
    /* caller has converted stride==0 to drawArraysNumParams * sizeof(GLuint) */
    assert(stride != 0);
 
-   if (!valid_draw_indirect_multi(ctx, primcount, stride,
-                                  "glMultiDrawArraysIndirect"))
+   if (!_mesa_valid_draw_indirect_multi(ctx, primcount, stride,
+                                        "glMultiDrawArraysIndirect"))
       return GL_FALSE;
 
    /* number of bytes of the indirect buffer which will be read */
@@ -1304,13 +1284,11 @@ _mesa_validate_MultiDrawElementsIndirect(struct gl_context *ctx,
    GLsizeiptr size = 0;
    const unsigned drawElementsNumParams = 5;
 
-   FLUSH_CURRENT(ctx, 0);
-
    /* caller has converted stride==0 to drawElementsNumParams * sizeof(GLuint) */
    assert(stride != 0);
 
-   if (!valid_draw_indirect_multi(ctx, primcount, stride,
-                                  "glMultiDrawElementsIndirect"))
+   if (!_mesa_valid_draw_indirect_multi(ctx, primcount, stride,
+                                        "glMultiDrawElementsIndirect"))
       return GL_FALSE;
 
    /* number of bytes of the indirect buffer which will be read */
@@ -1385,13 +1363,11 @@ _mesa_validate_MultiDrawArraysIndirectCount(struct gl_context *ctx,
    GLsizeiptr size = 0;
    const unsigned drawArraysNumParams = 4;
 
-   FLUSH_CURRENT(ctx, 0);
-
    /* caller has converted stride==0 to drawArraysNumParams * sizeof(GLuint) */
    assert(stride != 0);
 
-   if (!valid_draw_indirect_multi(ctx, maxdrawcount, stride,
-                                  "glMultiDrawArraysIndirectCountARB"))
+   if (!_mesa_valid_draw_indirect_multi(ctx, maxdrawcount, stride,
+                                        "glMultiDrawArraysIndirectCountARB"))
       return GL_FALSE;
 
    /* number of bytes of the indirect buffer which will be read */
@@ -1418,13 +1394,11 @@ _mesa_validate_MultiDrawElementsIndirectCount(struct gl_context *ctx,
    GLsizeiptr size = 0;
    const unsigned drawElementsNumParams = 5;
 
-   FLUSH_CURRENT(ctx, 0);
-
    /* caller has converted stride==0 to drawElementsNumParams * sizeof(GLuint) */
    assert(stride != 0);
 
-   if (!valid_draw_indirect_multi(ctx, maxdrawcount, stride,
-                                  "glMultiDrawElementsIndirectCountARB"))
+   if (!_mesa_valid_draw_indirect_multi(ctx, maxdrawcount, stride,
+                                        "glMultiDrawElementsIndirectCountARB"))
       return GL_FALSE;
 
    /* number of bytes of the indirect buffer which will be read */

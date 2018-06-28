@@ -436,6 +436,7 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib,
 }
 
 #define   G_009910_MICRO_TILE_MODE(x)          (((x) >> 0) & 0x03)
+#define     V_009910_ADDR_SURF_THICK_MICRO_TILING                   0x03
 #define   G_009910_MICRO_TILE_MODE_NEW(x)      (((x) >> 22) & 0x07)
 
 static void gfx6_set_micro_tile_mode(struct radeon_surf *surf,
@@ -544,6 +545,66 @@ static int gfx6_surface_settings(ADDR_HANDLE addrlib,
 		surf->tile_swizzle = AddrBaseSwizzleOut.tileSwizzle;
 	}
 	return 0;
+}
+
+void ac_compute_cmask(const struct radeon_info *info,
+		      const struct ac_surf_config *config,
+		      struct radeon_surf *surf)
+{
+	unsigned pipe_interleave_bytes = info->pipe_interleave_bytes;
+	unsigned num_pipes = info->num_tile_pipes;
+	unsigned cl_width, cl_height;
+
+	if (surf->flags & RADEON_SURF_Z_OR_SBUFFER)
+		return;
+
+	assert(info->chip_class <= VI);
+
+	switch (num_pipes) {
+	case 2:
+		cl_width = 32;
+		cl_height = 16;
+		break;
+	case 4:
+		cl_width = 32;
+		cl_height = 32;
+		break;
+	case 8:
+		cl_width = 64;
+		cl_height = 32;
+		break;
+	case 16: /* Hawaii */
+		cl_width = 64;
+		cl_height = 64;
+		break;
+	default:
+		assert(0);
+		return;
+	}
+
+	unsigned base_align = num_pipes * pipe_interleave_bytes;
+
+	unsigned width = align(config->info.width, cl_width*8);
+	unsigned height = align(config->info.height, cl_height*8);
+	unsigned slice_elements = (width * height) / (8*8);
+
+	/* Each element of CMASK is a nibble. */
+	unsigned slice_bytes = slice_elements / 2;
+
+	surf->u.legacy.cmask_slice_tile_max = (width * height) / (128*128);
+	if (surf->u.legacy.cmask_slice_tile_max)
+		surf->u.legacy.cmask_slice_tile_max -= 1;
+
+	unsigned num_layers;
+	if (config->is_3d)
+		num_layers = config->info.depth;
+	else if (config->is_cube)
+		num_layers = 6;
+	else
+		num_layers = config->info.array_size;
+
+	surf->cmask_alignment = MAX2(256, base_align);
+	surf->cmask_size = align(slice_bytes, base_align) * num_layers;
 }
 
 /**
@@ -670,7 +731,7 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib,
 		 config->info.levels == 1);
 
 	AddrSurfInfoIn.flags.noStencil = (surf->flags & RADEON_SURF_SBUFFER) == 0;
-	AddrSurfInfoIn.flags.compressZ = AddrSurfInfoIn.flags.depth;
+	AddrSurfInfoIn.flags.compressZ = !!(surf->flags & RADEON_SURF_Z_OR_SBUFFER);
 
 	/* On CI/VI, the DB uses the same pitch and tile mode (except tilesplit)
 	 * for Z and stencil. This can cause a number of problems which we work
@@ -950,6 +1011,18 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib,
 	surf->is_displayable = surf->is_linear ||
 			       surf->micro_tile_mode == RADEON_MICRO_MODE_DISPLAY ||
 			       surf->micro_tile_mode == RADEON_MICRO_MODE_ROTATED;
+
+	/* The rotated micro tile mode doesn't work if both CMASK and RB+ are
+	 * used at the same time. This case is not currently expected to occur
+	 * because we don't use rotated. Enforce this restriction on all chips
+	 * to facilitate testing.
+	 */
+	if (surf->micro_tile_mode == RADEON_MICRO_MODE_ROTATED) {
+		assert(!"rotate micro tile mode is unsupported");
+		return ADDR_ERROR;
+	}
+
+	ac_compute_cmask(info, config, surf);
 	return 0;
 }
 
@@ -1274,8 +1347,8 @@ static int gfx9_compute_miptree(ADDR_HANDLE addrlib,
 
 			surf->u.gfx9.cmask.rb_aligned = cin.cMaskFlags.rbAligned;
 			surf->u.gfx9.cmask.pipe_aligned = cin.cMaskFlags.pipeAligned;
-			surf->u.gfx9.cmask_size = cout.cmaskBytes;
-			surf->u.gfx9.cmask_alignment = cout.baseAlign;
+			surf->cmask_size = cout.cmaskBytes;
+			surf->cmask_alignment = cout.baseAlign;
 		}
 	}
 
@@ -1416,7 +1489,7 @@ static int gfx9_compute_surface(ADDR_HANDLE addrlib,
 	surf->htile_slice_size = 0;
 	surf->u.gfx9.surf_offset = 0;
 	surf->u.gfx9.stencil_offset = 0;
-	surf->u.gfx9.cmask_size = 0;
+	surf->cmask_size = 0;
 
 	/* Calculate texture layout information. */
 	r = gfx9_compute_miptree(addrlib, config, surf, compressed,
@@ -1490,8 +1563,13 @@ static int gfx9_compute_surface(ADDR_HANDLE addrlib,
 		case ADDR_SW_4KB_R_X:
 		case ADDR_SW_64KB_R_X:
 		case ADDR_SW_VAR_R_X:
-			surf->micro_tile_mode = RADEON_MICRO_MODE_ROTATED;
-			break;
+			/* The rotated micro tile mode doesn't work if both CMASK and RB+ are
+			 * used at the same time. This case is not currently expected to occur
+			 * because we don't use rotated. Enforce this restriction on all chips
+			 * to facilitate testing.
+			 */
+			assert(!"rotate micro tile mode is unsupported");
+			return ADDR_ERROR;
 
 		/* Z = depth. */
 		case ADDR_SW_4KB_Z:

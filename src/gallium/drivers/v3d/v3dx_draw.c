@@ -78,10 +78,10 @@ v3d_start_draw(struct v3d_context *v3d)
 
         cl_emit(&job->bcl, TILE_BINNING_MODE_CONFIGURATION_PART1, config) {
 #if V3D_VERSION >= 40
-                config.width_in_pixels_minus_1 = v3d->framebuffer.width - 1;
-                config.height_in_pixels_minus_1 = v3d->framebuffer.height - 1;
-                config.number_of_render_targets_minus_1 =
-                        MAX2(v3d->framebuffer.nr_cbufs, 1) - 1;
+                config.width_in_pixels = v3d->framebuffer.width;
+                config.height_in_pixels = v3d->framebuffer.height;
+                config.number_of_render_targets =
+                        MAX2(v3d->framebuffer.nr_cbufs, 1);
 #else /* V3D_VERSION < 40 */
                 config.tile_state_data_array_base_address =
                         cl_address(job->tile_state, 0);
@@ -178,7 +178,7 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                          v3d->prog.fs->prog_data.fs->discard);
 
                 shader.fragment_shader_uses_real_pixel_centre_w_in_addition_to_centroid_w2 =
-                        v3d->prog.fs->prog_data.fs->uses_centroid_and_center_w;
+                        v3d->prog.fs->prog_data.fs->uses_center_w;
 
                 shader.number_of_varyings_in_fragment_shader =
                         v3d->prog.fs->prog_data.base->num_inputs;
@@ -214,6 +214,9 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                 shader.fragment_shader_uniforms_address = fs_uniforms;
 
 #if V3D_VERSION >= 41
+                shader.min_coord_shader_input_segments_required_in_play = 1;
+                shader.min_vertex_shader_input_segments_required_in_play = 1;
+
                 shader.coordinate_shader_4_way_threadable =
                         v3d->prog.cs->prog_data.vs->base.threads == 4;
                 shader.vertex_shader_4_way_threadable =
@@ -278,6 +281,7 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                         attr.maximum_index = 0xffffff;
 #endif
                 }
+                STATIC_ASSERT(sizeof(vtx->attrs) >= VC5_MAX_ATTRIBUTES * size);
         }
 
         if (vtx->num_elements == 0) {
@@ -370,7 +374,8 @@ v3d_update_job_ez(struct v3d_context *v3d, struct v3d_job *job)
                 job->ez_state = VC5_EZ_DISABLED;
         }
 
-        if (job->first_ez_state == VC5_EZ_UNDECIDED)
+        if (job->first_ez_state == VC5_EZ_UNDECIDED &&
+            (job->ez_state != VC5_EZ_DISABLED || job->draw_calls_queued == 0))
                 job->first_ez_state = job->ez_state;
 }
 
@@ -555,21 +560,29 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         }
         job->draw_calls_queued++;
 
-        if (v3d->zsa && job->zsbuf &&
-            (v3d->zsa->base.depth.enabled ||
-             v3d->zsa->base.stencil[0].enabled)) {
+        /* Increment the TF offsets by how many verts we wrote.  XXX: This
+         * needs some clamping to the buffer size.
+         */
+        for (int i = 0; i < v3d->streamout.num_targets; i++)
+                v3d->streamout.offsets[i] += info->count;
+
+        if (v3d->zsa && job->zsbuf && v3d->zsa->base.depth.enabled) {
                 struct v3d_resource *rsc = v3d_resource(job->zsbuf->texture);
                 v3d_job_add_bo(job, rsc->bo);
 
-                if (v3d->zsa->base.depth.enabled) {
-                        job->resolve |= PIPE_CLEAR_DEPTH;
-                        rsc->initialized_buffers = PIPE_CLEAR_DEPTH;
-                }
+                job->resolve |= PIPE_CLEAR_DEPTH;
+                rsc->initialized_buffers = PIPE_CLEAR_DEPTH;
+        }
 
-                if (v3d->zsa->base.stencil[0].enabled) {
-                        job->resolve |= PIPE_CLEAR_STENCIL;
-                        rsc->initialized_buffers |= PIPE_CLEAR_STENCIL;
-                }
+        if (v3d->zsa && job->zsbuf && v3d->zsa->base.stencil[0].enabled) {
+                struct v3d_resource *rsc = v3d_resource(job->zsbuf->texture);
+                if (rsc->separate_stencil)
+                        rsc = rsc->separate_stencil;
+
+                v3d_job_add_bo(job, rsc->bo);
+
+                job->resolve |= PIPE_CLEAR_STENCIL;
+                rsc->initialized_buffers |= PIPE_CLEAR_STENCIL;
         }
 
         for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++) {

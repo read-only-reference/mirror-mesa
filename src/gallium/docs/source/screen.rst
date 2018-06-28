@@ -438,6 +438,9 @@ PIPE_CONSERVATIVE_RASTER_PRE_SNAP mode is supported for points and lines.
 works with conservative rasterization.
 * ``PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS``: The maximum
 subpixel precision bias in bits during conservative rasterization.
+* ``PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS``: True is the driver supports
+  programmable sample location through ```get_sample_pixel_grid``` and
+  ```set_sample_locations```.
 
 
 .. _pipe_capf:
@@ -546,6 +549,7 @@ MOV OUT[0], CONST[0][3]  # copy vector 3 of constbuf 0
   how many HW counters are available for this stage. (0 uses SSBO atomics).
 * ``PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS``: If atomic counters are
   separate, how many atomic counter buffers are available for this stage.
+* ``PIPE_SHADER_CAP_SCALAR_ISA``: Whether the ISA is a scalar one.
 
 .. _pipe_compute_cap:
 

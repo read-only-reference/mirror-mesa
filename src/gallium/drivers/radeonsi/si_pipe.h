@@ -30,7 +30,6 @@
 
 #include "util/u_dynarray.h"
 #include "util/u_idalloc.h"
-#include "util/u_range.h"
 #include "util/u_threaded_context.h"
 
 #ifdef PIPE_ARCH_BIG_ENDIAN
@@ -141,6 +140,7 @@ enum {
 	DBG_NO_WC,
 	DBG_CHECK_VM,
 	DBG_RESERVE_VMID,
+	DBG_ZERO_VRAM,
 
 	/* 3D engine options: */
 	DBG_SWITCH_ON_EOP,
@@ -216,38 +216,31 @@ struct r600_resource {
 	 */
 	bool				TC_L2_dirty;
 
-	/* Whether the resource has been exported via resource_get_handle. */
-	unsigned			external_usage; /* PIPE_HANDLE_USAGE_* */
-
 	/* Whether this resource is referenced by bindless handles. */
 	bool				texture_handle_allocated;
 	bool				image_handle_allocated;
+
+	/* Whether the resource has been exported via resource_get_handle. */
+	unsigned			external_usage; /* PIPE_HANDLE_USAGE_* */
 };
 
-struct r600_transfer {
+struct si_transfer {
 	struct threaded_transfer	b;
 	struct r600_resource		*staging;
 	unsigned			offset;
 };
 
-struct r600_cmask_info {
-	uint64_t offset;
-	uint64_t size;
-	unsigned alignment;
-	unsigned slice_tile_max;
-	uint64_t base_address_reg;
-};
-
-struct r600_texture {
+struct si_texture {
 	struct r600_resource		buffer;
 
 	struct radeon_surf		surface;
 	uint64_t			size;
-	struct r600_texture		*flushed_depth_texture;
+	struct si_texture		*flushed_depth_texture;
 
 	/* Colorbuffer compression and fast clear. */
 	uint64_t			fmask_offset;
-	struct r600_cmask_info		cmask;
+	uint64_t			cmask_offset;
+	uint64_t			cmask_base_address_reg;
 	struct r600_resource		*cmask_buffer;
 	uint64_t			dcc_offset; /* 0 = disabled */
 	unsigned			cb_color_info; /* fast clear enable bit */
@@ -305,7 +298,7 @@ struct r600_texture {
 	unsigned			num_slow_clears;
 };
 
-struct r600_surface {
+struct si_surface {
 	struct pipe_surface		base;
 
 	/* These can vary with block-compressed textures. */
@@ -386,11 +379,10 @@ union si_mmio_counters {
 	unsigned array[0];
 };
 
-struct r600_memory_object {
+struct si_memory_object {
 	struct pipe_memory_object	b;
 	struct pb_buffer		*buf;
 	uint32_t			stride;
-	uint32_t			offset;
 };
 
 /* Saved CS data for debugging features. */
@@ -409,7 +401,7 @@ struct si_screen {
 
 	struct radeon_info		info;
 	uint64_t			debug_flags;
-	char				renderer_string[100];
+	char				renderer_string[183];
 
 	unsigned			gs_table_depth;
 	unsigned			tess_offchip_block_dw_size;
@@ -744,8 +736,8 @@ struct si_context {
 
 	struct radeon_winsys		*ws;
 	struct radeon_winsys_ctx	*ctx;
-	struct radeon_winsys_cs		*gfx_cs;
-	struct radeon_winsys_cs		*dma_cs;
+	struct radeon_cmdbuf		*gfx_cs;
+	struct radeon_cmdbuf		*dma_cs;
 	struct pipe_fence_handle	*last_gfx_fence;
 	struct pipe_fence_handle	*last_sdma_fence;
 	struct r600_resource		*eop_bug_scratch;
@@ -893,7 +885,6 @@ struct si_context {
 	int			last_sh_base_reg;
 	int			last_primitive_restart_en;
 	int			last_restart_index;
-	int			last_gs_out_prim;
 	int			last_prim;
 	int			last_multi_vgt_param;
 	int			last_rast_prim;
@@ -917,6 +908,7 @@ struct si_context {
 	int			last_tes_sh_base;
 	bool			last_tess_uses_primid;
 	unsigned		last_num_patches;
+	int			last_ls_hs_config;
 
 	/* Debug state. */
 	bool			is_debug;
@@ -1004,7 +996,7 @@ struct si_context {
 	bool				render_cond_force_off; /* for u_blitter */
 
 	/* Statistics gathering for the DCC enablement heuristic. It can't be
-	 * in r600_texture because r600_texture can be shared by multiple
+	 * in si_texture because si_texture can be shared by multiple
 	 * contexts. This is for back buffers only. We shouldn't get too many
 	 * of those.
 	 *
@@ -1013,7 +1005,7 @@ struct si_context {
 	 * enabled by DCC stat gathering.
 	 */
 	struct {
-		struct r600_texture		*tex;
+		struct si_texture		*tex;
 		/* Query queue: 0 = usually active, 1 = waiting, 2 = readback. */
 		struct pipe_query		*ps_stats[3];
 		/* If all slots are used and another slot is needed,
@@ -1033,6 +1025,8 @@ struct si_context {
 
 	void (*dma_clear_buffer)(struct si_context *sctx, struct pipe_resource *dst,
 				 uint64_t offset, uint64_t size, unsigned value);
+
+	struct si_tracked_regs			tracked_regs;
 };
 
 /* cik_sdma.c */
@@ -1058,10 +1052,10 @@ void si_resource_copy_region(struct pipe_context *ctx,
 			     struct pipe_resource *src,
 			     unsigned src_level,
 			     const struct pipe_box *src_box);
-void si_decompress_dcc(struct si_context *sctx, struct r600_texture *rtex);
+void si_decompress_dcc(struct si_context *sctx, struct si_texture *tex);
 void si_blit_decompress_depth(struct pipe_context *ctx,
-			      struct r600_texture *texture,
-			      struct r600_texture *staging,
+			      struct si_texture *texture,
+			      struct si_texture *staging,
 			      unsigned first_level, unsigned last_level,
 			      unsigned first_layer, unsigned last_layer,
 			      unsigned first_sample, unsigned last_sample);
@@ -1094,7 +1088,7 @@ void si_init_buffer_functions(struct si_context *sctx);
 enum pipe_format si_simplify_cb_format(enum pipe_format format);
 bool vi_alpha_is_on_msb(enum pipe_format format);
 void vi_dcc_clear_level(struct si_context *sctx,
-			struct r600_texture *rtex,
+			struct si_texture *tex,
 			unsigned level, unsigned clear_value);
 void si_init_clear_functions(struct si_context *sctx);
 
@@ -1130,7 +1124,7 @@ void cik_emit_prefetch_L2(struct si_context *sctx, bool vertex_stage_only);
 void si_init_cp_dma_functions(struct si_context *sctx);
 
 /* si_debug.c */
-void si_save_cs(struct radeon_winsys *ws, struct radeon_winsys_cs *cs,
+void si_save_cs(struct radeon_winsys *ws, struct radeon_cmdbuf *cs,
 		struct radeon_saved_cs *saved, bool get_buffer_list);
 void si_clear_saved_cs(struct radeon_saved_cs *saved);
 void si_destroy_saved_cs(struct si_saved_cs *scs);
@@ -1216,26 +1210,23 @@ struct pipe_video_buffer *si_video_buffer_create(struct pipe_context *pipe,
 void si_update_vs_viewport_state(struct si_context *ctx);
 void si_init_viewport_functions(struct si_context *ctx);
 
-/* r600_texture.c */
+/* si_texture.c */
 bool si_prepare_for_dma_blit(struct si_context *sctx,
-			     struct r600_texture *rdst,
+			     struct si_texture *dst,
 			     unsigned dst_level, unsigned dstx,
 			     unsigned dsty, unsigned dstz,
-			     struct r600_texture *rsrc,
+			     struct si_texture *src,
 			     unsigned src_level,
 			     const struct pipe_box *src_box);
-void si_texture_get_cmask_info(struct si_screen *sscreen,
-			       struct r600_texture *rtex,
-			       struct r600_cmask_info *out);
 void si_eliminate_fast_color_clear(struct si_context *sctx,
-				   struct r600_texture *rtex);
+				   struct si_texture *tex);
 void si_texture_discard_cmask(struct si_screen *sscreen,
-			      struct r600_texture *rtex);
+			      struct si_texture *tex);
 bool si_init_flushed_depth_texture(struct pipe_context *ctx,
 				   struct pipe_resource *texture,
-				   struct r600_texture **staging);
+				   struct si_texture **staging);
 void si_print_texture_info(struct si_screen *sscreen,
-			   struct r600_texture *rtex, struct u_log_context *log);
+			   struct si_texture *tex, struct u_log_context *log);
 struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ);
 bool vi_dcc_formats_compatible(enum pipe_format format1,
@@ -1254,15 +1245,15 @@ struct pipe_surface *si_create_surface_custom(struct pipe_context *pipe,
 					      unsigned width, unsigned height);
 unsigned si_translate_colorswap(enum pipe_format format, bool do_endian_swap);
 void vi_separate_dcc_try_enable(struct si_context *sctx,
-				struct r600_texture *tex);
+				struct si_texture *tex);
 void vi_separate_dcc_start_query(struct si_context *sctx,
-				 struct r600_texture *tex);
+				 struct si_texture *tex);
 void vi_separate_dcc_stop_query(struct si_context *sctx,
-				struct r600_texture *tex);
+				struct si_texture *tex);
 void vi_separate_dcc_process_and_reset_stats(struct pipe_context *ctx,
-					     struct r600_texture *tex);
+					     struct si_texture *tex);
 bool si_texture_disable_dcc(struct si_context *sctx,
-			    struct r600_texture *rtex);
+			    struct si_texture *tex);
 void si_init_screen_texture_functions(struct si_screen *sscreen);
 void si_init_context_texture_functions(struct si_context *sctx);
 
@@ -1284,24 +1275,24 @@ r600_resource_reference(struct r600_resource **ptr, struct r600_resource *res)
 }
 
 static inline void
-r600_texture_reference(struct r600_texture **ptr, struct r600_texture *res)
+si_texture_reference(struct si_texture **ptr, struct si_texture *res)
 {
 	pipe_resource_reference((struct pipe_resource **)ptr, &res->buffer.b.b);
 }
 
 static inline bool
-vi_dcc_enabled(struct r600_texture *tex, unsigned level)
+vi_dcc_enabled(struct si_texture *tex, unsigned level)
 {
 	return tex->dcc_offset && level < tex->surface.num_dcc_levels;
 }
 
 static inline unsigned
-si_tile_mode_index(struct r600_texture *rtex, unsigned level, bool stencil)
+si_tile_mode_index(struct si_texture *tex, unsigned level, bool stencil)
 {
 	if (stencil)
-		return rtex->surface.u.legacy.stencil_tiling_index[level];
+		return tex->surface.u.legacy.stencil_tiling_index[level];
 	else
-		return rtex->surface.u.legacy.tiling_index[level];
+		return tex->surface.u.legacy.tiling_index[level];
 }
 
 static inline void
@@ -1456,20 +1447,20 @@ si_make_DB_shader_coherent(struct si_context *sctx, unsigned num_samples,
 }
 
 static inline bool
-si_can_sample_zs(struct r600_texture *tex, bool stencil_sampler)
+si_can_sample_zs(struct si_texture *tex, bool stencil_sampler)
 {
 	return (stencil_sampler && tex->can_sample_s) ||
 	       (!stencil_sampler && tex->can_sample_z);
 }
 
 static inline bool
-si_htile_enabled(struct r600_texture *tex, unsigned level)
+si_htile_enabled(struct si_texture *tex, unsigned level)
 {
 	return tex->htile_offset && level == 0;
 }
 
 static inline bool
-vi_tc_compat_htile_enabled(struct r600_texture *tex, unsigned level)
+vi_tc_compat_htile_enabled(struct si_texture *tex, unsigned level)
 {
 	assert(!tex->tc_compatible_htile || tex->htile_offset);
 	return tex->tc_compatible_htile && level == 0;
@@ -1503,6 +1494,23 @@ static inline unsigned si_get_total_colormask(struct si_context *sctx)
 	return colormask;
 }
 
+#define UTIL_ALL_PRIM_LINE_MODES ((1 << PIPE_PRIM_LINES) | \
+				  (1 << PIPE_PRIM_LINE_LOOP) | \
+				  (1 << PIPE_PRIM_LINE_STRIP) | \
+				  (1 << PIPE_PRIM_LINES_ADJACENCY) | \
+				  (1 << PIPE_PRIM_LINE_STRIP_ADJACENCY))
+
+static inline bool util_prim_is_lines(unsigned prim)
+{
+	return ((1 << prim) & UTIL_ALL_PRIM_LINE_MODES) != 0;
+}
+
+static inline bool util_prim_is_points_or_lines(unsigned prim)
+{
+	return ((1 << prim) & (UTIL_ALL_PRIM_LINE_MODES |
+			       (1 << PIPE_PRIM_POINTS))) != 0;
+}
+
 /**
  * Return true if there is enough memory in VRAM and GTT for the buffers
  * added so far.
@@ -1512,7 +1520,7 @@ static inline unsigned si_get_total_colormask(struct si_context *sctx)
  */
 static inline bool
 radeon_cs_memory_below_limit(struct si_screen *screen,
-			     struct radeon_winsys_cs *cs,
+			     struct radeon_cmdbuf *cs,
 			     uint64_t vram, uint64_t gtt)
 {
 	vram += cs->used_vram;
@@ -1537,7 +1545,7 @@ radeon_cs_memory_below_limit(struct si_screen *screen,
  * rebuilt.
  */
 static inline void radeon_add_to_buffer_list(struct si_context *sctx,
-					     struct radeon_winsys_cs *cs,
+					     struct radeon_cmdbuf *cs,
 					     struct r600_resource *rbo,
 					     enum radeon_bo_usage usage,
 					     enum radeon_bo_priority priority)

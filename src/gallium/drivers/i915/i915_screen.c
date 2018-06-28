@@ -333,6 +333,7 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_FENCE_SIGNAL:
    case PIPE_CAP_CONSTBUF0_FLAGS:
    case PIPE_CAP_PACKED_UNIFORMS:
+   case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
       return 0;
 
    case PIPE_CAP_MAX_VIEWPORTS:
@@ -511,9 +512,6 @@ i915_is_format_supported(struct pipe_screen *screen,
    };
    const enum pipe_format *list;
    uint i;
-
-   if (!util_format_is_supported(format, tex_usage))
-      return FALSE;
 
    if (sample_count > 1)
       return FALSE;

@@ -95,7 +95,7 @@ foreach g : [['70', ['gen7_cmd_buffer.c']], ['75', ['gen7_cmd_buffer.c']],
              ['100', ['gen8_cmd_buffer.c']], ['110', ['gen8_cmd_buffer.c']]]
   _gen = g[0]
   libanv_gen_libs += static_library(
-    'libanv_gen@0@'.format(_gen),
+    'anv_gen@0@'.format(_gen),
     [anv_gen_files, g[1], anv_entrypoints[0], anv_extensions_h],
     include_directories : [
       inc_common, inc_compiler, inc_drm_uapi, inc_intel, inc_vulkan_util,
@@ -162,6 +162,16 @@ if with_platform_wayland
   anv_deps += dep_wayland_client
   anv_flags += '-DVK_USE_PLATFORM_WAYLAND_KHR'
   libanv_files += files('anv_wsi_wayland.c')
+endif
+
+if with_platform_drm
+  anv_flags += '-DVK_USE_PLATFORM_DISPLAY_KHR'
+  libanv_files += files('anv_wsi_display.c')
+endif
+
+if with_xlib_lease
+  anv_deps += [dep_xcb_xrandr, dep_xlib_xrandr]
+  anv_flags += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
 endif
 
 libanv_common = static_library(

@@ -21,6 +21,10 @@ libgallium_la_SOURCES = \
 	$(NIR_SOURCES) \
 	$(GENERATED_SOURCES)
 
+if HAVE_PLATFORM_ANDROID
+libgallium_la_SOURCES += util/u_debug_stack_android.cpp
+endif
+
 if HAVE_LIBDRM
 
 AM_CFLAGS += \
@@ -118,6 +122,7 @@ EXTRA_DIST = \
 	postprocess/ADDING \
 	rbug/README \
 	target-helpers \
+	util/u_debug_stack_android.cpp \
 	util/u_format.csv \
 	util/u_format_pack.py \
 	util/u_format_parse.py \

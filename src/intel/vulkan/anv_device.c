@@ -274,10 +274,12 @@ anv_physical_device_init_uuids(struct anv_physical_device *device)
 static VkResult
 anv_physical_device_init(struct anv_physical_device *device,
                          struct anv_instance *instance,
+                         const char *primary_path,
                          const char *path)
 {
    VkResult result;
    int fd;
+   int master_fd = -1;
 
    brw_process_intel_debug_variable();
 
@@ -377,6 +379,9 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->use_softpin = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_SOFTPIN)
       && device->supports_48bit_addresses;
 
+   device->has_context_isolation =
+      anv_gem_get_param(fd, I915_PARAM_HAS_CONTEXT_ISOLATION);
+
    bool swizzled = anv_gem_get_bit6_swizzle(fd, I915_TILING_X);
 
    /* Starting with Gen10, the timestamp frequency of the command streamer may
@@ -427,13 +432,28 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->compiler->shader_debug_log = compiler_debug_log;
    device->compiler->shader_perf_log = compiler_perf_log;
    device->compiler->supports_pull_constants = false;
-   device->compiler->constant_buffer_0_is_relative = true;
+   device->compiler->constant_buffer_0_is_relative =
+      device->info.gen < 8 || !device->has_context_isolation;
 
    isl_device_init(&device->isl_dev, &device->info, swizzled);
 
    result = anv_physical_device_init_uuids(device);
    if (result != VK_SUCCESS)
       goto fail;
+
+   if (instance->enabled_extensions.KHR_display) {
+      master_fd = open(primary_path, O_RDWR | O_CLOEXEC);
+      if (master_fd >= 0) {
+         /* prod the device with a GETPARAM call which will fail if
+          * we don't have permission to even render on this device
+          */
+         if (anv_gem_get_param(master_fd, I915_PARAM_CHIPSET_ID) == 0) {
+            close(master_fd);
+            master_fd = -1;
+         }
+      }
+   }
+   device->master_fd = master_fd;
 
    result = anv_init_wsi(device);
    if (result != VK_SUCCESS) {
@@ -444,11 +464,15 @@ anv_physical_device_init(struct anv_physical_device *device,
    anv_physical_device_get_supported_extensions(device,
                                                 &device->supported_extensions);
 
+
    device->local_fd = fd;
+
    return VK_SUCCESS;
 
 fail:
    close(fd);
+   if (master_fd != -1)
+      close(master_fd);
    return result;
 }
 
@@ -458,6 +482,8 @@ anv_physical_device_finish(struct anv_physical_device *device)
    anv_finish_wsi(device);
    ralloc_free(device->compiler);
    close(device->local_fd);
+   if (device->master_fd >= 0)
+      close(device->master_fd);
 }
 
 static void *
@@ -631,6 +657,7 @@ anv_enumerate_devices(struct anv_instance *instance)
 
          result = anv_physical_device_init(&instance->physicalDevice,
                         instance,
+                        devices[i]->nodes[DRM_NODE_PRIMARY],
                         devices[i]->nodes[DRM_NODE_RENDER]);
          if (result != VK_ERROR_INCOMPATIBLE_DRIVER)
             break;
@@ -901,7 +928,7 @@ void anv_GetPhysicalDeviceProperties(
       .maxGeometryOutputComponents              = 128,
       .maxGeometryOutputVertices                = 256,
       .maxGeometryTotalOutputComponents         = 1024,
-      .maxFragmentInputComponents               = 128,
+      .maxFragmentInputComponents               = 112, /* 128 components - (POS, PSIZ, CLIP_DIST0, CLIP_DIST1) */
       .maxFragmentOutputAttachments             = 8,
       .maxFragmentDualSrcAttachments            = 1,
       .maxFragmentCombinedOutputResources       = 8,
@@ -1326,6 +1353,11 @@ anv_device_init_trivial_batch(struct anv_device *device)
    if (device->instance->physicalDevice.has_exec_async)
       device->trivial_batch_bo.flags |= EXEC_OBJECT_ASYNC;
 
+   if (device->instance->physicalDevice.use_softpin)
+      device->trivial_batch_bo.flags |= EXEC_OBJECT_PINNED;
+
+   anv_vma_alloc(device, &device->trivial_batch_bo);
+
    void *map = anv_gem_mmap(device, device->trivial_batch_bo.gem_handle,
                             0, 4096, 0);
 
@@ -1607,7 +1639,8 @@ VkResult anv_CreateDevice(
    uint64_t bo_flags =
       (physical_device->supports_48bit_addresses ? EXEC_OBJECT_SUPPORTS_48B_ADDRESS : 0) |
       (physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0) |
-      (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0);
+      (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0) |
+      (physical_device->use_softpin ? EXEC_OBJECT_PINNED : 0);
 
    anv_bo_pool_init(&device->batch_bo_pool, device, bo_flags);
 
@@ -1615,28 +1648,48 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_batch_bo_pool;
 
-   /* For the state pools we explicitly disable 48bit. */
-   bo_flags = (physical_device->has_exec_async ? EXEC_OBJECT_ASYNC : 0) |
-              (physical_device->has_exec_capture ? EXEC_OBJECT_CAPTURE : 0);
+   if (!physical_device->use_softpin)
+      bo_flags &= ~EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
 
-   result = anv_state_pool_init(&device->dynamic_state_pool, device, 16384,
+   result = anv_state_pool_init(&device->dynamic_state_pool, device,
+                                DYNAMIC_STATE_POOL_MIN_ADDRESS,
+                                16384,
                                 bo_flags);
    if (result != VK_SUCCESS)
       goto fail_bo_cache;
 
-   result = anv_state_pool_init(&device->instruction_state_pool, device, 16384,
+   result = anv_state_pool_init(&device->instruction_state_pool, device,
+                                INSTRUCTION_STATE_POOL_MIN_ADDRESS,
+                                16384,
                                 bo_flags);
    if (result != VK_SUCCESS)
       goto fail_dynamic_state_pool;
 
-   result = anv_state_pool_init(&device->surface_state_pool, device, 4096,
+   result = anv_state_pool_init(&device->surface_state_pool, device,
+                                SURFACE_STATE_POOL_MIN_ADDRESS,
+                                4096,
                                 bo_flags);
    if (result != VK_SUCCESS)
       goto fail_instruction_state_pool;
 
+   if (physical_device->use_softpin) {
+      result = anv_state_pool_init(&device->binding_table_pool, device,
+                                   BINDING_TABLE_POOL_MIN_ADDRESS,
+                                   4096,
+                                   bo_flags);
+      if (result != VK_SUCCESS)
+         goto fail_surface_state_pool;
+   }
+
    result = anv_bo_init_new(&device->workaround_bo, device, 1024);
    if (result != VK_SUCCESS)
-      goto fail_surface_state_pool;
+      goto fail_binding_table_pool;
+
+   if (physical_device->use_softpin)
+      device->workaround_bo.flags |= EXEC_OBJECT_PINNED;
+
+   if (!anv_vma_alloc(device, &device->workaround_bo))
+      goto fail_workaround_bo;
 
    anv_device_init_trivial_batch(device);
 
@@ -1687,6 +1740,9 @@ VkResult anv_CreateDevice(
    anv_scratch_pool_finish(device, &device->scratch_pool);
    anv_gem_munmap(device->workaround_bo.map, device->workaround_bo.size);
    anv_gem_close(device, device->workaround_bo.gem_handle);
+ fail_binding_table_pool:
+   if (physical_device->use_softpin)
+      anv_state_pool_finish(&device->binding_table_pool);
  fail_surface_state_pool:
    anv_state_pool_finish(&device->surface_state_pool);
  fail_instruction_state_pool:
@@ -1715,6 +1771,7 @@ void anv_DestroyDevice(
     const VkAllocationCallbacks*                pAllocator)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+   struct anv_physical_device *physical_device = &device->instance->physicalDevice;
 
    if (!device)
       return;
@@ -1733,12 +1790,16 @@ void anv_DestroyDevice(
    anv_scratch_pool_finish(device, &device->scratch_pool);
 
    anv_gem_munmap(device->workaround_bo.map, device->workaround_bo.size);
+   anv_vma_free(device, &device->workaround_bo);
    anv_gem_close(device, device->workaround_bo.gem_handle);
 
+   anv_vma_free(device, &device->trivial_batch_bo);
    anv_gem_close(device, device->trivial_batch_bo.gem_handle);
    if (device->info.gen >= 10)
       anv_gem_close(device, device->hiz_clear_bo.gem_handle);
 
+   if (physical_device->use_softpin)
+      anv_state_pool_finish(&device->binding_table_pool);
    anv_state_pool_finish(&device->surface_state_pool);
    anv_state_pool_finish(&device->instruction_state_pool);
    anv_state_pool_finish(&device->dynamic_state_pool);
@@ -2014,6 +2075,27 @@ VkResult anv_AllocateMemory(
    mem->map = NULL;
    mem->map_size = 0;
 
+   uint64_t bo_flags = 0;
+
+   assert(mem->type->heapIndex < pdevice->memory.heap_count);
+   if (pdevice->memory.heaps[mem->type->heapIndex].supports_48bit_addresses)
+      bo_flags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+
+   const struct wsi_memory_allocate_info *wsi_info =
+      vk_find_struct_const(pAllocateInfo->pNext, WSI_MEMORY_ALLOCATE_INFO_MESA);
+   if (wsi_info && wsi_info->implicit_sync) {
+      /* We need to set the WRITE flag on window system buffers so that GEM
+       * will know we're writing to them and synchronize uses on other rings
+       * (eg if the display server uses the blitter ring).
+       */
+      bo_flags |= EXEC_OBJECT_WRITE;
+   } else if (pdevice->has_exec_async) {
+      bo_flags |= EXEC_OBJECT_ASYNC;
+   }
+
+   if (pdevice->use_softpin)
+      bo_flags |= EXEC_OBJECT_PINNED;
+
    const VkImportMemoryFdInfoKHR *fd_info =
       vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
 
@@ -2028,7 +2110,7 @@ VkResult anv_AllocateMemory(
                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
 
       result = anv_bo_cache_import(device, &device->bo_cache,
-                                   fd_info->fd, &mem->bo);
+                                   fd_info->fd, bo_flags, &mem->bo);
       if (result != VK_SUCCESS)
          goto fail;
 
@@ -2066,7 +2148,7 @@ VkResult anv_AllocateMemory(
       close(fd_info->fd);
    } else {
       result = anv_bo_cache_alloc(device, &device->bo_cache,
-                                  pAllocateInfo->allocationSize,
+                                  pAllocateInfo->allocationSize, bo_flags,
                                   &mem->bo);
       if (result != VK_SUCCESS)
          goto fail;
@@ -2093,22 +2175,6 @@ VkResult anv_AllocateMemory(
             }
          }
       }
-   }
-
-   assert(mem->type->heapIndex < pdevice->memory.heap_count);
-   if (pdevice->memory.heaps[mem->type->heapIndex].supports_48bit_addresses)
-      mem->bo->flags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
-
-   const struct wsi_memory_allocate_info *wsi_info =
-      vk_find_struct_const(pAllocateInfo->pNext, WSI_MEMORY_ALLOCATE_INFO_MESA);
-   if (wsi_info && wsi_info->implicit_sync) {
-      /* We need to set the WRITE flag on window system buffers so that GEM
-       * will know we're writing to them and synchronize uses on other rings
-       * (eg if the display server uses the blitter ring).
-       */
-      mem->bo->flags |= EXEC_OBJECT_WRITE;
-   } else if (pdevice->has_exec_async) {
-      mem->bo->flags |= EXEC_OBJECT_ASYNC;
    }
 
    *pMem = anv_device_memory_to_handle(mem);

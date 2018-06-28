@@ -95,10 +95,9 @@ struct radv_tcs_variant_key {
 struct radv_fs_variant_key {
 	uint32_t col_format;
 	uint8_t log2_ps_iter_samples;
-	uint8_t log2_num_samples;
+	uint8_t num_samples;
 	uint32_t is_int8;
 	uint32_t is_int10;
-	uint32_t multisample : 1;
 };
 
 struct radv_shader_variant_key {
@@ -120,6 +119,7 @@ struct radv_nir_compiler_options {
 	bool dump_shader;
 	bool dump_preoptir;
 	bool record_llvm_ir;
+	bool check_ir;
 	enum radeon_family family;
 	enum chip_class chip_class;
 	uint32_t tess_offchip_block_dw_size;
@@ -135,7 +135,6 @@ enum radv_ud_index {
 	AC_UD_VS_VERTEX_BUFFERS = AC_UD_SHADER_START,
 	AC_UD_VS_BASE_VERTEX_START_INSTANCE,
 	AC_UD_VS_MAX_UD,
-	AC_UD_PS_SAMPLE_POS_OFFSET = AC_UD_SHADER_START,
 	AC_UD_PS_MAX_UD,
 	AC_UD_CS_GRID_SIZE = AC_UD_SHADER_START,
 	AC_UD_CS_MAX_UD,

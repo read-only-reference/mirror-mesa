@@ -118,7 +118,6 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.KHR_robustness = true;
    ctx->Extensions.AMD_seamless_cubemap_per_texture = true;
    ctx->Extensions.APPLE_object_purgeable = true;
-   ctx->Extensions.ATI_separate_stencil = true;
    ctx->Extensions.ATI_texture_env_combine3 = true;
    ctx->Extensions.MESA_pack_invert = true;
    ctx->Extensions.NV_conditional_render = true;
@@ -245,6 +244,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.EXT_shader_samples_identical = true;
       ctx->Extensions.OES_primitive_bounding_box = true;
       ctx->Extensions.OES_texture_buffer = true;
+      ctx->Extensions.ARB_fragment_shader_interlock = true;
 
       if (can_do_pipelined_register_writes(brw->screen)) {
          ctx->Extensions.ARB_draw_indirect = true;

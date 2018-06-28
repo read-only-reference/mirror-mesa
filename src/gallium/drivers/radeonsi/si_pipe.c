@@ -28,10 +28,10 @@
 #include "si_shader_internal.h"
 #include "sid.h"
 
+#include "ac_llvm_util.h"
 #include "radeon/radeon_uvd.h"
 #include "gallivm/lp_bld_misc.h"
 #include "util/disk_cache.h"
-#include "util/hash_table.h"
 #include "util/u_log.h"
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
@@ -82,6 +82,7 @@ static const struct debug_named_value debug_options[] = {
 	{ "nowc", DBG(NO_WC), "Disable GTT write combining" },
 	{ "check_vm", DBG(CHECK_VM), "Check VM faults and dump debug info." },
 	{ "reserve_vmid", DBG(RESERVE_VMID), "Force VMID reservation per context." },
+	{ "zerovram", DBG(ZERO_VRAM), "Clear VRAM allocations." },
 
 	/* 3D engine options: */
 	{ "switch_on_eop", DBG(SWITCH_ON_EOP), "Program WD/IA to switch on end-of-packet." },
@@ -241,7 +242,7 @@ static void si_destroy_context(struct pipe_context *context)
 				sctx->b.destroy_query(&sctx->b,
 							sctx->dcc_stats[i].ps_stats[j]);
 
-		r600_texture_reference(&sctx->dcc_stats[i].tex, NULL);
+		si_texture_reference(&sctx->dcc_stats[i].tex, NULL);
 	}
 
 	if (sctx->query_result_shader)
@@ -536,7 +537,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 			goto fail;
 
 		/* Initialize the memory. */
-		struct radeon_winsys_cs *cs = sctx->gfx_cs;
+		struct radeon_cmdbuf *cs = sctx->gfx_cs;
 		radeon_emit(cs, PKT3(PKT3_WRITE_DATA, 3, 0));
 		radeon_emit(cs, S_370_DST_SEL(V_370_MEMORY_SYNC) |
 			    S_370_WR_CONFIRM(1) |
@@ -865,7 +866,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		ac_print_gpu_info(&sscreen->info);
 
 	slab_create_parent(&sscreen->pool_transfers,
-			   sizeof(struct r600_transfer), 64);
+			   sizeof(struct si_transfer), 64);
 
 	sscreen->force_aniso = MIN2(16, debug_get_num_option("R600_TEX_ANISO", -1));
 	if (sscreen->force_aniso >= 0) {

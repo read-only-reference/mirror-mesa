@@ -30,7 +30,7 @@
 /* initialize */
 void si_need_gfx_cs_space(struct si_context *ctx)
 {
-	struct radeon_winsys_cs *cs = ctx->gfx_cs;
+	struct radeon_cmdbuf *cs = ctx->gfx_cs;
 
 	/* There is no need to flush the DMA IB here, because
 	 * r600_need_dma_space always flushes the GFX IB if there is
@@ -67,7 +67,7 @@ void si_need_gfx_cs_space(struct si_context *ctx)
 void si_flush_gfx_cs(struct si_context *ctx, unsigned flags,
 		     struct pipe_fence_handle **fence)
 {
-	struct radeon_winsys_cs *cs = ctx->gfx_cs;
+	struct radeon_cmdbuf *cs = ctx->gfx_cs;
 	struct radeon_winsys *ws = ctx->ws;
 	unsigned wait_flags = 0;
 
@@ -284,6 +284,7 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	ctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 	ctx->viewports.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 	ctx->viewports.depth_range_dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.guardband);
 	si_mark_atom_dirty(ctx, &ctx->atoms.s.scissors);
 	si_mark_atom_dirty(ctx, &ctx->atoms.s.viewports);
 
@@ -309,7 +310,6 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	ctx->last_index_size = -1;
 	ctx->last_primitive_restart_en = -1;
 	ctx->last_restart_index = SI_RESTART_INDEX_UNKNOWN;
-	ctx->last_gs_out_prim = -1;
 	ctx->last_prim = -1;
 	ctx->last_multi_vgt_param = -1;
 	ctx->last_rast_prim = -1;
@@ -319,6 +319,10 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	ctx->last_tcs = NULL;
 	ctx->last_tes_sh_base = -1;
 	ctx->last_num_tcs_input_cp = -1;
+	ctx->last_ls_hs_config = -1; /* impossible value */
 
 	ctx->cs_shader_state.initialized = false;
+
+	/* Set all saved registers state to unknown */
+	ctx->tracked_regs.reg_saved = 0;
 }

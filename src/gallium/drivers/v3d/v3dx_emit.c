@@ -343,20 +343,18 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 cl_emit(&job->bcl, CLIP_WINDOW, clip) {
                         clip.clip_window_left_pixel_coordinate = minx;
                         clip.clip_window_bottom_pixel_coordinate = miny;
-                        clip.clip_window_width_in_pixels = maxx - minx;
-                        clip.clip_window_height_in_pixels = maxy - miny;
-
-#if V3D_VERSION < 41
-                        /* The HW won't entirely clip out when scissor w/h is
-                         * 0.  Just treat it the same as rasterizer discard.
-                         */
-                        if (clip.clip_window_width_in_pixels == 0 ||
-                            clip.clip_window_height_in_pixels == 0) {
+                        if (maxx > minx && maxy > miny) {
+                                clip.clip_window_width_in_pixels = maxx - minx;
+                                clip.clip_window_height_in_pixels = maxy - miny;
+                        } else if (V3D_VERSION < 41) {
+                                /* The HW won't entirely clip out when scissor
+                                 * w/h is 0.  Just treat it the same as
+                                 * rasterizer discard.
+                                 */
                                 rasterizer_discard = true;
                                 clip.clip_window_width_in_pixels = 1;
                                 clip.clip_window_height_in_pixels = 1;
                         }
-#endif
                 }
 
                 job->draw_min_x = MIN2(job->draw_min_x, minx);
@@ -431,8 +429,14 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 cl_emit(&job->bcl, DEPTH_OFFSET, depth) {
                         depth.depth_offset_factor =
                                 v3d->rasterizer->offset_factor;
-                        depth.depth_offset_units =
-                                v3d->rasterizer->offset_units;
+                        if (job->zsbuf &&
+                            job->zsbuf->format == PIPE_FORMAT_Z16_UNORM) {
+                                depth.depth_offset_units =
+                                        v3d->rasterizer->z16_offset_units;
+                        } else {
+                                depth.depth_offset_units =
+                                        v3d->rasterizer->offset_units;
+                        }
                 }
         }
 
@@ -461,10 +465,12 @@ v3dX(emit_state)(struct pipe_context *pctx)
                                 v3d->viewport.scale[2];
                 }
                 cl_emit(&job->bcl, CLIPPER_Z_MIN_MAX_CLIPPING_PLANES, clip) {
-                        clip.minimum_zw = (v3d->viewport.translate[2] -
-                                           v3d->viewport.scale[2]);
-                        clip.maximum_zw = (v3d->viewport.translate[2] +
-                                           v3d->viewport.scale[2]);
+                        float z1 = (v3d->viewport.translate[2] -
+                                    v3d->viewport.scale[2]);
+                        float z2 = (v3d->viewport.translate[2] +
+                                    v3d->viewport.scale[2]);
+                        clip.minimum_zw = MIN2(z1, z2);
+                        clip.maximum_zw = MAX2(z1, z2);
                 }
 
                 cl_emit(&job->bcl, VIEWPORT_OFFSET, vp) {
@@ -490,24 +496,12 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 struct pipe_blend_state *blend = v3d->blend;
 
                 cl_emit(&job->bcl, COLOUR_WRITE_MASKS, mask) {
-                        if (blend->independent_blend_enable) {
-                                mask.render_target_0_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[0].colormask, 0);
-                                mask.render_target_1_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[1].colormask, 1);
-                                mask.render_target_2_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[2].colormask, 2);
-                                mask.render_target_3_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[3].colormask, 3);
-                        } else {
-                                mask.render_target_0_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[0].colormask, 0);
-                                mask.render_target_1_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[0].colormask, 1);
-                                mask.render_target_2_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[0].colormask, 2);
-                                mask.render_target_3_per_colour_component_write_masks =
-                                        translate_colormask(v3d, blend->rt[0].colormask, 3);
+                        for (int i = 0; i < 4; i++) {
+                                int rt = blend->independent_blend_enable ? i : 0;
+                                int rt_mask = blend->rt[rt].colormask;
+
+                                mask.mask |= translate_colormask(v3d, rt_mask,
+                                                                 i) << (4 * i);
                         }
                 }
         }
@@ -690,6 +684,10 @@ v3dX(emit_state)(struct pipe_context *pctx)
                                 so->targets[i];
                         struct v3d_resource *rsc = target ?
                                 v3d_resource(target->buffer) : NULL;
+                        struct pipe_shader_state *vs = &v3d->prog.bind_vs->base;
+                        struct pipe_stream_output_info *info = &vs->stream_output;
+                        uint32_t offset = (v3d->streamout.offsets[i] *
+                                           info->stride[i] * 4);
 
 #if V3D_VERSION >= 40
                         if (!target)
@@ -698,9 +696,10 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         cl_emit(&job->bcl, TRANSFORM_FEEDBACK_BUFFER, output) {
                                 output.buffer_address =
                                         cl_address(rsc->bo,
-                                                   target->buffer_offset);
+                                                   target->buffer_offset +
+                                                   offset);
                                 output.buffer_size_in_32_bit_words =
-                                        target->buffer_size >> 2;
+                                        (target->buffer_size - offset) >> 2;
                                 output.buffer_number = i;
                         }
 #else /* V3D_VERSION < 40 */
@@ -708,7 +707,8 @@ v3dX(emit_state)(struct pipe_context *pctx)
                                 if (target) {
                                         output.address =
                                                 cl_address(rsc->bo,
-                                                           target->buffer_offset);
+                                                           target->buffer_offset +
+                                                           offset);
                                 }
                         };
 #endif /* V3D_VERSION < 40 */

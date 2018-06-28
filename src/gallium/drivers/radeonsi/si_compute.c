@@ -88,15 +88,16 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	struct si_shader_selector sel;
 	struct si_compiler *compiler;
 	struct pipe_debug_callback *debug = &program->compiler_ctx_state.debug;
+	struct si_screen *sscreen = program->screen;
 
 	assert(!debug->debug_message || debug->async);
 	assert(thread_index >= 0);
-	assert(thread_index < ARRAY_SIZE(program->screen->compiler));
-	compiler = &program->screen->compiler[thread_index];
+	assert(thread_index < ARRAY_SIZE(sscreen->compiler));
+	compiler = &sscreen->compiler[thread_index];
 
 	memset(&sel, 0, sizeof(sel));
 
-	sel.screen = program->screen;
+	sel.screen = sscreen;
 
 	if (program->ir_type == PIPE_SHADER_IR_TGSI) {
 		tgsi_scan_shader(program->ir.tgsi, &sel.info);
@@ -109,9 +110,12 @@ static void si_create_compute_state_async(void *job, int thread_index)
 		si_lower_nir(&sel);
 	}
 
+	/* Store the declared LDS size into tgsi_shader_info for the shader
+	 * cache to include it.
+	 */
+	sel.info.properties[TGSI_PROPERTY_CS_LOCAL_SIZE] = program->local_size;
 
 	sel.type = PIPE_SHADER_COMPUTE;
-	sel.local_size = program->local_size;
 	si_get_active_slot_masks(&sel.info,
 				 &program->active_const_and_shader_buffers,
 				 &program->active_samplers_and_images);
@@ -122,10 +126,36 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	program->uses_block_size = sel.info.uses_block_size;
 	program->uses_bindless_samplers = sel.info.uses_bindless_samplers;
 	program->uses_bindless_images = sel.info.uses_bindless_images;
+	program->variable_group_size =
+		sel.info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0;
 
-	if (si_shader_create(program->screen, compiler, &program->shader, debug)) {
-		program->shader.compilation_failed = true;
+	void *ir_binary = si_get_ir_binary(&sel);
+
+	/* Try to load the shader from the shader cache. */
+	mtx_lock(&sscreen->shader_cache_mutex);
+
+	if (ir_binary &&
+	    si_shader_cache_load_shader(sscreen, ir_binary, shader)) {
+		mtx_unlock(&sscreen->shader_cache_mutex);
+
+		si_shader_dump_stats_for_shader_db(shader, debug);
+		si_shader_dump(sscreen, shader, debug, PIPE_SHADER_COMPUTE,
+			       stderr, true);
+
+		if (si_shader_binary_upload(sscreen, shader))
+			program->shader.compilation_failed = true;
 	} else {
+		mtx_unlock(&sscreen->shader_cache_mutex);
+
+		if (si_shader_create(sscreen, compiler, &program->shader, debug)) {
+			program->shader.compilation_failed = true;
+
+			if (program->ir_type == PIPE_SHADER_IR_TGSI)
+				FREE(program->ir.tgsi);
+			program->shader.selector = NULL;
+			return;
+		}
+
 		bool scratch_enabled = shader->config.scratch_bytes_per_wave > 0;
 		unsigned user_sgprs = SI_NUM_RESOURCE_SGPRS +
 				      (sel.info.uses_grid_size ? 3 : 0) +
@@ -147,8 +177,12 @@ static void si_create_compute_state_async(void *job, int thread_index)
 						sel.info.uses_thread_id[1] ? 1 : 0) |
 			S_00B84C_LDS_SIZE(shader->config.lds_size);
 
-		program->variable_group_size =
-			sel.info.properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0;
+		if (ir_binary) {
+			mtx_lock(&sscreen->shader_cache_mutex);
+			if (!si_shader_cache_insert_shader(sscreen, ir_binary, shader, true))
+				FREE(ir_binary);
+			mtx_unlock(&sscreen->shader_cache_mutex);
+		}
 	}
 
 	if (program->ir_type == PIPE_SHADER_IR_TGSI)
@@ -188,28 +222,11 @@ static void *si_create_compute_state(
 		program->compiler_ctx_state.debug = sctx->debug;
 		program->compiler_ctx_state.is_debug_context = sctx->is_debug;
 		p_atomic_inc(&sscreen->num_shaders_created);
-		util_queue_fence_init(&program->ready);
 
-		struct util_async_debug_callback async_debug;
-		bool wait =
-			(sctx->debug.debug_message && !sctx->debug.async) ||
-			sctx->is_debug ||
-			si_can_dump_shader(sscreen, PIPE_SHADER_COMPUTE);
-
-		if (wait) {
-			u_async_debug_init(&async_debug);
-			program->compiler_ctx_state.debug = async_debug.base;
-		}
-
-		util_queue_add_job(&sscreen->shader_compiler_queue,
-				   program, &program->ready,
-				   si_create_compute_state_async, NULL);
-
-		if (wait) {
-			util_queue_fence_wait(&program->ready);
-			u_async_debug_drain(&async_debug, &sctx->debug);
-			u_async_debug_cleanup(&async_debug);
-		}
+		si_schedule_initial_compile(sctx, PIPE_SHADER_COMPUTE,
+					    &program->ready,
+					    &program->compiler_ctx_state,
+					    program, si_create_compute_state_async);
 	} else {
 		const struct pipe_llvm_program_header *header;
 		const char *code;
@@ -292,7 +309,7 @@ static void si_set_global_binding(
 
 static void si_initialize_compute(struct si_context *sctx)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	uint64_t bc_va;
 
 	radeon_set_sh_reg_seq(cs, R_00B858_COMPUTE_STATIC_THREAD_MGMT_SE0, 2);
@@ -385,7 +402,7 @@ static bool si_switch_compute_shader(struct si_context *sctx,
 				     const amd_kernel_code_t *code_object,
 				     unsigned offset)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	struct si_shader_config inline_config = {0};
 	struct si_shader_config *config;
 	uint64_t shader_va;
@@ -489,7 +506,7 @@ static void setup_scratch_rsrc_user_sgprs(struct si_context *sctx,
 					  const amd_kernel_code_t *code_object,
 					  unsigned user_sgpr)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	uint64_t scratch_va = sctx->compute_scratch_buffer->gpu_address;
 
 	unsigned max_private_element_size = AMD_HSA_BITS_GET(
@@ -534,7 +551,7 @@ static void si_setup_user_sgprs_co_v2(struct si_context *sctx,
 				      uint64_t kernel_args_va)
 {
 	struct si_compute *program = sctx->cs_shader_state.program;
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 
 	static const enum amd_code_property_mask_t workgroup_count_masks [] = {
 		AMD_CODE_PROPERTY_ENABLE_SGPR_GRID_WORKGROUP_COUNT_X,
@@ -623,7 +640,7 @@ static bool si_upload_compute_input(struct si_context *sctx,
 				    const amd_kernel_code_t *code_object,
 				    const struct pipe_grid_info *info)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	struct si_compute *program = sctx->cs_shader_state.program;
 	struct r600_resource *input_buffer = NULL;
 	unsigned kernel_args_size;
@@ -687,7 +704,7 @@ static void si_setup_tgsi_grid(struct si_context *sctx,
                                 const struct pipe_grid_info *info)
 {
 	struct si_compute *program = sctx->cs_shader_state.program;
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	unsigned grid_size_reg = R_00B900_COMPUTE_USER_DATA_0 +
 				 4 * SI_NUM_RESOURCE_SGPRS;
 	unsigned block_size_reg = grid_size_reg +
@@ -734,7 +751,7 @@ static void si_emit_dispatch_packets(struct si_context *sctx,
                                      const struct pipe_grid_info *info)
 {
 	struct si_screen *sscreen = sctx->screen;
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
+	struct radeon_cmdbuf *cs = sctx->gfx_cs;
 	bool render_cond_bit = sctx->render_cond && !sctx->render_cond_force_off;
 	unsigned waves_per_threadgroup =
 		DIV_ROUND_UP(info->block[0] * info->block[1] * info->block[2], 64);
@@ -940,7 +957,6 @@ void si_init_compute_functions(struct si_context *sctx)
 	sctx->b.create_compute_state = si_create_compute_state;
 	sctx->b.delete_compute_state = si_delete_compute_state;
 	sctx->b.bind_compute_state = si_bind_compute_state;
-/*	 ctx->context.create_sampler_view = evergreen_compute_create_sampler_view; */
 	sctx->b.set_compute_resources = si_set_compute_resources;
 	sctx->b.set_global_binding = si_set_global_binding;
 	sctx->b.launch_grid = si_launch_grid;

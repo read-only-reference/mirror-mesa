@@ -152,6 +152,7 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
          .subgroup_quad = true,
          .subgroup_shuffle = true,
          .subgroup_vote = true,
+         .stencil_export = device->instance->physicalDevice.info.gen >= 9,
       },
    };
 
@@ -179,6 +180,7 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
    NIR_PASS_V(nir, nir_lower_constant_initializers, nir_var_local);
    NIR_PASS_V(nir, nir_lower_returns);
    NIR_PASS_V(nir, nir_inline_functions);
+   NIR_PASS_V(nir, nir_copy_prop);
 
    /* Pick off the single entrypoint that we want */
    foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
@@ -194,6 +196,12 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
     * corresponding stores.
     */
    NIR_PASS_V(nir, nir_lower_constant_initializers, ~0);
+
+   /* Split member structs.  We do this before lower_io_to_temporaries so that
+    * it doesn't lower system values to temporaries by accident.
+    */
+   NIR_PASS_V(nir, nir_split_var_copies);
+   NIR_PASS_V(nir, nir_split_per_member_structs);
 
    NIR_PASS_V(nir, nir_remove_dead_variables,
               nir_var_shader_in | nir_var_shader_out | nir_var_system_value);
@@ -978,7 +986,7 @@ anv_pipeline_compile_fs(struct anv_pipeline *pipeline,
 
       const unsigned *shader_code =
          brw_compile_fs(compiler, NULL, mem_ctx, &key, &prog_data, nir,
-                        NULL, -1, -1, true, false, NULL, NULL);
+                        NULL, -1, -1, -1, true, false, NULL, NULL);
       if (shader_code == NULL) {
          ralloc_free(mem_ctx);
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);

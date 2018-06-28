@@ -116,6 +116,7 @@ v3d_create_rasterizer_state(struct pipe_context *pctx,
 
         if (cso->offset_tri) {
                 so->offset_units = float_to_187_half(cso->offset_units);
+                so->z16_offset_units = float_to_187_half(cso->offset_units * 256.0);
                 so->offset_factor = float_to_187_half(cso->offset_scale);
         }
 
@@ -194,6 +195,8 @@ v3d_create_depth_stencil_alpha_state(struct pipe_context *pctx,
         const struct pipe_stencil_state *back = &cso->stencil[1];
 
         if (front->enabled) {
+                STATIC_ASSERT(sizeof(so->stencil_front) >=
+                              cl_packet_length(STENCIL_CONFIG));
                 v3dx_pack(&so->stencil_front, STENCIL_CONFIG, config) {
                         config.front_config = true;
                         /* If !back->enabled, then the front values should be
@@ -214,6 +217,8 @@ v3d_create_depth_stencil_alpha_state(struct pipe_context *pctx,
                 }
         }
         if (back->enabled) {
+                STATIC_ASSERT(sizeof(so->stencil_back) >=
+                              cl_packet_length(STENCIL_CONFIG));
                 v3dx_pack(&so->stencil_back, STENCIL_CONFIG, config) {
                         config.front_config = false;
                         config.back_config = true;
@@ -551,9 +556,17 @@ v3d_create_sampler_state(struct pipe_context *pctx,
                                                    15);
                 sampler.max_level_of_detail = MIN2(cso->max_lod, 15);
 
+                /* If we're not doing inter-miplevel filtering, we need to
+                 * clamp the LOD so that we only sample from baselevel.
+                 * However, we need to still allow the calculated LOD to be
+                 * fractionally over the baselevel, so that the HW can decide
+                 * between the min and mag filters.
+                 */
                 if (cso->min_mip_filter == PIPE_TEX_MIPFILTER_NONE) {
-                        sampler.min_level_of_detail = 0;
-                        sampler.max_level_of_detail = 0;
+                        sampler.min_level_of_detail =
+                                MIN2(sampler.min_level_of_detail, 1.0 / 256.0);
+                        sampler.max_level_of_detail =
+                                MIN2(sampler.max_level_of_detail, 1.0 / 256.0);
                 }
 
                 if (cso->max_anisotropy) {
@@ -693,12 +706,14 @@ v3d_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
         int msaa_scale = prsc->nr_samples > 1 ? 2 : 1;
 
 #if V3D_VERSION >= 40
-        so->bo = v3d_bo_alloc(v3d->screen, cl_packet_length(SAMPLER_STATE),
-                              "sampler");
+        so->bo = v3d_bo_alloc(v3d->screen,
+                              cl_packet_length(TEXTURE_SHADER_STATE), "sampler");
         void *map = v3d_bo_map(so->bo);
 
         v3dx_pack(map, TEXTURE_SHADER_STATE, tex) {
 #else /* V3D_VERSION < 40 */
+        STATIC_ASSERT(sizeof(so->texture_shader_state) >=
+                      cl_packet_length(TEXTURE_SHADER_STATE));
         v3dx_pack(&so->texture_shader_state, TEXTURE_SHADER_STATE, tex) {
 #endif
 
@@ -895,8 +910,12 @@ v3d_set_stream_output_targets(struct pipe_context *pctx,
 
         assert(num_targets <= ARRAY_SIZE(so->targets));
 
-        for (i = 0; i < num_targets; i++)
+        for (i = 0; i < num_targets; i++) {
+                if (offsets[i] != -1)
+                        so->offsets[i] = offsets[i];
+
                 pipe_so_target_reference(&so->targets[i], targets[i]);
+        }
 
         for (; i < so->num_targets; i++)
                 pipe_so_target_reference(&so->targets[i], NULL);

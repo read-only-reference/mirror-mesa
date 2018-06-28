@@ -1235,9 +1235,6 @@ x11_swapchain_destroy(struct wsi_swapchain *anv_chain,
    struct x11_swapchain *chain = (struct x11_swapchain *)anv_chain;
    xcb_void_cookie_t cookie;
 
-   for (uint32_t i = 0; i < chain->base.image_count; i++)
-      x11_image_finish(chain, pAllocator, &chain->images[i]);
-
    if (chain->threaded) {
       chain->status = VK_ERROR_OUT_OF_DATE_KHR;
       /* Push a UINT32_MAX to wake up the manager */
@@ -1246,6 +1243,9 @@ x11_swapchain_destroy(struct wsi_swapchain *anv_chain,
       wsi_queue_destroy(&chain->acquire_queue);
       wsi_queue_destroy(&chain->present_queue);
    }
+
+   for (uint32_t i = 0; i < chain->base.image_count; i++)
+      x11_image_finish(chain, pAllocator, &chain->images[i]);
 
    xcb_unregister_for_special_event(chain->conn, chain->special_event);
    cookie = xcb_present_select_input_checked(chain->conn, chain->event_id,
@@ -1469,7 +1469,6 @@ wsi_x11_init_wsi(struct wsi_device *wsi_device,
    }
 
    wsi->base.get_support = x11_surface_get_support;
-   wsi->base.get_capabilities = x11_surface_get_capabilities;
    wsi->base.get_capabilities2 = x11_surface_get_capabilities2;
    wsi->base.get_formats = x11_surface_get_formats;
    wsi->base.get_formats2 = x11_surface_get_formats2;

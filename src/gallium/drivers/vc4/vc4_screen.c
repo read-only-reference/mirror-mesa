@@ -298,6 +298,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
         case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
         case PIPE_CAP_PACKED_UNIFORMS:
+        case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
                 return 0;
 
                 /* Stream output. */
@@ -464,6 +465,8 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
                 return 0;
+        case PIPE_SHADER_CAP_SCALAR_ISA:
+                return 1;
         default:
                 fprintf(stderr, "unknown shader param %d\n", param);
                 return 0;
@@ -483,8 +486,7 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
         if (sample_count > 1 && sample_count != VC4_MAX_SAMPLES)
                 return FALSE;
 
-        if ((target >= PIPE_MAX_TEXTURE_TYPES) ||
-            !util_format_is_supported(format, usage)) {
+        if (target >= PIPE_MAX_TEXTURE_TYPES) {
                 return FALSE;
         }
 

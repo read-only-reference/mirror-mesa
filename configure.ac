@@ -90,6 +90,7 @@ LIBOMXIL_TIZONIA_REQUIRED=0.10.0
 LIBVA_REQUIRED=0.39.0
 VDPAU_REQUIRED=1.1
 WAYLAND_REQUIRED=1.11
+WAYLAND_EGL_BACKEND_REQUIRED=3
 WAYLAND_PROTOCOLS_REQUIRED=1.8
 XCB_REQUIRED=1.9.3
 XCBDRI2_REQUIRED=1.8
@@ -109,7 +110,7 @@ LLVM_REQUIRED_OPENCL=3.9.0
 LLVM_REQUIRED_R600=3.9.0
 LLVM_REQUIRED_RADEONSI=5.0.0
 LLVM_REQUIRED_RADV=5.0.0
-LLVM_REQUIRED_SWR=4.0.0
+LLVM_REQUIRED_SWR=5.0.0
 
 dnl Check for progs
 AC_PROG_CPP
@@ -301,7 +302,10 @@ AX_CHECK_COMPILE_FLAG([-Wall],                                 [CFLAGS="$CFLAGS 
 AX_CHECK_COMPILE_FLAG([-Werror=implicit-function-declaration], [CFLAGS="$CFLAGS -Werror=implicit-function-declaration"])
 AX_CHECK_COMPILE_FLAG([-Werror=missing-prototypes],            [CFLAGS="$CFLAGS -Werror=missing-prototypes"])
 AX_CHECK_COMPILE_FLAG([-Wmissing-prototypes],                  [CFLAGS="$CFLAGS -Wmissing-prototypes"])
+dnl Dylan Baker: gcc and clang always accepr -Wno-*, hence check for the original warning, then set the no-* flag
+AX_CHECK_COMPILE_FLAG([-Wmissing-field-initializers],          [CFLAGS="$CFLAGS -Wno-missing-field-initializers"])
 AX_CHECK_COMPILE_FLAG([-fno-math-errno],                       [CFLAGS="$CFLAGS -fno-math-errno"])
+
 AX_CHECK_COMPILE_FLAG([-fno-trapping-math],                    [CFLAGS="$CFLAGS -fno-trapping-math"])
 AX_CHECK_COMPILE_FLAG([-fvisibility=hidden],                   [VISIBILITY_CFLAGS="-fvisibility=hidden"])
 
@@ -313,6 +317,7 @@ AX_CHECK_COMPILE_FLAG([-Wall],                                 [CXXFLAGS="$CXXFL
 AX_CHECK_COMPILE_FLAG([-fno-math-errno],                       [CXXFLAGS="$CXXFLAGS -fno-math-errno"])
 AX_CHECK_COMPILE_FLAG([-fno-trapping-math],                    [CXXFLAGS="$CXXFLAGS -fno-trapping-math"])
 AX_CHECK_COMPILE_FLAG([-fvisibility=hidden],                   [VISIBILITY_CXXFLAGS="-fvisibility=hidden"])
+AX_CHECK_COMPILE_FLAG([-Wmissing-field-initializers],          [CXXFLAGS="$CXXFLAGS -Wno-missing-field-initializers"])
 AC_LANG_POP([C++])
 
 # Flags to help ensure that certain portions of the code -- and only those
@@ -444,7 +449,8 @@ int main() {
     struct {
         uint64_t *v;
     } x;
-    return (int)__atomic_load_n(x.v, __ATOMIC_ACQUIRE);
+    return (int)__atomic_load_n(x.v, __ATOMIC_ACQUIRE) &
+           (int)__atomic_add_fetch(x.v, (uint64_t)1, __ATOMIC_ACQ_REL);
 }]])], GCC_ATOMIC_BUILTINS_SUPPORTED=yes, GCC_ATOMIC_BUILTINS_SUPPORTED=no)
 
 dnl If that didn't work, we try linking with -latomic, which is needed on some
@@ -458,7 +464,8 @@ if test "x$GCC_ATOMIC_BUILTINS_SUPPORTED" != xyes; then
         struct {
             uint64_t *v;
         } x;
-        return (int)__atomic_load_n(x.v, __ATOMIC_ACQUIRE);
+        return (int)__atomic_load_n(x.v, __ATOMIC_ACQUIRE) &
+               (int)__atomic_add_fetch(x.v, (uint64_t)1, __ATOMIC_ACQ_REL);
    }]])], GCC_ATOMIC_BUILTINS_SUPPORTED=yes LIBATOMIC_LIBS="-latomic",
           GCC_ATOMIC_BUILTINS_SUPPORTED=no)
    LDFLAGS=$save_LDFLAGS
@@ -759,21 +766,6 @@ aix* )
 esac
 
 AC_SUBST([LIB_EXT])
-
-dnl
-dnl potentially-infringing-but-nobody-knows-for-sure stuff
-dnl
-AC_ARG_ENABLE([texture-float],
-    [AS_HELP_STRING([--enable-texture-float],
-        [enable floating-point textures and renderbuffers @<:@default=disabled@:>@])],
-    [enable_texture_float="$enableval"],
-    [enable_texture_float=no]
-)
-if test "x$enable_texture_float" = xyes; then
-    AC_MSG_WARN([Floating-point textures enabled.])
-    AC_MSG_WARN([Please consult docs/patents.txt with your lawyer before building Mesa.])
-    DEFINES="$DEFINES -DTEXTURE_FLOAT_ENABLED"
-fi
 
 dnl
 dnl Arch/platform-specific settings
@@ -1576,6 +1568,7 @@ AM_CONDITIONAL(HAVE_APPLEDRI, test "x$enable_dri" = xyes -a "x$dri_platform" = x
 AM_CONDITIONAL(HAVE_LMSENSORS, test "x$enable_lmsensors" = xyes )
 AM_CONDITIONAL(HAVE_GALLIUM_EXTRA_HUD, test "x$enable_gallium_extra_hud" = xyes )
 AM_CONDITIONAL(HAVE_WINDOWSDRI, test "x$enable_dri" = xyes -a "x$dri_platform" = xwindows )
+AM_CONDITIONAL(HAVE_XLEASE, test "x$have_xlease" = xyes )
 
 AC_ARG_ENABLE([shared-glapi],
     [AS_HELP_STRING([--enable-shared-glapi],
@@ -1808,6 +1801,9 @@ for plat in $platforms; do
         PKG_CHECK_MODULES([WAYLAND_CLIENT], [wayland-client >= $WAYLAND_REQUIRED])
         PKG_CHECK_MODULES([WAYLAND_SERVER], [wayland-server >= $WAYLAND_REQUIRED])
         PKG_CHECK_MODULES([WAYLAND_PROTOCOLS], [wayland-protocols >= $WAYLAND_PROTOCOLS_REQUIRED])
+        if test "x$enable_egl" = xyes; then
+          PKG_CHECK_MODULES([WAYLAND_EGL], [wayland-egl-backend >= $WAYLAND_EGL_BACKEND_REQUIRED])
+        fi
         WAYLAND_PROTOCOLS_DATADIR=`$PKG_CONFIG --variable=pkgdatadir wayland-protocols`
 
         PKG_CHECK_MODULES([WAYLAND_SCANNER], [wayland-scanner],
@@ -1840,6 +1836,9 @@ for plat in $platforms; do
 
     android)
         PKG_CHECK_MODULES([ANDROID], [cutils hardware sync])
+        if test -n "$with_gallium_drivers"; then
+            PKG_CHECK_MODULES([BACKTRACE], [backtrace])
+        fi
         DEFINES="$DEFINES -DHAVE_ANDROID_PLATFORM"
         ;;
 
@@ -1875,11 +1874,44 @@ if test x"$enable_dri3" = xyes; then
     fi
 fi
 
+
+if echo "$platforms" | grep -q 'x11' && echo "$platforms" | grep -q 'drm'; then
+    have_xlease=yes
+else
+    have_xlease=no
+fi
+
+if test x"$have_xlease" = xyes; then
+    randr_modules="x11-xcb xcb-randr"
+    PKG_CHECK_MODULES([XCB_RANDR], [$randr_modules])
+    xlib_randr_modules="xrandr"
+    PKG_CHECK_MODULES([XLIB_RANDR], [$xlib_randr_modules])
+fi
+
 AM_CONDITIONAL(HAVE_PLATFORM_X11, echo "$platforms" | grep -q 'x11')
 AM_CONDITIONAL(HAVE_PLATFORM_WAYLAND, echo "$platforms" | grep -q 'wayland')
 AM_CONDITIONAL(HAVE_PLATFORM_DRM, echo "$platforms" | grep -q 'drm')
 AM_CONDITIONAL(HAVE_PLATFORM_SURFACELESS, echo "$platforms" | grep -q 'surfaceless')
 AM_CONDITIONAL(HAVE_PLATFORM_ANDROID, echo "$platforms" | grep -q 'android')
+
+AC_ARG_ENABLE(xlib-lease,
+    [AS_HELP_STRING([--enable-xlib-lease]
+                    [enable VK_acquire_xlib_display using X leases])],
+    [enable_xlib_lease=$enableval], [enable_xlib_lease=auto])
+case "x$enable_xlib_lease" in
+xyes)
+    ;;
+xno)
+    ;;
+*)
+    if echo "$platforms" | grep -q 'x11' && echo "$platforms" | grep -q 'drm'; then
+        enable_xlib_lease=yes
+    else
+        enable_xlib_lease=no
+    fi
+esac
+
+AM_CONDITIONAL(HAVE_XLIB_LEASE, test "x$enable_xlib_lease" = xyes)
 
 dnl
 dnl More DRI setup
@@ -2099,6 +2131,9 @@ if test -n "$with_vulkan_drivers"; then
             PKG_CHECK_MODULES([AMDGPU], [libdrm >= $LIBDRM_AMDGPU_REQUIRED libdrm_amdgpu >= $LIBDRM_AMDGPU_REQUIRED])
             radeon_llvm_check $LLVM_REQUIRED_RADV "radv"
             require_x11_dri3 "radv"
+            if test "x$acv_mako_found" = xno; then
+                AC_MSG_ERROR([Python mako module v$PYTHON_MAKO_REQUIRED or higher not found])
+            fi
             HAVE_RADEON_VULKAN=yes
             ;;
         *)
@@ -2216,13 +2251,13 @@ else
     have_vdpau_platform=no
 fi
 
-if echo $platforms | grep -q "x11\|drm"; then
+if echo $platforms | egrep -q "x11|drm"; then
     have_omx_platform=yes
 else
     have_omx_platform=no
 fi
 
-if echo $platforms | grep -q "x11\|drm\|wayland"; then
+if echo $platforms | egrep -q "x11|drm|wayland"; then
     have_va_platform=yes
 else
     have_va_platform=no
@@ -2761,8 +2796,9 @@ if test -n "$with_gallium_drivers"; then
 fi
 
 # XXX: Keep in sync with LLVM_REQUIRED_SWR
-AM_CONDITIONAL(SWR_INVALID_LLVM_VERSION, test "x$LLVM_VERSION" != x4.0.0 -a \
-                                              "x$LLVM_VERSION" != x4.0.1)
+AM_CONDITIONAL(SWR_INVALID_LLVM_VERSION, test "x$LLVM_VERSION" != x5.0.0 -a \
+                                              "x$LLVM_VERSION" != x5.0.1 -a \
+                                              "x$LLVM_VERSION" != x5.0.2)
 
 if test "x$enable_llvm" = "xyes" -a "$with_gallium_drivers"; then
     llvm_require_version $LLVM_REQUIRED_GALLIUM "gallium"
@@ -3019,8 +3055,6 @@ AC_CONFIG_FILES([Makefile
                  src/egl/Makefile
                  src/egl/main/egl.pc
                  src/egl/wayland/wayland-drm/Makefile
-                 src/egl/wayland/wayland-egl/Makefile
-                 src/egl/wayland/wayland-egl/wayland-egl.pc
                  src/gallium/Makefile
                  src/gallium/auxiliary/Makefile
                  src/gallium/auxiliary/pipe-loader/Makefile

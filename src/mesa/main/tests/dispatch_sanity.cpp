@@ -575,6 +575,46 @@ const struct function common_desktop_functions_possible[] = {
    { "glBlendFunci", 40, -1 },
    { "glBlendFuncSeparatei", 40, -1 },
 
+   { "glGetSubroutineUniformLocation", 40, -1 },
+   { "glGetSubroutineIndex", 40, -1 },
+   { "glGetActiveSubroutineUniformiv", 40, -1 },
+   { "glGetActiveSubroutineUniformName", 40, -1 },
+   { "glGetActiveSubroutineName", 40, -1 },
+   { "glUniformSubroutinesuiv", 40, -1 },
+   { "glGetUniformSubroutineuiv", 40, -1 },
+   { "glGetProgramStageiv", 40, -1 },
+
+   { "glUniform1d", 40, -1 },
+   { "glUniform2d", 40, -1 },
+   { "glUniform3d", 40, -1 },
+   { "glUniform4d", 40, -1 },
+   { "glUniform1dv", 40, -1 },
+   { "glUniform2dv", 40, -1 },
+   { "glUniform3dv", 40, -1 },
+   { "glUniform4dv", 40, -1 },
+   { "glUniformMatrix2dv", 40, -1 },
+   { "glUniformMatrix3dv", 40, -1 },
+   { "glUniformMatrix4dv", 40, -1 },
+   { "glUniformMatrix2x3dv", 40, -1 },
+   { "glUniformMatrix2x4dv", 40, -1 },
+   { "glUniformMatrix3x2dv", 40, -1 },
+   { "glUniformMatrix3x4dv", 40, -1 },
+   { "glUniformMatrix4x2dv", 40, -1 },
+   { "glUniformMatrix4x3dv", 40, -1 },
+   { "glGetUniformdv", 43, -1 },
+
+   /* GL 4.1 */
+   { "glVertexAttribL1d", 41, -1 },
+   { "glVertexAttribL2d", 41, -1 },
+   { "glVertexAttribL3d", 41, -1 },
+   { "glVertexAttribL4d", 41, -1 },
+   { "glVertexAttribL1dv", 41, -1 },
+   { "glVertexAttribL2dv", 41, -1 },
+   { "glVertexAttribL3dv", 41, -1 },
+   { "glVertexAttribL4dv", 41, -1 },
+   { "glVertexAttribLPointer", 41, -1 },
+   { "glGetVertexAttribLdv", 41, -1 },
+
    /* GL 4.3 */
    { "glIsRenderbuffer", 43, -1 },
    { "glBindRenderbuffer", 43, -1 },
@@ -856,6 +896,15 @@ const struct function common_desktop_functions_possible[] = {
 // { "glTextureStorage2DMultisampleEXT", 43, -1 },      // XXX: Add to xml
 // { "glTextureStorage3DMultisampleEXT", 43, -1 },      // XXX: Add to xml
 
+   { "glViewportArrayv", 43, -1 },
+   { "glViewportIndexedf", 43, -1 },
+   { "glViewportIndexedfv", 43, -1 },
+   { "glScissorArrayv", 43, -1 },
+   { "glScissorIndexed", 43, -1 },
+   { "glScissorIndexedv", 43, -1 },
+   { "glDepthRangeArrayv", 43, -1 },
+   { "glDepthRangeIndexed", 43, -1 },
+
 /* GL 4.5 */
    /* aliased versions checked above */
    //{ "glGetGraphicsResetStatus", 45, -1 },
@@ -1034,6 +1083,11 @@ const struct function common_desktop_functions_possible[] = {
 
    /* GL_NV_conservative_raster_pre_snap_triangles */
    { "glConservativeRasterParameteriNV", 10, -1 },
+
+   /* GL_ARB_sample_locations */
+   { "glFramebufferSampleLocationsfvARB", 30, -1 },
+   { "glNamedFramebufferSampleLocationsfvARB", 30, -1 },
+   { "glEvaluateDepthValuesARB", 30, -1 },
 
    { NULL, 0, -1 }
 };
@@ -1523,16 +1577,6 @@ const struct function gl_core_functions_possible[] = {
    /* GL 3.2 */
    { "glFramebufferTexture", 32, -1 },
 
-   /* GL 4.0 */
-   { "glGetSubroutineUniformLocation", 40, -1 },
-   { "glGetSubroutineIndex", 40, -1 },
-   { "glGetActiveSubroutineUniformiv", 40, -1 },
-   { "glGetActiveSubroutineUniformName", 40, -1 },
-   { "glGetActiveSubroutineName", 40, -1 },
-   { "glUniformSubroutinesuiv", 40, -1 },
-   { "glGetUniformSubroutineuiv", 40, -1 },
-   { "glGetProgramStageiv", 40, -1 },
-
    /* GL 4.3 */
    { "glIsRenderbuffer", 43, -1 },
    { "glBindRenderbuffer", 43, -1 },
@@ -1653,25 +1697,6 @@ const struct function gl_core_functions_possible[] = {
    { "glDrawArraysIndirect", 43, -1 },
    { "glDrawElementsIndirect", 43, -1 },
 
-   { "glUniform1d", 40, -1 },
-   { "glUniform2d", 40, -1 },
-   { "glUniform3d", 40, -1 },
-   { "glUniform4d", 40, -1 },
-   { "glUniform1dv", 40, -1 },
-   { "glUniform2dv", 40, -1 },
-   { "glUniform3dv", 40, -1 },
-   { "glUniform4dv", 40, -1 },
-   { "glUniformMatrix2dv", 40, -1 },
-   { "glUniformMatrix3dv", 40, -1 },
-   { "glUniformMatrix4dv", 40, -1 },
-   { "glUniformMatrix2x3dv", 40, -1 },
-   { "glUniformMatrix2x4dv", 40, -1 },
-   { "glUniformMatrix3x2dv", 40, -1 },
-   { "glUniformMatrix3x4dv", 40, -1 },
-   { "glUniformMatrix4x2dv", 40, -1 },
-   { "glUniformMatrix4x3dv", 40, -1 },
-   { "glGetUniformdv", 43, -1 },
-
    { "glBindTransformFeedback", 43, -1 },
    { "glDeleteTransformFeedbacks", 43, -1 },
    { "glGenTransformFeedbacks", 43, -1 },
@@ -1751,25 +1776,6 @@ const struct function gl_core_functions_possible[] = {
    { "glProgramUniformMatrix4x3dv", 40, -1 },
    { "glValidateProgramPipeline", 43, -1 },
    { "glGetProgramPipelineInfoLog", 43, -1 },
-
-   { "glVertexAttribL1d", 41, -1 },
-   { "glVertexAttribL2d", 41, -1 },
-   { "glVertexAttribL3d", 41, -1 },
-   { "glVertexAttribL4d", 41, -1 },
-   { "glVertexAttribL1dv", 41, -1 },
-   { "glVertexAttribL2dv", 41, -1 },
-   { "glVertexAttribL3dv", 41, -1 },
-   { "glVertexAttribL4dv", 41, -1 },
-   { "glVertexAttribLPointer", 41, -1 },
-   { "glGetVertexAttribLdv", 41, -1 },
-   { "glViewportArrayv", 43, -1 },
-   { "glViewportIndexedf", 43, -1 },
-   { "glViewportIndexedfv", 43, -1 },
-   { "glScissorArrayv", 43, -1 },
-   { "glScissorIndexed", 43, -1 },
-   { "glScissorIndexedv", 43, -1 },
-   { "glDepthRangeArrayv", 43, -1 },
-   { "glDepthRangeIndexed", 43, -1 },
 
 // { "glCreateSyncFromCLeventARB", 43, -1 },            // XXX: Add to xml
 
@@ -2780,6 +2786,11 @@ const struct function gles31_functions_possible[] = {
    { "glDepthRangeArrayfvOES", 31, -1 },
    { "glDepthRangeIndexedfOES", 31, -1 },
    { "glGetFloati_vOES", 31, -1 },
+
+   /* GL_ARB_sample_locations */
+   { "glFramebufferSampleLocationsfvARB", 31, -1 },
+   { "glNamedFramebufferSampleLocationsfvARB", 31, -1 },
+   { "glEvaluateDepthValuesARB", 31, -1 },
 
    { NULL, 0, -1 },
  };

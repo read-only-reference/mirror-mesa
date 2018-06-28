@@ -236,6 +236,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
    case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
+   case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -343,6 +344,7 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
+      case PIPE_SHADER_CAP_SCALAR_ISA:
          return 0;
       default:
          debug_printf("unknown vertex shader param %d\n", param);
@@ -395,6 +397,7 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
+      case PIPE_SHADER_CAP_SCALAR_ISA:
          return 0;
       default:
          debug_printf("unknown fragment shader param %d\n", param);
@@ -418,10 +421,6 @@ nv30_screen_is_format_supported(struct pipe_screen *pscreen,
 
    if (!(0x00000017 & (1 << sample_count)))
       return false;
-
-   if (!util_format_is_supported(format, bindings)) {
-      return false;
-   }
 
    /* shared is always supported */
    bindings &= ~PIPE_BIND_SHARED;

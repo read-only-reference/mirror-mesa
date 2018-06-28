@@ -269,6 +269,7 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
         case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
         case PIPE_CAP_PACKED_UNIFORMS:
+        case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
                 return 0;
 
                 /* Geometry shader output, unsupported. */
@@ -376,7 +377,7 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 if (shader == PIPE_SHADER_FRAGMENT)
                         return VC5_MAX_FS_INPUTS / 4;
                 else
-                        return 16;
+                        return VC5_MAX_ATTRIBUTES;
         case PIPE_SHADER_CAP_MAX_OUTPUTS:
                 if (shader == PIPE_SHADER_FRAGMENT)
                         return 4;
@@ -410,6 +411,8 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
                 return 0;
+        case PIPE_SHADER_CAP_SCALAR_ISA:
+                return 1;
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
@@ -443,8 +446,7 @@ v3d_screen_is_format_supported(struct pipe_screen *pscreen,
         if (sample_count > 1 && sample_count != VC5_MAX_SAMPLES)
                 return FALSE;
 
-        if ((target >= PIPE_MAX_TEXTURE_TYPES) ||
-            !util_format_is_supported(format, usage)) {
+        if (target >= PIPE_MAX_TEXTURE_TYPES) {
                 return FALSE;
         }
 

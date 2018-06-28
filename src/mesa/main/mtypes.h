@@ -2599,6 +2599,10 @@ struct gl_shader
    bool uses_gl_fragcoord;
 
    bool PostDepthCoverage;
+   bool PixelInterlockOrdered;
+   bool PixelInterlockUnordered;
+   bool SampleInterlockOrdered;
+   bool SampleInterlockUnordered;
    bool InnerCoverage;
 
    /**
@@ -2889,6 +2893,12 @@ struct gl_shader_program_data
 
    /* Mask of stages this program was linked against */
    unsigned linked_stages;
+
+   /* Whether the shaders of this program are loaded from SPIR-V binaries
+    * (all have the SPIR_V_BINARY_ARB state). This was introduced by the
+    * ARB_gl_spirv extension.
+    */
+   bool spirv;
 };
 
 /**
@@ -3485,6 +3495,11 @@ struct gl_framebuffer
    GLenum16 ColorDrawBuffer[MAX_DRAW_BUFFERS];
    GLenum16 ColorReadBuffer;
 
+   /* GL_ARB_sample_locations */
+   GLfloat *SampleLocationTable; /**< If NULL, no table has been specified */
+   GLboolean ProgrammableSampleLocations;
+   GLboolean SampleLocationPixelGrid;
+
    /** Computed from ColorDraw/ReadBuffer above */
    GLuint _NumColorDrawBuffers;
    gl_buffer_index _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS];
@@ -3711,6 +3726,18 @@ struct gl_constants
     * Allow GLSL #extension directives in the middle of shaders.
     */
    GLboolean AllowGLSLExtensionDirectiveMidShader;
+
+   /**
+    * Allow builtins as part of constant expressions. This was not allowed
+    * until GLSL 1.20 this allows it everywhere.
+    */
+   GLboolean AllowGLSLBuiltinConstantExpression;
+
+   /**
+    * Allow some relaxation of GLSL ES shader restrictions. This encompasses
+    * a number of relaxations to the ES shader rules.
+    */
+   GLboolean AllowGLSLRelaxedES;
 
    /**
     * Allow GLSL built-in variables to be redeclared verbatim
@@ -4074,6 +4101,7 @@ struct gl_extensions
    GLboolean ARB_fragment_shader;
    GLboolean ARB_framebuffer_no_attachments;
    GLboolean ARB_framebuffer_object;
+   GLboolean ARB_fragment_shader_interlock;
    GLboolean ARB_enhanced_layouts;
    GLboolean ARB_explicit_attrib_location;
    GLboolean ARB_explicit_uniform_location;
@@ -4095,6 +4123,7 @@ struct gl_extensions
    GLboolean ARB_post_depth_coverage;
    GLboolean ARB_query_buffer_object;
    GLboolean ARB_robust_buffer_access_behavior;
+   GLboolean ARB_sample_locations;
    GLboolean ARB_sample_shading;
    GLboolean ARB_seamless_cube_map;
    GLboolean ARB_shader_atomic_counter_ops;
@@ -4215,7 +4244,6 @@ struct gl_extensions
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;
-   GLboolean ATI_separate_stencil;
    GLboolean GREMEDY_string_marker;
    GLboolean INTEL_conservative_rasterization;
    GLboolean INTEL_performance_query;
@@ -4404,7 +4432,7 @@ struct gl_dlist_state
    GLvertexformat ListVtxfmt;
 
    GLubyte ActiveAttribSize[VERT_ATTRIB_MAX];
-   GLfloat CurrentAttrib[VERT_ATTRIB_MAX][4];
+   GLfloat CurrentAttrib[VERT_ATTRIB_MAX][8];
 
    GLubyte ActiveMaterialSize[MAT_ATTRIB_MAX];
    GLfloat CurrentMaterial[MAT_ATTRIB_MAX][4];
@@ -4559,6 +4587,9 @@ struct gl_driver_flags
 
    /** Shader constants (uniforms, program parameters, state constants) */
    uint64_t NewShaderConstants[MESA_SHADER_STAGES];
+
+   /** Programmable sample location state for gl_context::DrawBuffer */
+   uint64_t NewSampleLocations;
 };
 
 struct gl_buffer_binding
