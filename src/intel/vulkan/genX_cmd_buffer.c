@@ -67,6 +67,11 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
 {
    struct anv_device *device = cmd_buffer->device;
 
+   /* If we are emitting a new state base address we probably need to re-emit
+    * binding tables.
+    */
+   cmd_buffer->state.descriptors_dirty |= ~0;
+
    /* Emit a render target cache flush.
     *
     * This isn't documented anywhere in the PRM.  However, it seems to be
@@ -1367,7 +1372,7 @@ genX(BeginCommandBuffer)(
 
          if (iview) {
             VkImageLayout layout =
-                cmd_buffer->state.subpass->depth_stencil_attachment.layout;
+                cmd_buffer->state.subpass->depth_stencil_attachment->layout;
 
             enum isl_aux_usage aux_usage =
                anv_layout_to_aux_usage(&cmd_buffer->device->info, iview->image,
@@ -2026,6 +2031,26 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
          bt_map[bias + s] = surface_state.offset + state_offset;
          continue;
+      } else if (binding->set == ANV_DESCRIPTOR_SET_SHADER_CONSTANTS) {
+         struct anv_state surface_state =
+            anv_cmd_buffer_alloc_surface_state(cmd_buffer);
+
+         struct anv_address constant_data = {
+            .bo = &pipeline->device->dynamic_state_pool.block_pool.bo,
+            .offset = pipeline->shaders[stage]->constant_data.offset,
+         };
+         unsigned constant_data_size =
+            pipeline->shaders[stage]->constant_data_size;
+
+         const enum isl_format format =
+            anv_isl_format_for_descriptor_type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+         anv_fill_buffer_surface_state(cmd_buffer->device,
+                                       surface_state, format,
+                                       constant_data, constant_data_size, 1);
+
+         bt_map[bias + s] = surface_state.offset + state_offset;
+         add_surface_reloc(cmd_buffer, surface_state, constant_data);
+         continue;
       }
 
       const struct anv_descriptor *desc =
@@ -2379,30 +2404,44 @@ cmd_buffer_flush_push_constants(struct anv_cmd_buffer *cmd_buffer,
                const struct anv_pipeline_binding *binding =
                   &bind_map->surface_to_descriptor[surface];
 
-               const struct anv_descriptor *desc =
-                  anv_descriptor_for_binding(&gfx_state->base, binding);
-
                struct anv_address read_addr;
                uint32_t read_len;
-               if (desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+               if (binding->set == ANV_DESCRIPTOR_SET_SHADER_CONSTANTS) {
+                  struct anv_address constant_data = {
+                     .bo = &pipeline->device->dynamic_state_pool.block_pool.bo,
+                     .offset = pipeline->shaders[stage]->constant_data.offset,
+                  };
+                  unsigned constant_data_size =
+                     pipeline->shaders[stage]->constant_data_size;
+
                   read_len = MIN2(range->length,
-                     DIV_ROUND_UP(desc->buffer_view->range, 32) - range->start);
-                  read_addr = anv_address_add(desc->buffer_view->address,
+                     DIV_ROUND_UP(constant_data_size, 32) - range->start);
+                  read_addr = anv_address_add(constant_data,
                                               range->start * 32);
                } else {
-                  assert(desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+                  const struct anv_descriptor *desc =
+                     anv_descriptor_for_binding(&gfx_state->base, binding);
 
-                  uint32_t dynamic_offset =
-                     dynamic_offset_for_binding(&gfx_state->base, binding);
-                  uint32_t buf_offset =
-                     MIN2(desc->offset + dynamic_offset, desc->buffer->size);
-                  uint32_t buf_range =
-                     MIN2(desc->range, desc->buffer->size - buf_offset);
+                  if (desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                     read_len = MIN2(range->length,
+                        DIV_ROUND_UP(desc->buffer_view->range, 32) - range->start);
+                     read_addr = anv_address_add(desc->buffer_view->address,
+                                                 range->start * 32);
+                  } else {
+                     assert(desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
 
-                  read_len = MIN2(range->length,
-                     DIV_ROUND_UP(buf_range, 32) - range->start);
-                  read_addr = anv_address_add(desc->buffer->address,
-                                              buf_offset + range->start * 32);
+                     uint32_t dynamic_offset =
+                        dynamic_offset_for_binding(&gfx_state->base, binding);
+                     uint32_t buf_offset =
+                        MIN2(desc->offset + dynamic_offset, desc->buffer->size);
+                     uint32_t buf_range =
+                        MIN2(desc->range, desc->buffer->size - buf_offset);
+
+                     read_len = MIN2(range->length,
+                        DIV_ROUND_UP(buf_range, 32) - range->start);
+                     read_addr = anv_address_add(desc->buffer->address,
+                                                 buf_offset + range->start * 32);
+                  }
                }
 
                if (read_len > 0) {
@@ -2478,18 +2517,13 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
 #if GEN_GEN >= 8
             .MemoryObjectControlState = GENX(MOCS),
 #else
-            .BufferAccessType = pipeline->instancing_enable[vb] ? INSTANCEDATA : VERTEXDATA,
-            /* Our implementation of VK_KHR_multiview uses instancing to draw
-             * the different views.  If the client asks for instancing, we
-             * need to use the Instance Data Step Rate to ensure that we
-             * repeat the client's per-instance data once for each view.
-             */
-            .InstanceDataStepRate = anv_subpass_view_count(pipeline->subpass),
+            .BufferAccessType = pipeline->vb[vb].instanced ? INSTANCEDATA : VERTEXDATA,
+            .InstanceDataStepRate = pipeline->vb[vb].instance_divisor,
             .VertexBufferMemoryObjectControlState = GENX(MOCS),
 #endif
 
             .AddressModifyEnable = true,
-            .BufferPitch = pipeline->binding_stride[vb],
+            .BufferPitch = pipeline->vb[vb].stride,
             .BufferStartingAddress = anv_address_add(buffer->address, offset),
 
 #if GEN_GEN >= 8
@@ -3008,6 +3042,8 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
             curbe.CURBEDataStartAddress   = push_state.offset;
          }
       }
+
+      cmd_buffer->state.push_constants_dirty &= ~VK_SHADER_STAGE_COMPUTE_BIT;
    }
 
    cmd_buffer->state.compute.pipeline_dirty = false;
@@ -3376,7 +3412,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
                               surface->offset);
 
       const uint32_t ds =
-         cmd_buffer->state.subpass->depth_stencil_attachment.attachment;
+         cmd_buffer->state.subpass->depth_stencil_attachment->attachment;
       info.hiz_usage = cmd_buffer->state.attachments[ds].aux_usage;
       if (info.hiz_usage == ISL_AUX_USAGE_HIZ) {
          info.hiz_surf = &image->planes[depth_plane].aux_surface.isl;
@@ -3851,6 +3887,15 @@ void genX(CmdBeginRenderPass)(
    cmd_buffer_begin_subpass(cmd_buffer, 0);
 }
 
+void genX(CmdBeginRenderPass2KHR)(
+    VkCommandBuffer                             commandBuffer,
+    const VkRenderPassBeginInfo*                pRenderPassBeginInfo,
+    const VkSubpassBeginInfoKHR*                pSubpassBeginInfo)
+{
+   genX(CmdBeginRenderPass)(commandBuffer, pRenderPassBeginInfo,
+                            pSubpassBeginInfo->contents);
+}
+
 void genX(CmdNextSubpass)(
     VkCommandBuffer                             commandBuffer,
     VkSubpassContents                           contents)
@@ -3865,6 +3910,14 @@ void genX(CmdNextSubpass)(
    uint32_t prev_subpass = anv_get_subpass_id(&cmd_buffer->state);
    cmd_buffer_end_subpass(cmd_buffer);
    cmd_buffer_begin_subpass(cmd_buffer, prev_subpass + 1);
+}
+
+void genX(CmdNextSubpass2KHR)(
+    VkCommandBuffer                             commandBuffer,
+    const VkSubpassBeginInfoKHR*                pSubpassBeginInfo,
+    const VkSubpassEndInfoKHR*                  pSubpassEndInfo)
+{
+   genX(CmdNextSubpass)(commandBuffer, pSubpassBeginInfo->contents);
 }
 
 void genX(CmdEndRenderPass)(
@@ -3889,4 +3942,11 @@ void genX(CmdEndRenderPass)(
    cmd_buffer->state.framebuffer = NULL;
    cmd_buffer->state.pass = NULL;
    cmd_buffer->state.subpass = NULL;
+}
+
+void genX(CmdEndRenderPass2KHR)(
+    VkCommandBuffer                             commandBuffer,
+    const VkSubpassEndInfoKHR*                  pSubpassEndInfo)
+{
+   genX(CmdEndRenderPass)(commandBuffer);
 }

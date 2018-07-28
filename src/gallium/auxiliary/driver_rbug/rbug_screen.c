@@ -124,6 +124,7 @@ rbug_screen_is_format_supported(struct pipe_screen *_screen,
                                 enum pipe_format format,
                                 enum pipe_texture_target target,
                                 unsigned sample_count,
+                                unsigned storage_sample_count,
                                 unsigned tex_usage)
 {
    struct rbug_screen *rb_screen = rbug_screen(_screen);
@@ -133,6 +134,7 @@ rbug_screen_is_format_supported(struct pipe_screen *_screen,
                                       format,
                                       target,
                                       sample_count,
+                                      storage_sample_count,
                                       tex_usage);
 }
 
@@ -222,7 +224,8 @@ rbug_screen_resource_changed(struct pipe_screen *_screen,
    struct pipe_screen *screen = rb_screen->screen;
    struct pipe_resource *resource = rb_resource->resource;
 
-   screen->resource_changed(screen, resource);
+   if (screen->resource_changed)
+      screen->resource_changed(screen, resource);
 }
 
 static void

@@ -74,13 +74,6 @@ vir_emit_thrsw(struct v3d_compile *c)
 }
 
 static struct qreg
-vir_SFU(struct v3d_compile *c, int waddr, struct qreg src)
-{
-        vir_FMOV_dest(c, vir_reg(QFILE_MAGIC, waddr), src);
-        return vir_FMOV(c, vir_reg(QFILE_MAGIC, V3D_QPU_WADDR_R4));
-}
-
-static struct qreg
 indirect_uniform_load(struct v3d_compile *c, nir_intrinsic_instr *intr)
 {
         struct qreg indirect_offset = ntq_get_src(c, intr->src[0], 0);
@@ -244,14 +237,6 @@ ntq_get_alu_src(struct v3d_compile *c, nir_alu_instr *instr,
         return r;
 };
 
-static inline struct qreg
-vir_SAT(struct v3d_compile *c, struct qreg val)
-{
-        return vir_FMAX(c,
-                        vir_FMIN(c, val, vir_uniform_f(c, 1.0)),
-                        vir_uniform_f(c, 0.0));
-}
-
 static struct qreg
 ntq_minify(struct v3d_compile *c, struct qreg size, struct qreg level)
 {
@@ -338,8 +323,7 @@ ntq_fsincos(struct v3d_compile *c, struct qreg src, bool is_cos)
                 input = vir_FADD(c, input, vir_uniform_f(c, 0.5));
 
         struct qreg periods = vir_FROUND(c, input);
-        struct qreg sin_output = vir_SFU(c, V3D_QPU_WADDR_SIN,
-                                         vir_FSUB(c, input, periods));
+        struct qreg sin_output = vir_SIN(c, vir_FSUB(c, input, periods));
         return vir_XOR(c, sin_output, vir_SHL(c,
                                               vir_FTOIN(c, periods),
                                               vir_uniform_ui(c, -1)));
@@ -377,8 +361,7 @@ emit_fragcoord_input(struct v3d_compile *c, int attr)
         c->inputs[attr * 4 + 0] = vir_FXCD(c);
         c->inputs[attr * 4 + 1] = vir_FYCD(c);
         c->inputs[attr * 4 + 2] = c->payload_z;
-        c->inputs[attr * 4 + 3] = vir_SFU(c, V3D_QPU_WADDR_RECIP,
-                                          c->payload_w);
+        c->inputs[attr * 4 + 3] = vir_RECIP(c, c->payload_w);
 }
 
 static struct qreg
@@ -443,9 +426,7 @@ emit_fragment_varying(struct v3d_compile *c, nir_variable *var,
                         return vir_FADD(c, vir_FMUL(c, vary, c->payload_w), r5);
                 }
         case INTERP_MODE_NOPERSPECTIVE:
-                /* C appears after the mov from the varying.
-                   XXX: improve ldvary setup.
-                */
+                BITSET_SET(c->noperspective_flags, i);
                 return vir_FADD(c, vir_MOV(c, vary), r5);
         case INTERP_MODE_FLAT:
                 BITSET_SET(c->flat_shade_flags, i);
@@ -792,16 +773,16 @@ ntq_emit_alu(struct v3d_compile *c, nir_alu_instr *instr)
                 break;
 
         case nir_op_frcp:
-                result = vir_SFU(c, V3D_QPU_WADDR_RECIP, src[0]);
+                result = vir_RECIP(c, src[0]);
                 break;
         case nir_op_frsq:
-                result = vir_SFU(c, V3D_QPU_WADDR_RSQRT, src[0]);
+                result = vir_RSQRT(c, src[0]);
                 break;
         case nir_op_fexp2:
-                result = vir_SFU(c, V3D_QPU_WADDR_EXP, src[0]);
+                result = vir_EXP(c, src[0]);
                 break;
         case nir_op_flog2:
-                result = vir_SFU(c, V3D_QPU_WADDR_LOG, src[0]);
+                result = vir_LOG(c, src[0]);
                 break;
 
         case nir_op_fceil:
@@ -1030,15 +1011,20 @@ emit_frag_end(struct v3d_compile *c)
                                 b = color[0];
                         }
 
+                        if (c->fs_key->sample_alpha_to_one)
+                                a = vir_uniform_f(c, 1.0);
+
                         if (c->fs_key->f32_color_rb & (1 << rt)) {
-                                inst = vir_MOV_dest(c, vir_reg(QFILE_TLBU, 0), color[0]);
+                                inst = vir_MOV_dest(c, vir_reg(QFILE_TLBU, 0), r);
                                 inst->src[vir_get_implicit_uniform_src(inst)] =
                                         vir_uniform_ui(c, conf);
 
-                                for (int i = 1; i < num_components; i++) {
-                                        inst = vir_MOV_dest(c, vir_reg(QFILE_TLB, 0),
-                                                            color[i]);
-                                }
+                                if (num_components >= 2)
+                                        vir_MOV_dest(c, vir_reg(QFILE_TLB, 0), g);
+                                if (num_components >= 3)
+                                        vir_MOV_dest(c, vir_reg(QFILE_TLB, 0), b);
+                                if (num_components >= 4)
+                                        vir_MOV_dest(c, vir_reg(QFILE_TLB, 0), a);
                         } else {
                                 inst = vir_VFPACK_dest(c, vir_reg(QFILE_TLB, 0), r, g);
                                 if (conf != ~0) {
@@ -1156,8 +1142,8 @@ emit_vert_end(struct v3d_compile *c)
         setup_default_position(c);
 
         uint32_t vpm_index = 0;
-        struct qreg rcp_w = vir_SFU(c, V3D_QPU_WADDR_RECIP,
-                                    c->outputs[c->output_position_index + 3]);
+        struct qreg rcp_w = vir_RECIP(c,
+                                      c->outputs[c->output_position_index + 3]);
 
         emit_vpm_write_setup(c);
 
@@ -1941,6 +1927,7 @@ const nir_shader_compiler_options v3d_nir_options = {
         .lower_ifind_msb = true,
         .lower_ldexp = true,
         .lower_mul_high = true,
+        .lower_wpos_pntc = true,
         .native_integers = true,
 };
 

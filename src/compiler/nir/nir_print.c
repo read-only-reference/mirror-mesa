@@ -88,6 +88,7 @@ print_register(nir_register *reg, print_state *state)
 
 static const char *sizes[] = { "error", "vec1", "vec2", "vec3", "vec4",
                                "error", "error", "error", "vec8",
+                               "error", "error", "error", "error",
                                "error", "error", "error", "vec16"};
 
 static void
@@ -185,9 +186,9 @@ print_alu_src(nir_alu_instr *instr, unsigned src, print_state *state)
    print_src(&instr->src[src].src, state);
 
    bool print_swizzle = false;
-   unsigned used_channels = 0;
+   nir_component_mask_t used_channels = 0;
 
-   for (unsigned i = 0; i < 4; i++) {
+   for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++) {
       if (!nir_alu_instr_channel_used(instr, src, i))
          continue;
 
@@ -203,7 +204,7 @@ print_alu_src(nir_alu_instr *instr, unsigned src, print_state *state)
 
    if (print_swizzle || used_channels != live_channels) {
       fprintf(fp, ".");
-      for (unsigned i = 0; i < 4; i++) {
+      for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++) {
          if (!nir_alu_instr_channel_used(instr, src, i))
             continue;
 
@@ -226,7 +227,7 @@ print_alu_dest(nir_alu_dest *dest, print_state *state)
    if (!dest->dest.is_ssa &&
        dest->write_mask != (1 << dest->dest.reg.reg->num_components) - 1) {
       fprintf(fp, ".");
-      for (unsigned i = 0; i < 4; i++)
+      for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++)
          if ((dest->write_mask >> i) & 1)
             fprintf(fp, "%c", "xyzw"[i]);
    }
@@ -795,6 +796,7 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       break;
    }
 
+   bool has_texture_deref = false, has_sampler_deref = false;
    for (unsigned i = 0; i < instr->num_srcs; i++) {
       print_src(&instr->src[i].src, state);
 
@@ -832,9 +834,11 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
          fprintf(fp, "(ddy)");
          break;
       case nir_tex_src_texture_deref:
+         has_texture_deref = true;
          fprintf(fp, "(texture_deref)");
          break;
       case nir_tex_src_sampler_deref:
+         has_sampler_deref = true;
          fprintf(fp, "(sampler_deref)");
          break;
       case nir_tex_src_texture_offset:
@@ -857,6 +861,14 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
 
    if (instr->op == nir_texop_tg4) {
       fprintf(fp, "%u (gather_component), ", instr->component);
+   }
+
+   if (!has_texture_deref) {
+      fprintf(fp, "%u (texture), ", instr->texture_index);
+   }
+
+   if (!has_sampler_deref) {
+      fprintf(fp, "%u (sampler), ", instr->sampler_index);
    }
 }
 

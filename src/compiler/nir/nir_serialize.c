@@ -124,7 +124,7 @@ read_constant(read_ctx *ctx, nir_variable *nvar)
 
    blob_copy_bytes(ctx->blob, (uint8_t *)c->values, sizeof(c->values));
    c->num_elements = blob_read_uint32(ctx->blob);
-   c->elements = ralloc_array(ctx->nir, nir_constant *, c->num_elements);
+   c->elements = ralloc_array(nvar, nir_constant *, c->num_elements);
    for (unsigned i = 0; i < c->num_elements; i++)
       c->elements[i] = read_constant(ctx, nvar);
 
@@ -1116,6 +1116,10 @@ nir_serialize(struct blob *blob, const nir_shader *nir)
       write_function_impl(&ctx, fxn->impl);
    }
 
+   blob_write_uint32(blob, nir->constant_data_size);
+   if (nir->constant_data_size > 0)
+      blob_write_bytes(blob, nir->constant_data, nir->constant_data_size);
+
    *(uintptr_t *)(blob->data + idx_size_offset) = ctx.next_idx;
 
    _mesa_hash_table_destroy(ctx.remap_table, NULL);
@@ -1168,6 +1172,14 @@ nir_deserialize(void *mem_ctx,
 
    nir_foreach_function(fxn, ctx.nir)
       fxn->impl = read_function_impl(&ctx, fxn);
+
+   ctx.nir->constant_data_size = blob_read_uint32(blob);
+   if (ctx.nir->constant_data_size > 0) {
+      ctx.nir->constant_data =
+         ralloc_size(ctx.nir, ctx.nir->constant_data_size);
+      blob_copy_bytes(blob, ctx.nir->constant_data,
+                      ctx.nir->constant_data_size);
+   }
 
    free(ctx.idx_table);
 

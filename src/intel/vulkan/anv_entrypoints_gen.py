@@ -23,7 +23,6 @@
 #
 
 import argparse
-import functools
 import math
 import os
 import xml.etree.cElementTree as et
@@ -31,7 +30,7 @@ import xml.etree.cElementTree as et
 from collections import OrderedDict, namedtuple
 from mako.template import Template
 
-from anv_extensions import *
+from anv_extensions import VkVersion, MAX_API_VERSION, EXTENSIONS
 
 # We generate a static hash table for entry point lookup
 # (vkGetProcAddress). We use a linear congruential generator for our hash
@@ -145,7 +144,7 @@ static const struct string_map_entry string_map_entries[] = {
 /* Hash table stats:
  * size ${len(strmap.sorted_strings)} entries
  * collisions entries:
-% for i in xrange(10):
+% for i in range(10):
  *     ${i}${'+' if i == 9 else ' '}     ${strmap.collisions[i]}
 % endfor
  */
@@ -504,7 +503,7 @@ def get_entrypoints(doc, entrypoints_to_defines, start_index):
             assert e.core_version is None
             e.extensions.append(ext)
 
-    return [e for e in entrypoints.itervalues() if e.enabled]
+    return [e for e in entrypoints.values() if e.enabled]
 
 
 def get_entrypoints_defines(doc):

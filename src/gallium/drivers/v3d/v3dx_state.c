@@ -36,16 +36,6 @@
 #include "broadcom/common/v3d_macros.h"
 #include "broadcom/cle/v3dx_pack.h"
 
-static void *
-v3d_generic_cso_state_create(const void *src, uint32_t size)
-{
-        void *dst = calloc(1, size);
-        if (!dst)
-                return NULL;
-        memcpy(dst, src, size);
-        return dst;
-}
-
 static void
 v3d_generic_cso_state_delete(struct pipe_context *pctx, void *hwcso)
 {
@@ -91,12 +81,6 @@ v3d_set_sample_mask(struct pipe_context *pctx, unsigned sample_mask)
         v3d->dirty |= VC5_DIRTY_SAMPLE_STATE;
 }
 
-static uint16_t
-float_to_187_half(float f)
-{
-        return fui(f) >> 16;
-}
-
 static void *
 v3d_create_rasterizer_state(struct pipe_context *pctx,
                             const struct pipe_rasterizer_state *cso)
@@ -114,10 +98,19 @@ v3d_create_rasterizer_state(struct pipe_context *pctx,
          */
         so->point_size = MAX2(cso->point_size, .125f);
 
-        if (cso->offset_tri) {
-                so->offset_units = float_to_187_half(cso->offset_units);
-                so->z16_offset_units = float_to_187_half(cso->offset_units * 256.0);
-                so->offset_factor = float_to_187_half(cso->offset_scale);
+        STATIC_ASSERT(sizeof(so->depth_offset) >=
+                      cl_packet_length(DEPTH_OFFSET));
+        v3dx_pack(&so->depth_offset, DEPTH_OFFSET, depth) {
+                depth.depth_offset_factor = cso->offset_scale;
+                depth.depth_offset_units = cso->offset_units;
+        }
+
+        /* The HW treats polygon offset units based on a Z24 buffer, so we
+         * need to scale up offset_units if we're only Z16.
+         */
+        v3dx_pack(&so->depth_offset_z16, DEPTH_OFFSET, depth) {
+                depth.depth_offset_factor = cso->offset_scale;
+                depth.depth_offset_units = cso->offset_units * 256.0;
         }
 
         return so;
@@ -128,7 +121,28 @@ static void *
 v3d_create_blend_state(struct pipe_context *pctx,
                        const struct pipe_blend_state *cso)
 {
-        return v3d_generic_cso_state_create(cso, sizeof(*cso));
+        struct v3d_blend_state *so;
+
+        so = CALLOC_STRUCT(v3d_blend_state);
+        if (!so)
+                return NULL;
+
+        so->base = *cso;
+
+        if (cso->independent_blend_enable) {
+                for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++) {
+                        so->blend_enables |= cso->rt[i].blend_enable << i;
+
+                        /* V3D 4.x is when we got independent blend enables. */
+                        assert(V3D_VERSION >= 40 ||
+                               cso->rt[i].blend_enable == cso->rt[0].blend_enable);
+                }
+        } else {
+                if (cso->rt[0].blend_enable)
+                        so->blend_enables = (1 << VC5_MAX_DRAW_BUFFERS) - 1;
+        }
+
+        return so;
 }
 
 static uint32_t
@@ -196,8 +210,8 @@ v3d_create_depth_stencil_alpha_state(struct pipe_context *pctx,
 
         if (front->enabled) {
                 STATIC_ASSERT(sizeof(so->stencil_front) >=
-                              cl_packet_length(STENCIL_CONFIG));
-                v3dx_pack(&so->stencil_front, STENCIL_CONFIG, config) {
+                              cl_packet_length(STENCIL_CFG));
+                v3dx_pack(&so->stencil_front, STENCIL_CFG, config) {
                         config.front_config = true;
                         /* If !back->enabled, then the front values should be
                          * used for both front and back-facing primitives.
@@ -218,8 +232,8 @@ v3d_create_depth_stencil_alpha_state(struct pipe_context *pctx,
         }
         if (back->enabled) {
                 STATIC_ASSERT(sizeof(so->stencil_back) >=
-                              cl_packet_length(STENCIL_CONFIG));
-                v3dx_pack(&so->stencil_back, STENCIL_CONFIG, config) {
+                              cl_packet_length(STENCIL_CFG));
+                v3dx_pack(&so->stencil_back, STENCIL_CFG, config) {
                         config.front_config = false;
                         config.back_config = true;
 
@@ -393,7 +407,7 @@ v3d_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
         so->default_attribute_values = v3d_bo_alloc(v3d->screen,
                                                     VC5_MAX_ATTRIBUTES *
                                                     4 * sizeof(float),
-                                                    "default attributes");
+                                                    "default_attributes");
         uint32_t *attrs = v3d_bo_map(so->default_attribute_values);
         for (int i = 0; i < VC5_MAX_ATTRIBUTES; i++) {
                 attrs[i * 4 + 0] = 0;
@@ -408,6 +422,15 @@ v3d_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
         }
 
         return so;
+}
+
+static void
+v3d_vertex_state_delete(struct pipe_context *pctx, void *hwcso)
+{
+        struct v3d_vertex_stateobj *so = hwcso;
+
+        v3d_bo_unreference(&so->default_attribute_values);
+        free(so);
 }
 
 static void
@@ -580,21 +603,21 @@ v3d_create_sampler_state(struct pipe_context *pctx,
                                 sampler.maximum_anisotropy = 1;
                 }
 
-                sampler.border_colour_mode = V3D_BORDER_COLOUR_FOLLOWS;
-                /* XXX: The border colour field is in the TMU blending format
+                sampler.border_color_mode = V3D_BORDER_COLOR_FOLLOWS;
+                /* XXX: The border color field is in the TMU blending format
                  * (32, f16, or i16), and we need to customize it based on
                  * that.
                  *
                  * XXX: for compat alpha formats, we need the alpha field to
                  * be in the red channel.
                  */
-                sampler.border_colour_red =
+                sampler.border_color_red =
                         util_float_to_half(cso->border_color.f[0]);
-                sampler.border_colour_green =
+                sampler.border_color_green =
                         util_float_to_half(cso->border_color.f[1]);
-                sampler.border_colour_blue =
+                sampler.border_color_blue =
                         util_float_to_half(cso->border_color.f[2]);
-                sampler.border_colour_alpha =
+                sampler.border_color_alpha =
                         util_float_to_half(cso->border_color.f[3]);
         }
 
@@ -748,7 +771,9 @@ v3d_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                  */
                 tex.texture_base_pointer = cl_address(NULL,
                                                       rsc->bo->offset +
-                                                      rsc->slices[0].offset),
+                                                      rsc->slices[0].offset +
+                                                      cso->u.tex.first_layer *
+                                                      rsc->cube_map_stride),
 
                 tex.swizzle_r = translate_swizzle(so->swizzle[0]);
                 tex.swizzle_g = translate_swizzle(so->swizzle[1]);
@@ -953,7 +978,7 @@ v3dX(state_init)(struct pipe_context *pctx)
         pctx->delete_depth_stencil_alpha_state = v3d_generic_cso_state_delete;
 
         pctx->create_vertex_elements_state = v3d_vertex_state_create;
-        pctx->delete_vertex_elements_state = v3d_generic_cso_state_delete;
+        pctx->delete_vertex_elements_state = v3d_vertex_state_delete;
         pctx->bind_vertex_elements_state = v3d_vertex_state_bind;
 
         pctx->create_sampler_state = v3d_create_sampler_state;

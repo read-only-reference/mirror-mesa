@@ -433,11 +433,14 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT);
    st->has_shader_model3 = screen->get_param(screen, PIPE_CAP_SM3);
    st->has_etc1 = screen->is_format_supported(screen, PIPE_FORMAT_ETC1_RGB8,
-                                              PIPE_TEXTURE_2D, 0,
+                                              PIPE_TEXTURE_2D, 0, 0,
                                               PIPE_BIND_SAMPLER_VIEW);
    st->has_etc2 = screen->is_format_supported(screen, PIPE_FORMAT_ETC2_RGB8,
-                                              PIPE_TEXTURE_2D, 0,
+                                              PIPE_TEXTURE_2D, 0, 0,
                                               PIPE_BIND_SAMPLER_VIEW);
+   st->has_astc_2d_ldr =
+      screen->is_format_supported(screen, PIPE_FORMAT_ASTC_4x4_SRGB,
+                                  PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_SAMPLER_VIEW);
    st->prefer_blit_based_texture_transfer = screen->get_param(screen,
                               PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER);
    st->force_persample_in_shader =
@@ -759,11 +762,15 @@ st_init_driver_functions(struct pipe_screen *screen,
       screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
                                PIPE_SHADER_CAP_PREFERRED_IR);
    if (preferred_ir == PIPE_SHADER_IR_NIR) {
-      functions->ProgramBinarySerializeDriverBlob = st_serialise_nir_program;
+      functions->ShaderCacheSerializeDriverBlob =  st_serialise_nir_program;
+      functions->ProgramBinarySerializeDriverBlob =
+         st_serialise_nir_program_binary;
       functions->ProgramBinaryDeserializeDriverBlob =
          st_deserialise_nir_program;
    } else {
-      functions->ProgramBinarySerializeDriverBlob = st_serialise_tgsi_program;
+      functions->ShaderCacheSerializeDriverBlob =  st_serialise_tgsi_program;
+      functions->ProgramBinarySerializeDriverBlob =
+         st_serialise_tgsi_program_binary;
       functions->ProgramBinaryDeserializeDriverBlob =
          st_deserialise_tgsi_program;
    }

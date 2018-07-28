@@ -57,6 +57,8 @@ extern "C" {
 
 #define NIR_FALSE 0u
 #define NIR_TRUE (~0u)
+#define NIR_MAX_VEC_COMPONENTS 4
+typedef uint8_t nir_component_mask_t;
 
 /** Defines a cast function
  *
@@ -115,16 +117,16 @@ typedef enum {
 } nir_rounding_mode;
 
 typedef union {
-   float f32[4];
-   double f64[4];
-   int8_t i8[4];
-   uint8_t u8[4];
-   int16_t i16[4];
-   uint16_t u16[4];
-   int32_t i32[4];
-   uint32_t u32[4];
-   int64_t i64[4];
-   uint64_t u64[4];
+   float f32[NIR_MAX_VEC_COMPONENTS];
+   double f64[NIR_MAX_VEC_COMPONENTS];
+   int8_t i8[NIR_MAX_VEC_COMPONENTS];
+   uint8_t u8[NIR_MAX_VEC_COMPONENTS];
+   int16_t i16[NIR_MAX_VEC_COMPONENTS];
+   uint16_t u16[NIR_MAX_VEC_COMPONENTS];
+   int32_t i32[NIR_MAX_VEC_COMPONENTS];
+   uint32_t u32[NIR_MAX_VEC_COMPONENTS];
+   int64_t i64[NIR_MAX_VEC_COMPONENTS];
+   uint64_t u64[NIR_MAX_VEC_COMPONENTS];
 } nir_const_value;
 
 typedef struct nir_constant {
@@ -135,7 +137,7 @@ typedef struct nir_constant {
     * by the type associated with the \c nir_variable.  Constants may be
     * scalars, vectors, or matrices.
     */
-   nir_const_value values[4];
+   nir_const_value values[NIR_MAX_VEC_COMPONENTS];
 
    /* we could get this from the var->type but makes clone *much* easier to
     * not have to care about the type.
@@ -258,6 +260,21 @@ typedef struct nir_variable {
       unsigned explicit_binding:1;
 
       /**
+       * Was a transfer feedback buffer set in the shader?
+       */
+      unsigned explicit_xfb_buffer:1;
+
+      /**
+       * Was a transfer feedback stride set in the shader?
+       */
+      unsigned explicit_xfb_stride:1;
+
+      /**
+       * Was an explicit offset set in the shader?
+       */
+      unsigned explicit_offset:1;
+
+      /**
        * \brief Layout qualifier for gl_FragDepth.
        *
        * This is not equal to \c ir_depth_layout_none if and only if this
@@ -318,9 +335,19 @@ typedef struct nir_variable {
       int binding;
 
       /**
-       * Location an atomic counter is stored at.
+       * Location an atomic counter or transform feedback is stored at.
        */
       unsigned offset;
+
+      /**
+       * Transform feedback buffer.
+       */
+      unsigned xfb_buffer;
+
+      /**
+       * Transform feedback stride.
+       */
+      unsigned xfb_stride;
 
       /**
        * ARB_shader_image_load_store qualifiers.
@@ -697,7 +724,7 @@ typedef struct {
     * a statement like "foo.xzw = bar.zyx" would have a writemask of 1101b and
     * a swizzle of {2, x, 1, 0} where x means "don't care."
     */
-   uint8_t swizzle[4];
+   uint8_t swizzle[NIR_MAX_VEC_COMPONENTS];
 } nir_alu_src;
 
 typedef struct {
@@ -712,7 +739,7 @@ typedef struct {
 
    bool saturate;
 
-   unsigned write_mask : 4; /* ignored if dest.is_ssa is true */
+   unsigned write_mask : NIR_MAX_VEC_COMPONENTS; /* ignored if dest.is_ssa is true */
 } nir_alu_dest;
 
 typedef enum {
@@ -841,14 +868,14 @@ typedef struct {
    /**
     * The number of components in each input
     */
-   unsigned input_sizes[4];
+   unsigned input_sizes[NIR_MAX_VEC_COMPONENTS];
 
    /**
     * The type of vector that each input takes. Note that negate and
     * absolute value are only allowed on inputs with int or float type and
     * behave differently on the two.
     */
-   nir_alu_type input_types[4];
+   nir_alu_type input_types[NIR_MAX_VEC_COMPONENTS];
 
    nir_op_algebraic_property algebraic_properties;
 } nir_op_info;
@@ -986,6 +1013,8 @@ nir_deref_instr_get_variable(const nir_deref_instr *instr)
 
    return instr->var;
 }
+
+bool nir_deref_instr_has_indirect(nir_deref_instr *instr);
 
 bool nir_deref_instr_remove_if_unused(nir_deref_instr *instr);
 
@@ -2002,9 +2031,26 @@ typedef struct nir_shader_compiler_options {
     */
    bool lower_base_vertex;
 
+   /**
+    * If enabled, gl_HelperInvocation will be lowered as:
+    *
+    *   !((1 << sample_id) & sample_mask_in))
+    *
+    * This depends on some possibly hw implementation details, which may
+    * not be true for all hw.  In particular that the FS is only executed
+    * for covered samples or for helper invocations.  So, do not blindly
+    * enable this option.
+    *
+    * Note: See also issue #22 in ARB_shader_image_load_store
+    */
+   bool lower_helper_invocation;
+
    bool lower_cs_local_index_from_id;
 
    bool lower_device_index_to_zero;
+
+   /* Set if nir_lower_wpos_ytransform() should also invert gl_PointCoord. */
+   bool lower_wpos_pntc;
 
    /**
     * Should nir_lower_io() create load_interpolated_input intrinsics?
@@ -2065,6 +2111,14 @@ typedef struct nir_shader {
     * access plus one
     */
    unsigned num_inputs, num_uniforms, num_outputs, num_shared;
+
+   /** Constant data associated with this shader.
+    *
+    * Constant data is loaded through load_constant intrinsics.  See also
+    * nir_opt_large_constants.
+    */
+   void *constant_data;
+   unsigned constant_data_size;
 } nir_shader;
 
 static inline nir_function_impl *
@@ -2410,7 +2464,7 @@ void nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_src new_src);
 void nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
                                     nir_instr *after_me);
 
-uint8_t nir_ssa_def_components_read(const nir_ssa_def *def);
+nir_component_mask_t nir_ssa_def_components_read(const nir_ssa_def *def);
 
 /*
  * finds the next basic block in source-code order, returns NULL if there is
@@ -2780,7 +2834,8 @@ void nir_lower_two_sided_color(nir_shader *shader);
 bool nir_lower_clamp_color_outputs(nir_shader *shader);
 
 void nir_lower_passthrough_edgeflags(nir_shader *shader);
-void nir_lower_tes_patch_vertices(nir_shader *tes, unsigned patch_vertices);
+bool nir_lower_patch_vertices(nir_shader *nir, unsigned static_count,
+                              const gl_state_index16 *uniform_state_tokens);
 
 typedef struct nir_lower_wpos_ytransform_options {
    gl_state_index16 state_tokens[STATE_LENGTH];
@@ -2894,6 +2949,10 @@ bool nir_opt_gcm(nir_shader *shader, bool value_number);
 bool nir_opt_if(nir_shader *shader);
 
 bool nir_opt_intrinsics(nir_shader *shader);
+
+bool nir_opt_large_constants(nir_shader *shader,
+                             glsl_type_size_align_func size_align,
+                             unsigned threshold);
 
 bool nir_opt_loop_unroll(nir_shader *shader, nir_variable_mode indirect_mask);
 

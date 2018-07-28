@@ -219,6 +219,12 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v2.max_shader_patch_varyings;
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
       return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_TEXTURE_VIEW;
+   case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
+      return vscreen->caps.caps.v2.max_vertex_attrib_stride;
+   case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_COPY_IMAGE;
+   case PIPE_CAP_TGSI_TXQS:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_TXQS;
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
@@ -226,7 +232,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_MULTI_DRAW_INDIRECT:
    case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-   case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
    case PIPE_CAP_CLIP_HALFZ:
    case PIPE_CAP_VERTEXID_NOBASE:
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
@@ -235,7 +240,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
    case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
    case PIPE_CAP_DEPTH_BOUNDS_TEST:
-   case PIPE_CAP_TGSI_TXQS:
    case PIPE_CAP_SHAREABLE_SHADERS:
    case PIPE_CAP_CLEAR_TEXTURE:
    case PIPE_CAP_DRAW_PARAMETERS:
@@ -246,7 +250,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_GENERATE_MIPMAP:
    case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
    case PIPE_CAP_QUERY_BUFFER_OBJECT:
-   case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
    case PIPE_CAP_STRING_MARKER:
    case PIPE_CAP_QUERY_MEMORY_INFO:
    case PIPE_CAP_PCI_GROUP:
@@ -283,6 +286,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
    case PIPE_CAP_TILE_RASTER_ORDER:
    case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+   case PIPE_CAP_FRAMEBUFFER_MSAA_CONSTRAINTS:
    case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
    case PIPE_CAP_CONTEXT_PRIORITY_MASK:
    case PIPE_CAP_FENCE_SIGNAL:
@@ -368,6 +372,16 @@ virgl_get_shader_param(struct pipe_screen *screen,
          return 32;
       case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
          return 4096 * sizeof(float[4]);
+      case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+         if (shader == PIPE_SHADER_FRAGMENT)
+            return vscreen->caps.caps.v2.max_shader_buffer_frag_compute;
+         else
+            return vscreen->caps.caps.v2.max_shader_buffer_other_stages;
+      case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+         if (shader == PIPE_SHADER_FRAGMENT)
+            return vscreen->caps.caps.v2.max_shader_image_frag_compute;
+         else
+            return vscreen->caps.caps.v2.max_shader_image_other_stages;
       case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_INT64_ATOMICS:
@@ -461,11 +475,15 @@ virgl_is_format_supported( struct pipe_screen *screen,
                                  enum pipe_format format,
                                  enum pipe_texture_target target,
                                  unsigned sample_count,
+                                 unsigned storage_sample_count,
                                  unsigned bind)
 {
    struct virgl_screen *vscreen = virgl_screen(screen);
    const struct util_format_description *format_desc;
    int i;
+
+   if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+      return false;
 
    assert(target == PIPE_BUFFER ||
           target == PIPE_TEXTURE_1D ||
@@ -487,6 +505,12 @@ virgl_is_format_supported( struct pipe_screen *screen,
    if (sample_count > 1) {
       if (!vscreen->caps.caps.v1.bset.texture_multisample)
          return FALSE;
+
+      if (bind & PIPE_BIND_SHADER_IMAGE) {
+         if (sample_count > vscreen->caps.caps.v2.max_image_samples)
+            return FALSE;
+      }
+
       if (sample_count > vscreen->caps.caps.v1.max_samples)
          return FALSE;
    }
@@ -494,6 +518,13 @@ virgl_is_format_supported( struct pipe_screen *screen,
    if (bind & PIPE_BIND_VERTEX_BUFFER) {
       return virgl_is_vertex_format_supported(screen, format);
    }
+
+   /* Allow 3-comp 32 bit textures only for TBOs (needed for ARB_tbo_rgb32) */
+   if ((format == PIPE_FORMAT_R32G32B32_FLOAT ||
+       format == PIPE_FORMAT_R32G32B32_SINT ||
+       format == PIPE_FORMAT_R32G32B32_UINT) &&
+       target != PIPE_BUFFER)
+      return FALSE;
 
    if (bind & PIPE_BIND_RENDER_TARGET) {
       if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS)

@@ -429,7 +429,8 @@ struct dd_function_table {
 			   struct gl_renderbuffer *rb,
 			   GLuint x, GLuint y, GLuint w, GLuint h,
 			   GLbitfield mode,
-			   GLubyte **mapOut, GLint *rowStrideOut);
+			   GLubyte **mapOut, GLint *rowStrideOut,
+			   bool flip_y);
 
    void (*UnmapRenderbuffer)(struct gl_context *ctx,
 			     struct gl_renderbuffer *rb);
@@ -1218,6 +1219,7 @@ struct dd_function_table {
    void (*GetProgramBinaryDriverSHA1)(struct gl_context *ctx, uint8_t *sha1);
 
    void (*ProgramBinarySerializeDriverBlob)(struct gl_context *ctx,
+                                            struct gl_shader_program *shProg,
                                             struct gl_program *prog);
 
    void (*ProgramBinaryDeserializeDriverBlob)(struct gl_context *ctx,
@@ -1281,6 +1283,21 @@ struct dd_function_table {
    void (*ImportSemaphoreFd)(struct gl_context *ctx,
                                 struct gl_semaphore_object *semObj,
                                 int fd);
+   /*@}*/
+
+   /**
+    * \name Disk shader cache functions
+    */
+   /*@{*/
+   /**
+    * Called to initialize gl_program::driver_cache_blob (and size) with a
+    * ralloc allocated buffer.
+    *
+    * This buffer will be saved and restored as part of the gl_program
+    * serialization and deserialization.
+    */
+   void (*ShaderCacheSerializeDriverBlob)(struct gl_context *ctx,
+                                          struct gl_program *prog);
    /*@}*/
 };
 

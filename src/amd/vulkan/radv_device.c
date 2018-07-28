@@ -436,6 +436,7 @@ static const struct debug_control radv_debug_options[] = {
 	{"errors", RADV_DEBUG_ERRORS},
 	{"startup", RADV_DEBUG_STARTUP},
 	{"checkir", RADV_DEBUG_CHECKIR},
+	{"nothreadllvm", RADV_DEBUG_NOTHREADLLVM},
 	{NULL, 0}
 };
 
@@ -684,6 +685,7 @@ void radv_GetPhysicalDeviceFeatures(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceFeatures*                   pFeatures)
 {
+	RADV_FROM_HANDLE(radv_physical_device, pdevice, physicalDevice);
 	memset(pFeatures, 0, sizeof(*pFeatures));
 
 	*pFeatures = (VkPhysicalDeviceFeatures) {
@@ -707,7 +709,8 @@ void radv_GetPhysicalDeviceFeatures(
 		.alphaToOne                               = true,
 		.multiViewport                            = true,
 		.samplerAnisotropy                        = true,
-		.textureCompressionETC2                   = false,
+		.textureCompressionETC2                   = pdevice->rad_info.chip_class >= GFX9 ||
+		                                            pdevice->rad_info.family == CHIP_STONEY,
 		.textureCompressionASTC_LDR               = false,
 		.textureCompressionBC                     = true,
 		.occlusionQueryPrecise                    = true,
@@ -739,6 +742,7 @@ void radv_GetPhysicalDeviceFeatures2(
 	VkPhysicalDevice                            physicalDevice,
 	VkPhysicalDeviceFeatures2KHR               *pFeatures)
 {
+	RADV_FROM_HANDLE(radv_physical_device, pdevice, physicalDevice);
 	vk_foreach_struct(ext, pFeatures->pNext) {
 		switch (ext->sType) {
 		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTER_FEATURES_KHR: {
@@ -769,10 +773,11 @@ void radv_GetPhysicalDeviceFeatures2(
 		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES: {
 			VkPhysicalDevice16BitStorageFeatures *features =
 			    (VkPhysicalDevice16BitStorageFeatures*)ext;
-			features->storageBuffer16BitAccess = false;
-			features->uniformAndStorageBuffer16BitAccess = false;
-			features->storagePushConstant16 = false;
-			features->storageInputOutput16 = false;
+			bool enabled = HAVE_LLVM >= 0x0700 && pdevice->rad_info.chip_class >= VI;
+			features->storageBuffer16BitAccess = enabled;
+			features->uniformAndStorageBuffer16BitAccess = enabled;
+			features->storagePushConstant16 = enabled;
+			features->storageInputOutput16 = enabled;
 			break;
 		}
 		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES: {
@@ -804,6 +809,13 @@ void radv_GetPhysicalDeviceFeatures2(
 			features->descriptorBindingPartiallyBound = true;
 			features->descriptorBindingVariableDescriptorCount = true;
 			features->runtimeDescriptorArray = true;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT: {
+			VkPhysicalDeviceConditionalRenderingFeaturesEXT *features =
+				(VkPhysicalDeviceConditionalRenderingFeaturesEXT*)ext;
+			features->conditionalRendering = true;
+			features->inheritedConditionalRendering = false;
 			break;
 		}
 		default:
@@ -1501,10 +1513,12 @@ VkResult radv_CreateDevice(
 	}
 
 	device->pbb_allowed = device->physical_device->rad_info.chip_class >= GFX9 &&
-	                      (device->instance->perftest_flags & RADV_PERFTEST_BINNING);
+			((device->instance->perftest_flags & RADV_PERFTEST_BINNING) ||
+			 device->physical_device->rad_info.family == CHIP_RAVEN);
 
 	/* Disabled and not implemented for now. */
-	device->dfsm_allowed = device->pbb_allowed && false;
+	device->dfsm_allowed = device->pbb_allowed &&
+	                       device->physical_device->rad_info.family == CHIP_RAVEN;
 
 #ifdef ANDROID
 	device->always_use_syncobj = device->physical_device->rad_info.has_syncobj_wait_for_submit;
@@ -1550,6 +1564,10 @@ VkResult radv_CreateDevice(
 
 		if (!radv_init_trace(device))
 			goto fail;
+
+		fprintf(stderr, "*****************************************************************************\n");
+		fprintf(stderr, "* WARNING: RADV_TRACE_FILE is costly and should only be used for debugging! *\n");
+		fprintf(stderr, "*****************************************************************************\n");
 
 		fprintf(stderr, "Trace file will be dumped to %s\n", filename);
 		radv_dump_enabled_options(device, stderr);
@@ -1927,10 +1945,10 @@ radv_emit_gs_ring_sizes(struct radv_queue *queue, struct radeon_cmdbuf *cs,
 		return;
 
 	if (esgs_ring_bo)
-		radv_cs_add_buffer(queue->device->ws, cs, esgs_ring_bo, 8);
+		radv_cs_add_buffer(queue->device->ws, cs, esgs_ring_bo);
 
 	if (gsvs_ring_bo)
-		radv_cs_add_buffer(queue->device->ws, cs, gsvs_ring_bo, 8);
+		radv_cs_add_buffer(queue->device->ws, cs, gsvs_ring_bo);
 
 	if (queue->device->physical_device->rad_info.chip_class >= CIK) {
 		radeon_set_uconfig_reg_seq(cs, R_030900_VGT_ESGS_RING_SIZE, 2);
@@ -1955,7 +1973,7 @@ radv_emit_tess_factor_ring(struct radv_queue *queue, struct radeon_cmdbuf *cs,
 
 	tf_va = radv_buffer_get_va(tess_rings_bo);
 
-	radv_cs_add_buffer(queue->device->ws, cs, tess_rings_bo, 8);
+	radv_cs_add_buffer(queue->device->ws, cs, tess_rings_bo);
 
 	if (queue->device->physical_device->rad_info.chip_class >= CIK) {
 		radeon_set_uconfig_reg(cs, R_030938_VGT_TF_RING_SIZE,
@@ -1989,7 +2007,7 @@ radv_emit_compute_scratch(struct radv_queue *queue, struct radeon_cmdbuf *cs,
 
 	scratch_va = radv_buffer_get_va(compute_scratch_bo);
 
-	radv_cs_add_buffer(queue->device->ws, cs, compute_scratch_bo, 8);
+	radv_cs_add_buffer(queue->device->ws, cs, compute_scratch_bo);
 
 	radeon_set_sh_reg_seq(cs, R_00B900_COMPUTE_USER_DATA_0, 2);
 	radeon_emit(cs, scratch_va);
@@ -2009,7 +2027,7 @@ radv_emit_global_shader_pointers(struct radv_queue *queue,
 
 	va = radv_buffer_get_va(descriptor_bo);
 
-	radv_cs_add_buffer(queue->device->ws, cs, descriptor_bo, 8);
+	radv_cs_add_buffer(queue->device->ws, cs, descriptor_bo);
 
 	if (queue->device->physical_device->rad_info.chip_class >= GFX9) {
 		uint32_t regs[] = {R_00B030_SPI_SHADER_USER_DATA_PS_0,
@@ -2188,7 +2206,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 		dest_cs[i] = cs;
 
 		if (scratch_bo)
-			radv_cs_add_buffer(queue->device->ws, cs, scratch_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, scratch_bo);
 
 		if (descriptor_bo != queue->descriptor_bo) {
 			uint32_t *map = (uint32_t*)queue->device->ws->buffer_map(descriptor_bo);
@@ -2239,7 +2257,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 			                       RADV_CMD_FLAG_INV_SMEM_L1 |
 			                       RADV_CMD_FLAG_INV_VMEM_L1 |
 			                       RADV_CMD_FLAG_INV_GLOBAL_L2 |
-					       RADV_CMD_FLAG_START_PIPELINE_STATS);
+					       RADV_CMD_FLAG_START_PIPELINE_STATS, 0);
 		} else if (i == 1) {
 			si_cs_emit_cache_flush(cs,
 			                       queue->device->physical_device->rad_info.chip_class,
@@ -2250,7 +2268,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 			                       RADV_CMD_FLAG_INV_SMEM_L1 |
 			                       RADV_CMD_FLAG_INV_VMEM_L1 |
 			                       RADV_CMD_FLAG_INV_GLOBAL_L2 |
-					       RADV_CMD_FLAG_START_PIPELINE_STATS);
+					       RADV_CMD_FLAG_START_PIPELINE_STATS, 0);
 		}
 
 		if (!queue->device->ws->cs_finalize(cs))

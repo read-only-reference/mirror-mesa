@@ -1712,35 +1712,6 @@ NVC0LoweringPass::loadMsInfo32(Value *ptr, uint32_t off)
       mkLoadv(TYPE_U32, bld.mkSymbol(FILE_MEMORY_CONST, b, TYPE_U32, off), ptr);
 }
 
-/* On nvc0, surface info is obtained via the surface binding points passed
- * to the SULD/SUST instructions.
- * On nve4, surface info is stored in c[] and is used by various special
- * instructions, e.g. for clamping coordinates or generating an address.
- * They couldn't just have added an equivalent to TIC now, couldn't they ?
- */
-#define NVC0_SU_INFO_ADDR   0x00
-#define NVC0_SU_INFO_FMT    0x04
-#define NVC0_SU_INFO_DIM_X  0x08
-#define NVC0_SU_INFO_PITCH  0x0c
-#define NVC0_SU_INFO_DIM_Y  0x10
-#define NVC0_SU_INFO_ARRAY  0x14
-#define NVC0_SU_INFO_DIM_Z  0x18
-#define NVC0_SU_INFO_UNK1C  0x1c
-#define NVC0_SU_INFO_WIDTH  0x20
-#define NVC0_SU_INFO_HEIGHT 0x24
-#define NVC0_SU_INFO_DEPTH  0x28
-#define NVC0_SU_INFO_TARGET 0x2c
-#define NVC0_SU_INFO_BSIZE  0x30
-#define NVC0_SU_INFO_RAW_X  0x34
-#define NVC0_SU_INFO_MS_X   0x38
-#define NVC0_SU_INFO_MS_Y   0x3c
-
-#define NVC0_SU_INFO__STRIDE 0x40
-
-#define NVC0_SU_INFO_DIM(i)  (0x08 + (i) * 8)
-#define NVC0_SU_INFO_SIZE(i) (0x20 + (i) * 4)
-#define NVC0_SU_INFO_MS(i)   (0x38 + (i) * 4)
-
 inline Value *
 NVC0LoweringPass::loadSuInfo32(Value *ptr, int slot, uint32_t off, bool bindless)
 {
@@ -2349,6 +2320,8 @@ NVC0LoweringPass::processSurfaceCoordsGM107(TexInstruction *su)
 
    bld.setPosition(su, false);
 
+   adjustCoordinatesMS(su);
+
    // add texture handle
    switch (su->op) {
    case OP_SUSTP:
@@ -2603,6 +2576,18 @@ NVC0LoweringPass::handleRDSV(Instruction *i)
          // TGSI backend may use 4th component of TID,NTID,CTAID,NCTAID
          i->op = OP_MOV;
          i->setSrc(0, bld.mkImm((sv == SV_NTID || sv == SV_NCTAID) ? 1 : 0));
+      } else
+      if (sv == SV_TID) {
+         // Help CSE combine TID fetches
+         Value *tid = bld.mkOp1v(OP_RDSV, TYPE_U32, bld.getScratch(),
+                                 bld.mkSysVal(SV_COMBINED_TID, 0));
+         i->op = OP_EXTBF;
+         i->setSrc(0, tid);
+         switch (sym->reg.data.sv.index) {
+         case 0: i->setSrc(1, bld.mkImm(0x1000)); break;
+         case 1: i->setSrc(1, bld.mkImm(0x0a10)); break;
+         case 2: i->setSrc(1, bld.mkImm(0x061a)); break;
+         }
       }
       if (sv == SV_VERTEX_COUNT) {
          bld.setPosition(i, true);

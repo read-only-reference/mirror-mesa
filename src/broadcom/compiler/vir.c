@@ -74,6 +74,8 @@ vir_has_implicit_uniform(struct qinst *inst)
 int
 vir_get_implicit_uniform_src(struct qinst *inst)
 {
+        if (!vir_has_implicit_uniform(inst))
+                return -1;
         return vir_get_nsrc(inst) - 1;
 }
 
@@ -96,6 +98,7 @@ vir_has_side_effects(struct v3d_compile *c, struct qinst *inst)
                 case V3D_QPU_A_STVPMD:
                 case V3D_QPU_A_STVPMP:
                 case V3D_QPU_A_VPMWT:
+                case V3D_QPU_A_TMUWT:
                         return true;
                 default:
                         break;
@@ -191,6 +194,11 @@ vir_is_tex(struct qinst *inst)
 {
         if (inst->dst.file == QFILE_MAGIC)
                 return v3d_qpu_magic_waddr_is_tmu(inst->dst.index);
+
+        if (inst->qpu.type == V3D_QPU_INSTR_TYPE_ALU &&
+            inst->qpu.alu.add.op == V3D_QPU_A_TMUWT) {
+                return true;
+        }
 
         return false;
 }
@@ -572,7 +580,7 @@ v3d_lower_nir(struct v3d_compile *c)
 {
         struct nir_lower_tex_options tex_options = {
                 .lower_txd = true,
-                .lower_rect = false, /* XXX */
+                .lower_rect = false, /* XXX: Use this on V3D 3.x */
                 .lower_txp = ~0,
                 /* Apply swizzles to all samplers. */
                 .swizzle_result = ~0,
@@ -759,6 +767,9 @@ v3d_set_fs_prog_data_inputs(struct v3d_compile *c,
                 if (BITSET_TEST(c->flat_shade_flags, i))
                         prog_data->flat_shade_flags[i / 24] |= 1 << (i % 24);
 
+                if (BITSET_TEST(c->noperspective_flags, i))
+                        prog_data->noperspective_flags[i / 24] |= 1 << (i % 24);
+
                 if (BITSET_TEST(c->centroid_flags, i))
                         prog_data->centroid_flags[i / 24] |= 1 << (i % 24);
         }
@@ -932,6 +943,17 @@ vir_uniform(struct v3d_compile *c,
         return vir_reg(QFILE_UNIF, uniform);
 }
 
+static bool
+vir_can_set_flags(struct v3d_compile *c, struct qinst *inst)
+{
+        if (c->devinfo->ver >= 40 && (v3d_qpu_reads_vpm(&inst->qpu) ||
+                                      v3d_qpu_uses_sfu(&inst->qpu))) {
+                return false;
+        }
+
+        return true;
+}
+
 void
 vir_PF(struct v3d_compile *c, struct qreg src, enum v3d_qpu_pf pf)
 {
@@ -951,7 +973,8 @@ vir_PF(struct v3d_compile *c, struct qreg src, enum v3d_qpu_pf pf)
 
         if (src.file != QFILE_TEMP ||
             !c->defs[src.index] ||
-            last_inst != c->defs[src.index]) {
+            last_inst != c->defs[src.index] ||
+            !vir_can_set_flags(c, last_inst)) {
                 /* XXX: Make the MOV be the appropriate type */
                 last_inst = vir_MOV_dest(c, vir_reg(QFILE_NULL, 0), src);
         }
@@ -984,6 +1007,7 @@ vir_optimize(struct v3d_compile *c)
 
                 OPTPASS(vir_opt_copy_propagate);
                 OPTPASS(vir_opt_dead_code);
+                OPTPASS(vir_opt_small_immediates);
 
                 if (!progress)
                         break;

@@ -28,8 +28,10 @@ LIBGLSL_FILES = \
 	glsl/gl_nir_lower_atomics.c \
 	glsl/gl_nir_lower_samplers.c \
 	glsl/gl_nir_lower_samplers_as_deref.c \
+	glsl/gl_nir_link_atomics.c \
 	glsl/gl_nir_link_uniform_initializers.c \
 	glsl/gl_nir_link_uniforms.c \
+	glsl/gl_nir_link_xfb.c \
 	glsl/gl_nir_linker.c \
 	glsl/gl_nir_linker.h \
 	glsl/gl_nir.h \
@@ -128,7 +130,6 @@ LIBGLSL_FILES = \
 	glsl/opt_constant_folding.cpp \
 	glsl/opt_constant_propagation.cpp \
 	glsl/opt_constant_variable.cpp \
-	glsl/opt_copy_propagation.cpp \
 	glsl/opt_copy_propagation_elements.cpp \
 	glsl/opt_dead_builtin_variables.cpp \
 	glsl/opt_dead_builtin_varyings.cpp \
@@ -202,6 +203,8 @@ NIR_FILES = \
 	nir/nir.c \
 	nir/nir.h \
 	nir/nir_builder.h \
+	nir/nir_builtin_builder.c \
+	nir/nir_builtin_builder.h \
 	nir/nir_clone.c \
 	nir/nir_constant_expressions.h \
 	nir/nir_control_flow.c \
@@ -276,6 +279,7 @@ NIR_FILES = \
 	nir/nir_opt_if.c \
 	nir/nir_opt_intrinsics.c \
 	nir/nir_opt_loop_unroll.c \
+	nir/nir_opt_large_constants.c \
 	nir/nir_opt_move_comparisons.c \
 	nir/nir_opt_move_load_ubo.c \
 	nir/nir_opt_peephole_select.c \

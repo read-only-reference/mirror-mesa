@@ -28,6 +28,17 @@
 #include "nir.h"
 #include "nir_builder.h"
 
+static nir_ssa_def*
+build_local_group_size(nir_builder *b)
+{
+   nir_const_value local_size;
+   memset(&local_size, 0, sizeof(local_size));
+   local_size.u32[0] = b->shader->info.cs.local_size[0];
+   local_size.u32[1] = b->shader->info.cs.local_size[1];
+   local_size.u32[2] = b->shader->info.cs.local_size[2];
+   return nir_build_imm(b, 3, 32, local_size);
+}
+
 static bool
 convert_block(nir_block *block, nir_builder *b)
 {
@@ -66,19 +77,11 @@ convert_block(nir_block *block, nir_builder *b)
           *    "The value of gl_GlobalInvocationID is equal to
           *    gl_WorkGroupID * gl_WorkGroupSize + gl_LocalInvocationID"
           */
-
-         nir_const_value local_size;
-         memset(&local_size, 0, sizeof(local_size));
-         local_size.u32[0] = b->shader->info.cs.local_size[0];
-         local_size.u32[1] = b->shader->info.cs.local_size[1];
-         local_size.u32[2] = b->shader->info.cs.local_size[2];
-
+         nir_ssa_def *group_size = build_local_group_size(b);
          nir_ssa_def *group_id = nir_load_work_group_id(b);
          nir_ssa_def *local_id = nir_load_local_invocation_id(b);
 
-         sysval = nir_iadd(b, nir_imul(b, group_id,
-                                       nir_build_imm(b, 3, 32, local_size)),
-                              local_id);
+         sysval = nir_iadd(b, nir_imul(b, group_id, group_size), local_id);
          break;
       }
 
@@ -112,12 +115,7 @@ convert_block(nir_block *block, nir_builder *b)
       }
 
       case SYSTEM_VALUE_LOCAL_GROUP_SIZE: {
-         nir_const_value local_size;
-         memset(&local_size, 0, sizeof(local_size));
-         local_size.u32[0] = b->shader->info.cs.local_size[0];
-         local_size.u32[1] = b->shader->info.cs.local_size[1];
-         local_size.u32[2] = b->shader->info.cs.local_size[2];
-         sysval = nir_build_imm(b, 3, 32, local_size);
+         sysval = build_local_group_size(b);
          break;
       }
 
@@ -146,6 +144,23 @@ convert_block(nir_block *block, nir_builder *b)
                               nir_load_first_vertex(b));
          break;
 
+      case SYSTEM_VALUE_HELPER_INVOCATION:
+         if (b->shader->options->lower_helper_invocation) {
+            nir_ssa_def *tmp;
+
+            tmp = nir_ishl(b,
+                           nir_imm_int(b, 1),
+                           nir_load_sample_id_no_per_sample(b));
+
+            tmp = nir_iand(b,
+                           nir_load_sample_mask_in(b),
+                           tmp);
+
+            sysval = nir_inot(b, nir_i2b(b, tmp));
+         }
+
+         break;
+
       case SYSTEM_VALUE_INSTANCE_INDEX:
          sysval = nir_iadd(b,
                            nir_load_instance_id(b),
@@ -172,6 +187,13 @@ convert_block(nir_block *block, nir_builder *b)
          if (b->shader->options->lower_device_index_to_zero)
             sysval = nir_imm_int(b, 0);
          break;
+
+      case SYSTEM_VALUE_GLOBAL_GROUP_SIZE: {
+         nir_ssa_def *group_size = build_local_group_size(b);
+         nir_ssa_def *num_work_groups = nir_load_num_work_groups(b);
+         sysval = nir_imul(b, group_size, num_work_groups);
+         break;
+      }
 
       default:
          break;

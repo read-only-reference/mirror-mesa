@@ -81,6 +81,7 @@ void v3d_job_add_bo(struct v3d_job *job, struct v3d_bo *bo);
 #define VC5_DIRTY_STREAMOUT     (1 << 27)
 #define VC5_DIRTY_OQ            (1 << 28)
 #define VC5_DIRTY_CENTROID_FLAGS (1 << 29)
+#define VC5_DIRTY_NOPERSPECTIVE_FLAGS (1 << 30)
 
 #define VC5_MAX_FS_INPUTS 64
 
@@ -279,11 +280,15 @@ struct v3d_job {
         /* Bitmask of PIPE_CLEAR_* of buffers that were cleared before the
          * first rendering.
          */
-        uint32_t cleared;
-        /* Bitmask of PIPE_CLEAR_* of buffers that have been rendered to
-         * (either clears or draws).
+        uint32_t clear;
+        /* Bitmask of PIPE_CLEAR_* of buffers that have been read by a draw
+         * call without having been cleared first.
          */
-        uint32_t resolve;
+        uint32_t load;
+        /* Bitmask of PIPE_CLEAR_* of buffers that have been rendered to
+         * (either clears or draws) and should be stored.
+         */
+        uint32_t store;
         uint32_t clear_color[4][4];
         float clear_z;
         uint8_t clear_s;
@@ -375,7 +380,7 @@ struct v3d_context {
 
         /** @{ Current pipeline state objects */
         struct pipe_scissor_state scissor;
-        struct pipe_blend_state *blend;
+        struct v3d_blend_state *blend;
         struct v3d_rasterizer_state *rasterizer;
         struct v3d_depth_stencil_alpha_state *zsa;
 
@@ -428,21 +433,8 @@ struct v3d_rasterizer_state {
 
         float point_size;
 
-        /**
-         * Half-float (1/8/7 bits) value of polygon offset units for
-         * VC5_PACKET_DEPTH_OFFSET
-         */
-        uint16_t offset_units;
-        /**
-         * The HW treats polygon offset units based on a Z24 buffer, so we
-         * need to scale up offset_units if we're only Z16.
-         */
-        uint16_t z16_offset_units;
-        /**
-         * Half-float (1/8/7 bits) value of polygon offset scale for
-         * VC5_PACKET_DEPTH_OFFSET
-         */
-        uint16_t offset_factor;
+        uint8_t depth_offset[9];
+        uint8_t depth_offset_z16[9];
 };
 
 struct v3d_depth_stencil_alpha_state {
@@ -452,6 +444,13 @@ struct v3d_depth_stencil_alpha_state {
 
         uint8_t stencil_front[6];
         uint8_t stencil_back[6];
+};
+
+struct v3d_blend_state {
+        struct pipe_blend_state base;
+
+        /* Per-RT mask of whether blending is enabled. */
+        uint8_t blend_enables;
 };
 
 #define perf_debug(...) do {                            \

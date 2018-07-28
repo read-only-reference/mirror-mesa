@@ -383,19 +383,20 @@ static void
 vtn_handle_extension(struct vtn_builder *b, SpvOp opcode,
                      const uint32_t *w, unsigned count)
 {
+   const char *ext = (const char *)&w[2];
    switch (opcode) {
    case SpvOpExtInstImport: {
       struct vtn_value *val = vtn_push_value(b, w[1], vtn_value_type_extension);
-      if (strcmp((const char *)&w[2], "GLSL.std.450") == 0) {
+      if (strcmp(ext, "GLSL.std.450") == 0) {
          val->ext_handler = vtn_handle_glsl450_instruction;
-      } else if ((strcmp((const char *)&w[2], "SPV_AMD_gcn_shader") == 0)
+      } else if ((strcmp(ext, "SPV_AMD_gcn_shader") == 0)
                 && (b->options && b->options->caps.gcn_shader)) {
          val->ext_handler = vtn_handle_amd_gcn_shader_instruction;
-      } else if ((strcmp((const char *)&w[2], "SPV_AMD_shader_trinary_minmax") == 0)
+      } else if ((strcmp(ext, "SPV_AMD_shader_trinary_minmax") == 0)
                 && (b->options && b->options->caps.trinary_minmax)) {
          val->ext_handler = vtn_handle_amd_shader_trinary_minmax_instruction;
       } else {
-         vtn_fail("Unsupported extension");
+         vtn_fail("Unsupported extension: %s", ext);
       }
       break;
    }
@@ -846,7 +847,6 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationNonWritable:
    case SpvDecorationNonReadable:
    case SpvDecorationUniform:
-   case SpvDecorationStream:
    case SpvDecorationLocation:
    case SpvDecorationComponent:
    case SpvDecorationOffset:
@@ -854,6 +854,14 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationXfbStride:
       vtn_warn("Decoration only allowed for struct members: %s",
                spirv_decoration_to_string(dec->decoration));
+      break;
+
+   case SpvDecorationStream:
+      /* We don't need to do anything here, as stream is filled up when
+       * aplying the decoration to a variable, just check that if it is not a
+       * struct member, it should be a struct.
+       */
+      vtn_assert(type->base_type == vtn_base_type_struct);
       break;
 
    case SpvDecorationRelaxedPrecision:
@@ -1493,8 +1501,19 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                   spirv_op_to_string(opcode), elem_count, val->type->length);
 
       nir_constant **elems = ralloc_array(b, nir_constant *, elem_count);
-      for (unsigned i = 0; i < elem_count; i++)
-         elems[i] = vtn_value(b, w[i + 3], vtn_value_type_constant)->constant;
+      for (unsigned i = 0; i < elem_count; i++) {
+         struct vtn_value *val = vtn_untyped_value(b, w[i + 3]);
+
+         if (val->value_type == vtn_value_type_constant) {
+            elems[i] = val->constant;
+         } else {
+            vtn_fail_if(val->value_type != vtn_value_type_undef,
+                        "only constants or undefs allowed for "
+                        "SpvOpConstantComposite");
+            /* to make it easier, just insert a NULL constant for now */
+            elems[i] = vtn_null_constant(b, val->type->type);
+         }
+      }
 
       switch (val->type->base_type) {
       case vtn_base_type_vector: {
@@ -2309,6 +2328,18 @@ get_image_coord(struct vtn_builder *b, uint32_t value)
    return nir_swizzle(&b->nb, coord->def, swizzle, 4, false);
 }
 
+static nir_ssa_def *
+expand_to_vec4(nir_builder *b, nir_ssa_def *value)
+{
+   if (value->num_components == 4)
+      return value;
+
+   unsigned swiz[4];
+   for (unsigned i = 0; i < 4; i++)
+      swiz[i] = i < value->num_components ? i : 0;
+   return nir_swizzle(b, value, swiz, 4, false);
+}
+
 static void
 vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
                  const uint32_t *w, unsigned count)
@@ -2422,11 +2453,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       /* The image coordinate is always 4 components but we may not have that
        * many.  Swizzle to compensate.
        */
-      unsigned swiz[4];
-      for (unsigned i = 0; i < 4; i++)
-         swiz[i] = i < image.coord->num_components ? i : 0;
-      intrin->src[1] = nir_src_for_ssa(nir_swizzle(&b->nb, image.coord,
-                                                   swiz, 4, false));
+      intrin->src[1] = nir_src_for_ssa(expand_to_vec4(&b->nb, image.coord));
       intrin->src[2] = nir_src_for_ssa(image.sample);
    }
 
@@ -2436,11 +2463,13 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
    case SpvOpImageRead:
       break;
    case SpvOpAtomicStore:
-      intrin->src[3] = nir_src_for_ssa(vtn_ssa_value(b, w[4])->def);
+   case SpvOpImageWrite: {
+      const uint32_t value_id = opcode == SpvOpAtomicStore ? w[4] : w[3];
+      nir_ssa_def *value = vtn_ssa_value(b, value_id)->def;
+      /* nir_intrinsic_image_deref_store always takes a vec4 value */
+      intrin->src[3] = nir_src_for_ssa(expand_to_vec4(&b->nb, value));
       break;
-   case SpvOpImageWrite:
-      intrin->src[3] = nir_src_for_ssa(vtn_ssa_value(b, w[3])->def);
-      break;
+   }
 
    case SpvOpAtomicCompareExchange:
    case SpvOpAtomicIIncrement:
@@ -2462,23 +2491,26 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       vtn_fail("Invalid image opcode");
    }
 
-   if (opcode != SpvOpImageWrite) {
+   if (opcode != SpvOpImageWrite && opcode != SpvOpAtomicStore) {
       struct vtn_value *val = vtn_push_value(b, w[2], vtn_value_type_ssa);
       struct vtn_type *type = vtn_value(b, w[1], vtn_value_type_type)->type;
 
-      unsigned dest_components = nir_intrinsic_dest_components(intrin);
-      if (intrin->intrinsic == nir_intrinsic_image_deref_size) {
-         dest_components = intrin->num_components =
-            glsl_get_vector_elements(type->type);
-      }
+      unsigned dest_components = glsl_get_vector_elements(type->type);
+      intrin->num_components = nir_intrinsic_infos[op].dest_components;
+      if (intrin->num_components == 0)
+         intrin->num_components = dest_components;
 
       nir_ssa_dest_init(&intrin->instr, &intrin->dest,
-                        dest_components, 32, NULL);
+                        intrin->num_components, 32, NULL);
 
       nir_builder_instr_insert(&b->nb, &intrin->instr);
 
+      nir_ssa_def *result = &intrin->dest.ssa;
+      if (intrin->num_components != dest_components)
+         result = nir_channels(&b->nb, result, (1 << dest_components) - 1);
+
       val->ssa = vtn_create_ssa_value(b, type->type);
-      val->ssa->def = &intrin->dest.ssa;
+      val->ssa->def = result;
    } else {
       nir_builder_instr_insert(&b->nb, &intrin->instr);
    }
@@ -2507,6 +2539,35 @@ get_ssbo_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
 #undef OP
    default:
       vtn_fail("Invalid SSBO atomic");
+   }
+}
+
+static nir_intrinsic_op
+get_uniform_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
+{
+   switch (opcode) {
+#define OP(S, N) case SpvOp##S: return nir_intrinsic_atomic_counter_ ##N;
+   OP(AtomicLoad,             read_deref)
+   OP(AtomicExchange,         exchange)
+   OP(AtomicCompareExchange,  comp_swap)
+   OP(AtomicIIncrement,       inc_deref)
+   OP(AtomicIDecrement,       post_dec_deref)
+   OP(AtomicIAdd,             add_deref)
+   OP(AtomicISub,             add_deref)
+   OP(AtomicUMin,             min_deref)
+   OP(AtomicUMax,             max_deref)
+   OP(AtomicAnd,              and_deref)
+   OP(AtomicOr,               or_deref)
+   OP(AtomicXor,              xor_deref)
+#undef OP
+   default:
+      /* We left the following out: AtomicStore, AtomicSMin and
+       * AtomicSmax. Right now there are not nir intrinsics for them. At this
+       * moment Atomic Counter support is needed for ARB_spirv support, so is
+       * only need to support GLSL Atomic Counters that are uints and don't
+       * allow direct storage.
+       */
+      unreachable("Invalid uniform atomic");
    }
 }
 
@@ -2562,9 +2623,12 @@ get_deref_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
    }
 }
 
+/*
+ * Handles shared atomics, ssbo atomics and atomic counters.
+ */
 static void
-vtn_handle_ssbo_or_shared_atomic(struct vtn_builder *b, SpvOp opcode,
-                                 const uint32_t *w, unsigned count)
+vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
+                   const uint32_t *w, unsigned count)
 {
    struct vtn_pointer *ptr;
    nir_intrinsic_instr *atomic;
@@ -2601,8 +2665,54 @@ vtn_handle_ssbo_or_shared_atomic(struct vtn_builder *b, SpvOp opcode,
    SpvMemorySemanticsMask semantics = w[5];
    */
 
-   if (ptr->mode == vtn_variable_mode_workgroup &&
-       !b->options->lower_workgroup_access_to_offsets) {
+   /* uniform as "atomic counter uniform" */
+   if (ptr->mode == vtn_variable_mode_uniform) {
+      nir_deref_instr *deref = vtn_pointer_to_deref(b, ptr);
+      const struct glsl_type *deref_type = deref->type;
+      nir_intrinsic_op op = get_uniform_nir_atomic_op(b, opcode);
+      atomic = nir_intrinsic_instr_create(b->nb.shader, op);
+      atomic->src[0] = nir_src_for_ssa(&deref->dest.ssa);
+
+      /* SSBO needs to initialize index/offset. In this case we don't need to,
+       * as that info is already stored on the ptr->var->var nir_variable (see
+       * vtn_create_variable)
+       */
+
+      switch (opcode) {
+      case SpvOpAtomicLoad:
+         atomic->num_components = glsl_get_vector_elements(deref_type);
+         break;
+
+      case SpvOpAtomicStore:
+         atomic->num_components = glsl_get_vector_elements(deref_type);
+         nir_intrinsic_set_write_mask(atomic, (1 << atomic->num_components) - 1);
+         break;
+
+      case SpvOpAtomicExchange:
+      case SpvOpAtomicCompareExchange:
+      case SpvOpAtomicCompareExchangeWeak:
+      case SpvOpAtomicIIncrement:
+      case SpvOpAtomicIDecrement:
+      case SpvOpAtomicIAdd:
+      case SpvOpAtomicISub:
+      case SpvOpAtomicSMin:
+      case SpvOpAtomicUMin:
+      case SpvOpAtomicSMax:
+      case SpvOpAtomicUMax:
+      case SpvOpAtomicAnd:
+      case SpvOpAtomicOr:
+      case SpvOpAtomicXor:
+         /* Nothing: we don't need to call fill_common_atomic_sources here, as
+          * atomic counter uniforms doesn't have sources
+          */
+         break;
+
+      default:
+         unreachable("Invalid SPIR-V atomic");
+
+      }
+   } else if (ptr->mode == vtn_variable_mode_workgroup &&
+              !b->options->lower_workgroup_access_to_offsets) {
       nir_deref_instr *deref = vtn_pointer_to_deref(b, ptr);
       const struct glsl_type *deref_type = deref->type;
       nir_intrinsic_op op = get_deref_nir_atomic_op(b, opcode);
@@ -2720,7 +2830,7 @@ create_vec(struct vtn_builder *b, unsigned num_components, unsigned bit_size)
 {
    nir_op op;
    switch (num_components) {
-   case 1: op = nir_op_fmov; break;
+   case 1: op = nir_op_imov; break;
    case 2: op = nir_op_vec2; break;
    case 3: op = nir_op_vec3; break;
    case 4: op = nir_op_vec4; break;
@@ -2768,8 +2878,7 @@ vtn_ssa_transpose(struct vtn_builder *b, struct vtn_ssa_value *src)
 nir_ssa_def *
 vtn_vector_extract(struct vtn_builder *b, nir_ssa_def *src, unsigned index)
 {
-   unsigned swiz[4] = { index };
-   return nir_swizzle(&b->nb, src, swiz, 1, true);
+   return nir_channel(&b->nb, src, index);
 }
 
 nir_ssa_def *
@@ -2985,7 +3094,7 @@ vtn_handle_composite(struct vtn_builder *b, SpvOp opcode,
       unsigned elems = count - 3;
       assume(elems >= 1);
       if (glsl_type_is_vector_or_scalar(type)) {
-         nir_ssa_def *srcs[4];
+         nir_ssa_def *srcs[NIR_MAX_VEC_COMPONENTS];
          for (unsigned i = 0; i < elems; i++)
             srcs[i] = vtn_ssa_value(b, w[3 + i])->def;
          val->ssa->def =
@@ -3109,9 +3218,12 @@ vtn_handle_barrier(struct vtn_builder *b, SpvOp opcode,
 
       switch (opcode) {
       case SpvOpEmitStreamVertex:
-      case SpvOpEndStreamPrimitive:
-         nir_intrinsic_set_stream_id(intrin, w[1]);
+      case SpvOpEndStreamPrimitive: {
+         unsigned stream = vtn_constant_value(b, w[1])->values[0].u32[0];
+         nir_intrinsic_set_stream_id(intrin, stream);
          break;
+      }
+
       default:
          break;
       }
@@ -3305,20 +3417,21 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilityStorageImageExtendedFormats:
          break;
 
-      case SpvCapabilityGeometryStreams:
       case SpvCapabilityLinkage:
       case SpvCapabilityVector16:
       case SpvCapabilityFloat16Buffer:
       case SpvCapabilityFloat16:
       case SpvCapabilityInt64Atomics:
-      case SpvCapabilityAtomicStorage:
       case SpvCapabilityStorageImageMultisample:
       case SpvCapabilityInt8:
       case SpvCapabilitySparseResidency:
       case SpvCapabilityMinLod:
-      case SpvCapabilityTransformFeedback:
          vtn_warn("Unsupported SPIR-V capability: %s",
                   spirv_capability_to_string(cap));
+         break;
+
+      case SpvCapabilityAtomicStorage:
+         spv_check_supported(atomic_storage, cap);
          break;
 
       case SpvCapabilityFloat64:
@@ -3329,6 +3442,14 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          break;
       case SpvCapabilityInt16:
          spv_check_supported(int16, cap);
+         break;
+
+      case SpvCapabilityTransformFeedback:
+         spv_check_supported(transform_feedback, cap);
+         break;
+
+      case SpvCapabilityGeometryStreams:
+         spv_check_supported(geometry_streams, cap);
          break;
 
       case SpvCapabilityAddresses:
@@ -3417,6 +3538,12 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          spv_check_supported(shader_viewport_index_layer, cap);
          break;
 
+      case SpvCapabilityStorageBuffer8BitAccess:
+      case SpvCapabilityUniformAndStorageBuffer8BitAccess:
+      case SpvCapabilityStoragePushConstant8:
+         spv_check_supported(storage_8bit, cap);
+         break;
+
       case SpvCapabilityInputAttachmentArrayDynamicIndexingEXT:
       case SpvCapabilityUniformTexelBufferArrayDynamicIndexingEXT:
       case SpvCapabilityStorageTexelBufferArrayDynamicIndexingEXT:
@@ -3429,6 +3556,10 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityStencilExportEXT:
          spv_check_supported(stencil_export, cap);
+         break;
+
+      case SpvCapabilitySampleMaskPostDepthCoverage:
+         spv_check_supported(post_depth_coverage, cap);
          break;
 
       default:
@@ -3496,6 +3627,11 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
    case SpvExecutionModeEarlyFragmentTests:
       vtn_assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
       b->shader->info.fs.early_fragment_tests = true;
+      break;
+
+   case SpvExecutionModePostDepthCoverage:
+      vtn_assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
+      b->shader->info.fs.post_depth_coverage = true;
       break;
 
    case SpvExecutionModeInvocations:
@@ -3601,7 +3737,7 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       break;
 
    case SpvExecutionModeXfb:
-      vtn_fail("Unhandled execution mode");
+      b->shader->info.has_transform_feedback_varyings = true;
       break;
 
    case SpvExecutionModeVecTypeHint:
@@ -3790,7 +3926,7 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
          vtn_handle_image(b, opcode, w, count);
       } else {
          vtn_assert(pointer->value_type == vtn_value_type_pointer);
-         vtn_handle_ssbo_or_shared_atomic(b, opcode, w, count);
+         vtn_handle_atomics(b, opcode, w, count);
       }
       break;
    }
@@ -3801,7 +3937,7 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
          vtn_handle_image(b, opcode, w, count);
       } else {
          vtn_assert(pointer->value_type == vtn_value_type_pointer);
-         vtn_handle_ssbo_or_shared_atomic(b, opcode, w, count);
+         vtn_handle_atomics(b, opcode, w, count);
       }
       break;
    }

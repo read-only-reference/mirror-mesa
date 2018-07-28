@@ -139,6 +139,7 @@
 
 #include "ac_binary.h"
 #include "ac_llvm_build.h"
+#include "ac_llvm_util.h"
 
 #include <stdio.h>
 
@@ -317,20 +318,11 @@ enum {
 
 struct si_shader;
 
-/* Per-thread persistent LLVM objects. */
-struct si_compiler {
-	LLVMTargetMachineRef		tm;
-	const char			*triple;
-	const char			*data_layout;
-	LLVMTargetLibraryInfoRef	target_library_info;
-	LLVMPassManagerRef		passmgr;
-};
-
 /* State of the context creating the shader object. */
 struct si_compiler_ctx_state {
 	/* Should only be used by si_init_shader_selector_async and
 	 * si_build_shader_variant if thread_index == -1 (non-threaded). */
-	struct si_compiler		*compiler;
+	struct ac_llvm_compiler		*compiler;
 
 	/* Used if thread_index == -1 or if debug.async is true. */
 	struct pipe_debug_callback	debug;
@@ -376,7 +368,8 @@ struct si_shader_selector {
 	ubyte		culldist_mask;
 
 	/* ES parameters. */
-	unsigned	esgs_itemsize;
+	unsigned	esgs_itemsize; /* vertex stride */
+	unsigned	lshs_vertex_stride;
 
 	/* GS parameters. */
 	unsigned	gs_input_verts_per_prim;
@@ -510,7 +503,7 @@ union si_shader_part_key {
 		unsigned	ancillary_vgpr_index:5;
 		unsigned	wqm:1;
 		char		color_attr_index[2];
-		char		color_interp_vgpr_index[2]; /* -1 == constant */
+		signed char	color_interp_vgpr_index[2]; /* -1 == constant */
 	} ps_prolog;
 	struct {
 		struct si_ps_epilog_bits states;
@@ -659,14 +652,14 @@ struct si_shader_part {
 /* si_shader.c */
 struct si_shader *
 si_generate_gs_copy_shader(struct si_screen *sscreen,
-			   struct si_compiler *compiler,
+			   struct ac_llvm_compiler *compiler,
 			   struct si_shader_selector *gs_selector,
 			   struct pipe_debug_callback *debug);
 int si_compile_tgsi_shader(struct si_screen *sscreen,
-			   struct si_compiler *compiler,
+			   struct ac_llvm_compiler *compiler,
 			   struct si_shader *shader,
 			   struct pipe_debug_callback *debug);
-int si_shader_create(struct si_screen *sscreen, struct si_compiler *compiler,
+int si_shader_create(struct si_screen *sscreen, struct ac_llvm_compiler *compiler,
 		     struct si_shader *shader,
 		     struct pipe_debug_callback *debug);
 void si_shader_destroy(struct si_shader *shader);

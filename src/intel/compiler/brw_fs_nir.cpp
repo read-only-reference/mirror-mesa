@@ -67,14 +67,25 @@ fs_visitor::nir_setup_outputs()
       vec4s[loc] = MAX2(vec4s[loc], var_vec4s);
    }
 
-   nir_foreach_variable(var, &nir->outputs) {
-      const int loc = var->data.driver_location;
-      if (outputs[loc].file == BAD_FILE) {
-         fs_reg reg = bld.vgrf(BRW_REGISTER_TYPE_F, 4 * vec4s[loc]);
-         for (unsigned i = 0; i < vec4s[loc]; i++) {
-            outputs[loc + i] = offset(reg, bld, 4 * i);
-         }
+   for (unsigned loc = 0; loc < ARRAY_SIZE(vec4s);) {
+      if (vec4s[loc] == 0) {
+         loc++;
+         continue;
       }
+
+      unsigned reg_size = vec4s[loc];
+
+      /* Check if there are any ranges that start within this range and extend
+       * past it. If so, include them in this allocation.
+       */
+      for (unsigned i = 1; i < reg_size; i++)
+         reg_size = MAX2(vec4s[i + loc] + i, reg_size);
+
+      fs_reg reg = bld.vgrf(BRW_REGISTER_TYPE_F, 4 * reg_size);
+      for (unsigned i = 0; i < reg_size; i++)
+         outputs[loc + i] = offset(reg, bld, 4 * i);
+
+      loc += reg_size;
    }
 }
 
@@ -292,10 +303,13 @@ brw_reg_type_from_bit_size(const unsigned bit_size,
       default:
          unreachable("Invalid bit size");
       }
+   case BRW_REGISTER_TYPE_B:
    case BRW_REGISTER_TYPE_W:
    case BRW_REGISTER_TYPE_D:
    case BRW_REGISTER_TYPE_Q:
       switch(bit_size) {
+      case 8:
+         return BRW_REGISTER_TYPE_B;
       case 16:
          return BRW_REGISTER_TYPE_W;
       case 32:
@@ -305,10 +319,13 @@ brw_reg_type_from_bit_size(const unsigned bit_size,
       default:
          unreachable("Invalid bit size");
       }
+   case BRW_REGISTER_TYPE_UB:
    case BRW_REGISTER_TYPE_UW:
    case BRW_REGISTER_TYPE_UD:
    case BRW_REGISTER_TYPE_UQ:
       switch(bit_size) {
+      case 8:
+         return BRW_REGISTER_TYPE_UB;
       case 16:
          return BRW_REGISTER_TYPE_UW;
       case 32:
@@ -770,7 +787,7 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
        * BRW_OPCODE_F32TO16 when/if we work for HF support on gen7.
        */
 
-   case nir_op_f2f16_undef:
+   case nir_op_f2f16:
       inst = bld.MOV(result, op[0]);
       inst->saturate = instr->dest.saturate;
       break;
@@ -817,17 +834,28 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_u2u16:
    case nir_op_i2f16:
    case nir_op_u2f16:
+   case nir_op_i2i8:
+   case nir_op_u2u8:
       inst = bld.MOV(result, op[0]);
       inst->saturate = instr->dest.saturate;
       break;
 
    case nir_op_fsign: {
       if (op[0].abs) {
-         /* Straightforward since the source can be assumed to be
-          * non-negative.
+         /* Straightforward since the source can be assumed to be either
+          * strictly >= 0 or strictly <= 0 depending on the setting of the
+          * negate flag.
           */
          set_condmod(BRW_CONDITIONAL_NZ, bld.MOV(result, op[0]));
-         set_predicate(BRW_PREDICATE_NORMAL, bld.MOV(result, brw_imm_f(1.0f)));
+
+         inst = (op[0].negate)
+            ? bld.MOV(result, brw_imm_f(-1.0f))
+            : bld.MOV(result, brw_imm_f(1.0f));
+
+         set_predicate(BRW_PREDICATE_NORMAL, inst);
+
+         if (instr->dest.saturate)
+            inst->saturate = true;
 
       } else if (type_sz(op[0].type) < 8) {
          /* AND(val, 0x80000000) gives the sign bit.
@@ -1646,7 +1674,10 @@ fs_visitor::get_nir_dest(const nir_dest &dest)
 {
    if (dest.is_ssa) {
       const brw_reg_type reg_type =
-         brw_reg_type_from_bit_size(dest.ssa.bit_size, BRW_REGISTER_TYPE_F);
+         brw_reg_type_from_bit_size(dest.ssa.bit_size,
+                                    dest.ssa.bit_size == 8 ?
+                                    BRW_REGISTER_TYPE_D :
+                                    BRW_REGISTER_TYPE_F);
       nir_ssa_values[dest.ssa.index] =
          bld.vgrf(reg_type, dest.ssa.num_components);
       return nir_ssa_values[dest.ssa.index];
@@ -2467,18 +2498,6 @@ fs_visitor::nir_emit_vs_intrinsic(const fs_builder &bld,
    case nir_intrinsic_load_base_vertex:
       unreachable("should be lowered by nir_lower_system_values()");
 
-   case nir_intrinsic_load_vertex_id_zero_base:
-   case nir_intrinsic_load_instance_id:
-   case nir_intrinsic_load_base_instance:
-   case nir_intrinsic_load_draw_id: {
-      gl_system_value sv = nir_system_value_from_intrinsic(instr->intrinsic);
-      fs_reg val = nir_system_values[sv];
-      assert(val.file != BAD_FILE);
-      dest.type = val.type;
-      bld.MOV(dest, val);
-      break;
-   }
-
    case nir_intrinsic_load_input: {
       fs_reg src = fs_reg(ATTR, nir_intrinsic_base(instr) * 4, dest.type);
       unsigned first_component = nir_intrinsic_component(instr);
@@ -2499,6 +2518,10 @@ fs_visitor::nir_emit_vs_intrinsic(const fs_builder &bld,
       break;
    }
 
+   case nir_intrinsic_load_vertex_id_zero_base:
+   case nir_intrinsic_load_instance_id:
+   case nir_intrinsic_load_base_instance:
+   case nir_intrinsic_load_draw_id:
    case nir_intrinsic_load_first_vertex:
    case nir_intrinsic_load_is_indexed_draw:
       unreachable("lowered by brw_nir_lower_vs_inputs");
@@ -3895,6 +3918,8 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       break;
    }
 
+   case nir_intrinsic_group_memory_barrier:
+   case nir_intrinsic_memory_barrier_shared:
    case nir_intrinsic_memory_barrier_atomic_counter:
    case nir_intrinsic_memory_barrier_buffer:
    case nir_intrinsic_memory_barrier_image:
@@ -3905,29 +3930,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
          ->size_written = 2 * REG_SIZE;
       break;
    }
-
-   case nir_intrinsic_group_memory_barrier:
-   case nir_intrinsic_memory_barrier_shared:
-      /* We treat these workgroup-level barriers as no-ops.  This should be
-       * safe at present and as long as:
-       *
-       *  - Memory access instructions are not subsequently reordered by the
-       *    compiler back-end.
-       *
-       *  - All threads from a given compute shader workgroup fit within a
-       *    single subslice and therefore talk to the same HDC shared unit
-       *    what supposedly guarantees ordering and coherency between threads
-       *    from the same workgroup.  This may change in the future when we
-       *    start splitting workgroups across multiple subslices.
-       *
-       *  - The context is not in fault-and-stream mode, which could cause
-       *    memory transactions (including to SLM) prior to the barrier to be
-       *    replayed after the barrier if a pagefault occurs.  This shouldn't
-       *    be a problem up to and including SKL because fault-and-stream is
-       *    not usable due to hardware issues, but that's likely to change in
-       *    the future.
-       */
-      break;
 
    case nir_intrinsic_shader_clock: {
       /* We cannot do anything if there is an event, so ignore it for now */
@@ -4253,7 +4255,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
             write_src = shuffle_for_32bit_write(bld, write_src, 0,
                                                 num_components);
          } else if (type_size < 4) {
-            assert(type_size == 2);
             /* For 16-bit types we pack two consecutive values into a 32-bit
              * word and use an untyped write message. For single values or not
              * 32-bit-aligned we need to use byte-scattered writes because
@@ -4277,12 +4278,15 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
                 * being aligned to 32-bit.
                 */
                num_components = 1;
-            } else if (num_components > 2 && (num_components % 2)) {
-               /* If there is an odd number of consecutive components we left
-                * the not paired component for a following emit of length == 1
-                * with byte_scattered_write.
+            } else if (num_components * type_size > 4 &&
+                       (num_components * type_size % 4)) {
+               /* If the pending components size is not a multiple of 4 bytes
+                * we left the not aligned components for following emits of
+                * length == 1 with byte_scattered_write.
                 */
-               num_components --;
+               num_components -= (num_components * type_size % 4) / type_size;
+            } else if (num_components * type_size < 4) {
+               num_components = 1;
             }
             /* For num_components == 1 we are also shuffling the component
              * because byte scattered writes of 16-bit need values to be dword
@@ -4306,7 +4310,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
          }
 
          if (type_size < 4 && num_components == 1) {
-            assert(type_size == 2);
             /* Untyped Surface messages have a fixed 32-bit size, so we need
              * to rely on byte scattered in order to write 16-bit elements.
              * The byte_scattered_write message needs that every written 16-bit

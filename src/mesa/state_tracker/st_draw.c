@@ -156,6 +156,7 @@ st_draw_vbo(struct gl_context *ctx,
    info.vertices_per_patch = ctx->TessCtrlProgram.patch_vertices;
    info.indirect = NULL;
    info.count_from_stream_output = NULL;
+   info.restart_index = 0;
 
    if (ib) {
       struct gl_buffer_object *bufobj = ib->obj;
@@ -260,6 +261,7 @@ st_indirect_draw_vbo(struct gl_context *ctx,
    memset(&indirect, 0, sizeof(indirect));
    util_draw_init_info(&info);
    info.start = 0; /* index offset / index size */
+   info.max_index = ~0u; /* so that u_vbuf can tell that it's unknown */
 
    if (ib) {
       struct gl_buffer_object *bufobj = ib->obj;

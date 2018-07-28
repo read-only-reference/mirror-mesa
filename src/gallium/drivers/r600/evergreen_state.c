@@ -243,6 +243,7 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 				      enum pipe_format format,
 				      enum pipe_texture_target target,
 				      unsigned sample_count,
+				      unsigned storage_sample_count,
 				      unsigned usage)
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
@@ -252,6 +253,9 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 		R600_ERR("r600: unsupported texture type %d\n", target);
 		return FALSE;
 	}
+
+	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+		return false;
 
 	if (sample_count > 1) {
 		if (!rscreen->has_msaa)
@@ -572,10 +576,18 @@ static void *evergreen_create_sampler_state(struct pipe_context *ctx,
 	unsigned max_aniso = rscreen->force_aniso >= 0 ? rscreen->force_aniso
 						       : state->max_anisotropy;
 	unsigned max_aniso_ratio = r600_tex_aniso_filter(max_aniso);
+	float max_lod = state->max_lod;
 
 	if (!ss) {
 		return NULL;
 	}
+
+	/* If the min_mip_filter is NONE, then the texture has no mipmapping and
+	 * MIP_FILTER will also be set to NONE. However, if more then one LOD is
+	 * configured, then the texture lookup seems to fail for some specific texture
+	 * formats. Forcing the number of LODs to one in this case fixes it. */
+	if (state->min_mip_filter == PIPE_TEX_MIPFILTER_NONE)
+		max_lod = state->min_lod;
 
 	ss->border_color_use = sampler_state_needs_border_color(state);
 
@@ -593,7 +605,7 @@ static void *evergreen_create_sampler_state(struct pipe_context *ctx,
 	/* R_03C004_SQ_TEX_SAMPLER_WORD1_0 */
 	ss->tex_sampler_words[1] =
 		S_03C004_MIN_LOD(S_FIXED(CLAMP(state->min_lod, 0, 15), 8)) |
-		S_03C004_MAX_LOD(S_FIXED(CLAMP(state->max_lod, 0, 15), 8));
+		S_03C004_MAX_LOD(S_FIXED(CLAMP(max_lod, 0, 15), 8));
 	/* R_03C008_SQ_TEX_SAMPLER_WORD2_0 */
 	ss->tex_sampler_words[2] =
 		S_03C008_LOD_BIAS(S_FIXED(CLAMP(state->lod_bias, -16, 16), 8)) |
@@ -1591,7 +1603,7 @@ static void evergreen_set_min_samples(struct pipe_context *ctx, unsigned min_sam
 }
 
 /* 8xMSAA */
-static uint32_t sample_locs_8x[] = {
+static const uint32_t sample_locs_8x[] = {
 	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
 	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
 	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
@@ -1856,7 +1868,7 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 		if (tex->cmask_buffer && tex->cmask_buffer != &tex->resource) {
 			cmask_reloc = radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx,
 				tex->cmask_buffer, RADEON_USAGE_READWRITE,
-				RADEON_PRIO_CMASK);
+				RADEON_PRIO_SEPARATE_META);
 		} else {
 			cmask_reloc = reloc;
 		}
@@ -2045,7 +2057,7 @@ static void evergreen_emit_db_state(struct r600_context *rctx, struct r600_atom 
 		radeon_set_context_reg(cs, R_028AC8_DB_PRELOAD_CONTROL, a->rsurf->db_preload_control);
 		radeon_set_context_reg(cs, R_028014_DB_HTILE_DATA_BASE, a->rsurf->db_htile_data_base);
 		reloc_idx = radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, &rtex->resource,
-						  RADEON_USAGE_READWRITE, RADEON_PRIO_HTILE);
+						  RADEON_USAGE_READWRITE, RADEON_PRIO_SEPARATE_META);
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, reloc_idx);
 	} else {
@@ -2394,6 +2406,37 @@ static void evergreen_emit_cs_sampler_views(struct r600_context *rctx, struct r6
 	                             EG_FETCH_CONSTANTS_OFFSET_CS + R600_MAX_CONST_BUFFERS, RADEON_CP_PACKET3_COMPUTE_MODE);
 }
 
+static void evergreen_convert_border_color(union pipe_color_union *in,
+                                           union pipe_color_union *out,
+                                           enum pipe_format format)
+{
+	if (util_format_is_pure_integer(format) &&
+		 !util_format_is_depth_or_stencil(format)) {
+		const struct util_format_description *d = util_format_description(format);
+
+		for (int i = 0; i < d->nr_channels; ++i) {
+			int cs = d->channel[i].size;
+			if (d->channel[i].type == UTIL_FORMAT_TYPE_SIGNED)
+				out->f[i] = (double)(in->i[i]) / ((1ul << (cs - 1)) - 1 );
+			else if (d->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
+				out->f[i] = (double)(in->ui[i]) / ((1ul << cs) - 1 );
+			else
+				out->f[i] = 0;
+		}
+
+	} else {
+		switch (format) {
+		case PIPE_FORMAT_X24S8_UINT:
+		case PIPE_FORMAT_X32_S8X24_UINT:
+			out->f[0] = (double)(in->ui[0]) / 255.0;
+			out->f[1] = out->f[2] = out->f[3] = 0.0f;
+			break;
+		default:
+			memcpy(out->f, in->f, 4 * sizeof(float));
+		}
+	}
+}
+
 static void evergreen_emit_sampler_states(struct r600_context *rctx,
 				struct r600_textures_info *texinfo,
 				unsigned resource_id_base,
@@ -2402,6 +2445,8 @@ static void evergreen_emit_sampler_states(struct r600_context *rctx,
 {
 	struct radeon_cmdbuf *cs = rctx->b.gfx.cs;
 	uint32_t dirty_mask = texinfo->states.dirty_mask;
+	union pipe_color_union border_color = {{0,0,0,1}};
+	union pipe_color_union *border_color_ptr = &border_color;
 
 	while (dirty_mask) {
 		struct r600_pipe_sampler_state *rstate;
@@ -2410,6 +2455,16 @@ static void evergreen_emit_sampler_states(struct r600_context *rctx,
 		rstate = texinfo->states.states[i];
 		assert(rstate);
 
+		if (rstate->border_color_use) {
+			struct r600_pipe_sampler_view	*rview = texinfo->views.views[i];
+			if (rview) {
+				evergreen_convert_border_color(&rstate->border_color,
+				                               &border_color, rview->base.format);
+			} else {
+				border_color_ptr = &rstate->border_color;
+			}
+		}
+
 		radeon_emit(cs, PKT3(PKT3_SET_SAMPLER, 3, 0) | pkt_flags);
 		radeon_emit(cs, (resource_id_base + i) * 3);
 		radeon_emit_array(cs, rstate->tex_sampler_words, 3);
@@ -2417,7 +2472,7 @@ static void evergreen_emit_sampler_states(struct r600_context *rctx,
 		if (rstate->border_color_use) {
 			radeon_set_config_reg_seq(cs, border_index_reg, 5);
 			radeon_emit(cs, i);
-			radeon_emit_array(cs, rstate->border_color.ui, 4);
+			radeon_emit_array(cs, border_color_ptr->ui, 4);
 		}
 	}
 	texinfo->states.dirty_mask = 0;
@@ -3799,9 +3854,9 @@ static void evergreen_dma_copy_tile(struct r600_context *rctx,
 		size = (cheight * pitch) / 4;
 		/* emit reloc before writing cs so that cs is always in consistent state */
 		radeon_add_to_buffer_list(&rctx->b, &rctx->b.dma, &rsrc->resource,
-				      RADEON_USAGE_READ, RADEON_PRIO_SDMA_TEXTURE);
+				      RADEON_USAGE_READ, 0);
 		radeon_add_to_buffer_list(&rctx->b, &rctx->b.dma, &rdst->resource,
-				      RADEON_USAGE_WRITE, RADEON_PRIO_SDMA_TEXTURE);
+				      RADEON_USAGE_WRITE, 0);
 		radeon_emit(cs, DMA_PACKET(DMA_PACKET_COPY, sub_cmd, size));
 		radeon_emit(cs, base >> 8);
 		radeon_emit(cs, (detile << 31) | (array_mode << 27) |
@@ -3962,7 +4017,7 @@ static void evergreen_set_hw_atomic_buffers(struct pipe_context *ctx,
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_atomic_buffer_state *astate;
-	int i, idx;
+	unsigned i, idx;
 
 	astate = &rctx->atomic_buffer_state;
 
@@ -3998,7 +4053,7 @@ static void evergreen_set_shader_buffers(struct pipe_context *ctx,
 	struct r600_tex_color_info color;
 	struct eg_buf_res_params buf_params;
 	struct r600_resource *resource;
-	int i, idx;
+	unsigned i, idx;
 	unsigned old_mask;
 
 	if (shader != PIPE_SHADER_FRAGMENT &&
@@ -4092,7 +4147,7 @@ static void evergreen_set_shader_images(struct pipe_context *ctx,
 					const struct pipe_image_view *images)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	int i;
+	unsigned i;
 	struct r600_image_view *rview;
 	struct pipe_resource *image;
 	struct r600_resource *resource;

@@ -41,7 +41,7 @@ namespace brw {
 void
 src_reg::init()
 {
-   memset(this, 0, sizeof(*this));
+   memset((void*)this, 0, sizeof(*this));
    this->file = BAD_FILE;
    this->type = BRW_REGISTER_TYPE_UD;
 }
@@ -83,7 +83,7 @@ src_reg::src_reg(const dst_reg &reg) :
 void
 dst_reg::init()
 {
-   memset(this, 0, sizeof(*this));
+   memset((void*)this, 0, sizeof(*this));
    this->file = BAD_FILE;
    this->type = BRW_REGISTER_TYPE_UD;
    this->writemask = WRITEMASK_XYZW;
@@ -799,10 +799,19 @@ vec4_visitor::opt_algebraic()
             break;
 
          if (inst->saturate) {
-            if (inst->dst.type != inst->src[0].type)
+            /* Full mixed-type saturates don't happen.  However, we can end up
+             * with things like:
+             *
+             *    mov.sat(8) g21<1>DF       -1F
+             *
+             * Other mixed-size-but-same-base-type cases may also be possible.
+             */
+            if (inst->dst.type != inst->src[0].type &&
+                inst->dst.type != BRW_REGISTER_TYPE_DF &&
+                inst->src[0].type != BRW_REGISTER_TYPE_F)
                assert(!"unimplemented: saturate mixed types");
 
-            if (brw_saturate_immediate(inst->dst.type,
+            if (brw_saturate_immediate(inst->src[0].type,
                                        &inst->src[0].as_brw_reg())) {
                inst->saturate = false;
                progress = true;
@@ -2827,7 +2836,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
    prog_data->double_inputs_read = shader->info.vs.double_inputs;
 
    brw_nir_lower_vs_inputs(shader, key->gl_attrib_wa_flags);
-   brw_nir_lower_vue_outputs(shader, is_scalar);
+   brw_nir_lower_vue_outputs(shader);
    shader = brw_postprocess_nir(shader, compiler, is_scalar);
 
    prog_data->base.clip_distance_mask =

@@ -154,14 +154,10 @@ emit_vertex_input(struct anv_pipeline *pipeline,
        * VERTEX_BUFFER_STATE which we emit later.
        */
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_INSTANCING), vfi) {
-         vfi.InstancingEnable = pipeline->instancing_enable[desc->binding];
+         vfi.InstancingEnable = pipeline->vb[desc->binding].instanced;
          vfi.VertexElementIndex = slot;
-         /* Our implementation of VK_KHR_multiview uses instancing to draw
-          * the different views.  If the client asks for instancing, we
-          * need to use the Instance Data Step Rate to ensure that we
-          * repeat the client's per-instance data once for each view.
-          */
-         vfi.InstanceDataStepRate = anv_subpass_view_count(pipeline->subpass);
+         vfi.InstanceDataStepRate =
+            pipeline->vb[desc->binding].instance_divisor;
       }
 #endif
    }
@@ -499,9 +495,9 @@ emit_rs_state(struct anv_pipeline *pipeline,
    /* Gen7 requires that we provide the depth format in 3DSTATE_SF so that it
     * can get the depth offsets correct.
     */
-   if (subpass->depth_stencil_attachment.attachment < pass->attachment_count) {
+   if (subpass->depth_stencil_attachment) {
       VkFormat vk_format =
-         pass->attachments[subpass->depth_stencil_attachment.attachment].format;
+         pass->attachments[subpass->depth_stencil_attachment->attachment].format;
       assert(vk_format_is_depth_or_stencil(vk_format));
       if (vk_format_aspects(vk_format) & VK_IMAGE_ASPECT_DEPTH_BIT) {
          enum isl_format isl_format =
@@ -816,9 +812,9 @@ emit_ds_state(struct anv_pipeline *pipeline,
    }
 
    VkImageAspectFlags ds_aspects = 0;
-   if (subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED) {
+   if (subpass->depth_stencil_attachment) {
       VkFormat depth_stencil_format =
-         pass->attachments[subpass->depth_stencil_attachment.attachment].format;
+         pass->attachments[subpass->depth_stencil_attachment->attachment].format;
       ds_aspects = vk_format_aspects(depth_stencil_format);
    }
 
@@ -1393,6 +1389,28 @@ emit_3dstate_wm(struct anv_pipeline *pipeline, struct anv_subpass *subpass,
             wm.EarlyDepthStencilControl         = EDSC_NORMAL;
          }
 
+#if GEN_GEN >= 8
+         /* Gen8 hardware tries to compute ThreadDispatchEnable for us but
+          * doesn't take into account KillPixels when no depth or stencil
+          * writes are enabled.  In order for occlusion queries to work
+          * correctly with no attachments, we need to force-enable PS thread
+          * dispatch.
+          *
+          * The BDW docs are pretty clear that that this bit isn't validated
+          * and probably shouldn't be used in production:
+          *
+          *    "This must always be set to Normal. This field should not be
+          *    tested for functional validation."
+          *
+          * Unfortunately, however, the other mechanism we have for doing this
+          * is 3DSTATE_PS_EXTRA::PixelShaderHasUAV which causes hangs on BDW.
+          * Given two bad options, we choose the one which works.
+          */
+         if ((wm_prog_data->has_side_effects || wm_prog_data->uses_kill) &&
+             !has_color_buffer_write_enabled(pipeline, blend))
+            wm.ForceThreadDispatchEnable = ForceON;
+#endif
+
          wm.BarycentricInterpolationMode =
             wm_prog_data->barycentric_interp_modes;
 
@@ -1587,42 +1605,17 @@ emit_3dstate_ps_extra(struct anv_pipeline *pipeline,
       ps.PixelShaderKillsPixel         = subpass->has_ds_self_dep ||
                                          wm_prog_data->uses_kill;
 
-      /* The stricter cross-primitive coherency guarantees that the hardware
-       * gives us with the "Accesses UAV" bit set for at least one shader stage
-       * and the "UAV coherency required" bit set on the 3DPRIMITIVE command are
-       * redundant within the current image, atomic counter and SSBO GL APIs,
-       * which all have very loose ordering and coherency requirements and
-       * generally rely on the application to insert explicit barriers when a
-       * shader invocation is expected to see the memory writes performed by the
-       * invocations of some previous primitive.  Regardless of the value of
-       * "UAV coherency required", the "Accesses UAV" bits will implicitly cause
-       * an in most cases useless DC flush when the lowermost stage with the bit
-       * set finishes execution.
-       *
-       * It would be nice to disable it, but in some cases we can't because on
-       * Gen8+ it also has an influence on rasterization via the PS UAV-only
-       * signal (which could be set independently from the coherency mechanism
-       * in the 3DSTATE_WM command on Gen7), and because in some cases it will
-       * determine whether the hardware skips execution of the fragment shader
-       * or not via the ThreadDispatchEnable signal.  However if we know that
-       * GEN8_PS_BLEND_HAS_WRITEABLE_RT is going to be set and
-       * GEN8_PSX_PIXEL_SHADER_NO_RT_WRITE is not set it shouldn't make any
-       * difference so we may just disable it here.
-       *
-       * Gen8 hardware tries to compute ThreadDispatchEnable for us but doesn't
-       * take into account KillPixels when no depth or stencil writes are
-       * enabled. In order for occlusion queries to work correctly with no
-       * attachments, we need to force-enable here.
-       */
-      if ((wm_prog_data->has_side_effects || wm_prog_data->uses_kill) &&
-          !has_color_buffer_write_enabled(pipeline, blend))
-         ps.PixelShaderHasUAV = true;
-
 #if GEN_GEN >= 9
       ps.PixelShaderComputesStencil = wm_prog_data->computed_stencil;
       ps.PixelShaderPullsBary    = wm_prog_data->pulls_bary;
-      ps.InputCoverageMaskState  = wm_prog_data->uses_sample_mask ?
-                                   ICMS_INNER_CONSERVATIVE : ICMS_NONE;
+
+      ps.InputCoverageMaskState  = ICMS_NONE;
+      if (wm_prog_data->uses_sample_mask) {
+         if (wm_prog_data->post_depth_coverage)
+            ps.InputCoverageMaskState  = ICMS_DEPTH_COVERAGE;
+         else
+            ps.InputCoverageMaskState  = ICMS_INNER_CONSERVATIVE;
+      }
 #else
       ps.PixelShaderUsesInputCoverageMask = wm_prog_data->uses_sample_mask;
 #endif
@@ -1693,6 +1686,10 @@ genX(graphics_pipeline_create)(
    VkResult result;
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+
+   /* Use the default pipeline cache if none is specified */
+   if (cache == NULL && device->instance->pipeline_cache_enabled)
+      cache = &device->default_pipeline_cache;
 
    pipeline = vk_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -1777,6 +1774,10 @@ compute_pipeline_create(
    VkResult result;
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
+
+   /* Use the default pipeline cache if none is specified */
+   if (cache == NULL && device->instance->pipeline_cache_enabled)
+      cache = &device->default_pipeline_cache;
 
    pipeline = vk_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);

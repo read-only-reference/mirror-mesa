@@ -49,7 +49,7 @@ void
 fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
               const fs_reg *src, unsigned sources)
 {
-   memset(this, 0, sizeof(*this));
+   memset((void*)this, 0, sizeof(*this));
 
    this->src = new fs_reg[MAX2(sources, 3)];
    for (unsigned i = 0; i < sources; i++)
@@ -131,7 +131,7 @@ fs_inst::fs_inst(enum opcode opcode, uint8_t exec_width, const fs_reg &dst,
 
 fs_inst::fs_inst(const fs_inst &that)
 {
-   memcpy(this, &that, sizeof(that));
+   memcpy((void*)this, &that, sizeof(that));
 
    this->src = new fs_reg[MAX2(that.sources, 3)];
 
@@ -408,7 +408,7 @@ fs_inst::can_change_types() const
 void
 fs_reg::init()
 {
-   memset(this, 0, sizeof(*this));
+   memset((void*)this, 0, sizeof(*this));
    type = BRW_REGISTER_TYPE_UD;
    stride = 1;
 }
@@ -2376,10 +2376,19 @@ fs_visitor::opt_algebraic()
             break;
 
          if (inst->saturate) {
-            if (inst->dst.type != inst->src[0].type)
+            /* Full mixed-type saturates don't happen.  However, we can end up
+             * with things like:
+             *
+             *    mov.sat(8) g21<1>DF       -1F
+             *
+             * Other mixed-size-but-same-base-type cases may also be possible.
+             */
+            if (inst->dst.type != inst->src[0].type &&
+                inst->dst.type != BRW_REGISTER_TYPE_DF &&
+                inst->src[0].type != BRW_REGISTER_TYPE_F)
                assert(!"unimplemented: saturate mixed types");
 
-            if (brw_saturate_immediate(inst->dst.type,
+            if (brw_saturate_immediate(inst->src[0].type,
                                        &inst->src[0].as_brw_reg())) {
                inst->saturate = false;
                progress = true;
@@ -4815,7 +4824,7 @@ lower_varying_pull_constant_logical_send(const fs_builder &bld, fs_inst *inst)
       inst->src[1] = tmp;
 
       inst->opcode = FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7;
-
+      inst->mlen = inst->exec_size / 8;
    } else {
       const fs_reg payload(MRF, FIRST_PULL_LOAD_MRF(devinfo->gen),
                            BRW_REGISTER_TYPE_UD);
@@ -5749,7 +5758,7 @@ fs_visitor::lower_simd_width()
              */
             fs_inst split_inst = *inst;
             split_inst.exec_size = lower_width;
-            split_inst.eot = inst->eot && i == n - 1;
+            split_inst.eot = inst->eot && i == int(n - 1);
 
             /* Select the correct channel enables for the i-th group, then
              * transform the sources and destination and emit the lowered
@@ -6025,33 +6034,6 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       fprintf(file, "group%d ", inst->group);
 
    fprintf(file, "\n");
-}
-
-/**
- * Possibly returns an instruction that set up @param reg.
- *
- * Sometimes we want to take the result of some expression/variable
- * dereference tree and rewrite the instruction generating the result
- * of the tree.  When processing the tree, we know that the
- * instructions generated are all writing temporaries that are dead
- * outside of this tree.  So, if we have some instructions that write
- * a temporary, we're free to point that temp write somewhere else.
- *
- * Note that this doesn't guarantee that the instruction generated
- * only reg -- it might be the size=4 destination of a texture instruction.
- */
-fs_inst *
-fs_visitor::get_instruction_generating_reg(fs_inst *start,
-					   fs_inst *end,
-					   const fs_reg &reg)
-{
-   if (end == start ||
-       end->is_partial_write() ||
-       !reg.equals(end->dst)) {
-      return NULL;
-   } else {
-      return end;
-   }
 }
 
 void

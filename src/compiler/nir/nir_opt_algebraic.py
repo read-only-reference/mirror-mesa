@@ -23,6 +23,9 @@
 # Authors:
 #    Jason Ekstrand (jason@jlekstrand.net)
 
+from __future__ import print_function
+
+from collections import OrderedDict
 import nir_algebraic
 import itertools
 
@@ -226,6 +229,8 @@ optimizations = [
    (('imax', a, a), a),
    (('umin', a, a), a),
    (('umax', a, a), a),
+   (('fmax', a, ('fneg', a)), ('fabs', a)),
+   (('imax', a, ('ineg', a)), ('iabs', a)),
    (('fmin', a, ('fneg', a)), ('fneg', ('fabs', a))),
    (('imin', a, ('ineg', a)), ('ineg', ('iabs', a))),
    (('fmin', a, ('fneg', ('fabs', a))), ('fneg', ('fabs', a))),
@@ -281,6 +286,9 @@ optimizations = [
    (('iand', ('ult(is_used_once)', a, c), ('ult', b, c)), ('ult', ('umax', a, b), c)),
    (('iand', ('uge(is_used_once)', a, b), ('uge', a, c)), ('uge', a, ('umax', b, c))),
    (('iand', ('uge(is_used_once)', a, c), ('uge', b, c)), ('uge', ('umin', a, b), c)),
+
+   (('ior', 'a@bool', ('ieq', a, False)), True),
+   (('ior', 'a@bool', ('inot', a)), True),
 
    (('iand', ('ieq', 'a@32', 0), ('ieq', 'b@32', 0)), ('ieq', ('ior', 'a@32', 'b@32'), 0)),
 
@@ -369,6 +377,10 @@ optimizations = [
    (('ixor', a, a), 0),
    (('ixor', a, 0), a),
    (('inot', ('inot', a)), a),
+   (('ior', ('iand', a, b), b), b),
+   (('ior', ('ior', a, b), b), ('ior', a, b)),
+   (('iand', ('ior', a, b), b), b),
+   (('iand', ('iand', a, b), b), ('iand', a, b)),
    # DeMorgan's Laws
    (('iand', ('inot', a), ('inot', b)), ('inot', ('ior',  a, b))),
    (('ior',  ('inot', a), ('inot', b)), ('inot', ('iand', a, b))),
@@ -628,7 +640,7 @@ optimizations = [
      'options->lower_unpack_snorm_4x8'),
 ]
 
-invert = {'feq': 'fne', 'fne': 'feq', 'fge': 'flt', 'flt': 'fge' }
+invert = OrderedDict([('feq', 'fne'), ('fne', 'feq'), ('fge', 'flt'), ('flt', 'fge')])
 
 for left, right in list(itertools.combinations(invert.keys(), 2)) + zip(invert.keys(), invert.keys()):
    optimizations.append((('inot', ('ior(is_used_once)', (left, a, b), (right, c, d))),
@@ -790,8 +802,8 @@ late_optimizations = [
    (('b2f@32', a), ('iand', a, 1.0), 'options->lower_b2f'),
 ]
 
-print nir_algebraic.AlgebraicPass("nir_opt_algebraic", optimizations).render()
-print nir_algebraic.AlgebraicPass("nir_opt_algebraic_before_ffma",
-                                  before_ffma_optimizations).render()
-print nir_algebraic.AlgebraicPass("nir_opt_algebraic_late",
-                                  late_optimizations).render()
+print(nir_algebraic.AlgebraicPass("nir_opt_algebraic", optimizations).render())
+print(nir_algebraic.AlgebraicPass("nir_opt_algebraic_before_ffma",
+                                  before_ffma_optimizations).render())
+print(nir_algebraic.AlgebraicPass("nir_opt_algebraic_late",
+                                  late_optimizations).render())

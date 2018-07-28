@@ -78,6 +78,7 @@ const char *si_get_family_name(const struct si_screen *sscreen)
 	case CHIP_VEGAM: return "AMD VEGAM";
 	case CHIP_VEGA10: return "AMD VEGA10";
 	case CHIP_VEGA12: return "AMD VEGA12";
+	case CHIP_VEGA20: return "AMD VEGA20";
 	case CHIP_RAVEN: return "AMD RAVEN";
 	default: return "AMD unknown";
 	}
@@ -311,6 +312,8 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
 	case PIPE_CAP_MAX_RENDER_TARGETS:
 		return 8;
+	case PIPE_CAP_FRAMEBUFFER_MSAA_CONSTRAINTS:
+		return sscreen->info.has_eqaa_surface_allocator ? 2 : 0;
 
 	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MIN_TEXEL_OFFSET:

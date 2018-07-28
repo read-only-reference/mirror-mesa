@@ -422,6 +422,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FENCE_SIGNAL:
 	case PIPE_CAP_CONSTBUF0_FLAGS:
 	case PIPE_CAP_PACKED_UNIFORMS:
+	case PIPE_CAP_FRAMEBUFFER_MSAA_CONSTRAINTS:
 	case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES:
 	case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
 	case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
@@ -470,7 +471,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return family >= CHIP_CEDAR ? 4 : 1;
 
 	case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
-		return 2047;
+		/* Should be 2047, but 2048 is a requirement for GL 4.4 */
+		return 2048;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:

@@ -70,9 +70,6 @@ static void
 brw_blorp_blit_vars_init(nir_builder *b, struct brw_blorp_blit_vars *v,
                          const struct brw_blorp_blit_prog_key *key)
 {
-    /* Blended and scaled blits never use pixel discard. */
-    assert(!key->use_kill || !(key->blend && key->blit_scaled));
-
 #define LOAD_INPUT(name, type)\
    v->v_##name = BLORP_CREATE_NIR_INPUT(b->shader, name, type);
 
@@ -996,6 +993,8 @@ convert_color(struct nir_builder *b, nir_ssa_def *color,
       value = nir_fmul(b, nir_fsat(b, nir_channel(b, color, 0)),
                           nir_imm_float(b, factor));
    } else if (key->dst_format == ISL_FORMAT_L8_UNORM_SRGB) {
+      value = nir_format_linear_to_srgb(b, nir_channel(b, color, 0));
+   } else if (key->dst_format == ISL_FORMAT_R8G8B8_UNORM_SRGB) {
       value = nir_format_linear_to_srgb(b, color);
    } else if (key->dst_format == ISL_FORMAT_R9G9B9E5_SHAREDEXP) {
       value = nir_format_pack_r9g9b9e5(b, color);
@@ -1003,8 +1002,14 @@ convert_color(struct nir_builder *b, nir_ssa_def *color,
       unreachable("Unsupported format conversion");
    }
 
-   nir_ssa_def *u = nir_ssa_undef(b, 1, 32);
-   return nir_vec4(b, value, u, u, u);
+   nir_ssa_def *out_comps[4];
+   for (unsigned i = 0; i < 4; i++) {
+      if (i < value->num_components)
+         out_comps[i] = nir_channel(b, value, i);
+      else
+         out_comps[i] = nir_ssa_undef(b, 1, 32);
+   }
+   return nir_vec(b, out_comps, 4);
 }
 
 /**
@@ -1164,18 +1169,6 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
       assert(key->persample_msaa_dispatch);
    }
 
-   if (key->blend) {
-      /* We are blending, which means we won't have an opportunity to
-       * translate the tiling and sample count for the texture surface.  So
-       * the surface state for the texture must be configured with the correct
-       * tiling and sample count.
-       */
-      assert(!key->src_tiled_w);
-      assert(key->tex_samples == key->src_samples);
-      assert(key->tex_layout == key->src_layout);
-      assert(key->tex_samples > 0);
-   }
-
    if (key->persample_msaa_dispatch) {
       /* It only makes sense to do persample dispatch if the render target is
        * configured as multisampled.
@@ -1251,10 +1244,8 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
     * If we need to kill pixels that are outside the destination rectangle,
     * now is the time to do it.
     */
-   if (key->use_kill) {
-      assert(!(key->blend && key->blit_scaled));
+   if (key->use_kill)
       blorp_nir_discard_if_outside_rect(&b, dst_pos, &v);
-   }
 
    src_pos = blorp_blit_apply_transform(&b, nir_i2f32(&b, dst_pos), &v);
    if (dst_pos->num_components == 3) {
@@ -1277,7 +1268,82 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
     * that we want to texture from.  Exception: if we are blending, then S is
     * irrelevant, because we are going to fetch all samples.
     */
-   if (key->blend && !key->blit_scaled) {
+   switch (key->filter) {
+   case BLORP_FILTER_NONE:
+   case BLORP_FILTER_NEAREST:
+   case BLORP_FILTER_SAMPLE_0:
+      /* We're going to use texelFetch, so we need integers */
+      if (src_pos->num_components == 2) {
+         src_pos = nir_f2i32(&b, src_pos);
+      } else {
+         assert(src_pos->num_components == 3);
+         src_pos = nir_vec3(&b, nir_channel(&b, nir_f2i32(&b, src_pos), 0),
+                                nir_channel(&b, nir_f2i32(&b, src_pos), 1),
+                                nir_channel(&b, src_pos, 2));
+      }
+
+      /* We aren't blending, which means we just want to fetch a single
+       * sample from the source surface.  The address that we want to fetch
+       * from is related to the X, Y and S values according to the formula:
+       *
+       * (X, Y, S) = decode_msaa(src_samples, detile(src_tiling, offset)).
+       *
+       * If the actual tiling and sample count of the source surface are
+       * not the same as the configuration of the texture, then we need to
+       * adjust the coordinates to compensate for the difference.
+       */
+      if (tex_tiled_w != key->src_tiled_w ||
+          key->tex_samples != key->src_samples ||
+          key->tex_layout != key->src_layout) {
+         src_pos = blorp_nir_encode_msaa(&b, src_pos, key->src_samples,
+                                         key->src_layout);
+         /* Now (X, Y, S) = detile(src_tiling, offset) */
+         if (tex_tiled_w != key->src_tiled_w)
+            src_pos = blorp_nir_retile_w_to_y(&b, src_pos);
+         /* Now (X, Y, S) = detile(tex_tiling, offset) */
+         src_pos = blorp_nir_decode_msaa(&b, src_pos, key->tex_samples,
+                                         key->tex_layout);
+      }
+
+      if (key->need_src_offset)
+         src_pos = nir_iadd(&b, src_pos, nir_load_var(&b, v.v_src_offset));
+
+      /* Now (X, Y, S) = decode_msaa(tex_samples, detile(tex_tiling, offset)).
+       *
+       * In other words: X, Y, and S now contain values which, when passed to
+       * the texturing unit, will cause data to be read from the correct
+       * memory location.  So we can fetch the texel now.
+       */
+      if (key->src_samples == 1) {
+         color = blorp_nir_txf(&b, &v, src_pos, key->texture_data_type);
+      } else {
+         nir_ssa_def *mcs = NULL;
+         if (key->tex_aux_usage == ISL_AUX_USAGE_MCS)
+            mcs = blorp_blit_txf_ms_mcs(&b, &v, src_pos);
+
+         color = blorp_nir_txf_ms(&b, &v, src_pos, mcs, key->texture_data_type);
+      }
+      break;
+
+   case BLORP_FILTER_BILINEAR:
+      assert(!key->src_tiled_w);
+      assert(key->tex_samples == key->src_samples);
+      assert(key->tex_layout == key->src_layout);
+
+      if (key->src_samples == 1) {
+         color = blorp_nir_tex(&b, &v, key, src_pos);
+      } else {
+         assert(!key->use_kill);
+         color = blorp_nir_manual_blend_bilinear(&b, src_pos, key->src_samples,
+                                                 key, &v);
+      }
+      break;
+
+   case BLORP_FILTER_AVERAGE:
+      assert(!key->src_tiled_w);
+      assert(key->tex_samples == key->src_samples);
+      assert(key->tex_layout == key->src_layout);
+
       /* Resolves (effecively) use texelFetch, so we need integers and we
        * don't care about the sample index if we got one.
        */
@@ -1302,65 +1368,10 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
                                                 key->tex_aux_usage,
                                                 key->texture_data_type);
       }
-   } else if (key->blend && key->blit_scaled) {
-      assert(!key->use_kill);
-      color = blorp_nir_manual_blend_bilinear(&b, src_pos, key->src_samples, key, &v);
-   } else {
-      if (key->bilinear_filter) {
-         color = blorp_nir_tex(&b, &v, key, src_pos);
-      } else {
-         /* We're going to use texelFetch, so we need integers */
-         if (src_pos->num_components == 2) {
-            src_pos = nir_f2i32(&b, src_pos);
-         } else {
-            assert(src_pos->num_components == 3);
-            src_pos = nir_vec3(&b, nir_channel(&b, nir_f2i32(&b, src_pos), 0),
-                                   nir_channel(&b, nir_f2i32(&b, src_pos), 1),
-                                   nir_channel(&b, src_pos, 2));
-         }
+      break;
 
-         /* We aren't blending, which means we just want to fetch a single
-          * sample from the source surface.  The address that we want to fetch
-          * from is related to the X, Y and S values according to the formula:
-          *
-          * (X, Y, S) = decode_msaa(src_samples, detile(src_tiling, offset)).
-          *
-          * If the actual tiling and sample count of the source surface are
-          * not the same as the configuration of the texture, then we need to
-          * adjust the coordinates to compensate for the difference.
-          */
-         if (tex_tiled_w != key->src_tiled_w ||
-             key->tex_samples != key->src_samples ||
-             key->tex_layout != key->src_layout) {
-            src_pos = blorp_nir_encode_msaa(&b, src_pos, key->src_samples,
-                                            key->src_layout);
-            /* Now (X, Y, S) = detile(src_tiling, offset) */
-            if (tex_tiled_w != key->src_tiled_w)
-               src_pos = blorp_nir_retile_w_to_y(&b, src_pos);
-            /* Now (X, Y, S) = detile(tex_tiling, offset) */
-            src_pos = blorp_nir_decode_msaa(&b, src_pos, key->tex_samples,
-                                            key->tex_layout);
-         }
-
-         if (key->need_src_offset)
-            src_pos = nir_iadd(&b, src_pos, nir_load_var(&b, v.v_src_offset));
-
-         /* Now (X, Y, S) = decode_msaa(tex_samples, detile(tex_tiling, offset)).
-          *
-          * In other words: X, Y, and S now contain values which, when passed to
-          * the texturing unit, will cause data to be read from the correct
-          * memory location.  So we can fetch the texel now.
-          */
-         if (key->src_samples == 1) {
-            color = blorp_nir_txf(&b, &v, src_pos, key->texture_data_type);
-         } else {
-            nir_ssa_def *mcs = NULL;
-            if (key->tex_aux_usage == ISL_AUX_USAGE_MCS)
-               mcs = blorp_blit_txf_ms_mcs(&b, &v, src_pos);
-
-            color = blorp_nir_txf_ms(&b, &v, src_pos, mcs, key->texture_data_type);
-         }
-      }
+   default:
+      unreachable("Invalid blorp filter");
    }
 
    if (!isl_swizzle_is_identity(key->src_swizzle)) {
@@ -1698,7 +1709,7 @@ get_red_format_for_rgb_format(enum isl_format format)
    }
 }
 
-static void
+void
 surf_fake_rgb_with_red(const struct isl_device *isl_dev,
                        struct brw_blorp_surface_info *info)
 {
@@ -1929,8 +1940,8 @@ try_blorp_blit(struct blorp_batch *batch,
 
    params->num_samples = params->dst.surf.samples;
 
-   if ((wm_prog_key->bilinear_filter ||
-        (wm_prog_key->blend && !wm_prog_key->blit_scaled)) &&
+   if ((wm_prog_key->filter == BLORP_FILTER_AVERAGE ||
+        wm_prog_key->filter == BLORP_FILTER_BILINEAR) &&
        batch->blorp->isl_dev->info->gen <= 6) {
       /* Gen4-5 don't support non-normalized texture coordinates */
       wm_prog_key->src_coords_normalized = true;
@@ -1950,6 +1961,10 @@ try_blorp_blit(struct blorp_batch *batch,
        */
       params->x0 *= 3;
       params->x1 *= 3;
+
+      /* If it happens to be sRGB, we need to force a conversion */
+      if (params->dst.view.format == ISL_FORMAT_R8G8B8_UNORM_SRGB)
+         wm_prog_key->dst_format = ISL_FORMAT_R8G8B8_UNORM_SRGB;
 
       surf_fake_rgb_with_red(batch->blorp->isl_dev, &params->dst);
 
@@ -2204,7 +2219,8 @@ blorp_blit(struct blorp_batch *batch,
            float src_x1, float src_y1,
            float dst_x0, float dst_y0,
            float dst_x1, float dst_y1,
-           GLenum filter, bool mirror_x, bool mirror_y)
+           enum blorp_filter filter,
+           bool mirror_x, bool mirror_y)
 {
    struct blorp_params params;
    blorp_params_init(&params);
@@ -2233,13 +2249,9 @@ blorp_blit(struct blorp_batch *batch,
    params.dst.view.swizzle = dst_swizzle;
 
    struct brw_blorp_blit_prog_key wm_prog_key = {
-      .shader_type = BLORP_SHADER_TYPE_BLIT
+      .shader_type = BLORP_SHADER_TYPE_BLIT,
+      .filter = filter,
    };
-
-   /* Scaled blitting or not. */
-   wm_prog_key.blit_scaled =
-      ((dst_x1 - dst_x0) == (src_x1 - src_x0) &&
-       (dst_y1 - dst_y0) == (src_y1 - src_y0)) ? false : true;
 
    /* Scaling factors used for bilinear filtering in multisample scaled
     * blits.
@@ -2249,27 +2261,6 @@ blorp_blit(struct blorp_batch *batch,
    else
       wm_prog_key.x_scale = 2.0f;
    wm_prog_key.y_scale = params.src.surf.samples / wm_prog_key.x_scale;
-
-   if (filter == GL_LINEAR &&
-       params.src.surf.samples <= 1 && params.dst.surf.samples <= 1) {
-      wm_prog_key.bilinear_filter = true;
-   }
-
-   if ((params.src.surf.usage & ISL_SURF_USAGE_DEPTH_BIT) == 0 &&
-       (params.src.surf.usage & ISL_SURF_USAGE_STENCIL_BIT) == 0 &&
-       !isl_format_has_int_channel(params.src.surf.format) &&
-       params.src.surf.samples > 1 && params.dst.surf.samples <= 1) {
-      /* We are downsampling a non-integer color buffer, so blend.
-       *
-       * Regarding integer color buffers, the OpenGL ES 3.2 spec says:
-       *
-       *    "If the source formats are integer types or stencil values, a
-       *    single sample's value is selected for each pixel."
-       *
-       * This implies we should not blend in that case.
-       */
-      wm_prog_key.blend = true;
-   }
 
    params.wm_inputs.rect_grid.x1 =
       minify(params.src.surf.logical_level0_px.width, src_level) *
@@ -2506,6 +2497,7 @@ blorp_copy(struct blorp_batch *batch,
 
    struct brw_blorp_blit_prog_key wm_prog_key = {
       .shader_type = BLORP_SHADER_TYPE_BLIT,
+      .filter = BLORP_FILTER_NONE,
       .need_src_offset = src_surf->tile_x_sa || src_surf->tile_y_sa,
       .need_dst_offset = dst_surf->tile_x_sa || dst_surf->tile_y_sa,
    };

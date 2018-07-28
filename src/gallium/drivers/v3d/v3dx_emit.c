@@ -276,20 +276,29 @@ static void
 emit_rt_blend(struct v3d_context *v3d, struct v3d_job *job,
               struct pipe_blend_state *blend, int rt)
 {
-        cl_emit(&job->bcl, BLEND_CONFIG, config) {
-                struct pipe_rt_blend_state *rtblend = &blend->rt[rt];
+        struct pipe_rt_blend_state *rtblend = &blend->rt[rt];
 
 #if V3D_VERSION >= 40
-                config.render_target_mask = 1 << rt;
+        /* We don't need to emit blend state for disabled RTs. */
+        if (!rtblend->blend_enable)
+                return;
+#endif
+
+        cl_emit(&job->bcl, BLEND_CFG, config) {
+#if V3D_VERSION >= 40
+                if (blend->independent_blend_enable)
+                        config.render_target_mask = 1 << rt;
+                else
+                        config.render_target_mask = (1 << VC5_MAX_DRAW_BUFFERS) - 1;
 #else
                 assert(rt == 0);
 #endif
 
-                config.colour_blend_mode = rtblend->rgb_func;
-                config.colour_blend_dst_factor =
+                config.color_blend_mode = rtblend->rgb_func;
+                config.color_blend_dst_factor =
                         v3d_factor(rtblend->rgb_dst_factor,
                                    v3d->blend_dst_alpha_one);
-                config.colour_blend_src_factor =
+                config.color_blend_src_factor =
                         v3d_factor(rtblend->rgb_src_factor,
                                    v3d->blend_dst_alpha_one);
 
@@ -301,6 +310,93 @@ emit_rt_blend(struct v3d_context *v3d, struct v3d_job *job,
                         v3d_factor(rtblend->alpha_src_factor,
                                    v3d->blend_dst_alpha_one);
         }
+}
+
+static void
+emit_flat_shade_flags(struct v3d_job *job,
+                      int varying_offset,
+                      uint32_t varyings,
+                      enum V3DX(Varying_Flags_Action) lower,
+                      enum V3DX(Varying_Flags_Action) higher)
+{
+        cl_emit(&job->bcl, FLAT_SHADE_FLAGS, flags) {
+                flags.varying_offset_v0 = varying_offset;
+                flags.flat_shade_flags_for_varyings_v024 = varyings;
+                flags.action_for_flat_shade_flags_of_lower_numbered_varyings =
+                        lower;
+                flags.action_for_flat_shade_flags_of_higher_numbered_varyings =
+                        higher;
+        }
+}
+
+#if V3D_VERSION >= 40
+static void
+emit_noperspective_flags(struct v3d_job *job,
+                         int varying_offset,
+                         uint32_t varyings,
+                         enum V3DX(Varying_Flags_Action) lower,
+                         enum V3DX(Varying_Flags_Action) higher)
+{
+        cl_emit(&job->bcl, NON_PERSPECTIVE_FLAGS, flags) {
+                flags.varying_offset_v0 = varying_offset;
+                flags.non_perspective_flags_for_varyings_v024 = varyings;
+                flags.action_for_non_perspective_flags_of_lower_numbered_varyings =
+                        lower;
+                flags.action_for_non_perspective_flags_of_higher_numbered_varyings =
+                        higher;
+        }
+}
+
+static void
+emit_centroid_flags(struct v3d_job *job,
+                    int varying_offset,
+                    uint32_t varyings,
+                    enum V3DX(Varying_Flags_Action) lower,
+                    enum V3DX(Varying_Flags_Action) higher)
+{
+        cl_emit(&job->bcl, CENTROID_FLAGS, flags) {
+                flags.varying_offset_v0 = varying_offset;
+                flags.centroid_flags_for_varyings_v024 = varyings;
+                flags.action_for_centroid_flags_of_lower_numbered_varyings =
+                        lower;
+                flags.action_for_centroid_flags_of_higher_numbered_varyings =
+                        higher;
+        }
+}
+#endif /* V3D_VERSION >= 40 */
+
+static bool
+emit_varying_flags(struct v3d_job *job, uint32_t *flags,
+                   void (*flag_emit_callback)(struct v3d_job *job,
+                                              int varying_offset,
+                                              uint32_t flags,
+                                              enum V3DX(Varying_Flags_Action) lower,
+                                              enum V3DX(Varying_Flags_Action) higher))
+{
+        struct v3d_context *v3d = job->v3d;
+        bool emitted_any = false;
+
+        for (int i = 0; i < ARRAY_SIZE(v3d->prog.fs->prog_data.fs->flat_shade_flags); i++) {
+                if (!flags[i])
+                        continue;
+
+                if (emitted_any) {
+                        flag_emit_callback(job, i, flags[i],
+                                           V3D_VARYING_FLAGS_ACTION_UNCHANGED,
+                                           V3D_VARYING_FLAGS_ACTION_UNCHANGED);
+                } else if (i == 0) {
+                        flag_emit_callback(job, i, flags[i],
+                                           V3D_VARYING_FLAGS_ACTION_UNCHANGED,
+                                           V3D_VARYING_FLAGS_ACTION_ZEROED);
+                } else {
+                        flag_emit_callback(job, i, flags[i],
+                                           V3D_VARYING_FLAGS_ACTION_ZEROED,
+                                           V3D_VARYING_FLAGS_ACTION_ZEROED);
+                }
+                emitted_any = true;
+        }
+
+        return emitted_any;
 }
 
 void
@@ -367,7 +463,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                           VC5_DIRTY_ZSA |
                           VC5_DIRTY_BLEND |
                           VC5_DIRTY_COMPILED_FS)) {
-                cl_emit(&job->bcl, CONFIGURATION_BITS, config) {
+                cl_emit(&job->bcl, CFG_BITS, config) {
                         config.enable_forward_facing_primitive =
                                 !rasterizer_discard &&
                                 !(v3d->rasterizer->base.cull_face &
@@ -400,7 +496,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         config.direct3d_provoking_vertex =
                                 v3d->rasterizer->base.flatshade_first;
 
-                        config.blend_enable = v3d->blend->rt[0].blend_enable;
+                        config.blend_enable = v3d->blend->blend_enables;
 
                         /* Note: EZ state may update based on the compiled FS,
                          * along with ZSA
@@ -426,17 +522,15 @@ v3dX(emit_state)(struct pipe_context *pctx)
 
         if (v3d->dirty & VC5_DIRTY_RASTERIZER &&
             v3d->rasterizer->base.offset_tri) {
-                cl_emit(&job->bcl, DEPTH_OFFSET, depth) {
-                        depth.depth_offset_factor =
-                                v3d->rasterizer->offset_factor;
-                        if (job->zsbuf &&
-                            job->zsbuf->format == PIPE_FORMAT_Z16_UNORM) {
-                                depth.depth_offset_units =
-                                        v3d->rasterizer->z16_offset_units;
-                        } else {
-                                depth.depth_offset_units =
-                                        v3d->rasterizer->offset_units;
-                        }
+                if (job->zsbuf &&
+                    job->zsbuf->format == PIPE_FORMAT_Z16_UNORM) {
+                        cl_emit_prepacked_sized(&job->bcl,
+                                                v3d->rasterizer->depth_offset_z16,
+                                                cl_packet_length(DEPTH_OFFSET));
+                } else {
+                        cl_emit_prepacked_sized(&job->bcl,
+                                                v3d->rasterizer->depth_offset,
+                                                cl_packet_length(DEPTH_OFFSET));
                 }
         }
 
@@ -481,21 +575,29 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 }
         }
 
-        if (v3d->dirty & VC5_DIRTY_BLEND && v3d->blend->rt[0].blend_enable) {
-                struct pipe_blend_state *blend = v3d->blend;
+        if (v3d->dirty & VC5_DIRTY_BLEND) {
+                struct v3d_blend_state *blend = v3d->blend;
 
-                if (blend->independent_blend_enable) {
-                        for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++)
-                                emit_rt_blend(v3d, job, blend, i);
-                } else {
-                        emit_rt_blend(v3d, job, blend, 0);
+                if (blend->blend_enables) {
+#if V3D_VERSION >= 40
+                        cl_emit(&job->bcl, BLEND_ENABLES, enables) {
+                                enables.mask = blend->blend_enables;
+                        }
+#endif
+
+                        if (blend->base.independent_blend_enable) {
+                                for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++)
+                                        emit_rt_blend(v3d, job, &blend->base, i);
+                        } else {
+                                emit_rt_blend(v3d, job, &blend->base, 0);
+                        }
                 }
         }
 
         if (v3d->dirty & VC5_DIRTY_BLEND) {
-                struct pipe_blend_state *blend = v3d->blend;
+                struct pipe_blend_state *blend = &v3d->blend->base;
 
-                cl_emit(&job->bcl, COLOUR_WRITE_MASKS, mask) {
+                cl_emit(&job->bcl, COLOR_WRITE_MASKS, mask) {
                         for (int i = 0; i < 4; i++) {
                                 int rt = blend->independent_blend_enable ? i : 0;
                                 int rt_mask = blend->rt[rt].colormask;
@@ -511,15 +613,15 @@ v3dX(emit_state)(struct pipe_context *pctx)
          */
         if (v3d->dirty & VC5_DIRTY_BLEND_COLOR ||
             (V3D_VERSION < 41 && (v3d->dirty & VC5_DIRTY_BLEND))) {
-                cl_emit(&job->bcl, BLEND_CONSTANT_COLOUR, colour) {
-                        colour.red_f16 = (v3d->swap_color_rb ?
+                cl_emit(&job->bcl, BLEND_CONSTANT_COLOR, color) {
+                        color.red_f16 = (v3d->swap_color_rb ?
                                           v3d->blend_color.hf[2] :
                                           v3d->blend_color.hf[0]);
-                        colour.green_f16 = v3d->blend_color.hf[1];
-                        colour.blue_f16 = (v3d->swap_color_rb ?
+                        color.green_f16 = v3d->blend_color.hf[1];
+                        color.blue_f16 = (v3d->swap_color_rb ?
                                            v3d->blend_color.hf[0] :
                                            v3d->blend_color.hf[2]);
-                        colour.alpha_f16 = v3d->blend_color.hf[3];
+                        color.alpha_f16 = v3d->blend_color.hf[3];
                 }
         }
 
@@ -528,7 +630,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 struct pipe_stencil_state *back = &v3d->zsa->base.stencil[1];
 
                 if (front->enabled) {
-                        cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
+                        cl_emit_with_prepacked(&job->bcl, STENCIL_CFG,
                                                v3d->zsa->stencil_front, config) {
                                 config.stencil_ref_value =
                                         v3d->stencil_ref.ref_value[0];
@@ -536,7 +638,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 }
 
                 if (back->enabled) {
-                        cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
+                        cl_emit_with_prepacked(&job->bcl, STENCIL_CFG,
                                                v3d->zsa->stencil_back, config) {
                                 config.stencil_ref_value =
                                         v3d->stencil_ref.ref_value[1];
@@ -556,76 +658,26 @@ v3dX(emit_state)(struct pipe_context *pctx)
 #endif
 
         if (v3d->dirty & VC5_DIRTY_FLAT_SHADE_FLAGS) {
-                bool emitted_any = false;
-
-                for (int i = 0; i < ARRAY_SIZE(v3d->prog.fs->prog_data.fs->flat_shade_flags); i++) {
-                        if (!v3d->prog.fs->prog_data.fs->flat_shade_flags[i])
-                                continue;
-
-                        cl_emit(&job->bcl, FLAT_SHADE_FLAGS, flags) {
-                                flags.varying_offset_v0 = i;
-
-                                if (emitted_any) {
-                                        flags.action_for_flat_shade_flags_of_lower_numbered_varyings =
-                                                V3D_VARYING_FLAGS_ACTION_UNCHANGED;
-                                        flags.action_for_flat_shade_flags_of_higher_numbered_varyings =
-                                                V3D_VARYING_FLAGS_ACTION_UNCHANGED;
-                                } else {
-                                        flags.action_for_flat_shade_flags_of_lower_numbered_varyings =
-                                                ((i == 0) ?
-                                                 V3D_VARYING_FLAGS_ACTION_UNCHANGED :
-                                                 V3D_VARYING_FLAGS_ACTION_ZEROED);
-
-                                        flags.action_for_flat_shade_flags_of_higher_numbered_varyings =
-                                                V3D_VARYING_FLAGS_ACTION_ZEROED;
-                                }
-
-                                flags.flat_shade_flags_for_varyings_v024 =
-                                        v3d->prog.fs->prog_data.fs->flat_shade_flags[i];
-                        }
-
-                        emitted_any = true;
-                }
-
-                if (!emitted_any) {
+                if (!emit_varying_flags(job,
+                                        v3d->prog.fs->prog_data.fs->flat_shade_flags,
+                                        emit_flat_shade_flags)) {
                         cl_emit(&job->bcl, ZERO_ALL_FLAT_SHADE_FLAGS, flags);
                 }
         }
 
 #if V3D_VERSION >= 40
-        if (v3d->dirty & VC5_DIRTY_CENTROID_FLAGS) {
-                bool emitted_any = false;
-
-                for (int i = 0; i < ARRAY_SIZE(v3d->prog.fs->prog_data.fs->centroid_flags); i++) {
-                        if (!v3d->prog.fs->prog_data.fs->centroid_flags[i])
-                                continue;
-
-                        cl_emit(&job->bcl, CENTROID_FLAGS, flags) {
-                                flags.varying_offset_v0 = i;
-
-                                if (emitted_any) {
-                                        flags.action_for_centroid_flags_of_lower_numbered_varyings =
-                                                V3D_VARYING_FLAGS_ACTION_UNCHANGED;
-                                        flags.action_for_centroid_flags_of_higher_numbered_varyings =
-                                                V3D_VARYING_FLAGS_ACTION_UNCHANGED;
-                                } else {
-                                        flags.action_for_centroid_flags_of_lower_numbered_varyings =
-                                                ((i == 0) ?
-                                                 V3D_VARYING_FLAGS_ACTION_UNCHANGED :
-                                                 V3D_VARYING_FLAGS_ACTION_ZEROED);
-
-                                        flags.action_for_centroid_flags_of_higher_numbered_varyings =
-                                                V3D_VARYING_FLAGS_ACTION_ZEROED;
-                                }
-
-                                flags.centroid_flags_for_varyings_v024 =
-                                        v3d->prog.fs->prog_data.fs->centroid_flags[i];
-                        }
-
-                        emitted_any = true;
+        if (v3d->dirty & VC5_DIRTY_NOPERSPECTIVE_FLAGS) {
+                if (!emit_varying_flags(job,
+                                        v3d->prog.fs->prog_data.fs->noperspective_flags,
+                                        emit_noperspective_flags)) {
+                        cl_emit(&job->bcl, ZERO_ALL_NON_PERSPECTIVE_FLAGS, flags);
                 }
+        }
 
-                if (!emitted_any) {
+        if (v3d->dirty & VC5_DIRTY_CENTROID_FLAGS) {
+                if (!emit_varying_flags(job,
+                                        v3d->prog.fs->prog_data.fs->centroid_flags,
+                                        emit_centroid_flags)) {
                         cl_emit(&job->bcl, ZERO_ALL_CENTROID_FLAGS, flags);
                 }
         }
@@ -735,7 +787,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         /* Note: SampleCoverage was handled at the
                          * state_tracker level by converting to sample_mask.
                          */
-                        state.coverage = fui(1.0) >> 16;
+                        state.coverage = 1.0;
                         state.mask = job->msaa ? v3d->sample_mask : 0xf;
                 }
         }

@@ -211,6 +211,9 @@ void virgl_encoder_set_polygon_stipple(struct virgl_context *ctx,
 void virgl_encoder_set_sample_mask(struct virgl_context *ctx,
                                   unsigned sample_mask);
 
+void virgl_encoder_set_min_samples(struct virgl_context *ctx,
+                                  unsigned min_samples);
+
 void virgl_encoder_set_clip_state(struct virgl_context *ctx,
                                  const struct pipe_clip_state *clip);
 
@@ -255,4 +258,15 @@ int virgl_encode_bind_shader(struct virgl_context *ctx,
 int virgl_encode_set_tess_state(struct virgl_context *ctx,
                                 const float outer[4],
                                 const float inner[2]);
+
+int virgl_encode_set_shader_buffers(struct virgl_context *ctx,
+                                    enum pipe_shader_type shader,
+                                    unsigned start_slot, unsigned count,
+                                    const struct pipe_shader_buffer *buffers);
+int virgl_encode_set_shader_images(struct virgl_context *ctx,
+                                   enum pipe_shader_type shader,
+                                   unsigned start_slot, unsigned count,
+                                   const struct pipe_image_view *images);
+int virgl_encode_memory_barrier(struct virgl_context *ctx,
+                                unsigned flags);
 #endif

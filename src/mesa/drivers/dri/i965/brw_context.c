@@ -340,9 +340,13 @@ brw_init_driver_functions(struct brw_context *brw,
    /* GL_ARB_get_program_binary */
    brw_program_binary_init(brw->screen->deviceID);
    functions->GetProgramBinaryDriverSHA1 = brw_get_program_binary_driver_sha1;
-   functions->ProgramBinarySerializeDriverBlob = brw_program_serialize_nir;
+   functions->ProgramBinarySerializeDriverBlob = brw_serialize_program_binary;
    functions->ProgramBinaryDeserializeDriverBlob =
       brw_deserialize_program_binary;
+
+   if (brw->screen->disk_cache) {
+      functions->ShaderCacheSerializeDriverBlob = brw_program_serialize_nir;
+   }
 }
 
 static void
@@ -363,6 +367,9 @@ brw_initialize_spirv_supported_capabilities(struct brw_context *brw)
    ctx->Const.SpirVCapabilities.draw_parameters = true;
    ctx->Const.SpirVCapabilities.image_write_without_format = true;
    ctx->Const.SpirVCapabilities.variable_pointers = true;
+   ctx->Const.SpirVCapabilities.atomic_storage = devinfo->gen >= 7;
+   ctx->Const.SpirVCapabilities.transform_feedback = devinfo->gen >= 7;
+   ctx->Const.SpirVCapabilities.geometry_streams = devinfo->gen >= 7;
 }
 
 static void

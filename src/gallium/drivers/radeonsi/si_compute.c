@@ -86,7 +86,7 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	struct si_compute *program = (struct si_compute *)job;
 	struct si_shader *shader = &program->shader;
 	struct si_shader_selector sel;
-	struct si_compiler *compiler;
+	struct ac_llvm_compiler *compiler;
 	struct pipe_debug_callback *debug = &program->compiler_ctx_state.debug;
 	struct si_screen *sscreen = program->screen;
 
@@ -238,6 +238,12 @@ static void *si_create_compute_state(
 			const amd_kernel_code_t *code_object =
 				si_compute_get_code_object(program, 0);
 			code_object_to_config(code_object, &program->shader.config);
+			if (program->shader.binary.reloc_count != 0) {
+				fprintf(stderr, "Error: %d unsupported relocations\n",
+					program->shader.binary.reloc_count);
+				FREE(program);
+				return NULL;
+			}
 		} else {
 			si_shader_binary_read_config(&program->shader.binary,
 				     &program->shader.config, 0);

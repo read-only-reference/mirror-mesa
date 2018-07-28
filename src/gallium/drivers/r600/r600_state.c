@@ -162,6 +162,7 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 				 enum pipe_format format,
 				 enum pipe_texture_target target,
 				 unsigned sample_count,
+				 unsigned storage_sample_count,
 				 unsigned usage)
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
@@ -171,6 +172,9 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 		R600_ERR("r600: unsupported texture type %d\n", target);
 		return FALSE;
 	}
+
+	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+		return false;
 
 	if (sample_count > 1) {
 		if (!rscreen->has_msaa)
@@ -1222,22 +1226,22 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 	rctx->framebuffer.do_update_surf_dirtiness = true;
 }
 
-static uint32_t sample_locs_2x[] = {
+static const uint32_t sample_locs_2x[] = {
 	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
 	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
 };
-static unsigned max_dist_2x = 4;
+static const unsigned max_dist_2x = 4;
 
-static uint32_t sample_locs_4x[] = {
+static const uint32_t sample_locs_4x[] = {
 	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
 	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
 };
-static unsigned max_dist_4x = 6;
-static uint32_t sample_locs_8x[] = {
+static const unsigned max_dist_4x = 6;
+static const uint32_t sample_locs_8x[] = {
 	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
 	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
 };
-static unsigned max_dist_8x = 7;
+static const unsigned max_dist_8x = 7;
 
 static void r600_get_sample_position(struct pipe_context *ctx,
 				     unsigned sample_count,
@@ -1554,7 +1558,7 @@ static void r600_emit_db_state(struct r600_context *rctx, struct r600_atom *atom
 		radeon_set_context_reg(cs, R_028D24_DB_HTILE_SURFACE, a->rsurf->db_htile_surface);
 		radeon_set_context_reg(cs, R_028014_DB_HTILE_DATA_BASE, a->rsurf->db_htile_data_base);
 		reloc_idx = radeon_add_to_buffer_list(&rctx->b, &rctx->b.gfx, &rtex->resource,
-						  RADEON_USAGE_READWRITE, RADEON_PRIO_HTILE);
+						  RADEON_USAGE_READWRITE, RADEON_PRIO_SEPARATE_META);
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, reloc_idx);
 	} else {
@@ -2922,10 +2926,8 @@ static boolean r600_dma_copy_tile(struct r600_context *rctx,
 		cheight = cheight > copy_height ? copy_height : cheight;
 		size = (cheight * pitch) / 4;
 		/* emit reloc before writing cs so that cs is always in consistent state */
-		radeon_add_to_buffer_list(&rctx->b, &rctx->b.dma, &rsrc->resource, RADEON_USAGE_READ,
-				      RADEON_PRIO_SDMA_TEXTURE);
-		radeon_add_to_buffer_list(&rctx->b, &rctx->b.dma, &rdst->resource, RADEON_USAGE_WRITE,
-				      RADEON_PRIO_SDMA_TEXTURE);
+		radeon_add_to_buffer_list(&rctx->b, &rctx->b.dma, &rsrc->resource, RADEON_USAGE_READ, 0);
+		radeon_add_to_buffer_list(&rctx->b, &rctx->b.dma, &rdst->resource, RADEON_USAGE_WRITE, 0);
 		radeon_emit(cs, DMA_PACKET(DMA_PACKET_COPY, 1, 0, size));
 		radeon_emit(cs, base >> 8);
 		radeon_emit(cs, (detile << 31) | (array_mode << 27) |

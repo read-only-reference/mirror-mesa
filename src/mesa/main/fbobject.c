@@ -1430,6 +1430,10 @@ framebuffer_parameteri(struct gl_context *ctx, struct gl_framebuffer *fb,
       if (!ctx->Extensions.ARB_sample_locations)
          goto invalid_pname_enum;
       break;
+   case GL_FRAMEBUFFER_FLIP_Y_MESA:
+      if (!ctx->Extensions.MESA_framebuffer_flip_y)
+         goto invalid_pname_enum;
+      cannot_be_winsys_fbo = true;
    default:
       goto invalid_pname_enum;
    }
@@ -1481,6 +1485,9 @@ framebuffer_parameteri(struct gl_context *ctx, struct gl_framebuffer *fb,
       break;
    case GL_FRAMEBUFFER_SAMPLE_LOCATION_PIXEL_GRID_ARB:
       fb->SampleLocationPixelGrid = !!param;
+      break;
+   case GL_FRAMEBUFFER_FLIP_Y_MESA:
+      fb->FlipY = param;
       break;
    }
 
@@ -1574,6 +1581,12 @@ validate_get_framebuffer_parameteriv_pname(struct gl_context *ctx,
          goto invalid_pname_enum;
       cannot_be_winsys_fbo = false;
       break;
+   case GL_FRAMEBUFFER_FLIP_Y_MESA:
+      if (!ctx->Extensions.MESA_framebuffer_flip_y) {
+         _mesa_error(ctx, GL_INVALID_ENUM, "%s(pname=0x%x)", func, pname);
+         return false;
+      }
+      break;
    default:
       goto invalid_pname_enum;
    }
@@ -1637,6 +1650,9 @@ get_framebuffer_parameteriv(struct gl_context *ctx, struct gl_framebuffer *fb,
       break;
    case GL_FRAMEBUFFER_SAMPLE_LOCATION_PIXEL_GRID_ARB:
       *params = fb->SampleLocationPixelGrid;
+      break;
+   case GL_FRAMEBUFFER_FLIP_Y_MESA:
+      *params = fb->FlipY;
       break;
    }
 }
@@ -1927,8 +1943,10 @@ _mesa_base_fbo_format(const struct gl_context *ctx, GLenum internalFormat)
    case GL_RGBA:
    case GL_RGBA2:
    case GL_RGBA12:
-   case GL_RGBA16:
       return _mesa_is_desktop_gl(ctx) ? GL_RGBA : 0;
+   case GL_RGBA16:
+      return _mesa_is_desktop_gl(ctx) || _mesa_has_EXT_texture_norm16(ctx)
+         ? GL_RGBA : 0;
    case GL_RGB10_A2:
    case GL_SRGB8_ALPHA8_EXT:
       return _mesa_is_desktop_gl(ctx) || _mesa_is_gles3(ctx) ? GL_RGBA : 0;
@@ -1963,15 +1981,17 @@ _mesa_base_fbo_format(const struct gl_context *ctx, GLenum internalFormat)
              ctx->Extensions.ARB_depth_buffer_float)
          ? GL_DEPTH_STENCIL : 0;
    case GL_RED:
+      return _mesa_has_ARB_texture_rg(ctx) ? GL_RED : 0;
    case GL_R16:
-      return _mesa_is_desktop_gl(ctx) && ctx->Extensions.ARB_texture_rg
+      return _mesa_has_ARB_texture_rg(ctx) || _mesa_has_EXT_texture_norm16(ctx)
          ? GL_RED : 0;
    case GL_R8:
       return ctx->API != API_OPENGLES && ctx->Extensions.ARB_texture_rg
          ? GL_RED : 0;
    case GL_RG:
+      return _mesa_has_ARB_texture_rg(ctx) ? GL_RG : 0;
    case GL_RG16:
-      return _mesa_is_desktop_gl(ctx) && ctx->Extensions.ARB_texture_rg
+      return _mesa_has_ARB_texture_rg(ctx) || _mesa_has_EXT_texture_norm16(ctx)
          ? GL_RG : 0;
    case GL_RG8:
       return ctx->API != API_OPENGLES && ctx->Extensions.ARB_texture_rg

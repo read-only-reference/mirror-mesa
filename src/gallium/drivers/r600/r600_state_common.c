@@ -570,7 +570,10 @@ static void r600_set_vertex_buffers(struct pipe_context *ctx,
 	/* Set vertex buffers. */
 	if (input) {
 		for (i = 0; i < count; i++) {
-			if (memcmp(&input[i], &vb[i], sizeof(struct pipe_vertex_buffer))) {
+			if ((input[i].buffer.resource != vb[i].buffer.resource) ||
+			    (vb[i].stride != input[i].stride) ||
+			    (vb[i].buffer_offset != input[i].buffer_offset) ||
+			    (vb[i].is_user_buffer != input[i].is_user_buffer)) {
 				if (input[i].buffer.resource) {
 					vb[i].stride = input[i].stride;
 					vb[i].buffer_offset = input[i].buffer_offset;
@@ -1307,7 +1310,7 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 }
 
 static void *r600_alloc_buf_consts(struct r600_context *rctx, int shader_type,
-				   int array_size, uint32_t *base_offset)
+				   unsigned array_size, uint32_t *base_offset)
 {
 	struct r600_shader_driver_constants_info *info = &rctx->driver_consts[shader_type];
 	if (array_size + R600_UCP_SIZE > info->alloc_size) {
@@ -1430,14 +1433,13 @@ void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 /* set sample xy locations as array of fragment shader constants */
 void r600_set_sample_locations_constant_buffer(struct r600_context *rctx)
 {
-	int i;
 	struct pipe_context *ctx = &rctx->b.b;
 
 	assert(rctx->framebuffer.nr_samples < R600_UCP_SIZE);
 	assert(rctx->framebuffer.nr_samples <= ARRAY_SIZE(rctx->sample_positions)/4);
 
 	memset(rctx->sample_positions, 0, 4 * 4 * 16);
-	for (i = 0; i < rctx->framebuffer.nr_samples; i++) {
+	for (unsigned i = 0; i < rctx->framebuffer.nr_samples; i++) {
 		ctx->get_sample_position(ctx, rctx->framebuffer.nr_samples, i, &rctx->sample_positions[4*i]);
 		/* Also fill in center-zeroed positions used for interpolateAtSample */
 		rctx->sample_positions[4*i + 2] = rctx->sample_positions[4*i + 0] - 0.5f;

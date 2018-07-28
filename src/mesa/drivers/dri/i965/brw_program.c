@@ -41,13 +41,17 @@
 #include "util/ralloc.h"
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/glsl_to_nir.h"
-#include "compiler/nir/nir_serialize.h"
 
 #include "brw_program.h"
 #include "brw_context.h"
 #include "compiler/brw_nir.h"
 #include "brw_defines.h"
 #include "intel_batchbuffer.h"
+
+#include "brw_cs.h"
+#include "brw_gs.h"
+#include "brw_vs.h"
+#include "brw_wm.h"
 
 static bool
 brw_nir_lower_uniforms(nir_shader *nir, bool is_scalar)
@@ -70,6 +74,7 @@ brw_create_nir(struct brw_context *brw,
                gl_shader_stage stage,
                bool is_scalar)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
    const nir_shader_compiler_options *options =
       ctx->Const.ShaderCompilerOptions[stage].NirOptions;
@@ -95,32 +100,26 @@ brw_create_nir(struct brw_context *brw,
    }
    nir_validate_shader(nir);
 
-   /* Lower PatchVerticesIn from system value to uniform. This needs to
-    * happen before brw_preprocess_nir, since that will lower system values
-    * to intrinsics.
-    *
-    * We only do this for TES if no TCS is present, since otherwise we know
-    * the number of vertices in the patch at link time and we can lower it
-    * directly to a constant. We do this in nir_lower_patch_vertices, which
-    * needs to run after brw_nir_preprocess has turned the system values
-    * into intrinsics.
-    */
-   const bool lower_patch_vertices_in_to_uniform =
-      (stage == MESA_SHADER_TESS_CTRL && brw->screen->devinfo.gen >= 8) ||
-      (stage == MESA_SHADER_TESS_EVAL &&
-       !shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL]);
-
-   if (lower_patch_vertices_in_to_uniform)
-      brw_nir_lower_patch_vertices_in_to_uniform(nir);
-
    nir = brw_preprocess_nir(brw->screen->compiler, nir);
 
-   if (stage == MESA_SHADER_TESS_EVAL && !lower_patch_vertices_in_to_uniform) {
-      assert(shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL]);
-      struct gl_linked_shader *linked_tcs =
+   if (stage == MESA_SHADER_TESS_CTRL) {
+      /* Lower gl_PatchVerticesIn from a sys. value to a uniform on Gen8+. */
+      static const gl_state_index16 tokens[STATE_LENGTH] =
+         { STATE_INTERNAL, STATE_TCS_PATCH_VERTICES_IN };
+      nir_lower_patch_vertices(nir, 0, devinfo->gen >= 8 ? tokens : NULL);
+   }
+
+   if (stage == MESA_SHADER_TESS_EVAL) {
+      /* Lower gl_PatchVerticesIn to a constant if we have a TCS, or
+       * a uniform if we don't.
+       */
+      struct gl_linked_shader *tcs =
          shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL];
-      uint32_t patch_vertices = linked_tcs->Program->info.tess.tcs_vertices_out;
-      nir_lower_tes_patch_vertices(nir, patch_vertices);
+      uint32_t static_patch_vertices =
+         tcs ? tcs->Program->info.tess.tcs_vertices_out : 0;
+      static const gl_state_index16 tokens[STATE_LENGTH] =
+         { STATE_INTERNAL, STATE_TES_PATCH_VERTICES_IN };
+      nir_lower_patch_vertices(nir, static_patch_vertices, tokens);
    }
 
    if (stage == MESA_SHADER_FRAGMENT) {
@@ -740,11 +739,10 @@ brw_dump_arb_asm(const char *stage, struct gl_program *prog)
 }
 
 void
-brw_setup_tex_for_precompile(struct brw_context *brw,
+brw_setup_tex_for_precompile(const struct gen_device_info *devinfo,
                              struct brw_sampler_prog_key_data *tex,
                              struct gl_program *prog)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    const bool has_shader_channel_select = devinfo->is_haswell || devinfo->gen >= 8;
    unsigned sampler_count = util_last_bit(prog->SamplersUsed);
    for (unsigned i = 0; i < sampler_count; i++) {
@@ -841,34 +839,47 @@ brw_assign_common_binding_table_offsets(const struct gen_device_info *devinfo,
 }
 
 void
-brw_program_serialize_nir(struct gl_context *ctx, struct gl_program *prog)
+brw_prog_key_set_id(union brw_any_prog_key *key, gl_shader_stage stage,
+                    unsigned id)
 {
-   struct blob writer;
-   blob_init(&writer);
-   nir_serialize(&writer, prog->nir);
-   prog->driver_cache_blob = ralloc_size(NULL, writer.size);
-   memcpy(prog->driver_cache_blob, writer.data, writer.size);
-   prog->driver_cache_blob_size = writer.size;
-   blob_finish(&writer);
+   static const unsigned stage_offsets[] = {
+      offsetof(struct brw_vs_prog_key, program_string_id),
+      offsetof(struct brw_tcs_prog_key, program_string_id),
+      offsetof(struct brw_tes_prog_key, program_string_id),
+      offsetof(struct brw_gs_prog_key, program_string_id),
+      offsetof(struct brw_wm_prog_key, program_string_id),
+      offsetof(struct brw_cs_prog_key, program_string_id),
+   };
+   assert((int)stage >= 0 && stage < ARRAY_SIZE(stage_offsets));
+   *(unsigned*)((uint8_t*)key + stage_offsets[stage]) = id;
 }
 
 void
-brw_program_deserialize_nir(struct gl_context *ctx, struct gl_program *prog,
-                            gl_shader_stage stage)
+brw_populate_default_key(const struct gen_device_info *devinfo,
+                         union brw_any_prog_key *prog_key,
+                         struct gl_shader_program *sh_prog,
+                         struct gl_program *prog)
 {
-   if (!prog->nir) {
-      assert(prog->driver_cache_blob && prog->driver_cache_blob_size > 0);
-      const struct nir_shader_compiler_options *options =
-         ctx->Const.ShaderCompilerOptions[stage].NirOptions;
-      struct blob_reader reader;
-      blob_reader_init(&reader, prog->driver_cache_blob,
-                       prog->driver_cache_blob_size);
-      prog->nir = nir_deserialize(NULL, options, &reader);
-   }
-
-   if (prog->driver_cache_blob) {
-      ralloc_free(prog->driver_cache_blob);
-      prog->driver_cache_blob = NULL;
-      prog->driver_cache_blob_size = 0;
+   switch (prog->info.stage) {
+   case MESA_SHADER_VERTEX:
+      brw_vs_populate_default_key(devinfo, &prog_key->vs, prog);
+      break;
+   case MESA_SHADER_TESS_CTRL:
+      brw_tcs_populate_default_key(devinfo, &prog_key->tcs, sh_prog, prog);
+      break;
+   case MESA_SHADER_TESS_EVAL:
+      brw_tes_populate_default_key(devinfo, &prog_key->tes, sh_prog, prog);
+      break;
+   case MESA_SHADER_GEOMETRY:
+      brw_gs_populate_default_key(devinfo, &prog_key->gs, prog);
+      break;
+   case MESA_SHADER_FRAGMENT:
+      brw_wm_populate_default_key(devinfo, &prog_key->wm, prog);
+      break;
+   case MESA_SHADER_COMPUTE:
+      brw_cs_populate_default_key(devinfo, &prog_key->cs, prog);
+      break;
+   default:
+      unreachable("Unsupported stage!");
    }
 }

@@ -168,7 +168,7 @@ v3d_resource_transfer_map(struct pipe_context *pctx,
          */
         if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
             !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
-            !(prsc->flags & PIPE_RESOURCE_FLAG_MAP_COHERENT) &&
+            !(prsc->flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) &&
             prsc->last_level == 0 &&
             prsc->width0 == box->width &&
             prsc->height0 == box->height &&
@@ -281,7 +281,7 @@ v3d_resource_transfer_map(struct pipe_context *pctx,
                 return trans->map;
         } else {
                 ptrans->stride = slice->stride;
-                ptrans->layer_stride = ptrans->stride;
+                ptrans->layer_stride = rsc->cube_map_stride;
 
                 return buf + slice->offset +
                         ptrans->box.y * ptrans->stride +
@@ -323,6 +323,17 @@ v3d_resource_get_handle(struct pipe_screen *pscreen,
          * the ones seeing it (like BO caching).
          */
         bo->private = false;
+
+        if (rsc->tiled) {
+                /* A shared tiled buffer should always be allocated as UIF,
+                 * not UBLINEAR or LT.
+                 */
+                assert(rsc->slices[0].tiling == VC5_TILING_UIF_XOR ||
+                       rsc->slices[0].tiling == VC5_TILING_UIF_NO_XOR);
+                whandle->modifier = DRM_FORMAT_MOD_BROADCOM_UIF;
+        } else {
+                whandle->modifier = DRM_FORMAT_MOD_LINEAR;
+        }
 
         switch (whandle->type) {
         case WINSYS_HANDLE_TYPE_SHARED:
@@ -651,7 +662,7 @@ v3d_resource_create_with_modifiers(struct pipe_screen *pscreen,
                 linear_ok = true;
                 rsc->tiled = should_tile;
         } else if (should_tile &&
-                   find_modifier(DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED,
+                   find_modifier(DRM_FORMAT_MOD_BROADCOM_UIF,
                                  modifiers, count)) {
                 rsc->tiled = true;
         } else if (linear_ok) {
@@ -697,10 +708,12 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
 
         switch (whandle->modifier) {
         case DRM_FORMAT_MOD_LINEAR:
-        case DRM_FORMAT_MOD_INVALID:
                 rsc->tiled = false;
                 break;
-        /* XXX: UIF */
+        case DRM_FORMAT_MOD_BROADCOM_UIF:
+        case DRM_FORMAT_MOD_INVALID:
+                rsc->tiled = true;
+                break;
         default:
                 fprintf(stderr,
                         "Attempt to import unsupported modifier 0x%llx\n",

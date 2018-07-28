@@ -128,13 +128,13 @@ static void
 ctx_disassemble_program(struct gen_batch_decode_ctx *ctx,
                         uint32_t ksp, const char *type)
 {
-   if (!ctx->instruction_base.map)
+   uint64_t addr = ctx->instruction_base + ksp;
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, addr);
+   if (!bo.map)
       return;
 
-   printf("\nReferenced %s:\n", type);
-   gen_disasm_disassemble(ctx->disasm,
-                          (void *)ctx->instruction_base.map, ksp,
-                          ctx->fp);
+   fprintf(ctx->fp, "\nReferenced %s:\n", type);
+   gen_disasm_disassemble(ctx->disasm, bo.map, 0, ctx->fp);
 }
 
 /* Heuristic to determine whether a uint32_t is probably actually a float
@@ -203,11 +203,11 @@ handle_state_base_address(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 
    while (gen_field_iterator_next(&iter)) {
       if (strcmp(iter.name, "Surface State Base Address") == 0) {
-         ctx->surface_base = ctx_get_bo(ctx, iter.raw_value);
+         ctx->surface_base = iter.raw_value;
       } else if (strcmp(iter.name, "Dynamic State Base Address") == 0) {
-         ctx->dynamic_base = ctx_get_bo(ctx, iter.raw_value);
+         ctx->dynamic_base = iter.raw_value;
       } else if (strcmp(iter.name, "Instruction Base Address") == 0) {
-         ctx->instruction_base = ctx_get_bo(ctx, iter.raw_value);
+         ctx->instruction_base = iter.raw_value;
       }
    }
 }
@@ -225,31 +225,36 @@ dump_binding_table(struct gen_batch_decode_ctx *ctx, uint32_t offset, int count)
    if (count < 0)
       count = update_count(ctx, offset, 1, 8);
 
-   if (ctx->surface_base.map == NULL) {
-      fprintf(ctx->fp, "  binding table unavailable\n");
-      return;
-   }
-
-   if (offset % 32 != 0 || offset >= UINT16_MAX ||
-       offset >= ctx->surface_base.size) {
+   if (offset % 32 != 0 || offset >= UINT16_MAX) {
       fprintf(ctx->fp, "  invalid binding table pointer\n");
       return;
    }
 
-   const uint32_t *pointers = ctx->surface_base.map + offset;
+   struct gen_batch_decode_bo bind_bo =
+      ctx_get_bo(ctx, ctx->surface_base + offset);
+
+   if (bind_bo.map == NULL) {
+      fprintf(ctx->fp, "  binding table unavailable\n");
+      return;
+   }
+
+   const uint32_t *pointers = bind_bo.map;
    for (int i = 0; i < count; i++) {
       if (pointers[i] == 0)
          continue;
 
+      uint64_t addr = ctx->surface_base + pointers[i];
+      struct gen_batch_decode_bo bo = ctx_get_bo(ctx, addr);
+      uint32_t size = strct->dw_length * 4;
+
       if (pointers[i] % 32 != 0 ||
-          (pointers[i] + strct->dw_length * 4) >= ctx->surface_base.size) {
+          addr < bo.addr || addr + size >= bo.addr + bo.size) {
          fprintf(ctx->fp, "pointer %u: %08x <not valid>\n", i, pointers[i]);
          continue;
       }
 
       fprintf(ctx->fp, "pointer %u: %08x\n", i, pointers[i]);
-      ctx_print_group(ctx, strct, ctx->surface_base.addr + pointers[i],
-                      ctx->surface_base.map + pointers[i]);
+      ctx_print_group(ctx, strct, addr, bo.map + (addr - bo.addr));
    }
 }
 
@@ -261,18 +266,20 @@ dump_samplers(struct gen_batch_decode_ctx *ctx, uint32_t offset, int count)
    if (count < 0)
       count = update_count(ctx, offset, strct->dw_length, 4);
 
-   if (ctx->dynamic_base.map == NULL) {
+   uint64_t state_addr = ctx->dynamic_base + offset;
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, state_addr);
+   const void *state_map = bo.map;
+
+   if (state_map == NULL) {
       fprintf(ctx->fp, "  samplers unavailable\n");
       return;
    }
 
-   if (offset % 32 != 0 || offset >= ctx->dynamic_base.size) {
+   if (offset % 32 != 0 || state_addr - bo.addr >= bo.size) {
       fprintf(ctx->fp, "  invalid sampler state pointer\n");
       return;
    }
 
-   uint64_t state_addr = ctx->dynamic_base.addr + offset;
-   const void *state_map = ctx->dynamic_base.map + offset;
    for (int i = 0; i < count; i++) {
       fprintf(ctx->fp, "sampler state %d\n", i);
       ctx_print_group(ctx, strct, state_addr, state_map);
@@ -285,9 +292,6 @@ static void
 handle_media_interface_descriptor_load(struct gen_batch_decode_ctx *ctx,
                                        const uint32_t *p)
 {
-   if (ctx->dynamic_base.map == NULL)
-      return;
-
    struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
    struct gen_group *desc =
       gen_spec_find_struct(ctx->spec, "INTERFACE_DESCRIPTOR_DATA");
@@ -305,17 +309,24 @@ handle_media_interface_descriptor_load(struct gen_batch_decode_ctx *ctx,
       }
    }
 
-   uint64_t desc_addr = ctx->dynamic_base.addr + descriptor_offset;
-   const uint32_t *desc_map = ctx->dynamic_base.map + descriptor_offset;
+   uint64_t desc_addr = ctx->dynamic_base + descriptor_offset;
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, desc_addr);
+   const void *desc_map = bo.map;
+
+   if (desc_map == NULL) {
+      fprintf(ctx->fp, "  interface descriptors unavailable\n");
+      return;
+   }
+
    for (int i = 0; i < descriptor_count; i++) {
       fprintf(ctx->fp, "descriptor %d: %08x\n", i, descriptor_offset);
 
       ctx_print_group(ctx, desc, desc_addr, desc_map);
 
       gen_field_iterator_init(&iter, desc, desc_map, 0, false);
-      uint64_t ksp;
-      uint32_t sampler_offset, sampler_count;
-      uint32_t binding_table_offset, binding_entry_count;
+      uint64_t ksp = 0;
+      uint32_t sampler_offset = 0, sampler_count = 0;
+      uint32_t binding_table_offset = 0, binding_entry_count = 0;
       while (gen_field_iterator_next(&iter)) {
          if (strcmp(iter.name, "Kernel Start Pointer") == 0) {
             ksp = strtoll(iter.value, NULL, 16);
@@ -552,9 +563,8 @@ decode_3dstate_constant(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
    struct gen_group *body =
       gen_spec_find_struct(ctx->spec, "3DSTATE_CONSTANT_BODY");
 
-   uint32_t read_length[4];
-   struct gen_batch_decode_bo buffer[4];
-   memset(buffer, 0, sizeof(buffer));
+   uint32_t read_length[4] = {0};
+   uint64_t read_addr[4];
 
    struct gen_field_iterator outer;
    gen_field_iterator_init(&outer, inst, p, 0, false);
@@ -571,18 +581,24 @@ decode_3dstate_constant(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
          if (sscanf(iter.name, "Read Length[%d]", &idx) == 1) {
             read_length[idx] = iter.raw_value;
          } else if (sscanf(iter.name, "Buffer[%d]", &idx) == 1) {
-            buffer[idx] = ctx_get_bo(ctx, iter.raw_value);
+            read_addr[idx] = iter.raw_value;
          }
       }
 
       for (int i = 0; i < 4; i++) {
-         if (read_length[i] == 0 || buffer[i].map == NULL)
+         if (read_length[i] == 0)
             continue;
+
+         struct gen_batch_decode_bo buffer = ctx_get_bo(ctx, read_addr[i]);
+         if (!buffer.map) {
+            fprintf(ctx->fp, "constant buffer %d unavailable\n", i);
+            continue;
+         }
 
          unsigned size = read_length[i] * 32;
          fprintf(ctx->fp, "constant buffer %d, size %u\n", i, size);
 
-         ctx_print_buffer(ctx, buffer[i], size, 0, -1);
+         ctx_print_buffer(ctx, buffer, size, 0, -1);
       }
    }
 }
@@ -625,15 +641,10 @@ decode_dynamic_state_pointers(struct gen_batch_decode_ctx *ctx,
                               const char *struct_type, const uint32_t *p,
                               int count)
 {
-   if (ctx->dynamic_base.map == NULL) {
-      fprintf(ctx->fp, "  dynamic %s state unavailable\n", struct_type);
-      return;
-   }
-
    struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
    struct gen_group *state = gen_spec_find_struct(ctx->spec, struct_type);
 
-   uint32_t state_offset;
+   uint32_t state_offset = 0;
 
    struct gen_field_iterator iter;
    gen_field_iterator_init(&iter, inst, p, 0, false);
@@ -644,8 +655,15 @@ decode_dynamic_state_pointers(struct gen_batch_decode_ctx *ctx,
       }
    }
 
-   uint32_t state_addr = ctx->dynamic_base.addr + state_offset;
-   const uint32_t *state_map = ctx->dynamic_base.map + state_offset;
+   uint64_t state_addr = ctx->dynamic_base + state_offset;
+   struct gen_batch_decode_bo bo = ctx_get_bo(ctx, state_addr);
+   const void *state_map = bo.map;
+
+   if (state_map == NULL) {
+      fprintf(ctx->fp, "  dynamic %s state unavailable\n", struct_type);
+      return;
+   }
+
    for (int i = 0; i < count; i++) {
       fprintf(ctx->fp, "%s %d\n", struct_type, i);
       ctx_print_group(ctx, state, state_offset, state_map);
@@ -826,7 +844,7 @@ gen_print_batch(struct gen_batch_decode_ctx *ctx,
       }
 
       if (strcmp(inst_name, "MI_BATCH_BUFFER_START") == 0) {
-         struct gen_batch_decode_bo next_batch;
+         struct gen_batch_decode_bo next_batch = {};
          bool second_level;
          struct gen_field_iterator iter;
          gen_field_iterator_init(&iter, inst, p, 0, false);
@@ -839,35 +857,26 @@ gen_print_batch(struct gen_batch_decode_ctx *ctx,
          }
 
          if (next_batch.map == NULL) {
-            fprintf(ctx->fp, "Secondary batch at 0x%08"PRIx64" unavailable",
+            fprintf(ctx->fp, "Secondary batch at 0x%08"PRIx64" unavailable\n",
                     next_batch.addr);
+         } else {
+            gen_print_batch(ctx, next_batch.map, next_batch.size,
+                            next_batch.addr);
          }
-
          if (second_level) {
             /* MI_BATCH_BUFFER_START with "2nd Level Batch Buffer" set acts
              * like a subroutine call.  Commands that come afterwards get
              * processed once the 2nd level batch buffer returns with
              * MI_BATCH_BUFFER_END.
              */
-            if (next_batch.map) {
-               gen_print_batch(ctx, next_batch.map, next_batch.size,
-                               next_batch.addr);
-            }
+            continue;
          } else {
             /* MI_BATCH_BUFFER_START with "2nd Level Batch Buffer" unset acts
              * like a goto.  Nothing after it will ever get processed.  In
              * order to prevent the recursion from growing, we just reset the
              * loop and continue;
              */
-            if (next_batch.map) {
-               p = next_batch.map;
-               end = next_batch.map + next_batch.size;
-               length = 0;
-               continue;
-            } else {
-               /* Nothing we can do */
-               break;
-            }
+            break;
          }
       } else if (strcmp(inst_name, "MI_BATCH_BUFFER_END") == 0) {
          break;

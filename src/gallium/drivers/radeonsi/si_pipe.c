@@ -41,12 +41,6 @@
 #include "vl/vl_decoder.h"
 #include "driver_ddebug/dd_util.h"
 
-#include <llvm-c/Transforms/IPO.h>
-#include <llvm-c/Transforms/Scalar.h>
-#if HAVE_LLVM >= 0x0700
-#include <llvm-c/Transforms/Utils.h>
-#endif
-
 static const struct debug_named_value debug_options[] = {
 	/* Shader logging options: */
 	{ "vs", DBG(VS), "Print vertex shaders" },
@@ -63,6 +57,7 @@ static const struct debug_named_value debug_options[] = {
 	/* Shader compiler options the shader cache should be aware of: */
 	{ "unsafemath", DBG(UNSAFE_MATH), "Enable unsafe math shader optimizations" },
 	{ "sisched", DBG(SI_SCHED), "Enable LLVM SI Machine Instruction Scheduler." },
+	{ "gisel", DBG(GISEL), "Enable LLVM global instruction selector." },
 
 	/* Shader compiler options (with no effect on the shader cache): */
 	{ "checkir", DBG(CHECK_IR), "Enable additional sanity checks on shader IR" },
@@ -111,67 +106,25 @@ static const struct debug_named_value debug_options[] = {
 };
 
 static void si_init_compiler(struct si_screen *sscreen,
-			     struct si_compiler *compiler)
+			     struct ac_llvm_compiler *compiler)
 {
 	enum ac_target_machine_options tm_options =
 		(sscreen->debug_flags & DBG(SI_SCHED) ? AC_TM_SISCHED : 0) |
+		(sscreen->debug_flags & DBG(GISEL) ? AC_TM_ENABLE_GLOBAL_ISEL : 0) |
 		(sscreen->info.chip_class >= GFX9 ? AC_TM_FORCE_ENABLE_XNACK : 0) |
 		(sscreen->info.chip_class < GFX9 ? AC_TM_FORCE_DISABLE_XNACK : 0) |
-		(!sscreen->llvm_has_working_vgpr_indexing ? AC_TM_PROMOTE_ALLOCA_TO_SCRATCH : 0);
+		(!sscreen->llvm_has_working_vgpr_indexing ? AC_TM_PROMOTE_ALLOCA_TO_SCRATCH : 0) |
+		(sscreen->debug_flags & DBG(CHECK_IR) ? AC_TM_CHECK_IR : 0);
 
-	compiler->tm = ac_create_target_machine(sscreen->info.family,
-						tm_options, &compiler->triple);
-	if (!compiler->tm)
-		return;
-
-	compiler->target_library_info =
-		gallivm_create_target_library_info(compiler->triple);
-	if (!compiler->target_library_info)
-		return;
-
-	compiler->passmgr = LLVMCreatePassManager();
-	if (!compiler->passmgr)
-		return;
-
-	LLVMAddTargetLibraryInfo(compiler->target_library_info,
-				 compiler->passmgr);
-
-	/* Add LLVM passes into the pass manager. */
-	if (sscreen->debug_flags & DBG(CHECK_IR))
-		LLVMAddVerifierPass(compiler->passmgr);
-
-	LLVMAddAlwaysInlinerPass(compiler->passmgr);
-	/* This pass should eliminate all the load and store instructions. */
-	LLVMAddPromoteMemoryToRegisterPass(compiler->passmgr);
-	LLVMAddScalarReplAggregatesPass(compiler->passmgr);
-	LLVMAddLICMPass(compiler->passmgr);
-	LLVMAddAggressiveDCEPass(compiler->passmgr);
-	LLVMAddCFGSimplificationPass(compiler->passmgr);
-	/* This is recommended by the instruction combining pass. */
-	LLVMAddEarlyCSEMemSSAPass(compiler->passmgr);
-	LLVMAddInstructionCombiningPass(compiler->passmgr);
-
-	/* Get the data layout. */
-	LLVMTargetDataRef data_layout = LLVMCreateTargetDataLayout(compiler->tm);
-	if (!data_layout)
-		return;
-	compiler->data_layout = LLVMCopyStringRepOfTargetData(data_layout);
-	LLVMDisposeTargetData(data_layout);
+	ac_init_llvm_once();
+	ac_init_llvm_compiler(compiler, true, sscreen->info.family, tm_options);
+	compiler->passes = ac_create_llvm_passes(compiler->tm);
 }
 
-static void si_destroy_compiler(struct si_compiler *compiler)
+static void si_destroy_compiler(struct ac_llvm_compiler *compiler)
 {
-	if (compiler->data_layout)
-		LLVMDisposeMessage((char*)compiler->data_layout);
-	if (compiler->passmgr)
-		LLVMDisposePassManager(compiler->passmgr);
-#if HAVE_LLVM >= 0x0700
-	/* This crashes on LLVM 5.0 and 6.0 and Ubuntu 18.04, so leak it there. */
-	if (compiler->target_library_info)
-		gallivm_dispose_target_library_info(compiler->target_library_info);
-#endif
-	if (compiler->tm)
-		LLVMDisposeTargetMachine(compiler->tm);
+	ac_destroy_llvm_passes(compiler->passes);
+	ac_destroy_llvm_compiler(compiler);
 }
 
 /*
@@ -805,6 +758,7 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 			/* These flags affect shader compilation. */
 			#define ALL_FLAGS (DBG(FS_CORRECT_DERIVS_AFTER_KILL) | \
 					   DBG(SI_SCHED) | \
+					   DBG(GISEL) | \
 					   DBG(UNSAFE_MATH) | \
 					   DBG(NIR))
 			uint64_t shader_debug_flags = sscreen->debug_flags &
@@ -837,6 +791,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	sscreen->ws = ws;
 	ws->query_info(ws, &sscreen->info);
+	si_handle_env_var_force_family(sscreen);
 
 	sscreen->debug_flags = debug_get_flags_option("R600_DEBUG",
 							debug_options, 0);
@@ -908,7 +863,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	num_comp_lo_threads = MIN2(num_comp_lo_threads,
 				   ARRAY_SIZE(sscreen->compiler_lowp));
 
-	if (!util_queue_init(&sscreen->shader_compiler_queue, "si_shader",
+	if (!util_queue_init(&sscreen->shader_compiler_queue, "sh",
 			     64, num_comp_hi_threads,
 			     UTIL_QUEUE_INIT_RESIZE_IF_FULL)) {
 		si_destroy_shader_cache(sscreen);
@@ -917,7 +872,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	}
 
 	if (!util_queue_init(&sscreen->shader_compiler_queue_low_priority,
-			     "si_shader_low",
+			     "shlo",
 			     64, num_comp_lo_threads,
 			     UTIL_QUEUE_INIT_RESIZE_IF_FULL |
 			     UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY)) {
@@ -925,8 +880,6 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	       FREE(sscreen);
 	       return NULL;
 	}
-
-	si_handle_env_var_force_family(sscreen);
 
 	if (!debug_get_bool_option("RADEON_DISABLE_PERFCOUNTERS", false))
 		si_init_perfcounters(sscreen);
@@ -941,7 +894,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	unsigned max_offchip_buffers_per_se;
 
 	/* Only certain chips can use the maximum value. */
-	if (sscreen->info.family == CHIP_VEGA12)
+	if (sscreen->info.family == CHIP_VEGA12 ||
+	    sscreen->info.family == CHIP_VEGA20)
 		max_offchip_buffers_per_se = double_offchip_buffers ? 128 : 64;
 	else
 		max_offchip_buffers_per_se = double_offchip_buffers ? 127 : 63;

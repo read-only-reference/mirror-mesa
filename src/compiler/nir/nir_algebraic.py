@@ -25,6 +25,7 @@
 
 from __future__ import print_function
 import ast
+from collections import OrderedDict
 import itertools
 import struct
 import sys
@@ -55,7 +56,7 @@ class VarSet(object):
    def __getitem__(self, name):
       if name not in self.names:
          assert not self.immutable, "Unknown replacement variable: " + name
-         self.names[name] = self.ids.next()
+         self.names[name] = next(self.ids)
 
       return self.names[name]
 
@@ -467,7 +468,7 @@ condition_list = ['true']
 
 class SearchAndReplace(object):
    def __init__(self, transform):
-      self.id = _optimization_ids.next()
+      self.id = next(_optimization_ids)
 
       search = transform[0]
       replace = transform[1]
@@ -511,7 +512,7 @@ struct transform {
 
 #endif
 
-% for (opcode, xform_list) in xform_dict.iteritems():
+% for (opcode, xform_list) in xform_dict.items():
 % for xform in xform_list:
    ${xform.search.render()}
    ${xform.replace.render()}
@@ -601,7 +602,7 @@ ${pass_name}(nir_shader *shader)
 
 class AlgebraicPass(object):
    def __init__(self, pass_name, transforms):
-      self.xform_dict = {}
+      self.xform_dict = OrderedDict()
       self.pass_name = pass_name
 
       error = False
