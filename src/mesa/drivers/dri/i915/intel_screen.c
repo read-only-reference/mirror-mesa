@@ -57,10 +57,6 @@ DRI_CONF_BEGIN
 	 DRI_CONF_DESC_END
       DRI_CONF_OPT_END
 
-      DRI_CONF_OPT_BEGIN_B(early_z, "false")
-	 DRI_CONF_DESC(en, "Enable early Z in classic mode (unstable, 945-only).")
-      DRI_CONF_OPT_END
-
       DRI_CONF_OPT_BEGIN_B(fragment_shader, "true")
 	 DRI_CONF_DESC(en, "Enable limited ARB_fragment_shader support on 915/945.")
       DRI_CONF_OPT_END
@@ -69,7 +65,6 @@ DRI_CONF_BEGIN
    DRI_CONF_SECTION_QUALITY
    DRI_CONF_SECTION_END
    DRI_CONF_SECTION_DEBUG
-      DRI_CONF_NO_RAST("false")
       DRI_CONF_ALWAYS_FLUSH_BATCH("false")
       DRI_CONF_ALWAYS_FLUSH_CACHE("false")
       DRI_CONF_DISABLE_THROTTLING("false")
@@ -1094,7 +1089,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      num_depth_stencil_bits,
                                      back_buffer_modes, 2,
                                      singlesample_samples, 1,
-                                     false, false);
+                                     false, false, false);
       configs = driConcatConfigs(configs, new_configs);
    }
 
@@ -1116,7 +1111,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      depth_bits, stencil_bits, 1,
                                      back_buffer_modes, 1,
                                      singlesample_samples, 1,
-                                     true, false);
+                                     true, false, false);
       configs = driConcatConfigs(configs, new_configs);
    }
 

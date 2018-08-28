@@ -43,6 +43,12 @@ enum {
 	AC_CONST_32BIT_ADDR_SPACE = 6, /* same as CONST, but the pointer type has 32 bits */
 };
 
+/* Combine these with & instead of |. */
+#define NOOP_WAITCNT	0xcf7f
+#define LGKM_CNT	0xc07f
+#define EXP_CNT		0xcf0f
+#define VM_CNT		0x0f70 /* On GFX9, vmcnt has 6 bits in [0:3] and [14:15] */
+
 struct ac_llvm_flow;
 
 struct ac_llvm_context {
@@ -133,6 +139,7 @@ ac_build_phi(struct ac_llvm_context *ctx, LLVMTypeRef type,
 	     unsigned count_incoming, LLVMValueRef *values,
 	     LLVMBasicBlockRef *blocks);
 
+void ac_build_s_barrier(struct ac_llvm_context *ctx);
 void ac_build_optimization_barrier(struct ac_llvm_context *ctx,
 				   LLVMValueRef *pvgpr);
 
@@ -397,6 +404,10 @@ void ac_build_kill_if_false(struct ac_llvm_context *ctx, LLVMValueRef i1);
 LLVMValueRef ac_build_bfe(struct ac_llvm_context *ctx, LLVMValueRef input,
 			  LLVMValueRef offset, LLVMValueRef width,
 			  bool is_signed);
+LLVMValueRef ac_build_imad(struct ac_llvm_context *ctx, LLVMValueRef s0,
+			   LLVMValueRef s1, LLVMValueRef s2);
+LLVMValueRef ac_build_fmad(struct ac_llvm_context *ctx, LLVMValueRef s0,
+			   LLVMValueRef s1, LLVMValueRef s2);
 
 void ac_build_waitcnt(struct ac_llvm_context *ctx, unsigned simm16);
 

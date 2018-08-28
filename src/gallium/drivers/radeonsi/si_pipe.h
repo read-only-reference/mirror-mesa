@@ -165,6 +165,7 @@ enum {
 	DBG_TEST_VMFAULT_CP,
 	DBG_TEST_VMFAULT_SDMA,
 	DBG_TEST_VMFAULT_SHADER,
+	DBG_TEST_DMA_PERF,
 };
 
 #define DBG_ALL_SHADERS		(((1 << (DBG_CS + 1)) - 1))
@@ -803,6 +804,9 @@ struct si_context {
 	struct si_scissors		scissors;
 	struct si_streamout		streamout;
 	struct si_viewports		viewports;
+	unsigned			num_window_rectangles;
+	bool				window_rectangles_include;
+	struct pipe_scissor_state	window_rectangles[4];
 
 	/* Precomputed states. */
 	struct si_pm4_state		*init_config;
@@ -821,6 +825,7 @@ struct si_context {
 	/* shader information */
 	struct si_vertex_elements	*vertex_elements;
 	unsigned			sprite_coord_enable;
+	unsigned			cs_max_waves_per_sh;
 	bool				flatshade;
 	bool				do_update_shaders;
 
@@ -850,6 +855,7 @@ struct si_context {
 	unsigned			border_color_count;
 	unsigned			num_vs_blit_sgprs;
 	uint32_t			vs_blit_sh_data[SI_VS_BLIT_SGPRS_POS_TEXCOORD];
+	uint32_t			cs_user_data[4];
 
 	/* Vertex and index buffers. */
 	bool				vertex_buffers_dirty;
@@ -1104,6 +1110,12 @@ void si_init_clear_functions(struct si_context *sctx);
 			   SI_CPDMA_SKIP_GFX_SYNC | \
 			   SI_CPDMA_SKIP_BO_LIST_UPDATE)
 
+enum si_cache_policy {
+	L2_BYPASS,
+	L2_STREAM, /* same as SLC=1 */
+	L2_LRU,    /* same as SLC=0 */
+};
+
 enum si_coherency {
 	SI_COHERENCY_NONE, /* no cache flushes needed */
 	SI_COHERENCY_SHADER,
@@ -1111,13 +1123,17 @@ enum si_coherency {
 };
 
 void si_cp_dma_wait_for_idle(struct si_context *sctx);
+void si_cp_dma_clear_buffer(struct si_context *sctx, struct pipe_resource *dst,
+			    uint64_t offset, uint64_t size, unsigned value,
+			    enum si_coherency coher,
+			    enum si_cache_policy cache_policy);
 void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst,
 		     uint64_t offset, uint64_t size, unsigned value,
 		     enum si_coherency coher);
 void si_copy_buffer(struct si_context *sctx,
 		    struct pipe_resource *dst, struct pipe_resource *src,
 		    uint64_t dst_offset, uint64_t src_offset, unsigned size,
-		    unsigned user_flags);
+		    unsigned user_flags, enum si_cache_policy cache_policy);
 void cik_prefetch_TC_L2_async(struct si_context *sctx, struct pipe_resource *buf,
 			      uint64_t offset, unsigned size);
 void cik_emit_prefetch_L2(struct si_context *sctx, bool vertex_stage_only);
@@ -1141,6 +1157,8 @@ bool si_replace_shader(unsigned num, struct ac_shader_binary *binary);
 void si_init_dma_functions(struct si_context *sctx);
 
 /* si_dma_cs.c */
+void si_dma_emit_timestamp(struct si_context *sctx, struct r600_resource *dst,
+			   uint64_t offset);
 void si_need_dma_space(struct si_context *ctx, unsigned num_dw,
 		       struct r600_resource *dst, struct r600_resource *src);
 void si_flush_dma_cs(struct si_context *ctx, unsigned flags,
@@ -1163,7 +1181,6 @@ struct pipe_fence_handle *si_create_fence(struct pipe_context *ctx,
 					  struct tc_unflushed_batch_token *tc_token);
 
 /* si_get.c */
-const char *si_get_family_name(const struct si_screen *sscreen);
 void si_init_screen_get_functions(struct si_screen *sscreen);
 
 /* si_gfx_cs.c */
@@ -1196,8 +1213,20 @@ void si_init_query_functions(struct si_context *sctx);
 void si_suspend_queries(struct si_context *sctx);
 void si_resume_queries(struct si_context *sctx);
 
+/* si_shaderlib_tgsi.c */
+void *si_get_blitter_vs(struct si_context *sctx, enum blitter_attrib_type type,
+			unsigned num_layers);
+void *si_create_fixed_func_tcs(struct si_context *sctx);
+void *si_create_dma_compute_shader(struct pipe_context *ctx,
+				   unsigned num_dwords_per_thread,
+				   bool dst_stream_cache_policy, bool is_copy);
+void *si_create_query_result_cs(struct si_context *sctx);
+
 /* si_test_dma.c */
 void si_test_dma(struct si_screen *sscreen);
+
+/* si_test_clearbuffer.c */
+void si_test_dma_perf(struct si_screen *sscreen);
 
 /* si_uvd.c */
 struct pipe_video_codec *si_uvd_create_decoder(struct pipe_context *context,

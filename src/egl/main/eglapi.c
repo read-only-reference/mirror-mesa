@@ -488,6 +488,8 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(EXT_create_context_robustness);
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import);
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import_modifiers);
+   _EGL_CHECK_EXTENSION(EXT_surface_CTA861_3_metadata);
+   _EGL_CHECK_EXTENSION(EXT_surface_SMPTE2086_metadata);
    _EGL_CHECK_EXTENSION(EXT_swap_buffers_with_damage);
 
    _EGL_CHECK_EXTENSION(IMG_context_priority);
@@ -509,6 +511,7 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(KHR_image);
    _EGL_CHECK_EXTENSION(KHR_image_base);
    _EGL_CHECK_EXTENSION(KHR_image_pixmap);
+   _EGL_CHECK_EXTENSION(KHR_mutable_render_buffer);
    _EGL_CHECK_EXTENSION(KHR_no_config_context);
    _EGL_CHECK_EXTENSION(KHR_partial_update);
    _EGL_CHECK_EXTENSION(KHR_reusable_sync);
@@ -537,19 +540,30 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
 static void
 _eglCreateAPIsString(_EGLDisplay *dpy)
 {
+#define addstr(str) \
+   { \
+      const size_t old_len = strlen(dpy->ClientAPIsString); \
+      const size_t add_len = sizeof(str); \
+      const size_t max_len = sizeof(dpy->ClientAPIsString) - 1; \
+      if (old_len + add_len <= max_len) \
+         strcat(dpy->ClientAPIsString, str " "); \
+      else \
+         assert(!"dpy->ClientAPIsString is not large enough"); \
+   }
+
    if (dpy->ClientAPIs & EGL_OPENGL_BIT)
-      strcat(dpy->ClientAPIsString, "OpenGL ");
+      addstr("OpenGL");
 
    if (dpy->ClientAPIs & EGL_OPENGL_ES_BIT ||
        dpy->ClientAPIs & EGL_OPENGL_ES2_BIT ||
        dpy->ClientAPIs & EGL_OPENGL_ES3_BIT_KHR) {
-      strcat(dpy->ClientAPIsString, "OpenGL_ES ");
+      addstr("OpenGL_ES");
    }
 
    if (dpy->ClientAPIs & EGL_OPENVG_BIT)
-      strcat(dpy->ClientAPIsString, "OpenVG ");
+      addstr("OpenVG");
 
-   assert(strlen(dpy->ClientAPIsString) < sizeof(dpy->ClientAPIsString));
+#undef addstr
 }
 
 static void
@@ -1394,8 +1408,6 @@ eglCopyBuffers(EGLDisplay dpy, EGLSurface surface, EGLNativePixmapType target)
    native_pixmap_ptr = (void*) target;
 
    _EGL_CHECK_SURFACE(disp, surf, EGL_FALSE, drv);
-   if (disp->Platform != _eglGetNativePlatform(disp->PlatformDisplay))
-      RETURN_EGL_ERROR(disp, EGL_BAD_NATIVE_PIXMAP, EGL_FALSE);
    ret = drv->API.CopyBuffers(drv, disp, surf, native_pixmap_ptr);
 
    RETURN_EGL_EVAL(disp, ret);

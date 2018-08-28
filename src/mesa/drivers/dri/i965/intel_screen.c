@@ -74,7 +74,6 @@ DRI_CONF_BEGIN
    DRI_CONF_SECTION_END
 
    DRI_CONF_SECTION_DEBUG
-      DRI_CONF_NO_RAST("false")
       DRI_CONF_ALWAYS_FLUSH_BATCH("false")
       DRI_CONF_ALWAYS_FLUSH_CACHE("false")
       DRI_CONF_DISABLE_THROTTLING("false")
@@ -1275,9 +1274,9 @@ static bool
 intel_image_format_is_supported(const struct gen_device_info *devinfo,
                                 const struct intel_image_format *fmt)
 {
-   if (fmt->fourcc == __DRI_IMAGE_FOURCC_SARGB8888 ||
-       fmt->fourcc == __DRI_IMAGE_FOURCC_SABGR8888)
-      return false;
+   /* Currently, all formats with an intel_image_format are available on all
+    * platforms so there's really nothing to check there.
+    */
 
 #ifndef NDEBUG
    if (fmt->nplanes == 1) {
@@ -1303,6 +1302,14 @@ intel_query_dma_buf_formats(__DRIscreen *_screen, int max,
    int num_formats = 0, i;
 
    for (i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
+      /* These two formats are valid DRI formats but do not exist in
+       * drm_fourcc.h in the Linux kernel.  We don't want to accidentally
+       * advertise them through the EGL layer.
+       */
+      if (intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SARGB8888 ||
+          intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SABGR8888)
+         continue;
+
       if (!intel_image_format_is_supported(&screen->devinfo,
                                            &intel_image_formats[i]))
          continue;
@@ -1588,12 +1595,17 @@ static const __DRI2blobExtension intelBlobExtension = {
    .set_cache_funcs = brw_set_cache_funcs
 };
 
+static const __DRImutableRenderBufferDriverExtension intelMutableRenderBufferExtension = {
+   .base = { __DRI_MUTABLE_RENDER_BUFFER_DRIVER, 1 },
+};
+
 static const __DRIextension *screenExtensions[] = {
     &intelTexBufferExtension.base,
     &intelFenceExtension.base,
     &intelFlushExtension.base,
     &intelImageExtension.base,
     &intelRendererQueryExtension.base,
+    &intelMutableRenderBufferExtension.base,
     &dri2ConfigQueryExtension.base,
     &dri2NoErrorExtension.base,
     &intelBlobExtension.base,
@@ -1606,6 +1618,7 @@ static const __DRIextension *intelRobustScreenExtensions[] = {
     &intelFlushExtension.base,
     &intelImageExtension.base,
     &intelRendererQueryExtension.base,
+    &intelMutableRenderBufferExtension.base,
     &dri2ConfigQueryExtension.base,
     &dri2Robustness.base,
     &dri2NoErrorExtension.base,
@@ -2159,7 +2172,9 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    bool allow_rgb10_configs = driQueryOptionb(&screen->optionCache,
                                               "allow_rgb10_configs");
 
-   /* Generate singlesample configs without accumulation buffer. */
+   /* Generate singlesample configs, each without accumulation buffer
+    * and with EGL_MUTABLE_RENDER_BUFFER_BIT_KHR.
+    */
    for (unsigned i = 0; i < num_formats; i++) {
       __DRIconfig **new_configs;
       int num_depth_stencil_bits = 2;
@@ -2195,7 +2210,8 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      num_depth_stencil_bits,
                                      back_buffer_modes, 2,
                                      singlesample_samples, 1,
-                                     false, false);
+                                     false, false,
+                                     /*mutable_render_buffer*/ true);
       configs = driConcatConfigs(configs, new_configs);
    }
 
@@ -2222,7 +2238,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      depth_bits, stencil_bits, 1,
                                      back_buffer_modes, 1,
                                      singlesample_samples, 1,
-                                     true, false);
+                                     true, false, false);
       configs = driConcatConfigs(configs, new_configs);
    }
 
@@ -2289,7 +2305,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      back_buffer_modes, 1,
                                      multisample_samples,
                                      num_msaa_modes,
-                                     false, false);
+                                     false, false, false);
       configs = driConcatConfigs(configs, new_configs);
    }
 
@@ -2442,7 +2458,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    memset(&options, 0, sizeof(options));
 
    driParseOptionInfo(&options, brw_config_options.xml);
-   driParseConfigFiles(&screen->optionCache, &options, dri_screen->myNum, "i965");
+   driParseConfigFiles(&screen->optionCache, &options, dri_screen->myNum,
+                       "i965", NULL);
    driDestroyOptionCache(&options);
 
    screen->driScrnPriv = dri_screen;

@@ -54,36 +54,6 @@ static const char *si_get_marketing_name(struct radeon_winsys *ws)
 	return ws->get_chip_name(ws);
 }
 
-const char *si_get_family_name(const struct si_screen *sscreen)
-{
-	switch (sscreen->info.family) {
-	case CHIP_TAHITI: return "AMD TAHITI";
-	case CHIP_PITCAIRN: return "AMD PITCAIRN";
-	case CHIP_VERDE: return "AMD CAPE VERDE";
-	case CHIP_OLAND: return "AMD OLAND";
-	case CHIP_HAINAN: return "AMD HAINAN";
-	case CHIP_BONAIRE: return "AMD BONAIRE";
-	case CHIP_KAVERI: return "AMD KAVERI";
-	case CHIP_KABINI: return "AMD KABINI";
-	case CHIP_HAWAII: return "AMD HAWAII";
-	case CHIP_MULLINS: return "AMD MULLINS";
-	case CHIP_TONGA: return "AMD TONGA";
-	case CHIP_ICELAND: return "AMD ICELAND";
-	case CHIP_CARRIZO: return "AMD CARRIZO";
-	case CHIP_FIJI: return "AMD FIJI";
-	case CHIP_STONEY: return "AMD STONEY";
-	case CHIP_POLARIS10: return "AMD POLARIS10";
-	case CHIP_POLARIS11: return "AMD POLARIS11";
-	case CHIP_POLARIS12: return "AMD POLARIS12";
-	case CHIP_VEGAM: return "AMD VEGAM";
-	case CHIP_VEGA10: return "AMD VEGA10";
-	case CHIP_VEGA12: return "AMD VEGA12";
-	case CHIP_VEGA20: return "AMD VEGA20";
-	case CHIP_RAVEN: return "AMD RAVEN";
-	default: return "AMD unknown";
-	}
-}
-
 static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
 	struct si_screen *sscreen = (struct si_screen *)pscreen;
@@ -96,6 +66,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_POINT_SPRITE:
 	case PIPE_CAP_OCCLUSION_QUERY:
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+	case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_DEPTH_CLIP_DISABLE:
@@ -208,16 +179,17 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
 	case PIPE_CAP_MAX_VERTEX_STREAMS:
 	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
+	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 		return 4;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 	case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
 		if (sscreen->info.has_indirect_compute_dispatch)
-			return param == PIPE_CAP_GLSL_FEATURE_LEVEL ?
-				450 : 440;
+				return 450;
 		return 420;
 
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
+	case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
 		return MIN2(sscreen->info.max_alloc_size, INT_MAX);
 
 	case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
@@ -243,7 +215,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
-	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
 	case PIPE_CAP_TGSI_MUL_ZERO_WINS:
 	case PIPE_CAP_UMA:
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
@@ -291,6 +262,10 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 1024;
 	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
 		return 4095;
+	case PIPE_CAP_MAX_GS_INVOCATIONS:
+		/* The closed driver exposes 127, but 125 is the greatest
+		 * number that works. */
+		return 125;
 
 	case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
 		return 2048;
@@ -422,7 +397,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
-		return 4096 * sizeof(float[4]); /* actually only memory limits this */
+		return MIN2(sscreen->info.max_alloc_size, INT_MAX - 3); /* aligned to 4 */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return SI_NUM_CONST_BUFFERS;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
@@ -956,16 +931,19 @@ static struct disk_cache *si_get_disk_shader_cache(struct pipe_screen *pscreen)
 static void si_init_renderer_string(struct si_screen *sscreen)
 {
 	struct radeon_winsys *ws = sscreen->ws;
-	char family_name[32] = {}, kernel_version[128] = {};
+	char first_name[256], second_name[32] = {}, kernel_version[128] = {};
 	struct utsname uname_data;
 
-	const char *chip_name = si_get_marketing_name(ws);
+	const char *marketing_name = si_get_marketing_name(ws);
 
-	if (chip_name)
-		snprintf(family_name, sizeof(family_name), "%s, ",
-			 si_get_family_name(sscreen) + 4);
-	else
-		chip_name = si_get_family_name(sscreen);
+	if (marketing_name) {
+		snprintf(first_name, sizeof(first_name), "%s", marketing_name);
+		snprintf(second_name, sizeof(second_name), "%s, ",
+			 sscreen->info.name);
+	} else {
+		snprintf(first_name, sizeof(first_name), "AMD %s",
+			 sscreen->info.name);
+	}
 
 	if (uname(&uname_data) == 0)
 		snprintf(kernel_version, sizeof(kernel_version),
@@ -973,7 +951,7 @@ static void si_init_renderer_string(struct si_screen *sscreen)
 
 	snprintf(sscreen->renderer_string, sizeof(sscreen->renderer_string),
 		 "%s (%sDRM %i.%i.%i%s, LLVM %i.%i.%i)",
-		 chip_name, family_name, sscreen->info.drm_major,
+		 first_name, second_name, sscreen->info.drm_major,
 		 sscreen->info.drm_minor, sscreen->info.drm_patchlevel,
 		 kernel_version,
 		 (HAVE_LLVM >> 8) & 0xff,

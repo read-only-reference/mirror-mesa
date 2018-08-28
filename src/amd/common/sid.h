@@ -294,11 +294,13 @@
 #define       V_500_GDS			1 /* program SAS to 1 as well */
 #define       V_500_DATA		2
 #define       V_500_SRC_ADDR_TC_L2	3 /* new for CIK */
+#define     S_500_DST_CACHE_POLICY(x)	(((unsigned)(x) & 0x3) << 25) /* CIK+ */
 #define     S_500_DST_SEL(x)		(((unsigned)(x) & 0x3) << 20)
 #define       V_500_DST_ADDR		0
 #define       V_500_GDS			1 /* program DAS to 1 as well */
 #define       V_500_NOWHERE		2 /* new for GFX9 */
 #define       V_500_DST_ADDR_TC_L2	3 /* new for CIK */
+#define     S_500_SRC_CACHE_POLICY(x)	(((unsigned)(x) & 0x3) << 13) /* CIK+ */
 #define     S_500_ENGINE(x)		((x) & 0x1)
 #define       V_500_ME			0
 #define       V_500_PFP			1
@@ -5282,6 +5284,22 @@
 #define   S_02820C_CLIP_RULE(x)                                       (((unsigned)(x) & 0xFFFF) << 0)
 #define   G_02820C_CLIP_RULE(x)                                       (((x) >> 0) & 0xFFFF)
 #define   C_02820C_CLIP_RULE                                          0xFFFF0000
+#define     V_02820C_OUT                                            0x0001
+#define     V_02820C_IN_0                                           0x0002
+#define     V_02820C_IN_1                                           0x0004
+#define     V_02820C_IN_10                                          0x0008
+#define     V_02820C_IN_2                                           0x0010
+#define     V_02820C_IN_20                                          0x0020
+#define     V_02820C_IN_21                                          0x0040
+#define     V_02820C_IN_210                                         0x0080
+#define     V_02820C_IN_3                                           0x0100
+#define     V_02820C_IN_30                                          0x0200
+#define     V_02820C_IN_31                                          0x0400
+#define     V_02820C_IN_310                                         0x0800
+#define     V_02820C_IN_32                                          0x1000
+#define     V_02820C_IN_320                                         0x2000
+#define     V_02820C_IN_321                                         0x4000
+#define     V_02820C_IN_3210                                        0x8000
 #define R_028210_PA_SC_CLIPRECT_0_TL                                    0x028210
 #define   S_028210_TL_X(x)                                            (((unsigned)(x) & 0x7FFF) << 0)
 #define   G_028210_TL_X(x)                                            (((x) >> 0) & 0x7FFF)
@@ -9122,8 +9140,14 @@
 #define    CIK_SDMA_PACKET_TRAP                    0x6
 #define    CIK_SDMA_PACKET_SEMAPHORE               0x7
 #define    CIK_SDMA_PACKET_CONSTANT_FILL           0xb
+#define    CIK_SDMA_OPCODE_TIMESTAMP               0xd
+#define        SDMA_TS_SUB_OPCODE_SET_LOCAL_TIMESTAMP     0x0
+#define        SDMA_TS_SUB_OPCODE_GET_LOCAL_TIMESTAMP     0x1
+#define        SDMA_TS_SUB_OPCODE_GET_GLOBAL_TIMESTAMP    0x2
 #define    CIK_SDMA_PACKET_SRBM_WRITE              0xe
-#define    CIK_SDMA_COPY_MAX_SIZE                  0x3fffe0
+/* There is apparently an undocumented HW "feature" that
+   prevents the HW from copying past 256 bytes of (1 << 22) */
+#define    CIK_SDMA_COPY_MAX_SIZE                  0x3fff00
 
 enum amd_cmp_class_flags {
 	S_NAN = 1 << 0,        // Signaling NaN

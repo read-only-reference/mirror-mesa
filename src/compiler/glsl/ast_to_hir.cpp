@@ -1850,9 +1850,11 @@ ast_expression::do_hir(exec_list *instructions,
        *   expressions; such use results in a compile-time error."
        */
       if (type->contains_opaque()) {
-         _mesa_glsl_error(&loc, state, "opaque variables cannot be operands "
-                          "of the ?: operator");
-         error_emitted = true;
+         if (!(state->has_bindless() && (type->is_image() || type->is_sampler()))) {
+            _mesa_glsl_error(&loc, state, "variables of type %s cannot be "
+                             "operands of the ?: operator", type->name);
+            error_emitted = true;
+         }
       }
 
       ir_constant *cond_val = op[0]->constant_expression_value(ctx);
@@ -1925,6 +1927,11 @@ ast_expression::do_hir(exec_list *instructions,
       op[1] = constant_one_for_inc_dec(ctx, op[0]->type);
 
       error_emitted = op[0]->type->is_error() || op[1]->type->is_error();
+
+      if (error_emitted) {
+         result = ir_rvalue::error_value(ctx);
+         break;
+      }
 
       type = arithmetic_result_type(op[0], op[1], false, state, & loc);
 

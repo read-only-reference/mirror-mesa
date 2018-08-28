@@ -2022,6 +2022,7 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 	bool flush_CB_meta = true, flush_DB_meta = true;
 	enum radv_cmd_flush_bits flush_bits = 0;
 	bool flush_CB = true, flush_DB = true;
+	bool image_is_coherent = false;
 	uint32_t b;
 
 	if (image) {
@@ -2034,6 +2035,19 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 			flush_CB_meta = false;
 		if (!radv_image_has_htile(image))
 			flush_DB_meta = false;
+
+		if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
+			if (image->info.samples == 1 &&
+			    (image->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+					     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
+			    !vk_format_is_stencil(image->vk_format)) {
+				/* Single-sample color and single-sample depth
+				 * (not stencil) are coherent with shaders on
+				 * GFX9.
+				 */
+				image_is_coherent = true;
+			}
+		}
 	}
 
 	for_each_bit(b, dst_flags) {
@@ -2045,11 +2059,16 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 			flush_bits |= RADV_CMD_FLAG_INV_VMEM_L1 | RADV_CMD_FLAG_INV_SMEM_L1;
 			break;
 		case VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT:
-		case VK_ACCESS_SHADER_READ_BIT:
 		case VK_ACCESS_TRANSFER_READ_BIT:
 		case VK_ACCESS_INPUT_ATTACHMENT_READ_BIT:
 			flush_bits |= RADV_CMD_FLAG_INV_VMEM_L1 |
 			              RADV_CMD_FLAG_INV_GLOBAL_L2;
+			break;
+		case VK_ACCESS_SHADER_READ_BIT:
+			flush_bits |= RADV_CMD_FLAG_INV_VMEM_L1;
+
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_INV_GLOBAL_L2;
 			break;
 		case VK_ACCESS_COLOR_ATTACHMENT_READ_BIT:
 			if (flush_CB)
@@ -2307,6 +2326,7 @@ VkResult radv_BeginCommandBuffer(
 	cmd_buffer->state.last_num_instances = -1;
 	cmd_buffer->state.last_vertex_offset = -1;
 	cmd_buffer->state.last_first_instance = -1;
+	cmd_buffer->state.predication_type = -1;
 	cmd_buffer->usage_flags = pBeginInfo->flags;
 
 	/* setup initial configuration into command buffer */
@@ -4126,15 +4146,18 @@ static void radv_init_color_image_metadata(struct radv_cmd_buffer *cmd_buffer,
 
 	if (radv_image_has_dcc(image)) {
 		uint32_t value = 0xffffffffu; /* Fully expanded mode. */
+		bool need_decompress_pass = false;
 
 		if (radv_layout_dcc_compressed(image, dst_layout,
 					       dst_queue_mask)) {
 			value = 0x20202020u;
+			need_decompress_pass = true;
 		}
 
 		radv_initialize_dcc(cmd_buffer, image, value);
 
-		radv_set_dcc_need_cmask_elim_pred(cmd_buffer, image, false);
+		radv_set_dcc_need_cmask_elim_pred(cmd_buffer, image,
+						  need_decompress_pass);
 	}
 
 	if (radv_image_has_cmask(image) || radv_image_has_dcc(image)) {

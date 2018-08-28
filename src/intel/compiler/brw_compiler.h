@@ -403,6 +403,7 @@ struct brw_wm_prog_key {
    bool force_dual_color_blend:1;
    bool coherent_fb_fetch:1;
 
+   uint8_t color_outputs_valid;
    uint64_t input_slots_valid;
    unsigned program_string_id;
    GLenum alpha_test_func;          /* < For Gen4/5 MRT alpha test */
@@ -433,18 +434,14 @@ union brw_any_prog_key {
  * entries [most of them except when we're doing untyped surface
  * access] will be removed by the uniform packing pass.
  */
-#define BRW_IMAGE_PARAM_SURFACE_IDX_OFFSET      0
-#define BRW_IMAGE_PARAM_OFFSET_OFFSET           4
-#define BRW_IMAGE_PARAM_SIZE_OFFSET             8
-#define BRW_IMAGE_PARAM_STRIDE_OFFSET           12
-#define BRW_IMAGE_PARAM_TILING_OFFSET           16
-#define BRW_IMAGE_PARAM_SWIZZLING_OFFSET        20
-#define BRW_IMAGE_PARAM_SIZE                    24
+#define BRW_IMAGE_PARAM_OFFSET_OFFSET           0
+#define BRW_IMAGE_PARAM_SIZE_OFFSET             4
+#define BRW_IMAGE_PARAM_STRIDE_OFFSET           8
+#define BRW_IMAGE_PARAM_TILING_OFFSET           12
+#define BRW_IMAGE_PARAM_SWIZZLING_OFFSET        16
+#define BRW_IMAGE_PARAM_SIZE                    20
 
 struct brw_image_param {
-   /** Surface binding table index. */
-   uint32_t surface_idx;
-
    /** Offset applied to the X and Y surface coordinates. */
    uint32_t offset[2];
 
@@ -1212,6 +1209,18 @@ DEFINE_PROG_DATA_DOWNCAST(sf)
 
 struct brw_compiler *
 brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo);
+
+/**
+ * Returns a compiler configuration for use with disk shader cache
+ *
+ * This value only needs to change for settings that can cause different
+ * program generation between two runs on the same hardware.
+ *
+ * For example, it doesn't need to be different for gen 8 and gen 9 hardware,
+ * but it does need to be different if INTEL_DEBUG=nocompact is or isn't used.
+ */
+uint64_t
+brw_get_compiler_config_value(const struct brw_compiler *compiler);
 
 unsigned
 brw_prog_data_size(gl_shader_stage stage);

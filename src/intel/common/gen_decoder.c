@@ -532,7 +532,8 @@ gen_spec_load(const struct gen_device_info *devinfo)
    struct parser_context ctx;
    void *buf;
    uint8_t *text_data = NULL;
-   uint32_t text_offset = 0, text_length = 0, total_length;
+   uint32_t text_offset = 0, text_length = 0;
+   MAYBE_UNUSED uint32_t total_length;
    uint32_t gen_10 = devinfo_to_gen(devinfo);
 
    for (int i = 0; i < ARRAY_SIZE(genxml_files_table); i++) {
@@ -812,6 +813,18 @@ iter_more_groups(const struct gen_field_iterator *iter)
 }
 
 static void
+iter_start_field(struct gen_field_iterator *iter, struct gen_field *field)
+{
+   iter->field = field;
+
+   int group_member_offset = iter_group_offset_bits(iter, iter->group_iter);
+
+   iter->start_bit = group_member_offset + iter->field->start;
+   iter->end_bit = group_member_offset + iter->field->end;
+   iter->struct_desc = NULL;
+}
+
+static void
 iter_advance_group(struct gen_field_iterator *iter)
 {
    if (iter->group->variable)
@@ -825,32 +838,20 @@ iter_advance_group(struct gen_field_iterator *iter)
       }
    }
 
-   iter->field = iter->group->fields;
+   iter_start_field(iter, iter->group->fields);
 }
 
 static bool
 iter_advance_field(struct gen_field_iterator *iter)
 {
    if (iter_more_fields(iter)) {
-      iter->field = iter->field->next;
+      iter_start_field(iter, iter->field->next);
    } else {
       if (!iter_more_groups(iter))
          return false;
 
       iter_advance_group(iter);
    }
-
-   if (iter->field->name)
-      snprintf(iter->name, sizeof(iter->name), "%s", iter->field->name);
-   else
-      memset(iter->name, 0, sizeof(iter->name));
-
-   int group_member_offset = iter_group_offset_bits(iter, iter->group_iter);
-
-   iter->start_bit = group_member_offset + iter->field->start;
-   iter->end_bit = group_member_offset + iter->field->end;
-   iter->struct_desc = NULL;
-
    return true;
 }
 
@@ -943,10 +944,14 @@ iter_decode_field(struct gen_field_iterator *iter)
       snprintf(iter->value, sizeof(iter->value), "%f",
                (float) v.qw / (1 << iter->field->type.f));
       break;
-   case GEN_TYPE_SFIXED:
-      /* FIXME: Sign extend extracted field. */
-      snprintf(iter->value, sizeof(iter->value), "%s", "foo");
+   case GEN_TYPE_SFIXED: {
+      /* Sign extend before converting */
+      int bits = iter->field->type.i + iter->field->type.f + 1;
+      int64_t v_sign_extend = ((int64_t)(v.qw << (64 - bits))) >> (64 - bits);
+      snprintf(iter->value, sizeof(iter->value), "%f",
+               (float) v_sign_extend / (1 << iter->field->type.f));
       break;
+   }
    case GEN_TYPE_MBO:
        break;
    case GEN_TYPE_ENUM: {
@@ -966,7 +971,8 @@ iter_decode_field(struct gen_field_iterator *iter)
       int length = strlen(iter->value);
       snprintf(iter->value + length, sizeof(iter->value) - length,
                " (%s)", enum_name);
-   } else if (strcmp(iter->name, "Surface Format") == 0) {
+   } else if (strcmp(iter->name, "Surface Format") == 0 ||
+              strcmp(iter->name, "Source Element Format") == 0) {
       if (isl_format_is_valid((enum isl_format)v.qw)) {
          const char *fmt_name = isl_format_get_name((enum isl_format)v.qw);
          int length = strlen(iter->value);
@@ -991,7 +997,7 @@ gen_field_iterator_init(struct gen_field_iterator *iter,
    iter->p_bit = p_bit;
 
    int length = gen_group_get_length(iter->group, iter->p);
-   iter->p_end = length > 0 ? &p[length] : NULL;
+   iter->p_end = length >= 0 ? &p[length] : NULL;
    iter->print_colors = print_colors;
 }
 
@@ -1001,15 +1007,19 @@ gen_field_iterator_next(struct gen_field_iterator *iter)
    /* Initial condition */
    if (!iter->field) {
       if (iter->group->fields)
-         iter->field = iter->group->fields;
+         iter_start_field(iter, iter->group->fields);
       else
-         iter->field = iter->group->next->fields;
+         iter_start_field(iter, iter->group->next->fields);
 
       bool result = iter_decode_field(iter);
-      if (iter->p_end)
-         assert(result);
+      if (!result && iter->p_end) {
+         /* We're dealing with a non empty struct of length=0 (BLEND_STATE on
+          * Gen 7.5)
+          */
+         assert(iter->group->dw_length == 0);
+      }
 
-      return true;
+      return result;
    }
 
    if (!iter_advance_field(iter))

@@ -184,6 +184,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
         case PIPE_CAP_CUBE_MAP_ARRAY:
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+        case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
         case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
         case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
         case PIPE_CAP_SEAMLESS_CUBE_MAP:
@@ -313,7 +314,10 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 /* Geometry shader output, unsupported. */
         case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
         case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+	case PIPE_CAP_MAX_GS_INVOCATIONS:
                 return 0;
+	case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+		return 1 << 27;
 
                 /* Texturing. */
         case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:

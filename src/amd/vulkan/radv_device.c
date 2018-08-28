@@ -60,7 +60,7 @@ radv_device_get_cache_uuid(enum radeon_family family, void *uuid)
 	memcpy(uuid, &mesa_timestamp, 4);
 	memcpy((char*)uuid + 4, &llvm_timestamp, 4);
 	memcpy((char*)uuid + 8, &f, 2);
-	snprintf((char*)uuid + 10, VK_UUID_SIZE - 10, "radv");
+	snprintf((char*)uuid + 10, VK_UUID_SIZE - 10, "radv%zd", sizeof(void *));
 	return 0;
 }
 
@@ -480,6 +480,9 @@ radv_handle_per_app_options(struct radv_instance *instance,
 			 */
 			instance->perftest_flags |= RADV_PERFTEST_SISCHED;
 		}
+	} else if (!strcmp(name, "DOOM_VFR")) {
+		/* Work around a Doom VFR game bug */
+		instance->debug_flags |= RADV_DEBUG_NO_DYNAMIC_BOUNDS;
 	}
 }
 
@@ -1134,6 +1137,12 @@ void radv_GetPhysicalDeviceProperties2(
 			properties->maxDescriptorSetUpdateAfterBindSampledImages = max_descriptor_set_size;
 			properties->maxDescriptorSetUpdateAfterBindStorageImages = max_descriptor_set_size;
 			properties->maxDescriptorSetUpdateAfterBindInputAttachments = max_descriptor_set_size;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES: {
+			VkPhysicalDeviceProtectedMemoryProperties *properties =
+				(VkPhysicalDeviceProtectedMemoryProperties *)ext;
+			properties->protectedNoFault = false;
 			break;
 		}
 		default:

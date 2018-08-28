@@ -882,12 +882,21 @@ struct anv_physical_device {
     int                                         master_fd;
 };
 
+struct anv_app_info {
+   const char*        app_name;
+   uint32_t           app_version;
+   const char*        engine_name;
+   uint32_t           engine_version;
+   uint32_t           api_version;
+};
+
 struct anv_instance {
     VK_LOADER_DATA                              _loader_data;
 
     VkAllocationCallbacks                       alloc;
 
-    uint32_t                                    apiVersion;
+    struct anv_app_info                         app_info;
+
     struct anv_instance_extension_table         enabled_extensions;
     struct anv_dispatch_table                   dispatch;
 
@@ -1540,9 +1549,6 @@ struct anv_descriptor_update_template {
    /* Entries of the template */
    struct anv_descriptor_template_entry entries[0];
 };
-
-size_t
-anv_descriptor_set_binding_layout_get_hw_size(const struct anv_descriptor_set_binding_layout *binding);
 
 size_t
 anv_descriptor_set_layout_size(const struct anv_descriptor_set_layout *layout);
@@ -2476,7 +2482,7 @@ VkResult
 anv_pipeline_compile_cs(struct anv_pipeline *pipeline,
                         struct anv_pipeline_cache *cache,
                         const VkComputePipelineCreateInfo *info,
-                        struct anv_shader_module *module,
+                        const struct anv_shader_module *module,
                         const char *entrypoint,
                         const VkSpecializationInfo *spec_info);
 

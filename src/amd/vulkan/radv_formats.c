@@ -612,7 +612,8 @@ radv_physical_device_get_format_properties(struct radv_physical_device *physical
 	}
 
 	if (desc->layout == VK_FORMAT_LAYOUT_ETC &&
-	    physical_device->rad_info.chip_class < GFX9 &&
+	    physical_device->rad_info.family != CHIP_VEGA10 &&
+	    physical_device->rad_info.family != CHIP_RAVEN &&
 	    physical_device->rad_info.family != CHIP_STONEY) {
 		out_properties->linearTilingFeatures = linear;
 		out_properties->optimalTilingFeatures = tiled;
@@ -1107,6 +1108,25 @@ static VkResult radv_get_image_format_properties(struct radv_physical_device *ph
 
 	if (info->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) {
 		if (!(format_feature_flags & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+			goto unsupported;
+		}
+	}
+
+	if (info->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) {
+		if (!(format_feature_flags & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT)) {
+			goto unsupported;
+		}
+	}
+
+	if (info->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) {
+		if (!(format_feature_flags & VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) {
+			goto unsupported;
+		}
+	}
+
+	if (info->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) {
+		if (!(format_feature_flags & (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+		                              VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))) {
 			goto unsupported;
 		}
 	}

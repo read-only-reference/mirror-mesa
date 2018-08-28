@@ -28,6 +28,7 @@
 #include <assert.h>
 #include "half_float.h"
 #include "rounding.h"
+#include "macros.h"
 
 typedef union { float f; int32_t i; uint32_t u; } fi_type;
 
@@ -186,7 +187,7 @@ uint8_t _mesa_half_to_unorm8(uint16_t val)
 {
    const int m = val & 0x3ff;
    const int e = (val >> 10) & 0x1f;
-   const int s = (val >> 15) & 0x1;
+   MAYBE_UNUSED const int s = (val >> 15) & 0x1;
 
    /* v = round_to_nearest(1.mmmmmmmmmm * 2^(e-15) * 255)
     *   = round_to_nearest((1.mmmmmmmmmm * 255) * 2^(e-15))
@@ -215,7 +216,17 @@ uint16_t _mesa_uint16_div_64k_to_half(uint16_t v)
       return v << 8;
 
    /* Count the leading 0s in the uint16_t */
-   int n = __builtin_clz(v) - (sizeof(unsigned int) - sizeof(uint16_t)) * 8;
+#ifdef HAVE___BUILTIN_CLZ
+   int n = __builtin_clz(v) - 16;
+#else
+   int n = 16;
+   for (int i = 15; i >= 0; i--) {
+      if (v & (1 << i)) {
+         n = 15 - i;
+         break;
+      }
+   }
+#endif
 
    /* Shift the mantissa up so bit 16 is the hidden 1 bit,
     * mask it off, then shift back down to 10 bits

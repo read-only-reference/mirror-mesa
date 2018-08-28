@@ -343,6 +343,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
    /* Unsupported features */
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+   case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
@@ -471,6 +472,10 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PACKED_UNIFORMS:
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
       return 0;
+   case PIPE_CAP_MAX_GS_INVOCATIONS:
+      return 32;
+   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+      return 1 << 27;
    }
 
    debug_printf("Unexpected PIPE_CAP_ query %u\n", param);
@@ -889,11 +894,7 @@ init_logging(struct pipe_screen *screen)
    svga_host_log(host_log);
 
    util_snprintf(host_log, sizeof(host_log) - strlen(log_prefix),
-                 "%s%s"
-#ifdef MESA_GIT_SHA1
-                 " (" MESA_GIT_SHA1 ")"
-#endif
-                 , log_prefix, PACKAGE_VERSION);
+                 "%s" PACKAGE_VERSION MESA_GIT_SHA1, log_prefix);
    svga_host_log(host_log);
 
    /* If the SVGA_EXTRA_LOGGING env var is set, log the process's command

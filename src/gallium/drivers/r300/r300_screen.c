@@ -100,6 +100,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_POINT_SPRITE:
         case PIPE_CAP_OCCLUSION_QUERY:
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+        case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
         case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
@@ -261,6 +262,11 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
         case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
             return 0;
+
+        case PIPE_CAP_MAX_GS_INVOCATIONS:
+            return 32;
+       case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+            return 1 << 27;
 
         /* SWTCL-only features. */
         case PIPE_CAP_PRIMITIVE_RESTART:

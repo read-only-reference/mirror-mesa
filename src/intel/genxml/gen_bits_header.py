@@ -25,7 +25,6 @@ from __future__ import (
 
 import argparse
 import os
-import sys
 import xml.parsers.expat
 
 from mako.template import Template
@@ -282,7 +281,7 @@ class XmlParser(object):
         self.container = None
 
     def parse(self, filename):
-        with open(filename) as f:
+        with open(filename, 'rb') as f:
             self.parser.ParseFile(f)
 
     def start_element(self, name, attrs):

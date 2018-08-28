@@ -980,7 +980,7 @@ static void *
 x11_manage_fifo_queues(void *state)
 {
    struct x11_swapchain *chain = state;
-   VkResult result;
+   VkResult result = VK_SUCCESS;
 
    assert(chain->base.present_mode == VK_PRESENT_MODE_FIFO_KHR);
 
@@ -991,7 +991,7 @@ x11_manage_fifo_queues(void *state)
        * before that point so the client should be able to acquire any image
        * other than the currently presented one.
        */
-      uint32_t image_index;
+      uint32_t image_index = 0;
       result = wsi_queue_pull(&chain->present_queue, &image_index, INT64_MAX);
       assert(result != VK_TIMEOUT);
       if (result < 0) {
@@ -1024,7 +1024,7 @@ x11_manage_fifo_queues(void *state)
    }
 
 fail:
-   result = x11_swapchain_result(chain, result);
+   x11_swapchain_result(chain, result);
    wsi_queue_push(&chain->acquire_queue, UINT32_MAX);
 
    return NULL;
@@ -1325,7 +1325,7 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
     * mode which provokes reallocation when anything changes, to make
     * sure we have the most optimal allocation.
     */
-   struct x11_swapchain *old_chain = (void *) pCreateInfo->oldSwapchain;
+   struct x11_swapchain *old_chain = (void *)(intptr_t) pCreateInfo->oldSwapchain;
    if (old_chain)
       chain->last_present_mode = old_chain->last_present_mode;
    else

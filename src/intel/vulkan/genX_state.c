@@ -157,6 +157,23 @@ genX(init_device_state)(struct anv_device *device)
    gen10_emit_wa_lri_to_cache_mode_zero(&batch);
 #endif
 
+#if GEN_GEN == 11
+   /* The default behavior of bit 5 "Headerless Message for Pre-emptable
+    * Contexts" in SAMPLER MODE register is set to 0, which means
+    * headerless sampler messages are not allowed for pre-emptable
+    * contexts. Set the bit 5 to 1 to allow them.
+    */
+   uint32_t sampler_mode;
+   anv_pack_struct(&sampler_mode, GENX(SAMPLER_MODE),
+                   .HeaderlessMessageforPreemptableContexts = true,
+                   .HeaderlessMessageforPreemptableContextsMask = true);
+
+    anv_batch_emit(&batch, GENX(MI_LOAD_REGISTER_IMM), lri) {
+      lri.RegisterOffset = GENX(SAMPLER_MODE_num);
+      lri.DataDWord      = sampler_mode;
+   }
+#endif
+
    /* Set the "CONSTANT_BUFFER Address Offset Disable" bit, so
     * 3DSTATE_CONSTANT_XS buffer 0 is an absolute address.
     *
@@ -245,6 +262,14 @@ static const uint32_t vk_to_gen_shadow_compare_op[] = {
    [VK_COMPARE_OP_ALWAYS]                       = PREFILTEROPNEVER,
 };
 
+#if GEN_GEN >= 9
+static const uint32_t vk_to_gen_sampler_reduction_mode[] = {
+   [VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT] = STD_FILTER,
+   [VK_SAMPLER_REDUCTION_MODE_MIN_EXT]              = MINIMUM,
+   [VK_SAMPLER_REDUCTION_MODE_MAX_EXT]              = MAXIMUM,
+};
+#endif
+
 VkResult genX(CreateSampler)(
     VkDevice                                    _device,
     const VkSamplerCreateInfo*                  pCreateInfo,
@@ -266,6 +291,11 @@ VkResult genX(CreateSampler)(
    uint32_t border_color_offset = device->border_colors.offset +
                                   pCreateInfo->borderColor * 64;
 
+#if GEN_GEN >= 9
+   unsigned sampler_reduction_mode = STD_FILTER;
+   bool enable_sampler_reduction = false;
+#endif
+
    vk_foreach_struct(ext, pCreateInfo->pNext) {
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO: {
@@ -281,6 +311,16 @@ VkResult genX(CreateSampler)(
          sampler->conversion = conversion;
          break;
       }
+#if GEN_GEN >= 9
+      case VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT: {
+         struct VkSamplerReductionModeCreateInfoEXT *sampler_reduction =
+            (struct VkSamplerReductionModeCreateInfoEXT *) ext;
+         sampler_reduction_mode =
+            vk_to_gen_sampler_reduction_mode[sampler_reduction->reductionMode];
+         enable_sampler_reduction = true;
+         break;
+      }
+#endif
       default:
          anv_debug_ignored_stype(ext->sType);
          break;
@@ -348,6 +388,11 @@ VkResult genX(CreateSampler)(
          .TCXAddressControlMode = vk_to_gen_tex_address[pCreateInfo->addressModeU],
          .TCYAddressControlMode = vk_to_gen_tex_address[pCreateInfo->addressModeV],
          .TCZAddressControlMode = vk_to_gen_tex_address[pCreateInfo->addressModeW],
+
+#if GEN_GEN >= 9
+         .ReductionType = sampler_reduction_mode,
+         .ReductionTypeEnable = enable_sampler_reduction,
+#endif
       };
 
       GENX(SAMPLER_STATE_pack)(NULL, sampler->state[p], &sampler_state);

@@ -102,13 +102,15 @@ if _drivers.contains('auto')
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       _drivers = []
     else
-      error('Unknown architecture. Please pass -Ddri-drivers to set driver options. Patches gladly accepted to fix this.')
+      error('Unknown architecture @0@. Please pass -Ddri-drivers to set driver options. Patches gladly accepted to fix this.'.format(
+            host_machine.cpu_family()))
     endif
   elif ['darwin', 'windows', 'cygwin', 'haiku'].contains(host_machine.system())
     # only swrast would make sense here, but gallium swrast is a much better default
     _drivers = []
   else
-    error('Unknown OS. Please pass -Ddri-drivers to set driver options. Patches gladly accepted to fix this.')
+    error('Unknown OS @0@. Please pass -Ddri-drivers to set driver options. Patches gladly accepted to fix this.'.format(
+          host_machine.system()))
   endif
 endif
 
@@ -135,12 +137,14 @@ if _drivers.contains('auto')
         'tegra', 'virgl', 'swrast',
       ]
     else
-      error('Unknown architecture. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.')
+      error('Unknown architecture @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
+            host_machine.cpu_family()))
     endif
   elif ['darwin', 'windows', 'cygwin', 'haiku'].contains(host_machine.system())
     _drivers = ['swrast']
   else
-    error('Unknown OS. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.')
+    error('Unknown OS @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
+          host_machine.system()))
   endif
 endif
 with_gallium_pl111 = _drivers.contains('pl111')
@@ -175,14 +179,18 @@ if _vulkan_drivers.contains('auto')
   if system_has_kms_drm
     if host_machine.cpu_family().startswith('x86')
       _vulkan_drivers = ['amd', 'intel']
+    elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
+      _vulkan_drivers = []
     else
-      error('Unknown architecture. Please pass -Dvulkan-drivers to set driver options. Patches gladly accepted to fix this.')
+      error('Unknown architecture @0@. Please pass -Dvulkan-drivers to set driver options. Patches gladly accepted to fix this.'.format(
+            host_machine.cpu_family()))
     endif
   elif ['darwin', 'windows', 'cygwin', 'haiku'].contains(host_machine.system())
     # No vulkan driver supports windows or macOS currently
     _vulkan_drivers = []
   else
-    error('Unknown OS. Please pass -Dvulkan-drivers to set driver options. Patches gladly accepted to fix this.')
+    error('Unknown OS @0@. Please pass -Dvulkan-drivers to set driver options. Patches gladly accepted to fix this.'.format(
+          host_machine.system()))
   endif
 endif
 
@@ -230,7 +238,8 @@ if _platforms.contains('auto')
   elif ['haiku'].contains(host_machine.system())
     _platforms = ['haiku']
   else
-    error('Unknown OS. Please pass -Dplatforms to set platforms. Patches gladly accepted to fix this.')
+    error('Unknown OS @0@. Please pass -Dplatforms to set platforms. Patches gladly accepted to fix this.'.format(
+          host_machine.system()))
   endif
 endif
 
@@ -304,7 +313,7 @@ elif _egl == 'true'
   elif not with_shared_glapi
     error('EGL requires shared-glapi')
   elif not with_platforms
-    error('No platforms specified, consider -Dplatforms=drm,x11 at least')
+    error('No platforms specified, consider -Dplatforms=drm,x11,surfaceless at least')
   elif not ['disabled', 'dri'].contains(with_glx)
     error('EGL requires dri, but a GLX is being built without dri')
   endif
@@ -697,10 +706,16 @@ if with_platform_haiku
   pre_args += '-DHAVE_HAIKU_PLATFORM'
 endif
 
-prog_python2 = find_program('python2')
-has_mako = run_command(prog_python2, '-c', 'import mako')
+prog_python = import('python3').find_python()
+has_mako = run_command(
+  prog_python, '-c',
+  '''
+from distutils.version import StrictVersion
+import mako
+assert StrictVersion(mako.__version__) > StrictVersion("0.8.0")
+  ''')
 if has_mako.returncode() != 0
-  error('Python (2.x) mako module required to build mesa.')
+  error('Python (3.x) mako module >= 0.8.0 required to build mesa.')
 endif
 
 if cc.get_id() == 'gcc' and cc.version().version_compare('< 4.4.6')
@@ -989,7 +1004,7 @@ if cc.links('''
       freelocale(loc);
       return 0;
     }''',
-    extra_args : pre_args,
+    args : pre_args,
     name : 'strtod has locale support')
   pre_args += '-DHAVE_STRTOD_L'
 endif
@@ -1080,11 +1095,11 @@ dep_libdrm_etnaviv = null_dep
 dep_libdrm_freedreno = null_dep
 dep_libdrm_intel = null_dep
 
-_drm_amdgpu_ver = '2.4.91'
+_drm_amdgpu_ver = '2.4.93'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.66'
 _drm_etnaviv_ver = '2.4.89'
-_drm_freedreno_ver = '2.4.92'
+_drm_freedreno_ver = '2.4.93'
 _drm_intel_ver = '2.4.75'
 _drm_ver = '2.4.75'
 
@@ -1151,8 +1166,10 @@ if with_gallium_opencl
   llvm_optional_modules += ['coroutines', 'opencl']
 endif
 
-if with_amd_vk or with_gallium_radeonsi or with_gallium_swr
-  _llvm_version = '>= 5.0.0'
+if with_amd_vk or with_gallium_radeonsi
+  _llvm_version = '>= 6.0.0'
+elif with_gallium_swr
+  _llvm_version = '>= 6.0.0'
 elif with_gallium_opencl or with_gallium_r600
   _llvm_version = '>= 3.9.0'
 else
@@ -1273,7 +1290,13 @@ endif
 # TODO: symbol mangling
 
 if with_platform_wayland
-  prog_wl_scanner = find_program('wayland-scanner')
+  dep_wl_scanner = dependency('wayland-scanner', native: true)
+  prog_wl_scanner = find_program(dep_wl_scanner.get_pkgconfig_variable('wayland_scanner'))
+  if dep_wl_scanner.version().version_compare('>= 1.15')
+    wl_scanner_arg = 'private-code'
+  else
+    wl_scanner_arg = 'code'
+  endif
   dep_wl_protocols = dependency('wayland-protocols', version : '>= 1.8')
   dep_wayland_client = dependency('wayland-client', version : '>=1.11')
   dep_wayland_server = dependency('wayland-server', version : '>=1.11')
@@ -1289,6 +1312,7 @@ if with_platform_wayland
   pre_args += ['-DHAVE_WAYLAND_PLATFORM', '-DWL_HIDE_DEPRECATED']
 else
   prog_wl_scanner = []
+  wl_scanner_arg = ''
   dep_wl_protocols = null_dep
   dep_wayland_client = null_dep
   dep_wayland_server = null_dep

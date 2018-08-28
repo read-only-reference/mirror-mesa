@@ -1011,15 +1011,15 @@ vtn_get_builtin_location(struct vtn_builder *b,
    case SpvBuiltInCullDistance:
       *location = VARYING_SLOT_CULL_DIST0;
       break;
-   case SpvBuiltInVertexIndex:
-      *location = SYSTEM_VALUE_VERTEX_ID;
-      set_mode_system_value(b, mode);
-      break;
    case SpvBuiltInVertexId:
-      /* Vulkan defines VertexID to be zero-based and reserves the new
-       * builtin keyword VertexIndex to indicate the non-zero-based value.
+   case SpvBuiltInVertexIndex:
+      /* The Vulkan spec defines VertexIndex to be non-zero-based and doesn't
+       * allow VertexId.  The ARB_gl_spirv spec defines VertexId to be the
+       * same as gl_VertexID, which is non-zero-based, and removes
+       * VertexIndex.  Since they're both defined to be non-zero-based, we use
+       * SYSTEM_VALUE_VERTEX_ID for both.
        */
-      *location = SYSTEM_VALUE_VERTEX_ID_ZERO_BASE;
+      *location = SYSTEM_VALUE_VERTEX_ID;
       set_mode_system_value(b, mode);
       break;
    case SpvBuiltInInstanceIndex:
@@ -1248,20 +1248,20 @@ apply_var_decoration(struct vtn_builder *b,
       var_data->read_only = true;
       break;
    case SpvDecorationNonReadable:
-      var_data->image.write_only = true;
+      var_data->image.access |= ACCESS_NON_READABLE;
       break;
    case SpvDecorationNonWritable:
       var_data->read_only = true;
-      var_data->image.read_only = true;
+      var_data->image.access |= ACCESS_NON_WRITEABLE;
       break;
    case SpvDecorationRestrict:
-      var_data->image.restrict_flag = true;
+      var_data->image.access |= ACCESS_RESTRICT;
       break;
    case SpvDecorationVolatile:
-      var_data->image._volatile = true;
+      var_data->image.access |= ACCESS_VOLATILE;
       break;
    case SpvDecorationCoherent:
-      var_data->image.coherent = true;
+      var_data->image.access |= ACCESS_COHERENT;
       break;
    case SpvDecorationComponent:
       var_data->location_frac = dec->literals[0];

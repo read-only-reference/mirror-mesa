@@ -286,7 +286,8 @@ anv_physical_device_init_disk_cache(struct anv_physical_device *device)
    char timestamp[41];
    _mesa_sha1_format(timestamp, device->driver_build_sha1);
 
-   const uint64_t driver_flags = INTEL_DEBUG & DEBUG_DISK_CACHE_MASK;
+   const uint64_t driver_flags =
+      brw_get_compiler_config_value(device->compiler);
    device->disk_cache = disk_cache_create(renderer, timestamp, driver_flags);
 #else
    device->disk_cache = NULL;
@@ -324,7 +325,7 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->instance = instance;
 
    assert(strlen(path) < ARRAY_SIZE(device->path));
-   strncpy(device->path, path, ARRAY_SIZE(device->path));
+   snprintf(device->path, ARRAY_SIZE(device->path), "%s", path);
 
    device->no_hw = getenv("INTEL_NO_HW") != NULL;
 
@@ -609,12 +610,25 @@ VkResult anv_CreateInstance(
    else
       instance->alloc = default_alloc;
 
-   if (pCreateInfo->pApplicationInfo &&
-       pCreateInfo->pApplicationInfo->apiVersion != 0) {
-      instance->apiVersion = pCreateInfo->pApplicationInfo->apiVersion;
-   } else {
-      anv_EnumerateInstanceVersion(&instance->apiVersion);
+   instance->app_info = (struct anv_app_info) { .api_version = 0 };
+   if (pCreateInfo->pApplicationInfo) {
+      const VkApplicationInfo *app = pCreateInfo->pApplicationInfo;
+
+      instance->app_info.app_name =
+         vk_strdup(&instance->alloc, app->pApplicationName,
+                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+      instance->app_info.app_version = app->applicationVersion;
+
+      instance->app_info.engine_name =
+         vk_strdup(&instance->alloc, app->pEngineName,
+                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+      instance->app_info.engine_version = app->engineVersion;
+
+      instance->app_info.api_version = app->apiVersion;
    }
+
+   if (instance->app_info.api_version == 0)
+      anv_EnumerateInstanceVersion(&instance->app_info.api_version);
 
    instance->enabled_extensions = enabled_extensions;
 
@@ -622,7 +636,7 @@ VkResult anv_CreateInstance(
       /* Vulkan requires that entrypoints for extensions which have not been
        * enabled must not be advertised.
        */
-      if (!anv_entrypoint_is_enabled(i, instance->apiVersion,
+      if (!anv_entrypoint_is_enabled(i, instance->app_info.api_version,
                                      &instance->enabled_extensions, NULL)) {
          instance->dispatch.entrypoints[i] = NULL;
       } else if (anv_dispatch_table.entrypoints[i] != NULL) {
@@ -667,6 +681,9 @@ void anv_DestroyInstance(
       assert(instance->physicalDeviceCount == 1);
       anv_physical_device_finish(&instance->physicalDevice);
    }
+
+   vk_free(&instance->alloc, instance->app_info.app_name);
+   vk_free(&instance->alloc, instance->app_info.engine_name);
 
    VG(VALGRIND_DESTROY_MEMPOOL(instance));
 
@@ -840,6 +857,15 @@ void anv_GetPhysicalDeviceFeatures(
    pFeatures->vertexPipelineStoresAndAtomics =
       pdevice->compiler->scalar_stage[MESA_SHADER_VERTEX] &&
       pdevice->compiler->scalar_stage[MESA_SHADER_GEOMETRY];
+
+   struct anv_app_info *app_info = &pdevice->instance->app_info;
+
+   /* The new DOOM and Wolfenstein games require depthBounds without
+    * checking for it.  They seem to run fine without it so just claim it's
+    * there and accept the consequences.
+    */
+   if (app_info->engine_name && strcmp(app_info->engine_name, "idTech") == 0)
+      pFeatures->depthBounds = true;
 }
 
 void anv_GetPhysicalDeviceFeatures2(
@@ -1117,6 +1143,14 @@ void anv_GetPhysicalDeviceProperties2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES_EXT: {
+         VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *properties =
+            (VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *)ext;
+         properties->filterMinmaxImageComponentMapping = pdevice->info.gen >= 9;
+         properties->filterMinmaxSingleComponentFormats = true;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES: {
          VkPhysicalDeviceSubgroupProperties *properties = (void *)ext;
 
@@ -1146,6 +1180,13 @@ void anv_GetPhysicalDeviceProperties2(
             (VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT *)ext;
          /* We have to restrict this a bit for multiview */
          props->maxVertexAttribDivisor = UINT32_MAX / 16;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES: {
+         VkPhysicalDeviceProtectedMemoryProperties *props =
+            (VkPhysicalDeviceProtectedMemoryProperties *)ext;
+         props->protectedNoFault = false;
          break;
       }
 
@@ -1444,7 +1485,6 @@ VkResult anv_EnumerateDeviceExtensionProperties(
 {
    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
    VK_OUTARRAY_MAKE(out, pProperties, pPropertyCount);
-   (void)device;
 
    for (int i = 0; i < ANV_DEVICE_EXTENSION_COUNT; i++) {
       if (device->supported_extensions.extensions[i]) {
@@ -1488,7 +1528,7 @@ anv_device_init_dispatch(struct anv_device *device)
       /* Vulkan requires that entrypoints for extensions which have not been
        * enabled must not be advertised.
        */
-      if (!anv_entrypoint_is_enabled(i, device->instance->apiVersion,
+      if (!anv_entrypoint_is_enabled(i, device->instance->app_info.api_version,
                                      &device->instance->enabled_extensions,
                                      &device->enabled_extensions)) {
          device->dispatch.entrypoints[i] = NULL;

@@ -216,14 +216,20 @@ public:
                               nir_intrinsic_instr *instr);
    void nir_emit_cs_intrinsic(const brw::fs_builder &bld,
                               nir_intrinsic_instr *instr);
+   fs_reg get_nir_image_intrinsic_image(const brw::fs_builder &bld,
+                                        nir_intrinsic_instr *instr);
    void nir_emit_intrinsic(const brw::fs_builder &bld,
                            nir_intrinsic_instr *instr);
    void nir_emit_tes_intrinsic(const brw::fs_builder &bld,
                                nir_intrinsic_instr *instr);
    void nir_emit_ssbo_atomic(const brw::fs_builder &bld,
                              int op, nir_intrinsic_instr *instr);
+   void nir_emit_ssbo_atomic_float(const brw::fs_builder &bld,
+                                   int op, nir_intrinsic_instr *instr);
    void nir_emit_shared_atomic(const brw::fs_builder &bld,
                                int op, nir_intrinsic_instr *instr);
+   void nir_emit_shared_atomic_float(const brw::fs_builder &bld,
+                                     int op, nir_intrinsic_instr *instr);
    void nir_emit_texture(const brw::fs_builder &bld,
                          nir_tex_instr *instr);
    void nir_emit_jump(const brw::fs_builder &bld,
@@ -231,7 +237,6 @@ public:
    fs_reg get_nir_src(const nir_src &src);
    fs_reg get_nir_src_imm(const nir_src &src);
    fs_reg get_nir_dest(const nir_dest &dest);
-   fs_reg get_nir_image_deref(nir_deref_instr *deref);
    fs_reg get_indirect_offset(nir_intrinsic_instr *instr);
    void emit_percomp(const brw::fs_builder &bld, const fs_inst &inst,
                      unsigned wr_mask);
@@ -539,6 +544,12 @@ fs_reg shuffle_for_32bit_write(const brw::fs_builder &bld,
 
 fs_reg setup_imm_df(const brw::fs_builder &bld,
                     double v);
+
+fs_reg setup_imm_b(const brw::fs_builder &bld,
+                   int8_t v);
+
+fs_reg setup_imm_ub(const brw::fs_builder &bld,
+                   uint8_t v);
 
 enum brw_barycentric_mode brw_barycentric_mode(enum glsl_interp_mode mode,
                                                nir_intrinsic_op op);

@@ -115,7 +115,34 @@ emit_vertex_input(struct anv_pipeline *pipeline,
                        GENX(3DSTATE_VERTEX_ELEMENTS));
    if (!p)
       return;
-   memset(p + 1, 0, (num_dwords - 1) * 4);
+
+   for (uint32_t i = 0; i < total_elems; i++) {
+      /* The SKL docs for VERTEX_ELEMENT_STATE say:
+       *
+       *    "All elements must be valid from Element[0] to the last valid
+       *    element. (I.e. if Element[2] is valid then Element[1] and
+       *    Element[0] must also be valid)."
+       *
+       * The SKL docs for 3D_Vertex_Component_Control say:
+       *
+       *    "Don't store this component. (Not valid for Component 0, but can
+       *    be used for Component 1-3)."
+       *
+       * So we can't just leave a vertex element blank and hope for the best.
+       * We have to tell the VF hardware to put something in it; so we just
+       * store a bunch of zero.
+       *
+       * TODO: Compact vertex elements so we never end up with holes.
+       */
+      struct GENX(VERTEX_ELEMENT_STATE) element = {
+         .Valid = true,
+         .Component0Control = VFCOMP_STORE_0,
+         .Component1Control = VFCOMP_STORE_0,
+         .Component2Control = VFCOMP_STORE_0,
+         .Component3Control = VFCOMP_STORE_0,
+      };
+      GENX(VERTEX_ELEMENT_STATE_pack)(NULL, &p[1 + i * 2], &element);
+   }
 
    for (uint32_t i = 0; i < info->vertexAttributeDescriptionCount; i++) {
       const VkVertexInputAttributeDescription *desc =
@@ -1136,7 +1163,11 @@ emit_3dstate_vs(struct anv_pipeline *pipeline)
 #endif
       vs.VectorMaskEnable           = false;
       vs.SamplerCount               = get_sampler_count(vs_bin);
-      vs.BindingTableEntryCount     = get_binding_table_entry_count(vs_bin);
+     /* Gen 11 workarounds table #2056 WABTPPrefetchDisable suggests to
+      * disable prefetching of binding tables on A0 and B0 steppings.
+      * TODO: Revisit this WA on newer steppings.
+      */
+      vs.BindingTableEntryCount     = GEN_GEN == 11 ? 0 : get_binding_table_entry_count(vs_bin);
       vs.FloatingPointMode          = IEEE754;
       vs.IllegalOpcodeExceptionEnable = false;
       vs.SoftwareExceptionEnable    = false;
@@ -1187,7 +1218,8 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline,
       hs.KernelStartPointer = tcs_bin->kernel.offset;
 
       hs.SamplerCount = get_sampler_count(tcs_bin);
-      hs.BindingTableEntryCount = get_binding_table_entry_count(tcs_bin);
+      /* Gen 11 workarounds table #2056 WABTPPrefetchDisable */
+      hs.BindingTableEntryCount = GEN_GEN == 11 ? 0 : get_binding_table_entry_count(tcs_bin);
       hs.MaximumNumberofThreads = devinfo->max_tcs_threads - 1;
       hs.IncludeVertexHandles = true;
       hs.InstanceCount = tcs_prog_data->instances - 1;
@@ -1237,7 +1269,8 @@ emit_3dstate_hs_te_ds(struct anv_pipeline *pipeline,
       ds.KernelStartPointer = tes_bin->kernel.offset;
 
       ds.SamplerCount = get_sampler_count(tes_bin);
-      ds.BindingTableEntryCount = get_binding_table_entry_count(tes_bin);
+      /* Gen 11 workarounds table #2056 WABTPPrefetchDisable */
+      ds.BindingTableEntryCount = GEN_GEN == 11 ? 0 : get_binding_table_entry_count(tes_bin);
       ds.MaximumNumberofThreads = devinfo->max_tes_threads - 1;
 
       ds.ComputeWCoordinateEnable =
@@ -1294,7 +1327,8 @@ emit_3dstate_gs(struct anv_pipeline *pipeline)
       gs.SingleProgramFlow       = false;
       gs.VectorMaskEnable        = false;
       gs.SamplerCount            = get_sampler_count(gs_bin);
-      gs.BindingTableEntryCount  = get_binding_table_entry_count(gs_bin);
+      /* Gen 11 workarounds table #2056 WABTPPrefetchDisable */
+      gs.BindingTableEntryCount  = GEN_GEN == 11 ? 0 : get_binding_table_entry_count(gs_bin);
       gs.IncludeVertexHandles    = gs_prog_data->base.include_vue_handles;
       gs.IncludePrimitiveID      = gs_prog_data->include_primitive_id;
 
@@ -1535,7 +1569,8 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
       ps.SingleProgramFlow          = false;
       ps.VectorMaskEnable           = true;
       ps.SamplerCount               = get_sampler_count(fs_bin);
-      ps.BindingTableEntryCount     = get_binding_table_entry_count(fs_bin);
+      /* Gen 11 workarounds table #2056 WABTPPrefetchDisable */
+      ps.BindingTableEntryCount     = GEN_GEN == 11 ? 0 : get_binding_table_entry_count(fs_bin);
       ps.PushConstantEnable         = wm_prog_data->base.nr_params > 0 ||
                                       wm_prog_data->base.ubo_ranges[0].length;
       ps.PositionXYOffsetSelect     = wm_prog_data->uses_pos_offset ?
@@ -1804,8 +1839,6 @@ compute_pipeline_create(
     */
    memset(pipeline->shaders, 0, sizeof(pipeline->shaders));
 
-   pipeline->active_stages = 0;
-
    pipeline->needs_data_cache = false;
 
    assert(pCreateInfo->stage.stage == VK_SHADER_STAGE_COMPUTE_BIT);
@@ -1868,7 +1901,8 @@ compute_pipeline_create(
       .KernelStartPointer     = cs_bin->kernel.offset,
 
       .SamplerCount           = get_sampler_count(cs_bin),
-      .BindingTableEntryCount = get_binding_table_entry_count(cs_bin),
+      /* Gen 11 workarounds table #2056 WABTPPrefetchDisable */
+      .BindingTableEntryCount = GEN_GEN == 11 ? 0 : get_binding_table_entry_count(cs_bin),
       .BarrierEnable          = cs_prog_data->uses_barrier,
       .SharedLocalMemorySize  =
          encode_slm_size(GEN_GEN, cs_prog_data->base.total_shared),

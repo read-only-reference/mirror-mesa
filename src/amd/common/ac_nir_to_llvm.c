@@ -486,7 +486,7 @@ static LLVMValueRef emit_unpack_half_2x16(struct ac_llvm_context *ctx,
 					  LLVMValueRef src0)
 {
 	LLVMValueRef const16 = LLVMConstInt(ctx->i32, 16, false);
-	LLVMValueRef temps[2], result, val;
+	LLVMValueRef temps[2], val;
 	int i;
 
 	for (i = 0; i < 2; i++) {
@@ -495,12 +495,7 @@ static LLVMValueRef emit_unpack_half_2x16(struct ac_llvm_context *ctx,
 		val = LLVMBuildBitCast(ctx->builder, val, ctx->f16, "");
 		temps[i] = LLVMBuildFPExt(ctx->builder, val, ctx->f32, "");
 	}
-
-	result = LLVMBuildInsertElement(ctx->builder, LLVMGetUndef(ctx->v2f32), temps[0],
-					ctx->i32_0, "");
-	result = LLVMBuildInsertElement(ctx->builder, result, temps[1],
-					ctx->i32_1, "");
-	return result;
+	return ac_build_gather_values(ctx, temps, 2);
 }
 
 static LLVMValueRef emit_ddxy(struct ac_nir_context *ctx,
@@ -1004,10 +999,7 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 
 	case nir_op_pack_64_2x32_split: {
 		LLVMValueRef tmp = LLVMGetUndef(ctx->ac.v2i32);
-		tmp = LLVMBuildInsertElement(ctx->ac.builder, tmp,
-					     src[0], ctx->ac.i32_0, "");
-		tmp = LLVMBuildInsertElement(ctx->ac.builder, tmp,
-					     src[1], ctx->ac.i32_1, "");
+		tmp = ac_build_gather_values(&ctx->ac, src, 2);
 		result = LLVMBuildBitCast(ctx->ac.builder, tmp, ctx->ac.i64, "");
 		break;
 	}
@@ -1171,7 +1163,8 @@ static LLVMValueRef lower_gather4_integer(struct ac_llvm_context *ctx,
 					  struct ac_image_args *args,
 					  const nir_tex_instr *instr)
 {
-	enum glsl_base_type stype = glsl_get_sampler_result_type(var->type);
+	const struct glsl_type *type = glsl_without_array(var->type);
+	enum glsl_base_type stype = glsl_get_sampler_result_type(type);
 	LLVMValueRef half_texel[2];
 	LLVMValueRef compare_cube_wa = NULL;
 	LLVMValueRef result;
@@ -1356,7 +1349,8 @@ static LLVMValueRef build_tex_intrinsic(struct ac_nir_context *ctx,
 	if (instr->op == nir_texop_tg4 && ctx->ac.chip_class <= VI) {
 		nir_deref_instr *texture_deref_instr = get_tex_texture_deref(instr);
 		nir_variable *var = nir_deref_instr_get_variable(texture_deref_instr);
-		enum glsl_base_type stype = glsl_get_sampler_result_type(var->type);
+		const struct glsl_type *type = glsl_without_array(var->type);
+		enum glsl_base_type stype = glsl_get_sampler_result_type(type);
 		if (stype == GLSL_TYPE_UINT || stype == GLSL_TYPE_INT) {
 			return lower_gather4_integer(&ctx->ac, var, args, instr);
 		}
@@ -2348,7 +2342,7 @@ static LLVMValueRef visit_image_load(struct ac_nir_context *ctx,
 					    glsl_sampler_type_is_array(type));
 		args.dmask = 15;
 		args.attributes = AC_FUNC_ATTR_READONLY;
-		if (var->data.image._volatile || var->data.image.coherent)
+		if (var->data.image.access & (ACCESS_VOLATILE | ACCESS_COHERENT))
 			args.cache_policy |= ac_glc;
 
 		res = ac_build_image_opcode(&ctx->ac, &args);
@@ -2389,7 +2383,7 @@ static void visit_image_store(struct ac_nir_context *ctx,
 		args.dim = get_ac_image_dim(&ctx->ac, glsl_get_sampler_dim(type),
 					    glsl_sampler_type_is_array(type));
 		args.dmask = 15;
-		if (force_glc || var->data.image._volatile || var->data.image.coherent)
+		if (force_glc || (var->data.image.access & (ACCESS_VOLATILE | ACCESS_COHERENT)))
 			args.cache_policy |= ac_glc;
 
 		ac_build_image_opcode(&ctx->ac, &args);
@@ -2543,10 +2537,6 @@ static LLVMValueRef visit_image_size(struct ac_nir_context *ctx,
 	return res;
 }
 
-#define NOOP_WAITCNT 0xf7f
-#define LGKM_CNT 0x07f
-#define VM_CNT 0xf70
-
 static void emit_membar(struct ac_llvm_context *ac,
 			const nir_intrinsic_instr *instr)
 {
@@ -2582,8 +2572,7 @@ void ac_emit_barrier(struct ac_llvm_context *ac, gl_shader_stage stage)
 		ac_build_waitcnt(ac, LGKM_CNT & VM_CNT);
 		return;
 	}
-	ac_build_intrinsic(ac, "llvm.amdgcn.s.barrier",
-			   ac->voidt, NULL, 0, AC_FUNC_ATTR_CONVERGENT);
+	ac_build_s_barrier(ac);
 }
 
 static void emit_discard(struct ac_nir_context *ctx,
@@ -2854,11 +2843,8 @@ static LLVMValueRef visit_interp(struct ac_nir_context *ctx,
 			interp_el = LLVMBuildBitCast(ctx->ac.builder, interp_el,
 						     ctx->ac.f32, "");
 
-			temp1 = LLVMBuildFMul(ctx->ac.builder, ddx_el, src_c0, "");
-			temp1 = LLVMBuildFAdd(ctx->ac.builder, temp1, interp_el, "");
-
-			temp2 = LLVMBuildFMul(ctx->ac.builder, ddy_el, src_c1, "");
-			temp2 = LLVMBuildFAdd(ctx->ac.builder, temp2, temp1, "");
+			temp1 = ac_build_fmad(&ctx->ac, ddx_el, src_c0, interp_el);
+			temp2 = ac_build_fmad(&ctx->ac, ddy_el, src_c1, temp1);
 
 			ij_out[i] = LLVMBuildBitCast(ctx->ac.builder,
 						     temp2, ctx->ac.i32, "");

@@ -46,7 +46,7 @@ v3d_screen_get_name(struct pipe_screen *pscreen)
 
         if (!screen->name) {
                 screen->name = ralloc_asprintf(screen,
-                                               "VC5 V3D %d.%d",
+                                               "V3D %d.%d",
                                                screen->devinfo.ver / 10,
                                                screen->devinfo.ver % 10);
         }
@@ -171,6 +171,7 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
         case PIPE_CAP_CUBE_MAP_ARRAY:
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+        case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
         case PIPE_CAP_SEAMLESS_CUBE_MAP:
         case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
         case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
@@ -277,7 +278,10 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 /* Geometry shader output, unsupported. */
         case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
         case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+	case PIPE_CAP_MAX_GS_INVOCATIONS:
                 return 0;
+	case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+		return 1 << 27;
 
                 /* Texturing. */
         case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -584,6 +588,8 @@ v3d_get_device_info(struct v3d_screen *screen)
         uint32_t major = (ident0.value >> 24) & 0xff;
         uint32_t minor = (ident1.value >> 0) & 0xf;
         screen->devinfo.ver = major * 10 + minor;
+
+        screen->devinfo.vpm_size = (ident1.value >> 28 & 0xf) * 1024;
 
         switch (screen->devinfo.ver) {
         case 33:

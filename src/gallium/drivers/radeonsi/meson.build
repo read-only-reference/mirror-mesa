@@ -51,6 +51,7 @@ files_libradeonsi = files(
   'si_shader_tgsi_alu.c',
   'si_shader_tgsi_mem.c',
   'si_shader_tgsi_setup.c',
+  'si_shaderlib_tgsi.c',
   'si_state.c',
   'si_state.h',
   'si_state_binning.c',
@@ -60,6 +61,7 @@ files_libradeonsi = files(
   'si_state_streamout.c',
   'si_state_viewport.c',
   'si_test_dma.c',
+  'si_test_dma_perf.c',
   'si_texture.c',
   'si_uvd.c',
   '../radeon/r600_perfcounter.c',
@@ -90,7 +92,7 @@ si_driinfo_h = custom_target(
     '../../auxiliary/pipe-loader/driinfo_gallium.h', 'driinfo_radeonsi.h'
   ),
   output : 'si_driinfo.h',
-  command : [prog_python2, '@INPUT@'],
+  command : [prog_python, '@INPUT@'],
   capture : true,
 )
 

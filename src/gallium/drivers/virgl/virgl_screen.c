@@ -24,6 +24,7 @@
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
 #include "util/u_video.h"
+#include "util/u_math.h"
 #include "util/os_time.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
@@ -35,9 +36,13 @@
 #include "virgl_public.h"
 #include "virgl_context.h"
 
-#define SP_MAX_TEXTURE_2D_LEVELS 15  /* 16K x 16K */
-#define SP_MAX_TEXTURE_3D_LEVELS 9   /* 512 x 512 x 512 */
-#define SP_MAX_TEXTURE_CUBE_LEVELS 13  /* 4K x 4K */
+int virgl_debug = 0;
+static const struct debug_named_value debug_options[] = {
+   { "verbose", VIRGL_DEBUG_VERBOSE, NULL },
+   { "tgsi", VIRGL_DEBUG_TGSI, NULL },
+   DEBUG_NAMED_VALUE_END
+};
+DEBUG_GET_ONCE_FLAGS_OPTION(virgl_debug, "VIRGL_DEBUG", debug_options, 0)
 
 static const char *
 virgl_get_vendor(struct pipe_screen *screen)
@@ -72,15 +77,22 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_OCCLUSION_QUERY:
       return vscreen->caps.caps.v1.bset.occlusion_query;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+   case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
       return vscreen->caps.caps.v1.bset.mirror_clamp;
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
-      return SP_MAX_TEXTURE_2D_LEVELS;
+      if (vscreen->caps.caps.v2.max_texture_2d_size)
+         return 1 + util_logbase2(vscreen->caps.caps.v2.max_texture_2d_size);
+      return 15; /* 16K x 16K */
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-      return SP_MAX_TEXTURE_3D_LEVELS;
+      if (vscreen->caps.caps.v2.max_texture_3d_size)
+         return 1 + util_logbase2(vscreen->caps.caps.v2.max_texture_3d_size);
+      return 9; /* 256 x 256 x 256 */
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-      return SP_MAX_TEXTURE_CUBE_LEVELS;
+      if (vscreen->caps.caps.v2.max_texture_cube_size)
+         return 1 + util_logbase2(vscreen->caps.caps.v2.max_texture_cube_size);
+      return 13; /* 4K x 4K */
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
       return 1;
    case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -124,7 +136,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CONDITIONAL_RENDER:
       return vscreen->caps.caps.v1.bset.conditional_render;
    case PIPE_CAP_TEXTURE_BARRIER:
-      return 0;
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_TEXTURE_BARRIER;
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
       return 1;
    case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
@@ -139,7 +151,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
       return 0;
    case PIPE_CAP_COMPUTE:
-      return 0;
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_COMPUTE_SHADER;
    case PIPE_CAP_USER_VERTEX_BUFFERS:
       return 0;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -225,6 +237,16 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_COPY_IMAGE;
    case PIPE_CAP_TGSI_TXQS:
       return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_TXQS;
+   case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_FB_NO_ATTACH;
+   case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_ROBUST_BUFFER_ACCESS;
+   case PIPE_CAP_TGSI_FS_FBFETCH:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_TGSI_FBFETCH;
+   case PIPE_CAP_TGSI_CLOCK:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_SHADER_CLOCK;
+   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
+      return vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_TGSI_COMPONENTS;
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
@@ -256,22 +278,17 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PCI_BUS:
    case PIPE_CAP_PCI_DEVICE:
    case PIPE_CAP_PCI_FUNCTION:
-   case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
-   case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
    case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
    case PIPE_CAP_TGSI_VOTE:
    case PIPE_CAP_MAX_WINDOW_RECTANGLES:
    case PIPE_CAP_POLYGON_OFFSET_UNITS_UNSCALED:
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
-   case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
    case PIPE_CAP_TGSI_CAN_READ_OUTPUTS:
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-   case PIPE_CAP_TGSI_FS_FBFETCH:
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_INT64:
    case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
-   case PIPE_CAP_TGSI_CLOCK:
    case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
    case PIPE_CAP_TGSI_BALLOT:
@@ -300,6 +317,10 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
       return 0;
+   case PIPE_CAP_MAX_GS_INVOCATIONS:
+      return 32;
+   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+      return 1 << 27;
    case PIPE_CAP_VENDOR_ID:
       return 0x1af4;
    case PIPE_CAP_DEVICE_ID:
@@ -328,6 +349,10 @@ virgl_get_shader_param(struct pipe_screen *screen,
        !vscreen->caps.caps.v1.bset.has_tessellation_shaders)
       return 0;
 
+   if (shader == PIPE_SHADER_COMPUTE &&
+       !(vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_COMPUTE_SHADER))
+     return 0;
+
    switch(shader)
    {
    case PIPE_SHADER_FRAGMENT:
@@ -335,6 +360,7 @@ virgl_get_shader_param(struct pipe_screen *screen,
    case PIPE_SHADER_GEOMETRY:
    case PIPE_SHADER_TESS_CTRL:
    case PIPE_SHADER_TESS_EVAL:
+   case PIPE_SHADER_COMPUTE:
       switch (param) {
       case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
       case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
@@ -373,15 +399,17 @@ virgl_get_shader_param(struct pipe_screen *screen,
       case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
          return 4096 * sizeof(float[4]);
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-         if (shader == PIPE_SHADER_FRAGMENT)
+         if (shader == PIPE_SHADER_FRAGMENT || shader == PIPE_SHADER_COMPUTE)
             return vscreen->caps.caps.v2.max_shader_buffer_frag_compute;
          else
             return vscreen->caps.caps.v2.max_shader_buffer_other_stages;
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-         if (shader == PIPE_SHADER_FRAGMENT)
+         if (shader == PIPE_SHADER_FRAGMENT || shader == PIPE_SHADER_COMPUTE)
             return vscreen->caps.caps.v2.max_shader_image_frag_compute;
          else
             return vscreen->caps.caps.v2.max_shader_image_other_stages;
+      case PIPE_SHADER_CAP_SUPPORTED_IRS:
+         return (1 << PIPE_SHADER_IR_TGSI);
       case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
       case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
       case PIPE_SHADER_CAP_INT64_ATOMICS:
@@ -424,6 +452,51 @@ virgl_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAPF %d query\n", param);
    return 0.0;
+}
+
+static int
+virgl_get_compute_param(struct pipe_screen *screen,
+                        enum pipe_shader_ir ir_type,
+                        enum pipe_compute_cap param,
+                        void *ret)
+{
+   struct virgl_screen *vscreen = virgl_screen(screen);
+   if (!(vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_COMPUTE_SHADER))
+      return 0;
+   switch (param) {
+   case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
+      if (ret) {
+         uint64_t *grid_size = ret;
+         grid_size[0] = vscreen->caps.caps.v2.max_compute_grid_size[0];
+         grid_size[1] = vscreen->caps.caps.v2.max_compute_grid_size[1];
+         grid_size[2] = vscreen->caps.caps.v2.max_compute_grid_size[2];
+      }
+      return 3 * sizeof(uint64_t) ;
+   case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
+      if (ret) {
+         uint64_t *block_size = ret;
+         block_size[0] = vscreen->caps.caps.v2.max_compute_block_size[0];
+         block_size[1] = vscreen->caps.caps.v2.max_compute_block_size[1];
+         block_size[2] = vscreen->caps.caps.v2.max_compute_block_size[2];
+      }
+      return 3 * sizeof(uint64_t);
+   case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
+      if (ret) {
+         uint64_t *max_threads_per_block = ret;
+         *max_threads_per_block = vscreen->caps.caps.v2.max_compute_work_group_invocations;
+      }
+      return sizeof(uint64_t);
+   case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE:
+      if (ret) {
+         uint64_t *max_local_size = ret;
+         /* Value reported by the closed source driver. */
+         *max_local_size = vscreen->caps.caps.v2.max_compute_shared_memory_size;
+      }
+      return sizeof(uint64_t);
+   default:
+      break;
+   }
+   return 0;
 }
 
 static boolean
@@ -527,6 +600,10 @@ virgl_is_format_supported( struct pipe_screen *screen,
       return FALSE;
 
    if (bind & PIPE_BIND_RENDER_TARGET) {
+      /* For ARB_framebuffer_no_attachments. */
+      if (format == PIPE_FORMAT_NONE)
+         return TRUE;
+
       if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS)
          return FALSE;
 
@@ -661,11 +738,14 @@ virgl_create_screen(struct virgl_winsys *vws)
    if (!screen)
       return NULL;
 
+   virgl_debug = debug_get_option_virgl_debug();
+
    screen->vws = vws;
    screen->base.get_name = virgl_get_name;
    screen->base.get_vendor = virgl_get_vendor;
    screen->base.get_param = virgl_get_param;
    screen->base.get_shader_param = virgl_get_shader_param;
+   screen->base.get_compute_param = virgl_get_compute_param;
    screen->base.get_paramf = virgl_get_paramf;
    screen->base.is_format_supported = virgl_is_format_supported;
    screen->base.destroy = virgl_destroy_screen;

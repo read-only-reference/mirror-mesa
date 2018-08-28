@@ -242,6 +242,7 @@ fs_inst::is_send_from_grf() const
    case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
    case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
    case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
@@ -493,16 +494,14 @@ type_size_scalar(const struct glsl_type *type)
       }
       return size;
    case GLSL_TYPE_SAMPLER:
-      /* Samplers take up no register space, since they're baked in at
-       * link time.
-       */
-      return 0;
    case GLSL_TYPE_ATOMIC_UINT:
+   case GLSL_TYPE_IMAGE:
+      /* Samplers, atomics, and images take up no register space, since
+       * they're baked in at link time.
+       */
       return 0;
    case GLSL_TYPE_SUBROUTINE:
       return 1;
-   case GLSL_TYPE_IMAGE:
-      return BRW_IMAGE_PARAM_SIZE;
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
@@ -808,6 +807,20 @@ fs_inst::components_read(unsigned i) const
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
       return (i == 0 ? 2 : 1);
 
+   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT_LOGICAL: {
+      assert(src[3].file == IMM &&
+             src[4].file == IMM);
+      const unsigned op = src[4].ud;
+      /* Surface coordinates. */
+      if (i == 0)
+         return src[3].ud;
+      /* Surface operation source. */
+      else if (i == 1 && op == BRW_AOP_FCMPWR)
+         return 2;
+      else
+         return 1;
+   }
+
    default:
       return 1;
    }
@@ -835,6 +848,7 @@ fs_inst::size_read(int arg) const
    case SHADER_OPCODE_URB_READ_SIMD8:
    case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
    case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
    case SHADER_OPCODE_TYPED_ATOMIC:
@@ -4976,6 +4990,12 @@ fs_visitor::lower_logical_sends()
                                     ibld.sample_mask_reg());
          break;
 
+      case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT_LOGICAL:
+         lower_surface_logical_send(ibld, inst,
+                                    SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT,
+                                    ibld.sample_mask_reg());
+         break;
+
       case SHADER_OPCODE_TYPED_SURFACE_READ_LOGICAL:
          lower_surface_logical_send(ibld, inst,
                                     SHADER_OPCODE_TYPED_SURFACE_READ,
@@ -5111,6 +5131,25 @@ get_fpu_lowered_simd_width(const struct gen_device_info *devinfo,
              !is_scalar_exception && !is_packed_word_exception) {
             const unsigned reg_count = DIV_ROUND_UP(inst->size_written, REG_SIZE);
             max_width = MIN2(max_width, inst->exec_size / reg_count);
+         }
+      }
+   }
+
+   if (devinfo->gen < 6) {
+      /* From the G45 PRM, Volume 4 Page 361:
+       *
+       *    "Operand Alignment Rule: With the exceptions listed below, a
+       *     source/destination operand in general should be aligned to even
+       *     256-bit physical register with a region size equal to two 256-bit
+       *     physical registers."
+       *
+       * Normally we enforce this by allocating virtual registers to the
+       * even-aligned class.  But we need to handle payload registers.
+       */
+      for (unsigned i = 0; i < inst->sources; i++) {
+         if (inst->src[i].file == FIXED_GRF && (inst->src[i].nr & 1) &&
+             inst->size_read(i) > REG_SIZE) {
+            max_width = MIN2(max_width, 8);
          }
       }
    }
@@ -5460,6 +5499,7 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
       return 8;
 
    case SHADER_OPCODE_UNTYPED_ATOMIC_LOGICAL:
+   case SHADER_OPCODE_UNTYPED_ATOMIC_FLOAT_LOGICAL:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
    case SHADER_OPCODE_UNTYPED_SURFACE_WRITE_LOGICAL:
    case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
@@ -6321,6 +6361,7 @@ fs_visitor::optimize()
    if (OPT(lower_load_payload)) {
       split_virtual_grfs();
       OPT(register_coalesce);
+      OPT(lower_simd_width);
       OPT(compute_to_mrf);
       OPT(dead_code_eliminate);
    }
@@ -6880,14 +6921,17 @@ brw_compute_flat_inputs(struct brw_wm_prog_data *prog_data,
    prog_data->flat_inputs = 0;
 
    nir_foreach_variable(var, &shader->inputs) {
-      int input_index = prog_data->urb_setup[var->data.location];
+      unsigned slots = glsl_count_attribute_slots(var->type, false);
+      for (unsigned s = 0; s < slots; s++) {
+         int input_index = prog_data->urb_setup[var->data.location + s];
 
-      if (input_index < 0)
-	 continue;
+         if (input_index < 0)
+            continue;
 
-      /* flat shading */
-      if (var->data.interpolation == INTERP_MODE_FLAT)
-         prog_data->flat_inputs |= (1 << input_index);
+         /* flat shading */
+         if (var->data.interpolation == INTERP_MODE_FLAT)
+            prog_data->flat_inputs |= 1 << input_index;
+      }
    }
 }
 

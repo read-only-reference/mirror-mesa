@@ -128,23 +128,6 @@ private:
 
 } /* end of anonymous namespace */
 
-static void
-nir_remap_attributes(nir_shader *shader,
-                     const nir_shader_compiler_options *options)
-{
-   if (options->vs_inputs_dual_locations) {
-      nir_foreach_variable(var, &shader->inputs) {
-         var->data.location +=
-            _mesa_bitcount_64(shader->info.vs.double_inputs &
-                              BITFIELD64_MASK(var->data.location));
-      }
-   }
-
-   /* Once the remap is done, reset double_inputs_read, so later it will have
-    * which location/slots are doubles */
-   shader->info.vs.double_inputs = 0;
-}
-
 nir_shader *
 glsl_to_nir(const struct gl_shader_program *shader_prog,
             gl_shader_stage stage,
@@ -433,12 +416,21 @@ nir_visitor::visit(ir_variable *ir)
    var->data.explicit_binding = ir->data.explicit_binding;
    var->data.bindless = ir->data.bindless;
    var->data.offset = ir->data.offset;
-   var->data.image.read_only = ir->data.memory_read_only;
-   var->data.image.write_only = ir->data.memory_write_only;
-   var->data.image.coherent = ir->data.memory_coherent;
-   var->data.image._volatile = ir->data.memory_volatile;
-   var->data.image.restrict_flag = ir->data.memory_restrict;
+
+   unsigned image_access = 0;
+   if (ir->data.memory_read_only)
+      image_access |= ACCESS_NON_WRITEABLE;
+   if (ir->data.memory_write_only)
+      image_access |= ACCESS_NON_READABLE;
+   if (ir->data.memory_coherent)
+      image_access |= ACCESS_COHERENT;
+   if (ir->data.memory_volatile)
+      image_access |= ACCESS_VOLATILE;
+   if (ir->data.memory_restrict)
+      image_access |= ACCESS_RESTRICT;
+   var->data.image.access = (gl_access_qualifier)image_access;
    var->data.image.format = ir->data.image_format;
+
    var->data.fb_fetch_output = ir->data.fb_fetch_output;
    var->data.explicit_xfb_buffer = ir->data.explicit_xfb_buffer;
    var->data.explicit_xfb_stride = ir->data.explicit_xfb_stride;
@@ -667,7 +659,9 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_image_deref_store;
          break;
       case ir_intrinsic_image_atomic_add:
-         op = nir_intrinsic_image_deref_atomic_add;
+         op = ir->return_deref->type->is_integer_32_64()
+            ? nir_intrinsic_image_deref_atomic_add
+            : nir_intrinsic_image_deref_atomic_fadd;
          break;
       case ir_intrinsic_image_atomic_min:
          op = nir_intrinsic_image_deref_atomic_min;
@@ -706,7 +700,8 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_load_ssbo;
          break;
       case ir_intrinsic_ssbo_atomic_add:
-         op = nir_intrinsic_ssbo_atomic_add;
+         op = ir->return_deref->type->is_integer_32_64()
+            ? nir_intrinsic_ssbo_atomic_add : nir_intrinsic_ssbo_atomic_fadd;
          break;
       case ir_intrinsic_ssbo_atomic_and:
          op = nir_intrinsic_ssbo_atomic_and;
@@ -723,6 +718,8 @@ nir_visitor::visit(ir_call *ir)
             op = nir_intrinsic_ssbo_atomic_imin;
          else if (ir->return_deref->type == glsl_type::uint_type)
             op = nir_intrinsic_ssbo_atomic_umin;
+         else if (ir->return_deref->type == glsl_type::float_type)
+            op = nir_intrinsic_ssbo_atomic_fmin;
          else
             unreachable("Invalid type");
          break;
@@ -732,6 +729,8 @@ nir_visitor::visit(ir_call *ir)
             op = nir_intrinsic_ssbo_atomic_imax;
          else if (ir->return_deref->type == glsl_type::uint_type)
             op = nir_intrinsic_ssbo_atomic_umax;
+         else if (ir->return_deref->type == glsl_type::float_type)
+            op = nir_intrinsic_ssbo_atomic_fmax;
          else
             unreachable("Invalid type");
          break;
@@ -739,7 +738,9 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_ssbo_atomic_exchange;
          break;
       case ir_intrinsic_ssbo_atomic_comp_swap:
-         op = nir_intrinsic_ssbo_atomic_comp_swap;
+         op = ir->return_deref->type->is_integer_32_64()
+            ? nir_intrinsic_ssbo_atomic_comp_swap
+            : nir_intrinsic_ssbo_atomic_fcomp_swap;
          break;
       case ir_intrinsic_shader_clock:
          op = nir_intrinsic_shader_clock;
@@ -749,6 +750,9 @@ nir_visitor::visit(ir_call *ir)
          break;
       case ir_intrinsic_end_invocation_interlock:
          op = nir_intrinsic_end_invocation_interlock;
+         break;
+      case ir_intrinsic_begin_fragment_shader_ordering:
+         op = nir_intrinsic_begin_fragment_shader_ordering;
          break;
       case ir_intrinsic_group_memory_barrier:
          op = nir_intrinsic_group_memory_barrier;
@@ -772,7 +776,9 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_store_shared;
          break;
       case ir_intrinsic_shared_atomic_add:
-         op = nir_intrinsic_shared_atomic_add;
+         op = ir->return_deref->type->is_integer_32_64()
+            ? nir_intrinsic_shared_atomic_add
+            : nir_intrinsic_shared_atomic_fadd;
          break;
       case ir_intrinsic_shared_atomic_and:
          op = nir_intrinsic_shared_atomic_and;
@@ -789,6 +795,8 @@ nir_visitor::visit(ir_call *ir)
             op = nir_intrinsic_shared_atomic_imin;
          else if (ir->return_deref->type == glsl_type::uint_type)
             op = nir_intrinsic_shared_atomic_umin;
+         else if (ir->return_deref->type == glsl_type::float_type)
+            op = nir_intrinsic_shared_atomic_fmin;
          else
             unreachable("Invalid type");
          break;
@@ -798,6 +806,8 @@ nir_visitor::visit(ir_call *ir)
             op = nir_intrinsic_shared_atomic_imax;
          else if (ir->return_deref->type == glsl_type::uint_type)
             op = nir_intrinsic_shared_atomic_umax;
+         else if (ir->return_deref->type == glsl_type::float_type)
+            op = nir_intrinsic_shared_atomic_fmax;
          else
             unreachable("Invalid type");
          break;
@@ -805,7 +815,9 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_shared_atomic_exchange;
          break;
       case ir_intrinsic_shared_atomic_comp_swap:
-         op = nir_intrinsic_shared_atomic_comp_swap;
+         op = ir->return_deref->type->is_integer_32_64()
+            ? nir_intrinsic_shared_atomic_comp_swap
+            : nir_intrinsic_shared_atomic_fcomp_swap;
          break;
       case ir_intrinsic_vote_any:
          op = nir_intrinsic_vote_any;
@@ -882,6 +894,7 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_image_deref_atomic_xor:
       case nir_intrinsic_image_deref_atomic_exchange:
       case nir_intrinsic_image_deref_atomic_comp_swap:
+      case nir_intrinsic_image_deref_atomic_fadd:
       case nir_intrinsic_image_deref_samples:
       case nir_intrinsic_image_deref_size: {
          nir_ssa_undef_instr *instr_undef =
@@ -900,10 +913,15 @@ nir_visitor::visit(ir_call *ir)
          /* Set the intrinsic destination. */
          if (ir->return_deref) {
             unsigned num_components = ir->return_deref->type->vector_elements;
-            if (instr->intrinsic == nir_intrinsic_image_deref_size)
-               instr->num_components = num_components;
             nir_ssa_dest_init(&instr->instr, &instr->dest,
                               num_components, 32, NULL);
+         }
+
+         if (op == nir_intrinsic_image_deref_size) {
+            instr->num_components = instr->dest.ssa.num_components;
+         } else if (op == nir_intrinsic_image_deref_load ||
+                    op == nir_intrinsic_image_deref_store) {
+            instr->num_components = 4;
          }
 
          if (op == nir_intrinsic_image_deref_size ||
@@ -972,6 +990,9 @@ nir_visitor::visit(ir_call *ir)
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_end_invocation_interlock:
+         nir_builder_instr_insert(&b, &instr->instr);
+         break;
+      case nir_intrinsic_begin_fragment_shader_ordering:
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_store_ssbo: {
@@ -1052,7 +1073,11 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_ssbo_atomic_or:
       case nir_intrinsic_ssbo_atomic_xor:
       case nir_intrinsic_ssbo_atomic_exchange:
-      case nir_intrinsic_ssbo_atomic_comp_swap: {
+      case nir_intrinsic_ssbo_atomic_comp_swap:
+      case nir_intrinsic_ssbo_atomic_fadd:
+      case nir_intrinsic_ssbo_atomic_fmin:
+      case nir_intrinsic_ssbo_atomic_fmax:
+      case nir_intrinsic_ssbo_atomic_fcomp_swap: {
          int param_count = ir->actual_parameters.length();
          assert(param_count == 3 || param_count == 4);
 
@@ -1073,7 +1098,8 @@ nir_visitor::visit(ir_call *ir)
 
          /* data2 parameter (only with atomic_comp_swap) */
          if (param_count == 4) {
-            assert(op == nir_intrinsic_ssbo_atomic_comp_swap);
+            assert(op == nir_intrinsic_ssbo_atomic_comp_swap ||
+                   op == nir_intrinsic_ssbo_atomic_fcomp_swap);
             param = param->get_next();
             inst = (ir_instruction *) param;
             instr->src[3] = nir_src_for_ssa(evaluate_rvalue(inst->as_rvalue()));
@@ -1135,7 +1161,11 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_shared_atomic_or:
       case nir_intrinsic_shared_atomic_xor:
       case nir_intrinsic_shared_atomic_exchange:
-      case nir_intrinsic_shared_atomic_comp_swap: {
+      case nir_intrinsic_shared_atomic_comp_swap:
+      case nir_intrinsic_shared_atomic_fadd:
+      case nir_intrinsic_shared_atomic_fmin:
+      case nir_intrinsic_shared_atomic_fmax:
+      case nir_intrinsic_shared_atomic_fcomp_swap:  {
          int param_count = ir->actual_parameters.length();
          assert(param_count == 2 || param_count == 3);
 
@@ -1151,7 +1181,8 @@ nir_visitor::visit(ir_call *ir)
 
          /* data2 parameter (only with atomic_comp_swap) */
          if (param_count == 3) {
-            assert(op == nir_intrinsic_shared_atomic_comp_swap);
+            assert(op == nir_intrinsic_shared_atomic_comp_swap ||
+                   op == nir_intrinsic_shared_atomic_fcomp_swap);
             param = param->get_next();
             inst = (ir_instruction *) param;
             instr->src[2] =

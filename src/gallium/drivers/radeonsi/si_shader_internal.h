@@ -173,6 +173,7 @@ struct si_shader_context {
 	int param_gs_vtx45_offset; /* in dwords (GFX9) */
 	/* CS */
 	int param_block_size;
+	int param_cs_user_data;
 
 	struct ac_llvm_compiler *compiler;
 
@@ -200,6 +201,8 @@ struct si_shader_context {
 
 	LLVMValueRef i32_0;
 	LLVMValueRef i32_1;
+	LLVMValueRef i1false;
+	LLVMValueRef i1true;
 };
 
 static inline struct si_shader_context *
@@ -217,7 +220,8 @@ si_shader_context_from_abi(struct ac_shader_abi *abi)
 
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
 			 struct ac_llvm_compiler *compiler,
-			 struct pipe_debug_callback *debug);
+			 struct pipe_debug_callback *debug,
+			 bool less_optimized);
 
 LLVMTypeRef tgsi2llvmtype(struct lp_build_tgsi_context *bld_base,
 			  enum tgsi_opcode_type type);
@@ -284,11 +288,6 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			const struct tgsi_opcode_info *info,
 			unsigned index,
 			LLVMValueRef dst[4]);
-
-/* Combine these with & instead of |. */
-#define NOOP_WAITCNT 0xf7f
-#define LGKM_CNT 0x07f
-#define VM_CNT 0xf70
 
 LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 				   const struct tgsi_ind_register *ind,

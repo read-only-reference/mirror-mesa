@@ -44,6 +44,8 @@ fd3_context_destroy(struct pipe_context *pctx)
 {
 	struct fd3_context *fd3_ctx = fd3_context(fd_context(pctx));
 
+	fd_context_destroy(pctx);
+
 	fd_bo_del(fd3_ctx->vs_pvt_mem);
 	fd_bo_del(fd3_ctx->fs_pvt_mem);
 	fd_bo_del(fd3_ctx->vsc_size_mem);
@@ -54,7 +56,7 @@ fd3_context_destroy(struct pipe_context *pctx)
 
 	fd_hw_query_fini(pctx);
 
-	fd_context_destroy(pctx);
+	free(fd3_ctx);
 }
 
 static const uint8_t primtypes[] = {

@@ -48,8 +48,8 @@ files_mesa_util = files(
   'mesa-sha1.h',
   'os_time.c',
   'os_time.h',
-  'process.c',
-  'process.h',
+  'u_process.c',
+  'u_process.h',
   'sha1/sha1.c',
   'sha1/sha1.h',
   'ralloc.c',
@@ -89,7 +89,7 @@ files_mesa_util = files(
   'vma.h',
 )
 
-install_data('drirc', install_dir : get_option('sysconfdir'))
+install_data('00-mesa-defaults.conf', install_dir : join_paths(get_option('datadir'), 'drirc.d'))
 
 files_xmlconfig = files(
   'xmlconfig.c',
@@ -100,7 +100,7 @@ format_srgb = custom_target(
   'format_srgb',
   input : ['format_srgb.py'],
   output : 'format_srgb.c',
-  command : [prog_python2, '@INPUT0@'],
+  command : [prog_python, '@INPUT0@'],
   capture : true,
 )
 
@@ -122,6 +122,9 @@ libxmlconfig = static_library(
     c_msvc_compat_args, c_vis_args,
     '-DSYSCONFDIR="@0@"'.format(
       join_paths(get_option('prefix'), get_option('sysconfdir'))
+    ),
+    '-DDATADIR="@0@"'.format(
+      join_paths(get_option('prefix'), get_option('datadir'))
     ),
   ],
   build_by_default : false,
