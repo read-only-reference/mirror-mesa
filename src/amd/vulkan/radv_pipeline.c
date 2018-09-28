@@ -1575,7 +1575,11 @@ calculate_gs_ring_sizes(struct radv_pipeline *pipeline, const struct radv_gs_sta
 	unsigned num_se = device->physical_device->rad_info.max_se;
 	unsigned wave_size = 64;
 	unsigned max_gs_waves = 32 * num_se; /* max 32 per SE on GCN */
-	unsigned gs_vertex_reuse = 16 * num_se; /* GS_VERTEX_REUSE register (per SE) */
+	/* On SI-CI, the value comes from VGT_GS_VERTEX_REUSE = 16.
+	 * On VI+, the value comes from VGT_VERTEX_REUSE_BLOCK_CNTL = 30 (+2).
+	 */
+	unsigned gs_vertex_reuse =
+		(device->physical_device->rad_info.chip_class >= VI ? 32 : 16) * num_se;
 	unsigned alignment = 256 * num_se;
 	/* The maximum size is 63.999 MB per SE. */
 	unsigned max_size = ((unsigned)(63.999 * 1024 * 1024) & ~255) * num_se;
@@ -2539,6 +2543,7 @@ radv_pipeline_generate_binning_state(struct radeon_cmdbuf *cs,
 	switch (pipeline->device->physical_device->rad_info.family) {
 	case CHIP_VEGA10:
 	case CHIP_VEGA12:
+	case CHIP_VEGA20:
 		context_states_per_bin = 1;
 		persistent_states_per_bin = 1;
 		fpovs_per_batch = 63;
@@ -2681,12 +2686,26 @@ radv_pipeline_generate_blend_state(struct radeon_cmdbuf *cs,
 	pipeline->graphics.cb_target_mask = blend->cb_target_mask;
 }
 
+static const VkConservativeRasterizationModeEXT
+radv_get_conservative_raster_mode(const VkPipelineRasterizationStateCreateInfo *pCreateInfo)
+{
+	const VkPipelineRasterizationConservativeStateCreateInfoEXT *conservative_raster =
+		vk_find_struct_const(pCreateInfo->pNext, PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT);
+
+	if (!conservative_raster)
+		return VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
+	return conservative_raster->conservativeRasterizationMode;
+}
 
 static void
 radv_pipeline_generate_raster_state(struct radeon_cmdbuf *cs,
+				    struct radv_pipeline *pipeline,
                                     const VkGraphicsPipelineCreateInfo *pCreateInfo)
 {
 	const VkPipelineRasterizationStateCreateInfo *vkraster = pCreateInfo->pRasterizationState;
+	const VkConservativeRasterizationModeEXT mode =
+		radv_get_conservative_raster_mode(vkraster);
+	uint32_t pa_sc_conservative_rast = 0;
 
 	radeon_set_context_reg(cs, R_028810_PA_CL_CLIP_CNTL,
 	                       S_028810_PS_UCP_MODE(3) |
@@ -2720,6 +2739,39 @@ radv_pipeline_generate_raster_state(struct radeon_cmdbuf *cs,
 	                       S_028814_POLY_OFFSET_FRONT_ENABLE(vkraster->depthBiasEnable ? 1 : 0) |
 	                       S_028814_POLY_OFFSET_BACK_ENABLE(vkraster->depthBiasEnable ? 1 : 0) |
 	                       S_028814_POLY_OFFSET_PARA_ENABLE(vkraster->depthBiasEnable ? 1 : 0));
+
+	/* Conservative rasterization. */
+	if (mode != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT) {
+		struct radv_multisample_state *ms = &pipeline->graphics.ms;
+
+		ms->pa_sc_aa_config |= S_028BE0_AA_MASK_CENTROID_DTMN(1);
+		ms->db_eqaa |= S_028804_ENABLE_POSTZ_OVERRASTERIZATION(1) |
+			       S_028804_OVERRASTERIZATION_AMOUNT(4);
+
+		pa_sc_conservative_rast = S_028C4C_PREZ_AA_MASK_ENABLE(1) |
+					  S_028C4C_POSTZ_AA_MASK_ENABLE(1) |
+					  S_028C4C_CENTROID_SAMPLE_OVERRIDE(1);
+
+		if (mode == VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT) {
+			pa_sc_conservative_rast |=
+				S_028C4C_OVER_RAST_ENABLE(1) |
+				S_028C4C_OVER_RAST_SAMPLE_SELECT(0) |
+				S_028C4C_UNDER_RAST_ENABLE(0) |
+				S_028C4C_UNDER_RAST_SAMPLE_SELECT(1) |
+				S_028C4C_PBB_UNCERTAINTY_REGION_ENABLE(1);
+		} else {
+			assert(mode == VK_CONSERVATIVE_RASTERIZATION_MODE_UNDERESTIMATE_EXT);
+			pa_sc_conservative_rast |=
+				S_028C4C_OVER_RAST_ENABLE(0) |
+				S_028C4C_OVER_RAST_SAMPLE_SELECT(1) |
+				S_028C4C_UNDER_RAST_ENABLE(1) |
+				S_028C4C_UNDER_RAST_SAMPLE_SELECT(0) |
+				S_028C4C_PBB_UNCERTAINTY_REGION_ENABLE(0);
+		}
+	}
+
+	radeon_set_context_reg(cs, R_028C4C_PA_SC_CONSERVATIVE_RASTERIZATION_CNTL,
+				   pa_sc_conservative_rast);
 }
 
 
@@ -3250,7 +3302,7 @@ radv_pipeline_generate_pm4(struct radv_pipeline *pipeline,
 
 	radv_pipeline_generate_depth_stencil_state(&pipeline->cs, pipeline, pCreateInfo, extra);
 	radv_pipeline_generate_blend_state(&pipeline->cs, pipeline, blend);
-	radv_pipeline_generate_raster_state(&pipeline->cs, pCreateInfo);
+	radv_pipeline_generate_raster_state(&pipeline->cs, pipeline, pCreateInfo);
 	radv_pipeline_generate_multisample_state(&pipeline->cs, pipeline);
 	radv_pipeline_generate_vgt_gs_mode(&pipeline->cs, pipeline);
 	radv_pipeline_generate_vertex_shader(&pipeline->cs, pipeline, tess);

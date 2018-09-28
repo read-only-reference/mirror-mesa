@@ -30,6 +30,7 @@
 #include "util/u_math.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_format.h"
+#include "util/u_screen.h"
 #include "util/u_string.h"
 #include "util/u_format_s3tc.h"
 #include "pipe/p_defines.h"
@@ -137,6 +138,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
+   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
       return 0;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
       return LP_MAX_TEXTURE_2D_LEVELS;
@@ -157,6 +159,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
       return 1;
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
+   case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
       return 0;
    case PIPE_CAP_PRIMITIVE_RESTART:
       return 1;
@@ -378,10 +381,10 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 32;
    case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
       return 1 << 27;
+
+   default:
+      return u_pipe_screen_get_param_defaults(screen, param);
    }
-   /* should only get here on unhandled cases */
-   debug_printf("Unexpected PIPE_CAP %d query\n", param);
-   return 0;
 }
 
 static int

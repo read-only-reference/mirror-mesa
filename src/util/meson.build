@@ -85,6 +85,8 @@ files_mesa_util = files(
   'u_thread.h',
   'u_vector.c',
   'u_vector.h',
+  'u_math.c',
+  'u_math.h',
   'vma.c',
   'vma.h',
 )
@@ -117,6 +119,7 @@ libxmlconfig = static_library(
   'xmlconfig',
   files_xmlconfig,
   include_directories : inc_common,
+  link_with : libmesa_util,
   dependencies : [dep_expat, dep_m],
   c_args : [
     c_msvc_compat_args, c_vis_args,

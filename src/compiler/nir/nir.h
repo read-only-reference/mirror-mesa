@@ -2119,12 +2119,6 @@ typedef struct nir_shader_compiler_options {
     */
    bool use_interpolated_input_intrinsics;
 
-   /**
-    * Do vertex shader double inputs use two locations? The Vulkan spec
-    * requires two locations to be used, OpenGL allows a single location.
-    */
-   bool vs_inputs_dual_locations;
-
    unsigned max_unroll_iterations;
 } nir_shader_compiler_options;
 
@@ -2356,6 +2350,36 @@ nir_after_block_before_jump(nir_block *block)
       return nir_before_instr(last_instr);
    } else {
       return nir_after_block(block);
+   }
+}
+
+static inline nir_cursor
+nir_before_src(nir_src *src, bool is_if_condition)
+{
+   if (is_if_condition) {
+      nir_block *prev_block =
+         nir_cf_node_as_block(nir_cf_node_prev(&src->parent_if->cf_node));
+      assert(!nir_block_ends_in_jump(prev_block));
+      return nir_after_block(prev_block);
+   } else if (src->parent_instr->type == nir_instr_type_phi) {
+#ifndef NDEBUG
+      nir_phi_instr *cond_phi = nir_instr_as_phi(src->parent_instr);
+      bool found = false;
+      nir_foreach_phi_src(phi_src, cond_phi) {
+         if (phi_src->src.ssa == src->ssa) {
+            found = true;
+            break;
+         }
+      }
+      assert(found);
+#endif
+      /* The LIST_ENTRY macro is a generic container-of macro, it just happens
+       * to have a more specific name.
+       */
+      nir_phi_src *phi_src = LIST_ENTRY(nir_phi_src, src, src);
+      return nir_after_block_before_jump(phi_src->pred);
+   } else {
+      return nir_before_instr(src->parent_instr);
    }
 }
 
@@ -2988,6 +3012,7 @@ bool nir_convert_from_ssa(nir_shader *shader, bool phi_webs_only);
 
 bool nir_lower_phis_to_regs_block(nir_block *block);
 bool nir_lower_ssa_defs_to_regs_block(nir_block *block);
+bool nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl);
 
 bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_before_ffma(nir_shader *shader);
@@ -3039,8 +3064,9 @@ bool nir_opt_conditional_discard(nir_shader *shader);
 
 void nir_sweep(nir_shader *shader);
 
-void nir_remap_attributes(nir_shader *shader,
-                          const nir_shader_compiler_options *options);
+void nir_remap_dual_slot_attributes(nir_shader *shader,
+                                    uint64_t *dual_slot_inputs);
+uint64_t nir_get_single_slot_attribs_mask(uint64_t attribs, uint64_t dual_slot);
 
 nir_intrinsic_op nir_intrinsic_from_system_value(gl_system_value val);
 gl_system_value nir_system_value_from_intrinsic(nir_intrinsic_op intrin);

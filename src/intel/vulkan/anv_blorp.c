@@ -168,7 +168,7 @@ get_blorp_surf_for_anv_buffer(struct anv_device *device,
                      .levels = 1,
                      .array_len = 1,
                      .samples = 1,
-                     .row_pitch = row_pitch,
+                     .row_pitch_B = row_pitch,
                      .usage = ISL_SURF_USAGE_TEXTURE_BIT |
                               ISL_SURF_USAGE_RENDER_TARGET_BIT,
                      .tiling_flags = ISL_TILING_LINEAR_BIT);
@@ -296,7 +296,7 @@ void anv_CmdCopyImage(
 
       assert(anv_image_aspects_compatible(src_mask, dst_mask));
 
-      if (_mesa_bitcount(src_mask) > 1) {
+      if (util_bitcount(src_mask) > 1) {
          uint32_t aspect_bit;
          anv_foreach_image_aspect_bit(aspect_bit, src_image, src_mask) {
             struct blorp_surf src_surf, dst_surf;
@@ -1604,6 +1604,24 @@ anv_image_hiz_clear(struct anv_cmd_buffer *cmd_buffer,
                                    ISL_AUX_USAGE_NONE, &stencil);
    }
 
+   /* From the Sky Lake PRM Volume 7, "Depth Buffer Clear":
+    *
+    *    "The following is required when performing a depth buffer clear with
+    *    using the WM_STATE or 3DSTATE_WM:
+    *
+    *       * If other rendering operations have preceded this clear, a
+    *         PIPE_CONTROL with depth cache flush enabled, Depth Stall bit
+    *         enabled must be issued before the rectangle primitive used for
+    *         the depth buffer clear operation.
+    *       * [...]"
+    *
+    * Even though the PRM only says that this is required if using 3DSTATE_WM
+    * and a 3DPRIMITIVE, the GPU appears to also need this to avoid occasional
+    * hangs when doing a clear with WM_HZ_OP.
+    */
+   cmd_buffer->state.pending_pipe_bits |=
+      ANV_PIPE_DEPTH_CACHE_FLUSH_BIT | ANV_PIPE_DEPTH_STALL_BIT;
+
    blorp_hiz_clear_depth_stencil(&batch, &depth, &stencil,
                                  level, base_layer, layer_count,
                                  area.offset.x, area.offset.y,
@@ -1618,18 +1636,22 @@ anv_image_hiz_clear(struct anv_cmd_buffer *cmd_buffer,
 
    /* From the SKL PRM, Depth Buffer Clear:
     *
-    * Depth Buffer Clear Workaround
-    * Depth buffer clear pass using any of the methods (WM_STATE, 3DSTATE_WM
-    * or 3DSTATE_WM_HZ_OP) must be followed by a PIPE_CONTROL command with
-    * DEPTH_STALL bit and Depth FLUSH bits “set” before starting to render.
-    * DepthStall and DepthFlush are not needed between consecutive depth clear
-    * passes nor is it required if the depth-clear pass was done with
-    * “full_surf_clear” bit set in the 3DSTATE_WM_HZ_OP.
+    *    "Depth Buffer Clear Workaround
+    *
+    *    Depth buffer clear pass using any of the methods (WM_STATE,
+    *    3DSTATE_WM or 3DSTATE_WM_HZ_OP) must be followed by a PIPE_CONTROL
+    *    command with DEPTH_STALL bit and Depth FLUSH bits “set” before
+    *    starting to render.  DepthStall and DepthFlush are not needed between
+    *    consecutive depth clear passes nor is it required if the depth-clear
+    *    pass was done with “full_surf_clear” bit set in the
+    *    3DSTATE_WM_HZ_OP."
+    *
+    * Even though the PRM provides a bunch of conditions under which this is
+    * supposedly unnecessary, we choose to perform the flush unconditionally
+    * just to be safe.
     */
-   if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
-      cmd_buffer->state.pending_pipe_bits |=
-         ANV_PIPE_DEPTH_CACHE_FLUSH_BIT | ANV_PIPE_DEPTH_STALL_BIT;
-   }
+   cmd_buffer->state.pending_pipe_bits |=
+      ANV_PIPE_DEPTH_CACHE_FLUSH_BIT | ANV_PIPE_DEPTH_STALL_BIT;
 }
 
 void

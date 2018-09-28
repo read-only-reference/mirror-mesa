@@ -41,6 +41,7 @@
 #include "util/os_time.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
+#include "util/u_screen.h"
 #include "util/u_string.h"
 
 #include "state_tracker/drm_driver.h"
@@ -185,6 +186,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
+   case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
@@ -284,6 +286,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
    case PIPE_CAP_PACKED_UNIFORMS:
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
+   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
       return 0;
 
    case PIPE_CAP_MAX_GS_INVOCATIONS:
@@ -307,6 +310,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
       return 128;
+   case PIPE_CAP_MAX_VERTEX_ELEMENT_SRC_OFFSET:
+      return 255;
 
    /* Texturing. */
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -369,10 +374,9 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_UMA:
       return 1;
+   default:
+      return u_pipe_screen_get_param_defaults(pscreen, param);
    }
-
-   debug_printf("unknown param %d", param);
-   return 0;
 }
 
 static float

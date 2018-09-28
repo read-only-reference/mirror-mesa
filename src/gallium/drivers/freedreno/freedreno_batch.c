@@ -69,7 +69,8 @@ batch_init(struct fd_batch *batch)
 	batch->in_fence_fd = -1;
 	batch->fence = fd_fence_create(batch);
 
-	batch->cleared = batch->partial_cleared = 0;
+	batch->cleared = 0;
+	batch->invalidated = 0;
 	batch->restore = batch->resolve = 0;
 	batch->needs_flush = false;
 	batch->flushed = false;
@@ -78,10 +79,6 @@ batch_init(struct fd_batch *batch)
 	batch->stage = FD_STAGE_NULL;
 
 	fd_reset_wfi(batch);
-
-	/* reset maximal bounds: */
-	batch->max_scissor.minx = batch->max_scissor.miny = ~0;
-	batch->max_scissor.maxx = batch->max_scissor.maxy = 0;
 
 	util_dynarray_init(&batch->draw_patches, NULL);
 
@@ -239,10 +236,10 @@ __fd_batch_destroy(struct fd_batch *batch)
 	debug_assert(batch->resources->entries == 0);
 	_mesa_set_destroy(batch->resources, NULL);
 
+	fd_context_unlock(ctx);
 	batch_flush_reset_dependencies(batch, false);
 	debug_assert(batch->dependents_mask == 0);
 
-	fd_context_unlock(ctx);
 	util_copy_framebuffer_state(&batch->framebuffer, NULL);
 	batch_fini(batch);
 	free(batch);
@@ -296,7 +293,6 @@ batch_flush(struct fd_batch *batch, bool force)
 	 */
 	fd_batch_set_stage(batch, FD_STAGE_NULL);
 
-	fd_context_all_dirty(batch->ctx);
 	batch_flush_reset_dependencies(batch, true);
 
 	batch->flushed = true;
@@ -352,10 +348,17 @@ fd_batch_flush(struct fd_batch *batch, bool sync, bool force)
 
 	if (newbatch) {
 		struct fd_context *ctx = batch->ctx;
-		struct fd_batch *new_batch =
-			fd_batch_from_fb(&ctx->screen->batch_cache, ctx, &batch->framebuffer);
+		struct fd_batch *new_batch;
 
-		util_copy_framebuffer_state(&new_batch->framebuffer, &batch->framebuffer);
+		if (ctx->screen->reorder) {
+			/* defer allocating new batch until one is needed for rendering
+			 * to avoid unused batches for apps that create many contexts
+			 */
+			new_batch = NULL;
+		} else {
+			new_batch = fd_batch_create(ctx, false);
+			util_copy_framebuffer_state(&new_batch->framebuffer, &batch->framebuffer);
+		}
 
 		fd_batch_reference(&batch, NULL);
 		ctx->batch = new_batch;
@@ -477,12 +480,16 @@ fd_batch_check_size(struct fd_batch *batch)
 {
 	debug_assert(!batch->flushed);
 
+	if (unlikely(fd_mesa_debug & FD_DBG_FLUSH)) {
+		fd_batch_flush(batch, true, false);
+		return;
+	}
+
 	if (fd_device_version(batch->ctx->screen->dev) >= FD_VERSION_UNLIMITED_CMDS)
 		return;
 
 	struct fd_ringbuffer *ring = batch->draw;
-	if (((ring->cur - ring->start) > (ring->size/4 - 0x1000)) ||
-			(fd_mesa_debug & FD_DBG_FLUSH))
+	if ((ring->cur - ring->start) > (ring->size/4 - 0x1000))
 		fd_batch_flush(batch, true, false);
 }
 

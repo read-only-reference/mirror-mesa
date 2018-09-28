@@ -160,7 +160,8 @@ struct PACKED bcolor_entry {
 	int8_t   si8[4];
 	uint32_t rgb10a2;
 	uint32_t z24; /* also s8? */
-	uint8_t  __pad1[32];
+	uint16_t srgb[4];      /* appears to duplicate fp16[], but clamped, used for srgb */
+	uint8_t  __pad1[24];
 };
 
 #define FD6_BORDER_COLOR_SIZE        0x60
@@ -194,8 +195,9 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 		if ((i >= tex->num_textures) || !tex->textures[i])
 			continue;
 
+		enum pipe_format format = tex->textures[i]->format;
 		const struct util_format_description *desc =
-				util_format_description(tex->textures[i]->format);
+				util_format_description(format);
 
 		e->rgb565 = 0;
 		e->rgb5a1 = 0;
@@ -205,6 +207,24 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 
 		for (j = 0; j < 4; j++) {
 			int c = desc->swizzle[j];
+			int cd = c;
+
+			/*
+			 * HACK: for PIPE_FORMAT_X24S8_UINT we end up w/ the
+			 * stencil border color value in bc->ui[0] but according
+			 * to desc->swizzle and desc->channel, the .x component
+			 * is NONE and the stencil value is in the y component.
+			 * Meanwhile the hardware wants this in the .x componetn.
+			 */
+			if ((format == PIPE_FORMAT_X24S8_UINT) ||
+					(format == PIPE_FORMAT_X32_S8X24_UINT)) {
+				if (j == 0) {
+					c = 1;
+					cd = 0;
+				} else {
+					continue;
+				}
+			}
 
 			if (c >= 4)
 				continue;
@@ -238,8 +258,8 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 					clamped = 0;
 					break;
 				}
-				e->fp32[c] = bc->ui[j];
-				e->fp16[c] = clamped;
+				e->fp32[cd] = bc->ui[j];
+				e->fp16[cd] = clamped;
 			} else {
 				float f = bc->f[j];
 				float f_u = CLAMP(f, 0, 1);
@@ -247,6 +267,7 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 
 				e->fp32[c] = fui(f);
 				e->fp16[c] = util_float_to_half(f);
+				e->srgb[c] = util_float_to_half(f_u);
 				e->ui16[c] = f_u * 0xffff;
 				e->si16[c] = f_s * 0x7fff;
 				e->ui8[c]  = f_u * 0xff;
@@ -522,6 +543,13 @@ fd6_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 			uint32_t size = fd_bo_size(rsc->bo) - off;
 			debug_assert(fmt != ~0);
 
+#ifdef DEBUG
+			/* see dEQP-GLES31.stress.vertex_attribute_binding.buffer_bounds.bind_vertex_buffer_offset_near_wrap_10
+			 */
+			if (off > fd_bo_size(rsc->bo))
+				continue;
+#endif
+
 			OUT_PKT4(ring, REG_A6XX_VFD_FETCH(j), 4);
 			OUT_RELOC(ring, rsc->bo, off, 0, 0);
 			OUT_RING(ring, size);           /* VFD_FETCH[j].SIZE */
@@ -580,13 +608,13 @@ fd6_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_PKT4(ring, REG_A6XX_SP_FS_RENDER_COMPONENTS, 1);
 		OUT_RING(ring,
 				 A6XX_SP_FS_RENDER_COMPONENTS_RT0(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT1(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT2(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT3(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT4(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT5(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT6(mrt_comp[0]) |
-				 A6XX_SP_FS_RENDER_COMPONENTS_RT7(mrt_comp[0]));
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT1(mrt_comp[1]) |
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT2(mrt_comp[2]) |
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT3(mrt_comp[3]) |
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT4(mrt_comp[4]) |
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT5(mrt_comp[5]) |
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT6(mrt_comp[6]) |
+				 A6XX_SP_FS_RENDER_COMPONENTS_RT7(mrt_comp[7]));
 	}
 
 	if (dirty & FD_DIRTY_ZSA) {
@@ -626,7 +654,8 @@ fd6_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		struct pipe_stencil_ref *sr = &ctx->stencil_ref;
 
 		OUT_PKT4(ring, REG_A6XX_RB_STENCILREF, 3);
-		OUT_RING(ring, A6XX_RB_STENCILREF_REF(sr->ref_value[0]));  // TODO bf?
+		OUT_RING(ring, A6XX_RB_STENCILREF_REF(sr->ref_value[0]) |
+				A6XX_RB_STENCILREF_BFREF(sr->ref_value[1]));
 		OUT_RING(ring, zsa->rb_stencilmask);
 		OUT_RING(ring, zsa->rb_stencilwrmask);
 	}
@@ -645,7 +674,8 @@ fd6_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, COND(fragz, A6XX_GRAS_SU_DEPTH_PLANE_CNTL_FRAG_WRITES_Z));
 	}
 
-	if (dirty & FD_DIRTY_SCISSOR) {
+	/* NOTE: scissor enabled bit is part of rasterizer state: */
+	if (dirty & (FD_DIRTY_SCISSOR | FD_DIRTY_RASTERIZER)) {
 		struct pipe_scissor_state *scissor = fd_context_get_scissor(ctx);
 
 		OUT_PKT4(ring, REG_A6XX_GRAS_SC_SCREEN_SCISSOR_TL_0, 2);

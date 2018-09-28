@@ -60,7 +60,8 @@ static void kil_emit(const struct lp_build_tgsi_action *action,
 
 		for (i = 0; i < TGSI_NUM_CHANNELS; i++) {
 			LLVMValueRef value = lp_build_emit_fetch(bld_base, inst, 0, i);
-			conds[i] = LLVMBuildFCmp(builder, LLVMRealOGE, value,
+			/* UGE because NaN shouldn't get killed */
+			conds[i] = LLVMBuildFCmp(builder, LLVMRealUGE, value,
 						ctx->ac.f32_0, "");
 		}
 
@@ -71,7 +72,7 @@ static void kil_emit(const struct lp_build_tgsi_action *action,
 		visible = conds[0];
 	} else {
 		assert(emit_data->inst->Instruction.Opcode == TGSI_OPCODE_KILL);
-		visible = LLVMConstInt(ctx->i1, false, 0);
+		visible = ctx->i1false;
 	}
 
 	si_llvm_emit_kill(&ctx->abi, visible);

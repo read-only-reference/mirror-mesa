@@ -603,7 +603,8 @@ static void brw_update_texture_surface(struct gl_context *ctx,
          view.usage |= ISL_SURF_USAGE_CUBE_BIT;
 
       enum isl_aux_usage aux_usage =
-         intel_miptree_texture_aux_usage(brw, mt, format);
+         intel_miptree_texture_aux_usage(brw, mt, format,
+                                         brw->gen9_astc5x5_wa_tex_mask);
 
       brw_emit_surface_state(brw, mt, mt->target, view, aux_usage,
                              surf_offset, surf_index,
@@ -633,9 +634,9 @@ brw_emit_buffer_surface_state(struct brw_context *brw,
                                                     *out_offset + brw->isl_dev.ss.addr_offset,
                                                     bo, buffer_offset,
                                                     reloc_flags),
-                         .size = buffer_size,
+                         .size_B = buffer_size,
                          .format = surface_format,
-                         .stride = pitch,
+                         .stride_B = pitch,
                          .mocs = brw_get_bo_mocs(devinfo, bo));
 }
 
@@ -948,7 +949,7 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
 	      (rb->Height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
 
    surf[3] = (brw_get_surface_tiling_bits(mt->surf.tiling) |
-	      (mt->surf.row_pitch - 1) << BRW_SURFACE_PITCH_SHIFT);
+	      (mt->surf.row_pitch_B - 1) << BRW_SURFACE_PITCH_SHIFT);
 
    surf[4] = brw_get_surface_num_multisamples(mt->surf.samples);
 
@@ -1107,7 +1108,8 @@ update_renderbuffer_read_surfaces(struct brw_context *brw)
             };
 
             enum isl_aux_usage aux_usage =
-               intel_miptree_texture_aux_usage(brw, irb->mt, format);
+               intel_miptree_texture_aux_usage(brw, irb->mt, format,
+                                               brw->gen9_astc5x5_wa_tex_mask);
             if (brw->draw_aux_usage[i] == ISL_AUX_USAGE_NONE)
                aux_usage = ISL_AUX_USAGE_NONE;
 

@@ -45,6 +45,9 @@
 #include "fd6_format.h"
 #include "fd6_zsa.h"
 
+/* some bits in common w/ a4xx: */
+#include "a4xx/fd4_draw.h"
+
 static void
 emit_mrt(struct fd_ringbuffer *ring, unsigned nr_bufs,
 		struct pipe_surface **bufs, struct fd_gmem_stateobj *gmem)
@@ -174,12 +177,15 @@ emit_zs(struct fd_ringbuffer *ring, struct pipe_surface *zsbuf,
 			size = slice->size0;
 			uint32_t base = gmem ? gmem->zsbuf_base[1] : 0;
 
-			OUT_PKT4(ring, REG_A6XX_RB_STENCIL_INFO, 5);
+			OUT_PKT4(ring, REG_A6XX_RB_STENCIL_INFO, 6);
 			OUT_RING(ring, A6XX_RB_STENCIL_INFO_SEPARATE_STENCIL);
 			OUT_RING(ring, A6XX_RB_STENCIL_BUFFER_PITCH(stride));
 			OUT_RING(ring, A6XX_RB_STENCIL_BUFFER_ARRAY_PITCH(size));
 			OUT_RELOCW(ring, rsc->stencil->bo, 0, 0, 0);  /* RB_STENCIL_BASE_LO/HI */
 			OUT_RING(ring, base);  /* RB_STENCIL_BASE_LO */
+		} else {
+			OUT_PKT4(ring, REG_A6XX_RB_STENCIL_INFO, 1);
+			OUT_RING(ring, 0x00000000);     /* RB_STENCIL_INFO */
 		}
 	} else {
 		OUT_PKT4(ring, REG_A6XX_RB_DEPTH_BUFFER_INFO, 6);
@@ -389,17 +395,18 @@ disable_msaa(struct fd_ringbuffer *ring)
 static void
 set_bin_size(struct fd_ringbuffer *ring, uint32_t w, uint32_t h, uint32_t flag)
 {
-	OUT_PKT4(ring, REG_A6XX_X1_BIN_SIZE, 1);
-	OUT_RING(ring, A6XX_X1_BIN_SIZE_WIDTH(w) |
-			 A6XX_X1_BIN_SIZE_HEIGHT(h) | flag);
-	OUT_PKT4(ring, REG_A6XX_X2_BIN_SIZE, 1);
-	OUT_RING(ring, A6XX_X2_BIN_SIZE_WIDTH(w) |
-			 A6XX_X2_BIN_SIZE_HEIGHT(h) | flag);
+	OUT_PKT4(ring, REG_A6XX_GRAS_BIN_CONTROL, 1);
+	OUT_RING(ring, A6XX_GRAS_BIN_CONTROL_BINW(w) |
+			 A6XX_GRAS_BIN_CONTROL_BINH(h) | flag);
+
+	OUT_PKT4(ring, REG_A6XX_RB_BIN_CONTROL, 1);
+	OUT_RING(ring, A6XX_RB_BIN_CONTROL_BINW(w) |
+			 A6XX_RB_BIN_CONTROL_BINH(h) | flag);
 
 	/* no flag for X3_BIN_SIZE... */
-	OUT_PKT4(ring, REG_A6XX_X3_BIN_SIZE, 1);
-	OUT_RING(ring, A6XX_X3_BIN_SIZE_WIDTH(w) |
-			 A6XX_X3_BIN_SIZE_HEIGHT(h));
+	OUT_PKT4(ring, REG_A6XX_RB_BIN_CONTROL2, 1);
+	OUT_RING(ring, A6XX_RB_BIN_CONTROL2_BINW(w) |
+			 A6XX_RB_BIN_CONTROL2_BINH(h));
 }
 
 /* before first tile */
@@ -470,17 +477,17 @@ set_window_offset(struct fd_ringbuffer *ring, uint32_t x1, uint32_t y1)
 	OUT_RING(ring, A6XX_RB_WINDOW_OFFSET_X(x1) |
 			A6XX_RB_WINDOW_OFFSET_Y(y1));
 
-	OUT_PKT4(ring, REG_A6XX_X1_WINDOW_OFFSET, 1);
-	OUT_RING(ring, A6XX_X1_WINDOW_OFFSET_X(x1) |
-			A6XX_X1_WINDOW_OFFSET_Y(y1));
+	OUT_PKT4(ring, REG_A6XX_RB_WINDOW_OFFSET2, 1);
+	OUT_RING(ring, A6XX_RB_WINDOW_OFFSET2_X(x1) |
+			A6XX_RB_WINDOW_OFFSET2_Y(y1));
 
-	OUT_PKT4(ring, REG_A6XX_X2_WINDOW_OFFSET, 1);
-	OUT_RING(ring, A6XX_X2_WINDOW_OFFSET_X(x1) |
-			A6XX_X2_WINDOW_OFFSET_Y(y1));
+	OUT_PKT4(ring, REG_A6XX_SP_WINDOW_OFFSET, 1);
+	OUT_RING(ring, A6XX_SP_WINDOW_OFFSET_X(x1) |
+			A6XX_SP_WINDOW_OFFSET_Y(y1));
 
-	OUT_PKT4(ring, REG_A6XX_X3_WINDOW_OFFSET, 1);
-	OUT_RING(ring, A6XX_X3_WINDOW_OFFSET_X(x1) |
-			A6XX_X3_WINDOW_OFFSET_Y(y1));
+	OUT_PKT4(ring, REG_A6XX_SP_TP_WINDOW_OFFSET, 1);
+	OUT_RING(ring, A6XX_SP_TP_WINDOW_OFFSET_X(x1) |
+			A6XX_SP_TP_WINDOW_OFFSET_Y(y1));
 }
 
 /* before mem2gmem */
@@ -610,7 +617,7 @@ emit_restore_blit(struct fd_batch *batch, uint32_t base,
 		info |= A6XX_RB_BLIT_INFO_UNK0;
 		break;
 	case FD_BUFFER_DEPTH:
-		info |= A6XX_RB_BLIT_INFO_DEPTH;
+		info |= A6XX_RB_BLIT_INFO_DEPTH | A6XX_RB_BLIT_INFO_UNK0;
 		break;
 	}
 
@@ -676,6 +683,9 @@ emit_resolve_blit(struct fd_batch *batch, uint32_t base,
 {
 	struct fd_ringbuffer *ring = batch->gmem;
 	uint32_t info = 0;
+
+	if (!rsc->valid)
+		return;
 
 	switch (buffer) {
 	case FD_BUFFER_COLOR:

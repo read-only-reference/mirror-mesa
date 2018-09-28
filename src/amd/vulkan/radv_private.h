@@ -108,6 +108,8 @@ typedef uint32_t xcb_window_t;
  */
 #define RADV_BUFFER_OPS_CS_THRESHOLD 4096
 
+#define RADV_BUFFER_UPDATE_THRESHOLD 1024
+
 enum radv_mem_heap {
 	RADV_MEM_HEAP_VRAM,
 	RADV_MEM_HEAP_VRAM_CPU_ACCESS,
@@ -684,6 +686,9 @@ struct radv_device {
 	bool use_global_bo_list;
 
 	struct radv_bo_list bo_list;
+
+	/* Whether anisotropy is forced with RADV_TEX_ANISO (-1 is disabled). */
+	int force_aniso;
 };
 
 struct radv_device_memory {
@@ -1065,8 +1070,10 @@ struct radv_image;
 
 bool radv_cmd_buffer_uses_mec(struct radv_cmd_buffer *cmd_buffer);
 
-void si_init_compute(struct radv_cmd_buffer *cmd_buffer);
-void si_init_config(struct radv_cmd_buffer *cmd_buffer);
+void si_emit_graphics(struct radv_physical_device *physical_device,
+		      struct radeon_cmdbuf *cs);
+void si_emit_compute(struct radv_physical_device *physical_device,
+		      struct radeon_cmdbuf *cs);
 
 void cik_create_gfx_config(struct radv_device *device);
 

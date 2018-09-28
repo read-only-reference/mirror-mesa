@@ -26,6 +26,7 @@
 #include "common/gen_debug.h"
 #include "compiler/glsl_types.h"
 #include "compiler/nir/nir_builder.h"
+#include "util/u_math.h"
 
 static bool
 is_input(nir_intrinsic_instr *intrin)
@@ -243,7 +244,7 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
        BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) |
        BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID));
 
-   const unsigned num_inputs = _mesa_bitcount_64(nir->info.inputs_read);
+   const unsigned num_inputs = util_bitcount64(nir->info.inputs_read);
 
    nir_foreach_function(function, nir) {
       if (!function->impl)
@@ -322,7 +323,7 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
                 * before it and counting the bits.
                 */
                int attr = nir_intrinsic_base(intrin);
-               int slot = _mesa_bitcount_64(nir->info.inputs_read &
+               int slot = util_bitcount64(nir->info.inputs_read &
                                             BITFIELD64_MASK(attr));
                nir_intrinsic_set_base(intrin, slot);
                break;
@@ -597,6 +598,11 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_lower_pack);
    } while (progress);
 
+   /* Workaround Gfxbench unused local sampler variable which will trigger an
+    * assert in the opt_large_constants pass.
+    */
+   OPT(nir_remove_dead_variables, nir_var_local);
+
    return nir;
 }
 
@@ -709,8 +715,6 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
 
    /* Get rid of split copies */
    nir = brw_nir_optimize(nir, compiler, is_scalar, false);
-
-   OPT(nir_remove_dead_variables, nir_var_local);
 
    return nir;
 }
@@ -953,4 +957,85 @@ brw_glsl_base_type_for_nir_type(nir_alu_type type)
    default:
       unreachable("bad type");
    }
+}
+
+nir_shader *
+brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compiler,
+                               const nir_shader_compiler_options *options,
+                               const struct brw_tcs_prog_key *key)
+{
+   nir_builder b;
+   nir_builder_init_simple_shader(&b, mem_ctx, MESA_SHADER_TESS_CTRL,
+                                  options);
+   nir_shader *nir = b.shader;
+   nir_variable *var;
+   nir_intrinsic_instr *load;
+   nir_intrinsic_instr *store;
+   nir_ssa_def *zero = nir_imm_int(&b, 0);
+   nir_ssa_def *invoc_id =
+      nir_load_system_value(&b, nir_intrinsic_load_invocation_id, 0);
+
+   nir->info.inputs_read = key->outputs_written &
+      ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
+   nir->info.outputs_written = key->outputs_written;
+   nir->info.tess.tcs_vertices_out = key->input_vertices;
+   nir->info.name = ralloc_strdup(nir, "passthrough");
+   nir->num_uniforms = 8 * sizeof(uint32_t);
+
+   var = nir_variable_create(nir, nir_var_uniform, glsl_vec4_type(), "hdr_0");
+   var->data.location = 0;
+   var = nir_variable_create(nir, nir_var_uniform, glsl_vec4_type(), "hdr_1");
+   var->data.location = 1;
+
+   /* Write the patch URB header. */
+   for (int i = 0; i <= 1; i++) {
+      load = nir_intrinsic_instr_create(nir, nir_intrinsic_load_uniform);
+      load->num_components = 4;
+      load->src[0] = nir_src_for_ssa(zero);
+      nir_ssa_dest_init(&load->instr, &load->dest, 4, 32, NULL);
+      nir_intrinsic_set_base(load, i * 4 * sizeof(uint32_t));
+      nir_builder_instr_insert(&b, &load->instr);
+
+      store = nir_intrinsic_instr_create(nir, nir_intrinsic_store_output);
+      store->num_components = 4;
+      store->src[0] = nir_src_for_ssa(&load->dest.ssa);
+      store->src[1] = nir_src_for_ssa(zero);
+      nir_intrinsic_set_base(store, VARYING_SLOT_TESS_LEVEL_INNER - i);
+      nir_intrinsic_set_write_mask(store, WRITEMASK_XYZW);
+      nir_builder_instr_insert(&b, &store->instr);
+   }
+
+   /* Copy inputs to outputs. */
+   uint64_t varyings = nir->info.inputs_read;
+
+   while (varyings != 0) {
+      const int varying = ffsll(varyings) - 1;
+
+      load = nir_intrinsic_instr_create(nir,
+                                        nir_intrinsic_load_per_vertex_input);
+      load->num_components = 4;
+      load->src[0] = nir_src_for_ssa(invoc_id);
+      load->src[1] = nir_src_for_ssa(zero);
+      nir_ssa_dest_init(&load->instr, &load->dest, 4, 32, NULL);
+      nir_intrinsic_set_base(load, varying);
+      nir_builder_instr_insert(&b, &load->instr);
+
+      store = nir_intrinsic_instr_create(nir,
+                                         nir_intrinsic_store_per_vertex_output);
+      store->num_components = 4;
+      store->src[0] = nir_src_for_ssa(&load->dest.ssa);
+      store->src[1] = nir_src_for_ssa(invoc_id);
+      store->src[2] = nir_src_for_ssa(zero);
+      nir_intrinsic_set_base(store, varying);
+      nir_intrinsic_set_write_mask(store, WRITEMASK_XYZW);
+      nir_builder_instr_insert(&b, &store->instr);
+
+      varyings &= ~BITFIELD64_BIT(varying);
+   }
+
+   nir_validate_shader(nir);
+
+   nir = brw_preprocess_nir(compiler, nir);
+
+   return nir;
 }

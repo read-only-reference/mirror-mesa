@@ -29,6 +29,7 @@
 #include "ac_llvm_util.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
+#include "util/u_screen.h"
 #include "util/u_video.h"
 #include "compiler/nir/nir.h"
 
@@ -70,6 +71,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_DEPTH_CLIP_DISABLE:
+	case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
 	case PIPE_CAP_SHADER_STENCIL_EXPORT:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -188,6 +190,10 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 				return 450;
 		return 420;
 
+	case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
+		/* Optimal number for good TexSubImage performance on Polaris10. */
+		return 64 * 1024 * 1024;
+
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 	case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
 		return MIN2(sscreen->info.max_alloc_size, INT_MAX);
@@ -285,6 +291,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_VIEWPORTS:
 		return SI_MAX_VIEWPORTS;
 	case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
+	case PIPE_CAP_RASTERIZER_SUBPIXEL_BITS:
 	case PIPE_CAP_MAX_RENDER_TARGETS:
 		return 8;
 	case PIPE_CAP_FRAMEBUFFER_MSAA_CONSTRAINTS:
@@ -315,8 +322,10 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return sscreen->info.pci_dev;
 	case PIPE_CAP_PCI_FUNCTION:
 		return sscreen->info.pci_func;
+
+	default:
+		return u_pipe_screen_get_param_defaults(pscreen, param);
 	}
-	return 0;
 }
 
 static float si_get_paramf(struct pipe_screen* pscreen, enum pipe_capf param)

@@ -27,6 +27,7 @@
 #include <nouveau_drm.h>
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
+#include "util/u_screen.h"
 
 #include "nv_object.xml.h"
 #include "nv_m2mf.xml.h"
@@ -108,6 +109,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_PRIMITIVE_RESTART:
       return (eng3d->oclass >= NV40_3D_CLASS) ? 1 : 0;
    /* unsupported */
+   case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
    case PIPE_CAP_SM3:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -239,6 +241,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
+   case PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET:
       return 0;
 
    case PIPE_CAP_MAX_GS_INVOCATIONS:
@@ -261,10 +264,9 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return dev->vram_size >> 20;
    case PIPE_CAP_UMA:
       return 0;
+   default:
+      return u_pipe_screen_get_param_defaults(pscreen, param);
    }
-
-   debug_printf("unknown param %d\n", param);
-   return 0;
 }
 
 static float

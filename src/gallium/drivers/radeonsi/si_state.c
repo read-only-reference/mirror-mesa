@@ -869,8 +869,8 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 				S_028A0C_REPEAT_COUNT(state->line_stipple_factor) : 0;
 	rs->pa_cl_clip_cntl =
 		S_028810_DX_CLIP_SPACE_DEF(state->clip_halfz) |
-		S_028810_ZCLIP_NEAR_DISABLE(!state->depth_clip) |
-		S_028810_ZCLIP_FAR_DISABLE(!state->depth_clip) |
+		S_028810_ZCLIP_NEAR_DISABLE(!state->depth_clip_near) |
+		S_028810_ZCLIP_FAR_DISABLE(!state->depth_clip_far) |
 		S_028810_DX_RASTERIZATION_KILL(state->rasterizer_discard) |
 		S_028810_DX_LINEAR_ATTR_CLIP_ENA(1);
 
@@ -4928,9 +4928,7 @@ static void si_init_config(struct si_context *sctx)
 			       S_00B21C_CU_EN(0xffff) | S_00B21C_WAVE_LIMIT(0x3F));
 
 		/* Compute LATE_ALLOC_VS.LIMIT. */
-		unsigned num_cu_per_sh = sscreen->info.num_good_compute_units /
-					 (sscreen->info.max_se *
-					  sscreen->info.max_sh_per_se);
+		unsigned num_cu_per_sh = sscreen->info.num_good_cu_per_sh;
 		unsigned late_alloc_limit; /* The limit is per SH. */
 
 		if (sctx->family == CHIP_KABINI) {

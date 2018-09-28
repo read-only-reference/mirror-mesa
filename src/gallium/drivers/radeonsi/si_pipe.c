@@ -346,6 +346,20 @@ static void si_set_log_context(struct pipe_context *ctx,
 		u_log_add_auto_logger(log, si_auto_log_cs, sctx);
 }
 
+static void si_set_context_param(struct pipe_context *ctx,
+				 enum pipe_context_param param,
+				 unsigned value)
+{
+	struct radeon_winsys *ws = ((struct si_context *)ctx)->ws;
+
+	switch (param) {
+	case PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE:
+		ws->pin_threads_to_L3_cache(ws, value);
+		break;
+	default:;
+	}
+}
+
 static struct pipe_context *si_create_context(struct pipe_screen *screen,
                                               unsigned flags)
 {
@@ -366,6 +380,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->b.emit_string_marker = si_emit_string_marker;
 	sctx->b.set_debug_callback = si_set_debug_callback;
 	sctx->b.set_log_context = si_set_log_context;
+	sctx->b.set_context_param = si_set_context_param;
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
 	sctx->is_debug = (flags & PIPE_CONTEXT_DEBUG) != 0;
 
@@ -730,12 +745,13 @@ static void si_test_vmfault(struct si_screen *sscreen)
 	r600_resource(buf)->gpu_address = 0; /* cause a VM fault */
 
 	if (sscreen->debug_flags & DBG(TEST_VMFAULT_CP)) {
-		si_copy_buffer(sctx, buf, buf, 0, 4, 4, 0, -1);
+		si_cp_dma_copy_buffer(sctx, buf, buf, 0, 4, 4, 0,
+				      SI_COHERENCY_NONE, L2_BYPASS);
 		ctx->flush(ctx, NULL, 0);
 		puts("VM fault test: CP - done.");
 	}
 	if (sscreen->debug_flags & DBG(TEST_VMFAULT_SDMA)) {
-		sctx->dma_clear_buffer(sctx, buf, 0, 4, 0);
+		si_sdma_clear_buffer(sctx, buf, 0, 4, 0);
 		ctx->flush(ctx, NULL, 0);
 		puts("VM fault test: SDMA - done.");
 	}

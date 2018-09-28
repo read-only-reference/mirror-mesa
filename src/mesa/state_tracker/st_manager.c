@@ -56,6 +56,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 #include "util/u_format.h"
+#include "util/u_helpers.h"
 #include "util/u_pointer.h"
 #include "util/u_inlines.h"
 #include "util/u_atomic.h"
@@ -834,6 +835,7 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
    struct st_context *shared_ctx = (struct st_context *) shared_stctxi;
    struct st_context *st;
    struct pipe_context *pipe;
+   struct gl_config* mode_ptr;
    struct gl_config mode;
    gl_api api;
    bool no_error = false;
@@ -893,7 +895,13 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
    }
 
    st_visual_to_context_mode(&attribs->visual, &mode);
-   st = st_create_context(api, pipe, &mode, shared_ctx,
+
+   if (attribs->visual.no_config)
+      mode_ptr = NULL;
+   else
+      mode_ptr = &mode;
+
+   st = st_create_context(api, pipe, mode_ptr, shared_ctx,
                           &attribs->options, no_error);
    if (!st) {
       *error = ST_CONTEXT_ERROR_NO_MEMORY;
@@ -1063,6 +1071,15 @@ st_api_make_current(struct st_api *stapi, struct st_context_iface *stctxi,
        * of the referenced drawables no longer exist.
        */
       st_framebuffers_purge(st);
+
+      /* Notify the driver that the context thread may have been changed.
+       * This should pin all driver threads to a specific L3 cache for optimal
+       * performance on AMD Zen CPUs.
+       */
+      struct glthread_state *glthread = st->ctx->GLThread;
+      thrd_t *upper_thread = glthread ? &glthread->queue.threads[0] : NULL;
+
+      util_context_thread_changed(st->pipe, upper_thread);
    }
    else {
       ret = _mesa_make_current(NULL, NULL, NULL);
