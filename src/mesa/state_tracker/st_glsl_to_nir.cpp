@@ -373,7 +373,7 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
          ~prev_stages & shader_program->data->linked_stages;
 
       nir->info.next_stage = stages_mask ?
-         (gl_shader_stage) ffs(stages_mask) : MESA_SHADER_FRAGMENT;
+         (gl_shader_stage) u_bit_scan(&stages_mask) : MESA_SHADER_FRAGMENT;
    } else {
       nir->info.next_stage = MESA_SHADER_FRAGMENT;
    }
@@ -665,7 +665,10 @@ st_link_nir(struct gl_context *ctx,
          mask = (nir_variable_mode)(mask | nir_var_shader_out);
 
       nir_shader *nir = shader->Program->nir;
-      NIR_PASS_V(nir, nir_lower_io_to_scalar_early, mask);
+
+      if (is_scalar[i])
+         NIR_PASS_V(nir, nir_lower_io_to_scalar_early, mask);
+
       st_nir_opts(nir, is_scalar[i]);
    }
 
@@ -718,7 +721,7 @@ st_link_nir(struct gl_context *ctx,
                                PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER);
 
          if (nir_lower_wpos_ytransform(nir, &wpos_options)) {
-            nir_validate_shader(nir);
+            nir_validate_shader(nir, "after nir_lower_wpos_ytransform");
             _mesa_add_state_reference(shader->Program->Parameters,
                                       wposTransformState);
          }

@@ -2487,9 +2487,6 @@ vc4_shader_state_create(struct pipe_context *pctx,
                  */
                 s = cso->ir.nir;
 
-                NIR_PASS_V(s, nir_lower_io, nir_var_all & ~nir_var_uniform,
-                           type_size,
-                           (nir_lower_io_options)0);
                 NIR_PASS_V(s, nir_lower_io, nir_var_uniform,
                            uniforms_type_size,
                            (nir_lower_io_options)0);
@@ -2504,6 +2501,10 @@ vc4_shader_state_create(struct pipe_context *pctx,
                 }
                 s = tgsi_to_nir(cso->tokens, &nir_options);
         }
+
+        NIR_PASS_V(s, nir_lower_io, nir_var_all & ~nir_var_uniform,
+                   type_size,
+                   (nir_lower_io_options)0);
 
         NIR_PASS_V(s, nir_opt_global_to_local);
         NIR_PASS_V(s, nir_lower_regs_to_ssa);
@@ -2974,7 +2975,6 @@ vc4_shader_state_delete(struct pipe_context *pctx, void *hwcso)
         struct vc4_context *vc4 = vc4_context(pctx);
         struct vc4_uncompiled_shader *so = hwcso;
 
-        struct hash_entry *entry;
         hash_table_foreach(vc4->fs_cache, entry) {
                 delete_from_cache_if_matches(vc4->fs_cache, &vc4->prog.fs,
                                              entry, so);
@@ -3031,7 +3031,6 @@ vc4_program_fini(struct pipe_context *pctx)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
 
-        struct hash_entry *entry;
         hash_table_foreach(vc4->fs_cache, entry) {
                 struct vc4_compiled_shader *shader = entry->data;
                 vc4_bo_unreference(&shader->bo);

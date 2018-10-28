@@ -40,12 +40,7 @@ fs_visitor::emit_nir_code()
    nir_setup_uniforms();
    nir_emit_system_values();
 
-   /* get the main function and emit it */
-   nir_foreach_function(function, nir) {
-      assert(strcmp(function->name, "main") == 0);
-      assert(function->impl);
-      nir_emit_impl(function->impl);
-   }
+   nir_emit_impl(nir_shader_get_entrypoint((nir_shader *)nir));
 }
 
 void
@@ -267,13 +262,9 @@ fs_visitor::nir_emit_system_values()
       }
    }
 
-   nir_foreach_function(function, nir) {
-      assert(strcmp(function->name, "main") == 0);
-      assert(function->impl);
-      nir_foreach_block(block, function->impl) {
-         emit_system_values_block(block, this);
-      }
-   }
+   nir_function_impl *impl = nir_shader_get_entrypoint((nir_shader *)nir);
+   nir_foreach_block(block, impl)
+      emit_system_values_block(block, this);
 }
 
 /*
@@ -793,6 +784,11 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       inst->saturate = instr->dest.saturate;
       break;
 
+   case nir_op_b2i:
+   case nir_op_b2f:
+      op[0].type = BRW_REGISTER_TYPE_D;
+      op[0].negate = !op[0].negate;
+      /* fallthrough */
    case nir_op_f2f64:
    case nir_op_f2i64:
    case nir_op_f2u64:
@@ -842,6 +838,7 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       break;
 
    case nir_op_fsign: {
+      assert(!instr->dest.saturate);
       if (op[0].abs) {
          /* Straightforward since the source can be assumed to be either
           * strictly >= 0 or strictly <= 0 depending on the setting of the
@@ -854,10 +851,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
             : bld.MOV(result, brw_imm_f(1.0f));
 
          set_predicate(BRW_PREDICATE_NORMAL, inst);
-
-         if (instr->dest.saturate)
-            inst->saturate = true;
-
       } else if (type_sz(op[0].type) < 8) {
          /* AND(val, 0x80000000) gives the sign bit.
           *
@@ -873,10 +866,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 
          inst = bld.OR(result_int, result_int, brw_imm_ud(0x3f800000u));
          inst->predicate = BRW_PREDICATE_NORMAL;
-         if (instr->dest.saturate) {
-            inst = bld.MOV(result, result);
-            inst->saturate = true;
-         }
       } else {
          /* For doubles we do the same but we need to consider:
           *
@@ -897,11 +886,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 
          set_predicate(BRW_PREDICATE_NORMAL,
                        bld.OR(r, r, brw_imm_ud(0x3ff00000u)));
-
-         if (instr->dest.saturate) {
-            inst = bld.MOV(result, result);
-            inst->saturate = true;
-         }
       }
       break;
    }
@@ -1223,11 +1207,6 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_frsq:
       inst = bld.emit(SHADER_OPCODE_RSQ, result, op[0]);
       inst->saturate = instr->dest.saturate;
-      break;
-
-   case nir_op_b2i:
-   case nir_op_b2f:
-      bld.MOV(result, negate(op[0]));
       break;
 
    case nir_op_i2b:

@@ -1,5 +1,3 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
  * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
@@ -216,6 +214,9 @@ fd_set_framebuffer_state(struct pipe_context *pctx,
 		framebuffer->layers, framebuffer->samples);
 
 	cso = &ctx->framebuffer;
+
+	if (util_framebuffer_state_equal(cso, framebuffer))
+		return;
 
 	util_copy_framebuffer_state(cso, framebuffer);
 

@@ -634,8 +634,7 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
       _eglCreateExtensionsString(disp);
       _eglCreateAPIsString(disp);
       snprintf(disp->VersionString, sizeof(disp->VersionString),
-               "%d.%d (%s)", disp->Version / 10, disp->Version % 10,
-               disp->Driver->Name);
+               "%d.%d", disp->Version / 10, disp->Version % 10);
    }
 
    /* Update applications version of major and minor if not NULL */
@@ -1222,6 +1221,9 @@ eglSwapInterval(EGLDisplay dpy, EGLint interval)
    if (_eglGetSurfaceHandle(surf) == EGL_NO_SURFACE)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
 
+   if (surf->Type != EGL_WINDOW_BIT)
+      RETURN_EGL_EVAL(disp, EGL_TRUE);
+
    interval = CLAMP(interval,
                     surf->Config->MinSwapInterval,
                     surf->Config->MaxSwapInterval);
@@ -1256,6 +1258,9 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
        surf != ctx->DrawSurface)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
    #endif
+
+   if (surf->Type != EGL_WINDOW_BIT)
+      RETURN_EGL_EVAL(disp, EGL_TRUE);
 
    /* From the EGL 1.5 spec:
     *
@@ -1295,6 +1300,9 @@ _eglSwapBuffersWithDamageCommon(_EGLDisplay *disp, _EGLSurface *surf,
    if (_eglGetContextHandle(ctx) == EGL_NO_CONTEXT ||
        surf != ctx->DrawSurface)
       RETURN_EGL_ERROR(disp, EGL_BAD_SURFACE, EGL_FALSE);
+
+   if (surf->Type != EGL_WINDOW_BIT)
+      RETURN_EGL_EVAL(disp, EGL_TRUE);
 
    if ((n_rects > 0 && rects == NULL) || n_rects < 0)
       RETURN_EGL_ERROR(disp, EGL_BAD_PARAMETER, EGL_FALSE);

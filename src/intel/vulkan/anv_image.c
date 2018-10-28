@@ -920,6 +920,9 @@ anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
 
    case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
       unreachable("VK_KHR_shared_presentable_image is unsupported");
+
+   case VK_IMAGE_LAYOUT_SHADING_RATE_OPTIMAL_NV:
+      unreachable("VK_NV_shading_rate_image is unsupported");
    }
 
    /* If the layout isn't recognized in the exhaustive switch above, the
@@ -1097,7 +1100,7 @@ anv_image_fill_surface_state(struct anv_device *device,
                             .size_B = surface->isl.size_B,
                             .format = ISL_FORMAT_RAW,
                             .stride_B = 1,
-                            .mocs = device->default_mocs);
+                            .mocs = anv_mocs_for_bo(device, address.bo));
       state_inout->address = address,
       state_inout->aux_address = ANV_NULL_ADDRESS;
       state_inout->clear_address = ANV_NULL_ADDRESS;
@@ -1198,7 +1201,8 @@ anv_image_fill_surface_state(struct anv_device *device,
                           .aux_address = anv_address_physical(aux_address),
                           .clear_address = anv_address_physical(clear_address),
                           .use_clear_address = !anv_address_is_null(clear_address),
-                          .mocs = device->default_mocs,
+                          .mocs = anv_mocs_for_bo(device,
+                                                  state_inout->address.bo),
                           .x_offset_sa = tile_x_sa,
                           .y_offset_sa = tile_y_sa);
 

@@ -1387,7 +1387,7 @@ static LLVMValueRef visit_load_push_constant(struct ac_nir_context *ctx,
 
 	if (instr->dest.ssa.bit_size == 16) {
 		unsigned load_dwords = instr->dest.ssa.num_components / 2 + 1;
-		LLVMTypeRef vec_type = LLVMVectorType(LLVMInt16Type(), 2 * load_dwords);
+		LLVMTypeRef vec_type = LLVMVectorType(LLVMInt16TypeInContext(ctx->ac.context), 2 * load_dwords);
 		ptr = ac_cast_ptr(&ctx->ac, ptr, vec_type);
 		LLVMValueRef res = LLVMBuildLoad(ctx->ac.builder, ptr, "");
 		res = LLVMBuildBitCast(ctx->ac.builder, res, vec_type, "");
@@ -1456,6 +1456,11 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 	LLVMValueRef src_data = get_src(ctx, instr->src[0]);
 	int elem_size_bytes = ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src_data)) / 8;
 	unsigned writemask = nir_intrinsic_write_mask(instr);
+	enum gl_access_qualifier access = nir_intrinsic_access(instr);
+	LLVMValueRef glc = ctx->ac.i1false;
+
+	if (access & (ACCESS_VOLATILE | ACCESS_COHERENT))
+		glc = ctx->ac.i1true;
 
 	LLVMValueRef rsrc = ctx->abi->load_ssbo(ctx->abi,
 				        get_src(ctx, instr->src[1]), true);
@@ -1512,7 +1517,7 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 				ctx->ac.i32_0,
 				LLVMConstInt(ctx->ac.i32, 2, false), // dfmt (= 16bit)
 				LLVMConstInt(ctx->ac.i32, 4, false), // nfmt (= uint)
-				ctx->ac.i1false,
+				glc,
 				ctx->ac.i1false,
 			};
 			ac_build_intrinsic(&ctx->ac, store_name,
@@ -1540,7 +1545,7 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 				rsrc,
 				ctx->ac.i32_0, /* vindex */
 				offset,
-				ctx->ac.i1false,  /* glc */
+				glc,
 				ctx->ac.i1false,  /* slc */
 			};
 			ac_build_intrinsic(&ctx->ac, store_name,
@@ -1613,6 +1618,11 @@ static LLVMValueRef visit_load_buffer(struct ac_nir_context *ctx,
 	int elem_size_bytes = instr->dest.ssa.bit_size / 8;
 	int num_components = instr->num_components;
 	int num_bytes = num_components * elem_size_bytes;
+	enum gl_access_qualifier access = nir_intrinsic_access(instr);
+	LLVMValueRef glc = ctx->ac.i1false;
+
+	if (access & (ACCESS_VOLATILE | ACCESS_COHERENT))
+		glc = ctx->ac.i1true;
 
 	for (int i = 0; i < num_bytes; i += load_bytes) {
 		load_bytes = MIN2(num_bytes - i, 16);
@@ -1631,7 +1641,8 @@ static LLVMValueRef visit_load_buffer(struct ac_nir_context *ctx,
 								   vindex,
 								   offset,
 								   ctx->ac.i32_0,
-								   immoffset);
+								   immoffset,
+								   glc);
 		} else {
 			switch (load_bytes) {
 			case 16:
@@ -1655,12 +1666,12 @@ static LLVMValueRef visit_load_buffer(struct ac_nir_context *ctx,
 				rsrc,
 				vindex,
 				LLVMBuildAdd(ctx->ac.builder, offset, immoffset, ""),
-				ctx->ac.i1false,
+				glc,
 				ctx->ac.i1false,
 			};
 			results[idx] = ac_build_intrinsic(&ctx->ac, load_name, data_type, params, 5, 0);
 			unsigned num_elems = ac_get_type_size(data_type) / elem_size_bytes;
-			LLVMTypeRef resTy = LLVMVectorType(LLVMIntType(instr->dest.ssa.bit_size), num_elems);
+			LLVMTypeRef resTy = LLVMVectorType(LLVMIntTypeInContext(ctx->ac.context, instr->dest.ssa.bit_size), num_elems);
 			results[idx] = LLVMBuildBitCast(ctx->ac.builder, results[idx], resTy, "");
 		}
 	}
@@ -1674,8 +1685,8 @@ static LLVMValueRef visit_load_buffer(struct ac_nir_context *ctx,
 		};
 
 		if (num_bytes > 16 && num_components == 3) {
-			/* we end up with a v4f32 and v2f32 but shuffle fails on that */
-			results[1] = ac_build_expand_to_vec4(&ctx->ac, results[1], 2);
+			/* we end up with a v2i64 and i64 but shuffle fails on that */
+			results[1] = ac_build_expand(&ctx->ac, results[1], 1, 2);
 		}
 
 		LLVMValueRef swizzle = LLVMConstVector(masks, num_components);
@@ -1709,7 +1720,8 @@ static LLVMValueRef visit_load_ubo_buffer(struct ac_nir_context *ctx,
 								 ctx->ac.i32_0,
 								 offset,
 								 ctx->ac.i32_0,
-								 LLVMConstInt(ctx->ac.i32, 2 * i, 0));
+								 LLVMConstInt(ctx->ac.i32, 2 * i, 0),
+								 ctx->ac.i1false);
 		}
 		ret = ac_build_gather_values(&ctx->ac, results, num_components);
 	} else {
@@ -3311,7 +3323,7 @@ static LLVMValueRef apply_round_slice(struct ac_llvm_context *ctx,
 				      LLVMValueRef coord)
 {
 	coord = ac_to_float(ctx, coord);
-	coord = ac_build_intrinsic(ctx, "llvm.rint.f32", ctx->f32, &coord, 1, 0);
+	coord = ac_build_round(ctx, coord);
 	coord = ac_to_integer(ctx, coord);
 	return coord;
 }
@@ -3623,7 +3635,6 @@ static void visit_post_phi(struct ac_nir_context *ctx,
 
 static void phi_post_pass(struct ac_nir_context *ctx)
 {
-	struct hash_entry *entry;
 	hash_table_foreach(ctx->phis, entry) {
 		visit_post_phi(ctx, (nir_phi_instr*)entry->key,
 		               (LLVMValueRef)entry->data);
@@ -3928,7 +3939,7 @@ setup_shared(struct ac_nir_context *ctx,
 			LLVMAddGlobalInAddressSpace(
 			   ctx->ac.module, glsl_to_llvm_type(&ctx->ac, variable->type),
 			   variable->name ? variable->name : "",
-			   AC_LOCAL_ADDR_SPACE);
+			   AC_ADDR_SPACE_LDS);
 		_mesa_hash_table_insert(ctx->vars, variable, shared);
 	}
 }

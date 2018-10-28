@@ -8,17 +8,17 @@ http://github.com/freedreno/envytools/
 git clone https://github.com/freedreno/envytools.git
 
 The rules-ng-ng source files this header was generated from are:
-- /home/robclark/src/envytools/rnndb/adreno.xml               (    501 bytes, from 2018-07-03 19:37:13)
-- /home/robclark/src/envytools/rnndb/freedreno_copyright.xml  (   1572 bytes, from 2018-07-03 19:37:13)
-- /home/robclark/src/envytools/rnndb/adreno/a2xx.xml          (  36805 bytes, from 2018-07-03 19:37:13)
-- /home/robclark/src/envytools/rnndb/adreno/adreno_common.xml (  13634 bytes, from 2018-07-03 19:37:13)
-- /home/robclark/src/envytools/rnndb/adreno/adreno_pm4.xml    (  42399 bytes, from 2018-09-27 19:00:01)
-- /home/robclark/src/envytools/rnndb/adreno/a3xx.xml          (  83840 bytes, from 2018-07-03 19:37:13)
-- /home/robclark/src/envytools/rnndb/adreno/a4xx.xml          ( 112086 bytes, from 2018-07-03 19:37:13)
-- /home/robclark/src/envytools/rnndb/adreno/a5xx.xml          ( 147240 bytes, from 2018-09-27 18:43:08)
-- /home/robclark/src/envytools/rnndb/adreno/a6xx.xml          ( 139337 bytes, from 2018-09-27 19:00:01)
-- /home/robclark/src/envytools/rnndb/adreno/a6xx_gmu.xml      (  10431 bytes, from 2018-09-14 13:03:07)
-- /home/robclark/src/envytools/rnndb/adreno/ocmem.xml         (   1773 bytes, from 2018-07-03 19:37:13)
+- /work/envytools/rnndb/adreno.xml               (    501 bytes, from 2018-07-10 14:59:32)
+- /work/envytools/rnndb/freedreno_copyright.xml  (   1572 bytes, from 2018-07-10 14:59:32)
+- /work/envytools/rnndb/adreno/a2xx.xml          (  37936 bytes, from 2018-10-08 20:10:47)
+- /work/envytools/rnndb/adreno/adreno_common.xml (  14201 bytes, from 2018-10-08 20:10:47)
+- /work/envytools/rnndb/adreno/adreno_pm4.xml    (  42864 bytes, from 2018-10-08 20:14:26)
+- /work/envytools/rnndb/adreno/a3xx.xml          (  83840 bytes, from 2018-07-10 14:59:32)
+- /work/envytools/rnndb/adreno/a4xx.xml          ( 112086 bytes, from 2018-07-10 14:59:32)
+- /work/envytools/rnndb/adreno/a5xx.xml          ( 147240 bytes, from 2018-09-28 22:41:49)
+- /work/envytools/rnndb/adreno/a6xx.xml          ( 140642 bytes, from 2018-10-12 21:46:25)
+- /work/envytools/rnndb/adreno/a6xx_gmu.xml      (  10431 bytes, from 2018-09-28 22:41:49)
+- /work/envytools/rnndb/adreno/ocmem.xml         (   1773 bytes, from 2018-07-10 14:59:32)
 
 Copyright (C) 2013-2018 by the following authors:
 - Rob Clark <robdclark@gmail.com> (robclark)
@@ -501,7 +501,7 @@ enum a6xx_vfd_perfcounter_select {
 	PERF_VFDP_VS_STAGE_WAVES = 22,
 };
 
-enum a6xx_hslq_perfcounter_select {
+enum a6xx_hlsq_perfcounter_select {
 	PERF_HLSQ_BUSY_CYCLES = 0,
 	PERF_HLSQ_STALL_CYCLES_UCHE = 1,
 	PERF_HLSQ_STALL_CYCLES_SP_STATE = 2,
@@ -2579,26 +2579,8 @@ static inline uint32_t A6XX_GRAS_BIN_CONTROL_BINH(uint32_t val)
 	assert(!(val & 0xf));
 	return ((val >> 4) << A6XX_GRAS_BIN_CONTROL_BINH__SHIFT) & A6XX_GRAS_BIN_CONTROL_BINH__MASK;
 }
-#define A6XX_GRAS_BIN_CONTROL_DEPTH				0x00040000
+#define A6XX_GRAS_BIN_CONTROL_BINNING_PASS			0x00040000
 #define A6XX_GRAS_BIN_CONTROL_USE_VIZ				0x00200000
-
-#define REG_A6XX_RB_BIN_CONTROL					0x00008800
-#define A6XX_RB_BIN_CONTROL_BINW__MASK				0x000000ff
-#define A6XX_RB_BIN_CONTROL_BINW__SHIFT				0
-static inline uint32_t A6XX_RB_BIN_CONTROL_BINW(uint32_t val)
-{
-	assert(!(val & 0x1f));
-	return ((val >> 5) << A6XX_RB_BIN_CONTROL_BINW__SHIFT) & A6XX_RB_BIN_CONTROL_BINW__MASK;
-}
-#define A6XX_RB_BIN_CONTROL_BINH__MASK				0x0001ff00
-#define A6XX_RB_BIN_CONTROL_BINH__SHIFT				8
-static inline uint32_t A6XX_RB_BIN_CONTROL_BINH(uint32_t val)
-{
-	assert(!(val & 0xf));
-	return ((val >> 4) << A6XX_RB_BIN_CONTROL_BINH__SHIFT) & A6XX_RB_BIN_CONTROL_BINH__MASK;
-}
-#define A6XX_RB_BIN_CONTROL_DEPTH				0x00040000
-#define A6XX_RB_BIN_CONTROL_USE_VIZ				0x00200000
 
 #define REG_A6XX_RB_BIN_CONTROL2				0x000088d3
 #define A6XX_RB_BIN_CONTROL2_BINW__MASK				0x000000ff
@@ -2985,6 +2967,8 @@ static inline uint32_t A6XX_GRAS_SC_WINDOW_SCISSOR_BR_Y(uint32_t val)
 #define A6XX_GRAS_LRZ_CNTL_ENABLE				0x00000001
 #define A6XX_GRAS_LRZ_CNTL_LRZ_WRITE				0x00000002
 #define A6XX_GRAS_LRZ_CNTL_GREATER				0x00000004
+#define A6XX_GRAS_LRZ_CNTL_UNK3					0x00000008
+#define A6XX_GRAS_LRZ_CNTL_UNK4					0x00000010
 
 #define REG_A6XX_GRAS_UNKNOWN_8101				0x00008101
 
@@ -3025,6 +3009,13 @@ static inline uint32_t A6XX_GRAS_LRZ_BUFFER_PITCH_ARRAY_PITCH(uint32_t val)
 #define REG_A6XX_GRAS_UNKNOWN_8110				0x00008110
 
 #define REG_A6XX_GRAS_2D_BLIT_CNTL				0x00008400
+#define A6XX_GRAS_2D_BLIT_CNTL_COLOR_FORMAT__MASK		0x0000ff00
+#define A6XX_GRAS_2D_BLIT_CNTL_COLOR_FORMAT__SHIFT		8
+static inline uint32_t A6XX_GRAS_2D_BLIT_CNTL_COLOR_FORMAT(enum a6xx_color_fmt val)
+{
+	return ((val) << A6XX_GRAS_2D_BLIT_CNTL_COLOR_FORMAT__SHIFT) & A6XX_GRAS_2D_BLIT_CNTL_COLOR_FORMAT__MASK;
+}
+#define A6XX_GRAS_2D_BLIT_CNTL_SCISSOR				0x00010000
 
 #define REG_A6XX_GRAS_2D_SRC_TL_X				0x00008401
 #define A6XX_GRAS_2D_SRC_TL_X_X__MASK				0x00ffff00
@@ -3119,6 +3110,35 @@ static inline uint32_t A6XX_GRAS_RESOLVE_CNTL_2_Y(uint32_t val)
 }
 
 #define REG_A6XX_GRAS_UNKNOWN_8600				0x00008600
+
+#define REG_A6XX_RB_BIN_CONTROL					0x00008800
+#define A6XX_RB_BIN_CONTROL_BINW__MASK				0x000000ff
+#define A6XX_RB_BIN_CONTROL_BINW__SHIFT				0
+static inline uint32_t A6XX_RB_BIN_CONTROL_BINW(uint32_t val)
+{
+	assert(!(val & 0x1f));
+	return ((val >> 5) << A6XX_RB_BIN_CONTROL_BINW__SHIFT) & A6XX_RB_BIN_CONTROL_BINW__MASK;
+}
+#define A6XX_RB_BIN_CONTROL_BINH__MASK				0x0001ff00
+#define A6XX_RB_BIN_CONTROL_BINH__SHIFT				8
+static inline uint32_t A6XX_RB_BIN_CONTROL_BINH(uint32_t val)
+{
+	assert(!(val & 0xf));
+	return ((val >> 4) << A6XX_RB_BIN_CONTROL_BINH__SHIFT) & A6XX_RB_BIN_CONTROL_BINH__MASK;
+}
+#define A6XX_RB_BIN_CONTROL_BINNING_PASS			0x00040000
+#define A6XX_RB_BIN_CONTROL_USE_VIZ				0x00200000
+
+#define REG_A6XX_RB_RENDER_CNTL					0x00008801
+#define A6XX_RB_RENDER_CNTL_UNK4				0x00000010
+#define A6XX_RB_RENDER_CNTL_BINNING				0x00000080
+#define A6XX_RB_RENDER_CNTL_FLAG_DEPTH				0x00004000
+#define A6XX_RB_RENDER_CNTL_FLAG_MRTS__MASK			0x00ff0000
+#define A6XX_RB_RENDER_CNTL_FLAG_MRTS__SHIFT			16
+static inline uint32_t A6XX_RB_RENDER_CNTL_FLAG_MRTS(uint32_t val)
+{
+	return ((val) << A6XX_RB_RENDER_CNTL_FLAG_MRTS__SHIFT) & A6XX_RB_RENDER_CNTL_FLAG_MRTS__MASK;
+}
 
 #define REG_A6XX_RB_RAS_MSAA_CNTL				0x00008802
 #define A6XX_RB_RAS_MSAA_CNTL_SAMPLES__MASK			0x00000003
@@ -3649,6 +3669,9 @@ static inline uint32_t A6XX_RB_WINDOW_OFFSET_Y(uint32_t val)
 #define REG_A6XX_RB_SAMPLE_COUNT_CONTROL			0x00008891
 #define A6XX_RB_SAMPLE_COUNT_CONTROL_COPY			0x00000002
 
+#define REG_A6XX_RB_LRZ_CNTL					0x00008898
+#define A6XX_RB_LRZ_CNTL_ENABLE					0x00000001
+
 #define REG_A6XX_RB_UNKNOWN_88D0				0x000088d0
 
 #define REG_A6XX_RB_BLIT_SCISSOR_TL				0x000088d1
@@ -3791,6 +3814,9 @@ static inline uint32_t A6XX_RB_2D_BLIT_CNTL_COLOR_FORMAT(enum a6xx_color_fmt val
 {
 	return ((val) << A6XX_RB_2D_BLIT_CNTL_COLOR_FORMAT__SHIFT) & A6XX_RB_2D_BLIT_CNTL_COLOR_FORMAT__MASK;
 }
+#define A6XX_RB_2D_BLIT_CNTL_SCISSOR				0x00010000
+
+#define REG_A6XX_RB_UNKNOWN_8C01				0x00008c01
 
 #define REG_A6XX_RB_2D_DST_INFO					0x00008c17
 #define A6XX_RB_2D_DST_INFO_COLOR_FORMAT__MASK			0x000000ff
@@ -4657,6 +4683,8 @@ static inline uint32_t A6XX_SP_FS_CONFIG_NSAMP(uint32_t val)
 
 #define REG_A6XX_SP_UNKNOWN_AB20				0x0000ab20
 
+#define REG_A6XX_SP_UNKNOWN_ACC0				0x0000acc0
+
 #define REG_A6XX_SP_UNKNOWN_AE00				0x0000ae00
 
 #define REG_A6XX_SP_UNKNOWN_AE03				0x0000ae03
@@ -4714,10 +4742,34 @@ static inline uint32_t A6XX_SP_PS_2D_SRC_INFO_COLOR_SWAP(enum a3xx_color_swap va
 	return ((val) << A6XX_SP_PS_2D_SRC_INFO_COLOR_SWAP__SHIFT) & A6XX_SP_PS_2D_SRC_INFO_COLOR_SWAP__MASK;
 }
 #define A6XX_SP_PS_2D_SRC_INFO_FLAGS				0x00001000
+#define A6XX_SP_PS_2D_SRC_INFO_FILTER				0x00010000
+
+#define REG_A6XX_SP_PS_2D_SRC_SIZE				0x0000b4c1
+#define A6XX_SP_PS_2D_SRC_SIZE_WIDTH__MASK			0x00007fff
+#define A6XX_SP_PS_2D_SRC_SIZE_WIDTH__SHIFT			0
+static inline uint32_t A6XX_SP_PS_2D_SRC_SIZE_WIDTH(uint32_t val)
+{
+	return ((val) << A6XX_SP_PS_2D_SRC_SIZE_WIDTH__SHIFT) & A6XX_SP_PS_2D_SRC_SIZE_WIDTH__MASK;
+}
+#define A6XX_SP_PS_2D_SRC_SIZE_HEIGHT__MASK			0x3fff8000
+#define A6XX_SP_PS_2D_SRC_SIZE_HEIGHT__SHIFT			15
+static inline uint32_t A6XX_SP_PS_2D_SRC_SIZE_HEIGHT(uint32_t val)
+{
+	return ((val) << A6XX_SP_PS_2D_SRC_SIZE_HEIGHT__SHIFT) & A6XX_SP_PS_2D_SRC_SIZE_HEIGHT__MASK;
+}
 
 #define REG_A6XX_SP_PS_2D_SRC_LO				0x0000b4c2
 
 #define REG_A6XX_SP_PS_2D_SRC_HI				0x0000b4c3
+
+#define REG_A6XX_SP_PS_2D_SRC_PITCH				0x0000b4c4
+#define A6XX_SP_PS_2D_SRC_PITCH_PITCH__MASK			0x01fffe00
+#define A6XX_SP_PS_2D_SRC_PITCH_PITCH__SHIFT			9
+static inline uint32_t A6XX_SP_PS_2D_SRC_PITCH_PITCH(uint32_t val)
+{
+	assert(!(val & 0x3f));
+	return ((val >> 6) << A6XX_SP_PS_2D_SRC_PITCH_PITCH__SHIFT) & A6XX_SP_PS_2D_SRC_PITCH_PITCH__MASK;
+}
 
 #define REG_A6XX_SP_PS_2D_SRC_FLAGS_LO				0x0000b4ca
 
@@ -5386,6 +5438,10 @@ static inline uint32_t A6XX_CX_DBGC_CFG_DBGBUS_BYTEL_1_BYTEL15(uint32_t val)
 #define REG_A6XX_CX_DBGC_CFG_DBGBUS_TRACE_BUF1			0x0000002f
 
 #define REG_A6XX_CX_DBGC_CFG_DBGBUS_TRACE_BUF2			0x00000030
+
+#define REG_A6XX_CX_MISC_SYSTEM_CACHE_CNTL_0			0x00000001
+
+#define REG_A6XX_CX_MISC_SYSTEM_CACHE_CNTL_1			0x00000002
 
 
 #endif /* A6XX_XML */

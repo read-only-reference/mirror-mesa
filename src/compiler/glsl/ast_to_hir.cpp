@@ -67,6 +67,9 @@ static void
 detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,
                                exec_list *instructions);
 static void
+verify_subroutine_associated_funcs(struct _mesa_glsl_parse_state *state);
+
+static void
 remove_per_vertex_blocks(exec_list *instructions,
                          _mesa_glsl_parse_state *state, ir_variable_mode mode);
 
@@ -155,6 +158,7 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
    foreach_list_typed (ast_node, ast, link, & state->translation_unit)
       ast->hir(instructions, state);
 
+   verify_subroutine_associated_funcs(state);
    detect_recursion_unlinked(state, instructions);
    detect_conflicting_assignments(state, instructions);
 
@@ -312,10 +316,6 @@ apply_implicit_conversion(const glsl_type *to, ir_rvalue * &from,
 
    /* Prior to GLSL 1.20, there are no implicit conversions */
    if (!state->is_version(120, 0))
-      return false;
-
-   /* ESSL does not allow implicit conversions */
-   if (state->es_shader)
       return false;
 
    /* From page 27 (page 33 of the PDF) of the GLSL 1.50 spec:
@@ -1685,6 +1685,12 @@ ast_expression::do_hir(exec_list *instructions,
       op[1] = this->subexpressions[1]->hir(instructions, state);
 
       orig_type = op[0]->type;
+
+      /* Break out if operand types were not parsed successfully. */
+      if ((op[0]->type == glsl_type::error_type ||
+           op[1]->type == glsl_type::error_type))
+         break;
+
       type = arithmetic_result_type(op[0], op[1],
                                     (this->oper == ast_mul_assign),
                                     state, & loc);
@@ -6639,7 +6645,6 @@ ast_case_statement_list::hir(exec_list *instructions,
     * if default should be chosen or not.
     */
    if (!default_case.is_empty()) {
-      struct hash_entry *entry;
       ir_factory body(instructions, state);
 
       ir_expression *cmp = NULL;
@@ -8678,6 +8683,38 @@ detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,
    }
 }
 
+static void
+verify_subroutine_associated_funcs(struct _mesa_glsl_parse_state *state)
+{
+   YYLTYPE loc;
+   memset(&loc, 0, sizeof(loc));
+
+   /* Section 6.1.2 (Subroutines) of the GLSL 4.00 spec says:
+    *
+    *   "A program will fail to compile or link if any shader
+    *    or stage contains two or more functions with the same
+    *    name if the name is associated with a subroutine type."
+    */
+
+   for (int i = 0; i < state->num_subroutines; i++) {
+      unsigned definitions = 0;
+      ir_function *fn = state->subroutines[i];
+      /* Calculate number of function definitions with the same name */
+      foreach_in_list(ir_function_signature, sig, &fn->signatures) {
+         if (sig->is_defined) {
+            if (++definitions > 1) {
+               _mesa_glsl_error(&loc, state,
+                     "%s shader contains two or more function "
+                     "definitions with name `%s', which is "
+                     "associated with a subroutine type.\n",
+                     _mesa_shader_stage_to_string(state->stage),
+                     fn->name);
+               return;
+            }
+         }
+      }
+   }
+}
 
 static void
 remove_per_vertex_blocks(exec_list *instructions,

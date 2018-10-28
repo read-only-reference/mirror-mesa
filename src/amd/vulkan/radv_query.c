@@ -789,6 +789,9 @@ VkResult radv_CreateQueryPool(
 	case VK_QUERY_TYPE_TIMESTAMP:
 		pool->stride = 8;
 		break;
+	case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT:
+		pool->stride = 32;
+		break;
 	default:
 		unreachable("creating unhandled query type");
 	}
@@ -951,6 +954,44 @@ VkResult radv_GetQueryPoolResults(
 			}
 			break;
 		}
+		case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
+			volatile uint64_t const *src64 = (volatile uint64_t const *)src;
+			uint64_t num_primitives_written;
+			uint64_t primitive_storage_needed;
+
+			/* SAMPLE_STREAMOUTSTATS stores this structure:
+			 * {
+			 *	u64 NumPrimitivesWritten;
+			 *	u64 PrimitiveStorageNeeded;
+			 * }
+			 */
+			available = 1;
+			for (int j = 0; j < 4; j++) {
+				if (!(src64[j] & 0x8000000000000000UL))
+					available = 0;
+			}
+
+			if (!available && !(flags & VK_QUERY_RESULT_PARTIAL_BIT)) {
+				result = VK_NOT_READY;
+				break;
+			}
+
+			num_primitives_written = src64[3] - src64[1];
+			primitive_storage_needed = src64[2] - src64[0];
+
+			if (flags & VK_QUERY_RESULT_64_BIT) {
+				*(uint64_t *)dest = num_primitives_written;
+				dest += 8;
+				*(uint64_t *)dest = primitive_storage_needed;
+				dest += 8;
+			} else {
+				*(uint32_t *)dest = num_primitives_written;
+				dest += 4;
+				*(uint32_t *)dest = primitive_storage_needed;
+				dest += 4;
+			}
+			break;
+		}
 		default:
 			unreachable("trying to get results of unhandled query type");
 		}
@@ -998,7 +1039,7 @@ void radv_CmdCopyQueryPoolResults(
 
 				/* Waits on the upper word of the last DB entry */
 				radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
-				radeon_emit(cs, 5 | WAIT_REG_MEM_MEM_SPACE(1));
+				radeon_emit(cs, WAIT_REG_MEM_GREATER_OR_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
 				radeon_emit(cs, src_va);
 				radeon_emit(cs, src_va >> 32);
 				radeon_emit(cs, 0x80000000); /* reference value */
@@ -1009,7 +1050,7 @@ void radv_CmdCopyQueryPoolResults(
 		radv_query_shader(cmd_buffer, &cmd_buffer->device->meta_state.query.occlusion_query_pipeline,
 		                  pool->bo, dst_buffer->bo, firstQuery * pool->stride,
 		                  dst_buffer->offset + dstOffset,
-		                  get_max_db(cmd_buffer->device) * 16, stride,
+		                  pool->stride, stride,
 		                  queryCount, flags, 0, 0);
 		break;
 	case VK_QUERY_TYPE_PIPELINE_STATISTICS:
@@ -1028,7 +1069,7 @@ void radv_CmdCopyQueryPoolResults(
 		radv_query_shader(cmd_buffer, &cmd_buffer->device->meta_state.query.pipeline_statistics_query_pipeline,
 		                  pool->bo, dst_buffer->bo, firstQuery * pool->stride,
 		                  dst_buffer->offset + dstOffset,
-		                  pipelinestat_block_size * 2, stride, queryCount, flags,
+		                  pool->stride, stride, queryCount, flags,
 		                  pool->pipeline_stats_mask,
 		                  pool->availability_offset + 4 * firstQuery);
 		break;
@@ -1053,8 +1094,8 @@ void radv_CmdCopyQueryPoolResults(
 				uint64_t avail_dest_va = dest_va + elem_size;
 
 				radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
-				radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_MEM) |
-						COPY_DATA_DST_SEL(COPY_DATA_MEM));
+				radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_SRC_MEM) |
+						COPY_DATA_DST_SEL(COPY_DATA_DST_MEM_GRBM));
 				radeon_emit(cs, local_src_va);
 				radeon_emit(cs, local_src_va >> 32);
 				radeon_emit(cs, avail_dest_va);
@@ -1062,8 +1103,8 @@ void radv_CmdCopyQueryPoolResults(
 			}
 
 			radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
-			radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_MEM) |
-					COPY_DATA_DST_SEL(COPY_DATA_MEM) |
+			radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_SRC_MEM) |
+					COPY_DATA_DST_SEL(COPY_DATA_DST_MEM_GRBM) |
 					((flags & VK_QUERY_RESULT_64_BIT) ? COPY_DATA_COUNT_SEL : 0));
 			radeon_emit(cs, local_src_va);
 			radeon_emit(cs, local_src_va >> 32);
@@ -1088,20 +1129,18 @@ void radv_CmdResetQueryPool(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
+	uint32_t value = pool->type == VK_QUERY_TYPE_TIMESTAMP
+			 ? TIMESTAMP_NOT_READY : 0;
 	uint32_t flush_bits = 0;
 
 	flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
 				       firstQuery * pool->stride,
-				       queryCount * pool->stride, 0);
+				       queryCount * pool->stride, value);
 
-	if (pool->type == VK_QUERY_TYPE_TIMESTAMP ||
-	    pool->type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
-		uint32_t value = pool->type == VK_QUERY_TYPE_TIMESTAMP
-				 ? TIMESTAMP_NOT_READY : 0;
-
+	if (pool->type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
 		flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
 					       pool->availability_offset + firstQuery * 4,
-					       queryCount * 4, value);
+					       queryCount * 4, 0);
 	}
 
 	if (flush_bits) {
@@ -1111,10 +1150,22 @@ void radv_CmdResetQueryPool(
 	}
 }
 
+static unsigned event_type_for_stream(unsigned stream)
+{
+	switch (stream) {
+	default:
+	case 0: return V_028A90_SAMPLE_STREAMOUTSTATS;
+	case 1: return V_028A90_SAMPLE_STREAMOUTSTATS1;
+	case 2: return V_028A90_SAMPLE_STREAMOUTSTATS2;
+	case 3: return V_028A90_SAMPLE_STREAMOUTSTATS3;
+	}
+}
+
 static void emit_begin_query(struct radv_cmd_buffer *cmd_buffer,
 			     uint64_t va,
 			     VkQueryType query_type,
-			     VkQueryControlFlags flags)
+			     VkQueryControlFlags flags,
+			     uint32_t index)
 {
 	struct radeon_cmdbuf *cs = cmd_buffer->cs;
 	switch (query_type) {
@@ -1163,6 +1214,16 @@ static void emit_begin_query(struct radv_cmd_buffer *cmd_buffer,
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 		break;
+	case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT:
+		radeon_check_space(cmd_buffer->device->ws, cs, 4);
+
+		assert(index < MAX_SO_STREAMS);
+
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
+		radeon_emit(cs, EVENT_TYPE(event_type_for_stream(index)) | EVENT_INDEX(3));
+		radeon_emit(cs, va);
+		radeon_emit(cs, va >> 32);
+		break;
 	default:
 		unreachable("beginning unhandled query type");
 	}
@@ -1171,7 +1232,7 @@ static void emit_begin_query(struct radv_cmd_buffer *cmd_buffer,
 
 static void emit_end_query(struct radv_cmd_buffer *cmd_buffer,
 			   uint64_t va, uint64_t avail_va,
-			   VkQueryType query_type)
+			   VkQueryType query_type, uint32_t index)
 {
 	struct radeon_cmdbuf *cs = cmd_buffer->cs;
 	switch (query_type) {
@@ -1217,16 +1278,27 @@ static void emit_end_query(struct radv_cmd_buffer *cmd_buffer,
 					   avail_va, 0, 1,
 					   cmd_buffer->gfx9_eop_bug_va);
 		break;
+	case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT:
+		radeon_check_space(cmd_buffer->device->ws, cs, 4);
+
+		assert(index < MAX_SO_STREAMS);
+
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
+		radeon_emit(cs, EVENT_TYPE(event_type_for_stream(index)) | EVENT_INDEX(3));
+		radeon_emit(cs, (va + 16));
+		radeon_emit(cs, (va + 16) >> 32);
+		break;
 	default:
 		unreachable("ending unhandled query type");
 	}
 }
 
-void radv_CmdBeginQuery(
+void radv_CmdBeginQueryIndexedEXT(
     VkCommandBuffer                             commandBuffer,
     VkQueryPool                                 queryPool,
     uint32_t                                    query,
-    VkQueryControlFlags                         flags)
+    VkQueryControlFlags                         flags,
+    uint32_t                                    index)
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
@@ -1249,14 +1321,23 @@ void radv_CmdBeginQuery(
 
 	va += pool->stride * query;
 
-	emit_begin_query(cmd_buffer, va, pool->type, flags);
+	emit_begin_query(cmd_buffer, va, pool->type, flags, index);
 }
 
-
-void radv_CmdEndQuery(
+void radv_CmdBeginQuery(
     VkCommandBuffer                             commandBuffer,
     VkQueryPool                                 queryPool,
-    uint32_t                                    query)
+    uint32_t                                    query,
+    VkQueryControlFlags                         flags)
+{
+	radv_CmdBeginQueryIndexedEXT(commandBuffer, queryPool, query, flags, 0);
+}
+
+void radv_CmdEndQueryIndexedEXT(
+    VkCommandBuffer                             commandBuffer,
+    VkQueryPool                                 queryPool,
+    uint32_t                                    query,
+    uint32_t                                    index)
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
@@ -1267,7 +1348,7 @@ void radv_CmdEndQuery(
 	/* Do not need to add the pool BO to the list because the query must
 	 * currently be active, which means the BO is already in the list.
 	 */
-	emit_end_query(cmd_buffer, va, avail_va, pool->type);
+	emit_end_query(cmd_buffer, va, avail_va, pool->type, index);
 
 	/*
 	 * For multiview we have to emit a query for each bit in the mask,
@@ -1284,10 +1365,18 @@ void radv_CmdEndQuery(
 		for (unsigned i = 1; i < util_bitcount(cmd_buffer->state.subpass->view_mask); i++) {
 			va += pool->stride;
 			avail_va += 4;
-			emit_begin_query(cmd_buffer, va, pool->type, 0);
-			emit_end_query(cmd_buffer, va, avail_va, pool->type);
+			emit_begin_query(cmd_buffer, va, pool->type, 0, 0);
+			emit_end_query(cmd_buffer, va, avail_va, pool->type, 0);
 		}
 	}
+}
+
+void radv_CmdEndQuery(
+    VkCommandBuffer                             commandBuffer,
+    VkQueryPool                                 queryPool,
+    uint32_t                                    query)
+{
+	radv_CmdEndQueryIndexedEXT(commandBuffer, queryPool, query, 0);
 }
 
 void radv_CmdWriteTimestamp(
