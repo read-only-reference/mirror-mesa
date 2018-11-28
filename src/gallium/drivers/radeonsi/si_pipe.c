@@ -103,6 +103,8 @@ static const struct debug_named_value debug_options[] = {
 	{ "testvmfaultshader", DBG(TEST_VMFAULT_SHADER), "Invoke a shader VM fault test and exit." },
 	{ "testdmaperf", DBG(TEST_DMA_PERF), "Test DMA performance" },
 	{ "testgds", DBG(TEST_GDS), "Test GDS." },
+	{ "testgdsmm", DBG(TEST_GDS_MM), "Test GDS memory management." },
+	{ "testgdsoamm", DBG(TEST_GDS_OA_MM), "Test GDS OA memory management." },
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -373,6 +375,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	struct si_screen* sscreen = (struct si_screen *)screen;
 	struct radeon_winsys *ws = sscreen->ws;
 	int shader, i;
+	bool stop_exec_on_failure = (flags & PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET) != 0;
 
 	if (!sctx)
 		return NULL;
@@ -450,8 +453,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	if (sscreen->info.num_sdma_rings && !(sscreen->debug_flags & DBG(NO_ASYNC_DMA))) {
 		sctx->dma_cs = sctx->ws->cs_create(sctx->ctx, RING_DMA,
-						       (void*)si_flush_dma_cs,
-						       sctx);
+						   (void*)si_flush_dma_cs,
+						   sctx, stop_exec_on_failure);
 	}
 
 	si_init_buffer_functions(sctx);
@@ -472,7 +475,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	}
 
 	sctx->gfx_cs = ws->cs_create(sctx->ctx, RING_GFX,
-				       (void*)si_flush_gfx_cs, sctx);
+				     (void*)si_flush_gfx_cs, sctx, stop_exec_on_failure);
 
 	/* Border colors. */
 	sctx->border_color_table = malloc(SI_MAX_BORDER_COLORS *
@@ -787,6 +790,41 @@ static void si_test_vmfault(struct si_screen *sscreen)
 	exit(0);
 }
 
+static void si_test_gds_memory_management(struct si_context *sctx,
+					  unsigned alloc_size, unsigned alignment,
+					  enum radeon_bo_domain domain)
+{
+	struct radeon_winsys *ws = sctx->ws;
+	struct radeon_cmdbuf *cs[8];
+	struct pb_buffer *gds_bo[ARRAY_SIZE(cs)];
+
+	for (unsigned i = 0; i < ARRAY_SIZE(cs); i++) {
+		cs[i] = ws->cs_create(sctx->ctx, RING_COMPUTE,
+				      NULL, NULL, false);
+		gds_bo[i] = ws->buffer_create(ws, alloc_size, alignment, domain, 0);
+		assert(gds_bo[i]);
+	}
+
+	for (unsigned iterations = 0; iterations < 20000; iterations++) {
+		for (unsigned i = 0; i < ARRAY_SIZE(cs); i++) {
+			/* This clears GDS with CP DMA.
+			 *
+			 * We don't care if GDS is present. Just add some packet
+			 * to make the GPU busy for a moment.
+			 */
+			si_cp_dma_clear_buffer(sctx, cs[i], NULL, 0, alloc_size, 0,
+					       SI_CPDMA_SKIP_BO_LIST_UPDATE |
+					       SI_CPDMA_SKIP_CHECK_CS_SPACE |
+					       SI_CPDMA_SKIP_GFX_SYNC, 0, 0);
+
+			ws->cs_add_buffer(cs[i], gds_bo[i], domain,
+					  RADEON_USAGE_READWRITE, 0);
+			ws->cs_flush(cs[i], PIPE_FLUSH_ASYNC, NULL);
+		}
+	}
+	exit(0);
+}
+
 static void si_disk_cache_create(struct si_screen *sscreen)
 {
 	/* Don't use the cache if shader dumping is enabled. */
@@ -1029,22 +1067,28 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 					   sscreen->info.family == CHIP_RAVEN;
 	sscreen->has_ls_vgpr_init_bug = sscreen->info.family == CHIP_VEGA10 ||
 					sscreen->info.family == CHIP_RAVEN;
+	sscreen->has_dcc_constant_encode = sscreen->info.family == CHIP_RAVEN2;
 
+	/* Only enable primitive binning on APUs by default. */
+	sscreen->dpbb_allowed = sscreen->info.family == CHIP_RAVEN ||
+				sscreen->info.family == CHIP_RAVEN2;
+
+	sscreen->dfsm_allowed = sscreen->info.family == CHIP_RAVEN ||
+				sscreen->info.family == CHIP_RAVEN2;
+
+	/* Process DPBB enable flags. */
 	if (sscreen->debug_flags & DBG(DPBB)) {
 		sscreen->dpbb_allowed = true;
-	} else {
-		/* Only enable primitive binning on APUs by default. */
-		/* TODO: Investigate if binning is profitable on Vega12. */
-		sscreen->dpbb_allowed = !(sscreen->debug_flags & DBG(NO_DPBB)) &&
-					(sscreen->info.family == CHIP_RAVEN ||
-					 sscreen->info.family == CHIP_RAVEN2);
+		if (sscreen->debug_flags & DBG(DFSM))
+			sscreen->dfsm_allowed = true;
 	}
 
-	if (sscreen->debug_flags & DBG(DFSM)) {
-		sscreen->dfsm_allowed = sscreen->dpbb_allowed;
-	} else {
-		sscreen->dfsm_allowed = sscreen->dpbb_allowed &&
-					!(sscreen->debug_flags & DBG(NO_DFSM));
+	/* Process DPBB disable flags. */
+	if (sscreen->debug_flags & DBG(NO_DPBB)) {
+		sscreen->dpbb_allowed = false;
+		sscreen->dfsm_allowed = false;
+	} else if (sscreen->debug_flags & DBG(NO_DFSM)) {
+		sscreen->dfsm_allowed = false;
 	}
 
 	/* While it would be nice not to have this flag, we are constrained
@@ -1134,6 +1178,15 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	if (sscreen->debug_flags & DBG(TEST_GDS))
 		si_test_gds((struct si_context*)sscreen->aux_context);
+
+	if (sscreen->debug_flags & DBG(TEST_GDS_MM)) {
+		si_test_gds_memory_management((struct si_context*)sscreen->aux_context,
+					      32 * 1024, 4, RADEON_DOMAIN_GDS);
+	}
+	if (sscreen->debug_flags & DBG(TEST_GDS_OA_MM)) {
+		si_test_gds_memory_management((struct si_context*)sscreen->aux_context,
+					      4, 1, RADEON_DOMAIN_OA);
+	}
 
 	return &sscreen->b;
 }

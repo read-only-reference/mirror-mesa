@@ -45,7 +45,6 @@
 #include "sid.h"
 #include "git_sha1.h"
 #include "gfx9d.h"
-#include "addrlib/gfx9/chip/gfx9_enum.h"
 #include "util/build_id.h"
 #include "util/debug.h"
 #include "util/mesa-sha1.h"
@@ -113,6 +112,7 @@ radv_get_device_name(enum radeon_family family, char *name, size_t name_len)
 	case CHIP_VEGA10: chip_string = "AMD RADV VEGA10"; break;
 	case CHIP_VEGA12: chip_string = "AMD RADV VEGA12"; break;
 	case CHIP_RAVEN: chip_string = "AMD RADV RAVEN"; break;
+	case CHIP_RAVEN2: chip_string = "AMD RADV RAVEN2"; break;
 	default: chip_string = "AMD RADV unknown"; break;
 	}
 
@@ -336,7 +336,8 @@ radv_physical_device_init(struct radv_physical_device *device,
 		device->has_rbplus = true;
 		device->rbplus_allowed = device->rad_info.family == CHIP_STONEY ||
 					 device->rad_info.family == CHIP_VEGA12 ||
-		                         device->rad_info.family == CHIP_RAVEN;
+		                         device->rad_info.family == CHIP_RAVEN ||
+		                         device->rad_info.family == CHIP_RAVEN2;
 	}
 
 	/* The mere presence of CLEAR_STATE in the IB causes random GPU hangs
@@ -449,6 +450,7 @@ static const struct debug_control radv_debug_options[] = {
 	{"startup", RADV_DEBUG_STARTUP},
 	{"checkir", RADV_DEBUG_CHECKIR},
 	{"nothreadllvm", RADV_DEBUG_NOTHREADLLVM},
+	{"nobinning", RADV_DEBUG_NOBINNING},
 	{NULL, 0}
 };
 
@@ -463,7 +465,6 @@ static const struct debug_control radv_perftest_options[] = {
 	{"nobatchchain", RADV_PERFTEST_NO_BATCHCHAIN},
 	{"sisched", RADV_PERFTEST_SISCHED},
 	{"localbos", RADV_PERFTEST_LOCAL_BOS},
-	{"binning", RADV_PERFTEST_BINNING},
 	{"dccmsaa", RADV_PERFTEST_DCC_MSAA},
 	{NULL, 0}
 };
@@ -1052,16 +1053,14 @@ void radv_GetPhysicalDeviceProperties2(
 			    (VkPhysicalDeviceSubgroupProperties*)ext;
 			properties->subgroupSize = 64;
 			properties->supportedStages = VK_SHADER_STAGE_ALL;
-			/* TODO: Enable VK_SUBGROUP_FEATURE_VOTE_BIT when wwm
-			 * is fixed in LLVM.
-			 */
 			properties->supportedOperations =
-							VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
 							VK_SUBGROUP_FEATURE_BASIC_BIT |
 							VK_SUBGROUP_FEATURE_BALLOT_BIT |
-							VK_SUBGROUP_FEATURE_QUAD_BIT;
+							VK_SUBGROUP_FEATURE_QUAD_BIT |
+							VK_SUBGROUP_FEATURE_VOTE_BIT;
 			if (pdevice->rad_info.chip_class >= VI) {
 				properties->supportedOperations |=
+							VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
 							VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
 							VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
 			}
@@ -1096,9 +1095,7 @@ void radv_GetPhysicalDeviceProperties2(
 			properties->shaderArraysPerEngineCount =
 				pdevice->rad_info.max_sh_per_se;
 			properties->computeUnitsPerShaderArray =
-				pdevice->rad_info.num_good_compute_units /
-					(pdevice->rad_info.max_se *
-					 pdevice->rad_info.max_sh_per_se);
+				pdevice->rad_info.num_good_cu_per_sh;
 			properties->simdPerComputeUnit = 4;
 			properties->wavefrontsPerSimd =
 				pdevice->rad_info.family == CHIP_TONGA ||
@@ -1634,12 +1631,12 @@ VkResult radv_CreateDevice(
 	}
 
 	device->pbb_allowed = device->physical_device->rad_info.chip_class >= GFX9 &&
-			((device->instance->perftest_flags & RADV_PERFTEST_BINNING) ||
-			 device->physical_device->rad_info.family == CHIP_RAVEN);
+			      !(device->instance->debug_flags & RADV_DEBUG_NOBINNING);
 
 	/* Disabled and not implemented for now. */
 	device->dfsm_allowed = device->pbb_allowed &&
-	                       device->physical_device->rad_info.family == CHIP_RAVEN;
+	                       (device->physical_device->rad_info.family == CHIP_RAVEN ||
+	                        device->physical_device->rad_info.family == CHIP_RAVEN2);
 
 #ifdef ANDROID
 	device->always_use_syncobj = device->physical_device->rad_info.has_syncobj_wait_for_submit;
@@ -2044,16 +2041,15 @@ radv_get_hs_offchip_param(struct radv_device *device, uint32_t *max_offchip_buff
 	max_offchip_buffers = max_offchip_buffers_per_se *
 		device->physical_device->rad_info.max_se;
 
-	switch (device->tess_offchip_block_dw_size) {
-	default:
-		assert(0);
-		/* fall through */
-	case 8192:
-		offchip_granularity = V_03093C_X_8K_DWORDS;
-		break;
-	case 4096:
+	/* Hawaii has a bug with offchip buffers > 256 that can be worked
+	 * around by setting 4K granularity.
+	 */
+	if (device->tess_offchip_block_dw_size == 4096) {
+		assert(device->physical_device->rad_info.family == CHIP_HAWAII);
 		offchip_granularity = V_03093C_X_4K_DWORDS;
-		break;
+	} else {
+		assert(device->tess_offchip_block_dw_size == 8192);
+		offchip_granularity = V_03093C_X_8K_DWORDS;
 	}
 
 	switch (device->physical_device->rad_info.chip_class) {
@@ -4529,11 +4525,11 @@ radv_tex_filter_mode(VkSamplerReductionModeEXT mode)
 {
 	switch (mode) {
 	case VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT:
-		return SQ_IMG_FILTER_MODE_BLEND;
+		return V_008F30_SQ_IMG_FILTER_MODE_BLEND;
 	case VK_SAMPLER_REDUCTION_MODE_MIN_EXT:
-		return SQ_IMG_FILTER_MODE_MIN;
+		return V_008F30_SQ_IMG_FILTER_MODE_MIN;
 	case VK_SAMPLER_REDUCTION_MODE_MAX_EXT:
-		return SQ_IMG_FILTER_MODE_MAX;
+		return V_008F30_SQ_IMG_FILTER_MODE_MAX;
 	default:
 		break;
 	}
@@ -4562,7 +4558,7 @@ radv_init_sampler(struct radv_device *device,
 	uint32_t max_aniso = radv_get_max_anisotropy(device, pCreateInfo);
 	uint32_t max_aniso_ratio = radv_tex_aniso_filter(max_aniso);
 	bool is_vi = (device->physical_device->rad_info.chip_class >= VI);
-	unsigned filter_mode = SQ_IMG_FILTER_MODE_BLEND;
+	unsigned filter_mode = V_008F30_SQ_IMG_FILTER_MODE_BLEND;
 
 	const struct VkSamplerReductionModeCreateInfoEXT *sampler_reduction =
 		vk_find_struct_const(pCreateInfo->pNext,

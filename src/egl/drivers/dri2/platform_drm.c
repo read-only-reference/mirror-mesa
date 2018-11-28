@@ -664,8 +664,9 @@ drm_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
 
    for (unsigned i = 0; i < ARRAY_SIZE(format_count); i++) {
       if (!format_count[i]) {
-         _eglLog(_EGL_DEBUG, "No DRI config supports native format 0x%x",
-                 visuals[i].gbm_format);
+         struct gbm_format_name_desc desc;
+         _eglLog(_EGL_DEBUG, "No DRI config supports native format %s",
+                 gbm_format_get_name(visuals[i].gbm_format, &desc));
       }
    }
 
@@ -694,6 +695,7 @@ static const struct dri2_egl_display_vtbl dri2_drm_display_vtbl = {
 EGLBoolean
 dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
 {
+   _EGLDevice *dev;
    struct dri2_egl_display *dri2_dpy;
    struct gbm_device *gbm;
    const char *err;
@@ -701,8 +703,6 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
    /* Not supported yet */
    if (disp->Options.ForceSoftware)
       return EGL_FALSE;
-
-   loader_set_logger(_eglLog);
 
    dri2_dpy = calloc(1, sizeof *dri2_dpy);
    if (!dri2_dpy)
@@ -735,6 +735,14 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
       err = "DRI2: gbm device using incorrect/incompatible backend";
       goto cleanup;
    }
+
+   dev = _eglAddDevice(dri2_dpy->fd, false);
+   if (!dev) {
+      err = "DRI2: failed to find EGLDevice";
+      goto cleanup;
+   }
+
+   disp->Device = dev;
 
    dri2_dpy->gbm_dri = gbm_dri_device(gbm);
    dri2_dpy->driver_name = strdup(dri2_dpy->gbm_dri->driver_name);

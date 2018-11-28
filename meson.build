@@ -43,8 +43,7 @@ pre_args = [
   '-D__STDC_CONSTANT_MACROS',
   '-D__STDC_FORMAT_MACROS',
   '-D__STDC_LIMIT_MACROS',
-  '-DVERSION="@0@"'.format(meson.project_version()),
-  '-DPACKAGE_VERSION=VERSION',
+  '-DPACKAGE_VERSION="@0@"'.format(meson.project_version()),
   '-DPACKAGE_BUGREPORT="https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa"',
 ]
 
@@ -787,7 +786,7 @@ endif
 
 # Check for generic C arguments
 c_args = []
-foreach a : ['-Wall', '-Werror=implicit-function-declaration',
+foreach a : ['-Werror=implicit-function-declaration',
              '-Werror=missing-prototypes', '-Werror=return-type',
              '-fno-math-errno',
              '-fno-trapping-math', '-Qunused-arguments']
@@ -809,7 +808,7 @@ endif
 
 # Check for generic C++ arguments
 cpp_args = []
-foreach a : ['-Wall', '-Werror=return-type',
+foreach a : ['-Werror=return-type',
              '-fno-math-errno', '-fno-trapping-math',
              '-Qunused-arguments']
   if cpp.has_argument(a)
@@ -905,8 +904,9 @@ if not cc.links('''#include <stdint.h>
                    int main() {
                      return __sync_add_and_fetch(&v, (uint64_t)1);
                    }''',
+                dependencies : dep_atomic,
                 name : 'GCC 64bit atomics')
-  pre_args += '-DMISSING_64_BIT_ATOMICS'
+  pre_args += '-DMISSING_64BIT_ATOMICS'
 endif
 
 # TODO: shared/static? Is this even worth doing?
@@ -1317,13 +1317,6 @@ if with_platform_wayland
     'linux-dmabuf', 'linux-dmabuf-unstable-v1.xml'
   )
   pre_args += ['-DHAVE_WAYLAND_PLATFORM', '-DWL_HIDE_DEPRECATED']
-else
-  prog_wl_scanner = []
-  wl_scanner_arg = ''
-  dep_wl_protocols = null_dep
-  dep_wayland_client = null_dep
-  dep_wayland_server = null_dep
-  wayland_dmabuf_xml = ''
 endif
 
 dep_x11 = null_dep
@@ -1356,7 +1349,7 @@ if with_platform_x11
     dep_xdamage = dependency('xdamage', version : '>= 1.1')
     dep_xfixes = dependency('xfixes')
     dep_xcb_glx = dependency('xcb-glx', version : '>= 1.8.1')
-    dep_xxf86vm = dependency('xxf86vm', required : false)
+    dep_xxf86vm = dependency('xxf86vm')
   endif
   if (with_any_vk or with_glx == 'dri' or
        (with_gallium_vdpau or with_gallium_xvmc or with_gallium_va or
@@ -1434,12 +1427,10 @@ elif with_glx == 'dri'
   if with_dri_platform == 'drm'
     gl_priv_reqs += 'xcb-dri2 >= 1.8'
   endif
+  gl_priv_reqs += 'xxf86vm'
 endif
 if dep_libdrm.found()
   gl_priv_reqs += 'libdrm >= 2.4.75'
-endif
-if dep_xxf86vm.found()
-  gl_priv_reqs += 'xxf86vm'
 endif
 
 gl_priv_libs = []

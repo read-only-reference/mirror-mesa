@@ -42,6 +42,7 @@ aub_viewer_decode_ctx_init(struct aub_viewer_decode_ctx *ctx,
    ctx->get_bo = get_bo;
    ctx->get_state_size = get_state_size;
    ctx->user_data = user_data;
+   ctx->engine = I915_ENGINE_CLASS_RENDER;
 
    ctx->cfg = cfg;
    ctx->decode_cfg = decode_cfg;
@@ -172,7 +173,7 @@ handle_state_base_address(struct aub_viewer_decode_ctx *ctx,
          surface_modify = iter.raw_value;
       } else if (strcmp(iter.name, "Dynamic State Base Address Modify Enable") == 0) {
          dynamic_modify = iter.raw_value;
-      } else if (strcmp(iter.name, "Insntruction Base Address Modify Enable") == 0) {
+      } else if (strcmp(iter.name, "Instruction Base Address Modify Enable") == 0) {
          instruction_modify = iter.raw_value;
       }
    }
@@ -624,8 +625,6 @@ decode_dynamic_state_pointers(struct aub_viewer_decode_ctx *ctx,
                               struct gen_group *inst, const uint32_t *p,
                               const char *struct_type,  int count)
 {
-   struct gen_group *state = gen_spec_find_struct(ctx->spec, struct_type);
-
    uint32_t state_offset = 0;
 
    struct gen_field_iterator iter;
@@ -648,12 +647,28 @@ decode_dynamic_state_pointers(struct aub_viewer_decode_ctx *ctx,
       return;
    }
 
-   for (int i = 0; i < count; i++) {
-      ImGui::Text("%s %d", struct_type, i);
-      aub_viewer_print_group(ctx, state, state_offset, state_map);
+   struct gen_group *state = gen_spec_find_struct(ctx->spec, struct_type);
+   if (strcmp(struct_type, "BLEND_STATE") == 0) {
+      /* Blend states are different from the others because they have a header
+       * struct called BLEND_STATE which is followed by a variable number of
+       * BLEND_STATE_ENTRY structs.
+       */
+      ImGui::Text("%s", struct_type);
+      aub_viewer_print_group(ctx, state, state_addr, state_map);
 
       state_addr += state->dw_length * 4;
-      state_map += state->dw_length;
+      state_map += state->dw_length * 4;
+
+      struct_type = "BLEND_STATE_ENTRY";
+      state = gen_spec_find_struct(ctx->spec, struct_type);
+   }
+
+   for (int i = 0; i < count; i++) {
+      ImGui::Text("%s %d", struct_type, i);
+      aub_viewer_print_group(ctx, state, state_addr, state_map);
+
+      state_addr += state->dw_length * 4;
+      state_map += state->dw_length * 4;
    }
 }
 
@@ -871,7 +886,7 @@ aub_viewer_render_batch(struct aub_viewer_decode_ctx *ctx,
    int length;
 
    for (p = batch; p < end; p += length) {
-      inst = gen_spec_find_instruction(ctx->spec, p);
+      inst = gen_spec_find_instruction(ctx->spec, ctx->engine, p);
       length = gen_group_get_length(inst, p);
       assert(inst == NULL || length > 0);
       length = MAX2(1, length);

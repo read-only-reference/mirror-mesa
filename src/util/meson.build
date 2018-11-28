@@ -119,7 +119,7 @@ libmesa_util = static_library(
   'mesa_util',
   [files_mesa_util, format_srgb],
   include_directories : inc_common,
-  dependencies : [dep_zlib, dep_clock, dep_thread, dep_atomic],
+  dependencies : [dep_zlib, dep_clock, dep_thread, dep_atomic, dep_m],
   c_args : [c_msvc_compat_args, c_vis_args],
   build_by_default : false
 )
@@ -151,7 +151,8 @@ if with_tests
       include_directories : inc_common,
       link_with : libmesa_util,
       c_args : [c_msvc_compat_args],
-    )
+    ),
+    suite : ['util'],
   )
 
   test(
@@ -162,7 +163,8 @@ if with_tests
       include_directories : inc_common,
       c_args : [c_msvc_compat_args],
       dependencies : [dep_m],
-    )
+    ),
+    suite : ['util'],
   )
 
   test(
@@ -173,7 +175,8 @@ if with_tests
       include_directories : inc_common,
       link_with : libmesa_util,
       c_args : [c_msvc_compat_args],
-    )
+    ),
+    suite : ['util'],
   )
 
   subdir('tests/fast_idiv_by_const')

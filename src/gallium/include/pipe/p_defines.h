@@ -341,7 +341,13 @@ enum pipe_transfer_usage
     * PIPE_RESOURCE_FLAG_MAP_COHERENT must be set when creating
     * the resource.
     */
-   PIPE_TRANSFER_COHERENT = (1 << 14)
+   PIPE_TRANSFER_COHERENT = (1 << 14),
+
+   /**
+    * This and higher bits are reserved for private use by drivers. Drivers
+    * should use this as (PIPE_TRANSFER_DRV_PRV << i).
+    */
+   PIPE_TRANSFER_DRV_PRV = (1 << 24)
 };
 
 /**
@@ -400,6 +406,9 @@ enum pipe_flush_flags
  * Create a low priority context.
  */
 #define PIPE_CONTEXT_LOW_PRIORITY      (1 << 5)
+
+/** Stop execution if the device is reset. */
+#define PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET (1 << 6)
 
 /**
  * Flags for pipe_context::memory_barrier.

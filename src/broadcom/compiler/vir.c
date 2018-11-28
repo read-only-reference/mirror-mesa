@@ -745,7 +745,8 @@ uint64_t *v3d_compile_vs(const struct v3d_compiler *compiler,
                 NIR_PASS_V(c->s, nir_lower_clamp_color_outputs);
 
         if (key->base.ucp_enables) {
-                NIR_PASS_V(c->s, nir_lower_clip_vs, key->base.ucp_enables);
+                NIR_PASS_V(c->s, nir_lower_clip_vs, key->base.ucp_enables,
+                           false);
                 NIR_PASS_V(c->s, nir_lower_io_to_scalar,
                            nir_var_shader_out);
         }
@@ -1004,6 +1005,12 @@ vir_can_set_flags(struct v3d_compile *c, struct qinst *inst)
         if (c->devinfo->ver >= 40 && (v3d_qpu_reads_vpm(&inst->qpu) ||
                                       v3d_qpu_uses_sfu(&inst->qpu))) {
                 return false;
+        }
+
+        if (inst->qpu.type != V3D_QPU_INSTR_TYPE_ALU ||
+            (inst->qpu.alu.add.op == V3D_QPU_A_NOP &&
+             inst->qpu.alu.mul.op == V3D_QPU_M_NOP)) {
+               return false;
         }
 
         return true;

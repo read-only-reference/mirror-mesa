@@ -636,7 +636,7 @@ VkResult anv_CreateInstance(
    }
 
    if (instance->app_info.api_version == 0)
-      anv_EnumerateInstanceVersion(&instance->app_info.api_version);
+      instance->app_info.api_version = VK_API_VERSION_1_0;
 
    instance->enabled_extensions = enabled_extensions;
 
@@ -919,6 +919,13 @@ void anv_GetPhysicalDeviceFeatures2(
          VkPhysicalDeviceSamplerYcbcrConversionFeatures *features =
             (VkPhysicalDeviceSamplerYcbcrConversionFeatures *) ext;
          features->samplerYcbcrConversion = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES_EXT: {
+         VkPhysicalDeviceScalarBlockLayoutFeaturesEXT *features =
+            (VkPhysicalDeviceScalarBlockLayoutFeaturesEXT *)ext;
+         features->scalarBlockLayout = true;
          break;
       }
 

@@ -34,6 +34,7 @@
 #include "util/list.h"
 #include "util/ralloc.h"
 #include "util/set.h"
+#include "util/bitscan.h"
 #include "util/bitset.h"
 #include "util/macros.h"
 #include "compiler/nir_types.h"
@@ -952,6 +953,19 @@ nir_alu_instr_channel_used(const nir_alu_instr *instr, unsigned src,
    return (instr->dest.write_mask >> channel) & 1;
 }
 
+static inline nir_component_mask_t
+nir_alu_instr_src_read_mask(const nir_alu_instr *instr, unsigned src)
+{
+   nir_component_mask_t read_mask = 0;
+   for (unsigned c = 0; c < NIR_MAX_VEC_COMPONENTS; c++) {
+      if (!nir_alu_instr_channel_used(instr, src, c))
+         continue;
+
+      read_mask |= (1 << instr->src[src].swizzle[c]);
+   }
+   return read_mask;
+}
+
 /*
  * For instructions whose destinations are SSA, get the number of channels
  * used for a source
@@ -1235,6 +1249,18 @@ typedef enum {
     */
    NIR_INTRINSIC_ACCESS = 16,
 
+   /**
+    * Alignment for offsets and addresses
+    *
+    * These two parameters, specify an alignment in terms of a multiplier and
+    * an offset.  The offset or address parameter X of the intrinsic is
+    * guaranteed to satisfy the following:
+    *
+    *                (X - align_offset) % align_mul == 0
+    */
+   NIR_INTRINSIC_ALIGN_MUL = 17,
+   NIR_INTRINSIC_ALIGN_OFFSET = 18,
+
    NIR_INTRINSIC_NUM_INDEX_FLAGS,
 
 } nir_intrinsic_index_flag;
@@ -1329,6 +1355,34 @@ INTRINSIC_IDX_ACCESSORS(image_dim, IMAGE_DIM, enum glsl_sampler_dim)
 INTRINSIC_IDX_ACCESSORS(image_array, IMAGE_ARRAY, bool)
 INTRINSIC_IDX_ACCESSORS(access, ACCESS, enum gl_access_qualifier)
 INTRINSIC_IDX_ACCESSORS(format, FORMAT, unsigned)
+INTRINSIC_IDX_ACCESSORS(align_mul, ALIGN_MUL, unsigned)
+INTRINSIC_IDX_ACCESSORS(align_offset, ALIGN_OFFSET, unsigned)
+
+static inline void
+nir_intrinsic_set_align(nir_intrinsic_instr *intrin,
+                        unsigned align_mul, unsigned align_offset)
+{
+   assert(util_is_power_of_two_nonzero(align_mul));
+   assert(align_offset < align_mul);
+   nir_intrinsic_set_align_mul(intrin, align_mul);
+   nir_intrinsic_set_align_offset(intrin, align_offset);
+}
+
+/** Returns a simple alignment for a load/store intrinsic offset
+ *
+ * Instead of the full mul+offset alignment scheme provided by the ALIGN_MUL
+ * and ALIGN_OFFSET parameters, this helper takes both into account and
+ * provides a single simple alignment parameter.  The offset X is guaranteed
+ * to satisfy X % align == 0.
+ */
+static inline unsigned
+nir_intrinsic_align(nir_intrinsic_instr *intrin)
+{
+   const unsigned align_mul = nir_intrinsic_align_mul(intrin);
+   const unsigned align_offset = nir_intrinsic_align_offset(intrin);
+   assert(align_offset < align_mul);
+   return align_offset ? 1 << (ffs(align_offset) - 1) : align_mul;
+}
 
 /**
  * \group texture information
@@ -2070,8 +2124,14 @@ typedef struct nir_shader_compiler_options {
     */
    bool fdot_replicates;
 
+   /** lowers ffloor to fsub+ffract: */
+   bool lower_ffloor;
+
    /** lowers ffract to fsub+ffloor: */
    bool lower_ffract;
+
+   /** lowers fceil to fneg+ffloor+fneg: */
+   bool lower_fceil;
 
    bool lower_ldexp;
 
@@ -2121,6 +2181,7 @@ typedef struct nir_shader_compiler_options {
    bool lower_helper_invocation;
 
    bool lower_cs_local_index_from_id;
+   bool lower_cs_local_id_from_index;
 
    bool lower_device_index_to_zero;
 
@@ -2800,6 +2861,7 @@ bool nir_remove_unused_io_vars(nir_shader *shader, struct exec_list *var_list,
 void nir_compact_varyings(nir_shader *producer, nir_shader *consumer,
                           bool default_to_smooth_interp);
 void nir_link_xfb_varyings(nir_shader *producer, nir_shader *consumer);
+bool nir_link_constant_varyings(nir_shader *producer, nir_shader *consumer);
 
 typedef enum {
    /* If set, this forces all non-flat fragment shader inputs to be
@@ -2891,6 +2953,7 @@ typedef struct nir_lower_tex_options {
    unsigned lower_y_u_v_external;
    unsigned lower_yx_xuxv_external;
    unsigned lower_xy_uxvx_external;
+   unsigned lower_ayuv_external;
 
    /**
     * To emulate certain texture wrap modes, this can be used
@@ -2954,7 +3017,7 @@ bool nir_lower_tex(nir_shader *shader,
 
 bool nir_lower_idiv(nir_shader *shader);
 
-bool nir_lower_clip_vs(nir_shader *shader, unsigned ucp_enables);
+bool nir_lower_clip_vs(nir_shader *shader, unsigned ucp_enables, bool use_vars);
 bool nir_lower_clip_fs(nir_shader *shader, unsigned ucp_enables);
 bool nir_lower_clip_cull_distance_arrays(nir_shader *nir);
 
@@ -2999,7 +3062,15 @@ typedef struct nir_lower_bitmap_options {
 void nir_lower_bitmap(nir_shader *shader, const nir_lower_bitmap_options *options);
 
 bool nir_lower_atomics_to_ssbo(nir_shader *shader, unsigned ssbo_offset);
-bool nir_lower_to_source_mods(nir_shader *shader);
+
+typedef enum  {
+   nir_lower_int_source_mods = 1 << 0,
+   nir_lower_float_source_mods = 1 << 1,
+   nir_lower_all_source_mods = (1 << 2) - 1
+} nir_lower_to_source_mods_flags;
+
+
+bool nir_lower_to_source_mods(nir_shader *shader, nir_lower_to_source_mods_flags options);
 
 bool nir_lower_gs_intrinsics(nir_shader *shader);
 

@@ -620,7 +620,7 @@ genX(emit_vertices)(struct brw_context *brw)
    for (unsigned i = 0; i < brw->vb.nr_enabled; i++) {
       struct brw_vertex_element *input = brw->vb.enabled[i];
       const struct gl_array_attributes *glattrib = input->glattrib;
-      uint32_t format = brw_get_vertex_surface_type(brw, glattrib);
+      uint32_t format = brw_get_vertex_surface_type(brw, &glattrib->Format);
 
       if (uploads_needed(format, input->is_dual_slot) > 1)
          nr_elements++;
@@ -713,7 +713,7 @@ genX(emit_vertices)(struct brw_context *brw)
    for (i = 0; i < brw->vb.nr_enabled; i++) {
       const struct brw_vertex_element *input = brw->vb.enabled[i];
       const struct gl_array_attributes *glattrib = input->glattrib;
-      uint32_t format = brw_get_vertex_surface_type(brw, glattrib);
+      uint32_t format = brw_get_vertex_surface_type(brw, &glattrib->Format);
       uint32_t comp0 = VFCOMP_STORE_SRC;
       uint32_t comp1 = VFCOMP_STORE_SRC;
       uint32_t comp2 = VFCOMP_STORE_SRC;
@@ -756,16 +756,16 @@ genX(emit_vertices)(struct brw_context *brw)
 
          const struct gl_array_attributes *glattrib = input->glattrib;
          const int size = (GEN_GEN < 8 && is_passthru_format(format)) ?
-            upload_format_size(upload_format) : glattrib->Size;
+            upload_format_size(upload_format) : glattrib->Format.Size;
 
          switch (size) {
             case 0: comp0 = VFCOMP_STORE_0;
             case 1: comp1 = VFCOMP_STORE_0;
             case 2: comp2 = VFCOMP_STORE_0;
             case 3:
-               if (GEN_GEN >= 8 && glattrib->Doubles) {
+               if (GEN_GEN >= 8 && glattrib->Format.Doubles) {
                   comp3 = VFCOMP_STORE_0;
-               } else if (glattrib->Integer) {
+               } else if (glattrib->Format.Integer) {
                   comp3 = VFCOMP_STORE_1_INT;
                } else {
                   comp3 = VFCOMP_STORE_1_FP;
@@ -790,7 +790,7 @@ genX(emit_vertices)(struct brw_context *brw)
           *     to be specified as VFCOMP_STORE_0 in order to output a 256-bit
           *     vertex element."
           */
-         if (glattrib->Doubles && !input->is_dual_slot) {
+         if (glattrib->Format.Doubles && !input->is_dual_slot) {
             /* Store vertex elements which correspond to double and dvec2 vertex
              * shader inputs as 128-bit vertex elements, instead of 256-bits.
              */
@@ -877,7 +877,7 @@ genX(emit_vertices)(struct brw_context *brw)
 #if GEN_GEN >= 6
    if (gen6_edgeflag_input) {
       const struct gl_array_attributes *glattrib = gen6_edgeflag_input->glattrib;
-      const uint32_t format = brw_get_vertex_surface_type(brw, glattrib);
+      const uint32_t format = brw_get_vertex_surface_type(brw, &glattrib->Format);
 
       struct GENX(VERTEX_ELEMENT_STATE) elem_state = {
          .Valid = true,
@@ -2004,7 +2004,8 @@ genX(upload_wm)(struct brw_context *brw)
       if (wm_prog_data->base.use_alt_mode)
          wm.FloatingPointMode = FLOATING_POINT_MODE_Alternate;
 
-      wm.SamplerCount = GEN_GEN == 5 ?
+      /* WA_1606682166 */
+      wm.SamplerCount = (GEN_GEN == 5 || GEN_GEN == 11) ?
          0 : DIV_ROUND_UP(stage_state->sampler_count, 4);
 
       wm.BindingTableEntryCount =
@@ -2166,7 +2167,10 @@ static const struct brw_tracked_state genX(wm_state) = {
 
 #define INIT_THREAD_DISPATCH_FIELDS(pkt, prefix) \
    pkt.KernelStartPointer = KSP(brw, stage_state->prog_offset);           \
+   /* WA_1606682166 */                                                    \
    pkt.SamplerCount       =                                               \
+      GEN_GEN == 11 ?                                                     \
+      0 :                                                                 \
       DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4);          \
    /* Gen 11 workarounds table #2056 WABTPPrefetchDisable suggests to     \
     * disable prefetching of binding tables in A0 and B0 steppings.       \
@@ -3997,8 +4001,13 @@ genX(upload_ps)(struct brw_context *brw)
        */
       ps.VectorMaskEnable = GEN_GEN >= 8;
 
-      ps.SamplerCount =
-         DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4);
+      /* WA_1606682166:
+       * "Incorrect TDL's SSP address shift in SARB for 16:6 & 18:8 modes.
+       * Disable the Sampler state prefetch functionality in the SARB by
+       * programming 0xB000[30] to '1'."
+       */
+      ps.SamplerCount = GEN_GEN == 11 ?
+         0 : DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4);
 
       /* BRW_NEW_FS_PROG_DATA */
       /* Gen 11 workarounds table #2056 WABTPPrefetchDisable suggests to disable

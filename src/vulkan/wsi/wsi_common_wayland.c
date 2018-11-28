@@ -455,10 +455,11 @@ wsi_wl_get_presentation_support(struct wsi_device *wsi_device,
       (struct wsi_wayland *)wsi_device->wsi[VK_ICD_WSI_PLATFORM_WAYLAND];
 
    struct wsi_wl_display display;
-   int ret = wsi_wl_display_init(wsi, &display, wl_display, false);
-   wsi_wl_display_finish(&display);
+   VkResult ret = wsi_wl_display_init(wsi, &display, wl_display, false);
+   if (ret == VK_SUCCESS)
+      wsi_wl_display_finish(&display);
 
-   return ret == 0;
+   return ret == VK_SUCCESS;
 }
 
 static VkResult
@@ -507,6 +508,7 @@ wsi_wl_surface_get_capabilities(VkIcdSurfaceBase *surface,
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
       VK_IMAGE_USAGE_SAMPLED_BIT |
       VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+      VK_IMAGE_USAGE_STORAGE_BIT |
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
    return VK_SUCCESS;

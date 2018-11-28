@@ -217,6 +217,7 @@
 #define PKT3_INCREMENT_CE_COUNTER              0x84
 #define PKT3_INCREMENT_DE_COUNTER              0x85
 #define PKT3_WAIT_ON_CE_COUNTER                0x86
+#define PKT3_LOAD_CONTEXT_REG                  0x9F /* new for VI */
 
 #define PKT_TYPE_S(x)                   (((unsigned)(x) & 0x3) << 30)
 #define PKT_TYPE_G(x)                   (((x) >> 30) & 0x3)
@@ -2435,6 +2436,9 @@
 #define   S_008F30_FILTER_MODE(x)                                     (((unsigned)(x) & 0x03) << 29)
 #define   G_008F30_FILTER_MODE(x)                                     (((x) >> 29) & 0x03)
 #define   C_008F30_FILTER_MODE                                        0x9FFFFFFF
+#define     V_008F30_SQ_IMG_FILTER_MODE_BLEND                       0x00
+#define     V_008F30_SQ_IMG_FILTER_MODE_MIN                         0x01
+#define     V_008F30_SQ_IMG_FILTER_MODE_MAX                         0x02
 /* VI */
 #define   S_008F30_COMPAT_MODE(x)                                     (((unsigned)(x) & 0x1) << 31)
 #define   G_008F30_COMPAT_MODE(x)                                     (((x) >> 31) & 0x1)
