@@ -261,7 +261,7 @@ constant_copy(ir_constant *ir, void *mem_ctx)
       assert(cols == 1);
 
       for (unsigned r = 0; r < rows; r++)
-         ret->values[0].u32[r] = ir->value.b[r] ? NIR_TRUE : NIR_FALSE;
+         ret->values[0].b[r] = ir->value.b[r];
 
       break;
 
@@ -747,9 +747,6 @@ nir_visitor::visit(ir_call *ir)
       case ir_intrinsic_end_invocation_interlock:
          op = nir_intrinsic_end_invocation_interlock;
          break;
-      case ir_intrinsic_begin_fragment_shader_ordering:
-         op = nir_intrinsic_begin_fragment_shader_ordering;
-         break;
       case ir_intrinsic_group_memory_barrier:
          op = nir_intrinsic_group_memory_barrier;
          break;
@@ -988,9 +985,6 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_end_invocation_interlock:
          nir_builder_instr_insert(&b, &instr->instr);
          break;
-      case nir_intrinsic_begin_fragment_shader_ordering:
-         nir_builder_instr_insert(&b, &instr->instr);
-         break;
       case nir_intrinsic_store_ssbo: {
          exec_node *param = ir->actual_parameters.get_head();
          ir_rvalue *block = ((ir_instruction *)param)->as_rvalue();
@@ -1006,7 +1000,8 @@ nir_visitor::visit(ir_call *ir)
          assert(write_mask);
 
          nir_ssa_def *nir_val = evaluate_rvalue(val);
-         assert(!val->type->is_boolean() || nir_val->bit_size == 32);
+         if (val->type->is_boolean())
+            nir_val = nir_b2i32(&b, nir_val);
 
          instr->src[0] = nir_src_for_ssa(nir_val);
          instr->src[1] = nir_src_for_ssa(evaluate_rvalue(block));
@@ -1116,6 +1111,10 @@ nir_visitor::visit(ir_call *ir)
                            type->vector_elements, bit_size, NULL);
 
          nir_builder_instr_insert(&b, &instr->instr);
+
+         /* The value in shared memory is a 32-bit value */
+         if (type->is_boolean())
+            ret = nir_i2b(&b, &instr->dest.ssa);
          break;
       }
       case nir_intrinsic_store_shared: {
@@ -1135,7 +1134,9 @@ nir_visitor::visit(ir_call *ir)
          nir_intrinsic_set_write_mask(instr, write_mask->value.u[0]);
 
          nir_ssa_def *nir_val = evaluate_rvalue(val);
-         assert(!val->type->is_boolean() || nir_val->bit_size == 32);
+         /* The value in shared memory is a 32-bit value */
+         if (val->type->is_boolean())
+            nir_val = nir_b2i32(&b, nir_val);
 
          instr->src[0] = nir_src_for_ssa(nir_val);
          instr->num_components = val->type->vector_elements;
@@ -1193,7 +1194,7 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_vote_any:
       case nir_intrinsic_vote_all:
       case nir_intrinsic_vote_ieq: {
-         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 32, NULL);
+         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 1, NULL);
          instr->num_components = 1;
 
          ir_rvalue *value = (ir_rvalue *) ir->actual_parameters.get_head();
@@ -1533,7 +1534,7 @@ nir_visitor::visit(ir_expression *ir)
       result = supports_ints ? nir_u2f32(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
       break;
    case ir_unop_b2f:
-      result = supports_ints ? nir_b2f(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
+      result = supports_ints ? nir_b2f32(&b, srcs[0]) : nir_fmov(&b, srcs[0]);
       break;
    case ir_unop_f2i:
    case ir_unop_f2u:
