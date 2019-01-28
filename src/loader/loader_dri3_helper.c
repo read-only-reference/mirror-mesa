@@ -366,7 +366,7 @@ loader_dri3_drawable_init(xcb_connection_t *conn,
    cnd_init(&draw->event_cnd);
 
    if (draw->ext->config) {
-      unsigned char adaptive_sync;
+      unsigned char adaptive_sync = 0;
 
       draw->ext->config->configQueryi(draw->dri_screen,
                                       "vblank_mode", &vblank_mode);
@@ -1319,12 +1319,20 @@ dri3_alloc_render_buffer(struct loader_dri3_drawable *draw, unsigned int format,
 
          free(mod_reply);
 
-         buffer->image = draw->ext->image->createImageWithModifiers(draw->dri_screen,
-                                                                    width, height,
-                                                                    format,
-                                                                    modifiers,
-                                                                    count,
-                                                                    buffer);
+         /* don't use createImageWithModifiers() if we have no
+          * modifiers, other things depend on the use flags when
+          * there are no modifiers to know that a buffer can be
+          * shared.
+          */
+         if (modifiers) {
+            buffer->image = draw->ext->image->createImageWithModifiers(draw->dri_screen,
+                                                                       width, height,
+                                                                       format,
+                                                                       modifiers,
+                                                                       count,
+                                                                       buffer);
+         }
+
          free(modifiers);
       }
 #endif

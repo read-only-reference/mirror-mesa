@@ -197,6 +197,16 @@ v3d_shader_precompile(struct v3d_context *v3d,
                         .base.shader_state = so,
                 };
 
+                nir_foreach_variable(var, &s->outputs) {
+                        if (var->data.location == FRAG_RESULT_COLOR) {
+                                key.nr_cbufs = 1;
+                        } else if (var->data.location == FRAG_RESULT_DATA0) {
+                                key.nr_cbufs = MAX2(key.nr_cbufs,
+                                                    var->data.location -
+                                                    FRAG_RESULT_DATA0 + 1);
+                        }
+                }
+
                 v3d_setup_shared_precompile_key(so, &key.base);
                 v3d_get_compiled_shader(v3d, &key.base);
         } else {
@@ -207,13 +217,17 @@ v3d_shader_precompile(struct v3d_context *v3d,
                 v3d_setup_shared_precompile_key(so, &key.base);
 
                 /* Compile VS: All outputs */
-                for (int vary = 0; vary < 64; vary++) {
-                        if (!(s->info.outputs_written & (1ull << vary)))
-                                continue;
-                        for (int i = 0; i < 4; i++) {
+                nir_foreach_variable(var, &s->outputs) {
+                        unsigned array_len = MAX2(glsl_get_length(var->type), 1);
+                        assert(array_len == 1);
+                        (void)array_len;
+
+                        int slot = var->data.location;
+                        for (int i = 0; i < glsl_get_components(var->type); i++) {
+                                int swiz = var->data.location_frac + i;
                                 key.fs_inputs[key.num_fs_inputs++] =
-                                        v3d_slot_from_slot_and_component(vary,
-                                                                         i);
+                                        v3d_slot_from_slot_and_component(slot,
+                                                                         swiz);
                         }
                 }
 
@@ -282,7 +296,7 @@ v3d_shader_state_create(struct pipe_context *pctx,
 
         v3d_optimize_nir(s);
 
-        NIR_PASS_V(s, nir_remove_dead_variables, nir_var_local);
+        NIR_PASS_V(s, nir_remove_dead_variables, nir_var_function_temp);
 
         /* Garbage collect dead instructions */
         nir_sweep(s);
@@ -344,37 +358,19 @@ v3d_get_compiled_shader(struct v3d_context *v3d, struct v3d_key *key)
         uint64_t *qpu_insts;
         uint32_t shader_size;
 
-        switch (s->info.stage) {
-        case MESA_SHADER_VERTEX:
-                shader->prog_data.vs = rzalloc(shader, struct v3d_vs_prog_data);
-
-                qpu_insts = v3d_compile_vs(v3d->screen->compiler,
-                                           (struct v3d_vs_key *)key,
-                                           shader->prog_data.vs, s,
-                                           v3d_shader_debug_output,
-                                           v3d,
-                                           program_id, variant_id,
-                                           &shader_size);
-                break;
-        case MESA_SHADER_FRAGMENT:
-                shader->prog_data.fs = rzalloc(shader, struct v3d_fs_prog_data);
-
-                qpu_insts = v3d_compile_fs(v3d->screen->compiler,
-                                           (struct v3d_fs_key *)key,
-                                           shader->prog_data.fs, s,
-                                           v3d_shader_debug_output,
-                                           v3d,
-                                           program_id, variant_id,
-                                           &shader_size);
-                break;
-        default:
-                unreachable("bad stage");
-        }
+        qpu_insts = v3d_compile(v3d->screen->compiler, key,
+                                &shader->prog_data.base, s,
+                                v3d_shader_debug_output,
+                                v3d,
+                                program_id, variant_id, &shader_size);
+        ralloc_steal(shader, shader->prog_data.base);
 
         v3d_set_shader_uniform_dirty_flags(shader);
 
-        u_upload_data(v3d->state_uploader, 0, shader_size, 8,
-                      qpu_insts, &shader->offset, &shader->resource);
+        if (shader_size) {
+                u_upload_data(v3d->state_uploader, 0, shader_size, 8,
+                              qpu_insts, &shader->offset, &shader->resource);
+        }
 
         free(qpu_insts);
 
@@ -519,7 +515,7 @@ v3d_update_compiled_fs(struct v3d_context *v3d, uint8_t prim_mode)
         if (job->msaa) {
                 key->msaa = v3d->rasterizer->base.multisample;
                 key->sample_coverage = (v3d->rasterizer->base.multisample &&
-                                        v3d->sample_mask != (1 << VC5_MAX_SAMPLES) - 1);
+                                        v3d->sample_mask != (1 << V3D_MAX_SAMPLES) - 1);
                 key->sample_alpha_to_coverage = v3d->blend->base.alpha_to_coverage;
                 key->sample_alpha_to_one = v3d->blend->base.alpha_to_one;
         }

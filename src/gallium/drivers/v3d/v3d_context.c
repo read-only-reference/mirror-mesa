@@ -37,6 +37,7 @@
 #include "v3d_screen.h"
 #include "v3d_context.h"
 #include "v3d_resource.h"
+#include "broadcom/compiler/v3d_compiler.h"
 
 void
 v3d_flush(struct pipe_context *pctx)
@@ -63,6 +64,16 @@ v3d_pipe_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
                 screen->fence_reference(screen, fence, NULL);
                 *fence = (struct pipe_fence_handle *)f;
         }
+}
+
+static void
+v3d_memory_barrier(struct pipe_context *pctx, unsigned int flags)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+
+        /* We only need to flush jobs writing to SSBOs/images. */
+        perf_debug("Flushing all jobs for glMemoryBarrier(), could do better");
+        v3d_flush(pctx);
 }
 
 static void
@@ -172,6 +183,7 @@ v3d_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
         pctx->priv = priv;
         pctx->destroy = v3d_context_destroy;
         pctx->flush = v3d_pipe_flush;
+        pctx->memory_barrier = v3d_memory_barrier;
         pctx->set_debug_callback = v3d_set_debug_callback;
         pctx->invalidate_resource = v3d_invalidate_resource;
         pctx->get_sample_position = v3d_get_sample_position;
@@ -213,7 +225,7 @@ v3d_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 
         V3D_DEBUG |= saved_shaderdb_flag;
 
-        v3d->sample_mask = (1 << VC5_MAX_SAMPLES) - 1;
+        v3d->sample_mask = (1 << V3D_MAX_SAMPLES) - 1;
         v3d->active_queries = true;
 
         return &v3d->base;
