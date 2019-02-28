@@ -109,7 +109,19 @@
 #define SI_RESOURCE_FLAG_UNMAPPABLE	(PIPE_RESOURCE_FLAG_DRV_PRIV << 4)
 #define SI_RESOURCE_FLAG_READ_ONLY	(PIPE_RESOURCE_FLAG_DRV_PRIV << 5)
 #define SI_RESOURCE_FLAG_32BIT		(PIPE_RESOURCE_FLAG_DRV_PRIV << 6)
-#define SI_RESOURCE_FLAG_SO_FILLED_SIZE	(PIPE_RESOURCE_FLAG_DRV_PRIV << 7)
+#define SI_RESOURCE_FLAG_CLEAR		(PIPE_RESOURCE_FLAG_DRV_PRIV << 7)
+/* For const_uploader, upload data via GTT and copy to VRAM on context flush via SDMA. */
+#define SI_RESOURCE_FLAG_UPLOAD_FLUSH_EXPLICIT_VIA_SDMA  (PIPE_RESOURCE_FLAG_DRV_PRIV << 8)
+
+enum si_clear_code
+{
+	DCC_CLEAR_COLOR_0000   = 0x00000000,
+	DCC_CLEAR_COLOR_0001   = 0x40404040,
+	DCC_CLEAR_COLOR_1110   = 0x80808080,
+	DCC_CLEAR_COLOR_1111   = 0xC0C0C0C0,
+	DCC_CLEAR_COLOR_REG    = 0x20202020,
+	DCC_UNCOMPRESSED       = 0xFFFFFFFF,
+};
 
 /* Debug flags. */
 enum {
@@ -766,6 +778,14 @@ struct si_saved_cs {
 	int64_t			time_flush;
 };
 
+struct si_sdma_upload {
+	struct si_resource	*dst;
+	struct si_resource	*src;
+	unsigned		src_offset;
+	unsigned		dst_offset;
+	unsigned		size;
+};
+
 struct si_context {
 	struct pipe_context		b; /* base class */
 
@@ -774,7 +794,7 @@ struct si_context {
 
 	struct radeon_winsys		*ws;
 	struct radeon_winsys_ctx	*ctx;
-	struct radeon_cmdbuf		*gfx_cs;
+	struct radeon_cmdbuf		*gfx_cs; /* compute IB if graphics is disabled */
 	struct radeon_cmdbuf		*dma_cs;
 	struct pipe_fence_handle	*last_gfx_fence;
 	struct pipe_fence_handle	*last_sdma_fence;
@@ -802,6 +822,8 @@ struct si_context {
 	void				*cs_copy_buffer;
 	void				*cs_copy_image;
 	void				*cs_copy_image_1d_array;
+	void				*cs_clear_render_target;
+	void				*cs_clear_render_target_1d_array;
 	struct si_screen		*screen;
 	struct pipe_debug_callback	debug;
 	struct ac_llvm_compiler		compiler; /* only non-threaded compilation */
@@ -810,6 +832,7 @@ struct si_context {
 	unsigned			wait_mem_number;
 	uint16_t			prefetch_L2_mask;
 
+	bool				has_graphics;
 	bool				gfx_flush_in_progress:1;
 	bool				gfx_last_ib_is_busy:1;
 	bool				compute_is_busy:1;
@@ -1069,6 +1092,12 @@ struct si_context {
 	bool				render_cond_invert;
 	bool				render_cond_force_off; /* for u_blitter */
 
+	/* For uploading data via GTT and copy to VRAM on context flush via SDMA. */
+	bool				sdma_uploads_in_progress;
+	struct si_sdma_upload		*sdma_uploads;
+	unsigned			num_sdma_uploads;
+	unsigned			max_sdma_uploads;
+
 	/* Statistics gathering for the DCC enablement heuristic. It can't be
 	 * in si_texture because si_texture can be shared by multiple
 	 * contexts. This is for back buffers only. We shouldn't get too many
@@ -1179,6 +1208,12 @@ void si_compute_copy_image(struct si_context *sctx,
 			   unsigned src_level,
 			   unsigned dstx, unsigned dsty, unsigned dstz,
 			   const struct pipe_box *src_box);
+void si_compute_clear_render_target(struct pipe_context *ctx,
+                                    struct pipe_surface *dstsurf,
+                                    const union pipe_color_union *color,
+                                    unsigned dstx, unsigned dsty,
+                                    unsigned width, unsigned height,
+				    bool render_condition_enabled);
 void si_init_compute_blit_functions(struct si_context *sctx);
 
 /* si_cp_dma.c */
@@ -1262,6 +1297,7 @@ void si_flush_gfx_cs(struct si_context *ctx, unsigned flags,
 		     struct pipe_fence_handle **fence);
 void si_begin_new_gfx_cs(struct si_context *ctx);
 void si_need_gfx_cs_space(struct si_context *ctx);
+void si_unref_sdma_uploads(struct si_context *sctx);
 
 /* si_gpu_load.c */
 void si_gpu_load_kill_thread(struct si_screen *sscreen);
@@ -1294,6 +1330,8 @@ void *si_create_dma_compute_shader(struct pipe_context *ctx,
 				   bool dst_stream_cache_policy, bool is_copy);
 void *si_create_copy_image_compute_shader(struct pipe_context *ctx);
 void *si_create_copy_image_compute_shader_1d_array(struct pipe_context *ctx);
+void *si_clear_render_target_shader(struct pipe_context *ctx);
+void *si_clear_render_target_shader_1d_array(struct pipe_context *ctx);
 void *si_create_query_result_cs(struct si_context *sctx);
 
 /* si_test_dma.c */

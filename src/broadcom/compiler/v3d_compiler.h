@@ -105,6 +105,11 @@ static inline struct qreg vir_reg(enum qfile file, uint32_t index)
         return (struct qreg){file, index};
 }
 
+static inline struct qreg vir_nop_reg(void)
+{
+        return (struct qreg){QFILE_NULL, 0};
+}
+
 /**
  * A reference to an actual register at the QPU level, for register
  * allocation.
@@ -357,7 +362,8 @@ struct v3d_fs_key {
         bool sample_alpha_to_one;
         bool clamp_color;
         bool shade_model_flat;
-        uint8_t nr_cbufs;
+        /* Mask of which color render targets are present. */
+        uint8_t cbufs;
         uint8_t swap_color_rb;
         /* Mask of which render targets need to be written as 32-bit floats */
         uint8_t f32_color_rb;
@@ -519,6 +525,7 @@ struct v3d_compile {
         uint32_t centroid_flags[BITSET_WORDS(V3D_MAX_FS_INPUTS)];
 
         bool uses_center_w;
+        bool writes_z;
 
         struct v3d_ubo_range *ubo_ranges;
         bool *ubo_range_used;
@@ -531,6 +538,7 @@ struct v3d_compile {
          * yes, otherwise a block number + 1 that the channel jumped to.
          */
         struct qreg execute;
+        bool in_control_flow;
 
         struct qreg line_x, point_x, point_y;
 
@@ -667,7 +675,6 @@ struct v3d_prog_data {
         uint32_t ubo_size;
         uint32_t spill_size;
 
-        uint8_t num_inputs;
         uint8_t threads;
 
         /* For threads > 1, whether the program should be dispatched in the
@@ -715,8 +722,9 @@ struct v3d_fs_prog_data {
 
         uint32_t centroid_flags[((V3D_MAX_FS_INPUTS - 1) / 24) + 1];
 
+        uint8_t num_inputs;
         bool writes_z;
-        bool discard;
+        bool disable_ez;
         bool uses_center_w;
 };
 
@@ -786,7 +794,6 @@ bool vir_is_raw_mov(struct qinst *inst);
 bool vir_is_tex(struct qinst *inst);
 bool vir_is_add(struct qinst *inst);
 bool vir_is_mul(struct qinst *inst);
-bool vir_is_float_input(struct qinst *inst);
 bool vir_writes_r3(const struct v3d_device_info *devinfo, struct qinst *inst);
 bool vir_writes_r4(const struct v3d_device_info *devinfo, struct qinst *inst);
 struct qreg vir_follow_movs(struct v3d_compile *c, struct qreg reg);
@@ -831,14 +838,18 @@ bool vir_init_reg_sets(struct v3d_compiler *compiler);
 
 bool v3d_gl_format_is_return_32(GLenum format);
 
-void vir_PF(struct v3d_compile *c, struct qreg src, enum v3d_qpu_pf pf);
-
 static inline bool
 quniform_contents_is_texture_p0(enum quniform_contents contents)
 {
         return (contents >= QUNIFORM_TEXTURE_CONFIG_P0_0 &&
                 contents < (QUNIFORM_TEXTURE_CONFIG_P0_0 +
                             V3D_MAX_TEXTURE_SAMPLERS));
+}
+
+static inline bool
+vir_in_nonuniform_control_flow(struct v3d_compile *c)
+{
+        return c->execute.file != QFILE_NULL;
 }
 
 static inline struct qreg
@@ -1140,5 +1151,9 @@ vir_BRANCH(struct v3d_compile *c, enum v3d_qpu_branch_cond cond)
 #define vir_for_each_inst_inorder(inst, c)                              \
         vir_for_each_block(_block, c)                                   \
                 vir_for_each_inst(inst, _block)
+
+#define vir_for_each_inst_inorder_safe(inst, c)                         \
+        vir_for_each_block(_block, c)                                   \
+                vir_for_each_inst_safe(inst, _block)
 
 #endif /* V3D_COMPILER_H */

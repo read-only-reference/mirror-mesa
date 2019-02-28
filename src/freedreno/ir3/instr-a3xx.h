@@ -172,7 +172,7 @@ typedef enum {
 	OPC_STG             = _OPC(6, 3),        /* store-global */
 	OPC_STL             = _OPC(6, 4),
 	OPC_STP             = _OPC(6, 5),
-	OPC_STI             = _OPC(6, 6),
+	OPC_LDIB            = _OPC(6, 6),
 	OPC_G2L             = _OPC(6, 7),
 	OPC_L2G             = _OPC(6, 8),
 	OPC_PREFETCH        = _OPC(6, 9),
@@ -741,6 +741,10 @@ typedef union PACKED {
  *    src1    - vecN offset/coords
  *    src2    - value to store
  *
+ * For ldib:
+ *    pad1=1, pad2=c, pad3=0, pad4=2
+ *    src1    - vecN offset/coords
+ *
  * for ldc (load from UBO using descriptor):
  *    pad1=0, pad2=8, pad3=0, pad4=2
  */
@@ -755,7 +759,7 @@ typedef struct PACKED {
 	uint32_t src1     : 8;  /* coordinate/offset */
 
 	/* dword1: */
-	uint32_t src2     : 8;
+	uint32_t src2     : 8;  /* or the dst for load instructions */
 	uint32_t pad3     : 1;  //mustbe0 ?? or zero means imm vs reg for ssbo??
 	uint32_t ssbo     : 8;  /* ssbo/image binding point */
 	uint32_t type     : 3;
@@ -906,6 +910,18 @@ static inline bool is_ssbo(opc_t opc)
 	case OPC_LDGB:
 	case OPC_STGB:
 	case OPC_STIB:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static inline bool is_isam(opc_t opc)
+{
+	switch (opc) {
+	case OPC_ISAM:
+	case OPC_ISAML:
+	case OPC_ISAMM:
 		return true;
 	default:
 		return false;

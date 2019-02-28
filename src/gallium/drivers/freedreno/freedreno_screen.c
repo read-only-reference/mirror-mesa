@@ -39,7 +39,7 @@
 
 #include "util/os_time.h"
 
-#include <drm_fourcc.h>
+#include "drm-uapi/drm_fourcc.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -243,7 +243,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		if (is_a3xx(screen)) return 16;
 		if (is_a4xx(screen)) return 32;
 		if (is_a5xx(screen)) return 32;
-		if (is_a6xx(screen)) return 32;
+		if (is_a6xx(screen)) return 64;
 		return 0;
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		/* We could possibly emulate more by pretending 2d/rect textures and
@@ -252,7 +252,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		if (is_a3xx(screen)) return 8192;
 		if (is_a4xx(screen)) return 16384;
 		if (is_a5xx(screen)) return 16384;
-		if (is_a6xx(screen)) return 16384;
+		if (is_a6xx(screen)) return 1 << 27;
 		return 0;
 
 	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
@@ -279,7 +279,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return is_ir3(screen) ? 140 : 120;
 
 	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
-		if (is_a5xx(screen) || is_a6xx(screen))
+		if (is_a6xx(screen)) return 64;
+		if (is_a5xx(screen)) return 4;
 			return 4;
 		return 0;
 
@@ -316,6 +317,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_MAX_VIEWPORTS:
 		return 1;
+
+	case PIPE_CAP_MAX_VARYINGS:
+		return 16;
 
 	case PIPE_CAP_SHAREABLE_SHADERS:
 	case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:

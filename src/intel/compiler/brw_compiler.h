@@ -196,6 +196,10 @@ struct brw_sampler_prog_key_data {
    uint32_t yx_xuxv_image_mask;
    uint32_t xy_uxvx_image_mask;
    uint32_t ayuv_image_mask;
+   uint32_t xyuv_image_mask;
+
+   /* Scale factor for each texture. */
+   float scale_factors[32];
 };
 
 /**
@@ -563,6 +567,8 @@ enum brw_param_builtin {
    BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_W,
    BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X,
    BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y,
+
+   BRW_PARAM_BUILTIN_PATCH_VERTICES_IN,
 
    BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_X,
    BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Y,

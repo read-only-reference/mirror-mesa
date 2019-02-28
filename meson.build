@@ -61,11 +61,11 @@ endif
 
 dri_drivers_path = get_option('dri-drivers-path')
 if dri_drivers_path == ''
-  dri_drivers_path = join_paths(get_option('libdir'), 'dri')
+  dri_drivers_path = join_paths(get_option('prefix'), get_option('libdir'), 'dri')
 endif
 dri_search_path = get_option('dri-search-path')
 if dri_search_path == ''
-  dri_search_path = join_paths(get_option('prefix'), dri_drivers_path)
+  dri_search_path = dri_drivers_path
 endif
 
 with_gles1 = get_option('gles1')
@@ -132,7 +132,7 @@ if _drivers.contains('auto')
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       _drivers = [
         'kmsro', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau',
-        'tegra', 'virgl', 'swrast',
+        'tegra', 'virgl', 'swrast'
       ]
     else
       error('Unknown architecture @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
@@ -154,8 +154,10 @@ with_gallium_freedreno = _drivers.contains('freedreno')
 with_gallium_softpipe = _drivers.contains('swrast')
 with_gallium_vc4 = _drivers.contains('vc4')
 with_gallium_v3d = _drivers.contains('v3d')
+with_gallium_panfrost = _drivers.contains('panfrost')
 with_gallium_etnaviv = _drivers.contains('etnaviv')
 with_gallium_tegra = _drivers.contains('tegra')
+with_gallium_iris = _drivers.contains('iris')
 with_gallium_i915 = _drivers.contains('i915')
 with_gallium_svga = _drivers.contains('svga')
 with_gallium_virgl = _drivers.contains('virgl')
@@ -209,8 +211,8 @@ endif
 if with_dri_i915 and with_gallium_i915
   error('Only one i915 provider can be built')
 endif
-if with_gallium_kmsro and not (with_gallium_vc4 or with_gallium_etnaviv or with_gallium_freedreno)
-  error('kmsro driver requires one or more renderonly drivers (vc4, etnaviv, freedreno)')
+if with_gallium_kmsro and not (with_gallium_vc4 or with_gallium_etnaviv or with_gallium_freedreno or with_gallium_panfrost)
+  error('kmsro driver requires one or more renderonly drivers (vc4, etnaviv, freedreno, panfrost)')
 endif
 if with_gallium_tegra and not with_gallium_nouveau
   error('tegra driver requires nouveau driver')
@@ -608,7 +610,7 @@ with_gallium_xa = _xa != 'false'
 
 d3d_drivers_path = get_option('d3d-drivers-path')
 if d3d_drivers_path == ''
-  d3d_drivers_path = join_paths(get_option('libdir'), 'd3d')
+  d3d_drivers_path = join_paths(get_option('prefix'), get_option('libdir'), 'd3d')
 endif
 
 with_gallium_st_nine =  get_option('gallium-nine')
@@ -616,7 +618,8 @@ if with_gallium_st_nine
   if not with_gallium_softpipe
     error('The nine state tracker requires gallium softpipe/llvmpipe.')
   elif not (with_gallium_radeonsi or with_gallium_nouveau or with_gallium_r600
-            or with_gallium_r300 or with_gallium_svga or with_gallium_i915)
+            or with_gallium_r300 or with_gallium_svga or with_gallium_i915
+            or with_gallium_iris)
     error('The nine state tracker requires at least one non-swrast gallium driver.')
   endif
   if not with_dri3
@@ -1400,7 +1403,7 @@ if with_platform_x11
     dep_xcb_xfixes = dependency('xcb-xfixes')
   endif
   if with_xlib_lease
-    dep_xcb_xrandr = dependency('xcb-randr', version : '>= 1.12')
+    dep_xcb_xrandr = dependency('xcb-randr')
     dep_xlib_xrandr = dependency('xrandr', version : '>= 1.3')
   endif
 endif
@@ -1463,6 +1466,10 @@ pkg = import('pkgconfig')
 
 env_test = environment()
 env_test.set('NM', find_program('nm').path())
+
+# This quirk needs to be applied to sources with functions defined in assembly
+# as GCC LTO drops them. See: https://bugs.freedesktop.org/show_bug.cgi?id=109391
+gcc_lto_quirk = (cc.get_id() == 'gcc') ? ['-fno-lto'] : []
 
 subdir('include')
 subdir('bin')

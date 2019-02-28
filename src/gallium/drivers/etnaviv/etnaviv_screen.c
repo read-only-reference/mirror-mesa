@@ -46,7 +46,7 @@
 
 #include "state_tracker/drm_driver.h"
 
-#include <drm_fourcc.h>
+#include "drm-uapi/drm_fourcc.h"
 
 #define ETNA_DRM_VERSION(major, minor) ((major) << 16 | (minor))
 #define ETNA_DRM_VERSION_FENCE_FD      ETNA_DRM_VERSION(1, 1)
@@ -359,6 +359,9 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    /* Preferences */
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return 0;
+
+   case PIPE_CAP_MAX_VARYINGS:
+      return screen->specs.max_varyings;
 
    case PIPE_CAP_PCI_GROUP:
    case PIPE_CAP_PCI_BUS:

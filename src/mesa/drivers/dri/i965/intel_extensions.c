@@ -97,6 +97,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_blend_func_separate = true;
    ctx->Extensions.EXT_blend_minmax = true;
    ctx->Extensions.EXT_draw_buffers2 = true;
+   ctx->Extensions.EXT_float_blend = true;
    ctx->Extensions.EXT_framebuffer_sRGB = true;
    ctx->Extensions.EXT_gpu_program_parameters = true;
    ctx->Extensions.EXT_packed_float = true;
@@ -182,14 +183,16 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_conditional_render_inverted = true;
       ctx->Extensions.ARB_cull_distance = true;
       ctx->Extensions.ARB_draw_buffers_blend = true;
-      if (ctx->API != API_OPENGL_COMPAT)
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion)
          ctx->Extensions.ARB_enhanced_layouts = true;
       ctx->Extensions.ARB_ES3_compatibility = true;
       ctx->Extensions.ARB_fragment_layer_viewport = true;
       ctx->Extensions.ARB_pipeline_statistics_query = true;
       ctx->Extensions.ARB_sample_shading = true;
       ctx->Extensions.ARB_shading_language_420pack = true;
-      if (ctx->API != API_OPENGL_COMPAT) {
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion) {
          ctx->Extensions.ARB_texture_buffer_object = true;
          ctx->Extensions.ARB_texture_buffer_object_rgb32 = true;
          ctx->Extensions.ARB_texture_buffer_range = true;
@@ -199,7 +202,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_multisample = true;
       ctx->Extensions.ARB_uniform_buffer_object = true;
 
-      if (ctx->API != API_OPENGL_COMPAT)
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion)
          ctx->Extensions.AMD_vertex_shader_layer = true;
       ctx->Extensions.EXT_framebuffer_multisample = true;
       ctx->Extensions.EXT_framebuffer_multisample_blit_scaled = true;
@@ -228,7 +232,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_conservative_depth = true;
       ctx->Extensions.ARB_derivative_control = true;
       ctx->Extensions.ARB_framebuffer_no_attachments = true;
-      if (ctx->API != API_OPENGL_COMPAT) {
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion) {
          ctx->Extensions.ARB_gpu_shader5 = true;
          ctx->Extensions.ARB_gpu_shader_fp64 = true;
       }
@@ -239,7 +244,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_shader_image_size = true;
       ctx->Extensions.ARB_shader_precision = true;
       ctx->Extensions.ARB_shader_texture_image_samples = true;
-      if (ctx->API != API_OPENGL_COMPAT)
+      if (ctx->API != API_OPENGL_COMPAT ||
+          ctx->Const.AllowHigherCompatVersion)
          ctx->Extensions.ARB_tessellation_shader = true;
       ctx->Extensions.ARB_texture_compression_bptc = true;
       ctx->Extensions.ARB_texture_view = true;
@@ -287,12 +293,20 @@ intelInitExtensions(struct gl_context *ctx)
    }
 
    if (devinfo->gen >= 8 || devinfo->is_baytrail) {
-      /* For now, we only enable OES_copy_image on platforms that support
-       * ETC2 natively in hardware.  We would need more hacks to support it
-       * elsewhere. Same with OES_texture_view.
+      /* For now, we can't enable OES_texture_view on Gen 7 because of
+       * some piglit failures coming from
+       * piglit/tests/spec/arb_texture_view/rendering-formats.c that need
+       * investigation.
+       */
+      ctx->Extensions.OES_texture_view = true;
+   }
+
+   if (devinfo->gen >= 7) {
+      /* We can safely enable OES_copy_image on Gen 7, since we emulate
+       * the ETC2 support using the shadow_miptree to store the
+       * compressed data.
        */
       ctx->Extensions.OES_copy_image = true;
-      ctx->Extensions.OES_texture_view = true;
    }
 
    if (devinfo->gen >= 8) {
@@ -321,11 +335,13 @@ intelInitExtensions(struct gl_context *ctx)
    if (devinfo->gen >= 6)
       ctx->Extensions.INTEL_performance_query = true;
 
-   if (ctx->API != API_OPENGL_COMPAT)
+   if (ctx->API != API_OPENGL_COMPAT ||
+       ctx->Const.AllowHigherCompatVersion)
       ctx->Extensions.ARB_base_instance = true;
    if (ctx->API != API_OPENGL_CORE)
       ctx->Extensions.ARB_color_buffer_float = true;
 
    ctx->Extensions.EXT_texture_compression_s3tc = true;
+   ctx->Extensions.EXT_texture_compression_s3tc_srgb = true;
    ctx->Extensions.ANGLE_texture_compression_dxt = true;
 }

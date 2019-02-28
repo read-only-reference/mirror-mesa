@@ -205,6 +205,10 @@ static void si_destroy_context(struct pipe_context *context)
 		sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_image);
 	if (sctx->cs_copy_image_1d_array)
 		sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_image_1d_array);
+	if (sctx->cs_clear_render_target)
+		sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_render_target);
+	if (sctx->cs_clear_render_target_1d_array)
+		sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_render_target_1d_array);
 
 	if (sctx->blitter)
 		util_blitter_destroy(sctx->blitter);
@@ -260,6 +264,7 @@ static void si_destroy_context(struct pipe_context *context)
 	util_dynarray_fini(&sctx->resident_tex_needs_color_decompress);
 	util_dynarray_fini(&sctx->resident_img_needs_color_decompress);
 	util_dynarray_fini(&sctx->resident_tex_needs_depth_decompress);
+	si_unref_sdma_uploads(sctx);
 	FREE(sctx);
 }
 
@@ -384,16 +389,15 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	if (!sctx)
 		return NULL;
 
+	sctx->has_graphics = sscreen->info.chip_class == SI ||
+			     !(flags & PIPE_CONTEXT_COMPUTE_ONLY);
+
 	if (flags & PIPE_CONTEXT_DEBUG)
 		sscreen->record_llvm_ir = true; /* racy but not critical */
 
 	sctx->b.screen = screen; /* this must be set first */
 	sctx->b.priv = NULL;
 	sctx->b.destroy = si_destroy_context;
-	sctx->b.emit_string_marker = si_emit_string_marker;
-	sctx->b.set_debug_callback = si_set_debug_callback;
-	sctx->b.set_log_context = si_set_log_context;
-	sctx->b.set_context_param = si_set_context_param;
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
 	sctx->is_debug = (flags & PIPE_CONTEXT_DEBUG) != 0;
 
@@ -409,11 +413,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 			sctx->ws->query_value(sctx->ws, RADEON_GPU_RESET_COUNTER);
 	}
 
-	sctx->b.get_device_reset_status = si_get_reset_status;
-	sctx->b.set_device_reset_callback = si_set_device_reset_callback;
-
-	si_init_context_texture_functions(sctx);
-	si_init_query_functions(sctx);
 
 	if (sctx->chip_class == CIK ||
 	    sctx->chip_class == VI ||
@@ -425,10 +424,12 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 			goto fail;
 	}
 
+	/* Initialize context allocators. */
 	sctx->allocator_zeroed_memory =
-			u_suballocator_create(&sctx->b, sscreen->info.gart_page_size,
-					      0, PIPE_USAGE_DEFAULT,
-					      SI_RESOURCE_FLAG_SO_FILLED_SIZE, true);
+		u_suballocator_create(&sctx->b, 128 * 1024,
+				      0, PIPE_USAGE_DEFAULT,
+				      SI_RESOURCE_FLAG_UNMAPPABLE |
+				      SI_RESOURCE_FLAG_CLEAR, false);
 	if (!sctx->allocator_zeroed_memory)
 		goto fail;
 
@@ -436,14 +437,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 						    0, PIPE_USAGE_STREAM,
 						    SI_RESOURCE_FLAG_READ_ONLY);
 	if (!sctx->b.stream_uploader)
-		goto fail;
-
-	sctx->b.const_uploader = u_upload_create(&sctx->b, 128 * 1024,
-						   0, PIPE_USAGE_DEFAULT,
-						   SI_RESOURCE_FLAG_32BIT |
-						   (sscreen->cpdma_prefetch_writes_memory ?
-							    0 : SI_RESOURCE_FLAG_READ_ONLY));
-	if (!sctx->b.const_uploader)
 		goto fail;
 
 	sctx->cached_gtt_allocator = u_upload_create(&sctx->b, 16 * 1024,
@@ -461,24 +454,22 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 						   sctx, stop_exec_on_failure);
 	}
 
-	si_init_buffer_functions(sctx);
-	si_init_clear_functions(sctx);
-	si_init_blit_functions(sctx);
-	si_init_compute_functions(sctx);
-	si_init_compute_blit_functions(sctx);
-	si_init_debug_functions(sctx);
-	si_init_msaa_functions(sctx);
-	si_init_streamout_functions(sctx);
+	bool use_sdma_upload = sscreen->info.has_dedicated_vram && sctx->dma_cs;
+	sctx->b.const_uploader = u_upload_create(&sctx->b, 256 * 1024,
+						 0, PIPE_USAGE_DEFAULT,
+						 SI_RESOURCE_FLAG_32BIT |
+						 (use_sdma_upload ?
+							  SI_RESOURCE_FLAG_UPLOAD_FLUSH_EXPLICIT_VIA_SDMA :
+							  (sscreen->cpdma_prefetch_writes_memory ?
+								   0 : SI_RESOURCE_FLAG_READ_ONLY)));
+	if (!sctx->b.const_uploader)
+		goto fail;
 
-	if (sscreen->info.has_hw_decode) {
-		sctx->b.create_video_codec = si_uvd_create_decoder;
-		sctx->b.create_video_buffer = si_video_buffer_create;
-	} else {
-		sctx->b.create_video_codec = vl_create_decoder;
-		sctx->b.create_video_buffer = vl_video_buffer_create;
-	}
+	if (use_sdma_upload)
+		u_upload_enable_flush_explicit(sctx->b.const_uploader);
 
-	sctx->gfx_cs = ws->cs_create(sctx->ctx, RING_GFX,
+	sctx->gfx_cs = ws->cs_create(sctx->ctx,
+				     sctx->has_graphics ? RING_GFX : RING_COMPUTE,
 				     (void*)si_flush_gfx_cs, sctx, stop_exec_on_failure);
 
 	/* Border colors. */
@@ -500,28 +491,61 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	if (!sctx->border_color_map)
 		goto fail;
 
-	si_init_all_descriptors(sctx);
-	si_init_fence_functions(sctx);
-	si_init_state_functions(sctx);
-	si_init_shader_functions(sctx);
-	si_init_viewport_functions(sctx);
+	/* Initialize context functions used by graphics and compute. */
+	sctx->b.emit_string_marker = si_emit_string_marker;
+	sctx->b.set_debug_callback = si_set_debug_callback;
+	sctx->b.set_log_context = si_set_log_context;
+	sctx->b.set_context_param = si_set_context_param;
+	sctx->b.get_device_reset_status = si_get_reset_status;
+	sctx->b.set_device_reset_callback = si_set_device_reset_callback;
+	sctx->b.memory_barrier = si_memory_barrier;
 
+	si_init_all_descriptors(sctx);
+	si_init_buffer_functions(sctx);
+	si_init_clear_functions(sctx);
+	si_init_blit_functions(sctx);
+	si_init_compute_functions(sctx);
+	si_init_compute_blit_functions(sctx);
+	si_init_debug_functions(sctx);
+	si_init_fence_functions(sctx);
+
+	if (sscreen->debug_flags & DBG(FORCE_DMA))
+		sctx->b.resource_copy_region = sctx->dma_copy;
+
+	/* Initialize graphics-only context functions. */
+	if (sctx->has_graphics) {
+		si_init_context_texture_functions(sctx);
+		si_init_query_functions(sctx);
+		si_init_msaa_functions(sctx);
+		si_init_shader_functions(sctx);
+		si_init_state_functions(sctx);
+		si_init_streamout_functions(sctx);
+		si_init_viewport_functions(sctx);
+
+		sctx->blitter = util_blitter_create(&sctx->b);
+		if (sctx->blitter == NULL)
+			goto fail;
+		sctx->blitter->skip_viewport_restore = true;
+
+		si_init_draw_functions(sctx);
+	}
+
+	/* Initialize SDMA functions. */
 	if (sctx->chip_class >= CIK)
 		cik_init_sdma_functions(sctx);
 	else
 		si_init_dma_functions(sctx);
 
-	if (sscreen->debug_flags & DBG(FORCE_DMA))
-		sctx->b.resource_copy_region = sctx->dma_copy;
-
-	sctx->blitter = util_blitter_create(&sctx->b);
-	if (sctx->blitter == NULL)
-		goto fail;
-	sctx->blitter->skip_viewport_restore = true;
-
-	si_init_draw_functions(sctx);
-
 	sctx->sample_mask = 0xffff;
+
+	/* Initialize multimedia functions. */
+	if (sscreen->info.has_hw_decode) {
+		sctx->b.create_video_codec = si_uvd_create_decoder;
+		sctx->b.create_video_buffer = si_video_buffer_create;
+	} else {
+		sctx->b.create_video_codec = vl_create_decoder;
+		sctx->b.create_video_buffer = vl_video_buffer_create;
+	}
 
 	if (sctx->chip_class >= GFX9) {
 		sctx->wait_mem_scratch = si_resource(
@@ -546,7 +570,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 			goto fail;
 		sctx->null_const_buf.buffer_size = sctx->null_const_buf.buffer->width0;
 
-		for (shader = 0; shader < SI_NUM_SHADERS; shader++) {
+		unsigned start_shader = sctx->has_graphics ? 0 :  PIPE_SHADER_COMPUTE;
+		for (shader = start_shader; shader < SI_NUM_SHADERS; shader++) {
 			for (i = 0; i < SI_NUM_CONST_BUFFERS; i++) {
 				sctx->b.set_constant_buffer(&sctx->b, shader, i,
 							      &sctx->null_const_buf);
@@ -844,7 +869,9 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	}
 
 	sscreen->debug_flags = debug_get_flags_option("R600_DEBUG",
-							debug_options, 0);
+						      debug_options, 0);
+	sscreen->debug_flags |= debug_get_flags_option("AMD_DEBUG",
+						       debug_options, 0);
 
 	/* Set functions first. */
 	sscreen->b.context_create = si_pipe_create_context;
@@ -865,7 +892,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		sscreen->debug_flags |= DBG(FS_CORRECT_DERIVS_AFTER_KILL);
 	if (driQueryOptionb(config->options, "radeonsi_enable_sisched"))
 		sscreen->debug_flags |= DBG(SI_SCHED);
-
+	if (driQueryOptionb(config->options, "radeonsi_enable_nir"))
+		sscreen->debug_flags |= DBG(NIR);
 
 	if (sscreen->debug_flags & DBG(INFO))
 		ac_print_gpu_info(&sscreen->info);

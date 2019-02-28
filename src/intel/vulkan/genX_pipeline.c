@@ -464,6 +464,7 @@ emit_rs_state(struct anv_pipeline *pipeline,
    sf.TriangleStripListProvokingVertexSelect = 0;
    sf.LineStripListProvokingVertexSelect = 0;
    sf.TriangleFanProvokingVertexSelect = 1;
+   sf.VertexSubPixelPrecisionSelect = _8Bit;
 
    const struct brw_vue_prog_data *last_vue_prog_data =
       anv_pipeline_get_last_vue_prog_data(pipeline);
@@ -508,10 +509,10 @@ emit_rs_state(struct anv_pipeline *pipeline,
 
 #if GEN_GEN >= 9
    /* GEN9+ splits ViewportZClipTestEnable into near and far enable bits */
-   raster.ViewportZFarClipTestEnable = !pipeline->depth_clamp_enable;
-   raster.ViewportZNearClipTestEnable = !pipeline->depth_clamp_enable;
+   raster.ViewportZFarClipTestEnable = pipeline->depth_clip_enable;
+   raster.ViewportZNearClipTestEnable = pipeline->depth_clip_enable;
 #elif GEN_GEN >= 8
-   raster.ViewportZClipTestEnable = !pipeline->depth_clamp_enable;
+   raster.ViewportZClipTestEnable = pipeline->depth_clip_enable;
 #endif
 
    raster.GlobalDepthOffsetEnableSolid = rs_info->depthBiasEnable;
@@ -1077,6 +1078,10 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
       clip.APIMode                  = APIMODE_D3D,
       clip.ViewportXYClipTestEnable = true;
 
+#if GEN_GEN >= 8
+      clip.VertexSubPixelPrecisionSelect = _8Bit;
+#endif
+
       clip.ClipMode = CLIPMODE_NORMAL;
 
       clip.TriangleStripListProvokingVertexSelect = 0;
@@ -1113,7 +1118,7 @@ emit_3dstate_clip(struct anv_pipeline *pipeline,
 #if GEN_GEN == 7
       clip.FrontWinding            = vk_to_gen_front_face[rs_info->frontFace];
       clip.CullMode                = vk_to_gen_cullmode[rs_info->cullMode];
-      clip.ViewportZClipTestEnable = !pipeline->depth_clamp_enable;
+      clip.ViewportZClipTestEnable = pipeline->depth_clip_enable;
       clip.UserClipDistanceClipTestEnableBitmask = last->clip_distance_mask;
       clip.UserClipDistanceCullTestEnableBitmask = last->cull_distance_mask;
 #else
@@ -1211,13 +1216,30 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
             hole_dwords -= 4;
          }
 
+         int varying = output->location;
+         uint8_t component_mask = output->component_mask;
+         /* VARYING_SLOT_PSIZ contains three scalar fields packed together:
+          * - VARYING_SLOT_LAYER    in VARYING_SLOT_PSIZ.y
+          * - VARYING_SLOT_VIEWPORT in VARYING_SLOT_PSIZ.z
+          * - VARYING_SLOT_PSIZ     in VARYING_SLOT_PSIZ.w
+          */
+         if (varying == VARYING_SLOT_LAYER) {
+            varying = VARYING_SLOT_PSIZ;
+            component_mask = 1 << 1; // SO_DECL_COMPMASK_Y
+         } else if (varying == VARYING_SLOT_VIEWPORT) {
+            varying = VARYING_SLOT_PSIZ;
+            component_mask = 1 << 2; // SO_DECL_COMPMASK_Z
+         } else if (varying == VARYING_SLOT_PSIZ) {
+            component_mask = 1 << 3; // SO_DECL_COMPMASK_W
+         }
+
          next_offset[buffer] = output->offset +
-                               __builtin_popcount(output->component_mask) * 4;
+                               __builtin_popcount(component_mask) * 4;
 
          so_decl[stream][decls[stream]++] = (struct GENX(SO_DECL)) {
             .OutputBufferSlot = buffer,
-            .RegisterIndex = vue_map->varying_to_slot[output->location],
-            .ComponentMask = output->component_mask,
+            .RegisterIndex = vue_map->varying_to_slot[varying],
+            .ComponentMask = component_mask,
          };
       }
 

@@ -115,6 +115,9 @@ typedef struct shader_info {
    /* Whether or not this shader ever uses textureGather() */
    bool uses_texture_gather;
 
+   /** Bitfield of which textures are used */
+   uint32_t textures_used;
+
    /** Bitfield of which textures are used by texelFetch() */
    uint32_t textures_used_by_txf;
 
@@ -192,12 +195,37 @@ typedef struct shader_info {
 
          bool post_depth_coverage;
 
+         /**
+          * \name ARB_fragment_coord_conventions
+          * @{
+          */
          bool pixel_center_integer;
+         bool origin_upper_left;
+         /*@}*/
 
          bool pixel_interlock_ordered;
          bool pixel_interlock_unordered;
          bool sample_interlock_ordered;
          bool sample_interlock_unordered;
+
+         /**
+          * Flags whether NIR's base types on the FS color outputs should be
+          * ignored.
+          *
+          * GLSL requires that fragment shader output base types match the
+          * render target's base types for the behavior to be defined.  From
+          * the GL 4.6 spec:
+          *
+          *     "If the values written by the fragment shader do not match the
+          *      format(s) of the corresponding color buffer(s), the result is
+          *      undefined."
+          *
+          * However, for NIR shaders translated from TGSI, we don't have the
+          * output types any more, so the driver will need to do whatever
+          * fixups are necessary to handle effectively untyped data being
+          * output from the FS.
+          */
+         bool untyped_color_outputs;
 
          /** gl_FragDepth layout for ARB_conservative_depth. */
          enum gl_frag_depth_layout depth_layout;

@@ -246,25 +246,8 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 	so->texconst0 =
 		A6XX_TEX_CONST_0_FMT(fd6_pipe2tex(format)) |
 		A6XX_TEX_CONST_0_SAMPLES(fd_msaa_samples(prsc->nr_samples)) |
-		fd6_tex_swiz(prsc, cso->swizzle_r, cso->swizzle_g,
+		fd6_tex_swiz(prsc, cso->format, cso->swizzle_r, cso->swizzle_g,
 				cso->swizzle_b, cso->swizzle_a);
-
-	/* NOTE: since we sample z24s8 using 8888_UINT format, the swizzle
-	 * we get isn't quite right.  Use SWAP(XYZW) as a cheap and cheerful
-	 * way to re-arrange things so stencil component is where the swiz
-	 * expects.
-	 *
-	 * Note that gallium expects stencil sampler to return (s,s,s,s)
-	 * which isn't quite true.  To make that happen we'd have to massage
-	 * the swizzle.  But in practice only the .x component is used.
-	 *
-	 * Skip this in the tile case because tiled formats are not swapped
-	 * and we have already applied the inverse swap in fd6_tex_swiz()
-	 * to componsate for that.
-	 */
-	if ((format == PIPE_FORMAT_X24S8_UINT) && !rsc->tile_mode) {
-		so->texconst0 |= A6XX_TEX_CONST_0_SWAP(XYZW);
-	}
 
 	if (util_format_is_srgb(format)) {
 		if (use_astc_srgb_workaround(pctx, format))
@@ -277,11 +260,11 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 
 		lvl = 0;
 		so->texconst1 =
-			A6XX_TEX_CONST_1_WIDTH(elements) |
-			A6XX_TEX_CONST_1_HEIGHT(1);
+			A6XX_TEX_CONST_1_WIDTH(elements & MASK(15)) |
+			A6XX_TEX_CONST_1_HEIGHT(elements >> 15);
 		so->texconst2 =
-			A6XX_TEX_CONST_2_FETCHSIZE(fd6_pipe2fetchsize(format)) |
-			A6XX_TEX_CONST_2_PITCH(elements * rsc->cpp);
+			A6XX_TEX_CONST_2_UNK4 |
+			A6XX_TEX_CONST_2_UNK31;
 		so->offset = cso->u.buf.offset;
 	} else {
 		unsigned miplevels;
@@ -449,19 +432,7 @@ fd6_texture_state(struct fd_context *ctx, enum a6xx_state_block sb,
 		needs_border |= sampler->needs_border;
 	}
 
-	/* This will need update for HS/DS/GS: */
-	if (unlikely(needs_border && (sb == SB6_FS_TEX))) {
-		/* TODO we could probably use fixed offsets for each shader
-		 * stage and avoid the need for # of VS samplers to be part
-		 * of the FS tex state.. but I don't think our handling of
-		 * BCOLOR_OFFSET is actually correct, and trying to use a
-		 * hard coded offset of 16 breaks things.
-		 *
-		 * Note that when this changes, then a corresponding change
-		 * in emit_border_color() is also needed.
-		 */
-		key.bcolor_offset = ctx->tex[PIPE_SHADER_VERTEX].num_samplers;
-	}
+	key.bcolor_offset = fd6_border_color_offset(ctx, sb, tex);
 
 	uint32_t hash = key_hash(&key);
 	struct hash_entry *entry =
@@ -477,7 +448,8 @@ fd6_texture_state(struct fd_context *ctx, enum a6xx_state_block sb,
 	state->stateobj = fd_ringbuffer_new_object(ctx->pipe, 0x1000);
 	state->needs_border = needs_border;
 
-	fd6_emit_textures(ctx->pipe, state->stateobj, sb, tex, key.bcolor_offset);
+	fd6_emit_textures(ctx->pipe, state->stateobj, sb, tex, key.bcolor_offset,
+			NULL, NULL, NULL);
 
 	/* NOTE: uses copy of key in state obj, because pointer passed by caller
 	 * is probably on the stack

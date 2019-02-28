@@ -30,7 +30,7 @@
 #include <pthread.h>
 #include <assert.h>
 #include <stdint.h>
-#include <i915_drm.h>
+#include "drm-uapi/i915_drm.h"
 
 #ifdef HAVE_VALGRIND
 #include <valgrind.h>
@@ -1099,6 +1099,12 @@ struct anv_device {
     struct anv_bo                               trivial_batch_bo;
     struct anv_bo                               hiz_clear_bo;
 
+    /* Set of pointers to anv_buffer objects for all pinned buffers.  Pinned
+     * buffers are always resident because they could be used at any time via
+     * VK_EXT_buffer_device_address.
+     */
+    struct set *                                pinned_buffers;
+
     struct anv_pipeline_cache                   default_pipeline_cache;
     struct blorp_context                        blorp;
 
@@ -1449,10 +1455,10 @@ _anv_combine_address(struct anv_batch *batch, void *location,
  */
 
 /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */
-#define GEN9_MOCS 2
+#define GEN9_MOCS (2 << 1)
 
 /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */
-#define GEN9_EXTERNAL_MOCS 1
+#define GEN9_EXTERNAL_MOCS (1 << 1)
 
 /* Cannonlake MOCS defines are duplicates of Skylake MOCS defines. */
 #define GEN10_MOCS GEN9_MOCS
@@ -2618,6 +2624,7 @@ struct anv_pipeline {
    bool                                         writes_stencil;
    bool                                         stencil_test_enable;
    bool                                         depth_clamp_enable;
+   bool                                         depth_clip_enable;
    bool                                         sample_shading_enable;
    bool                                         kill_pixel;
 

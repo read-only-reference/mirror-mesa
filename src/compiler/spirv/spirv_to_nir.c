@@ -497,7 +497,8 @@ vtn_handle_decoration(struct vtn_builder *b, SpvOp opcode,
    case SpvOpMemberDecorate:
    case SpvOpDecorateStringGOOGLE:
    case SpvOpMemberDecorateStringGOOGLE:
-   case SpvOpExecutionMode: {
+   case SpvOpExecutionMode:
+   case SpvOpExecutionModeId: {
       struct vtn_value *val = vtn_untyped_value(b, target);
 
       struct vtn_decoration *dec = rzalloc(b, struct vtn_decoration);
@@ -513,6 +514,7 @@ vtn_handle_decoration(struct vtn_builder *b, SpvOp opcode,
                      "Member argument of OpMemberDecorate too large");
          break;
       case SpvOpExecutionMode:
+      case SpvOpExecutionModeId:
          dec->scope = VTN_DEC_EXECUTION_MODE;
          break;
       default:
@@ -1564,10 +1566,7 @@ handle_workgroup_size_decoration_cb(struct vtn_builder *b,
       return;
 
    vtn_assert(val->type->type == glsl_vector_type(GLSL_TYPE_UINT, 3));
-
-   b->shader->info.cs.local_size[0] = val->constant->values[0].u32[0];
-   b->shader->info.cs.local_size[1] = val->constant->values[0].u32[1];
-   b->shader->info.cs.local_size[2] = val->constant->values[0].u32[2];
+   b->workgroup_size_builtin = val;
 }
 
 static void
@@ -3358,7 +3357,7 @@ vtn_handle_barrier(struct vtn_builder *b, SpvOp opcode,
       switch (opcode) {
       case SpvOpEmitStreamVertex:
       case SpvOpEndStreamPrimitive: {
-         unsigned stream = vtn_constant_value(b, w[1])->values[0].u32[0];
+         unsigned stream = vtn_constant_uint(b, w[1]);
          nir_intrinsic_set_stream_id(intrin, stream);
          break;
       }
@@ -3372,23 +3371,19 @@ vtn_handle_barrier(struct vtn_builder *b, SpvOp opcode,
    }
 
    case SpvOpMemoryBarrier: {
-      SpvScope scope = vtn_constant_value(b, w[1])->values[0].u32[0];
-      SpvMemorySemanticsMask semantics =
-         vtn_constant_value(b, w[2])->values[0].u32[0];
+      SpvScope scope = vtn_constant_uint(b, w[1]);
+      SpvMemorySemanticsMask semantics = vtn_constant_uint(b, w[2]);
       vtn_emit_memory_barrier(b, scope, semantics);
       return;
    }
 
    case SpvOpControlBarrier: {
-      SpvScope execution_scope =
-         vtn_constant_value(b, w[1])->values[0].u32[0];
+      SpvScope execution_scope = vtn_constant_uint(b, w[1]);
       if (execution_scope == SpvScopeWorkgroup)
          vtn_emit_barrier(b, nir_intrinsic_barrier);
 
-      SpvScope memory_scope =
-         vtn_constant_value(b, w[2])->values[0].u32[0];
-      SpvMemorySemanticsMask memory_semantics =
-         vtn_constant_value(b, w[3])->values[0].u32[0];
+      SpvScope memory_scope = vtn_constant_uint(b, w[2]);
+      SpvMemorySemanticsMask memory_semantics = vtn_constant_uint(b, w[3]);
       vtn_emit_memory_barrier(b, memory_scope, memory_semantics);
       break;
    }
@@ -3595,6 +3590,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityInt64Atomics:
          spv_check_supported(int64_atomics, cap);
+         break;
 
       case SpvCapabilityInt8:
          spv_check_supported(int8, cap);
@@ -3762,6 +3758,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       break;
 
    case SpvOpExecutionMode:
+   case SpvOpExecutionModeId:
    case SpvOpDecorationGroup:
    case SpvOpDecorate:
    case SpvOpMemberDecorate:
@@ -3788,7 +3785,8 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
    switch(mode->exec_mode) {
    case SpvExecutionModeOriginUpperLeft:
    case SpvExecutionModeOriginLowerLeft:
-      b->origin_upper_left =
+      vtn_assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
+      b->shader->info.fs.origin_upper_left =
          (mode->exec_mode == SpvExecutionModeOriginUpperLeft);
       break;
 
@@ -3830,7 +3828,15 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       b->shader->info.cs.local_size[1] = mode->literals[1];
       b->shader->info.cs.local_size[2] = mode->literals[2];
       break;
+
+   case SpvExecutionModeLocalSizeId:
+      b->shader->info.cs.local_size[0] = vtn_constant_uint(b, mode->literals[0]);
+      b->shader->info.cs.local_size[1] = vtn_constant_uint(b, mode->literals[1]);
+      b->shader->info.cs.local_size[2] = vtn_constant_uint(b, mode->literals[2]);
+      break;
+
    case SpvExecutionModeLocalSizeHint:
+   case SpvExecutionModeLocalSizeHintId:
       break; /* Nothing to do with this */
 
    case SpvExecutionModeOutputVertices:
@@ -3903,7 +3909,8 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       break;
 
    case SpvExecutionModePixelCenterInteger:
-      b->pixel_center_integer = true;
+      vtn_assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
+      b->shader->info.fs.pixel_center_integer = true;
       break;
 
    case SpvExecutionModeXfb:
@@ -4448,16 +4455,28 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
    /* Set shader info defaults */
    b->shader->info.gs.invocations = 1;
 
-   /* Parse execution modes */
-   vtn_foreach_execution_mode(b, b->entry_point,
-                              vtn_handle_execution_mode, NULL);
-
    b->specializations = spec;
    b->num_specializations = num_spec;
 
    /* Handle all variable, type, and constant instructions */
    words = vtn_foreach_instruction(b, words, word_end,
                                    vtn_handle_variable_or_type_instruction);
+
+   /* Parse execution modes */
+   vtn_foreach_execution_mode(b, b->entry_point,
+                              vtn_handle_execution_mode, NULL);
+
+   if (b->workgroup_size_builtin) {
+      vtn_assert(b->workgroup_size_builtin->type->type ==
+                 glsl_vector_type(GLSL_TYPE_UINT, 3));
+
+      nir_const_value *const_size =
+         &b->workgroup_size_builtin->constant->values[0];
+
+      b->shader->info.cs.local_size[0] = const_size->u32[0];
+      b->shader->info.cs.local_size[1] = const_size->u32[1];
+      b->shader->info.cs.local_size[2] = const_size->u32[2];
+   }
 
    /* Set types on all vtn_values */
    vtn_foreach_instruction(b, words, word_end, vtn_set_instruction_result_type);
@@ -4480,20 +4499,35 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
       }
    } while (progress);
 
+   vtn_assert(b->entry_point->value_type == vtn_value_type_function);
+   nir_function *entry_point = b->entry_point->func->impl->function;
+   vtn_assert(entry_point);
+
+   entry_point->is_entrypoint = true;
+
+   /* When multiple shader stages exist in the same SPIR-V module, we
+    * generate input and output variables for every stage, in the same
+    * NIR program.  These dead variables can be invalid NIR.  For example,
+    * TCS outputs must be per-vertex arrays (or decorated 'patch'), while
+    * VS output variables wouldn't be.
+    *
+    * To ensure we have valid NIR, we eliminate any dead inputs and outputs
+    * right away.  In order to do so, we must lower any constant initializers
+    * on outputs so nir_remove_dead_variables sees that they're written to.
+    */
+   nir_lower_constant_initializers(b->shader, nir_var_shader_out);
+   nir_remove_dead_variables(b->shader,
+                             nir_var_shader_in | nir_var_shader_out);
+
    /* We sometimes generate bogus derefs that, while never used, give the
     * validator a bit of heartburn.  Run dead code to get rid of them.
     */
    nir_opt_dce(b->shader);
-
-   vtn_assert(b->entry_point->value_type == vtn_value_type_function);
-   nir_function *entry_point = b->entry_point->func->impl->function;
-   vtn_assert(entry_point);
 
    /* Unparent the shader from the vtn_builder before we delete the builder */
    ralloc_steal(NULL, b->shader);
 
    ralloc_free(b);
 
-   entry_point->is_entrypoint = true;
    return entry_point;
 }

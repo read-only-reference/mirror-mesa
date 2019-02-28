@@ -1004,6 +1004,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    fb->_HasAttachments = true;
    fb->_IntegerBuffers = 0;
    fb->_RGBBuffers = 0;
+   fb->_FP32Buffers = 0;
 
    /* Start at -2 to more easily loop over all attachment points.
     *  -2: depth buffer
@@ -1013,6 +1014,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    for (i = -2; i < (GLint) ctx->Const.MaxColorAttachments; i++) {
       struct gl_renderbuffer_attachment *att;
       GLenum f;
+      GLenum baseFormat;
       mesa_format attFormat;
       GLenum att_tex_target = GL_NONE;
 
@@ -1067,6 +1069,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          minHeight = MIN2(minHeight, texImg->Height);
          maxHeight = MAX2(maxHeight, texImg->Height);
          f = texImg->_BaseFormat;
+         baseFormat = f;
          attFormat = texImg->TexFormat;
          numImages++;
 
@@ -1099,6 +1102,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          minHeight = MIN2(minHeight, att->Renderbuffer->Height);
          maxHeight = MAX2(minHeight, att->Renderbuffer->Height);
          f = att->Renderbuffer->InternalFormat;
+         baseFormat = att->Renderbuffer->_BaseFormat;
          attFormat = att->Renderbuffer->Format;
          numImages++;
 
@@ -1150,8 +1154,11 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          if (_mesa_is_format_integer_color(attFormat))
             fb->_IntegerBuffers |= (1 << i);
 
-         if (f == GL_RGB)
+         if (baseFormat == GL_RGB)
             fb->_RGBBuffers |= (1 << i);
+
+         if (type == GL_FLOAT && _mesa_get_format_max_bits(attFormat) > 16)
+            fb->_FP32Buffers |= (1 << i);
 
          fb->_AllColorBuffersFixedPoint =
             fb->_AllColorBuffersFixedPoint &&
@@ -4663,8 +4670,12 @@ get_fb_attachment(struct gl_context *ctx, struct gl_framebuffer *fb,
    case GL_COLOR_ATTACHMENT12:
    case GL_COLOR_ATTACHMENT13:
    case GL_COLOR_ATTACHMENT14:
-   case GL_COLOR_ATTACHMENT15:
-      return &fb->Attachment[BUFFER_COLOR0 + attachment - GL_COLOR_ATTACHMENT0];
+   case GL_COLOR_ATTACHMENT15: {
+      const unsigned i = attachment - GL_COLOR_ATTACHMENT0;
+      if (i >= ctx->Const.MaxColorAttachments)
+         return NULL;
+      return &fb->Attachment[BUFFER_COLOR0 + i];
+   }
    case GL_DEPTH:
    case GL_DEPTH_ATTACHMENT:
    case GL_DEPTH_STENCIL_ATTACHMENT:
