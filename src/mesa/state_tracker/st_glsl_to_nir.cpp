@@ -36,6 +36,7 @@
 #include "main/shaderapi.h"
 #include "main/uniforms.h"
 
+#include "main/shaderobj.h"
 #include "st_context.h"
 #include "st_glsl_types.h"
 #include "st_program.h"
@@ -47,7 +48,6 @@
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/ir_optimization.h"
 #include "compiler/glsl/string_to_uint_map.h"
-
 
 static int
 type_size(const struct glsl_type *type)
@@ -240,9 +240,8 @@ st_nir_lookup_parameter_index(const struct gl_program_parameter_list *params,
 static void
 st_nir_assign_uniform_locations(struct gl_context *ctx,
                                 struct gl_program *prog,
-                                struct exec_list *uniform_list, unsigned *size)
+                                struct exec_list *uniform_list)
 {
-   int max = 0;
    int shaderidx = 0;
    int imageidx = 0;
 
@@ -272,7 +271,7 @@ st_nir_assign_uniform_locations(struct gl_context *ctx,
           */
 
          unsigned comps;
-         if (glsl_type_is_struct(type)) {
+         if (glsl_type_is_struct_or_ifc(type)) {
             comps = 4;
          } else {
             comps = glsl_get_vector_elements(type);
@@ -288,16 +287,17 @@ st_nir_assign_uniform_locations(struct gl_context *ctx,
       } else {
          loc = st_nir_lookup_parameter_index(prog->Parameters, uniform->name);
 
-         if (ctx->Const.PackedDriverUniformStorage) {
+         /* We need to check that loc is not -1 here before accessing the
+          * array. It can be negative for example when we have a struct that
+          * only contains opaque types.
+          */
+         if (loc >= 0 && ctx->Const.PackedDriverUniformStorage) {
             loc = prog->Parameters->ParameterValueOffset[loc];
          }
       }
 
       uniform->data.driver_location = loc;
-
-      max = MAX2(max, loc + type_size(uniform->type));
    }
-   *size = max;
 }
 
 void
@@ -355,11 +355,13 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
    struct pipe_screen *screen = st->pipe->screen;
    bool is_scalar = screen->get_shader_param(screen, type, PIPE_SHADER_CAP_SCALAR_ISA);
    assert(options);
+   bool lower_64bit =
+      options->lower_int64_options || options->lower_doubles_options;
 
    if (prog->nir)
       return prog->nir;
 
-   nir_shader *nir = glsl_to_nir(shader_program, stage, options);
+   nir_shader *nir = glsl_to_nir(st->ctx, shader_program, stage, options);
 
    /* Set the next shader stage hint for VS and TES. */
    if (!nir->info.separate_shader &&
@@ -374,6 +376,14 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
          (gl_shader_stage) u_bit_scan(&stages_mask) : MESA_SHADER_FRAGMENT;
    } else {
       nir->info.next_stage = MESA_SHADER_FRAGMENT;
+   }
+
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   nir_shader *softfp64 = NULL;
+   if (nir->info.uses_64bit &&
+       (options->lower_doubles_options & nir_lower_fp64_full_software) != 0) {
+      softfp64 = glsl_float64_funcs_to_nir(st->ctx, options);
+      ralloc_steal(ralloc_parent(nir), softfp64);
    }
 
    nir_variable_mode mask =
@@ -396,7 +406,39 @@ st_glsl_to_nir(struct st_context *st, struct gl_program *prog,
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
 
+   if (is_scalar) {
+     NIR_PASS_V(nir, nir_lower_alu_to_scalar);
+   }
+
    st_nir_opts(nir, is_scalar);
+
+   NIR_PASS_V(nir, gl_nir_lower_buffers, shader_program);
+   /* Do a round of constant folding to clean up address calculations */
+   NIR_PASS_V(nir, nir_opt_constant_folding);
+
+   if (lower_64bit) {
+      bool lowered_64bit_ops = false;
+      bool progress = false;
+
+      NIR_PASS_V(nir, nir_opt_algebraic);
+
+      do {
+         progress = false;
+         if (options->lower_int64_options) {
+            NIR_PASS(progress, nir, nir_lower_int64,
+                     options->lower_int64_options);
+         }
+         if (options->lower_doubles_options) {
+            NIR_PASS(progress, nir, nir_lower_doubles,
+                     softfp64, options->lower_doubles_options);
+         }
+         NIR_PASS(progress, nir, nir_opt_algebraic);
+         lowered_64bit_ops |= progress;
+      } while (progress);
+
+      if (progress)
+         st_nir_opts(nir, is_scalar);
+   }
 
    return nir;
 }
@@ -425,7 +467,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
          const struct glsl_type *type = glsl_without_array(var->type);
          for (unsigned int i = 0; i < var->num_state_slots; i++) {
             unsigned comps;
-            if (glsl_type_is_struct(type)) {
+            if (glsl_type_is_struct_or_ifc(type)) {
                /* Builtin struct require specical handling for now we just
                 * make all members vec4. See st_nir_lower_builtin.
                 */
@@ -797,6 +839,10 @@ st_link_nir(struct gl_context *ctx,
       }
 
       nir_sweep(shader->Program->nir);
+
+      /* The GLSL IR won't be needed anymore. */
+      ralloc_free(shader->ir);
+      shader->ir = NULL;
    }
 
    return true;
@@ -876,6 +922,7 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
    if (options->lower_all_io_to_temps ||
+       options->lower_all_io_to_elements ||
        nir->info.stage == MESA_SHADER_VERTEX ||
        nir->info.stage == MESA_SHADER_GEOMETRY) {
       NIR_PASS_V(nir, nir_lower_io_arrays_to_elements_no_indirects, false);
@@ -889,12 +936,15 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
          st->ctx->Const.Program[nir->info.stage].MaxAtomicBuffers);
 
    st_nir_assign_uniform_locations(st->ctx, prog,
-                                   &nir->uniforms, &nir->num_uniforms);
+                                   &nir->uniforms);
+
+   /* Set num_uniforms in number of attribute slots (vec4s) */
+   nir->num_uniforms = DIV_ROUND_UP(prog->Parameters->NumParameterValues, 4);
 
    if (st->ctx->Const.PackedDriverUniformStorage) {
       NIR_PASS_V(nir, nir_lower_io, nir_var_uniform, st_glsl_type_dword_size,
                  (nir_lower_io_options)0);
-      NIR_PASS_V(nir, st_nir_lower_uniforms_to_ubo);
+      NIR_PASS_V(nir, nir_lower_uniforms_to_ubo, 4);
    }
 
    st_nir_lower_samplers(screen, nir, shader_program, prog);

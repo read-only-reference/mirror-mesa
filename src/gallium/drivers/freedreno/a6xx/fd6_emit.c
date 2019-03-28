@@ -72,11 +72,10 @@ fd6_emit_const(struct fd_ringbuffer *ring, gl_shader_stage type,
 		uint32_t regid, uint32_t offset, uint32_t sizedwords,
 		const uint32_t *dwords, struct pipe_resource *prsc)
 {
-	uint32_t i, sz;
+	uint32_t i, sz, align_sz;
 	enum a6xx_state_src src;
 
 	debug_assert((regid % 4) == 0);
-	debug_assert((sizedwords % 4) == 0);
 
 	if (prsc) {
 		sz = 0;
@@ -86,12 +85,14 @@ fd6_emit_const(struct fd_ringbuffer *ring, gl_shader_stage type,
 		src = SS6_DIRECT;
 	}
 
-	OUT_PKT7(ring, shader_t_to_opcode(type), 3 + sz);
+	align_sz = align(sz, 4);
+
+	OUT_PKT7(ring, shader_t_to_opcode(type), 3 + align_sz);
 	OUT_RING(ring, CP_LOAD_STATE6_0_DST_OFF(regid/4) |
 			CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
 			CP_LOAD_STATE6_0_STATE_SRC(src) |
 			CP_LOAD_STATE6_0_STATE_BLOCK(fd6_stage2shadersb(type)) |
-			CP_LOAD_STATE6_0_NUM_UNIT(sizedwords/4));
+			CP_LOAD_STATE6_0_NUM_UNIT(DIV_ROUND_UP(sizedwords, 4)));
 	if (prsc) {
 		struct fd_bo *bo = fd_resource(prsc)->bo;
 		OUT_RELOC(ring, bo, offset, 0, 0);
@@ -100,8 +101,14 @@ fd6_emit_const(struct fd_ringbuffer *ring, gl_shader_stage type,
 		OUT_RING(ring, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
 		dwords = (uint32_t *)&((uint8_t *)dwords)[offset];
 	}
+
 	for (i = 0; i < sz; i++) {
 		OUT_RING(ring, dwords[i]);
+	}
+
+	/* Zero-pad to multiple of 4 dwords */
+	for (i = sz; i < align_sz; i++) {
+		OUT_RING(ring, 0);
 	}
 }
 
@@ -162,10 +169,10 @@ struct PACKED bcolor_entry {
 	uint32_t rgb10a2;
 	uint32_t z24; /* also s8? */
 	uint16_t srgb[4];      /* appears to duplicate fp16[], but clamped, used for srgb */
-	uint8_t  __pad1[24];
+	uint8_t  __pad1[56];
 };
 
-#define FD6_BORDER_COLOR_SIZE        0x60
+#define FD6_BORDER_COLOR_SIZE        sizeof(struct bcolor_entry)
 #define FD6_BORDER_COLOR_UPLOAD_SIZE (2 * PIPE_MAX_SAMPLERS * FD6_BORDER_COLOR_SIZE)
 
 static void
@@ -196,7 +203,8 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 		if ((i >= tex->num_textures) || !tex->textures[i])
 			continue;
 
-		enum pipe_format format = tex->textures[i]->format;
+		struct pipe_sampler_view *view = tex->textures[i];
+		enum pipe_format format = view->format;
 		const struct util_format_description *desc =
 				util_format_description(format);
 
@@ -206,8 +214,14 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 		e->rgb10a2 = 0;
 		e->z24 = 0;
 
+		unsigned char swiz[4];
+
+		fd6_tex_swiz(format, swiz,
+				view->swizzle_r, view->swizzle_g,
+				view->swizzle_b, view->swizzle_a);
+
 		for (j = 0; j < 4; j++) {
-			int c = desc->swizzle[j];
+			int c = swiz[j];
 			int cd = c;
 
 			/*
@@ -411,17 +425,22 @@ fd6_emit_textures(struct fd_pipe *pipe, struct fd_ringbuffer *ring,
 			static const struct fd6_pipe_sampler_view dummy_view = {};
 			const struct fd6_pipe_sampler_view *view = tex->textures[i] ?
 				fd6_pipe_sampler_view(tex->textures[i]) : &dummy_view;
+			struct fd_resource *rsc = NULL;
+
+			if (view->base.texture)
+				rsc = fd_resource(view->base.texture);
 
 			OUT_RING(state, view->texconst0);
 			OUT_RING(state, view->texconst1);
 			OUT_RING(state, view->texconst2);
-			OUT_RING(state, view->texconst3);
+			OUT_RING(state, view->texconst3 |
+				COND(rsc && view->ubwc_enabled,
+					A6XX_TEX_CONST_3_FLAG | A6XX_TEX_CONST_3_UNK27));
 
-			if (view->base.texture) {
-				struct fd_resource *rsc = fd_resource(view->base.texture);
+			if (rsc) {
 				if (view->base.format == PIPE_FORMAT_X32_S8X24_UINT)
 					rsc = rsc->stencil;
-				OUT_RELOC(state, rsc->bo, view->offset,
+				OUT_RELOC(state, rsc->bo, view->offset + rsc->offset,
 					(uint64_t)view->texconst5 << 32, 0);
 			} else {
 				OUT_RING(state, 0x00000000);
@@ -429,8 +448,14 @@ fd6_emit_textures(struct fd_pipe *pipe, struct fd_ringbuffer *ring,
 			}
 
 			OUT_RING(state, view->texconst6);
-			OUT_RING(state, view->texconst7);
-			OUT_RING(state, view->texconst8);
+
+			if (rsc && view->ubwc_enabled) {
+				OUT_RELOC(state, rsc->bo, view->offset + rsc->ubwc_offset, 0, 0);
+			} else {
+				OUT_RING(state, 0);
+				OUT_RING(state, 0);
+			}
+
 			OUT_RING(state, view->texconst9);
 			OUT_RING(state, view->texconst10);
 			OUT_RING(state, view->texconst11);

@@ -88,6 +88,7 @@ static const struct debug_named_value debug_options[] = {
 		{"ttile",     FD_DBG_TTILE,  "Enable texture tiling (a5xx)"},
 		{"perfcntrs", FD_DBG_PERFC,  "Expose performance counters"},
 		{"softpin",   FD_DBG_SOFTPIN,"Enable softpin command submission (experimental)"},
+		{"ubwc",      FD_DBG_UBWC,   "Enable UBWC for all internal buffers (experimental)"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -194,6 +195,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
 	case PIPE_CAP_TEXTURE_BARRIER:
 	case PIPE_CAP_INVALIDATE_BUFFER:
+	case PIPE_CAP_PACKED_UNIFORMS:
 		return 1;
 
 	case PIPE_CAP_VERTEXID_NOBASE:
@@ -277,6 +279,13 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		if (glsl120)
 			return 120;
 		return is_ir3(screen) ? 140 : 120;
+
+	case PIPE_CAP_ESSL_FEATURE_LEVEL:
+		/* we can probably enable 320 for a5xx too, but need to test: */
+		if (is_a6xx(screen)) return 320;
+		if (is_a5xx(screen)) return 310;
+		if (is_ir3(screen))  return 300;
+		return 120;
 
 	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
 		if (is_a6xx(screen)) return 64;

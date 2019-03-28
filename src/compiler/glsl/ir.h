@@ -657,6 +657,19 @@ public:
       unsigned centroid:1;
       unsigned sample:1;
       unsigned patch:1;
+      /**
+       * Was an 'invariant' qualifier explicitly set in the shader?
+       *
+       * This is used to cross validate qualifiers.
+       */
+      unsigned explicit_invariant:1;
+      /**
+       * Is the variable invariant?
+       *
+       * It can happen either by having the 'invariant' qualifier
+       * explicitly set in the shader or by being used in calculations
+       * of other invariant variables.
+       */
       unsigned invariant:1;
       unsigned precise:1;
 
@@ -759,17 +772,17 @@ public:
       unsigned is_xfb_only:1;
 
       /**
-       * Was a transfor feedback buffer set in the shader?
+       * Was a transform feedback buffer set in the shader?
        */
       unsigned explicit_xfb_buffer:1;
 
       /**
-       * Was a transfor feedback offset set in the shader?
+       * Was a transform feedback offset set in the shader?
        */
       unsigned explicit_xfb_offset:1;
 
       /**
-       * Was a transfor feedback stride set in the shader?
+       * Was a transform feedback stride set in the shader?
        */
       unsigned explicit_xfb_stride:1;
 

@@ -117,6 +117,21 @@ atomic_add_unless(int *v, int add, int unless)
    return c == unless;
 }
 
+static const char *
+memzone_name(enum iris_memory_zone memzone)
+{
+   const char *names[] = {
+      [IRIS_MEMZONE_SHADER]  = "shader",
+      [IRIS_MEMZONE_BINDER]  = "binder",
+      [IRIS_MEMZONE_SURFACE] = "surface",
+      [IRIS_MEMZONE_DYNAMIC] = "dynamic",
+      [IRIS_MEMZONE_OTHER]   = "other",
+      [IRIS_MEMZONE_BORDER_COLOR_POOL] = "bordercolor",
+   };
+   assert(memzone < ARRAY_SIZE(names));
+   return names[memzone];
+}
+
 /**
  * Iris fixed-size bucketing VMA allocator.
  *
@@ -521,6 +536,12 @@ bo_alloc_internal(struct iris_bufmgr *bufmgr,
    if (flags & BO_ALLOC_ZEROED)
       zeroed = true;
 
+   if ((flags & BO_ALLOC_COHERENT) && !bufmgr->has_llc) {
+      bo_size = MAX2(ALIGN(size, page_size), page_size);
+      bucket = NULL;
+      goto skip_cache;
+   }
+
    /* Round the allocated size up to a power of two number of pages. */
    bucket = bucket_for_size(bufmgr, size);
 
@@ -579,6 +600,7 @@ retry:
          bo->gtt_offset = 0ull;
       }
    } else {
+skip_cache:
       bo = bo_calloc();
       if (!bo)
          goto err;
@@ -644,8 +666,19 @@ retry:
 
    mtx_unlock(&bufmgr->lock);
 
-   DBG("bo_create: buf %d (%s) %llub\n", bo->gem_handle, bo->name,
-       (unsigned long long) size);
+   if ((flags & BO_ALLOC_COHERENT) && !bo->cache_coherent) {
+      struct drm_i915_gem_caching arg = {
+         .handle = bo->gem_handle,
+         .caching = 1,
+      };
+      if (drm_ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_SET_CACHING, &arg) == 0) {
+         bo->cache_coherent = true;
+         bo->reusable = false;
+      }
+   }
+
+   DBG("bo_create: buf %d (%s) (%s memzone) %llub\n", bo->gem_handle,
+       bo->name, memzone_name(memzone), (unsigned long long) size);
 
    return bo;
 
@@ -1168,8 +1201,11 @@ can_map_cpu(struct iris_bo *bo, unsigned flags)
     * most drawing while non-persistent mappings are active, we may still use
     * the GPU for blits or other operations, causing batches to happen at
     * inconvenient times.
+    *
+    * If RAW is set, we expect the caller to be able to handle a WC buffer
+    * more efficiently than the involuntary clflushes.
     */
-   if (flags & (MAP_PERSISTENT | MAP_COHERENT | MAP_ASYNC))
+   if (flags & (MAP_PERSISTENT | MAP_COHERENT | MAP_ASYNC | MAP_RAW))
       return false;
 
    return !(flags & MAP_WRITE);
@@ -1616,7 +1652,7 @@ iris_bufmgr_init(struct gen_device_info *devinfo, int fd)
    const uint64_t _4GB = 1ull << 32;
 
    util_vma_heap_init(&bufmgr->vma_allocator[IRIS_MEMZONE_SHADER],
-                      PAGE_SIZE, _4GB);
+                      PAGE_SIZE, _4GB - PAGE_SIZE);
    util_vma_heap_init(&bufmgr->vma_allocator[IRIS_MEMZONE_SURFACE],
                       IRIS_MEMZONE_SURFACE_START,
                       _4GB - IRIS_MAX_BINDERS * IRIS_BINDER_SIZE);

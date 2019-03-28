@@ -73,11 +73,11 @@ buffer_usage_warning(struct gl_context *ctx, GLuint *id, const char *fmt, ...)
    va_list args;
 
    va_start(args, fmt);
-   _mesa_gl_vdebug(ctx, id,
-                   MESA_DEBUG_SOURCE_API,
-                   MESA_DEBUG_TYPE_PERFORMANCE,
-                   MESA_DEBUG_SEVERITY_MEDIUM,
-                   fmt, args);
+   _mesa_gl_vdebugf(ctx, id,
+                    MESA_DEBUG_SOURCE_API,
+                    MESA_DEBUG_TYPE_PERFORMANCE,
+                    MESA_DEBUG_SEVERITY_MEDIUM,
+                    fmt, args);
    va_end(args);
 }
 
@@ -113,8 +113,13 @@ get_buffer_target(struct gl_context *ctx, GLenum target)
 
    switch (target) {
    case GL_ARRAY_BUFFER_ARB:
+      if (ctx->Array.ArrayBufferObj)
+         ctx->Array.ArrayBufferObj->UsageHistory |= USAGE_ARRAY_BUFFER;
       return &ctx->Array.ArrayBufferObj;
    case GL_ELEMENT_ARRAY_BUFFER_ARB:
+      if (ctx->Array.VAO->IndexBufferObj)
+         ctx->Array.VAO->IndexBufferObj->UsageHistory
+            |= USAGE_ELEMENT_ARRAY_BUFFER;
       return &ctx->Array.VAO->IndexBufferObj;
    case GL_PIXEL_PACK_BUFFER_EXT:
       return &ctx->Pack.BufferObj;

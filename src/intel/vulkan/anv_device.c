@@ -44,9 +44,30 @@
 
 #include "genxml/gen7_pack.h"
 
+/* This is probably far to big but it reflects the max size used for messages
+ * in OpenGLs KHR_debug.
+ */
+#define MAX_DEBUG_MESSAGE_LENGTH    4096
+
 static void
 compiler_debug_log(void *data, const char *fmt, ...)
-{ }
+{
+   char str[MAX_DEBUG_MESSAGE_LENGTH];
+   struct anv_device *device = (struct anv_device *)data;
+
+   if (list_empty(&device->instance->debug_report_callbacks.callbacks))
+      return;
+
+   va_list args;
+   va_start(args, fmt);
+   (void) vsnprintf(str, MAX_DEBUG_MESSAGE_LENGTH, fmt, args);
+   va_end(args);
+
+   vk_debug_report(&device->instance->debug_report_callbacks,
+                   VK_DEBUG_REPORT_DEBUG_BIT_EXT,
+                   VK_DEBUG_REPORT_OBJECT_TYPE_UNKNOWN_EXT,
+                   0, 0, 0, "anv", str);
+}
 
 static void
 compiler_perf_log(void *data, const char *fmt, ...)
@@ -812,7 +833,7 @@ VkResult anv_EnumeratePhysicalDeviceGroups(
       memset(p->physicalDevices, 0, sizeof(p->physicalDevices));
       p->physicalDevices[0] =
          anv_physical_device_to_handle(&instance->physicalDevice);
-      p->subsetAllocation = VK_FALSE;
+      p->subsetAllocation = false;
 
       vk_foreach_struct(ext, p->pNext)
          anv_debug_ignored_stype(ext->sType);
@@ -946,7 +967,22 @@ void anv_GetPhysicalDeviceFeatures2(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT: {
          VkPhysicalDeviceDepthClipEnableFeaturesEXT *features =
             (VkPhysicalDeviceDepthClipEnableFeaturesEXT *)ext;
-         features->depthClipEnable = VK_TRUE;
+         features->depthClipEnable = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES_EXT: {
+         VkPhysicalDeviceHostQueryResetFeaturesEXT *features =
+            (VkPhysicalDeviceHostQueryResetFeaturesEXT *)ext;
+         features->hostQueryReset = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES_EXT: {
+         VkPhysicalDeviceInlineUniformBlockFeaturesEXT *features =
+            (VkPhysicalDeviceInlineUniformBlockFeaturesEXT *)ext;
+         features->inlineUniformBlock = true;
+         features->descriptorBindingInlineUniformBlockUpdateAfterBind = false;
          break;
       }
 
@@ -961,7 +997,7 @@ void anv_GetPhysicalDeviceFeatures2(
 
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES: {
          VkPhysicalDeviceProtectedMemoryFeatures *features = (void *)ext;
-         features->protectedMemory = VK_FALSE;
+         features->protectedMemory = false;
          break;
       }
 
@@ -995,16 +1031,23 @@ void anv_GetPhysicalDeviceFeatures2(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT: {
          VkPhysicalDeviceTransformFeedbackFeaturesEXT *features =
             (VkPhysicalDeviceTransformFeedbackFeaturesEXT *)ext;
-         features->transformFeedback = VK_TRUE;
-         features->geometryStreams = VK_TRUE;
+         features->transformFeedback = true;
+         features->geometryStreams = true;
          break;
       }
 
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT: {
          VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *features =
             (VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *)ext;
-         features->vertexAttributeInstanceRateDivisor = VK_TRUE;
-         features->vertexAttributeInstanceRateZeroDivisor = VK_TRUE;
+         features->vertexAttributeInstanceRateDivisor = true;
+         features->vertexAttributeInstanceRateZeroDivisor = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_YCBCR_IMAGE_ARRAYS_FEATURES_EXT: {
+         VkPhysicalDeviceYcbcrImageArraysFeaturesEXT *features =
+            (VkPhysicalDeviceYcbcrImageArraysFeaturesEXT *)ext;
+         features->ycbcrImageArrays = true;
          break;
       }
 
@@ -1089,7 +1132,7 @@ void anv_GetPhysicalDeviceProperties(
       .maxFragmentCombinedOutputResources       = 8,
       .maxComputeSharedMemorySize               = 32768,
       .maxComputeWorkGroupCount                 = { 65535, 65535, 65535 },
-      .maxComputeWorkGroupInvocations           = 16 * devinfo->max_cs_threads,
+      .maxComputeWorkGroupInvocations           = 32 * devinfo->max_cs_threads,
       .maxComputeWorkGroupSize = {
          16 * devinfo->max_cs_threads,
          16 * devinfo->max_cs_threads,
@@ -1198,8 +1241,8 @@ void anv_GetPhysicalDeviceProperties2(
                VK_RESOLVE_MODE_MAX_BIT_KHR;
          }
 
-         props->independentResolveNone = VK_TRUE;
-         props->independentResolve = VK_TRUE;
+         props->independentResolveNone = true;
+         props->independentResolve = true;
          break;
       }
 
@@ -1223,6 +1266,14 @@ void anv_GetPhysicalDeviceProperties2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT: {
+         VkPhysicalDeviceExternalMemoryHostPropertiesEXT *props =
+            (VkPhysicalDeviceExternalMemoryHostPropertiesEXT *) ext;
+         /* Userptr needs page aligned memory. */
+         props->minImportedHostPointerAlignment = 4096;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES: {
          VkPhysicalDeviceIDProperties *id_props =
             (VkPhysicalDeviceIDProperties *)ext;
@@ -1230,6 +1281,21 @@ void anv_GetPhysicalDeviceProperties2(
          memcpy(id_props->driverUUID, pdevice->driver_uuid, VK_UUID_SIZE);
          /* The LUID is for Windows. */
          id_props->deviceLUIDValid = false;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES_EXT: {
+         VkPhysicalDeviceInlineUniformBlockPropertiesEXT *props =
+            (VkPhysicalDeviceInlineUniformBlockPropertiesEXT *)ext;
+         props->maxInlineUniformBlockSize = MAX_INLINE_UNIFORM_BLOCK_SIZE;
+         props->maxPerStageDescriptorInlineUniformBlocks =
+            MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS;
+         props->maxPerStageDescriptorUpdateAfterBindInlineUniformBlocks =
+            MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS;
+         props->maxDescriptorSetInlineUniformBlocks =
+            MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS;
+         props->maxDescriptorSetUpdateAfterBindInlineUniformBlocks =
+            MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS;
          break;
       }
 
@@ -1313,7 +1379,7 @@ void anv_GetPhysicalDeviceProperties2(
                                            VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT |
                                            VK_SUBGROUP_FEATURE_CLUSTERED_BIT |
                                            VK_SUBGROUP_FEATURE_QUAD_BIT;
-         properties->quadOperationsInAllStages = VK_TRUE;
+         properties->quadOperationsInAllStages = true;
          break;
       }
 
@@ -1327,10 +1393,10 @@ void anv_GetPhysicalDeviceProperties2(
          props->maxTransformFeedbackStreamDataSize = 128 * 4;
          props->maxTransformFeedbackBufferDataSize = 128 * 4;
          props->maxTransformFeedbackBufferDataStride = 2048;
-         props->transformFeedbackQueries = VK_TRUE;
-         props->transformFeedbackStreamsLinesTriangles = VK_FALSE;
-         props->transformFeedbackRasterizationStreamSelect = VK_FALSE;
-         props->transformFeedbackDraw = VK_TRUE;
+         props->transformFeedbackQueries = true;
+         props->transformFeedbackStreamsLinesTriangles = false;
+         props->transformFeedbackRasterizationStreamSelect = false;
+         props->transformFeedbackDraw = true;
          break;
       }
 
@@ -1735,6 +1801,65 @@ anv_device_init_hiz_clear_value_bo(struct anv_device *device)
    anv_gem_munmap(map, device->hiz_clear_bo.size);
 }
 
+static bool
+get_bo_from_pool(struct gen_batch_decode_bo *ret,
+                 struct anv_block_pool *pool,
+                 uint64_t address)
+{
+   for (uint32_t i = 0; i < pool->nbos; i++) {
+      uint64_t bo_address = pool->bos[i].offset & (~0ull >> 16);
+      uint32_t bo_size = pool->bos[i].size;
+      if (address >= bo_address && address < (bo_address + bo_size)) {
+         *ret = (struct gen_batch_decode_bo) {
+            .addr = bo_address,
+            .size = bo_size,
+            .map = pool->bos[i].map,
+         };
+         return true;
+      }
+   }
+   return false;
+}
+
+/* Finding a buffer for batch decoding */
+static struct gen_batch_decode_bo
+decode_get_bo(void *v_batch, bool ppgtt, uint64_t address)
+{
+   struct anv_device *device = v_batch;
+   struct gen_batch_decode_bo ret_bo = {};
+
+   assert(ppgtt);
+
+   if (get_bo_from_pool(&ret_bo, &device->dynamic_state_pool.block_pool, address))
+      return ret_bo;
+   if (get_bo_from_pool(&ret_bo, &device->instruction_state_pool.block_pool, address))
+      return ret_bo;
+   if (get_bo_from_pool(&ret_bo, &device->binding_table_pool.block_pool, address))
+      return ret_bo;
+   if (get_bo_from_pool(&ret_bo, &device->surface_state_pool.block_pool, address))
+      return ret_bo;
+
+   if (!device->cmd_buffer_being_decoded)
+      return (struct gen_batch_decode_bo) { };
+
+   struct anv_batch_bo **bo;
+
+   u_vector_foreach(bo, &device->cmd_buffer_being_decoded->seen_bbos) {
+      /* The decoder zeroes out the top 16 bits, so we need to as well */
+      uint64_t bo_address = (*bo)->bo.offset & (~0ull >> 16);
+
+      if (address >= bo_address && address < bo_address + (*bo)->bo.size) {
+         return (struct gen_batch_decode_bo) {
+            .addr = bo_address,
+            .size = (*bo)->bo.size,
+            .map = (*bo)->bo.map,
+         };
+      }
+   }
+
+   return (struct gen_batch_decode_bo) { };
+}
+
 VkResult anv_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -1801,6 +1926,17 @@ VkResult anv_CreateDevice(
                        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
    if (!device)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   const unsigned decode_flags =
+      GEN_BATCH_DECODE_FULL |
+      ((INTEL_DEBUG & DEBUG_COLOR) ? GEN_BATCH_DECODE_IN_COLOR : 0) |
+      GEN_BATCH_DECODE_OFFSETS |
+      GEN_BATCH_DECODE_FLOATS;
+
+   gen_batch_decode_ctx_init(&device->decoder_ctx,
+                             &physical_device->info,
+                             stderr, decode_flags, NULL,
+                             decode_get_bo, NULL, device);
 
    device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
    device->instance = physical_device->instance;
@@ -2089,6 +2225,8 @@ void anv_DestroyDevice(
 
    anv_gem_destroy_context(device, device->context_id);
 
+   gen_batch_decode_ctx_finish(&device->decoder_ctx);
+
    close(device->fd);
 
    vk_free(&device->alloc, device);
@@ -2363,6 +2501,7 @@ VkResult anv_AllocateMemory(
    mem->map = NULL;
    mem->map_size = 0;
    mem->ahw = NULL;
+   mem->host_ptr = NULL;
 
    uint64_t bo_flags = 0;
 
@@ -2475,6 +2614,30 @@ VkResult anv_AllocateMemory(
       goto success;
    }
 
+   const VkImportMemoryHostPointerInfoEXT *host_ptr_info =
+      vk_find_struct_const(pAllocateInfo->pNext,
+                           IMPORT_MEMORY_HOST_POINTER_INFO_EXT);
+   if (host_ptr_info && host_ptr_info->handleType) {
+      if (host_ptr_info->handleType ==
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT) {
+         result = vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE);
+         goto fail;
+      }
+
+      assert(host_ptr_info->handleType ==
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT);
+
+      result = anv_bo_cache_import_host_ptr(
+         device, &device->bo_cache, host_ptr_info->pHostPointer,
+         pAllocateInfo->allocationSize, bo_flags, &mem->bo);
+
+      if (result != VK_SUCCESS)
+         goto fail;
+
+      mem->host_ptr = host_ptr_info->pHostPointer;
+      goto success;
+   }
+
    /* Regular allocate (not importing memory). */
 
    if (export_info && export_info->handleTypes)
@@ -2564,6 +2727,32 @@ VkResult anv_GetMemoryFdPropertiesKHR(
    }
 }
 
+VkResult anv_GetMemoryHostPointerPropertiesEXT(
+   VkDevice                                    _device,
+   VkExternalMemoryHandleTypeFlagBits          handleType,
+   const void*                                 pHostPointer,
+   VkMemoryHostPointerPropertiesEXT*           pMemoryHostPointerProperties)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+
+   assert(pMemoryHostPointerProperties->sType ==
+          VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT);
+
+   switch (handleType) {
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT: {
+      struct anv_physical_device *pdevice = &device->instance->physicalDevice;
+
+      /* Host memory can be imported as any memory type. */
+      pMemoryHostPointerProperties->memoryTypeBits =
+         (1ull << pdevice->memory.type_count) - 1;
+
+      return VK_SUCCESS;
+   }
+   default:
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+}
+
 void anv_FreeMemory(
     VkDevice                                    _device,
     VkDeviceMemory                              _mem,
@@ -2580,7 +2769,7 @@ void anv_FreeMemory(
 
    anv_bo_cache_release(device, &device->bo_cache, mem->bo);
 
-#ifdef ANDROID
+#if defined(ANDROID) && ANDROID_API_LEVEL >= 26
    if (mem->ahw)
       AHardwareBuffer_release(mem->ahw);
 #endif
@@ -2601,6 +2790,11 @@ VkResult anv_MapMemory(
 
    if (mem == NULL) {
       *ppData = NULL;
+      return VK_SUCCESS;
+   }
+
+   if (mem->host_ptr) {
+      *ppData = mem->host_ptr + offset;
       return VK_SUCCESS;
    }
 
@@ -2656,7 +2850,7 @@ void anv_UnmapMemory(
 {
    ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
 
-   if (mem == NULL)
+   if (mem == NULL || mem->host_ptr)
       return;
 
    anv_gem_munmap(mem->map, mem->map_size);
@@ -2774,8 +2968,8 @@ void anv_GetBufferMemoryRequirements2(
       switch (ext->sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
          VkMemoryDedicatedRequirements *requirements = (void *)ext;
-         requirements->prefersDedicatedAllocation = VK_FALSE;
-         requirements->requiresDedicatedAllocation = VK_FALSE;
+         requirements->prefersDedicatedAllocation = false;
+         requirements->requiresDedicatedAllocation = false;
          break;
       }
 
@@ -2880,11 +3074,11 @@ void anv_GetImageMemoryRequirements2(
              *
              * See also anv_AllocateMemory.
              */
-            requirements->prefersDedicatedAllocation = VK_TRUE;
-            requirements->requiresDedicatedAllocation = VK_TRUE;
+            requirements->prefersDedicatedAllocation = true;
+            requirements->requiresDedicatedAllocation = true;
          } else {
-            requirements->prefersDedicatedAllocation = VK_FALSE;
-            requirements->requiresDedicatedAllocation = VK_FALSE;
+            requirements->prefersDedicatedAllocation = false;
+            requirements->requiresDedicatedAllocation = false;
          }
          break;
       }
@@ -3158,6 +3352,7 @@ anv_fill_buffer_surface_state(struct anv_device *device, struct anv_state state,
                          .mocs = device->default_mocs,
                          .size_B = range,
                          .format = format,
+                         .swizzle = ISL_SWIZZLE_IDENTITY,
                          .stride_B = stride);
 }
 

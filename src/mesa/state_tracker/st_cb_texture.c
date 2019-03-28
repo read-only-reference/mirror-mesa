@@ -62,6 +62,7 @@
 #include "state_tracker/st_gen_mipmap.h"
 #include "state_tracker/st_atom.h"
 #include "state_tracker/st_sampler_view.h"
+#include "state_tracker/st_util.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
@@ -156,7 +157,9 @@ st_NewTextureObject(struct gl_context * ctx, GLuint name, GLenum target)
    if (!obj)
       return NULL;
 
-   /* Pre-allocate a sampler views container to save a branch in the fast path. */
+   /* Pre-allocate a sampler views container to save a branch in the
+    * fast path.
+    */
    obj->sampler_views = calloc(1, sizeof(struct st_sampler_views)
                                + sizeof(struct st_sampler_view));
    if (!obj->sampler_views) {
@@ -184,8 +187,7 @@ st_DeleteTextureObject(struct gl_context *ctx,
    struct st_texture_object *stObj = st_texture_object(texObj);
 
    pipe_resource_reference(&stObj->pt, NULL);
-   st_texture_release_all_sampler_views(st, stObj);
-   st_texture_free_sampler_views(stObj);
+   st_delete_texture_sampler_views(st, stObj);
    simple_mtx_destroy(&stObj->validate_mutex);
    _mesa_delete_texture_object(ctx, texObj);
 }
@@ -792,6 +794,7 @@ st_get_blit_mask(GLenum srcFormat, GLenum dstFormat)
 
    case GL_STENCIL_INDEX:
       switch (srcFormat) {
+      case GL_DEPTH_STENCIL:
       case GL_STENCIL_INDEX:
          return PIPE_MASK_S;
       default:
@@ -2796,7 +2799,7 @@ st_texture_create_from_memory(struct st_context *st,
                               GLuint depth0,
                               GLuint layers,
                               GLuint nr_samples,
-                              GLuint bind )
+                              GLuint bind)
 {
    struct pipe_resource pt, *newtex;
    struct pipe_screen *screen = st->pipe->screen;

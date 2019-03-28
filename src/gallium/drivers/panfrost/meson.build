@@ -31,6 +31,7 @@ files_panfrost = files(
   'midgard/disassemble.c',
 
   'pan_context.c',
+  'pan_job.c',
   'pan_trace.c',
   'pan_drm.c',
   'pan_allocate.c',
@@ -41,6 +42,9 @@ files_panfrost = files(
   'pan_blend_shaders.c',
   'pan_wallpaper.c',
   'pan_pretty_print.c',
+  'pan_fragment.c',
+  'pan_sfbd.c',
+  'pan_mfbd.c'
 )
 
 inc_panfrost = [
