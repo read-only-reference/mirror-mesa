@@ -124,7 +124,7 @@ resolve_image_views(struct iris_context *ice,
 
    while (views) {
       const int i = u_bit_scan(&views);
-      struct iris_resource *res = (void *) shs->image[i].res;
+      struct iris_resource *res = (void *) shs->image[i].base.resource;
 
       if (res->base.target != PIPE_BUFFER) {
          if (consider_framebuffer) {
@@ -248,50 +248,58 @@ iris_postdraw_update_resolve_tracking(struct iris_context *ice,
 
    // XXX: front buffer drawing?
 
-   if (ice->state.dirty & (IRIS_DIRTY_DEPTH_BUFFER |
-                           IRIS_DIRTY_WM_DEPTH_STENCIL)) {
-      struct pipe_surface *zs_surf = cso_fb->zsbuf;
-      if (zs_surf) {
-         struct iris_resource *z_res, *s_res;
-         iris_get_depth_stencil_resources(zs_surf->texture, &z_res, &s_res);
-         unsigned num_layers =
-            zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
+   bool may_have_resolved_depth =
+      ice->state.dirty & (IRIS_DIRTY_DEPTH_BUFFER |
+                          IRIS_DIRTY_WM_DEPTH_STENCIL);
 
-         if (z_res) {
+   struct pipe_surface *zs_surf = cso_fb->zsbuf;
+   if (zs_surf) {
+      struct iris_resource *z_res, *s_res;
+      iris_get_depth_stencil_resources(zs_surf->texture, &z_res, &s_res);
+      unsigned num_layers =
+         zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
+
+      if (z_res) {
+         if (may_have_resolved_depth) {
             iris_resource_finish_depth(ice, z_res, zs_surf->u.tex.level,
                                        zs_surf->u.tex.first_layer, num_layers,
                                        ice->state.depth_writes_enabled);
-
-            if (ice->state.depth_writes_enabled)
-               iris_depth_cache_add_bo(batch, z_res->bo);
          }
 
-         if (s_res) {
+         if (ice->state.depth_writes_enabled)
+            iris_depth_cache_add_bo(batch, z_res->bo);
+      }
+
+      if (s_res) {
+         if (may_have_resolved_depth) {
             iris_resource_finish_write(ice, s_res, zs_surf->u.tex.level,
                                        zs_surf->u.tex.first_layer, num_layers,
                                        ISL_AUX_USAGE_NONE);
-
-            if (ice->state.stencil_writes_enabled)
-               iris_depth_cache_add_bo(batch, s_res->bo);
          }
+
+         if (ice->state.stencil_writes_enabled)
+            iris_depth_cache_add_bo(batch, s_res->bo);
       }
    }
 
-   if (ice->state.dirty & (IRIS_DIRTY_BINDINGS_FS | IRIS_DIRTY_BLEND_STATE)) {
-      for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
-         struct iris_surface *surf = (void *) cso_fb->cbufs[i];
-         if (!surf)
-            continue;
+   bool may_have_resolved_color =
+      ice->state.dirty & (IRIS_DIRTY_BINDINGS_FS | IRIS_DIRTY_BLEND_STATE);
 
-         struct iris_resource *res = (void *) surf->base.texture;
+   for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
+      struct iris_surface *surf = (void *) cso_fb->cbufs[i];
+      if (!surf)
+         continue;
+
+      struct iris_resource *res = (void *) surf->base.texture;
+      enum isl_aux_usage aux_usage = ice->state.draw_aux_usage[i];
+
+      iris_render_cache_add_bo(batch, res->bo, surf->view.format,
+                               aux_usage);
+
+      if (may_have_resolved_color) {
          union pipe_surface_desc *desc = &surf->base.u;
          unsigned num_layers =
             desc->tex.last_layer - desc->tex.first_layer + 1;
-         enum isl_aux_usage aux_usage = ice->state.draw_aux_usage[i];
-
-         iris_render_cache_add_bo(batch, res->bo, surf->view.format,
-                                  aux_usage);
-
          iris_resource_finish_render(ice, res, desc->tex.level,
                                      desc->tex.first_layer, num_layers,
                                      aux_usage);
@@ -485,7 +493,8 @@ iris_mcs_partial_resolve(struct iris_context *ice,
 
    struct blorp_batch blorp_batch;
    blorp_batch_init(&ice->blorp, &blorp_batch, batch, 0);
-   blorp_mcs_partial_resolve(&blorp_batch, &surf, res->surf.format,
+   blorp_mcs_partial_resolve(&blorp_batch, &surf,
+                             isl_format_srgb_to_linear(res->surf.format),
                              start_layer, num_layers);
    blorp_batch_finish(&blorp_batch);
 }

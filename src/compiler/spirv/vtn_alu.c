@@ -23,6 +23,7 @@
 
 #include <math.h>
 #include "vtn_private.h"
+#include "spirv_info.h"
 
 /*
  * Normally, column vectors in SPIR-V correspond to a single NIR SSA
@@ -207,7 +208,7 @@ vtn_handle_matrix_alu(struct vtn_builder *b, SpvOp opcode,
       }
       break;
 
-   default: vtn_fail("unknown matrix opcode");
+   default: vtn_fail_with_opcode("unknown matrix opcode", opcode);
    }
 }
 
@@ -363,7 +364,7 @@ handle_rounding_mode(struct vtn_builder *b, struct vtn_value *val, int member,
    assert(dec->scope == VTN_DEC_DECORATION);
    if (dec->decoration != SpvDecorationFPRoundingMode)
       return;
-   switch (dec->literals[0]) {
+   switch (dec->operands[0]) {
    case SpvFPRoundingModeRTE:
       *out_rounding_mode = nir_rounding_mode_rtne;
       break;

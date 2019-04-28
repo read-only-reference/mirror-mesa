@@ -256,7 +256,7 @@ static void si_emit_cb_render_state(struct si_context *sctx)
 					    sx_blend_opt_control);
 	}
 	if (initial_cdw != cs->current.cdw)
-		sctx->context_roll_counter++;
+		sctx->context_roll = true;
 }
 
 /*
@@ -793,7 +793,7 @@ static void si_emit_clip_regs(struct si_context *sctx)
 		S_028810_CLIP_DISABLE(window_space));
 
 	if (initial_cdw != sctx->gfx_cs->current.cdw)
-		sctx->context_roll_counter++;
+		sctx->context_roll = true;
 }
 
 /*
@@ -1015,10 +1015,8 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	si_update_poly_offset_state(sctx);
 
 	if (!old_rs ||
-	    old_rs->scissor_enable != rs->scissor_enable) {
-		sctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+	    old_rs->scissor_enable != rs->scissor_enable)
 		si_mark_atom_dirty(sctx, &sctx->atoms.s.scissors);
-	}
 
 	if (!old_rs ||
 	    old_rs->line_width != rs->line_width ||
@@ -1027,10 +1025,8 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 		si_mark_atom_dirty(sctx, &sctx->atoms.s.guardband);
 
 	if (!old_rs ||
-	    old_rs->clip_halfz != rs->clip_halfz) {
-		sctx->viewports.depth_range_dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+	    old_rs->clip_halfz != rs->clip_halfz)
 		si_mark_atom_dirty(sctx, &sctx->atoms.s.viewports);
-	}
 
 	if (!old_rs ||
 	    old_rs->clip_plane_enable != rs->clip_plane_enable ||
@@ -1356,6 +1352,14 @@ void si_save_qbo_state(struct si_context *sctx, struct si_qbo_state *st)
 
 	si_get_pipe_constant_buffer(sctx, PIPE_SHADER_COMPUTE, 0, &st->saved_const0);
 	si_get_shader_buffers(sctx, PIPE_SHADER_COMPUTE, 0, 3, st->saved_ssbo);
+
+	st->saved_ssbo_writable_mask = 0;
+
+	for (unsigned i = 0; i < 3; i++) {
+		if (sctx->const_and_shader_buffers[PIPE_SHADER_COMPUTE].writable_mask &
+		    (1u << si_get_shaderbuf_slot(i)))
+			st->saved_ssbo_writable_mask |= 1 << i;
+	}
 }
 
 static void si_emit_db_render_state(struct si_context *sctx)
@@ -1447,7 +1451,7 @@ static void si_emit_db_render_state(struct si_context *sctx)
 				   SI_TRACKED_DB_SHADER_CONTROL, db_shader_control);
 
 	if (initial_cdw != sctx->gfx_cs->current.cdw)
-		sctx->context_roll_counter++;
+		sctx->context_roll = true;
 }
 
 /*
@@ -2807,9 +2811,11 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	 *
 	 * Only flush and wait for CB if there is actually a bound color buffer.
 	 */
-	if (sctx->framebuffer.uncompressed_cb_mask)
+	if (sctx->framebuffer.uncompressed_cb_mask) {
 		si_make_CB_shader_coherent(sctx, sctx->framebuffer.nr_samples,
-					   sctx->framebuffer.CB_has_shader_readable_metadata);
+					   sctx->framebuffer.CB_has_shader_readable_metadata,
+					   sctx->framebuffer.all_DCC_pipe_aligned);
+	}
 
 	sctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
 
@@ -2858,6 +2864,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	sctx->framebuffer.any_dst_linear = false;
 	sctx->framebuffer.CB_has_shader_readable_metadata = false;
 	sctx->framebuffer.DB_has_shader_readable_metadata = false;
+	sctx->framebuffer.all_DCC_pipe_aligned = true;
 	unsigned num_bpp64_colorbufs = 0;
 
 	for (i = 0; i < state->nr_cbufs; i++) {
@@ -2908,8 +2915,13 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 		if (tex->surface.bpe >= 8)
 			num_bpp64_colorbufs++;
 
-		if (vi_dcc_enabled(tex, surf->base.u.tex.level))
+		if (vi_dcc_enabled(tex, surf->base.u.tex.level)) {
 			sctx->framebuffer.CB_has_shader_readable_metadata = true;
+
+			if (sctx->chip_class >= GFX9 &&
+			    !tex->surface.u.gfx9.dcc.pipe_aligned)
+				sctx->framebuffer.all_DCC_pipe_aligned = false;
+		}
 
 		si_context_add_resource_size(sctx, surf->base.texture);
 
@@ -3528,7 +3540,7 @@ static void si_emit_msaa_config(struct si_context *sctx)
 				   SI_TRACKED_PA_SC_MODE_CNTL_1, sc_mode_cntl_1);
 
 	if (initial_cdw != cs->current.cdw) {
-		sctx->context_roll_counter++;
+		sctx->context_roll = true;
 
 		/* GFX9: Flush DFSM when the AA mode changes. */
 		if (sctx->screen->dfsm_allowed) {
@@ -4700,9 +4712,11 @@ static void si_texture_barrier(struct pipe_context *ctx, unsigned flags)
 	si_update_fb_dirtiness_after_rendering(sctx);
 
 	/* Multisample surfaces are flushed in si_decompress_textures. */
-	if (sctx->framebuffer.uncompressed_cb_mask)
+	if (sctx->framebuffer.uncompressed_cb_mask) {
 		si_make_CB_shader_coherent(sctx, sctx->framebuffer.nr_samples,
-					   sctx->framebuffer.CB_has_shader_readable_metadata);
+					   sctx->framebuffer.CB_has_shader_readable_metadata,
+					   sctx->framebuffer.all_DCC_pipe_aligned);
+	}
 }
 
 /* This only ensures coherency for shader image/buffer stores. */
