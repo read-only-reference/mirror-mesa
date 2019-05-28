@@ -47,7 +47,7 @@ radv_choose_tiling(struct radv_device *device,
 
 	if (!vk_format_is_compressed(pCreateInfo->format) &&
 	    !vk_format_is_depth_or_stencil(pCreateInfo->format)
-	    && device->physical_device->rad_info.chip_class <= VI) {
+	    && device->physical_device->rad_info.chip_class <= GFX8) {
 		/* this causes hangs in some VK CTS tests on GFX9. */
 		/* Textures with a very small height are recommended to be linear. */
 		if (pCreateInfo->imageType == VK_IMAGE_TYPE_1D ||
@@ -69,11 +69,18 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device,
 				   const VkImageCreateInfo *pCreateInfo)
 {
 	/* TC-compat HTILE is only available for GFX8+. */
-	if (device->physical_device->rad_info.chip_class < VI)
+	if (device->physical_device->rad_info.chip_class < GFX8)
 		return false;
 
 	if ((pCreateInfo->usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
 	    (pCreateInfo->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT))
+		return false;
+
+	/* TODO: Implement layout transitions with variable sample locations
+	 * before enabling HTILE for depth/stencil images created with this
+	 * flags because the depth decompress pass needs to know them.
+	 */
+	if (pCreateInfo->flags & VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT)
 		return false;
 
 	if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR)
@@ -130,7 +137,7 @@ radv_use_dcc_for_image(struct radv_device *device,
 	bool blendable;
 
 	/* DCC (Delta Color Compression) is only available for GFX8+. */
-	if (device->physical_device->rad_info.chip_class < VI)
+	if (device->physical_device->rad_info.chip_class < GFX8)
 		return false;
 
 	if (device->instance->debug_flags & RADV_DEBUG_NO_DCC)
@@ -328,7 +335,7 @@ radv_make_buffer_descriptor(struct radv_device *device,
 	state[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) |
 		S_008F04_STRIDE(stride);
 
-	if (device->physical_device->rad_info.chip_class != VI && stride) {
+	if (device->physical_device->rad_info.chip_class != GFX8 && stride) {
 		range /= stride;
 	}
 
@@ -370,12 +377,12 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 	state[1] &= C_008F14_BASE_ADDRESS_HI;
 	state[1] |= S_008F14_BASE_ADDRESS_HI(va >> 40);
 
-	if (chip_class >= VI) {
+	if (chip_class >= GFX8) {
 		state[6] &= C_008F28_COMPRESSION_EN;
 		state[7] = 0;
 		if (!is_storage_image && radv_dcc_enabled(image, first_level)) {
 			meta_va = gpu_address + image->dcc_offset;
-			if (chip_class <= VI)
+			if (chip_class <= GFX8)
 				meta_va += base_level_info->dcc_offset;
 		} else if (!is_storage_image &&
 			   radv_image_is_tc_compat_htile(image)) {
@@ -417,7 +424,7 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 				    S_008F24_META_RB_ALIGNED(meta.rb_aligned);
 		}
 	} else {
-		/* SI-CI-VI */
+		/* GFX6-GFX8 */
 		unsigned pitch = base_level_info->nblk_x * block_width;
 		unsigned index = si_tile_mode_index(plane, base_level, is_stencil);
 
@@ -596,7 +603,7 @@ si_make_texture_descriptor(struct radv_device *device,
 		/* The last dword is unused by hw. The shader uses it to clear
 		 * bits in the first dword of sampler state.
 		 */
-		if (device->physical_device->rad_info.chip_class <= CIK && image->info.samples <= 1) {
+		if (device->physical_device->rad_info.chip_class <= GFX7 && image->info.samples <= 1) {
 			if (first_level == last_level)
 				state[7] = C_008F30_MAX_ANISO_RATIO;
 			else
@@ -725,7 +732,7 @@ radv_query_opaque_metadata(struct radv_device *device,
 	memcpy(&md->metadata[2], desc, sizeof(desc));
 
 	/* Dwords [10:..] contain the mipmap level offsets. */
-	if (device->physical_device->rad_info.chip_class <= VI) {
+	if (device->physical_device->rad_info.chip_class <= GFX8) {
 		for (i = 0; i <= image->info.levels - 1; i++)
 			md->metadata[10+i] = image->planes[0].surface.u.legacy.level[i].offset >> 8;
 		md->size_metadata = (11 + image->info.levels - 1) * 4;
@@ -758,6 +765,34 @@ radv_init_metadata(struct radv_device *device,
 		metadata->u.legacy.scanout = (surface->flags & RADEON_SURF_SCANOUT) != 0;
 	}
 	radv_query_opaque_metadata(device, image, metadata);
+}
+
+void
+radv_image_override_offset_stride(struct radv_device *device,
+                                  struct radv_image *image,
+                                  uint64_t offset, uint32_t stride)
+{
+	struct radeon_surf *surface = &image->planes[0].surface;
+	unsigned bpe = vk_format_get_blocksizebits(image->vk_format) / 8;
+
+	if (device->physical_device->rad_info.chip_class >= GFX9) {
+		if (stride) {
+			surface->u.gfx9.surf_pitch = stride;
+			surface->u.gfx9.surf_slice_size =
+				(uint64_t)stride * surface->u.gfx9.surf_height * bpe;
+		}
+		surface->u.gfx9.surf_offset = offset;
+	} else {
+		surface->u.legacy.level[0].nblk_x = stride;
+		surface->u.legacy.level[0].slice_size_dw =
+			((uint64_t)stride * surface->u.legacy.level[0].nblk_y * bpe) / 4;
+
+		if (offset) {
+			for (unsigned i = 0; i < ARRAY_SIZE(surface->u.legacy.level); ++i)
+				surface->u.legacy.level[i].offset += offset;
+		}
+
+	}
 }
 
 /* The number of samples can be specified independently of the texture. */
@@ -1189,6 +1224,8 @@ radv_get_aspect_format(struct radv_image *image, VkImageAspectFlags mask)
 		return vk_format_stencil_only(image->vk_format);
 	case VK_IMAGE_ASPECT_DEPTH_BIT:
 		return vk_format_depth_only(image->vk_format);
+	case VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT:
+		return vk_format_depth_only(image->vk_format);
 	default:
 		return image->vk_format;
 	}
@@ -1426,7 +1463,19 @@ void radv_GetImageSubresourceLayout(
 
 	if (device->physical_device->rad_info.chip_class >= GFX9) {
 		pLayout->offset = plane->offset + surface->u.gfx9.offset[level] + surface->u.gfx9.surf_slice_size * layer;
-		pLayout->rowPitch = surface->u.gfx9.surf_pitch * surface->bpe;
+		if (image->vk_format == VK_FORMAT_R32G32B32_UINT ||
+		    image->vk_format == VK_FORMAT_R32G32B32_SINT ||
+		    image->vk_format == VK_FORMAT_R32G32B32_SFLOAT) {
+			/* Adjust the number of bytes between each row because
+			 * the pitch is actually the number of components per
+			 * row.
+			 */
+			pLayout->rowPitch = surface->u.gfx9.surf_pitch * surface->bpe / 3;
+		} else {
+			assert(util_is_power_of_two_nonzero(surface->bpe));
+			pLayout->rowPitch = surface->u.gfx9.surf_pitch * surface->bpe;
+		}
+
 		pLayout->arrayPitch = surface->u.gfx9.surf_slice_size;
 		pLayout->depthPitch = surface->u.gfx9.surf_slice_size;
 		pLayout->size = surface->u.gfx9.surf_slice_size;

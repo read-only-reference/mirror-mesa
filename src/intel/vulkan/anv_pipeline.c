@@ -134,8 +134,6 @@ anv_shader_compile_to_nir(struct anv_device *device,
       }
    }
 
-   nir_address_format ssbo_addr_format =
-      anv_nir_ssbo_addr_format(pdevice, device->robust_buffer_access);
    struct spirv_to_nir_options spirv_options = {
       .lower_workgroup_access_to_offsets = true,
       .caps = {
@@ -172,19 +170,24 @@ anv_shader_compile_to_nir(struct anv_device *device,
          .transform_feedback = pdevice->info.gen >= 8,
          .variable_pointers = true,
       },
-      .ubo_ptr_type = glsl_vector_type(GLSL_TYPE_UINT, 2),
-      .ssbo_ptr_type = nir_address_format_to_glsl_type(ssbo_addr_format),
-      .phys_ssbo_ptr_type = glsl_vector_type(GLSL_TYPE_UINT64, 1),
-      .push_const_ptr_type = glsl_uint_type(),
-      .shared_ptr_type = glsl_uint_type(),
+      .ubo_addr_format = nir_address_format_32bit_index_offset,
+      .ssbo_addr_format =
+          anv_nir_ssbo_addr_format(pdevice, device->robust_buffer_access),
+      .phys_ssbo_addr_format = nir_address_format_64bit_global,
+      .push_const_addr_format = nir_address_format_logical,
+
+      /* TODO: Consider changing this to an address format that has the NULL
+       * pointer equals to 0.  That might be a better format to play nice
+       * with certain code / code generators.
+       */
+      .shared_addr_format = nir_address_format_32bit_offset,
    };
 
 
-   nir_function *entry_point =
+   nir_shader *nir =
       spirv_to_nir(spirv, module->size / 4,
                    spec_entries, num_spec_entries,
                    stage, entrypoint_name, &spirv_options, nir_options);
-   nir_shader *nir = entry_point->shader;
    assert(nir->info.stage == stage);
    nir_validate_shader(nir, "after spirv_to_nir");
    ralloc_steal(mem_ctx, nir);
@@ -208,7 +211,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
 
    /* Pick off the single entrypoint that we want */
    foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
-      if (func != entry_point)
+      if (!func->is_entrypoint)
          exec_node_remove(&func->node);
    }
    assert(exec_list_length(&nir->functions) == 1);
@@ -234,7 +237,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
 
    NIR_PASS_V(nir, nir_propagate_invariant);
    NIR_PASS_V(nir, nir_lower_io_to_temporaries,
-              entry_point->impl, true, false);
+              nir_shader_get_entrypoint(nir), true, false);
 
    NIR_PASS_V(nir, nir_lower_frexp);
 
@@ -400,12 +403,12 @@ populate_wm_prog_key(const struct gen_device_info *devinfo,
        * harmless to compute it and then let dead-code take care of it.
        */
       if (ms_info->rasterizationSamples > 1) {
-         key->persample_interp =
+         key->persample_interp = ms_info->sampleShadingEnable &&
             (ms_info->minSampleShading * ms_info->rasterizationSamples) > 1;
          key->multisample_fbo = true;
       }
 
-      key->frag_coord_adds_sample_pos = ms_info->sampleShadingEnable;
+      key->frag_coord_adds_sample_pos = key->persample_interp;
    }
 }
 
@@ -825,13 +828,23 @@ anv_pipeline_link_fs(const struct brw_compiler *compiler,
          continue;
 
       const unsigned rt = var->data.location - FRAG_RESULT_DATA0;
-      /* Unused or out-of-bounds */
-      if (rt >= MAX_RTS || !(stage->key.wm.color_outputs_valid & (1 << rt)))
+      /* Out-of-bounds */
+      if (rt >= MAX_RTS)
          continue;
 
       const unsigned array_len =
          glsl_type_is_array(var->type) ? glsl_get_length(var->type) : 1;
       assert(rt + array_len <= max_rt);
+
+      /* Unused */
+      if (!(stage->key.wm.color_outputs_valid & BITFIELD_RANGE(rt, array_len))) {
+         /* If this is the RT at location 0 and we have alpha to coverage
+          * enabled we will have to create a null RT for it, so mark it as
+          * used.
+          */
+         if (rt > 0 || !stage->key.wm.alpha_to_coverage)
+            continue;
+      }
 
       for (unsigned i = 0; i < array_len; i++)
          rt_used[rt + i] = true;
@@ -843,11 +856,22 @@ anv_pipeline_link_fs(const struct brw_compiler *compiler,
          continue;
 
       rt_to_bindings[i] = num_rts;
-      rt_bindings[rt_to_bindings[i]] = (struct anv_pipeline_binding) {
-         .set = ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS,
-         .binding = 0,
-         .index = i,
-      };
+
+      if (stage->key.wm.color_outputs_valid & (1 << i)) {
+         rt_bindings[rt_to_bindings[i]] = (struct anv_pipeline_binding) {
+            .set = ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS,
+            .binding = 0,
+            .index = i,
+         };
+      } else {
+         /* Setup a null render target */
+         rt_bindings[rt_to_bindings[i]] = (struct anv_pipeline_binding) {
+            .set = ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS,
+            .binding = 0,
+            .index = UINT32_MAX,
+         };
+      }
+
       num_rts++;
    }
 
@@ -857,9 +881,11 @@ anv_pipeline_link_fs(const struct brw_compiler *compiler,
          continue;
 
       const unsigned rt = var->data.location - FRAG_RESULT_DATA0;
-      if (rt >= MAX_RTS ||
-          !(stage->key.wm.color_outputs_valid & (1 << rt))) {
-         /* Unused or out-of-bounds, throw it away */
+
+      if (rt >= MAX_RTS || !rt_used[rt]) {
+         /* Unused or out-of-bounds, throw it away, unless it is the first
+          * RT and we have alpha to coverage enabled.
+          */
          deleted_output = true;
          var->data.mode = nir_var_function_temp;
          exec_node_remove(&var->node);

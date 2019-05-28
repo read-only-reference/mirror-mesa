@@ -477,11 +477,11 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.MaxImageUnits = MAX_IMAGE_UNITS;
    if (devinfo->gen >= 7) {
       ctx->Const.MaxRenderbufferSize = 16384;
-      ctx->Const.MaxTextureLevels = MIN2(15 /* 16384 */, MAX_TEXTURE_LEVELS);
+      ctx->Const.MaxTextureSize = 16384;
       ctx->Const.MaxCubeTextureLevels = 15; /* 16384 */
    } else {
       ctx->Const.MaxRenderbufferSize = 8192;
-      ctx->Const.MaxTextureLevels = MIN2(14 /* 8192 */, MAX_TEXTURE_LEVELS);
+      ctx->Const.MaxTextureSize = 8192;
       ctx->Const.MaxCubeTextureLevels = 14; /* 8192 */
    }
    ctx->Const.Max3DTextureLevels = 12; /* 2048 */
@@ -1078,13 +1078,6 @@ brwCreateContext(gl_api api,
       *dri_ctx_error = __DRI_CTX_ERROR_NO_MEMORY;
       intelDestroyContext(driContextPriv);
       return false;
-   }
-
-   if (devinfo->gen == 11) {
-      fprintf(stderr,
-              "WARNING: i965 does not fully support Gen11 yet.\n"
-              "Instability or lower performance might occur.\n");
-
    }
 
    brw_upload_init(&brw->upload, brw->bufmgr, 65536);

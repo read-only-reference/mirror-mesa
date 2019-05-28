@@ -220,7 +220,7 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 	struct fd6_pipe_sampler_view *so = CALLOC_STRUCT(fd6_pipe_sampler_view);
 	struct fd_resource *rsc = fd_resource(prsc);
 	enum pipe_format format = cso->format;
-	unsigned lvl, layers;
+	unsigned lvl, layers = 0;
 
 	if (!so)
 		return NULL;
@@ -265,8 +265,8 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 					util_format_get_nblocksx(
 							format, rsc->slices[lvl].pitch) * rsc->cpp);
 		so->offset = fd_resource_offset(rsc, lvl, cso->u.tex.first_layer);
-
-		so->ubwc_enabled = rsc->ubwc_size && u_minify(prsc->width0, lvl) >= 16;
+		so->ubwc_offset = fd_resource_ubwc_offset(rsc, lvl, cso->u.tex.first_layer);
+		so->ubwc_enabled = fd_resource_ubwc_enabled(rsc, lvl);
 	}
 
 	so->texconst0 |= fd6_tex_const_0(prsc, lvl, cso->format,
@@ -274,8 +274,8 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 				cso->swizzle_b, cso->swizzle_a);
 
 	if (so->ubwc_enabled) {
-		so->texconst9 |= A6XX_TEX_CONST_9_FLAG_BUFFER_PITCH(rsc->ubwc_size);
-		so->texconst10 |= A6XX_TEX_CONST_10_FLAG_BUFFER_ARRAY_PITCH(rsc->ubwc_pitch);
+		so->texconst9 |= A6XX_TEX_CONST_9_FLAG_BUFFER_ARRAY_PITCH(rsc->ubwc_size);
+		so->texconst10 |= A6XX_TEX_CONST_10_FLAG_BUFFER_PITCH(rsc->ubwc_pitch);
 	}
 
 	so->texconst2 |= A6XX_TEX_CONST_2_TYPE(fd6_tex_type(cso->target));
@@ -396,6 +396,7 @@ fd6_texture_state(struct fd_context *ctx, enum pipe_shader_type type,
 		needs_border |= sampler->needs_border;
 	}
 
+	key.type = type;
 	key.bcolor_offset = fd6_border_color_offset(ctx, type, tex);
 
 	uint32_t hash = key_hash(&key);

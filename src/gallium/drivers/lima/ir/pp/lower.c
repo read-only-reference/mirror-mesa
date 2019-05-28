@@ -389,6 +389,51 @@ static bool ppir_lower_select(ppir_block *block, ppir_node *node)
    return true;
 }
 
+static bool ppir_lower_trunc(ppir_block *block, ppir_node *node)
+{
+   /* Turn it into a mov with a round to integer output modifier */
+   ppir_alu_node *alu = ppir_node_to_alu(node);
+   ppir_dest *move_dest = &alu->dest;
+   move_dest->modifier = ppir_outmod_round;
+   node->op = ppir_op_mov;
+
+   return true;
+}
+
+static bool ppir_lower_branch(ppir_block *block, ppir_node *node)
+{
+   ppir_branch_node *branch = ppir_node_to_branch(node);
+   ppir_const_node *zero = ppir_node_create(block, ppir_op_const, -1, 0);
+
+   if (!zero)
+      return false;
+
+   list_addtail(&zero->node.list, &node->list);
+
+   zero->constant.value[0].f = 0;
+   zero->constant.num = 1;
+   zero->dest.type = ppir_target_ssa;
+   zero->dest.ssa.num_components = 1;
+   zero->dest.ssa.live_in = INT_MAX;
+   zero->dest.ssa.live_out = 0;
+   zero->dest.write_mask = 0x01;
+
+   /* For now we're just comparing branch condition with 0,
+    * in future we should look whether it's possible to move
+    * comparision node into branch itself and use current
+    * way as a fallback for complex conditions.
+    */
+   branch->src[1].type = ppir_target_ssa;
+   branch->src[1].ssa = &zero->dest.ssa;
+
+   branch->cond_gt = true;
+   branch->cond_lt = true;
+
+   ppir_node_add_dep(&branch->node, &zero->node);
+
+   return true;
+}
+
 static bool (*ppir_lower_funcs[ppir_op_num])(ppir_block *, ppir_node *) = {
    [ppir_op_const] = ppir_lower_const,
    [ppir_op_dot2] = ppir_lower_dot,
@@ -405,6 +450,8 @@ static bool (*ppir_lower_funcs[ppir_op_num])(ppir_block *, ppir_node *) = {
    [ppir_op_le] = ppir_lower_swap_args,
    [ppir_op_load_texture] = ppir_lower_texture,
    [ppir_op_select] = ppir_lower_select,
+   [ppir_op_trunc] = ppir_lower_trunc,
+   [ppir_op_branch] = ppir_lower_branch,
 };
 
 bool ppir_lower_prog(ppir_compiler *comp)

@@ -538,6 +538,11 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       brw_nir_no_indirect_mask(compiler, nir->info.stage);
 
    bool progress;
+   unsigned lower_flrp =
+      (nir->options->lower_flrp16 ? 16 : 0) |
+      (nir->options->lower_flrp32 ? 32 : 0) |
+      (nir->options->lower_flrp64 ? 64 : 0);
+
    do {
       progress = false;
       OPT(nir_split_array_vars, nir_var_function_temp);
@@ -556,7 +561,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_opt_combine_stores, nir_var_all);
 
       if (is_scalar) {
-         OPT(nir_lower_alu_to_scalar);
+         OPT(nir_lower_alu_to_scalar, NULL);
       }
 
       OPT(nir_copy_prop);
@@ -598,6 +603,24 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_opt_idiv_const, 32);
       OPT(nir_opt_algebraic);
       OPT(nir_opt_constant_folding);
+
+      if (lower_flrp != 0) {
+         /* To match the old behavior, set always_precise only for scalar
+          * shader stages.
+          */
+         if (OPT(nir_lower_flrp,
+                 lower_flrp,
+                 false /* always_precise */,
+                 compiler->devinfo->gen >= 6)) {
+            OPT(nir_opt_constant_folding);
+         }
+
+         /* Nothing should rematerialize any flrps, so we only need to do this
+          * lowering once.
+          */
+         lower_flrp = 0;
+      }
+
       OPT(nir_opt_dead_cf);
       if (OPT(nir_opt_trivial_continues)) {
          /* If nir_opt_trivial_continues makes progress, then we need to clean
@@ -678,7 +701,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    const bool is_scalar = compiler->scalar_stage[nir->info.stage];
 
    if (is_scalar) {
-      OPT(nir_lower_alu_to_scalar);
+      OPT(nir_lower_alu_to_scalar, NULL);
    }
 
    if (nir->info.stage == MESA_SHADER_GEOMETRY)
@@ -889,10 +912,27 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
           compiler->devinfo->gen >= 6);
    }
 
-   OPT(nir_opt_algebraic_late);
+   do {
+      progress = false;
+      if (OPT(nir_opt_algebraic_late)) {
+         /* At this late stage, anything that makes more constants will wreak
+          * havok on the vec4 backend.  The handling of constants in the vec4
+          * backend is not good.
+          */
+         if (is_scalar) {
+            OPT(nir_opt_constant_folding);
+            OPT(nir_copy_prop);
+         }
+         OPT(nir_opt_dce);
+         OPT(nir_opt_cse);
+      }
+   } while (progress);
+
 
    OPT(brw_nir_lower_conversions);
 
+   if (is_scalar)
+      OPT(nir_lower_alu_to_scalar, NULL);
    OPT(nir_lower_to_source_mods, nir_lower_all_source_mods);
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);
@@ -922,6 +962,9 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    }
 
    OPT(nir_opt_dce);
+
+   if (OPT(nir_opt_rematerialize_compares))
+      OPT(nir_opt_dce);
 
    /* This is the last pass we run before we start emitting stuff.  It
     * determines when we need to insert boolean resolves on Gen <= 5.  We

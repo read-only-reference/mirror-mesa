@@ -228,12 +228,6 @@ struct mali_blend_equation {
         /* Corresponds to MALI_MASK_* above and glColorMask arguments */
 
         unsigned color_mask : 4;
-
-        /* Attached constant for CONSTANT_ALPHA, etc */
-
-#ifndef BIFROST
-        float constant;
-#endif
 } __attribute__((packed));
 
 /* Used with channel swizzling */
@@ -415,23 +409,55 @@ enum mali_format {
 #define MALI_READS_ZS (1 << 12)
 #define MALI_READS_TILEBUFFER (1 << 16)
 
-struct mali_blend_meta {
-#ifndef BIFROST
-        /* Base value of 0x200.
+/* The raw Midgard blend payload can either be an equation or a shader
+ * address, depending on the context */
+
+union midgard_blend {
+        mali_ptr shader;
+
+        struct {
+                struct mali_blend_equation equation;
+                float constant;
+        };
+};
+
+/* On MRT Midgard systems (using an MFBD), each render target gets its own
+ * blend descriptor */
+
+struct midgard_blend_rt {
+        /* Flags base value of 0x200 to enable the render target.
          * OR with 0x1 for blending (anything other than REPLACE).
-         * OR with 0x2 for programmable blending
+         * OR with 0x2 for programmable blending with 0-2 registers
+         * OR with 0x3 for programmable blending with 2+ registers
          */
 
-        u64 unk1;
+        u64 flags;
+        union midgard_blend blend;
+} __attribute__((packed));
 
-        /* For programmable blending, these turn into the blend_shader address */
-        struct mali_blend_equation blend_equation_1;
+/* On Bifrost systems (all MRT), each render target gets one of these
+ * descriptors */
 
-        u64 zero2;
-        struct mali_blend_equation blend_equation_2;
-#else
-        u32 unk1; // = 0x200
-        struct mali_blend_equation blend_equation;
+struct bifrost_blend_rt {
+        /* This is likely an analogue of the flags on
+         * midgard_blend_rt */
+
+        u16 flags; // = 0x200
+
+        /* Single-channel blend constants are encoded in a sort of
+         * fixed-point. Basically, the float is mapped to a byte, becoming
+         * a high byte, and then the lower-byte is added for precision.
+         * For the original float f:
+         *
+         * f = (constant_hi / 255) + (constant_lo / 65535)
+         *
+         * constant_hi = int(f / 255)
+         * constant_lo = 65535*f - (65535/255) * constant_hi
+         */
+
+        u16 constant;
+
+        struct mali_blend_equation equation;
         /*
          * - 0x19 normally
          * - 0x3 when this slot is unused (everything else is 0 except the index)
@@ -477,10 +503,12 @@ struct mali_blend_meta {
 		 * in the same pool as the original shader. The kernel will
 		 * make sure this allocation is aligned to 2^24 bytes.
 		 */
-		u32 blend_shader;
+		u32 shader;
 	};
-#endif
 } __attribute__((packed));
+
+/* Descriptor for the shader. Following this is at least one, up to four blend
+ * descriptors for each active render target */
 
 struct mali_shader_meta {
         mali_ptr shader;
@@ -582,17 +610,7 @@ struct mali_shader_meta {
          * MALI_HAS_BLEND_SHADER to decide how to interpret.
          */
 
-        union {
-                mali_ptr blend_shader;
-                struct mali_blend_equation blend_equation;
-        };
-
-        /* There can be up to 4 blend_meta's. None of them are required for
-         * vertex shaders or the non-MRT case for Midgard (so the blob doesn't
-         * allocate any space).
-         */
-        struct mali_blend_meta blend_meta[];
-
+        union midgard_blend blend;
 } __attribute__((packed));
 
 /* This only concerns hardware jobs */
@@ -1014,13 +1032,6 @@ struct mali_vertex_tiler_postfix {
          * in vertex and tiler jobs.
          */
         mali_ptr framebuffer;
-
-#ifdef __LP64__
-#ifdef BIFROST
-        /* most likely padding to make this a multiple of 64 bytes */
-        u64 zero7;
-#endif
-#endif
 } __attribute__((packed));
 
 struct midgard_payload_vertex_tiler {
@@ -1064,6 +1075,7 @@ struct bifrost_payload_fused {
         struct mali_vertex_tiler_prefix prefix;
         struct bifrost_tiler_only tiler;
         struct mali_vertex_tiler_postfix tiler_postfix;
+        u64 padding; /* zero */
         struct bifrost_vertex_only vertex;
         struct mali_vertex_tiler_postfix vertex_postfix;
 } __attribute__((packed));
@@ -1099,6 +1111,9 @@ enum mali_wrap_mode {
 #define MAX_FACES (6)
 
 /* Corresponds to the type passed to glTexImage2D and so forth */
+
+/* Flags for usage2 */
+#define MALI_TEX_MANUAL_STRIDE (0x20)
 
 struct mali_texture_format {
         unsigned swizzle : 12;
@@ -1199,11 +1214,8 @@ struct mali_sampler_descriptor {
         float border_color[4];
 } __attribute__((packed));
 
-/* TODO: What are the floats? Apparently always { -inf, -inf, inf, inf },
- * unless the scissor test is enabled.
- *
- * viewport0/viewport1 form the arguments to glViewport. viewport1 is modified
- * by MALI_POSITIVE; viewport0 is as-is.
+/* viewport0/viewport1 form the arguments to glViewport. viewport1 is
+ * modified by MALI_POSITIVE; viewport0 is as-is.
  */
 
 struct mali_viewport {
@@ -1269,7 +1281,7 @@ struct mali_payload_fragment {
         mali_ptr framebuffer;
 } __attribute__((packed));
 
-/* (Single?) Framebuffer Descriptor */
+/* Single Framebuffer Descriptor */
 
 /* Flags apply to format. With just MSAA_A and MSAA_B, the framebuffer is
  * configured for 4x. With MSAA_8, it is configured for 8x. */

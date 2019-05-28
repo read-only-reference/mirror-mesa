@@ -709,7 +709,7 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		enum glsl_base_type base_type =
 			glsl_get_base_type(glsl_without_array(type));
 		unsigned aoa_size = MAX2(1, glsl_get_aoa_size(type));
-		unsigned loc = variable->data.location;
+		unsigned loc = variable->data.driver_location / 4;
 		int slot_count = glsl_count_attribute_slots(type, false);
 		int max_slot = MAX2(info->const_file_max[0], (int) loc) + slot_count;
 
@@ -779,17 +779,8 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 					u_bit_consecutive(variable->data.binding, aoa_size);
 			}
 		} else if (base_type != GLSL_TYPE_ATOMIC_UINT) {
-			if (strncmp(variable->name, "state.", 6) == 0 ||
-			    strncmp(variable->name, "gl_", 3) == 0) {
-				/* FIXME: figure out why piglit tests with builtin
-				 * uniforms are failing without this.
-				 */
-				info->const_buffers_declared =
-					u_bit_consecutive(0, SI_NUM_CONST_BUFFERS);
-			} else {
-				info->const_buffers_declared |= 1;
-				info->const_file_max[0] = max_slot;
-			}
+			info->const_buffers_declared |= 1;
+			info->const_file_max[0] = max_slot;
 		}
 	}
 
@@ -815,6 +806,11 @@ void
 si_nir_opts(struct nir_shader *nir)
 {
 	bool progress;
+        unsigned lower_flrp =
+                (nir->options->lower_flrp16 ? 16 : 0) |
+                (nir->options->lower_flrp32 ? 32 : 0) |
+                (nir->options->lower_flrp64 ? 64 : 0);
+
 	do {
 		progress = false;
 
@@ -823,7 +819,7 @@ si_nir_opts(struct nir_shader *nir)
 		NIR_PASS(progress, nir, nir_opt_copy_prop_vars);
 		NIR_PASS(progress, nir, nir_opt_dead_write_vars);
 
-		NIR_PASS_V(nir, nir_lower_alu_to_scalar);
+		NIR_PASS_V(nir, nir_lower_alu_to_scalar, NULL);
 		NIR_PASS_V(nir, nir_lower_phis_to_scalar);
 
 		/* (Constant) copy propagation is needed for txf with offsets. */
@@ -843,6 +839,25 @@ si_nir_opts(struct nir_shader *nir)
 		/* Needed for algebraic lowering */
 		NIR_PASS(progress, nir, nir_opt_algebraic);
 		NIR_PASS(progress, nir, nir_opt_constant_folding);
+
+		if (lower_flrp != 0) {
+			bool lower_flrp_progress = false;
+
+			NIR_PASS(lower_flrp_progress, nir, nir_lower_flrp,
+				 lower_flrp,
+				 false /* always_precise */,
+				 nir->options->lower_ffma);
+			if (lower_flrp_progress) {
+				NIR_PASS(progress, nir,
+					 nir_opt_constant_folding);
+				progress = true;
+			}
+
+			/* Nothing should rematerialize any flrps, so we only
+			 * need to do this lowering once.
+			 */
+			lower_flrp = 0;
+		}
 
 		NIR_PASS(progress, nir, nir_opt_undef);
 		NIR_PASS(progress, nir, nir_opt_conditional_discard);

@@ -91,6 +91,7 @@ typedef uint32_t xcb_window_t;
 #define MAX_VIEWPORTS   16
 #define MAX_SCISSORS    16
 #define MAX_DISCARD_RECTANGLES 4
+#define MAX_SAMPLE_LOCATIONS 32
 #define MAX_PUSH_CONSTANTS_SIZE 128
 #define MAX_PUSH_DESCRIPTORS 32
 #define MAX_DYNAMIC_UNIFORM_BUFFERS 16
@@ -280,6 +281,9 @@ void *radv_lookup_entrypoint_checked(const char *name,
                                     uint32_t core_version,
                                     const struct radv_instance_extension_table *instance,
                                     const struct radv_device_extension_table *device);
+void *radv_lookup_physical_device_entrypoint_checked(const char *name,
+                                                     uint32_t core_version,
+                                                     const struct radv_instance_extension_table *instance);
 
 struct radv_physical_device {
 	VK_LOADER_DATA                              _loader_data;
@@ -698,9 +702,8 @@ struct radv_device {
 	float sample_locations_2x[2][2];
 	float sample_locations_4x[4][2];
 	float sample_locations_8x[8][2];
-	float sample_locations_16x[16][2];
 
-	/* CIK and later */
+	/* GFX7 and later */
 	uint32_t gfx_init_size_dw;
 	struct radeon_winsys_bo                      *gfx_init;
 
@@ -850,7 +853,8 @@ enum radv_dynamic_state_bits {
 	RADV_DYNAMIC_STENCIL_WRITE_MASK   = 1 << 7,
 	RADV_DYNAMIC_STENCIL_REFERENCE    = 1 << 8,
 	RADV_DYNAMIC_DISCARD_RECTANGLE    = 1 << 9,
-	RADV_DYNAMIC_ALL                  = (1 << 10) - 1,
+	RADV_DYNAMIC_SAMPLE_LOCATIONS     = 1 << 10,
+	RADV_DYNAMIC_ALL                  = (1 << 11) - 1,
 };
 
 enum radv_cmd_dirty_bits {
@@ -866,12 +870,13 @@ enum radv_cmd_dirty_bits {
 	RADV_CMD_DIRTY_DYNAMIC_STENCIL_WRITE_MASK        = 1 << 7,
 	RADV_CMD_DIRTY_DYNAMIC_STENCIL_REFERENCE         = 1 << 8,
 	RADV_CMD_DIRTY_DYNAMIC_DISCARD_RECTANGLE         = 1 << 9,
-	RADV_CMD_DIRTY_DYNAMIC_ALL                       = (1 << 10) - 1,
-	RADV_CMD_DIRTY_PIPELINE                          = 1 << 10,
-	RADV_CMD_DIRTY_INDEX_BUFFER                      = 1 << 11,
-	RADV_CMD_DIRTY_FRAMEBUFFER                       = 1 << 12,
-	RADV_CMD_DIRTY_VERTEX_BUFFER                     = 1 << 13,
-	RADV_CMD_DIRTY_STREAMOUT_BUFFER                  = 1 << 14,
+	RADV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS          = 1 << 10,
+	RADV_CMD_DIRTY_DYNAMIC_ALL                       = (1 << 11) - 1,
+	RADV_CMD_DIRTY_PIPELINE                          = 1 << 11,
+	RADV_CMD_DIRTY_INDEX_BUFFER                      = 1 << 12,
+	RADV_CMD_DIRTY_FRAMEBUFFER                       = 1 << 13,
+	RADV_CMD_DIRTY_VERTEX_BUFFER                     = 1 << 14,
+	RADV_CMD_DIRTY_STREAMOUT_BUFFER                  = 1 << 15,
 };
 
 enum radv_cmd_flush_bits {
@@ -948,6 +953,13 @@ struct radv_discard_rectangle_state {
 	VkRect2D                                          rectangles[MAX_DISCARD_RECTANGLES];
 };
 
+struct radv_sample_locations_state {
+	VkSampleCountFlagBits per_pixel;
+	VkExtent2D grid_size;
+	uint32_t count;
+	VkSampleLocationEXT locations[MAX_SAMPLE_LOCATIONS];
+};
+
 struct radv_dynamic_state {
 	/**
 	 * Bitmask of (1 << VK_DYNAMIC_STATE_*).
@@ -990,6 +1002,8 @@ struct radv_dynamic_state {
 	} stencil_reference;
 
 	struct radv_discard_rectangle_state               discard_rectangle;
+
+	struct radv_sample_locations_state                sample_location;
 };
 
 extern const struct radv_dynamic_state default_dynamic_state;
@@ -1140,6 +1154,11 @@ struct radv_cmd_buffer {
 	 * Whether a query pool has been resetted and we have to flush caches.
 	 */
 	bool pending_reset_query;
+
+	/**
+	 * Bitmask of pending active query flushes.
+	 */
+	enum radv_cmd_flush_bits active_query_flush_bits;
 };
 
 struct radv_image;
@@ -1160,6 +1179,7 @@ void si_write_scissors(struct radeon_cmdbuf *cs, int first,
 		       const VkViewport *viewports, bool can_use_guardband);
 uint32_t si_get_ia_multi_vgt_param(struct radv_cmd_buffer *cmd_buffer,
 				   bool instanced_draw, bool indirect_draw,
+				   bool count_from_stream_output,
 				   uint32_t draw_vertex_count);
 void si_cs_emit_write_event_eop(struct radeon_cmdbuf *cs,
 				enum chip_class chip_class,
@@ -1209,8 +1229,8 @@ void radv_cmd_buffer_clear_subpass(struct radv_cmd_buffer *cmd_buffer);
 void radv_cmd_buffer_resolve_subpass(struct radv_cmd_buffer *cmd_buffer);
 void radv_cmd_buffer_resolve_subpass_cs(struct radv_cmd_buffer *cmd_buffer);
 void radv_cmd_buffer_resolve_subpass_fs(struct radv_cmd_buffer *cmd_buffer);
-void radv_cayman_emit_msaa_sample_locs(struct radeon_cmdbuf *cs, int nr_samples);
-unsigned radv_cayman_get_maxdist(int log_samples);
+void radv_emit_default_sample_locations(struct radeon_cmdbuf *cs, int nr_samples);
+unsigned radv_get_default_max_sample_dist(int log_samples);
 void radv_device_init_msaa(struct radv_device *device);
 
 void radv_update_ds_clear_metadata(struct radv_cmd_buffer *cmd_buffer,
@@ -1671,6 +1691,11 @@ radv_init_metadata(struct radv_device *device,
 		   struct radv_image *image,
 		   struct radeon_bo_metadata *metadata);
 
+void
+radv_image_override_offset_stride(struct radv_device *device,
+                                  struct radv_image *image,
+                                  uint64_t offset, uint32_t stride);
+
 union radv_descriptor {
 	struct {
 		uint32_t plane0_descriptor[8];
@@ -1965,8 +1990,6 @@ void radv_initialize_fmask(struct radv_cmd_buffer *cmd_buffer,
 struct radv_fence {
 	struct radeon_winsys_fence *fence;
 	struct wsi_fence *fence_wsi;
-	bool submitted;
-	bool signalled;
 
 	uint32_t syncobj;
 	uint32_t temp_syncobj;

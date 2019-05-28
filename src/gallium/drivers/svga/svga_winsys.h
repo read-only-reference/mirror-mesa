@@ -385,6 +385,7 @@ struct svga_winsys_context
     **/
 
    boolean have_gb_objects;
+   boolean force_coherent;
 
    /**
     * Map a guest-backed surface.
@@ -410,13 +411,6 @@ struct svga_winsys_context
    (*surface_unmap)(struct svga_winsys_context *swc,
                     struct svga_winsys_surface *surface,
                     boolean *rebind);
-
-   /**
-    * Invalidate the content of this surface
-    */
-   enum pipe_error
-   (*surface_invalidate)(struct svga_winsys_context *swc,
-                         struct svga_winsys_surface *surface);
 
    /**
     * Create and define a DX GB shader that resides in the device COTable.
@@ -753,6 +747,11 @@ struct svga_winsys_screen
    void
    (*stats_time_pop)();
 
+   /**
+    * Send a host log message
+    */
+   void
+   (*host_log)(struct svga_winsys_screen *sws, const char *message);
 
    /** Have VGPU v10 hardware? */
    boolean have_vgpu10;

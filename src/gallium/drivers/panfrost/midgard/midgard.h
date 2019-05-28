@@ -94,7 +94,7 @@ typedef enum {
         midgard_alu_op_iornot     = 0x75, /* (a | ~b) */
         midgard_alu_op_ixor       = 0x76,
         midgard_alu_op_inxor      = 0x77, /* ~(a & b) */
-        midgard_alu_op_ilzcnt     = 0x78, /* Number of zeroes on left. 31 - ilzcnt(x) = findMSB(x) */
+        midgard_alu_op_iclz       = 0x78, /* Number of zeroes on left */
         midgard_alu_op_ibitcount8 = 0x7A, /* Counts bits in 8-bit increments */
         midgard_alu_op_imov       = 0x7B,
         midgard_alu_op_iabs       = 0x7C,
@@ -138,8 +138,9 @@ typedef enum {
         midgard_alu_op_i2f        = 0xB8,
         midgard_alu_op_u2f        = 0xBC,
 
-        midgard_alu_op_icsel      = 0xC1,
-        midgard_alu_op_fcsel_i    = 0xC4,
+        midgard_alu_op_icsel_v    = 0xC0, /* condition code r31 */
+        midgard_alu_op_icsel      = 0xC1, /* condition code r31.w */
+        midgard_alu_op_fcsel_v    = 0xC4,
         midgard_alu_op_fcsel      = 0xC5,
         midgard_alu_op_fround     = 0xC6,
 
@@ -164,10 +165,10 @@ typedef enum {
 } midgard_outmod;
 
 typedef enum {
-        midgard_reg_mode_quarter = 0,
-        midgard_reg_mode_half = 1,
-        midgard_reg_mode_full = 2,
-        midgard_reg_mode_double = 3 /* TODO: verify */
+        midgard_reg_mode_8 = 0,
+        midgard_reg_mode_16 = 1,
+        midgard_reg_mode_32 = 2,
+        midgard_reg_mode_64 = 3 /* TODO: verify */
 } midgard_reg_mode;
 
 typedef enum {
@@ -344,20 +345,63 @@ typedef enum {
         /* Unclear why this is on the L/S unit, but (with an address of 0,
          * appropriate swizzle, magic constant 0x24, and xy mask?) moves fp32 cube
          * map coordinates in r27 to its cube map texture coordinate
-         * destination (e.g r29). 0x4 magic for loading from fp16 instead */
+         * destination (e.g r29). 0x4 magic for lding from fp16 instead */
 
-        midgard_op_store_cubemap_coords = 0x0E,
+        midgard_op_st_cubemap_coords = 0x0E,
 
-        midgard_op_load_attr_16 = 0x95,
-        midgard_op_load_attr_32 = 0x94,
-        midgard_op_load_vary_16 = 0x99,
-        midgard_op_load_vary_32 = 0x98,
-        midgard_op_load_color_buffer_16 = 0x9D,
-        midgard_op_load_color_buffer_8 = 0xBA,
-        midgard_op_load_uniform_16 = 0xAC,
-        midgard_op_load_uniform_32 = 0xB0,
-        midgard_op_store_vary_16 = 0xD5,
-        midgard_op_store_vary_32 = 0xD4
+        /* Used in OpenCL. Probably can ld other things as well */
+        midgard_op_ld_global_id = 0x10,
+
+        /* val in r27.y, address embedded, outputs result to argument. Invert val for sub. Let val = +-1 for inc/dec. */
+        midgard_op_atomic_add = 0x40,
+        midgard_op_atomic_and = 0x44,
+        midgard_op_atomic_or = 0x48,
+        midgard_op_atomic_xor = 0x4C,
+
+        midgard_op_atomic_imin = 0x50,
+        midgard_op_atomic_umin = 0x54,
+        midgard_op_atomic_imax = 0x58,
+        midgard_op_atomic_umax = 0x5C,
+
+        midgard_op_atomic_xchg = 0x60,
+
+        /* Used for compute shader's __global arguments, __local variables (or
+         * for register spilling) */
+
+        midgard_op_ld_char = 0x81,
+        midgard_op_ld_char2 = 0x84,
+        midgard_op_ld_short = 0x85,
+        midgard_op_ld_char4 = 0x88, /* short2, int, float */
+        midgard_op_ld_short4 = 0x8C, /* int2, float2, long */
+        midgard_op_ld_int4 = 0x90, /* float4, long2 */
+
+        midgard_op_ld_attr_32 = 0x94,
+        midgard_op_ld_attr_16 = 0x95,
+        midgard_op_ld_attr_32i = 0x97,
+        midgard_op_ld_vary_32 = 0x98,
+        midgard_op_ld_vary_16 = 0x99,
+        midgard_op_ld_vary_32i = 0x9B,
+        midgard_op_ld_color_buffer_16 = 0x9D,
+
+        midgard_op_ld_uniform_16 = 0xAC,
+
+        midgard_op_ld_uniform_32 = 0xB0,
+        midgard_op_ld_color_buffer_8 = 0xBA,
+
+        midgard_op_st_char = 0xC0,
+        midgard_op_st_char2 = 0xC4, /* short */
+        midgard_op_st_char4 = 0xC8, /* short2, int, float */
+        midgard_op_st_short4 = 0xCC, /* int2, float2, long */
+        midgard_op_st_int4 = 0xD0, /* float4, long2 */
+
+        midgard_op_st_vary_32 = 0xD4,
+        midgard_op_st_vary_16 = 0xD5,
+        midgard_op_st_vary_32i = 0xD7,
+
+        /* Value to st in r27, location r26.w as short2 */
+        midgard_op_st_image_f = 0xD8,
+        midgard_op_st_image_ui = 0xDA,
+        midgard_op_st_image_i = 0xDB,
 } midgard_load_store_op;
 
 typedef enum {
@@ -491,19 +535,5 @@ __attribute__((__packed__))
         unsigned sampler_handle : 16;
 }
 midgard_texture_word;
-
-static char *load_store_opcode_names[256] = {
-        [midgard_op_store_cubemap_coords] = "st_cubemap_coords",
-        [midgard_op_load_attr_16] = "ld_attr_16",
-        [midgard_op_load_attr_32] = "ld_attr_32",
-        [midgard_op_load_vary_16] = "ld_vary_16",
-        [midgard_op_load_vary_32] = "ld_vary_32",
-        [midgard_op_load_uniform_16] = "ld_uniform_16",
-        [midgard_op_load_uniform_32] = "ld_uniform_32",
-        [midgard_op_load_color_buffer_8] = "ld_color_buffer_8",
-        [midgard_op_load_color_buffer_16] = "ld_color_buffer_16",
-        [midgard_op_store_vary_16] = "st_vary_16",
-        [midgard_op_store_vary_32] = "st_vary_32"
-};
 
 #endif
