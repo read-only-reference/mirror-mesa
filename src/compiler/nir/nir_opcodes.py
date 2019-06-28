@@ -190,8 +190,6 @@ unop("mov", tuint, "src0")
 unop("ineg", tint, "-src0")
 unop("fneg", tfloat, "-src0")
 unop("inot", tint, "~src0") # invert every bit of the integer
-unop("fnot", tfloat, ("bit_size == 64 ? ((src0 == 0.0) ? 1.0 : 0.0f) : " +
-                      "((src0 == 0.0f) ? 1.0f : 0.0f)"))
 unop("fsign", tfloat, ("bit_size == 64 ? " +
                        "((src0 == 0.0) ? 0.0 : ((src0 > 0.0) ? 1.0 : -1.0)) : " +
                        "((src0 == 0.0f) ? 0.0f : ((src0 > 0.0f) ? 1.0f : -1.0f))"))
@@ -552,6 +550,13 @@ if (bit_size == 64) {
 }
 """)
 
+# low 32-bits of unsigned integer multiply
+binop("umul_low", tuint32, _2src_commutative, """
+uint64_t mask = (1 << (bit_size / 2)) - 1;
+dst = ((uint64_t)src0 & mask) * ((uint64_t)src1 & mask);
+""")
+
+
 binop("fdiv", tfloat, "", "src0 / src1")
 binop("idiv", tint, "", "src1 == 0 ? 0 : (src0 / src1)")
 binop("udiv", tuint, "", "src1 == 0 ? 0 : (src0 / src1)")
@@ -693,18 +698,6 @@ binop("ior", tuint, _2src_commutative + associative, "src0 | src1")
 binop("ixor", tuint, _2src_commutative + associative, "src0 ^ src1")
 
 
-# floating point logic operators
-#
-# These use (src != 0.0) for testing the truth of the input, and output 1.0
-# for true and 0.0 for false
-
-binop("fand", tfloat32, _2src_commutative,
-      "((src0 != 0.0f) && (src1 != 0.0f)) ? 1.0f : 0.0f")
-binop("for", tfloat32, _2src_commutative,
-      "((src0 != 0.0f) || (src1 != 0.0f)) ? 1.0f : 0.0f")
-binop("fxor", tfloat32, _2src_commutative,
-      "(src0 != 0.0f && src1 == 0.0f) || (src0 == 0.0f && src1 != 0.0f) ? 1.0f : 0.0f")
-
 binop_reduce("fdot", 1, tfloat, tfloat, "{src0} * {src1}", "{src0} + {src1}",
              "{src}")
 
@@ -780,14 +773,12 @@ binop_convert("pack_32_2x16_split", tuint32, tuint16, "",
               "src0 | ((uint32_t)src1 << 16)")
 
 # bfm implements the behavior of the first operation of the SM5 "bfi" assembly
-# and that of the "bfi1" i965 instruction. That is, it has undefined behavior
-# if either of its arguments are 32.
+# and that of the "bfi1" i965 instruction. That is, the bits and offset values
+# are from the low five bits of src0 and src1, respectively.
 binop_convert("bfm", tuint32, tint32, "", """
-int bits = src0, offset = src1;
-if (offset < 0 || bits < 0 || offset > 31 || bits > 31 || offset + bits > 32)
-   dst = 0; /* undefined */
-else
-   dst = ((1u << bits) - 1) << offset;
+int bits = src0 & 0x1F;
+int offset = src1 & 0x1F;
+dst = ((1u << bits) - 1) << offset;
 """)
 
 opcode("ldexp", 0, tfloat, [0, 0], [tfloat, tint32], False, "", """
@@ -866,15 +857,17 @@ if (mask == 0) {
 }
 """)
 
-# SM5 ubfe/ibfe assembly
+
+triop("bitfield_select", tuint, "", "(src0 & src1) | (~src0 & src2)")
+
+# SM5 ubfe/ibfe assembly: only the 5 least significant bits of offset and bits are used.
 opcode("ubfe", 0, tuint32,
-       [0, 0, 0], [tuint32, tint32, tint32], False, "", """
+       [0, 0, 0], [tuint32, tuint32, tuint32], False, "", """
 unsigned base = src0;
-int offset = src1, bits = src2;
+unsigned offset = src1 & 0x1F;
+unsigned bits = src2 & 0x1F;
 if (bits == 0) {
    dst = 0;
-} else if (bits < 0 || offset < 0) {
-   dst = 0; /* undefined */
 } else if (offset + bits < 32) {
    dst = (base << (32 - bits - offset)) >> (32 - bits);
 } else {
@@ -882,13 +875,12 @@ if (bits == 0) {
 }
 """)
 opcode("ibfe", 0, tint32,
-       [0, 0, 0], [tint32, tint32, tint32], False, "", """
+       [0, 0, 0], [tint32, tuint32, tuint32], False, "", """
 int base = src0;
-int offset = src1, bits = src2;
+unsigned offset = src1 & 0x1F;
+unsigned bits = src2 & 0x1F;
 if (bits == 0) {
    dst = 0;
-} else if (bits < 0 || offset < 0) {
-   dst = 0; /* undefined */
 } else if (offset + bits < 32) {
    dst = (base << (32 - bits - offset)) >> (32 - bits);
 } else {
@@ -958,4 +950,10 @@ dst.z = src2.x;
 dst.w = src3.x;
 """)
 
-
+# ir3-specific instruction that maps directly to mul-add shift high mix,
+# (IMADSH_MIX16 i.e. ah * bl << 16 + c). It is used for lowering integer
+# multiplication (imul) on Freedreno backend..
+opcode("imadsh_mix16", 1, tint32,
+       [1, 1, 1], [tint32, tint32, tint32], False, "", """
+dst.x = ((((src0.x & 0xffff0000) >> 16) * (src1.x & 0x0000ffff)) << 16) + src2.x;
+""")

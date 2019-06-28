@@ -38,6 +38,7 @@ struct ac_nir_context {
 	struct ac_shader_abi *abi;
 
 	gl_shader_stage stage;
+	shader_info *info;
 
 	LLVMValueRef *ssa_defs;
 
@@ -428,60 +429,30 @@ static LLVMValueRef emit_imul_high(struct ac_llvm_context *ctx,
 	return result;
 }
 
-static LLVMValueRef emit_bitfield_extract(struct ac_llvm_context *ctx,
-					  bool is_signed,
-					  const LLVMValueRef srcs[3])
+static LLVMValueRef emit_bfm(struct ac_llvm_context *ctx,
+			     LLVMValueRef bits, LLVMValueRef offset)
 {
-	LLVMValueRef result;
-
-	if (HAVE_LLVM >= 0x0800) {
-		LLVMValueRef icond = LLVMBuildICmp(ctx->builder, LLVMIntEQ, srcs[2], LLVMConstInt(ctx->i32, 32, false), "");
-		result = ac_build_bfe(ctx, srcs[0], srcs[1], srcs[2], is_signed);
-		result = LLVMBuildSelect(ctx->builder, icond, srcs[0], result, "");
-	} else {
-		/* FIXME: LLVM 7+ returns incorrect result when count is 0.
-		 * https://bugs.freedesktop.org/show_bug.cgi?id=107276
-		 */
-		LLVMValueRef zero = ctx->i32_0;
-		LLVMValueRef icond1 = LLVMBuildICmp(ctx->builder, LLVMIntEQ, srcs[2], LLVMConstInt(ctx->i32, 32, false), "");
-		LLVMValueRef icond2 = LLVMBuildICmp(ctx->builder, LLVMIntEQ, srcs[2], zero, "");
-
-		result = ac_build_bfe(ctx, srcs[0], srcs[1], srcs[2], is_signed);
-		result = LLVMBuildSelect(ctx->builder, icond1, srcs[0], result, "");
-		result = LLVMBuildSelect(ctx->builder, icond2, zero, result, "");
-	}
-
-	return result;
+	/* mask = ((1 << bits) - 1) << offset */
+	return LLVMBuildShl(ctx->builder,
+			    LLVMBuildSub(ctx->builder,
+					 LLVMBuildShl(ctx->builder,
+						      ctx->i32_1,
+						      bits, ""),
+					 ctx->i32_1, ""),
+			    offset, "");
 }
 
-static LLVMValueRef emit_bitfield_insert(struct ac_llvm_context *ctx,
-					 LLVMValueRef src0, LLVMValueRef src1,
-					 LLVMValueRef src2, LLVMValueRef src3)
+static LLVMValueRef emit_bitfield_select(struct ac_llvm_context *ctx,
+					 LLVMValueRef mask, LLVMValueRef insert,
+					 LLVMValueRef base)
 {
-	LLVMValueRef bfi_args[3], result;
-
-	bfi_args[0] = LLVMBuildShl(ctx->builder,
-				   LLVMBuildSub(ctx->builder,
-						LLVMBuildShl(ctx->builder,
-							     ctx->i32_1,
-							     src3, ""),
-						ctx->i32_1, ""),
-				   src2, "");
-	bfi_args[1] = LLVMBuildShl(ctx->builder, src1, src2, "");
-	bfi_args[2] = src0;
-
-	LLVMValueRef icond = LLVMBuildICmp(ctx->builder, LLVMIntEQ, src3, LLVMConstInt(ctx->i32, 32, false), "");
-
 	/* Calculate:
-	 *   (arg0 & arg1) | (~arg0 & arg2) = arg2 ^ (arg0 & (arg1 ^ arg2)
+	 *   (mask & insert) | (~mask & base) = base ^ (mask & (insert ^ base))
 	 * Use the right-hand side, which the LLVM backend can convert to V_BFI.
 	 */
-	result = LLVMBuildXor(ctx->builder, bfi_args[2],
-			      LLVMBuildAnd(ctx->builder, bfi_args[0],
-					   LLVMBuildXor(ctx->builder, bfi_args[1], bfi_args[2], ""), ""), "");
-
-	result = LLVMBuildSelect(ctx->builder, icond, src1, result, "");
-	return result;
+	return LLVMBuildXor(ctx->builder, base,
+			    LLVMBuildAnd(ctx->builder, mask,
+					 LLVMBuildXor(ctx->builder, insert, base, ""), ""), "");
 }
 
 static LLVMValueRef emit_pack_half_2x16(struct ac_llvm_context *ctx,
@@ -834,14 +805,17 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		else
 			result = ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ldexp.f64", ctx->ac.f64, src, 2, AC_FUNC_ATTR_READNONE);
 		break;
-	case nir_op_ibitfield_extract:
-		result = emit_bitfield_extract(&ctx->ac, true, src);
+	case nir_op_bfm:
+		result = emit_bfm(&ctx->ac, src[0], src[1]);
 		break;
-	case nir_op_ubitfield_extract:
-		result = emit_bitfield_extract(&ctx->ac, false, src);
+	case nir_op_bitfield_select:
+		result = emit_bitfield_select(&ctx->ac, src[0], src[1], src[2]);
 		break;
-	case nir_op_bitfield_insert:
-		result = emit_bitfield_insert(&ctx->ac, src[0], src[1], src[2], src[3]);
+	case nir_op_ubfe:
+		result = ac_build_bfe(&ctx->ac, src[0], src[1], src[2], false);
+		break;
+	case nir_op_ibfe:
+		result = ac_build_bfe(&ctx->ac, src[0], src[1], src[2], true);
 		break;
 	case nir_op_bitfield_reverse:
 		result = ac_build_bitfield_reverse(&ctx->ac, src[0]);
@@ -1265,7 +1239,7 @@ static LLVMValueRef lower_gather4_integer(struct ac_llvm_context *ctx,
 					      LLVMConstInt(ctx->i32, 0x14000000, false), "");
 
 		/* replace the NUM FORMAT in the descriptor */
-		tmp2 = LLVMBuildAnd(ctx->builder, tmp2, LLVMConstInt(ctx->i32, C_008F14_NUM_FORMAT_GFX6, false), "");
+		tmp2 = LLVMBuildAnd(ctx->builder, tmp2, LLVMConstInt(ctx->i32, C_008F14_NUM_FORMAT, false), "");
 		tmp2 = LLVMBuildOr(ctx->builder, tmp2, tmp, "");
 
 		args->resource = LLVMBuildInsertElement(ctx->builder, args->resource, tmp2, ctx->i32_1, "");
@@ -1394,6 +1368,22 @@ static LLVMValueRef build_tex_intrinsic(struct ac_nir_context *ctx,
 	}
 
 	args->attributes = AC_FUNC_ATTR_READNONE;
+	bool cs_derivs = ctx->stage == MESA_SHADER_COMPUTE &&
+			 ctx->info->cs.derivative_group != DERIVATIVE_GROUP_NONE;
+	if (ctx->stage == MESA_SHADER_FRAGMENT || cs_derivs) {
+		/* Prevent texture instructions with implicit derivatives from being
+		 * sinked into branches. */
+		switch (instr->op) {
+		case nir_texop_tex:
+		case nir_texop_txb:
+		case nir_texop_lod:
+			args->attributes |= AC_FUNC_ATTR_CONVERGENT;
+			break;
+		default:
+			break;
+		}
+	}
+
 	return ac_build_image_opcode(&ctx->ac, args);
 }
 
@@ -1574,9 +1564,10 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 
 		u_bit_scan_consecutive_range(&writemask, &start, &count);
 
-		/* Due to an LLVM limitation, split 3-element writes
-		 * into a 2-element and a 1-element write. */
-		if (count == 3) {
+		/* Due to an LLVM limitation with LLVM < 9, split 3-element
+		 * writes into a 2-element and a 1-element write. */
+		if (count == 3 &&
+		    (elem_size_bytes != 4 || !ac_has_vec3_support(ctx->ac.chip_class, false))) {
 			writemask |= 1 << (start + 2);
 			count = 2;
 		}
@@ -1604,19 +1595,20 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 		if (num_bytes == 1) {
 			ac_build_tbuffer_store_byte(&ctx->ac, rsrc, data,
 						    offset, ctx->ac.i32_0,
-						    cache_policy & ac_glc,
-						    writeonly_memory);
+						    cache_policy & ac_glc);
 		} else if (num_bytes == 2) {
 			ac_build_tbuffer_store_short(&ctx->ac, rsrc, data,
 						     offset, ctx->ac.i32_0,
-						     cache_policy & ac_glc,
-						     writeonly_memory);
+						     cache_policy & ac_glc);
 		} else {
 			int num_channels = num_bytes / 4;
 
 			switch (num_bytes) {
 			case 16: /* v4f32 */
 				data_type = ctx->ac.v4f32;
+				break;
+			case 12: /* v3f32 */
+				data_type = ctx->ac.v3f32;
 				break;
 			case 8: /* v2f32 */
 				data_type = ctx->ac.v2f32;
@@ -1633,8 +1625,7 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 						    num_channels, offset,
 						    ctx->ac.i32_0, 0,
 						    cache_policy & ac_glc,
-						    false, writeonly_memory,
-						    false);
+						    false, false);
 		}
 	}
 }
@@ -1761,11 +1752,12 @@ static LLVMValueRef visit_load_buffer(struct ac_nir_context *ctx,
 							 cache_policy & ac_glc);
 		} else {
 			int num_channels = util_next_power_of_two(load_bytes) / 4;
+			bool can_speculate = access & ACCESS_CAN_REORDER;
 
 			ret = ac_build_buffer_load(&ctx->ac, rsrc, num_channels,
 						   vindex, offset, immoffset, 0,
 						   cache_policy & ac_glc, 0,
-						   false, false);
+						   can_speculate, false);
 		}
 
 		LLVMTypeRef byte_vec = LLVMVectorType(ctx->ac.i8, ac_get_type_size(LLVMTypeOf(ret)));
@@ -2471,11 +2463,11 @@ static LLVMValueRef visit_image_load(struct ac_nir_context *ctx,
 		vindex = LLVMBuildExtractElement(ctx->ac.builder, get_src(ctx, instr->src[1]),
 						 ctx->ac.i32_0, "");
 
-		/* TODO: set "can_speculate" when OpenGL needs it. */
+		bool can_speculate = access & ACCESS_CAN_REORDER;
 		res = ac_build_buffer_load_format(&ctx->ac, rsrc, vindex,
 						  ctx->ac.i32_0, num_channels,
 						  !!(args.cache_policy & ac_glc),
-						  false);
+						  can_speculate);
 		res = ac_build_expand_to_vec4(&ctx->ac, res, num_channels);
 
 		res = ac_trim_vector(&ctx->ac, res, instr->dest.ssa.num_components);
@@ -2535,8 +2527,7 @@ static void visit_image_store(struct ac_nir_context *ctx,
 
 		ac_build_buffer_store_format(&ctx->ac, rsrc, src, vindex,
 					     ctx->ac.i32_0, src_channels,
-					     args.cache_policy & ac_glc,
-					     writeonly_memory);
+					     args.cache_policy & ac_glc, false);
 	} else {
 		args.opcode = ac_image_store;
 		args.data[0] = ac_to_float(&ctx->ac, get_src(ctx, instr->src[3]));
@@ -3437,6 +3428,26 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 	case nir_intrinsic_quad_swap_diagonal:
 		result = ac_build_quad_swizzle(&ctx->ac, get_src(ctx, instr->src[0]), 3, 2, 1 ,0);
 		break;
+	case nir_intrinsic_quad_swizzle_amd: {
+		uint32_t mask = nir_intrinsic_swizzle_mask(instr);
+		result = ac_build_quad_swizzle(&ctx->ac, get_src(ctx, instr->src[0]),
+					       mask & 0x3, (mask >> 2) & 0x3,
+					       (mask >> 4) & 0x3, (mask >> 6) & 0x3);
+		break;
+	}
+	case nir_intrinsic_masked_swizzle_amd: {
+		uint32_t mask = nir_intrinsic_swizzle_mask(instr);
+		result = ac_build_ds_swizzle(&ctx->ac, get_src(ctx, instr->src[0]), mask);
+		break;
+	}
+	case nir_intrinsic_write_invocation_amd:
+		result = ac_build_writelane(&ctx->ac, get_src(ctx, instr->src[0]),
+					    get_src(ctx, instr->src[1]),
+					    get_src(ctx, instr->src[2]));
+		break;
+	case nir_intrinsic_mbcnt_amd:
+		result = ac_build_mbcnt(&ctx->ac, get_src(ctx, instr->src[0]));
+		break;
 	default:
 		fprintf(stderr, "Unknown intrinsic: ");
 		nir_print_instr(&instr->instr, stderr);
@@ -3874,7 +3885,13 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
 		args.offset = NULL;
 	}
 
-	/* TODO TG4 support */
+	/* DMASK was repurposed for GATHER4. 4 components are always
+	 * returned and DMASK works like a swizzle - it selects
+	 * the component to fetch. The only valid DMASK values are
+	 * 1=red, 2=green, 4=blue, 8=alpha. (e.g. 1 returns
+	 * (red,red,red,red) etc.) The ISA document doesn't mention
+	 * this.
+	 */
 	args.dmask = 0xf;
 	if (instr->op == nir_texop_tg4) {
 		if (instr->is_shadow)
@@ -4350,6 +4367,7 @@ void ac_nir_translate(struct ac_llvm_context *ac, struct ac_shader_abi *abi,
 	ctx.abi = abi;
 
 	ctx.stage = nir->info.stage;
+	ctx.info = &nir->info;
 
 	ctx.main_function = LLVMGetBasicBlockParent(LLVMGetInsertBlock(ctx.ac.builder));
 

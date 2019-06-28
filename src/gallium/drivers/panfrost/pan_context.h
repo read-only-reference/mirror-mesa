@@ -47,7 +47,6 @@
 /* Forward declare to avoid extra header dep */
 struct prim_convert_context;
 
-#define MAX_DRAW_CALLS 4096
 #define MAX_VARYINGS   4096
 
 //#define PAN_DIRTY_CLEAR	     (1 << 0)
@@ -68,9 +67,9 @@ struct prim_convert_context;
 		lval &= ~(bit);
 
 struct panfrost_constant_buffer {
-        bool dirty;
-        size_t size;
-        void *buffer;
+        struct pipe_constant_buffer cb[PIPE_MAX_CONSTANT_BUFFERS];
+        uint32_t enabled_mask;
+        uint32_t dirty_mask;
 };
 
 struct panfrost_query {
@@ -133,8 +132,8 @@ struct panfrost_context {
         struct panfrost_memory scratchpad;
         struct panfrost_memory tiler_heap;
         struct panfrost_memory varying_mem;
-        struct panfrost_memory misc_0;
-        struct panfrost_memory misc_1;
+        struct panfrost_memory tiler_polygon_list;
+        struct panfrost_memory tiler_dummy;
         struct panfrost_memory depth_stencil_buffer;
 
         struct panfrost_query *occlusion_query;
@@ -148,23 +147,6 @@ struct panfrost_context {
          * stencil/depth tests, etc. Refer to the presentations. */
 
         struct mali_shader_meta fragment_shader_core;
-
-        /* A frame is composed of a starting set value job, a number of vertex
-         * and tiler jobs, linked to the fragment job at the end. See the
-         * presentations for more information how this works */
-
-        unsigned draw_count;
-
-        mali_ptr set_value_job;
-        mali_ptr vertex_jobs[MAX_DRAW_CALLS];
-        mali_ptr tiler_jobs[MAX_DRAW_CALLS];
-
-        struct mali_job_descriptor_header *u_set_value_job;
-        struct mali_job_descriptor_header *u_vertex_jobs[MAX_DRAW_CALLS];
-        struct mali_job_descriptor_header *u_tiler_jobs[MAX_DRAW_CALLS];
-
-        unsigned vertex_job_count;
-        unsigned tiler_job_count;
 
         /* Per-draw Dirty flags are setup like any other driver */
         int dirty;
@@ -201,6 +183,15 @@ struct panfrost_context {
 
         struct primconvert_context *primconvert;
         struct blitter_context *blitter;
+
+        /* Blitting the wallpaper (the old contents of the framebuffer back to
+         * itself) uses a dedicated u_blitter instance versus general blit()
+         * callbacks from Gallium, as the blit() callback can trigger
+         * wallpapering without Gallium realising, which in turns u_blitter
+         * errors due to unsupported reucrsion */
+
+        struct blitter_context *blitter_wallpaper;
+        struct panfrost_job *wallpaper_batch;
 
         struct panfrost_blend_state *blend;
 
@@ -267,14 +258,17 @@ struct panfrost_shader_state {
         bool writes_point_size;
         bool reads_point_coord;
 
-        unsigned general_varying_stride;
         struct mali_attr_meta varyings[PIPE_MAX_ATTRIBS];
+        gl_varying_slot varyings_loc[PIPE_MAX_ATTRIBS];
 
         unsigned sysval_count;
         unsigned sysval[MAX_SYSVAL_COUNT];
 
         /* Information on this particular shader variant */
         struct pipe_alpha_state alpha_state;
+
+        uint16_t point_sprite_mask;
+        unsigned point_sprite_upper_left : 1;
 };
 
 /* A collection of varyings (the CSO) */
@@ -313,12 +307,6 @@ pan_context(struct pipe_context *pcontext)
         return (struct panfrost_context *) pcontext;
 }
 
-static inline struct panfrost_screen *
-pan_screen(struct pipe_screen *p)
-{
-   return (struct panfrost_screen *)p;
-}
-
 struct pipe_context *
 panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags);
 
@@ -340,20 +328,17 @@ panfrost_flush(
 bool
 panfrost_is_scanout(struct panfrost_context *ctx);
 
-mali_ptr
-panfrost_sfbd_fragment(struct panfrost_context *ctx, bool flip_y);
-
-mali_ptr
-panfrost_mfbd_fragment(struct panfrost_context *ctx, bool flip_y);
+mali_ptr panfrost_sfbd_fragment(struct panfrost_context *ctx, bool has_draws);
+mali_ptr panfrost_mfbd_fragment(struct panfrost_context *ctx, bool has_draws);
 
 struct bifrost_framebuffer
-panfrost_emit_mfbd(struct panfrost_context *ctx);
+panfrost_emit_mfbd(struct panfrost_context *ctx, unsigned vertex_count);
 
 struct mali_single_framebuffer
-panfrost_emit_sfbd(struct panfrost_context *ctx);
+panfrost_emit_sfbd(struct panfrost_context *ctx, unsigned vertex_count);
 
 mali_ptr
-panfrost_fragment_job(struct panfrost_context *ctx);
+panfrost_fragment_job(struct panfrost_context *ctx, bool has_draws);
 
 void
 panfrost_shader_compile(struct panfrost_context *ctx, struct mali_shader_meta *meta, const char *src, int type, struct panfrost_shader_state *state);

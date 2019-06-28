@@ -107,7 +107,7 @@ with_any_opengl = with_opengl or with_gles1 or with_gles2
 # Only build shared_glapi if at least one OpenGL API is enabled
 with_shared_glapi = get_option('shared-glapi') and with_any_opengl
 
-system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'dragonfly', 'linux'].contains(host_machine.system())
+system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly', 'linux'].contains(host_machine.system())
 
 dri_drivers = get_option('dri-drivers')
 if dri_drivers.contains('auto')
@@ -278,6 +278,10 @@ with_platform_surfaceless = _platforms.contains('surfaceless')
 
 with_platforms = false
 if _platforms.length() != 0 and _platforms != ['']
+  # sanity check that list contains no empty strings
+  if _platforms.contains('')
+    error('Invalid argument list given to -Dplatforms, please fix.')
+  endif
   with_platforms = true
   egl_native_platform = _platforms[0]
 endif
@@ -353,12 +357,12 @@ else
   with_egl = false
 endif
 
-if with_egl and not (with_platform_drm or with_platform_surfaceless)
+if with_egl and not (with_platform_drm or with_platform_surfaceless or with_platform_android)
   if with_gallium_radeonsi
-    error('RadeonSI requires drm or surfaceless platform when using EGL')
+    error('RadeonSI requires the drm, surfaceless or android platform when using EGL')
   endif
   if with_gallium_virgl
-    error('Virgl requires drm or surfaceless platform when using EGL')
+    error('Virgl requires the drm, surfaceless or android platform when using EGL')
   endif
 endif
 
@@ -503,12 +507,6 @@ if not system_has_kms_drm
   else
     error('OMX state tracker can only be built on unix-like OSes.')
   endif
-elif not (with_platform_x11 or with_platform_drm)
-  if ['auto', 'disabled'].contains(_omx)
-    _omx = 'disabled'
-  else
-    error('OMX state tracker requires X11 or drm platform support.')
-  endif
 elif not (with_gallium_r600 or with_gallium_radeonsi or with_gallium_nouveau)
   if ['auto', 'disabled'].contains(_omx)
     _omx = 'disabled'
@@ -586,12 +584,6 @@ _va = get_option('gallium-va')
 if not system_has_kms_drm
   if _va == 'true'
     error('VA state tracker can only be built on unix-like OSes.')
-  else
-    _va = 'false'
-  endif
-elif not (with_platform_x11 or with_platform_drm)
-  if _va == 'true'
-    error('VA state tracker requires X11 or drm or wayland platform support.')
   else
     _va = 'false'
   endif
@@ -754,7 +746,11 @@ if with_platform_haiku
   pre_args += '-DHAVE_HAIKU_PLATFORM'
 endif
 
-prog_python = import('python3').find_python()
+if meson.version().version_compare('>=0.50')
+  prog_python = import('python').find_installation('python3')
+else
+  prog_python = import('python3').find_python()
+endif
 has_mako = run_command(
   prog_python, '-c',
   '''
@@ -840,7 +836,7 @@ if cc.compiles('__uint128_t foo(void) { return 0; }',
 endif
 
 # TODO: this is very incomplete
-if ['linux', 'cygwin', 'gnu'].contains(host_machine.system())
+if ['linux', 'cygwin', 'gnu', 'gnu/kfreebsd'].contains(host_machine.system())
   pre_args += '-D_GNU_SOURCE'
 endif
 
@@ -849,6 +845,8 @@ c_args = []
 foreach a : ['-Werror=implicit-function-declaration',
              '-Werror=missing-prototypes', '-Werror=return-type',
              '-Werror=incompatible-pointer-types',
+             '-Werror=format',
+             '-Wformat-security',
              '-fno-math-errno',
              '-fno-trapping-math', '-Qunused-arguments']
   if cc.has_argument(a)
@@ -870,6 +868,8 @@ endif
 # Check for generic C++ arguments
 cpp_args = []
 foreach a : ['-Werror=return-type',
+             '-Werror=format',
+             '-Wformat-security',
              '-fno-math-errno', '-fno-trapping-math',
              '-Qunused-arguments']
   if cpp.has_argument(a)
@@ -1044,7 +1044,7 @@ elif cc.has_header_symbol('sys/mkdev.h', 'major')
   pre_args += '-DMAJOR_IN_MKDEV'
 endif
 
-foreach h : ['xlocale.h', 'sys/sysctl.h', 'linux/futex.h', 'endian.h', 'dlfcn.h']
+foreach h : ['xlocale.h', 'sys/sysctl.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'execinfo.h', 'sys/shm.h']
   if cc.compiles('#include <@0@>'.format(h), name : '@0@'.format(h))
     pre_args += '-DHAVE_@0@'.format(h.to_upper().underscorify())
   endif
@@ -1159,15 +1159,13 @@ dep_m = cc.find_library('m', required : false)
 dep_libdrm_amdgpu = null_dep
 dep_libdrm_radeon = null_dep
 dep_libdrm_nouveau = null_dep
-dep_libdrm_etnaviv = null_dep
 dep_libdrm_intel = null_dep
 
 _drm_amdgpu_ver = '2.4.97'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.66'
-_drm_etnaviv_ver = '2.4.89'
 _drm_intel_ver = '2.4.75'
-_drm_ver = '2.4.75'
+_drm_ver = '2.4.81'
 
 _libdrm_checks = [
   ['intel', with_dri_i915 or with_gallium_i915],
@@ -1175,12 +1173,16 @@ _libdrm_checks = [
   ['radeon', (with_gallium_radeonsi or with_dri_r100 or with_dri_r200 or
               with_gallium_r300 or with_gallium_r600)],
   ['nouveau', (with_gallium_nouveau or with_dri_nouveau)],
-  ['etnaviv', with_gallium_etnaviv],
 ]
 
 # VC4 only needs core libdrm support of this version, not a libdrm_vc4
 # library.
 if with_gallium_vc4
+  _drm_ver = '2.4.89'
+endif
+
+# etnaviv only needs core libdrm
+if with_gallium_etnaviv
   _drm_ver = '2.4.89'
 endif
 
@@ -1537,8 +1539,8 @@ lines = ['',
                                                     with_gles2 ? 'yes' : 'no'),
 ]
 
-lines += ''
 if with_osmesa != 'none'
+  lines += ''
   suffix = ''
   if with_osmesa == 'gallium'
     suffix = '(Gallium)'
@@ -1548,8 +1550,8 @@ else
   lines += 'OSMesa:          no'
 endif
 
-lines += ''
 if with_dri
+  lines += ''
   lines += 'DRI platform:    ' + with_dri_platform
   if dri_drivers.length() != 0 and dri_drivers != ['']
     lines += 'DRI drivers:     ' + ' '.join(dri_drivers)
@@ -1559,8 +1561,8 @@ if with_dri
   lines += 'DRI driver dir:  ' + dri_drivers_path
 endif
 
-lines += ''
 if with_glx != 'disabled'
+  lines += ''
   if with_glx == 'dri'
     lines += 'GLX:             DRI-based'
   elif with_glx == 'xlib'

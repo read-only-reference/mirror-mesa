@@ -23,8 +23,8 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "radeonsi/si_pipe.h"
-#include "radeonsi/si_query.h"
+#include "si_pipe.h"
+#include "si_query.h"
 #include "util/u_format.h"
 #include "util/u_log.h"
 #include "util/u_memory.h"
@@ -36,8 +36,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include "state_tracker/drm_driver.h"
-#include "amd/common/sid.h"
-#include "amd/common/gfx9d.h"
+#include "sid.h"
 
 static enum radeon_surf_mode
 si_choose_tiling(struct si_screen *sscreen,
@@ -172,6 +171,11 @@ static void si_copy_from_staging_texture(struct pipe_context *ctx, struct si_tra
 					   transfer->box.x, transfer->box.y, transfer->box.z,
 					   src, 0, &sbox);
 		return;
+	}
+
+	if (util_format_is_compressed(dst->format)) {
+		sbox.width = util_format_get_nblocksx(dst->format, sbox.width);
+		sbox.height = util_format_get_nblocksx(dst->format, sbox.height);
 	}
 
 	sctx->dma_copy(ctx, dst, transfer->level,
@@ -1072,7 +1076,7 @@ void si_print_texture_info(struct si_screen *sscreen,
 			tex->surface.u.gfx9.surf.epitch,
 			tex->surface.u.gfx9.surf_pitch);
 
-		if (tex->surface.fmask_size) {
+		if (tex->fmask_offset) {
 			u_log_printf(log, "  FMASK: offset=%"PRIu64", size=%"PRIu64", "
 				"alignment=%u, swmode=%u, epitch=%u\n",
 				tex->fmask_offset,
@@ -1127,7 +1131,7 @@ void si_print_texture_info(struct si_screen *sscreen,
 		tex->surface.u.legacy.tile_split, tex->surface.u.legacy.pipe_config,
 		(tex->surface.flags & RADEON_SURF_SCANOUT) != 0);
 
-	if (tex->surface.fmask_size)
+	if (tex->fmask_offset)
 		u_log_printf(log, "  FMask: offset=%"PRIu64", size=%"PRIu64", alignment=%u, pitch_in_pixels=%u, "
 			"bankh=%u, slice_tile_max=%u, tile_mode_index=%u\n",
 			tex->fmask_offset, tex->surface.fmask_size, tex->surface.fmask_alignment,
@@ -1794,6 +1798,25 @@ static void si_init_temp_resource_from_box(struct pipe_resource *res,
 	res->array_size = 1;
 	res->usage = flags & SI_RESOURCE_FLAG_TRANSFER ? PIPE_USAGE_STAGING : PIPE_USAGE_DEFAULT;
 	res->flags = flags;
+
+	if (flags & SI_RESOURCE_FLAG_TRANSFER &&
+	    util_format_is_compressed(orig->format)) {
+		/* Transfer resources are allocated with linear tiling, which is
+		 * not supported for compressed formats.
+		 */
+		unsigned blocksize =
+			util_format_get_blocksize(orig->format);
+
+		if (blocksize == 8) {
+			res->format = PIPE_FORMAT_R16G16B16A16_UINT;
+		} else {
+			assert(blocksize == 16);
+			res->format = PIPE_FORMAT_R32G32B32A32_UINT;
+		}
+
+		res->width0 = util_format_get_nblocksx(orig->format, box->width);
+		res->height0 = util_format_get_nblocksy(orig->format, box->height);
+	}
 
 	/* We must set the correct texture target and dimensions for a 3D box. */
 	if (box->depth > 1 && util_max_layer(orig, level) > 0) {

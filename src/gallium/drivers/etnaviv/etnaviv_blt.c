@@ -261,10 +261,10 @@ etna_blit_clear_zs_blt(struct pipe_context *pctx, struct pipe_surface *dst,
    /* Get the channels to clear */
    switch (surf->base.format) {
    case PIPE_FORMAT_Z16_UNORM:
+   case PIPE_FORMAT_X8Z24_UNORM:
       clear_bits_depth = 0xffffffff;
       clear_bits_stencil = 0x00000000;
       break;
-   case PIPE_FORMAT_X8Z24_UNORM:
    case PIPE_FORMAT_S8_UINT_Z24_UNORM:
       clear_bits_depth = 0xffffff00;
       clear_bits_stencil = 0x000000ff;
@@ -391,12 +391,16 @@ etna_try_blt_blit(struct pipe_context *pctx,
 
    /* TODO: 1 byte per pixel formats aren't handled by etna_compatible_rs_format nor
     * translate_rs_format.
-    * Also this should be smarter about format conversions; etna_compatible_rs_format
-    * assumes all 2-byte pixel format are laid out as 4444, all 4-byte pixel formats
-    * are 8888.
     */
-   unsigned src_format = etna_compatible_rs_format(blit_info->src.format);
-   unsigned dst_format = etna_compatible_rs_format(blit_info->dst.format);
+   unsigned src_format = blit_info->src.format;
+   unsigned dst_format = blit_info->dst.format;
+
+   /* for a copy with same dst/src format, we can use a different format */
+   if (translate_blt_format(src_format) == ETNA_NO_MATCH &&
+       src_format == dst_format) {
+      src_format = dst_format = etna_compatible_rs_format(src_format);
+   }
+
    if (translate_blt_format(src_format) == ETNA_NO_MATCH ||
        translate_blt_format(dst_format) == ETNA_NO_MATCH ||
        blit_info->scissor_enable ||
@@ -449,7 +453,7 @@ etna_try_blt_blit(struct pipe_context *pctx,
       op.src.tiling = src->layout;
       op.src.cache_mode = TS_CACHE_MODE_128; /* TODO: cache modes */
       const struct util_format_description *src_format_desc =
-         util_format_description(blit_info->src.format);
+         util_format_description(src_format);
       for (unsigned x=0; x<4; ++x)
          op.src.swizzle[x] = src_format_desc->swizzle[x];
 
@@ -474,7 +478,7 @@ etna_try_blt_blit(struct pipe_context *pctx,
       op.dest.tiling = dst->layout;
       op.dest.cache_mode = TS_CACHE_MODE_128; /* TODO cache modes */
       const struct util_format_description *dst_format_desc =
-         util_format_description(blit_info->dst.format);
+         util_format_description(dst_format);
       for (unsigned x=0; x<4; ++x)
          op.dest.swizzle[x] = dst_format_desc->swizzle[x];
 

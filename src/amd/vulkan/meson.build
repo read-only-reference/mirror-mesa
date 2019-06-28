@@ -129,6 +129,13 @@ if with_xlib_lease
   radv_flags += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
 endif
 
+if with_platform_android
+  radv_flags += [
+    '-DVK_USE_PLATFORM_ANDROID_KHR'
+  ]
+  libradv_files += files('radv_android.c')
+endif
+
 libvulkan_radeon = shared_library(
   'vulkan_radeon',
   [libradv_files, radv_entrypoints, radv_extensions_c, amd_vk_format_table_c, sha1_h, xmlpool_options_h],
@@ -142,7 +149,7 @@ libvulkan_radeon = shared_library(
   dependencies : [
     dep_llvm, dep_libdrm_amdgpu, dep_thread, dep_elf, dep_dl, dep_m,
     dep_valgrind, radv_deps,
-    idep_nir, idep_vulkan_util,
+    idep_nir, idep_vulkan_util, idep_amdgfxregs_h,
   ],
   c_args : [c_vis_args, no_override_init_args, radv_flags],
   cpp_args : [cpp_vis_args, radv_flags],

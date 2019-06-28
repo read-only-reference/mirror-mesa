@@ -31,9 +31,9 @@
 #include "vk_util.h"
 #include "radv_radeon_winsys.h"
 #include "sid.h"
-#include "gfx9d.h"
 #include "util/debug.h"
 #include "util/u_atomic.h"
+
 static unsigned
 radv_choose_tiling(struct radv_device *device,
 		   const struct radv_image_create_info *create_info)
@@ -76,13 +76,6 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device,
 	    (pCreateInfo->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT))
 		return false;
 
-	/* TODO: Implement layout transitions with variable sample locations
-	 * before enabling HTILE for depth/stencil images created with this
-	 * flags because the depth decompress pass needs to know them.
-	 */
-	if (pCreateInfo->flags & VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT)
-		return false;
-
 	if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR)
 		return false;
 
@@ -116,6 +109,9 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device,
 			 * one format with everything else.
 			 */
 			for (unsigned i = 0; i < format_list->viewFormatCount; ++i) {
+				if (format_list->pViewFormats[i] == VK_FORMAT_UNDEFINED)
+					continue;
+
 				if (pCreateInfo->format != format_list->pViewFormats[i])
 					return false;
 			}
@@ -125,6 +121,22 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device,
 	}
 
 	return true;
+}
+
+static bool
+radv_surface_has_scanout(struct radv_device *device, const struct radv_image_create_info *info)
+{
+	if (info->scanout)
+		return true;
+
+	if (!info->bo_metadata)
+		return false;
+
+	if (device->physical_device->rad_info.chip_class >= GFX9) {
+		return info->bo_metadata->u.gfx9.swizzle_mode == 0 || info->bo_metadata->u.gfx9.swizzle_mode % 4 == 2;
+	} else {
+		return info->bo_metadata->u.legacy.scanout;
+	}
 }
 
 static bool
@@ -143,9 +155,7 @@ radv_use_dcc_for_image(struct radv_device *device,
 	if (device->instance->debug_flags & RADV_DEBUG_NO_DCC)
 		return false;
 
-	/* FIXME: DCC is broken for shareable images starting with GFX9 */
-	if (device->physical_device->rad_info.chip_class >= GFX9 &&
-	    image->shareable)
+	if (image->shareable)
 		return false;
 
 	/* TODO: Enable DCC for storage images. */
@@ -160,11 +170,16 @@ radv_use_dcc_for_image(struct radv_device *device,
 	    vk_format_get_plane_count(pCreateInfo->format) > 1)
 		return false;
 
-	/* TODO: Enable DCC for mipmaps and array layers. */
-	if (pCreateInfo->mipLevels > 1 || pCreateInfo->arrayLayers > 1)
+	/* TODO: Enable DCC for mipmaps on GFX9+. */
+	if (pCreateInfo->mipLevels > 1 &&
+	    device->physical_device->rad_info.chip_class >= GFX9)
 		return false;
 
-	if (create_info->scanout)
+	/* TODO: Enable DCC for array layers. */
+	if (pCreateInfo->arrayLayers > 1)
+		return false;
+
+	if (radv_surface_has_scanout(device, create_info))
 		return false;
 
 	/* FIXME: DCC for MSAA with 4x and 8x samples doesn't work yet, while
@@ -191,6 +206,9 @@ radv_use_dcc_for_image(struct radv_device *device,
 			/* compatibility is transitive, so we only need to check
 			 * one format with everything else. */
 			for (unsigned i = 0; i < format_list->viewFormatCount; ++i) {
+				if (format_list->pViewFormats[i] == VK_FORMAT_UNDEFINED)
+					continue;
+
 				if (!radv_dcc_formats_compatible(pCreateInfo->format,
 				                                 format_list->pViewFormats[i]))
 					dcc_compatible_formats = false;
@@ -204,6 +222,60 @@ radv_use_dcc_for_image(struct radv_device *device,
 		return false;
 
 	return true;
+}
+
+static bool
+radv_use_tc_compat_cmask_for_image(struct radv_device *device,
+				   struct radv_image *image)
+{
+	if (!(device->instance->perftest_flags & RADV_PERFTEST_TC_COMPAT_CMASK))
+		return false;
+
+	/* TC-compat CMASK is only available for GFX8+. */
+	if (device->physical_device->rad_info.chip_class < GFX8)
+		return false;
+
+	if (image->usage & VK_IMAGE_USAGE_STORAGE_BIT)
+		return false;
+
+	if (radv_image_has_dcc(image))
+		return false;
+
+	if (!radv_image_has_cmask(image))
+		return false;
+
+	return true;
+}
+
+static void
+radv_prefill_surface_from_metadata(struct radv_device *device,
+                                   struct radeon_surf *surface,
+                                   const struct radv_image_create_info *create_info)
+{
+	const struct radeon_bo_metadata *md = create_info->bo_metadata;
+	if (device->physical_device->rad_info.chip_class >= GFX9) {
+		if (md->u.gfx9.swizzle_mode > 0)
+			surface->flags |= RADEON_SURF_SET(RADEON_SURF_MODE_2D, MODE);
+		else
+			surface->flags |= RADEON_SURF_SET(RADEON_SURF_MODE_LINEAR_ALIGNED, MODE);
+
+		surface->u.gfx9.surf.swizzle_mode = md->u.gfx9.swizzle_mode;
+	} else {
+		surface->u.legacy.pipe_config = md->u.legacy.pipe_config;
+		surface->u.legacy.bankw = md->u.legacy.bankw;
+		surface->u.legacy.bankh = md->u.legacy.bankh;
+		surface->u.legacy.tile_split = md->u.legacy.tile_split;
+		surface->u.legacy.mtilea = md->u.legacy.mtilea;
+		surface->u.legacy.num_banks = md->u.legacy.num_banks;
+
+		if (md->u.legacy.macrotile == RADEON_LAYOUT_TILED)
+			surface->flags |= RADEON_SURF_SET(RADEON_SURF_MODE_2D, MODE);
+		else if (md->u.legacy.microtile == RADEON_LAYOUT_TILED)
+			surface->flags |= RADEON_SURF_SET(RADEON_SURF_MODE_1D, MODE);
+		else
+			surface->flags |= RADEON_SURF_SET(RADEON_SURF_MODE_LINEAR_ALIGNED, MODE);
+
+	}
 }
 
 static int
@@ -230,7 +302,11 @@ radv_init_surface(struct radv_device *device,
 	if (surface->bpe == 3) {
 		surface->bpe = 4;
 	}
-	surface->flags = RADEON_SURF_SET(array_mode, MODE);
+	if (create_info->bo_metadata) {
+		radv_prefill_surface_from_metadata(device, surface, create_info);
+	} else {
+		surface->flags = RADEON_SURF_SET(array_mode, MODE);
+	}
 
 	switch (pCreateInfo->imageType){
 	case VK_IMAGE_TYPE_1D:
@@ -272,8 +348,9 @@ radv_init_surface(struct radv_device *device,
 	if (!radv_use_dcc_for_image(device, image, create_info, pCreateInfo))
 		surface->flags |= RADEON_SURF_DISABLE_DCC;
 
-	if (create_info->scanout)
+	if (radv_surface_has_scanout(device, create_info))
 		surface->flags |= RADEON_SURF_SCANOUT;
+
 	return 0;
 }
 
@@ -329,6 +406,9 @@ radv_make_buffer_descriptor(struct radv_device *device,
 
 	num_format = radv_translate_buffer_numformat(desc, first_non_void);
 	data_format = radv_translate_buffer_dataformat(desc, first_non_void);
+
+	assert(data_format != V_008F0C_BUF_DATA_FORMAT_INVALID);
+	assert(num_format != ~0);
 
 	va += offset;
 	state[0] = va;
@@ -398,14 +478,14 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 
 	if (chip_class >= GFX9) {
 		state[3] &= C_008F1C_SW_MODE;
-		state[4] &= C_008F20_PITCH_GFX9;
+		state[4] &= C_008F20_PITCH;
 
 		if (is_stencil) {
 			state[3] |= S_008F1C_SW_MODE(plane->surface.u.gfx9.stencil.swizzle_mode);
-			state[4] |= S_008F20_PITCH_GFX9(plane->surface.u.gfx9.stencil.epitch);
+			state[4] |= S_008F20_PITCH(plane->surface.u.gfx9.stencil.epitch);
 		} else {
 			state[3] |= S_008F1C_SW_MODE(plane->surface.u.gfx9.surf.swizzle_mode);
-			state[4] |= S_008F20_PITCH_GFX9(plane->surface.u.gfx9.surf.epitch);
+			state[4] |= S_008F20_PITCH(plane->surface.u.gfx9.surf.epitch);
 		}
 
 		state[5] &= C_008F24_META_DATA_ADDRESS &
@@ -430,8 +510,8 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 
 		state[3] &= C_008F1C_TILING_INDEX;
 		state[3] |= S_008F1C_TILING_INDEX(index);
-		state[4] &= C_008F20_PITCH_GFX6;
-		state[4] |= S_008F20_PITCH_GFX6(pitch - 1);
+		state[4] &= C_008F20_PITCH;
+		state[4] |= S_008F20_PITCH(pitch - 1);
 	}
 }
 
@@ -555,8 +635,8 @@ si_make_texture_descriptor(struct radv_device *device,
 		depth = image->info.array_size / 6;
 
 	state[0] = 0;
-	state[1] = (S_008F14_DATA_FORMAT_GFX6(data_format) |
-		    S_008F14_NUM_FORMAT_GFX6(num_format));
+	state[1] = (S_008F14_DATA_FORMAT(data_format) |
+		    S_008F14_NUM_FORMAT(num_format));
 	state[2] = (S_008F18_WIDTH(width - 1) |
 		    S_008F18_HEIGHT(height - 1) |
 		    S_008F18_PERF_MOD(4));
@@ -657,8 +737,8 @@ si_make_texture_descriptor(struct radv_device *device,
 		fmask_state[0] = va >> 8;
 		fmask_state[0] |= image->fmask.tile_swizzle;
 		fmask_state[1] = S_008F14_BASE_ADDRESS_HI(va >> 40) |
-			S_008F14_DATA_FORMAT_GFX6(fmask_format) |
-			S_008F14_NUM_FORMAT_GFX6(num_format);
+			S_008F14_DATA_FORMAT(fmask_format) |
+			S_008F14_NUM_FORMAT(num_format);
 		fmask_state[2] = S_008F18_WIDTH(width - 1) |
 			S_008F18_HEIGHT(height - 1);
 		fmask_state[3] = S_008F1C_DST_SEL_X(V_008F1C_SQ_SEL_X) |
@@ -674,14 +754,29 @@ si_make_texture_descriptor(struct radv_device *device,
 		if (device->physical_device->rad_info.chip_class >= GFX9) {
 			fmask_state[3] |= S_008F1C_SW_MODE(image->planes[0].surface.u.gfx9.fmask.swizzle_mode);
 			fmask_state[4] |= S_008F20_DEPTH(last_layer) |
-					  S_008F20_PITCH_GFX9(image->planes[0].surface.u.gfx9.fmask.epitch);
+					  S_008F20_PITCH(image->planes[0].surface.u.gfx9.fmask.epitch);
 			fmask_state[5] |= S_008F24_META_PIPE_ALIGNED(image->planes[0].surface.u.gfx9.cmask.pipe_aligned) |
 					  S_008F24_META_RB_ALIGNED(image->planes[0].surface.u.gfx9.cmask.rb_aligned);
+
+			if (radv_image_is_tc_compat_cmask(image)) {
+				va = gpu_address + image->offset + image->cmask.offset;
+
+				fmask_state[5] |= S_008F24_META_DATA_ADDRESS(va >> 40);
+				fmask_state[6] |= S_008F28_COMPRESSION_EN(1);
+				fmask_state[7] |= va >> 8;
+			}
 		} else {
 			fmask_state[3] |= S_008F1C_TILING_INDEX(image->fmask.tile_mode_index);
 			fmask_state[4] |= S_008F20_DEPTH(depth - 1) |
-				S_008F20_PITCH_GFX6(image->fmask.pitch_in_pixels - 1);
+				S_008F20_PITCH(image->fmask.pitch_in_pixels - 1);
 			fmask_state[5] |= S_008F24_LAST_ARRAY(last_layer);
+
+			if (radv_image_is_tc_compat_cmask(image)) {
+				va = gpu_address + image->offset + image->cmask.offset;
+
+				fmask_state[6] |= S_008F28_COMPRESSION_EN(1);
+				fmask_state[7] |= va >> 8;
+			}
 		}
 	} else if (fmask_state)
 		memset(fmask_state, 0, 8 * 4);
@@ -812,6 +907,7 @@ radv_image_get_fmask_info(struct radv_device *device,
 	out->slice_tile_max = image->planes[0].surface.u.legacy.fmask.slice_tile_max;
 	out->tile_mode_index = image->planes[0].surface.u.legacy.fmask.tiling_index;
 	out->pitch_in_pixels = image->planes[0].surface.u.legacy.fmask.pitch_in_pixels;
+	out->slice_size = image->planes[0].surface.u.legacy.fmask.slice_size;
 	out->bank_height = image->planes[0].surface.u.legacy.fmask.bankh;
 	out->tile_swizzle = image->planes[0].surface.fmask_tile_swizzle;
 	out->alignment = image->planes[0].surface.fmask_alignment;
@@ -836,10 +932,6 @@ radv_image_get_cmask_info(struct radv_device *device,
 			  struct radv_image *image,
 			  struct radv_cmask_info *out)
 {
-	unsigned pipe_interleave_bytes = device->physical_device->rad_info.pipe_interleave_bytes;
-	unsigned num_pipes = device->physical_device->rad_info.num_tile_pipes;
-	unsigned cl_width, cl_height;
-
 	assert(image->plane_count == 1);
 
 	if (device->physical_device->rad_info.chip_class >= GFX9) {
@@ -848,44 +940,10 @@ radv_image_get_cmask_info(struct radv_device *device,
 		return;
 	}
 
-	switch (num_pipes) {
-	case 2:
-		cl_width = 32;
-		cl_height = 16;
-		break;
-	case 4:
-		cl_width = 32;
-		cl_height = 32;
-		break;
-	case 8:
-		cl_width = 64;
-		cl_height = 32;
-		break;
-	case 16: /* Hawaii */
-		cl_width = 64;
-		cl_height = 64;
-		break;
-	default:
-		assert(0);
-		return;
-	}
-
-	unsigned base_align = num_pipes * pipe_interleave_bytes;
-
-	unsigned width = align(image->planes[0].surface.u.legacy.level[0].nblk_x, cl_width*8);
-	unsigned height = align(image->planes[0].surface.u.legacy.level[0].nblk_y, cl_height*8);
-	unsigned slice_elements = (width * height) / (8*8);
-
-	/* Each element of CMASK is a nibble. */
-	unsigned slice_bytes = slice_elements / 2;
-
-	out->slice_tile_max = (width * height) / (128*128);
-	if (out->slice_tile_max)
-		out->slice_tile_max -= 1;
-
-	out->alignment = MAX2(256, base_align);
-	out->size = (image->type == VK_IMAGE_TYPE_3D ? image->info.depth : image->info.array_size) *
-		    align(slice_bytes, base_align);
+	out->slice_tile_max = image->planes[0].surface.u.legacy.cmask_slice_tile_max;
+	out->alignment = image->planes[0].surface.cmask_alignment;
+	out->slice_size = image->planes[0].surface.cmask_slice_size;
+	out->size = image->planes[0].surface.cmask_size;
 }
 
 static void
@@ -911,11 +969,11 @@ radv_image_alloc_dcc(struct radv_image *image)
 	assert(image->plane_count == 1);
 
 	image->dcc_offset = align64(image->size, image->planes[0].surface.dcc_alignment);
-	/* + 16 for storing the clear values + dcc pred */
+	/* + 24 for storing the clear values + fce pred + dcc pred for each mip */
 	image->clear_value_offset = image->dcc_offset + image->planes[0].surface.dcc_size;
-	image->fce_pred_offset = image->clear_value_offset + 8;
-	image->dcc_pred_offset = image->clear_value_offset + 16;
-	image->size = image->dcc_offset + image->planes[0].surface.dcc_size + 24;
+	image->fce_pred_offset = image->clear_value_offset + 8 * image->info.levels;
+	image->dcc_pred_offset = image->clear_value_offset + 16 * image->info.levels;
+	image->size = image->dcc_offset + image->planes[0].surface.dcc_size + 24 * image->info.levels;
 	image->alignment = MAX2(image->alignment, image->planes[0].surface.dcc_alignment);
 }
 
@@ -1057,7 +1115,8 @@ radv_image_create(VkDevice _device,
 
 	image->shareable = vk_find_struct_const(pCreateInfo->pNext,
 	                                        EXTERNAL_MEMORY_IMAGE_CREATE_INFO) != NULL;
-	if (!vk_format_is_depth_or_stencil(pCreateInfo->format) && !create_info->scanout && !image->shareable) {
+	if (!vk_format_is_depth_or_stencil(pCreateInfo->format) &&
+	    !radv_surface_has_scanout(device, create_info) && !image->shareable) {
 		image->info.surf_index = &device->image_mrt_offset_counter;
 	}
 
@@ -1108,6 +1167,9 @@ radv_image_create(VkDevice _device,
 		/* Try to enable FMASK for multisampled images. */
 		if (radv_image_can_enable_fmask(image)) {
 			radv_image_alloc_fmask(device, image);
+
+			if (radv_use_tc_compat_cmask_for_image(device, image))
+				image->tc_compatible_cmask = true;
 		} else {
 			/* Otherwise, try to enable HTILE for depth surfaces. */
 			if (radv_image_can_enable_htile(image) &&

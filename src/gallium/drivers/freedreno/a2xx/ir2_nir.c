@@ -32,7 +32,7 @@
 static const nir_shader_compiler_options options = {
 	.lower_fpow = true,
 	.lower_flrp32 = true,
-	.lower_fmod32 = true,
+	.lower_fmod = true,
 	.lower_fdiv = true,
 	.lower_fceil = true,
 	.fuse_ffma = true,
@@ -286,10 +286,6 @@ instr_create_alu(struct ir2_context *ctx, nir_op opcode, unsigned ncomp)
 
 		[nir_op_mov] = {MAXs, MAXv},
 		[nir_op_fsign] = {-1, CNDGTEv},
-		[nir_op_fnot] = {SETEs, SETEv},
-		[nir_op_for] = {MAXs, MAXv},
-		[nir_op_fand] = {MINs, MINv},
-		[nir_op_fxor] = {-1, SETNEv},
 		[nir_op_fadd] = {ADDs, ADDv},
 		[nir_op_fsub] = {ADDs, ADDv},
 		[nir_op_fmul] = {MULs, MULv},

@@ -95,6 +95,33 @@ static const uint64_t stage_to_debug[] = {
    [MESA_SHADER_COMPUTE] = DEBUG_CS,
 };
 
+struct anv_spirv_debug_data {
+   struct anv_device *device;
+   const struct anv_shader_module *module;
+};
+
+static void anv_spirv_nir_debug(void *private_data,
+                                enum nir_spirv_debug_level level,
+                                size_t spirv_offset,
+                                const char *message)
+{
+   struct anv_spirv_debug_data *debug_data = private_data;
+   static const VkDebugReportFlagsEXT vk_flags[] = {
+      [NIR_SPIRV_DEBUG_LEVEL_INFO] = VK_DEBUG_REPORT_INFORMATION_BIT_EXT,
+      [NIR_SPIRV_DEBUG_LEVEL_WARNING] = VK_DEBUG_REPORT_WARNING_BIT_EXT,
+      [NIR_SPIRV_DEBUG_LEVEL_ERROR] = VK_DEBUG_REPORT_ERROR_BIT_EXT,
+   };
+   char buffer[256];
+
+   snprintf(buffer, sizeof(buffer), "SPIR-V offset %lu: %s", (unsigned long) spirv_offset, message);
+
+   vk_debug_report(&debug_data->device->instance->debug_report_callbacks,
+                   vk_flags[level],
+                   VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT,
+                   (uint64_t) (uintptr_t) debug_data->module,
+                   0, 0, "anv", buffer);
+}
+
 /* Eventually, this will become part of anv_CreateShader.  Unfortunately,
  * we can't do that yet because we don't have the ability to copy nir.
  */
@@ -134,6 +161,10 @@ anv_shader_compile_to_nir(struct anv_device *device,
       }
    }
 
+   struct anv_spirv_debug_data spirv_debug_data = {
+      .device = device,
+      .module = module,
+   };
    struct spirv_to_nir_options spirv_options = {
       .lower_workgroup_access_to_offsets = true,
       .caps = {
@@ -145,6 +176,8 @@ anv_shader_compile_to_nir(struct anv_device *device,
          .draw_parameters = true,
          .float16 = pdevice->info.gen >= 8,
          .float64 = pdevice->info.gen >= 8,
+         .fragment_shader_sample_interlock = pdevice->info.gen >= 9,
+         .fragment_shader_pixel_interlock = pdevice->info.gen >= 9,
          .geometry_streams = true,
          .image_write_without_format = true,
          .int8 = pdevice->info.gen >= 8,
@@ -181,6 +214,10 @@ anv_shader_compile_to_nir(struct anv_device *device,
        * with certain code / code generators.
        */
       .shared_addr_format = nir_address_format_32bit_offset,
+      .debug = {
+         .func = anv_spirv_nir_debug,
+         .private_data = &spirv_debug_data,
+      },
    };
 
 
@@ -232,9 +269,6 @@ anv_shader_compile_to_nir(struct anv_device *device,
    NIR_PASS_V(nir, nir_remove_dead_variables,
               nir_var_shader_in | nir_var_shader_out | nir_var_system_value);
 
-   NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_mem_global,
-              nir_address_format_64bit_global);
-
    NIR_PASS_V(nir, nir_propagate_invariant);
    NIR_PASS_V(nir, nir_lower_io_to_temporaries,
               nir_shader_get_entrypoint(nir), true, false);
@@ -244,7 +278,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
    /* Vulkan uses the separate-shader linking model */
    nir->info.separate_shader = true;
 
-   nir = brw_preprocess_nir(compiler, nir, NULL);
+   brw_preprocess_nir(compiler, nir, NULL);
 
    return nir;
 }
@@ -617,6 +651,9 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    NIR_PASS_V(nir, brw_nir_lower_image_load_store, compiler->devinfo);
 
+   NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_mem_global,
+              nir_address_format_64bit_global);
+
    /* Apply the actual pipeline layout to UBOs, SSBOs, and textures */
    if (layout) {
       anv_nir_apply_pipeline_layout(pdevice,
@@ -654,7 +691,7 @@ anv_pipeline_link_vs(const struct brw_compiler *compiler,
                      struct anv_pipeline_stage *next_stage)
 {
    if (next_stage)
-      brw_nir_link_shaders(compiler, &vs_stage->nir, &next_stage->nir);
+      brw_nir_link_shaders(compiler, vs_stage->nir, next_stage->nir);
 }
 
 static const unsigned *
@@ -718,7 +755,7 @@ anv_pipeline_link_tcs(const struct brw_compiler *compiler,
 {
    assert(tes_stage && tes_stage->stage == MESA_SHADER_TESS_EVAL);
 
-   brw_nir_link_shaders(compiler, &tcs_stage->nir, &tes_stage->nir);
+   brw_nir_link_shaders(compiler, tcs_stage->nir, tes_stage->nir);
 
    nir_lower_patch_vertices(tes_stage->nir,
                             tcs_stage->nir->info.tess.tcs_vertices_out,
@@ -762,7 +799,7 @@ anv_pipeline_link_tes(const struct brw_compiler *compiler,
                       struct anv_pipeline_stage *next_stage)
 {
    if (next_stage)
-      brw_nir_link_shaders(compiler, &tes_stage->nir, &next_stage->nir);
+      brw_nir_link_shaders(compiler, tes_stage->nir, next_stage->nir);
 }
 
 static const unsigned *
@@ -789,7 +826,7 @@ anv_pipeline_link_gs(const struct brw_compiler *compiler,
                      struct anv_pipeline_stage *next_stage)
 {
    if (next_stage)
-      brw_nir_link_shaders(compiler, &gs_stage->nir, &next_stage->nir);
+      brw_nir_link_shaders(compiler, gs_stage->nir, next_stage->nir);
 }
 
 static const unsigned *

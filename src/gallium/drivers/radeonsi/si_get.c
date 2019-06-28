@@ -156,6 +156,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_COMPUTE_GRID_INFO_LAST_BLOCK:
 	case PIPE_CAP_IMAGE_LOAD_FORMATTED:
 	case PIPE_CAP_PREFER_COMPUTE_BLIT_FOR_MULTIMEDIA:
+        case PIPE_CAP_TGSI_DIV:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -263,7 +264,10 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	/* Geometry shader output. */
 	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
-		return 1024;
+		/* gfx9 has to report 256 to make piglit/gs-max-output pass.
+		 * gfx8 and earlier can do 1024.
+		 */
+		return 256;
 	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
 		return 4095;
 	case PIPE_CAP_MAX_GS_INVOCATIONS:
@@ -484,8 +488,11 @@ static const struct nir_shader_compiler_options nir_options = {
 	.lower_flrp64 = true,
 	.lower_fsat = true,
 	.lower_fdiv = true,
+	.lower_bitfield_insert_to_bitfield_select = true,
+	.lower_bitfield_extract = true,
 	.lower_sub = true,
 	.lower_ffma = true,
+	.lower_fmod = true,
 	.lower_pack_snorm_2x16 = true,
 	.lower_pack_snorm_4x8 = true,
 	.lower_pack_unorm_2x16 = true,
@@ -627,7 +634,7 @@ static int si_get_video_param(struct pipe_screen *screen,
 				return true;
 			if (sscreen->info.family < CHIP_CARRIZO || sscreen->info.family >= CHIP_VEGA10)
 				return false;
-			if (!(sscreen->info.drm_major == 3 && sscreen->info.drm_minor >= 19)) {
+			if (!(sscreen->info.is_amdgpu && sscreen->info.drm_minor >= 19)) {
 				RVID_ERR("No MJPEG support for the kernel version\n");
 				return false;
 			}
@@ -919,7 +926,7 @@ static void si_query_memory_info(struct pipe_screen *screen,
 	info->device_memory_evicted =
 		ws->query_value(ws, RADEON_NUM_BYTES_MOVED) / 1024;
 
-	if (sscreen->info.drm_major == 3 && sscreen->info.drm_minor >= 4)
+	if (sscreen->info.is_amdgpu && sscreen->info.drm_minor >= 4)
 		info->nr_device_memory_evictions =
 			ws->query_value(ws, RADEON_NUM_EVICTIONS);
 	else

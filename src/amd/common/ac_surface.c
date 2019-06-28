@@ -49,113 +49,6 @@
 #define CIASICIDGFXENGINE_ARCTICISLAND 0x0000000D
 #endif
 
-static unsigned get_first(unsigned x, unsigned y)
-{
-	return x;
-}
-
-static void addrlib_family_rev_id(enum radeon_family family,
-                                 unsigned *addrlib_family,
-                                 unsigned *addrlib_revid)
-{
-	switch (family) {
-	case CHIP_TAHITI:
-		*addrlib_family = FAMILY_SI;
-		*addrlib_revid = get_first(AMDGPU_TAHITI_RANGE);
-		break;
-	case CHIP_PITCAIRN:
-		*addrlib_family = FAMILY_SI;
-		*addrlib_revid = get_first(AMDGPU_PITCAIRN_RANGE);
-		break;
-	case CHIP_VERDE:
-		*addrlib_family = FAMILY_SI;
-		*addrlib_revid =  get_first(AMDGPU_CAPEVERDE_RANGE);
-		break;
-	case CHIP_OLAND:
-		*addrlib_family = FAMILY_SI;
-		*addrlib_revid = get_first(AMDGPU_OLAND_RANGE);
-		break;
-	case CHIP_HAINAN:
-		*addrlib_family = FAMILY_SI;
-		*addrlib_revid = get_first(AMDGPU_HAINAN_RANGE);
-		break;
-	case CHIP_BONAIRE:
-		*addrlib_family = FAMILY_CI;
-		*addrlib_revid = get_first(AMDGPU_BONAIRE_RANGE);
-		break;
-	case CHIP_KAVERI:
-		*addrlib_family = FAMILY_KV;
-		*addrlib_revid = get_first(AMDGPU_SPECTRE_RANGE);
-		break;
-	case CHIP_KABINI:
-		*addrlib_family = FAMILY_KV;
-		*addrlib_revid = get_first(AMDGPU_KALINDI_RANGE);
-		break;
-	case CHIP_HAWAII:
-		*addrlib_family = FAMILY_CI;
-		*addrlib_revid = get_first(AMDGPU_HAWAII_RANGE);
-		break;
-	case CHIP_TONGA:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_TONGA_RANGE);
-		break;
-	case CHIP_ICELAND:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_ICELAND_RANGE);
-		break;
-	case CHIP_CARRIZO:
-		*addrlib_family = FAMILY_CZ;
-		*addrlib_revid = get_first(AMDGPU_CARRIZO_RANGE);
-		break;
-	case CHIP_STONEY:
-		*addrlib_family = FAMILY_CZ;
-		*addrlib_revid = get_first(AMDGPU_STONEY_RANGE);
-		break;
-	case CHIP_FIJI:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_FIJI_RANGE);
-		break;
-	case CHIP_POLARIS10:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_POLARIS10_RANGE);
-		break;
-	case CHIP_POLARIS11:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_POLARIS11_RANGE);
-		break;
-	case CHIP_POLARIS12:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_POLARIS12_RANGE);
-		break;
-	case CHIP_VEGAM:
-		*addrlib_family = FAMILY_VI;
-		*addrlib_revid = get_first(AMDGPU_VEGAM_RANGE);
-		break;
-	case CHIP_VEGA10:
-		*addrlib_family = FAMILY_AI;
-		*addrlib_revid = get_first(AMDGPU_VEGA10_RANGE);
-		break;
-	case CHIP_VEGA12:
-		*addrlib_family = FAMILY_AI;
-		*addrlib_revid = get_first(AMDGPU_VEGA12_RANGE);
-		break;
-	case CHIP_VEGA20:
-		*addrlib_family = FAMILY_AI;
-		*addrlib_revid = get_first(AMDGPU_VEGA20_RANGE);
-		break;
-	case CHIP_RAVEN:
-		*addrlib_family = FAMILY_RV;
-		*addrlib_revid = get_first(AMDGPU_RAVEN_RANGE);
-		break;
-	case CHIP_RAVEN2:
-		*addrlib_family = FAMILY_RV;
-		*addrlib_revid = get_first(AMDGPU_RAVEN2_RANGE);
-		break;
-	default:
-		fprintf(stderr, "amdgpu: Unknown family.\n");
-	}
-}
-
 static void *ADDR_API allocSysMem(const ADDR_ALLOCSYSMEM_INPUT * pInput)
 {
 	return malloc(pInput->sizeInBytes);
@@ -184,7 +77,9 @@ ADDR_HANDLE amdgpu_addr_create(const struct radeon_info *info,
 	regValue.gbAddrConfig = amdinfo->gb_addr_cfg;
 	createFlags.value = 0;
 
-       addrlib_family_rev_id(info->family, &addrCreateInput.chipFamily, &addrCreateInput.chipRevision);
+	addrCreateInput.chipFamily = info->family_id;
+	addrCreateInput.chipRevision = info->chip_external_rev;
+
 	if (addrCreateInput.chipFamily == FAMILY_UNKNOWN)
 		return NULL;
 
@@ -552,9 +447,9 @@ static int gfx6_surface_settings(ADDR_HANDLE addrlib,
 	return 0;
 }
 
-void ac_compute_cmask(const struct radeon_info *info,
-		      const struct ac_surf_config *config,
-		      struct radeon_surf *surf)
+static void ac_compute_cmask(const struct radeon_info *info,
+			     const struct ac_surf_config *config,
+			     struct radeon_surf *surf)
 {
 	unsigned pipe_interleave_bytes = info->pipe_interleave_bytes;
 	unsigned num_pipes = info->num_tile_pipes;
@@ -609,7 +504,8 @@ void ac_compute_cmask(const struct radeon_info *info,
 		num_layers = config->info.array_size;
 
 	surf->cmask_alignment = MAX2(256, base_align);
-	surf->cmask_size = align(slice_bytes, base_align) * num_layers;
+	surf->cmask_slice_size = align(slice_bytes, base_align);
+	surf->cmask_size = surf->cmask_slice_size * num_layers;
 }
 
 /**
@@ -953,6 +849,7 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib,
 		surf->u.legacy.fmask.tiling_index = fout.tileIndex;
 		surf->u.legacy.fmask.bankh = fout.pTileInfo->bankHeight;
 		surf->u.legacy.fmask.pitch_in_pixels = fout.pitch;
+		surf->u.legacy.fmask.slice_size = fout.sliceSize;
 
 		/* Compute tile swizzle for FMASK. */
 		if (config->info.fmask_surf_index &&

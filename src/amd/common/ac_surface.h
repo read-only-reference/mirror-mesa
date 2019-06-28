@@ -86,6 +86,7 @@ struct legacy_surf_fmask {
     uint8_t tiling_index;    /* max 31 */
     uint8_t bankh;           /* max 8 */
     uint16_t pitch_in_pixels;
+    uint64_t slice_size;
 };
 
 struct legacy_surf_layout {
@@ -218,6 +219,7 @@ struct radeon_surf {
     uint32_t                    htile_alignment;
 
     uint32_t                    cmask_size;
+    uint32_t                    cmask_slice_size;
     uint32_t                    cmask_alignment;
 
     union {
@@ -260,10 +262,6 @@ int ac_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *info,
 		       const struct ac_surf_config * config,
 		       enum radeon_surf_mode mode,
 		       struct radeon_surf *surf);
-
-void ac_compute_cmask(const struct radeon_info *info,
-		      const struct ac_surf_config *config,
-		      struct radeon_surf *surf);
 
 #ifdef __cplusplus
 }

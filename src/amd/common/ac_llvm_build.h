@@ -71,6 +71,7 @@ struct ac_llvm_context {
 	LLVMTypeRef v3i32;
 	LLVMTypeRef v4i32;
 	LLVMTypeRef v2f32;
+	LLVMTypeRef v3f32;
 	LLVMTypeRef v4f32;
 	LLVMTypeRef v8i32;
 
@@ -270,7 +271,6 @@ ac_build_buffer_store_dword(struct ac_llvm_context *ctx,
 			    unsigned inst_offset,
 		            bool glc,
 		            bool slc,
-			    bool writeonly_memory,
 			    bool swizzle_enable_hint);
 
 void
@@ -281,7 +281,7 @@ ac_build_buffer_store_format(struct ac_llvm_context *ctx,
 			     LLVMValueRef voffset,
 			     unsigned num_channels,
 			     bool glc,
-			     bool writeonly_memory);
+			     bool slc);
 
 LLVMValueRef
 ac_build_buffer_load(struct ac_llvm_context *ctx,
@@ -393,8 +393,7 @@ ac_build_tbuffer_store_short(struct ac_llvm_context *ctx,
 			     LLVMValueRef vdata,
 			     LLVMValueRef voffset,
 			     LLVMValueRef soffset,
-			     bool glc,
-			     bool writeonly_memory);
+			     bool glc);
 
 void
 ac_build_tbuffer_store_byte(struct ac_llvm_context *ctx,
@@ -402,8 +401,7 @@ ac_build_tbuffer_store_byte(struct ac_llvm_context *ctx,
 			    LLVMValueRef vdata,
 			    LLVMValueRef voffset,
 			    LLVMValueRef soffset,
-			    bool glc,
-			    bool writeonly_memory);
+			    bool glc);
 
 void
 ac_build_struct_tbuffer_store(struct ac_llvm_context *ctx,
@@ -417,8 +415,7 @@ ac_build_struct_tbuffer_store(struct ac_llvm_context *ctx,
 			      unsigned dfmt,
 			      unsigned nfmt,
 			      bool glc,
-			      bool slc,
-			      bool writeonly_memory);
+			      bool slc);
 
 void
 ac_build_raw_tbuffer_store(struct ac_llvm_context *ctx,
@@ -431,8 +428,7 @@ ac_build_raw_tbuffer_store(struct ac_llvm_context *ctx,
 			   unsigned dfmt,
 			   unsigned nfmt,
 			   bool glc,
-			   bool slc,
-			   bool writeonly_memory);
+			   bool slc);
 
 LLVMValueRef
 ac_get_thread_id(struct ac_llvm_context *ctx);
@@ -723,6 +719,9 @@ ac_build_ddxy_interp(struct ac_llvm_context *ctx, LLVMValueRef interp_ij);
 
 LLVMValueRef
 ac_build_load_helper_invocation(struct ac_llvm_context *ctx);
+
+LLVMValueRef ac_build_call(struct ac_llvm_context *ctx, LLVMValueRef func,
+			   LLVMValueRef *args, unsigned num_args);
 
 LLVMValueRef ac_build_atomic_rmw(struct ac_llvm_context *ctx, LLVMAtomicRMWBinOp op,
 				 LLVMValueRef ptr, LLVMValueRef val,

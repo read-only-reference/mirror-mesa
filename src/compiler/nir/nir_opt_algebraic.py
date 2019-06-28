@@ -66,6 +66,12 @@ e = 'e'
 # should only match that particular bit-size.  In the replace half of the
 # expression this indicates that the constructed value should have that
 # bit-size.
+#
+# A special condition "many-comm-expr" can be used with expressions to note
+# that the expression and its subexpressions have more commutative expressions
+# than nir_replace_instr can handle.  If this special condition is needed with
+# another condition, the two can be separated by a comma (e.g.,
+# "(many-comm-expr,is_used_once)").
 
 optimizations = [
 
@@ -399,6 +405,7 @@ optimizations = [
    (('imax', a, ('iabs', a)), ('iabs', a)),
    (('fmax', a, ('fneg', a)), ('fabs', a)),
    (('imax', a, ('ineg', a)), ('iabs', a)),
+   (('~fmax', ('fabs', a), 0.0), ('fabs', a)),
    (('~fmin', ('fmax', a, 0.0), 1.0), ('fsat', a), '!options->lower_fsat'),
    (('~fmax', ('fmin', a, 1.0), 0.0), ('fsat', a), '!options->lower_fsat'),
    (('~fmin', ('fmax', a, -1.0),  0.0), ('fneg', ('fsat', ('fneg', a))), '!options->lower_negate && !options->lower_fsat'),
@@ -496,6 +503,10 @@ optimizations = [
    (('ult', ('umax', a, b), a), False),
    (('uge', a, ('umax', b, a)), ('uge', a, b)),
    (('uge', ('umin', a, b), a), ('uge', b, a)),
+   (('ult', a, ('iand', b, a)), False),
+   (('ult', ('ior', a, b), a), False),
+   (('uge', a, ('iand', b, a)), True),
+   (('uge', ('ior', a, b), a), True),
 
    (('ilt', '#a', ('imax', '#b', c)), ('ior', ('ilt', a, b), ('ilt', a, c))),
    (('ilt', ('imin', '#a', b), '#c'), ('ior', ('ilt', a, c), ('ilt', b, c))),
@@ -549,14 +560,12 @@ optimizations = [
    (('ult', a, a), False),
    (('uge', a, a), True),
    # Logical and bit operations
-   (('fand', a, 0.0), 0.0),
    (('iand', a, a), a),
    (('iand', a, ~0), a),
    (('iand', a, 0), 0),
    (('ior', a, a), a),
    (('ior', a, 0), a),
    (('ior', a, True), True),
-   (('fxor', a, a), 0.0),
    (('ixor', a, a), 0),
    (('ixor', a, 0), a),
    (('inot', ('inot', a)), a),
@@ -758,6 +767,9 @@ optimizations.extend([
    (('~fadd', '#a', ('fneg', ('fadd', 'b(is_not_const)', '#c'))), ('fadd', ('fadd', a, ('fneg', c)), ('fneg', b))),
    (('iadd', '#a', ('iadd', 'b(is_not_const)', '#c')), ('iadd', ('iadd', a, c), b)),
 
+   # Drop mul-div by the same value when there's no wrapping.
+   (('idiv', ('imul(no_signed_wrap)', a, b), b), a),
+
    # By definition...
    (('bcsel', ('ige', ('find_lsb', a), 0), ('find_lsb', a), -1), ('find_lsb', a)),
    (('bcsel', ('ige', ('ifind_msb', a), 0), ('ifind_msb', a), -1), ('ifind_msb', a)),
@@ -770,15 +782,14 @@ optimizations.extend([
    (('bcsel', ('ine', a, -1), ('ifind_msb', a), -1), ('ifind_msb', a)),
 
    # Misc. lowering
-   (('fmod@16', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod16'),
-   (('fmod@32', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod32'),
-   (('fmod@64', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod64'),
-   (('frem', a, b), ('fsub', a, ('fmul', b, ('ftrunc', ('fdiv', a, b)))), 'options->lower_fmod32'),
+   (('fmod@16', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod'),
+   (('fmod@32', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod'),
+   (('frem', a, b), ('fsub', a, ('fmul', b, ('ftrunc', ('fdiv', a, b)))), 'options->lower_fmod'),
    (('uadd_carry@32', a, b), ('b2i', ('ult', ('iadd', a, b), a)), 'options->lower_uadd_carry'),
    (('usub_borrow@32', a, b), ('b2i', ('ult', a, b)), 'options->lower_usub_borrow'),
 
    (('bitfield_insert', 'base', 'insert', 'offset', 'bits'),
-    ('bcsel', ('ilt', 31, 'bits'), 'insert',
+    ('bcsel', ('ult', 31, 'bits'), 'insert',
               ('bfi', ('bfm', 'bits', 'offset'), 'insert', 'base')),
     'options->lower_bitfield_insert'),
    (('ihadd', a, b), ('iadd', ('iand', a, b), ('ishr', ('ixor', a, b), 1)), 'options->lower_hadd'),
@@ -790,20 +801,21 @@ optimizations.extend([
 
    # Alternative lowering that doesn't rely on bfi.
    (('bitfield_insert', 'base', 'insert', 'offset', 'bits'),
-    ('bcsel', ('ilt', 31, 'bits'),
+    ('bcsel', ('ult', 31, 'bits'),
      'insert',
-     ('ior',
-      ('iand', 'base', ('inot', ('bfm', 'bits', 'offset'))),
-      ('iand', ('ishl', 'insert', 'offset'), ('bfm', 'bits', 'offset')))),
+    (('ior',
+     ('iand', 'base', ('inot', ('ishl', ('isub', ('ishl', 1, 'bits'), 1), 'offset'))),
+     ('iand', ('ishl', 'insert', 'offset'), ('ishl', ('isub', ('ishl', 1, 'bits'), 1), 'offset'))))),
     'options->lower_bitfield_insert_to_shifts'),
 
-   # bfm lowering -- note that the NIR opcode is undefined if either arg is 32.
-   (('bfm', 'bits', 'offset'),
-    ('ishl', ('isub', ('ishl', 1, 'bits'), 1), 'offset'),
-    'options->lower_bfm'),
+   # Alternative lowering that uses bitfield_select.
+   (('bitfield_insert', 'base', 'insert', 'offset', 'bits'),
+    ('bcsel', ('ult', 31, 'bits'), 'insert',
+              ('bitfield_select', ('bfm', 'bits', 'offset'), ('ishl', 'insert', 'offset'), 'base')),
+    'options->lower_bitfield_insert_to_bitfield_select'),
 
    (('ibitfield_extract', 'value', 'offset', 'bits'),
-    ('bcsel', ('ilt', 31, 'bits'), 'value',
+    ('bcsel', ('ult', 31, 'bits'), 'value',
               ('ibfe', 'value', 'offset', 'bits')),
     'options->lower_bitfield_extract'),
 
@@ -811,6 +823,14 @@ optimizations.extend([
     ('bcsel', ('ult', 31, 'bits'), 'value',
               ('ubfe', 'value', 'offset', 'bits')),
     'options->lower_bitfield_extract'),
+
+   # Note that these opcodes are defined to only use the five least significant bits of 'offset' and 'bits'
+   (('ubfe', 'value', 'offset', ('iand', 31, 'bits')), ('ubfe', 'value', 'offset', 'bits')),
+   (('ubfe', 'value', ('iand', 31, 'offset'), 'bits'), ('ubfe', 'value', 'offset', 'bits')),
+   (('ibfe', 'value', 'offset', ('iand', 31, 'bits')), ('ibfe', 'value', 'offset', 'bits')),
+   (('ibfe', 'value', ('iand', 31, 'offset'), 'bits'), ('ibfe', 'value', 'offset', 'bits')),
+   (('bfm', 'bits', ('iand', 31, 'offset')), ('bfm', 'bits', 'offset')),
+   (('bfm', ('iand', 31, 'bits'), 'offset'), ('bfm', 'bits', 'offset')),
 
    (('ibitfield_extract', 'value', 'offset', 'bits'),
     ('bcsel', ('ieq', 0, 'bits'),
@@ -825,7 +845,7 @@ optimizations.extend([
      ('ushr', 'value', 'offset'),
      ('bcsel', ('ieq', 'bits', 32),
       0xffffffff,
-      ('bfm', 'bits', 0))),
+      ('isub', ('ishl', 1, 'bits'), 1))),
     'options->lower_bitfield_extract_to_shifts'),
 
    (('ifind_msb', 'value'),
@@ -1042,7 +1062,7 @@ def bitfield_reverse(u):
     step2 = ('ior', ('ishl', ('iand', step1, 0x00ff00ff), 8), ('ushr', ('iand', step1, 0xff00ff00), 8))
     step3 = ('ior', ('ishl', ('iand', step2, 0x0f0f0f0f), 4), ('ushr', ('iand', step2, 0xf0f0f0f0), 4))
     step4 = ('ior', ('ishl', ('iand', step3, 0x33333333), 2), ('ushr', ('iand', step3, 0xcccccccc), 2))
-    step5 = ('ior', ('ishl', ('iand', step4, 0x55555555), 1), ('ushr', ('iand', step4, 0xaaaaaaaa), 1))
+    step5 = ('ior(many-comm-expr)', ('ishl', ('iand', step4, 0x55555555), 1), ('ushr', ('iand', step4, 0xaaaaaaaa), 1))
 
     return step5
 
@@ -1103,6 +1123,15 @@ for op in ['fddx', 'fddx_fine', 'fddx_coarse',
            'fddy', 'fddy_fine', 'fddy_coarse']:
    optimizations += [
       ((op, 'a'), 0.0, 'info->stage == MESA_SHADER_COMPUTE && info->cs.derivative_group == DERIVATIVE_GROUP_NONE')
+]
+
+# Some optimizations for ir3-specific instructions.
+optimizations += [
+   # 'al * bl': If either 'al' or 'bl' is zero, return zero.
+   (('umul_low', '#a(is_lower_half_zero)', 'b'), (0)),
+   # '(ah * bl) << 16 + c': If either 'ah' or 'bl' is zero, return 'c'.
+   (('imadsh_mix16', '#a@32(is_lower_half_zero)', 'b@32', 'c@32'), ('c')),
+   (('imadsh_mix16', 'a@32', '#b@32(is_upper_half_zero)', 'c@32'), ('c')),
 ]
 
 # This section contains "late" optimizations that should be run before

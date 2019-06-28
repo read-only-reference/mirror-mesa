@@ -36,7 +36,6 @@
 #include <llvm-c/Transforms/Utils.h>
 
 #include "sid.h"
-#include "gfx9d.h"
 #include "ac_binary.h"
 #include "ac_llvm_util.h"
 #include "ac_llvm_build.h"
@@ -518,11 +517,8 @@ create_llvm_function(LLVMContextRef ctx, LLVMModuleRef module,
 						     options->address32_hi);
 	}
 
-	if (max_workgroup_size) {
-		ac_llvm_add_target_dep_function_attr(main_function,
-						     "amdgpu-max-work-group-size",
-						     max_workgroup_size);
-	}
+	ac_llvm_set_workgroup_size(main_function, max_workgroup_size);
+
 	if (options->unsafe_math) {
 		/* These were copied from some LLVM test. */
 		LLVMAddTargetDependentFunctionAttr(main_function,
@@ -1589,13 +1585,13 @@ store_tcs_output(struct ac_shader_abi *abi,
 		if (!is_tess_factor && writemask != 0xF)
 			ac_build_buffer_store_dword(&ctx->ac, ctx->hs_ring_tess_offchip, value, 1,
 						    buf_addr, ctx->oc_lds,
-						    4 * (base + chan), 1, 0, true, false);
+						    4 * (base + chan), 1, 0, false);
 	}
 
 	if (writemask == 0xF) {
 		ac_build_buffer_store_dword(&ctx->ac, ctx->hs_ring_tess_offchip, src, 4,
 					    buf_addr, ctx->oc_lds,
-					    (base * 4), 1, 0, true, false);
+					    (base * 4), 1, 0, false);
 	}
 }
 
@@ -1862,7 +1858,7 @@ visit_emit_vertex(struct ac_shader_abi *abi, unsigned stream, LLVMValueRef *addr
 						    ctx->gsvs_ring[stream],
 						    out_val, 1,
 						    voffset, ctx->gs2vs_offset, 0,
-						    1, 1, true, true);
+						    1, 1, true);
 		}
 	}
 
@@ -2768,14 +2764,16 @@ radv_emit_stream_output(struct radv_shader_context *ctx,
 		/* fall through */
 	case 4: /* as v4i32 */
 		vdata = ac_build_gather_values(&ctx->ac, out,
-					       util_next_power_of_two(num_comps));
+					       !ac_has_vec3_support(ctx->ac.chip_class, false) ?
+					       util_next_power_of_two(num_comps) :
+					       num_comps);
 		break;
 	}
 
 	ac_build_buffer_store_dword(&ctx->ac, so_buffers[buf],
 				    vdata, num_comps, so_write_offsets[buf],
 				    ctx->ac.i32_0, offset,
-				    1, 1, true, false);
+				    1, 1, false);
 }
 
 static void
@@ -2863,6 +2861,7 @@ radv_emit_streamout(struct radv_shader_context *ctx, unsigned stream)
 static void
 handle_vs_outputs_post(struct radv_shader_context *ctx,
 		       bool export_prim_id, bool export_layer_id,
+		       bool export_clip_dists,
 		       struct radv_vs_output_info *outinfo)
 {
 	uint32_t param_count = 0;
@@ -2919,9 +2918,11 @@ handle_vs_outputs_post(struct radv_shader_context *ctx,
 			memcpy(&pos_args[target - V_008DFC_SQ_EXP_POS],
 			&args, sizeof(args));
 
-			/* Export the clip/cull distances values to the next stage. */
-			radv_export_param(ctx, param_count, &slots[0], 0xf);
-			outinfo->vs_output_param_offset[location] = param_count++;
+			if (export_clip_dists) {
+				/* Export the clip/cull distances values to the next stage. */
+				radv_export_param(ctx, param_count, &slots[0], 0xf);
+				outinfo->vs_output_param_offset[location] = param_count++;
+			}
 		}
 	}
 
@@ -3152,7 +3153,7 @@ handle_es_outputs_post(struct radv_shader_context *ctx,
 				                            out_val, 1,
 				                            NULL, ctx->es2gs_offset,
 				                            (4 * param_index + j) * 4,
-				                            1, 1, true, true);
+				                            1, 1, true);
 			}
 		}
 	}
@@ -3285,7 +3286,7 @@ write_tess_factors(struct radv_shader_context *ctx)
 		ac_build_buffer_store_dword(&ctx->ac, buffer,
 					    LLVMConstInt(ctx->ac.i32, 0x80000000, false),
 					    1, ctx->ac.i32_0, tf_base,
-					    0, 1, 0, true, false);
+					    0, 1, 0, false);
 		tf_offset += 4;
 
 		ac_nir_build_endif(&inner_if_ctx);
@@ -3294,11 +3295,11 @@ write_tess_factors(struct radv_shader_context *ctx)
 	/* Store the tessellation factors. */
 	ac_build_buffer_store_dword(&ctx->ac, buffer, vec0,
 				    MIN2(stride, 4), byteoffset, tf_base,
-				    tf_offset, 1, 0, true, false);
+				    tf_offset, 1, 0, false);
 	if (vec1)
 		ac_build_buffer_store_dword(&ctx->ac, buffer, vec1,
 					    stride - 4, byteoffset, tf_base,
-					    16 + tf_offset, 1, 0, true, false);
+					    16 + tf_offset, 1, 0, false);
 
 	//store to offchip for TES to read - only if TES reads them
 	if (ctx->options->key.tcs.tes_reads_tess_factors) {
@@ -3315,7 +3316,7 @@ write_tess_factors(struct radv_shader_context *ctx)
 
 		ac_build_buffer_store_dword(&ctx->ac, ctx->hs_ring_tess_offchip, outer_vec,
 					    outer_comps, tf_outer_offset,
-					    ctx->oc_lds, 0, 1, 0, true, false);
+					    ctx->oc_lds, 0, 1, 0, false);
 		if (inner_comps) {
 			param_inner = shader_io_get_unique_index(VARYING_SLOT_TESS_LEVEL_INNER);
 			tf_inner_offset = get_tcs_tes_buffer_address(ctx, NULL,
@@ -3325,7 +3326,7 @@ write_tess_factors(struct radv_shader_context *ctx)
 				ac_build_gather_values(&ctx->ac, inner, inner_comps);
 			ac_build_buffer_store_dword(&ctx->ac, ctx->hs_ring_tess_offchip, inner_vec,
 						    inner_comps, tf_inner_offset,
-						    ctx->oc_lds, 0, 1, 0, true, false);
+						    ctx->oc_lds, 0, 1, 0, false);
 		}
 	}
 	ac_nir_build_endif(&if_ctx);
@@ -3448,6 +3449,7 @@ handle_shader_outputs_post(struct ac_shader_abi *abi, unsigned max_outputs,
 		else
 			handle_vs_outputs_post(ctx, ctx->options->key.vs.export_prim_id,
 					       ctx->options->key.vs.export_layer_id,
+					       ctx->options->key.vs.export_clip_dists,
 					       &ctx->shader_info->vs.outinfo);
 		break;
 	case MESA_SHADER_FRAGMENT:
@@ -3465,6 +3467,7 @@ handle_shader_outputs_post(struct ac_shader_abi *abi, unsigned max_outputs,
 		else
 			handle_vs_outputs_post(ctx, ctx->options->key.tes.export_prim_id,
 					       ctx->options->key.tes.export_layer_id,
+					       ctx->options->key.tes.export_clip_dists,
 					       &ctx->shader_info->tes.outinfo);
 		break;
 	default:
@@ -4119,7 +4122,7 @@ ac_gs_copy_shader_emit(struct radv_shader_context *ctx)
 			radv_emit_streamout(ctx, stream);
 
 		if (stream == 0) {
-			handle_vs_outputs_post(ctx, false, false,
+			handle_vs_outputs_post(ctx, false, false, true,
 					       &ctx->shader_info->vs.outinfo);
 		}
 

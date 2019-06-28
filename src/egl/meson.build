@@ -44,7 +44,6 @@ files_egl = files(
   'main/egldisplay.h',
   'main/egldriver.c',
   'main/egldriver.h',
-  'main/eglfallbacks.c',
   'main/eglglobals.c',
   'main/eglglobals.h',
   'main/eglimage.c',
@@ -96,6 +95,7 @@ if with_dri2
   link_for_egl += [libloader, libxmlconfig]
   incs_for_egl += inc_loader
 
+  files_egl += files('drivers/dri2/platform_device.c')
   if with_platform_x11
     files_egl += files('drivers/dri2/platform_x11.c')
     if with_dri3

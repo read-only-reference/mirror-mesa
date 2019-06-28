@@ -3,6 +3,7 @@
  * Copyright 2008 VMware, Inc.
  * Copyright 2014 Broadcom
  * Copyright 2018 Alyssa Rosenzweig
+ * Copyright 2019 Collabora, Ltd.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -48,12 +49,14 @@
 #include "pan_resource.h"
 #include "pan_public.h"
 #include "pan_util.h"
+#include "pandecode/decode.h"
 
 #include "pan_context.h"
 #include "midgard/midgard_compile.h"
 
 static const struct debug_named_value debug_options[] = {
 	{"msgs",      PAN_DBG_MSGS,	"Print debug messages"},
+	{"trace",     PAN_DBG_TRACE,    "Trace the command stream"},
 	DEBUG_NAMED_VALUE_END
 };
 
@@ -62,8 +65,6 @@ DEBUG_GET_ONCE_FLAGS_OPTION(pan_debug, "PAN_MESA_DEBUG", debug_options, 0)
 int pan_debug = 0;
 
 struct panfrost_driver *panfrost_create_drm_driver(int fd);
-
-const char *pan_counters_base = NULL;
 
 static const char *
 panfrost_get_name(struct pipe_screen *screen)
@@ -132,10 +133,17 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
         case PIPE_CAP_INDEP_BLEND_FUNC:
                 return 1;
 
-        case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
+                /* Hardware is natively upper left */
+                return 0;
+
+        case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
+                return 1;
         case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
         case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+                return 1;
+
+        case PIPE_CAP_GENERATE_MIPMAP:
                 return 1;
 
         case PIPE_CAP_DEPTH_CLIP_DISABLE:
@@ -314,7 +322,7 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return 16 * 1024 * sizeof(float);
 
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-                return 4;
+                return 16;
 
         case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
                 return 0;
@@ -450,16 +458,31 @@ panfrost_is_format_supported( struct pipe_screen *screen,
         if (format == PIPE_FORMAT_A1B5G5R5_UNORM || format == PIPE_FORMAT_X1B5G5R5_UNORM)
                 return FALSE;
 
+        /* Allow through special formats */
+
+        switch (format) {
+                case PIPE_FORMAT_R11G11B10_FLOAT:
+                case PIPE_FORMAT_B5G6R5_UNORM:
+                        return TRUE;
+                default:
+                        break;
+        }
+
         if (bind & PIPE_BIND_RENDER_TARGET) {
-                /* TODO: Support all the formats! :) */
-                bool supported = util_format_is_rgba8_variant(format_desc);
-                supported |= format == PIPE_FORMAT_B5G6R5_UNORM;
-
-                if (!supported)
-                        return FALSE;
-
                 if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS)
                         return FALSE;
+
+                /* Check for vaguely 8UNORM formats. Looser than
+                 * util_format_is_rgba8_variant, since it permits R8 (for
+                 * instance) */
+
+                for (unsigned chan = 0; chan < 4; ++chan) {
+                        enum util_format_type t = format_desc->channel[chan].type;
+                        if (t == UTIL_FORMAT_TYPE_VOID) continue;
+                        if (t != UTIL_FORMAT_TYPE_UNSIGNED) return FALSE;
+                        if (!format_desc->channel[chan].normalized) return FALSE;
+                        if (format_desc->channel[chan].size != 8) return FALSE;
+                }
 
                 /*
                  * Although possible, it is unnatural to render into compressed or YUV
@@ -476,30 +499,9 @@ panfrost_is_format_supported( struct pipe_screen *screen,
                         return FALSE;
         }
 
-        if (format_desc->layout == UTIL_FORMAT_LAYOUT_BPTC ||
-                        format_desc->layout == UTIL_FORMAT_LAYOUT_ASTC ||
-                        format_desc->layout == UTIL_FORMAT_LAYOUT_ETC) {
+        if (format_desc->layout != UTIL_FORMAT_LAYOUT_PLAIN) {
                 /* Compressed formats not yet hooked up. */
                 return FALSE;
-        }
-
-        if ((bind & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW)) &&
-                        ((bind & PIPE_BIND_DISPLAY_TARGET) == 0) &&
-                        target != PIPE_BUFFER) {
-                const struct util_format_description *desc =
-                        util_format_description(format);
-
-                if (desc->nr_channels == 3 && desc->is_array) {
-                        /* Don't support any 3-component formats for rendering/texturing
-                         * since we don't support the corresponding 8-bit 3 channel UNORM
-                         * formats.  This allows us to support GL_ARB_copy_image between
-                         * GL_RGB8 and GL_RGB8UI, for example.  Otherwise, we may be asked to
-                         * do a resource copy between PIPE_FORMAT_R8G8B8_UINT and
-                         * PIPE_FORMAT_R8G8B8X8_UNORM, for example, which will not work
-                         * (different bpp).
-                         */
-                        return FALSE;
-                }
         }
 
         return TRUE;
@@ -507,9 +509,11 @@ panfrost_is_format_supported( struct pipe_screen *screen,
 
 
 static void
-panfrost_destroy_screen( struct pipe_screen *screen )
+panfrost_destroy_screen(struct pipe_screen *pscreen)
 {
-        FREE(screen);
+        struct panfrost_screen *screen = pan_screen(pscreen);
+        panfrost_resource_screen_deinit(screen);
+        ralloc_free(screen);
 }
 
 static void
@@ -533,8 +537,7 @@ panfrost_fence_reference(struct pipe_screen *pscreen,
                          struct pipe_fence_handle **ptr,
                          struct pipe_fence_handle *fence)
 {
-        struct panfrost_screen *screen = pan_screen(pscreen);
-        screen->driver->fence_reference(pscreen, ptr, fence);
+        panfrost_drm_fence_reference(pscreen, ptr, fence);
 }
 
 static boolean
@@ -543,8 +546,7 @@ panfrost_fence_finish(struct pipe_screen *pscreen,
                       struct pipe_fence_handle *fence,
                       uint64_t timeout)
 {
-        struct panfrost_screen *screen = pan_screen(pscreen);
-        return screen->driver->fence_finish(pscreen, ctx, fence, timeout);
+        return panfrost_drm_fence_finish(pscreen, ctx, fence, timeout);
 }
 
 static const void *
@@ -558,7 +560,7 @@ panfrost_screen_get_compiler_options(struct pipe_screen *pscreen,
 struct pipe_screen *
 panfrost_create_screen(int fd, struct renderonly *ro)
 {
-        struct panfrost_screen *screen = CALLOC_STRUCT(panfrost_screen);
+        struct panfrost_screen *screen = rzalloc(NULL, struct panfrost_screen);
 
 	pan_debug = debug_get_option_pan_debug();
 
@@ -574,20 +576,10 @@ panfrost_create_screen(int fd, struct renderonly *ro)
                 }
         }
 
-        screen->driver = panfrost_create_drm_driver(fd);
+        screen->fd = fd;
 
-        /* Dump memory and/or performance counters iff asked for in the environment */
-        const char *pantrace_base = getenv("PANTRACE_BASE");
-        pan_counters_base = getenv("PANCOUNTERS_BASE");
-
-        if (pantrace_base) {
-                pantrace_initialize(pantrace_base);
-        }
-
-        if (pan_counters_base) {
-                screen->driver->allocate_slab(screen, &screen->perf_counters, 64, true, 0, 0, 0);
-                screen->driver->enable_counters(screen);
-        }
+        if (pan_debug & PAN_DBG_TRACE)
+                pandecode_initialize();
 
         screen->base.destroy = panfrost_destroy_screen;
 

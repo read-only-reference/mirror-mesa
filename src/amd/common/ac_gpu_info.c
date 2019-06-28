@@ -25,7 +25,6 @@
 
 #include "ac_gpu_info.h"
 #include "sid.h"
-#include "gfx9d.h"
 
 #include "util/u_math.h"
 
@@ -92,7 +91,7 @@ static bool has_syncobj(int fd)
 	return value ? true : false;
 }
 
-bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
+bool ac_query_gpu_info(int fd, void *dev_p,
 		       struct radeon_info *info,
 		       struct amdgpu_gpu_info *amdinfo)
 {
@@ -104,6 +103,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	struct amdgpu_gds_resource_info gds = {};
 	uint32_t vce_version = 0, vce_feature = 0, uvd_version = 0, uvd_feature = 0;
 	int r, i, j;
+	amdgpu_device_handle dev = dev_p;
 	drmDevicePtr devinfo;
 
 	/* Get PCI info. */
@@ -117,6 +117,9 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	info->pci_dev = devinfo->businfo.pci->dev;
 	info->pci_func = devinfo->businfo.pci->func;
 	drmFreeDevice(&devinfo);
+
+	assert(info->drm_major == 3);
+	info->is_amdgpu = true;
 
 	/* Query hardware and driver information. */
 	r = amdgpu_query_gpu_info(dev, amdinfo);
@@ -162,7 +165,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 		return false;
 	}
 
-	if (info->drm_major == 3 && info->drm_minor >= 17) {
+	if (info->drm_minor >= 17) {
 		r = amdgpu_query_hw_ip_info(dev, AMDGPU_HW_IP_UVD_ENC, 0, &uvd_enc);
 		if (r) {
 			fprintf(stderr, "amdgpu: amdgpu_query_hw_ip_info(uvd_enc) failed.\n");
@@ -170,7 +173,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 		}
 	}
 
-	if (info->drm_major == 3 && info->drm_minor >= 17) {
+	if (info->drm_minor >= 17) {
 		r = amdgpu_query_hw_ip_info(dev, AMDGPU_HW_IP_VCN_DEC, 0, &vcn_dec);
 		if (r) {
 			fprintf(stderr, "amdgpu: amdgpu_query_hw_ip_info(vcn_dec) failed.\n");
@@ -178,7 +181,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 		}
 	}
 
-	if (info->drm_major == 3 && info->drm_minor >= 17) {
+	if (info->drm_minor >= 17) {
 		r = amdgpu_query_hw_ip_info(dev, AMDGPU_HW_IP_VCN_ENC, 0, &vcn_enc);
 		if (r) {
 			fprintf(stderr, "amdgpu: amdgpu_query_hw_ip_info(vcn_enc) failed.\n");
@@ -186,7 +189,7 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 		}
 	}
 
-	if (info->drm_major == 3 && info->drm_minor >= 27) {
+	if (info->drm_minor >= 27) {
 		r = amdgpu_query_hw_ip_info(dev, AMDGPU_HW_IP_VCN_JPEG, 0, &vcn_jpeg);
 		if (r) {
 			fprintf(stderr, "amdgpu: amdgpu_query_hw_ip_info(vcn_jpeg) failed.\n");
@@ -333,6 +336,8 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 		return false;
 	}
 
+	info->family_id = amdinfo->family_id;
+	info->chip_external_rev = amdinfo->chip_external_rev;
 	info->marketing_name = amdgpu_get_marketing_name(dev);
 	info->is_pro_graphics = info->marketing_name &&
 				(!strcmp(info->marketing_name, "Pro") ||
@@ -745,7 +750,7 @@ ac_get_raster_config(struct radeon_info *info,
 	/* drm/radeon on Kaveri is buggy, so disable 1 RB to work around it.
 	 * This decreases performance by up to 50% when the RB is the bottleneck.
 	 */
-	if (info->family == CHIP_KAVERI && info->drm_major == 2)
+	if (info->family == CHIP_KAVERI && !info->is_amdgpu)
 		raster_config = 0x00000000;
 
 	/* Fiji: Old kernels have incorrect tiling config. This decreases

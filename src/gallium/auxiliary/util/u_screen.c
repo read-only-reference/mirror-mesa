@@ -283,6 +283,7 @@ u_pipe_screen_get_param_defaults(struct pipe_screen *pscreen,
    case PIPE_CAP_TGSI_BALLOT:
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
+   case PIPE_CAP_TGSI_DIV:
       return 0;
 
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
@@ -328,6 +329,8 @@ u_pipe_screen_get_param_defaults(struct pipe_screen *pscreen,
    case PIPE_CAP_IMAGE_LOAD_FORMATTED:
    case PIPE_CAP_PREFER_COMPUTE_BLIT_FOR_MULTIMEDIA:
    case PIPE_CAP_FRAGMENT_SHADER_INTERLOCK:
+   case PIPE_CAP_CS_DERIVED_SYSTEM_VALUES_SUPPORTED:
+   case PIPE_CAP_ATOMIC_FLOAT_MINMAX:
       return 0;
 
    case PIPE_CAP_MAX_GS_INVOCATIONS:

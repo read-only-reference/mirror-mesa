@@ -22,6 +22,9 @@
 #ifndef __MDG_HELPERS_H
 #define __MDG_HELPERS_H
 
+#include "util/macros.h"
+#include <string.h>
+
 #define OP_IS_STORE_VARY(op) (\
 		op == midgard_op_st_vary_16 || \
 		op == midgard_op_st_vary_32 \
@@ -83,12 +86,36 @@
 
 /* 4-bit type tags */
 
+#define TAG_TEXTURE_4_VTX 0x2
 #define TAG_TEXTURE_4 0x3
 #define TAG_LOAD_STORE_4 0x5
 #define TAG_ALU_4 0x8
 #define TAG_ALU_8 0x9
 #define TAG_ALU_12 0xA
 #define TAG_ALU_16 0xB
+
+static inline int
+quadword_size(int tag)
+{
+        switch (tag) {
+        case TAG_ALU_4:
+        case TAG_LOAD_STORE_4:
+        case TAG_TEXTURE_4:
+        case TAG_TEXTURE_4_VTX:
+                return 1;
+        case TAG_ALU_8:
+                return 2;
+        case TAG_ALU_12:
+                return 3;
+        case TAG_ALU_16:
+                return 4;
+        default:
+                unreachable("Unknown tag");
+        }
+}
+
+#define IS_ALU(tag) (tag == TAG_ALU_4 || tag == TAG_ALU_8 ||  \
+		     tag == TAG_ALU_12 || tag == TAG_ALU_16)
 
 /* Special register aliases */
 
@@ -124,6 +151,38 @@
 #define COMPONENT_Z 0x2
 #define COMPONENT_W 0x3
 
+#define SWIZZLE_XXXX SWIZZLE(COMPONENT_X, COMPONENT_X, COMPONENT_X, COMPONENT_X)
+#define SWIZZLE_XYXX SWIZZLE(COMPONENT_X, COMPONENT_Y, COMPONENT_X, COMPONENT_X)
+#define SWIZZLE_XYZX SWIZZLE(COMPONENT_X, COMPONENT_Y, COMPONENT_Z, COMPONENT_X)
+#define SWIZZLE_XYZW SWIZZLE(COMPONENT_X, COMPONENT_Y, COMPONENT_Z, COMPONENT_W)
+#define SWIZZLE_XYXZ SWIZZLE(COMPONENT_X, COMPONENT_Y, COMPONENT_X, COMPONENT_Z)
+#define SWIZZLE_XYZZ SWIZZLE(COMPONENT_X, COMPONENT_Y, COMPONENT_Z, COMPONENT_Z)
+#define SWIZZLE_WWWW SWIZZLE(COMPONENT_W, COMPONENT_W, COMPONENT_W, COMPONENT_W)
+
+static inline unsigned
+swizzle_of(unsigned comp)
+{
+        switch (comp) {
+                case 1:
+                        return SWIZZLE_XXXX;
+                case 2:
+                        return SWIZZLE_XYXX;
+                case 3:
+                        return SWIZZLE_XYZX;
+                case 4:
+                        return SWIZZLE_XYZW;
+                default:
+                        unreachable("Invalid component count");
+        }
+}
+
+static inline unsigned
+mask_of(unsigned nr_comp)
+{
+        return (1 << nr_comp) - 1;
+}
+
+
 /* See ISA notes */
 
 #define LDST_NOP (3)
@@ -157,5 +216,82 @@ struct mir_op_props {
 
 /* This file is common, so don't define the tables themselves. #include
  * midgard_op.h if you need that, or edit midgard_ops.c directly */
+
+/* Duplicate bits to convert standard 4-bit writemask to duplicated 8-bit
+ * format (or do the inverse). The 8-bit format only really matters for
+ * int8, as far as I know, where performance can be improved by using a
+ * vec8 output */
+
+static inline unsigned
+expand_writemask(unsigned mask)
+{
+        unsigned o = 0;
+
+        for (int i = 0; i < 4; ++i)
+                if (mask & (1 << i))
+                        o |= (3 << (2 * i));
+
+        return o;
+}
+
+static inline unsigned
+squeeze_writemask(unsigned mask)
+{
+        unsigned o = 0;
+
+        for (int i = 0; i < 4; ++i)
+                if (mask & (3 << (2 * i)))
+                        o |= (1 << i);
+
+        return o;
+
+}
+
+/* Coerce structs to integer */
+
+static inline unsigned
+vector_alu_srco_unsigned(midgard_vector_alu_src src)
+{
+        unsigned u;
+        memcpy(&u, &src, sizeof(src));
+        return u;
+}
+
+static inline midgard_vector_alu_src
+vector_alu_from_unsigned(unsigned u)
+{
+        midgard_vector_alu_src s;
+        memcpy(&s, &u, sizeof(s));
+        return s;
+}
+
+/* Composes two swizzles */
+static inline unsigned
+pan_compose_swizzle(unsigned left, unsigned right)
+{
+        unsigned out = 0;
+
+        for (unsigned c = 0; c < 4; ++c) {
+                unsigned s = (left >> (2*c)) & 0x3;
+                unsigned q = (right >> (2*s)) & 0x3;
+
+                out |= (q << (2*c));
+        }
+
+        return out;
+}
+
+/* Applies a swizzle to an ALU source */
+
+static inline unsigned
+vector_alu_apply_swizzle(unsigned src, unsigned swizzle)
+{
+        midgard_vector_alu_src s =
+                vector_alu_from_unsigned(src);
+
+        s.swizzle = pan_compose_swizzle(s.swizzle, swizzle);
+
+        return vector_alu_srco_unsigned(s);
+}
 
 #endif

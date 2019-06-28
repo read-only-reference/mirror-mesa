@@ -40,7 +40,6 @@
 #include <llvm-c/TargetMachine.h>
 
 #include "sid.h"
-#include "gfx9d.h"
 #include "ac_binary.h"
 #include "ac_llvm_util.h"
 #include "ac_nir_to_llvm.h"
@@ -524,7 +523,7 @@ radv_pipeline_compute_spi_color_formats(struct radv_pipeline *pipeline,
 		col_format |= cf << (4 * i);
 	}
 
-	if (!col_format && blend->need_src_alpha & (1 << 0)) {
+	if (!(col_format & 0xf) && blend->need_src_alpha & (1 << 0)) {
 		/* When a subpass doesn't have any color attachments, write the
 		 * alpha channel of MRT0 when alpha coverage is enabled because
 		 * the depth attachment needs it.
@@ -542,10 +541,13 @@ radv_pipeline_compute_spi_color_formats(struct radv_pipeline *pipeline,
 		}
 	}
 
-	blend->cb_shader_mask = ac_get_cb_shader_mask(col_format);
-
+	/* The output for dual source blending should have the same format as
+	 * the first output.
+	 */
 	if (blend->mrt0_is_dual_src)
 		col_format |= (col_format & 0xf) << 4;
+
+	blend->cb_shader_mask = ac_get_cb_shader_mask(col_format);
 	blend->spi_shader_col_format = col_format;
 }
 
@@ -2239,10 +2241,14 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.prim_id_input;
 		keys[MESA_SHADER_VERTEX].vs.export_layer_id =
 		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.layer_input;
+		keys[MESA_SHADER_VERTEX].vs.export_clip_dists =
+		        !!pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.num_input_clips_culls;
 		keys[MESA_SHADER_TESS_EVAL].tes.export_prim_id =
 		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.prim_id_input;
 		keys[MESA_SHADER_TESS_EVAL].tes.export_layer_id =
 		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.layer_input;
+		keys[MESA_SHADER_TESS_EVAL].tes.export_clip_dists =
+		        !!pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.num_input_clips_culls;
 	}
 
 	if (device->physical_device->rad_info.chip_class >= GFX9 && modules[MESA_SHADER_TESS_CTRL]) {
@@ -2737,7 +2743,6 @@ radv_pipeline_generate_depth_stencil_state(struct radeon_cmdbuf *ctx_cs,
 	const VkPipelineDepthStencilStateCreateInfo *vkds = pCreateInfo->pDepthStencilState;
 	RADV_FROM_HANDLE(radv_render_pass, pass, pCreateInfo->renderPass);
 	struct radv_subpass *subpass = pass->subpasses + pCreateInfo->subpass;
-	struct radv_shader_variant *ps = pipeline->shaders[MESA_SHADER_FRAGMENT];
 	struct radv_render_pass_attachment *attachment = NULL;
 	uint32_t db_depth_control = 0, db_stencil_control = 0;
 	uint32_t db_render_control = 0, db_render_override2 = 0;
@@ -2786,8 +2791,7 @@ radv_pipeline_generate_depth_stencil_state(struct radeon_cmdbuf *ctx_cs,
 	db_render_override |= S_02800C_FORCE_HIS_ENABLE0(V_02800C_FORCE_DISABLE) |
 			      S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE);
 
-	if (!pCreateInfo->pRasterizationState->depthClampEnable &&
-	    ps->info.info.ps.writes_z) {
+	if (!pCreateInfo->pRasterizationState->depthClampEnable) {
 		/* From VK_EXT_depth_range_unrestricted spec:
 		 *
 		 * "The behavior described in Primitive Clipping still applies.

@@ -32,6 +32,9 @@
 
 typedef enum {
    ppir_op_mov,
+   ppir_op_abs,
+   ppir_op_neg,
+   ppir_op_sat,
    ppir_op_add,
 
    ppir_op_ddx,
@@ -297,7 +300,7 @@ typedef struct ppir_instr {
    int est; /* earliest start time */
    int parent_index;
    bool scheduled;
-   off_t offset;
+   int offset;
 } ppir_instr;
 
 typedef struct ppir_block {

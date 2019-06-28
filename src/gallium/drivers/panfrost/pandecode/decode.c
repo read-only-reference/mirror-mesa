@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2017-2019 Alyssa Rosenzweig
  * Copyright (C) 2017-2019 Connor Abbott
+ * Copyright (C) 2019 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -28,7 +29,7 @@
 #include <memory.h>
 #include <stdbool.h>
 #include <stdarg.h>
-#include "mmap.h"
+#include "decode.h"
 #include "util/u_math.h"
 
 #include "../pan_pretty_print.h"
@@ -37,15 +38,11 @@
 int pandecode_replay_jc(mali_ptr jc_gpu_va, bool bifrost);
 
 #define MEMORY_PROP(obj, p) {\
-	char *a = pointer_as_memory_reference(obj->p); \
-	pandecode_prop("%s = %s", #p, a); \
-	free(a); \
-}
-
-#define MEMORY_COMMENT(obj, p) {\
-	char *a = pointer_as_memory_reference(obj->p); \
-	pandecode_msg("%s = %s\n", #p, a); \
-	free(a); \
+        if (obj->p) { \
+                char *a = pointer_as_memory_reference(obj->p); \
+                pandecode_prop("%s = %s", #p, a); \
+                free(a); \
+        } \
 }
 
 #define DYN_MEMORY_PROP(obj, no, p) { \
@@ -147,10 +144,11 @@ pandecode_log_decoded_flags(const struct pandecode_flag_info *flag_info,
 
 #define FLAG_INFO(flag) { MALI_##flag, "MALI_" #flag }
 static const struct pandecode_flag_info gl_enable_flag_info[] = {
-        FLAG_INFO(CULL_FACE_FRONT),
-        FLAG_INFO(CULL_FACE_BACK),
         FLAG_INFO(OCCLUSION_QUERY),
         FLAG_INFO(OCCLUSION_PRECISE),
+        FLAG_INFO(FRONT_CCW_TOP),
+        FLAG_INFO(CULL_FACE_FRONT),
+        FLAG_INFO(CULL_FACE_BACK),
         {}
 };
 #undef FLAG_INFO
@@ -205,8 +203,8 @@ static const struct pandecode_flag_info fb_fmt_flag_info[] = {
 
 #define FLAG_INFO(flag) { MALI_MFBD_FORMAT_##flag, "MALI_MFBD_FORMAT_" #flag }
 static const struct pandecode_flag_info mfbd_fmt_flag_info[] = {
-        FLAG_INFO(AFBC),
         FLAG_INFO(MSAA),
+        FLAG_INFO(SRGB),
         {}
 };
 #undef FLAG_INFO
@@ -221,13 +219,23 @@ static const struct pandecode_flag_info mfbd_extra_flag_info[] = {
 #undef FLAG_INFO
 
 #define FLAG_INFO(flag) { MALI_##flag, "MALI_" #flag }
-static const struct pandecode_flag_info shader_unknown1_flag_info [] = {
-        FLAG_INFO(NO_ALPHA_TO_COVERAGE),
+static const struct pandecode_flag_info shader_midgard1_flag_info [] = {
+        FLAG_INFO(EARLY_Z),
+        FLAG_INFO(HELPER_INVOCATIONS),
         FLAG_INFO(READS_TILEBUFFER),
         FLAG_INFO(READS_ZS),
         {}
 };
 #undef FLAG_INFO
+
+#define FLAG_INFO(flag) { MALI_MFBD_##flag, "MALI_MFBD_" #flag }
+static const struct pandecode_flag_info mfbd_flag_info [] = {
+        FLAG_INFO(DEPTH_WRITE),
+        FLAG_INFO(EXTRA),
+        {}
+};
+#undef FLAG_INFO
+
 
 extern char *replace_fragment;
 extern char *replace_vertex;
@@ -396,6 +404,38 @@ pandecode_wrap_mode_name(enum mali_wrap_mode op)
 }
 #undef DEFINE_CASE
 
+#define DEFINE_CASE(name) case MALI_TEX_## name: return "MALI_TEX_" #name
+static char *
+pandecode_texture_type(enum mali_texture_type type)
+{
+        switch (type) {
+                DEFINE_CASE(1D);
+                DEFINE_CASE(2D);
+                DEFINE_CASE(3D);
+                DEFINE_CASE(CUBE);
+
+        default:
+                unreachable("Unknown case");
+        }
+}
+#undef DEFINE_CASE
+
+#define DEFINE_CASE(name) case MALI_MFBD_BLOCK_## name: return "MALI_MFBD_BLOCK_" #name
+static char *
+pandecode_mfbd_block_format(enum mali_mfbd_block_format fmt)
+{
+        switch (fmt) {
+                DEFINE_CASE(TILED);
+                DEFINE_CASE(UNKNOWN);
+                DEFINE_CASE(LINEAR);
+                DEFINE_CASE(AFBC);
+
+        default:
+                unreachable("Invalid case");
+        }
+}
+#undef DEFINE_CASE
+
 static inline char *
 pandecode_decode_fbd_type(enum mali_fbd_type type)
 {
@@ -410,7 +450,7 @@ pandecode_replay_sfbd(uint64_t gpu_va, int job_no)
         struct pandecode_mapped_memory *mem = pandecode_find_mapped_gpu_mem_containing(gpu_va);
         const struct mali_single_framebuffer *PANDECODE_PTR_VAR(s, mem, (mali_ptr) gpu_va);
 
-        pandecode_log("struct mali_single_framebuffer framebuffer_%d = {\n", job_no);
+        pandecode_log("struct mali_single_framebuffer framebuffer_%"PRIx64"_%d = {\n", gpu_va, job_no);
         pandecode_indent++;
 
         pandecode_prop("unknown1 = 0x%" PRIx32, s->unknown1);
@@ -462,11 +502,12 @@ pandecode_replay_sfbd(uint64_t gpu_va, int job_no)
         }
 
         MEMORY_PROP(s, unknown_address_0);
-        MEMORY_PROP(s, unknown_address_1);
-        MEMORY_PROP(s, unknown_address_2);
+        MEMORY_PROP(s, tiler_polygon_list);
+        MEMORY_PROP(s, tiler_polygon_list_body);
 
-        pandecode_prop("resolution_check = 0x%" PRIx32, s->resolution_check);
-        pandecode_prop("tiler_flags = 0x%" PRIx32, s->tiler_flags);
+        pandecode_prop("tiler_resolution_check = 0x%" PRIx32, s->tiler_resolution_check);
+        pandecode_prop("tiler_hierarchy_mask = 0x%" PRIx16, s->tiler_hierarchy_mask);
+        pandecode_prop("tiler_flags = 0x%" PRIx16, s->tiler_flags);
 
         MEMORY_PROP(s, tiler_heap_free);
         MEMORY_PROP(s, tiler_heap_end);
@@ -495,6 +536,35 @@ pandecode_replay_sfbd(uint64_t gpu_va, int job_no)
 }
 
 static void
+pandecode_u32_slide(unsigned name, const u32 *slide, unsigned count)
+{
+        pandecode_log(".unknown%d = {", name);
+
+        for (int i = 0; i < count; ++i)
+                printf("%X, ", slide[i]);
+
+        pandecode_log("},\n");
+}
+
+#define SHORT_SLIDE(num) \
+        pandecode_u32_slide(num, s->unknown ## num, ARRAY_SIZE(s->unknown ## num))
+
+static void
+pandecode_compute_fbd(uint64_t gpu_va, int job_no)
+{
+        struct pandecode_mapped_memory *mem = pandecode_find_mapped_gpu_mem_containing(gpu_va);
+        const struct mali_compute_fbd *PANDECODE_PTR_VAR(s, mem, (mali_ptr) gpu_va);
+
+        pandecode_log("struct mali_compute_fbd framebuffer_%"PRIx64"_%d = {\n", gpu_va, job_no);
+        pandecode_indent++;
+
+        SHORT_SLIDE(1);
+
+        pandecode_indent--;
+        printf("},\n");
+}
+
+static void
 pandecode_replay_swizzle(unsigned swizzle)
 {
 	pandecode_prop("swizzle = %s | (%s << 3) | (%s << 6) | (%s << 9)",
@@ -512,6 +582,10 @@ pandecode_rt_format(struct mali_rt_format format)
 
         pandecode_prop("unk1 = 0x%" PRIx32, format.unk1);
         pandecode_prop("unk2 = 0x%" PRIx32, format.unk2);
+        pandecode_prop("unk3 = 0x%" PRIx32, format.unk3);
+
+        pandecode_prop("block = %s",
+                        pandecode_mfbd_block_format(format.block));
 
         pandecode_prop("nr_channels = MALI_POSITIVE(%d)",
                         MALI_NEGATIVE(format.nr_channels));
@@ -529,7 +603,76 @@ pandecode_rt_format(struct mali_rt_format format)
 }
 
 static void
-pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no)
+pandecode_render_target(uint64_t gpu_va, unsigned job_no, const struct bifrost_framebuffer *fb)
+{
+        pandecode_log("struct bifrost_render_target rts_list_%"PRIx64"_%d[] = {\n", gpu_va, job_no);
+        pandecode_indent++;
+
+        for (int i = 0; i < MALI_NEGATIVE(fb->rt_count_1); i++) {
+                mali_ptr rt_va = gpu_va + i * sizeof(struct bifrost_render_target);
+                struct pandecode_mapped_memory *mem =
+                        pandecode_find_mapped_gpu_mem_containing(rt_va);
+                const struct bifrost_render_target *PANDECODE_PTR_VAR(rt, mem, (mali_ptr) rt_va);
+
+                pandecode_log("{\n");
+                pandecode_indent++;
+
+                pandecode_rt_format(rt->format);
+
+                if (rt->format.block == MALI_MFBD_BLOCK_AFBC) {
+                        pandecode_log(".afbc = {\n");
+                        pandecode_indent++;
+
+                        char *a = pointer_as_memory_reference(rt->afbc.metadata);
+                        pandecode_prop("metadata = %s", a);
+                        free(a);
+
+                        pandecode_prop("stride = %d", rt->afbc.stride);
+                        pandecode_prop("unk = 0x%" PRIx32, rt->afbc.unk);
+
+                        pandecode_indent--;
+                        pandecode_log("},\n");
+                } else {
+                        pandecode_log(".chunknown = {\n");
+                        pandecode_indent++;
+
+                        pandecode_prop("unk = 0x%" PRIx64, rt->chunknown.unk);
+
+                        char *a = pointer_as_memory_reference(rt->chunknown.pointer);
+                        pandecode_prop("pointer = %s", a);
+                        free(a);
+
+                        pandecode_indent--;
+                        pandecode_log("},\n");
+                }
+
+                MEMORY_PROP(rt, framebuffer);
+                pandecode_prop("framebuffer_stride = %d", rt->framebuffer_stride);
+
+                if (rt->clear_color_1 | rt->clear_color_2 | rt->clear_color_3 | rt->clear_color_4) {
+                        pandecode_prop("clear_color_1 = 0x%" PRIx32, rt->clear_color_1);
+                        pandecode_prop("clear_color_2 = 0x%" PRIx32, rt->clear_color_2);
+                        pandecode_prop("clear_color_3 = 0x%" PRIx32, rt->clear_color_3);
+                        pandecode_prop("clear_color_4 = 0x%" PRIx32, rt->clear_color_4);
+                }
+
+                if (rt->zero1 || rt->zero2 || rt->zero3) {
+                        pandecode_msg("render target zeros tripped\n");
+                        pandecode_prop("zero1 = 0x%" PRIx64, rt->zero1);
+                        pandecode_prop("zero2 = 0x%" PRIx32, rt->zero2);
+                        pandecode_prop("zero3 = 0x%" PRIx32, rt->zero3);
+                }
+
+                pandecode_indent--;
+                pandecode_log("},\n");
+        }
+
+        pandecode_indent--;
+        pandecode_log("};\n");
+}
+
+static unsigned
+pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no, bool with_render_targets)
 {
         struct pandecode_mapped_memory *mem = pandecode_find_mapped_gpu_mem_containing(gpu_va);
         const struct bifrost_framebuffer *PANDECODE_PTR_VAR(fb, mem, (mali_ptr) gpu_va);
@@ -561,7 +704,7 @@ pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no)
                 pandecode_log("};\n");
         }
 
-        pandecode_log("struct bifrost_framebuffer framebuffer_%d = {\n", job_no);
+        pandecode_log("struct bifrost_framebuffer framebuffer_%"PRIx64"_%d = {\n", gpu_va, job_no);
         pandecode_indent++;
 
         pandecode_prop("unk0 = 0x%x", fb->unk0);
@@ -569,12 +712,13 @@ pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no)
         if (fb->sample_locations)
                 pandecode_prop("sample_locations = sample_locations_%d", job_no);
 
-        /* Assume that unknown1 and tiler_meta were emitted in the last job for
+        /* Assume that unknown1 was emitted in the last job for
          * now */
-        /*pandecode_prop("unknown1 = unknown1_%d_p", job_no - 1);
-        pandecode_prop("tiler_meta = tiler_meta_%d_p", job_no - 1);*/
         MEMORY_PROP(fb, unknown1);
-        MEMORY_PROP(fb, tiler_meta);
+
+        pandecode_prop("tiler_polygon_list_size = 0x%x", fb->tiler_polygon_list_size);
+        pandecode_prop("tiler_hierarchy_mask = 0x%" PRIx16, fb->tiler_hierarchy_mask);
+        pandecode_prop("tiler_flags = 0x%" PRIx16, fb->tiler_flags);
 
         pandecode_prop("width1 = MALI_POSITIVE(%d)", fb->width1 + 1);
         pandecode_prop("height1 = MALI_POSITIVE(%d)", fb->height1 + 1);
@@ -586,25 +730,40 @@ pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no)
         pandecode_prop("rt_count_1 = MALI_POSITIVE(%d)", fb->rt_count_1 + 1);
         pandecode_prop("rt_count_2 = %d", fb->rt_count_2);
 
-        pandecode_prop("unk3 = 0x%x", fb->unk3);
+        pandecode_log(".mfbd_flags = ");
+        pandecode_log_decoded_flags(mfbd_flag_info, fb->mfbd_flags);
+        pandecode_log_cont(",\n");
+
         pandecode_prop("clear_stencil = 0x%x", fb->clear_stencil);
         pandecode_prop("clear_depth = %f", fb->clear_depth);
 
         pandecode_prop("unknown2 = 0x%x", fb->unknown2);
         MEMORY_PROP(fb, scratchpad);
-        MEMORY_PROP(fb, tiler_scratch_start);
-        MEMORY_PROP(fb, tiler_scratch_middle);
+        MEMORY_PROP(fb, tiler_polygon_list);
+        MEMORY_PROP(fb, tiler_polygon_list_body);
         MEMORY_PROP(fb, tiler_heap_start);
         MEMORY_PROP(fb, tiler_heap_end);
 
-        if (fb->zero3 || fb->zero4 || fb->zero9 || fb->zero10 || fb->zero11 || fb->zero12) {
+        if (fb->zero3 || fb->zero4) {
                 pandecode_msg("framebuffer zeros tripped\n");
                 pandecode_prop("zero3 = 0x%" PRIx32, fb->zero3);
                 pandecode_prop("zero4 = 0x%" PRIx32, fb->zero4);
-                pandecode_prop("zero9 = 0x%" PRIx64, fb->zero9);
-                pandecode_prop("zero10 = 0x%" PRIx64, fb->zero10);
-                pandecode_prop("zero11 = 0x%" PRIx64, fb->zero11);
-                pandecode_prop("zero12 = 0x%" PRIx64, fb->zero12);
+        }
+
+        bool nonzero_weights = false;
+
+        for (unsigned w = 0; w < ARRAY_SIZE(fb->tiler_weights); ++w) {
+                nonzero_weights |= fb->tiler_weights[w] != 0x0;
+        }
+
+        if (nonzero_weights) {
+                pandecode_log(".tiler_weights = {");
+
+                for (unsigned w = 0; w < ARRAY_SIZE(fb->tiler_weights); ++w) {
+                        pandecode_log("%d, ", fb->tiler_weights[w]);
+                }
+
+                pandecode_log("},");
         }
 
         pandecode_indent--;
@@ -612,11 +771,11 @@ pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no)
 
         gpu_va += sizeof(struct bifrost_framebuffer);
 
-        if (fb->unk3 & MALI_MFBD_EXTRA) {
+        if ((fb->mfbd_flags & MALI_MFBD_EXTRA) && with_render_targets) {
                 mem = pandecode_find_mapped_gpu_mem_containing(gpu_va);
                 const struct bifrost_fb_extra *PANDECODE_PTR_VAR(fbx, mem, (mali_ptr) gpu_va);
 
-                pandecode_log("struct bifrost_fb_extra fb_extra_%d = {\n", job_no);
+                pandecode_log("struct bifrost_fb_extra fb_extra_%"PRIx64"_%d = {\n", gpu_va, job_no);
                 pandecode_indent++;
 
                 MEMORY_PROP(fbx, checksum);
@@ -693,70 +852,11 @@ pandecode_replay_mfbd_bfr(uint64_t gpu_va, int job_no)
                 gpu_va += sizeof(struct bifrost_fb_extra);
         }
 
-        pandecode_log("struct bifrost_render_target rts_list_%d[] = {\n", job_no);
-        pandecode_indent++;
+        if (with_render_targets)
+                pandecode_render_target(gpu_va, job_no, fb);
 
-        for (int i = 0; i < MALI_NEGATIVE(fb->rt_count_1); i++) {
-                mali_ptr rt_va = gpu_va + i * sizeof(struct bifrost_render_target);
-                mem = pandecode_find_mapped_gpu_mem_containing(rt_va);
-                const struct bifrost_render_target *PANDECODE_PTR_VAR(rt, mem, (mali_ptr) rt_va);
-
-                pandecode_log("{\n");
-                pandecode_indent++;
-
-                pandecode_rt_format(rt->format);
-
-                /* TODO: How the actual heck does AFBC enabling work here? */
-                if (0) {
-                        pandecode_log(".afbc = {\n");
-                        pandecode_indent++;
-
-                        char *a = pointer_as_memory_reference(rt->afbc.metadata);
-                        pandecode_prop("metadata = %s", a);
-                        free(a);
-
-                        pandecode_prop("stride = %d", rt->afbc.stride);
-                        pandecode_prop("unk = 0x%" PRIx32, rt->afbc.unk);
-
-                        pandecode_indent--;
-                        pandecode_log("},\n");
-                } else {
-                        pandecode_log(".chunknown = {\n");
-                        pandecode_indent++;
-
-                        pandecode_prop("unk = 0x%" PRIx64, rt->chunknown.unk);
-
-                        char *a = pointer_as_memory_reference(rt->chunknown.pointer);
-                        pandecode_prop("pointer = %s", a);
-                        free(a);
-
-                        pandecode_indent--;
-                        pandecode_log("},\n");
-                }
-
-                MEMORY_PROP(rt, framebuffer);
-                pandecode_prop("framebuffer_stride = %d", rt->framebuffer_stride);
-
-                if (rt->clear_color_1 | rt->clear_color_2 | rt->clear_color_3 | rt->clear_color_4) {
-                        pandecode_prop("clear_color_1 = 0x%" PRIx32, rt->clear_color_1);
-                        pandecode_prop("clear_color_2 = 0x%" PRIx32, rt->clear_color_2);
-                        pandecode_prop("clear_color_3 = 0x%" PRIx32, rt->clear_color_3);
-                        pandecode_prop("clear_color_4 = 0x%" PRIx32, rt->clear_color_4);
-                }
-
-                if (rt->zero1 || rt->zero2 || rt->zero3) {
-                        pandecode_msg("render target zeros tripped\n");
-                        pandecode_prop("zero1 = 0x%" PRIx64, rt->zero1);
-                        pandecode_prop("zero2 = 0x%" PRIx32, rt->zero2);
-                        pandecode_prop("zero3 = 0x%" PRIx32, rt->zero3);
-                }
-
-                pandecode_indent--;
-                pandecode_log("},\n");
-        }
-
-        pandecode_indent--;
-        pandecode_log("};\n");
+        /* Passback the render target count */
+        return MALI_NEGATIVE(fb->rt_count_1);
 }
 
 static void
@@ -835,9 +935,23 @@ pandecode_replay_shader_address(const char *name, mali_ptr ptr)
         return shader_ptr;
 }
 
+static bool
+all_zero(unsigned *buffer, unsigned count)
+{
+        for (unsigned i = 0; i < count; ++i) {
+                if (buffer[i])
+                        return false;
+        }
+
+        return true;
+}
+
 static void
 pandecode_replay_stencil(const char *name, const struct mali_stencil_test *stencil)
 {
+        if (all_zero((unsigned *) stencil, sizeof(stencil) / sizeof(unsigned)))
+                return;
+
         const char *func = pandecode_func_name(stencil->func);
         const char *sfail = pandecode_stencil_op_name(stencil->sfail);
         const char *dpfail = pandecode_stencil_op_name(stencil->dpfail);
@@ -917,6 +1031,9 @@ pandecode_bifrost_blend(void *descs, int job_no, int rt_no)
 static mali_ptr
 pandecode_midgard_blend(union midgard_blend *blend, bool is_shader)
 {
+        if (all_zero((unsigned *) blend, sizeof(blend) / sizeof(unsigned)))
+                return 0;
+
         pandecode_log(".blend = {\n");
         pandecode_indent++;
 
@@ -1039,7 +1156,7 @@ pandecode_replay_vertex_tiler_prefix(struct mali_vertex_tiler_prefix *p, int job
         pandecode_log_cont("{\n");
         pandecode_indent++;
 
-        pandecode_prop("invocation_count = %" PRIx32, p->invocation_count);
+        pandecode_prop("invocation_count = 0x%" PRIx32, p->invocation_count);
         pandecode_prop("size_y_shift = %d", p->size_y_shift);
         pandecode_prop("size_z_shift = %d", p->size_z_shift);
         pandecode_prop("workgroups_x_shift = %d", p->workgroups_x_shift);
@@ -1064,7 +1181,9 @@ pandecode_replay_vertex_tiler_prefix(struct mali_vertex_tiler_prefix *p, int job
                          32) + 1);
 
         /* TODO: Decode */
-        pandecode_prop("unknown_draw = 0x%" PRIx32, p->unknown_draw);
+        if (p->unknown_draw)
+                pandecode_prop("unknown_draw = 0x%" PRIx32, p->unknown_draw);
+
         pandecode_prop("workgroups_x_shift_3 = 0x%" PRIx32, p->workgroups_x_shift_3);
 
         pandecode_prop("draw_mode = %s", pandecode_draw_mode_name(p->draw_mode));
@@ -1074,7 +1193,8 @@ pandecode_replay_vertex_tiler_prefix(struct mali_vertex_tiler_prefix *p, int job
         if (p->index_count)
                 pandecode_prop("index_count = MALI_POSITIVE(%" PRId32 ")", p->index_count + 1);
 
-        pandecode_prop("negative_start = %d", p->negative_start);
+        if (p->negative_start)
+                pandecode_prop("negative_start = %d", p->negative_start);
 
         DYN_MEMORY_PROP(p, job_no, indices);
 
@@ -1151,7 +1271,7 @@ pandecode_replay_scratchpad(uintptr_t pscratchpad, int job_no, char *suffix)
         if (scratchpad->zero)
                 pandecode_msg("XXX scratchpad zero tripped");
 
-        pandecode_log("struct bifrost_scratchpad scratchpad_%d%s = {\n", job_no, suffix);
+        pandecode_log("struct bifrost_scratchpad scratchpad_%"PRIx64"_%d%s = {\n", pscratchpad, job_no, suffix);
         pandecode_indent++;
 
         pandecode_prop("flags = 0x%x", scratchpad->flags);
@@ -1193,6 +1313,8 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
         mali_ptr shader_meta_ptr = (u64) (uintptr_t) (p->_shader_upper << 4);
         struct pandecode_mapped_memory *attr_mem;
 
+        unsigned rt_count = 1;
+
         /* On Bifrost, since the tiler heap (for tiler jobs) and the scratchpad
          * are the only things actually needed from the FBD, vertex/tiler jobs
          * no longer reference the FBD -- instead, this field points to some
@@ -1201,7 +1323,9 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
         if (is_bifrost)
                 pandecode_replay_scratchpad(p->framebuffer & ~FBD_TYPE, job_no, suffix);
         else if (p->framebuffer & MALI_MFBD)
-                pandecode_replay_mfbd_bfr((u64) ((uintptr_t) p->framebuffer) & FBD_MASK, job_no);
+                rt_count = pandecode_replay_mfbd_bfr((u64) ((uintptr_t) p->framebuffer) & FBD_MASK, job_no, false);
+        else if (job_type == JOB_TYPE_COMPUTE)
+                pandecode_compute_fbd((u64) (uintptr_t) p->framebuffer, job_no);
         else
                 pandecode_replay_sfbd((u64) (uintptr_t) p->framebuffer, job_no);
 
@@ -1212,7 +1336,7 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                 struct pandecode_mapped_memory *smem = pandecode_find_mapped_gpu_mem_containing(shader_meta_ptr);
                 struct mali_shader_meta *PANDECODE_PTR_VAR(s, smem, shader_meta_ptr);
 
-                pandecode_log("struct mali_shader_meta shader_meta_%d%s = {\n", job_no, suffix);
+                pandecode_log("struct mali_shader_meta shader_meta_%"PRIx64"_%d%s = {\n", shader_meta_ptr, job_no, suffix);
                 pandecode_indent++;
 
                 /* Save for dumps */
@@ -1226,8 +1350,7 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                         uniform_buffer_count = s->bifrost1.uniform_buffer_count;
                 } else {
                         uniform_count = s->midgard1.uniform_count;
-                        /* TODO figure this out */
-                        uniform_buffer_count = 1;
+                        uniform_buffer_count = s->midgard1.uniform_buffer_count;
                 }
 
                 mali_ptr shader_ptr = pandecode_replay_shader_address("shader", s->shader);
@@ -1251,10 +1374,11 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                         pandecode_indent++;
 
                         pandecode_prop("uniform_count = %" PRId16, s->midgard1.uniform_count);
+                        pandecode_prop("uniform_buffer_count = %" PRId16, s->midgard1.uniform_buffer_count);
                         pandecode_prop("work_count = %" PRId16, s->midgard1.work_count);
 
-                        pandecode_log(".unknown1 = ");
-                        pandecode_log_decoded_flags(shader_unknown1_flag_info, s->midgard1.unknown1);
+                        pandecode_log(".flags = ");
+                        pandecode_log_decoded_flags(shader_midgard1_flag_info, s->midgard1.flags);
                         pandecode_log_cont(",\n");
 
                         pandecode_prop("unknown2 = 0x%" PRIx32, s->midgard1.unknown2);
@@ -1272,37 +1396,43 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                         pandecode_prop("depth_factor = %f", s->depth_factor);
                 }
 
-                bool invert_alpha_coverage = s->alpha_coverage & 0xFFF0;
-                uint16_t inverted_coverage = invert_alpha_coverage ? ~s->alpha_coverage : s->alpha_coverage;
+                if (s->alpha_coverage) {
+                        bool invert_alpha_coverage = s->alpha_coverage & 0xFFF0;
+                        uint16_t inverted_coverage = invert_alpha_coverage ? ~s->alpha_coverage : s->alpha_coverage;
 
-                pandecode_prop("alpha_coverage = %sMALI_ALPHA_COVERAGE(%f)",
-                             invert_alpha_coverage ? "~" : "",
-                             MALI_GET_ALPHA_COVERAGE(inverted_coverage));
-
-                pandecode_log(".unknown2_3 = ");
-
-                int unknown2_3 = s->unknown2_3;
-                int unknown2_4 = s->unknown2_4;
-
-                /* We're not quite sure what these flags mean without the depth test, if anything */
-
-                if (unknown2_3 & (MALI_DEPTH_TEST | MALI_DEPTH_FUNC_MASK)) {
-                        const char *func = pandecode_func_name(MALI_GET_DEPTH_FUNC(unknown2_3));
-                        unknown2_3 &= ~MALI_DEPTH_FUNC_MASK;
-
-                        pandecode_log_cont("MALI_DEPTH_FUNC(%s) | ", func);
+                        pandecode_prop("alpha_coverage = %sMALI_ALPHA_COVERAGE(%f)",
+                                     invert_alpha_coverage ? "~" : "",
+                                     MALI_GET_ALPHA_COVERAGE(inverted_coverage));
                 }
 
-                pandecode_log_decoded_flags(u3_flag_info, unknown2_3);
-                pandecode_log_cont(",\n");
+                if (s->unknown2_3 || s->unknown2_4) {
+                        pandecode_log(".unknown2_3 = ");
 
-                pandecode_prop("stencil_mask_front = 0x%02X", s->stencil_mask_front);
-                pandecode_prop("stencil_mask_back = 0x%02X", s->stencil_mask_back);
+                        int unknown2_3 = s->unknown2_3;
+                        int unknown2_4 = s->unknown2_4;
 
-                pandecode_log(".unknown2_4 = ");
-                pandecode_log_decoded_flags(u4_flag_info, unknown2_4);
-                pandecode_log_cont(",\n");
+                        /* We're not quite sure what these flags mean without the depth test, if anything */
 
+                        if (unknown2_3 & (MALI_DEPTH_TEST | MALI_DEPTH_FUNC_MASK)) {
+                                const char *func = pandecode_func_name(MALI_GET_DEPTH_FUNC(unknown2_3));
+                                unknown2_3 &= ~MALI_DEPTH_FUNC_MASK;
+
+                                pandecode_log_cont("MALI_DEPTH_FUNC(%s) | ", func);
+                        }
+
+                        pandecode_log_decoded_flags(u3_flag_info, unknown2_3);
+                        pandecode_log_cont(",\n");
+
+                        pandecode_log(".unknown2_4 = ");
+                        pandecode_log_decoded_flags(u4_flag_info, unknown2_4);
+                        pandecode_log_cont(",\n");
+                }
+
+                if (s->stencil_mask_front || s->stencil_mask_back) {
+                        pandecode_prop("stencil_mask_front = 0x%02X", s->stencil_mask_front);
+                        pandecode_prop("stencil_mask_back = 0x%02X", s->stencil_mask_back);
+                }
+                
                 pandecode_replay_stencil("front", &s->stencil_front);
                 pandecode_replay_stencil("back", &s->stencil_back);
 
@@ -1317,7 +1447,7 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
 
                         pandecode_indent--;
                         pandecode_log("},\n");
-                } else {
+                } else if (s->midgard2.unknown2_7) {
                         pandecode_log(".midgard2 = {\n");
                         pandecode_indent++;
 
@@ -1326,7 +1456,8 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                         pandecode_log("},\n");
                 }
 
-                pandecode_prop("unknown2_8 = 0x%" PRIx32, s->unknown2_8);
+                if (s->unknown2_8)
+                        pandecode_prop("unknown2_8 = 0x%" PRIx32, s->unknown2_8);
 
                 if (!is_bifrost) {
                         /* TODO: Blend shaders routing/disasm */
@@ -1343,7 +1474,7 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                 if (job_type == JOB_TYPE_TILER) {
                         void* blend_base = (void *) (s + 1);
 
-                        for (unsigned i = 0; i < 4; i++) {
+                        for (unsigned i = 0; i < rt_count; i++) {
                                 mali_ptr shader = 0;
 
                                 if (is_bifrost)
@@ -1410,21 +1541,27 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                 pandecode_replay_attribute_meta(job_no, varying_count, p, true, suffix);
         }
 
-        if (p->uniforms) {
+        bool is_compute = job_type == JOB_TYPE_COMPUTE;
+
+        if (p->uniforms && !is_compute) {
                 int rows = uniform_count, width = 4;
                 size_t sz = rows * width * sizeof(float);
 
                 struct pandecode_mapped_memory *uniform_mem = pandecode_find_mapped_gpu_mem_containing(p->uniforms);
                 pandecode_fetch_gpu_mem(uniform_mem, p->uniforms, sz);
-                float *PANDECODE_PTR_VAR(uniforms, uniform_mem, p->uniforms);
+                u32 *PANDECODE_PTR_VAR(uniforms, uniform_mem, p->uniforms);
 
-                pandecode_log("float uniforms_%d%s[] = {\n", job_no, suffix);
+                pandecode_log("u32 uniforms_%d%s[] = {\n", job_no, suffix);
 
                 pandecode_indent++;
 
                 for (int row = 0; row < rows; row++) {
-                        for (int i = 0; i < width; i++)
-                                pandecode_log_cont("%ff, ", uniforms[i]);
+                        for (int i = 0; i < width; i++) {
+                                u32 v = uniforms[i];
+                                float f;
+                                memcpy(&f, &v, sizeof(v));
+                                pandecode_log_cont("%X /* %f */, ", v, f);
+                        }
 
                         pandecode_log_cont("\n");
 
@@ -1433,6 +1570,27 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
 
                 pandecode_indent--;
                 pandecode_log("};\n");
+        } else if (p->uniforms) {
+                int rows = uniform_count * 2;
+                size_t sz = rows * sizeof(mali_ptr);
+
+                struct pandecode_mapped_memory *uniform_mem = pandecode_find_mapped_gpu_mem_containing(p->uniforms);
+                pandecode_fetch_gpu_mem(uniform_mem, p->uniforms, sz);
+                mali_ptr *PANDECODE_PTR_VAR(uniforms, uniform_mem, p->uniforms);
+
+                pandecode_log("mali_ptr uniforms_%d%s[] = {\n", job_no, suffix);
+
+                pandecode_indent++;
+
+                for (int row = 0; row < rows; row++) {
+                        char *a = pointer_as_memory_reference(uniforms[row]);
+                        pandecode_log("%s,\n", a);
+                        free(a);
+                }
+
+                pandecode_indent--;
+                pandecode_log("};\n");
+
         }
 
         if (p->uniform_buffers) {
@@ -1466,14 +1624,13 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                                 if (tmem) {
                                         struct mali_texture_descriptor *PANDECODE_PTR_VAR(t, tmem, *u);
 
-                                        pandecode_log("struct mali_texture_descriptor texture_descriptor_%d_%d = {\n", job_no, tex);
+                                        pandecode_log("struct mali_texture_descriptor texture_descriptor_%"PRIx64"_%d_%d = {\n", *u, job_no, tex);
                                         pandecode_indent++;
 
                                         pandecode_prop("width = MALI_POSITIVE(%" PRId16 ")", t->width + 1);
                                         pandecode_prop("height = MALI_POSITIVE(%" PRId16 ")", t->height + 1);
                                         pandecode_prop("depth = MALI_POSITIVE(%" PRId16 ")", t->depth + 1);
-
-                                        pandecode_prop("unknown1 = %" PRId16, t->unknown1);
+                                        pandecode_prop("array_size = MALI_POSITIVE(%" PRId16 ")", t->array_size + 1);
                                         pandecode_prop("unknown3 = %" PRId16, t->unknown3);
                                         pandecode_prop("unknown3A = %" PRId8, t->unknown3A);
                                         pandecode_prop("nr_mipmap_levels = %" PRId8, t->nr_mipmap_levels);
@@ -1485,9 +1642,9 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
 
                                         pandecode_replay_swizzle(f.swizzle);
 					pandecode_prop("format = %s", pandecode_format_name(f.format));
-
-                                        pandecode_prop("usage1 = 0x%" PRIx32, f.usage1);
-                                        pandecode_prop("is_not_cubemap = %" PRId32, f.is_not_cubemap);
+					pandecode_prop("type = %s", pandecode_texture_type(f.type));
+                                        pandecode_prop("srgb = %" PRId32, f.srgb);
+                                        pandecode_prop("unknown1 = %" PRId32, f.unknown1);
                                         pandecode_prop("usage2 = 0x%" PRIx32, f.usage2);
 
                                         pandecode_indent--;
@@ -1507,7 +1664,7 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                                         pandecode_prop("unknown6 = 0x%" PRIx32, t->unknown6);
                                         pandecode_prop("unknown7 = 0x%" PRIx32, t->unknown7);
 
-                                        pandecode_log(".swizzled_bitmaps = {\n");
+                                        pandecode_log(".payload = {\n");
                                         pandecode_indent++;
 
                                         /* A bunch of bitmap pointers follow.
@@ -1517,32 +1674,22 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                                          * possibilities to futureproof */
 
                                         int bitmap_count = MALI_NEGATIVE(t->nr_mipmap_levels);
+                                        bool manual_stride = f.usage2 & MALI_TEX_MANUAL_STRIDE;
 
-                                        if (!f.is_not_cubemap) {
-                                                /* Miptree for each face */
+                                        /* Miptree for each face */
+                                        if (f.type == MALI_TEX_CUBE)
                                                 bitmap_count *= 6;
-                                        }
 
-                                        if (f.usage2 & MALI_TEX_MANUAL_STRIDE) {
-                                                /* Stride for each... what exactly? TODO More traces */
+                                        /* Array of textures */
+                                        bitmap_count *= MALI_NEGATIVE(t->array_size);
 
-                                                if (bitmap_count > 1) {
-                                                        pandecode_msg("Manual stride with mip/cubemaps, decode uncertain");
-                                                }
+                                        /* Stride for each element */
+                                        if (manual_stride)
+                                                bitmap_count *= 2;
 
-                                                /* This is a guess, we've only
-                                                 * seen for 1-level non-mip 2D
-                                                 * */
-
-                                                bitmap_count += 1;
-                                        }
-
-                                        int max_count = sizeof(t->swizzled_bitmaps) / sizeof(t->swizzled_bitmaps[0]);
-
-                                        if (bitmap_count > max_count) {
-                                                pandecode_msg("XXX: bitmap count tripped");
-                                                bitmap_count = max_count;
-                                        }
+                                        /* Sanity check the size */
+                                        int max_count = sizeof(t->payload) / sizeof(t->payload[0]);
+                                        assert (bitmap_count <= max_count);
 
                                         /* Dump more to be safe, but not _that_ much more */
                                         int safe_count = MIN2(bitmap_count * 2, max_count);
@@ -1552,15 +1699,15 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
 
                                                 /* How we dump depends if this is a stride or a pointer */
 
-                                                if ((f.usage2 & MALI_TEX_MANUAL_STRIDE) && ((i + 1) == bitmap_count)) {
+                                                if ((f.usage2 & MALI_TEX_MANUAL_STRIDE) && (i & 1)) {
                                                         /* signed 32-bit snuck in as a 64-bit pointer */
-                                                        uint64_t stride_set = t->swizzled_bitmaps[i];
+                                                        uint64_t stride_set = t->payload[i];
                                                         uint32_t clamped_stride = stride_set;
                                                         int32_t stride = clamped_stride;
                                                         assert(stride_set == clamped_stride);
                                                         pandecode_log("%s(mali_ptr) %d /* stride */, \n", prefix, stride);
                                                 } else {
-                                                        char *a = pointer_as_memory_reference(t->swizzled_bitmaps[i]);
+                                                        char *a = pointer_as_memory_reference(t->payload[i]);
                                                         pandecode_log("%s%s, \n", prefix, a);
                                                         free(a);
                                                 }
@@ -1610,7 +1757,7 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                                         pandecode_prop("zero = 0x%X, 0x%X\n", s->zero, s->zero2);
                                 }
 
-                                pandecode_prop("unknown2 = %d", s->unknown2);
+                                pandecode_prop("seamless_cube_map = %d", s->seamless_cube_map);
 
                                 pandecode_prop("border_color = { %f, %f, %f, %f }",
                                              s->border_color[0],
@@ -1632,30 +1779,16 @@ pandecode_replay_vertex_tiler_postfix(const struct mali_vertex_tiler_postfix *p,
         pandecode_indent++;
 
         MEMORY_PROP(p, position_varying);
-        MEMORY_COMMENT(p, position_varying);
         DYN_MEMORY_PROP(p, job_no, uniform_buffers);
-        MEMORY_COMMENT(p, uniform_buffers);
         DYN_MEMORY_PROP(p, job_no, texture_trampoline);
-        MEMORY_COMMENT(p, texture_trampoline);
         DYN_MEMORY_PROP(p, job_no, sampler_descriptor);
-        MEMORY_COMMENT(p, sampler_descriptor);
         DYN_MEMORY_PROP(p, job_no, uniforms);
-        MEMORY_COMMENT(p, uniforms);
         DYN_MEMORY_PROP(p, job_no, attributes);
-        MEMORY_COMMENT(p, attributes);
         DYN_MEMORY_PROP(p, job_no, attribute_meta);
-        MEMORY_COMMENT(p, attribute_meta);
         DYN_MEMORY_PROP(p, job_no, varyings);
-        MEMORY_COMMENT(p, varyings);
         DYN_MEMORY_PROP(p, job_no, varying_meta);
-        MEMORY_COMMENT(p, varying_meta);
         DYN_MEMORY_PROP(p, job_no, viewport);
-        MEMORY_COMMENT(p, viewport);
         DYN_MEMORY_PROP(p, job_no, occlusion_counter);
-        MEMORY_COMMENT(p, occlusion_counter);
-        MEMORY_COMMENT(p, framebuffer & ~1);
-        pandecode_msg("%" PRIx64 "\n", p->viewport);
-        pandecode_msg("%" PRIx64 "\n", p->framebuffer);
 
         if (is_bifrost)
                 pandecode_prop("framebuffer = scratchpad_%d_p", job_no);
@@ -1733,7 +1866,7 @@ pandecode_replay_tiler_meta(mali_ptr gpu_va, int job_no)
 
         pandecode_replay_tiler_heap_meta(t->tiler_heap_meta, job_no);
 
-        pandecode_log("struct mali_tiler_meta tiler_meta_%d = {\n", job_no);
+        pandecode_log("struct bifrost_tiler_meta tiler_meta_%d = {\n", job_no);
         pandecode_indent++;
 
         if (t->zero0 || t->zero1) {
@@ -1742,7 +1875,9 @@ pandecode_replay_tiler_meta(mali_ptr gpu_va, int job_no)
                 pandecode_prop("zero1 = 0x%" PRIx64, t->zero1);
         }
 
-        pandecode_prop("unk = 0x%x", t->unk);
+        pandecode_prop("hierarchy_mask = 0x%" PRIx16, t->hierarchy_mask);
+        pandecode_prop("flags = 0x%" PRIx16, t->flags);
+
         pandecode_prop("width = MALI_POSITIVE(%d)", t->width + 1);
         pandecode_prop("height = MALI_POSITIVE(%d)", t->height + 1);
         DYN_MEMORY_PROP(t, job_no, tiler_heap_meta);
@@ -1763,13 +1898,6 @@ pandecode_replay_gl_enables(uint32_t gl_enables, int job_type)
 {
         pandecode_log(".gl_enables = ");
 
-        if (job_type == JOB_TYPE_TILER) {
-                pandecode_log_cont("MALI_FRONT_FACE(MALI_%s) | ",
-                                 gl_enables & MALI_FRONT_FACE(MALI_CW) ? "CW" : "CCW");
-
-                gl_enables &= ~(MALI_FRONT_FACE(1));
-        }
-
         pandecode_log_decoded_flags(gl_enable_flag_info, gl_enables);
 
         pandecode_log_cont(",\n");
@@ -1778,6 +1906,9 @@ pandecode_replay_gl_enables(uint32_t gl_enables, int job_type)
 static void
 pandecode_replay_primitive_size(union midgard_primitive_size u, bool constant)
 {
+        if (u.pointer == 0x0)
+                return;
+
         pandecode_log(".primitive_size = {\n");
         pandecode_indent++;
 
@@ -1884,10 +2015,6 @@ pandecode_replay_vertex_or_tiler_job_mdg(const struct mali_job_descriptor_header
 {
         struct midgard_payload_vertex_tiler *PANDECODE_PTR_VAR(v, mem, payload);
 
-        char *a = pointer_as_memory_reference(payload);
-        pandecode_msg("vt payload: %s\n", a);
-        free(a);
-
         pandecode_replay_vertex_tiler_postfix_pre(&v->postfix, job_no, h->job_type, "", false);
 
         pandecode_replay_indices(v->prefix.indices, v->prefix.index_count, job_no);
@@ -1902,7 +2029,9 @@ pandecode_replay_vertex_or_tiler_job_mdg(const struct mali_job_descriptor_header
         pandecode_replay_vertex_tiler_prefix(&v->prefix, job_no);
 
         pandecode_replay_gl_enables(v->gl_enables, h->job_type);
-        pandecode_prop("draw_start = %d", v->draw_start);
+
+        if (v->draw_start)
+                pandecode_prop("draw_start = %d", v->draw_start);
 
 #ifndef __LP64__
 
@@ -1956,13 +2085,12 @@ pandecode_replay_fragment_job(const struct pandecode_mapped_memory *mem,
                  * trace, which appears impossible.
                  */
 
-                pandecode_replay_mfbd_bfr(s->framebuffer & FBD_MASK, job_no);
+                pandecode_replay_mfbd_bfr(s->framebuffer & FBD_MASK, job_no, true);
                 fbd_dumped = true;
         }
 
         uintptr_t p = (uintptr_t) s->framebuffer & FBD_MASK;
-
-        pandecode_log("struct mali_payload_fragment payload_%d = {\n", job_no);
+        pandecode_log("struct mali_payload_fragment payload_%"PRIx64"_%d = {\n", payload, job_no);
         pandecode_indent++;
 
         /* See the comments by the macro definitions for mathematical context
@@ -2031,7 +2159,7 @@ pandecode_replay_jc(mali_ptr jc_gpu_va, bool bifrost)
                 if (first)
                         start_number = job_no;
 
-                pandecode_log("struct mali_job_descriptor_header job_%d = {\n", job_no);
+                pandecode_log("struct mali_job_descriptor_header job_%"PRIx64"_%d = {\n", jc_gpu_va, job_no);
                 pandecode_indent++;
 
                 pandecode_prop("job_type = %s", pandecode_job_type_name(h->job_type));
@@ -2042,8 +2170,12 @@ pandecode_replay_jc(mali_ptr jc_gpu_va, bool bifrost)
                 if (h->job_descriptor_size)
                         pandecode_prop("job_descriptor_size = %d", h->job_descriptor_size);
 
-                if (h->exception_status)
-                        pandecode_prop("exception_status = %d", h->exception_status);
+                if (h->exception_status != 0x1)
+                        pandecode_prop("exception_status = %x (source ID: 0x%x access: 0x%x exception: 0x%x)",
+                                       h->exception_status,
+                                       (h->exception_status >> 16) & 0xFFFF,
+                                       (h->exception_status >> 8) & 0x3,
+                                       h->exception_status  & 0xFF);
 
                 if (h->first_incomplete_task)
                         pandecode_prop("first_incomplete_task = %d", h->first_incomplete_task);
@@ -2077,8 +2209,7 @@ pandecode_replay_jc(mali_ptr jc_gpu_va, bool bifrost)
                 switch (h->job_type) {
                 case JOB_TYPE_SET_VALUE: {
                         struct mali_payload_set_value *s = payload;
-
-                        pandecode_log("struct mali_payload_set_value payload_%d = {\n", job_no);
+                        pandecode_log("struct mali_payload_set_value payload_%"PRIx64"_%d = {\n", payload_ptr, job_no);
                         pandecode_indent++;
                         MEMORY_PROP(s, out);
                         pandecode_prop("unknown = 0x%" PRIX64, s->unknown);

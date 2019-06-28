@@ -277,6 +277,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
    case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_DEST_SURFACE_SRGB_CONTROL:
+   case PIPE_CAP_TGSI_DIV:
       return 1;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return nouveau_screen(pscreen)->vram_domain & NOUVEAU_BO_VRAM ? 1 : 0;
@@ -905,15 +906,13 @@ static const nir_shader_compiler_options nir_options = {
    .lower_fpow = false,
    .lower_fsat = false,
    .lower_fsqrt = false, // TODO: only before gm200
-   .lower_fmod32 = true,
-   .lower_fmod64 = true,
+   .lower_fmod = true,
    .lower_bitfield_extract = false,
    .lower_bitfield_extract_to_shifts = false,
    .lower_bitfield_insert = false,
    .lower_bitfield_insert_to_shifts = false,
    .lower_bitfield_reverse = false,
    .lower_bit_count = false,
-   .lower_bfm = false,
    .lower_ifind_msb = false,
    .lower_find_lsb = false,
    .lower_uadd_carry = true, // TODO
@@ -955,7 +954,7 @@ static const nir_shader_compiler_options nir_options = {
    .lower_mul_2x32_64 = true, // TODO
    .max_unroll_iterations = 32,
    .lower_int64_options = nir_lower_divmod64, // TODO
-   .lower_doubles_options = 0, // TODO
+   .lower_doubles_options = nir_lower_dmod, // TODO
 };
 
 static const void *

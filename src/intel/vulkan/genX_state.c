@@ -200,18 +200,6 @@ genX(init_device_state)(struct anv_device *device)
       lri.DataDWord      = half_slice_chicken7;
    }
 
-   /* WA_2204188704: Pixel Shader Panic dispatch must be disabled.
-    */
-   uint32_t common_slice_chicken3;
-   anv_pack_struct(&common_slice_chicken3, GENX(COMMON_SLICE_CHICKEN3),
-                   .PSThreadPanicDispatch = 0x3,
-                   .PSThreadPanicDispatchMask = 0x3);
-
-    anv_batch_emit(&batch, GENX(MI_LOAD_REGISTER_IMM), lri) {
-      lri.RegisterOffset = GENX(COMMON_SLICE_CHICKEN3_num);
-      lri.DataDWord      = common_slice_chicken3;
-   }
-
    /* WaEnableStateCacheRedirectToCS:icl */
    uint32_t slice_common_eco_chicken1;
    anv_pack_struct(&slice_common_eco_chicken1,
@@ -341,8 +329,10 @@ VkResult genX(CreateSampler)(
 
    sampler->n_planes = 1;
 
+   uint32_t border_color_stride = GEN_IS_HASWELL ? 512 : 64;
    uint32_t border_color_offset = device->border_colors.offset +
-                                  pCreateInfo->borderColor * 64;
+                                  pCreateInfo->borderColor *
+                                  border_color_stride;
 
 #if GEN_GEN >= 9
    unsigned sampler_reduction_mode = STD_FILTER;

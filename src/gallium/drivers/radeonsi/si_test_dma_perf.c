@@ -112,6 +112,9 @@ void si_test_dma_perf(struct si_screen *sscreen)
 			unsigned cs_dwords_per_thread =
 				test_cs ? cs_dwords_per_thread_list[cs_method % NUM_SHADERS] : 0;
 
+			if (test_sdma && !sctx->dma_cs)
+				continue;
+
 			if (sctx->chip_class == GFX6) {
 				/* GFX6 doesn't support CP DMA operations through L2. */
 				if (test_cp && cache_policy != L2_BYPASS)
@@ -230,8 +233,8 @@ void si_test_dma_perf(struct si_screen *sscreen)
 								sctx->cs_user_data[i] = clear_value;
 						}
 
-						sctx->flags |= SI_CONTEXT_INV_VMEM_L1 |
-							       SI_CONTEXT_INV_SMEM_L1;
+						sctx->flags |= SI_CONTEXT_INV_VCACHE |
+							       SI_CONTEXT_INV_SCACHE;
 
 						ctx->set_shader_buffers(ctx, PIPE_SHADER_COMPUTE, 0,
 									is_copy ? 2 : 1, sb, 0x1);
@@ -249,7 +252,7 @@ void si_test_dma_perf(struct si_screen *sscreen)
 
 					/* Flush L2, so that we don't just test L2 cache performance. */
 					if (!test_sdma) {
-						sctx->flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+						sctx->flags |= SI_CONTEXT_WB_L2;
 						si_emit_cache_flush(sctx);
 					}
 
