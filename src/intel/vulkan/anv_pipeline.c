@@ -167,7 +167,9 @@ anv_shader_compile_to_nir(struct anv_device *device,
    };
    struct spirv_to_nir_options spirv_options = {
       .lower_workgroup_access_to_offsets = true,
+      .frag_coord_is_sysval = true,
       .caps = {
+         .demote_to_helper_invocation = true,
          .derivative_group = true,
          .descriptor_array_dynamic_indexing = true,
          .descriptor_array_non_uniform_indexing = true,
@@ -351,12 +353,26 @@ populate_sampler_prog_key(const struct gen_device_info *devinfo,
 }
 
 static void
+populate_base_prog_key(const struct gen_device_info *devinfo,
+                       VkPipelineShaderStageCreateFlags flags,
+                       struct brw_base_prog_key *key)
+{
+   if (flags & VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT_EXT)
+      key->subgroup_size_type = BRW_SUBGROUP_SIZE_VARYING;
+   else
+      key->subgroup_size_type = BRW_SUBGROUP_SIZE_API_CONSTANT;
+
+   populate_sampler_prog_key(devinfo, &key->tex);
+}
+
+static void
 populate_vs_prog_key(const struct gen_device_info *devinfo,
+                     VkPipelineShaderStageCreateFlags flags,
                      struct brw_vs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_base_prog_key(devinfo, flags, &key->base);
 
    /* XXX: Handle vertex input work-arounds */
 
@@ -365,43 +381,47 @@ populate_vs_prog_key(const struct gen_device_info *devinfo,
 
 static void
 populate_tcs_prog_key(const struct gen_device_info *devinfo,
+                      VkPipelineShaderStageCreateFlags flags,
                       unsigned input_vertices,
                       struct brw_tcs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_base_prog_key(devinfo, flags, &key->base);
 
    key->input_vertices = input_vertices;
 }
 
 static void
 populate_tes_prog_key(const struct gen_device_info *devinfo,
+                      VkPipelineShaderStageCreateFlags flags,
                       struct brw_tes_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_base_prog_key(devinfo, flags, &key->base);
 }
 
 static void
 populate_gs_prog_key(const struct gen_device_info *devinfo,
+                     VkPipelineShaderStageCreateFlags flags,
                      struct brw_gs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_base_prog_key(devinfo, flags, &key->base);
 }
 
 static void
 populate_wm_prog_key(const struct gen_device_info *devinfo,
+                     VkPipelineShaderStageCreateFlags flags,
                      const struct anv_subpass *subpass,
                      const VkPipelineMultisampleStateCreateInfo *ms_info,
                      struct brw_wm_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_base_prog_key(devinfo, flags, &key->base);
 
    /* We set this to 0 here and set to the actual value before we call
     * brw_compile_fs.
@@ -448,11 +468,37 @@ populate_wm_prog_key(const struct gen_device_info *devinfo,
 
 static void
 populate_cs_prog_key(const struct gen_device_info *devinfo,
+                     VkPipelineShaderStageCreateFlags flags,
+                     const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT *rss_info,
                      struct brw_cs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_base_prog_key(devinfo, flags, &key->base);
+
+   if (rss_info) {
+      assert(key->base.subgroup_size_type != BRW_SUBGROUP_SIZE_VARYING);
+
+      /* These enum values are expressly chosen to be equal to the subgroup
+       * size that they require.
+       */
+      assert(rss_info->requiredSubgroupSize == 8 ||
+             rss_info->requiredSubgroupSize == 16 ||
+             rss_info->requiredSubgroupSize == 32);
+      key->base.subgroup_size_type = rss_info->requiredSubgroupSize;
+   } else if (flags & VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT) {
+      /* If the client expressly requests full subgroups and they don't
+       * specify a subgroup size, we need to pick one.  If they're requested
+       * varying subgroup sizes, we set it to UNIFORM and let the back-end
+       * compiler pick.  Otherwise, we specify the API value of 32.
+       * Performance will likely be terrible in this case but there's nothing
+       * we can do about that.  The client should have chosen a size.
+       */
+      if (flags & VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT_EXT)
+         key->base.subgroup_size_type = BRW_SUBGROUP_SIZE_UNIFORM;
+      else
+         key->base.subgroup_size_type = BRW_SUBGROUP_SIZE_REQUIRE_32;
+   }
 }
 
 struct anv_pipeline_stage {
@@ -607,7 +653,7 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS_V(nir, nir_lower_wpos_center, pipeline->sample_shading_enable);
-      NIR_PASS_V(nir, anv_nir_lower_input_attachments);
+      NIR_PASS_V(nir, nir_lower_input_attachments, true);
    }
 
    NIR_PASS_V(nir, anv_nir_lower_ycbcr_textures, layout);
@@ -1034,21 +1080,22 @@ anv_pipeline_compile_graphics(struct anv_pipeline *pipeline,
       const struct gen_device_info *devinfo = &pipeline->device->info;
       switch (stage) {
       case MESA_SHADER_VERTEX:
-         populate_vs_prog_key(devinfo, &stages[stage].key.vs);
+         populate_vs_prog_key(devinfo, sinfo->flags, &stages[stage].key.vs);
          break;
       case MESA_SHADER_TESS_CTRL:
-         populate_tcs_prog_key(devinfo,
+         populate_tcs_prog_key(devinfo, sinfo->flags,
                                info->pTessellationState->patchControlPoints,
                                &stages[stage].key.tcs);
          break;
       case MESA_SHADER_TESS_EVAL:
-         populate_tes_prog_key(devinfo, &stages[stage].key.tes);
+         populate_tes_prog_key(devinfo, sinfo->flags, &stages[stage].key.tes);
          break;
       case MESA_SHADER_GEOMETRY:
-         populate_gs_prog_key(devinfo, &stages[stage].key.gs);
+         populate_gs_prog_key(devinfo, sinfo->flags, &stages[stage].key.gs);
          break;
       case MESA_SHADER_FRAGMENT:
-         populate_wm_prog_key(devinfo, pipeline->subpass,
+         populate_wm_prog_key(devinfo, sinfo->flags,
+                              pipeline->subpass,
                               info->pMultisampleState,
                               &stages[stage].key.wm);
          break;
@@ -1342,7 +1389,12 @@ anv_pipeline_compile_cs(struct anv_pipeline *pipeline,
 
    struct anv_shader_bin *bin = NULL;
 
-   populate_cs_prog_key(&pipeline->device->info, &stage.key.cs);
+   const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT *rss_info =
+      vk_find_struct_const(info->stage.pNext,
+                           PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT);
+
+   populate_cs_prog_key(&pipeline->device->info, info->stage.flags,
+                        rss_info, &stage.key.cs);
 
    ANV_FROM_HANDLE(anv_pipeline_layout, layout, info->layout);
 

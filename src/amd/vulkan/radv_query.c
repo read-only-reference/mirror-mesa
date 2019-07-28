@@ -1129,7 +1129,7 @@ VkResult radv_GetQueryPoolResults(
 			if (flags & VK_QUERY_RESULT_WAIT_BIT) {
 				while (*(volatile uint64_t *)src == TIMESTAMP_NOT_READY)
 					;
-				available = *(uint64_t *)src != TIMESTAMP_NOT_READY;
+				available = true;
 			}
 
 			if (!available && !(flags & VK_QUERY_RESULT_PARTIAL_BIT))
@@ -1371,7 +1371,7 @@ void radv_CmdCopyQueryPoolResults(
 			unsigned query = firstQuery + i;
 			uint64_t local_src_va = va  + query * pool->stride;
 
-			MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 19);
+			ASSERTED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 19);
 
 
 			if (flags & VK_QUERY_RESULT_WAIT_BIT) {
@@ -1619,6 +1619,7 @@ static void emit_end_query(struct radv_cmd_buffer *cmd_buffer,
 					   cmd_buffer->device->physical_device->rad_info.chip_class,
 					   radv_cmd_buffer_uses_mec(cmd_buffer),
 					   V_028A90_BOTTOM_OF_PIPE_TS, 0,
+					   EOP_DST_SEL_MEM,
 					   EOP_DATA_SEL_VALUE_32BIT,
 					   avail_va, 1,
 					   cmd_buffer->gfx9_eop_bug_va);
@@ -1744,7 +1745,7 @@ void radv_CmdWriteTimestamp(
 	if (cmd_buffer->state.subpass && cmd_buffer->state.subpass->view_mask)
 		num_queries = util_bitcount(cmd_buffer->state.subpass->view_mask);
 
-	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 28 * num_queries);
+	ASSERTED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 28 * num_queries);
 
 	for (unsigned i = 0; i < num_queries; i++) {
 		switch(pipelineStage) {
@@ -1763,6 +1764,7 @@ void radv_CmdWriteTimestamp(
 						   cmd_buffer->device->physical_device->rad_info.chip_class,
 						   mec,
 						   V_028A90_BOTTOM_OF_PIPE_TS, 0,
+						   EOP_DST_SEL_MEM,
 						   EOP_DATA_SEL_TIMESTAMP,
 						   query_va, 0,
 						   cmd_buffer->gfx9_eop_bug_va);

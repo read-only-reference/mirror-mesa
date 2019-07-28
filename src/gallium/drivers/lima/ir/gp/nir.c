@@ -118,6 +118,8 @@ static int nir_to_gpir_opcodes[nir_num_opcodes] = {
    [nir_op_fmax] = gpir_op_max,
    [nir_op_frcp] = gpir_op_rcp,
    [nir_op_frsq] = gpir_op_rsqrt,
+   [nir_op_fexp2] = gpir_op_exp2,
+   [nir_op_flog2] = gpir_op_log2,
    [nir_op_slt] = gpir_op_lt,
    [nir_op_sge] = gpir_op_ge,
    [nir_op_fcsel] = gpir_op_select,
@@ -422,10 +424,7 @@ bool gpir_compile_nir(struct lima_vs_shader_state *prog, struct nir_shader *nir)
    if (!gpir_post_rsched_lower_prog(comp))
       goto err_out0;
 
-   if (!gpir_value_regalloc_prog(comp))
-      goto err_out0;
-
-   if (!gpir_physical_regalloc_prog(comp))
+   if (!gpir_regalloc_prog(comp))
       goto err_out0;
 
    if (!gpir_schedule_prog(comp))

@@ -134,7 +134,9 @@ files_libnir = files(
   'nir_lower_locals_to_regs.c',
   'nir_lower_idiv.c',
   'nir_lower_indirect_derefs.c',
+  'nir_lower_input_attachments.c',
   'nir_lower_int64.c',
+  'nir_lower_interpolation.c',
   'nir_lower_int_to_float.c',
   'nir_lower_io.c',
   'nir_lower_io_arrays_to_elements.c',
@@ -150,7 +152,6 @@ files_libnir = files(
   'nir_lower_returns.c',
   'nir_lower_scratch.c',
   'nir_lower_subgroups.c',
-  'nir_lower_sincos.c',
   'nir_lower_system_values.c',
   'nir_lower_tex.c',
   'nir_lower_to_source_mods.c',
@@ -268,7 +269,7 @@ if with_tests
       include_directories : [inc_common],
       dependencies : [dep_thread, idep_gtest, idep_nir],
       link_with : libmesa_util,
-    ), 
+    ),
     suite : ['compiler', 'nir'],
   )
 
@@ -298,6 +299,18 @@ if with_tests
     executable(
       'negative_equal',
       files('tests/negative_equal_tests.cpp'),
+      c_args : [c_vis_args, c_msvc_compat_args, no_override_init_args],
+      include_directories : [inc_common],
+      dependencies : [dep_thread, idep_gtest, idep_nir],
+      link_with : libmesa_util,
+    )
+  )
+
+  test(
+    'comparison_pre',
+    executable(
+      'comparison_pre',
+      files('tests/comparison_pre_tests.cpp'),
       c_args : [c_vis_args, c_msvc_compat_args, no_override_init_args],
       include_directories : [inc_common],
       dependencies : [dep_thread, idep_gtest, idep_nir],

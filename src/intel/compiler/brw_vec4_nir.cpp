@@ -407,6 +407,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
    switch (instr->intrinsic) {
 
    case nir_intrinsic_load_input: {
+      assert(nir_dest_bit_size(instr->dest) == 32);
       /* We set EmitNoIndirectInput for VS */
       unsigned load_offset = nir_src_as_uint(instr->src[0]);
 
@@ -417,53 +418,22 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
                     glsl_type::uvec4_type);
       src = retype(src, dest.type);
 
-      bool is_64bit = nir_dest_bit_size(instr->dest) == 64;
-      if (is_64bit) {
-         dst_reg tmp = dst_reg(this, glsl_type::dvec4_type);
-         src.swizzle = BRW_SWIZZLE_XYZW;
-         shuffle_64bit_data(tmp, src, false);
-         emit(MOV(dest, src_reg(tmp)));
-      } else {
-         /* Swizzle source based on component layout qualifier */
-         src.swizzle = BRW_SWZ_COMP_INPUT(nir_intrinsic_component(instr));
-         emit(MOV(dest, src));
-      }
+      /* Swizzle source based on component layout qualifier */
+      src.swizzle = BRW_SWZ_COMP_INPUT(nir_intrinsic_component(instr));
+      emit(MOV(dest, src));
       break;
    }
 
    case nir_intrinsic_store_output: {
+      assert(nir_src_bit_size(instr->src[0]) == 32);
       unsigned store_offset = nir_src_as_uint(instr->src[1]);
       int varying = instr->const_index[0] + store_offset;
-
-      bool is_64bit = nir_src_bit_size(instr->src[0]) == 64;
-      if (is_64bit) {
-         src_reg data;
-         src = get_nir_src(instr->src[0], BRW_REGISTER_TYPE_DF,
-                           instr->num_components);
-         data = src_reg(this, glsl_type::dvec4_type);
-         shuffle_64bit_data(dst_reg(data), src, true);
-         src = retype(data, BRW_REGISTER_TYPE_F);
-      } else {
-         src = get_nir_src(instr->src[0], BRW_REGISTER_TYPE_F,
-                           instr->num_components);
-      }
+      src = get_nir_src(instr->src[0], BRW_REGISTER_TYPE_F,
+                        instr->num_components);
 
       unsigned c = nir_intrinsic_component(instr);
       output_reg[varying][c] = dst_reg(src);
       output_num_components[varying][c] = instr->num_components;
-
-      unsigned num_components = instr->num_components;
-      if (is_64bit)
-         num_components *= 2;
-
-      output_reg[varying][c] = dst_reg(src);
-      output_num_components[varying][c] = MIN2(4, num_components);
-
-      if (is_64bit && num_components > 4) {
-         assert(num_components <= 8);
-         output_reg[varying + 1][c] = byte_offset(dst_reg(src), REG_SIZE);
-         output_num_components[varying + 1][c] = num_components - 4;
-      }
       break;
    }
 
@@ -1032,11 +1002,19 @@ vec4_visitor::emit_conversion_to_double(dst_reg dst, src_reg src,
 static int
 try_immediate_source(const nir_alu_instr *instr, src_reg *op,
                      bool try_src0_also,
-                     MAYBE_UNUSED const gen_device_info *devinfo)
+                     ASSERTED const gen_device_info *devinfo)
 {
    unsigned idx;
 
-   if (nir_src_bit_size(instr->src[1].src) == 32 &&
+   /* MOV should be the only single-source instruction passed to this
+    * function.  Any other unary instruction with a constant source should
+    * have been constant-folded away!
+    */
+   assert(nir_op_infos[instr->op].num_inputs > 1 ||
+          instr->op == nir_op_mov);
+
+   if (instr->op != nir_op_mov &&
+       nir_src_bit_size(instr->src[1].src) == 32 &&
        nir_src_is_const(instr->src[1].src)) {
       idx = 1;
    } else if (try_src0_also &&
@@ -1088,29 +1066,50 @@ try_immediate_source(const nir_alu_instr *instr, src_reg *op,
 
    case BRW_REGISTER_TYPE_F: {
       int first_comp = -1;
-      float f;
+      float f[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+      bool is_scalar = true;
 
       for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++) {
          if (nir_alu_instr_channel_used(instr, idx, i)) {
+            f[i] = nir_src_comp_as_float(instr->src[idx].src,
+                                         instr->src[idx].swizzle[i]);
             if (first_comp < 0) {
                first_comp = i;
-               f = nir_src_comp_as_float(instr->src[idx].src,
-                                         instr->src[idx].swizzle[i]);
-            } else if (f != nir_src_comp_as_float(instr->src[idx].src,
-                                                  instr->src[idx].swizzle[i])) {
-               return -1;
+            } else if (f[first_comp] != f[i]) {
+               is_scalar = false;
             }
          }
       }
 
-      if (op[idx].abs)
-         f = fabs(f);
+      if (is_scalar) {
+         if (op[idx].abs)
+            f[first_comp] = fabs(f[first_comp]);
 
-      if (op[idx].negate)
-         f = -f;
+         if (op[idx].negate)
+            f[first_comp] = -f[first_comp];
 
-      op[idx] = src_reg(brw_imm_f(f));
-      assert(op[idx].type == old_type);
+         op[idx] = src_reg(brw_imm_f(f[first_comp]));
+         assert(op[idx].type == old_type);
+      } else {
+         uint8_t vf_values[4] = { 0, 0, 0, 0 };
+
+         for (unsigned i = 0; i < NIR_MAX_VEC_COMPONENTS; i++) {
+            if (op[idx].abs)
+               f[i] = fabs(f[i]);
+
+            if (op[idx].negate)
+               f[i] = -f[i];
+
+            const int vf = brw_float_to_vf(f[i]);
+            if (vf == -1)
+               return -1;
+
+            vf_values[i] = vf;
+         }
+
+         op[idx] = src_reg(brw_imm_vf4(vf_values[0], vf_values[1],
+                                       vf_values[2], vf_values[3]));
+      }
       break;
    }
 
@@ -1118,16 +1117,60 @@ try_immediate_source(const nir_alu_instr *instr, src_reg *op,
       unreachable("Non-32bit type.");
    }
 
-   /* The instruction format only allows source 1 to be an immediate value.
-    * If the immediate value was source 0, then the sources must be exchanged.
+   /* If the instruction has more than one source, the instruction format only
+    * allows source 1 to be an immediate value.  If the immediate value was
+    * source 0, then the sources must be exchanged.
     */
-   if (idx == 0) {
+   if (idx == 0 && instr->op != nir_op_mov) {
       src_reg tmp = op[0];
       op[0] = op[1];
       op[1] = tmp;
    }
 
    return idx;
+}
+
+void
+vec4_visitor::fix_float_operands(src_reg op[3], nir_alu_instr *instr)
+{
+   bool fixed[3] = { false, false, false };
+
+   for (unsigned i = 0; i < 2; i++) {
+      if (!nir_src_is_const(instr->src[i].src))
+         continue;
+
+      for (unsigned j = i + 1; j < 3; j++) {
+         if (fixed[j])
+            continue;
+
+         if (!nir_src_is_const(instr->src[j].src))
+            continue;
+
+         if (nir_alu_srcs_equal(instr, instr, i, j)) {
+            if (!fixed[i])
+               op[i] = fix_3src_operand(op[i]);
+
+            op[j] = op[i];
+
+            fixed[i] = true;
+            fixed[j] = true;
+         } else if (nir_alu_srcs_negative_equal(instr, instr, i, j)) {
+            if (!fixed[i])
+               op[i] = fix_3src_operand(op[i]);
+
+            op[j] = op[i];
+            op[j].negate = !op[j].negate;
+
+            fixed[i] = true;
+            fixed[j] = true;
+         }
+      }
+   }
+
+   for (unsigned i = 0; i < 3; i++) {
+      if (!fixed[i])
+         op[i] = fix_3src_operand(op[i]);
+   }
 }
 
 void
@@ -1153,6 +1196,7 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
 
    switch (instr->op) {
    case nir_op_mov:
+      try_immediate_source(instr, &op[0], true, devinfo);
       inst = emit(MOV(dst, op[0]));
       inst->saturate = instr->dest.saturate;
       break;
@@ -1916,17 +1960,15 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
          inst = emit(ADD(dst, src_reg(mul_dst), op[2]));
          inst->saturate = instr->dest.saturate;
       } else {
-         op[0] = fix_3src_operand(op[0]);
-         op[1] = fix_3src_operand(op[1]);
-         op[2] = fix_3src_operand(op[2]);
-
+         fix_float_operands(op, instr);
          inst = emit(MAD(dst, op[2], op[1], op[0]));
          inst->saturate = instr->dest.saturate;
       }
       break;
 
    case nir_op_flrp:
-      inst = emit_lrp(dst, op[0], op[1], op[2]);
+      fix_float_operands(op, instr);
+      inst = emit(LRP(dst, op[2], op[1], op[0]));
       inst->saturate = instr->dest.saturate;
       break;
 

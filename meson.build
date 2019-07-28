@@ -25,7 +25,7 @@ project(
     [find_program('python', 'python2', 'python3'), 'bin/meson_get_version.py']
   ).stdout(),
   license : 'MIT',
-  meson_version : '>= 0.45',
+  meson_version : '>= 0.46',
   default_options : ['buildtype=debugoptimized', 'b_ndebug=if-release', 'c_std=c99', 'cpp_std=c++11']
 )
 
@@ -49,14 +49,22 @@ with_vulkan_icd_dir = get_option('vulkan-icd-dir')
 with_tests = get_option('build-tests')
 with_valgrind = get_option('valgrind')
 with_libunwind = get_option('libunwind')
-with_asm = get_option('asm')
 with_glx_read_only_text = get_option('glx-read-only-text')
 with_glx_direct = get_option('glx-direct')
 with_osmesa = get_option('osmesa')
 with_swr_arches = get_option('swr-arches')
 with_tools = get_option('tools')
 if with_tools.contains('all')
-  with_tools = ['etnaviv', 'freedreno', 'glsl', 'intel', 'nir', 'nouveau', 'xvmc']
+  with_tools = [
+    'drm-shim',
+    'etnaviv',
+    'freedreno',
+    'glsl',
+    'intel',
+    'nir',
+    'nouveau',
+    'xvmc',
+  ]
 endif
 
 dri_drivers_path = get_option('dri-drivers-path')
@@ -244,6 +252,7 @@ endif
 
 if host_machine.system() == 'darwin'
   with_dri_platform = 'apple'
+  pre_args += '-DBUILDING_MESA'
 elif ['windows', 'cygwin'].contains(host_machine.system())
   with_dri_platform = 'windows'
 elif system_has_kms_drm
@@ -316,7 +325,7 @@ if with_glx == 'dri'
    endif
 endif
 
-if not (with_dri or with_gallium or with_glx == 'xlib' or with_glx == 'gallium-xlib')
+if not (with_dri or with_gallium or with_glx != 'disabled')
   with_gles1 = false
   with_gles2 = false
   with_opengl = false
@@ -383,9 +392,7 @@ if with_glx != 'disabled'
       error('xlib conflicts with any dri driver')
     endif
   elif with_glx == 'dri'
-    if not with_dri
-      error('dri based GLX requires at least one DRI driver')
-    elif not with_shared_glapi
+    if not with_shared_glapi
       error('dri based GLX requires shared-glapi')
     endif
   endif
@@ -972,68 +979,41 @@ endif
 
 # TODO: shared/static? Is this even worth doing?
 
-# When cross compiling we generally need to turn off the use of assembly,
-# because mesa's assembly relies on building an executable for the host system,
-# and running it to get information about struct sizes. There is at least one
-# case of cross compiling where we can use asm, and that's x86_64 -> x86 when
-# host OS == build OS, since in that case the build machine can run the host's
-# binaries.
-if with_asm and meson.is_cross_build()
-  if build_machine.system() != host_machine.system()
-    # TODO: It may be possible to do this with an exe_wrapper (like wine).
-    message('Cross compiling from one OS to another, disabling assembly.')
-    with_asm = false
-  elif not (build_machine.cpu_family().startswith('x86') and host_machine.cpu_family() == 'x86')
-    # FIXME: Gentoo always sets -m32 for x86_64 -> x86 builds, resulting in an
-    # x86 -> x86 cross compile. We use startswith rather than == to handle this
-    # case.
-    # TODO: There may be other cases where the 64 bit version of the
-    # architecture can run 32 bit binaries (aarch64 and armv7 for example)
-    message('''
-      Cross compiling to different architectures, and the host cannot run
-      the build machine's binaries. Disabling assembly.
-    ''')
-    with_asm = false
-  endif
-endif
-
 with_asm_arch = ''
-if with_asm
-  if host_machine.cpu_family() == 'x86'
-    if system_has_kms_drm or host_machine.system() == 'gnu'
-      with_asm_arch = 'x86'
-      pre_args += ['-DUSE_X86_ASM', '-DUSE_MMX_ASM', '-DUSE_3DNOW_ASM',
-                   '-DUSE_SSE_ASM']
+if host_machine.cpu_family() == 'x86'
+  if system_has_kms_drm or host_machine.system() == 'gnu'
+    with_asm_arch = 'x86'
+    pre_args += ['-DUSE_X86_ASM', '-DUSE_MMX_ASM', '-DUSE_3DNOW_ASM',
+                 '-DUSE_SSE_ASM']
 
-      if with_glx_read_only_text
-         pre_args += ['-DGLX_X86_READONLY_TEXT']
-      endif
+    if with_glx_read_only_text
+      pre_args += ['-DGLX_X86_READONLY_TEXT']
     endif
-  elif host_machine.cpu_family() == 'x86_64'
-    if system_has_kms_drm
-      with_asm_arch = 'x86_64'
-      pre_args += ['-DUSE_X86_64_ASM']
-    endif
-  elif host_machine.cpu_family() == 'arm'
-    if system_has_kms_drm
-      with_asm_arch = 'arm'
-      pre_args += ['-DUSE_ARM_ASM']
-    endif
-  elif host_machine.cpu_family() == 'aarch64'
-    if system_has_kms_drm
-      with_asm_arch = 'aarch64'
-      pre_args += ['-DUSE_AARCH64_ASM']
-    endif
-  elif host_machine.cpu_family() == 'sparc64'
-    if system_has_kms_drm
-      with_asm_arch = 'sparc'
-      pre_args += ['-DUSE_SPARC_ASM']
-    endif
-  elif host_machine.cpu_family().startswith('ppc64') and host_machine.endian() == 'little'
-    if system_has_kms_drm
-      with_asm_arch = 'ppc64le'
-      pre_args += ['-DUSE_PPC64LE_ASM']
-    endif
+  endif
+elif host_machine.cpu_family() == 'x86_64'
+  if system_has_kms_drm
+    with_asm_arch = 'x86_64'
+    pre_args += ['-DUSE_X86_64_ASM']
+  endif
+elif host_machine.cpu_family() == 'arm'
+  if system_has_kms_drm
+    with_asm_arch = 'arm'
+    pre_args += ['-DUSE_ARM_ASM']
+  endif
+elif host_machine.cpu_family() == 'aarch64'
+  if system_has_kms_drm
+    with_asm_arch = 'aarch64'
+    pre_args += ['-DUSE_AARCH64_ASM']
+  endif
+elif host_machine.cpu_family() == 'sparc64'
+  if system_has_kms_drm
+    with_asm_arch = 'sparc'
+    pre_args += ['-DUSE_SPARC_ASM']
+  endif
+elif host_machine.cpu_family().startswith('ppc64') and host_machine.endian() == 'little'
+  if system_has_kms_drm
+    with_asm_arch = 'ppc64le'
+    pre_args += ['-DUSE_PPC64LE_ASM']
   endif
 endif
 
@@ -1050,11 +1030,18 @@ foreach h : ['xlocale.h', 'sys/sysctl.h', 'linux/futex.h', 'endian.h', 'dlfcn.h'
   endif
 endforeach
 
-foreach f : ['strtof', 'mkostemp', 'posix_memalign', 'timespec_get', 'memfd_create']
+foreach f : ['strtof', 'mkostemp', 'posix_memalign', 'timespec_get', 'memfd_create', 'random_r']
   if cc.has_function(f)
     pre_args += '-DHAVE_@0@'.format(f.to_upper())
   endif
 endforeach
+
+if cc.has_header_symbol('errno.h', 'program_invocation_name',
+                        args : '-D_GNU_SOURCE')
+   pre_args += '-DHAVE_PROGRAM_INVOCATION_NAME'
+elif with_tools.contains('intel')
+  error('Intel tools require the program_invocation_name variable')
+endif
 
 # strtod locale support
 if cc.links('''
@@ -1161,7 +1148,7 @@ dep_libdrm_radeon = null_dep
 dep_libdrm_nouveau = null_dep
 dep_libdrm_intel = null_dep
 
-_drm_amdgpu_ver = '2.4.97'
+_drm_amdgpu_ver = '2.4.99'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.66'
 _drm_intel_ver = '2.4.75'
@@ -1510,10 +1497,6 @@ endif
 pkg = import('pkgconfig')
 
 prog_nm = find_program('nm', required : false)
-env_test = environment()
-if prog_nm.found()
-  env_test.set('NM', prog_nm.path())
-endif
 
 # This quirk needs to be applied to sources with functions defined in assembly
 # as GCC LTO drops them. See: https://bugs.freedesktop.org/show_bug.cgi?id=109391

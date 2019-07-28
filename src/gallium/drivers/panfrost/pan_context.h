@@ -31,6 +31,7 @@
 #include <assert.h>
 #include "pan_resource.h"
 #include "pan_job.h"
+#include "pan_blend.h"
 
 #include "pipe/p_compiler.h"
 #include "pipe/p_config.h"
@@ -86,28 +87,12 @@ struct panfrost_fence {
         int fd;
 };
 
-#define PANFROST_MAX_TRANSIENT_ENTRIES 64
-
-struct panfrost_transient_pool {
-        /* Memory blocks in the pool */
-        struct panfrost_memory_entry *entries[PANFROST_MAX_TRANSIENT_ENTRIES];
-
-        /* Number of entries we own */
-        unsigned entry_count;
-
-        /* Current entry that we are writing to, zero-indexed, strictly less than entry_count */
-        unsigned entry_index;
-
-        /* Number of bytes into the current entry we are */
-        off_t entry_offset;
-
-        /* Entry size (all entries must be homogenous) */
-        size_t entry_size;
-};
-
 struct panfrost_context {
         /* Gallium context */
         struct pipe_context base;
+
+        /* Compiler context */
+        struct midgard_screen compiler;
 
         /* Bound job and map of panfrost_job_key to jobs */
         struct panfrost_job *job;
@@ -121,17 +106,10 @@ struct panfrost_context {
 
         struct pipe_framebuffer_state pipe_framebuffer;
 
-        /* The number of concurrent FBOs allowed depends on the number of pools
-         * used; pools are ringed for parallelism opportunities */
-
-        struct panfrost_transient_pool transient_pools[2];
-        int cmdstream_i;
-
         struct panfrost_memory cmdstream_persistent;
         struct panfrost_memory shaders;
         struct panfrost_memory scratchpad;
         struct panfrost_memory tiler_heap;
-        struct panfrost_memory varying_mem;
         struct panfrost_memory tiler_polygon_list;
         struct panfrost_memory tiler_dummy;
         struct panfrost_memory depth_stencil_buffer;
@@ -152,10 +130,13 @@ struct panfrost_context {
         int dirty;
 
         unsigned vertex_count;
+        unsigned instance_count;
+
+        /* If instancing is enabled, vertex count padded for instance; if
+         * it is disabled, just equal to plain vertex count */
+        unsigned padded_count;
 
         union mali_attr attributes[PIPE_MAX_ATTRIBS];
-
-        unsigned varying_height;
 
         struct mali_single_framebuffer vt_framebuffer_sfbd;
         struct bifrost_framebuffer vt_framebuffer_mfbd;
@@ -204,14 +185,7 @@ struct panfrost_context {
         /* True for t6XX, false for t8xx. */
         bool is_t6xx;
 
-        /* If set, we'll require the use of single render-target framebuffer
-         * descriptors (SFBD), for older hardware -- specifically, <T760 hardware, If
-         * false, we'll use the MFBD no matter what. New hardware -does- retain support
-         * for SFBD, and in theory we could flip between them on a per-RT basis, but
-         * there's no real advantage to doing so */
-        bool require_sfbd;
-
-	uint32_t out_sync;
+        uint32_t out_sync;
 };
 
 /* Corresponds to the CSO */
@@ -221,21 +195,6 @@ struct panfrost_rasterizer {
 
         /* Bitmask of front face, etc */
         unsigned tiler_gl_enables;
-};
-
-struct panfrost_blend_state {
-        struct pipe_blend_state base;
-
-        /* Whether a blend shader is in use */
-        bool has_blend_shader;
-
-        /* Compiled fixed function command */
-        struct mali_blend_equation equation;
-        float constant;
-
-        /* Compiled blend shader */
-        mali_ptr blend_shader;
-        int blend_work_count;
 };
 
 /* Variants bundle together to form the backing CSO, bundling multiple
@@ -250,7 +209,6 @@ struct panfrost_shader_state {
         /* Compiled, mapped descriptor, ready for the hardware */
         bool compiled;
         struct mali_shader_meta *tripipe;
-        mali_ptr tripipe_gpu;
 
         /* Non-descript information */
         int uniform_count;
@@ -269,6 +227,9 @@ struct panfrost_shader_state {
 
         uint16_t point_sprite_mask;
         unsigned point_sprite_upper_left : 1;
+
+        /* Should we enable helper invocations */
+        bool helper_invocations;
 };
 
 /* A collection of varyings (the CSO) */
@@ -299,6 +260,7 @@ struct panfrost_sampler_state {
 struct panfrost_sampler_view {
         struct pipe_sampler_view base;
         struct mali_texture_descriptor hw;
+        bool manual_stride;
 };
 
 static inline struct panfrost_context *
@@ -342,5 +304,49 @@ panfrost_fragment_job(struct panfrost_context *ctx, bool has_draws);
 
 void
 panfrost_shader_compile(struct panfrost_context *ctx, struct mali_shader_meta *meta, const char *src, int type, struct panfrost_shader_state *state);
+
+void
+panfrost_pack_work_groups_compute(
+        struct mali_vertex_tiler_prefix *out,
+        unsigned num_x,
+        unsigned num_y,
+        unsigned num_z,
+        unsigned size_x,
+        unsigned size_y,
+        unsigned size_z);
+
+void
+panfrost_pack_work_groups_fused(
+        struct mali_vertex_tiler_prefix *vertex,
+        struct mali_vertex_tiler_prefix *tiler,
+        unsigned num_x,
+        unsigned num_y,
+        unsigned num_z,
+        unsigned size_x,
+        unsigned size_y,
+        unsigned size_z);
+
+/* Instancing */
+
+mali_ptr
+panfrost_vertex_buffer_address(struct panfrost_context *ctx, unsigned i);
+
+void
+panfrost_emit_vertex_data(struct panfrost_job *batch);
+
+struct pan_shift_odd {
+        unsigned shift;
+        unsigned odd;
+};
+
+struct pan_shift_odd
+panfrost_padded_vertex_count(
+        unsigned vertex_count,
+        bool primitive_pot);
+
+
+unsigned
+pan_expand_shift_odd(struct pan_shift_odd o);
+
 
 #endif

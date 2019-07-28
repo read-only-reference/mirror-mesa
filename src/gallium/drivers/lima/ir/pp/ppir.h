@@ -83,10 +83,6 @@ typedef enum {
    ppir_op_max,
    ppir_op_trunc,
 
-   ppir_op_dot2,
-   ppir_op_dot3,
-   ppir_op_dot4,
-
    ppir_op_and,
    ppir_op_or,
    ppir_op_xor,
@@ -103,6 +99,7 @@ typedef enum {
    ppir_op_load_varying,
    ppir_op_load_coords,
    ppir_op_load_fragcoord,
+   ppir_op_load_pointcoord,
    ppir_op_load_texture,
    ppir_op_load_temp,
 
@@ -257,7 +254,7 @@ typedef struct {
 typedef struct {
    ppir_node node;
    ppir_dest dest;
-   ppir_src src_coords;
+   ppir_src src_coords; /* not to be used after lowering */
    int sampler;
    int sampler_dim;
 } ppir_load_texture_node;
@@ -301,6 +298,7 @@ typedef struct ppir_instr {
    int parent_index;
    bool scheduled;
    int offset;
+   int encode_size;
 } ppir_instr;
 
 typedef struct ppir_block {

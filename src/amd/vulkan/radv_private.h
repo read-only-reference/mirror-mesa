@@ -60,9 +60,10 @@
 #include "ac_surface.h"
 #include "ac_llvm_build.h"
 #include "ac_llvm_util.h"
+#include "radv_constants.h"
 #include "radv_descriptor_set.h"
 #include "radv_extensions.h"
-#include "radv_cs.h"
+#include "sid.h"
 
 #include <llvm-c/TargetMachine.h>
 
@@ -83,39 +84,16 @@ typedef uint32_t xcb_window_t;
 #include "wsi_common.h"
 #include "wsi_common_display.h"
 
-#define ATI_VENDOR_ID 0x1002
+struct gfx10_format {
+    unsigned img_format:9;
 
-#define MAX_VBS         32
-#define MAX_VERTEX_ATTRIBS 32
-#define MAX_RTS          8
-#define MAX_VIEWPORTS   16
-#define MAX_SCISSORS    16
-#define MAX_DISCARD_RECTANGLES 4
-#define MAX_SAMPLE_LOCATIONS 32
-#define MAX_PUSH_CONSTANTS_SIZE 128
-#define MAX_PUSH_DESCRIPTORS 32
-#define MAX_DYNAMIC_UNIFORM_BUFFERS 16
-#define MAX_DYNAMIC_STORAGE_BUFFERS 8
-#define MAX_DYNAMIC_BUFFERS (MAX_DYNAMIC_UNIFORM_BUFFERS + MAX_DYNAMIC_STORAGE_BUFFERS)
-#define MAX_SAMPLES_LOG2 4
-#define NUM_META_FS_KEYS 12
-#define RADV_MAX_DRM_DEVICES 8
-#define MAX_VIEWS        8
-#define MAX_SO_STREAMS 4
-#define MAX_SO_BUFFERS 4
-#define MAX_SO_OUTPUTS 64
-#define MAX_INLINE_UNIFORM_BLOCK_SIZE (4ull * 1024 * 1024)
-#define MAX_INLINE_UNIFORM_BLOCK_COUNT 64
+    /* Various formats are only supported with workarounds for vertex fetch,
+     * and some 32_32_32 formats are supported natively, but only for buffers
+     * (possibly with some image support, actually, but no filtering). */
+    bool buffers_only:1;
+};
 
-#define NUM_DEPTH_CLEAR_PIPELINES 3
-
-/*
- * This is the point we switch from using CP to compute shader
- * for certain buffer operations.
- */
-#define RADV_BUFFER_OPS_CS_THRESHOLD 4096
-
-#define RADV_BUFFER_UPDATE_THRESHOLD 1024
+#include "gfx10_format_table.h"
 
 enum radv_mem_heap {
 	RADV_MEM_HEAP_VRAM,
@@ -306,6 +284,7 @@ struct radv_physical_device {
 	bool has_clear_state;
 	bool cpdma_prefetch_writes_memory;
 	bool has_scissor_bug;
+	bool has_tc_compat_zrange_bug;
 
 	bool has_out_of_order_rast;
 	bool out_of_order_rast_allowed;
@@ -321,6 +300,9 @@ struct radv_physical_device {
 
 	/* Whether DISABLE_CONSTANT_ENCODE_REG is supported. */
 	bool has_dcc_constant_encode;
+
+	/* Number of threads per wave. */
+	uint8_t cs_wave_size;
 
 	/* This is the drivers on-disk cache used as a fallback as opposed to
 	 * the pipeline cache defined by apps.
@@ -397,6 +379,9 @@ struct radv_pipeline_key {
 	uint32_t optimisations_disabled : 1;
 };
 
+struct radv_shader_binary;
+struct radv_shader_variant;
+
 void
 radv_pipeline_cache_init(struct radv_pipeline_cache *cache,
 			 struct radv_device *device);
@@ -405,8 +390,6 @@ radv_pipeline_cache_finish(struct radv_pipeline_cache *cache);
 bool
 radv_pipeline_cache_load(struct radv_pipeline_cache *cache,
 			 const void *data, size_t size);
-
-struct radv_shader_variant;
 
 bool
 radv_create_shader_variants_from_pipeline_cache(struct radv_device *device,
@@ -420,8 +403,7 @@ radv_pipeline_cache_insert_shaders(struct radv_device *device,
 				   struct radv_pipeline_cache *cache,
 				   const unsigned char *sha1,
 				   struct radv_shader_variant **variants,
-				   const void *const *codes,
-				   const unsigned *code_sizes);
+				   struct radv_shader_binary *const *binaries);
 
 enum radv_blit_ds_layout {
 	RADV_BLIT_DS_LAYOUT_TILE_ENABLE,
@@ -1233,7 +1215,7 @@ void si_cs_emit_write_event_eop(struct radeon_cmdbuf *cs,
 				enum chip_class chip_class,
 				bool is_mec,
 				unsigned event, unsigned event_flags,
-				unsigned data_sel,
+				unsigned dst_sel, unsigned data_sel,
 				uint64_t va,
 				uint32_t new_fence,
 				uint64_t gfx9_eop_bug_va);
@@ -1379,6 +1361,8 @@ struct radv_shader_module;
 #define RADV_HASH_SHADER_IS_GEOM_COPY_SHADER (1 << 0)
 #define RADV_HASH_SHADER_SISCHED             (1 << 1)
 #define RADV_HASH_SHADER_UNSAFE_MATH         (1 << 2)
+#define RADV_HASH_SHADER_NO_NGG              (1 << 3)
+
 void
 radv_hash_shaders(unsigned char *hash,
 		  const VkPipelineShaderStageCreateInfo **stages,
@@ -1438,6 +1422,11 @@ struct radv_ia_multi_vgt_param_helpers {
 	bool partial_vs_wave;
 };
 
+struct radv_binning_state {
+	uint32_t pa_sc_binner_cntl_0;
+	uint32_t db_dfsm_control;
+};
+
 #define SI_GS_PER_ES 128
 
 struct radv_pipeline {
@@ -1464,6 +1453,7 @@ struct radv_pipeline {
 	union {
 		struct {
 			struct radv_multisample_state ms;
+			struct radv_binning_state binning;
 			uint32_t spi_baryc_cntl;
 			bool prim_restart_enable;
 			unsigned esgs_ring_size;
@@ -1498,6 +1488,10 @@ static inline bool radv_pipeline_has_tess(const struct radv_pipeline *pipeline)
 {
 	return pipeline->shaders[MESA_SHADER_TESS_CTRL] ? true : false;
 }
+
+bool radv_pipeline_has_ngg(const struct radv_pipeline *pipeline);
+
+bool radv_pipeline_has_gs_copy_shader(const struct radv_pipeline *pipeline);
 
 struct radv_userdata_info *radv_lookup_user_sgpr(struct radv_pipeline *pipeline,
 						 gl_shader_stage stage,
@@ -1926,7 +1920,8 @@ struct radv_color_buffer_info {
 	uint32_t cb_color_view;
 	uint32_t cb_color_info;
 	uint32_t cb_color_attrib;
-	uint32_t cb_color_attrib2;
+	uint32_t cb_color_attrib2; /* GFX9 and later */
+	uint32_t cb_color_attrib3; /* GFX10 and later */
 	uint32_t cb_dcc_control;
 	uint32_t cb_color_cmask_slice;
 	uint32_t cb_color_fmask_slice;
@@ -1950,8 +1945,8 @@ struct radv_ds_buffer_info {
 	uint32_t db_depth_slice;
 	uint32_t db_htile_surface;
 	uint32_t pa_su_poly_offset_db_fmt_cntl;
-	uint32_t db_z_info2;
-	uint32_t db_stencil_info2;
+	uint32_t db_z_info2; /* GFX9 only */
+	uint32_t db_stencil_info2; /* GFX9 only */
 	float offset_scale;
 };
 
@@ -2107,20 +2102,19 @@ struct radv_nir_compiler_options;
 
 void radv_compile_gs_copy_shader(struct ac_llvm_compiler *ac_llvm,
 				 struct nir_shader *geom_shader,
-				 struct ac_shader_binary *binary,
-				 struct ac_shader_config *config,
+				 struct radv_shader_binary **rbinary,
 				 struct radv_shader_variant_info *shader_info,
 				 const struct radv_nir_compiler_options *option);
 
 void radv_compile_nir_shader(struct ac_llvm_compiler *ac_llvm,
-			     struct ac_shader_binary *binary,
-			     struct ac_shader_config *config,
+			     struct radv_shader_binary **rbinary,
 			     struct radv_shader_variant_info *shader_info,
 			     struct nir_shader *const *nir,
 			     int nir_count,
 			     const struct radv_nir_compiler_options *options);
 
 unsigned radv_nir_get_max_workgroup_size(enum chip_class chip_class,
+					 gl_shader_stage stage,
 					 const struct nir_shader *nir);
 
 /* radv_shader_info.h */
@@ -2135,6 +2129,30 @@ void radv_nir_shader_info_init(struct radv_shader_info *info);
 struct radeon_winsys_sem;
 
 uint64_t radv_get_current_time(void);
+
+static inline uint32_t
+si_conv_gl_prim_to_vertices(unsigned gl_prim)
+{
+	switch (gl_prim) {
+	case 0: /* GL_POINTS */
+		return 1;
+	case 1: /* GL_LINES */
+	case 3: /* GL_LINE_STRIP */
+		return 2;
+	case 4: /* GL_TRIANGLES */
+	case 5: /* GL_TRIANGLE_STRIP */
+		return 3;
+	case 0xA: /* GL_LINE_STRIP_ADJACENCY_ARB */
+		return 4;
+	case 0xc: /* GL_TRIANGLES_ADJACENCY_ARB */
+		return 6;
+	case 7: /* GL_QUADS */
+		return V_028A6C_OUTPRIM_TYPE_TRISTRIP;
+	default:
+		assert(0);
+		return 0;
+	}
+}
 
 #define RADV_DEFINE_HANDLE_CASTS(__radv_type, __VkType)		\
 								\

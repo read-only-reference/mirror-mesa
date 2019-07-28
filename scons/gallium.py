@@ -330,7 +330,7 @@ def generate(env):
         '__STDC_CONSTANT_MACROS',
         '__STDC_FORMAT_MACROS',
         '__STDC_LIMIT_MACROS',
-        'HAVE_NO_AUTOCONF',
+        'HAVE_SCONS',
     ]
     if env['build'] in ('debug', 'checked'):
         cppdefines += ['DEBUG']
@@ -352,6 +352,7 @@ def generate(env):
                 '_DARWIN_C_SOURCE',
                 'GLX_USE_APPLEGL',
                 'GLX_DIRECT_RENDERING',
+                'BUILDING_MESA',
             ]
         else:
             cppdefines += [
@@ -367,6 +368,9 @@ def generate(env):
 
         if check_functions(env, ['strtod_l', 'strtof_l']):
             cppdefines += ['HAVE_STRTOD_L']
+
+        if check_functions(env, ['random_r']):
+            cppdefines += ['HAVE_RANDOM_R']
 
         if check_functions(env, ['timespec_get']):
             cppdefines += ['HAVE_TIMESPEC_GET']

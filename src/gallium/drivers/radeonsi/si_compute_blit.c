@@ -117,13 +117,14 @@ static void si_compute_do_clear_or_copy(struct si_context *sctx,
 					   SI_COMPUTE_CLEAR_DW_PER_THREAD;
 	unsigned instructions_per_thread = MAX2(1, dwords_per_thread / 4);
 	unsigned dwords_per_instruction = dwords_per_thread / instructions_per_thread;
-	unsigned dwords_per_wave = dwords_per_thread * 64;
+	unsigned wave_size = sctx->screen->compute_wave_size;
+	unsigned dwords_per_wave = dwords_per_thread * wave_size;
 
 	unsigned num_dwords = size / 4;
 	unsigned num_instructions = DIV_ROUND_UP(num_dwords, dwords_per_instruction);
 
 	struct pipe_grid_info info = {};
-	info.block[0] = MIN2(64, num_instructions);
+	info.block[0] = MIN2(wave_size, num_instructions);
 	info.block[1] = 1;
 	info.block[2] = 1;
 	info.grid[0] = DIV_ROUND_UP(num_dwords, dwords_per_wave);
@@ -192,7 +193,7 @@ void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst,
 	if (!size)
 		return;
 
-	unsigned clear_alignment = MIN2(clear_value_size, 4);
+	ASSERTED unsigned clear_alignment = MIN2(clear_value_size, 4);
 
 	assert(clear_value_size != 3 && clear_value_size != 6); /* 12 is allowed. */
 	assert(offset % clear_alignment == 0);
@@ -434,7 +435,7 @@ void si_retile_dcc(struct si_context *sctx, struct si_texture *tex)
 		       SI_CONTEXT_CS_PARTIAL_FLUSH |
 		       si_get_flush_flags(sctx, SI_COHERENCY_CB_META, L2_LRU) |
 		       si_get_flush_flags(sctx, SI_COHERENCY_SHADER, L2_LRU);
-	si_emit_cache_flush(sctx);
+	sctx->emit_cache_flush(sctx);
 
 	/* Save states. */
 	void *saved_cs = sctx->cs_shader_state.program;

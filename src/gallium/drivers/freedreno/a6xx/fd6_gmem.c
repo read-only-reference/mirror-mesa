@@ -420,7 +420,7 @@ emit_binning_pass(struct fd_batch *batch)
 
 	emit_marker6(ring, 7);
 	OUT_PKT7(ring, CP_SET_MARKER, 1);
-	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(RM6_BINNING));
+	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(RM6_BINNING));
 	emit_marker6(ring, 7);
 
 	OUT_PKT7(ring, CP_SET_VISIBILITY_OVERRIDE, 1);
@@ -606,7 +606,7 @@ fd6_emit_tile_prep(struct fd_batch *batch, struct fd_tile *tile)
 
 	emit_marker6(ring, 7);
 	OUT_PKT7(ring, CP_SET_MARKER, 1);
-	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(RM6_GMEM) | 0x10);
+	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(RM6_GMEM) | 0x10);
 	emit_marker6(ring, 7);
 
 	uint32_t x1 = tile->xoff;
@@ -679,17 +679,10 @@ set_blit_scissor(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	struct pipe_scissor_state blit_scissor;
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 
-	blit_scissor.minx = batch->max_scissor.minx;
-	blit_scissor.miny = batch->max_scissor.miny;
-	blit_scissor.maxx = MIN2(pfb->width, batch->max_scissor.maxx);
-	blit_scissor.maxy = MIN2(pfb->height, batch->max_scissor.maxy);
-
-	/* NOTE: blob switches to CP_BLIT instead of CP_EVENT_WRITE:BLIT for
-	 * small render targets.  But since we align pitch to binw I think
-	 * we can get away avoiding GPU hangs a simpler way, by just rounding
-	 * up the blit scissor:
-	 */
-	blit_scissor.maxx = MAX2(blit_scissor.maxx, batch->ctx->screen->gmem_alignw);
+	blit_scissor.minx = 0;
+	blit_scissor.miny = 0;
+	blit_scissor.maxx = align(pfb->width, batch->ctx->screen->gmem_alignw);
+	blit_scissor.maxy = align(pfb->height, batch->ctx->screen->gmem_alignh);
 
 	OUT_PKT4(ring, REG_A6XX_RB_BLIT_SCISSOR_TL, 2);
 	OUT_RING(ring,
@@ -1109,7 +1102,7 @@ fd6_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 
 	if (use_hw_binning(batch)) {
 		OUT_PKT7(ring, CP_SET_MARKER, 1);
-		OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(0x5) | 0x10);
+		OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(0x5) | 0x10);
 	}
 
 	OUT_PKT7(ring, CP_SET_DRAW_STATE, 3);
@@ -1124,13 +1117,13 @@ fd6_emit_tile_gmem2mem(struct fd_batch *batch, struct fd_tile *tile)
 
 	emit_marker6(ring, 7);
 	OUT_PKT7(ring, CP_SET_MARKER, 1);
-	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(RM6_RESOLVE) | 0x10);
+	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(RM6_RESOLVE) | 0x10);
 	emit_marker6(ring, 7);
 
 	fd6_emit_ib(ring, batch->tile_fini);
 
 	OUT_PKT7(ring, CP_SET_MARKER, 1);
-	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(0x7));
+	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(0x7));
 }
 
 static void
@@ -1158,7 +1151,7 @@ fd6_emit_sysmem_prep(struct fd_batch *batch)
 
 	emit_marker6(ring, 7);
 	OUT_PKT7(ring, CP_SET_MARKER, 1);
-	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(RM6_BYPASS) | 0x10); /* | 0x10 ? */
+	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(RM6_BYPASS) | 0x10); /* | 0x10 ? */
 	emit_marker6(ring, 7);
 
 	OUT_PKT7(ring, CP_SKIP_IB2_ENABLE_GLOBAL, 1);

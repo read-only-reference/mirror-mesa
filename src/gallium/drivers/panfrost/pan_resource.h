@@ -57,36 +57,6 @@ struct panfrost_slice {
         bool initialized;
 };
 
-struct panfrost_bo {
-        struct pipe_reference reference;
-
-        /* Description of the mip levels */
-        struct panfrost_slice slices[MAX_MIP_LEVELS];
-
-        /* Mapping for the entire object (all levels) */
-        uint8_t *cpu;
-
-        /* GPU address for the object */
-        mali_ptr gpu;
-
-        /* Size of all entire trees */
-        size_t size;
-
-        /* Distance from tree to tree */
-        unsigned cubemap_stride;
-
-        /* Set if this bo was imported rather than allocated */
-        bool imported;
-
-        /* Internal layout (tiled?) */
-        enum panfrost_memory_layout layout;
-
-        /* Is transaciton elimination enabled? */
-        bool checksummed;
-
-        int gem_handle;
-};
-
 void
 panfrost_bo_reference(struct panfrost_bo *bo);
 
@@ -102,12 +72,24 @@ struct panfrost_resource {
         struct panfrost_resource *separate_stencil;
 
         struct util_range valid_buffer_range;
+
+        /* Description of the mip levels */
+        struct panfrost_slice slices[MAX_MIP_LEVELS];
+
+        /* Distance from tree to tree */
+        unsigned cubemap_stride;
+
+        /* Internal layout (tiled?) */
+        enum panfrost_memory_layout layout;
+
+        /* Is transaciton elimination enabled? */
+        bool checksummed;
 };
 
 static inline struct panfrost_resource *
 pan_resource(struct pipe_resource *p)
 {
-   return (struct panfrost_resource *)p;
+        return (struct panfrost_resource *)p;
 }
 
 struct panfrost_gtransfer {
@@ -118,18 +100,24 @@ struct panfrost_gtransfer {
 static inline struct panfrost_gtransfer *
 pan_transfer(struct pipe_transfer *p)
 {
-   return (struct panfrost_gtransfer *)p;
+        return (struct panfrost_gtransfer *)p;
 }
 
 mali_ptr
 panfrost_get_texture_address(
-                struct panfrost_resource *rsrc,
-                unsigned level, unsigned face);
+        struct panfrost_resource *rsrc,
+        unsigned level, unsigned face);
 
 void panfrost_resource_screen_init(struct panfrost_screen *screen);
-void panfrost_resource_screen_deinit(struct panfrost_screen *screen);
 
 void panfrost_resource_context_init(struct pipe_context *pctx);
+
+void
+panfrost_resource_hint_layout(
+                struct panfrost_screen *screen,
+                struct panfrost_resource *rsrc,
+                enum panfrost_memory_layout layout,
+                signed weight);
 
 /* AFBC */
 

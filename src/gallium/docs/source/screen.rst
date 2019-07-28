@@ -22,6 +22,8 @@ or integer values, use :ref:`get_param`.
 
 The integer capabilities:
 
+* ``PIPE_CAP_GRAPHICS``: Whether graphics is supported. If not, contexts can
+  only be created with PIPE_CONTEXT_COMPUTE_ONLY.
 * ``PIPE_CAP_NPOT_TEXTURES``: Whether :term:`NPOT` textures may have repeat modes,
   normalized coordinates, and mipmaps.
 * ``PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS``: How many dual-source blend RTs are support.
@@ -45,8 +47,6 @@ The integer capabilities:
   with clamp or clamp-to-border wrap modes.
 * ``PIPE_CAP_BLEND_EQUATION_SEPARATE``: Whether alpha blend equations may be different
   from color blend equations, in :ref:`Blend` state.
-* ``PIPE_CAP_SM3``: Whether the vertex shader and fragment shader support equivalent
-  opcodes to the Shader Model 3 specification. XXX oh god this is horrible
 * ``PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS``: The maximum number of stream buffers.
 * ``PIPE_CAP_PRIMITIVE_RESTART``: Whether primitive restart is supported.
 * ``PIPE_CAP_INDEP_BLEND_ENABLE``: Whether per-rendertarget blend enabling and channel
@@ -305,6 +305,8 @@ The integer capabilities:
   TGSI opcodes are supported.
 * ``PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL``: If state trackers should use
   a system value for the POSITION fragment shader input.
+* ``PIPE_CAP_TGSI_FS_POINT_IS_SYSVAL``: If state trackers should use
+  a system value for the POINT fragment shader input.
 * ``PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL``: If state trackers should use
   a system value for the FACE fragment shader input.
   Also, the FACE system value is integer, not float.
@@ -534,6 +536,14 @@ The integer capabilities:
 * ``PIPE_CAP_ATOMIC_FLOAT_MINMAX``: Atomic float point minimum,
   maximum, exchange and compare-and-swap support to buffer and shared variables.
 * ``PIPE_CAP_TGSI_DIV``: Whether opcode DIV is supported
+* ``PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD``: Whether texture lookups with
+  explicit LOD is supported in the fragment shader.
+* ``PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES``: True if the driver supports
+  derivatives in fragment shaders.
+* ``PIPE_CAP_VERTEX_SHADER_SATURATE``: True if the driver supports saturate
+  modifiers in the vertex shader.
+* ``PIPE_CAP_TEXTURE_SHADOW_LOD``: True if the driver supports shadow sampler
+  types with texture functions having interaction with LOD of texture lookup.
 
 .. _pipe_capf:
 
