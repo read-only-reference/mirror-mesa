@@ -67,7 +67,9 @@ The integer capabilities:
 * ``PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER``: Whether the TGSI
   property FS_COORD_PIXEL_CENTER with value INTEGER is supported.
 * ``PIPE_CAP_DEPTH_CLIP_DISABLE``: Whether the driver is capable of disabling
-  depth clipping (through pipe_rasterizer_state)
+  depth clipping (=1) (through pipe_rasterizer_state) or supports lowering
+  depth_clamp in the client shader code (=2), for this the driver must
+  currently use TGSI.
 * ``PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE``: Whether the driver is capable of
   disabling depth clipping (through pipe_rasterizer_state) separately for
   the near and far plane. If not, depth_clip_near and depth_clip_far will be
@@ -526,8 +528,8 @@ The integer capabilities:
   execution. 0 = throttling is disabled.
 * ``PIPE_CAP_DMABUF``: Whether Linux DMABUF handles are supported by
   resource_from_handle and resource_get_handle.
-* ``PIPE_CAP_PREFER_COMPUTE_BLIT_FOR_MULTIMEDIA``: Whether VDPAU, VAAPI, and
-  OpenMAX should use a compute-based blit instead of pipe_context::blit.
+* ``PIPE_CAP_PREFER_COMPUTE_FOR_MULTIMEDIA``: Whether VDPAU, VAAPI, and
+  OpenMAX should use a compute-based blit instead of pipe_context::blit and compute pipeline for compositing images.
 * ``PIPE_CAP_FRAGMENT_SHADER_INTERLOCK``: True if fragment shader interlock
   functionality is supported.
 * ``PIPE_CAP_CS_DERIVED_SYSTEM_VALUES_SUPPORTED``: True if driver handles
@@ -544,6 +546,8 @@ The integer capabilities:
   modifiers in the vertex shader.
 * ``PIPE_CAP_TEXTURE_SHADOW_LOD``: True if the driver supports shadow sampler
   types with texture functions having interaction with LOD of texture lookup.
+* ``PIPE_CAP_SHADER_SAMPLES_IDENTICAL``: True if the driver supports a shader query to tell whether all samples of a multisampled surface are definitely identical.
+* ``PIPE_CAP_TGSI_ATOMINC_WRAP``: Atomic increment/decrement + wrap around are supported.
 
 .. _pipe_capf:
 

@@ -74,7 +74,7 @@ upload_blorp_shader(struct blorp_batch *batch,
                                        key, key_size, kernel, kernel_size,
                                        NULL, 0,
                                        prog_data, prog_data_size,
-                                       NULL, &bind_map);
+                                       NULL, 0, NULL, &bind_map);
 
    if (!bin)
       return false;
@@ -116,6 +116,9 @@ anv_device_init_blorp(struct anv_device *device)
       break;
    case 11:
       device->blorp.exec = gen11_blorp_exec;
+      break;
+   case 12:
+      device->blorp.exec = gen12_blorp_exec;
       break;
    default:
       unreachable("Unknown hardware generation");

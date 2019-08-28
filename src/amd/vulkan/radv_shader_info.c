@@ -284,8 +284,10 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
 	case nir_intrinsic_image_deref_load:
 	case nir_intrinsic_image_deref_store:
 	case nir_intrinsic_image_deref_atomic_add:
-	case nir_intrinsic_image_deref_atomic_min:
-	case nir_intrinsic_image_deref_atomic_max:
+	case nir_intrinsic_image_deref_atomic_imin:
+	case nir_intrinsic_image_deref_atomic_umin:
+	case nir_intrinsic_image_deref_atomic_imax:
+	case nir_intrinsic_image_deref_atomic_umax:
 	case nir_intrinsic_image_deref_atomic_and:
 	case nir_intrinsic_image_deref_atomic_or:
 	case nir_intrinsic_image_deref_atomic_xor:
@@ -297,8 +299,10 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
 
 		if (instr->intrinsic == nir_intrinsic_image_deref_store ||
 		    instr->intrinsic == nir_intrinsic_image_deref_atomic_add ||
-		    instr->intrinsic == nir_intrinsic_image_deref_atomic_min ||
-		    instr->intrinsic == nir_intrinsic_image_deref_atomic_max ||
+		    instr->intrinsic == nir_intrinsic_image_deref_atomic_imin ||
+		    instr->intrinsic == nir_intrinsic_image_deref_atomic_umin ||
+		    instr->intrinsic == nir_intrinsic_image_deref_atomic_imax ||
+		    instr->intrinsic == nir_intrinsic_image_deref_atomic_umax ||
 		    instr->intrinsic == nir_intrinsic_image_deref_atomic_and ||
 		    instr->intrinsic == nir_intrinsic_image_deref_atomic_or ||
 		    instr->intrinsic == nir_intrinsic_image_deref_atomic_xor ||
@@ -390,6 +394,28 @@ gather_info_input_decl_vs(const nir_shader *nir, const nir_variable *var,
 }
 
 static void
+mark_16bit_ps_input(struct radv_shader_info *info, const struct glsl_type *type,
+		    int location)
+{
+	if (glsl_type_is_scalar(type) || glsl_type_is_vector(type) || glsl_type_is_matrix(type)) {
+		unsigned attrib_count = glsl_count_attribute_slots(type, false);
+		if (glsl_type_is_16bit(type)) {
+			info->ps.float16_shaded_mask |= ((1ull << attrib_count) - 1) << location;
+		}
+	} else if (glsl_type_is_array(type)) {
+		unsigned stride = glsl_count_attribute_slots(glsl_get_array_element(type), false);
+		for (unsigned i = 0; i < glsl_get_length(type); ++i) {
+			mark_16bit_ps_input(info, glsl_get_array_element(type), location + i * stride);
+		}
+	} else {
+		assert(glsl_type_is_struct_or_ifc(type));
+		for (unsigned i = 0; i < glsl_get_length(type); i++) {
+			mark_16bit_ps_input(info, glsl_get_struct_field(type, i), location);
+			location += glsl_count_attribute_slots(glsl_get_struct_field(type, i), false);
+		}
+	}
+}
+static void
 gather_info_input_decl_ps(const nir_shader *nir, const nir_variable *var,
 			  struct radv_shader_info *info)
 {
@@ -419,6 +445,22 @@ gather_info_input_decl_ps(const nir_shader *nir, const nir_variable *var,
 		if (var->data.sample)
 			info->ps.force_persample = true;
 	}
+
+	if (var->data.compact) {
+		unsigned component_count = var->data.location_frac +
+		                           glsl_get_length(var->type);
+		attrib_count = (component_count + 3) / 4;
+	} else {
+		mark_16bit_ps_input(info, var->type, var->data.driver_location);
+	}
+
+	uint64_t mask = ((1ull << attrib_count) - 1);
+
+	if (var->data.interpolation == INTERP_MODE_FLAT)
+		info->ps.flat_shaded_mask |= mask << var->data.driver_location;
+
+	if (var->data.location >= VARYING_SLOT_VAR0)
+		info->ps.input_mask |= mask << (var->data.location - VARYING_SLOT_VAR0);
 }
 
 static void
@@ -593,4 +635,7 @@ radv_nir_shader_info_pass(const struct nir_shader *nir,
 			break;
 		}
 	}
+
+	if (nir->info.stage == MESA_SHADER_FRAGMENT)
+		info->ps.num_interp = nir->num_inputs;
 }

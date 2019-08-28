@@ -123,6 +123,9 @@ struct st_fp_variant_key
    /** needed for ATI_fragment_shader */
    GLuint fog:2;
 
+   /** for ARB_depth_clamp */
+   GLuint lower_depth_clamp:1;
+
    /** needed for ATI_fragment_shader */
    char texture_targets[MAX_NUM_FRAGMENT_REGISTERS_ATI];
 
@@ -179,10 +182,14 @@ struct st_fragment_program
 struct st_vp_variant_key
 {
    struct st_context *st;          /**< variants are per-context */
-   boolean passthrough_edgeflags;
+   bool passthrough_edgeflags;
 
    /** for ARB_color_buffer_float */
-   boolean clamp_color;
+   bool clamp_color;
+
+   /** both for ARB_depth_clamp */
+   bool lower_depth_clamp;
+   bool clip_negative_one_to_one;
 };
 
 
@@ -262,6 +269,11 @@ struct st_basic_variant_key
 
    /** For compat profile */
    bool clamp_color;
+
+   /** both for ARB_depth_clamp */
+   bool lower_depth_clamp;
+   bool clip_negative_one_to_one;
+
 };
 
 

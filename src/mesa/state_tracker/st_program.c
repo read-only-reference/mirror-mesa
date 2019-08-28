@@ -55,6 +55,7 @@
 #include "st_cb_bitmap.h"
 #include "st_cb_drawpixels.h"
 #include "st_context.h"
+#include "st_tgsi_lower_depth_clamp.h"
 #include "st_tgsi_lower_yuv.h"
 #include "st_program.h"
 #include "st_mesa_to_tgsi.h"
@@ -633,6 +634,9 @@ st_translate_vertex_program(struct st_context *st,
    return stvp->tgsi.tokens != NULL;
 }
 
+static const gl_state_index16 depth_range_state[STATE_LENGTH] =
+   { STATE_DEPTH_RANGE };
+
 static struct st_vp_variant *
 st_create_vp_variant(struct st_context *st,
                      struct st_vertex_program *stvp,
@@ -640,6 +644,7 @@ st_create_vp_variant(struct st_context *st,
 {
    struct st_vp_variant *vpv = CALLOC_STRUCT(st_vp_variant);
    struct pipe_context *pipe = st->pipe;
+   struct gl_program_parameter_list *params = stvp->Base.Parameters;
 
    vpv->key = *key;
    vpv->tgsi.stream_output = stvp->tgsi.stream_output;
@@ -689,6 +694,18 @@ st_create_vp_variant(struct st_context *st,
             vpv->num_inputs++;
       } else
          fprintf(stderr, "mesa: cannot emulate deprecated features\n");
+   }
+
+   if (key->lower_depth_clamp) {
+      unsigned depth_range_const =
+            _mesa_add_state_reference(params, depth_range_state);
+
+      const struct tgsi_token *tokens;
+      tokens = st_tgsi_lower_depth_clamp(vpv->tgsi.tokens, depth_range_const,
+                                         key->clip_negative_one_to_one);
+      if (tokens != vpv->tgsi.tokens)
+         tgsi_free_tokens(vpv->tgsi.tokens);
+      vpv->tgsi.tokens = tokens;
    }
 
    if (ST_DEBUG & DEBUG_TGSI) {
@@ -1348,6 +1365,16 @@ st_create_fp_variant(struct st_context *st,
       }
    }
 
+   if (key->lower_depth_clamp) {
+      unsigned depth_range_const = _mesa_add_state_reference(params, depth_range_state);
+
+      const struct tgsi_token *tokens;
+      tokens = st_tgsi_lower_depth_clamp_fs(tgsi.tokens, depth_range_const);
+      if (tgsi.tokens != stfp->tgsi.tokens)
+         tgsi_free_tokens(tgsi.tokens);
+      tgsi.tokens = tokens;
+   }
+
    if (ST_DEBUG & DEBUG_TGSI) {
       tgsi_dump(tgsi.tokens, 0);
       debug_printf("\n");
@@ -1670,8 +1697,27 @@ st_get_basic_variant(struct st_context *st,
                NIR_PASS_V(tgsi.ir.nir, nir_lower_clamp_color_outputs);
 
             tgsi.stream_output = prog->tgsi.stream_output;
-	 } else
+	 } else {
+            if (key->lower_depth_clamp) {
+               struct gl_program_parameter_list *params = prog->Base.Parameters;
+
+               unsigned depth_range_const =
+                     _mesa_add_state_reference(params, depth_range_state);
+
+               const struct tgsi_token *tokens;
+               tokens =
+                     st_tgsi_lower_depth_clamp(prog->tgsi.tokens,
+                                               depth_range_const,
+                                               key->clip_negative_one_to_one);
+
+               if (tokens != prog->tgsi.tokens)
+                  tgsi_free_tokens(prog->tgsi.tokens);
+
+               prog->tgsi.tokens = tokens;
+               prog->num_tgsi_tokens = tgsi_num_tokens(tokens);
+            }
 	    tgsi = prog->tgsi;
+         }
          /* fill in new variant */
          switch (pipe_shader) {
          case PIPE_SHADER_TESS_CTRL:

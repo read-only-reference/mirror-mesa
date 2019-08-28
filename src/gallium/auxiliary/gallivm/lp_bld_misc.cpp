@@ -828,9 +828,22 @@ LLVMValueRef LLVMBuildAtomicCmpXchg(LLVMBuilderRef B, LLVMValueRef Ptr,
                                     LLVMAtomicOrdering FailureOrdering,
                                     LLVMBool SingleThread)
 {
-   /* LLVM 3.8 doesn't have a second ordering and uses old SynchronizationScope enum */
    return llvm::wrap(llvm::unwrap(B)->CreateAtomicCmpXchg(llvm::unwrap(Ptr), llvm::unwrap(Cmp),
                                                           llvm::unwrap(New), mapFromLLVMOrdering(SuccessOrdering),
+#if HAVE_LLVM >= 0x305
+                                                          mapFromLLVMOrdering(FailureOrdering),
+#endif
                                                           SingleThread ? llvm::SynchronizationScope::SingleThread : llvm::SynchronizationScope::CrossThread));
+}
+#endif
+
+#if HAVE_LLVM < 0x305
+LLVMValueRef LLVMBuildFence(LLVMBuilderRef B,
+			    LLVMAtomicOrdering ordering,
+			    LLVMBool singleThread,
+			    const char *Name)
+{
+  return llvm::wrap(llvm::unwrap(B)->CreateFence(mapFromLLVMOrdering(ordering),
+						 singleThread ? llvm::SynchronizationScope::SingleThread : llvm::SynchronizationScope::CrossThread));
 }
 #endif

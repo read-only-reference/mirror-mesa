@@ -74,6 +74,7 @@ panfrost_allocate_transient(struct panfrost_context *ctx, size_t sz)
         unsigned offset = 0;
         bool update_offset = false;
 
+        pthread_mutex_lock(&screen->transient_lock);
         bool has_current = batch->transient_indices.size;
         bool fits_in_current = (batch->transient_offset + sz) < TRANSIENT_SLAB_SIZE;
 
@@ -110,6 +111,8 @@ panfrost_allocate_transient(struct panfrost_context *ctx, size_t sz)
                         bo = panfrost_create_slab(screen, &index);
                 }
 
+                panfrost_job_add_bo(batch, bo);
+
                 /* Remember we created this */
                 util_dynarray_append(&batch->transient_indices, unsigned, index);
 
@@ -131,6 +134,7 @@ panfrost_allocate_transient(struct panfrost_context *ctx, size_t sz)
 
         if (update_offset)
                 batch->transient_offset = offset + sz;
+        pthread_mutex_unlock(&screen->transient_lock);
 
         return ret;
 

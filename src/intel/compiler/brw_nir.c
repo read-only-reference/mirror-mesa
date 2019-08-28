@@ -875,7 +875,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    OPT(nir_lower_to_source_mods, nir_lower_all_source_mods);
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);
-   OPT(nir_opt_move_comparisons);
+   OPT(nir_opt_move, nir_move_comparisons);
 
    OPT(nir_lower_bool_to_int32);
 
@@ -1039,6 +1039,121 @@ brw_nir_apply_key(nir_shader *nir,
 
    if (progress)
       brw_nir_optimize(nir, compiler, is_scalar, false);
+}
+
+enum brw_conditional_mod
+brw_cmod_for_nir_comparison(nir_op op)
+{
+   switch (op) {
+   case nir_op_flt:
+   case nir_op_flt32:
+   case nir_op_ilt:
+   case nir_op_ilt32:
+   case nir_op_ult:
+   case nir_op_ult32:
+      return BRW_CONDITIONAL_L;
+
+   case nir_op_fge:
+   case nir_op_fge32:
+   case nir_op_ige:
+   case nir_op_ige32:
+   case nir_op_uge:
+   case nir_op_uge32:
+      return BRW_CONDITIONAL_GE;
+
+   case nir_op_feq:
+   case nir_op_feq32:
+   case nir_op_ieq:
+   case nir_op_ieq32:
+   case nir_op_b32all_fequal2:
+   case nir_op_b32all_iequal2:
+   case nir_op_b32all_fequal3:
+   case nir_op_b32all_iequal3:
+   case nir_op_b32all_fequal4:
+   case nir_op_b32all_iequal4:
+      return BRW_CONDITIONAL_Z;
+
+   case nir_op_fne:
+   case nir_op_fne32:
+   case nir_op_ine:
+   case nir_op_ine32:
+   case nir_op_b32any_fnequal2:
+   case nir_op_b32any_inequal2:
+   case nir_op_b32any_fnequal3:
+   case nir_op_b32any_inequal3:
+   case nir_op_b32any_fnequal4:
+   case nir_op_b32any_inequal4:
+      return BRW_CONDITIONAL_NZ;
+
+   default:
+      unreachable("Unsupported NIR comparison op");
+   }
+}
+
+uint32_t
+brw_aop_for_nir_intrinsic(const nir_intrinsic_instr *atomic)
+{
+   switch (atomic->intrinsic) {
+#define AOP_CASE(atom) \
+   case nir_intrinsic_image_atomic_##atom:            \
+   case nir_intrinsic_bindless_image_atomic_##atom:   \
+   case nir_intrinsic_ssbo_atomic_##atom:             \
+   case nir_intrinsic_shared_atomic_##atom:           \
+   case nir_intrinsic_global_atomic_##atom
+
+   AOP_CASE(add): {
+      unsigned src_idx;
+      switch (atomic->intrinsic) {
+      case nir_intrinsic_image_atomic_add:
+      case nir_intrinsic_bindless_image_atomic_add:
+         src_idx = 3;
+         break;
+      case nir_intrinsic_ssbo_atomic_add:
+         src_idx = 2;
+         break;
+      case nir_intrinsic_shared_atomic_add:
+      case nir_intrinsic_global_atomic_add:
+         src_idx = 1;
+         break;
+      default:
+         unreachable("Invalid add atomic opcode");
+      }
+
+      if (nir_src_is_const(atomic->src[src_idx])) {
+         int64_t add_val = nir_src_as_int(atomic->src[src_idx]);
+         if (add_val == 1)
+            return BRW_AOP_INC;
+         else if (add_val == -1)
+            return BRW_AOP_DEC;
+      }
+      return BRW_AOP_ADD;
+   }
+
+   AOP_CASE(imin):         return BRW_AOP_IMIN;
+   AOP_CASE(umin):         return BRW_AOP_UMIN;
+   AOP_CASE(imax):         return BRW_AOP_IMAX;
+   AOP_CASE(umax):         return BRW_AOP_UMAX;
+   AOP_CASE(and):          return BRW_AOP_AND;
+   AOP_CASE(or):           return BRW_AOP_OR;
+   AOP_CASE(xor):          return BRW_AOP_XOR;
+   AOP_CASE(exchange):     return BRW_AOP_MOV;
+   AOP_CASE(comp_swap):    return BRW_AOP_CMPWR;
+
+#undef AOP_CASE
+#define AOP_CASE(atom) \
+   case nir_intrinsic_ssbo_atomic_##atom:          \
+   case nir_intrinsic_shared_atomic_##atom:        \
+   case nir_intrinsic_global_atomic_##atom
+
+   AOP_CASE(fmin):         return BRW_AOP_FMIN;
+   AOP_CASE(fmax):         return BRW_AOP_FMAX;
+   AOP_CASE(fcomp_swap):   return BRW_AOP_FCMPWR;
+
+#undef AOP_CASE
+
+   default:
+      unreachable("Unsupported NIR atomic intrinsic");
+   }
 }
 
 enum brw_reg_type

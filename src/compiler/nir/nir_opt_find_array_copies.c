@@ -260,7 +260,8 @@ clobber(struct match_node *node, struct match_state *state)
 
 static bool
 try_match_deref(nir_deref_path *base_path, int *path_array_idx,
-                nir_deref_path *deref_path, int arr_idx)
+                nir_deref_path *deref_path, int arr_idx,
+                nir_deref_instr *dst)
 {
    for (int i = 0; ; i++) {
       nir_deref_instr *b = base_path->path[i];
@@ -292,11 +293,13 @@ try_match_deref(nir_deref_path *base_path, int *path_array_idx,
          /* If we don't have an index into the path yet or if this entry in
           * the path is at the array index, see if this is a candidate.  We're
           * looking for an index which is zero in the base deref and arr_idx
-          * in the search deref.
+          * in the search deref and has a matching array size.
           */
          if ((*path_array_idx < 0 || *path_array_idx == i) &&
              const_b_idx && b_idx == 0 &&
-             const_d_idx && d_idx == arr_idx) {
+             const_d_idx && d_idx == arr_idx &&
+             glsl_get_length(nir_deref_instr_parent(b)->type) ==
+             glsl_get_length(nir_deref_instr_parent(dst)->type)) {
             *path_array_idx = i;
             continue;
          }
@@ -398,7 +401,8 @@ handle_write(nir_deref_instr *dst, nir_deref_instr *src,
          nir_deref_path_init(&src_path, src, state->dead_ctx);
          bool result = try_match_deref(&dst_node->first_src_path,
                                        &dst_node->src_wildcard_idx,
-                                       &src_path, dst_node->next_array_idx);
+                                       &src_path, dst_node->next_array_idx,
+                                       *instr);
          nir_deref_path_finish(&src_path);
          if (!result)
             goto reset;
@@ -541,13 +545,16 @@ opt_find_array_copies_block(nir_builder *b, nir_block *block,
       /* There must be no indirects in the source or destination and no known
        * out-of-bounds accesses in the source, and the copy must be fully
        * qualified, or else we can't build up the array copy. We handled
-       * out-of-bounds accesses to the dest above.
+       * out-of-bounds accesses to the dest above. The types must match, since
+       * copy_deref currently can't bitcast mismatched deref types.
        */
       if (src_deref &&
           (nir_deref_instr_has_indirect(src_deref) ||
            nir_deref_instr_is_known_out_of_bounds(src_deref) ||
            nir_deref_instr_has_indirect(dst_deref) ||
-           !glsl_type_is_vector_or_scalar(src_deref->type))) {
+           !glsl_type_is_vector_or_scalar(src_deref->type) ||
+           glsl_get_bare_type(src_deref->type) !=
+           glsl_get_bare_type(dst_deref->type))) {
          src_deref = NULL;
       }
 

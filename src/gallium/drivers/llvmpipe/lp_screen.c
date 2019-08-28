@@ -97,8 +97,7 @@ static const char *
 llvmpipe_get_name(struct pipe_screen *screen)
 {
    static char buf[100];
-   snprintf(buf, sizeof(buf), "llvmpipe (LLVM %u.%u, %u bits)",
-            HAVE_LLVM >> 8, HAVE_LLVM & 0xff,
+   snprintf(buf, sizeof(buf), "llvmpipe (LLVM " MESA_LLVM_VERSION_STRING ", %u bits)",
             lp_native_vector_width );
    return buf;
 }
@@ -703,7 +702,7 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
    llvmpipe_init_screen_resource_funcs(&screen->base);
 
    screen->num_threads = util_cpu_caps.nr_cpus > 1 ? util_cpu_caps.nr_cpus : 0;
-#ifdef PIPE_SUBSYSTEM_EMBEDDED
+#ifdef EMBEDDED_DEVICE
    screen->num_threads = 0;
 #endif
    screen->num_threads = debug_get_num_option("LP_NUM_THREADS", screen->num_threads);
