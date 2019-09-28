@@ -296,6 +296,10 @@ u_pipe_screen_get_param_defaults(struct pipe_screen *pscreen,
        */
       return 1;
 
+   case PIPE_CAP_PREFER_IMM_ARRAYS_AS_CONSTBUF:
+      /* Don't unset this unless your driver can do better */
+      return 1;
+
    case PIPE_CAP_POST_DEPTH_COVERAGE:
    case PIPE_CAP_BINDLESS_TEXTURE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
@@ -372,12 +376,22 @@ u_pipe_screen_get_param_defaults(struct pipe_screen *pscreen,
    case PIPE_CAP_TEXTURE_SHADOW_LOD:
       return 0;
 
+   case PIPE_CAP_GL_SPIRV:
+   case PIPE_CAP_GL_SPIRV_VARIABLE_POINTERS:
+      return 0;
+
+   case PIPE_CAP_DEMOTE_TO_HELPER_INVOCATION:
+      return 0;
+
    case PIPE_CAP_DMABUF:
 #if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD)
       return 1;
 #else
       return 0;
 #endif
+
+   case PIPE_CAP_TEXTURE_SHADOW_MAP: /* Enables ARB_shadow */
+      return 1;
 
    default:
       unreachable("bad PIPE_CAP_*");

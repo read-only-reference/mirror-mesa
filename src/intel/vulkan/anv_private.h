@@ -57,6 +57,7 @@
 #include "util/u_vector.h"
 #include "util/u_math.h"
 #include "util/vma.h"
+#include "util/xmlconfig.h"
 #include "vk_alloc.h"
 #include "vk_debug_report.h"
 
@@ -961,6 +962,7 @@ struct anv_physical_device {
     bool                                        has_bindless_samplers;
 
     struct anv_device_extension_table           supported_extensions;
+    struct anv_physical_device_dispatch_table   dispatch;
 
     uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
@@ -1009,6 +1011,9 @@ struct anv_instance {
     bool                                        pipeline_cache_enabled;
 
     struct vk_debug_report_instance             debug_report_callbacks;
+
+    struct driOptionCache                       dri_options;
+    struct driOptionCache                       available_dri_options;
 };
 
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
@@ -3689,11 +3694,18 @@ struct anv_query_pool {
 
 int anv_get_instance_entrypoint_index(const char *name);
 int anv_get_device_entrypoint_index(const char *name);
+int anv_get_physical_device_entrypoint_index(const char *name);
+
+const char *anv_get_instance_entry_name(int index);
+const char *anv_get_physical_device_entry_name(int index);
+const char *anv_get_device_entry_name(int index);
 
 bool
 anv_instance_entrypoint_is_enabled(int index, uint32_t core_version,
                                    const struct anv_instance_extension_table *instance);
-
+bool
+anv_physical_device_entrypoint_is_enabled(int index, uint32_t core_version,
+                                          const struct anv_instance_extension_table *instance);
 bool
 anv_device_entrypoint_is_enabled(int index, uint32_t core_version,
                                  const struct anv_instance_extension_table *instance,

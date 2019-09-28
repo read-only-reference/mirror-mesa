@@ -335,8 +335,8 @@ const ppir_op_info ppir_op_infos[] = {
          PPIR_INSTR_SLOT_BRANCH, PPIR_INSTR_SLOT_END
       },
    },
-   [ppir_op_dummy] = {
-      .name = "dummy",
+   [ppir_op_undef] = {
+      .name = "undef",
       .type = ppir_node_type_alu,
       .slots = (int []) {
       },
@@ -387,7 +387,8 @@ void *ppir_node_create(ppir_block *block, ppir_op op, int index, unsigned mask)
    return node;
 }
 
-void ppir_node_add_dep(ppir_node *succ, ppir_node *pred)
+void ppir_node_add_dep(ppir_node *succ, ppir_node *pred,
+                       ppir_dep_type type)
 {
    /* don't add dep for two nodes from different block */
    if (succ->block != pred->block)
@@ -402,6 +403,7 @@ void ppir_node_add_dep(ppir_node *succ, ppir_node *pred)
    ppir_dep *dep = ralloc(succ, ppir_dep);
    dep->pred = pred;
    dep->succ = succ;
+   dep->type = type;
    list_addtail(&dep->pred_link, &succ->pred_list);
    list_addtail(&dep->succ_link, &pred->succ_list);
 }
@@ -624,12 +626,28 @@ static ppir_node *
 ppir_node_clone_tex(ppir_block *block, ppir_node *node)
 {
    ppir_load_texture_node *tex_node = ppir_node_to_load_texture(node);
-   ppir_load_texture_node *new_tnode = ppir_node_create(block, ppir_op_load_texture, -1, 0);
+   ppir_node *tex_coords = tex_node->src_coords.node;
 
+   ppir_node *new_tex_coords = NULL;
+
+   ppir_load_texture_node *new_tnode = ppir_node_create(block, ppir_op_load_texture, -1, 0);
    if (!new_tnode)
       return NULL;
 
    list_addtail(&new_tnode->node.list, &block->node_list);
+
+   if (tex_coords) {
+      switch (tex_coords->op) {
+      case ppir_op_load_varying:
+      case ppir_op_load_coords:
+         new_tex_coords = ppir_node_clone(block, tex_coords);
+         assert(new_tex_coords);
+         break;
+      default:
+         new_tex_coords = tex_coords;
+         break;
+      }
+   }
 
    ppir_dest *dest = ppir_node_get_dest(node);
    new_tnode->dest = *dest;
@@ -644,14 +662,19 @@ ppir_node_clone_tex(ppir_block *block, ppir_node *node)
       ppir_src *new_src = ppir_node_get_src(&new_tnode->node, i);
       switch (src->type) {
       case ppir_target_ssa: {
-         ppir_node_target_assign(new_src, src->node);
-         ppir_node_add_dep(&new_tnode->node, src->node);
+         ppir_node_target_assign(new_src, new_tex_coords);
+         ppir_node_add_dep(&new_tnode->node, new_tex_coords, ppir_dep_src);
          break;
       }
       case ppir_target_register: {
          new_src->type = src->type;
          new_src->reg = src->reg;
          new_src->node = NULL;
+         break;
+      }
+      case ppir_target_pipeline: {
+         new_src->type = src->type;
+         new_src->pipeline = src->pipeline;
          break;
       }
       default:
@@ -680,6 +703,25 @@ ppir_node_clone_load(ppir_block *block, ppir_node *node)
    ppir_dest *dest = ppir_node_get_dest(node);
    new_lnode->dest = *dest;
 
+   ppir_src *src = ppir_node_get_src(node, 0);
+   if (src) {
+      new_lnode->num_src = 1;
+      switch (src->type) {
+      case ppir_target_ssa:
+         ppir_node_target_assign(&new_lnode->src, src->node);
+         ppir_node_add_dep(&new_lnode->node, src->node, ppir_dep_src);
+         break;
+      case ppir_target_register:
+         new_lnode->src.type = src->type;
+         new_lnode->src.reg = src->reg;
+         new_lnode->src.node = NULL;
+         break;
+      default:
+         /* Load nodes can't consume pipeline registers */
+         assert(0);
+      }
+   }
+
    return &new_lnode->node;
 }
 
@@ -693,8 +735,48 @@ ppir_node *ppir_node_clone(ppir_block *block, ppir_node *node)
    case ppir_op_load_uniform:
    case ppir_op_load_varying:
    case ppir_op_load_temp:
+   case ppir_op_load_coords:
       return ppir_node_clone_load(block, node);
    default:
       return NULL;
    }
+}
+
+ppir_node *ppir_node_insert_mov(ppir_node *node)
+{
+   ppir_node *move = ppir_node_create(node->block, ppir_op_mov, -1, 0);
+   if (unlikely(!move))
+      return NULL;
+
+   ppir_dest *dest = ppir_node_get_dest(node);
+   ppir_alu_node *alu = ppir_node_to_alu(move);
+   alu->dest = *dest;
+   alu->num_src = 1;
+   ppir_node_target_assign(alu->src, node);
+
+   for (int s = 0; s < 4; s++)
+      alu->src->swizzle[s] = s;
+
+   ppir_node_replace_all_succ(move, node);
+   ppir_node_add_dep(move, node, ppir_dep_src);
+   list_addtail(&move->list, &node->list);
+
+   return move;
+}
+
+bool ppir_node_has_single_src_succ(ppir_node *node)
+{
+   if (list_is_singular(&node->succ_list) &&
+       list_first_entry(&node->succ_list,
+                        ppir_dep, succ_link)->type == ppir_dep_src)
+      return true;
+
+   int cnt = 0;
+   ppir_node_foreach_succ(node, dep) {
+      if (dep->type != ppir_dep_src)
+         continue;
+      cnt++;
+   }
+
+   return cnt == 1;
 }

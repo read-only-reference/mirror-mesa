@@ -113,7 +113,7 @@ typedef enum {
    ppir_op_discard,
    ppir_op_branch,
 
-   ppir_op_dummy,
+   ppir_op_undef,
 
    ppir_op_num,
 } ppir_op;
@@ -136,8 +136,15 @@ typedef struct {
 
 extern const ppir_op_info ppir_op_infos[];
 
+typedef enum {
+   ppir_dep_src,
+   ppir_dep_write_after_read,
+   ppir_dep_sequence,
+} ppir_dep_type;
+
 typedef struct {
    void *pred, *succ;
+   ppir_dep_type type;
    struct list_head pred_link;
    struct list_head succ_link;
 } ppir_dep;
@@ -181,6 +188,7 @@ typedef struct ppir_reg {
    /* instr live range */
    int live_in, live_out;
    bool spilled;
+   bool undef;
 } ppir_reg;
 
 typedef enum {
@@ -248,6 +256,7 @@ typedef struct {
    int num_components;
    ppir_dest dest;
    ppir_src src;
+   int num_src;
 } ppir_load_node;
 
 typedef struct {
@@ -375,7 +384,7 @@ typedef struct ppir_compiler {
 } ppir_compiler;
 
 void *ppir_node_create(ppir_block *block, ppir_op op, int index, unsigned mask);
-void ppir_node_add_dep(ppir_node *succ, ppir_node *pred);
+void ppir_node_add_dep(ppir_node *succ, ppir_node *pred, ppir_dep_type type);
 void ppir_node_remove_dep(ppir_dep *dep);
 void ppir_node_delete(ppir_node *node);
 void ppir_node_print_prog(ppir_compiler *comp);
@@ -384,6 +393,8 @@ void ppir_node_replace_all_succ(ppir_node *dst, ppir_node *src);
 void ppir_node_replace_pred(ppir_dep *dep, ppir_node *new_pred);
 ppir_dep *ppir_dep_for_pred(ppir_node *node, ppir_node *pred);
 ppir_node *ppir_node_clone(ppir_block *block, ppir_node *node);
+/* Assumes that node successors are in the same block */
+ppir_node *ppir_node_insert_mov(ppir_node *node);
 
 static inline bool ppir_node_is_root(ppir_node *node)
 {
@@ -399,6 +410,8 @@ static inline bool ppir_node_has_single_succ(ppir_node *node)
 {
    return list_is_singular(&node->succ_list);
 }
+
+bool ppir_node_has_single_src_succ(ppir_node *node);
 
 static inline ppir_node *ppir_node_first_succ(ppir_node *node)
 {
@@ -455,8 +468,9 @@ static inline int ppir_node_get_src_num(ppir_node *node)
       return ppir_node_to_alu(node)->num_src;
    case ppir_node_type_branch:
       return ppir_node_to_branch(node)->num_src;
-   case ppir_node_type_load_texture:
    case ppir_node_type_load:
+      return ppir_node_to_load(node)->num_src;
+   case ppir_node_type_load_texture:
    case ppir_node_type_store:
       return 1;
    default:

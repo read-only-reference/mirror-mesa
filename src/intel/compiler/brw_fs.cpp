@@ -1011,15 +1011,37 @@ fs_inst::size_read(int arg) const
 }
 
 namespace {
+   unsigned
+   predicate_width(brw_predicate predicate)
+   {
+      switch (predicate) {
+      case BRW_PREDICATE_NONE:            return 1;
+      case BRW_PREDICATE_NORMAL:          return 1;
+      case BRW_PREDICATE_ALIGN1_ANY2H:    return 2;
+      case BRW_PREDICATE_ALIGN1_ALL2H:    return 2;
+      case BRW_PREDICATE_ALIGN1_ANY4H:    return 4;
+      case BRW_PREDICATE_ALIGN1_ALL4H:    return 4;
+      case BRW_PREDICATE_ALIGN1_ANY8H:    return 8;
+      case BRW_PREDICATE_ALIGN1_ALL8H:    return 8;
+      case BRW_PREDICATE_ALIGN1_ANY16H:   return 16;
+      case BRW_PREDICATE_ALIGN1_ALL16H:   return 16;
+      case BRW_PREDICATE_ALIGN1_ANY32H:   return 32;
+      case BRW_PREDICATE_ALIGN1_ALL32H:   return 32;
+      default: unreachable("Unsupported predicate");
+      }
+   }
+
    /* Return the subset of flag registers that an instruction could
     * potentially read or write based on the execution controls and flag
     * subregister number of the instruction.
     */
    unsigned
-   flag_mask(const fs_inst *inst)
+   flag_mask(const fs_inst *inst, unsigned width)
    {
-      const unsigned start = inst->flag_subreg * 16 + inst->group;
-      const unsigned end = start + inst->exec_size;
+      assert(util_is_power_of_two_nonzero(width));
+      const unsigned start = (inst->flag_subreg * 16 + inst->group) &
+                             ~(width - 1);
+      const unsigned end = start + ALIGN(inst->exec_size, width);
       return ((1 << DIV_ROUND_UP(end, 8)) - 1) & ~((1 << (start / 8)) - 1);
    }
 
@@ -1051,9 +1073,9 @@ fs_inst::flags_read(const gen_device_info *devinfo) const
        * f0.0 and f1.0 on Gen7+, and f0.0 and f0.1 on older hardware.
        */
       const unsigned shift = devinfo->gen >= 7 ? 4 : 2;
-      return flag_mask(this) << shift | flag_mask(this);
+      return flag_mask(this, 1) << shift | flag_mask(this, 1);
    } else if (predicate) {
-      return flag_mask(this);
+      return flag_mask(this, predicate_width(predicate));
    } else {
       unsigned mask = 0;
       for (int i = 0; i < sources; i++) {
@@ -1072,7 +1094,7 @@ fs_inst::flags_written() const
                             opcode != BRW_OPCODE_WHILE)) ||
        opcode == SHADER_OPCODE_FIND_LIVE_CHANNEL ||
        opcode == FS_OPCODE_FB_WRITE) {
-      return flag_mask(this);
+      return flag_mask(this, 1);
    } else {
       return flag_mask(dst, size_written);
    }
@@ -1192,7 +1214,7 @@ fs_visitor::emit_fragcoord_interpolation(fs_reg wpos)
    } else {
       bld.emit(FS_OPCODE_LINTERP, wpos,
                this->delta_xy[BRW_BARYCENTRIC_PERSPECTIVE_PIXEL],
-               interp_reg(VARYING_SLOT_POS, 2));
+               component(interp_reg(VARYING_SLOT_POS, 2), 0));
    }
    wpos = offset(wpos, bld, 1);
 
@@ -1910,6 +1932,17 @@ fs_visitor::split_virtual_grfs()
    }
 
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
+      /* We fix up undef instructions later */
+      if (inst->opcode == SHADER_OPCODE_UNDEF) {
+         /* UNDEF instructions are currently only used to undef entire
+          * registers.  We need this invariant later when we split them.
+          */
+         assert(inst->dst.file == VGRF);
+         assert(inst->dst.offset == 0);
+         assert(inst->size_written == alloc.sizes[inst->dst.nr] * REG_SIZE);
+         continue;
+      }
+
       if (inst->dst.file == VGRF) {
          int reg = vgrf_to_reg[inst->dst.nr] + inst->dst.offset / REG_SIZE;
          for (unsigned j = 1; j < regs_written(inst); j++)
@@ -1962,7 +1995,20 @@ fs_visitor::split_virtual_grfs()
    }
    assert(reg == reg_count);
 
-   foreach_block_and_inst(block, fs_inst, inst, cfg) {
+   foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
+      if (inst->opcode == SHADER_OPCODE_UNDEF) {
+         const fs_builder ibld(this, block, inst);
+         assert(inst->size_written % REG_SIZE == 0);
+         unsigned reg_offset = 0;
+         while (reg_offset < inst->size_written / REG_SIZE) {
+            reg = vgrf_to_reg[inst->dst.nr] + reg_offset;
+            ibld.UNDEF(fs_reg(VGRF, new_virtual_grf[reg], inst->dst.type));
+            reg_offset += alloc.sizes[new_virtual_grf[reg]];
+         }
+         inst->remove(block);
+         continue;
+      }
+
       if (inst->dst.file == VGRF) {
          reg = vgrf_to_reg[inst->dst.nr] + inst->dst.offset / REG_SIZE;
          inst->dst.nr = new_virtual_grf[reg];
@@ -2402,6 +2448,8 @@ fs_visitor::get_pull_locs(const fs_reg &src,
 
       *out_surf_index = prog_data->binding_table.ubo_start + range->block;
       *out_pull_index = (32 * range->start + src.offset) / 4;
+
+      prog_data->has_ubo_pull = true;
       return true;
    }
 
@@ -2411,6 +2459,8 @@ fs_visitor::get_pull_locs(const fs_reg &src,
       /* A regular uniform push constant */
       *out_surf_index = stage_prog_data->binding_table.pull_constants_start;
       *out_pull_index = pull_constant_loc[location];
+
+      prog_data->has_ubo_pull = true;
       return true;
    }
 
@@ -3507,9 +3557,22 @@ bool
 fs_visitor::remove_extra_rounding_modes()
 {
    bool progress = false;
+   unsigned execution_mode = this->nir->info.float_controls_execution_mode;
+
+   brw_rnd_mode base_mode = BRW_RND_MODE_UNSPECIFIED;
+   if ((FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP16 |
+        FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP32 |
+        FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP64) &
+       execution_mode)
+      base_mode = BRW_RND_MODE_RTNE;
+   if ((FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP16 |
+        FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP32 |
+        FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP64) &
+       execution_mode)
+      base_mode = BRW_RND_MODE_RTZ;
 
    foreach_block (block, cfg) {
-      brw_rnd_mode prev_mode = BRW_RND_MODE_UNSPECIFIED;
+      brw_rnd_mode prev_mode = base_mode;
 
       foreach_inst_in_block_safe (fs_inst, inst, block) {
          if (inst->opcode == SHADER_OPCODE_RND_MODE) {
@@ -4447,7 +4510,7 @@ lower_fb_write_logical_send(const fs_builder &bld, fs_inst *inst,
       uint32_t ex_desc = 0;
 
       inst->desc =
-         (inst->group / 16) ? (1 << 11) : 0 | /* rt slot group */
+         (inst->group / 16) << 11 | /* rt slot group */
          brw_dp_write_desc(devinfo, inst->target, msg_ctl,
                            GEN6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE,
                            inst->last_rt, false);
@@ -4457,6 +4520,9 @@ lower_fb_write_logical_send(const fs_builder &bld, fs_inst *inst,
           * in the extended message descriptor, in lieu of using a header.
           */
          ex_desc = inst->target << 12 | src0_alpha_present << 15;
+
+         if (key->nr_color_regions == 0)
+            ex_desc |= 1 << 20; /* Null Render Target */
       }
 
       inst->opcode = SHADER_OPCODE_SEND;

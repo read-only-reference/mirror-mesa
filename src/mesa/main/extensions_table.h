@@ -204,6 +204,7 @@ EXT(ATI_texture_env_combine3                , ATI_texture_env_combine3          
 EXT(ATI_texture_float                       , ARB_texture_float                      , GLL, GLC,  x ,  x , 2002)
 EXT(ATI_texture_mirror_once                 , ATI_texture_mirror_once                , GLL, GLC,  x ,  x , 2006)
 
+EXT(EXT_EGL_sync                            , dummy_true                             , GLL, GLC,  x ,  x , 2019)
 EXT(EXT_abgr                                , dummy_true                             , GLL, GLC,  x ,  x , 1995)
 EXT(EXT_base_instance                       , ARB_base_instance                      ,  x ,  x ,  x ,  30, 2014)
 EXT(EXT_bgra                                , dummy_true                             , GLL,  x ,  x ,  x , 1995)
@@ -221,6 +222,7 @@ EXT(EXT_compiled_vertex_array               , dummy_true                        
 EXT(EXT_compressed_ETC1_RGB8_sub_texture    , OES_compressed_ETC1_RGB8_texture       ,  x ,  x , ES1, ES2, 2014)
 EXT(EXT_copy_image                          , OES_copy_image                         ,  x ,  x ,  x ,  30, 2014)
 EXT(EXT_copy_texture                        , dummy_true                             , GLL,  x ,  x ,  x , 1995)
+EXT(EXT_demote_to_helper_invocation         , EXT_demote_to_helper_invocation        , GLL, GLC, ES1, ES2, 2019)
 EXT(EXT_depth_bounds_test                   , EXT_depth_bounds_test                  , GLL, GLC,  x ,  x , 2002)
 EXT(EXT_depth_clamp                         , ARB_depth_clamp                        ,  x ,  x ,  x , ES2, 2019)
 EXT(EXT_discard_framebuffer                 , dummy_true                             ,  x ,  x , ES1, ES2, 2009)

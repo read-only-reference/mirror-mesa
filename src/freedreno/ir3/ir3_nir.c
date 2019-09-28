@@ -81,6 +81,7 @@ static const nir_shader_compiler_options options_a6xx = {
 		.lower_bitfield_extract_to_shifts = true,
 		.use_interpolated_input_intrinsics = true,
 		.lower_rotate = true,
+		.vectorize_io = true,
 };
 
 const nir_shader_compiler_options *
@@ -124,7 +125,7 @@ ir3_optimize_loop(nir_shader *s)
 		OPT_V(s, nir_lower_vars_to_ssa);
 		progress |= OPT(s, nir_opt_copy_prop_vars);
 		progress |= OPT(s, nir_opt_dead_write_vars);
-		progress |= OPT(s, nir_lower_alu_to_scalar, NULL);
+		progress |= OPT(s, nir_lower_alu_to_scalar, NULL, NULL);
 		progress |= OPT(s, nir_lower_phis_to_scalar);
 
 		progress |= OPT(s, nir_copy_prop);
@@ -261,6 +262,20 @@ ir3_optimize_nir(struct ir3_shader *shader, nir_shader *s,
 	const bool idiv_progress = OPT(s, nir_lower_idiv);
 	if (ubo_progress || idiv_progress)
 		ir3_optimize_loop(s);
+
+	/* Do late algebraic optimization to turn add(a, neg(b)) back into
+	* subs, then the mandatory cleanup after algebraic.  Note that it may
+	* produce fnegs, and if so then we need to keep running to squash
+	* fneg(fneg(a)).
+	*/
+	bool more_late_algebraic = true;
+	while (more_late_algebraic) {
+		more_late_algebraic = OPT(s, nir_opt_algebraic_late);
+		OPT_V(s, nir_opt_constant_folding);
+		OPT_V(s, nir_copy_prop);
+		OPT_V(s, nir_opt_dce);
+		OPT_V(s, nir_opt_cse);
+	}
 
 	OPT_V(s, nir_remove_dead_variables, nir_var_function_temp);
 

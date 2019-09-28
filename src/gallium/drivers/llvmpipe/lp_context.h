@@ -40,6 +40,7 @@
 #include "lp_jit.h"
 #include "lp_setup.h"
 #include "lp_state_fs.h"
+#include "lp_state_cs.h"
 #include "lp_state_setup.h"
 
 
@@ -48,6 +49,7 @@ struct draw_context;
 struct draw_stage;
 struct draw_vertex_shader;
 struct lp_fragment_shader;
+struct lp_compute_shader;
 struct lp_blend_state;
 struct lp_setup_context;
 struct lp_setup_variant;
@@ -65,6 +67,7 @@ struct llvmpipe_context {
    struct lp_fragment_shader *fs;
    struct draw_vertex_shader *vs;
    const struct lp_geometry_shader *gs;
+   struct lp_compute_shader *cs;
    const struct lp_velems_state *velems;
    const struct lp_so_state *so;
 
@@ -101,7 +104,7 @@ struct llvmpipe_context {
    unsigned active_occlusion_queries;
 
    unsigned dirty; /**< Mask of LP_NEW_x flags */
-
+   unsigned cs_dirty; /**< Mask of LP_CSNEW_x flags */
    /** Mapped vertex buffers */
    ubyte *mapped_vbuffer[PIPE_MAX_ATTRIBS];
    
@@ -148,6 +151,12 @@ struct llvmpipe_context {
 
    struct lp_setup_variant_list_item setup_variants_list;
    unsigned nr_setup_variants;
+
+   /** List of all compute shader variants */
+   struct lp_cs_variant_list_item cs_variants_list;
+   unsigned nr_cs_variants;
+   unsigned nr_cs_instrs;
+   struct lp_cs_context *csctx;
 
    /** Conditional query object and mode */
    struct pipe_query *render_cond_query;

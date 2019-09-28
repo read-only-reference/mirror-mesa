@@ -518,7 +518,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_opt_combine_stores, nir_var_all);
 
       if (is_scalar) {
-         OPT(nir_lower_alu_to_scalar, NULL);
+         OPT(nir_lower_alu_to_scalar, NULL, NULL);
       }
 
       OPT(nir_copy_prop);
@@ -654,7 +654,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    const bool is_scalar = compiler->scalar_stage[nir->info.stage];
 
    if (is_scalar) {
-      OPT(nir_lower_alu_to_scalar, NULL);
+      OPT(nir_lower_alu_to_scalar, NULL, NULL);
    }
 
    if (nir->info.stage == MESA_SHADER_GEOMETRY)
@@ -690,13 +690,6 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    OPT(nir_lower_doubles, softfp64, nir->options->lower_doubles_options);
    OPT(nir_lower_int64, nir->options->lower_int64_options);
 
-   /* This needs to be run after the first optimization pass but before we
-    * lower indirect derefs away
-    */
-   if (compiler->supports_shader_constants) {
-      OPT(nir_opt_large_constants, NULL, 32);
-   }
-
    OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
 
    if (is_scalar) {
@@ -705,6 +698,13 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
 
    /* Lower a bunch of stuff */
    OPT(nir_lower_var_copies);
+
+   /* This needs to be run after the first optimization pass but before we
+    * lower indirect derefs away
+    */
+   if (compiler->supports_shader_constants) {
+      OPT(nir_opt_large_constants, NULL, 32);
+   }
 
    OPT(nir_lower_system_values);
 
@@ -871,7 +871,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    OPT(brw_nir_lower_conversions);
 
    if (is_scalar)
-      OPT(nir_lower_alu_to_scalar, NULL);
+      OPT(nir_lower_alu_to_scalar, NULL, NULL);
    OPT(nir_lower_to_source_mods, nir_lower_all_source_mods);
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);

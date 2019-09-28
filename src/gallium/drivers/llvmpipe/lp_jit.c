@@ -32,6 +32,7 @@
  * @author Jose Fonseca <jfonseca@vmware.com>
  */
 
+#include <llvm/Config/llvm-config.h>
 
 #include "util/u_memory.h"
 #include "gallivm/lp_bld_init.h"
@@ -202,18 +203,18 @@ lp_jit_create_types(struct lp_fragment_shader_variant *lp)
          LLVMArrayType(LLVMPointerType(LLVMFloatTypeInContext(lc), 0), LP_MAX_TGSI_CONST_BUFFERS);
       elem_types[LP_JIT_CTX_NUM_CONSTANTS] =
             LLVMArrayType(LLVMInt32TypeInContext(lc), LP_MAX_TGSI_CONST_BUFFERS);
-      elem_types[LP_JIT_CTX_ALPHA_REF] = LLVMFloatTypeInContext(lc);
-      elem_types[LP_JIT_CTX_STENCIL_REF_FRONT] =
-      elem_types[LP_JIT_CTX_STENCIL_REF_BACK] = LLVMInt32TypeInContext(lc);
-      elem_types[LP_JIT_CTX_U8_BLEND_COLOR] = LLVMPointerType(LLVMInt8TypeInContext(lc), 0);
-      elem_types[LP_JIT_CTX_F_BLEND_COLOR] = LLVMPointerType(LLVMFloatTypeInContext(lc), 0);
-      elem_types[LP_JIT_CTX_VIEWPORTS] = LLVMPointerType(viewport_type, 0);
       elem_types[LP_JIT_CTX_TEXTURES] = LLVMArrayType(texture_type,
                                                       PIPE_MAX_SHADER_SAMPLER_VIEWS);
       elem_types[LP_JIT_CTX_SAMPLERS] = LLVMArrayType(sampler_type,
                                                       PIPE_MAX_SAMPLERS);
       elem_types[LP_JIT_CTX_IMAGES] = LLVMArrayType(image_type,
                                                     PIPE_MAX_SHADER_IMAGES);
+      elem_types[LP_JIT_CTX_ALPHA_REF] = LLVMFloatTypeInContext(lc);
+      elem_types[LP_JIT_CTX_STENCIL_REF_FRONT] =
+      elem_types[LP_JIT_CTX_STENCIL_REF_BACK] = LLVMInt32TypeInContext(lc);
+      elem_types[LP_JIT_CTX_U8_BLEND_COLOR] = LLVMPointerType(LLVMInt8TypeInContext(lc), 0);
+      elem_types[LP_JIT_CTX_F_BLEND_COLOR] = LLVMPointerType(LLVMFloatTypeInContext(lc), 0);
+      elem_types[LP_JIT_CTX_VIEWPORTS] = LLVMPointerType(viewport_type, 0);
       elem_types[LP_JIT_CTX_SSBOS] =
          LLVMArrayType(LLVMPointerType(LLVMInt32TypeInContext(lc), 0), LP_MAX_TGSI_SHADER_BUFFERS);
       elem_types[LP_JIT_CTX_NUM_SSBOS] =
@@ -227,6 +228,15 @@ lp_jit_create_types(struct lp_fragment_shader_variant *lp)
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, num_constants,
                              gallivm->target, context_type,
                              LP_JIT_CTX_NUM_CONSTANTS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, textures,
+                             gallivm->target, context_type,
+                             LP_JIT_CTX_TEXTURES);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, samplers,
+                             gallivm->target, context_type,
+                             LP_JIT_CTX_SAMPLERS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, images,
+                             gallivm->target, context_type,
+                             LP_JIT_CTX_IMAGES);
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, alpha_ref_value,
                              gallivm->target, context_type,
                              LP_JIT_CTX_ALPHA_REF);
@@ -245,15 +255,6 @@ lp_jit_create_types(struct lp_fragment_shader_variant *lp)
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, viewports,
                              gallivm->target, context_type,
                              LP_JIT_CTX_VIEWPORTS);
-      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, textures,
-                             gallivm->target, context_type,
-                             LP_JIT_CTX_TEXTURES);
-      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, samplers,
-                             gallivm->target, context_type,
-                             LP_JIT_CTX_SAMPLERS);
-      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, images,
-                             gallivm->target, context_type,
-                             LP_JIT_CTX_IMAGES);
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, ssbos,
                              gallivm->target, context_type,
                              LP_JIT_CTX_SSBOS);
@@ -285,13 +286,9 @@ lp_jit_create_types(struct lp_fragment_shader_variant *lp)
    }
 
    if (gallivm_debug & GALLIVM_DEBUG_IR) {
-#if HAVE_LLVM >= 0x304
       char *str = LLVMPrintModuleToString(gallivm->module);
       fprintf(stderr, "%s", str);
       LLVMDisposeMessage(str);
-#else
-      LLVMDumpModule(gallivm->module);
-#endif
    }
 }
 
@@ -315,4 +312,103 @@ lp_jit_init_types(struct lp_fragment_shader_variant *lp)
 {
    if (!lp->jit_context_ptr_type)
       lp_jit_create_types(lp);
+}
+
+static void
+lp_jit_create_cs_types(struct lp_compute_shader_variant *lp)
+{
+   struct gallivm_state *gallivm = lp->gallivm;
+   LLVMContextRef lc = gallivm->context;
+   LLVMTypeRef texture_type, sampler_type, image_type;
+
+   texture_type = create_jit_texture_type(gallivm);
+   sampler_type = create_jit_sampler_type(gallivm);
+   image_type = create_jit_image_type(gallivm);
+
+   /* struct lp_jit_cs_thread_data */
+   {
+      LLVMTypeRef elem_types[LP_JIT_CS_THREAD_DATA_COUNT];
+      LLVMTypeRef thread_data_type;
+
+      elem_types[LP_JIT_CS_THREAD_DATA_CACHE] =
+            LLVMPointerType(lp_build_format_cache_type(gallivm), 0);
+
+      elem_types[LP_JIT_CS_THREAD_DATA_SHARED] = LLVMPointerType(LLVMInt32TypeInContext(lc), 0);
+      thread_data_type = LLVMStructTypeInContext(lc, elem_types,
+                                                 ARRAY_SIZE(elem_types), 0);
+
+      lp->jit_cs_thread_data_ptr_type = LLVMPointerType(thread_data_type, 0);
+   }
+
+   /* struct lp_jit_cs_context */
+   {
+      LLVMTypeRef elem_types[LP_JIT_CS_CTX_COUNT];
+      LLVMTypeRef cs_context_type;
+
+      elem_types[LP_JIT_CS_CTX_CONSTANTS] =
+         LLVMArrayType(LLVMPointerType(LLVMFloatTypeInContext(lc), 0), LP_MAX_TGSI_CONST_BUFFERS);
+      elem_types[LP_JIT_CS_CTX_NUM_CONSTANTS] =
+            LLVMArrayType(LLVMInt32TypeInContext(lc), LP_MAX_TGSI_CONST_BUFFERS);
+      elem_types[LP_JIT_CS_CTX_TEXTURES] = LLVMArrayType(texture_type,
+                                                      PIPE_MAX_SHADER_SAMPLER_VIEWS);
+      elem_types[LP_JIT_CS_CTX_SAMPLERS] = LLVMArrayType(sampler_type,
+                                                      PIPE_MAX_SAMPLERS);
+      elem_types[LP_JIT_CS_CTX_IMAGES] = LLVMArrayType(image_type,
+                                                       PIPE_MAX_SHADER_IMAGES);
+      elem_types[LP_JIT_CS_CTX_SSBOS] =
+         LLVMArrayType(LLVMPointerType(LLVMInt32TypeInContext(lc), 0), LP_MAX_TGSI_SHADER_BUFFERS);
+      elem_types[LP_JIT_CS_CTX_NUM_SSBOS] =
+            LLVMArrayType(LLVMInt32TypeInContext(lc), LP_MAX_TGSI_SHADER_BUFFERS);
+
+      elem_types[LP_JIT_CS_CTX_SHARED_SIZE] = LLVMInt32TypeInContext(lc);
+
+      cs_context_type = LLVMStructTypeInContext(lc, elem_types,
+                                             ARRAY_SIZE(elem_types), 0);
+
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, constants,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_CONSTANTS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, num_constants,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_NUM_CONSTANTS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, textures,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_TEXTURES);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, samplers,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_SAMPLERS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, images,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_IMAGES);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, ssbos,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_SSBOS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, num_ssbos,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_NUM_SSBOS);
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_cs_context, shared_size,
+                             gallivm->target, cs_context_type,
+                             LP_JIT_CS_CTX_SHARED_SIZE);
+      LP_CHECK_STRUCT_SIZE(struct lp_jit_cs_context,
+                           gallivm->target, cs_context_type);
+
+      lp->jit_cs_context_ptr_type = LLVMPointerType(cs_context_type, 0);
+   }
+
+   if (gallivm_debug & GALLIVM_DEBUG_IR) {
+#if (LLVM_VERSION_MAJOR > 3 || (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR >= 4))
+      char *str = LLVMPrintModuleToString(gallivm->module);
+      fprintf(stderr, "%s", str);
+      LLVMDisposeMessage(str);
+#else
+      LLVMDumpModule(gallivm->module);
+#endif
+   }
+}
+
+void
+lp_jit_init_cs_types(struct lp_compute_shader_variant *lp)
+{
+   if (!lp->jit_cs_context_ptr_type)
+      lp_jit_create_cs_types(lp);
 }

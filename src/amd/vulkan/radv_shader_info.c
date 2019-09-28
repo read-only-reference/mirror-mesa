@@ -310,6 +310,8 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
 		    instr->intrinsic == nir_intrinsic_image_deref_atomic_comp_swap) {
 			if (nir->info.stage == MESA_SHADER_FRAGMENT)
 				info->ps.writes_memory = true;
+			else if (nir->info.stage == MESA_SHADER_GEOMETRY)
+				info->gs.writes_memory = true;
 		}
 		break;
 	}
@@ -326,6 +328,8 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
 	case nir_intrinsic_ssbo_atomic_comp_swap:
 		if (nir->info.stage == MESA_SHADER_FRAGMENT)
 			info->ps.writes_memory = true;
+		else if (nir->info.stage == MESA_SHADER_GEOMETRY)
+			info->gs.writes_memory = true;
 		break;
 	case nir_intrinsic_load_deref:
 		gather_intrinsic_load_deref_info(nir, instr, info);
@@ -377,7 +381,7 @@ gather_info_block(const nir_shader *nir, const nir_block *block,
 static void
 gather_info_input_decl_vs(const nir_shader *nir, const nir_variable *var,
 			  struct radv_shader_info *info,
-			  const struct radv_nir_compiler_options *options)
+			  const struct radv_shader_variant_key *key)
 {
 	unsigned attrib_count = glsl_count_attribute_slots(var->type, true);
 	int idx = var->data.location;
@@ -388,7 +392,7 @@ gather_info_input_decl_vs(const nir_shader *nir, const nir_variable *var,
 	for (unsigned i = 0; i < attrib_count; ++i) {
 		unsigned attrib_index = var->data.location + i - VERT_ATTRIB_GENERIC0;
 
-		if (options->key.vs.instance_rate_inputs & (1u << attrib_index))
+		if (key->vs.instance_rate_inputs & (1u << attrib_index))
 			info->vs.needs_instance_id = true;
 	}
 }
@@ -466,11 +470,11 @@ gather_info_input_decl_ps(const nir_shader *nir, const nir_variable *var,
 static void
 gather_info_input_decl(const nir_shader *nir, const nir_variable *var,
 		       struct radv_shader_info *info,
-		       const struct radv_nir_compiler_options *options)
+		       const struct radv_shader_variant_key *key)
 {
 	switch (nir->info.stage) {
 	case MESA_SHADER_VERTEX:
-		gather_info_input_decl_vs(nir, var, info, options);
+		gather_info_input_decl_vs(nir, var, info, key);
 		break;
 	case MESA_SHADER_FRAGMENT:
 		gather_info_input_decl_ps(nir, var, info);
@@ -531,21 +535,57 @@ gather_info_output_decl_gs(const nir_shader *nir, const nir_variable *var,
 static void
 gather_info_output_decl(const nir_shader *nir, const nir_variable *var,
 			struct radv_shader_info *info,
-			const struct radv_nir_compiler_options *options)
+			const struct radv_shader_variant_key *key)
 {
+	struct radv_vs_output_info *vs_info = NULL;
+
 	switch (nir->info.stage) {
 	case MESA_SHADER_FRAGMENT:
 		gather_info_output_decl_ps(nir, var, info);
 		break;
 	case MESA_SHADER_VERTEX:
-		if (options->key.vs_common_out.as_ls)
+		if (!key->vs_common_out.as_ls &&
+		    !key->vs_common_out.as_es)
+			vs_info = &info->vs.outinfo;
+
+		if (key->vs_common_out.as_ls)
 			gather_info_output_decl_ls(nir, var, info);
+		else if (key->vs_common_out.as_ngg)
+			gather_info_output_decl_gs(nir, var, info);
 		break;
 	case MESA_SHADER_GEOMETRY:
+		vs_info = &info->vs.outinfo;
 		gather_info_output_decl_gs(nir, var, info);
+		break;
+	case MESA_SHADER_TESS_EVAL:
+		if (!key->vs_common_out.as_es)
+			vs_info = &info->tes.outinfo;
 		break;
 	default:
 		break;
+	}
+
+	if (vs_info) {
+		switch (var->data.location) {
+		case VARYING_SLOT_CLIP_DIST0:
+			vs_info->clip_dist_mask =
+				(1 << nir->info.clip_distance_array_size) - 1;
+			vs_info->cull_dist_mask =
+				(1 << nir->info.cull_distance_array_size) - 1;
+			vs_info->cull_dist_mask <<= nir->info.clip_distance_array_size;
+			break;
+		case VARYING_SLOT_PSIZ:
+			vs_info->writes_pointsize = true;
+			break;
+		case VARYING_SLOT_VIEWPORT:
+			vs_info->writes_viewport_index = true;
+			break;
+		case VARYING_SLOT_LAYER:
+			vs_info->writes_layer = true;
+			break;
+		default:
+			break;
+		}
 	}
 }
 
@@ -592,27 +632,28 @@ radv_nir_shader_info_init(struct radv_shader_info *info)
 
 void
 radv_nir_shader_info_pass(const struct nir_shader *nir,
-			  const struct radv_nir_compiler_options *options,
+			  const struct radv_pipeline_layout *layout,
+			  const struct radv_shader_variant_key *key,
 			  struct radv_shader_info *info)
 {
 	struct nir_function *func =
 		(struct nir_function *)exec_list_get_head_const(&nir->functions);
 
-	if (options->layout && options->layout->dynamic_offset_count &&
-	    (options->layout->dynamic_shader_stages & mesa_to_vk_shader_stage(nir->info.stage))) {
+	if (layout && layout->dynamic_offset_count &&
+	    (layout->dynamic_shader_stages & mesa_to_vk_shader_stage(nir->info.stage))) {
 		info->loads_push_constants = true;
 		info->loads_dynamic_offsets = true;
 	}
 
 	nir_foreach_variable(variable, &nir->inputs)
-		gather_info_input_decl(nir, variable, info, options);
+		gather_info_input_decl(nir, variable, info, key);
 
 	nir_foreach_block(block, func->impl) {
 		gather_info_block(nir, block, info);
 	}
 
 	nir_foreach_variable(variable, &nir->outputs)
-		gather_info_output_decl(nir, variable, info, options);
+		gather_info_output_decl(nir, variable, info, key);
 
 	if (nir->info.stage == MESA_SHADER_VERTEX ||
 	    nir->info.stage == MESA_SHADER_TESS_EVAL ||
@@ -620,7 +661,7 @@ radv_nir_shader_info_pass(const struct nir_shader *nir,
 		gather_xfb_info(nir, info);
 
 	/* Make sure to export the LayerID if the fragment shader needs it. */
-	if (options->key.vs_common_out.export_layer_id) {
+	if (key->vs_common_out.export_layer_id) {
 		switch (nir->info.stage) {
 		case MESA_SHADER_VERTEX:
 			info->vs.output_usage_mask[VARYING_SLOT_LAYER] |= 0x1;
@@ -636,6 +677,107 @@ radv_nir_shader_info_pass(const struct nir_shader *nir,
 		}
 	}
 
+	/* Make sure to export the LayerID if the subpass has multiviews. */
+	if (key->has_multiview_view_index) {
+		switch (nir->info.stage) {
+		case MESA_SHADER_VERTEX:
+			info->vs.outinfo.writes_layer = true;
+			break;
+		case MESA_SHADER_TESS_EVAL:
+			info->tes.outinfo.writes_layer = true;
+			break;
+		case MESA_SHADER_GEOMETRY:
+			info->vs.outinfo.writes_layer = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	/* Make sure to export the PrimitiveID if the fragment shader needs it. */
+	if (key->vs_common_out.export_prim_id) {
+		switch (nir->info.stage) {
+		case MESA_SHADER_VERTEX:
+			info->vs.outinfo.export_prim_id = true;
+			break;
+		case MESA_SHADER_TESS_EVAL:
+			info->tes.outinfo.export_prim_id = true;
+			break;
+		case MESA_SHADER_GEOMETRY:
+			info->vs.outinfo.export_prim_id = true;
+			break;
+		default:
+			break;
+		}
+	}
+
 	if (nir->info.stage == MESA_SHADER_FRAGMENT)
 		info->ps.num_interp = nir->num_inputs;
+
+	switch (nir->info.stage) {
+        case MESA_SHADER_COMPUTE:
+                for (int i = 0; i < 3; ++i)
+                        info->cs.block_size[i] = nir->info.cs.local_size[i];
+                break;
+        case MESA_SHADER_FRAGMENT:
+		info->ps.can_discard = nir->info.fs.uses_discard;
+                info->ps.early_fragment_test = nir->info.fs.early_fragment_tests;
+                info->ps.post_depth_coverage = nir->info.fs.post_depth_coverage;
+                break;
+        case MESA_SHADER_GEOMETRY:
+                info->gs.vertices_in = nir->info.gs.vertices_in;
+                info->gs.vertices_out = nir->info.gs.vertices_out;
+                info->gs.output_prim = nir->info.gs.output_primitive;
+                info->gs.invocations = nir->info.gs.invocations;
+                break;
+        case MESA_SHADER_TESS_EVAL:
+                info->tes.primitive_mode = nir->info.tess.primitive_mode;
+                info->tes.spacing = nir->info.tess.spacing;
+                info->tes.ccw = nir->info.tess.ccw;
+                info->tes.point_mode = nir->info.tess.point_mode;
+                info->tes.as_es = key->vs_common_out.as_es;
+                info->tes.export_prim_id = key->vs_common_out.export_prim_id;
+                info->is_ngg = key->vs_common_out.as_ngg;
+                break;
+        case MESA_SHADER_TESS_CTRL:
+                info->tcs.tcs_vertices_out = nir->info.tess.tcs_vertices_out;
+                break;
+        case MESA_SHADER_VERTEX:
+                info->vs.as_es = key->vs_common_out.as_es;
+                info->vs.as_ls = key->vs_common_out.as_ls;
+                info->vs.export_prim_id = key->vs_common_out.export_prim_id;
+                info->is_ngg = key->vs_common_out.as_ngg;
+                break;
+        default:
+                break;
+        }
+
+	if (nir->info.stage == MESA_SHADER_GEOMETRY) {
+		unsigned add_clip = nir->info.clip_distance_array_size +
+				    nir->info.cull_distance_array_size > 4;
+		info->gs.gsvs_vertex_size =
+			(util_bitcount64(nir->info.outputs_written) + add_clip) * 16;
+		info->gs.max_gsvs_emit_size =
+			info->gs.gsvs_vertex_size * nir->info.gs.vertices_out;
+	}
+
+	/* Compute the ESGS item size for VS or TES as ES. */
+	if ((nir->info.stage == MESA_SHADER_VERTEX ||
+	     nir->info.stage == MESA_SHADER_TESS_EVAL) &&
+	    key->vs_common_out.as_es) {
+		struct radv_es_output_info *es_info =
+			nir->info.stage == MESA_SHADER_VERTEX ? &info->vs.es_info : &info->tes.es_info;
+		uint32_t max_output_written = 0;
+
+		uint64_t output_mask = nir->info.outputs_written;
+		while (output_mask) {
+			const int i = u_bit_scan64(&output_mask);
+			unsigned param_index = shader_io_get_unique_index(i);
+
+			max_output_written = MAX2(param_index, max_output_written);
+		}
+
+		es_info->esgs_itemsize = (max_output_written + 1) * 16;
+	}
+
 }

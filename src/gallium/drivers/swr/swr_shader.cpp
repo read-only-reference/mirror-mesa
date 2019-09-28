@@ -21,14 +21,22 @@
  * IN THE SOFTWARE.
  ***************************************************************************/
 
+#include <llvm/Config/llvm-config.h>
+
+#if LLVM_VERSION_MAJOR < 7
 // llvm redefines DEBUG
 #pragma push_macro("DEBUG")
 #undef DEBUG
+#endif
+
 #include "JitManager.h"
 #include "llvm-c/Core.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/IR/LegacyPassManager.h"
+
+#if LLVM_VERSION_MAJOR < 7
 #pragma pop_macro("DEBUG")
+#endif
 
 #include "state.h"
 #include "gen_state_llvm.h"
@@ -599,7 +607,7 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "GS",
                                      JM()->mpCurrentModule);
-#if HAVE_LLVM < 0x0500
+#if LLVM_VERSION_MAJOR < 5
    AttributeSet attrSet = AttributeSet::get(
       JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
    pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
@@ -728,7 +736,7 @@ swr_compile_gs(struct swr_context *ctx, swr_jit_gs_key &key)
       "GS");
    PFN_GS_FUNC func = builder.CompileGS(ctx, key);
 
-   ctx->gs->map.insert(std::make_pair(key, make_unique<VariantGS>(builder.gallivm, func)));
+   ctx->gs->map.insert(std::make_pair(key, std::make_unique<VariantGS>(builder.gallivm, func)));
    return func;
 }
 
@@ -773,7 +781,7 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "VS",
                                      JM()->mpCurrentModule);
-#if HAVE_LLVM < 0x0500
+#if LLVM_VERSION_MAJOR < 5
    AttributeSet attrSet = AttributeSet::get(
       JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
    pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
@@ -983,7 +991,7 @@ swr_compile_vs(struct swr_context *ctx, swr_jit_vs_key &key)
       "VS");
    PFN_VERTEX_FUNC func = builder.CompileVS(ctx, key);
 
-   ctx->vs->map.insert(std::make_pair(key, make_unique<VariantVS>(builder.gallivm, func)));
+   ctx->vs->map.insert(std::make_pair(key, std::make_unique<VariantVS>(builder.gallivm, func)));
    return func;
 }
 
@@ -1059,7 +1067,7 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
                                      GlobalValue::ExternalLinkage,
                                      "FS",
                                      JM()->mpCurrentModule);
-#if HAVE_LLVM < 0x0500
+#if LLVM_VERSION_MAJOR < 5
    AttributeSet attrSet = AttributeSet::get(
       JM()->mContext, AttributeSet::FunctionIndex, attrBuilder);
    pFunction->addAttributes(AttributeSet::FunctionIndex, attrSet);
@@ -1450,6 +1458,6 @@ swr_compile_fs(struct swr_context *ctx, swr_jit_fs_key &key)
       "FS");
    PFN_PIXEL_KERNEL func = builder.CompileFS(ctx, key);
 
-   ctx->fs->map.insert(std::make_pair(key, make_unique<VariantFS>(builder.gallivm, func)));
+   ctx->fs->map.insert(std::make_pair(key, std::make_unique<VariantFS>(builder.gallivm, func)));
    return func;
 }

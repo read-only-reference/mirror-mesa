@@ -22,6 +22,8 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <llvm/Config/llvm-config.h>
+
 #include "util/u_memory.h"
 #include "util/u_string.h"
 #include "tgsi/tgsi_build.h"
@@ -5028,7 +5030,7 @@ static void create_function(struct si_shader_context *ctx)
 	shader->info.num_input_vgprs -= num_prolog_vgprs;
 
 	if (shader->key.as_ls || ctx->type == PIPE_SHADER_TESS_CTRL) {
-		if (USE_LDS_SYMBOLS && HAVE_LLVM >= 0x0900) {
+		if (USE_LDS_SYMBOLS && LLVM_VERSION_MAJOR >= 9) {
 			/* The LSHS size is not known until draw time, so we append it
 			 * at the end of whatever LDS use there may be in the rest of
 			 * the shader (currently none, unless LLVM decides to do its
@@ -5085,7 +5087,7 @@ static void preload_ring_buffers(struct si_shader_context *ctx)
 			ctx->esgs_ring =
 				ac_build_load_to_sgpr(&ctx->ac, buf_ptr, offset);
 		} else {
-			if (USE_LDS_SYMBOLS && HAVE_LLVM >= 0x0900) {
+			if (USE_LDS_SYMBOLS && LLVM_VERSION_MAJOR >= 9) {
 				/* Declare the ESGS ring as an explicit LDS symbol. */
 				declare_esgs_ring(ctx);
 			} else {
@@ -5286,7 +5288,7 @@ static unsigned si_get_shader_binary_size(struct si_screen *screen, struct si_sh
 {
 	struct ac_rtld_binary rtld;
 	si_shader_binary_open(screen, shader, &rtld);
-	return rtld.rx_size;
+	return rtld.exec_size;
 }
 
 static bool si_get_external_symbol(void *data, const char *name, uint64_t *value)
@@ -5418,7 +5420,7 @@ static void si_calculate_max_simd_waves(struct si_shader *shader)
 	unsigned lds_per_wave = 0;
 	unsigned max_simd_waves;
 
-	max_simd_waves = ac_get_max_simd_waves(sscreen->info.family);
+	max_simd_waves = sscreen->info.max_wave64_per_simd;
 
 	/* Compute LDS usage for PS. */
 	switch (shader->selector->type) {
@@ -5452,16 +5454,25 @@ static void si_calculate_max_simd_waves(struct si_shader *shader)
 	if (conf->num_sgprs) {
 		max_simd_waves =
 			MIN2(max_simd_waves,
-			     ac_get_num_physical_sgprs(sscreen->info.chip_class) / conf->num_sgprs);
+			     sscreen->info.num_physical_sgprs_per_simd / conf->num_sgprs);
 	}
 
-	if (conf->num_vgprs)
-		max_simd_waves = MIN2(max_simd_waves, 256 / conf->num_vgprs);
+	if (conf->num_vgprs) {
+		/* Always print wave limits as Wave64, so that we can compare
+		 * Wave32 and Wave64 with shader-db fairly. */
+		unsigned max_vgprs = sscreen->info.num_physical_wave64_vgprs_per_simd;
+		max_simd_waves = MIN2(max_simd_waves, max_vgprs / conf->num_vgprs);
+	}
 
-	/* LDS is 64KB per CU (4 SIMDs), which is 16KB per SIMD (usage above
-	 * 16KB makes some SIMDs unoccupied). */
+	/* LDS is 64KB per CU (4 SIMDs) on GFX6-9, which is 16KB per SIMD (usage above
+	 * 16KB makes some SIMDs unoccupied).
+	 *
+	 * LDS is 128KB in WGP mode and 64KB in CU mode. Assume the WGP mode is used.
+	 */
+	unsigned max_lds_size = sscreen->info.chip_class >= GFX10 ? 128*1024 : 64*1024;
+	unsigned max_lds_per_simd = max_lds_size / 4;
 	if (lds_per_wave)
-		max_simd_waves = MIN2(max_simd_waves, 16384 / lds_per_wave);
+		max_simd_waves = MIN2(max_simd_waves, max_lds_per_simd / lds_per_wave);
 
 	shader->info.max_simd_waves = max_simd_waves;
 }
@@ -7165,15 +7176,17 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 	 */
 	if (sel->type == PIPE_SHADER_COMPUTE) {
 		unsigned wave_size = sscreen->compute_wave_size;
-		unsigned max_vgprs = 256;
-		unsigned max_sgprs = sscreen->info.chip_class >= GFX8 ? 800 : 512;
+		unsigned max_vgprs = sscreen->info.num_physical_wave64_vgprs_per_simd *
+				     (wave_size == 32 ? 2 : 1);
+		unsigned max_sgprs = sscreen->info.num_physical_sgprs_per_simd;
 		unsigned max_sgprs_per_wave = 128;
-		unsigned max_block_threads = si_get_max_workgroup_size(shader);
-		unsigned min_waves_per_cu = DIV_ROUND_UP(max_block_threads, wave_size);
-		unsigned min_waves_per_simd = DIV_ROUND_UP(min_waves_per_cu, 4);
+		unsigned simds_per_tg = 4; /* assuming WGP mode on gfx10 */
+		unsigned threads_per_tg = si_get_max_workgroup_size(shader);
+		unsigned waves_per_tg = DIV_ROUND_UP(threads_per_tg, wave_size);
+		unsigned waves_per_simd = DIV_ROUND_UP(waves_per_tg, simds_per_tg);
 
-		max_vgprs = max_vgprs / min_waves_per_simd;
-		max_sgprs = MIN2(max_sgprs / min_waves_per_simd, max_sgprs_per_wave);
+		max_vgprs = max_vgprs / waves_per_simd;
+		max_sgprs = MIN2(max_sgprs / waves_per_simd, max_sgprs_per_wave);
 
 		if (shader->config.num_sgprs > max_sgprs ||
 		    shader->config.num_vgprs > max_vgprs) {
@@ -7197,46 +7210,9 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 
 	/* Calculate the number of fragment input VGPRs. */
 	if (ctx.type == PIPE_SHADER_FRAGMENT) {
-		shader->info.num_input_vgprs = 0;
-		shader->info.face_vgpr_index = -1;
-		shader->info.ancillary_vgpr_index = -1;
-
-		if (G_0286CC_PERSP_SAMPLE_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 2;
-		if (G_0286CC_PERSP_CENTER_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 2;
-		if (G_0286CC_PERSP_CENTROID_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 2;
-		if (G_0286CC_PERSP_PULL_MODEL_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 3;
-		if (G_0286CC_LINEAR_SAMPLE_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 2;
-		if (G_0286CC_LINEAR_CENTER_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 2;
-		if (G_0286CC_LINEAR_CENTROID_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 2;
-		if (G_0286CC_LINE_STIPPLE_TEX_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
-		if (G_0286CC_POS_X_FLOAT_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
-		if (G_0286CC_POS_Y_FLOAT_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
-		if (G_0286CC_POS_Z_FLOAT_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
-		if (G_0286CC_POS_W_FLOAT_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
-		if (G_0286CC_FRONT_FACE_ENA(shader->config.spi_ps_input_addr)) {
-			shader->info.face_vgpr_index = shader->info.num_input_vgprs;
-			shader->info.num_input_vgprs += 1;
-		}
-		if (G_0286CC_ANCILLARY_ENA(shader->config.spi_ps_input_addr)) {
-			shader->info.ancillary_vgpr_index = shader->info.num_input_vgprs;
-			shader->info.num_input_vgprs += 1;
-		}
-		if (G_0286CC_SAMPLE_COVERAGE_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
-		if (G_0286CC_POS_FIXED_PT_ENA(shader->config.spi_ps_input_addr))
-			shader->info.num_input_vgprs += 1;
+		shader->info.num_input_vgprs = ac_get_fs_input_vgpr_cnt(&shader->config,
+						&shader->info.face_vgpr_index,
+						&shader->info.ancillary_vgpr_index);
 	}
 
 	si_calculate_max_simd_waves(shader);

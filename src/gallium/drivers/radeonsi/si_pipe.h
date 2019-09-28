@@ -288,7 +288,6 @@ struct si_texture {
 	struct si_resource		buffer;
 
 	struct radeon_surf		surface;
-	uint64_t			size;
 	struct si_texture		*flushed_depth_texture;
 
 	/* One texture allocation can contain these buffers:
@@ -300,20 +299,14 @@ struct si_texture {
 	 * - displayable DCC buffer (if the DCC buffer is not displayable)
 	 * - DCC retile mapping buffer (if the DCC buffer is not displayable)
 	 */
-	uint64_t			fmask_offset;
-	uint64_t			cmask_offset;
 	uint64_t			cmask_base_address_reg;
 	struct si_resource		*cmask_buffer;
-	uint64_t			dcc_offset; /* 0 = disabled */
-	uint64_t			display_dcc_offset;
-	uint64_t			dcc_retile_map_offset;
 	unsigned			cb_color_info; /* fast clear enable bit */
 	unsigned			color_clear_value[2];
 	unsigned			last_msaa_resolve_target_micro_mode;
 	unsigned			num_level0_transfers;
 
 	/* Depth buffer compression and fast clear. */
-	uint64_t			htile_offset;
 	float				depth_clear_value;
 	uint16_t			dirty_level_mask; /* each bit says if that mipmap is compressed */
 	uint16_t			stencil_dirty_level_mask; /* each bit says if that mipmap is compressed */
@@ -1550,7 +1543,7 @@ si_texture_reference(struct si_texture **ptr, struct si_texture *res)
 static inline bool
 vi_dcc_enabled(struct si_texture *tex, unsigned level)
 {
-	return tex->dcc_offset && level < tex->surface.num_dcc_levels;
+	return tex->surface.dcc_offset && level < tex->surface.num_dcc_levels;
 }
 
 static inline unsigned
@@ -1691,7 +1684,9 @@ si_make_CB_shader_coherent(struct si_context *sctx, unsigned num_samples,
 		       SI_CONTEXT_INV_VCACHE;
 
 	if (sctx->chip_class >= GFX10) {
-		if (shaders_read_metadata)
+		if (sctx->screen->info.tcc_harvested)
+			sctx->flags |= SI_CONTEXT_INV_L2;
+		else if (shaders_read_metadata)
 			sctx->flags |= SI_CONTEXT_INV_L2_METADATA;
 	} else if (sctx->chip_class == GFX9) {
 		/* Single-sample color is coherent with shaders on GFX9, but
@@ -1717,7 +1712,9 @@ si_make_DB_shader_coherent(struct si_context *sctx, unsigned num_samples,
 		       SI_CONTEXT_INV_VCACHE;
 
 	if (sctx->chip_class >= GFX10) {
-		if (shaders_read_metadata)
+		if (sctx->screen->info.tcc_harvested)
+			sctx->flags |= SI_CONTEXT_INV_L2;
+		else if (shaders_read_metadata)
 			sctx->flags |= SI_CONTEXT_INV_L2_METADATA;
 	} else if (sctx->chip_class == GFX9) {
 		/* Single-sample depth (not stencil) is coherent with shaders
@@ -1747,13 +1744,13 @@ si_htile_enabled(struct si_texture *tex, unsigned level, unsigned zs_mask)
 	if (zs_mask == PIPE_MASK_S && tex->htile_stencil_disabled)
 		return false;
 
-	return tex->htile_offset && level == 0;
+	return tex->surface.htile_offset && level == 0;
 }
 
 static inline bool
 vi_tc_compat_htile_enabled(struct si_texture *tex, unsigned level, unsigned zs_mask)
 {
-	assert(!tex->tc_compatible_htile || tex->htile_offset);
+	assert(!tex->tc_compatible_htile || tex->surface.htile_offset);
 	return tex->tc_compatible_htile && si_htile_enabled(tex, level, zs_mask);
 }
 

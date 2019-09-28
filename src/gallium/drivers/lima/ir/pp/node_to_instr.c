@@ -50,7 +50,7 @@ static bool ppir_do_node_to_instr_pipeline(ppir_block *block, ppir_node *node)
    if (!dest || dest->type != ppir_target_pipeline)
       return false;
 
-   assert(ppir_node_has_single_succ(node));
+   assert(ppir_node_has_single_src_succ(node));
    ppir_node *succ = ppir_node_first_succ(node);
    assert(succ);
    assert(succ->instr);
@@ -66,11 +66,15 @@ static bool ppir_do_one_node_to_instr(ppir_block *block, ppir_node *node, ppir_n
    switch (node->type) {
    case ppir_node_type_alu:
    {
+      /* don't create an instr for undef node */
+      if (node->op == ppir_op_undef)
+         break;
+
       /* merge pred mul and succ add in the same instr can save a reg
        * by using pipeline reg ^vmul/^fmul */
       ppir_alu_node *alu = ppir_node_to_alu(node);
       if (alu->dest.type == ppir_target_ssa &&
-          ppir_node_has_single_succ(node)) {
+          ppir_node_has_single_src_succ(node)) {
          ppir_node *succ = ppir_node_first_succ(node);
          if (succ->instr_pos == PPIR_INSTR_SLOT_ALU_VEC_ADD) {
             node->instr_pos = PPIR_INSTR_SLOT_ALU_VEC_MUL;
@@ -93,23 +97,52 @@ static bool ppir_do_one_node_to_instr(ppir_block *block, ppir_node *node, ppir_n
       break;
    }
    case ppir_node_type_load:
-      if (node->op == ppir_op_load_varying ||
-          node->op == ppir_op_load_fragcoord ||
-          node->op == ppir_op_load_pointcoord ||
-          node->op == ppir_op_load_frontface) {
-         if (!create_new_instr(block, node))
-            return false;
-      }
-      else {
-         /* not supported yet */
-         assert(0);
-         return false;
-      }
-      break;
    case ppir_node_type_load_texture:
+   {
       if (!create_new_instr(block, node))
          return false;
+
+      /* load varying output can be a register, it doesn't need a mov */
+      switch (node->op) {
+      case ppir_op_load_varying:
+      case ppir_op_load_coords:
+      case ppir_op_load_fragcoord:
+      case ppir_op_load_pointcoord:
+      case ppir_op_load_frontface:
+         return true;
+      default:
+         break;
+      }
+
+      /* Load cannot be pipelined, likely slot is already taken. Create a mov */
+      assert(ppir_node_has_single_src_succ(node));
+      ppir_dest *dest = ppir_node_get_dest(node);
+      assert(dest->type == ppir_target_pipeline);
+      ppir_pipeline pipeline_reg = dest->pipeline;
+
+      /* Turn dest back to SSA, so we can update predecessors */
+      ppir_node *succ = ppir_node_first_succ(node);
+      ppir_src *succ_src = ppir_node_get_src_for_pred(succ, node);
+      dest->type = ppir_target_ssa;
+      dest->ssa.index = -1;
+      ppir_node_target_assign(succ_src, node);
+
+      ppir_node *move = ppir_node_insert_mov(node);
+      if (unlikely(!move))
+         return false;
+
+      ppir_src *mov_src = ppir_node_get_src(move, 0);
+      mov_src->type = dest->type = ppir_target_pipeline;
+      mov_src->pipeline = dest->pipeline = pipeline_reg;
+
+      ppir_debug("node_to_instr create move %d for load %d\n",
+                 move->index, node->index);
+
+      if (!ppir_instr_insert_node(node->instr, move))
+         return false;
+
       break;
+   }
    case ppir_node_type_const:
       /* Const nodes are supposed to go through do_node_to_instr_pipeline() */
       assert(false);

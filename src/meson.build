@@ -47,6 +47,11 @@ sha1_h = custom_target(
 )
 
 subdir('gtest')
+if cc.get_id() == 'msvc'
+  subdir('getopt')
+else
+  idep_getopt = null_dep
+endif
 subdir('util')
 subdir('mapi')
 # TODO: opengl
@@ -106,12 +111,12 @@ endif
 
 # This must be after at least mesa, glx, and gallium, since libgl will be
 # defined in one of those subdirs depending on the glx provider.
-if with_glx != 'disabled'
+if with_glx != 'disabled' and (not with_glvnd or glvnd_missing_pc_files)
   # If using glvnd the pkg-config header should not point to GL_mesa, it should
   # point to GL. glvnd is only available on unix like platforms so adding -l
   # should be safe here
   # TODO: in the glvnd case glvnd itself should really be providing this.
-  if with_glvnd
+  if glvnd_missing_pc_files
     _gl = '-L${libdir} -lGL'
   else
     _gl = libgl

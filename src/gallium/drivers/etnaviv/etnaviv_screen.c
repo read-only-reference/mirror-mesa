@@ -152,6 +152,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TEXCOORD:
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
+   case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
       return 1;
    case PIPE_CAP_NATIVE_FENCE_FD:
       return screen->drm_version >= ETNA_DRM_VERSION_FENCE_FD;
@@ -192,6 +193,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 255;
 
    /* Texturing. */
+   case PIPE_CAP_TEXTURE_SHADOW_MAP:
+      return 0;
    case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS: /* TODO: verify */
       return screen->specs.max_texture_size;
@@ -319,10 +322,11 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
       return 0;
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return VIV_FEATURE(screen, chipMinorFeatures0, HAS_SQRT_TRIG);
-   case PIPE_SHADER_CAP_INTEGERS:
    case PIPE_SHADER_CAP_INT64_ATOMICS:
    case PIPE_SHADER_CAP_FP16:
       return 0;
+   case PIPE_SHADER_CAP_INTEGERS:
+      return DBG_ENABLED(ETNA_DBG_NIR) && screen->specs.halti >= 2;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
       return shader == PIPE_SHADER_FRAGMENT

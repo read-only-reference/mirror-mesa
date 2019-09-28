@@ -214,7 +214,10 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
    }
    ctx->dirty |= ETNA_DIRTY_INDEX_BUFFER;
 
-   struct etna_shader_key key = {};
+   struct etna_shader_key key = {
+      .front_ccw = ctx->rasterizer->front_ccw,
+   };
+
    if (pfb->cbufs[0])
       key.frag_rb_swap = !!translate_rs_format_rb_swap(pfb->cbufs[0]->format);
 
@@ -251,7 +254,7 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
    resource_read(ctx, ctx->constant_buffer[PIPE_SHADER_FRAGMENT].buffer);
 
    /* Mark VBOs as being read */
-   for (i = 0; i < ctx->vertex_buffer.count; i++) {
+   foreach_bit(i, ctx->vertex_buffer.enabled_mask) {
       assert(!ctx->vertex_buffer.vb[i].is_user_buffer);
       resource_read(ctx, ctx->vertex_buffer.vb[i].buffer.resource);
    }

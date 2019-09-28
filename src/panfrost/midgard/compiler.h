@@ -88,20 +88,14 @@ typedef struct midgard_instruction {
         unsigned src[3];
         unsigned dest;
 
-        /* Swizzle for the conditional for a csel */
-        unsigned csel_swizzle;
+        /* Swizzle for the conditional for a csel/branch */
+        unsigned cond_swizzle;
 
         /* Special fields for an ALU instruction */
         midgard_reg_info registers;
 
         /* I.e. (1 << alu_bit) */
         int unit;
-
-        /* When emitting bundle, should this instruction have a break forced
-         * before it? Used for r31 writes which are valid only within a single
-         * bundle and *need* to happen as early as possible... this is a hack,
-         * TODO remove when we have a scheduler */
-        bool precede_break;
 
         bool has_constants;
         uint32_t constants[4];
@@ -135,6 +129,16 @@ typedef struct midgard_instruction {
 
         /* Generic hint for intra-pass use */
         bool hint;
+
+        /* During scheduling, the backwards dependency graph
+         * (DAG). nr_dependencies is the number of unscheduled
+         * instructions that must still be scheduled after
+         * (before) this instruction. dependents are which
+         * instructions need to be scheduled before (after) this
+         * instruction. */
+
+        unsigned nr_dependencies;
+        BITSET_WORD *dependents;
 
         union {
                 midgard_load_store_word load_store;
@@ -194,9 +198,10 @@ typedef struct midgard_bundle {
         /* Tag for the overall bundle */
         int tag;
 
-        /* Instructions contained by the bundle */
+        /* Instructions contained by the bundle. instruction_count <= 6 (vmul,
+         * sadd, vadd, smul, vlut, branch) */
         int instruction_count;
-        midgard_instruction *instructions[5];
+        midgard_instruction *instructions[6];
 
         /* Bundle-wide ALU configuration */
         int padding;
@@ -496,10 +501,8 @@ void mir_set_swizzle(midgard_instruction *ins, unsigned idx, unsigned new);
 void mir_rewrite_index(compiler_context *ctx, unsigned old, unsigned new);
 void mir_rewrite_index_src(compiler_context *ctx, unsigned old, unsigned new);
 void mir_rewrite_index_dst(compiler_context *ctx, unsigned old, unsigned new);
-void mir_rewrite_index_dst_tag(compiler_context *ctx, unsigned old, unsigned new, unsigned tag);
 void mir_rewrite_index_dst_single(midgard_instruction *ins, unsigned old, unsigned new);
 void mir_rewrite_index_src_single(midgard_instruction *ins, unsigned old, unsigned new);
-void mir_rewrite_index_src_tag(compiler_context *ctx, unsigned old, unsigned new, unsigned tag);
 void mir_rewrite_index_src_swizzle(compiler_context *ctx, unsigned old, unsigned new, unsigned swizzle);
 bool mir_single_use(compiler_context *ctx, unsigned value);
 bool mir_special_index(compiler_context *ctx, unsigned idx);
@@ -521,6 +524,7 @@ bool mir_nontrivial_outmod(midgard_instruction *ins);
 
 void mir_insert_instruction_before_scheduled(compiler_context *ctx, midgard_block *block, midgard_instruction *tag, midgard_instruction ins);
 void mir_insert_instruction_after_scheduled(compiler_context *ctx, midgard_block *block, midgard_instruction *tag, midgard_instruction ins);
+void mir_flip(midgard_instruction *ins);
 
 /* MIR goodies */
 
@@ -650,6 +654,7 @@ void midgard_lower_invert(compiler_context *ctx, midgard_block *block);
 bool midgard_opt_not_propagate(compiler_context *ctx, midgard_block *block);
 bool midgard_opt_fuse_src_invert(compiler_context *ctx, midgard_block *block);
 bool midgard_opt_fuse_dest_invert(compiler_context *ctx, midgard_block *block);
+bool midgard_opt_csel_invert(compiler_context *ctx, midgard_block *block);
 bool midgard_opt_promote_fmov(compiler_context *ctx, midgard_block *block);
 
 #endif

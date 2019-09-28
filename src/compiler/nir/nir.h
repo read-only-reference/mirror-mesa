@@ -988,6 +988,87 @@ nir_op_vec(unsigned components)
    }
 }
 
+static inline bool
+nir_is_float_control_signed_zero_inf_nan_preserve(unsigned execution_mode, unsigned bit_size)
+{
+    return (16 == bit_size && execution_mode & FLOAT_CONTROLS_SIGNED_ZERO_INF_NAN_PRESERVE_FP16) ||
+        (32 == bit_size && execution_mode & FLOAT_CONTROLS_SIGNED_ZERO_INF_NAN_PRESERVE_FP32) ||
+        (64 == bit_size && execution_mode & FLOAT_CONTROLS_SIGNED_ZERO_INF_NAN_PRESERVE_FP64);
+}
+
+static inline bool
+nir_is_denorm_flush_to_zero(unsigned execution_mode, unsigned bit_size)
+{
+    return (16 == bit_size && execution_mode & FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP16) ||
+        (32 == bit_size && execution_mode & FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP32) ||
+        (64 == bit_size && execution_mode & FLOAT_CONTROLS_DENORM_FLUSH_TO_ZERO_FP64);
+}
+
+static inline bool
+nir_is_denorm_preserve(unsigned execution_mode, unsigned bit_size)
+{
+    return (16 == bit_size && execution_mode & FLOAT_CONTROLS_DENORM_PRESERVE_FP16) ||
+        (32 == bit_size && execution_mode & FLOAT_CONTROLS_DENORM_PRESERVE_FP32) ||
+        (64 == bit_size && execution_mode & FLOAT_CONTROLS_DENORM_PRESERVE_FP64);
+}
+
+static inline bool
+nir_is_rounding_mode_rtne(unsigned execution_mode, unsigned bit_size)
+{
+    return (16 == bit_size && execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP16) ||
+        (32 == bit_size && execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP32) ||
+        (64 == bit_size && execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP64);
+}
+
+static inline bool
+nir_is_rounding_mode_rtz(unsigned execution_mode, unsigned bit_size)
+{
+    return (16 == bit_size && execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP16) ||
+        (32 == bit_size && execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP32) ||
+        (64 == bit_size && execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP64);
+}
+
+static inline bool
+nir_has_any_rounding_mode_rtz(unsigned execution_mode)
+{
+    return (execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP16) ||
+        (execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP32) ||
+        (execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTZ_FP64);
+}
+
+static inline bool
+nir_has_any_rounding_mode_rtne(unsigned execution_mode)
+{
+    return (execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP16) ||
+        (execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP32) ||
+        (execution_mode & FLOAT_CONTROLS_ROUNDING_MODE_RTE_FP64);
+}
+
+static inline nir_rounding_mode
+nir_get_rounding_mode_from_float_controls(unsigned execution_mode,
+                                          nir_alu_type type)
+{
+   if (nir_alu_type_get_base_type(type) != nir_type_float)
+      return nir_rounding_mode_undef;
+
+   unsigned bit_size = nir_alu_type_get_type_size(type);
+
+   if (nir_is_rounding_mode_rtz(execution_mode, bit_size))
+      return nir_rounding_mode_rtz;
+   if (nir_is_rounding_mode_rtne(execution_mode, bit_size))
+      return nir_rounding_mode_rtne;
+   return nir_rounding_mode_undef;
+}
+
+static inline bool
+nir_has_any_rounding_mode_enabled(unsigned execution_mode)
+{
+   bool result =
+      nir_has_any_rounding_mode_rtne(execution_mode) ||
+      nir_has_any_rounding_mode_rtz(execution_mode);
+   return result;
+}
+
 typedef enum {
    /**
     * Operation where the first two sources are commutative.
@@ -3373,6 +3454,7 @@ void nir_calc_dominance(nir_shader *shader);
 
 nir_block *nir_dominance_lca(nir_block *b1, nir_block *b2);
 bool nir_block_dominates(nir_block *parent, nir_block *child);
+bool nir_block_is_unreachable(nir_block *block);
 
 void nir_dump_dom_tree_impl(nir_function_impl *impl, FILE *fp);
 void nir_dump_dom_tree(nir_shader *shader, FILE *fp);
@@ -3606,7 +3688,7 @@ bool nir_lower_alu(nir_shader *shader);
 bool nir_lower_flrp(nir_shader *shader, unsigned lowering_mask,
                     bool always_precise, bool have_ffma);
 
-bool nir_lower_alu_to_scalar(nir_shader *shader, BITSET_WORD *lower_set);
+bool nir_lower_alu_to_scalar(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
 bool nir_lower_bool_to_float(nir_shader *shader);
 bool nir_lower_bool_to_int32(nir_shader *shader);
 bool nir_lower_int_to_float(nir_shader *shader);
@@ -3937,6 +4019,8 @@ bool nir_convert_from_ssa(nir_shader *shader, bool phi_webs_only);
 bool nir_lower_phis_to_regs_block(nir_block *block);
 bool nir_lower_ssa_defs_to_regs_block(nir_block *block);
 bool nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl);
+
+bool nir_lower_samplers(nir_shader *shader);
 
 /* This is here for unit tests. */
 bool nir_opt_comparison_pre_impl(nir_function_impl *impl);

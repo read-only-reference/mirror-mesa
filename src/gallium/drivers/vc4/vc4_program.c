@@ -1530,7 +1530,7 @@ vc4_optimize_nir(struct nir_shader *s)
                 progress = false;
 
                 NIR_PASS_V(s, nir_lower_vars_to_ssa);
-                NIR_PASS(progress, s, nir_lower_alu_to_scalar, NULL);
+                NIR_PASS(progress, s, nir_lower_alu_to_scalar, NULL, NULL);
                 NIR_PASS(progress, s, nir_lower_phis_to_scalar);
                 NIR_PASS(progress, s, nir_copy_prop);
                 NIR_PASS(progress, s, nir_opt_remove_phis);
@@ -2334,6 +2334,21 @@ vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
         NIR_PASS_V(c->s, nir_lower_idiv);
 
         vc4_optimize_nir(c->s);
+
+        /* Do late algebraic optimization to turn add(a, neg(b)) back into
+         * subs, then the mandatory cleanup after algebraic.  Note that it may
+         * produce fnegs, and if so then we need to keep running to squash
+         * fneg(fneg(a)).
+         */
+        bool more_late_algebraic = true;
+        while (more_late_algebraic) {
+                more_late_algebraic = false;
+                NIR_PASS(more_late_algebraic, c->s, nir_opt_algebraic_late);
+                NIR_PASS_V(c->s, nir_opt_constant_folding);
+                NIR_PASS_V(c->s, nir_copy_prop);
+                NIR_PASS_V(c->s, nir_opt_dce);
+                NIR_PASS_V(c->s, nir_opt_cse);
+        }
 
         NIR_PASS_V(c->s, nir_lower_bool_to_int32);
 

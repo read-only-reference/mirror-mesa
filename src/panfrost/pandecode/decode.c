@@ -147,8 +147,8 @@ pandecode_validate_buffer(mali_ptr addr, size_t sz)
 
         if (total > bo->length) {
                 pandecode_msg("XXX: buffer overrun. "
-                                "Chunk of size %d at offset %d in buffer of size %d. "
-                                "Overrun by %d bytes. \n",
+                                "Chunk of size %zu at offset %d in buffer of size %zu. "
+                                "Overrun by %zu bytes. \n",
                                 sz, offset, bo->length, total - bo->length);
                 return;
         }
@@ -444,7 +444,7 @@ pandecode_special_varying(uint64_t v)
         case MALI_VARYING_POINT_COORD:
                 return "gl_PointCoord";
         default:
-                pandecode_msg("XXX: invalid special varying %X\n", v);
+                pandecode_msg("XXX: invalid special varying %" PRIx64 "\n", v);
                 return "";
         }
 }
@@ -571,7 +571,7 @@ pandecode_midgard_tiler_descriptor(
                 /* When tiling is enabled, the heap should be a tight fit */
                 unsigned heap_offset = t->heap_start - heap->gpu_va;
                 if ((heap_offset + heap_size) != heap->length) {
-                        pandecode_msg("XXX: heap size %d (expected %d)\n",
+                        pandecode_msg("XXX: heap size %u (expected %zu)\n",
                                         heap_size, heap->length - heap_offset);
                 }
 
@@ -639,7 +639,10 @@ pandecode_sfbd(uint64_t gpu_va, int job_no, bool is_fragment)
         struct pandecode_mapped_memory *mem = pandecode_find_mapped_gpu_mem_containing(gpu_va);
         const struct mali_single_framebuffer *PANDECODE_PTR_VAR(s, mem, (mali_ptr) gpu_va);
 
-        struct pandecode_fbd info;
+        struct pandecode_fbd info = {
+                .has_extra = false,
+                .rt_count = 1
+        };
 
         pandecode_log("struct mali_single_framebuffer framebuffer_%"PRIx64"_%d = {\n", gpu_va, job_no);
         pandecode_indent++;
@@ -653,7 +656,6 @@ pandecode_sfbd(uint64_t gpu_va, int job_no, bool is_fragment)
 
         info.width = s->width + 1;
         info.height = s->height + 1;
-        info.rt_count = 1;
 
         pandecode_prop("width = MALI_POSITIVE(%" PRId16 ")", info.width);
         pandecode_prop("height = MALI_POSITIVE(%" PRId16 ")", info.height);
@@ -1644,7 +1646,7 @@ pandecode_vertex_tiler_prefix(struct mali_vertex_tiler_prefix *p, int job_no, bo
 
         if (!canonical) {
                 pandecode_msg("XXX: non-canonical workgroups packing\n");
-                pandecode_msg("expected: %X, %d, %d, %d, %d, %d\n",
+                pandecode_msg("expected: %X, %d, %d, %d, %d, %d, %d\n",
                                 ref.invocation_count,
                                 ref.size_y_shift,
                                 ref.size_z_shift,
@@ -1802,6 +1804,7 @@ pandecode_shader_disassemble(mali_ptr shader_ptr, int shader_no, int type,
                 stats.instruction_count = 0;
                 stats.bundle_count = 0;
                 stats.quadword_count = 0;
+                stats.helper_invocations = false;
         } else {
                 stats = disassemble_midgard(code, sz);
         }

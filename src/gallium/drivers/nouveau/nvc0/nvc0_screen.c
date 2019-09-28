@@ -418,9 +418,13 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen,
    switch (param) {
    case PIPE_SHADER_CAP_PREFERRED_IR:
       return screen->prefer_nir ? PIPE_SHADER_IR_NIR : PIPE_SHADER_IR_TGSI;
-   case PIPE_SHADER_CAP_SUPPORTED_IRS:
-      return 1 << PIPE_SHADER_IR_TGSI |
-             1 << PIPE_SHADER_IR_NIR;
+   case PIPE_SHADER_CAP_SUPPORTED_IRS: {
+      uint32_t irs = 1 << PIPE_SHADER_IR_TGSI |
+                     1 << PIPE_SHADER_IR_NIR;
+      if (screen->force_enable_cl)
+         irs |= 1 << PIPE_SHADER_IR_NIR_SERIALIZED;
+      return irs;
+   }
    case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_TEX_INSTRUCTIONS:
@@ -935,7 +939,7 @@ static const nir_shader_compiler_options nir_options = {
    .lower_usub_borrow = true, // TODO
    .lower_mul_high = false,
    .lower_negate = false,
-   .lower_sub = false, // TODO
+   .lower_sub = true,
    .lower_scmp = true, // TODO: not implemented yet
    .lower_idiv = true,
    .lower_isign = false, // TODO

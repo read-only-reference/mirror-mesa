@@ -844,7 +844,7 @@ brw_process_driconf_options(struct brw_context *brw)
    driOptionCache *options = &brw->optionCache;
    driParseConfigFiles(options, &brw->screen->optionCache,
                        brw->driContext->driScreenPriv->myNum,
-                       "i965", NULL);
+                       "i965", NULL, NULL, 0);
 
    if (INTEL_DEBUG & DEBUG_NO_HIZ) {
        brw->has_hiz = false;
@@ -1236,7 +1236,7 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 GLboolean
 intelUnbindContext(__DRIcontext * driContextPriv)
 {
-   GET_CURRENT_CONTEXT(ctx);
+   struct gl_context *ctx = driContextPriv->driverPrivate;
    _mesa_glthread_finish(ctx);
 
    /* Unset current context and dispath table */
