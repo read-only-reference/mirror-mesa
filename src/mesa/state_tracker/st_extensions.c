@@ -163,7 +163,10 @@ void st_init_limits(struct pipe_screen *screen,
       struct gl_program_constants *pc;
       const nir_shader_compiler_options *nir_options = NULL;
 
-      if (screen->get_compiler_options) {
+      bool prefer_nir = PIPE_SHADER_IR_NIR ==
+         screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_PREFERRED_IR);
+
+      if (screen->get_compiler_options && prefer_nir) {
          nir_options = (const nir_shader_compiler_options *)
             screen->get_compiler_options(screen, PIPE_SHADER_IR_NIR, sh);
       }
@@ -323,9 +326,6 @@ void st_init_limits(struct pipe_screen *screen,
 
       if (!screen->get_param(screen, PIPE_CAP_NIR_COMPACT_ARRAYS))
          options->LowerCombinedClipCullDistance = true;
-
-      bool prefer_nir = PIPE_SHADER_IR_NIR ==
-         screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_PREFERRED_IR);
 
       /* NIR can do the lowering on our behalf and we'll get better results
        * because it can actually optimize SSBO access.
@@ -1024,6 +1024,7 @@ void st_init_extensions(struct pipe_screen *screen,
    extensions->ATI_fragment_shader = GL_TRUE;
    extensions->ATI_texture_env_combine3 = GL_TRUE;
 
+   extensions->MESA_framebuffer_flip_y = GL_TRUE;
    extensions->MESA_pack_invert = GL_TRUE;
 
    extensions->NV_fog_distance = GL_TRUE;
@@ -1173,7 +1174,7 @@ void st_init_extensions(struct pipe_screen *screen,
     * invocations of a geometry shader. There is no separate cap for that, so
     * we check the GLSLVersion.
     */
-   if (GLSLVersion >= 400 &&
+   if ((GLSLVersion >= 400 || ESSLVersion >= 310) &&
        screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY,
                                 PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0) {
       extensions->OES_geometry_shader = GL_TRUE;

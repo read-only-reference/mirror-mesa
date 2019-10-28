@@ -62,6 +62,12 @@ struct state {
    unsigned num_nodes;
 };
 
+#define compile_error(ctx, args...) ({ \
+   printf(args); \
+   ctx->error = true; \
+   assert(0); \
+})
+
 static inline hw_src
 src_swizzle(hw_src src, unsigned swizzle)
 {
@@ -388,7 +394,8 @@ get_src(struct state *state, nir_src *src)
       case nir_intrinsic_load_frag_coord:
          return SRC_REG(0, INST_SWIZ_IDENTITY);
       default:
-         assert(0);
+         compile_error(state->c, "Unhandled NIR intrinsic type: %s\n",
+                       nir_intrinsic_infos[intr->intrinsic].name);
          break;
       }
    } break;
@@ -401,7 +408,7 @@ get_src(struct state *state, nir_src *src)
       return src_swizzle(const_src(state, &value, 1), SWIZZLE(X,X,X,X));
    }
    default:
-      assert(0);
+      compile_error(state->c, "Unhandled NIR instruction type: %d\n", instr->type);
       break;
    }
 
@@ -1054,8 +1061,7 @@ emit_tex(struct state *state, nir_tex_instr * tex)
 {
    unsigned dst_swiz;
    hw_dst dst = ra_dest(state, &tex->dest, &dst_swiz);
-   nir_src *coord = NULL;
-   nir_src *lod_bias = NULL;
+   nir_src *coord = NULL, *lod_bias = NULL, *compare = NULL;
 
    for (unsigned i = 0; i < tex->num_srcs; i++) {
       switch (tex->src[i].src_type) {
@@ -1067,14 +1073,19 @@ emit_tex(struct state *state, nir_tex_instr * tex)
          assert(!lod_bias);
          lod_bias = &tex->src[i].src;
          break;
+      case nir_tex_src_comparator:
+         compare = &tex->src[i].src;
+         break;
       default:
-         assert(0);
+         compile_error(state->c, "Unhandled NIR tex src type: %d\n",
+                       tex->src[i].src_type);
          break;
       }
    }
 
    emit(tex, tex->op, tex->sampler_index, dst_swiz, dst, get_src(state, coord),
-        lod_bias ? get_src(state, lod_bias) : SRC_DISABLE);
+        lod_bias ? get_src(state, lod_bias) : SRC_DISABLE,
+        compare ? get_src(state, compare) : SRC_DISABLE);
 }
 
 static void
@@ -1104,7 +1115,8 @@ emit_intrinsic(struct state *state, nir_intrinsic_instr * intr)
    case nir_intrinsic_load_instance_id:
       break;
    default:
-      assert(0);
+      compile_error(state->c, "Unhandled NIR intrinsic type: %s\n",
+                    nir_intrinsic_infos[intr->intrinsic].name);
    }
 }
 
@@ -1128,7 +1140,7 @@ emit_instr(struct state *state, nir_instr * instr)
    case nir_instr_type_deref:
       break;
    default:
-      assert(0);
+      compile_error(state->c, "Unhandled NIR instruction type: %d\n", instr->type);
       break;
    }
 }
@@ -1181,7 +1193,7 @@ emit_cf_list(struct state *state, struct exec_list *list)
          emit_cf_list(state, &nir_cf_node_as_loop(node)->body);
          break;
       default:
-         assert(0);
+         compile_error(state->c, "Unknown NIR node type\n");
          break;
       }
    }

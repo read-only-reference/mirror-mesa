@@ -37,19 +37,6 @@
 		op == midgard_op_st_vary_32i \
 	)
 
-#define OP_IS_STORE_R26(op) (\
-                OP_IS_STORE_VARY(op) || \
-                op == midgard_op_st_char || \
-                op == midgard_op_st_char2 || \
-                op == midgard_op_st_char4 || \
-                op == midgard_op_st_short4 || \
-                op == midgard_op_st_int4 \
-        )
-
-#define OP_IS_STORE(op) (\
-                OP_IS_STORE_R26(op) \
-	)
-
 #define OP_IS_PROJECTION(op) ( \
                 op == midgard_op_ldst_perspective_division_z || \
                 op == midgard_op_ldst_perspective_division_w \
@@ -261,6 +248,26 @@ struct mir_op_props {
         const char *name;
         unsigned props;
 };
+
+/* For load/store */
+
+struct mir_ldst_op_props {
+        const char *name;
+        unsigned props;
+};
+
+/* Lower 2-bits are a midgard_reg_mode */
+#define GET_LDST_SIZE(c) (c & 3)
+
+/* Store (so the primary register is a source, not a destination */
+#define LDST_STORE (1 << 2)
+
+/* Mask has special meaning and should not be manipulated directly */
+#define LDST_SPECIAL_MASK (1 << 3)
+
+/* Non-store operation has side effects and should not be eliminated even if
+ * its mask is 0 */
+#define LDST_SIDE_FX (1 << 4)
 
 /* This file is common, so don't define the tables themselves. #include
  * midgard_op.h if you need that, or edit midgard_ops.c directly */

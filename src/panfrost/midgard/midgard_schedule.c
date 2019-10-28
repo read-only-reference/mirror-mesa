@@ -55,18 +55,18 @@
  *
  */
 
-/* We create the dependency graph with per-component granularity */
+/* We create the dependency graph with per-byte granularity */
 
-#define COMPONENT_COUNT 8
+#define BYTE_COUNT 16
 
 static void
-add_dependency(struct util_dynarray *table, unsigned index, unsigned mask, midgard_instruction **instructions, unsigned child)
+add_dependency(struct util_dynarray *table, unsigned index, uint16_t mask, midgard_instruction **instructions, unsigned child)
 {
-        for (unsigned i = 0; i < COMPONENT_COUNT; ++i) {
+        for (unsigned i = 0; i < BYTE_COUNT; ++i) {
                 if (!(mask & (1 << i)))
                         continue;
 
-                struct util_dynarray *parents = &table[(COMPONENT_COUNT * index) + i];
+                struct util_dynarray *parents = &table[(BYTE_COUNT * index) + i];
 
                 util_dynarray_foreach(parents, unsigned, parent) {
                         BITSET_WORD *dependents = instructions[*parent]->dependents;
@@ -82,20 +82,20 @@ add_dependency(struct util_dynarray *table, unsigned index, unsigned mask, midga
 }
 
 static void
-mark_access(struct util_dynarray *table, unsigned index, unsigned mask, unsigned parent)
+mark_access(struct util_dynarray *table, unsigned index, uint16_t mask, unsigned parent)
 {
-        for (unsigned i = 0; i < COMPONENT_COUNT; ++i) {
+        for (unsigned i = 0; i < BYTE_COUNT; ++i) {
                 if (!(mask & (1 << i)))
                         continue;
 
-                util_dynarray_append(&table[(COMPONENT_COUNT * index) + i], unsigned, parent);
+                util_dynarray_append(&table[(BYTE_COUNT * index) + i], unsigned, parent);
         }
 }
 
 static void
 mir_create_dependency_graph(midgard_instruction **instructions, unsigned count, unsigned node_count)
 {
-        size_t sz = node_count * COMPONENT_COUNT;
+        size_t sz = node_count * BYTE_COUNT;
 
         struct util_dynarray *last_read = calloc(sizeof(struct util_dynarray), sz);
         struct util_dynarray *last_write = calloc(sizeof(struct util_dynarray), sz);
@@ -119,13 +119,13 @@ mir_create_dependency_graph(midgard_instruction **instructions, unsigned count, 
                         continue;
 
                 unsigned dest = instructions[i]->dest;
-                unsigned mask = instructions[i]->mask;
+                unsigned mask = mir_bytemask(instructions[i]);
 
                 mir_foreach_src((*instructions), s) {
                         unsigned src = instructions[i]->src[s];
 
                         if (src < node_count) {
-                                unsigned readmask = mir_mask_of_read_components(instructions[i], src);
+                                unsigned readmask = mir_bytemask_of_read_components(instructions[i], src);
                                 add_dependency(last_write, src, readmask, instructions, i);
                         }
                 }
@@ -140,7 +140,7 @@ mir_create_dependency_graph(midgard_instruction **instructions, unsigned count, 
                         unsigned src = instructions[i]->src[s];
 
                         if (src < node_count) {
-                                unsigned readmask = mir_mask_of_read_components(instructions[i], src);
+                                unsigned readmask = mir_bytemask_of_read_components(instructions[i], src);
                                 mark_access(last_read, src, readmask, i);
                         }
                 }
@@ -388,7 +388,7 @@ mir_adjust_constants(midgard_instruction *ins,
                 uint32_t *bundles = (uint32_t *) pred->constants;
                 uint32_t *constants = (uint32_t *) ins->constants;
                 unsigned r_constant = SSA_FIXED_REGISTER(REGISTER_CONSTANT);
-                unsigned mask = mir_mask_of_read_components(ins, r_constant);
+                unsigned mask = mir_from_bytemask(mir_bytemask_of_read_components(ins, r_constant), midgard_reg_mode_32);
 
                 /* First, check if it fits */
                 unsigned count = DIV_ROUND_UP(pred->constant_count, sizeof(uint32_t));
@@ -1206,14 +1206,26 @@ static void mir_spill_register(
 
         /* We can't spill any bundles that contain unspills. This could be
          * optimized to allow use of r27 to spill twice per bundle, but if
-         * you're at the point of optimizing spilling, it's too late. */
+         * you're at the point of optimizing spilling, it's too late.
+         *
+         * We also can't double-spill. */
 
         mir_foreach_block(ctx, block) {
                 mir_foreach_bundle_in_block(block, bun) {
                         bool no_spill = false;
 
-                        for (unsigned i = 0; i < bun->instruction_count; ++i)
+                        for (unsigned i = 0; i < bun->instruction_count; ++i) {
                                 no_spill |= bun->instructions[i]->no_spill;
+
+                                if (bun->instructions[i]->no_spill) {
+                                        mir_foreach_src(bun->instructions[i], s) {
+                                                unsigned src = bun->instructions[i]->src[s];
+
+                                                if (src < ctx->temp_count)
+                                                        ra_set_node_spill_cost(g, src, -1.0);
+                                        }
+                                }
+                        }
 
                         if (!no_spill)
                                 continue;
@@ -1278,11 +1290,11 @@ static void mir_spill_register(
                 }
         }
 
-        /* For special reads, figure out how many components we need */
-        unsigned read_mask = 0;
+        /* For special reads, figure out how many bytes we need */
+        unsigned read_bytemask = 0;
 
         mir_foreach_instr_global_safe(ctx, ins) {
-                read_mask |= mir_mask_of_read_components(ins, spill_node);
+                read_bytemask |= mir_bytemask_of_read_components(ins, spill_node);
         }
 
         /* Insert a load from TLS before the first consecutive
@@ -1337,7 +1349,7 @@ static void mir_spill_register(
                                 /* Mask the load based on the component count
                                  * actually needed to prvent RA loops */
 
-                                st.mask = read_mask;
+                                st.mask = mir_from_bytemask(read_bytemask, midgard_reg_mode_32);
 
                                 mir_insert_instruction_before_scheduled(ctx, block, before, st);
                                // consecutive_skip = true;
@@ -1393,6 +1405,7 @@ schedule_program(compiler_context *ctx)
                         mir_spill_register(ctx, g, &spill_count);
 
                 mir_squeeze_index(ctx);
+                mir_invalidate_liveness(ctx);
 
                 g = NULL;
                 g = allocate_registers(ctx, &spilled);

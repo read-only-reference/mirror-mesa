@@ -291,7 +291,7 @@ genX(emit_urb_setup)(struct anv_device *device, struct anv_batch *batch,
    anv_batch_emit(batch, GEN7_PIPE_CONTROL, pc) {
       pc.DepthStallEnable  = true;
       pc.PostSyncOperation = WriteImmediateData;
-      pc.Address           = (struct anv_address) { &device->workaround_bo, 0 };
+      pc.Address           = (struct anv_address) { device->workaround_bo, 0 };
    }
 #endif
 
@@ -1021,6 +1021,7 @@ emit_ds_state(struct anv_pipeline *pipeline,
    pipeline->stencil_test_enable = info.stencilTestEnable;
    pipeline->writes_depth = info.depthWriteEnable;
    pipeline->depth_test_enable = info.depthTestEnable;
+   pipeline->depth_bounds_test_enable = info.depthBoundsTestEnable;
 
    /* VkBool32 depthBoundsTestEnable; // optional (depth_bounds_test) */
 
@@ -2215,12 +2216,15 @@ compute_pipeline_create(
 
    pipeline->blend_state.map = NULL;
 
-   result = anv_reloc_list_init(&pipeline->batch_relocs,
-                                pAllocator ? pAllocator : &device->alloc);
+   const VkAllocationCallbacks *alloc =
+      pAllocator ? pAllocator : &device->alloc;
+
+   result = anv_reloc_list_init(&pipeline->batch_relocs, alloc);
    if (result != VK_SUCCESS) {
       vk_free2(&device->alloc, pAllocator, pipeline);
       return result;
    }
+   pipeline->batch.alloc = alloc;
    pipeline->batch.next = pipeline->batch.start = pipeline->batch_data;
    pipeline->batch.end = pipeline->batch.start + sizeof(pipeline->batch_data);
    pipeline->batch.relocs = &pipeline->batch_relocs;

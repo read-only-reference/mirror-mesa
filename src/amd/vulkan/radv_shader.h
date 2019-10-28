@@ -76,6 +76,9 @@ struct radv_vs_variant_key {
 
 	/* For some formats the channels have to be shuffled. */
 	uint32_t post_shuffle;
+
+	/* Output primitive type. */
+	uint8_t outprim;
 };
 
 struct radv_tes_variant_key {
@@ -311,6 +314,8 @@ struct radv_shader_info {
 
 	struct gfx9_gs_info gs_ring_info;
 	struct gfx10_ngg_info ngg_info;
+
+	unsigned float_controls_mode;
 };
 
 enum radv_shader_binary_type {
@@ -361,7 +366,7 @@ struct radv_shader_variant {
 
 	/* debug only */
 	bool aco_used;
-	uint32_t *spirv;
+	char *spirv;
 	uint32_t spirv_size;
 	char *nir_string;
 	char *disasm_string;
@@ -401,6 +406,16 @@ radv_alloc_shader_memory(struct radv_device *device,
 
 void
 radv_destroy_shader_slabs(struct radv_device *device);
+
+void
+radv_create_shaders(struct radv_pipeline *pipeline,
+		    struct radv_device *device,
+		    struct radv_pipeline_cache *cache,
+		    const struct radv_pipeline_key *key,
+		    const VkPipelineShaderStageCreateInfo **pStages,
+		    const VkPipelineCreateFlags flags,
+		    VkPipelineCreationFeedbackEXT *pipeline_feedback,
+		    VkPipelineCreationFeedbackEXT **stage_feedbacks);
 
 struct radv_shader_variant *
 radv_shader_variant_create(struct radv_device *device,

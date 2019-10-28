@@ -482,7 +482,7 @@ optimise_nir(nir_shader *nir)
 
         NIR_PASS(progress, nir, nir_lower_regs_to_ssa);
         NIR_PASS(progress, nir, midgard_nir_lower_fdot2);
-        NIR_PASS(progress, nir, nir_lower_idiv);
+        NIR_PASS(progress, nir, nir_lower_idiv, nir_lower_idiv_fast);
 
         nir_lower_tex_options lower_tex_options = {
                 .lower_txs_lod = true,
@@ -1548,17 +1548,6 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 emit_ssbo_access(ctx, &instr->instr, false, reg, offset, indirect_offset, uindex);
                 break;
 
-        case nir_intrinsic_load_alpha_ref_float:
-                assert(instr->dest.is_ssa);
-
-                float ref_value = ctx->alpha_ref;
-
-                /* See emit_load_const */
-                float *v = ralloc_array(NULL, float, 4);
-                memcpy(v, &ref_value, sizeof(float));
-                _mesa_hash_table_u64_insert(ctx->ssa_constants, (instr->dest.ssa.index << 1) + 1, v);
-                break;
-
         case nir_intrinsic_load_viewport_scale:
         case nir_intrinsic_load_viewport_offset:
         case nir_intrinsic_load_num_work_groups:
@@ -2146,7 +2135,6 @@ midgard_opt_pos_propagate(compiler_context *ctx, midgard_block *block)
                 /* TODO: Registers? */
                 unsigned src = ins->src[1];
                 if (src & IS_REG) continue;
-                assert(!mir_has_multiple_writes(ctx, src));
 
                 /* There might be a source modifier, too */
                 if (mir_nontrivial_source2_mod(ins)) continue;

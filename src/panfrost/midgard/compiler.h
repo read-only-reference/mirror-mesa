@@ -187,11 +187,9 @@ typedef struct midgard_block {
 
         /* In liveness analysis, these are live masks (per-component) for
          * indices for the block. Scalar compilers have the luxury of using
-         * simple bit fields, but for us, liveness is a vector idea. We use
-         * 8-bit to allow finegrained tracking up to vec8. If you're
-         * implementing vec16 on Panfrost... I'm sorry. */
-        uint8_t *live_in;
-        uint8_t *live_out;
+         * simple bit fields, but for us, liveness is a vector idea. */
+        uint16_t *live_in;
+        uint16_t *live_out;
 } midgard_block;
 
 typedef struct midgard_bundle {
@@ -288,7 +286,13 @@ typedef struct compiler_context {
         unsigned sysvals[MAX_SYSVAL_COUNT];
         unsigned sysval_count;
         struct hash_table_u64 *sysval_to_id;
+
+        /* Bitmask of valid metadata */
+        unsigned metadata;
 } compiler_context;
+
+/* Per-block live_in/live_out */
+#define MIDGARD_METADATA_LIVENESS (1 << 0)
 
 /* Helpers for manipulating the above structures (forming the driver IR) */
 
@@ -508,8 +512,15 @@ bool mir_single_use(compiler_context *ctx, unsigned value);
 bool mir_special_index(compiler_context *ctx, unsigned idx);
 unsigned mir_use_count(compiler_context *ctx, unsigned value);
 bool mir_is_written_before(compiler_context *ctx, midgard_instruction *ins, unsigned node);
-unsigned mir_mask_of_read_components(midgard_instruction *ins, unsigned node);
+uint16_t mir_bytemask_of_read_components(midgard_instruction *ins, unsigned node);
 unsigned mir_ubo_shift(midgard_load_store_op op);
+midgard_reg_mode mir_typesize(midgard_instruction *ins);
+midgard_reg_mode mir_srcsize(midgard_instruction *ins, unsigned i);
+unsigned mir_bytes_for_mode(midgard_reg_mode mode);
+uint16_t mir_from_bytemask(uint16_t bytemask, midgard_reg_mode mode);
+uint16_t mir_bytemask(midgard_instruction *ins);
+uint16_t mir_round_bytemask_down(uint16_t mask, midgard_reg_mode mode);
+void mir_set_bytemask(midgard_instruction *ins, uint16_t bytemask);
 
 /* MIR printing */
 
@@ -525,6 +536,7 @@ bool mir_nontrivial_outmod(midgard_instruction *ins);
 void mir_insert_instruction_before_scheduled(compiler_context *ctx, midgard_block *block, midgard_instruction *tag, midgard_instruction ins);
 void mir_insert_instruction_after_scheduled(compiler_context *ctx, midgard_block *block, midgard_instruction *tag, midgard_instruction ins);
 void mir_flip(midgard_instruction *ins);
+void mir_compute_temp_count(compiler_context *ctx);
 
 /* MIR goodies */
 
@@ -603,8 +615,10 @@ struct ra_graph;
 void mir_lower_special_reads(compiler_context *ctx);
 struct ra_graph* allocate_registers(compiler_context *ctx, bool *spilled);
 void install_registers(compiler_context *ctx, struct ra_graph *g);
+void mir_liveness_ins_update(uint16_t *live, midgard_instruction *ins, unsigned max);
+void mir_compute_liveness(compiler_context *ctx);
+void mir_invalidate_liveness(compiler_context *ctx);
 bool mir_is_live_after(compiler_context *ctx, midgard_block *block, midgard_instruction *start, int src);
-bool mir_has_multiple_writes(compiler_context *ctx, int src);
 
 void mir_create_pipeline_registers(compiler_context *ctx);
 

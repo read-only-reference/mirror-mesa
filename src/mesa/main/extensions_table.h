@@ -84,7 +84,7 @@ EXT(ARB_get_texture_sub_image               , dummy_true                        
 EXT(ARB_gl_spirv                            , ARB_gl_spirv                           ,  x,  GLC,  x ,  x , 2016)
 EXT(ARB_gpu_shader5                         , ARB_gpu_shader5                        , GLL, GLC,  x ,  x , 2010)
 EXT(ARB_gpu_shader_fp64                     , ARB_gpu_shader_fp64                    ,  32, GLC,  x ,  x , 2010)
-EXT(ARB_gpu_shader_int64                    , ARB_gpu_shader_int64                   ,  x , GLC,  x ,  x , 2015)
+EXT(ARB_gpu_shader_int64                    , ARB_gpu_shader_int64                   ,  40, GLC,  x ,  x , 2015)
 EXT(ARB_half_float_pixel                    , dummy_true                             , GLL, GLC,  x ,  x , 2003)
 EXT(ARB_half_float_vertex                   , ARB_half_float_vertex                  , GLL, GLC,  x ,  x , 2008)
 EXT(ARB_indirect_parameters                 , ARB_indirect_parameters                , GLL, GLC,  x ,  x , 2013)
@@ -356,7 +356,7 @@ EXT(KHR_texture_compression_astc_hdr        , KHR_texture_compression_astc_hdr  
 EXT(KHR_texture_compression_astc_ldr        , KHR_texture_compression_astc_ldr       , GLL, GLC,  x , ES2, 2012)
 EXT(KHR_texture_compression_astc_sliced_3d  , KHR_texture_compression_astc_sliced_3d , GLL, GLC,  x , ES2, 2015)
 
-EXT(MESA_framebuffer_flip_y                 , MESA_framebuffer_flip_y                ,  43,  43,  x ,  31, 2018)
+EXT(MESA_framebuffer_flip_y                 , MESA_framebuffer_flip_y                ,  43,  43,  x ,  30, 2018)
 EXT(MESA_pack_invert                        , MESA_pack_invert                       , GLL, GLC,  x ,  x , 2002)
 EXT(MESA_shader_integer_functions           , MESA_shader_integer_functions          , GLL, GLC,  x ,  30, 2016)
 EXT(MESA_texture_signed_rgba                , EXT_texture_snorm                      , GLL, GLC,  x ,  x , 2009)
