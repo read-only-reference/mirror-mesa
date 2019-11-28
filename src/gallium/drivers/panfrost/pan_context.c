@@ -32,14 +32,14 @@
 #include "pan_format.h"
 
 #include "util/macros.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_upload_mgr.h"
 #include "util/u_memory.h"
 #include "util/u_vbuf.h"
 #include "util/half_float.h"
 #include "util/u_helpers.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_prim.h"
 #include "util/u_prim_restart.h"
 #include "indices/u_primconvert.h"
@@ -57,7 +57,8 @@
 static struct midgard_tiler_descriptor
 panfrost_emit_midg_tiler(struct panfrost_batch *batch, unsigned vertex_count)
 {
-        struct midgard_tiler_descriptor t = {};
+        struct panfrost_screen *screen = pan_screen(batch->ctx->base.screen);
+        struct midgard_tiler_descriptor t = {0};
         unsigned height = batch->key.height;
         unsigned width = batch->key.width;
 
@@ -100,6 +101,15 @@ panfrost_emit_midg_tiler(struct panfrost_batch *batch, unsigned vertex_count)
 
                 /* Disable the tiler */
                 t.hierarchy_mask |= MALI_TILER_DISABLED;
+
+                if (screen->require_sfbd) {
+                        t.hierarchy_mask = 0xFFF; /* TODO: What's this? */
+                        t.polygon_list_size = 0x200;
+
+                        /* We don't have a SET_VALUE job, so write the polygon list manually */
+                        uint32_t *polygon_list_body = (uint32_t *) (tiler_dummy->cpu + header_size);
+                        polygon_list_body[0] = 0xa0000000; /* TODO: Just that? */
+                }
         }
 
         t.polygon_list_body =
@@ -118,7 +128,9 @@ panfrost_emit_sfbd(struct panfrost_batch *batch, unsigned vertex_count)
                 .width = MALI_POSITIVE(width),
                 .height = MALI_POSITIVE(height),
                 .unknown2 = 0x1f,
-                .format = 0x30000000,
+                .format = {
+                        .unk3 = 0x3,
+                },
                 .clear_flags = 0x1000,
                 .unknown_address_0 = panfrost_batch_get_scratchpad(batch)->gpu,
                 .tiler = panfrost_emit_midg_tiler(batch, vertex_count),
@@ -400,6 +412,7 @@ panfrost_make_stencil_state(const struct pipe_stencil_state *in, struct mali_ste
 static void
 panfrost_default_shader_backend(struct panfrost_context *ctx)
 {
+        struct panfrost_screen *screen = pan_screen(ctx->base.screen);
         struct mali_shader_meta shader = {
                 .alpha_coverage = ~MALI_ALPHA_COVERAGE(0.000000),
 
@@ -407,13 +420,13 @@ panfrost_default_shader_backend(struct panfrost_context *ctx)
                 .unknown2_4 = MALI_NO_MSAA | 0x4e0,
         };
 
-        /* unknown2_4 has 0x10 bit set on T6XX. We don't know why this is
+        /* unknown2_4 has 0x10 bit set on T6XX and T720. We don't know why this is
          * required (independent of 32-bit/64-bit descriptors), or why it's not
          * used on later GPU revisions. Otherwise, all shader jobs fault on
          * these earlier chips (perhaps this is a chicken bit of some kind).
          * More investigation is needed. */
 
-	if (ctx->is_t6xx) {
+	if (screen->require_sfbd) {
 		shader.unknown2_4 |= 0x10;
 	}
 
@@ -748,6 +761,29 @@ static void panfrost_upload_ssbo_sysval(
         uniform->u[2] = sb.buffer_size;
 }
 
+static void
+panfrost_upload_sampler_sysval(
+                struct panfrost_context *ctx,
+                enum pipe_shader_type st,
+                unsigned sampler_index,
+                struct sysval_uniform *uniform)
+{
+        struct pipe_sampler_state *sampl =
+                &ctx->samplers[st][sampler_index]->base;
+
+        uniform->f[0] = sampl->min_lod;
+        uniform->f[1] = sampl->max_lod;
+        uniform->f[2] = sampl->lod_bias;
+
+        /* Even without any errata, Midgard represents "no mipmapping" as
+         * fixing the LOD with the clamps; keep behaviour consistent. c.f.
+         * panfrost_create_sampler_state which also explains our choice of
+         * epsilon value (again to keep behaviour consistent) */
+
+        if (sampl->min_mip_filter == PIPE_TEX_MIPFILTER_NONE)
+                uniform->f[1] = uniform->f[0] + (1.0/256.0);
+}
+
 static void panfrost_upload_num_work_groups_sysval(struct panfrost_context *ctx,
                 struct sysval_uniform *uniform)
 {
@@ -783,7 +819,10 @@ static void panfrost_upload_sysvals(struct panfrost_context *ctx, void *buf,
                 case PAN_SYSVAL_NUM_WORK_GROUPS:
                         panfrost_upload_num_work_groups_sysval(ctx, &uniforms[i]);
                         break;
-
+                case PAN_SYSVAL_SAMPLER:
+                        panfrost_upload_sampler_sysval(ctx, st, PAN_SYSVAL_ID(sysval),
+                                                    &uniforms[i]);
+                        break;
                 default:
                         assert(0);
                 }
@@ -988,22 +1027,15 @@ panfrost_emit_for_draw(struct panfrost_context *ctx, bool with_vertex_data)
                                 ctx->fragment_shader_core.midgard1.work_count = 16;
                 }
 
-                /* Set late due to depending on render state */
-                unsigned flags = ctx->fragment_shader_core.midgard1.flags;
-
                 /* Depending on whether it's legal to in the given shader, we
                  * try to enable early-z testing (or forward-pixel kill?) */
 
-                if (!variant->can_discard)
-                        flags |= MALI_EARLY_Z;
+                SET_BIT(ctx->fragment_shader_core.midgard1.flags, MALI_EARLY_Z, !variant->can_discard);
 
                 /* Any time texturing is used, derivatives are implicitly
                  * calculated, so we need to enable helper invocations */
 
-                if (variant->helper_invocations)
-                        flags |= MALI_HELPER_INVOCATIONS;
-
-                ctx->fragment_shader_core.midgard1.flags = flags;
+                SET_BIT(ctx->fragment_shader_core.midgard1.flags, MALI_HELPER_INVOCATIONS, variant->helper_invocations);
 
                 /* Assign the stencil refs late */
 
@@ -1021,10 +1053,8 @@ panfrost_emit_for_draw(struct panfrost_context *ctx, bool with_vertex_data)
                  * thing?" by Peter Harris
                  */
 
-                if (variant->can_discard) {
-                        ctx->fragment_shader_core.unknown2_3 |= MALI_CAN_DISCARD;
-                        ctx->fragment_shader_core.midgard1.flags |= 0x400;
-                }
+                SET_BIT(ctx->fragment_shader_core.unknown2_3, MALI_CAN_DISCARD, variant->can_discard);
+                SET_BIT(ctx->fragment_shader_core.midgard1.flags, 0x400, variant->can_discard);
 
                 /* Even on MFBD, the shader descriptor gets blend shaders. It's
                  * *also* copied to the blend_meta appended (by convention),
@@ -1044,6 +1074,8 @@ panfrost_emit_for_draw(struct panfrost_context *ctx, bool with_vertex_data)
                          * additionally need to signal CAN_DISCARD for nontrivial blend
                          * modes (so we're able to read back the destination buffer) */
 
+                        SET_BIT(ctx->fragment_shader_core.unknown2_3, MALI_HAS_BLEND_SHADER, blend[0].is_shader);
+
                         if (!blend[0].is_shader) {
                                 ctx->fragment_shader_core.blend.equation =
                                         *blend[0].equation.equation;
@@ -1051,9 +1083,7 @@ panfrost_emit_for_draw(struct panfrost_context *ctx, bool with_vertex_data)
                                         blend[0].equation.constant;
                         }
 
-                        if (!blend[0].no_blending) {
-                                ctx->fragment_shader_core.unknown2_3 |= MALI_CAN_DISCARD;
-                        }
+                        SET_BIT(ctx->fragment_shader_core.unknown2_3, MALI_CAN_DISCARD, !blend[0].no_blending);
                 }
 
                 size_t size = sizeof(struct mali_shader_meta) + (sizeof(struct midgard_blend_rt) * rt_count);
@@ -1068,36 +1098,17 @@ panfrost_emit_for_draw(struct panfrost_context *ctx, bool with_vertex_data)
                         struct midgard_blend_rt rts[4];
 
                         for (unsigned i = 0; i < rt_count; ++i) {
-                                unsigned blend_count = 0x200;
-
-                                if (blend[i].is_shader) {
-                                        /* For a blend shader, the bottom nibble corresponds to
-                                         * the number of work registers used, which signals the
-                                         * -existence- of a blend shader */
-
-                                        assert(blend[i].shader.work_count >= 2);
-                                        blend_count |= MIN2(blend[i].shader.work_count, 3);
-                                } else {
-                                        /* Otherwise, the bottom bit simply specifies if
-                                         * blending (anything other than REPLACE) is enabled */
-
-                                        if (!blend[i].no_blending)
-                                                blend_count |= 0x1;
-                                }
-
+                                rts[i].flags = 0x200;
 
                                 bool is_srgb =
                                         (ctx->pipe_framebuffer.nr_cbufs > i) &&
                                         (ctx->pipe_framebuffer.cbufs[i]) &&
                                         util_format_is_srgb(ctx->pipe_framebuffer.cbufs[i]->format);
 
-                                rts[i].flags = blend_count;
-
-                                if (is_srgb)
-                                        rts[i].flags |= MALI_BLEND_SRGB;
-
-                                if (!ctx->blend->base.dither)
-                                        rts[i].flags |= MALI_BLEND_NO_DITHER;
+                                SET_BIT(rts[i].flags, MALI_BLEND_MRT_SHADER, blend[i].is_shader);
+                                SET_BIT(rts[i].flags, MALI_BLEND_LOAD_TIB, !blend[i].no_blending);
+                                SET_BIT(rts[i].flags, MALI_BLEND_SRGB, is_srgb);
+                                SET_BIT(rts[i].flags, MALI_BLEND_NO_DITHER, !ctx->blend->base.dither);
 
                                 /* TODO: sRGB in blend shaders is currently
                                  * unimplemented. Contact me (Alyssa) if you're
@@ -1710,7 +1721,7 @@ panfrost_bind_rasterizer_state(
         ctx->rasterizer = hwcso;
         ctx->dirty |= PAN_DIRTY_RASTERIZER;
 
-        ctx->fragment_shader_core.depth_units = ctx->rasterizer->base.offset_units;
+        ctx->fragment_shader_core.depth_units = ctx->rasterizer->base.offset_units * 2.0f;
         ctx->fragment_shader_core.depth_factor = ctx->rasterizer->base.offset_scale;
 
         /* Gauranteed with the core GL call, so don't expose ARB_polygon_offset */
@@ -1839,6 +1850,7 @@ panfrost_create_sampler_state(
                 },
                 .min_lod = FIXED_16(cso->min_lod),
                 .max_lod = FIXED_16(cso->max_lod),
+                .lod_bias = FIXED_16(cso->lod_bias),
                 .seamless_cube_map = cso->seamless_cube_map,
         };
 
@@ -1947,7 +1959,7 @@ update_so_info(struct pipe_stream_output_info *so_info,
                uint64_t outputs_written)
 {
 	uint64_t so_outputs = 0;
-	uint8_t reverse_map[64] = {};
+	uint8_t reverse_map[64] = {0};
 	unsigned slot = 0;
 
 	while (outputs_written)
@@ -2346,7 +2358,8 @@ panfrost_bind_depth_stencil_state(struct pipe_context *pipe,
         ctx->fragment_shader_core.stencil_mask_back = depth_stencil->stencil[back_index].writemask;
 
         /* Depth state (TODO: Refactor) */
-        SET_BIT(ctx->fragment_shader_core.unknown2_3, MALI_DEPTH_TEST, depth_stencil->depth.enabled);
+        SET_BIT(ctx->fragment_shader_core.unknown2_3, MALI_DEPTH_WRITEMASK,
+                depth_stencil->depth.writemask);
 
         int func = depth_stencil->depth.enabled ? depth_stencil->depth.func : PIPE_FUNC_ALWAYS;
 
@@ -2431,6 +2444,9 @@ panfrost_destroy(struct pipe_context *pipe)
 
         if (panfrost->blitter_wallpaper)
                 util_blitter_destroy(panfrost->blitter_wallpaper);
+
+        util_unreference_framebuffer_state(&panfrost->pipe_framebuffer);
+        u_upload_destroy(pipe->stream_uploader);
 
         ralloc_free(pipe);
 }
@@ -2628,8 +2644,6 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         struct panfrost_context *ctx = rzalloc(screen, struct panfrost_context);
         struct panfrost_screen *pscreen = pan_screen(screen);
         struct pipe_context *gallium = (struct pipe_context *) ctx;
-
-        ctx->is_t6xx = pscreen->gpu_id < 0x0700; /* Literally, "earlier than T700" */
 
         gallium->screen = screen;
 

@@ -95,6 +95,8 @@ struct exec_ctx {
 };
 
 bool pred_by_exec_mask(aco_ptr<Instruction>& instr) {
+   if (instr->isSALU())
+      return instr->reads_exec();
    if (instr->format == Format::SMEM || instr->isSALU())
       return false;
    if (instr->format == Format::PSEUDO_BARRIER)
@@ -132,6 +134,9 @@ bool needs_exact(aco_ptr<Instruction>& instr) {
    } else if (instr->format == Format::MIMG) {
       MIMG_instruction *mimg = static_cast<MIMG_instruction *>(instr.get());
       return mimg->disable_wqm;
+   } else if (instr->format == Format::FLAT || instr->format == Format::GLOBAL) {
+      FLAT_instruction *flat = static_cast<FLAT_instruction *>(instr.get());
+      return flat->disable_wqm;
    } else {
       return instr->format == Format::EXP || instr->opcode == aco_opcode::p_fs_buffer_store_smem;
    }
@@ -200,8 +205,7 @@ void get_block_needs(wqm_ctx &ctx, exec_ctx &exec_ctx, Block* block)
       ctx.wqm = false;
    }
 
-   for (int i = block->instructions.size() - 1; i >= 0; --i)
-   {
+   for (int i = block->instructions.size() - 1; i >= 0; --i) {
       aco_ptr<Instruction>& instr = block->instructions[i];
 
       WQMState needs = needs_exact(instr) ? Exact : Unspecified;

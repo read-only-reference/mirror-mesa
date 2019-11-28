@@ -28,8 +28,8 @@
 
 #include "util/u_debug.h"
 #include "util/u_memory.h"
-#include "util/u_format.h"
-#include "util/u_format_s3tc.h"
+#include "util/format/u_format.h"
+#include "util/format/u_format_s3tc.h"
 #include "util/u_video.h"
 #include "util/u_screen.h"
 #include "util/os_time.h"
@@ -490,8 +490,7 @@ panfrost_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_t
 
 	switch (param) {
 	case PIPE_COMPUTE_CAP_ADDRESS_BITS:
-                /* TODO: We'll want 64-bit pointers soon */
-		RET((uint32_t []){ 32 });
+		RET((uint32_t []){ 64 });
 
 	case PIPE_COMPUTE_CAP_IR_TARGET:
 		if (ret)
@@ -547,7 +546,7 @@ panfrost_destroy_screen(struct pipe_screen *pscreen)
 {
         struct panfrost_screen *screen = pan_screen(pscreen);
         panfrost_bo_cache_evict_all(screen);
-        pthread_mutex_destroy(&screen->bo_cache_lock);
+        pthread_mutex_destroy(&screen->bo_cache.lock);
         pthread_mutex_destroy(&screen->active_bos_lock);
         drmFreeVersion(screen->kernel_version);
         ralloc_free(screen);
@@ -754,9 +753,10 @@ panfrost_create_screen(int fd, struct renderonly *ro)
         screen->active_bos = _mesa_set_create(screen, panfrost_active_bos_hash,
                                               panfrost_active_bos_cmp);
 
-        pthread_mutex_init(&screen->bo_cache_lock, NULL);
-        for (unsigned i = 0; i < ARRAY_SIZE(screen->bo_cache); ++i)
-                list_inithead(&screen->bo_cache[i]);
+        pthread_mutex_init(&screen->bo_cache.lock, NULL);
+        list_inithead(&screen->bo_cache.lru);
+        for (unsigned i = 0; i < ARRAY_SIZE(screen->bo_cache.buckets); ++i)
+                list_inithead(&screen->bo_cache.buckets[i]);
 
         if (pan_debug & PAN_DBG_TRACE)
                 pandecode_initialize();

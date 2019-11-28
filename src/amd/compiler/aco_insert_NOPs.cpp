@@ -115,13 +115,6 @@ bool VALU_writes_sgpr(aco_ptr<Instruction>& instr)
    return false;
 }
 
-bool instr_reads_exec(const aco_ptr<Instruction>& instr)
-{
-   return std::any_of(instr->operands.begin(), instr->operands.end(), [](const Operand &op) -> bool {
-      return op.physReg() == exec_lo || op.physReg() == exec_hi;
-   });
-}
-
 bool instr_writes_exec(const aco_ptr<Instruction>& instr)
 {
    return std::any_of(instr->definitions.begin(), instr->definitions.end(), [](const Definition &def) -> bool {
@@ -294,17 +287,23 @@ int handle_instruction_gfx8_9(NOP_ctx_gfx8_9& ctx, aco_ptr<Instruction>& instr,
 
       /* Write VGPRs holding writedata > 64 bit from MIMG/MUBUF instructions */
       // FIXME: handle case if the last instruction of a block without branch is such store
-      // TODO: confirm that DS instructions cannot cause WAR hazards here
       if (new_idx > 0) {
          aco_ptr<Instruction>& pred = new_instructions.back();
-         if (pred->isVMEM() &&
-             pred->operands.size() == 4 &&
-             pred->operands[3].size() > 2 &&
-             pred->operands[1].size() != 8 &&
-             (pred->format != Format::MUBUF || pred->operands[2].physReg() >= 102)) {
-            /* Ops that use a 256-bit T# do not need a wait state.
-             * BUFFER_STORE_* operations that use an SGPR for "offset"
-             * do not require any wait states. */
+         /* >64-bit MUBUF/MTBUF store with a constant in SOFFSET */
+         bool consider_buf = (pred->format == Format::MUBUF || pred->format == Format::MTBUF) &&
+                             pred->operands.size() == 4 &&
+                             pred->operands[3].size() > 2 &&
+                             pred->operands[2].physReg() >= 128;
+         /* MIMG store with a 128-bit T# with more than two bits set in dmask (making it a >64-bit store) */
+         bool consider_mimg = pred->format == Format::MIMG &&
+                              pred->operands.size() == 4 &&
+                              pred->operands[3].size() > 2 &&
+                              pred->operands[1].size() != 8;
+         /* FLAT/GLOBAL/SCRATCH store with >64-bit data */
+         bool consider_flat = (pred->isFlatOrGlobal() || pred->format == Format::SCRATCH) &&
+                              pred->operands.size() == 3 &&
+                              pred->operands[2].size() > 2;
+         if (consider_buf || consider_mimg || consider_flat) {
             PhysReg wrdata = pred->operands[3].physReg();
             unsigned size = pred->operands[3].size();
             assert(wrdata >= 256);
@@ -392,7 +391,7 @@ void insert_NOPs_gfx8_9(Program* program)
    }
 }
 
-void handle_instruction_gfx10(NOP_ctx_gfx10 &ctx, aco_ptr<Instruction>& instr,
+void handle_instruction_gfx10(Program *program, NOP_ctx_gfx10 &ctx, aco_ptr<Instruction>& instr,
                               std::vector<aco_ptr<Instruction>>& old_instructions,
                               std::vector<aco_ptr<Instruction>>& new_instructions)
 {
@@ -403,6 +402,9 @@ void handle_instruction_gfx10(NOP_ctx_gfx10 &ctx, aco_ptr<Instruction>& instr,
        instr->format == Format::SCRATCH || instr->format == Format::DS) {
       /* Remember all SGPRs that are read by the VMEM instruction */
       mark_read_regs(instr, ctx.sgprs_read_by_VMEM);
+      ctx.sgprs_read_by_VMEM.set(exec);
+      if (program->wave_size == 64)
+         ctx.sgprs_read_by_VMEM.set(exec_hi);
    } else if (instr->isSALU() || instr->format == Format::SMEM) {
       /* Check if SALU writes an SGPR that was previously read by the VALU */
       if (check_written_regs(instr, ctx.sgprs_read_by_VMEM)) {
@@ -445,7 +447,7 @@ void handle_instruction_gfx10(NOP_ctx_gfx10 &ctx, aco_ptr<Instruction>& instr,
    /* VcmpxExecWARHazard
     * Handle any VALU instruction writing the exec mask after it was read by a non-VALU instruction.
     */
-   if (!instr->isVALU() && instr_reads_exec(instr)) {
+   if (!instr->isVALU() && instr->reads_exec()) {
       ctx.has_nonVALU_exec_read = true;
    } else if (instr->isVALU()) {
       if (instr_writes_exec(instr)) {
@@ -535,7 +537,7 @@ void handle_instruction_gfx10(NOP_ctx_gfx10 &ctx, aco_ptr<Instruction>& instr,
    }
 }
 
-void handle_block_gfx10(NOP_ctx_gfx10& ctx, Block& block)
+void handle_block_gfx10(Program *program, NOP_ctx_gfx10& ctx, Block& block)
 {
    if (block.instructions.empty())
       return;
@@ -544,7 +546,7 @@ void handle_block_gfx10(NOP_ctx_gfx10& ctx, Block& block)
    instructions.reserve(block.instructions.size());
 
    for (aco_ptr<Instruction>& instr : block.instructions) {
-      handle_instruction_gfx10(ctx, instr, block.instructions, instructions);
+      handle_instruction_gfx10(program, ctx, instr, block.instructions, instructions);
       instructions.emplace_back(std::move(instr));
    }
 
@@ -569,7 +571,7 @@ void mitigate_hazards_gfx10(Program *program)
             for (unsigned b : program->blocks[idx].linear_preds)
                loop_block_ctx.join(all_ctx[b]);
 
-            handle_block_gfx10(loop_block_ctx, program->blocks[idx]);
+            handle_block_gfx10(program, loop_block_ctx, program->blocks[idx]);
 
             /* We only need to continue if the loop header context changed */
             if (idx == loop_header_indices.top() && loop_block_ctx == all_ctx[idx])
@@ -584,7 +586,7 @@ void mitigate_hazards_gfx10(Program *program)
       for (unsigned b : block.linear_preds)
          ctx.join(all_ctx[b]);
 
-      handle_block_gfx10(ctx, block);
+      handle_block_gfx10(program, ctx, block);
    }
 }
 

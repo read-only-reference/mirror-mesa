@@ -560,6 +560,7 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->compiler->constant_buffer_0_is_relative =
       device->info.gen < 8 || !device->has_context_isolation;
    device->compiler->supports_shader_constants = true;
+   device->compiler->compact_params = false;
 
    /* Broadwell PRM says:
     *
@@ -1188,6 +1189,13 @@ void anv_GetPhysicalDeviceFeatures2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SEPARATE_DEPTH_STENCIL_LAYOUTS_FEATURES_KHR: {
+         VkPhysicalDeviceSeparateDepthStencilLayoutsFeaturesKHR *features =
+            (VkPhysicalDeviceSeparateDepthStencilLayoutsFeaturesKHR *)ext;
+         features->separateDepthStencilLayouts = true;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_INT64_FEATURES_KHR: {
          VkPhysicalDeviceShaderAtomicInt64FeaturesKHR *features = (void *)ext;
          features->shaderBufferInt64Atomics =
@@ -1235,6 +1243,13 @@ void anv_GetPhysicalDeviceFeatures2(
          VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT *features =
             (VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT *)ext;
          features->texelBufferAlignment = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR: {
+         VkPhysicalDeviceTimelineSemaphoreFeaturesKHR *features =
+            (VkPhysicalDeviceTimelineSemaphoreFeaturesKHR *) ext;
+         features->timelineSemaphore = true;
          break;
       }
 
@@ -1790,6 +1805,13 @@ void anv_GetPhysicalDeviceProperties2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES_KHR: {
+         VkPhysicalDeviceTimelineSemaphorePropertiesKHR *props =
+            (VkPhysicalDeviceTimelineSemaphorePropertiesKHR *) ext;
+         props->maxTimelineSemaphoreValueDifference = UINT64_MAX;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT: {
          VkPhysicalDeviceTransformFeedbackPropertiesEXT *props =
             (VkPhysicalDeviceTransformFeedbackPropertiesEXT *)ext;
@@ -2105,19 +2127,6 @@ anv_DebugReportMessageEXT(VkInstance _instance,
    ANV_FROM_HANDLE(anv_instance, instance, _instance);
    vk_debug_report(&instance->debug_report_callbacks, flags, objectType,
                    object, location, messageCode, pLayerPrefix, pMessage);
-}
-
-static void
-anv_queue_init(struct anv_device *device, struct anv_queue *queue)
-{
-   queue->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
-   queue->device = device;
-   queue->flags = 0;
-}
-
-static void
-anv_queue_finish(struct anv_queue *queue)
-{
 }
 
 static struct anv_state
@@ -2522,10 +2531,14 @@ VkResult anv_CreateDevice(
       goto fail_fd;
    }
 
+   result = anv_queue_init(device, &device->queue);
+   if (result != VK_SUCCESS)
+      goto fail_context_id;
+
    if (physical_device->use_softpin) {
       if (pthread_mutex_init(&device->vma_mutex, NULL) != 0) {
          result = vk_error(VK_ERROR_INITIALIZATION_FAILED);
-         goto fail_context_id;
+         goto fail_queue;
       }
 
       /* keep the page with address zero out of the allocator */
@@ -2576,7 +2589,7 @@ VkResult anv_CreateDevice(
 
    if (pthread_mutex_init(&device->mutex, NULL) != 0) {
       result = vk_error(VK_ERROR_INITIALIZATION_FAILED);
-      goto fail_context_id;
+      goto fail_queue;
    }
 
    pthread_condattr_t condattr;
@@ -2653,8 +2666,6 @@ VkResult anv_CreateDevice(
 
    anv_scratch_pool_init(device, &device->scratch_pool);
 
-   anv_queue_init(device, &device->queue);
-
    switch (device->info.gen) {
    case 7:
       if (!device->info.is_haswell)
@@ -2683,7 +2694,7 @@ VkResult anv_CreateDevice(
       unreachable("unhandled gen");
    }
    if (result != VK_SUCCESS)
-      goto fail_queue;
+      goto fail_workaround_bo;
 
    anv_pipeline_cache_init(&device->default_pipeline_cache, device, true);
 
@@ -2697,15 +2708,13 @@ VkResult anv_CreateDevice(
 
    return VK_SUCCESS;
 
- fail_queue:
-   anv_queue_finish(&device->queue);
+ fail_workaround_bo:
    anv_scratch_pool_finish(device, &device->scratch_pool);
    if (device->info.gen >= 10)
       anv_device_release_bo(device, device->hiz_clear_bo);
+   anv_device_release_bo(device, device->workaround_bo);
  fail_trivial_batch_bo:
    anv_device_release_bo(device, device->trivial_batch_bo);
- fail_workaround_bo:
-   anv_device_release_bo(device, device->workaround_bo);
  fail_surface_aux_map_pool:
    if (device->info.gen >= 12) {
       gen_aux_map_finish(device->aux_map_ctx);
@@ -2732,6 +2741,8 @@ VkResult anv_CreateDevice(
       util_vma_heap_finish(&device->vma_hi);
       util_vma_heap_finish(&device->vma_lo);
    }
+ fail_queue:
+   anv_queue_finish(&device->queue);
  fail_context_id:
    anv_gem_destroy_context(device, device->context_id);
  fail_fd:
@@ -2841,11 +2852,15 @@ void anv_GetDeviceQueue(
     uint32_t                                    queueIndex,
     VkQueue*                                    pQueue)
 {
-   ANV_FROM_HANDLE(anv_device, device, _device);
+   const VkDeviceQueueInfo2 info = {
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
+      .pNext = NULL,
+      .flags = 0,
+      .queueFamilyIndex = queueNodeIndex,
+      .queueIndex = queueIndex,
+   };
 
-   assert(queueIndex == 0);
-
-   *pQueue = anv_queue_to_handle(&device->queue);
+   anv_GetDeviceQueue2(_device, &info, pQueue);
 }
 
 void anv_GetDeviceQueue2(
@@ -2871,10 +2886,32 @@ _anv_device_set_lost(struct anv_device *device,
    VkResult err;
    va_list ap;
 
-   device->_lost = true;
+   p_atomic_inc(&device->_lost);
 
    va_start(ap, msg);
    err = __vk_errorv(device->instance, device,
+                     VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT,
+                     VK_ERROR_DEVICE_LOST, file, line, msg, ap);
+   va_end(ap);
+
+   if (env_var_as_boolean("ANV_ABORT_ON_DEVICE_LOSS", false))
+      abort();
+
+   return err;
+}
+
+VkResult
+_anv_queue_set_lost(struct anv_queue *queue,
+                    const char *file, int line,
+                    const char *msg, ...)
+{
+   VkResult err;
+   va_list ap;
+
+   p_atomic_inc(&queue->device->_lost);
+
+   va_start(ap, msg);
+   err = __vk_errorv(queue->device->instance, queue->device,
                      VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT,
                      VK_ERROR_DEVICE_LOST, file, line, msg, ap);
    va_end(ap);
@@ -2959,19 +2996,11 @@ VkResult anv_DeviceWaitIdle(
     VkDevice                                    _device)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
+
    if (anv_device_is_lost(device))
       return VK_ERROR_DEVICE_LOST;
 
-   struct anv_batch batch;
-
-   uint32_t cmds[8];
-   batch.start = batch.next = cmds;
-   batch.end = (void *) cmds + sizeof(cmds);
-
-   anv_batch_emit(&batch, GEN7_MI_BATCH_BUFFER_END, bbe);
-   anv_batch_emit(&batch, GEN7_MI_NOOP, noop);
-
-   return anv_device_submit_simple_batch(device, &batch);
+   return anv_queue_submit_simple_batch(&device->queue, NULL);
 }
 
 bool
@@ -3916,7 +3945,7 @@ anv_fill_buffer_surface_state(struct anv_device *device, struct anv_state state,
 {
    isl_buffer_fill_state(&device->isl_dev, state.map,
                          .address = anv_address_physical(address),
-                         .mocs = device->default_mocs,
+                         .mocs = device->isl_dev.mocs.internal,
                          .size_B = range,
                          .format = format,
                          .swizzle = ISL_SWIZZLE_IDENTITY,

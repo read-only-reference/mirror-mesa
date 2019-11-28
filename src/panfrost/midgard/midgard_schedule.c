@@ -24,7 +24,6 @@
 #include "compiler.h"
 #include "midgard_ops.h"
 #include "util/u_memory.h"
-#include "util/register_allocate.h"
 
 /* Scheduling for Midgard is complicated, to say the least. ALU instructions
  * must be grouped into VLIW bundles according to following model:
@@ -370,7 +369,7 @@ mir_adjust_constants(midgard_instruction *ins,
         if (!ins->has_constants)
                 return true;
 
-        if (ins->alu.reg_mode == midgard_reg_mode_16) {
+        if (ins->alu.reg_mode != midgard_reg_mode_32) {
                 /* TODO: 16-bit constant combining */
                 if (pred->constant_count)
                         return false;
@@ -437,7 +436,7 @@ mir_adjust_constants(midgard_instruction *ins,
                 /* If destructive, let's copy in the new constants and adjust
                  * swizzles to pack it in. */
 
-                uint32_t indices[4] = { 0 };
+                unsigned indices[16] = { 0 };
 
                 /* Reset count */
                 count = existing_count;
@@ -473,17 +472,12 @@ mir_adjust_constants(midgard_instruction *ins,
 
                 pred->constant_count = count * sizeof(uint32_t);
 
-                /* Cool, we have it in. So use indices as a
-                 * swizzle */
+                /* Use indices as a swizzle */
 
-                unsigned swizzle = SWIZZLE_FROM_ARRAY(indices);
-
-                if (ins->src[0] == r_constant)
-                        ins->alu.src1 = vector_alu_apply_swizzle(ins->alu.src1, swizzle);
-
-                if (ins->src[1] == r_constant)
-                        ins->alu.src2 = vector_alu_apply_swizzle(ins->alu.src2, swizzle);
-
+                mir_foreach_src(ins, s) {
+                        if (ins->src[s] == r_constant)
+                                mir_compose_swizzle(ins->swizzle[s], indices, ins->swizzle[s]);
+                }
         }
 
         return true;
@@ -707,12 +701,12 @@ mir_schedule_comparison(
                 midgard_instruction **instructions,
                 struct midgard_predicate *predicate,
                 BITSET_WORD *worklist, unsigned count,
-                unsigned cond, bool vector, unsigned swizzle,
+                unsigned cond, bool vector, unsigned *swizzle,
                 midgard_instruction *user)
 {
         /* TODO: swizzle when scheduling */
         unsigned comp_i =
-                (!vector && (swizzle == 0)) ?
+                (!vector && (swizzle[0] == 0)) ?
                 mir_comparison_mobile(ctx, instructions, predicate, count, cond) : ~0;
 
         /* If we can, schedule the condition immediately */
@@ -723,12 +717,10 @@ mir_schedule_comparison(
         }
 
         /* Otherwise, we insert a move */
-        midgard_vector_alu_src csel = {
-                .swizzle = swizzle
-        };
 
-        midgard_instruction mov = v_mov(cond, csel, cond);
+        midgard_instruction mov = v_mov(cond, cond);
         mov.mask = vector ? 0xF : 0x1;
+        memcpy(mov.swizzle[1], swizzle, sizeof(mov.swizzle[1]));
 
         return mir_insert_instruction_before(ctx, user, mov);
 }
@@ -754,7 +746,7 @@ mir_schedule_condition(compiler_context *ctx,
 
         midgard_instruction *cond = mir_schedule_comparison(
                         ctx, instructions, predicate, worklist, count, last->src[condition_index],
-                        vector, last->cond_swizzle, last);
+                        vector, last->swizzle[2], last);
 
         /* We have exclusive reign over this (possibly move) conditional
          * instruction. We can rewrite into a pipeline conditional register */
@@ -769,7 +761,8 @@ mir_schedule_condition(compiler_context *ctx,
                         if (cond->src[s] == ~0)
                                 continue;
 
-                        mir_set_swizzle(cond, s, (mir_get_swizzle(cond, s) << (2*3)) & 0xFF);
+                        for (unsigned q = 0; q < 4; ++q)
+                                cond->swizzle[s][q + COMPONENT_W] = cond->swizzle[s][q];
                 }
         }
 
@@ -962,7 +955,7 @@ mir_schedule_alu(
                 /* Finally, add a move if necessary */
                 if (bad_writeout || writeout_mask != 0xF) {
                         unsigned temp = (branch->src[0] == ~0) ? SSA_FIXED_REGISTER(0) : make_compiler_temp(ctx);
-                        midgard_instruction mov = v_mov(src, blank_alu_src, temp);
+                        midgard_instruction mov = v_mov(src, temp);
                         vmul = mem_dup(&mov, sizeof(midgard_instruction));
                         vmul->unit = UNIT_VMUL;
                         vmul->mask = 0xF ^ writeout_mask;
@@ -1078,7 +1071,9 @@ schedule_block(compiler_context *ctx, midgard_block *block)
 
         /* Blend constant was backwards as well. blend_offset if set is
          * strictly positive, as an offset of zero would imply constants before
-         * any instructions which is invalid in Midgard */
+         * any instructions which is invalid in Midgard. TODO: blend constants
+         * are broken if you spill since then quadword_count becomes invalid
+         * XXX */
 
         if (blend_offset)
                 ctx->blend_constant_offset = ((ctx->quadword_count + block->quadword_count) - blend_offset - 1) * 0x10;
@@ -1123,7 +1118,8 @@ find_or_allocate_temp(compiler_context *ctx, unsigned hash)
         return temp;
 }
 
-/* Reassigns numbering to get rid of gaps in the indices */
+/* Reassigns numbering to get rid of gaps in the indices and to prioritize
+ * smaller register classes */
 
 static void
 mir_squeeze_index(compiler_context *ctx)
@@ -1133,8 +1129,18 @@ mir_squeeze_index(compiler_context *ctx)
         /* TODO don't leak old hash_to_temp */
         ctx->hash_to_temp = _mesa_hash_table_u64_create(NULL);
 
+        /* We need to prioritize texture registers on older GPUs so we don't
+         * fail RA trying to assign to work registers r0/r1 when a work
+         * register is already there */
+
         mir_foreach_instr_global(ctx, ins) {
-                ins->dest = find_or_allocate_temp(ctx, ins->dest);
+                if (ins->type == TAG_TEXTURE_4)
+                        ins->dest = find_or_allocate_temp(ctx, ins->dest);
+        }
+
+        mir_foreach_instr_global(ctx, ins) {
+                if (ins->type != TAG_TEXTURE_4)
+                        ins->dest = find_or_allocate_temp(ctx, ins->dest);
 
                 for (unsigned i = 0; i < ARRAY_SIZE(ins->src); ++i)
                         ins->src[i] = find_or_allocate_temp(ctx, ins->src[i]);
@@ -1156,22 +1162,20 @@ v_load_store_scratch(
                 .mask = mask,
                 .dest = ~0,
                 .src = { ~0, ~0, ~0 },
+                .swizzle = SWIZZLE_IDENTITY_4,
                 .load_store = {
                         .op = is_store ? midgard_op_st_int4 : midgard_op_ld_int4,
-                        .swizzle = SWIZZLE_XYZW,
 
                         /* For register spilling - to thread local storage */
                         .arg_1 = 0xEA,
                         .arg_2 = 0x1E,
-
-                        /* Splattered across, TODO combine logically */
-                        .varying_parameters = (byte & 0x1FF) << 1,
-                        .address = (byte >> 9)
                 },
 
                 /* If we spill an unspill, RA goes into an infinite loop */
                 .no_spill = true
         };
+
+        ins.constants[0] = byte;
 
        if (is_store) {
                 /* r0 = r26, r1 = r27 */
@@ -1191,7 +1195,7 @@ v_load_store_scratch(
 
 static void mir_spill_register(
                 compiler_context *ctx,
-                struct ra_graph *g,
+                struct lcra_state *l,
                 unsigned *spill_count)
 {
         unsigned spill_index = ctx->temp_count;
@@ -1200,9 +1204,20 @@ static void mir_spill_register(
          * spill node. All nodes are equal in spill cost, but we can't spill
          * nodes written to from an unspill */
 
-        for (unsigned i = 0; i < ctx->temp_count; ++i) {
-                ra_set_node_spill_cost(g, i, 1.0);
+        unsigned *cost = calloc(ctx->temp_count, sizeof(cost[0]));
+
+        mir_foreach_instr_global(ctx, ins) {
+                if (ins->dest < ctx->temp_count)
+                        cost[ins->dest]++;
+
+                mir_foreach_src(ins, s) {
+                        if (ins->src[s] < ctx->temp_count)
+                                cost[ins->src[s]]++;
+                }
         }
+
+        for (unsigned i = 0; i < ctx->temp_count; ++i)
+                lcra_set_node_spill_cost(l, i, cost[i]);
 
         /* We can't spill any bundles that contain unspills. This could be
          * optimized to allow use of r27 to spill twice per bundle, but if
@@ -1222,7 +1237,7 @@ static void mir_spill_register(
                                                 unsigned src = bun->instructions[i]->src[s];
 
                                                 if (src < ctx->temp_count)
-                                                        ra_set_node_spill_cost(g, src, -1.0);
+                                                        lcra_set_node_spill_cost(l, src, -1);
                                         }
                                 }
                         }
@@ -1233,12 +1248,12 @@ static void mir_spill_register(
                         for (unsigned i = 0; i < bun->instruction_count; ++i) {
                                 unsigned dest = bun->instructions[i]->dest;
                                 if (dest < ctx->temp_count)
-                                        ra_set_node_spill_cost(g, dest, -1.0);
+                                        lcra_set_node_spill_cost(l, dest, -1);
                         }
                 }
         }
 
-        int spill_node = ra_get_best_spill_node(g);
+        int spill_node = lcra_get_best_spill_node(l);
 
         if (spill_node < 0) {
                 mir_print_shader(ctx);
@@ -1249,9 +1264,8 @@ static void mir_spill_register(
          * legitimately spill to TLS, but special registers just spill to work
          * registers */
 
-        unsigned class = ra_get_node_class(g, spill_node);
-        bool is_special = (class >> 2) != REG_CLASS_WORK;
-        bool is_special_w = (class >> 2) == REG_CLASS_TEXW;
+        bool is_special = l->class[spill_node] != REG_CLASS_WORK;
+        bool is_special_w = l->class[spill_node] == REG_CLASS_TEXW;
 
         /* Allocate TLS slot (maybe) */
         unsigned spill_slot = !is_special ? (*spill_count)++ : 0;
@@ -1271,7 +1285,7 @@ static void mir_spill_register(
                         midgard_instruction st;
 
                         if (is_special_w) {
-                                st = v_mov(spill_node, blank_alu_src, spill_slot);
+                                st = v_mov(spill_node, spill_slot);
                                 st.no_spill = true;
                         } else {
                                 ins->dest = SSA_FIXED_REGISTER(26);
@@ -1331,7 +1345,7 @@ static void mir_spill_register(
 
                                 midgard_instruction *before = ins;
 
-                                /* For a csel, go back one more not to break up the bundle */
+                                /* TODO: Remove me I'm a fossil */
                                 if (ins->type == TAG_ALU_4 && OP_IS_CSEL(ins->alu.op))
                                         before = mir_prev_op(before);
 
@@ -1339,7 +1353,7 @@ static void mir_spill_register(
 
                                 if (is_special) {
                                         /* Move */
-                                        st = v_mov(spill_node, blank_alu_src, consecutive_index);
+                                        st = v_mov(spill_node, consecutive_index);
                                         st.no_spill = true;
                                 } else {
                                         /* TLS load */
@@ -1347,7 +1361,7 @@ static void mir_spill_register(
                                 }
 
                                 /* Mask the load based on the component count
-                                 * actually needed to prvent RA loops */
+                                 * actually needed to prevent RA loops */
 
                                 st.mask = mir_from_bytemask(read_bytemask, midgard_reg_mode_32);
 
@@ -1377,7 +1391,7 @@ static void mir_spill_register(
 void
 schedule_program(compiler_context *ctx)
 {
-        struct ra_graph *g = NULL;
+        struct lcra_state *l = NULL;
         bool spilled = false;
         int iter_count = 1000; /* max iterations */
 
@@ -1402,13 +1416,13 @@ schedule_program(compiler_context *ctx)
 
         do {
                 if (spilled) 
-                        mir_spill_register(ctx, g, &spill_count);
+                        mir_spill_register(ctx, l, &spill_count);
 
                 mir_squeeze_index(ctx);
                 mir_invalidate_liveness(ctx);
 
-                g = NULL;
-                g = allocate_registers(ctx, &spilled);
+                l = NULL;
+                l = allocate_registers(ctx, &spilled);
         } while(spilled && ((iter_count--) > 0));
 
         if (iter_count <= 0) {
@@ -1421,5 +1435,5 @@ schedule_program(compiler_context *ctx)
 
         ctx->tls_size = spill_count * 16;
 
-        install_registers(ctx, g);
+        install_registers(ctx, l);
 }

@@ -99,7 +99,7 @@ iris_upload_ubo_ssbo_surf_state(struct iris_context *ice,
                                         : ISL_FORMAT_R32G32B32A32_FLOAT,
                          .swizzle = ISL_SWIZZLE_IDENTITY,
                          .stride_B = 1,
-                         .mocs = ice->vtbl.mocs(res->bo));
+                         .mocs = ice->vtbl.mocs(res->bo, &screen->isl_dev));
 }
 
 static nir_ssa_def *
@@ -194,17 +194,34 @@ iris_fix_edge_flags(nir_shader *nir)
    if (nir->info.stage != MESA_SHADER_VERTEX)
       return false;
 
-   nir_foreach_variable(var, &nir->outputs) {
-      if (var->data.location == VARYING_SLOT_EDGE) {
-         var->data.mode = nir_var_shader_temp;
-         nir->info.outputs_written &= ~VARYING_BIT_EDGE;
-         nir->info.inputs_read &= ~VERT_BIT_EDGEFLAG;
-         nir_fixup_deref_modes(nir);
-         return true;
+   nir_variable *var = NULL;
+   nir_foreach_variable(v, &nir->outputs) {
+      if (v->data.location == VARYING_SLOT_EDGE) {
+         var = v;
+         break;
       }
    }
 
-   return false;
+   if (!var)
+      return false;
+
+   exec_node_remove(&var->node);
+   var->data.mode = nir_var_shader_temp;
+   exec_list_push_tail(&nir->globals, &var->node);
+   nir->info.outputs_written &= ~VARYING_BIT_EDGE;
+   nir->info.inputs_read &= ~VERT_BIT_EDGEFLAG;
+   nir_fixup_deref_modes(nir);
+
+   nir_foreach_function(f, nir) {
+      if (f->impl) {
+         nir_metadata_preserve(f->impl, nir_metadata_block_index |
+                                        nir_metadata_dominance |
+                                        nir_metadata_live_ssa_defs |
+                                        nir_metadata_loop_analysis);
+      }
+   }
+
+   return true;
 }
 
 /**
@@ -2009,7 +2026,7 @@ iris_create_uncompiled_shader(struct pipe_context *ctx,
    if (!ish)
       return NULL;
 
-   ish->needs_edge_flag = iris_fix_edge_flags(nir);
+   NIR_PASS(ish->needs_edge_flag, nir, iris_fix_edge_flags);
 
    brw_preprocess_nir(screen->compiler, nir, NULL);
 

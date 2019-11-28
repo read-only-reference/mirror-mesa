@@ -477,12 +477,6 @@ anv_raster_polygon_mode(struct anv_pipeline *pipeline,
                         const VkPipelineInputAssemblyStateCreateInfo *ia_info,
                         const VkPipelineRasterizationStateCreateInfo *rs_info)
 {
-   /* Points always override everything.  This saves us from having to handle
-    * rs_info->polygonMode in all of the line cases below.
-    */
-   if (rs_info->polygonMode == VK_POLYGON_MODE_POINT)
-      return VK_POLYGON_MODE_POINT;
-
    if (anv_pipeline_has_stage(pipeline, MESA_SHADER_GEOMETRY)) {
       switch (get_gs_prog_data(pipeline)->output_topology) {
       case _3DPRIM_POINTLIST:
@@ -1005,6 +999,7 @@ emit_ds_state(struct anv_pipeline *pipeline,
       pipeline->stencil_test_enable = false;
       pipeline->writes_depth = false;
       pipeline->depth_test_enable = false;
+      pipeline->depth_bounds_test_enable = false;
       memset(depth_stencil_dw, 0, sizeof(depth_stencil_dw));
       return;
    }
@@ -1022,8 +1017,6 @@ emit_ds_state(struct anv_pipeline *pipeline,
    pipeline->writes_depth = info.depthWriteEnable;
    pipeline->depth_test_enable = info.depthTestEnable;
    pipeline->depth_bounds_test_enable = info.depthBoundsTestEnable;
-
-   /* VkBool32 depthBoundsTestEnable; // optional (depth_bounds_test) */
 
 #if GEN_GEN <= 7
    struct GENX(DEPTH_STENCIL_STATE) depth_stencil = {
@@ -1118,7 +1111,6 @@ emit_cb_state(struct anv_pipeline *pipeline,
          continue;
       }
 
-      assert(binding->binding == 0);
       const VkPipelineColorBlendAttachmentState *a =
          &info->pAttachments[binding->index];
 

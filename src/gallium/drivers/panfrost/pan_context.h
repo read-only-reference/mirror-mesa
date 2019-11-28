@@ -105,9 +105,6 @@ struct panfrost_context {
         /* Gallium context */
         struct pipe_context base;
 
-        /* Compiler context */
-        struct midgard_screen compiler;
-
         /* Bound job batch and map of panfrost_batch_key to job batches */
         struct panfrost_batch *batch;
         struct hash_table *batches;
@@ -188,9 +185,6 @@ struct panfrost_context {
         struct pipe_blend_color blend_color;
         struct pipe_depth_stencil_alpha_state *depth_stencil;
         struct pipe_stencil_ref stencil_ref;
-
-        /* True for t6XX, false for t8xx. */
-        bool is_t6xx;
 };
 
 /* Corresponds to the CSO */

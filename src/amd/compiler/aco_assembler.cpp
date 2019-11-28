@@ -105,7 +105,7 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
       encoding |=
          !instr->definitions.empty() && !(instr->definitions[0].physReg() == scc) ?
          instr->definitions[0].physReg() << 16 :
-         !instr->operands.empty() && !(instr->operands[0].physReg() == scc) ?
+         !instr->operands.empty() && instr->operands[0].physReg() <= 127 ?
          instr->operands[0].physReg() << 16 : 0;
       encoding |= sopk->imm;
       out.push_back(encoding);
@@ -317,6 +317,7 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
 
       uint32_t img_format = ac_get_tbuffer_format(ctx.chip_class, mtbuf->dfmt, mtbuf->nfmt);
       uint32_t encoding = (0b111010 << 26);
+      assert(img_format <= 0x7F);
       assert(!mtbuf->dlc || ctx.chip_class >= GFX10);
       encoding |= (mtbuf->dlc ? 1 : 0) << 15; /* DLC bit replaces one bit of the OPCODE on GFX10 */
       encoding |= (mtbuf->glc ? 1 : 0) << 14;
@@ -398,11 +399,14 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
       if (ctx.chip_class <= GFX9) {
          assert(flat->offset <= 0x1fff);
          encoding |= flat->offset & 0x1fff;
-      } else {
+      } else if (instr->format == Format::FLAT) {
          /* GFX10 has a 12-bit immediate OFFSET field,
           * but it has a hw bug: it ignores the offset, called FlatSegmentOffsetBug
           */
          assert(flat->offset == 0);
+      } else {
+         assert(flat->offset <= 0xfff);
+         encoding |= flat->offset & 0xfff;
       }
       if (instr->format == Format::SCRATCH)
          encoding |= 1 << 14;
@@ -421,13 +425,13 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
       encoding = (0xFF & instr->operands[0].physReg());
       if (!instr->definitions.empty())
          encoding |= (0xFF & instr->definitions[0].physReg()) << 24;
-      else
+      if (instr->operands.size() >= 3)
          encoding |= (0xFF & instr->operands[2].physReg()) << 8;
       if (!instr->operands[1].isUndefined()) {
          assert(ctx.chip_class >= GFX10 || instr->operands[1].physReg() != 0x7F);
          assert(instr->format != Format::FLAT);
          encoding |= instr->operands[1].physReg() << 16;
-      } else if (instr->format != Format::FLAT) {
+      } else if (instr->format != Format::FLAT || ctx.chip_class >= GFX10) { /* SADDR is actually used with FLAT on GFX10 */
          if (ctx.chip_class <= GFX9)
             encoding |= 0x7F << 16;
          else
