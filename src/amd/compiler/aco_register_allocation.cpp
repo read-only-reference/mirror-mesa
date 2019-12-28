@@ -1509,7 +1509,8 @@ void register_allocation(Program *program, std::vector<std::set<Temp>> live_out_
          /* handle definitions which must have the same register as an operand */
          if (instr->opcode == aco_opcode::v_interp_p2_f32 ||
              instr->opcode == aco_opcode::v_mac_f32 ||
-             instr->opcode == aco_opcode::v_writelane_b32) {
+             instr->opcode == aco_opcode::v_writelane_b32 ||
+             instr->opcode == aco_opcode::v_writelane_b32_e64) {
             instr->definitions[0].setFixed(instr->operands[2].physReg());
          } else if (instr->opcode == aco_opcode::s_addk_i32 ||
                     instr->opcode == aco_opcode::s_mulk_i32) {
@@ -1719,6 +1720,7 @@ void register_allocation(Program *program, std::vector<std::set<Temp>> live_out_
 
                pc->operands[i] = parallelcopy[i].first;
                pc->definitions[i] = parallelcopy[i].second;
+               assert(pc->operands[i].size() == pc->definitions[i].size());
 
                /* it might happen that the operand is already renamed. we have to restore the original name. */
                std::map<unsigned, Temp>::iterator it = ctx.orig_names.find(pc->operands[i].tempId());

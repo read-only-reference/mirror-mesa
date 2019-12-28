@@ -361,6 +361,7 @@ llvmpipe_begin_query(struct pipe_context *pipe, struct pipe_query *q)
       break;
    case PIPE_QUERY_PRIMITIVES_GENERATED:
       pq->num_primitives_generated = llvmpipe->so_stats.primitives_storage_needed;
+      llvmpipe->active_primgen_queries++;
       break;
    case PIPE_QUERY_SO_STATISTICS:
       pq->num_primitives_written = llvmpipe->so_stats.num_primitives_written;
@@ -408,6 +409,8 @@ llvmpipe_end_query(struct pipe_context *pipe, struct pipe_query *q)
          llvmpipe->so_stats.num_primitives_written - pq->num_primitives_written;
       break;
    case PIPE_QUERY_PRIMITIVES_GENERATED:
+      assert(llvmpipe->active_primgen_queries);
+      llvmpipe->active_primgen_queries--;
       pq->num_primitives_generated =
          llvmpipe->so_stats.primitives_storage_needed - pq->num_primitives_generated;
       break;
@@ -482,6 +485,11 @@ llvmpipe_check_render_cond(struct llvmpipe_context *lp)
 static void
 llvmpipe_set_active_query_state(struct pipe_context *pipe, bool enable)
 {
+   struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
+
+   llvmpipe->queries_disabled = !enable;
+   /* for OQs we need to regenerate the fragment shader */
+   llvmpipe->dirty |= LP_NEW_OCCLUSION_QUERY;
 }
 
 void llvmpipe_init_query_funcs(struct llvmpipe_context *llvmpipe )

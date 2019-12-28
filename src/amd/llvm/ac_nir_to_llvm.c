@@ -3022,6 +3022,17 @@ static LLVMValueRef visit_var_atomic(struct ac_nir_context *ctx,
 
 	const char *sync_scope = LLVM_VERSION_MAJOR >= 9 ? "workgroup-one-as" : "workgroup";
 
+	if (instr->src[0].ssa->parent_instr->type == nir_instr_type_deref) {
+		nir_deref_instr *deref = nir_instr_as_deref(instr->src[0].ssa->parent_instr);
+		if (deref->mode == nir_var_mem_global) {
+			/* use "singlethread" sync scope to implement relaxed ordering */
+			sync_scope = LLVM_VERSION_MAJOR >= 9 ? "singlethread-one-as" : "singlethread";
+
+			LLVMTypeRef ptr_type = LLVMPointerType(LLVMTypeOf(src), LLVMGetPointerAddressSpace(LLVMTypeOf(ptr)));
+			ptr = LLVMBuildBitCast(ctx->ac.builder, ptr, ptr_type , "");
+		}
+	}
+
 	if (instr->intrinsic == nir_intrinsic_shared_atomic_comp_swap ||
 	    instr->intrinsic == nir_intrinsic_deref_atomic_comp_swap) {
 		LLVMValueRef src1 = get_src(ctx, instr->src[src_idx + 1]);
@@ -3747,11 +3758,21 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 		break;
 	}
 	case nir_intrinsic_load_constant: {
+		unsigned base = nir_intrinsic_base(instr);
+		unsigned range = nir_intrinsic_range(instr);
+
 		LLVMValueRef offset = get_src(ctx, instr->src[0]);
-		LLVMValueRef base = LLVMConstInt(ctx->ac.i32,
-						 nir_intrinsic_base(instr),
-						 false);
-		offset = LLVMBuildAdd(ctx->ac.builder, offset, base, "");
+		offset = LLVMBuildAdd(ctx->ac.builder, offset,
+				      LLVMConstInt(ctx->ac.i32, base, false), "");
+
+		/* Clamp the offset to avoid out-of-bound access because global
+		 * instructions can't handle them.
+		 */
+		LLVMValueRef size = LLVMConstInt(ctx->ac.i32, base + range, false);
+		LLVMValueRef cond = LLVMBuildICmp(ctx->ac.builder, LLVMIntULT,
+						  offset, size, "");
+		offset = LLVMBuildSelect(ctx->ac.builder, cond, offset, size, "");
+
 		LLVMValueRef ptr = ac_build_gep0(&ctx->ac, ctx->constant_data,
 						 offset);
 		LLVMTypeRef comp_type =

@@ -342,6 +342,10 @@ generate_fs_loop(struct gallivm_state *gallivm,
 
    memset(&system_values, 0, sizeof(system_values));
 
+   /* truncate then sign extend. */
+   system_values.front_facing = LLVMBuildTrunc(gallivm->builder, facing, LLVMInt1TypeInContext(gallivm->context), "");
+   system_values.front_facing = LLVMBuildSExt(gallivm->builder, system_values.front_facing, LLVMInt32TypeInContext(gallivm->context), "");
+
    if (key->depth.enabled ||
        key->stencil[0].enabled) {
 
@@ -2983,7 +2987,7 @@ llvmpipe_create_fs_state(struct pipe_context *pipe,
       shader->base.tokens = tgsi_dup_tokens(templ->tokens);
    } else {
       shader->base.ir.nir = templ->ir.nir;
-      nir_tgsi_scan_shader(templ->ir.nir, &shader->info.base, false);
+      nir_tgsi_scan_shader(templ->ir.nir, &shader->info.base, true);
    }
 
    shader->draw_data = draw_create_fragment_shader(llvmpipe->draw, templ);
@@ -3344,7 +3348,7 @@ make_variant_key(struct llvmpipe_context *lp,
    /* alpha.ref_value is passed in jit_context */
 
    key->flatshade = lp->rasterizer->flatshade;
-   if (lp->active_occlusion_queries) {
+   if (lp->active_occlusion_queries && !lp->queries_disabled) {
       key->occlusion_count = TRUE;
    }
 

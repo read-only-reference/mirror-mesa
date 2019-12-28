@@ -346,9 +346,10 @@ stream_state(struct iris_batch *batch,
    struct iris_bo *bo = iris_resource_bo(*out_res);
    iris_use_pinned_bo(batch, bo, false);
 
-   *out_offset += iris_bo_offset_from_base_address(bo);
+   iris_record_state_size(batch->state_sizes,
+                          bo->gtt_offset + *out_offset, size);
 
-   iris_record_state_size(batch->state_sizes, *out_offset, size);
+   *out_offset += iris_bo_offset_from_base_address(bo);
 
    return ptr;
 }
@@ -931,6 +932,14 @@ iris_init_render_context(struct iris_batch *batch)
 #endif
 
 #if GEN_GEN == 11
+      iris_pack_state(GENX(TCCNTLREG), &reg_val, reg) {
+         reg.L3DataPartialWriteMergingEnable = true;
+         reg.ColorZPartialWriteMergingEnable = true;
+         reg.URBPartialWriteMergingEnable = true;
+         reg.TCDisable = true;
+      }
+      iris_emit_lri(batch, TCCNTLREG, reg_val);
+
       iris_pack_state(GENX(SAMPLER_MODE), &reg_val, reg) {
          reg.HeaderlessMessageforPreemptableContexts = 1;
          reg.HeaderlessMessageforPreemptableContextsMask = 1;
@@ -1980,10 +1989,12 @@ iris_upload_sampler_states(struct iris_context *ice, gl_shader_stage stage)
       return;
 
    struct pipe_resource *res = shs->sampler_table.res;
-   shs->sampler_table.offset +=
-      iris_bo_offset_from_base_address(iris_resource_bo(res));
+   struct iris_bo *bo = iris_resource_bo(res);
 
-   iris_record_state_size(ice->state.sizes, shs->sampler_table.offset, size);
+   iris_record_state_size(ice->state.sizes,
+                          bo->gtt_offset + shs->sampler_table.offset, size);
+
+   shs->sampler_table.offset += iris_bo_offset_from_base_address(bo);
 
    /* Make sure all land in the same BO */
    iris_border_color_pool_reserve(ice, IRIS_MAX_TEXTURE_SAMPLERS);
@@ -3997,14 +4008,14 @@ static void
 iris_populate_vs_key(const struct iris_context *ice,
                      const struct shader_info *info,
                      gl_shader_stage last_stage,
-                     struct brw_vs_prog_key *key)
+                     struct iris_vs_prog_key *key)
 {
    const struct iris_rasterizer_state *cso_rast = ice->state.cso_rast;
 
    if (info->clip_distance_array_size == 0 &&
        (info->outputs_written & (VARYING_BIT_POS | VARYING_BIT_CLIP_VERTEX)) &&
        last_stage == MESA_SHADER_VERTEX)
-      key->nr_userclip_plane_consts = cso_rast->num_clip_plane_consts;
+      key->vue.nr_userclip_plane_consts = cso_rast->num_clip_plane_consts;
 }
 
 /**
@@ -4012,7 +4023,7 @@ iris_populate_vs_key(const struct iris_context *ice,
  */
 static void
 iris_populate_tcs_key(const struct iris_context *ice,
-                      struct brw_tcs_prog_key *key)
+                      struct iris_tcs_prog_key *key)
 {
 }
 
@@ -4023,14 +4034,14 @@ static void
 iris_populate_tes_key(const struct iris_context *ice,
                       const struct shader_info *info,
                       gl_shader_stage last_stage,
-                      struct brw_tes_prog_key *key)
+                      struct iris_tes_prog_key *key)
 {
    const struct iris_rasterizer_state *cso_rast = ice->state.cso_rast;
 
    if (info->clip_distance_array_size == 0 &&
        (info->outputs_written & (VARYING_BIT_POS | VARYING_BIT_CLIP_VERTEX)) &&
        last_stage == MESA_SHADER_TESS_EVAL)
-      key->nr_userclip_plane_consts = cso_rast->num_clip_plane_consts;
+      key->vue.nr_userclip_plane_consts = cso_rast->num_clip_plane_consts;
 }
 
 /**
@@ -4040,14 +4051,14 @@ static void
 iris_populate_gs_key(const struct iris_context *ice,
                      const struct shader_info *info,
                      gl_shader_stage last_stage,
-                     struct brw_gs_prog_key *key)
+                     struct iris_gs_prog_key *key)
 {
    const struct iris_rasterizer_state *cso_rast = ice->state.cso_rast;
 
    if (info->clip_distance_array_size == 0 &&
        (info->outputs_written & (VARYING_BIT_POS | VARYING_BIT_CLIP_VERTEX)) &&
        last_stage == MESA_SHADER_GEOMETRY)
-      key->nr_userclip_plane_consts = cso_rast->num_clip_plane_consts;
+      key->vue.nr_userclip_plane_consts = cso_rast->num_clip_plane_consts;
 }
 
 /**
@@ -4056,7 +4067,7 @@ iris_populate_gs_key(const struct iris_context *ice,
 static void
 iris_populate_fs_key(const struct iris_context *ice,
                      const struct shader_info *info,
-                     struct brw_wm_prog_key *key)
+                     struct iris_fs_prog_key *key)
 {
    struct iris_screen *screen = (void *) ice->ctx.screen;
    const struct pipe_framebuffer_state *fb = &ice->state.framebuffer;
@@ -4089,7 +4100,7 @@ iris_populate_fs_key(const struct iris_context *ice,
 
 static void
 iris_populate_cs_key(const struct iris_context *ice,
-                     struct brw_cs_prog_key *key)
+                     struct iris_cs_prog_key *key)
 {
 }
 
@@ -5089,6 +5100,140 @@ genX(emit_aux_map_state)(struct iris_batch *batch)
 }
 #endif
 
+struct push_bos {
+   struct {
+      struct iris_address addr;
+      uint32_t length;
+   } buffers[4];
+   int buffer_count;
+   uint32_t max_length;
+};
+
+static void
+setup_constant_buffers(struct iris_context *ice,
+                       struct iris_batch *batch,
+                       int stage,
+                       struct push_bos *push_bos)
+{
+   struct iris_shader_state *shs = &ice->state.shaders[stage];
+   struct iris_compiled_shader *shader = ice->shaders.prog[stage];
+   struct brw_stage_prog_data *prog_data = (void *) shader->prog_data;
+
+   uint32_t push_range_sum = 0;
+
+   int n = 0;
+   for (int i = 0; i < 4; i++) {
+      const struct brw_ubo_range *range = &prog_data->ubo_ranges[i];
+
+      if (range->length == 0)
+         continue;
+
+      push_range_sum += range->length;
+
+      if (range->length > push_bos->max_length)
+         push_bos->max_length = range->length;
+
+      /* Range block is a binding table index, map back to UBO index. */
+      unsigned block_index = iris_bti_to_group_index(
+         &shader->bt, IRIS_SURFACE_GROUP_UBO, range->block);
+      assert(block_index != IRIS_SURFACE_NOT_USED);
+
+      struct pipe_shader_buffer *cbuf = &shs->constbuf[block_index];
+      struct iris_resource *res = (void *) cbuf->buffer;
+
+      assert(cbuf->buffer_offset % 32 == 0);
+
+      push_bos->buffers[n].length = range->length;
+      push_bos->buffers[n].addr =
+         res ? ro_bo(res->bo, range->start * 32 + cbuf->buffer_offset)
+         : ro_bo(batch->screen->workaround_bo, 0);
+      n++;
+   }
+
+   /* From the 3DSTATE_CONSTANT_XS and 3DSTATE_CONSTANT_ALL programming notes:
+    *
+    *    "The sum of all four read length fields must be less than or
+    *    equal to the size of 64."
+    */
+   assert(push_range_sum <= 64);
+
+   push_bos->buffer_count = n;
+}
+
+static void
+emit_push_constant_packets(struct iris_context *ice,
+                           struct iris_batch *batch,
+                           int stage,
+                           const struct push_bos *push_bos)
+{
+   struct iris_compiled_shader *shader = ice->shaders.prog[stage];
+   struct brw_stage_prog_data *prog_data = (void *) shader->prog_data;
+
+   iris_emit_cmd(batch, GENX(3DSTATE_CONSTANT_VS), pkt) {
+      pkt._3DCommandSubOpcode = push_constant_opcodes[stage];
+      if (prog_data) {
+         /* The Skylake PRM contains the following restriction:
+          *
+          *    "The driver must ensure The following case does not occur
+          *     without a flush to the 3D engine: 3DSTATE_CONSTANT_* with
+          *     buffer 3 read length equal to zero committed followed by a
+          *     3DSTATE_CONSTANT_* with buffer 0 read length not equal to
+          *     zero committed."
+          *
+          * To avoid this, we program the buffers in the highest slots.
+          * This way, slot 0 is only used if slot 3 is also used.
+          */
+         int n = push_bos->buffer_count;
+         assert(n <= 4);
+         const unsigned shift = 4 - n;
+         for (int i = 0; i < n; i++) {
+            pkt.ConstantBody.ReadLength[i + shift] =
+               push_bos->buffers[i].length;
+            pkt.ConstantBody.Buffer[i + shift] = push_bos->buffers[i].addr;
+         }
+      }
+   }
+}
+
+#if GEN_GEN >= 12
+static void
+emit_push_constant_packet_all(struct iris_context *ice,
+                              struct iris_batch *batch,
+                              uint32_t shader_mask,
+                              const struct push_bos *push_bos)
+{
+   if (!push_bos) {
+      iris_emit_cmd(batch, GENX(3DSTATE_CONSTANT_ALL), pc) {
+         pc.ShaderUpdateEnable = shader_mask;
+      }
+      return;
+   }
+
+   const uint32_t n = push_bos->buffer_count;
+   const uint32_t max_pointers = 4;
+   const uint32_t num_dwords = 2 + 2 * n;
+   uint32_t const_all[2 + 2 * max_pointers];
+   uint32_t *dw = &const_all[0];
+
+   assert(n <= max_pointers);
+   iris_pack_command(GENX(3DSTATE_CONSTANT_ALL), dw, all) {
+      all.DWordLength = num_dwords - 2;
+      all.ShaderUpdateEnable = shader_mask;
+      all.PointerBufferMask = (1 << n) - 1;
+   }
+   dw += 2;
+
+   for (int i = 0; i < n; i++) {
+      _iris_pack_state(batch, GENX(3DSTATE_CONSTANT_ALL_DATA),
+                       dw + i * 2, data) {
+         data.PointerToConstantBuffer = push_bos->buffers[i].addr;
+         data.ConstantBufferReadLength = push_bos->buffers[i].length;
+      }
+   }
+   iris_batch_emit(batch, const_all, sizeof(uint32_t) * num_dwords);
+}
+#endif
+
 static void
 iris_upload_dirty_render_state(struct iris_context *ice,
                                struct iris_batch *batch,
@@ -5267,8 +5412,23 @@ iris_upload_dirty_render_state(struct iris_context *ice,
       }
    }
 
+   /* GEN:BUG:1604061319
+    *
+    *    3DSTATE_CONSTANT_* needs to be programmed before BTP_*
+    *
+    * Testing shows that all the 3DSTATE_CONSTANT_XS need to be emitted if
+    * any stage has a dirty binding table.
+    */
+   const bool emit_const_wa = GEN_GEN >= 11 &&
+      (dirty & IRIS_ALL_DIRTY_BINDINGS) != 0;
+
+#if GEN_GEN >= 12
+   uint32_t nobuffer_stages = 0;
+#endif
+
    for (int stage = 0; stage <= MESA_SHADER_FRAGMENT; stage++) {
-      if (!(dirty & (IRIS_DIRTY_CONSTANTS_VS << stage)))
+      if (!(dirty & (IRIS_DIRTY_CONSTANTS_VS << stage)) &&
+          !emit_const_wa)
          continue;
 
       struct iris_shader_state *shs = &ice->state.shaders[stage];
@@ -5280,49 +5440,34 @@ iris_upload_dirty_render_state(struct iris_context *ice,
       if (shs->sysvals_need_upload)
          upload_sysvals(ice, stage);
 
-      struct brw_stage_prog_data *prog_data = (void *) shader->prog_data;
+      struct push_bos push_bos = {};
+      setup_constant_buffers(ice, batch, stage, &push_bos);
 
-      iris_emit_cmd(batch, GENX(3DSTATE_CONSTANT_VS), pkt) {
-         pkt._3DCommandSubOpcode = push_constant_opcodes[stage];
-         if (prog_data) {
-            /* The Skylake PRM contains the following restriction:
-             *
-             *    "The driver must ensure The following case does not occur
-             *     without a flush to the 3D engine: 3DSTATE_CONSTANT_* with
-             *     buffer 3 read length equal to zero committed followed by a
-             *     3DSTATE_CONSTANT_* with buffer 0 read length not equal to
-             *     zero committed."
-             *
-             * To avoid this, we program the buffers in the highest slots.
-             * This way, slot 0 is only used if slot 3 is also used.
-             */
-            int n = 3;
-
-            for (int i = 3; i >= 0; i--) {
-               const struct brw_ubo_range *range = &prog_data->ubo_ranges[i];
-
-               if (range->length == 0)
-                  continue;
-
-               /* Range block is a binding table index, map back to UBO index. */
-               unsigned block_index = iris_bti_to_group_index(
-                  &shader->bt, IRIS_SURFACE_GROUP_UBO, range->block);
-               assert(block_index != IRIS_SURFACE_NOT_USED);
-
-               struct pipe_shader_buffer *cbuf = &shs->constbuf[block_index];
-               struct iris_resource *res = (void *) cbuf->buffer;
-
-               assert(cbuf->buffer_offset % 32 == 0);
-
-               pkt.ConstantBody.ReadLength[n] = range->length;
-               pkt.ConstantBody.Buffer[n] =
-                  res ? ro_bo(res->bo, range->start * 32 + cbuf->buffer_offset)
-                      : ro_bo(batch->screen->workaround_bo, 0);
-               n--;
-            }
-         }
+#if GEN_GEN >= 12
+      /* If this stage doesn't have any push constants, emit it later in a
+       * single CONSTANT_ALL packet with all the other stages.
+       */
+      if (push_bos.buffer_count == 0) {
+         nobuffer_stages |= 1 << stage;
+         continue;
       }
+
+      /* The Constant Buffer Read Length field from 3DSTATE_CONSTANT_ALL
+       * contains only 5 bits, so we can only use it for buffers smaller than
+       * 32.
+       */
+      if (push_bos.max_length < 32) {
+         emit_push_constant_packet_all(ice, batch, 1 << stage, &push_bos);
+         continue;
+      }
+#endif
+      emit_push_constant_packets(ice, batch, stage, &push_bos);
    }
+
+#if GEN_GEN >= 12
+   if (nobuffer_stages)
+      emit_push_constant_packet_all(ice, batch, nobuffer_stages, NULL);
+#endif
 
    for (int stage = 0; stage <= MESA_SHADER_FRAGMENT; stage++) {
       /* Gen9 requires 3DSTATE_BINDING_TABLE_POINTERS_XS to be re-emitted
