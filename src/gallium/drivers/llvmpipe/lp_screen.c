@@ -266,7 +266,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
       return 1;
    case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
-      return 0;
+      return 1;
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
       return 1;
@@ -327,6 +327,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_DRAW_PARAMETERS:
       return 1;
+   case PIPE_CAP_MULTI_DRAW_INDIRECT:
+   case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
+      return 1;
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -336,8 +339,6 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
    case PIPE_CAP_SHAREABLE_SHADERS:
    case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
-   case PIPE_CAP_MULTI_DRAW_INDIRECT:
-   case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
    case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
    case PIPE_CAP_INVALIDATE_BUFFER:
    case PIPE_CAP_GENERATE_MIPMAP:
@@ -596,8 +597,8 @@ static const struct nir_shader_compiler_options gallivm_nir_options = {
    .lower_flrp32 = true,
    .lower_flrp64 = true,
    .lower_fsat = true,
-   .lower_bitfield_insert_to_bitfield_select = true,
-   .lower_bitfield_extract = true,
+   .lower_bitfield_insert_to_shifts = true,
+   .lower_bitfield_extract_to_shifts = true,
    .lower_sub = true,
    .lower_ffma = true,
    .lower_fmod = true,
@@ -614,6 +615,7 @@ static const struct nir_shader_compiler_options gallivm_nir_options = {
    .lower_extract_byte = true,
    .lower_extract_word = true,
    .lower_rotate = true,
+   .lower_ifind_msb = true,
    .optimize_sample_mask_in = true,
    .max_unroll_iterations = 32,
    .use_interpolated_input_intrinsics = true,

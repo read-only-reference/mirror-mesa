@@ -340,6 +340,7 @@ radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 	cmd_buffer->gsvs_ring_size_needed = 0;
 	cmd_buffer->tess_rings_needed = false;
 	cmd_buffer->gds_needed = false;
+	cmd_buffer->gds_oa_needed = false;
 	cmd_buffer->sample_positions_needed = false;
 
 	if (cmd_buffer->upload.upload_bo)
@@ -1126,6 +1127,33 @@ radv_emit_rbplus_state(struct radv_cmd_buffer *cmd_buffer)
 }
 
 static void
+radv_emit_batch_break_on_new_ps(struct radv_cmd_buffer *cmd_buffer)
+{
+	if (!cmd_buffer->device->pbb_allowed)
+		return;
+
+        struct radv_binning_settings settings =
+                radv_get_binning_settings(cmd_buffer->device->physical_device);
+	bool break_for_new_ps =
+		(!cmd_buffer->state.emitted_pipeline ||
+		 cmd_buffer->state.emitted_pipeline->shaders[MESA_SHADER_FRAGMENT] !=
+		 cmd_buffer->state.pipeline->shaders[MESA_SHADER_FRAGMENT]) &&
+		(settings.context_states_per_bin > 1 ||
+		 settings.persistent_states_per_bin > 1);
+	bool break_for_new_cb_target_mask =
+		(!cmd_buffer->state.emitted_pipeline ||
+		 cmd_buffer->state.emitted_pipeline->graphics.cb_target_mask !=
+		 cmd_buffer->state.pipeline->graphics.cb_target_mask) &&
+		 settings.context_states_per_bin > 1;
+
+	if (!break_for_new_ps && !break_for_new_cb_target_mask)
+		return;
+
+	radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+	radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_BREAK_BATCH) | EVENT_INDEX(0));
+}
+
+static void
 radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer)
 {
 	struct radv_pipeline *pipeline = cmd_buffer->state.pipeline;
@@ -1156,6 +1184,8 @@ radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer)
 		radeon_emit_array(cmd_buffer->cs, pipeline->ctx_cs.buf, pipeline->ctx_cs.cdw);
 		cmd_buffer->state.context_roll_without_scissor_emitted = true;
 	}
+
+	radv_emit_batch_break_on_new_ps(cmd_buffer);
 
 	for (unsigned i = 0; i < MESA_SHADER_COMPUTE; i++) {
 		if (!pipeline->shaders[i])
@@ -2545,12 +2575,42 @@ radv_flush_streamout_descriptors(struct radv_cmd_buffer *cmd_buffer)
 }
 
 static void
+radv_flush_ngg_gs_state(struct radv_cmd_buffer *cmd_buffer)
+{
+	struct radv_pipeline *pipeline = cmd_buffer->state.pipeline;
+	struct radv_userdata_info *loc;
+	uint32_t ngg_gs_state = 0;
+	uint32_t base_reg;
+
+	if (!radv_pipeline_has_gs(pipeline) ||
+	    !radv_pipeline_has_ngg(pipeline))
+		return;
+
+	/* By default NGG GS queries are disabled but they are enabled if the
+	 * command buffer has active GDS queries or if it's a secondary command
+	 * buffer that inherits the number of generated primitives.
+	 */
+	if (cmd_buffer->state.active_pipeline_gds_queries ||
+	    (cmd_buffer->state.inherited_pipeline_statistics & VK_QUERY_PIPELINE_STATISTIC_GEOMETRY_SHADER_PRIMITIVES_BIT))
+		ngg_gs_state = 1;
+
+	loc = radv_lookup_user_sgpr(pipeline, MESA_SHADER_GEOMETRY,
+				    AC_UD_NGG_GS_STATE);
+	base_reg = pipeline->user_data_0[MESA_SHADER_GEOMETRY];
+	assert(loc->sgpr_idx != -1);
+
+	radeon_set_sh_reg(cmd_buffer->cs, base_reg + loc->sgpr_idx * 4,
+			  ngg_gs_state);
+}
+
+static void
 radv_upload_graphics_shader_descriptors(struct radv_cmd_buffer *cmd_buffer, bool pipeline_is_dirty)
 {
 	radv_flush_vertex_descriptors(cmd_buffer, pipeline_is_dirty);
 	radv_flush_streamout_descriptors(cmd_buffer);
 	radv_flush_descriptors(cmd_buffer, VK_SHADER_STAGE_ALL_GRAPHICS);
 	radv_flush_constants(cmd_buffer, VK_SHADER_STAGE_ALL_GRAPHICS);
+	radv_flush_ngg_gs_state(cmd_buffer);
 }
 
 struct radv_draw_info {
@@ -3123,11 +3183,11 @@ radv_cmd_state_setup_attachments(struct radv_cmd_buffer *cmd_buffer,
 				 const VkRenderPassBeginInfo *info)
 {
 	struct radv_cmd_state *state = &cmd_buffer->state;
-	const struct VkRenderPassAttachmentBeginInfoKHR *attachment_info = NULL;
+	const struct VkRenderPassAttachmentBeginInfo *attachment_info = NULL;
 
 	if (info) {
 		attachment_info = vk_find_struct_const(info->pNext,
-		                                       RENDER_PASS_ATTACHMENT_BEGIN_INFO_KHR);
+		                                       RENDER_PASS_ATTACHMENT_BEGIN_INFO);
 	}
 
 
@@ -3318,6 +3378,9 @@ VkResult radv_BeginCommandBuffer(
 			if (result != VK_SUCCESS)
 				return result;
 		}
+
+		cmd_buffer->state.inherited_pipeline_statistics =
+			pBeginInfo->pInheritanceInfo->pipelineStatistics;
 
 		radv_cmd_buffer_set_subpass(cmd_buffer, subpass);
 	}
@@ -4059,6 +4122,8 @@ void radv_CmdExecuteCommands(
 			primary->tess_rings_needed = true;
 		if (secondary->sample_positions_needed)
 			primary->sample_positions_needed = true;
+		if (secondary->gds_needed)
+			primary->gds_needed = true;
 
 		if (!secondary->state.framebuffer &&
 		    (primary->state.dirty & RADV_CMD_DIRTY_FRAMEBUFFER)) {
@@ -4290,10 +4355,10 @@ void radv_CmdBeginRenderPass(
 	radv_cmd_buffer_begin_subpass(cmd_buffer, 0);
 }
 
-void radv_CmdBeginRenderPass2KHR(
+void radv_CmdBeginRenderPass2(
     VkCommandBuffer                             commandBuffer,
     const VkRenderPassBeginInfo*                pRenderPassBeginInfo,
-    const VkSubpassBeginInfoKHR*                pSubpassBeginInfo)
+    const VkSubpassBeginInfo*                   pSubpassBeginInfo)
 {
 	radv_CmdBeginRenderPass(commandBuffer, pRenderPassBeginInfo,
 				pSubpassBeginInfo->contents);
@@ -4310,10 +4375,10 @@ void radv_CmdNextSubpass(
 	radv_cmd_buffer_begin_subpass(cmd_buffer, prev_subpass + 1);
 }
 
-void radv_CmdNextSubpass2KHR(
+void radv_CmdNextSubpass2(
     VkCommandBuffer                             commandBuffer,
-    const VkSubpassBeginInfoKHR*                pSubpassBeginInfo,
-    const VkSubpassEndInfoKHR*                  pSubpassEndInfo)
+    const VkSubpassBeginInfo*                   pSubpassBeginInfo,
+    const VkSubpassEndInfo*                     pSubpassEndInfo)
 {
 	radv_CmdNextSubpass(commandBuffer, pSubpassBeginInfo->contents);
 }
@@ -4799,7 +4864,7 @@ void radv_CmdDrawIndexedIndirect(
 	radv_draw(cmd_buffer, &info);
 }
 
-void radv_CmdDrawIndirectCountKHR(
+void radv_CmdDrawIndirectCount(
 	VkCommandBuffer                             commandBuffer,
 	VkBuffer                                    _buffer,
 	VkDeviceSize                                offset,
@@ -4823,7 +4888,7 @@ void radv_CmdDrawIndirectCountKHR(
 	radv_draw(cmd_buffer, &info);
 }
 
-void radv_CmdDrawIndexedIndirectCountKHR(
+void radv_CmdDrawIndexedIndirectCount(
 	VkCommandBuffer                             commandBuffer,
 	VkBuffer                                    _buffer,
 	VkDeviceSize                                offset,
@@ -5152,9 +5217,9 @@ void radv_CmdEndRenderPass(
 	cmd_buffer->state.subpass_sample_locs = NULL;
 }
 
-void radv_CmdEndRenderPass2KHR(
+void radv_CmdEndRenderPass2(
     VkCommandBuffer                             commandBuffer,
-    const VkSubpassEndInfoKHR*                  pSubpassEndInfo)
+    const VkSubpassEndInfo*                     pSubpassEndInfo)
 {
 	radv_CmdEndRenderPass(commandBuffer);
 }
@@ -5890,8 +5955,10 @@ radv_set_streamout_enable(struct radv_cmd_buffer *cmd_buffer, bool enable)
 	     (old_hw_enabled_mask != so->hw_enabled_mask)))
 		radv_emit_streamout_enable(cmd_buffer);
 
-	if (cmd_buffer->device->physical_device->use_ngg_streamout)
+	if (cmd_buffer->device->physical_device->use_ngg_streamout) {
 		cmd_buffer->gds_needed = true;
+		cmd_buffer->gds_oa_needed = true;
+	}
 }
 
 static void radv_flush_vgt_streamout(struct radv_cmd_buffer *cmd_buffer)

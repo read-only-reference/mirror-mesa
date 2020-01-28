@@ -398,6 +398,9 @@ vtn_handle_extension(struct vtn_builder *b, SpvOp opcode,
       } else if ((strcmp(ext, "SPV_AMD_shader_trinary_minmax") == 0)
                 && (b->options && b->options->caps.amd_trinary_minmax)) {
          val->ext_handler = vtn_handle_amd_shader_trinary_minmax_instruction;
+      } else if ((strcmp(ext, "SPV_AMD_shader_explicit_vertex_parameter") == 0)
+                && (b->options && b->options->caps.amd_shader_explicit_vertex_parameter)) {
+         val->ext_handler = vtn_handle_amd_shader_explicit_vertex_parameter_instruction;
       } else if (strcmp(ext, "OpenCL.std") == 0) {
          val->ext_handler = vtn_handle_opencl_instruction;
       } else if (strstr(ext, "NonSemantic.") == ext) {
@@ -746,7 +749,7 @@ array_stride_decoration_cb(struct vtn_builder *b,
 
 static void
 struct_member_decoration_cb(struct vtn_builder *b,
-                            struct vtn_value *val, int member,
+                            UNUSED struct vtn_value *val, int member,
                             const struct vtn_decoration *dec, void *void_ctx)
 {
    struct member_decoration_ctx *ctx = void_ctx;
@@ -778,6 +781,9 @@ struct_member_decoration_cb(struct vtn_builder *b,
       break;
    case SpvDecorationFlat:
       ctx->fields[member].interpolation = INTERP_MODE_FLAT;
+      break;
+   case SpvDecorationExplicitInterpAMD:
+      ctx->fields[member].interpolation = INTERP_MODE_EXPLICIT;
       break;
    case SpvDecorationCentroid:
       ctx->fields[member].centroid = true;
@@ -889,7 +895,7 @@ vtn_array_type_rewrite_glsl_type(struct vtn_type *type)
  */
 static void
 struct_member_matrix_stride_cb(struct vtn_builder *b,
-                               struct vtn_value *val, int member,
+                               UNUSED struct vtn_value *val, int member,
                                const struct vtn_decoration *dec,
                                void *void_ctx)
 {
@@ -946,7 +952,7 @@ struct_block_decoration_cb(struct vtn_builder *b,
 static void
 type_decoration_cb(struct vtn_builder *b,
                    struct vtn_value *val, int member,
-                    const struct vtn_decoration *dec, void *ctx)
+                   const struct vtn_decoration *dec, UNUSED void *ctx)
 {
    struct vtn_type *type = val->type;
 
@@ -984,6 +990,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationPatch:
    case SpvDecorationCentroid:
    case SpvDecorationSample:
+   case SpvDecorationExplicitInterpAMD:
    case SpvDecorationVolatile:
    case SpvDecorationCoherent:
    case SpvDecorationNonWritable:
@@ -1348,7 +1355,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
          case SpvStorageClassUniform:
          case SpvStorageClassPushConstant:
          case SpvStorageClassStorageBuffer:
-         case SpvStorageClassPhysicalStorageBufferEXT:
+         case SpvStorageClassPhysicalStorageBuffer:
             vtn_foreach_decoration(b, val, array_stride_decoration_cb, NULL);
             break;
          default:
@@ -1532,9 +1539,9 @@ vtn_null_constant(struct vtn_builder *b, struct vtn_type *type)
 }
 
 static void
-spec_constant_decoration_cb(struct vtn_builder *b, struct vtn_value *v,
-                             int member, const struct vtn_decoration *dec,
-                             void *data)
+spec_constant_decoration_cb(struct vtn_builder *b, UNUSED struct vtn_value *val,
+                            ASSERTED int member,
+                            const struct vtn_decoration *dec, void *data)
 {
    vtn_assert(member == -1);
    if (dec->decoration != SpvDecorationSpecId)
@@ -1578,9 +1585,9 @@ get_specialization64(struct vtn_builder *b, struct vtn_value *val,
 static void
 handle_workgroup_size_decoration_cb(struct vtn_builder *b,
                                     struct vtn_value *val,
-                                    int member,
+                                    ASSERTED int member,
                                     const struct vtn_decoration *dec,
-                                    void *data)
+                                    UNUSED void *data)
 {
    vtn_assert(member == -1);
    if (dec->decoration != SpvDecorationBuiltIn ||
@@ -1937,7 +1944,7 @@ vtn_storage_class_to_memory_semantics(SpvStorageClass sc)
 {
    switch (sc) {
    case SpvStorageClassStorageBuffer:
-   case SpvStorageClassPhysicalStorageBufferEXT:
+   case SpvStorageClassPhysicalStorageBuffer:
       return SpvMemorySemanticsUniformMemoryMask;
    case SpvStorageClassWorkgroup:
       return SpvMemorySemanticsWorkgroupMemoryMask;
@@ -2101,14 +2108,15 @@ vtn_emit_scoped_memory_barrier(struct vtn_builder *b, SpvScope scope,
 
    nir_variable_mode modes = 0;
    if (semantics & (SpvMemorySemanticsUniformMemoryMask |
-                    SpvMemorySemanticsImageMemoryMask))
-      modes |= nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_uniform;
+                    SpvMemorySemanticsImageMemoryMask)) {
+      modes |= nir_var_uniform |
+               nir_var_mem_ubo |
+               nir_var_mem_ssbo |
+               nir_var_mem_global;
+   }
    if (semantics & SpvMemorySemanticsWorkgroupMemoryMask)
       modes |= nir_var_mem_shared;
    if (semantics & SpvMemorySemanticsOutputMemoryMask) {
-      vtn_fail_if(!b->options->caps.vk_memory_model,
-                  "To use Output memory semantics, the VulkanMemoryModel "
-                  "capability must be declared.");
       modes |= nir_var_shader_out;
    }
 
@@ -2345,6 +2353,14 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       dest_type = nir_type_int;
       break;
 
+   case SpvOpFragmentFetchAMD:
+      texop = nir_texop_fragment_fetch;
+      break;
+
+   case SpvOpFragmentMaskFetchAMD:
+      texop = nir_texop_fragment_mask_fetch;
+      break;
+
    default:
       vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
@@ -2376,6 +2392,8 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case nir_texop_query_levels:
    case nir_texop_texture_samples:
    case nir_texop_samples_identical:
+   case nir_texop_fragment_fetch:
+   case nir_texop_fragment_mask_fetch:
       /* These don't */
       break;
    case nir_texop_txf_ms_fb:
@@ -2403,7 +2421,9 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case SpvOpImageFetch:
    case SpvOpImageGather:
    case SpvOpImageDrefGather:
-   case SpvOpImageQueryLod: {
+   case SpvOpImageQueryLod:
+   case SpvOpFragmentFetchAMD:
+   case SpvOpFragmentMaskFetchAMD: {
       /* All these types have the coordinate as their first real argument */
       switch (sampler_dim) {
       case GLSL_SAMPLER_DIM_1D:
@@ -2413,6 +2433,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       case GLSL_SAMPLER_DIM_2D:
       case GLSL_SAMPLER_DIM_RECT:
       case GLSL_SAMPLER_DIM_MS:
+      case GLSL_SAMPLER_DIM_SUBPASS_MS:
          coord_components = 2;
          break;
       case GLSL_SAMPLER_DIM_3D:
@@ -2480,6 +2501,10 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    /* For OpImageQuerySizeLod, we always have an LOD */
    if (opcode == SpvOpImageQuerySizeLod)
       (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_lod);
+
+   /* For OpFragmentFetchAMD, we always have a multisample index */
+   if (opcode == SpvOpFragmentFetchAMD)
+      (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_ms_index);
 
    /* Now we need to handle some number of optional arguments */
    struct vtn_value *gather_offsets = NULL;
@@ -2710,6 +2735,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       val->image->image = vtn_value(b, w[3], vtn_value_type_pointer)->pointer;
       val->image->coord = get_image_coord(b, w[4]);
       val->image->sample = vtn_ssa_value(b, w[5])->def;
+      val->image->lod = nir_imm_int(&b->nb, 0);
       return;
    }
 
@@ -2748,6 +2774,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       image.image = vtn_value(b, w[3], vtn_value_type_pointer)->pointer;
       image.coord = NULL;
       image.sample = NULL;
+      image.lod = NULL;
       break;
 
    case SpvOpImageRead: {
@@ -2772,6 +2799,14 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
                                           SpvImageOperandsMakeTexelVisibleMask);
          semantics = SpvMemorySemanticsMakeVisibleMask;
          scope = vtn_constant_uint(b, w[arg]);
+      }
+
+      if (operands & SpvImageOperandsLodMask) {
+         uint32_t arg = image_operand_arg(b, w, count, 5,
+                                          SpvImageOperandsLodMask);
+         image.lod = vtn_ssa_value(b, w[arg])->def;
+      } else {
+         image.lod = nir_imm_int(&b->nb, 0);
       }
 
       /* TODO: Volatile. */
@@ -2803,6 +2838,14 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
                                           SpvImageOperandsMakeTexelAvailableMask);
          semantics = SpvMemorySemanticsMakeAvailableMask;
          scope = vtn_constant_uint(b, w[arg]);
+      }
+
+      if (operands & SpvImageOperandsLodMask) {
+         uint32_t arg = image_operand_arg(b, w, count, 4,
+                                          SpvImageOperandsLodMask);
+         image.lod = vtn_ssa_value(b, w[arg])->def;
+      } else {
+         image.lod = nir_imm_int(&b->nb, 0);
       }
 
       /* TODO: Volatile. */
@@ -2861,6 +2904,14 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
    case SpvOpAtomicLoad:
    case SpvOpImageQuerySize:
    case SpvOpImageRead:
+      if (opcode == SpvOpImageRead || opcode == SpvOpAtomicLoad) {
+         /* Only OpImageRead can support a lod parameter if
+          * SPV_AMD_shader_image_load_store_lod is used but the current NIR
+          * intrinsics definition for atomics requires us to set it for
+          * OpAtomicLoad.
+          */
+         intrin->src[3] = nir_src_for_ssa(image.lod);
+      }
       break;
    case SpvOpAtomicStore:
    case SpvOpImageWrite: {
@@ -2870,6 +2921,12 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       assert(op == nir_intrinsic_image_deref_store);
       intrin->num_components = 4;
       intrin->src[3] = nir_src_for_ssa(expand_to_vec4(&b->nb, value));
+      /* Only OpImageWrite can support a lod parameter if
+       * SPV_AMD_shader_image_load_store_lod is used but the current NIR
+       * intrinsics definition for atomics requires us to set it for
+       * OpAtomicStore.
+       */
+      intrin->src[4] = nir_src_for_ssa(image.lod);
       break;
    }
 
@@ -2985,7 +3042,7 @@ get_uniform_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
        * only need to support GLSL Atomic Counters that are uints and don't
        * allow direct storage.
        */
-      unreachable("Invalid uniform atomic");
+      vtn_fail("Invalid uniform atomic");
    }
 }
 
@@ -3021,7 +3078,7 @@ get_deref_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
  */
 static void
 vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
-                   const uint32_t *w, unsigned count)
+                   const uint32_t *w, UNUSED unsigned count)
 {
    struct vtn_pointer *ptr;
    nir_intrinsic_instr *atomic;
@@ -3587,6 +3644,10 @@ vtn_emit_memory_barrier(struct vtn_builder *b, SpvScope scope,
       case SpvMemorySemanticsImageMemoryMask:
          vtn_emit_barrier(b, nir_intrinsic_memory_barrier_image);
          break;
+      case SpvMemorySemanticsOutputMemoryMask:
+         if (b->nb.shader->info.stage == MESA_SHADER_TESS_CTRL)
+            vtn_emit_barrier(b, nir_intrinsic_memory_barrier_tcs_patch);
+         break;
       default:
          break;;
       }
@@ -3595,7 +3656,7 @@ vtn_emit_memory_barrier(struct vtn_builder *b, SpvScope scope,
 
 static void
 vtn_handle_barrier(struct vtn_builder *b, SpvOp opcode,
-                   const uint32_t *w, unsigned count)
+                   const uint32_t *w, UNUSED unsigned count)
 {
    switch (opcode) {
    case SpvOpEmitVertex:
@@ -3643,13 +3704,43 @@ vtn_handle_barrier(struct vtn_builder *b, SpvOp opcode,
    }
 
    case SpvOpControlBarrier: {
+      SpvScope execution_scope = vtn_constant_uint(b, w[1]);
       SpvScope memory_scope = vtn_constant_uint(b, w[2]);
       SpvMemorySemanticsMask memory_semantics = vtn_constant_uint(b, w[3]);
+
+      /* GLSLang, prior to commit 8297936dd6eb3, emitted OpControlBarrier with
+       * memory semantics of None for GLSL barrier().
+       */
+      if (b->wa_glslang_cs_barrier &&
+          b->nb.shader->info.stage == MESA_SHADER_COMPUTE &&
+          execution_scope == SpvScopeWorkgroup &&
+          memory_semantics == SpvMemorySemanticsMaskNone) {
+         memory_scope = SpvScopeWorkgroup;
+         memory_semantics = SpvMemorySemanticsAcquireReleaseMask |
+                            SpvMemorySemanticsWorkgroupMemoryMask;
+      }
+
+      /* From the SPIR-V spec:
+       *
+       *    "When used with the TessellationControl execution model, it also
+       *    implicitly synchronizes the Output Storage Class: Writes to Output
+       *    variables performed by any invocation executed prior to a
+       *    OpControlBarrier will be visible to any other invocation after
+       *    return from that OpControlBarrier."
+       */
+      if (b->nb.shader->info.stage == MESA_SHADER_TESS_CTRL) {
+         memory_semantics &= ~(SpvMemorySemanticsAcquireMask |
+                               SpvMemorySemanticsReleaseMask |
+                               SpvMemorySemanticsAcquireReleaseMask |
+                               SpvMemorySemanticsSequentiallyConsistentMask);
+         memory_semantics |= SpvMemorySemanticsAcquireReleaseMask |
+                             SpvMemorySemanticsOutputMemoryMask;
+      }
+
       vtn_emit_memory_barrier(b, memory_scope, memory_semantics);
 
-      SpvScope execution_scope = vtn_constant_uint(b, w[1]);
       if (execution_scope == SpvScopeWorkgroup)
-         vtn_emit_barrier(b, nir_intrinsic_barrier);
+         vtn_emit_barrier(b, nir_intrinsic_control_barrier);
       break;
    }
 
@@ -4011,7 +4102,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          spv_check_supported(float_controls, cap);
          break;
 
-      case SpvCapabilityPhysicalStorageBufferAddressesEXT:
+      case SpvCapabilityPhysicalStorageBufferAddresses:
          spv_check_supported(physical_storage_buffer_address, cap);
          break;
 
@@ -4046,6 +4137,18 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityVulkanMemoryModelDeviceScope:
          spv_check_supported(vk_memory_model_device_scope, cap);
+         break;
+
+      case SpvCapabilityImageReadWriteLodAMD:
+         spv_check_supported(amd_image_read_write_lod, cap);
+         break;
+
+      case SpvCapabilityIntegerFunctions2INTEL:
+         spv_check_supported(integer_functions2, cap);
+         break;
+
+      case SpvCapabilityFragmentMaskAMD:
+         spv_check_supported(amd_fragment_mask, cap);
          break;
 
       default:
@@ -4084,10 +4187,10 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
                      "AddressingModelLogical only supported for shaders");
          b->physical_ptrs = false;
          break;
-      case SpvAddressingModelPhysicalStorageBuffer64EXT:
+      case SpvAddressingModelPhysicalStorageBuffer64:
          vtn_fail_if(!b->options ||
                      !b->options->caps.physical_storage_buffer_address,
-                     "AddressingModelPhysicalStorageBuffer64EXT not supported");
+                     "AddressingModelPhysicalStorageBuffer64 not supported");
          break;
       default:
          vtn_fail("Unknown addressing model: %s (%u)",
@@ -4161,7 +4264,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
 static void
 vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
-                          const struct vtn_decoration *mode, void *data)
+                          const struct vtn_decoration *mode, UNUSED void *data)
 {
    vtn_assert(b->entry_point == entry_point);
 
@@ -4718,6 +4821,11 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
       break;
    }
 
+   case SpvOpFragmentMaskFetchAMD:
+   case SpvOpFragmentFetchAMD:
+      vtn_handle_texture(b, opcode, w, count);
+      break;
+
    case SpvOpAtomicLoad:
    case SpvOpAtomicExchange:
    case SpvOpAtomicCompareExchange:
@@ -4854,6 +4962,20 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpVectorTimesMatrix:
    case SpvOpMatrixTimesVector:
    case SpvOpMatrixTimesMatrix:
+   case SpvOpUCountLeadingZerosINTEL:
+   case SpvOpUCountTrailingZerosINTEL:
+   case SpvOpAbsISubINTEL:
+   case SpvOpAbsUSubINTEL:
+   case SpvOpIAddSatINTEL:
+   case SpvOpUAddSatINTEL:
+   case SpvOpIAverageINTEL:
+   case SpvOpUAverageINTEL:
+   case SpvOpIAverageRoundedINTEL:
+   case SpvOpUAverageRoundedINTEL:
+   case SpvOpISubSatINTEL:
+   case SpvOpUSubSatINTEL:
+   case SpvOpIMul32x16INTEL:
+   case SpvOpUMul32x16INTEL:
       vtn_handle_alu(b, opcode, w, count);
       break;
 
@@ -5066,6 +5188,13 @@ vtn_create_builder(const uint32_t *words, size_t word_count,
     * versions of GLSLang.
     */
    b->wa_glslang_179 = (generator_id == 8 && generator_version == 1);
+
+   /* In GLSLang commit 8297936dd6eb3, their handling of barrier() was fixed
+    * to provide correct memory semantics on compute shader barrier()
+    * commands.  Prior to that, we need to fix them up ourselves.  This
+    * GLSLang fix caused them to bump to generator version 3.
+    */
+   b->wa_glslang_cs_barrier = (generator_id == 8 && generator_version < 3);
 
    /* words[2] == generator magic */
    unsigned value_id_bound = words[3];

@@ -73,6 +73,7 @@ static const struct debug_named_value debug_options[] = {
    {"shaderdb",       ETNA_DBG_SHADERDB, "Enable shaderdb output"},
    {"no_singlebuffer",ETNA_DBG_NO_SINGLEBUF, "Disable single buffer feature"},
    {"nir",            ETNA_DBG_NIR, "use new NIR compiler"},
+   {"deqp",           ETNA_DBG_DEQP, "Hacks to run dEQP GLES3 tests"}, /* needs MESA_GLES_VERSION_OVERRIDE=3.0 */
    DEBUG_NAMED_VALUE_END
 };
 
@@ -180,6 +181,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 0;
 
    /* Stream output. */
+   case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
+      return DBG_ENABLED(ETNA_DBG_DEQP) ? 4 : 0;
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
       return 0;
@@ -190,6 +193,9 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 255;
    case PIPE_CAP_MAX_VERTEX_BUFFERS:
       return screen->specs.stream_count;
+   case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
+      return VIV_FEATURE(screen, chipMinorFeatures4, HALTI2);
+
 
    /* Texturing. */
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
@@ -274,6 +280,10 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
                              enum pipe_shader_cap param)
 {
    struct etna_screen *screen = etna_screen(pscreen);
+   bool ubo_enable = screen->specs.halti >= 2 && DBG_ENABLED(ETNA_DBG_NIR);
+
+   if (DBG_ENABLED(ETNA_DBG_DEQP))
+      ubo_enable = true;
 
    switch (shader) {
    case PIPE_SHADER_FRAGMENT:
@@ -309,7 +319,7 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return 64; /* Max native temporaries. */
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-      return 1;
+      return ubo_enable ? ETNA_MAX_CONST_BUF : 1;
    case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
       return 1;
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -334,6 +344,8 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_PREFERRED_IR:
       return DBG_ENABLED(ETNA_DBG_NIR) ? PIPE_SHADER_IR_NIR : PIPE_SHADER_IR_TGSI;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+      if (ubo_enable)
+         return 16384; /* 16384 so state tracker enables UBOs */
       return shader == PIPE_SHADER_FRAGMENT
                 ? screen->specs.max_ps_uniforms * sizeof(float[4])
                 : screen->specs.max_vs_uniforms * sizeof(float[4]);
@@ -434,6 +446,8 @@ gpu_supports_render_format(struct etna_screen *screen, enum pipe_format format,
    /* Validate MSAA; number of samples must be allowed, and render target
     * must have MSAA'able format. */
    if (sample_count > 1) {
+      if (!VIV_FEATURE(screen, chipFeatures, MSAA))
+         return false;
       if (!translate_samples_to_xyscale(sample_count, NULL, NULL))
          return false;
       if (translate_ts_format(format) == ETNA_NO_MATCH)
@@ -705,6 +719,10 @@ etna_get_specs(struct etna_screen *screen)
    screen->specs.vertex_sampler_offset = 8;
    screen->specs.fragment_sampler_count = 8;
    screen->specs.vertex_sampler_count = 4;
+
+   if (screen->model == 0x400)
+      screen->specs.vertex_sampler_count = 0;
+
    screen->specs.vs_need_z_div =
       screen->model < 0x1000 && screen->model != 0x880;
    screen->specs.has_sin_cos_sqrt =

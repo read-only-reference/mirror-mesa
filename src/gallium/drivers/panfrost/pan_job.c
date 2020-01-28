@@ -181,6 +181,9 @@ panfrost_free_batch(struct panfrost_batch *batch)
                 panfrost_batch_fence_unreference(*dep);
         }
 
+        util_dynarray_fini(&batch->headers);
+        util_dynarray_fini(&batch->gpu_headers);
+
         /* The out_sync fence lifetime is different from the the batch one
          * since other batches might want to wait on a fence of already
          * submitted/signaled batch. All we need to do here is make sure the
@@ -343,7 +346,9 @@ panfrost_bo_access_gc_fences(struct panfrost_context *ctx,
                 access->writer = NULL;
         }
 
-        unsigned nreaders = 0;
+        struct panfrost_batch_fence **readers_array = util_dynarray_begin(&access->readers);
+        struct panfrost_batch_fence **new_readers = readers_array;
+
         util_dynarray_foreach(&access->readers, struct panfrost_batch_fence *,
                               reader) {
                 if (!(*reader))
@@ -353,12 +358,15 @@ panfrost_bo_access_gc_fences(struct panfrost_context *ctx,
                         panfrost_batch_fence_unreference(*reader);
                         *reader = NULL;
                 } else {
-                        nreaders++;
+                        /* Build a new array of only unsignaled fences in-place */
+                        *(new_readers++) = *reader;
                 }
         }
 
-        if (!nreaders)
-                util_dynarray_clear(&access->readers);
+        if (!util_dynarray_resize(&access->readers, struct panfrost_batch_fence *,
+                                  new_readers - readers_array) &&
+            new_readers != readers_array)
+                unreachable("Invalid dynarray access->readers");
 }
 
 /* Collect signaled fences to keep the kernel-side syncobj-map small. The
@@ -380,8 +388,10 @@ panfrost_gc_fences(struct panfrost_context *ctx)
                 panfrost_bo_access_gc_fences(ctx, access, entry->key);
                 if (!util_dynarray_num_elements(&access->readers,
                                                 struct panfrost_batch_fence *) &&
-                    !access->writer)
+                    !access->writer) {
+                        ralloc_free(access);
                         _mesa_hash_table_remove(ctx->accessed_bos, entry);
+                }
         }
 }
 
@@ -883,7 +893,7 @@ panfrost_batch_submit_ioctl(struct panfrost_batch *batch,
         free(in_syncs);
 
         if (ret) {
-                fprintf(stderr, "Error submitting: %m\n");
+                DBG("Error submitting: %m\n");
                 return errno;
         }
 
@@ -897,7 +907,7 @@ panfrost_batch_submit_ioctl(struct panfrost_batch *batch,
                 status = header->exception_status;
 
                 if (status && status != 0x1) {
-                        fprintf(stderr, "Job %" PRIx64 " failed: source ID: 0x%x access: %s exception: 0x%x (exception_status 0x%x) fault_pointer 0x%" PRIx64 " \n",
+                        DBG("Job %" PRIx64 " failed: source ID: 0x%x access: %s exception: 0x%x (exception_status 0x%x) fault_pointer 0x%" PRIx64 " \n",
                                first_job_desc,
                                (status >> 16) & 0xFFFF,
                                pandecode_exception_access((status >> 8) & 0x3),
@@ -985,7 +995,7 @@ panfrost_batch_submit(struct panfrost_batch *batch)
         ret = panfrost_batch_submit_jobs(batch);
 
         if (ret)
-                fprintf(stderr, "panfrost_batch_submit failed: %d\n", ret);
+                DBG("panfrost_batch_submit failed: %d\n", ret);
 
         /* We must reset the damage info of our render targets here even
          * though a damage reset normally happens when the DRI layer swaps
@@ -1208,6 +1218,8 @@ pan_pack_color(uint32_t *packed, const union pipe_color_union *color, enum pipe_
                         pan_pack_color_32(packed, out.ui[0] | (out.ui[0] << 16));
                 else if (size == 3 || size == 4)
                         pan_pack_color_32(packed, out.ui[0]);
+                else if (size == 6)
+                        pan_pack_color_64(packed, out.ui[0], out.ui[1] | (out.ui[1] << 16)); /* RGB16F -- RGBB */
                 else if (size == 8)
                         pan_pack_color_64(packed, out.ui[0], out.ui[1]);
                 else if (size == 16)

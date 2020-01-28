@@ -585,7 +585,7 @@ tu_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
       .textureCompressionETC2 = true,
       .textureCompressionASTC_LDR = true,
       .textureCompressionBC = true,
-      .occlusionQueryPrecise = false,
+      .occlusionQueryPrecise = true,
       .pipelineStatisticsQuery = false,
       .vertexPipelineStoresAndAtomics = false,
       .fragmentStoresAndAtomics = false,
@@ -786,7 +786,7 @@ tu_GetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
       .viewportBoundsRange = { INT16_MIN, INT16_MAX },
       .viewportSubPixelBits = 8,
       .minMemoryMapAlignment = 4096, /* A page */
-      .minTexelBufferOffsetAlignment = 1,
+      .minTexelBufferOffsetAlignment = 64,
       .minUniformBufferOffsetAlignment = 4,
       .minStorageBufferOffsetAlignment = 4,
       .minTexelOffset = -32,
@@ -1761,6 +1761,8 @@ tu_DestroyEvent(VkDevice _device,
 
    if (!event)
       return;
+
+   tu_bo_finish(device, &event->bo);
    vk_free2(&device->alloc, pAllocator, event);
 }
 
