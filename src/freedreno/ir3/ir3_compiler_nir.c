@@ -1040,7 +1040,7 @@ emit_intrinsic_atomic_shared(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 static struct ir3_instruction *
 get_image_samp_tex_src(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 {
-	unsigned slot = ir3_get_image_slot(nir_src_as_deref(intr->src[0]));
+	unsigned slot = nir_src_as_uint(intr->src[0]);
 	unsigned tex_idx = ir3_image_to_tex(&ctx->so->image_mapping, slot);
 	struct ir3_instruction *texture, *sampler;
 
@@ -1059,13 +1059,12 @@ emit_intrinsic_load_image(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 		struct ir3_instruction **dst)
 {
 	struct ir3_block *b = ctx->block;
-	const nir_variable *var = nir_intrinsic_get_var(intr, 0);
 	struct ir3_instruction *samp_tex = get_image_samp_tex_src(ctx, intr);
 	struct ir3_instruction *sam;
 	struct ir3_instruction * const *src0 = ir3_get_src(ctx, &intr->src[1]);
 	struct ir3_instruction *coords[4];
-	unsigned flags, ncoords = ir3_get_image_coords(var, &flags);
-	type_t type = ir3_get_image_type(var);
+	unsigned flags, ncoords = ir3_get_image_coords(intr, &flags);
+	type_t type = ir3_get_type_for_image_intrinsic(intr);
 
 	/* hmm, this seems a bit odd, but it is what blob does and (at least
 	 * a5xx) just faults on bogus addresses otherwise:
@@ -1095,10 +1094,9 @@ emit_intrinsic_image_size(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 		struct ir3_instruction **dst)
 {
 	struct ir3_block *b = ctx->block;
-	const nir_variable *var = nir_intrinsic_get_var(intr, 0);
 	struct ir3_instruction *samp_tex = get_image_samp_tex_src(ctx, intr);
 	struct ir3_instruction *sam, *lod;
-	unsigned flags, ncoords = ir3_get_image_coords(var, &flags);
+	unsigned flags, ncoords = ir3_get_image_coords(intr, &flags);
 	type_t dst_type = nir_dest_bit_size(intr->dest) < 32 ?
 			TYPE_U16 : TYPE_U32;
 
@@ -1126,9 +1124,7 @@ emit_intrinsic_image_size(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 	 *
 	 * TODO: This is at least true on a5xx. Check other gens.
 	 */
-	enum glsl_sampler_dim dim =
-		glsl_get_sampler_dim(glsl_without_array(var->type));
-	if (dim == GLSL_SAMPLER_DIM_BUF) {
+	if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF) {
 		/* Since all the possible values the divisor can take are
 		 * power-of-two (4, 8, or 16), the division is implemented
 		 * as a shift-right.
@@ -1138,7 +1134,7 @@ emit_intrinsic_image_size(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 		 */
 		struct ir3_const_state *const_state = &ctx->so->shader->const_state;
 		unsigned cb = regid(const_state->offsets.image_dims, 0) +
-			const_state->image_dims.off[var->data.driver_location];
+			const_state->image_dims.off[nir_src_as_uint(intr->src[0])];
 		struct ir3_instruction *aux = create_uniform(b, cb + 1);
 
 		tmp[0] = ir3_SHR_B(b, tmp[0], 0, aux, 0);
@@ -1306,12 +1302,12 @@ static struct ir3_instruction *
 get_frag_coord(struct ir3_context *ctx)
 {
 	if (!ctx->frag_coord) {
-		struct ir3_block *b = ctx->block;
+		struct ir3_block *b = ctx->in_block;
 		struct ir3_instruction *xyzw[4];
 		struct ir3_instruction *hw_frag_coord;
 
 		hw_frag_coord = create_sysval_input(ctx, SYSTEM_VALUE_FRAG_COORD, 0xf);
-		ir3_split_dest(ctx->block, xyzw, hw_frag_coord, 0, 4);
+		ir3_split_dest(b, xyzw, hw_frag_coord, 0, 4);
 
 		/* for frag_coord.xy, we get unsigned values.. we need
 		 * to subtract (integer) 8 and divide by 16 (right-
@@ -1544,6 +1540,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 					 * nir_variable to figure out what it is.
 					 */
 					dst[i] = ctx->inputs[inloc];
+					compile_assert(ctx, dst[i]);
 				}
 			}
 		} else {
@@ -1621,28 +1618,28 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 	case nir_intrinsic_shared_atomic_comp_swap:
 		dst[0] = emit_intrinsic_atomic_shared(ctx, intr);
 		break;
-	case nir_intrinsic_image_deref_load:
+	case nir_intrinsic_image_load:
 		emit_intrinsic_load_image(ctx, intr, dst);
 		break;
-	case nir_intrinsic_image_deref_store:
+	case nir_intrinsic_image_store:
 		if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
 				!ctx->s->info.fs.early_fragment_tests)
 			ctx->so->no_earlyz = true;
 		ctx->funcs->emit_intrinsic_store_image(ctx, intr);
 		break;
-	case nir_intrinsic_image_deref_size:
+	case nir_intrinsic_image_size:
 		emit_intrinsic_image_size(ctx, intr, dst);
 		break;
-	case nir_intrinsic_image_deref_atomic_add:
-	case nir_intrinsic_image_deref_atomic_imin:
-	case nir_intrinsic_image_deref_atomic_umin:
-	case nir_intrinsic_image_deref_atomic_imax:
-	case nir_intrinsic_image_deref_atomic_umax:
-	case nir_intrinsic_image_deref_atomic_and:
-	case nir_intrinsic_image_deref_atomic_or:
-	case nir_intrinsic_image_deref_atomic_xor:
-	case nir_intrinsic_image_deref_atomic_exchange:
-	case nir_intrinsic_image_deref_atomic_comp_swap:
+	case nir_intrinsic_image_atomic_add:
+	case nir_intrinsic_image_atomic_imin:
+	case nir_intrinsic_image_atomic_umin:
+	case nir_intrinsic_image_atomic_imax:
+	case nir_intrinsic_image_atomic_umax:
+	case nir_intrinsic_image_atomic_and:
+	case nir_intrinsic_image_atomic_or:
+	case nir_intrinsic_image_atomic_xor:
+	case nir_intrinsic_image_atomic_exchange:
+	case nir_intrinsic_image_atomic_comp_swap:
 		if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
 				!ctx->s->info.fs.early_fragment_tests)
 			ctx->so->no_earlyz = true;
@@ -1780,6 +1777,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		cond->regs[0]->flags &= ~IR3_REG_SSA;
 
 		kill = ir3_KILL(b, cond, 0);
+		kill->regs[1]->num = regid(REG_P0, 0);
 		array_insert(ctx->ir, ctx->ir->predicates, kill);
 
 		array_insert(b, b->keeps, kill);
@@ -1892,33 +1890,15 @@ get_tex_dest_type(nir_tex_instr *tex)
 static void
 tex_info(nir_tex_instr *tex, unsigned *flagsp, unsigned *coordsp)
 {
-	unsigned coords, flags = 0;
+	unsigned coords = glsl_get_sampler_dim_coordinate_components(tex->sampler_dim);
+	unsigned flags = 0;
 
 	/* note: would use tex->coord_components.. except txs.. also,
 	 * since array index goes after shadow ref, we don't want to
 	 * count it:
 	 */
-	switch (tex->sampler_dim) {
-	case GLSL_SAMPLER_DIM_1D:
-	case GLSL_SAMPLER_DIM_BUF:
-		coords = 1;
-		break;
-	case GLSL_SAMPLER_DIM_2D:
-	case GLSL_SAMPLER_DIM_RECT:
-	case GLSL_SAMPLER_DIM_EXTERNAL:
-	case GLSL_SAMPLER_DIM_MS:
-	case GLSL_SAMPLER_DIM_SUBPASS:
-	case GLSL_SAMPLER_DIM_SUBPASS_MS:
-		coords = 2;
-		break;
-	case GLSL_SAMPLER_DIM_3D:
-	case GLSL_SAMPLER_DIM_CUBE:
-		coords = 3;
+	if (coords == 3)
 		flags |= IR3_INSTR_3D;
-		break;
-	default:
-		unreachable("bad sampler_dim");
-	}
 
 	if (tex->is_shadow && tex->op != nir_texop_lod)
 		flags |= IR3_INSTR_S;
@@ -3344,6 +3324,10 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	if (so->binning_pass && (ctx->compiler->gpu_id < 600))
 		fixup_binning_pass(ctx);
 
+	ir3_debug_print(ir, "BEFORE CF");
+
+	ir3_cf(ir);
+
 	ir3_debug_print(ir, "BEFORE CP");
 
 	ir3_cp(ir, so);
@@ -3404,10 +3388,6 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	if (ret) {
 		DBG("SCHED failed!");
 		goto out;
-	}
-
-	if (compiler->gpu_id >= 600) {
-		ir3_a6xx_fixup_atomic_dests(ir, so);
 	}
 
 	ir3_debug_print(ir, "AFTER SCHED");
@@ -3482,7 +3462,14 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 		goto out;
 	}
 
-	ir3_debug_print(ir, "AFTER RA");
+	ir3_postsched(ctx);
+	ir3_debug_print(ir, "AFTER POSTSCHED");
+
+	if (compiler->gpu_id >= 600) {
+		if (ir3_a6xx_fixup_atomic_dests(ir, so)) {
+			ir3_debug_print(ir, "AFTER ATOMIC FIXUP");
+		}
+	}
 
 	if (so->type == MESA_SHADER_FRAGMENT)
 		pack_inlocs(ctx);

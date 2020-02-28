@@ -10,6 +10,8 @@ echo 'deb https://deb.debian.org/debian buster-backports main' >/etc/apt/sources
 dpkg --add-architecture armhf
 apt-get update
 apt-get -y install \
+	abootimg \
+	android-sdk-ext4-utils \
 	bc \
 	bison \
 	ccache \
@@ -41,6 +43,7 @@ apt-get -y install \
 	meson \
 	pkg-config \
 	python \
+	python3-distutils \
 	python3-mako \
 	unzip \
 	wget \
@@ -69,6 +72,7 @@ DEBIAN_ARCH=arm64 . .gitlab-ci/container/lava_arm.sh
 DEBIAN_ARCH=armhf . .gitlab-ci/container/lava_arm.sh
 
 apt-get purge -y \
+        python3-distutils \
         wget
 
 apt-get autoremove -y --purge

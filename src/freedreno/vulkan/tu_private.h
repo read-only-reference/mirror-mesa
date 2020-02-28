@@ -313,8 +313,16 @@ struct tu_physical_device
 
    unsigned gpu_id;
    uint32_t gmem_size;
+   uint64_t gmem_base;
    uint32_t tile_align_w;
    uint32_t tile_align_h;
+
+   struct {
+      uint32_t RB_UNKNOWN_8E04_blit;    /* for CP_BLIT's */
+      uint32_t RB_CCU_CNTL_gmem;        /* for GMEM */
+      uint32_t PC_UNKNOWN_9805;
+      uint32_t SP_UNKNOWN_A0F8;
+   } magic;
 
    /* This is the drivers on-disk cache used as a fallback as opposed to
     * the pipeline cache defined by apps.
@@ -330,6 +338,8 @@ enum tu_debug_flags
    TU_DEBUG_NIR = 1 << 1,
    TU_DEBUG_IR3 = 1 << 2,
    TU_DEBUG_NOBIN = 1 << 3,
+   TU_DEBUG_SYSMEM = 1 << 4,
+   TU_DEBUG_FORCEBIN = 1 << 5,
 };
 
 struct tu_instance
@@ -453,6 +463,14 @@ struct tu_queue
    struct tu_fence submit_fence;
 };
 
+struct tu_bo
+{
+   uint32_t gem_handle;
+   uint64_t size;
+   uint64_t iova;
+   void *map;
+};
+
 struct tu_device
 {
    VK_LOADER_DATA _loader_data;
@@ -473,18 +491,15 @@ struct tu_device
    /* Backup in-memory cache to be used if the app doesn't provide one */
    struct tu_pipeline_cache *mem_cache;
 
+   struct tu_bo vsc_data;
+   struct tu_bo vsc_data2;
+   uint32_t vsc_data_pitch;
+   uint32_t vsc_data2_pitch;
+
    struct list_head shader_slabs;
    mtx_t shader_slab_mutex;
 
    struct tu_device_extension_table enabled_extensions;
-};
-
-struct tu_bo
-{
-   uint32_t gem_handle;
-   uint64_t size;
-   uint64_t iova;
-   void *map;
 };
 
 VkResult
@@ -555,6 +570,7 @@ struct tu_cs
    uint32_t *reserved_end;
    uint32_t *end;
 
+   struct tu_device *device;
    enum tu_cs_mode mode;
    uint32_t next_bo_size;
 
@@ -565,6 +581,10 @@ struct tu_cs
    struct tu_bo **bos;
    uint32_t bo_count;
    uint32_t bo_capacity;
+
+   /* state for cond_exec_start/cond_exec_end */
+   uint32_t cond_flags;
+   uint32_t *cond_dwords;
 };
 
 struct tu_device_memory
@@ -809,6 +829,9 @@ struct tu_tiling_config
    /* pipe register values */
    uint32_t pipe_config[MAX_VSC_PIPES];
    uint32_t pipe_sizes[MAX_VSC_PIPES];
+
+   /* Whether sysmem rendering must be used */
+   bool force_sysmem;
 };
 
 enum tu_cmd_dirty_bits
@@ -854,7 +877,6 @@ struct tu_cmd_state
 
    struct tu_tiling_config tiling_config;
 
-   struct tu_cs_entry tile_load_ib;
    struct tu_cs_entry tile_store_ib;
 };
 
@@ -937,9 +959,6 @@ struct tu_cmd_buffer
    struct tu_cs draw_cs;
    struct tu_cs draw_epilogue_cs;
    struct tu_cs sub_cs;
-
-   uint16_t marker_reg;
-   uint32_t marker_seqno;
 
    struct tu_bo scratch_bo;
    uint32_t scratch_seqno;
@@ -1057,10 +1076,10 @@ struct tu_descriptor_map
    /* TODO: avoid fixed size array/justify the size */
    unsigned num; /* number of array entries */
    unsigned num_desc; /* Number of descriptors (sum of array_size[]) */
-   int set[64];
-   int binding[64];
-   int value[64];
-   int array_size[64];
+   int set[128];
+   int binding[128];
+   int value[128];
+   int array_size[128];
 };
 
 struct tu_shader
@@ -1243,17 +1262,24 @@ struct tu_graphics_pipeline_create_info
    uint32_t custom_blend_mode;
 };
 
-struct tu_native_format
-{
-   int vtx;      /* VFMTn_xxx or -1 */
-   int tex;      /* TFMTn_xxx or -1 */
-   int rb;       /* RBn_xxx or -1 */
-   int swap;     /* enum a3xx_color_swap */
-   bool present; /* internal only; always true to external users */
+enum tu_supported_formats {
+   FMT_VERTEX = 1,
+   FMT_TEXTURE = 2,
+   FMT_COLOR = 4,
 };
 
-const struct tu_native_format *
-tu6_get_native_format(VkFormat format);
+struct tu_native_format
+{
+   enum a6xx_format fmt : 8;
+   enum a3xx_color_swap swap : 8;
+   enum tu_supported_formats supported : 8;
+};
+
+struct tu_native_format tu6_get_native_format(VkFormat format);
+struct tu_native_format tu6_format_vtx(VkFormat format);
+enum a6xx_format tu6_format_gmem(VkFormat format);
+struct tu_native_format tu6_format_color(VkFormat format, bool tiled);
+struct tu_native_format tu6_format_texture(VkFormat format, bool tiled);
 
 void
 tu_pack_clear_value(const VkClearValue *val,
@@ -1266,7 +1292,7 @@ tu_2d_clear_color(const VkClearColorValue *val, VkFormat format, uint32_t buf[4]
 void
 tu_2d_clear_zs(const VkClearDepthStencilValue *val, VkFormat format, uint32_t buf[4]);
 
-enum a6xx_2d_ifmt tu6_rb_fmt_to_ifmt(enum a6xx_color_fmt fmt);
+enum a6xx_2d_ifmt tu6_fmt_to_ifmt(enum a6xx_format fmt);
 enum a6xx_depth_format tu6_pipe2depth(VkFormat format);
 
 struct tu_image_level
@@ -1362,7 +1388,7 @@ tu_image_base(struct tu_image *image, int level, int layer)
 static inline VkDeviceSize
 tu_image_ubwc_size(struct tu_image *image, int level)
 {
-   return image->layout.ubwc_size;
+   return image->layout.ubwc_layer_size;
 }
 
 static inline uint32_t
@@ -1600,6 +1626,9 @@ int
 tu_drm_get_gmem_size(const struct tu_physical_device *dev, uint32_t *size);
 
 int
+tu_drm_get_gmem_base(const struct tu_physical_device *dev, uint64_t *base);
+
+int
 tu_drm_submitqueue_new(const struct tu_device *dev,
                        int priority,
                        uint32_t *queue_id);
@@ -1621,6 +1650,21 @@ uint64_t
 tu_gem_info_offset(const struct tu_device *dev, uint32_t gem_handle);
 uint64_t
 tu_gem_info_iova(const struct tu_device *dev, uint32_t gem_handle);
+
+
+void
+tu_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
+                           struct tu_cs *cs,
+                           uint32_t attachment,
+                           const VkClearValue *value,
+                           const VkClearRect *rect);
+
+void
+tu_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
+                         struct tu_cs *cs,
+                         uint32_t attachment,
+                         uint8_t component_mask,
+                         const VkClearValue *value);
 
 #define TU_DEFINE_HANDLE_CASTS(__tu_type, __VkType)                          \
                                                                              \

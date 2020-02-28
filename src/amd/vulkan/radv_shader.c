@@ -402,7 +402,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 		 * inline functions.  That way they get properly initialized at the top
 		 * of the function and not at the top of its caller.
 		 */
-		NIR_PASS_V(nir, nir_lower_constant_initializers, nir_var_function_temp);
+		NIR_PASS_V(nir, nir_lower_variable_initializers, nir_var_function_temp);
 		NIR_PASS_V(nir, nir_lower_returns);
 		NIR_PASS_V(nir, nir_inline_functions);
 		NIR_PASS_V(nir, nir_opt_deref);
@@ -419,12 +419,12 @@ radv_shader_compile_to_nir(struct radv_device *device,
 		/* Make sure we lower constant initializers on output variables so that
 		 * nir_remove_dead_variables below sees the corresponding stores
 		 */
-		NIR_PASS_V(nir, nir_lower_constant_initializers, nir_var_shader_out);
+		NIR_PASS_V(nir, nir_lower_variable_initializers, nir_var_shader_out);
 
 		/* Now that we've deleted all but the main function, we can go ahead and
 		 * lower the rest of the constant initializers.
 		 */
-		NIR_PASS_V(nir, nir_lower_constant_initializers, ~0);
+		NIR_PASS_V(nir, nir_lower_variable_initializers, ~0);
 
 		/* Split member structs.  We do this before lower_io_to_temporaries so that
 		 * it doesn't lower system values to temporaries by accident.
@@ -1122,8 +1122,6 @@ shader_variant_compile(struct radv_device *device,
 		bool thread_compiler;
 
 		tm_options |= AC_TM_SUPPORTS_SPILL;
-		if (device->instance->perftest_flags & RADV_PERFTEST_SISCHED)
-			tm_options |= AC_TM_SISCHED;
 		if (options->check_ir)
 			tm_options |= AC_TM_CHECK_IR;
 		if (device->instance->debug_flags & RADV_DEBUG_NO_LOAD_STORE_OPT)
@@ -1335,14 +1333,12 @@ radv_get_max_waves(struct radv_device *device,
 		unsigned vgprs = align(conf->num_vgprs, wave_size == 32 ? 8 : 4);
 		max_simd_waves =
 			MIN2(max_simd_waves,
-			     RADV_NUM_PHYSICAL_VGPRS / vgprs);
+			     device->physical_device->rad_info.num_physical_wave64_vgprs_per_simd / vgprs);
 	}
 
-	/* LDS is 64KB per CU (4 SIMDs), divided into 16KB blocks per SIMD
-	 * that PS can use.
-	 */
+	unsigned max_lds_per_simd = device->physical_device->rad_info.lds_size_per_cu / device->physical_device->rad_info.num_simd_per_compute_unit;
 	if (lds_per_wave)
-		max_simd_waves = MIN2(max_simd_waves, 16384 / lds_per_wave);
+		max_simd_waves = MIN2(max_simd_waves, max_lds_per_simd / lds_per_wave);
 
 	return max_simd_waves;
 }
@@ -1427,7 +1423,7 @@ radv_GetShaderInfoAMD(VkDevice _device,
 
 			VkShaderStatisticsInfoAMD statistics = {};
 			statistics.shaderStageMask = shaderStage;
-			statistics.numPhysicalVgprs = RADV_NUM_PHYSICAL_VGPRS;
+			statistics.numPhysicalVgprs = device->physical_device->rad_info.num_physical_wave64_vgprs_per_simd;
 			statistics.numPhysicalSgprs = device->physical_device->rad_info.num_physical_sgprs_per_simd;
 			statistics.numAvailableSgprs = statistics.numPhysicalSgprs;
 

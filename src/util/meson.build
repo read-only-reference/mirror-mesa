@@ -113,6 +113,7 @@ files_mesa_util = files(
   'u_mm.h',
   'u_debug.c',
   'u_debug.h',
+  'u_debug_memory.c',
   'u_cpu_detect.c',
   'u_cpu_detect.h',
   'vma.c',
@@ -248,6 +249,7 @@ if with_tests
       dependencies : [dep_m],
     ),
     suite : ['util'],
+    should_fail : meson.get_cross_property('xfail', '').contains('roundeven'),
   )
 
   # FIXME: this test crashes on windows

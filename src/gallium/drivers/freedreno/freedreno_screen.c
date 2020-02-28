@@ -91,6 +91,7 @@ static const struct debug_named_value debug_options[] = {
 		{"noubwc",    FD_DBG_NOUBWC, "Disable UBWC for all internal buffers"},
 		{"nolrz",     FD_DBG_NOLRZ,  "Disable LRZ (a6xx)"},
 		{"notile",    FD_DBG_NOTILE, "Disable tiling for all internal buffers"},
+		{"layout",    FD_DBG_LAYOUT, "Dump resource layouts"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -339,6 +340,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		/* name is confusing, but this turns on std430 packing */
 		if (is_ir3(screen))
 			return 1;
+		return 0;
+
+	case PIPE_CAP_NIR_IMAGES_AS_DEREF:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -983,15 +987,6 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 	pscreen->fence_get_fd = fd_fence_get_fd;
 
 	pscreen->query_dmabuf_modifiers = fd_screen_query_dmabuf_modifiers;
-
-	if (!screen->supported_modifiers) {
-		static const uint64_t supported_modifiers[] = {
-			DRM_FORMAT_MOD_LINEAR,
-		};
-
-		screen->supported_modifiers = supported_modifiers;
-		screen->num_supported_modifiers = ARRAY_SIZE(supported_modifiers);
-	}
 
 	slab_create_parent(&screen->transfer_pool, sizeof(struct fd_transfer), 16);
 

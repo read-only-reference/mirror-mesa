@@ -41,7 +41,7 @@
 #include <fcntl.h>
 #include <radeon_surface.h>
 
-static struct util_hash_table *fd_tab = NULL;
+static struct hash_table *fd_tab = NULL;
 static mtx_t fd_tab_mutex = _MTX_INITIALIZER_NP;
 
 /* Enable/disable feature access for one command stream.
@@ -622,9 +622,9 @@ static void radeon_winsys_destroy(struct radeon_winsys *rws)
         radeon_surface_manager_free(ws->surf_man);
     }
 
-    util_hash_table_destroy(ws->bo_names);
-    util_hash_table_destroy(ws->bo_handles);
-    util_hash_table_destroy(ws->bo_vas);
+    _mesa_hash_table_destroy(ws->bo_names, NULL);
+    _mesa_hash_table_destroy(ws->bo_handles, NULL);
+    _mesa_hash_table_destroy(ws->bo_vas, NULL);
     mtx_destroy(&ws->bo_handles_mutex);
     mtx_destroy(&ws->vm32.mutex);
     mtx_destroy(&ws->vm64.mutex);
@@ -761,28 +761,6 @@ static bool radeon_read_registers(struct radeon_winsys *rws,
     return true;
 }
 
-static unsigned hash_fd(void *key)
-{
-    int fd = pointer_to_intptr(key);
-    struct stat stat;
-    fstat(fd, &stat);
-
-    return stat.st_dev ^ stat.st_ino ^ stat.st_rdev;
-}
-
-static int compare_fd(void *key1, void *key2)
-{
-    int fd1 = pointer_to_intptr(key1);
-    int fd2 = pointer_to_intptr(key2);
-    struct stat stat1, stat2;
-    fstat(fd1, &stat1);
-    fstat(fd2, &stat2);
-
-    return stat1.st_dev != stat2.st_dev ||
-           stat1.st_ino != stat2.st_ino ||
-           stat1.st_rdev != stat2.st_rdev;
-}
-
 DEBUG_GET_ONCE_BOOL_OPTION(thread, "RADEON_THREAD", true)
 
 static bool radeon_winsys_unref(struct radeon_winsys *ws)
@@ -798,27 +776,15 @@ static bool radeon_winsys_unref(struct radeon_winsys *ws)
 
     destroy = pipe_reference(&rws->reference, NULL);
     if (destroy && fd_tab) {
-        util_hash_table_remove(fd_tab, intptr_to_pointer(rws->fd));
-        if (util_hash_table_count(fd_tab) == 0) {
-           util_hash_table_destroy(fd_tab);
+        _mesa_hash_table_remove_key(fd_tab, intptr_to_pointer(rws->fd));
+        if (_mesa_hash_table_num_entries(fd_tab) == 0) {
+           _mesa_hash_table_destroy(fd_tab, NULL);
            fd_tab = NULL;
         }
     }
 
     mtx_unlock(&fd_tab_mutex);
     return destroy;
-}
-
-#define PTR_TO_UINT(x) ((unsigned)((intptr_t)(x)))
-
-static unsigned handle_hash(void *key)
-{
-    return PTR_TO_UINT(key);
-}
-
-static int handle_compare(void *key1, void *key2)
-{
-    return PTR_TO_UINT(key1) != PTR_TO_UINT(key2);
 }
 
 static void radeon_pin_threads_to_L3_cache(struct radeon_winsys *ws,
@@ -840,7 +806,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
 
     mtx_lock(&fd_tab_mutex);
     if (!fd_tab) {
-        fd_tab = util_hash_table_create(hash_fd, compare_fd);
+        fd_tab = util_hash_table_create_fd_keys();
     }
 
     ws = util_hash_table_get(fd_tab, intptr_to_pointer(fd));
@@ -911,9 +877,9 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
     (void) mtx_init(&ws->hyperz_owner_mutex, mtx_plain);
     (void) mtx_init(&ws->cmask_owner_mutex, mtx_plain);
 
-    ws->bo_names = util_hash_table_create(handle_hash, handle_compare);
-    ws->bo_handles = util_hash_table_create(handle_hash, handle_compare);
-    ws->bo_vas = util_hash_table_create(handle_hash, handle_compare);
+    ws->bo_names = util_hash_table_create_ptr_keys();
+    ws->bo_handles = util_hash_table_create_ptr_keys();
+    ws->bo_vas = util_hash_table_create_ptr_keys();
     (void) mtx_init(&ws->bo_handles_mutex, mtx_plain);
     (void) mtx_init(&ws->vm32.mutex, mtx_plain);
     (void) mtx_init(&ws->vm64.mutex, mtx_plain);
@@ -963,7 +929,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
         return NULL;
     }
 
-    util_hash_table_set(fd_tab, intptr_to_pointer(ws->fd), ws);
+    _mesa_hash_table_insert(fd_tab, intptr_to_pointer(ws->fd), ws);
 
     /* We must unlock the mutex once the winsys is fully initialized, so that
      * other threads attempting to create the winsys from the same fd will

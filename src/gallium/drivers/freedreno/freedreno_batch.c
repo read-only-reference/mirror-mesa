@@ -39,6 +39,7 @@ static void
 batch_init(struct fd_batch *batch)
 {
 	struct fd_context *ctx = batch->ctx;
+	enum fd_ringbuffer_flags flags = 0;
 	unsigned size = 0;
 
 	/* if kernel is too old to support unlimited # of cmd buffers, we
@@ -51,21 +52,23 @@ batch_init(struct fd_batch *batch)
 	if ((fd_device_version(ctx->screen->dev) < FD_VERSION_UNLIMITED_CMDS) ||
 			(fd_mesa_debug & FD_DBG_NOGROW)){
 		size = 0x100000;
+	} else {
+		flags = FD_RINGBUFFER_GROWABLE;
 	}
 
 	batch->submit = fd_submit_new(ctx->pipe);
 	if (batch->nondraw) {
 		batch->draw = fd_submit_new_ringbuffer(batch->submit, size,
-				FD_RINGBUFFER_PRIMARY | FD_RINGBUFFER_GROWABLE);
+				FD_RINGBUFFER_PRIMARY | flags);
 	} else {
 		batch->gmem = fd_submit_new_ringbuffer(batch->submit, size,
-				FD_RINGBUFFER_PRIMARY | FD_RINGBUFFER_GROWABLE);
+				FD_RINGBUFFER_PRIMARY | flags);
 		batch->draw = fd_submit_new_ringbuffer(batch->submit, size,
-				FD_RINGBUFFER_GROWABLE);
+				flags);
 
 		if (ctx->screen->gpu_id < 600) {
 			batch->binning = fd_submit_new_ringbuffer(batch->submit,
-					size, FD_RINGBUFFER_GROWABLE);
+					size, flags);
 		}
 	}
 
@@ -321,7 +324,6 @@ void
 fd_batch_flush(struct fd_batch *batch)
 {
 	struct fd_batch *tmp = NULL;
-	bool newbatch = false;
 
 	/* NOTE: we need to hold an extra ref across the body of flush,
 	 * since the last ref to this batch could be dropped when cleaning
@@ -329,30 +331,10 @@ fd_batch_flush(struct fd_batch *batch)
 	 */
 	fd_batch_reference(&tmp, batch);
 
-	if (batch == batch->ctx->batch) {
-		batch->ctx->batch = NULL;
-		newbatch = true;
-	}
-
 	batch_flush(tmp);
 
-	if (newbatch) {
-		struct fd_context *ctx = batch->ctx;
-		struct fd_batch *new_batch;
-
-		if (ctx->screen->reorder) {
-			/* defer allocating new batch until one is needed for rendering
-			 * to avoid unused batches for apps that create many contexts
-			 */
-			new_batch = NULL;
-		} else {
-			new_batch = fd_bc_alloc_batch(&ctx->screen->batch_cache, ctx, false);
-			util_copy_framebuffer_state(&new_batch->framebuffer, &batch->framebuffer);
-		}
-
-		fd_batch_reference(&batch, NULL);
-		ctx->batch = new_batch;
-		fd_context_all_dirty(ctx);
+	if (batch == batch->ctx->batch) {
+		fd_batch_reference(&batch->ctx->batch, NULL);
 	}
 
 	fd_batch_reference(&tmp, NULL);

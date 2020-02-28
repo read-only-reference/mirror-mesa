@@ -78,7 +78,7 @@ can_fast_clear_color(struct iris_context *ice,
    if (INTEL_DEBUG & DEBUG_NO_FAST_CLEAR)
       return false;
 
-   if (res->aux.usage == ISL_AUX_USAGE_NONE)
+   if (!isl_aux_usage_has_fast_clears(res->aux.usage))
       return false;
 
    /* Check for partial clear */
@@ -702,10 +702,10 @@ iris_clear_texture(struct pipe_context *ctx,
       uint8_t stencil = 0;
 
       if (fmt_desc->unpack_z_float)
-         fmt_desc->unpack_z_float(&depth, 0, data, 0, 1, 1);
+         util_format_unpack_z_float(p_res->format, &depth, data, 1);
 
       if (fmt_desc->unpack_s_8uint)
-         fmt_desc->unpack_s_8uint(&stencil, 0, data, 0, 1, 1);
+         util_format_unpack_s_8uint(p_res->format, &stencil, data, 1);
 
       clear_depth_stencil(ice, p_res, level, box, true, true, true,
                           depth, stencil);

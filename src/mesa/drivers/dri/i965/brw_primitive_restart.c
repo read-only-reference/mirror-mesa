@@ -131,7 +131,7 @@ brw_handle_primitive_restart(struct gl_context *ctx,
                              const struct _mesa_prim *prims,
                              GLuint nr_prims,
                              const struct _mesa_index_buffer *ib,
-                             struct gl_buffer_object *indirect)
+                             GLuint num_instances, GLuint base_instance)
 {
    struct brw_context *brw = brw_context(ctx);
 
@@ -163,14 +163,21 @@ brw_handle_primitive_restart(struct gl_context *ctx,
       /* Cut index should work for primitive restart, so use it
        */
       brw->prim_restart.enable_cut_index = true;
-      brw_draw_prims(ctx, prims, nr_prims, ib, GL_FALSE, -1, -1, NULL, 0,
-                     indirect);
+      brw_draw_prims(ctx, prims, nr_prims, ib, GL_FALSE, -1, -1,
+                     num_instances, base_instance, NULL, 0);
       brw->prim_restart.enable_cut_index = false;
    } else {
       /* Not all the primitive draw modes are supported by the cut index,
        * so take the software path
        */
-      vbo_sw_primitive_restart(ctx, prims, nr_prims, ib, indirect);
+      struct gl_buffer_object *indirect_data = brw->draw.draw_indirect_data;
+
+      /* Clear this to make the draw direct. */
+      brw->draw.draw_indirect_data = NULL;
+
+      vbo_sw_primitive_restart(ctx, prims, nr_prims, ib, num_instances,
+                               base_instance, indirect_data,
+                               brw->draw.draw_indirect_offset);
    }
 
    brw->prim_restart.in_progress = false;

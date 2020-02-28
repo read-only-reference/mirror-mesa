@@ -55,7 +55,7 @@ nir_setup_uniform_remap_tables(struct gl_context *ctx,
    prog->data->UniformDataSlots = data;
 
    prog->data->UniformDataDefaults =
-         rzalloc_array(prog->data->UniformStorage,
+         rzalloc_array(prog->data->UniformDataSlots,
                        union gl_constant_value, prog->data->NumUniformDataSlots);
 
    unsigned data_pos = 0;
@@ -105,16 +105,20 @@ nir_setup_uniform_remap_tables(struct gl_context *ctx,
       unsigned location =
          link_util_find_empty_block(prog, &prog->data->UniformStorage[i]);
 
-      if (location == -1) {
-         location = prog->NumUniformRemapTable;
+      if (location == -1 || location + entries >= prog->NumUniformRemapTable) {
+         unsigned new_entries = entries;
+         if (location == -1)
+            location = prog->NumUniformRemapTable;
+         else
+            new_entries = location - prog->NumUniformRemapTable + entries;
 
          /* resize remap table to fit new entries */
          prog->UniformRemapTable =
             reralloc(prog,
                      prog->UniformRemapTable,
                      struct gl_uniform_storage *,
-                     prog->NumUniformRemapTable + entries);
-         prog->NumUniformRemapTable += entries;
+                     prog->NumUniformRemapTable + new_entries);
+         prog->NumUniformRemapTable += new_entries;
       }
 
       /* set the base location in remap table for the uniform */
@@ -240,10 +244,10 @@ struct nir_link_uniforms_state {
    unsigned num_hidden_uniforms;
    unsigned num_values;
    unsigned max_uniform_location;
-   unsigned next_sampler_index;
-   unsigned next_image_index;
 
    /* per-shader stage */
+   unsigned next_image_index;
+   unsigned next_sampler_index;
    unsigned num_shader_samplers;
    unsigned num_shader_images;
    unsigned num_shader_uniform_components;
@@ -314,7 +318,7 @@ free_type_tree(struct type_tree_entry *entry)
 static unsigned
 get_next_index(struct nir_link_uniforms_state *state,
                const struct gl_uniform_storage *uniform,
-               unsigned *next_index)
+               unsigned *next_index, bool *initialised)
 {
    /* If we’ve already calculated an index for this member then we can just
     * offset from there.
@@ -334,7 +338,9 @@ get_next_index(struct nir_link_uniforms_state *state,
 
       state->current_type->next_index = *next_index;
       *next_index += array_size;
-   }
+      *initialised = true;
+   } else
+      *initialised = false;
 
    unsigned index = state->current_type->next_index;
 
@@ -604,23 +610,29 @@ nir_link_uniform(struct gl_context *ctx,
       unsigned values = glsl_get_component_slots(type);
 
       if (glsl_type_is_sampler(type_no_array)) {
+         bool init_idx;
          int sampler_index =
-            get_next_index(state, uniform, &state->next_sampler_index);
+            get_next_index(state, uniform, &state->next_sampler_index,
+                           &init_idx);
 
-         state->num_shader_samplers++;
+         /* Samplers (bound or bindless) are counted as two components as
+          * specified by ARB_bindless_texture.
+          */
+         state->num_shader_samplers += values / 2;
 
          uniform->opaque[stage].active = true;
          uniform->opaque[stage].index = sampler_index;
 
-         const unsigned shadow = glsl_sampler_type_is_shadow(type_no_array);
-
-         for (unsigned i = sampler_index;
-              i < MIN2(state->next_sampler_index, MAX_SAMPLERS);
-              i++) {
-            stage_program->sh.SamplerTargets[i] =
-               glsl_get_sampler_target(type_no_array);
-            state->shader_samplers_used |= 1U << i;
-            state->shader_shadow_samplers |= shadow << i;
+         if (init_idx) {
+            const unsigned shadow = glsl_sampler_type_is_shadow(type_no_array);
+            for (unsigned i = sampler_index;
+                 i < MIN2(state->next_sampler_index, MAX_SAMPLERS);
+                 i++) {
+               stage_program->sh.SamplerTargets[i] =
+                  glsl_get_sampler_target(type_no_array);
+               state->shader_samplers_used |= 1U << i;
+               state->shader_shadow_samplers |= shadow << i;
+            }
          }
 
          state->num_values += values;
@@ -633,7 +645,10 @@ nir_link_uniform(struct gl_context *ctx,
          int image_index = state->next_image_index;
          state->next_image_index += entries;
 
-         state->num_shader_images++;
+         /* Images (bound or bindless) are counted as two components as
+          * specified by ARB_bindless_texture.
+          */
+         state->num_shader_images += values / 2;
 
          uniform->opaque[stage].active = true;
          uniform->opaque[stage].index = image_index;
@@ -696,6 +711,8 @@ gl_nir_link_uniforms(struct gl_context *ctx,
       nir_shader *nir = sh->Program->nir;
       assert(nir);
 
+      state.next_image_index = 0;
+      state.next_sampler_index = 0;
       state.num_shader_samplers = 0;
       state.num_shader_images = 0;
       state.num_shader_uniform_components = 0;
@@ -783,6 +800,22 @@ gl_nir_link_uniforms(struct gl_context *ctx,
 
          if (res == -1)
             return false;
+      }
+
+      if (state.num_shader_samplers >
+          ctx->Const.Program[shader_type].MaxTextureImageUnits) {
+         linker_error(prog, "Too many %s shader texture samplers\n",
+                      _mesa_shader_stage_to_string(shader_type));
+         continue;
+      }
+
+      if (state.num_shader_images >
+          ctx->Const.Program[shader_type].MaxImageUniforms) {
+         linker_error(prog, "Too many %s shader image uniforms (%u > %u)\n",
+                      _mesa_shader_stage_to_string(shader_type),
+                      state.num_shader_images,
+                      ctx->Const.Program[shader_type].MaxImageUniforms);
+         continue;
       }
 
       sh->Program->SamplersUsed = state.shader_samplers_used;

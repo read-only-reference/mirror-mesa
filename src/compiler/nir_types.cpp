@@ -528,6 +528,20 @@ glsl_array_type(const glsl_type *base, unsigned elements,
 }
 
 const glsl_type *
+glsl_replace_vector_type(const glsl_type *t, unsigned components)
+{
+   if (glsl_type_is_array(t)) {
+      return glsl_array_type(
+         glsl_replace_vector_type(t->fields.array, components), t->length,
+                                  t->explicit_stride);
+   } else if (glsl_type_is_vector_or_scalar(t)) {
+      return glsl_vector_type(t->base_type, components);
+   } else {
+      unreachable("Unhandled base type glsl_replace_vector_type()");
+   }
+}
+
+const glsl_type *
 glsl_struct_type(const glsl_struct_field *fields,
                  unsigned num_fields, const char *name,
                  bool packed)
@@ -606,6 +620,12 @@ glsl_channel_type(const glsl_type *t)
    }
 }
 
+const glsl_type *
+glsl_float16_type(const struct glsl_type *type)
+{
+   return type->get_float16_type();
+}
+
 void
 glsl_get_natural_size_align_bytes(const struct glsl_type *type,
                                   unsigned *size, unsigned *align)
@@ -637,7 +657,7 @@ glsl_get_natural_size_align_bytes(const struct glsl_type *type,
    }
 
    case GLSL_TYPE_ARRAY: {
-      unsigned elem_size, elem_align;
+      unsigned elem_size = 0, elem_align = 0;
       glsl_get_natural_size_align_bytes(type->fields.array,
                                         &elem_size, &elem_align);
       *align = elem_align;

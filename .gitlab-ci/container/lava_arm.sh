@@ -7,7 +7,7 @@ if [[ "$DEBIAN_ARCH" = "arm64" ]]; then
     GCC_ARCH="aarch64-linux-gnu"
     KERNEL_ARCH="arm64"
     DEFCONFIG="arch/arm64/configs/defconfig"
-    DEVICE_TREES="arch/arm64/boot/dts/rockchip/rk3399-gru-kevin.dtb arch/arm64/boot/dts/amlogic/meson-gxl-s905x-libretech-cc.dtb arch/arm64/boot/dts/allwinner/sun50i-h6-pine-h64.dtb arch/arm64/boot/dts/amlogic/meson-gxm-khadas-vim2.dtb"
+    DEVICE_TREES="arch/arm64/boot/dts/rockchip/rk3399-gru-kevin.dtb arch/arm64/boot/dts/amlogic/meson-gxl-s905x-libretech-cc.dtb arch/arm64/boot/dts/allwinner/sun50i-h6-pine-h64.dtb arch/arm64/boot/dts/amlogic/meson-gxm-khadas-vim2.dtb arch/arm64/boot/dts/qcom/apq8016-sbc.dtb"
     KERNEL_IMAGE_NAME="Image"
 else
     GCC_ARCH="arm-linux-gnueabihf"
@@ -34,7 +34,7 @@ mv /deqp /lava-files/rootfs-${DEBIAN_ARCH}/.
 
 
 ############### Cross-build kernel
-KERNEL_URL="https://gitlab.freedesktop.org/tomeu/linux/-/archive/v5.5-rc5-panfrost-fixes/linux-v5.5-rc5-panfrost-fixes.tar.gz"
+KERNEL_URL="https://gitlab.freedesktop.org/tomeu/linux/-/archive/v5.5-panfrost-fixes/linux-v5.5-panfrost-fixes.tar.gz"
 
 if [[ "$DEBIAN_ARCH" = "armhf" ]]; then
     export ARCH=${KERNEL_ARCH}
@@ -54,7 +54,14 @@ rm -rf kernel
 
 ############### Create rootfs
 set +e
-debootstrap --variant=minbase --arch=${DEBIAN_ARCH} testing /lava-files/rootfs-${DEBIAN_ARCH}/ http://deb.debian.org/debian
+debootstrap \
+    --variant=minbase \
+    --arch=${DEBIAN_ARCH} \
+     --components main,contrib,non-free \
+    testing \
+    /lava-files/rootfs-${DEBIAN_ARCH}/ \
+    http://deb.debian.org/debian
+
 cat /lava-files/rootfs-${DEBIAN_ARCH}/debootstrap/debootstrap.log
 set -e
 

@@ -853,6 +853,9 @@ struct brw_context
    /* The last PMA stall bits programmed. */
    uint32_t pma_stall_bits;
 
+   /* Whether INTEL_black_render is active. */
+   bool frontend_noop;
+
    struct {
       struct {
          /**
@@ -904,6 +907,13 @@ struct brw_context
        */
       struct brw_bo *draw_params_count_bo;
       uint32_t draw_params_count_offset;
+
+      /**
+       * Draw indirect buffer.
+       */
+      unsigned draw_indirect_stride;
+      GLsizeiptr draw_indirect_offset;
+      struct gl_buffer_object *draw_indirect_data;
    } draw;
 
    struct {

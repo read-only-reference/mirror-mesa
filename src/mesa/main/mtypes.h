@@ -459,6 +459,7 @@ struct gl_vertex_format
 {
    GLenum16 Type;        /**< datatype: GL_FLOAT, GL_INT, etc */
    GLenum16 Format;      /**< default: GL_RGBA, but may be GL_BGRA */
+   enum pipe_format _PipeFormat:16; /**< pipe_format for Gallium */
    GLubyte Size:5;       /**< components per element (1,2,3,4) */
    GLubyte Normalized:1; /**< GL_ARB_vertex_program */
    GLubyte Integer:1;    /**< Integer-valued? */
@@ -1546,6 +1547,9 @@ struct gl_vertex_array_object
    /** Mask indicating which vertex arrays have vertex buffer associated. */
    GLbitfield VertexAttribBufferMask;
 
+   /** Mask indicating which vertex arrays have a non-zero instance divisor. */
+   GLbitfield NonZeroDivisorMask;
+
    /** Mask of VERT_BIT_* values indicating which arrays are enabled */
    GLbitfield Enabled;
 
@@ -1557,6 +1561,9 @@ struct gl_vertex_array_object
     * the VAO to Array._DrawVAO.
     */
    GLbitfield _EffEnabledVBO;
+
+   /** Same as _EffEnabledVBO, but for instance divisors. */
+   GLbitfield _EffEnabledNonZeroDivisor;
 
    /** Denotes the way the position/generic0 attribute is mapped */
    gl_attribute_map_mode _AttributeMapMode;
@@ -4150,6 +4157,9 @@ struct gl_constants
    /** Wether or not glBitmap uses red textures rather than alpha */
    bool BitmapUsesRed;
 
+   /** Whether the vertex buffer offset is a signed 32-bit integer. */
+   bool VertexBufferOffsetIsInt32;
+
    /** GL_ARB_gl_spirv */
    struct spirv_supported_capabilities SpirVCapabilities;
 
@@ -4327,6 +4337,7 @@ struct gl_extensions
    GLboolean EXT_texture_filter_anisotropic;
    GLboolean EXT_texture_integer;
    GLboolean EXT_texture_mirror_clamp;
+   GLboolean EXT_texture_norm16;
    GLboolean EXT_texture_shadow_lod;
    GLboolean EXT_texture_shared_exponent;
    GLboolean EXT_texture_snorm;
@@ -4364,6 +4375,7 @@ struct gl_extensions
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;
    GLboolean GREMEDY_string_marker;
+   GLboolean INTEL_blackhole_render;
    GLboolean INTEL_conservative_rasterization;
    GLboolean INTEL_performance_query;
    GLboolean INTEL_shader_atomic_float_minmax;
@@ -4383,6 +4395,7 @@ struct gl_extensions
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_compute_shader_derivatives;
    GLboolean NV_conditional_render;
+   GLboolean NV_copy_image;
    GLboolean NV_fill_rectangle;
    GLboolean NV_fog_distance;
    GLboolean NV_point_sprite;
@@ -5139,6 +5152,8 @@ struct gl_context
    GLboolean ConservativeRasterization; /**< GL_CONSERVATIVE_RASTERIZATION_NV */
    GLfloat ConservativeRasterDilate;
    GLenum16 ConservativeRasterMode;
+
+   GLboolean IntelBlackholeRender; /**< GL_INTEL_blackhole_render */
 
    /** Does glVertexAttrib(0) alias glVertex()? */
    bool _AttribZeroAliasesVertex;

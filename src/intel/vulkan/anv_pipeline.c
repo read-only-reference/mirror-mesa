@@ -87,15 +87,6 @@ void anv_DestroyShaderModule(
 
 #define SPIR_V_MAGIC_NUMBER 0x07230203
 
-static const uint64_t stage_to_debug[] = {
-   [MESA_SHADER_VERTEX] = DEBUG_VS,
-   [MESA_SHADER_TESS_CTRL] = DEBUG_TCS,
-   [MESA_SHADER_TESS_EVAL] = DEBUG_TES,
-   [MESA_SHADER_GEOMETRY] = DEBUG_GS,
-   [MESA_SHADER_FRAGMENT] = DEBUG_WM,
-   [MESA_SHADER_COMPUTE] = DEBUG_CS,
-};
-
 struct anv_spirv_debug_data {
    struct anv_device *device;
    const struct anv_shader_module *module;
@@ -169,7 +160,6 @@ anv_shader_compile_to_nir(struct anv_device *device,
    };
    struct spirv_to_nir_options spirv_options = {
       .frag_coord_is_sysval = true,
-      .use_scoped_memory_barrier = true,
       .caps = {
          .demote_to_helper_invocation = true,
          .derivative_group = true,
@@ -240,7 +230,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
 
    free(spec_entries);
 
-   if (unlikely(INTEL_DEBUG & stage_to_debug[stage])) {
+   if (unlikely(INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage))) {
       fprintf(stderr, "NIR (from SPIR-V) for %s shader:\n",
               gl_shader_stage_name(stage));
       nir_print_shader(nir, stderr);
@@ -250,7 +240,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
     * inline functions.  That way they get properly initialized at the top
     * of the function and not at the top of its caller.
     */
-   NIR_PASS_V(nir, nir_lower_constant_initializers, nir_var_function_temp);
+   NIR_PASS_V(nir, nir_lower_variable_initializers, nir_var_function_temp);
    NIR_PASS_V(nir, nir_lower_returns);
    NIR_PASS_V(nir, nir_inline_functions);
    NIR_PASS_V(nir, nir_opt_deref);
@@ -267,7 +257,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
     * nir_remove_dead_variables and split_per_member_structs below see the
     * corresponding stores.
     */
-   NIR_PASS_V(nir, nir_lower_constant_initializers, ~0);
+   NIR_PASS_V(nir, nir_lower_variable_initializers, ~0);
 
    /* Split member structs.  We do this before lower_io_to_temporaries so that
     * it doesn't lower system values to temporaries by accident.
@@ -677,9 +667,6 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
       NIR_PASS_V(nir, anv_nir_lower_multiview, pipeline->subpass->view_mask);
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
-
-   if (nir->info.num_ssbos > 0 || nir->info.num_images > 0)
-      pipeline->needs_data_cache = true;
 
    NIR_PASS_V(nir, brw_nir_lower_image_load_store, compiler->devinfo);
 
@@ -1823,11 +1810,9 @@ anv_pipeline_setup_l3_config(struct anv_pipeline *pipeline, bool needs_slm)
    const struct gen_device_info *devinfo = &pipeline->device->info;
 
    const struct gen_l3_weights w =
-      gen_get_default_l3_weights(devinfo, pipeline->needs_data_cache, needs_slm);
+      gen_get_default_l3_weights(devinfo, true, needs_slm);
 
-   pipeline->urb.l3_config = gen_get_l3_config(devinfo, w);
-   pipeline->urb.total_size =
-      gen_get_l3_config_urb_size(devinfo, pipeline->urb.l3_config);
+   pipeline->l3_config = gen_get_l3_config(devinfo, w);
 }
 
 VkResult
@@ -1882,8 +1867,6 @@ anv_pipeline_init(struct anv_pipeline *pipeline,
       !pCreateInfo->pRasterizationState->rasterizerDiscardEnable &&
       pCreateInfo->pMultisampleState &&
       pCreateInfo->pMultisampleState->sampleShadingEnable;
-
-   pipeline->needs_data_cache = false;
 
    /* When we free the pipeline, we detect stages based on the NULL status
     * of various prog_data pointers.  Make them NULL by default.

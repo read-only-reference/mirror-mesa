@@ -28,6 +28,10 @@
 #ifndef U_VBUF_H
 #define U_VBUF_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* This module takes care of user buffer uploads and vertex format fallbacks.
  * It's designed for the drivers which don't want to use the Draw module.
  * There is a more detailed description at the beginning of the .c file.
@@ -38,6 +42,7 @@
 #include "pipe/p_format.h"
 
 struct cso_context;
+struct cso_velems_state;
 struct u_vbuf;
 
 /* Hardware vertex fetcher limitations can be described by this structure. */
@@ -69,8 +74,8 @@ u_vbuf_create(struct pipe_context *pipe, struct u_vbuf_caps *caps);
 void u_vbuf_destroy(struct u_vbuf *mgr);
 
 /* State and draw functions. */
-void u_vbuf_set_vertex_elements(struct u_vbuf *mgr, unsigned count,
-                                const struct pipe_vertex_element *states);
+void u_vbuf_set_vertex_elements(struct u_vbuf *mgr,
+                                const struct cso_velems_state *velems);
 void u_vbuf_unset_vertex_elements(struct u_vbuf *mgr);
 void u_vbuf_set_vertex_buffers(struct u_vbuf *mgr,
                                unsigned start_slot, unsigned count,
@@ -85,5 +90,10 @@ void u_vbuf_save_vertex_elements(struct u_vbuf *mgr);
 void u_vbuf_restore_vertex_elements(struct u_vbuf *mgr);
 void u_vbuf_save_vertex_buffer0(struct u_vbuf *mgr);
 void u_vbuf_restore_vertex_buffer0(struct u_vbuf *mgr);
+
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

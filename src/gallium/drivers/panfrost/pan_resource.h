@@ -29,33 +29,31 @@
 #include <panfrost-job.h>
 #include "pan_screen.h"
 #include "pan_allocate.h"
+#include "pan_texture.h"
 #include "drm-uapi/drm.h"
 #include "util/u_range.h"
 
-/* Describes the memory layout of a BO */
+/* Index buffer min/max cache. We need to caclculate the min/max for arbitrary
+ * slices (start, start + count) of the index buffer at drawtime. As this can
+ * be quite expensive, we cache. Conceptually, we just use a hash table mapping
+ * the key (start, count) to the value (min, max). In practice, mesa's hash
+ * table implementation is higher overhead than we would like and makes
+ * handling memory usage a little complicated. So we use this data structure
+ * instead. Searching is O(n) to the size, but the size is capped at the
+ * PANFROST_MINMAX_SIZE constant (so this is a tradeoff between cache hit/miss
+ * ratio and cache search speed). Note that keys are adjacent so we get cache
+ * line alignment benefits. Insertion is O(1) and in-order until the cache
+ * fills up, after that it evicts the oldest cached value in a ring facilitated
+ * by index.
+ */
 
-enum panfrost_memory_layout {
-        PAN_LINEAR,
-        PAN_TILED,
-        PAN_AFBC
-};
+#define PANFROST_MINMAX_SIZE 64
 
-struct panfrost_slice {
-        unsigned offset;
-        unsigned stride;
-        unsigned size0;
-
-        /* If there is a header preceding each slice, how big is
-         * that header?  Used for AFBC */
-        unsigned header_size;
-
-        /* If checksumming is enabled following the slice, what
-         * is its offset/stride? */
-        unsigned checksum_offset;
-        unsigned checksum_stride;
-
-        /* Has anything been written to this slice? */
-        bool initialized;
+struct panfrost_minmax_cache {
+        uint64_t keys[PANFROST_MINMAX_SIZE];
+        uint64_t values[PANFROST_MINMAX_SIZE];
+        unsigned size;
+        unsigned index;
 };
 
 struct panfrost_resource {
@@ -79,12 +77,15 @@ struct panfrost_resource {
         unsigned cubemap_stride;
 
         /* Internal layout (tiled?) */
-        enum panfrost_memory_layout layout;
+        enum mali_texture_layout layout;
 
         /* Is transaciton elimination enabled? */
         bool checksummed;
 
         enum pipe_format internal_format;
+
+        /* Cached min/max values for index buffers */
+        struct panfrost_minmax_cache *index_cache;
 };
 
 static inline struct panfrost_resource *
@@ -117,16 +118,8 @@ void
 panfrost_resource_hint_layout(
                 struct panfrost_screen *screen,
                 struct panfrost_resource *rsrc,
-                enum panfrost_memory_layout layout,
+                enum mali_texture_layout layout,
                 signed weight);
-
-/* AFBC */
-
-bool
-panfrost_format_supports_afbc(enum pipe_format format);
-
-unsigned
-panfrost_afbc_header_size(unsigned width, unsigned height);
 
 /* Blitting */
 

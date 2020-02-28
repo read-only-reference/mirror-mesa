@@ -571,7 +571,6 @@ struct iris_vtable {
                            struct iris_fs_prog_key *key);
    void (*populate_cs_key)(const struct iris_context *ice,
                            struct iris_cs_prog_key *key);
-   uint32_t (*mocs)(const struct iris_bo *bo, const struct isl_device *isl_dev);
    void (*lost_genx_state)(struct iris_context *ice, struct iris_batch *batch);
 };
 
@@ -686,6 +685,9 @@ struct iris_context {
    } condition;
 
    struct gen_perf_context *perf_ctx;
+
+   /** Frame number for debug prints */
+   uint32_t frame;
 
    struct {
       uint64_t dirty;

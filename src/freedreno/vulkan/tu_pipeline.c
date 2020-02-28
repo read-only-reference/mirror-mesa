@@ -468,17 +468,17 @@ tu6_emit_fs_config(struct tu_cs *cs, struct tu_shader *shader,
    if (fs->need_fine_derivatives)
       sp_fs_ctrl |= A6XX_SP_FS_CTRL_REG0_DIFF_FINE;
 
-   uint32_t sp_fs_config = A6XX_SP_FS_CONFIG_NTEX(shader->texture_map.num_desc) |
-                           A6XX_SP_FS_CONFIG_NSAMP(shader->sampler_map.num_desc) |
-                           A6XX_SP_FS_CONFIG_NIBO(tu_shader_nibo(shader));
+   uint32_t sp_fs_config = 0;
+   unsigned shader_nibo = 0;
+   if (shader) {
+      shader_nibo = tu_shader_nibo(shader);
+      sp_fs_config = A6XX_SP_FS_CONFIG_NTEX(shader->texture_map.num_desc) |
+                     A6XX_SP_FS_CONFIG_NSAMP(shader->sampler_map.num_desc) |
+                     A6XX_SP_FS_CONFIG_NIBO(shader_nibo);
+   }
+
    if (fs->instrlen)
       sp_fs_config |= A6XX_SP_FS_CONFIG_ENABLED;
-
-   tu_cs_emit_pkt4(cs, REG_A6XX_SP_UNKNOWN_A9A8, 1);
-   tu_cs_emit(cs, 0);
-
-   tu_cs_emit_pkt4(cs, REG_A6XX_SP_UNKNOWN_AB00, 1);
-   tu_cs_emit(cs, 0x5);
 
    tu_cs_emit_pkt4(cs, REG_A6XX_SP_FS_CTRL_REG0, 1);
    tu_cs_emit(cs, sp_fs_ctrl);
@@ -492,7 +492,7 @@ tu6_emit_fs_config(struct tu_cs *cs, struct tu_shader *shader,
                   A6XX_HLSQ_FS_CNTL_ENABLED);
 
    tu_cs_emit_pkt4(cs, REG_A6XX_SP_IBO_COUNT, 1);
-   tu_cs_emit(cs, tu_shader_nibo(shader));
+   tu_cs_emit(cs, shader_nibo);
 }
 
 static void
@@ -633,9 +633,6 @@ tu6_emit_vpc(struct tu_cs *cs,
    tu_cs_emit(cs, A6XX_VPC_PACK_POSITIONLOC(position_loc) |
                      A6XX_VPC_PACK_PSIZELOC(pointsize_loc) |
                      A6XX_VPC_PACK_STRIDE_IN_VPC(linkage.max_loc));
-
-   tu_cs_emit_pkt4(cs, REG_A6XX_VPC_GS_SIV_CNTL, 1);
-   tu_cs_emit(cs, 0x0000ffff); /* XXX */
 
    tu_cs_emit_pkt4(cs, REG_A6XX_SP_PRIMITIVE_CNTL, 1);
    tu_cs_emit(cs, A6XX_SP_PRIMITIVE_CNTL_VSOUT(linkage.cnt));
@@ -804,9 +801,6 @@ tu6_emit_fs_inputs(struct tu_cs *cs, const struct ir3_shader_variant *fs)
    tu_cs_emit_pkt4(cs, REG_A6XX_HLSQ_UNKNOWN_B980, 1);
    tu_cs_emit(cs, enable_varyings ? 3 : 1);
 
-   tu_cs_emit_pkt4(cs, REG_A6XX_SP_UNKNOWN_A982, 1);
-   tu_cs_emit(cs, 0); /* XXX */
-
    tu_cs_emit_pkt4(cs, REG_A6XX_HLSQ_UPDATE_CNTL, 1);
    tu_cs_emit(cs, 0xff); /* XXX */
 
@@ -845,6 +839,15 @@ tu6_emit_fs_inputs(struct tu_cs *cs, const struct ir3_shader_variant *fs)
          CONDREG(samp_id_regid, A6XX_RB_RENDER_CONTROL1_SAMPLEID) |
          CONDREG(ij_size_regid, A6XX_RB_RENDER_CONTROL1_SIZE) |
          COND(fs->frag_face, A6XX_RB_RENDER_CONTROL1_FACENESS));
+
+   tu_cs_emit_pkt4(cs, REG_A6XX_RB_SAMPLE_CNTL, 1);
+   tu_cs_emit(cs, COND(sample_shading, A6XX_RB_SAMPLE_CNTL_PER_SAMP_MODE));
+
+   tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_UNKNOWN_8101, 1);
+   tu_cs_emit(cs, COND(sample_shading, 0x6));  // XXX
+
+   tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_SAMPLE_CNTL, 1);
+   tu_cs_emit(cs, COND(sample_shading, A6XX_GRAS_SAMPLE_CNTL_PER_SAMP_MODE));
 }
 
 static void
@@ -957,7 +960,11 @@ tu6_emit_shader_object(struct tu_cs *cs,
    assert(variant->type == stage);
 
    const uint64_t binary_iova = binary_bo->iova + binary_offset;
-   assert((binary_iova & 0x3) == 0);
+   assert((binary_iova & 0xf) == 0);
+   /* note: it looks like HW might try to read a few instructions beyond the instrlen size
+    * of the shader. this could be a potential source of problems at some point
+    * possibly this doesn't happen if shader iova is aligned enough (to 4k for example)
+    */
 
    tu_cs_emit_pkt4(cs, reg, 2);
    tu_cs_emit_qw(cs, binary_iova);
@@ -1101,13 +1108,11 @@ tu6_emit_vertex_input(struct tu_cs *cs,
          tu_find_vertex_input_binding(vi_info, vi_attr);
       assert(vi_attr && vi_binding);
 
-      const struct tu_native_format *format =
-         tu6_get_native_format(vi_attr->format);
-      assert(format && format->vtx >= 0);
+      const struct tu_native_format format = tu6_format_vtx(vi_attr->format);
 
       uint32_t vfd_decode = A6XX_VFD_DECODE_INSTR_IDX(vfd_decode_idx) |
-                            A6XX_VFD_DECODE_INSTR_FORMAT(format->vtx) |
-                            A6XX_VFD_DECODE_INSTR_SWAP(format->swap) |
+                            A6XX_VFD_DECODE_INSTR_FORMAT(format.fmt) |
+                            A6XX_VFD_DECODE_INSTR_SWAP(format.swap) |
                             A6XX_VFD_DECODE_INSTR_UNK30;
       if (vi_binding->inputRate == VK_VERTEX_INPUT_RATE_INSTANCE)
          vfd_decode |= A6XX_VFD_DECODE_INSTR_INSTANCED;
@@ -1223,8 +1228,8 @@ tu6_emit_scissor(struct tu_cs *cs, const VkRect2D *scissor)
 static void
 tu6_emit_gras_unknowns(struct tu_cs *cs)
 {
-   tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_UNKNOWN_8000, 1);
-   tu_cs_emit(cs, 0x80);
+   tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_DISABLE_CNTL, 1);
+   tu_cs_emit(cs, A6XX_GRAS_DISABLE_CNTL_VP_CLIP_CODE_IGNORE);
    tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_UNKNOWN_8001, 1);
    tu_cs_emit(cs, 0x0);
    tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_LAYER_CNTL, 1);
@@ -1459,12 +1464,6 @@ tu6_emit_rb_mrt_controls(struct tu_cs *cs,
       tu_cs_emit(cs, rb_mrt_control);
       tu_cs_emit(cs, rb_mrt_blend_control);
    }
-
-   for (uint32_t i = blend_info->attachmentCount; i < MAX_RTS; i++) {
-      tu_cs_emit_pkt4(cs, REG_A6XX_RB_MRT_CONTROL(i), 2);
-      tu_cs_emit(cs, 0);
-      tu_cs_emit(cs, 0);
-   }
 }
 
 static void
@@ -1472,7 +1471,6 @@ tu6_emit_blend_control(struct tu_cs *cs,
                        uint32_t blend_enable_mask,
                        const VkPipelineMultisampleStateCreateInfo *msaa_info)
 {
-   assert(!msaa_info->sampleShadingEnable);
    assert(!msaa_info->alphaToOneEnable);
 
    uint32_t sp_blend_cntl = A6XX_SP_BLEND_CNTL_UNK8;
@@ -1518,10 +1516,10 @@ tu_pipeline_create(struct tu_device *dev,
    if (!pipeline)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   tu_cs_init(&pipeline->cs, TU_CS_MODE_SUB_STREAM, 2048);
+   tu_cs_init(&pipeline->cs, dev, TU_CS_MODE_SUB_STREAM, 2048);
 
    /* reserve the space now such that tu_cs_begin_sub_stream never fails */
-   VkResult result = tu_cs_reserve_space(dev, &pipeline->cs, 2048);
+   VkResult result = tu_cs_reserve_space(&pipeline->cs, 2048);
    if (result != VK_SUCCESS) {
       vk_free2(&dev->alloc, pAllocator, pipeline);
       return result;
@@ -1654,11 +1652,11 @@ tu_pipeline_builder_parse_shader_stages(struct tu_pipeline_builder *builder,
                                         struct tu_pipeline *pipeline)
 {
    struct tu_cs prog_cs;
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs, 512, &prog_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 512, &prog_cs);
    tu6_emit_program(&prog_cs, builder, &pipeline->program.binary_bo, false);
    pipeline->program.state_ib = tu_cs_end_sub_stream(&pipeline->cs, &prog_cs);
 
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs, 512, &prog_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 512, &prog_cs);
    tu6_emit_program(&prog_cs, builder, &pipeline->program.binary_bo, true);
    pipeline->program.binning_state_ib =
       tu_cs_end_sub_stream(&pipeline->cs, &prog_cs);
@@ -1682,7 +1680,7 @@ tu_pipeline_builder_parse_vertex_input(struct tu_pipeline_builder *builder,
    const struct tu_shader *vs = builder->shaders[MESA_SHADER_VERTEX];
 
    struct tu_cs vi_cs;
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs,
+   tu_cs_begin_sub_stream(&pipeline->cs,
                           MAX_VERTEX_ATTRIBS * 5 + 2, &vi_cs);
    tu6_emit_vertex_input(&vi_cs, &vs->variants[0], vi_info,
                          pipeline->vi.bindings, pipeline->vi.strides,
@@ -1690,7 +1688,7 @@ tu_pipeline_builder_parse_vertex_input(struct tu_pipeline_builder *builder,
    pipeline->vi.state_ib = tu_cs_end_sub_stream(&pipeline->cs, &vi_cs);
 
    if (vs->has_binning_pass) {
-      tu_cs_begin_sub_stream(builder->device, &pipeline->cs,
+      tu_cs_begin_sub_stream(&pipeline->cs,
                              MAX_VERTEX_ATTRIBS * 5 + 2, &vi_cs);
       tu6_emit_vertex_input(
          &vi_cs, &vs->variants[1], vi_info, pipeline->vi.binning_bindings,
@@ -1731,7 +1729,7 @@ tu_pipeline_builder_parse_viewport(struct tu_pipeline_builder *builder,
       builder->create_info->pViewportState;
 
    struct tu_cs vp_cs;
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs, 15, &vp_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 15, &vp_cs);
 
    if (!(pipeline->dynamic_state.mask & TU_DYNAMIC_VIEWPORT)) {
       assert(vp_info->viewportCount == 1);
@@ -1757,7 +1755,7 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
    assert(rast_info->polygonMode == VK_POLYGON_MODE_FILL);
 
    struct tu_cs rast_cs;
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs, 20, &rast_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 20, &rast_cs);
 
    /* move to hw ctx init? */
    tu6_emit_gras_unknowns(&rast_cs);
@@ -1801,7 +1799,7 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
          : &dummy_ds_info;
 
    struct tu_cs ds_cs;
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs, 12, &ds_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 12, &ds_cs);
 
    /* move to hw ctx init? */
    tu6_emit_alpha_control_disable(&ds_cs);
@@ -1856,8 +1854,7 @@ tu_pipeline_builder_parse_multisample_and_color_blend(
                                      : &dummy_blend_info;
 
    struct tu_cs blend_cs;
-   tu_cs_begin_sub_stream(builder->device, &pipeline->cs, MAX_RTS * 3 + 9,
-                          &blend_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, MAX_RTS * 3 + 9, &blend_cs);
 
    uint32_t blend_enable_mask;
    tu6_emit_rb_mrt_controls(&blend_cs, blend_info,
@@ -1877,7 +1874,7 @@ tu_pipeline_finish(struct tu_pipeline *pipeline,
                    struct tu_device *dev,
                    const VkAllocationCallbacks *alloc)
 {
-   tu_cs_finish(dev, &pipeline->cs);
+   tu_cs_finish(&pipeline->cs);
 
    if (pipeline->program.binary_bo.gem_handle)
       tu_bo_finish(dev, &pipeline->program.binary_bo);
@@ -2117,7 +2114,7 @@ tu_compute_pipeline_create(VkDevice device,
       pipeline->compute.local_size[i] = v->shader->nir->info.cs.local_size[i];
 
    struct tu_cs prog_cs;
-   tu_cs_begin_sub_stream(dev, &pipeline->cs, 512, &prog_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 512, &prog_cs);
    tu6_emit_compute_program(&prog_cs, shader, &pipeline->program.binary_bo);
    pipeline->program.state_ib = tu_cs_end_sub_stream(&pipeline->cs, &prog_cs);
 

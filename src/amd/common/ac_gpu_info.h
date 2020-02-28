@@ -49,6 +49,7 @@ struct radeon_info {
 	const char                  *marketing_name;
 	bool                        is_pro_graphics;
 	uint32_t                    pci_id;
+	uint32_t                    pci_rev_id;
 	enum radeon_family          family;
 	enum chip_class             chip_class;
 	uint32_t                    family_id;
@@ -84,6 +85,8 @@ struct radeon_info {
 	uint64_t                    gart_size;
 	uint64_t                    vram_size;
 	uint64_t                    vram_vis_size;
+	uint32_t                    vram_bit_width;
+	uint32_t                    vram_type;
 	unsigned                    gds_size;
 	unsigned                    gds_gfx_partition_size;
 	uint64_t                    max_alloc_size;
@@ -97,6 +100,12 @@ struct radeon_info {
 	uint32_t                    tcc_cache_line_size;
 	bool			    tcc_harvested;
 	unsigned                    pc_lines;
+	uint32_t                    lds_size_per_cu;
+	uint32_t                    lds_granularity;
+	uint32_t                    max_memory_clock;
+	uint32_t                    ce_ram_size;
+	uint32_t                    l1_cache_size;
+	uint32_t                    l2_cache_size;
 
 	/* CP info. */
 	bool                        gfx_ib_pad_with_type2;
@@ -152,6 +161,13 @@ struct radeon_info {
 	uint32_t                    max_wave64_per_simd;
 	uint32_t                    num_physical_sgprs_per_simd;
 	uint32_t                    num_physical_wave64_vgprs_per_simd;
+	uint32_t                    num_simd_per_compute_unit;
+	uint32_t                    min_sgpr_alloc;
+	uint32_t                    max_sgpr_alloc;
+	uint32_t                    sgpr_alloc_granularity;
+	uint32_t                    min_vgpr_alloc;
+	uint32_t                    max_vgpr_alloc;
+	uint32_t                    vgpr_alloc_granularity;
 
 	/* Render backends (color + depth blocks). */
 	uint32_t                    r300_num_gb_pipes;

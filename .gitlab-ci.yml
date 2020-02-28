@@ -3,8 +3,7 @@ variables:
 
 include:
   - project: 'wayland/ci-templates'
-    # Must be the same as in .gitlab-ci/lava-gitlab-ci.yml
-    ref: 0a9bdd33a98f05af6761ab118b5074952242aab0
+    ref: b7030c2cd0d6ccc5f6d4f8299bafa4daa9240d71
     file: '/templates/debian.yml'
   - local: '.gitlab-ci/lava-gitlab-ci.yml'
 
@@ -113,7 +112,7 @@ x86_build:
     - .debian@container-ifnot-exists
     - .container
   variables:
-    DEBIAN_TAG: &x86_build "2020-01-14"
+    DEBIAN_TAG: &x86_build "2020-02-15"
 
 .use-x86_build:
   variables:
@@ -126,7 +125,7 @@ x86_build:
 x86_test-gl:
   extends: x86_build
   variables:
-    DEBIAN_TAG: &x86_test-gl "2020-01-14"
+    DEBIAN_TAG: &x86_test-gl "2020-02-14"
 
 # Debian 10 based x86 test image for VK
 x86_test-vk:
@@ -166,7 +165,7 @@ arm_build:
     - .debian@container-ifnot-exists@arm64v8
     - .container
   variables:
-    DEBIAN_TAG: &arm_build "2020-01-14"
+    DEBIAN_TAG: &arm_build "2020-02-26"
 
 .use-arm_build:
   variables:
@@ -179,7 +178,7 @@ arm_build:
 arm_test:
   extends: arm_build
   variables:
-    DEBIAN_TAG: &arm_test "2019-12-18"
+    DEBIAN_TAG: &arm_test "2020-01-30"
 
 .use-arm_test:
   variables:
@@ -262,6 +261,8 @@ meson-testing:
     GALLIUM_DRIVERS: "swrast"
     VULKAN_DRIVERS: amd
     BUILDTYPE: "debugoptimized"
+    EXTRA_OPTION: >
+      -D werror=true
   script:
     - .gitlab-ci/meson-build.sh
     - .gitlab-ci/prepare-artifacts.sh
@@ -313,6 +314,7 @@ meson-main:
       -D gallium-va=false
       -D gallium-xa=false
       -D gallium-nine=false
+    LLVM_VERSION: "8"
 
 .meson-arm:
   extends:
@@ -322,8 +324,6 @@ meson-main:
     VULKAN_DRIVERS: freedreno
     GALLIUM_DRIVERS: "etnaviv,freedreno,kmsro,lima,nouveau,panfrost,swrast,tegra,v3d,vc4"
     BUILDTYPE: "debugoptimized"
-    EXTRA_OPTION: >
-      -D I-love-half-baked-turnips=true
   tags:
     - aarch64
 
@@ -334,6 +334,8 @@ meson-armhf:
   variables:
     CROSS: armhf
     LLVM_VERSION: "7"
+    EXTRA_OPTION: >
+      -D llvm=false
   script:
     - .gitlab-ci/meson-build.sh
     - .gitlab-ci/prepare-artifacts.sh
@@ -343,11 +345,21 @@ meson-arm64:
     - .meson-arm
     - .ci-deqp-artifacts
   variables:
-    LLVM_VERSION: "8"
-    VULKAN_DRIVERS: "freedreno,amd"
+    VULKAN_DRIVERS: "freedreno"
+    EXTRA_OPTION: >
+      -D llvm=false
   script:
     - .gitlab-ci/meson-build.sh
     - .gitlab-ci/prepare-artifacts.sh
+
+meson-arm64-build-test:
+  extends:
+    - .meson-arm
+    - .ci-deqp-artifacts
+  variables:
+    VULKAN_DRIVERS: "amd"
+  script:
+    - .gitlab-ci/meson-build.sh
 
 meson-clang:
   extends: .meson-build
@@ -451,6 +463,7 @@ meson-vulkan:
     VULKAN_DRIVERS: intel,amd,freedreno
     EXTRA_OPTION: >
       -D vulkan-overlay-layer=true
+      -D werror=true
 
 # While the main point of this build is testing the i386 cross build,
 # we also use this one to test some other options that are exclusive
@@ -467,6 +480,26 @@ meson-i386:
       -D llvm=false
       -D osmesa=classic
       -D werror=true
+
+meson-s390x:
+  extends:
+    - .meson-cross
+  tags:
+    - gstreamer
+  variables:
+    CROSS: s390x
+    GALLIUM_DRIVERS: "swrast"
+  script:
+    - dpkg -i /var/cache/apt/archives/$CROSS/*.deb
+    - .gitlab-ci/meson-build.sh
+
+meson-ppc64el:
+  extends:
+    - meson-s390x
+  variables:
+    CROSS: ppc64el
+    GALLIUM_DRIVERS: "nouveau,radeonsi,swrast,virgl"
+    VULKAN_DRIVERS: "amd"
 
 meson-mingw32-x86_64:
   extends: .meson-build
@@ -688,3 +721,20 @@ radv_polaris10_vkcts:
     DEQP_SKIPS: deqp-radv-polaris10-skips.txt
   tags:
     - polaris10
+
+.traces-test:
+  extends:
+    - .test-gl
+  cache:
+    key: ${CI_JOB_NAME}
+    paths:
+      - .git-lfs-storage/
+  script:
+    - ./artifacts/tracie-runner.sh
+
+llvmpipe-traces:
+  variables:
+    LIBGL_ALWAYS_SOFTWARE: "true"
+    GALLIUM_DRIVER: "llvmpipe"
+    DEVICE_NAME: "vmware-llvmpipe"
+  extends: .traces-test

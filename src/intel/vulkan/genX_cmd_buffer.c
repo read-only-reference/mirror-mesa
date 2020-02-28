@@ -1993,6 +1993,7 @@ genX(cmd_buffer_config_l3)(struct anv_cmd_buffer *cmd_buffer,
 void
 genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
 {
+   UNUSED const struct gen_device_info *devinfo = &cmd_buffer->device->info;
    enum anv_pipe_bits bits = cmd_buffer->state.pending_pipe_bits;
 
    if (cmd_buffer->device->physical->always_flush_cache)
@@ -2048,6 +2049,24 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
              sizeof(cmd_buffer->state.gfx.vb_dirty_ranges));
       memset(&cmd_buffer->state.gfx.ib_dirty_range, 0,
              sizeof(cmd_buffer->state.gfx.ib_dirty_range));
+   }
+
+   /* Project: SKL / Argument: LRI Post Sync Operation [23]
+    *
+    * "PIPECONTROL command with “Command Streamer Stall Enable” must be
+    *  programmed prior to programming a PIPECONTROL command with "LRI
+    *  Post Sync Operation" in GPGPU mode of operation (i.e when
+    *  PIPELINE_SELECT command is set to GPGPU mode of operation)."
+    *
+    * The same text exists a few rows below for Post Sync Op.
+    *
+    * On Gen12 this is GEN:BUG:1607156449.
+    */
+   if (bits & ANV_PIPE_POST_SYNC_BIT) {
+      if ((GEN_GEN == 9 || (GEN_GEN == 12 && devinfo->revision == 0 /* A0 */)) &&
+          cmd_buffer->state.current_pipeline == GPGPU)
+         bits |= ANV_PIPE_CS_STALL_BIT;
+      bits &= ~ANV_PIPE_POST_SYNC_BIT;
    }
 
    if (bits & (ANV_PIPE_FLUSH_BITS | ANV_PIPE_CS_STALL_BIT)) {
@@ -2332,25 +2351,37 @@ anv_descriptor_set_address(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
+static struct anv_cmd_pipeline_state *
+pipe_state_for_stage(struct anv_cmd_buffer *cmd_buffer,
+                     gl_shader_stage stage)
+{
+   switch (stage) {
+   case MESA_SHADER_COMPUTE:
+      return &cmd_buffer->state.compute.base;
+
+   case MESA_SHADER_VERTEX:
+   case MESA_SHADER_TESS_CTRL:
+   case MESA_SHADER_TESS_EVAL:
+   case MESA_SHADER_GEOMETRY:
+   case MESA_SHADER_FRAGMENT:
+      return &cmd_buffer->state.gfx.base;
+
+   default:
+      unreachable("invalid stage");
+   }
+}
+
 static VkResult
 emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
                    gl_shader_stage stage,
                    struct anv_state *bt_state)
 {
    struct anv_subpass *subpass = cmd_buffer->state.subpass;
-   struct anv_cmd_pipeline_state *pipe_state;
-   struct anv_pipeline *pipeline;
    uint32_t state_offset;
 
-   switch (stage) {
-   case  MESA_SHADER_COMPUTE:
-      pipe_state = &cmd_buffer->state.compute.base;
-      break;
-   default:
-      pipe_state = &cmd_buffer->state.gfx.base;
-      break;
-   }
-   pipeline = pipe_state->pipeline;
+   struct anv_cmd_pipeline_state *pipe_state =
+      pipe_state_for_stage(cmd_buffer, stage);
+   struct anv_pipeline *pipeline = pipe_state->pipeline;
 
    if (!anv_pipeline_has_stage(pipeline, stage)) {
       *bt_state = (struct anv_state) { 0, };
@@ -2599,8 +2630,7 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
               struct anv_state *state)
 {
    struct anv_cmd_pipeline_state *pipe_state =
-      stage == MESA_SHADER_COMPUTE ? &cmd_buffer->state.compute.base :
-                                     &cmd_buffer->state.gfx.base;
+      pipe_state_for_stage(cmd_buffer, stage);
    struct anv_pipeline *pipeline = pipe_state->pipeline;
 
    if (!anv_pipeline_has_stage(pipeline, stage)) {
@@ -2818,6 +2848,10 @@ cmd_buffer_emit_push_constant(struct anv_cmd_buffer *cmd_buffer,
          const struct anv_pipeline_bind_map *bind_map =
             &pipeline->shaders[stage]->bind_map;
 
+#if GEN_GEN >= 12
+         c.MOCS = cmd_buffer->device->isl_dev.mocs.internal;
+#endif
+
 #if GEN_GEN >= 8 || GEN_IS_HASWELL
          /* The Skylake PRM contains the following restriction:
           *
@@ -2878,6 +2912,7 @@ cmd_buffer_emit_push_constant_all(struct anv_cmd_buffer *cmd_buffer,
    if (count == 0) {
       anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_CONSTANT_ALL), c) {
          c.ShaderUpdateEnable = shader_mask;
+         c.MOCS = cmd_buffer->device->isl_dev.mocs.internal;
       }
       return;
    }
@@ -2908,7 +2943,8 @@ cmd_buffer_emit_push_constant_all(struct anv_cmd_buffer *cmd_buffer,
    dw = anv_batch_emitn(&cmd_buffer->batch, num_dwords,
                         GENX(3DSTATE_CONSTANT_ALL),
                         .ShaderUpdateEnable = shader_mask,
-                        .PointerBufferMask = buffers);
+                        .PointerBufferMask = buffers,
+                        .MOCS = cmd_buffer->device->isl_dev.mocs.internal);
 
    for (int i = 0; i < count; i++) {
       const struct anv_push_range *range = &bind_map->push_ranges[i];
@@ -2999,7 +3035,7 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
 
    assert((pipeline->active_stages & VK_SHADER_STAGE_COMPUTE_BIT) == 0);
 
-   genX(cmd_buffer_config_l3)(cmd_buffer, pipeline->urb.l3_config);
+   genX(cmd_buffer_config_l3)(cmd_buffer, pipeline->l3_config);
 
    genX(cmd_buffer_emit_hashing_mode)(cmd_buffer, UINT_MAX, UINT_MAX, 1);
 
@@ -3890,7 +3926,7 @@ genX(cmd_buffer_flush_compute_state)(struct anv_cmd_buffer *cmd_buffer)
 
    assert(pipeline->active_stages == VK_SHADER_STAGE_COMPUTE_BIT);
 
-   genX(cmd_buffer_config_l3)(cmd_buffer, pipeline->urb.l3_config);
+   genX(cmd_buffer_config_l3)(cmd_buffer, pipeline->l3_config);
 
    genX(flush_pipeline_select_gpgpu)(cmd_buffer);
 
@@ -4619,6 +4655,9 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    isl_emit_depth_stencil_hiz_s(&device->isl_dev, dw, &info);
 
    if (GEN_GEN >= 12) {
+      cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_POST_SYNC_BIT;
+      genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
       /* GEN:BUG:1408224581
        *
        * Workaround: Gen12LP Astep only An additional pipe control with
@@ -5570,6 +5609,9 @@ void genX(CmdSetEvent)(
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_event, event, _event);
 
+   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_POST_SYNC_BIT;
+   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
    anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
       if (stageMask & ANV_PIPELINE_STAGE_PIPELINED_BITS) {
          pc.StallAtPixelScoreboard = true;
@@ -5593,6 +5635,9 @@ void genX(CmdResetEvent)(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    ANV_FROM_HANDLE(anv_event, event, _event);
+
+   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_POST_SYNC_BIT;
+   genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
 
    anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
       if (stageMask & ANV_PIPELINE_STAGE_PIPELINED_BITS) {

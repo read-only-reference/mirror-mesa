@@ -312,7 +312,7 @@ emit_urb_setup(struct anv_pipeline *pipeline,
    }
 
    genX(emit_urb_setup)(pipeline->device, &pipeline->batch,
-                        pipeline->urb.l3_config,
+                        pipeline->l3_config,
                         pipeline->active_stages, entry_size,
                         deref_block_size);
 }
@@ -1309,7 +1309,6 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
    const struct brw_vue_prog_data *prog_data =
       anv_pipeline_get_last_vue_prog_data(pipeline);
    const struct brw_vue_map *vue_map = &prog_data->vue_map;
-#endif
 
    nir_xfb_info *xfb_info;
    if (anv_pipeline_has_stage(pipeline, MESA_SHADER_GEOMETRY))
@@ -1318,8 +1317,7 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
       xfb_info = pipeline->shaders[MESA_SHADER_TESS_EVAL]->xfb_info;
    else
       xfb_info = pipeline->shaders[MESA_SHADER_VERTEX]->xfb_info;
-
-   pipeline->xfb_used = xfb_info ? xfb_info->buffers_written : 0;
+#endif
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_STREAMOUT), so) {
       so.RenderingDisable = rs_info->rasterizerDiscardEnable;
@@ -2258,8 +2256,6 @@ compute_pipeline_create(
     */
    memset(pipeline->shaders, 0, sizeof(pipeline->shaders));
    pipeline->num_executables = 0;
-
-   pipeline->needs_data_cache = false;
 
    assert(pCreateInfo->stage.stage == VK_SHADER_STAGE_COMPUTE_BIT);
    pipeline->active_stages |= VK_SHADER_STAGE_COMPUTE_BIT;

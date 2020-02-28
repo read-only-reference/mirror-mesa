@@ -852,6 +852,14 @@ struct radv_device {
 	/* Condition variable for legacy timelines, to notify waiters when a
 	 * new point gets submitted. */
 	pthread_cond_t timeline_cond;
+
+	/* Thread trace. */
+	struct radeon_cmdbuf *thread_trace_start_cs[2];
+	struct radeon_cmdbuf *thread_trace_stop_cs[2];
+	struct radeon_winsys_bo *thread_trace_bo;
+	void *thread_trace_ptr;
+	uint32_t thread_trace_buffer_size;
+	int thread_trace_start_frame;
 };
 
 struct radv_device_memory {
@@ -971,7 +979,8 @@ enum radv_dynamic_state_bits {
 	RADV_DYNAMIC_STENCIL_REFERENCE    = 1 << 8,
 	RADV_DYNAMIC_DISCARD_RECTANGLE    = 1 << 9,
 	RADV_DYNAMIC_SAMPLE_LOCATIONS     = 1 << 10,
-	RADV_DYNAMIC_ALL                  = (1 << 11) - 1,
+	RADV_DYNAMIC_LINE_STIPPLE	  = 1 << 11,
+	RADV_DYNAMIC_ALL                  = (1 << 12) - 1,
 };
 
 enum radv_cmd_dirty_bits {
@@ -988,12 +997,13 @@ enum radv_cmd_dirty_bits {
 	RADV_CMD_DIRTY_DYNAMIC_STENCIL_REFERENCE         = 1 << 8,
 	RADV_CMD_DIRTY_DYNAMIC_DISCARD_RECTANGLE         = 1 << 9,
 	RADV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS          = 1 << 10,
-	RADV_CMD_DIRTY_DYNAMIC_ALL                       = (1 << 11) - 1,
-	RADV_CMD_DIRTY_PIPELINE                          = 1 << 11,
-	RADV_CMD_DIRTY_INDEX_BUFFER                      = 1 << 12,
-	RADV_CMD_DIRTY_FRAMEBUFFER                       = 1 << 13,
-	RADV_CMD_DIRTY_VERTEX_BUFFER                     = 1 << 14,
-	RADV_CMD_DIRTY_STREAMOUT_BUFFER                  = 1 << 15,
+	RADV_CMD_DIRTY_DYNAMIC_LINE_STIPPLE		 = 1 << 11,
+	RADV_CMD_DIRTY_DYNAMIC_ALL                       = (1 << 12) - 1,
+	RADV_CMD_DIRTY_PIPELINE                          = 1 << 12,
+	RADV_CMD_DIRTY_INDEX_BUFFER                      = 1 << 13,
+	RADV_CMD_DIRTY_FRAMEBUFFER                       = 1 << 14,
+	RADV_CMD_DIRTY_VERTEX_BUFFER                     = 1 << 15,
+	RADV_CMD_DIRTY_STREAMOUT_BUFFER                  = 1 << 16,
 };
 
 enum radv_cmd_flush_bits {
@@ -1125,6 +1135,11 @@ struct radv_dynamic_state {
 	struct radv_discard_rectangle_state               discard_rectangle;
 
 	struct radv_sample_locations_state                sample_location;
+
+	struct {
+		uint32_t factor;
+		uint16_t pattern;
+	} line_stipple;
 };
 
 extern const struct radv_dynamic_state default_dynamic_state;
@@ -1268,6 +1283,10 @@ struct radv_cmd_state {
 	uint32_t last_num_instances;
 	uint32_t last_first_instance;
 	uint32_t last_vertex_offset;
+
+	uint32_t last_sx_ps_downconvert;
+	uint32_t last_sx_blend_opt_epsilon;
+	uint32_t last_sx_blend_opt_control;
 
 	/* Whether CP DMA is busy/idle. */
 	bool dma_is_busy;
@@ -1526,13 +1545,11 @@ struct radv_event {
 
 struct radv_shader_module;
 
-#define RADV_HASH_SHADER_IS_GEOM_COPY_SHADER (1 << 0)
-#define RADV_HASH_SHADER_SISCHED             (1 << 1)
-#define RADV_HASH_SHADER_NO_NGG              (1 << 2)
-#define RADV_HASH_SHADER_CS_WAVE32           (1 << 3)
-#define RADV_HASH_SHADER_PS_WAVE32           (1 << 4)
-#define RADV_HASH_SHADER_GE_WAVE32           (1 << 5)
-#define RADV_HASH_SHADER_ACO                 (1 << 6)
+#define RADV_HASH_SHADER_NO_NGG              (1 << 0)
+#define RADV_HASH_SHADER_CS_WAVE32           (1 << 1)
+#define RADV_HASH_SHADER_PS_WAVE32           (1 << 2)
+#define RADV_HASH_SHADER_GE_WAVE32           (1 << 3)
+#define RADV_HASH_SHADER_ACO                 (1 << 4)
 
 void
 radv_hash_shaders(unsigned char *hash,
@@ -1636,6 +1653,7 @@ struct radv_pipeline {
  			bool can_use_guardband;
 			uint32_t needed_dynamic_state;
 			bool disable_out_of_order_rast_for_occlusion;
+			uint8_t topology;
 
 			/* Used for rbplus */
 			uint32_t col_format;
@@ -2277,6 +2295,9 @@ struct radv_semaphore {
 	struct radv_semaphore_part temporary;
 };
 
+bool radv_queue_internal_submit(struct radv_queue *queue,
+				struct radeon_cmdbuf *cs);
+
 void radv_set_descriptor_set(struct radv_cmd_buffer *cmd_buffer,
 			     VkPipelineBindPoint bind_point,
 			     struct radv_descriptor_set *set,
@@ -2349,6 +2370,36 @@ void radv_nir_shader_info_pass(const struct nir_shader *nir,
 			       struct radv_shader_info *info);
 
 void radv_nir_shader_info_init(struct radv_shader_info *info);
+
+/* radv_sqtt.c */
+struct radv_thread_trace_info {
+	uint32_t cur_offset;
+	uint32_t trace_status;
+	uint32_t write_counter;
+};
+
+struct radv_thread_trace_se {
+	struct radv_thread_trace_info info;
+	void *data_ptr;
+	uint32_t shader_engine;
+	uint32_t compute_unit;
+};
+
+struct radv_thread_trace {
+	uint32_t num_traces;
+	struct radv_thread_trace_se traces[4];
+};
+
+bool radv_thread_trace_init(struct radv_device *device);
+void radv_thread_trace_finish(struct radv_device *device);
+bool radv_begin_thread_trace(struct radv_queue *queue);
+bool radv_end_thread_trace(struct radv_queue *queue);
+bool radv_get_thread_trace(struct radv_queue *queue,
+			   struct radv_thread_trace *thread_trace);
+
+/* radv_rgp.c */
+int radv_dump_thread_trace(struct radv_device *device,
+			   const struct radv_thread_trace *trace);
 
 struct radeon_winsys_sem;
 

@@ -559,6 +559,9 @@ void st_init_limits(struct pipe_screen *screen,
    temp = screen->get_param(screen, PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES);
    if (temp > 0 && c->MaxCombinedShaderOutputResources > temp)
       c->MaxCombinedShaderOutputResources = temp;
+
+   c->VertexBufferOffsetIsInt32 =
+      screen->get_param(screen, PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET);
 }
 
 
@@ -790,6 +793,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(OES_texture_float_linear),         PIPE_CAP_TEXTURE_FLOAT_LINEAR             },
       { o(OES_texture_half_float_linear),    PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR        },
       { o(OES_texture_view),                 PIPE_CAP_SAMPLER_VIEW_TARGET              },
+      { o(INTEL_blackhole_render),           PIPE_CAP_FRONTEND_NOOP,                   },
    };
 
    /* Required: render target and sampler support */
@@ -821,6 +825,11 @@ void st_init_extensions(struct pipe_screen *screen,
       { { o(ARB_texture_rg) },
         { PIPE_FORMAT_R8_UNORM,
           PIPE_FORMAT_R8G8_UNORM } },
+
+      { { o(EXT_texture_norm16) },
+        { PIPE_FORMAT_R16_UNORM,
+          PIPE_FORMAT_R16G16_UNORM,
+          PIPE_FORMAT_R16G16B16A16_UNORM } },
 
       { { o(EXT_render_snorm) },
         { PIPE_FORMAT_R8_SNORM,
@@ -964,6 +973,13 @@ void st_init_extensions(struct pipe_screen *screen,
         { PIPE_FORMAT_ATC_RGB,
           PIPE_FORMAT_ATC_RGBA_EXPLICIT,
           PIPE_FORMAT_ATC_RGBA_INTERPOLATED } },
+
+      { { o(EXT_texture_norm16) },
+        { PIPE_FORMAT_R16G16B16_UNORM,
+          PIPE_FORMAT_R16_SNORM,
+          PIPE_FORMAT_R16G16_SNORM,
+          PIPE_FORMAT_R16G16B16_SNORM,
+          PIPE_FORMAT_R16G16B16A16_SNORM } },
    };
 
    /* Required: vertex fetch support. */
@@ -1032,6 +1048,7 @@ void st_init_extensions(struct pipe_screen *screen,
    extensions->MESA_framebuffer_flip_y = GL_TRUE;
    extensions->MESA_pack_invert = GL_TRUE;
 
+   extensions->NV_copy_image = GL_TRUE;
    extensions->NV_fog_distance = GL_TRUE;
    extensions->NV_texture_env_combine4 = GL_TRUE;
    extensions->NV_texture_rectangle = GL_TRUE;
