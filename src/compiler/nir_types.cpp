@@ -772,6 +772,37 @@ glsl_type_get_image_count(const struct glsl_type *type)
    return 0;
 }
 
+enum glsl_interface_packing
+glsl_get_internal_ifc_packing(const struct glsl_type *type,
+                              bool std430_supported)
+{
+   return type->get_internal_ifc_packing(std430_supported);
+}
+
+unsigned
+glsl_get_std140_base_alignment(const struct glsl_type *type, bool row_major)
+{
+   return type->std140_base_alignment(row_major);
+}
+
+unsigned
+glsl_get_std140_size(const struct glsl_type *type, bool row_major)
+{
+   return type->std140_size(row_major);
+}
+
+unsigned
+glsl_get_std430_base_alignment(const struct glsl_type *type, bool row_major)
+{
+   return type->std430_base_alignment(row_major);
+}
+
+unsigned
+glsl_get_std430_size(const struct glsl_type *type, bool row_major)
+{
+   return type->std430_size(row_major);
+}
+
 unsigned
 glsl_get_explicit_size(const struct glsl_type *type, bool align_to_stride)
 {

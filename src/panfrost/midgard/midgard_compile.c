@@ -33,7 +33,7 @@
 #include "main/mtypes.h"
 #include "compiler/glsl/glsl_to_nir.h"
 #include "compiler/nir_types.h"
-#include "main/imports.h"
+#include "util/imports.h"
 #include "compiler/nir/nir_builder.h"
 #include "util/half_float.h"
 #include "util/u_math.h"
@@ -74,32 +74,13 @@ create_empty_block(compiler_context *ctx)
 {
         midgard_block *blk = rzalloc(ctx, midgard_block);
 
-        blk->predecessors = _mesa_set_create(blk,
+        blk->base.predecessors = _mesa_set_create(blk,
                         _mesa_hash_pointer,
                         _mesa_key_pointer_equal);
 
-        blk->source_id = ctx->block_source_count++;
+        blk->base.name = ctx->block_source_count++;
 
         return blk;
-}
-
-static void
-midgard_block_add_successor(midgard_block *block, midgard_block *successor)
-{
-        assert(block);
-        assert(successor);
-
-        /* Deduplicate */
-        for (unsigned i = 0; i < block->nr_successors; ++i) {
-                if (block->successors[i] == successor)
-                        return;
-        }
-
-        block->successors[block->nr_successors++] = successor;
-        assert(block->nr_successors <= ARRAY_SIZE(block->successors));
-
-        /* Note the predecessor in the other direction */
-        _mesa_set_add(successor->predecessors, block);
 }
 
 static void
@@ -108,9 +89,9 @@ schedule_barrier(compiler_context *ctx)
         midgard_block *temp = ctx->after_block;
         ctx->after_block = create_empty_block(ctx);
         ctx->block_count++;
-        list_addtail(&ctx->after_block->link, &ctx->blocks);
-        list_inithead(&ctx->after_block->instructions);
-        midgard_block_add_successor(ctx->current_block, ctx->after_block);
+        list_addtail(&ctx->after_block->base.link, &ctx->blocks);
+        list_inithead(&ctx->after_block->base.instructions);
+        pan_block_add_successor(&ctx->current_block->base, &ctx->after_block->base);
         ctx->current_block = ctx->after_block;
         ctx->after_block = temp;
 }
@@ -293,121 +274,6 @@ midgard_nir_lower_fdot2_body(nir_builder *b, nir_alu_instr *alu)
 
         /* Replace the fdot2 with this sum */
         nir_ssa_def_rewrite_uses(&alu->dest.dest.ssa, nir_src_for_ssa(sum));
-}
-
-/* TODO: ssbo_size */
-static int
-midgard_sysval_for_ssbo(nir_intrinsic_instr *instr)
-{
-        nir_src index = instr->src[0];
-        assert(nir_src_is_const(index));
-        uint32_t uindex = nir_src_as_uint(index);
-
-        return PAN_SYSVAL(SSBO, uindex);
-}
-
-static int
-midgard_sysval_for_sampler(nir_intrinsic_instr *instr)
-{
-        /* TODO: indirect samplers !!! */
-        nir_src index = instr->src[0];
-        assert(nir_src_is_const(index));
-        uint32_t uindex = nir_src_as_uint(index);
-
-        return PAN_SYSVAL(SAMPLER, uindex);
-}
-
-static unsigned
-midgard_nir_sysval_for_intrinsic(nir_intrinsic_instr *instr)
-{
-        switch (instr->intrinsic) {
-        case nir_intrinsic_load_viewport_scale:
-                return PAN_SYSVAL_VIEWPORT_SCALE;
-        case nir_intrinsic_load_viewport_offset:
-                return PAN_SYSVAL_VIEWPORT_OFFSET;
-        case nir_intrinsic_load_num_work_groups:
-                return PAN_SYSVAL_NUM_WORK_GROUPS;
-        case nir_intrinsic_load_ssbo_address: 
-        case nir_intrinsic_get_buffer_size: 
-                return midgard_sysval_for_ssbo(instr);
-        case nir_intrinsic_load_sampler_lod_parameters_pan:
-                return midgard_sysval_for_sampler(instr);
-        default:
-                return ~0;
-        }
-}
-
-static int sysval_for_instr(compiler_context *ctx, nir_instr *instr,
-                            unsigned *dest)
-{
-        nir_intrinsic_instr *intr;
-        nir_dest *dst = NULL;
-        nir_tex_instr *tex;
-        unsigned sysval = ~0;
-
-        switch (instr->type) {
-        case nir_instr_type_intrinsic:
-                intr = nir_instr_as_intrinsic(instr);
-                sysval = midgard_nir_sysval_for_intrinsic(intr);
-                dst = &intr->dest;
-                break;
-        case nir_instr_type_tex:
-                tex = nir_instr_as_tex(instr);
-                if (tex->op != nir_texop_txs)
-                        break;
-
-                sysval = PAN_SYSVAL(TEXTURE_SIZE,
-                                    PAN_TXS_SYSVAL_ID(tex->texture_index,
-                                                      nir_tex_instr_dest_size(tex) -
-                                                      (tex->is_array ? 1 : 0),
-                                                      tex->is_array));
-                dst  = &tex->dest;
-                break;
-        default:
-                break;
-        }
-
-        if (dest && dst)
-                *dest = nir_dest_index(ctx, dst);
-
-        return sysval;
-}
-
-static void
-midgard_nir_assign_sysval_body(compiler_context *ctx, nir_instr *instr)
-{
-        int sysval;
-
-        sysval = sysval_for_instr(ctx, instr, NULL);
-        if (sysval < 0)
-                return;
-
-        /* We have a sysval load; check if it's already been assigned */
-
-        if (_mesa_hash_table_u64_search(ctx->sysval_to_id, sysval))
-                return;
-
-        /* It hasn't -- so assign it now! */
-
-        unsigned id = ctx->sysval_count++;
-        _mesa_hash_table_u64_insert(ctx->sysval_to_id, sysval, (void *) ((uintptr_t) id + 1));
-        ctx->sysvals[id] = sysval;
-}
-
-static void
-midgard_nir_assign_sysvals(compiler_context *ctx, nir_shader *shader)
-{
-        ctx->sysval_count = 0;
-
-        nir_foreach_function(function, shader) {
-                if (!function->impl) continue;
-
-                nir_foreach_block(block, function->impl) {
-                        nir_foreach_instr_safe(instr, block) {
-                                midgard_nir_assign_sysval_body(ctx, instr);
-                        }
-                }
-        }
 }
 
 static bool
@@ -781,7 +647,7 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
 
         bool is_ssa = instr->dest.dest.is_ssa;
 
-        unsigned dest = nir_dest_index(ctx, &instr->dest.dest);
+        unsigned dest = nir_dest_index(&instr->dest.dest);
         unsigned nr_components = nir_dest_num_components(instr->dest.dest);
         unsigned nr_inputs = nir_op_infos[instr->op].num_inputs;
 
@@ -1216,7 +1082,7 @@ mir_set_intr_mask(nir_instr *instr, midgard_instruction *ins, bool is_read)
         }
 
         /* Once we have the NIR mask, we need to normalize to work in 32-bit space */
-        unsigned bytemask = mir_to_bytemask(mir_mode_for_destsize(dsize), nir_mask);
+        unsigned bytemask = pan_to_bytemask(dsize, nir_mask);
         mir_set_bytemask(ins, bytemask);
 
         if (dsize == 64)
@@ -1368,17 +1234,16 @@ emit_attr_read(
 }
 
 static void
-emit_sysval_read(compiler_context *ctx, nir_instr *instr, signed dest_override,
+emit_sysval_read(compiler_context *ctx, nir_instr *instr,
                 unsigned nr_components, unsigned offset)
 {
-        unsigned dest = 0;
+        nir_dest nir_dest;
 
         /* Figure out which uniform this is */
-        int sysval = sysval_for_instr(ctx, instr, &dest);
-        void *val = _mesa_hash_table_u64_search(ctx->sysval_to_id, sysval);
+        int sysval = panfrost_sysval_for_instr(instr, &nir_dest);
+        void *val = _mesa_hash_table_u64_search(ctx->sysvals.sysval_to_id, sysval);
 
-        if (dest_override >= 0)
-                dest = dest_override;
+        unsigned dest = nir_dest_index(&nir_dest);
 
         /* Sysvals are prefix uniforms */
         unsigned uniform = ((uintptr_t) val) - 1;
@@ -1438,7 +1303,7 @@ emit_fragment_store(compiler_context *ctx, unsigned src, enum midgard_rt_id rt)
 static void
 emit_compute_builtin(compiler_context *ctx, nir_intrinsic_instr *instr)
 {
-        unsigned reg = nir_dest_index(ctx, &instr->dest);
+        unsigned reg = nir_dest_index(&instr->dest);
         midgard_instruction ins = m_ld_compute_id(reg, 0);
         ins.mask = mask_of(3);
         ins.swizzle[0][3] = COMPONENT_X; /* xyzx */
@@ -1462,7 +1327,7 @@ vertex_builtin_arg(nir_op op)
 static void
 emit_vertex_builtin(compiler_context *ctx, nir_intrinsic_instr *instr)
 {
-        unsigned reg = nir_dest_index(ctx, &instr->dest);
+        unsigned reg = nir_dest_index(&instr->dest);
         emit_attr_read(ctx, reg, vertex_builtin_arg(instr->intrinsic), 1, nir_type_int);
 }
 
@@ -1555,10 +1420,10 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 /* We may need to apply a fractional offset */
                 int component = (is_flat || is_interp) ?
                                 nir_intrinsic_component(instr) : 0;
-                reg = nir_dest_index(ctx, &instr->dest);
+                reg = nir_dest_index(&instr->dest);
 
                 if (is_uniform && !ctx->is_blend) {
-                        emit_ubo_read(ctx, &instr->instr, reg, (ctx->sysval_count + offset) * 16, indirect_offset, 4, 0);
+                        emit_ubo_read(ctx, &instr->instr, reg, (ctx->sysvals.sysval_count + offset) * 16, indirect_offset, 4, 0);
                 } else if (is_ubo) {
                         nir_src index = instr->src[0];
 
@@ -1597,7 +1462,7 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
         case nir_intrinsic_load_raw_output_pan:
         case nir_intrinsic_load_output_u8_as_fp16_pan:
-                reg = nir_dest_index(ctx, &instr->dest);
+                reg = nir_dest_index(&instr->dest);
                 assert(ctx->is_blend);
 
                 /* T720 and below use different blend opcodes with slightly
@@ -1625,7 +1490,7 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
         case nir_intrinsic_load_blend_const_color_rgba: {
                 assert(ctx->is_blend);
-                reg = nir_dest_index(ctx, &instr->dest);
+                reg = nir_dest_index(&instr->dest);
 
                 /* Blend constants are embedded directly in the shader and
                  * patched in, so we use some magic routing */
@@ -1769,18 +1634,18 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 break;
 
         case nir_intrinsic_load_ssbo_address:
-                emit_sysval_read(ctx, &instr->instr, ~0, 1, 0);
+                emit_sysval_read(ctx, &instr->instr, 1, 0);
                 break;
 
         case nir_intrinsic_get_buffer_size:
-                emit_sysval_read(ctx, &instr->instr, ~0, 1, 8);
+                emit_sysval_read(ctx, &instr->instr, 1, 8);
                 break;
  
         case nir_intrinsic_load_viewport_scale:
         case nir_intrinsic_load_viewport_offset:
         case nir_intrinsic_load_num_work_groups:
         case nir_intrinsic_load_sampler_lod_parameters_pan:
-                emit_sysval_read(ctx, &instr->instr, ~0, 3, 0);
+                emit_sysval_read(ctx, &instr->instr, 3, 0);
                 break;
 
         case nir_intrinsic_load_work_group_id:
@@ -1898,7 +1763,7 @@ emit_texop_native(compiler_context *ctx, nir_tex_instr *instr,
         midgard_instruction ins = {
                 .type = TAG_TEXTURE_4,
                 .mask = 0xF,
-                .dest = nir_dest_index(ctx, &instr->dest),
+                .dest = nir_dest_index(&instr->dest),
                 .src = { ~0, ~0, ~0, ~0 },
                 .swizzle = SWIZZLE_IDENTITY_4,
                 .texture = {
@@ -2084,7 +1949,7 @@ emit_tex(compiler_context *ctx, nir_tex_instr *instr)
                 emit_texop_native(ctx, instr, TEXTURE_OP_TEXEL_FETCH);
                 break;
         case nir_texop_txs:
-                emit_sysval_read(ctx, &instr->instr, ~0, 4, 0);
+                emit_sysval_read(ctx, &instr->instr, 4, 0);
                 break;
         default: {
                 fprintf(stderr, "Unhandled texture op: %d\n", instr->op);
@@ -2480,13 +2345,13 @@ emit_block(compiler_context *ctx, nir_block *block)
         if (!this_block)
                 this_block = create_empty_block(ctx);
 
-        list_addtail(&this_block->link, &ctx->blocks);
+        list_addtail(&this_block->base.link, &ctx->blocks);
 
-        this_block->is_scheduled = false;
+        this_block->scheduled = false;
         ++ctx->block_count;
 
         /* Set up current block */
-        list_inithead(&this_block->instructions);
+        list_inithead(&this_block->base.instructions);
         ctx->current_block = this_block;
 
         nir_foreach_instr(instr, block) {
@@ -2543,11 +2408,11 @@ emit_if(struct compiler_context *ctx, nir_if *nif)
 
         ctx->after_block = create_empty_block(ctx);
 
-        midgard_block_add_successor(before_block, then_block);
-        midgard_block_add_successor(before_block, else_block);
+        pan_block_add_successor(&before_block->base, &then_block->base);
+        pan_block_add_successor(&before_block->base, &else_block->base);
 
-        midgard_block_add_successor(end_then_block, ctx->after_block);
-        midgard_block_add_successor(end_else_block, ctx->after_block);
+        pan_block_add_successor(&end_then_block->base, &ctx->after_block->base);
+        pan_block_add_successor(&end_else_block->base, &ctx->after_block->base);
 }
 
 static void
@@ -2571,8 +2436,8 @@ emit_loop(struct compiler_context *ctx, nir_loop *nloop)
         emit_mir_instruction(ctx, br_back);
 
         /* Mark down that branch in the graph. */
-        midgard_block_add_successor(start_block, loop_block);
-        midgard_block_add_successor(ctx->current_block, loop_block);
+        pan_block_add_successor(&start_block->base, &loop_block->base);
+        pan_block_add_successor(&ctx->current_block->base, &loop_block->base);
 
         /* Find the index of the block about to follow us (note: we don't add
          * one; blocks are 0-indexed so we get a fencepost problem) */
@@ -2582,8 +2447,8 @@ emit_loop(struct compiler_context *ctx, nir_loop *nloop)
          * now that we can allocate a block number for them */
         ctx->after_block = create_empty_block(ctx);
 
-        list_for_each_entry_from(struct midgard_block, block, start_block, &ctx->blocks, link) {
-                mir_foreach_instr_in_block(block, ins) {
+        mir_foreach_block_from(ctx, start_block, _block) {
+                mir_foreach_instr_in_block(((midgard_block *) _block), ins) {
                         if (ins->type != TAG_ALU_4) continue;
                         if (!ins->compact_branch) continue;
 
@@ -2599,7 +2464,7 @@ emit_loop(struct compiler_context *ctx, nir_loop *nloop)
                         ins->branch.target_type = TARGET_GOTO;
                         ins->branch.target_block = break_block_idx;
 
-                        midgard_block_add_successor(block, ctx->after_block);
+                        pan_block_add_successor(_block, &ctx->after_block->base);
                 }
         }
 
@@ -2653,7 +2518,8 @@ midgard_get_first_tag_from_block(compiler_context *ctx, unsigned block_idx)
 {
         midgard_block *initial_block = mir_get_block(ctx, block_idx);
 
-        mir_foreach_block_from(ctx, initial_block, v) {
+        mir_foreach_block_from(ctx, initial_block, _v) {
+                midgard_block *v = (midgard_block *) _v;
                 if (v->quadword_count) {
                         midgard_bundle *initial_bundle =
                                 util_dynarray_element(&v->bundles, midgard_bundle, 0);
@@ -2731,7 +2597,7 @@ mir_add_writeout_loops(compiler_context *ctx)
                 if (!br) continue;
 
                 unsigned popped = br->branch.target_block;
-                midgard_block_add_successor(mir_get_block(ctx, popped - 1), ctx->current_block);
+                pan_block_add_successor(&(mir_get_block(ctx, popped - 1)->base), &ctx->current_block->base);
                 br->branch.target_block = emit_fragment_epilogue(ctx, rt);
 
                 /* If we have more RTs, we'll need to restore back after our
@@ -2741,7 +2607,7 @@ mir_add_writeout_loops(compiler_context *ctx)
                         midgard_instruction uncond = v_branch(false, false);
                         uncond.branch.target_block = popped;
                         emit_mir_instruction(ctx, uncond);
-                        midgard_block_add_successor(ctx->current_block, mir_get_block(ctx, popped));
+                        pan_block_add_successor(&ctx->current_block->base, &(mir_get_block(ctx, popped)->base));
                         schedule_barrier(ctx);
                 } else {
                         /* We're last, so we can terminate here */
@@ -2751,7 +2617,7 @@ mir_add_writeout_loops(compiler_context *ctx)
 }
 
 int
-midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_blend, unsigned blend_rt, unsigned gpu_id, bool shaderdb)
+midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_blend, unsigned blend_rt, unsigned gpu_id, bool shaderdb)
 {
         struct util_dynarray *compiled = &program->compiled;
 
@@ -2776,7 +2642,6 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
 
         ctx->ssa_constants = _mesa_hash_table_u64_create(NULL);
         ctx->hash_to_temp = _mesa_hash_table_u64_create(NULL);
-        ctx->sysval_to_id = _mesa_hash_table_u64_create(NULL);
 
         /* Record the varying mapping for the command stream's bookkeeping */
 
@@ -2829,11 +2694,11 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
         /* Assign sysvals and counts, now that we're sure
          * (post-optimisation) */
 
-        midgard_nir_assign_sysvals(ctx, nir);
+        panfrost_nir_assign_sysvals(&ctx->sysvals, nir);
 
         program->uniform_count = nir->num_uniforms;
-        program->sysval_count = ctx->sysval_count;
-        memcpy(program->sysvals, ctx->sysvals, sizeof(ctx->sysvals[0]) * ctx->sysval_count);
+        program->sysval_count = ctx->sysvals.sysval_count;
+        memcpy(program->sysvals, ctx->sysvals.sysvals, sizeof(ctx->sysvals.sysvals[0]) * ctx->sysvals.sysval_count);
 
         nir_foreach_function(func, nir) {
                 if (!func->impl)
@@ -2851,7 +2716,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
 
         /* Per-block lowering before opts */
 
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 inline_alu_constants(ctx, block);
                 midgard_opt_promote_fmov(ctx, block);
                 embedded_to_inline_constant(ctx, block);
@@ -2863,7 +2729,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
         do {
                 progress = false;
 
-                mir_foreach_block(ctx, block) {
+                mir_foreach_block(ctx, _block) {
+                        midgard_block *block = (midgard_block *) _block;
                         progress |= midgard_opt_pos_propagate(ctx, block);
                         progress |= midgard_opt_copy_prop(ctx, block);
                         progress |= midgard_opt_dead_code_eliminate(ctx, block);
@@ -2878,7 +2745,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
                 }
         } while (progress);
 
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 midgard_lower_invert(ctx, block);
                 midgard_lower_derivatives(ctx, block);
         }
@@ -2886,7 +2754,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
         /* Nested control-flow can result in dead branches at the end of the
          * block. This messes with our analysis and is just dead code, so cull
          * them */
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 midgard_opt_cull_dead_branch(ctx, block);
         }
 
@@ -2907,7 +2776,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
 
         int br_block_idx = 0;
 
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 util_dynarray_foreach(&block->bundles, midgard_bundle, bundle) {
                         for (int c = 0; c < bundle->instruction_count; ++c) {
                                 midgard_instruction *ins = bundle->instructions[c];
@@ -3019,12 +2889,14 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
         /* Cache _all_ bundles in source order for lookahead across failed branches */
 
         int bundle_count = 0;
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 bundle_count += block->bundles.size / sizeof(midgard_bundle);
         }
         midgard_bundle **source_order_bundles = malloc(sizeof(midgard_bundle *) * bundle_count);
         int bundle_idx = 0;
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 util_dynarray_foreach(&block->bundles, midgard_bundle, bundle) {
                         source_order_bundles[bundle_idx++] = bundle;
                 }
@@ -3036,7 +2908,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
          * need to lookahead. Unless this is the last instruction, in
          * which we return 1. */
 
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 mir_foreach_bundle_in_block(block, bundle) {
                         int lookahead = 1;
 
@@ -3071,7 +2944,8 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
 
                 /* Count instructions and bundles */
 
-                mir_foreach_block(ctx, block) {
+                mir_foreach_block(ctx, _block) {
+                        midgard_block *block = (midgard_block *) _block;
                         nr_bundles += util_dynarray_num_elements(
                                               &block->bundles, midgard_bundle);
 

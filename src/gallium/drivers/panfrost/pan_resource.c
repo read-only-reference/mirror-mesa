@@ -47,7 +47,25 @@
 #include "pan_resource.h"
 #include "pan_util.h"
 #include "pan_tiling.h"
+#include "pandecode/decode.h"
 #include "panfrost-quirks.h"
+
+/* Wrapper around panfrost_bo_create that handles pandecode */
+
+struct panfrost_bo *
+pan_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags)
+{
+        struct panfrost_bo *bo = panfrost_bo_create(dev, size, flags);
+
+        if (pan_debug & (PAN_DBG_TRACE | PAN_DBG_SYNC)) {
+                if (flags & PAN_BO_INVISIBLE)
+                        pandecode_inject_mmap(bo->gpu, NULL, bo->size, NULL);
+                else if (!(flags & PAN_BO_DELAY_MMAP))
+                        pandecode_inject_mmap(bo->gpu, bo->cpu, bo->size, NULL);
+        }
+
+        return bo;
+}
 
 void
 panfrost_resource_reset_damage(struct panfrost_resource *pres)
@@ -66,7 +84,7 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
                               struct winsys_handle *whandle,
                               unsigned usage)
 {
-        struct panfrost_screen *screen = pan_screen(pscreen);
+        struct panfrost_device *dev = pan_device(pscreen);
         struct panfrost_resource *rsc;
         struct pipe_resource *prsc;
 
@@ -83,7 +101,7 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
         pipe_reference_init(&prsc->reference, 1);
         prsc->screen = pscreen;
 
-        rsc->bo = panfrost_bo_import(screen, whandle->handle);
+        rsc->bo = panfrost_bo_import(dev, whandle->handle);
         rsc->internal_format = templat->format;
         rsc->layout = MALI_TEXTURE_LINEAR;
         rsc->slices[0].stride = whandle->stride;
@@ -91,9 +109,9 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
         rsc->slices[0].initialized = true;
         panfrost_resource_reset_damage(rsc);
 
-        if (screen->ro) {
+        if (dev->ro) {
                 rsc->scanout =
-                        renderonly_create_gpu_import_for_resource(prsc, screen->ro, NULL);
+                        renderonly_create_gpu_import_for_resource(prsc, dev->ro, NULL);
                 /* failure is expected in some cases.. */
         }
 
@@ -107,7 +125,7 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
                              struct winsys_handle *handle,
                              unsigned usage)
 {
-        struct panfrost_screen *screen = pan_screen(pscreen);
+        struct panfrost_device *dev = pan_device(pscreen);
         struct panfrost_resource *rsrc = (struct panfrost_resource *) pt;
         struct renderonly_scanout *scanout = rsrc->scanout;
 
@@ -130,7 +148,7 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
                                 .flags = DRM_CLOEXEC,
                         };
 
-                        int ret = drmIoctl(screen->ro->kms_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &args);
+                        int ret = drmIoctl(dev->ro->kms_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &args);
                         if (ret == -1)
                                 return false;
 
@@ -209,14 +227,14 @@ static struct pipe_resource *
 panfrost_create_scanout_res(struct pipe_screen *screen,
                             const struct pipe_resource *template)
 {
-        struct panfrost_screen *pscreen = pan_screen(screen);
+        struct panfrost_device *dev = pan_device(screen);
         struct pipe_resource scanout_templat = *template;
         struct renderonly_scanout *scanout;
         struct winsys_handle handle;
         struct pipe_resource *res;
 
         scanout = renderonly_scanout_for_resource(&scanout_templat,
-                        pscreen->ro, &handle);
+                        dev->ro, &handle);
         if (!scanout)
                 return NULL;
 
@@ -354,7 +372,7 @@ panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
 }
 
 static void
-panfrost_resource_create_bo(struct panfrost_screen *screen, struct panfrost_resource *pres)
+panfrost_resource_create_bo(struct panfrost_device *dev, struct panfrost_resource *pres)
 {
         struct pipe_resource *res = &pres->base;
 
@@ -387,7 +405,7 @@ panfrost_resource_create_bo(struct panfrost_screen *screen, struct panfrost_reso
         bool is_2d = (res->target == PIPE_TEXTURE_2D);
         bool is_sane_bpp = bpp == 8 || bpp == 16 || bpp == 32 || bpp == 64 || bpp == 128;
         bool should_tile = (res->usage != PIPE_USAGE_STREAM);
-        bool must_tile = (res->bind & PIPE_BIND_DEPTH_STENCIL) && (screen->quirks & MIDGARD_SFBD);
+        bool must_tile = (res->bind & PIPE_BIND_DEPTH_STENCIL) && (dev->quirks & MIDGARD_SFBD);
         bool can_tile = is_2d && is_sane_bpp && ((res->bind & ~valid_binding) == 0);
 
         /* FBOs we would like to checksum, if at all possible */
@@ -406,7 +424,7 @@ panfrost_resource_create_bo(struct panfrost_screen *screen, struct panfrost_reso
 
         /* We create a BO immediately but don't bother mapping, since we don't
          * care to map e.g. FBOs which the CPU probably won't touch */
-        pres->bo = panfrost_bo_create(screen, bo_size, PAN_BO_DELAY_MMAP);
+        pres->bo = pan_bo_create(dev, bo_size, PAN_BO_DELAY_MMAP);
 }
 
 void
@@ -500,7 +518,7 @@ panfrost_resource_create(struct pipe_screen *screen,
                 return panfrost_create_scanout_res(screen, template);
 
         struct panfrost_resource *so = rzalloc(screen, struct panfrost_resource);
-        struct panfrost_screen *pscreen = (struct panfrost_screen *) screen;
+        struct panfrost_device *dev = pan_device(screen);
 
         so->base = *template;
         so->base.screen = screen;
@@ -510,7 +528,7 @@ panfrost_resource_create(struct pipe_screen *screen,
 
         util_range_init(&so->valid_buffer_range);
 
-        panfrost_resource_create_bo(pscreen, so);
+        panfrost_resource_create_bo(dev, so);
         panfrost_resource_reset_damage(so);
 
         if (template->bind & PIPE_BIND_INDEX_BUFFER)
@@ -523,11 +541,11 @@ static void
 panfrost_resource_destroy(struct pipe_screen *screen,
                           struct pipe_resource *pt)
 {
-        struct panfrost_screen *pscreen = pan_screen(screen);
+        struct panfrost_device *dev = pan_device(screen);
         struct panfrost_resource *rsrc = (struct panfrost_resource *) pt;
 
         if (rsrc->scanout)
-                renderonly_scanout_destroy(rsrc->scanout, pscreen->ro);
+                renderonly_scanout_destroy(rsrc->scanout, dev->ro);
 
         if (rsrc->bo)
                 panfrost_bo_unreference(rsrc->bo);
@@ -536,39 +554,6 @@ panfrost_resource_destroy(struct pipe_screen *screen,
         ralloc_free(rsrc);
 }
 
-/* If we've been caching min/max indices and we update the index
- * buffer, that may invalidate the min/max. Check what's been cached vs
- * what we've written, and throw out invalid entries. */
-
-static void
-panfrost_invalidate_index_cache(struct panfrost_resource *rsrc, struct pipe_transfer *transfer)
-{
-        struct panfrost_minmax_cache *cache = rsrc->index_cache;
-
-        /* Ensure there is a cache to invalidate and a write */
-        if (!rsrc->index_cache) return;
-        if (!(transfer->usage & PIPE_TRANSFER_WRITE)) return;
-
-        unsigned valid_count = 0;
-
-        for (unsigned i = 0; i < cache->size; ++i) {
-                uint64_t key = cache->keys[i];
-
-                uint32_t start = key & 0xffffffff;
-                uint32_t count = key >> 32;
-
-                /* 1D range intersection */
-                bool invalid = MAX2(transfer->box.x, start) < MIN2(transfer->box.x + transfer->box.width, start + count);
-                if (!invalid) {
-                        cache->keys[valid_count] = key;
-                        cache->values[valid_count] = cache->values[i];
-                        valid_count++;
-                }
-        }
-
-        cache->size = valid_count;
-        cache->index = 0;
-}
 
 static void *
 panfrost_transfer_map(struct pipe_context *pctx,
@@ -595,6 +580,9 @@ panfrost_transfer_map(struct pipe_context *pctx,
         /* If we haven't already mmaped, now's the time */
         panfrost_bo_mmap(bo);
 
+        if (pan_debug & (PAN_DBG_TRACE | PAN_DBG_SYNC))
+                pandecode_inject_mmap(bo->gpu, bo->cpu, bo->size, NULL);
+
         if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
                 /* If the BO is used by one of the pending batches or if it's
                  * not ready yet (still accessed by one of the already flushed
@@ -602,7 +590,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
                  */
                 if (panfrost_pending_batches_access_bo(ctx, bo) ||
                     !panfrost_bo_wait(bo, 0, PAN_BO_ACCESS_RW)) {
-                        struct panfrost_screen *screen = pan_screen(pctx->screen);
+                        struct panfrost_device *dev = pan_device(pctx->screen);
                         /* We want the BO to be MMAPed. */
                         uint32_t flags = bo->flags & ~PAN_BO_DELAY_MMAP;
                         struct panfrost_bo *newbo = NULL;
@@ -613,7 +601,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
                          * doing to it.
                          */
                         if (!(bo->flags & (PAN_BO_IMPORTED | PAN_BO_EXPORTED)))
-                                newbo = panfrost_bo_create(screen, bo->size,
+                                newbo = pan_bo_create(dev, bo->size,
                                                            flags);
 
                         if (newbo) {
@@ -691,7 +679,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
 
                 if ((usage & PIPE_TRANSFER_WRITE) && (usage & PIPE_TRANSFER_MAP_DIRECTLY)) {
                         rsrc->slices[level].initialized = true;
-                        panfrost_invalidate_index_cache(rsrc, &transfer->base);
+                        panfrost_minmax_cache_invalidate(rsrc->index_cache, &transfer->base);
                 }
 
                 return bo->cpu
@@ -741,7 +729,7 @@ panfrost_transfer_unmap(struct pipe_context *pctx,
                        transfer->box.x,
                        transfer->box.x + transfer->box.width);
 
-        panfrost_invalidate_index_cache(prsrc, transfer);
+        panfrost_minmax_cache_invalidate(prsrc->index_cache, transfer);
 
         /* Derefence the resource */
         pipe_resource_reference(&transfer->resource, NULL);
@@ -845,7 +833,7 @@ panfrost_get_texture_address(
 
 void
 panfrost_resource_hint_layout(
-                struct panfrost_screen *screen,
+                struct panfrost_device *dev,
                 struct panfrost_resource *rsrc,
                 enum mali_texture_layout layout,
                 signed weight)
@@ -895,7 +883,7 @@ panfrost_resource_hint_layout(
         /* If we grew in size, reallocate the BO */
         if (new_size > rsrc->bo->size) {
                 panfrost_bo_unreference(rsrc->bo);
-                rsrc->bo = panfrost_bo_create(screen, new_size, PAN_BO_DELAY_MMAP);
+                rsrc->bo = pan_bo_create(dev, new_size, PAN_BO_DELAY_MMAP);
         }
 
         /* TODO: If there are textures bound, regenerate their descriptors */
@@ -926,15 +914,15 @@ static const struct u_transfer_vtbl transfer_vtbl = {
 };
 
 void
-panfrost_resource_screen_init(struct panfrost_screen *pscreen)
+panfrost_resource_screen_init(struct pipe_screen *pscreen)
 {
         //pscreen->base.resource_create_with_modifiers =
         //        panfrost_resource_create_with_modifiers;
-        pscreen->base.resource_create = u_transfer_helper_resource_create;
-        pscreen->base.resource_destroy = u_transfer_helper_resource_destroy;
-        pscreen->base.resource_from_handle = panfrost_resource_from_handle;
-        pscreen->base.resource_get_handle = panfrost_resource_get_handle;
-        pscreen->base.transfer_helper = u_transfer_helper_create(&transfer_vtbl,
+        pscreen->resource_create = u_transfer_helper_resource_create;
+        pscreen->resource_destroy = u_transfer_helper_resource_destroy;
+        pscreen->resource_from_handle = panfrost_resource_from_handle;
+        pscreen->resource_get_handle = panfrost_resource_get_handle;
+        pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
                                         true, false,
                                         true, true);
 }

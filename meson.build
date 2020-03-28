@@ -933,7 +933,11 @@ if cc.get_id() == 'msvc'
                '/wd4756',  # overflow in constant arithmetic
                '/wd4800',  # forcing value to bool 'true' or 'false' (performance warning)
                '/wd4996',  # disabled deprecated POSIX name warnings
-               '/wd4291']  # no matching operator delete found
+               '/wd4291',  # no matching operator delete found
+               '/wd4146',  # unary minus operator applied to unsigned type, result still unsigned
+               '/wd4200',  # nonstandard extension used: zero-sized array in struct/union
+               '/wd4624',  # destructor was implicitly defined as deleted [from LLVM]
+              ]
     if cc.has_argument(a)
       c_args += a
     endif
@@ -958,6 +962,7 @@ else
     '-fno-math-errno',
     '-fno-trapping-math',
     '-Qunused-arguments',
+    '-fno-common',
   ]
   # MinGW chokes on format specifiers and I can't get it all working
   if not (cc.get_id() == 'gcc' and host_machine.system() == 'windows')
@@ -1512,7 +1517,9 @@ else
   # Disable deprecated keyword warnings, since we have to use them for
   # old-bison compat.  See discussion in
   # https://gitlab.freedesktop.org/mesa/mesa/merge_requests/2161
-  prog_bison = [prog_bison, '-Wno-deprecated']
+  if meson.version().version_compare('>= 0.52.0') and find_program('bison', required : false, version : '> 2.3').found()
+    prog_bison = [prog_bison, '-Wno-deprecated']
+  endif
 
   prog_flex = find_program('flex', required : with_any_opengl)
 endif

@@ -37,7 +37,7 @@
 #include "compiler/nir/nir_builtin_builder.h"
 #include "compiler/nir/nir_deref.h"
 #include "main/errors.h"
-#include "main/imports.h"
+#include "util/imports.h"
 #include "main/mtypes.h"
 #include "main/shaderobj.h"
 #include "util/u_math.h"
@@ -316,6 +316,7 @@ nir_visitor::constant_copy(ir_constant *ir, void *mem_ctx)
       break;
 
    case GLSL_TYPE_FLOAT:
+   case GLSL_TYPE_FLOAT16:
    case GLSL_TYPE_DOUBLE:
       if (cols > 1) {
          ret->elements = ralloc_array(mem_ctx, nir_constant *, cols);
@@ -327,6 +328,11 @@ nir_visitor::constant_copy(ir_constant *ir, void *mem_ctx)
             case GLSL_TYPE_FLOAT:
                for (unsigned r = 0; r < rows; r++)
                   col_const->values[r].f32 = ir->value.f[c * rows + r];
+               break;
+
+            case GLSL_TYPE_FLOAT16:
+               for (unsigned r = 0; r < rows; r++)
+                  col_const->values[r].u16 = ir->value.f16[c * rows + r];
                break;
 
             case GLSL_TYPE_DOUBLE:
@@ -344,6 +350,11 @@ nir_visitor::constant_copy(ir_constant *ir, void *mem_ctx)
          case GLSL_TYPE_FLOAT:
             for (unsigned r = 0; r < rows; r++)
                ret->values[r].f32 = ir->value.f[r];
+            break;
+
+         case GLSL_TYPE_FLOAT16:
+            for (unsigned r = 0; r < rows; r++)
+               ret->values[r].u16 = ir->value.f16[r];
             break;
 
          case GLSL_TYPE_DOUBLE:
@@ -1538,7 +1549,7 @@ nir_visitor::visit(ir_call *ir)
 
          /* The value in shared memory is a 32-bit value */
          if (type->is_boolean())
-            ret = nir_i2b(&b, &instr->dest.ssa);
+            ret = nir_b2b1(&b, &instr->dest.ssa);
          break;
       }
       case nir_intrinsic_store_shared: {
@@ -1560,7 +1571,7 @@ nir_visitor::visit(ir_call *ir)
          nir_ssa_def *nir_val = evaluate_rvalue(val);
          /* The value in shared memory is a 32-bit value */
          if (val->type->is_boolean())
-            nir_val = nir_b2i32(&b, nir_val);
+            nir_val = nir_b2b32(&b, nir_val);
 
          instr->src[0] = nir_src_for_ssa(nir_val);
          instr->num_components = val->type->vector_elements;
@@ -2026,6 +2037,10 @@ nir_visitor::visit(ir_expression *ir)
    case ir_unop_b2i64:
    case ir_unop_d2f:
    case ir_unop_f2d:
+   case ir_unop_f162f:
+   case ir_unop_f2f16:
+   case ir_unop_f162b:
+   case ir_unop_b2f16:
    case ir_unop_d2i:
    case ir_unop_d2u:
    case ir_unop_d2b:
@@ -2061,6 +2076,11 @@ nir_visitor::visit(ir_expression *ir)
        * just assume 32 and we have to fix it up here.
        */
       result->bit_size = nir_alu_type_get_type_size(dst_type);
+      break;
+   }
+
+   case ir_unop_f2fmp: {
+      result = nir_build_alu(&b, nir_op_f2fmp, srcs[0], NULL, NULL, NULL);
       break;
    }
 
@@ -2538,6 +2558,9 @@ nir_visitor::visit(ir_texture *ir)
    switch (ir->type->base_type) {
    case GLSL_TYPE_FLOAT:
       instr->dest_type = nir_type_float;
+      break;
+   case GLSL_TYPE_FLOAT16:
+      instr->dest_type = nir_type_float16;
       break;
    case GLSL_TYPE_INT:
       instr->dest_type = nir_type_int;

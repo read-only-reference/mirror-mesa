@@ -91,9 +91,6 @@ panfrost_find_format(const struct util_format_description *desc)
         /* Check for special formats */
         switch (desc->format)
         {
-        case PIPE_FORMAT_NV12:
-                return MALI_NV12;
-
         case PIPE_FORMAT_R10G10B10X2_UNORM:
         case PIPE_FORMAT_B10G10R10X2_UNORM:
         case PIPE_FORMAT_R10G10B10A2_UNORM:
@@ -116,24 +113,22 @@ panfrost_find_format(const struct util_format_description *desc)
                 return MALI_RGB10_A2I;
 
         case PIPE_FORMAT_Z32_UNORM:
-                return MALI_Z32_UNORM;
-
         case PIPE_FORMAT_Z24X8_UNORM:
         case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-                /* Midgard has no dedicated samplers for Z24S8 and Z24X8
-                 * formats, and the GPU expects the depth to be encoded in an
-                 * IEEE 32-bit float. Turn all Z24_UNORM variants into R32UI
-                 * and let the shader do the conversion using bfe+fmul
-                 * instructions.
-                 */
-                return MALI_R32UI;
+                return MALI_Z32_UNORM;
 
         case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
                 /* Z32F = R32F to the hardware */
                 return MALI_R32F;
 
+        case PIPE_FORMAT_R3G3B2_UNORM:
+                return MALI_RGB332_UNORM;
+
         case PIPE_FORMAT_B5G6R5_UNORM:
                 return MALI_RGB565;
+
+        case PIPE_FORMAT_B5G5R5X1_UNORM:
+                return MALI_RGB5_X1_UNORM;
 
         case PIPE_FORMAT_B5G5R5A1_UNORM:
                 return MALI_RGB5_A1_UNORM;

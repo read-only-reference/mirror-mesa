@@ -617,14 +617,47 @@ enum isl_aux_usage {
     */
    ISL_AUX_USAGE_MC,
 
-   /** The auxiliary surface is a HiZ surface and CCS is also enabled */
+   /** The auxiliary surface is a HiZ surface operating in write-through mode
+    *  and CCS is also enabled
+    *
+    * In this mode, the HiZ and CCS surfaces act as a single fused compression
+    * surface where resolves and ambiguates operate on both surfaces at the
+    * same time.  In this mode, the HiZ surface operates in write-through
+    * mode where it is only used for accelerating depth testing and not for
+    * actual compression.  The CCS-compressed surface contains valid data at
+    * all times.
+    *
+    * @invariant isl_surf::samples == 1
+    */
+   ISL_AUX_USAGE_HIZ_CCS_WT,
+
+   /** The auxiliary surface is a HiZ surface with and CCS is also enabled
+    *
+    * In this mode, the HiZ and CCS surfaces act as a single fused compression
+    * surface where resolves and ambiguates operate on both surfaces at the
+    * same time.  In this mode, full HiZ compression is enabled and the
+    * CCS-compressed main surface may not contain valid data.  The only way to
+    * read the surface outside of the depth hardware is to do a full resolve
+    * which resolves both HiZ and CCS so the surface is in the pass-through
+    * state.
+    */
    ISL_AUX_USAGE_HIZ_CCS,
 
    /** The auxiliary surface is an MCS and CCS is also enabled
     *
+    * In this mode, we have fused MCS+CCS compression where the MCS is used
+    * for fast-clears and "identical samples" compression just like on Gen7-11
+    * but each plane is then CCS compressed.
+    *
     * @invariant isl_surf::samples > 1
     */
    ISL_AUX_USAGE_MCS_CCS,
+
+   /** CCS auxiliary data is used to compress a stencil buffer
+    *
+    * @invariant isl_surf::samples == 1
+    */
+   ISL_AUX_USAGE_STC_CCS,
 };
 
 /**
@@ -782,7 +815,10 @@ enum isl_aux_usage {
  *          the CCS and filling it with zeros.
  */
 enum isl_aux_state {
-   ISL_AUX_STATE_CLEAR = 0,
+#ifdef IN_UNIT_TEST
+   ISL_AUX_STATE_ASSERT,
+#endif
+   ISL_AUX_STATE_CLEAR,
    ISL_AUX_STATE_PARTIAL_CLEAR,
    ISL_AUX_STATE_COMPRESSED_CLEAR,
    ISL_AUX_STATE_COMPRESSED_NO_CLEAR,
@@ -795,6 +831,10 @@ enum isl_aux_state {
  * Enum which describes explicit aux transition operations.
  */
 enum isl_aux_op {
+#ifdef IN_UNIT_TEST
+   ISL_AUX_OP_ASSERT,
+#endif
+
    ISL_AUX_OP_NONE,
 
    /** Fast Clear
@@ -1584,6 +1624,12 @@ isl_format_has_bc_compression(enum isl_format fmt)
 }
 
 static inline bool
+isl_format_is_planar(enum isl_format fmt)
+{
+   return fmt == ISL_FORMAT_PLANAR_420_8;
+}
+
+static inline bool
 isl_format_is_yuv(enum isl_format fmt)
 {
    const struct isl_format_layout *fmtl = isl_format_get_layout(fmt);
@@ -1737,6 +1783,7 @@ static inline bool
 isl_aux_usage_has_hiz(enum isl_aux_usage usage)
 {
    return usage == ISL_AUX_USAGE_HIZ ||
+          usage == ISL_AUX_USAGE_HIZ_CCS_WT ||
           usage == ISL_AUX_USAGE_HIZ_CCS;
 }
 
@@ -1753,8 +1800,10 @@ isl_aux_usage_has_ccs(enum isl_aux_usage usage)
    return usage == ISL_AUX_USAGE_CCS_D ||
           usage == ISL_AUX_USAGE_CCS_E ||
           usage == ISL_AUX_USAGE_MC ||
+          usage == ISL_AUX_USAGE_HIZ_CCS_WT ||
           usage == ISL_AUX_USAGE_HIZ_CCS ||
-          usage == ISL_AUX_USAGE_MCS_CCS;
+          usage == ISL_AUX_USAGE_MCS_CCS ||
+          usage == ISL_AUX_USAGE_STC_CCS;
 }
 
 static inline bool
@@ -2261,14 +2310,6 @@ isl_tiling_get_intratile_offset_sa(enum isl_tiling tiling,
 uint32_t
 isl_surf_get_depth_format(const struct isl_device *dev,
                           const struct isl_surf *surf);
-
-/**
- * @brief determines if a surface supports writing through HIZ to the CCS.
- */
-bool
-isl_surf_supports_hiz_ccs_wt(const struct gen_device_info *dev,
-                             const struct isl_surf *surf,
-                             enum isl_aux_usage aux_usage);
 
 /**
  * @brief performs a copy from linear to tiled surface

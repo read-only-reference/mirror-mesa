@@ -282,58 +282,85 @@ brw_emit_prim(struct brw_context *brw,
 
 
 static void
-brw_merge_inputs(struct brw_context *brw)
+brw_clear_buffers(struct brw_context *brw)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   const struct gl_context *ctx = &brw->ctx;
-   GLuint i;
-
-   for (i = 0; i < brw->vb.nr_buffers; i++) {
+   for (unsigned i = 0; i < brw->vb.nr_buffers; ++i) {
       brw_bo_unreference(brw->vb.buffers[i].bo);
       brw->vb.buffers[i].bo = NULL;
    }
    brw->vb.nr_buffers = 0;
 
-   for (i = 0; i < VERT_ATTRIB_MAX; i++) {
-      struct brw_vertex_element *input = &brw->vb.inputs[i];
-      input->buffer = -1;
-      _mesa_draw_attrib_and_binding(ctx, i,
-                                    &input->glattrib, &input->glbinding);
+   for (unsigned i = 0; i < brw->vb.nr_enabled; ++i) {
+      brw->vb.enabled[i]->buffer = -1;
+   }
+#ifndef NDEBUG
+   for (unsigned i = 0; i < VERT_ATTRIB_MAX; i++) {
+      assert(brw->vb.inputs[i].buffer == -1);
+   }
+#endif
+}
+
+
+static uint8_t get_wa_flags(const struct gl_vertex_format *glformat)
+{
+   uint8_t wa_flags = 0;
+
+   switch (glformat->Type) {
+   case GL_FIXED:
+      wa_flags = glformat->Size;
+      break;
+
+   case GL_INT_2_10_10_10_REV:
+      wa_flags |= BRW_ATTRIB_WA_SIGN;
+      /* fallthough */
+
+   case GL_UNSIGNED_INT_2_10_10_10_REV:
+      if (glformat->Format == GL_BGRA)
+         wa_flags |= BRW_ATTRIB_WA_BGRA;
+
+      if (glformat->Normalized)
+         wa_flags |= BRW_ATTRIB_WA_NORMALIZE;
+      else if (!glformat->Integer)
+         wa_flags |= BRW_ATTRIB_WA_SCALE;
+
+      break;
    }
 
+   return wa_flags;
+}
+
+
+static void
+brw_merge_inputs(struct brw_context *brw)
+{
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   const struct gl_context *ctx = &brw->ctx;
+
    if (devinfo->gen < 8 && !devinfo->is_haswell) {
-      uint64_t mask = ctx->VertexProgram._Current->info.inputs_read;
       /* Prior to Haswell, the hardware can't natively support GL_FIXED or
        * 2_10_10_10_REV vertex formats.  Set appropriate workaround flags.
        */
-      while (mask) {
-         const struct gl_vertex_format *glformat;
-         uint8_t wa_flags = 0;
+      const struct gl_vertex_array_object *vao = ctx->Array._DrawVAO;
+      const uint64_t vs_inputs = ctx->VertexProgram._Current->info.inputs_read;
+      assert((vs_inputs & ~((uint64_t)VERT_BIT_ALL)) == 0);
 
-         i = u_bit_scan64(&mask);
-         glformat = &brw->vb.inputs[i].glattrib->Format;
+      unsigned vaomask = vs_inputs & _mesa_draw_array_bits(ctx);
+      while (vaomask) {
+         const gl_vert_attrib i = u_bit_scan(&vaomask);
+         const uint8_t wa_flags =
+            get_wa_flags(_mesa_draw_array_format(vao, i));
 
-         switch (glformat->Type) {
-
-         case GL_FIXED:
-            wa_flags = glformat->Size;
-            break;
-
-         case GL_INT_2_10_10_10_REV:
-            wa_flags |= BRW_ATTRIB_WA_SIGN;
-            /* fallthough */
-
-         case GL_UNSIGNED_INT_2_10_10_10_REV:
-            if (glformat->Format == GL_BGRA)
-               wa_flags |= BRW_ATTRIB_WA_BGRA;
-
-            if (glformat->Normalized)
-               wa_flags |= BRW_ATTRIB_WA_NORMALIZE;
-            else if (!glformat->Integer)
-               wa_flags |= BRW_ATTRIB_WA_SCALE;
-
-            break;
+         if (brw->vb.attrib_wa_flags[i] != wa_flags) {
+            brw->vb.attrib_wa_flags[i] = wa_flags;
+            brw->ctx.NewDriverState |= BRW_NEW_VS_ATTRIB_WORKAROUNDS;
          }
+      }
+
+      unsigned currmask = vs_inputs & _mesa_draw_current_bits(ctx);
+      while (currmask) {
+         const gl_vert_attrib i = u_bit_scan(&currmask);
+         const uint8_t wa_flags =
+            get_wa_flags(_mesa_draw_current_format(ctx, i));
 
          if (brw->vb.attrib_wa_flags[i] != wa_flags) {
             brw->vb.attrib_wa_flags[i] = wa_flags;
@@ -852,6 +879,7 @@ brw_prepare_drawing(struct gl_context *ctx,
 
    /* Bind all inputs, derive varying and size information:
     */
+   brw_clear_buffers(brw);
    brw_merge_inputs(brw);
 
    brw->ib.ib = ib;
@@ -990,7 +1018,7 @@ brw_draw_single_prim(struct gl_context *ctx,
       brw->baseinstance = base_instance;
       if (prim_id > 0) { /* For i == 0 we just did this before the loop */
          brw->ctx.NewDriverState |= BRW_NEW_VERTICES;
-         brw_merge_inputs(brw);
+         brw_clear_buffers(brw);
       }
    }
 

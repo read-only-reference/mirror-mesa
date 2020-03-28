@@ -85,17 +85,12 @@ static bool is_scheduled(struct ir3_instruction *instr)
 	return !!(instr->flags & IR3_INSTR_MARK);
 }
 
-static bool is_sfu_or_mem(struct ir3_instruction *instr)
-{
-	return is_sfu(instr) || is_mem(instr);
-}
-
 static void
 unuse_each_src(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 {
 	struct ir3_instruction *src;
 
-	foreach_ssa_src_n(src, n, instr) {
+	foreach_ssa_src_n (src, n, instr) {
 		if (__is_false_dep(instr, n))
 			continue;
 		if (instr->block != src->block)
@@ -134,7 +129,7 @@ transfer_use(struct ir3_sched_ctx *ctx, struct ir3_instruction *orig_instr,
 
 	debug_assert(is_scheduled(orig_instr));
 
-	foreach_ssa_src_n(src, n, new_instr) {
+	foreach_ssa_src_n (src, n, new_instr) {
 		if (__is_false_dep(new_instr, n))
 			continue;
 		if (is_half(new_instr)) {
@@ -153,7 +148,7 @@ use_each_src(struct ir3_instruction *instr)
 {
 	struct ir3_instruction *src;
 
-	foreach_ssa_src_n(src, n, instr) {
+	foreach_ssa_src_n (src, n, instr) {
 		if (__is_false_dep(instr, n))
 			continue;
 		use_instr(src);
@@ -206,7 +201,7 @@ update_use_count(struct ir3 *ir)
 	/* Shader outputs are also used:
 	 */
 	struct ir3_instruction *out;
-	foreach_output(out, ir)
+	foreach_output (out, ir)
 		use_instr(out);
 }
 
@@ -225,13 +220,6 @@ static void
 schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 {
 	debug_assert(ctx->block == instr->block);
-
-	/* maybe there is a better way to handle this than just stuffing
-	 * a nop.. ideally we'd know about this constraint in the
-	 * scheduling and depth calculation..
-	 */
-	if (ctx->scheduled && is_sfu_or_mem(ctx->scheduled) && is_sfu_or_mem(instr))
-		ir3_NOP(ctx->block);
 
 	/* remove from depth list:
 	 */
@@ -301,7 +289,7 @@ static bool
 could_sched(struct ir3_instruction *instr, struct ir3_instruction *src)
 {
 	struct ir3_instruction *other_src;
-	foreach_ssa_src(other_src, instr) {
+	foreach_ssa_src (other_src, instr) {
 		/* if dependency not scheduled, we aren't ready yet: */
 		if ((src != other_src) && !is_scheduled(other_src)) {
 			return false;
@@ -415,7 +403,7 @@ find_instr_recursive(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 	}
 
 	/* find unscheduled srcs: */
-	foreach_ssa_src(src, instr) {
+	foreach_ssa_src (src, instr) {
 		if (!is_scheduled(src) && (src->block == instr->block)) {
 			debug_assert(nsrcs < ARRAY_SIZE(srcs));
 			srcs[nsrcs++] = src;
@@ -456,7 +444,7 @@ live_effect(struct ir3_instruction *instr)
 	int new_live = dest_regs(instr);
 	int old_live = 0;
 
-	foreach_ssa_src_n(src, n, instr) {
+	foreach_ssa_src_n (src, n, instr) {
 		if (__is_false_dep(instr, n))
 			continue;
 
@@ -475,7 +463,7 @@ live_effect(struct ir3_instruction *instr)
 			struct ir3_instruction *src2;
 			bool last_use = true;
 
-			foreach_ssa_src(src2, src) {
+			foreach_ssa_src (src2, src) {
 				if (src2->use_count > 1) {
 					last_use = false;
 					break;
@@ -784,34 +772,10 @@ sched_block(struct ir3_sched_ctx *ctx, struct ir3_block *block)
 	}
 }
 
-static bool
-has_latency_to_hide(struct ir3 *ir)
-{
-	foreach_block (block, &ir->block_list) {
-		foreach_instr (instr, &block->instr_list) {
-			if (is_tex(instr))
-				return true;
-
-			if (is_load(instr)) {
-				switch (instr->opc) {
-				case OPC_LDLV:
-				case OPC_LDL:
-				case OPC_LDLW:
-					break;
-				default:
-					return true;
-				}
-			}
-		}
-	}
-
-	return false;
-}
-
 static void
 setup_thresholds(struct ir3_sched_ctx *ctx, struct ir3 *ir)
 {
-	if (has_latency_to_hide(ir)) {
+	if (ir3_has_latency_to_hide(ir)) {
 		ctx->live_threshold_hi = 2 * 16 * 4;
 		ctx->live_threshold_lo = 2 * 4 * 4;
 		ctx->depth_threshold_hi = 6;

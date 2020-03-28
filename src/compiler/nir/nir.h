@@ -1055,6 +1055,22 @@ nir_op_vec(unsigned components)
 }
 
 static inline bool
+nir_op_is_vec(nir_op op)
+{
+   switch (op) {
+   case nir_op_mov:
+   case nir_op_vec2:
+   case nir_op_vec3:
+   case nir_op_vec4:
+   case nir_op_vec8:
+   case nir_op_vec16:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static inline bool
 nir_is_float_control_signed_zero_inf_nan_preserve(unsigned execution_mode, unsigned bit_size)
 {
     return (16 == bit_size && execution_mode & FLOAT_CONTROLS_SIGNED_ZERO_INF_NAN_PRESERVE_FP16) ||
@@ -1451,16 +1467,16 @@ typedef enum {
    NIR_MEMORY_ACQ_REL        = NIR_MEMORY_ACQUIRE | NIR_MEMORY_RELEASE,
 
    /* Memory visibility operations. */
-   NIR_MEMORY_MAKE_AVAILABLE = 1 << 3,
-   NIR_MEMORY_MAKE_VISIBLE   = 1 << 4,
+   NIR_MEMORY_MAKE_AVAILABLE = 1 << 2,
+   NIR_MEMORY_MAKE_VISIBLE   = 1 << 3,
 } nir_memory_semantics;
 
 typedef enum {
-   NIR_SCOPE_DEVICE,
-   NIR_SCOPE_QUEUE_FAMILY,
-   NIR_SCOPE_WORKGROUP,
-   NIR_SCOPE_SUBGROUP,
    NIR_SCOPE_INVOCATION,
+   NIR_SCOPE_SUBGROUP,
+   NIR_SCOPE_WORKGROUP,
+   NIR_SCOPE_QUEUE_FAMILY,
+   NIR_SCOPE_DEVICE,
 } nir_scope;
 
 /**
@@ -3868,6 +3884,7 @@ bool nir_lower_flrp(nir_shader *shader, unsigned lowering_mask,
                     bool always_precise, bool have_ffma);
 
 bool nir_lower_alu_to_scalar(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
+bool nir_lower_bool_to_bitsize(nir_shader *shader);
 bool nir_lower_bool_to_float(nir_shader *shader);
 bool nir_lower_bool_to_int32(nir_shader *shader);
 bool nir_lower_int_to_float(nir_shader *shader);
@@ -3896,6 +3913,7 @@ typedef struct nir_lower_subgroups_options {
    bool lower_shuffle_to_32bit:1;
    bool lower_quad:1;
    bool lower_quad_broadcast_dynamic:1;
+   bool lower_quad_broadcast_dynamic_to_const:1;
 } nir_lower_subgroups_options;
 
 bool nir_lower_subgroups(nir_shader *shader,
@@ -4197,6 +4215,8 @@ typedef enum {
 bool nir_lower_interpolation(nir_shader *shader,
                              nir_lower_interpolation_options options);
 
+bool nir_lower_discard_to_demote(nir_shader *shader);
+
 bool nir_normalize_cubemap_coords(nir_shader *shader);
 
 void nir_live_ssa_defs_impl(nir_function_impl *impl);
@@ -4236,6 +4256,17 @@ bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_before_ffma(nir_shader *shader);
 bool nir_opt_algebraic_late(nir_shader *shader);
 bool nir_opt_constant_folding(nir_shader *shader);
+
+/* Try to combine a and b into a.  Return true if combination was possible,
+ * which will result in b being removed by the pass.  Return false if
+ * combination wasn't possible.
+ */
+typedef bool (*nir_combine_memory_barrier_cb)(
+   nir_intrinsic_instr *a, nir_intrinsic_instr *b, void *data);
+
+bool nir_opt_combine_memory_barriers(nir_shader *shader,
+                                     nir_combine_memory_barrier_cb combine_cb,
+                                     void *data);
 
 bool nir_opt_combine_stores(nir_shader *shader, nir_variable_mode modes);
 

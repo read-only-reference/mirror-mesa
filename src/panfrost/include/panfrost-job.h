@@ -287,16 +287,17 @@ enum mali_format {
 	MALI_ASTC_HDR_SUPP   = MALI_FORMAT_COMPRESSED | 0x17,
 
 	MALI_RGB565         = MALI_FORMAT_SPECIAL | 0x0,
+	MALI_RGB5_X1_UNORM  = MALI_FORMAT_SPECIAL | 0x1,
 	MALI_RGB5_A1_UNORM  = MALI_FORMAT_SPECIAL | 0x2,
 	MALI_RGB10_A2_UNORM = MALI_FORMAT_SPECIAL | 0x3,
 	MALI_RGB10_A2_SNORM = MALI_FORMAT_SPECIAL | 0x5,
 	MALI_RGB10_A2UI     = MALI_FORMAT_SPECIAL | 0x7,
 	MALI_RGB10_A2I      = MALI_FORMAT_SPECIAL | 0x9,
 
-	/* YUV formats */
-	MALI_NV12           = MALI_FORMAT_SPECIAL | 0xc,
+	MALI_RGB332_UNORM   = MALI_FORMAT_SPECIAL | 0xb,
+	MALI_RGB233_UNORM   = MALI_FORMAT_SPECIAL | 0xc,
 
-	MALI_Z32_UNORM      = MALI_FORMAT_SPECIAL | 0xD,
+	MALI_Z32_UNORM      = MALI_FORMAT_SPECIAL | 0xd,
 	MALI_R32_FIXED      = MALI_FORMAT_SPECIAL | 0x11,
 	MALI_RG32_FIXED     = MALI_FORMAT_SPECIAL | 0x12,
 	MALI_RGB32_FIXED    = MALI_FORMAT_SPECIAL | 0x13,
@@ -601,6 +602,11 @@ struct mali_shader_meta {
                          * - R61 : gl_SampleMaskIn and gl_SampleID, used by
                          *   varying interpolation.
                          * - R62 : unknown (bit always unset).
+                         *
+                         * Later GPUs (starting with Mali-G52?) support
+                         * preloading float varyings into r0-r7. This is
+                         * indicated by setting 0x40. There is no distinction
+                         * here between 1 varying and 2.
                          */
                         u32 preload_regs : 8;
                         /* In units of 8 bytes or 64 bits, since the
@@ -1491,7 +1497,14 @@ struct mali_shared_memory {
         mali_ptr unknown1;
 } __attribute__((packed));
 
+/* Configures multisampling on Bifrost fragment jobs */
 
+struct bifrost_multisampling {
+        u64 zero1;
+        u64 zero2;
+        mali_ptr sample_locations;
+        u64 zero4;
+} __attribute__((packed));
 
 struct mali_single_framebuffer {
         struct mali_shared_memory shared_memory;
@@ -1685,7 +1698,10 @@ struct mali_framebuffer_extra  {
 #define MALI_MFBD_EXTRA (1 << 13)
 
 struct mali_framebuffer {
-        struct mali_shared_memory shared_memory;
+        union {
+                struct mali_shared_memory shared_memory;
+                struct bifrost_multisampling msaa;
+        };
 
         /* 0x20 */
         u16 width1, height1;

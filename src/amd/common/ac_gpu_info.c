@@ -544,7 +544,7 @@ bool ac_query_gpu_info(int fd, void *dev_p,
 	 *
 	 * LDS is 128KB in WGP mode and 64KB in CU mode. Assume the WGP mode is used.
 	 */
-	info->lds_size_per_cu = info->chip_class >= GFX10 ? 128 * 1024 : 64 * 1024;
+	info->lds_size_per_workgroup = info->chip_class >= GFX10 ? 128 * 1024 : 64 * 1024;
 	info->lds_granularity = info->chip_class >= GFX7 ? 128 * 4 : 64 * 4;
 
 	assert(util_is_power_of_two_or_zero(dma.available_rings + 1));
@@ -613,10 +613,13 @@ bool ac_query_gpu_info(int fd, void *dev_p,
 
 	/* Get the number of good compute units. */
 	info->num_good_compute_units = 0;
-	for (i = 0; i < info->max_se; i++)
-		for (j = 0; j < info->max_sh_per_se; j++)
+	for (i = 0; i < info->max_se; i++) {
+		for (j = 0; j < info->max_sh_per_se; j++) {
+			info->cu_mask[i][j] = amdinfo->cu_bitmap[i][j];
 			info->num_good_compute_units +=
-				util_bitcount(amdinfo->cu_bitmap[i][j]);
+				util_bitcount(info->cu_mask[i][j]);
+		}
+	}
 	info->num_good_cu_per_sh = info->num_good_compute_units /
 				   (info->max_se * info->max_sh_per_se);
 
@@ -714,22 +717,27 @@ bool ac_query_gpu_info(int fd, void *dev_p,
 		info->num_physical_sgprs_per_simd = 128 * info->max_wave64_per_simd * 2;
 		info->min_sgpr_alloc = 128;
 		info->sgpr_alloc_granularity = 128;
+		/* Don't use late alloc on small chips. */
+		info->use_late_alloc = info->num_render_backends > 4;
 	} else if (info->chip_class >= GFX8) {
 		info->num_physical_sgprs_per_simd = 800;
 		info->min_sgpr_alloc = 16;
 		info->sgpr_alloc_granularity = 16;
+		info->use_late_alloc = true;
 	} else {
 		info->num_physical_sgprs_per_simd = 512;
 		info->min_sgpr_alloc = 8;
 		info->sgpr_alloc_granularity = 8;
+		/* Potential hang on Kabini: */
+		info->use_late_alloc = info->family != CHIP_KABINI;
 	}
 
 	info->max_sgpr_alloc = info->family == CHIP_TONGA ||
 			       info->family == CHIP_ICELAND ? 96 : 104;
 
-	info->min_vgpr_alloc = 4;
+	info->min_wave64_vgpr_alloc = 4;
 	info->max_vgpr_alloc = 256;
-	info->vgpr_alloc_granularity = info->chip_class >= GFX10 ? 8 : 4;
+	info->wave64_vgpr_alloc_granularity = 4;
 
 	info->num_physical_wave64_vgprs_per_simd = info->chip_class >= GFX10 ? 512 : 256;
 	info->num_simd_per_compute_unit = info->chip_class >= GFX10 ? 2 : 4;
@@ -831,7 +839,7 @@ void ac_print_gpu_info(struct radeon_info *info)
 	printf("    tcc_cache_line_size = %u\n", info->tcc_cache_line_size);
 	printf("    tcc_harvested = %u\n", info->tcc_harvested);
 	printf("    pc_lines = %u\n", info->pc_lines);
-	printf("    lds_size_per_cu = %u\n", info->lds_size_per_cu);
+	printf("    lds_size_per_workgroup = %u\n", info->lds_size_per_workgroup);
 	printf("    lds_granularity = %i\n", info->lds_granularity);
 	printf("    max_memory_clock = %i\n", info->max_memory_clock);
 	printf("    ce_ram_size = %i\n", info->ce_ram_size);
@@ -893,9 +901,9 @@ void ac_print_gpu_info(struct radeon_info *info)
 	printf("    min_sgpr_alloc = %i\n", info->min_sgpr_alloc);
 	printf("    max_sgpr_alloc = %i\n", info->max_sgpr_alloc);
 	printf("    sgpr_alloc_granularity = %i\n", info->sgpr_alloc_granularity);
-	printf("    min_vgpr_alloc = %i\n", info->min_vgpr_alloc);
+	printf("    min_wave64_vgpr_alloc = %i\n", info->min_wave64_vgpr_alloc);
 	printf("    max_vgpr_alloc = %i\n", info->max_vgpr_alloc);
-	printf("    vgpr_alloc_granularity = %i\n", info->vgpr_alloc_granularity);
+	printf("    wave64_vgpr_alloc_granularity = %i\n", info->wave64_vgpr_alloc_granularity);
 
 	printf("Render backend info:\n");
 	printf("    pa_sc_tile_steering_override = 0x%x\n", info->pa_sc_tile_steering_override);

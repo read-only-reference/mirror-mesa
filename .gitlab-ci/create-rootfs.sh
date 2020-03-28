@@ -3,6 +3,7 @@
 set -ex
 
 apt-get -y install --no-install-recommends \
+    ca-certificates \
     initramfs-tools \
     libpng16-16 \
     strace \
@@ -11,7 +12,6 @@ apt-get -y install --no-install-recommends \
     libdrm2 \
     libdrm-nouveau2 \
     firmware-qcom-media \
-    firmware-realtek \
     wget \
     xz-utils
 passwd root -d
@@ -24,12 +24,19 @@ exec sh
 EOF
 chmod +x  /init
 
+mkdir -p /lib/firmware/rtl_nic
+wget https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/rtl_nic/rtl8153a-3.fw -O /lib/firmware/rtl_nic/rtl8153a-3.fw
+
 #######################################################################
 # Strip the image to a small minimal system without removing the debian
 # toolchain.
 
-# xz compress firmware so it doesn't waste RAM at runtime.
-find /lib/firmware -type f -print0 | xargs -0r -P4 -n4 xz -T1 -C crc32
+# xz compress firmware so it doesn't waste RAM at runtime.  Except db820c's
+# GPU firmware, due to using a precompiled kernel without compression support.
+find /lib/firmware -type f -print0 | \
+    grep -vz a530 | \
+    xargs -0r -P4 -n4 xz -T1 -C crc32
+ln -s /lib/firmware/qcom/a530* /lib/firmware/
 
 # Copy timezone file and remove tzdata package
 rm -rf /etc/localtime

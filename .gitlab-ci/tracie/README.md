@@ -17,13 +17,13 @@ traces-db:
 traces:
   - path: glmark2/jellyfish.rdc
     expectations:
-      - device: intel-0x3185
+      - device: gl-intel-0x3185
         checksum: 58359ea4caf6ad44c6b65526881bbd17
-      - device: vmware-llvmpipe
+      - device: gl-vmware-llvmpipe
         checksum: d82267c25a0decdad7b563c56bb81106
   - path: supertuxkart/supertuxkart-antediluvian-abyss.rdc
     expectations:
-      - device: intel-0x3185
+      - device: gl-intel-0x3185
         checksum: ff827f7eb069afd87cc305a422cba939
 ```
 
@@ -50,15 +50,29 @@ individually, thus reducing storage requirements during CI runs.
 To enable trace testing on a new device:
 
 1. Create a new job in .gitlab-ci.yml. The job will need to be tagged
-   to run on runners with the appropriate hardware. Use the `.traces-test`
-   template job as a base, and make sure you set a unique value for the
-   `DEVICE_NAME` variable:
+   to run on runners with the appropriate hardware.
+
+   1. If you mean to test GL traces, use the `.traces-test-gl`
+      template jobs as a base, and make sure you set a unique value for the
+     `DEVICE_NAME` variable:
 
    ```yaml
-   my-hardware-traces:
+   my-hardware-gl-traces:
+     extends: .traces-test-gl
      variables:
-       DEVICE_NAME: "myhardware"
-     extends: .traces-test
+       DEVICE_NAME: "gl-myhardware"
+   ```
+
+   2. If you mean to test Vulkan traces, use the `.traces-test-vk`
+      template jobs as a base, set the `VK_DRIVER` variable, and make
+      sure you set a unique value for the `DEVICE_NAME` variable:
+
+   ```yaml
+   my-hardware-vk-traces:
+     extends: .traces-test-vk
+     variables:
+       VK_DRIVER: "radeon"
+       DEVICE_NAME: "vk-myhardware"
    ```
 
 2. Update the .gitlab-ci/traces.yml file with expectations for the new device.
@@ -68,8 +82,9 @@ To enable trace testing on a new device:
 
 ### Trace files
 
-Tracie supports both renderdoc (.rdc) and apitrace (.trace) files. Trace files
-need to have the correct extension so that tracie can detect them properly.
+Tracie supports renderdoc (.rdc), apitrace (.trace) and gfxreconstruct
+(.gfxr) files. Trace files need to have the correct extension so that
+tracie can detect them properly.
 
 The trace files that are contained in public traces-db repositories must be
 legally redistributable. This is typically true for FOSS games and
@@ -83,7 +98,8 @@ Mesa traces CI uses a set of scripts to replay traces and check the output
 against reference checksums.
 
 The high level script [tracie.sh](.gitlab-ci/tracie/tracie.sh) accepts
-a traces definition file and the type of traces (apitrace/renderdoc) to run:
+a traces definition file and the type of traces
+(apitrace/renderdoc/gfxreconstruct) to run:
 
     tracie.sh .gitlab-ci/traces.yml renderdoc
 
@@ -110,17 +126,34 @@ appended.
 
 Examples:
 
-    python3 dump_traces_images.py --device-name=vmware-llvmpipe mytrace.trace
-    python3 dump_traces_images.py --device-name=vmware-llvmpipe --calls=2075,3300 mytrace.trace
+    python3 dump_traces_images.py --device-name=gl-vmware-llvmpipe mytrace.trace
+    python3 dump_traces_images.py --device-name=gl-vmware-llvmpipe --calls=2075,3300 mytrace.trace
 
 ### Running the replay scripts locally
 
 It's often useful, especially during development, to be able to run the scripts
-locally. The scripts require a recent version of apitrace being in the path,
-and also the renderdoc python module being available.
+locally.
+
+Depending on the target 3D API, the scripts require a recent version
+of apitrace being in the path, and also the renderdoc python module
+being available, for GL traces.
 
 To ensure python3 can find the renderdoc python module you need to set
 `PYTHONPATH` to point to the location of `renderdoc.so` (binary python modules)
 and `LD_LIBRARY_PATH` to point to the location of `librenderdoc.so`. In the
 renderdoc build tree, both of these are in `renderdoc/<builddir>/lib`. Note
 that renderdoc doesn't install the `renderdoc.so` python module.
+
+In the case of Vulkan traces, the scripts need a recent version of
+gfxrecon-replay being in the path, and also the
+`VK_LAYER_LUNARG_screenshot` Vulkan layer from LunarG's VulkanTools.
+
+To ensure that this layer can be found when running the trace you need
+to set `VK_LAYER_PATH` to point to the location of
+`VkLayer_screenshot.json` and `LD_LIBRARY_PATH` to point to the
+location of `libVkLayer_screenshot.so`.
+
+In the case of DXGI traces, the scripts require Wine, a recent version
+of DXVK installed in the default `WINEPREFIX`, and a recent binary
+version of apitrace for Windows which should be reachable through
+Windows' `PATH` environment variable.

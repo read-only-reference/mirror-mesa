@@ -29,32 +29,10 @@
 #include <panfrost-job.h>
 #include "pan_screen.h"
 #include "pan_allocate.h"
+#include "pan_minmax_cache.h"
 #include "pan_texture.h"
 #include "drm-uapi/drm.h"
 #include "util/u_range.h"
-
-/* Index buffer min/max cache. We need to caclculate the min/max for arbitrary
- * slices (start, start + count) of the index buffer at drawtime. As this can
- * be quite expensive, we cache. Conceptually, we just use a hash table mapping
- * the key (start, count) to the value (min, max). In practice, mesa's hash
- * table implementation is higher overhead than we would like and makes
- * handling memory usage a little complicated. So we use this data structure
- * instead. Searching is O(n) to the size, but the size is capped at the
- * PANFROST_MINMAX_SIZE constant (so this is a tradeoff between cache hit/miss
- * ratio and cache search speed). Note that keys are adjacent so we get cache
- * line alignment benefits. Insertion is O(1) and in-order until the cache
- * fills up, after that it evicts the oldest cached value in a ring facilitated
- * by index.
- */
-
-#define PANFROST_MINMAX_SIZE 64
-
-struct panfrost_minmax_cache {
-        uint64_t keys[PANFROST_MINMAX_SIZE];
-        uint64_t values[PANFROST_MINMAX_SIZE];
-        unsigned size;
-        unsigned index;
-};
 
 struct panfrost_resource {
         struct pipe_resource base;
@@ -110,13 +88,13 @@ panfrost_get_texture_address(
         struct panfrost_resource *rsrc,
         unsigned level, unsigned face);
 
-void panfrost_resource_screen_init(struct panfrost_screen *screen);
+void panfrost_resource_screen_init(struct pipe_screen *screen);
 
 void panfrost_resource_context_init(struct pipe_context *pctx);
 
 void
 panfrost_resource_hint_layout(
-                struct panfrost_screen *screen,
+                struct panfrost_device *dev,
                 struct panfrost_resource *rsrc,
                 enum mali_texture_layout layout,
                 signed weight);
@@ -139,5 +117,9 @@ panfrost_resource_set_damage_region(struct pipe_screen *screen,
                                     struct pipe_resource *res,
                                     unsigned int nrects,
                                     const struct pipe_box *rects);
+
+
+struct panfrost_bo *
+pan_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags);
 
 #endif /* PAN_RESOURCE_H */

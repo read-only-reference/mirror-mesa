@@ -1319,11 +1319,8 @@ get_frag_coord(struct ir3_context *ctx)
 		 *
 		 */
 		for (int i = 0; i < 2; i++) {
-			xyzw[i] = ir3_SUB_S(b, xyzw[i], 0,
-					create_immed(b, 8), 0);
-			xyzw[i] = ir3_SHR_B(b, xyzw[i], 0,
-					create_immed(b, 4), 0);
 			xyzw[i] = ir3_COV(b, xyzw[i], TYPE_U32, TYPE_F32);
+			xyzw[i] = ir3_MUL_F(b, xyzw[i], 0, create_immed(b, fui(1.0 / 16.0)), 0);
 		}
 
 		ctx->frag_coord = ir3_create_collect(ctx, xyzw, 4);
@@ -2200,6 +2197,7 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
 
 		sam = ir3_META_TEX_PREFETCH(b);
 		__ssa_dst(sam)->wrmask = MASK(ncomp);   /* dst */
+		__ssa_src(sam, get_barycentric_pixel(ctx), 0);
 		sam->prefetch.input_offset =
 				ir3_nir_coord_offset(tex->src[idx].src.ssa);
 		sam->prefetch.tex  = tex->texture_index;
@@ -2431,7 +2429,7 @@ emit_block(struct ir3_context *ctx, nir_block *nblock)
 		ctx->addr_ht[i] = NULL;
 	}
 
-	nir_foreach_instr(instr, nblock) {
+	nir_foreach_instr (instr, nblock) {
 		ctx->cur_instr = instr;
 		emit_instr(ctx, instr);
 		ctx->cur_instr = NULL;
@@ -2478,7 +2476,7 @@ stack_pop(struct ir3_context *ctx)
 static void
 emit_cf_list(struct ir3_context *ctx, struct exec_list *list)
 {
-	foreach_list_typed(nir_cf_node, node, node, list) {
+	foreach_list_typed (nir_cf_node, node, node, list) {
 		switch (node->type) {
 		case nir_cf_node_block:
 			emit_block(ctx, nir_cf_node_as_block(node));
@@ -2759,7 +2757,7 @@ setup_input(struct ir3_context *ctx, nir_variable *in)
 		struct ir3_instruction *components[4];
 		unsigned mask = (1 << (ncomp + frac)) - 1;
 
-		foreach_input(in, ctx->ir) {
+		foreach_input (in, ctx->ir) {
 			if (in->input.inidx == n) {
 				input = in;
 				break;
@@ -2987,7 +2985,7 @@ static int
 max_drvloc(struct exec_list *vars)
 {
 	int drvloc = -1;
-	nir_foreach_variable(var, vars) {
+	nir_foreach_variable (var, vars) {
 		drvloc = MAX2(drvloc, (int)var->data.driver_location);
 	}
 	return drvloc;
@@ -3020,27 +3018,21 @@ emit_instructions(struct ir3_context *ctx)
 	 * only need ij_pixel for "old style" varying inputs (ie.
 	 * tgsi_to_nir)
 	 */
-	struct ir3_instruction *vcoord = NULL;
 	if (ctx->so->type == MESA_SHADER_FRAGMENT) {
-		struct ir3_instruction *xy[2];
-
-		vcoord = create_input(ctx, 0x3);
-		ir3_split_dest(ctx->block, xy, vcoord, 0, 2);
-
-		ctx->ij_pixel = ir3_create_collect(ctx, xy, 2);
+		ctx->ij_pixel = create_input(ctx, 0x3);
 	}
 
 	/* Setup inputs: */
-	nir_foreach_variable(var, &ctx->s->inputs) {
+	nir_foreach_variable (var, &ctx->s->inputs) {
 		setup_input(ctx, var);
 	}
 
 	/* Defer add_sysval_input() stuff until after setup_inputs(),
 	 * because sysvals need to be appended after varyings:
 	 */
-	if (vcoord) {
+	if (ctx->ij_pixel) {
 		add_sysval_input_compmask(ctx, SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL,
-				0x3, vcoord);
+				0x3, ctx->ij_pixel);
 	}
 
 
@@ -3079,12 +3071,12 @@ emit_instructions(struct ir3_context *ctx)
 	}
 
 	/* Setup outputs: */
-	nir_foreach_variable(var, &ctx->s->outputs) {
+	nir_foreach_variable (var, &ctx->s->outputs) {
 		setup_output(ctx, var);
 	}
 
 	/* Find # of samplers: */
-	nir_foreach_variable(var, &ctx->s->uniforms) {
+	nir_foreach_variable (var, &ctx->s->uniforms) {
 		ctx->so->num_samp += glsl_type_get_sampler_count(var->type);
 		/* just assume that we'll be reading from images.. if it
 		 * is write-only we don't have to count it, but not sure
@@ -3094,7 +3086,7 @@ emit_instructions(struct ir3_context *ctx)
 	}
 
 	/* NOTE: need to do something more clever when we support >1 fxn */
-	nir_foreach_register(reg, &fxn->registers) {
+	nir_foreach_register (reg, &fxn->registers) {
 		ir3_declare_array(ctx, reg);
 	}
 	/* And emit the body: */
@@ -3170,7 +3162,7 @@ fixup_binning_pass(struct ir3_context *ctx)
 
 			/* fixup outidx to point to new output table entry: */
 			struct ir3_instruction *out;
-			foreach_output(out, ir) {
+			foreach_output (out, ir) {
 				if (out->collect.outidx == i) {
 					out->collect.outidx = j;
 					break;
@@ -3441,7 +3433,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 		struct ir3_instruction *instr, *precolor[2];
 		int idx = 0;
 
-		foreach_input(instr, ir) {
+		foreach_input (instr, ir) {
 			if (instr->input.sysval != SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL)
 				continue;
 
@@ -3489,7 +3481,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 		so->outputs[i].regid = INVALID_REG;
 
 	struct ir3_instruction *out;
-	foreach_output(out, ir) {
+	foreach_output (out, ir) {
 		assert(out->opc == OPC_META_COLLECT);
 		unsigned outidx = out->collect.outidx;
 
@@ -3498,7 +3490,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	}
 
 	struct ir3_instruction *in;
-	foreach_input(in, ir) {
+	foreach_input (in, ir) {
 		assert(in->opc == OPC_META_INPUT);
 		unsigned inidx = in->input.inidx;
 
@@ -3550,6 +3542,10 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
 	/* Collect sampling instructions eligible for pre-dispatch. */
 	collect_tex_prefetches(ctx, ir);
+
+	if (so->type == MESA_SHADER_FRAGMENT &&
+			ctx->s->info.fs.needs_helper_invocations)
+		so->need_pixlod = true;
 
 out:
 	if (ret) {

@@ -116,6 +116,20 @@ static struct gen_device_info devinfo = {0};
 static int device = 0;
 static struct aub_file aub_file;
 
+static void
+ensure_device_info(int fd)
+{
+   /* We can't do this at open time as we're not yet authenticated. */
+   if (device == 0) {
+      fail_if(!gen_get_device_info_from_fd(fd, &devinfo),
+              "failed to identify chipset.\n");
+      device = devinfo.chipset_id;
+   } else if (devinfo.gen == 0) {
+      fail_if(!gen_get_device_info_from_pci_id(device, &devinfo),
+              "failed to identify chipset.\n");
+   }
+}
+
 static void *
 relocate_bo(int fd, struct bo *bo, const struct drm_i915_gem_execbuffer2 *execbuffer2,
             const struct drm_i915_gem_exec_object2 *obj)
@@ -202,15 +216,7 @@ dump_execbuffer2(int fd, struct drm_i915_gem_execbuffer2 *execbuffer2)
    int batch_index;
    void *data;
 
-   /* We can't do this at open time as we're not yet authenticated. */
-   if (device == 0) {
-      fail_if(!gen_get_device_info_from_fd(fd, &devinfo),
-              "failed to identify chipset.\n");
-      device = devinfo.chipset_id;
-   } else if (devinfo.gen == 0) {
-      fail_if(!gen_get_device_info_from_pci_id(device, &devinfo),
-              "failed to identify chipset.\n");
-   }
+   ensure_device_info(fd);
 
    if (!aub_file.file) {
       aub_file_init(&aub_file, output_file,
@@ -469,7 +475,61 @@ ioctl(int fd, unsigned long request, ...)
 
       case DRM_IOCTL_I915_GETPARAM: {
          struct drm_i915_getparam *getparam = argp;
-         return get_pci_id(fd, getparam->value);
+
+         ensure_device_info(fd);
+
+         if (getparam->param == I915_PARAM_CHIPSET_ID)
+            return get_pci_id(fd, getparam->value);
+
+         if (device_override) {
+            switch (getparam->param) {
+            case I915_PARAM_CS_TIMESTAMP_FREQUENCY:
+               *getparam->value = devinfo.timestamp_frequency;
+               return 0;
+
+            case I915_PARAM_HAS_WAIT_TIMEOUT:
+            case I915_PARAM_HAS_EXECBUF2:
+            case I915_PARAM_MMAP_VERSION:
+            case I915_PARAM_HAS_EXEC_ASYNC:
+            case I915_PARAM_HAS_EXEC_FENCE:
+            case I915_PARAM_HAS_EXEC_FENCE_ARRAY:
+               *getparam->value = 1;
+               return 0;
+
+            case I915_PARAM_HAS_EXEC_SOFTPIN:
+               *getparam->value = devinfo.gen >= 8 && !devinfo.is_cherryview;
+               return 0;
+
+            default:
+               return -1;
+            }
+         }
+
+         return libc_ioctl(fd, request, argp);
+      }
+
+      case DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM: {
+         struct drm_i915_gem_context_param *getparam = argp;
+
+         ensure_device_info(fd);
+
+         if (device_override) {
+            switch (getparam->param) {
+            case I915_CONTEXT_PARAM_GTT_SIZE:
+               if (devinfo.is_elkhartlake)
+                  getparam->value = 1ull << 36;
+               else if (devinfo.gen >= 8 && !devinfo.is_cherryview)
+                  getparam->value = 1ull << 48;
+               else
+                  getparam->value = 1ull << 31;
+               return 0;
+
+            default:
+               return -1;
+            }
+         }
+
+         return libc_ioctl(fd, request, argp);
       }
 
       case DRM_IOCTL_I915_GEM_EXECBUFFER: {

@@ -247,6 +247,7 @@ struct wait_ctx {
    bool pending_s_buffer_store = false; /* GFX10 workaround */
 
    wait_imm barrier_imm[barrier_count];
+   uint16_t barrier_events[barrier_count] = {}; /* use wait_event notion */
 
    std::map<PhysReg,wait_entry> gpr_map;
 
@@ -291,8 +292,11 @@ struct wait_ctx {
          }
       }
 
-      for (unsigned i = 0; i < barrier_count; i++)
+      for (unsigned i = 0; i < barrier_count; i++) {
          changed |= barrier_imm[i].combine(other->barrier_imm[i]);
+         changed |= other->barrier_events[i] & ~barrier_events[i];
+         barrier_events[i] |= other->barrier_events[i];
+      }
 
       return changed;
    }
@@ -399,17 +403,12 @@ wait_imm kill(Instruction* instr, wait_ctx& ctx)
    }
 
    if (instr->format == Format::PSEUDO_BARRIER) {
-      uint32_t workgroup_size = UINT32_MAX;
-      if (ctx.program->stage & sw_cs) {
-         unsigned* bsize = ctx.program->info->cs.block_size;
-         workgroup_size = bsize[0] * bsize[1] * bsize[2];
-      }
       switch (instr->opcode) {
       case aco_opcode::p_memory_barrier_common:
          imm.combine(ctx.barrier_imm[ffs(barrier_atomic) - 1]);
          imm.combine(ctx.barrier_imm[ffs(barrier_buffer) - 1]);
          imm.combine(ctx.barrier_imm[ffs(barrier_image) - 1]);
-         if (workgroup_size > ctx.program->wave_size)
+         if (ctx.program->workgroup_size > ctx.program->wave_size)
             imm.combine(ctx.barrier_imm[ffs(barrier_shared) - 1]);
          break;
       case aco_opcode::p_memory_barrier_atomic:
@@ -422,7 +421,7 @@ wait_imm kill(Instruction* instr, wait_ctx& ctx)
          imm.combine(ctx.barrier_imm[ffs(barrier_image) - 1]);
          break;
       case aco_opcode::p_memory_barrier_shared:
-         if (workgroup_size > ctx.program->wave_size)
+         if (ctx.program->workgroup_size > ctx.program->wave_size)
             imm.combine(ctx.barrier_imm[ffs(barrier_shared) - 1]);
          break;
       case aco_opcode::p_memory_barrier_gs_data:
@@ -452,14 +451,25 @@ wait_imm kill(Instruction* instr, wait_ctx& ctx)
       /* update barrier wait imms */
       for (unsigned i = 0; i < barrier_count; i++) {
          wait_imm& bar = ctx.barrier_imm[i];
-         if (bar.exp != wait_imm::unset_counter && imm.exp <= bar.exp)
+         uint16_t& bar_ev = ctx.barrier_events[i];
+         if (bar.exp != wait_imm::unset_counter && imm.exp <= bar.exp) {
             bar.exp = wait_imm::unset_counter;
-         if (bar.vm != wait_imm::unset_counter && imm.vm <= bar.vm)
+            bar_ev &= ~exp_events;
+         }
+         if (bar.vm != wait_imm::unset_counter && imm.vm <= bar.vm) {
             bar.vm = wait_imm::unset_counter;
-         if (bar.lgkm != wait_imm::unset_counter && imm.lgkm <= bar.lgkm)
+            bar_ev &= ~(vm_events & ~event_flat);
+         }
+         if (bar.lgkm != wait_imm::unset_counter && imm.lgkm <= bar.lgkm) {
             bar.lgkm = wait_imm::unset_counter;
-         if (bar.vs != wait_imm::unset_counter && imm.vs <= bar.vs)
+            bar_ev &= ~(lgkm_events & ~event_flat);
+         }
+         if (bar.vs != wait_imm::unset_counter && imm.vs <= bar.vs) {
             bar.vs = wait_imm::unset_counter;
+            bar_ev &= ~vs_events;
+         }
+         if (bar.vm == wait_imm::unset_counter && bar.lgkm == wait_imm::unset_counter)
+            bar_ev &= ~event_flat;
       }
 
       /* remove all gprs with higher counter from map */
@@ -491,12 +501,19 @@ wait_imm kill(Instruction* instr, wait_ctx& ctx)
    return imm;
 }
 
-void update_barrier_imm(wait_ctx& ctx, uint8_t counters, barrier_interaction barrier)
+void update_barrier_counter(uint8_t *ctr, unsigned max)
 {
-   unsigned barrier_index = ffs(barrier) - 1;
+   if (*ctr != wait_imm::unset_counter && *ctr < max)
+      (*ctr)++;
+}
+
+void update_barrier_imm(wait_ctx& ctx, uint8_t counters, wait_event event, barrier_interaction barrier)
+{
    for (unsigned i = 0; i < barrier_count; i++) {
       wait_imm& bar = ctx.barrier_imm[i];
-      if (i == barrier_index) {
+      uint16_t& bar_ev = ctx.barrier_events[i];
+      if (barrier & (1 << i)) {
+         bar_ev |= event;
          if (counters & counter_lgkm)
             bar.lgkm = 0;
          if (counters & counter_vm)
@@ -505,15 +522,15 @@ void update_barrier_imm(wait_ctx& ctx, uint8_t counters, barrier_interaction bar
             bar.exp = 0;
          if (counters & counter_vs)
             bar.vs = 0;
-      } else {
-         if (counters & counter_lgkm && bar.lgkm != wait_imm::unset_counter && bar.lgkm < ctx.max_lgkm_cnt)
-            bar.lgkm++;
-         if (counters & counter_vm && bar.vm != wait_imm::unset_counter && bar.vm < ctx.max_vm_cnt)
-            bar.vm++;
-         if (counters & counter_exp && bar.exp != wait_imm::unset_counter && bar.exp < ctx.max_exp_cnt)
-            bar.exp++;
-         if (counters & counter_vs && bar.vs != wait_imm::unset_counter && bar.vs < ctx.max_vs_cnt)
-            bar.vs++;
+      } else if (!(bar_ev & ctx.unordered_events) && !(ctx.unordered_events & event)) {
+         if (counters & counter_lgkm && (bar_ev & lgkm_events) == event)
+            update_barrier_counter(&bar.lgkm, ctx.max_lgkm_cnt);
+         if (counters & counter_vm && (bar_ev & vm_events) == event)
+            update_barrier_counter(&bar.vm, ctx.max_vm_cnt);
+         if (counters & counter_exp && (bar_ev & exp_events) == event)
+            update_barrier_counter(&bar.exp, ctx.max_exp_cnt);
+         if (counters & counter_vs && (bar_ev & vs_events) == event)
+            update_barrier_counter(&bar.vs, ctx.max_vs_cnt);
       }
    }
 }
@@ -531,7 +548,7 @@ void update_counters(wait_ctx& ctx, wait_event event, barrier_interaction barrie
    if (counters & counter_vs && ctx.vs_cnt <= ctx.max_vs_cnt)
       ctx.vs_cnt++;
 
-   update_barrier_imm(ctx, counters, barrier);
+   update_barrier_imm(ctx, counters, event, barrier);
 
    if (ctx.unordered_events & event)
       return;
@@ -569,7 +586,7 @@ void update_counters_for_flat_load(wait_ctx& ctx, barrier_interaction barrier=ba
    if (ctx.vm_cnt <= ctx.max_vm_cnt)
       ctx.vm_cnt++;
 
-   update_barrier_imm(ctx, counter_vm | counter_lgkm, barrier);
+   update_barrier_imm(ctx, counter_vm | counter_lgkm, event_flat, barrier);
 
    for (std::pair<PhysReg,wait_entry> e : ctx.gpr_map)
    {

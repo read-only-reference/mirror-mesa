@@ -166,6 +166,8 @@ static_assert(sizeof(struct sqtt_file_chunk_cpu_info) == 112,
 static void
 radv_sqtt_fill_cpu_info(struct sqtt_file_chunk_cpu_info *chunk)
 {
+	uint64_t system_ram_size = 0;
+
 	chunk->header.chunk_id.type = SQTT_FILE_CHUNK_TYPE_CPU_INFO;
 	chunk->header.chunk_id.index = 0;
 	chunk->header.major_version = 0;
@@ -181,7 +183,10 @@ radv_sqtt_fill_cpu_info(struct sqtt_file_chunk_cpu_info *chunk)
 	chunk->clock_speed = 0;
 	chunk->num_logical_cores = 0;
 	chunk->num_physical_cores = 0;
+
 	chunk->system_ram_size = 0;
+	if (os_get_total_physical_memory(&system_ram_size))
+		chunk->system_ram_size = system_ram_size / (1024 * 1024);
 }
 
 /**
@@ -345,8 +350,8 @@ radv_fill_sqtt_asic_info(struct radv_device *device,
 	if (rad_info->family == CHIP_FIJI || rad_info->chip_class >= GFX9)
 		chunk->flags |= SQTT_FILE_CHUNK_ASIC_INFO_FLAG_PS1_EVENT_TOKENS_ENABLED;
 
-	chunk->trace_shader_core_clock = rad_info->max_shader_clock;
-	chunk->trace_memory_clock = rad_info->max_memory_clock;
+	chunk->trace_shader_core_clock = rad_info->max_shader_clock * 1000000;
+	chunk->trace_memory_clock = rad_info->max_memory_clock * 1000000;
 
 	chunk->device_id = rad_info->pci_id;
 	chunk->device_revision_id = rad_info->pci_rev_id;
@@ -357,8 +362,8 @@ radv_fill_sqtt_asic_info(struct radv_device *device,
 	chunk->simd_per_compute_unit = rad_info->num_simd_per_compute_unit;
 	chunk->wavefronts_per_simd = rad_info->max_wave64_per_simd;
 
-	chunk->minimum_vgpr_alloc = rad_info->min_vgpr_alloc;
-	chunk->vgpr_alloc_granularity = rad_info->vgpr_alloc_granularity;
+	chunk->minimum_vgpr_alloc = rad_info->min_wave64_vgpr_alloc;
+	chunk->vgpr_alloc_granularity = rad_info->wave64_vgpr_alloc_granularity;
 	chunk->minimum_sgpr_alloc = rad_info->min_sgpr_alloc;
 	chunk->sgpr_alloc_granularity = rad_info->sgpr_alloc_granularity;
 
@@ -376,7 +381,7 @@ radv_fill_sqtt_asic_info(struct radv_device *device,
 	chunk->vram_size = rad_info->vram_size;
 	chunk->l2_cache_size = rad_info->l2_cache_size;
 	chunk->l1_cache_size = rad_info->l1_cache_size;
-	chunk->lds_size = rad_info->lds_size_per_cu;
+	chunk->lds_size = rad_info->lds_size_per_workgroup;
 
 	strncpy(chunk->gpu_name, device->physical_device->name, SQTT_GPU_NAME_MAX_SIZE);
 
@@ -392,9 +397,9 @@ radv_fill_sqtt_asic_info(struct radv_device *device,
 	chunk->memory_chip_type = radv_vram_type_to_sqtt_memory_type(rad_info->vram_type);
 	chunk->lds_granularity = rad_info->lds_granularity;
 
-	for (unsigned se = 0; se < 32; se++) {
+	for (unsigned se = 0; se < 4; se++) {
 		for (unsigned sa = 0; sa < 2; sa++) {
-			chunk->cu_mask[se][sa] = 0; /* TODO */
+			chunk->cu_mask[se][sa] = rad_info->cu_mask[se][sa];
 		}
 	}
 }
@@ -541,7 +546,7 @@ radv_sqtt_fill_sqtt_desc(struct radv_device *device,
 
 	chunk->sqtt_version = radv_chip_class_to_sqtt_version(device->physical_device->rad_info.chip_class);
 	chunk->shader_engine_index = shader_engine_index;
-	chunk->v1.instrumentation_spec_version = 0;
+	chunk->v1.instrumentation_spec_version = 1;
 	chunk->v1.instrumentation_api_version = 0;
 	chunk->v1.compute_unit_index = compute_unit_index;
 }

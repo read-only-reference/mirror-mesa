@@ -6,8 +6,8 @@ set -o xtrace
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get install -y \
-        ca-certificates \
-        gnupg \
+      ca-certificates \
+      gnupg
 
 # Upstream LLVM package repository
 apt-key add .gitlab-ci/container/llvm-snapshot.gpg.key
@@ -30,45 +30,45 @@ apt-get dist-upgrade -y
 apt-get install -y --no-remove \
       autoconf \
       automake \
+      ccache \
       cmake \
       g++ \
-      git \
-      git-lfs \
       gcc \
+      git \
       libexpat1 \
       libgbm-dev \
       libgles2-mesa-dev \
-      libpcre32-3 \
+      libllvm9 \
       libpcre3-dev \
-      libpng16-16 \
+      libpcre32-3 \
       libpng-dev \
+      libpng16-16 \
       libpython3.7 \
-      libvulkan1 \
       libvulkan-dev \
+      libvulkan1 \
       libwaffle-dev \
       libwayland-server0 \
       libxcb-keysyms1 \
       libxcb-keysyms1-dev \
       libxcb-xfixes0 \
-      libxkbcommon0 \
       libxkbcommon-dev \
-      libxrender1 \
+      libxkbcommon0 \
       libxrender-dev \
-      libllvm9 \
+      libxrender1 \
       make \
       meson \
       patch \
       pkg-config \
       python \
-      python3.7 \
-      python3.7-dev \
       python3-distutils \
       python3-mako \
       python3-numpy \
       python3-pil \
-      python3-pilkit \
+      python3-requests \
       python3-six \
       python3-yaml \
+      python3.7 \
+      python3.7-dev \
       qt5-default \
       qt5-qmake \
       waffle-utils \
@@ -76,6 +76,7 @@ apt-get install -y --no-remove \
       xvfb \
       zlib1g
 
+. .gitlab-ci/container/container_pre_build.sh
 
 ############### Build piglit
 
@@ -99,9 +100,12 @@ apt-get install -y --no-remove \
 
 ############### Uninstall the build software
 
+ccache --show-stats
+
 apt-get purge -y \
       autoconf \
       automake \
+      ccache \
       cmake \
       g++ \
       gcc \
@@ -119,7 +123,7 @@ apt-get purge -y \
       meson \
       patch \
       pkg-config \
-      python3.7-dev \
-      python3-distutils
+      python3-distutils \
+      python3.7-dev
 
 apt-get autoremove -y --purge

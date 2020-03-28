@@ -28,7 +28,7 @@
 
 #include "compiler/nir/nir.h"
 
-#include "main/imports.h"
+#include "util/imports.h"
 #include "main/context.h"
 #include "main/macros.h"
 #include "main/spirv_extensions.h"
@@ -331,6 +331,19 @@ void st_init_limits(struct pipe_screen *screen,
        * because it can actually optimize SSBO access.
        */
       options->LowerBufferInterfaceBlocks = !prefer_nir;
+
+      if (sh == MESA_SHADER_VERTEX) {
+         if (screen->get_param(screen, PIPE_CAP_VIEWPORT_TRANSFORM_LOWERED))
+            options->LowerBuiltinVariablesXfb |= VARYING_BIT_POS;
+         if (screen->get_param(screen, PIPE_CAP_PSIZ_CLAMPED))
+            options->LowerBuiltinVariablesXfb |= VARYING_BIT_PSIZ;
+      }
+
+      /* Initialize lower precision shader compiler option based on
+       * the value of PIPE_SHADER_CAP_FP16.
+       */
+      options->LowerPrecision =
+         screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_FP16);
    }
 
    c->MaxUserAssignableUniformLocations =
@@ -562,6 +575,12 @@ void st_init_limits(struct pipe_screen *screen,
 
    c->VertexBufferOffsetIsInt32 =
       screen->get_param(screen, PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET);
+
+   c->MultiDrawWithUserIndices =
+      screen->get_param(screen, PIPE_CAP_DRAW_INFO_START_WITH_USER_INDICES);
+
+   c->glBeginEndBufferSize =
+      screen->get_param(screen, PIPE_CAP_GL_BEGIN_END_BUFFER_SIZE);
 }
 
 
@@ -973,13 +992,6 @@ void st_init_extensions(struct pipe_screen *screen,
         { PIPE_FORMAT_ATC_RGB,
           PIPE_FORMAT_ATC_RGBA_EXPLICIT,
           PIPE_FORMAT_ATC_RGBA_INTERPOLATED } },
-
-      { { o(EXT_texture_norm16) },
-        { PIPE_FORMAT_R16G16B16_UNORM,
-          PIPE_FORMAT_R16_SNORM,
-          PIPE_FORMAT_R16G16_SNORM,
-          PIPE_FORMAT_R16G16B16_SNORM,
-          PIPE_FORMAT_R16G16B16A16_SNORM } },
    };
 
    /* Required: vertex fetch support. */
@@ -1427,6 +1439,9 @@ void st_init_extensions(struct pipe_screen *screen,
          consts->DisableVaryingPacking = GL_TRUE;
    }
 
+   if (!screen->get_param(screen, PIPE_CAP_PACKED_STREAM_OUTPUT))
+      consts->DisableTransformFeedbackPacking = GL_TRUE;
+
    unsigned max_fb_fetch_rts = screen->get_param(screen, PIPE_CAP_FBFETCH);
    bool coherent_fb_fetch =
       screen->get_param(screen, PIPE_CAP_FBFETCH_COHERENT);
@@ -1703,4 +1718,6 @@ void st_init_extensions(struct pipe_screen *screen,
       consts->SpirVExtensions = CALLOC_STRUCT(spirv_supported_extensions);
       _mesa_fill_supported_spirv_extensions(consts->SpirVExtensions, spirv_caps);
    }
+
+   consts->AllowDrawOutOfOrder = options->allow_draw_out_of_order;
 }

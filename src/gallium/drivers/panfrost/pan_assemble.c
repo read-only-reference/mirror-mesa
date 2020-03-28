@@ -37,16 +37,14 @@
 #include "tgsi/tgsi_dump.h"
 
 void
-panfrost_shader_compile(
-                struct panfrost_context *ctx,
-                struct mali_shader_meta *meta,
-                enum pipe_shader_ir ir_type,
-                const void *ir,
-                gl_shader_stage stage,
-                struct panfrost_shader_state *state,
-                uint64_t *outputs_written)
+panfrost_shader_compile(struct panfrost_context *ctx,
+                        enum pipe_shader_ir ir_type,
+                        const void *ir,
+                        gl_shader_stage stage,
+                        struct panfrost_shader_state *state,
+                        uint64_t *outputs_written)
 {
-        struct panfrost_screen *screen = pan_screen(ctx->base.screen);
+        struct panfrost_device *dev = pan_device(ctx->base.screen);
         uint8_t *dst;
 
         nir_shader *s;
@@ -62,11 +60,11 @@ panfrost_shader_compile(
 
         /* Call out to Midgard compiler given the above NIR */
 
-        midgard_program program = {
+        panfrost_program program = {
                 .alpha_ref = state->alpha_state.ref_value
         };
 
-        midgard_compile_shader_nir(s, &program, false, 0, screen->gpu_id,
+        midgard_compile_shader_nir(s, &program, false, 0, dev->gpu_id,
                         pan_debug & PAN_DBG_PRECOMPILE);
 
         /* Prepare the compiled binary for upload */
@@ -78,12 +76,12 @@ panfrost_shader_compile(
          * that's how I'd do it. */
 
         if (size) {
-                state->bo = panfrost_bo_create(screen, size, PAN_BO_EXECUTE);
+                state->bo = pan_bo_create(dev, size, PAN_BO_EXECUTE);
                 memcpy(state->bo->cpu, dst, size);
-                meta->shader = state->bo->gpu | program.first_tag;
+                state->first_tag = program.first_tag;
         } else {
                 /* No shader. Use dummy tag to avoid INSTR_INVALID_ENC */
-                meta->shader = 0x0 | 1;
+                state->first_tag = 1;
         }
 
         util_dynarray_fini(&program.compiled);
@@ -93,27 +91,24 @@ panfrost_shader_compile(
         state->sysval_count = program.sysval_count;
         memcpy(state->sysval, program.sysvals, sizeof(state->sysval[0]) * state->sysval_count);
 
-        meta->midgard1.uniform_count = MIN2(program.uniform_count, program.uniform_cutoff);
-        meta->midgard1.work_count = program.work_register_count;
-
         bool vertex_id = s->info.system_values_read & (1 << SYSTEM_VALUE_VERTEX_ID);
         bool instance_id = s->info.system_values_read & (1 << SYSTEM_VALUE_INSTANCE_ID);
 
         switch (stage) {
         case MESA_SHADER_VERTEX:
-                meta->attribute_count = util_bitcount64(s->info.inputs_read);
-                meta->varying_count = util_bitcount64(s->info.outputs_written);
+                state->attribute_count = util_bitcount64(s->info.inputs_read);
+                state->varying_count = util_bitcount64(s->info.outputs_written);
 
                 if (vertex_id)
-                        meta->attribute_count = MAX2(meta->attribute_count, PAN_VERTEX_ID + 1);
+                        state->attribute_count = MAX2(state->attribute_count, PAN_VERTEX_ID + 1);
 
                 if (instance_id)
-                        meta->attribute_count = MAX2(meta->attribute_count, PAN_INSTANCE_ID + 1);
+                        state->attribute_count = MAX2(state->attribute_count, PAN_INSTANCE_ID + 1);
 
                 break;
         case MESA_SHADER_FRAGMENT:
-                meta->attribute_count = 0;
-                meta->varying_count = util_bitcount64(s->info.inputs_read);
+                state->attribute_count = 0;
+                state->varying_count = util_bitcount64(s->info.inputs_read);
                 if (s->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
                         state->writes_depth = true;
                 if (s->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_STENCIL))
@@ -121,8 +116,8 @@ panfrost_shader_compile(
                 break;
         case MESA_SHADER_COMPUTE:
                 /* TODO: images */
-                meta->attribute_count = 0;
-                meta->varying_count = 0;
+                state->attribute_count = 0;
+                state->varying_count = 0;
                 state->shared_size = s->info.cs.shared_size;
                 break;
         default:
@@ -140,15 +135,15 @@ panfrost_shader_compile(
 
         /* Separate as primary uniform count is truncated */
         state->uniform_count = program.uniform_count;
-
-        meta->midgard1.flags_hi = 8; /* XXX */
+        state->uniform_cutoff = program.uniform_cutoff;
+        state->work_reg_count = program.work_register_count;
 
         unsigned default_vec1_swizzle = panfrost_get_default_swizzle(1);
         unsigned default_vec2_swizzle = panfrost_get_default_swizzle(2);
         unsigned default_vec4_swizzle = panfrost_get_default_swizzle(4);
 
         /* Iterate the varyings and emit the corresponding descriptor */
-        for (unsigned i = 0; i < meta->varying_count; ++i) {
+        for (unsigned i = 0; i < state->varying_count; ++i) {
                 unsigned location = program.varyings[i];
 
                 /* Default to a vec4 varying */

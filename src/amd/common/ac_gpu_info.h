@@ -100,7 +100,7 @@ struct radeon_info {
 	uint32_t                    tcc_cache_line_size;
 	bool			    tcc_harvested;
 	unsigned                    pc_lines;
-	uint32_t                    lds_size_per_cu;
+	uint32_t                    lds_size_per_workgroup;
 	uint32_t                    lds_granularity;
 	uint32_t                    max_memory_clock;
 	uint32_t                    ce_ram_size;
@@ -152,6 +152,7 @@ struct radeon_info {
 	bool                        has_scheduled_fence_dependency;
 
 	/* Shader cores. */
+	uint32_t                    cu_mask[4][2];
 	uint32_t                    r600_max_quad_pipes; /* wave size / 16 */
 	uint32_t                    max_shader_clock;
 	uint32_t                    num_good_compute_units;
@@ -165,9 +166,10 @@ struct radeon_info {
 	uint32_t                    min_sgpr_alloc;
 	uint32_t                    max_sgpr_alloc;
 	uint32_t                    sgpr_alloc_granularity;
-	uint32_t                    min_vgpr_alloc;
+	uint32_t                    min_wave64_vgpr_alloc;
 	uint32_t                    max_vgpr_alloc;
-	uint32_t                    vgpr_alloc_granularity;
+	uint32_t                    wave64_vgpr_alloc_granularity;
+	bool                        use_late_alloc; /* VS and GS: late pos/param allocation */
 
 	/* Render backends (color + depth blocks). */
 	uint32_t                    r300_num_gb_pipes;

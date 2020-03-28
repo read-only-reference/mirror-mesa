@@ -37,7 +37,7 @@
 
 
 #include "main/errors.h"
-#include "main/imports.h"
+#include "util/imports.h"
 #include "main/image.h"
 #include "main/bufferobj.h"
 #include "main/macros.h"
@@ -202,7 +202,7 @@ st_draw_vbo(struct gl_context *ctx,
                                 nr_prims);
       }
 
-      info.index_size = ib->index_size;
+      info.index_size = 1 << ib->index_size_shift;
       info.min_index = min_index;
       info.max_index = max_index;
 
@@ -217,7 +217,7 @@ st_draw_vbo(struct gl_context *ctx,
          if (!info.index.resource)
             return;
 
-         start = pointer_to_offset(ib->ptr) / info.index_size;
+         start = pointer_to_offset(ib->ptr) >> ib->index_size_shift;
       } else {
          /* indices are in user space memory */
          info.has_user_indices = true;
@@ -297,9 +297,9 @@ st_indirect_draw_vbo(struct gl_context *ctx,
       /* indices are always in a real VBO */
       assert(_mesa_is_bufferobj(bufobj));
 
-      info.index_size = ib->index_size;
+      info.index_size = 1 << ib->index_size_shift;
       info.index.resource = st_buffer_object(bufobj)->buffer;
-      info.start = pointer_to_offset(ib->ptr) / info.index_size;
+      info.start = pointer_to_offset(ib->ptr) >> ib->index_size_shift;
 
       /* Primitive restart is not handled by the VBO module in this case. */
       setup_primitive_restart(ctx, &info);

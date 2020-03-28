@@ -25,7 +25,7 @@
  *
  */
 
-#include "main/imports.h"
+#include "util/imports.h"
 #include "main/bufferobj.h"
 #include "main/varray.h"
 #include "vbo/vbo.h"
@@ -52,14 +52,14 @@ can_cut_index_handle_restart_index(struct gl_context *ctx,
 
    bool cut_index_will_work;
 
-   switch (ib->index_size) {
-   case 1:
+   switch (ib->index_size_shift) {
+   case 0:
       cut_index_will_work = ctx->Array.RestartIndex == 0xff;
       break;
-   case 2:
+   case 1:
       cut_index_will_work = ctx->Array.RestartIndex == 0xffff;
       break;
-   case 4:
+   case 2:
       cut_index_will_work = ctx->Array.RestartIndex == 0xffffffff;
       break;
    default:

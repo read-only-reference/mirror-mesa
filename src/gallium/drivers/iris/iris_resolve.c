@@ -116,11 +116,11 @@ static void
 resolve_image_views(struct iris_context *ice,
                     struct iris_batch *batch,
                     struct iris_shader_state *shs,
+                    const struct shader_info *info,
                     bool *draw_aux_buffer_disabled,
                     bool consider_framebuffer)
 {
-   /* TODO: Consider images used by program */
-   uint32_t views = shs->bound_image_views;
+   uint32_t views = info ? (shs->bound_image_views & info->images_used) : 0;
 
    while (views) {
       const int i = u_bit_scan(&views);
@@ -137,11 +137,13 @@ resolve_image_views(struct iris_context *ice,
          unsigned num_layers =
             pview->u.tex.last_layer - pview->u.tex.first_layer + 1;
 
-         /* The data port doesn't understand any compression */
+         enum isl_aux_usage aux_usage =
+            iris_image_view_aux_usage(ice, pview, info);
+
          iris_resource_prepare_access(ice, batch, res,
                                       pview->u.tex.level, 1,
                                       pview->u.tex.first_layer, num_layers,
-                                      ISL_AUX_USAGE_NONE, false);
+                                      aux_usage, false);
       }
 
       iris_cache_flush_for_read(batch, res->bo);
@@ -171,7 +173,7 @@ iris_predraw_resolve_inputs(struct iris_context *ice,
    if (ice->state.dirty & dirty) {
       resolve_sampler_views(ice, batch, shs, info, draw_aux_buffer_disabled,
                             consider_framebuffer);
-      resolve_image_views(ice, batch, shs, draw_aux_buffer_disabled,
+      resolve_image_views(ice, batch, shs, info, draw_aux_buffer_disabled,
                           consider_framebuffer);
    }
 }
@@ -499,7 +501,7 @@ iris_resolve_color(struct iris_context *ice,
    /* On Gen >= 12, Stencil buffer with lossless compression needs to be
     * resolve with WM_HZ_OP packet.
     */
-   if (isl_surf_usage_is_stencil(res->surf.usage)) {
+   if (res->aux.usage == ISL_AUX_USAGE_STC_CCS) {
       blorp_hiz_stencil_op(&blorp_batch, &surf, level, layer,
                            1, resolve_op);
    } else {
@@ -569,10 +571,9 @@ iris_sample_with_depth_aux(const struct gen_device_info *devinfo,
          break;
       return false;
    case ISL_AUX_USAGE_HIZ_CCS:
-      /* Write through mode must have been enabled for prior writes. */
-      if (isl_surf_supports_hiz_ccs_wt(devinfo, &res->surf, res->aux.usage))
-         break;
       return false;
+   case ISL_AUX_USAGE_HIZ_CCS_WT:
+      break;
    default:
       return false;
    }
@@ -953,12 +954,17 @@ iris_resource_texture_aux_usage(struct iris_context *ice,
       break;
 
    case ISL_AUX_USAGE_HIZ_CCS:
+      assert(!iris_sample_with_depth_aux(devinfo, res));
+      return ISL_AUX_USAGE_NONE;
+
+   case ISL_AUX_USAGE_HIZ_CCS_WT:
       if (iris_sample_with_depth_aux(devinfo, res))
-         return ISL_AUX_USAGE_CCS_E;
+         return ISL_AUX_USAGE_HIZ_CCS_WT;
       break;
 
    case ISL_AUX_USAGE_MCS:
    case ISL_AUX_USAGE_MCS_CCS:
+   case ISL_AUX_USAGE_STC_CCS:
       return res->aux.usage;
 
    case ISL_AUX_USAGE_CCS_D:
@@ -978,6 +984,32 @@ iris_resource_texture_aux_usage(struct iris_context *ice,
    default:
       break;
    }
+
+   return ISL_AUX_USAGE_NONE;
+}
+
+enum isl_aux_usage
+iris_image_view_aux_usage(struct iris_context *ice,
+                          const struct pipe_image_view *pview,
+                          const struct shader_info *info)
+{
+   if (!info)
+      return ISL_AUX_USAGE_NONE;
+
+   struct iris_screen *screen = (void *) ice->ctx.screen;
+   const struct gen_device_info *devinfo = &screen->devinfo;
+   struct iris_resource *res = (void *) pview->resource;
+
+   enum isl_format view_format = iris_image_view_get_format(ice, pview);
+   enum isl_aux_usage aux_usage =
+      iris_resource_texture_aux_usage(ice, res, view_format);
+
+   bool uses_atomic_load_store =
+      ice->shaders.uncompiled[info->stage]->uses_atomic_load_store;
+
+   if ((devinfo->gen == 12 && aux_usage == ISL_AUX_USAGE_CCS_E) &&
+       !uses_atomic_load_store)
+      return ISL_AUX_USAGE_CCS_E;
 
    return ISL_AUX_USAGE_NONE;
 }

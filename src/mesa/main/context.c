@@ -77,7 +77,7 @@
 
 
 #include "glheader.h"
-#include "imports.h"
+#include "util/imports.h"
 #include "accum.h"
 #include "api_exec.h"
 #include "api_loopback.h"
@@ -754,6 +754,8 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->ConservativeRasterDilateRange[0] = 0.0;
    consts->ConservativeRasterDilateRange[1] = 0.0;
    consts->ConservativeRasterDilateGranularity = 0.0;
+
+   consts->glBeginEndBufferSize = 512 * 1024;
 }
 
 
@@ -1763,6 +1765,7 @@ _mesa_make_current( struct gl_context *newCtx,
              * changed since the last time this FBO was bound).
              */
             _mesa_update_draw_buffers(newCtx);
+            _mesa_update_allow_draw_out_of_order(newCtx);
          }
          if (!newCtx->ReadBuffer || _mesa_is_winsys_fbo(newCtx->ReadBuffer)) {
             _mesa_reference_framebuffer(&newCtx->ReadBuffer, readBuffer);

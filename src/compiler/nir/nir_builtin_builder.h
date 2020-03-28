@@ -89,6 +89,18 @@ nir_uabs_diff(nir_builder *b, nir_ssa_def *x, nir_ssa_def *y)
 }
 
 static inline nir_ssa_def *
+nir_fexp(nir_builder *b, nir_ssa_def *x)
+{
+   return nir_fexp2(b, nir_fmul_imm(b, x, M_LOG2E));
+}
+
+static inline nir_ssa_def *
+nir_flog(nir_builder *b, nir_ssa_def *x)
+{
+   return nir_fmul_imm(b, nir_flog2(b, x), 1.0 / M_LOG2E);
+}
+
+static inline nir_ssa_def *
 nir_umul24(nir_builder *b, nir_ssa_def *x, nir_ssa_def *y)
 {
    nir_ssa_def *mask = nir_imm_int(b, 0xffffff);

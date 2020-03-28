@@ -22,9 +22,22 @@
 #
 # SPDX-License-Identifier: MIT
 
+import atexit
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
+def cleanup(dirpath):
+        shutil.rmtree(dirpath)
+
+dirpath = tempfile.mkdtemp()
+atexit.register(cleanup, dirpath)
+RENDERDOC_DEBUG_FILE = dirpath + "/renderdoc.log"
+
+# Needs to be in the environment before importing the module
+os.environ['RENDERDOC_DEBUG_LOG_FILE'] = RENDERDOC_DEBUG_FILE
 import renderdoc as rd
 
 def findDrawWithEventId(controller, eventId):
@@ -75,16 +88,21 @@ def loadCapture(filename):
     if not cap.LocalReplaySupport():
         raise RuntimeError("Capture cannot be replayed")
 
-    status,controller = cap.OpenCapture(rd.ReplayOptions(), None)
+    status, controller = cap.OpenCapture(rd.ReplayOptions(), None)
 
     if status != rd.ReplayStatus.Succeeded:
+        if os.path.exists(RENDERDOC_DEBUG_FILE):
+            print(open(RENDERDOC_DEBUG_FILE, "r").read())
         raise RuntimeError("Couldn't initialise replay: " + str(status))
+
+    if os.path.exists(RENDERDOC_DEBUG_FILE):
+        open(RENDERDOC_DEBUG_FILE, "w").write("")
 
     return (cap, controller)
 
 def renderdoc_dump_images(filename, eventIds, outputDir):
-   rd.InitGlobalEnv(rd.GlobalEnvironment(), [])
-   cap,controller = loadCapture(filename);
+   rd.InitialiseReplay(rd.GlobalEnvironment(), [])
+   cap, controller = loadCapture(filename);
 
    tracefile = Path(filename).name
 
@@ -96,6 +114,8 @@ def renderdoc_dump_images(filename, eventIds, outputDir):
 
    controller.Shutdown()
    cap.Shutdown()
+
+   rd.ShutdownReplay()
 
 if __name__ == "__main__":
    if len(sys.argv) < 3:

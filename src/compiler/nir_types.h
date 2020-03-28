@@ -52,6 +52,16 @@ int glsl_get_struct_field_offset(const struct glsl_type *type,
 const struct glsl_struct_field *
 glsl_get_struct_field_data(const struct glsl_type *type, unsigned index);
 
+enum glsl_interface_packing
+glsl_get_internal_ifc_packing(const struct glsl_type *type,
+                              bool std430_supported);
+
+unsigned glsl_get_std140_base_alignment(const struct glsl_type *type,
+                                        bool row_major);
+unsigned glsl_get_std140_size(const struct glsl_type *type, bool row_major);
+unsigned glsl_get_std430_base_alignment(const struct glsl_type *type,
+                                        bool row_major);
+unsigned glsl_get_std430_size(const struct glsl_type *type, bool row_major);
 unsigned glsl_get_explicit_stride(const struct glsl_type *type);
 const struct glsl_type *glsl_get_array_element(const struct glsl_type *type);
 const struct glsl_type *glsl_without_array(const struct glsl_type *type);

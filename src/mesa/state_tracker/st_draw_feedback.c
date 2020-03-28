@@ -25,7 +25,7 @@
  * 
  **************************************************************************/
 
-#include "main/imports.h"
+#include "util/imports.h"
 #include "main/arrayobj.h"
 #include "main/image.h"
 #include "main/macros.h"
@@ -134,7 +134,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
 
    st_validate_state(st, ST_PIPELINE_RENDER);
 
-   if (!index_bounds_valid)
+   if (ib && !index_bounds_valid)
       vbo_get_minmax_indices(ctx, prims, ib, &min_index, &max_index, nr_prims);
 
    /* must get these after state validation! */
@@ -188,7 +188,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
 
    if (ib) {
       struct gl_buffer_object *bufobj = ib->obj;
-      unsigned index_size = ib->index_size;
+      unsigned index_size = 1 << ib->index_size_shift;
 
       if (index_size == 0)
          goto out_unref_vertex;
@@ -196,7 +196,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
       if (bufobj && bufobj->Name) {
          struct st_buffer_object *stobj = st_buffer_object(bufobj);
 
-         start = pointer_to_offset(ib->ptr) / index_size;
+         start = pointer_to_offset(ib->ptr) >> ib->index_size_shift;
          mapped_indices = pipe_buffer_map(pipe, stobj->buffer,
                                           PIPE_TRANSFER_READ, &ib_transfer);
       }
@@ -204,7 +204,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
          mapped_indices = ib->ptr;
       }
 
-      info.index_size = ib->index_size;
+      info.index_size = index_size;
       info.min_index = min_index;
       info.max_index = max_index;
       info.has_user_indices = true;

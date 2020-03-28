@@ -19,6 +19,7 @@ apt-get -y install \
 	cpio \
 	crossbuild-essential-armhf \
 	debootstrap \
+	fastboot \
 	flex \
 	g++ \
 	gettext \
@@ -45,9 +46,13 @@ apt-get -y install \
 	python \
 	python3-distutils \
 	python3-mako \
+	python3-serial \
 	unzip \
 	wget \
+	xz-utils \
 	zlib1g-dev
+
+. .gitlab-ci/container/container_pre_build.sh
 
 # dependencies where we want a specific version
 export LIBDRM_VERSION=libdrm-2.4.100
@@ -75,4 +80,4 @@ apt-get purge -y \
         python3-distutils \
         wget
 
-apt-get autoremove -y --purge
+. .gitlab-ci/container/container_post_build.sh

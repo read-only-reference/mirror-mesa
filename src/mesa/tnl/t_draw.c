@@ -32,7 +32,7 @@
 #include "main/bufferobj.h"
 #include "main/condrender.h"
 #include "main/context.h"
-#include "main/imports.h"
+#include "util/imports.h"
 #include "main/mtypes.h"
 #include "main/macros.h"
 #include "main/enums.h"
@@ -368,7 +368,7 @@ static void bind_indices( struct gl_context *ctx,
       bo[*nr_bo] = ib->obj;
       (*nr_bo)++;
       ptr = ctx->Driver.MapBufferRange(ctx, (GLsizeiptr) ib->ptr,
-                                       ib->count * ib->index_size,
+                                       ib->count << ib->index_size_shift,
 				       GL_MAP_READ_BIT, ib->obj,
                                        MAP_INTERNAL);
       assert(ib->obj->Mappings[MAP_INTERNAL].Pointer);
@@ -377,19 +377,19 @@ static void bind_indices( struct gl_context *ctx,
       ptr = ADD_POINTERS(ib->obj->Mappings[MAP_INTERNAL].Pointer, ib->ptr);
    }
 
-   if (ib->index_size == 4 && VB->Primitive[0].basevertex == 0) {
+   if (ib->index_size_shift == 2 && VB->Primitive[0].basevertex == 0) {
       VB->Elts = (GLuint *) ptr;
    }
    else {
       GLuint *elts = (GLuint *)get_space(ctx, ib->count * sizeof(GLuint));
       VB->Elts = elts;
 
-      if (ib->index_size == 4) {
+      if (ib->index_size_shift == 2) {
 	 const GLuint *in = (GLuint *)ptr;
 	 for (i = 0; i < ib->count; i++)
 	    *elts++ = (GLuint)(*in++) + VB->Primitive[0].basevertex;
       }
-      else if (ib->index_size == 2) {
+      else if (ib->index_size_shift == 1) {
 	 const GLushort *in = (GLushort *)ptr;
 	 for (i = 0; i < ib->count; i++) 
 	    *elts++ = (GLuint)(*in++) + VB->Primitive[0].basevertex;

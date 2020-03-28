@@ -26,7 +26,6 @@
 #include "midgard_ops.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "lcra.h"
 #include "midgard_quirks.h"
 
 struct phys_reg {
@@ -385,7 +384,8 @@ mir_compute_interference(
         if (ctx->is_blend) {
                 unsigned r1w = ~0;
 
-                mir_foreach_block(ctx, block) {
+                mir_foreach_block(ctx, _block) {
+                        midgard_block *block = (midgard_block *) _block;
                         mir_foreach_instr_in_block_rev(block, ins) {
                                 if (ins->writeout)
                                         r1w = ins->src[2];
@@ -405,8 +405,9 @@ mir_compute_interference(
          * interference by walking each block linearly. Take live_out at the
          * end of each block and walk the block backwards. */
 
-        mir_foreach_block(ctx, blk) {
-                uint16_t *live = mem_dup(blk->live_out, ctx->temp_count * sizeof(uint16_t));
+        mir_foreach_block(ctx, _blk) {
+                midgard_block *blk = (midgard_block *) _blk;
+                uint16_t *live = mem_dup(_blk->live_out, ctx->temp_count * sizeof(uint16_t));
 
                 mir_foreach_instr_in_block_rev(blk, ins) {
                         /* Mark all registers live after the instruction as
@@ -564,13 +565,6 @@ allocate_registers(compiler_context *ctx, bool *spilled)
                         set_class(l->class, ins->src[1], REG_CLASS_TEXR);
                         set_class(l->class, ins->src[2], REG_CLASS_TEXR);
                         set_class(l->class, ins->src[3], REG_CLASS_TEXR);
-
-                        /* Texture offsets need to be aligned to vec4, since
-                         * the swizzle for x is forced to x in hardware, while
-                         * the other components are free. TODO: Relax to 8 for
-                         * half-registers if that ever occurs. */
-
-                        //lcra_restrict_range(l, ins->src[3], 16);
                 }
         }
 
@@ -834,7 +828,8 @@ mir_spill_register(
                 if (is_special_w)
                         spill_slot = spill_index++;
 
-                mir_foreach_block(ctx, block) {
+                mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 mir_foreach_instr_in_block_safe(block, ins) {
                         if (ins->dest != spill_node) continue;
 
@@ -876,7 +871,8 @@ mir_spill_register(
          * work registers to back special registers; TLS
          * spilling is to use memory to back work registers) */
 
-        mir_foreach_block(ctx, block) {
+        mir_foreach_block(ctx, _block) {
+                midgard_block *block = (midgard_block *) _block;
                 mir_foreach_instr_in_block(block, ins) {
                         /* We can't rewrite the moves used to spill in the
                          * first place. These moves are hinted. */

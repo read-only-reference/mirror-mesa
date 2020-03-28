@@ -51,6 +51,7 @@
 #include "intel_screen.h"
 #include "intel_tex_obj.h"
 #include "perf/gen_perf.h"
+#include "perf/gen_perf_query.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -446,8 +447,7 @@ struct brw_vertex_buffer {
    GLuint step_rate;
 };
 struct brw_vertex_element {
-   const struct gl_array_attributes *glattrib;
-   const struct gl_vertex_buffer_binding *glbinding;
+   const struct gl_vertex_format *glformat;
 
    int buffer;
    bool is_dual_slot;

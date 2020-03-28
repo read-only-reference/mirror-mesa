@@ -361,6 +361,9 @@ struct iris_uncompiled_shader {
 
    bool needs_edge_flag;
 
+   /* Whether shader uses atomic operations. */
+   bool uses_atomic_load_store;
+
    /** Constant data scraped from the shader by nir_opt_large_constants */
    struct pipe_resource *const_data;
 
@@ -953,7 +956,7 @@ bool iris_blorp_lookup_shader(struct blorp_batch *blorp_batch,
                               uint32_t key_size,
                               uint32_t *kernel_out,
                               void *prog_data_out);
-bool iris_blorp_upload_shader(struct blorp_batch *blorp_batch,
+bool iris_blorp_upload_shader(struct blorp_batch *blorp_batch, uint32_t stage,
                               const void *key, uint32_t key_size,
                               const void *kernel, uint32_t kernel_size,
                               const struct brw_stage_prog_data *prog_data,

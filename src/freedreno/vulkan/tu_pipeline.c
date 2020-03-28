@@ -562,17 +562,122 @@ tu6_emit_vs_system_values(struct tu_cs *cs,
    tu_cs_emit(cs, 0x00000000); /* VFD_CONTROL_6 */
 }
 
+/* Add any missing varyings needed for stream-out. Otherwise varyings not
+ * used by fragment shader will be stripped out.
+ */
+static void
+tu6_link_streamout(struct ir3_shader_linkage *l,
+                     const struct ir3_shader_variant *v)
+{
+   const struct ir3_stream_output_info *info = &v->shader->stream_output;
+
+   /*
+    * First, any stream-out varyings not already in linkage map (ie. also
+    * consumed by frag shader) need to be added:
+    */
+   for (unsigned i = 0; i < info->num_outputs; i++) {
+      const struct ir3_stream_output *out = &info->output[i];
+      unsigned compmask =
+                  (1 << (out->num_components + out->start_component)) - 1;
+      unsigned k = out->register_index;
+      unsigned idx, nextloc = 0;
+
+      /* psize/pos need to be the last entries in linkage map, and will
+       * get added link_stream_out, so skip over them:
+       */
+      if (v->outputs[k].slot == VARYING_SLOT_PSIZ ||
+            v->outputs[k].slot == VARYING_SLOT_POS)
+         continue;
+
+      for (idx = 0; idx < l->cnt; idx++) {
+         if (l->var[idx].regid == v->outputs[k].regid)
+            break;
+         nextloc = MAX2(nextloc, l->var[idx].loc + 4);
+      }
+
+      /* add if not already in linkage map: */
+      if (idx == l->cnt)
+         ir3_link_add(l, v->outputs[k].regid, compmask, nextloc);
+
+      /* expand component-mask if needed, ie streaming out all components
+       * but frag shader doesn't consume all components:
+       */
+      if (compmask & ~l->var[idx].compmask) {
+         l->var[idx].compmask |= compmask;
+         l->max_loc = MAX2(l->max_loc, l->var[idx].loc +
+                           util_last_bit(l->var[idx].compmask));
+      }
+   }
+}
+
+static void
+tu6_setup_streamout(const struct ir3_shader_variant *v,
+            struct ir3_shader_linkage *l, struct tu_streamout_state *tf)
+{
+   const struct ir3_stream_output_info *info = &v->shader->stream_output;
+
+   memset(tf, 0, sizeof(*tf));
+
+   tf->prog_count = align(l->max_loc, 2) / 2;
+
+   debug_assert(tf->prog_count < ARRAY_SIZE(tf->prog));
+
+   /* set stride info to the streamout state */
+   for (unsigned i = 0; i < IR3_MAX_SO_BUFFERS; i++)
+      tf->stride[i] = info->stride[i];
+
+   for (unsigned i = 0; i < info->num_outputs; i++) {
+      const struct ir3_stream_output *out = &info->output[i];
+      unsigned k = out->register_index;
+      unsigned idx;
+
+      tf->ncomp[out->output_buffer] += out->num_components;
+
+      /* linkage map sorted by order frag shader wants things, so
+       * a bit less ideal here..
+       */
+      for (idx = 0; idx < l->cnt; idx++)
+         if (l->var[idx].regid == v->outputs[k].regid)
+            break;
+
+      debug_assert(idx < l->cnt);
+
+      for (unsigned j = 0; j < out->num_components; j++) {
+         unsigned c   = j + out->start_component;
+         unsigned loc = l->var[idx].loc + c;
+         unsigned off = j + out->dst_offset;  /* in dwords */
+
+         if (loc & 1) {
+            tf->prog[loc/2] |= A6XX_VPC_SO_PROG_B_EN |
+                        A6XX_VPC_SO_PROG_B_BUF(out->output_buffer) |
+                        A6XX_VPC_SO_PROG_B_OFF(off * 4);
+         } else {
+            tf->prog[loc/2] |= A6XX_VPC_SO_PROG_A_EN |
+                        A6XX_VPC_SO_PROG_A_BUF(out->output_buffer) |
+                        A6XX_VPC_SO_PROG_A_OFF(off * 4);
+         }
+      }
+   }
+
+   tf->vpc_so_buf_cntl = A6XX_VPC_SO_BUF_CNTL_ENABLE |
+               COND(tf->ncomp[0] > 0, A6XX_VPC_SO_BUF_CNTL_BUF0) |
+               COND(tf->ncomp[1] > 0, A6XX_VPC_SO_BUF_CNTL_BUF1) |
+               COND(tf->ncomp[2] > 0, A6XX_VPC_SO_BUF_CNTL_BUF2) |
+               COND(tf->ncomp[3] > 0, A6XX_VPC_SO_BUF_CNTL_BUF3);
+}
+
 static void
 tu6_emit_vpc(struct tu_cs *cs,
              const struct ir3_shader_variant *vs,
              const struct ir3_shader_variant *fs,
-             bool binning_pass)
+             bool binning_pass,
+             struct tu_streamout_state *tf)
 {
    struct ir3_shader_linkage linkage = { 0 };
    ir3_link_shaders(&linkage, vs, fs);
 
-   if (vs->shader->stream_output.num_outputs && !binning_pass)
-      tu_finishme("stream output");
+   if (vs->shader->stream_output.num_outputs)
+      tu6_link_streamout(&linkage, vs);
 
    BITSET_DECLARE(vpc_var_enables, 128) = { 0 };
    for (uint32_t i = 0; i < linkage.cnt; i++) {
@@ -601,6 +706,9 @@ tu6_emit_vpc(struct tu_cs *cs,
       pointsize_loc = linkage.max_loc;
       ir3_link_add(&linkage, pointsize_regid, 0x1, linkage.max_loc);
    }
+
+   if (vs->shader->stream_output.num_outputs)
+      tu6_setup_streamout(vs, &linkage, tf);
 
    /* map vs outputs to VPC */
    assert(linkage.cnt <= 32);
@@ -1034,7 +1142,8 @@ static void
 tu6_emit_program(struct tu_cs *cs,
                  const struct tu_pipeline_builder *builder,
                  const struct tu_bo *binary_bo,
-                 bool binning_pass)
+                 bool binning_pass,
+                 struct tu_streamout_state *tf)
 {
    static const struct ir3_shader_variant dummy_variant = {
       .type = MESA_SHADER_NONE
@@ -1060,7 +1169,12 @@ tu6_emit_program(struct tu_cs *cs,
          : &dummy_variant;
 
    if (binning_pass) {
-      vs = &builder->shaders[MESA_SHADER_VERTEX]->variants[1];
+      /* if we have streamout, use full VS in binning pass, as the
+       * binning pass VS will have outputs on other than position/psize
+       * stripped out:
+       */
+      if (vs->shader->stream_output.num_outputs == 0)
+         vs = &builder->shaders[MESA_SHADER_VERTEX]->variants[1];
       fs = &dummy_variant;
    }
 
@@ -1071,7 +1185,7 @@ tu6_emit_program(struct tu_cs *cs,
    tu6_emit_fs_config(cs, builder->shaders[MESA_SHADER_FRAGMENT], fs);
 
    tu6_emit_vs_system_values(cs, vs);
-   tu6_emit_vpc(cs, vs, fs, binning_pass);
+   tu6_emit_vpc(cs, vs, fs, binning_pass, tf);
    tu6_emit_vpc_varying_modes(cs, fs, binning_pass);
    tu6_emit_fs_inputs(cs, fs);
    tu6_emit_fs_outputs(cs, fs, builder->color_attachment_count);
@@ -1207,6 +1321,17 @@ tu6_emit_viewport(struct tu_cs *cs, const VkViewport *viewport)
    tu_cs_emit(cs,
               A6XX_GRAS_CL_GUARDBAND_CLIP_ADJ_HORZ(guardband_adj.width) |
                  A6XX_GRAS_CL_GUARDBAND_CLIP_ADJ_VERT(guardband_adj.height));
+
+   float z_clamp_min = MIN2(viewport->minDepth, viewport->maxDepth);
+   float z_clamp_max = MAX2(viewport->minDepth, viewport->maxDepth);
+
+   tu_cs_emit_regs(cs,
+                   A6XX_GRAS_CL_Z_CLAMP_MIN(z_clamp_min),
+                   A6XX_GRAS_CL_Z_CLAMP_MAX(z_clamp_max));
+
+   tu_cs_emit_regs(cs,
+                   A6XX_RB_Z_CLAMP_MIN(z_clamp_min),
+                   A6XX_RB_Z_CLAMP_MAX(z_clamp_max));
 }
 
 void
@@ -1228,8 +1353,6 @@ tu6_emit_scissor(struct tu_cs *cs, const VkRect2D *scissor)
 static void
 tu6_emit_gras_unknowns(struct tu_cs *cs)
 {
-   tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_DISABLE_CNTL, 1);
-   tu_cs_emit(cs, A6XX_GRAS_DISABLE_CNTL_VP_CLIP_CODE_IGNORE);
    tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_UNKNOWN_8001, 1);
    tu_cs_emit(cs, 0x0);
    tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_LAYER_CNTL, 1);
@@ -1303,7 +1426,8 @@ tu6_emit_alpha_control_disable(struct tu_cs *cs)
 
 static void
 tu6_emit_depth_control(struct tu_cs *cs,
-                       const VkPipelineDepthStencilStateCreateInfo *ds_info)
+                       const VkPipelineDepthStencilStateCreateInfo *ds_info,
+                       const VkPipelineRasterizationStateCreateInfo *rast_info)
 {
    assert(!ds_info->depthBoundsTestEnable);
 
@@ -1313,6 +1437,9 @@ tu6_emit_depth_control(struct tu_cs *cs,
          A6XX_RB_DEPTH_CNTL_Z_ENABLE |
          A6XX_RB_DEPTH_CNTL_ZFUNC(tu6_compare_func(ds_info->depthCompareOp)) |
          A6XX_RB_DEPTH_CNTL_Z_TEST_ENABLE;
+
+      if (rast_info->depthClampEnable)
+         rb_depth_cntl |= A6XX_RB_DEPTH_CNTL_Z_CLAMP_ENABLE;
 
       if (ds_info->depthWriteEnable)
          rb_depth_cntl |= A6XX_RB_DEPTH_CNTL_Z_WRITE_ENABLE;
@@ -1575,9 +1702,16 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder)
 
    if (builder->shaders[MESA_SHADER_VERTEX]->has_binning_pass) {
       const struct tu_shader *vs = builder->shaders[MESA_SHADER_VERTEX];
+      const struct ir3_shader_variant *variant;
+
+      if (vs->ir3_shader.stream_output.num_outputs)
+         variant = &vs->variants[0];
+      else
+         variant = &vs->variants[1];
+
       builder->binning_vs_offset = builder->shader_total_size;
       builder->shader_total_size +=
-         sizeof(uint32_t) * vs->variants[1].info.sizedwords;
+         sizeof(uint32_t) * variant->info.sizedwords;
    }
 
    return VK_SUCCESS;
@@ -1609,8 +1743,19 @@ tu_pipeline_builder_upload_shaders(struct tu_pipeline_builder *builder,
 
    if (builder->shaders[MESA_SHADER_VERTEX]->has_binning_pass) {
       const struct tu_shader *vs = builder->shaders[MESA_SHADER_VERTEX];
-      memcpy(bo->map + builder->binning_vs_offset, vs->binning_binary,
-             sizeof(uint32_t) * vs->variants[1].info.sizedwords);
+      const struct ir3_shader_variant *variant;
+      void *bin;
+
+      if (vs->ir3_shader.stream_output.num_outputs) {
+         variant = &vs->variants[0];
+         bin = vs->binary;
+      } else {
+         variant = &vs->variants[1];
+         bin = vs->binning_binary;
+      }
+
+      memcpy(bo->map + builder->binning_vs_offset, bin,
+             sizeof(uint32_t) * variant->info.sizedwords);
    }
 
    return VK_SUCCESS;
@@ -1653,11 +1798,11 @@ tu_pipeline_builder_parse_shader_stages(struct tu_pipeline_builder *builder,
 {
    struct tu_cs prog_cs;
    tu_cs_begin_sub_stream(&pipeline->cs, 512, &prog_cs);
-   tu6_emit_program(&prog_cs, builder, &pipeline->program.binary_bo, false);
+   tu6_emit_program(&prog_cs, builder, &pipeline->program.binary_bo, false, &pipeline->streamout);
    pipeline->program.state_ib = tu_cs_end_sub_stream(&pipeline->cs, &prog_cs);
 
    tu_cs_begin_sub_stream(&pipeline->cs, 512, &prog_cs);
-   tu6_emit_program(&prog_cs, builder, &pipeline->program.binary_bo, true);
+   tu6_emit_program(&prog_cs, builder, &pipeline->program.binary_bo, true, &pipeline->streamout);
    pipeline->program.binning_state_ib =
       tu_cs_end_sub_stream(&pipeline->cs, &prog_cs);
 
@@ -1729,7 +1874,7 @@ tu_pipeline_builder_parse_viewport(struct tu_pipeline_builder *builder,
       builder->create_info->pViewportState;
 
    struct tu_cs vp_cs;
-   tu_cs_begin_sub_stream(&pipeline->cs, 15, &vp_cs);
+   tu_cs_begin_sub_stream(&pipeline->cs, 21, &vp_cs);
 
    if (!(pipeline->dynamic_state.mask & TU_DYNAMIC_VIEWPORT)) {
       assert(vp_info->viewportCount == 1);
@@ -1751,12 +1896,19 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
    const VkPipelineRasterizationStateCreateInfo *rast_info =
       builder->create_info->pRasterizationState;
 
-   assert(!rast_info->depthClampEnable);
    assert(rast_info->polygonMode == VK_POLYGON_MODE_FILL);
 
    struct tu_cs rast_cs;
    tu_cs_begin_sub_stream(&pipeline->cs, 20, &rast_cs);
 
+
+   tu_cs_emit_regs(&rast_cs,
+                   A6XX_GRAS_CL_CNTL(
+                     .znear_clip_disable = rast_info->depthClampEnable,
+                     .zfar_clip_disable = rast_info->depthClampEnable,
+                     .unk5 = rast_info->depthClampEnable,
+                     .zero_gb_scale_z = 1,
+                     .vp_clip_code_ignore = 1));
    /* move to hw ctx init? */
    tu6_emit_gras_unknowns(&rast_cs);
    tu6_emit_point_size(&rast_cs);
@@ -1804,7 +1956,7 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
    /* move to hw ctx init? */
    tu6_emit_alpha_control_disable(&ds_cs);
 
-   tu6_emit_depth_control(&ds_cs, ds_info);
+   tu6_emit_depth_control(&ds_cs, ds_info, builder->create_info->pRasterizationState);
    tu6_emit_stencil_control(&ds_cs, ds_info);
 
    if (!(pipeline->dynamic_state.mask & TU_DYNAMIC_STENCIL_COMPARE_MASK)) {

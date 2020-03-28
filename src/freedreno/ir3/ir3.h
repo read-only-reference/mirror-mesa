@@ -59,6 +59,9 @@ struct ir3_info {
 	/* number of sync bits: */
 	uint16_t ss, sy;
 
+	/* estimate of number of cycles stalled on (ss) */
+	uint16_t sstall;
+
 	uint16_t last_baryf;     /* instruction # of last varying fetch */
 };
 
@@ -589,16 +592,6 @@ void ir3_block_clear_mark(struct ir3_block *block);
 void ir3_clear_mark(struct ir3 *shader);
 
 unsigned ir3_count_instructions(struct ir3 *ir);
-
-static inline int ir3_instr_regno(struct ir3_instruction *instr,
-		struct ir3_register *reg)
-{
-	unsigned i;
-	for (i = 0; i < instr->regs_count; i++)
-		if (reg == instr->regs[i])
-			return i;
-	return -1;
-}
 
 
 #define MAX_ARRAYS 16
@@ -1194,6 +1187,37 @@ int ir3_ra(struct ir3_shader_variant *v, struct ir3_instruction **precolor, unsi
 
 /* legalize: */
 void ir3_legalize(struct ir3 *ir, struct ir3_shader_variant *so, int *max_bary);
+
+static inline bool
+ir3_has_latency_to_hide(struct ir3 *ir)
+{
+	/* VS/GS/TCS/TESS  co-exist with frag shader invocations, but we don't
+	 * know the nature of the fragment shader.  Just assume it will have
+	 * latency to hide:
+	 */
+	if (ir->type != MESA_SHADER_FRAGMENT)
+		return true;
+
+	foreach_block (block, &ir->block_list) {
+		foreach_instr (instr, &block->instr_list) {
+			if (is_tex_or_prefetch(instr))
+				return true;
+
+			if (is_load(instr)) {
+				switch (instr->opc) {
+				case OPC_LDLV:
+				case OPC_LDL:
+				case OPC_LDLW:
+					break;
+				default:
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
 
 /* ************************************************************************* */
 /* instruction helpers */
