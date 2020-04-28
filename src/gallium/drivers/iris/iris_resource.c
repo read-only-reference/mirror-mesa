@@ -340,6 +340,8 @@ iris_resource_destroy(struct pipe_screen *screen,
    iris_resource_disable_aux(res);
 
    iris_bo_unreference(res->bo);
+   iris_pscreen_unref(res->base.screen);
+
    free(res);
 }
 
@@ -352,7 +354,7 @@ iris_alloc_resource(struct pipe_screen *pscreen,
       return NULL;
 
    res->base = *templ;
-   res->base.screen = pscreen;
+   res->base.screen = iris_pscreen_ref(pscreen);
    pipe_reference_init(&res->base.reference, 1);
 
    res->aux.possible_usages = 1 << ISL_AUX_USAGE_NONE;
@@ -799,6 +801,9 @@ iris_resource_create_for_buffer(struct pipe_screen *pscreen,
       return NULL;
    }
 
+   if (templ->bind & PIPE_BIND_SHARED)
+      iris_bo_make_external(res->bo);
+
    return &res->base;
 }
 
@@ -922,6 +927,9 @@ iris_resource_create_with_modifiers(struct pipe_screen *pscreen,
       map_aux_addresses(screen, res);
    }
 
+   if (templ->bind & PIPE_BIND_SHARED)
+      iris_bo_make_external(res->bo);
+
    return &res->base;
 
 fail:
@@ -973,7 +981,7 @@ iris_resource_from_user_memory(struct pipe_screen *pscreen,
                                     user_memory, templ->width0,
                                     IRIS_MEMZONE_OTHER);
    if (!res->bo) {
-      free(res);
+      iris_resource_destroy(pscreen, &res->base);
       return NULL;
    }
 
@@ -1016,7 +1024,7 @@ iris_resource_from_handle(struct pipe_screen *pscreen,
       unreachable("invalid winsys handle type");
    }
    if (!res->bo)
-      return NULL;
+      goto fail;
 
    res->offset = whandle->offset;
 
@@ -1305,7 +1313,7 @@ iris_invalidate_resource(struct pipe_context *ctx,
    /* Rebind the buffer, replacing any state referring to the old BO's
     * address, and marking state dirty so it's reemitted.
     */
-   ice->vtbl.rebind_buffer(ice, res);
+   screen->vtbl.rebind_buffer(ice, res);
 
    util_range_set_empty(&res->valid_buffer_range);
 
@@ -1801,6 +1809,9 @@ iris_transfer_map(struct pipe_context *ctx,
    struct iris_context *ice = (struct iris_context *)ctx;
    struct iris_resource *res = (struct iris_resource *)resource;
    struct isl_surf *surf = &res->surf;
+
+   if (iris_resource_unfinished_aux_import(res))
+      iris_resource_finish_aux_import(ctx->screen, res);
 
    if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
       /* Replace the backing storage with a fresh buffer for non-async maps */

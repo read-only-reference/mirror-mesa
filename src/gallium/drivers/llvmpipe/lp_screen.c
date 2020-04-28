@@ -324,7 +324,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_VARYINGS:
       return 32;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
-      return 1;
+      return 16;
    case PIPE_CAP_QUERY_BUFFER_OBJECT:
       return 1;
    case PIPE_CAP_DRAW_PARAMETERS:
@@ -478,7 +478,7 @@ llvmpipe_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
    case PIPE_CAPF_MAX_POINT_WIDTH:
       /* fall-through */
    case PIPE_CAPF_MAX_POINT_WIDTH_AA:
-      return 255.0; /* arbitrary */
+      return LP_MAX_POINT_WIDTH; /* arbitrary */
    case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
       return 16.0; /* not actually signficant at this time */
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
@@ -733,11 +733,6 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
 
       if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS)
          return false;
-
-      /* TODO: Support stencil-only formats */
-      if (format_desc->swizzle[0] == PIPE_SWIZZLE_NONE) {
-         return false;
-      }
    }
 
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_ASTC ||

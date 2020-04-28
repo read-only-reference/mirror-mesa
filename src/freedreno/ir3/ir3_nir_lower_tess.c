@@ -890,15 +890,9 @@ ir3_nir_lower_gs(nir_shader *shader, struct ir3_shader *s)
 
 	build_primitive_map(shader, &state.map, &shader->inputs);
 
-	uint32_t loc = 0;
-	nir_foreach_variable (var, &shader->outputs) {
-		uint32_t end = var->data.driver_location + glsl_count_attribute_slots(var->type, false);
-		loc = MAX2(loc, end);
-	}
-
 	state.vertex_flags_out = nir_variable_create(shader, nir_var_shader_out,
 			glsl_uint_type(), "vertex_flags");
-	state.vertex_flags_out->data.driver_location = loc;
+	state.vertex_flags_out->data.driver_location = shader->num_outputs++;
 	state.vertex_flags_out->data.location = VARYING_SLOT_GS_VERTEX_FLAGS_IR3;
 
 	nir_function_impl *impl = nir_shader_get_entrypoint(shader);
@@ -955,4 +949,40 @@ ir3_nir_lower_gs(nir_shader *shader, struct ir3_shader *s)
 		fprintf(stderr, "NIR (after gs lowering):\n");
 		nir_print_shader(shader, stderr);
 	}
+}
+
+uint32_t
+ir3_link_geometry_stages(const struct ir3_shader_variant *producer,
+		const struct ir3_shader_variant *consumer,
+		uint32_t *locs)
+{
+	uint32_t num_loc = 0, factor;
+
+	switch (consumer->type) {
+	case MESA_SHADER_TESS_CTRL:
+	case MESA_SHADER_GEOMETRY:
+		/* These stages load with ldlw, which expects byte offsets. */
+		factor = 4;
+		break;
+	case MESA_SHADER_TESS_EVAL:
+		/* The tess eval shader uses ldg, which takes dword offsets. */
+		factor = 1;
+		break;
+	default:
+		unreachable("bad shader stage");
+	}
+
+	nir_foreach_variable(in_var, &consumer->shader->nir->inputs) {
+		nir_foreach_variable(out_var, &producer->shader->nir->outputs) {
+			if (in_var->data.location == out_var->data.location) {
+				locs[in_var->data.driver_location] =
+					producer->shader->output_loc[out_var->data.driver_location] * factor;
+
+				debug_assert(num_loc <= in_var->data.driver_location + 1);
+				num_loc = in_var->data.driver_location + 1;
+			}
+		}
+	}
+
+	return num_loc;
 }

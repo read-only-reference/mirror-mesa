@@ -941,6 +941,7 @@ backend_instruction::can_do_saturate() const
    case BRW_OPCODE_ADD:
    case BRW_OPCODE_ASR:
    case BRW_OPCODE_AVG:
+   case BRW_OPCODE_CSEL:
    case BRW_OPCODE_DP2:
    case BRW_OPCODE_DP3:
    case BRW_OPCODE_DP4:
@@ -1277,7 +1278,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
 
    brw_compute_vue_map(devinfo, &prog_data->base.vue_map,
                        nir->info.outputs_written,
-                       nir->info.separate_shader);
+                       nir->info.separate_shader, 1);
 
    unsigned output_size_bytes = prog_data->base.vue_map.num_slots * 4 * 4;
 
@@ -1370,7 +1371,8 @@ brw_compile_tes(const struct brw_compiler *compiler,
                                         nir->info.name));
       }
 
-      g.generate_code(v.cfg, 8, v.shader_stats, stats);
+      g.generate_code(v.cfg, 8, v.shader_stats,
+                      v.performance_analysis.require(), stats);
 
       assembly = g.get_assembly();
    } else {
@@ -1386,7 +1388,9 @@ brw_compile_tes(const struct brw_compiler *compiler,
 	 v.dump_instructions();
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx, nir,
-                                            &prog_data->base, v.cfg, stats);
+                                            &prog_data->base, v.cfg,
+                                            v.performance_analysis.require(),
+                                            stats);
    }
 
    return assembly;

@@ -235,6 +235,8 @@ static void si_destroy_context(struct pipe_context *context)
       sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_render_target_1d_array);
    if (sctx->cs_clear_12bytes_buffer)
       sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_12bytes_buffer);
+   if (sctx->cs_dcc_decompress)
+      sctx->b.delete_compute_state(&sctx->b, sctx->cs_dcc_decompress);
    if (sctx->cs_dcc_retile)
       sctx->b.delete_compute_state(&sctx->b, sctx->cs_dcc_retile);
 
@@ -686,6 +688,7 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen, v
 {
    struct si_screen *sscreen = (struct si_screen *)screen;
    struct pipe_context *ctx;
+   uint64_t total_ram;
 
    if (sscreen->debug_flags & DBG(CHECK_VM))
       flags |= PIPE_CONTEXT_DEBUG;
@@ -706,9 +709,16 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen, v
 
    /* Use asynchronous flushes only on amdgpu, since the radeon
     * implementation for fence_server_sync is incomplete. */
-   return threaded_context_create(ctx, &sscreen->pool_transfers, si_replace_buffer_storage,
-                                  sscreen->info.is_amdgpu ? si_create_fence : NULL,
-                                  &((struct si_context *)ctx)->tc);
+   struct pipe_context * tc = threaded_context_create(
+            ctx, &sscreen->pool_transfers, si_replace_buffer_storage,
+            sscreen->info.is_amdgpu ? si_create_fence : NULL,
+            &((struct si_context *)ctx)->tc);
+
+   if (tc && tc != ctx && os_get_total_physical_memory(&total_ram)) {
+      ((struct threaded_context *) tc)->bytes_mapped_limit = total_ram / 4;
+   }
+
+   return tc;
 }
 
 /*

@@ -303,6 +303,8 @@ The integer capabilities:
   a compressed block is copied to/from a plain pixel of the same size.
 * ``PIPE_CAP_CLEAR_TEXTURE``: Whether `clear_texture` will be
   available in contexts.
+* ``PIPE_CAP_CLEAR_SCISSORED``: Whether `clear` can accept a scissored
+  bounding box.
 * ``PIPE_CAP_DRAW_PARAMETERS``: Whether ``TGSI_SEMANTIC_BASEVERTEX``,
   ``TGSI_SEMANTIC_BASEINSTANCE``, and ``TGSI_SEMANTIC_DRAWID`` are
   supported in vertex shaders.
@@ -573,6 +575,10 @@ The integer capabilities:
 * ``PIPE_CAP_PSIZ_CLAMPED``: Driver needs for the point size to be clamped. Additionally, the gl_PointSize has been modified and its value should be lowered for transform feedback, if needed. Defaults to false.
 * ``PIPE_CAP_DRAW_INFO_START_WITH_USER_INDICES``: pipe_draw_info::start can be non-zero with user indices.
 * ``PIPE_CAP_GL_BEGIN_END_BUFFER_SIZE``: Buffer size used to upload vertices for glBegin/glEnd.
+* ``PIPE_CAP_VIEWPORT_SWIZZLE``: Whether pipe_viewport_state::swizzle can be used to specify pre-clipping swizzling of coordinates (see GL_NV_viewport_swizzle).
+* ``PIPE_CAP_SYSTEM_SVM``: True if all application memory can be shared with the GPU without explicit mapping.
+* ``PIPE_CAP_VIEWPORT_MASK``: Whether ``TGSI_SEMANTIC_VIEWPORT_MASK`` and ``TGSI_PROPERTY_LAYER_VIEWPORT_RELATIVE`` are supported (see GL_NV_viewport_array2).
+* ``PIPE_CAP_MAP_UNSYNCHRONIZED_THREAD_SAFE``: Whether mapping a buffer as unsynchronized from any thread is safe.
 
 .. _pipe_capf:
 
@@ -939,7 +945,11 @@ replaced by ``nr_storage_samples``.
 
 **flags** bitmask of PIPE_RESOURCE_FLAG flags.
 
+**next**: Pointer to the next plane for resources that consist of multiple
+memory planes.
 
+As a corollary, this mean resources for an image with multiple planes have
+to be created starting from the highest plane.
 
 resource_changed
 ^^^^^^^^^^^^^^^^

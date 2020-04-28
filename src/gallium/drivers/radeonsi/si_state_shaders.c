@@ -918,8 +918,7 @@ static void gfx10_emit_ge_pc_alloc(struct si_context *sctx, unsigned value)
        sctx->tracked_regs.reg_value[reg] != value) {
       struct radeon_cmdbuf *cs = sctx->gfx_cs;
 
-      if (sctx->family == CHIP_NAVI10 || sctx->family == CHIP_NAVI12 ||
-          sctx->family == CHIP_NAVI14) {
+      if (sctx->chip_class == GFX10) {
          /* SQ_NON_EVENT must be emitted before GE_PC_ALLOC is written. */
          radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
          radeon_emit(cs, EVENT_TYPE(V_028A90_SQ_NON_EVENT) | EVENT_INDEX(0));
@@ -1162,8 +1161,7 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
       late_alloc_wave64 = (num_cu_per_sh - 2) * 4;
 
    /* Limit LATE_ALLOC_GS for prevent a hang (hw bug). */
-   if (sscreen->info.family == CHIP_NAVI10 || sscreen->info.family == CHIP_NAVI12 ||
-       sscreen->info.family == CHIP_NAVI14)
+   if (sscreen->info.chip_class == GFX10)
       late_alloc_wave64 = MIN2(late_alloc_wave64, 64);
 
    si_pm4_set_reg(
@@ -1255,8 +1253,7 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
        *
        * Requirement: GE_CNTL.VERT_GRP_SIZE = VGT_GS_ONCHIP_CNTL.ES_VERTS_PER_SUBGRP - 5
        */
-      if ((sscreen->info.family == CHIP_NAVI10 || sscreen->info.family == CHIP_NAVI12 ||
-           sscreen->info.family == CHIP_NAVI14) &&
+      if ((sscreen->info.chip_class == GFX10) &&
           (es_type == PIPE_SHADER_VERTEX || gs_type == PIPE_SHADER_VERTEX) && /* = no tess */
           shader->ngg.hw_max_esverts != 256) {
          shader->ge_cntl &= C_03096C_VERT_GRP_SIZE;
@@ -2827,9 +2824,27 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 
 static void *si_create_shader(struct pipe_context *ctx, const struct pipe_shader_state *state)
 {
+   struct si_context *sctx = (struct si_context *)ctx;
    struct si_screen *sscreen = (struct si_screen *)ctx->screen;
+   bool cache_hit;
+   struct si_shader_selector *sel = (struct si_shader_selector *)util_live_shader_cache_get(
+      ctx, &sscreen->live_shader_cache, state, &cache_hit);
 
-   return util_live_shader_cache_get(ctx, &sscreen->live_shader_cache, state);
+   if (sel && cache_hit && sctx->debug.debug_message) {
+      if (sel->main_shader_part)
+         si_shader_dump_stats_for_shader_db(sscreen, sel->main_shader_part, &sctx->debug);
+      if (sel->main_shader_part_ls)
+         si_shader_dump_stats_for_shader_db(sscreen, sel->main_shader_part_ls, &sctx->debug);
+      if (sel->main_shader_part_es)
+         si_shader_dump_stats_for_shader_db(sscreen, sel->main_shader_part_es, &sctx->debug);
+      if (sel->main_shader_part_ngg)
+         si_shader_dump_stats_for_shader_db(sscreen, sel->main_shader_part_ngg, &sctx->debug);
+      if (sel->main_shader_part_ngg_es)
+         si_shader_dump_stats_for_shader_db(sscreen, sel->main_shader_part_ngg_es, &sctx->debug);
+      if (sel->gs_copy_shader)
+         si_shader_dump_stats_for_shader_db(sscreen, sel->gs_copy_shader, &sctx->debug);
+   }
+   return sel;
 }
 
 static void si_update_streamout_state(struct si_context *sctx)
@@ -2932,9 +2947,7 @@ bool si_update_ngg(struct si_context *sctx)
        * VGT_FLUSH is also emitted at the beginning of IBs when legacy GS ring
        * pointers are set.
        */
-      if ((sctx->family == CHIP_NAVI10 || sctx->family == CHIP_NAVI12 ||
-           sctx->family == CHIP_NAVI14) &&
-          !new_ngg)
+      if (sctx->chip_class == GFX10 && !new_ngg)
          sctx->flags |= SI_CONTEXT_VGT_FLUSH;
 
       sctx->ngg = new_ngg;

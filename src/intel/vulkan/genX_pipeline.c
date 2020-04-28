@@ -355,18 +355,19 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
 #  define swiz sbe
 #endif
 
-   /* Skip the VUE header and position slots by default */
-   unsigned urb_entry_read_offset = 1;
+   int first_slot = brw_compute_first_urb_slot_required(wm_prog_data->inputs,
+                                                        fs_input_map);
+   assert(first_slot % 2 == 0);
+   unsigned urb_entry_read_offset = first_slot / 2;
    int max_source_attr = 0;
-   for (int attr = 0; attr < VARYING_SLOT_MAX; attr++) {
+   for (uint8_t idx = 0; idx < wm_prog_data->urb_setup_attribs_count; idx++) {
+      uint8_t attr = wm_prog_data->urb_setup_attribs[idx];
       int input_index = wm_prog_data->urb_setup[attr];
 
-      if (input_index < 0)
-         continue;
+      assert(0 <= input_index);
 
       /* gl_Viewport and gl_Layer are stored in the VUE header */
       if (attr == VARYING_SLOT_VIEWPORT || attr == VARYING_SLOT_LAYER) {
-         urb_entry_read_offset = 0;
          continue;
       }
 
@@ -376,9 +377,6 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
       }
 
       const int slot = fs_input_map->varying_to_slot[attr];
-
-      if (input_index >= 16)
-         continue;
 
       if (slot == -1) {
          /* This attribute does not exist in the VUE--that means that the
@@ -393,15 +391,24 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
          swiz.Attribute[input_index].ComponentOverrideY = true;
          swiz.Attribute[input_index].ComponentOverrideZ = true;
          swiz.Attribute[input_index].ComponentOverrideW = true;
-      } else {
-         /* We have to subtract two slots to accout for the URB entry output
-          * read offset in the VS and GS stages.
-          */
-         const int source_attr = slot - 2 * urb_entry_read_offset;
-         assert(source_attr >= 0 && source_attr < 32);
-         max_source_attr = MAX2(max_source_attr, source_attr);
-         swiz.Attribute[input_index].SourceAttribute = source_attr;
+         continue;
       }
+
+      /* We have to subtract two slots to accout for the URB entry output
+       * read offset in the VS and GS stages.
+       */
+      const int source_attr = slot - 2 * urb_entry_read_offset;
+      assert(source_attr >= 0 && source_attr < 32);
+      max_source_attr = MAX2(max_source_attr, source_attr);
+      /* The hardware can only do overrides on 16 overrides at a time, and the
+       * other up to 16 have to be lined up so that the input index = the
+       * output index. We'll need to do some tweaking to make sure that's the
+       * case.
+       */
+      if (input_index < 16)
+         swiz.Attribute[input_index].SourceAttribute = source_attr;
+      else
+         assert(source_attr == input_index);
    }
 
    sbe.VertexURBEntryReadOffset = urb_entry_read_offset;
@@ -2099,6 +2106,32 @@ compute_kill_pixel(struct anv_graphics_pipeline *pipeline,
       (ms_info && ms_info->alphaToCoverageEnable);
 }
 
+#if GEN_GEN == 12
+static void
+emit_3dstate_primitive_replication(struct anv_graphics_pipeline *pipeline)
+{
+   if (!pipeline->use_primitive_replication) {
+      anv_batch_emit(&pipeline->base.batch, GENX(3DSTATE_PRIMITIVE_REPLICATION), pr);
+      return;
+   }
+
+   uint32_t view_mask = pipeline->subpass->view_mask;
+   int view_count = util_bitcount(view_mask);
+   assert(view_count > 1 && view_count <= MAX_VIEWS_FOR_PRIMITIVE_REPLICATION);
+
+   anv_batch_emit(&pipeline->base.batch, GENX(3DSTATE_PRIMITIVE_REPLICATION), pr) {
+      pr.ReplicaMask = (1 << view_count) - 1;
+      pr.ReplicationCount = view_count - 1;
+
+      int i = 0, view_index;
+      for_each_bit(view_index, view_mask) {
+         pr.RTAIOffset[i] = view_index;
+         i++;
+      }
+   }
+}
+#endif
+
 static VkResult
 genX(graphics_pipeline_create)(
     VkDevice                                    _device,
@@ -2173,6 +2206,10 @@ genX(graphics_pipeline_create)(
                      vp_info,
                      pCreateInfo->pRasterizationState);
    emit_3dstate_streamout(pipeline, pCreateInfo->pRasterizationState);
+
+#if GEN_GEN == 12
+   emit_3dstate_primitive_replication(pipeline);
+#endif
 
 #if 0
    /* From gen7_vs_state.c */
@@ -2284,8 +2321,10 @@ compute_pipeline_create(
    else
       pipeline->cs_right_mask = ~0u >> (32 - cs_prog_data->simd_size);
 
+   const uint32_t threads = anv_cs_threads(pipeline);
+
    const uint32_t vfe_curbe_allocation =
-      ALIGN(cs_prog_data->push.per_thread.regs * cs_prog_data->threads +
+      ALIGN(cs_prog_data->push.per_thread.regs * threads +
             cs_prog_data->push.cross_thread.regs, 2);
 
    const uint32_t subslices = MAX2(device->physical->subslice_total, 1);
@@ -2368,7 +2407,7 @@ compute_pipeline_create(
       .ThreadPreemptionDisable = true,
 #endif
 
-      .NumberofThreadsinGPGPUThreadGroup = cs_prog_data->threads,
+      .NumberofThreadsinGPGPUThreadGroup = threads,
    };
    GENX(INTERFACE_DESCRIPTOR_DATA_pack)(NULL,
                                         pipeline->interface_descriptor_data,

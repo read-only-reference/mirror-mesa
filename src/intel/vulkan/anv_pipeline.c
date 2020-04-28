@@ -140,17 +140,30 @@ anv_shader_compile_to_nir(struct anv_device *device,
    struct nir_spirv_specialization *spec_entries = NULL;
    if (spec_info && spec_info->mapEntryCount > 0) {
       num_spec_entries = spec_info->mapEntryCount;
-      spec_entries = malloc(num_spec_entries * sizeof(*spec_entries));
+      spec_entries = calloc(num_spec_entries, sizeof(*spec_entries));
       for (uint32_t i = 0; i < num_spec_entries; i++) {
          VkSpecializationMapEntry entry = spec_info->pMapEntries[i];
          const void *data = spec_info->pData + entry.offset;
          assert(data + entry.size <= spec_info->pData + spec_info->dataSize);
 
          spec_entries[i].id = spec_info->pMapEntries[i].constantID;
-         if (spec_info->dataSize == 8)
-            spec_entries[i].data64 = *(const uint64_t *)data;
-         else
-            spec_entries[i].data32 = *(const uint32_t *)data;
+         switch (entry.size) {
+         case 8:
+            spec_entries[i].value.u64 = *(const uint64_t *)data;
+            break;
+         case 4:
+            spec_entries[i].value.u32 = *(const uint32_t *)data;
+            break;
+         case 2:
+            spec_entries[i].value.u16 = *(const uint16_t *)data;
+            break;
+         case 1:
+            spec_entries[i].value.u8 = *(const uint8_t *)data;
+            break;
+         default:
+            assert(!"Invalid spec constant size");
+            break;
+         }
       }
    }
 
@@ -687,7 +700,7 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    if (pipeline->type == ANV_PIPELINE_GRAPHICS) {
       NIR_PASS_V(nir, anv_nir_lower_multiview,
-                 anv_pipeline_to_graphics(pipeline)->subpass->view_mask);
+                 anv_pipeline_to_graphics(pipeline));
    }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
@@ -735,16 +748,23 @@ anv_pipeline_link_vs(const struct brw_compiler *compiler,
 static void
 anv_pipeline_compile_vs(const struct brw_compiler *compiler,
                         void *mem_ctx,
-                        struct anv_device *device,
+                        struct anv_graphics_pipeline *pipeline,
                         struct anv_pipeline_stage *vs_stage)
 {
+   /* When using Primitive Replication for multiview, each view gets its own
+    * position slot.
+    */
+   uint32_t pos_slots = pipeline->use_primitive_replication ?
+      anv_subpass_view_count(pipeline->subpass) : 1;
+
    brw_compute_vue_map(compiler->devinfo,
                        &vs_stage->prog_data.vs.base.vue_map,
                        vs_stage->nir->info.outputs_written,
-                       vs_stage->nir->info.separate_shader);
+                       vs_stage->nir->info.separate_shader,
+                       pos_slots);
 
    vs_stage->num_stats = 1;
-   vs_stage->code = brw_compile_vs(compiler, device, mem_ctx,
+   vs_stage->code = brw_compile_vs(compiler, pipeline->base.device, mem_ctx,
                                    &vs_stage->key.vs,
                                    &vs_stage->prog_data.vs,
                                    vs_stage->nir, -1,
@@ -887,7 +907,7 @@ anv_pipeline_compile_gs(const struct brw_compiler *compiler,
    brw_compute_vue_map(compiler->devinfo,
                        &gs_stage->prog_data.gs.base.vue_map,
                        gs_stage->nir->info.outputs_written,
-                       gs_stage->nir->info.separate_shader);
+                       gs_stage->nir->info.separate_shader, 1);
 
    gs_stage->num_stats = 1;
    gs_stage->code = brw_compile_gs(compiler, device, mem_ctx,
@@ -1167,6 +1187,27 @@ anv_pipeline_add_executables(struct anv_pipeline *pipeline,
    }
 }
 
+static void
+anv_pipeline_init_from_cached_graphics(struct anv_graphics_pipeline *pipeline)
+{
+   /* TODO: Cache this pipeline-wide information. */
+
+   /* Primitive replication depends on information from all the shaders.
+    * Recover this bit from the fact that we have more than one position slot
+    * in the vertex shader when using it.
+    */
+   assert(pipeline->active_stages & VK_SHADER_STAGE_VERTEX_BIT);
+   int pos_slots = 0;
+   const struct brw_vue_prog_data *vue_prog_data =
+      (const void *) pipeline->shaders[MESA_SHADER_VERTEX]->prog_data;
+   const struct brw_vue_map *vue_map = &vue_prog_data->vue_map;
+   for (int i = 0; i < vue_map->num_slots; i++) {
+      if (vue_map->slot_to_varying[i] == VARYING_SLOT_POS)
+         pos_slots++;
+   }
+   pipeline->use_primitive_replication = pos_slots > 1;
+}
+
 static VkResult
 anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
                               struct anv_pipeline_cache *cache,
@@ -1295,6 +1336,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
             anv_pipeline_add_executables(&pipeline->base, &stages[s],
                                          pipeline->shaders[s]);
          }
+         anv_pipeline_init_from_cached_graphics(pipeline);
          goto done;
       } else if (found > 0) {
          /* We found some but not all of our shaders.  This shouldn't happen
@@ -1383,6 +1425,23 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
       next_stage = &stages[s];
    }
 
+   if (pipeline->base.device->info.gen >= 12 &&
+       pipeline->subpass->view_mask != 0) {
+      /* For some pipelines HW Primitive Replication can be used instead of
+       * instancing to implement Multiview.  This depend on how viewIndex is
+       * used in all the active shaders, so this check can't be done per
+       * individual shaders.
+       */
+      nir_shader *shaders[MESA_SHADER_STAGES] = {};
+      for (unsigned s = 0; s < MESA_SHADER_STAGES; s++)
+         shaders[s] = stages[s].nir;
+
+      pipeline->use_primitive_replication =
+         anv_check_for_primitive_replication(shaders, pipeline);
+   } else {
+      pipeline->use_primitive_replication = false;
+   }
+
    struct anv_pipeline_stage *prev_stage = NULL;
    for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
       if (!stages[s].entrypoint)
@@ -1402,7 +1461,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
 
       switch (s) {
       case MESA_SHADER_VERTEX:
-         anv_pipeline_compile_vs(compiler, stage_ctx, pipeline->base.device,
+         anv_pipeline_compile_vs(compiler, stage_ctx, pipeline,
                                  &stages[s]);
          break;
       case MESA_SHADER_TESS_CTRL:
@@ -1662,6 +1721,23 @@ anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
    pipeline->cs = bin;
 
    return VK_SUCCESS;
+}
+
+uint32_t
+anv_cs_workgroup_size(const struct anv_compute_pipeline *pipeline)
+{
+   const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(pipeline);
+   return cs_prog_data->local_size[0] *
+          cs_prog_data->local_size[1] *
+          cs_prog_data->local_size[2];
+}
+
+uint32_t
+anv_cs_threads(const struct anv_compute_pipeline *pipeline)
+{
+   const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(pipeline);
+   return DIV_ROUND_UP(anv_cs_workgroup_size(pipeline),
+                       cs_prog_data->simd_size);
 }
 
 /**
@@ -2015,7 +2091,7 @@ anv_pipeline_init(struct anv_graphics_pipeline *pipeline,
     * the instance divisor by the number of views ensure that we repeat the
     * client's per-instance data once for each view.
     */
-   if (pipeline->subpass->view_mask) {
+   if (pipeline->subpass->view_mask && !pipeline->use_primitive_replication) {
       const uint32_t view_count = anv_subpass_view_count(pipeline->subpass);
       for (uint32_t vb = 0; vb < MAX_VBS; vb++) {
          if (pipeline->vb[vb].instanced)
@@ -2126,6 +2202,16 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
    }
 
    vk_outarray_append(&out, stat) {
+      WRITE_STR(stat->name, "SEND Count");
+      WRITE_STR(stat->description,
+                "Number of instructions in the final generated shader "
+                "executable which access external units such as the "
+                "constant cache or the sampler.");
+      stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
+      stat->value.u64 = exe->stats.sends;
+   }
+
+   vk_outarray_append(&out, stat) {
       WRITE_STR(stat->name, "Loop Count");
       WRITE_STR(stat->description,
                 "Number of loops (not unrolled) in the final generated "
@@ -2184,7 +2270,7 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
                    "Number of bytes of workgroup shared memory used by this "
                    "compute shader including any padding.");
          stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-         stat->value.u64 = prog_data->total_scratch;
+         stat->value.u64 = brw_cs_prog_data_const(prog_data)->slm_size;
       }
    }
 

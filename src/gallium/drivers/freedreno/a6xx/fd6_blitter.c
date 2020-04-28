@@ -157,6 +157,11 @@ emit_setup(struct fd_batch *batch)
 	fd6_event_write(batch, ring, PC_CCU_FLUSH_DEPTH_TS, true);
 	fd6_event_write(batch, ring, PC_CCU_INVALIDATE_COLOR, false);
 	fd6_event_write(batch, ring, PC_CCU_INVALIDATE_DEPTH, false);
+
+	/* normal BLIT_OP_SCALE operation needs bypass RB_CCU_CNTL */
+	OUT_WFI5(ring);
+	OUT_PKT4(ring, REG_A6XX_RB_CCU_CNTL, 1);
+	OUT_RING(ring, fd6_context(batch->ctx)->magic.RB_CCU_CNTL_bypass);
 }
 
 static uint32_t
@@ -334,7 +339,6 @@ emit_blit_or_clear_texture(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	enum a6xx_format sfmt, dfmt;
 	enum a6xx_tile_mode stile, dtile;
 	enum a3xx_color_swap sswap, dswap;
-	unsigned spitch, dpitch;
 	int sx1, sy1, sx2, sy2;
 	int dx1, dy1, dx2, dy2;
 
@@ -365,12 +369,6 @@ emit_blit_or_clear_texture(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	 */
 	sswap = fd6_resource_swap(src, info->src.format);
 	dswap = fd6_resource_swap(dst, info->dst.format);
-
-	/* Use the underlying resource format so that we get the right block width
-	 * for compressed textures.
-	 */
-	spitch = util_format_get_nblocksx(src->base.format, sslice->pitch) * src->layout.cpp;
-	dpitch = util_format_get_nblocksx(dst->base.format, dslice->pitch) * dst->layout.cpp;
 
 	uint32_t nr_samples = fd_resource_nr_samples(&dst->base);
 	sx1 = sbox->x * nr_samples;
@@ -502,7 +500,7 @@ emit_blit_or_clear_texture(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, A6XX_SP_PS_2D_SRC_SIZE_WIDTH(width) |
 				 A6XX_SP_PS_2D_SRC_SIZE_HEIGHT(height)); /* SP_PS_2D_SRC_SIZE */
 		OUT_RELOC(ring, src->bo, soff, 0, 0);    /* SP_PS_2D_SRC_LO/HI */
-		OUT_RING(ring, A6XX_SP_PS_2D_SRC_PITCH_PITCH(spitch));
+		OUT_RING(ring, A6XX_SP_PS_2D_SRC_PITCH_PITCH(sslice->pitch));
 
 		OUT_RING(ring, 0x00000000);
 		OUT_RING(ring, 0x00000000);
@@ -528,7 +526,7 @@ emit_blit_or_clear_texture(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				 COND(util_format_is_srgb(info->dst.format), A6XX_RB_2D_DST_INFO_SRGB) |
 				 COND(dubwc_enabled, A6XX_RB_2D_DST_INFO_FLAGS));
 		OUT_RELOCW(ring, dst->bo, doff, 0, 0);    /* RB_2D_DST_LO/HI */
-		OUT_RING(ring, A6XX_RB_2D_DST_SIZE_PITCH(dpitch));
+		OUT_RING(ring, A6XX_RB_2D_DST_SIZE_PITCH(dslice->pitch));
 		OUT_RING(ring, 0x00000000);
 		OUT_RING(ring, 0x00000000);
 		OUT_RING(ring, 0x00000000);
@@ -640,12 +638,12 @@ handle_rgba_blit(struct fd_context *ctx, const struct pipe_blit_info *info)
 	fd6_emit_restore(batch, batch->draw);
 	fd6_emit_lrz_flush(batch->draw);
 
-	mtx_lock(&ctx->screen->lock);
+	fd_screen_lock(ctx->screen);
 
 	fd_batch_resource_used(batch, fd_resource(info->src.resource), false);
 	fd_batch_resource_used(batch, fd_resource(info->dst.resource), true);
 
-	mtx_unlock(&ctx->screen->lock);
+	fd_screen_unlock(ctx->screen);
 
 	fd_batch_set_stage(batch, FD_STAGE_BLIT);
 

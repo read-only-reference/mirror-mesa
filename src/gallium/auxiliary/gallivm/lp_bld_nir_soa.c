@@ -1378,6 +1378,14 @@ static void emit_sysval_intrin(struct lp_build_nir_context *bld_base,
    }
 }
 
+static void emit_helper_invocation(struct lp_build_nir_context *bld_base,
+                                   LLVMValueRef *dst)
+{
+   struct gallivm_state *gallivm = bld_base->base.gallivm;
+   struct lp_build_context *uint_bld = &bld_base->uint_bld;
+   *dst = lp_build_cmp(uint_bld, PIPE_FUNC_NOTEQUAL, mask_vec(bld_base), lp_build_const_int_vec(gallivm, uint_bld->type, -1));
+}
+
 static void bgnloop(struct lp_build_nir_context *bld_base)
 {
    struct lp_build_nir_soa_context *bld = (struct lp_build_nir_soa_context *)bld_base;
@@ -1603,7 +1611,6 @@ static void emit_vote(struct lp_build_nir_context *bld_base, LLVMValueRef src, n
       lp_build_endif(&ifthen);
       lp_build_loop_end_cond(&loop_state, lp_build_const_int32(gallivm, bld_base->uint_bld.type.length),
 			     NULL, LLVMIntUGE);
-      lp_build_print_value(gallivm, "init_val is ", LLVMBuildLoad(builder, res_store, ""));
       init_val = LLVMBuildLoad(builder, res_store, "");
    } else {
       LLVMBuildStore(builder, lp_build_const_int32(gallivm, instr->intrinsic == nir_intrinsic_vote_any ? 0 : -1), res_store);
@@ -1730,6 +1737,7 @@ void lp_build_nir_soa(struct gallivm_state *gallivm,
    bld.bld_base.image_op = emit_image_op;
    bld.bld_base.image_size = emit_image_size;
    bld.bld_base.vote = emit_vote;
+   bld.bld_base.helper_invocation = emit_helper_invocation;
 
    bld.mask = params->mask;
    bld.inputs = params->inputs;

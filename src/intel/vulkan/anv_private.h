@@ -174,6 +174,7 @@ struct gen_perf_config;
 #define MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS 32
 #define ANV_UBO_BOUNDS_CHECK_ALIGNMENT 32
 #define ANV_SSBO_BOUNDS_CHECK_ALIGNMENT 4
+#define MAX_VIEWS_FOR_PRIMITIVE_REPLICATION 16
 
 /* From the Skylake PRM Vol. 7 "Binding Table Surface State Model":
  *
@@ -1043,6 +1044,7 @@ struct anv_physical_device {
     bool                                        has_context_priority;
     bool                                        has_context_isolation;
     bool                                        has_mem_available;
+    bool                                        has_mmap_offset;
     uint64_t                                    gtt_size;
 
     bool                                        use_softpin;
@@ -1290,9 +1292,19 @@ struct anv_device {
     struct anv_state_pool                       binding_table_pool;
     struct anv_state_pool                       surface_state_pool;
 
+    /** BO used for various workarounds
+     *
+     * There are a number of workarounds on our hardware which require writing
+     * data somewhere and it doesn't really matter where.  For that, we use
+     * this BO and just write to the first dword or so.
+     *
+     * We also need to be able to handle NULL buffers bound as pushed UBOs.
+     * For that, we use the high bytes (>= 1024) of the workaround BO.
+     */
     struct anv_bo *                             workaround_bo;
     struct anv_bo *                             trivial_batch_bo;
     struct anv_bo *                             hiz_clear_bo;
+    struct anv_state                            null_surface_state;
 
     struct anv_pipeline_cache                   default_pipeline_cache;
     struct blorp_context                        blorp;
@@ -1470,7 +1482,7 @@ uint64_t anv_get_absolute_timeout(uint64_t timeout);
 
 void* anv_gem_mmap(struct anv_device *device,
                    uint32_t gem_handle, uint64_t offset, uint64_t size, uint32_t flags);
-void anv_gem_munmap(void *p, uint64_t size);
+void anv_gem_munmap(struct anv_device *device, void *p, uint64_t size);
 uint32_t anv_gem_create(struct anv_device *device, uint64_t size);
 void anv_gem_close(struct anv_device *device, uint32_t gem_handle);
 uint32_t anv_gem_userptr(struct anv_device *device, void *mem, size_t size);
@@ -2476,8 +2488,10 @@ struct anv_push_constants {
    /** Dynamic offsets for dynamic UBOs and SSBOs */
    uint32_t dynamic_offsets[MAX_DYNAMIC_BUFFERS];
 
+   uint64_t push_reg_mask;
+
    /** Pad out to a multiple of 32 bytes */
-   uint32_t push_ubo_sizes[4];
+   uint32_t pad[2];
 
    struct {
       /** Base workgroup ID
@@ -2577,7 +2591,6 @@ struct anv_surface_state {
  */
 struct anv_attachment_state {
    enum isl_aux_usage                           aux_usage;
-   enum isl_aux_usage                           input_aux_usage;
    struct anv_surface_state                     color;
    struct anv_surface_state                     input;
 
@@ -2587,8 +2600,6 @@ struct anv_attachment_state {
    VkImageAspectFlags                           pending_load_aspects;
    bool                                         fast_clear;
    VkClearValue                                 clear_value;
-   bool                                         clear_color_is_zero_one;
-   bool                                         clear_color_is_zero;
 
    /* When multiview is active, attachments with a renderpass clear
     * operation have their respective layers cleared on the first
@@ -2744,11 +2755,11 @@ struct anv_cmd_state {
     * flat array.  For depth-stencil attachments, the surface state is simply
     * left blank.
     */
-   struct anv_state                             render_pass_states;
+   struct anv_state                             attachment_states;
 
    /**
     * A null surface state of the right size to match the framebuffer.  This
-    * is one of the states in render_pass_states.
+    * is one of the states in attachment_states.
     */
    struct anv_state                             null_surface_state;
 };
@@ -3207,6 +3218,11 @@ struct anv_graphics_pipeline {
    bool                                         kill_pixel;
    bool                                         depth_bounds_test_enable;
 
+   /* When primitive replication is used, subpass->view_mask will describe what
+    * views to replicate.
+    */
+   bool                                         use_primitive_replication;
+
    struct anv_state                             blend_state;
 
    uint32_t                                     vb_used;
@@ -3308,6 +3324,12 @@ anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
                         const struct anv_shader_module *module,
                         const char *entrypoint,
                         const VkSpecializationInfo *spec_info);
+
+uint32_t
+anv_cs_workgroup_size(const struct anv_compute_pipeline *pipeline);
+
+uint32_t
+anv_cs_threads(const struct anv_compute_pipeline *pipeline);
 
 struct anv_format_plane {
    enum isl_format isl_format:16;
@@ -3682,6 +3704,16 @@ anv_can_sample_with_hiz(const struct gen_device_info * const devinfo,
                         const struct anv_image *image)
 {
    if (!(image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT))
+      return false;
+
+   /* For Gen8-11, there are some restrictions around sampling from HiZ.
+    * The Skylake PRM docs for RENDER_SURFACE_STATE::AuxiliarySurfaceMode
+    * say:
+    *
+    *    "If this field is set to AUX_HIZ, Number of Multisamples must
+    *    be MULTISAMPLECOUNT_1, and Surface Type cannot be SURFTYPE_3D."
+    */
+   if (image->type == VK_IMAGE_TYPE_3D)
       return false;
 
    /* Allow this feature on BDW even though it is disabled in the BDW devinfo

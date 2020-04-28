@@ -171,6 +171,8 @@ a6xx_SOURCES := \
 	a6xx/fd6_blitter.h \
 	a6xx/fd6_compute.c \
 	a6xx/fd6_compute.h \
+	a6xx/fd6_const.c \
+	a6xx/fd6_const.h \
 	a6xx/fd6_context.c \
 	a6xx/fd6_context.h \
 	a6xx/fd6_draw.c \
@@ -195,12 +197,15 @@ a6xx_SOURCES := \
 	a6xx/fd6_screen.h \
 	a6xx/fd6_texture.c \
 	a6xx/fd6_texture.h \
+	a6xx/fd6_vsc.c \
+	a6xx/fd6_vsc.h \
 	a6xx/fd6_zsa.c \
 	a6xx/fd6_zsa.h
 
 ir3_SOURCES := \
 	ir3/ir3_cache.c \
 	ir3/ir3_cache.h \
+	ir3/ir3_const.h \
 	ir3/ir3_gallium.c \
 	ir3/ir3_gallium.h
 

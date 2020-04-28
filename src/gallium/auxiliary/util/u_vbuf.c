@@ -256,7 +256,8 @@ static const struct {
    { PIPE_FORMAT_R8G8B8A8_SSCALED,     PIPE_FORMAT_R32G32B32A32_FLOAT },
 };
 
-void u_vbuf_get_caps(struct pipe_screen *screen, struct u_vbuf_caps *caps)
+void u_vbuf_get_caps(struct pipe_screen *screen, struct u_vbuf_caps *caps,
+                     bool needs64b)
 {
    unsigned i;
 
@@ -272,6 +273,10 @@ void u_vbuf_get_caps(struct pipe_screen *screen, struct u_vbuf_caps *caps)
 
    for (i = 0; i < ARRAY_SIZE(vbuf_format_fallbacks); i++) {
       enum pipe_format format = vbuf_format_fallbacks[i].from;
+      unsigned comp_bits = util_format_get_component_bits(format, 0, 0);
+
+      if ((comp_bits > 32) && !needs64b)
+         continue;
 
       if (!screen->is_format_supported(screen, format, PIPE_BUFFER, 0, 0,
                                        PIPE_BIND_VERTEX_BUFFER)) {
@@ -1433,8 +1438,7 @@ void u_vbuf_draw_vbo(struct u_vbuf *mgr, const struct pipe_draw_info *info)
           * performance. */
          if (!info->indirect &&
              !new_info.primitive_restart &&
-             num_vertices > new_info.count * 4 &&
-             new_info.count > 32 &&
+             util_is_vbo_upload_ratio_too_large(new_info.count, num_vertices) &&
              !u_vbuf_mapping_vertex_buffer_blocks(mgr)) {
             unroll_indices = TRUE;
             user_vb_mask &= ~(mgr->nonzero_stride_vb_mask &

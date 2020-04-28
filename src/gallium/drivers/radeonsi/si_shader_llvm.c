@@ -134,7 +134,7 @@ void si_llvm_context_init(struct si_shader_context *ctx, struct si_screen *sscre
    ctx->compiler = compiler;
 
    ac_llvm_context_init(&ctx->ac, compiler, sscreen->info.chip_class, sscreen->info.family,
-                        AC_FLOAT_MODE_NO_SIGNED_ZEROS_FP_MATH, wave_size, 64);
+                        AC_FLOAT_MODE_DEFAULT_OPENGL, wave_size, 64);
 }
 
 void si_llvm_create_func(struct si_shader_context *ctx, const char *name, LLVMTypeRef *return_types,
@@ -526,7 +526,7 @@ void si_build_wrapper_function(struct si_shader_context *ctx, LLVMValueRef *part
       if (LLVMGetTypeKind(type) == LLVMPointerTypeKind) {
          type = LLVMGetElementType(type);
 
-         if (LLVMGetTypeKind(type) == LLVMVectorTypeKind) {
+         if (LLVMGetTypeKind(type) == LLVMFixedVectorTypeKind) {
             if (LLVMGetVectorSize(type) == 4)
                arg_type = AC_ARG_CONST_DESC_PTR;
             else if (LLVMGetVectorSize(type) == 8)

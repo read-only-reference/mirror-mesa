@@ -191,6 +191,9 @@ typedef struct shader_info {
    /* Whether the shader writes memory, including transform feedback. */
    bool writes_memory:1;
 
+   /* Whether gl_Layer is viewport-relative */
+   bool layer_viewport_relative:1;
+
    union {
       struct {
          /* Which inputs are doubles */
@@ -298,6 +301,7 @@ typedef struct shader_info {
 
       struct {
          uint16_t local_size[3];
+         uint16_t max_variable_local_size;
 
          bool local_size_variable:1;
          uint8_t user_data_components_amd:3;
@@ -330,6 +334,10 @@ typedef struct shader_info {
          uint8_t tcs_vertices_out;
          enum gl_tess_spacing spacing:2;
 
+         /** Is the vertex order counterclockwise? */
+         bool ccw:1;
+         bool point_mode:1;
+
          /* Bit mask of TCS per-vertex inputs (VS outputs) that are used
           * with a vertex index that is NOT the invocation id
           */
@@ -339,10 +347,6 @@ typedef struct shader_info {
           * with a vertex index that is NOT the invocation id
           */
          uint64_t tcs_cross_invocation_outputs_read;
-
-         /** Is the vertex order counterclockwise? */
-         bool ccw:1;
-         bool point_mode:1;
       } tess;
    };
 } shader_info;

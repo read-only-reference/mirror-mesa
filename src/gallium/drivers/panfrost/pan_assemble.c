@@ -28,13 +28,92 @@
 #include "pan_bo.h"
 #include "pan_context.h"
 #include "pan_util.h"
+#include "panfrost-quirks.h"
 
 #include "compiler/nir/nir.h"
 #include "nir/tgsi_to_nir.h"
 #include "midgard/midgard_compile.h"
+#include "bifrost/bifrost_compile.h"
 #include "util/u_dynarray.h"
 
 #include "tgsi/tgsi_dump.h"
+
+static unsigned
+pan_format_from_nir_base(nir_alu_type base)
+{
+        switch (base) {
+        case nir_type_int:
+                return MALI_FORMAT_SINT;
+        case nir_type_uint:
+        case nir_type_bool:
+                return MALI_FORMAT_UINT;
+        case nir_type_float:
+                return MALI_CHANNEL_FLOAT;
+        default:
+                unreachable("Invalid base");
+        }
+}
+
+static unsigned
+pan_format_from_nir_size(nir_alu_type base, unsigned size)
+{
+        if (base == nir_type_float) {
+                switch (size) {
+                case 16: return MALI_FORMAT_SINT;
+                case 32: return MALI_FORMAT_UNORM;
+                default:
+                        unreachable("Invalid float size for format");
+                }
+        } else {
+                switch (size) {
+                case 1:
+                case 8:  return MALI_CHANNEL_8;
+                case 16: return MALI_CHANNEL_16;
+                case 32: return MALI_CHANNEL_32;
+                default:
+                         unreachable("Invalid int size for format");
+                }
+        }
+}
+
+static enum mali_format
+pan_format_from_glsl(const struct glsl_type *type)
+{
+        enum glsl_base_type glsl_base = glsl_get_base_type(glsl_without_array(type));
+        nir_alu_type t = nir_get_nir_type_for_glsl_base_type(glsl_base);
+
+        unsigned base = nir_alu_type_get_base_type(t);
+        unsigned size = nir_alu_type_get_type_size(t);
+
+        return pan_format_from_nir_base(base) |
+                pan_format_from_nir_size(base, size) |
+                MALI_NR_CHANNELS(4);
+}
+
+static enum bifrost_shader_type
+bifrost_blend_type_from_nir(nir_alu_type nir_type)
+{
+        switch(nir_type) {
+        case 0: /* Render target not in use */
+                return 0;
+        case nir_type_float16:
+                return BIFROST_BLEND_F16;
+        case nir_type_float32:
+                return BIFROST_BLEND_F32;
+        case nir_type_int32:
+                return BIFROST_BLEND_I32;
+        case nir_type_uint32:
+                return BIFROST_BLEND_U32;
+        case nir_type_int16:
+                return BIFROST_BLEND_I16;
+        case nir_type_uint16:
+                return BIFROST_BLEND_U16;
+        default:
+                DBG("Unsupported blend shader type for NIR alu type %d", nir_type);
+                assert(0);
+                return 0;
+        }
+}
 
 void
 panfrost_shader_compile(struct panfrost_context *ctx,
@@ -64,8 +143,12 @@ panfrost_shader_compile(struct panfrost_context *ctx,
                 .alpha_ref = state->alpha_state.ref_value
         };
 
-        midgard_compile_shader_nir(s, &program, false, 0, dev->gpu_id,
-                        pan_debug & PAN_DBG_PRECOMPILE);
+        if (dev->quirks & IS_BIFROST) {
+                bifrost_compile_shader_nir(s, &program, dev->gpu_id);
+        } else {
+                midgard_compile_shader_nir(s, &program, false, 0, dev->gpu_id,
+                                pan_debug & PAN_DBG_PRECOMPILE);
+        }
 
         /* Prepare the compiled binary for upload */
         int size = program.compiled.size;
@@ -78,16 +161,16 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         if (size) {
                 state->bo = pan_bo_create(dev, size, PAN_BO_EXECUTE);
                 memcpy(state->bo->cpu, dst, size);
-                state->first_tag = program.first_tag;
-        } else {
-                /* No shader. Use dummy tag to avoid INSTR_INVALID_ENC */
-                state->first_tag = 1;
+        }
+
+        if (!(dev->quirks & IS_BIFROST)) {
+                /* If size = 0, no shader. Use dummy tag to avoid
+                 * INSTR_INVALID_ENC */
+                state->first_tag = size ? program.first_tag : 1;
         }
 
         util_dynarray_fini(&program.compiled);
 
-        /* Sysvals are prepended */
-        program.uniform_count += program.sysval_count;
         state->sysval_count = program.sysval_count;
         memcpy(state->sysval, program.sysvals, sizeof(state->sysval[0]) * state->sysval_count);
 
@@ -133,22 +216,45 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         if (outputs_written)
                 *outputs_written = s->info.outputs_written;
 
-        /* Separate as primary uniform count is truncated */
-        state->uniform_count = program.uniform_count;
+        /* Separate as primary uniform count is truncated. Sysvals are prefix
+         * uniforms */
+        state->uniform_count = s->num_uniforms + program.sysval_count;
         state->uniform_cutoff = program.uniform_cutoff;
         state->work_reg_count = program.work_register_count;
+
+        if (dev->quirks & IS_BIFROST)
+                for (unsigned i = 0; i < BIFROST_MAX_RENDER_TARGET_COUNT; i++)
+                        state->blend_types[i] = bifrost_blend_type_from_nir(program.blend_types[i]);
 
         unsigned default_vec1_swizzle = panfrost_get_default_swizzle(1);
         unsigned default_vec2_swizzle = panfrost_get_default_swizzle(2);
         unsigned default_vec4_swizzle = panfrost_get_default_swizzle(4);
 
+        /* Record the varying mapping for the command stream's bookkeeping */
+
+        unsigned p_varyings[32];
+        enum mali_format p_varying_type[32];
+
+        struct exec_list *l_varyings =
+                        stage == MESA_SHADER_VERTEX ? &s->outputs : &s->inputs;
+
+        nir_foreach_variable(var, l_varyings) {
+                unsigned loc = var->data.driver_location;
+                unsigned sz = glsl_count_attribute_slots(var->type, FALSE);
+
+                for (int c = 0; c < sz; ++c) {
+                        p_varyings[loc + c] = var->data.location + c;
+                        p_varying_type[loc + c] = pan_format_from_glsl(var->type);
+                }
+        }
+
         /* Iterate the varyings and emit the corresponding descriptor */
         for (unsigned i = 0; i < state->varying_count; ++i) {
-                unsigned location = program.varyings[i];
+                unsigned location = p_varyings[i];
 
                 /* Default to a vec4 varying */
                 struct mali_attr_meta v = {
-                        .format = program.varying_type[i],
+                        .format = p_varying_type[i],
                         .swizzle = default_vec4_swizzle,
                         .unknown1 = 0x2,
                 };

@@ -122,7 +122,7 @@ bi_ldst_type_name(enum bifrost_ldst_type type)
 /* The remaining functions in this file are for IR-internal
  * structures; the disassembler doesn't use them */
 
-static const char *
+const char *
 bi_class_name(enum bi_class cl)
 {
         switch (cl) {
@@ -137,6 +137,7 @@ bi_class_name(enum bi_class cl)
         case BI_CSEL: return "csel";
         case BI_DISCARD: return "discard";
         case BI_FMA: return "fma";
+        case BI_FMOV: return "fmov";
         case BI_FREXP: return "frexp";
         case BI_ISUB: return "isub";
         case BI_LOAD: return "load";
@@ -146,34 +147,49 @@ bi_class_name(enum bi_class cl)
         case BI_LOAD_VAR_ADDRESS: return "load_var_address";
         case BI_MINMAX: return "minmax";
         case BI_MOV: return "mov";
+        case BI_SELECT: return "select";
         case BI_SHIFT: return "shift";
         case BI_STORE: return "store";
         case BI_STORE_VAR: return "store_var";
         case BI_SPECIAL: return "special";
-        case BI_SWIZZLE: return "swizzle";
+        case BI_TABLE: return "table";
         case BI_TEX: return "tex";
         case BI_ROUND: return "round";
         default: return "unknown_class";
         }
 }
 
-static void
-bi_print_index(FILE *fp, bi_instruction *ins, unsigned index)
+static bool
+bi_print_dest_index(FILE *fp, bi_instruction *ins, unsigned index)
 {
         if (!index)
                 fprintf(fp, "_");
         else if (index & BIR_INDEX_REGISTER)
                 fprintf(fp, "br%u", index & ~BIR_INDEX_REGISTER);
-        else if (index & BIR_INDEX_UNIFORM)
+        else if (index & PAN_IS_REG)
+                fprintf(fp, "r%u", index >> 1);
+        else if (!(index & BIR_SPECIAL))
+                fprintf(fp, "%u", (index >> 1) - 1);
+        else
+                return false;
+
+        return true;
+}
+
+static void
+bi_print_index(FILE *fp, bi_instruction *ins, unsigned index, unsigned s)
+{
+        if (bi_print_dest_index(fp, ins, index))
+                return;
+
+        if (index & BIR_INDEX_UNIFORM)
                 fprintf(fp, "u%u", index & ~BIR_INDEX_UNIFORM);
         else if (index & BIR_INDEX_CONSTANT)
-                fprintf(fp, "#0x%" PRIx64, bi_get_immediate(ins, index));
+                fprintf(fp, "#0x%" PRIx64, bi_get_immediate(ins, s));
         else if (index & BIR_INDEX_ZERO)
                 fprintf(fp, "#0");
-        else if (index & BIR_IS_REG)
-                fprintf(fp, "r%u", index >> 1);
         else
-                fprintf(fp, "%u", (index >> 1) - 1);
+                fprintf(fp, "#err");
 }
 
 static void
@@ -190,50 +206,21 @@ bi_print_src(FILE *fp, bi_instruction *ins, unsigned s)
         if (abs)
                 fprintf(fp, "abs(");
 
-        bi_print_index(fp, ins, src);
+        if (ins->type == BI_BITWISE && ins->bitwise.src_invert[s])
+                fprintf(fp, "~");
+
+        bi_print_index(fp, ins, src, s);
 
         if (abs)
                 fprintf(fp, ")");
 }
 
-/* Prints a NIR ALU type in Bifrost-style ".f32" ".i8" etc */
-
-static void
-bi_print_alu_type(nir_alu_type t, FILE *fp)
-{
-        unsigned size = nir_alu_type_get_type_size(t);
-        nir_alu_type base = nir_alu_type_get_base_type(t);
-
-        switch (base) {
-        case nir_type_int:
-                fprintf(fp, ".i");
-                break;
-        case nir_type_uint:
-                fprintf(fp, ".u");
-                break;
-        case nir_type_bool:
-                fprintf(fp, ".b");
-                break;
-        case nir_type_float:
-                fprintf(fp, ".f");
-                break;
-        default:
-                fprintf(fp, ".unknown");
-                break;
-        }
-
-        fprintf(fp, "%u", size);
-}
-
 static void
 bi_print_swizzle(bi_instruction *ins, unsigned src, FILE *fp)
 {
-        unsigned size = nir_alu_type_get_type_size(ins->dest_type);
-        unsigned count = (size == 64) ? 1 : (32 / size);
-
         fprintf(fp, ".");
 
-        for (unsigned u = 0; u < count; ++u) {
+        for (unsigned u = 0; u < bi_get_component_count(ins, src); ++u) {
                 assert(ins->swizzle[src][u] < 4);
                 fputc("xyzw"[ins->swizzle[src][u]], fp);
         }
@@ -250,18 +237,51 @@ bi_bitwise_op_name(enum bi_bitwise_op op)
         }
 }
 
-static const char *
+const char *
+bi_table_op_name(enum bi_table_op op)
+{
+        switch (op) {
+        case BI_TABLE_LOG2_U_OVER_U_1_LOW: return "log2.help";
+        default: return "invalid";
+        }
+}
+
+const char *
 bi_special_op_name(enum bi_special_op op)
 {
         switch (op) {
         case BI_SPECIAL_FRCP: return "frcp";
         case BI_SPECIAL_FRSQ: return "frsq";
-        case BI_SPECIAL_FATAN: return "fatan";
-        case BI_SPECIAL_FSIN: return "fsin";
-        case BI_SPECIAL_FCOS: return "fcos";
-        case BI_SPECIAL_FEXP: return "fexp";
-        case BI_SPECIAL_FLOG2: return "flog2";
-        case BI_SPECIAL_FLOGE: return "flog";
+        case BI_SPECIAL_EXP2_LOW: return "exp2_low";
+        default: return "invalid";
+        }
+}
+
+const char *
+bi_reduce_op_name(enum bi_reduce_op op)
+{
+        switch (op) {
+        case BI_REDUCE_ADD_FREXPM: return "add_frexpm";
+        default: return "invalid";
+        }
+}
+
+const char *
+bi_frexp_op_name(enum bi_frexp_op op)
+{
+        switch (op) {
+        case BI_FREXPE_LOG: return "frexpe_log";
+        default: return "invalid";
+        }
+}
+
+const char *
+bi_tex_op_name(enum bi_tex_op op)
+{
+        switch (op) {
+        case BI_TEX_NORMAL: return "normal";
+        case BI_TEX_COMPACT: return "compact";
+        case BI_TEX_DUAL: return "dual";
         default: return "invalid";
         }
 }
@@ -278,7 +298,7 @@ bi_print_load_vary(struct bi_load_vary *load, FILE *fp)
                 fprintf(fp, ".flat");
 }
 
-static const char *
+const char *
 bi_cond_name(enum bi_cond cond)
 {
         switch (cond) {
@@ -299,27 +319,6 @@ bi_print_branch(struct bi_branch *branch, FILE *fp)
         fprintf(fp, ".%s", bi_cond_name(branch->cond));
 }
 
-static void
-bi_print_writemask(bi_instruction *ins, FILE *fp)
-{
-        unsigned bits_per_comp = nir_alu_type_get_type_size(ins->dest_type);
-        assert(bits_per_comp);
-        unsigned bytes_per_comp = bits_per_comp / 8;
-        unsigned comps = 16 / bytes_per_comp;
-        unsigned smask = (1 << bytes_per_comp) - 1;
-        fprintf(fp, ".");
-
-        for (unsigned i = 0; i < comps; ++i) {
-                unsigned masked = (ins->writemask >> (i * bytes_per_comp)) & smask;
-                if (!masked)
-                        continue;
-
-                assert(masked == smask);
-                assert(i < 4);
-                fputc("xyzw"[i], fp);
-        }
-}
-
 void
 bi_print_instruction(bi_instruction *ins, FILE *fp)
 {
@@ -327,14 +326,19 @@ bi_print_instruction(bi_instruction *ins, FILE *fp)
                 fprintf(fp, "%s", ins->op.minmax == BI_MINMAX_MIN ? "min" : "max");
         else if (ins->type == BI_BITWISE)
                 fprintf(fp, "%s", bi_bitwise_op_name(ins->op.bitwise));
-        else if (ins->type == BI_ROUND)
-                fprintf(fp, ins->op.round == BI_ROUND_MODE ? "roundMode": "round");
         else if (ins->type == BI_SPECIAL)
                 fprintf(fp, "%s", bi_special_op_name(ins->op.special));
-        else if (ins->type == BI_CMP)
-                fprintf(fp, "%s", bi_cond_name(ins->op.compare));
+        else if (ins->type == BI_TABLE)
+                fprintf(fp, "%s", bi_table_op_name(ins->op.table));
+        else if (ins->type == BI_REDUCE_FMA)
+                fprintf(fp, "%s", bi_reduce_op_name(ins->op.reduce));
+        else if (ins->type == BI_FREXP)
+                fprintf(fp, "%s", bi_frexp_op_name(ins->op.frexp));
         else
                 fprintf(fp, "%s", bi_class_name(ins->type));
+
+        if ((ins->type == BI_ADD || ins->type == BI_FMA) && ins->op.mscale)
+                fprintf(fp, ".mscale");
 
         if (ins->type == BI_MINMAX)
                 fprintf(fp, "%s", bi_minmax_mode_name(ins->minmax));
@@ -342,15 +346,20 @@ bi_print_instruction(bi_instruction *ins, FILE *fp)
                 bi_print_load_vary(&ins->load_vary, fp);
         else if (ins->type == BI_BRANCH)
                 bi_print_branch(&ins->branch, fp);
-        else if (ins->type == BI_CSEL)
-                fprintf(fp, ".%s", bi_cond_name(ins->csel_cond));
+        else if (ins->type == BI_CSEL || ins->type == BI_CMP)
+                fprintf(fp, ".%s", bi_cond_name(ins->cond));
         else if (ins->type == BI_BLEND)
                 fprintf(fp, ".loc%u", ins->blend_location);
-        else if (ins->type == BI_STORE || ins->type == BI_STORE_VAR)
-                fprintf(fp, ".v%u", ins->store_channels);
+        else if (ins->type == BI_TEX)
+                fprintf(fp, ".%s", bi_tex_op_name(ins->op.texture));
+        else if (ins->type == BI_BITWISE)
+                fprintf(fp, ".%cshift", ins->bitwise.rshift ? 'r' : 'l');
+
+        if (ins->vector_channels)
+                fprintf(fp, ".v%u", ins->vector_channels);
 
         if (ins->dest)
-                bi_print_alu_type(ins->dest_type, fp);
+                pan_print_alu_type(ins->dest_type, fp);
 
         if (bi_has_outmod(ins))
                 fprintf(fp, "%s", bi_output_mod_name(ins->outmod));
@@ -359,10 +368,11 @@ bi_print_instruction(bi_instruction *ins, FILE *fp)
                 fprintf(fp, "%s", bi_round_mode_name(ins->roundmode));
 
         fprintf(fp, " ");
-        bi_print_index(fp, ins, ins->dest);
+        bool succ = bi_print_dest_index(fp, ins, ins->dest);
+        assert(succ);
 
-        if (ins->dest)
-                bi_print_writemask(ins, fp);
+        if (ins->dest_offset)
+                fprintf(fp, "+%u", ins->dest_offset);
 
         fprintf(fp, ", ");
 
@@ -370,7 +380,7 @@ bi_print_instruction(bi_instruction *ins, FILE *fp)
                 bi_print_src(fp, ins, s);
 
                 if (ins->src[s] && !(ins->src[s] & (BIR_INDEX_CONSTANT | BIR_INDEX_ZERO))) {
-                        bi_print_alu_type(ins->src_types[s], fp);
+                        pan_print_alu_type(ins->src_types[s], fp);
                         bi_print_swizzle(ins, s, fp);
                 }
 

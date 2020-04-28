@@ -264,7 +264,7 @@ ra_block_find_definers(struct ir3_ra_ctx *ctx, struct ir3_block *block)
 		if (instr->regs_count == 0)
 			continue;
 		/* couple special cases: */
-		if (writes_addr(instr) || writes_pred(instr)) {
+		if (writes_addr0(instr) || writes_addr1(instr) || writes_pred(instr)) {
 			id->cls = -1;
 		} else if (instr->regs[0]->flags & IR3_REG_ARRAY) {
 			id->cls = total_class_count;
@@ -441,11 +441,11 @@ ra_select_reg_merged(unsigned int n, BITSET_WORD *regs, void *data)
 	if (!ctx->scalar_pass) {
 		base = ctx->set->gpr_to_ra_reg[class][0];
 		if (high) {
-			max_target = HIGH_CLASS_REGS(sz);
+			max_target = HIGH_CLASS_REGS(class - HIGH_OFFSET);
 		} else if (half) {
-			max_target = HALF_CLASS_REGS(sz);
+			max_target = HALF_CLASS_REGS(class - HALF_OFFSET);
 		} else {
-			max_target = CLASS_REGS(sz);
+			max_target = CLASS_REGS(class);
 		}
 
 		if ((sz == 1) && !high) {
@@ -478,9 +478,16 @@ ra_select_reg_merged(unsigned int n, BITSET_WORD *regs, void *data)
 	 * for write after read hazards:
 	 */
 	struct ir3_instruction *instr = name_to_instr(ctx, n);
-	if (is_sfu(instr) && instr->regs[1]->instr) {
-		struct ir3_instruction *src = instr->regs[1]->instr;
-		unsigned src_n = scalar_name(ctx, src, 0);
+	if (is_sfu(instr)) {
+		struct ir3_register *src = instr->regs[1];
+		int src_n;
+
+		if ((src->flags & IR3_REG_ARRAY) && !(src->flags & IR3_REG_RELATIV)) {
+			struct ir3_array *arr = ir3_lookup_array(ctx->ir, src->array.id);
+			src_n = arr->base + src->array.offset;
+		} else {
+			src_n = scalar_name(ctx, src->instr, 0);
+		}
 
 		unsigned reg = ra_get_node_reg(ctx->g, src_n);
 
@@ -534,7 +541,7 @@ ra_init(struct ir3_ra_ctx *ctx)
 	unsigned n, base;
 
 	ir3_clear_mark(ctx->ir);
-	n = ir3_count_instructions(ctx->ir);
+	n = ir3_count_instructions_ra(ctx->ir);
 
 	ctx->instrd = rzalloc_array(NULL, struct ir3_ra_instr_data, n);
 
@@ -943,6 +950,15 @@ ra_calc_block_live_values(struct ir3_ra_ctx *ctx, struct ir3_block *block)
 
 	/* the remaining live should match liveout (for extra sanity testing): */
 	if (RA_DEBUG) {
+		unsigned new_dead = 0;
+		BITSET_FOREACH_SET (name, live, ctx->alloc_count) {
+			/* Is this the last use? */
+			if (ctx->use[name] != block->end_ip)
+				continue;
+			new_dead += name_size(ctx, name);
+			d("NEW_DEAD: %u (new_dead=%u)", name, new_dead);
+			BITSET_CLEAR(live, name);
+		}
 		unsigned liveout = 0;
 		BITSET_FOREACH_SET (name, bd->liveout, ctx->alloc_count) {
 			liveout += name_size(ctx, name);
@@ -1082,39 +1098,6 @@ static void fixup_half_instr_dst(struct ir3_instruction *instr)
 	case 1: /* move instructions */
 		instr->cat1.dst_type = half_type(instr->cat1.dst_type);
 		break;
-	case 3:
-		switch (instr->opc) {
-		case OPC_MAD_F32:
-			/* Available for that dest is half and srcs are full.
-			 * eg. mad.f32 hr0, r0.x, r0.y, r0.z
-			 */
-			if (instr->regs[1]->flags & IR3_REG_HALF)
-				instr->opc = OPC_MAD_F16;
-			break;
-		case OPC_SEL_B32:
-			instr->opc = OPC_SEL_B16;
-			break;
-		case OPC_SEL_S32:
-			instr->opc = OPC_SEL_S16;
-			break;
-		case OPC_SEL_F32:
-			instr->opc = OPC_SEL_F16;
-			break;
-		case OPC_SAD_S32:
-			instr->opc = OPC_SAD_S16;
-			break;
-		/* instructions may already be fixed up: */
-		case OPC_MAD_F16:
-		case OPC_SEL_B16:
-		case OPC_SEL_S16:
-		case OPC_SEL_F16:
-		case OPC_SAD_S16:
-			break;
-		default:
-			assert(0);
-			break;
-		}
-		break;
 	case 4:
 		switch (instr->opc) {
 		case OPC_RSQ:
@@ -1141,6 +1124,21 @@ static void fixup_half_instr_src(struct ir3_instruction *instr)
 	switch (instr->opc) {
 	case OPC_MOV:
 		instr->cat1.src_type = half_type(instr->cat1.src_type);
+		break;
+	case OPC_MAD_F32:
+		instr->opc = OPC_MAD_F16;
+		break;
+	case OPC_SEL_B32:
+		instr->opc = OPC_SEL_B16;
+		break;
+	case OPC_SEL_S32:
+		instr->opc = OPC_SEL_S16;
+		break;
+	case OPC_SEL_F32:
+		instr->opc = OPC_SEL_F16;
+		break;
+	case OPC_SAD_S32:
+		instr->opc = OPC_SAD_S16;
 		break;
 	default:
 		break;
@@ -1269,6 +1267,62 @@ ra_block_alloc(struct ir3_ra_ctx *ctx, struct ir3_block *block)
 	}
 }
 
+static void
+assign_arr_base(struct ir3_ra_ctx *ctx, struct ir3_array *arr,
+		struct ir3_instruction **precolor, unsigned nprecolor)
+{
+	unsigned base = 0;
+
+	/* figure out what else we conflict with which has already
+	 * been assigned:
+	 */
+retry:
+	foreach_array (arr2, &ctx->ir->array_list) {
+		if (arr2 == arr)
+			break;
+		if (arr2->end_ip == 0)
+			continue;
+		/* if it intersects with liverange AND register range.. */
+		if (intersects(arr->start_ip, arr->end_ip,
+				arr2->start_ip, arr2->end_ip) &&
+			intersects(base, base + reg_size_for_array(arr),
+				arr2->reg, arr2->reg + reg_size_for_array(arr2))) {
+			base = MAX2(base, arr2->reg + reg_size_for_array(arr2));
+			goto retry;
+		}
+	}
+
+	/* also need to not conflict with any pre-assigned inputs: */
+	for (unsigned i = 0; i < nprecolor; i++) {
+		struct ir3_instruction *instr = precolor[i];
+
+		if (!instr || (instr->flags & IR3_INSTR_UNUSED))
+			continue;
+
+		struct ir3_ra_instr_data *id = &ctx->instrd[instr->ip];
+
+		/* only consider the first component: */
+		if (id->off > 0)
+			continue;
+
+		unsigned name = ra_name(ctx, id);
+		unsigned regid = instr->regs[0]->num;
+
+		/* Check if array intersects with liverange AND register
+		 * range of the input:
+		 */
+		if (intersects(arr->start_ip, arr->end_ip,
+						ctx->def[name], ctx->use[name]) &&
+				intersects(base, base + reg_size_for_array(arr),
+						regid, regid + class_sizes[id->cls])) {
+			base = MAX2(base, regid + class_sizes[id->cls]);
+			goto retry;
+		}
+	}
+
+	arr->reg = base;
+}
+
 /* handle pre-colored registers.  This includes "arrays" (which could be of
  * length 1, used for phi webs lowered to registers in nir), as well as
  * special shader input values that need to be pinned to certain registers.
@@ -1276,7 +1330,6 @@ ra_block_alloc(struct ir3_ra_ctx *ctx, struct ir3_block *block)
 static void
 ra_precolor(struct ir3_ra_ctx *ctx, struct ir3_instruction **precolor, unsigned nprecolor)
 {
-	unsigned num_precolor = 0;
 	for (unsigned i = 0; i < nprecolor; i++) {
 		if (precolor[i] && !(precolor[i]->flags & IR3_INSTR_UNUSED)) {
 			struct ir3_instruction *instr = precolor[i];
@@ -1316,7 +1369,6 @@ ra_precolor(struct ir3_ra_ctx *ctx, struct ir3_instruction **precolor, unsigned 
 			unsigned reg = ctx->set->gpr_to_ra_reg[id->cls][regid];
 			unsigned name = ra_name(ctx, id);
 			ra_set_node_reg(ctx->g, name, reg);
-			num_precolor = MAX2(regid, num_precolor);
 		}
 	}
 
@@ -1327,59 +1379,14 @@ ra_precolor(struct ir3_ra_ctx *ctx, struct ir3_instruction **precolor, unsigned 
 	 * But on a5xx and earlier it will need to track two bases.
 	 */
 	foreach_array (arr, &ctx->ir->array_list) {
-		unsigned base = 0;
 
 		if (arr->end_ip == 0)
 			continue;
 
-		/* figure out what else we conflict with which has already
-		 * been assigned:
-		 */
-retry:
-		foreach_array (arr2, &ctx->ir->array_list) {
-			if (arr2 == arr)
-				break;
-			if (arr2->end_ip == 0)
-				continue;
-			/* if it intersects with liverange AND register range.. */
-			if (intersects(arr->start_ip, arr->end_ip,
-					arr2->start_ip, arr2->end_ip) &&
-				intersects(base, base + reg_size_for_array(arr),
-					arr2->reg, arr2->reg + reg_size_for_array(arr2))) {
-				base = MAX2(base, arr2->reg + reg_size_for_array(arr2));
-				goto retry;
-			}
-		}
+		if (!ctx->scalar_pass)
+			assign_arr_base(ctx, arr, precolor, nprecolor);
 
-		/* also need to not conflict with any pre-assigned inputs: */
-		for (unsigned i = 0; i < nprecolor; i++) {
-			struct ir3_instruction *instr = precolor[i];
-
-			if (!instr || (instr->flags & IR3_INSTR_UNUSED))
-				continue;
-
-			struct ir3_ra_instr_data *id = &ctx->instrd[instr->ip];
-
-			/* only consider the first component: */
-			if (id->off > 0)
-				continue;
-
-			unsigned name = ra_name(ctx, id);
-			unsigned regid = instr->regs[0]->num;
-
-			/* Check if array intersects with liverange AND register
-			 * range of the input:
-			 */
-			if (intersects(arr->start_ip, arr->end_ip,
-							ctx->def[name], ctx->use[name]) &&
-					intersects(base, base + reg_size_for_array(arr),
-							regid, regid + class_sizes[id->cls])) {
-				base = MAX2(base, regid + class_sizes[id->cls]);
-				goto retry;
-			}
-		}
-
-		arr->reg = base;
+		unsigned base = arr->reg;
 
 		for (unsigned i = 0; i < arr->length; i++) {
 			unsigned name, reg;
@@ -1541,20 +1548,14 @@ ir3_ra(struct ir3_shader_variant *v, struct ir3_instruction **precolor,
 	if (ret)
 		return ret;
 
-	if (ir3_shader_debug & IR3_DBG_OPTMSGS) {
-		printf("AFTER RA (1st pass):\n");
-		ir3_print(v->ir);
-	}
+	ir3_debug_print(v->ir, "AFTER RA (1st pass)");
 
 	/* Second pass, assign the scalar registers: */
 	ret = ir3_ra_pass(v, precolor, nprecolor, true);
 	if (ret)
 		return ret;
 
-	if (ir3_shader_debug & IR3_DBG_OPTMSGS) {
-		printf("AFTER RA (2nd pass):\n");
-		ir3_print(v->ir);
-	}
+	ir3_debug_print(v->ir, "AFTER RA (2st pass)");
 
 #ifdef DEBUG
 #  define SANITY_CHECK DEBUG

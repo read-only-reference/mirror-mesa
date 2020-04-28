@@ -24,7 +24,9 @@
 
 #include "pan_bo.h"
 #include "pan_context.h"
+#include "pan_cmdstream.h"
 #include "pan_util.h"
+#include "panfrost-quirks.h"
 
 static struct mali_rt_format
 panfrost_mfbd_format(struct pipe_surface *surf)
@@ -159,6 +161,10 @@ panfrost_mfbd_clear(
         struct mali_render_target *rts,
         unsigned rt_count)
 {
+        struct panfrost_context *ctx = batch->ctx;
+        struct pipe_context *gallium = (struct pipe_context *) ctx;
+        struct panfrost_device *dev = pan_device(gallium->screen);
+
         for (unsigned i = 0; i < rt_count; ++i) {
                 if (!(batch->clear & (PIPE_CLEAR_COLOR0 << i)))
                         continue;
@@ -175,6 +181,11 @@ panfrost_mfbd_clear(
 
         if (batch->clear & PIPE_CLEAR_STENCIL) {
                 fb->clear_stencil = batch->clear_stencil;
+        }
+
+        if (dev->quirks & IS_BIFROST) {
+                fbx->clear_color_1 = batch->clear_color[0][0];
+                fbx->clear_color_2 = 0xc0000000 | (fbx->clear_color_1 & 0xffff); /* WTF? */
         }
 }
 
@@ -364,9 +375,7 @@ panfrost_emit_mfbd(struct panfrost_batch *batch, unsigned vertex_count)
         unsigned width = batch->key.width;
         unsigned height = batch->key.height;
 
-        unsigned shift = panfrost_get_stack_shift(batch->stack_size);
-
-        struct mali_framebuffer framebuffer = {
+        struct mali_framebuffer mfbd = {
                 .width1 = MALI_POSITIVE(width),
                 .height1 = MALI_POSITIVE(height),
                 .width2 = MALI_POSITIVE(width),
@@ -376,17 +385,25 @@ panfrost_emit_mfbd(struct panfrost_batch *batch, unsigned vertex_count)
 
                 .rt_count_1 = MALI_POSITIVE(batch->key.nr_cbufs),
                 .rt_count_2 = 4,
-
-                .tiler = panfrost_emit_midg_tiler(batch, vertex_count),
-
-                .shared_memory = {
-                        .stack_shift = shift,
-                        .scratchpad = panfrost_batch_get_scratchpad(batch, shift, dev->thread_tls_alloc, dev->core_count)->gpu,
-                        .shared_workgroup_count = ~0,
-                }
         };
 
-        return framebuffer;
+        if (dev->quirks & IS_BIFROST) {
+                mfbd.msaa.sample_locations = panfrost_emit_sample_locations(batch);
+                mfbd.tiler_meta = panfrost_batch_get_tiler_meta(batch, vertex_count);
+        } else {
+                unsigned shift = panfrost_get_stack_shift(batch->stack_size);
+                struct panfrost_bo *bo = panfrost_batch_get_scratchpad(batch,
+                                                                       shift,
+                                                                       dev->thread_tls_alloc,
+                                                                       dev->core_count);
+                mfbd.shared_memory.stack_shift = shift;
+                mfbd.shared_memory.scratchpad = bo->gpu;
+                mfbd.shared_memory.shared_workgroup_count = ~0;
+
+                mfbd.tiler = panfrost_emit_midg_tiler(batch, vertex_count);
+        }
+
+        return mfbd;
 }
 
 void

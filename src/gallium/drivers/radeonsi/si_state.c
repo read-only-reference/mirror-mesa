@@ -455,17 +455,29 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
    blend->dual_src_blend = util_blend_state_is_dual(state, 0);
    blend->logicop_enable = logicop_enable;
 
+   unsigned num_shader_outputs = state->max_rt + 1; /* estimate */
+   if (blend->dual_src_blend)
+      num_shader_outputs = MAX2(num_shader_outputs, 2);
+
    if (logicop_enable) {
       color_control |= S_028808_ROP3(state->logicop_func | (state->logicop_func << 4));
    } else {
       color_control |= S_028808_ROP3(0xcc);
    }
 
-   si_pm4_set_reg(pm4, R_028B70_DB_ALPHA_TO_MASK,
-                  S_028B70_ALPHA_TO_MASK_ENABLE(state->alpha_to_coverage) |
-                     S_028B70_ALPHA_TO_MASK_OFFSET0(3) | S_028B70_ALPHA_TO_MASK_OFFSET1(1) |
-                     S_028B70_ALPHA_TO_MASK_OFFSET2(0) | S_028B70_ALPHA_TO_MASK_OFFSET3(2) |
-                     S_028B70_OFFSET_ROUND(1));
+   if (state->alpha_to_coverage && state->alpha_to_coverage_dither) {
+      si_pm4_set_reg(pm4, R_028B70_DB_ALPHA_TO_MASK,
+                     S_028B70_ALPHA_TO_MASK_ENABLE(state->alpha_to_coverage) |
+                        S_028B70_ALPHA_TO_MASK_OFFSET0(3) | S_028B70_ALPHA_TO_MASK_OFFSET1(1) |
+                        S_028B70_ALPHA_TO_MASK_OFFSET2(0) | S_028B70_ALPHA_TO_MASK_OFFSET3(2) |
+                        S_028B70_OFFSET_ROUND(1));
+   } else {
+      si_pm4_set_reg(pm4, R_028B70_DB_ALPHA_TO_MASK,
+                     S_028B70_ALPHA_TO_MASK_ENABLE(state->alpha_to_coverage) |
+                        S_028B70_ALPHA_TO_MASK_OFFSET0(2) | S_028B70_ALPHA_TO_MASK_OFFSET1(2) |
+                        S_028B70_ALPHA_TO_MASK_OFFSET2(2) | S_028B70_ALPHA_TO_MASK_OFFSET3(2) |
+                        S_028B70_OFFSET_ROUND(0));
+   }
 
    if (state->alpha_to_coverage)
       blend->need_src_alpha_4bit |= 0xf;
@@ -473,7 +485,7 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
    blend->cb_target_mask = 0;
    blend->cb_target_enabled_4bit = 0;
 
-   for (int i = 0; i < 8; i++) {
+   for (int i = 0; i < num_shader_outputs; i++) {
       /* state->rt entries > 0 only written if independent blending */
       const int j = state->independent_blend_enable ? i : 0;
 
@@ -576,7 +588,7 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
 
       blend->blend_enable_4bit |= 0xfu << (i * 4);
 
-      if (sctx->chip_class >= GFX8 && sctx->family <= CHIP_NAVI14)
+      if (sctx->chip_class >= GFX8 && sctx->chip_class <= GFX10)
          blend->dcc_msaa_corruption_4bit |= 0xfu << (i * 4);
 
       /* This is only important for formats without alpha. */
@@ -587,7 +599,7 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
          blend->need_src_alpha_4bit |= 0xfu << (i * 4);
    }
 
-   if (sctx->chip_class >= GFX8 && sctx->family <= CHIP_NAVI14 && logicop_enable)
+   if (sctx->chip_class >= GFX8 && sctx->chip_class <= GFX10 && logicop_enable)
       blend->dcc_msaa_corruption_4bit |= blend->cb_target_enabled_4bit;
 
    if (blend->cb_target_mask) {
@@ -601,13 +613,13 @@ static void *si_create_blend_state_mode(struct pipe_context *ctx,
        * Vulkan does this.
        */
       if (blend->dual_src_blend) {
-         for (int i = 0; i < 8; i++) {
+         for (int i = 0; i < num_shader_outputs; i++) {
             sx_mrt_blend_opt[i] = S_028760_COLOR_COMB_FCN(V_028760_OPT_COMB_NONE) |
                                   S_028760_ALPHA_COMB_FCN(V_028760_OPT_COMB_NONE);
          }
       }
 
-      for (int i = 0; i < 8; i++)
+      for (int i = 0; i < num_shader_outputs; i++)
          si_pm4_set_reg(pm4, R_028760_SX_MRT0_BLEND_OPT + i * 4, sx_mrt_blend_opt[i]);
 
       /* RB+ doesn't work with dual source blending, logic op, and RESOLVE. */
@@ -2404,10 +2416,10 @@ static void si_initialize_color_surface(struct si_context *sctx, struct si_surfa
          min_compressed_block_size = V_028C78_MIN_BLOCK_SIZE_64B;
 
       surf->cb_dcc_control = S_028C78_MAX_UNCOMPRESSED_BLOCK_SIZE(V_028C78_MAX_BLOCK_SIZE_256B) |
-                             S_028C78_MAX_COMPRESSED_BLOCK_SIZE(V_028C78_MAX_BLOCK_SIZE_128B) |
+                             S_028C78_MAX_COMPRESSED_BLOCK_SIZE(tex->surface.u.gfx9.dcc.max_compressed_block_size) |
                              S_028C78_MIN_COMPRESSED_BLOCK_SIZE(min_compressed_block_size) |
-                             S_028C78_INDEPENDENT_64B_BLOCKS(0) |
-                             S_028C78_INDEPENDENT_128B_BLOCKS(1);
+                             S_028C78_INDEPENDENT_64B_BLOCKS(tex->surface.u.gfx9.dcc.independent_64B_blocks) |
+                             S_028C78_INDEPENDENT_128B_BLOCKS(tex->surface.u.gfx9.dcc.independent_128B_blocks);
    } else if (sctx->chip_class >= GFX8) {
       unsigned max_uncompressed_block_size = V_028C78_MAX_BLOCK_SIZE_256B;
       unsigned min_compressed_block_size = V_028C78_MIN_BLOCK_SIZE_32B;
@@ -3787,7 +3799,7 @@ static void gfx10_make_texture_descriptor(
 
    if (tex->surface.dcc_offset) {
       state[6] |= S_00A018_MAX_UNCOMPRESSED_BLOCK_SIZE(V_028C78_MAX_BLOCK_SIZE_256B) |
-                  S_00A018_MAX_COMPRESSED_BLOCK_SIZE(V_028C78_MAX_BLOCK_SIZE_128B) |
+                  S_00A018_MAX_COMPRESSED_BLOCK_SIZE(tex->surface.u.gfx9.dcc.max_compressed_block_size) |
                   S_00A018_ALPHA_IS_ON_MSB(vi_alpha_is_on_msb(screen, pipe_format));
    }
 

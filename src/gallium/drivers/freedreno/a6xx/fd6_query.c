@@ -93,9 +93,7 @@ occlusion_pause(struct fd_acc_query *aq, struct fd_batch *batch)
 	OUT_PKT4(ring, REG_A6XX_RB_SAMPLE_COUNT_ADDR_LO, 2);
 	OUT_RELOCW(ring, query_sample(aq, stop));
 
-	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
-	OUT_RING(ring, ZPASS_DONE);
-	fd_reset_wfi(batch);
+	fd6_event_write(batch, ring, ZPASS_DONE, false);
 
 	OUT_PKT7(ring, CP_WAIT_REG_MEM, 6);
 	OUT_RING(ring, 0x00000014);   // XXX
@@ -166,7 +164,7 @@ timestamp_resume(struct fd_acc_query *aq, struct fd_batch *batch)
 	struct fd_ringbuffer *ring = batch->draw;
 
 	OUT_PKT7(ring, CP_EVENT_WRITE, 4);
-	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(CACHE_FLUSH_AND_INV_EVENT) |
+	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(RB_DONE_TS) |
 			CP_EVENT_WRITE_0_TIMESTAMP);
 	OUT_RELOCW(ring, query_sample(aq, start));
 	OUT_RING(ring, 0x00000000);
@@ -180,7 +178,7 @@ time_elapsed_pause(struct fd_acc_query *aq, struct fd_batch *batch)
 	struct fd_ringbuffer *ring = batch->draw;
 
 	OUT_PKT7(ring, CP_EVENT_WRITE, 4);
-	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(CACHE_FLUSH_AND_INV_EVENT) |
+	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(RB_DONE_TS) |
 			CP_EVENT_WRITE_0_TIMESTAMP);
 	OUT_RELOCW(ring, query_sample(aq, stop));
 	OUT_RING(ring, 0x00000000);
@@ -209,7 +207,7 @@ static void
 record_timestamp(struct fd_ringbuffer *ring, struct fd_bo *bo, unsigned offset)
 {
 	OUT_PKT7(ring, CP_EVENT_WRITE, 4);
-	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(CACHE_FLUSH_AND_INV_EVENT) |
+	OUT_RING(ring, CP_EVENT_WRITE_0_EVENT(RB_DONE_TS) |
 			CP_EVENT_WRITE_0_TIMESTAMP);
 	OUT_RELOCW(ring, bo, offset, 0, 0);
 	OUT_RING(ring, 0x00000000);

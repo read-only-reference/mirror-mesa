@@ -106,7 +106,7 @@ set_io_mask(nir_shader *shader, nir_variable *var, int offset, int len,
                shader->info.inputs_read_indirectly |= bitfield;
          }
 
-         if (cross_invocation)
+         if (cross_invocation && shader->info.stage == MESA_SHADER_TESS_CTRL)
             shader->info.tess.tcs_cross_invocation_inputs_read |= bitfield;
 
          if (shader->info.stage == MESA_SHADER_FRAGMENT) {
@@ -125,7 +125,7 @@ set_io_mask(nir_shader *shader, nir_variable *var, int offset, int len,
                   shader->info.outputs_accessed_indirectly |= bitfield;
             }
 
-            if (cross_invocation)
+            if (cross_invocation && shader->info.stage == MESA_SHADER_TESS_CTRL)
                shader->info.tess.tcs_cross_invocation_outputs_read |= bitfield;
          } else {
             if (is_patch_generic) {
@@ -157,6 +157,17 @@ mark_whole_variable(nir_shader *shader, nir_variable *var,
    const struct glsl_type *type = var->type;
 
    if (nir_is_per_vertex_io(var, shader->info.stage)) {
+      assert(glsl_type_is_array(type));
+      type = glsl_get_array_element(type);
+   }
+
+   if (var->data.per_view) {
+      /* TODO: Per view and Per Vertex are not currently used together.  When
+       * they start to be used (e.g. when adding Primitive Replication for GS
+       * on Intel), verify that "peeling" the type twice is correct.  This
+       * assert ensures we remember it.
+       */
+      assert(!nir_is_per_vertex_io(var, shader->info.stage));
       assert(glsl_type_is_array(type));
       type = glsl_get_array_element(type);
    }
@@ -208,6 +219,10 @@ try_mask_partial_io(nir_shader *shader, nir_variable *var,
       assert(glsl_type_is_array(type));
       type = glsl_get_array_element(type);
    }
+
+   /* Per view variables will be considered as a whole. */
+   if (var->data.per_view)
+      return false;
 
    /* The code below only handles:
     *

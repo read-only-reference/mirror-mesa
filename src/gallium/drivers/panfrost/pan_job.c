@@ -699,6 +699,39 @@ panfrost_batch_get_tiler_heap(struct panfrost_batch *batch)
         return batch->tiler_heap;
 }
 
+mali_ptr
+panfrost_batch_get_tiler_meta(struct panfrost_batch *batch, unsigned vertex_count)
+{
+        if (!vertex_count)
+                return 0;
+
+        if (batch->tiler_meta)
+                return batch->tiler_meta;
+
+        struct panfrost_bo *tiler_heap;
+        tiler_heap = panfrost_batch_get_tiler_heap(batch);
+
+        struct bifrost_tiler_heap_meta tiler_heap_meta = {
+            .heap_size = tiler_heap->size,
+            .tiler_heap_start = tiler_heap->gpu,
+            .tiler_heap_free = tiler_heap->gpu,
+            .tiler_heap_end = tiler_heap->gpu + tiler_heap->size,
+            .unk1 = 0x1,
+            .unk7e007e = 0x7e007e,
+        };
+
+        struct bifrost_tiler_meta tiler_meta = {
+            .hierarchy_mask = 0x28,
+            .flags = 0x0,
+            .width = MALI_POSITIVE(batch->key.width),
+            .height = MALI_POSITIVE(batch->key.height),
+            .tiler_heap_meta = panfrost_upload_transient(batch, &tiler_heap_meta, sizeof(tiler_heap_meta)),
+        };
+
+        batch->tiler_meta = panfrost_upload_transient(batch, &tiler_meta, sizeof(tiler_meta));
+        return batch->tiler_meta;
+}
+
 struct panfrost_bo *
 panfrost_batch_get_tiler_dummy(struct panfrost_batch *batch)
 {
@@ -918,7 +951,7 @@ panfrost_batch_submit_ioctl(struct panfrost_batch *batch,
 
                 /* Trace gets priority over sync */
                 bool minimal = !(pan_debug & PAN_DBG_TRACE);
-                pandecode_jc(submit.jc, FALSE, dev->gpu_id, minimal);
+                pandecode_jc(submit.jc, dev->quirks & IS_BIFROST, dev->gpu_id, minimal);
         }
 
         return 0;

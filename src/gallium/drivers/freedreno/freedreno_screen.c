@@ -156,7 +156,7 @@ fd_screen_destroy(struct pipe_screen *pscreen)
 
 	slab_destroy_parent(&screen->transfer_pool);
 
-	mtx_destroy(&screen->lock);
+	simple_mtx_destroy(&screen->lock);
 
 	ralloc_free(screen->compiler);
 
@@ -558,6 +558,8 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 		return 0;
 	case PIPE_SHADER_CAP_FP16:
 		return ((is_a5xx(screen) || is_a6xx(screen)) &&
+				(shader == PIPE_SHADER_COMPUTE ||
+					shader == PIPE_SHADER_FRAGMENT) &&
 				!(fd_mesa_debug & FD_DBG_NOFP16));
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
@@ -912,6 +914,7 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 	case 330:
 		fd3_screen_init(pscreen);
 		break;
+	case 405:
 	case 420:
 	case 430:
 		fd4_screen_init(pscreen);
@@ -959,7 +962,9 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 
 	fd_bc_init(&screen->batch_cache);
 
-	(void) mtx_init(&screen->lock, mtx_plain);
+	list_inithead(&screen->context_list);
+
+	(void) simple_mtx_init(&screen->lock, mtx_plain);
 
 	pscreen->destroy = fd_screen_destroy;
 	pscreen->get_param = fd_screen_get_param;

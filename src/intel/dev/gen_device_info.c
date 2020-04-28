@@ -76,6 +76,12 @@ gen_device_name_to_pci_device_id(const char *name)
          return name_map[i].pci_id;
    }
 
+   fprintf(stderr, "Unknown platform '%s'. Supported names: %s",
+           name, name_map[0].name);
+   for (unsigned i = 1; i < ARRAY_SIZE(name_map); i++)
+      fprintf(stderr, ", %s", name_map[i].name);
+   fprintf(stderr, "\n");
+
    return -1;
 }
 
@@ -1198,6 +1204,17 @@ update_from_topology(struct gen_device_info *devinfo,
             devinfo->ppipe_subslices[ss >= 4 ? 1 : 0] += 1;
          subslices >>= 1;
          ss++;
+      }
+   }
+
+   if (devinfo->gen == 12 && devinfo->num_slices == 1) {
+      if (n_subslices >= 6) {
+         assert(n_subslices == 6);
+         devinfo->l3_banks = 8;
+      } else if (n_subslices > 2) {
+         devinfo->l3_banks = 6;
+      } else {
+         devinfo->l3_banks = 4;
       }
    }
 

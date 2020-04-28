@@ -440,6 +440,11 @@ typedef struct nir_variable {
       unsigned explicit_offset:1;
 
       /**
+       * Layout of the matrix.  Uses glsl_matrix_layout values.
+       */
+      unsigned matrix_layout:2;
+
+      /**
        * Non-zero if this variable was created by lowering a named interface
        * block.
        */
@@ -452,6 +457,12 @@ typedef struct nir_variable {
        * not be visible via the API.
        */
       unsigned how_declared:2;
+
+      /**
+       * Is this variable per-view?  If so, we know it must be an array with
+       * size corresponding to the number of views.
+       */
+      unsigned per_view:1;
 
       /**
        * \brief Layout qualifier for gl_FragDepth.
@@ -879,6 +890,26 @@ static inline unsigned
 nir_dest_num_components(nir_dest dest)
 {
    return dest.is_ssa ? dest.ssa.num_components : dest.reg.reg->num_components;
+}
+
+/* Are all components the same, ie. .xxxx */
+static inline bool
+nir_is_same_comp_swizzle(uint8_t *swiz, unsigned nr_comp)
+{
+   for (unsigned i = 1; i < nr_comp; i++)
+      if (swiz[i] != swiz[0])
+         return false;
+   return true;
+}
+
+/* Are all components sequential, ie. .yzw */
+static inline bool
+nir_is_sequential_comp_swizzle(uint8_t *swiz, unsigned nr_comp)
+{
+   for (unsigned i = 1; i < nr_comp; i++)
+      if (swiz[i] != (swiz[0] + i))
+         return false;
+   return true;
 }
 
 void nir_src_copy(nir_src *dest, const nir_src *src, void *instr_or_if);
@@ -1918,6 +1949,30 @@ typedef struct {
    unsigned sampler_index;
 } nir_tex_instr;
 
+/*
+ * Returns true if the texture operation requires a sampler as a general rule,
+ * see the documentation of sampler_index.
+ *
+ * Note that the specific hw/driver backend could require to a sampler
+ * object/configuration packet in any case, for some other reason.
+ */
+static inline bool
+nir_tex_instr_need_sampler(const nir_tex_instr *instr)
+{
+   switch (instr->op) {
+   case nir_texop_txf:
+   case nir_texop_txf_ms:
+   case nir_texop_txs:
+   case nir_texop_lod:
+   case nir_texop_query_levels:
+   case nir_texop_texture_samples:
+   case nir_texop_samples_identical:
+      return false;
+   default:
+      return true;
+   }
+}
+
 static inline unsigned
 nir_tex_instr_dest_size(const nir_tex_instr *instr)
 {
@@ -2375,12 +2430,19 @@ typedef struct nir_block {
     * dom_pre_index and dom_post_index for this block, which makes testing if
     * a given block is dominated by another block an O(1) operation.
     */
-   unsigned dom_pre_index, dom_post_index;
+   int16_t dom_pre_index, dom_post_index;
 
    /* live in and out for this block; used for liveness analysis */
    BITSET_WORD *live_in;
    BITSET_WORD *live_out;
 } nir_block;
+
+static inline bool
+nir_block_is_reachable(nir_block *b)
+{
+   /* See also nir_block_dominates */
+   return b->dom_post_index != -1;
+}
 
 static inline nir_instr *
 nir_block_first_instr(nir_block *block)
@@ -2801,17 +2863,17 @@ typedef struct nir_shader_compiler_options {
    bool lower_ldexp;
 
    bool lower_pack_half_2x16;
-   bool lower_pack_half_2x16_split;
    bool lower_pack_unorm_2x16;
    bool lower_pack_snorm_2x16;
    bool lower_pack_unorm_4x8;
    bool lower_pack_snorm_4x8;
    bool lower_unpack_half_2x16;
-   bool lower_unpack_half_2x16_split;
    bool lower_unpack_unorm_2x16;
    bool lower_unpack_snorm_2x16;
    bool lower_unpack_unorm_4x8;
    bool lower_unpack_snorm_4x8;
+
+   bool lower_pack_split;
 
    bool lower_extract_byte;
    bool lower_extract_word;
@@ -2934,6 +2996,14 @@ typedef struct nir_shader_compiler_options {
     */
    bool has_imul24;
 
+   /** Backend supports umul24, if not set  umul24 will automatically be lowered
+    * to imul with masked inputs */
+   bool has_umul24;
+
+   /** Backend supports umad24, if not set  umad24 will automatically be lowered
+    * to imul with masked inputs and iadd */
+   bool has_umad24;
+
    /* Whether to generate only scoped_memory_barrier intrinsics instead of the
     * set of memory barrier intrinsics based on GLSL.
     */
@@ -2948,6 +3018,12 @@ typedef struct nir_shader_compiler_options {
     * 3-source (e.g., ffma and flrp) instructions.
     */
    bool intel_vec4;
+
+   /** Whether 8-bit ALU is supported. */
+   bool support_8bit_alu;
+
+   /** Whether 16-bit ALU is supported. */
+   bool support_16bit_alu;
 
    unsigned max_unroll_iterations;
 
@@ -3733,6 +3809,15 @@ void nir_assign_io_var_locations(struct exec_list *var_list,
                                  unsigned *size,
                                  gl_shader_stage stage);
 
+typedef struct {
+   uint8_t num_linked_io_vars;
+   uint8_t num_linked_patch_io_vars;
+} nir_linked_io_var_info;
+
+nir_linked_io_var_info
+nir_assign_linked_io_var_locations(nir_shader *producer,
+                                   nir_shader *consumer);
+
 typedef enum {
    /* If set, this causes all 64-bit IO operations to be lowered on-the-fly
     * to 32-bit operations.  This is only valid for nir_var_shader_in/out
@@ -4202,6 +4287,8 @@ bool nir_lower_doubles(nir_shader *shader, const nir_shader *softfp64,
                        nir_lower_doubles_options options);
 bool nir_lower_pack(nir_shader *shader);
 
+void nir_lower_mediump_outputs(nir_shader *nir);
+
 bool nir_lower_point_size(nir_shader *shader, float min, float max);
 
 typedef enum {
@@ -4255,6 +4342,7 @@ bool nir_opt_access(nir_shader *shader);
 bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_before_ffma(nir_shader *shader);
 bool nir_opt_algebraic_late(nir_shader *shader);
+bool nir_opt_algebraic_distribute_src_mods(nir_shader *shader);
 bool nir_opt_constant_folding(nir_shader *shader);
 
 /* Try to combine a and b into a.  Return true if combination was possible,

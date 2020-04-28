@@ -55,8 +55,6 @@ files_mesa_util = files(
   'half_float.h',
   'hash_table.c',
   'hash_table.h',
-  'imports.c',
-  'imports.h',
   'list.h',
   'macros.h',
   'mesa-sha1.c',
@@ -112,6 +110,7 @@ files_mesa_util = files(
   'u_vector.h',
   'u_math.c',
   'u_math.h',
+  'u_memset.h',
   'u_mm.c',
   'u_mm.h',
   'u_debug.c',
@@ -316,10 +315,7 @@ if with_tests
   endif
   subdir('tests/vma')
   subdir('tests/set')
-  # FIXME: this test on the Wine version in GitLab CI
-  if host_machine.system() != 'windows'
-    subdir('tests/sparse_array')
-  endif
+  subdir('tests/sparse_array')
   subdir('tests/format')
   subdir('tests/vector')
 endif

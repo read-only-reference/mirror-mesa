@@ -925,6 +925,11 @@ struct brw_context
       struct brw_bo *num_work_groups_bo;
       GLintptr num_work_groups_offset;
       const GLuint *num_work_groups;
+      /**
+       * This is only used alongside ARB_compute_variable_group_size when the
+       * local work group size is variable, otherwise it's NULL.
+       */
+      const GLuint *group_size;
    } compute;
 
    struct {
@@ -1508,8 +1513,6 @@ gen6_get_sample_position(struct gl_context *ctx,
                          struct gl_framebuffer *fb,
                          GLuint index,
                          GLfloat *result);
-void
-gen6_set_sample_maps(struct gl_context *ctx);
 
 /* gen8_multisample_state.c */
 void gen8_emit_3dstate_sample_pattern(struct brw_context *brw);

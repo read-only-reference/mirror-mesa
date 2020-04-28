@@ -28,6 +28,18 @@ struct asm_context {
    int subvector_begin_pos = -1;
 };
 
+static uint32_t get_sdwa_sel(unsigned sel, PhysReg reg)
+{
+   if (sel & sdwa_isra) {
+      unsigned size = sdwa_rasize & sel;
+      if (size == 1)
+         return reg.byte();
+      else /* size == 2 */
+         return sdwa_isword | (reg.byte() >> 1);
+   }
+   return sel & sdwa_asuint;
+}
+
 void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction* instr)
 {
    uint32_t instr_offset = out.size() * 4u;
@@ -156,7 +168,7 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
          encoding |= instr->operands.size() ? (instr->operands[0].physReg() >> 1) << 9 : 0;
          if (instr->operands.size() >= 2) {
             if (!instr->operands[1].isConstant() || instr->operands[1].constantValue() >= 1024) {
-               encoding |= instr->operands[1].physReg().reg;
+               encoding |= instr->operands[1].physReg().reg();
             } else {
                encoding |= instr->operands[1].constantValue() >> 2;
                encoding |= 1 << 8;
@@ -542,12 +554,40 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
             encoding |= vop3->neg[i] << (29+i);
          out.push_back(encoding);
 
+      } else if (instr->format == Format::VOP3P) {
+         VOP3P_instruction* vop3 = static_cast<VOP3P_instruction*>(instr);
+
+         uint32_t encoding;
+         if (ctx.chip_class == GFX9) {
+            encoding = (0b110100111 << 23);
+         } else if (ctx.chip_class == GFX10) {
+            encoding = (0b110011 << 26);
+         } else {
+            unreachable("Unknown chip_class.");
+         }
+
+         encoding |= opcode << 16;
+         encoding |= (vop3->clamp ? 1 : 0) << 15;
+         encoding |= vop3->opsel_lo << 11;
+         encoding |= (vop3->opsel_hi & 0x4) ? 1 : 0 << 14;
+         for (unsigned i = 0; i < 3; i++)
+            encoding |= vop3->neg_hi[i] << (8+i);
+         encoding |= (0xFF & instr->definitions[0].physReg());
+         out.push_back(encoding);
+         encoding = 0;
+         for (unsigned i = 0; i < instr->operands.size(); i++)
+            encoding |= instr->operands[i].physReg() << (i * 9);
+         encoding |= vop3->opsel_hi & 0x3 << 27;
+         for (unsigned i = 0; i < 3; i++)
+            encoding |= vop3->neg_lo[i] << (29+i);
+         out.push_back(encoding);
+
       } else if (instr->isDPP()){
          assert(ctx.chip_class >= GFX8);
          /* first emit the instruction without the DPP operand */
          Operand dpp_op = instr->operands[0];
          instr->operands[0] = Operand(PhysReg{250}, v1);
-         instr->format = (Format) ((uint32_t) instr->format & ~(1 << 14));
+         instr->format = (Format) ((uint16_t) instr->format & ~(uint16_t)Format::DPP);
          emit_instruction(ctx, out, instr);
          DPP_instruction* dpp = static_cast<DPP_instruction*>(instr);
          uint32_t encoding = (0xF & dpp->row_mask) << 28;
@@ -561,6 +601,49 @@ void emit_instruction(asm_context& ctx, std::vector<uint32_t>& out, Instruction*
          encoding |= (0xFF) & dpp_op.physReg();
          out.push_back(encoding);
          return;
+      } else if (instr->isSDWA()) {
+         /* first emit the instruction without the SDWA operand */
+         Operand sdwa_op = instr->operands[0];
+         instr->operands[0] = Operand(PhysReg{249}, v1);
+         instr->format = (Format) ((uint16_t) instr->format & ~(uint16_t)Format::SDWA);
+         emit_instruction(ctx, out, instr);
+
+         SDWA_instruction* sdwa = static_cast<SDWA_instruction*>(instr);
+         uint32_t encoding = 0;
+
+         if ((uint16_t)instr->format & (uint16_t)Format::VOPC) {
+            if (instr->definitions[0].physReg() != vcc) {
+               encoding |= instr->definitions[0].physReg() << 8;
+               encoding |= 1 << 15;
+            }
+            encoding |= (sdwa->clamp ? 1 : 0) << 13;
+         } else {
+            encoding |= get_sdwa_sel(sdwa->dst_sel, instr->definitions[0].physReg()) << 8;
+            uint32_t dst_u = sdwa->dst_sel & sdwa_sext ? 1 : 0;
+            if (sdwa->dst_preserve || (sdwa->dst_sel & sdwa_isra))
+               dst_u = 2;
+            encoding |= dst_u << 11;
+            encoding |= (sdwa->clamp ? 1 : 0) << 13;
+            encoding |= sdwa->omod << 14;
+         }
+
+         encoding |= get_sdwa_sel(sdwa->sel[0], sdwa_op.physReg()) << 16;
+         encoding |= sdwa->sel[0] & sdwa_sext ? 1 << 19 : 0;
+         encoding |= sdwa->abs[0] << 21;
+         encoding |= sdwa->neg[0] << 20;
+
+         if (instr->operands.size() >= 2) {
+            encoding |= get_sdwa_sel(sdwa->sel[1], instr->operands[1].physReg()) << 24;
+            encoding |= sdwa->sel[1] & sdwa_sext ? 1 << 27 : 0;
+            encoding |= sdwa->abs[1] << 29;
+            encoding |= sdwa->neg[1] << 28;
+         }
+
+         encoding |= 0xFF & sdwa_op.physReg();
+         encoding |= (sdwa_op.physReg() < 256) << 23;
+         if (instr->operands.size() >= 2)
+            encoding |= (instr->operands[1].physReg() < 256) << 31;
+         out.push_back(encoding);
       } else {
          unreachable("unimplemented instruction format");
       }
@@ -604,7 +687,7 @@ void fix_exports(asm_context& ctx, std::vector<uint32_t>& out, Program* program)
       {
          if ((*it)->format == Format::EXP) {
             Export_instruction* exp = static_cast<Export_instruction*>((*it).get());
-            if (program->stage & hw_vs) {
+            if (program->stage & (hw_vs | hw_ngg_gs)) {
                if (exp->dest >= V_008DFC_SQ_EXP_POS && exp->dest <= (V_008DFC_SQ_EXP_POS + 3)) {
                   exp->done = true;
                   exported = true;
@@ -694,7 +777,7 @@ unsigned emit_program(Program* program,
 {
    asm_context ctx(program);
 
-   if (program->stage & (hw_vs | hw_fs))
+   if (program->stage & (hw_vs | hw_fs | hw_ngg_gs))
       fix_exports(ctx, code, program);
 
    for (Block& block : program->blocks) {

@@ -227,6 +227,8 @@ struct radeon_bo_metadata {
          unsigned dcc_offset_256B : 24;
          unsigned dcc_pitch_max : 14; /* (mip chain pitch - 1) for DCN */
          unsigned dcc_independent_64B : 1;
+         unsigned dcc_independent_128B : 1;
+         unsigned dcc_max_compressed_block_size : 2;
 
          bool scanout;
       } gfx9;
@@ -443,6 +445,14 @@ struct radeon_winsys {
     * Query the initial placement of the buffer from the kernel driver.
     */
    enum radeon_bo_domain (*buffer_get_initial_domain)(struct pb_buffer *buf);
+
+   /**
+    * Query the flags used for creation of this buffer.
+    *
+    * Note that for imported buffer this may be lossy since not all flags
+    * are passed 1:1.
+    */
+   enum radeon_bo_flag (*buffer_get_flags)(struct pb_buffer *buf);
 
    /**************************************************************************
     * Command submission.
