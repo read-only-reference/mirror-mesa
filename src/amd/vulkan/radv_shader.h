@@ -34,10 +34,12 @@
 
 #include "nir/nir.h"
 #include "vulkan/vulkan.h"
+#include "vulkan/util/vk_object.h"
 
 struct radv_device;
 
 struct radv_shader_module {
+	struct vk_object_base base;
 	struct nir_shader *nir;
 	unsigned char sha1[20];
 	uint32_t size;
@@ -440,7 +442,7 @@ radv_alloc_shader_memory(struct radv_device *device,
 void
 radv_destroy_shader_slabs(struct radv_device *device);
 
-void
+VkResult
 radv_create_shaders(struct radv_pipeline *pipeline,
 		    struct radv_device *device,
 		    struct radv_pipeline_cache *cache,

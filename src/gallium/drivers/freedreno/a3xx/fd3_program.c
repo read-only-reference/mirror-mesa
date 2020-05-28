@@ -85,7 +85,7 @@ emit_shader(struct fd_ringbuffer *ring, const struct ir3_shader_variant *so)
 		OUT_RING(ring, CP_LOAD_STATE_1_EXT_SRC_ADDR(0) |
 				CP_LOAD_STATE_1_STATE_TYPE(ST_SHADER));
 	} else {
-		OUT_RELOCD(ring, so->bo, 0,
+		OUT_RELOC(ring, so->bo, 0,
 				CP_LOAD_STATE_1_STATE_TYPE(ST_SHADER), 0);
 	}
 	for (i = 0; i < sz; i++) {
@@ -231,7 +231,7 @@ fd3_program_emit(struct fd_ringbuffer *ring, struct fd3_emit *emit,
 			A3XX_SP_VS_CTRL_REG0_LENGTH(vpbuffersz));
 	OUT_RING(ring, A3XX_SP_VS_CTRL_REG1_CONSTLENGTH(vp->constlen) |
 			A3XX_SP_VS_CTRL_REG1_INITIALOUTSTANDING(vp->total_in) |
-			A3XX_SP_VS_CTRL_REG1_CONSTFOOTPRINT(MAX2(vp->constlen + 1, 0)));
+			A3XX_SP_VS_CTRL_REG1_CONSTFOOTPRINT(MAX2(vp->constlen - 1, 0)));
 	OUT_RING(ring, A3XX_SP_VS_PARAM_REG_POSREGID(pos_regid) |
 			A3XX_SP_VS_PARAM_REG_PSIZEREGID(psize_regid) |
 			A3XX_SP_VS_PARAM_REG_TOTALVSOUTVAR(fp->varying_in));
@@ -302,7 +302,7 @@ fd3_program_emit(struct fd_ringbuffer *ring, struct fd3_emit *emit,
 				A3XX_SP_FS_CTRL_REG0_LENGTH(fpbuffersz));
 		OUT_RING(ring, A3XX_SP_FS_CTRL_REG1_CONSTLENGTH(fp->constlen) |
 				A3XX_SP_FS_CTRL_REG1_INITIALOUTSTANDING(fp->total_in) |
-				A3XX_SP_FS_CTRL_REG1_CONSTFOOTPRINT(MAX2(fp->constlen + 1, 0)) |
+				A3XX_SP_FS_CTRL_REG1_CONSTFOOTPRINT(MAX2(fp->constlen - 1, 0)) |
 				A3XX_SP_FS_CTRL_REG1_HALFPRECVAROFFSET(63));
 
 		OUT_PKT0(ring, REG_A3XX_SP_FS_OBJ_OFFSET_REG, 2);

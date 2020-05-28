@@ -859,6 +859,7 @@ struct_member_decoration_cb(struct vtn_builder *b,
       break;
 
    case SpvDecorationUserSemantic:
+   case SpvDecorationUserTypeGOOGLE:
       /* User semantic decorations can safely be ignored by the driver. */
       break;
 
@@ -1038,6 +1039,10 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationAlignment:
       vtn_warn("Decoration only allowed for CL-style kernels: %s",
                spirv_decoration_to_string(dec->decoration));
+      break;
+
+   case SpvDecorationUserTypeGOOGLE:
+      /* User semantic decorations can safely be ignored by the driver. */
       break;
 
    default:
@@ -2445,8 +2450,10 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       uint32_t operands = w[idx];
 
       if (operands & SpvImageOperandsBiasMask) {
-         vtn_assert(texop == nir_texop_tex);
-         texop = nir_texop_txb;
+         vtn_assert(texop == nir_texop_tex ||
+                    texop == nir_texop_tg4);
+         if (texop == nir_texop_tex)
+            texop = nir_texop_txb;
          uint32_t arg = image_operand_arg(b, w, count, idx,
                                           SpvImageOperandsBiasMask);
          (*p++) = vtn_tex_src(b, w[arg], nir_tex_src_bias);
@@ -2454,7 +2461,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
 
       if (operands & SpvImageOperandsLodMask) {
          vtn_assert(texop == nir_texop_txl || texop == nir_texop_txf ||
-                    texop == nir_texop_txs);
+                    texop == nir_texop_txs || texop == nir_texop_tg4);
          uint32_t arg = image_operand_arg(b, w, count, idx,
                                           SpvImageOperandsLodMask);
          (*p++) = vtn_tex_src(b, w[arg], nir_tex_src_lod);
@@ -3469,9 +3476,11 @@ vtn_handle_composite(struct vtn_builder *b, SpvOp opcode,
       break;
 
    case SpvOpCopyLogical:
-   case SpvOpCopyObject:
       ssa = vtn_composite_copy(b, vtn_ssa_value(b, w[3]));
       break;
+   case SpvOpCopyObject:
+      vtn_copy_value(b, w[3], w[2]);
+      return;
 
    default:
       vtn_fail_with_opcode("unknown composite operation", opcode);
@@ -4057,6 +4066,10 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityFragmentMaskAMD:
          spv_check_supported(amd_fragment_mask, cap);
+         break;
+
+      case SpvCapabilityImageGatherBiasLodAMD:
+         spv_check_supported(amd_image_gather_bias_lod, cap);
          break;
 
       default:
@@ -5010,7 +5023,19 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    }
 
    case SpvOpReadClockKHR: {
-      assert(vtn_constant_uint(b, w[3]) == SpvScopeSubgroup);
+      SpvScope scope = vtn_constant_uint(b, w[3]);
+      nir_scope nir_scope;
+
+      switch (scope) {
+      case SpvScopeDevice:
+         nir_scope = NIR_SCOPE_DEVICE;
+         break;
+      case SpvScopeSubgroup:
+         nir_scope = NIR_SCOPE_SUBGROUP;
+         break;
+      default:
+         vtn_fail("invalid read clock scope");
+      }
 
       /* Operation supports two result types: uvec2 and uint64_t.  The NIR
        * intrinsic gives uvec2, so pack the result for the other case.
@@ -5018,6 +5043,7 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
       nir_intrinsic_instr *intrin =
          nir_intrinsic_instr_create(b->nb.shader, nir_intrinsic_shader_clock);
       nir_ssa_dest_init(&intrin->instr, &intrin->dest, 2, 32, NULL);
+      nir_intrinsic_set_memory_scope(intrin, nir_scope);
       nir_builder_instr_insert(&b->nb, &intrin->instr);
 
       struct vtn_type *type = vtn_value(b, w[1], vtn_value_type_type)->type;

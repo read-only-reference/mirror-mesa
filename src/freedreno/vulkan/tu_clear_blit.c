@@ -1141,7 +1141,17 @@ tu6_blit_image(struct tu_cmd_buffer *cmd,
          mask = 0x8;
    }
 
-   if (dst_image->samples > 1)
+   /* BC1_RGB_* formats need to have their last components overriden with 1
+    * when sampling, which is normally handled with the texture descriptor
+    * swizzle. The 2d path can't handle that, so use the 3d path.
+    *
+    * TODO: we could use RB_2D_BLIT_CNTL::MASK to make these formats work with
+    * the 2d path.
+    */
+
+   if (dst_image->samples > 1 ||
+       src_image->vk_format == VK_FORMAT_BC1_RGB_UNORM_BLOCK ||
+       src_image->vk_format == VK_FORMAT_BC1_RGB_SRGB_BLOCK)
       ops = &r3d_ops;
 
    /* TODO: shader path fails some of blit_image.all_formats.generate_mipmaps.* tests,
@@ -1222,8 +1232,8 @@ static void
 copy_compressed(VkFormat format,
                 VkOffset3D *offset,
                 VkExtent3D *extent,
-                uint32_t *pitch,
-                uint32_t *layer_size)
+                uint32_t *width,
+                uint32_t *height)
 {
    if (!vk_format_is_compressed(format))
       return;
@@ -1238,10 +1248,10 @@ copy_compressed(VkFormat format,
       extent->width = DIV_ROUND_UP(extent->width, block_width);
       extent->height = DIV_ROUND_UP(extent->height, block_height);
    }
-   if (pitch)
-      *pitch /= block_width;
-   if (layer_size)
-      *layer_size /= (block_width * block_height);
+   if (width)
+      *width = DIV_ROUND_UP(*width, block_width);
+   if (height)
+      *height = DIV_ROUND_UP(*height, block_height);
 }
 
 static void
@@ -1273,15 +1283,17 @@ tu_copy_buffer_to_image(struct tu_cmd_buffer *cmd,
 
    VkOffset3D offset = info->imageOffset;
    VkExtent3D extent = info->imageExtent;
-   uint32_t pitch =
-      (info->bufferRowLength ?: extent.width) * vk_format_get_blocksize(src_format);
-   uint32_t layer_size = (info->bufferImageHeight ?: extent.height) * pitch;
+   uint32_t src_width = info->bufferRowLength ?: extent.width;
+   uint32_t src_height = info->bufferImageHeight ?: extent.height;
 
    if (dst_format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 || vk_format_is_compressed(src_format)) {
       assert(src_format == dst_format);
-      copy_compressed(dst_format, &offset, &extent, &pitch, &layer_size);
+      copy_compressed(dst_format, &offset, &extent, &src_width, &src_height);
       src_format = dst_format = copy_format(dst_format);
    }
+
+   uint32_t pitch = src_width * vk_format_get_blocksize(src_format);
+   uint32_t layer_size = src_height * pitch;
 
    /* note: the src_va/pitch alignment of 64 is for 2D engine,
     * it is also valid for 1cpp format with shader path (stencil aspect path)
@@ -1354,14 +1366,17 @@ tu_copy_image_to_buffer(struct tu_cmd_buffer *cmd,
    const struct blit_ops *ops = stencil_read ? &r3d_ops : &r2d_ops;
    VkOffset3D offset = info->imageOffset;
    VkExtent3D extent = info->imageExtent;
-   uint32_t pitch = (info->bufferRowLength ?: extent.width) * vk_format_get_blocksize(dst_format);
-   uint32_t layer_size = (info->bufferImageHeight ?: extent.height) * pitch;
+   uint32_t dst_width = info->bufferRowLength ?: extent.width;
+   uint32_t dst_height = info->bufferImageHeight ?: extent.height;
 
    if (dst_format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 || vk_format_is_compressed(dst_format)) {
       assert(src_format == dst_format);
-      copy_compressed(dst_format, &offset, &extent, &pitch, &layer_size);
+      copy_compressed(dst_format, &offset, &extent, &dst_width, &dst_height);
       src_format = dst_format = copy_format(dst_format);
    }
+
+   uint32_t pitch = dst_width * vk_format_get_blocksize(dst_format);
+   uint32_t layer_size = pitch * dst_height;
 
    /* note: the dst_va/pitch alignment of 64 is for 2D engine,
     * it is also valid for 1cpp format with shader path (stencil aspect)
@@ -1412,6 +1427,35 @@ tu_CmdCopyImageToBuffer(VkCommandBuffer commandBuffer,
       tu_copy_image_to_buffer(cmd, src_image, dst_buffer, pRegions + i);
 }
 
+/* Tiled formats don't support swapping, which means that we can't support
+ * formats that require a non-WZYX swap like B8G8R8A8 natively. Also, some
+ * formats like B5G5R5A1 have a separate linear-only format when sampling.
+ * Currently we fake support for tiled swapped formats and use the unswapped
+ * format instead, but this means that reinterpreting copies to and from
+ * swapped formats can't be performed correctly unless we can swizzle the
+ * components by reinterpreting the other image as the "correct" swapped
+ * format, i.e. only when the other image is linear.
+ */
+
+static bool
+is_swapped_format(VkFormat format)
+{
+   struct tu_native_format linear = tu6_format_texture(format, TILE6_LINEAR);
+   struct tu_native_format tiled = tu6_format_texture(format, TILE6_3);
+   return linear.fmt != tiled.fmt || linear.swap != tiled.swap;
+}
+
+/* R8G8_* formats have a different tiling layout than other cpp=2 formats, and
+ * therefore R8G8 images can't be reinterpreted as non-R8G8 images (and vice
+ * versa). This should mirror the logic in fdl6_layout.
+ */
+static bool
+image_is_r8g8(struct tu_image *image)
+{
+   return image->layout.cpp == 2 &&
+      vk_format_get_nr_components(image->vk_format) == 2;
+}
+
 static void
 tu_copy_image_to_image(struct tu_cmd_buffer *cmd,
                        struct tu_image *src_image,
@@ -1439,38 +1483,159 @@ tu_copy_image_to_image(struct tu_cmd_buffer *cmd,
    VkOffset3D dst_offset = info->dstOffset;
    VkExtent3D extent = info->extent;
 
-   /* TODO: should check (ubwc || (tile_mode && swap)) instead */
-   if (src_image->layout.tile_mode && src_image->vk_format != VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)
-      format = src_image->vk_format;
-
-   if (dst_image->layout.tile_mode && dst_image->vk_format != VK_FORMAT_E5B9G9R9_UFLOAT_PACK32) {
-      if (format != VK_FORMAT_UNDEFINED && format != dst_image->vk_format) {
-         /* can be clever in some cases but in some cases we need and intermediate
-         * linear buffer
-         */
-         tu_finishme("image copy between two tiled/ubwc images\n");
-         return;
-      }
-      format = dst_image->vk_format;
-   }
-
-   if (format == VK_FORMAT_UNDEFINED)
-      format = copy_format(src_image->vk_format);
-
+   /* From the Vulkan 1.2.140 spec, section 19.3 "Copying Data Between
+    * Images":
+    *
+    *    When copying between compressed and uncompressed formats the extent
+    *    members represent the texel dimensions of the source image and not
+    *    the destination. When copying from a compressed image to an
+    *    uncompressed image the image texel dimensions written to the
+    *    uncompressed image will be source extent divided by the compressed
+    *    texel block dimensions. When copying from an uncompressed image to a
+    *    compressed image the image texel dimensions written to the compressed
+    *    image will be the source extent multiplied by the compressed texel
+    *    block dimensions.
+    *
+    * This means we only have to adjust the extent if the source image is
+    * compressed.
+    */
    copy_compressed(src_image->vk_format, &src_offset, &extent, NULL, NULL);
    copy_compressed(dst_image->vk_format, &dst_offset, NULL, NULL, NULL);
 
-   ops->setup(cmd, cs, format, ROTATE_0, false, mask);
-   coords(ops, cs, &dst_offset, &src_offset, &extent);
+   VkFormat dst_format = vk_format_is_compressed(dst_image->vk_format) ?
+      copy_format(dst_image->vk_format) : dst_image->vk_format;
+   VkFormat src_format = vk_format_is_compressed(src_image->vk_format) ?
+      copy_format(src_image->vk_format) : src_image->vk_format;
+
+   bool use_staging_blit = false;
+
+   if (src_format == dst_format) {
+      /* Images that share a format can always be copied directly because it's
+       * the same as a blit.
+       */
+      format = src_format;
+   } else if (!src_image->layout.tile_mode) {
+      /* If an image is linear, we can always safely reinterpret it with the
+       * other image's format and then do a regular blit.
+       */
+      format = dst_format;
+   } else if (!dst_image->layout.tile_mode) {
+      format = src_format;
+   } else if (image_is_r8g8(src_image) != image_is_r8g8(dst_image)) {
+      /* We can't currently copy r8g8 images to/from other cpp=2 images,
+       * due to the different tile layout.
+       */
+      use_staging_blit = true;
+   } else if (is_swapped_format(src_format) ||
+              is_swapped_format(dst_format)) {
+      /* If either format has a non-identity swap, then we can't copy
+       * to/from it.
+       */
+      use_staging_blit = true;
+   } else if (!src_image->layout.ubwc) {
+      format = dst_format;
+   } else if (!dst_image->layout.ubwc) {
+      format = src_format;
+   } else {
+      /* Both formats use UBWC and so neither can be reinterpreted.
+       * TODO: We could do an in-place decompression of the dst instead.
+       */
+      use_staging_blit = true;
+   }
 
    struct tu_image_view dst, src;
-   tu_image_view_blit2(&dst, dst_image, format, &info->dstSubresource, dst_offset.z, false);
-   tu_image_view_blit2(&src, src_image, format, &info->srcSubresource, src_offset.z, false);
 
-   for (uint32_t i = 0; i < info->extent.depth; i++) {
-      ops->src(cmd, cs, &src, i, false);
-      ops->dst(cs, &dst, i);
-      ops->run(cmd, cs);
+   if (use_staging_blit) {
+      tu_image_view_blit2(&dst, dst_image, dst_format, &info->dstSubresource, dst_offset.z, false);
+      tu_image_view_blit2(&src, src_image, src_format, &info->srcSubresource, src_offset.z, false);
+
+      struct tu_image staging_image = {
+         .vk_format = src_format,
+         .type = src_image->type,
+         .tiling = VK_IMAGE_TILING_LINEAR,
+         .extent = extent,
+         .level_count = 1,
+         .layer_count = info->srcSubresource.layerCount,
+         .samples = src_image->samples,
+         .bo_offset = 0,
+      }; 
+
+      VkImageSubresourceLayers staging_subresource = {
+         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+         .mipLevel = 0,
+         .baseArrayLayer = 0,
+         .layerCount = info->srcSubresource.layerCount,
+      };
+
+      VkOffset3D staging_offset = { 0 };
+
+      staging_image.layout.tile_mode = TILE6_LINEAR;
+      staging_image.layout.ubwc = false;
+
+      fdl6_layout(&staging_image.layout,
+                  vk_format_to_pipe_format(staging_image.vk_format),
+                  staging_image.samples,
+                  staging_image.extent.width,
+                  staging_image.extent.height,
+                  staging_image.extent.depth,
+                  staging_image.level_count,
+                  staging_image.layer_count,
+                  staging_image.type == VK_IMAGE_TYPE_3D,
+                  NULL);
+
+      VkResult result = tu_get_scratch_bo(cmd->device,
+                                          staging_image.layout.size,
+                                          &staging_image.bo);
+      if (result != VK_SUCCESS) {
+         cmd->record_result = result;
+         return;
+      }
+
+      tu_bo_list_add(&cmd->bo_list, staging_image.bo,
+                     MSM_SUBMIT_BO_READ | MSM_SUBMIT_BO_WRITE);
+
+      struct tu_image_view staging;
+      tu_image_view_blit2(&staging, &staging_image, src_format,
+                          &staging_subresource, 0, false);
+
+      ops->setup(cmd, cs, src_format, ROTATE_0, false, mask);
+      coords(ops, cs, &staging_offset, &src_offset, &extent);
+
+      for (uint32_t i = 0; i < info->extent.depth; i++) {
+         ops->src(cmd, cs, &src, i, false);
+         ops->dst(cs, &staging, i);
+         ops->run(cmd, cs);
+      }
+
+      /* When executed by the user there has to be a pipeline barrier here,
+       * but since we're doing it manually we'll have to flush ourselves.
+       */
+      tu6_emit_event_write(cmd, cs, PC_CCU_FLUSH_COLOR_TS, true);
+      tu6_emit_event_write(cmd, cs, CACHE_INVALIDATE, false);
+
+      tu_image_view_blit2(&staging, &staging_image, dst_format,
+                          &staging_subresource, 0, false);
+
+      ops->setup(cmd, cs, dst_format, ROTATE_0, false, mask);
+      coords(ops, cs, &dst_offset, &staging_offset, &extent);
+
+      for (uint32_t i = 0; i < info->extent.depth; i++) {
+         ops->src(cmd, cs, &staging, i, false);
+         ops->dst(cs, &dst, i);
+         ops->run(cmd, cs);
+      }
+   } else {
+      tu_image_view_blit2(&dst, dst_image, format, &info->dstSubresource, dst_offset.z, false);
+      tu_image_view_blit2(&src, src_image, format, &info->srcSubresource, src_offset.z, false);
+
+      ops->setup(cmd, cs, format, ROTATE_0, false, mask);
+      coords(ops, cs, &dst_offset, &src_offset, &extent);
+
+      for (uint32_t i = 0; i < info->extent.depth; i++) {
+         ops->src(cmd, cs, &src, i, false);
+         ops->dst(cs, &dst, i);
+         ops->run(cmd, cs);
+      }
    }
 }
 
@@ -1924,7 +2089,7 @@ tu_clear_sysmem_attachments(struct tu_cmd_buffer *cmd,
    tu_cs_emit_regs(cs, A6XX_RB_STENCIL_CONTROL(
          .stencil_enable = s_clear,
          .func = FUNC_ALWAYS,
-         .zpass = VK_STENCIL_OP_REPLACE));
+         .zpass = STENCIL_REPLACE));
    tu_cs_emit_regs(cs, A6XX_RB_STENCILMASK(.mask = 0xff));
    tu_cs_emit_regs(cs, A6XX_RB_STENCILWRMASK(.wrmask = 0xff));
    tu_cs_emit_regs(cs, A6XX_RB_STENCILREF(.ref = s_clear_val));

@@ -441,6 +441,13 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 
       ctx->abi.interp_at_sample_force_center =
          ctx->shader->key.mono.u.ps.interpolate_at_sample_force_center;
+
+      ctx->abi.kill_ps_if_inf_interp =
+         (ctx->screen->debug_flags & DBG(KILL_PS_INF_INTERP)) &&
+         (ctx->shader->selector->info.uses_persp_center ||
+          ctx->shader->selector->info.uses_persp_centroid ||
+          ctx->shader->selector->info.uses_persp_sample);
+
    } else if (nir->info.stage == MESA_SHADER_COMPUTE) {
       if (nir->info.cs.user_data_components_amd) {
          ctx->abi.user_data = ac_get_arg(&ctx->ac, ctx->cs_user_data);
@@ -452,6 +459,7 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
    ctx->abi.inputs = &ctx->inputs[0];
    ctx->abi.clamp_shadow_reference = true;
    ctx->abi.robust_buffer_access = true;
+   ctx->abi.convert_undef_to_zero = true;
 
    if (ctx->shader->selector->info.properties[TGSI_PROPERTY_CS_LOCAL_SIZE]) {
       assert(gl_shader_stage_is_compute(nir->info.stage));
@@ -526,7 +534,7 @@ void si_build_wrapper_function(struct si_shader_context *ctx, LLVMValueRef *part
       if (LLVMGetTypeKind(type) == LLVMPointerTypeKind) {
          type = LLVMGetElementType(type);
 
-         if (LLVMGetTypeKind(type) == LLVMFixedVectorTypeKind) {
+         if (LLVMGetTypeKind(type) == LLVMVectorTypeKind) {
             if (LLVMGetVectorSize(type) == 4)
                arg_type = AC_ARG_CONST_DESC_PTR;
             else if (LLVMGetVectorSize(type) == 8)

@@ -171,6 +171,8 @@ assemble_variant(struct ir3_shader_variant *v)
 			DRM_FREEDRENO_GEM_CACHE_WCOMBINE |
 			DRM_FREEDRENO_GEM_TYPE_KMEM,
 			"%s:%s", ir3_shader_stage(v), info->name);
+	/* Always include shaders in kernel crash dumps. */
+	fd_bo_mark_for_dump(v->bo);
 
 	memcpy(fd_bo_map(v->bo), bin, sz);
 
@@ -289,8 +291,65 @@ ir3_shader_destroy(struct ir3_shader *shader)
 	free(shader);
 }
 
+/**
+ * Creates a bitmask of the used bits of the shader key by this particular
+ * shader.  Used by the gallium driver to skip state-dependent recompiles when
+ * possible.
+ */
+static void
+ir3_setup_used_key(struct ir3_shader *shader)
+{
+	nir_shader *nir = shader->nir;
+	struct shader_info *info = &nir->info;
+	struct ir3_shader_key *key = &shader->key_mask;
+
+	/* This key flag is just used to make for a cheaper ir3_shader_key_equal
+	 * check in the common case.
+	 */
+	key->has_per_samp = true;
+
+	if (info->stage == MESA_SHADER_FRAGMENT) {
+		key->fsaturate_s = ~0;
+		key->fsaturate_t = ~0;
+		key->fsaturate_r = ~0;
+		key->fastc_srgb = ~0;
+		key->fsamples = ~0;
+
+		if (info->inputs_read & VARYING_BITS_COLOR) {
+			key->rasterflat = true;
+			key->color_two_side = true;
+		}
+
+		if ((info->outputs_written & ~(FRAG_RESULT_DEPTH |
+								FRAG_RESULT_STENCIL |
+								FRAG_RESULT_SAMPLE_MASK)) != 0) {
+			key->fclamp_color = true;
+		}
+
+		/* Only used for deciding on behavior of
+		 * nir_intrinsic_load_barycentric_sample
+		 */
+		key->msaa = info->fs.uses_sample_qualifier;
+	} else {
+		key->tessellation = ~0;
+		key->has_gs = true;
+
+		if (info->outputs_written & VARYING_BITS_COLOR)
+			key->vclamp_color = true;
+
+		if (info->stage == MESA_SHADER_VERTEX) {
+			key->vsaturate_s = ~0;
+			key->vsaturate_t = ~0;
+			key->vsaturate_r = ~0;
+			key->vastc_srgb = ~0;
+			key->vsamples = ~0;
+		}
+	}
+}
+
 struct ir3_shader *
-ir3_shader_from_nir(struct ir3_compiler *compiler, nir_shader *nir)
+ir3_shader_from_nir(struct ir3_compiler *compiler, nir_shader *nir,
+		struct ir3_stream_output_info *stream_output)
 {
 	struct ir3_shader *shader = CALLOC_STRUCT(ir3_shader);
 
@@ -298,6 +357,11 @@ ir3_shader_from_nir(struct ir3_compiler *compiler, nir_shader *nir)
 	shader->compiler = compiler;
 	shader->id = p_atomic_inc_return(&shader->compiler->shader_count);
 	shader->type = nir->info.stage;
+	if (stream_output)
+		memcpy(&shader->stream_output, stream_output, sizeof(shader->stream_output));
+
+	if (nir->info.stage == MESA_SHADER_GEOMETRY)
+		NIR_PASS_V(nir, ir3_nir_lower_gs);
 
 	NIR_PASS_V(nir, nir_lower_io, nir_var_all, ir3_glsl_type_size,
 			   (nir_lower_io_options)0);
@@ -329,6 +393,8 @@ ir3_shader_from_nir(struct ir3_compiler *compiler, nir_shader *nir)
 		printf("dump nir%d: type=%d", shader->id, shader->type);
 		nir_print_shader(shader->nir, stdout);
 	}
+
+	ir3_setup_used_key(shader);
 
 	return shader;
 }
@@ -390,7 +456,6 @@ ir3_shader_disasm(struct ir3_shader_variant *so, uint32_t *bin, FILE *out)
 	uint8_t regid;
 	unsigned i;
 
-	struct ir3_instruction *instr;
 	foreach_input_n (instr, i, ir) {
 		reg = instr->regs[0];
 		regid = reg->num;

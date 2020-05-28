@@ -64,6 +64,7 @@ struct ra_ctx {
    std::unordered_map<unsigned, phi_info> phi_map;
    std::unordered_map<unsigned, unsigned> affinities;
    std::unordered_map<unsigned, Instruction*> vectors;
+   std::unordered_map<unsigned, Instruction*> split_vectors;
    aco_ptr<Instruction> pseudo_dummy;
    unsigned max_used_sgpr = 0;
    unsigned max_used_vgpr = 0;
@@ -80,8 +81,10 @@ struct ra_ctx {
    }
 };
 
-bool instr_can_access_subdword(aco_ptr<Instruction>& instr)
+bool instr_can_access_subdword(ra_ctx& ctx, aco_ptr<Instruction>& instr)
 {
+   if (ctx.program->chip_class < GFX8)
+      return false;
    return instr->isSDWA() || instr->format == Format::PSEUDO;
 }
 
@@ -110,7 +113,7 @@ struct DefInfo {
 
       if (rc.is_subdword()) {
          /* stride in bytes */
-         if(!instr_can_access_subdword(instr))
+         if(!instr_can_access_subdword(ctx, instr))
             stride = 4;
          else if (rc.bytes() % 4 == 0)
             stride = 4;
@@ -550,7 +553,7 @@ bool get_regs_for_copies(ra_ctx& ctx,
                   PhysReg reg(def_reg_lo);
                   reg.reg_b += offset;
                   assert(!reg_file.test(reg, var.rc.bytes()));
-                  res = {reg, true};
+                  res = {reg, reg.byte() == 0 || instr_can_access_subdword(ctx, instr)};
                   break;
                }
             }
@@ -699,9 +702,9 @@ std::pair<PhysReg, bool> get_reg_impl(ra_ctx& ctx,
       if (instr->operands[j].isTemp() &&
           instr->operands[j].isFirstKillBeforeDef() &&
           instr->operands[j].physReg() >= lb &&
-          instr->operands[j].physReg() < ub) {
+          instr->operands[j].physReg() < ub &&
+          !reg_file.test(instr->operands[j].physReg(), instr->operands[j].bytes())) {
          assert(instr->operands[j].isFixed());
-         assert(!reg_file.test(instr->operands[j].physReg(), instr->operands[j].bytes()));
          reg_file.block(instr->operands[j].physReg(), instr->operands[j].regClass());
          killed_ops += instr->operands[j].getTemp().size();
       }
@@ -805,7 +808,7 @@ std::pair<PhysReg, bool> get_reg_impl(ra_ctx& ctx,
    /* now, we figured the placement for our definition */
    std::set<std::pair<unsigned, unsigned>> vars = collect_vars(ctx, reg_file, PhysReg{best_pos}, size);
 
-   if (instr->opcode == aco_opcode::p_create_vector) {
+   if (instr->opcode == aco_opcode::p_create_vector && ctx.program->chip_class >= GFX9) {
       /* move killed operands which aren't yet at the correct position */
       for (unsigned i = 0, offset = 0; i < instr->operands.size(); offset += instr->operands[i].size(), i++) {
          if (instr->operands[i].isTemp() && instr->operands[i].isFirstKillBeforeDef() &&
@@ -877,7 +880,7 @@ bool get_reg_specified(ra_ctx& ctx,
                        aco_ptr<Instruction>& instr,
                        PhysReg reg)
 {
-   if (rc.is_subdword() && reg.byte() && !instr_can_access_subdword(instr))
+   if (rc.is_subdword() && reg.byte() && !instr_can_access_subdword(ctx, instr))
       return false;
    if (!rc.is_subdword() && reg.byte())
       return false;
@@ -919,6 +922,21 @@ PhysReg get_reg(ra_ctx& ctx,
                 std::vector<std::pair<Operand, Definition>>& parallelcopies,
                 aco_ptr<Instruction>& instr)
 {
+   auto split_vec = ctx.split_vectors.find(temp.id());
+   if (split_vec != ctx.split_vectors.end()) {
+      unsigned offset = 0;
+      for (Definition def : split_vec->second->definitions) {
+         auto affinity_it = ctx.affinities.find(def.tempId());
+         if (affinity_it != ctx.affinities.end() && ctx.assignments[affinity_it->second].assigned) {
+            PhysReg reg = ctx.assignments[affinity_it->second].reg;
+            reg.reg_b -= offset;
+            if (get_reg_specified(ctx, reg_file, temp.regClass(), parallelcopies, instr, reg))
+               return reg;
+         }
+         offset += def.bytes();
+      }
+   }
+
    if (ctx.affinities.find(temp.id()) != ctx.affinities.end() &&
        ctx.assignments[ctx.affinities[temp.id()]].assigned) {
       PhysReg reg = ctx.assignments[ctx.affinities[temp.id()]].reg;
@@ -1102,18 +1120,26 @@ PhysReg get_reg_create_vector(ra_ctx& ctx,
    /* collect variables to be moved */
    std::set<std::pair<unsigned, unsigned>> vars = collect_vars(ctx, reg_file, PhysReg{best_pos}, size);
 
-   /* move killed operands which aren't yet at the correct position */
-   uint64_t moved_operand_mask = 0;
-   for (unsigned i = 0, offset = 0; i < instr->operands.size(); offset += instr->operands[i].bytes(), i++) {
-      if (instr->operands[i].isTemp() &&
-          instr->operands[i].isFirstKillBeforeDef() &&
-          instr->operands[i].getTemp().type() == rc.type() &&
-          instr->operands[i].physReg().reg_b != best_pos * 4 + offset) {
-         vars.emplace(instr->operands[i].bytes(), instr->operands[i].tempId());
-         moved_operand_mask |= (uint64_t)1 << i;
+   /* GFX9+: move killed operands which aren't yet at the correct position
+    * Moving all killed operands generally leads to more register swaps.
+    * This is only done on GFX9+ because of the cheap v_swap instruction.
+    */
+   if (ctx.program->chip_class >= GFX9) {
+      for (unsigned i = 0, offset = 0; i < instr->operands.size(); offset += instr->operands[i].bytes(), i++) {
+         if (instr->operands[i].isTemp() &&
+             instr->operands[i].isFirstKillBeforeDef() &&
+             instr->operands[i].getTemp().type() == rc.type() &&
+             instr->operands[i].physReg().reg_b != best_pos * 4 + offset) {
+            vars.emplace(instr->operands[i].bytes(), instr->operands[i].tempId());
+         }
+      }
+   } else {
+      /* re-enable the killed operands */
+      for (unsigned j = 0; j < instr->operands.size(); j++) {
+         if (instr->operands[j].isTemp() && instr->operands[j].isFirstKill())
+            reg_file.fill(instr->operands[j]);
       }
    }
-
    ASSERTED bool success = false;
    success = get_regs_for_copies(ctx, reg_file, parallelcopies, vars, lb, ub, instr, best_pos, best_pos + size - 1);
    assert(success);
@@ -1121,10 +1147,13 @@ PhysReg get_reg_create_vector(ra_ctx& ctx,
    update_renames(ctx, reg_file, parallelcopies, instr);
    adjust_max_used_regs(ctx, rc, best_pos);
 
-   while (moved_operand_mask) {
-      unsigned i = u_bit_scan64(&moved_operand_mask);
-      assert(instr->operands[i].isFirstKillBeforeDef());
-      reg_file.clear(instr->operands[i]);
+   /* remove killed operands from reg_file once again */
+   for (unsigned i = 0; i < instr->operands.size(); i++) {
+      if (!instr->operands[i].isTemp() || !instr->operands[i].isFixed())
+         continue;
+      assert(!instr->operands[i].isUndefined());
+      if (instr->operands[i].isFirstKillBeforeDef())
+         reg_file.clear(instr->operands[i]);
    }
 
    return PhysReg{best_pos};
@@ -1189,12 +1218,12 @@ void handle_pseudo(ra_ctx& ctx,
    }
 }
 
-bool operand_can_use_reg(aco_ptr<Instruction>& instr, unsigned idx, PhysReg reg)
+bool operand_can_use_reg(ra_ctx& ctx, aco_ptr<Instruction>& instr, unsigned idx, PhysReg reg)
 {
    if (instr->operands[idx].isFixed())
       return instr->operands[idx].physReg() == reg;
 
-   if (!instr_can_access_subdword(instr) && reg.byte())
+   if (reg.byte() && !instr_can_access_subdword(ctx, instr))
       return false;
 
    switch (instr->format) {
@@ -1410,9 +1439,10 @@ void register_allocation(Program *program, std::vector<TempSet>& live_out_per_bl
       for (rit = block.instructions.rbegin(); rit != block.instructions.rend(); ++rit) {
          aco_ptr<Instruction>& instr = *rit;
          if (is_phi(instr)) {
-            live.erase(instr->definitions[0].getTemp());
-            if (instr->definitions[0].isKill() || instr->definitions[0].isFixed())
+            if (instr->definitions[0].isKill() || instr->definitions[0].isFixed()) {
+               live.erase(instr->definitions[0].getTemp());
                continue;
+            }
             /* collect information about affinity-related temporaries */
             std::vector<Temp> affinity_related;
             /* affinity_related[0] is the last seen affinity-related temp */
@@ -1425,21 +1455,23 @@ void register_allocation(Program *program, std::vector<TempSet>& live_out_per_bl
                }
             }
             phi_ressources.emplace_back(std::move(affinity_related));
-            continue;
-         }
-
-         /* add vector affinities */
-         if (instr->opcode == aco_opcode::p_create_vector) {
-            for (const Operand& op : instr->operands) {
-               if (op.isTemp() && op.isFirstKill() && op.getTemp().type() == instr->definitions[0].getTemp().type())
-                  ctx.vectors[op.tempId()] = instr.get();
+         } else {
+            /* add vector affinities */
+            if (instr->opcode == aco_opcode::p_create_vector) {
+               for (const Operand& op : instr->operands) {
+                  if (op.isTemp() && op.isFirstKill() && op.getTemp().type() == instr->definitions[0].getTemp().type())
+                     ctx.vectors[op.tempId()] = instr.get();
+               }
             }
-         }
 
-         /* add operands to live variables */
-         for (const Operand& op : instr->operands) {
-            if (op.isTemp())
-               live.emplace(op.getTemp());
+            if (instr->opcode == aco_opcode::p_split_vector && instr->operands[0].isFirstKillBeforeDef())
+               ctx.split_vectors[instr->operands[0].tempId()] = instr.get();
+
+            /* add operands to live variables */
+            for (const Operand& op : instr->operands) {
+               if (op.isTemp())
+                  live.emplace(op.getTemp());
+            }
          }
 
          /* erase definitions from live */
@@ -1707,7 +1739,7 @@ void register_allocation(Program *program, std::vector<TempSet>& live_out_per_bl
             assert(ctx.assignments[operand.tempId()].assigned);
 
             PhysReg reg = ctx.assignments[operand.tempId()].reg;
-            if (operand_can_use_reg(instr, i, reg))
+            if (operand_can_use_reg(ctx, instr, i, reg))
                operand.setFixed(reg);
             else
                get_reg_for_operand(ctx, register_file, parallelcopy, instr, operand);
@@ -1738,8 +1770,14 @@ void register_allocation(Program *program, std::vector<TempSet>& live_out_per_bl
              instr->operands[1].isTemp() &&
              instr->operands[1].getTemp().type() == RegType::vgpr &&
              !instr->usesModifiers()) {
-            instr->format = Format::VOP2;
-            instr->opcode = aco_opcode::v_mac_f32;
+            unsigned def_id = instr->definitions[0].tempId();
+            auto it = ctx.affinities.find(def_id);
+            if (it == ctx.affinities.end() || !ctx.assignments[it->second].assigned ||
+                instr->operands[2].physReg() == ctx.assignments[it->second].reg ||
+                register_file.test(ctx.assignments[it->second].reg, instr->operands[2].bytes())) {
+               instr->format = Format::VOP2;
+               instr->opcode = aco_opcode::v_mac_f32;
+            }
          }
 
          /* handle definitions which must have the same register as an operand */
@@ -1837,13 +1875,12 @@ void register_allocation(Program *program, std::vector<TempSet>& live_out_per_bl
                   reg.reg_b += instr->definitions[j].bytes();
                if (get_reg_specified(ctx, register_file, definition.regClass(), parallelcopy, instr, reg))
                   definition.setFixed(reg);
-            } else if (instr->opcode == aco_opcode::p_wqm) {
-               PhysReg reg;
-               if (instr->operands[0].isKillBeforeDef() && instr->operands[0].getTemp().type() == definition.getTemp().type()) {
-                  reg = instr->operands[0].physReg();
+            } else if (instr->opcode == aco_opcode::p_wqm || instr->opcode == aco_opcode::p_parallelcopy) {
+               PhysReg reg = instr->operands[i].physReg();
+               if (instr->operands[i].isTemp() &&
+                   instr->operands[i].getTemp().type() == definition.getTemp().type() &&
+                   !register_file.test(reg, definition.bytes()))
                   definition.setFixed(reg);
-                  assert(register_file[reg.reg()] == 0);
-               }
             } else if (instr->opcode == aco_opcode::p_extract_vector) {
                PhysReg reg;
                if (instr->operands[0].isKillBeforeDef() &&
@@ -1861,10 +1898,8 @@ void register_allocation(Program *program, std::vector<TempSet>& live_out_per_bl
 
             if (!definition.isFixed()) {
                Temp tmp = definition.getTemp();
-               /* subdword instructions before RDNA write full registers */
                if (tmp.regClass().is_subdword() &&
-                   !instr_can_access_subdword(instr) &&
-                   ctx.program->chip_class <= GFX9) {
+                   !instr_can_access_subdword(ctx, instr)) {
                   assert(tmp.bytes() <= 4);
                   tmp = Temp(definition.tempId(), v1);
                }

@@ -113,7 +113,6 @@ legalize_block(struct ir3_legalize_ctx *ctx, struct ir3_block *block)
 	list_inithead(&block->instr_list);
 
 	foreach_instr_safe (n, &instr_list) {
-		struct ir3_register *reg;
 		unsigned i;
 
 		n->flags &= ~(IR3_INSTR_SS | IR3_INSTR_SY);
@@ -138,7 +137,7 @@ legalize_block(struct ir3_legalize_ctx *ctx, struct ir3_block *block)
 			regmask_init(&state->needs_sy);
 		}
 
-		if (last_n && (last_n->opc == OPC_IF)) {
+		if (last_n && (last_n->opc == OPC_PREDT)) {
 			n->flags |= IR3_INSTR_SS;
 			regmask_init(&state->needs_ss_war);
 			regmask_init(&state->needs_ss);
@@ -151,7 +150,7 @@ legalize_block(struct ir3_legalize_ctx *ctx, struct ir3_block *block)
 		 * resulting in undefined results:
 		 */
 		for (i = 0; i < n->regs_count; i++) {
-			reg = n->regs[i];
+			struct ir3_register *reg = n->regs[i];
 
 			if (reg_gpr(reg)) {
 
@@ -181,7 +180,7 @@ legalize_block(struct ir3_legalize_ctx *ctx, struct ir3_block *block)
 		}
 
 		if (n->regs_count > 0) {
-			reg = n->regs[0];
+			struct ir3_register *reg = n->regs[0];
 			if (regmask_get(&state->needs_ss_war, reg)) {
 				n->flags |= IR3_INSTR_SS;
 				last_input_needs_ss = false;
@@ -574,12 +573,12 @@ block_sched(struct ir3 *ir)
 			/* create "else" branch first (since "then" block should
 			 * frequently/always end up being a fall-thru):
 			 */
-			br = ir3_BR(block, block->condition, 0);
+			br = ir3_B(block, block->condition, 0);
 			br->cat0.inv = true;
 			br->cat0.target = block->successors[1];
 
 			/* "then" branch: */
-			br = ir3_BR(block, block->condition, 0);
+			br = ir3_B(block, block->condition, 0);
 			br->cat0.target = block->successors[0];
 
 		} else if (block->successors[0]) {
@@ -633,7 +632,7 @@ kill_sched(struct ir3 *ir, struct ir3_shader_variant *so)
 			if (instr->opc != OPC_KILL)
 				continue;
 
-			struct ir3_instruction *br = ir3_instr_create(block, OPC_BR);
+			struct ir3_instruction *br = ir3_instr_create(block, OPC_B);
 			br->regs[1] = instr->regs[1];
 			br->cat0.target =
 				list_last_entry(&ir->block_list, struct ir3_block, node);
@@ -707,7 +706,7 @@ nop_sched(struct ir3 *ir)
 	}
 }
 
-void
+bool
 ir3_legalize(struct ir3 *ir, struct ir3_shader_variant *so, int *max_bary)
 {
 	struct ir3_legalize_ctx *ctx = rzalloc(ir, struct ir3_legalize_ctx);
@@ -747,4 +746,6 @@ ir3_legalize(struct ir3 *ir, struct ir3_shader_variant *so, int *max_bary)
 	mark_xvergence_points(ir);
 
 	ralloc_free(ctx);
+
+	return true;
 }

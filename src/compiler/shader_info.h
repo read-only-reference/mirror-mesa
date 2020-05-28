@@ -85,6 +85,7 @@ struct spirv_supported_capabilities {
    bool amd_trinary_minmax;
    bool amd_image_read_write_lod;
    bool amd_shader_explicit_vertex_parameter;
+   bool amd_image_gather_bias_lod;
 };
 
 typedef struct shader_info {
@@ -301,7 +302,6 @@ typedef struct shader_info {
 
       struct {
          uint16_t local_size[3];
-         uint16_t max_variable_local_size;
 
          bool local_size_variable:1;
          uint8_t user_data_components_amd:3;

@@ -24,7 +24,7 @@
 #define IRIS_SCREEN_H
 
 #include "pipe/p_screen.h"
-#include "state_tracker/drm_driver.h"
+#include "frontend/drm_driver.h"
 #include "util/disk_cache.h"
 #include "util/slab.h"
 #include "util/u_screen.h"
@@ -136,6 +136,12 @@ struct iris_vtable {
    void (*lost_genx_state)(struct iris_context *ice, struct iris_batch *batch);
 };
 
+struct iris_address {
+   struct iris_bo *bo;
+   uint64_t offset;
+   bool write;
+};
+
 struct iris_screen {
    struct pipe_screen base;
 
@@ -168,6 +174,10 @@ struct iris_screen {
       bool always_flush_cache;
    } driconf;
 
+   /** Does the kernel support various features (KERNEL_HAS_* bitfield)? */
+   unsigned kernel_features;
+#define KERNEL_HAS_WAIT_FOR_SUBMIT (1<<0)
+
    unsigned subslice_total;
 
    uint64_t aperture_bytes;
@@ -182,10 +192,15 @@ struct iris_screen {
    const struct gen_l3_config *l3_config_cs;
 
    /**
-    * A buffer containing nothing useful, for hardware workarounds that
-    * require scratch writes or reads from some unimportant memory.
+    * A buffer containing a marker + description of the driver. This buffer is
+    * added to all execbufs syscalls so that we can identify the driver that
+    * generated a hang by looking at the content of the buffer in the error
+    * state. It is also used for hardware workarounds that require scratch
+    * writes or reads from some unimportant memory. To avoid overriding the
+    * debug data, use the workaround_address field for workarounds.
     */
    struct iris_bo *workaround_bo;
+   struct iris_address workaround_address;
 
    struct disk_cache *disk_cache;
 };

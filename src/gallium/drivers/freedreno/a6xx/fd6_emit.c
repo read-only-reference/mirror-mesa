@@ -555,58 +555,32 @@ static struct fd_ringbuffer *
 build_vbo_state(struct fd6_emit *emit, const struct ir3_shader_variant *vp)
 {
 	const struct fd_vertex_state *vtx = emit->vtx;
-	int32_t i, j;
 
 	struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(emit->ctx->batch->submit,
-			4 * (10 * vp->inputs_count + 2), FD_RINGBUFFER_STREAMING);
+			4 * (3 + vtx->vertexbuf.count * 4), FD_RINGBUFFER_STREAMING);
 
-	for (i = 0, j = 0; i <= vp->inputs_count; i++) {
-		if (vp->inputs[i].sysval)
-			continue;
-		if (vp->inputs[i].compmask) {
-			struct pipe_vertex_element *elem = &vtx->vtx->pipe[i];
-			const struct pipe_vertex_buffer *vb =
-					&vtx->vertexbuf.vb[elem->vertex_buffer_index];
-			struct fd_resource *rsc = fd_resource(vb->buffer.resource);
-			enum pipe_format pfmt = elem->src_format;
-			enum a6xx_format fmt = fd6_pipe2vtx(pfmt);
-			bool isint = util_format_is_pure_integer(pfmt);
-			uint32_t off = vb->buffer_offset + elem->src_offset;
+	OUT_PKT4(ring, REG_A6XX_VFD_CONTROL_0, 1);
+	OUT_RING(ring, A6XX_VFD_CONTROL_0_FETCH_CNT(vtx->vertexbuf.count) |
+			A6XX_VFD_CONTROL_0_DECODE_CNT(vtx->vtx->num_elements));
+
+	OUT_PKT4(ring, REG_A6XX_VFD_FETCH(0), 4 * vtx->vertexbuf.count);
+	for (int32_t j = 0; j < vtx->vertexbuf.count; j++) {
+		const struct pipe_vertex_buffer *vb = &vtx->vertexbuf.vb[j];
+		struct fd_resource *rsc = fd_resource(vb->buffer.resource);
+		if (rsc == NULL) {
+			OUT_RING(ring, 0);
+			OUT_RING(ring, 0);
+			OUT_RING(ring, 0);
+			OUT_RING(ring, 0);
+		} else {
+			uint32_t off = vb->buffer_offset;
 			uint32_t size = fd_bo_size(rsc->bo) - off;
-			debug_assert(fmt != ~0);
 
-#ifdef DEBUG
-			/* see dEQP-GLES31.stress.vertex_attribute_binding.buffer_bounds.bind_vertex_buffer_offset_near_wrap_10
-			 */
-			if (off > fd_bo_size(rsc->bo))
-				continue;
-#endif
-
-			OUT_PKT4(ring, REG_A6XX_VFD_FETCH(j), 4);
 			OUT_RELOC(ring, rsc->bo, off, 0, 0);
 			OUT_RING(ring, size);           /* VFD_FETCH[j].SIZE */
 			OUT_RING(ring, vb->stride);     /* VFD_FETCH[j].STRIDE */
-
-			OUT_PKT4(ring, REG_A6XX_VFD_DECODE(j), 2);
-			OUT_RING(ring, A6XX_VFD_DECODE_INSTR_IDX(j) |
-					A6XX_VFD_DECODE_INSTR_FORMAT(fmt) |
-					COND(elem->instance_divisor, A6XX_VFD_DECODE_INSTR_INSTANCED) |
-					A6XX_VFD_DECODE_INSTR_SWAP(fd6_pipe2swap(pfmt)) |
-					A6XX_VFD_DECODE_INSTR_UNK30 |
-					COND(!isint, A6XX_VFD_DECODE_INSTR_FLOAT));
-			OUT_RING(ring, MAX2(1, elem->instance_divisor)); /* VFD_DECODE[j].STEP_RATE */
-
-			OUT_PKT4(ring, REG_A6XX_VFD_DEST_CNTL(j), 1);
-			OUT_RING(ring, A6XX_VFD_DEST_CNTL_INSTR_WRITEMASK(vp->inputs[i].compmask) |
-					A6XX_VFD_DEST_CNTL_INSTR_REGID(vp->inputs[i].regid));
-
-			j++;
 		}
 	}
-
-	OUT_PKT4(ring, REG_A6XX_VFD_CONTROL_0, 1);
-	OUT_RING(ring, A6XX_VFD_CONTROL_0_FETCH_CNT(j) |
-			A6XX_VFD_CONTROL_0_DECODE_CNT(j));
 
 	return ring;
 }
@@ -671,7 +645,7 @@ fd6_emit_streamout(struct fd_ringbuffer *ring, struct fd6_emit *emit, struct ir3
 
 		OUT_PKT4(ring, REG_A6XX_VPC_SO_BUFFER_BASE_LO(i), 3);
 		/* VPC_SO[i].BUFFER_BASE_LO: */
-		OUT_RELOCW(ring, fd_resource(target->buffer)->bo, target->buffer_offset, 0, 0);
+		OUT_RELOC(ring, fd_resource(target->buffer)->bo, target->buffer_offset, 0, 0);
 		OUT_RING(ring, target->buffer_size - target->buffer_offset);
 
 		if (so->reset & (1 << i)) {
@@ -687,7 +661,7 @@ fd6_emit_streamout(struct fd_ringbuffer *ring, struct fd6_emit *emit, struct ir3
 		}
 
 		OUT_PKT4(ring, REG_A6XX_VPC_SO_FLUSH_BASE_LO(i), 2);
-		OUT_RELOCW(ring, control_ptr(fd6_context(ctx), flush_base[i]));
+		OUT_RELOC(ring, control_ptr(fd6_context(ctx), flush_base[i]));
 
 		so->reset &= ~(1 << i);
 
@@ -695,32 +669,26 @@ fd6_emit_streamout(struct fd_ringbuffer *ring, struct fd6_emit *emit, struct ir3
 	}
 
 	if (emit->streamout_mask) {
-		const struct fd6_streamout_state *tf = &prog->tf;
-
-		OUT_PKT7(ring, CP_CONTEXT_REG_BUNCH, 12 + (2 * tf->prog_count));
-		OUT_RING(ring, REG_A6XX_VPC_SO_BUF_CNTL);
-		OUT_RING(ring, tf->vpc_so_buf_cntl);
-		OUT_RING(ring, REG_A6XX_VPC_SO_NCOMP(0));
-		OUT_RING(ring, tf->ncomp[0]);
-		OUT_RING(ring, REG_A6XX_VPC_SO_NCOMP(1));
-		OUT_RING(ring, tf->ncomp[1]);
-		OUT_RING(ring, REG_A6XX_VPC_SO_NCOMP(2));
-		OUT_RING(ring, tf->ncomp[2]);
-		OUT_RING(ring, REG_A6XX_VPC_SO_NCOMP(3));
-		OUT_RING(ring, tf->ncomp[3]);
-		OUT_RING(ring, REG_A6XX_VPC_SO_CNTL);
-		OUT_RING(ring, A6XX_VPC_SO_CNTL_ENABLE);
-		for (unsigned i = 0; i < tf->prog_count; i++) {
-			OUT_RING(ring, REG_A6XX_VPC_SO_PROG);
-			OUT_RING(ring, tf->prog[i]);
-		}
+		fd6_emit_add_group(emit, prog->streamout_stateobj, FD6_GROUP_SO, ENABLE_ALL);
 	} else {
-		OUT_PKT7(ring, CP_CONTEXT_REG_BUNCH, 4);
-		OUT_RING(ring, REG_A6XX_VPC_SO_CNTL);
-		OUT_RING(ring, 0);
-		OUT_RING(ring, REG_A6XX_VPC_SO_BUF_CNTL);
-		OUT_RING(ring, 0);
+		/* If we transition from a draw with streamout to one without, turn
+		 * off streamout.
+		 */
+		if (ctx->last.streamout_mask != 0) {
+			struct fd_ringbuffer *obj = fd_submit_new_ringbuffer(emit->ctx->batch->submit,
+					5 * 4, FD_RINGBUFFER_STREAMING);
+
+			OUT_PKT7(obj, CP_CONTEXT_REG_BUNCH, 4);
+			OUT_RING(obj, REG_A6XX_VPC_SO_CNTL);
+			OUT_RING(obj, 0);
+			OUT_RING(obj, REG_A6XX_VPC_SO_BUF_CNTL);
+			OUT_RING(obj, 0);
+
+			fd6_emit_take_group(emit, obj, FD6_GROUP_SO, ENABLE_ALL);
+		}
 	}
+
+	ctx->last.streamout_mask = emit->streamout_mask;
 }
 
 void
@@ -746,6 +714,15 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 	if (fs->fb_read)
 		ctx->batch->gmem_reason |= FD_GMEM_FB_READ;
 
+	if (emit->dirty & FD_DIRTY_VTXSTATE) {
+		struct fd6_vertex_stateobj *vtx = fd6_vertex_stateobj(ctx->vtx.vtx);
+
+		fd6_emit_add_group(emit, vtx->stateobj, FD6_GROUP_VTXSTATE, ENABLE_ALL);
+	}
+
+	/* VFD_CONTROL packs both vfd fetch count and vfd decode count, so we have
+	 * to emit this if either change.
+	 */
 	if (emit->dirty & (FD_DIRTY_VTXBUF | FD_DIRTY_VTXSTATE)) {
 		struct fd_ringbuffer *state;
 
@@ -1187,8 +1164,8 @@ fd6_mem_to_mem(struct fd_ringbuffer *ring, struct pipe_resource *dst,
 	for (i = 0; i < sizedwords; i++) {
 		OUT_PKT7(ring, CP_MEM_TO_MEM, 5);
 		OUT_RING(ring, 0x00000000);
-		OUT_RELOCW(ring, dst_bo, dst_off, 0, 0);
-		OUT_RELOC (ring, src_bo, src_off, 0, 0);
+		OUT_RELOC(ring, dst_bo, dst_off, 0, 0);
+		OUT_RELOC(ring, src_bo, src_off, 0, 0);
 
 		dst_off += 4;
 		src_off += 4;

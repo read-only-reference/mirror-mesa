@@ -503,6 +503,7 @@ panfrost_create_vertex_elements_state(
         const struct pipe_vertex_element *elements)
 {
         struct panfrost_vertex_state *so = CALLOC_STRUCT(panfrost_vertex_state);
+        struct panfrost_device *dev = pan_device(pctx->screen);
 
         so->num_elements = num_elements;
         memcpy(so->pipe, elements, sizeof(*elements) * num_elements);
@@ -513,16 +514,29 @@ panfrost_create_vertex_elements_state(
                 enum pipe_format fmt = elements[i].src_format;
                 const struct util_format_description *desc = util_format_description(fmt);
                 so->hw[i].unknown1 = 0x2;
-                so->hw[i].swizzle = panfrost_translate_swizzle_4(desc->swizzle);
 
-                so->hw[i].format = panfrost_find_format(desc);
+                if (dev->quirks & HAS_SWIZZLES)
+                        so->hw[i].swizzle = panfrost_translate_swizzle_4(desc->swizzle);
+                else
+                        so->hw[i].swizzle = panfrost_bifrost_swizzle(desc->nr_channels);
+
+                enum mali_format hw_format = panfrost_pipe_format_table[desc->format].hw;
+                so->hw[i].format = hw_format;
+                assert(hw_format);
         }
 
         /* Let's also prepare vertex builtins */
         so->hw[PAN_VERTEX_ID].format = MALI_R32UI;
-        so->hw[PAN_VERTEX_ID].swizzle = panfrost_get_default_swizzle(1);
+        if (dev->quirks & HAS_SWIZZLES)
+                so->hw[PAN_VERTEX_ID].swizzle = panfrost_get_default_swizzle(1);
+        else
+                so->hw[PAN_VERTEX_ID].swizzle = panfrost_bifrost_swizzle(1);
+
         so->hw[PAN_INSTANCE_ID].format = MALI_R32UI;
-        so->hw[PAN_INSTANCE_ID].swizzle = panfrost_get_default_swizzle(1);
+        if (dev->quirks & HAS_SWIZZLES)
+                so->hw[PAN_INSTANCE_ID].swizzle = panfrost_get_default_swizzle(1);
+        else
+                so->hw[PAN_INSTANCE_ID].swizzle = panfrost_bifrost_swizzle(1);
 
         return so;
 }
@@ -1297,7 +1311,7 @@ panfrost_get_query_result(struct pipe_context *pipe,
         case PIPE_QUERY_OCCLUSION_COUNTER:
         case PIPE_QUERY_OCCLUSION_PREDICATE:
         case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
-                /* Flush first */
+                DBG("Flushing for occlusion query\n");
                 panfrost_flush_all_batches(ctx, true);
 
                 /* Read back the query results */
@@ -1314,6 +1328,7 @@ panfrost_get_query_result(struct pipe_context *pipe,
 
         case PIPE_QUERY_PRIMITIVES_GENERATED:
         case PIPE_QUERY_PRIMITIVES_EMITTED:
+                DBG("Flushing for primitive query\n");
                 panfrost_flush_all_batches(ctx, true);
                 vresult->u64 = query->end - query->start;
                 break;
@@ -1386,6 +1401,7 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
 {
         struct panfrost_context *ctx = rzalloc(screen, struct panfrost_context);
         struct pipe_context *gallium = (struct pipe_context *) ctx;
+        struct panfrost_device *dev = pan_device(screen);
 
         gallium->screen = screen;
 
@@ -1453,13 +1469,19 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         panfrost_blend_context_init(gallium);
         panfrost_compute_context_init(gallium);
 
-        /* XXX: leaks */
         gallium->stream_uploader = u_upload_create_default(gallium);
         gallium->const_uploader = gallium->stream_uploader;
         assert(gallium->stream_uploader);
 
-        /* Midgard supports ES modes, plus QUADS/QUAD_STRIPS/POLYGON */
-        ctx->draw_modes = (1 << (PIPE_PRIM_POLYGON + 1)) - 1;
+        /* All of our GPUs support ES mode. Midgard supports additionally
+         * QUADS/QUAD_STRIPS/POLYGON. Bifrost supports just QUADS. */
+
+        ctx->draw_modes = (1 << (PIPE_PRIM_QUADS + 1)) - 1;
+
+        if (!(dev->quirks & IS_BIFROST)) {
+                ctx->draw_modes |= (1 << PIPE_PRIM_QUAD_STRIP);
+                ctx->draw_modes |= (1 << PIPE_PRIM_POLYGON);
+        }
 
         ctx->primconvert = util_primconvert_create(gallium, ctx->draw_modes);
 

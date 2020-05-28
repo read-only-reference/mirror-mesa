@@ -340,7 +340,7 @@ pack_unorm_1x8(float x)
      *
      *       packUnorm4x8: round(clamp(c, 0, +1) * 255.0)
      */
-   return (uint8_t) (int) _mesa_roundevenf(CLAMP(x, 0.0f, 1.0f) * 255.0f);
+   return (uint8_t) (int) _mesa_roundevenf(SATURATE(x) * 255.0f);
 }
 
 /**
@@ -359,7 +359,7 @@ pack_unorm_1x16(float x)
      *       packUnorm2x16: round(clamp(c, 0, +1) * 65535.0)
      */
    return (uint16_t) (int)
-          _mesa_roundevenf(CLAMP(x, 0.0f, 1.0f) * 65535.0f);
+          _mesa_roundevenf(SATURATE(x) * 65535.0f);
 }
 
 /**
@@ -867,13 +867,6 @@ ir_dereference_array::constant_expression_value(void *mem_ctx,
          ir_constant_data data = { { 0 } };
 
          switch (column_type->base_type) {
-         case GLSL_TYPE_UINT:
-         case GLSL_TYPE_INT:
-            for (unsigned i = 0; i < column_type->vector_elements; i++)
-               data.u[i] = array->value.u[mat_idx + i];
-
-            break;
-
          case GLSL_TYPE_FLOAT:
             for (unsigned i = 0; i < column_type->vector_elements; i++)
                data.f[i] = array->value.f[mat_idx + i];
@@ -887,8 +880,7 @@ ir_dereference_array::constant_expression_value(void *mem_ctx,
             break;
 
          default:
-            assert(!"Should not get here.");
-            break;
+            unreachable("Matrix types are either float or double.");
          }
 
          return new(mem_ctx) ir_constant(column_type, &data);

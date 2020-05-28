@@ -224,11 +224,14 @@ blorp_vf_invalidate_for_vb_48b_transitions(struct blorp_batch *blorp_batch,
 }
 
 static struct blorp_address
-blorp_get_workaround_page(struct blorp_batch *blorp_batch)
+blorp_get_workaround_address(struct blorp_batch *blorp_batch)
 {
    struct iris_batch *batch = blorp_batch->driver_batch;
 
-   return (struct blorp_address) { .buffer = batch->screen->workaround_bo };
+   return (struct blorp_address) {
+      .buffer = batch->screen->workaround_address.bo,
+      .offset = batch->screen->workaround_address.offset,
+   };
 }
 
 static void

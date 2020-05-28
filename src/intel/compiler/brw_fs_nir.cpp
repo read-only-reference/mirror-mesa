@@ -105,7 +105,8 @@ fs_visitor::nir_setup_uniforms()
       assert(uniforms == prog_data->nr_params);
 
       uint32_t *param;
-      if (brw_cs_prog_data(prog_data)->uses_variable_group_size) {
+      if (nir->info.cs.local_size_variable &&
+          compiler->lower_variable_group_size) {
          param = brw_stage_prog_data_add_params(prog_data, 3);
          for (unsigned i = 0; i < 3; i++) {
             param[i] = (BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_X + i);
@@ -3162,7 +3163,15 @@ fs_visitor::nir_emit_gs_intrinsic(const fs_builder &bld,
 static fs_reg
 fetch_render_target_array_index(const fs_builder &bld)
 {
-   if (bld.shader->devinfo->gen >= 6) {
+   if (bld.shader->devinfo->gen >= 12) {
+      /* The render target array index is provided in the thread payload as
+       * bits 26:16 of r1.1.
+       */
+      const fs_reg idx = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      bld.AND(idx, brw_uw1_reg(BRW_GENERAL_REGISTER_FILE, 1, 3),
+              brw_imm_uw(0x7ff));
+      return idx;
+   } else if (bld.shader->devinfo->gen >= 6) {
       /* The render target array index is provided in the thread payload as
        * bits 26:16 of r0.0.
        */
@@ -3473,13 +3482,7 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
       cmp->predicate = BRW_PREDICATE_NORMAL;
       cmp->flag_subreg = sample_mask_flag_subreg(this);
 
-      if (devinfo->gen >= 6) {
-         /* Due to the way we implement discard, the jump will only happen
-          * when the whole quad is discarded.  So we can do this even for
-          * demote as it won't break its uniformity promises.
-          */
-         emit_discard_jump();
-      }
+      emit_discard_jump();
 
       if (devinfo->gen < 7)
          limit_dispatch_width(
@@ -3724,7 +3727,7 @@ fs_visitor::nir_emit_cs_intrinsic(const fs_builder &bld,
        * invocations are already executed lock-step.  Instead of an actual
        * barrier just emit a scheduling fence, that will generate no code.
        */
-      if (!cs_prog_data->uses_variable_group_size &&
+      if (!nir->info.cs.local_size_variable &&
           workgroup_size() <= dispatch_width) {
          bld.exec_all().group(1, 0).emit(FS_OPCODE_SCHEDULING_FENCE);
          break;
@@ -3861,6 +3864,8 @@ fs_visitor::nir_emit_cs_intrinsic(const fs_builder &bld,
    }
 
    case nir_intrinsic_load_local_group_size: {
+      assert(compiler->lower_variable_group_size);
+      assert(nir->info.cs.local_size_variable);
       for (unsigned i = 0; i < 3; i++) {
          bld.MOV(retype(offset(dest, bld, i), BRW_REGISTER_TYPE_UD),
             group_size[i]);
@@ -4074,10 +4079,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_bindless_image_atomic_xor:
    case nir_intrinsic_bindless_image_atomic_exchange:
    case nir_intrinsic_bindless_image_atomic_comp_swap: {
-      if (stage == MESA_SHADER_FRAGMENT &&
-          instr->intrinsic != nir_intrinsic_image_load)
-         brw_wm_prog_data(prog_data)->has_side_effects = true;
-
       /* Get some metadata from the image intrinsic. */
       const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];
 
@@ -4211,9 +4212,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    }
 
    case nir_intrinsic_image_store_raw_intel: {
-      if (stage == MESA_SHADER_FRAGMENT)
-         brw_wm_prog_data(prog_data)->has_side_effects = true;
-
       fs_reg srcs[SURFACE_LOGICAL_NUM_SRCS];
       srcs[SURFACE_LOGICAL_SRC_SURFACE] =
          get_nir_image_intrinsic_image(bld, instr);
@@ -4289,7 +4287,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
        *
        * TODO: Check if applies for many HW threads sharing same Data Port.
        */
-      if (!brw_cs_prog_data(prog_data)->uses_variable_group_size &&
+      if (!nir->info.cs.local_size_variable &&
           slm_fence && workgroup_size() <= dispatch_width)
          slm_fence = false;
 
@@ -4578,9 +4576,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_store_global:
       assert(devinfo->gen >= 8);
 
-      if (stage == MESA_SHADER_FRAGMENT)
-         brw_wm_prog_data(prog_data)->has_side_effects = true;
-
       assert(nir_src_bit_size(instr->src[0]) <= 32);
       assert(nir_intrinsic_write_mask(instr) ==
              (1u << instr->num_components) - 1);
@@ -4664,9 +4659,6 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
    case nir_intrinsic_store_ssbo: {
       assert(devinfo->gen >= 7);
-
-      if (stage == MESA_SHADER_FRAGMENT)
-         brw_wm_prog_data(prog_data)->has_side_effects = true;
 
       const unsigned bit_size = nir_src_bit_size(instr->src[0]);
       fs_reg srcs[SURFACE_LOGICAL_NUM_SRCS];
@@ -4865,7 +4857,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       assert(nir_src_num_components(instr->src[0]) == 1);
       assert(nir_src_bit_size(instr->src[0]) <= 32);
       assert(nir_intrinsic_write_mask(instr) == 1);
-      assert(nir_intrinsic_align(instr) > 1);
+      assert(nir_intrinsic_align(instr) > 0);
       if (nir_src_bit_size(instr->src[0]) == 32 &&
           nir_intrinsic_align(instr) >= 4) {
          srcs[SURFACE_LOGICAL_SRC_DATA] = data;
@@ -5289,9 +5281,6 @@ void
 fs_visitor::nir_emit_ssbo_atomic(const fs_builder &bld,
                                  int op, nir_intrinsic_instr *instr)
 {
-   if (stage == MESA_SHADER_FRAGMENT)
-      brw_wm_prog_data(prog_data)->has_side_effects = true;
-
    /* The BTI untyped atomic messages only support 32-bit atomics.  If you
     * just look at the big table of messages in the Vol 7 of the SKL PRM, they
     * appear to exist.  However, if you look at Vol 2a, there are no message
@@ -5331,9 +5320,6 @@ void
 fs_visitor::nir_emit_ssbo_atomic_float(const fs_builder &bld,
                                        int op, nir_intrinsic_instr *instr)
 {
-   if (stage == MESA_SHADER_FRAGMENT)
-      brw_wm_prog_data(prog_data)->has_side_effects = true;
-
    fs_reg dest;
    if (nir_intrinsic_infos[instr->intrinsic].has_dest)
       dest = get_nir_dest(instr->dest);
@@ -5443,9 +5429,6 @@ void
 fs_visitor::nir_emit_global_atomic(const fs_builder &bld,
                                    int op, nir_intrinsic_instr *instr)
 {
-   if (stage == MESA_SHADER_FRAGMENT)
-      brw_wm_prog_data(prog_data)->has_side_effects = true;
-
    fs_reg dest;
    if (nir_intrinsic_infos[instr->intrinsic].has_dest)
       dest = get_nir_dest(instr->dest);
@@ -5477,9 +5460,6 @@ void
 fs_visitor::nir_emit_global_atomic_float(const fs_builder &bld,
                                          int op, nir_intrinsic_instr *instr)
 {
-   if (stage == MESA_SHADER_FRAGMENT)
-      brw_wm_prog_data(prog_data)->has_side_effects = true;
-
    assert(nir_intrinsic_infos[instr->intrinsic].has_dest);
    fs_reg dest = get_nir_dest(instr->dest);
 

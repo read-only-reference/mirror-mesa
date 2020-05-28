@@ -225,6 +225,9 @@ struct ir3_sampler_prefetch {
 /* Configuration key used to identify a shader variant.. different
  * shader variants can be used to implement features not supported
  * in hw (two sided color), binning-pass vertex shader, etc.
+ *
+ * When adding to this struct, please update ir3_shader_variant()'s debug
+ * output.
  */
 struct ir3_shader_key {
 	union {
@@ -248,7 +251,6 @@ struct ir3_shader_key {
 			unsigned sample_shading : 1;
 			unsigned msaa           : 1;
 			unsigned color_two_side : 1;
-			unsigned half_precision : 1;
 			/* used when shader needs to handle flat varyings (a4xx)
 			 * for front/back color inputs to frag shader:
 			 */
@@ -288,6 +290,21 @@ struct ir3_shader_key {
 	uint16_t vastc_srgb, fastc_srgb;
 };
 
+static inline unsigned
+ir3_tess_mode(unsigned gl_tess_mode)
+{
+	switch (gl_tess_mode) {
+	case GL_ISOLINES:
+		return  IR3_TESS_ISOLINES;
+	case GL_TRIANGLES:
+		return IR3_TESS_TRIANGLES;
+	case GL_QUADS:
+		return IR3_TESS_QUADS;
+	default:
+		unreachable("bad tessmode");
+	}
+}
+
 static inline bool
 ir3_shader_key_equal(struct ir3_shader_key *a, struct ir3_shader_key *b)
 {
@@ -314,9 +331,6 @@ ir3_shader_key_changes_fs(struct ir3_shader_key *key, struct ir3_shader_key *las
 		return true;
 
 	if (last_key->color_two_side != key->color_two_side)
-		return true;
-
-	if (last_key->half_precision != key->half_precision)
 		return true;
 
 	if (last_key->rasterflat != key->rasterflat)
@@ -348,64 +362,6 @@ ir3_shader_key_changes_vs(struct ir3_shader_key *key, struct ir3_shader_key *las
 		return true;
 
 	return false;
-}
-
-/* clears shader-key flags which don't apply to the given shader
- * stage
- */
-static inline void
-ir3_normalize_key(struct ir3_shader_key *key, gl_shader_stage type)
-{
-	switch (type) {
-	case MESA_SHADER_FRAGMENT:
-		if (key->has_per_samp) {
-			key->vsaturate_s = 0;
-			key->vsaturate_t = 0;
-			key->vsaturate_r = 0;
-			key->vastc_srgb = 0;
-			key->vsamples = 0;
-			key->has_gs = false; /* FS doesn't care */
-			key->tessellation = IR3_TESS_NONE;
-		}
-		break;
-	case MESA_SHADER_VERTEX:
-	case MESA_SHADER_GEOMETRY:
-		key->color_two_side = false;
-		key->half_precision = false;
-		key->rasterflat = false;
-		if (key->has_per_samp) {
-			key->fsaturate_s = 0;
-			key->fsaturate_t = 0;
-			key->fsaturate_r = 0;
-			key->fastc_srgb = 0;
-			key->fsamples = 0;
-		}
-
-		/* VS and GS only care about whether or not we're tessellating. */
-		key->tessellation = !!key->tessellation;
-		break;
-	case MESA_SHADER_TESS_CTRL:
-	case MESA_SHADER_TESS_EVAL:
-		key->color_two_side = false;
-		key->half_precision = false;
-		key->rasterflat = false;
-		if (key->has_per_samp) {
-			key->fsaturate_s = 0;
-			key->fsaturate_t = 0;
-			key->fsaturate_r = 0;
-			key->fastc_srgb = 0;
-			key->fsamples = 0;
-			key->vsaturate_s = 0;
-			key->vsaturate_t = 0;
-			key->vsaturate_r = 0;
-			key->vastc_srgb = 0;
-			key->vsamples = 0;
- 		}
-		break;
-	default:
-		/* TODO */
-		break;
-	}
 }
 
 /**
@@ -500,7 +456,8 @@ struct ir3_shader_variant {
 	 *   + From the vert shader, we only need the output regid
 	 */
 
-	bool frag_coord, frag_face, color0_mrt;
+	bool frag_face, color0_mrt;
+	uint8_t fragcoord_compmask;
 
 	/* NOTE: for input/outputs, slot is:
 	 *   gl_vert_attrib  - for VS inputs
@@ -642,9 +599,20 @@ struct ir3_shader {
 	uint32_t id;
 	uint32_t variant_count;
 
+	/* Set by freedreno after shader_state_create, so we can emit debug info
+	 * when recompiling a shader at draw time.
+	 */
+	bool initial_variants_done;
+
 	struct ir3_compiler *compiler;
 
 	struct ir3_ubo_analysis_state ubo_state;
+
+	/* Number of UBOs loaded by LDC, as opposed to LDG through pointers in
+	 * ubo_state.
+	 */
+	unsigned num_ubos;
+
 	struct ir3_const_state const_state;
 
 	struct nir_shader *nir;
@@ -657,12 +625,18 @@ struct ir3_shader {
 
 	/* Map from driver_location to byte offset in per-primitive storage */
 	unsigned output_loc[32];
+
+	/* Bitmask of bits of the shader key used by this shader.  Used to avoid
+	 * recompiles for GL NOS that doesn't actually apply to the shader.
+	 */
+	struct ir3_shader_key key_mask;
 };
 
 void * ir3_shader_assemble(struct ir3_shader_variant *v, uint32_t gpu_id);
 struct ir3_shader_variant * ir3_shader_get_variant(struct ir3_shader *shader,
 		struct ir3_shader_key *key, bool binning_pass, bool *created);
-struct ir3_shader * ir3_shader_from_nir(struct ir3_compiler *compiler, nir_shader *nir);
+struct ir3_shader * ir3_shader_from_nir(struct ir3_compiler *compiler, nir_shader *nir,
+		struct ir3_stream_output_info *stream_output);
 void ir3_shader_destroy(struct ir3_shader *shader);
 void ir3_shader_disasm(struct ir3_shader_variant *so, uint32_t *bin, FILE *out);
 uint64_t ir3_shader_outputs(const struct ir3_shader *so);
@@ -673,6 +647,18 @@ ir3_glsl_type_size(const struct glsl_type *type, bool bindless);
 /*
  * Helper/util:
  */
+
+/* clears shader-key flags which don't apply to the given shader.
+ */
+static inline void
+ir3_key_clear_unused(struct ir3_shader_key *key, struct ir3_shader *shader)
+{
+	uint32_t *key_bits = (uint32_t *)key;
+	uint32_t *key_mask = (uint32_t *)&shader->key_mask;
+	STATIC_ASSERT(sizeof(*key) % 4 == 0);
+	for (int i = 0; i < sizeof(*key) >> 2; i++)
+		key_bits[i] &= key_mask[i];
+}
 
 static inline int
 ir3_find_output(const struct ir3_shader_variant *so, gl_varying_slot slot)

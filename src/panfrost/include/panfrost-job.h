@@ -297,7 +297,7 @@ enum mali_format {
 	MALI_RGB332_UNORM   = MALI_FORMAT_SPECIAL | 0xb,
 	MALI_RGB233_UNORM   = MALI_FORMAT_SPECIAL | 0xc,
 
-	MALI_Z32_UNORM      = MALI_FORMAT_SPECIAL | 0xd,
+	MALI_Z24X8_UNORM    = MALI_FORMAT_SPECIAL | 0xd,
 	MALI_R32_FIXED      = MALI_FORMAT_SPECIAL | 0x11,
 	MALI_RG32_FIXED     = MALI_FORMAT_SPECIAL | 0x12,
 	MALI_RGB32_FIXED    = MALI_FORMAT_SPECIAL | 0x13,
@@ -414,6 +414,38 @@ enum mali_format {
 
 /* Should be set when the fragment shader updates the stencil value. */
 #define MALI_WRITES_S (1 << 2)
+
+/* Mode to suppress generation of Infinity and NaN values by clamping inf
+ * (-inf) to MAX_FLOAT (-MIN_FLOAT) and flushing NaN to 0.0
+ *
+ * Compare suppress_inf/suppress_nan flags on the Bifrost clause header for the
+ * same functionality.
+ *
+ * This is not conformant on GLES3 or OpenCL, but is optional on GLES2, where
+ * it works around app bugs (e.g. in glmark2-es2 -bterrain with FP16).
+ */
+#define MALI_SUPPRESS_INF_NAN (1 << 3)
+
+/* Flags for bifrost1.unk1 */
+
+/* Shader uses less than 32 registers, partitioned as [R0, R15] U [R48, R63],
+ * allowing for full thread count. If clear, the full [R0, R63] register set is
+ * available at half thread count */
+#define MALI_BIFROST_FULL_THREAD (1 << 9)
+
+/* Enable early-z testing (presumably). This flag may not be set if the shader:
+ *
+ *  - Uses blending
+ *  - Uses discard
+ *  - Writes gl_FragDepth
+ *
+ * This differs from Midgard which sets the MALI_EARLY_Z flag even with
+ * blending, although I've begun to suspect that flag does not in fact enable
+ * EARLY_Z alone. */
+#define MALI_BIFROST_EARLY_Z (1 << 15)
+
+/* First clause type is ATEST */
+#define MALI_BIFROST_FIRST_ATEST (1 << 26)
 
 /* The raw Midgard blend payload can either be an equation or a shader
  * address, depending on the context */
@@ -1041,12 +1073,13 @@ struct bifrost_tiler_heap_meta {
 } __attribute__((packed));
 
 struct bifrost_tiler_meta {
-        u64 zero0;
+        u32 tiler_heap_next_start;  /* To be written by the GPU */
+        u32 used_hierarchy_mask;  /* To be written by the GPU */
         u16 hierarchy_mask; /* Five values observed: 0xa, 0x14, 0x28, 0x50, 0xa0 */
         u16 flags;
         u16 width;
         u16 height;
-        u64 zero1;
+        u64 zero0;
         mali_ptr tiler_heap_meta;
         /* TODO what is this used for? */
         u64 zeros[20];
@@ -1252,7 +1285,8 @@ struct mali_texture_descriptor {
 struct bifrost_texture_descriptor {
         unsigned format_unk : 4; /* 2 */
         enum mali_texture_type type : 2;
-        unsigned format_unk2 : 16; /* 0 */
+        unsigned zero : 4;
+        unsigned format_swizzle : 12;
         enum mali_format format : 8;
         unsigned srgb : 1;
         unsigned format_unk3 : 1; /* 0 */
@@ -1264,7 +1298,7 @@ struct bifrost_texture_descriptor {
         unsigned swizzle : 12;
         enum mali_texture_layout layout : 4;
         uint8_t levels : 8; /* Number of levels-1 if mipmapped, 0 if not */
-        unsigned unk1 : 4;
+        unsigned unk1 : 8;
 
         unsigned levels_unk : 24; /* 0 */
         unsigned level_2 : 8; /* Number of levels, again? */
@@ -1347,25 +1381,25 @@ struct mali_sampler_descriptor {
 struct bifrost_sampler_descriptor {
         uint8_t unk1;
 
-        enum mali_wrap_mode wrap_s : 4;
-        enum mali_wrap_mode wrap_t : 4;
         enum mali_wrap_mode wrap_r : 4;
+        enum mali_wrap_mode wrap_t : 4;
+        enum mali_wrap_mode wrap_s : 4;
         uint8_t unk8 : 4;
 
-        uint8_t unk2 : 3;
-        uint8_t min_filter : 1;
+        uint8_t unk2 : 1;
         uint8_t norm_coords : 1;
+        uint8_t unk3 : 1;
+        uint8_t min_filter : 1;
         uint8_t zero1 : 1;
-        uint8_t mip_filter : 1;
         uint8_t mag_filter : 1;
+        uint8_t mip_filter : 1;
 
         int16_t min_lod;
         int16_t max_lod;
-        int8_t zero2;
-        int8_t zero3;
 
-        uint32_t zero4;
-        uint32_t zero5;
+        uint64_t zero2;
+        uint64_t zero3;
+        uint64_t zero4;
 } __attribute__((packed));
 
 /* viewport0/viewport1 form the arguments to glViewport. viewport1 is
@@ -1637,7 +1671,8 @@ struct mali_rt_format {
 
         unsigned nr_channels : 2; /* MALI_POSITIVE */
 
-        unsigned unk3 : 5;
+        unsigned unk3 : 4;
+        unsigned unk4 : 1;
         enum mali_block_format block : 2;
         unsigned flags : 4;
 

@@ -37,11 +37,29 @@ algebraic_late = [
 
     (('ineg', a), ('isub', 0, a)),
 
+    # Likewise we want fsub lowered but not isub
+    (('fsub', a, b), ('fadd', a, ('fneg', b))),
+
     # These two special-cases save space/an op than the actual csel op +
     # scheduler flexibility
 
     (('b32csel', a, 'b@32', 0), ('iand', a, b)),
     (('b32csel', a, 0, 'b@32'), ('iand', ('inot', a), b)),
+
+    # Fuse sat_signed. This should probably be shared with Bifrost
+    (('~fmin', ('fmax', a, -1.0), 1.0), ('fsat_signed', a)),
+    (('~fmax', ('fmin', a, 1.0), -1.0), ('fsat_signed', a)),
+
+    # Fuse clamp_positive. This should probably be shared with Utgard/bifrost
+    (('fmax', a, 0.0), ('fclamp_pos', a)),
+
+    (('ishl', 'a@16', b), ('u2u16', ('ishl', ('u2u32', a), b))),
+    (('ishr', 'a@16', b), ('i2i16', ('ishr', ('i2i32', a), b))),
+    (('ushr', 'a@16', b), ('u2u16', ('ushr', ('u2u32', a), b))),
+
+    (('ishl', 'a@8', b), ('u2u8', ('u2u16', ('ishl', ('u2u32', ('u2u16', a)), b)))),
+    (('ishr', 'a@8', b), ('i2i8', ('i2i16', ('ishr', ('i2i32', ('i2i16', a)), b)))),
+    (('ushr', 'a@8', b), ('u2u8', ('u2u16', ('ushr', ('u2u32', ('u2u16', a)), b)))),
 ]
 
 
@@ -83,11 +101,24 @@ for op in ('u2u', 'i2i', 'f2f', 'i2f', 'u2f', 'f2i', 'f2u'):
             srcsz *= 2
         dstsz *= 2
 
-# Midgard outputs fp32 for specials. The f2f32 will be folded in later.
-SPECIAL = ['fexp2', 'flog2', 'fsin', 'fcos', 'frcp', 'frsq']
+# Try to force constants to the right
+constant_switch = [
+        # fge gets flipped to fle, so we invert to keep the order
+        (('fge', 'a', '#b'), (('inot', ('flt', a, b)))),
+        (('fge32', 'a', '#b'), (('inot', ('flt32', a, b)))),
+        (('ige32', 'a', '#b'), (('inot', ('ilt32', a, b)))),
+        (('uge32', 'a', '#b'), (('inot', ('ult32', a, b)))),
 
-for op in SPECIAL:
-        converts += [((op + '@16', a), ('f2f16', (op, ('f2f32', a))))]
+        # fge gets mapped to fle with a flip
+        (('flt32', '#a', 'b'), ('inot', ('fge32', a, b))),
+        (('ilt32', '#a', 'b'), ('inot', ('ige32', a, b))),
+        (('ult32', '#a', 'b'), ('inot', ('uge32', a, b)))
+]
+
+# ..since the above switching happens after algebraic stuff is done
+cancel_inot = [
+        (('inot', ('inot', a)), a)
+]
 
 # Midgard scales fsin/fcos arguments by pi.
 # Pass must be run only once, after the main loop
@@ -111,10 +142,13 @@ def run():
     print('#include "midgard_nir.h"')
 
     print(nir_algebraic.AlgebraicPass("midgard_nir_lower_algebraic_late",
-                                      algebraic_late + converts).render())
+                                      algebraic_late + converts + constant_switch).render())
 
     print(nir_algebraic.AlgebraicPass("midgard_nir_scale_trig",
                                       scale_trig).render())
+
+    print(nir_algebraic.AlgebraicPass("midgard_nir_cancel_inot",
+                                      cancel_inot).render())
 
 
 if __name__ == '__main__':

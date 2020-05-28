@@ -198,28 +198,18 @@ mir_is_scalar(midgard_instruction *ains)
 
         /* Otherwise, check mode hazards */
         bool could_scalar = true;
+        unsigned sz0 = nir_alu_type_get_type_size(ains->src_types[0]);
+        unsigned sz1 = nir_alu_type_get_type_size(ains->src_types[1]);
 
         /* Only 16/32-bit can run on a scalar unit */
         could_scalar &= ains->alu.reg_mode != midgard_reg_mode_8;
         could_scalar &= ains->alu.reg_mode != midgard_reg_mode_64;
-        could_scalar &= ains->alu.dest_override == midgard_dest_override_none;
 
-        if (ains->alu.reg_mode == midgard_reg_mode_16) {
-                /* If we're running in 16-bit mode, we
-                 * can't have any 8-bit sources on the
-                 * scalar unit (since the scalar unit
-                 * doesn't understand 8-bit) */
+        if (ains->src[0] != ~0)
+                could_scalar &= (sz0 == 16) || (sz0 == 32);
 
-                midgard_vector_alu_src s1 =
-                        vector_alu_from_unsigned(ains->alu.src1);
-
-                could_scalar &= !s1.half;
-
-                midgard_vector_alu_src s2 =
-                        vector_alu_from_unsigned(ains->alu.src2);
-
-                could_scalar &= !s2.half;
-        }
+        if (ains->src[1] != ~0)
+                could_scalar &= (sz1 == 16) || (sz1 == 32);
 
         return could_scalar;
 }
@@ -357,6 +347,79 @@ struct midgard_predicate {
         unsigned pipeline_count;
 };
 
+static bool
+mir_adjust_constant(midgard_instruction *ins, unsigned src,
+                unsigned *bundle_constant_mask,
+                unsigned *comp_mapping,
+                uint8_t *bundle_constants,
+                bool upper)
+{
+        unsigned type_size = nir_alu_type_get_type_size(ins->src_types[src]) / 8;
+        unsigned type_shift = util_logbase2(type_size);
+        unsigned max_comp = mir_components_for_type(ins->src_types[src]);
+        unsigned comp_mask = mir_from_bytemask(mir_round_bytemask_up(
+                                mir_bytemask_of_read_components_index(ins, src),
+                                type_size * 8),
+                                               type_size * 8);
+        unsigned type_mask = (1 << type_size) - 1;
+
+        /* Upper only makes sense for 16-bit */
+        if (type_size != 16 && upper)
+                return false;
+
+        /* For 16-bit, we need to stay on either upper or lower halves to avoid
+         * disrupting the swizzle */
+        unsigned start = upper ? 8 : 0;
+        unsigned length = (type_size == 2) ? 8 : 16;
+
+        for (unsigned comp = 0; comp < max_comp; comp++) {
+                if (!(comp_mask & (1 << comp)))
+                        continue;
+
+                uint8_t *constantp = ins->constants.u8 + (type_size * comp);
+                unsigned best_reuse_bytes = 0;
+                signed best_place = -1;
+                unsigned i, j;
+
+                for (i = start; i < (start + length); i += type_size) {
+                        unsigned reuse_bytes = 0;
+
+                        for (j = 0; j < type_size; j++) {
+                                if (!(*bundle_constant_mask & (1 << (i + j))))
+                                        continue;
+                                if (constantp[j] != bundle_constants[i + j])
+                                        break;
+                                if ((i + j) > (start + length))
+                                        break;
+
+                                reuse_bytes++;
+                        }
+
+                        /* Select the place where existing bytes can be
+                         * reused so we leave empty slots to others
+                         */
+                        if (j == type_size &&
+                            (reuse_bytes > best_reuse_bytes || best_place < 0)) {
+                                best_reuse_bytes = reuse_bytes;
+                                best_place = i;
+                                break;
+                        }
+                }
+
+                /* This component couldn't fit in the remaining constant slot,
+                 * no need check the remaining components, bail out now
+                 */
+                if (best_place < 0)
+                        return false;
+
+                memcpy(&bundle_constants[i], constantp, type_size);
+                *bundle_constant_mask |= type_mask << best_place;
+                comp_mapping[comp] = best_place >> type_shift;
+        }
+
+        return true;
+}
+
 /* For an instruction that can fit, adjust it to fit and update the constants
  * array, in destructive mode. Returns whether the fitting was successful. */
 
@@ -381,8 +444,6 @@ mir_adjust_constants(midgard_instruction *ins,
                 return true;
 
         unsigned r_constant = SSA_FIXED_REGISTER(REGISTER_CONSTANT);
-        midgard_reg_mode dst_mode = mir_typesize(ins);
-
         unsigned bundle_constant_mask = pred->constant_mask;
         unsigned comp_mapping[2][16] = { };
         uint8_t bundle_constants[16];
@@ -396,55 +457,18 @@ mir_adjust_constants(midgard_instruction *ins,
                 if (ins->src[src] != SSA_FIXED_REGISTER(REGISTER_CONSTANT))
                         continue;
 
-                midgard_reg_mode src_mode = mir_srcsize(ins, src);
-                unsigned type_size = mir_bytes_for_mode(src_mode);
-                unsigned max_comp = 16 / type_size;
-                unsigned comp_mask = mir_from_bytemask(mir_bytemask_of_read_components_index(ins, src),
-                                                       dst_mode);
-                unsigned type_mask = (1 << type_size) - 1;
+                /* First, try lower half (or whole for !16) */
+                if (mir_adjust_constant(ins, src, &bundle_constant_mask,
+                                comp_mapping[src], bundle_constants, false))
+                        continue;
 
-                for (unsigned comp = 0; comp < max_comp; comp++) {
-                        if (!(comp_mask & (1 << comp)))
-                                continue;
+                /* Next, try upper half */
+                if (mir_adjust_constant(ins, src, &bundle_constant_mask,
+                                comp_mapping[src], bundle_constants, true))
+                        continue;
 
-                        uint8_t *constantp = ins->constants.u8 + (type_size * comp);
-                        unsigned best_reuse_bytes = 0;
-                        signed best_place = -1;
-                        unsigned i, j;
-
-                        for (i = 0; i < 16; i += type_size) {
-                                unsigned reuse_bytes = 0;
-
-                                for (j = 0; j < type_size; j++) {
-                                        if (!(bundle_constant_mask & (1 << (i + j))))
-                                                continue;
-                                        if (constantp[j] != bundle_constants[i + j])
-                                                break;
-
-                                        reuse_bytes++;
-                                }
-
-                                /* Select the place where existing bytes can be
-                                 * reused so we leave empty slots to others
-                                 */
-                                if (j == type_size &&
-                                    (reuse_bytes > best_reuse_bytes || best_place < 0)) {
-                                        best_reuse_bytes = reuse_bytes;
-                                        best_place = i;
-                                        break;
-                                }
-                        }
-
-                        /* This component couldn't fit in the remaining constant slot,
-                         * no need check the remaining components, bail out now
-                         */
-                        if (best_place < 0)
-                                return false;
-
-                        memcpy(&bundle_constants[i], constantp, type_size);
-                        bundle_constant_mask |= type_mask << best_place;
-                        comp_mapping[src][comp] = best_place / type_size;
-                }
+                /* Otherwise bail */
+                return false;
         }
 
         /* If non-destructive, we're done */

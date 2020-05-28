@@ -26,6 +26,7 @@
 #include "spirv/nir_spirv.h"
 #include "util/mesa-sha1.h"
 #include "nir/nir_xfb_info.h"
+#include "nir/nir_vulkan.h"
 #include "vk_util.h"
 
 #include "ir3/ir3_nir.h"
@@ -272,10 +273,69 @@ lower_intrinsic(nir_builder *b, nir_intrinsic_instr *instr,
    }
 }
 
+static void
+lower_tex_ycbcr(const struct tu_pipeline_layout *layout,
+                nir_builder *builder,
+                nir_tex_instr *tex)
+{
+   int deref_src_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_deref);
+   assert(deref_src_idx >= 0);
+   nir_deref_instr *deref = nir_src_as_deref(tex->src[deref_src_idx].src);
+
+   nir_variable *var = nir_deref_instr_get_variable(deref);
+   const struct tu_descriptor_set_layout *set_layout =
+      layout->set[var->data.descriptor_set].layout;
+   const struct tu_descriptor_set_binding_layout *binding =
+      &set_layout->binding[var->data.binding];
+   const struct tu_sampler_ycbcr_conversion *ycbcr_samplers =
+      tu_immutable_ycbcr_samplers(set_layout, binding);
+
+   if (!ycbcr_samplers)
+      return;
+
+   /* For the following instructions, we don't apply any change */
+   if (tex->op == nir_texop_txs ||
+       tex->op == nir_texop_query_levels ||
+       tex->op == nir_texop_lod)
+      return;
+
+   assert(tex->texture_index == 0);
+   unsigned array_index = 0;
+   if (deref->deref_type != nir_deref_type_var) {
+      assert(deref->deref_type == nir_deref_type_array);
+      if (!nir_src_is_const(deref->arr.index))
+         return;
+      array_index = nir_src_as_uint(deref->arr.index);
+      array_index = MIN2(array_index, binding->array_size - 1);
+   }
+   const struct tu_sampler_ycbcr_conversion *ycbcr_sampler = ycbcr_samplers + array_index;
+
+   if (ycbcr_sampler->ycbcr_model == VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY)
+      return;
+
+   builder->cursor = nir_after_instr(&tex->instr);
+
+   uint8_t bits = vk_format_get_component_bits(ycbcr_sampler->format,
+                                               UTIL_FORMAT_COLORSPACE_RGB,
+                                               PIPE_SWIZZLE_X);
+   uint32_t bpcs[3] = {bits, bits, bits}; /* TODO: use right bpc for each channel ? */
+   nir_ssa_def *result = nir_convert_ycbcr_to_rgb(builder,
+                                                  ycbcr_sampler->ycbcr_model,
+                                                  ycbcr_sampler->ycbcr_range,
+                                                  &tex->dest.ssa,
+                                                  bpcs);
+   nir_ssa_def_rewrite_uses_after(&tex->dest.ssa, nir_src_for_ssa(result),
+                                  result->parent_instr);
+
+   builder->cursor = nir_before_instr(&tex->instr);
+}
+
 static bool
 lower_tex(nir_builder *b, nir_tex_instr *tex,
           struct tu_shader *shader, const struct tu_pipeline_layout *layout)
 {
+   lower_tex_ycbcr(layout, b, tex);
+
    int sampler_src_idx = nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
    if (sampler_src_idx >= 0) {
       nir_deref_instr *deref = nir_src_as_deref(tex->src[sampler_src_idx].src);
@@ -472,8 +532,6 @@ tu_shader_create(struct tu_device *dev,
                  struct tu_pipeline_layout *layout,
                  const VkAllocationCallbacks *alloc)
 {
-   const struct tu_shader_module *module =
-      tu_shader_module_from_handle(stage_info->module);
    struct tu_shader *shader;
 
    const uint32_t max_variant_count = (stage == MESA_SHADER_VERTEX) ? 2 : 1;
@@ -484,11 +542,25 @@ tu_shader_create(struct tu_device *dev,
    if (!shader)
       return NULL;
 
-   /* translate SPIR-V to NIR */
-   assert(module->code_size % 4 == 0);
-   nir_shader *nir = tu_spirv_to_nir(
-      dev->compiler, (const uint32_t *) module->code, module->code_size / 4,
-      stage, stage_info->pName, stage_info->pSpecializationInfo);
+   nir_shader *nir;
+   if (stage_info) {
+      /* translate SPIR-V to NIR */
+      const struct tu_shader_module *module =
+         tu_shader_module_from_handle(stage_info->module);
+      assert(module->code_size % 4 == 0);
+      nir = tu_spirv_to_nir(
+         dev->compiler, (const uint32_t *) module->code, module->code_size / 4,
+         stage, stage_info->pName, stage_info->pSpecializationInfo);
+   } else {
+      assert(stage == MESA_SHADER_FRAGMENT);
+      nir_builder fs_b;
+      const nir_shader_compiler_options *nir_options =
+         ir3_get_compiler_options(dev->compiler);
+      nir_builder_init_simple_shader(&fs_b, NULL, MESA_SHADER_FRAGMENT, nir_options);
+      fs_b.shader->info.name = ralloc_strdup(fs_b.shader, "noop_fs");
+      nir = fs_b.shader;
+   }
+
    if (!nir) {
       vk_free2(&dev->alloc, alloc, shader);
       return NULL;
@@ -554,6 +626,9 @@ tu_shader_create(struct tu_device *dev,
 
    if (stage == MESA_SHADER_FRAGMENT)
       NIR_PASS_V(nir, nir_lower_input_attachments, true);
+
+   if (stage == MESA_SHADER_GEOMETRY)
+      NIR_PASS_V(nir, ir3_nir_lower_gs);
 
    NIR_PASS_V(nir, tu_lower_io, shader, layout);
 

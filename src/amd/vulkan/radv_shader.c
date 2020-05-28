@@ -160,11 +160,14 @@ VkResult radv_CreateShaderModule(
 	assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
 	assert(pCreateInfo->flags == 0);
 
-	module = vk_alloc2(&device->alloc, pAllocator,
+	module = vk_alloc2(&device->vk.alloc, pAllocator,
 			     sizeof(*module) + pCreateInfo->codeSize, 8,
 			     VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 	if (module == NULL)
 		return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+	vk_object_base_init(&device->vk, &module->base,
+			    VK_OBJECT_TYPE_SHADER_MODULE);
 
 	module->nir = NULL;
 	module->size = pCreateInfo->codeSize;
@@ -188,7 +191,8 @@ void radv_DestroyShaderModule(
 	if (!module)
 		return;
 
-	vk_free2(&device->alloc, pAllocator, module);
+	vk_object_base_finish(&module->base);
+	vk_free2(&device->vk.alloc, pAllocator, module);
 }
 
 void
@@ -353,6 +357,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 			.caps = {
 				.amd_fragment_mask = true,
 				.amd_gcn_shader = true,
+				.amd_image_gather_bias_lod = true,
 				.amd_image_read_write_lod = true,
 				.amd_shader_ballot = device->physical_device->use_shader_ballot,
 				.amd_shader_explicit_vertex_parameter = true,
@@ -375,6 +380,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 				.int16 = int8_int16_enable,
 				.int64 = true,
 				.int64_atomics = true,
+				.min_lod = true,
 				.multiview = true,
 				.physical_storage_buffer_address = true,
 				.post_depth_coverage = true,

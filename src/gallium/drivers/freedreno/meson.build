@@ -137,6 +137,8 @@ files_libfreedreno = files(
   'a4xx/fd4_query.h',
   'a4xx/fd4_rasterizer.c',
   'a4xx/fd4_rasterizer.h',
+  'a4xx/fd4_resource.c',
+  'a4xx/fd4_resource.h',
   'a4xx/fd4_screen.c',
   'a4xx/fd4_screen.h',
   'a4xx/fd4_texture.c',
@@ -274,4 +276,25 @@ ir3_compiler = executable(
   ],
   build_by_default : with_tools.contains('freedreno'),
   install : with_tools.contains('freedreno'),
+)
+
+gmemtool = executable(
+  'gmemtool',
+  'gmemtool.c',
+  include_directories : freedreno_includes,
+  dependencies : [
+    idep_nir,
+    idep_mesautil,
+  ],
+  link_with : [
+    libfreedreno,
+    libfreedreno_drm,
+    libfreedreno_ir3,
+    libfreedreno_layout,
+    libgallium,
+    libglsl_standalone,
+    libfreedreno_perfcntrs,
+  ],
+  build_by_default : with_tools.contains('freedreno'),
+  install : false,
 )

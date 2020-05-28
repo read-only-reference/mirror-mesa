@@ -33,7 +33,7 @@
 #include <fcntl.h>
 #include "drm-uapi/drm_fourcc.h"
 
-#include "state_tracker/winsys_handle.h"
+#include "frontend/winsys_handle.h"
 #include "util/format/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_surface.h"
@@ -108,6 +108,14 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
         rsc->slices[0].offset = whandle->offset;
         rsc->slices[0].initialized = true;
         panfrost_resource_reset_damage(rsc);
+
+        if (dev->quirks & IS_BIFROST &&
+            templat->bind & PIPE_BIND_RENDER_TARGET) {
+                unsigned size = panfrost_compute_checksum_size(
+                                        &rsc->slices[0], templat->width0, templat->height0);
+                rsc->slices[0].checksum_bo = pan_bo_create(dev, size, 0);
+                rsc->checksummed = true;
+        }
 
         if (dev->ro) {
                 rsc->scanout =
@@ -402,10 +410,11 @@ panfrost_resource_create_bo(struct panfrost_device *dev, struct panfrost_resourc
                 PIPE_BIND_DISPLAY_TARGET;
 
         unsigned bpp = util_format_get_blocksizebits(res->format);
-        bool is_2d = (res->target == PIPE_TEXTURE_2D);
-        bool is_sane_bpp = bpp == 8 || bpp == 16 || bpp == 32 || bpp == 64 || bpp == 128;
+        bool is_2d = (res->target == PIPE_TEXTURE_2D) || (res->target == PIPE_TEXTURE_RECT);
+        bool is_sane_bpp = bpp == 8 || bpp == 16 || bpp == 24 || bpp == 32 || bpp == 64 || bpp == 128;
         bool should_tile = (res->usage != PIPE_USAGE_STREAM);
-        bool must_tile = (res->bind & PIPE_BIND_DEPTH_STENCIL) && (dev->quirks & MIDGARD_SFBD);
+        bool must_tile = (res->bind & PIPE_BIND_DEPTH_STENCIL) &&
+                (dev->quirks & (MIDGARD_SFBD | IS_BIFROST));
         bool can_tile = is_2d && is_sane_bpp && ((res->bind & ~valid_binding) == 0);
 
         /* FBOs we would like to checksum, if at all possible */
@@ -550,6 +559,9 @@ panfrost_resource_destroy(struct pipe_screen *screen,
         if (rsrc->bo)
                 panfrost_bo_unreference(rsrc->bo);
 
+        if (rsrc->slices[0].checksum_bo)
+                panfrost_bo_unreference(rsrc->slices[0].checksum_bo);
+
         util_range_destroy(&rsrc->valid_buffer_range);
         ralloc_free(rsrc);
 }
@@ -641,7 +653,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
 
                 transfer->base.stride = box->width * bytes_per_pixel;
                 transfer->base.layer_stride = transfer->base.stride * box->height;
-                transfer->map = rzalloc_size(transfer, transfer->base.layer_stride * box->depth);
+                transfer->map = ralloc_size(transfer, transfer->base.layer_stride * box->depth);
                 assert(box->depth == 1);
 
                 if ((usage & PIPE_TRANSFER_READ) && rsrc->slices[level].initialized) {
@@ -806,7 +818,7 @@ panfrost_generate_mipmap(
                                 PIPE_TEX_FILTER_LINEAR);
 
         /* If the blit was successful, flush once more. If it wasn't, well, let
-         * the state tracker deal with it. */
+         * the gallium frontend deal with it. */
 
         if (blit_res) {
                 panfrost_flush_batches_accessing_bo(ctx, rsrc->bo, PAN_BO_ACCESS_WRITE);

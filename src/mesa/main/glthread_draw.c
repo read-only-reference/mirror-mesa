@@ -27,6 +27,8 @@
  * index data, so that glthread doesn't have to execute synchronously.
  */
 
+#include "c99_alloca.h"
+
 #include "main/glthread_marshal.h"
 #include "main/dispatch.h"
 #include "main/varray.h"
@@ -162,7 +164,7 @@ upload_vertices(struct gl_context *ctx, unsigned attrib_mask,
 struct marshal_cmd_DrawArraysInstancedBaseInstance
 {
    struct marshal_cmd_base cmd_base;
-   GLenum16 mode;
+   GLenum mode;
    GLint first;
    GLsizei count;
    GLsizei instance_count;
@@ -224,15 +226,21 @@ draw_arrays_async(struct gl_context *ctx, GLenum mode, GLint first,
       memcpy(cmd + 1, attribs, attribs_size);
 }
 
-void GLAPIENTRY
-_mesa_marshal_DrawArraysInstancedBaseInstance(GLenum mode, GLint first,
-                                              GLsizei count, GLsizei instance_count,
-                                              GLuint baseinstance)
+static ALWAYS_INLINE void
+draw_arrays(GLenum mode, GLint first, GLsizei count, GLsizei instance_count,
+            GLuint baseinstance, bool compiled_into_dlist)
 {
    GET_CURRENT_CONTEXT(ctx);
 
    struct glthread_vao *vao = ctx->GLThread.CurrentVAO;
    unsigned non_vbo_attrib_mask = vao->UserPointerMask & vao->Enabled;
+
+   if (compiled_into_dlist && ctx->GLThread.inside_dlist) {
+      _mesa_glthread_finish_before(ctx, "DrawArrays");
+      /* Use the function that's compiled into a display list. */
+      CALL_DrawArrays(ctx->CurrentServerDispatch, (mode, first, count));
+      return;
+   }
 
    /* Fast path when nothing needs to be done.
     *
@@ -265,7 +273,7 @@ _mesa_marshal_DrawArraysInstancedBaseInstance(GLenum mode, GLint first,
 struct marshal_cmd_MultiDrawArrays
 {
    struct marshal_cmd_base cmd_base;
-   GLenum16 mode;
+   GLenum mode;
    GLsizei draw_count;
    GLuint non_vbo_attrib_mask;
 };
@@ -332,7 +340,7 @@ multi_draw_arrays_async(struct gl_context *ctx, GLenum mode,
    }
 }
 
-void
+void GLAPIENTRY
 _mesa_marshal_MultiDrawArrays(GLenum mode, const GLint *first,
                               const GLsizei *count, GLsizei draw_count)
 {
@@ -340,6 +348,9 @@ _mesa_marshal_MultiDrawArrays(GLenum mode, const GLint *first,
 
    struct glthread_vao *vao = ctx->GLThread.CurrentVAO;
    unsigned non_vbo_attrib_mask = vao->UserPointerMask & vao->Enabled;
+
+   if (ctx->GLThread.inside_dlist)
+      goto sync;
 
    if (draw_count >= 0 &&
        (ctx->API == API_OPENGL_CORE || !non_vbo_attrib_mask)) {
@@ -397,8 +408,8 @@ struct marshal_cmd_DrawElementsInstancedBaseVertexBaseInstance
 {
    struct marshal_cmd_base cmd_base;
    bool index_bounds_valid;
-   GLenum16 mode;
-   GLenum16 type;
+   GLenum mode;
+   GLenum type;
    GLsizei count;
    GLsizei instance_count;
    GLint basevertex;
@@ -494,13 +505,17 @@ draw_elements_async(struct gl_context *ctx, GLenum mode, GLsizei count,
 static void
 draw_elements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices,
               GLsizei instance_count, GLint basevertex, GLuint baseinstance,
-              bool index_bounds_valid, GLuint min_index, GLuint max_index)
+              bool index_bounds_valid, GLuint min_index, GLuint max_index,
+              bool compiled_into_dlist)
 {
    GET_CURRENT_CONTEXT(ctx);
 
    struct glthread_vao *vao = ctx->GLThread.CurrentVAO;
    unsigned non_vbo_attrib_mask = vao->UserPointerMask & vao->Enabled;
    bool has_user_indices = vao->CurrentElementBufferName == 0;
+
+   if (compiled_into_dlist && ctx->GLThread.inside_dlist)
+      goto sync;
 
    /* Fast path when nothing needs to be done.
     *
@@ -572,7 +587,18 @@ draw_elements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices,
 sync:
    _mesa_glthread_finish_before(ctx, "DrawElements");
 
-   if (index_bounds_valid && instance_count == 1 && baseinstance == 0) {
+   if (compiled_into_dlist && ctx->GLThread.inside_dlist) {
+      /* Only use the ones that are compiled into display lists. */
+      if (basevertex) {
+         CALL_DrawElementsBaseVertex(ctx->CurrentServerDispatch,
+                                     (mode, count, type, indices, basevertex));
+      } else if (index_bounds_valid) {
+         CALL_DrawRangeElements(ctx->CurrentServerDispatch,
+                                (mode, min_index, max_index, count, type, indices));
+      } else {
+         CALL_DrawElements(ctx->CurrentServerDispatch, (mode, count, type, indices));
+      }
+   } else if (index_bounds_valid && instance_count == 1 && baseinstance == 0) {
       CALL_DrawRangeElementsBaseVertex(ctx->CurrentServerDispatch,
                                        (mode, min_index, max_index, count,
                                         type, indices, basevertex));
@@ -588,8 +614,8 @@ struct marshal_cmd_MultiDrawElementsBaseVertex
 {
    struct marshal_cmd_base cmd_base;
    bool has_base_vertex;
-   GLenum16 mode;
-   GLenum16 type;
+   GLenum mode;
+   GLenum type;
    GLsizei draw_count;
    GLuint non_vbo_attrib_mask;
    struct gl_buffer_object *index_buffer;
@@ -700,6 +726,9 @@ _mesa_marshal_MultiDrawElementsBaseVertex(GLenum mode, const GLsizei *count,
    struct glthread_vao *vao = ctx->GLThread.CurrentVAO;
    unsigned non_vbo_attrib_mask = vao->UserPointerMask & vao->Enabled;
    bool has_user_indices = vao->CurrentElementBufferName == 0;
+
+   if (ctx->GLThread.inside_dlist)
+      goto sync;
 
    /* Fast path when nothing needs to be done. */
    if (draw_count >= 0 &&
@@ -839,22 +868,29 @@ sync:
 void GLAPIENTRY
 _mesa_marshal_DrawArrays(GLenum mode, GLint first, GLsizei count)
 {
-   _mesa_marshal_DrawArraysInstancedBaseInstance(mode, first, count, 1, 0);
+   draw_arrays(mode, first, count, 1, 0, true);
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawArraysInstancedARB(GLenum mode, GLint first, GLsizei count,
                                      GLsizei instance_count)
 {
-   _mesa_marshal_DrawArraysInstancedBaseInstance(mode, first, count,
-                                                 instance_count, 0);
+   draw_arrays(mode, first, count, instance_count, 0, false);
+}
+
+void GLAPIENTRY
+_mesa_marshal_DrawArraysInstancedBaseInstance(GLenum mode, GLint first,
+                                              GLsizei count, GLsizei instance_count,
+                                              GLuint baseinstance)
+{
+   draw_arrays(mode, first, count, instance_count, baseinstance, false);
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawElements(GLenum mode, GLsizei count, GLenum type,
                            const GLvoid *indices)
 {
-   draw_elements(mode, count, type, indices, 1, 0, 0, false, 0, 0);
+   draw_elements(mode, count, type, indices, 1, 0, 0, false, 0, 0, true);
 }
 
 void GLAPIENTRY
@@ -862,21 +898,21 @@ _mesa_marshal_DrawRangeElements(GLenum mode, GLuint start, GLuint end,
                                 GLsizei count, GLenum type,
                                 const GLvoid *indices)
 {
-   draw_elements(mode, count, type, indices, 1, 0, 0, true, start, end);
+   draw_elements(mode, count, type, indices, 1, 0, 0, true, start, end, true);
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawElementsInstancedARB(GLenum mode, GLsizei count, GLenum type,
                                        const GLvoid *indices, GLsizei instance_count)
 {
-   draw_elements(mode, count, type, indices, instance_count, 0, 0, false, 0, 0);
+   draw_elements(mode, count, type, indices, instance_count, 0, 0, false, 0, 0, false);
 }
 
 void GLAPIENTRY
 _mesa_marshal_DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type,
                                      const GLvoid *indices, GLint basevertex)
 {
-   draw_elements(mode, count, type, indices, 1, basevertex, 0, false, 0, 0);
+   draw_elements(mode, count, type, indices, 1, basevertex, 0, false, 0, 0, true);
 }
 
 void GLAPIENTRY
@@ -884,7 +920,7 @@ _mesa_marshal_DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end,
                                           GLsizei count, GLenum type,
                                           const GLvoid *indices, GLint basevertex)
 {
-   draw_elements(mode, count, type, indices, 1, basevertex, 0, true, start, end);
+   draw_elements(mode, count, type, indices, 1, basevertex, 0, true, start, end, false);
 }
 
 void GLAPIENTRY
@@ -892,7 +928,7 @@ _mesa_marshal_DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count,
                                               GLenum type, const GLvoid *indices,
                                               GLsizei instance_count, GLint basevertex)
 {
-   draw_elements(mode, count, type, indices, instance_count, basevertex, 0, false, 0, 0);
+   draw_elements(mode, count, type, indices, instance_count, basevertex, 0, false, 0, 0, false);
 }
 
 void GLAPIENTRY
@@ -900,7 +936,7 @@ _mesa_marshal_DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count,
                                                 GLenum type, const GLvoid *indices,
                                                 GLsizei instance_count, GLuint baseinstance)
 {
-   draw_elements(mode, count, type, indices, instance_count, 0, baseinstance, false, 0, 0);
+   draw_elements(mode, count, type, indices, instance_count, 0, baseinstance, false, 0, 0, false);
 }
 
 void GLAPIENTRY
@@ -909,7 +945,7 @@ _mesa_marshal_DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei c
                                                           GLsizei instance_count, GLint basevertex,
                                                           GLuint baseinstance)
 {
-   draw_elements(mode, count, type, indices, instance_count, basevertex, baseinstance, false, 0, 0);
+   draw_elements(mode, count, type, indices, instance_count, basevertex, baseinstance, false, 0, 0, false);
 }
 
 void GLAPIENTRY

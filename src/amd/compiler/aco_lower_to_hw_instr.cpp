@@ -42,7 +42,27 @@ struct lower_context {
 };
 
 aco_opcode get_reduce_opcode(chip_class chip, ReduceOp op) {
+   /* Because some 16-bit instructions are already VOP3 on GFX10, we use the
+    * 32-bit opcodes (VOP2) which allows to remove the tempory VGPR and to use
+    * DPP with the arithmetic instructions. This requires to sign-extend.
+    */
    switch (op) {
+   case iadd8:
+   case iadd16: return chip >= GFX10 ? aco_opcode::v_add_u32 : aco_opcode::v_add_u16;
+   case imul8:
+   case imul16: return chip >= GFX10 ? aco_opcode::v_mul_lo_u16_e64 : aco_opcode::v_mul_lo_u16;
+   case fadd16: return aco_opcode::v_add_f16;
+   case fmul16: return aco_opcode::v_mul_f16;
+   case imax8:
+   case imax16: return chip >= GFX10 ? aco_opcode::v_max_i32 : aco_opcode::v_max_i16;
+   case imin8:
+   case imin16: return chip >= GFX10 ? aco_opcode::v_min_i32 : aco_opcode::v_min_i16;
+   case umin8:
+   case umin16: return chip >= GFX10 ? aco_opcode::v_min_u32 : aco_opcode::v_min_u16;
+   case umax8:
+   case umax16: return chip >= GFX10 ? aco_opcode::v_max_u32 : aco_opcode::v_max_u16;
+   case fmin16: return aco_opcode::v_min_f16;
+   case fmax16: return aco_opcode::v_max_f16;
    case iadd32: return chip >= GFX9 ? aco_opcode::v_add_u32 : aco_opcode::v_add_co_u32;
    case imul32: return aco_opcode::v_mul_lo_u32;
    case fadd32: return aco_opcode::v_add_f32;
@@ -53,8 +73,14 @@ aco_opcode get_reduce_opcode(chip_class chip, ReduceOp op) {
    case umax32: return aco_opcode::v_max_u32;
    case fmin32: return aco_opcode::v_min_f32;
    case fmax32: return aco_opcode::v_max_f32;
+   case iand8:
+   case iand16:
    case iand32: return aco_opcode::v_and_b32;
+   case ixor8:
+   case ixor16:
    case ixor32: return aco_opcode::v_xor_b32;
+   case ior8:
+   case ior16:
    case ior32: return aco_opcode::v_or_b32;
    case iadd64: return aco_opcode::num_opcodes;
    case imul64: return aco_opcode::num_opcodes;
@@ -71,6 +97,15 @@ aco_opcode get_reduce_opcode(chip_class chip, ReduceOp op) {
    case ixor64: return aco_opcode::num_opcodes;
    default: return aco_opcode::num_opcodes;
    }
+}
+
+bool is_vop3_reduce_opcode(aco_opcode opcode)
+{
+   /* 64-bit reductions are VOP3. */
+   if (opcode == aco_opcode::num_opcodes)
+      return true;
+
+   return instr_info.format[(int)opcode] == Format::VOP3;
 }
 
 void emit_vadd32(Builder& bld, Definition def, Operand src0, Operand src1)
@@ -296,7 +331,7 @@ void emit_dpp_op(lower_context *ctx, PhysReg dst_reg, PhysReg src0_reg, PhysReg 
    Operand src1(src1_reg, rc);
 
    aco_opcode opcode = get_reduce_opcode(ctx->program->chip_class, op);
-   bool vop3 = op == imul32 || size == 2;
+   bool vop3 = is_vop3_reduce_opcode(opcode);
 
    if (!vop3) {
       if (opcode == aco_opcode::v_add_co_u32)
@@ -334,7 +369,7 @@ void emit_op(lower_context *ctx, PhysReg dst_reg, PhysReg src0_reg, PhysReg src1
    Operand src1(src1_reg, rc);
 
    aco_opcode opcode = get_reduce_opcode(ctx->program->chip_class, op);
-   bool vop3 = op == imul32 || size == 2;
+   bool vop3 = is_vop3_reduce_opcode(opcode);
 
    if (opcode == aco_opcode::num_opcodes) {
       emit_int64_op(ctx, dst_reg, src0_reg, src1_reg, vtmp, op);
@@ -363,41 +398,71 @@ void emit_dpp_mov(lower_context *ctx, PhysReg dst, PhysReg src0, unsigned size,
 uint32_t get_reduction_identity(ReduceOp op, unsigned idx)
 {
    switch (op) {
+   case iadd8:
+   case iadd16:
    case iadd32:
    case iadd64:
+   case fadd16:
    case fadd32:
    case fadd64:
+   case ior8:
+   case ior16:
    case ior32:
    case ior64:
+   case ixor8:
+   case ixor16:
    case ixor32:
    case ixor64:
+   case umax8:
+   case umax16:
    case umax32:
    case umax64:
       return 0;
+   case imul8:
+   case imul16:
    case imul32:
    case imul64:
       return idx ? 0 : 1;
+   case fmul16:
+      return 0x3c00u; /* 1.0 */
    case fmul32:
       return 0x3f800000u; /* 1.0 */
    case fmul64:
       return idx ? 0x3ff00000u : 0u; /* 1.0 */
+   case imin8:
+      return INT8_MAX;
+   case imin16:
+      return INT16_MAX;
    case imin32:
       return INT32_MAX;
    case imin64:
       return idx ? 0x7fffffffu : 0xffffffffu;
+   case imax8:
+      return INT8_MIN;
+   case imax16:
+      return INT16_MIN;
    case imax32:
       return INT32_MIN;
    case imax64:
       return idx ? 0x80000000u : 0;
+   case umin8:
+   case umin16:
+   case iand8:
+   case iand16:
+      return 0xffffffffu;
    case umin32:
    case umin64:
    case iand32:
    case iand64:
       return 0xffffffffu;
+   case fmin16:
+      return 0x7c00u; /* infinity */
    case fmin32:
       return 0x7f800000u; /* infinity */
    case fmin64:
       return idx ? 0x7ff00000u : 0u; /* infinity */
+   case fmax16:
+      return 0xfc00u; /* negative infinity */
    case fmax32:
       return 0xff800000u; /* negative infinity */
    case fmax64:
@@ -452,6 +517,32 @@ void emit_reduction(lower_context *ctx, aco_opcode op, ReduceOp reduce_op, unsig
       bld.vop2_e64(aco_opcode::v_cndmask_b32, Definition(PhysReg{tmp + i}, v1),
                    vcndmask_identity[i], Operand(PhysReg{src.physReg() + i}, v1),
                    Operand(stmp, bld.lm));
+   }
+
+   if (src.regClass() == v1b) {
+      aco_ptr<SDWA_instruction> sdwa{create_instruction<SDWA_instruction>(aco_opcode::v_mov_b32, asSDWA(Format::VOP1), 1, 1)};
+      sdwa->operands[0] = Operand(PhysReg{tmp}, v1);
+      sdwa->definitions[0] = Definition(PhysReg{tmp}, v1);
+      if (reduce_op == imin8 || reduce_op == imax8)
+         sdwa->sel[0] = sdwa_sbyte;
+      else
+         sdwa->sel[0] = sdwa_ubyte;
+      sdwa->dst_sel = sdwa_udword;
+      bld.insert(std::move(sdwa));
+   } else if (src.regClass() == v2b) {
+      if (ctx->program->chip_class >= GFX10 &&
+          (reduce_op == iadd16 || reduce_op == imax16 ||
+           reduce_op == imin16 || reduce_op == umin16 || reduce_op == umax16)) {
+         aco_ptr<SDWA_instruction> sdwa{create_instruction<SDWA_instruction>(aco_opcode::v_mov_b32, asSDWA(Format::VOP1), 1, 1)};
+         sdwa->operands[0] = Operand(PhysReg{tmp}, v1);
+         sdwa->definitions[0] = Definition(PhysReg{tmp}, v1);
+         if (reduce_op == imin16 || reduce_op == imax16 || reduce_op == iadd16)
+            sdwa->sel[0] = sdwa_sword;
+         else
+            sdwa->sel[0] = sdwa_uword;
+         sdwa->dst_sel = sdwa_udword;
+         bld.insert(std::move(sdwa));
+      }
    }
 
    bool reduction_needs_last_op = false;
@@ -1063,9 +1154,8 @@ void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context*
 
    while (!copy_map.empty()) {
 
-      /* Perform larger swaps first, so that we don't have to split the uses of
-       * registers we swap (we don't have to because of alignment restrictions) and
-       * larger swaps swaps can make other swaps unnecessary. */
+      /* Perform larger swaps first, because larger swaps swaps can make other
+       * swaps unnecessary. */
       auto it = copy_map.begin();
       for (auto it2 = copy_map.begin(); it2 != copy_map.end(); ++it2) {
          if (it2->second.bytes > it->second.bytes) {
@@ -1129,7 +1219,7 @@ void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context*
       /* remove from map */
       copy_map.erase(it);
 
-      /* change the operand reg of the target's use and split uses if needed */
+      /* change the operand reg of the target's uses and split uses if needed */
       target = copy_map.begin();
       uint32_t bytes_left = u_bit_consecutive(0, swap.bytes);
       for (; target != copy_map.end(); ++target) {
@@ -1146,10 +1236,49 @@ void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context*
 
          assert(target->second.bytes < swap.bytes);
 
-         PhysReg new_reg = swap.op.physReg();
-         new_reg.reg_b += target->second.op.physReg().reg_b - swap.def.physReg().reg_b;
-         target->second.op.setFixed(new_reg);
+         int offset = (int)target->second.op.physReg().reg_b - (int)swap.def.physReg().reg_b;
 
+         /* split and update the middle (the portion that reads the swap's
+          * definition) to read the swap's operand instead */
+         int target_op_end = target->second.op.physReg().reg_b + target->second.bytes;
+         int swap_def_end = swap.def.physReg().reg_b + swap.bytes;
+         int before_bytes = MAX2(-offset, 0);
+         int after_bytes = MAX2(target_op_end - swap_def_end, 0);
+         int middle_bytes = target->second.bytes - before_bytes - after_bytes;
+
+         if (after_bytes) {
+            unsigned after_offset = before_bytes + middle_bytes;
+            assert(after_offset > 0);
+            copy_operation copy;
+            copy.bytes = after_bytes;
+            memcpy(copy.uses, target->second.uses + after_offset, copy.bytes);
+            RegClass rc = RegClass::get(target->second.op.regClass().type(), after_bytes);
+            copy.op = Operand(target->second.op.physReg().advance(after_offset), rc);
+            copy.def = Definition(target->second.def.physReg().advance(after_offset), rc);
+            copy_map[copy.def.physReg()] = copy;
+         }
+
+         if (middle_bytes) {
+            copy_operation copy;
+            copy.bytes = middle_bytes;
+            memcpy(copy.uses, target->second.uses + before_bytes, copy.bytes);
+            RegClass rc = RegClass::get(target->second.op.regClass().type(), middle_bytes);
+            copy.op = Operand(swap.op.physReg().advance(MAX2(offset, 0)), rc);
+            copy.def = Definition(target->second.def.physReg().advance(before_bytes), rc);
+            copy_map[copy.def.physReg()] = copy;
+         }
+
+         if (before_bytes) {
+            copy_operation copy;
+            target->second.bytes = before_bytes;
+            RegClass rc = RegClass::get(target->second.op.regClass().type(), before_bytes);
+            target->second.op = Operand(target->second.op.physReg(), rc);
+            target->second.def = Definition(target->second.def.physReg(), rc);
+            memset(target->second.uses + target->second.bytes, 0, 8 - target->second.bytes);
+         }
+
+         /* break early since we know each byte of the swap's definition is used
+          * at most once */
          bytes_left &= ~imask;
          if (!bytes_left)
             break;
@@ -1407,7 +1536,7 @@ void lower_to_hw_instr(Program* program)
                assert(instr->operands[0].physReg() == vcc); /* Compare */
                assert(instr->operands[1].regClass() == v2.as_linear()); /* Temp VGPR pair */
                assert(instr->operands[2].regClass() == v1); /* Indices x4 */
-               assert(instr->operands[3].regClass() == v1); /* Input data */
+               assert(instr->operands[3].bytes() <= 4); /* Indices x4 */
 
                PhysReg shared_vgpr_reg_lo = PhysReg(align(program->config->num_vgprs, 4) + 256);
                PhysReg shared_vgpr_reg_hi = PhysReg(shared_vgpr_reg_lo + 1);

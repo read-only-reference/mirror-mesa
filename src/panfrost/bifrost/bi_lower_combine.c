@@ -197,7 +197,9 @@ bi_lower_combine(bi_context *ctx, bi_block *block)
         bi_foreach_instr_in_block_safe(block, ins) {
                 if (ins->type != BI_COMBINE) continue;
 
-                unsigned R = bi_make_temp_reg(ctx);
+                bool needs_rewrite = !(ins->dest & PAN_IS_REG);
+                unsigned R = needs_rewrite ? bi_make_temp_reg(ctx) : ins->dest;
+                unsigned sz = nir_alu_type_get_type_size(ins->dest_type);
 
                 bi_foreach_src(ins, s) {
                         /* We're done early for vec2/3 */
@@ -215,16 +217,19 @@ bi_lower_combine(bi_context *ctx, bi_block *block)
                                 bi_insert_combine_mov(ctx, ins, s, R);
                         }
 #endif
-                        if (ins->dest_type == nir_type_uint32)
+                        if (sz == 32)
                                 bi_combine_mov32(ctx, ins, s, R);
-                        else {
+                        else if (sz == 16) {
                                 bi_combine_sel16(ctx, ins, s, R);
                                 s++;
+                        } else {
+                                unreachable("Unknown COMBINE size");
                         }
                 }
 
+                if (needs_rewrite)
+                        bi_rewrite_uses(ctx, ins->dest, 0, R, 0);
 
-                bi_rewrite_uses(ctx, ins->dest, 0, R, 0);
                 bi_remove_instruction(ins);
         }
 }

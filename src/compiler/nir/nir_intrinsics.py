@@ -229,7 +229,8 @@ intrinsic("scoped_memory_barrier",
 # GLSL intrinsic.
 # The latter can be used as code motion barrier, which is currently not
 # feasible with NIR.
-intrinsic("shader_clock", dest_comp=2, flags=[CAN_ELIMINATE])
+intrinsic("shader_clock", dest_comp=2, flags=[CAN_ELIMINATE],
+          indices=[MEMORY_SCOPE])
 
 # Shader ballot intrinsics with semantics analogous to the
 #
@@ -401,7 +402,7 @@ image("atomic_or",   src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_xor",  src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_exchange",  src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_comp_swap", src_comp=[4, 1, 1, 1], dest_comp=1)
-image("atomic_fadd",  src_comp=[1, 4, 1, 1], dest_comp=1)
+image("atomic_fadd",  src_comp=[4, 1, 1], dest_comp=1)
 image("size",    dest_comp=0, flags=[CAN_ELIMINATE, CAN_REORDER])
 image("samples", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
 image("atomic_inc_wrap",  src_comp=[4, 1, 1], dest_comp=1)
@@ -645,6 +646,9 @@ system_value("color1", 4)
 # System value for internal compute shaders in radeonsi.
 system_value("user_data_amd", 4)
 
+# Number of data items being operated on for a SIMD program.
+system_value("simd_width_intel", 1)
+
 # Barycentric coordinate intrinsics.
 #
 # These set up the barycentric coordinates for a particular interpolation.
@@ -792,16 +796,16 @@ intrinsic("store_ssbo_ir3",  src_comp=[0, 1, 1, 1],
           indices=[WRMASK, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 intrinsic("load_ssbo_ir3",  src_comp=[1, 1, 1], dest_comp=0,
           indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])
-intrinsic("ssbo_atomic_add_ir3",        src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_imin_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_umin_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_imax_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_umax_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_and_ir3",        src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_or_ir3",         src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_xor_ir3",        src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_exchange_ir3",   src_comp=[1, 1, 1, 1],    dest_comp=1)
-intrinsic("ssbo_atomic_comp_swap_ir3",  src_comp=[1, 1, 1, 1, 1], dest_comp=1)
+intrinsic("ssbo_atomic_add_ir3",        src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_imin_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_umin_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_imax_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_umax_ir3",       src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_and_ir3",        src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_or_ir3",         src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_xor_ir3",        src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_exchange_ir3",   src_comp=[1, 1, 1, 1],    dest_comp=1, indices=[ACCESS])
+intrinsic("ssbo_atomic_comp_swap_ir3",  src_comp=[1, 1, 1, 1, 1], dest_comp=1, indices=[ACCESS])
 
 # IR3-specific instruction for UBO loads using the ldc instruction. The second
 # source is the indirect offset, in units of four dwords. The base is a
@@ -833,7 +837,7 @@ intrinsic("end_patch_ir3")
 # between geometry stages - perhaps it's explicit access to the vertex cache.
 
 # src[] = { value, offset }.
-store("shared_ir3", 2, [BASE, WRMASK, ALIGN_MUL, ALIGN_OFFSET])
+store("shared_ir3", 2, [BASE, ALIGN_MUL, ALIGN_OFFSET])
 # src[] = { offset }.
 load("shared_ir3", 1, [BASE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 
@@ -843,7 +847,7 @@ load("shared_ir3", 1, [BASE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 
 # src[] = { value, address(vec2 of hi+lo uint32_t), offset }.
 # const_index[] = { write_mask, align_mul, align_offset }
-intrinsic("store_global_ir3", [0, 2, 1], indices=[WRMASK, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
+intrinsic("store_global_ir3", [0, 2, 1], indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 # src[] = { address(vec2 of hi+lo uint32_t), offset }.
 # const_index[] = { access, align_mul, align_offset }
 intrinsic("load_global_ir3", [2, 1], dest_comp=0, indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN_ELIMINATE])

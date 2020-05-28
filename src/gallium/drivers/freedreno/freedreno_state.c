@@ -104,7 +104,7 @@ fd_set_constant_buffer(struct pipe_context *pctx,
 
 	util_copy_constant_buffer(&so->cb[index], cb);
 
-	/* Note that the state tracker can unbind constant buffers by
+	/* Note that gallium frontends can unbind constant buffers by
 	 * passing NULL here.
 	 */
 	if (unlikely(!cb)) {
@@ -588,10 +588,6 @@ fd_set_global_binding(struct pipe_context *pctx,
 
 		for (unsigned i = 0; i < count; i++) {
 			unsigned n = i + first;
-			if (so->buf[n]) {
-				struct fd_resource *rsc = fd_resource(so->buf[n]);
-				fd_bo_put_iova(rsc->bo);
-			}
 			pipe_resource_reference(&so->buf[n], NULL);
 		}
 
@@ -627,7 +623,8 @@ fd_state_init(struct pipe_context *pctx)
 	pctx->bind_depth_stencil_alpha_state = fd_zsa_state_bind;
 	pctx->delete_depth_stencil_alpha_state = fd_zsa_state_delete;
 
-	pctx->create_vertex_elements_state = fd_vertex_state_create;
+	if (!pctx->create_vertex_elements_state)
+		pctx->create_vertex_elements_state = fd_vertex_state_create;
 	pctx->delete_vertex_elements_state = fd_vertex_state_delete;
 	pctx->bind_vertex_elements_state = fd_vertex_state_bind;
 

@@ -208,7 +208,7 @@ typedef enum {
 typedef enum {
         midgard_outmod_none = 0,
         midgard_outmod_pos  = 1, /* max(x, 0.0) */
-        midgard_outmod_one  = 2, /* clamp(x, -1.0, 1.0) */
+        midgard_outmod_sat_signed  = 2, /* clamp(x, -1.0, 1.0) */
         midgard_outmod_sat  = 3 /* clamp(x, 0.0, 1.0) */
 } midgard_outmod_float;
 
@@ -275,8 +275,7 @@ midgard_vector_alu;
 typedef struct
 __attribute__((__packed__))
 {
-        bool abs           : 1;
-        bool negate        : 1;
+        unsigned mod       : 2;
         bool full          : 1; /* 0 = half, 1 = full */
         unsigned component : 3;
 }
@@ -416,6 +415,9 @@ typedef enum {
         /* Packs a colour from fp16 to a native format */
         midgard_op_pack_colour   = 0x09,
 
+        /* Likewise packs from fp32 */
+        midgard_op_pack_colour_32 = 0x0A,
+
         /* Unclear why this is on the L/S unit, but moves fp32 cube map
          * coordinates in r27 to its cube map texture coordinate destination
          * (e.g r29). */
@@ -458,9 +460,10 @@ typedef enum {
         /* Used for compute shader's __global arguments, __local variables (or
          * for register spilling) */
 
-        midgard_op_ld_char = 0x81,
-        midgard_op_ld_char2 = 0x84,
-        midgard_op_ld_short = 0x85,
+        midgard_op_ld_uchar = 0x80, /* zero extends */
+        midgard_op_ld_char = 0x81, /* sign extends */
+        midgard_op_ld_ushort = 0x84, /* zero extends */
+        midgard_op_ld_short = 0x85, /* sign extends */
         midgard_op_ld_char4 = 0x88, /* short2, int, float */
         midgard_op_ld_short4 = 0x8C, /* int2, float2, long */
         midgard_op_ld_int4 = 0x90, /* float4, long2 */
@@ -724,7 +727,7 @@ __attribute__((__packed__))
 
         /* In immediate mode, each offset field is an immediate range [0, 7].
          *
-         * In register mode, offset_x becomes a register full / select / upper
+         * In register mode, offset_x becomes a register (full, select, upper)
          * triplet followed by a vec3 swizzle is splattered across
          * offset_y/offset_z in a genuinely bizarre way.
          *

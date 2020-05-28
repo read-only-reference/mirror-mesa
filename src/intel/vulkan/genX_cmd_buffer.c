@@ -34,7 +34,10 @@
 #include "genxml/gen_macros.h"
 #include "genxml/genX_pack.h"
 
-/* We reserve GPR 14 and 15 for conditional rendering */
+/* We reserve :
+ *    - GPR 14 for secondary command buffer returns
+ *    - GPR 15 for conditional rendering
+ */
 #define GEN_MI_BUILDER_NUM_ALLOC_GPRS 14
 #define __gen_get_batch_dwords anv_batch_emit_dwords
 #define __gen_address_offset anv_address_add
@@ -1755,6 +1758,11 @@ genX(CmdExecuteCommands)(
       }
 
       anv_cmd_buffer_add_secondary(primary, secondary);
+
+      assert(secondary->perf_query_pool == NULL || primary->perf_query_pool == NULL ||
+             secondary->perf_query_pool == primary->perf_query_pool);
+      if (secondary->perf_query_pool)
+         primary->perf_query_pool = secondary->perf_query_pool;
    }
 
    /* The secondary isn't counted in our VF cache tracking so we need to
@@ -2125,10 +2133,7 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
          if (bits & ANV_PIPE_END_OF_PIPE_SYNC_BIT) {
             pipe.CommandStreamerStallEnable = true;
             pipe.PostSyncOperation = WriteImmediateData;
-            pipe.Address = (struct anv_address) {
-               .bo = cmd_buffer->device->workaround_bo,
-               .offset = 0
-            };
+            pipe.Address = cmd_buffer->device->workaround_address;
          }
 
          /*
@@ -2198,10 +2203,7 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
           */
          anv_batch_emit(&cmd_buffer->batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
             lrm.RegisterAddress  = 0x243C; /* GEN7_3DPRIM_START_INSTANCE */
-            lrm.MemoryAddress = (struct anv_address) {
-               .bo = cmd_buffer->device->workaround_bo,
-               .offset = 0
-            };
+            lrm.MemoryAddress = cmd_buffer->device->workaround_address;
          }
       }
 
@@ -2243,8 +2245,7 @@ genX(cmd_buffer_apply_pipe_flushes)(struct anv_cmd_buffer *cmd_buffer)
           */
          if (GEN_GEN == 9 && pipe.VFCacheInvalidationEnable) {
             pipe.PostSyncOperation = WriteImmediateData;
-            pipe.Address =
-               (struct anv_address) { cmd_buffer->device->workaround_bo, 0 };
+            pipe.Address = cmd_buffer->device->workaround_address;
          }
       }
 
@@ -2664,7 +2665,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
                /* Align the range for consistency */
                if (desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)
-                  range = align_u32(range, ANV_UBO_BOUNDS_CHECK_ALIGNMENT);
+                  range = align_u32(range, ANV_UBO_ALIGNMENT);
 
                struct anv_address address =
                   anv_address_add(desc->buffer->address, offset);
@@ -2993,7 +2994,7 @@ get_push_range_bound_size(struct anv_cmd_buffer *cmd_buffer,
          uint32_t bound_range = MIN2(desc->range, desc->buffer->size - offset);
 
          /* Align the range for consistency */
-         bound_range = align_u32(bound_range, ANV_UBO_BOUNDS_CHECK_ALIGNMENT);
+         bound_range = align_u32(bound_range, ANV_UBO_ALIGNMENT);
 
          return bound_range;
       }
@@ -3029,7 +3030,21 @@ cmd_buffer_emit_push_constant(struct anv_cmd_buffer *cmd_buffer,
          const struct anv_pipeline_bind_map *bind_map =
             &pipeline->shaders[stage]->bind_map;
 
-#if GEN_GEN >= 12
+#if GEN_GEN >= 9
+         /* This field exists since Gen8.  However, the Broadwell PRM says:
+          *
+          *    "Constant Buffer Object Control State must be always programmed
+          *    to zero."
+          *
+          * This restriction does not exist on any newer platforms.
+          *
+          * We only have one MOCS field for the whole packet, not one per
+          * buffer.  We could go out of our way here to walk over all of the
+          * buffers and see if any of them are used externally and use the
+          * external MOCS.  However, the notion that someone would use the
+          * same bit of memory for both scanout and a UBO is nuts.  Let's not
+          * bother and assume it's all internal.
+          */
          c.MOCS = cmd_buffer->device->isl_dev.mocs.internal;
 #endif
 
@@ -3382,8 +3397,7 @@ genX(cmd_buffer_flush_state)(struct anv_cmd_buffer *cmd_buffer)
       anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
          pc.DepthStallEnable  = true;
          pc.PostSyncOperation = WriteImmediateData;
-         pc.Address           =
-            (struct anv_address) { cmd_buffer->device->workaround_bo, 0 };
+         pc.Address           = cmd_buffer->device->workaround_address;
       }
    }
 #endif
@@ -3841,41 +3855,39 @@ void genX(CmdDrawIndexedIndirect)(
    }
 }
 
-#define TMP_DRAW_COUNT_REG 0x2670 /* MI_ALU_REG14 */
-
-static void
+static struct gen_mi_value
 prepare_for_draw_count_predicate(struct anv_cmd_buffer *cmd_buffer,
+                                 struct gen_mi_builder *b,
                                  struct anv_address count_address,
                                  const bool conditional_render_enabled)
 {
-   struct gen_mi_builder b;
-   gen_mi_builder_init(&b, &cmd_buffer->batch);
+   struct gen_mi_value ret = gen_mi_imm(0);
 
    if (conditional_render_enabled) {
 #if GEN_GEN >= 8 || GEN_IS_HASWELL
-      gen_mi_store(&b, gen_mi_reg64(TMP_DRAW_COUNT_REG),
-                       gen_mi_mem32(count_address));
+      ret = gen_mi_new_gpr(b);
+      gen_mi_store(b, gen_mi_value_ref(b, ret), gen_mi_mem32(count_address));
 #endif
    } else {
       /* Upload the current draw count from the draw parameters buffer to
        * MI_PREDICATE_SRC0.
        */
-      gen_mi_store(&b, gen_mi_reg64(MI_PREDICATE_SRC0),
-                       gen_mi_mem32(count_address));
+      gen_mi_store(b, gen_mi_reg64(MI_PREDICATE_SRC0),
+                      gen_mi_mem32(count_address));
 
-      gen_mi_store(&b, gen_mi_reg32(MI_PREDICATE_SRC1 + 4), gen_mi_imm(0));
+      gen_mi_store(b, gen_mi_reg32(MI_PREDICATE_SRC1 + 4), gen_mi_imm(0));
    }
+
+   return ret;
 }
 
 static void
 emit_draw_count_predicate(struct anv_cmd_buffer *cmd_buffer,
+                          struct gen_mi_builder *b,
                           uint32_t draw_index)
 {
-   struct gen_mi_builder b;
-   gen_mi_builder_init(&b, &cmd_buffer->batch);
-
    /* Upload the index of the current primitive to MI_PREDICATE_SRC1. */
-   gen_mi_store(&b, gen_mi_reg32(MI_PREDICATE_SRC1), gen_mi_imm(draw_index));
+   gen_mi_store(b, gen_mi_reg32(MI_PREDICATE_SRC1), gen_mi_imm(draw_index));
 
    if (draw_index == 0) {
       anv_batch_emit(&cmd_buffer->batch, GENX(MI_PREDICATE), mip) {
@@ -3903,24 +3915,22 @@ emit_draw_count_predicate(struct anv_cmd_buffer *cmd_buffer,
 static void
 emit_draw_count_predicate_with_conditional_render(
                           struct anv_cmd_buffer *cmd_buffer,
-                          uint32_t draw_index)
+                          struct gen_mi_builder *b,
+                          uint32_t draw_index,
+                          struct gen_mi_value max)
 {
-   struct gen_mi_builder b;
-   gen_mi_builder_init(&b, &cmd_buffer->batch);
-
-   struct gen_mi_value pred = gen_mi_ult(&b, gen_mi_imm(draw_index),
-                                         gen_mi_reg64(TMP_DRAW_COUNT_REG));
-   pred = gen_mi_iand(&b, pred, gen_mi_reg64(ANV_PREDICATE_RESULT_REG));
+   struct gen_mi_value pred = gen_mi_ult(b, gen_mi_imm(draw_index), max);
+   pred = gen_mi_iand(b, pred, gen_mi_reg64(ANV_PREDICATE_RESULT_REG));
 
 #if GEN_GEN >= 8
-   gen_mi_store(&b, gen_mi_reg64(MI_PREDICATE_RESULT), pred);
+   gen_mi_store(b, gen_mi_reg64(MI_PREDICATE_RESULT), pred);
 #else
    /* MI_PREDICATE_RESULT is not whitelisted in i915 command parser
     * so we emit MI_PREDICATE to set it.
     */
 
-   gen_mi_store(&b, gen_mi_reg64(MI_PREDICATE_SRC0), pred);
-   gen_mi_store(&b, gen_mi_reg64(MI_PREDICATE_SRC1), gen_mi_imm(0));
+   gen_mi_store(b, gen_mi_reg64(MI_PREDICATE_SRC0), pred);
+   gen_mi_store(b, gen_mi_reg64(MI_PREDICATE_SRC1), gen_mi_imm(0));
 
    anv_batch_emit(&cmd_buffer->batch, GENX(MI_PREDICATE), mip) {
       mip.LoadOperation    = LOAD_LOADINV;
@@ -3952,23 +3962,26 @@ void genX(CmdDrawIndirectCount)(
 
    genX(cmd_buffer_flush_state)(cmd_buffer);
 
+   struct gen_mi_builder b;
+   gen_mi_builder_init(&b, &cmd_buffer->batch);
    struct anv_address count_address =
       anv_address_add(count_buffer->address, countBufferOffset);
-
-   prepare_for_draw_count_predicate(cmd_buffer, count_address,
-                                    cmd_state->conditional_render_enabled);
+   struct gen_mi_value max =
+      prepare_for_draw_count_predicate(cmd_buffer, &b, count_address,
+                                       cmd_state->conditional_render_enabled);
 
    for (uint32_t i = 0; i < maxDrawCount; i++) {
       struct anv_address draw = anv_address_add(buffer->address, offset);
 
 #if GEN_GEN >= 8 || GEN_IS_HASWELL
       if (cmd_state->conditional_render_enabled) {
-         emit_draw_count_predicate_with_conditional_render(cmd_buffer, i);
+         emit_draw_count_predicate_with_conditional_render(
+            cmd_buffer, &b, i, gen_mi_value_ref(&b, max));
       } else {
-         emit_draw_count_predicate(cmd_buffer, i);
+         emit_draw_count_predicate(cmd_buffer, &b, i);
       }
 #else
-      emit_draw_count_predicate(cmd_buffer, i);
+      emit_draw_count_predicate(cmd_buffer, &b, i);
 #endif
 
       if (vs_prog_data->uses_firstvertex ||
@@ -3995,6 +4008,8 @@ void genX(CmdDrawIndirectCount)(
 
       offset += stride;
    }
+
+   gen_mi_value_unref(&b, max);
 }
 
 void genX(CmdDrawIndexedIndirectCount)(
@@ -4018,23 +4033,26 @@ void genX(CmdDrawIndexedIndirectCount)(
 
    genX(cmd_buffer_flush_state)(cmd_buffer);
 
+   struct gen_mi_builder b;
+   gen_mi_builder_init(&b, &cmd_buffer->batch);
    struct anv_address count_address =
       anv_address_add(count_buffer->address, countBufferOffset);
-
-   prepare_for_draw_count_predicate(cmd_buffer, count_address,
-                                    cmd_state->conditional_render_enabled);
+   struct gen_mi_value max =
+      prepare_for_draw_count_predicate(cmd_buffer, &b, count_address,
+                                       cmd_state->conditional_render_enabled);
 
    for (uint32_t i = 0; i < maxDrawCount; i++) {
       struct anv_address draw = anv_address_add(buffer->address, offset);
 
 #if GEN_GEN >= 8 || GEN_IS_HASWELL
       if (cmd_state->conditional_render_enabled) {
-         emit_draw_count_predicate_with_conditional_render(cmd_buffer, i);
+         emit_draw_count_predicate_with_conditional_render(
+            cmd_buffer, &b, i, gen_mi_value_ref(&b, max));
       } else {
-         emit_draw_count_predicate(cmd_buffer, i);
+         emit_draw_count_predicate(cmd_buffer, &b, i);
       }
 #else
-      emit_draw_count_predicate(cmd_buffer, i);
+      emit_draw_count_predicate(cmd_buffer, &b, i);
 #endif
 
       /* TODO: We need to stomp base vertex to 0 somehow */
@@ -4062,6 +4080,8 @@ void genX(CmdDrawIndexedIndirectCount)(
 
       offset += stride;
    }
+
+   gen_mi_value_unref(&b, max);
 }
 
 void genX(CmdBeginTransformFeedbackEXT)(
@@ -4340,12 +4360,14 @@ void genX(CmdDispatchBase)(
    if (cmd_buffer->state.conditional_render_enabled)
       genX(cmd_emit_conditional_render_predicate)(cmd_buffer);
 
+   const struct anv_cs_parameters cs_params = anv_cs_parameters(pipeline);
+
    anv_batch_emit(&cmd_buffer->batch, GENX(GPGPU_WALKER), ggw) {
       ggw.PredicateEnable              = cmd_buffer->state.conditional_render_enabled;
-      ggw.SIMDSize                     = prog_data->simd_size / 16;
+      ggw.SIMDSize                     = cs_params.simd_size / 16;
       ggw.ThreadDepthCounterMaximum    = 0;
       ggw.ThreadHeightCounterMaximum   = 0;
-      ggw.ThreadWidthCounterMaximum    = anv_cs_threads(pipeline) - 1;
+      ggw.ThreadWidthCounterMaximum    = cs_params.threads - 1;
       ggw.ThreadGroupIDXDimension      = groupCountX;
       ggw.ThreadGroupIDYDimension      = groupCountY;
       ggw.ThreadGroupIDZDimension      = groupCountZ;
@@ -4454,14 +4476,16 @@ void genX(CmdDispatchIndirect)(
       genX(cmd_emit_conditional_render_predicate)(cmd_buffer);
 #endif
 
+   const struct anv_cs_parameters cs_params = anv_cs_parameters(pipeline);
+
    anv_batch_emit(batch, GENX(GPGPU_WALKER), ggw) {
       ggw.IndirectParameterEnable      = true;
       ggw.PredicateEnable              = GEN_GEN <= 7 ||
                                          cmd_buffer->state.conditional_render_enabled;
-      ggw.SIMDSize                     = prog_data->simd_size / 16;
+      ggw.SIMDSize                     = cs_params.simd_size / 16;
       ggw.ThreadDepthCounterMaximum    = 0;
       ggw.ThreadHeightCounterMaximum   = 0;
-      ggw.ThreadWidthCounterMaximum    = anv_cs_threads(pipeline) - 1;
+      ggw.ThreadWidthCounterMaximum    = cs_params.threads - 1;
       ggw.RightExecutionMask           = pipeline->cs_right_mask;
       ggw.BottomExecutionMask          = 0xffffffff;
    }
@@ -4922,8 +4946,7 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
        */
       anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
          pc.PostSyncOperation = WriteImmediateData;
-         pc.Address =
-            (struct anv_address) { cmd_buffer->device->workaround_bo, 0 };
+         pc.Address = cmd_buffer->device->workaround_address;
       }
    }
    cmd_buffer->state.hiz_enabled = isl_aux_usage_has_hiz(info.hiz_usage);

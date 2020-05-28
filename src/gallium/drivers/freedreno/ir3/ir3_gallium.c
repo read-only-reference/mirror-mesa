@@ -77,15 +77,26 @@ ir3_shader_variant(struct ir3_shader *shader, struct ir3_shader_key key,
 	struct ir3_shader_variant *v;
 	bool created = false;
 
-	/* some shader key values only apply to vertex or frag shader,
-	 * so normalize the key to avoid constructing multiple identical
-	 * variants:
+	/* Some shader key values may not be used by a given ir3_shader (for
+	 * example, fragment shader saturates in the vertex shader), so clean out
+	 * those flags to avoid recompiling.
 	 */
-	ir3_normalize_key(&key, shader->type);
+	ir3_key_clear_unused(&key, shader);
 
 	v = ir3_shader_get_variant(shader, &key, binning_pass, &created);
 
 	if (created) {
+		if (shader->initial_variants_done) {
+			pipe_debug_message(debug, SHADER_INFO,
+					"%s shader: recompiling at draw time: global 0x%08x, vsats %x/%x/%x, fsats %x/%x/%x, vfsamples %x/%x, astc %x/%x\n",
+					ir3_shader_stage(v),
+					key.global,
+					key.vsaturate_s, key.vsaturate_t, key.vsaturate_r,
+					key.fsaturate_s, key.fsaturate_t, key.fsaturate_r,
+					key.vsamples, key.fsamples,
+					key.vastc_srgb, key.fastc_srgb);
+
+		}
 		dump_shader_info(v, binning_pass, debug);
 	}
 
@@ -128,24 +139,53 @@ ir3_shader_create(struct ir3_compiler *compiler,
 		if (ir3_shader_debug & IR3_DBG_DISASM) {
 			tgsi_dump(cso->tokens, 0);
 		}
-		nir = tgsi_to_nir(cso->tokens, screen);
+		nir = tgsi_to_nir(cso->tokens, screen, false);
 	}
 
-	struct ir3_shader *shader = ir3_shader_from_nir(compiler, nir);
+	struct ir3_stream_output_info stream_output;
+	copy_stream_out(&stream_output, &cso->stream_output);
 
-	copy_stream_out(&shader->stream_output, &cso->stream_output);
+	struct ir3_shader *shader = ir3_shader_from_nir(compiler, nir, &stream_output);
 
-	if (fd_mesa_debug & FD_DBG_SHADERDB) {
-		/* if shader-db run, create a standard variant immediately
-		 * (as otherwise nothing will trigger the shader to be
-		 * actually compiled)
+	/* Compile standard variants immediately to try to avoid draw-time stalls
+	 * to run the compiler.
+	 */
+	struct ir3_shader_key key = {
+		.tessellation = IR3_TESS_NONE,
+		.msaa = true,
+	};
+
+	switch (nir->info.stage) {
+	case MESA_SHADER_TESS_EVAL:
+		key.tessellation = ir3_tess_mode(nir->info.tess.primitive_mode);
+		break;
+
+	case MESA_SHADER_TESS_CTRL:
+		/* The primitive_mode field, while it exists for TCS, is not
+		 * populated (since separable shaders between TCS/TES are legal,
+		 * so TCS wouldn't have access to TES's declaration).  Make a
+		 * guess so that we shader-db something plausible for TCS.
 		 */
-		static struct ir3_shader_key key; /* static is implicitly zeroed */
-		ir3_shader_variant(shader, key, false, debug);
+		if (nir->info.outputs_written & VARYING_BIT_TESS_LEVEL_INNER)
+			key.tessellation = IR3_TESS_TRIANGLES;
+		else
+			key.tessellation = IR3_TESS_ISOLINES;
+		break;
 
-		if (nir->info.stage != MESA_SHADER_FRAGMENT)
-			ir3_shader_variant(shader, key, true, debug);
+	case MESA_SHADER_GEOMETRY:
+		key.has_gs = true;
+		break;
+
+	default:
+		break;
 	}
+
+	ir3_shader_variant(shader, key, false, debug);
+
+	if (nir->info.stage == MESA_SHADER_VERTEX)
+		ir3_shader_variant(shader, key, true, debug);
+
+	shader->initial_variants_done = true;
 
 	return shader;
 }
@@ -168,19 +208,19 @@ ir3_shader_create_compute(struct ir3_compiler *compiler,
 		if (ir3_shader_debug & IR3_DBG_DISASM) {
 			tgsi_dump(cso->prog, 0);
 		}
-		nir = tgsi_to_nir(cso->prog, screen);
+		nir = tgsi_to_nir(cso->prog, screen, false);
 	}
 
-	struct ir3_shader *shader = ir3_shader_from_nir(compiler, nir);
+	struct ir3_shader *shader = ir3_shader_from_nir(compiler, nir, NULL);
 
-	if (fd_mesa_debug & FD_DBG_SHADERDB) {
-		/* if shader-db run, create a standard variant immediately
-		 * (as otherwise nothing will trigger the shader to be
-		 * actually compiled)
-		 */
-		static struct ir3_shader_key key; /* static is implicitly zeroed */
-		ir3_shader_variant(shader, key, false, debug);
-	}
+	/* Immediately compile a standard variant.  We have so few variants in our
+	 * shaders, that doing so almost eliminates draw-time recompiles.  (This
+	 * is also how we get data from shader-db's ./run)
+	 */
+	static struct ir3_shader_key key; /* static is implicitly zeroed */
+	ir3_shader_variant(shader, key, false, debug);
+
+	shader->initial_variants_done = true;
 
 	return shader;
 }

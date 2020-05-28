@@ -1334,7 +1334,7 @@ iris_create_zsa_state(struct pipe_context *ctx,
       state->stencil[0].writemask != 0 ||
       (two_sided_stencil && state->stencil[1].writemask != 0);
 
-   /* The state tracker needs to optimize away EQUAL writes for us. */
+   /* gallium frontends need to optimize away EQUAL writes for us. */
    assert(!(state->depth.func == PIPE_FUNC_EQUAL && state->depth.writemask));
 
    iris_pack_command(GENX(3DSTATE_WM_DEPTH_STENCIL), cso->wmds, wmds) {
@@ -1361,6 +1361,9 @@ iris_create_zsa_state(struct pipe_context *ctx,
       wmds.BackfaceStencilTestMask = state->stencil[1].valuemask;
       wmds.BackfaceStencilWriteMask = state->stencil[1].writemask;
       /* wmds.[Backface]StencilReferenceValue are merged later */
+#if GEN_GEN >= 12
+      wmds.StencilReferenceValueModifyDisable = true;
+#endif
    }
 
 #if GEN_GEN >= 12
@@ -1987,7 +1990,7 @@ iris_upload_sampler_states(struct iris_context *ice, gl_shader_stage stage)
    struct iris_shader_state *shs = &ice->state.shaders[stage];
    const struct shader_info *info = iris_get_shader_info(ice, stage);
 
-   /* We assume the state tracker will call pipe->bind_sampler_states()
+   /* We assume gallium frontends will call pipe->bind_sampler_states()
     * if the program's number of textures changes.
     */
    unsigned count = info ? util_last_bit(info->textures_used) : 0;
@@ -2586,7 +2589,7 @@ iris_create_surface(struct pipe_context *ctx,
        * texture, the tile offsets may be anything and we can't rely on
        * X/Y Offset.
        *
-       * Return NULL to force the state tracker to take fallback paths.
+       * Return NULL to force gallium frontends to take fallback paths.
        */
       if (view->array_len > 1 || GEN_GEN == 8)
          return NULL;
@@ -2936,10 +2939,12 @@ iris_set_stencil_ref(struct pipe_context *ctx,
 {
    struct iris_context *ice = (struct iris_context *) ctx;
    memcpy(&ice->state.stencil_ref, state, sizeof(*state));
-   if (GEN_GEN == 8)
-      ice->state.dirty |= IRIS_DIRTY_COLOR_CALC_STATE;
-   else
+   if (GEN_GEN >= 12)
+      ice->state.dirty |= IRIS_DIRTY_STENCIL_REF;
+   else if (GEN_GEN >= 9)
       ice->state.dirty |= IRIS_DIRTY_WM_DEPTH_STENCIL;
+   else
+      ice->state.dirty |= IRIS_DIRTY_COLOR_CALC_STATE;
 }
 
 static float
@@ -3214,6 +3219,10 @@ upload_sysvals(struct iris_context *ice,
          value = fui(ice->state.default_inner_level[0]);
       } else if (sysval == BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y) {
          value = fui(ice->state.default_inner_level[1]);
+      } else if (sysval >= BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_X &&
+                 sysval <= BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_Z) {
+         unsigned i = sysval - BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_X;
+         value = ice->state.last_block[i];
       } else {
          assert(!"unhandled system value");
       }
@@ -4178,6 +4187,8 @@ iris_store_tcs_state(struct iris_context *ice,
        *    more than 2 times the number of instance count.
        */
       assert((devinfo->max_tcs_threads / 2) > tcs_prog_data->instances);
+      hs.DispatchGRFStartRegisterForURBData = prog_data->dispatch_grf_start_reg & 0x1f;
+      hs.DispatchGRFStartRegisterForURBData5 = prog_data->dispatch_grf_start_reg >> 5;
 #endif
 
       hs.InstanceCount = tcs_prog_data->instances - 1;
@@ -4364,7 +4375,6 @@ iris_store_cs_state(struct iris_context *ice,
    void *map = shader->derived_data;
 
    iris_pack_state(GENX(INTERFACE_DESCRIPTOR_DATA), map, desc) {
-      desc.KernelStartPointer = KSP(shader);
       desc.ConstantURBEntryReadLength = cs_prog_data->push.per_thread.regs;
       desc.SharedLocalMemorySize =
          encode_slm_size(GEN_GEN, prog_data->total_shared);
@@ -5213,7 +5223,7 @@ setup_constant_buffers(struct iris_context *ice,
       push_bos->buffers[n].length = range->length;
       push_bos->buffers[n].addr =
          res ? ro_bo(res->bo, range->start * 32 + cbuf->buffer_offset)
-         : ro_bo(batch->screen->workaround_bo, 0);
+         : batch->screen->workaround_address;
       n++;
    }
 
@@ -5874,7 +5884,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
 
    if (dirty & IRIS_DIRTY_WM_DEPTH_STENCIL) {
       struct iris_depth_stencil_alpha_state *cso = ice->state.cso_zsa;
-#if GEN_GEN >= 9
+#if GEN_GEN >= 9 && GEN_GEN < 12
       struct pipe_stencil_ref *p_stencil_refs = &ice->state.stencil_ref;
       uint32_t stencil_refs[GENX(3DSTATE_WM_DEPTH_STENCIL_length)];
       iris_pack_command(GENX(3DSTATE_WM_DEPTH_STENCIL), &stencil_refs, wmds) {
@@ -5883,11 +5893,33 @@ iris_upload_dirty_render_state(struct iris_context *ice,
       }
       iris_emit_merge(batch, cso->wmds, stencil_refs, ARRAY_SIZE(cso->wmds));
 #else
+      /* Use modify disable fields which allow us to emit packets
+       * directly instead of merging them later.
+       */
       iris_batch_emit(batch, cso->wmds, sizeof(cso->wmds));
 #endif
 
 #if GEN_GEN >= 12
       iris_batch_emit(batch, cso->depth_bounds, sizeof(cso->depth_bounds));
+#endif
+   }
+
+   if (dirty & IRIS_DIRTY_STENCIL_REF) {
+#if GEN_GEN >= 12
+      /* Use modify disable fields which allow us to emit packets
+       * directly instead of merging them later.
+       */
+      struct pipe_stencil_ref *p_stencil_refs = &ice->state.stencil_ref;
+      uint32_t stencil_refs[GENX(3DSTATE_WM_DEPTH_STENCIL_length)];
+      iris_pack_command(GENX(3DSTATE_WM_DEPTH_STENCIL), &stencil_refs, wmds) {
+         wmds.StencilReferenceValue = p_stencil_refs->ref_value[0];
+         wmds.BackfaceStencilReferenceValue = p_stencil_refs->ref_value[1];
+         wmds.StencilTestMaskModifyDisable = true;
+         wmds.StencilWriteMaskModifyDisable = true;
+         wmds.StencilStateModifyDisable = true;
+         wmds.DepthStateModifyDisable = true;
+      }
+      iris_batch_emit(batch, stencil_refs, sizeof(stencil_refs));
 #endif
    }
 
@@ -5938,7 +5970,8 @@ iris_upload_dirty_render_state(struct iris_context *ice,
           */
          iris_emit_pipe_control_write(batch, "WA for stencil state",
                                       PIPE_CONTROL_WRITE_IMMEDIATE,
-                                      batch->screen->workaround_bo, 0, 0);
+                                      batch->screen->workaround_address.bo,
+                                      batch->screen->workaround_address.offset, 0);
       }
 
       union isl_color_value clear_value = { .f32 = { 0, } };
@@ -6472,7 +6505,9 @@ iris_upload_compute_state(struct iris_context *ice,
    struct brw_cs_prog_data *cs_prog_data = (void *) prog_data;
 
    const uint32_t group_size = grid->block[0] * grid->block[1] * grid->block[2];
-   const unsigned threads = DIV_ROUND_UP(group_size, cs_prog_data->simd_size);
+   const unsigned simd_size =
+      brw_cs_simd_size_for_group_size(devinfo, cs_prog_data, group_size);
+   const unsigned threads = DIV_ROUND_UP(group_size, simd_size);
 
    /* Always pin the binder.  If we're emitting new binding table pointers,
     * we need it.  If not, we're probably inheriting old tables via the
@@ -6570,6 +6605,8 @@ iris_upload_compute_state(struct iris_context *ice,
       uint32_t desc[GENX(INTERFACE_DESCRIPTOR_DATA_length)];
 
       iris_pack_state(GENX(INTERFACE_DESCRIPTOR_DATA), desc, idd) {
+         idd.KernelStartPointer =
+            KSP(shader) + brw_cs_prog_data_prog_offset(cs_prog_data, simd_size);
          idd.SamplerStatePointer = shs->sampler_table.offset;
          idd.BindingTablePointer = binder->bt_offset[MESA_SHADER_COMPUTE];
          idd.NumberofThreadsinGPGPUThreadGroup = threads;
@@ -6586,14 +6623,6 @@ iris_upload_compute_state(struct iris_context *ice,
                        &ice->state.last_res.cs_desc, desc, sizeof(desc), 64);
       }
    }
-
-   uint32_t remainder = group_size & (cs_prog_data->simd_size - 1);
-   uint32_t right_mask;
-
-   if (remainder > 0)
-      right_mask = ~0u >> (32 - remainder);
-   else
-      right_mask = ~0u >> (32 - cs_prog_data->simd_size);
 
 #define GPGPU_DISPATCHDIMX 0x2500
 #define GPGPU_DISPATCHDIMY 0x2504
@@ -6616,9 +6645,11 @@ iris_upload_compute_state(struct iris_context *ice,
       }
    }
 
+   const uint32_t right_mask = brw_cs_right_mask(group_size, simd_size);
+
    iris_emit_cmd(batch, GENX(GPGPU_WALKER), ggw) {
       ggw.IndirectParameterEnable    = grid->indirect != NULL;
-      ggw.SIMDSize                   = cs_prog_data->simd_size / 16;
+      ggw.SIMDSize                   = simd_size / 16;
       ggw.ThreadDepthCounterMaximum  = 0;
       ggw.ThreadHeightCounterMaximum = 0;
       ggw.ThreadWidthCounterMaximum  = threads - 1;
@@ -6956,7 +6987,8 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
          flags |= PIPE_CONTROL_WRITE_IMMEDIATE;
          post_sync_flags |= PIPE_CONTROL_WRITE_IMMEDIATE;
          non_lri_post_sync_flags |= PIPE_CONTROL_WRITE_IMMEDIATE;
-         bo = batch->screen->workaround_bo;
+         bo = batch->screen->workaround_address.bo;
+         offset = batch->screen->workaround_address.offset;
       }
    }
 

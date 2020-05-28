@@ -339,7 +339,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return rscreen->b.chip_class > R700;
 
 	case PIPE_CAP_TGSI_TEXCOORD:
-		return is_nir_enabled(&rscreen->b);
+		return 1;
 
 	case PIPE_CAP_FAKE_SW_MSAA:
 		return 0;
@@ -561,9 +561,11 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_TESS_EVAL:
 		if (rscreen->b.family >= CHIP_CEDAR)
 			break;
+		/* fallthrough */
 	case PIPE_SHADER_COMPUTE:
 		if (!is_nir_enabled(&rscreen->b))
 			break;
+		/* fallthrough */
 	default:
 		return 0;
 	}

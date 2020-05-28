@@ -50,6 +50,7 @@ enum fd6_state_id {
 	FD6_GROUP_PROG_FB_RAST,
 	FD6_GROUP_LRZ,
 	FD6_GROUP_LRZ_BINNING,
+	FD6_GROUP_VTXSTATE,
 	FD6_GROUP_VBO,
 	FD6_GROUP_CONST,
 	FD6_GROUP_VS_DRIVER_PARAMS,
@@ -65,6 +66,7 @@ enum fd6_state_id {
 	FD6_GROUP_BLEND,
 	FD6_GROUP_SCISSOR,
 	FD6_GROUP_BLEND_COLOR,
+	FD6_GROUP_SO,
 };
 
 #define ENABLE_ALL (CP_SET_DRAW_STATE__0_BINNING | CP_SET_DRAW_STATE__0_GMEM | CP_SET_DRAW_STATE__0_SYSMEM)
@@ -158,7 +160,7 @@ fd6_event_write(struct fd_batch *batch, struct fd_ringbuffer *ring,
 	if (timestamp) {
 		struct fd6_context *fd6_ctx = fd6_context(batch->ctx);
 		seqno = ++fd6_ctx->seqno;
-		OUT_RELOCW(ring, control_ptr(fd6_ctx, seqno));  /* ADDR_LO/HI */
+		OUT_RELOC(ring, control_ptr(fd6_ctx, seqno));  /* ADDR_LO/HI */
 		OUT_RING(ring, seqno);
 	}
 

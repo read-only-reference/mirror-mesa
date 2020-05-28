@@ -137,8 +137,6 @@ fixup_draw_state(struct fd_context *ctx, struct fd6_emit *emit)
 		ctx->dirty |= FD_DIRTY_RASTERIZER;
 		ctx->last.primitive_restart = emit->primitive_restart;
 	}
-
-	ctx->last.dirty = false;
 }
 
 static bool
@@ -184,19 +182,7 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 		emit.key.ds = ctx->prog.ds;
 
 		shader_info *ds_info = &emit.key.ds->nir->info;
-		switch (ds_info->tess.primitive_mode) {
-		case GL_ISOLINES:
-			emit.key.key.tessellation = IR3_TESS_ISOLINES;
-			break;
-		case GL_TRIANGLES:
-			emit.key.key.tessellation = IR3_TESS_TRIANGLES;
-			break;
-		case GL_QUADS:
-			emit.key.key.tessellation = IR3_TESS_QUADS;
-			break;
-		default:
-			unreachable("bad tessmode");
-		}
+		emit.key.key.tessellation = ir3_tess_mode(ds_info->tess.primitive_mode);
 	}
 
 	if (emit.key.gs)
@@ -424,7 +410,7 @@ fd6_clear_lrz(struct fd_batch *batch, struct fd_resource *zsbuf, double depth)
 	OUT_RING(ring, A6XX_RB_2D_DST_INFO_COLOR_FORMAT(FMT6_16_UNORM) |
 			A6XX_RB_2D_DST_INFO_TILE_MODE(TILE6_LINEAR) |
 			A6XX_RB_2D_DST_INFO_COLOR_SWAP(WZYX));
-	OUT_RELOCW(ring, zsbuf->lrz, 0, 0, 0);
+	OUT_RELOC(ring, zsbuf->lrz, 0, 0, 0);
 	OUT_RING(ring, A6XX_RB_2D_DST_SIZE_PITCH(zsbuf->lrz_pitch * 2));
 	OUT_RING(ring, 0x00000000);
 	OUT_RING(ring, 0x00000000);

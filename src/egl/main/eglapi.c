@@ -597,6 +597,11 @@ _eglComputeVersion(_EGLDisplay *disp)
        disp->Extensions.KHR_gl_colorspace &&
        disp->Extensions.KHR_surfaceless_context)
       disp->Version = 15;
+
+   /* For Android P and below limit the EGL version to 1.4 */
+#if defined(ANDROID) && ANDROID_API_LEVEL <= 28
+   disp->Version = 14;
+#endif
 }
 
 /**
@@ -1352,7 +1357,7 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
 static EGLBoolean
 _eglSwapBuffersWithDamageCommon(_EGLDisplay *disp, _EGLSurface *surf,
-                                EGLint *rects, EGLint n_rects)
+                                const EGLint *rects, EGLint n_rects)
 {
    _EGLContext *ctx = _eglGetCurrentContext();
    _EGLDriver *drv;
@@ -1387,7 +1392,7 @@ _eglSwapBuffersWithDamageCommon(_EGLDisplay *disp, _EGLSurface *surf,
 
 static EGLBoolean EGLAPIENTRY
 eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface surface,
-                            EGLint *rects, EGLint n_rects)
+                            const EGLint *rects, EGLint n_rects)
 {
    _EGLDisplay *disp = _eglLockDisplay(dpy);
    _EGLSurface *surf = _eglLookupSurface(surface, disp);
@@ -1397,7 +1402,7 @@ eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface surface,
 
 static EGLBoolean EGLAPIENTRY
 eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface surface,
-                            EGLint *rects, EGLint n_rects)
+                            const EGLint *rects, EGLint n_rects)
 {
    _EGLDisplay *disp = _eglLockDisplay(dpy);
    _EGLSurface *surf = _eglLookupSurface(surface, disp);
