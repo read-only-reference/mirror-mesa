@@ -48,6 +48,10 @@
 /* for fd_get_driver/device_uuid() */
 #include "freedreno/common/freedreno_uuid.h"
 
+static void
+tu_semaphore_remove_temp(struct tu_device *device,
+                         struct tu_semaphore *sem);
+
 static int
 tu_device_get_cache_uuid(uint16_t family, void *uuid)
 {
@@ -205,6 +209,9 @@ tu_physical_device_init(struct tu_physical_device *device,
       close(fd);
       return result;
    }
+
+   device->msm_major_version = version->version_major;
+   device->msm_minor_version = version->version_minor;
 
    drmFreeVersion(version);
 
@@ -494,8 +501,12 @@ tu_enumerate_devices(struct tu_instance *instance)
 
    max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
 
-   if (instance->debug_flags & TU_DEBUG_STARTUP)
-      tu_logi("Found %d drm nodes", max_devices);
+   if (instance->debug_flags & TU_DEBUG_STARTUP) {
+      if (max_devices < 0)
+         tu_logi("drmGetDevices2 returned error: %s\n", strerror(max_devices));
+      else
+         tu_logi("Found %d drm nodes", max_devices);
+   }
 
    if (max_devices < 1)
       return vk_error(instance, VK_ERROR_INCOMPATIBLE_DRIVER);
@@ -581,24 +592,24 @@ tu_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
    memset(pFeatures, 0, sizeof(*pFeatures));
 
    *pFeatures = (VkPhysicalDeviceFeatures) {
-      .robustBufferAccess = false,
+      .robustBufferAccess = true,
       .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
       .geometryShader = true,
-      .tessellationShader = false,
+      .tessellationShader = true,
       .sampleRateShading = true,
       .dualSrcBlend = true,
       .logicOp = true,
-      .multiDrawIndirect = false,
-      .drawIndirectFirstInstance = false,
+      .multiDrawIndirect = true,
+      .drawIndirectFirstInstance = true,
       .depthClamp = true,
-      .depthBiasClamp = false,
-      .fillModeNonSolid = false,
-      .depthBounds = false,
+      .depthBiasClamp = true,
+      .fillModeNonSolid = true,
+      .depthBounds = true,
       .wideLines = false,
-      .largePoints = false,
-      .alphaToOne = false,
+      .largePoints = true,
+      .alphaToOne = true,
       .multiViewport = false,
       .samplerAnisotropy = true,
       .textureCompressionETC2 = true,
@@ -636,6 +647,22 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
    vk_foreach_struct(ext, pFeatures->pNext)
    {
       switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES: {
+         VkPhysicalDeviceVulkan11Features *features = (void *) ext;
+         features->storageBuffer16BitAccess            = false;
+         features->uniformAndStorageBuffer16BitAccess  = false;
+         features->storagePushConstant16               = false;
+         features->storageInputOutput16                = false;
+         features->multiview                           = false;
+         features->multiviewGeometryShader             = false;
+         features->multiviewTessellationShader         = false;
+         features->variablePointersStorageBuffer       = false;
+         features->variablePointers                    = false;
+         features->protectedMemory                     = false;
+         features->samplerYcbcrConversion              = true;
+         features->shaderDrawParameters                = true;
+         break;
+      }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES: {
          VkPhysicalDeviceVariablePointersFeatures *features = (void *) ext;
          features->variablePointersStorageBuffer = false;
@@ -653,7 +680,7 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES: {
          VkPhysicalDeviceShaderDrawParametersFeatures *features =
             (VkPhysicalDeviceShaderDrawParametersFeatures *) ext;
-         features->shaderDrawParameters = false;
+         features->shaderDrawParameters = true;
          break;
       }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES: {
@@ -714,6 +741,19 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
             (VkPhysicalDeviceTransformFeedbackFeaturesEXT *) ext;
          features->transformFeedback = true;
          features->geometryStreams = false;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES_EXT: {
+         VkPhysicalDeviceIndexTypeUint8FeaturesEXT *features =
+            (VkPhysicalDeviceIndexTypeUint8FeaturesEXT *)ext;
+         features->indexTypeUint8 = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT: {
+         VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *features =
+            (VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *)ext;
+         features->vertexAttributeInstanceRateDivisor = true;
+         features->vertexAttributeInstanceRateZeroDivisor = true;
          break;
       }
       default:
@@ -796,11 +836,11 @@ tu_GetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
       .maxComputeWorkGroupInvocations = 2048,
       .maxComputeWorkGroupSize = { 2048, 2048, 2048 },
       .subPixelPrecisionBits = 8,
-      .subTexelPrecisionBits = 4 /* FIXME */,
-      .mipmapPrecisionBits = 4 /* FIXME */,
+      .subTexelPrecisionBits = 8,
+      .mipmapPrecisionBits = 8,
       .maxDrawIndexedIndexValue = UINT32_MAX,
       .maxDrawIndirectCount = UINT32_MAX,
-      .maxSamplerLodBias = 16,
+      .maxSamplerLodBias = 4095.0 / 256.0, /* [-16, 15.99609375] */
       .maxSamplerAnisotropy = 16,
       .maxViewports = MAX_VIEWPORTS,
       .maxViewportDimensions = { (1 << 14), (1 << 14) },
@@ -810,13 +850,13 @@ tu_GetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
       .minTexelBufferOffsetAlignment = 64,
       .minUniformBufferOffsetAlignment = 64,
       .minStorageBufferOffsetAlignment = 64,
-      .minTexelOffset = -32,
-      .maxTexelOffset = 31,
+      .minTexelOffset = -16,
+      .maxTexelOffset = 15,
       .minTexelGatherOffset = -32,
       .maxTexelGatherOffset = 31,
-      .minInterpolationOffset = -2,
-      .maxInterpolationOffset = 2,
-      .subPixelInterpolationOffsetBits = 8,
+      .minInterpolationOffset = -0.5,
+      .maxInterpolationOffset = 0.4375,
+      .subPixelInterpolationOffsetBits = 4,
       .maxFramebufferWidth = (1 << 14),
       .maxFramebufferHeight = (1 << 14),
       .maxFramebufferLayers = (1 << 10),
@@ -837,9 +877,9 @@ tu_GetPhysicalDeviceProperties(VkPhysicalDevice physicalDevice,
       .maxCullDistances = 8,
       .maxCombinedClipAndCullDistances = 8,
       .discreteQueuePriorities = 1,
-      .pointSizeRange = { 0.125, 255.875 },
+      .pointSizeRange = { 1, 4092 },
       .lineWidthRange = { 0.0, 7.9921875 },
-      .pointSizeGranularity = (1.0 / 8.0),
+      .pointSizeGranularity = 	0.0625,
       .lineWidthGranularity = (1.0 / 128.0),
       .strictLines = false, /* FINISHME */
       .standardSampleLocations = true,
@@ -948,7 +988,22 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          properties->filterMinmaxSingleComponentFormats = true;
          break;
       }
-
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES: {
+         VkPhysicalDeviceSubgroupProperties *properties =
+            (VkPhysicalDeviceSubgroupProperties *)ext;
+         properties->subgroupSize = 64;
+         properties->supportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+         properties->supportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT |
+                                           VK_SUBGROUP_FEATURE_VOTE_BIT;
+         properties->quadOperationsInAllStages = false;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES_EXT: {
+         VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT *props =
+            (VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT *)ext;
+         props->maxVertexAttribDivisor = UINT32_MAX;
+         break;
+      }
       default:
          break;
       }
@@ -1161,6 +1216,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
+   device->_lost = false;
 
    if (pAllocator)
       device->alloc = *pAllocator;
@@ -1302,13 +1358,35 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
          tu_bo_finish(device, &device->scratch_bos[i].bo);
    }
 
-   /* the compiler does not use pAllocator */
-   ralloc_free(device->compiler);
+   ir3_compiler_destroy(device->compiler);
 
    VkPipelineCache pc = tu_pipeline_cache_to_handle(device->mem_cache);
    tu_DestroyPipelineCache(tu_device_to_handle(device), pc, NULL);
 
    vk_free(&device->alloc, device);
+}
+
+VkResult
+_tu_device_set_lost(struct tu_device *device,
+                    const char *file, int line,
+                    const char *msg, ...)
+{
+   /* Set the flag indicating that waits should return in finite time even
+    * after device loss.
+    */
+   p_atomic_inc(&device->_lost);
+
+   /* TODO: Report the log message through VkDebugReportCallbackEXT instead */
+   fprintf(stderr, "%s:%d: ", file, line);
+   va_list ap;
+   va_start(ap, msg);
+   vfprintf(stderr, msg, ap);
+   va_end(ap);
+
+   if (env_var_as_boolean("TU_ABORT_ON_DEVICE_LOSS", false))
+      abort();
+
+   return VK_ERROR_DEVICE_LOST;
 }
 
 VkResult
@@ -1413,6 +1491,65 @@ tu_GetDeviceQueue(VkDevice _device,
    tu_GetDeviceQueue2(_device, &info, pQueue);
 }
 
+static VkResult
+tu_get_semaphore_syncobjs(const VkSemaphore *sems,
+                          uint32_t sem_count,
+                          bool wait,
+                          struct drm_msm_gem_submit_syncobj **out,
+                          uint32_t *out_count)
+{
+   uint32_t syncobj_count = 0;
+   struct drm_msm_gem_submit_syncobj *syncobjs;
+
+   for (uint32_t i = 0; i  < sem_count; ++i) {
+      TU_FROM_HANDLE(tu_semaphore, sem, sems[i]);
+
+      struct tu_semaphore_part *part =
+         sem->temporary.kind != TU_SEMAPHORE_NONE ?
+            &sem->temporary : &sem->permanent;
+
+      if (part->kind == TU_SEMAPHORE_SYNCOBJ)
+         ++syncobj_count;
+   }
+
+   *out = NULL;
+   *out_count = syncobj_count;
+   if (!syncobj_count)
+      return VK_SUCCESS;
+
+   *out = syncobjs = calloc(syncobj_count, sizeof (*syncobjs));
+   if (!syncobjs)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+   for (uint32_t i = 0, j = 0; i  < sem_count; ++i) {
+      TU_FROM_HANDLE(tu_semaphore, sem, sems[i]);
+
+      struct tu_semaphore_part *part =
+         sem->temporary.kind != TU_SEMAPHORE_NONE ?
+            &sem->temporary : &sem->permanent;
+
+      if (part->kind == TU_SEMAPHORE_SYNCOBJ) {
+         syncobjs[j].handle = part->syncobj;
+         syncobjs[j].flags = wait ? MSM_SUBMIT_SYNCOBJ_RESET : 0;
+         ++j;
+      }
+   }
+
+   return VK_SUCCESS;
+}
+
+
+static void
+tu_semaphores_remove_temp(struct tu_device *device,
+                          const VkSemaphore *sems,
+                          uint32_t sem_count)
+{
+   for (uint32_t i = 0; i  < sem_count; ++i) {
+      TU_FROM_HANDLE(tu_semaphore, sem, sems[i]);
+      tu_semaphore_remove_temp(device, sem);
+   }
+}
+
 VkResult
 tu_QueueSubmit(VkQueue _queue,
                uint32_t submitCount,
@@ -1420,12 +1557,32 @@ tu_QueueSubmit(VkQueue _queue,
                VkFence _fence)
 {
    TU_FROM_HANDLE(tu_queue, queue, _queue);
+   VkResult result;
 
    for (uint32_t i = 0; i < submitCount; ++i) {
       const VkSubmitInfo *submit = pSubmits + i;
       const bool last_submit = (i == submitCount - 1);
+      struct drm_msm_gem_submit_syncobj *in_syncobjs = NULL, *out_syncobjs = NULL;
+      uint32_t nr_in_syncobjs, nr_out_syncobjs;
       struct tu_bo_list bo_list;
       tu_bo_list_init(&bo_list);
+
+      result = tu_get_semaphore_syncobjs(pSubmits[i].pWaitSemaphores,
+                                         pSubmits[i].waitSemaphoreCount,
+                                         false, &in_syncobjs, &nr_in_syncobjs);
+      if (result != VK_SUCCESS) {
+         return tu_device_set_lost(queue->device,
+                                   "failed to allocate space for semaphore submission\n");
+      }
+
+      result = tu_get_semaphore_syncobjs(pSubmits[i].pSignalSemaphores,
+                                         pSubmits[i].signalSemaphoreCount,
+                                         false, &out_syncobjs, &nr_out_syncobjs);
+      if (result != VK_SUCCESS) {
+         free(in_syncobjs);
+         return tu_device_set_lost(queue->device,
+                                   "failed to allocate space for semaphore submission\n");
+      }
 
       uint32_t entry_count = 0;
       for (uint32_t j = 0; j < submit->commandBufferCount; ++j) {
@@ -1454,6 +1611,13 @@ tu_QueueSubmit(VkQueue _queue,
       }
 
       uint32_t flags = MSM_PIPE_3D0;
+      if (nr_in_syncobjs) {
+         flags |= MSM_SUBMIT_SYNCOBJ_IN;
+      }
+      if (nr_out_syncobjs) {
+         flags |= MSM_SUBMIT_SYNCOBJ_OUT;
+      }
+
       if (last_submit) {
          flags |= MSM_SUBMIT_FENCE_FD_OUT;
       }
@@ -1465,21 +1629,34 @@ tu_QueueSubmit(VkQueue _queue,
          .nr_bos = bo_list.count,
          .cmds = (uint64_t)(uintptr_t)cmds,
          .nr_cmds = entry_count,
+         .in_syncobjs = (uint64_t)(uintptr_t)in_syncobjs,
+         .out_syncobjs = (uint64_t)(uintptr_t)out_syncobjs,
+         .nr_in_syncobjs = nr_in_syncobjs,
+         .nr_out_syncobjs = nr_out_syncobjs,
+         .syncobj_stride = sizeof(struct drm_msm_gem_submit_syncobj),
       };
 
       int ret = drmCommandWriteRead(queue->device->physical_device->local_fd,
                                     DRM_MSM_GEM_SUBMIT,
                                     &req, sizeof(req));
       if (ret) {
-         fprintf(stderr, "submit failed: %s\n", strerror(errno));
-         abort();
+         free(in_syncobjs);
+         free(out_syncobjs);
+         return tu_device_set_lost(queue->device, "submit failed: %s\n",
+                                   strerror(errno));
       }
 
       tu_bo_list_destroy(&bo_list);
+      free(in_syncobjs);
+      free(out_syncobjs);
 
+      tu_semaphores_remove_temp(queue->device, pSubmits[i].pWaitSemaphores,
+                                pSubmits[i].waitSemaphoreCount);
       if (last_submit) {
          /* no need to merge fences as queue execution is serialized */
          tu_fence_update_fd(&queue->submit_fence, req.fence_fd);
+      } else if (last_submit) {
+         close(req.fence_fd);
       }
    }
 
@@ -1496,6 +1673,9 @@ tu_QueueWaitIdle(VkQueue _queue)
 {
    TU_FROM_HANDLE(tu_queue, queue, _queue);
 
+   if (tu_device_is_lost(queue->device))
+      return VK_ERROR_DEVICE_LOST;
+
    tu_fence_wait_idle(&queue->submit_fence);
 
    return VK_SUCCESS;
@@ -1506,49 +1686,14 @@ tu_DeviceWaitIdle(VkDevice _device)
 {
    TU_FROM_HANDLE(tu_device, device, _device);
 
+   if (tu_device_is_lost(device))
+      return VK_ERROR_DEVICE_LOST;
+
    for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
       for (unsigned q = 0; q < device->queue_count[i]; q++) {
          tu_QueueWaitIdle(tu_queue_to_handle(&device->queues[i][q]));
       }
    }
-   return VK_SUCCESS;
-}
-
-VkResult
-tu_ImportSemaphoreFdKHR(VkDevice _device,
-                        const VkImportSemaphoreFdInfoKHR *pImportSemaphoreFdInfo)
-{
-   tu_stub();
-
-   return VK_SUCCESS;
-}
-
-VkResult
-tu_GetSemaphoreFdKHR(VkDevice _device,
-                     const VkSemaphoreGetFdInfoKHR *pGetFdInfo,
-                     int *pFd)
-{
-   tu_stub();
-
-   return VK_SUCCESS; 
-}
-
-VkResult
-tu_ImportFenceFdKHR(VkDevice _device,
-                    const VkImportFenceFdInfoKHR *pImportFenceFdInfo)
-{
-   tu_stub();
-
-   return VK_SUCCESS;
-}
-
-VkResult
-tu_GetFenceFdKHR(VkDevice _device,
-                 const VkFenceGetFdInfoKHR *pGetFdInfo,
-                 int *pFd)
-{
-   tu_stub();
-
    return VK_SUCCESS;
 }
 
@@ -1931,6 +2076,30 @@ tu_QueueBindSparse(VkQueue _queue,
 
 // Queue semaphore functions
 
+
+static void
+tu_semaphore_part_destroy(struct tu_device *device,
+                          struct tu_semaphore_part *part)
+{
+   switch(part->kind) {
+   case TU_SEMAPHORE_NONE:
+      break;
+   case TU_SEMAPHORE_SYNCOBJ:
+      drmSyncobjDestroy(device->physical_device->local_fd, part->syncobj);
+      break;
+   }
+   part->kind = TU_SEMAPHORE_NONE;
+}
+
+static void
+tu_semaphore_remove_temp(struct tu_device *device,
+                         struct tu_semaphore *sem)
+{
+   if (sem->temporary.kind != TU_SEMAPHORE_NONE) {
+      tu_semaphore_part_destroy(device, &sem->temporary);
+   }
+}
+
 VkResult
 tu_CreateSemaphore(VkDevice _device,
                    const VkSemaphoreCreateInfo *pCreateInfo,
@@ -1945,6 +2114,21 @@ tu_CreateSemaphore(VkDevice _device,
    if (!sem)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   const VkExportSemaphoreCreateInfo *export =
+      vk_find_struct_const(pCreateInfo->pNext, EXPORT_SEMAPHORE_CREATE_INFO);
+   VkExternalSemaphoreHandleTypeFlags handleTypes =
+      export ? export->handleTypes : 0;
+
+   sem->permanent.kind = TU_SEMAPHORE_NONE;
+   sem->temporary.kind = TU_SEMAPHORE_NONE;
+
+   if (handleTypes) {
+      if (drmSyncobjCreate(device->physical_device->local_fd, 0, &sem->permanent.syncobj) < 0) {
+          vk_free2(&device->alloc, pAllocator, sem);
+          return VK_ERROR_OUT_OF_HOST_MEMORY;
+      }
+      sem->permanent.kind = TU_SEMAPHORE_SYNCOBJ;
+   }
    *pSemaphore = tu_semaphore_to_handle(sem);
    return VK_SUCCESS;
 }
@@ -1958,6 +2142,9 @@ tu_DestroySemaphore(VkDevice _device,
    TU_FROM_HANDLE(tu_semaphore, sem, _semaphore);
    if (!_semaphore)
       return;
+
+   tu_semaphore_part_destroy(device, &sem->permanent);
+   tu_semaphore_part_destroy(device, &sem->temporary);
 
    vk_free2(&device->alloc, pAllocator, sem);
 }
@@ -2122,57 +2309,6 @@ tu_DestroyFramebuffer(VkDevice _device,
    vk_free2(&device->alloc, pAllocator, fb);
 }
 
-static enum a6xx_tex_clamp
-tu6_tex_wrap(VkSamplerAddressMode address_mode)
-{
-   switch (address_mode) {
-   case VK_SAMPLER_ADDRESS_MODE_REPEAT:
-      return A6XX_TEX_REPEAT;
-   case VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT:
-      return A6XX_TEX_MIRROR_REPEAT;
-   case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE:
-      return A6XX_TEX_CLAMP_TO_EDGE;
-   case VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER:
-      return A6XX_TEX_CLAMP_TO_BORDER;
-   case VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE:
-      /* only works for PoT.. need to emulate otherwise! */
-      return A6XX_TEX_MIRROR_CLAMP;
-   default:
-      unreachable("illegal tex wrap mode");
-      break;
-   }
-}
-
-static enum a6xx_tex_filter
-tu6_tex_filter(VkFilter filter, unsigned aniso)
-{
-   switch (filter) {
-   case VK_FILTER_NEAREST:
-      return A6XX_TEX_NEAREST;
-   case VK_FILTER_LINEAR:
-      return aniso ? A6XX_TEX_ANISO : A6XX_TEX_LINEAR;
-   case VK_FILTER_CUBIC_EXT:
-      return A6XX_TEX_CUBIC;
-   default:
-      unreachable("illegal texture filter");
-      break;
-   }
-}
-
-static inline enum adreno_compare_func
-tu6_compare_func(VkCompareOp op)
-{
-   return (enum adreno_compare_func) op;
-}
-
-static inline enum a6xx_reduction_mode
-tu6_reduction_mode(VkSamplerReductionMode reduction_mode)
-{
-   /* note: vulkan enum matches hw */
-
-   return (enum a6xx_reduction_mode) reduction_mode;
-}
-
 static void
 tu_init_sampler(struct tu_device *device,
                 struct tu_sampler *sampler,
@@ -2186,6 +2322,8 @@ tu_init_sampler(struct tu_device *device,
    unsigned aniso = pCreateInfo->anisotropyEnable ?
       util_last_bit(MIN2((uint32_t)pCreateInfo->maxAnisotropy >> 1, 8)) : 0;
    bool miplinear = (pCreateInfo->mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR);
+   float min_lod = CLAMP(pCreateInfo->minLod, 0.0f, 4095.0f / 256.0f);
+   float max_lod = CLAMP(pCreateInfo->maxLod, 0.0f, 4095.0f / 256.0f);
 
    sampler->descriptor[0] =
       COND(miplinear, A6XX_TEX_SAMP_0_MIPFILTER_LINEAR_NEAR) |
@@ -2199,8 +2337,8 @@ tu_init_sampler(struct tu_device *device,
    sampler->descriptor[1] =
       /* COND(!cso->seamless_cube_map, A6XX_TEX_SAMP_1_CUBEMAPSEAMLESSFILTOFF) | */
       COND(pCreateInfo->unnormalizedCoordinates, A6XX_TEX_SAMP_1_UNNORM_COORDS) |
-      A6XX_TEX_SAMP_1_MIN_LOD(pCreateInfo->minLod) |
-      A6XX_TEX_SAMP_1_MAX_LOD(pCreateInfo->maxLod) |
+      A6XX_TEX_SAMP_1_MIN_LOD(min_lod) |
+      A6XX_TEX_SAMP_1_MAX_LOD(max_lod) |
       COND(pCreateInfo->compareEnable,
            A6XX_TEX_SAMP_1_COMPARE_FUNC(tu6_compare_func(pCreateInfo->compareOp)));
    /* This is an offset into the border_color BO, which we fill with all the
@@ -2345,15 +2483,151 @@ tu_GetMemoryFdPropertiesKHR(VkDevice _device,
    return VK_SUCCESS;
 }
 
+VkResult
+tu_ImportFenceFdKHR(VkDevice _device,
+                    const VkImportFenceFdInfoKHR *pImportFenceFdInfo)
+{
+   tu_stub();
+
+   return VK_SUCCESS;
+}
+
+VkResult
+tu_GetFenceFdKHR(VkDevice _device,
+                 const VkFenceGetFdInfoKHR *pGetFdInfo,
+                 int *pFd)
+{
+   tu_stub();
+
+   return VK_SUCCESS;
+}
+
+VkResult
+tu_ImportSemaphoreFdKHR(VkDevice _device,
+                        const VkImportSemaphoreFdInfoKHR *pImportSemaphoreFdInfo)
+{
+   TU_FROM_HANDLE(tu_device, device, _device);
+   TU_FROM_HANDLE(tu_semaphore, sem, pImportSemaphoreFdInfo->semaphore);
+   int ret;
+   struct tu_semaphore_part *dst = NULL;
+
+   if (pImportSemaphoreFdInfo->flags & VK_SEMAPHORE_IMPORT_TEMPORARY_BIT) {
+      dst = &sem->temporary;
+   } else {
+      dst = &sem->permanent;
+   }
+
+   uint32_t syncobj = dst->kind == TU_SEMAPHORE_SYNCOBJ ? dst->syncobj : 0;
+
+   switch(pImportSemaphoreFdInfo->handleType) {
+      case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT: {
+         uint32_t old_syncobj = syncobj;
+         ret = drmSyncobjFDToHandle(device->physical_device->local_fd, pImportSemaphoreFdInfo->fd, &syncobj);
+         if (ret == 0) {
+            close(pImportSemaphoreFdInfo->fd);
+            if (old_syncobj)
+               drmSyncobjDestroy(device->physical_device->local_fd, old_syncobj);
+         }
+         break;
+      }
+      case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT: {
+         if (!syncobj) {
+            ret = drmSyncobjCreate(device->physical_device->local_fd, 0, &syncobj);
+            if (ret)
+               break;
+         }
+         if (pImportSemaphoreFdInfo->fd == -1) {
+            ret = drmSyncobjSignal(device->physical_device->local_fd, &syncobj, 1);
+         } else {
+            ret = drmSyncobjImportSyncFile(device->physical_device->local_fd, syncobj, pImportSemaphoreFdInfo->fd);
+         }
+         if (!ret)
+            close(pImportSemaphoreFdInfo->fd);
+         break;
+      }
+      default:
+         unreachable("Unhandled semaphore handle type");
+   }
+
+   if (ret) {
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+   dst->syncobj = syncobj;
+   dst->kind = TU_SEMAPHORE_SYNCOBJ;
+
+   return VK_SUCCESS;
+}
+
+VkResult
+tu_GetSemaphoreFdKHR(VkDevice _device,
+                     const VkSemaphoreGetFdInfoKHR *pGetFdInfo,
+                     int *pFd)
+{
+   TU_FROM_HANDLE(tu_device, device, _device);
+   TU_FROM_HANDLE(tu_semaphore, sem, pGetFdInfo->semaphore);
+   int ret;
+   uint32_t syncobj_handle;
+
+   if (sem->temporary.kind != TU_SEMAPHORE_NONE) {
+      assert(sem->temporary.kind == TU_SEMAPHORE_SYNCOBJ);
+      syncobj_handle = sem->temporary.syncobj;
+   } else {
+      assert(sem->permanent.kind == TU_SEMAPHORE_SYNCOBJ);
+      syncobj_handle = sem->permanent.syncobj;
+   }
+
+   switch(pGetFdInfo->handleType) {
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT:
+      ret = drmSyncobjHandleToFD(device->physical_device->local_fd, syncobj_handle, pFd);
+      break;
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT:
+      ret = drmSyncobjExportSyncFile(device->physical_device->local_fd, syncobj_handle, pFd);
+      if (!ret) {
+         if (sem->temporary.kind != TU_SEMAPHORE_NONE) {
+            tu_semaphore_part_destroy(device, &sem->temporary);
+         } else {
+            drmSyncobjReset(device->physical_device->local_fd, &syncobj_handle, 1);
+         }
+      }
+      break;
+   default:
+      unreachable("Unhandled semaphore handle type");
+   }
+
+   if (ret)
+      return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+   return VK_SUCCESS;
+}
+
+
+static bool tu_has_syncobj(struct tu_physical_device *pdev)
+{
+   uint64_t value;
+   if (drmGetCap(pdev->local_fd, DRM_CAP_SYNCOBJ, &value))
+      return false;
+   return value && pdev->msm_major_version == 1 && pdev->msm_minor_version >= 6;
+}
+
 void
 tu_GetPhysicalDeviceExternalSemaphoreProperties(
    VkPhysicalDevice physicalDevice,
    const VkPhysicalDeviceExternalSemaphoreInfo *pExternalSemaphoreInfo,
    VkExternalSemaphoreProperties *pExternalSemaphoreProperties)
 {
-   pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
-   pExternalSemaphoreProperties->compatibleHandleTypes = 0;
-   pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
+   TU_FROM_HANDLE(tu_physical_device, pdev, physicalDevice);
+
+   if (tu_has_syncobj(pdev) &&
+       (pExternalSemaphoreInfo->handleType == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT ||
+        pExternalSemaphoreInfo->handleType == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT)) {
+      pExternalSemaphoreProperties->exportFromImportedHandleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT | VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+      pExternalSemaphoreProperties->compatibleHandleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT | VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+      pExternalSemaphoreProperties->externalSemaphoreFeatures = VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT |
+         VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT;
+   } else {
+      pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
+      pExternalSemaphoreProperties->compatibleHandleTypes = 0;
+      pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
+   }
 }
 
 void

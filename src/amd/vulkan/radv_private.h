@@ -95,18 +95,6 @@ typedef uint32_t xcb_window_t;
 #define RADV_SUPPORT_ANDROID_HARDWARE_BUFFER 0
 #endif
 
-
-struct gfx10_format {
-    unsigned img_format:9;
-
-    /* Various formats are only supported with workarounds for vertex fetch,
-     * and some 32_32_32 formats are supported natively, but only for buffers
-     * (possibly with some image support, actually, but no filtering). */
-    bool buffers_only:1;
-};
-
-#include "gfx10_format_table.h"
-
 enum radv_secure_compile_type {
 	RADV_SC_TYPE_INIT_SUCCESS,
 	RADV_SC_TYPE_INIT_FAILURE,
@@ -306,9 +294,6 @@ struct radv_physical_device {
 	/* Whether DCC should be enabled for MSAA textures. */
 	bool dcc_msaa_allowed;
 
-	/* Whether to enable the AMD_shader_ballot extension */
-	bool use_shader_ballot;
-
 	/* Whether to enable NGG. */
 	bool use_ngg;
 
@@ -323,8 +308,8 @@ struct radv_physical_device {
 	uint8_t cs_wave_size;
 	uint8_t ge_wave_size;
 
-	/* Whether to use the experimental compiler backend */
-	bool use_aco;
+	/* Whether to use the LLVM compiler backend */
+	bool use_llvm;
 
 	/* This is the drivers on-disk cache used as a fallback as opposed to
 	 * the pipeline cache defined by apps.
@@ -366,6 +351,11 @@ struct radv_instance {
 
 	struct driOptionCache dri_options;
 	struct driOptionCache available_dri_options;
+
+	/**
+	 * Workarounds for game bugs.
+	 */
+	bool enable_mrt_output_nan_fixup;
 };
 
 static inline
@@ -414,6 +404,7 @@ struct radv_pipeline_key {
 	uint32_t is_int10;
 	uint8_t log2_ps_iter_samples;
 	uint8_t num_samples;
+	bool is_dual_src;
 	uint32_t has_multiview_view_index : 1;
 	uint32_t optimisations_disabled : 1;
 	uint8_t topology;
@@ -1588,7 +1579,7 @@ struct radv_shader_module;
 #define RADV_HASH_SHADER_CS_WAVE32           (1 << 1)
 #define RADV_HASH_SHADER_PS_WAVE32           (1 << 2)
 #define RADV_HASH_SHADER_GE_WAVE32           (1 << 3)
-#define RADV_HASH_SHADER_ACO                 (1 << 4)
+#define RADV_HASH_SHADER_LLVM                (1 << 4)
 
 void
 radv_hash_shaders(unsigned char *hash,
@@ -1698,6 +1689,7 @@ struct radv_pipeline {
 			/* Used for rbplus */
 			uint32_t col_format;
 			uint32_t cb_target_mask;
+			bool is_dual_src;
 		} graphics;
 	};
 
@@ -1816,13 +1808,9 @@ struct radv_image {
 	/* Set when bound */
 	struct radeon_winsys_bo *bo;
 	VkDeviceSize offset;
-	uint64_t dcc_offset;
-	uint64_t htile_offset;
 	bool tc_compatible_htile;
 	bool tc_compatible_cmask;
 
-	uint64_t cmask_offset;
-	uint64_t fmask_offset;
 	uint64_t clear_value_offset;
 	uint64_t fce_pred_offset;
 	uint64_t dcc_pred_offset;
@@ -1870,7 +1858,7 @@ bool radv_layout_dcc_compressed(const struct radv_device *device,
 static inline bool
 radv_image_has_cmask(const struct radv_image *image)
 {
-	return image->cmask_offset;
+	return image->planes[0].surface.cmask_offset;
 }
 
 /**
@@ -1879,7 +1867,7 @@ radv_image_has_cmask(const struct radv_image *image)
 static inline bool
 radv_image_has_fmask(const struct radv_image *image)
 {
-	return image->fmask_offset;
+	return image->planes[0].surface.fmask_offset;
 }
 
 /**
@@ -2407,7 +2395,7 @@ void radv_nir_shader_info_pass(const struct nir_shader *nir,
 			       const struct radv_pipeline_layout *layout,
 			       const struct radv_shader_variant_key *key,
 			       struct radv_shader_info *info,
-			       bool use_aco);
+			       bool use_llvm);
 
 void radv_nir_shader_info_init(struct radv_shader_info *info);
 

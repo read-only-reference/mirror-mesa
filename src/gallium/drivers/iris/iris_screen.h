@@ -139,7 +139,7 @@ struct iris_vtable {
 struct iris_address {
    struct iris_bo *bo;
    uint64_t offset;
-   bool write;
+   enum iris_domain access;
 };
 
 struct iris_screen {
@@ -150,8 +150,14 @@ struct iris_screen {
    /** Global slab allocator for iris_transfer_map objects */
    struct slab_parent_pool transfer_pool;
 
-   /** drm device file descriptor, on shared with bufmgr, do not close. */
+   /** drm device file descriptor, shared with bufmgr, do not close. */
    int fd;
+
+   /**
+    * drm device file descriptor to used for window system integration, owned
+    * by iris_screen, can be a different DRM instance than fd.
+    */
+   int winsys_fd;
 
    /** PCI ID for our GPU device */
    int pci_id;
@@ -181,6 +187,15 @@ struct iris_screen {
    unsigned subslice_total;
 
    uint64_t aperture_bytes;
+
+   /**
+    * Last sequence number allocated by the cache tracking mechanism.
+    *
+    * These are used for synchronization and are expected to identify a single
+    * section of a batch, so they should be monotonically increasing and
+    * unique across a single pipe_screen.
+    */
+   uint64_t last_seqno;
 
    struct gen_device_info devinfo;
    struct isl_device isl_dev;

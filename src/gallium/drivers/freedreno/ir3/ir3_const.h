@@ -93,12 +93,12 @@ static inline void
 ir3_emit_user_consts(struct fd_screen *screen, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring, struct fd_constbuf_stateobj *constbuf)
 {
-	struct ir3_ubo_analysis_state *state;
-	state = &v->shader->ubo_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
+	const struct ir3_ubo_analysis_state *state = &const_state->ubo_state;
 
 	for (unsigned i = 0; i < state->num_enabled; i++) {
-		assert(!state->range[i].bindless);
-		unsigned ubo = state->range[i].block;
+		assert(!state->range[i].ubo.bindless);
+		unsigned ubo = state->range[i].ubo.block;
 		if (!(constbuf->enabled_mask & (1 << ubo)))
 			continue;
 		struct pipe_constant_buffer *cb = &constbuf->cb[ubo];
@@ -131,22 +131,41 @@ ir3_emit_user_consts(struct fd_screen *screen, const struct ir3_shader_variant *
 }
 
 static inline void
-ir3_emit_ubos(struct fd_screen *screen, const struct ir3_shader_variant *v,
+ir3_emit_ubos(struct fd_context *ctx, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring, struct fd_constbuf_stateobj *constbuf)
 {
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.ubo;
+
+	/* a6xx+ uses UBO state and ldc instead of pointers emitted in
+	 * const state and ldg:
+	 */
+	if (ctx->screen->gpu_id >= 600)
+		return;
+
 	if (v->constlen > offset) {
 		uint32_t params = const_state->num_ubos;
 		uint32_t offsets[params];
 		struct pipe_resource *prscs[params];
 
 		for (uint32_t i = 0; i < params; i++) {
-			const uint32_t index = i + 1;   /* UBOs start at index 1 */
-			struct pipe_constant_buffer *cb = &constbuf->cb[index];
-			assert(!cb->user_buffer);
+			struct pipe_constant_buffer *cb = &constbuf->cb[i];
 
-			if ((constbuf->enabled_mask & (1 << index)) && cb->buffer) {
+			/* If we have user pointers (constbuf 0, aka GL uniforms), upload
+			 * them to a buffer now, and save it in the constbuf so that we
+			 * don't have to reupload until they get changed.
+			 */
+			if (cb->user_buffer) {
+				struct pipe_context *pctx = &ctx->base;
+				u_upload_data(pctx->stream_uploader, 0,
+						cb->buffer_size,
+						64,
+						cb->user_buffer,
+						&cb->buffer_offset, &cb->buffer);
+				cb->user_buffer = NULL;
+			}
+
+			if ((constbuf->enabled_mask & (1 << i)) && cb->buffer) {
 				offsets[i] = cb->buffer_offset;
 				prscs[i] = cb->buffer;
 			} else {
@@ -165,7 +184,7 @@ static inline void
 ir3_emit_ssbo_sizes(struct fd_screen *screen, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring, struct fd_shaderbuf_stateobj *sb)
 {
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.ssbo_sizes;
 	if (v->constlen > offset) {
 		uint32_t sizes[align(const_state->ssbo_size.count, 4)];
@@ -185,7 +204,7 @@ static inline void
 ir3_emit_image_dims(struct fd_screen *screen, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring, struct fd_shaderimg_stateobj *si)
 {
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.image_dims;
 	if (v->constlen > offset) {
 		uint32_t dims[align(const_state->image_dims.count, 4)];
@@ -238,7 +257,7 @@ static inline void
 ir3_emit_immediates(struct fd_screen *screen, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring)
 {
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t base = const_state->offsets.immediate;
 	int size = const_state->immediates_count;
 
@@ -260,7 +279,7 @@ ir3_emit_link_map(struct fd_screen *screen,
 		const struct ir3_shader_variant *producer,
 		const struct ir3_shader_variant *v, struct fd_ringbuffer *ring)
 {
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t base = const_state->offsets.primitive_map;
 	uint32_t patch_locs[MAX_VARYING] = { }, num_loc;
 
@@ -287,7 +306,7 @@ emit_tfbos(struct fd_context *ctx, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring)
 {
 	/* streamout addresses after driver-params: */
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.tfbo;
 	if (v->constlen > offset) {
 		struct fd_streamout_stateobj *so = &ctx->streamout;
@@ -391,7 +410,7 @@ emit_common_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 		ring_wfi(ctx->batch, ring);
 
 		ir3_emit_user_consts(ctx->screen, v, ring, constbuf);
-		ir3_emit_ubos(ctx->screen, v, ring, constbuf);
+		ir3_emit_ubos(ctx, v, ring, constbuf);
 		if (shader_dirty)
 			ir3_emit_immediates(ctx->screen, v, ring);
 	}
@@ -412,7 +431,7 @@ emit_common_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 static inline bool
 ir3_needs_vs_driver_params(const struct ir3_shader_variant *v)
 {
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.driver_param;
 
 	return v->constlen > offset;
@@ -425,7 +444,7 @@ ir3_emit_vs_driver_params(const struct ir3_shader_variant *v,
 {
 	debug_assert(ir3_needs_vs_driver_params(v));
 
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.driver_param;
 	uint32_t vertex_params[IR3_DP_VS_COUNT] = {
 			[IR3_DP_VTXID_BASE] = info->index_size ?
@@ -532,7 +551,7 @@ ir3_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 	emit_common_consts(v, ring, ctx, PIPE_SHADER_COMPUTE);
 
 	/* emit compute-shader driver-params: */
-	const struct ir3_const_state *const_state = &v->shader->const_state;
+	const struct ir3_const_state *const_state = ir3_const_state(v);
 	uint32_t offset = const_state->offsets.driver_param;
 	if (v->constlen > offset) {
 		ring_wfi(ctx->batch, ring);

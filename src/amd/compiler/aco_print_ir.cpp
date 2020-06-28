@@ -55,7 +55,6 @@ static const char *reduce_ops[] = {
    [ixor16] = "ixor16",
    [ixor32] = "ixor32",
    [ixor64] = "ixor64",
-   [gfx10_wave64_bpermute] = "gfx10_wave64_bpermute",
 };
 
 static void print_reg_class(const RegClass rc, FILE *output)
@@ -154,8 +153,13 @@ static void print_constant(uint8_t reg, FILE *output)
 
 static void print_operand(const Operand *operand, FILE *output)
 {
-   if (operand->isLiteral()) {
-      fprintf(output, "0x%x", operand->constantValue());
+   if (operand->isLiteral() || (operand->isConstant() && operand->bytes() == 1)) {
+      if (operand->bytes() == 1)
+         fprintf(output, "0x%.2x", operand->constantValue());
+      else if (operand->bytes() == 2)
+         fprintf(output, "0x%.4x", operand->constantValue());
+      else
+         fprintf(output, "0x%x", operand->constantValue());
    } else if (operand->isConstant()) {
       print_constant(operand->physReg().reg(), output);
    } else if (operand->isUndefined()) {
@@ -175,6 +179,8 @@ static void print_operand(const Operand *operand, FILE *output)
 static void print_definition(const Definition *definition, FILE *output)
 {
    print_reg_class(definition->regClass(), output);
+   if (definition->isPrecise())
+      fprintf(output, "(precise)");
    fprintf(output, "%%%d", definition->tempId());
 
    if (definition->isFixed())

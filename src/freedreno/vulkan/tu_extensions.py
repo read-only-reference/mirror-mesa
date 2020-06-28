@@ -75,14 +75,19 @@ EXTENSIONS = [
     Extension('VK_EXT_sampler_filter_minmax',             1, True),
     Extension('VK_EXT_transform_feedback',                1, True),
     Extension('VK_ANDROID_native_buffer',                 1, True),
-    Extension('VK_KHR_external_semaphore_fd',             1, True),
     Extension('VK_KHR_external_fence_fd',                 1, True),
+    Extension('VK_KHR_external_semaphore',                1, True),
+    Extension('VK_KHR_external_semaphore_capabilities',   1, True),
+    Extension('VK_KHR_external_semaphore_fd',             1, True),
     Extension('VK_IMG_filter_cubic',                      1, 'device->gpu_id == 650'),
     Extension('VK_EXT_filter_cubic',                      1, 'device->gpu_id == 650'),
+    Extension('VK_EXT_index_type_uint8',                  1, True),
+    Extension('VK_EXT_vertex_attribute_divisor',          1, True),
+    Extension('VK_KHR_shader_draw_parameters',            1, True),
 ]
 
 MAX_API_VERSION = VkVersion(MAX_API_VERSION)
-API_VERSIONS = []
+API_VERSIONS = [ ApiVersion(MAX_API_VERSION,  True) ]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

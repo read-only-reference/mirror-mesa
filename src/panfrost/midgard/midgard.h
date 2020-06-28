@@ -477,8 +477,9 @@ typedef enum {
         midgard_op_ld_vary_32u = 0x9A,
         midgard_op_ld_vary_32i = 0x9B,
 
-        /* Old version of midgard_op_ld_color_buffer_u8_as_fp16, for T720 */
-        midgard_op_ld_color_buffer_u8_as_fp16_old = 0x9D,
+        /* Old version of midgard_op_ld_color_buffer_as_fp16, for T720 */
+        midgard_op_ld_color_buffer_as_fp16_old = 0x9D,
+        midgard_op_ld_color_buffer_32u_old = 0x9E,
 
         /* The distinction between these ops is the alignment requirement /
          * accompanying shift. Thus, the offset to ld_ubo_int4 is in 16-byte
@@ -495,7 +496,7 @@ typedef enum {
         midgard_op_ld_ubo_int4   = 0xB0,
 
         /* New-style blending ops. Works on T760/T860 */
-        midgard_op_ld_color_buffer_u8_as_fp16 = 0xB9,
+        midgard_op_ld_color_buffer_as_fp16 = 0xB9,
         midgard_op_ld_color_buffer_32u = 0xBA,
 
         midgard_op_st_char = 0xC0,
@@ -654,6 +655,9 @@ enum mali_sampler_type {
         MALI_SAMPLER_SIGNED     = 0x3, /* isampler */
 };
 
+#define MIDGARD_BARRIER_BUFFER (1 << 0)
+#define MIDGARD_BARRIER_SHARED (1 << 1)
+
 typedef struct
 __attribute__((__packed__))
 {
@@ -718,12 +722,14 @@ __attribute__((__packed__))
 
         /* For barriers, control barriers are implied regardless, but these
          * bits also enable memory barriers of various types. For regular
-         * textures, these bits are not yet understood. */
-        unsigned barrier_buffer : 1;
-        unsigned barrier_shared : 1;
-        unsigned barrier_stack  : 1;
+         * textures, these indicate how many bundles after this texture op may
+         * be executed in parallel with this op. We may execute only ALU and
+         * ld/st in parallel (not other textures), and obviously there cannot
+         * be any dependency (the blob appears to forbid even accessing other
+         * channels of a given texture register). */
 
-        unsigned unknown4  : 9;
+        unsigned out_of_order   : 2;
+        unsigned unknown4  : 10;
 
         /* In immediate mode, each offset field is an immediate range [0, 7].
          *
@@ -815,5 +821,12 @@ typedef union midgard_constants {
         int8_t i8[16];
 }
 midgard_constants;
+
+enum midgard_roundmode {
+        MIDGARD_RTE = 0x0, /* round to even */
+        MIDGARD_RTZ = 0x1, /* round to zero */
+        MIDGARD_RTN = 0x2, /* round to negative */
+        MIDGARD_RTP = 0x3, /* round to positive */
+};
 
 #endif

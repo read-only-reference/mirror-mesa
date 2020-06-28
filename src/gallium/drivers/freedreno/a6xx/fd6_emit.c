@@ -258,8 +258,7 @@ fd6_emit_fb_tex(struct fd_ringbuffer *state, struct fd_context *ctx)
 	OUT_RING(state, texconst0);
 	OUT_RING(state, A6XX_TEX_CONST_1_WIDTH(pfb->width) |
 			A6XX_TEX_CONST_1_HEIGHT(pfb->height));
-	OUT_RINGP(state, A6XX_TEX_CONST_2_TYPE(A6XX_TEX_2D) |
-			A6XX_TEX_CONST_2_FETCHSIZE(TFETCH6_2_BYTE),
+	OUT_RINGP(state, A6XX_TEX_CONST_2_TYPE(A6XX_TEX_2D),
 			&ctx->batch->fb_read_patches);
 	OUT_RING(state, A6XX_TEX_CONST_3_ARRAY_PITCH(rsc->layout.layer_size));
 
@@ -552,16 +551,12 @@ fd6_emit_combined_textures(struct fd_ringbuffer *ring, struct fd6_emit *emit,
 }
 
 static struct fd_ringbuffer *
-build_vbo_state(struct fd6_emit *emit, const struct ir3_shader_variant *vp)
+build_vbo_state(struct fd6_emit *emit)
 {
 	const struct fd_vertex_state *vtx = emit->vtx;
 
 	struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(emit->ctx->batch->submit,
-			4 * (3 + vtx->vertexbuf.count * 4), FD_RINGBUFFER_STREAMING);
-
-	OUT_PKT4(ring, REG_A6XX_VFD_CONTROL_0, 1);
-	OUT_RING(ring, A6XX_VFD_CONTROL_0_FETCH_CNT(vtx->vertexbuf.count) |
-			A6XX_VFD_CONTROL_0_DECODE_CNT(vtx->vtx->num_elements));
+			4 * (1 + vtx->vertexbuf.count * 4), FD_RINGBUFFER_STREAMING);
 
 	OUT_PKT4(ring, REG_A6XX_VFD_FETCH(0), 4 * vtx->vertexbuf.count);
 	for (int32_t j = 0; j < vtx->vertexbuf.count; j++) {
@@ -585,45 +580,142 @@ build_vbo_state(struct fd6_emit *emit, const struct ir3_shader_variant *vp)
 	return ring;
 }
 
+static enum a6xx_ztest_mode
+compute_ztest_mode(struct fd6_emit *emit, bool lrz_valid)
+{
+	struct fd_context *ctx =  emit->ctx;
+	struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
+	struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(ctx->zsa);
+	const struct ir3_shader_variant *fs = emit->fs;
+
+	if (fs->no_earlyz || fs->writes_pos) {
+		return A6XX_LATE_Z;
+	} else if ((fs->has_kill || zsa->alpha_test) &&
+			(zsa->base.depth.writemask || !pfb->zsbuf)) {
+		/* Slightly odd, but seems like the hw wants us to select
+		 * LATE_Z mode if there is no depth buffer + discard.  Either
+		 * that, or when occlusion query is enabled.  See:
+		 *
+		 * dEQP-GLES31.functional.fbo.no_attachments.*
+		 */
+		return lrz_valid ? A6XX_EARLY_LRZ_LATE_Z : A6XX_LATE_Z;
+	} else {
+		return A6XX_EARLY_Z;
+	}
+}
+
+/**
+ * Calculate normalized LRZ state based on zsa/prog/blend state, updating
+ * the zsbuf's lrz state as necessary to detect the cases where we need
+ * to invalidate lrz.
+ */
+static struct fd6_lrz_state
+compute_lrz_state(struct fd6_emit *emit, bool binning_pass)
+{
+	struct fd_context *ctx = emit->ctx;
+	struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
+	const struct ir3_shader_variant *fs = emit->fs;
+	struct fd6_lrz_state lrz;
+
+	if (!pfb->zsbuf) {
+		memset(&lrz, 0, sizeof(lrz));
+		if (!binning_pass) {
+			lrz.z_mode = compute_ztest_mode(emit, false);
+		}
+		return lrz;
+	}
+
+	struct fd6_blend_stateobj *blend = fd6_blend_stateobj(ctx->blend);
+	struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(ctx->zsa);
+	struct fd_resource *rsc = fd_resource(pfb->zsbuf->texture);
+
+	lrz = zsa->lrz;
+
+	/* normalize lrz state: */
+	if (blend->reads_dest || fs->writes_pos || fs->no_earlyz || fs->has_kill) {
+		lrz.write = false;
+		if (binning_pass)
+			lrz.enable = false;
+	}
+
+	/* if we change depthfunc direction, bail out on using LRZ.  The
+	 * LRZ buffer encodes a min/max depth value per block, but if
+	 * we switch from GT/GE <-> LT/LE, those values cannot be
+	 * interpreted properly.
+	 */
+	if (zsa->base.depth.enabled &&
+			(rsc->lrz_direction != FD_LRZ_UNKNOWN) &&
+			(rsc->lrz_direction != lrz.direction)) {
+		rsc->lrz_valid = false;
+	}
+
+	if (zsa->invalidate_lrz || !rsc->lrz_valid) {
+		rsc->lrz_valid = false;
+		memset(&lrz, 0, sizeof(lrz));
+	}
+
+	if (fs->no_earlyz || fs->writes_pos) {
+		lrz.enable = false;
+		lrz.write = false;
+		lrz.test = false;
+	}
+
+	if (!binning_pass) {
+		lrz.z_mode = compute_ztest_mode(emit, rsc->lrz_valid);
+	}
+
+	/* Once we start writing to the real depth buffer, we lock in the
+	 * direction for LRZ.. if we have to skip a LRZ write for any
+	 * reason, it is still safe to have LRZ until there is a direction
+	 * reversal.  Prior to the reversal, since we disabled LRZ writes
+	 * in the "unsafe" cases, this just means that the LRZ test may
+	 * not early-discard some things that end up not passing a later
+	 * test (ie. be overly concervative).  But once you have a reversal
+	 * of direction, it is possible to increase/decrease the z value
+	 * to the point where the overly-conservative test is incorrect.
+	 */
+	if (zsa->base.depth.writemask) {
+		rsc->lrz_direction = lrz.direction;
+	}
+
+	return lrz;
+}
+
 static struct fd_ringbuffer *
 build_lrz(struct fd6_emit *emit, bool binning_pass)
 {
 	struct fd_context *ctx = emit->ctx;
-	struct fd6_blend_stateobj *blend = fd6_blend_stateobj(ctx->blend);
-	struct fd6_zsa_stateobj *zsa = fd6_zsa_stateobj(ctx->zsa);
-	struct pipe_framebuffer_state *pfb = &ctx->batch->framebuffer;
-	struct fd_resource *rsc = fd_resource(pfb->zsbuf->texture);
-	uint32_t gras_lrz_cntl = zsa->gras_lrz_cntl;
-	uint32_t rb_lrz_cntl = zsa->rb_lrz_cntl;
-
-	if (zsa->invalidate_lrz) {
-		rsc->lrz_valid = false;
-		gras_lrz_cntl = 0;
-		rb_lrz_cntl = 0;
-	} else if (emit->no_lrz_write || !rsc->lrz || !rsc->lrz_valid) {
-		gras_lrz_cntl = 0;
-		rb_lrz_cntl = 0;
-	} else if (binning_pass && blend->lrz_write && zsa->lrz_write) {
-		gras_lrz_cntl |= A6XX_GRAS_LRZ_CNTL_LRZ_WRITE;
-	}
-
 	struct fd6_context *fd6_ctx = fd6_context(ctx);
-	if ((fd6_ctx->last.lrz[binning_pass].gras_lrz_cntl == gras_lrz_cntl) &&
-			(fd6_ctx->last.lrz[binning_pass].rb_lrz_cntl == rb_lrz_cntl) &&
-			!ctx->last.dirty)
+	struct fd6_lrz_state lrz =
+			compute_lrz_state(emit, binning_pass);
+
+	/* If the LRZ state has not changed, we can skip the emit: */
+	if (!ctx->last.dirty &&
+			!memcmp(&fd6_ctx->last.lrz[binning_pass], &lrz, sizeof(lrz)))
 		return NULL;
 
-	fd6_ctx->last.lrz[binning_pass].gras_lrz_cntl = gras_lrz_cntl;
-	fd6_ctx->last.lrz[binning_pass].rb_lrz_cntl = rb_lrz_cntl;
+	fd6_ctx->last.lrz[binning_pass] = lrz;
 
 	struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(ctx->batch->submit,
-			16, FD_RINGBUFFER_STREAMING);
+			8*4, FD_RINGBUFFER_STREAMING);
 
-	OUT_PKT4(ring, REG_A6XX_GRAS_LRZ_CNTL, 1);
-	OUT_RING(ring, gras_lrz_cntl);
+	OUT_REG(ring, A6XX_GRAS_LRZ_CNTL(
+			.enable        = lrz.enable,
+			.lrz_write     = lrz.write,
+			.greater       = lrz.direction == FD_LRZ_GREATER,
+			.z_test_enable = lrz.test,
+		));
+	OUT_REG(ring, A6XX_RB_LRZ_CNTL(
+			.enable = lrz.enable,
+		));
 
-	OUT_PKT4(ring, REG_A6XX_RB_LRZ_CNTL, 1);
-	OUT_RING(ring, rb_lrz_cntl);
+	OUT_REG(ring, A6XX_RB_DEPTH_PLANE_CNTL(
+			.z_mode = lrz.z_mode,
+		));
+
+	OUT_REG(ring, A6XX_GRAS_SU_DEPTH_PLANE_CNTL(
+			.z_mode = lrz.z_mode,
+		));
 
 	return ring;
 }
@@ -720,13 +812,10 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 		fd6_emit_add_group(emit, vtx->stateobj, FD6_GROUP_VTXSTATE, ENABLE_ALL);
 	}
 
-	/* VFD_CONTROL packs both vfd fetch count and vfd decode count, so we have
-	 * to emit this if either change.
-	 */
-	if (emit->dirty & (FD_DIRTY_VTXBUF | FD_DIRTY_VTXSTATE)) {
+	if (emit->dirty & FD_DIRTY_VTXBUF) {
 		struct fd_ringbuffer *state;
 
-		state = build_vbo_state(emit, emit->vs);
+		state = build_vbo_state(emit);
 		fd6_emit_take_group(emit, state, FD6_GROUP_VBO, ENABLE_ALL);
 	}
 
@@ -739,7 +828,7 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 			fd6_emit_add_group(emit, zsa->stateobj, FD6_GROUP_ZSA, ENABLE_ALL);
 	}
 
-	if ((dirty & (FD_DIRTY_ZSA | FD_DIRTY_BLEND | FD_DIRTY_PROG)) && pfb->zsbuf) {
+	if (dirty & (FD_DIRTY_ZSA | FD_DIRTY_BLEND | FD_DIRTY_PROG)) {
 		struct fd_ringbuffer *state;
 
 		state = build_lrz(emit, false);
@@ -1070,9 +1159,6 @@ fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	WRITE(REG_A6XX_RB_UNKNOWN_8811, 0x00000010);
 	WRITE(REG_A6XX_PC_MODE_CNTL, 0x1f);
 
-	OUT_PKT4(ring, REG_A6XX_RB_SRGB_CNTL, 1);
-	OUT_RING(ring, 0);
-
 	WRITE(REG_A6XX_GRAS_UNKNOWN_8101, 0);
 	WRITE(REG_A6XX_GRAS_SAMPLE_CNTL, 0);
 	WRITE(REG_A6XX_GRAS_UNKNOWN_8110, 0x2);
@@ -1108,9 +1194,7 @@ fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	WRITE(REG_A6XX_VPC_UNKNOWN_9210, 0);
 	WRITE(REG_A6XX_VPC_UNKNOWN_9211, 0);
 	WRITE(REG_A6XX_VPC_UNKNOWN_9602, 0);
-	WRITE(REG_A6XX_PC_UNKNOWN_9981, 0x3);
 	WRITE(REG_A6XX_PC_UNKNOWN_9E72, 0);
-	WRITE(REG_A6XX_VPC_UNKNOWN_9108, 0x3);
 	WRITE(REG_A6XX_SP_TP_SAMPLE_CONFIG, 0);
 	/* NOTE blob seems to (mostly?) use 0xb2 for SP_TP_UNKNOWN_B309
 	 * but this seems to kill texture gather offsets.
@@ -1118,8 +1202,8 @@ fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	WRITE(REG_A6XX_SP_TP_UNKNOWN_B309, 0xa2);
 	WRITE(REG_A6XX_RB_SAMPLE_CONFIG, 0);
 	WRITE(REG_A6XX_GRAS_SAMPLE_CONFIG, 0);
-	WRITE(REG_A6XX_RB_UNKNOWN_8878, 0);
-	WRITE(REG_A6XX_RB_UNKNOWN_8879, 0);
+	WRITE(REG_A6XX_RB_Z_BOUNDS_MIN, 0);
+	WRITE(REG_A6XX_RB_Z_BOUNDS_MAX, 0);
 	WRITE(REG_A6XX_HLSQ_CONTROL_5_REG, 0xfc);
 
 	emit_marker6(ring, 7);

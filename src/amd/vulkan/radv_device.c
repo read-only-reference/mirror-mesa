@@ -63,7 +63,7 @@
 #include "util/timespec.h"
 #include "util/u_atomic.h"
 #include "compiler/glsl_types.h"
-#include "util/xmlpool.h"
+#include "util/driconf.h"
 
 static struct radv_timeline_point *
 radv_timeline_find_point_at_least_locked(struct radv_device *device,
@@ -162,24 +162,13 @@ radv_physical_device_init_mem_types(struct radv_physical_device *device)
 
 	unsigned type_count = 0;
 
-	if (device->rad_info.has_dedicated_vram) {
-		if (vram_index >= 0) {
-			device->memory_domains[type_count] = RADEON_DOMAIN_VRAM;
-			device->memory_flags[type_count] = RADEON_FLAG_NO_CPU_ACCESS;
-			device->memory_properties.memoryTypes[type_count++] = (VkMemoryType) {
-				.propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				.heapIndex = vram_index,
-			};
-		}
-	} else {
-		if (visible_vram_index >= 0) {
-			device->memory_domains[type_count] = RADEON_DOMAIN_VRAM;
-			device->memory_flags[type_count] = RADEON_FLAG_NO_CPU_ACCESS;
-			device->memory_properties.memoryTypes[type_count++] = (VkMemoryType) {
-				.propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				.heapIndex = visible_vram_index,
-			};
-		}
+	if (vram_index >= 0 || visible_vram_index >= 0) {
+		device->memory_domains[type_count] = RADEON_DOMAIN_VRAM;
+		device->memory_flags[type_count] = RADEON_FLAG_NO_CPU_ACCESS;
+		device->memory_properties.memoryTypes[type_count++] = (VkMemoryType) {
+			.propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			.heapIndex = vram_index >= 0 ? vram_index : visible_vram_index,
+		};
 	}
 
 	if (gart_index >= 0) {
@@ -241,7 +230,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *device)
 static const char *
 radv_get_compiler_string(struct radv_physical_device *pdevice)
 {
-	if (pdevice->use_aco) {
+	if (!pdevice->use_llvm) {
 		/* Some games like SotTR apply shader workarounds if the LLVM
 		 * version is too old or if the LLVM version string is
 		 * missing. This gives 2-5% performance with SotTR and ACO.
@@ -349,7 +338,7 @@ radv_physical_device_try_create(struct radv_instance *instance,
 	device->local_fd = fd;
 	device->ws->query_info(device->ws, &device->rad_info);
 
-	device->use_aco = instance->perftest_flags & RADV_PERFTEST_ACO;
+	device->use_llvm = instance->debug_flags & RADV_DEBUG_LLVM;
 
 	snprintf(device->name, sizeof(device->name),
 		 "AMD RADV %s (%s)",
@@ -362,7 +351,7 @@ radv_physical_device_try_create(struct radv_instance *instance,
 	}
 
 	/* These flags affect shader compilation. */
-	uint64_t shader_env_flags = (device->use_aco ? 0x2 : 0);
+	uint64_t shader_env_flags = (device->use_llvm ? 0 : 0x2);
 
 	/* The gpu id is already embedded in the uuid so we just pass "radv"
 	 * when creating the cache.
@@ -371,7 +360,7 @@ radv_physical_device_try_create(struct radv_instance *instance,
 	disk_cache_format_hex_id(buf, device->cache_uuid, VK_UUID_SIZE * 2);
 	device->disk_cache = disk_cache_create(device->name, buf, shader_env_flags);
 
-	if (device->rad_info.chip_class < GFX8)
+	if (device->rad_info.chip_class < GFX8 || !device->use_llvm)
 		fprintf(stderr, "WARNING: radv is not a conformant vulkan implementation, testing use only.\n");
 
 	radv_get_driver_uuid(&device->driver_uuid);
@@ -383,15 +372,12 @@ radv_physical_device_try_create(struct radv_instance *instance,
 	device->dcc_msaa_allowed =
 		(device->instance->perftest_flags & RADV_PERFTEST_DCC_MSAA);
 
-	device->use_shader_ballot = (device->use_aco && device->rad_info.chip_class >= GFX8) ||
-				    (device->instance->perftest_flags & RADV_PERFTEST_SHADER_BALLOT);
-
 	device->use_ngg = device->rad_info.chip_class >= GFX10 &&
 			  device->rad_info.family != CHIP_NAVI14 &&
 			  !(device->instance->debug_flags & RADV_DEBUG_NO_NGG);
 
 	/* TODO: Implement NGG GS with ACO. */
-	device->use_ngg_gs = device->use_ngg && !device->use_aco;
+	device->use_ngg_gs = device->use_ngg && device->use_llvm;
 	device->use_ngg_streamout = false;
 
 	/* Determine the number of threads per wave for all stages. */
@@ -512,12 +498,11 @@ static const struct debug_control radv_debug_options[] = {
 	{"checkir", RADV_DEBUG_CHECKIR},
 	{"nothreadllvm", RADV_DEBUG_NOTHREADLLVM},
 	{"nobinning", RADV_DEBUG_NOBINNING},
-	{"noloadstoreopt", RADV_DEBUG_NO_LOAD_STORE_OPT},
 	{"nongg", RADV_DEBUG_NO_NGG},
-	{"noshaderballot", RADV_DEBUG_NO_SHADER_BALLOT},
 	{"allentrypoints", RADV_DEBUG_ALL_ENTRYPOINTS},
 	{"metashaders", RADV_DEBUG_DUMP_META_SHADERS},
 	{"nomemorycache", RADV_DEBUG_NO_MEMORY_CACHE},
+	{"llvm", RADV_DEBUG_LLVM},
 	{NULL, 0}
 };
 
@@ -532,13 +517,11 @@ static const struct debug_control radv_perftest_options[] = {
 	{"localbos", RADV_PERFTEST_LOCAL_BOS},
 	{"dccmsaa", RADV_PERFTEST_DCC_MSAA},
 	{"bolist", RADV_PERFTEST_BO_LIST},
-	{"shader_ballot", RADV_PERFTEST_SHADER_BALLOT},
 	{"tccompatcmask", RADV_PERFTEST_TC_COMPAT_CMASK},
 	{"cswave32", RADV_PERFTEST_CS_WAVE_32},
 	{"pswave32", RADV_PERFTEST_PS_WAVE_32},
 	{"gewave32", RADV_PERFTEST_GE_WAVE_32},
 	{"dfsm", RADV_PERFTEST_DFSM},
-	{"aco", RADV_PERFTEST_ACO},
 	{NULL, 0}
 };
 
@@ -554,41 +537,47 @@ radv_handle_per_app_options(struct radv_instance *instance,
 			    const VkApplicationInfo *info)
 {
 	const char *name = info ? info->pApplicationName : NULL;
+	const char *engine_name = info ? info->pEngineName : NULL;
 
-	if (!name)
-		return;
-
-	if (!strcmp(name, "DOOM_VFR")) {
-		/* Work around a Doom VFR game bug */
-		instance->debug_flags |= RADV_DEBUG_NO_DYNAMIC_BOUNDS;
-	} else if (!strcmp(name, "MonsterHunterWorld.exe")) {
-		/* Workaround for a WaW hazard when LLVM moves/merges
-		 * load/store memory operations.
-		 * See https://reviews.llvm.org/D61313
-		 */
-		if (LLVM_VERSION_MAJOR < 9)
-			instance->debug_flags |= RADV_DEBUG_NO_LOAD_STORE_OPT;
-	} else if (!strcmp(name, "Wolfenstein: Youngblood")) {
-		if (!(instance->debug_flags & RADV_DEBUG_NO_SHADER_BALLOT) &&
-		    !(instance->perftest_flags & RADV_PERFTEST_ACO)) {
-			/* Force enable VK_AMD_shader_ballot because it looks
-			 * safe and it gives a nice boost (+20% on Vega 56 at
-			 * this time). It also prevents corruption on LLVM.
+	if (name) {
+		if (!strcmp(name, "DOOM_VFR")) {
+			/* Work around a Doom VFR game bug */
+			instance->debug_flags |= RADV_DEBUG_NO_DYNAMIC_BOUNDS;
+		} else if (!strcmp(name, "Fledge")) {
+			/*
+			 * Zero VRAM for "The Surge 2"
+			 *
+			 * This avoid a hang when when rendering any level. Likely
+			 * uninitialized data in an indirect draw.
 			 */
-			instance->perftest_flags |= RADV_PERFTEST_SHADER_BALLOT;
+			instance->debug_flags |= RADV_DEBUG_ZERO_VRAM;
+		} else if (!strcmp(name, "No Man's Sky")) {
+			/* Work around a NMS game bug */
+			instance->debug_flags |= RADV_DEBUG_DISCARD_TO_DEMOTE;
+		} else if (!strcmp(name, "DOOMEternal")) {
+			/* Zero VRAM for Doom Eternal to fix rendering issues. */
+			instance->debug_flags |= RADV_DEBUG_ZERO_VRAM;
+		} else if (!strcmp(name, "Red Dead Redemption 2")) {
+			/* Work around a RDR2 game bug */
+			instance->debug_flags |= RADV_DEBUG_DISCARD_TO_DEMOTE;
 		}
-	} else if (!strcmp(name, "Fledge")) {
-		/*
-		 * Zero VRAM for "The Surge 2"
-		 *
-		 * This avoid a hang when when rendering any level. Likely
-		 * uninitialized data in an indirect draw.
-		 */
-		instance->debug_flags |= RADV_DEBUG_ZERO_VRAM;
-	} else if (!strcmp(name, "No Man's Sky")) {
-		/* Work around a NMS game bug */
-		instance->debug_flags |= RADV_DEBUG_DISCARD_TO_DEMOTE;
 	}
+
+	if (engine_name) {
+		if (!strcmp(engine_name, "vkd3d")) {
+			/* Zero VRAM for all VKD3D (DX12->VK) games to fix
+			 * rendering issues.
+			 */
+			instance->debug_flags |= RADV_DEBUG_ZERO_VRAM;
+		}
+	}
+
+	instance->enable_mrt_output_nan_fixup =
+		driQueryOptionb(&instance->dri_options,
+				"radv_enable_mrt_output_nan_fixup");
+
+	if (driQueryOptionb(&instance->dri_options, "radv_no_dynamic_bounds"))
+		instance->debug_flags |= RADV_DEBUG_NO_DYNAMIC_BOUNDS;
 }
 
 static const char radv_dri_options_xml[] =
@@ -598,6 +587,8 @@ DRI_CONF_BEGIN
 		DRI_CONF_VK_X11_OVERRIDE_MIN_IMAGE_COUNT(0)
 		DRI_CONF_VK_X11_STRICT_IMAGE_COUNT("false")
 		DRI_CONF_RADV_REPORT_LLVM9_VERSION_STRING("false")
+		DRI_CONF_RADV_ENABLE_MRT_OUTPUT_NAN_FIXUP("false")
+		DRI_CONF_RADV_NO_DYNAMIC_BOUNDS("false")
 	DRI_CONF_SECTION_END
 
 	DRI_CONF_SECTION_DEBUG
@@ -663,9 +654,6 @@ VkResult radv_CreateInstance(
 
 	instance->perftest_flags = parse_debug_string(getenv("RADV_PERFTEST"),
 						   radv_perftest_options);
-
-	if (instance->perftest_flags & RADV_PERFTEST_ACO)
-		fprintf(stderr, "WARNING: Experimental compiler backend enabled. Here be dragons! Incorrect rendering, GPU hangs and/or resets are likely\n");
 
 	if (instance->debug_flags & RADV_DEBUG_STARTUP)
 		radv_logi("Created an instance");
@@ -941,7 +929,7 @@ void radv_GetPhysicalDeviceFeatures(
 		.shaderCullDistance                       = true,
 		.shaderFloat64                            = true,
 		.shaderInt64                              = true,
-		.shaderInt16                              = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8,
+		.shaderInt16                              = true,
 		.sparseBinding                            = true,
 		.variableMultisampleRate                  = true,
 		.shaderResourceMinLod                     = true,
@@ -955,10 +943,10 @@ radv_get_physical_device_features_1_1(struct radv_physical_device *pdevice,
 {
 	assert(f->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES);
 
-	f->storageBuffer16BitAccess            = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
-	f->uniformAndStorageBuffer16BitAccess  = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
-	f->storagePushConstant16               = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
-	f->storageInputOutput16                = pdevice->rad_info.has_double_rate_fp16 && (LLVM_VERSION_MAJOR >= 9 || pdevice->use_aco);
+	f->storageBuffer16BitAccess            = true;
+	f->uniformAndStorageBuffer16BitAccess  = true;
+	f->storagePushConstant16               = true;
+	f->storageInputOutput16                = pdevice->rad_info.has_packed_math_16bit && (LLVM_VERSION_MAJOR >= 9 || !pdevice->use_llvm);
 	f->multiview                           = true;
 	f->multiviewGeometryShader             = true;
 	f->multiviewTessellationShader         = true;
@@ -977,13 +965,13 @@ radv_get_physical_device_features_1_2(struct radv_physical_device *pdevice,
 
 	f->samplerMirrorClampToEdge = true;
 	f->drawIndirectCount = true;
-	f->storageBuffer8BitAccess = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
-	f->uniformAndStorageBuffer8BitAccess = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
-	f->storagePushConstant8 = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
-	f->shaderBufferInt64Atomics = LLVM_VERSION_MAJOR >= 9;
-	f->shaderSharedInt64Atomics = LLVM_VERSION_MAJOR >= 9;
-	f->shaderFloat16 = pdevice->rad_info.has_double_rate_fp16 && !pdevice->use_aco;
-	f->shaderInt8 = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
+	f->storageBuffer8BitAccess = true;
+	f->uniformAndStorageBuffer8BitAccess = true;
+	f->storagePushConstant8 = true;
+	f->shaderBufferInt64Atomics = LLVM_VERSION_MAJOR >= 9 || !pdevice->use_llvm;
+	f->shaderSharedInt64Atomics = LLVM_VERSION_MAJOR >= 9 || !pdevice->use_llvm;
+	f->shaderFloat16 = pdevice->rad_info.has_packed_math_16bit;
+	f->shaderInt8 = true;
 
 	f->descriptorIndexing = true;
 	f->shaderInputAttachmentArrayDynamicIndexing = true;
@@ -1011,7 +999,7 @@ radv_get_physical_device_features_1_2(struct radv_physical_device *pdevice,
 	f->scalarBlockLayout = pdevice->rad_info.chip_class >= GFX7;
 	f->imagelessFramebuffer = true;
 	f->uniformBufferStandardLayout = true;
-	f->shaderSubgroupExtendedTypes = !pdevice->use_aco || pdevice->rad_info.chip_class >= GFX8;
+	f->shaderSubgroupExtendedTypes = true;
 	f->separateDepthStencilLayouts = true;
 	f->hostQueryReset = true;
 	f->timelineSemaphore = pdevice->rad_info.has_syncobj_wait_for_submit;
@@ -1199,7 +1187,7 @@ void radv_GetPhysicalDeviceFeatures2(
 		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES_EXT: {
 			VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT *features =
 				(VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT *)ext;
-			features->shaderDemoteToHelperInvocation = pdevice->use_aco;
+			features->shaderDemoteToHelperInvocation = LLVM_VERSION_MAJOR >= 9 || !pdevice->use_llvm;
 			break;
 		}
 		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_FEATURES_EXT: {
@@ -1525,14 +1513,9 @@ radv_get_physical_device_properties_1_1(struct radv_physical_device *pdevice,
 					 VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
 					 VK_SUBGROUP_FEATURE_BALLOT_BIT |
 					 VK_SUBGROUP_FEATURE_CLUSTERED_BIT |
-					 VK_SUBGROUP_FEATURE_QUAD_BIT;
-
-	if (((pdevice->rad_info.chip_class == GFX6 ||
-	      pdevice->rad_info.chip_class == GFX7) && !pdevice->use_aco) ||
-	    pdevice->rad_info.chip_class >= GFX8) {
-		p->subgroupSupportedOperations |= VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-						  VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
-	}
+					 VK_SUBGROUP_FEATURE_QUAD_BIT |
+					 VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
+					 VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
 	p->subgroupQuadOperationsInAllStages = true;
 
 	p->pointClippingBehavior = VK_POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES;
@@ -1564,7 +1547,7 @@ radv_get_physical_device_properties_1_2(struct radv_physical_device *pdevice,
 	/* On AMD hardware, denormals and rounding modes for fp16/fp64 are
 	 * controlled by the same config register.
 	 */
-	if (pdevice->rad_info.has_double_rate_fp16) {
+	if (pdevice->rad_info.has_packed_math_16bit) {
 		p->denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_32_BIT_ONLY_KHR;
 		p->roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_32_BIT_ONLY_KHR;
 	} else {
@@ -1587,10 +1570,10 @@ radv_get_physical_device_properties_1_2(struct radv_physical_device *pdevice,
 	p->shaderSignedZeroInfNanPreserveFloat32 = true;
 
 	p->shaderDenormFlushToZeroFloat16 = false;
-	p->shaderDenormPreserveFloat16 = pdevice->rad_info.has_double_rate_fp16;
-	p->shaderRoundingModeRTEFloat16 = pdevice->rad_info.has_double_rate_fp16;
+	p->shaderDenormPreserveFloat16 = pdevice->rad_info.has_packed_math_16bit;
+	p->shaderRoundingModeRTEFloat16 = pdevice->rad_info.has_packed_math_16bit;
 	p->shaderRoundingModeRTZFloat16 = false;
-	p->shaderSignedZeroInfNanPreserveFloat16 = pdevice->rad_info.has_double_rate_fp16;
+	p->shaderSignedZeroInfNanPreserveFloat16 = pdevice->rad_info.has_packed_math_16bit;
 
 	p->shaderDenormFlushToZeroFloat64 = false;
 	p->shaderDenormPreserveFloat64 = pdevice->rad_info.chip_class >= GFX8;
@@ -3004,6 +2987,8 @@ static VkResult radv_device_init_border_color(struct radv_device *device)
 
 	device->border_color_data.colors_gpu_ptr =
 		device->ws->buffer_map(device->border_color_data.bo);
+	if (!device->border_color_data.colors_gpu_ptr)
+		return vk_error(device->physical_device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 	pthread_mutex_init(&device->border_color_data.mutex, NULL);
 
 	return VK_SUCCESS;
@@ -3675,7 +3660,10 @@ radv_get_hs_offchip_param(struct radv_device *device, uint32_t *max_offchip_buff
 	}
 
 	*max_offchip_buffers_p = max_offchip_buffers;
-	if (device->physical_device->rad_info.chip_class >= GFX7) {
+	if (device->physical_device->rad_info.chip_class >= GFX10_3) {
+		hs_offchip_param = S_03093C_OFFCHIP_BUFFERING_GFX103(max_offchip_buffers - 1) |
+				   S_03093C_OFFCHIP_GRANULARITY_GFX103(offchip_granularity);
+	} else if (device->physical_device->rad_info.chip_class >= GFX7) {
 		if (device->physical_device->rad_info.chip_class >= GFX8)
 			--max_offchip_buffers;
 		hs_offchip_param =
@@ -4086,6 +4074,8 @@ radv_get_preamble_cs(struct radv_queue *queue,
 
 	if (descriptor_bo != queue->descriptor_bo) {
 		uint32_t *map = (uint32_t*)queue->device->ws->buffer_map(descriptor_bo);
+		if (!map)
+			goto fail;
 
 		if (scratch_bo) {
 			uint64_t scratch_va = radv_buffer_get_va(scratch_bo);
@@ -4182,7 +4172,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 					       RADV_CMD_FLAG_START_PIPELINE_STATS, 0);
 		}
 
-		if (!queue->device->ws->cs_finalize(cs))
+		if (queue->device->ws->cs_finalize(cs) != VK_SUCCESS)
 			goto fail;
 	}
 
@@ -6351,7 +6341,14 @@ radv_SignalSemaphore(VkDevice _device,
 	return VK_SUCCESS;
 }
 
-
+static void radv_destroy_event(struct radv_device *device,
+                               const VkAllocationCallbacks* pAllocator,
+                               struct radv_event *event)
+{
+	device->ws->buffer_destroy(event->bo);
+	vk_object_base_finish(&event->base);
+	vk_free2(&device->vk.alloc, pAllocator, event);
+}
 
 VkResult radv_CreateEvent(
 	VkDevice                                    _device,
@@ -6379,6 +6376,10 @@ VkResult radv_CreateEvent(
 	}
 
 	event->map = (uint64_t*)device->ws->buffer_map(event->bo);
+	if (!event->map) {
+		radv_destroy_event(device, pAllocator, event);
+		return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+	}
 
 	*pEvent = radv_event_to_handle(event);
 
@@ -6395,9 +6396,8 @@ void radv_DestroyEvent(
 
 	if (!event)
 		return;
-	device->ws->buffer_destroy(event->bo);
-	vk_object_base_finish(&event->base);
-	vk_free2(&device->vk.alloc, pAllocator, event);
+
+	radv_destroy_event(device, pAllocator, event);
 }
 
 VkResult radv_GetEventStatus(
@@ -6626,7 +6626,7 @@ radv_initialise_color_surface(struct radv_device *device,
 				.pipe_aligned = 1,
 			};
 
-			if (iview->image->dcc_offset)
+			if (surf->dcc_offset)
 				meta = surf->u.gfx9.dcc;
 
 			cb->cb_color_attrib |= S_028C74_COLOR_SW_MODE(surf->u.gfx9.surf.swizzle_mode) |
@@ -6672,11 +6672,11 @@ radv_initialise_color_surface(struct radv_device *device,
 
 	/* CMASK variables */
 	va = radv_buffer_get_va(iview->bo) + iview->image->offset;
-	va += iview->image->cmask_offset;
+	va += surf->cmask_offset;
 	cb->cb_color_cmask = va >> 8;
 
 	va = radv_buffer_get_va(iview->bo) + iview->image->offset;
-	va += iview->image->dcc_offset;
+	va += surf->dcc_offset;
 
 	if (radv_dcc_enabled(iview->image, iview->base_mip) &&
 	    device->physical_device->rad_info.chip_class <= GFX8)
@@ -6701,7 +6701,7 @@ radv_initialise_color_surface(struct radv_device *device,
 	}
 
 	if (radv_image_has_fmask(iview->image)) {
-		va = radv_buffer_get_va(iview->bo) + iview->image->offset + iview->image->fmask_offset;
+		va = radv_buffer_get_va(iview->bo) + iview->image->offset + surf->fmask_offset;
 		cb->cb_color_fmask = va >> 8;
 		cb->cb_color_fmask |= surf->fmask_tile_swizzle;
 	} else {
@@ -6953,7 +6953,7 @@ radv_initialise_ds_surface(struct radv_device *device,
 				/* Use all of the htile_buffer for depth if there's no stencil. */
 				ds->db_stencil_info |= S_02803C_TILE_STENCIL_DISABLE(1);
 			va = radv_buffer_get_va(iview->bo) + iview->image->offset +
-				iview->image->htile_offset;
+				surf->htile_offset;
 			ds->db_htile_data_base = va >> 8;
 			ds->db_htile_surface = S_028ABC_FULL_CACHE(1) |
 				S_028ABC_PIPE_ALIGNED(1);
@@ -7021,7 +7021,7 @@ radv_initialise_ds_surface(struct radv_device *device,
 				ds->db_stencil_info |= S_028044_TILE_STENCIL_DISABLE(1);
 
 			va = radv_buffer_get_va(iview->bo) + iview->image->offset +
-				iview->image->htile_offset;
+				surf->htile_offset;
 			ds->db_htile_data_base = va >> 8;
 			ds->db_htile_surface = S_028ABC_FULL_CACHE(1);
 

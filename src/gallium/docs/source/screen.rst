@@ -52,6 +52,9 @@ The integer capabilities:
   from color blend equations, in :ref:`Blend` state.
 * ``PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS``: The maximum number of stream buffers.
 * ``PIPE_CAP_PRIMITIVE_RESTART``: Whether primitive restart is supported.
+* ``PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX``: Subset of
+  PRIMITIVE_RESTART where the restart index is always the fixed maximum
+  value for the index type.
 * ``PIPE_CAP_INDEP_BLEND_ENABLE``: Whether per-rendertarget blend enabling and channel
   masks are supported. If 0, then the first rendertarget's blend mask is
   replicated across all MRTs.
@@ -650,6 +653,10 @@ MOV OUT[0], CONST[0][3]  # copy vector 3 of constbuf 0
 * ``PIPE_SHADER_CAP_INT64_ATOMICS``: Whether int64 atomic opcodes are supported. The device needs to support add, sub, swap, cmpswap, and, or, xor, min, and max.
 * ``PIPE_SHADER_CAP_FP16``: Whether half precision floating-point opcodes are supported.
    If unsupported, half precision ops need to be lowered to full precision.
+* ``PIPE_SHADER_CAP_FP16_DERIVATIVES``: Whether half precision floating-point
+  DDX and DDY opcodes are supported.
+* ``PIPE_SHADER_CAP_INT16``: Whether 16-bit signed and unsigned integer types
+  are supported.
 * ``PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS``: The maximum number of texture
   samplers.
 * ``PIPE_SHADER_CAP_PREFERRED_IR``: Preferred representation of the

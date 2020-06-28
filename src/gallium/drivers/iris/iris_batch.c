@@ -203,8 +203,6 @@ iris_init_batch(struct iris_context *ice,
 
    batch->cache.render = _mesa_hash_table_create(NULL, _mesa_hash_pointer,
                                                  _mesa_key_pointer_equal);
-   batch->cache.depth = _mesa_set_create(NULL, _mesa_hash_pointer,
-                                         _mesa_key_pointer_equal);
 
    memset(batch->other_batches, 0, sizeof(batch->other_batches));
 
@@ -271,7 +269,7 @@ ensure_exec_obj_space(struct iris_batch *batch, uint32_t count)
 void
 iris_use_pinned_bo(struct iris_batch *batch,
                    struct iris_bo *bo,
-                   bool writable)
+                   bool writable, enum iris_domain access)
 {
    assert(bo->kflags & EXEC_OBJECT_PINNED);
 
@@ -282,6 +280,11 @@ iris_use_pinned_bo(struct iris_batch *batch,
     */
    if (bo == batch->screen->workaround_bo)
       writable = false;
+
+   if (access < NUM_IRIS_DOMAINS) {
+      assert(batch->sync_region_depth);
+      iris_bo_bump_seqno(bo, batch->next_seqno, access);
+   }
 
    struct drm_i915_gem_exec_object2 *existing_entry =
       find_validation_entry(batch, bo);
@@ -357,7 +360,7 @@ create_batch(struct iris_batch *batch)
    batch->map = iris_bo_map(NULL, batch->bo, MAP_READ | MAP_WRITE);
    batch->map_next = batch->map;
 
-   iris_use_pinned_bo(batch, batch->bo, false);
+   iris_use_pinned_bo(batch, batch->bo, false, IRIS_DOMAIN_NONE);
 }
 
 static void
@@ -396,12 +399,14 @@ iris_batch_reset(struct iris_batch *batch)
    iris_batch_add_syncobj(batch, syncobj, I915_EXEC_FENCE_SIGNAL);
    iris_syncobj_reference(screen, &syncobj, NULL);
 
-   iris_cache_sets_clear(batch);
+   assert(!batch->sync_region_depth);
+   iris_batch_sync_boundary(batch);
+   iris_batch_mark_reset_sync(batch);
 
    /* Always add the workaround BO, it contains a driver identifier at the
     * beginning quite helpful to debug error states.
     */
-   iris_use_pinned_bo(batch, screen->workaround_bo, false);
+   iris_use_pinned_bo(batch, screen->workaround_bo, false, IRIS_DOMAIN_NONE);
 
    iris_batch_maybe_noop(batch);
 }
@@ -437,7 +442,6 @@ iris_batch_free(struct iris_batch *batch)
    iris_destroy_hw_context(bufmgr, batch->hw_ctx_id);
 
    _mesa_hash_table_destroy(batch->cache.render, NULL);
-   _mesa_set_destroy(batch->cache.depth, NULL);
 
    if (unlikely(INTEL_DEBUG))
       gen_batch_decode_ctx_finish(&batch->decoder);
@@ -669,12 +673,6 @@ batch_name_to_string(enum iris_batch_name name)
 /**
  * Flush the batch buffer, submitting it to the GPU and resetting it so
  * we're ready to emit the next batch.
- *
- * \param in_fence_fd is ignored if -1.  Otherwise, this function takes
- * ownership of the fd.
- *
- * \param out_fence_fd is ignored if NULL.  Otherwise, the caller must
- * take ownership of the returned fd.
  */
 void
 _iris_batch_flush(struct iris_batch *batch, const char *file, int line)
@@ -765,10 +763,11 @@ iris_batch_references(struct iris_batch *batch, struct iris_bo *bo)
 }
 
 /**
- * Updates the state of the noop feature.
+ * Updates the state of the noop feature.  Returns true if there was a noop
+ * transition that led to state invalidation.
  */
-uint64_t
-iris_batch_prepare_noop(struct iris_batch *batch, bool noop_enable, uint64_t dirty_flags)
+bool
+iris_batch_prepare_noop(struct iris_batch *batch, bool noop_enable)
 {
    if (batch->noop_enabled == noop_enable)
       return 0;
@@ -784,5 +783,5 @@ iris_batch_prepare_noop(struct iris_batch *batch, bool noop_enable, uint64_t dir
    /* We only need to update the entire state if we transition from noop ->
     * not-noop.
     */
-   return !batch->noop_enabled ? dirty_flags : 0;
+   return !batch->noop_enabled;
 }

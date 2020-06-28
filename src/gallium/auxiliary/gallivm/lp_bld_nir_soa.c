@@ -69,8 +69,13 @@ emit_fetch_64bit(
    assert(len <= (2 * (LP_MAX_VECTOR_WIDTH/32)));
 
    for (i = 0; i < bld_base->base.type.length * 2; i+=2) {
+#if UTIL_ARCH_LITTLE_ENDIAN
       shuffles[i] = lp_build_const_int32(gallivm, i / 2);
       shuffles[i + 1] = lp_build_const_int32(gallivm, i / 2 + bld_base->base.type.length);
+#else
+      shuffles[i] = lp_build_const_int32(gallivm, i / 2 + bld_base->base.type.length);
+      shuffles[i + 1] = lp_build_const_int32(gallivm, i / 2);
+#endif
    }
    res = LLVMBuildShuffleVector(builder, input, input2, LLVMConstVector(shuffles, len), "");
 
@@ -91,8 +96,13 @@ emit_store_64bit_split(struct lp_build_nir_context *bld_base,
 
    value = LLVMBuildBitCast(gallivm->builder, value, LLVMVectorType(LLVMFloatTypeInContext(gallivm->context), len), "");
    for (i = 0; i < bld_base->base.type.length; i++) {
+#if UTIL_ARCH_LITTLE_ENDIAN
       shuffles[i] = lp_build_const_int32(gallivm, i * 2);
       shuffles2[i] = lp_build_const_int32(gallivm, (i * 2) + 1);
+#else
+      shuffles[i] = lp_build_const_int32(gallivm, i * 2 + 1);
+      shuffles2[i] = lp_build_const_int32(gallivm, i * 2);
+#endif
    }
 
    split_values[0] = LLVMBuildShuffleVector(builder, value,
@@ -1555,7 +1565,7 @@ end_primitive_masked(struct lp_build_nir_context * bld_base,
    if (stream_id == 0)
       bld->gs_iface->end_primitive(bld->gs_iface, &bld->bld_base.base,
                                    total_emitted_vertices_vec,
-                                   emitted_vertices_vec, emitted_prims_vec, mask_vec(bld_base));
+                                   emitted_vertices_vec, emitted_prims_vec, mask);
    increment_vec_ptr_by_mask(bld_base, bld->emitted_prims_vec_ptr[stream_id],
                              mask);
    clear_uint_vec_ptr_from_mask(bld_base, bld->emitted_vertices_vec_ptr[stream_id],

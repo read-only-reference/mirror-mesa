@@ -31,10 +31,6 @@
  * - main interface to GEM in the kernel
  */
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-
 #include <xf86drm.h>
 #include <util/u_atomic.h>
 #include <fcntl.h>
@@ -63,6 +59,7 @@
 #include "util/macros.h"
 #include "util/hash_table.h"
 #include "util/list.h"
+#include "util/os_file.h"
 #include "util/u_dynarray.h"
 #include "util/vma.h"
 #include "iris_bufmgr.h"
@@ -90,6 +87,17 @@
 #define VG_NOACCESS(ptr, size) VG(VALGRIND_MAKE_MEM_NOACCESS(ptr, size))
 
 #define PAGE_SIZE 4096
+
+#define WARN_ONCE(cond, fmt...) do {                            \
+   if (unlikely(cond)) {                                        \
+      static bool _warned = false;                              \
+      if (!_warned) {                                           \
+         fprintf(stderr, "WARNING: ");                          \
+         fprintf(stderr, fmt);                                  \
+         _warned = true;                                        \
+      }                                                         \
+   }                                                            \
+} while (0)
 
 #define FILE_DEBUG_FLAG DEBUG_BUFMGR
 
@@ -126,6 +134,16 @@ struct bo_cache_bucket {
    uint64_t size;
 };
 
+struct bo_export {
+   /** File descriptor associated with a handle export. */
+   int drm_fd;
+
+   /** GEM handle in drm_fd */
+   uint32_t gem_handle;
+
+   struct list_head link;
+};
+
 struct iris_bufmgr {
    /**
     * List into the list of bufmgr.
@@ -156,6 +174,7 @@ struct iris_bufmgr {
 
    bool has_llc:1;
    bool has_mmap_offset:1;
+   bool has_tiling_uapi:1;
    bool bo_reuse:1;
 
    struct gen_aux_map_context *aux_map_ctx;
@@ -349,9 +368,13 @@ static struct iris_bo *
 bo_calloc(void)
 {
    struct iris_bo *bo = calloc(1, sizeof(*bo));
-   if (bo) {
-      bo->hash = _mesa_hash_pointer(bo);
-   }
+   if (!bo)
+      return NULL;
+
+   list_inithead(&bo->exports);
+
+   bo->hash = _mesa_hash_pointer(bo);
+
    return bo;
 }
 
@@ -456,7 +479,6 @@ alloc_fresh_bo(struct iris_bufmgr *bufmgr, uint64_t bo_size)
    bo->size = bo_size;
    bo->idle = true;
    bo->tiling_mode = I915_TILING_NONE;
-   bo->swizzle_mode = I915_BIT_6_SWIZZLE_NONE;
    bo->stride = 0;
 
    /* Calling set_domain() will allocate pages for the BO outside of the
@@ -589,6 +611,7 @@ iris_bo_create_userptr(struct iris_bufmgr *bufmgr, const char *name,
                        void *ptr, size_t size,
                        enum iris_memory_zone memzone)
 {
+   struct drm_gem_close close = { 0, };
    struct iris_bo *bo;
 
    bo = bo_calloc();
@@ -634,7 +657,8 @@ iris_bo_create_userptr(struct iris_bufmgr *bufmgr, const char *name,
    return bo;
 
 err_close:
-   gen_ioctl(bufmgr->fd, DRM_IOCTL_GEM_CLOSE, &bo->gem_handle);
+   close.handle = bo->gem_handle;
+   gen_ioctl(bufmgr->fd, DRM_IOCTL_GEM_CLOSE, &close);
 err_free:
    free(bo);
    return NULL;
@@ -704,7 +728,7 @@ iris_bo_gem_create_from_name(struct iris_bufmgr *bufmgr,
       goto err_unref;
 
    bo->tiling_mode = get_tiling.tiling_mode;
-   bo->swizzle_mode = get_tiling.swizzle_mode;
+
    /* XXX stride is unknown */
    DBG("bo_create_from_handle: %d (%s)\n", handle, bo->name);
 
@@ -733,6 +757,16 @@ bo_close(struct iris_bo *bo)
 
       entry = _mesa_hash_table_search(bufmgr->handle_table, &bo->gem_handle);
       _mesa_hash_table_remove(bufmgr->handle_table, entry);
+
+      list_for_each_entry_safe(struct bo_export, export, &bo->exports, link) {
+         struct drm_gem_close close = { .handle = export->gem_handle };
+         gen_ioctl(export->drm_fd, DRM_IOCTL_GEM_CLOSE, &close);
+
+         list_del(&export->link);
+         free(export);
+      }
+   } else {
+      assert(list_is_empty(&bo->exports));
    }
 
    /* Close this object */
@@ -1082,6 +1116,11 @@ iris_bo_map_gtt(struct pipe_debug_callback *dbg,
 {
    struct iris_bufmgr *bufmgr = bo->bufmgr;
 
+   /* If we don't support get/set_tiling, there's no support for GTT mapping
+    * either (it won't do any de-tiling for us).
+    */
+   assert(bufmgr->has_tiling_uapi);
+
    /* Get a mapping of the buffer if we haven't before. */
    if (bo->map_gtt == NULL) {
       DBG("bo_map_gtt: mmap %d (%s)\n", bo->gem_handle, bo->name);
@@ -1309,6 +1348,15 @@ bo_set_tiling_internal(struct iris_bo *bo, uint32_t tiling_mode,
        tiling_mode == bo->tiling_mode && stride == bo->stride)
       return 0;
 
+   /* If we can't do map_gtt, the set/get_tiling API isn't useful. And it's
+    * actually not supported by the kernel in those cases.
+    */
+   if (!bufmgr->has_tiling_uapi) {
+      bo->tiling_mode = tiling_mode;
+      bo->stride = stride;
+      return 0;
+   }
+
    memset(&set_tiling, 0, sizeof(set_tiling));
    do {
       /* set_tiling is slightly broken and overwrites the
@@ -1325,23 +1373,13 @@ bo_set_tiling_internal(struct iris_bo *bo, uint32_t tiling_mode,
       return -errno;
 
    bo->tiling_mode = set_tiling.tiling_mode;
-   bo->swizzle_mode = set_tiling.swizzle_mode;
    bo->stride = set_tiling.stride;
-   return 0;
-}
-
-int
-iris_bo_get_tiling(struct iris_bo *bo, uint32_t *tiling_mode,
-                  uint32_t *swizzle_mode)
-{
-   *tiling_mode = bo->tiling_mode;
-   *swizzle_mode = bo->swizzle_mode;
    return 0;
 }
 
 struct iris_bo *
 iris_bo_import_dmabuf(struct iris_bufmgr *bufmgr, int prime_fd,
-                      uint32_t tiling, uint32_t stride)
+                      int tiling, uint32_t stride)
 {
    uint32_t handle;
    struct iris_bo *bo;
@@ -1384,20 +1422,38 @@ iris_bo_import_dmabuf(struct iris_bufmgr *bufmgr, int prime_fd,
    bo->reusable = false;
    bo->external = true;
    bo->kflags = EXEC_OBJECT_SUPPORTS_48B_ADDRESS | EXEC_OBJECT_PINNED;
-   bo->gtt_offset = vma_alloc(bufmgr, IRIS_MEMZONE_OTHER, bo->size, 1);
+
+   /* From the Bspec, Memory Compression - Gen12:
+    *
+    *    The base address for the surface has to be 64K page aligned and the
+    *    surface is expected to be padded in the virtual domain to be 4 4K
+    *    pages.
+    *
+    * The dmabuf may contain a compressed surface. Align the BO to 64KB just
+    * in case. We always align to 64KB even on platforms where we don't need
+    * to, because it's a fairly reasonable thing to do anyway.
+    */
+   bo->gtt_offset =
+      vma_alloc(bufmgr, IRIS_MEMZONE_OTHER, bo->size, 64 * 1024);
+
    bo->gem_handle = handle;
    _mesa_hash_table_insert(bufmgr->handle_table, &bo->gem_handle, bo);
 
    struct drm_i915_gem_get_tiling get_tiling = { .handle = bo->gem_handle };
-   if (gen_ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_GET_TILING, &get_tiling))
+   if (!bufmgr->has_tiling_uapi)
+      get_tiling.tiling_mode = I915_TILING_NONE;
+   else if (gen_ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_GET_TILING, &get_tiling))
       goto err;
 
-   if (get_tiling.tiling_mode == tiling || tiling > I915_TILING_LAST) {
+   if (tiling == -1) {
       bo->tiling_mode = get_tiling.tiling_mode;
-      bo->swizzle_mode = get_tiling.swizzle_mode;
-       /* XXX stride is unknown */
+      /* XXX stride is unknown */
    } else {
-      if (bo_set_tiling_internal(bo, tiling, stride)) {
+      /* Modifiers path */
+      if (get_tiling.tiling_mode == tiling || !bufmgr->has_tiling_uapi) {
+         bo->tiling_mode = tiling;
+         bo->stride = stride;
+      } else if (bo_set_tiling_internal(bo, tiling, stride)) {
          goto err;
       }
    }
@@ -1485,6 +1541,69 @@ iris_bo_flink(struct iris_bo *bo, uint32_t *name)
    }
 
    *name = bo->global_name;
+   return 0;
+}
+
+int
+iris_bo_export_gem_handle_for_device(struct iris_bo *bo, int drm_fd,
+                                     uint32_t *out_handle)
+{
+   /* Only add the new GEM handle to the list of export if it belongs to a
+    * different GEM device. Otherwise we might close the same buffer multiple
+    * times.
+    */
+   struct iris_bufmgr *bufmgr = bo->bufmgr;
+   int ret = os_same_file_description(drm_fd, bufmgr->fd);
+   WARN_ONCE(ret < 0,
+             "Kernel has no file descriptor comparison support: %s\n",
+             strerror(errno));
+   if (ret == 0) {
+      *out_handle = iris_bo_export_gem_handle(bo);
+      return 0;
+   }
+
+   struct bo_export *export = calloc(1, sizeof(*export));
+   if (!export)
+      return -ENOMEM;
+
+   export->drm_fd = drm_fd;
+
+   int dmabuf_fd = -1;
+   int err = iris_bo_export_dmabuf(bo, &dmabuf_fd);
+   if (err) {
+      free(export);
+      return err;
+   }
+
+   mtx_lock(&bufmgr->lock);
+   err = drmPrimeFDToHandle(drm_fd, dmabuf_fd, &export->gem_handle);
+   close(dmabuf_fd);
+   if (err) {
+      mtx_unlock(&bufmgr->lock);
+      free(export);
+      return err;
+   }
+
+   bool found = false;
+   list_for_each_entry(struct bo_export, iter, &bo->exports, link) {
+      if (iter->drm_fd != drm_fd)
+         continue;
+      /* Here we assume that for a given DRM fd, we'll always get back the
+       * same GEM handle for a given buffer.
+       */
+      assert(iter->gem_handle == export->gem_handle);
+      free(export);
+      export = iter;
+      found = true;
+      break;
+   }
+   if (!found)
+      list_addtail(&export->link, &bo->exports);
+
+   mtx_unlock(&bufmgr->lock);
+
+   *out_handle = export->gem_handle;
+
    return 0;
 }
 
@@ -1716,7 +1835,7 @@ iris_bufmgr_create(struct gen_device_info *devinfo, int fd, bool bo_reuse)
     * Don't do this! Ensure that each library/bufmgr has its own device
     * fd so that its namespace does not clash with another.
     */
-   bufmgr->fd = dup(fd);
+   bufmgr->fd = os_dupfd_cloexec(fd);
 
    p_atomic_set(&bufmgr->refcount, 1);
 
@@ -1729,6 +1848,7 @@ iris_bufmgr_create(struct gen_device_info *devinfo, int fd, bool bo_reuse)
    list_inithead(&bufmgr->zombie_list);
 
    bufmgr->has_llc = devinfo->has_llc;
+   bufmgr->has_tiling_uapi = devinfo->has_tiling_uapi;
    bufmgr->bo_reuse = bo_reuse;
    bufmgr->has_mmap_offset = gem_param(fd, I915_PARAM_MMAP_GTT_VERSION) >= 4;
 
@@ -1769,7 +1889,7 @@ iris_bufmgr_create(struct gen_device_info *devinfo, int fd, bool bo_reuse)
    bufmgr->handle_table =
       _mesa_hash_table_create(NULL, _mesa_hash_uint, _mesa_key_uint_equal);
 
-   if (devinfo->gen >= 12) {
+   if (devinfo->has_aux_map) {
       bufmgr->aux_map_ctx = gen_aux_map_init(bufmgr, &aux_map_allocator,
                                              devinfo);
       assert(bufmgr->aux_map_ctx);

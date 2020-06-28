@@ -59,6 +59,7 @@ struct radeon_info {
 	/* Features. */
 	bool                        has_graphics; /* false if the chip is compute-only */
 	uint32_t                    num_rings[NUM_RING_TYPES];
+	uint32_t                    ib_pad_dw_mask[NUM_RING_TYPES];
 	bool                        has_clear_state;
 	bool                        has_distributed_tess;
 	bool                        has_dcc_constant_encode;
@@ -66,7 +67,7 @@ struct radeon_info {
 	bool                        rbplus_allowed; /* if RB+ is allowed */
 	bool                        has_load_ctx_reg_pkt;
 	bool                        has_out_of_order_rast;
-	bool                        has_double_rate_fp16;
+	bool                        has_packed_math_16bit;
 	bool                        cpdma_prefetch_writes_memory;
 	bool                        has_gfx9_scissor_bug;
 	bool                        has_tc_compat_zrange_bug;

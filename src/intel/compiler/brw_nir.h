@@ -119,6 +119,8 @@ void brw_nir_lower_fs_outputs(nir_shader *nir);
 
 bool brw_nir_lower_conversions(nir_shader *nir);
 
+bool brw_nir_lower_scoped_barriers(nir_shader *nir);
+
 bool brw_nir_lower_image_load_store(nir_shader *nir,
                                     const struct gen_device_info *devinfo,
                                     bool *uses_atomic_load_store);
@@ -189,6 +191,13 @@ nir_shader *brw_nir_create_passthrough_tcs(void *mem_ctx,
 #define BRW_NIR_FRAG_OUTPUT_INDEX_MASK INTEL_MASK(0, 0)
 #define BRW_NIR_FRAG_OUTPUT_LOCATION_SHIFT 1
 #define BRW_NIR_FRAG_OUTPUT_LOCATION_MASK INTEL_MASK(31, 1)
+
+bool brw_nir_move_interpolation_to_top(nir_shader *nir);
+bool brw_nir_demote_sample_qualifiers(nir_shader *nir);
+void brw_nir_populate_wm_prog_data(const nir_shader *shader,
+                                   const struct gen_device_info *devinfo,
+                                   const struct brw_wm_prog_key *key,
+                                   struct brw_wm_prog_data *prog_data);
 
 #ifdef __cplusplus
 }

@@ -74,6 +74,7 @@ panfrost_mfbd_format(struct pipe_surface *surf)
 
         case PIPE_FORMAT_A4B4G4R4_UNORM:
         case PIPE_FORMAT_B4G4R4A4_UNORM:
+        case PIPE_FORMAT_R4G4B4A4_UNORM:
                 fmt.unk1 = 0x10000000;
                 fmt.unk3 = 0x5;
                 fmt.nr_channels = MALI_POSITIVE(1);
@@ -89,6 +90,7 @@ panfrost_mfbd_format(struct pipe_surface *surf)
                 break;
 
         case PIPE_FORMAT_B5G5R5A1_UNORM:
+        case PIPE_FORMAT_R5G5B5A1_UNORM:
         case PIPE_FORMAT_B5G5R5X1_UNORM:
                 fmt.unk1 = 0x18000000;
                 fmt.unk3 = 0x7;
@@ -241,7 +243,13 @@ panfrost_mfbd_set_cbuf(
                 rt->framebuffer = base + header_size;
                 rt->afbc.metadata = base;
                 rt->afbc.stride = 0;
-                rt->afbc.unk = 0x30009;
+                rt->afbc.flags = MALI_AFBC_FLAGS;
+
+                unsigned components = util_format_get_nr_components(surf->format);
+
+                /* The "lossless colorspace transform" is lossy for R and RG formats */
+                if (components >= 3)
+                   rt->afbc.flags |= MALI_AFBC_YTR;
 
                 /* TODO: The blob sets this to something nonzero, but it's not
                  * clear what/how to calculate/if it matters */
@@ -285,7 +293,7 @@ panfrost_mfbd_set_zsbuf(
                 fbx->ds_afbc.depth_stencil_afbc_metadata = base;
                 fbx->ds_afbc.depth_stencil_afbc_stride = 0;
 
-                fbx->ds_afbc.zero1 = 0x10009;
+                fbx->ds_afbc.flags = MALI_AFBC_FLAGS;
                 fbx->ds_afbc.padding = 0x1000;
         } else if (rsrc->layout == MALI_TEXTURE_LINEAR || rsrc->layout == MALI_TEXTURE_TILED) {
                 /* TODO: Z32F(S8) support, which is always linear */
@@ -390,6 +398,25 @@ panfrost_mfbd_upload(struct panfrost_batch *batch,
 
 #undef UPLOAD
 
+/* Determines whether a framebuffer uses too much tilebuffer space (requiring
+ * us to scale up the tile at a performance penalty). This is conservative but
+ * afaict you get 128-bits per pixel normally */
+
+static bool
+pan_is_large_tib(struct panfrost_batch *batch)
+{
+        unsigned size = 0;
+
+        for (int cb = 0; cb < batch->key.nr_cbufs; ++cb) {
+                struct pipe_surface *surf = batch->key.cbufs[cb];
+                assert(surf);
+                unsigned bpp = util_format_get_blocksize(surf->format);
+                size += ALIGN_POT(bpp, 4);
+        }
+
+        return (size > 16);
+}
+
 static struct mali_framebuffer
 panfrost_emit_mfbd(struct panfrost_batch *batch, unsigned vertex_count)
 {
@@ -406,7 +433,8 @@ panfrost_emit_mfbd(struct panfrost_batch *batch, unsigned vertex_count)
                 .width2 = MALI_POSITIVE(width),
                 .height2 = MALI_POSITIVE(height),
 
-                .unk1 = 0x1080,
+                /* Seems to configure tib size */
+                .unk1 = pan_is_large_tib(batch) ? 0xc80 : 0x1080,
 
                 .rt_count_1 = MALI_POSITIVE(batch->key.nr_cbufs),
                 .rt_count_2 = 4,
@@ -537,7 +565,7 @@ panfrost_mfbd_fragment(struct panfrost_batch *batch, bool has_draws)
                         struct panfrost_slice *slice = &rsrc->slices[level];
 
                         fb.mfbd_flags |= MALI_MFBD_EXTRA;
-                        fbx.flags_lo |= MALI_EXTRA_PRESENT;
+                        fbx.flags_hi |= MALI_EXTRA_PRESENT;
                         fbx.checksum_stride = slice->checksum_stride;
                         if (slice->checksum_bo)
                                 fbx.checksum = slice->checksum_bo->gpu;

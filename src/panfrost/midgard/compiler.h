@@ -70,6 +70,10 @@ typedef struct midgard_branch {
         };
 } midgard_branch;
 
+#define PAN_WRITEOUT_C 1
+#define PAN_WRITEOUT_Z 2
+#define PAN_WRITEOUT_S 4
+
 /* Generic in-memory data type repesenting a single logical instruction, rather
  * than a single instruction group. This is the preferred form for code gen.
  * Multiple midgard_insturctions will later be combined during scheduling,
@@ -101,6 +105,11 @@ typedef struct midgard_instruction {
         nir_alu_type src_types[MIR_SRC_COUNT];
         nir_alu_type dest_type;
 
+        /* Packing ops have non-32-bit dest types even though they functionally
+         * work at the 32-bit level, use this as a signal to disable copyprop.
+         * We maybe need synthetic pack ops instead. */
+        bool is_pack;
+
         /* Modifiers, depending on type */
         union {
                 struct {
@@ -115,6 +124,9 @@ typedef struct midgard_instruction {
 
         /* Out of the union for csel (could maybe be fixed..) */
         bool src_invert[MIR_SRC_COUNT];
+
+        /* If the op supports it */
+        enum midgard_roundmode roundmode;
 
         /* Special fields for an ALU instruction */
         midgard_reg_info registers;
@@ -134,9 +146,7 @@ typedef struct midgard_instruction {
         bool has_inline_constant;
 
         bool compact_branch;
-        bool writeout;
-        bool writeout_depth;
-        bool writeout_stencil;
+        uint8_t writeout;
         bool last_writeout;
 
         /* Masks in a saneish format. One bit per channel, not packed fancy.
@@ -231,6 +241,9 @@ typedef struct compiler_context {
 
         /* Render target number for a keyed blend shader. Depends on is_blend */
         unsigned blend_rt;
+
+        /* Index to precolour to r0 for an input blend colour */
+        unsigned blend_input;
 
         /* Tracking for blend constant patching */
         int blend_constant_offset;
@@ -641,12 +654,14 @@ void mir_analyze_helper_requirements(compiler_context *ctx);
 
 void emit_binary_bundle(
         compiler_context *ctx,
+        midgard_block *block,
         midgard_bundle *bundle,
         struct util_dynarray *emission,
         int next_tag);
 
 bool
 nir_undef_to_zero(nir_shader *shader);
+bool nir_fuse_io_16(nir_shader *shader);
 
 void midgard_nir_lod_errata(nir_shader *shader);
 

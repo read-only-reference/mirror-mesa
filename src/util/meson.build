@@ -21,7 +21,6 @@
 inc_util = include_directories('.')
 
 subdir('format')
-subdir('xmlpool')
 
 files_mesa_util = files(
   'anon_file.h',
@@ -171,7 +170,8 @@ _libmesa_util = static_library(
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
   dependencies : deps_for_libmesa_util,
   link_with: libmesa_format,
-  c_args : [c_msvc_compat_args, c_vis_args],
+  c_args : [c_msvc_compat_args],
+  gnu_symbol_visibility : 'hidden',
   build_by_default : false
 )
 
@@ -187,7 +187,7 @@ _libxmlconfig = static_library(
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
   dependencies : [idep_mesautil, dep_expat, dep_m],
   c_args : [
-    c_msvc_compat_args, c_vis_args,
+    c_msvc_compat_args,
     '-DSYSCONFDIR="@0@"'.format(
       join_paths(get_option('prefix'), get_option('sysconfdir'))
     ),
@@ -195,11 +195,12 @@ _libxmlconfig = static_library(
       join_paths(get_option('prefix'), get_option('datadir'))
     ),
   ],
+  gnu_symbol_visibility : 'hidden',
   build_by_default : false,
 )
 
 idep_xmlconfig = declare_dependency(
-  dependencies : [idep_xmlconfig_headers, dep_expat],
+  dependencies : dep_expat,
   link_with : _libxmlconfig,
 )
 

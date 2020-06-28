@@ -597,20 +597,33 @@ nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint)
 {
    shader->info.num_textures = 0;
    shader->info.num_images = 0;
-   shader->info.last_msaa_image = -1;
+   shader->info.image_buffers = 0;
+   shader->info.msaa_images = 0;
 
    nir_foreach_variable(var, &shader->uniforms) {
-      /* Bindless textures and images don't use non-bindless slots. */
-      if (var->data.bindless)
+      /* Bindless textures and images don't use non-bindless slots.
+       * Interface blocks imply inputs, outputs, UBO, or SSBO, which can only
+       * mean bindless.
+       */
+      if (var->data.bindless || var->interface_type)
          continue;
 
       shader->info.num_textures += glsl_type_get_sampler_count(var->type);
-      shader->info.num_images += glsl_type_get_image_count(var->type);
 
-      /* Assuming image slots don't have holes (e.g. OpenGL) */
-      if (glsl_type_is_image(var->type) &&
-          glsl_get_sampler_dim(var->type) == GLSL_SAMPLER_DIM_MS)
-         shader->info.last_msaa_image = shader->info.num_images - 1;
+      unsigned num_image_slots = glsl_type_get_image_count(var->type);
+      if (num_image_slots) {
+         const struct glsl_type *image_type = glsl_without_array(var->type);
+
+         if (glsl_get_sampler_dim(image_type) == GLSL_SAMPLER_DIM_BUF) {
+            shader->info.image_buffers |=
+               BITFIELD_RANGE(shader->info.num_images, num_image_slots);
+         }
+         if (glsl_get_sampler_dim(image_type) == GLSL_SAMPLER_DIM_MS) {
+            shader->info.msaa_images |=
+               BITFIELD_RANGE(shader->info.num_images, num_image_slots);
+         }
+         shader->info.num_images += num_image_slots;
+      }
    }
 
    shader->info.inputs_read = 0;

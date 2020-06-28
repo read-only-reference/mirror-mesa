@@ -30,6 +30,13 @@ a = 'a'
 b = 'b'
 c = 'c'
 
+algebraic = [
+   (('pack_unorm_4x8', a), ('pack_32_4x8', ('f2u8', ('fround_even', ('fmul', ('fsat', a), 255.0))))),
+
+   # Allows us to schedule as a multiply by 2
+   (('~fadd', ('fadd', a, b), a), ('fadd', ('fadd', a, a), b)),
+]
+
 algebraic_late = [
     # ineg must be lowered late, but only for integers; floats will try to
     # have modifiers attached... hence why this has to be here rather than
@@ -60,11 +67,15 @@ algebraic_late = [
     (('ishl', 'a@8', b), ('u2u8', ('u2u16', ('ishl', ('u2u32', ('u2u16', a)), b)))),
     (('ishr', 'a@8', b), ('i2i8', ('i2i16', ('ishr', ('i2i32', ('i2i16', a)), b)))),
     (('ushr', 'a@8', b), ('u2u8', ('u2u16', ('ushr', ('u2u32', ('u2u16', a)), b)))),
+
+    # Canonical form. The scheduler will convert back if it makes sense.
+    (('fmul', a, 2.0), ('fadd', a, a))
 ]
 
 
 # Midgard is able to type convert down by only one "step" per instruction; if
-# NIR wants more than one step, we need to break up into multiple instructions
+# NIR wants more than one step, we need to break up into multiple instructions.
+# Nevertheless, we can do both a size step and a floating/int step at once.
 
 converts = []
 
@@ -81,8 +92,7 @@ for op in ('u2u', 'i2i', 'f2f', 'i2f', 'u2f', 'f2i', 'f2u'):
         while srcsz <= srcsz_max:
             # Size converter lowering is only needed if src and dst sizes are
             # spaced by a factor > 2.
-            # Type converter lowering is needed as soon as src_size != dst_size
-            if srcsz != dstsz and ((srcsz * 2 != dstsz and srcsz != dstsz * 2) or op[0] != op[2]):
+            if srcsz != dstsz and (srcsz * 2 != dstsz and srcsz != dstsz * 2):
                 cursz = srcsz
                 rule = a
                 # When converting down we first do the type conversion followed
@@ -140,6 +150,9 @@ def run():
     import nir_algebraic  # pylint: disable=import-error
 
     print('#include "midgard_nir.h"')
+
+    print(nir_algebraic.AlgebraicPass("midgard_nir_lower_algebraic_early",
+                                      algebraic).render())
 
     print(nir_algebraic.AlgebraicPass("midgard_nir_lower_algebraic_late",
                                       algebraic_late + converts + constant_switch).render())

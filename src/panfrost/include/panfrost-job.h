@@ -104,6 +104,9 @@ enum mali_func {
 
 #define MALI_DEPTH_WRITEMASK    (1 << 11)
 
+#define MALI_DEPTH_CLIP_NEAR    (1 << 12)
+#define MALI_DEPTH_CLIP_FAR     (1 << 13)
+
 /* Next flags to unknown2_4 */
 #define MALI_STENCIL_TEST      	(1 << 0)
 
@@ -251,11 +254,13 @@ struct mali_channel_swizzle {
  * for Bifrost framebuffer output.
  */
 #define MALI_FORMAT_SPECIAL2 (7 << 5)
+#define MALI_EXTRACT_TYPE(fmt) ((fmt) & 0xe0)
 
 /* If the high 3 bits are 3 to 6 these two bits say how many components
  * there are.
  */
 #define MALI_NR_CHANNELS(n) ((n - 1) << 3)
+#define MALI_EXTRACT_CHANNELS(fmt) ((((fmt) >> 3) & 3) + 1)
 
 /* If the high 3 bits are 3 to 6, then the low 3 bits say how big each
  * component is, except the special MALI_CHANNEL_FLOAT which overrides what the
@@ -274,6 +279,7 @@ struct mali_channel_swizzle {
  * MALI_FORMAT_UNORM, it means a 32-bit float.
  */
 #define MALI_CHANNEL_FLOAT 7
+#define MALI_EXTRACT_BITS(fmt) (fmt & 0x7)
 
 enum mali_format {
 	MALI_ETC2_RGB8       = MALI_FORMAT_COMPRESSED | 0x1,
@@ -390,11 +396,11 @@ enum mali_format {
 /* Should be set when the fragment shader updates the depth value. */
 #define MALI_WRITES_Z (1 << 4)
 
-/* Should the hardware perform early-Z testing? Normally should be set
- * for performance reasons. Clear if you use: discard,
- * alpha-to-coverage... * It's also possible this disables
- * forward-pixel kill; we're not quite sure which bit is which yet.
- * TODO: How does this interact with blending?*/
+/* Should the hardware perform early-Z testing? Set if the shader does not use
+ * discard, alpha-to-coverage, shader depth writes, and if the shader has no
+ * side effects (writes to global memory or images) unless early-z testing is
+ * forced in the shader.
+ */
 
 #define MALI_EARLY_Z (1 << 6)
 
@@ -408,6 +414,13 @@ enum mali_format {
  * it might read depth/stencil in particular, also set MALI_READS_ZS */
 
 #define MALI_READS_ZS (1 << 8)
+
+/* The shader might write to global memory (via OpenCL, SSBOs, or images).
+ * Reading is okay, as are ordinary writes to the tilebuffer/varyings. Setting
+ * incurs a performance penalty. On a fragment shader, this bit implies there
+ * are side effects, hence it interacts with early-z. */
+#define MALI_WRITES_GLOBAL (1 << 9)
+
 #define MALI_READS_TILEBUFFER (1 << 12)
 
 /* Applies to midgard1.flags_hi */
@@ -1690,6 +1703,13 @@ struct mali_rt_format {
         unsigned no_preload : 1;
 } __attribute__((packed));
 
+/* Flags for afbc.flags and ds_afbc.flags */
+
+#define MALI_AFBC_FLAGS 0x10009
+
+/* Lossless RGB and RGBA colorspace transform */
+#define MALI_AFBC_YTR (1 << 17)
+
 struct mali_render_target {
         struct mali_rt_format format;
 
@@ -1708,7 +1728,7 @@ struct mali_render_target {
 
                 mali_ptr metadata;
                 u32 stride; // stride in units of tiles
-                u32 unk; // = 0x20000
+                u32 flags; // = 0x20000
         } afbc;
 
         mali_ptr framebuffer;
@@ -1752,7 +1772,7 @@ struct mali_framebuffer_extra  {
                 struct {
                         mali_ptr depth_stencil_afbc_metadata;
                         u32 depth_stencil_afbc_stride; // in units of tiles
-                        u32 zero1;
+                        u32 flags;
 
                         mali_ptr depth_stencil;
 

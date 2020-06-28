@@ -466,20 +466,29 @@ static void
 emit_load_const(bi_context *ctx, nir_load_const_instr *instr)
 {
         /* Make sure we've been lowered */
-        assert(instr->def.num_components == 1);
+        assert(instr->def.num_components <= (32 / instr->def.bit_size));
+
+        /* Accumulate all the channels of the constant, as if we did an
+         * implicit SEL over them */
+        uint32_t acc = 0;
+
+        for (unsigned i = 0; i < instr->def.num_components; ++i) {
+                unsigned v = nir_const_value_as_uint(instr->value[i], instr->def.bit_size);
+                acc |= (v << (i * instr->def.bit_size));
+        }
 
         bi_instruction move = {
                 .type = BI_MOV,
                 .dest = pan_ssa_index(&instr->def),
-                .dest_type = instr->def.bit_size | nir_type_uint,
+                .dest_type = nir_type_uint32,
                 .src = {
                         BIR_INDEX_CONSTANT
                 },
                 .src_types = {
-                        instr->def.bit_size | nir_type_uint,
+                        nir_type_uint32,
                 },
                 .constant = {
-                        .u64 = nir_const_value_as_uint(instr->value[0], instr->def.bit_size)
+                        .u32 = acc
                 }
         };
 
@@ -834,6 +843,26 @@ emit_alu(bi_context *ctx, nir_alu_instr *instr)
         case nir_op_ixor:
                 alu.op.bitwise = BI_BITWISE_XOR;
                 break;
+
+        case nir_op_f2f16:
+        case nir_op_i2i16:
+        case nir_op_u2u16: {
+                if (nir_src_bit_size(instr->src[0].src) != 32)
+                        break;
+
+                /* Should have been const folded */
+                assert(!nir_src_is_const(instr->src[0].src));
+
+                alu.src_types[1] = alu.src_types[0];
+                alu.src[1] = alu.src[0];
+
+                unsigned last = nir_dest_num_components(instr->dest.dest) - 1;
+                assert(last <= 1);
+
+                alu.swizzle[1][0] = instr->src[0].swizzle[last];
+                break;
+        }
+
         default:
                 break;
         }

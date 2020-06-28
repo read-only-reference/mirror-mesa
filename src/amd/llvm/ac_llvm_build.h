@@ -79,6 +79,9 @@ struct ac_llvm_context {
 	LLVMTypeRef f32;
 	LLVMTypeRef f64;
 	LLVMTypeRef v2i16;
+	LLVMTypeRef v4i16;
+	LLVMTypeRef v2f16;
+	LLVMTypeRef v4f16;
 	LLVMTypeRef v2i32;
 	LLVMTypeRef v3i32;
 	LLVMTypeRef v4i32;
@@ -315,7 +318,6 @@ ac_build_buffer_store_format(struct ac_llvm_context *ctx,
 			     LLVMValueRef data,
 			     LLVMValueRef vindex,
 			     LLVMValueRef voffset,
-			     unsigned num_channels,
 			     unsigned cache_policy);
 
 LLVMValueRef
@@ -336,7 +338,8 @@ LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 					 LLVMValueRef voffset,
 					 unsigned num_channels,
 					 unsigned cache_policy,
-					 bool can_speculate);
+					 bool can_speculate,
+					 bool d16);
 
 LLVMValueRef
 ac_build_tbuffer_load_short(struct ac_llvm_context *ctx,
@@ -551,6 +554,7 @@ struct ac_image_args {
 	unsigned cache_policy : 3;
 	bool unorm : 1;
 	bool level_zero : 1;
+	bool d16 : 1; /* data and return values are 16-bit, requires GFX8+ */
 	unsigned attributes; /* additional call-site specific AC_FUNC_ATTRs */
 
 	LLVMValueRef resource;
