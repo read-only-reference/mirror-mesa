@@ -1199,6 +1199,13 @@ void anv_GetPhysicalDeviceFeatures2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES_EXT: {
+         VkPhysicalDeviceImageRobustnessFeaturesEXT *features =
+            (VkPhysicalDeviceImageRobustnessFeaturesEXT *)ext;
+         features->robustImageAccess = true;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES_EXT: {
          VkPhysicalDeviceIndexTypeUint8FeaturesEXT *features =
             (VkPhysicalDeviceIndexTypeUint8FeaturesEXT *)ext;
@@ -1311,6 +1318,23 @@ void anv_GetPhysicalDeviceFeatures2(
          VkPhysicalDeviceSeparateDepthStencilLayoutsFeaturesKHR *features =
             (VkPhysicalDeviceSeparateDepthStencilLayoutsFeaturesKHR *)ext;
          CORE_FEATURE(1, 2, separateDepthStencilLayouts);
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT: {
+         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT *features = (void *)ext;
+         features->shaderBufferFloat32Atomics =    true;
+         features->shaderBufferFloat32AtomicAdd =  false;
+         features->shaderBufferFloat64Atomics =    false;
+         features->shaderBufferFloat64AtomicAdd =  false;
+         features->shaderSharedFloat32Atomics =    true;
+         features->shaderSharedFloat32AtomicAdd =  false;
+         features->shaderSharedFloat64Atomics =    false;
+         features->shaderSharedFloat64AtomicAdd =  false;
+         features->shaderImageFloat32Atomics =     true;
+         features->shaderImageFloat32AtomicAdd =   false;
+         features->sparseImageFloat32Atomics =     false;
+         features->sparseImageFloat32AtomicAdd =   false;
          break;
       }
 
@@ -2983,7 +3007,8 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_clear_value_bo;
 
-   anv_pipeline_cache_init(&device->default_pipeline_cache, device, true);
+   anv_pipeline_cache_init(&device->default_pipeline_cache, device,
+                           true /* cache_enabled */, false /* external_sync */);
 
    anv_device_init_blorp(device);
 

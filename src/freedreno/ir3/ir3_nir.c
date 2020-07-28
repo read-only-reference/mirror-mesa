@@ -71,6 +71,12 @@ static const nir_shader_compiler_options options = {
 		.lower_to_scalar = true,
 		.has_imul24 = true,
 		.lower_wpos_pntc = true,
+
+		/* Only needed for the spirv_to_nir() pass done in ir3_cmdline.c
+		 * but that should be harmless for GL since 64b is not
+		 * supported there.
+		 */
+		.lower_int64_options = (nir_lower_int64_options)~0,
 };
 
 /* we don't want to lower vertex_id to _zero_based on newer gpus: */
@@ -115,6 +121,12 @@ static const nir_shader_compiler_options options_a6xx = {
 		.has_imul24 = true,
 		.max_unroll_iterations = 32,
 		.lower_wpos_pntc = true,
+
+		/* Only needed for the spirv_to_nir() pass done in ir3_cmdline.c
+		 * but that should be harmless for GL since 64b is not
+		 * supported there.
+		 */
+		.lower_int64_options = (nir_lower_int64_options)~0,
 };
 
 const nir_shader_compiler_options *
@@ -194,6 +206,7 @@ ir3_optimize_loop(nir_shader *s)
 			OPT(s, nir_opt_dce);
 		}
 		progress |= OPT(s, nir_opt_if, false);
+		progress |= OPT(s, nir_opt_loop_unroll, nir_var_all);
 		progress |= OPT(s, nir_opt_remove_phis);
 		progress |= OPT(s, nir_opt_undef);
 	} while (progress);
@@ -278,8 +291,8 @@ ir3_finalize_nir(struct ir3_compiler *compiler, nir_shader *s)
 void
 ir3_nir_post_finalize(struct ir3_compiler *compiler, nir_shader *s)
 {
-	NIR_PASS_V(s, nir_lower_io, nir_var_all, ir3_glsl_type_size,
-			   (nir_lower_io_options)0);
+	NIR_PASS_V(s, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
+			   ir3_glsl_type_size, (nir_lower_io_options)0);
 
 	if (s->info.stage == MESA_SHADER_FRAGMENT) {
 		/* NOTE: lower load_barycentric_at_sample first, since it
@@ -305,6 +318,61 @@ ir3_nir_post_finalize(struct ir3_compiler *compiler, nir_shader *s)
 	ir3_optimize_loop(s);
 }
 
+static bool
+ir3_nir_lower_layer_id(nir_shader *nir)
+{
+	unsigned layer_id_loc = ~0;
+	nir_foreach_shader_in_variable(var, nir) {
+		if (var->data.location == VARYING_SLOT_LAYER) {
+			layer_id_loc = var->data.driver_location;
+			break;
+		}
+	}
+
+	assert(layer_id_loc != ~0);
+
+	bool progress = false;
+	nir_builder b;
+
+	nir_foreach_function(func, nir) {
+		nir_builder_init(&b, func->impl);
+
+		nir_foreach_block(block, func->impl) {
+			nir_foreach_instr_safe(instr, block) {
+				if (instr->type != nir_instr_type_intrinsic)
+					continue;
+
+				nir_intrinsic_instr *intrin =
+					nir_instr_as_intrinsic(instr);
+
+				if (intrin->intrinsic != nir_intrinsic_load_input)
+					continue;
+
+				unsigned base = nir_intrinsic_base(intrin);
+				if (base != layer_id_loc)
+					continue;
+
+				b.cursor = nir_before_instr(&intrin->instr);
+				nir_ssa_def *zero = nir_imm_int(&b, 0);
+				nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
+										 nir_src_for_ssa(zero));
+				nir_instr_remove(&intrin->instr);
+				progress = true;
+			}
+		}
+
+		if (progress) {
+			nir_metadata_preserve(func->impl,
+								  nir_metadata_block_index |
+								  nir_metadata_dominance);
+		} else {
+			nir_metadata_preserve(func->impl, nir_metadata_all);
+		}
+	}
+
+	return progress;
+}
+
 void
 ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 {
@@ -324,7 +392,7 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 			break;
 		case MESA_SHADER_TESS_CTRL:
 			NIR_PASS_V(s, ir3_nir_lower_tess_ctrl, so, so->key.tessellation);
-			NIR_PASS_V(s, ir3_nir_lower_to_explicit_input);
+			NIR_PASS_V(s, ir3_nir_lower_to_explicit_input, so->shader->compiler);
 			progress = true;
 			break;
 		case MESA_SHADER_TESS_EVAL:
@@ -334,7 +402,7 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 			progress = true;
 			break;
 		case MESA_SHADER_GEOMETRY:
-			NIR_PASS_V(s, ir3_nir_lower_to_explicit_input);
+			NIR_PASS_V(s, ir3_nir_lower_to_explicit_input, so->shader->compiler);
 			progress = true;
 			break;
 		default:
@@ -352,9 +420,11 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 			progress |= OPT(s, nir_lower_clip_fs, so->key.ucp_enables, false);
 		if (so->key.fclamp_color)
 			progress |= OPT(s, nir_lower_clamp_color_outputs);
+		if (so->key.layer_zero && (s->info.inputs_read & VARYING_BIT_LAYER))
+			progress |= OPT(s, ir3_nir_lower_layer_id);
 	}
 	if (so->key.color_two_side) {
-		OPT_V(s, nir_lower_two_sided_color);
+		OPT_V(s, nir_lower_two_sided_color, true);
 		progress = true;
 	}
 
@@ -445,6 +515,8 @@ ir3_nir_scan_driver_consts(nir_shader *shader,
 
 				switch (intr->intrinsic) {
 				case nir_intrinsic_get_buffer_size:
+					if (ir3_bindless_resource(intr->src[0]))
+						break;
 					idx = nir_src_as_uint(intr->src[0]);
 					if (layout->ssbo_size.mask & (1 << idx))
 						break;
@@ -483,8 +555,9 @@ ir3_nir_scan_driver_consts(nir_shader *shader,
 						MAX2(layout->num_driver_params, IR3_DP_INSTID_BASE + 1);
 					break;
 				case nir_intrinsic_load_user_clip_plane:
+					idx = nir_intrinsic_ucp_id(intr);
 					layout->num_driver_params =
-						MAX2(layout->num_driver_params, IR3_DP_UCP7_W + 1);
+						MAX2(layout->num_driver_params, IR3_DP_UCP0_X + (idx + 1) * 4);
 					break;
 				case nir_intrinsic_load_num_work_groups:
 					layout->num_driver_params =

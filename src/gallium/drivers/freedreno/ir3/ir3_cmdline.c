@@ -67,7 +67,7 @@ static void dump_info(struct ir3_shader_variant *so, const char *str)
 static void
 insert_sorted(struct exec_list *var_list, nir_variable *new_var)
 {
-	nir_foreach_variable(var, var_list) {
+	nir_foreach_variable_in_list(var, var_list) {
 		if (var->data.location > new_var->data.location) {
 			exec_node_insert_node_before(&var->node, &new_var->node);
 			return;
@@ -77,21 +77,21 @@ insert_sorted(struct exec_list *var_list, nir_variable *new_var)
 }
 
 static void
-sort_varyings(struct exec_list *var_list)
+sort_varyings(nir_shader *nir, nir_variable_mode mode)
 {
 	struct exec_list new_list;
 	exec_list_make_empty(&new_list);
-	nir_foreach_variable_safe(var, var_list) {
+	nir_foreach_variable_with_modes_safe(var, nir, mode) {
 		exec_node_remove(&var->node);
 		insert_sorted(&new_list, var);
 	}
-	exec_list_move_nodes_to(&new_list, var_list);
+	exec_list_append(&nir->variables, &new_list);
 }
 
 static void
-fixup_varying_slots(struct exec_list *var_list)
+fixup_varying_slots(nir_shader *nir, nir_variable_mode mode)
 {
-	nir_foreach_variable(var, var_list) {
+	nir_foreach_variable_with_modes(var, nir, mode) {
 		if (var->data.location >= VARYING_SLOT_VAR0) {
 			var->data.location += 9;
 		} else if ((var->data.location >= VARYING_SLOT_TEX0) &&
@@ -147,26 +147,26 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
 
 	switch (stage) {
 	case MESA_SHADER_VERTEX:
-		nir_assign_var_locations(&nir->inputs,
+		nir_assign_var_locations(nir, nir_var_shader_in,
 				&nir->num_inputs,
 				ir3_glsl_type_size);
 
 		/* Re-lower global vars, to deal with any dead VS inputs. */
 		NIR_PASS_V(nir, nir_lower_global_vars_to_local);
 
-		sort_varyings(&nir->outputs);
-		nir_assign_var_locations(&nir->outputs,
+		sort_varyings(nir, nir_var_shader_out);
+		nir_assign_var_locations(nir, nir_var_shader_out,
 				&nir->num_outputs,
 				ir3_glsl_type_size);
-		fixup_varying_slots(&nir->outputs);
+		fixup_varying_slots(nir, nir_var_shader_out);
 		break;
 	case MESA_SHADER_FRAGMENT:
-		sort_varyings(&nir->inputs);
-		nir_assign_var_locations(&nir->inputs,
+		sort_varyings(nir, nir_var_shader_in);
+		nir_assign_var_locations(nir, nir_var_shader_in,
 				&nir->num_inputs,
 				ir3_glsl_type_size);
-		fixup_varying_slots(&nir->inputs);
-		nir_assign_var_locations(&nir->outputs,
+		fixup_varying_slots(nir, nir_var_shader_in);
+		nir_assign_var_locations(nir, nir_var_shader_out,
 				&nir->num_outputs,
 				ir3_glsl_type_size);
 		break;
@@ -177,13 +177,15 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
 		errx(1, "unhandled shader stage: %d", stage);
 	}
 
-	nir_assign_var_locations(&nir->uniforms,
+	nir_assign_var_locations(nir, nir_var_uniform,
 			&nir->num_uniforms,
 			ir3_glsl_type_size);
 
 	NIR_PASS_V(nir, nir_lower_system_values);
 	NIR_PASS_V(nir, nir_lower_frexp);
-	NIR_PASS_V(nir, nir_lower_io, nir_var_all, ir3_glsl_type_size, 0);
+	NIR_PASS_V(nir, nir_lower_io,
+	           nir_var_shader_in | nir_var_shader_out,
+	           ir3_glsl_type_size, (nir_lower_io_options)0);
 	NIR_PASS_V(nir, gl_nir_lower_samplers, prog);
 
 	return nir;
@@ -287,9 +289,8 @@ int main(int argc, char **argv)
 	/* TODO cmdline option to target different gpus: */
 	unsigned gpu_id = 320;
 	const char *info;
-	const char *entry;
+	const char *spirv_entry = NULL;
 	void *ptr;
-	bool from_spirv = false;
 	bool from_tgsi = false;
 	size_t size;
 
@@ -411,21 +412,20 @@ int main(int argc, char **argv)
 			if (num_files != 0)
 				errx(1, "in SPIR-V mode, only a single file may be specified");
 			stage = MESA_SHADER_COMPUTE;
-			from_spirv = true;
 			filenames[num_files++] = filename;
 			n++;
 			if (n == argc)
 				errx(1, "in SPIR-V mode, an entry point must be specified");
-			entry = argv[n];
+			spirv_entry = argv[n];
 			n++;
 		} else if (strcmp(ext, ".comp") == 0) {
-			if (from_tgsi || from_spirv)
+			if (from_tgsi || spirv_entry)
 				errx(1, "cannot mix GLSL/TGSI/SPIRV");
 			if (num_files >= ARRAY_SIZE(filenames))
 				errx(1, "too many GLSL files");
 			stage = MESA_SHADER_COMPUTE;
 		} else if (strcmp(ext, ".frag") == 0) {
-			if (from_tgsi || from_spirv)
+			if (from_tgsi || spirv_entry)
 				errx(1, "cannot mix GLSL/TGSI/SPIRV");
 			if (num_files >= ARRAY_SIZE(filenames))
 				errx(1, "too many GLSL files");
@@ -472,14 +472,15 @@ int main(int argc, char **argv)
 
 		nir = tgsi_to_nir_noscreen(toks, nir_options);
 		NIR_PASS_V(nir, nir_lower_global_vars_to_local);
-	} else if (from_spirv) {
-		nir = load_spirv(filenames[0], entry, stage);
+	} else if (spirv_entry) {
+		nir = load_spirv(filenames[0], spirv_entry, stage);
 
-		NIR_PASS_V(nir, nir_lower_io, nir_var_all, ir3_glsl_type_size,
-				(nir_lower_io_options)0);
+		NIR_PASS_V(nir, nir_lower_io,
+		           nir_var_shader_in | nir_var_shader_out,
+		           ir3_glsl_type_size, (nir_lower_io_options)0);
 
 		/* TODO do this somewhere else */
-		nir_lower_int64(nir, ~0);
+		nir_lower_int64(nir);
 		nir_lower_system_values(nir);
 	} else if (num_files > 0) {
 		nir = load_glsl(num_files, filenames, stage);

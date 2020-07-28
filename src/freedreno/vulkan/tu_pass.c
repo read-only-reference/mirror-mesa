@@ -29,12 +29,65 @@
 #include "vk_util.h"
 #include "vk_format.h"
 
+/* Return true if we have to fallback to sysmem rendering because the
+ * dependency can't be satisfied with tiled rendering.
+ */
+
+static bool
+dep_invalid_for_gmem(const VkSubpassDependency2 *dep)
+{
+   /* External dependencies don't matter here. */
+   if (dep->srcSubpass == VK_SUBPASS_EXTERNAL ||
+       dep->dstSubpass == VK_SUBPASS_EXTERNAL)
+      return false;
+
+   /* We can conceptually break down the process of rewriting a sysmem
+    * renderpass into a gmem one into two parts:
+    *
+    * 1. Split each draw and multisample resolve into N copies, one for each
+    * bin. (If hardware binning, add one more copy where the FS is disabled
+    * for the binning pass). This is always allowed because the vertex stage
+    * is allowed to run an arbitrary number of times and there are no extra
+    * ordering constraints within a draw.
+    * 2. Take the last copy of the second-to-last draw and slide it down to
+    * before the last copy of the last draw. Repeat for each earlier draw
+    * until the draw pass for the last bin is complete, then repeat for each
+    * earlier bin until we finish with the first bin.
+    *
+    * During this rearranging process, we can't slide draws past each other in
+    * a way that breaks the subpass dependencies. For each draw, we must slide
+    * it past (copies of) the rest of the draws in the renderpass. We can
+    * slide a draw past another if there isn't a dependency between them, or
+    * if the dependenc(ies) are dependencies between framebuffer-space stages
+    * only with the BY_REGION bit set. Note that this includes
+    * self-dependencies, since these may result in pipeline barriers that also
+    * break the rearranging process.
+    */
+
+   /* This is straight from the Vulkan 1.2 spec, section 6.1.4 "Framebuffer
+    * Region Dependencies":
+    */
+   const VkPipelineStageFlags framebuffer_space_stages =
+      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+   return
+      (dep->srcStageMask & ~framebuffer_space_stages) ||
+      (dep->dstStageMask & ~framebuffer_space_stages) ||
+      !(dep->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT);
+}
+
 static void
 tu_render_pass_add_subpass_dep(struct tu_render_pass *pass,
                                const VkSubpassDependency2 *dep)
 {
    uint32_t src = dep->srcSubpass;
    uint32_t dst = dep->dstSubpass;
+
+   if (dep_invalid_for_gmem(dep))
+      pass->gmem_pixels = 0;
 
    /* Ignore subpass self-dependencies as they allow the app to call
     * vkCmdPipelineBarrier() inside the render pass and the driver should only
@@ -289,7 +342,7 @@ static void
 tu_render_pass_gmem_config(struct tu_render_pass *pass,
                            const struct tu_physical_device *phys_dev)
 {
-   uint32_t block_align_shift = 4; /* log2(gmem_align/(tile_align_w*tile_align_h)) */
+   uint32_t block_align_shift = 3; /* log2(gmem_align/(tile_align_w*tile_align_h)) */
    uint32_t tile_align_w = phys_dev->tile_align_w;
    uint32_t gmem_align = (1 << block_align_shift) * tile_align_w * TILE_ALIGN_H;
 
@@ -533,8 +586,8 @@ tu_CreateRenderPass2(VkDevice _device,
    attachments_offset = size;
    size += pCreateInfo->attachmentCount * sizeof(pass->attachments[0]);
 
-   pass = vk_zalloc2(&device->alloc, pAllocator, size, 8,
-                    VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   pass = vk_object_zalloc(&device->vk, pAllocator, size,
+                           VK_OBJECT_TYPE_RENDER_PASS);
    if (pass == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -568,11 +621,11 @@ tu_CreateRenderPass2(VkDevice _device,
 
    if (subpass_attachment_count) {
       pass->subpass_attachments = vk_alloc2(
-         &device->alloc, pAllocator,
+         &device->vk.alloc, pAllocator,
          subpass_attachment_count * sizeof(struct tu_subpass_attachment), 8,
          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
       if (pass->subpass_attachments == NULL) {
-         vk_free2(&device->alloc, pAllocator, pass);
+         vk_object_free(&device->vk, pAllocator, pass);
          return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
       }
    } else
@@ -672,8 +725,8 @@ tu_DestroyRenderPass(VkDevice _device,
    if (!_pass)
       return;
 
-   vk_free2(&device->alloc, pAllocator, pass->subpass_attachments);
-   vk_free2(&device->alloc, pAllocator, pass);
+   vk_free2(&device->vk.alloc, pAllocator, pass->subpass_attachments);
+   vk_object_free(&device->vk, pAllocator, pass);
 }
 
 void

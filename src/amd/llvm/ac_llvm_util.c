@@ -78,10 +78,9 @@ static void ac_init_llvm_target()
 	LLVMParseCommandLineOptions(ARRAY_SIZE(argv), argv, NULL);
 }
 
-static once_flag ac_init_llvm_target_once_flag = ONCE_FLAG_INIT;
-
-void ac_init_llvm_once(void)
+PUBLIC void ac_init_llvm_once(void)
 {
+	static once_flag ac_init_llvm_target_once_flag = ONCE_FLAG_INIT;
 	call_once(&ac_init_llvm_target_once_flag, ac_init_llvm_target);
 }
 
@@ -157,7 +156,8 @@ const char *ac_get_llvm_processor_name(enum radeon_family family)
 		return "gfx1011";
 	case CHIP_NAVI14:
 		return "gfx1012";
-	case CHIP_SIENNA:
+	case CHIP_SIENNA_CICHLID:
+	case CHIP_NAVY_FLOUNDER:
 		return "gfx1030";
 	default:
 		return "";

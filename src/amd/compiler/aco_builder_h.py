@@ -69,6 +69,13 @@ dpp_row_sr(unsigned amount)
     return (dpp_ctrl)(((unsigned) _dpp_row_sr) | amount);
 }
 
+inline dpp_ctrl
+dpp_row_rr(unsigned amount)
+{
+    assert(amount > 0 && amount < 16);
+    return (dpp_ctrl)(((unsigned) _dpp_row_rr) | amount);
+}
+
 inline unsigned
 ds_pattern_bitmode(unsigned and_mask, unsigned or_mask, unsigned xor_mask)
 {
@@ -169,8 +176,9 @@ public:
    std::vector<aco_ptr<Instruction>> *instructions;
    std::vector<aco_ptr<Instruction>>::iterator it;
    bool is_precise = false;
+   bool is_nuw = false;
 
-   Builder(Program *pgm) : program(pgm), use_iterator(false), start(false), lm(pgm->lane_mask), instructions(NULL) {}
+   Builder(Program *pgm) : program(pgm), use_iterator(false), start(false), lm(pgm ? pgm->lane_mask : s2), instructions(NULL) {}
    Builder(Program *pgm, Block *block) : program(pgm), use_iterator(false), start(false), lm(pgm ? pgm->lane_mask : s2), instructions(&block->instructions) {}
    Builder(Program *pgm, std::vector<aco_ptr<Instruction>> *instrs) : program(pgm), use_iterator(false), start(false), lm(pgm ? pgm->lane_mask : s2), instructions(instrs) {}
 
@@ -179,6 +187,12 @@ public:
       res.is_precise = true;
       return res;
    };
+
+   Builder nuw() const {
+      Builder res = *this;
+      res.is_nuw = true;
+      return res;
+   }
 
    void moveEnd(Block *block) {
       instructions = &block->instructions;
@@ -545,8 +559,9 @@ formats = [("pseudo", [Format.PSEUDO], 'Pseudo_instruction', list(itertools.prod
            ("vopc_e64", [Format.VOPC, Format.VOP3A], 'VOP3A_instruction', itertools.product([1, 2], [2])),
            ("flat", [Format.FLAT], 'FLAT_instruction', [(0, 3), (1, 2)]),
            ("global", [Format.GLOBAL], 'FLAT_instruction', [(0, 3), (1, 2)])]
+formats = [(f if len(f) == 5 else f + ('',)) for f in formats]
 %>\\
-% for name, formats, struct, shapes in formats:
+% for name, formats, struct, shapes, extra_field_setup in formats:
     % for num_definitions, num_operands in shapes:
         <%
         args = ['aco_opcode opcode']
@@ -564,6 +579,7 @@ formats = [("pseudo", [Format.PSEUDO], 'Pseudo_instruction', list(itertools.prod
         % for i in range(num_definitions):
             instr->definitions[${i}] = def${i};
             instr->definitions[${i}].setPrecise(is_precise);
+            instr->definitions[${i}].setNUW(is_nuw);
         % endfor
         % for i in range(num_operands):
             instr->operands[${i}] = op${i}.op;
@@ -574,6 +590,7 @@ formats = [("pseudo", [Format.PSEUDO], 'Pseudo_instruction', list(itertools.prod
             % endfor
             ${f.get_builder_initialization(num_operands)}
         % endfor
+       ${extra_field_setup}
       return insert(instr);
    }
 

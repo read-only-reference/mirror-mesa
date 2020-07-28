@@ -303,7 +303,7 @@ _eglReleaseDisplayResources(_EGLDriver *drv, _EGLDisplay *display)
       list = list->Next;
 
       _eglUnlinkContext(ctx);
-      drv->API.DestroyContext(drv, display, ctx);
+      drv->DestroyContext(drv, display, ctx);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_CONTEXT]);
 
@@ -313,7 +313,7 @@ _eglReleaseDisplayResources(_EGLDriver *drv, _EGLDisplay *display)
       list = list->Next;
 
       _eglUnlinkSurface(surf);
-      drv->API.DestroySurface(drv, display, surf);
+      drv->DestroySurface(drv, display, surf);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_SURFACE]);
 
@@ -323,7 +323,7 @@ _eglReleaseDisplayResources(_EGLDriver *drv, _EGLDisplay *display)
       list = list->Next;
 
       _eglUnlinkImage(image);
-      drv->API.DestroyImageKHR(drv, display, image);
+      drv->DestroyImageKHR(drv, display, image);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_IMAGE]);
 
@@ -333,7 +333,7 @@ _eglReleaseDisplayResources(_EGLDriver *drv, _EGLDisplay *display)
       list = list->Next;
 
       _eglUnlinkSync(sync);
-      drv->API.DestroySyncKHR(drv, display, sync);
+      drv->DestroySyncKHR(drv, display, sync);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_SYNC]);
 }
@@ -534,7 +534,6 @@ _eglGetWaylandDisplay(struct wl_display *native_display,
 }
 #endif /* HAVE_WAYLAND_PLATFORM */
 
-#ifdef HAVE_SURFACELESS_PLATFORM
 _EGLDisplay*
 _eglGetSurfacelessDisplay(void *native_display,
                           const EGLAttrib *attrib_list)
@@ -554,7 +553,6 @@ _eglGetSurfacelessDisplay(void *native_display,
    return _eglFindDisplay(_EGL_PLATFORM_SURFACELESS, native_display,
                           attrib_list);
 }
-#endif /* HAVE_SURFACELESS_PLATFORM */
 
 #ifdef HAVE_ANDROID_PLATFORM
 _EGLDisplay*

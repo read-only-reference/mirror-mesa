@@ -679,14 +679,14 @@ radv_nir_shader_info_pass(const struct nir_shader *nir,
 		info->loads_dynamic_offsets = true;
 	}
 
-	nir_foreach_variable(variable, &nir->inputs)
+	nir_foreach_shader_in_variable(variable, nir)
 		gather_info_input_decl(nir, variable, info, key);
 
 	nir_foreach_block(block, func->impl) {
 		gather_info_block(nir, block, info);
 	}
 
-	nir_foreach_variable(variable, &nir->outputs)
+	nir_foreach_shader_out_variable(variable, nir)
 		gather_info_output_decl(nir, variable, info, key);
 
 	if (nir->info.stage == MESA_SHADER_VERTEX ||
@@ -846,6 +846,18 @@ radv_nir_shader_info_pass(const struct nir_shader *nir,
 	info->float_controls_mode = nir->info.float_controls_execution_mode;
 
 	if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+		/* If the i-th output is used, all previous outputs must be
+		 * non-zero to match the target format.
+		 * TODO: compact MRT to avoid holes and to remove this
+		 * workaround.
+		 */
+		unsigned num_targets = (util_last_bit(info->ps.cb_shader_mask) + 3) / 4;
+		for (unsigned i = 0; i < num_targets; i++) {
+			if (!(info->ps.cb_shader_mask & (0xf << (i * 4)))) {
+				info->ps.cb_shader_mask |= 0xf << (i * 4);
+			}
+		}
+
 		if (key->fs.is_dual_src) {
 			info->ps.cb_shader_mask |= (info->ps.cb_shader_mask & 0xf) << 4;
 		}

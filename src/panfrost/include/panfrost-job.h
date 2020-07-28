@@ -92,6 +92,10 @@ enum mali_func {
 /* Flags apply to unknown2_3? */
 
 #define MALI_HAS_MSAA		(1 << 0)
+
+/* Execute fragment shader per-sample if set (e.g. to implement gl_SampleID
+ * reads) */
+#define MALI_PER_SAMPLE         (1 << 2)
 #define MALI_CAN_DISCARD 	(1 << 5)
 
 /* Applies on SFBD systems, specifying that programmable blending is in use */
@@ -110,8 +114,7 @@ enum mali_func {
 /* Next flags to unknown2_4 */
 #define MALI_STENCIL_TEST      	(1 << 0)
 
-/* What?! */
-#define MALI_SAMPLE_ALPHA_TO_COVERAGE_NO_BLEND_SHADER (1 << 1)
+#define MALI_ALPHA_TO_COVERAGE (1 << 1)
 
 #define MALI_NO_DITHER		(1 << 9)
 #define MALI_DEPTH_RANGE_A	(1 << 12)
@@ -282,15 +285,35 @@ struct mali_channel_swizzle {
 #define MALI_EXTRACT_BITS(fmt) (fmt & 0x7)
 
 enum mali_format {
+        /* Not all formats are in fact available, need to query dynamically to
+         * check. Factory settings for Juno enables only ETC2 and ASTC, no
+         * DXT/RGTC formats.
+         * */
+
+        /* 0x0 invalid */
 	MALI_ETC2_RGB8       = MALI_FORMAT_COMPRESSED | 0x1,
 	MALI_ETC2_R11_UNORM  = MALI_FORMAT_COMPRESSED | 0x2,
 	MALI_ETC2_RGBA8      = MALI_FORMAT_COMPRESSED | 0x3,
 	MALI_ETC2_RG11_UNORM = MALI_FORMAT_COMPRESSED | 0x4,
-	MALI_ETC2_R11_SNORM  = MALI_FORMAT_COMPRESSED | 0x11,
-	MALI_ETC2_RG11_SNORM = MALI_FORMAT_COMPRESSED | 0x12,
+        /* 0x5 reserved */
+        MALI_NXR             = MALI_FORMAT_COMPRESSED | 0x6, /* Nokia eXtended Range */
+        MALI_BC1_UNORM       = MALI_FORMAT_COMPRESSED | 0x7, /* DXT1 */
+        MALI_BC2_UNORM       = MALI_FORMAT_COMPRESSED | 0x8, /* DXT3 */
+        MALI_BC3_UNORM       = MALI_FORMAT_COMPRESSED | 0x9, /* DXT5 */
+        MALI_BC4_UNORM       = MALI_FORMAT_COMPRESSED | 0xA, /* RGTC1_UNORM */
+        MALI_BC4_SNORM       = MALI_FORMAT_COMPRESSED | 0xB, /* RGTC1_SNORM */
+        MALI_BC5_UNORM       = MALI_FORMAT_COMPRESSED | 0xC, /* RGTC2_UNORM */
+        MALI_BC5_SNORM       = MALI_FORMAT_COMPRESSED | 0xD, /* RGTC2_SNORM */
+        MALI_BC6H_UF16       = MALI_FORMAT_COMPRESSED | 0xE,
+        MALI_BC6H_SF16       = MALI_FORMAT_COMPRESSED | 0xF,
+        MALI_BC7_UNORM       = MALI_FORMAT_COMPRESSED | 0x10,
+	MALI_ETC2_R11_SNORM  = MALI_FORMAT_COMPRESSED | 0x11, /* EAC_SNORM */
+	MALI_ETC2_RG11_SNORM = MALI_FORMAT_COMPRESSED | 0x12, /* EAC_SNORM */
 	MALI_ETC2_RGB8A1     = MALI_FORMAT_COMPRESSED | 0x13,
-	MALI_ASTC_SRGB_SUPP  = MALI_FORMAT_COMPRESSED | 0x16,
-	MALI_ASTC_HDR_SUPP   = MALI_FORMAT_COMPRESSED | 0x17,
+	MALI_ASTC_3D_LDR     = MALI_FORMAT_COMPRESSED | 0x14,
+	MALI_ASTC_3D_HDR     = MALI_FORMAT_COMPRESSED | 0x15,
+	MALI_ASTC_2D_LDR     = MALI_FORMAT_COMPRESSED | 0x16,
+	MALI_ASTC_2D_HDR     = MALI_FORMAT_COMPRESSED | 0x17,
 
 	MALI_RGB565         = MALI_FORMAT_SPECIAL | 0x0,
 	MALI_RGB5_X1_UNORM  = MALI_FORMAT_SPECIAL | 0x1,
@@ -384,13 +407,6 @@ enum mali_format {
 };
 
 
-/* Alpha coverage is encoded as 4-bits (from a clampf), with inversion
- * literally performing a bitwise invert. This function produces slightly wrong
- * results and I'm not sure why; some rounding issue I suppose... */
-
-#define MALI_ALPHA_COVERAGE(clampf) ((uint16_t) (int) (clampf * 15.0f))
-#define MALI_GET_ALPHA_COVERAGE(nibble) ((float) nibble / 15.0f)
-
 /* Applies to midgard1.flags_lo */
 
 /* Should be set when the fragment shader updates the depth value. */
@@ -421,7 +437,7 @@ enum mali_format {
  * are side effects, hence it interacts with early-z. */
 #define MALI_WRITES_GLOBAL (1 << 9)
 
-#define MALI_READS_TILEBUFFER (1 << 12)
+#define MALI_READS_TILEBUFFER (1 << 10)
 
 /* Applies to midgard1.flags_hi */
 
@@ -610,7 +626,11 @@ struct mali_shader_meta {
 
         u32 unknown2_2;
 
-        u16 alpha_coverage;
+        /* Generated from SAMPLE_COVERAGE_VALUE and SAMPLE_COVERAGE_INVERT. See
+         * 13.8.3 ("Multisample Fragment Operations") in the OpenGL ES 3.2
+         * specification. Only matters when multisampling is enabled. */
+        u16 coverage_mask;
+
         u16 unknown2_3;
 
         u8 stencil_mask_front;
@@ -1673,8 +1693,12 @@ struct mali_single_framebuffer {
         /* More below this, maybe */
 } __attribute__((packed));
 
-/* Format bits for the render target flags */
+/* Format bits for the render target flags. Setting MSAA alone works for on
+ * chip MSAA. Setting MSAA with the LAYERED flag works for MSAA where each
+ * sample is its own image (implements the ES3 spec directly but inefficient on
+ * mobile). */
 
+#define MALI_MFBD_FORMAT_LAYERED  (1 << 0)
 #define MALI_MFBD_FORMAT_MSAA 	  (1 << 1)
 #define MALI_MFBD_FORMAT_SRGB 	  (1 << 2)
 
@@ -1734,8 +1758,8 @@ struct mali_render_target {
         mali_ptr framebuffer;
 
         u32 zero2 : 4;
-        u32 framebuffer_stride : 28; // in units of bytes
-        u32 zero3;
+        u32 framebuffer_stride : 28; // in units of bytes, row to next
+        u32 layer_stride; /* For multisample rendering */
 
         u32 clear_color_1; // RGBA8888 from glClear, actually used by hardware
         u32 clear_color_2; // always equal, but unclear function?
@@ -1753,7 +1777,7 @@ struct mali_render_target {
  */
 
 /* flags_hi */
-#define MALI_EXTRA_PRESENT      (0x10)
+#define MALI_EXTRA_PRESENT      (0x1)
 
 /* flags_lo */
 #define MALI_EXTRA_ZS           (0x4)
@@ -1765,7 +1789,11 @@ struct mali_framebuffer_extra  {
 
         unsigned flags_lo : 4;
         enum mali_block_format zs_block : 2;
-        unsigned flags_hi : 26;
+
+        /* Number of samples in Z/S attachment, MALI_POSITIVE. So zero for
+         * 1-sample (non-MSAA), 0x3 for MSAA 4x, etc */
+        unsigned zs_samples : 4;
+        unsigned flags_hi : 22;
 
         union {
                 /* Note: AFBC is only allowed for 24/8 combined depth/stencil. */
@@ -1784,12 +1812,12 @@ struct mali_framebuffer_extra  {
                         mali_ptr depth;
                         u32 depth_stride_zero : 4;
                         u32 depth_stride : 28;
-                        u32 zero1;
+                        u32 depth_layer_stride;
 
                         mali_ptr stencil;
                         u32 stencil_stride_zero : 4;
                         u32 stencil_stride : 28;
-                        u32 zero2;
+                        u32 stencil_layer_stride;
                 } ds_linear;
         };
 
@@ -1821,8 +1849,8 @@ struct mali_framebuffer {
         u32 zero3;
         u16 width2, height2;
         u32 unk1 : 19; // = 0x01000
-        u32 rt_count_1 : 2; // off-by-one (use MALI_POSITIVE)
-        u32 unk2 : 3; // = 0
+        u32 rt_count_1 : 3; // off-by-one (use MALI_POSITIVE)
+        u32 unk2 : 2; // = 0
         u32 rt_count_2 : 3; // no off-by-one
         u32 zero4 : 5;
         /* 0x30 */

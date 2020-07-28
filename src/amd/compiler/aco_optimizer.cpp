@@ -83,7 +83,7 @@ enum Label {
    label_add_sub = 1 << 17,
    label_bitwise = 1 << 18,
    label_minmax = 1 << 19,
-   label_fcmp = 1 << 20,
+   label_vopc = 1 << 20,
    label_uniform_bool = 1 << 21,
    label_constant_64bit = 1 << 22,
    label_uniform_bitwise = 1 << 23,
@@ -95,7 +95,7 @@ enum Label {
 };
 
 static constexpr uint64_t instr_labels = label_vec | label_mul | label_mad | label_omod_success | label_clamp_success |
-                                         label_add_sub | label_bitwise | label_uniform_bitwise | label_minmax | label_fcmp;
+                                         label_add_sub | label_bitwise | label_uniform_bitwise | label_minmax | label_vopc;
 static constexpr uint64_t temp_labels = label_abs | label_neg | label_temp | label_vcc | label_b2f | label_uniform_bool |
                                         label_omod2 | label_omod4 | label_omod5 | label_clamp | label_scc_invert | label_b2i;
 static constexpr uint32_t val_labels = label_constant_32bit | label_constant_64bit | label_constant_16bit | label_literal;
@@ -430,15 +430,15 @@ struct ssa_info {
       return label & label_minmax;
    }
 
-   void set_fcmp(Instruction *fcmp_instr)
+   void set_vopc(Instruction *vopc_instr)
    {
-      add_label(label_fcmp);
-      instr = fcmp_instr;
+      add_label(label_vopc);
+      instr = vopc_instr;
    }
 
-   bool is_fcmp()
+   bool is_vopc()
    {
-      return label & label_fcmp;
+      return label & label_vopc;
    }
 
    void set_scc_needed()
@@ -524,6 +524,10 @@ bool can_swap_operands(aco_ptr<Instruction>& instr)
       return false;
 
    switch (instr->opcode) {
+   case aco_opcode::v_add_u32:
+   case aco_opcode::v_add_co_u32:
+   case aco_opcode::v_add_co_u32_e64:
+   case aco_opcode::v_add_i32:
    case aco_opcode::v_add_f16:
    case aco_opcode::v_add_f32:
    case aco_opcode::v_mul_f16:
@@ -711,7 +715,7 @@ bool check_vop3_operands(opt_ctx& ctx, unsigned num_operands, Operand *operands)
    return true;
 }
 
-bool parse_base_offset(opt_ctx &ctx, Instruction* instr, unsigned op_index, Temp *base, uint32_t *offset)
+bool parse_base_offset(opt_ctx &ctx, Instruction* instr, unsigned op_index, Temp *base, uint32_t *offset, bool prevent_overflow)
 {
    Operand op = instr->operands[op_index];
 
@@ -733,6 +737,8 @@ bool parse_base_offset(opt_ctx &ctx, Instruction* instr, unsigned op_index, Temp
    default:
       return false;
    }
+   if (prevent_overflow && !add_instr->definitions[0].isNUW())
+      return false;
 
    if (add_instr->usesModifiers())
       return false;
@@ -750,7 +756,7 @@ bool parse_base_offset(opt_ctx &ctx, Instruction* instr, unsigned op_index, Temp
          continue;
 
       uint32_t offset2 = 0;
-      if (parse_base_offset(ctx, add_instr, !i, base, &offset2)) {
+      if (parse_base_offset(ctx, add_instr, !i, base, &offset2, prevent_overflow)) {
          *offset += offset2;
       } else {
          *base = add_instr->operands[!i].getTemp();
@@ -923,6 +929,15 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
          while (info.is_temp())
             info = ctx.info[info.temp.id()];
 
+         /* According to AMDGPUDAGToDAGISel::SelectMUBUFScratchOffen(), vaddr
+          * overflow for scratch accesses works only on GFX9+ and saddr overflow
+          * never works. Since swizzling is the only thing that separates
+          * scratch accesses and other accesses and swizzling changing how
+          * addressing works significantly, this probably applies to swizzled
+          * MUBUF accesses. */
+         bool vaddr_prevent_overflow = mubuf->swizzled && ctx.program->chip_class < GFX9;
+         bool saddr_prevent_overflow = mubuf->swizzled;
+
          if (mubuf->offen && i == 1 && info.is_constant_or_literal(32) && mubuf->offset + info.val < 4096) {
             assert(!mubuf->idxen);
             instr->operands[1] = Operand(v1);
@@ -933,12 +948,14 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
             instr->operands[2] = Operand((uint32_t) 0);
             mubuf->offset += info.val;
             continue;
-         } else if (mubuf->offen && i == 1 && parse_base_offset(ctx, instr.get(), i, &base, &offset) && base.regClass() == v1 && mubuf->offset + offset < 4096) {
+         } else if (mubuf->offen && i == 1 && parse_base_offset(ctx, instr.get(), i, &base, &offset, vaddr_prevent_overflow) &&
+                    base.regClass() == v1 && mubuf->offset + offset < 4096) {
             assert(!mubuf->idxen);
             instr->operands[1].setTemp(base);
             mubuf->offset += offset;
             continue;
-         } else if (i == 2 && parse_base_offset(ctx, instr.get(), i, &base, &offset) && base.regClass() == s1 && mubuf->offset + offset < 4096) {
+         } else if (i == 2 && parse_base_offset(ctx, instr.get(), i, &base, &offset, saddr_prevent_overflow) &&
+                    base.regClass() == s1 && mubuf->offset + offset < 4096) {
             instr->operands[i].setTemp(base);
             mubuf->offset += offset;
             continue;
@@ -953,7 +970,7 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
          uint32_t offset;
          bool has_usable_ds_offset = ctx.program->chip_class >= GFX7;
          if (has_usable_ds_offset &&
-             i == 0 && parse_base_offset(ctx, instr.get(), i, &base, &offset) &&
+             i == 0 && parse_base_offset(ctx, instr.get(), i, &base, &offset, false) &&
              base.regClass() == instr->operands[i].regClass() &&
              instr->opcode != aco_opcode::ds_swizzle_b32) {
             if (instr->opcode == aco_opcode::ds_write2_b32 || instr->opcode == aco_opcode::ds_read2_b32 ||
@@ -983,13 +1000,14 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
          SMEM_instruction *smem = static_cast<SMEM_instruction *>(instr.get());
          Temp base;
          uint32_t offset;
+         bool prevent_overflow = smem->operands[0].size() > 2 || smem->prevent_overflow;
          if (i == 1 && info.is_constant_or_literal(32) &&
              ((ctx.program->chip_class == GFX6 && info.val <= 0x3FF) ||
               (ctx.program->chip_class == GFX7 && info.val <= 0xFFFFFFFF) ||
               (ctx.program->chip_class >= GFX8 && info.val <= 0xFFFFF))) {
             instr->operands[i] = Operand(info.val);
             continue;
-         } else if (i == 1 && parse_base_offset(ctx, instr.get(), i, &base, &offset) && base.regClass() == s1 && offset <= 0xFFFFF && ctx.program->chip_class >= GFX9) {
+         } else if (i == 1 && parse_base_offset(ctx, instr.get(), i, &base, &offset, prevent_overflow) && base.regClass() == s1 && offset <= 0xFFFFF && ctx.program->chip_class >= GFX9) {
             bool soe = smem->operands.size() >= (!smem->definitions.empty() ? 3 : 4);
             if (soe &&
                 (!ctx.info[smem->operands.back().tempId()].is_constant_or_literal(32) ||
@@ -1008,8 +1026,7 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
                new_instr->operands.back() = Operand(base);
                if (!smem->definitions.empty())
                   new_instr->definitions[0] = smem->definitions[0];
-               new_instr->can_reorder = smem->can_reorder;
-               new_instr->barrier = smem->barrier;
+               new_instr->sync = smem->sync;
                new_instr->glc = smem->glc;
                new_instr->dlc = smem->dlc;
                new_instr->nv = smem->nv;
@@ -1033,6 +1050,11 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
    /* if this instruction doesn't define anything, return */
    if (instr->definitions.empty())
       return;
+
+   if ((uint16_t) instr->format & (uint16_t) Format::VOPC) {
+      ctx.info[instr->definitions[0].tempId()].set_vopc(instr.get());
+      return;
+   }
 
    switch (instr->opcode) {
    case aco_opcode::p_create_vector: {
@@ -1351,6 +1373,14 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
             ctx.info[instr->definitions[1].tempId()].set_temp(ctx.info[instr->operands[0].tempId()].instr->definitions[1].getTemp());
             ctx.info[instr->definitions[0].tempId()].set_uniform_bool(ctx.info[instr->operands[0].tempId()].instr->definitions[1].getTemp());
             break;
+         } else if (ctx.info[instr->operands[0].tempId()].is_vopc()) {
+            Instruction* vopc_instr = ctx.info[instr->operands[0].tempId()].instr;
+            /* Remove superfluous s_and when the VOPC instruction uses the same exec and thus already produces the same result */
+            if (vopc_instr->pass_flags == instr->pass_flags) {
+               assert(instr->pass_flags > 0);
+               ctx.info[instr->definitions[0].tempId()].set_temp(vopc_instr->definitions[0].getTemp());
+               break;
+            }
          }
       }
       /* fallthrough */
@@ -1382,28 +1412,6 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
    case aco_opcode::v_max_u16:
    case aco_opcode::v_max_i16:
       ctx.info[instr->definitions[0].tempId()].set_minmax(instr.get());
-      break;
-   #define CMP(cmp) \
-   case aco_opcode::v_cmp_##cmp##_f16:\
-   case aco_opcode::v_cmp_##cmp##_f32:\
-   case aco_opcode::v_cmp_##cmp##_f64:\
-   case aco_opcode::v_cmp_n##cmp##_f16:\
-   case aco_opcode::v_cmp_n##cmp##_f32:\
-   case aco_opcode::v_cmp_n##cmp##_f64:
-   CMP(lt)
-   CMP(eq)
-   CMP(le)
-   CMP(gt)
-   CMP(lg)
-   CMP(ge)
-   case aco_opcode::v_cmp_o_f16:
-   case aco_opcode::v_cmp_u_f16:
-   case aco_opcode::v_cmp_o_f32:
-   case aco_opcode::v_cmp_u_f32:
-   case aco_opcode::v_cmp_o_f64:
-   case aco_opcode::v_cmp_u_f64:
-   #undef CMP
-      ctx.info[instr->definitions[0].tempId()].set_fcmp(instr.get());
       break;
    case aco_opcode::s_cselect_b64:
    case aco_opcode::s_cselect_b32:
@@ -1642,7 +1650,7 @@ bool combine_ordering_test(opt_ctx &ctx, aco_ptr<Instruction>& instr)
    new_instr->definitions[0] = instr->definitions[0];
 
    ctx.info[instr->definitions[0].tempId()].label = 0;
-   ctx.info[instr->definitions[0].tempId()].set_fcmp(new_instr);
+   ctx.info[instr->definitions[0].tempId()].set_vopc(new_instr);
 
    instr.reset(new_instr);
 
@@ -1712,7 +1720,7 @@ bool combine_comparison_ordering(opt_ctx &ctx, aco_ptr<Instruction>& instr)
    new_instr->definitions[0] = instr->definitions[0];
 
    ctx.info[instr->definitions[0].tempId()].label = 0;
-   ctx.info[instr->definitions[0].tempId()].set_fcmp(new_instr);
+   ctx.info[instr->definitions[0].tempId()].set_vopc(new_instr);
 
    instr.reset(new_instr);
 
@@ -1815,7 +1823,7 @@ bool combine_constant_comparison_ordering(opt_ctx &ctx, aco_ptr<Instruction>& in
    new_instr->definitions[0] = instr->definitions[0];
 
    ctx.info[instr->definitions[0].tempId()].label = 0;
-   ctx.info[instr->definitions[0].tempId()].set_fcmp(new_instr);
+   ctx.info[instr->definitions[0].tempId()].set_vopc(new_instr);
 
    instr.reset(new_instr);
 
@@ -1864,7 +1872,7 @@ bool combine_inverse_comparison(opt_ctx &ctx, aco_ptr<Instruction>& instr)
    new_instr->definitions[0] = instr->definitions[0];
 
    ctx.info[instr->definitions[0].tempId()].label = 0;
-   ctx.info[instr->definitions[0].tempId()].set_fcmp(new_instr);
+   ctx.info[instr->definitions[0].tempId()].set_vopc(new_instr);
 
    instr.reset(new_instr);
 

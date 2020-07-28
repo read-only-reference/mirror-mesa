@@ -21,13 +21,6 @@ actions:
 - deploy:
     timeout:
       minutes: 10
-{% if boot_method == "fastboot" %}
-{# fastboot has just one boot image with the dtb and rootfs packed in #}
-    to: fastboot
-    images:
-      boot:
-        url: {{ base_artifacts_url }}/{{ kernel_image_name }}
-{% else %}
     to: tftp
     kernel:
       url: {{ base_artifacts_url }}/{{ kernel_image_name }}
@@ -35,10 +28,11 @@ actions:
       {{ kernel_image_type }}
 {% endif %}
     ramdisk:
-      url: {{ base_artifacts_url }}/lava-rootfs-{{ arch }}.cpio.gz
+      url: {{ base_artifacts_url }}/lava-rootfs.cpio.gz
       compression: gz
+{% if dtb %}
     dtb:
-      url: {{ base_artifacts_url }}/{{ device_type }}.dtb
+      url: {{ base_artifacts_url }}/{{ dtb }}.dtb
 {% endif %}
     os: oe
 - boot:
@@ -78,6 +72,9 @@ actions:
           - mount -t devtmpfs none /dev || echo possibly already mounted
           - mkdir -p /dev/pts
           - mount -t devpts devpts /dev/pts
+          - echo "nameserver 8.8.8.8" > /etc/resolv.conf
+          - for i in 1 2 3; do sntp -sS pool.ntp.org && break || sleep 2; done
+
 
 {% if env_vars %}
           - export {{ env_vars }}
@@ -85,6 +82,8 @@ actions:
 
           # deqp-runner.sh assumes some stuff is in pwd
           - cd /
+
+          - wget -S --progress=dot:giga -O- {{ mesa_url }} | tar -xz
 
           - export DEQP_NO_SAVE_RESULTS=1
           - 'export DEQP_RUNNER_OPTIONS="--shuffle false"'

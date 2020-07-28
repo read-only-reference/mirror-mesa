@@ -66,7 +66,7 @@ class Format(Enum):
          return [('uint32_t', 'block', '-1'),
                  ('uint32_t', 'imm', '0')]
       elif self == Format.SMEM:
-         return [('bool', 'can_reorder', 'true'),
+         return [('memory_sync_info', 'sync', 'memory_sync_info()'),
                  ('bool', 'glc', 'false'),
                  ('bool', 'dlc', 'false'),
                  ('bool', 'nv', 'false')]
@@ -88,6 +88,7 @@ class Format(Enum):
       elif self == Format.MUBUF:
          return [('unsigned', 'offset', None),
                  ('bool', 'offen', None),
+                 ('bool', 'swizzled', 'false'),
                  ('bool', 'idxen', 'false'),
                  ('bool', 'addr64', 'false'),
                  ('bool', 'disable_wqm', 'false'),
@@ -122,6 +123,9 @@ class Format(Enum):
       elif self == Format.PSEUDO_REDUCTION:
          return [('ReduceOp', 'op', None, 'reduce_op'),
                  ('unsigned', 'cluster_size', '0')]
+      elif self == Format.PSEUDO_BARRIER:
+         return [('memory_sync_info', 'sync', None),
+                 ('sync_scope', 'exec_scope', 'scope_invocation')]
       elif self == Format.VINTRP:
          return [('unsigned', 'attribute', None),
                  ('unsigned', 'component', None)]
@@ -129,10 +133,10 @@ class Format(Enum):
          return [('uint16_t', 'dpp_ctrl', None),
                  ('uint8_t', 'row_mask', '0xF'),
                  ('uint8_t', 'bank_mask', '0xF'),
-                 ('bool', 'bound_ctrl', 'false')]
+                 ('bool', 'bound_ctrl', 'true')]
       elif self in [Format.FLAT, Format.GLOBAL, Format.SCRATCH]:
          return [('uint16_t', 'offset', 0),
-                 ('bool', 'can_reorder', 'true'),
+                 ('memory_sync_info', 'sync', 'memory_sync_info()'),
                  ('bool', 'glc', 'false'),
                  ('bool', 'slc', 'false'),
                  ('bool', 'lds', 'false'),
@@ -242,6 +246,7 @@ opcode("p_startpgm")
 opcode("p_phi")
 opcode("p_linear_phi")
 opcode("p_as_uniform")
+opcode("p_unit_test")
 
 opcode("p_create_vector")
 opcode("p_extract_vector")
@@ -264,13 +269,7 @@ opcode("p_cbranch", format=Format.PSEUDO_BRANCH)
 opcode("p_cbranch_z", format=Format.PSEUDO_BRANCH)
 opcode("p_cbranch_nz", format=Format.PSEUDO_BRANCH)
 
-opcode("p_memory_barrier_common", format=Format.PSEUDO_BARRIER) # atomic, buffer, image and shared
-opcode("p_memory_barrier_atomic", format=Format.PSEUDO_BARRIER)
-opcode("p_memory_barrier_buffer", format=Format.PSEUDO_BARRIER)
-opcode("p_memory_barrier_image", format=Format.PSEUDO_BARRIER)
-opcode("p_memory_barrier_shared", format=Format.PSEUDO_BARRIER)
-opcode("p_memory_barrier_gs_data", format=Format.PSEUDO_BARRIER)
-opcode("p_memory_barrier_gs_sendmsg", format=Format.PSEUDO_BARRIER)
+opcode("p_barrier", format=Format.PSEUDO_BARRIER)
 
 opcode("p_spill")
 opcode("p_reload")
@@ -672,6 +671,7 @@ VOP2 = {
    (0x1f, 0x1f, 0x16, 0x16, 0x1f, "v_mac_f32", True),
    (0x20, 0x20, 0x17, 0x17, 0x20, "v_madmk_f32", False),
    (0x21, 0x21, 0x18, 0x18, 0x21, "v_madak_f32", False),
+   (0x24, 0x24,   -1,   -1,   -1, "v_mbcnt_hi_u32_b32", False),
    (0x25, 0x25, 0x19, 0x19,   -1, "v_add_co_u32", False), # VOP3B only in RDNA
    (0x26, 0x26, 0x1a, 0x1a,   -1, "v_sub_co_u32", False), # VOP3B only in RDNA
    (0x27, 0x27, 0x1b, 0x1b,   -1, "v_subrev_co_u32", False), # VOP3B only in RDNA
@@ -733,6 +733,7 @@ VOP1 = {
    (0x08, 0x08, 0x08, 0x08, 0x08, "v_cvt_i32_f32", True, False),
    (0x09, 0x09,   -1,   -1, 0x09, "v_mov_fed_b32", True, False), # LLVM mentions it for GFX8_9
    (0x0a, 0x0a, 0x0a, 0x0a, 0x0a, "v_cvt_f16_f32", True, True),
+   (  -1,   -1,   -1,   -1,   -1, "p_cvt_f16_f32_rtne", True, True),
    (0x0b, 0x0b, 0x0b, 0x0b, 0x0b, "v_cvt_f32_f16", True, True),
    (0x0c, 0x0c, 0x0c, 0x0c, 0x0c, "v_cvt_rpi_i32_f32", True, False),
    (0x0d, 0x0d, 0x0d, 0x0d, 0x0d, "v_cvt_flr_i32_f32", True, False),
@@ -1042,7 +1043,7 @@ VOP3 = {
    (   -1,    -1, 0x28a, 0x28a, 0x361, "v_writelane_b32_e64", False, False),
    (0x122, 0x122, 0x28b, 0x28b, 0x364, "v_bcnt_u32_b32", False, False),
    (0x123, 0x123, 0x28c, 0x28c, 0x365, "v_mbcnt_lo_u32_b32", False, False),
-   (0x124, 0x124, 0x28d, 0x28d, 0x366, "v_mbcnt_hi_u32_b32", False, False),
+   (   -1,    -1, 0x28d, 0x28d, 0x366, "v_mbcnt_hi_u32_b32_e64", False, False),
    (   -1,    -1, 0x28f, 0x28f, 0x2ff, "v_lshlrev_b64", False, False),
    (   -1,    -1, 0x290, 0x290, 0x300, "v_lshrrev_b64", False, False),
    (   -1,    -1, 0x291, 0x291, 0x301, "v_ashrrev_i64", False, False),

@@ -18,15 +18,26 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_freedreno = include_directories(['.', './registers'])
+inc_freedreno = include_directories(['.', './registers', './common'])
+inc_freedreno_rnn = include_directories('rnn')
 
 subdir('common')
 subdir('registers')
 subdir('drm')
+subdir('ir2')
 subdir('ir3')
 subdir('fdl')
 subdir('perfcntrs')
 subdir('computerator')
+
+dep_libxml2 = dependency('libxml-2.0', required: false)
+
+# Everything that depends on rnn requires (indirectly) libxml2:
+if dep_libxml2.found()
+  subdir('rnn')
+  subdir('decode')
+  subdir('afuc')
+endif
 
 if with_tools.contains('drm-shim')
   subdir('drm-shim')

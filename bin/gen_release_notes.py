@@ -25,6 +25,7 @@ import asyncio
 import datetime
 import os
 import pathlib
+import subprocess
 import sys
 import textwrap
 import typing
@@ -211,6 +212,7 @@ def get_features(is_point_release: bool) -> typing.Generator[str, None, None]:
                 yield line
             else:
                 yield "None"
+        p.unlink()
     else:
         yield "None"
 
@@ -250,6 +252,10 @@ async def main() -> None:
             ))
         except:
             print(exceptions.text_error_template().render())
+
+    subprocess.run(['git', 'add', final])
+    subprocess.run(['git', 'commit', '-m',
+                    f'docs: add release notes for {this_version}'])
 
 
 if __name__ == "__main__":

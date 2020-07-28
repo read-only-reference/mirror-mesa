@@ -1253,7 +1253,8 @@ struct anv_pipeline_bind_map;
 
 void anv_pipeline_cache_init(struct anv_pipeline_cache *cache,
                              struct anv_device *device,
-                             bool cache_enabled);
+                             bool cache_enabled,
+                             bool external_sync);
 void anv_pipeline_cache_finish(struct anv_pipeline_cache *cache);
 
 struct anv_shader_bin *
@@ -2025,6 +2026,10 @@ struct anv_descriptor_set {
 
    struct anv_descriptor_pool *pool;
    struct anv_descriptor_set_layout *layout;
+
+   /* Amount of space occupied in the the pool by this descriptor set. It can
+    * be larger than the size of the descriptor set.
+    */
    uint32_t size;
 
    /* State relative to anv_descriptor_pool::bo */

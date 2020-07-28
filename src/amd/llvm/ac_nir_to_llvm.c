@@ -3032,16 +3032,6 @@ static LLVMValueRef visit_image_atomic(struct ac_nir_context *ctx,
 	case nir_intrinsic_image_deref_atomic_inc_wrap: {
 		atomic_name = "inc";
 		atomic_subop = ac_atomic_inc_wrap;
-		/* ATOMIC_INC instruction does:
-		 *      value = (value + 1) % (data + 1)
-		 * but we want:
-		 *      value = (value + 1) % data
-		 * So replace 'data' by 'data - 1'.
-		 */
-		ctx->ssa_defs[instr->src[3].ssa->index] =
-			LLVMBuildSub(ctx->ac.builder,
-				     ctx->ssa_defs[instr->src[3].ssa->index],
-				     ctx->ac.i32_1, "");
 		break;
 	}
 	case nir_intrinsic_bindless_image_atomic_dec_wrap:
@@ -3414,11 +3404,26 @@ static LLVMValueRef visit_var_atomic(struct ac_nir_context *ctx,
 		case nir_intrinsic_deref_atomic_exchange:
 			op = LLVMAtomicRMWBinOpXchg;
 			break;
+#if LLVM_VERSION_MAJOR >= 10
+		case nir_intrinsic_shared_atomic_fadd:
+		case nir_intrinsic_deref_atomic_fadd:
+			op = LLVMAtomicRMWBinOpFAdd;
+			break;
+#endif
 		default:
 			return NULL;
 		}
 
-		result = ac_build_atomic_rmw(&ctx->ac, op, ptr, ac_to_integer(&ctx->ac, src), sync_scope);
+		LLVMValueRef val;
+
+		if (instr->intrinsic == nir_intrinsic_shared_atomic_fadd ||
+		    instr->intrinsic == nir_intrinsic_deref_atomic_fadd) {
+			val = ac_to_float(&ctx->ac, src);
+		} else {
+			val = ac_to_integer(&ctx->ac, src);
+		}
+
+		result = ac_build_atomic_rmw(&ctx->ac, op, ptr, val, sync_scope);
 	}
 
 	if (ctx->ac.postponed_kill)
@@ -3940,6 +3945,25 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 	case nir_intrinsic_memory_barrier_shared:
 		emit_membar(&ctx->ac, instr);
 		break;
+	case nir_intrinsic_scoped_barrier: {
+		assert(!(nir_intrinsic_memory_semantics(instr) &
+			 (NIR_MEMORY_MAKE_AVAILABLE | NIR_MEMORY_MAKE_VISIBLE)));
+
+		nir_variable_mode modes = nir_intrinsic_memory_modes(instr);
+
+		unsigned wait_flags = 0;
+		if (modes & (nir_var_mem_global | nir_var_mem_ssbo))
+			wait_flags |= AC_WAIT_VLOAD | AC_WAIT_VSTORE;
+		if (modes & nir_var_mem_shared)
+			wait_flags |= AC_WAIT_LGKM;
+
+		if (wait_flags)
+			ac_build_waitcnt(&ctx->ac, wait_flags);
+
+		if (nir_intrinsic_execution_scope(instr) == NIR_SCOPE_WORKGROUP)
+			ac_emit_barrier(&ctx->ac, ctx->stage);
+		break;
+	}
 	case nir_intrinsic_memory_barrier_tcs_patch:
 		break;
 	case nir_intrinsic_control_barrier:
@@ -3954,7 +3978,8 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 	case nir_intrinsic_shared_atomic_or:
 	case nir_intrinsic_shared_atomic_xor:
 	case nir_intrinsic_shared_atomic_exchange:
-	case nir_intrinsic_shared_atomic_comp_swap: {
+	case nir_intrinsic_shared_atomic_comp_swap:
+	case nir_intrinsic_shared_atomic_fadd: {
 		LLVMValueRef ptr = get_memory_ptr(ctx, instr->src[0],
 						  instr->src[1].ssa->bit_size);
 		result = visit_var_atomic(ctx, instr, ptr, 1);
@@ -3969,7 +3994,8 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 	case nir_intrinsic_deref_atomic_or:
 	case nir_intrinsic_deref_atomic_xor:
 	case nir_intrinsic_deref_atomic_exchange:
-	case nir_intrinsic_deref_atomic_comp_swap: {
+	case nir_intrinsic_deref_atomic_comp_swap:
+	case nir_intrinsic_deref_atomic_fadd: {
 		LLVMValueRef ptr = get_src(ctx, instr->src[0]);
 		result = visit_var_atomic(ctx, instr, ptr, 1);
 		break;
@@ -5247,7 +5273,7 @@ setup_locals(struct ac_nir_context *ctx,
 {
 	int i, j;
 	ctx->num_locals = 0;
-	nir_foreach_variable(variable, &func->impl->locals) {
+	nir_foreach_function_temp_variable(variable, func->impl) {
 		unsigned attrib_count = glsl_count_attribute_slots(variable->type, false);
 		variable->data.driver_location = ctx->num_locals * 4;
 		variable->data.location_frac = 0;
@@ -5347,7 +5373,7 @@ void ac_nir_translate(struct ac_llvm_context *ac, struct ac_shader_abi *abi,
 
 	ctx.main_function = LLVMGetBasicBlockParent(LLVMGetInsertBlock(ctx.ac.builder));
 
-	nir_foreach_variable(variable, &nir->outputs)
+	nir_foreach_shader_out_variable(variable, nir)
 		ac_handle_shader_output_decl(&ctx.ac, ctx.abi, nir, variable,
 					     ctx.stage);
 

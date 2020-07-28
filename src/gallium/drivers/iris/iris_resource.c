@@ -108,6 +108,7 @@ modifier_is_supported(const struct gen_device_info *devinfo,
       if (rt_format == ISL_FORMAT_UNSUPPORTED ||
           !isl_format_supports_ccs_e(devinfo, rt_format))
          return false;
+      break;
    }
    default:
       break;
@@ -619,6 +620,7 @@ iris_resource_configure_aux(struct iris_screen *screen,
       *alloc_flags |= BO_ALLOC_ZEROED;
       break;
    case ISL_AUX_USAGE_MC:
+   default:
       unreachable("Unsupported aux mode");
    }
 
@@ -2093,7 +2095,8 @@ iris_texture_subdata(struct pipe_context *ctx,
     * stall-avoidance blits.
     */
    if (surf->tiling == ISL_TILING_LINEAR ||
-       res->aux.usage == ISL_AUX_USAGE_CCS_E ||
+       (isl_aux_usage_has_ccs(res->aux.usage) &&
+        res->aux.usage != ISL_AUX_USAGE_CCS_D) ||
        resource_is_busy(ice, res)) {
       return u_default_texture_subdata(ctx, resource, level, usage, box,
                                        data, stride, layer_stride);

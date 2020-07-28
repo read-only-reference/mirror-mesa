@@ -218,7 +218,7 @@ tu_physical_device_init(struct tu_physical_device *device,
    if (instance->debug_flags & TU_DEBUG_STARTUP)
       tu_logi("Found compatible device '%s'.", path);
 
-   device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
+   vk_object_base_init(NULL, &device->base, VK_OBJECT_TYPE_PHYSICAL_DEVICE);
    device->instance = instance;
    assert(strlen(path) < ARRAY_SIZE(device->path));
    strncpy(device->path, path, ARRAY_SIZE(device->path));
@@ -265,7 +265,7 @@ tu_physical_device_init(struct tu_physical_device *device,
    case 618:
       device->ccu_offset_gmem = 0x7c000; /* 0x7e000 in some cases? */
       device->ccu_offset_bypass = 0x10000;
-      device->tile_align_w = 64;
+      device->tile_align_w = 32;
       device->magic.PC_UNKNOWN_9805 = 0x0;
       device->magic.SP_UNKNOWN_A0F8 = 0x0;
       break;
@@ -273,7 +273,7 @@ tu_physical_device_init(struct tu_physical_device *device,
    case 640:
       device->ccu_offset_gmem = 0xf8000;
       device->ccu_offset_bypass = 0x20000;
-      device->tile_align_w = 64;
+      device->tile_align_w = 32;
       device->magic.PC_UNKNOWN_9805 = 0x1;
       device->magic.SP_UNKNOWN_A0F8 = 0x1;
       break;
@@ -339,6 +339,8 @@ tu_physical_device_finish(struct tu_physical_device *device)
    close(device->local_fd);
    if (device->master_fd != -1)
       close(device->master_fd);
+
+   vk_object_base_finish(&device->base);
 }
 
 static VKAPI_ATTR void *
@@ -421,10 +423,11 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    instance = vk_zalloc2(&default_alloc, pAllocator, sizeof(*instance), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+
    if (!instance)
       return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   instance->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
+   vk_object_base_init(NULL, &instance->base, VK_OBJECT_TYPE_INSTANCE);
 
    if (pAllocator)
       instance->alloc = *pAllocator;
@@ -445,6 +448,7 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       int index = tu_get_instance_extension_index(ext_name);
 
       if (index < 0 || !tu_instance_extensions_supported.extensions[index]) {
+         vk_object_base_finish(&instance->base);
          vk_free2(&default_alloc, pAllocator, instance);
          return vk_error(instance, VK_ERROR_EXTENSION_NOT_PRESENT);
       }
@@ -454,6 +458,7 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    result = vk_debug_report_instance_init(&instance->debug_report_callbacks);
    if (result != VK_SUCCESS) {
+      vk_object_base_finish(&instance->base);
       vk_free2(&default_alloc, pAllocator, instance);
       return vk_error(instance, result);
    }
@@ -486,6 +491,7 @@ tu_DestroyInstance(VkInstance _instance,
 
    vk_debug_report_instance_destroy(&instance->debug_report_callbacks);
 
+   vk_object_base_finish(&instance->base);
    vk_free(&instance->alloc, instance);
 }
 
@@ -617,16 +623,16 @@ tu_GetPhysicalDeviceFeatures(VkPhysicalDevice physicalDevice,
       .textureCompressionBC = true,
       .occlusionQueryPrecise = true,
       .pipelineStatisticsQuery = false,
-      .vertexPipelineStoresAndAtomics = false,
-      .fragmentStoresAndAtomics = false,
+      .vertexPipelineStoresAndAtomics = true,
+      .fragmentStoresAndAtomics = true,
       .shaderTessellationAndGeometryPointSize = false,
       .shaderImageGatherExtended = false,
       .shaderStorageImageExtendedFormats = false,
       .shaderStorageImageMultisample = false,
-      .shaderUniformBufferArrayDynamicIndexing = false,
-      .shaderSampledImageArrayDynamicIndexing = false,
-      .shaderStorageBufferArrayDynamicIndexing = false,
-      .shaderStorageImageArrayDynamicIndexing = false,
+      .shaderUniformBufferArrayDynamicIndexing = true,
+      .shaderSampledImageArrayDynamicIndexing = true,
+      .shaderStorageBufferArrayDynamicIndexing = true,
+      .shaderStorageImageArrayDynamicIndexing = true,
       .shaderStorageImageReadWithoutFormat = false,
       .shaderStorageImageWriteWithoutFormat = false,
       .shaderClipDistance = false,
@@ -656,17 +662,70 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->multiview                           = false;
          features->multiviewGeometryShader             = false;
          features->multiviewTessellationShader         = false;
-         features->variablePointersStorageBuffer       = false;
-         features->variablePointers                    = false;
+         features->variablePointersStorageBuffer       = true;
+         features->variablePointers                    = true;
          features->protectedMemory                     = false;
          features->samplerYcbcrConversion              = true;
          features->shaderDrawParameters                = true;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES: {
+         VkPhysicalDeviceVulkan12Features *features = (void *) ext;
+         features->samplerMirrorClampToEdge            = true;
+         features->drawIndirectCount                   = true;
+         features->storageBuffer8BitAccess             = false;
+         features->uniformAndStorageBuffer8BitAccess   = false;
+         features->storagePushConstant8                = false;
+         features->shaderBufferInt64Atomics            = false;
+         features->shaderSharedInt64Atomics            = false;
+         features->shaderFloat16                       = false;
+         features->shaderInt8                          = false;
+
+         features->descriptorIndexing                                 = false;
+         features->shaderInputAttachmentArrayDynamicIndexing          = false;
+         features->shaderUniformTexelBufferArrayDynamicIndexing       = false;
+         features->shaderStorageTexelBufferArrayDynamicIndexing       = false;
+         features->shaderUniformBufferArrayNonUniformIndexing         = false;
+         features->shaderSampledImageArrayNonUniformIndexing          = false;
+         features->shaderStorageBufferArrayNonUniformIndexing         = false;
+         features->shaderStorageImageArrayNonUniformIndexing          = false;
+         features->shaderInputAttachmentArrayNonUniformIndexing       = false;
+         features->shaderUniformTexelBufferArrayNonUniformIndexing    = false;
+         features->shaderStorageTexelBufferArrayNonUniformIndexing    = false;
+         features->descriptorBindingUniformBufferUpdateAfterBind      = false;
+         features->descriptorBindingSampledImageUpdateAfterBind       = false;
+         features->descriptorBindingStorageImageUpdateAfterBind       = false;
+         features->descriptorBindingStorageBufferUpdateAfterBind      = false;
+         features->descriptorBindingUniformTexelBufferUpdateAfterBind = false;
+         features->descriptorBindingStorageTexelBufferUpdateAfterBind = false;
+         features->descriptorBindingUpdateUnusedWhilePending          = false;
+         features->descriptorBindingPartiallyBound                    = false;
+         features->descriptorBindingVariableDescriptorCount           = false;
+         features->runtimeDescriptorArray                             = false;
+
+         features->samplerFilterMinmax                 = true;
+         features->scalarBlockLayout                   = false;
+         features->imagelessFramebuffer                = false;
+         features->uniformBufferStandardLayout         = false;
+         features->shaderSubgroupExtendedTypes         = false;
+         features->separateDepthStencilLayouts         = false;
+         features->hostQueryReset                      = false;
+         features->timelineSemaphore                   = false;
+         features->bufferDeviceAddress                 = false;
+         features->bufferDeviceAddressCaptureReplay    = false;
+         features->bufferDeviceAddressMultiDevice      = false;
+         features->vulkanMemoryModel                   = false;
+         features->vulkanMemoryModelDeviceScope        = false;
+         features->vulkanMemoryModelAvailabilityVisibilityChains = false;
+         features->shaderOutputViewportIndex           = false;
+         features->shaderOutputLayer                   = false;
+         features->subgroupBroadcastDynamicId          = false;
+         break;
+      }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTERS_FEATURES: {
          VkPhysicalDeviceVariablePointersFeatures *features = (void *) ext;
-         features->variablePointersStorageBuffer = false;
-         features->variablePointers = false;
+         features->variablePointersStorageBuffer = true;
+         features->variablePointers = true;
          break;
       }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES: {
@@ -754,6 +813,18 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
             (VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT *)ext;
          features->vertexAttributeInstanceRateDivisor = true;
          features->vertexAttributeInstanceRateZeroDivisor = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES_EXT: {
+         VkPhysicalDevicePrivateDataFeaturesEXT *features =
+            (VkPhysicalDevicePrivateDataFeaturesEXT *)ext;
+         features->privateData = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT: {
+         VkPhysicalDeviceDepthClipEnableFeaturesEXT *features =
+            (VkPhysicalDeviceDepthClipEnableFeaturesEXT *)ext;
+         features->depthClipEnable = true;
          break;
       }
       default:
@@ -1096,7 +1167,8 @@ tu_queue_init(struct tu_device *device,
               int idx,
               VkDeviceQueueCreateFlags flags)
 {
-   queue->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
+   vk_object_base_init(&device->vk, &queue->base, VK_OBJECT_TYPE_QUEUE);
+
    queue->device = device;
    queue->queue_family_index = queue_family_index;
    queue->queue_idx = idx;
@@ -1182,7 +1254,6 @@ struct PACKED bcolor_entry {
    },
 };
 
-
 VkResult
 tu_CreateDevice(VkPhysicalDevice physicalDevice,
                 const VkDeviceCreateInfo *pCreateInfo,
@@ -1213,22 +1284,19 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    if (!device)
       return vk_error(physical_device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   device->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
+   vk_device_init(&device->vk, pCreateInfo,
+         &physical_device->instance->alloc, pAllocator);
+
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
    device->_lost = false;
-
-   if (pAllocator)
-      device->alloc = *pAllocator;
-   else
-      device->alloc = physical_device->instance->alloc;
 
    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
       const char *ext_name = pCreateInfo->ppEnabledExtensionNames[i];
       int index = tu_get_device_extension_index(ext_name);
       if (index < 0 ||
           !physical_device->supported_extensions.extensions[index]) {
-         vk_free(&device->alloc, device);
+         vk_free(&device->vk.alloc, device);
          return vk_error(physical_device->instance,
                          VK_ERROR_EXTENSION_NOT_PRESENT);
       }
@@ -1241,7 +1309,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
          &pCreateInfo->pQueueCreateInfos[i];
       uint32_t qfi = queue_create->queueFamilyIndex;
       device->queues[qfi] = vk_alloc(
-         &device->alloc, queue_create->queueCount * sizeof(struct tu_queue),
+         &device->vk.alloc, queue_create->queueCount * sizeof(struct tu_queue),
          8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
       if (!device->queues[qfi]) {
          result = VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -1265,30 +1333,21 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    if (!device->compiler)
       goto fail_queues;
 
-#define VSC_DRAW_STRM_SIZE(pitch)  ((pitch) * 32 + 0x100)  /* extra size to store VSC_SIZE */
-#define VSC_PRIM_STRM_SIZE(pitch) ((pitch) * 32)
+   /* initial sizes, these will increase if there is overflow */
+   device->vsc_draw_strm_pitch = 0x1000 + VSC_PAD;
+   device->vsc_prim_strm_pitch = 0x4000 + VSC_PAD;
 
-   device->vsc_draw_strm_pitch = 0x440 * 4;
-   device->vsc_prim_strm_pitch = 0x1040 * 4;
-
-   result = tu_bo_init_new(device, &device->vsc_draw_strm, VSC_DRAW_STRM_SIZE(device->vsc_draw_strm_pitch));
+   STATIC_ASSERT(sizeof(border_color) == sizeof(((struct tu6_global*) 0)->border_color));
+   result = tu_bo_init_new(device, &device->global_bo, sizeof(struct tu6_global));
    if (result != VK_SUCCESS)
-      goto fail_vsc_data;
+      goto fail_global_bo;
 
-   result = tu_bo_init_new(device, &device->vsc_prim_strm, VSC_PRIM_STRM_SIZE(device->vsc_prim_strm_pitch));
+   result = tu_bo_map(device, &device->global_bo);
    if (result != VK_SUCCESS)
-      goto fail_vsc_data2;
+      goto fail_global_bo_map;
 
-   STATIC_ASSERT(sizeof(struct bcolor_entry) == 128);
-   result = tu_bo_init_new(device, &device->border_color, sizeof(border_color));
-   if (result != VK_SUCCESS)
-      goto fail_border_color;
-
-   result = tu_bo_map(device, &device->border_color);
-   if (result != VK_SUCCESS)
-      goto fail_border_color_map;
-
-   memcpy(device->border_color.map, border_color, sizeof(border_color));
+   memcpy(device->global_bo.map + gb_offset(border_color), border_color, sizeof(border_color));
+   tu_init_clear_blit_shaders(device->global_bo.map);
 
    VkPipelineCacheCreateInfo ci;
    ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
@@ -1307,20 +1366,16 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    for (unsigned i = 0; i < ARRAY_SIZE(device->scratch_bos); i++)
       mtx_init(&device->scratch_bos[i].construct_mtx, mtx_plain);
 
+   mtx_init(&device->vsc_pitch_mtx, mtx_plain);
+
    *pDevice = tu_device_to_handle(device);
    return VK_SUCCESS;
 
 fail_pipeline_cache:
-fail_border_color_map:
-   tu_bo_finish(device, &device->border_color);
+fail_global_bo_map:
+   tu_bo_finish(device, &device->global_bo);
 
-fail_border_color:
-   tu_bo_finish(device, &device->vsc_prim_strm);
-
-fail_vsc_data2:
-   tu_bo_finish(device, &device->vsc_draw_strm);
-
-fail_vsc_data:
+fail_global_bo:
    ralloc_free(device->compiler);
 
 fail_queues:
@@ -1328,10 +1383,10 @@ fail_queues:
       for (unsigned q = 0; q < device->queue_count[i]; q++)
          tu_queue_finish(&device->queues[i][q]);
       if (device->queue_count[i])
-         vk_free(&device->alloc, device->queues[i]);
+         vk_object_free(&device->vk, NULL, device->queues[i]);
    }
 
-   vk_free(&device->alloc, device);
+   vk_free(&device->vk.alloc, device);
    return result;
 }
 
@@ -1343,14 +1398,11 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    if (!device)
       return;
 
-   tu_bo_finish(device, &device->vsc_draw_strm);
-   tu_bo_finish(device, &device->vsc_prim_strm);
-
    for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
       for (unsigned q = 0; q < device->queue_count[i]; q++)
          tu_queue_finish(&device->queues[i][q]);
       if (device->queue_count[i])
-         vk_free(&device->alloc, device->queues[i]);
+         vk_object_free(&device->vk, NULL, device->queues[i]);
    }
 
    for (unsigned i = 0; i < ARRAY_SIZE(device->scratch_bos); i++) {
@@ -1363,7 +1415,7 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    VkPipelineCache pc = tu_pipeline_cache_to_handle(device->mem_cache);
    tu_DestroyPipelineCache(tu_device_to_handle(device), pc, NULL);
 
-   vk_free(&device->alloc, device);
+   vk_free(&device->vk.alloc, device);
 }
 
 VkResult
@@ -1791,8 +1843,8 @@ tu_alloc_memory(struct tu_device *device,
       return VK_SUCCESS;
    }
 
-   mem = vk_alloc2(&device->alloc, pAllocator, sizeof(*mem), 8,
-                   VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   mem = vk_object_alloc(&device->vk, pAllocator, sizeof(*mem),
+                         VK_OBJECT_TYPE_DEVICE_MEMORY);
    if (mem == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -1824,7 +1876,7 @@ tu_alloc_memory(struct tu_device *device,
    }
 
    if (result != VK_SUCCESS) {
-      vk_free2(&device->alloc, pAllocator, mem);
+      vk_object_free(&device->vk, pAllocator, mem);
       return result;
    }
 
@@ -1861,7 +1913,7 @@ tu_FreeMemory(VkDevice _device,
       return;
 
    tu_bo_finish(device, &mem->bo);
-   vk_free2(&device->alloc, pAllocator, mem);
+   vk_object_free(&device->vk, pAllocator, mem);
 }
 
 VkResult
@@ -1952,8 +2004,8 @@ tu_GetImageMemoryRequirements(VkDevice _device,
    TU_FROM_HANDLE(tu_image, image, _image);
 
    pMemoryRequirements->memoryTypeBits = 1;
-   pMemoryRequirements->size = image->layout.size;
-   pMemoryRequirements->alignment = image->layout.base_align;
+   pMemoryRequirements->size = image->total_size;
+   pMemoryRequirements->alignment = image->layout[0].base_align;
 }
 
 void
@@ -2109,8 +2161,8 @@ tu_CreateSemaphore(VkDevice _device,
    TU_FROM_HANDLE(tu_device, device, _device);
 
    struct tu_semaphore *sem =
-      vk_alloc2(&device->alloc, pAllocator, sizeof(*sem), 8,
-                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+         vk_object_alloc(&device->vk, pAllocator, sizeof(*sem),
+                         VK_OBJECT_TYPE_SEMAPHORE);
    if (!sem)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -2124,7 +2176,7 @@ tu_CreateSemaphore(VkDevice _device,
 
    if (handleTypes) {
       if (drmSyncobjCreate(device->physical_device->local_fd, 0, &sem->permanent.syncobj) < 0) {
-          vk_free2(&device->alloc, pAllocator, sem);
+          vk_free2(&device->vk.alloc, pAllocator, sem);
           return VK_ERROR_OUT_OF_HOST_MEMORY;
       }
       sem->permanent.kind = TU_SEMAPHORE_SYNCOBJ;
@@ -2146,7 +2198,7 @@ tu_DestroySemaphore(VkDevice _device,
    tu_semaphore_part_destroy(device, &sem->permanent);
    tu_semaphore_part_destroy(device, &sem->temporary);
 
-   vk_free2(&device->alloc, pAllocator, sem);
+   vk_object_free(&device->vk, pAllocator, sem);
 }
 
 VkResult
@@ -2156,10 +2208,10 @@ tu_CreateEvent(VkDevice _device,
                VkEvent *pEvent)
 {
    TU_FROM_HANDLE(tu_device, device, _device);
-   struct tu_event *event =
-      vk_alloc2(&device->alloc, pAllocator, sizeof(*event), 8,
-                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 
+   struct tu_event *event =
+         vk_object_alloc(&device->vk, pAllocator, sizeof(*event),
+                         VK_OBJECT_TYPE_EVENT);
    if (!event)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -2178,7 +2230,7 @@ tu_CreateEvent(VkDevice _device,
 fail_map:
    tu_bo_finish(device, &event->bo);
 fail_alloc:
-   vk_free2(&device->alloc, pAllocator, event);
+   vk_object_free(&device->vk, pAllocator, event);
    return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 }
 
@@ -2194,7 +2246,7 @@ tu_DestroyEvent(VkDevice _device,
       return;
 
    tu_bo_finish(device, &event->bo);
-   vk_free2(&device->alloc, pAllocator, event);
+   vk_object_free(&device->vk, pAllocator, event);
 }
 
 VkResult
@@ -2236,8 +2288,8 @@ tu_CreateBuffer(VkDevice _device,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
 
-   buffer = vk_alloc2(&device->alloc, pAllocator, sizeof(*buffer), 8,
-                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   buffer = vk_object_alloc(&device->vk, pAllocator, sizeof(*buffer),
+                            VK_OBJECT_TYPE_BUFFER);
    if (buffer == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -2261,7 +2313,7 @@ tu_DestroyBuffer(VkDevice _device,
    if (!buffer)
       return;
 
-   vk_free2(&device->alloc, pAllocator, buffer);
+   vk_object_free(&device->vk, pAllocator, buffer);
 }
 
 VkResult
@@ -2271,14 +2323,15 @@ tu_CreateFramebuffer(VkDevice _device,
                      VkFramebuffer *pFramebuffer)
 {
    TU_FROM_HANDLE(tu_device, device, _device);
+   TU_FROM_HANDLE(tu_render_pass, pass, pCreateInfo->renderPass);
    struct tu_framebuffer *framebuffer;
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
 
    size_t size = sizeof(*framebuffer) + sizeof(struct tu_attachment_info) *
                                            pCreateInfo->attachmentCount;
-   framebuffer = vk_alloc2(&device->alloc, pAllocator, size, 8,
-                           VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   framebuffer = vk_object_alloc(&device->vk, pAllocator, size,
+                                 VK_OBJECT_TYPE_FRAMEBUFFER);
    if (framebuffer == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -2291,6 +2344,8 @@ tu_CreateFramebuffer(VkDevice _device,
       struct tu_image_view *iview = tu_image_view_from_handle(_iview);
       framebuffer->attachments[i].attachment = iview;
    }
+
+   tu_framebuffer_tiling_config(framebuffer, device, pass);
 
    *pFramebuffer = tu_framebuffer_to_handle(framebuffer);
    return VK_SUCCESS;
@@ -2306,7 +2361,8 @@ tu_DestroyFramebuffer(VkDevice _device,
 
    if (!fb)
       return;
-   vk_free2(&device->alloc, pAllocator, fb);
+
+   vk_object_free(&device->vk, pAllocator, fb);
 }
 
 static void
@@ -2379,8 +2435,8 @@ tu_CreateSampler(VkDevice _device,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
 
-   sampler = vk_alloc2(&device->alloc, pAllocator, sizeof(*sampler), 8,
-                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   sampler = vk_object_alloc(&device->vk, pAllocator, sizeof(*sampler),
+                             VK_OBJECT_TYPE_SAMPLER);
    if (!sampler)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -2400,7 +2456,8 @@ tu_DestroySampler(VkDevice _device,
 
    if (!sampler)
       return;
-   vk_free2(&device->alloc, pAllocator, sampler);
+
+   vk_object_free(&device->vk, pAllocator, sampler);
 }
 
 /* vk_icd.h does not declare this function, so we declare it here to
@@ -2706,4 +2763,57 @@ void tu_GetPhysicalDeviceMultisamplePropertiesEXT(
       pMultisampleProperties->maxSampleLocationGridSize = (VkExtent2D){ 1, 1 };
    else
       pMultisampleProperties->maxSampleLocationGridSize = (VkExtent2D){ 0, 0 };
+}
+
+
+VkResult
+tu_CreatePrivateDataSlotEXT(VkDevice _device,
+                            const VkPrivateDataSlotCreateInfoEXT* pCreateInfo,
+                            const VkAllocationCallbacks* pAllocator,
+                            VkPrivateDataSlotEXT* pPrivateDataSlot)
+{
+   TU_FROM_HANDLE(tu_device, device, _device);
+   return vk_private_data_slot_create(&device->vk,
+                                      pCreateInfo,
+                                      pAllocator,
+                                      pPrivateDataSlot);
+}
+
+void
+tu_DestroyPrivateDataSlotEXT(VkDevice _device,
+                             VkPrivateDataSlotEXT privateDataSlot,
+                             const VkAllocationCallbacks* pAllocator)
+{
+   TU_FROM_HANDLE(tu_device, device, _device);
+   vk_private_data_slot_destroy(&device->vk, privateDataSlot, pAllocator);
+}
+
+VkResult
+tu_SetPrivateDataEXT(VkDevice _device,
+                     VkObjectType objectType,
+                     uint64_t objectHandle,
+                     VkPrivateDataSlotEXT privateDataSlot,
+                     uint64_t data)
+{
+   TU_FROM_HANDLE(tu_device, device, _device);
+   return vk_object_base_set_private_data(&device->vk,
+                                          objectType,
+                                          objectHandle,
+                                          privateDataSlot,
+                                          data);
+}
+
+void
+tu_GetPrivateDataEXT(VkDevice _device,
+                     VkObjectType objectType,
+                     uint64_t objectHandle,
+                     VkPrivateDataSlotEXT privateDataSlot,
+                     uint64_t* pData)
+{
+   TU_FROM_HANDLE(tu_device, device, _device);
+   vk_object_base_get_private_data(&device->vk,
+                                   objectType,
+                                   objectHandle,
+                                   privateDataSlot,
+                                   pData);
 }

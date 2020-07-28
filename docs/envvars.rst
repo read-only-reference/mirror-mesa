@@ -181,8 +181,8 @@ Core Mesa environment variables
    -  This can be very useful for debugging but some features may not be
       implemented correctly. (For developers only)
 
-NIR passes enviroment variables
--------------------------------
+NIR passes environment variables
+--------------------------------
 
 The following are only applicable for drivers that uses NIR, as they
 modify the behaviour for the common NIR_PASS and NIR_PASS_V macros, that
@@ -190,13 +190,13 @@ wrap calls to NIR lowering/optimizations.
 
 ``NIR_PRINT``
    If defined, the resulting NIR shader will be printed out at each
-   succesful NIR lowering/optimization call.
+   successful NIR lowering/optimization call.
 ``NIR_TEST_CLONE``
-   If defined, cloning a NIR shader would be tested at each succesful
+   If defined, cloning a NIR shader would be tested at each successful
    NIR lowering/optimization call.
 ``NIR_TEST_SERIALIZE``
    If defined, serialize and deserialize a NIR shader would be tested at
-   each succesful NIR lowering/optimization call.
+   each successful NIR lowering/optimization call.
 
 Mesa Xlib driver environment variables
 --------------------------------------
@@ -414,15 +414,22 @@ Clover environment variables
 Softpipe driver environment variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``SOFTPIPE_DUMP_FS``
-   if set, the softpipe driver will print fragment shaders to stderr
-``SOFTPIPE_DUMP_GS``
-   if set, the softpipe driver will print geometry shaders to stderr
-``SOFTPIPE_NO_RAST``
-   if set, rasterization is no-op'd. For profiling purposes.
-``SOFTPIPE_USE_LLVM``
-   if set, the softpipe driver will try to use LLVM JIT for vertex
-   shading processing.
+``SOFTPIPE_DEBUG``
+   a comma-separated list of named flags, which do various things:
+
+   ``vs``
+      Dump vertex shader assembly to stderr
+   ``fs``
+      Dump fragment shader assembly to stderr
+   ``gs``
+      Dump geometry shader assembly to stderr
+   ``cs``
+      Dump compute shader assembly to stderr
+   ``no_rast``
+      rasterization is no-op'd. For profiling purposes.
+   ``use_llvm``
+      the softpipe driver will try to use LLVM JIT for vertex
+      shading processing.
 
 LLVMpipe driver environment variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -588,8 +595,6 @@ RADV driver environment variables
    ``tccompatcmask``
       enable TC-compat cmask for MSAA images
 
-``RADV_SECURE_COMPILE_THREADS``
-   maximum number of secure compile threads (up to 32)
 ``RADV_TEX_ANISO``
    force anisotropy filter (up to 16)
 ``RADV_TRACE_FILE``

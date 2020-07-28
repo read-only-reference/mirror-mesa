@@ -74,6 +74,18 @@ enum ir3_driver_param {
 #define IR3_MAX_SO_OUTPUTS       64
 #define IR3_MAX_UBO_PUSH_RANGES  32
 
+/* mirrors SYSTEM_VALUE_BARYCENTRIC_ but starting from 0 */
+enum ir3_bary {
+	IJ_PERSP_PIXEL,
+	IJ_PERSP_SAMPLE,
+	IJ_PERSP_CENTROID,
+	IJ_PERSP_SIZE,
+	IJ_LINEAR_PIXEL,
+	IJ_LINEAR_CENTROID,
+	IJ_LINEAR_SAMPLE,
+	IJ_COUNT,
+};
+
 /**
  * Description of a lowered UBO.
  */
@@ -306,6 +318,9 @@ struct ir3_shader_key {
 			 * the limit:
 			 */
 			unsigned safe_constlen : 1;
+
+			/* Whether gl_Layer must be forced to 0 because it isn't written. */
+			unsigned layer_zero : 1;
 		};
 		uint32_t global;
 	};
@@ -371,6 +386,9 @@ ir3_shader_key_changes_fs(struct ir3_shader_key *key, struct ir3_shader_key *las
 		return true;
 
 	if (last_key->rasterflat != key->rasterflat)
+		return true;
+
+	if (last_key->layer_zero != key->layer_zero)
 		return true;
 
 	if (last_key->ucp_enables != key->ucp_enables)
@@ -546,7 +564,7 @@ struct ir3_shader_variant {
 		uint8_t regid;
 		bool    half : 1;
 	} outputs[32 + 2];  /* +POSITION +PSIZE */
-	bool writes_pos, writes_smask, writes_psize;
+	bool writes_pos, writes_smask, writes_psize, writes_stencilref;
 
 	/* Size in dwords of all outputs for VS, size of entire patch for HS. */
 	uint32_t output_size;

@@ -8335,7 +8335,7 @@ brw_compute_flat_inputs(struct brw_wm_prog_data *prog_data,
 {
    prog_data->flat_inputs = 0;
 
-   nir_foreach_variable(var, &shader->inputs) {
+   nir_foreach_shader_in_variable(var, shader) {
       unsigned slots = glsl_count_attribute_slots(var->type, false);
       for (unsigned s = 0; s < slots; s++) {
          int input_index = prog_data->urb_setup[var->data.location + s];
@@ -8657,10 +8657,12 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
       }
    }
 
+   const bool simd16_failed = v16 && !simd16_cfg;
+
    /* Currently, the compiler only supports SIMD32 on SNB+ */
    if (!has_spilled &&
        v8->max_dispatch_width >= 32 && !use_rep_send &&
-       devinfo->gen >= 6 && simd16_cfg &&
+       devinfo->gen >= 6 && !simd16_failed &&
        !(INTEL_DEBUG & DEBUG_NO32)) {
       /* Try a SIMD32 compile */
       v32 = new fs_visitor(compiler, log_data, mem_ctx, &key->base,
@@ -9054,7 +9056,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
     *
     * TODO: Use performance_analysis and drop this boolean.
     */
-   const bool needs_32 = min_dispatch_width > 16 ||
+   const bool needs_32 = v == NULL ||
                          (INTEL_DEBUG & DEBUG_DO32) ||
                          generate_all;
 

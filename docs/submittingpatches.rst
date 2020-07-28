@@ -112,7 +112,7 @@ The ``Fixes:`` tag
 If a patch addresses a issue introduced with earlier commit, that
 should be noted in the commit message. For example::
 
-    Fixes: d7b3707c612 "util/disk_cache: use stat() to check if entry is a directory"
+    Fixes: d7b3707c612 ("util/disk_cache: use stat() to check if entry is a directory")
 
 You can produce those fixes lines by running this command once::
 
@@ -134,6 +134,8 @@ to automatically, so you don't need to figure it out.
 Alternatively, you may use a "CC:" tag. Here are some examples of such a
 note::
 
+    Cc: mesa-stable
+    Cc: 20.0 <mesa-stable>
     CC: 20.0 19.3 <mesa-stable>
 
 Using the CC tag **should** include the stable branches you want to

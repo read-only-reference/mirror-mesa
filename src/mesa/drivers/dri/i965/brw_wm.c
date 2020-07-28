@@ -253,8 +253,8 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
                      key->swizzles[i] |= SWIZZLE_ONE << (3 * i);
                   }
                }
-               /* fallthrough */
             }
+            /* fallthrough */
             case GL_RG32F:
                /* The channel select for green doesn't work - we have to
                 * request blue.  Haswell can use SCS for this, but Ivybridge
@@ -322,6 +322,17 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
                break;
             default:
                break;
+            }
+
+            switch (intel_tex->yuv_color_space) {
+            case __DRI_YUV_COLOR_SPACE_ITU_REC709:
+              key->bt709_mask |= 1 << s;
+              break;
+            case __DRI_YUV_COLOR_SPACE_ITU_REC2020:
+              key->bt2020_mask |= 1 << s;
+              break;
+            default:
+              break;
             }
          }
 

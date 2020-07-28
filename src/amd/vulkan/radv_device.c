@@ -33,6 +33,7 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <linux/unistd.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -82,6 +83,25 @@ radv_timeline_trigger_waiters_locked(struct radv_timeline *timeline,
 static
 void radv_destroy_semaphore_part(struct radv_device *device,
                                  struct radv_semaphore_part *part);
+
+static VkResult
+radv_create_pthread_cond(pthread_cond_t *cond);
+
+uint64_t radv_get_current_time(void)
+{
+	struct timespec tv;
+	clock_gettime(CLOCK_MONOTONIC, &tv);
+	return tv.tv_nsec + tv.tv_sec*1000000000ull;
+}
+
+static uint64_t radv_get_absolute_timeout(uint64_t timeout)
+{
+	uint64_t current_time = radv_get_current_time();
+
+	timeout = MIN2(UINT64_MAX - current_time, timeout);
+
+	return current_time + timeout;
+}
 
 static int
 radv_device_get_cache_uuid(enum radeon_family family, void *uuid)
@@ -569,6 +589,10 @@ radv_handle_per_app_options(struct radv_instance *instance,
 			 * rendering issues.
 			 */
 			instance->debug_flags |= RADV_DEBUG_ZERO_VRAM;
+		} else if (!strcmp(engine_name, "Quantic Dream Engine")) {
+			/* Fix various artifacts in Detroit: Become Human */
+			instance->debug_flags |= RADV_DEBUG_ZERO_VRAM |
+			                         RADV_DEBUG_DISCARD_TO_DEMOTE;
 		}
 	}
 
@@ -586,6 +610,7 @@ DRI_CONF_BEGIN
 		DRI_CONF_ADAPTIVE_SYNC("true")
 		DRI_CONF_VK_X11_OVERRIDE_MIN_IMAGE_COUNT(0)
 		DRI_CONF_VK_X11_STRICT_IMAGE_COUNT("false")
+		DRI_CONF_VK_X11_ENSURE_MIN_IMAGE_COUNT("false")
 		DRI_CONF_RADV_REPORT_LLVM9_VERSION_STRING("false")
 		DRI_CONF_RADV_ENABLE_MRT_OUTPUT_NAN_FIXUP("false")
 		DRI_CONF_RADV_NO_DYNAMIC_BOUNDS("false")
@@ -639,18 +664,8 @@ VkResult radv_CreateInstance(
 	if (instance->apiVersion == 0)
 		instance->apiVersion = VK_API_VERSION_1_0;
 
-	/* Get secure compile thread count. NOTE: We cap this at 32 */
-#define MAX_SC_PROCS 32
-	char *num_sc_threads = getenv("RADV_SECURE_COMPILE_THREADS");
-	if (num_sc_threads)
-		instance->num_sc_threads = MIN2(strtoul(num_sc_threads, NULL, 10), MAX_SC_PROCS);
-
 	instance->debug_flags = parse_debug_string(getenv("RADV_DEBUG"),
 						   radv_debug_options);
-
-	/* Disable memory cache when secure compile is set */
-	if (radv_device_use_secure_compile(instance))
-		instance->debug_flags |= RADV_DEBUG_NO_MEMORY_CACHE;
 
 	instance->perftest_flags = parse_debug_string(getenv("RADV_PERFTEST"),
 						   radv_perftest_options);
@@ -668,6 +683,7 @@ VkResult radv_CreateInstance(
 
 		if (idx >= RADV_INSTANCE_EXTENSION_COUNT ||
 		    !radv_instance_extensions_supported.extensions[idx]) {
+			vk_object_base_finish(&instance->base);
 			vk_free2(&default_alloc, pAllocator, instance);
 			return vk_error(instance, VK_ERROR_EXTENSION_NOT_PRESENT);
 		}
@@ -724,6 +740,7 @@ VkResult radv_CreateInstance(
 
 	result = vk_debug_report_instance_init(&instance->debug_report_callbacks);
 	if (result != VK_SUCCESS) {
+		vk_object_base_finish(&instance->base);
 		vk_free2(&default_alloc, pAllocator, instance);
 		return vk_error(instance, result);
 	}
@@ -1331,6 +1348,36 @@ void radv_GetPhysicalDeviceFeatures2(
 			features-> pipelineCreationCacheControl = true;
 			break;
 		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT: {
+			VkPhysicalDeviceExtendedDynamicStateFeaturesEXT *features =
+				(VkPhysicalDeviceExtendedDynamicStateFeaturesEXT *) ext;
+			features->extendedDynamicState = true;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES_EXT: {
+			VkPhysicalDeviceImageRobustnessFeaturesEXT *features =
+				(VkPhysicalDeviceImageRobustnessFeaturesEXT *)ext;
+			features->robustImageAccess = true;
+			break;
+		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT: {
+			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT *features =
+				(VkPhysicalDeviceShaderAtomicFloatFeaturesEXT *)ext;
+			features->shaderBufferFloat32Atomics = true;
+			features->shaderBufferFloat32AtomicAdd = false;
+			features->shaderBufferFloat64Atomics = true;
+			features->shaderBufferFloat64AtomicAdd = false;
+			features->shaderSharedFloat32Atomics = true;
+			features->shaderSharedFloat32AtomicAdd = pdevice->rad_info.chip_class >= GFX8 &&
+								 (!pdevice->use_llvm || LLVM_VERSION_MAJOR >= 10);
+			features->shaderSharedFloat64Atomics = true;
+			features->shaderSharedFloat64AtomicAdd = false;
+			features->shaderImageFloat32Atomics = true;
+			features->shaderImageFloat32AtomicAdd = false;
+			features->sparseImageFloat32Atomics = false;
+			features->sparseImageFloat32AtomicAdd = false;
+			break;
+		}
 		default:
 			break;
 		}
@@ -1467,8 +1514,8 @@ void radv_GetPhysicalDeviceProperties(
 		.maxCullDistances                         = 8,
 		.maxCombinedClipAndCullDistances          = 8,
 		.discreteQueuePriorities                  = 2,
-		.pointSizeRange                           = { 0.0, 8192.0 },
-		.lineWidthRange                           = { 0.0, 8192.0 },
+		.pointSizeRange                           = { 0.0, 8191.875 },
+		.lineWidthRange                           = { 0.0, 8191.875 },
 		.pointSizeGranularity                     = (1.0 / 8.0),
 		.lineWidthGranularity                     = (1.0 / 8.0),
 		.strictLines                              = false, /* FINISHME */
@@ -1555,30 +1602,29 @@ radv_get_physical_device_properties_1_2(struct radv_physical_device *pdevice,
 		p->roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL_KHR;
 	}
 
-	/* Do not allow both preserving and flushing denorms because different
-	 * shaders in the same pipeline can have different settings and this
-	 * won't work for merged shaders. To make it work, this requires LLVM
+	/* With LLVM, do not allow both preserving and flushing denorms because
+	 * different shaders in the same pipeline can have different settings and
+	 * this won't work for merged shaders. To make it work, this requires LLVM
 	 * support for changing the register. The same logic applies for the
 	 * rounding modes because they are configured with the same config
-	 * register. TODO: we can enable a lot of these for ACO when it
-	 * supports all stages.
+	 * register.
 	 */
 	p->shaderDenormFlushToZeroFloat32 = true;
-	p->shaderDenormPreserveFloat32 = false;
+	p->shaderDenormPreserveFloat32 = !pdevice->use_llvm;
 	p->shaderRoundingModeRTEFloat32 = true;
-	p->shaderRoundingModeRTZFloat32 = false;
+	p->shaderRoundingModeRTZFloat32 = !pdevice->use_llvm;
 	p->shaderSignedZeroInfNanPreserveFloat32 = true;
 
-	p->shaderDenormFlushToZeroFloat16 = false;
+	p->shaderDenormFlushToZeroFloat16 = pdevice->rad_info.has_packed_math_16bit && !pdevice->use_llvm;
 	p->shaderDenormPreserveFloat16 = pdevice->rad_info.has_packed_math_16bit;
 	p->shaderRoundingModeRTEFloat16 = pdevice->rad_info.has_packed_math_16bit;
-	p->shaderRoundingModeRTZFloat16 = false;
+	p->shaderRoundingModeRTZFloat16 = pdevice->rad_info.has_packed_math_16bit && !pdevice->use_llvm;
 	p->shaderSignedZeroInfNanPreserveFloat16 = pdevice->rad_info.has_packed_math_16bit;
 
-	p->shaderDenormFlushToZeroFloat64 = false;
+	p->shaderDenormFlushToZeroFloat64 = pdevice->rad_info.chip_class >= GFX8 && !pdevice->use_llvm;
 	p->shaderDenormPreserveFloat64 = pdevice->rad_info.chip_class >= GFX8;
 	p->shaderRoundingModeRTEFloat64 = pdevice->rad_info.chip_class >= GFX8;
-	p->shaderRoundingModeRTZFloat64 = false;
+	p->shaderRoundingModeRTZFloat64 = pdevice->rad_info.chip_class >= GFX8 && !pdevice->use_llvm;
 	p->shaderSignedZeroInfNanPreserveFloat64 = pdevice->rad_info.chip_class >= GFX8;
 
 	p->maxUpdateAfterBindDescriptorsInAllPools = UINT32_MAX / 64;
@@ -2226,13 +2272,27 @@ radv_queue_init(struct radv_device *device, struct radv_queue *queue,
 	list_inithead(&queue->pending_submissions);
 	pthread_mutex_init(&queue->pending_mutex, NULL);
 
+	pthread_mutex_init(&queue->thread_mutex, NULL);
+	queue->thread_submission = NULL;
+	queue->thread_running = queue->thread_exit = false;
+	result = radv_create_pthread_cond(&queue->thread_cond);
+	if (result != VK_SUCCESS)
+		return vk_error(device->instance, result);
+
 	return VK_SUCCESS;
 }
 
 static void
 radv_queue_finish(struct radv_queue *queue)
 {
+	if (queue->thread_running) {
+		p_atomic_set(&queue->thread_exit, true);
+		pthread_cond_broadcast(&queue->thread_cond);
+		pthread_join(queue->submission_thread, NULL);
+	}
+	pthread_cond_destroy(&queue->thread_cond);
 	pthread_mutex_destroy(&queue->pending_mutex);
+	pthread_mutex_destroy(&queue->thread_mutex);
 
 	if (queue->hw_ctx)
 		queue->device->ws->ctx_destroy(queue->hw_ctx);
@@ -2366,537 +2426,6 @@ radv_get_int_debug_option(const char *name, int default_value)
 	}
 
 	return result;
-}
-
-static int install_seccomp_filter() {
-
-	struct sock_filter filter[] = {
-		/* Check arch is 64bit x86 */
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, arch))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, AUDIT_ARCH_X86_64, 0, 12),
-
-		/* Futex is required for mutex locks */
-		#if defined __NR__newselect
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR__newselect, 11, 0),
-		#elif defined __NR_select
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_select, 11, 0),
-		#else
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_pselect6, 11, 0),
-		#endif
-
-		/* Allow system exit calls for the forked process */
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_exit_group, 9, 0),
-
-		/* Allow system read calls */
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_read, 7, 0),
-
-		/* Allow system write calls */
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_write, 5, 0),
-
-		/* Allow system brk calls (we need this for malloc) */
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_brk, 3, 0),
-
-		/* Futex is required for mutex locks */
-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, (offsetof(struct seccomp_data, nr))),
-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, __NR_futex, 1, 0),
-
-		/* Return error if we hit a system call not on the whitelist */
-		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)),
-
-		/* Allow whitelisted system calls */
-		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
-	};
-
-	struct sock_fprog prog = {
-		.len = (unsigned short)(sizeof(filter) / sizeof(filter[0])),
-		.filter = filter,
-	};
-
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
-		return -1;
-
-	if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog))
-		return -1;
-
-	return 0;
-}
-
-/* Helper function with timeout support for reading from the pipe between
- * processes used for secure compile.
- */
-bool radv_sc_read(int fd, void *buf, size_t size, bool timeout)
-{
-	fd_set fds;
-	struct timeval tv;
-
-	FD_ZERO(&fds);
-	FD_SET(fd, &fds);
-
-	while (true) {
-		/* We can't rely on the value of tv after calling select() so
-		 * we must reset it on each iteration of the loop.
-		 */
-		tv.tv_sec = 5;
-		tv.tv_usec = 0;
-
-		int rval = select(fd + 1, &fds, NULL, NULL, timeout ? &tv : NULL);
-
-		if (rval == -1) {
-			/* select error */
-			return false;
-		} else if (rval) {
-			ssize_t bytes_read = read(fd, buf, size);
-			if (bytes_read < 0)
-				return false;
-
-			buf += bytes_read;
-			size -= bytes_read;
-			if (size == 0)
-				return true;
-		} else {
-			/* select timeout */
-			return false;
-		}
-	}
-}
-
-static bool radv_close_all_fds(const int *keep_fds, int keep_fd_count)
-{
-	DIR *d;
-	struct dirent *dir;
-	d = opendir("/proc/self/fd");
-	if (!d)
-		return false;
-	int dir_fd = dirfd(d);
-
-	while ((dir = readdir(d)) != NULL) {
-		if (dir->d_name[0] == '.')
-			continue;
-
-		int fd = atoi(dir->d_name);
-		if (fd == dir_fd)
-			continue;
-
-		bool keep = false;
-		for (int i = 0; !keep && i < keep_fd_count; ++i)
-			if (keep_fds[i] == fd)
-				keep = true;
-
-		if (keep)
-			continue;
-
-		close(fd);
-	}
-	closedir(d);
-	return true;
-}
-
-static bool secure_compile_open_fifo_fds(struct radv_secure_compile_state *sc,
-					 int *fd_server, int *fd_client,
-					 unsigned process, bool make_fifo)
-{
-	bool result = false;
-	char *fifo_server_path = NULL;
-	char *fifo_client_path = NULL;
-
-	if (asprintf(&fifo_server_path, "/tmp/radv_server_%s_%u", sc->uid, process) == -1)
-		goto open_fifo_exit;
-
-	if (asprintf(&fifo_client_path, "/tmp/radv_client_%s_%u", sc->uid, process) == -1)
-		goto open_fifo_exit;
-
-	if (make_fifo) {
-		int file1 = mkfifo(fifo_server_path, 0666);
-		if(file1 < 0)
-			goto open_fifo_exit;
-
-		int file2 = mkfifo(fifo_client_path, 0666);
-		if(file2 < 0)
-			goto open_fifo_exit;
-	}
-
-	*fd_server = open(fifo_server_path, O_RDWR);
-	if(*fd_server < 1)
-		goto open_fifo_exit;
-
-	*fd_client = open(fifo_client_path, O_RDWR);
-	if(*fd_client < 1) {
-		close(*fd_server);
-		goto open_fifo_exit;
-	}
-
-	result = true;
-
-open_fifo_exit:
-	free(fifo_server_path);
-	free(fifo_client_path);
-
-	return result;
-}
-
-static void run_secure_compile_device(struct radv_device *device, unsigned process,
-				      int fd_idle_device_output)
-{
-	int fd_secure_input;
-	int fd_secure_output;
-	bool fifo_result = secure_compile_open_fifo_fds(device->sc_state,
-							&fd_secure_input,
-							&fd_secure_output,
-							process, false);
-
-	enum radv_secure_compile_type sc_type;
-
-	const int needed_fds[] = {
-		fd_secure_input,
-		fd_secure_output,
-		fd_idle_device_output,
-	};
-
-	if (!fifo_result || !radv_close_all_fds(needed_fds, ARRAY_SIZE(needed_fds)) ||
-	    install_seccomp_filter() == -1) {
-		sc_type = RADV_SC_TYPE_INIT_FAILURE;
-	} else {
-		sc_type = RADV_SC_TYPE_INIT_SUCCESS;
-		device->sc_state->secure_compile_processes[process].fd_secure_input = fd_secure_input;
-		device->sc_state->secure_compile_processes[process].fd_secure_output = fd_secure_output;
-	}
-
-	write(fd_idle_device_output, &sc_type, sizeof(sc_type));
-
-	if (sc_type == RADV_SC_TYPE_INIT_FAILURE)
-		goto secure_compile_exit;
-
-	while (true) {
-		radv_sc_read(fd_secure_input, &sc_type, sizeof(sc_type), false);
-
-		if (sc_type == RADV_SC_TYPE_COMPILE_PIPELINE) {
-			struct radv_pipeline *pipeline;
-			bool sc_read = true;
-
-			pipeline = vk_zalloc2(&device->vk.alloc, NULL, sizeof(*pipeline), 8,
-					      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-
-			pipeline->device = device;
-
-			/* Read pipeline layout */
-			struct radv_pipeline_layout layout;
-			sc_read = radv_sc_read(fd_secure_input, &layout, sizeof(struct radv_pipeline_layout), true);
-			sc_read &= radv_sc_read(fd_secure_input, &layout.num_sets, sizeof(uint32_t), true);
-			if (!sc_read)
-				goto secure_compile_exit;
-
-			for (uint32_t set = 0; set < layout.num_sets; set++) {
-				uint32_t layout_size;
-				sc_read &= radv_sc_read(fd_secure_input, &layout_size, sizeof(uint32_t), true);
-				if (!sc_read)
-					goto secure_compile_exit;
-
-				layout.set[set].layout = malloc(layout_size);
-				layout.set[set].layout->layout_size = layout_size;
-				sc_read &= radv_sc_read(fd_secure_input, layout.set[set].layout,
-							layout.set[set].layout->layout_size, true);
-			}
-
-			pipeline->layout = &layout;
-
-			/* Read pipeline key */
-			struct radv_pipeline_key key;
-			sc_read &= radv_sc_read(fd_secure_input, &key, sizeof(struct radv_pipeline_key), true);
-
-			/* Read pipeline create flags */
-			VkPipelineCreateFlags flags;
-			sc_read &= radv_sc_read(fd_secure_input, &flags, sizeof(VkPipelineCreateFlags), true);
-
-			/* Read stage and shader information */
-			uint32_t num_stages;
-			const VkPipelineShaderStageCreateInfo *pStages[MESA_SHADER_STAGES] = { 0, };
-			sc_read &= radv_sc_read(fd_secure_input, &num_stages, sizeof(uint32_t), true);
-			if (!sc_read)
-				goto secure_compile_exit;
-
-			for (uint32_t i = 0; i < num_stages; i++) {
-
-				/* Read stage */
-				gl_shader_stage stage;
-				sc_read &= radv_sc_read(fd_secure_input, &stage, sizeof(gl_shader_stage), true);
-
-				VkPipelineShaderStageCreateInfo *pStage = calloc(1, sizeof(VkPipelineShaderStageCreateInfo));
-
-				/* Read entry point name */
-				size_t name_size;
-				sc_read &= radv_sc_read(fd_secure_input, &name_size, sizeof(size_t), true);
-				if (!sc_read)
-					goto secure_compile_exit;
-
-				char *ep_name = malloc(name_size);
-				sc_read &= radv_sc_read(fd_secure_input, ep_name, name_size, true);
-				pStage->pName = ep_name;
-
-				/* Read shader module */
-				size_t module_size;
-				sc_read &= radv_sc_read(fd_secure_input, &module_size, sizeof(size_t), true);
-				if (!sc_read)
-					goto secure_compile_exit;
-
-				struct radv_shader_module *module = malloc(module_size);
-				sc_read &= radv_sc_read(fd_secure_input, module, module_size, true);
-				pStage->module = radv_shader_module_to_handle(module);
-
-				/* Read specialization info */
-				bool has_spec_info;
-				sc_read &= radv_sc_read(fd_secure_input, &has_spec_info, sizeof(bool), true);
-				if (!sc_read)
-					goto secure_compile_exit;
-
-				if (has_spec_info) {
-					VkSpecializationInfo *specInfo = malloc(sizeof(VkSpecializationInfo));
-					pStage->pSpecializationInfo = specInfo;
-
-					sc_read &= radv_sc_read(fd_secure_input, &specInfo->dataSize, sizeof(size_t), true);
-					if (!sc_read)
-						goto secure_compile_exit;
-
-					void *si_data = malloc(specInfo->dataSize);
-					sc_read &= radv_sc_read(fd_secure_input, si_data, specInfo->dataSize, true);
-					specInfo->pData = si_data;
-
-					sc_read &= radv_sc_read(fd_secure_input, &specInfo->mapEntryCount, sizeof(uint32_t), true);
-					if (!sc_read)
-						goto secure_compile_exit;
-
-					VkSpecializationMapEntry *mapEntries = malloc(sizeof(VkSpecializationMapEntry) * specInfo->mapEntryCount);
-					for (uint32_t j = 0; j < specInfo->mapEntryCount; j++) {
-						sc_read &= radv_sc_read(fd_secure_input, &mapEntries[j], sizeof(VkSpecializationMapEntry), true);
-						if (!sc_read)
-							goto secure_compile_exit;
-					}
-
-					specInfo->pMapEntries = mapEntries;
-				}
-
-				pStages[stage] = pStage;
-			}
-
-			/* Compile the shaders */
-			VkPipelineCreationFeedbackEXT *stage_feedbacks[MESA_SHADER_STAGES] = { 0 };
-
-			/* Not fully to spec but if we're doing sandboxed compilations already this doesn't matter. */
-			flags &= ~VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_EXT;
-
-			radv_create_shaders(pipeline, device, NULL, &key, pStages, flags, NULL, stage_feedbacks);
-
-			/* free memory allocated above */
-			for (uint32_t set = 0; set < layout.num_sets; set++)
-				free(layout.set[set].layout);
-
-			for (uint32_t i = 0; i < MESA_SHADER_STAGES; i++) {
-				if (!pStages[i])
-					continue;
-
-				free((void *) pStages[i]->pName);
-				free(radv_shader_module_from_handle(pStages[i]->module));
-				if (pStages[i]->pSpecializationInfo) {
-					free((void *) pStages[i]->pSpecializationInfo->pData);
-					free((void *) pStages[i]->pSpecializationInfo->pMapEntries);
-					free((void *) pStages[i]->pSpecializationInfo);
-				}
-				free((void *) pStages[i]);
-			}
-
-			vk_free(&device->vk.alloc, pipeline);
-
-			sc_type = RADV_SC_TYPE_COMPILE_PIPELINE_FINISHED;
-			write(fd_secure_output, &sc_type, sizeof(sc_type));
-
-		} else if (sc_type == RADV_SC_TYPE_DESTROY_DEVICE) {
-			goto secure_compile_exit;
-		}
-	}
-
-secure_compile_exit:
-	close(fd_secure_input);
-	close(fd_secure_output);
-	close(fd_idle_device_output);
-	_exit(0);
-}
-
-static enum radv_secure_compile_type fork_secure_compile_device(struct radv_device *device, unsigned process)
-{
-	int fd_secure_input[2];
-	int fd_secure_output[2];
-
-	/* create pipe descriptors (used to communicate between processes) */
-	if (pipe(fd_secure_input) == -1 || pipe(fd_secure_output) == -1)
-		return RADV_SC_TYPE_INIT_FAILURE;
-
-
-	int sc_pid;
-	if ((sc_pid = fork()) == 0) {
-		device->sc_state->secure_compile_thread_counter = process;
-		run_secure_compile_device(device, process, fd_secure_output[1]);
-	} else {
-		if (sc_pid == -1)
-			return RADV_SC_TYPE_INIT_FAILURE;
-
-		/* Read the init result returned from the secure process */
-		enum radv_secure_compile_type sc_type;
-		bool sc_read = radv_sc_read(fd_secure_output[0], &sc_type, sizeof(sc_type), true);
-
-		if (sc_type == RADV_SC_TYPE_INIT_FAILURE || !sc_read) {
-			close(fd_secure_input[0]);
-			close(fd_secure_input[1]);
-			close(fd_secure_output[1]);
-			close(fd_secure_output[0]);
-			int status;
-			waitpid(sc_pid, &status, 0);
-
-			return RADV_SC_TYPE_INIT_FAILURE;
-		} else {
-			assert(sc_type == RADV_SC_TYPE_INIT_SUCCESS);
-			write(device->sc_state->secure_compile_processes[process].fd_secure_output, &sc_type, sizeof(sc_type));
-
-			close(fd_secure_input[0]);
-			close(fd_secure_input[1]);
-			close(fd_secure_output[1]);
-			close(fd_secure_output[0]);
-
-			int status;
-			waitpid(sc_pid, &status, 0);
-		}
-	}
-
-	return RADV_SC_TYPE_INIT_SUCCESS;
-}
-
-/* Run a bare bones fork of a device that was forked right after its creation.
- * This device will have low overhead when it is forked again before each
- * pipeline compilation. This device sits idle and its only job is to fork
- * itself.
- */
-static void run_secure_compile_idle_device(struct radv_device *device, unsigned process,
-					    int fd_secure_input, int fd_secure_output)
-{
-	enum radv_secure_compile_type sc_type = RADV_SC_TYPE_INIT_SUCCESS;
-	device->sc_state->secure_compile_processes[process].fd_secure_input = fd_secure_input;
-	device->sc_state->secure_compile_processes[process].fd_secure_output = fd_secure_output;
-
-	write(fd_secure_output, &sc_type, sizeof(sc_type));
-
-	while (true) {
-		radv_sc_read(fd_secure_input, &sc_type, sizeof(sc_type), false);
-
-		if (sc_type == RADV_SC_TYPE_FORK_DEVICE) {
-			sc_type = fork_secure_compile_device(device, process);
-
-			if (sc_type == RADV_SC_TYPE_INIT_FAILURE)
-				goto secure_compile_exit;
-
-		} else if (sc_type == RADV_SC_TYPE_DESTROY_DEVICE) {
-			goto secure_compile_exit;
-		}
-	}
-
-secure_compile_exit:
-	close(fd_secure_input);
-	close(fd_secure_output);
-	_exit(0);
-}
-
-static void destroy_secure_compile_device(struct radv_device *device, unsigned process)
-{
-	int fd_secure_input = device->sc_state->secure_compile_processes[process].fd_secure_input;
-
-	enum radv_secure_compile_type sc_type = RADV_SC_TYPE_DESTROY_DEVICE;
-	write(fd_secure_input, &sc_type, sizeof(sc_type));
-
-	close(device->sc_state->secure_compile_processes[process].fd_secure_input);
-	close(device->sc_state->secure_compile_processes[process].fd_secure_output);
-
-	int status;
-	waitpid(device->sc_state->secure_compile_processes[process].sc_pid, &status, 0);
-}
-
-static VkResult fork_secure_compile_idle_device(struct radv_device *device)
-{
-	device->sc_state = vk_zalloc(&device->vk.alloc,
-				     sizeof(struct radv_secure_compile_state),
-				     8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-
-	mtx_init(&device->sc_state->secure_compile_mutex, mtx_plain);
-
-	pid_t upid = getpid();
-	time_t seconds = time(NULL);
-
-	char *uid;
-	if (asprintf(&uid, "%ld_%ld", (long) upid, (long) seconds) == -1)
-		return VK_ERROR_INITIALIZATION_FAILED;
-
-	device->sc_state->uid = uid;
-
-	uint8_t sc_threads = device->instance->num_sc_threads;
-	int fd_secure_input[MAX_SC_PROCS][2];
-	int fd_secure_output[MAX_SC_PROCS][2];
-
-	/* create pipe descriptors (used to communicate between processes) */
-	for (unsigned i = 0; i < sc_threads; i++) {
-		if (pipe(fd_secure_input[i]) == -1 ||
-		    pipe(fd_secure_output[i]) == -1) {
-			return VK_ERROR_INITIALIZATION_FAILED;
-		}
-	}
-
-	device->sc_state->secure_compile_processes = vk_zalloc(&device->vk.alloc,
-								sizeof(struct radv_secure_compile_process) * sc_threads, 8,
-								VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-
-	for (unsigned process = 0; process < sc_threads; process++) {
-		if ((device->sc_state->secure_compile_processes[process].sc_pid = fork()) == 0) {
-			device->sc_state->secure_compile_thread_counter = process;
-			run_secure_compile_idle_device(device, process, fd_secure_input[process][0], fd_secure_output[process][1]);
-		} else {
-			if (device->sc_state->secure_compile_processes[process].sc_pid == -1)
-				return VK_ERROR_INITIALIZATION_FAILED;
-
-			/* Read the init result returned from the secure process */
-			enum radv_secure_compile_type sc_type;
-			bool sc_read = radv_sc_read(fd_secure_output[process][0], &sc_type, sizeof(sc_type), true);
-
-			bool fifo_result;
-			if (sc_read && sc_type == RADV_SC_TYPE_INIT_SUCCESS) {
-				fifo_result = secure_compile_open_fifo_fds(device->sc_state,
-									   &device->sc_state->secure_compile_processes[process].fd_server,
-									   &device->sc_state->secure_compile_processes[process].fd_client,
-									   process, true);
-
-				device->sc_state->secure_compile_processes[process].fd_secure_input = fd_secure_input[process][1];
-				device->sc_state->secure_compile_processes[process].fd_secure_output = fd_secure_output[process][0];
-			}
-
-			if (sc_type == RADV_SC_TYPE_INIT_FAILURE || !sc_read || !fifo_result) {
-				close(fd_secure_input[process][0]);
-				close(fd_secure_input[process][1]);
-				close(fd_secure_output[process][1]);
-				close(fd_secure_output[process][0]);
-				int status;
-				waitpid(device->sc_state->secure_compile_processes[process].sc_pid, &status, 0);
-
-				/* Destroy any forks that were created sucessfully */
-				for (unsigned i = 0; i < process; i++) {
-					destroy_secure_compile_device(device, i);
-				}
-
-				return VK_ERROR_INITIALIZATION_FAILED;
-			}
-		}
-	}
-	return VK_SUCCESS;
 }
 
 static void
@@ -3211,11 +2740,6 @@ VkResult radv_CreateDevice(
 			goto fail;
 	}
 
-	/* Temporarily disable secure compile while we create meta shaders, etc */
-	uint8_t sc_threads = device->instance->num_sc_threads;
-	if (sc_threads)
-		device->instance->num_sc_threads = 0;
-
 	device->keep_shader_info = keep_shader_info;
 	result = radv_device_init_meta(device);
 	if (result != VK_SUCCESS)
@@ -3232,6 +2756,9 @@ VkResult radv_CreateDevice(
 
 	for (int family = 0; family < RADV_MAX_QUEUE_FAMILIES; ++family) {
 		device->empty_cs[family] = device->ws->cs_create(device->ws, family);
+		if (!device->empty_cs[family])
+			goto fail;
+
 		switch (family) {
 		case RADV_QUEUE_GENERAL:
 			radeon_emit(device->empty_cs[family], PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
@@ -3243,7 +2770,10 @@ VkResult radv_CreateDevice(
 			radeon_emit(device->empty_cs[family], 0);
 			break;
 		}
-		device->ws->cs_finalize(device->empty_cs[family]);
+
+		result = device->ws->cs_finalize(device->empty_cs[family]);
+		if (result != VK_SUCCESS)
+			goto fail;
 	}
 
 	if (device->physical_device->rad_info.chip_class >= GFX7)
@@ -3272,15 +2802,6 @@ VkResult radv_CreateDevice(
 	if (device->force_aniso >= 0) {
 		fprintf(stderr, "radv: Forcing anisotropy filter to %ix\n",
 			1 << util_logbase2(device->force_aniso));
-	}
-
-	/* Fork device for secure compile as required */
-	device->instance->num_sc_threads = sc_threads;
-	if (radv_device_use_secure_compile(device->instance)) {
-
-		result = fork_secure_compile_idle_device(device);
-		if (result != VK_SUCCESS)
-			goto fail_meta;
 	}
 
 	*pDevice = radv_device_to_handle(device);
@@ -3351,17 +2872,6 @@ void radv_DestroyDevice(
 
 	radv_thread_trace_finish(device);
 
-	if (radv_device_use_secure_compile(device->instance)) {
-		for (unsigned i = 0; i < device->instance->num_sc_threads; i++ ) {
-			destroy_secure_compile_device(device, i);
-		}
-	}
-
-	if (device->sc_state) {
-		free(device->sc_state->uid);
-		vk_free(&device->vk.alloc, device->sc_state->secure_compile_processes);
-	}
-	vk_free(&device->vk.alloc, device->sc_state);
 	vk_free(&device->vk.alloc, device);
 }
 
@@ -4147,6 +3657,10 @@ radv_get_preamble_cs(struct radv_queue *queue,
 		if (queue->device->trace_bo)
 			radv_cs_add_buffer(queue->device->ws, cs, queue->device->trace_bo);
 
+		if (queue->device->border_color_data.bo)
+			radv_cs_add_buffer(queue->device->ws, cs,
+					   queue->device->border_color_data.bo);
+
 		if (i == 0) {
 			si_cs_emit_cache_flush(cs,
 			                       queue->device->physical_device->rad_info.chip_class,
@@ -4282,7 +3796,7 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 				      VkFence _fence,
 				      bool is_signal)
 {
-	int syncobj_idx = 0, sem_idx = 0;
+	int syncobj_idx = 0, non_reset_idx = 0, sem_idx = 0, timeline_idx = 0;
 
 	if (num_sems == 0 && _fence == VK_NULL_HANDLE)
 		return VK_SUCCESS;
@@ -4291,6 +3805,7 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 		switch(sems[i]->kind) {
 		case RADV_SEMAPHORE_SYNCOBJ:
 			counts->syncobj_count++;
+			counts->syncobj_reset_count++;
 			break;
 		case RADV_SEMAPHORE_WINSYS:
 			counts->sem_count++;
@@ -4300,19 +3815,29 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 		case RADV_SEMAPHORE_TIMELINE:
 			counts->syncobj_count++;
 			break;
+		case RADV_SEMAPHORE_TIMELINE_SYNCOBJ:
+			counts->timeline_syncobj_count++;
+			break;
 		}
 	}
 
 	if (_fence != VK_NULL_HANDLE) {
 		RADV_FROM_HANDLE(radv_fence, fence, _fence);
-		if (fence->temp_syncobj || fence->syncobj)
+
+		struct radv_fence_part *part =
+			fence->temporary.kind != RADV_FENCE_NONE ?
+			&fence->temporary : &fence->permanent;
+		if (part->kind == RADV_FENCE_SYNCOBJ)
 			counts->syncobj_count++;
 	}
 
-	if (counts->syncobj_count) {
-		counts->syncobj = (uint32_t *)malloc(sizeof(uint32_t) * counts->syncobj_count);
-		if (!counts->syncobj)
+	if (counts->syncobj_count || counts->timeline_syncobj_count) {
+		counts->points = (uint64_t *)malloc(
+			sizeof(*counts->syncobj) * counts->syncobj_count +
+			(sizeof(*counts->syncobj) + sizeof(*counts->points)) * counts->timeline_syncobj_count);
+		if (!counts->points)
 			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+		counts->syncobj = (uint32_t*)(counts->points + counts->timeline_syncobj_count);
 	}
 
 	if (counts->sem_count) {
@@ -4322,6 +3847,8 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 		}
 	}
+
+	non_reset_idx = counts->syncobj_reset_count;
 
 	for (uint32_t i = 0; i < num_sems; i++) {
 		switch(sems[i]->kind) {
@@ -4346,7 +3873,7 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 			pthread_mutex_unlock(&sems[i]->timeline.mutex);
 
 			if (point) {
-				counts->syncobj[syncobj_idx++] = point->syncobj;
+				counts->syncobj[non_reset_idx++] = point->syncobj;
 			} else {
 				/* Explicitly remove the semaphore so we might not find
 				 * a point later post-submit. */
@@ -4354,19 +3881,26 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 			}
 			break;
 		}
+		case RADV_SEMAPHORE_TIMELINE_SYNCOBJ:
+			counts->syncobj[counts->syncobj_count + timeline_idx] = sems[i]->syncobj;
+			counts->points[timeline_idx] = timeline_values[i];
+			++timeline_idx;
+			break;
 		}
 	}
 
 	if (_fence != VK_NULL_HANDLE) {
 		RADV_FROM_HANDLE(radv_fence, fence, _fence);
-		if (fence->temp_syncobj)
-			counts->syncobj[syncobj_idx++] = fence->temp_syncobj;
-		else if (fence->syncobj)
-			counts->syncobj[syncobj_idx++] = fence->syncobj;
+
+		struct radv_fence_part *part =
+			fence->temporary.kind != RADV_FENCE_NONE ?
+			&fence->temporary : &fence->permanent;
+		if (part->kind == RADV_FENCE_SYNCOBJ)
+			counts->syncobj[non_reset_idx++] = part->syncobj;
 	}
 
-	assert(syncobj_idx <= counts->syncobj_count);
-	counts->syncobj_count = syncobj_idx;
+	assert(MAX2(syncobj_idx, non_reset_idx) <= counts->syncobj_count);
+	counts->syncobj_count = MAX2(syncobj_idx, non_reset_idx);
 
 	return VK_SUCCESS;
 }
@@ -4374,9 +3908,9 @@ static VkResult radv_alloc_sem_counts(struct radv_device *device,
 static void
 radv_free_sem_info(struct radv_winsys_sem_info *sem_info)
 {
-	free(sem_info->wait.syncobj);
+	free(sem_info->wait.points);
 	free(sem_info->wait.sem);
-	free(sem_info->signal.syncobj);
+	free(sem_info->signal.points);
 	free(sem_info->signal.sem);
 }
 
@@ -4446,15 +3980,19 @@ radv_finalize_timelines(struct radv_device *device,
 			point->wait_count -= 2;
 			radv_timeline_trigger_waiters_locked(&signal_sems[i]->timeline, processing_list);
 			pthread_mutex_unlock(&signal_sems[i]->timeline.mutex);
+		} else if (signal_sems[i] && signal_sems[i]->kind == RADV_SEMAPHORE_TIMELINE_SYNCOBJ) {
+			signal_sems[i]->timeline_syncobj.max_point =
+				MAX2(signal_sems[i]->timeline_syncobj.max_point, signal_values[i]);
 		}
 	}
 }
 
-static void
+static VkResult
 radv_sparse_buffer_bind_memory(struct radv_device *device,
                                const VkSparseBufferMemoryBindInfo *bind)
 {
 	RADV_FROM_HANDLE(radv_buffer, buffer, bind->buffer);
+	VkResult result;
 
 	for (uint32_t i = 0; i < bind->bindCount; ++i) {
 		struct radv_device_memory *mem = NULL;
@@ -4462,19 +4000,24 @@ radv_sparse_buffer_bind_memory(struct radv_device *device,
 		if (bind->pBinds[i].memory != VK_NULL_HANDLE)
 			mem = radv_device_memory_from_handle(bind->pBinds[i].memory);
 
-		device->ws->buffer_virtual_bind(buffer->bo,
-		                                bind->pBinds[i].resourceOffset,
-		                                bind->pBinds[i].size,
-		                                mem ? mem->bo : NULL,
-		                                bind->pBinds[i].memoryOffset);
+		result = device->ws->buffer_virtual_bind(buffer->bo,
+							 bind->pBinds[i].resourceOffset,
+							 bind->pBinds[i].size,
+							 mem ? mem->bo : NULL,
+							 bind->pBinds[i].memoryOffset);
+		if (result != VK_SUCCESS)
+			return result;
 	}
+
+	return VK_SUCCESS;
 }
 
-static void
+static VkResult
 radv_sparse_image_opaque_bind_memory(struct radv_device *device,
                                      const VkSparseImageOpaqueMemoryBindInfo *bind)
 {
 	RADV_FROM_HANDLE(radv_image, image, bind->image);
+	VkResult result;
 
 	for (uint32_t i = 0; i < bind->bindCount; ++i) {
 		struct radv_device_memory *mem = NULL;
@@ -4482,12 +4025,16 @@ radv_sparse_image_opaque_bind_memory(struct radv_device *device,
 		if (bind->pBinds[i].memory != VK_NULL_HANDLE)
 			mem = radv_device_memory_from_handle(bind->pBinds[i].memory);
 
-		device->ws->buffer_virtual_bind(image->bo,
-		                                bind->pBinds[i].resourceOffset,
-		                                bind->pBinds[i].size,
-		                                mem ? mem->bo : NULL,
-		                                bind->pBinds[i].memoryOffset);
+		result = device->ws->buffer_virtual_bind(image->bo,
+							 bind->pBinds[i].resourceOffset,
+							 bind->pBinds[i].size,
+							 mem ? mem->bo : NULL,
+							 bind->pBinds[i].memoryOffset);
+		if (result != VK_SUCCESS)
+			return result;
 	}
+
+	return VK_SUCCESS;
 }
 
 static VkResult
@@ -4589,6 +4136,11 @@ struct radv_queue_submission {
 };
 
 static VkResult
+radv_queue_trigger_submission(struct radv_deferred_queue_submission *submission,
+                              uint32_t decrement,
+                              struct list_head *processing_list);
+
+static VkResult
 radv_create_deferred_submission(struct radv_queue *queue,
                                 const struct radv_queue_submission *submission,
                                 struct radv_deferred_queue_submission **out)
@@ -4683,7 +4235,7 @@ radv_create_deferred_submission(struct radv_queue *queue,
 	return VK_SUCCESS;
 }
 
-static void
+static VkResult
 radv_queue_enqueue_submission(struct radv_deferred_queue_submission *submission,
                               struct list_head *processing_list)
 {
@@ -4714,9 +4266,7 @@ radv_queue_enqueue_submission(struct radv_deferred_queue_submission *submission,
 	 * submitted, but if the queue was empty, we decrement ourselves as there is no previous
 	 * submission. */
 	uint32_t decrement = submission->wait_semaphore_count - wait_cnt + (is_first ? 1 : 0);
-	if (__atomic_sub_fetch(&submission->submission_wait_count, decrement, __ATOMIC_ACQ_REL) == 0) {
-		list_addtail(&submission->processing_list, processing_list);
-	}
+	return radv_queue_trigger_submission(submission, decrement, processing_list);
 }
 
 static void
@@ -4732,9 +4282,7 @@ radv_queue_submission_update_queue(struct radv_deferred_queue_submission *submis
 			list_first_entry(&submission->queue->pending_submissions,
 			                 struct radv_deferred_queue_submission,
 			                 queue_pending_list);
-		if (p_atomic_dec_zero(&next_submission->submission_wait_count)) {
-			list_addtail(&next_submission->processing_list, processing_list);
-		}
+		radv_queue_trigger_submission(next_submission, 1, processing_list);
 	}
 	pthread_mutex_unlock(&submission->queue->pending_mutex);
 
@@ -4749,16 +4297,32 @@ radv_queue_submit_deferred(struct radv_deferred_queue_submission *submission,
 	struct radv_queue *queue = submission->queue;
 	struct radeon_winsys_ctx *ctx = queue->hw_ctx;
 	uint32_t max_cs_submission = queue->device->trace_bo ? 1 : RADV_MAX_IBS_PER_SUBMIT;
-	struct radeon_winsys_fence *base_fence = fence ? fence->fence : NULL;
+	struct radeon_winsys_fence *base_fence = NULL;
 	bool do_flush = submission->flush_caches || submission->wait_dst_stage_mask;
 	bool can_patch = true;
 	uint32_t advance;
 	struct radv_winsys_sem_info sem_info;
 	VkResult result;
-	int ret;
 	struct radeon_cmdbuf *initial_preamble_cs = NULL;
 	struct radeon_cmdbuf *initial_flush_preamble_cs = NULL;
 	struct radeon_cmdbuf *continue_preamble_cs = NULL;
+
+	if (fence) {
+		/* Under most circumstances, out fences won't be temporary.
+		 * However, the spec does allow it for opaque_fd.
+		 *
+		 * From the Vulkan 1.0.53 spec:
+		 *
+		 *    "If the import is temporary, the implementation must
+		 *    restore the semaphore to its prior permanent state after
+		 *    submitting the next semaphore wait operation."
+		 */
+		struct radv_fence_part *part =
+			fence->temporary.kind != RADV_FENCE_NONE ?
+			&fence->temporary : &fence->permanent;
+		if (part->kind == RADV_FENCE_WINSYS)
+			base_fence = part->fence;
+	}
 
 	result = radv_get_preambles(queue, submission->cmd_buffers,
 	                            submission->cmd_buffer_count,
@@ -4781,27 +4345,27 @@ radv_queue_submit_deferred(struct radv_deferred_queue_submission *submission,
 		goto fail;
 
 	for (uint32_t i = 0; i < submission->buffer_bind_count; ++i) {
-		radv_sparse_buffer_bind_memory(queue->device,
-		                               submission->buffer_binds + i);
+		result = radv_sparse_buffer_bind_memory(queue->device,
+							submission->buffer_binds + i);
+		if (result != VK_SUCCESS)
+			goto fail;
 	}
 
 	for (uint32_t i = 0; i < submission->image_opaque_bind_count; ++i) {
-		radv_sparse_image_opaque_bind_memory(queue->device,
-		                                     submission->image_opaque_binds + i);
+		result = radv_sparse_image_opaque_bind_memory(queue->device,
+							      submission->image_opaque_binds + i);
+		if (result != VK_SUCCESS)
+			goto fail;
 	}
 
 	if (!submission->cmd_buffer_count) {
-		ret = queue->device->ws->cs_submit(ctx, queue->queue_idx,
-						   &queue->device->empty_cs[queue->queue_family_index],
-						   1, NULL, NULL,
-						   &sem_info, NULL,
-						   false, base_fence);
-		if (ret) {
-			radv_loge("failed to submit CS\n");
-			abort();
-		}
-
-		goto success;
+		result = queue->device->ws->cs_submit(ctx, queue->queue_idx,
+						      &queue->device->empty_cs[queue->queue_family_index],
+						      1, NULL, NULL,
+						      &sem_info, NULL,
+						      false, base_fence);
+		if (result != VK_SUCCESS)
+			goto fail;
 	} else {
 		struct radeon_cmdbuf **cs_array = malloc(sizeof(struct radeon_cmdbuf *) *
 		                                         (submission->cmd_buffer_count));
@@ -4835,18 +4399,17 @@ radv_queue_submit_deferred(struct radv_deferred_queue_submission *submission,
 				bo_list = &queue->device->bo_list.list;
 			}
 
-			ret = queue->device->ws->cs_submit(ctx, queue->queue_idx, cs_array + j,
-			                                   advance, initial_preamble, continue_preamble_cs,
-			                                   &sem_info, bo_list,
-			                                   can_patch, base_fence);
+			result = queue->device->ws->cs_submit(ctx, queue->queue_idx, cs_array + j,
+							      advance, initial_preamble, continue_preamble_cs,
+							      &sem_info, bo_list,
+							      can_patch, base_fence);
 
 			if (unlikely(queue->device->use_global_bo_list))
 				pthread_mutex_unlock(&queue->device->bo_list.mutex);
 
-			if (ret) {
-				radv_loge("failed to submit CS\n");
-				abort();
-			}
+			if (result != VK_SUCCESS)
+				goto fail;
+
 			if (queue->device->trace_bo) {
 				radv_check_gpu_hangs(queue, cs_array[j]);
 			}
@@ -4855,7 +4418,6 @@ radv_queue_submit_deferred(struct radv_deferred_queue_submission *submission,
 		free(cs_array);
 	}
 
-success:
 	radv_free_temp_syncobjs(queue->device,
 				submission->temporary_semaphore_part_count,
 				submission->temporary_semaphore_parts);
@@ -4876,11 +4438,22 @@ success:
 	return VK_SUCCESS;
 
 fail:
+	if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST) {
+		/* When something bad happened during the submission, such as
+		 * an out of memory issue, it might be hard to recover from
+		 * this inconsistent state. To avoid this sort of problem, we
+		 * assume that we are in a really bad situation and return
+		 * VK_ERROR_DEVICE_LOST to ensure the clients do not attempt
+		 * to submit the same job again to this device.
+		 */
+		result = VK_ERROR_DEVICE_LOST;
+	}
+
 	radv_free_temp_syncobjs(queue->device,
 				submission->temporary_semaphore_part_count,
 				submission->temporary_semaphore_parts);
 	free(submission);
-	return VK_ERROR_DEVICE_LOST;
+	return result;
 }
 
 static VkResult
@@ -4898,6 +4471,131 @@ radv_process_submissions(struct list_head *processing_list)
 	return VK_SUCCESS;
 }
 
+static VkResult
+wait_for_submission_timelines_available(struct radv_deferred_queue_submission *submission,
+                                        uint64_t timeout)
+{
+	struct radv_device *device = submission->queue->device;
+	uint32_t syncobj_count = 0;
+	uint32_t syncobj_idx = 0;
+
+	for (uint32_t i = 0; i < submission->wait_semaphore_count; ++i) {
+		if (submission->wait_semaphores[i]->kind != RADV_SEMAPHORE_TIMELINE_SYNCOBJ)
+			continue;
+
+		if (submission->wait_semaphores[i]->timeline_syncobj.max_point >= submission->wait_values[i])
+			continue;
+		++syncobj_count;
+	}
+
+	if (!syncobj_count)
+		return VK_SUCCESS;
+
+	uint64_t *points = malloc((sizeof(uint64_t) + sizeof(uint32_t)) * syncobj_count);
+	if (!points)
+		return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+	uint32_t *syncobj = (uint32_t*)(points + syncobj_count);
+
+	for (uint32_t i = 0; i < submission->wait_semaphore_count; ++i) {
+		if (submission->wait_semaphores[i]->kind != RADV_SEMAPHORE_TIMELINE_SYNCOBJ)
+			continue;
+
+		if (submission->wait_semaphores[i]->timeline_syncobj.max_point >= submission->wait_values[i])
+			continue;
+
+		syncobj[syncobj_idx] = submission->wait_semaphores[i]->syncobj;
+		points[syncobj_idx] = submission->wait_values[i];
+		++syncobj_idx;
+	}
+	bool success = device->ws->wait_timeline_syncobj(device->ws, syncobj, points, syncobj_idx, true, true, timeout);
+
+	free(points);
+	return success ? VK_SUCCESS : VK_TIMEOUT;
+}
+
+static void* radv_queue_submission_thread_run(void *q)
+{
+	struct radv_queue *queue = q;
+
+	pthread_mutex_lock(&queue->thread_mutex);
+	while (!p_atomic_read(&queue->thread_exit)) {
+		struct radv_deferred_queue_submission *submission = queue->thread_submission;
+		struct list_head processing_list;
+		VkResult result = VK_SUCCESS;
+		if (!submission) {
+			pthread_cond_wait(&queue->thread_cond, &queue->thread_mutex);
+			continue;
+		}
+		pthread_mutex_unlock(&queue->thread_mutex);
+
+		/* Wait at most 5 seconds so we have a chance to notice shutdown when
+		 * a semaphore never gets signaled. If it takes longer we just retry
+		 * the wait next iteration. */
+		result = wait_for_submission_timelines_available(submission,
+		                                                 radv_get_absolute_timeout(5000000000));
+		if (result != VK_SUCCESS) {
+			pthread_mutex_lock(&queue->thread_mutex);
+			continue;
+		}
+
+		/* The lock isn't held but nobody will add one until we finish
+		 * the current submission. */
+		p_atomic_set(&queue->thread_submission, NULL);
+
+		list_inithead(&processing_list);
+		list_addtail(&submission->processing_list, &processing_list);
+		result = radv_process_submissions(&processing_list);
+
+		pthread_mutex_lock(&queue->thread_mutex);
+	}
+	pthread_mutex_unlock(&queue->thread_mutex);
+	return NULL;
+}
+
+static VkResult
+radv_queue_trigger_submission(struct radv_deferred_queue_submission *submission,
+                              uint32_t decrement,
+                              struct list_head *processing_list)
+{
+	struct radv_queue *queue = submission->queue;
+	int ret;
+	if  (p_atomic_add_return(&submission->submission_wait_count, -decrement))
+		return VK_SUCCESS;
+
+	if (wait_for_submission_timelines_available(submission, radv_get_absolute_timeout(0)) == VK_SUCCESS) {
+		list_addtail(&submission->processing_list, processing_list);
+		return VK_SUCCESS;
+	}
+
+	pthread_mutex_lock(&queue->thread_mutex);
+
+	/* A submission can only be ready for the thread if it doesn't have
+	 * any predecessors in the same queue, so there can only be one such
+	 * submission at a time. */
+	assert(queue->thread_submission == NULL);
+
+	/* Only start the thread on demand to save resources for the many games
+	 * which only use binary semaphores. */
+	if (!queue->thread_running) {
+		ret  = pthread_create(&queue->submission_thread, NULL,
+		                      radv_queue_submission_thread_run, queue);
+		if (ret) {
+			pthread_mutex_unlock(&queue->thread_mutex);
+			return vk_errorf(queue->device->instance,
+			                 VK_ERROR_DEVICE_LOST,
+			                 "Failed to start submission thread");
+		}
+		queue->thread_running = true;
+	}
+
+	queue->thread_submission = submission;
+	pthread_mutex_unlock(&queue->thread_mutex);
+
+	pthread_cond_signal(&queue->thread_cond);
+	return VK_SUCCESS;
+}
+
 static VkResult radv_queue_submit(struct radv_queue *queue,
                                   const struct radv_queue_submission *submission)
 {
@@ -4910,7 +4608,12 @@ static VkResult radv_queue_submit(struct radv_queue *queue,
 	struct list_head processing_list;
 	list_inithead(&processing_list);
 
-	radv_queue_enqueue_submission(deferred, &processing_list);
+	result = radv_queue_enqueue_submission(deferred, &processing_list);
+	if (result != VK_SUCCESS) {
+		/* If anything is in the list we leak. */
+		assert(list_is_empty(&processing_list));
+		return result;
+	}
 	return radv_process_submissions(&processing_list);
 }
 
@@ -4920,17 +4623,21 @@ radv_queue_internal_submit(struct radv_queue *queue, struct radeon_cmdbuf *cs)
 	struct radeon_winsys_ctx *ctx = queue->hw_ctx;
 	struct radv_winsys_sem_info sem_info;
 	VkResult result;
-	int ret;
 
 	result = radv_alloc_sem_info(queue->device, &sem_info, 0, NULL, 0, 0,
 				     0, NULL, VK_NULL_HANDLE);
 	if (result != VK_SUCCESS)
 		return false;
 
-	ret = queue->device->ws->cs_submit(ctx, queue->queue_idx, &cs, 1, NULL,
-					   NULL, &sem_info, NULL, false, NULL);
+	result = queue->device->ws->cs_submit(ctx, queue->queue_idx, &cs, 1,
+					      NULL, NULL, &sem_info, NULL,
+					      false, NULL);
 	radv_free_sem_info(&sem_info);
-	return !ret;
+	if (result != VK_SUCCESS)
+		return false;
+
+	return true;
+
 }
 
 /* Signals fence as soon as all the work currently put on queue is done. */
@@ -5020,9 +4727,11 @@ VkResult radv_QueueWaitIdle(
 	}
 	pthread_mutex_unlock(&queue->pending_mutex);
 
-	queue->device->ws->ctx_wait_idle(queue->hw_ctx,
-	                                 radv_queue_family_to_ring(queue->queue_family_index),
-	                                 queue->queue_idx);
+	if (!queue->device->ws->ctx_wait_idle(queue->hw_ctx,
+					      radv_queue_family_to_ring(queue->queue_family_index),
+					      queue->queue_idx))
+		return VK_ERROR_DEVICE_LOST;
+
 	return VK_SUCCESS;
 }
 
@@ -5033,7 +4742,11 @@ VkResult radv_DeviceWaitIdle(
 
 	for (unsigned i = 0; i < RADV_MAX_QUEUE_FAMILIES; i++) {
 		for (unsigned q = 0; q < device->queue_count[i]; q++) {
-			radv_QueueWaitIdle(radv_queue_to_handle(&device->queues[i][q]));
+			VkResult result =
+				radv_QueueWaitIdle(radv_queue_to_handle(&device->queues[i][q]));
+
+			if (result != VK_SUCCESS)
+				return result;
 		}
 	}
 	return VK_SUCCESS;
@@ -5195,9 +4908,10 @@ bool radv_get_memory_fd(struct radv_device *device,
 }
 
 
-static void radv_free_memory(struct radv_device *device,
-			     const VkAllocationCallbacks* pAllocator,
-			     struct radv_device_memory *mem)
+void
+radv_free_memory(struct radv_device *device,
+		 const VkAllocationCallbacks* pAllocator,
+		 struct radv_device_memory *mem)
 {
 	if (mem == NULL)
 		return;
@@ -5705,6 +5419,41 @@ static bool radv_sparse_bind_has_effects(const VkBindSparseInfo *info)
 	return VK_SUCCESS;
 }
 
+static void
+radv_destroy_fence_part(struct radv_device *device,
+			struct radv_fence_part *part)
+{
+	switch (part->kind) {
+	case RADV_FENCE_NONE:
+		break;
+	case RADV_FENCE_WINSYS:
+		device->ws->destroy_fence(part->fence);
+		break;
+	case RADV_FENCE_SYNCOBJ:
+		device->ws->destroy_syncobj(device->ws, part->syncobj);
+		break;
+	case RADV_FENCE_WSI:
+		part->fence_wsi->destroy(part->fence_wsi);
+		break;
+	default:
+		unreachable("Invalid fence type");
+	}
+
+	part->kind = RADV_FENCE_NONE;
+}
+
+static void
+radv_destroy_fence(struct radv_device *device,
+		   const VkAllocationCallbacks *pAllocator,
+		   struct radv_fence *fence)
+{
+	radv_destroy_fence_part(device, &fence->temporary);
+	radv_destroy_fence_part(device, &fence->permanent);
+
+	vk_object_base_finish(&fence->base);
+	vk_free2(&device->vk.alloc, pAllocator, fence);
+}
+
 VkResult radv_CreateFence(
 	VkDevice                                    _device,
 	const VkFenceCreateInfo*                    pCreateInfo,
@@ -5716,43 +5465,46 @@ VkResult radv_CreateFence(
 		vk_find_struct_const(pCreateInfo->pNext, EXPORT_FENCE_CREATE_INFO);
 	VkExternalFenceHandleTypeFlags handleTypes =
 		export ? export->handleTypes : 0;
+	struct radv_fence *fence;
 
-	struct radv_fence *fence = vk_alloc2(&device->vk.alloc, pAllocator,
-					       sizeof(*fence), 8,
-					       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-
+	fence = vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*fence), 8,
+			   VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
 	if (!fence)
 		return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
 	vk_object_base_init(&device->vk, &fence->base, VK_OBJECT_TYPE_FENCE);
 
-	fence->fence_wsi = NULL;
-	fence->temp_syncobj = 0;
 	if (device->always_use_syncobj || handleTypes) {
-		int ret = device->ws->create_syncobj(device->ws, &fence->syncobj);
-		if (ret) {
-			vk_free2(&device->vk.alloc, pAllocator, fence);
-			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
-		}
-		if (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT) {
-			device->ws->signal_syncobj(device->ws, fence->syncobj);
-		}
-		fence->fence = NULL;
-	} else {
-		fence->fence = device->ws->create_fence();
-		if (!fence->fence) {
-			vk_free2(&device->vk.alloc, pAllocator, fence);
-			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
-		}
-		fence->syncobj = 0;
+		fence->permanent.kind = RADV_FENCE_SYNCOBJ;
+
+		bool create_signaled = false;
 		if (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT)
-			device->ws->signal_fence(fence->fence);
+			create_signaled = true;
+
+		int ret = device->ws->create_syncobj(device->ws, create_signaled,
+						     &fence->permanent.syncobj);
+		if (ret) {
+			radv_destroy_fence(device, pAllocator, fence);
+			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+		}
+	} else {
+		fence->permanent.kind = RADV_FENCE_WINSYS;
+
+		fence->permanent.fence = device->ws->create_fence();
+		if (!fence->permanent.fence) {
+			vk_free2(&device->vk.alloc, pAllocator, fence);
+			radv_destroy_fence(device, pAllocator, fence);
+			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+		}
+		if (pCreateInfo->flags & VK_FENCE_CREATE_SIGNALED_BIT)
+			device->ws->signal_fence(fence->permanent.fence);
 	}
 
 	*pFence = radv_fence_to_handle(fence);
 
 	return VK_SUCCESS;
 }
+
 
 void radv_DestroyFence(
 	VkDevice                                    _device,
@@ -5765,45 +5517,20 @@ void radv_DestroyFence(
 	if (!fence)
 		return;
 
-	if (fence->temp_syncobj)
-		device->ws->destroy_syncobj(device->ws, fence->temp_syncobj);
-	if (fence->syncobj)
-		device->ws->destroy_syncobj(device->ws, fence->syncobj);
-	if (fence->fence)
-		device->ws->destroy_fence(fence->fence);
-	if (fence->fence_wsi)
-		fence->fence_wsi->destroy(fence->fence_wsi);
-
-	vk_object_base_finish(&fence->base);
-	vk_free2(&device->vk.alloc, pAllocator, fence);
+	radv_destroy_fence(device, pAllocator, fence);
 }
-
-
-uint64_t radv_get_current_time(void)
-{
-	struct timespec tv;
-	clock_gettime(CLOCK_MONOTONIC, &tv);
-	return tv.tv_nsec + tv.tv_sec*1000000000ull;
-}
-
-static uint64_t radv_get_absolute_timeout(uint64_t timeout)
-{
-	uint64_t current_time = radv_get_current_time();
-
-	timeout = MIN2(UINT64_MAX - current_time, timeout);
-
-	return current_time + timeout;
-}
-
 
 static bool radv_all_fences_plain_and_submitted(struct radv_device *device,
                                                 uint32_t fenceCount, const VkFence *pFences)
 {
 	for (uint32_t i = 0; i < fenceCount; ++i) {
 		RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
-		if (fence->fence == NULL || fence->syncobj ||
-		    fence->temp_syncobj || fence->fence_wsi ||
-		    (!device->ws->is_fence_waitable(fence->fence)))
+
+		struct radv_fence_part *part =
+			fence->temporary.kind != RADV_FENCE_NONE ?
+			&fence->temporary : &fence->permanent;
+		if (part->kind != RADV_FENCE_WINSYS ||
+		    !device->ws->is_fence_waitable(part->fence))
 			return false;
 	}
 	return true;
@@ -5813,7 +5540,11 @@ static bool radv_all_fences_syncobj(uint32_t fenceCount, const VkFence *pFences)
 {
 	for (uint32_t i = 0; i < fenceCount; ++i) {
 		RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
-		if (fence->syncobj == 0 && fence->temp_syncobj == 0)
+
+		struct radv_fence_part *part =
+			fence->temporary.kind != RADV_FENCE_NONE ?
+			&fence->temporary : &fence->permanent;
+		if (part->kind != RADV_FENCE_SYNCOBJ)
 			return false;
 	}
 	return true;
@@ -5838,7 +5569,13 @@ VkResult radv_WaitForFences(
 
 		for (uint32_t i = 0; i < fenceCount; ++i) {
 			RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
-			handles[i] = fence->temp_syncobj ? fence->temp_syncobj : fence->syncobj;
+
+			struct radv_fence_part *part =
+				fence->temporary.kind != RADV_FENCE_NONE ?
+				&fence->temporary : &fence->permanent;
+
+			assert(part->kind == RADV_FENCE_SYNCOBJ);
+			handles[i] = part->syncobj;
 		}
 
 		bool success = device->ws->wait_syncobj(device->ws, handles, fenceCount, waitAll, timeout);
@@ -5858,12 +5595,17 @@ VkResult radv_WaitForFences(
 			for (uint32_t i = 0; i < fenceCount; ++i) {
 				RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
 
-				if (device->ws->fence_wait(device->ws, fence->fence, false, 0)) {
+				struct radv_fence_part *part =
+					fence->temporary.kind != RADV_FENCE_NONE ?
+					&fence->temporary : &fence->permanent;
+				assert(part->kind == RADV_FENCE_WINSYS);
+
+				if (device->ws->fence_wait(device->ws, part->fence, false, 0)) {
 					free(fences);
 					return VK_SUCCESS;
 				}
 
-				fences[wait_count++] = fence->fence;
+				fences[wait_count++] = part->fence;
 			}
 
 			bool success = device->ws->fences_wait(device->ws, fences, wait_count,
@@ -5886,36 +5628,40 @@ VkResult radv_WaitForFences(
 		RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
 		bool expired = false;
 
-		if (fence->temp_syncobj) {
-			if (!device->ws->wait_syncobj(device->ws, &fence->temp_syncobj, 1, true, timeout))
-				return VK_TIMEOUT;
-			continue;
-		}
+		struct radv_fence_part *part =
+			fence->temporary.kind != RADV_FENCE_NONE ?
+			&fence->temporary : &fence->permanent;
 
-		if (fence->syncobj) {
-			if (!device->ws->wait_syncobj(device->ws, &fence->syncobj, 1, true, timeout))
-				return VK_TIMEOUT;
-			continue;
-		}
-
-		if (fence->fence) {
-			if (!device->ws->is_fence_waitable(fence->fence)) {
-				while(!device->ws->is_fence_waitable(fence->fence) &&
+		switch (part->kind) {
+		case RADV_FENCE_NONE:
+			break;
+		case RADV_FENCE_WINSYS:
+			if (!device->ws->is_fence_waitable(part->fence)) {
+				while (!device->ws->is_fence_waitable(part->fence) &&
 				      radv_get_current_time() <= timeout)
 					/* Do nothing */;
 			}
 
 			expired = device->ws->fence_wait(device->ws,
-							 fence->fence,
+							 part->fence,
 							 true, timeout);
 			if (!expired)
 				return VK_TIMEOUT;
-		}
-
-		if (fence->fence_wsi) {
-			VkResult result = fence->fence_wsi->wait(fence->fence_wsi, timeout);
+			break;
+		case RADV_FENCE_SYNCOBJ:
+			if (!device->ws->wait_syncobj(device->ws,
+						      &part->syncobj, 1, true,
+						      timeout))
+				return VK_TIMEOUT;
+			break;
+		case RADV_FENCE_WSI: {
+			VkResult result = part->fence_wsi->wait(part->fence_wsi, timeout);
 			if (result != VK_SUCCESS)
 				return result;
+			break;
+		}
+		default:
+			unreachable("Invalid fence type");
 		}
 	}
 
@@ -5930,18 +5676,29 @@ VkResult radv_ResetFences(VkDevice _device,
 
 	for (unsigned i = 0; i < fenceCount; ++i) {
 		RADV_FROM_HANDLE(radv_fence, fence, pFences[i]);
-		if (fence->fence)
-			device->ws->reset_fence(fence->fence);
 
-		/* Per spec, we first restore the permanent payload, and then reset, so
-		 * having a temp syncobj should not skip resetting the permanent syncobj. */
-		if (fence->temp_syncobj) {
-			device->ws->destroy_syncobj(device->ws, fence->temp_syncobj);
-			fence->temp_syncobj = 0;
-		}
+		/* From the Vulkan 1.0.53 spec:
+		 *
+		 *    "If any member of pFences currently has its payload
+		 *    imported with temporary permanence, that fence’s prior
+		 *    permanent payload is irst restored. The remaining
+		 *    operations described therefore operate on the restored
+		 *    payload."
+		 */
+		if (fence->temporary.kind != RADV_FENCE_NONE)
+			radv_destroy_fence_part(device, &fence->temporary);
 
-		if (fence->syncobj) {
-			device->ws->reset_syncobj(device->ws, fence->syncobj);
+		struct radv_fence_part *part = &fence->permanent;
+
+		switch (part->kind) {
+		case RADV_FENCE_WSI:
+			device->ws->reset_fence(part->fence);
+			break;
+		case RADV_FENCE_SYNCOBJ:
+			device->ws->reset_syncobj(device->ws, part->syncobj);
+			break;
+		default:
+			unreachable("Invalid fence type");
 		}
 	}
 
@@ -5953,29 +5710,37 @@ VkResult radv_GetFenceStatus(VkDevice _device, VkFence _fence)
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	RADV_FROM_HANDLE(radv_fence, fence, _fence);
 
-	if (fence->temp_syncobj) {
-			bool success = device->ws->wait_syncobj(device->ws, &fence->temp_syncobj, 1, true, 0);
-			return success ? VK_SUCCESS : VK_NOT_READY;
-	}
+	struct radv_fence_part *part =
+		fence->temporary.kind != RADV_FENCE_NONE ?
+		&fence->temporary : &fence->permanent;
 
-	if (fence->syncobj) {
-			bool success = device->ws->wait_syncobj(device->ws, &fence->syncobj, 1, true, 0);
-			return success ? VK_SUCCESS : VK_NOT_READY;
-	}
-
-	if (fence->fence) {
-		if (!device->ws->fence_wait(device->ws, fence->fence, false, 0))
+	switch (part->kind) {
+	case RADV_FENCE_NONE:
+		break;
+	case RADV_FENCE_WINSYS:
+		if (!device->ws->fence_wait(device->ws, part->fence, false, 0))
 			return VK_NOT_READY;
+		break;
+	case RADV_FENCE_SYNCOBJ: {
+		bool success = device->ws->wait_syncobj(device->ws,
+							&part->syncobj, 1, true, 0);
+		if (!success)
+			return VK_NOT_READY;
+		break;
 	}
-	if (fence->fence_wsi) {
-		VkResult result = fence->fence_wsi->wait(fence->fence_wsi, 0);
-
+	case RADV_FENCE_WSI: {
+		VkResult result = part->fence_wsi->wait(part->fence_wsi, 0);
 		if (result != VK_SUCCESS) {
 			if (result == VK_TIMEOUT)
 				return VK_NOT_READY;
 			return result;
 		}
+		break;
 	}
+	default:
+		unreachable("Invalid fence type");
+	}
+
 	return VK_SUCCESS;
 }
 
@@ -6058,6 +5823,7 @@ radv_timeline_add_point_locked(struct radv_device *device,
 
 	struct radv_timeline_point *ret = NULL;
 	struct radv_timeline_point *prev = NULL;
+	int r;
 
 	if (p <= timeline->highest_signaled)
 		return NULL;
@@ -6074,7 +5840,11 @@ radv_timeline_add_point_locked(struct radv_device *device,
 
 	if (list_is_empty(&timeline->free_points)) {
 		ret = malloc(sizeof(struct radv_timeline_point));
-		device->ws->create_syncobj(device->ws, &ret->syncobj);
+		r = device->ws->create_syncobj(device->ws, false, &ret->syncobj);
+		if (r) {
+			free(ret);
+			return NULL;
+		}
 	} else {
 		ret = list_first_entry(&timeline->free_points, struct radv_timeline_point, list);
 		list_del(&ret->list);
@@ -6095,31 +5865,35 @@ radv_timeline_add_point_locked(struct radv_device *device,
 
 
 static VkResult
-radv_timeline_wait_locked(struct radv_device *device,
-                          struct radv_timeline *timeline,
-                          uint64_t value,
-                          uint64_t abs_timeout)
+radv_timeline_wait(struct radv_device *device,
+                   struct radv_timeline *timeline,
+                   uint64_t value,
+                   uint64_t abs_timeout)
 {
+	pthread_mutex_lock(&timeline->mutex);
+
 	while(timeline->highest_submitted < value) {
 		struct timespec abstime;
 		timespec_from_nsec(&abstime, abs_timeout);
 
 		pthread_cond_timedwait(&device->timeline_cond, &timeline->mutex, &abstime);
 
-		if (radv_get_current_time() >= abs_timeout && timeline->highest_submitted < value)
+		if (radv_get_current_time() >= abs_timeout && timeline->highest_submitted < value) {
+			pthread_mutex_unlock(&timeline->mutex);
 			return VK_TIMEOUT;
+		}
 	}
 
 	struct radv_timeline_point *point = radv_timeline_find_point_at_least_locked(device, timeline, value);
+	pthread_mutex_unlock(&timeline->mutex);
 	if (!point)
 		return VK_SUCCESS;
-
-	pthread_mutex_unlock(&timeline->mutex);
 
 	bool success = device->ws->wait_syncobj(device->ws, &point->syncobj, 1, true, abs_timeout);
 
 	pthread_mutex_lock(&timeline->mutex);
 	point->wait_count--;
+	pthread_mutex_unlock(&timeline->mutex);
 	return success ? VK_SUCCESS : VK_TIMEOUT;
 }
 
@@ -6132,9 +5906,7 @@ radv_timeline_trigger_waiters_locked(struct radv_timeline *timeline,
 		if (waiter->value > timeline->highest_submitted)
 			continue;
 
-		if (p_atomic_dec_zero(&waiter->submission->submission_wait_count)) {
-			list_addtail(&waiter->submission->processing_list, processing_list);
-		}
+		radv_queue_trigger_submission(waiter->submission, 1, processing_list);
 		list_del(&waiter->list);
 	}
 }
@@ -6153,6 +5925,7 @@ void radv_destroy_semaphore_part(struct radv_device *device,
 		radv_destroy_timeline(device, &part->timeline);
 		break;
 	case RADV_SEMAPHORE_SYNCOBJ:
+	case RADV_SEMAPHORE_TIMELINE_SYNCOBJ:
 		device->ws->destroy_syncobj(device->ws, part->syncobj);
 		break;
 	}
@@ -6171,6 +5944,17 @@ radv_get_semaphore_type(const void *pNext, uint64_t *initial_value)
 	if (initial_value)
 		*initial_value = type_info->initialValue;
 	return type_info->semaphoreType;
+}
+
+static void
+radv_destroy_semaphore(struct radv_device *device,
+		       const VkAllocationCallbacks *pAllocator,
+		       struct radv_semaphore *sem)
+{
+	radv_destroy_semaphore_part(device, &sem->temporary);
+	radv_destroy_semaphore_part(device, &sem->permanent);
+	vk_object_base_finish(&sem->base);
+	vk_free2(&device->vk.alloc, pAllocator, sem);
 }
 
 VkResult radv_CreateSemaphore(
@@ -6199,21 +5983,32 @@ VkResult radv_CreateSemaphore(
 	sem->temporary.kind = RADV_SEMAPHORE_NONE;
 	sem->permanent.kind = RADV_SEMAPHORE_NONE;
 
-	if (type == VK_SEMAPHORE_TYPE_TIMELINE) {
+	if (type == VK_SEMAPHORE_TYPE_TIMELINE &&
+	    device->physical_device->rad_info.has_timeline_syncobj) {
+		int ret = device->ws->create_syncobj(device->ws, false, &sem->permanent.syncobj);
+		if (ret) {
+			radv_destroy_semaphore(device, pAllocator, sem);
+			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+		}
+		device->ws->signal_syncobj(device->ws, sem->permanent.syncobj, initial_value);
+		sem->permanent.timeline_syncobj.max_point = initial_value;
+		sem->permanent.kind = RADV_SEMAPHORE_TIMELINE_SYNCOBJ;
+	} else if (type == VK_SEMAPHORE_TYPE_TIMELINE) {
 		radv_create_timeline(&sem->permanent.timeline, initial_value);
 		sem->permanent.kind = RADV_SEMAPHORE_TIMELINE;
 	} else if (device->always_use_syncobj || handleTypes) {
 		assert (device->physical_device->rad_info.has_syncobj);
-		int ret = device->ws->create_syncobj(device->ws, &sem->permanent.syncobj);
+		int ret = device->ws->create_syncobj(device->ws, false,
+						     &sem->permanent.syncobj);
 		if (ret) {
-			vk_free2(&device->vk.alloc, pAllocator, sem);
+			radv_destroy_semaphore(device, pAllocator, sem);
 			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 		}
 		sem->permanent.kind = RADV_SEMAPHORE_SYNCOBJ;
 	} else {
 		sem->permanent.ws_sem = device->ws->create_sem(device->ws);
 		if (!sem->permanent.ws_sem) {
-			vk_free2(&device->vk.alloc, pAllocator, sem);
+			radv_destroy_semaphore(device, pAllocator, sem);
 			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 		}
 		sem->permanent.kind = RADV_SEMAPHORE_WINSYS;
@@ -6233,10 +6028,7 @@ void radv_DestroySemaphore(
 	if (!_semaphore)
 		return;
 
-	radv_destroy_semaphore_part(device, &sem->temporary);
-	radv_destroy_semaphore_part(device, &sem->permanent);
-	vk_object_base_finish(&sem->base);
-	vk_free2(&device->vk.alloc, pAllocator, sem);
+	radv_destroy_semaphore(device, pAllocator, sem);
 }
 
 VkResult
@@ -6258,6 +6050,9 @@ radv_GetSemaphoreCounterValue(VkDevice _device,
 		pthread_mutex_unlock(&part->timeline.mutex);
 		return VK_SUCCESS;
 	}
+	case RADV_SEMAPHORE_TIMELINE_SYNCOBJ: {
+		return device->ws->query_syncobj(device->ws, part->syncobj, pValue);
+	}
 	case RADV_SEMAPHORE_NONE:
 	case RADV_SEMAPHORE_SYNCOBJ:
 	case RADV_SEMAPHORE_WINSYS:
@@ -6276,9 +6071,7 @@ radv_wait_timelines(struct radv_device *device,
 		for (;;) {
 			for(uint32_t i = 0; i < pWaitInfo->semaphoreCount; ++i) {
 				RADV_FROM_HANDLE(radv_semaphore, semaphore, pWaitInfo->pSemaphores[i]);
-				pthread_mutex_lock(&semaphore->permanent.timeline.mutex);
-				VkResult result = radv_timeline_wait_locked(device, &semaphore->permanent.timeline, pWaitInfo->pValues[i], 0);
-				pthread_mutex_unlock(&semaphore->permanent.timeline.mutex);
+				VkResult result = radv_timeline_wait(device, &semaphore->permanent.timeline, pWaitInfo->pValues[i], 0);
 
 				if (result == VK_SUCCESS)
 					return VK_SUCCESS;
@@ -6290,9 +6083,7 @@ radv_wait_timelines(struct radv_device *device,
 
 	for(uint32_t i = 0; i < pWaitInfo->semaphoreCount; ++i) {
 		RADV_FROM_HANDLE(radv_semaphore, semaphore, pWaitInfo->pSemaphores[i]);
-		pthread_mutex_lock(&semaphore->permanent.timeline.mutex);
-		VkResult result = radv_timeline_wait_locked(device, &semaphore->permanent.timeline, pWaitInfo->pValues[i], abs_timeout);
-		pthread_mutex_unlock(&semaphore->permanent.timeline.mutex);
+		VkResult result = radv_timeline_wait(device, &semaphore->permanent.timeline, pWaitInfo->pValues[i], abs_timeout);
 
 		if (result != VK_SUCCESS)
 			return result;
@@ -6306,7 +6097,28 @@ radv_WaitSemaphores(VkDevice _device,
 {
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	uint64_t abs_timeout = radv_get_absolute_timeout(timeout);
-	return radv_wait_timelines(device, pWaitInfo, abs_timeout);
+
+	if (radv_semaphore_from_handle(pWaitInfo->pSemaphores[0])->permanent.kind == RADV_SEMAPHORE_TIMELINE)
+		return radv_wait_timelines(device, pWaitInfo, abs_timeout);
+
+	if (pWaitInfo->semaphoreCount > UINT32_MAX / sizeof(uint32_t))
+		return vk_errorf(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY, "semaphoreCount integer overflow");
+
+	bool wait_all = !(pWaitInfo->flags & VK_SEMAPHORE_WAIT_ANY_BIT_KHR);
+	uint32_t *handles = malloc(sizeof(*handles) * pWaitInfo->semaphoreCount);
+	if (!handles)
+		return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+	for (uint32_t i = 0; i < pWaitInfo->semaphoreCount; ++i) {
+		RADV_FROM_HANDLE(radv_semaphore, semaphore, pWaitInfo->pSemaphores[i]);
+		handles[i] = semaphore->permanent.syncobj;
+	}
+
+	bool success = device->ws->wait_timeline_syncobj(device->ws, handles, pWaitInfo->pValues,
+	                                                 pWaitInfo->semaphoreCount, wait_all, false,
+	                                                 abs_timeout);
+	free(handles);
+	return success ? VK_SUCCESS : VK_TIMEOUT;
 }
 
 VkResult
@@ -6331,7 +6143,21 @@ radv_SignalSemaphore(VkDevice _device,
 		radv_timeline_trigger_waiters_locked(&part->timeline, &processing_list);
 		pthread_mutex_unlock(&part->timeline.mutex);
 
-		return radv_process_submissions(&processing_list);
+		VkResult result = radv_process_submissions(&processing_list);
+
+		/* This needs to happen after radv_process_submissions, so
+		 * that any submitted submissions that are now unblocked get
+		 * processed before we wake the application. This way we
+		 * ensure that any binary semaphores that are now unblocked
+		 * are usable by the application. */
+		pthread_cond_broadcast(&device->timeline_cond);
+
+		return result;
+	}
+	case RADV_SEMAPHORE_TIMELINE_SYNCOBJ: {
+		part->timeline_syncobj.max_point = MAX2(part->timeline_syncobj.max_point, pSignalInfo->value);
+		device->ws->signal_syncobj(device->ws, part->syncobj, pSignalInfo->value);
+		break;
 	}
 	case RADV_SEMAPHORE_NONE:
 	case RADV_SEMAPHORE_SYNCOBJ:
@@ -6345,7 +6171,9 @@ static void radv_destroy_event(struct radv_device *device,
                                const VkAllocationCallbacks* pAllocator,
                                struct radv_event *event)
 {
-	device->ws->buffer_destroy(event->bo);
+	if (event->bo)
+		device->ws->buffer_destroy(event->bo);
+
 	vk_object_base_finish(&event->base);
 	vk_free2(&device->vk.alloc, pAllocator, event);
 }
@@ -6371,7 +6199,7 @@ VkResult radv_CreateEvent(
 					      RADEON_FLAG_VA_UNCACHED | RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING,
 					      RADV_BO_PRIORITY_FENCE);
 	if (!event->bo) {
-		vk_free2(&device->vk.alloc, pAllocator, event);
+		radv_destroy_event(device, pAllocator, event);
 		return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 	}
 
@@ -6431,6 +6259,18 @@ VkResult radv_ResetEvent(
 	return VK_SUCCESS;
 }
 
+static void
+radv_destroy_buffer(struct radv_device *device,
+		    const VkAllocationCallbacks *pAllocator,
+		    struct radv_buffer *buffer)
+{
+	if ((buffer->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) && buffer->bo)
+		device->ws->buffer_destroy(buffer->bo);
+
+	vk_object_base_finish(&buffer->base);
+	vk_free2(&device->vk.alloc, pAllocator, buffer);
+}
+
 VkResult radv_CreateBuffer(
 	VkDevice                                    _device,
 	const VkBufferCreateInfo*                   pCreateInfo,
@@ -6467,7 +6307,7 @@ VkResult radv_CreateBuffer(
 		                                       4096, 0, RADEON_FLAG_VIRTUAL,
 		                                       RADV_BO_PRIORITY_VIRTUAL);
 		if (!buffer->bo) {
-			vk_free2(&device->vk.alloc, pAllocator, buffer);
+			radv_destroy_buffer(device, pAllocator, buffer);
 			return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 		}
 	}
@@ -6488,11 +6328,7 @@ void radv_DestroyBuffer(
 	if (!buffer)
 		return;
 
-	if (buffer->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT)
-		device->ws->buffer_destroy(buffer->bo);
-
-	vk_object_base_finish(&buffer->base);
-	vk_free2(&device->vk.alloc, pAllocator, buffer);
+	radv_destroy_buffer(device, pAllocator, buffer);
 }
 
 VkDeviceAddress radv_GetBufferDeviceAddress(
@@ -7579,23 +7415,26 @@ static VkResult radv_import_sync_fd(struct radv_device *device,
 	 * leave a syncobj in an undetermined state in the fence. */
 	uint32_t syncobj_handle =  *syncobj;
 	if (!syncobj_handle) {
-		int ret = device->ws->create_syncobj(device->ws, &syncobj_handle);
+		bool create_signaled = fd == -1 ? true : false;
+
+		int ret = device->ws->create_syncobj(device->ws, create_signaled,
+						     &syncobj_handle);
 		if (ret) {
-			return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+			return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 		}
+	} else {
+		if (fd == -1)
+			device->ws->signal_syncobj(device->ws, syncobj_handle, 0);
 	}
 
-	if (fd == -1) {
-		device->ws->signal_syncobj(device->ws, syncobj_handle);
-	} else {
+	if (fd != -1) {
 		int ret = device->ws->import_syncobj_from_sync_file(device->ws, syncobj_handle, fd);
-	if (ret != 0)
-		return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+		if (ret)
+			return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+		close(fd);
 	}
 
 	*syncobj = syncobj_handle;
-	if (fd != -1)
-		close(fd);
 
 	return VK_SUCCESS;
 }
@@ -7607,20 +7446,24 @@ VkResult radv_ImportSemaphoreFdKHR(VkDevice _device,
 	RADV_FROM_HANDLE(radv_semaphore, sem, pImportSemaphoreFdInfo->semaphore);
 	VkResult result;
 	struct radv_semaphore_part *dst = NULL;
+	bool timeline = sem->permanent.kind == RADV_SEMAPHORE_TIMELINE_SYNCOBJ;
 
 	if (pImportSemaphoreFdInfo->flags & VK_SEMAPHORE_IMPORT_TEMPORARY_BIT) {
+		assert(!timeline);
 		dst = &sem->temporary;
 	} else {
 		dst = &sem->permanent;
 	}
 
-	uint32_t syncobj = dst->kind == RADV_SEMAPHORE_SYNCOBJ ? dst->syncobj : 0;
+	uint32_t syncobj = (dst->kind == RADV_SEMAPHORE_SYNCOBJ ||
+	                    dst->kind == RADV_SEMAPHORE_TIMELINE_SYNCOBJ) ? dst->syncobj : 0;
 
 	switch(pImportSemaphoreFdInfo->handleType) {
 		case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT:
 			result = radv_import_opaque_fd(device, pImportSemaphoreFdInfo->fd, &syncobj);
 			break;
 		case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT:
+			assert(!timeline);
 			result = radv_import_sync_fd(device, pImportSemaphoreFdInfo->fd, &syncobj);
 			break;
 		default:
@@ -7630,6 +7473,10 @@ VkResult radv_ImportSemaphoreFdKHR(VkDevice _device,
 	if (result == VK_SUCCESS) {
 		dst->syncobj = syncobj;
 		dst->kind = RADV_SEMAPHORE_SYNCOBJ;
+		if (timeline) {
+			dst->kind = RADV_SEMAPHORE_TIMELINE_SYNCOBJ;
+			dst->timeline_syncobj.max_point = 0;
+		}
 	}
 
 	return result;
@@ -7645,33 +7492,36 @@ VkResult radv_GetSemaphoreFdKHR(VkDevice _device,
 	uint32_t syncobj_handle;
 
 	if (sem->temporary.kind != RADV_SEMAPHORE_NONE) {
-		assert(sem->temporary.kind == RADV_SEMAPHORE_SYNCOBJ);
+		assert(sem->temporary.kind == RADV_SEMAPHORE_SYNCOBJ ||
+		       sem->temporary.kind == RADV_SEMAPHORE_TIMELINE_SYNCOBJ);
 		syncobj_handle = sem->temporary.syncobj;
 	} else {
-		assert(sem->permanent.kind == RADV_SEMAPHORE_SYNCOBJ);
+		assert(sem->permanent.kind == RADV_SEMAPHORE_SYNCOBJ ||
+		       sem->permanent.kind == RADV_SEMAPHORE_TIMELINE_SYNCOBJ);
 		syncobj_handle = sem->permanent.syncobj;
 	}
 
 	switch(pGetFdInfo->handleType) {
 	case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT:
 		ret = device->ws->export_syncobj(device->ws, syncobj_handle, pFd);
+		if (ret)
+			return vk_error(device->instance, VK_ERROR_TOO_MANY_OBJECTS);
 		break;
 	case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT:
 		ret = device->ws->export_syncobj_to_sync_file(device->ws, syncobj_handle, pFd);
-		if (!ret) {
-			if (sem->temporary.kind != RADV_SEMAPHORE_NONE) {
-				radv_destroy_semaphore_part(device, &sem->temporary);
-			} else {
-				device->ws->reset_syncobj(device->ws, syncobj_handle);
-			}
+		if (ret)
+			return vk_error(device->instance, VK_ERROR_TOO_MANY_OBJECTS);
+
+		if (sem->temporary.kind != RADV_SEMAPHORE_NONE) {
+			radv_destroy_semaphore_part(device, &sem->temporary);
+		} else {
+			device->ws->reset_syncobj(device->ws, syncobj_handle);
 		}
 		break;
 	default:
 		unreachable("Unhandled semaphore handle type");
 	}
 
-	if (ret)
-		return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
 	return VK_SUCCESS;
 }
 
@@ -7683,7 +7533,13 @@ void radv_GetPhysicalDeviceExternalSemaphoreProperties(
 	RADV_FROM_HANDLE(radv_physical_device, pdevice, physicalDevice);
 	VkSemaphoreTypeKHR type = radv_get_semaphore_type(pExternalSemaphoreInfo->pNext, NULL);
 	
-	if (type == VK_SEMAPHORE_TYPE_TIMELINE) {
+	if (type == VK_SEMAPHORE_TYPE_TIMELINE && pdevice->rad_info.has_timeline_syncobj &&
+	    pExternalSemaphoreInfo->handleType == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT) {
+		pExternalSemaphoreProperties->exportFromImportedHandleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+		pExternalSemaphoreProperties->compatibleHandleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+		pExternalSemaphoreProperties->externalSemaphoreFeatures = VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT |
+			VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT;
+	} else if (type == VK_SEMAPHORE_TYPE_TIMELINE) {
 		pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
 		pExternalSemaphoreProperties->compatibleHandleTypes = 0;
 		pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
@@ -7713,23 +7569,34 @@ VkResult radv_ImportFenceFdKHR(VkDevice _device,
 {
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	RADV_FROM_HANDLE(radv_fence, fence, pImportFenceFdInfo->fence);
-	uint32_t *syncobj_dst = NULL;
-
+	struct radv_fence_part *dst = NULL;
+	VkResult result;
 
 	if (pImportFenceFdInfo->flags & VK_FENCE_IMPORT_TEMPORARY_BIT) {
-		syncobj_dst = &fence->temp_syncobj;
+		dst = &fence->temporary;
 	} else {
-		syncobj_dst = &fence->syncobj;
+		dst = &fence->permanent;
 	}
+
+	uint32_t syncobj = dst->kind == RADV_FENCE_SYNCOBJ ? dst->syncobj : 0;
 
 	switch(pImportFenceFdInfo->handleType) {
 		case VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQUE_FD_BIT:
-			return radv_import_opaque_fd(device, pImportFenceFdInfo->fd, syncobj_dst);
+			result = radv_import_opaque_fd(device, pImportFenceFdInfo->fd, &syncobj);
+			break;
 		case VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT:
-			return radv_import_sync_fd(device, pImportFenceFdInfo->fd, syncobj_dst);
+			result = radv_import_sync_fd(device, pImportFenceFdInfo->fd, &syncobj);
+			break;
 		default:
 			unreachable("Unhandled fence handle type");
 	}
+
+	if (result == VK_SUCCESS) {
+		dst->syncobj = syncobj;
+		dst->kind = RADV_FENCE_SYNCOBJ;
+	}
+
+	return result;
 }
 
 VkResult radv_GetFenceFdKHR(VkDevice _device,
@@ -7739,34 +7606,33 @@ VkResult radv_GetFenceFdKHR(VkDevice _device,
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	RADV_FROM_HANDLE(radv_fence, fence, pGetFdInfo->fence);
 	int ret;
-	uint32_t syncobj_handle;
 
-	if (fence->temp_syncobj)
-		syncobj_handle = fence->temp_syncobj;
-	else
-		syncobj_handle = fence->syncobj;
+	struct radv_fence_part *part =
+		fence->temporary.kind != RADV_FENCE_NONE ?
+		&fence->temporary : &fence->permanent;
 
 	switch(pGetFdInfo->handleType) {
 	case VK_EXTERNAL_FENCE_HANDLE_TYPE_OPAQUE_FD_BIT:
-		ret = device->ws->export_syncobj(device->ws, syncobj_handle, pFd);
+		ret = device->ws->export_syncobj(device->ws, part->syncobj, pFd);
+		if (ret)
+			return vk_error(device->instance, VK_ERROR_TOO_MANY_OBJECTS);
 		break;
 	case VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT:
-		ret = device->ws->export_syncobj_to_sync_file(device->ws, syncobj_handle, pFd);
-		if (!ret) {
-			if (fence->temp_syncobj) {
-				close (fence->temp_syncobj);
-				fence->temp_syncobj = 0;
-			} else {
-				device->ws->reset_syncobj(device->ws, syncobj_handle);
-			}
+		ret = device->ws->export_syncobj_to_sync_file(device->ws,
+							      part->syncobj, pFd);
+		if (ret)
+			return vk_error(device->instance, VK_ERROR_TOO_MANY_OBJECTS);
+
+		if (part == &fence->temporary) {
+			radv_destroy_fence_part(device, part);
+		} else {
+			device->ws->reset_syncobj(device->ws, part->syncobj);
 		}
 		break;
 	default:
 		unreachable("Unhandled fence handle type");
 	}
 
-	if (ret)
-		return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
 	return VK_SUCCESS;
 }
 

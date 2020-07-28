@@ -51,6 +51,7 @@ pre_args = [
 
 with_vulkan_icd_dir = get_option('vulkan-icd-dir')
 with_tests = get_option('build-tests')
+with_aco_tests = get_option('build-aco-tests')
 with_glx_read_only_text = get_option('glx-read-only-text')
 with_glx_direct = get_option('glx-direct')
 with_osmesa = get_option('osmesa')
@@ -275,6 +276,9 @@ endif
 if with_gallium_tegra and not with_gallium_nouveau
   error('tegra driver requires nouveau driver')
 endif
+if with_aco_tests and not with_amd_vk
+  error('ACO tests require Radv')
+endif
 
 if host_machine.system() == 'darwin'
   with_dri_platform = 'apple'
@@ -293,9 +297,9 @@ endif
 _platforms = get_option('platforms')
 if _platforms.contains('auto')
   if system_has_kms_drm
-    _platforms = ['x11', 'wayland', 'drm', 'surfaceless']
+    _platforms = ['x11', 'wayland']
   elif ['darwin', 'cygwin'].contains(host_machine.system())
-    _platforms = ['x11', 'surfaceless']
+    _platforms = ['x11']
   elif ['haiku'].contains(host_machine.system())
     _platforms = ['haiku']
   elif host_machine.system() == 'windows'
@@ -309,27 +313,21 @@ endif
 with_platform_android = _platforms.contains('android')
 with_platform_x11 = _platforms.contains('x11')
 with_platform_wayland = _platforms.contains('wayland')
-with_platform_drm = _platforms.contains('drm')
 with_platform_haiku = _platforms.contains('haiku')
-with_platform_surfaceless = _platforms.contains('surfaceless')
 with_platform_windows = _platforms.contains('windows')
+
+if _platforms.contains('surfaceless')
+  warning('Platform `surfaceless` is now always selected; setting this option will be an error in Mesa 20.3')
+endif
+
+if _platforms.contains('drm')
+  warning('Platform `drm` is now automatically selected; setting this option will be an error in Mesa 20.3')
+endif
 
 if _platforms.length() != 0
   egl_native_platform = _platforms[0]
-endif
-
-_xlib_lease = get_option('xlib-lease')
-if _xlib_lease == 'true'
-  _xlib_lease = 'enabled'
-  warning('xlib_lease option "true" deprecated, please use "enabled" instead.')
-elif _xlib_lease == 'false'
-  _xlib_lease = 'disabled'
-  warning('xlib_lease option "false" deprecated, please use "disabled" instead.')
-endif
-if _xlib_lease == 'auto'
-  with_xlib_lease = with_platform_x11 and with_platform_drm
 else
-  with_xlib_lease = _xlib_lease == 'enabled'
+  egl_native_platform = 'surfaceless'
 endif
 
 with_glx = get_option('glx')
@@ -382,6 +380,20 @@ if with_gbm and not system_has_kms_drm
   error('GBM only supports DRM/KMS platforms')
 endif
 
+_xlib_lease = get_option('xlib-lease')
+if _xlib_lease == 'true'
+  _xlib_lease = 'enabled'
+  warning('xlib_lease option "true" deprecated, please use "enabled" instead.')
+elif _xlib_lease == 'false'
+  _xlib_lease = 'disabled'
+  warning('xlib_lease option "false" deprecated, please use "disabled" instead.')
+endif
+if _xlib_lease == 'auto'
+  with_xlib_lease = with_platform_x11 and with_gbm
+else
+  with_xlib_lease = _xlib_lease == 'enabled'
+endif
+
 _egl = get_option('egl')
 if _egl == 'true'
   _egl = 'enabled'
@@ -393,15 +405,13 @@ endif
 if _egl == 'auto'
   with_egl = (
     not ['darwin', 'windows'].contains(host_machine.system()) and
-    with_dri and with_shared_glapi and _platforms.length() != 0
+    with_dri and with_shared_glapi
   )
 elif _egl == 'enabled'
   if not with_dri
     error('EGL requires dri')
   elif not with_shared_glapi
     error('EGL requires shared-glapi')
-  elif _platforms.length() == 0
-    error('No platforms specified, consider -Dplatforms=drm,x11,surfaceless at least')
   elif not ['disabled', 'dri'].contains(with_glx)
     error('EGL requires dri, but a GLX is being built without dri')
   elif ['darwin', 'windows'].contains(host_machine.system())
@@ -412,17 +422,8 @@ else
   with_egl = false
 endif
 
-if with_egl and not (with_platform_drm or with_platform_surfaceless or with_platform_android)
-  if with_gallium_radeonsi
-    error('RadeonSI requires the drm, surfaceless or android platform when using EGL')
-  endif
-  if with_gallium_virgl
-    error('Virgl requires the drm, surfaceless or android platform when using EGL')
-  endif
-endif
-
 # Android uses emutls for versions <= P/28. For USE_ELF_TLS we need ELF TLS.
-if host_machine.system() != 'windows' and (not with_platform_android or get_option('platform-sdk-version') >= 29)
+if not ['windows', 'freebsd'].contains(host_machine.system()) and (not with_platform_android or get_option('platform-sdk-version') >= 29)
   pre_args += '-DUSE_ELF_TLS'
 endif
 
@@ -540,6 +541,10 @@ endif
 
 if with_gallium_zink
   dep_vulkan = dependency('vulkan')
+endif
+
+if with_vulkan_overlay_layer or with_aco_tests
+  prog_glslang = find_program('glslangValidator')
 endif
 
 _xvmc = get_option('gallium-xvmc')
@@ -828,14 +833,8 @@ else
   pre_args += '-DEGL_NO_X11'
   gl_pkgconfig_c_flags += '-DEGL_NO_X11'
 endif
-if with_platform_drm
-  if with_egl and not with_gbm
-    error('EGL drm platform requires gbm')
-  endif
+if with_gbm
   pre_args += '-DHAVE_DRM_PLATFORM'
-endif
-if with_platform_surfaceless
-  pre_args += '-DHAVE_SURFACELESS_PLATFORM'
 endif
 if with_platform_android
   dep_android = [
@@ -991,6 +990,7 @@ else
     '-Werror=empty-body',
     '-Werror=incompatible-pointer-types',
     '-Werror=int-conversion',
+    '-Wimplicit-fallthrough',
     '-Wno-missing-field-initializers',
     '-Wno-format-truncation',
     '-fno-math-errno',
@@ -1363,7 +1363,7 @@ dep_libdrm_intel = null_dep
 
 _drm_amdgpu_ver = '2.4.100'
 _drm_radeon_ver = '2.4.71'
-_drm_nouveau_ver = '2.4.66'
+_drm_nouveau_ver = '2.4.102'
 _drm_intel_ver = '2.4.75'
 _drm_ver = '2.4.81'
 
@@ -1765,6 +1765,19 @@ else
   dep_lmsensors = null_dep
 endif
 
+# If the compiler supports it, put function and data symbols in their
+# own sections and GC the sections after linking.  This lets drivers
+# drop shared code unused by that specific driver (particularly
+# relevant for Vulkan drivers).
+if cc.has_link_argument('-Wl,--gc-sections')
+  add_project_arguments('-Wl,--gc-sections', language : ['c', 'cpp'])
+  foreach a: ['-ffunction-sections', '-fdata-sections']
+    if cc.has_argument(a)
+      add_project_arguments(a, language : ['c', 'cpp'])
+    endif
+  endforeach
+endif
+
 foreach a : pre_args
   add_project_arguments(a, language : ['c', 'cpp'])
 endforeach
@@ -1887,7 +1900,11 @@ if with_egl
   lines += 'EGL drivers:     ' + ' '.join(egl_drivers)
 endif
 lines += 'GBM:             ' + (with_gbm ? 'yes' : 'no')
-if _platforms.length() != 0
+if with_egl or with_any_vk
+  _platforms += 'surfaceless'
+  if with_gbm
+    _platforms += 'drm'
+  endif
   lines += 'EGL/Vulkan/VL platforms:   ' + ' '.join(_platforms)
 endif
 

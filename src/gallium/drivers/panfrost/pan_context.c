@@ -54,6 +54,7 @@
 #include "pan_cmdstream.h"
 #include "pan_util.h"
 #include "pandecode/decode.h"
+#include "util/pan_lower_framebuffer.h"
 
 struct midgard_tiler_descriptor
 panfrost_emit_midg_tiler(struct panfrost_batch *batch, unsigned vertex_count)
@@ -238,39 +239,30 @@ panfrost_flush(
         unsigned flags)
 {
         struct panfrost_context *ctx = pan_context(pipe);
-        struct util_dynarray fences;
+        struct panfrost_device *dev = pan_device(pipe->screen);
+        uint32_t syncobj = 0;
 
-        /* We must collect the fences before the flush is done, otherwise we'll
-         * lose track of them.
-         */
-        if (fence) {
-                util_dynarray_init(&fences, NULL);
-                hash_table_foreach(ctx->batches, hentry) {
-                        struct panfrost_batch *batch = hentry->data;
-
-                        panfrost_batch_fence_reference(batch->out_sync);
-                        util_dynarray_append(&fences,
-                                             struct panfrost_batch_fence *,
-                                             batch->out_sync);
-                }
-        }
+        if (fence)
+                drmSyncobjCreate(dev->fd, 0, &syncobj);
 
         /* Submit all pending jobs */
-        panfrost_flush_all_batches(ctx, false);
+        panfrost_flush_all_batches(ctx, syncobj);
 
         if (fence) {
-                struct panfrost_fence *f = panfrost_fence_create(ctx, &fences);
+                struct panfrost_fence *f = panfrost_fence_create(ctx, syncobj);
                 pipe->screen->fence_reference(pipe->screen, fence, NULL);
                 *fence = (struct pipe_fence_handle *)f;
-
-                util_dynarray_foreach(&fences, struct panfrost_batch_fence *, fence)
-                        panfrost_batch_fence_unreference(*fence);
-
-                util_dynarray_fini(&fences);
         }
 
-        if (pan_debug & PAN_DBG_TRACE)
+        if (dev->debug & PAN_DBG_TRACE)
                 pandecode_next_frame();
+}
+
+static void
+panfrost_texture_barrier(struct pipe_context *pipe, unsigned flags)
+{
+        struct panfrost_context *ctx = pan_context(pipe);
+        panfrost_flush_all_batches(ctx, 0);
 }
 
 #define DEFINE_CASE(c) case PIPE_PRIM_##c: return MALI_##c;
@@ -557,6 +549,7 @@ panfrost_create_shader_state(
         enum pipe_shader_type stage)
 {
         struct panfrost_shader_variants *so = CALLOC_STRUCT(panfrost_shader_variants);
+        struct panfrost_device *dev = pan_device(pctx->screen);
         so->base = *cso;
 
         /* Token deep copy to prevent memory corruption */
@@ -565,7 +558,7 @@ panfrost_create_shader_state(
                 so->base.tokens = tgsi_dup_tokens(so->base.tokens);
 
         /* Precompile for shader-db if we need to */
-        if (unlikely((pan_debug & PAN_DBG_PRECOMPILE) && cso->type == PIPE_SHADER_IR_NIR)) {
+        if (unlikely((dev->debug & PAN_DBG_PRECOMPILE) && cso->type == PIPE_SHADER_IR_NIR)) {
                 struct panfrost_context *ctx = pan_context(pctx);
 
                 struct panfrost_shader_state state;
@@ -588,7 +581,7 @@ panfrost_delete_shader_state(
         struct panfrost_shader_variants *cso = (struct panfrost_shader_variants *) so;
 
         if (cso->base.type == PIPE_SHADER_IR_TGSI) {
-                DBG("Deleting TGSI shader leaks duplicated tokens\n");
+                /* TODO: leaks TGSI tokens! */
         }
 
         for (unsigned i = 0; i < cso->variant_count; ++i) {
@@ -659,6 +652,27 @@ panfrost_variant_matches(
 
                 if (!(same_func && same_ref)) {
                         return false;
+                }
+        }
+
+        if (variant->outputs_read) {
+                struct pipe_framebuffer_state *fb = &ctx->pipe_framebuffer;
+
+                unsigned i;
+                BITSET_FOREACH_SET(i, &variant->outputs_read, 8) {
+                        enum pipe_format fmt = PIPE_FORMAT_R8G8B8A8_UNORM;
+
+                        if ((fb->nr_cbufs > i) && fb->cbufs[i])
+                                fmt = fb->cbufs[i]->format;
+
+                        const struct util_format_description *desc =
+                                util_format_description(fmt);
+
+                        if (pan_format_class_load(desc, dev->quirks) == PAN_FORMAT_NATIVE)
+                                fmt = PIPE_FORMAT_NONE;
+
+                        if (variant->rt_formats[i] != fmt)
+                                return false;
                 }
         }
 
@@ -775,6 +789,22 @@ panfrost_bind_shader_state(
                 if (type == PIPE_SHADER_FRAGMENT) {
                         v->alpha_state = ctx->depth_stencil->alpha;
 
+                        struct pipe_framebuffer_state *fb = &ctx->pipe_framebuffer;
+                        for (unsigned i = 0; i < fb->nr_cbufs; ++i) {
+                                enum pipe_format fmt = PIPE_FORMAT_R8G8B8A8_UNORM;
+
+                                if ((fb->nr_cbufs > i) && fb->cbufs[i])
+                                        fmt = fb->cbufs[i]->format;
+
+                                const struct util_format_description *desc =
+                                        util_format_description(fmt);
+
+                                if (pan_format_class_load(desc, dev->quirks) == PAN_FORMAT_NATIVE)
+                                        fmt = PIPE_FORMAT_NONE;
+
+                                v->rt_formats[i] = fmt;
+                        }
+
                         /* Point sprites are TODO on Bifrost */
                         if (ctx->rasterizer && !(dev->quirks & IS_BIFROST)) {
                                 v->point_sprite_mask = ctx->rasterizer->base.sprite_coord_enable;
@@ -883,32 +913,6 @@ panfrost_set_stencil_ref(
         ctx->stencil_ref = *ref;
 }
 
-static enum mali_texture_type
-panfrost_translate_texture_type(enum pipe_texture_target t) {
-        switch (t)
-        {
-        case PIPE_BUFFER:
-        case PIPE_TEXTURE_1D:
-        case PIPE_TEXTURE_1D_ARRAY:
-                return MALI_TEX_1D;
-
-        case PIPE_TEXTURE_2D:
-        case PIPE_TEXTURE_2D_ARRAY:
-        case PIPE_TEXTURE_RECT:
-                return MALI_TEX_2D;
-
-        case PIPE_TEXTURE_3D:
-                return MALI_TEX_3D;
-
-        case PIPE_TEXTURE_CUBE:
-        case PIPE_TEXTURE_CUBE_ARRAY:
-                return MALI_TEX_CUBE;
-
-        default:
-                unreachable("Unknown target");
-        }
-}
-
 void
 panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                                 struct pipe_context *pctx,
@@ -916,7 +920,28 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
 {
         struct panfrost_device *device = pan_device(pctx->screen);
         struct panfrost_resource *prsrc = (struct panfrost_resource *)texture;
+        enum pipe_format format = so->base.format;
         assert(prsrc->bo);
+
+        /* Format to access the stencil portion of a Z32_S8 texture */
+        if (format == PIPE_FORMAT_X32_S8X24_UINT) {
+                assert(prsrc->separate_stencil);
+                texture = &prsrc->separate_stencil->base;
+                prsrc = (struct panfrost_resource *)texture;
+                format = texture->format;
+        }
+
+        const struct util_format_description *desc = util_format_description(format);
+
+        bool fake_rgtc = !panfrost_supports_compressed_format(device, MALI_BC4_UNORM);
+
+        if (desc->layout == UTIL_FORMAT_LAYOUT_RGTC && fake_rgtc) {
+                if (desc->is_snorm)
+                        format = PIPE_FORMAT_R8G8B8A8_SNORM;
+                else
+                        format = PIPE_FORMAT_R8G8B8A8_UNORM;
+                desc = util_format_description(format);
+        }
 
         so->texture_bo = prsrc->bo->gpu;
         so->layout = prsrc->layout;
@@ -932,6 +957,7 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
          * whereas in Gallium, it also covers cubemaps */
 
         unsigned array_size = texture->array_size;
+        unsigned depth = texture->depth0;
 
         if (so->base.target == PIPE_TEXTURE_CUBE) {
                 /* TODO: Cubemap arrays */
@@ -939,12 +965,21 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                 array_size /= 6;
         }
 
+        /* MSAA only supported for 2D textures (and 2D texture arrays via an
+         * extension currently unimplemented */
+
+        if (so->base.target == PIPE_TEXTURE_2D) {
+                assert(depth == 1);
+                depth = texture->nr_samples;
+        } else {
+                /* MSAA only supported for 2D textures */
+                assert(texture->nr_samples <= 1);
+        }
+
         enum mali_texture_type type =
                 panfrost_translate_texture_type(so->base.target);
 
         if (device->quirks & IS_BIFROST) {
-                const struct util_format_description *desc =
-                        util_format_description(so->base.format);
                 unsigned char composed_swizzle[4];
                 util_format_compose_swizzles(desc->swizzle, user_swizzle, composed_swizzle);
 
@@ -953,21 +988,23 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                                 so->base.u.tex.last_level,
                                 so->base.u.tex.first_layer,
                                 so->base.u.tex.last_layer,
+                                texture->nr_samples,
                                 type, prsrc->layout);
 
-                so->bo = pan_bo_create(device, size, 0);
+                so->bo = panfrost_bo_create(device, size, 0);
 
                 so->bifrost_descriptor = rzalloc(pctx, struct bifrost_texture_descriptor);
                 panfrost_new_texture_bifrost(
                                 so->bifrost_descriptor,
                                 texture->width0, texture->height0,
-                                texture->depth0, array_size,
-                                so->base.format,
+                                depth, array_size,
+                                format,
                                 type, prsrc->layout,
                                 so->base.u.tex.first_level,
                                 so->base.u.tex.last_level,
                                 so->base.u.tex.first_layer,
                                 so->base.u.tex.last_layer,
+                                texture->nr_samples,
                                 prsrc->cubemap_stride,
                                 panfrost_translate_swizzle_4(composed_swizzle),
                                 prsrc->bo->gpu,
@@ -979,21 +1016,23 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                                 so->base.u.tex.last_level,
                                 so->base.u.tex.first_layer,
                                 so->base.u.tex.last_layer,
+                                texture->nr_samples,
                                 type, prsrc->layout);
                 size += sizeof(struct mali_texture_descriptor);
 
-                so->bo = pan_bo_create(device, size, 0);
+                so->bo = panfrost_bo_create(device, size, 0);
 
                 panfrost_new_texture(
                                 so->bo->cpu,
                                 texture->width0, texture->height0,
-                                texture->depth0, array_size,
-                                so->base.format,
+                                depth, array_size,
+                                format,
                                 type, prsrc->layout,
                                 so->base.u.tex.first_level,
                                 so->base.u.tex.last_level,
                                 so->base.u.tex.first_layer,
                                 so->base.u.tex.last_layer,
+                                texture->nr_samples,
                                 prsrc->cubemap_stride,
                                 panfrost_translate_swizzle_4(user_swizzle),
                                 prsrc->bo->gpu,
@@ -1084,7 +1123,7 @@ panfrost_hint_afbc(
                 const struct pipe_framebuffer_state *fb)
 {
         /* AFBC implemenation incomplete; hide it */
-        if (!(pan_debug & PAN_DBG_AFBC)) return;
+        if (!(device->debug & PAN_DBG_AFBC)) return;
 
         /* Hint AFBC to the resources bound to each color buffer */
 
@@ -1112,6 +1151,13 @@ panfrost_set_framebuffer_state(struct pipe_context *pctx,
         util_copy_framebuffer_state(&ctx->pipe_framebuffer, fb);
         ctx->batch = NULL;
         panfrost_invalidate_frame(ctx);
+
+        /* We may need to generate a new variant if the fragment shader is
+         * keyed to the framebuffer format (due to EXT_framebuffer_fetch) */
+        struct panfrost_shader_variants *fs = ctx->shader[PIPE_SHADER_FRAGMENT];
+
+        if (fs && fs->variant_count && fs->variants[fs->active_variant].outputs_read)
+                ctx->base.bind_fs_state(&ctx->base, fs);
 }
 
 static void *
@@ -1154,7 +1200,18 @@ static void
 panfrost_set_sample_mask(struct pipe_context *pipe,
                          unsigned sample_mask)
 {
+        struct panfrost_context *ctx = pan_context(pipe);
+        ctx->sample_mask = sample_mask;
 }
+
+static void
+panfrost_set_min_samples(struct pipe_context *pipe,
+                         unsigned min_samples)
+{
+        struct panfrost_context *ctx = pan_context(pipe);
+        ctx->min_samples = min_samples;
+}
+
 
 static void
 panfrost_set_clip_state(struct pipe_context *pipe,
@@ -1261,7 +1318,7 @@ panfrost_begin_query(struct pipe_context *pipe, struct pipe_query *q)
         case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
                 /* Allocate a bo for the query results to be stored */
                 if (!query->bo) {
-                        query->bo = pan_bo_create(
+                        query->bo = panfrost_bo_create(
                                         pan_device(ctx->base.screen),
                                         sizeof(unsigned), 0);
                 }
@@ -1282,7 +1339,7 @@ panfrost_begin_query(struct pipe_context *pipe, struct pipe_query *q)
                 break;
 
         default:
-                DBG("Skipping query %u\n", query->type);
+                /* TODO: timestamp queries, etc? */
                 break;
         }
 
@@ -1326,9 +1383,8 @@ panfrost_get_query_result(struct pipe_context *pipe,
         case PIPE_QUERY_OCCLUSION_COUNTER:
         case PIPE_QUERY_OCCLUSION_PREDICATE:
         case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
-                DBG("Flushing for occlusion query\n");
-                panfrost_flush_batches_accessing_bo(ctx, query->bo, PAN_BO_ACCESS_WRITE);
-                panfrost_bo_wait(query->bo, INT64_MAX, PAN_BO_ACCESS_WRITE);
+                panfrost_flush_batches_accessing_bo(ctx, query->bo, false);
+                panfrost_bo_wait(query->bo, INT64_MAX, false);
 
                 /* Read back the query results */
                 unsigned *result = (unsigned *) query->bo->cpu;
@@ -1344,13 +1400,12 @@ panfrost_get_query_result(struct pipe_context *pipe,
 
         case PIPE_QUERY_PRIMITIVES_GENERATED:
         case PIPE_QUERY_PRIMITIVES_EMITTED:
-                DBG("Flushing for primitive query\n");
-                panfrost_flush_all_batches(ctx, true);
+                panfrost_flush_all_batches(ctx, 0);
                 vresult->u64 = query->end - query->start;
                 break;
 
         default:
-                DBG("Skipped query get %u\n", query->type);
+                /* TODO: more queries */
                 break;
         }
 
@@ -1428,6 +1483,7 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         gallium->flush = panfrost_flush;
         gallium->clear = panfrost_clear;
         gallium->draw_vbo = panfrost_draw_vbo;
+        gallium->texture_barrier = panfrost_texture_barrier;
 
         gallium->set_vertex_buffers = panfrost_set_vertex_buffers;
         gallium->set_constant_buffer = panfrost_set_constant_buffer;
@@ -1464,6 +1520,7 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         gallium->delete_depth_stencil_alpha_state = panfrost_delete_depth_stencil_state;
 
         gallium->set_sample_mask = panfrost_set_sample_mask;
+        gallium->set_min_samples = panfrost_set_min_samples;
 
         gallium->set_clip_state = panfrost_set_clip_state;
         gallium->set_viewport_states = panfrost_set_viewport_states;
@@ -1511,6 +1568,14 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
 
         panfrost_batch_init(ctx);
         panfrost_invalidate_frame(ctx);
+
+        if (!(dev->quirks & IS_BIFROST)) {
+                for (unsigned c = 0; c < PIPE_MAX_COLOR_BUFS; ++c)
+                        ctx->blit_blend.rt[c].shaders = _mesa_hash_table_u64_create(ctx);
+        }
+
+        /* By default mask everything on */
+        ctx->sample_mask = ~0;
 
         return gallium;
 }
