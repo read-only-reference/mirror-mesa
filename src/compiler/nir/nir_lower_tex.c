@@ -830,9 +830,19 @@ lower_tex_packing(nir_builder *b, nir_tex_instr *tex,
 
       switch (nir_alu_type_get_base_type(tex->dest_type)) {
       case nir_type_float:
-         if (tex->is_shadow && tex->is_new_style_shadow) {
+         switch (nir_tex_instr_dest_size(tex)) {
+         case 1:
+            assert(tex->is_shadow && tex->is_new_style_shadow);
             color = nir_unpack_half_2x16_split_x(b, nir_channel(b, color, 0));
-         } else {
+            break;
+         case 2: {
+            nir_ssa_def *rg = nir_channel(b, color, 0);
+            color = nir_vec2(b,
+                             nir_unpack_half_2x16_split_x(b, rg),
+                             nir_unpack_half_2x16_split_y(b, rg));
+            break;
+         }
+         case 4: {
             nir_ssa_def *rg = nir_channel(b, color, 0);
             nir_ssa_def *ba = nir_channel(b, color, 1);
             color = nir_vec4(b,
@@ -840,6 +850,10 @@ lower_tex_packing(nir_builder *b, nir_tex_instr *tex,
                              nir_unpack_half_2x16_split_y(b, rg),
                              nir_unpack_half_2x16_split_x(b, ba),
                              nir_unpack_half_2x16_split_y(b, ba));
+            break;
+         }
+         default:
+            unreachable("wrong dest_size");
          }
          break;
 
@@ -1086,7 +1100,8 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
       if (options->lower_tex_packing[tex->sampler_index] !=
           nir_lower_tex_packing_none &&
           tex->op != nir_texop_txs &&
-          tex->op != nir_texop_query_levels) {
+          tex->op != nir_texop_query_levels &&
+          tex->op != nir_texop_texture_samples) {
          lower_tex_packing(b, tex, options);
          progress = true;
       }

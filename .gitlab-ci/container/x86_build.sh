@@ -58,7 +58,7 @@ export           WAYLAND_RELEASES=https://wayland.freedesktop.org/releases
 export         XORGMACROS_VERSION=util-macros-1.19.0
 export           XCBPROTO_VERSION=xcb-proto-1.13
 export             LIBXCB_VERSION=libxcb-1.13
-export         LIBWAYLAND_VERSION=wayland-1.15.0
+export         LIBWAYLAND_VERSION=wayland-1.17.0
 export  WAYLAND_PROTOCOLS_VERSION=wayland-protocols-1.12
 
 wget $XORG_RELEASES/util/$XORGMACROS_VERSION.tar.bz2
@@ -92,7 +92,7 @@ rm -rf $WAYLAND_PROTOCOLS_VERSION
 # The version of libglvnd-dev in debian is too old
 # Check this page to see when this local compilation can be dropped in favour of the package:
 # https://packages.debian.org/libglvnd-dev
-GLVND_VERSION=1.2.0
+GLVND_VERSION=1.3.2
 wget https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v$GLVND_VERSION/libglvnd-v$GLVND_VERSION.tar.gz
 tar -xvf libglvnd-v$GLVND_VERSION.tar.gz && rm libglvnd-v$GLVND_VERSION.tar.gz
 pushd libglvnd-v$GLVND_VERSION; ./autogen.sh; ./configure; make install; popd

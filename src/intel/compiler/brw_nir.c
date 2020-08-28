@@ -516,6 +516,8 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
 
       if (is_scalar) {
          OPT(nir_lower_alu_to_scalar, NULL, NULL);
+      } else {
+         OPT(nir_opt_shrink_vectors);
       }
 
       OPT(nir_copy_prop);
@@ -707,6 +709,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    }
 
    OPT(nir_lower_system_values);
+   OPT(nir_lower_compute_system_values, NULL);
 
    const nir_lower_subgroups_options subgroups_options = {
       .ballot_bit_size = 32,
@@ -1185,8 +1188,8 @@ brw_cmod_for_nir_comparison(nir_op op)
    case nir_op_b32all_iequal4:
       return BRW_CONDITIONAL_Z;
 
-   case nir_op_fne:
-   case nir_op_fne32:
+   case nir_op_fneu:
+   case nir_op_fneu32:
    case nir_op_ine:
    case nir_op_ine32:
    case nir_op_b32any_fnequal2:

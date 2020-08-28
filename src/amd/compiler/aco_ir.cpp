@@ -31,9 +31,13 @@ namespace aco {
 uint64_t debug_flags = 0;
 
 static const struct debug_control aco_debug_options[] = {
-   {"validateir", DEBUG_VALIDATE},
+   {"validateir", DEBUG_VALIDATE_IR},
    {"validatera", DEBUG_VALIDATE_RA},
    {"perfwarn", DEBUG_PERFWARN},
+   {"force-waitcnt", DEBUG_FORCE_WAITCNT},
+   {"novn", DEBUG_NO_VN},
+   {"noopt", DEBUG_NO_OPT},
+   {"nosched", DEBUG_NO_SCHED},
    {NULL, 0}
 };
 
@@ -45,7 +49,7 @@ static void init_once()
 
    #ifndef NDEBUG
    /* enable some flags by default on debug builds */
-   debug_flags |= aco::DEBUG_VALIDATE;
+   debug_flags |= aco::DEBUG_VALIDATE_IR;
    #endif
 }
 
@@ -101,7 +105,10 @@ void init_program(Program *program, Stage stage, struct radv_shader_info *info,
       program->physical_sgprs = 2560; /* doesn't matter as long as it's at least 128 * 20 */
       program->sgpr_alloc_granule = 127;
       program->sgpr_limit = 106;
-      program->vgpr_alloc_granule = program->wave_size == 32 ? 7 : 3;
+      if (chip_class >= GFX10_3)
+         program->vgpr_alloc_granule = program->wave_size == 32 ? 15 : 7;
+      else
+         program->vgpr_alloc_granule = program->wave_size == 32 ? 7 : 3;
    } else if (program->chip_class >= GFX8) {
       program->physical_sgprs = 800;
       program->sgpr_alloc_granule = 15;
@@ -234,6 +241,10 @@ aco_ptr<Instruction> convert_to_SDWA(chip_class chip, aco_ptr<Instruction>& inst
    }
 
    for (unsigned i = 0; i < instr->operands.size(); i++) {
+      /* SDWA only uses operands 0 and 1. */
+      if (i >= 2)
+         break;
+
       switch (instr->operands[i].bytes()) {
       case 1:
          sdwa->sel[i] = sdwa_ubyte;

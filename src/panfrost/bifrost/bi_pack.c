@@ -1219,7 +1219,7 @@ bi_pack_add_ld_vary(bi_clause *clause, bi_instruction *ins, bi_registers *regs)
         struct bifrost_ld_var pack = {
                 .src0 = bi_get_src(ins, regs, 1),
                 .addr = packed_addr,
-                .channels = MALI_POSITIVE(channels),
+                .channels = channels - 1,
                 .interp_mode = ins->load_vary.interp_mode,
                 .reuse = ins->load_vary.reuse,
                 .flat = ins->load_vary.flat,
@@ -1352,7 +1352,7 @@ bi_pack_add_ld_attr(bi_clause *clause, bi_instruction *ins, bi_registers *regs)
                 .src0 = bi_get_src(ins, regs, 1),
                 .src1 = bi_get_src(ins, regs, 2),
                 .location = bi_get_immediate(ins, 0),
-                .channels = MALI_POSITIVE(ins->vector_channels),
+                .channels = ins->vector_channels - 1,
                 .type = bi_pack_ldst_type(ins->dest_type),
                 .op = BIFROST_ADD_OP_LD_ATTR
         };
@@ -1370,7 +1370,7 @@ bi_pack_add_st_vary(bi_clause *clause, bi_instruction *ins, bi_registers *regs)
                 .src0 = bi_get_src(ins, regs, 1),
                 .src1 = bi_get_src(ins, regs, 2),
                 .src2 = bi_get_src(ins, regs, 3),
-                .channels = MALI_POSITIVE(ins->vector_channels),
+                .channels = ins->vector_channels - 1,
                 .op = BIFROST_ADD_OP_ST_VAR
         };
 
@@ -1476,7 +1476,7 @@ bi_pack_add_tex_compact(bi_clause *clause, bi_instruction *ins, bi_registers *re
 static unsigned
 bi_pack_add_select(bi_instruction *ins, bi_registers *regs)
 {
-        unsigned size = nir_alu_type_get_type_size(ins->src_types[0]);
+        ASSERTED unsigned size = nir_alu_type_get_type_size(ins->src_types[0]);
         assert(size == 16);
 
         unsigned swiz = (ins->swizzle[0][0] | (ins->swizzle[1][0] << 1));
@@ -1591,7 +1591,7 @@ static unsigned
 bi_pack_add_cmp(bi_instruction *ins, bi_registers *regs)
 {
         nir_alu_type Tl = ins->src_types[0];
-        nir_alu_type Tr = ins->src_types[1];
+        ASSERTED nir_alu_type Tr = ins->src_types[1];
         nir_alu_type Bl = nir_alu_type_get_base_type(Tl);
 
         if (Bl == nir_type_uint || Bl == nir_type_int) {      
@@ -1827,7 +1827,7 @@ bi_pack_constants(bi_context *ctx, bi_clause *clause,
 {
         /* After these two, are we done? Determines tag */
         bool done = clause->constant_count <= (index + 2);
-        bool only = clause->constant_count <= (index + 1);
+        ASSERTED bool only = clause->constant_count <= (index + 1);
 
         /* Is the constant we're packing for a branch? */
         bool branches = clause->branch_constant && done;

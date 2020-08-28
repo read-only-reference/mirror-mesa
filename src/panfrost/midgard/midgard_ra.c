@@ -116,7 +116,7 @@ set_class(unsigned *classes, unsigned node, unsigned class)
 /* Special register classes impose special constraints on who can read their
  * values, so check that */
 
-static bool
+static bool ASSERTED
 check_read_class(unsigned *classes, unsigned tag, unsigned node)
 {
         /* Non-nodes are implicitly ok */
@@ -137,7 +137,7 @@ check_read_class(unsigned *classes, unsigned tag, unsigned node)
         }
 }
 
-static bool
+static bool ASSERTED
 check_write_class(unsigned *classes, unsigned tag, unsigned node)
 {
         /* Non-nodes are implicitly ok */
@@ -723,19 +723,19 @@ install_registers_instr(
                 unsigned src3 = ins->src[2];
 
                 if (src2 != ~0) {
-                        struct phys_reg src = index_to_reg(ctx, l, src2, 2);
+                        struct phys_reg src = index_to_reg(ctx, l, src2, src_shift[1]);
                         unsigned component = src.offset >> src.shift;
                         assert(component << src.shift == src.offset);
                         ins->src[1] = SSA_FIXED_REGISTER(src.reg);
-                        ins->swizzle[1][0] = component;
+                        ins->swizzle[1][0] += component;
                 }
 
                 if (src3 != ~0) {
-                        struct phys_reg src = index_to_reg(ctx, l, src3, 2);
+                        struct phys_reg src = index_to_reg(ctx, l, src3, src_shift[2]);
                         unsigned component = src.offset >> src.shift;
                         assert(component << src.shift == src.offset);
                         ins->src[2] = SSA_FIXED_REGISTER(src.reg);
-                        ins->swizzle[2][0] = component;
+                        ins->swizzle[2][0] += component;
                 }
  
                 break;
@@ -855,9 +855,17 @@ mir_spill_register(
 
                         midgard_instruction st;
 
+                        /* Note: it's important to match the mask of the spill
+                         * with the mask of the instruction whose destination
+                         * we're spilling, or otherwise we'll read invalid
+                         * components and can fail RA in a subsequent iteration
+                         */
+
                         if (is_special_w) {
                                 st = v_mov(spill_node, spill_slot);
                                 st.no_spill |= (1 << spill_class);
+                                st.mask = ins->mask;
+                                st.dest_type = st.src_types[0] = ins->dest_type;
                         } else {
                                 ins->dest = spill_index++;
                                 ins->no_spill |= (1 << spill_class);

@@ -71,6 +71,7 @@ static const nir_shader_compiler_options options = {
 		.lower_to_scalar = true,
 		.has_imul24 = true,
 		.lower_wpos_pntc = true,
+		.lower_cs_local_index_from_id = true,
 
 		/* Only needed for the spirv_to_nir() pass done in ir3_cmdline.c
 		 * but that should be harmless for GL since 64b is not
@@ -121,6 +122,7 @@ static const nir_shader_compiler_options options_a6xx = {
 		.has_imul24 = true,
 		.max_unroll_iterations = 32,
 		.lower_wpos_pntc = true,
+		.lower_cs_local_index_from_id = true,
 
 		/* Only needed for the spirv_to_nir() pass done in ir3_cmdline.c
 		 * but that should be harmless for GL since 64b is not
@@ -459,6 +461,9 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 	/* UBO offset lowering has to come after we've decided what will
 	 * be left as load_ubo
 	 */
+	if (so->shader->compiler->gpu_id >= 600)
+		OPT_V(s, nir_lower_ubo_vec4);
+
 	OPT_V(s, ir3_nir_lower_io_offsets, so->shader->compiler->gpu_id);
 
 	if (progress)

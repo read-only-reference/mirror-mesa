@@ -1939,6 +1939,7 @@ gfx10_get_ngg_info(const struct radv_pipeline_key *key,
 	unsigned gsprim_lds_size = 0;
 
 	/* All these are per subgroup: */
+	const unsigned min_esverts = pipeline->device->physical_device->rad_info.chip_class >= GFX10_3 ? 29 : 24;
 	bool max_vert_out_per_gs_instance = false;
 	unsigned max_esverts_base = 256;
 	unsigned max_gsprims_base = 128; /* default prim group size clamp */
@@ -2064,7 +2065,7 @@ gfx10_get_ngg_info(const struct radv_pipeline_key *key,
 	}
 
 	/* Hardware restriction: minimum value of max_esverts */
-	max_esverts = MAX2(max_esverts, 23 + max_verts_per_prim);
+	max_esverts = MAX2(max_esverts, min_esverts - 1 + max_verts_per_prim);
 
 	unsigned max_out_vertices =
 		max_vert_out_per_gs_instance ? gs_info->gs.vertices_out :
@@ -2101,7 +2102,7 @@ gfx10_get_ngg_info(const struct radv_pipeline_key *key,
 
 	pipeline->graphics.esgs_ring_size = ngg->esgs_ring_size;
 
-	assert(ngg->hw_max_esverts >= 24); /* HW limitation */
+	assert(ngg->hw_max_esverts >= min_esverts); /* HW limitation */
 }
 
 static void
@@ -2624,7 +2625,7 @@ radv_fill_shader_info(struct radv_pipeline *pipeline,
 					  pipeline->layout,
 					  &keys[MESA_SHADER_FRAGMENT],
 					  &infos[MESA_SHADER_FRAGMENT],
-					  pipeline->device->physical_device->use_llvm);
+					  radv_use_llvm_for_stage(pipeline->device, MESA_SHADER_FRAGMENT));
 
 		/* TODO: These are no longer used as keys we should refactor this */
 		keys[MESA_SHADER_VERTEX].vs_common_out.export_prim_id =
@@ -2676,7 +2677,7 @@ radv_fill_shader_info(struct radv_pipeline *pipeline,
 			radv_nir_shader_info_pass(combined_nir[i],
 						  pipeline->layout, &key,
 						  &infos[MESA_SHADER_TESS_CTRL],
-						  pipeline->device->physical_device->use_llvm);
+						  radv_use_llvm_for_stage(pipeline->device, MESA_SHADER_TESS_CTRL));
 		}
 
 		keys[MESA_SHADER_TESS_EVAL].tes.num_patches =
@@ -2700,7 +2701,7 @@ radv_fill_shader_info(struct radv_pipeline *pipeline,
 						  pipeline->layout,
 						  &keys[pre_stage],
 						  &infos[MESA_SHADER_GEOMETRY],
-						  pipeline->device->physical_device->use_llvm);
+						  radv_use_llvm_for_stage(pipeline->device, MESA_SHADER_GEOMETRY));
 		}
 
 		filled_stages |= (1 << pre_stage);
@@ -2725,7 +2726,8 @@ radv_fill_shader_info(struct radv_pipeline *pipeline,
 
 		radv_nir_shader_info_init(&infos[i]);
 		radv_nir_shader_info_pass(nir[i], pipeline->layout,
-					  &keys[i], &infos[i], pipeline->device->physical_device->use_llvm);
+					  &keys[i], &infos[i],
+					  radv_use_llvm_for_stage(pipeline->device, i));
 	}
 
 	for (int i = 0; i < MESA_SHADER_STAGES; i++) {
@@ -2935,7 +2937,7 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 			/* do this again since information such as outputs_read can be out-of-date */
 			nir_shader_gather_info(nir[i], nir_shader_get_entrypoint(nir[i]));
 
-			if (device->physical_device->use_llvm) {
+			if (radv_use_llvm_for_stage(device, i)) {
 				NIR_PASS_V(nir[i], nir_lower_bool_to_int32);
 			} else {
 				NIR_PASS_V(nir[i], nir_lower_non_uniform_access,
@@ -2943,8 +2945,8 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 				           nir_lower_non_uniform_ssbo_access |
 				           nir_lower_non_uniform_texture_access |
 				           nir_lower_non_uniform_image_access);
-				NIR_PASS_V(nir[i], nir_lower_memory_model);
 			}
+			NIR_PASS_V(nir[i], nir_lower_memory_model);
 		}
 	}
 
@@ -2993,7 +2995,8 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 
 			radv_nir_shader_info_pass(nir[MESA_SHADER_GEOMETRY],
 						  pipeline->layout, &key,
-						  &info, pipeline->device->physical_device->use_llvm);
+						  &info,
+						  radv_use_llvm_for_stage(pipeline->device, MESA_SHADER_GEOMETRY));
 			info.wave_size = 64; /* Wave32 not supported. */
 			info.ballot_bit_size = 64;
 
@@ -3101,10 +3104,9 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 		if (nir[i]) {
 			ralloc_free(nir[i]);
 
-			if (radv_can_dump_shader_stats(device, modules[i]))
-				radv_shader_dump_stats(device,
-						       pipeline->shaders[i],
-						       i, stderr);
+			if (radv_can_dump_shader_stats(device, modules[i])) {
+				radv_dump_shader_stats(device, pipeline, i, stderr);
+			}
 		}
 	}
 
@@ -3920,6 +3922,7 @@ radv_pipeline_generate_hw_vs(struct radeon_cmdbuf *ctx_cs,
 	                       S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0f) != 0) |
 	                       S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xf0) != 0) |
 			       S_02881C_BYPASS_PRIM_RATE_COMBINER_GFX103(pipeline->device->physical_device->rad_info.chip_class >= GFX10_3) |
+			       S_02881C_BYPASS_VTX_RATE_COMBINER_GFX103(pipeline->device->physical_device->rad_info.chip_class >= GFX10_3) |
 	                       cull_dist_mask << 8 |
 	                       clip_dist_mask);
 
@@ -4035,6 +4038,7 @@ radv_pipeline_generate_hw_ngg(struct radeon_cmdbuf *ctx_cs,
 	                       S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0f) != 0) |
 	                       S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xf0) != 0) |
 			       S_02881C_BYPASS_PRIM_RATE_COMBINER_GFX103(pipeline->device->physical_device->rad_info.chip_class >= GFX10_3) |
+			       S_02881C_BYPASS_VTX_RATE_COMBINER_GFX103(pipeline->device->physical_device->rad_info.chip_class >= GFX10_3) |
 	                       cull_dist_mask << 8 |
 	                       clip_dist_mask);
 
@@ -5510,7 +5514,7 @@ VkResult radv_GetPipelineExecutableInternalRepresentationsKHR(
 	/* backend IR */
 	if (p < end) {
 		p->isText = true;
-		if (pipeline->device->physical_device->use_llvm) {
+		if (radv_use_llvm_for_stage(pipeline->device, stage)) {
 			desc_copy(p->name, "LLVM IR");
 			desc_copy(p->description, "The LLVM IR after some optimizations");
 		} else {

@@ -115,7 +115,7 @@ indirect_uniform_load(struct vc4_compile *c, nir_intrinsic_instr *intr)
 static struct qreg
 vc4_ubo_load(struct vc4_compile *c, nir_intrinsic_instr *intr)
 {
-        int buffer_index = nir_src_as_uint(intr->src[0]);
+        ASSERTED int buffer_index = nir_src_as_uint(intr->src[0]);
         assert(buffer_index == 1);
         assert(c->stage == QSTAGE_FRAG);
 
@@ -958,7 +958,7 @@ ntq_emit_comparison(struct vc4_compile *c, struct qreg *dest,
         case nir_op_seq:
                 cond = QPU_COND_ZS;
                 break;
-        case nir_op_fne32:
+        case nir_op_fneu32:
         case nir_op_ine32:
         case nir_op_sne:
                 cond = QPU_COND_ZC;
@@ -1213,7 +1213,7 @@ ntq_emit_alu(struct vc4_compile *c, nir_alu_instr *instr)
         case nir_op_sge:
         case nir_op_slt:
         case nir_op_feq32:
-        case nir_op_fne32:
+        case nir_op_fneu32:
         case nir_op_fge32:
         case nir_op_flt32:
         case nir_op_ieq32:

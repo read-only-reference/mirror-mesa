@@ -516,8 +516,8 @@ nir_compare_deref_paths(nir_deref_path *a_path,
    }
 
    /* We're at either the tail or the divergence point between the two deref
-    * paths.  Look to see if either contains a ptr_as_array deref.  It it
-    * does we don't know how to safely make any inferences.  Hopefully,
+    * paths.  Look to see if either contains cast or a ptr_as_array deref.  If
+    * it does we don't know how to safely make any inferences.  Hopefully,
     * nir_opt_deref will clean most of these up and we can start inferring
     * things again.
     *
@@ -527,11 +527,13 @@ nir_compare_deref_paths(nir_deref_path *a_path,
     * different constant indices.
     */
    for (nir_deref_instr **t_p = a_p; *t_p; t_p++) {
-      if ((*t_p)->deref_type == nir_deref_type_ptr_as_array)
+      if ((*t_p)->deref_type == nir_deref_type_cast ||
+          (*t_p)->deref_type == nir_deref_type_ptr_as_array)
          return nir_derefs_may_alias_bit;
    }
    for (nir_deref_instr **t_p = b_p; *t_p; t_p++) {
-      if ((*t_p)->deref_type == nir_deref_type_ptr_as_array)
+      if ((*t_p)->deref_type == nir_deref_type_cast ||
+          (*t_p)->deref_type == nir_deref_type_ptr_as_array)
          return nir_derefs_may_alias_bit;
    }
 
@@ -733,7 +735,7 @@ nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl)
    struct rematerialize_deref_state state = { 0 };
    nir_builder_init(&state.builder, impl);
 
-   nir_foreach_block(block, impl) {
+   nir_foreach_block_unstructured(block, impl) {
       state.block = block;
 
       /* Start each block with a fresh cache */

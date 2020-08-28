@@ -102,12 +102,13 @@ st_shader_gather_info(nir_shader *nir, struct gl_program *prog)
 void
 st_nir_assign_vs_in_locations(struct nir_shader *nir)
 {
-   if (nir->info.stage != MESA_SHADER_VERTEX)
+   if (nir->info.stage != MESA_SHADER_VERTEX || nir->info.io_lowered)
       return;
+
+   nir->num_inputs = util_bitcount64(nir->info.inputs_read);
 
    bool removed_inputs = false;
 
-   nir->num_inputs = util_bitcount64(nir->info.inputs_read);
    nir_foreach_shader_in_variable_safe(var, nir) {
       /* NIR already assigns dual-slot inputs to two locations so all we have
        * to do is compact everything down.
@@ -432,6 +433,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
                          struct gl_shader_program *shader_program)
 {
    nir_shader *nir = prog->nir;
+   struct pipe_screen *screen = st->pipe->screen;
 
    /* Make a pass over the IR to add state references for any built-in
     * uniforms that are used.  This has to be done now (during linking).
@@ -486,7 +488,9 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
        !st->ctx->Const.PackedDriverUniformStorage)
       NIR_PASS_V(nir, st_nir_lower_builtin);
 
-   NIR_PASS_V(nir, gl_nir_lower_atomics, shader_program, true);
+   if (!screen->get_param(screen, PIPE_CAP_NIR_ATOMICS_AS_DEREF))
+      NIR_PASS_V(nir, gl_nir_lower_atomics, shader_program, true);
+
    NIR_PASS_V(nir, nir_opt_intrinsics);
 
    /* Lower 64-bit ops. */
@@ -508,7 +512,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
       (nir_var_shader_in | nir_var_shader_out | nir_var_function_temp );
    nir_remove_dead_variables(nir, mask, NULL);
 
-   if (!st->has_hw_atomics)
+   if (!st->has_hw_atomics && !screen->get_param(screen, PIPE_CAP_NIR_ATOMICS_AS_DEREF))
       NIR_PASS_V(nir, nir_lower_atomics_to_ssbo);
 
    st_finalize_nir_before_variants(nir);
@@ -768,6 +772,8 @@ st_link_nir(struct gl_context *ctx,
                  st->pipe->screen);
 
       NIR_PASS_V(nir, nir_lower_system_values);
+      NIR_PASS_V(nir, nir_lower_compute_system_values, NULL);
+
       NIR_PASS_V(nir, nir_lower_clip_cull_distance_arrays);
 
       st_shader_gather_info(nir, shader->Program);

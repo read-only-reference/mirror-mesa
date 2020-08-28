@@ -461,6 +461,23 @@ midgard_nir_reorder_writeout(nir_shader *nir)
         return progress;
 }
 
+static bool
+mdg_is_64(const nir_instr *instr, const void *_unused)
+{
+        const nir_alu_instr *alu = nir_instr_as_alu(instr);
+
+        if (nir_dest_bit_size(alu->dest.dest) == 64)
+                return true;
+
+        switch (alu->op) {
+        case nir_op_umul_high:
+        case nir_op_imul_high:
+                return true;
+        default:
+                return false;
+        }
+}
+
 /* Flushes undefined values to zero */
 
 static void
@@ -480,6 +497,7 @@ optimise_nir(nir_shader *nir, unsigned quirks, bool is_blend)
                 .lower_txp = ~0,
                 .lower_tex_without_implicit_lod =
                         (quirks & MIDGARD_EXPLICIT_LOD),
+                .lower_tg4_broadcom_swizzle = true,
 
                 /* TODO: we have native gradient.. */
                 .lower_txd = true,
@@ -542,6 +560,8 @@ optimise_nir(nir_shader *nir, unsigned quirks, bool is_blend)
 
                 NIR_PASS(progress, nir, nir_opt_vectorize);
         } while (progress);
+
+        NIR_PASS_V(nir, nir_lower_alu_to_scalar, mdg_is_64, NULL);
 
         /* Run after opts so it can hit more */
         if (!is_blend)
@@ -858,8 +878,8 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
         /* Should we swap arguments? */
         bool flip_src12 = false;
 
-        unsigned src_bitsize = nir_src_bit_size(instr->src[0].src);
-        unsigned dst_bitsize = nir_dest_bit_size(*dest);
+        ASSERTED unsigned src_bitsize = nir_src_bit_size(instr->src[0].src);
+        ASSERTED unsigned dst_bitsize = nir_dest_bit_size(*dest);
 
         enum midgard_roundmode roundmode = MIDGARD_RTE;
 
@@ -881,6 +901,8 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                 ALU_CASE(iadd, iadd);
                 ALU_CASE(isub, isub);
                 ALU_CASE(imul, imul);
+                ALU_CASE(imul_high, imul);
+                ALU_CASE(umul_high, imul);
 
                 /* Zero shoved as second-arg */
                 ALU_CASE(iabs, iabsdiff);
@@ -888,7 +910,7 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                 ALU_CASE(mov, imov);
 
                 ALU_CASE_CMP(feq32, feq, false);
-                ALU_CASE_CMP(fne32, fne, false);
+                ALU_CASE_CMP(fneu32, fne, false);
                 ALU_CASE_CMP(flt32, flt, false);
                 ALU_CASE_CMP(ieq32, ieq, true);
                 ALU_CASE_CMP(ine32, ine, true);
@@ -1059,7 +1081,9 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
         unsigned outmod = 0;
         bool is_int = midgard_is_integer_op(op);
 
-        if (midgard_is_integer_out_op(op)) {
+        if (instr->op == nir_op_umul_high || instr->op == nir_op_imul_high) {
+                outmod = midgard_outmod_int_high;
+        } else if (midgard_is_integer_out_op(op)) {
                 outmod = midgard_outmod_int_wrap;
         } else if (instr->op == nir_op_fsat) {
                 outmod = midgard_outmod_sat;
@@ -1334,6 +1358,15 @@ emit_global(
         mir_set_offset(ctx, &ins, offset, is_shared);
         mir_set_intr_mask(instr, &ins, is_read);
 
+        /* Set a valid swizzle for masked out components */
+        assert(ins.mask);
+        unsigned first_component = __builtin_ffs(ins.mask) - 1;
+
+        for (unsigned i = 0; i < ARRAY_SIZE(ins.swizzle[0]); ++i) {
+                if (!(ins.mask & (1 << i)))
+                        ins.swizzle[0][i] = first_component;
+        }
+
         emit_mir_instruction(ctx, ins);
 }
 
@@ -1547,13 +1580,13 @@ emit_vertex_builtin(compiler_context *ctx, nir_intrinsic_instr *instr)
 }
 
 static void
-emit_msaa_builtin(compiler_context *ctx, nir_intrinsic_instr *instr)
+emit_special(compiler_context *ctx, nir_intrinsic_instr *instr, unsigned idx)
 {
         unsigned reg = nir_dest_index(&instr->dest);
 
         midgard_instruction ld = m_ld_color_buffer_32u(reg, 0);
         ld.op = midgard_op_ld_color_buffer_32u_old;
-        ld.load_store.address = 97;
+        ld.load_store.address = idx;
         ld.load_store.arg_2 = 0x1E;
 
         for (int i = 0; i < 4; ++i)
@@ -1570,11 +1603,6 @@ emit_control_barrier(compiler_context *ctx)
                 .dest = ~0,
                 .src = { ~0, ~0, ~0, ~0 },
                 .op = TEXTURE_OP_BARRIER,
-                .texture = {
-                        /* TODO: optimize */
-                        .out_of_order = MIDGARD_BARRIER_BUFFER |
-                                MIDGARD_BARRIER_SHARED ,
-                }
         };
 
         emit_mir_instruction(ctx, ins);
@@ -1841,7 +1869,7 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                         else if (combined)
                                 rt = MIDGARD_ZS_RT;
                         else
-                                assert(0);
+                                unreachable("bad rt");
 
                         unsigned reg_z = ~0, reg_s = ~0;
                         if (combined) {
@@ -1952,8 +1980,12 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 emit_vertex_builtin(ctx, instr);
                 break;
 
+        case nir_intrinsic_load_sample_mask_in:
+                emit_special(ctx, instr, 96);
+                break;
+
         case nir_intrinsic_load_sample_id:
-                emit_msaa_builtin(ctx, instr);
+                emit_special(ctx, instr, 97);
                 break;
 
         case nir_intrinsic_memory_barrier_buffer:
@@ -1973,25 +2005,26 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
         }
 }
 
+/* Returns dimension with 0 special casing cubemaps */
 static unsigned
 midgard_tex_format(enum glsl_sampler_dim dim)
 {
         switch (dim) {
         case GLSL_SAMPLER_DIM_1D:
         case GLSL_SAMPLER_DIM_BUF:
-                return MALI_TEX_1D;
+                return 1;
 
         case GLSL_SAMPLER_DIM_2D:
         case GLSL_SAMPLER_DIM_MS:
         case GLSL_SAMPLER_DIM_EXTERNAL:
         case GLSL_SAMPLER_DIM_RECT:
-                return MALI_TEX_2D;
+                return 2;
 
         case GLSL_SAMPLER_DIM_3D:
-                return MALI_TEX_3D;
+                return 3;
 
         case GLSL_SAMPLER_DIM_CUBE:
-                return MALI_TEX_CUBE;
+                return 0;
 
         default:
                 DBG("Unknown sampler dim type\n");
@@ -2033,6 +2066,19 @@ pan_attach_constant_bias(
         return true;
 }
 
+static enum mali_texture_mode
+mdg_texture_mode(nir_tex_instr *instr)
+{
+        if (instr->op == nir_texop_tg4 && instr->is_shadow)
+                return TEXTURE_GATHER_SHADOW;
+        else if (instr->op == nir_texop_tg4)
+                return TEXTURE_GATHER_X + instr->component;
+        else if (instr->is_shadow)
+                return TEXTURE_SHADOW;
+        else
+                return TEXTURE_NORMAL;
+}
+
 static void
 emit_texop_native(compiler_context *ctx, nir_tex_instr *instr,
                   unsigned midgard_texop)
@@ -2067,11 +2113,11 @@ emit_texop_native(compiler_context *ctx, nir_tex_instr *instr,
                         .format = midgard_tex_format(instr->sampler_dim),
                         .texture_handle = texture_index,
                         .sampler_handle = sampler_index,
-                        .shadow = instr->is_shadow,
+                        .mode = mdg_texture_mode(instr)
                 }
         };
 
-        if (instr->is_shadow && !instr->is_new_style_shadow)
+        if (instr->is_shadow && !instr->is_new_style_shadow && instr->op != nir_texop_tg4)
            for (int i = 0; i < 4; ++i)
               ins.swizzle[0][i] = COMPONENT_X;
 
@@ -2241,6 +2287,7 @@ emit_tex(compiler_context *ctx, nir_tex_instr *instr)
                 emit_texop_native(ctx, instr, TEXTURE_OP_NORMAL);
                 break;
         case nir_texop_txl:
+        case nir_texop_tg4:
                 emit_texop_native(ctx, instr, TEXTURE_OP_LOD);
                 break;
         case nir_texop_txf:
@@ -2394,6 +2441,13 @@ max_bitsize_for_alu(midgard_instruction *ins)
 
         default:
                 break;
+        }
+
+        /* High implies computing at a higher bitsize, e.g umul_high of 32-bit
+         * requires computing at 64-bit */
+        if (midgard_is_integer_out_op(ins->op) && ins->outmod == midgard_outmod_int_high) {
+                max_bitsize *= 2;
+                assert(max_bitsize <= 64);
         }
 
         return max_bitsize;
@@ -2846,7 +2900,6 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
         ctx->nir = nir;
         ctx->stage = nir->info.stage;
         ctx->is_blend = is_blend;
-        ctx->alpha_ref = program->alpha_ref;
         ctx->blend_rt = MIDGARD_COLOR_RT0 + blend_rt;
         ctx->blend_input = ~0;
         ctx->blend_src1 = ~0;
@@ -2860,7 +2913,6 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
         /* Initialize at a global (not block) level hash tables */
 
         ctx->ssa_constants = _mesa_hash_table_u64_create(NULL);
-        ctx->hash_to_temp = _mesa_hash_table_u64_create(NULL);
 
         /* Lower gl_Position pre-optimisation, but after lowering vars to ssa
          * (so we don't accidentally duplicate the epilogue since mesa/st has
@@ -2903,7 +2955,7 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
         /* Assign sysvals and counts, now that we're sure
          * (post-optimisation) */
 
-        panfrost_nir_assign_sysvals(&ctx->sysvals, nir);
+        panfrost_nir_assign_sysvals(&ctx->sysvals, ctx, nir);
         program->sysval_count = ctx->sysvals.sysval_count;
         memcpy(program->sysvals, ctx->sysvals.sysvals, sizeof(ctx->sysvals.sysvals[0]) * ctx->sysvals.sysval_count);
 

@@ -155,6 +155,7 @@ struct wait_imm {
       assert(exp == unset_counter || exp <= 0x7);
       switch (chip) {
       case GFX10:
+      case GFX10_3:
          assert(lgkm == unset_counter || lgkm <= 0x3f);
          assert(vm == unset_counter || vm <= 0x3f);
          imm = ((vm & 0x30) << 10) | ((lgkm & 0x3f) << 8) | ((exp & 0x7) << 4) | (vm & 0xf);
@@ -472,9 +473,32 @@ wait_imm perform_barrier(wait_ctx& ctx, memory_sync_info sync, unsigned semantic
    return imm;
 }
 
+void force_waitcnt(wait_ctx& ctx, wait_imm& imm)
+{
+   if (ctx.vm_cnt)
+      imm.vm = 0;
+   if (ctx.exp_cnt)
+      imm.exp = 0;
+   if (ctx.lgkm_cnt)
+      imm.lgkm = 0;
+
+   if (ctx.chip_class >= GFX10) {
+      if (ctx.vs_cnt)
+         imm.vs = 0;
+   }
+}
+
 wait_imm kill(Instruction* instr, wait_ctx& ctx, memory_sync_info sync_info)
 {
    wait_imm imm;
+
+   if (debug_flags & DEBUG_FORCE_WAITCNT) {
+      /* Force emitting waitcnt states right after the instruction if there is
+       * something to wait for.
+       */
+      force_waitcnt(ctx, imm);
+   }
+
    if (ctx.exp_cnt || ctx.vm_cnt || ctx.lgkm_cnt)
       imm.combine(check_instr(instr, ctx));
 

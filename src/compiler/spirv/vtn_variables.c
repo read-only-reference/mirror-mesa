@@ -125,6 +125,18 @@ vtn_mode_uses_ssa_offset(struct vtn_builder *b,
 }
 
 static bool
+vtn_mode_is_cross_invocation(struct vtn_builder *b,
+                             enum vtn_variable_mode mode)
+{
+   return mode == vtn_variable_mode_ssbo ||
+          mode == vtn_variable_mode_ubo ||
+          mode == vtn_variable_mode_phys_ssbo ||
+          mode == vtn_variable_mode_push_constant ||
+          mode == vtn_variable_mode_workgroup ||
+          mode == vtn_variable_mode_cross_workgroup;
+}
+
+static bool
 vtn_pointer_is_external_block(struct vtn_builder *b,
                               struct vtn_pointer *ptr)
 {
@@ -1074,11 +1086,11 @@ _vtn_variable_load_store(struct vtn_builder *b, bool load,
       if (glsl_type_is_vector_or_scalar(ptr->type->type)) {
          /* We hit a vector or scalar; go ahead and emit the load[s] */
          nir_deref_instr *deref = vtn_pointer_to_deref(b, ptr);
-         if (vtn_pointer_is_external_block(b, ptr)) {
-            /* If it's external, we call nir_load/store_deref directly.  The
-             * vtn_local_load/store helpers are too clever and do magic to
-             * avoid array derefs of vectors.  That magic is both less
-             * efficient than the direct load/store and, in the case of
+         if (vtn_mode_is_cross_invocation(b, ptr->mode)) {
+            /* If it's cross-invocation, we call nir_load/store_deref
+             * directly.  The vtn_local_load/store helpers are too clever and
+             * do magic to avoid array derefs of vectors.  That magic is both
+             * less efficient than the direct load/store and, in the case of
              * stores, is broken because it creates a race condition if two
              * threads are writing to different components of the same vector
              * due to the load+insert+store it uses to emulate the array
@@ -1155,7 +1167,8 @@ static void
 _vtn_variable_copy(struct vtn_builder *b, struct vtn_pointer *dest,
                    struct vtn_pointer *src)
 {
-   vtn_assert(src->type->type == dest->type->type);
+   vtn_assert(glsl_get_bare_type(src->type->type) ==
+              glsl_get_bare_type(dest->type->type));
    enum glsl_base_type base_type = glsl_get_base_type(src->type->type);
    switch (base_type) {
    case GLSL_TYPE_UINT:
@@ -1384,6 +1397,10 @@ vtn_get_builtin_location(struct vtn_builder *b,
       *location = SYSTEM_VALUE_GLOBAL_INVOCATION_INDEX;
       set_mode_system_value(b, mode);
       break;
+   case SpvBuiltInGlobalOffset:
+      *location = SYSTEM_VALUE_BASE_GLOBAL_INVOCATION_ID;
+      set_mode_system_value(b, mode);
+      break;
    case SpvBuiltInBaseVertex:
       /* OpenGL gl_BaseVertex (SYSTEM_VALUE_BASE_VERTEX) is not the same
        * semantic as Vulkan BaseVertex (SYSTEM_VALUE_FIRST_VERTEX).
@@ -1423,8 +1440,13 @@ vtn_get_builtin_location(struct vtn_builder *b,
       set_mode_system_value(b, mode);
       break;
    case SpvBuiltInViewIndex:
-      *location = SYSTEM_VALUE_VIEW_INDEX;
-      set_mode_system_value(b, mode);
+      if (b->options && b->options->view_index_is_input) {
+         *location = VARYING_SLOT_VIEW_INDEX;
+         vtn_assert(*mode == nir_var_shader_in);
+      } else {
+         *location = SYSTEM_VALUE_VIEW_INDEX;
+         set_mode_system_value(b, mode);
+      }
       break;
    case SpvBuiltInSubgroupEqMask:
       *location = SYSTEM_VALUE_SUBGROUP_EQ_MASK,
@@ -2197,10 +2219,6 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
       /* Create the variable normally */
       var->var = rzalloc(b->shader, nir_variable);
       var->var->name = ralloc_strdup(var->var, val->name);
-      /* Workgroup variables don't have any explicit layout but some
-       * layouts may have leaked through due to type deduplication in the
-       * SPIR-V.
-       */
       var->var->type = vtn_type_get_nir_type(b, var->type, var->mode);
       var->var->data.mode = nir_var_mem_shared;
       break;
@@ -2253,11 +2271,6 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
 
       var->var = rzalloc(b->shader, nir_variable);
       var->var->name = ralloc_strdup(var->var, val->name);
-      /* In Vulkan, shader I/O variables don't have any explicit layout but
-       * some layouts may have leaked through due to type deduplication in
-       * the SPIR-V.  We do, however, keep the layouts in the variable's
-       * interface_type because we need offsets for XFB arrays of blocks.
-       */
       var->var->type = vtn_type_get_nir_type(b, var->type, var->mode);
       var->var->data.mode = nir_mode;
       var->var->data.patch = var->patch;
@@ -2469,6 +2482,32 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
       }
 
       vtn_create_variable(b, val, ptr_type, storage_class, const_initializer, var_initializer);
+
+      break;
+   }
+
+   case SpvOpConstantSampler: {
+      /* Synthesize a pointer-to-sampler type, create a variable of that type,
+       * and give the variable a constant initializer with the sampler params */
+      struct vtn_type *sampler_type = vtn_value(b, w[1], vtn_value_type_type)->type;
+      struct vtn_value *val = vtn_push_value(b, w[2], vtn_value_type_pointer);
+
+      struct vtn_type *ptr_type = rzalloc(b, struct vtn_type);
+      ptr_type = rzalloc(b, struct vtn_type);
+      ptr_type->base_type = vtn_base_type_pointer;
+      ptr_type->deref = sampler_type;
+      ptr_type->storage_class = SpvStorageClassUniform;
+
+      ptr_type->type = nir_address_format_to_glsl_type(
+         vtn_mode_to_address_format(b, vtn_variable_mode_function));
+
+      vtn_create_variable(b, val, ptr_type, ptr_type->storage_class, NULL, NULL);
+
+      nir_variable *nir_var = val->pointer->var->var;
+      nir_var->data.sampler.is_inline_sampler = true;
+      nir_var->data.sampler.addressing_mode = w[3];
+      nir_var->data.sampler.normalized_coordinates = w[4];
+      nir_var->data.sampler.filter_mode = w[5];
 
       break;
    }

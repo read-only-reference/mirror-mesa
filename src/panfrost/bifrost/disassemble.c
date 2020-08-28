@@ -32,7 +32,7 @@
 
 #include "bifrost.h"
 #include "disassemble.h"
-#include "bi_print.h"
+#include "bi_print_common.h"
 #include "util/macros.h"
 
 // return bits (high, lo]
@@ -342,8 +342,7 @@ static uint64_t get_const(uint64_t *consts, struct bifrost_regs srcs)
                 imm = consts[5];
                 break;
         default:
-                assert(0);
-                break;
+                unreachable("bad imm");
         }
         return imm | low_bits;
 }

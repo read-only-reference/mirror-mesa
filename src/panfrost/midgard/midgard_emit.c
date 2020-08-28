@@ -240,7 +240,7 @@ mir_pack_swizzle(unsigned mask, unsigned *swizzle,
                 for (unsigned c = (dest_up ? 4 : 0); c < (dest_up ? 8 : 4); ++c) {
                         unsigned v = swizzle[c];
 
-                        bool t_upper = v > 3;
+                        ASSERTED bool t_upper = v > 3;
 
                         /* Ensure we're doing something sane */
 
@@ -419,7 +419,7 @@ mir_pack_ldst_mask(midgard_instruction *ins)
                 for (unsigned i = 0; i < 4; ++i) {
                         /* Make sure we're duplicated */
                         bool u = (ins->mask & (1 << (2*i + 0))) != 0;
-                        bool v = (ins->mask & (1 << (2*i + 1))) != 0;
+                        ASSERTED bool v = (ins->mask & (1 << (2*i + 1))) != 0;
                         assert(u == v);
 
                         packed |= (u << i);
@@ -501,12 +501,14 @@ load_store_from_instr(midgard_instruction *ins)
 
         if (ins->src[1] != ~0) {
                 unsigned src = SSA_REG_FROM_FIXED(ins->src[1]);
-                ldst.arg_1 |= midgard_ldst_reg(src, ins->swizzle[1][0]);
+                unsigned sz = nir_alu_type_get_type_size(ins->src_types[1]);
+                ldst.arg_1 |= midgard_ldst_reg(src, ins->swizzle[1][0], sz);
         }
 
         if (ins->src[2] != ~0) {
                 unsigned src = SSA_REG_FROM_FIXED(ins->src[2]);
-                ldst.arg_2 |= midgard_ldst_reg(src, ins->swizzle[2][0]);
+                unsigned sz = nir_alu_type_get_type_size(ins->src_types[2]);
+                ldst.arg_2 |= midgard_ldst_reg(src, ins->swizzle[2][0], sz);
         }
 
         return ldst;
@@ -641,7 +643,8 @@ emit_branch(midgard_instruction *ins,
         int quadword_offset = 0;
 
         if (is_discard) {
-                /* Ignored */
+                /* Fixed encoding, not actually an offset */
+                quadword_offset = 0x2;
         } else if (is_tilebuf_wait) {
                 quadword_offset = -1;
         } else if (target_number > block->base.name) {
@@ -903,6 +906,7 @@ emit_binary_bundle(compiler_context *ctx,
                 /* Nothing else to pack for barriers */
                 if (ins->op == TEXTURE_OP_BARRIER) {
                         ins->texture.cont = ins->texture.last = 1;
+                        ins->texture.op = ins->op;
                         util_dynarray_append(emission, midgard_texture_word, ins->texture);
                         return;
                 }
