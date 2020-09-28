@@ -1451,8 +1451,7 @@ v3d_optimize_nir(struct nir_shader *s)
 
                         NIR_PASS(lower_flrp_progress, s, nir_lower_flrp,
                                  lower_flrp,
-                                 false /* always_precise */,
-                                 s->options->lower_ffma);
+                                 false /* always_precise */);
                         if (lower_flrp_progress) {
                                 NIR_PASS(progress, s, nir_opt_constant_folding);
                                 progress = true;
@@ -2151,7 +2150,7 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
                 v3d40_vir_emit_image_load_store(c, instr);
                 break;
 
-        case nir_intrinsic_get_buffer_size:
+        case nir_intrinsic_get_ssbo_size:
                 ntq_store_dest(c, &instr->dest, 0,
                                vir_uniform(c, QUNIFORM_GET_BUFFER_SIZE,
                                            nir_src_as_uint(instr->src[0])));
@@ -2875,7 +2874,9 @@ const nir_shader_compiler_options v3d_nir_options = {
         .lower_unpack_half_2x16 = true,
         .lower_fdiv = true,
         .lower_find_lsb = true,
-        .lower_ffma = true,
+	.lower_ffma16 = true,
+	.lower_ffma32 = true,
+	.lower_ffma64 = true,
         .lower_flrp32 = true,
         .lower_fpow = true,
         .lower_fsat = true,

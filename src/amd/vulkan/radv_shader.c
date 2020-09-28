@@ -70,7 +70,9 @@ static const struct nir_shader_compiler_options nir_options_llvm = {
 	.lower_unpack_unorm_4x8 = true,
 	.lower_extract_byte = true,
 	.lower_extract_word = true,
-	.lower_ffma = true,
+	.lower_ffma16 = true,
+	.lower_ffma32 = true,
+	.lower_ffma64 = true,
 	.lower_fpow = true,
 	.lower_mul_2x32_64 = true,
 	.lower_rotate = true,
@@ -113,7 +115,9 @@ static const struct nir_shader_compiler_options nir_options_aco = {
 	.lower_unpack_half_2x16 = true,
 	.lower_extract_byte = true,
 	.lower_extract_word = true,
-	.lower_ffma = true,
+	.lower_ffma16 = true,
+	.lower_ffma32 = true,
+	.lower_ffma64 = true,
 	.lower_fpow = true,
 	.lower_mul_2x32_64 = true,
 	.lower_rotate = true,
@@ -261,8 +265,7 @@ radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively,
                                  shader,
                                  nir_lower_flrp,
                                  lower_flrp,
-                                 false /* always_precise */,
-                                 shader->options->lower_ffma);
+                                 false /* always_precise */);
                         if (lower_flrp_progress) {
                                 NIR_PASS(progress, shader,
                                          nir_opt_constant_folding);
@@ -349,6 +352,40 @@ static void radv_compiler_debug(void *private_data,
 			0, 0, "radv", message);
 }
 
+static bool
+lower_load_vulkan_descriptor(nir_shader *nir)
+{
+	nir_function_impl *entry = nir_shader_get_entrypoint(nir);
+	bool progress = false;
+	nir_builder b;
+
+	nir_builder_init(&b, entry);
+
+	nir_foreach_block(block, entry) {
+		nir_foreach_instr_safe(instr, block) {
+			if (instr->type != nir_instr_type_intrinsic)
+				continue;
+
+			nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+			if (intrin->intrinsic != nir_intrinsic_load_vulkan_descriptor)
+				continue;
+
+			b.cursor = nir_before_instr(&intrin->instr);
+
+			nir_ssa_def *def = nir_vec2(&b,
+						    nir_channel(&b, intrin->src[0].ssa, 0),
+						    nir_imm_int(&b, 0));
+			nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
+						 nir_src_for_ssa(def));
+
+			nir_instr_remove(instr);
+			progress = true;
+		}
+	}
+
+	return progress;
+}
+
 nir_shader *
 radv_shader_compile_to_nir(struct radv_device *device,
 			   struct radv_shader_module *module,
@@ -415,7 +452,6 @@ radv_shader_compile_to_nir(struct radv_device *device,
 			.module = module,
 		};
 		const struct spirv_to_nir_options spirv_options = {
-			.lower_ubo_ssbo_access_to_offsets = true,
 			.caps = {
 				.amd_fragment_mask = true,
 				.amd_gcn_shader = true,
@@ -521,8 +557,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 		NIR_PASS_V(nir, nir_split_var_copies);
 		NIR_PASS_V(nir, nir_split_per_member_structs);
 
-		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
-		    !radv_use_llvm_for_stage(device, nir->info.stage))
+		if (nir->info.stage == MESA_SHADER_FRAGMENT)
                         NIR_PASS_V(nir, nir_lower_io_to_vector, nir_var_shader_out);
 		if (nir->info.stage == MESA_SHADER_FRAGMENT)
 			NIR_PASS_V(nir, nir_lower_input_attachments,
@@ -618,6 +653,15 @@ radv_shader_compile_to_nir(struct radv_device *device,
 	 */
 	nir_lower_var_copies(nir);
 
+	NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_mem_push_const,
+		   nir_address_format_32bit_offset);
+
+	NIR_PASS_V(nir, nir_lower_explicit_io,
+		   nir_var_mem_ubo | nir_var_mem_ssbo,
+		   nir_address_format_32bit_index_offset);
+
+	NIR_PASS_V(nir, lower_load_vulkan_descriptor);
+
 	/* Lower deref operations for compute shared memory. */
 	if (nir->info.stage == MESA_SHADER_COMPUTE) {
 		NIR_PASS_V(nir, nir_lower_vars_to_explicit_types,
@@ -625,6 +669,9 @@ radv_shader_compile_to_nir(struct radv_device *device,
 		NIR_PASS_V(nir, nir_lower_explicit_io,
 			   nir_var_mem_shared, nir_address_format_32bit_offset);
 	}
+
+	nir_lower_explicit_io(nir, nir_var_mem_global,
+			      nir_address_format_64bit_global);
 
 	/* Lower large variables that are always constant with load_constant
 	 * intrinsics, which get turned into PC-relative loads from a data
@@ -714,12 +761,13 @@ radv_lower_fs_io(nir_shader *nir)
 	nir_assign_io_var_locations(nir, nir_var_shader_in, &nir->num_inputs,
 				    MESA_SHADER_FRAGMENT);
 
-	NIR_PASS_V(nir, nir_lower_io, nir_var_shader_in, type_size_vec4, 0);
+	NIR_PASS_V(nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);
 
 	/* This pass needs actual constants */
 	nir_opt_constant_folding(nir);
 
-	NIR_PASS_V(nir, nir_io_add_const_offset_to_base, nir_var_shader_in);
+	NIR_PASS_V(nir, nir_io_add_const_offset_to_base,
+		   nir_var_shader_in | nir_var_shader_out);
 }
 
 
@@ -896,7 +944,7 @@ static void radv_postprocess_config(const struct radv_device *device,
 			if (pdevice->rad_info.chip_class >= GFX10) {
 				vgpr_comp_cnt = info->vs.needs_instance_id ? 3 : 1;
 				config_out->rsrc2 |= S_00B42C_LDS_SIZE_GFX10(info->tcs.num_lds_blocks) |
-						     S_00B42C_EXCP_EN_GFX10(excp_en);
+						     S_00B42C_EXCP_EN_GFX6(excp_en);
 			} else {
 				vgpr_comp_cnt = info->vs.needs_instance_id ? 2 : 1;
 				config_out->rsrc2 |= S_00B42C_LDS_SIZE_GFX9(info->tcs.num_lds_blocks) |
@@ -1324,6 +1372,7 @@ radv_shader_variant_compile(struct radv_device *device,
 			   const struct radv_shader_variant_key *key,
 			   struct radv_shader_info *info,
 			   bool keep_shader_info, bool keep_statistic_info,
+			   bool disable_optimizations,
 			   struct radv_shader_binary **binary_out)
 {
 	gl_shader_stage stage =  shaders[shader_count - 1]->info.stage;
@@ -1335,6 +1384,7 @@ radv_shader_variant_compile(struct radv_device *device,
 
 	options.explicit_scratch_args = !radv_use_llvm_for_stage(device, stage);
 	options.robust_buffer_access = device->robust_buffer_access;
+	options.disable_optimizations = disable_optimizations;
 
 	return shader_variant_compile(device, module, shaders, shader_count, stage, info,
 				      &options, false, false,
@@ -1347,13 +1397,14 @@ radv_create_gs_copy_shader(struct radv_device *device,
 			   struct radv_shader_info *info,
 			   struct radv_shader_binary **binary_out,
 			   bool keep_shader_info, bool keep_statistic_info,
-			   bool multiview)
+			   bool multiview, bool disable_optimizations)
 {
 	struct radv_nir_compiler_options options = {0};
 	gl_shader_stage stage = MESA_SHADER_VERTEX;
 
 	options.explicit_scratch_args = !radv_use_llvm_for_stage(device, stage);
 	options.key.has_multiview_view_index = multiview;
+	options.disable_optimizations = disable_optimizations;
 
 	return shader_variant_compile(device, NULL, &shader, 1, stage,
 				      info, &options, true, false,

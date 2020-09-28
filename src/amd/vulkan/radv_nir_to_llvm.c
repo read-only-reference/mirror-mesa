@@ -589,11 +589,12 @@ store_tcs_output(struct ac_shader_abi *abi,
 		 LLVMValueRef param_index,
 		 unsigned const_index,
 		 LLVMValueRef src,
-		 unsigned writemask)
+		 unsigned writemask,
+		 unsigned component,
+		 unsigned driver_location)
 {
 	struct radv_shader_context *ctx = radv_shader_context_from_abi(abi);
 	const unsigned location = var->data.location;
-	unsigned component = var->data.location_frac;
 	const bool is_patch = var->data.patch;
 	const bool is_compact = var->data.compact;
 	LLVMValueRef dw_addr;
@@ -2011,8 +2012,12 @@ handle_vs_outputs_post(struct radv_shader_context *ctx,
 		outputs[noutput].slot_name = VARYING_SLOT_PRIMITIVE_ID;
 		outputs[noutput].slot_index = 0;
 		outputs[noutput].usage_mask = 0x1;
-		outputs[noutput].values[0] =
-			ac_get_arg(&ctx->ac, ctx->args->vs_prim_id);
+		if (ctx->stage == MESA_SHADER_TESS_EVAL)
+			outputs[noutput].values[0] =
+				ac_get_arg(&ctx->ac, ctx->args->ac.tes_patch_id);
+		else
+			outputs[noutput].values[0] =
+				ac_get_arg(&ctx->ac, ctx->args->vs_prim_id);
 		for (unsigned j = 1; j < 4; j++)
 			outputs[noutput].values[j] = ctx->ac.f32_0;
 		noutput++;

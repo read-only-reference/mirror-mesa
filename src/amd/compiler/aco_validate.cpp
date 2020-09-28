@@ -323,23 +323,34 @@ bool validate_ir(Program* program)
 
          switch (instr->format) {
          case Format::PSEUDO: {
-            bool is_subdword = false;
-            bool has_const_sgpr = false;
-            bool has_literal = false;
-            for (Definition def : instr->definitions)
-               is_subdword |= def.regClass().is_subdword();
-            for (unsigned i = 0; i < instr->operands.size(); i++) {
-               if (instr->opcode == aco_opcode::p_extract_vector && i == 1)
-                  continue;
-               Operand op = instr->operands[i];
-               is_subdword |= op.hasRegClass() && op.regClass().is_subdword();
-               has_const_sgpr |= op.isConstant() || (op.hasRegClass() && op.regClass().type() == RegType::sgpr);
-               has_literal |= op.isLiteral();
-            }
+            if (instr->opcode == aco_opcode::p_parallelcopy) {
+               for (unsigned i = 0; i < instr->operands.size(); i++) {
+                  if (!instr->definitions[i].regClass().is_subdword())
+                     continue;
+                  Operand op = instr->operands[i];
+                  check(!op.isLiteral(), "Sub-dword copies cannot take literals", instr.get());
+                  if (op.isConstant() || (op.hasRegClass() && op.regClass().type() == RegType::sgpr))
+                     check(program->chip_class >= GFX9, "Sub-dword pseudo instructions can only take constants or SGPRs on GFX9+", instr.get());
+               }
+            } else {
+               bool is_subdword = false;
+               bool has_const_sgpr = false;
+               bool has_literal = false;
+               for (Definition def : instr->definitions)
+                  is_subdword |= def.regClass().is_subdword();
+               for (unsigned i = 0; i < instr->operands.size(); i++) {
+                  if (instr->opcode == aco_opcode::p_extract_vector && i == 1)
+                     continue;
+                  Operand op = instr->operands[i];
+                  is_subdword |= op.hasRegClass() && op.regClass().is_subdword();
+                  has_const_sgpr |= op.isConstant() || (op.hasRegClass() && op.regClass().type() == RegType::sgpr);
+                  has_literal |= op.isLiteral();
+               }
 
-            check(!is_subdword || !has_const_sgpr || program->chip_class >= GFX9,
-                  "Sub-dword pseudo instructions can only take constants or SGPRs on GFX9+", instr.get());
-            check(!is_subdword || !has_literal, "Sub-dword pseudo instructions cannot take literals", instr.get());
+               check(!is_subdword || !has_const_sgpr || program->chip_class >= GFX9,
+                     "Sub-dword pseudo instructions can only take constants or SGPRs on GFX9+", instr.get());
+               check(!is_subdword || !has_literal, "Sub-dword pseudo instructions cannot take literals", instr.get());
+            }
 
             if (instr->opcode == aco_opcode::p_create_vector) {
                unsigned size = 0;
@@ -728,7 +739,8 @@ bool validate_ra(Program *program, const struct radv_nir_compiler_options *optio
       regs.fill(0);
 
       std::set<Temp> live;
-      live.insert(live_vars.live_out[block.index].begin(), live_vars.live_out[block.index].end());
+      for (unsigned id : live_vars.live_out[block.index])
+         live.insert(Temp(id, program->temp_rc[id]));
       /* remove killed p_phi sgpr operands */
       for (Temp tmp : phi_sgpr_ops[block.index])
          live.erase(tmp);

@@ -60,7 +60,7 @@ nir_shader_create(void *mem_ctx,
    shader->num_inputs = 0;
    shader->num_outputs = 0;
    shader->num_uniforms = 0;
-   shader->num_shared = 0;
+   shader->shared_size = 0;
 
    return shader;
 }
@@ -115,14 +115,12 @@ nir_shader_add_variable(nir_shader *shader, nir_variable *var)
    case nir_var_mem_ssbo:
    case nir_var_mem_shared:
    case nir_var_system_value:
+   case nir_var_mem_push_const:
+   case nir_var_mem_constant:
       break;
 
    case nir_var_mem_global:
       assert(!"nir_shader_add_variable cannot be used for global memory");
-      return;
-
-   case nir_var_mem_push_const:
-      assert(!"nir_var_push_constant is not supposed to be used for variables");
       return;
 
    default:
@@ -2237,6 +2235,12 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_WORK_DIM;
    case nir_intrinsic_load_user_data_amd:
       return SYSTEM_VALUE_USER_DATA_AMD;
+   case nir_intrinsic_load_barycentric_model:
+      return SYSTEM_VALUE_BARYCENTRIC_PULL_MODEL;
+   case nir_intrinsic_load_gs_header_ir3:
+      return SYSTEM_VALUE_GS_HEADER_IR3;
+   case nir_intrinsic_load_tcs_header_ir3:
+      return SYSTEM_VALUE_TCS_HEADER_IR3;
    default:
       unreachable("intrinsic doesn't produce a system value");
    }

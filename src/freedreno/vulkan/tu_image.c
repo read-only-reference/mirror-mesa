@@ -116,21 +116,6 @@ tu_image_create(VkDevice _device,
    image->layer_count = pCreateInfo->arrayLayers;
    image->samples = pCreateInfo->samples;
 
-   image->exclusive = pCreateInfo->sharingMode == VK_SHARING_MODE_EXCLUSIVE;
-   if (pCreateInfo->sharingMode == VK_SHARING_MODE_CONCURRENT) {
-      for (uint32_t i = 0; i < pCreateInfo->queueFamilyIndexCount; ++i)
-         if (pCreateInfo->pQueueFamilyIndices[i] ==
-             VK_QUEUE_FAMILY_EXTERNAL)
-            image->queue_family_mask |= (1u << TU_MAX_QUEUE_FAMILIES) - 1u;
-         else
-            image->queue_family_mask |=
-               1u << pCreateInfo->pQueueFamilyIndices[i];
-   }
-
-   image->shareable =
-      vk_find_struct_const(pCreateInfo->pNext,
-                           EXTERNAL_MEMORY_IMAGE_CREATE_INFO) != NULL;
-
    enum a6xx_tile_mode tile_mode = TILE6_3;
    bool ubwc_enabled =
       !(device->physical_device->instance->debug_flags & TU_DEBUG_NOUBWC);
@@ -469,8 +454,9 @@ tu_image_view_init(struct tu_image_view *iview,
       format = tu6_plane_format(format, tu6_plane_index(format, aspect_mask));
 
    struct tu_native_format fmt = tu6_format_texture(format, layout->tile_mode);
-   /* note: freedreno layout assumes no TILE_ALL bit for non-UBWC
-    * this means smaller mipmap levels have a linear tile mode
+   /* note: freedreno layout assumes no TILE_ALL bit for non-UBWC color formats
+    * this means smaller mipmap levels have a linear tile mode.
+    * Depth/stencil formats have non-linear tile mode.
     */
    fmt.tile_mode = fdl_tile_mode(layout, range->baseMipLevel);
 
@@ -507,6 +493,9 @@ tu_image_view_init(struct tu_image_view *iview,
    iview->descriptor[3] = A6XX_TEX_CONST_3_ARRAY_PITCH(layer_size);
    iview->descriptor[4] = base_addr;
    iview->descriptor[5] = (base_addr >> 32) | A6XX_TEX_CONST_5_DEPTH(depth);
+
+   if (layout->tile_all)
+      iview->descriptor[3] |= A6XX_TEX_CONST_3_TILE_ALL;
 
    if (format == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ||
        format == VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM) {
@@ -554,7 +543,7 @@ tu_image_view_init(struct tu_image_view *iview,
       uint32_t block_width, block_height;
       fdl6_get_ubwc_blockwidth(layout, &block_width, &block_height);
 
-      iview->descriptor[3] |= A6XX_TEX_CONST_3_FLAG | A6XX_TEX_CONST_3_TILE_ALL;
+      iview->descriptor[3] |= A6XX_TEX_CONST_3_FLAG;
       iview->descriptor[7] = ubwc_addr;
       iview->descriptor[8] = ubwc_addr >> 32;
       iview->descriptor[9] |= A6XX_TEX_CONST_9_FLAG_BUFFER_ARRAY_PITCH(layout->ubwc_layer_size >> 2);

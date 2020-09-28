@@ -198,6 +198,8 @@ Converter::Converter(Program *prog, nir_shader *nir, nv50_ir_prog_info *info,
      nir(nir),
      curLoopDepth(0),
      curIfDepth(0),
+     exit(NULL),
+     immInsertPos(NULL),
      clipVertexOutput(-1)
 {
    zero = mkImm((uint32_t)0);
@@ -355,6 +357,7 @@ Converter::getFile(nir_intrinsic_op op)
    switch (op) {
    case nir_intrinsic_load_global:
    case nir_intrinsic_store_global:
+   case nir_intrinsic_load_global_constant:
       return FILE_MEMORY_GLOBAL;
    case nir_intrinsic_load_scratch:
    case nir_intrinsic_store_scratch:
@@ -1994,7 +1997,7 @@ Converter::visit(nir_intrinsic_instr *insn)
       }
       break;
    }
-   case nir_intrinsic_get_buffer_size: {
+   case nir_intrinsic_get_ssbo_size: {
       LValues &newDefs = convert(&insn->dest);
       const DataType dType = getDType(insn);
       Value *indirectBuffer;
@@ -2211,7 +2214,6 @@ Converter::visit(nir_intrinsic_instr *insn)
       case nir_intrinsic_bindless_image_store:
       case nir_intrinsic_image_store:
          ty = TYPE_U32;
-         mask = 0xf;
          bindless = op == nir_intrinsic_bindless_image_store;
          info_out->io.globalAccess |= 0x2;
          lod_src = 5;
@@ -2219,6 +2221,7 @@ Converter::visit(nir_intrinsic_instr *insn)
          break;
       case nir_intrinsic_bindless_image_samples:
          mask = 0x8;
+         /* fallthrough */
       case nir_intrinsic_image_samples:
          ty = TYPE_U32;
          bindless = op == nir_intrinsic_bindless_image_samples;
@@ -2328,7 +2331,8 @@ Converter::visit(nir_intrinsic_instr *insn)
       mkOp1(OP_RDSV, dType, newDefs[1], mkSysVal(SV_CLOCK, 0))->fixed = 1;
       break;
    }
-   case nir_intrinsic_load_global: {
+   case nir_intrinsic_load_global:
+   case nir_intrinsic_load_global_constant: {
       const DataType dType = getDType(insn);
       LValues &newDefs = convert(&insn->dest);
       Value *indirectOffset;
@@ -3122,8 +3126,7 @@ Converter::run()
    NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_function_temp, nir_address_format_32bit_offset);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
-   NIR_PASS_V(nir, nir_lower_io,
-              (nir_variable_mode)(nir_var_shader_in | nir_var_shader_out),
+   NIR_PASS_V(nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
               type_size, (nir_lower_io_options)0);
 
    NIR_PASS_V(nir, nir_lower_subgroups, &subgroup_options);
@@ -3203,8 +3206,12 @@ nvir_nir_shader_compiler_options(int chipset)
 {
    nir_shader_compiler_options op = {};
    op.lower_fdiv = (chipset >= NVISA_GV100_CHIPSET);
-   op.lower_ffma = false;
-   op.fuse_ffma = false; /* nir doesn't track mad vs fma */
+   op.lower_ffma16 = false;
+   op.lower_ffma32 = false;
+   op.lower_ffma64 = false;
+   op.fuse_ffma16 = false; /* nir doesn't track mad vs fma */
+   op.fuse_ffma32 = false; /* nir doesn't track mad vs fma */
+   op.fuse_ffma64 = false; /* nir doesn't track mad vs fma */
    op.lower_flrp16 = (chipset >= NVISA_GV100_CHIPSET);
    op.lower_flrp32 = true;
    op.lower_flrp64 = true;

@@ -3891,6 +3891,11 @@ struct gl_constants
    GLchar GLSLZeroInit;
 
    /**
+    * Force GL names reuse. Needed by SPECviewperf13.
+    */
+   GLboolean ForceGLNamesReuse;
+
+   /**
     * Treat integer textures using GL_LINEAR filters as GL_NEAREST.
     */
    GLboolean ForceIntegerTexNearest;
@@ -4209,6 +4214,12 @@ struct gl_constants
 
    /** Buffer size used to upload vertices from glBegin/glEnd. */
    unsigned glBeginEndBufferSize;
+
+   /** Whether the driver doesn't want x/y/width/height clipped based on src size
+    *  when doing a copy texture operation (eg: may want out-of-bounds reads that
+    *  produce 0 instead of leaving the texture content undefined).
+    */
+   bool NoClippingOnCopyTex;
 };
 
 
@@ -4241,6 +4252,7 @@ struct gl_extensions
    GLboolean ARB_conservative_depth;
    GLboolean ARB_copy_image;
    GLboolean ARB_cull_distance;
+   GLboolean EXT_color_buffer_half_float;
    GLboolean ARB_depth_buffer_float;
    GLboolean ARB_depth_clamp;
    GLboolean ARB_depth_texture;
@@ -4445,6 +4457,7 @@ struct gl_extensions
    GLboolean NV_point_sprite;
    GLboolean NV_primitive_restart;
    GLboolean NV_shader_atomic_float;
+   GLboolean NV_shader_atomic_int64;
    GLboolean NV_texture_barrier;
    GLboolean NV_texture_env_combine4;
    GLboolean NV_texture_rectangle;

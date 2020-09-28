@@ -264,9 +264,8 @@ st_nir_opts(nir_shader *nir)
        * might be able to make progress after it.
        */
       NIR_PASS(progress, nir, nir_remove_dead_variables,
-               (nir_variable_mode)(nir_var_function_temp |
-                                   nir_var_shader_temp |
-                                   nir_var_mem_shared),
+               nir_var_function_temp | nir_var_shader_temp |
+               nir_var_mem_shared,
                NULL);
 
       NIR_PASS(progress, nir, nir_opt_copy_prop_vars);
@@ -306,8 +305,7 @@ st_nir_opts(nir_shader *nir)
 
             NIR_PASS(lower_flrp_progress, nir, nir_lower_flrp,
                      lower_flrp,
-                     false /* always_precise */,
-                     nir->options->lower_ffma);
+                     false /* always_precise */);
             if (lower_flrp_progress) {
                NIR_PASS(progress, nir,
                         nir_opt_constant_folding);
@@ -383,8 +381,7 @@ st_nir_preprocess(struct st_context *st, struct gl_program *prog,
     * calls below do a little extra work but should otherwise have no impact.
     */
    if (!_mesa_is_gles(st->ctx) || !nir->info.separate_shader) {
-      nir_variable_mode mask =
-         (nir_variable_mode) (nir_var_shader_in | nir_var_shader_out);
+      nir_variable_mode mask = nir_var_shader_in | nir_var_shader_out;
       nir_remove_dead_variables(nir, mask, NULL);
    }
 
@@ -508,8 +505,8 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
          st_nir_opts(nir);
    }
 
-   nir_variable_mode mask = (nir_variable_mode)
-      (nir_var_shader_in | nir_var_shader_out | nir_var_function_temp );
+   nir_variable_mode mask =
+      nir_var_shader_in | nir_var_shader_out | nir_var_function_temp;
    nir_remove_dead_variables(nir, mask, NULL);
 
    if (!st->has_hw_atomics && !screen->get_param(screen, PIPE_CAP_NIR_ATOMICS_AS_DEREF))
@@ -755,6 +752,8 @@ st_link_nir(struct gl_context *ctx,
       struct gl_linked_shader *shader = linked_shader[i];
       nir_shader *nir = shader->Program->nir;
 
+      NIR_PASS_V(nir, nir_opt_access);
+
       /* This needs to run after the initial pass of nir_lower_vars_to_ssa, so
        * that the buffer indices are constants in nir where they where
        * constants in GLSL. */
@@ -810,6 +809,8 @@ st_link_nir(struct gl_context *ctx,
       struct gl_linked_shader *shader = linked_shader[i];
       struct shader_info *info = &shader->Program->nir->info;
 
+      st_glsl_to_nir_post_opts(st, shader->Program, shader_program);
+
       if (prev_info &&
           ctx->Const.ShaderCompilerOptions[shader->Stage].NirOptions->unify_interfaces) {
          prev_info->outputs_written |= info->inputs_read &
@@ -827,7 +828,6 @@ st_link_nir(struct gl_context *ctx,
       struct gl_linked_shader *shader = linked_shader[i];
       struct gl_program *prog = shader->Program;
       struct st_program *stp = st_program(prog);
-      st_glsl_to_nir_post_opts(st, prog, shader_program);
 
       /* Initialize st_vertex_program members. */
       if (shader->Stage == MESA_SHADER_VERTEX)
@@ -919,16 +919,20 @@ st_unpacked_uniforms_type_size(const struct glsl_type *type, bool bindless)
 void
 st_nir_lower_uniforms(struct st_context *st, nir_shader *nir)
 {
+   unsigned multiplier = 16;
    if (st->ctx->Const.PackedDriverUniformStorage) {
       NIR_PASS_V(nir, nir_lower_io, nir_var_uniform,
                  st_packed_uniforms_type_size,
                  (nir_lower_io_options)0);
-      NIR_PASS_V(nir, nir_lower_uniforms_to_ubo, 4);
+      multiplier = 4;
    } else {
       NIR_PASS_V(nir, nir_lower_io, nir_var_uniform,
                  st_unpacked_uniforms_type_size,
                  (nir_lower_io_options)0);
    }
+
+   if (nir->options->lower_uniforms_to_ubo)
+      NIR_PASS_V(nir, nir_lower_uniforms_to_ubo, multiplier);
 }
 
 /* Last third of preparing nir from glsl, which happens after shader

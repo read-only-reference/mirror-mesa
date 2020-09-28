@@ -41,8 +41,11 @@ files_mesa_util = files(
   'debug.h',
   'disk_cache.c',
   'disk_cache.h',
+  'disk_cache_os.c',
+  'disk_cache_os.h',
   'double.c',
   'double.h',
+  'enum_operators.h',
   'fast_idiv_by_const.c',
   'fast_idiv_by_const.h',
   'format_r11g11b10f.h',
@@ -53,7 +56,10 @@ files_mesa_util = files(
   'half_float.h',
   'hash_table.c',
   'hash_table.h',
+  'u_idalloc.c',
+  'u_idalloc.h',
   'list.h',
+  'log.c',
   'macros.h',
   'mesa-sha1.c',
   'mesa-sha1.h',
@@ -214,6 +220,17 @@ idep_xmlconfig = declare_dependency(
 )
 
 if with_tests
+  if host_machine.system() != 'windows'
+    test('xmlconfig',
+      executable('xmlconfig_test',
+        files('tests/xmlconfig.cpp'),
+        include_directories : [inc_include, inc_src],
+        dependencies : [idep_mesautil, idep_xmlconfig, idep_gtest],
+      ),
+      suite : ['util'],
+        )
+  endif
+
   test(
     'u_atomic',
     executable(

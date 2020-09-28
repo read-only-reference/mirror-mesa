@@ -79,6 +79,7 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
         rsc->internal_format = templat->format;
         rsc->modifier = (whandle->modifier == DRM_FORMAT_MOD_INVALID) ?
                 DRM_FORMAT_MOD_LINEAR : whandle->modifier;
+        rsc->modifier_constant = true;
         rsc->slices[0].stride = whandle->stride;
         rsc->slices[0].offset = whandle->offset;
         rsc->slices[0].initialized = true;
@@ -118,6 +119,7 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
         struct renderonly_scanout *scanout = rsrc->scanout;
 
         handle->modifier = rsrc->modifier;
+        rsrc->modifier_constant = true;
 
         if (handle->type == WINSYS_HANDLE_TYPE_SHARED) {
                 return false;
@@ -398,13 +400,15 @@ panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
                 /* Arrays and cubemaps have the entire miptree duplicated */
 
                 pres->cubemap_stride = ALIGN_POT(offset, 64);
-                *bo_size = ALIGN_POT(pres->cubemap_stride * res->array_size, 4096);
+                if (bo_size)
+                        *bo_size = ALIGN_POT(pres->cubemap_stride * res->array_size, 4096);
         } else {
                 /* 3D strides across the 2D layers */
                 assert(res->array_size == 1);
 
                 pres->cubemap_stride = size_2d;
-                *bo_size = ALIGN_POT(offset, 4096);
+                if (bo_size)
+                        *bo_size = ALIGN_POT(offset, 4096);
         }
 }
 
@@ -524,29 +528,21 @@ panfrost_best_modifier(struct panfrost_device *dev,
 }
 
 static void
-panfrost_resource_create_bo(struct panfrost_device *dev, struct panfrost_resource *pres,
-                uint64_t modifier)
+panfrost_resource_setup(struct panfrost_device *dev, struct panfrost_resource *pres,
+                        size_t *bo_size, uint64_t modifier)
 {
-        struct pipe_resource *res = &pres->base;
-
         pres->modifier = (modifier != DRM_FORMAT_MOD_INVALID) ? modifier :
                 panfrost_best_modifier(dev, pres);
-        pres->checksummed = (res->bind & PIPE_BIND_RENDER_TARGET);
+        pres->checksummed = (pres->base.bind & PIPE_BIND_RENDER_TARGET);
 
         /* We can only switch tiled->linear if the resource isn't already
          * linear, and if we control the modifier, and if the resource can be
          * linear. */
         pres->modifier_constant = !((pres->modifier != DRM_FORMAT_MOD_LINEAR)
-                        && (modifier == DRM_FORMAT_INVALID)
+                        && (modifier == DRM_FORMAT_MOD_INVALID)
                         && panfrost_can_linear(dev, pres));
 
-        size_t bo_size;
-
-        panfrost_setup_slices(pres, &bo_size);
-
-        /* We create a BO immediately but don't bother mapping, since we don't
-         * care to map e.g. FBOs which the CPU probably won't touch */
-        pres->bo = panfrost_bo_create(dev, bo_size, PAN_BO_DELAY_MMAP);
+        panfrost_setup_slices(pres, bo_size);
 }
 
 void
@@ -631,7 +627,13 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
 
         util_range_init(&so->valid_buffer_range);
 
-        panfrost_resource_create_bo(dev, so, modifier);
+        size_t bo_size;
+        panfrost_resource_setup(dev, so, &bo_size, modifier);
+
+        /* We create a BO immediately but don't bother mapping, since we don't
+         * care to map e.g. FBOs which the CPU probably won't touch */
+        so->bo = panfrost_bo_create(dev, bo_size, PAN_BO_DELAY_MMAP);
+
         panfrost_resource_set_damage_region(NULL, &so->base, 0, NULL);
 
         if (template->bind & PIPE_BIND_INDEX_BUFFER)
@@ -730,7 +732,7 @@ static void
 pan_blit_from_staging(struct pipe_context *pctx, struct panfrost_gtransfer *trans)
 {
         struct pipe_resource *dst = trans->base.resource;
-        struct pipe_blit_info blit = {};
+        struct pipe_blit_info blit = {0};
 
         blit.dst.resource = dst;
         blit.dst.format   = dst->format;
@@ -750,7 +752,7 @@ static void
 pan_blit_to_staging(struct pipe_context *pctx, struct panfrost_gtransfer *trans)
 {
         struct pipe_resource *src = trans->base.resource;
-        struct pipe_blit_info blit = {};
+        struct pipe_blit_info blit = {0};
 
         blit.src.resource = src;
         blit.src.format   = src->format;
@@ -770,7 +772,7 @@ static void *
 panfrost_transfer_map(struct pipe_context *pctx,
                       struct pipe_resource *resource,
                       unsigned level,
-                      unsigned usage,  /* a combination of PIPE_TRANSFER_x */
+                      unsigned usage,  /* a combination of PIPE_MAP_x */
                       const struct pipe_box *box,
                       struct pipe_transfer **out_transfer)
 {
@@ -781,7 +783,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
         struct panfrost_bo *bo = rsrc->bo;
 
         /* Can't map tiled/compressed directly */
-        if ((usage & PIPE_TRANSFER_MAP_DIRECTLY) && rsrc->modifier != DRM_FORMAT_MOD_LINEAR)
+        if ((usage & PIPE_MAP_DIRECTLY) && rsrc->modifier != DRM_FORMAT_MOD_LINEAR)
                 return NULL;
 
         struct panfrost_gtransfer *transfer = rzalloc(pctx, struct panfrost_gtransfer);
@@ -812,7 +814,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
                  * from a pending batch XXX */
                 panfrost_flush_batches_accessing_bo(ctx, rsrc->bo, true);
 
-                if ((usage & PIPE_TRANSFER_READ) && rsrc->slices[level].initialized) {
+                if ((usage & PIPE_MAP_READ) && rsrc->slices[level].initialized) {
                         pan_blit_to_staging(pctx, transfer);
                         panfrost_flush_batches_accessing_bo(ctx, staging->bo, true);
                         panfrost_bo_wait(staging->bo, INT64_MAX, false);
@@ -828,20 +830,19 @@ panfrost_transfer_map(struct pipe_context *pctx,
         if (dev->debug & (PAN_DBG_TRACE | PAN_DBG_SYNC))
                 pandecode_inject_mmap(bo->gpu, bo->cpu, bo->size, NULL);
 
-        bool create_new_bo = usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
+        bool create_new_bo = usage & PIPE_MAP_DISCARD_WHOLE_RESOURCE;
         bool copy_resource = false;
 
         if (!create_new_bo &&
-            !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
-            (usage & PIPE_TRANSFER_WRITE) &&
+            !(usage & PIPE_MAP_UNSYNCHRONIZED) &&
+            (usage & PIPE_MAP_WRITE) &&
             !(resource->target == PIPE_BUFFER
               && !util_ranges_intersect(&rsrc->valid_buffer_range, box->x, box->x + box->width)) &&
             panfrost_pending_batches_access_bo(ctx, bo)) {
 
                 /* When a resource to be modified is already being used by a
                  * pending batch, it is often faster to copy the whole BO than
-                 * to flush and split the frame in two. This also mostly
-                 * mitigates broken depth reload.
+                 * to flush and split the frame in two.
                  */
 
                 panfrost_flush_batches_accessing_bo(ctx, bo, false);
@@ -886,15 +887,15 @@ panfrost_transfer_map(struct pipe_context *pctx,
                                 panfrost_bo_wait(bo, INT64_MAX, true);
                         }
                 }
-        } else if ((usage & PIPE_TRANSFER_WRITE)
+        } else if ((usage & PIPE_MAP_WRITE)
                    && resource->target == PIPE_BUFFER
                    && !util_ranges_intersect(&rsrc->valid_buffer_range, box->x, box->x + box->width)) {
                 /* No flush for writes to uninitialized */
-        } else if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
-                if (usage & PIPE_TRANSFER_WRITE) {
+        } else if (!(usage & PIPE_MAP_UNSYNCHRONIZED)) {
+                if (usage & PIPE_MAP_WRITE) {
                         panfrost_flush_batches_accessing_bo(ctx, bo, true);
                         panfrost_bo_wait(bo, INT64_MAX, true);
-                } else if (usage & PIPE_TRANSFER_READ) {
+                } else if (usage & PIPE_MAP_READ) {
                         panfrost_flush_batches_accessing_bo(ctx, bo, false);
                         panfrost_bo_wait(bo, INT64_MAX, false);
                 }
@@ -906,7 +907,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
                 transfer->map = ralloc_size(transfer, transfer->base.layer_stride * box->depth);
                 assert(box->depth == 1);
 
-                if ((usage & PIPE_TRANSFER_READ) && rsrc->slices[level].initialized) {
+                if ((usage & PIPE_MAP_READ) && rsrc->slices[level].initialized) {
                         panfrost_load_tiled_image(
                                         transfer->map,
                                         bo->cpu + rsrc->slices[level].offset,
@@ -924,7 +925,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
                  * caching... I don't know if this is actually possible but we
                  * should still get it right */
 
-                unsigned dpw = PIPE_TRANSFER_MAP_DIRECTLY | PIPE_TRANSFER_WRITE | PIPE_TRANSFER_PERSISTENT;
+                unsigned dpw = PIPE_MAP_DIRECTLY | PIPE_MAP_WRITE | PIPE_MAP_PERSISTENT;
 
                 if ((usage & dpw) == dpw && rsrc->index_cache)
                         return NULL;
@@ -937,7 +938,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
                 /* By mapping direct-write, we're implicitly already
                  * initialized (maybe), so be conservative */
 
-                if (usage & PIPE_TRANSFER_WRITE) {
+                if (usage & PIPE_MAP_WRITE) {
                         rsrc->slices[level].initialized = true;
                         panfrost_minmax_cache_invalidate(rsrc->index_cache, &transfer->base);
                 }
@@ -950,6 +951,33 @@ panfrost_transfer_map(struct pipe_context *pctx,
         }
 }
 
+static bool
+panfrost_should_linear_convert(struct panfrost_resource *prsrc,
+                               struct pipe_transfer *transfer)
+{
+        if (prsrc->modifier_constant)
+                return false;
+
+        /* Overwriting the entire resource indicates streaming, for which
+         * linear layout is most efficient due to the lack of expensive
+         * conversion.
+         *
+         * For now we just switch to linear after a number of complete
+         * overwrites to keep things simple, but we could do better.
+         */
+
+        bool entire_overwrite = prsrc->base.last_level == 0
+                && transfer->box.width == prsrc->base.width0
+                && transfer->box.height == prsrc->base.height0
+                && transfer->box.x == 0
+                && transfer->box.y == 0;
+
+        if (entire_overwrite)
+                ++prsrc->modifier_updates;
+
+        return prsrc->modifier_updates >= LAYOUT_CONVERT_THRESHOLD;
+}
+
 static void
 panfrost_transfer_unmap(struct pipe_context *pctx,
                         struct pipe_transfer *transfer)
@@ -958,6 +986,7 @@ panfrost_transfer_unmap(struct pipe_context *pctx,
 
         struct panfrost_gtransfer *trans = pan_transfer(transfer);
         struct panfrost_resource *prsrc = (struct panfrost_resource *) transfer->resource;
+        struct panfrost_device *dev = pan_device(pctx->screen);
 
         /* AFBC will use a staging resource. `initialized` will be set when the
          * fragment job is created; this is deferred to prevent useless surface
@@ -965,44 +994,37 @@ panfrost_transfer_unmap(struct pipe_context *pctx,
          * malformed AFBC data if uninitialized */
 
         if (trans->staging.rsrc) {
-		if (transfer->usage & PIPE_TRANSFER_WRITE) {
-			pan_blit_from_staging(pctx, trans);
-                        panfrost_flush_batches_accessing_bo(pan_context(pctx), pan_resource(trans->staging.rsrc)->bo, true);
+                if (transfer->usage & PIPE_MAP_WRITE) {
+                        if (panfrost_should_linear_convert(prsrc, transfer)) {
+
+                                panfrost_bo_unreference(prsrc->bo);
+                                if (prsrc->slices[0].checksum_bo)
+                                        panfrost_bo_unreference(prsrc->slices[0].checksum_bo);
+
+                                panfrost_resource_setup(dev, prsrc, NULL, DRM_FORMAT_MOD_LINEAR);
+
+                                prsrc->bo = pan_resource(trans->staging.rsrc)->bo;
+                                panfrost_bo_reference(prsrc->bo);
+                        } else {
+                                pan_blit_from_staging(pctx, trans);
+                                panfrost_flush_batches_accessing_bo(pan_context(pctx), pan_resource(trans->staging.rsrc)->bo, true);
+                        }
                 }
 
-		pipe_resource_reference(&trans->staging.rsrc, NULL);
+                pipe_resource_reference(&trans->staging.rsrc, NULL);
         }
 
         /* Tiling will occur in software from a staging cpu buffer */
         if (trans->map) {
                 struct panfrost_bo *bo = prsrc->bo;
 
-                if (transfer->usage & PIPE_TRANSFER_WRITE) {
+                if (transfer->usage & PIPE_MAP_WRITE) {
                         prsrc->slices[transfer->level].initialized = true;
 
                         if (prsrc->modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED) {
                                 assert(transfer->box.depth == 1);
 
-                                /* Do we overwrite the entire resource? If so,
-                                 * we don't need an intermediate blit so it's a
-                                 * good time to switch the modifier. */
-
-                                bool discards_content = prsrc->base.last_level == 0
-                                    && transfer->box.width == prsrc->base.width0
-                                    && transfer->box.height == prsrc->base.height0
-                                    && transfer->box.x == 0
-                                    && transfer->box.y == 0
-                                    && !prsrc->modifier_constant;
-
-                                /* It also serves as a good heuristic for
-                                 * streaming textures (e.g. in video players),
-                                 * but we could do better */
-
-                                if (discards_content)
-                                        ++prsrc->modifier_updates;
-
-                                if (prsrc->modifier_updates >= LAYOUT_CONVERT_THRESHOLD)
-                                {
+                                if (panfrost_should_linear_convert(prsrc, transfer)) {
                                         prsrc->modifier = DRM_FORMAT_MOD_LINEAR;
 
                                         util_copy_rect(

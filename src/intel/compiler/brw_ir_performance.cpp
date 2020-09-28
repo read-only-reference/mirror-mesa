@@ -376,6 +376,7 @@ namespace {
       case BRW_OPCODE_CMP:
       case BRW_OPCODE_ADD:
       case BRW_OPCODE_MUL:
+      case SHADER_OPCODE_MOV_RELOC_IMM:
          if (devinfo->gen >= 11) {
             return calculate_desc(info, unit_fpu, 0, 2, 0, 0, 2,
                                   0, 10, 6, 14, 0, 0);
@@ -822,15 +823,6 @@ namespace {
                                   4 /* XXX */, 0,
                                   0, 12 /* XXX */, 8 /* XXX */, 18 /* XXX */,
                                   0, 0);
-
-      case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
-         if (devinfo->gen >= 8)
-            return calculate_desc(info, unit_fpu, 12 /* XXX */, 0, 0,
-                                  4 /* XXX */, 0,
-                                  0, 8 /* XXX */, 4 /* XXX */, 12 /* XXX */,
-                                  0, 0);
-         else
-            abort();
 
       case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
       case TCS_OPCODE_GET_INSTANCE_ID:

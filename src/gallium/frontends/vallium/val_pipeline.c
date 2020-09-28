@@ -511,7 +511,6 @@ val_shader_compile_to_ir(struct val_pipeline *pipeline,
    struct val_device *pdevice = pipeline->device;
    const struct spirv_to_nir_options spirv_options = {
       .environment = NIR_SPIRV_VULKAN,
-      .lower_ubo_ssbo_access_to_offsets = true,
       .caps = {
          .float64 = (pdevice->pscreen->get_param(pdevice->pscreen, PIPE_CAP_DOUBLES) == 1),
          .int16 = true,
@@ -573,6 +572,13 @@ val_shader_compile_to_ir(struct val_pipeline *pipeline,
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_global_vars_to_local);
 
+   NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_mem_push_const,
+              nir_address_format_32bit_offset);
+
+   NIR_PASS_V(nir, nir_lower_explicit_io,
+              nir_var_mem_ubo | nir_var_mem_ssbo,
+              nir_address_format_32bit_index_offset);
+
    if (nir->info.stage == MESA_SHADER_COMPUTE) {
       NIR_PASS_V(nir, nir_lower_vars_to_explicit_types, nir_var_mem_shared, shared_var_info);
       NIR_PASS_V(nir, nir_lower_explicit_io, nir_var_mem_shared, nir_address_format_32bit_offset);
@@ -590,7 +596,7 @@ val_shader_compile_to_ir(struct val_pipeline *pipeline,
    do {
       progress = false;
 
-      progress |= OPT(nir_lower_flrp, 32|64, true, false);
+      progress |= OPT(nir_lower_flrp, 32|64, true);
       progress |= OPT(nir_split_array_vars, nir_var_function_temp);
       progress |= OPT(nir_shrink_vec_array_vars, nir_var_function_temp);
       progress |= OPT(nir_opt_deref);

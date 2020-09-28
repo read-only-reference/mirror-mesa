@@ -162,6 +162,8 @@ if dri_drivers.contains('auto')
       dri_drivers = ['i915', 'i965', 'r100', 'r200', 'nouveau']
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       dri_drivers = []
+    elif ['mips', 'mips64'].contains(host_machine.cpu_family())
+      dri_drivers = ['r100', 'r200', 'nouveau']
     else
       error('Unknown architecture @0@. Please pass -Ddri-drivers to set driver options. Patches gladly accepted to fix this.'.format(
             host_machine.cpu_family()))
@@ -197,6 +199,10 @@ if gallium_drivers.contains('auto')
       gallium_drivers = [
         'kmsro', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau',
         'tegra', 'virgl', 'lima', 'panfrost', 'swrast'
+      ]
+    elif ['mips', 'mips64'].contains(host_machine.cpu_family())
+      gallium_drivers = [
+        'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'swrast'
       ]
     else
       error('Unknown architecture @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
@@ -246,6 +252,8 @@ if _vulkan_drivers.contains('auto')
       _vulkan_drivers = ['amd', 'intel', 'swrast']
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       _vulkan_drivers = ['swrast']
+    elif ['mips', 'mips64'].contains(host_machine.cpu_family())
+      _vulkan_drivers = ['amd', 'swrast']
     else
       error('Unknown architecture @0@. Please pass -Dvulkan-drivers to set driver options. Patches gladly accepted to fix this.'.format(
             host_machine.cpu_family()))
@@ -263,6 +271,7 @@ with_intel_vk = _vulkan_drivers.contains('intel')
 with_amd_vk = _vulkan_drivers.contains('amd')
 with_freedreno_vk = _vulkan_drivers.contains('freedreno')
 with_swrast_vk = _vulkan_drivers.contains('swrast')
+with_freedreno_kgsl = get_option('freedreno-kgsl')
 with_any_vk = _vulkan_drivers.length() != 0
 
 if with_swrast_vk and not with_gallium_softpipe
@@ -1102,6 +1111,19 @@ else
   sse41_args = []
 endif
 
+if cc.has_argument('-mf16c') and cpp.has_argument('-mf16c')
+  pre_args += '-DUSE_F16C'
+  c_args += '-mf16c'
+  cpp_args += '-mf16c'
+
+  # GCC on x86 (not x86_64) with -msse* assumes a 16 byte aligned stack, but
+  # that's not guaranteed (not sure if this also applies to -mf16c)
+  if host_machine.cpu_family() == 'x86'
+    c_args += '-mstackrealign'
+    cpp_args += '-mstackrealign'
+  endif
+endif
+
 # Check for GCC style atomics
 dep_atomic = null_dep
 
@@ -1345,12 +1367,6 @@ if dep_thread.found() and host_machine.system() != 'windows'
       args : '-D_GNU_SOURCE')
     pre_args += '-DHAVE_PTHREAD_SETAFFINITY'
   endif
-  if cc.has_function(
-      'pthread_setaffinity_np',
-      dependencies : dep_thread,
-      prefix : '#include <pthread_np.h>')
-    pre_args += '-DPTHREAD_SETAFFINITY_IN_NP_HEADER'
-  endif
 endif
 if host_machine.system() != 'windows'
   dep_expat = dependency('expat', fallback : ['expat', 'expat_dep'])
@@ -1447,8 +1463,7 @@ if with_gallium_opencl
   ]
 endif
 
-with_opencl_spirv = _opencl != 'disabled' and get_option('opencl-spirv')
-if with_amd_vk or with_gallium_radeonsi or with_opencl_spirv
+if with_amd_vk or with_gallium_radeonsi or with_gallium_opencl
   _llvm_version = '>= 8.0.0'
 elif with_gallium_swr
   _llvm_version = '>= 6.0.0'
@@ -1542,6 +1557,7 @@ elif with_gallium_opencl
   error('The OpenCL "Clover" state tracker requires LLVM, but LLVM is disabled.')
 endif
 
+with_opencl_spirv = _opencl != 'disabled' and get_option('opencl-spirv')
 if with_opencl_spirv
   chosen_llvm_version_array = dep_llvm.version().split('.')
   chosen_llvm_version_major = chosen_llvm_version_array[0].to_int()

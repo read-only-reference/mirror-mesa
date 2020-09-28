@@ -92,7 +92,8 @@ struct gen_perf_query_result;
 #include "isl/isl.h"
 
 #include "dev/gen_debug.h"
-#include "common/intel_log.h"
+#define MESA_LOG_TAG "MESA-INTEL"
+#include "util/log.h"
 #include "wsi_common.h"
 
 #define NSEC_PER_SEC 1000000000ull
@@ -181,6 +182,7 @@ struct gen_perf_query_result;
  * GEM object.
  */
 #define ANV_UBO_ALIGNMENT 64
+#define ANV_SSBO_ALIGNMENT 4
 #define ANV_SSBO_BOUNDS_CHECK_ALIGNMENT 4
 #define MAX_VIEWS_FOR_PRIMITIVE_REPLICATION 16
 
@@ -506,7 +508,7 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
  *    defined by extensions supported by that component.
  */
 #define anv_debug_ignored_stype(sType) \
-   intel_logd("%s: ignored VkStructureType %u\n", __func__, (sType))
+   mesa_logd("%s: ignored VkStructureType %u\n", __func__, (sType))
 
 void __anv_perf_warn(struct anv_device *device, const void *object,
                      VkDebugReportObjectTypeEXT type, const char *file,
@@ -522,7 +524,7 @@ void anv_loge_v(const char *format, va_list va);
    do { \
       static bool reported = false; \
       if (!reported) { \
-         intel_logw("%s:%d: FINISHME: " format, __FILE__, __LINE__, \
+         mesa_logw("%s:%d: FINISHME: " format, __FILE__, __LINE__, \
                     ##__VA_ARGS__); \
          reported = true; \
       } \
@@ -545,7 +547,7 @@ void anv_loge_v(const char *format, va_list va);
 #ifdef DEBUG
 #define anv_assert(x) ({ \
    if (unlikely(!(x))) \
-      intel_loge("%s:%d ASSERT: %s", __FILE__, __LINE__, #x); \
+      mesa_loge("%s:%d ASSERT: %s", __FILE__, __LINE__, #x); \
 })
 #else
 #define anv_assert(x)
@@ -1079,8 +1081,10 @@ struct anv_physical_device {
     bool                                        has_exec_fence;
     bool                                        has_syncobj;
     bool                                        has_syncobj_wait;
+    bool                                        has_syncobj_wait_available;
     bool                                        has_context_priority;
     bool                                        has_context_isolation;
+    bool                                        has_thread_submit;
     bool                                        has_mem_available;
     bool                                        has_mmap_offset;
     uint64_t                                    gtt_size;
@@ -1095,6 +1099,8 @@ struct anv_physical_device {
     bool                                        has_bindless_images;
     /** True if we can use bindless access for samplers */
     bool                                        has_bindless_samplers;
+    /** True if we can use timeline semaphores through execbuf */
+    bool                                        has_exec_timeline;
 
     /** True if we can read the GPU timestamp register
      *
@@ -1180,6 +1186,7 @@ struct anv_queue_submit {
    uint32_t                                  fence_count;
    uint32_t                                  fence_array_length;
    struct drm_i915_gem_exec_fence *          fences;
+   uint64_t *                                fence_values;
 
    uint32_t                                  temporary_semaphore_count;
    uint32_t                                  temporary_semaphore_array_length;
@@ -1191,7 +1198,10 @@ struct anv_queue_submit {
    uint32_t                                  sync_fd_semaphore_array_length;
 
    /* Allocated only with non shareable timelines. */
-   struct anv_timeline **                    wait_timelines;
+   union {
+      struct anv_timeline **                 wait_timelines;
+      uint32_t *                             wait_timeline_syncobjs;
+   };
    uint32_t                                  wait_timeline_count;
    uint32_t                                  wait_timeline_array_length;
    uint64_t *                                wait_timeline_values;
@@ -1226,14 +1236,34 @@ struct anv_queue_submit {
 struct anv_queue {
     struct vk_object_base                       base;
 
-    struct anv_device *                         device;
+   struct anv_device *                       device;
 
-    /*
-     * A list of struct anv_queue_submit to be submitted to i915.
-     */
-    struct list_head                            queued_submits;
+   VkDeviceQueueCreateFlags                  flags;
 
-    VkDeviceQueueCreateFlags                    flags;
+   /* Set once from the device api calls. */
+   bool                                      lost_signaled;
+
+   /* Only set once atomically by the queue */
+   int                                       lost;
+   int                                       error_line;
+   const char *                              error_file;
+   char                                      error_msg[80];
+
+   /*
+    * This mutext protects the variables below.
+    */
+   pthread_mutex_t                           mutex;
+
+   pthread_t                                 thread;
+   pthread_cond_t                            cond;
+
+   /*
+    * A list of struct anv_queue_submit to be submitted to i915.
+    */
+   struct list_head                          queued_submits;
+
+   /* Set to true to stop the submission thread */
+   bool                                      quit;
 };
 
 struct anv_pipeline_cache {
@@ -1265,8 +1295,6 @@ anv_pipeline_cache_upload_kernel(struct anv_pipeline_cache *cache,
                                  gl_shader_stage stage,
                                  const void *key_data, uint32_t key_size,
                                  const void *kernel_data, uint32_t kernel_size,
-                                 const void *constant_data,
-                                 uint32_t constant_data_size,
                                  const struct brw_stage_prog_data *prog_data,
                                  uint32_t prog_data_size,
                                  const struct brw_compile_stats *stats,
@@ -1286,8 +1314,6 @@ anv_device_upload_kernel(struct anv_device *device,
                          gl_shader_stage stage,
                          const void *key_data, uint32_t key_size,
                          const void *kernel_data, uint32_t kernel_size,
-                         const void *constant_data,
-                         uint32_t constant_data_size,
                          const struct brw_stage_prog_data *prog_data,
                          uint32_t prog_data_size,
                          const struct brw_compile_stats *stats,
@@ -1327,6 +1353,7 @@ struct anv_device {
     int                                         fd;
     bool                                        can_chain_batches;
     bool                                        robust_buffer_access;
+    bool                                        has_thread_submit;
     struct anv_device_extension_table           enabled_extensions;
     struct anv_device_dispatch_table            dispatch;
 
@@ -1379,6 +1406,7 @@ struct anv_device {
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
     int                                         _lost;
+    int                                         lost_reported;
 
     struct gen_batch_decode_ctx                 decoder_ctx;
     /*
@@ -1436,7 +1464,7 @@ anv_mocs_for_bo(const struct anv_device *device, const struct anv_bo *bo)
 void anv_device_init_blorp(struct anv_device *device);
 void anv_device_finish_blorp(struct anv_device *device);
 
-void _anv_device_set_all_queue_lost(struct anv_device *device);
+void _anv_device_report_lost(struct anv_device *device);
 VkResult _anv_device_set_lost(struct anv_device *device,
                               const char *file, int line,
                               const char *msg, ...)
@@ -1448,12 +1476,17 @@ VkResult _anv_queue_set_lost(struct anv_queue *queue,
 #define anv_device_set_lost(dev, ...) \
    _anv_device_set_lost(dev, __FILE__, __LINE__, __VA_ARGS__)
 #define anv_queue_set_lost(queue, ...) \
-   _anv_queue_set_lost(queue, __FILE__, __LINE__, __VA_ARGS__)
+   (queue)->device->has_thread_submit ? \
+   _anv_queue_set_lost(queue, __FILE__, __LINE__, __VA_ARGS__) : \
+   _anv_device_set_lost(queue->device, __FILE__, __LINE__, __VA_ARGS__)
 
 static inline bool
 anv_device_is_lost(struct anv_device *device)
 {
-   return unlikely(p_atomic_read(&device->_lost));
+   int lost = p_atomic_read(&device->_lost);
+   if (unlikely(lost && !device->lost_reported))
+      _anv_device_report_lost(device);
+   return lost;
 }
 
 VkResult anv_device_query_status(struct anv_device *device);
@@ -1561,6 +1594,7 @@ int anv_gem_set_context_param(int fd, int context, uint32_t param,
 int anv_gem_get_context_param(int fd, int context, uint32_t param,
                               uint64_t *value);
 int anv_gem_get_param(int fd, uint32_t param);
+uint64_t anv_gem_get_drm_cap(int fd, uint32_t capability);
 int anv_gem_get_tiling(struct anv_device *device, uint32_t gem_handle);
 bool anv_gem_get_bit6_swizzle(int fd, uint32_t tiling);
 int anv_gem_gpu_get_reset_stats(struct anv_device *device,
@@ -1583,8 +1617,18 @@ int anv_gem_syncobj_import_sync_file(struct anv_device *device,
 void anv_gem_syncobj_reset(struct anv_device *device, uint32_t handle);
 bool anv_gem_supports_syncobj_wait(int fd);
 int anv_gem_syncobj_wait(struct anv_device *device,
-                         uint32_t *handles, uint32_t num_handles,
+                         const uint32_t *handles, uint32_t num_handles,
                          int64_t abs_timeout_ns, bool wait_all);
+int anv_gem_syncobj_timeline_wait(struct anv_device *device,
+                                  const uint32_t *handles, const uint64_t *points,
+                                  uint32_t num_items, int64_t abs_timeout_ns,
+                                  bool wait_all, bool wait_materialize);
+int anv_gem_syncobj_timeline_signal(struct anv_device *device,
+                                    const uint32_t *handles, const uint64_t *points,
+                                    uint32_t num_items);
+int anv_gem_syncobj_timeline_query(struct anv_device *device,
+                                   const uint32_t *handles, uint64_t *points,
+                                   uint32_t num_items);
 
 uint64_t anv_vma_alloc(struct anv_device *device,
                        uint64_t size, uint64_t align,
@@ -3162,6 +3206,7 @@ enum anv_semaphore_type {
    ANV_SEMAPHORE_TYPE_SYNC_FILE,
    ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ,
    ANV_SEMAPHORE_TYPE_TIMELINE,
+   ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ_TIMELINE,
 };
 
 struct anv_timeline_point {
@@ -3275,6 +3320,11 @@ mesa_to_vk_shader_stage(gl_shader_stage mesa_stage)
         stage = __builtin_ffs(__tmp) - 1, __tmp;                     \
         __tmp &= ~(1 << (stage)))
 
+enum anv_shader_reloc {
+   ANV_SHADER_RELOC_CONST_DATA_ADDR_LOW,
+   ANV_SHADER_RELOC_CONST_DATA_ADDR_HIGH,
+};
+
 struct anv_pipeline_bind_map {
    unsigned char                                surface_sha1[20];
    unsigned char                                sampler_sha1[20];
@@ -3304,9 +3354,6 @@ struct anv_shader_bin {
    struct anv_state kernel;
    uint32_t kernel_size;
 
-   struct anv_state constant_data;
-   uint32_t constant_data_size;
-
    const struct brw_stage_prog_data *prog_data;
    uint32_t prog_data_size;
 
@@ -3323,7 +3370,6 @@ anv_shader_bin_create(struct anv_device *device,
                       gl_shader_stage stage,
                       const void *key, uint32_t key_size,
                       const void *kernel, uint32_t kernel_size,
-                      const void *constant_data, uint32_t constant_data_size,
                       const struct brw_stage_prog_data *prog_data,
                       uint32_t prog_data_size,
                       const struct brw_compile_stats *stats, uint32_t num_stats,

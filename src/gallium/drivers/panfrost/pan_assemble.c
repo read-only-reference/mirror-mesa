@@ -241,14 +241,14 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         s->info.stage = stage;
 
         /* Call out to Midgard compiler given the above NIR */
-        panfrost_program program = {};
+        panfrost_program program = {0};
         memcpy(program.rt_formats, state->rt_formats, sizeof(program.rt_formats));
 
         if (dev->quirks & IS_BIFROST) {
                 bifrost_compile_shader_nir(s, &program, dev->gpu_id);
         } else {
                 midgard_compile_shader_nir(s, &program, false, 0, dev->gpu_id,
-                                dev->debug & PAN_DBG_PRECOMPILE, false);
+                                dev->debug & PAN_DBG_PRECOMPILE);
         }
 
         /* Prepare the compiled binary for upload */

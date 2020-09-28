@@ -1810,7 +1810,7 @@ genX(cmd_buffer_config_l3)(struct anv_cmd_buffer *cmd_buffer,
       return;
 
    if (unlikely(INTEL_DEBUG & DEBUG_L3)) {
-      intel_logd("L3 config transition: ");
+      mesa_logd("L3 config transition: ");
       gen_dump_l3_config(cfg, stderr);
    }
 
@@ -2512,10 +2512,11 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
             anv_cmd_buffer_alloc_surface_state(cmd_buffer);
 
          struct anv_address constant_data = {
-            .bo = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
-            .offset = shader->constant_data.offset,
+            .bo = cmd_buffer->device->instruction_state_pool.block_pool.bo,
+            .offset = shader->kernel.offset +
+                      shader->prog_data->const_data_offset,
          };
-         unsigned constant_data_size = shader->constant_data_size;
+         unsigned constant_data_size = shader->prog_data->const_data_size;
 
          const enum isl_format format =
             anv_isl_format_for_descriptor_type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
@@ -4650,7 +4651,8 @@ genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,
 
    anv_batch_emit(&cmd_buffer->batch, GENX(PIPELINE_SELECT), ps) {
 #if GEN_GEN >= 9
-      ps.MaskBits = 3;
+      ps.MaskBits = GEN_GEN >= 12 ? 0x13 : 3;
+      ps.MediaSamplerDOPClockGateEnable = GEN_GEN >= 12;
 #endif
       ps.PipelineSelection = pipeline;
    }

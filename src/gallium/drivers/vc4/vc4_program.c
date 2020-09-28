@@ -1546,8 +1546,7 @@ vc4_optimize_nir(struct nir_shader *s)
 
                         NIR_PASS(lower_flrp_progress, s, nir_lower_flrp,
                                  lower_flrp,
-                                 false /* always_precise */,
-                                 s->options->lower_ffma);
+                                 false /* always_precise */);
                         if (lower_flrp_progress) {
                                 NIR_PASS(progress, s, nir_opt_constant_folding);
                                 progress = true;
@@ -2180,7 +2179,9 @@ static const nir_shader_compiler_options nir_options = {
         .lower_extract_byte = true,
         .lower_extract_word = true,
         .lower_fdiv = true,
-        .lower_ffma = true,
+        .lower_ffma16 = true,
+        .lower_ffma32 = true,
+        .lower_ffma64 = true,
         .lower_flrp32 = true,
         .lower_fmod = true,
         .lower_fpow = true,

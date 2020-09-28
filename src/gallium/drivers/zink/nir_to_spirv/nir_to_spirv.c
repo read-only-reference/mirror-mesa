@@ -285,6 +285,12 @@ get_glsl_type(struct ntv_context *ctx, const struct glsl_type *type)
       return ret;
    }
 
+   if (glsl_type_is_matrix(type))
+      return spirv_builder_type_matrix(&ctx->builder,
+                                       spirv_builder_type_vector(&ctx->builder,
+                                                                 get_glsl_basetype(ctx, glsl_get_base_type(type)),
+                                                                 glsl_get_vector_elements(type)),
+                                       glsl_get_matrix_columns(type));
 
    unreachable("we shouldn't get here, I think...");
 }
@@ -2255,6 +2261,13 @@ nir_to_spirv(struct nir_shader *s, const struct zink_so_info *so_info)
 
    default:
       unreachable("invalid stage");
+   }
+
+   if (s->info.outputs_written & BITFIELD64_BIT(VARYING_SLOT_VIEWPORT)) {
+      if (s->info.stage < MESA_SHADER_GEOMETRY)
+         spirv_builder_emit_cap(&ctx.builder, SpvCapabilityShaderViewportIndex);
+      else
+         spirv_builder_emit_cap(&ctx.builder, SpvCapabilityMultiViewport);
    }
 
    // TODO: only enable when needed
