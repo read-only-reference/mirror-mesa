@@ -55,9 +55,9 @@ device::device(clover::platform &platform, pipe_loader_device *ldev) :
          return;
 #ifdef HAVE_CLOVER_SPIRV
       if (supports_ir(PIPE_SHADER_IR_NIR_SERIALIZED)) {
+         nir::check_for_libclc(*this);
          clc_cache = nir::create_clc_disk_cache();
-         clc = spirv::load_clc(*this);
-         clc_nir = lazy<std::shared_ptr<nir_shader>>([&] () { std::string log; return std::shared_ptr<nir_shader>(nir::libclc_spirv_to_nir(clc, *this, log), ralloc_free); });
+         clc_nir = lazy<std::shared_ptr<nir_shader>>([&] () { std::string log; return std::shared_ptr<nir_shader>(nir::load_libclc_nir(*this, log), ralloc_free); });
          return;
       }
 #endif
@@ -109,7 +109,7 @@ device::vendor_id() const {
 
 size_t
 device::max_images_read() const {
-   return PIPE_MAX_SHADER_IMAGES;
+   return PIPE_MAX_SHADER_SAMPLER_VIEWS;
 }
 
 size_t

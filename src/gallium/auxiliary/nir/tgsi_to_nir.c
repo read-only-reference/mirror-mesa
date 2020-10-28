@@ -694,8 +694,8 @@ ttn_src_for_file_and_index(struct ttn_compile *c, unsigned file, unsigned index,
 
       load = nir_intrinsic_instr_create(b->shader, op);
       if (op == nir_intrinsic_load_uniform) {
-         nir_intrinsic_set_type(load, src_is_float ? nir_type_float :
-                                                     nir_type_int);
+         nir_intrinsic_set_dest_type(load, src_is_float ? nir_type_float :
+                                                          nir_type_int);
       }
 
       load->num_components = 4;
@@ -2122,11 +2122,11 @@ ttn_emit_instruction(struct ttn_compile *c)
       break;
 
    case TGSI_OPCODE_IF:
-      nir_push_if(b, nir_fneu(b, src[0], nir_imm_float(b, 0.0)));
+      nir_push_if(b, nir_fneu(b, nir_channel(b, src[0], 0), nir_imm_float(b, 0.0)));
       break;
 
    case TGSI_OPCODE_UIF:
-      nir_push_if(b, nir_ine(b, src[0], nir_imm_int(b, 0)));
+      nir_push_if(b, nir_ine(b, nir_channel(b, src[0], 0), nir_imm_int(b, 0)));
       break;
 
    case TGSI_OPCODE_ELSE:

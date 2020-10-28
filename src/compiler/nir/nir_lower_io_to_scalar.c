@@ -49,7 +49,8 @@ lower_load_input_to_scalar(nir_builder *b, nir_intrinsic_instr *intr)
 
       nir_intrinsic_set_base(chan_intr, nir_intrinsic_base(intr));
       nir_intrinsic_set_component(chan_intr, nir_intrinsic_component(intr) + i);
-      nir_intrinsic_set_type(chan_intr, nir_intrinsic_type(intr));
+      nir_intrinsic_set_dest_type(chan_intr, nir_intrinsic_dest_type(intr));
+      nir_intrinsic_set_io_semantics(chan_intr, nir_intrinsic_io_semantics(intr));
       /* offset */
       nir_src_copy(&chan_intr->src[0], &intr->src[0], chan_intr);
 
@@ -82,7 +83,8 @@ lower_store_output_to_scalar(nir_builder *b, nir_intrinsic_instr *intr)
       nir_intrinsic_set_base(chan_intr, nir_intrinsic_base(intr));
       nir_intrinsic_set_write_mask(chan_intr, 0x1);
       nir_intrinsic_set_component(chan_intr, nir_intrinsic_component(intr) + i);
-      nir_intrinsic_set_type(chan_intr, nir_intrinsic_type(intr));
+      nir_intrinsic_set_src_type(chan_intr, nir_intrinsic_src_type(intr));
+      nir_intrinsic_set_io_semantics(chan_intr, nir_intrinsic_io_semantics(intr));
 
       /* value */
       chan_intr->src[0] = nir_src_for_ssa(nir_channel(b, value, i));
@@ -374,7 +376,7 @@ nir_lower_io_to_scalar_early_instr(nir_builder *b, nir_instr *instr, void *data)
  * This function is intended to be called earlier than nir_lower_io_to_scalar()
  * i.e. before nir_lower_io() is called.
  */
-void
+bool
 nir_lower_io_to_scalar_early(nir_shader *shader, nir_variable_mode mask)
 {
    struct io_to_scalar_early_state state = {
@@ -383,11 +385,11 @@ nir_lower_io_to_scalar_early(nir_shader *shader, nir_variable_mode mask)
       .mask = mask
    };
 
-   nir_shader_instructions_pass(shader,
-                                nir_lower_io_to_scalar_early_instr,
-                                nir_metadata_block_index |
-                                nir_metadata_dominance,
-                                &state);
+   bool progress = nir_shader_instructions_pass(shader,
+                                                nir_lower_io_to_scalar_early_instr,
+                                                nir_metadata_block_index |
+                                                nir_metadata_dominance,
+                                                &state);
 
    /* Remove old input from the shaders inputs list */
    hash_table_foreach(state.split_inputs, entry) {
@@ -409,4 +411,6 @@ nir_lower_io_to_scalar_early(nir_shader *shader, nir_variable_mode mask)
    _mesa_hash_table_destroy(state.split_outputs, NULL);
 
    nir_remove_dead_derefs(shader);
+
+   return progress;
 }

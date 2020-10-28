@@ -133,6 +133,14 @@ struct brw_compiler {
     * back-end compiler.
     */
    bool lower_variable_group_size;
+
+   /**
+    * Whether indirect UBO loads should use the sampler or go through the
+    * data/constant cache.  For the sampler, UBO surface states have to be set
+    * up with VK_FORMAT_R32G32B32A32_FLOAT whereas if it's going through the
+    * constant or data cache, UBOs must use VK_FORMAT_RAW.
+    */
+   bool indirect_ubos_use_sampler;
 };
 
 /**
@@ -629,6 +637,7 @@ enum brw_param_builtin {
    BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_X,
    BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_Y,
    BRW_PARAM_BUILTIN_WORK_GROUP_SIZE_Z,
+   BRW_PARAM_BUILTIN_WORK_DIM,
 };
 
 #define BRW_PARAM_BUILTIN_CLIP_PLANE(idx, comp) \
@@ -960,7 +969,6 @@ struct brw_cs_prog_data {
    struct brw_stage_prog_data base;
 
    unsigned local_size[3];
-   unsigned slm_size;
 
    /* Program offsets for the 8/16/32 SIMD variants.  Multiple variants are
     * kept when using variable group size, and the right one can only be

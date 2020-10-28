@@ -3111,10 +3111,10 @@ Converter::run()
    if (prog->dbgFlags & NV50_IR_DEBUG_VERBOSE)
       nir_print_shader(nir, stderr);
 
-   struct nir_lower_subgroups_options subgroup_options = {
-      .subgroup_size = 32,
-      .ballot_bit_size = 32,
-   };
+   struct nir_lower_subgroups_options subgroup_options = {};
+   subgroup_options.subgroup_size = 32;
+   subgroup_options.ballot_bit_size = 32;
+   subgroup_options.lower_elect = true;
 
    /* prepare for IO lowering */
    NIR_PASS_V(nir, nir_opt_deref);
@@ -3236,7 +3236,6 @@ nvir_nir_shader_compiler_options(int chipset)
    op.lower_sub = true;
    op.lower_scmp = true; // TODO: not implemented yet
    op.lower_vector_cmp = false;
-   op.lower_idiv = true;
    op.lower_bitops = false;
    op.lower_isign = (chipset >= NVISA_GV100_CHIPSET);
    op.lower_fsign = (chipset >= NVISA_GV100_CHIPSET);

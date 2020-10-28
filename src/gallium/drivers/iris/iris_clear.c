@@ -114,6 +114,23 @@ can_fast_clear_color(struct iris_context *ice,
    if (!iris_is_color_fast_clear_compatible(ice, res->surf.format, color))
       return false;
 
+   /* The RENDER_SURFACE_STATE page for TGL says:
+    *
+    *   For an 8 bpp surface with NUM_MULTISAMPLES = 1, Surface Width not
+    *   multiple of 64 pixels and more than 1 mip level in the view, Fast Clear
+    *   is not supported when AUX_CCS_E is set in this field.
+    *
+    * The granularity of a fast-clear is one CCS element. For an 8 bpp primary
+    * surface, this maps to 32px x 4rows. Due to the surface layout parameters,
+    * if LOD0's width isn't a multiple of 64px, LOD1 and LOD2+ will share CCS
+    * elements. Assuming LOD2 exists, don't fast-clear any level above LOD0
+    * to avoid stomping on other LODs.
+    */
+   if (level > 0 && util_format_get_blocksizebits(p_res->format) == 8 &&
+       res->aux.usage == ISL_AUX_USAGE_GEN12_CCS_E && p_res->width0 % 64) {
+      return false;
+   }
+
    return true;
 }
 
@@ -198,8 +215,6 @@ fast_clear_color(struct iris_context *ice,
 {
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
    struct pipe_resource *p_res = (void *) res;
-   const enum isl_aux_state aux_state =
-      iris_resource_get_aux_state(res, level, box->z);
 
    color = convert_fast_clear_color(ice, res, color);
 
@@ -278,7 +293,9 @@ fast_clear_color(struct iris_context *ice,
    /* If the buffer is already in ISL_AUX_STATE_CLEAR, and the color hasn't
     * changed, the clear is redundant and can be skipped.
     */
-   if (!color_changed && aux_state == ISL_AUX_STATE_CLEAR)
+   const enum isl_aux_state aux_state =
+      iris_resource_get_aux_state(res, level, box->z);
+   if (!color_changed && box->depth == 1 && aux_state == ISL_AUX_STATE_CLEAR)
       return;
 
    /* Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":

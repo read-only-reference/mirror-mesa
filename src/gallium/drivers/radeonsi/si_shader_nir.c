@@ -154,8 +154,10 @@ static void scan_io_usage(struct si_shader_info *info, nir_intrinsic_instr *intr
                }
             }
 
-            if (nir_intrinsic_has_type(intr))
-               info->output_type[loc] = nir_intrinsic_type(intr);
+            if (nir_intrinsic_has_src_type(intr))
+               info->output_type[loc] = nir_intrinsic_src_type(intr);
+            else if (nir_intrinsic_has_dest_type(intr))
+               info->output_type[loc] = nir_intrinsic_dest_type(intr);
             else
                info->output_type[loc] = nir_type_float32;
 
@@ -166,11 +168,11 @@ static void scan_io_usage(struct si_shader_info *info, nir_intrinsic_instr *intr
                 semantic >= FRAG_RESULT_DATA0 && semantic <= FRAG_RESULT_DATA7) {
                unsigned index = semantic - FRAG_RESULT_DATA0;
 
-               if (nir_intrinsic_type(intr) == nir_type_float16)
+               if (nir_intrinsic_src_type(intr) == nir_type_float16)
                   info->output_color_types |= SI_TYPE_FLOAT16 << (index * 2);
-               else if (nir_intrinsic_type(intr) == nir_type_int16)
+               else if (nir_intrinsic_src_type(intr) == nir_type_int16)
                   info->output_color_types |= SI_TYPE_INT16 << (index * 2);
-               else if (nir_intrinsic_type(intr) == nir_type_uint16)
+               else if (nir_intrinsic_src_type(intr) == nir_type_uint16)
                   info->output_color_types |= SI_TYPE_UINT16 << (index * 2);
             }
          }
@@ -426,7 +428,7 @@ static bool si_alu_to_scalar_filter(const nir_instr *instr, const void *data)
    return true;
 }
 
-static void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first)
+void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first)
 {
    bool progress;
 
@@ -661,6 +663,7 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       .lower_subgroup_masks = true,
       .lower_vote_trivial = false,
       .lower_vote_eq_to_ballot = true,
+      .lower_elect = true,
    };
    NIR_PASS_V(nir, nir_lower_subgroups, &subgroups_options);
 
@@ -706,7 +709,6 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       NIR_PASS_V(nir, nir_opt_cse);
    }
 
-   NIR_PASS_V(nir, nir_lower_bool_to_int32);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
    if (sscreen->debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL))
@@ -721,4 +723,7 @@ void si_finalize_nir(struct pipe_screen *screen, void *nirptr, bool optimize)
    si_lower_io(nir);
    si_lower_nir(sscreen, nir);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+
+   if (sscreen->options.inline_uniforms)
+      nir_find_inlinable_uniforms(nir);
 }

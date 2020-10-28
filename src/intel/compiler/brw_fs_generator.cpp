@@ -650,15 +650,54 @@ fs_generator::generate_shuffle(fs_inst *inst,
             group_idx = retype(spread(group_idx, 2), BRW_REGISTER_TYPE_W);
          }
 
+         uint32_t src_start_offset = src.nr * REG_SIZE + src.subnr;
+
+         /* From the Haswell PRM:
+          *
+          *    "When a sequence of NoDDChk and NoDDClr are used, the last
+          *    instruction that completes the scoreboard clear must have a
+          *    non-zero execution mask. This means, if any kind of predication
+          *    can change the execution mask or channel enable of the last
+          *    instruction, the optimization must be avoided.  This is to
+          *    avoid instructions being shot down the pipeline when no writes
+          *    are required."
+          *
+          * Whenever predication is enabled or the instructions being emitted
+          * aren't the full width, it's possible that it will be run with zero
+          * channels enabled so we can't use dependency control without
+          * running the risk of a hang if an instruction gets shot down.
+          */
+         const bool use_dep_ctrl = !inst->predicate &&
+                                   lower_width == dispatch_width;
+         brw_inst *insn;
+
+         /* Due to a hardware bug some platforms (particularly Gen11+) seem
+          * to require the address components of all channels to be valid
+          * whether or not they're active, which causes issues if we use VxH
+          * addressing under non-uniform control-flow.  We can easily work
+          * around that by initializing the whole address register with a
+          * pipelined NoMask MOV instruction.
+          */
+         insn = brw_MOV(p, addr, brw_imm_uw(src_start_offset));
+         brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
+         brw_inst_set_pred_control(devinfo, insn, BRW_PREDICATE_NONE);
+         if (devinfo->gen >= 12)
+            brw_set_default_swsb(p, tgl_swsb_null());
+         else
+            brw_inst_set_no_dd_clear(devinfo, insn, use_dep_ctrl);
+
          /* Take into account the component size and horizontal stride. */
          assert(src.vstride == src.hstride + src.width);
-         brw_SHL(p, addr, group_idx,
-                 brw_imm_uw(util_logbase2(type_sz(src.type)) +
-                            src.hstride - 1));
+         insn = brw_SHL(p, addr, group_idx,
+                        brw_imm_uw(util_logbase2(type_sz(src.type)) +
+                                   src.hstride - 1));
+         if (devinfo->gen >= 12)
+            brw_set_default_swsb(p, tgl_swsb_regdist(1));
+         else
+            brw_inst_set_no_dd_check(devinfo, insn, use_dep_ctrl);
 
          /* Add on the register start offset */
-         brw_set_default_swsb(p, tgl_swsb_regdist(1));
-         brw_ADD(p, addr, addr, brw_imm_uw(src.nr * REG_SIZE + src.subnr));
+         brw_ADD(p, addr, addr, brw_imm_uw(src_start_offset));
 
          if (type_sz(src.type) > 4 &&
              ((devinfo->gen == 7 && !devinfo->is_haswell) ||
@@ -798,22 +837,7 @@ fs_generator::generate_urb_read(fs_inst *inst,
 void
 fs_generator::generate_urb_write(fs_inst *inst, struct brw_reg payload)
 {
-   brw_inst *insn;
-
-    /* WaClearTDRRegBeforeEOTForNonPS.
-     *
-     *   WA: Clear tdr register before send EOT in all non-PS shader kernels
-     *
-     *   mov(8) tdr0:ud 0x0:ud {NoMask}"
-     */
-   if (inst->eot && p->devinfo->gen == 10) {
-      brw_push_insn_state(p);
-      brw_set_default_mask_control(p, BRW_MASK_DISABLE);
-      brw_MOV(p, brw_tdr_reg(), brw_imm_uw(0));
-      brw_pop_insn_state(p);
-   }
-
-   insn = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_inst *insn = brw_next_insn(p, BRW_OPCODE_SEND);
 
    brw_set_dest(p, insn, brw_null_reg());
    brw_set_src0(p, insn, payload);
@@ -1492,6 +1516,76 @@ fs_generator::generate_scratch_read_gen7(fs_inst *inst, struct brw_reg dst)
    assert(inst->exec_size <= 16 || inst->force_writemask_all);
 
    gen7_block_read_scratch(p, dst, inst->exec_size / 8, inst->offset);
+}
+
+/* The A32 messages take a buffer base address in header.5:[31:0] (See
+ * MH1_A32_PSM for typed messages or MH_A32_GO for byte/dword scattered
+ * and OWord block messages in the SKL PRM Vol. 2d for more details.)
+ * Unfortunately, there are a number of subtle differences:
+ *
+ * For the block read/write messages:
+ *
+ *   - We always stomp header.2 to fill in the actual scratch address (in
+ *     units of OWORDs) so we don't care what's in there.
+ *
+ *   - They rely on per-thread scratch space value in header.3[3:0] to do
+ *     bounds checking so that needs to be valid.  The upper bits of
+ *     header.3 are ignored, though, so we can copy all of g0.3.
+ *
+ *   - They ignore header.5[9:0] and assumes the address is 1KB aligned.
+ *
+ *
+ * For the byte/dword scattered read/write messages:
+ *
+ *   - We want header.2 to be zero because that gets added to the per-channel
+ *     offset in the non-header portion of the message.
+ *
+ *   - Contrary to what the docs claim, they don't do any bounds checking so
+ *     the value of header.3[3:0] doesn't matter.
+ *
+ *   - They consider all of header.5 for the base address and header.5[9:0]
+ *     are not ignored.  This means that we can't copy g0.5 verbatim because
+ *     g0.5[9:0] contains the FFTID on most platforms.  Instead, we have to
+ *     use an AND to mask off the bottom 10 bits.
+ *
+ *
+ * For block messages, just copying g0 gives a valid header because all the
+ * garbage gets ignored except for header.2 which we stomp as part of message
+ * setup.  For byte/dword scattered messages, we can just zero out the header
+ * and copy over the bits we need from g0.5.  This opcode, however, tries to
+ * satisfy the requirements of both by starting with 0 and filling out the
+ * information required by either set of opcodes.
+ */
+void
+fs_generator::generate_scratch_header(fs_inst *inst, struct brw_reg dst)
+{
+   assert(inst->exec_size == 8 && inst->force_writemask_all);
+   assert(dst.file == BRW_GENERAL_REGISTER_FILE);
+
+   dst.type = BRW_REGISTER_TYPE_UD;
+
+   brw_inst *insn = brw_MOV(p, dst, brw_imm_ud(0));
+   if (devinfo->gen >= 12)
+      brw_set_default_swsb(p, tgl_swsb_null());
+   else
+      brw_inst_set_no_dd_clear(p->devinfo, insn, true);
+
+   /* Copy the per-thread scratch space size from g0.3[3:0] */
+   brw_set_default_exec_size(p, BRW_EXECUTE_1);
+   insn = brw_AND(p, suboffset(dst, 3),
+                     retype(brw_vec1_grf(0, 3), BRW_REGISTER_TYPE_UD),
+                     brw_imm_ud(INTEL_MASK(3, 0)));
+   if (devinfo->gen < 12) {
+      brw_inst_set_no_dd_clear(p->devinfo, insn, true);
+      brw_inst_set_no_dd_check(p->devinfo, insn, true);
+   }
+
+   /* Copy the scratch base address from g0.5[31:10] */
+   insn = brw_AND(p, suboffset(dst, 5),
+                     retype(brw_vec1_grf(0, 5), BRW_REGISTER_TYPE_UD),
+                     brw_imm_ud(INTEL_MASK(31, 10)));
+   if (devinfo->gen < 12)
+      brw_inst_set_no_dd_check(p->devinfo, insn, true);
 }
 
 void
@@ -2225,6 +2319,10 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 	 generate_scratch_read_gen7(inst, dst);
          fill_count++;
 	 break;
+
+      case SHADER_OPCODE_SCRATCH_HEADER:
+         generate_scratch_header(inst, dst);
+         break;
 
       case SHADER_OPCODE_MOV_INDIRECT:
          generate_mov_indirect(inst, dst, src[0], src[1]);

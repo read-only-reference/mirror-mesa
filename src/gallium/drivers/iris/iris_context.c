@@ -221,9 +221,6 @@ iris_destroy_context(struct pipe_context *ctx)
    case 11:                                       \
       gen11_##func(__VA_ARGS__);                  \
       break;                                      \
-   case 10:                                       \
-      gen10_##func(__VA_ARGS__);                  \
-      break;                                      \
    case 9:                                        \
       gen9_##func(__VA_ARGS__);                   \
       break;                                      \
@@ -302,7 +299,7 @@ iris_create_context(struct pipe_screen *pscreen, void *priv, unsigned flags)
    if (flags & PIPE_CONTEXT_LOW_PRIORITY)
       priority = GEN_CONTEXT_LOW_PRIORITY;
 
-   if (unlikely(INTEL_DEBUG & DEBUG_BATCH))
+   if (INTEL_DEBUG & DEBUG_BATCH)
       ice->state.sizes = _mesa_hash_table_u64_create(ice);
 
    for (int i = 0; i < IRIS_BATCH_COUNT; i++) {

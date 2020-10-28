@@ -61,6 +61,8 @@ files_mesa_util = files(
   'list.h',
   'log.c',
   'macros.h',
+  'memstream.c',
+  'memstream.h',
   'mesa-sha1.c',
   'mesa-sha1.h',
   'os_time.c',
@@ -72,6 +74,7 @@ files_mesa_util = files(
   'os_socket.h',
   'u_process.c',
   'u_process.h',
+  'rwlock.h',
   'sha1/sha1.c',
   'sha1/sha1.h',
   'ralloc.c',
@@ -196,11 +199,16 @@ idep_mesautil = declare_dependency(
   dependencies : [dep_zlib, dep_clock, dep_thread, dep_atomic, dep_m],
 )
 
+xmlconfig_deps = []
+if not (with_platform_android or with_platform_windows)
+  xmlconfig_deps += dep_expat
+endif
+
 _libxmlconfig = static_library(
   'xmlconfig',
   files_xmlconfig,
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-  dependencies : [idep_mesautil, dep_expat, dep_m],
+  dependencies : [idep_mesautil, dep_m, xmlconfig_deps],
   c_args : [
     c_msvc_compat_args,
     '-DSYSCONFDIR="@0@"'.format(
@@ -215,17 +223,23 @@ _libxmlconfig = static_library(
 )
 
 idep_xmlconfig = declare_dependency(
-  dependencies : dep_expat,
+  dependencies : xmlconfig_deps,
   link_with : _libxmlconfig,
 )
 
+files_xxd = files('xxd.py')
+
 if with_tests
-  if host_machine.system() != 'windows'
+  # DRI_CONF macros use designated initializers (required for union
+  # initializaiton), so we need c++2a since gtest forces us to use c++
+  if host_machine.system() != 'windows' and cpp.has_argument('-std=c++2a')
     test('xmlconfig',
       executable('xmlconfig_test',
         files('tests/xmlconfig.cpp'),
         include_directories : [inc_include, inc_src],
         dependencies : [idep_mesautil, idep_xmlconfig, idep_gtest],
+        override_options : ['cpp_std=c++2a'],
+        cpp_args: ['-Wno-write-strings']
       ),
       suite : ['util'],
         )

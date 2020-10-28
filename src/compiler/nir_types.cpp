@@ -457,6 +457,12 @@ glsl_uvec4_type(void)
 }
 
 const glsl_type *
+glsl_ivec4_type(void)
+{
+   return glsl_type::ivec4_type;
+}
+
+const glsl_type *
 glsl_int_type(void)
 {
    return glsl_type::int_type;
@@ -929,4 +935,10 @@ glsl_get_explicit_type_for_size_align(const struct glsl_type *type,
                                       unsigned *size, unsigned *align)
 {
    return type->get_explicit_type_for_size_align(type_info, size, align);
+}
+
+const struct glsl_type *
+glsl_type_replace_vec3_with_vec4(const struct glsl_type *type)
+{
+   return type->replace_vec3_with_vec4();
 }

@@ -56,8 +56,11 @@ MESA_UTIL_FILES := \
 	u_idalloc.c \
 	u_idalloc.h \
 	list.h \
+	log.c \
 	log.h \
 	macros.h \
+	memstream.c \
+	memstream.h \
 	mesa-sha1.c \
 	mesa-sha1.h \
 	os_time.c \

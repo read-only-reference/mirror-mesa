@@ -48,6 +48,7 @@
 #include "compiler/shader_enums.h"
 #include "util/macros.h"
 #include "util/list.h"
+#include "util/rwlock.h"
 #include "util/xmlconfig.h"
 #include "vk_alloc.h"
 #include "vk_debug_report.h"
@@ -299,9 +300,6 @@ struct radv_physical_device {
 	/* Whether to enable NGG. */
 	bool use_ngg;
 
-	/* Whether to enable NGG GS. */
-	bool use_ngg_gs;
-
 	/* Whether to enable NGG streamout. */
 	bool use_ngg_streamout;
 
@@ -393,7 +391,7 @@ struct radv_pipeline_key {
 	uint32_t vertex_attribute_bindings[MAX_VERTEX_ATTRIBS];
 	uint32_t vertex_attribute_offsets[MAX_VERTEX_ATTRIBS];
 	uint32_t vertex_attribute_strides[MAX_VERTEX_ATTRIBS];
-	uint64_t vertex_alpha_adjust;
+	enum ac_fetch_format vertex_alpha_adjust[MAX_VERTEX_ATTRIBS];
 	uint32_t vertex_post_shuffle;
 	unsigned tess_input_vertices;
 	uint32_t col_format;
@@ -741,7 +739,7 @@ struct radv_queue {
 struct radv_bo_list {
 	struct radv_winsys_bo_list list;
 	unsigned capacity;
-	pthread_rwlock_t rwlock;
+	struct u_rwlock rwlock;
 };
 
 VkResult radv_bo_list_add(struct radv_device *device,
@@ -2480,8 +2478,7 @@ struct radv_shader_variant_key;
 void radv_nir_shader_info_pass(const struct nir_shader *nir,
 			       const struct radv_pipeline_layout *layout,
 			       const struct radv_shader_variant_key *key,
-			       struct radv_shader_info *info,
-			       bool use_llvm);
+			       struct radv_shader_info *info);
 
 void radv_nir_shader_info_init(struct radv_shader_info *info);
 

@@ -385,6 +385,9 @@ struct iris_uncompiled_shader {
 
    /** Size (in bytes) of the kernel input data */
    unsigned kernel_input_size;
+
+   /** Size (in bytes) of the local (shared) data passed as kernel inputs */
+   unsigned kernel_shared_size;
 };
 
 enum iris_surface_group {
@@ -847,7 +850,7 @@ uint32_t iris_upload_border_color(struct iris_context *ice,
 void iris_upload_ubo_ssbo_surf_state(struct iris_context *ice,
                                      struct pipe_shader_buffer *buf,
                                      struct iris_state_ref *surf_state,
-                                     bool ssbo);
+                                     isl_surf_usage_flags_t usage);
 const struct shader_info *iris_get_shader_info(const struct iris_context *ice,
                                                gl_shader_stage stage);
 struct iris_bo *iris_get_scratch_space(struct iris_context *ice,
@@ -963,9 +966,6 @@ void gen9_toggle_preemption(struct iris_context *ice,
 #  include "iris_genx_protos.h"
 #  undef genX
 #  define genX(x) gen9_##x
-#  include "iris_genx_protos.h"
-#  undef genX
-#  define genX(x) gen10_##x
 #  include "iris_genx_protos.h"
 #  undef genX
 #  define genX(x) gen11_##x

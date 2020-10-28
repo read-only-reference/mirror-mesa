@@ -153,10 +153,11 @@ void
 iris_upload_ubo_ssbo_surf_state(struct iris_context *ice,
                                 struct pipe_shader_buffer *buf,
                                 struct iris_state_ref *surf_state,
-                                bool ssbo)
+                                isl_surf_usage_flags_t usage)
 {
    struct pipe_context *ctx = &ice->ctx;
    struct iris_screen *screen = (struct iris_screen *) ctx->screen;
+   bool ssbo = usage & ISL_SURF_USAGE_STORAGE_BIT;
 
    void *map =
       upload_state(ice->state.surface_uploader, surf_state,
@@ -170,15 +171,17 @@ iris_upload_ubo_ssbo_surf_state(struct iris_context *ice,
    struct iris_bo *surf_bo = iris_resource_bo(surf_state->res);
    surf_state->offset += iris_bo_offset_from_base_address(surf_bo);
 
+   const bool dataport = ssbo || !screen->compiler->indirect_ubos_use_sampler;
+
    isl_buffer_fill_state(&screen->isl_dev, map,
                          .address = res->bo->gtt_offset + res->offset +
                                     buf->buffer_offset,
                          .size_B = buf->buffer_size - res->offset,
-                         .format = ssbo ? ISL_FORMAT_RAW
-                                        : ISL_FORMAT_R32G32B32A32_FLOAT,
+                         .format = dataport ? ISL_FORMAT_RAW
+                                            : ISL_FORMAT_R32G32B32A32_FLOAT,
                          .swizzle = ISL_SWIZZLE_IDENTITY,
                          .stride_B = 1,
-                         .mocs = iris_mocs(res->bo, &screen->isl_dev));
+                         .mocs = iris_mocs(res->bo, &screen->isl_dev, usage));
 }
 
 static nir_ssa_def *
@@ -396,6 +399,7 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
    unsigned ucp_idx[IRIS_MAX_CLIP_PLANES];
    unsigned img_idx[PIPE_MAX_SHADER_IMAGES];
    unsigned variable_group_size_idx = -1;
+   unsigned work_dim_idx = -1;
    memset(ucp_idx, -1, sizeof(ucp_idx));
    memset(img_idx, -1, sizeof(img_idx));
 
@@ -537,6 +541,16 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
             b.cursor = nir_before_instr(instr);
             offset = nir_imm_int(&b, system_values_start +
                                      variable_group_size_idx * sizeof(uint32_t));
+            break;
+         }
+         case nir_intrinsic_load_work_dim: {
+            if (work_dim_idx == -1) {
+               work_dim_idx = num_system_values++;
+               system_values[work_dim_idx] = BRW_PARAM_BUILTIN_WORK_DIM;
+            }
+            b.cursor = nir_before_instr(instr);
+            offset = nir_imm_int(&b, system_values_start +
+                                     work_dim_idx * sizeof(uint32_t));
             break;
          }
          case nir_intrinsic_load_kernel_input: {
@@ -922,7 +936,7 @@ iris_setup_binding_table(const struct gen_device_info *devinfo,
    }
    bt->size_bytes = next * 4;
 
-   if (unlikely(INTEL_DEBUG & DEBUG_BT)) {
+   if (INTEL_DEBUG & DEBUG_BT) {
       iris_print_binding_table(stderr, gl_shader_stage_name(info->stage), bt);
    }
 
@@ -1822,7 +1836,8 @@ iris_update_pull_constant_descriptors(struct iris_context *ice,
       struct pipe_shader_buffer *cbuf = &shs->constbuf[i];
       struct iris_state_ref *surf_state = &shs->constbuf_surf_state[i];
       if (!surf_state->res && cbuf->buffer) {
-         iris_upload_ubo_ssbo_surf_state(ice, cbuf, surf_state, false);
+         iris_upload_ubo_ssbo_surf_state(ice, cbuf, surf_state,
+                                         ISL_SURF_USAGE_CONSTANT_BUFFER_BIT);
          any_new_descriptors = true;
       }
    }
@@ -2405,6 +2420,7 @@ iris_create_compute_state(struct pipe_context *ctx,
    struct iris_uncompiled_shader *ish =
       iris_create_uncompiled_shader(ctx, nir, NULL);
    ish->kernel_input_size = state->req_input_mem;
+   ish->kernel_shared_size = state->req_local_mem;
 
    // XXX: disallow more than 64KB of shared variables
 

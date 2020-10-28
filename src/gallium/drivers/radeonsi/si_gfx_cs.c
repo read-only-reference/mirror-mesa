@@ -30,7 +30,7 @@
 #include "util/u_upload_mgr.h"
 
 /* initialize */
-void si_need_gfx_cs_space(struct si_context *ctx)
+void si_need_gfx_cs_space(struct si_context *ctx, unsigned num_draws)
 {
    struct radeon_cmdbuf *cs = ctx->gfx_cs;
 
@@ -54,7 +54,7 @@ void si_need_gfx_cs_space(struct si_context *ctx)
    ctx->gtt = 0;
    ctx->vram = 0;
 
-   unsigned need_dwords = si_get_minimum_num_gfx_cs_dwords(ctx);
+   unsigned need_dwords = si_get_minimum_num_gfx_cs_dwords(ctx, num_draws);
    if (!ctx->ws->cs_check_space(cs, need_dwords, false))
       si_flush_gfx_cs(ctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
 }
@@ -226,6 +226,9 @@ void si_flush_gfx_cs(struct si_context *ctx, unsigned flags, struct pipe_fence_h
          ws->fence_reference(&ctx->last_ib_barrier_fence, NULL);
       }
    }
+
+   if (ctx->is_noop)
+      flags |= RADEON_FLUSH_NOOP;
 
    /* Flush the CS. */
    ws->cs_flush(cs, flags, &ctx->last_gfx_fence);

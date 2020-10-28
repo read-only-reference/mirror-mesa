@@ -30,6 +30,7 @@
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
+#include "compiler/shader_info.h"
 
 /* 0 = disabled, 1 = assertions, 2 = printfs */
 #define TC_DEBUG 0
@@ -59,6 +60,13 @@ enum tc_call_id {
    TC_NUM_CALLS,
 };
 
+/* This is actually variable-sized, because indirect isn't allocated if it's
+ * not needed. */
+struct tc_full_draw_info {
+   struct pipe_draw_info draw;
+   struct pipe_draw_indirect_info indirect;
+};
+
 typedef void (*tc_execute)(struct pipe_context *pipe, union tc_payload *payload);
 
 static const tc_execute execute_func[TC_NUM_CALLS];
@@ -79,6 +87,19 @@ tc_debug_check(struct threaded_context *tc)
    }
 }
 
+static bool
+is_next_call_a_mergeable_draw(struct tc_full_draw_info *first_info,
+                              struct tc_call *next,
+                              struct tc_full_draw_info **next_info)
+{
+   return next->call_id == TC_CALL_draw_vbo &&
+          (*next_info = (struct tc_full_draw_info*)&next->payload) &&
+          /* All fields must be the same except start and count. */
+          memcmp((uint32_t*)&first_info->draw + 2,
+                 (uint32_t*)&(*next_info)->draw + 2,
+                 sizeof(struct pipe_draw_info) - 8) == 0;
+}
+
 static void
 tc_batch_execute(void *job, UNUSED int thread_index)
 {
@@ -90,10 +111,57 @@ tc_batch_execute(void *job, UNUSED int thread_index)
 
    assert(!batch->token);
 
-   for (struct tc_call *iter = batch->call; iter != last;
-        iter += iter->num_call_slots) {
+   for (struct tc_call *iter = batch->call; iter != last;) {
       tc_assert(iter->sentinel == TC_SENTINEL);
+
+      /* Draw call merging. */
+      if (iter->call_id == TC_CALL_draw_vbo) {
+         struct tc_call *first = iter;
+         struct tc_call *next = first + first->num_call_slots;
+         struct tc_full_draw_info *first_info =
+            (struct tc_full_draw_info*)&first->payload;
+         struct tc_full_draw_info *next_info;
+
+         /* If at least 2 consecutive draw calls can be merged... */
+         if (next != last && next->call_id == TC_CALL_draw_vbo &&
+             first_info->draw.drawid == 0 &&
+             !first_info->draw.indirect &&
+             !first_info->draw.count_from_stream_output &&
+             is_next_call_a_mergeable_draw(first_info, next, &next_info)) {
+            /* Merge up to 256 draw calls. */
+            struct pipe_draw_start_count multi[256];
+            unsigned num_draws = 2;
+
+            multi[0].start = first_info->draw.start;
+            multi[0].count = first_info->draw.count;
+            multi[1].start = next_info->draw.start;
+            multi[1].count = next_info->draw.count;
+
+            if (next_info->draw.index_size)
+               pipe_resource_reference(&next_info->draw.index.resource, NULL);
+
+            /* Find how many other draws can be merged. */
+            next = next + next->num_call_slots;
+            for (; next != last && num_draws < ARRAY_SIZE(multi) &&
+                 is_next_call_a_mergeable_draw(first_info, next, &next_info);
+                 next += next->num_call_slots, num_draws++) {
+               multi[num_draws].start = next_info->draw.start;
+               multi[num_draws].count = next_info->draw.count;
+
+               if (next_info->draw.index_size)
+                  pipe_resource_reference(&next_info->draw.index.resource, NULL);
+            }
+
+            pipe->multi_draw(pipe, &first_info->draw, multi, num_draws);
+            if (first_info->draw.index_size)
+               pipe_resource_reference(&first_info->draw.index.resource, NULL);
+            iter = next;
+            continue;
+         }
+      }
+
       execute_func[iter->call_id](pipe, &iter->payload);
+      iter += iter->num_call_slots;
    }
 
    tc_batch_check(batch);
@@ -696,11 +764,41 @@ tc_set_constant_buffer(struct pipe_context *_pipe,
       } else {
          tc_set_resource_reference(&p->cb.buffer,
                                    cb->buffer);
-         memcpy(&p->cb, cb, sizeof(*cb));
+         p->cb.user_buffer = NULL;
+         p->cb.buffer_offset = cb->buffer_offset;
+         p->cb.buffer_size = cb->buffer_size;
       }
    } else {
       memset(&p->cb, 0, sizeof(*cb));
    }
+}
+
+struct tc_inlinable_constants {
+   ubyte shader;
+   ubyte num_values;
+   uint32_t values[MAX_INLINABLE_UNIFORMS];
+};
+
+static void
+tc_call_set_inlinable_constants(struct pipe_context *pipe, union tc_payload *payload)
+{
+   struct tc_inlinable_constants *p = (struct tc_inlinable_constants *)payload;
+
+   pipe->set_inlinable_constants(pipe, p->shader, p->num_values, p->values);
+}
+
+static void
+tc_set_inlinable_constants(struct pipe_context *_pipe,
+                           enum pipe_shader_type shader,
+                           uint num_values, uint32_t *values)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+   struct tc_inlinable_constants *p =
+      tc_add_struct_typed_call(tc, TC_CALL_set_inlinable_constants,
+                               tc_inlinable_constants);
+   p->shader = shader;
+   p->num_values = num_values;
+   memcpy(p->values, values, num_values * 4);
 }
 
 struct tc_scissors {
@@ -1608,9 +1706,9 @@ tc_transfer_unmap(struct pipe_context *_pipe, struct pipe_transfer *transfer)
                                   PIPE_MAP_DISCARD_RANGE)));
 
       struct pipe_context *pipe = tc->pipe;
-      pipe->transfer_unmap(pipe, transfer);
       util_range_add(&tres->b, tres->base_valid_buffer_range,
                       transfer->box.x, transfer->box.x + transfer->box.width);
+      pipe->transfer_unmap(pipe, transfer);
       return;
    }
 
@@ -1971,8 +2069,9 @@ tc_set_context_param(struct pipe_context *_pipe,
 
    if (param == PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE) {
       /* Pin the gallium thread as requested. */
-      util_pin_thread_to_L3(tc->queue.threads[0], value,
-                            util_cpu_caps.cores_per_L3);
+      util_set_thread_affinity(tc->queue.threads[0],
+                               util_cpu_caps.L3_affinity_mask[value],
+                               NULL, UTIL_MAX_CPUS);
 
       /* Execute this immediately (without enqueuing).
        * It's required to be thread-safe.
@@ -1991,6 +2090,20 @@ tc_set_context_param(struct pipe_context *_pipe,
       payload->param = param;
       payload->value = value;
    }
+}
+
+static void
+tc_call_set_frontend_noop(struct pipe_context *pipe, union tc_payload *payload)
+{
+   pipe->set_frontend_noop(pipe, payload->boolean);
+}
+
+static void
+tc_set_frontend_noop(struct pipe_context *_pipe, bool enable)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+
+   tc_add_small_call(tc, TC_CALL_set_frontend_noop)->boolean = enable;
 }
 
 
@@ -2039,19 +2152,7 @@ tc_flush(struct pipe_context *_pipe, struct pipe_fence_handle **fence,
    struct threaded_context *tc = threaded_context(_pipe);
    struct pipe_context *pipe = tc->pipe;
    struct pipe_screen *screen = pipe->screen;
-   bool async = flags & PIPE_FLUSH_DEFERRED;
-
-   if (flags & PIPE_FLUSH_ASYNC) {
-      struct tc_batch *last = &tc->batch_slots[tc->last];
-
-      /* Prefer to do the flush in the driver thread, but avoid the inter-thread
-       * communication overhead if the driver thread is currently idle and the
-       * caller is going to wait for the fence immediately anyway.
-       */
-      if (!(util_queue_fence_is_signalled(&last->fence) &&
-            (flags & PIPE_FLUSH_HINT_FINISH)))
-         async = true;
-   }
+   bool async = flags & (PIPE_FLUSH_DEFERRED | PIPE_FLUSH_ASYNC);
 
    if (async && tc->create_fence) {
       if (fence) {
@@ -2090,13 +2191,6 @@ out_of_memory:
       tc_flush_queries(tc);
    pipe->flush(pipe, fence, flags);
 }
-
-/* This is actually variable-sized, because indirect isn't allocated if it's
- * not needed. */
-struct tc_full_draw_info {
-   struct pipe_draw_info draw;
-   struct pipe_draw_indirect_info indirect;
-};
 
 static void
 tc_call_draw_vbo(struct pipe_context *pipe, union tc_payload *payload)
@@ -2746,6 +2840,7 @@ threaded_context_create(struct pipe_context *pipe,
    CTX_INIT(set_min_samples);
    CTX_INIT(set_clip_state);
    CTX_INIT(set_constant_buffer);
+   CTX_INIT(set_inlinable_constants);
    CTX_INIT(set_framebuffer_state);
    CTX_INIT(set_polygon_stipple);
    CTX_INIT(set_scissor_states);
@@ -2793,6 +2888,7 @@ threaded_context_create(struct pipe_context *pipe,
    CTX_INIT(create_image_handle);
    CTX_INIT(delete_image_handle);
    CTX_INIT(make_image_handle_resident);
+   CTX_INIT(set_frontend_noop);
 #undef CTX_INIT
 
    if (out)

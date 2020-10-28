@@ -247,7 +247,7 @@ anv_shader_compile_to_nir(struct anv_device *device,
 
    free(spec_entries);
 
-   if (unlikely(INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage))) {
+   if (INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage)) {
       fprintf(stderr, "NIR (from SPIR-V) for %s shader:\n",
               gl_shader_stage_name(stage));
       nir_print_shader(nir, stderr);
@@ -2408,7 +2408,7 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
                    "Number of bytes of workgroup shared memory used by this "
                    "compute shader including any padding.");
          stat->format = VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR;
-         stat->value.u64 = brw_cs_prog_data_const(prog_data)->slm_size;
+         stat->value.u64 = prog_data->total_shared;
       }
    }
 

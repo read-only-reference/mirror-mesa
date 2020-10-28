@@ -36,9 +36,6 @@
 #include "util/u_math.h"
 
 #include <stdio.h>
-#if UTIL_ARCH_BIG_ENDIAN
-#include <byteswap.h>
-#endif
 
 void
 vtn_log(struct vtn_builder *b, enum nir_spirv_debug_level level,
@@ -415,7 +412,7 @@ vtn_string_literal(struct vtn_builder *b, const uint32_t *words,
    {
       uint32_t *copy = ralloc_array(b, uint32_t, word_count);
       for (unsigned i = 0; i < word_count; i++)
-         copy[i] = bswap_32(words[i]);
+         copy[i] = util_bswap32(words[i]);
       words = copy;
    }
 #endif
@@ -2661,7 +2658,9 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
                      "Unless the Kernel capability is being used, the coordinate parameter "
                      "OpImageSampleExplicitLod must be floating point.");
 
-         p->src = nir_src_for_ssa(nir_i2f32(&b->nb, p->src.ssa));
+         p->src = nir_src_for_ssa(
+            nir_fadd(&b->nb, nir_i2f32(&b->nb, p->src.ssa),
+                             nir_imm_float(&b->nb, 0.5)));
       }
 
       p->src_type = nir_tex_src_coord;
@@ -3237,7 +3236,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       intrin->src[4] = nir_src_for_ssa(image.lod);
 
       if (opcode == SpvOpImageWrite)
-         nir_intrinsic_set_type(intrin, nir_get_nir_type_for_glsl_type(value->type));
+         nir_intrinsic_set_src_type(intrin, nir_get_nir_type_for_glsl_type(value->type));
       break;
    }
 
@@ -3292,7 +3291,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       vtn_push_nir_ssa(b, w[2], result);
 
       if (opcode == SpvOpImageRead)
-         nir_intrinsic_set_type(intrin, nir_get_nir_type_for_glsl_type(type->type));
+         nir_intrinsic_set_dest_type(intrin, nir_get_nir_type_for_glsl_type(type->type));
    } else {
       nir_builder_instr_insert(&b->nb, &intrin->instr);
    }
@@ -4090,6 +4089,8 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          (count > 3) ? vtn_value(b, w[3], vtn_value_type_string)->str : "";
 
       vtn_info("Parsing SPIR-V from %s %u source file %s", lang, version, file);
+
+      b->source_lang = w[1];
       break;
    }
 
@@ -4133,7 +4134,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          break;
 
       case SpvCapabilityLinkage:
-      case SpvCapabilityFloat16Buffer:
       case SpvCapabilitySparseResidency:
          vtn_warn("Unsupported SPIR-V capability: %s",
                   spirv_capability_to_string(cap));
@@ -4181,6 +4181,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          break;
 
       case SpvCapabilityKernel:
+      case SpvCapabilityFloat16Buffer:
          spv_check_supported(kernel, cap);
          break;
 
@@ -4350,6 +4351,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityDemoteToHelperInvocationEXT:
          spv_check_supported(demote_to_helper_invocation, cap);
+         b->uses_demote_to_helper_invocation = true;
          break;
 
       case SpvCapabilityShaderClockKHR:
@@ -5135,6 +5137,8 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpSConvert:
    case SpvOpFConvert:
    case SpvOpQuantizeToF16:
+   case SpvOpSatConvertSToU:
+   case SpvOpSatConvertUToS:
    case SpvOpPtrCastToGeneric:
    case SpvOpGenericCastToPtr:
    case SpvOpIsNan:
@@ -5446,7 +5450,7 @@ vtn_create_builder(const uint32_t *words, size_t word_count,
       goto fail;
    }
 
-   uint16_t generator_id = words[2] >> 16;
+   b->generator_id = words[2] >> 16;
    uint16_t generator_version = words[2];
 
    /* In GLSLang commit 8297936dd6eb3, their handling of barrier() was fixed
@@ -5454,7 +5458,9 @@ vtn_create_builder(const uint32_t *words, size_t word_count,
     * commands.  Prior to that, we need to fix them up ourselves.  This
     * GLSLang fix caused them to bump to generator version 3.
     */
-   b->wa_glslang_cs_barrier = (generator_id == 8 && generator_version < 3);
+   b->wa_glslang_cs_barrier =
+      (b->generator_id == vtn_generator_glslang_reference_front_end &&
+       generator_version < 3);
 
    /* words[2] == generator magic */
    unsigned value_id_bound = words[3];
@@ -5574,6 +5580,20 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
    /* Handle all the preamble instructions */
    words = vtn_foreach_instruction(b, words, word_end,
                                    vtn_handle_preamble_instruction);
+
+   /* DirectXShaderCompiler and glslang/shaderc both create OpKill from HLSL's
+    * discard/clip, which uses demote semantics. DirectXShaderCompiler will use
+    * demote if the extension is enabled, so we disable this workaround in that
+    * case.
+    *
+    * Related glslang issue: https://github.com/KhronosGroup/glslang/issues/2416
+    */
+   bool glslang = b->generator_id == vtn_generator_glslang_reference_front_end ||
+                  b->generator_id == vtn_generator_shaderc_over_glslang;
+   bool dxsc = b->generator_id == vtn_generator_spiregg;
+   b->convert_discard_to_demote = ((dxsc && !b->uses_demote_to_helper_invocation) ||
+                                   (glslang && b->source_lang == SpvSourceLanguageHLSL)) &&
+                                  options->caps.demote_to_helper_invocation;
 
    if (!options->create_library && b->entry_point == NULL) {
       vtn_fail("Entry point not found for %s shader \"%s\"",

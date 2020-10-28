@@ -837,7 +837,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
       [NIR_INTRINSIC_ALIGN_MUL] = "align_mul",
       [NIR_INTRINSIC_ALIGN_OFFSET] = "align_offset",
       [NIR_INTRINSIC_DESC_TYPE] = "desc_type",
-      [NIR_INTRINSIC_TYPE] = "type",
+      [NIR_INTRINSIC_SRC_TYPE] = "src_type",
+      [NIR_INTRINSIC_DEST_TYPE] = "dest_type",
       [NIR_INTRINSIC_SWIZZLE_MASK] = "swizzle_mask",
       [NIR_INTRINSIC_DRIVER_LOCATION] = "driver_location",
       [NIR_INTRINSIC_MEMORY_SEMANTICS] = "mem_semantics",
@@ -845,6 +846,8 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
       [NIR_INTRINSIC_MEMORY_SCOPE] = "mem_scope",
       [NIR_INTRINSIC_EXECUTION_SCOPE] = "exec_scope",
       [NIR_INTRINSIC_IO_SEMANTICS] = "io_semantics",
+      [NIR_INTRINSIC_ROUNDING_MODE] = "src_type",
+      [NIR_INTRINSIC_SATURATE] = "src_type",
    };
 
    for (unsigned idx = 1; idx < NIR_INTRINSIC_NUM_INDEX_FLAGS; idx++) {
@@ -898,9 +901,15 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
          break;
       }
 
-      case NIR_INTRINSIC_TYPE: {
-         fprintf(fp, " type=");
-         print_alu_type(nir_intrinsic_type(instr), state);
+      case NIR_INTRINSIC_SRC_TYPE: {
+         fprintf(fp, " src_type=");
+         print_alu_type(nir_intrinsic_src_type(instr), state);
+         break;
+      }
+
+      case NIR_INTRINSIC_DEST_TYPE: {
+         fprintf(fp, " dest_type=");
+         print_alu_type(nir_intrinsic_dest_type(instr), state);
          break;
       }
 
@@ -996,6 +1005,19 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
             }
          }
          break;
+
+      case NIR_INTRINSIC_ROUNDING_MODE: {
+         fprintf(fp, " rounding_mode=");
+         switch (nir_intrinsic_rounding_mode(instr)) {
+         case nir_rounding_mode_undef: fprintf(fp, "undef");   break;
+         case nir_rounding_mode_rtne:  fprintf(fp, "rtne");    break;
+         case nir_rounding_mode_ru:    fprintf(fp, "ru");      break;
+         case nir_rounding_mode_rd:    fprintf(fp, "rd");      break;
+         case nir_rounding_mode_rtz:   fprintf(fp, "rtz");     break;
+         default:                      fprintf(fp, "unkown");  break;
+         }
+         break;
+      }
 
       default: {
          unsigned off = info->index_map[idx] - 1;

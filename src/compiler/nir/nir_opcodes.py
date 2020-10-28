@@ -541,7 +541,7 @@ def binop_horiz(name, out_size, out_type, src1_size, src1_type, src2_size,
           False, "", const_expr)
 
 def binop_reduce(name, output_size, output_type, src_type, prereduce_expr,
-                 reduce_expr, final_expr):
+                 reduce_expr, final_expr, suffix=""):
    def final(src):
       return final_expr.format(src= "(" + src + ")")
    def reduce_(src0, src1):
@@ -554,10 +554,10 @@ def binop_reduce(name, output_size, output_type, src_type, prereduce_expr,
          return srcs[start]
       return reduce_(pairwise_reduce(start, size // 2), pairwise_reduce(start + size // 2, size // 2))
    for size in [2, 4, 8, 16]:
-      opcode(name + str(size), output_size, output_type,
+      opcode(name + str(size) + suffix, output_size, output_type,
              [size, size], [src_type, src_type], False, _2src_commutative,
              final(pairwise_reduce(0, size)))
-   opcode(name + "3", output_size, output_type,
+   opcode(name + "3" + suffix, output_size, output_type,
           [3, 3], [src_type, src_type], False, _2src_commutative,
           final(reduce_(reduce_(srcs[0], srcs[1]), srcs[2])))
 
@@ -625,7 +625,10 @@ if (nir_is_rounding_mode_rtz(execution_mode, bit_size)) {
 }
 """)
 # low 32-bits of signed/unsigned integer multiply
-binop("imul", tint, _2src_commutative + associative, "src0 * src1")
+binop("imul", tint, _2src_commutative + associative, """
+   /* Use 64-bit multiplies to prevent overflow of signed arithmetic */
+   dst = (uint64_t)src0 * (uint64_t)src1;
+""")
 
 # Generate 64 bit result from 2 32 bits quantity
 binop_convert("imul_2x32_64", tint64, tint32, _2src_commutative,
@@ -656,7 +659,9 @@ if (bit_size == 64) {
    ubm_mul_u32arr(prod_u32, src0_u32, src1_u32);
    dst = (uint64_t)prod_u32[2] | ((uint64_t)prod_u32[3] << 32);
 } else {
-   dst = ((int64_t)src0 * (int64_t)src1) >> bit_size;
+   /* First, sign-extend to 64-bit, then convert to unsigned to prevent
+    * potential overflow of signed multiply */
+   dst = ((uint64_t)(int64_t)src0 * (uint64_t)(int64_t)src1) >> bit_size;
 }
 """)
 
@@ -820,8 +825,9 @@ binop("ixor", tuint, _2src_commutative + associative, "src0 ^ src1")
 binop_reduce("fdot", 1, tfloat, tfloat, "{src0} * {src1}", "{src0} + {src1}",
              "{src}")
 
-binop_reduce("fdot_replicated", 4, tfloat, tfloat,
-             "{src0} * {src1}", "{src0} + {src1}", "{src}")
+binop_reduce("fdot", 4, tfloat, tfloat,
+             "{src0} * {src1}", "{src0} + {src1}", "{src}",
+             suffix="_replicated")
 
 opcode("fdph", 1, tfloat, [3, 4], [tfloat, tfloat], False, "",
        "src0.x * src1.x + src0.y * src1.y + src0.z * src1.z + src1.w")

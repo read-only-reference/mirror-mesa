@@ -418,11 +418,11 @@ struct si_shader_selector {
    struct pipe_stream_output_info so;
    struct si_shader_info info;
 
+   enum pipe_shader_type pipe_shader_type;
    ubyte const_and_shader_buf_descriptors_index;
    ubyte sampler_and_images_descriptors_index;
    bool vs_needs_prolog;
    bool prim_discard_cs_allowed;
-   bool ngg_culling_allowed;
    ubyte cs_shaderbufs_sgpr_index;
    ubyte cs_num_shaderbufs_in_user_sgprs;
    ubyte cs_images_sgpr_index;
@@ -431,6 +431,8 @@ struct si_shader_selector {
    ubyte num_vs_inputs;
    ubyte num_vbos_in_user_sgprs;
    unsigned pa_cl_vs_out_cntl;
+   unsigned ngg_cull_vert_threshold; /* 0 = disabled */
+   unsigned ngg_cull_nonindexed_fast_launch_vert_threshold; /* 0 = disabled */
    ubyte clipdist_mask;
    ubyte culldist_mask;
    ubyte rast_prim;
@@ -554,7 +556,6 @@ union si_shader_part_key {
       unsigned as_es : 1;
       unsigned as_ngg : 1;
       unsigned as_prim_discard_cs : 1;
-      unsigned has_ngg_cull_inputs : 1;      /* from the NGG cull shader */
       unsigned gs_fast_launch_tri_list : 1;  /* for NGG culling */
       unsigned gs_fast_launch_tri_strip : 1; /* for NGG culling */
       /* Prologs for monolithic shaders shouldn't set EXEC. */
@@ -646,8 +647,8 @@ struct si_shader_key {
    struct {
       /* For HW VS (it can be VS, TES, GS) */
       uint64_t kill_outputs; /* "get_unique_index" bits */
+      unsigned kill_clip_distances : 8;
       unsigned kill_pointsize : 1;
-      unsigned clip_disable : 1;
 
       /* For NGG VS and TES. */
       unsigned ngg_culling : 5; /* SI_NGG_CULL_* */
@@ -672,6 +673,9 @@ struct si_shader_key {
       unsigned cs_cull_back : 1;
       unsigned cs_cull_z : 1;
       unsigned cs_halfz_clip_space : 1;
+      unsigned inline_uniforms:1;
+
+      uint32_t inlined_uniform_values[MAX_INLINABLE_UNIFORMS];
    } opt;
 };
 
@@ -847,6 +851,7 @@ struct si_shader *si_generate_gs_copy_shader(struct si_screen *sscreen,
 
 /* si_shader_nir.c */
 void si_nir_scan_shader(const struct nir_shader *nir, struct si_shader_info *info);
+void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first);
 void si_finalize_nir(struct pipe_screen *screen, void *nirptr, bool optimize);
 
 /* si_state_shaders.c */

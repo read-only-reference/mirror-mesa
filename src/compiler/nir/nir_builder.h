@@ -36,6 +36,10 @@ typedef struct nir_builder {
    /* Whether new ALU instructions will be marked "exact" */
    bool exact;
 
+   /* Whether to run divergence analysis on inserted instructions (loop merge
+    * and header phis are not updated). */
+   bool update_divergence;
+
    nir_shader *shader;
    nir_function_impl *impl;
 } nir_builder;
@@ -54,6 +58,7 @@ nir_builder_init_simple_shader(nir_builder *build, void *mem_ctx,
                                gl_shader_stage stage,
                                const nir_shader_compiler_options *options)
 {
+   memset(build, 0, sizeof(*build));
    build->shader = nir_shader_create(mem_ctx, stage, options, NULL);
    nir_function *func = nir_function_create(build->shader, "main");
    func->is_entrypoint = true;
@@ -109,6 +114,9 @@ static inline void
 nir_builder_instr_insert(nir_builder *build, nir_instr *instr)
 {
    nir_instr_insert(build->cursor, instr);
+
+   if (build->update_divergence)
+      nir_update_instr_divergence(build->shader, instr);
 
    /* Move the cursor forward. */
    build->cursor = nir_after_instr(instr);
@@ -237,6 +245,8 @@ nir_ssa_undef(nir_builder *build, unsigned num_components, unsigned bit_size)
       return NULL;
 
    nir_instr_insert(nir_before_cf_list(&build->impl->body), &undef->instr);
+   if (build->update_divergence)
+      nir_update_instr_divergence(build->shader, &undef->instr);
 
    return &undef->def;
 }
@@ -1474,6 +1484,30 @@ nir_load_reloc_const_intel(nir_builder *b, uint32_t id)
    nir_ssa_dest_init(&load->instr, &load->dest, 1, 32, NULL);
    nir_builder_instr_insert(b, &load->instr);
    return &load->dest.ssa;
+}
+
+static inline nir_ssa_def *
+nir_convert_alu_types(nir_builder *b, nir_ssa_def *src,
+                      nir_alu_type src_type, nir_alu_type dest_type,
+                      nir_rounding_mode round, bool saturate)
+{
+   assert(nir_alu_type_get_type_size(dest_type) != 0);
+   assert(nir_alu_type_get_type_size(src_type) == 0 ||
+          nir_alu_type_get_type_size(src_type) == src->bit_size);
+   src_type = (nir_alu_type)(src_type | src->bit_size);
+
+   nir_intrinsic_instr *conv =
+      nir_intrinsic_instr_create(b->shader, nir_intrinsic_convert_alu_types);
+   conv->src[0] = nir_src_for_ssa(src);
+   conv->num_components = src->num_components;
+   nir_intrinsic_set_src_type(conv, src_type);
+   nir_intrinsic_set_dest_type(conv, dest_type);
+   nir_intrinsic_set_rounding_mode(conv, round);
+   nir_intrinsic_set_saturate(conv, saturate);
+   nir_ssa_dest_init(&conv->instr, &conv->dest, src->num_components,
+                     nir_alu_type_get_type_size(dest_type), NULL);
+   nir_builder_instr_insert(b, &conv->instr);
+   return &conv->dest.ssa;
 }
 
 #include "nir_builder_opcodes.h"

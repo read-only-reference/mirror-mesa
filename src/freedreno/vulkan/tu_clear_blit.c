@@ -561,7 +561,10 @@ r3d_src_common(struct tu_cmd_buffer *cmd,
    VkResult result = tu_cs_alloc(&cmd->sub_cs,
                                  2, /* allocate space for a sampler too */
                                  A6XX_TEX_CONST_DWORDS, &texture);
-   assert(result == VK_SUCCESS);
+   if (result != VK_SUCCESS) {
+      cmd->record_result = result;
+      return;
+   }
 
    memcpy(texture.map, tex_const, A6XX_TEX_CONST_DWORDS * 4);
 
@@ -912,6 +915,24 @@ copy_format(VkFormat format, VkImageAspectFlags aspect_mask, bool copy_buffer)
       assert(aspect_mask == VK_IMAGE_ASPECT_DEPTH_BIT);
       return VK_FORMAT_D32_SFLOAT;
    }
+}
+
+void
+tu6_clear_lrz(struct tu_cmd_buffer *cmd,
+              struct tu_cs *cs,
+              struct tu_image *image,
+              const VkClearValue *value)
+{
+   const struct blit_ops *ops = &r2d_ops;
+
+   ops->setup(cmd, cs, VK_FORMAT_D16_UNORM, VK_IMAGE_ASPECT_DEPTH_BIT, ROTATE_0, true, false);
+   ops->clear_value(cs, VK_FORMAT_D16_UNORM, value);
+   ops->dst_buffer(cs, VK_FORMAT_D16_UNORM,
+                   image->bo->iova + image->bo_offset + image->lrz_offset,
+                   image->lrz_pitch * 2);
+   ops->coords(cs, &(VkOffset2D) {}, NULL, &(VkExtent2D) {image->lrz_pitch, image->lrz_height});
+   ops->run(cmd, cs);
+   ops->teardown(cmd, cs);
 }
 
 static void
@@ -1889,6 +1910,11 @@ tu_clear_sysmem_attachments(struct tu_cmd_buffer *cmd,
             .component_enable = COND(clear_rts & (1 << i), 0xf)));
    }
 
+   if (z_clear) {
+      tu_cs_emit_regs(cs, A6XX_GRAS_LRZ_CNTL(0));
+      tu_cs_emit_regs(cs, A6XX_RB_LRZ_CNTL(0));
+   }
+
    tu_cs_emit_regs(cs, A6XX_RB_DEPTH_PLANE_CNTL());
    tu_cs_emit_regs(cs, A6XX_RB_DEPTH_CNTL(
          .z_enable = z_clear,
@@ -2137,6 +2163,13 @@ tu_CmdClearAttachments(VkCommandBuffer commandBuffer,
    tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
    tu_clear_sysmem_attachments(cmd, attachmentCount, pAttachments, rectCount, pRects);
    tu_cond_exec_end(cs);
+
+   for (uint32_t j = 0; j < attachmentCount; j++) {
+      if ((pAttachments[j].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) == 0)
+         continue;
+      cmd->state.lrz.valid = false;
+      cmd->state.dirty |= TU_CMD_DIRTY_LRZ;
+   }
 }
 
 static void

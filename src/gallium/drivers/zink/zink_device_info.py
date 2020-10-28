@@ -53,12 +53,18 @@ def EXTENSIONS():
         Extension("VK_KHR_maintenance1",             required=True),
         Extension("VK_KHR_external_memory",          required=True),
         Extension("VK_KHR_external_memory_fd"),
+        Extension("VK_KHR_vulkan_memory_model"),
         Extension("VK_EXT_conditional_rendering",    alias="cond_render", feature="conditionalRendering"),
         Extension("VK_EXT_transform_feedback",       alias="tf", properties=True, feature="transformFeedback"),
         Extension("VK_EXT_index_type_uint8",         alias="index_uint8", feature="indexTypeUint8"),
         Extension("VK_EXT_robustness2",              alias="rb2", properties=True, feature="nullDescriptor"),
         Extension("VK_EXT_vertex_attribute_divisor", alias="vdiv", properties=True, feature="vertexAttributeInstanceRateDivisor"),
         Extension("VK_EXT_calibrated_timestamps"),
+        Extension("VK_EXT_custom_border_color",      alias="border_color", properties=True, feature="customBorderColors"),
+        Extension("VK_EXT_blend_operation_advanced", alias="blend", properties=True),
+        Extension("VK_EXT_extended_dynamic_state",   alias="dynamic_state", feature="extendedDynamicState"),
+        Extension("VK_EXT_pipeline_creation_cache_control",   alias="pipeline_cache_control", feature="pipelineCreationCacheControl"),
+        Extension("VK_EXT_shader_stencil_export",    alias="stencil_export"),
     ]
 
 # There exists some inconsistencies regarding the enum constants, fix them.

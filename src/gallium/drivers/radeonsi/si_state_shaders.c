@@ -1168,14 +1168,17 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
       late_alloc_wave64 = 0;
    else if (num_cu_per_sh <= 6)
       late_alloc_wave64 = num_cu_per_sh - 2; /* All CUs enabled */
-   else if (shader->key.opt.ngg_culling & SI_NGG_CULL_GS_FAST_LAUNCH_ALL)
-      late_alloc_wave64 = (num_cu_per_sh - 2) * 6;
+   else if (shader->key.opt.ngg_culling)
+      late_alloc_wave64 = num_cu_per_sh * 10;
    else
-      late_alloc_wave64 = (num_cu_per_sh - 2) * 4;
+      late_alloc_wave64 = num_cu_per_sh * 4;
 
    /* Limit LATE_ALLOC_GS for prevent a hang (hw bug). */
    if (sscreen->info.chip_class == GFX10)
       late_alloc_wave64 = MIN2(late_alloc_wave64, 64);
+
+   /* Max number that fits into the register field. */
+   late_alloc_wave64 = MIN2(late_alloc_wave64, 127);
 
    si_pm4_set_reg(
       pm4, R_00B204_SPI_SHADER_PGM_RSRC4_GS,
@@ -1260,7 +1263,7 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
                         S_03096C_VERT_GRP_SIZE(shader->ngg.max_gsprims + 2);
    } else {
       shader->ge_cntl = S_03096C_PRIM_GRP_SIZE(shader->ngg.max_gsprims) |
-                        S_03096C_VERT_GRP_SIZE(256) | /* 256 = disable vertex grouping */
+                        S_03096C_VERT_GRP_SIZE(shader->ngg.hw_max_esverts) |
                         S_03096C_BREAK_WAVE_AT_EOI(break_wave_at_eoi);
 
       /* Bug workaround for a possible hang with non-tessellation cases.
@@ -1774,9 +1777,7 @@ static void si_shader_selector_key_hw_vs(struct si_context *sctx, struct si_shad
 {
    struct si_shader_selector *ps = sctx->ps_shader.cso;
 
-   key->opt.clip_disable = sctx->queued.named.rasterizer->clip_plane_enable == 0 &&
-                           (vs->info.base.clip_distance_array_size || vs->info.writes_clipvertex) &&
-                           !vs->info.base.cull_distance_array_size;
+   key->opt.kill_clip_distances = vs->clipdist_mask & ~sctx->queued.named.rasterizer->clip_plane_enable;
 
    /* Find out if PS is disabled. */
    bool ps_disabled = true;
@@ -1831,6 +1832,15 @@ static inline void si_shader_selector_key(struct pipe_context *ctx, struct si_sh
    struct si_context *sctx = (struct si_context *)ctx;
 
    memset(key, 0, sizeof(*key));
+
+   unsigned num_inlinable_uniforms = sel->info.base.num_inlinable_uniforms;
+   if (num_inlinable_uniforms &&
+       sctx->inlinable_uniforms_valid_mask & (1 << sel->pipe_shader_type)) {
+      key->opt.inline_uniforms = true;
+      memcpy(key->opt.inlined_uniform_values,
+             sctx->inlinable_uniforms[sel->pipe_shader_type],
+             num_inlinable_uniforms * 4);
+   }
 
    switch (sel->info.stage) {
    case MESA_SHADER_VERTEX:
@@ -2634,6 +2644,7 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
    si_nir_scan_shader(sel->nir, &sel->info);
 
    const enum pipe_shader_type type = pipe_shader_type_from_mesa(sel->info.stage);
+   sel->pipe_shader_type = type;
    sel->const_and_shader_buf_descriptors_index =
       si_const_and_shader_buffer_descriptors_idx(type);
    sel->sampler_and_images_descriptors_index =
@@ -2771,20 +2782,45 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
    default:;
    }
 
-   sel->ngg_culling_allowed =
+   bool ngg_culling_allowed =
       sscreen->info.chip_class >= GFX10 &&
       sscreen->info.has_dedicated_vram &&
       sscreen->use_ngg_culling &&
       (sel->info.stage == MESA_SHADER_VERTEX ||
-       (sel->info.stage == MESA_SHADER_TESS_EVAL &&
-        (sscreen->always_use_ngg_culling_all ||
-         sscreen->always_use_ngg_culling_tess))) &&
+       sel->info.stage == MESA_SHADER_TESS_EVAL) &&
       sel->info.writes_position &&
       !sel->info.writes_viewport_index && /* cull only against viewport 0 */
       !sel->info.base.writes_memory && !sel->so.num_outputs &&
       (sel->info.stage != MESA_SHADER_VERTEX ||
        (!sel->info.base.vs.blit_sgprs_amd &&
         !sel->info.base.vs.window_space_position));
+
+   sel->ngg_cull_vert_threshold = UINT_MAX; /* disabled (changed below) */
+   sel->ngg_cull_nonindexed_fast_launch_vert_threshold = UINT_MAX;
+
+   if (ngg_culling_allowed) {
+      if (sel->info.stage == MESA_SHADER_VERTEX) {
+         /* 1000 non-indexed vertices (roughly 8 primgroups) are needed
+          * per draw call (no TES/GS) to enable NGG culling by default.
+          */
+         sel->ngg_cull_nonindexed_fast_launch_vert_threshold = 1000;
+
+         if (sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_ALL))
+            sel->ngg_cull_vert_threshold = 0; /* always enabled */
+         else if (sscreen->options.shader_culling ||
+                  (sscreen->info.chip_class == GFX10_3 &&
+                   sscreen->info.has_dedicated_vram) ||
+                  (sscreen->info.chip_class == GFX10 &&
+                   sscreen->info.is_pro_graphics))
+            sel->ngg_cull_vert_threshold = 1500; /* vertex count must be more than this */
+      } else if (sel->info.stage == MESA_SHADER_TESS_EVAL) {
+         if (sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_ALL) ||
+             sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_TESS) ||
+             (sscreen->info.chip_class == GFX10_3 &&
+              sscreen->info.has_dedicated_vram))
+            sel->ngg_cull_vert_threshold = 0; /* always enabled */
+      }
+   }
 
    /* PA_CL_VS_OUT_CNTL */
    if (sctx->chip_class <= GFX9)
@@ -2901,12 +2937,15 @@ static void si_update_clip_regs(struct si_context *sctx, struct si_shader_select
         old_hw_vs->clipdist_mask != next_hw_vs->clipdist_mask ||
         old_hw_vs->culldist_mask != next_hw_vs->culldist_mask || !old_hw_vs_variant ||
         !next_hw_vs_variant ||
-        old_hw_vs_variant->key.opt.clip_disable != next_hw_vs_variant->key.opt.clip_disable))
+        old_hw_vs_variant->key.opt.kill_clip_distances != next_hw_vs_variant->key.opt.kill_clip_distances))
       si_mark_atom_dirty(sctx, &sctx->atoms.s.clip_regs);
 }
 
-static void si_update_common_shader_state(struct si_context *sctx)
+static void si_update_common_shader_state(struct si_context *sctx, struct si_shader_selector *sel,
+                                          enum pipe_shader_type type)
 {
+   si_set_active_descriptors_for_shader(sctx, sel);
+
    sctx->uses_bindless_samplers = si_shader_uses_bindless_samplers(sctx->vs_shader.cso) ||
                                   si_shader_uses_bindless_samplers(sctx->gs_shader.cso) ||
                                   si_shader_uses_bindless_samplers(sctx->ps_shader.cso) ||
@@ -2917,6 +2956,15 @@ static void si_update_common_shader_state(struct si_context *sctx)
                                 si_shader_uses_bindless_images(sctx->ps_shader.cso) ||
                                 si_shader_uses_bindless_images(sctx->tcs_shader.cso) ||
                                 si_shader_uses_bindless_images(sctx->tes_shader.cso);
+
+   if (sel && sel->info.base.num_inlinable_uniforms)
+      sctx->shader_has_inlinable_uniforms_mask |= 1 << type;
+   else
+      sctx->shader_has_inlinable_uniforms_mask &= ~(1 << type);
+
+   /* Invalidate inlinable uniforms. */
+   sctx->inlinable_uniforms_valid_mask &= ~(1 << type);
+
    sctx->do_update_shaders = true;
 }
 
@@ -2937,9 +2985,8 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
    if (si_update_ngg(sctx))
       si_shader_change_notify(sctx);
 
-   si_update_common_shader_state(sctx);
+   si_update_common_shader_state(sctx, sel, PIPE_SHADER_VERTEX);
    si_update_vs_viewport_state(sctx);
-   si_set_active_descriptors_for_shader(sctx, sel);
    si_update_streamout_state(sctx);
    si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant, si_get_vs(sctx)->cso,
                        si_get_vs_state(sctx));
@@ -3003,7 +3050,7 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
    sctx->gs_shader.current = sel ? sel->first_variant : NULL;
    sctx->ia_multi_vgt_param_key.u.uses_gs = sel != NULL;
 
-   si_update_common_shader_state(sctx);
+   si_update_common_shader_state(sctx, sel, PIPE_SHADER_GEOMETRY);
    sctx->last_gs_out_prim = -1; /* reset this so that it gets updated */
 
    ngg_changed = si_update_ngg(sctx);
@@ -3014,7 +3061,6 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
          si_update_tess_uses_prim_id(sctx);
    }
    si_update_vs_viewport_state(sctx);
-   si_set_active_descriptors_for_shader(sctx, sel);
    si_update_streamout_state(sctx);
    si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant, si_get_vs(sctx)->cso,
                        si_get_vs_state(sctx));
@@ -3033,12 +3079,10 @@ static void si_bind_tcs_shader(struct pipe_context *ctx, void *state)
    sctx->tcs_shader.current = sel ? sel->first_variant : NULL;
    si_update_tess_uses_prim_id(sctx);
 
-   si_update_common_shader_state(sctx);
+   si_update_common_shader_state(sctx, sel, PIPE_SHADER_TESS_CTRL);
 
    if (enable_changed)
       sctx->last_tcs = NULL; /* invalidate derived tess state */
-
-   si_set_active_descriptors_for_shader(sctx, sel);
 }
 
 static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
@@ -3057,7 +3101,7 @@ static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
    sctx->ia_multi_vgt_param_key.u.uses_tess = sel != NULL;
    si_update_tess_uses_prim_id(sctx);
 
-   si_update_common_shader_state(sctx);
+   si_update_common_shader_state(sctx, sel, PIPE_SHADER_TESS_EVAL);
    sctx->last_gs_out_prim = -1; /* reset this so that it gets updated */
 
    bool ngg_changed = si_update_ngg(sctx);
@@ -3066,7 +3110,6 @@ static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
    if (enable_changed)
       sctx->last_tes_sh_base = -1; /* invalidate derived tess state */
    si_update_vs_viewport_state(sctx);
-   si_set_active_descriptors_for_shader(sctx, sel);
    si_update_streamout_state(sctx);
    si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant, si_get_vs(sctx)->cso,
                        si_get_vs_state(sctx));
@@ -3085,7 +3128,7 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
    sctx->ps_shader.cso = sel;
    sctx->ps_shader.current = sel ? sel->first_variant : NULL;
 
-   si_update_common_shader_state(sctx);
+   si_update_common_shader_state(sctx, sel, PIPE_SHADER_FRAGMENT);
    if (sel) {
       if (sctx->ia_multi_vgt_param_key.u.uses_tess)
          si_update_tess_uses_prim_id(sctx);
@@ -3099,7 +3142,6 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
               sel->info.base.fs.early_fragment_tests))
          si_mark_atom_dirty(sctx, &sctx->atoms.s.msaa_config);
    }
-   si_set_active_descriptors_for_shader(sctx, sel);
    si_update_ps_colorbuf0_slot(sctx);
 }
 
@@ -3843,7 +3885,7 @@ bool si_update_shaders(struct si_context *sctx)
    struct si_compiler_ctx_state compiler_state;
    struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
    struct si_shader *old_vs = si_get_vs_state(sctx);
-   bool old_clip_disable = old_vs ? old_vs->key.opt.clip_disable : false;
+   unsigned old_kill_clip_distances = old_vs ? old_vs->key.opt.kill_clip_distances : 0;
    struct si_shader *old_ps = sctx->ps_shader.current;
    union si_vgt_stages_key key;
    unsigned old_spi_shader_col_format =
@@ -3969,7 +4011,7 @@ bool si_update_shaders(struct si_context *sctx)
 
    si_update_vgt_shader_config(sctx, key);
 
-   if (old_clip_disable != si_get_vs_state(sctx)->key.opt.clip_disable)
+   if (old_kill_clip_distances != si_get_vs_state(sctx)->key.opt.kill_clip_distances)
       si_mark_atom_dirty(sctx, &sctx->atoms.s.clip_regs);
 
    if (sctx->ps_shader.cso) {

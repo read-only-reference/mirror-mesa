@@ -97,6 +97,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    switch (param) {
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_TGSI_TEXCOORD:
+   case PIPE_CAP_DRAW_INDIRECT:
       return 1;
 
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
@@ -116,12 +117,11 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
 
-#if 0 /* TODO: Enable me */
    case PIPE_CAP_QUERY_TIME_ELAPSED:
       return 1;
-#endif
 
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
+   case PIPE_CAP_SAMPLE_SHADING:
       return 1;
 
    case PIPE_CAP_TEXTURE_SWIZZLE:
@@ -172,9 +172,10 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONDITIONAL_RENDER:
      return screen->info.have_EXT_conditional_rendering;
 
-   case PIPE_CAP_GLSL_FEATURE_LEVEL:
    case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       return 130;
+   case PIPE_CAP_GLSL_FEATURE_LEVEL:
+      return 330;
 
 #if 0 /* TODO: Enable me */
    case PIPE_CAP_COMPUTE:
@@ -184,10 +185,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return screen->info.props.limits.minUniformBufferOffsetAlignment;
 
-#if 0 /* TODO: Enable me */
    case PIPE_CAP_QUERY_TIMESTAMP:
-      return 1;
-#endif
+      return screen->info.have_EXT_calibrated_timestamps;
 
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return screen->info.props.limits.minMemoryMapAlignment;
@@ -220,7 +219,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
       return screen->info.props.limits.maxGeometryOutputVertices;
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
-      return screen->info.props.limits.maxGeometryOutputComponents;
+      return screen->info.props.limits.maxGeometryTotalOutputComponents;
 
 #if 0 /* TODO: Enable me. Enables ARB_texture_gather */
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
@@ -290,13 +289,13 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 0; /* not sure */
 
    case PIPE_CAP_MAX_GS_INVOCATIONS:
-      return 0; /* not implemented */
+      return screen->info.props.limits.maxGeometryShaderInvocations;
 
    case PIPE_CAP_MAX_COMBINED_SHADER_BUFFERS:
       return screen->info.props.limits.maxDescriptorSetStorageBuffers;
 
    case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
-      return screen->info.props.limits.maxStorageBufferRange; /* unsure */
+      return 65536;
 
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
@@ -324,6 +323,12 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_POINT_SIZE_FIXED:
    case PIPE_CAP_TWO_SIDED_COLOR:
       return 0;
+
+   case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
+      return screen->info.props.limits.maxTessellationControlPerVertexOutputComponents / 4;
+   case PIPE_CAP_MAX_VARYINGS:
+      /* need to reserve up to 60 of our varying components and 16 slots for streamout */
+      return MIN2(screen->info.props.limits.maxVertexOutputComponents / 4 / 2, 16);
 
    case PIPE_CAP_DMABUF:
       return screen->info.have_KHR_external_memory_fd;
@@ -372,6 +377,20 @@ zink_get_shader_param(struct pipe_screen *pscreen,
 
    switch (param) {
    case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
+      switch (shader) {
+      case PIPE_SHADER_FRAGMENT:
+      case PIPE_SHADER_VERTEX:
+         return INT_MAX;
+
+      case PIPE_SHADER_GEOMETRY:
+         if (screen->info.feats.features.geometryShader)
+            return INT_MAX;
+         break;
+
+      default:
+         break;
+      }
+      return 0;
    case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_TEX_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
@@ -386,6 +405,9 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_VERTEX:
          return MIN2(screen->info.props.limits.maxVertexInputAttributes,
                      PIPE_MAX_SHADER_INPUTS);
+      case PIPE_SHADER_GEOMETRY:
+         return MIN2(screen->info.props.limits.maxGeometryInputComponents,
+                     PIPE_MAX_SHADER_INPUTS);
       case PIPE_SHADER_FRAGMENT:
          return MIN2(screen->info.props.limits.maxFragmentInputComponents / 4,
                      PIPE_MAX_SHADER_INPUTS);
@@ -398,6 +420,9 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_VERTEX:
          return MIN2(screen->info.props.limits.maxVertexOutputComponents / 4,
                      PIPE_MAX_SHADER_OUTPUTS);
+      case PIPE_SHADER_GEOMETRY:
+         return MIN2(screen->info.props.limits.maxGeometryOutputComponents / 4,
+                     PIPE_MAX_SHADER_OUTPUTS);
       case PIPE_SHADER_FRAGMENT:
          return MIN2(screen->info.props.limits.maxColorAttachments,
                 PIPE_MAX_SHADER_OUTPUTS);
@@ -409,6 +434,7 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       switch (shader) {
       case PIPE_SHADER_VERTEX:
       case PIPE_SHADER_FRAGMENT:
+      case PIPE_SHADER_GEOMETRY:
          /* this might be a bit simplistic... */
          return MIN2(screen->info.props.limits.maxPerStageDescriptorSamplers,
                      PIPE_MAX_SAMPLERS);
@@ -417,7 +443,7 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       }
 
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
-      return MIN2(screen->info.props.limits.maxUniformBufferRange, INT_MAX);
+      return 65536;
 
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
       return screen->info.props.limits.maxPerStageDescriptorUniformBuffers;
@@ -428,10 +454,12 @@ zink_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_INTEGERS:
       return 1;
 
+   case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
+      return 1;
+
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
-   case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
    case PIPE_SHADER_CAP_SUBROUTINES:
    case PIPE_SHADER_CAP_INT64_ATOMICS:
    case PIPE_SHADER_CAP_FP16:
@@ -462,8 +490,7 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       return 32; /* arbitrary */
 
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-      /* TODO: this limitation is dumb, and will need some fixes in mesa */
-      return MIN2(screen->info.props.limits.maxPerStageDescriptorStorageBuffers, PIPE_MAX_SHADER_BUFFERS);
+      return 0;
 
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_TGSI);
@@ -788,6 +815,10 @@ load_device_extensions(struct zink_screen *screen)
       assert(have_device_time);
       free(domains);
    }
+   if (screen->info.have_EXT_extended_dynamic_state) {
+      GET_PROC_ADDR(CmdSetViewportWithCountEXT);
+      GET_PROC_ADDR(CmdSetScissorWithCountEXT);
+   }
 
 #undef GET_PROC_ADDR
 
@@ -795,7 +826,7 @@ load_device_extensions(struct zink_screen *screen)
 }
 
 static struct pipe_screen *
-zink_internal_create_screen(struct sw_winsys *winsys, int fd)
+zink_internal_create_screen(struct sw_winsys *winsys, int fd, const struct pipe_screen_config *config)
 {
    struct zink_screen *screen = CALLOC_STRUCT(zink_screen);
    if (!screen)
@@ -828,6 +859,11 @@ zink_internal_create_screen(struct sw_winsys *winsys, int fd)
    qci.queueFamilyIndex = screen->gfx_queue;
    qci.queueCount = 1;
    qci.pQueuePriorities = &dummy;
+
+   /* TODO: we can probably support non-premul here with some work? */
+   screen->info.have_EXT_blend_operation_advanced = screen->info.have_EXT_blend_operation_advanced &&
+                                                    screen->info.blend_props.advancedBlendNonPremultipliedSrcColor &&
+                                                    screen->info.blend_props.advancedBlendNonPremultipliedDstColor;
 
    VkDeviceCreateInfo dci = {};
    dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -876,11 +912,11 @@ fail:
 struct pipe_screen *
 zink_create_screen(struct sw_winsys *winsys)
 {
-   return zink_internal_create_screen(winsys, -1);
+   return zink_internal_create_screen(winsys, -1, NULL);
 }
 
 struct pipe_screen *
-zink_drm_create_screen(int fd)
+zink_drm_create_screen(int fd, const struct pipe_screen_config *config)
 {
-   return zink_internal_create_screen(NULL, fd);
+   return zink_internal_create_screen(NULL, fd, config);
 }

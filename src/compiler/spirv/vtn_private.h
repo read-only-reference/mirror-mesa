@@ -35,6 +35,7 @@
 #include "util/u_dynarray.h"
 #include "nir_spirv.h"
 #include "spirv.h"
+#include "vtn_generator_ids.h"
 
 struct vtn_builder;
 struct vtn_decoration;
@@ -129,6 +130,7 @@ enum vtn_branch_type {
    vtn_branch_type_loop_continue,
    vtn_branch_type_loop_back_edge,
    vtn_branch_type_discard,
+   vtn_branch_type_terminate,
    vtn_branch_type_return,
 };
 
@@ -658,8 +660,16 @@ struct vtn_builder {
    unsigned value_id_bound;
    struct vtn_value *values;
 
+   /* Information on the origin of the SPIR-V */
+   enum vtn_generator generator_id;
+   SpvSourceLanguage source_lang;
+
    /* True if we need to fix up CS OpControlBarrier */
    bool wa_glslang_cs_barrier;
+
+   /* Workaround discard bugs in HLSL -> SPIR-V compilers */
+   bool uses_demote_to_helper_invocation;
+   bool convert_discard_to_demote;
 
    gl_shader_stage entry_point_stage;
    const char *entry_point_name;
@@ -899,6 +909,9 @@ enum vtn_variable_mode vtn_storage_class_to_mode(struct vtn_builder *b,
 
 nir_address_format vtn_mode_to_address_format(struct vtn_builder *b,
                                               enum vtn_variable_mode);
+
+nir_rounding_mode vtn_rounding_mode_to_nir(struct vtn_builder *b,
+                                           SpvFPRoundingMode mode);
 
 static inline uint32_t
 vtn_align_u32(uint32_t v, uint32_t a)

@@ -408,6 +408,7 @@ void ShaderFromNirProcessor::emit_instruction_internal(Instruction *ir)
 void ShaderFromNirProcessor::emit_shader_start()
 {
    /* placeholder, may become an abstract method */
+   m_ssbo_instr.set_ssbo_offset(m_image_count);
 }
 
 bool ShaderFromNirProcessor::emit_jump_instruction(nir_jump_instr *instr)
@@ -677,8 +678,8 @@ bool ShaderFromNirProcessor::emit_intrinsic_instruction(nir_intrinsic_instr* ins
    case nir_intrinsic_control_barrier:
    case nir_intrinsic_memory_barrier_tcs_patch:
    case nir_intrinsic_memory_barrier_shared:
-   case nir_intrinsic_memory_barrier:
    case nir_intrinsic_memory_barrier_buffer:
+   case nir_intrinsic_memory_barrier:
    case nir_intrinsic_memory_barrier_image:
    case nir_intrinsic_group_memory_barrier:
       return emit_barrier(instr);

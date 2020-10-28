@@ -217,11 +217,14 @@ update_so_info(struct zink_shader *sh,
 }
 
 VkShaderModule
-zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs)
+zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
+                    unsigned char *shader_slot_map, unsigned char *shader_slots_reserved)
 {
    VkShaderModule mod = VK_NULL_HANDLE;
-   void *streamout = zs->streamout.so_info_slots ? &zs->streamout : NULL;
-   struct spirv_shader *spirv = nir_to_spirv(zs->nir, streamout);
+   void *streamout = NULL;
+   if (zs->streamout.so_info_slots && (zs->nir->info.stage != MESA_SHADER_VERTEX || !zs->has_geometry_shader))
+      streamout = &zs->streamout;
+   struct spirv_shader *spirv = nir_to_spirv(zs->nir, streamout, shader_slot_map, shader_slots_reserved);
    assert(spirv);
 
    if (zink_debug & ZINK_DEBUG_SPIRV) {
@@ -259,10 +262,17 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
 
    ret->programs = _mesa_pointer_set_create(NULL);
 
-   NIR_PASS_V(nir, nir_lower_uniforms_to_ubo, 1);
+   /* only do uniforms -> ubo if we have uniforms, otherwise we're just
+    * screwing with the bindings for no reason
+    */
+   if (nir->num_uniforms)
+      NIR_PASS_V(nir, nir_lower_uniforms_to_ubo, 16);
+   NIR_PASS_V(nir, nir_lower_ubo_vec4);
    NIR_PASS_V(nir, nir_lower_clip_halfz);
-   if (nir->info.stage == MESA_SHADER_VERTEX)
+   if (nir->info.stage < MESA_SHADER_FRAGMENT)
       have_psiz = check_psiz(nir);
+   if (nir->info.stage == MESA_SHADER_GEOMETRY)
+      NIR_PASS_V(nir, nir_lower_gs_intrinsics, nir_lower_gs_intrinsics_per_stream);
    NIR_PASS_V(nir, nir_lower_regs_to_ssa);
    optimize_nir(nir);
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
@@ -277,37 +287,62 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
    }
 
    ret->num_bindings = 0;
-   nir_foreach_variable_with_modes(var, nir, nir_var_uniform |
-                                             nir_var_mem_ubo) {
-      if (var->data.mode == nir_var_mem_ubo) {
-         int binding = zink_binding(nir->info.stage,
-                                    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                    var->data.binding);
-         ret->bindings[ret->num_bindings].index = var->data.binding;
-         ret->bindings[ret->num_bindings].binding = binding;
-         ret->bindings[ret->num_bindings].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-         ret->num_bindings++;
-      } else {
-         assert(var->data.mode == nir_var_uniform);
-         if (glsl_type_is_array(var->type) &&
-             glsl_type_is_sampler(glsl_get_array_element(var->type))) {
-            for (int i = 0; i < glsl_get_length(var->type); ++i) {
-               int binding = zink_binding(nir->info.stage,
-                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                          var->data.binding + i);
-               ret->bindings[ret->num_bindings].index = var->data.binding + i;
-               ret->bindings[ret->num_bindings].binding = binding;
-               ret->bindings[ret->num_bindings].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-               ret->num_bindings++;
-            }
-         } else if (glsl_type_is_sampler(var->type)) {
+   uint32_t cur_ubo = 0;
+   /* UBO buffers are zero-indexed, but buffer 0 is always the one created by nir_lower_uniforms_to_ubo,
+    * which means there is no buffer 0 if there are no uniforms
+    */
+   int ubo_index = !nir->num_uniforms;
+   /* need to set up var->data.binding for UBOs, which means we need to start at
+    * the "first" UBO, which is at the end of the list
+    */
+   foreach_list_typed_reverse(nir_variable, var, node, &nir->variables) {
+      if (_nir_shader_variable_has_mode(var, nir_var_uniform |
+                                        nir_var_mem_ubo |
+                                        nir_var_mem_ssbo)) {
+         if (var->data.mode == nir_var_mem_ubo) {
+            /* ignore variables being accessed if they aren't the base of the UBO */
+            if (var->data.location)
+               continue;
+            var->data.binding = cur_ubo++;
+
             int binding = zink_binding(nir->info.stage,
-                                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                        var->data.binding);
-            ret->bindings[ret->num_bindings].index = var->data.binding;
+            ret->bindings[ret->num_bindings].index = ubo_index++;
             ret->bindings[ret->num_bindings].binding = binding;
-            ret->bindings[ret->num_bindings].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            ret->bindings[ret->num_bindings].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ret->num_bindings++;
+         } else {
+            assert(var->data.mode == nir_var_uniform);
+            if (glsl_type_is_sampler(var->type)) {
+               VkDescriptorType vktype = zink_sampler_type(var->type);
+               int binding = zink_binding(nir->info.stage,
+                                          vktype,
+                                          var->data.binding);
+               ret->bindings[ret->num_bindings].index = var->data.binding;
+               ret->bindings[ret->num_bindings].binding = binding;
+               ret->bindings[ret->num_bindings].type = vktype;
+               ret->num_bindings++;
+            } else if (glsl_type_is_array(var->type)) {
+               /* need to unroll possible arrays of arrays before checking type
+                * in order to handle ARB_arrays_of_arrays extension
+                */
+               const struct glsl_type *type = glsl_without_array(var->type);
+               if (!glsl_type_is_sampler(type))
+                  continue;
+               VkDescriptorType vktype = zink_sampler_type(type);
+
+               unsigned size = glsl_get_aoa_size(var->type);
+               for (int i = 0; i < size; ++i) {
+                  int binding = zink_binding(nir->info.stage,
+                                             vktype,
+                                             var->data.binding + i);
+                  ret->bindings[ret->num_bindings].index = var->data.binding + i;
+                  ret->bindings[ret->num_bindings].binding = binding;
+                  ret->bindings[ret->num_bindings].type = vktype;
+                  ret->num_bindings++;
+               }
+            }
          }
       }
    }

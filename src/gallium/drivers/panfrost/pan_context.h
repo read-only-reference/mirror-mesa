@@ -34,6 +34,7 @@
 #include "pan_blend.h"
 #include "pan_encoder.h"
 #include "pan_texture.h"
+#include "midgard_pack.h"
 
 #include "pipe/p_compiler.h"
 #include "pipe/p_config.h"
@@ -78,6 +79,9 @@ struct panfrost_query {
 
         /* Memory for the GPU to writeback the value of the query */
         struct panfrost_bo *bo;
+
+        /* Whether an occlusion query is for a MSAA framebuffer */
+        bool msaa;
 };
 
 struct panfrost_fence {
@@ -158,15 +162,6 @@ struct panfrost_context {
         struct primconvert_context *primconvert;
         struct blitter_context *blitter;
 
-        /* Blitting the wallpaper (the old contents of the framebuffer back to
-         * itself) uses a dedicated u_blitter instance versus general blit()
-         * callbacks from Gallium, as the blit() callback can trigger
-         * wallpapering without Gallium realising, which in turns u_blitter
-         * errors due to unsupported reucrsion */
-
-        struct blitter_context *blitter_wallpaper;
-        struct panfrost_batch *wallpaper_batch;
-
         struct panfrost_blend_state *blend;
 
         struct pipe_viewport_state pipe_viewport;
@@ -177,7 +172,8 @@ struct panfrost_context {
         unsigned sample_mask;
         unsigned min_samples;
 
-        struct panfrost_blend_state blit_blend;
+        struct panfrost_blend_state *blit_blend;
+        struct hash_table *blend_shaders;
 };
 
 /* Corresponds to the CSO */
@@ -202,9 +198,9 @@ struct panfrost_shader_state {
                 uint32_t offset;
         } upload;
 
-        struct mali_shader_packed shader;
-        struct mali_midgard_properties_packed properties;
-        struct mali_preload_packed preload;
+        struct MALI_SHADER shader;
+        struct MALI_RENDERER_PROPERTIES properties;
+        struct MALI_PRELOAD preload;
 
         /* Non-descript information */
         unsigned uniform_count;
@@ -225,7 +221,7 @@ struct panfrost_shader_state {
         bool fs_sidefx;
 
         /* For Bifrost - output type for each RT */
-        enum bifrost_shader_type blend_types[BIFROST_MAX_RENDER_TARGET_COUNT];
+        enum mali_bifrost_register_file_format blend_types[MALI_BIFROST_BLEND_MAX_RT];
 
         unsigned attribute_count, varying_count, ubo_count;
         enum mali_format varyings[PIPE_MAX_ATTRIBS];
@@ -244,6 +240,9 @@ struct panfrost_shader_state {
 
         BITSET_WORD outputs_read;
         enum pipe_format rt_formats[8];
+
+        /* Blend return addresses */
+        uint32_t blend_ret_addrs[8];
 };
 
 /* A collection of varyings (the CSO) */
@@ -278,8 +277,8 @@ struct panfrost_zsa_state {
         struct pipe_depth_stencil_alpha_state base;
 
         /* Precomputed stencil state */
-        struct mali_stencil_packed stencil_front;
-        struct mali_stencil_packed stencil_back;
+        struct MALI_STENCIL stencil_front;
+        struct MALI_STENCIL stencil_back;
         u8 stencil_mask_front;
         u8 stencil_mask_back;
 };
@@ -329,7 +328,7 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags);
 bool
 panfrost_writes_point_size(struct panfrost_context *ctx);
 
-struct panfrost_transfer
+struct panfrost_ptr
 panfrost_vertex_tiler_job(struct panfrost_context *ctx, bool is_tiler);
 
 void

@@ -513,14 +513,15 @@ validate_deref_instr(nir_deref_instr *instr, validate_state *state)
     */
    validate_assert(state, list_is_empty(&instr->dest.ssa.if_uses));
 
-   /* Only certain modes can be used as sources for phi instructions. */
+   /* Certain modes cannot be used as sources for phi instructions because
+    * way too many passes assume that they can always chase deref chains.
+    */
    nir_foreach_use(use, &instr->dest.ssa) {
       if (use->parent_instr->type == nir_instr_type_phi) {
-         validate_assert(state, instr->mode == nir_var_mem_ubo ||
-                                instr->mode == nir_var_mem_ssbo ||
-                                instr->mode == nir_var_mem_shared ||
-                                instr->mode == nir_var_mem_global ||
-                                instr->mode == nir_var_mem_constant);
+         validate_assert(state, instr->mode != nir_var_shader_in &&
+                                instr->mode != nir_var_shader_out &&
+                                instr->mode != nir_var_shader_out &&
+                                instr->mode != nir_var_uniform);
       }
    }
 }
@@ -546,6 +547,16 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
    unsigned dest_bit_size = 0;
    unsigned src_bit_sizes[NIR_INTRINSIC_MAX_INPUTS] = { 0, };
    switch (instr->intrinsic) {
+   case nir_intrinsic_convert_alu_types: {
+      nir_alu_type src_type = nir_intrinsic_src_type(instr);
+      nir_alu_type dest_type = nir_intrinsic_dest_type(instr);
+      dest_bit_size = nir_alu_type_get_type_size(dest_type);
+      src_bit_sizes[0] = nir_alu_type_get_type_size(src_type);
+      validate_assert(state, dest_bit_size != 0);
+      validate_assert(state, src_bit_sizes[0] != 0);
+      break;
+   }
+
    case nir_intrinsic_load_param: {
       unsigned param_idx = nir_intrinsic_param_idx(instr);
       validate_assert(state, param_idx < state->impl->function->num_params);
@@ -1217,6 +1228,34 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
 }
 
 static void
+validate_constant(nir_constant *c, const struct glsl_type *type,
+                  validate_state *state)
+{
+   if (glsl_type_is_vector_or_scalar(type)) {
+      unsigned num_components = glsl_get_vector_elements(type);
+      unsigned bit_size = glsl_get_bit_size(type);
+      for (unsigned i = 0; i < num_components; i++)
+         validate_const_value(&c->values[i], bit_size, state);
+      for (unsigned i = num_components; i < NIR_MAX_VEC_COMPONENTS; i++)
+         validate_assert(state, c->values[i].u64 == 0);
+   } else {
+      validate_assert(state, c->num_elements == glsl_get_length(type));
+      if (glsl_type_is_struct_or_ifc(type)) {
+         for (unsigned i = 0; i < c->num_elements; i++) {
+            const struct glsl_type *elem_type = glsl_get_struct_field(type, i);
+            validate_constant(c->elements[i], elem_type, state);
+         }
+      } else if (glsl_type_is_array_or_matrix(type)) {
+         const struct glsl_type *elem_type = glsl_get_array_element(type);
+         for (unsigned i = 0; i < c->num_elements; i++)
+            validate_constant(c->elements[i], elem_type, state);
+      } else {
+         validate_assert(state, !"Invalid type for nir_constant");
+      }
+   }
+}
+
+static void
 validate_var_decl(nir_variable *var, nir_variable_mode valid_modes,
                   validate_state *state)
 {
@@ -1248,6 +1287,9 @@ validate_var_decl(nir_variable *var, nir_variable_mode valid_modes,
 
    if (var->data.per_view)
       validate_assert(state, glsl_type_is_array(var->type));
+
+   if (var->constant_initializer)
+      validate_constant(var->constant_initializer, var->type, state);
 
    /*
     * TODO validate some things ir_validate.cpp does (requires more GLSL type

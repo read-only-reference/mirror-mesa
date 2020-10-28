@@ -31,10 +31,8 @@
 #include <string.h>
 #include "util/u_cpu_detect.h"
 
-#ifdef USE_F16C
+#if defined(USE_X86_64_ASM)
 #include <immintrin.h>
-#define F16C_NEAREST 0
-#define F16C_TRUNCATE 3
 #endif
 
 #ifdef __cplusplus
@@ -60,9 +58,15 @@ uint16_t _mesa_float_to_float16_rtz_slow(float val);
 static inline uint16_t
 _mesa_float_to_half(float val)
 {
-#ifdef USE_F16C
-   if (util_cpu_caps.has_f16c)
-      return _cvtss_sh(val, F16C_NEAREST);
+#if defined(USE_X86_64_ASM)
+   if (util_cpu_caps.has_f16c) {
+      __m128 in = {val};
+      __m128i out;
+
+      /* $0 = round to nearest */
+      __asm volatile("vcvtps2ph $0, %1, %0" : "=v"(out) : "v"(in));
+      return out[0];
+   }
 #endif
    return _mesa_float_to_half_slow(val);
 }
@@ -70,9 +74,14 @@ _mesa_float_to_half(float val)
 static inline float
 _mesa_half_to_float(uint16_t val)
 {
-#ifdef USE_F16C
-   if (util_cpu_caps.has_f16c)
-      return _cvtsh_ss(val);
+#if defined(USE_X86_64_ASM)
+   if (util_cpu_caps.has_f16c) {
+      __m128i in = {val};
+      __m128 out;
+
+      __asm volatile("vcvtph2ps %1, %0" : "=v"(out) : "v"(in));
+      return out[0];
+   }
 #endif
    return _mesa_half_to_float_slow(val);
 }
@@ -80,9 +89,15 @@ _mesa_half_to_float(uint16_t val)
 static inline uint16_t
 _mesa_float_to_float16_rtz(float val)
 {
-#ifdef USE_F16C
-   if (util_cpu_caps.has_f16c)
-      return _cvtss_sh(val, F16C_TRUNCATE);
+#if defined(USE_X86_64_ASM)
+   if (util_cpu_caps.has_f16c) {
+      __m128 in = {val};
+      __m128i out;
+
+      /* $3 = round towards zero (truncate) */
+      __asm volatile("vcvtps2ph $3, %1, %0" : "=v"(out) : "v"(in));
+      return out[0];
+   }
 #endif
    return _mesa_float_to_float16_rtz_slow(val);
 }

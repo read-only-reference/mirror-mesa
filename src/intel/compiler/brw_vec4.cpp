@@ -2685,7 +2685,7 @@ vec4_visitor::run()
       pass_num++;                                                      \
       bool this_progress = pass(args);                                 \
                                                                        \
-      if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {  \
+      if ((INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {  \
          char filename[64];                                            \
          snprintf(filename, 64, "%s-%s-%02d-%02d-" #pass,              \
                   stage_abbrev, nir->info.name, iteration, pass_num); \
@@ -2698,7 +2698,7 @@ vec4_visitor::run()
    })
 
 
-   if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
+   if (INTEL_DEBUG & DEBUG_OPTIMIZER) {
       char filename[64];
       snprintf(filename, 64, "%s-%s-00-00-start",
                stage_abbrev, nir->info.name);
@@ -2761,7 +2761,7 @@ vec4_visitor::run()
 
    setup_payload();
 
-   if (unlikely(INTEL_DEBUG & DEBUG_SPILL_VEC4)) {
+   if (INTEL_DEBUG & DEBUG_SPILL_VEC4) {
       /* Debug of register spilling: Go spill everything. */
       const int grf_count = alloc.count;
       float spill_costs[alloc.count];
@@ -2937,12 +2937,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       prog_data->base.urb_entry_size = DIV_ROUND_UP(vue_entries, 8);
    } else {
       prog_data->base.urb_entry_size = DIV_ROUND_UP(vue_entries, 4);
-      /* On Cannonlake software shall not program an allocation size that
-       * specifies a size that is a multiple of 3 64B (512-bit) cachelines.
-       */
-      if (compiler->devinfo->gen == 10 &&
-          prog_data->base.urb_entry_size % 3 == 0)
-         prog_data->base.urb_entry_size++;
    }
 
    if (INTEL_DEBUG & DEBUG_VS) {

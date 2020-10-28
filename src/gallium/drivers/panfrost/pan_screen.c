@@ -62,9 +62,11 @@ static const struct debug_named_value debug_options[] = {
         {"afbc",      PAN_DBG_AFBC,     "Enable AFBC buffer sharing"},
         {"sync",      PAN_DBG_SYNC,     "Wait for each job's completion and check for any GPU fault"},
         {"precompile", PAN_DBG_PRECOMPILE, "Precompile shaders for shader-db"},
+        {"fp16",     PAN_DBG_FP16,     "Enable 16-bit support"},
         {"nofp16",     PAN_DBG_NOFP16,     "Disable 16-bit support"},
         {"bifrost",   PAN_DBG_BIFROST, "Enable experimental Mali G31 and G52 support"},
         {"gl3",       PAN_DBG_GL3,      "Enable experimental GL 3.x implementation, up to 3.3"},
+        {"noafbc",    PAN_DBG_NO_AFBC,  "Disable AFBC support"},
         DEBUG_NAMED_VALUE_END
 };
 
@@ -129,14 +131,15 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
                 /* WIP */
                 return is_gl3 ? 1 : 0;
 
+        case PIPE_CAP_OCCLUSION_QUERY:
+        case PIPE_CAP_PRIMITIVE_RESTART:
+        case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
+                return true;
 
         /* ES3 features unsupported on Bifrost */
-        case PIPE_CAP_OCCLUSION_QUERY:
         case PIPE_CAP_TGSI_INSTANCEID:
         case PIPE_CAP_TEXTURE_MULTISAMPLE:
         case PIPE_CAP_SURFACE_SAMPLE_COUNT:
-        case PIPE_CAP_PRIMITIVE_RESTART:
-        case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
                 return !is_bifrost;
 
         case PIPE_CAP_SAMPLER_VIEW_TARGET:
@@ -170,7 +173,7 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
         case PIPE_CAP_GLSL_FEATURE_LEVEL:
         case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
-                return is_gl3 ? 330 : (is_bifrost ? 120 : 140);
+                return is_gl3 ? 330 : is_bifrost ? 120 : 140;
         case PIPE_CAP_ESSL_FEATURE_LEVEL:
                 return is_bifrost ? 120 : 300;
 
@@ -282,6 +285,7 @@ panfrost_get_shader_param(struct pipe_screen *screen,
 {
         struct panfrost_device *dev = pan_device(screen);
         bool is_deqp = dev->debug & PAN_DBG_DEQP;
+        bool is_fp16 = dev->debug & PAN_DBG_FP16;
         bool is_nofp16 = dev->debug & PAN_DBG_NOFP16;
         bool is_bifrost = dev->quirks & IS_BIFROST;
 
@@ -341,7 +345,7 @@ panfrost_get_shader_param(struct pipe_screen *screen,
 
         case PIPE_SHADER_CAP_FP16:
         case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
-                return !is_nofp16;
+                return (!is_nofp16 && !is_bifrost) || is_fp16;
 
         case PIPE_SHADER_CAP_FP16_DERIVATIVES:
         case PIPE_SHADER_CAP_INT16:
@@ -432,6 +436,7 @@ panfrost_is_format_supported( struct pipe_screen *screen,
                               unsigned bind)
 {
         struct panfrost_device *dev = pan_device(screen);
+        bool is_bifrost = (dev->quirks & IS_BIFROST);
         const struct util_format_description *format_desc;
 
         assert(target == PIPE_BUFFER ||
@@ -459,6 +464,14 @@ panfrost_is_format_supported( struct pipe_screen *screen,
         if (MAX2(sample_count, 1) != MAX2(storage_sample_count, 1))
                 return false;
 
+        /* Don't advertise multisampling on Bifrost yet */
+        if (is_bifrost && sample_count > 1)
+                return false;
+
+        /* Z16 causes dEQP failures on t720 */
+        if (format == PIPE_FORMAT_Z16_UNORM && dev->quirks & MIDGARD_SFBD)
+                return false;
+
         /* Don't confuse poorly written apps (workaround dEQP bug) that expect
          * more alpha than they ask for */
 
@@ -474,19 +487,20 @@ panfrost_is_format_supported( struct pipe_screen *screen,
                 ( PIPE_BIND_DEPTH_STENCIL | PIPE_BIND_RENDER_TARGET
                 | PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_SAMPLER_VIEW);
 
-        struct panfrost_format fmt = panfrost_pipe_format_table[format];
+        struct panfrost_format fmt = dev->formats[format];
+        enum mali_format indexed = MALI_EXTRACT_INDEX(fmt.hw);
 
         /* Also check that compressed texture formats are supported on this
          * particular chip. They may not be depending on system integration
          * differences. RGTC can be emulated so is always supported. */
 
         bool is_rgtc = format_desc->layout == UTIL_FORMAT_LAYOUT_RGTC;
-        bool supported = panfrost_supports_compressed_format(dev, fmt.hw);
+        bool supported = panfrost_supports_compressed_format(dev, indexed);
 
         if (!is_rgtc && !supported)
                 return false;
 
-        return fmt.hw && ((relevant_bind & ~fmt.bind) == 0);
+        return indexed && ((relevant_bind & ~fmt.bind) == 0);
 }
 
 /* We always support linear and tiled operations, both external and internal.
@@ -695,6 +709,9 @@ panfrost_create_screen(int fd, struct renderonly *ro)
 
         dev->debug = debug_get_flags_option("PAN_MESA_DEBUG", debug_options, 0);
 
+        if (dev->debug & PAN_DBG_NO_AFBC)
+                dev->quirks |= MIDGARD_NO_AFBC;
+
         if (ro) {
                 dev->ro = renderonly_dup(ro);
                 if (!dev->ro) {
@@ -750,9 +767,7 @@ panfrost_create_screen(int fd, struct renderonly *ro)
         screen->base.set_damage_region = panfrost_resource_set_damage_region;
 
         panfrost_resource_screen_init(&screen->base);
-
-        if (!(dev->quirks & IS_BIFROST))
-                panfrost_init_blit_shaders(dev);
+        panfrost_init_blit_shaders(dev);
 
         return &screen->base;
 }

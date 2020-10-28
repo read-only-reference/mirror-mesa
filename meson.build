@@ -72,6 +72,7 @@ if with_tools.contains('all')
     'xvmc',
   ]
 endif
+with_clc = false
 
 with_intel_tools = with_tools.contains('intel') or with_tools.contains('intel-ui')
 with_imgui = with_intel_tools or with_vulkan_overlay_layer
@@ -272,7 +273,11 @@ with_amd_vk = _vulkan_drivers.contains('amd')
 with_freedreno_vk = _vulkan_drivers.contains('freedreno')
 with_swrast_vk = _vulkan_drivers.contains('swrast')
 with_freedreno_kgsl = get_option('freedreno-kgsl')
+with_broadcom_vk = _vulkan_drivers.contains('broadcom')
 with_any_vk = _vulkan_drivers.length() != 0
+
+with_any_broadcom = with_gallium_vc4 or with_gallium_v3d or with_broadcom_vk
+with_any_intel = with_dri_i965 or with_intel_vk or with_gallium_iris
 
 if with_swrast_vk and not with_gallium_softpipe
   error('swrast vulkan requires gallium swrast')
@@ -345,7 +350,9 @@ endif
 
 with_glx = get_option('glx')
 if with_glx == 'auto'
-  if with_dri
+  if with_platform_android
+    with_glx = 'disabled'
+  elif with_dri
     with_glx = 'dri'
   elif with_platform_haiku
     with_glx = 'disabled'
@@ -765,7 +772,7 @@ _power8 = get_option('power8')
 if _power8 == 'true'
   _power8 = 'enabled'
   warning('power8 option "true" deprecated, please use "enabled" instead.')
-elif _power8 == 'disabled'
+elif _power8 == 'false'
   _power8 = 'disabled'
   warning('power8 option "false" deprecated, please use "disabled" instead.')
 endif
@@ -802,13 +809,17 @@ if _opencl != 'disabled'
     error('OpenCL Clover implementation requires at least one gallium driver.')
   endif
 
-  dep_clc = dependency('libclc')
+  with_clc = true
   with_gallium_opencl = true
   with_opencl_icd = _opencl == 'icd'
 else
-  dep_clc = null_dep
   with_gallium_opencl = false
   with_opencl_icd = false
+endif
+
+dep_clc = null_dep
+if with_clc
+  dep_clc = dependency('libclc')
 endif
 
 gl_pkgconfig_c_flags = []
@@ -903,11 +914,14 @@ elif _shader_cache == 'false'
 endif
 if _shader_cache != 'disabled'
   if host_machine.system() == 'windows'
-    if _shader_cache == 'enabled'
+    if ['enabled', 'default-disabled'].contains(_shader_cache)
       error('Shader Cache does not currently work on Windows')
     endif
   else
     pre_args += '-DENABLE_SHADER_CACHE'
+    if _shader_cache == 'default-disabled'
+      pre_args += '-DSHADER_CACHE_DISABLE_BY_DEFAULT'
+    endif
     with_shader_cache = true
   endif
 endif
@@ -1109,19 +1123,6 @@ if host_machine.cpu_family().startswith('x86') and cc.get_id() != 'msvc'
 else
   with_sse41 = false
   sse41_args = []
-endif
-
-if cc.has_argument('-mf16c') and cpp.has_argument('-mf16c')
-  pre_args += '-DUSE_F16C'
-  c_args += '-mf16c'
-  cpp_args += '-mf16c'
-
-  # GCC on x86 (not x86_64) with -msse* assumes a 16 byte aligned stack, but
-  # that's not guaranteed (not sure if this also applies to -mf16c)
-  if host_machine.cpu_family() == 'x86'
-    c_args += '-mstackrealign'
-    cpp_args += '-mstackrealign'
-  endif
 endif
 
 # Check for GCC style atomics
@@ -1369,7 +1370,8 @@ if dep_thread.found() and host_machine.system() != 'windows'
   endif
 endif
 if host_machine.system() != 'windows'
-  dep_expat = dependency('expat', fallback : ['expat', 'expat_dep'])
+  dep_expat = dependency('expat', fallback : ['expat', 'expat_dep'],
+                         required: not with_platform_android or with_any_broadcom or with_any_intel)
 else
   dep_expat = null_dep
 endif
@@ -1665,7 +1667,7 @@ elif _libunwind == 'false'
   _libunwind = 'disabled'
   warning('libunwind option "false" deprecated, please use "disabled" instead.')
 endif
-if _libunwind != 'disabled'
+if _libunwind != 'disabled' and not with_platform_android
   dep_unwind = dependency('libunwind', required : _libunwind == 'enabled')
   if dep_unwind.found()
     pre_args += '-DHAVE_LIBUNWIND'
@@ -1783,10 +1785,13 @@ if with_platform_x11
   if with_glx == 'dri'
     if with_dri_platform == 'drm'
       dep_dri2proto = dependency('dri2proto', version : '>= 2.8')
-      dep_xxf86vm = dependency('xxf86vm')
+      if with_glx_direct
+        dep_xxf86vm = dependency('xxf86vm')
+      endif
     endif
   endif
-  if (with_egl or (
+  if (with_egl or 
+      with_dri3 or (
       with_gallium_vdpau or with_gallium_xvmc or with_gallium_xa or
       with_gallium_omx != 'disabled'))
     dep_xcb_xfixes = dependency('xcb-xfixes')
@@ -1823,7 +1828,6 @@ endif
 # drop shared code unused by that specific driver (particularly
 # relevant for Vulkan drivers).
 if cc.has_link_argument('-Wl,--gc-sections')
-  add_project_arguments('-Wl,--gc-sections', language : ['c', 'cpp'])
   foreach a: ['-ffunction-sections', '-fdata-sections']
     if cc.has_argument(a)
       add_project_arguments(a, language : ['c', 'cpp'])
@@ -1851,7 +1855,9 @@ elif with_glx == 'dri'
     'xcb-glx >= 1.8.1']
   if with_dri_platform == 'drm'
     gl_priv_reqs += 'xcb-dri2 >= 1.8'
-    gl_priv_reqs += 'xxf86vm'
+    if with_glx_direct
+      gl_priv_reqs += 'xxf86vm'
+    endif
   endif
 endif
 if dep_libdrm.found()

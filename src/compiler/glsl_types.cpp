@@ -2472,13 +2472,18 @@ const glsl_type *
 glsl_type::get_explicit_type_for_size_align(glsl_type_size_align_func type_info,
                                             unsigned *size, unsigned *alignment) const
 {
-   if (this->is_scalar()) {
+   if (this->is_image() || this->is_sampler()) {
+      type_info(this, size, alignment);
+      assert(*alignment > 0);
+      return this;
+   } else if (this->is_scalar()) {
       type_info(this, size, alignment);
       assert(*size == explicit_type_scalar_byte_size(this));
       assert(*alignment == explicit_type_scalar_byte_size(this));
       return this;
    } else if (this->is_vector()) {
       type_info(this, size, alignment);
+      assert(*alignment > 0);
       assert(*alignment % explicit_type_scalar_byte_size(this) == 0);
       return glsl_type::get_instance(this->base_type, this->vector_elements,
                                      1, 0, false, *alignment);
@@ -2532,9 +2537,78 @@ glsl_type::get_explicit_type_for_size_align(glsl_type_size_align_func type_info,
 
       *size = this->matrix_columns * stride;
       /* Matrix and column alignments match. See glsl_type::column_type() */
+      assert(col_align > 0);
       *alignment = col_align;
       return glsl_type::get_instance(this->base_type, this->vector_elements,
                                      this->matrix_columns, stride, false, *alignment);
+   } else {
+      unreachable("Unhandled type.");
+   }
+}
+
+const glsl_type *
+glsl_type::replace_vec3_with_vec4() const
+{
+   if (this->is_scalar() || this->is_vector() || this->is_matrix()) {
+      if (this->interface_row_major) {
+         if (this->matrix_columns == 3) {
+            return glsl_type::get_instance(this->base_type,
+                                           this->vector_elements,
+                                           4, /* matrix columns */
+                                           this->explicit_stride,
+                                           this->interface_row_major,
+                                           this->explicit_alignment);
+         } else {
+            return this;
+         }
+      } else {
+         if (this->vector_elements == 3) {
+            return glsl_type::get_instance(this->base_type,
+                                           4, /* vector elements */
+                                           this->matrix_columns,
+                                           this->explicit_stride,
+                                           this->interface_row_major,
+                                           this->explicit_alignment);
+         } else {
+            return this;
+         }
+      }
+   } else if (this->is_array()) {
+      const glsl_type *vec4_elem_type =
+         this->fields.array->replace_vec3_with_vec4();
+      if (vec4_elem_type == this->fields.array)
+         return this;
+      return glsl_type::get_array_instance(vec4_elem_type,
+                                           this->length,
+                                           this->explicit_stride);
+   } else if (this->is_struct() || this->is_interface()) {
+      struct glsl_struct_field *fields = (struct glsl_struct_field *)
+         malloc(sizeof(struct glsl_struct_field) * this->length);
+
+      bool needs_new_type = false;
+      for (unsigned i = 0; i < this->length; i++) {
+         fields[i] = this->fields.structure[i];
+         assert(fields[i].matrix_layout != GLSL_MATRIX_LAYOUT_ROW_MAJOR);
+         fields[i].type = fields[i].type->replace_vec3_with_vec4();
+         if (fields[i].type != this->fields.structure[i].type)
+            needs_new_type = true;
+      }
+
+      const glsl_type *type;
+      if (!needs_new_type) {
+         type = this;
+      } else if (this->is_struct()) {
+         type = get_struct_instance(fields, this->length, this->name,
+                                    this->packed, this->explicit_alignment);
+      } else {
+         assert(!this->packed);
+         type = get_interface_instance(fields, this->length,
+                                       (enum glsl_interface_packing)this->interface_packing,
+                                       this->interface_row_major,
+                                       this->name);
+      }
+      free(fields);
+      return type;
    } else {
       unreachable("Unhandled type.");
    }

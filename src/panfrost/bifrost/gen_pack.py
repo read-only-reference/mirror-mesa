@@ -271,6 +271,7 @@ modifier_map = {
 
         # 0: compute 1: zero
         "lod_mode": lambda a,b,c,d: '1 - ins->texture.compute_lod',
+        "skip": lambda a,b,c,d: 'ins->skip',
 
         # Not much choice in the matter...
         "divzero": lambda a,b,c,d: '0',
@@ -294,7 +295,6 @@ modifier_map = {
         "sample": lambda a,b,c,d: '0', # LD_VAR center
         "function": lambda a,b,c,d: '3', # LD_VAR_FLAT none
         "preserve_null": lambda a,b,c,d: '0', # SEG_ADD none
-        "skip": lambda a,b,c,d: '0', # texturing (no skip)
         "bytes2": lambda a,b,c,d: '0', # NIR shifts are in bits
         "result_word": lambda a,b,c,d: '0', # 32-bit only shifts for now (TODO)
         "source": lambda a,b,c,d: '7', # cycle_counter for LD_GCLK
@@ -392,7 +392,7 @@ IMMEDIATE_TABLE = {
         'attribute_index': 'bi_get_immediate(ins, 0)',
         'varying_index': 'bi_get_immediate(ins, 0)',
         'index': 'bi_get_immediate(ins, 0)',
-        'image_index': 'ins->texture.texture_index',
+        'texture_index': 'ins->texture.texture_index',
         'sampler_index': 'ins->texture.sampler_index',
         'table': '63', # Bindless (flat addressing) mode for DTSEL_IMM
 
@@ -516,15 +516,15 @@ def pack_variant(opname, states):
             st.append('({} << {})'.format(name, pos))
 
     if staging == 'r':
-        common_body.append('bi_read_data_register(clause, ins);')
+        common_body.append('bi_read_staging_register(clause, ins);')
     elif staging == 'w':
-        common_body.append('bi_write_data_register(clause, ins);')
+        common_body.append('bi_write_staging_register(clause, ins);')
     elif staging == '':
         pass
     else:
         assert staging == 'rw'
         # XXX: register allocation requirement (!)
-        common_body.append('bi_read_data_register(clause, ins);')
+        common_body.append('bi_read_staging_register(clause, ins);')
         common_body.append('assert(ins->src[0] == ins->dest);')
 
     # After this, we have to branch off, since deriveds *do* vary based on state.

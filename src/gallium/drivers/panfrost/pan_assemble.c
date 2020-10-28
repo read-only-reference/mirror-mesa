@@ -40,59 +40,60 @@
 #include "tgsi/tgsi_dump.h"
 
 static void
-pan_pack_midgard_props(struct panfrost_shader_state *state,
-                gl_shader_stage stage)
+pan_prepare_midgard_props(struct panfrost_shader_state *state,
+                          gl_shader_stage stage)
 {
-        pan_pack(&state->properties, MIDGARD_PROPERTIES, cfg) {
-                cfg.uniform_buffer_count = state->ubo_count;
-                cfg.uniform_count = state->uniform_count;
-                cfg.writes_globals = state->writes_global;
-                cfg.suppress_inf_nan = true; /* XXX */
+        pan_prepare(&state->properties, RENDERER_PROPERTIES);
+        state->properties.uniform_buffer_count = state->ubo_count;
+        state->properties.midgard.uniform_count = state->uniform_count;
+        state->properties.midgard.shader_has_side_effects = state->writes_global;
 
-                if (stage == MESA_SHADER_FRAGMENT) {
-                        /* Work register count, early-z, reads at draw-time */
-                        cfg.stencil_from_shader = state->writes_stencil;
-                        cfg.helper_invocation_enable = state->helper_invocations;
-                        cfg.depth_source = state->writes_depth ?
-                                MALI_DEPTH_SOURCE_SHADER :
-                                MALI_DEPTH_SOURCE_FIXED_FUNCTION;
-                } else {
-                        cfg.work_register_count = state->work_reg_count;
-                }
+        /* TODO: Select the appropriate mode. Suppresing inf/nan works around
+         * some bugs in gles2 apps (eg glmark2's terrain scene) but isn't
+         * conformant on gles3 */
+        state->properties.midgard.fp_mode = MALI_FP_MODE_GL_INF_NAN_SUPPRESSED;
+
+        if (stage == MESA_SHADER_FRAGMENT) {
+                /* Work register count, early-z, reads at draw-time */
+                state->properties.stencil_from_shader = state->writes_stencil;
+                state->properties.shader_contains_barrier = state->helper_invocations;
+                state->properties.depth_source = state->writes_depth ?
+                                                 MALI_DEPTH_SOURCE_SHADER :
+                                                 MALI_DEPTH_SOURCE_FIXED_FUNCTION;
+        } else {
+                state->properties.midgard.work_register_count = state->work_reg_count;
         }
 }
 
 static void
-pan_pack_bifrost_props(struct panfrost_shader_state *state,
-                gl_shader_stage stage)
+pan_prepare_bifrost_props(struct panfrost_shader_state *state,
+                          gl_shader_stage stage)
 {
+
         switch (stage) {
         case MESA_SHADER_VERTEX:
-                pan_pack(&state->properties, BIFROST_PROPERTIES, cfg) {
-                        cfg.unknown = 0x800000; /* XXX */
-                        cfg.uniform_buffer_count = state->ubo_count;
-                }
+                pan_prepare(&state->properties, RENDERER_PROPERTIES);
+                state->properties.bifrost.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+                state->properties.uniform_buffer_count = state->ubo_count;
 
-                pan_pack(&state->preload, PRELOAD_VERTEX, cfg) {
-                        cfg.uniform_count = state->uniform_count;
-                        cfg.vertex_id = true;
-                        cfg.instance_id = true;
-                }
-
+                pan_prepare(&state->preload, PRELOAD);
+                state->preload.uniform_count = state->uniform_count;
+                state->preload.vertex.vertex_id = true;
+                state->preload.vertex.instance_id = true;
                 break;
         case MESA_SHADER_FRAGMENT:
-                pan_pack(&state->properties, BIFROST_PROPERTIES, cfg) {
-                        /* Early-Z set at draw-time */
+                pan_prepare(&state->properties, RENDERER_PROPERTIES);
+                /* Early-Z set at draw-time */
+                state->properties.bifrost.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+                state->properties.uniform_buffer_count = state->ubo_count;
+                state->properties.shader_contains_barrier = state->helper_invocations;
+                state->properties.bifrost.shader_modifies_coverage = state->can_discard;
 
-                        cfg.unknown = 0x950020; /* XXX */
-                        cfg.uniform_buffer_count = state->ubo_count;
-                }
-
-                pan_pack(&state->preload, PRELOAD_FRAGMENT, cfg) {
-                        cfg.uniform_count = state->uniform_count;
-                        cfg.fragment_position = state->reads_frag_coord;
-                }
-
+                pan_prepare(&state->preload, PRELOAD);
+                state->preload.uniform_count = state->uniform_count;
+                state->preload.fragment.fragment_position = state->reads_frag_coord;
+                state->preload.fragment.coverage = true;
+                state->preload.fragment.primitive_flags = state->reads_face;
                 break;
         default:
                 unreachable("TODO");
@@ -106,12 +107,12 @@ pan_upload_shader_descriptor(struct panfrost_context *ctx,
         const struct panfrost_device *dev = pan_device(ctx->base.screen);
         struct mali_state_packed *out;
 
-        u_upload_alloc(ctx->state_uploader, 0, MALI_STATE_LENGTH, MALI_STATE_LENGTH,
+        u_upload_alloc(ctx->state_uploader, 0, MALI_RENDERER_STATE_LENGTH, MALI_RENDERER_STATE_LENGTH,
                         &state->upload.offset, &state->upload.rsrc, (void **) &out);
 
-        pan_pack(out, STATE_OPAQUE, cfg) {
+        pan_pack(out, RENDERER_STATE, cfg) {
                 cfg.shader = state->shader;
-                memcpy(&cfg.properties, &state->properties, sizeof(state->properties));
+                cfg.properties = state->properties;
 
                 if (dev->quirks & IS_BIFROST)
                         cfg.preload = state->preload;
@@ -195,24 +196,24 @@ pan_format_from_glsl(const struct glsl_type *type, unsigned precision, unsigned 
                 MALI_NR_CHANNELS(chan);
 }
 
-static enum bifrost_shader_type
+static enum mali_bifrost_register_file_format
 bifrost_blend_type_from_nir(nir_alu_type nir_type)
 {
         switch(nir_type) {
         case 0: /* Render target not in use */
                 return 0;
         case nir_type_float16:
-                return BIFROST_BLEND_F16;
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_F16;
         case nir_type_float32:
-                return BIFROST_BLEND_F32;
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_F32;
         case nir_type_int32:
-                return BIFROST_BLEND_I32;
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_I32;
         case nir_type_uint32:
-                return BIFROST_BLEND_U32;
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_U32;
         case nir_type_int16:
-                return BIFROST_BLEND_I16;
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_I16;
         case nir_type_uint16:
-                return BIFROST_BLEND_U16;
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_U16;
         default:
                 unreachable("Unsupported blend shader type for NIR alu type");
                 return 0;
@@ -241,25 +242,29 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         s->info.stage = stage;
 
         /* Call out to Midgard compiler given the above NIR */
-        panfrost_program program = {0};
-        memcpy(program.rt_formats, state->rt_formats, sizeof(program.rt_formats));
+        struct panfrost_compile_inputs inputs = {
+                .gpu_id = dev->gpu_id,
+                .shaderdb = !!(dev->debug & PAN_DBG_PRECOMPILE),
+        };
 
-        if (dev->quirks & IS_BIFROST) {
-                bifrost_compile_shader_nir(s, &program, dev->gpu_id);
-        } else {
-                midgard_compile_shader_nir(s, &program, false, 0, dev->gpu_id,
-                                dev->debug & PAN_DBG_PRECOMPILE);
-        }
+        memcpy(inputs.rt_formats, state->rt_formats, sizeof(inputs.rt_formats));
+
+        panfrost_program *program;
+
+        if (dev->quirks & IS_BIFROST)
+                program = bifrost_compile_shader_nir(NULL, s, &inputs);
+        else
+                program = midgard_compile_shader_nir(NULL, s, &inputs);
 
         /* Prepare the compiled binary for upload */
         mali_ptr shader = 0;
         unsigned attribute_count = 0, varying_count = 0;
-        int size = program.compiled.size;
+        int size = program->compiled.size;
 
         if (size) {
                 state->bo = panfrost_bo_create(dev, size, PAN_BO_EXECUTE);
-                memcpy(state->bo->cpu, program.compiled.data, size);
-                shader = state->bo->gpu;
+                memcpy(state->bo->ptr.cpu, program->compiled.data, size);
+                shader = state->bo->ptr.gpu;
         }
 
         /* Midgard needs the first tag on the bottom nibble */
@@ -268,15 +273,13 @@ panfrost_shader_compile(struct panfrost_context *ctx,
                 /* If size = 0, we tag as "end-of-shader" */
 
                 if (size)
-                        shader |= program.first_tag;
+                        shader |= program->first_tag;
                 else
                         shader = 0x1;
         }
 
-        util_dynarray_fini(&program.compiled);
-
-        state->sysval_count = program.sysval_count;
-        memcpy(state->sysval, program.sysvals, sizeof(state->sysval[0]) * state->sysval_count);
+        state->sysval_count = program->sysval_count;
+        memcpy(state->sysval, program->sysvals, sizeof(state->sysval[0]) * state->sysval_count);
 
         bool vertex_id = s->info.system_values_read & (1 << SYSTEM_VALUE_VERTEX_ID);
         bool instance_id = s->info.system_values_read & (1 << SYSTEM_VALUE_INSTANCE_ID);
@@ -299,6 +302,14 @@ panfrost_shader_compile(struct panfrost_context *ctx,
 
                 break;
         case MESA_SHADER_FRAGMENT:
+                for (unsigned i = 0; i < ARRAY_SIZE(state->blend_ret_addrs); i++) {
+                        if (!program->blend_ret_offsets[i])
+                                continue;
+
+                        state->blend_ret_addrs[i] = (state->bo->ptr.gpu & UINT32_MAX) +
+                                                    program->blend_ret_offsets[i];
+                        assert(!(state->blend_ret_addrs[i] & 0x7));
+                }
                 varying_count = util_bitcount64(s->info.inputs_read);
                 if (s->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
                         state->writes_depth = true;
@@ -329,11 +340,12 @@ panfrost_shader_compile(struct panfrost_context *ctx,
 
         state->can_discard = s->info.fs.uses_discard;
         state->helper_invocations = s->info.fs.needs_helper_invocations;
-        state->stack_size = program.tls_size;
+        state->stack_size = program->tls_size;
 
         state->reads_frag_coord = s->info.inputs_read & (1 << VARYING_SLOT_POS);
         state->reads_point_coord = s->info.inputs_read & (1 << VARYING_SLOT_PNTC);
-        state->reads_face = s->info.inputs_read & (1 << VARYING_SLOT_FACE);
+        state->reads_face = (s->info.inputs_read & (1 << VARYING_SLOT_FACE)) ||
+                            (s->info.system_values_read & (1 << SYSTEM_VALUE_FRONT_FACE));
         state->writes_point_size = s->info.outputs_written & (1 << VARYING_SLOT_PSIZ);
 
         if (outputs_written)
@@ -341,12 +353,12 @@ panfrost_shader_compile(struct panfrost_context *ctx,
 
         /* Separate as primary uniform count is truncated. Sysvals are prefix
          * uniforms */
-        state->uniform_count = MIN2(s->num_uniforms + program.sysval_count, program.uniform_cutoff);
-        state->work_reg_count = program.work_register_count;
+        state->uniform_count = MIN2(s->num_uniforms + program->sysval_count, program->uniform_cutoff);
+        state->work_reg_count = program->work_register_count;
 
         if (dev->quirks & IS_BIFROST)
-                for (unsigned i = 0; i < BIFROST_MAX_RENDER_TARGET_COUNT; i++)
-                        state->blend_types[i] = bifrost_blend_type_from_nir(program.blend_types[i]);
+                for (unsigned i = 0; i < ARRAY_SIZE(state->blend_types); i++)
+                        state->blend_types[i] = bifrost_blend_type_from_nir(program->blend_types[i]);
 
         /* Record the varying mapping for the command stream's bookkeeping */
 
@@ -370,21 +382,21 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         state->ubo_count = s->info.num_ubos + 1; /* off-by-one for uniforms */
 
         /* Prepare the descriptors at compile-time */
-        pan_pack(&state->shader, SHADER, cfg) {
-                cfg.shader = shader;
-                cfg.attribute_count = attribute_count;
-                cfg.varying_count = varying_count;
-                cfg.texture_count = s->info.num_textures;
-                cfg.sampler_count = cfg.texture_count;
-        }
+        state->shader.shader = shader;
+        state->shader.attribute_count = attribute_count;
+        state->shader.varying_count = varying_count;
+        state->shader.texture_count = s->info.num_textures;
+        state->shader.sampler_count = s->info.num_textures;
 
         if (dev->quirks & IS_BIFROST)
-                pan_pack_bifrost_props(state, stage);
+                pan_prepare_bifrost_props(state, stage);
         else
-                pan_pack_midgard_props(state, stage);
+                pan_prepare_midgard_props(state, stage);
 
         if (stage != MESA_SHADER_FRAGMENT)
                 pan_upload_shader_descriptor(ctx, state);
+
+        ralloc_free(program);
 
         /* In both clone and tgsi_to_nir paths, the shader is ralloc'd against
          * a NULL context */

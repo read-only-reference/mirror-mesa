@@ -378,17 +378,13 @@ void si_llvm_preload_tes_rings(struct si_shader_context *ctx)
 
 static LLVMValueRef si_nir_load_tcs_varyings(struct ac_shader_abi *abi, LLVMTypeRef type,
                                              LLVMValueRef vertex_index, LLVMValueRef param_index,
-                                             unsigned const_index, unsigned location,
                                              unsigned driver_location, unsigned component,
-                                             unsigned num_components, bool unused,
-                                             bool is_compact, bool load_input)
+                                             unsigned num_components, bool load_input)
 {
    struct si_shader_context *ctx = si_shader_context_from_abi(abi);
    struct si_shader_info *info = &ctx->shader->selector->info;
    LLVMValueRef dw_addr, stride;
    ubyte semantic;
-
-   driver_location = driver_location / 4;
 
    if (load_input) {
       semantic = info->input_semantic[driver_location];
@@ -415,7 +411,7 @@ static LLVMValueRef si_nir_load_tcs_varyings(struct ac_shader_abi *abi, LLVMType
    }
 
    if (!param_index) {
-      param_index = LLVMConstInt(ctx->ac.i32, const_index, 0);
+      param_index = ctx->ac.i32_0;
    }
 
    dw_addr = get_dw_address_from_generic_indices(ctx, stride, dw_addr, vertex_index, param_index,
@@ -430,16 +426,14 @@ static LLVMValueRef si_nir_load_tcs_varyings(struct ac_shader_abi *abi, LLVMType
 
 static LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi, LLVMTypeRef type,
                                           LLVMValueRef vertex_index, LLVMValueRef param_index,
-                                          unsigned const_index, unsigned location,
                                           unsigned driver_location, unsigned component,
-                                          unsigned num_components, bool unused, bool is_compact,
+                                          unsigned num_components,
                                           bool load_input)
 {
    struct si_shader_context *ctx = si_shader_context_from_abi(abi);
    struct si_shader_info *info = &ctx->shader->selector->info;
    LLVMValueRef base, addr;
 
-   driver_location = driver_location / 4;
    ubyte semantic = info->input_semantic[driver_location];
 
    assert((semantic >= VARYING_SLOT_PATCH0 ||
@@ -449,7 +443,7 @@ static LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi, LLVMTypeRef
    base = ac_get_arg(&ctx->ac, ctx->tcs_offchip_offset);
 
    if (!param_index) {
-      param_index = LLVMConstInt(ctx->ac.i32, const_index, 0);
+      param_index = ctx->ac.i32_0;
    }
 
    addr =
@@ -466,10 +460,10 @@ static LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi, LLVMTypeRef
    return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
 }
 
-static void si_nir_store_output_tcs(struct ac_shader_abi *abi, const struct nir_variable *var,
+static void si_nir_store_output_tcs(struct ac_shader_abi *abi,
                                     LLVMValueRef vertex_index, LLVMValueRef param_index,
-                                    unsigned const_index, LLVMValueRef src, unsigned writemask,
-                                    unsigned component, unsigned driver_location)
+                                    LLVMValueRef src, unsigned writemask,
+                                    unsigned component, unsigned location, unsigned driver_location)
 {
    struct si_shader_context *ctx = si_shader_context_from_abi(abi);
    struct si_shader_info *info = &ctx->shader->selector->info;
@@ -478,12 +472,11 @@ static void si_nir_store_output_tcs(struct ac_shader_abi *abi, const struct nir_
    LLVMValueRef values[8];
    bool is_tess_factor = false, is_tess_inner = false;
 
-   driver_location = driver_location / 4;
    ubyte semantic = info->output_semantic[driver_location];
 
    bool is_const = !param_index;
    if (!param_index)
-      param_index = LLVMConstInt(ctx->ac.i32, const_index, 0);
+      param_index = ctx->ac.i32_0;
 
    const bool is_patch = vertex_index == NULL;
 
@@ -502,7 +495,7 @@ static void si_nir_store_output_tcs(struct ac_shader_abi *abi, const struct nir_
       dw_addr = get_dw_address_from_generic_indices(ctx, NULL, dw_addr, vertex_index, param_index,
                                                     semantic);
 
-      if (is_const && const_index == 0) {
+      if (is_const) {
          int semantic = info->output_semantic[driver_location];
 
          /* Always write tess factors into LDS for the TCS epilog. */

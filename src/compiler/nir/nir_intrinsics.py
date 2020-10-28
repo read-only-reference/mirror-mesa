@@ -124,8 +124,10 @@ ALIGN_MUL = "NIR_INTRINSIC_ALIGN_MUL"
 ALIGN_OFFSET = "NIR_INTRINSIC_ALIGN_OFFSET"
 # The vulkan descriptor type for vulkan_resource_index
 DESC_TYPE = "NIR_INTRINSIC_DESC_TYPE"
-# The nir_alu_type of a uniform/input/output
-TYPE = "NIR_INTRINSIC_TYPE"
+# The nir_alu_type of input data to a store or conversion
+SRC_TYPE = "NIR_INTRINSIC_SRC_TYPE"
+# The nir_alu_type of the data output from a load or conversion
+DEST_TYPE = "NIR_INTRINSIC_DEST_TYPE"
 # The swizzle mask for quad_swizzle_amd & masked_swizzle_amd
 SWIZZLE_MASK = "NIR_INTRINSIC_SWIZZLE_MASK"
 # Driver location of attribute
@@ -139,6 +141,10 @@ MEMORY_SCOPE = "NIR_INTRINSIC_MEMORY_SCOPE"
 # Scope of a control barrier
 EXECUTION_SCOPE = "NIR_INTRINSIC_EXECUTION_SCOPE"
 IO_SEMANTICS = "NIR_INTRINSIC_IO_SEMANTICS"
+# Rounding mode for conversions
+ROUNDING_MODE = "NIR_INTRINSIC_ROUNDING_MODE"
+# Whether or not to saturate in conversions
+SATURATE = "NIR_INTRINSIC_SATURATE"
 
 #
 # Possible flags:
@@ -167,6 +173,10 @@ def intrinsic(name, src_comp=[], dest_comp=-1, indices=[],
                                    indices, flags, sysval, bit_sizes)
 
 intrinsic("nop", flags=[CAN_ELIMINATE])
+
+intrinsic("convert_alu_types", dest_comp=0, src_comp=[0],
+          indices=[SRC_TYPE, DEST_TYPE, ROUNDING_MODE, SATURATE],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 intrinsic("load_param", dest_comp=0, indices=[PARAM_IDX], flags=[CAN_ELIMINATE])
 
@@ -199,6 +209,8 @@ intrinsic("deref_buffer_array_length", src_comp=[-1], dest_comp=1,
 # as source.
 intrinsic("get_ssbo_size", src_comp=[-1], dest_comp=1,
           flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("get_ubo_size", src_comp=[-1], dest_comp=1,
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # a barrier is an intrinsic with no inputs/outputs but which can't be moved
 # around/optimized in general
@@ -215,6 +227,9 @@ barrier("discard")
 # As specified by SPV_EXT_demote_to_helper_invocation.
 barrier("demote")
 intrinsic("is_helper_invocation", dest_comp=1, flags=[CAN_ELIMINATE])
+
+# SpvOpTerminateInvocation from SPIR-V.  Essentially a discard "for real".
+barrier("terminate")
 
 # A workgroup-level control barrier.  Any thread which hits this barrier will
 # pause until all threads within the current workgroup have also hit the
@@ -256,10 +271,11 @@ intrinsic("read_first_invocation", src_comp=[0], dest_comp=0, flags=[CAN_ELIMINA
 #
 # These correspond to the SPIR-V opcodes
 #
-#    OpGroupUniformElect
+#    OpGroupNonUniformElect
 #    OpSubgroupFirstInvocationKHR
 intrinsic("elect", dest_comp=1, flags=[CAN_ELIMINATE])
 intrinsic("first_invocation", dest_comp=1, flags=[CAN_ELIMINATE])
+intrinsic("last_invocation", dest_comp=1, flags=[CAN_ELIMINATE])
 
 # Memory barrier with semantics analogous to the compute shader
 # groupMemoryBarrier(), memoryBarrierAtomicCounter(), memoryBarrierBuffer(),
@@ -275,9 +291,10 @@ barrier("end_invocation_interlock")
 # Memory barrier for synchronizing TCS patch outputs
 barrier("memory_barrier_tcs_patch")
 
-# A conditional discard/demote, with a single boolean source.
+# A conditional discard/demote/terminate, with a single boolean source.
 intrinsic("discard_if", src_comp=[1])
 intrinsic("demote_if", src_comp=[1])
+intrinsic("terminate_if", src_comp=[1])
 
 # ARB_shader_group_vote intrinsics
 intrinsic("vote_any", src_comp=[1], dest_comp=1, flags=[CAN_ELIMINATE])
@@ -338,11 +355,14 @@ intrinsic("end_primitive", indices=[STREAM_ID])
 # Alternatively, drivers may implement these intrinsics, and use
 # nir_lower_gs_intrinsics() to convert from the basic intrinsics.
 #
-# These maintain a count of the number of vertices emitted, as an additional
-# unsigned integer source.
-intrinsic("emit_vertex_with_counter", src_comp=[1], indices=[STREAM_ID])
-intrinsic("end_primitive_with_counter", src_comp=[1], indices=[STREAM_ID])
-intrinsic("set_vertex_count", src_comp=[1])
+# These contain two additional unsigned integer sources:
+# 1. The total number of vertices emitted so far.
+# 2. The number of vertices emitted for the current primitive
+#    so far if we're counting, otherwise undef.
+intrinsic("emit_vertex_with_counter", src_comp=[1, 1], indices=[STREAM_ID])
+intrinsic("end_primitive_with_counter", src_comp=[1, 1], indices=[STREAM_ID])
+# Contains the final total vertex and primitive counts in the current GS thread.
+intrinsic("set_vertex_and_primitive_count", src_comp=[1, 1], indices=[STREAM_ID])
 
 # Atomic counters
 #
@@ -399,8 +419,8 @@ def image(name, src_comp=[], extra_indices=[], **kwargs):
     intrinsic("bindless_image_" + name, src_comp=[1] + src_comp,
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
 
-image("load", src_comp=[4, 1, 1], extra_indices=[TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
-image("store", src_comp=[4, 1, 0, 1], extra_indices=[TYPE])
+image("load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
+image("store", src_comp=[4, 1, 0, 1], extra_indices=[SRC_TYPE])
 image("atomic_add",  src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_imin",  src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_umin",  src_comp=[4, 1, 1], dest_comp=1)
@@ -603,7 +623,6 @@ system_value("base_work_group_id", 3, bit_sizes=[32, 64])
 system_value("user_clip_plane", 4, indices=[UCP_ID])
 system_value("num_work_groups", 3, bit_sizes=[32, 64])
 system_value("helper_invocation", 1, bit_sizes=[1, 32])
-system_value("alpha_ref_float", 1)
 system_value("layer_id", 1)
 system_value("view_index", 1)
 system_value("subgroup_size", 1)
@@ -746,15 +765,15 @@ def load(name, src_comp, indices=[], flags=[]):
               flags=flags)
 
 # src[] = { offset }.
-load("uniform", [1], [BASE, RANGE, TYPE], [CAN_ELIMINATE, CAN_REORDER])
+load("uniform", [1], [BASE, RANGE, DEST_TYPE], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { buffer_index, offset }.
 load("ubo", [-1, 1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET, RANGE_BASE, RANGE], flags=[CAN_ELIMINATE, CAN_REORDER])
 # src[] = { buffer_index, offset in vec4 units }
 load("ubo_vec4", [-1, 1], [ACCESS, COMPONENT], flags=[CAN_ELIMINATE, CAN_REORDER])
 # src[] = { offset }.
-load("input", [1], [BASE, COMPONENT, TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+load("input", [1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { vertex_id, offset }.
-load("input_vertex", [1, 1], [BASE, COMPONENT, TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
+load("input_vertex", [1, 1], [BASE, COMPONENT, DEST_TYPE, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { vertex, offset }.
 load("per_vertex_input", [1, 1], [BASE, COMPONENT, IO_SEMANTICS], [CAN_ELIMINATE, CAN_REORDER])
 # src[] = { barycoord, offset }.
@@ -794,7 +813,7 @@ def store(name, srcs, indices=[], flags=[]):
     intrinsic("store_" + name, [0] + srcs, indices=indices, flags=flags)
 
 # src[] = { value, offset }.
-store("output", [1], [BASE, WRMASK, COMPONENT, TYPE, IO_SEMANTICS])
+store("output", [1], [BASE, WRMASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
 # src[] = { value, vertex, offset }.
 store("per_vertex_output", [1, 1], [BASE, WRMASK, COMPONENT, IO_SEMANTICS])
 # src[] = { value, block_index, offset }
@@ -928,7 +947,7 @@ load("tlb_color_v3d", [1], [BASE, COMPONENT], [])
 #
 # src[] = { value, render_target }
 # BASE = sample index
-store("tlb_sample_color_v3d", [1], [BASE, COMPONENT, TYPE], [])
+store("tlb_sample_color_v3d", [1], [BASE, COMPONENT, SRC_TYPE], [])
 
 # V3D-specific intrinsic to load the number of layers attached to
 # the target framebuffer

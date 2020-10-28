@@ -628,7 +628,8 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
    prog_data->invocations = nir->info.gs.invocations;
 
    if (compiler->devinfo->gen >= 8)
-      prog_data->static_vertex_count = nir_gs_count_vertices(nir);
+      nir_gs_count_vertices_and_primitives(
+         nir, &prog_data->static_vertex_count, nullptr, 1u);
 
    if (compiler->devinfo->gen >= 7) {
       if (nir->info.gs.output_primitive == GL_POINTS) {
@@ -789,12 +790,6 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
     */
    if (compiler->devinfo->gen >= 7) {
       prog_data->base.urb_entry_size = ALIGN(output_size_bytes, 64) / 64;
-      /* On Cannonlake software shall not program an allocation size that
-       * specifies a size that is a multiple of 3 64B (512-bit) cachelines.
-       */
-      if (compiler->devinfo->gen == 10 &&
-          prog_data->base.urb_entry_size % 3 == 0)
-         prog_data->base.urb_entry_size++;
    } else {
       prog_data->base.urb_entry_size = ALIGN(output_size_bytes, 128) / 128;
    }
@@ -813,7 +808,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
    /* Now that prog_data setup is done, we are ready to actually compile the
     * program.
     */
-   if (unlikely(INTEL_DEBUG & DEBUG_GS)) {
+   if (INTEL_DEBUG & DEBUG_GS) {
       fprintf(stderr, "GS Input ");
       brw_print_vue_map(stderr, &c.input_vue_map);
       fprintf(stderr, "GS Output ");
@@ -829,7 +824,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
 
          fs_generator g(compiler, log_data, mem_ctx,
                         &prog_data->base.base, false, MESA_SHADER_GEOMETRY);
-         if (unlikely(INTEL_DEBUG & DEBUG_GS)) {
+         if (INTEL_DEBUG & DEBUG_GS) {
             const char *label =
                nir->info.label ? nir->info.label : "unnamed";
             char *name = ralloc_asprintf(mem_ctx, "%s geometry shader %s",
@@ -854,7 +849,7 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
        * dual object mode.
        */
       if (prog_data->invocations <= 1 &&
-          likely(!(INTEL_DEBUG & DEBUG_NO_DUAL_OBJECT_GS))) {
+          !(INTEL_DEBUG & DEBUG_NO_DUAL_OBJECT_GS)) {
          prog_data->base.dispatch_mode = DISPATCH_MODE_4X2_DUAL_OBJECT;
 
          brw::vec4_gs_visitor v(compiler, log_data, &c, prog_data, nir,

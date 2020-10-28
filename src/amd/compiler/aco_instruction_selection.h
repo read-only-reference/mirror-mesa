@@ -59,9 +59,9 @@ struct isel_context {
    nir_shader *shader;
    uint32_t constant_data_offset;
    Block *block;
-   std::unique_ptr<Temp[]> allocated;
+   uint32_t first_temp_id;
    std::unordered_map<unsigned, std::array<Temp,NIR_MAX_VEC_COMPONENTS>> allocated_vec;
-   Stage stage; /* Stage */
+   Stage stage;
    bool has_gfx10_wave64_bpermute = false;
    struct {
       bool has_branch;
@@ -93,7 +93,16 @@ struct isel_context {
    Temp persp_centroid, linear_centroid;
 
    /* GS inputs */
+   bool ngg_nogs_early_prim_export = false;
+   bool ngg_gs_early_alloc = false;
+   bool ngg_gs_known_vtxcnt[4] = {false, false, false, false};
    Temp gs_wave_id;
+   unsigned ngg_gs_emit_addr = 0;
+   unsigned ngg_gs_emit_vtx_bytes = 0;
+   unsigned ngg_gs_scratch_addr = 0;
+   unsigned ngg_gs_primflags_offset = 0;
+   int ngg_gs_const_vtxcnt[4];
+   int ngg_gs_const_prmcnt[4];
 
    /* VS output information */
    bool export_clip_dists;
@@ -131,11 +140,15 @@ inline void get_buffer_resource_flags(isel_context *ctx, nir_ssa_def *def, unsig
       /* global resources are considered aliasing with all other buffers and
        * buffer images */
       // TODO: only merge flags of resources which can really alias.
-   } else if (def->parent_instr->type == nir_instr_type_intrinsic) {
-      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(def->parent_instr);
-      if (intrin->intrinsic == nir_intrinsic_vulkan_resource_index) {
-         desc_set = nir_intrinsic_desc_set(intrin);
-         binding = nir_intrinsic_binding(intrin);
+   } else if (def->parent_instr->type == nir_instr_type_alu) {
+      nir_alu_instr* mov_instr = nir_instr_as_alu(def->parent_instr);
+      if (mov_instr->op == nir_op_mov && mov_instr->src[0].swizzle[0] == 0 &&
+          mov_instr->src[0].src.ssa->parent_instr->type == nir_instr_type_intrinsic) {
+         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(mov_instr->src[0].src.ssa->parent_instr);
+         if (intrin->intrinsic == nir_intrinsic_vulkan_resource_index) {
+            desc_set = nir_intrinsic_desc_set(intrin);
+            binding = nir_intrinsic_binding(intrin);
+         }
       }
    } else if (def->parent_instr->type == nir_instr_type_deref) {
       nir_deref_instr *deref = nir_instr_as_deref(def->parent_instr);

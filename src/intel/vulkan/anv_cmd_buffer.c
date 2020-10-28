@@ -390,9 +390,6 @@ VkResult anv_ResetCommandBuffer(
    case 9:                                         \
       gen9_##func(__VA_ARGS__);                    \
       break;                                       \
-   case 10:                                        \
-      gen10_##func(__VA_ARGS__);                   \
-      break;                                       \
    case 11:                                        \
       gen11_##func(__VA_ARGS__);                   \
       break;                                       \
@@ -975,12 +972,14 @@ void anv_CmdBindTransformFeedbackBuffersEXT(
 }
 
 enum isl_format
-anv_isl_format_for_descriptor_type(VkDescriptorType type)
+anv_isl_format_for_descriptor_type(const struct anv_device *device,
+                                   VkDescriptorType type)
 {
    switch (type) {
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
    case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
-      return ISL_FORMAT_R32G32B32A32_FLOAT;
+      return device->physical->compiler->indirect_ubos_use_sampler ?
+             ISL_FORMAT_R32G32B32A32_FLOAT : ISL_FORMAT_RAW;
 
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
    case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
@@ -1240,8 +1239,9 @@ anv_cmd_buffer_push_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
       anv_descriptor_set_layout_ref(layout);
       set->layout = layout;
    }
-   set->size = anv_descriptor_set_layout_size(layout);
+   set->size = anv_descriptor_set_layout_size(layout, 0);
    set->buffer_view_count = layout->buffer_view_count;
+   set->descriptor_count = layout->descriptor_count;
    set->buffer_views = (*push_set)->buffer_views;
 
    if (layout->descriptor_buffer_size &&
@@ -1265,13 +1265,17 @@ anv_cmd_buffer_push_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
          .offset = set->desc_mem.offset,
       };
 
+      enum isl_format format =
+         anv_isl_format_for_descriptor_type(cmd_buffer->device,
+                                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+
       const struct isl_device *isl_dev = &cmd_buffer->device->isl_dev;
       set->desc_surface_state =
          anv_state_stream_alloc(&cmd_buffer->surface_state_stream,
                                 isl_dev->ss.size, isl_dev->ss.align);
       anv_fill_buffer_surface_state(cmd_buffer->device,
-                                    set->desc_surface_state,
-                                    ISL_FORMAT_R32G32B32A32_FLOAT,
+                                    set->desc_surface_state, format,
+                                    ISL_SURF_USAGE_CONSTANT_BUFFER_BIT,
                                     addr, layout->descriptor_buffer_size, 1);
    }
 

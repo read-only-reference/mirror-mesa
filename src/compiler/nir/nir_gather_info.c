@@ -337,6 +337,12 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
          shader->info.fs.uses_discard = true;
       break;
 
+   case nir_intrinsic_terminate:
+   case nir_intrinsic_terminate_if:
+      assert(shader->info.stage == MESA_SHADER_FRAGMENT);
+      shader->info.fs.uses_discard = true;
+      break;
+
    case nir_intrinsic_interp_deref_at_centroid:
    case nir_intrinsic_interp_deref_at_sample:
    case nir_intrinsic_interp_deref_at_offset:
@@ -433,6 +439,12 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
          shader->info.fs.color_is_dual_source = true;
       break;
 
+   case nir_intrinsic_load_color0:
+   case nir_intrinsic_load_color1:
+      shader->info.inputs_read |=
+         BITFIELD64_BIT(VARYING_SLOT_COL0 <<
+                        (instr->intrinsic == nir_intrinsic_load_color1));
+      /* fall through */
    case nir_intrinsic_load_subgroup_size:
    case nir_intrinsic_load_subgroup_invocation:
    case nir_intrinsic_load_subgroup_eq_mask:
@@ -459,8 +471,6 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
    case nir_intrinsic_load_sample_pos:
    case nir_intrinsic_load_sample_mask_in:
    case nir_intrinsic_load_helper_invocation:
-   case nir_intrinsic_load_color0:
-   case nir_intrinsic_load_color1:
    case nir_intrinsic_load_tess_coord:
    case nir_intrinsic_load_patch_vertices_in:
    case nir_intrinsic_load_primitive_id:

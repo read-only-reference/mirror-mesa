@@ -726,6 +726,16 @@ dri2_update_tex_buffer(struct dri_drawable *drawable,
    /* no-op */
 }
 
+static const struct dri2_format_mapping r8_g8b8_mapping = {
+   DRM_FORMAT_NV12,
+   __DRI_IMAGE_FORMAT_NONE,
+   __DRI_IMAGE_COMPONENTS_Y_UV,
+   PIPE_FORMAT_R8_G8B8_420_UNORM,
+   2,
+   { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
+     { 1, 1, 1, __DRI_IMAGE_FORMAT_GR88, 2 } }
+};
+
 static __DRIimage *
 dri2_create_image_from_winsys(__DRIscreen *_screen,
                               int width, int height, const struct dri2_format_mapping *map,
@@ -747,6 +757,14 @@ dri2_create_image_from_winsys(__DRIscreen *_screen,
    if (pscreen->is_format_supported(pscreen, map->pipe_format, screen->target, 0, 0,
                                     PIPE_BIND_SAMPLER_VIEW))
       tex_usage |= PIPE_BIND_SAMPLER_VIEW;
+
+   /* For NV12, see if we have support for sampling r8_b8g8 */
+   if (!tex_usage && map->pipe_format == PIPE_FORMAT_NV12 &&
+       pscreen->is_format_supported(pscreen, PIPE_FORMAT_R8_G8B8_420_UNORM,
+                                    screen->target, 0, 0, PIPE_BIND_SAMPLER_VIEW)) {
+      map = &r8_g8b8_mapping;
+      tex_usage |= PIPE_BIND_SAMPLER_VIEW;
+   }
 
    if (!tex_usage && util_format_is_yuv(map->pipe_format)) {
       /* YUV format sampling can be emulated by the GL gallium frontend by
@@ -971,14 +989,23 @@ dri2_create_image_common(__DRIscreen *_screen,
 {
    const struct dri2_format_mapping *map = dri2_get_mapping_by_format(format);
    struct dri_screen *screen = dri_screen(_screen);
+   struct pipe_screen *pscreen = screen->base.screen;
    __DRIimage *img;
    struct pipe_resource templ;
-   unsigned tex_usage;
+   unsigned tex_usage = 0;
 
    if (!map)
       return NULL;
 
-   tex_usage = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW;
+   if (pscreen->is_format_supported(pscreen, map->pipe_format, screen->target,
+                                    0, 0, PIPE_BIND_RENDER_TARGET))
+      tex_usage |= PIPE_BIND_RENDER_TARGET;
+   if (pscreen->is_format_supported(pscreen, map->pipe_format, screen->target,
+                                    0, 0, PIPE_BIND_SAMPLER_VIEW))
+      tex_usage |= PIPE_BIND_SAMPLER_VIEW;
+
+   if (!tex_usage)
+      return NULL;
 
    if (use & __DRI_IMAGE_USE_SCANOUT)
       tex_usage |= PIPE_BIND_SCANOUT;
@@ -1095,9 +1122,11 @@ dri2_query_image_by_resource_handle(__DRIimage *image, int attrib, int *value)
 {
    struct pipe_screen *pscreen = image->texture->screen;
    struct winsys_handle whandle;
+   struct pipe_resource *tex;
    unsigned usage;
    memset(&whandle, 0, sizeof(whandle));
    whandle.plane = image->plane;
+   int i;
 
    switch (attrib) {
    case __DRI_IMAGE_ATTRIB_STRIDE:
@@ -1112,7 +1141,9 @@ dri2_query_image_by_resource_handle(__DRIimage *image, int attrib, int *value)
       whandle.type = WINSYS_HANDLE_TYPE_FD;
       break;
    case __DRI_IMAGE_ATTRIB_NUM_PLANES:
-      *value = 1;
+      for (i = 0, tex = image->texture; tex; tex = tex->next)
+         i++;
+      *value = i;
       return true;
    case __DRI_IMAGE_ATTRIB_MODIFIER_UPPER:
    case __DRI_IMAGE_ATTRIB_MODIFIER_LOWER:
@@ -1348,15 +1379,25 @@ static __DRIimage *
 dri2_from_planar(__DRIimage *image, int plane, void *loaderPrivate)
 {
    __DRIimage *img;
+   struct pipe_resource *tex = image->texture;
+   int i;
 
    if (plane < 0) {
       return NULL;
    } else if (plane > 0) {
       uint64_t planes;
-      if (!dri2_resource_get_param(image, PIPE_RESOURCE_PARAM_NPLANES, 0,
-                                   &planes) ||
+      if (dri2_resource_get_param(image, PIPE_RESOURCE_PARAM_NPLANES, 0,
+                                  &planes) &&
           plane >= planes) {
          return NULL;
+      }
+   }
+
+   if (tex->next) {
+      for (i = 0; i < plane; i++) {
+         tex = tex->next;
+         if (!tex)
+            return NULL;
       }
    }
 
@@ -1372,6 +1413,8 @@ dri2_from_planar(__DRIimage *image, int plane, void *loaderPrivate)
    img = dri2_dup_image(image, loaderPrivate);
    if (img == NULL)
       return NULL;
+
+   pipe_resource_reference(&img->texture, tex);
 
    if (img->texture->screen->resource_changed)
       img->texture->screen->resource_changed(img->texture->screen,
@@ -2000,16 +2043,33 @@ dri2GalliumConfigQueryf(__DRIscreen *sPriv, const char *var, float *val)
 }
 
 /**
+ * \brief the DRI2ConfigQueryExtension configQuerys method
+ */
+static int
+dri2GalliumConfigQuerys(__DRIscreen *sPriv, const char *var, char **val)
+{
+   struct dri_screen *screen = dri_screen(sPriv);
+
+   if (!driCheckOption(&screen->dev->option_cache, var, DRI_STRING))
+      return dri2ConfigQueryExtension.configQuerys(sPriv, var, val);
+
+    *val = driQueryOptionstr(&screen->dev->option_cache, var);
+
+    return 0;
+}
+
+/**
  * \brief the DRI2ConfigQueryExtension struct.
  *
  * We first query the driver option cache. Then the dri2 option cache.
  */
 static const __DRI2configQueryExtension dri2GalliumConfigQueryExtension = {
-   .base = { __DRI2_CONFIG_QUERY, 1 },
+   .base = { __DRI2_CONFIG_QUERY, 2 },
 
    .configQueryb        = dri2GalliumConfigQueryb,
    .configQueryi        = dri2GalliumConfigQueryi,
    .configQueryf        = dri2GalliumConfigQueryf,
+   .configQuerys        = dri2GalliumConfigQuerys,
 };
 
 /**

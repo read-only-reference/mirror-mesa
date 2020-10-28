@@ -1164,18 +1164,36 @@ static void si_pipe_set_constant_buffer(struct pipe_context *ctx, enum pipe_shad
    if (shader >= SI_NUM_SHADERS)
       return;
 
-   if (slot == 0 && input && input->buffer &&
-       !(si_resource(input->buffer)->flags & RADEON_FLAG_32BIT)) {
-      assert(!"constant buffer 0 must have a 32-bit VM address, use const_uploader");
-      return;
-   }
+   if (input) {
+      if (input->buffer) {
+         if (slot == 0 &&
+             !(si_resource(input->buffer)->flags & RADEON_FLAG_32BIT)) {
+            assert(!"constant buffer 0 must have a 32-bit VM address, use const_uploader");
+            return;
+         }
+         si_resource(input->buffer)->bind_history |= PIPE_BIND_CONSTANT_BUFFER;
+      }
 
-   if (input && input->buffer)
-      si_resource(input->buffer)->bind_history |= PIPE_BIND_CONSTANT_BUFFER;
+      if (slot == 0) {
+         /* Invalidate current inlinable uniforms. */
+         sctx->inlinable_uniforms_valid_mask &= ~(1 << shader);
+      }
+   }
 
    slot = si_get_constbuf_slot(slot);
    si_set_constant_buffer(sctx, &sctx->const_and_shader_buffers[shader],
                           si_const_and_shader_buffer_descriptors_idx(shader), slot, input);
+}
+
+static void si_set_inlinable_constants(struct pipe_context *ctx,
+                                       enum pipe_shader_type shader,
+                                       uint num_values, uint32_t *values)
+{
+   struct si_context *sctx = (struct si_context *)ctx;
+
+   memcpy(sctx->inlinable_uniforms[shader], values, num_values * 4);
+   sctx->inlinable_uniforms_dirty_mask |= 1 << shader;
+   sctx->inlinable_uniforms_valid_mask |= 1 << shader;
 }
 
 void si_get_pipe_constant_buffer(struct si_context *sctx, uint shader, uint slot,
@@ -2584,6 +2602,7 @@ void si_init_all_descriptors(struct si_context *sctx)
    sctx->b.bind_sampler_states = si_bind_sampler_states;
    sctx->b.set_shader_images = si_set_shader_images;
    sctx->b.set_constant_buffer = si_pipe_set_constant_buffer;
+   sctx->b.set_inlinable_constants = si_set_inlinable_constants;
    sctx->b.set_shader_buffers = si_set_shader_buffers;
    sctx->b.set_sampler_views = si_set_sampler_views;
    sctx->b.create_texture_handle = si_create_texture_handle;

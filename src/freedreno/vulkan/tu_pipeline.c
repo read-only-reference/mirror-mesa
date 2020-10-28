@@ -686,7 +686,7 @@ tu6_setup_streamout(struct tu_cs *cs,
 static void
 tu6_emit_const(struct tu_cs *cs, uint32_t opcode, uint32_t base,
                enum a6xx_state_block block, uint32_t offset,
-               uint32_t size, uint32_t *dwords) {
+               uint32_t size, const uint32_t *dwords) {
    assert(size % 4 == 0);
 
    tu_cs_emit_pkt7(cs, opcode, 3 + size);
@@ -711,16 +711,14 @@ tu6_emit_link_map(struct tu_cs *cs,
 {
    const struct ir3_const_state *const_state = ir3_const_state(consumer);
    uint32_t base = const_state->offsets.primitive_map;
-   uint32_t patch_locs[MAX_VARYING] = { }, num_loc;
-   num_loc = ir3_link_geometry_stages(producer, consumer, patch_locs);
-   int size = DIV_ROUND_UP(num_loc, 4);
+   int size = DIV_ROUND_UP(consumer->input_size, 4);
 
    size = (MIN2(size + base, consumer->constlen) - base) * 4;
    if (size <= 0)
       return;
 
    tu6_emit_const(cs, CP_LOAD_STATE6_GEOM, base, sb, 0, size,
-                         patch_locs);
+                         producer->output_loc);
 }
 
 static uint16_t
@@ -805,7 +803,11 @@ tu6_emit_vpc(struct tu_cs *cs,
 
    const struct reg_config *cfg = &reg_config[last_shader->type];
 
-   struct ir3_shader_linkage linkage = { .primid_loc = 0xff };
+   struct ir3_shader_linkage linkage = {
+      .primid_loc = 0xff,
+      .clip0_loc = 0xff,
+      .clip1_loc = 0xff,
+   };
    if (fs)
       ir3_link_shaders(&linkage, last_shader, fs, true);
 
@@ -831,6 +833,10 @@ tu6_emit_vpc(struct tu_cs *cs,
       ir3_find_output_regid(last_shader, VARYING_SLOT_LAYER);
    const uint32_t view_regid =
       ir3_find_output_regid(last_shader, VARYING_SLOT_VIEWPORT);
+   const uint32_t clip0_regid =
+      ir3_find_output_regid(last_shader, VARYING_SLOT_CLIP_DIST0);
+   const uint32_t clip1_regid =
+      ir3_find_output_regid(last_shader, VARYING_SLOT_CLIP_DIST1);
    uint32_t primitive_regid = gs ?
       ir3_find_sysval_regid(gs, SYSTEM_VALUE_PRIMITIVE_ID) : regid(63, 0);
    uint32_t flags_regid = gs ?
@@ -865,6 +871,19 @@ tu6_emit_vpc(struct tu_cs *cs,
    if (pointsize_regid != regid(63, 0)) {
       pointsize_loc = linkage.max_loc;
       ir3_link_add(&linkage, pointsize_regid, 0x1, linkage.max_loc);
+   }
+
+   uint8_t clip_cull_mask = last_shader->clip_mask | last_shader->cull_mask;
+
+   /* Handle the case where clip/cull distances aren't read by the FS */
+   uint32_t clip0_loc = linkage.clip0_loc, clip1_loc = linkage.clip1_loc;
+   if (clip0_loc == 0xff && clip0_regid != regid(63, 0)) {
+      clip0_loc = linkage.max_loc;
+      ir3_link_add(&linkage, clip0_regid, clip_cull_mask & 0xf, linkage.max_loc);
+   }
+   if (clip1_loc == 0xff && clip1_regid != regid(63, 0)) {
+      clip1_loc = linkage.max_loc;
+      ir3_link_add(&linkage, clip1_regid, clip_cull_mask >> 4, linkage.max_loc);
    }
 
    tu6_setup_streamout(cs, last_shader, &linkage);
@@ -904,17 +923,21 @@ tu6_emit_vpc(struct tu_cs *cs,
                   A6XX_VPC_VS_PACK_EXTRAPOS(extra_pos));
 
    tu_cs_emit_pkt4(cs, cfg->reg_vpc_xs_clip_cntl, 1);
-   tu_cs_emit(cs, 0xffff00);
+   tu_cs_emit(cs, A6XX_VPC_VS_CLIP_CNTL_CLIP_MASK(clip_cull_mask) |
+                  A6XX_VPC_VS_CLIP_CNTL_CLIP_DIST_03_LOC(clip0_loc) |
+                  A6XX_VPC_VS_CLIP_CNTL_CLIP_DIST_47_LOC(clip1_loc));
 
    tu_cs_emit_pkt4(cs, cfg->reg_gras_xs_cl_cntl, 1);
-   tu_cs_emit(cs, 0);
+   tu_cs_emit(cs, A6XX_GRAS_VS_CL_CNTL_CLIP_MASK(last_shader->clip_mask) |
+                  A6XX_GRAS_VS_CL_CNTL_CULL_MASK(last_shader->cull_mask));
 
    tu_cs_emit_pkt4(cs, cfg->reg_pc_xs_out_cntl, 1);
    tu_cs_emit(cs, A6XX_PC_VS_OUT_CNTL_STRIDE_IN_VPC(linkage.max_loc) |
                   CONDREG(pointsize_regid, A6XX_PC_VS_OUT_CNTL_PSIZE) |
                   CONDREG(layer_regid, A6XX_PC_VS_OUT_CNTL_LAYER) |
                   CONDREG(view_regid, A6XX_PC_VS_OUT_CNTL_VIEW) |
-                  CONDREG(primitive_regid, A6XX_PC_VS_OUT_CNTL_PRIMITIVE_ID));
+                  CONDREG(primitive_regid, A6XX_PC_VS_OUT_CNTL_PRIMITIVE_ID) |
+                  A6XX_PC_VS_OUT_CNTL_CLIP_MASK(clip_cull_mask));
 
    tu_cs_emit_pkt4(cs, cfg->reg_sp_xs_primitive_cntl, 1);
    tu_cs_emit(cs, A6XX_SP_VS_PRIMITIVE_CNTL_OUT(linkage.cnt) |
@@ -2054,6 +2077,7 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
 
    key.layer_zero = !(outputs_written & VARYING_BIT_LAYER);
    key.view_zero = !(outputs_written & VARYING_BIT_VIEWPORT);
+   key.ucp_enables = MASK(last_shader->ir3_shader->nir->info.clip_distance_array_size);
 
    pipeline->tess.patch_type = key.tessellation;
 
@@ -2495,6 +2519,58 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
       tu_cs_emit_regs(&cs, A6XX_RB_STENCILREF(.ref = ds_info->front.reference & 0xff,
                                               .bfref = ds_info->back.reference & 0xff));
    }
+
+   if (ds_info->depthTestEnable) {
+      pipeline->lrz.write = ds_info->depthWriteEnable;
+      pipeline->lrz.invalidate = false;
+      pipeline->lrz.z_test_enable = true;
+
+      /* LRZ does not support some depth modes.
+       *
+       * The HW has a flag for GREATER and GREATER_OR_EQUAL modes which is used
+       * in freedreno, however there are some dEQP-VK tests that fail if we use here.
+       * Furthermore, blob disables LRZ on these comparison opcodes too.
+       *
+       * TODO: investigate if we can enable GREATER flag here.
+       */
+      switch(ds_info->depthCompareOp) {
+      case VK_COMPARE_OP_ALWAYS:
+      case VK_COMPARE_OP_NOT_EQUAL:
+      case VK_COMPARE_OP_GREATER:
+      case VK_COMPARE_OP_GREATER_OR_EQUAL:
+         pipeline->lrz.invalidate = true;
+         pipeline->lrz.write = false;
+         break;
+      case VK_COMPARE_OP_EQUAL:
+      case VK_COMPARE_OP_NEVER:
+         pipeline->lrz.enable = true;
+         pipeline->lrz.write = false;
+         break;
+      case VK_COMPARE_OP_LESS:
+      case VK_COMPARE_OP_LESS_OR_EQUAL:
+         pipeline->lrz.enable = true;
+         break;
+      default:
+         unreachable("bad VK_COMPARE_OP value");
+         break;
+      };
+   }
+
+   if (ds_info->stencilTestEnable) {
+      pipeline->lrz.write = false;
+      pipeline->lrz.invalidate = true;
+   }
+
+   if (builder->shaders[MESA_SHADER_FRAGMENT]) {
+      const struct ir3_shader_variant *fs = &builder->shaders[MESA_SHADER_FRAGMENT]->ir3_shader->variants[0];
+      if (fs->has_kill || fs->no_earlyz || fs->writes_pos) {
+         pipeline->lrz.write = false;
+      }
+      if (fs->no_earlyz || fs->writes_pos) {
+         pipeline->lrz.enable = false;
+         pipeline->lrz.z_test_enable = false;
+      }
+   }
 }
 
 static void
@@ -2540,6 +2616,24 @@ tu_pipeline_builder_parse_multisample_and_color_blend(
                           builder->use_dual_src_blend, msaa_info);
 
    assert(cs.cur == cs.end); /* validate draw state size */
+
+   if (blend_enable_mask) {
+      for (int i = 0; i < blend_info->attachmentCount; i++) {
+         VkPipelineColorBlendAttachmentState blendAttachment = blend_info->pAttachments[i];
+         /* Disable LRZ writes when blend is enabled, since the
+          * resulting pixel value from the blend-draw
+          * depends on an earlier draw, which LRZ in the draw pass
+          * could early-reject if the previous blend-enabled draw wrote LRZ.
+          *
+          * From the PoV of LRZ, having masked color channels is
+          * the same as having blend enabled, in that the draw will
+          * care about the fragments from an earlier draw.
+          */
+         if (blendAttachment.blendEnable || blendAttachment.colorWriteMask != 0xf) {
+            pipeline->lrz.blend_disable_write = true;
+         }
+      }
+   }
 
    if (tu_pipeline_static_state(pipeline, &cs, VK_DYNAMIC_STATE_BLEND_CONSTANTS, 5)) {
       tu_cs_emit_pkt4(&cs, REG_A6XX_RB_BLEND_RED_F32, 4);

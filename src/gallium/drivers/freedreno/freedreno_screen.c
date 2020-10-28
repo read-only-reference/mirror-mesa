@@ -461,6 +461,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return fd_device_version(screen->dev) >= FD_VERSION_FENCE_FD;
 	case PIPE_CAP_FENCE_SIGNAL:
 		return screen->has_syncobj;
+	case PIPE_CAP_CULL_DISTANCE:
+		return is_a6xx(screen);
 	default:
 		return u_pipe_screen_get_param_defaults(pscreen, param);
 	}
@@ -990,21 +992,7 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 		goto fail;
 	}
 
-	if (screen->gpu_id >= 600) {
-		screen->gmem_alignw = 16;
-		screen->gmem_alignh = 4;
-		screen->tile_alignw = is_a650(screen) ? 96 : 32;
-		screen->tile_alignh = 32;
-		screen->num_vsc_pipes = 32;
-	} else if (screen->gpu_id >= 500) {
-		screen->gmem_alignw = screen->tile_alignw = 64;
-		screen->gmem_alignh = screen->tile_alignh = 32;
-		screen->num_vsc_pipes = 16;
-	} else {
-		screen->gmem_alignw = screen->tile_alignw = 32;
-		screen->gmem_alignh = screen->tile_alignh = 32;
-		screen->num_vsc_pipes = 8;
-	}
+	fd_gmem_init_limits(pscreen);
 
 	if (fd_mesa_debug & FD_DBG_PERFC) {
 		screen->perfcntr_groups = fd_perfcntrs(screen->gpu_id,

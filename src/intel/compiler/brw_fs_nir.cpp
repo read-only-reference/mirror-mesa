@@ -3149,7 +3149,7 @@ fs_visitor::nir_emit_gs_intrinsic(const fs_builder &bld,
       emit_gs_end_primitive(instr->src[0]);
       break;
 
-   case nir_intrinsic_set_vertex_count:
+   case nir_intrinsic_set_vertex_and_primitive_count:
       bld.MOV(this->final_gs_vertex_count, get_nir_src(instr->src[0]));
       break;
 
@@ -3427,8 +3427,10 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
 
    case nir_intrinsic_demote:
    case nir_intrinsic_discard:
+   case nir_intrinsic_terminate:
    case nir_intrinsic_demote_if:
-   case nir_intrinsic_discard_if: {
+   case nir_intrinsic_discard_if:
+   case nir_intrinsic_terminate_if: {
       /* We track our discarded pixels in f0.1/f1.0.  By predicating on it, we
        * can update just the flag bits that aren't yet discarded.  If there's
        * no condition, we emit a CMP of g0 != g0, so all currently executing
@@ -3436,7 +3438,8 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
        */
       fs_inst *cmp = NULL;
       if (instr->intrinsic == nir_intrinsic_demote_if ||
-          instr->intrinsic == nir_intrinsic_discard_if) {
+          instr->intrinsic == nir_intrinsic_discard_if ||
+          instr->intrinsic == nir_intrinsic_terminate_if) {
          nir_alu_instr *alu = nir_src_as_alu_instr(instr->src[0]);
 
          if (alu != NULL &&
@@ -3492,7 +3495,19 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
       cmp->predicate = BRW_PREDICATE_NORMAL;
       cmp->flag_subreg = sample_mask_flag_subreg(this);
 
-      emit_discard_jump();
+      fs_inst *jump = bld.emit(FS_OPCODE_DISCARD_JUMP);
+      jump->flag_subreg = sample_mask_flag_subreg(this);
+      jump->predicate_inverse = true;
+
+      if (instr->intrinsic == nir_intrinsic_terminate ||
+          instr->intrinsic == nir_intrinsic_terminate_if) {
+         jump->predicate = BRW_PREDICATE_NORMAL;
+      } else {
+         /* Only jump when the whole quad is demoted.  For historical
+          * reasons this is also used for discard.
+          */
+         jump->predicate = BRW_PREDICATE_ALIGN1_ANY4H;
+      }
 
       if (devinfo->gen < 7)
          limit_dispatch_width(
@@ -3990,18 +4005,16 @@ fs_visitor::get_nir_ssbo_intrinsic_index(const brw::fs_builder &bld,
    /* SSBO stores are weird in that their index is in src[1] */
    const unsigned src = instr->intrinsic == nir_intrinsic_store_ssbo ? 1 : 0;
 
-   fs_reg surf_index;
    if (nir_src_is_const(instr->src[src])) {
       unsigned index = stage_prog_data->binding_table.ssbo_start +
                        nir_src_as_uint(instr->src[src]);
-      surf_index = brw_imm_ud(index);
+      return brw_imm_ud(index);
    } else {
-      surf_index = vgrf(glsl_type::uint_type);
+      fs_reg surf_index = vgrf(glsl_type::uint_type);
       bld.ADD(surf_index, get_nir_src(instr->src[src]),
               brw_imm_ud(stage_prog_data->binding_table.ssbo_start));
+      return bld.emit_uniformize(surf_index);
    }
-
-   return bld.emit_uniformize(surf_index);
 }
 
 /**
@@ -4501,7 +4514,8 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
          for (int i = 0; i < instr->num_components; i++)
             VARYING_PULL_CONSTANT_LOAD(bld, offset(dest, bld, i), surf_index,
-                                       base_offset, i * type_sz(dest.type));
+                                       base_offset, i * type_sz(dest.type),
+                                       nir_dest_bit_size(instr->dest) / 8);
 
          prog_data->has_ubo_pull = true;
       } else {

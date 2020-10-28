@@ -672,7 +672,7 @@ nir_is_non_scalar_swizzle(nir_alu_src *src, unsigned nr_components)
                 roundmode = MIDGARD_RTZ; \
 		break;
 
-#define ALU_CHECK_CMP(sext) \
+#define ALU_CHECK_CMP() \
                 assert(src_bitsize == 16 || src_bitsize == 32); \
                 assert(dst_bitsize == 16 || dst_bitsize == 32); \
 
@@ -680,14 +680,14 @@ nir_is_non_scalar_swizzle(nir_alu_src *src, unsigned nr_components)
         case nir_op_##nir: \
                 op = midgard_alu_op_##_op; \
                 broadcast_swizzle = count; \
-                ALU_CHECK_CMP(true); \
+                ALU_CHECK_CMP(); \
                 break;
 
-#define ALU_CASE_CMP(nir, _op, sext) \
+#define ALU_CASE_CMP(nir, _op) \
 	case nir_op_##nir: \
 		op = midgard_alu_op_##_op; \
-                ALU_CHECK_CMP(sext); \
-                 break;
+                ALU_CHECK_CMP(); \
+                break;
 
 /* Compare mir_lower_invert */
 static bool
@@ -900,15 +900,18 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                 /* Zero shoved as second-arg */
                 ALU_CASE(iabs, iabsdiff);
 
+                ALU_CASE(uabs_isub, iabsdiff);
+                ALU_CASE(uabs_usub, uabsdiff);
+
                 ALU_CASE(mov, imov);
 
-                ALU_CASE_CMP(feq32, feq, false);
-                ALU_CASE_CMP(fneu32, fne, false);
-                ALU_CASE_CMP(flt32, flt, false);
-                ALU_CASE_CMP(ieq32, ieq, true);
-                ALU_CASE_CMP(ine32, ine, true);
-                ALU_CASE_CMP(ilt32, ilt, true);
-                ALU_CASE_CMP(ult32, ult, false);
+                ALU_CASE_CMP(feq32, feq);
+                ALU_CASE_CMP(fneu32, fne);
+                ALU_CASE_CMP(flt32, flt);
+                ALU_CASE_CMP(ieq32, ieq);
+                ALU_CASE_CMP(ine32, ine);
+                ALU_CASE_CMP(ilt32, ilt);
+                ALU_CASE_CMP(ult32, ult);
 
                 /* We don't have a native b2f32 instruction. Instead, like many
                  * GPUs, we exploit booleans as 0/~0 for false/true, and
@@ -921,15 +924,15 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                  * At the end of emit_alu (as MIR), we'll fix-up the constant
                  */
 
-                ALU_CASE_CMP(b2f32, iand, true);
-                ALU_CASE_CMP(b2f16, iand, true);
-                ALU_CASE_CMP(b2i32, iand, true);
+                ALU_CASE_CMP(b2f32, iand);
+                ALU_CASE_CMP(b2f16, iand);
+                ALU_CASE_CMP(b2i32, iand);
 
                 /* Likewise, we don't have a dedicated f2b32 instruction, but
                  * we can do a "not equal to 0.0" test. */
 
-                ALU_CASE_CMP(f2b32, fne, false);
-                ALU_CASE_CMP(i2b32, ine, true);
+                ALU_CASE_CMP(f2b32, fne);
+                ALU_CASE_CMP(i2b32, ine);
 
                 ALU_CASE(frcp, frcp);
                 ALU_CASE(frsq, frsqrt);
@@ -970,19 +973,19 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
 
                 ALU_CASE_BCAST(b32all_fequal2, fball_eq, 2);
                 ALU_CASE_BCAST(b32all_fequal3, fball_eq, 3);
-                ALU_CASE_CMP(b32all_fequal4, fball_eq, true);
+                ALU_CASE_CMP(b32all_fequal4, fball_eq);
 
                 ALU_CASE_BCAST(b32any_fnequal2, fbany_neq, 2);
                 ALU_CASE_BCAST(b32any_fnequal3, fbany_neq, 3);
-                ALU_CASE_CMP(b32any_fnequal4, fbany_neq, true);
+                ALU_CASE_CMP(b32any_fnequal4, fbany_neq);
 
                 ALU_CASE_BCAST(b32all_iequal2, iball_eq, 2);
                 ALU_CASE_BCAST(b32all_iequal3, iball_eq, 3);
-                ALU_CASE_CMP(b32all_iequal4, iball_eq, true);
+                ALU_CASE_CMP(b32all_iequal4, iball_eq);
 
                 ALU_CASE_BCAST(b32any_inequal2, ibany_neq, 2);
                 ALU_CASE_BCAST(b32any_inequal3, ibany_neq, 3);
-                ALU_CASE_CMP(b32any_inequal4, ibany_neq, true);
+                ALU_CASE_CMP(b32any_inequal4, ibany_neq);
 
                 /* Source mods will be shoved in later */
                 ALU_CASE(fabs, fmov);
@@ -1033,7 +1036,7 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                         0;
 
                 flip_src12 = true;
-                ALU_CHECK_CMP(false);
+                ALU_CHECK_CMP();
                 break;
         }
 
@@ -1736,7 +1739,7 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 nir_alu_type t =
                         (is_ubo || is_global || is_shared) ? nir_type_uint :
                         (is_interp) ? nir_type_float :
-                        nir_intrinsic_type(instr);
+                        nir_intrinsic_dest_type(instr);
 
                 t = nir_alu_type_get_base_type(t);
 
@@ -1861,12 +1864,9 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 assert(ctx->is_blend);
                 reg = nir_dest_index(&instr->dest);
 
-                /* Blend constants are embedded directly in the shader and
-                 * patched in, so we use some magic routing */
-
                 midgard_instruction ins = v_mov(SSA_FIXED_REGISTER(REGISTER_CONSTANT), reg);
                 ins.has_constants = true;
-                ins.has_blend_constant = true;
+                memcpy(ins.constants.f32, ctx->blend_constants, sizeof(ctx->blend_constants));
                 emit_mir_instruction(ctx, ins);
                 break;
         }
@@ -1948,7 +1948,7 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                         st.load_store.arg_1 = 0x9E;
                         st.load_store.arg_2 = 0x1E;
 
-                        switch (nir_alu_type_get_base_type(nir_intrinsic_type(instr))) {
+                        switch (nir_alu_type_get_base_type(nir_intrinsic_src_type(instr))) {
                         case nir_type_uint:
                         case nir_type_bool:
                                 st.op = midgard_op_st_vary_32u;
@@ -2540,9 +2540,6 @@ embedded_to_inline_constant(compiler_context *ctx, midgard_block *block)
                 if (!ins->has_constants) continue;
                 if (ins->has_inline_constant) continue;
 
-                /* Blend constants must not be inlined by definition */
-                if (ins->has_blend_constant) continue;
-
                 unsigned max_bitsize = max_bitsize_for_alu(ins);
 
                 /* We can inline 32-bit (sometimes) or 16-bit (usually) */
@@ -2945,9 +2942,12 @@ mir_add_writeout_loops(compiler_context *ctx)
         }
 }
 
-int
-midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_blend, unsigned blend_rt, unsigned gpu_id, bool shaderdb)
+panfrost_program *
+midgard_compile_shader_nir(void *mem_ctx, nir_shader *nir,
+                           const struct panfrost_compile_inputs *inputs)
 {
+        panfrost_program *program = rzalloc(mem_ctx, panfrost_program);
+
         struct util_dynarray *compiled = &program->compiled;
 
         midgard_debug = debug_get_option_midgard_debug();
@@ -2957,11 +2957,12 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
 
         ctx->nir = nir;
         ctx->stage = nir->info.stage;
-        ctx->is_blend = is_blend;
-        ctx->blend_rt = MIDGARD_COLOR_RT0 + blend_rt;
+        ctx->is_blend = inputs->is_blend;
+        ctx->blend_rt = MIDGARD_COLOR_RT0 + inputs->blend.rt;
+        memcpy(ctx->blend_constants, inputs->blend.constants, sizeof(ctx->blend_constants));
         ctx->blend_input = ~0;
         ctx->blend_src1 = ~0;
-        ctx->quirks = midgard_get_quirks(gpu_id);
+        ctx->quirks = midgard_get_quirks(inputs->gpu_id);
 
         /* Start off with a safe cutoff, allowing usage of all 16 work
          * registers. Later, we'll promote uniform reads to uniform registers
@@ -2991,9 +2992,9 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
         NIR_PASS_V(nir, nir_lower_var_copies);
         NIR_PASS_V(nir, nir_lower_vars_to_ssa);
 
-        unsigned pan_quirks = panfrost_get_quirks(gpu_id);
+        unsigned pan_quirks = panfrost_get_quirks(inputs->gpu_id);
         NIR_PASS_V(nir, pan_lower_framebuffer,
-                   program->rt_formats, is_blend, pan_quirks);
+                   inputs->rt_formats, inputs->is_blend, pan_quirks);
 
         NIR_PASS_V(nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out,
                         glsl_type_size, 0);
@@ -3002,7 +3003,7 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
 
         /* Optimisation passes */
 
-        optimise_nir(nir, ctx->quirks, is_blend);
+        optimise_nir(nir, ctx->quirks, inputs->is_blend);
 
         NIR_PASS_V(nir, midgard_nir_reorder_writeout);
 
@@ -3026,7 +3027,7 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
                 ctx->func = func;
                 ctx->already_emitted = calloc(BITSET_WORDS(func->impl->ssa_alloc), sizeof(BITSET_WORD));
 
-                if (nir->info.outputs_read && !is_blend) {
+                if (nir->info.outputs_read && !inputs->is_blend) {
                         emit_block_init(ctx);
 
                         struct midgard_instruction wait = v_branch(false, false);
@@ -3042,7 +3043,7 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
                 break; /* TODO: Multi-function shaders */
         }
 
-        util_dynarray_init(compiled, NULL);
+        util_dynarray_init(compiled, program);
 
         /* Per-block lowering before opts */
 
@@ -3137,13 +3138,17 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
         program->work_register_count = ctx->work_registers + 1;
         program->uniform_cutoff = ctx->uniform_cutoff;
 
-        program->blend_patch_offset = ctx->blend_constant_offset;
         program->tls_size = ctx->tls_size;
 
-        if ((midgard_debug & MIDGARD_DBG_SHADERS) && !nir->info.internal)
-                disassemble_midgard(stdout, program->compiled.data, program->compiled.size, gpu_id, ctx->stage);
+        if ((midgard_debug & MIDGARD_DBG_SHADERS) && !nir->info.internal) {
+                disassemble_midgard(stdout,
+                                    program->compiled.data,
+                                    program->compiled.size,
+                                    inputs->gpu_id, ctx->stage);
+        }
 
-        if ((midgard_debug & MIDGARD_DBG_SHADERDB || shaderdb) && !nir->info.internal) {
+        if ((midgard_debug & MIDGARD_DBG_SHADERDB || inputs->shaderdb) &&
+            !nir->info.internal) {
                 unsigned nr_bundles = 0, nr_ins = 0;
 
                 /* Count instructions and bundles */
@@ -3184,5 +3189,5 @@ midgard_compile_shader_nir(nir_shader *nir, panfrost_program *program, bool is_b
 
         ralloc_free(ctx);
 
-        return 0;
+        return program;
 }
