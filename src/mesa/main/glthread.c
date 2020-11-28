@@ -52,6 +52,11 @@ glthread_unmarshal_batch(void *job, int thread_index)
 
    _glapi_set_dispatch(ctx->CurrentServerDispatch);
 
+   _mesa_HashLockMutex(ctx->Shared->BufferObjects);
+   ctx->BufferObjectsLocked = true;
+   mtx_lock(&ctx->Shared->TexMutex);
+   ctx->TexturesLocked = true;
+
    while (pos < used) {
       const struct marshal_cmd_base *cmd =
          (const struct marshal_cmd_base *)&buffer[pos];
@@ -60,8 +65,18 @@ glthread_unmarshal_batch(void *job, int thread_index)
       pos += cmd->cmd_size;
    }
 
+   ctx->TexturesLocked = false;
+   mtx_unlock(&ctx->Shared->TexMutex);
+   ctx->BufferObjectsLocked = false;
+   _mesa_HashUnlockMutex(ctx->Shared->BufferObjects);
+
    assert(pos == used);
    batch->used = 0;
+
+   unsigned batch_index = batch - ctx->GLThread.batches;
+   /* Atomically set this to -1 if it's equal to batch_index. */
+   p_atomic_cmpxchg(&ctx->GLThread.LastProgramChangeBatch, batch_index, -1);
+
 }
 
 static void
@@ -292,4 +307,25 @@ _mesa_glthread_finish_before(struct gl_context *ctx, const char *func)
 
    /* Uncomment this if you want to know where glthread syncs. */
    /*printf("fallback to sync: %s\n", func);*/
+}
+
+void
+_mesa_error_glthread_safe(struct gl_context *ctx, GLenum error, bool glthread,
+                          const char *format, ...)
+{
+   if (glthread) {
+      _mesa_marshal_InternalSetError(error);
+   } else {
+      char s[MAX_DEBUG_MESSAGE_LENGTH];
+      va_list args;
+
+      va_start(args, format);
+      ASSERTED size_t len = vsnprintf(s, MAX_DEBUG_MESSAGE_LENGTH, format, args);
+      va_end(args);
+
+      /* Whoever calls _mesa_error should use shorter strings. */
+      assert(len < MAX_DEBUG_MESSAGE_LENGTH);
+
+      _mesa_error(ctx, error, "%s", s);
+   }
 }

@@ -107,7 +107,7 @@ remap_patch_urb_offsets(nir_block *block, nir_builder *b,
                         GLenum tes_primitive_mode)
 {
    const bool is_passthrough_tcs = b->shader->info.name &&
-      strcmp(b->shader->info.name, "passthrough") == 0;
+      strcmp(b->shader->info.name, "passthrough TCS") == 0;
 
    nir_foreach_instr_safe(instr, block) {
       if (instr->type != nir_instr_type_intrinsic)
@@ -364,6 +364,45 @@ brw_nir_lower_tes_inputs(nir_shader *nir, const struct brw_vue_map *vue_map)
    }
 }
 
+/**
+ * Convert interpolateAtOffset() offsets from [-0.5, +0.5] floating point
+ * offsets to integer [-8, +7] offsets (in units of 1/16th of a pixel).
+ *
+ * We clamp to +7/16 on the upper end of the range, since +0.5 isn't
+ * representable in a S0.4 value; a naive conversion would give us -8/16,
+ * which is the opposite of what was intended.
+ *
+ * This is allowed by GL_ARB_gpu_shader5's quantization rules:
+ *
+ *    "Not all values of <offset> may be supported; x and y offsets may
+ *     be rounded to fixed-point values with the number of fraction bits
+ *     given by the implementation-dependent constant
+ *     FRAGMENT_INTERPOLATION_OFFSET_BITS."
+ */
+static bool
+lower_barycentric_at_offset(nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+
+   if (intrin->intrinsic != nir_intrinsic_load_barycentric_at_offset)
+      return false;
+
+   b->cursor = nir_before_instr(instr);
+
+   assert(intrin->src[0].ssa);
+   nir_ssa_def *offset =
+      nir_imin(b, nir_imm_int(b, 7),
+               nir_f2i32(b, nir_fmul(b, nir_imm_float(b, 16),
+                                     intrin->src[0].ssa)));
+
+   nir_instr_rewrite_src(instr, &intrin->src[0], nir_src_for_ssa(offset));
+
+   return true;
+}
+
 void
 brw_nir_lower_fs_inputs(nir_shader *nir,
                         const struct gen_device_info *devinfo,
@@ -403,6 +442,11 @@ brw_nir_lower_fs_inputs(nir_shader *nir,
    nir_lower_io(nir, nir_var_shader_in, type_size_vec4, lower_io_options);
    if (devinfo->gen >= 11)
       nir_lower_interpolation(nir, ~0);
+
+   nir_shader_instructions_pass(nir, lower_barycentric_at_offset,
+                                nir_metadata_block_index |
+                                nir_metadata_dominance,
+                                NULL);
 
    /* This pass needs actual constants */
    nir_opt_constant_folding(nir);
@@ -633,35 +677,100 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
 }
 
 static unsigned
-lower_bit_size_callback(const nir_alu_instr *alu, UNUSED void *data)
+lower_bit_size_callback(const nir_instr *instr, UNUSED void *data)
 {
-   assert(alu->dest.dest.is_ssa);
-   if (alu->dest.dest.ssa.bit_size >= 32)
-      return 0;
-
    const struct brw_compiler *compiler = (const struct brw_compiler *) data;
+   const struct gen_device_info *devinfo = compiler->devinfo;
 
-   switch (alu->op) {
-   case nir_op_idiv:
-   case nir_op_imod:
-   case nir_op_irem:
-   case nir_op_udiv:
-   case nir_op_umod:
-   case nir_op_fceil:
-   case nir_op_ffloor:
-   case nir_op_ffract:
-   case nir_op_fround_even:
-   case nir_op_ftrunc:
-      return 32;
-   case nir_op_frcp:
-   case nir_op_frsq:
-   case nir_op_fsqrt:
-   case nir_op_fpow:
-   case nir_op_fexp2:
-   case nir_op_flog2:
-   case nir_op_fsin:
-   case nir_op_fcos:
-      return compiler->devinfo->gen < 9 ? 32 : 0;
+   switch (instr->type) {
+   case nir_instr_type_alu: {
+      nir_alu_instr *alu = nir_instr_as_alu(instr);
+      assert(alu->dest.dest.is_ssa);
+      if (alu->dest.dest.ssa.bit_size >= 32)
+         return 0;
+
+      switch (alu->op) {
+      case nir_op_idiv:
+      case nir_op_imod:
+      case nir_op_irem:
+      case nir_op_udiv:
+      case nir_op_umod:
+      case nir_op_fceil:
+      case nir_op_ffloor:
+      case nir_op_ffract:
+      case nir_op_fround_even:
+      case nir_op_ftrunc:
+         return 32;
+      case nir_op_frcp:
+      case nir_op_frsq:
+      case nir_op_fsqrt:
+      case nir_op_fpow:
+      case nir_op_fexp2:
+      case nir_op_flog2:
+      case nir_op_fsin:
+      case nir_op_fcos:
+         return devinfo->gen < 9 ? 32 : 0;
+      default:
+         if (devinfo->gen >= 11) {
+            if (nir_op_infos[alu->op].num_inputs >= 2 &&
+                alu->dest.dest.ssa.bit_size == 8)
+               return 16;
+
+            if (nir_alu_instr_is_comparison(alu) &&
+                alu->src[0].src.ssa->bit_size == 8)
+               return 16;
+         }
+         return 0;
+      }
+      break;
+   }
+
+   case nir_instr_type_intrinsic: {
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+      switch (intrin->intrinsic) {
+      case nir_intrinsic_read_invocation:
+      case nir_intrinsic_read_first_invocation:
+      case nir_intrinsic_vote_feq:
+      case nir_intrinsic_vote_ieq:
+      case nir_intrinsic_shuffle:
+      case nir_intrinsic_shuffle_xor:
+      case nir_intrinsic_shuffle_up:
+      case nir_intrinsic_shuffle_down:
+      case nir_intrinsic_quad_broadcast:
+      case nir_intrinsic_quad_swap_horizontal:
+      case nir_intrinsic_quad_swap_vertical:
+      case nir_intrinsic_quad_swap_diagonal:
+         if (intrin->src[0].ssa->bit_size == 8 && devinfo->gen >= 11)
+            return 16;
+         return 0;
+
+      case nir_intrinsic_reduce:
+      case nir_intrinsic_inclusive_scan:
+      case nir_intrinsic_exclusive_scan:
+         /* There are a couple of register region issues that make things
+          * complicated for 8-bit types:
+          *
+          *    1. Only raw moves are allowed to write to a packed 8-bit
+          *       destination.
+          *    2. If we use a strided destination, the efficient way to do
+          *       scan operations ends up using strides that are too big to
+          *       encode in an instruction.
+          *
+          * To get around these issues, we just do all 8-bit scan operations
+          * in 16 bits.  It's actually fewer instructions than what we'd have
+          * to do if we were trying to do it in native 8-bit types and the
+          * results are the same once we truncate to 8 bits at the end.
+          */
+         if (intrin->dest.ssa.bit_size == 8)
+            return 16;
+         return 0;
+
+      default:
+         return 0;
+      }
+      break;
+   }
+
    default:
       return 0;
    }
@@ -1410,9 +1519,9 @@ brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compile
                                const nir_shader_compiler_options *options,
                                const struct brw_tcs_prog_key *key)
 {
-   nir_builder b;
-   nir_builder_init_simple_shader(&b, mem_ctx, MESA_SHADER_TESS_CTRL,
-                                  options);
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_TESS_CTRL,
+                                                  options, "passthrough TCS");
+   ralloc_adopt(mem_ctx, b.shader);
    nir_shader *nir = b.shader;
    nir_variable *var;
    nir_intrinsic_instr *load;
@@ -1424,7 +1533,6 @@ brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compile
       ~(VARYING_BIT_TESS_LEVEL_INNER | VARYING_BIT_TESS_LEVEL_OUTER);
    nir->info.outputs_written = key->outputs_written;
    nir->info.tess.tcs_vertices_out = key->input_vertices;
-   nir->info.name = ralloc_strdup(nir, "passthrough");
    nir->num_uniforms = 8 * sizeof(uint32_t);
 
    var = nir_variable_create(nir, nir_var_uniform, glsl_vec4_type(), "hdr_0");

@@ -81,6 +81,7 @@ files_libradeonsi = files(
   '../radeon/radeon_vcn_dec_jpeg.c',
   '../radeon/radeon_vcn_dec.c',
   '../radeon/radeon_vcn_dec.h',
+  '../radeon/radeon_vcn_av1_default.h',
   '../radeon/radeon_uvd_enc_1_1.c',
   '../radeon/radeon_uvd_enc.c',
   '../radeon/radeon_uvd_enc.h',
@@ -103,7 +104,7 @@ libradeonsi = static_library(
   ],
   c_args : ['-Wstrict-overflow=0'],
   gnu_symbol_visibility : 'hidden',
-  dependencies : [dep_llvm, dep_clock, dep_libdrm_radeon, idep_nir_headers, idep_amdgfxregs_h],
+  dependencies : [dep_llvm, dep_clock, dep_libdrm_radeon, idep_nir_headers, idep_amdgfxregs_h, idep_mesautil],
 )
 
 driver_radeonsi = declare_dependency(

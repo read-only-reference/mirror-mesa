@@ -107,10 +107,6 @@ can_fast_clear_color(struct iris_context *ice,
       return false;
    }
 
-   /* XXX: if (irb->mt->supports_fast_clear)
-    * see intel_miptree_create_for_dri_image()
-    */
-
    if (!iris_is_color_fast_clear_compatible(ice, res->surf.format, color))
       return false;
 
@@ -135,21 +131,18 @@ can_fast_clear_color(struct iris_context *ice,
 }
 
 static union isl_color_value
-convert_fast_clear_color(struct iris_context *ice,
-                         struct iris_resource *res,
-                         const union isl_color_value color)
+convert_clear_color(enum pipe_format format,
+                    const union pipe_color_union *color)
 {
-   union isl_color_value override_color = color;
-   struct pipe_resource *p_res = (void *) res;
+   /* pipe_color_union and isl_color_value are interchangeable */
+   union isl_color_value override_color = *(union isl_color_value *)color;
 
-   const enum pipe_format format = p_res->format;
    const struct util_format_description *desc =
       util_format_description(format);
    unsigned colormask = util_format_colormask(desc);
 
    if (util_format_is_intensity(format) ||
-       util_format_is_luminance(format) ||
-       util_format_is_luminance_alpha(format)) {
+       util_format_is_luminance(format)) {
       override_color.u32[1] = override_color.u32[0];
       override_color.u32[2] = override_color.u32[0];
       if (util_format_is_intensity(format))
@@ -180,8 +173,7 @@ convert_fast_clear_color(struct iris_context *ice,
       for (int i = 0; i < 4; i++) {
          unsigned bits = util_format_get_component_bits(
             format, UTIL_FORMAT_COLORSPACE_RGB, i);
-         assert(bits > 0);
-         if (bits < 32) {
+         if (bits > 0 && bits < 32) {
             int32_t max = (1 << (bits - 1)) - 1;
             int32_t min = -(1 << (bits - 1));
             override_color.i32[i] = CLAMP(override_color.i32[i], min, max);
@@ -215,8 +207,6 @@ fast_clear_color(struct iris_context *ice,
 {
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
    struct pipe_resource *p_res = (void *) res;
-
-   color = convert_fast_clear_color(ice, res, color);
 
    bool color_changed = !!memcmp(&res->aux.clear_color, &color,
                                  sizeof(color));
@@ -457,19 +447,7 @@ fast_clear_depth(struct iris_context *ice,
                  const struct pipe_box *box,
                  float depth)
 {
-   struct pipe_resource *p_res = (void *) res;
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
-
-   /* Quantize the clear value to what can be stored in the actual depth
-    * buffer.  This makes the following check more accurate because it now
-    * checks if the actual depth bits will match.  It also prevents us from
-    * getting a too-accurate depth value during depth testing or when sampling
-    * with HiZ enabled.
-    */
-   const unsigned nbits = p_res->format == PIPE_FORMAT_Z16_UNORM ? 16 : 24;
-   const uint32_t depth_max = (1 << nbits) - 1;
-   depth = p_res->format == PIPE_FORMAT_Z32_FLOAT ? depth :
-      (unsigned)(depth * depth_max) / (float)depth_max;
 
    bool update_clear_depth = false;
 
@@ -696,9 +674,6 @@ iris_clear(struct pipe_context *ctx,
    }
 
    if (buffers & PIPE_CLEAR_COLOR) {
-      /* pipe_color_union and isl_color_value are interchangeable */
-      union isl_color_value *color = (void *) p_color;
-
       for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
          if (buffers & (PIPE_CLEAR_COLOR0 << i)) {
             struct pipe_surface *psurf = cso_fb->cbufs[i];
@@ -708,7 +683,7 @@ iris_clear(struct pipe_context *ctx,
 
             clear_color(ice, psurf->texture, psurf->u.tex.level, &box,
                         true, isurf->view.format, isurf->view.swizzle,
-                        *color);
+                        convert_clear_color(psurf->format, p_color));
          }
       }
    }
@@ -806,12 +781,10 @@ iris_clear_render_target(struct pipe_context *ctx,
       .depth = psurf->u.tex.last_layer - psurf->u.tex.first_layer + 1
    };
 
-   /* pipe_color_union and isl_color_value are interchangeable */
-   union isl_color_value *color = (void *) p_color;
-
    clear_color(ice, psurf->texture, psurf->u.tex.level, &box,
                render_condition_enabled,
-               isurf->view.format, isurf->view.swizzle, *color);
+               isurf->view.format, isurf->view.swizzle,
+               convert_clear_color(psurf->format, p_color));
 }
 
 /**

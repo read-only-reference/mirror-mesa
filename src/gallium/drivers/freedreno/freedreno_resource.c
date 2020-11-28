@@ -692,9 +692,9 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 		struct fd_batch *write_batch = NULL;
 
 		/* hold a reference, so it doesn't disappear under us: */
-		fd_context_lock(ctx);
+		fd_screen_lock(ctx->screen);
 		fd_batch_reference_locked(&write_batch, rsc->write_batch);
-		fd_context_unlock(ctx);
+		fd_screen_unlock(ctx->screen);
 
 		if ((usage & PIPE_MAP_WRITE) && write_batch &&
 				write_batch->back_blit) {
@@ -977,6 +977,7 @@ fd_resource_allocate_and_resolve(struct pipe_screen *pscreen,
 	if (size == 0) {
 		/* note, semi-intention == instead of & */
 		debug_assert(prsc->bind == PIPE_BIND_QUERY_BUFFER);
+		*psize = 0;
 		return prsc;
 	}
 
@@ -1021,7 +1022,7 @@ fd_resource_create_with_modifiers(struct pipe_screen *pscreen,
 		struct winsys_handle handle;
 
 		/* note: alignment is wrong for a6xx */
-		scanout_templat.width0 = align(tmpl->width0, screen->gmem_alignw);
+		scanout_templat.width0 = align(tmpl->width0, screen->info.gmem_align_w);
 
 		scanout = renderonly_scanout_for_resource(&scanout_templat,
 												  screen->ro, &handle);
@@ -1113,14 +1114,14 @@ fd_resource_from_handle(struct pipe_screen *pscreen,
 	slice->offset = handle->offset;
 	slice->size0 = handle->stride * prsc->height0;
 
-	/* use a pitchalign of gmem_alignw pixels, because GMEM resolve for
+	/* use a pitchalign of gmem_align_w pixels, because GMEM resolve for
 	 * lower alignments is not implemented (but possible for a6xx at least)
 	 *
 	 * for UBWC-enabled resources, layout_resource_for_modifier will further
 	 * validate the pitch and set the right pitchalign
 	 */
 	rsc->layout.pitchalign =
-		fdl_cpp_shift(&rsc->layout) + util_logbase2(screen->gmem_alignw);
+		fdl_cpp_shift(&rsc->layout) + util_logbase2(screen->info.gmem_align_w);
 
 	/* apply the minimum pitchalign (note: actually 4 for a3xx but doesn't matter) */
 	if (is_a6xx(screen) || is_a5xx(screen))

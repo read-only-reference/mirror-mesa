@@ -154,7 +154,7 @@ static void
 si_set_raster_config(struct radv_physical_device *physical_device,
 		     struct radeon_cmdbuf *cs)
 {
-	unsigned num_rb = MIN2(physical_device->rad_info.num_render_backends, 16);
+	unsigned num_rb = MIN2(physical_device->rad_info.max_render_backends, 16);
 	unsigned rb_mask = physical_device->rad_info.enabled_rb_mask;
 	unsigned raster_config, raster_config_1;
 
@@ -347,9 +347,19 @@ si_emit_graphics(struct radv_device *device,
 			} else {
 				late_alloc_wave64 = (num_cu_per_sh - 2) * 4;
 
-				/* CU2 & CU3 disabled because of the dual CU design */
-				cu_mask_vs = 0xfff3;
-				cu_mask_gs = 0xfff3; /* NGG only */
+				/* Gfx10: CU2 & CU3 must be disabled to
+				 * prevent a hw deadlock.  Others: CU1 must be
+				 * disabled to prevent a hw deadlock.
+				 *
+				 * The deadlock is caused by late alloc, which
+				 * usually increases performance.
+				 */
+				cu_mask_vs &= physical_device->rad_info.chip_class == GFX10 ?
+					      ~BITFIELD_RANGE(2, 2) : ~BITFIELD_RANGE(1, 1);
+
+				if (physical_device->use_ngg) {
+					cu_mask_gs = cu_mask_vs;
+				}
 			}
 
 			late_alloc_wave64_gs = late_alloc_wave64;
@@ -426,7 +436,7 @@ si_emit_graphics(struct radv_device *device,
 		unsigned meta_write_policy, meta_read_policy;
 
 		/* TODO: investigate whether LRU improves performance on other chips too */
-		if (physical_device->rad_info.num_render_backends <= 4) {
+		if (physical_device->rad_info.max_render_backends <= 4) {
 			meta_write_policy = V_02807C_CACHE_LRU_WR; /* cache writes */
 			meta_read_policy =  V_02807C_CACHE_LRU_RD; /* cache reads */
 		} else {

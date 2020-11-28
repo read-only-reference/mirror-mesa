@@ -1191,7 +1191,7 @@ const struct nir_shader_compiler_options r600_nir_fs_options = {
         .lower_fsign = true,
 	.lower_fmod = true,
 	.lower_doubles_options = nir_lower_fp64_full_software,
-	.lower_int64_options = 0,
+	.lower_int64_options = ~0,
 	.lower_extract_byte = true,
 	.lower_extract_word = true,
         .lower_rotate = true,
@@ -1200,6 +1200,7 @@ const struct nir_shader_compiler_options r600_nir_fs_options = {
 	.vectorize_io = true,
 	.has_umad24 = true,
 	.has_umul24 = true,
+        .use_interpolated_input_intrinsics = true
 };
 
 const struct nir_shader_compiler_options r600_nir_options = {
@@ -1213,7 +1214,7 @@ const struct nir_shader_compiler_options r600_nir_options = {
 	.lower_fdiv = true,
 	.lower_fmod = true,
 	.lower_doubles_options = nir_lower_fp64_full_software,
-	.lower_int64_options = 0,
+	.lower_int64_options = ~0,
 	.lower_extract_byte = true,
 	.lower_extract_word = true,
         .lower_rotate = true,
@@ -1344,12 +1345,12 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 		printf("max_shader_clock = %i\n", rscreen->info.max_shader_clock);
 		printf("num_good_compute_units = %i\n", rscreen->info.num_good_compute_units);
 		printf("max_se = %i\n", rscreen->info.max_se);
-		printf("max_sh_per_se = %i\n", rscreen->info.max_sh_per_se);
+		printf("max_sh_per_se = %i\n", rscreen->info.max_sa_per_se);
 
 		printf("r600_gb_backend_map = %i\n", rscreen->info.r600_gb_backend_map);
 		printf("r600_gb_backend_map_valid = %i\n", rscreen->info.r600_gb_backend_map_valid);
 		printf("r600_num_banks = %i\n", rscreen->info.r600_num_banks);
-		printf("num_render_backends = %i\n", rscreen->info.num_render_backends);
+		printf("num_render_backends = %i\n", rscreen->info.max_render_backends);
 		printf("num_tile_pipes = %i\n", rscreen->info.num_tile_pipes);
 		printf("pipe_interleave_bytes = %i\n", rscreen->info.pipe_interleave_bytes);
 		printf("enabled_rb_mask = 0x%x\n", rscreen->info.enabled_rb_mask);

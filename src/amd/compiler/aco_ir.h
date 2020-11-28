@@ -158,8 +158,8 @@ enum sync_scope : uint8_t {
 
 struct memory_sync_info {
    memory_sync_info() : storage(storage_none), semantics(semantic_none), scope(scope_invocation) {}
-   memory_sync_info(int storage, int semantics=0, sync_scope scope=scope_invocation)
-      : storage((storage_class)storage), semantics((memory_semantics)semantics), scope(scope) {}
+   memory_sync_info(int storage_, int semantics_=0, sync_scope scope_=scope_invocation)
+      : storage((storage_class)storage_), semantics((memory_semantics)semantics_), scope(scope_) {}
 
    storage_class storage:8;
    memory_semantics semantics:8;
@@ -281,8 +281,8 @@ struct RegClass {
    };
 
    RegClass() = default;
-   constexpr RegClass(RC rc)
-      : rc(rc) {}
+   constexpr RegClass(RC rc_)
+      : rc(rc_) {}
    constexpr RegClass(RegType type, unsigned size)
       : rc((RC) ((type == RegType::vgpr ? 1 << 5 : 0) | size)) {}
 
@@ -420,7 +420,7 @@ public:
    constexpr Operand()
       : reg_(PhysReg{128}), isTemp_(false), isFixed_(true), isConstant_(false),
         isKill_(false), isUndef_(true), isFirstKill_(false), constSize(0),
-        isLateKill_(false) {}
+        isLateKill_(false), is16bit_(false), is24bit_(false) {}
 
    explicit Operand(Temp r) noexcept
    {
@@ -746,6 +746,27 @@ public:
       else
          return other.isTemp() && other.getTemp() == getTemp();
    }
+
+   constexpr void set16bit(bool flag) noexcept
+   {
+      is16bit_ = flag;
+   }
+
+   constexpr bool is16bit() const noexcept
+   {
+      return is16bit_;
+   }
+
+   constexpr void set24bit(bool flag) noexcept
+   {
+      is24bit_ = flag;
+   }
+
+   constexpr bool is24bit() const noexcept
+   {
+      return is24bit_;
+   }
+
 private:
    union {
       uint32_t i;
@@ -763,6 +784,8 @@ private:
          uint8_t isFirstKill_:1;
          uint8_t constSize:2;
          uint8_t isLateKill_:1;
+         uint8_t is16bit_:1;
+         uint8_t is24bit_:1;
       };
       /* can't initialize bit-fields in c++11, so work around using a union */
       uint16_t control_ = 0;
@@ -1628,7 +1651,6 @@ public:
    Stage stage;
    bool needs_exact = false; /* there exists an instruction with disable_wqm = true */
    bool needs_wqm = false; /* there exists a p_wqm instruction */
-   bool wb_smem_l1_on_end = false;
 
    std::vector<uint8_t> constant_data;
    Temp private_segment_buffer;
@@ -1762,6 +1784,7 @@ void collect_presched_stats(Program *program);
 void collect_preasm_stats(Program *program);
 void collect_postasm_stats(Program *program, const std::vector<uint32_t>& code);
 
+void aco_print_operand(const Operand *operand, FILE *output);
 void aco_print_instr(const Instruction *instr, FILE *output);
 void aco_print_program(const Program *program, FILE *output);
 

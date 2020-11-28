@@ -78,9 +78,7 @@ protected:
 
    std::string swizzle(nir_alu_instr *instr, int src);
 
-   void *mem_ctx;
-
-   nir_builder *b;
+   nir_builder *b, _b;
    std::map<unsigned, nir_alu_instr*> movs;
    std::map<unsigned, nir_alu_src*> loads;
    std::map<unsigned, nir_ssa_def*> res_map;
@@ -90,10 +88,9 @@ nir_load_store_vectorize_test::nir_load_store_vectorize_test()
 {
    glsl_type_singleton_init_or_ref();
 
-   mem_ctx = ralloc_context(NULL);
    static const nir_shader_compiler_options options = { };
-   b = rzalloc(mem_ctx, nir_builder);
-   nir_builder_init_simple_shader(b, mem_ctx, MESA_SHADER_COMPUTE, &options);
+   _b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE, &options, "load store tests");
+   b = &_b;
 }
 
 nir_load_store_vectorize_test::~nir_load_store_vectorize_test()
@@ -103,7 +100,7 @@ nir_load_store_vectorize_test::~nir_load_store_vectorize_test()
       nir_print_shader(b->shader, stdout);
    }
 
-   ralloc_free(mem_ctx);
+   ralloc_free(b->shader);
 
    glsl_type_singleton_decref();
 }
@@ -840,7 +837,7 @@ TEST_F(nir_load_store_vectorize_test, ssbo_load_adjacent_memory_barrier)
 TEST_F(nir_load_store_vectorize_test, ssbo_load_adjacent_barrier)
 {
    create_load(nir_var_mem_ssbo, 0, 0, 0x1);
-   nir_builder_instr_insert(b, &nir_intrinsic_instr_create(b->shader, nir_intrinsic_control_barrier)->instr);
+   nir_control_barrier(b);
    create_load(nir_var_mem_ssbo, 0, 4, 0x2);
 
    nir_validate_shader(b->shader, NULL);

@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2019-2020 Collabora, Ltd.
  * Copyright 2018-2019 Alyssa Rosenzweig
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -133,7 +134,7 @@ panfrost_mfbd_rt_set_buf(struct pipe_surface *surf,
         unsigned level = surf->u.tex.level;
         unsigned first_layer = surf->u.tex.first_layer;
         assert(surf->u.tex.last_layer == first_layer);
-        int stride = rsrc->slices[level].stride;
+        int row_stride = rsrc->slices[level].row_stride;
 
         /* Only set layer_stride for layered MSAA rendering  */
 
@@ -157,7 +158,7 @@ panfrost_mfbd_rt_set_buf(struct pipe_surface *surf,
                         rt->midgard.writeback_block_format = MALI_BLOCK_FORMAT_LINEAR;
 
                 rt->rgb.base = base;
-                rt->rgb.row_stride = stride;
+                rt->rgb.row_stride = row_stride;
                 rt->rgb.surface_stride = layer_stride;
         } else if (rsrc->modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED) {
                 if (version >= 7)
@@ -166,7 +167,7 @@ panfrost_mfbd_rt_set_buf(struct pipe_surface *surf,
                         rt->midgard.writeback_block_format = MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED;
 
                 rt->rgb.base = base;
-                rt->rgb.row_stride = stride * 16;
+                rt->rgb.row_stride = row_stride;
                 rt->rgb.surface_stride = layer_stride;
         } else if (drm_is_afbc(rsrc->modifier)) {
                 if (version >= 7)
@@ -304,12 +305,12 @@ panfrost_mfbd_zs_crc_ext_set_bufs(struct panfrost_batch *batch,
                        rsrc->modifier == DRM_FORMAT_MOD_LINEAR);
                 /* TODO: Z32F(S8) support, which is always linear */
 
-                int stride = rsrc->slices[level].stride;
+                int row_stride = rsrc->slices[level].row_stride;
 
                 unsigned layer_stride = (nr_samples > 1) ? rsrc->slices[level].size0 : 0;
 
                 ext->zs_writeback_base = base;
-                ext->zs_writeback_row_stride = stride;
+                ext->zs_writeback_row_stride = row_stride;
                 ext->zs_writeback_surface_stride = layer_stride;
 
                 if (rsrc->modifier == DRM_FORMAT_MOD_LINEAR) {
@@ -318,7 +319,6 @@ panfrost_mfbd_zs_crc_ext_set_bufs(struct panfrost_batch *batch,
                         else
                                 ext->zs_block_format = MALI_BLOCK_FORMAT_LINEAR;
                 } else {
-                        ext->zs_writeback_row_stride *= 16;
                         if (version >= 7)
                                 ext->zs_block_format_v7 = MALI_BLOCK_FORMAT_V7_TILED_U_INTERLEAVED;
                         else
@@ -351,9 +351,7 @@ panfrost_mfbd_zs_crc_ext_set_bufs(struct panfrost_batch *batch,
                 unsigned stencil_layer_stride = (nr_samples > 1) ? stencil_slice.size0 : 0;
 
                 ext->s_writeback_base = panfrost_get_texture_address(stencil, level, first_layer, 0);
-                ext->s_writeback_row_stride = stencil_slice.stride;
-                if (rsrc->modifier != DRM_FORMAT_MOD_LINEAR)
-                        ext->s_writeback_row_stride *= 16;
+                ext->s_writeback_row_stride = stencil_slice.row_stride;
                 ext->s_writeback_surface_stride = stencil_layer_stride;
                 break;
         default:
@@ -556,10 +554,13 @@ panfrost_mfbd_fragment(struct panfrost_batch *batch, bool has_draws)
                 panfrost_mfbd_emit_rt(batch, rt, surf, rt_offset, cb);
 
                 if (surf) {
-                        if (MAX2(surf->nr_samples, surf->texture->nr_samples) > 1)
+                        unsigned samples = MAX2(surf->nr_samples, surf->texture->nr_samples);
+
+                        if (samples > 1)
                                 batch->requirements |= PAN_REQ_MSAA;
 
-                        rt_offset += pan_bytes_per_pixel_tib(surf->format) * tib_size;
+                        rt_offset += pan_bytes_per_pixel_tib(surf->format) * tib_size *
+                                MAX2(samples, 1);
                 }
         }
 

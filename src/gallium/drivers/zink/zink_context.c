@@ -75,6 +75,39 @@ zink_context_destroy(struct pipe_context *pctx)
    FREE(ctx);
 }
 
+static enum pipe_reset_status
+zink_get_device_reset_status(struct pipe_context *pctx)
+{
+   struct zink_context *ctx = zink_context(pctx);
+
+   enum pipe_reset_status status = PIPE_NO_RESET;
+
+   if (ctx->is_device_lost) {
+      // Since we don't know what really happened to the hardware, just
+      // assume that we are in the wrong
+      status = PIPE_GUILTY_CONTEXT_RESET;
+
+      debug_printf("ZINK: device lost detected!\n");
+
+      if (ctx->reset.reset)
+         ctx->reset.reset(ctx->reset.data, status);
+   }
+
+   return status;
+}
+
+static void
+zink_set_device_reset_callback(struct pipe_context *pctx,
+                               const struct pipe_device_reset_callback *cb)
+{
+   struct zink_context *ctx = zink_context(pctx);
+
+   if (cb)
+      ctx->reset = *cb;
+   else
+      memset(&ctx->reset, 0, sizeof(ctx->reset));
+}
+
 static VkSamplerMipmapMode
 sampler_mipmap_mode(enum pipe_tex_mipfilter filter)
 {
@@ -119,13 +152,27 @@ compare_op(enum pipe_compare_func op)
    unreachable("unexpected compare");
 }
 
+static inline bool
+wrap_needs_border_color(unsigned wrap)
+{
+   return wrap == PIPE_TEX_WRAP_CLAMP || wrap == PIPE_TEX_WRAP_CLAMP_TO_BORDER ||
+          wrap == PIPE_TEX_WRAP_MIRROR_CLAMP || wrap == PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER;
+}
+
+struct zink_sampler_state {
+   VkSampler sampler;
+   bool custom_border_color;
+};
+
 static void *
 zink_create_sampler_state(struct pipe_context *pctx,
                           const struct pipe_sampler_state *state)
 {
    struct zink_screen *screen = zink_screen(pctx->screen);
+   bool need_custom = false;
 
    VkSamplerCreateInfo sci = {};
+   VkSamplerCustomBorderColorCreateInfoEXT cbci = {};
    sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
    sci.magFilter = zink_filter(state->mag_img_filter);
    sci.minFilter = zink_filter(state->min_img_filter);
@@ -145,6 +192,10 @@ zink_create_sampler_state(struct pipe_context *pctx,
    sci.addressModeW = sampler_address_mode(state->wrap_r);
    sci.mipLodBias = state->lod_bias;
 
+   need_custom |= wrap_needs_border_color(state->wrap_s);
+   need_custom |= wrap_needs_border_color(state->wrap_t);
+   need_custom |= wrap_needs_border_color(state->wrap_r);
+
    if (state->compare_mode == PIPE_TEX_COMPARE_NONE)
       sci.compareOp = VK_COMPARE_OP_NEVER;
    else {
@@ -152,7 +203,18 @@ zink_create_sampler_state(struct pipe_context *pctx,
       sci.compareEnable = VK_TRUE;
    }
 
-   sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK; // TODO
+   if (screen->info.have_EXT_custom_border_color &&
+       screen->info.border_color_feats.customBorderColorWithoutFormat && need_custom) {
+      cbci.sType = VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT;
+      cbci.format = VK_FORMAT_UNDEFINED;
+      /* these are identical unions */
+      memcpy(&cbci.customBorderColor, &state->border_color, sizeof(union pipe_color_union));
+      sci.pNext = &cbci;
+      sci.borderColor = VK_BORDER_COLOR_INT_CUSTOM_EXT;
+      UNUSED uint32_t check = p_atomic_inc_return(&screen->cur_custom_border_color_samplers);
+      assert(check <= screen->info.border_color_props.maxCustomBorderColorSamplers);
+   } else
+      sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK; // TODO with custom shader if we're super interested?
    sci.unnormalizedCoordinates = !state->normalized_coords;
 
    if (state->max_anisotropy > 1) {
@@ -160,11 +222,11 @@ zink_create_sampler_state(struct pipe_context *pctx,
       sci.anisotropyEnable = VK_TRUE;
    }
 
-   VkSampler *sampler = CALLOC(1, sizeof(VkSampler));
+   struct zink_sampler_state *sampler = CALLOC(1, sizeof(struct zink_sampler_state));
    if (!sampler)
       return NULL;
 
-   if (vkCreateSampler(screen->dev, &sci, NULL, sampler) != VK_SUCCESS) {
+   if (vkCreateSampler(screen->dev, &sci, NULL, &sampler->sampler) != VK_SUCCESS) {
       FREE(sampler);
       return NULL;
    }
@@ -192,10 +254,13 @@ static void
 zink_delete_sampler_state(struct pipe_context *pctx,
                           void *sampler_state)
 {
+   struct zink_sampler_state *sampler = sampler_state;
    struct zink_batch *batch = zink_curr_batch(zink_context(pctx));
    util_dynarray_append(&batch->zombie_samplers, VkSampler,
-                        *(VkSampler *)sampler_state);
-   FREE(sampler_state);
+                        sampler->sampler);
+   if (sampler->custom_border_color)
+      p_atomic_dec(&zink_screen(pctx->screen)->cur_custom_border_color_samplers);
+   FREE(sampler);
 }
 
 
@@ -734,8 +799,10 @@ access_src_flags(VkImageLayout layout)
 {
    switch (layout) {
    case VK_IMAGE_LAYOUT_UNDEFINED:
-   case VK_IMAGE_LAYOUT_GENERAL:
       return 0;
+
+   case VK_IMAGE_LAYOUT_GENERAL:
+      return VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 
    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
       return VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
@@ -764,8 +831,10 @@ access_dst_flags(VkImageLayout layout)
 {
    switch (layout) {
    case VK_IMAGE_LAYOUT_UNDEFINED:
-   case VK_IMAGE_LAYOUT_GENERAL:
       return 0;
+
+   case VK_IMAGE_LAYOUT_GENERAL:
+      return VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 
    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
       return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -797,6 +866,9 @@ pipeline_dst_stage(VkImageLayout layout)
    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
       return VK_PIPELINE_STAGE_TRANSFER_BIT;
 
+   case VK_IMAGE_LAYOUT_GENERAL:
+      return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+
    default:
       return VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
    }
@@ -815,6 +887,9 @@ pipeline_src_stage(VkImageLayout layout)
       return VK_PIPELINE_STAGE_TRANSFER_BIT;
    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
       return VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+   case VK_IMAGE_LAYOUT_GENERAL:
+      return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
    default:
       return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -1166,6 +1241,8 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->base.priv = priv;
 
    ctx->base.destroy = zink_context_destroy;
+   ctx->base.get_device_reset_status = zink_get_device_reset_status;
+   ctx->base.set_device_reset_callback = zink_set_device_reset_callback;
 
    zink_context_state_init(&ctx->base);
 
@@ -1216,8 +1293,9 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
                         1 << PIPE_PRIM_LINES |
                         1 << PIPE_PRIM_LINE_STRIP |
                         1 << PIPE_PRIM_TRIANGLES |
-                        1 << PIPE_PRIM_TRIANGLE_STRIP |
-                        1 << PIPE_PRIM_TRIANGLE_FAN;
+                        1 << PIPE_PRIM_TRIANGLE_STRIP;
+   if (screen->have_triangle_fans)
+      prim_hwsupport |= 1 << PIPE_PRIM_TRIANGLE_FAN;
 
    ctx->primconvert = util_primconvert_create(&ctx->base, prim_hwsupport);
    if (!ctx->primconvert)

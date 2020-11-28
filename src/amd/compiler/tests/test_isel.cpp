@@ -51,9 +51,9 @@ BEGIN_TEST(isel.interp.simple)
       }
    );
 
-   PipelineBuilder bld(get_vk_device(GFX9));
-   bld.add_vsfs(vs, fs);
-   bld.print_ir(VK_SHADER_STAGE_FRAGMENT_BIT, "ACO IR");
+   PipelineBuilder pbld(get_vk_device(GFX9));
+   pbld.add_vsfs(vs, fs);
+   pbld.print_ir(VK_SHADER_STAGE_FRAGMENT_BIT, "ACO IR");
 END_TEST
 
 BEGIN_TEST(isel.compute.simple)
@@ -67,16 +67,69 @@ BEGIN_TEST(isel.compute.simple)
             uint res;
          };
          void main() {
-            //~gfx7>> v1: %data = p_parallelcopy 42
-            //~gfx7>> buffer_store_dword %_, v1: undef, 0, %data disable_wqm storage:buffer semantics: scope:invocation
-            //~gfx8>> s1: %data = p_parallelcopy 42
-            //~gfx8>> s_buffer_store_dword %_, 0, %data storage:buffer semantics: scope:invocation
+            //>> v1: %data = p_parallelcopy 42
+            //buffer_store_dword %_, v1: undef, 0, %data disable_wqm storage:buffer semantics: scope:invocation
             res = 42;
          }
       );
 
-      PipelineBuilder bld(get_vk_device((chip_class)i));
-      bld.add_cs(cs);
-      bld.print_ir(VK_SHADER_STAGE_COMPUTE_BIT, "ACO IR", true);
+      PipelineBuilder pbld(get_vk_device((chip_class)i));
+      pbld.add_cs(cs);
+      pbld.print_ir(VK_SHADER_STAGE_COMPUTE_BIT, "ACO IR", true);
+   }
+END_TEST
+
+BEGIN_TEST(isel.gs.no_outputs)
+   for (unsigned i = GFX8; i <= GFX10; i++) {
+      if (!set_variant((chip_class)i))
+         continue;
+
+      QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
+         void main() {}
+      );
+
+      QoShaderModuleCreateInfo gs = qoShaderModuleCreateInfoGLSL(GEOMETRY,
+         layout(points) in;
+         layout(points, max_vertices = 1) out;
+
+         void main() {
+            EmitVertex();
+            EndPrimitive();
+         }
+      );
+
+      PipelineBuilder pbld(get_vk_device((chip_class)i));
+      pbld.add_stage(VK_SHADER_STAGE_VERTEX_BIT, vs);
+      pbld.add_stage(VK_SHADER_STAGE_GEOMETRY_BIT, gs);
+      pbld.create_pipeline();
+
+      //! success
+      fprintf(output, "success\n");
+   }
+END_TEST
+
+BEGIN_TEST(isel.gs.no_verts)
+   for (unsigned i = GFX8; i <= GFX10; i++) {
+      if (!set_variant((chip_class)i))
+         continue;
+
+      QoShaderModuleCreateInfo vs = qoShaderModuleCreateInfoGLSL(VERTEX,
+         void main() {}
+      );
+
+      QoShaderModuleCreateInfo gs = qoShaderModuleCreateInfoGLSL(GEOMETRY,
+         layout(points) in;
+         layout(points, max_vertices = 0) out;
+
+         void main() {}
+      );
+
+      PipelineBuilder pbld(get_vk_device((chip_class)i));
+      pbld.add_stage(VK_SHADER_STAGE_VERTEX_BIT, vs);
+      pbld.add_stage(VK_SHADER_STAGE_GEOMETRY_BIT, gs);
+      pbld.create_pipeline();
+
+      //! success
+      fprintf(output, "success\n");
    }
 END_TEST

@@ -68,7 +68,7 @@ tu6_load_state_size(struct tu_pipeline *pipeline, bool compute)
    const unsigned load_state_size = 4;
    unsigned size = 0;
    for (unsigned i = 0; i < pipeline->layout->num_sets; i++) {
-      if (pipeline && !(pipeline->active_desc_sets & (1u << i)))
+      if (!(pipeline->active_desc_sets & (1u << i)))
          continue;
 
       struct tu_descriptor_set_layout *set_layout = pipeline->layout->set[i].layout;
@@ -255,6 +255,8 @@ struct tu_pipeline_builder
    uint64_t shader_iova[MESA_SHADER_STAGES];
    uint64_t binning_vs_iova;
 
+   struct tu_pvtmem_config pvtmem;
+
    bool rasterizer_discard;
    /* these states are affectd by rasterizer_discard */
    VkSampleCountFlagBits samples;
@@ -330,49 +332,50 @@ void
 tu6_emit_xs_config(struct tu_cs *cs,
                    gl_shader_stage stage, /* xs->type, but xs may be NULL */
                    const struct ir3_shader_variant *xs,
+                   const struct tu_pvtmem_config *pvtmem,
                    uint64_t binary_iova)
 {
    static const struct xs_config {
       uint16_t reg_sp_xs_ctrl;
       uint16_t reg_sp_xs_config;
       uint16_t reg_hlsq_xs_ctrl;
-      uint16_t reg_sp_vs_obj_start;
+      uint16_t reg_sp_xs_first_exec_offset;
    } xs_config[] = {
       [MESA_SHADER_VERTEX] = {
          REG_A6XX_SP_VS_CTRL_REG0,
          REG_A6XX_SP_VS_CONFIG,
          REG_A6XX_HLSQ_VS_CNTL,
-         REG_A6XX_SP_VS_OBJ_START_LO,
+         REG_A6XX_SP_VS_OBJ_FIRST_EXEC_OFFSET,
       },
       [MESA_SHADER_TESS_CTRL] = {
          REG_A6XX_SP_HS_CTRL_REG0,
          REG_A6XX_SP_HS_CONFIG,
          REG_A6XX_HLSQ_HS_CNTL,
-         REG_A6XX_SP_HS_OBJ_START_LO,
+         REG_A6XX_SP_HS_OBJ_FIRST_EXEC_OFFSET,
       },
       [MESA_SHADER_TESS_EVAL] = {
          REG_A6XX_SP_DS_CTRL_REG0,
          REG_A6XX_SP_DS_CONFIG,
          REG_A6XX_HLSQ_DS_CNTL,
-         REG_A6XX_SP_DS_OBJ_START_LO,
+         REG_A6XX_SP_DS_OBJ_FIRST_EXEC_OFFSET,
       },
       [MESA_SHADER_GEOMETRY] = {
          REG_A6XX_SP_GS_CTRL_REG0,
          REG_A6XX_SP_GS_CONFIG,
          REG_A6XX_HLSQ_GS_CNTL,
-         REG_A6XX_SP_GS_OBJ_START_LO,
+         REG_A6XX_SP_GS_OBJ_FIRST_EXEC_OFFSET,
       },
       [MESA_SHADER_FRAGMENT] = {
          REG_A6XX_SP_FS_CTRL_REG0,
          REG_A6XX_SP_FS_CONFIG,
          REG_A6XX_HLSQ_FS_CNTL,
-         REG_A6XX_SP_FS_OBJ_START_LO,
+         REG_A6XX_SP_FS_OBJ_FIRST_EXEC_OFFSET,
       },
       [MESA_SHADER_COMPUTE] = {
          REG_A6XX_SP_CS_CTRL_REG0,
          REG_A6XX_SP_CS_CONFIG,
          REG_A6XX_HLSQ_CS_CNTL,
-         REG_A6XX_SP_CS_OBJ_START_LO,
+         REG_A6XX_SP_CS_OBJ_FIRST_EXEC_OFFSET,
       },
    };
    const struct xs_config *cfg = &xs_config[stage];
@@ -425,14 +428,21 @@ tu6_emit_xs_config(struct tu_cs *cs,
    tu_cs_emit(cs, A6XX_HLSQ_VS_CNTL_CONSTLEN(xs->constlen) |
                   A6XX_HLSQ_VS_CNTL_ENABLED);
 
-   /* emit program binary
+   /* emit program binary & private memory layout
     * binary_iova should be aligned to 1 instrlen unit (128 bytes)
     */
 
    assert((binary_iova & 0x7f) == 0);
+   assert((pvtmem->iova & 0x1f) == 0);
 
-   tu_cs_emit_pkt4(cs, cfg->reg_sp_vs_obj_start, 2);
+   tu_cs_emit_pkt4(cs, cfg->reg_sp_xs_first_exec_offset, 7);
+   tu_cs_emit(cs, 0);
    tu_cs_emit_qw(cs, binary_iova);
+   tu_cs_emit(cs,
+              A6XX_SP_VS_PVT_MEM_PARAM_MEMSIZEPERITEM(pvtmem->per_fiber_size));
+   tu_cs_emit_qw(cs, pvtmem->iova);
+   tu_cs_emit(cs, A6XX_SP_VS_PVT_MEM_SIZE_TOTALPVTMEMSIZE(pvtmem->per_sp_size) |
+                  COND(pvtmem->per_wave, A6XX_SP_VS_PVT_MEM_SIZE_PERWAVEMEMLAYOUT));
 
    tu_cs_emit_pkt7(cs, tu6_stage2opcode(stage), 3);
    tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(0) |
@@ -453,31 +463,74 @@ tu6_emit_xs_config(struct tu_cs *cs,
     */
    size = MIN2(size + base, xs->constlen) - base;
 
-   if (size <= 0)
-      return;
+   if (size > 0) {
+      tu_cs_emit_pkt7(cs, tu6_stage2opcode(stage), 3 + size * 4);
+      tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(base) |
+                 CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                 CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+                 CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(stage)) |
+                 CP_LOAD_STATE6_0_NUM_UNIT(size));
+      tu_cs_emit(cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
+      tu_cs_emit(cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
 
-   tu_cs_emit_pkt7(cs, tu6_stage2opcode(stage), 3 + size * 4);
-   tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(base) |
-                  CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-                  CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-                  CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(stage)) |
-                  CP_LOAD_STATE6_0_NUM_UNIT(size));
-   tu_cs_emit(cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
-   tu_cs_emit(cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
+      tu_cs_emit_array(cs, const_state->immediates, size * 4);
+   }
 
-   tu_cs_emit_array(cs, const_state->immediates, size * 4);
+   if (const_state->constant_data_ubo != -1) {
+      uint64_t iova = binary_iova + xs->info.constant_data_offset;
+
+      /* Upload UBO state for the constant data. */
+      tu_cs_emit_pkt7(cs, tu6_stage2opcode(stage), 5);
+      tu_cs_emit(cs,
+                 CP_LOAD_STATE6_0_DST_OFF(const_state->constant_data_ubo) |
+                 CP_LOAD_STATE6_0_STATE_TYPE(ST6_UBO)|
+                 CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+                 CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(stage)) |
+                 CP_LOAD_STATE6_0_NUM_UNIT(1));
+      tu_cs_emit(cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
+      tu_cs_emit(cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
+      int size_vec4s = DIV_ROUND_UP(xs->constant_data_size, 16);
+      tu_cs_emit_qw(cs,
+                    iova |
+                    (uint64_t)A6XX_UBO_1_SIZE(size_vec4s) << 32);
+
+      /* Upload the constant data to the const file if needed. */
+      const struct ir3_ubo_analysis_state *ubo_state = &const_state->ubo_state;
+
+      for (int i = 0; i < ubo_state->num_enabled; i++) {
+         if (ubo_state->range[i].ubo.block != const_state->constant_data_ubo ||
+             ubo_state->range[i].ubo.bindless) {
+            continue;
+         }
+
+         uint32_t start = ubo_state->range[i].start;
+         uint32_t end = ubo_state->range[i].end;
+         uint32_t size = MIN2(end - start,
+                              (16 * xs->constlen) - ubo_state->range[i].offset);
+
+         tu_cs_emit_pkt7(cs, tu6_stage2opcode(stage), 3);
+         tu_cs_emit(cs,
+                    CP_LOAD_STATE6_0_DST_OFF(ubo_state->range[i].offset / 16) |
+                    CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                    CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+                    CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(stage)) |
+                    CP_LOAD_STATE6_0_NUM_UNIT(size / 16));
+         tu_cs_emit_qw(cs, iova + start);
+      }
+   }
 }
 
 static void
 tu6_emit_cs_config(struct tu_cs *cs, const struct tu_shader *shader,
                    const struct ir3_shader_variant *v,
+                   const struct tu_pvtmem_config *pvtmem,
                    uint64_t binary_iova)
 {
    tu_cs_emit_regs(cs, A6XX_HLSQ_INVALIDATE_CMD(
          .cs_state = true,
          .cs_ibo = true));
 
-   tu6_emit_xs_config(cs, MESA_SHADER_COMPUTE, v, binary_iova);
+   tu6_emit_xs_config(cs, MESA_SHADER_COMPUTE, v, pvtmem, binary_iova);
 
    tu_cs_emit_pkt4(cs, REG_A6XX_SP_CS_UNKNOWN_A9B1, 1);
    tu_cs_emit(cs, 0x41);
@@ -608,9 +661,13 @@ tu6_setup_streamout(struct tu_cs *cs,
                     struct ir3_shader_linkage *l)
 {
    const struct ir3_stream_output_info *info = &v->shader->stream_output;
-   uint32_t prog[IR3_MAX_SO_OUTPUTS * 2] = {};
+   /* Note: 64 here comes from the HW layout of the program RAM. The program
+    * for stream N is at DWORD 64 * N.
+    */
+#define A6XX_SO_PROG_DWORDS 64
+   uint32_t prog[A6XX_SO_PROG_DWORDS * IR3_MAX_SO_STREAMS] = {};
+   BITSET_DECLARE(valid_dwords, A6XX_SO_PROG_DWORDS * IR3_MAX_SO_STREAMS) = {0};
    uint32_t ncomp[IR3_MAX_SO_BUFFERS] = {};
-   uint32_t prog_count = align(l->max_loc, 2) / 2;
 
    /* TODO: streamout state should be in a non-GMEM draw state */
 
@@ -619,7 +676,7 @@ tu6_setup_streamout(struct tu_cs *cs,
       tu_cs_emit_pkt7(cs, CP_CONTEXT_REG_BUNCH, 4);
       tu_cs_emit(cs, REG_A6XX_VPC_SO_CNTL);
       tu_cs_emit(cs, 0);
-      tu_cs_emit(cs, REG_A6XX_VPC_SO_BUF_CNTL);
+      tu_cs_emit(cs, REG_A6XX_VPC_SO_STREAM_CNTL);
       tu_cs_emit(cs, 0);
       return;
    }
@@ -651,35 +708,54 @@ tu6_setup_streamout(struct tu_cs *cs,
          unsigned loc = l->var[idx].loc + c;
          unsigned off = j + out->dst_offset;  /* in dwords */
 
+         assert(loc < A6XX_SO_PROG_DWORDS * 2);
+         unsigned dword = out->stream * A6XX_SO_PROG_DWORDS + loc/2;
          if (loc & 1) {
-            prog[loc/2] |= A6XX_VPC_SO_PROG_B_EN |
+            prog[dword] |= A6XX_VPC_SO_PROG_B_EN |
                            A6XX_VPC_SO_PROG_B_BUF(out->output_buffer) |
                            A6XX_VPC_SO_PROG_B_OFF(off * 4);
          } else {
-            prog[loc/2] |= A6XX_VPC_SO_PROG_A_EN |
+            prog[dword] |= A6XX_VPC_SO_PROG_A_EN |
                            A6XX_VPC_SO_PROG_A_BUF(out->output_buffer) |
                            A6XX_VPC_SO_PROG_A_OFF(off * 4);
          }
+         BITSET_SET(valid_dwords, dword);
       }
    }
 
-   tu_cs_emit_pkt7(cs, CP_CONTEXT_REG_BUNCH, 12 + 2 * prog_count);
-   tu_cs_emit(cs, REG_A6XX_VPC_SO_BUF_CNTL);
-   tu_cs_emit(cs, A6XX_VPC_SO_BUF_CNTL_ENABLE |
-                  COND(ncomp[0] > 0, A6XX_VPC_SO_BUF_CNTL_BUF0) |
-                  COND(ncomp[1] > 0, A6XX_VPC_SO_BUF_CNTL_BUF1) |
-                  COND(ncomp[2] > 0, A6XX_VPC_SO_BUF_CNTL_BUF2) |
-                  COND(ncomp[3] > 0, A6XX_VPC_SO_BUF_CNTL_BUF3));
+   unsigned prog_count = 0;
+   unsigned start, end;
+   BITSET_FOREACH_RANGE(start, end, valid_dwords,
+                        A6XX_SO_PROG_DWORDS * IR3_MAX_SO_STREAMS) {
+      prog_count += end - start + 1;
+   }
+
+   tu_cs_emit_pkt7(cs, CP_CONTEXT_REG_BUNCH, 10 + 2 * prog_count);
+   tu_cs_emit(cs, REG_A6XX_VPC_SO_STREAM_CNTL);
+   tu_cs_emit(cs, A6XX_VPC_SO_STREAM_CNTL_STREAM_ENABLE(info->streams_written) |
+                  COND(ncomp[0] > 0,
+                       A6XX_VPC_SO_STREAM_CNTL_BUF0_STREAM(1 + info->buffer_to_stream[0])) |
+                  COND(ncomp[1] > 0,
+                       A6XX_VPC_SO_STREAM_CNTL_BUF1_STREAM(1 + info->buffer_to_stream[1])) |
+                  COND(ncomp[2] > 0,
+                       A6XX_VPC_SO_STREAM_CNTL_BUF2_STREAM(1 + info->buffer_to_stream[2])) |
+                  COND(ncomp[3] > 0,
+                       A6XX_VPC_SO_STREAM_CNTL_BUF3_STREAM(1 + info->buffer_to_stream[3])));
    for (uint32_t i = 0; i < 4; i++) {
       tu_cs_emit(cs, REG_A6XX_VPC_SO_NCOMP(i));
       tu_cs_emit(cs, ncomp[i]);
    }
-   /* note: "VPC_SO_CNTL" write seems to be responsible for resetting the SO_PROG */
-   tu_cs_emit(cs, REG_A6XX_VPC_SO_CNTL);
-   tu_cs_emit(cs, A6XX_VPC_SO_CNTL_ENABLE);
-   for (uint32_t i = 0; i < prog_count; i++) {
-      tu_cs_emit(cs, REG_A6XX_VPC_SO_PROG);
-      tu_cs_emit(cs, prog[i]);
+   bool first = true;
+   BITSET_FOREACH_RANGE(start, end, valid_dwords,
+                        A6XX_SO_PROG_DWORDS * IR3_MAX_SO_STREAMS) {
+      tu_cs_emit(cs, REG_A6XX_VPC_SO_CNTL);
+      tu_cs_emit(cs, COND(first, A6XX_VPC_SO_CNTL_RESET) |
+                     A6XX_VPC_SO_CNTL_ADDR(start));
+      for (unsigned i = start; i < end; i++) {
+         tu_cs_emit(cs, REG_A6XX_VPC_SO_PROG);
+         tu_cs_emit(cs, prog[i]);
+      }
+      first = false;
    }
 }
 
@@ -1449,7 +1525,7 @@ tu6_emit_program(struct tu_cs *cs,
    */
    if (binning_pass && !gs) {
       vs = bs;
-      tu6_emit_xs_config(cs, stage, bs, builder->binning_vs_iova);
+      tu6_emit_xs_config(cs, stage, bs, &builder->pvtmem, builder->binning_vs_iova);
       stage++;
    }
 
@@ -1459,7 +1535,7 @@ tu6_emit_program(struct tu_cs *cs,
       if (stage == MESA_SHADER_FRAGMENT && binning_pass)
          fs = xs = NULL;
 
-      tu6_emit_xs_config(cs, stage, xs, builder->shader_iova[stage]);
+      tu6_emit_xs_config(cs, stage, xs, &builder->pvtmem, builder->shader_iova[stage]);
    }
 
    uint32_t multiview_views = util_logbase2(builder->multiview_mask) + 1;
@@ -1482,7 +1558,7 @@ tu6_emit_program(struct tu_cs *cs,
    tu_cs_emit(cs, multiview_cntl);
 
    if (multiview_cntl &&
-       builder->device->physical_device->supports_multiview_mask) {
+       builder->device->physical_device->info.a6xx.supports_multiview_mask) {
       tu_cs_emit_pkt4(cs, REG_A6XX_PC_MULTIVIEW_MASK, 1);
       tu_cs_emit(cs, builder->multiview_mask);
    }
@@ -1904,6 +1980,43 @@ tu6_emit_blend_control(struct tu_cs *cs,
                                       .alpha_to_one = msaa_info->alphaToOneEnable));
 }
 
+static uint32_t
+calc_pvtmem_size(struct tu_device *dev, struct tu_pvtmem_config *config,
+                 uint32_t pvtmem_bytes)
+{
+   uint32_t per_fiber_size = ALIGN(pvtmem_bytes, 512);
+   uint32_t per_sp_size =
+      ALIGN(per_fiber_size * dev->physical_device->info.fibers_per_sp, 1 << 12);
+
+   if (config) {
+      config->per_fiber_size = per_fiber_size;
+      config->per_sp_size = per_sp_size;
+   }
+
+   return dev->physical_device->info.num_sp_cores * per_sp_size;
+}
+
+static void
+tu_setup_pvtmem(struct tu_device *dev,
+                struct tu_pipeline *pipeline,
+                struct tu_pvtmem_config *config,
+                uint32_t pvtmem_bytes, bool per_wave)
+{
+   struct tu_cs_memory memory;
+
+   if (!pvtmem_bytes) {
+      memset(config, 0, sizeof(*config));
+      return;
+   }
+
+   uint32_t total_size = calc_pvtmem_size(dev, config, pvtmem_bytes);
+   config->per_wave = per_wave;
+
+   tu_cs_alloc(&pipeline->cs, total_size / 32, 8, &memory);
+   config->iova = memory.iova;
+}
+
+
 static VkResult
 tu_pipeline_allocate_cs(struct tu_device *dev,
                         struct tu_pipeline *pipeline,
@@ -1914,14 +2027,21 @@ tu_pipeline_allocate_cs(struct tu_device *dev,
 
    /* graphics case: */
    if (builder) {
+      uint32_t pvtmem_bytes = 0;
       for (uint32_t i = 0; i < MESA_SHADER_STAGES; i++) {
-         if (builder->variants[i])
-            size += builder->variants[i]->info.sizedwords;
+         if (builder->variants[i]) {
+            size += builder->variants[i]->info.size / 4;
+            pvtmem_bytes = MAX2(pvtmem_bytes, builder->variants[i]->pvtmem_size);
+         }
       }
 
-      size += builder->binning_variant->info.sizedwords;
+      size += builder->binning_variant->info.size / 4;
+      pvtmem_bytes = MAX2(pvtmem_bytes, builder->binning_variant->pvtmem_size);
+
+      size += calc_pvtmem_size(dev, NULL, pvtmem_bytes) / 4;
    } else {
-      size += compute->info.sizedwords;
+      size += compute->info.size / 4;
+      size += calc_pvtmem_size(dev, NULL, compute->pvtmem_size) / 4;
    }
 
    tu_cs_init(&pipeline->cs, dev, TU_CS_MODE_SUB_STREAM, size);
@@ -1993,12 +2113,12 @@ tu_upload_variant(struct tu_pipeline *pipeline,
       return 0;
 
    /* this expects to get enough alignment because shaders are allocated first
-    * and sizedwords is always aligned correctly
+    * and total size is always aligned correctly
     * note: an assert in tu6_emit_xs_config validates the alignment
     */
-   tu_cs_alloc(&pipeline->cs, variant->info.sizedwords, 1, &memory);
+   tu_cs_alloc(&pipeline->cs, variant->info.size / 4, 1, &memory);
 
-   memcpy(memory.map, variant->bin, sizeof(uint32_t) * variant->info.sizedwords);
+   memcpy(memory.map, variant->bin, variant->info.size);
    return memory.iova;
 }
 
@@ -2035,10 +2155,9 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
    if (!nir[MESA_SHADER_FRAGMENT]) {
          const nir_shader_compiler_options *nir_options =
             ir3_get_compiler_options(builder->device->compiler);
-         nir_builder fs_b;
-         nir_builder_init_simple_shader(&fs_b, NULL, MESA_SHADER_FRAGMENT,
-                                        nir_options);
-         fs_b.shader->info.name = ralloc_strdup(fs_b.shader, "noop_fs");
+         nir_builder fs_b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
+                                                           nir_options,
+                                                           "noop_fs");
          nir[MESA_SHADER_FRAGMENT] = fs_b.shader;
    }
 
@@ -2378,7 +2497,7 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
       depth_clip_disable = !depth_clip_state->depthClipEnable;
 
    struct tu_cs cs;
-   pipeline->rast_state = tu_cs_draw_state(&pipeline->cs, &cs, 9);
+   pipeline->rast_state = tu_cs_draw_state(&pipeline->cs, &cs, 13);
 
    tu_cs_emit_regs(&cs,
                    A6XX_GRAS_CL_CNTL(
@@ -2399,6 +2518,16 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
    tu_cs_emit_regs(&cs,
                    A6XX_GRAS_SU_POINT_MINMAX(.min = 1.0f / 16.0f, .max = 4092.0f),
                    A6XX_GRAS_SU_POINT_SIZE(1.0f));
+
+   const VkPipelineRasterizationStateStreamCreateInfoEXT *stream_info =
+      vk_find_struct_const(rast_info->pNext,
+                           PIPELINE_RASTERIZATION_STATE_STREAM_CREATE_INFO_EXT);
+   unsigned stream = stream_info ? stream_info->rasterizationStream : 0;
+   tu_cs_emit_regs(&cs,
+                   A6XX_PC_RASTER_CNTL(.stream = stream,
+                                       .discard = rast_info->rasterizerDiscardEnable));
+   tu_cs_emit_regs(&cs,
+                   A6XX_VPC_UNKNOWN_9107(.raster_discard = rast_info->rasterizerDiscardEnable));
 
    pipeline->gras_su_cntl =
       tu6_gras_su_cntl(rast_info, builder->samples, builder->multiview_mask != 0);
@@ -2693,6 +2822,30 @@ tu_pipeline_builder_build(struct tu_pipeline_builder *builder,
    builder->binning_vs_iova =
       tu_upload_variant(*pipeline, builder->binning_variant);
 
+   /* Setup private memory. Note that because we're sharing the same private
+    * memory for all stages, all stages must use the same config, or else
+    * fibers from one stage might overwrite fibers in another.
+    */
+
+   uint32_t pvtmem_size = 0;
+   bool per_wave = true;
+   for (uint32_t i = 0; i < MESA_SHADER_STAGES; i++) {
+      if (builder->variants[i]) {
+         pvtmem_size = MAX2(pvtmem_size, builder->variants[i]->pvtmem_size);
+         if (!builder->variants[i]->pvtmem_per_wave)
+            per_wave = false;
+      }
+   }
+
+   if (builder->binning_variant) {
+      pvtmem_size = MAX2(pvtmem_size, builder->binning_variant->pvtmem_size);
+      if (!builder->binning_variant->pvtmem_per_wave)
+         per_wave = false;
+   }
+
+   tu_setup_pvtmem(builder->device, *pipeline, &builder->pvtmem,
+                   pvtmem_size, per_wave);
+
    tu_pipeline_builder_parse_dynamic(builder, *pipeline);
    tu_pipeline_builder_parse_shader_stages(builder, *pipeline);
    tu_pipeline_builder_parse_vertex_input(builder, *pipeline);
@@ -2884,12 +3037,15 @@ tu_compute_pipeline_create(VkDevice device,
 
    uint64_t shader_iova = tu_upload_variant(pipeline, v);
 
+   struct tu_pvtmem_config pvtmem;
+   tu_setup_pvtmem(dev, pipeline, &pvtmem, v->pvtmem_size, v->pvtmem_per_wave);
+
    for (int i = 0; i < 3; i++)
       pipeline->compute.local_size[i] = v->shader->nir->info.cs.local_size[i];
 
    struct tu_cs prog_cs;
    tu_cs_begin_sub_stream(&pipeline->cs, 512, &prog_cs);
-   tu6_emit_cs_config(&prog_cs, shader, v, shader_iova);
+   tu6_emit_cs_config(&prog_cs, shader, v, &pvtmem, shader_iova);
    pipeline->program.state = tu_cs_end_draw_state(&pipeline->cs, &prog_cs);
 
    tu6_emit_load_state(pipeline, true);

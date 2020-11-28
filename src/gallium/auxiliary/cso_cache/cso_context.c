@@ -1722,21 +1722,27 @@ cso_restore_state(struct cso_context *cso)
 
 void
 cso_draw_vbo(struct cso_context *cso,
-             const struct pipe_draw_info *info)
+             const struct pipe_draw_info *info,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count draw)
 {
    struct u_vbuf *vbuf = cso->vbuf_current;
 
    /* We can't have both indirect drawing and SO-vertex-count drawing */
-   assert(info->indirect == NULL || info->count_from_stream_output == NULL);
+   assert(!indirect ||
+          indirect->buffer == NULL ||
+          indirect->count_from_stream_output == NULL);
 
    /* We can't have SO-vertex-count drawing with an index buffer */
-   assert(info->count_from_stream_output == NULL || info->index_size == 0);
+   assert(info->index_size == 0 ||
+          !indirect ||
+          indirect->count_from_stream_output == NULL);
 
    if (vbuf) {
-      u_vbuf_draw_vbo(vbuf, info);
+      u_vbuf_draw_vbo(vbuf, info, indirect, draw);
    } else {
       struct pipe_context *pipe = cso->pipe;
-      pipe->draw_vbo(pipe, info);
+      pipe->draw_vbo(pipe, info, indirect, &draw, 1);
    }
 }
 
@@ -1744,16 +1750,18 @@ void
 cso_draw_arrays(struct cso_context *cso, uint mode, uint start, uint count)
 {
    struct pipe_draw_info info;
+   struct pipe_draw_start_count draw;
 
    util_draw_init_info(&info);
 
    info.mode = mode;
-   info.start = start;
-   info.count = count;
    info.min_index = start;
    info.max_index = start + count - 1;
 
-   cso_draw_vbo(cso, &info);
+   draw.start = start;
+   draw.count = count;
+
+   cso_draw_vbo(cso, &info, NULL, draw);
 }
 
 void
@@ -1762,16 +1770,18 @@ cso_draw_arrays_instanced(struct cso_context *cso, uint mode,
                           uint start_instance, uint instance_count)
 {
    struct pipe_draw_info info;
+   struct pipe_draw_start_count draw;
 
    util_draw_init_info(&info);
 
    info.mode = mode;
-   info.start = start;
-   info.count = count;
    info.min_index = start;
    info.max_index = start + count - 1;
    info.start_instance = start_instance;
    info.instance_count = instance_count;
 
-   cso_draw_vbo(cso, &info);
+   draw.start = start;
+   draw.count = count;
+
+   cso_draw_vbo(cso, &info, NULL, draw);
 }

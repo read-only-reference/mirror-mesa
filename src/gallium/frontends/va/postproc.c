@@ -204,6 +204,7 @@ static VAStatus vlVaPostProcBlit(vlVaDriver *drv, vlVaContext *context,
 
       memset(&blit, 0, sizeof(blit));
       blit.src.resource = from->texture;
+      blit.src.resource->height0 = src_region->height;
       blit.src.format = from->format;
       blit.src.level = 0;
       blit.src.box.z = from->u.tex.first_layer;
@@ -211,6 +212,7 @@ static VAStatus vlVaPostProcBlit(vlVaDriver *drv, vlVaContext *context,
       vlVaGetBox(src, i, &blit.src.box, src_region);
 
       blit.dst.resource = dst_surfaces[i]->texture;
+      blit.dst.resource->height0 = dst_region->height;
       blit.dst.format = dst_surfaces[i]->format;
       blit.dst.level = 0;
       blit.dst.box.z = dst_surfaces[i]->u.tex.first_layer;
@@ -285,7 +287,7 @@ vlVaHandleVAProcPipelineParameterBufferType(vlVaDriver *drv, vlVaContext *contex
    VARectangle def_src_region, def_dst_region;
    const VARectangle *src_region, *dst_region;
    VAProcPipelineParameterBuffer *param;
-   struct pipe_video_buffer *src;
+   struct pipe_video_buffer *src, *dst;
    vlVaSurface *src_surface, *dst_surface;
    unsigned i;
 
@@ -307,6 +309,21 @@ vlVaHandleVAProcPipelineParameterBufferType(vlVaDriver *drv, vlVaContext *contex
       return VA_STATUS_ERROR_INVALID_SURFACE;
 
    src = src_surface->buffer;
+   dst = dst_surface->buffer;
+
+   /* convert the destination buffer to progressive if we're deinterlacing 
+      otherwise we might end up deinterlacing twice */
+   if (param->num_filters && dst->interlaced) {
+      vlVaSurface *surf;
+      surf = dst_surface;
+      surf->templat.interlaced = false;
+      dst->destroy(dst);
+
+      if (vlVaHandleSurfaceAllocate(drv, surf, &surf->templat) != VA_STATUS_SUCCESS)
+         return VA_STATUS_ERROR_ALLOCATION_FAILED;
+
+      dst = context->target = surf->buffer;
+   }
 
    for (i = 0; i < param->num_filters; i++) {
       vlVaBuffer *buf = handle_table_get(drv->htab, param->filters[i]);

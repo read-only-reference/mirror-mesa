@@ -23,6 +23,8 @@ LibGL environment variables
 ``LIBGL_SHOW_FPS``
    print framerate to stdout based on the number of ``glXSwapBuffers``
    calls per second.
+``LIBGL_DRI2_DISABLE``
+   disable DRI2 if set to ``true``.
 ``LIBGL_DRI3_DISABLE``
    disable DRI3 if set to ``true``.
 
@@ -349,6 +351,11 @@ i945/i965 driver environment variables (non-Gallium)
    The success of assembly override would be signified by "Successfully
    overrode shader with sha1 <sha1>" in stderr replacing the original
    assembly.
+``INTEL_BLACKHOLE_DEFAULT``
+   if set to 1, true or yes, then the OpenGL implementation will
+   default ``GL_BLACKHOLE_RENDER_INTEL`` to true, thus disabling any
+   rendering.
+
 
 Radeon driver environment variables (radeon, r200, and r300g)
 -------------------------------------------------------------
@@ -555,8 +562,10 @@ RADV driver environment variables
       Enables DCC,FMASK,CMASK,HTILE in situations where the driver supports it
       but normally does not deem it beneficial.
    ``hang``
-      enable GPU hangs detection and dump a report to $HOME/radv_dumps_<pid>
-      if a GPU hang is detected
+      enable GPU hangs detection and dump a report to
+      $HOME/radv_dumps_<pid>_<time> if a GPU hang is detected
+   ``img``
+      Print image info
    ``info``
       show GPU-related information
    ``metashaders``
@@ -585,6 +594,8 @@ RADV driver environment variables
       disable out-of-order rasterization
    ``nothreadllvm``
       disable LLVM threaded compilation
+   ``noumr``
+      disable UMR dumps during GPU hang detection (only with RADV_DEBUG=hang)
    ``preoptir``
       dump LLVM IR before any optimizations
    ``shaders``
@@ -657,8 +668,6 @@ radeonsi driver environment variables
    Disable SDMA clears
 ``nodmacopyimage``
    Disable SDMA image copies
-``zerovram``
-   Clear VRAM allocations.
 ``nodcc``
    Disable DCC.
 ``nodccclear``
@@ -677,8 +686,6 @@ radeonsi driver environment variables
    Disable MSAA compression
 ``nohyperz``
    Disable Hyper-Z
-``norbplus``
-   Disable RB+.
 ``no2d``
    Disable 2D tiling
 ``info``

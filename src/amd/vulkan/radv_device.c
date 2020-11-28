@@ -56,6 +56,13 @@
 #include "compiler/glsl_types.h"
 #include "util/driconf.h"
 
+/* The number of IBs per submit isn't infinite, it depends on the ring type
+ * (ie. some initial setup needed for a submit) and the number of IBs (4 DW).
+ * This limit is arbitrary but should be safe for now.  Ideally, we should get
+ * this limit from the KMD.
+*/
+#define RADV_MAX_IBS_PER_SUBMIT 192
+
 /* The "RAW" clocks on Linux are called "FAST" on FreeBSD */
 #if !defined(CLOCK_MONOTONIC_RAW) && defined(CLOCK_MONOTONIC_FAST)
 #define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC_FAST
@@ -79,14 +86,9 @@ static
 void radv_destroy_semaphore_part(struct radv_device *device,
                                  struct radv_semaphore_part *part);
 
-static VkResult
-radv_create_pthread_cond(pthread_cond_t *cond);
-
 uint64_t radv_get_current_time(void)
 {
-	struct timespec tv;
-	clock_gettime(CLOCK_MONOTONIC, &tv);
-	return tv.tv_nsec + tv.tv_sec*1000000000ull;
+	return os_time_get_nano();
 }
 
 static uint64_t radv_get_absolute_timeout(uint64_t timeout)
@@ -154,6 +156,13 @@ radv_get_vram_size(struct radv_physical_device *device)
 	return radv_get_adjusted_vram_size(device) - device->rad_info.vram_vis_size;
 }
 
+enum radv_heap {
+	RADV_HEAP_VRAM     = 1 << 0,
+	RADV_HEAP_GTT      = 1 << 1,
+	RADV_HEAP_VRAM_VIS = 1 << 2,
+	RADV_HEAP_MAX      = 1 << 3,
+};
+
 static void
 radv_physical_device_init_mem_types(struct radv_physical_device *device)
 {
@@ -161,8 +170,13 @@ radv_physical_device_init_mem_types(struct radv_physical_device *device)
 	uint64_t vram_size = radv_get_vram_size(device);
 	int vram_index = -1, visible_vram_index = -1, gart_index = -1;
 	device->memory_properties.memoryHeapCount = 0;
-	if (vram_size > 0) {
+	device->heaps = 0;
+
+	/* Only get a VRAM heap if it is significant, not if it is a 16 MiB
+	 * remainder above visible VRAM. */
+	if (vram_size > 0 && vram_size * 9 >= visible_vram_size) {
 		vram_index = device->memory_properties.memoryHeapCount++;
+		device->heaps |= RADV_HEAP_VRAM;
 		device->memory_properties.memoryHeaps[vram_index] = (VkMemoryHeap) {
 			.size = vram_size,
 			.flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
@@ -171,6 +185,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *device)
 
 	if (device->rad_info.gart_size > 0) {
 		gart_index = device->memory_properties.memoryHeapCount++;
+		device->heaps |= RADV_HEAP_GTT;
 		device->memory_properties.memoryHeaps[gart_index] = (VkMemoryHeap) {
 			.size = device->rad_info.gart_size,
 			.flags = 0,
@@ -179,6 +194,7 @@ radv_physical_device_init_mem_types(struct radv_physical_device *device)
 
 	if (visible_vram_size) {
 		visible_vram_index = device->memory_properties.memoryHeapCount++;
+		device->heaps |= RADV_HEAP_VRAM_VIS;
 		device->memory_properties.memoryHeaps[visible_vram_index] = (VkMemoryHeap) {
 			.size = visible_vram_size,
 			.flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT,
@@ -399,7 +415,6 @@ radv_physical_device_try_create(struct radv_instance *instance,
 
 	device->use_ngg = device->rad_info.chip_class >= GFX10 &&
 			  device->rad_info.family != CHIP_NAVI14 &&
-			  device->rad_info.has_dedicated_vram &&
 			  !(device->instance->debug_flags & RADV_DEBUG_NO_NGG);
 
 	device->use_ngg_streamout = false;
@@ -531,6 +546,8 @@ static const struct debug_control radv_debug_options[] = {
 	{"llvm", RADV_DEBUG_LLVM},
 	{"forcecompress", RADV_DEBUG_FORCE_COMPRESS},
 	{"hang", RADV_DEBUG_HANG},
+	{"img", RADV_DEBUG_IMG},
+	{"noumr", RADV_DEBUG_NO_UMR},
 	{NULL, 0}
 };
 
@@ -1433,6 +1450,13 @@ void radv_GetPhysicalDeviceFeatures2(
 			features->shaderTerminateInvocation = true;
 			break;
 		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT: {
+			VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT *features =
+				(VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT *)ext;
+			features->shaderImageInt64Atomics = LLVM_VERSION_MAJOR >= 11 || !pdevice->use_llvm;
+			features->sparseImageInt64Atomics = false;
+			break;
+		}
 		default:
 			break;
 		}
@@ -1850,7 +1874,7 @@ void radv_GetPhysicalDeviceProperties2(
 			properties->shaderEngineCount =
 				pdevice->rad_info.max_se;
 			properties->shaderArraysPerEngineCount =
-				pdevice->rad_info.max_sh_per_se;
+				pdevice->rad_info.max_sa_per_se;
 			properties->computeUnitsPerShaderArray =
 				pdevice->rad_info.min_good_cu_per_sa;
 			properties->simdPerComputeUnit =
@@ -2195,10 +2219,6 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
 {
 	RADV_FROM_HANDLE(radv_physical_device, device, physicalDevice);
 	VkPhysicalDeviceMemoryProperties *memory_properties = &device->memory_properties;
-	uint64_t visible_vram_size = radv_get_visible_vram_size(device);
-	uint64_t vram_size = radv_get_vram_size(device);
-	uint64_t gtt_size = device->rad_info.gart_size;
-	uint64_t heap_budget, heap_usage;
 
 	/* For all memory heaps, the computation of budget is as follow:
 	 *	heap_budget = heap_size - global_heap_usage + app_heap_usage
@@ -2209,43 +2229,38 @@ radv_get_memory_budget_properties(VkPhysicalDevice physicalDevice,
 	 * Note that the application heap usages are not really accurate (eg.
 	 * in presence of shared buffers).
 	 */
-	for (int i = 0; i < device->memory_properties.memoryTypeCount; i++) {
-		uint32_t heap_index = device->memory_properties.memoryTypes[i].heapIndex;
+	unsigned mask = device->heaps;
+	unsigned heap = 0;
+	while (mask) {
+		uint64_t internal_usage = 0, total_usage = 0;
+		unsigned type = 1u << u_bit_scan(&mask);
 
-		if ((device->memory_domains[i] & RADEON_DOMAIN_VRAM) && (device->memory_flags[i] & RADEON_FLAG_NO_CPU_ACCESS)) {
-			heap_usage = device->ws->query_value(device->ws,
-							     RADEON_ALLOCATED_VRAM);
-
-			heap_budget = vram_size -
-				MIN2(vram_size, device->ws->query_value(device->ws, RADEON_VRAM_USAGE)) +
-				heap_usage;
-
-			memoryBudget->heapBudget[heap_index] = heap_budget;
-			memoryBudget->heapUsage[heap_index] = heap_usage;
-		} else if (device->memory_domains[i] & RADEON_DOMAIN_VRAM) {
-			heap_usage = device->ws->query_value(device->ws,
-							     RADEON_ALLOCATED_VRAM_VIS);
-
-			heap_budget = visible_vram_size -
-				MIN2(visible_vram_size, device->ws->query_value(device->ws, RADEON_VRAM_VIS_USAGE)) +
-				heap_usage;
-
-			memoryBudget->heapBudget[heap_index] = heap_budget;
-			memoryBudget->heapUsage[heap_index] = heap_usage;
-		} else {
-			assert(device->memory_domains[i] & RADEON_DOMAIN_GTT);
-
-			heap_usage = device->ws->query_value(device->ws,
-							     RADEON_ALLOCATED_GTT);
-
-			heap_budget = gtt_size -
-				device->ws->query_value(device->ws, RADEON_GTT_USAGE) +
-				heap_usage;
-
-			memoryBudget->heapBudget[heap_index] = heap_budget;
-			memoryBudget->heapUsage[heap_index] = heap_usage;
+		switch(type) {
+		case RADV_HEAP_VRAM:
+			internal_usage = device->ws->query_value(device->ws, RADEON_ALLOCATED_VRAM);
+			total_usage = device->ws->query_value(device->ws, RADEON_VRAM_USAGE);
+			break;
+		case RADV_HEAP_VRAM_VIS:
+			internal_usage = device->ws->query_value(device->ws, RADEON_ALLOCATED_VRAM_VIS);
+			if (!(device->heaps & RADV_HEAP_VRAM))
+				internal_usage += device->ws->query_value(device->ws, RADEON_ALLOCATED_VRAM);
+			total_usage = device->ws->query_value(device->ws, RADEON_VRAM_VIS_USAGE);
+			break;
+		case RADV_HEAP_GTT:
+			internal_usage = device->ws->query_value(device->ws, RADEON_ALLOCATED_GTT);
+			total_usage = device->ws->query_value(device->ws, RADEON_GTT_USAGE);
+			break;
 		}
+
+		uint64_t free_space = device->memory_properties.memoryHeaps[heap].size -
+			MIN2(device->memory_properties.memoryHeaps[heap].size,
+			     total_usage);
+		memoryBudget->heapBudget[heap] = free_space + internal_usage;
+		memoryBudget->heapUsage[heap] = internal_usage;
+		++heap;
 	}
+
+	assert(heap == memory_properties->memoryHeapCount);
 
 	/* The heapBudget and heapUsage values must be zero for array elements
 	 * greater than or equal to
@@ -2333,7 +2348,6 @@ radv_queue_init(struct radv_device *device, struct radv_queue *queue,
 	queue->queue_idx = idx;
 	queue->priority = radv_get_queue_global_priority(global_priority);
 	queue->flags = flags;
-	queue->hw_ctx = NULL;
 
 	VkResult result = device->ws->ctx_create(device->ws, queue->priority, &queue->hw_ctx);
 	if (result != VK_SUCCESS)
@@ -2343,11 +2357,11 @@ radv_queue_init(struct radv_device *device, struct radv_queue *queue,
 	pthread_mutex_init(&queue->pending_mutex, NULL);
 
 	pthread_mutex_init(&queue->thread_mutex, NULL);
-	queue->thread_submission = NULL;
-	queue->thread_running = queue->thread_exit = false;
-	result = radv_create_pthread_cond(&queue->thread_cond);
-	if (result != VK_SUCCESS)
+	if (u_cnd_monotonic_init(&queue->thread_cond)) {
+		result = VK_ERROR_INITIALIZATION_FAILED;
 		return vk_error(device->instance, result);
+	}
+	queue->cond_created = true;
 
 	return VK_SUCCESS;
 }
@@ -2355,17 +2369,22 @@ radv_queue_init(struct radv_device *device, struct radv_queue *queue,
 static void
 radv_queue_finish(struct radv_queue *queue)
 {
-	if (queue->thread_running) {
-		p_atomic_set(&queue->thread_exit, true);
-		pthread_cond_broadcast(&queue->thread_cond);
-		pthread_join(queue->submission_thread, NULL);
-	}
-	pthread_cond_destroy(&queue->thread_cond);
-	pthread_mutex_destroy(&queue->pending_mutex);
-	pthread_mutex_destroy(&queue->thread_mutex);
+	if (queue->hw_ctx) {
+		if (queue->cond_created) {
+			if (queue->thread_running) {
+				p_atomic_set(&queue->thread_exit, true);
+				u_cnd_monotonic_broadcast(&queue->thread_cond);
+				pthread_join(queue->submission_thread, NULL);
+			}
 
-	if (queue->hw_ctx)
+			u_cnd_monotonic_destroy(&queue->thread_cond);
+		}
+
+		pthread_mutex_destroy(&queue->pending_mutex);
+		pthread_mutex_destroy(&queue->thread_mutex);
+
 		queue->device->ws->ctx_destroy(queue->hw_ctx);
+	}
 
 	if (queue->initial_full_flush_preamble_cs)
 		queue->device->ws->cs_destroy(queue->initial_full_flush_preamble_cs);
@@ -2534,26 +2553,6 @@ radv_device_init_dispatch(struct radv_device *device)
 				radv_device_dispatch_table.entrypoints[i];
 		}
 	}
-}
-
-static VkResult
-radv_create_pthread_cond(pthread_cond_t *cond)
-{
-	pthread_condattr_t condattr;
-	if (pthread_condattr_init(&condattr)) {
-		return VK_ERROR_INITIALIZATION_FAILED;
-	}
-
-	if (pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC)) {
-		pthread_condattr_destroy(&condattr);
-		return VK_ERROR_INITIALIZATION_FAILED;
-	}
-	if (pthread_cond_init(cond, &condattr)) {
-		pthread_condattr_destroy(&condattr);
-		return VK_ERROR_INITIALIZATION_FAILED;
-	}
-	pthread_condattr_destroy(&condattr);
-	return VK_SUCCESS;
 }
 
 static VkResult
@@ -2836,6 +2835,12 @@ VkResult radv_CreateDevice(
 			abort();
 		}
 
+		if (device->physical_device->rad_info.chip_class > GFX10) {
+			fprintf(stderr, "radv: Thread trace is not supported "
+					"for that GPU!\n");
+			exit(1);
+		}
+
 		/* Default buffer size set to 1MB per SE. */
 		device->thread_trace_buffer_size =
 			radv_get_int_debug_option("RADV_THREAD_TRACE_BUFFER_SIZE", 1024 * 1024);
@@ -2919,9 +2924,10 @@ VkResult radv_CreateDevice(
 
 	device->mem_cache = radv_pipeline_cache_from_handle(pc);
 
-	result = radv_create_pthread_cond(&device->timeline_cond);
-	if (result != VK_SUCCESS)
+	if (u_cnd_monotonic_init(&device->timeline_cond)) {
+		result = VK_ERROR_INITIALIZATION_FAILED;
 		goto fail_mem_cache;
+	}
 
 	device->force_aniso =
 		MIN2(16, radv_get_int_debug_option("RADV_TEX_ANISO", -1));
@@ -2998,7 +3004,7 @@ void radv_DestroyDevice(
 
 	radv_destroy_shader_slabs(device);
 
-	pthread_cond_destroy(&device->timeline_cond);
+	u_cnd_monotonic_destroy(&device->timeline_cond);
 	radv_bo_list_finish(&device->bo_list);
 
 	free(device->thread_trace_trigger_file);
@@ -4479,7 +4485,7 @@ radv_queue_submission_update_queue(struct radv_deferred_queue_submission *submis
 	}
 	pthread_mutex_unlock(&submission->queue->pending_mutex);
 
-	pthread_cond_broadcast(&submission->queue->device->timeline_cond);
+	u_cnd_monotonic_broadcast(&submission->queue->device->timeline_cond);
 }
 
 static VkResult
@@ -4721,7 +4727,7 @@ static void* radv_queue_submission_thread_run(void *q)
 		struct list_head processing_list;
 		VkResult result = VK_SUCCESS;
 		if (!submission) {
-			pthread_cond_wait(&queue->thread_cond, &queue->thread_mutex);
+			u_cnd_monotonic_wait(&queue->thread_cond, &queue->thread_mutex);
 			continue;
 		}
 		pthread_mutex_unlock(&queue->thread_mutex);
@@ -4789,7 +4795,7 @@ radv_queue_trigger_submission(struct radv_deferred_queue_submission *submission,
 	queue->thread_submission = submission;
 	pthread_mutex_unlock(&queue->thread_mutex);
 
-	pthread_cond_signal(&queue->thread_cond);
+	u_cnd_monotonic_signal(&queue->thread_cond);
 	return VK_SUCCESS;
 }
 
@@ -4941,7 +4947,7 @@ VkResult radv_QueueWaitIdle(
 
 	pthread_mutex_lock(&queue->pending_mutex);
 	while (!list_is_empty(&queue->pending_submissions)) {
-		pthread_cond_wait(&queue->device->timeline_cond, &queue->pending_mutex);
+		u_cnd_monotonic_wait(&queue->device->timeline_cond, &queue->pending_mutex);
 	}
 	pthread_mutex_unlock(&queue->pending_mutex);
 
@@ -5254,7 +5260,8 @@ static VkResult radv_alloc_memory(struct radv_device *device,
 		}
 
 		if (mem->image && mem->image->plane_count == 1 &&
-		    !vk_format_is_depth_or_stencil(mem->image->vk_format)) {
+		    !vk_format_is_depth_or_stencil(mem->image->vk_format) &&
+		    mem->image->info.samples == 1) {
 			struct radeon_bo_metadata metadata;
 			device->ws->buffer_get_metadata(mem->bo, &metadata);
 
@@ -5617,7 +5624,6 @@ static bool radv_sparse_bind_has_effects(const VkBindSparseInfo *info)
 	VkFence                                     fence)
 {
 	RADV_FROM_HANDLE(radv_queue, queue, _queue);
-	VkResult result;
 	uint32_t fence_idx = 0;
 
 	if (radv_device_is_lost(queue->device))
@@ -5658,7 +5664,7 @@ static bool radv_sparse_bind_has_effects(const VkBindSparseInfo *info)
 	}
 
 	if (fence != VK_NULL_HANDLE && !bindInfoCount) {
-		result = radv_signal_fence(queue, fence);
+		VkResult result = radv_signal_fence(queue, fence);
 		if (result != VK_SUCCESS)
 			return result;
 	}
@@ -6112,7 +6118,7 @@ radv_timeline_wait(struct radv_device *device,
 		struct timespec abstime;
 		timespec_from_nsec(&abstime, abs_timeout);
 
-		pthread_cond_timedwait(&device->timeline_cond, &timeline->mutex, &abstime);
+		u_cnd_monotonic_timedwait(&device->timeline_cond, &timeline->mutex, &abstime);
 
 		if (radv_get_current_time() >= abs_timeout && timeline->highest_submitted < value) {
 			pthread_mutex_unlock(&timeline->mutex);
@@ -6393,7 +6399,7 @@ radv_SignalSemaphore(VkDevice _device,
 		 * processed before we wake the application. This way we
 		 * ensure that any binary semaphores that are now unblocked
 		 * are usable by the application. */
-		pthread_cond_broadcast(&device->timeline_cond);
+		u_cnd_monotonic_broadcast(&device->timeline_cond);
 
 		return result;
 	}

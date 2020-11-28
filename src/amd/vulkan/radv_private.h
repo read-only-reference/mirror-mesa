@@ -46,6 +46,7 @@
 #include "c11/threads.h"
 #include <amdgpu.h>
 #include "compiler/shader_enums.h"
+#include "util/cnd_monotonic.h"
 #include "util/macros.h"
 #include "util/list.h"
 #include "util/rwlock.h"
@@ -319,6 +320,7 @@ struct radv_physical_device {
 	VkPhysicalDeviceMemoryProperties memory_properties;
 	enum radeon_bo_domain memory_domains[VK_MAX_MEMORY_TYPES];
 	enum radeon_bo_flag memory_flags[VK_MAX_MEMORY_TYPES];
+	unsigned heaps;
 
 	drmPciBusInfo bus_info;
 
@@ -729,11 +731,12 @@ struct radv_queue {
 	pthread_mutex_t pending_mutex;
 
 	pthread_mutex_t thread_mutex;
-	pthread_cond_t thread_cond;
+	struct u_cnd_monotonic thread_cond;
 	struct radv_deferred_queue_submission *thread_submission;
 	pthread_t submission_thread;
 	bool thread_exit;
 	bool thread_running;
+	bool cond_created;
 };
 
 struct radv_bo_list {
@@ -835,7 +838,7 @@ struct radv_device {
 
 	/* Condition variable for legacy timelines, to notify waiters when a
 	 * new point gets submitted. */
-	pthread_cond_t timeline_cond;
+	struct u_cnd_monotonic timeline_cond;
 
 	/* Thread trace. */
 	struct radeon_cmdbuf *thread_trace_start_cs[2];
@@ -1388,6 +1391,8 @@ struct radv_cmd_state {
 	uint32_t num_layout_transitions;
 	bool pending_sqtt_barrier_end;
 	enum rgp_flush_bits sqtt_flush_bits;
+
+	uint8_t cb_mip[MAX_RTS];
 };
 
 struct radv_cmd_pool {
@@ -1646,6 +1651,8 @@ struct radv_shader_module;
 #define RADV_HASH_SHADER_PS_WAVE32           (1 << 2)
 #define RADV_HASH_SHADER_GE_WAVE32           (1 << 3)
 #define RADV_HASH_SHADER_LLVM                (1 << 4)
+#define RADV_HASH_SHADER_DISCARD_TO_DEMOTE   (1 << 5)
+#define RADV_HASH_SHADER_MRT_NAN_FIXUP       (1 << 6)
 
 void
 radv_hash_shaders(unsigned char *hash,
@@ -1676,7 +1683,7 @@ mesa_to_vk_shader_stage(gl_shader_stage mesa_stage)
 	     __tmp &= ~(1 << (stage)))
 
 extern const VkFormat radv_fs_key_format_exemplars[NUM_META_FS_KEYS];
-unsigned radv_format_meta_fs_key(VkFormat format);
+unsigned radv_format_meta_fs_key(struct radv_device *device, VkFormat format);
 
 struct radv_multisample_state {
 	uint32_t db_eqaa;

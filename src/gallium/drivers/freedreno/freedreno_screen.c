@@ -269,6 +269,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
 		return is_a4xx(screen) || is_a5xx(screen) || is_a6xx(screen);
 
+	case PIPE_CAP_PREFER_IMM_ARRAYS_AS_CONSTBUF:
+		return 0;
+
 	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
 		if (is_a3xx(screen)) return 16;
 		if (is_a4xx(screen)) return 32;
@@ -434,7 +437,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_RENDER_TARGETS:
 		return screen->max_rts;
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
-		return is_a3xx(screen) ? 1 : 0;
+		return (is_a3xx(screen) || is_a6xx(screen)) ? 1 : 0;
 
 	/* Queries. */
 	case PIPE_CAP_OCCLUSION_QUERY:
@@ -462,6 +465,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_FENCE_SIGNAL:
 		return screen->has_syncobj;
 	case PIPE_CAP_CULL_DISTANCE:
+		return is_a6xx(screen);
+	case PIPE_CAP_SHADER_STENCIL_EXPORT:
 		return is_a6xx(screen);
 	default:
 		return u_pipe_screen_get_param_defaults(pscreen, param);
@@ -496,7 +501,7 @@ fd_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 	case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
 		return 0.0f;
 	}
-	debug_printf("unknown paramf %d\n", param);
+	mesa_loge("unknown paramf %d", param);
 	return 0;
 }
 
@@ -523,7 +528,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 			break;
 		return 0;
 	default:
-		DBG("unknown shader type %d", shader);
+		mesa_loge("unknown shader type %d", shader);
 		return 0;
 	}
 
@@ -636,7 +641,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 		}
 		return 0;
 	}
-	debug_printf("unknown shader param %d\n", param);
+	mesa_loge("unknown shader param %d", param);
 	return 0;
 }
 
@@ -795,6 +800,27 @@ fd_screen_query_dmabuf_modifiers(struct pipe_screen *pscreen,
 	}
 
 	*count = num;
+}
+
+static bool
+fd_screen_is_dmabuf_modifier_supported(struct pipe_screen *pscreen,
+		uint64_t modifier,
+		enum pipe_format format,
+		bool *external_only)
+{
+	struct fd_screen *screen = fd_screen(pscreen);
+	int i;
+
+	for (i = 0; i < screen->num_supported_modifiers; i++) {
+		if (modifier == screen->supported_modifiers[i]) {
+			if (external_only)
+				*external_only = false;
+
+			return true;
+		}
+	}
+
+	return false;
 }
 
 struct fd_bo *
@@ -988,11 +1014,11 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 		fd6_screen_init(pscreen);
 		break;
 	default:
-		debug_printf("unsupported GPU: a%03d\n", screen->gpu_id);
+		mesa_loge("unsupported GPU: a%03d", screen->gpu_id);
 		goto fail;
 	}
 
-	fd_gmem_init_limits(pscreen);
+	freedreno_dev_info_init(&screen->info, screen->gpu_id);
 
 	if (fd_mesa_debug & FD_DBG_PERFC) {
 		screen->perfcntr_groups = fd_perfcntrs(screen->gpu_id,
@@ -1038,6 +1064,7 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 	pscreen->fence_get_fd = fd_fence_get_fd;
 
 	pscreen->query_dmabuf_modifiers = fd_screen_query_dmabuf_modifiers;
+	pscreen->is_dmabuf_modifier_supported = fd_screen_is_dmabuf_modifier_supported;
 
 	pscreen->get_device_uuid = fd_screen_get_device_uuid;
 	pscreen->get_driver_uuid = fd_screen_get_driver_uuid;

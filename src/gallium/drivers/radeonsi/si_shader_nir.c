@@ -66,7 +66,7 @@ static void scan_io_usage(struct si_shader_info *info, nir_intrinsic_instr *intr
    unsigned mask, bit_size;
    bool is_output_load;
 
-   if (nir_intrinsic_infos[intr->intrinsic].index_map[NIR_INTRINSIC_WRMASK] > 0) {
+   if (nir_intrinsic_has_write_mask(intr)) {
       mask = nir_intrinsic_write_mask(intr); /* store */
       bit_size = nir_src_bit_size(intr->src[0]);
       is_output_load = false;
@@ -139,18 +139,16 @@ static void scan_io_usage(struct si_shader_info *info, nir_intrinsic_instr *intr
             info->output_readmask[loc] |= mask;
          } else if (mask) {
             /* Output stores. */
-            if (info->stage == MESA_SHADER_GEOMETRY) {
-               unsigned gs_streams = (uint32_t)nir_intrinsic_io_semantics(intr).gs_streams <<
-                                     (nir_intrinsic_component(intr) * 2);
-               unsigned new_mask = mask & ~info->output_usagemask[loc];
+            unsigned gs_streams = (uint32_t)nir_intrinsic_io_semantics(intr).gs_streams <<
+                                  (nir_intrinsic_component(intr) * 2);
+            unsigned new_mask = mask & ~info->output_usagemask[loc];
 
-               for (unsigned i = 0; i < 4; i++) {
-                  unsigned stream = (gs_streams >> (i * 2)) & 0x3;
+            for (unsigned i = 0; i < 4; i++) {
+               unsigned stream = (gs_streams >> (i * 2)) & 0x3;
 
-                  if (new_mask & (1 << i)) {
-                     info->output_streams[loc] |= stream << (i * 2);
-                     info->num_stream_output_components[stream]++;
-                  }
+               if (new_mask & (1 << i)) {
+                  info->output_streams[loc] |= stream << (i * 2);
+                  info->num_stream_output_components[stream]++;
                }
             }
 
@@ -189,7 +187,7 @@ static void scan_instruction(const struct nir_shader *nir, struct si_shader_info
       nir_variable *var = deref ? nir_deref_instr_get_variable(deref) : NULL;
 
       if (var) {
-         if (deref->mode != nir_var_uniform || var->data.bindless)
+         if (var->data.mode != nir_var_uniform || var->data.bindless)
             info->uses_bindless_samplers = true;
       }
    } else if (instr->type == nir_instr_type_intrinsic) {
@@ -231,6 +229,8 @@ static void scan_instruction(const struct nir_shader *nir, struct si_shader_info
       case nir_intrinsic_bindless_image_atomic_xor:
       case nir_intrinsic_bindless_image_atomic_exchange:
       case nir_intrinsic_bindless_image_atomic_comp_swap:
+      case nir_intrinsic_bindless_image_atomic_inc_wrap:
+      case nir_intrinsic_bindless_image_atomic_dec_wrap:
          info->uses_bindless_images = true;
          info->num_memory_stores++;
          break;
@@ -525,7 +525,7 @@ static void si_nir_lower_color(nir_shader *nir)
             continue;
 
          nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
-         if (deref->mode != nir_var_shader_in)
+         if (!nir_deref_mode_is(deref, nir_var_shader_in))
             continue;
 
          b.cursor = nir_before_instr(instr);
@@ -711,8 +711,8 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
 
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
-   if (sscreen->debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL))
-      NIR_PASS_V(nir, nir_lower_discard_to_demote);
+   NIR_PASS_V(nir, nir_lower_discard_or_demote,
+              sscreen->debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL));
 }
 
 void si_finalize_nir(struct pipe_screen *screen, void *nirptr, bool optimize)

@@ -183,7 +183,6 @@ enum
    DBG_NO_WC,
    DBG_CHECK_VM,
    DBG_RESERVE_VMID,
-   DBG_ZERO_VRAM,
    DBG_SHADOW_REGS,
 
    /* 3D engine options: */
@@ -202,7 +201,6 @@ enum
    DBG_DPBB,
    DBG_DFSM,
    DBG_NO_HYPERZ,
-   DBG_NO_RB_PLUS,
    DBG_NO_2D_TILING,
    DBG_NO_TILING,
    DBG_NO_DCC,
@@ -1113,6 +1111,7 @@ struct si_context {
    bool ls_vgpr_fix : 1;
    bool prim_discard_cs_instancing : 1;
    bool ngg : 1;
+   bool same_patch_vertices : 1;
    uint8_t ngg_culling;
    int last_index_size;
    int last_base_vertex;
@@ -1282,6 +1281,12 @@ struct si_context {
                     unsigned src_level, const struct pipe_box *src_box);
 
    struct si_tracked_regs tracked_regs;
+
+   /* Resources that need to be flushed, but will not get an explicit
+    * flush_resource from the frontend and that will need to get flushed during
+    * a context flush.
+    */
+   struct hash_table *dirty_implicit_resources;
 };
 
 /* cik_sdma.c */
@@ -1307,6 +1312,7 @@ void si_resource_copy_region(struct pipe_context *ctx, struct pipe_resource *dst
                              struct pipe_resource *src, unsigned src_level,
                              const struct pipe_box *src_box);
 void si_decompress_dcc(struct si_context *sctx, struct si_texture *tex);
+void si_flush_implicit_resources(struct si_context *sctx);
 
 /* si_buffer.c */
 bool si_rings_is_buffer_referenced(struct si_context *sctx, struct pb_buffer *buf,
@@ -1604,10 +1610,8 @@ static inline unsigned si_get_minimum_num_gfx_cs_dwords(struct si_context *sctx,
     *
     * Also reserve space for stopping queries at the end of IB, because
     * the number of active queries is unlimited in theory.
-    *
-    * Both indexed and non-indexed draws use 6 dwords per draw.
     */
-   return 2048 + sctx->num_cs_dw_queries_suspend + num_draws * 6;
+   return 2048 + sctx->num_cs_dw_queries_suspend + num_draws * 9;
 }
 
 static inline void si_context_add_resource_size(struct si_context *sctx, struct pipe_resource *r)

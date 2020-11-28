@@ -40,6 +40,15 @@
 struct vtn_builder;
 struct vtn_decoration;
 
+/* setjmp/longjmp is broken on MinGW: https://sourceforge.net/p/mingw-w64/bugs/406/ */
+#ifdef __MINGW32__
+  #define vtn_setjmp __builtin_setjmp
+  #define vtn_longjmp __builtin_longjmp
+#else
+  #define vtn_setjmp setjmp
+  #define vtn_longjmp longjmp
+#endif
+
 void vtn_log(struct vtn_builder *b, enum nir_spirv_debug_level level,
              size_t spirv_offset, const char *message);
 
@@ -130,7 +139,9 @@ enum vtn_branch_type {
    vtn_branch_type_loop_continue,
    vtn_branch_type_loop_back_edge,
    vtn_branch_type_discard,
-   vtn_branch_type_terminate,
+   vtn_branch_type_terminate_invocation,
+   vtn_branch_type_ignore_intersection,
+   vtn_branch_type_terminate_ray,
    vtn_branch_type_return,
 };
 
@@ -325,6 +336,7 @@ enum vtn_base_type {
    vtn_base_type_image,
    vtn_base_type_sampler,
    vtn_base_type_sampled_image,
+   vtn_base_type_accel_struct,
    vtn_base_type_function,
    vtn_base_type_event,
 };
@@ -487,10 +499,18 @@ enum vtn_variable_mode {
    vtn_variable_mode_push_constant,
    vtn_variable_mode_workgroup,
    vtn_variable_mode_cross_workgroup,
+   vtn_variable_mode_generic,
    vtn_variable_mode_constant,
    vtn_variable_mode_input,
    vtn_variable_mode_output,
    vtn_variable_mode_image,
+   vtn_variable_mode_accel_struct,
+   vtn_variable_mode_call_data,
+   vtn_variable_mode_call_data_in,
+   vtn_variable_mode_ray_payload,
+   vtn_variable_mode_ray_payload_in,
+   vtn_variable_mode_hit_attrib,
+   vtn_variable_mode_shader_record,
 };
 
 struct vtn_pointer {
@@ -684,7 +704,19 @@ struct vtn_builder {
    unsigned func_param_idx;
 
    bool has_loop_continue;
-   bool has_kill;
+
+   /** True if this shader has any early termination instructions like OpKill
+    *
+    * In the SPIR-V, the following instructions are block terminators:
+    *
+    *  - OpKill
+    *  - OpTerminateInvocation
+    *
+    * However, in NIR, they're represented by regular intrinsics with no
+    * control-flow semantics.  This means that the SSA form from the SPIR-V
+    * may not 100% match NIR and we have to fix it up at the end.
+    */
+   bool has_early_terminate;
 
    /* false by default, set to true by the ContractionOff execution mode */
    bool exact;
@@ -834,6 +866,9 @@ nir_deref_instr *vtn_pointer_to_deref(struct vtn_builder *b,
 nir_ssa_def *
 vtn_pointer_to_offset(struct vtn_builder *b, struct vtn_pointer *ptr,
                       nir_ssa_def **index_out);
+
+nir_deref_instr *
+vtn_get_call_payload_for_location(struct vtn_builder *b, uint32_t location_id);
 
 struct vtn_ssa_value *
 vtn_local_load(struct vtn_builder *b, nir_deref_instr *src,

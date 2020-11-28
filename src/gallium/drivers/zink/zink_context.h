@@ -81,8 +81,11 @@ struct zink_context {
    struct slab_child_pool transfer_pool;
    struct blitter_context *blitter;
 
+   struct pipe_device_reset_callback reset;
+
    VkCommandPool cmdpool;
    struct zink_batch batches[4];
+   bool is_device_lost;
    unsigned curr_batch;
 
    VkQueue queue;
@@ -126,7 +129,8 @@ struct zink_context {
    struct pipe_stencil_ref stencil_ref;
 
    struct list_head suspended_queries;
-   bool queries_disabled;
+   struct list_head primitives_generated_queries;
+   bool queries_disabled, render_condition_active;
 
    struct pipe_resource *dummy_buffer;
    struct pipe_resource *null_buffers[5]; /* used to create zink_framebuffer->null_surface, one buffer per samplecount */
@@ -183,6 +187,9 @@ zink_blit(struct pipe_context *pctx,
 
 void
 zink_draw_vbo(struct pipe_context *pctx,
-              const struct pipe_draw_info *dinfo);
+              const struct pipe_draw_info *dinfo,
+              const struct pipe_draw_indirect_info *indirect,
+              const struct pipe_draw_start_count *draws,
+              unsigned num_draws);
 
 #endif

@@ -31,6 +31,7 @@
 
 #define BIFROST_DBG_MSGS        0x0001
 #define BIFROST_DBG_SHADERS     0x0002
+#define BIFROST_DBG_SHADERDB    0x0004
 
 extern int bifrost_debug;
 
@@ -221,15 +222,26 @@ enum bifrost_minmax_mode {
 };
 
 enum bifrost_interp_mode {
-        BIFROST_INTERP_PER_FRAG = 0x0,
+        BIFROST_INTERP_CENTER = 0x0,
         BIFROST_INTERP_CENTROID = 0x1,
-        BIFROST_INTERP_DEFAULT  = 0x2,
-        BIFROST_INTERP_EXPLICIT = 0x3
+        BIFROST_INTERP_SAMPLE  = 0x2,
+        BIFROST_INTERP_EXPLICIT = 0x3,
+        BIFROST_INTERP_NONE = 0x4,
+};
+
+enum bifrost_update_mode {
+        BIFROST_UPDATE_STORE,
+        BIFROST_UPDATE_RETRIEVE,
+        BIFROST_UPDATE_CONDITIONAL,
+        BIFROST_UPDATE_CLOBBER,
 };
 
 /* Fixed location for gl_FragCoord.zw */
-#define BIFROST_FRAGZ (23)
-#define BIFROST_FRAGW (22)
+enum bifrost_special_var_id {
+        BIFROST_SPECIAL_VAR_POINT = 0,
+        BIFROST_SPECIAL_VAR_FRAGW = 2,
+        BIFROST_SPECIAL_VAR_FRAGZ = 3,
+};
 
 enum branch_bit_size {
         BR_SIZE_32 = 0,

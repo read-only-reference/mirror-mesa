@@ -38,7 +38,7 @@ lvp_image_create(VkDevice _device,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
 
-   image = vk_zalloc2(&device->alloc, alloc, sizeof(*image), 8,
+   image = vk_zalloc2(&device->vk.alloc, alloc, sizeof(*image), 8,
                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (image == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -112,7 +112,7 @@ lvp_DestroyImage(VkDevice _device, VkImage _image,
      return;
    pipe_resource_reference(&image->bo, NULL);
    vk_object_base_finish(&image->base);
-   vk_free2(&device->alloc, pAllocator, image);
+   vk_free2(&device->vk.alloc, pAllocator, image);
 }
 
 VkResult
@@ -125,7 +125,7 @@ lvp_CreateImageView(VkDevice _device,
    LVP_FROM_HANDLE(lvp_image, image, pCreateInfo->image);
    struct lvp_image_view *view;
 
-   view = vk_alloc2(&device->alloc, pAllocator, sizeof(*view), 8,
+   view = vk_alloc2(&device->vk.alloc, pAllocator, sizeof(*view), 8,
                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (view == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -156,7 +156,7 @@ lvp_DestroyImageView(VkDevice _device, VkImageView _iview,
 
    pipe_surface_reference(&iview->surface, NULL);
    vk_object_base_finish(&iview->base);
-   vk_free2(&device->alloc, pAllocator, iview);
+   vk_free2(&device->vk.alloc, pAllocator, iview);
 }
 
 void lvp_GetImageSubresourceLayout(
@@ -167,14 +167,48 @@ void lvp_GetImageSubresourceLayout(
 {
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_image, image, _image);
-   uint32_t stride, offset;
-   device->pscreen->resource_get_info(device->pscreen,
-                                      image->bo,
-                                      &stride, &offset);
-   pLayout->offset = offset;
-   pLayout->rowPitch = stride;
-   pLayout->arrayPitch = 0;
+   uint64_t value;
+
+   device->pscreen->resource_get_param(device->pscreen,
+                                       NULL,
+                                       image->bo,
+                                       0,
+                                       pSubresource->arrayLayer,
+                                       pSubresource->mipLevel,
+                                       PIPE_RESOURCE_PARAM_STRIDE,
+                                       0, &value);
+
+   pLayout->rowPitch = value;
+
+   device->pscreen->resource_get_param(device->pscreen,
+                                       NULL,
+                                       image->bo,
+                                       0,
+                                       pSubresource->arrayLayer,
+                                       pSubresource->mipLevel,
+                                       PIPE_RESOURCE_PARAM_OFFSET,
+                                       0, &value);
+
+   pLayout->offset = value;
+
+   device->pscreen->resource_get_param(device->pscreen,
+                                       NULL,
+                                       image->bo,
+                                       0,
+                                       pSubresource->arrayLayer,
+                                       pSubresource->mipLevel,
+                                       PIPE_RESOURCE_PARAM_LAYER_STRIDE,
+                                       0, &value);
+
+   if (image->bo->target == PIPE_TEXTURE_3D) {
+      pLayout->depthPitch = value;
+      pLayout->arrayPitch = 0;
+   } else {
+      pLayout->depthPitch = 0;
+      pLayout->arrayPitch = value;
+   }
    pLayout->size = image->size;
+
    switch (pSubresource->aspectMask) {
    case VK_IMAGE_ASPECT_COLOR_BIT:
       break;
@@ -202,7 +236,7 @@ VkResult lvp_CreateBuffer(
    if (pCreateInfo->size > UINT32_MAX)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   buffer = vk_alloc2(&device->alloc, pAllocator, sizeof(*buffer), 8,
+   buffer = vk_alloc2(&device->vk.alloc, pAllocator, sizeof(*buffer), 8,
                        VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (buffer == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -227,7 +261,7 @@ VkResult lvp_CreateBuffer(
                                                              &template,
                                                              &buffer->total_size);
       if (!buffer->bo) {
-         vk_free2(&device->alloc, pAllocator, buffer);
+         vk_free2(&device->vk.alloc, pAllocator, buffer);
          return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
       }
    }
@@ -249,7 +283,7 @@ void lvp_DestroyBuffer(
 
    pipe_resource_reference(&buffer->bo, NULL);
    vk_object_base_finish(&buffer->base);
-   vk_free2(&device->alloc, pAllocator, buffer);
+   vk_free2(&device->vk.alloc, pAllocator, buffer);
 }
 
 VkResult
@@ -261,7 +295,7 @@ lvp_CreateBufferView(VkDevice _device,
    LVP_FROM_HANDLE(lvp_device, device, _device);
    LVP_FROM_HANDLE(lvp_buffer, buffer, pCreateInfo->buffer);
    struct lvp_buffer_view *view;
-   view = vk_alloc2(&device->alloc, pAllocator, sizeof(*view), 8,
+   view = vk_alloc2(&device->vk.alloc, pAllocator, sizeof(*view), 8,
                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (!view)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -288,5 +322,5 @@ lvp_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
    if (!bufferView)
      return;
    vk_object_base_finish(&view->base);
-   vk_free2(&device->alloc, pAllocator, view);
+   vk_free2(&device->vk.alloc, pAllocator, view);
 }

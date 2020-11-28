@@ -235,6 +235,7 @@ with_gallium_virgl = gallium_drivers.contains('virgl')
 with_gallium_swr = gallium_drivers.contains('swr')
 with_gallium_lima = gallium_drivers.contains('lima')
 with_gallium_zink = gallium_drivers.contains('zink')
+with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 
 with_gallium = gallium_drivers.length() != 0
 
@@ -298,6 +299,19 @@ if with_aco_tests and not with_amd_vk
   error('ACO tests require Radv')
 endif
 
+dep_clang = dependency(
+  'clang',
+  method : 'cmake',
+  static : true,
+  modules : [
+    'clangBasic', 'clangCodeGen', 'clangDriver', 'clangFrontend', 'clangFrontendTool',
+    'clangHandleCXX', 'clangHandleLLVM',
+  ],
+  required : get_option('microsoft-clc'),
+)
+with_microsoft_clc = dep_clang.found()
+with_clc = dep_clang.found()
+
 if host_machine.system() == 'darwin'
   with_dri_platform = 'apple'
   pre_args += '-DBUILDING_MESA'
@@ -333,14 +347,6 @@ with_platform_x11 = _platforms.contains('x11')
 with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
-
-if _platforms.contains('surfaceless')
-  warning('Platform `surfaceless` is now always selected; setting this option will be an error in Mesa 20.3')
-endif
-
-if _platforms.contains('drm')
-  warning('Platform `drm` is now automatically selected; setting this option will be an error in Mesa 20.3')
-endif
 
 if _platforms.length() != 0
   egl_native_platform = _platforms[0]
@@ -563,6 +569,10 @@ endif
 
 if with_gallium_zink
   dep_vulkan = dependency('vulkan')
+endif
+
+if with_gallium_d3d12 and not cpp.check_header('d3d12.h')
+  error('The D3D12 driver requires d3d12.h from the Windows SDK')
 endif
 
 if with_vulkan_overlay_layer or with_aco_tests
@@ -826,6 +836,7 @@ gl_pkgconfig_c_flags = []
 if with_platform_x11
   if with_any_vk or with_egl or (with_glx == 'dri' and with_dri_platform == 'drm')
     pre_args += '-DHAVE_X11_PLATFORM'
+    pre_args += '-DHAVE_XCB_PLATFORM'
   endif
   if with_glx == 'xlib' or with_glx == 'gallium-xlib'
     pre_args += '-DUSE_XSHM'
@@ -914,12 +925,12 @@ elif _shader_cache == 'false'
 endif
 if _shader_cache != 'disabled'
   if host_machine.system() == 'windows'
-    if ['enabled', 'default-disabled'].contains(_shader_cache)
+    if _shader_cache == 'enabled'
       error('Shader Cache does not currently work on Windows')
     endif
   else
     pre_args += '-DENABLE_SHADER_CACHE'
-    if _shader_cache == 'default-disabled'
+    if not get_option('shader-cache-default')
       pre_args += '-DSHADER_CACHE_DISABLE_BY_DEFAULT'
     endif
     with_shader_cache = true
@@ -1464,8 +1475,13 @@ if with_gallium_opencl
     'lto', 'option', 'objcarcopts', 'profiledata',
   ]
 endif
+if with_microsoft_clc
+  llvm_modules += ['target', 'linker', 'irreader', 'option', 'libdriver']
+endif
 
-if with_amd_vk or with_gallium_radeonsi or with_gallium_opencl
+if with_microsoft_clc
+  _llvm_version = '>= 10.0.0'
+elif with_amd_vk or with_gallium_radeonsi or with_gallium_opencl
   _llvm_version = '>= 8.0.0'
 elif with_gallium_swr
   _llvm_version = '>= 6.0.0'
@@ -1515,11 +1531,12 @@ if _llvm != 'disabled'
     optional_modules : llvm_optional_modules,
     required : (
       with_amd_vk or with_gallium_radeonsi or with_gallium_swr or
-      with_gallium_opencl or _llvm == 'enabled'
+      with_gallium_opencl or with_microsoft_clc or _llvm == 'enabled'
     ),
     static : not _shared_llvm,
     method : _llvm_method,
     fallback : ['llvm', 'dep_llvm'],
+    include_type : 'system',
   )
   with_llvm = dep_llvm.found()
 endif
@@ -1557,9 +1574,11 @@ elif with_amd_vk or with_gallium_radeonsi or with_gallium_swr
   error('The following drivers require LLVM: Radv, RadeonSI, SWR. One of these is enabled, but LLVM is disabled.')
 elif with_gallium_opencl
   error('The OpenCL "Clover" state tracker requires LLVM, but LLVM is disabled.')
+elif with_microsoft_clc
+  error('The Microsoft CLC compiler requires LLVM, but LLVM is disabled.')
 endif
 
-with_opencl_spirv = _opencl != 'disabled' and get_option('opencl-spirv')
+with_opencl_spirv = (_opencl != 'disabled' and get_option('opencl-spirv')) or with_microsoft_clc
 if with_opencl_spirv
   chosen_llvm_version_array = dep_llvm.version().split('.')
   chosen_llvm_version_major = chosen_llvm_version_array[0].to_int()
@@ -1790,7 +1809,7 @@ if with_platform_x11
       endif
     endif
   endif
-  if (with_egl or 
+  if (with_egl or
       with_dri3 or (
       with_gallium_vdpau or with_gallium_xvmc or with_gallium_xa or
       with_gallium_omx != 'disabled'))

@@ -48,8 +48,10 @@ namespace r600 {
 using std::vector;
 
 ShaderFromNir::ShaderFromNir():sh(nullptr),
+   chip_class(CLASS_UNKNOWN),
    m_current_if_id(0),
-   m_current_loop_id(0)
+   m_current_loop_id(0),
+   scratch_size(0)
 {
 }
 
@@ -97,6 +99,10 @@ bool ShaderFromNir::lower(const nir_shader *shader, r600_pipe_shader *pipe_shade
    const nir_function *func = reinterpret_cast<const nir_function *>(exec_list_get_head_const(&sh->functions));
 
    sfn_log << SfnLog::trans << "Scan shader\n";
+
+   if (sfn_log.has_debug_flag(SfnLog::instr))
+      nir_print_shader(const_cast<nir_shader *>(shader), stderr);
+
    nir_foreach_block(block, func->impl) {
       nir_foreach_instr(instr, block) {
          if (!impl->scan_instruction(instr)) {
@@ -268,7 +274,7 @@ bool ShaderFromNir::process_declaration()
    // scan declarations
    nir_foreach_shader_in_variable(variable, sh) {
       if (!impl->process_inputs(variable)) {
-         fprintf(stderr, "R600: error parsing input varible %s\n", variable->name);
+         fprintf(stderr, "R600: error parsing input variable %s\n", variable->name);
          return false;
       }
    }
@@ -276,7 +282,7 @@ bool ShaderFromNir::process_declaration()
    // scan declarations
    nir_foreach_shader_out_variable(variable, sh) {
       if (!impl->process_outputs(variable)) {
-         fprintf(stderr, "R600: error parsing outputs varible %s\n", variable->name);
+         fprintf(stderr, "R600: error parsing outputs variable %s\n", variable->name);
          return false;
       }
    }
@@ -286,7 +292,7 @@ bool ShaderFromNir::process_declaration()
                                                  nir_var_mem_ubo |
                                                  nir_var_mem_ssbo) {
       if (!impl->process_uniforms(variable)) {
-         fprintf(stderr, "R600: error parsing outputs varible %s\n", variable->name);
+         fprintf(stderr, "R600: error parsing outputs variable %s\n", variable->name);
          return false;
       }
    }
@@ -698,6 +704,46 @@ r600_lower_shared_io(nir_shader *nir)
 	return progress;
 }
 
+
+static nir_ssa_def *
+r600_lower_fs_pos_input_impl(nir_builder *b, nir_instr *instr, void *_options)
+{
+   auto old_ir = nir_instr_as_intrinsic(instr);
+   auto load = nir_intrinsic_instr_create(b->shader, nir_intrinsic_load_input);
+   nir_ssa_dest_init(&load->instr, &load->dest,
+                     old_ir->dest.ssa.num_components, old_ir->dest.ssa.bit_size, NULL);
+   nir_intrinsic_set_io_semantics(load, nir_intrinsic_io_semantics(old_ir));
+
+   nir_intrinsic_set_base(load, nir_intrinsic_base(old_ir));
+   nir_intrinsic_set_component(load, nir_intrinsic_component(old_ir));
+   nir_intrinsic_set_dest_type(load, nir_type_float32);
+   load->num_components = old_ir->num_components;
+   load->src[0] = old_ir->src[1];
+   nir_builder_instr_insert(b, &load->instr);
+   return &load->dest.ssa;
+}
+
+bool r600_lower_fs_pos_input_filter(const nir_instr *instr, const void *_options)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   auto ir = nir_instr_as_intrinsic(instr);
+   if (ir->intrinsic != nir_intrinsic_load_interpolated_input)
+      return false;
+
+   return nir_intrinsic_io_semantics(ir).location == VARYING_SLOT_POS;
+}
+
+/* Strip the interpolator specification, it is not needed and irritates */
+bool r600_lower_fs_pos_input(nir_shader *shader)
+{
+   return nir_shader_lower_instructions(shader,
+                                        r600_lower_fs_pos_input_filter,
+                                        r600_lower_fs_pos_input_impl,
+                                        nullptr);
+};
+
 static bool
 optimize_once(nir_shader *shader, bool vectorize)
 {
@@ -776,44 +822,38 @@ int r600_shader_from_nir(struct r600_context *rctx,
    NIR_PASS_V(sel->nir, r600_nir_lower_int_tg4);
    NIR_PASS_V(sel->nir, r600_nir_lower_pack_unpack_2x16);
 
-   NIR_PASS_V(sel->nir, nir_lower_io, nir_var_uniform, r600_glsl_type_size,
-              nir_lower_io_lower_64bit_to_32);
+   nir_variable_mode io_modes = nir_var_uniform;
+   if (sel->nir->info.stage != MESA_SHADER_VERTEX)
+      io_modes |= nir_var_shader_in;
+
+   if (sel->nir->info.stage != MESA_SHADER_FRAGMENT)
+      io_modes |= nir_var_shader_out;
+
+   NIR_PASS_V(sel->nir, nir_lower_io, io_modes, r600_glsl_type_size,
+                 nir_lower_io_lower_64bit_to_32);
+
+   NIR_PASS_V(sel->nir, nir_opt_constant_folding);
+   NIR_PASS_V(sel->nir, nir_io_add_const_offset_to_base, io_modes);
 
    if (sel->nir->info.stage == MESA_SHADER_VERTEX)
       NIR_PASS_V(sel->nir, r600_vectorize_vs_inputs);
 
-   if (sel->nir->info.stage == MESA_SHADER_FRAGMENT)
+   if (sel->nir->info.stage == MESA_SHADER_FRAGMENT) {
+      NIR_PASS_V(sel->nir, r600_lower_fs_pos_input);
       NIR_PASS_V(sel->nir, r600_lower_fs_out_to_vector);
-
-   if (sel->nir->info.stage == MESA_SHADER_TESS_CTRL ||
-       (sel->nir->info.stage == MESA_SHADER_VERTEX && key->vs.as_ls)) {
-      NIR_PASS_V(sel->nir, nir_lower_io, nir_var_shader_out, r600_glsl_type_size,
-                 nir_lower_io_lower_64bit_to_32);
-      NIR_PASS_V(sel->nir, r600_lower_tess_io, (pipe_prim_type)key->tcs.prim_mode);
-   }
-
-   if (sel->nir->info.stage == MESA_SHADER_TESS_CTRL ||
-       sel->nir->info.stage == MESA_SHADER_TESS_EVAL) {
-      NIR_PASS_V(sel->nir, nir_lower_io, nir_var_shader_in, r600_glsl_type_size,
-                 nir_lower_io_lower_64bit_to_32);
    }
 
    if (sel->nir->info.stage == MESA_SHADER_TESS_CTRL ||
        sel->nir->info.stage == MESA_SHADER_TESS_EVAL ||
        (sel->nir->info.stage == MESA_SHADER_VERTEX && key->vs.as_ls)) {
-      auto prim_type = sel->nir->info.stage == MESA_SHADER_TESS_CTRL ?
-                          key->tcs.prim_mode : sel->nir->info.tess.primitive_mode;
+      auto prim_type = sel->nir->info.stage == MESA_SHADER_TESS_EVAL ?
+                          sel->nir->info.tess.primitive_mode: key->tcs.prim_mode;
       NIR_PASS_V(sel->nir, r600_lower_tess_io, static_cast<pipe_prim_type>(prim_type));
    }
-
 
    if (sel->nir->info.stage == MESA_SHADER_TESS_CTRL)
       NIR_PASS_V(sel->nir, r600_append_tcs_TF_emission,
                  (pipe_prim_type)key->tcs.prim_mode);
-
-
-   const nir_function *func = reinterpret_cast<const nir_function *>(exec_list_get_head_const(&sel->nir->functions));
-   assert(func->impl->registers.length() == 0 && !has_saturate(func));
 
    NIR_PASS_V(sel->nir, nir_lower_ubo_vec4);
 
@@ -830,11 +870,10 @@ int r600_shader_from_nir(struct r600_context *rctx,
               40,
               r600_get_natural_size_align_bytes);
 
-   NIR_PASS_V(sel->nir, nir_lower_bool_to_int32);
-
    while (optimize_once(sel->nir, true));
 
    auto sh = nir_shader_clone(sel->nir, sel->nir);
+   NIR_PASS_V(sel->nir, nir_lower_bool_to_int32);
    NIR_PASS_V(sh, nir_opt_algebraic_late);
 
    if (sel->nir->info.stage == MESA_SHADER_FRAGMENT)

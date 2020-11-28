@@ -118,6 +118,7 @@ struct ac_llvm_context {
     * False = demoted lanes
     */
    LLVMValueRef postponed_kill;
+   bool conditional_demote_seen;
 
    /* Since ac_nir_translate makes a local copy of ac_llvm_context, there
     * are two ac_llvm_contexts. Declare a pointer here, so that the control
@@ -390,9 +391,9 @@ enum ac_image_cache_policy
 };
 
 struct ac_image_args {
-   enum ac_image_opcode opcode : 4;
-   enum ac_atomic_op atomic : 4; /* for the ac_image_atomic opcode */
-   enum ac_image_dim dim : 3;
+   enum ac_image_opcode opcode;
+   enum ac_atomic_op atomic; /* for the ac_image_atomic opcode */
+   enum ac_image_dim dim;
    unsigned dmask : 4;
    unsigned cache_policy : 3;
    bool unorm : 1;
@@ -469,6 +470,7 @@ void ac_build_ifcc(struct ac_llvm_context *ctx, LLVMValueRef cond, int label_id)
 
 LLVMValueRef ac_build_alloca(struct ac_llvm_context *ac, LLVMTypeRef type, const char *name);
 LLVMValueRef ac_build_alloca_undef(struct ac_llvm_context *ac, LLVMTypeRef type, const char *name);
+LLVMValueRef ac_build_alloca_init(struct ac_llvm_context *ac, LLVMValueRef val, const char *name);
 
 LLVMValueRef ac_cast_ptr(struct ac_llvm_context *ctx, LLVMValueRef ptr, LLVMTypeRef type);
 

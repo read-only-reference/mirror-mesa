@@ -61,15 +61,16 @@ panfrost_bo_access_for_stage(enum pipe_shader_type stage)
 mali_ptr
 panfrost_get_index_buffer_bounded(struct panfrost_context *ctx,
                                   const struct pipe_draw_info *info,
+                                  const struct pipe_draw_start_count *draw,
                                   unsigned *min_index, unsigned *max_index)
 {
         struct panfrost_resource *rsrc = pan_resource(info->index.resource);
         struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
-        off_t offset = info->start * info->index_size;
+        off_t offset = draw->start * info->index_size;
         bool needs_indices = true;
         mali_ptr out = 0;
 
-        if (info->max_index != ~0u) {
+        if (info->index_bounds_valid) {
                 *min_index = info->min_index;
                 *max_index = info->max_index;
                 needs_indices = false;
@@ -85,8 +86,8 @@ panfrost_get_index_buffer_bounded(struct panfrost_context *ctx,
 
                 /* Check the cache */
                 needs_indices = !panfrost_minmax_cache_get(rsrc->index_cache,
-                                                           info->start,
-                                                           info->count,
+                                                           draw->start,
+                                                           draw->count,
                                                            min_index,
                                                            max_index);
         } else {
@@ -94,20 +95,20 @@ panfrost_get_index_buffer_bounded(struct panfrost_context *ctx,
                 const uint8_t *ibuf8 = (const uint8_t *) info->index.user;
                 struct panfrost_ptr T =
                         panfrost_pool_alloc_aligned(&batch->pool,
-                                info->count * info->index_size,
+                                draw->count * info->index_size,
                                 info->index_size);
 
-                memcpy(T.cpu, ibuf8 + offset, info->count * info->index_size);
+                memcpy(T.cpu, ibuf8 + offset, draw->count * info->index_size);
                 out = T.gpu;
         }
 
         if (needs_indices) {
                 /* Fallback */
-                u_vbuf_get_minmax_index(&ctx->base, info, min_index, max_index);
+                u_vbuf_get_minmax_index(&ctx->base, info, draw, min_index, max_index);
 
                 if (!info->has_user_indices)
                         panfrost_minmax_cache_add(rsrc->index_cache,
-                                                  info->start, info->count,
+                                                  draw->start, draw->count,
                                                   *min_index, *max_index);
         }
 
@@ -296,13 +297,12 @@ panfrost_emit_bifrost_blend(struct panfrost_batch *batch,
                                 else
                                         cfg.bifrost.internal.mode = MALI_BIFROST_BLEND_MODE_FIXED_FUNCTION;
 
-                                cfg.bifrost.internal.fixed_function.num_comps = format_desc->nr_channels;
-                                cfg.bifrost.internal.fixed_function.conversion.memory_format.format =
-                                        panfrost_format_to_bifrost_blend(format_desc, true);
-                                if (dev->quirks & HAS_SWIZZLES) {
-                                        cfg.bifrost.internal.fixed_function.conversion.memory_format.swizzle =
-                                                panfrost_get_default_swizzle(4);
-                                }
+                                /* If we want the conversion to work properly,
+                                 * num_comps must be set to 4
+                                 */
+                                cfg.bifrost.internal.fixed_function.num_comps = 4;
+                                cfg.bifrost.internal.fixed_function.conversion.memory_format =
+                                        panfrost_format_to_bifrost_blend(dev, format_desc, true);
                                 cfg.bifrost.internal.fixed_function.conversion.register_format =
                                         fs->blend_types[i];
                         }
@@ -447,7 +447,7 @@ panfrost_prepare_midgard_fs_state(struct panfrost_context *ctx,
                 state->shader = fs->shader;
         }
 
-        if (dev->quirks & MIDGARD_SFBD) {
+        if (dev->quirks & MIDGARD_SFBD && ctx->pipe_framebuffer.nr_cbufs > 0) {
                 state->multisample_misc.sfbd_load_destination = blend[0].load_dest;
                 state->multisample_misc.sfbd_blend_shader = blend[0].is_shader;
                 state->stencil_mask_misc.sfbd_write_enable = !blend[0].no_colour;
@@ -461,6 +461,16 @@ panfrost_prepare_midgard_fs_state(struct panfrost_context *ctx,
                         state->sfbd_blend_equation = blend[0].equation.equation;
                         state->sfbd_blend_constant = blend[0].equation.constant;
                 }
+        } else if (dev->quirks & MIDGARD_SFBD) {
+                /* If there is no colour buffer, leaving fields default is
+                 * fine, except for blending which is nonnullable */
+                state->sfbd_blend_equation.color_mask = 0xf;
+                state->sfbd_blend_equation.rgb.a = MALI_BLEND_OPERAND_A_SRC;
+                state->sfbd_blend_equation.rgb.b = MALI_BLEND_OPERAND_B_SRC;
+                state->sfbd_blend_equation.rgb.c = MALI_BLEND_OPERAND_C_ZERO;
+                state->sfbd_blend_equation.alpha.a = MALI_BLEND_OPERAND_A_SRC;
+                state->sfbd_blend_equation.alpha.b = MALI_BLEND_OPERAND_B_SRC;
+                state->sfbd_blend_equation.alpha.c = MALI_BLEND_OPERAND_C_ZERO;
         } else {
                 /* Bug where MRT-capable hw apparently reads the last blend
                  * shader from here instead of the usual location? */
@@ -936,7 +946,8 @@ panfrost_emit_const_buf(struct panfrost_batch *batch,
                 }
         }
 
-        *push_constants = transfer.gpu;
+        if (ss->uniform_count)
+                *push_constants = transfer.gpu;
 
         buf->dirty_mask = 0;
         return ubos.gpu;
@@ -1096,13 +1107,15 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
                           mali_ptr *buffers)
 {
         struct panfrost_context *ctx = batch->ctx;
+        struct panfrost_device *dev = pan_device(ctx->base.screen);
+        bool is_bifrost = !!(dev->quirks & IS_BIFROST);
         struct panfrost_vertex_state *so = ctx->vertex;
         struct panfrost_shader_state *vs = panfrost_get_shader_state(ctx, PIPE_SHADER_VERTEX);
 
         /* Worst case: everything is NPOT, which is only possible if instancing
          * is enabled. Otherwise single record is gauranteed */
         struct panfrost_ptr S = panfrost_pool_alloc_aligned(&batch->pool,
-                        MALI_ATTRIBUTE_BUFFER_LENGTH * vs->attribute_count *
+                        MALI_ATTRIBUTE_BUFFER_LENGTH * (vs->attribute_count + 1) *
                         (ctx->instance_count > 1 ? 2 : 1),
                         MALI_ATTRIBUTE_BUFFER_LENGTH * 2);
 
@@ -1112,6 +1125,10 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
 
         struct mali_attribute_buffer_packed *bufs =
                 (struct mali_attribute_buffer_packed *) S.cpu;
+
+        /* Determine (n + 1)'th index to suppress prefetch on Bifrost */
+        unsigned last = vs->attribute_count * ((ctx->instance_count > 1) ? 2 : 1);
+        memset(bufs + last, 0, sizeof(*bufs));
 
         struct mali_attribute_packed *out =
                 (struct mali_attribute_packed *) T.cpu;
@@ -1230,6 +1247,10 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
                         cfg.format = so->formats[PAN_INSTANCE_ID];
                 }
         }
+
+        /* We need an empty attrib buf to stop the prefetching on Bifrost */
+        if (is_bifrost)
+                pan_pack(&bufs[k], ATTRIBUTE_BUFFER, cfg);
 
         /* Attribute addresses require 64-byte alignment, so let:
          *
@@ -1709,6 +1730,11 @@ panfrost_emit_varying_descriptor(struct panfrost_batch *batch,
 
         struct pipe_stream_output_info *so = &vs->stream_output;
         uint16_t point_coord_mask = ctx->rasterizer->base.sprite_coord_enable;
+
+        /* TODO: point sprites need lowering on Bifrost */
+        if (dev->quirks & IS_BIFROST)
+                point_coord_mask =  0;
+
         unsigned present = pan_varying_present(vs, fs, dev->quirks, point_coord_mask);
 
         /* Check if this varying is linked by us. This is the case for
@@ -1752,10 +1778,13 @@ panfrost_emit_varying_descriptor(struct panfrost_batch *batch,
 
         unsigned xfb_base = pan_xfb_base(present);
         struct panfrost_ptr T = panfrost_pool_alloc_aligned(&batch->pool,
-                        MALI_ATTRIBUTE_BUFFER_LENGTH * (xfb_base + ctx->streamout.num_targets),
+                        MALI_ATTRIBUTE_BUFFER_LENGTH * (xfb_base + ctx->streamout.num_targets + 1),
                         MALI_ATTRIBUTE_BUFFER_LENGTH * 2);
         struct mali_attribute_buffer_packed *varyings =
                 (struct mali_attribute_buffer_packed *) T.cpu;
+
+        /* Suppress prefetch on Bifrost */
+        memset(varyings + (xfb_base * ctx->streamout.num_targets), 0, sizeof(*varyings));
 
         /* Emit the stream out buffers */
 

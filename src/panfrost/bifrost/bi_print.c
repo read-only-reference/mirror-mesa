@@ -68,13 +68,15 @@ bi_class_name(enum bi_class cl)
         case BI_SELECT: return "select";
         case BI_STORE: return "store";
         case BI_STORE_VAR: return "store_var";
-        case BI_SPECIAL: return "special";
+        case BI_SPECIAL_ADD: return "special";
+        case BI_SPECIAL_FMA: return "special";
         case BI_TABLE: return "table";
         case BI_TEXS: return "texs";
         case BI_TEXC: return "texc";
         case BI_TEXC_DUAL: return "texc_dual";
         case BI_ROUND: return "round";
         case BI_IMUL: return "imul";
+        case BI_ZS_EMIT: return "zs_emit";
         default: return "unknown_class";
         }
 }
@@ -97,6 +99,18 @@ bi_print_dest_index(FILE *fp, bi_instruction *ins, unsigned index)
         return true;
 }
 
+static const char *
+bir_fau_name(unsigned fau_idx)
+{
+        const char *names[] = {
+                "zero", "lane-id", "wrap-id", "core-id",
+                "fb-extent", "atest-param", "sample-pos"
+        };
+
+        assert(fau_idx < ARRAY_SIZE(names));
+        return names[fau_idx];
+}
+
 static void
 bi_print_index(FILE *fp, bi_instruction *ins, unsigned index, unsigned s)
 {
@@ -112,6 +126,9 @@ bi_print_index(FILE *fp, bi_instruction *ins, unsigned index, unsigned s)
         else if (index & BIR_INDEX_BLEND)
                 fprintf(fp, "blend_descriptor_%u.%c", ins->blend_location,
                         (index & ~BIR_INDEX_BLEND) == BIFROST_SRC_FAU_HI ? 'y' : 'x');
+        else if (index & BIR_INDEX_FAU)
+                fprintf(fp, "%s.%c", bir_fau_name(index & BIR_FAU_TYPE_MASK),
+                        (index & BIR_FAU_HI) ? 'y' : 'x');
         else
                 fprintf(fp, "#err");
 }
@@ -148,8 +165,8 @@ bi_print_swizzle(bi_instruction *ins, unsigned src, FILE *fp)
         fprintf(fp, ".");
 
         for (unsigned u = 0; u < bi_get_component_count(ins, src); ++u) {
-                assert(ins->swizzle[src][u] < 4);
-                fputc("xyzw"[ins->swizzle[src][u]], fp);
+                assert(ins->swizzle[src][u] < 16);
+                fputc("xyzwefghijklmnop"[ins->swizzle[src][u]], fp);
         }
 }
 
@@ -190,6 +207,12 @@ bi_special_op_name(enum bi_special_op op)
         case BI_SPECIAL_FRCP: return "frcp";
         case BI_SPECIAL_FRSQ: return "frsq";
         case BI_SPECIAL_EXP2_LOW: return "exp2_low";
+        case BI_SPECIAL_CUBEFACE1: return "cubeface1";
+        case BI_SPECIAL_CUBEFACE2: return "cubeface2";
+        case BI_SPECIAL_CUBE_SSEL: return "cube_ssel";
+        case BI_SPECIAL_CUBE_TSEL: return "cube_tsel";
+        case BI_SPECIAL_CLPER_V6: return "clper_v6";
+        case BI_SPECIAL_CLPER_V7: return "clper_v7";
         default: return "invalid";
         }
 }
@@ -217,11 +240,31 @@ bi_print_load_vary(struct bi_load_vary *load, FILE *fp)
 {
         fprintf(fp, "%s", bi_interp_mode_name(load->interp_mode));
 
+        if (load->special) {
+                switch (load->var_id) {
+                case BIFROST_SPECIAL_VAR_POINT: fprintf(fp, ".point"); break;
+                case BIFROST_SPECIAL_VAR_FRAGZ: fprintf(fp, ".fragz"); break;
+                case BIFROST_SPECIAL_VAR_FRAGW: fprintf(fp, ".fragw"); break;
+                default: unreachable("Invalid varying ID");
+                }
+        }
+
         if (load->reuse)
                 fprintf(fp, ".reuse");
 
         if (load->flat)
                 fprintf(fp, ".flat");
+
+        if (load->immediate)
+                fprintf(fp, ".imm(%d)", load->index);
+
+        switch (load->update_mode) {
+        case BIFROST_UPDATE_STORE: fprintf(fp, ".store"); break;
+        case BIFROST_UPDATE_RETRIEVE: fprintf(fp, ".retrieve"); break;
+        case BIFROST_UPDATE_CONDITIONAL: fprintf(fp, ".conditional"); break;
+        case BIFROST_UPDATE_CLOBBER: fprintf(fp, ".clobber"); break;
+        default: unreachable("Invalid update mode");
+        }
 }
 
 const char *
@@ -256,7 +299,7 @@ bi_print_instruction(bi_instruction *ins, FILE *fp)
                 fprintf(fp, "%s", bi_bitwise_op_name(ins->op.bitwise));
         else if (ins->type == BI_IMATH)
                 fprintf(fp, "%s", bi_imath_op_name(ins->op.imath));
-        else if (ins->type == BI_SPECIAL)
+        else if (ins->type == BI_SPECIAL_ADD || ins->type == BI_SPECIAL_FMA)
                 fprintf(fp, "%s", bi_special_op_name(ins->op.special));
         else if (ins->type == BI_TABLE)
                 fprintf(fp, "%s", bi_table_op_name(ins->op.table));
@@ -321,7 +364,9 @@ bi_print_instruction(bi_instruction *ins, FILE *fp)
         bi_foreach_src(ins, s) {
                 bi_print_src(fp, ins, s);
 
-                if (ins->src[s] && !(ins->src[s] & (BIR_INDEX_CONSTANT | BIR_INDEX_ZERO))) {
+                if (ins->src[s] &&
+                    !(ins->src[s] &
+                      (BIR_INDEX_CONSTANT | BIR_INDEX_ZERO | BIR_INDEX_FAU))) {
                         pan_print_alu_type(ins->src_types[s], fp);
                         bi_print_swizzle(ins, s, fp);
                 }

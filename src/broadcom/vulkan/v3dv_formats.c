@@ -331,7 +331,7 @@ bool
 v3dv_tfu_supports_tex_format(const struct v3d_device_info *devinfo,
                              uint32_t tex_format)
 {
-   assert(devinfo->ver >= 41);
+   assert(devinfo->ver >= 42);
 
    switch (tex_format) {
    case TEXTURE_DATA_FORMAT_R8:
@@ -355,6 +355,17 @@ v3dv_tfu_supports_tex_format(const struct v3d_device_info *devinfo,
    case TEXTURE_DATA_FORMAT_RGBA16F:
    case TEXTURE_DATA_FORMAT_R11F_G11F_B10F:
    case TEXTURE_DATA_FORMAT_R4:
+   case TEXTURE_DATA_FORMAT_RGB9_E5:
+   case TEXTURE_DATA_FORMAT_R32F:
+   case TEXTURE_DATA_FORMAT_RG32F:
+   case TEXTURE_DATA_FORMAT_RGBA32F:
+   case TEXTURE_DATA_FORMAT_RGB8_ETC2:
+   case TEXTURE_DATA_FORMAT_RGB8_PUNCHTHROUGH_ALPHA1:
+   case TEXTURE_DATA_FORMAT_RGBA8_ETC2_EAC:
+   case TEXTURE_DATA_FORMAT_R11_EAC:
+   case TEXTURE_DATA_FORMAT_SIGNED_R11_EAC:
+   case TEXTURE_DATA_FORMAT_RG11_EAC:
+   case TEXTURE_DATA_FORMAT_SIGNED_RG11_EAC:
       return true;
    default:
       return false;
@@ -442,6 +453,11 @@ image_format_features(VkFormat vk_format,
       flags |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
       if (desc->nr_channels == 1 && vk_format_is_int(vk_format))
          flags |= VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT;
+   } else if (vk_format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+              vk_format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ||
+              vk_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
+      /* To comply with shaderStorageImageExtendedFormats */
+      flags |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
    }
 
    if (flags) {
@@ -482,10 +498,12 @@ buffer_format_features(VkFormat vk_format, const struct v3dv_format *v3dv_format
       }
    } else if (vk_format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
       flags |= VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT |
-               VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
+               VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT |
+               VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT;
    } else if (vk_format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ||
               vk_format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) {
-      flags |= VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
+      flags |= VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT |
+               VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT;
    }
 
    if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN &&
@@ -496,6 +514,16 @@ buffer_format_features(VkFormat vk_format, const struct v3dv_format *v3dv_format
    }
 
    return flags;
+}
+
+bool
+v3dv_buffer_format_supports_features(VkFormat vk_format,
+                                     VkFormatFeatureFlags features)
+{
+   const struct v3dv_format *v3dv_format = v3dv_get_format(vk_format);
+   const VkFormatFeatureFlags supported =
+      buffer_format_features(vk_format, v3dv_format);
+   return (supported & features) == features;
 }
 
 void

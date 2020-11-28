@@ -519,6 +519,8 @@ fd6_emit_combined_textures(struct fd_ringbuffer *ring, struct fd6_emit *emit,
 
 			fd6_emit_add_group(emit, tex->stateobj, s[type].state_id,
 					s[type].enable_mask);
+
+			fd6_texture_state_reference(&tex, NULL);
 		}
 	} else {
 		/* In the slow-path, create a one-shot texture state object
@@ -587,7 +589,8 @@ compute_ztest_mode(struct fd6_emit *emit, bool lrz_valid)
 	if (fs->shader->nir->info.fs.early_fragment_tests)
 		return A6XX_EARLY_Z;
 
-	if (fs->no_earlyz || fs->writes_pos || !zsa->base.depth.enabled) {
+	if (fs->no_earlyz || fs->writes_pos || !zsa->base.depth.enabled ||
+			fs->writes_stencilref) {
 		return A6XX_LATE_Z;
 	} else if ((fs->has_kill || zsa->alpha_test) &&
 			(zsa->base.depth.writemask || !pfb->zsbuf)) {
@@ -772,7 +775,7 @@ fd6_emit_streamout(struct fd_ringbuffer *ring, struct fd6_emit *emit, struct ir3
 			OUT_PKT7(obj, CP_CONTEXT_REG_BUNCH, 4);
 			OUT_RING(obj, REG_A6XX_VPC_SO_CNTL);
 			OUT_RING(obj, 0);
-			OUT_RING(obj, REG_A6XX_VPC_SO_BUF_CNTL);
+			OUT_RING(obj, REG_A6XX_VPC_SO_STREAM_CNTL);
 			OUT_RING(obj, 0);
 
 			fd6_emit_take_group(emit, obj, FD6_GROUP_SO, ENABLE_ALL);
@@ -953,23 +956,47 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
 						   FD6_GROUP_RASTERIZER, ENABLE_ALL);
 	}
 
-	if (dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_RASTERIZER_DISCARD | FD_DIRTY_PROG)) {
+	if (dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_RASTERIZER_DISCARD |
+				 FD_DIRTY_PROG | FD_DIRTY_BLEND_DUAL)) {
 		struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(
-				emit->ctx->batch->submit, 5 * 4, FD_RINGBUFFER_STREAMING);
+				emit->ctx->batch->submit, 9 * 4, FD_RINGBUFFER_STREAMING);
 
 		unsigned nr = pfb->nr_cbufs;
 
 		if (ctx->rasterizer->rasterizer_discard)
 			nr = 0;
 
+		struct fd6_blend_stateobj *blend = fd6_blend_stateobj(ctx->blend);
+
+		if (blend->use_dual_src_blend)
+			nr++;
+
 		OUT_PKT4(ring, REG_A6XX_RB_FS_OUTPUT_CNTL0, 2);
 		OUT_RING(ring, COND(fs->writes_pos, A6XX_RB_FS_OUTPUT_CNTL0_FRAG_WRITES_Z) |
 				COND(fs->writes_smask && pfb->samples > 1,
-						A6XX_RB_FS_OUTPUT_CNTL0_FRAG_WRITES_SAMPMASK));
+						A6XX_RB_FS_OUTPUT_CNTL0_FRAG_WRITES_SAMPMASK) |
+				COND(fs->writes_stencilref,
+						A6XX_RB_FS_OUTPUT_CNTL0_FRAG_WRITES_STENCILREF) |
+				COND(blend->use_dual_src_blend,
+						A6XX_RB_FS_OUTPUT_CNTL0_DUAL_COLOR_IN_ENABLE));
 		OUT_RING(ring, A6XX_RB_FS_OUTPUT_CNTL1_MRT(nr));
 
 		OUT_PKT4(ring, REG_A6XX_SP_FS_OUTPUT_CNTL1, 1);
 		OUT_RING(ring, A6XX_SP_FS_OUTPUT_CNTL1_MRT(nr));
+
+		unsigned mrt_components = 0;
+		for (unsigned i = 0; i < pfb->nr_cbufs; i++) {
+			if (!pfb->cbufs[i])
+				continue;
+			mrt_components |= 0xf << (i * 4);
+		}
+
+		/* dual source blending has an extra fs output in the 2nd slot */
+		if (blend->use_dual_src_blend)
+			mrt_components |= 0xf << 4;
+
+		OUT_REG(ring, A6XX_SP_FS_RENDER_COMPONENTS(.dword = mrt_components));
+		OUT_REG(ring, A6XX_RB_RENDER_COMPONENTS(.dword = mrt_components));
 
 		fd6_emit_take_group(emit, ring, FD6_GROUP_PROG_FB_RAST, ENABLE_DRAW);
 	}
@@ -1211,11 +1238,9 @@ fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 
 	WRITE(REG_A6XX_VPC_SO_DISABLE, A6XX_VPC_SO_DISABLE(true).value);
 
-	WRITE(REG_A6XX_PC_UNKNOWN_9980, 0);
+	WRITE(REG_A6XX_PC_RASTER_CNTL, 0);
 
 	WRITE(REG_A6XX_PC_MULTIVIEW_CNTL, 0);
-
-	WRITE(REG_A6XX_SP_UNKNOWN_A81B, 0);
 
 	WRITE(REG_A6XX_SP_UNKNOWN_B183, 0);
 
@@ -1256,8 +1281,8 @@ fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	OUT_RING(ring, CP_SET_DRAW_STATE__1_ADDR_LO(0));
 	OUT_RING(ring, CP_SET_DRAW_STATE__2_ADDR_HI(0));
 
-	OUT_PKT4(ring, REG_A6XX_VPC_SO_BUF_CNTL, 1);
-	OUT_RING(ring, 0x00000000);   /* VPC_SO_BUF_CNTL */
+	OUT_PKT4(ring, REG_A6XX_VPC_SO_STREAM_CNTL, 1);
+	OUT_RING(ring, 0x00000000);   /* VPC_SO_STREAM_CNTL */
 
 	OUT_PKT4(ring, REG_A6XX_GRAS_LRZ_CNTL, 1);
 	OUT_RING(ring, 0x00000000);

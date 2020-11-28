@@ -174,8 +174,8 @@ enum
 
    /* all VS variants */
    SI_SGPR_BASE_VERTEX = SI_NUM_VS_STATE_RESOURCE_SGPRS,
-   SI_SGPR_START_INSTANCE,
    SI_SGPR_DRAWID,
+   SI_SGPR_START_INSTANCE,
    SI_VS_NUM_USER_SGPR,
 
    SI_SGPR_VS_BLIT_DATA = SI_SGPR_CONST_AND_SHADER_BUFFERS,
@@ -278,7 +278,9 @@ enum
 #define SI_NGG_CULL_FRONT_FACE               (1 << 2)   /* front faces */
 #define SI_NGG_CULL_GS_FAST_LAUNCH_TRI_LIST  (1 << 3)   /* GS fast launch: triangles */
 #define SI_NGG_CULL_GS_FAST_LAUNCH_TRI_STRIP (1 << 4)   /* GS fast launch: triangle strip */
-#define SI_NGG_CULL_GS_FAST_LAUNCH_ALL       (0x3 << 3) /* GS fast launch (both prim types) */
+#define SI_NGG_CULL_GS_FAST_LAUNCH_INDEX_SIZE_PACKED(x)     (((x) & 0x3) << 5) /* 0->0, 1->1, 2->2, 3->4 */
+#define SI_GET_NGG_CULL_GS_FAST_LAUNCH_INDEX_SIZE_PACKED(x) (((x) >> 5) & 0x3)
+#define SI_NGG_CULL_GS_FAST_LAUNCH_ALL       (0xf << 3) /* GS fast launch (both prim types) */
 
 /**
  * For VS shader keys, describe any fixups required for vertex fetch.
@@ -461,6 +463,7 @@ struct si_shader_selector {
    uint32_t patch_outputs_written;     /* "get_unique_index_patch" bits */
 
    uint64_t inputs_read; /* "get_unique_index" bits */
+   uint64_t tcs_vgpr_only_inputs; /* TCS inputs that are only in VGPRs, not LDS. */
 
    /* bitmasks of used descriptor slots */
    uint64_t active_const_and_shader_buffers;
@@ -558,6 +561,7 @@ union si_shader_part_key {
       unsigned as_prim_discard_cs : 1;
       unsigned gs_fast_launch_tri_list : 1;  /* for NGG culling */
       unsigned gs_fast_launch_tri_strip : 1; /* for NGG culling */
+      unsigned gs_fast_launch_index_size_packed : 2;
       /* Prologs for monolithic shaders shouldn't set EXEC. */
       unsigned is_monolithic : 1;
    } vs_prolog;
@@ -651,7 +655,7 @@ struct si_shader_key {
       unsigned kill_pointsize : 1;
 
       /* For NGG VS and TES. */
-      unsigned ngg_culling : 5; /* SI_NGG_CULL_* */
+      unsigned ngg_culling : 7; /* SI_NGG_CULL_* */
 
       /* For shaders where monolithic variants have better code.
        *
@@ -673,6 +677,10 @@ struct si_shader_key {
       unsigned cs_cull_back : 1;
       unsigned cs_cull_z : 1;
       unsigned cs_halfz_clip_space : 1;
+
+      /* VS and TCS have the same number of patch vertices. */
+      unsigned same_patch_vertices:1;
+
       unsigned inline_uniforms:1;
 
       uint32_t inlined_uniform_values[MAX_INLINABLE_UNIFORMS];

@@ -27,6 +27,8 @@
 #include "zink_context.h"
 #include "zink_screen.h"
 
+#include "vulkan/wsi/wsi_common.h"
+
 #include "util/slab.h"
 #include "util/u_debug.h"
 #include "util/format/u_format.h"
@@ -36,7 +38,13 @@
 
 #include "frontend/sw_winsys.h"
 
+#ifndef _WIN32
+#define ZINK_USE_DMABUF
+#endif
+
+#ifdef ZINK_USE_DMABUF
 #include "drm-uapi/drm_fourcc.h"
+#endif
 
 static void
 zink_resource_destroy(struct pipe_screen *pscreen,
@@ -225,6 +233,15 @@ resource_create(struct pipe_screen *pscreen,
       ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
       res->layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
+      struct wsi_image_create_info image_wsi_info = {
+         VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
+         NULL,
+         .scanout = true,
+      };
+
+      if (screen->needs_mesa_wsi && (templ->bind & PIPE_BIND_SCANOUT))
+         ici.pNext = &image_wsi_info;
+
       VkResult result = vkCreateImage(screen->dev, &ici, NULL, &res->image);
       if (result != VK_SUCCESS) {
          FREE(res);
@@ -250,6 +267,8 @@ resource_create(struct pipe_screen *pscreen,
    if (templ->bind & PIPE_BIND_SHARED) {
       emai.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
       emai.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+
+      emai.pNext = mai.pNext;
       mai.pNext = &emai;
    }
 
@@ -263,7 +282,20 @@ resource_create(struct pipe_screen *pscreen,
       imfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
       imfi.fd = whandle->handle;
 
+      imfi.pNext = mai.pNext;
       emai.pNext = &imfi;
+   }
+
+   struct wsi_memory_allocate_info memory_wsi_info = {
+      VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA,
+      NULL,
+   };
+
+   if (screen->needs_mesa_wsi && (templ->bind & PIPE_BIND_SCANOUT)) {
+      memory_wsi_info.implicit_sync = true;
+
+      memory_wsi_info.pNext = mai.pNext;
+      mai.pNext = &memory_wsi_info;
    }
 
    if (vkAllocateMemory(screen->dev, &mai, NULL, &res->mem) != VK_SUCCESS)
@@ -319,8 +351,6 @@ zink_resource_get_handle(struct pipe_screen *pscreen,
 {
    struct zink_resource *res = zink_resource(tex);
    struct zink_screen *screen = zink_screen(pscreen);
-   VkMemoryGetFdInfoKHR fd_info = {};
-   int fd;
 
    if (res->base.target != PIPE_BUFFER) {
       VkImageSubresource sub_res = {};
@@ -334,6 +364,9 @@ zink_resource_get_handle(struct pipe_screen *pscreen,
    }
 
    if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
+#ifdef ZINK_USE_DMABUF
+      VkMemoryGetFdInfoKHR fd_info = {};
+      int fd;
       fd_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
       fd_info.memory = res->mem;
       fd_info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
@@ -342,6 +375,9 @@ zink_resource_get_handle(struct pipe_screen *pscreen,
          return false;
       whandle->handle = fd;
       whandle->modifier = DRM_FORMAT_MOD_INVALID;
+#else
+      return false;
+#endif
    }
    return true;
 }
@@ -352,10 +388,14 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
                  struct winsys_handle *whandle,
                  unsigned usage)
 {
+#ifdef ZINK_USE_DMABUF
    if (whandle->modifier != DRM_FORMAT_MOD_INVALID)
       return NULL;
 
    return resource_create(pscreen, templ, whandle, usage);
+#else
+   return NULL;
+#endif
 }
 
 static bool
@@ -487,6 +527,25 @@ zink_transfer_map(struct pipe_context *pctx,
       VkResult result = vkMapMemory(screen->dev, res->mem, res->offset, res->size, 0, &ptr);
       if (result != VK_SUCCESS)
          return NULL;
+
+#if defined(__APPLE__)
+      if (!(usage & PIPE_MAP_DISCARD_WHOLE_RESOURCE)) {
+         // Work around for MoltenVk limitation
+         // MoltenVk returns blank memory ranges when there should be data present
+         // This is a known limitation of MoltenVK.
+         // See https://github.com/KhronosGroup/MoltenVK/blob/master/Docs/MoltenVK_Runtime_UserGuide.md#known-moltenvk-limitations
+         VkMappedMemoryRange range = {
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+            NULL,
+            res->mem,
+            res->offset,
+            res->size
+         };
+         result = vkFlushMappedMemoryRanges(screen->dev, 1, &range);
+         if (result != VK_SUCCESS)
+            return NULL;
+      }
+#endif
 
       trans->base.stride = 0;
       trans->base.layer_stride = 0;
@@ -625,9 +684,8 @@ zink_resource_setup_transfer_layouts(struct zink_batch *batch, struct zink_resou
        * VK_IMAGE_LAYOUT_GENERAL. And since this isn't a present-related
        * operation, VK_IMAGE_LAYOUT_GENERAL seems most appropriate.
        */
-      if (src->layout != VK_IMAGE_LAYOUT_GENERAL)
-         zink_resource_barrier(batch->cmdbuf, src, src->aspect,
-                               VK_IMAGE_LAYOUT_GENERAL);
+      zink_resource_barrier(batch->cmdbuf, src, src->aspect,
+                            VK_IMAGE_LAYOUT_GENERAL);
    } else {
       if (src->layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
          zink_resource_barrier(batch->cmdbuf, src, src->aspect,

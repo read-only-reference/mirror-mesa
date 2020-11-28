@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2019-2020 Collabora, Ltd.
  * © Copyright 2018 Alyssa Rosenzweig
  * Copyright © 2014-2017 Broadcom
  * Copyright (C) 2017 Intel Corporation
@@ -227,12 +228,13 @@ panfrost_scissor_culls_everything(struct panfrost_context *ctx)
 static void
 panfrost_statistics_record(
                 struct panfrost_context *ctx,
-                const struct pipe_draw_info *info)
+                const struct pipe_draw_info *info,
+                const struct pipe_draw_start_count *draw)
 {
         if (!ctx->active_queries)
                 return;
 
-        uint32_t prims = u_prims_for_vertices(info->mode, info->count);
+        uint32_t prims = u_prims_for_vertices(info->mode, draw->count);
         ctx->prims_generated += prims;
 
         if (!ctx->streamout.num_targets)
@@ -329,6 +331,8 @@ panfrost_emit_primitive_size(struct panfrost_context *ctx,
 static void
 panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                          const struct pipe_draw_info *info,
+                         const struct pipe_draw_indirect_info *indirect,
+                         const struct pipe_draw_start_count *draw,
                          void *invocation_template,
                          mali_ptr shared_mem, mali_ptr indices,
                          mali_ptr fs_vary, mali_ptr varyings,
@@ -360,10 +364,10 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                         cfg.index_type = panfrost_translate_index_size(info->index_size);
                         cfg.indices = indices;
                         cfg.base_vertex_offset = info->index_bias - ctx->offset_start;
-                        cfg.index_count = info->count;
+                        cfg.index_count = draw->count;
                 } else {
-                        cfg.index_count = info->count_from_stream_output ?
-                                          pan_so_target(info->count_from_stream_output)->offset :
+                        cfg.index_count = indirect && indirect->count_from_stream_output ?
+                                          pan_so_target(indirect->count_from_stream_output)->offset :
                                           ctx->vertex_count;
                 }
         }
@@ -421,7 +425,10 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
 static void
 panfrost_draw_vbo(
         struct pipe_context *pipe,
-        const struct pipe_draw_info *info)
+        const struct pipe_draw_info *info,
+      const struct pipe_draw_indirect_info *indirect,
+      const struct pipe_draw_start_count *draws,
+      unsigned num_draws)
 {
         struct panfrost_context *ctx = pan_context(pipe);
         struct panfrost_device *device = pan_device(ctx->base.screen);
@@ -440,7 +447,7 @@ panfrost_draw_vbo(
 
         if (info->primitive_restart && info->index_size
             && info->restart_index != primitive_index) {
-                util_draw_vbo_without_prim_restart(pipe, info);
+                util_draw_vbo_without_prim_restart(pipe, info, indirect, &draws[0]);
                 return;
         }
 
@@ -449,13 +456,13 @@ panfrost_draw_vbo(
         assert(ctx->rasterizer != NULL);
 
         if (!(ctx->draw_modes & (1 << mode))) {
-                if (info->count < 4) {
+                if (draws[0].count < 4) {
                         /* Degenerate case? */
                         return;
                 }
 
                 util_primconvert_save_rasterizer_state(ctx->primconvert, &ctx->rasterizer->base);
-                util_primconvert_draw_vbo(ctx->primconvert, info);
+                util_primconvert_draw_vbo(ctx->primconvert, info, &draws[0]);
                 return;
         }
 
@@ -465,7 +472,7 @@ panfrost_draw_vbo(
         panfrost_batch_set_requirements(batch);
 
         /* Take into account a negative bias */
-        ctx->vertex_count = info->count + abs(info->index_bias);
+        ctx->vertex_count = draws[0].count + abs(info->index_bias);
         ctx->instance_count = info->instance_count;
         ctx->active_prim = info->mode;
 
@@ -489,7 +496,7 @@ panfrost_draw_vbo(
         mali_ptr indices = 0;
 
         if (info->index_size) {
-                indices = panfrost_get_index_buffer_bounded(ctx, info,
+                indices = panfrost_get_index_buffer_bounded(ctx, info, &draws[0],
                                                             &min_index,
                                                             &max_index);
 
@@ -497,7 +504,7 @@ panfrost_draw_vbo(
                 vertex_count = max_index - min_index + 1;
                 ctx->offset_start = min_index + info->index_bias;
         } else {
-                ctx->offset_start = info->start;
+                ctx->offset_start = draws[0].start;
         }
 
         /* Encode the padded vertex count */
@@ -507,7 +514,7 @@ panfrost_draw_vbo(
         else
                 ctx->padded_count = vertex_count;
 
-        panfrost_statistics_record(ctx, info);
+        panfrost_statistics_record(ctx, info, &draws[0]);
 
         struct mali_invocation_packed invocation;
         panfrost_pack_work_groups_compute(&invocation,
@@ -526,7 +533,7 @@ panfrost_draw_vbo(
         /* Fire off the draw itself */
         panfrost_draw_emit_vertex(batch, info, &invocation, shared_mem,
                                   vs_vary, varyings, vertex.cpu);
-        panfrost_draw_emit_tiler(batch, info, &invocation, shared_mem, indices,
+        panfrost_draw_emit_tiler(batch, info, indirect, &draws[0], &invocation, shared_mem, indices,
                                  fs_vary, varyings, pos, psiz, tiler.cpu);
         panfrost_emit_vertex_tiler_jobs(batch, &vertex, &tiler);
 
@@ -987,15 +994,9 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
         }
 
         /* MSAA only supported for 2D textures (and 2D texture arrays via an
-         * extension currently unimplemented */
+         * extension currently unimplemented) */
 
-        if (so->base.target == PIPE_TEXTURE_2D) {
-                assert(depth == 1);
-                depth = texture->nr_samples;
-        } else {
-                /* MSAA only supported for 2D textures */
-                assert(texture->nr_samples <= 1);
-        }
+        assert(texture->nr_samples <= 1 || so->base.target == PIPE_TEXTURE_2D);
 
         enum mali_texture_dimension type =
                 panfrost_translate_texture_dimension(so->base.target);

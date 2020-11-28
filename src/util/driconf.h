@@ -199,10 +199,6 @@
    DRI_CONF_OPT_B(allow_glsl_cross_stage_interpolation_mismatch, def,   \
                   "Allow interpolation qualifier mismatch across shader stages")
 
-#define DRI_CONF_ALLOW_GLSL_LAYOUT_QUALIFIER_ON_FUNCTION_PARAMETERS(def) \
-   DRI_CONF_OPT_B(allow_glsl_layout_qualifier_on_function_parameters, def, \
-                  "Allow layout qualifiers on function parameters.")
-
 #define DRI_CONF_ALLOW_DRAW_OUT_OF_ORDER(def) \
    DRI_CONF_OPT_B(allow_draw_out_of_order, def, \
                   "Allow out-of-order draw optimizations. Set when Z fighting doesn't have to be accurate.")
@@ -229,6 +225,9 @@
    DRI_CONF_OPT_S(indirect_gl_extension_override, def, \
                   "Allow enabling/disabling a list of indirect-GL extensions")
 
+#define DRI_CONF_DISABLE_PROTECTED_CONTENT_CHECK(def) \
+   DRI_CONF_OPT_B(disable_protected_content_check, def, \
+                  "Don't reject image import if protected_content attribute doesn't match")
 
 /**
  * \brief Image quality-related options
@@ -311,19 +310,6 @@
 #define DRI_CONF_MESA_NO_ERROR(def) \
    DRI_CONF_OPT_B(mesa_no_error, def, \
                   "Disable GL driver error checking")
-
-#define DRI_CONF_DISABLE_EXT_BUFFER_AGE(def) \
-   DRI_CONF_OPT_B(glx_disable_ext_buffer_age, def, \
-                  "Disable the GLX_EXT_buffer_age extension")
-
-#define DRI_CONF_DISABLE_OML_SYNC_CONTROL(def) \
-   DRI_CONF_OPT_B(glx_disable_oml_sync_control, def, \
-                  "Disable the GLX_OML_sync_control extension")
-
-#define DRI_CONF_DISABLE_SGI_VIDEO_SYNC(def) \
-   DRI_CONF_OPT_B(glx_disable_sgi_video_sync, def, \
-                  "Disable the GLX_SGI_video_sync extension")
-
 
 
 /**

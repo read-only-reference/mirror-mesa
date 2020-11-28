@@ -127,6 +127,7 @@ public:
    bool run_tes();
    bool run_gs();
    bool run_cs(bool allow_spilling);
+   bool run_bs(bool allow_spilling);
    void optimize();
    void allocate_registers(bool allow_spilling);
    void setup_fs_payload_gen4();
@@ -250,6 +251,8 @@ public:
                               nir_intrinsic_instr *instr);
    void nir_emit_cs_intrinsic(const brw::fs_builder &bld,
                               nir_intrinsic_instr *instr);
+   void nir_emit_bs_intrinsic(const brw::fs_builder &bld,
+                              nir_intrinsic_instr *instr);
    fs_reg get_nir_image_intrinsic_image(const brw::fs_builder &bld,
                                         nir_intrinsic_instr *instr);
    fs_reg get_nir_ssbo_intrinsic_index(const brw::fs_builder &bld,
@@ -343,12 +346,9 @@ public:
 
    const struct brw_vue_map *input_vue_map;
 
-   BRW_ANALYSIS(live_analysis, brw::fs_live_variables,
-                backend_shader *) live_analysis;
-   BRW_ANALYSIS(regpressure_analysis, brw::register_pressure,
-                fs_visitor *) regpressure_analysis;
-   BRW_ANALYSIS(performance_analysis, brw::performance,
-                fs_visitor *) performance_analysis;
+   brw_analysis<brw::fs_live_variables, backend_shader> live_analysis;
+   brw_analysis<brw::register_pressure, fs_visitor> regpressure_analysis;
+   brw_analysis<brw::performance, fs_visitor> performance_analysis;
 
    /** Number of uniform variable components visited. */
    unsigned uniforms;

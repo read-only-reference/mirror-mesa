@@ -29,6 +29,7 @@
  * \brief Extension handling
  */
 
+#include "util/os_misc.h"
 
 #include "glheader.h"
 
@@ -177,7 +178,6 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    ctx->Extensions.EXT_texture_swizzle = GL_TRUE;
    /*ctx->Extensions.EXT_transform_feedback = GL_TRUE;*/
    ctx->Extensions.EXT_vertex_array_bgra = GL_TRUE;
-   ctx->Extensions.MESA_pack_invert = GL_TRUE;
    ctx->Extensions.MESA_ycbcr_texture = GL_TRUE;
    ctx->Extensions.NV_conditional_render = GL_TRUE;
    ctx->Extensions.NV_point_sprite = GL_TRUE;
@@ -238,7 +238,7 @@ free_unknown_extensions_strings(void)
 void
 _mesa_one_time_init_extension_overrides(void)
 {
-   const char *env_const = getenv("MESA_EXTENSION_OVERRIDE");
+   const char *env_const = os_get_option("MESA_EXTENSION_OVERRIDE");
    char *env;
    char *ext;
    size_t offset;

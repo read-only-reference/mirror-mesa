@@ -226,8 +226,8 @@ rewrite_phi_preds(nir_block *block, nir_block *old_pred, nir_block *new_pred)
    }
 }
 
-static void
-insert_phi_undef(nir_block *block, nir_block *pred)
+void
+nir_insert_phi_undef(nir_block *block, nir_block *pred)
 {
    nir_function_impl *impl = nir_cf_node_get_function(&block->cf_node);
    nir_foreach_instr(instr, block) {
@@ -298,7 +298,7 @@ block_add_normal_succs(nir_block *block)
          nir_block *head_block = nir_loop_first_block(loop);
 
          link_blocks(block, head_block, NULL);
-         insert_phi_undef(head_block, block);
+         nir_insert_phi_undef(head_block, block);
       } else {
          nir_function_impl *impl = nir_cf_node_as_function(parent);
          link_blocks(block, impl->end_block, NULL);
@@ -318,7 +318,7 @@ block_add_normal_succs(nir_block *block)
          nir_block *first_block = nir_loop_first_block(next_loop);
 
          link_blocks(block, first_block, NULL);
-         insert_phi_undef(first_block, block);
+         nir_insert_phi_undef(first_block, block);
       }
    }
 }
@@ -473,6 +473,7 @@ nir_handle_add_jump(nir_block *block)
 
    switch (jump_instr->type) {
    case nir_jump_return:
+   case nir_jump_halt:
       link_blocks(block, impl->end_block, NULL);
       break;
 
@@ -734,6 +735,53 @@ nir_cf_extract(nir_cf_list *extracted, nir_cursor begin, nir_cursor end)
    stitch_blocks(block_before, block_after);
 }
 
+static void
+relink_jump_halt_cf_node(nir_cf_node *node, nir_block *end_block)
+{
+   switch (node->type) {
+   case nir_cf_node_block: {
+      nir_block *block = nir_cf_node_as_block(node);
+      nir_instr *last_instr = nir_block_last_instr(block);
+      if (last_instr == NULL || last_instr->type != nir_instr_type_jump)
+         break;
+
+      nir_jump_instr *jump = nir_instr_as_jump(last_instr);
+      /* We can't move a CF list from one function to another while we still
+       * have returns.
+       */
+      assert(jump->type != nir_jump_return);
+
+      if (jump->type == nir_jump_halt) {
+         unlink_block_successors(block);
+         link_blocks(block, end_block, NULL);
+      }
+      break;
+   }
+
+   case nir_cf_node_if: {
+      nir_if *if_stmt = nir_cf_node_as_if(node);
+      foreach_list_typed(nir_cf_node, child, node, &if_stmt->then_list)
+         relink_jump_halt_cf_node(child, end_block);
+      foreach_list_typed(nir_cf_node, child, node, &if_stmt->else_list)
+         relink_jump_halt_cf_node(child, end_block);
+      break;
+   }
+
+   case nir_cf_node_loop: {
+      nir_loop *loop = nir_cf_node_as_loop(node);
+      foreach_list_typed(nir_cf_node, child, node, &loop->body)
+         relink_jump_halt_cf_node(child, end_block);
+      break;
+   }
+
+   case nir_cf_node_function:
+      unreachable("Cannot insert a function in a function");
+
+   default:
+      unreachable("Invalid CF node type");
+   }
+}
+
 void
 nir_cf_reinsert(nir_cf_list *cf_list, nir_cursor cursor)
 {
@@ -741,6 +789,13 @@ nir_cf_reinsert(nir_cf_list *cf_list, nir_cursor cursor)
 
    if (exec_list_is_empty(&cf_list->list))
       return;
+
+   nir_function_impl *cursor_impl =
+      nir_cf_node_get_function(&nir_cursor_current_block(cursor)->cf_node);
+   if (cf_list->impl != cursor_impl) {
+      foreach_list_typed(nir_cf_node, node, node, &cf_list->list)
+         relink_jump_halt_cf_node(node, cursor_impl->end_block);
+   }
 
    split_block_cursor(cursor, &before, &after);
 

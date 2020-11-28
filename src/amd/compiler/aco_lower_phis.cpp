@@ -79,7 +79,7 @@ Operand get_ssa(Program *program, unsigned block_idx, ssa_state *state, bool bef
       Temp res = Temp(program->allocateTmp(program->lane_mask));
       state->latest[block_idx] = Operand(res);
 
-      Operand ops[pred];
+      Operand *const ops = (Operand *)alloca(pred * sizeof(Operand));
       for (unsigned i = 0; i < pred; i++)
          ops[i] = get_ssa(program, block.linear_preds[i], state, false);
 
@@ -103,8 +103,8 @@ Operand get_ssa(Program *program, unsigned block_idx, ssa_state *state, bool bef
 
 void insert_before_logical_end(Block *block, aco_ptr<Instruction> instr)
 {
-   auto IsLogicalEnd = [] (const aco_ptr<Instruction>& instr) -> bool {
-      return instr->opcode == aco_opcode::p_logical_end;
+   auto IsLogicalEnd = [] (const aco_ptr<Instruction>& inst) -> bool {
+      return inst->opcode == aco_opcode::p_logical_end;
    };
    auto it = std::find_if(block->instructions.crbegin(), block->instructions.crend(), IsLogicalEnd);
 

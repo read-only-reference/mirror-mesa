@@ -80,7 +80,19 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
         rsc->modifier = (whandle->modifier == DRM_FORMAT_MOD_INVALID) ?
                 DRM_FORMAT_MOD_LINEAR : whandle->modifier;
         rsc->modifier_constant = true;
-        rsc->slices[0].stride = whandle->stride;
+        rsc->slices[0].line_stride = whandle->stride;
+        rsc->slices[0].row_stride = whandle->stride;
+
+        if (rsc->modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED ||
+            drm_is_afbc(rsc->modifier)) {
+                unsigned tile_h = panfrost_block_dim(rsc->modifier, false, 0);
+
+                if (util_format_is_compressed(rsc->internal_format))
+                        tile_h >>= 2;
+
+                rsc->slices[0].row_stride *= tile_h;
+        }
+
         rsc->slices[0].offset = whandle->offset;
         rsc->slices[0].initialized = true;
         panfrost_resource_set_damage_region(NULL, &rsc->base, 0, NULL);
@@ -128,7 +140,7 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
                         return true;
 
                 handle->handle = rsrc->bo->gem_handle;
-                handle->stride = rsrc->slices[0].stride;
+                handle->stride = rsrc->slices[0].line_stride;
                 handle->offset = rsrc->slices[0].offset;
                 return TRUE;
         } else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
@@ -153,7 +165,7 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
                                 return false;
 
                         handle->handle = fd;
-                        handle->stride = rsrc->slices[0].stride;
+                        handle->stride = rsrc->slices[0].line_stride;
                         handle->offset = rsrc->slices[0].offset;
                         return true;
                 }
@@ -280,13 +292,22 @@ panfrost_create_scanout_res(struct pipe_screen *screen,
 /* Setup the mip tree given a particular modifier, possibly with checksumming */
 
 static void
-panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
+panfrost_setup_slices(struct panfrost_device *dev,
+                      struct panfrost_resource *pres,
+                      size_t *bo_size)
 {
         struct pipe_resource *res = &pres->base;
         unsigned width = res->width0;
         unsigned height = res->height0;
         unsigned depth = res->depth0;
         unsigned bytes_per_pixel = util_format_get_blocksize(pres->internal_format);
+
+        /* Z32_S8X24 variants are actually stored in 2 planes (one per
+         * component), we have to adjust the bytes_per_pixel value accordingly.
+         */
+        if (pres->internal_format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT ||
+            pres->internal_format == PIPE_FORMAT_X32_S8X24_UINT)
+                bytes_per_pixel = 4;
 
         /* MSAA is implemented as a 3D texture with z corresponding to the
          * sample #, horrifyingly enough */
@@ -313,15 +334,16 @@ panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
         bool linear = pres->modifier == DRM_FORMAT_MOD_LINEAR;
         bool should_align = renderable || tiled || afbc;
 
-        /* We don't know how to specify a 2D stride for 3D textures */
-
-        bool can_align_stride =
-                res->target != PIPE_TEXTURE_3D;
-
-        should_align &= can_align_stride;
-
         unsigned offset = 0;
         unsigned size_2d = 0;
+        unsigned tile_h = 1, tile_w = 1, tile_shift = 0;
+
+        if (tiled || afbc) {
+                tile_w = panfrost_block_dim(pres->modifier, true, 0);
+                tile_h = panfrost_block_dim(pres->modifier, false, 0);
+                if (util_format_is_compressed(pres->internal_format))
+                        tile_shift = 2;
+        }
 
         for (unsigned l = 0; l <= res->last_level; ++l) {
                 struct panfrost_slice *slice = &pres->slices[l];
@@ -331,8 +353,8 @@ panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
                 unsigned effective_depth = depth;
 
                 if (should_align) {
-                        effective_width = ALIGN_POT(effective_width, 16);
-                        effective_height = ALIGN_POT(effective_height, 16);
+                        effective_width = ALIGN_POT(effective_width, tile_w) >> tile_shift;
+                        effective_height = ALIGN_POT(effective_height, tile_h);
 
                         /* We don't need to align depth */
                 }
@@ -347,16 +369,17 @@ panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
                 /* Compute the would-be stride */
                 unsigned stride = bytes_per_pixel * effective_width;
 
-                if (util_format_is_compressed(pres->internal_format))
-                        stride /= 4;
-
-                /* ..but cache-line align it for performance */
-                if (can_align_stride && linear)
+                /* On Bifrost, pixel lines have to be aligned on 64 bytes otherwise
+                 * we end up with DATA_INVALID faults. That doesn't seem to be
+                 * mandatory on Midgard, but we keep the alignment for performance.
+                 */
+                if (linear)
                         stride = ALIGN_POT(stride, 64);
 
-                slice->stride = stride;
+                slice->line_stride = stride;
+                slice->row_stride = stride * (tile_h >> tile_shift);
 
-                unsigned slice_one_size = slice->stride * effective_height;
+                unsigned slice_one_size = slice->line_stride * effective_height;
                 unsigned slice_full_size = slice_one_size * effective_depth;
 
                 slice->size0 = slice_one_size;
@@ -417,18 +440,7 @@ panfrost_setup_slices(struct panfrost_resource *pres, size_t *bo_size)
  * level, not all usages are valid for tiling. Finally, if the app is hinting
  * that the contents frequently change, tiling will be a loss.
  *
- * Due to incomplete information on some platforms, we may need to force tiling
- * in some cases.
- *
  * On platforms where it is supported, AFBC is even better. */
-
-static bool
-panfrost_can_linear(struct panfrost_device *dev, const struct panfrost_resource *pres)
-{
-        /* XXX: We should be able to do linear Z/S with the right bits.. */
-        return !((pres->base.bind & PIPE_BIND_DEPTH_STENCIL) &&
-                (dev->quirks & (MIDGARD_SFBD | IS_BIFROST)));
-}
 
 static bool
 panfrost_should_afbc(struct panfrost_device *dev, const struct panfrost_resource *pres)
@@ -500,11 +512,6 @@ panfrost_should_tile(struct panfrost_device *dev, const struct panfrost_resource
 
         bool can_tile = is_2d && is_sane_bpp && ((pres->base.bind & ~valid_binding) == 0);
 
-        if (!panfrost_can_linear(dev, pres)) {
-                assert(can_tile);
-                return true;
-        }
-
         return can_tile && (pres->base.usage != PIPE_USAGE_STREAM);
 }
 
@@ -536,13 +543,11 @@ panfrost_resource_setup(struct panfrost_device *dev, struct panfrost_resource *p
         pres->checksummed = (pres->base.bind & PIPE_BIND_RENDER_TARGET);
 
         /* We can only switch tiled->linear if the resource isn't already
-         * linear, and if we control the modifier, and if the resource can be
-         * linear. */
+         * linear and if we control the modifier */
         pres->modifier_constant = !((pres->modifier != DRM_FORMAT_MOD_LINEAR)
-                        && (modifier == DRM_FORMAT_MOD_INVALID)
-                        && panfrost_can_linear(dev, pres));
+                        && (modifier == DRM_FORMAT_MOD_INVALID));
 
-        panfrost_setup_slices(pres, bo_size);
+        panfrost_setup_slices(dev, pres, bo_size);
 }
 
 void
@@ -728,6 +733,20 @@ pan_alloc_staging(struct panfrost_context *ctx, struct panfrost_resource *rsc,
         return pan_resource(pstaging);
 }
 
+static enum pipe_format
+pan_blit_format(enum pipe_format fmt)
+{
+        const struct util_format_description *desc;
+        desc = util_format_description(fmt);
+
+        /* This must be an emulated format (using u_transfer_helper) as if it
+         * was real RGTC we wouldn't have used AFBC and needed a blit. */
+        if (desc->layout == UTIL_FORMAT_LAYOUT_RGTC)
+                fmt = PIPE_FORMAT_R8G8B8A8_UNORM;
+
+        return fmt;
+}
+
 static void
 pan_blit_from_staging(struct pipe_context *pctx, struct panfrost_transfer *trans)
 {
@@ -735,14 +754,14 @@ pan_blit_from_staging(struct pipe_context *pctx, struct panfrost_transfer *trans
         struct pipe_blit_info blit = {0};
 
         blit.dst.resource = dst;
-        blit.dst.format   = dst->format;
+        blit.dst.format   = pan_blit_format(dst->format);
         blit.dst.level    = trans->base.level;
         blit.dst.box      = trans->base.box;
         blit.src.resource = trans->staging.rsrc;
-        blit.src.format   = trans->staging.rsrc->format;
+        blit.src.format   = pan_blit_format(trans->staging.rsrc->format);
         blit.src.level    = 0;
         blit.src.box      = trans->staging.box;
-        blit.mask = util_format_get_mask(trans->staging.rsrc->format);
+        blit.mask = util_format_get_mask(blit.src.format);
         blit.filter = PIPE_TEX_FILTER_NEAREST;
 
         panfrost_blit(pctx, &blit);
@@ -755,14 +774,14 @@ pan_blit_to_staging(struct pipe_context *pctx, struct panfrost_transfer *trans)
         struct pipe_blit_info blit = {0};
 
         blit.src.resource = src;
-        blit.src.format   = src->format;
+        blit.src.format   = pan_blit_format(src->format);
         blit.src.level    = trans->base.level;
         blit.src.box      = trans->base.box;
         blit.dst.resource = trans->staging.rsrc;
-        blit.dst.format   = trans->staging.rsrc->format;
+        blit.dst.format   = pan_blit_format(trans->staging.rsrc->format);
         blit.dst.level    = 0;
         blit.dst.box      = trans->staging.box;
-        blit.mask = util_format_get_mask(trans->staging.rsrc->format);
+        blit.mask = util_format_get_mask(blit.dst.format);
         blit.filter = PIPE_TEX_FILTER_NEAREST;
 
         panfrost_blit(pctx, &blit);
@@ -797,7 +816,7 @@ panfrost_ptr_map(struct pipe_context *pctx,
         /* We don't have s/w routines for AFBC, so use a staging texture */
         if (drm_is_afbc(rsrc->modifier)) {
                 struct panfrost_resource *staging = pan_alloc_staging(ctx, rsrc, level, box);
-                transfer->base.stride = staging->slices[0].stride;
+                transfer->base.stride = staging->slices[0].line_stride;
                 transfer->base.layer_stride = transfer->base.stride * box->height;
 
                 transfer->staging.rsrc = &staging->base;
@@ -913,7 +932,7 @@ panfrost_ptr_map(struct pipe_context *pctx,
                                         bo->ptr.cpu + rsrc->slices[level].offset,
                                         box->x, box->y, box->width, box->height,
                                         transfer->base.stride,
-                                        rsrc->slices[level].stride,
+                                        rsrc->slices[level].line_stride,
                                         rsrc->internal_format);
                 }
 
@@ -930,7 +949,7 @@ panfrost_ptr_map(struct pipe_context *pctx,
                 if ((usage & dpw) == dpw && rsrc->index_cache)
                         return NULL;
 
-                transfer->base.stride = rsrc->slices[level].stride;
+                transfer->base.stride = rsrc->slices[level].line_stride;
                 transfer->base.layer_stride = panfrost_get_layer_stride(
                                 rsrc->slices, rsrc->base.target == PIPE_TEXTURE_3D,
                                 rsrc->cubemap_stride, level);
@@ -946,7 +965,7 @@ panfrost_ptr_map(struct pipe_context *pctx,
                 return bo->ptr.cpu
                        + rsrc->slices[level].offset
                        + transfer->base.box.z * transfer->base.layer_stride
-                       + transfer->base.box.y * rsrc->slices[level].stride
+                       + transfer->base.box.y * rsrc->slices[level].line_stride
                        + transfer->base.box.x * bytes_per_pixel;
         }
 }
@@ -1025,25 +1044,25 @@ panfrost_ptr_unmap(struct pipe_context *pctx,
                                 assert(transfer->box.depth == 1);
 
                                 if (panfrost_should_linear_convert(prsrc, transfer)) {
-                                        prsrc->modifier = DRM_FORMAT_MOD_LINEAR;
-
                                         util_copy_rect(
                                                 bo->ptr.cpu + prsrc->slices[0].offset,
                                                 prsrc->base.format,
-                                                prsrc->slices[0].stride,
+                                                prsrc->slices[0].line_stride,
                                                 0, 0,
                                                 transfer->box.width,
                                                 transfer->box.height,
                                                 trans->map,
                                                 transfer->stride,
                                                 0, 0);
+
+                                        panfrost_resource_setup(dev, prsrc, NULL, DRM_FORMAT_MOD_LINEAR);
                                 } else {
                                         panfrost_store_tiled_image(
                                                 bo->ptr.cpu + prsrc->slices[transfer->level].offset,
                                                 trans->map,
                                                 transfer->box.x, transfer->box.y,
                                                 transfer->box.width, transfer->box.height,
-                                                prsrc->slices[transfer->level].stride,
+                                                prsrc->slices[transfer->level].line_stride,
                                                 transfer->stride,
                                                 prsrc->internal_format);
                                 }

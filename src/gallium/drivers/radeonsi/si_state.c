@@ -751,7 +751,8 @@ static void si_emit_clip_regs(struct si_context *sctx)
    unsigned initial_cdw = sctx->gfx_cs->current.cdw;
    unsigned pa_cl_cntl = S_02881C_VS_OUT_CCDIST0_VEC_ENA((vs_out_mask & 0x0F) != 0) |
                          S_02881C_VS_OUT_CCDIST1_VEC_ENA((vs_out_mask & 0xF0) != 0) |
-                         S_02881C_BYPASS_VTX_RATE_COMBINER(sctx->chip_class >= GFX10_3) |
+                         S_02881C_BYPASS_VTX_RATE_COMBINER(sctx->chip_class >= GFX10_3 &&
+                                                           !sctx->screen->options.vrs2x2) |
                          S_02881C_BYPASS_PRIM_RATE_COMBINER(sctx->chip_class >= GFX10_3) |
                          clipdist_mask | (culldist_mask << 8);
 
@@ -1406,6 +1407,21 @@ static void si_emit_db_render_state(struct si_context *sctx)
 
    radeon_opt_set_context_reg(sctx, R_02880C_DB_SHADER_CONTROL, SI_TRACKED_DB_SHADER_CONTROL,
                               db_shader_control);
+
+   if (sctx->screen->options.vrs2x2) {
+      /* If the shader is using discard, turn off coarse shading because
+       * discard at 2x2 pixel granularity degrades quality too much.
+       *
+       * MIN allows sample shading but not coarse shading.
+       */
+      unsigned mode = G_02880C_KILL_ENABLE(db_shader_control) ? V_028064_VRS_COMB_MODE_MIN
+                                                              : V_028064_VRS_COMB_MODE_PASSTHRU;
+      radeon_opt_set_context_reg(sctx, R_028064_DB_VRS_OVERRIDE_CNTL,
+                                 SI_TRACKED_DB_VRS_OVERRIDE_CNTL,
+                                 S_028064_VRS_OVERRIDE_RATE_COMBINER_MODE(mode) |
+                                 S_028064_VRS_OVERRIDE_RATE_X(0) |
+                                 S_028064_VRS_OVERRIDE_RATE_Y(0));
+   }
 
    if (initial_cdw != sctx->gfx_cs->current.cdw)
       sctx->context_roll = true;
@@ -2136,7 +2152,7 @@ static bool si_is_format_supported(struct pipe_screen *screen, enum pipe_format 
       /* Chips with 1 RB don't increment occlusion queries at 16x MSAA sample rate,
        * so don't expose 16 samples there.
        */
-      const unsigned max_eqaa_samples = sscreen->info.num_render_backends == 1 ? 8 : 16;
+      const unsigned max_eqaa_samples = sscreen->info.max_render_backends == 1 ? 8 : 16;
       const unsigned max_samples = 8;
 
       /* MSAA support without framebuffer attachments. */
@@ -2197,7 +2213,7 @@ static void si_choose_spi_color_formats(struct si_surface *surf, unsigned format
 {
    struct ac_spi_color_formats formats = {};
 
-   ac_choose_spi_color_formats(format, swap, ntype, is_depth, &formats);
+   ac_choose_spi_color_formats(format, swap, ntype, is_depth, true, &formats);
 
    surf->spi_shader_col_format = formats.normal;
    surf->spi_shader_col_format_alpha = formats.alpha;
@@ -2576,9 +2592,17 @@ static void si_update_display_dcc_dirty(struct si_context *sctx)
       surf = (struct si_surface *)state->cbufs[i];
       tex = (struct si_texture *)surf->base.texture;
 
-      if (!tex->surface.display_dcc_offset)
+      if (!tex->surface.display_dcc_offset || tex->displayable_dcc_dirty)
          continue;
 
+      if (!(tex->buffer.external_usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH)) {
+         struct hash_entry *entry = _mesa_hash_table_search(sctx->dirty_implicit_resources, tex);
+         if (!entry) {
+            struct pipe_resource *dummy = NULL;
+            pipe_resource_reference(&dummy, &tex->buffer.b.b);
+            _mesa_hash_table_insert(sctx->dirty_implicit_resources, tex, tex);
+         }
+      }
       tex->displayable_dcc_dirty = true;
    }
 }
@@ -5043,7 +5067,7 @@ static void si_write_harvested_raster_configs(struct si_context *sctx, struct si
 static void si_set_raster_config(struct si_context *sctx, struct si_pm4_state *pm4)
 {
    struct si_screen *sscreen = sctx->screen;
-   unsigned num_rb = MIN2(sscreen->info.num_render_backends, 16);
+   unsigned num_rb = MIN2(sscreen->info.max_render_backends, 16);
    unsigned rb_mask = sscreen->info.enabled_rb_mask;
    unsigned raster_config = sscreen->pa_sc_raster_config;
    unsigned raster_config_1 = sscreen->pa_sc_raster_config_1;
@@ -5302,7 +5326,7 @@ void si_init_cs_preamble_state(struct si_context *sctx, bool uses_reg_shadowing)
 
       /* Enable CMASK/FMASK/HTILE/DCC caching in L2 for small chips. */
       unsigned meta_write_policy, meta_read_policy;
-      if (sscreen->info.num_render_backends <= 4) {
+      if (sscreen->info.max_render_backends <= 4) {
          meta_write_policy = V_02807C_CACHE_LRU_WR; /* cache writes */
          meta_read_policy = V_02807C_CACHE_LRU_RD;  /* cache reads */
       } else {
@@ -5358,9 +5382,18 @@ void si_init_cs_preamble_state(struct si_context *sctx, bool uses_reg_shadowing)
 
    if (sctx->chip_class >= GFX10_3) {
       si_pm4_set_reg(pm4, R_028750_SX_PS_DOWNCONVERT_CONTROL, 0xff);
-      /* This allows sample shading. */
+      /* The rate combiners have no effect if they are disabled like this:
+       *   VERTEX_RATE:    BYPASS_VTX_RATE_COMBINER = 1
+       *   PRIMITIVE_RATE: BYPASS_PRIM_RATE_COMBINER = 1
+       *   HTILE_RATE:     VRS_HTILE_ENCODING = 0
+       *   SAMPLE_ITER:    PS_ITER_SAMPLE = 0
+       *
+       * Use OVERRIDE, which will ignore results from previous combiners.
+       * (e.g. enabled sample shading overrides the vertex rate)
+       */
       si_pm4_set_reg(pm4, R_028848_PA_CL_VRS_CNTL,
-                     S_028848_SAMPLE_ITER_COMBINER_MODE(1));
+                     S_028848_VERTEX_RATE_COMBINER_MODE(V_028848_VRS_COMB_MODE_OVERRIDE) |
+                     S_028848_SAMPLE_ITER_COMBINER_MODE(V_028848_VRS_COMB_MODE_OVERRIDE));
    }
 
    sctx->cs_preamble_state = pm4;

@@ -193,7 +193,8 @@ vbo_save_map_vertex_store(struct gl_context *ctx,
    const GLbitfield access = (GL_MAP_WRITE_BIT |
                               GL_MAP_INVALIDATE_RANGE_BIT |
                               GL_MAP_UNSYNCHRONIZED_BIT |
-                              GL_MAP_FLUSH_EXPLICIT_BIT);
+                              GL_MAP_FLUSH_EXPLICIT_BIT |
+                              MESA_MAP_ONCE);
 
    assert(vertex_store->bufferobj);
    assert(!vertex_store->buffer_map);  /* the buffer should not be mapped */
@@ -1375,7 +1376,7 @@ _save_OBE_MultiDrawArrays(GLenum mode, const GLint *first,
 
 static void
 array_element(struct gl_context *ctx,
-              GLint basevertex, GLuint elt, unsigned index_size)
+              GLint basevertex, GLuint elt, unsigned index_size_shift)
 {
    /* Section 10.3.5 Primitive Restart:
     * [...]
@@ -1386,8 +1387,8 @@ array_element(struct gl_context *ctx,
    /* If PrimitiveRestart is enabled and the index is the RestartIndex
     * then we call PrimitiveRestartNV and return.
     */
-   if (ctx->Array._PrimitiveRestart &&
-       elt == ctx->Array._RestartIndex[index_size - 1]) {
+   if (ctx->Array._PrimitiveRestart[index_size_shift] &&
+       elt == ctx->Array._RestartIndex[index_size_shift]) {
       CALL_PrimitiveRestartNV(ctx->CurrentServerDispatch, ());
       return;
    }
@@ -1441,15 +1442,15 @@ _save_OBE_DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type,
    switch (type) {
    case GL_UNSIGNED_BYTE:
       for (i = 0; i < count; i++)
-         array_element(ctx, basevertex, ((GLubyte *) indices)[i], 1);
+         array_element(ctx, basevertex, ((GLubyte *) indices)[i], 0);
       break;
    case GL_UNSIGNED_SHORT:
       for (i = 0; i < count; i++)
-         array_element(ctx, basevertex, ((GLushort *) indices)[i], 2);
+         array_element(ctx, basevertex, ((GLushort *) indices)[i], 1);
       break;
    case GL_UNSIGNED_INT:
       for (i = 0; i < count; i++)
-         array_element(ctx, basevertex, ((GLuint *) indices)[i], 4);
+         array_element(ctx, basevertex, ((GLuint *) indices)[i], 2);
       break;
    default:
       _mesa_error(ctx, GL_INVALID_ENUM, "glDrawElements(type)");

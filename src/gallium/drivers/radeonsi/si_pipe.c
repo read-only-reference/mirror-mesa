@@ -89,7 +89,6 @@ static const struct debug_named_value debug_options[] = {
    {"nowc", DBG(NO_WC), "Disable GTT write combining"},
    {"check_vm", DBG(CHECK_VM), "Check VM faults and dump debug info."},
    {"reserve_vmid", DBG(RESERVE_VMID), "Force VMID reservation per context."},
-   {"zerovram", DBG(ZERO_VRAM), "Clear VRAM allocations."},
    {"shadowregs", DBG(SHADOW_REGS), "Enable CP register shadowing."},
 
    /* 3D engine options: */
@@ -108,7 +107,6 @@ static const struct debug_named_value debug_options[] = {
    {"dpbb", DBG(DPBB), "Enable DPBB."},
    {"dfsm", DBG(DFSM), "Enable DFSM."},
    {"nohyperz", DBG(NO_HYPERZ), "Disable Hyper-Z"},
-   {"norbplus", DBG(NO_RB_PLUS), "Disable RB+."},
    {"no2d", DBG(NO_2D_TILING), "Disable 2D tiling"},
    {"notiling", DBG(NO_TILING), "Disable tiling"},
    {"nodcc", DBG(NO_DCC), "Disable DCC."},
@@ -164,6 +162,12 @@ void si_init_compiler(struct si_screen *sscreen, struct ac_llvm_compiler *compil
 static void si_destroy_compiler(struct ac_llvm_compiler *compiler)
 {
    ac_destroy_llvm_compiler(compiler);
+}
+
+
+static void decref_implicit_resource(struct hash_entry *entry)
+{
+   pipe_resource_reference((struct pipe_resource**)&entry->data, NULL);
 }
 
 /*
@@ -285,6 +289,10 @@ static void si_destroy_context(struct pipe_context *context)
       sctx->ws->cs_destroy(sctx->sdma_cs);
    if (sctx->ctx)
       sctx->ws->ctx_destroy(sctx->ctx);
+
+   if (sctx->dirty_implicit_resources)
+      _mesa_hash_table_destroy(sctx->dirty_implicit_resources,
+                               decref_implicit_resource);
 
    if (sctx->b.stream_uploader)
       u_upload_destroy(sctx->b.stream_uploader);
@@ -469,11 +477,11 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    if (sctx->chip_class == GFX7 || sctx->chip_class == GFX8 || sctx->chip_class == GFX9) {
       sctx->eop_bug_scratch = si_aligned_buffer_create(
          &sscreen->b, SI_RESOURCE_FLAG_DRIVER_INTERNAL,
-         PIPE_USAGE_DEFAULT, 16 * sscreen->info.num_render_backends, 256);
+         PIPE_USAGE_DEFAULT, 16 * sscreen->info.max_render_backends, 256);
       if (sctx->screen->info.has_tmz_support)
          sctx->eop_bug_scratch_tmz = si_aligned_buffer_create(
             &sscreen->b, PIPE_RESOURCE_FLAG_ENCRYPTED | SI_RESOURCE_FLAG_DRIVER_INTERNAL,
-            PIPE_USAGE_DEFAULT, 16 * sscreen->info.num_render_backends, 256);
+            PIPE_USAGE_DEFAULT, 16 * sscreen->info.max_render_backends, 256);
       if (!sctx->eop_bug_scratch)
          goto fail;
    }
@@ -706,6 +714,10 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    util_dynarray_init(&sctx->resident_tex_needs_color_decompress, NULL);
    util_dynarray_init(&sctx->resident_img_needs_color_decompress, NULL);
    util_dynarray_init(&sctx->resident_tex_needs_depth_decompress, NULL);
+
+   sctx->dirty_implicit_resources = _mesa_pointer_hash_table_create(NULL);
+   if (!sctx->dirty_implicit_resources)
+      goto fail;
 
    sctx->sample_pos_buffer =
       pipe_buffer_create(sctx->b.screen, 0, PIPE_USAGE_DEFAULT, sizeof(sctx->sample_positions));
@@ -1068,6 +1080,9 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 #include "si_debug_options.h"
    }
 
+   if (sscreen->info.chip_class < GFX10_3)
+      sscreen->options.vrs2x2 = false;
+
    si_disk_cache_create(sscreen);
 
    /* Determine the number of shader compiler threads. */
@@ -1220,7 +1235,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 
    if (sscreen->dpbb_allowed) {
       if (sscreen->info.has_dedicated_vram) {
-         if (sscreen->info.num_render_backends > 4) {
+         if (sscreen->info.max_render_backends > 4) {
             sscreen->pbb_context_states_per_bin = 1;
             sscreen->pbb_persistent_states_per_bin = 1;
          } else {

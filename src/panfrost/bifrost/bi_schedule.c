@@ -31,10 +31,8 @@
 static bool
 bi_is_fragz(bi_instruction *ins)
 {
-        if (!(ins->src[0] & BIR_INDEX_CONSTANT))
-                return false;
-
-        return (ins->constant.u32 == BIFROST_FRAGZ);
+        return ins->load_vary.special &&
+               ins->load_vary.var_id == BIFROST_SPECIAL_VAR_FRAGZ;
 }
 
 static enum bifrost_message_type
@@ -82,6 +80,9 @@ bi_message_type_for_ins(bi_instruction *ins)
 
         case BI_ATEST:
                 return BIFROST_MESSAGE_ATEST;
+
+        case BI_ZS_EMIT:
+                return BIFROST_MESSAGE_Z_STENCIL;
 
         default:
                 unreachable("Invalid high-latency class");

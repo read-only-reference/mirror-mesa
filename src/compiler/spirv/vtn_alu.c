@@ -118,9 +118,9 @@ matrix_multiply(struct vtn_builder *b,
       for (unsigned i = 0; i < src1_columns; i++) {
          /* dest[i] = sum(src0[j] * src1[i][j] for all j) */
          dest->elems[i]->def =
-            nir_fmul(&b->nb, src0->elems[0]->def,
-                     nir_channel(&b->nb, src1->elems[i]->def, 0));
-         for (unsigned j = 1; j < src0_columns; j++) {
+            nir_fmul(&b->nb, src0->elems[src0_columns - 1]->def,
+                     nir_channel(&b->nb, src1->elems[i]->def, src0_columns - 1));
+         for (int j = src0_columns - 2; j >= 0; j--) {
             dest->elems[i]->def =
                nir_fadd(&b->nb, dest->elems[i]->def,
                         nir_fmul(&b->nb, src0->elems[j]->def,
@@ -355,6 +355,10 @@ vtn_nir_alu_op_for_spirv_opcode(struct vtn_builder *b,
       nir_alu_type dst_type = convert_op_dst_type(opcode) | dst_bit_size;
       return nir_type_conversion_op(src_type, dst_type, nir_rounding_mode_undef);
    }
+
+   case SpvOpPtrCastToGeneric:   return nir_op_mov;
+   case SpvOpGenericCastToPtr:   return nir_op_mov;
+
    /* Derivatives: */
    case SpvOpDPdx:         return nir_op_fddx;
    case SpvOpDPdy:         return nir_op_fddy;
@@ -649,9 +653,9 @@ vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
                                                nir_rounding_mode_undef);
             dest->def = nir_build_alu(&b->nb, op, src[0], NULL, NULL, NULL);
          } else {
-            dest->def = nir_convert_alu_types(&b->nb, src[0], src_type,
-                                              dst_type, opts.rounding_mode,
-                                              opts.saturate);
+            dest->def = nir_convert_alu_types(&b->nb, dst_bit_size, src[0],
+                                              src_type, dst_type,
+                                              opts.rounding_mode, opts.saturate);
          }
       } else {
          vtn_fail_if(opts.rounding_mode != nir_rounding_mode_undef &&

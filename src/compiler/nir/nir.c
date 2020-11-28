@@ -179,6 +179,8 @@ nir_shader_add_variable(nir_shader *shader, nir_variable *var)
    case nir_var_system_value:
    case nir_var_mem_push_const:
    case nir_var_mem_constant:
+   case nir_var_shader_call_data:
+   case nir_var_ray_hit_attrib:
       break;
 
    case nir_var_mem_global:
@@ -332,6 +334,20 @@ nir_alu_dest_copy(nir_alu_dest *dest, const nir_alu_dest *src,
    dest->saturate = src->saturate;
 }
 
+bool
+nir_alu_src_is_trivial_ssa(const nir_alu_instr *alu, unsigned srcn)
+{
+   static uint8_t trivial_swizzle[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+   STATIC_ASSERT(ARRAY_SIZE(trivial_swizzle) == NIR_MAX_VEC_COMPONENTS);
+
+   const nir_alu_src *src = &alu->src[srcn];
+   unsigned num_components = nir_ssa_alu_instr_src_components(alu, srcn);
+
+   return src->src.is_ssa && (src->src.ssa->num_components == num_components) &&
+          !src->abs && !src->negate &&
+          (memcmp(src->swizzle, trivial_swizzle, num_components) == 0);
+}
+
 
 static void
 cf_init(nir_cf_node *node, nir_cf_node_type type)
@@ -355,6 +371,7 @@ nir_function_impl_create_bare(nir_shader *shader)
    exec_list_make_empty(&impl->locals);
    impl->reg_alloc = 0;
    impl->ssa_alloc = 0;
+   impl->num_blocks = 0;
    impl->valid_metadata = nir_metadata_none;
    impl->structured = true;
 
@@ -2202,6 +2219,34 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_work_dim;
    case SYSTEM_VALUE_USER_DATA_AMD:
       return nir_intrinsic_load_user_data_amd;
+   case SYSTEM_VALUE_RAY_LAUNCH_ID:
+      return nir_intrinsic_load_ray_launch_id;
+   case SYSTEM_VALUE_RAY_LAUNCH_SIZE:
+      return nir_intrinsic_load_ray_launch_size;
+   case SYSTEM_VALUE_RAY_WORLD_ORIGIN:
+      return nir_intrinsic_load_ray_world_origin;
+   case SYSTEM_VALUE_RAY_WORLD_DIRECTION:
+      return nir_intrinsic_load_ray_world_direction;
+   case SYSTEM_VALUE_RAY_OBJECT_ORIGIN:
+      return nir_intrinsic_load_ray_object_origin;
+   case SYSTEM_VALUE_RAY_OBJECT_DIRECTION:
+      return nir_intrinsic_load_ray_object_direction;
+   case SYSTEM_VALUE_RAY_T_MIN:
+      return nir_intrinsic_load_ray_t_min;
+   case SYSTEM_VALUE_RAY_T_MAX:
+      return nir_intrinsic_load_ray_t_max;
+   case SYSTEM_VALUE_RAY_OBJECT_TO_WORLD:
+      return nir_intrinsic_load_ray_object_to_world;
+   case SYSTEM_VALUE_RAY_WORLD_TO_OBJECT:
+      return nir_intrinsic_load_ray_world_to_object;
+   case SYSTEM_VALUE_RAY_HIT_KIND:
+      return nir_intrinsic_load_ray_hit_kind;
+   case SYSTEM_VALUE_RAY_FLAGS:
+      return nir_intrinsic_load_ray_flags;
+   case SYSTEM_VALUE_RAY_GEOMETRY_INDEX:
+      return nir_intrinsic_load_ray_geometry_index;
+   case SYSTEM_VALUE_RAY_INSTANCE_CUSTOM_INDEX:
+      return nir_intrinsic_load_ray_instance_custom_index;
    default:
       unreachable("system value does not directly correspond to intrinsic");
    }
@@ -2309,6 +2354,34 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_GS_HEADER_IR3;
    case nir_intrinsic_load_tcs_header_ir3:
       return SYSTEM_VALUE_TCS_HEADER_IR3;
+   case nir_intrinsic_load_ray_launch_id:
+      return SYSTEM_VALUE_RAY_LAUNCH_ID;
+   case nir_intrinsic_load_ray_launch_size:
+      return SYSTEM_VALUE_RAY_LAUNCH_SIZE;
+   case nir_intrinsic_load_ray_world_origin:
+      return SYSTEM_VALUE_RAY_WORLD_ORIGIN;
+   case nir_intrinsic_load_ray_world_direction:
+      return SYSTEM_VALUE_RAY_WORLD_DIRECTION;
+   case nir_intrinsic_load_ray_object_origin:
+      return SYSTEM_VALUE_RAY_OBJECT_ORIGIN;
+   case nir_intrinsic_load_ray_object_direction:
+      return SYSTEM_VALUE_RAY_OBJECT_DIRECTION;
+   case nir_intrinsic_load_ray_t_min:
+      return SYSTEM_VALUE_RAY_T_MIN;
+   case nir_intrinsic_load_ray_t_max:
+      return SYSTEM_VALUE_RAY_T_MAX;
+   case nir_intrinsic_load_ray_object_to_world:
+      return SYSTEM_VALUE_RAY_OBJECT_TO_WORLD;
+   case nir_intrinsic_load_ray_world_to_object:
+      return SYSTEM_VALUE_RAY_WORLD_TO_OBJECT;
+   case nir_intrinsic_load_ray_hit_kind:
+      return SYSTEM_VALUE_RAY_HIT_KIND;
+   case nir_intrinsic_load_ray_flags:
+      return SYSTEM_VALUE_RAY_FLAGS;
+   case nir_intrinsic_load_ray_geometry_index:
+      return SYSTEM_VALUE_RAY_GEOMETRY_INDEX;
+   case nir_intrinsic_load_ray_instance_custom_index:
+      return SYSTEM_VALUE_RAY_INSTANCE_CUSTOM_INDEX;
    default:
       unreachable("intrinsic doesn't produce a system value");
    }
@@ -2429,4 +2502,122 @@ nir_image_intrinsic_coord_components(const nir_intrinsic_instr *instr)
       return coords;
    else
       return coords + nir_intrinsic_image_array(instr);
+}
+
+nir_src *
+nir_get_shader_call_payload_src(nir_intrinsic_instr *call)
+{
+   switch (call->intrinsic) {
+   case nir_intrinsic_trace_ray:
+      return &call->src[10];
+   case nir_intrinsic_execute_callable:
+      return &call->src[1];
+   default:
+      unreachable("Not a call intrinsic");
+      return NULL;
+   }
+}
+
+nir_binding nir_chase_binding(nir_src rsrc)
+{
+   nir_binding res = {0};
+   if (rsrc.ssa->parent_instr->type == nir_instr_type_deref) {
+      const struct glsl_type *type = glsl_without_array(nir_src_as_deref(rsrc)->type);
+      bool is_image = glsl_type_is_image(type) || glsl_type_is_sampler(type);
+      while (rsrc.ssa->parent_instr->type == nir_instr_type_deref) {
+         nir_deref_instr *deref = nir_src_as_deref(rsrc);
+
+         if (deref->deref_type == nir_deref_type_var) {
+            res.success = true;
+            res.var = deref->var;
+            res.desc_set = deref->var->data.descriptor_set;
+            res.binding = deref->var->data.binding;
+            return res;
+         } else if (deref->deref_type == nir_deref_type_array && is_image) {
+            if (res.num_indices == ARRAY_SIZE(res.indices))
+               return (nir_binding){0};
+            res.indices[res.num_indices++] = deref->arr.index;
+         }
+
+         rsrc = deref->parent;
+      }
+   }
+
+   /* Skip copies and trimming. Trimming can appear as nir_op_mov instructions
+    * when removing the offset from addresses. We also consider nir_op_is_vec()
+    * instructions to skip trimming of vec2_index_32bit_offset addresses after
+    * lowering ALU to scalar.
+    */
+   while (true) {
+      nir_alu_instr *alu = nir_src_as_alu_instr(rsrc);
+      nir_intrinsic_instr *intrin = nir_src_as_intrinsic(rsrc);
+      if (alu && alu->op == nir_op_mov) {
+         for (unsigned i = 0; i < alu->dest.dest.ssa.num_components; i++) {
+            if (alu->src[0].swizzle[i] != i)
+               return (nir_binding){0};
+         }
+         rsrc = alu->src[0].src;
+      } else if (alu && nir_op_is_vec(alu->op)) {
+         for (unsigned i = 0; i < nir_op_infos[alu->op].num_inputs; i++) {
+            if (alu->src[i].swizzle[0] != i || alu->src[i].src.ssa != alu->src[0].src.ssa)
+               return (nir_binding){0};
+         }
+         rsrc = alu->src[0].src;
+      } else if (intrin && intrin->intrinsic == nir_intrinsic_read_first_invocation) {
+         /* The caller might want to be aware if only the first invocation of
+          * the indices are used.
+          */
+         res.read_first_invocation = true;
+         rsrc = intrin->src[0];
+      } else {
+         break;
+      }
+   }
+
+   if (nir_src_is_const(rsrc)) {
+      /* GL binding model after deref lowering */
+      res.success = true;
+      res.binding = nir_src_as_uint(rsrc);
+      return res;
+   }
+
+   /* otherwise, must be Vulkan binding model after deref lowering or GL bindless */
+
+   nir_intrinsic_instr *intrin = nir_src_as_intrinsic(rsrc);
+   if (!intrin)
+      return (nir_binding){0};
+
+   /* skip load_vulkan_descriptor */
+   if (intrin->intrinsic == nir_intrinsic_load_vulkan_descriptor) {
+      intrin = nir_src_as_intrinsic(intrin->src[0]);
+      if (!intrin)
+         return (nir_binding){0};
+   }
+
+   if (intrin->intrinsic != nir_intrinsic_vulkan_resource_index)
+      return (nir_binding){0};
+
+   assert(res.num_indices == 0);
+   res.success = true;
+   res.desc_set = nir_intrinsic_desc_set(intrin);
+   res.binding = nir_intrinsic_binding(intrin);
+   res.num_indices = 1;
+   res.indices[0] = intrin->src[0];
+   return res;
+}
+
+nir_variable *nir_get_binding_variable(nir_shader *shader, nir_binding binding)
+{
+   if (!binding.success)
+      return NULL;
+
+   if (binding.var)
+      return binding.var;
+
+   nir_foreach_variable_with_modes(var, shader, nir_var_mem_ubo | nir_var_mem_ssbo) {
+      if (var->data.descriptor_set == binding.desc_set && var->data.binding == binding.binding)
+         return var;
+   }
+
+   return NULL;
 }

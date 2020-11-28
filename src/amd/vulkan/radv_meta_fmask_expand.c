@@ -29,8 +29,6 @@
 static nir_shader *
 build_fmask_expand_compute_shader(struct radv_device *device, int samples)
 {
-	nir_builder b;
-	char name[64];
 	const struct glsl_type *type =
 		glsl_sampler_type(GLSL_SAMPLER_DIM_MS, false, false,
 				  GLSL_TYPE_FLOAT);
@@ -38,10 +36,7 @@ build_fmask_expand_compute_shader(struct radv_device *device, int samples)
 		glsl_image_type(GLSL_SAMPLER_DIM_MS, false,
 				  GLSL_TYPE_FLOAT);
 
-	snprintf(name, 64, "meta_fmask_expand_cs-%d", samples);
-
-	nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_COMPUTE, NULL);
-	b.shader->info.name = ralloc_strdup(b.shader, name);
+	nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE, NULL, "meta_fmask_expand_cs-%d", samples);
 	b.shader->info.cs.local_size[0] = 16;
 	b.shader->info.cs.local_size[1] = 16;
 	b.shader->info.cs.local_size[2] = 1;
@@ -93,16 +88,8 @@ build_fmask_expand_compute_shader(struct radv_device *device, int samples)
 	for (uint32_t i = 0; i < samples; i++) {
 		nir_ssa_def *outval = &tex_instr[i]->dest.ssa;
 
-		nir_intrinsic_instr *store =
-			nir_intrinsic_instr_create(b.shader,
-						   nir_intrinsic_image_deref_store);
-		store->num_components = 4;
-		store->src[0] = nir_src_for_ssa(output_img_deref);
-		store->src[1] = nir_src_for_ssa(global_id);
-		store->src[2] = nir_src_for_ssa(nir_imm_int(&b, i));
-		store->src[3] = nir_src_for_ssa(outval);
-		store->src[4] = nir_src_for_ssa(nir_imm_int(&b, 0));
-		nir_builder_instr_insert(&b, &store->instr);
+		nir_image_deref_store(&b, output_img_deref, global_id, nir_imm_int(&b, i),
+		                      outval, nir_imm_int(&b, 0));
 	}
 
 	return b.shader;

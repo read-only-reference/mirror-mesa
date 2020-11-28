@@ -388,7 +388,7 @@ void ac_build_optimization_barrier(struct ac_llvm_context *ctx, LLVMValueRef *pv
    LLVMBuilderRef builder = ctx->builder;
    char code[16];
 
-   snprintf(code, sizeof(code), "; %d", p_atomic_inc_return(&counter));
+   snprintf(code, sizeof(code), "; %d", (int)p_atomic_inc_return(&counter));
 
    if (!pvgpr) {
       LLVMTypeRef ftype = LLVMFunctionType(ctx->voidt, NULL, 0, false);
@@ -572,7 +572,7 @@ static LLVMValueRef ac_build_expand(struct ac_llvm_context *ctx, LLVMValueRef va
                                     unsigned src_channels, unsigned dst_channels)
 {
    LLVMTypeRef elemtype;
-   LLVMValueRef chan[dst_channels];
+   LLVMValueRef *const chan = alloca(dst_channels * sizeof(LLVMValueRef));
 
    if (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMVectorTypeKind) {
       unsigned vec_size = LLVMGetVectorSize(LLVMTypeOf(value));
@@ -605,7 +605,7 @@ static LLVMValueRef ac_build_expand(struct ac_llvm_context *ctx, LLVMValueRef va
 LLVMValueRef ac_extract_components(struct ac_llvm_context *ctx, LLVMValueRef value, unsigned start,
                                    unsigned channels)
 {
-   LLVMValueRef chan[channels];
+   LLVMValueRef *const chan = alloca(channels * sizeof(LLVMValueRef));
 
    for (unsigned i = 0; i < channels; i++)
       chan[i] = ac_llvm_extract_elem(ctx, value, i + start);
@@ -2122,7 +2122,7 @@ LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx, struct ac_image_
    char data_type_str[8];
 
    if (atomic) {
-      data_type = ctx->i32;
+      data_type = LLVMTypeOf(a->data[0]);
    } else if (a->opcode == ac_image_store || a->opcode == ac_image_store_mip) {
       /* Image stores might have been shrinked using the format. */
       data_type = LLVMTypeOf(a->data[0]);
@@ -2258,7 +2258,7 @@ LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx, struct ac_image_
 
    LLVMTypeRef retty;
    if (atomic)
-      retty = ctx->i32;
+      retty = data_type;
    else if (a->opcode == ac_image_store || a->opcode == ac_image_store_mip)
       retty = ctx->voidt;
    else
@@ -3138,6 +3138,22 @@ void ac_build_else(struct ac_llvm_context *ctx, int label_id)
    current_branch->next_block = endif_block;
 }
 
+/* Invoked after a branch is exited. */
+static void ac_branch_exited(struct ac_llvm_context *ctx)
+{
+   if (ctx->flow->depth == 0 && ctx->conditional_demote_seen) {
+      /* The previous conditional branch contained demote. Kill threads
+       * after all conditional blocks because amdgcn.wqm.vote doesn't
+       * return usable values inside the blocks.
+       *
+       * This is an optional optimization that only kills whole inactive quads.
+       */
+      LLVMValueRef cond = LLVMBuildLoad(ctx->builder, ctx->postponed_kill, "");
+      ac_build_kill_if_false(ctx, ac_build_wqm_vote(ctx, cond));
+      ctx->conditional_demote_seen = false;
+   }
+}
+
 void ac_build_endif(struct ac_llvm_context *ctx, int label_id)
 {
    struct ac_llvm_flow *current_branch = get_current_flow(ctx);
@@ -3149,6 +3165,7 @@ void ac_build_endif(struct ac_llvm_context *ctx, int label_id)
    set_basicblock_name(current_branch->next_block, "endif", label_id);
 
    ctx->flow->depth--;
+   ac_branch_exited(ctx);
 }
 
 void ac_build_endloop(struct ac_llvm_context *ctx, int label_id)
@@ -3162,6 +3179,7 @@ void ac_build_endloop(struct ac_llvm_context *ctx, int label_id)
    LLVMPositionBuilderAtEnd(ctx->builder, current_loop->next_block);
    set_basicblock_name(current_loop->next_block, "endloop", label_id);
    ctx->flow->depth--;
+   ac_branch_exited(ctx);
 }
 
 void ac_build_ifcc(struct ac_llvm_context *ctx, LLVMValueRef cond, int label_id)
@@ -3204,6 +3222,13 @@ LLVMValueRef ac_build_alloca(struct ac_llvm_context *ac, LLVMTypeRef type, const
    return ptr;
 }
 
+LLVMValueRef ac_build_alloca_init(struct ac_llvm_context *ac, LLVMValueRef val, const char *name)
+{
+   LLVMValueRef ptr = ac_build_alloca_undef(ac, LLVMTypeOf(val), name);
+   LLVMBuildStore(ac->builder, val, ptr);
+   return ptr;
+}
+
 LLVMValueRef ac_cast_ptr(struct ac_llvm_context *ctx, LLVMValueRef ptr, LLVMTypeRef type)
 {
    int addr_space = LLVMGetPointerAddressSpace(LLVMTypeOf(ptr));
@@ -3216,7 +3241,7 @@ LLVMValueRef ac_trim_vector(struct ac_llvm_context *ctx, LLVMValueRef value, uns
    if (count == num_components)
       return value;
 
-   LLVMValueRef masks[MAX2(count, 2)];
+   LLVMValueRef *const masks = alloca(MAX2(count, 2) * sizeof(LLVMValueRef));
    masks[0] = ctx->i32_0;
    masks[1] = ctx->i32_1;
    for (unsigned i = 2; i < count; i++)

@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2019-2020 Collabora, Ltd.
  * Copyright 2018-2019 Alyssa Rosenzweig
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -83,7 +84,7 @@ panfrost_sfbd_set_cbuf(
         unsigned level = surf->u.tex.level;
         unsigned first_layer = surf->u.tex.first_layer;
         assert(surf->u.tex.last_layer == first_layer);
-        signed stride = rsrc->slices[level].stride;
+        signed row_stride = rsrc->slices[level].row_stride;
 
         mali_ptr base = panfrost_get_texture_address(rsrc, level, first_layer, 0);
 
@@ -91,13 +92,12 @@ panfrost_sfbd_set_cbuf(
 
         fb->color_write_enable = true;
         fb->color_writeback.base = base;
-        fb->color_writeback.row_stride = stride;
+        fb->color_writeback.row_stride = row_stride;
 
         if (rsrc->modifier == DRM_FORMAT_MOD_LINEAR)
                 fb->color_block_format = MALI_BLOCK_FORMAT_LINEAR;
         else if (rsrc->modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED) {
                 fb->color_block_format = MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED;
-                fb->color_writeback.row_stride *= 16;
         } else {
                 fprintf(stderr, "Invalid render modifier\n");
                 assert(0);
@@ -114,12 +114,18 @@ panfrost_sfbd_set_zsbuf(
         unsigned level = surf->u.tex.level;
         assert(surf->u.tex.first_layer == 0);
 
-        if (rsrc->modifier != DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED)
-                unreachable("Invalid render modifier.");
-
-        fb->zs_block_format = MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED;
         fb->zs_writeback.base = rsrc->bo->ptr.gpu + rsrc->slices[level].offset;
-        fb->zs_writeback.row_stride = rsrc->slices[level].stride * 16;
+        fb->zs_writeback.row_stride = rsrc->slices[level].row_stride;
+
+        if (rsrc->modifier == DRM_FORMAT_MOD_LINEAR)
+                fb->zs_block_format = MALI_BLOCK_FORMAT_LINEAR;
+        else if (rsrc->modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED) {
+                fb->zs_block_format = MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED;
+        } else {
+                fprintf(stderr, "Invalid render modifier\n");
+                assert(0);
+        }
+
         switch (surf->format) {
         case PIPE_FORMAT_Z16_UNORM:
                 fb->zs_format = MALI_ZS_FORMAT_D16;

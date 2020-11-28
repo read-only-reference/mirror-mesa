@@ -80,29 +80,10 @@ tu_physical_device_init(struct tu_physical_device *device,
    switch (device->gpu_id) {
    case 615:
    case 618:
-      device->ccu_offset_gmem = 0x7c000; /* 0x7e000 in some cases? */
-      device->ccu_offset_bypass = 0x10000;
-      device->tile_align_w = 32;
-      device->magic.PC_UNKNOWN_9805 = 0x0;
-      device->magic.SP_UNKNOWN_A0F8 = 0x0;
-      device->supports_multiview_mask = false; /* TODO */
-      break;
    case 630:
    case 640:
-      device->ccu_offset_gmem = 0xf8000;
-      device->ccu_offset_bypass = 0x20000;
-      device->tile_align_w = 32;
-      device->magic.PC_UNKNOWN_9805 = 0x1;
-      device->magic.SP_UNKNOWN_A0F8 = 0x1;
-      device->supports_multiview_mask = device->gpu_id != 630;
-      break;
    case 650:
-      device->ccu_offset_gmem = 0x114000;
-      device->ccu_offset_bypass = 0x30000;
-      device->tile_align_w = 96;
-      device->magic.PC_UNKNOWN_9805 = 0x2;
-      device->magic.SP_UNKNOWN_A0F8 = 0x2;
-      device->supports_multiview_mask = true;
+      freedreno_dev_info_init(&device->info, device->gpu_id);
       break;
    default:
       result = vk_startup_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
@@ -582,7 +563,7 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          VkPhysicalDeviceTransformFeedbackFeaturesEXT *features =
             (VkPhysicalDeviceTransformFeedbackFeaturesEXT *) ext;
          features->transformFeedback = true;
-         features->geometryStreams = false;
+         features->geometryStreams = true;
          break;
       }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES_EXT: {
@@ -829,8 +810,8 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          properties->maxTransformFeedbackBufferDataSize = 512;
          properties->maxTransformFeedbackBufferDataStride = 512;
          properties->transformFeedbackQueries = true;
-         properties->transformFeedbackStreamsLinesTriangles = false;
-         properties->transformFeedbackRasterizationStreamSelect = false;
+         properties->transformFeedbackStreamsLinesTriangles = true;
+         properties->transformFeedbackRasterizationStreamSelect = true;
          properties->transformFeedbackDraw = true;
          break;
       }
@@ -875,6 +856,15 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT: {
          VkPhysicalDeviceCustomBorderColorPropertiesEXT *props = (void *)ext;
          props->maxCustomBorderColorSamplers = TU_BORDER_COLOR_COUNT;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES: {
+         VkPhysicalDeviceDepthStencilResolveProperties *props =
+            (VkPhysicalDeviceDepthStencilResolveProperties *)ext;
+         props->independentResolve = false;
+         props->independentResolveNone = false;
+         props->supportedDepthResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+         props->supportedStencilResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
          break;
       }
       default:
@@ -970,6 +960,7 @@ tu_queue_init(struct tu_device *device,
 static void
 tu_queue_finish(struct tu_queue *queue)
 {
+   vk_object_base_finish(&queue->base);
    if (queue->fence >= 0)
       close(queue->fence);
    tu_drm_submitqueue_close(queue->device, queue->msm_queue_id);
@@ -1163,7 +1154,7 @@ fail_queues:
       for (unsigned q = 0; q < device->queue_count[i]; q++)
          tu_queue_finish(&device->queues[i][q]);
       if (device->queue_count[i])
-         vk_object_free(&device->vk, NULL, device->queues[i]);
+         vk_free(&device->vk.alloc, device->queues[i]);
    }
 
    vk_free(&device->vk.alloc, device);
@@ -1182,7 +1173,7 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
       for (unsigned q = 0; q < device->queue_count[i]; q++)
          tu_queue_finish(&device->queues[i][q]);
       if (device->queue_count[i])
-         vk_object_free(&device->vk, NULL, device->queues[i]);
+         vk_free(&device->vk.alloc, device->queues[i]);
    }
 
    for (unsigned i = 0; i < ARRAY_SIZE(device->scratch_bos); i++) {

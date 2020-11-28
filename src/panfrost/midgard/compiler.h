@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2019-2020 Collabora, Ltd.
  * Copyright (C) 2019 Alyssa Rosenzweig <alyssa@rosenzweig.io>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -70,10 +71,6 @@ typedef struct midgard_branch {
                 int target_continue;
         };
 } midgard_branch;
-
-#define PAN_WRITEOUT_C 1
-#define PAN_WRITEOUT_Z 2
-#define PAN_WRITEOUT_S 4
 
 /* Generic in-memory data type repesenting a single logical instruction, rather
  * than a single instruction group. This is the preferred form for code gen.

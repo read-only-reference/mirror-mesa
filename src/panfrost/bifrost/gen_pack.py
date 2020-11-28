@@ -76,7 +76,7 @@ def pack_widen(mod, opts, body, pack_exprs):
             sz = 16 if op[0] == 'h' else 8
 
             # Condition on the swizzle
-            conds = ['ins->swizzle[{}][{}] == {}'.format(marg, idx, lane) for idx, lane in enumerate(op[1:])]
+            conds = ['(ins->swizzle[{}][{}] % 4) == {}'.format(marg, idx, lane) for idx, lane in enumerate(op[1:])]
             cond = " && ".join(conds)
 
             body.append('{}if ({}_sz == {} && {}) {}_temp = {};'.format(t_else, mod, sz, cond, mod, i))
@@ -153,12 +153,6 @@ def pack_extend(mod, opts, body, pack_exprs):
         body.append('assert({}_small);'.format(mod))
         return '{}_signed ? 1 : 0'.format(mod)
 
-# Packs special varying loads. Our BIFROST_FRAGZ etc defines match the hw in
-# the bottom two bits (TODO drop upper bits)
-def pack_varying_name(mod, opts, body, pack_exprs):
-    assert(opts[0] == 'point' and opts[2] == 'frag_w' and opts[3] == 'frag_z')
-    return 'ins->constant.u64 & 0x3'
-
 def pack_not_src1(mod, opts, body, pack_exprs):
     return 'ins->bitwise.src1_invert ? {} : {}'.format(opts.index('not'), opts.index('none'))
 
@@ -181,8 +175,14 @@ def pack_register_format(mod, opts, body, pack_exprs):
     body.append('unsigned {}_temp = 0;'.format(mod))
 
     first = True
+    auto = None
     for i, op in enumerate(opts):
         if op is None or op == 'reserved':
+            continue
+
+        if op == 'auto':
+            assert(auto == None)
+            auto = i
             continue
 
         t_else = 'else ' if not first else ''
@@ -193,7 +193,10 @@ def pack_register_format(mod, opts, body, pack_exprs):
             body.append('{}if (ins->format == {}) {}_temp = {};'.format(t_else, nir_type, mod, i))
 
     assert not first
-    body.append('else unreachable("Could not pattern match register format");')
+    if auto is None:
+        body.append('else unreachable("Could not pattern match register format");')
+    else:
+        body.append('else {}_temp = {};'.format(mod, auto))
     return mod + '_temp'
 
 def pack_seg(mod, opts, body, pack_exprs):
@@ -205,15 +208,6 @@ def pack_seg(mod, opts, body, pack_exprs):
         return 'ins->segment == BI_SEGMENT_WLS ? 1 : 0'
     else:
         assert(False)
-
-# TODO: Update modes (perf / slow) For now just force store, except for special
-# varyings for which we force clobber
-def pack_update(mod, opts, body, pack_exprs):
-    if opts == ['store', 'retrieve', 'conditional', 'clobber']:
-        return '(ins->constant.u64 >= 20) ? 3 : 0'
-    else:
-        assert(opts[0] == 'store')
-        return '0'
 
 # Processes modifiers. If used directly, emits a pack. Otherwise, just
 # processes the value (grabbing it from the IR). This must sync with the IR.
@@ -259,12 +253,12 @@ modifier_map = {
         "clamp": pack_clamp,
         "round": pack_round,
         "cmpf": pack_cmpf,
-        "varying_name": pack_varying_name,
+        "varying_name": lambda a,b,c,d: 'ins->load_vary.var_id',
         "not1": pack_not_src1,
         "not_result": pack_not_result,
         "register_format": pack_register_format,
         "seg": pack_seg,
-        "update": pack_update,
+        "update": lambda a,b,c,d: 'ins->load_vary.update_mode',
 
         # Just a minus one modifier
         "vecsize": lambda a,b,c,d: 'ins->vector_channels - 1',
@@ -276,6 +270,20 @@ modifier_map = {
         # Not much choice in the matter...
         "divzero": lambda a,b,c,d: '0',
         "sem": lambda a,b,c,d: '0', # IEEE 754 compliant NaN rules
+
+        # For +ZS_EMIT, infer modifiers from specified sources
+        "z": lambda a,b,c,d: '(ins->src[0] != 0)',
+        "stencil": lambda a,b,c,d: '(ins->src[1] != 0)',
+
+        # For +LD_VAR, infer sample from load_vary.interp_mode
+        "sample": lambda a,b,c,d: 'ins->load_vary.interp_mode',
+
+        # +CLPER
+        "lane_op": lambda a,b,c,d: 'ins->special.clper.lane_op_mod',
+        "inactive_result": lambda a,b,c,d: 'ins->special.clper.inactive_res',
+
+        # +CLPER and +WMASK
+        "subgroup": lambda a,b,c,d: 'ins->special.subgroup_sz',
 
         # We don't support these in the IR yet (TODO)
         "saturate": lambda a,b,c,d: '0', # clamp to min/max int
@@ -292,18 +300,12 @@ modifier_map = {
         "func": lambda a,b,c,d: '0', # pow special case thing
         "h": lambda a,b,c,d: '0', # VN_ASST1.f16
         "l": lambda a,b,c,d: '0', # VN_ASST1.f16
-        "sample": lambda a,b,c,d: '0', # LD_VAR center
         "function": lambda a,b,c,d: '3', # LD_VAR_FLAT none
         "preserve_null": lambda a,b,c,d: '0', # SEG_ADD none
         "bytes2": lambda a,b,c,d: '0', # NIR shifts are in bits
         "result_word": lambda a,b,c,d: '0', # 32-bit only shifts for now (TODO)
         "source": lambda a,b,c,d: '7', # cycle_counter for LD_GCLK
-        "lane_op": lambda a,b,c,d: '0', # CLPER none
-        "subgroup": lambda a,b,c,d: '1', # CLPER subgroup4
-        "inactive_result": lambda a,b,c,d: '0', # CLPER zero
         "threads": lambda a,b,c,d: '0', # IMULD odd
-        "stencil": lambda a,b,c,d: '1', # ZS_EMIT stencil
-        "z": lambda a,b,c,d: '1', # ZS_EMIT z
         "combine": lambda a,b,c,d: '0', # BRANCHC any
         "format": lambda a,b,c,d: '1', # LEA_TEX_IMM u32
         "test_mode": lambda a,b,c,d: '0', # JUMP_EX z
@@ -389,9 +391,9 @@ def pack_derived(pos, exprs, imm_map, body, pack_exprs):
 # lookup the value in the IR, performing adjustments as needed
 
 IMMEDIATE_TABLE = {
-        'attribute_index': 'bi_get_immediate(ins, 0)',
-        'varying_index': 'bi_get_immediate(ins, 0)',
-        'index': 'bi_get_immediate(ins, 0)',
+        'attribute_index': 'ins->attribute.index',
+        'varying_index': 'ins->texture.varying_index',
+        'index': 'ins->load_vary.index',
         'texture_index': 'ins->texture.texture_index',
         'sampler_index': 'ins->texture.sampler_index',
         'table': '63', # Bindless (flat addressing) mode for DTSEL_IMM
@@ -448,11 +450,6 @@ def pack_variant(opname, states):
     staging = states[0][1].get("staging", "")
     offset = 0
     if staging in ["r", "rw"]:
-        offset += 1
-
-    offset += len(set(["attribute_index", "varying_index", "index"]) & set([x[0] for x in states[0][1].get("immediates", [])]))
-
-    if opname == '+LD_VAR_SPECIAL':
         offset += 1
 
     pack_sources(states[0][1].get("srcs", []), common_body, pack_exprs, offset)

@@ -95,15 +95,15 @@ set_feedback_vertex_format(struct gl_context *ctx)
 void
 st_feedback_draw_vbo(struct gl_context *ctx,
                      const struct _mesa_prim *prims,
-                     GLuint nr_prims,
+                     unsigned nr_prims,
                      const struct _mesa_index_buffer *ib,
-		     GLboolean index_bounds_valid,
-                     GLuint min_index,
-                     GLuint max_index,
-                     GLuint num_instances,
-                     GLuint base_instance,
-                     struct gl_transform_feedback_object *tfb_vertcount,
-                     unsigned stream)
+		     bool index_bounds_valid,
+                     bool primitive_restart,
+                     unsigned restart_index,
+                     unsigned min_index,
+                     unsigned max_index,
+                     unsigned num_instances,
+                     unsigned base_instance)
 {
    struct st_context *st = st_context(ctx);
    struct pipe_context *pipe = st->pipe;
@@ -125,8 +125,6 @@ st_feedback_draw_vbo(struct gl_context *ctx,
    /* Initialize pipe_draw_info. */
    info.primitive_restart = false;
    info.vertices_per_patch = ctx->TessCtrlProgram.patch_vertices;
-   info.indirect = NULL;
-   info.count_from_stream_output = NULL;
    info.restart_index = 0;
 
    st_flush_bitmap_cache(st);
@@ -134,8 +132,11 @@ st_feedback_draw_vbo(struct gl_context *ctx,
 
    st_validate_state(st, ST_PIPELINE_RENDER);
 
-   if (ib && !index_bounds_valid)
-      vbo_get_minmax_indices(ctx, prims, ib, &min_index, &max_index, nr_prims);
+   if (ib && !index_bounds_valid) {
+      vbo_get_minmax_indices(ctx, prims, ib, &min_index, &max_index, nr_prims,
+                             primitive_restart, restart_index);
+      index_bounds_valid = true;
+   }
 
    /* must get these after state validation! */
    struct st_common_variant_key key;
@@ -205,6 +206,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
       }
 
       info.index_size = index_size;
+      info.index_bounds_valid = index_bounds_valid;
       info.min_index = min_index;
       info.max_index = max_index;
       info.has_user_indices = true;
@@ -214,10 +216,8 @@ st_feedback_draw_vbo(struct gl_context *ctx,
                        (ubyte *) mapped_indices,
                        index_size, ~0);
 
-      if (ctx->Array._PrimitiveRestart) {
-         info.primitive_restart = true;
-         info.restart_index = ctx->Array._RestartIndex[index_size - 1];
-      }
+      info.primitive_restart = primitive_restart;
+      info.restart_index = restart_index;
    } else {
       info.index_size = 0;
       info.has_user_indices = false;
@@ -426,21 +426,24 @@ st_feedback_draw_vbo(struct gl_context *ctx,
 
    /* draw here */
    for (i = 0; i < nr_prims; i++) {
-      info.count = prims[i].count;
+      struct pipe_draw_start_count d;
 
-      if (!info.count)
+      d.count = prims[i].count;
+
+      if (!d.count)
          continue;
 
+      d.start = start + prims[i].start;
+
       info.mode = prims[i].mode;
-      info.start = start + prims[i].start;
       info.index_bias = prims[i].basevertex;
       info.drawid = prims[i].draw_id;
       if (!ib) {
-         info.min_index = info.start;
-         info.max_index = info.start + info.count - 1;
+         info.min_index = d.start;
+         info.max_index = d.start + d.count - 1;
       }
 
-      draw_vbo(draw, &info);
+      draw_vbo(draw, &info, NULL, &d, 1);
    }
 
    /* unmap images */

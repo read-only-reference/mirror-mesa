@@ -73,22 +73,30 @@ void si_get_ir_cache_key(struct si_shader_selector *sel, bool ngg, bool es,
    if (si_get_wave_size(sel->screen, sel->info.stage, ngg, es, false, false) == 32)
       shader_variant_flags |= 1 << 2;
    if (sel->info.stage == MESA_SHADER_FRAGMENT &&
-       /* Derivatives imply helper invocations so check for needs_helper_invocations. */
-       sel->info.base.fs.needs_helper_invocations &&
+       /* Derivatives imply helper invocations so check for needs_quad_helper_invocations. */
+       sel->info.base.fs.needs_quad_helper_invocations &&
        sel->info.base.fs.uses_discard &&
        sel->screen->debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL))
       shader_variant_flags |= 1 << 3;
-
-   /* This varies depending on whether compute-based culling is enabled. */
-   assert(sel->screen->num_vbos_in_user_sgprs <= 7);
-   shader_variant_flags |= MIN2(sel->screen->num_vbos_in_user_sgprs, 7) << 4;
-
+   if (sel->info.stage == MESA_SHADER_VERTEX) {
+      /* This varies depending on whether compute-based culling is enabled. */
+      assert(sel->screen->num_vbos_in_user_sgprs <= 7);
+      shader_variant_flags |= MIN2(sel->screen->num_vbos_in_user_sgprs, 7) << 4;
+   }
    if (sel->screen->options.no_infinite_interp)
       shader_variant_flags |= 1 << 7;
    if (sel->screen->options.clamp_div_by_zero)
       shader_variant_flags |= 1 << 8;
    if (sel->screen->debug_flags & DBG(GISEL))
       shader_variant_flags |= 1 << 9;
+   if ((sel->info.stage == MESA_SHADER_VERTEX ||
+        sel->info.stage == MESA_SHADER_TESS_EVAL ||
+        sel->info.stage == MESA_SHADER_GEOMETRY) &&
+       !es &&
+       sel->screen->options.vrs2x2)
+      shader_variant_flags |= 1 << 10;
+   if (sel->screen->options.inline_uniforms)
+      shader_variant_flags |= 1 << 11;
 
    struct mesa_sha1 ctx;
    _mesa_sha1_init(&ctx);
@@ -1056,9 +1064,11 @@ static unsigned si_get_vs_out_cntl(const struct si_shader_selector *sel,
       writes_psize &= !shader->key.opt.kill_pointsize;
 
    bool misc_vec_ena = writes_psize || (sel->info.writes_edgeflag && !ngg) ||
+                       sel->screen->options.vrs2x2 ||
                        sel->info.writes_layer || sel->info.writes_viewport_index;
    return S_02881C_USE_VTX_POINT_SIZE(writes_psize) |
           S_02881C_USE_VTX_EDGE_FLAG(sel->info.writes_edgeflag && !ngg) |
+          S_02881C_USE_VTX_VRS_RATE(sel->screen->options.vrs2x2) |
           S_02881C_USE_VTX_RENDER_TARGET_INDX(sel->info.writes_layer) |
           S_02881C_USE_VTX_VIEWPORT_INDX(sel->info.writes_viewport_index) |
           S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
@@ -1874,6 +1884,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx, struct si_sh
           * The LS VGPR fix prefers this too.
           */
          key->opt.prefer_mono = 1;
+         key->opt.same_patch_vertices = sctx->same_patch_vertices;
       }
 
       key->part.tcs.epilog.prim_mode =
@@ -2745,6 +2756,10 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 
       assert(((sel->esgs_itemsize / 4) & C_028AAC_ITEMSIZE) == 0);
 
+      sel->tcs_vgpr_only_inputs = ~sel->info.base.tess.tcs_cross_invocation_inputs_read &
+                                  ~sel->info.base.inputs_read_indirectly &
+                                  sel->info.base.inputs_read;
+
       /* Only for TES: */
       if (sel->info.stage == MESA_SHADER_TESS_EVAL) {
          if (sel->info.base.tess.point_mode)
@@ -3024,8 +3039,13 @@ bool si_update_ngg(struct si_context *sctx)
        * VGT_FLUSH is also emitted at the beginning of IBs when legacy GS ring
        * pointers are set.
        */
-      if (sctx->chip_class == GFX10 && !new_ngg)
+      if ((sctx->chip_class == GFX10 || sctx->family == CHIP_SIENNA_CICHLID) && !new_ngg) {
          sctx->flags |= SI_CONTEXT_VGT_FLUSH;
+         if (sctx->chip_class == GFX10) {
+            /* Workaround for https://gitlab.freedesktop.org/mesa/mesa/-/issues/2941 */
+            si_flush_gfx_cs(sctx, RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
+         }
+      }
 
       sctx->ngg = new_ngg;
       sctx->last_gs_out_prim = -1; /* reset this so that it gets updated */

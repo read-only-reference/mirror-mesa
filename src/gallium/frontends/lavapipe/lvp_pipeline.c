@@ -44,7 +44,7 @@ VkResult lvp_CreateShaderModule(
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
    assert(pCreateInfo->flags == 0);
 
-   module = vk_alloc2(&device->alloc, pAllocator,
+   module = vk_alloc2(&device->vk.alloc, pAllocator,
                       sizeof(*module) + pCreateInfo->codeSize, 8,
                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (module == NULL)
@@ -72,7 +72,7 @@ void lvp_DestroyShaderModule(
    if (!_module)
       return;
    vk_object_base_finish(&module->base);
-   vk_free2(&device->alloc, pAllocator, module);
+   vk_free2(&device->vk.alloc, pAllocator, module);
 }
 
 void lvp_DestroyPipeline(
@@ -130,7 +130,7 @@ void lvp_DestroyPipeline(
       if (pipeline->compute_create_info.stage.pSpecializationInfo)
          free((void *)pipeline->compute_create_info.stage.pSpecializationInfo);
    vk_object_base_finish(&pipeline->base);
-   vk_free2(&device->alloc, pAllocator, pipeline);
+   vk_free2(&device->vk.alloc, pAllocator, pipeline);
 }
 
 static VkResult
@@ -747,7 +747,7 @@ lvp_graphics_pipeline_init(struct lvp_pipeline *pipeline,
                            const VkAllocationCallbacks *alloc)
 {
    if (alloc == NULL)
-      alloc = &device->alloc;
+      alloc = &device->vk.alloc;
    pipeline->device = device;
    pipeline->layout = lvp_pipeline_layout_from_handle(pCreateInfo->layout);
    pipeline->force_min_sample = false;
@@ -789,10 +789,8 @@ lvp_graphics_pipeline_init(struct lvp_pipeline *pipeline,
 
    if (has_fragment_shader == false) {
       /* create a dummy fragment shader for this pipeline. */
-      nir_builder b;
-
-      nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_FRAGMENT, NULL);
-      b.shader->info.name = ralloc_strdup(b.shader, "dummy_frag");
+      nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, NULL,
+                                                     "dummy_frag");
 
       pipeline->pipeline_nir[MESA_SHADER_FRAGMENT] = b.shader;
       struct pipe_shader_state shstate = {};
@@ -818,7 +816,7 @@ lvp_graphics_pipeline_create(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
 
-   pipeline = vk_zalloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
+   pipeline = vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (pipeline == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -828,7 +826,7 @@ lvp_graphics_pipeline_create(
    result = lvp_graphics_pipeline_init(pipeline, device, cache, pCreateInfo,
                                        pAllocator);
    if (result != VK_SUCCESS) {
-      vk_free2(&device->alloc, pAllocator, pipeline);
+      vk_free2(&device->vk.alloc, pAllocator, pipeline);
       return result;
    }
 
@@ -873,7 +871,7 @@ lvp_compute_pipeline_init(struct lvp_pipeline *pipeline,
    LVP_FROM_HANDLE(lvp_shader_module, module,
                    pCreateInfo->stage.module);
    if (alloc == NULL)
-      alloc = &device->alloc;
+      alloc = &device->vk.alloc;
    pipeline->device = device;
    pipeline->layout = lvp_pipeline_layout_from_handle(pCreateInfo->layout);
    pipeline->force_min_sample = false;
@@ -904,7 +902,7 @@ lvp_compute_pipeline_create(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
 
-   pipeline = vk_zalloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
+   pipeline = vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (pipeline == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -914,7 +912,7 @@ lvp_compute_pipeline_create(
    result = lvp_compute_pipeline_init(pipeline, device, cache, pCreateInfo,
                                       pAllocator);
    if (result != VK_SUCCESS) {
-      vk_free2(&device->alloc, pAllocator, pipeline);
+      vk_free2(&device->vk.alloc, pAllocator, pipeline);
       return result;
    }
 

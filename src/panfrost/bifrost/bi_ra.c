@@ -76,11 +76,15 @@ bi_allocate_registers(bi_context *ctx, bool *success)
         } else {
                 /* R0 - R63, all 32-bit */
                 l->class_start[BI_REG_CLASS_WORK] = 0;
-                l->class_size[BI_REG_CLASS_WORK] = 64 * 4;
+                l->class_size[BI_REG_CLASS_WORK] = 63 * 4;
         }
 
         bi_foreach_instr_global(ctx, ins) {
                 unsigned dest = ins->dest;
+
+                /* Blend shaders expect the src colour to be in r0-r3 */
+                if (ins->type == BI_BLEND && !ctx->is_blend)
+                        l->solutions[ins->src[0]] = 0;
 
                 if (!dest || (dest >= node_count))
                         continue;
@@ -88,6 +92,7 @@ bi_allocate_registers(bi_context *ctx, bool *success)
                 l->class[dest] = BI_REG_CLASS_WORK;
                 lcra_set_alignment(l, dest, 2, 16); /* 2^2 = 4 */
                 lcra_restrict_range(l, dest, 4);
+
         }
 
         bi_compute_interference(ctx, l);
@@ -361,6 +366,7 @@ bi_register_allocate(bi_context *ctx)
                 unsigned both = BI_DATA_REG_SRC | BI_DATA_REG_DEST;
                 if ((props & both) != both) continue;
 
+                assert(ins->src[0] & PAN_IS_REG);
                 bi_rewrite_uses(ctx, ins->dest, 0, ins->src[0], 0);
                 ins->dest = ins->src[0];
         }

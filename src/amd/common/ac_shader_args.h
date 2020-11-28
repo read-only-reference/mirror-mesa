@@ -47,11 +47,11 @@ enum ac_arg_type
 };
 
 struct ac_arg {
-   uint8_t arg_index;
+   uint16_t arg_index;
    bool used;
 };
 
-#define AC_MAX_ARGS 128
+#define AC_MAX_ARGS 384 /* including all VS->TCS IO */
 
 struct ac_shader_args {
    /* Info on how to declare arguments */
@@ -63,7 +63,7 @@ struct ac_shader_args {
       bool skip;
    } args[AC_MAX_ARGS];
 
-   uint8_t arg_count;
+   uint16_t arg_count;
    uint8_t sgpr_count;
    uint8_t num_sgprs_used;
    uint8_t num_vgprs_used;

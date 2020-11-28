@@ -35,6 +35,7 @@ libglsl_util = static_library(
     'mesa/program/dummy_errors.c',
   ),
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+  dependencies : dep_valgrind,
   gnu_symbol_visibility : 'hidden',
   build_by_default : false,
 )
@@ -67,7 +68,7 @@ endif
 if with_platform_wayland
   subdir('egl/wayland/wayland-drm')
 endif
-if with_any_vk
+if with_any_vk or with_gallium_zink
   subdir('vulkan')
 endif
 if with_gallium_radeonsi or with_amd_vk
@@ -90,6 +91,9 @@ if with_gallium_virgl
 endif
 if with_any_intel
   subdir('intel')
+endif
+if with_microsoft_clc or with_gallium_d3d12
+  subdir('microsoft')
 endif
 subdir('mesa')
 subdir('loader')

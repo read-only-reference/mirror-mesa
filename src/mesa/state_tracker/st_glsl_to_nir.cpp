@@ -370,7 +370,7 @@ st_nir_preprocess(struct st_context *st, struct gl_program *prog,
    }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
-   if (!st->ctx->SoftFP64 && nir->info.uses_64bit &&
+   if (!st->ctx->SoftFP64 && ((nir->info.bit_sizes_int | nir->info.bit_sizes_float) & 64) &&
        (options->lower_doubles_options & nir_lower_fp64_full_software) != 0) {
       st->ctx->SoftFP64 = glsl_float64_funcs_to_nir(st->ctx, options);
    }
@@ -834,6 +834,8 @@ st_link_nir(struct gl_context *ctx,
        */
       shader_info old_info = prog->info;
       prog->info = prog->nir->info;
+      prog->info.name = old_info.name;
+      prog->info.label = old_info.label;
       prog->info.num_ssbos = old_info.num_ssbos;
       prog->info.num_ubos = old_info.num_ubos;
       prog->info.num_abos = old_info.num_abos;

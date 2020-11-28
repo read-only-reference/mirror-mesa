@@ -51,7 +51,10 @@
  * the drawing to the 'draw' module.
  */
 static void
-llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
+llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+                  const struct pipe_draw_indirect_info *indirect,
+                  const struct pipe_draw_start_count *draws,
+                  unsigned num_draws)
 {
    struct llvmpipe_context *lp = llvmpipe_context(pipe);
    struct draw_context *draw = lp->draw;
@@ -61,8 +64,8 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    if (!llvmpipe_check_render_cond(lp))
       return;
 
-   if (info->indirect) {
-      util_draw_indirect(pipe, info);
+   if (indirect && indirect->buffer) {
+      util_draw_indirect(pipe, info, indirect);
       return;
    }
 
@@ -139,7 +142,7 @@ llvmpipe_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
                                      !lp->queries_disabled);
 
    /* draw! */
-   draw_vbo(draw, info);
+   draw_vbo(draw, info, indirect, draws, num_draws);
 
    /*
     * unmap vertex/index buffers

@@ -76,8 +76,8 @@ void _aco_err(Program *program, const char *file, unsigned line,
 bool validate_ir(Program* program)
 {
    bool is_valid = true;
-   auto check = [&program, &is_valid](bool check, const char * msg, aco::Instruction * instr) -> void {
-      if (!check) {
+   auto check = [&program, &is_valid](bool success, const char * msg, aco::Instruction * instr) -> void {
+      if (!success) {
          char *out;
          size_t outsize;
          struct u_memstream mem;
@@ -88,15 +88,15 @@ bool validate_ir(Program* program)
          aco_print_instr(instr, memf);
          u_memstream_close(&mem);
 
-         aco_err(program, out);
+         aco_err(program, "%s", out);
          free(out);
 
          is_valid = false;
       }
    };
 
-   auto check_block = [&program, &is_valid](bool check, const char * msg, aco::Block * block) -> void {
-      if (!check) {
+   auto check_block = [&program, &is_valid](bool success, const char * msg, aco::Block * block) -> void {
+      if (!success) {
          aco_err(program, "%s: BB%u", msg, block->index);
          is_valid = false;
       }
@@ -555,7 +555,7 @@ bool ra_fail(Program *program, Location loc, Location loc2, const char *fmt, ...
    fprintf(memf, "\n\n");
    u_memstream_close(&mem);
 
-   aco_err(program, out);
+   aco_err(program, "%s", out);
    free(out);
 
    return true;

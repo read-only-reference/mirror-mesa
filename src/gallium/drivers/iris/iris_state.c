@@ -6055,12 +6055,19 @@ iris_upload_dirty_render_state(struct iris_context *ice,
    }
 
    if (dirty & IRIS_DIRTY_SCISSOR_RECT) {
+      /* GEN:BUG:1409725701:
+       *    "The viewport-specific state used by the SF unit (SCISSOR_RECT) is
+       *    stored as an array of up to 16 elements. The location of first
+       *    element of the array, as specified by Pointer to SCISSOR_RECT,
+       *    should be aligned to a 64-byte boundary.
+       */
+      uint32_t alignment = 64;
       uint32_t scissor_offset =
          emit_state(batch, ice->state.dynamic_uploader,
                     &ice->state.last_res.scissor,
                     ice->state.scissors,
                     sizeof(struct pipe_scissor_state) *
-                    ice->state.num_viewports, 32);
+                    ice->state.num_viewports, alignment);
 
       iris_emit_cmd(batch, GENX(3DSTATE_SCISSOR_STATE_POINTERS), ptr) {
          ptr.ScissorRectPointer = scissor_offset;
@@ -6410,7 +6417,9 @@ iris_upload_dirty_render_state(struct iris_context *ice,
 static void
 iris_upload_render_state(struct iris_context *ice,
                          struct iris_batch *batch,
-                         const struct pipe_draw_info *draw)
+                         const struct pipe_draw_info *draw,
+                         const struct pipe_draw_indirect_info *indirect,
+                         const struct pipe_draw_start_count *sc)
 {
    bool use_predicate = ice->state.predicate == IRIS_PREDICATE_STATE_USE_BIT;
 
@@ -6436,7 +6445,7 @@ iris_upload_render_state(struct iris_context *ice,
 
       if (draw->has_user_indices) {
          u_upload_data(ice->ctx.stream_uploader, 0,
-                       draw->count * draw->index_size, 4, draw->index.user,
+                       sc->count * draw->index_size, 4, draw->index.user,
                        &offset, &ice->state.last_res.index_buffer);
       } else {
          struct iris_resource *res = (void *) draw->index.resource;
@@ -6485,14 +6494,14 @@ iris_upload_render_state(struct iris_context *ice,
 #define _3DPRIM_START_INSTANCE      0x243C
 #define _3DPRIM_BASE_VERTEX         0x2440
 
-   if (draw->indirect) {
-      if (draw->indirect->indirect_draw_count) {
+   if (indirect && !indirect->count_from_stream_output) {
+      if (indirect->indirect_draw_count) {
          use_predicate = true;
 
          struct iris_bo *draw_count_bo =
-            iris_resource_bo(draw->indirect->indirect_draw_count);
+            iris_resource_bo(indirect->indirect_draw_count);
          unsigned draw_count_offset =
-            draw->indirect->indirect_draw_count_offset;
+            indirect->indirect_draw_count_offset;
 
          iris_emit_pipe_control_flush(batch,
                                       "ensure indirect draw buffer is flushed",
@@ -6544,43 +6553,43 @@ iris_upload_render_state(struct iris_context *ice,
             iris_batch_emit(batch, &mi_predicate, sizeof(uint32_t));
          }
       }
-      struct iris_bo *bo = iris_resource_bo(draw->indirect->buffer);
+      struct iris_bo *bo = iris_resource_bo(indirect->buffer);
       assert(bo);
 
       iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
          lrm.RegisterAddress = _3DPRIM_VERTEX_COUNT;
-         lrm.MemoryAddress = ro_bo(bo, draw->indirect->offset + 0);
+         lrm.MemoryAddress = ro_bo(bo, indirect->offset + 0);
       }
       iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
          lrm.RegisterAddress = _3DPRIM_INSTANCE_COUNT;
-         lrm.MemoryAddress = ro_bo(bo, draw->indirect->offset + 4);
+         lrm.MemoryAddress = ro_bo(bo, indirect->offset + 4);
       }
       iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
          lrm.RegisterAddress = _3DPRIM_START_VERTEX;
-         lrm.MemoryAddress = ro_bo(bo, draw->indirect->offset + 8);
+         lrm.MemoryAddress = ro_bo(bo, indirect->offset + 8);
       }
       if (draw->index_size) {
          iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
             lrm.RegisterAddress = _3DPRIM_BASE_VERTEX;
-            lrm.MemoryAddress = ro_bo(bo, draw->indirect->offset + 12);
+            lrm.MemoryAddress = ro_bo(bo, indirect->offset + 12);
          }
          iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
             lrm.RegisterAddress = _3DPRIM_START_INSTANCE;
-            lrm.MemoryAddress = ro_bo(bo, draw->indirect->offset + 16);
+            lrm.MemoryAddress = ro_bo(bo, indirect->offset + 16);
          }
       } else {
          iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_MEM), lrm) {
             lrm.RegisterAddress = _3DPRIM_START_INSTANCE;
-            lrm.MemoryAddress = ro_bo(bo, draw->indirect->offset + 12);
+            lrm.MemoryAddress = ro_bo(bo, indirect->offset + 12);
          }
          iris_emit_cmd(batch, GENX(MI_LOAD_REGISTER_IMM), lri) {
             lri.RegisterOffset = _3DPRIM_BASE_VERTEX;
             lri.DataDWord = 0;
          }
       }
-   } else if (draw->count_from_stream_output) {
+   } else if (indirect && indirect->count_from_stream_output) {
       struct iris_stream_output_target *so =
-         (void *) draw->count_from_stream_output;
+         (void *) indirect->count_from_stream_output;
 
       /* XXX: Replace with actual cache tracking */
       iris_emit_pipe_control_flush(batch,
@@ -6608,14 +6617,14 @@ iris_upload_render_state(struct iris_context *ice,
       prim.VertexAccessType = draw->index_size > 0 ? RANDOM : SEQUENTIAL;
       prim.PredicateEnable = use_predicate;
 
-      if (draw->indirect || draw->count_from_stream_output) {
+      if (indirect) {
          prim.IndirectParameterEnable = true;
       } else {
          prim.StartInstanceLocation = draw->start_instance;
          prim.InstanceCount = draw->instance_count;
-         prim.VertexCountPerInstance = draw->count;
+         prim.VertexCountPerInstance = sc->count;
 
-         prim.StartVertexLocation = draw->start;
+         prim.StartVertexLocation = sc->start;
 
          if (draw->index_size) {
             prim.BaseVertexLocation += draw->index_bias;
@@ -7755,6 +7764,41 @@ iris_set_frontend_noop(struct pipe_context *ctx, bool enable)
 }
 
 void
+genX(init_screen_state)(struct iris_screen *screen)
+{
+   screen->vtbl.destroy_state = iris_destroy_state;
+   screen->vtbl.init_render_context = iris_init_render_context;
+   screen->vtbl.init_compute_context = iris_init_compute_context;
+   screen->vtbl.upload_render_state = iris_upload_render_state;
+   screen->vtbl.update_surface_base_address = iris_update_surface_base_address;
+   screen->vtbl.upload_compute_state = iris_upload_compute_state;
+   screen->vtbl.emit_raw_pipe_control = iris_emit_raw_pipe_control;
+   screen->vtbl.emit_mi_report_perf_count = iris_emit_mi_report_perf_count;
+   screen->vtbl.rebind_buffer = iris_rebind_buffer;
+   screen->vtbl.load_register_reg32 = iris_load_register_reg32;
+   screen->vtbl.load_register_reg64 = iris_load_register_reg64;
+   screen->vtbl.load_register_imm32 = iris_load_register_imm32;
+   screen->vtbl.load_register_imm64 = iris_load_register_imm64;
+   screen->vtbl.load_register_mem32 = iris_load_register_mem32;
+   screen->vtbl.load_register_mem64 = iris_load_register_mem64;
+   screen->vtbl.store_register_mem32 = iris_store_register_mem32;
+   screen->vtbl.store_register_mem64 = iris_store_register_mem64;
+   screen->vtbl.store_data_imm32 = iris_store_data_imm32;
+   screen->vtbl.store_data_imm64 = iris_store_data_imm64;
+   screen->vtbl.copy_mem_mem = iris_copy_mem_mem;
+   screen->vtbl.derived_program_state_size = iris_derived_program_state_size;
+   screen->vtbl.store_derived_program_state = iris_store_derived_program_state;
+   screen->vtbl.create_so_decl_list = iris_create_so_decl_list;
+   screen->vtbl.populate_vs_key = iris_populate_vs_key;
+   screen->vtbl.populate_tcs_key = iris_populate_tcs_key;
+   screen->vtbl.populate_tes_key = iris_populate_tes_key;
+   screen->vtbl.populate_gs_key = iris_populate_gs_key;
+   screen->vtbl.populate_fs_key = iris_populate_fs_key;
+   screen->vtbl.populate_cs_key = iris_populate_cs_key;
+   screen->vtbl.lost_genx_state = iris_lost_genx_state;
+}
+
+void
 genX(init_state)(struct iris_context *ice)
 {
    struct pipe_context *ctx = &ice->ctx;
@@ -7801,37 +7845,6 @@ genX(init_state)(struct iris_context *ice)
    ctx->stream_output_target_destroy = iris_stream_output_target_destroy;
    ctx->set_stream_output_targets = iris_set_stream_output_targets;
    ctx->set_frontend_noop = iris_set_frontend_noop;
-
-   screen->vtbl.destroy_state = iris_destroy_state;
-   screen->vtbl.init_render_context = iris_init_render_context;
-   screen->vtbl.init_compute_context = iris_init_compute_context;
-   screen->vtbl.upload_render_state = iris_upload_render_state;
-   screen->vtbl.update_surface_base_address = iris_update_surface_base_address;
-   screen->vtbl.upload_compute_state = iris_upload_compute_state;
-   screen->vtbl.emit_raw_pipe_control = iris_emit_raw_pipe_control;
-   screen->vtbl.emit_mi_report_perf_count = iris_emit_mi_report_perf_count;
-   screen->vtbl.rebind_buffer = iris_rebind_buffer;
-   screen->vtbl.load_register_reg32 = iris_load_register_reg32;
-   screen->vtbl.load_register_reg64 = iris_load_register_reg64;
-   screen->vtbl.load_register_imm32 = iris_load_register_imm32;
-   screen->vtbl.load_register_imm64 = iris_load_register_imm64;
-   screen->vtbl.load_register_mem32 = iris_load_register_mem32;
-   screen->vtbl.load_register_mem64 = iris_load_register_mem64;
-   screen->vtbl.store_register_mem32 = iris_store_register_mem32;
-   screen->vtbl.store_register_mem64 = iris_store_register_mem64;
-   screen->vtbl.store_data_imm32 = iris_store_data_imm32;
-   screen->vtbl.store_data_imm64 = iris_store_data_imm64;
-   screen->vtbl.copy_mem_mem = iris_copy_mem_mem;
-   screen->vtbl.derived_program_state_size = iris_derived_program_state_size;
-   screen->vtbl.store_derived_program_state = iris_store_derived_program_state;
-   screen->vtbl.create_so_decl_list = iris_create_so_decl_list;
-   screen->vtbl.populate_vs_key = iris_populate_vs_key;
-   screen->vtbl.populate_tcs_key = iris_populate_tcs_key;
-   screen->vtbl.populate_tes_key = iris_populate_tes_key;
-   screen->vtbl.populate_gs_key = iris_populate_gs_key;
-   screen->vtbl.populate_fs_key = iris_populate_fs_key;
-   screen->vtbl.populate_cs_key = iris_populate_cs_key;
-   screen->vtbl.lost_genx_state = iris_lost_genx_state;
 
    ice->state.dirty = ~0ull;
    ice->state.stage_dirty = ~0ull;

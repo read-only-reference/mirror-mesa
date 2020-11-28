@@ -846,7 +846,6 @@ init_attrib_groups(struct gl_context *ctx)
    _mesa_init_debug_output( ctx );
    _mesa_init_display_list( ctx );
    _mesa_init_eval( ctx );
-   _mesa_init_fbobjects( ctx );
    _mesa_init_feedback( ctx );
    _mesa_init_fog( ctx );
    _mesa_init_hint( ctx );
@@ -886,6 +885,7 @@ init_attrib_groups(struct gl_context *ctx)
    ctx->ErrorValue = GL_NO_ERROR;
    ctx->ShareGroupReset = false;
    ctx->varying_vp_inputs = VERT_BIT_ALL;
+   ctx->IntelBlackholeRender = env_var_as_boolean("INTEL_BLACKHOLE_DEFAULT", false);
 
    return GL_TRUE;
 }

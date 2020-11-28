@@ -63,6 +63,7 @@
 #include "adreno_pm4.xml.h"
 #include "a6xx.xml.h"
 #include "fdl/freedreno_layout.h"
+#include "common/freedreno_dev_info.h"
 
 #include "tu_descriptor_set.h"
 #include "tu_extensions.h"
@@ -196,20 +197,8 @@ struct tu_physical_device
    unsigned gpu_id;
    uint32_t gmem_size;
    uint64_t gmem_base;
-   uint32_t ccu_offset_gmem;
-   uint32_t ccu_offset_bypass;
-   /* alignment for size of tiles */
-   uint32_t tile_align_w;
-#define TILE_ALIGN_H 16
-   /* gmem store/load granularity */
-#define GMEM_ALIGN_W 16
-#define GMEM_ALIGN_H 4
-   bool supports_multiview_mask;
 
-   struct {
-      uint32_t PC_UNKNOWN_9805;
-      uint32_t SP_UNKNOWN_A0F8;
-   } magic;
+   struct freedreno_dev_info info;
 
    int msm_major_version;
    int msm_minor_version;
@@ -1167,10 +1156,18 @@ void tu6_emit_window_scissor(struct tu_cs *cs, uint32_t x1, uint32_t y1, uint32_
 
 void tu6_emit_window_offset(struct tu_cs *cs, uint32_t x1, uint32_t y1);
 
+struct tu_pvtmem_config {
+   uint64_t iova;
+   uint32_t per_fiber_size;
+   uint32_t per_sp_size;
+   bool per_wave;
+};
+
 void
 tu6_emit_xs_config(struct tu_cs *cs,
                    gl_shader_stage stage,
                    const struct ir3_shader_variant *xs,
+                   const struct tu_pvtmem_config *pvtmem,
                    uint64_t binary_iova);
 
 void
@@ -1255,25 +1252,20 @@ struct tu_image
 {
    struct vk_object_base base;
 
-   VkImageType type;
    /* The original VkFormat provided by the client.  This may not match any
     * of the actual surface formats.
     */
    VkFormat vk_format;
-   VkImageAspectFlags aspects;
-   VkImageUsageFlags usage;  /**< Superset of VkImageCreateInfo::usage. */
-   VkImageTiling tiling;     /** VkImageCreateInfo::tiling */
-   VkImageCreateFlags flags; /** VkImageCreateInfo::flags */
-   VkExtent3D extent;
    uint32_t level_count;
    uint32_t layer_count;
-   VkSampleCountFlagBits samples;
 
    struct fdl_layout layout[3];
    uint32_t total_size;
 
+#ifdef ANDROID
    /* For VK_ANDROID_native_buffer, the WSI image owns the memory, */
    VkDeviceMemory owned_memory;
+#endif
 
    /* Set when bound */
    struct tu_bo *bo;
@@ -1380,24 +1372,24 @@ tu_cs_image_stencil_ref(struct tu_cs *cs, const struct tu_image_view *iview, uin
    ((iview->x & ~A6XX_##x##_COLOR_FORMAT__MASK) | A6XX_##x##_COLOR_FORMAT(FMT6_8_UINT))
 
 VkResult
-tu_image_create(VkDevice _device,
-                const VkImageCreateInfo *pCreateInfo,
-                const VkAllocationCallbacks *alloc,
-                VkImage *pImage,
-                uint64_t modifier,
-                const VkSubresourceLayout *plane_layouts);
+tu_gralloc_info(struct tu_device *device,
+                const VkNativeBufferANDROID *gralloc_info,
+                int *dma_buf,
+                uint64_t *modifier);
 
 VkResult
-tu_image_from_gralloc(VkDevice device_h,
-                      const VkImageCreateInfo *base_info,
-                      const VkNativeBufferANDROID *gralloc_info,
-                      const VkAllocationCallbacks *alloc,
-                      VkImage *out_image_h);
+tu_import_memory_from_gralloc_handle(VkDevice device_h,
+                                     int dma_buf,
+                                     const VkAllocationCallbacks *alloc,
+                                     VkImage image_h);
 
 void
 tu_image_view_init(struct tu_image_view *iview,
                    const VkImageViewCreateInfo *pCreateInfo,
                    bool limited_z24s8);
+
+bool
+ubwc_possible(VkFormat format, VkImageType type, VkImageUsageFlags usage, bool limited_z24s8);
 
 struct tu_buffer_view
 {
@@ -1464,6 +1456,8 @@ struct tu_subpass
 {
    uint32_t input_count;
    uint32_t color_count;
+   uint32_t resolve_count;
+   bool resolve_depth_stencil;
    struct tu_subpass_attachment *input_attachments;
    struct tu_subpass_attachment *color_attachments;
    struct tu_subpass_attachment *resolve_attachments;
@@ -1517,6 +1511,9 @@ struct tu_query_pool
    uint32_t pipeline_statistics;
    struct tu_bo bo;
 };
+
+uint32_t
+tu_subpass_get_attachment_to_resolve(const struct tu_subpass *subpass, uint32_t index);
 
 void
 tu_update_descriptor_sets(VkDescriptorSet overrideSet,

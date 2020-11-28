@@ -151,7 +151,7 @@ static void print_constant(uint8_t reg, FILE *output)
    }
 }
 
-static void print_operand(const Operand *operand, FILE *output)
+void aco_print_operand(const Operand *operand, FILE *output)
 {
    if (operand->isLiteral() || (operand->isConstant() && operand->bytes() == 1)) {
       if (operand->bytes() == 1)
@@ -168,6 +168,10 @@ static void print_operand(const Operand *operand, FILE *output)
    } else {
       if (operand->isLateKill())
          fprintf(output, "(latekill)");
+      if (operand->is16bit())
+         fprintf(output, "(is16bit)");
+      if (operand->is24bit())
+         fprintf(output, "(is24bit)");
 
       fprintf(output, "%%%d", operand->tempId());
 
@@ -678,10 +682,10 @@ void aco_print_instr(const Instruction *instr, FILE *output)
    }
    fprintf(output, "%s", instr_info.name[(int)instr->opcode]);
    if (instr->operands.size()) {
-      bool abs[instr->operands.size()];
-      bool neg[instr->operands.size()];
-      bool opsel[instr->operands.size()];
-      uint8_t sel[instr->operands.size()];
+      bool *const abs = (bool *)alloca(instr->operands.size() * sizeof(bool));
+      bool *const neg = (bool *)alloca(instr->operands.size() * sizeof(bool));
+      bool *const opsel = (bool *)alloca(instr->operands.size() * sizeof(bool));
+      uint8_t *const sel = (uint8_t *)alloca(instr->operands.size() * sizeof(uint8_t));
       if ((int)instr->format & (int)Format::VOP3A) {
          const VOP3A_instruction* vop3 = static_cast<const VOP3A_instruction*>(instr);
          for (unsigned i = 0; i < instr->operands.size(); ++i) {
@@ -728,7 +732,7 @@ void aco_print_instr(const Instruction *instr, FILE *output)
             fprintf(output, "hi(");
          else if (sel[i] & sdwa_sext)
             fprintf(output, "sext(");
-         print_operand(&instr->operands[i], output);
+         aco_print_operand(&instr->operands[i], output);
          if (opsel[i] || (sel[i] & sdwa_sext))
             fprintf(output, ")");
          if (!(sel[i] & sdwa_isra)) {

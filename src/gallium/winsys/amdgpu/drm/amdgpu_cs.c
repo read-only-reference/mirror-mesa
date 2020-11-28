@@ -420,7 +420,7 @@ int amdgpu_lookup_buffer(struct amdgpu_cs_context *cs, struct amdgpu_winsys_bo *
    if (bo->bo) {
       buffers = cs->real_buffers;
       num_buffers = cs->num_real_buffers;
-   } else if (!bo->sparse) {
+   } else if (!(bo->base.usage & RADEON_FLAG_SPARSE)) {
       buffers = cs->slab_buffers;
       num_buffers = cs->num_slab_buffers;
    } else {
@@ -505,9 +505,9 @@ amdgpu_lookup_or_add_real_buffer(struct amdgpu_cs *acs, struct amdgpu_winsys_bo 
    hash = bo->unique_id & (ARRAY_SIZE(cs->buffer_indices_hashlist)-1);
    cs->buffer_indices_hashlist[hash] = idx;
 
-   if (bo->initial_domain & RADEON_DOMAIN_VRAM)
+   if (bo->base.placement & RADEON_DOMAIN_VRAM)
       acs->main.base.used_vram += bo->base.size;
-   else if (bo->initial_domain & RADEON_DOMAIN_GTT)
+   else if (bo->base.placement & RADEON_DOMAIN_GTT)
       acs->main.base.used_gart += bo->base.size;
 
    return idx;
@@ -608,9 +608,9 @@ static int amdgpu_lookup_or_add_sparse_buffer(struct amdgpu_cs *acs,
    simple_mtx_lock(&bo->lock);
 
    list_for_each_entry(struct amdgpu_sparse_backing, backing, &bo->u.sparse.backing, list) {
-      if (bo->initial_domain & RADEON_DOMAIN_VRAM)
+      if (bo->base.placement & RADEON_DOMAIN_VRAM)
          acs->main.base.used_vram += backing->bo->base.size;
-      else if (bo->initial_domain & RADEON_DOMAIN_GTT)
+      else if (bo->base.placement & RADEON_DOMAIN_GTT)
          acs->main.base.used_gart += backing->bo->base.size;
    }
 
@@ -643,7 +643,7 @@ static unsigned amdgpu_cs_add_buffer(struct radeon_cmdbuf *rcs,
        (1u << priority) & cs->last_added_bo_priority_usage)
       return cs->last_added_bo_index;
 
-   if (!bo->sparse) {
+   if (!(bo->base.usage & RADEON_FLAG_SPARSE)) {
       if (!bo->bo) {
          index = amdgpu_lookup_or_add_slab_buffer(acs, bo);
          if (index < 0)
@@ -1430,6 +1430,7 @@ static void amdgpu_cs_submit_ib(void *job, int thread_index)
    bool use_bo_list_create = ws->info.drm_minor < 27;
    struct drm_amdgpu_bo_list_in bo_list_in;
 
+#if DEBUG
    /* Prepare the buffer list. */
    if (ws->debug_all_bos) {
       /* The buffer list contains all buffers. This is a slow path that
@@ -1453,7 +1454,9 @@ static void amdgpu_cs_submit_ib(void *job, int thread_index)
          fprintf(stderr, "amdgpu: buffer list creation failed (%d)\n", r);
          goto cleanup;
       }
-   } else {
+   } else
+#endif
+   {
       if (!amdgpu_add_sparse_backing_buffers(cs)) {
          fprintf(stderr, "amdgpu: amdgpu_add_sparse_backing_buffers failed\n");
          r = -ENOMEM;

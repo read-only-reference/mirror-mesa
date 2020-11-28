@@ -160,8 +160,8 @@ tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
       tu_cs_emit_regs(cs,
                       A6XX_RB_CCU_CNTL(.offset =
                                           ccu_state == TU_CMD_CCU_GMEM ?
-                                          phys_dev->ccu_offset_gmem :
-                                          phys_dev->ccu_offset_bypass,
+                                          phys_dev->info.a6xx.ccu_offset_gmem :
+                                          phys_dev->info.a6xx.ccu_offset_bypass,
                                        .gmem = ccu_state == TU_CMD_CCU_GMEM));
       cmd_buffer->state.ccu_state = ccu_state;
    }
@@ -369,7 +369,7 @@ tu6_emit_render_cntl(struct tu_cmd_buffer *cmd,
 static void
 tu6_emit_blit_scissor(struct tu_cmd_buffer *cmd, struct tu_cs *cs, bool align)
 {
-
+   struct tu_physical_device *phys_dev = cmd->device->physical_device;
    const VkRect2D *render_area = &cmd->state.render_area;
 
    /* Avoid assertion fails with an empty render area at (0, 0) where the
@@ -388,10 +388,10 @@ tu6_emit_blit_scissor(struct tu_cmd_buffer *cmd, struct tu_cs *cs, bool align)
    uint32_t y2 = y1 + render_area->extent.height - 1;
 
    if (align) {
-      x1 = x1 & ~(GMEM_ALIGN_W - 1);
-      y1 = y1 & ~(GMEM_ALIGN_H - 1);
-      x2 = ALIGN_POT(x2 + 1, GMEM_ALIGN_W) - 1;
-      y2 = ALIGN_POT(y2 + 1, GMEM_ALIGN_H) - 1;
+      x1 = x1 & ~(phys_dev->info.gmem_align_w - 1);
+      y1 = y1 & ~(phys_dev->info.gmem_align_h - 1);
+      x2 = ALIGN_POT(x2 + 1, phys_dev->info.gmem_align_w) - 1;
+      y2 = ALIGN_POT(y2 + 1, phys_dev->info.gmem_align_h) - 1;
    }
 
    tu_cs_emit_regs(cs,
@@ -632,10 +632,11 @@ tu6_emit_sysmem_resolves(struct tu_cmd_buffer *cmd,
        * Commands":
        *
        *    End-of-subpass multisample resolves are treated as color
-       *    attachment writes for the purposes of synchronization. That is,
-       *    they are considered to execute in the
-       *    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT pipeline stage and
-       *    their writes are synchronized with
+       *    attachment writes for the purposes of synchronization.
+       *    This applies to resolve operations for both color and
+       *    depth/stencil attachments. That is, they are considered to
+       *    execute in the VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+       *    pipeline stage and their writes are synchronized with
        *    VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT. Synchronization between
        *    rendering within a subpass and any resolve operations at the end
        *    of the subpass occurs automatically, without need for explicit
@@ -649,18 +650,22 @@ tu6_emit_sysmem_resolves(struct tu_cmd_buffer *cmd,
        * last sentence and the fact that we're in sysmem mode.
        */
       tu6_emit_event_write(cmd, cs, PC_CCU_FLUSH_COLOR_TS);
+      if (subpass->resolve_depth_stencil)
+         tu6_emit_event_write(cmd, cs, PC_CCU_FLUSH_DEPTH_TS);
+
       tu6_emit_event_write(cmd, cs, CACHE_INVALIDATE);
 
       /* Wait for the flushes to land before using the 2D engine */
       tu_cs_emit_wfi(cs);
 
-      for (unsigned i = 0; i < subpass->color_count; i++) {
+      for (unsigned i = 0; i < subpass->resolve_count; i++) {
          uint32_t a = subpass->resolve_attachments[i].attachment;
          if (a == VK_ATTACHMENT_UNUSED)
             continue;
 
-         tu6_emit_sysmem_resolve(cmd, cs, subpass->multiview_mask, a,
-                                 subpass->color_attachments[i].attachment);
+         uint32_t gmem_a = tu_subpass_get_attachment_to_resolve(subpass, i);
+
+         tu6_emit_sysmem_resolve(cmd, cs, subpass->multiview_mask, a, gmem_a);
       }
    }
 }
@@ -692,11 +697,12 @@ tu6_emit_tile_store(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    }
 
    if (subpass->resolve_attachments) {
-      for (unsigned i = 0; i < subpass->color_count; i++) {
+      for (unsigned i = 0; i < subpass->resolve_count; i++) {
          uint32_t a = subpass->resolve_attachments[i].attachment;
-         if (a != VK_ATTACHMENT_UNUSED)
-            tu_store_gmem_attachment(cmd, cs, a,
-                                     subpass->color_attachments[i].attachment);
+         if (a != VK_ATTACHMENT_UNUSED) {
+            uint32_t gmem_a = tu_subpass_get_attachment_to_resolve(subpass, i);
+            tu_store_gmem_attachment(cmd, cs, a, gmem_a);
+         }
       }
    }
 }
@@ -729,7 +735,7 @@ tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       ~(TU_CMD_FLAG_WAIT_FOR_IDLE | TU_CMD_FLAG_CACHE_INVALIDATE);
 
    tu_cs_emit_regs(cs,
-                   A6XX_RB_CCU_CNTL(.offset = phys_dev->ccu_offset_bypass));
+                   A6XX_RB_CCU_CNTL(.offset = phys_dev->info.a6xx.ccu_offset_bypass));
    cmd->state.ccu_state = TU_CMD_CCU_SYSMEM;
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_UNKNOWN_8E04, 0x00100000);
    tu_cs_emit_write_reg(cs, REG_A6XX_SP_UNKNOWN_AE04, 0x8);
@@ -750,7 +756,6 @@ tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    tu_cs_emit_write_reg(cs, REG_A6XX_UCHE_UNKNOWN_0E12, 0x3200000);
    tu_cs_emit_write_reg(cs, REG_A6XX_UCHE_CLIENT_PF, 4);
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_UNKNOWN_8E01, 0x0);
-   tu_cs_emit_write_reg(cs, REG_A6XX_SP_UNKNOWN_A982, 0);
    tu_cs_emit_write_reg(cs, REG_A6XX_SP_UNKNOWN_A9A8, 0);
    tu_cs_emit_write_reg(cs, REG_A6XX_SP_MODE_CONTROL,
                         A6XX_SP_MODE_CONTROL_CONSTANT_DEMOTION_ENABLE | 4);
@@ -771,16 +776,10 @@ tu6_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_UNKNOWN_881E, 0);
    tu_cs_emit_write_reg(cs, REG_A6XX_RB_UNKNOWN_88F0, 0);
 
-   tu_cs_emit_write_reg(cs, REG_A6XX_VPC_UNKNOWN_9107, 0);
-
    tu_cs_emit_regs(cs, A6XX_VPC_POINT_COORD_INVERT(false));
    tu_cs_emit_write_reg(cs, REG_A6XX_VPC_UNKNOWN_9300, 0);
 
    tu_cs_emit_regs(cs, A6XX_VPC_SO_DISABLE(true));
-
-   tu_cs_emit_write_reg(cs, REG_A6XX_PC_UNKNOWN_9980, 0);
-
-   tu_cs_emit_write_reg(cs, REG_A6XX_SP_UNKNOWN_A81B, 0);
 
    tu_cs_emit_write_reg(cs, REG_A6XX_SP_UNKNOWN_B183, 0);
 
@@ -939,10 +938,10 @@ tu6_emit_binning_pass(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
    update_vsc_pipe(cmd, cs);
 
    tu_cs_emit_regs(cs,
-                   A6XX_PC_UNKNOWN_9805(.unknown = phys_dev->magic.PC_UNKNOWN_9805));
+                   A6XX_PC_UNKNOWN_9805(.unknown = phys_dev->info.a6xx.magic.PC_UNKNOWN_9805));
 
    tu_cs_emit_regs(cs,
-                   A6XX_SP_UNKNOWN_A0F8(.unknown = phys_dev->magic.SP_UNKNOWN_A0F8));
+                   A6XX_SP_UNKNOWN_A0F8(.unknown = phys_dev->info.a6xx.magic.SP_UNKNOWN_A0F8));
 
    tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
    tu_cs_emit(cs, UNK_2C);
@@ -1226,9 +1225,9 @@ tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       tu_cs_emit_regs(cs,
                       A6XX_VFD_MODE_CNTL(0));
 
-      tu_cs_emit_regs(cs, A6XX_PC_UNKNOWN_9805(.unknown = phys_dev->magic.PC_UNKNOWN_9805));
+      tu_cs_emit_regs(cs, A6XX_PC_UNKNOWN_9805(.unknown = phys_dev->info.a6xx.magic.PC_UNKNOWN_9805));
 
-      tu_cs_emit_regs(cs, A6XX_SP_UNKNOWN_A0F8(.unknown = phys_dev->magic.SP_UNKNOWN_A0F8));
+      tu_cs_emit_regs(cs, A6XX_SP_UNKNOWN_A0F8(.unknown = phys_dev->info.a6xx.magic.SP_UNKNOWN_A0F8));
 
       tu_cs_emit_pkt7(cs, CP_SKIP_IB2_ENABLE_GLOBAL, 1);
       tu_cs_emit(cs, 0x1);
@@ -2969,13 +2968,14 @@ tu_CmdNextSubpass2(VkCommandBuffer commandBuffer,
    if (subpass->resolve_attachments) {
       tu6_emit_blit_scissor(cmd, cs, true);
 
-      for (unsigned i = 0; i < subpass->color_count; i++) {
+      for (unsigned i = 0; i < subpass->resolve_count; i++) {
          uint32_t a = subpass->resolve_attachments[i].attachment;
          if (a == VK_ATTACHMENT_UNUSED)
             continue;
 
-         tu_store_gmem_attachment(cmd, cs, a,
-                                  subpass->color_attachments[i].attachment);
+         uint32_t gmem_a = tu_subpass_get_attachment_to_resolve(subpass, i);
+
+         tu_store_gmem_attachment(cmd, cs, a, gmem_a);
 
          if (pass->attachments[a].gmem_offset < 0)
             continue;
@@ -3017,7 +3017,8 @@ tu6_emit_user_consts(struct tu_cs *cs, const struct tu_pipeline *pipeline,
 {
    const struct tu_program_descriptor_linkage *link =
       &pipeline->program.link[type];
-   const struct ir3_ubo_analysis_state *state = &link->const_state.ubo_state;
+   const struct ir3_const_state *const_state = &link->const_state;
+   const struct ir3_ubo_analysis_state *state = &const_state->ubo_state;
 
    if (link->push_consts.count > 0) {
       unsigned num_units = link->push_consts.count;
@@ -3052,9 +3053,14 @@ tu6_emit_user_consts(struct tu_cs *cs, const struct tu_pipeline *pipeline,
       debug_assert((offset % 16) == 0);
 
       /* Dig out the descriptor from the descriptor state and read the VA from
-       * it.
+       * it.  All our UBOs are bindless with the exception of the NIR
+       * constant_data, which is uploaded once in the pipeline.
        */
-      assert(state->range[i].ubo.bindless);
+      if (!state->range[i].ubo.bindless) {
+         assert(state->range[i].ubo.block == const_state->constant_data_ubo);
+         continue;
+      }
+
       uint32_t *base = state->range[i].ubo.bindless_base == MAX_SETS ?
          descriptors_state->dynamic_descriptors :
          descriptors_state->sets[state->range[i].ubo.bindless_base]->mapped_ptr;
@@ -3979,12 +3985,8 @@ tu_barrier(struct tu_cmd_buffer *cmd,
    enum tu_cmd_access_mask dst_flags = 0;
 
    for (uint32_t i = 0; i < imageMemoryBarrierCount; i++) {
-      TU_FROM_HANDLE(tu_image, image, pImageMemoryBarriers[i].image);
       VkImageLayout old_layout = pImageMemoryBarriers[i].oldLayout;
-      /* For non-linear images, PREINITIALIZED is the same as UNDEFINED */
-      if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
-          (image->tiling != VK_IMAGE_TILING_LINEAR &&
-           old_layout == VK_IMAGE_LAYOUT_PREINITIALIZED)) {
+      if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
          /* The underlying memory for this image may have been used earlier
           * within the same queue submission for a different image, which
           * means that there may be old, stale cache entries which are in the

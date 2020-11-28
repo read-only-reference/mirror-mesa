@@ -1,5 +1,6 @@
 /*
  * © Copyright 2018 Alyssa Rosenzweig
+ * Copyright (C) 2019-2020 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -53,16 +54,10 @@ pan_prepare_midgard_props(struct panfrost_shader_state *state,
          * conformant on gles3 */
         state->properties.midgard.fp_mode = MALI_FP_MODE_GL_INF_NAN_SUPPRESSED;
 
-        if (stage == MESA_SHADER_FRAGMENT) {
-                /* Work register count, early-z, reads at draw-time */
-                state->properties.stencil_from_shader = state->writes_stencil;
-                state->properties.shader_contains_barrier = state->helper_invocations;
-                state->properties.depth_source = state->writes_depth ?
-                                                 MALI_DEPTH_SOURCE_SHADER :
-                                                 MALI_DEPTH_SOURCE_FIXED_FUNCTION;
-        } else {
+        /* For fragment shaders, work register count, early-z, reads at draw-time */
+
+        if (stage != MESA_SHADER_FRAGMENT)
                 state->properties.midgard.work_register_count = state->work_reg_count;
-        }
 }
 
 static void
@@ -84,9 +79,14 @@ pan_prepare_bifrost_props(struct panfrost_shader_state *state,
         case MESA_SHADER_FRAGMENT:
                 pan_prepare(&state->properties, RENDERER_PROPERTIES);
                 /* Early-Z set at draw-time */
-                state->properties.bifrost.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+                if (state->writes_depth || state->writes_stencil) {
+                        state->properties.bifrost.zs_update_operation = MALI_PIXEL_KILL_FORCE_LATE;
+                        state->properties.bifrost.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_LATE;
+                } else {
+                        state->properties.bifrost.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+                        state->properties.bifrost.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_EARLY;
+                }
                 state->properties.uniform_buffer_count = state->ubo_count;
-                state->properties.shader_contains_barrier = state->helper_invocations;
                 state->properties.bifrost.shader_modifies_coverage = state->can_discard;
 
                 pan_prepare(&state->preload, PRELOAD);
@@ -284,9 +284,6 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         bool vertex_id = s->info.system_values_read & (1 << SYSTEM_VALUE_VERTEX_ID);
         bool instance_id = s->info.system_values_read & (1 << SYSTEM_VALUE_INSTANCE_ID);
 
-        /* On Bifrost it's a sysval, on Midgard it's a varying */
-        state->reads_frag_coord = s->info.system_values_read & (1 << SYSTEM_VALUE_FRAG_COORD);
-
         state->writes_global = s->info.writes_memory;
 
         switch (stage) {
@@ -339,10 +336,11 @@ panfrost_shader_compile(struct panfrost_context *ctx,
         }
 
         state->can_discard = s->info.fs.uses_discard;
-        state->helper_invocations = s->info.fs.needs_helper_invocations;
+        state->helper_invocations = s->info.fs.needs_quad_helper_invocations;
         state->stack_size = program->tls_size;
 
-        state->reads_frag_coord = s->info.inputs_read & (1 << VARYING_SLOT_POS);
+        state->reads_frag_coord = (s->info.inputs_read & (1 << VARYING_SLOT_POS)) ||
+                                  (s->info.system_values_read & (1 << SYSTEM_VALUE_FRAG_COORD));
         state->reads_point_coord = s->info.inputs_read & (1 << VARYING_SLOT_PNTC);
         state->reads_face = (s->info.inputs_read & (1 << VARYING_SLOT_FACE)) ||
                             (s->info.system_values_read & (1 << SYSTEM_VALUE_FRONT_FACE));
@@ -392,6 +390,12 @@ panfrost_shader_compile(struct panfrost_context *ctx,
                 pan_prepare_bifrost_props(state, stage);
         else
                 pan_prepare_midgard_props(state, stage);
+
+        state->properties.stencil_from_shader = state->writes_stencil;
+        state->properties.shader_contains_barrier = state->helper_invocations;
+        state->properties.depth_source = state->writes_depth ?
+                                         MALI_DEPTH_SOURCE_SHADER :
+                                         MALI_DEPTH_SOURCE_FIXED_FUNCTION;
 
         if (stage != MESA_SHADER_FRAGMENT)
                 pan_upload_shader_descriptor(ctx, state);

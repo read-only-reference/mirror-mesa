@@ -1611,14 +1611,10 @@ ntq_setup_vs_inputs(struct v3d_compile *c)
                 c->vattr_sizes[loc] = MAX2(c->vattr_sizes[loc],
                                            start_component + num_components);
 
-                /* Handle BGRA user inputs */
+                /* Handle BGRA inputs */
                 if (start_component == 0 &&
-                    var->data.location >= VERT_ATTRIB_GENERIC0) {
-                        int32_t idx = var->data.location - VERT_ATTRIB_GENERIC0;
-                        if (c->vs_key->va_swap_rb_mask & (1 << idx)) {
-                                c->vattr_sizes[loc] =
-                                        MAX2(3, c->vattr_sizes[loc]);
-                        }
+                    c->vs_key->va_swap_rb_mask & (1 << var->data.location)) {
+                        c->vattr_sizes[loc] = MAX2(3, c->vattr_sizes[loc]);
                 }
         }
 
@@ -2959,6 +2955,7 @@ ntq_emit_jump(struct v3d_compile *c, nir_jump_instr *jump)
                 unreachable("All returns shouold be lowered\n");
                 break;
 
+        case nir_jump_halt:
         case nir_jump_goto:
         case nir_jump_goto_if:
                 unreachable("not supported\n");

@@ -35,12 +35,9 @@ static nir_shader *
 build_nir_fs(void)
 {
 	const struct glsl_type *vec4 = glsl_vec4_type();
-	nir_builder b;
 	nir_variable *f_color; /* vec4, fragment output color */
 
-	nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_FRAGMENT, NULL);
-	b.shader->info.name = ralloc_asprintf(b.shader,
-					       "meta_resolve_fs");
+	nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, NULL, "meta_resolve_fs");
 
 	f_color = nir_variable_create(b.shader, nir_var_shader_out, vec4,
 				      "f_color");
@@ -288,7 +285,7 @@ radv_device_init_meta_resolve_state(struct radv_device *device, bool on_demand)
 
 	for (uint32_t i = 0; i < NUM_META_FS_KEYS; ++i) {
 		VkFormat format = radv_fs_key_format_exemplars[i];
-		unsigned fs_key = radv_format_meta_fs_key(format);
+		unsigned fs_key = radv_format_meta_fs_key(device, format);
 		res = create_pass(device, format, &state->resolve.pass[fs_key]);
 		if (res != VK_SUCCESS)
 			goto fail;
@@ -319,7 +316,7 @@ emit_resolve(struct radv_cmd_buffer *cmd_buffer,
 {
 	struct radv_device *device = cmd_buffer->device;
 	VkCommandBuffer cmd_buffer_h = radv_cmd_buffer_to_handle(cmd_buffer);
-	unsigned fs_key = radv_format_meta_fs_key(vk_format);
+	unsigned fs_key = radv_format_meta_fs_key(device, vk_format);
 
 	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB;
 
@@ -445,7 +442,7 @@ radv_meta_resolve_hardware_image(struct radv_cmd_buffer *cmd_buffer,
 	if (src_image->info.array_size > 1)
 		radv_finishme("vkCmdResolveImage: multisample array images");
 
-	unsigned fs_key = radv_format_meta_fs_key(dst_image->vk_format);
+	unsigned fs_key = radv_format_meta_fs_key(device, dst_image->vk_format);
 
 	/* From the Vulkan 1.0 spec:
 	 *
@@ -862,7 +859,7 @@ radv_cmd_buffer_resolve_subpass(struct radv_cmd_buffer *cmd_buffer)
 
 		radv_cmd_buffer_set_subpass(cmd_buffer, &resolve_subpass);
 
-		VkResult ret = build_resolve_pipeline(cmd_buffer->device, radv_format_meta_fs_key(dest_iview->vk_format));
+		VkResult ret = build_resolve_pipeline(cmd_buffer->device, radv_format_meta_fs_key(cmd_buffer->device, dest_iview->vk_format));
 		if (ret != VK_SUCCESS) {
 			cmd_buffer->record_result = ret;
 			continue;

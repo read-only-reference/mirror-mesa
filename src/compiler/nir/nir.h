@@ -128,9 +128,24 @@ typedef enum {
    nir_var_mem_ssbo        = (1 << 7),
    nir_var_mem_shared      = (1 << 8),
    nir_var_mem_global      = (1 << 9),
+   nir_var_mem_generic     = (nir_var_shader_temp |
+                              nir_var_function_temp |
+                              nir_var_mem_shared |
+                              nir_var_mem_global),
    nir_var_mem_push_const  = (1 << 10), /* not actually used for variables */
    nir_var_mem_constant    = (1 << 11),
-   nir_num_variable_modes  = 12,
+   /** Incoming call or ray payload data for ray-tracing shaders */
+   nir_var_shader_call_data = (1 << 12),
+   /** Ray hit attributes */
+   nir_var_ray_hit_attrib  = (1 << 13),
+   nir_var_read_only_modes = nir_var_shader_in | nir_var_uniform |
+                             nir_var_system_value | nir_var_mem_constant |
+                             nir_var_mem_ubo,
+   /** Modes where vector derefs can be indexed as arrays */
+   nir_var_vec_indexable_modes = nir_var_mem_ubo | nir_var_mem_ssbo |
+                                 nir_var_mem_shared | nir_var_mem_global |
+                                 nir_var_mem_push_const,
+   nir_num_variable_modes  = 14,
    nir_var_all             = (1 << nir_num_variable_modes) - 1,
 } nir_variable_mode;
 MESA_DEFINE_CPP_ENUM_BITFIELD_OPERATORS(nir_variable_mode)
@@ -339,7 +354,7 @@ typedef struct nir_variable {
        *
        * \sa nir_variable_mode
        */
-      unsigned mode:12;
+      unsigned mode:14;
 
       /**
        * Is the variable read-only?
@@ -1150,6 +1165,39 @@ nir_get_nir_type_for_glsl_type(const struct glsl_type *type)
    return nir_get_nir_type_for_glsl_base_type(glsl_get_base_type(type));
 }
 
+static inline enum glsl_base_type
+nir_get_glsl_base_type_for_nir_type(nir_alu_type base_type)
+{
+   switch (base_type) {
+   case nir_type_bool1:
+      return GLSL_TYPE_BOOL;
+   case nir_type_uint32:
+      return GLSL_TYPE_UINT;
+   case nir_type_int32:
+      return GLSL_TYPE_INT;
+   case nir_type_uint16:
+      return GLSL_TYPE_UINT16;
+   case nir_type_int16:
+      return GLSL_TYPE_INT16;
+   case nir_type_uint8:
+      return GLSL_TYPE_UINT8;
+   case nir_type_int8:
+      return GLSL_TYPE_INT8;
+   case nir_type_uint64:
+      return GLSL_TYPE_UINT64;
+   case nir_type_int64:
+      return GLSL_TYPE_INT64;
+   case nir_type_float32:
+      return GLSL_TYPE_FLOAT;
+   case nir_type_float16:
+      return GLSL_TYPE_FLOAT16;
+   case nir_type_float64:
+      return GLSL_TYPE_DOUBLE;
+
+   default: unreachable("Not a sized nir_alu_type");
+   }
+}
+
 nir_op nir_type_conversion_op(nir_alu_type src, nir_alu_type dst,
                               nir_rounding_mode rnd);
 
@@ -1426,6 +1474,8 @@ bool nir_alu_srcs_negative_equal(const nir_alu_instr *alu1,
                                  const nir_alu_instr *alu2,
                                  unsigned src1, unsigned src2);
 
+bool nir_alu_src_is_trivial_ssa(const nir_alu_instr *alu, unsigned srcn);
+
 typedef enum {
    nir_deref_type_var,
    nir_deref_type_array,
@@ -1441,8 +1491,16 @@ typedef struct {
    /** The type of this deref instruction */
    nir_deref_type deref_type;
 
-   /** The mode of the underlying variable */
-   nir_variable_mode mode;
+   /** Bitmask what modes the underlying variable might be
+    *
+    * For OpenCL-style generic pointers, we may not know exactly what mode it
+    * is at any given point in time in the compile process.  This bitfield
+    * contains the set of modes which it MAY be.
+    *
+    * Generally, this field should not be accessed directly.  Use one of the
+    * nir_deref_mode_ helpers instead.
+    */
+   nir_variable_mode modes;
 
    /** The dereferenced type of the resulting pointer value */
    const struct glsl_type *type;
@@ -1475,6 +1533,104 @@ typedef struct {
    /** Destination to store the resulting "pointer" */
    nir_dest dest;
 } nir_deref_instr;
+
+/** Returns true if deref might have one of the given modes
+ *
+ * For multi-mode derefs, this returns true if any of the possible modes for
+ * the deref to have any of the specified modes.  This function returning true
+ * does NOT mean that the deref definitely has one of those modes.  It simply
+ * means that, with the best information we have at the time, it might.
+ */
+static inline bool
+nir_deref_mode_may_be(const nir_deref_instr *deref, nir_variable_mode modes)
+{
+   assert(!(modes & ~nir_var_all));
+   assert(deref->modes != 0);
+   return deref->modes & modes;
+}
+
+/** Returns true if deref must have one of the given modes
+ *
+ * For multi-mode derefs, this returns true if NIR can prove that the given
+ * deref has one of the specified modes.  This function returning false does
+ * NOT mean that deref doesn't have one of the given mode.  It very well may
+ * have one of those modes, we just don't have enough information to prove
+ * that it does for sure.
+ */
+static inline bool
+nir_deref_mode_must_be(const nir_deref_instr *deref, nir_variable_mode modes)
+{
+   assert(!(modes & ~nir_var_all));
+   assert(deref->modes != 0);
+   return !(deref->modes & ~modes);
+}
+
+/** Returns true if deref has the given mode
+ *
+ * This returns true if the deref has exactly the mode specified.  If the
+ * deref may have that mode but may also have a different mode (i.e. modes has
+ * multiple bits set), this will assert-fail.
+ *
+ * If you're confused about which nir_deref_mode_ helper to use, use this one
+ * or nir_deref_mode_is_one_of below.
+ */
+static inline bool
+nir_deref_mode_is(const nir_deref_instr *deref, nir_variable_mode mode)
+{
+   assert(util_bitcount(mode) == 1 && (mode & nir_var_all));
+   assert(deref->modes != 0);
+
+   /* This is only for "simple" cases so, if modes might interact with this
+    * deref then the deref has to have a single mode.
+    */
+   if (nir_deref_mode_may_be(deref, mode)) {
+      assert(util_bitcount(deref->modes) == 1);
+      assert(deref->modes == mode);
+   }
+
+   return deref->modes == mode;
+}
+
+/** Returns true if deref has one of the given modes
+ *
+ * This returns true if the deref has exactly one possible mode and that mode
+ * is one of the modes specified.  If the deref may have one of those modes
+ * but may also have a different mode (i.e. modes has multiple bits set), this
+ * will assert-fail.
+ */
+static inline bool
+nir_deref_mode_is_one_of(const nir_deref_instr *deref, nir_variable_mode modes)
+{
+   /* This is only for "simple" cases so, if modes might interact with this
+    * deref then the deref has to have a single mode.
+    */
+   if (nir_deref_mode_may_be(deref, modes)) {
+      assert(util_bitcount(deref->modes) == 1);
+      assert(nir_deref_mode_must_be(deref, modes));
+   }
+
+   return nir_deref_mode_may_be(deref, modes);
+}
+
+/** Returns true if deref's possible modes lie in the given set of modes
+ *
+ * This returns true if the deref's modes lie in the given set of modes.  If
+ * the deref's modes overlap with the specified modes but aren't entirely
+ * contained in the specified set of modes, this will assert-fail.  In
+ * particular, if this is used in a generic pointers scenario, the specified
+ * modes has to contain all or none of the possible generic pointer modes.
+ *
+ * This is intended mostly for mass-lowering of derefs which might have
+ * generic pointers.
+ */
+static inline bool
+nir_deref_mode_is_in_set(const nir_deref_instr *deref, nir_variable_mode modes)
+{
+   if (nir_deref_mode_may_be(deref, modes))
+      assert(nir_deref_mode_must_be(deref, modes));
+
+   return nir_deref_mode_may_be(deref, modes);
+}
 
 static inline nir_deref_instr *nir_src_as_deref(nir_src src);
 
@@ -1590,6 +1746,7 @@ typedef enum {
    NIR_SCOPE_NONE,
    NIR_SCOPE_INVOCATION,
    NIR_SCOPE_SUBGROUP,
+   NIR_SCOPE_SHADER_CALL,
    NIR_SCOPE_WORKGROUP,
    NIR_SCOPE_QUEUE_FAMILY,
    NIR_SCOPE_DEVICE,
@@ -1618,198 +1775,13 @@ typedef enum {
 } nir_intrinsic_semantic_flag;
 
 /**
- * \name NIR intrinsics const-index flag
- *
- * Indicates the usage of a const_index slot.
- *
- * \sa nir_intrinsic_info::index_map
- */
-typedef enum {
-   /**
-    * Generally instructions that take a offset src argument, can encode
-    * a constant 'base' value which is added to the offset.
-    */
-   NIR_INTRINSIC_BASE = 1,
-
-   /**
-    * For store instructions, a writemask for the store.
-    */
-   NIR_INTRINSIC_WRMASK,
-
-   /**
-    * The stream-id for GS emit_vertex/end_primitive intrinsics.
-    */
-   NIR_INTRINSIC_STREAM_ID,
-
-   /**
-    * The clip-plane id for load_user_clip_plane intrinsic.
-    */
-   NIR_INTRINSIC_UCP_ID,
-
-   /**
-    * The start of NIR_INTRINSIC_RANGE.  Only present on instructions that
-    * don't have NIR_INTRINSIC_BASE.
-    *
-    * If the [range_base, range] is [0, ~0], then we don't know the possible
-    * range of the access.
-    */
-   NIR_INTRINSIC_RANGE_BASE,
-
-   /**
-    * The amount of data, starting from BASE or RANGE_BASE, that this
-    * instruction may access.  This is used to provide bounds if the offset is
-    * not constant.
-    */
-   NIR_INTRINSIC_RANGE,
-
-   /**
-    * The Vulkan descriptor set for vulkan_resource_index intrinsic.
-    */
-   NIR_INTRINSIC_DESC_SET,
-
-   /**
-    * The Vulkan descriptor set binding for vulkan_resource_index intrinsic.
-    */
-   NIR_INTRINSIC_BINDING,
-
-   /**
-    * Component offset.
-    */
-   NIR_INTRINSIC_COMPONENT,
-
-   /**
-    * Interpolation mode (only meaningful for FS inputs).
-    */
-   NIR_INTRINSIC_INTERP_MODE,
-
-   /**
-    * A binary nir_op to use when performing a reduction or scan operation
-    */
-   NIR_INTRINSIC_REDUCTION_OP,
-
-   /**
-    * Cluster size for reduction operations
-    */
-   NIR_INTRINSIC_CLUSTER_SIZE,
-
-   /**
-    * Parameter index for a load_param intrinsic
-    */
-   NIR_INTRINSIC_PARAM_IDX,
-
-   /**
-    * Image dimensionality for image intrinsics
-    *
-    * One of GLSL_SAMPLER_DIM_*
-    */
-   NIR_INTRINSIC_IMAGE_DIM,
-
-   /**
-    * Non-zero if we are accessing an array image
-    */
-   NIR_INTRINSIC_IMAGE_ARRAY,
-
-   /**
-    * Image format for image intrinsics
-    */
-   NIR_INTRINSIC_FORMAT,
-
-   /**
-    * Access qualifiers for image and memory access intrinsics
-    */
-   NIR_INTRINSIC_ACCESS,
-
-   /**
-    * Alignment for offsets and addresses
-    *
-    * These two parameters, specify an alignment in terms of a multiplier and
-    * an offset.  The multiplier is always a power of two.  The offset or
-    * address parameter X of the intrinsic is guaranteed to satisfy the
-    * following:
-    *
-    *                (X - align_offset) % align_mul == 0
-    *
-    * For constant offset values, align_mul will be NIR_ALIGN_MUL_MAX and the
-    * align_offset will be modulo that.
-    */
-   NIR_INTRINSIC_ALIGN_MUL,
-   NIR_INTRINSIC_ALIGN_OFFSET,
-
-   /**
-    * The Vulkan descriptor type for a vulkan_resource_[re]index intrinsic.
-    */
-   NIR_INTRINSIC_DESC_TYPE,
-
-   /**
-    * The nir_alu_type of input data to a store or conversion
-    */
-   NIR_INTRINSIC_SRC_TYPE,
-
-   /**
-    * The nir_alu_type of the data output from a load or conversion
-    */
-   NIR_INTRINSIC_DEST_TYPE,
-
-   /**
-    * The swizzle mask for the instructions
-    * SwizzleInvocationsAMD and SwizzleInvocationsMaskedAMD
-    */
-   NIR_INTRINSIC_SWIZZLE_MASK,
-
-   /* Separate source/dest access flags for copies */
-   NIR_INTRINSIC_SRC_ACCESS,
-   NIR_INTRINSIC_DST_ACCESS,
-
-   /* Driver location for nir_load_patch_location_ir3 */
-   NIR_INTRINSIC_DRIVER_LOCATION,
-
-   /**
-    * Mask of nir_memory_semantics, includes ordering and visibility.
-    */
-   NIR_INTRINSIC_MEMORY_SEMANTICS,
-
-   /**
-    * Mask of nir_variable_modes affected by the memory operation.
-    */
-   NIR_INTRINSIC_MEMORY_MODES,
-
-   /**
-    * Value of nir_scope.
-    */
-   NIR_INTRINSIC_MEMORY_SCOPE,
-
-   /**
-    * Value of nir_scope.
-    */
-   NIR_INTRINSIC_EXECUTION_SCOPE,
-
-   /**
-    * Value of nir_io_semantics.
-    */
-   NIR_INTRINSIC_IO_SEMANTICS,
-
-   /**
-    * The rounding mode of a conversion
-    */
-   NIR_INTRINSIC_ROUNDING_MODE,
-
-   /**
-    * Whether or not to saturate in conversions
-    */
-   NIR_INTRINSIC_SATURATE,
-
-   NIR_INTRINSIC_NUM_INDEX_FLAGS,
-
-} nir_intrinsic_index_flag;
-
-/**
  * Maximum valid value for a nir align_mul value (in intrinsics or derefs).
  *
  * Offsets can be signed, so this is the largest power of two in int32_t.
  */
 #define NIR_ALIGN_MUL_MAX 0x40000000
 
-typedef struct {
+typedef struct nir_io_semantics {
    unsigned location:7; /* gl_vert_attrib, gl_varying_slot, or gl_frag_result */
    unsigned num_slots:6;  /* max 32, may be pessimistic with const indexing */
    unsigned dual_source_blend_index:1;
@@ -1820,7 +1792,7 @@ typedef struct {
    unsigned _pad:7;
 } nir_io_semantics;
 
-#define NIR_INTRINSIC_MAX_INPUTS 5
+#define NIR_INTRINSIC_MAX_INPUTS 11
 
 typedef struct {
    const char *name;
@@ -1848,8 +1820,20 @@ typedef struct {
    /** bitfield of legal bit sizes */
    uint8_t dest_bit_sizes;
 
+   /** source which the destination bit size must match
+    *
+    * Some intrinsics, such as subgroup intrinsics, are data manipulation
+    * intrinsics and they have similar bit-size rules to ALU ops. This enables
+    * validation to validate a bit more and enables auto-generated builder code
+    * to properly determine destination bit sizes automatically.
+    */
+   int8_t bit_size_src;
+
    /** the number of constant indices used by the intrinsic */
    uint8_t num_indices;
+
+   /** list of indices */
+   uint8_t indices[NIR_INTRINSIC_MAX_CONST_INDEX];
 
    /** indicates the usage of intr->const_index[n] */
    uint8_t index_map[NIR_INTRINSIC_NUM_INDEX_FLAGS];
@@ -1912,60 +1896,7 @@ nir_intrinsic_copy_const_indices(nir_intrinsic_instr *dst, nir_intrinsic_instr *
    }
 }
 
-#define INTRINSIC_IDX_ACCESSORS(name, flag, type)                             \
-static inline type                                                            \
-nir_intrinsic_##name(const nir_intrinsic_instr *instr)                        \
-{                                                                             \
-   const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];   \
-   assert(info->index_map[NIR_INTRINSIC_##flag] > 0);                         \
-   return (type)instr->const_index[info->index_map[NIR_INTRINSIC_##flag] - 1]; \
-}                                                                             \
-static inline void                                                            \
-nir_intrinsic_set_##name(nir_intrinsic_instr *instr, type val)                \
-{                                                                             \
-   const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];   \
-   assert(info->index_map[NIR_INTRINSIC_##flag] > 0);                         \
-   instr->const_index[info->index_map[NIR_INTRINSIC_##flag] - 1] = val;       \
-}                                                                             \
-static inline bool                                                            \
-nir_intrinsic_has_##name(const nir_intrinsic_instr *instr)                    \
-{                                                                             \
-   const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];   \
-   return info->index_map[NIR_INTRINSIC_##flag] > 0;                          \
-}
-
-INTRINSIC_IDX_ACCESSORS(write_mask, WRMASK, unsigned)
-INTRINSIC_IDX_ACCESSORS(base, BASE, int)
-INTRINSIC_IDX_ACCESSORS(stream_id, STREAM_ID, unsigned)
-INTRINSIC_IDX_ACCESSORS(ucp_id, UCP_ID, unsigned)
-INTRINSIC_IDX_ACCESSORS(range, RANGE, unsigned)
-INTRINSIC_IDX_ACCESSORS(range_base, RANGE_BASE, unsigned)
-INTRINSIC_IDX_ACCESSORS(desc_set, DESC_SET, unsigned)
-INTRINSIC_IDX_ACCESSORS(binding, BINDING, unsigned)
-INTRINSIC_IDX_ACCESSORS(component, COMPONENT, unsigned)
-INTRINSIC_IDX_ACCESSORS(interp_mode, INTERP_MODE, unsigned)
-INTRINSIC_IDX_ACCESSORS(reduction_op, REDUCTION_OP, unsigned)
-INTRINSIC_IDX_ACCESSORS(cluster_size, CLUSTER_SIZE, unsigned)
-INTRINSIC_IDX_ACCESSORS(param_idx, PARAM_IDX, unsigned)
-INTRINSIC_IDX_ACCESSORS(image_dim, IMAGE_DIM, enum glsl_sampler_dim)
-INTRINSIC_IDX_ACCESSORS(image_array, IMAGE_ARRAY, bool)
-INTRINSIC_IDX_ACCESSORS(access, ACCESS, enum gl_access_qualifier)
-INTRINSIC_IDX_ACCESSORS(src_access, SRC_ACCESS, enum gl_access_qualifier)
-INTRINSIC_IDX_ACCESSORS(dst_access, DST_ACCESS, enum gl_access_qualifier)
-INTRINSIC_IDX_ACCESSORS(format, FORMAT, enum pipe_format)
-INTRINSIC_IDX_ACCESSORS(align_mul, ALIGN_MUL, unsigned)
-INTRINSIC_IDX_ACCESSORS(align_offset, ALIGN_OFFSET, unsigned)
-INTRINSIC_IDX_ACCESSORS(desc_type, DESC_TYPE, unsigned)
-INTRINSIC_IDX_ACCESSORS(src_type, SRC_TYPE, nir_alu_type)
-INTRINSIC_IDX_ACCESSORS(dest_type, DEST_TYPE, nir_alu_type)
-INTRINSIC_IDX_ACCESSORS(swizzle_mask, SWIZZLE_MASK, unsigned)
-INTRINSIC_IDX_ACCESSORS(driver_location, DRIVER_LOCATION, unsigned)
-INTRINSIC_IDX_ACCESSORS(memory_semantics, MEMORY_SEMANTICS, nir_memory_semantics)
-INTRINSIC_IDX_ACCESSORS(memory_modes, MEMORY_MODES, nir_variable_mode)
-INTRINSIC_IDX_ACCESSORS(memory_scope, MEMORY_SCOPE, nir_scope)
-INTRINSIC_IDX_ACCESSORS(execution_scope, EXECUTION_SCOPE, nir_scope)
-INTRINSIC_IDX_ACCESSORS(rounding_mode, ROUNDING_MODE, nir_rounding_mode)
-INTRINSIC_IDX_ACCESSORS(saturate, SATURATE, bool)
+#include "nir_intrinsics_indices.h"
 
 static inline void
 nir_intrinsic_set_align(nir_intrinsic_instr *intrin,
@@ -2000,30 +1931,6 @@ nir_intrinsic_has_align(const nir_intrinsic_instr *intrin)
           nir_intrinsic_has_align_offset(intrin);
 }
 
-static inline void
-nir_intrinsic_set_io_semantics(nir_intrinsic_instr *intrin,
-                               nir_io_semantics semantics)
-{
-   const nir_intrinsic_info *info = &nir_intrinsic_infos[intrin->intrinsic];
-   assert(info->index_map[NIR_INTRINSIC_IO_SEMANTICS] > 0);
-   STATIC_ASSERT(sizeof(nir_io_semantics) == sizeof(intrin->const_index[0]));
-   semantics._pad = 0; /* clear padding bits */
-   memcpy(&intrin->const_index[info->index_map[NIR_INTRINSIC_IO_SEMANTICS] - 1],
-          &semantics, sizeof(semantics));
-}
-
-static inline nir_io_semantics
-nir_intrinsic_io_semantics(const nir_intrinsic_instr *intrin)
-{
-   const nir_intrinsic_info *info = &nir_intrinsic_infos[intrin->intrinsic];
-   assert(info->index_map[NIR_INTRINSIC_IO_SEMANTICS] > 0);
-   nir_io_semantics semantics;
-   memcpy(&semantics,
-          &intrin->const_index[info->index_map[NIR_INTRINSIC_IO_SEMANTICS] - 1],
-          sizeof(semantics));
-   return semantics;
-}
-
 unsigned
 nir_image_intrinsic_coord_components(const nir_intrinsic_instr *instr);
 
@@ -2035,11 +1942,14 @@ void nir_rewrite_image_intrinsic(nir_intrinsic_instr *instr,
 static inline bool
 nir_intrinsic_can_reorder(nir_intrinsic_instr *instr)
 {
-   if (instr->intrinsic == nir_intrinsic_load_deref ||
-       instr->intrinsic == nir_intrinsic_load_ssbo ||
-       instr->intrinsic == nir_intrinsic_bindless_image_load ||
-       instr->intrinsic == nir_intrinsic_image_deref_load ||
-       instr->intrinsic == nir_intrinsic_image_load) {
+   if (instr->intrinsic == nir_intrinsic_load_deref) {
+      nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      return nir_deref_mode_is_in_set(deref, nir_var_read_only_modes) ||
+             (nir_intrinsic_access(instr) & ACCESS_CAN_REORDER);
+   } else if (instr->intrinsic == nir_intrinsic_load_ssbo ||
+              instr->intrinsic == nir_intrinsic_bindless_image_load ||
+              instr->intrinsic == nir_intrinsic_image_deref_load ||
+              instr->intrinsic == nir_intrinsic_image_load) {
       return nir_intrinsic_access(instr) & ACCESS_CAN_REORDER;
    } else {
       const nir_intrinsic_info *info =
@@ -2240,7 +2150,6 @@ nir_tex_instr_is_query(const nir_tex_instr *instr)
    case nir_texop_lod:
    case nir_texop_texture_samples:
    case nir_texop_query_levels:
-   case nir_texop_txf_ms_mcs:
       return true;
    case nir_texop_tex:
    case nir_texop_txb:
@@ -2249,6 +2158,7 @@ nir_tex_instr_is_query(const nir_tex_instr *instr)
    case nir_texop_txf:
    case nir_texop_txf_ms:
    case nir_texop_txf_ms_fb:
+   case nir_texop_txf_ms_mcs:
    case nir_texop_tg4:
       return false;
    default:
@@ -2290,6 +2200,7 @@ nir_tex_instr_src_type(const nir_tex_instr *instr, unsigned src)
       switch (instr->op) {
       case nir_texop_txs:
       case nir_texop_txf:
+      case nir_texop_txf_ms:
          return nir_type_int;
 
       default:
@@ -2394,6 +2305,23 @@ typedef enum {
     */
    nir_jump_return,
 
+   /** Immediately exit the current shader
+    *
+    * This instruction is roughly the equivalent of C's "exit()" in that it
+    * immediately terminates the current shader invocation.  From a CFG
+    * perspective, it looks like a jump to nir_function_impl::end_block but
+    * it actually jumps to the end block of the shader entrypoint.  A halt
+    * instruction in the shader entrypoint itself is semantically identical
+    * to a return.
+    *
+    * For shaders with built-in I/O, any outputs written prior to a halt
+    * instruction remain written and any outputs not written prior to the
+    * halt have undefined values.  It does NOT cause an implicit discard of
+    * written results.  If one wants discard results in a fragment shader,
+    * for instance, a discard or demote intrinsic is required.
+    */
+   nir_jump_halt,
+
    /** Break out of the inner-most loop
     *
     * This has the same semantics as C's "break" statement.
@@ -2452,6 +2380,18 @@ typedef struct {
 
    nir_dest dest;
 } nir_phi_instr;
+
+static inline nir_phi_src *
+nir_phi_get_src_from_block(nir_phi_instr *phi, struct nir_block *block)
+{
+   nir_foreach_phi_src(src, phi) {
+      if (src->pred == block)
+         return src;
+   }
+
+   assert(!"Block is not a predecessor of phi.");
+   return NULL;
+}
 
 typedef struct {
    struct exec_node node;
@@ -2601,6 +2541,21 @@ nir_ssa_scalar_chase_alu_src(nir_ssa_scalar s, unsigned alu_src_idx)
 
    return out;
 }
+
+
+typedef struct {
+   bool success;
+
+   nir_variable *var;
+   unsigned desc_set;
+   unsigned binding;
+   unsigned num_indices;
+   nir_src indices[4];
+   bool read_first_invocation;
+} nir_binding;
+
+nir_binding nir_chase_binding(nir_src rsrc);
+nir_variable *nir_get_binding_variable(struct nir_shader *shader, nir_binding binding);
 
 
 /*
@@ -4295,6 +4250,10 @@ bool
 nir_lower_vars_to_explicit_types(nir_shader *shader,
                                  nir_variable_mode modes,
                                  glsl_type_size_align_func type_info);
+void
+nir_gather_explicit_io_initializers(nir_shader *shader,
+                                    void *dst, size_t dst_size,
+                                    nir_variable_mode mode);
 
 bool nir_lower_mem_constant_vars(nir_shader *shader,
                                  glsl_type_size_align_func type_info);
@@ -4341,6 +4300,26 @@ typedef enum {
    nir_address_format_vec2_index_32bit_offset,
 
    /**
+    * An address format which represents generic pointers with a 62-bit
+    * pointer and a 2-bit enum in the top two bits.  The top two bits have
+    * the following meanings:
+    *
+    *  - 0x0: Global memory
+    *  - 0x1: Shared memory
+    *  - 0x2: Scratch memory
+    *  - 0x3: Global memory
+    *
+    * The redundancy between 0x0 and 0x3 is because of Intel sign-extension of
+    * addresses.  Valid global memory addresses may naturally have either 0 or
+    * ~0 as their high bits.
+    *
+    * Shared and scratch pointers are represented as 32-bit offsets with the
+    * top 32 bits only being used for the enum.  This allows us to avoid
+    * 64-bit address calculations in a bunch of cases.
+    */
+   nir_address_format_62bit_generic,
+
+   /**
     * An address format which is a simple 32-bit offset.
     */
    nir_address_format_32bit_offset,
@@ -4370,6 +4349,7 @@ nir_address_format_bit_size(nir_address_format addr_format)
    case nir_address_format_32bit_index_offset:        return 32;
    case nir_address_format_32bit_index_offset_pack64: return 64;
    case nir_address_format_vec2_index_32bit_offset:   return 32;
+   case nir_address_format_62bit_generic:             return 64;
    case nir_address_format_32bit_offset:              return 32;
    case nir_address_format_32bit_offset_as_64bit:     return 64;
    case nir_address_format_logical:                   return 32;
@@ -4387,6 +4367,7 @@ nir_address_format_num_components(nir_address_format addr_format)
    case nir_address_format_32bit_index_offset:        return 2;
    case nir_address_format_32bit_index_offset_pack64: return 1;
    case nir_address_format_vec2_index_32bit_offset:   return 3;
+   case nir_address_format_62bit_generic:             return 1;
    case nir_address_format_32bit_offset:              return 1;
    case nir_address_format_32bit_offset_as_64bit:     return 1;
    case nir_address_format_logical:                   return 1;
@@ -4432,6 +4413,7 @@ bool nir_lower_explicit_io(nir_shader *shader,
 
 nir_src *nir_get_io_offset_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_io_vertex_index_src(nir_intrinsic_instr *instr);
+nir_src *nir_get_shader_call_payload_src(nir_intrinsic_instr *call);
 
 bool nir_is_per_vertex_io(const nir_variable *var, gl_shader_stage stage);
 
@@ -4505,6 +4487,8 @@ bool nir_lower_system_values(nir_shader *shader);
 typedef struct nir_lower_compute_system_values_options {
    bool has_base_global_invocation_id:1;
    bool has_base_work_group_id:1;
+   bool shuffle_local_ids_for_quad_derivatives:1;
+   bool lower_local_invocation_index:1;
 } nir_lower_compute_system_values_options;
 
 bool nir_lower_compute_system_values(nir_shader *shader,
@@ -4585,10 +4569,16 @@ typedef struct nir_lower_tex_options {
 
    /* A swizzle for each texture.  Values 0-3 represent x, y, z, or w swizzles
     * while 4 and 5 represent 0 and 1 respectively.
+    *
+    * Indexed by texture-id.
     */
    uint8_t swizzles[32][4];
 
-   /* Can be used to scale sampled values in range required by the format. */
+   /* Can be used to scale sampled values in range required by the
+    * format.
+    *
+    * Indexed by texture-id.
+    */
    float scale_factors[32];
 
    /**
@@ -4674,6 +4664,11 @@ typedef struct nir_lower_tex_options {
     */
    bool lower_tg4_offsets;
 
+   /**
+    * To lower packed sampler return formats.
+    *
+    * Indexed by sampler-id.
+    */
    enum nir_lower_tex_packing lower_tex_packing[32];
 } nir_lower_tex_options;
 
@@ -4800,7 +4795,7 @@ typedef enum {
 
 bool nir_lower_gs_intrinsics(nir_shader *shader, nir_lower_gs_intrinsics_flags options);
 
-typedef unsigned (*nir_lower_bit_size_callback)(const nir_alu_instr *, void *);
+typedef unsigned (*nir_lower_bit_size_callback)(const nir_instr *, void *);
 
 bool nir_lower_bit_size(nir_shader *shader,
                         nir_lower_bit_size_callback callback,
@@ -4830,7 +4825,8 @@ typedef enum {
 bool nir_lower_interpolation(nir_shader *shader,
                              nir_lower_interpolation_options options);
 
-bool nir_lower_discard_to_demote(nir_shader *shader);
+bool nir_lower_discard_or_demote(nir_shader *shader,
+                                 bool force_correct_quad_ops_after_discard);
 
 bool nir_lower_memory_model(nir_shader *shader);
 
@@ -4843,6 +4839,8 @@ bool nir_lower_multiview(nir_shader *shader, uint32_t view_mask);
 bool nir_normalize_cubemap_coords(nir_shader *shader);
 
 void nir_live_ssa_defs_impl(nir_function_impl *impl);
+
+const BITSET_WORD *nir_get_live_ssa_defs(nir_cursor cursor, void *mem_ctx);
 
 void nir_loop_analyze_impl(nir_function_impl *impl,
                            nir_variable_mode indirect_mask);
@@ -4953,6 +4951,8 @@ bool nir_opt_shrink_vectors(nir_shader *shader);
 bool nir_opt_trivial_continues(nir_shader *shader);
 
 bool nir_opt_undef(nir_shader *shader);
+
+bool nir_lower_undef_to_zero(nir_shader *shader);
 
 bool nir_opt_uniform_atomics(nir_shader *shader);
 

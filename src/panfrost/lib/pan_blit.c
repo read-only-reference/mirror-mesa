@@ -52,8 +52,7 @@ panfrost_build_blit_shader(struct panfrost_device *dev,
 {
         bool is_colour = loc >= FRAG_RESULT_DATA0;
 
-        nir_builder _b;
-        nir_builder_init_simple_shader(&_b, NULL, MESA_SHADER_FRAGMENT, &midgard_nir_options);
+        nir_builder _b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &midgard_nir_options, "pan_blit");
         nir_builder *b = &_b;
         nir_shader *shader = b->shader;
 
@@ -156,7 +155,7 @@ panfrost_init_blit_shaders(struct panfrost_device *dev)
         unsigned total_size = (FRAG_RESULT_DATA7 * PAN_BLIT_NUM_TYPES) * (8 * 16) * 2;
 
         if (is_bifrost)
-                total_size *= 2;
+                total_size *= 4;
 
         dev->blit_shaders.bo = panfrost_bo_create(dev, total_size, PAN_BO_EXECUTE);
 
@@ -569,17 +568,13 @@ bifrost_load_emit_blend_rt(struct pan_pool *pool, void *out,
                         cfg.bifrost.equation.alpha.b = MALI_BLEND_OPERAND_B_SRC;
                         cfg.bifrost.equation.alpha.c = MALI_BLEND_OPERAND_C_ZERO;
                         cfg.bifrost.equation.color_mask = 0xf;
-                        cfg.bifrost.internal.fixed_function.num_comps = format_desc->nr_channels;
-                        cfg.bifrost.internal.fixed_function.conversion.memory_format.format =
-                                panfrost_format_to_bifrost_blend(format_desc, true);
+                        cfg.bifrost.internal.fixed_function.num_comps = 4;
+                        cfg.bifrost.internal.fixed_function.conversion.memory_format =
+                                panfrost_format_to_bifrost_blend(pool->dev, format_desc, true);
                         cfg.bifrost.internal.fixed_function.conversion.register_format =
                                 blit_type_to_reg_fmt(T);
 
                         cfg.bifrost.internal.fixed_function.rt = rt;
-                        if (pool->dev->quirks & HAS_SWIZZLES) {
-                                cfg.bifrost.internal.fixed_function.conversion.memory_format.swizzle =
-                                        panfrost_get_default_swizzle(4);
-                        }
                 }
         }
 }
@@ -597,7 +592,17 @@ bifrost_load_emit_rsd(struct pan_pool *pool, struct MALI_DRAW *draw,
 
         pan_pack(t.cpu, RENDERER_STATE, cfg) {
                 panfrost_load_prepare_rsd(pool, &cfg, image, loc);
-                cfg.properties.bifrost.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+                if (loc >= FRAG_RESULT_DATA0) {
+                        cfg.properties.bifrost.zs_update_operation =
+                                MALI_PIXEL_KILL_STRONG_EARLY;
+                        cfg.properties.bifrost.pixel_kill_operation =
+                                MALI_PIXEL_KILL_FORCE_EARLY;
+                } else {
+                        cfg.properties.bifrost.zs_update_operation =
+                                MALI_PIXEL_KILL_FORCE_LATE;
+                        cfg.properties.bifrost.pixel_kill_operation =
+                                MALI_PIXEL_KILL_FORCE_LATE;
+                }
                 cfg.properties.bifrost.allow_forward_pixel_to_kill = true;
                 cfg.preload.fragment.coverage = true;
         }

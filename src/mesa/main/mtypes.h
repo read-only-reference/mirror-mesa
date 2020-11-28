@@ -1631,9 +1631,9 @@ struct gl_array_attrib
    /*@{*/
    GLboolean PrimitiveRestart;
    GLboolean PrimitiveRestartFixedIndex;
-   GLboolean _PrimitiveRestart;
+   GLboolean _PrimitiveRestart[3]; /**< Enable indexed by index_size_shift. */
    GLuint RestartIndex;
-   GLuint _RestartIndex[4]; /**< Restart indices for index_size - 1. */
+   GLuint _RestartIndex[3]; /**< Restart indices indexed by index_size_shift. */
    /*@}*/
 
    /* GL_ARB_vertex_buffer_object */
@@ -3871,11 +3871,6 @@ struct gl_constants
    GLboolean AllowHigherCompatVersion;
 
    /**
-    * Allow layout qualifiers on function parameters.
-    */
-   GLboolean AllowLayoutQualifiersOnFunctionParameters;
-
-   /**
     * Allow extra tokens at end of preprocessor directives. The CTS now tests
     * to make sure these are not allowed. However, previously drivers would
     * allow them to exist and just issue a warning so some old applications
@@ -4450,7 +4445,6 @@ struct gl_extensions
    GLboolean KHR_texture_compression_astc_sliced_3d;
    GLboolean MESA_framebuffer_flip_y;
    GLboolean MESA_tile_raster_order;
-   GLboolean MESA_pack_invert;
    GLboolean EXT_shader_framebuffer_fetch;
    GLboolean EXT_shader_framebuffer_fetch_non_coherent;
    GLboolean MESA_shader_integer_functions;
@@ -4931,6 +4925,11 @@ struct gl_context
 {
    /** State possibly shared with other contexts in the address space */
    struct gl_shared_state *Shared;
+
+   /** Whether Shared->BufferObjects has already been locked for this context. */
+   bool BufferObjectsLocked;
+   /** Whether Shared->TexMutex has already been locked for this context. */
+   bool TexturesLocked;
 
    /** \name API function pointer tables */
    /*@{*/

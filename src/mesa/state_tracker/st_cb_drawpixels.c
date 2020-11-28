@@ -148,11 +148,13 @@ make_drawpix_z_stencil_program_nir(struct st_context *st,
                                    bool write_depth,
                                    bool write_stencil)
 {
-   struct nir_builder b;
    const nir_shader_compiler_options *options =
       st_get_nir_compiler_options(st, MESA_SHADER_FRAGMENT);
 
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_FRAGMENT, options);
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, options,
+                                                  "drawpixels %s%s",
+                                                  write_depth ? "Z" : "",
+                                                  write_stencil ? "S" : "");
 
    nir_variable *texcoord =
       nir_variable_create(b.shader, nir_var_shader_in, glsl_vec_type(2),
@@ -191,22 +193,18 @@ make_drawpix_z_stencil_program_nir(struct st_context *st,
       nir_store_var(&b, out, stencil, 0x1);
    }
 
-   char name[14];
-   snprintf(name, 14, "drawpixels %s%s",
-            write_depth ? "Z" : "", write_stencil ? "S" : "");
-
-   return st_nir_finish_builtin_shader(st, b.shader, name);
+   return st_nir_finish_builtin_shader(st, b.shader);
 }
 
 static void *
 make_drawpix_zs_to_color_program_nir(struct st_context *st,
                                    bool rgba)
 {
-   struct nir_builder b;
    const nir_shader_compiler_options *options =
       st_get_nir_compiler_options(st, MESA_SHADER_FRAGMENT);
 
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_FRAGMENT, options);
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, options,
+                                                  "copypixels ZStoC");
 
    nir_variable *texcoord =
       nir_variable_create(b.shader, nir_var_shader_in, glsl_vec_type(2),
@@ -251,10 +249,7 @@ make_drawpix_zs_to_color_program_nir(struct st_context *st,
       nir_store_var(&b, color_out, swizzled_ds, 0xf);
    }
 
-   char name[17];
-   snprintf(name, 17, "copypixels ZStoC");
-
-   return st_nir_finish_builtin_shader(st, b.shader, name);
+   return st_nir_finish_builtin_shader(st, b.shader);
 }
 
 

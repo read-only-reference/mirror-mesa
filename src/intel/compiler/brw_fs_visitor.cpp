@@ -844,9 +844,6 @@ fs_visitor::emit_cs_terminate()
 {
    assert(devinfo->gen >= 7);
 
-   /* We are getting the thread ID from the compute shader header */
-   assert(stage == MESA_SHADER_COMPUTE || stage == MESA_SHADER_KERNEL);
-
    /* We can't directly send from g0, since sends with EOT have to use
     * g112-127. So, copy it to a virtual register, The register allocator will
     * make sure it uses the appropriate register range.
@@ -870,7 +867,6 @@ fs_visitor::emit_barrier()
    case 8:
       barrier_id_mask = 0x0f000000u; break;
    case 9:
-   case 10:
       barrier_id_mask = 0x8f000000u; break;
    case 11:
    case 12:

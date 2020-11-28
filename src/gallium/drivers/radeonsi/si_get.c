@@ -163,6 +163,8 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_NO_CLIP_ON_COPY_TEX:
    case PIPE_CAP_SHADER_ATOMIC_INT64:
    case PIPE_CAP_FRONTEND_NOOP:
+   case PIPE_CAP_DEMOTE_TO_HELPER_INVOCATION:
+   case PIPE_CAP_MULTI_DRAW:
       return 1;
 
    case PIPE_CAP_GLSL_ZERO_INIT:
@@ -182,6 +184,9 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
       return sscreen->info.has_gpu_reset_status_query;
+
+   case PIPE_CAP_DEVICE_PROTECTED_CONTENT:
+      return sscreen->info.has_tmz_support;
 
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return sscreen->info.has_2d_tiling;
@@ -580,6 +585,10 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
          if (sscreen->info.family < CHIP_RAVEN)
             return false;
          return true;
+      case PIPE_VIDEO_FORMAT_AV1:
+         if (sscreen->info.family < CHIP_SIENNA_CICHLID)
+            return false;
+         return true;
       default:
          return false;
       }
@@ -589,6 +598,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
       switch (codec) {
       case PIPE_VIDEO_FORMAT_HEVC:
       case PIPE_VIDEO_FORMAT_VP9:
+      case PIPE_VIDEO_FORMAT_AV1:
          return (sscreen->info.family < CHIP_RENOIR)
                    ? ((sscreen->info.family < CHIP_TONGA) ? 2048 : 4096)
                    : 8192;
@@ -599,6 +609,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
       switch (codec) {
       case PIPE_VIDEO_FORMAT_HEVC:
       case PIPE_VIDEO_FORMAT_VP9:
+      case PIPE_VIDEO_FORMAT_AV1:
          return (sscreen->info.family < CHIP_RENOIR)
                    ? ((sscreen->info.family < CHIP_TONGA) ? 1152 : 4096)
                    : 4352;
@@ -617,11 +628,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
    case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED: {
       enum pipe_video_format format = u_reduce_video_profile(profile);
 
-      if (format == PIPE_VIDEO_FORMAT_HEVC)
-         return false; // The firmware doesn't support interlaced HEVC.
-      else if (format == PIPE_VIDEO_FORMAT_JPEG)
-         return false;
-      else if (format == PIPE_VIDEO_FORMAT_VP9)
+      if (format >= PIPE_VIDEO_FORMAT_HEVC)
          return false;
       return true;
    }

@@ -310,8 +310,8 @@ v3dv_CreateImage(VkDevice _device,
    const struct v3dv_format *format = v3dv_get_format(pCreateInfo->format);
    v3dv_assert(format != NULL && format->supported);
 
-   image = vk_zalloc2(&device->alloc, pAllocator, sizeof(*image), 8,
-                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   image = vk_object_zalloc(&device->vk, pAllocator, sizeof(*image),
+                            VK_OBJECT_TYPE_IMAGE);
    if (!image)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -327,7 +327,7 @@ v3dv_CreateImage(VkDevice _device,
    image->array_size = pCreateInfo->arrayLayers;
    image->samples = pCreateInfo->samples;
    image->usage = pCreateInfo->usage;
-   image->create_flags = pCreateInfo->flags;
+   image->flags = pCreateInfo->flags;
 
    image->drm_format_mod = modifier;
    image->tiling = tiling;
@@ -400,7 +400,11 @@ v3dv_DestroyImage(VkDevice _device,
 {
    V3DV_FROM_HANDLE(v3dv_device, device, _device);
    V3DV_FROM_HANDLE(v3dv_image, image, _image);
-   vk_free2(&device->alloc, pAllocator, image);
+
+   if (image == NULL)
+      return;
+
+   vk_object_free(&device->vk, pAllocator, image);
 }
 
 VkImageViewType
@@ -576,8 +580,8 @@ v3dv_CreateImageView(VkDevice _device,
    V3DV_FROM_HANDLE(v3dv_image, image, pCreateInfo->image);
    struct v3dv_image_view *iview;
 
-   iview = vk_zalloc2(&device->alloc, pAllocator, sizeof(*iview), 8,
-                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   iview = vk_object_zalloc(&device->vk, pAllocator, sizeof(*iview),
+                            VK_OBJECT_TYPE_IMAGE_VIEW);
    if (iview == NULL)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -596,6 +600,13 @@ v3dv_CreateImageView(VkDevice _device,
    case VK_IMAGE_TYPE_3D:
       assert(range->baseArrayLayer + v3dv_layer_count(image, range) - 1
              <= u_minify(image->extent.depth, range->baseMipLevel));
+      /* VK_KHR_maintenance1 */
+      assert(pCreateInfo->viewType != VK_IMAGE_VIEW_TYPE_2D ||
+             ((image->flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) &&
+              range->levelCount == 1 && range->layerCount == 1));
+      assert(pCreateInfo->viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
+             ((image->flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) &&
+              range->levelCount == 1));
       break;
    default:
       unreachable("bad VkImageType");
@@ -687,7 +698,10 @@ v3dv_DestroyImageView(VkDevice _device,
    V3DV_FROM_HANDLE(v3dv_device, device, _device);
    V3DV_FROM_HANDLE(v3dv_image_view, image_view, imageView);
 
-   vk_free2(&device->alloc, pAllocator, image_view);
+   if (image_view == NULL)
+      return;
+
+   vk_object_free(&device->vk, pAllocator, image_view);
 }
 
 static void
@@ -710,7 +724,7 @@ pack_texture_shader_state_from_buffer_view(struct v3dv_device *device,
        * we are providing a 28 bit field for size, but split on the usual
        * 14bit height/width).
        */
-      tex.image_width = buffer_view->size;
+      tex.image_width = buffer_view->num_elements;
       tex.image_height = tex.image_width >> 14;
       tex.image_width &= (1 << 14) - 1;
       tex.image_height &= (1 << 14) - 1;
@@ -744,8 +758,8 @@ v3dv_CreateBufferView(VkDevice _device,
       v3dv_buffer_from_handle(pCreateInfo->buffer);
 
    struct v3dv_buffer_view *view =
-      vk_alloc2(&device->alloc, pAllocator, sizeof(*view), 8,
-                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+      vk_object_zalloc(&device->vk, pAllocator, sizeof(*view),
+                       VK_OBJECT_TYPE_BUFFER_VIEW);
    if (!view)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
@@ -786,5 +800,8 @@ v3dv_DestroyBufferView(VkDevice _device,
    V3DV_FROM_HANDLE(v3dv_device, device, _device);
    V3DV_FROM_HANDLE(v3dv_buffer_view, buffer_view, bufferView);
 
-   vk_free2(&device->alloc, pAllocator, buffer_view);
+   if (buffer_view == NULL)
+      return;
+
+   vk_object_free(&device->vk, pAllocator, buffer_view);
 }

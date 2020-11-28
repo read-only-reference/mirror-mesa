@@ -811,44 +811,28 @@ nir_visitor::visit(ir_discard *ir)
     * discards will be immediately followed by a return.
     */
 
-   nir_intrinsic_instr *discard;
-   if (ir->condition) {
-      discard = nir_intrinsic_instr_create(this->shader,
-                                           nir_intrinsic_discard_if);
-      discard->src[0] =
-         nir_src_for_ssa(evaluate_rvalue(ir->condition));
-   } else {
-      discard = nir_intrinsic_instr_create(this->shader, nir_intrinsic_discard);
-   }
-
-   nir_builder_instr_insert(&b, &discard->instr);
+   if (ir->condition)
+      nir_discard_if(&b, evaluate_rvalue(ir->condition));
+   else
+      nir_discard(&b);
 }
 
 void
 nir_visitor::visit(ir_demote *ir)
 {
-   nir_intrinsic_instr *demote =
-      nir_intrinsic_instr_create(this->shader, nir_intrinsic_demote);
-
-   nir_builder_instr_insert(&b, &demote->instr);
+   nir_demote(&b);
 }
 
 void
 nir_visitor::visit(ir_emit_vertex *ir)
 {
-   nir_intrinsic_instr *instr =
-      nir_intrinsic_instr_create(this->shader, nir_intrinsic_emit_vertex);
-   nir_intrinsic_set_stream_id(instr, ir->stream_id());
-   nir_builder_instr_insert(&b, &instr->instr);
+   nir_emit_vertex(&b, (unsigned)ir->stream_id());
 }
 
 void
 nir_visitor::visit(ir_end_primitive *ir)
 {
-   nir_intrinsic_instr *instr =
-      nir_intrinsic_instr_create(this->shader, nir_intrinsic_end_primitive);
-   nir_intrinsic_set_stream_id(instr, ir->stream_id());
-   nir_builder_instr_insert(&b, &instr->instr);
+   nir_end_primitive(&b, (unsigned)ir->stream_id());
 }
 
 void
@@ -1830,7 +1814,7 @@ nir_visitor::visit(ir_expression *ir)
       deref->accept(this);
 
       nir_intrinsic_op op;
-      if (this->deref->mode == nir_var_shader_in) {
+      if (nir_deref_mode_is(this->deref, nir_var_shader_in)) {
          switch (ir->operation) {
          case ir_unop_interpolate_at_centroid:
             op = nir_intrinsic_interp_deref_at_centroid;
@@ -1851,7 +1835,7 @@ nir_visitor::visit(ir_expression *ir)
           * sense, we'll just turn it into a load which will probably
           * eventually end up as an SSA definition.
           */
-         assert(this->deref->mode == nir_var_shader_temp);
+         assert(nir_deref_mode_is(this->deref, nir_var_shader_temp));
          op = nir_intrinsic_load_deref;
       }
 
@@ -2302,7 +2286,7 @@ nir_visitor::visit(ir_expression *ir)
       result = nir_channel(&b, srcs[0], 0);
       for (unsigned i = 1; i < ir->operands[0]->type->vector_elements; i++) {
          nir_ssa_def *swizzled = nir_channel(&b, srcs[0], i);
-         result = nir_bcsel(&b, nir_ieq(&b, srcs[1], nir_imm_int(&b, i)),
+         result = nir_bcsel(&b, nir_ieq_imm(&b, srcs[1], i),
                             swizzled, result);
       }
       break;
@@ -2468,7 +2452,7 @@ nir_visitor::visit(ir_texture *ir)
    nir_deref_instr *sampler_deref = evaluate_deref(ir->sampler);
 
    /* check for bindless handles */
-   if (sampler_deref->mode != nir_var_uniform ||
+   if (!nir_deref_mode_is(sampler_deref, nir_var_uniform) ||
        nir_deref_instr_get_variable(sampler_deref)->data.bindless) {
       nir_ssa_def *load = nir_load_deref(&b, sampler_deref);
       instr->src[0].src = nir_src_for_ssa(load);
@@ -2648,21 +2632,12 @@ nir_visitor::visit(ir_dereference_array *ir)
 void
 nir_visitor::visit(ir_barrier *)
 {
-   if (shader->info.stage == MESA_SHADER_COMPUTE) {
-      nir_intrinsic_instr *shared_barrier =
-         nir_intrinsic_instr_create(this->shader,
-                                    nir_intrinsic_memory_barrier_shared);
-      nir_builder_instr_insert(&b, &shared_barrier->instr);
-   } else if (shader->info.stage == MESA_SHADER_TESS_CTRL) {
-      nir_intrinsic_instr *patch_barrier =
-         nir_intrinsic_instr_create(this->shader,
-                                    nir_intrinsic_memory_barrier_tcs_patch);
-      nir_builder_instr_insert(&b, &patch_barrier->instr);
-   }
+   if (shader->info.stage == MESA_SHADER_COMPUTE)
+      nir_memory_barrier_shared(&b);
+   else if (shader->info.stage == MESA_SHADER_TESS_CTRL)
+      nir_memory_barrier_tcs_patch(&b);
 
-   nir_intrinsic_instr *instr =
-      nir_intrinsic_instr_create(this->shader, nir_intrinsic_control_barrier);
-   nir_builder_instr_insert(&b, &instr->instr);
+   nir_control_barrier(&b);
 }
 
 nir_shader *
