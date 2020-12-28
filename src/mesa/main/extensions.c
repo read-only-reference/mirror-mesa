@@ -116,7 +116,7 @@ _mesa_override_extensions(struct gl_context *ctx)
 
 /**
  * Enable all extensions suitable for a software-only renderer.
- * This is a convenience function used by the XMesa, OSMesa, GGI drivers, etc.
+ * This is a convenience function used by the mesa/swrast drivers.
  */
 void
 _mesa_enable_sw_extensions(struct gl_context *ctx)
@@ -180,7 +180,6 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    ctx->Extensions.EXT_vertex_array_bgra = GL_TRUE;
    ctx->Extensions.MESA_ycbcr_texture = GL_TRUE;
    ctx->Extensions.NV_conditional_render = GL_TRUE;
-   ctx->Extensions.NV_point_sprite = GL_TRUE;
    ctx->Extensions.NV_texture_env_combine4 = GL_TRUE;
    ctx->Extensions.NV_texture_rectangle = GL_TRUE;
    ctx->Extensions.EXT_gpu_program_parameters = GL_TRUE;

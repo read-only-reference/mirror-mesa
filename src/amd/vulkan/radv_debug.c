@@ -379,8 +379,9 @@ radv_dump_annotated_shaders(struct radv_pipeline *pipeline,
 		"\n\n", num_waves);
 
 	/* Dump annotated active graphics shaders. */
-	while (active_stages) {
-		int stage = u_bit_scan(&active_stages);
+	unsigned stages = active_stages;
+	while (stages) {
+		int stage = u_bit_scan(&stages);
 
 		radv_dump_annotated_shader(pipeline->shaders[stage],
 					   stage, waves, num_waves, f);
@@ -447,8 +448,9 @@ radv_dump_shaders(struct radv_pipeline *pipeline,
 		  VkShaderStageFlagBits active_stages, FILE *f)
 {
 	/* Dump active graphics shaders. */
-	while (active_stages) {
-		int stage = u_bit_scan(&active_stages);
+	unsigned stages = active_stages;
+	while (stages) {
+		int stage = u_bit_scan(&stages);
 
 		radv_dump_shader(pipeline, pipeline->shaders[stage], stage, f);
 	}
@@ -669,7 +671,7 @@ radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_cmdbuf *cs)
 	char buf_time[128];
 
 	time(&raw_time);
-	timep = localtime_r(&raw_time, &result);
+	timep = os_localtime(&raw_time, &result);
 	strftime(buf_time, sizeof(buf_time), "%Y.%m.%d_%H.%M.%S", timep);
 
 	snprintf(dump_dir, sizeof(dump_dir), "%s/"RADV_DUMP_DIR"_%d_%s",
@@ -729,6 +731,14 @@ radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_cmdbuf *cs)
 	f = fopen(dump_path, "w+");
 	if (f) {
 		device->ws->dump_bo_ranges(device->ws, f);
+		fclose(f);
+	}
+
+	/* Dump BO log. */
+	snprintf(dump_path, sizeof(dump_path), "%s/%s", dump_dir, "bo_history.log");
+	f = fopen(dump_path, "w+");
+	if (f) {
+		device->ws->dump_bo_log(device->ws, f);
 		fclose(f);
 	}
 
@@ -860,10 +870,14 @@ radv_get_faulty_shader(struct radv_device *device, uint64_t faulty_pc)
 	mtx_lock(&device->shader_slab_mutex);
 
 	list_for_each_entry(struct radv_shader_slab, slab, &device->shader_slabs, slabs) {
+#ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wshadow"
+#endif
 		list_for_each_entry(struct radv_shader_variant, s, &slab->shaders, slab_list) {
+#ifdef __GNUC__
 #pragma GCC diagnostic pop
+#endif
 			uint64_t offset = align_u64(s->bo_offset + s->code_size, 256);
 			uint64_t va = radv_buffer_get_va(s->bo);
 

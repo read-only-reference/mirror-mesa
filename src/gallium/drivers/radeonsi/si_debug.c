@@ -424,20 +424,20 @@ static void si_log_chunk_type_cs_print(void *data, FILE *f)
          ac_parse_ib(f, scs->gfx.ib + chunk->gfx_begin, chunk->gfx_end - chunk->gfx_begin,
                      &last_trace_id, map ? 1 : 0, "IB", ctx->chip_class, NULL, NULL);
       } else {
-         si_parse_current_ib(f, ctx->gfx_cs, chunk->gfx_begin, chunk->gfx_end, &last_trace_id,
+         si_parse_current_ib(f, &ctx->gfx_cs, chunk->gfx_begin, chunk->gfx_end, &last_trace_id,
                              map ? 1 : 0, "IB", ctx->chip_class);
       }
    }
 
    if (chunk->compute_end != chunk->compute_begin) {
-      assert(ctx->prim_discard_compute_cs);
+      assert(ctx->prim_discard_compute_cs.priv);
 
       if (scs->flushed) {
          ac_parse_ib(f, scs->compute.ib + chunk->compute_begin,
                      chunk->compute_end - chunk->compute_begin, &last_compute_trace_id, map ? 1 : 0,
                      "Compute IB", ctx->chip_class, NULL, NULL);
       } else {
-         si_parse_current_ib(f, ctx->prim_discard_compute_cs, chunk->compute_begin,
+         si_parse_current_ib(f, &ctx->prim_discard_compute_cs, chunk->compute_begin,
                              chunk->compute_end, &last_compute_trace_id, map ? 1 : 0, "Compute IB",
                              ctx->chip_class);
       }
@@ -461,12 +461,12 @@ static void si_log_cs(struct si_context *ctx, struct u_log_context *log, bool du
    assert(ctx->current_saved_cs);
 
    struct si_saved_cs *scs = ctx->current_saved_cs;
-   unsigned gfx_cur = ctx->gfx_cs->prev_dw + ctx->gfx_cs->current.cdw;
+   unsigned gfx_cur = ctx->gfx_cs.prev_dw + ctx->gfx_cs.current.cdw;
    unsigned compute_cur = 0;
 
-   if (ctx->prim_discard_compute_cs)
+   if (ctx->prim_discard_compute_cs.priv)
       compute_cur =
-         ctx->prim_discard_compute_cs->prev_dw + ctx->prim_discard_compute_cs->current.cdw;
+         ctx->prim_discard_compute_cs.prev_dw + ctx->prim_discard_compute_cs.current.cdw;
 
    if (!dump_bo_list && gfx_cur == scs->gfx_last_dw && compute_cur == scs->compute_last_dw)
       return;
@@ -1110,25 +1110,6 @@ void si_log_compute_state(struct si_context *sctx, struct u_log_context *log)
    si_dump_compute_descriptors(sctx, log);
 }
 
-static void si_dump_dma(struct si_context *sctx, struct radeon_saved_cs *saved, FILE *f)
-{
-   static const char ib_name[] = "sDMA IB";
-   unsigned i;
-
-   si_dump_bo_list(sctx, saved, f);
-
-   fprintf(f, "------------------ %s begin ------------------\n", ib_name);
-
-   for (i = 0; i < saved->num_dw; ++i) {
-      fprintf(f, " %08x\n", saved->ib[i]);
-   }
-
-   fprintf(f, "------------------- %s end -------------------\n", ib_name);
-   fprintf(f, "\n");
-
-   fprintf(f, "SDMA Dump Done.\n");
-}
-
 void si_check_vm_faults(struct si_context *sctx, struct radeon_saved_cs *saved, enum ring_type ring)
 {
    struct pipe_screen *screen = sctx->b.screen;
@@ -1167,9 +1148,6 @@ void si_check_vm_faults(struct si_context *sctx, struct radeon_saved_cs *saved, 
       u_log_context_destroy(&log);
       break;
    }
-   case RING_DMA:
-      si_dump_dma(sctx, saved, f);
-      break;
 
    default:
       break;

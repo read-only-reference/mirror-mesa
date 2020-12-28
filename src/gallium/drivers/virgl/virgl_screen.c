@@ -745,6 +745,7 @@ virgl_is_format_supported( struct pipe_screen *screen,
 }
 
 static void virgl_flush_frontbuffer(struct pipe_screen *screen,
+                                    struct pipe_context *ctx,
                                       struct pipe_resource *res,
                                       unsigned level, unsigned layer,
                                     void *winsys_drawable_handle, struct pipe_box *sub_box)
@@ -873,7 +874,9 @@ virgl_create_screen(struct virgl_winsys *vws, const struct pipe_screen_config *c
    fixup_formats(&screen->caps.caps, &screen->caps.caps.v2.scanout);
 
    union virgl_caps *caps = &screen->caps.caps;
-   screen->tweak_gles_emulate_bgra &= !virgl_format_check_bitmask(PIPE_FORMAT_B8G8R8A8_SRGB, caps->v1.render.bitmask, false);
+   bool may_emulate_bgra = (caps->v2.capability_bits & VIRGL_CAP_APP_TWEAK_SUPPORT);
+   screen->tweak_gles_emulate_bgra &= !virgl_format_check_bitmask(
+       PIPE_FORMAT_B8G8R8A8_SRGB, caps->v1.render.bitmask, may_emulate_bgra);
    screen->refcnt = 1;
 
    slab_create_parent(&screen->transfer_pool, sizeof(struct virgl_transfer), 16);

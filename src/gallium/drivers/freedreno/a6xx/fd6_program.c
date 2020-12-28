@@ -383,6 +383,7 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 	psize_regid = ir3_find_output_regid(vs, VARYING_SLOT_PSIZ);
 	clip0_regid = ir3_find_output_regid(vs, VARYING_SLOT_CLIP_DIST0);
 	clip1_regid = ir3_find_output_regid(vs, VARYING_SLOT_CLIP_DIST1);
+	layer_regid = ir3_find_output_regid(vs, VARYING_SLOT_LAYER);
 	vertex_regid = ir3_find_sysval_regid(vs, SYSTEM_VALUE_VERTEX_ID);
 	instance_regid = ir3_find_sysval_regid(vs, SYSTEM_VALUE_INSTANCE_ID);
 
@@ -416,7 +417,6 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 	} else {
 		gs_header_regid = regid(63, 0);
 		primitive_regid = regid(63, 0);
-		layer_regid = regid(63, 0);
 	}
 
 	if (fs->color0_mrt) {
@@ -581,7 +581,7 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 		setup_stream_out(state, last_shader, &l);
 	}
 
-	debug_assert(l.cnt < 32);
+	debug_assert(l.cnt <= 32);
 	if (gs)
 		OUT_PKT4(ring, REG_A6XX_SP_GS_OUT_REG(0), DIV_ROUND_UP(l.cnt, 2));
 	else if (ds)
@@ -654,8 +654,24 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 		OUT_PKT4(ring, REG_A6XX_PC_HS_INPUT_SIZE, 1);
 		OUT_RING(ring, hs_info->tess.tcs_vertices_out * vs->output_size / 4);
 
-		OUT_PKT4(ring, REG_A6XX_SP_HS_UNKNOWN_A831, 1);
-		OUT_RING(ring, vs->output_size);
+		const uint32_t wavesize = 64;
+		const uint32_t max_wave_input_size = 64;
+		const uint32_t patch_control_points = hs_info->tess.tcs_vertices_out;
+
+		/* note: if HS is really just the VS extended, then this
+		 * should be by MAX2(patch_control_points, hs_info->tess.tcs_vertices_out)
+		 * however that doesn't match the blob, and fails some dEQP tests.
+		 */
+		uint32_t prims_per_wave = wavesize / hs_info->tess.tcs_vertices_out;
+		uint32_t max_prims_per_wave =
+			max_wave_input_size * wavesize / (vs->output_size * patch_control_points);
+		prims_per_wave = MIN2(prims_per_wave, max_prims_per_wave);
+
+		uint32_t total_size = vs->output_size * patch_control_points * prims_per_wave;
+		uint32_t wave_input_size = DIV_ROUND_UP(total_size, wavesize);
+
+		OUT_PKT4(ring, REG_A6XX_SP_HS_WAVE_INPUT_SIZE, 1);
+		OUT_RING(ring, wave_input_size);
 
 		shader_info *ds_info = &ds->shader->nir->info;
 		OUT_PKT4(ring, REG_A6XX_PC_TESS_CNTL, 1);
@@ -706,7 +722,7 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 				A6XX_PC_DS_OUT_CNTL_CLIP_MASK(clip_cull_mask));
 
 	} else {
-		OUT_PKT4(ring, REG_A6XX_SP_HS_UNKNOWN_A831, 1);
+		OUT_PKT4(ring, REG_A6XX_SP_HS_WAVE_INPUT_SIZE, 1);
 		OUT_RING(ring, 0);
 	}
 
@@ -724,6 +740,7 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 	OUT_PKT4(ring, REG_A6XX_PC_VS_OUT_CNTL, 1);
 	OUT_RING(ring, A6XX_PC_VS_OUT_CNTL_STRIDE_IN_VPC(l.max_loc) |
 			CONDREG(psize_regid, A6XX_PC_VS_OUT_CNTL_PSIZE) |
+			CONDREG(layer_regid, A6XX_PC_VS_OUT_CNTL_LAYER) |
 			A6XX_PC_VS_OUT_CNTL_CLIP_MASK(clip_cull_mask));
 
 	OUT_PKT4(ring, REG_A6XX_PC_PRIMITIVE_CNTL_3, 1);
@@ -760,7 +777,8 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 			COND(fs->need_pixlod, A6XX_SP_FS_CTRL_REG0_PIXLODENABLE));
 
 	OUT_PKT4(ring, REG_A6XX_VPC_VS_LAYER_CNTL, 1);
-	OUT_RING(ring, 0x0000ffff);        /* XXX */
+	OUT_RING(ring, A6XX_VPC_VS_LAYER_CNTL_LAYERLOC(layer_loc) |
+			A6XX_VPC_VS_LAYER_CNTL_VIEWLOC(0xff));
 
 	bool need_size = fs->frag_face || fs->fragcoord_compmask != 0;
 	bool need_size_persamp = false;
@@ -912,6 +930,9 @@ setup_stateobj(struct fd_ringbuffer *ring, struct fd_context *ctx,
 		OUT_RING(ring, 0);
 		OUT_PKT4(ring, REG_A6XX_SP_GS_PRIM_SIZE, 1);
 		OUT_RING(ring, 0);
+
+		OUT_PKT4(ring, REG_A6XX_GRAS_VS_LAYER_CNTL, 1);
+		OUT_RING(ring, CONDREG(layer_regid, A6XX_GRAS_VS_LAYER_CNTL_WRITES_LAYER));
 	}
 
 	OUT_PKT4(ring, REG_A6XX_VPC_VS_CLIP_CNTL, 1);

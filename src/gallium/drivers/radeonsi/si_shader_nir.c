@@ -345,6 +345,8 @@ void si_nir_scan_shader(const struct nir_shader *nir, struct si_shader_info *inf
 
    info->uses_frontface = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_FRONT_FACE);
    info->uses_instanceid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID);
+   info->uses_base_vertex = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX);
+   info->uses_base_instance = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE);
    info->uses_invocationid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_INVOCATION_ID);
    info->uses_grid_size = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_NUM_WORK_GROUPS);
    info->uses_subgroup_info = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_LOCAL_INVOCATION_INDEX) ||
@@ -673,6 +675,24 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
    NIR_PASS_V(nir, nir_opt_intrinsics);
    NIR_PASS_V(nir, nir_lower_system_values);
    NIR_PASS_V(nir, nir_lower_compute_system_values, NULL);
+
+   if (nir->info.stage == MESA_SHADER_COMPUTE) {
+      if (nir->info.cs.derivative_group == DERIVATIVE_GROUP_QUADS) {
+         /* If we are shuffling local_invocation_id for quad derivatives, we
+          * need to derive local_invocation_index from local_invocation_id
+          * first, so that the value corresponds to the shuffled
+          * local_invocation_id.
+          */
+         nir_lower_compute_system_values_options options = {0};
+         options.lower_local_invocation_index = true;
+         NIR_PASS_V(nir, nir_lower_compute_system_values, &options);
+      }
+
+      nir_opt_cse(nir); /* CSE load_local_invocation_id */
+      nir_lower_compute_system_values_options options = {0};
+      options.shuffle_local_ids_for_quad_derivatives = true;
+      NIR_PASS_V(nir, nir_lower_compute_system_values, &options);
+   }
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT &&
        sscreen->info.has_packed_math_16bit &&

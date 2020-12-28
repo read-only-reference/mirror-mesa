@@ -38,15 +38,16 @@ d3d12_wgl_create_screen(struct sw_winsys *winsys, HDC hDC)
       stw_dev->callbacks.pfnGetAdapterLuid(hDC, &local_luid);
       adapter_luid = &local_luid;
    }
-   return d3d12_create_screen(winsys, adapter_luid);
+   return d3d12_create_dxgi_screen(winsys, adapter_luid);
 }
 
 void
 d3d12_wgl_present(struct pipe_screen *screen,
+                  struct pipe_context *ctx,
                   struct pipe_resource *res,
                   HDC hDC)
 {
-   screen->flush_frontbuffer(screen, res, 0, 0, hDC, NULL);
+   screen->flush_frontbuffer(screen, ctx, res, 0, 0, hDC, NULL);
 }
 
 unsigned

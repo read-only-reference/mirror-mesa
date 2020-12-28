@@ -108,7 +108,7 @@ resource_create(struct pipe_screen *pscreen,
    pipe_reference_init(&res->base.reference, 1);
    res->base.screen = pscreen;
 
-   VkMemoryRequirements reqs;
+   VkMemoryRequirements reqs = {};
    VkMemoryPropertyFlags flags = 0;
 
    res->internal_format = templ->format;
@@ -203,8 +203,10 @@ resource_create(struct pipe_screen *pscreen,
           templ->target == PIPE_TEXTURE_CUBE_ARRAY)
          ici.arrayLayers *= 6;
 
-      if (templ->bind & PIPE_BIND_SHARED)
+      if (templ->bind & (PIPE_BIND_DISPLAY_TARGET |
+                         PIPE_BIND_SHARED)) {
          ici.tiling = VK_IMAGE_TILING_LINEAR;
+      }
 
       if (templ->usage == PIPE_USAGE_STAGING)
          ici.tiling = VK_IMAGE_TILING_LINEAR;
@@ -248,7 +250,7 @@ resource_create(struct pipe_screen *pscreen,
          return NULL;
       }
 
-      res->optimial_tiling = ici.tiling != VK_IMAGE_TILING_LINEAR;
+      res->optimal_tiling = ici.tiling != VK_IMAGE_TILING_LINEAR;
       res->aspect = aspect_from_format(templ->format);
 
       vkGetImageMemoryRequirements(screen->dev, res->image, &reqs);
@@ -551,7 +553,7 @@ zink_transfer_map(struct pipe_context *pctx,
       trans->base.layer_stride = 0;
       ptr = ((uint8_t *)ptr) + box->x;
    } else {
-      if (res->optimial_tiling || ((res->base.usage != PIPE_USAGE_STAGING))) {
+      if (res->optimal_tiling || ((res->base.usage != PIPE_USAGE_STAGING))) {
          enum pipe_format format = pres->format;
          if (usage & PIPE_MAP_DEPTH_ONLY)
             format = util_format_get_depth_only(pres->format);
@@ -598,7 +600,7 @@ zink_transfer_map(struct pipe_context *pctx,
             return NULL;
 
       } else {
-         assert(!res->optimial_tiling);
+         assert(!res->optimal_tiling);
          if (batch_uses >= ZINK_RESOURCE_ACCESS_WRITE)
             zink_fence_wait(pctx);
          VkResult result = vkMapMemory(screen->dev, res->mem, res->offset, res->size, 0, &ptr);
@@ -613,9 +615,12 @@ zink_transfer_map(struct pipe_context *pctx,
          vkGetImageSubresourceLayout(screen->dev, res->image, &isr, &srl);
          trans->base.stride = srl.rowPitch;
          trans->base.layer_stride = srl.arrayPitch;
-         ptr = ((uint8_t *)ptr) + box->z * srl.depthPitch +
-                                  box->y * srl.rowPitch +
-                                  box->x;
+         const struct util_format_description *desc = util_format_description(res->base.format);
+         unsigned offset = srl.offset +
+                           box->z * srl.depthPitch +
+                           (box->y / desc->block.height) * srl.rowPitch +
+                           (box->x / desc->block.width) * (desc->block.bits / 8);
+         ptr = ((uint8_t *)ptr) + offset;
       }
    }
 

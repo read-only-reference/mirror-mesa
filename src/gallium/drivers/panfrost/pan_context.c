@@ -160,16 +160,13 @@ panfrost_flush(
 {
         struct panfrost_context *ctx = pan_context(pipe);
         struct panfrost_device *dev = pan_device(pipe->screen);
-        uint32_t syncobj = 0;
 
-        if (fence)
-                drmSyncobjCreate(dev->fd, 0, &syncobj);
 
         /* Submit all pending jobs */
-        panfrost_flush_all_batches(ctx, syncobj);
+        panfrost_flush_all_batches(ctx);
 
         if (fence) {
-                struct panfrost_fence *f = panfrost_fence_create(ctx, syncobj);
+                struct panfrost_fence *f = panfrost_fence_create(ctx);
                 pipe->screen->fence_reference(pipe->screen, fence, NULL);
                 *fence = (struct pipe_fence_handle *)f;
         }
@@ -182,7 +179,7 @@ static void
 panfrost_texture_barrier(struct pipe_context *pipe, unsigned flags)
 {
         struct panfrost_context *ctx = pan_context(pipe);
-        panfrost_flush_all_batches(ctx, 0);
+        panfrost_flush_all_batches(ctx);
 }
 
 #define DEFINE_CASE(c) case PIPE_PRIM_##c: return MALI_DRAW_MODE_##c;
@@ -304,10 +301,12 @@ panfrost_draw_emit_vertex(struct panfrost_batch *batch,
                 cfg.state = panfrost_emit_compute_shader_meta(batch, PIPE_SHADER_VERTEX);
                 cfg.attributes = panfrost_emit_vertex_data(batch, &cfg.attribute_buffers);
                 cfg.varyings = vs_vary;
-                cfg.varying_buffers = varyings;
+                cfg.varying_buffers = vs_vary ? varyings : 0;
                 cfg.thread_storage = shared_mem;
                 pan_emit_draw_descs(batch, &cfg, PIPE_SHADER_VERTEX);
         }
+
+        pan_section_pack(job, COMPUTE_JOB, DRAW_PADDING, cfg);
 }
 
 static void
@@ -355,7 +354,18 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                 cfg.draw_mode = pan_draw_mode(info->mode);
                 if (panfrost_writes_point_size(ctx))
                         cfg.point_size_array_format = MALI_POINT_SIZE_ARRAY_FORMAT_FP16;
-                cfg.first_provoking_vertex = rast->flatshade_first;
+
+                /* For line primitives, PRIMITIVE.first_provoking_vertex must
+                 * be set to true and the provoking vertex is selected with
+                 * DRAW.flat_shading_vertex.
+                 */
+                if (info->mode == PIPE_PRIM_LINES ||
+                    info->mode == PIPE_PRIM_LINE_LOOP ||
+                    info->mode == PIPE_PRIM_LINE_STRIP)
+                        cfg.first_provoking_vertex = true;
+                else
+                        cfg.first_provoking_vertex = rast->flatshade_first;
+
                 if (info->primitive_restart)
                         cfg.primitive_restart = MALI_PRIMITIVE_RESTART_IMPLICIT;
                 cfg.job_task_split = 6;
@@ -400,8 +410,20 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                 cfg.state = panfrost_emit_frag_shader_meta(batch);
                 cfg.viewport = panfrost_emit_viewport(batch);
                 cfg.varyings = fs_vary;
-                cfg.varying_buffers = varyings;
+                cfg.varying_buffers = fs_vary ? varyings : 0;
                 cfg.thread_storage = shared_mem;
+
+                /* For all primitives but lines DRAW.flat_shading_vertex must
+                 * be set to 0 and the provoking vertex is selected with the
+                 * PRIMITIVE.first_provoking_vertex field.
+                 */
+                if (info->mode == PIPE_PRIM_LINES ||
+                    info->mode == PIPE_PRIM_LINE_LOOP ||
+                    info->mode == PIPE_PRIM_LINE_STRIP) {
+                        /* The logic is inverted on bifrost. */
+                        cfg.flat_shading_vertex =
+                                is_bifrost ? rast->flatshade_first : !rast->flatshade_first;
+                }
 
                 pan_emit_draw_descs(batch, &cfg, PIPE_SHADER_FRAGMENT);
 
@@ -420,6 +442,8 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
 
         if (!is_bifrost)
                 panfrost_emit_primitive_size(ctx, points, psiz, prim_size);
+        else
+                pan_section_pack(job, BIFROST_TILER_JOB, DRAW_PADDING, cfg);
 }
 
 static void
@@ -469,6 +493,11 @@ panfrost_draw_vbo(
         /* Now that we have a guaranteed terminating path, find the job. */
 
         struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+
+        /* Don't add too many jobs to a single batch */
+        if (batch->scoreboard.job_index > 10000)
+                batch = panfrost_get_fresh_batch_for_fbo(ctx);
+
         panfrost_batch_set_requirements(batch);
 
         /* Take into account a negative bias */
@@ -935,10 +964,10 @@ panfrost_set_constant_buffer(
 static void
 panfrost_set_stencil_ref(
         struct pipe_context *pctx,
-        const struct pipe_stencil_ref *ref)
+        const struct pipe_stencil_ref ref)
 {
         struct panfrost_context *ctx = pan_context(pctx);
-        ctx->stencil_ref = *ref;
+        ctx->stencil_ref = ref;
 }
 
 void
@@ -993,10 +1022,11 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                 array_size /= 6;
         }
 
-        /* MSAA only supported for 2D textures (and 2D texture arrays via an
-         * extension currently unimplemented) */
+        /* MSAA only supported for 2D textures */
 
-        assert(texture->nr_samples <= 1 || so->base.target == PIPE_TEXTURE_2D);
+        assert(texture->nr_samples <= 1 ||
+               so->base.target == PIPE_TEXTURE_2D ||
+               so->base.target == PIPE_TEXTURE_2D_ARRAY);
 
         enum mali_texture_dimension type =
                 panfrost_translate_texture_dimension(so->base.target);
@@ -1194,10 +1224,10 @@ panfrost_create_depth_stencil_state(struct pipe_context *pipe,
         }
 
         /* Alpha lowered by frontend */
-        assert(!zsa->alpha.enabled);
+        assert(!zsa->alpha_enabled);
 
         /* TODO: Bounds test should be easy */
-        assert(!zsa->depth.bounds_test);
+        assert(!zsa->depth_bounds_test);
 
         return so;
 }
@@ -1416,7 +1446,7 @@ panfrost_get_query_result(struct pipe_context *pipe,
                         for (int i = 0; i < dev->core_count; ++i)
                                 passed += result[i];
 
-                        if (!query->msaa)
+                        if (!(dev->quirks & IS_BIFROST) && !query->msaa)
                                 passed /= 4;
 
                         vresult->u64 = passed;
@@ -1428,7 +1458,7 @@ panfrost_get_query_result(struct pipe_context *pipe,
 
         case PIPE_QUERY_PRIMITIVES_GENERATED:
         case PIPE_QUERY_PRIMITIVES_EMITTED:
-                panfrost_flush_all_batches(ctx, 0);
+                panfrost_flush_all_batches(ctx);
                 vresult->u64 = query->end - query->start;
                 break;
 
@@ -1615,6 +1645,14 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         /* By default mask everything on */
         ctx->sample_mask = ~0;
         ctx->active_queries = true;
+
+        int ASSERTED ret;
+
+        /* Create a syncobj in a signaled state. Will be updated to point to the
+         * last queued job out_sync every time we submit a new job.
+         */
+        ret = drmSyncobjCreate(dev->fd, DRM_SYNCOBJ_CREATE_SIGNALED, &ctx->syncobj);
+        assert(!ret && ctx->syncobj);
 
         return gallium;
 }

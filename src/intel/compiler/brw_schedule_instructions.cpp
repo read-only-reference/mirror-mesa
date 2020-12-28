@@ -985,7 +985,7 @@ instruction_scheduler::compute_exits()
     * optimistic unblocked time estimate calculated above.
     */
    foreach_in_list_reverse(schedule_node, n, &instructions) {
-      n->exit = (n->inst->opcode == FS_OPCODE_DISCARD_JUMP ? n : NULL);
+      n->exit = (n->inst->opcode == BRW_OPCODE_HALT ? n : NULL);
 
       for (int i = 0; i < n->child_count; i++) {
          if (exit_unblocked_time(n->children[i]) < exit_unblocked_time(n))
@@ -1047,7 +1047,7 @@ instruction_scheduler::add_dep(schedule_node *before, schedule_node *after)
 static bool
 is_scheduling_barrier(const backend_instruction *inst)
 {
-   return inst->opcode == FS_OPCODE_PLACEHOLDER_HALT ||
+   return inst->opcode == SHADER_OPCODE_HALT_TARGET ||
           inst->is_control_flow() ||
           inst->has_side_effects();
 }

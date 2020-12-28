@@ -141,6 +141,10 @@
 
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Use LDS symbols when supported by LLVM. Can be disabled for testing the old
 // path on newer LLVM for now. Should be removed in the long term.
 #define USE_LDS_SYMBOLS (true)
@@ -367,6 +371,8 @@ struct si_shader_info {
    bool uses_linear_sample;
    bool uses_interp_at_sample;
    bool uses_instanceid;
+   bool uses_base_vertex;
+   bool uses_base_instance;
    bool uses_drawid;
    bool uses_primid;
    bool uses_frontface;
@@ -433,11 +439,11 @@ struct si_shader_selector {
    ubyte num_vs_inputs;
    ubyte num_vbos_in_user_sgprs;
    unsigned pa_cl_vs_out_cntl;
-   unsigned ngg_cull_vert_threshold; /* 0 = disabled */
-   unsigned ngg_cull_nonindexed_fast_launch_vert_threshold; /* 0 = disabled */
+   unsigned ngg_cull_vert_threshold; /* UINT32_MAX = disabled */
+   unsigned ngg_cull_nonindexed_fast_launch_vert_threshold; /* UINT32_MAX = disabled */
    ubyte clipdist_mask;
    ubyte culldist_mask;
-   ubyte rast_prim;
+   enum pipe_prim_type rast_prim;
 
    /* ES parameters. */
    uint16_t esgs_itemsize; /* vertex stride */
@@ -747,6 +753,12 @@ struct si_shader {
    struct ac_shader_config config;
    struct si_shader_binary_info info;
 
+   /* SI_SGPR_VS_STATE_BITS */
+   bool uses_vs_state_provoking_vertex;
+   bool uses_vs_state_outprim;
+
+   bool uses_base_instance;
+
    struct {
       uint16_t ngg_emit_size; /* in dwords */
       uint16_t hw_max_esverts;
@@ -901,5 +913,9 @@ static inline bool si_shader_uses_bindless_images(struct si_shader_selector *sel
 {
    return selector ? selector->info.uses_bindless_images : false;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

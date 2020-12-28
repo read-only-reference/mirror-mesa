@@ -1454,7 +1454,7 @@ emit_tfu_job(struct v3dv_cmd_buffer *cmd_buffer,
              const struct v3dv_format *format)
 {
    const struct v3d_resource_slice *src_slice = &src->slices[src_mip_level];
-   const struct v3d_resource_slice *dst_slice = &dst->slices[src_mip_level];
+   const struct v3d_resource_slice *dst_slice = &dst->slices[dst_mip_level];
 
    assert(dst->mem && dst->mem->bo);
    const struct v3dv_bo *dst_bo = dst->mem->bo;
@@ -1466,7 +1466,7 @@ emit_tfu_job(struct v3dv_cmd_buffer *cmd_buffer,
       .ios = (height << 16) | width,
       .bo_handles = {
          dst_bo->handle,
-         src != dst ? src_bo->handle : 0
+         src_bo->handle != dst_bo->handle ? src_bo->handle : 0
       },
    };
 
@@ -1605,18 +1605,9 @@ copy_image_tfu(struct v3dv_cmd_buffer *cmd_buffer,
     * to use compatible formats that are supported with the TFU unit.
     */
    assert(dst->cpp == src->cpp);
-   VkFormat vk_format;
-   switch (dst->cpp) {
-   case 16: vk_format = VK_FORMAT_R32G32B32A32_SFLOAT;  break;
-   case 8:  vk_format = VK_FORMAT_R16G16B16A16_SFLOAT;  break;
-   case 4:  vk_format = VK_FORMAT_R32_SFLOAT;           break;
-   case 2:  vk_format = VK_FORMAT_R16_SFLOAT;           break;
-   case 1:  vk_format = VK_FORMAT_R8_UNORM;             break;
-   default: unreachable("unsupported format bit-size"); break;
-   };
-   const struct v3dv_format *format = v3dv_get_format(vk_format);
-   assert(v3dv_tfu_supports_tex_format(&cmd_buffer->device->devinfo,
-                                       format->tex_type));
+   const struct v3dv_format *format =
+      v3dv_get_compatible_tfu_format(&cmd_buffer->device->devinfo,
+                                     dst->cpp, NULL);
 
    /* Emit a TFU job for each layer to blit */
    const uint32_t layer_count = dst->type != VK_IMAGE_TYPE_3D ?
@@ -2620,18 +2611,9 @@ copy_buffer_to_image_tfu(struct v3dv_cmd_buffer *cmd_buffer,
     * the image's format and choose a compatible TFU format for the image
     * texel size instead, which expands the list of formats we can handle here.
     */
-   VkFormat vk_format;
-   switch (image->cpp) {
-   case 16: vk_format = VK_FORMAT_R32G32B32A32_SFLOAT;  break;
-   case 8:  vk_format = VK_FORMAT_R16G16B16A16_SFLOAT;  break;
-   case 4:  vk_format = VK_FORMAT_R32_SFLOAT;           break;
-   case 2:  vk_format = VK_FORMAT_R16_SFLOAT;           break;
-   case 1:  vk_format = VK_FORMAT_R8_UNORM;             break;
-   default: unreachable("unsupported format bit-size"); break;
-   };
-   const struct v3dv_format *format = v3dv_get_format(vk_format);
-   assert(v3dv_tfu_supports_tex_format(&cmd_buffer->device->devinfo,
-                                       format->tex_type));
+   const struct v3dv_format *format =
+      v3dv_get_compatible_tfu_format(&cmd_buffer->device->devinfo,
+                                     image->cpp, NULL);
 
    const uint32_t mip_level = region->imageSubresource.mipLevel;
    const struct v3d_resource_slice *slice = &image->slices[mip_level];
@@ -2658,7 +2640,7 @@ copy_buffer_to_image_tfu(struct v3dv_cmd_buffer *cmd_buffer,
          .ios = (height << 16) | width,
          .bo_handles = {
             dst_bo->handle,
-            src_bo != dst_bo ? src_bo->handle : 0
+            src_bo->handle != dst_bo->handle ? src_bo->handle : 0
          },
       };
 
@@ -2931,9 +2913,15 @@ create_texel_buffer_copy_descriptor_pool(struct v3dv_cmd_buffer *cmd_buffer)
 
    if (result == VK_SUCCESS) {
       assert(cmd_buffer->meta.texel_buffer_copy.dspool != VK_NULL_HANDLE);
+      const VkDescriptorPool _pool = cmd_buffer->meta.texel_buffer_copy.dspool;
+
       v3dv_cmd_buffer_add_private_obj(
-         cmd_buffer, (uintptr_t)cmd_buffer->meta.texel_buffer_copy.dspool,
+         cmd_buffer, (uintptr_t) _pool,
          (v3dv_cmd_buffer_private_obj_destroy_cb)v3dv_DestroyDescriptorPool);
+
+      struct v3dv_descriptor_pool *pool =
+         v3dv_descriptor_pool_from_handle(_pool);
+      pool->is_driver_internal = true;
    }
 
    return result;
@@ -4019,38 +4007,25 @@ compute_blit_3d_layers(const VkOffset3D *offsets,
 /**
  * Returns true if the implementation supports the requested operation (even if
  * it failed to process it, for example, due to an out-of-memory error).
+ *
+ * The TFU blit path doesn't handle scaling so the blit filter parameter can
+ * be ignored.
  */
 static bool
 blit_tfu(struct v3dv_cmd_buffer *cmd_buffer,
          struct v3dv_image *dst,
          struct v3dv_image *src,
-         const VkImageBlit *region,
-         VkFilter filter)
+         const VkImageBlit *region)
 {
-   /* FIXME? The v3d driver seems to ignore filtering completely! */
-   if (filter != VK_FILTER_NEAREST)
-      return false;
+   assert(dst->samples == VK_SAMPLE_COUNT_1_BIT);
+   assert(src->samples == VK_SAMPLE_COUNT_1_BIT);
 
    /* Format must match */
    if (src->vk_format != dst->vk_format)
       return false;
 
-   VkFormat vk_format = dst->vk_format;
-   const struct v3dv_format *format = dst->format;
-
-   /* Format must be supported for texturing */
-   if (!v3dv_tfu_supports_tex_format(&cmd_buffer->device->devinfo,
-                                     format->tex_type)) {
-      return false;
-   }
-
-   /* Only color formats */
-   if (vk_format_is_depth_or_stencil(vk_format))
-      return false;
-
    /* Destination can't be raster format */
-   const uint32_t dst_mip_level = region->dstSubresource.mipLevel;
-   if (dst->slices[dst_mip_level].tiling == VC5_TILING_RASTER)
+   if (dst->tiling == VK_IMAGE_TILING_LINEAR)
       return false;
 
    /* Source region must start at (0,0) */
@@ -4061,6 +4036,7 @@ blit_tfu(struct v3dv_cmd_buffer *cmd_buffer,
    if (region->dstOffsets[0].x != 0 || region->dstOffsets[0].y != 0)
       return false;
 
+   const uint32_t dst_mip_level = region->dstSubresource.mipLevel;
    const uint32_t dst_width = u_minify(dst->extent.width, dst_mip_level);
    const uint32_t dst_height = u_minify(dst->extent.height, dst_mip_level);
    if (region->dstOffsets[1].x < dst_width - 1||
@@ -4068,16 +4044,30 @@ blit_tfu(struct v3dv_cmd_buffer *cmd_buffer,
       return false;
    }
 
-   /* No scaling */
+   /* No XY scaling */
    if (region->srcOffsets[1].x != region->dstOffsets[1].x ||
        region->srcOffsets[1].y != region->dstOffsets[1].y) {
       return false;
    }
 
-   if (dst->type == VK_IMAGE_TYPE_3D &&
-       region->srcOffsets[1].z != region->dstOffsets[1].z) {
-      return false;
+   /* If the format is D24S8 both aspects need to be copied, since the TFU
+    * can't be programmed to copy only one aspect of the image.
+    */
+   if (dst->vk_format == VK_FORMAT_D24_UNORM_S8_UINT) {
+       const VkImageAspectFlags ds_aspects = VK_IMAGE_ASPECT_DEPTH_BIT |
+                                             VK_IMAGE_ASPECT_STENCIL_BIT;
+       if (region->dstSubresource.aspectMask != ds_aspects)
+          return false;
    }
+
+   /* Our TFU blits only handle exact copies (it requires same formats
+    * on input and output, no scaling, etc), so there is no pixel format
+    * conversions and we can rewrite the format to use one that is TFU
+    * compatible based on its texel size.
+    */
+   const struct v3dv_format *format =
+      v3dv_get_compatible_tfu_format(&cmd_buffer->device->devinfo,
+                                     dst->cpp, NULL);
 
    /* Emit a TFU job for each layer to blit */
    assert(region->dstSubresource.layerCount ==
@@ -4090,16 +4080,9 @@ blit_tfu(struct v3dv_cmd_buffer *cmd_buffer,
       compute_blit_3d_layers(region->dstOffsets,
                              &min_dst_layer, &max_dst_layer,
                              &dst_mirror_z);
-
-      /* TFU can only do exact copies, so we can't handle mirroring. This checks
-       * mirroring in Z for 3D images, XY mirroring is already handled by earlier
-       * checks
-       */
-      if (dst_mirror_z)
-         return false;
    } else {
       min_dst_layer = region->dstSubresource.baseArrayLayer;
-      max_dst_layer = min_dst_layer + region->dstSubresource.layerCount - 1;
+      max_dst_layer = min_dst_layer + region->dstSubresource.layerCount;
    }
 
    uint32_t min_src_layer;
@@ -4109,27 +4092,31 @@ blit_tfu(struct v3dv_cmd_buffer *cmd_buffer,
       compute_blit_3d_layers(region->srcOffsets,
                              &min_src_layer, &max_src_layer,
                              &src_mirror_z);
-
-      if (src_mirror_z)
-         return false;
    } else {
       min_src_layer = region->srcSubresource.baseArrayLayer;
-      max_src_layer = min_src_layer + region->srcSubresource.layerCount - 1;
+      max_src_layer = min_src_layer + region->srcSubresource.layerCount;
    }
 
+   /* No Z scaling for 3D images (for non-3D images both src and dst must
+    * have the same layerCount).
+    */
    if (max_dst_layer - min_dst_layer != max_src_layer - min_src_layer)
       return false;
 
-   const uint32_t layer_count = dst->type != VK_IMAGE_TYPE_3D ?
-      region->dstSubresource.layerCount :
-      max_dst_layer - min_dst_layer;
+   const uint32_t layer_count = max_dst_layer - min_dst_layer;
    const uint32_t src_mip_level = region->srcSubresource.mipLevel;
-
    for (uint32_t i = 0; i < layer_count; i++) {
+      /* Since the TFU path doesn't handle scaling, Z mirroring for 3D images
+       * only involves reversing the order of the slices.
+       */
+      const uint32_t dst_layer =
+         dst_mirror_z ? max_dst_layer - i - 1: min_dst_layer + i;
+      const uint32_t src_layer =
+         src_mirror_z ? max_src_layer - i - 1: min_src_layer + i;
       emit_tfu_job(cmd_buffer,
-                   dst, dst_mip_level, min_dst_layer + i,
-                   src, src_mip_level, min_src_layer + i,
-                   dst_width, dst_height, dst->format);
+                   dst, dst_mip_level, dst_layer,
+                   src, src_mip_level, src_layer,
+                   dst_width, dst_height, format);
    }
 
    return true;
@@ -4965,9 +4952,15 @@ create_blit_descriptor_pool(struct v3dv_cmd_buffer *cmd_buffer)
 
    if (result == VK_SUCCESS) {
       assert(cmd_buffer->meta.blit.dspool != VK_NULL_HANDLE);
+      const VkDescriptorPool _pool = cmd_buffer->meta.blit.dspool;
+
       v3dv_cmd_buffer_add_private_obj(
-         cmd_buffer, (uintptr_t)cmd_buffer->meta.blit.dspool,
+         cmd_buffer, (uintptr_t) _pool,
          (v3dv_cmd_buffer_private_obj_destroy_cb)v3dv_DestroyDescriptorPool);
+
+      struct v3dv_descriptor_pool *pool =
+         v3dv_descriptor_pool_from_handle(_pool);
+      pool->is_driver_internal = true;
    }
 
    return result;
@@ -5461,7 +5454,7 @@ v3dv_CmdBlitImage(VkCommandBuffer commandBuffer,
    assert(!vk_format_is_compressed(dst->vk_format));
 
    for (uint32_t i = 0; i < regionCount; i++) {
-      if (blit_tfu(cmd_buffer, dst, src, &pRegions[i], filter))
+      if (blit_tfu(cmd_buffer, dst, src, &pRegions[i]))
          continue;
       if (blit_shader(cmd_buffer,
                       dst, dst->vk_format,

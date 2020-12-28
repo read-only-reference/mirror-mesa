@@ -135,6 +135,9 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
         case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
                 return true;
 
+        case PIPE_CAP_ANISOTROPIC_FILTER:
+                return !!(dev->quirks & HAS_ANISOTROPIC);
+
         /* ES3 features unsupported on Bifrost */
         case PIPE_CAP_TGSI_INSTANCEID:
         case PIPE_CAP_TEXTURE_MULTISAMPLE:
@@ -702,17 +705,51 @@ panfrost_fence_finish(struct pipe_screen *pscreen,
 }
 
 struct panfrost_fence *
-panfrost_fence_create(struct panfrost_context *ctx,
-                      uint32_t syncobj)
+panfrost_fence_create(struct panfrost_context *ctx)
 {
         struct panfrost_fence *f = calloc(1, sizeof(*f));
         if (!f)
                 return NULL;
 
+        struct panfrost_device *dev = pan_device(ctx->base.screen);
+        int fd = -1, ret;
+
+        /* Snapshot the last rendering out fence. We'd rather have another
+         * syncobj instead of a sync file, but this is all we get.
+         * (HandleToFD/FDToHandle just gives you another syncobj ID for the
+         * same syncobj).
+         */
+        ret = drmSyncobjExportSyncFile(dev->fd, ctx->syncobj, &fd);
+        if (ret || fd == -1) {
+                fprintf(stderr, "export failed\n");
+                goto err_free_fence;
+        }
+
+        ret = drmSyncobjCreate(dev->fd, 0, &f->syncobj);
+        if (ret) {
+                fprintf(stderr, "create syncobj failed\n");
+                goto err_close_fd;
+        }
+
+        ret = drmSyncobjImportSyncFile(dev->fd, f->syncobj, fd);
+        if (ret) {
+                fprintf(stderr, "create syncobj failed\n");
+                goto err_destroy_syncobj;
+        }
+
+        assert(f->syncobj != ctx->syncobj);
+        close(fd);
         pipe_reference_init(&f->reference, 1);
-        f->syncobj = syncobj;
 
         return f;
+
+err_destroy_syncobj:
+        drmSyncobjDestroy(dev->fd, f->syncobj);
+err_close_fd:
+        close(fd);
+err_free_fence:
+        free(f);
+        return NULL;
 }
 
 static const void *

@@ -572,7 +572,7 @@ radv_emit_set_predication_state_from_image(struct radv_cmd_buffer *cmd_buffer,
 		va += pred_offset;
 	}
 
-	si_emit_set_predication_state(cmd_buffer, true, va);
+	si_emit_set_predication_state(cmd_buffer, true, PREDICATION_OP_BOOL64, va);
 }
 
 static void
@@ -627,7 +627,7 @@ radv_process_color_image_layer(struct radv_cmd_buffer *cmd_buffer,
 						},
 						.clearValueCount = 0,
 						.pClearValues = NULL,
-					});
+					}, NULL);
 
 	radv_cmd_buffer_set_subpass(cmd_buffer,
 				    &cmd_buffer->state.pass->subpasses[0]);
@@ -771,6 +771,7 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 			/* Restore previous conditional rendering user state. */
 			si_emit_set_predication_state(cmd_buffer,
 						      cmd_buffer->state.predication_type,
+						      cmd_buffer->state.predication_op,
 						      cmd_buffer->state.predication_va);
 		}
 	}

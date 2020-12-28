@@ -58,7 +58,7 @@ struct virgl_vertex_elements_state {
 static uint32_t next_handle;
 uint32_t virgl_object_assign_handle(void)
 {
-   return ++next_handle;
+   return p_atomic_inc_return(&next_handle);
 }
 
 bool
@@ -610,10 +610,10 @@ static void virgl_hw_set_vertex_buffers(struct virgl_context *vctx)
 }
 
 static void virgl_set_stencil_ref(struct pipe_context *ctx,
-                                 const struct pipe_stencil_ref *ref)
+                                 const struct pipe_stencil_ref ref)
 {
    struct virgl_context *vctx = virgl_context(ctx);
-   virgl_encoder_set_stencil_ref(vctx, ref);
+   virgl_encoder_set_stencil_ref(vctx, &ref);
 }
 
 static void virgl_set_blend_color(struct pipe_context *ctx,

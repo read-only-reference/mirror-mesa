@@ -3020,37 +3020,49 @@ fs_visitor::opt_register_renaming()
 }
 
 /**
- * Remove redundant or useless discard jumps.
+ * Remove redundant or useless halts.
  *
- * For example, we can eliminate jumps in the following sequence:
+ * For example, we can eliminate halts in the following sequence:
  *
- * discard-jump       (redundant with the next jump)
- * discard-jump       (useless; jumps to the next instruction)
- * placeholder-halt
+ * halt        (redundant with the next halt)
+ * halt        (useless; jumps to the next instruction)
+ * halt-target
  */
 bool
-fs_visitor::opt_redundant_discard_jumps()
+fs_visitor::opt_redundant_halt()
 {
    bool progress = false;
 
-   bblock_t *last_bblock = cfg->blocks[cfg->num_blocks - 1];
+   unsigned halt_count = 0;
+   fs_inst *halt_target = NULL;
+   bblock_t *halt_target_block = NULL;
+   foreach_block_and_inst(block, fs_inst, inst, cfg) {
+      if (inst->opcode == BRW_OPCODE_HALT)
+         halt_count++;
 
-   fs_inst *placeholder_halt = NULL;
-   foreach_inst_in_block_reverse(fs_inst, inst, last_bblock) {
-      if (inst->opcode == FS_OPCODE_PLACEHOLDER_HALT) {
-         placeholder_halt = inst;
+      if (inst->opcode == SHADER_OPCODE_HALT_TARGET) {
+         halt_target = inst;
+         halt_target_block = block;
          break;
       }
    }
 
-   if (!placeholder_halt)
+   if (!halt_target) {
+      assert(halt_count == 0);
       return false;
+   }
 
-   /* Delete any HALTs immediately before the placeholder halt. */
-   for (fs_inst *prev = (fs_inst *) placeholder_halt->prev;
-        !prev->is_head_sentinel() && prev->opcode == FS_OPCODE_DISCARD_JUMP;
-        prev = (fs_inst *) placeholder_halt->prev) {
-      prev->remove(last_bblock);
+   /* Delete any HALTs immediately before the halt target. */
+   for (fs_inst *prev = (fs_inst *) halt_target->prev;
+        !prev->is_head_sentinel() && prev->opcode == BRW_OPCODE_HALT;
+        prev = (fs_inst *) halt_target->prev) {
+      prev->remove(halt_target_block);
+      halt_count--;
+      progress = true;
+   }
+
+   if (halt_count == 0) {
+      halt_target->remove(halt_target_block);
       progress = true;
    }
 
@@ -3285,7 +3297,7 @@ fs_visitor::eliminate_find_live_channel()
          depth--;
          break;
 
-      case FS_OPCODE_DISCARD_JUMP:
+      case BRW_OPCODE_HALT:
          /* This can potentially make control flow non-uniform until the end
           * of the program.
           */
@@ -7830,7 +7842,7 @@ fs_visitor::optimize()
       OPT(opt_peephole_sel);
    }
 
-   OPT(opt_redundant_discard_jumps);
+   OPT(opt_redundant_halt);
 
    if (OPT(lower_load_payload)) {
       split_virtual_grfs();
@@ -7943,18 +7955,15 @@ fs_visitor::fixup_3src_null_dest()
  * Find the first instruction in the program that might start a region of
  * divergent control flow due to a HALT jump.  There is no
  * find_halt_control_flow_region_end(), the region of divergence extends until
- * the only FS_OPCODE_PLACEHOLDER_HALT in the program.
+ * the only SHADER_OPCODE_HALT_TARGET in the program.
  */
 static const fs_inst *
 find_halt_control_flow_region_start(const fs_visitor *v)
 {
-   if (v->stage == MESA_SHADER_FRAGMENT &&
-       brw_wm_prog_data(v->prog_data)->uses_kill) {
-      foreach_block_and_inst(block, fs_inst, inst, v->cfg) {
-         if (inst->opcode == FS_OPCODE_DISCARD_JUMP ||
-             inst->opcode == FS_OPCODE_PLACEHOLDER_HALT)
-            return inst;
-      }
+   foreach_block_and_inst(block, fs_inst, inst, v->cfg) {
+      if (inst->opcode == BRW_OPCODE_HALT ||
+          inst->opcode == SHADER_OPCODE_HALT_TARGET)
+         return inst;
    }
 
    return NULL;
@@ -8002,7 +8011,7 @@ fs_visitor::fixup_nomask_control_flow()
          switch (inst->opcode) {
          case BRW_OPCODE_DO:
          case BRW_OPCODE_IF:
-            /* Note that this doesn't handle FS_OPCODE_DISCARD_JUMP since only
+            /* Note that this doesn't handle BRW_OPCODE_HALT since only
              * the first one in the program closes the region of divergent
              * control flow due to any HALT instructions -- Instead this is
              * handled with the halt_start check below.
@@ -8012,7 +8021,7 @@ fs_visitor::fixup_nomask_control_flow()
 
          case BRW_OPCODE_WHILE:
          case BRW_OPCODE_ENDIF:
-         case FS_OPCODE_PLACEHOLDER_HALT:
+         case SHADER_OPCODE_HALT_TARGET:
             depth++;
             break;
 
@@ -8526,9 +8535,6 @@ fs_visitor::run_fs(bool allow_spilling, bool do_rep_send)
 
       if (failed)
 	 return false;
-
-      if (wm_prog_data->uses_kill)
-         bld.emit(FS_OPCODE_PLACEHOLDER_HALT);
 
       if (wm_key->alpha_test_func)
          emit_alpha_test();

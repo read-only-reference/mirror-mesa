@@ -126,6 +126,8 @@ files_mesa_util = files(
   'u_debug_memory.c',
   'u_cpu_detect.c',
   'u_cpu_detect.h',
+  'u_printf.cpp',
+  'u_printf.h',
   'vma.c',
   'vma.h',
   'xxhash.h',
@@ -243,6 +245,10 @@ if with_tests
         cpp_args: ['-Wno-write-strings']
       ),
       suite : ['util'],
+      env: ['HOME=' + join_paths(meson.current_source_dir(),
+                                 'tests', 'drirc_home'),
+            'DRIRC_CONFIGDIR=' + join_paths(meson.current_source_dir(),
+                                            'tests', 'drirc_configdir')]
         )
   endif
 

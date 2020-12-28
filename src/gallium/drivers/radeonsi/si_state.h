@@ -29,6 +29,10 @@
 #include "si_pm4.h"
 #include "util/u_blitter.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define SI_NUM_GRAPHICS_SHADERS (PIPE_SHADER_TESS_EVAL + 1)
 #define SI_NUM_SHADERS          (PIPE_SHADER_COMPUTE + 1)
 
@@ -228,6 +232,7 @@ union si_state_atoms {
       struct si_atom scratch_state;
       struct si_atom window_rectangles;
       struct si_atom shader_query;
+      struct si_atom ngg_cull_state;
    } s;
    struct si_atom array[sizeof(struct si_atoms_s) / sizeof(struct si_atom)];
 };
@@ -627,5 +632,9 @@ static inline unsigned si_get_image_slot(unsigned slot)
    /* images are in slots [31..16], while FMASKs are in slots [15..0] */
    return SI_NUM_IMAGE_SLOTS - 1 - slot;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

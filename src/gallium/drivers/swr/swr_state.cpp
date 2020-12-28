@@ -164,11 +164,11 @@ swr_set_blend_color(struct pipe_context *pipe,
 
 static void
 swr_set_stencil_ref(struct pipe_context *pipe,
-                    const struct pipe_stencil_ref *ref)
+                    const struct pipe_stencil_ref ref)
 {
    struct swr_context *ctx = swr_context(pipe);
 
-   ctx->stencil_ref = *ref;
+   ctx->stencil_ref = ref;
 
    ctx->dirty |= SWR_NEW_DEPTH_STENCIL_ALPHA;
 }
@@ -1828,8 +1828,8 @@ swr_update_derived(struct pipe_context *pipe,
 
    /* Depth/stencil state */
    if (ctx->dirty & (SWR_NEW_DEPTH_STENCIL_ALPHA | SWR_NEW_FRAMEBUFFER)) {
-      struct pipe_depth_state *depth = &(ctx->depth_stencil->depth);
-      struct pipe_stencil_state *stencil = ctx->depth_stencil->stencil;
+      struct pipe_depth_stencil_alpha_state *depth = ctx->depth_stencil;
+      struct pipe_stencil_state *stencil = depth->stencil;
       SWR_DEPTH_STENCIL_STATE depthStencilState = {{0}};
       SWR_DEPTH_BOUNDS_STATE depthBoundsState = {0};
 
@@ -1837,7 +1837,6 @@ swr_update_derived(struct pipe_context *pipe,
       struct pipe_stencil_state *front_stencil =
       ctx->depth_stencil.stencil[0];
       struct pipe_stencil_state *back_stencil = ctx->depth_stencil.stencil[1];
-      struct pipe_alpha_state alpha;
       */
       if (stencil[0].enabled) {
          depthStencilState.stencilWriteEnable = 1;
@@ -1874,14 +1873,14 @@ swr_update_derived(struct pipe_context *pipe,
             ctx->stencil_ref.ref_value[1];
       }
 
-      depthStencilState.depthTestEnable = depth->enabled;
-      depthStencilState.depthTestFunc = swr_convert_depth_func(depth->func);
-      depthStencilState.depthWriteEnable = depth->writemask;
+      depthStencilState.depthTestEnable = depth->depth_enabled;
+      depthStencilState.depthTestFunc = swr_convert_depth_func(depth->depth_func);
+      depthStencilState.depthWriteEnable = depth->depth_writemask;
       ctx->api.pfnSwrSetDepthStencilState(ctx->swrContext, &depthStencilState);
 
-      depthBoundsState.depthBoundsTestEnable = depth->bounds_test;
-      depthBoundsState.depthBoundsTestMinValue = depth->bounds_min;
-      depthBoundsState.depthBoundsTestMaxValue = depth->bounds_max;
+      depthBoundsState.depthBoundsTestEnable = depth->depth_bounds_test;
+      depthBoundsState.depthBoundsTestMinValue = depth->depth_bounds_min;
+      depthBoundsState.depthBoundsTestMaxValue = depth->depth_bounds_max;
       ctx->api.pfnSwrSetDepthBoundsState(ctx->swrContext, &depthBoundsState);
    }
 
@@ -1899,7 +1898,7 @@ swr_update_derived(struct pipe_context *pipe,
       blendState.constantColor[2] = ctx->blend_color.color[2];
       blendState.constantColor[3] = ctx->blend_color.color[3];
       blendState.alphaTestReference =
-         *((uint32_t*)&ctx->depth_stencil->alpha.ref_value);
+         *((uint32_t*)&ctx->depth_stencil->alpha_ref_value);
 
       blendState.sampleMask = ctx->sample_mask;
       blendState.sampleCount = GetSampleCount(fb->samples);
@@ -1942,13 +1941,13 @@ swr_update_derived(struct pipe_context *pipe,
 
             if (compileState.blendState.blendEnable == false &&
                 compileState.blendState.logicOpEnable == false &&
-                ctx->depth_stencil->alpha.enabled == 0) {
+                ctx->depth_stencil->alpha_enabled == 0) {
                ctx->api.pfnSwrSetBlendFunc(ctx->swrContext, target, NULL);
                continue;
             }
 
             compileState.desc.alphaTestEnable =
-               ctx->depth_stencil->alpha.enabled;
+               ctx->depth_stencil->alpha_enabled;
             compileState.desc.independentAlphaBlendEnable =
                (compileState.blendState.sourceBlendFactor !=
                 compileState.blendState.sourceAlphaBlendFactor) ||
@@ -1962,7 +1961,7 @@ swr_update_derived(struct pipe_context *pipe,
             compileState.desc.numSamples = fb->samples;
 
             compileState.alphaTestFunction =
-               swr_convert_depth_func(ctx->depth_stencil->alpha.func);
+               swr_convert_depth_func(ctx->depth_stencil->alpha_func);
             compileState.alphaTestFormat = ALPHA_TEST_FLOAT32; // xxx
 
             compileState.Canonicalize();

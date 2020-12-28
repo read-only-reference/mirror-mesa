@@ -30,8 +30,8 @@
 
 #include "freedreno_blitter.h"
 #include "freedreno_fence.h"
-#include "freedreno_log.h"
 #include "freedreno_resource.h"
+#include "freedreno_tracepoints.h"
 
 #include "fd6_blitter.h"
 #include "fd6_format.h"
@@ -819,25 +819,23 @@ handle_rgba_blit(struct fd_context *ctx, const struct pipe_blit_info *info)
 
 	fd_batch_set_stage(batch, FD_STAGE_BLIT);
 
-	fd_log_stream(batch, stream, util_dump_blit_info(stream, info));
-
 	emit_setup(batch);
+
+	trace_start_blit(&batch->trace, info->src.resource->target, info->dst.resource->target);
 
 	if ((info->src.resource->target == PIPE_BUFFER) &&
 			(info->dst.resource->target == PIPE_BUFFER)) {
 		assert(fd_resource(info->src.resource)->layout.tile_mode == TILE6_LINEAR);
 		assert(fd_resource(info->dst.resource)->layout.tile_mode == TILE6_LINEAR);
-		fd_log(batch, "START BLIT (BUFFER)");
 		emit_blit_buffer(ctx, batch->draw, info);
-		fd_log(batch, "END BLIT (BUFFER)");
 	} else {
 		/* I don't *think* we need to handle blits between buffer <-> !buffer */
 		debug_assert(info->src.resource->target != PIPE_BUFFER);
 		debug_assert(info->dst.resource->target != PIPE_BUFFER);
-		fd_log(batch, "START BLIT (TEXTURE)");
 		emit_blit_texture(ctx, batch->draw, info);
-		fd_log(batch, "END BLIT (TEXTURE)");
 	}
+
+	trace_end_blit(&batch->trace);
 
 	fd6_event_write(batch, batch->draw, PC_CCU_FLUSH_COLOR_TS, true);
 	fd6_event_write(batch, batch->draw, PC_CCU_FLUSH_DEPTH_TS, true);

@@ -1741,7 +1741,7 @@ nir_block_cf_tree_next(nir_block *block)
 
       assert(block == nir_if_last_else_block(if_stmt));
    }
-   /* fallthrough */
+   FALLTHROUGH;
 
    case nir_cf_node_loop:
       return nir_cf_node_as_block(nir_cf_node_next(parent));
@@ -1779,7 +1779,7 @@ nir_block_cf_tree_prev(nir_block *block)
 
       assert(block == nir_if_first_then_block(if_stmt));
    }
-   /* fallthrough */
+   FALLTHROUGH;
 
    case nir_cf_node_loop:
       return nir_cf_node_as_block(nir_cf_node_prev(parent));
@@ -1946,12 +1946,12 @@ nir_index_instrs(nir_function_impl *impl)
    unsigned index = 0;
 
    nir_foreach_block(block, impl) {
-      block->start_ip = index;
+      block->start_ip = index++;
 
       nir_foreach_instr(instr, block)
          instr->index = index++;
 
-      block->end_ip = index;
+      block->end_ip = index++;
    }
 
    return index;
@@ -2247,6 +2247,8 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_ray_geometry_index;
    case SYSTEM_VALUE_RAY_INSTANCE_CUSTOM_INDEX:
       return nir_intrinsic_load_ray_instance_custom_index;
+   case SYSTEM_VALUE_FRAG_SHADING_RATE:
+      return nir_intrinsic_load_frag_shading_rate;
    default:
       unreachable("system value does not directly correspond to intrinsic");
    }
@@ -2382,6 +2384,8 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_RAY_GEOMETRY_INDEX;
    case nir_intrinsic_load_ray_instance_custom_index:
       return SYSTEM_VALUE_RAY_INSTANCE_CUSTOM_INDEX;
+   case nir_intrinsic_load_frag_shading_rate:
+      return SYSTEM_VALUE_FRAG_SHADING_RATE;
    default:
       unreachable("intrinsic doesn't produce a system value");
    }

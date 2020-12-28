@@ -84,6 +84,7 @@ nir_options = {
    .lower_flrp16 = true,
    .lower_flrp32 = true,
    .lower_flrp64 = true,
+   .lower_bitfield_extract_to_shifts = true,
    .lower_extract_word = true,
    .lower_extract_byte = true,
    .lower_all_io_to_elements = true,
@@ -365,39 +366,6 @@ emit_sampler_metadata(struct dxil_module *m, const struct dxil_type *struct_type
    return dxil_get_metadata_node(m, fields, ARRAY_SIZE(fields));
 }
 
-static const struct dxil_type *
-get_glsl_basetype(struct dxil_module *m, enum glsl_base_type type)
-{
-   switch (type) {
-   case GLSL_TYPE_BOOL:
-      return dxil_module_get_int_type(m, 1);
-
-   case GLSL_TYPE_UINT:
-   case GLSL_TYPE_INT:
-      return dxil_module_get_int_type(m, 32);
-
-   default:
-      debug_printf("type: %s\n", glsl_get_type_name(glsl_scalar_type(type)));
-      unreachable("unexpected GLSL type");
-   }
-}
-
-static const struct dxil_type *
-get_glsl_type(struct dxil_module *m, const struct glsl_type *type)
-{
-   assert(type);
-
-   if (glsl_type_is_scalar(type))
-      return get_glsl_basetype(m, glsl_get_base_type(type));
-
-   if (glsl_type_is_array(type))
-      return dxil_module_get_array_type(m,
-         get_glsl_type(m, glsl_get_array_element(type)),
-         glsl_get_length(type));
-
-   unreachable("unexpected glsl type");
-}
-
 
 #define MAX_SRVS 128
 #define MAX_UAVS 64
@@ -461,9 +429,9 @@ unary_func_name(enum dxil_intr intr)
    case DXIL_INTR_ISFINITE:
    case DXIL_INTR_ISNORMAL:
       return "dx.op.isSpecialFloat";
+   default:
+      return "dx.op.unary";
    }
-
-   return "dx.op.unary";
 }
 
 static const struct dxil_value *
@@ -953,7 +921,6 @@ var_fill_const_array(struct ntd_context *ctx, const struct nir_constant *c,
       assert(!glsl_type_is_unsized_array(type));
       const struct glsl_type *without = glsl_without_array(type);
       unsigned stride = glsl_get_explicit_stride(without);
-      enum glsl_base_type without_base = glsl_get_base_type(without);
 
       for (unsigned elt = 0; elt < glsl_get_length(type); elt++) {
          if (!var_fill_const_array(ctx, c->elements[elt], without,
@@ -984,7 +951,6 @@ static bool
 emit_global_consts(struct ntd_context *ctx, nir_shader *s)
 {
    nir_foreach_variable_with_modes(var, s, nir_var_shader_temp) {
-      struct dxil_value *ret;
       bool err;
 
       assert(var->constant_initializer);
@@ -1064,8 +1030,6 @@ emit_cbv(struct ntd_context *ctx, unsigned binding,
 static bool
 emit_ubo_var(struct ntd_context *ctx, nir_variable *var)
 {
-   unsigned size = get_dword_size(var->type);
-   unsigned binding = var->data.binding;
    return emit_cbv(ctx, var->data.binding, get_dword_size(var->type), var->name);
 }
 
@@ -1453,15 +1417,6 @@ get_src(struct ntd_context *ctx, nir_src *src, unsigned chan,
    }
 }
 
-static const struct dxil_value *
-get_src_ptr(struct ntd_context *ctx, nir_src *src, unsigned chan,
-            nir_alu_type type)
-{
-   /* May implement pointer casting */
-   assert(src->is_ssa);
-   return get_src_ssa(ctx, src->ssa, chan);
-}
-
 static const struct dxil_type *
 get_alu_src_type(struct ntd_context *ctx, nir_alu_instr *alu, unsigned src)
 {
@@ -1653,6 +1608,8 @@ emit_cast(struct ntd_context *ctx, nir_alu_instr *alu,
    case DXIL_CAST_FPTOSI:
       if (is_double(info->input_types[0], nir_src_bit_size(alu->src[0].src)))
          ctx->mod.feats.dx11_1_double_extensions = true;
+      break;
+   default:
       break;
    }
 
@@ -2039,7 +1996,7 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
    }
 }
 
-const struct dxil_value *
+static const struct dxil_value *
 load_ubo(struct ntd_context *ctx, const struct dxil_value *handle,
          const struct dxil_value *offset, enum overload_type overload)
 {
@@ -2205,32 +2162,6 @@ get_int32_undef(struct dxil_module *m)
       return NULL;
 
    return dxil_module_get_undef(m, int32_type);
-}
-
-static const struct dxil_value *
-offset_to_index(struct dxil_module *m, const struct dxil_value *offset,
-                unsigned bit_size)
-{
-   unsigned shift_amt = util_logbase2(bit_size / 8);
-   const struct dxil_value *shift =
-      dxil_module_get_int32_const(m, shift_amt);
-   if (!shift)
-      return NULL;
-
-   return dxil_emit_binop(m, DXIL_BINOP_LSHR, offset, shift, 0);
-}
-
-static const struct dxil_value *
-index_to_offset(struct dxil_module *m, const struct dxil_value *index,
-                unsigned bit_size)
-{
-   unsigned shift_amt = util_logbase2(bit_size / 8);
-   const struct dxil_value *shift =
-      dxil_module_get_int32_const(m, shift_amt);
-   if (!shift)
-      return NULL;
-
-   return dxil_emit_binop(m, DXIL_BINOP_SHL, index, shift, 0);
 }
 
 static const struct dxil_value *
@@ -2732,7 +2663,7 @@ emit_load_shared(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 static bool
 emit_load_scratch(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 {
-   const struct dxil_value *zero, *one, *index;
+   const struct dxil_value *zero, *index;
    unsigned bit_size = nir_dest_bit_size(intr->dest);
    unsigned align = bit_size / 8;
 
@@ -3662,6 +3593,10 @@ emit_tex(struct ntd_context *ctx, nir_tex_instr *instr)
       const struct dxil_value *retval = dxil_emit_extractval(&ctx->mod, sample, 3);
       store_dest(ctx, &instr->dest, 0, retval, nir_alu_type_get_base_type(instr->dest_type));
       return true;
+
+   default:
+      fprintf(stderr, "texture op: %d\n", instr->op);
+      unreachable("unknown texture op");
    }
 
    if (!sample)
@@ -4090,13 +4025,13 @@ emit_module(struct ntd_context *ctx, nir_shader *s, const struct nir_to_dxil_opt
    }
 
    if (ctx->mod.feats.native_low_precision)
-      ctx->mod.minor_version = max(ctx->mod.minor_version, 2);
+      ctx->mod.minor_version = MAX2(ctx->mod.minor_version, 2);
 
    return emit_metadata(ctx, s) &&
           dxil_emit_module(&ctx->mod);
 }
 
-unsigned int
+static unsigned int
 get_dxil_shader_kind(struct nir_shader *s)
 {
    switch (s->info.stage) {

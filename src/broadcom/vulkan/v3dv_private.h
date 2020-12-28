@@ -41,8 +41,8 @@
 #include <xf86drm.h>
 
 #ifdef HAVE_VALGRIND
-#include <valgrind/valgrind.h>
-#include <valgrind/memcheck.h>
+#include <valgrind.h>
+#include <memcheck.h>
 #define VG(x) x
 #else
 #define VG(x) ((void)0)
@@ -113,11 +113,6 @@ pack_emit_reloc(void *cl, const void *reloc) {}
 #define for_each_bit(b, dword)                                               \
    for (uint32_t __dword = (dword);                                          \
         (b) = __builtin_ffs(__dword) - 1, __dword; __dword &= ~(1 << (b)))
-
-#define typed_memcpy(dest, src, count) ({				\
-			STATIC_ASSERT(sizeof(*src) == sizeof(*dest)); \
-			memcpy((dest), (src), (count) * sizeof(*(src))); \
-		})
 
 struct v3dv_instance;
 
@@ -1455,6 +1450,11 @@ struct v3dv_descriptor_pool_entry
 struct v3dv_descriptor_pool {
    struct vk_object_base base;
 
+   /* If this descriptor pool has been allocated for the driver for internal
+    * use, typically to implement meta operations.
+    */
+   bool is_driver_internal;
+
    struct v3dv_bo *bo;
    /* Current offset at the descriptor bo. 0 means that we didn't use it for
     * any descriptor. If the descriptor bo is NULL, current offset is
@@ -1850,6 +1850,9 @@ void v3dv_get_internal_type_bpp_for_output_format(uint32_t format, uint32_t *typ
 uint8_t v3dv_get_tex_return_size(const struct v3dv_format *vf, bool compare_enable);
 bool v3dv_tfu_supports_tex_format(const struct v3d_device_info *devinfo,
                                   uint32_t tex_format);
+const struct v3dv_format *
+v3dv_get_compatible_tfu_format(const struct v3d_device_info *devinfo,
+                               uint32_t bpp, VkFormat *out_vk_format);
 bool v3dv_buffer_format_supports_features(VkFormat vk_format,
                                           VkFormatFeatureFlags features);
 bool v3dv_format_supports_tlb_resolve(const struct v3dv_format *format);

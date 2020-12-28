@@ -79,7 +79,6 @@ load_comps_to_vec32(nir_builder *b, unsigned src_bit_size,
    nir_ssa_def *vec32comps[4];
 
    for (unsigned i = 0; i < num_vec32comps; i += step) {
-      nir_ssa_def *tmp;
       switch (src_bit_size) {
       case 64:
          vec32comps[i] = nir_unpack_64_2x32_split_x(b, src_comps[i / 2]);
@@ -89,16 +88,17 @@ load_comps_to_vec32(nir_builder *b, unsigned src_bit_size,
          vec32comps[i] = src_comps[i];
          break;
       case 16:
-      case 8:
+      case 8: {
          unsigned src_offs = i * comps_per32b;
 
          vec32comps[i] = nir_u2u32(b, src_comps[src_offs]);
          for (unsigned j = 1; j < comps_per32b && src_offs + j < num_src_comps; j++) {
-             nir_ssa_def *tmp = nir_ishl(b, nir_u2u32(b, src_comps[src_offs + j]),
-                                            nir_imm_int(b, j * src_bit_size));
-             vec32comps[i] = nir_ior(b, vec32comps[i], tmp);
+            nir_ssa_def *tmp = nir_ishl(b, nir_u2u32(b, src_comps[src_offs + j]),
+                                           nir_imm_int(b, j * src_bit_size));
+            vec32comps[i] = nir_ior(b, vec32comps[i], tmp);
          }
          break;
+      }
       }
    }
 
@@ -284,7 +284,7 @@ lower_load_ssbo(nir_builder *b, nir_intrinsic_instr *intr)
    b->cursor = nir_before_instr(&intr->instr);
 
    nir_ssa_def *buffer = intr->src[0].ssa;
-   nir_ssa_def *offset = nir_iand(b, intr->src[1].ssa, nir_imm_int(b, ~3UL));
+   nir_ssa_def *offset = nir_iand(b, intr->src[1].ssa, nir_imm_int(b, ~3));
    unsigned bit_size = nir_dest_bit_size(intr->dest);
    unsigned num_components = nir_dest_num_components(intr->dest);
    unsigned num_bits = num_components * bit_size;
@@ -350,7 +350,7 @@ lower_store_ssbo(nir_builder *b, nir_intrinsic_instr *intr)
 
    nir_ssa_def *val = intr->src[0].ssa;
    nir_ssa_def *buffer = intr->src[1].ssa;
-   nir_ssa_def *offset = nir_iand(b, intr->src[2].ssa, nir_imm_int(b, ~3UL));
+   nir_ssa_def *offset = nir_iand(b, intr->src[2].ssa, nir_imm_int(b, ~3));
 
    unsigned bit_size = val->bit_size;
    unsigned num_components = val->num_components;
@@ -417,7 +417,7 @@ lower_store_ssbo(nir_builder *b, nir_intrinsic_instr *intr)
    return true;
 }
 
-void
+static void
 lower_load_vec32(nir_builder *b, nir_ssa_def *index, unsigned num_comps, nir_ssa_def **comps, nir_intrinsic_op op)
 {
    for (unsigned i = 0; i < num_comps; i++) {
@@ -719,7 +719,7 @@ dxil_nir_lower_ubo_to_temp(nir_shader *nir)
    return progress;
 }
 
-bool
+static bool
 lower_load_ubo(nir_builder *b, nir_intrinsic_instr *intr)
 {
    assert(intr->dest.is_ssa);
@@ -778,6 +778,8 @@ dxil_nir_lower_loads_stores_to_dxil(nir_shader *nir)
             case nir_intrinsic_store_ssbo:
                progress |= lower_store_ssbo(&b, intr);
                break;
+            default:
+               break;
             }
          }
       }
@@ -786,6 +788,7 @@ dxil_nir_lower_loads_stores_to_dxil(nir_shader *nir)
    return progress;
 }
 
+static bool
 lower_shared_atomic(nir_builder *b, nir_intrinsic_instr *intr,
                     nir_intrinsic_op dxil_op)
 {
@@ -852,6 +855,8 @@ dxil_nir_lower_atomics_to_dxil(nir_shader *nir)
             ATOMIC(comp_swap);
 
 #undef ATOMIC
+            default:
+               break;
             }
          }
       }
@@ -1200,6 +1205,8 @@ lower_fp16_casts_filter(const nir_instr *instr, const void *data)
       case nir_op_f2f16_rtne:
       case nir_op_f2f16_rtz:
          return true;
+      default:
+         return false;
       }
    } else if (instr->type == nir_instr_type_intrinsic) {
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
@@ -1234,7 +1241,6 @@ float_to_half_impl(nir_builder *b, nir_ssa_def *src, nir_rounding_mode mode)
 {
    nir_ssa_def *f32infinity = nir_imm_int(b, 255 << 23);
    nir_ssa_def *f16max = nir_imm_int(b, (127 + 16) << 23);
-   nir_ssa_def *denorm_magic = nir_imm_int(b, ((127 - 15) + (23 - 10) + 1) << 23);
    nir_ssa_def *sign = nir_iand(b, src, nir_imm_int(b, 0x80000000));
    nir_ssa_def *one = nir_imm_int(b, 1);
 
@@ -1350,6 +1356,7 @@ lower_fp16_cast_impl(nir_builder *b, nir_instr *instr, void *data)
       case nir_op_f2f16_rtz:
          mode = nir_rounding_mode_rtz;
          break;
+      default: unreachable("Should've been filtered");
       }
    } else {
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);

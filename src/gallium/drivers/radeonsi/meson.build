@@ -19,7 +19,6 @@
 # SOFTWARE.
 
 files_libradeonsi = files(
-  'cik_sdma.c',
   'driinfo_radeonsi.h',
   'gfx10_query.c',
   'gfx10_shader_ngg.c',
@@ -35,7 +34,6 @@ files_libradeonsi = files(
   'si_cp_reg_shadowing.c',
   'si_debug.c',
   'si_descriptors.c',
-  'si_dma_cs.c',
   'si_fence.c',
   'si_get.c',
   'si_gfx_cs.c',
@@ -62,12 +60,12 @@ files_libradeonsi = files(
   'si_state.c',
   'si_state.h',
   'si_state_binning.c',
-  'si_state_draw.c',
+  'si_state_draw.cpp',
   'si_state_msaa.c',
   'si_state_shaders.c',
   'si_state_streamout.c',
   'si_state_viewport.c',
-  'si_test_dma.c',
+  'si_test_blit.c',
   'si_test_dma_perf.c',
   'si_texture.c',
   'si_uvd.c',

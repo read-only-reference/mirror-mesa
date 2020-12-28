@@ -137,7 +137,9 @@ else
   driver_i915 = declare_dependency()
 endif
 if with_gallium_svga
-  subdir('winsys/svga/drm')
+  if not with_platform_windows
+     subdir('winsys/svga/drm')
+  endif
   subdir('drivers/svga')
 else
   driver_svga = declare_dependency()
@@ -178,7 +180,7 @@ if with_dri
   subdir('frontends/dri')
   subdir('targets/dri')
 endif
-if with_osmesa == 'gallium'
+if with_osmesa
   subdir('frontends/osmesa')
   subdir('targets/osmesa')
 endif

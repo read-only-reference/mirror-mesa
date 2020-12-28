@@ -34,6 +34,7 @@
 #include "util/list.h"
 #include "util/slab.h"
 #include "util/u_string.h"
+#include "util/u_trace.h"
 
 #include "freedreno_screen.h"
 #include "freedreno_gmem.h"
@@ -252,6 +253,7 @@ struct fd_context {
 
 	/* shaders used by clear, and gmem->mem blits: */
 	struct fd_program_stateobj solid_prog; // TODO move to screen?
+	struct fd_program_stateobj solid_layered_prog;
 
 	/* shaders used by mem->gmem blits: */
 	struct fd_program_stateobj blit_prog[MAX_RENDER_TARGETS]; // TODO move to screen?
@@ -393,6 +395,8 @@ struct fd_context {
 
 	struct pipe_debug_callback debug;
 
+	struct u_trace_context trace_context;
+
 	/* Called on rebind_resource() for any per-gen cleanup required: */
 	void (*rebind_resource)(struct fd_context *ctx, struct fd_resource *rsc);
 
@@ -437,10 +441,6 @@ struct fd_context {
 	/* logger: */
 	void (*record_timestamp)(struct fd_ringbuffer *ring, struct fd_bo *bo, unsigned offset);
 	uint64_t (*ts_to_ns)(uint64_t ts);
-
-	struct list_head log_chunks;  /* list of flushed log chunks in fifo order */
-	unsigned frame_nr;            /* frame counter (for fd_log) */
-	FILE *log_out;
 
 	/*
 	 * Common pre-cooked VBO state (used for a3xx and later):

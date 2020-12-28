@@ -924,23 +924,28 @@ struct copy_operation {
    };
 };
 
-void split_copy(unsigned offset, Definition *def, Operand *op, const copy_operation& src, bool ignore_uses, unsigned max_size)
+void split_copy(lower_context *ctx, unsigned offset, Definition *def, Operand *op,
+                const copy_operation& src, bool ignore_uses, unsigned max_size)
 {
    PhysReg def_reg = src.def.physReg();
    PhysReg op_reg = src.op.physReg();
    def_reg.reg_b += offset;
    op_reg.reg_b += offset;
 
-   max_size = MIN2(max_size, src.def.regClass().type() == RegType::vgpr ? 4 : 8);
+   /* 64-bit VGPR copies (implemented with v_lshrrev_b64) are slow before GFX10 */
+   if (ctx->program->chip_class < GFX10 &&
+       src.def.regClass().type() == RegType::vgpr)
+      max_size = MIN2(max_size, 4);
+   unsigned max_align = src.def.regClass().type() == RegType::vgpr ? 4 : 16;
 
    /* make sure the size is a power of two and reg % bytes == 0 */
    unsigned bytes = 1;
    for (; bytes <= max_size; bytes *= 2) {
       unsigned next = bytes * 2u;
-      bool can_increase = def_reg.reg_b % next == 0 &&
+      bool can_increase = def_reg.reg_b % MIN2(next, max_align) == 0 &&
                           offset + next <= src.bytes && next <= max_size;
       if (!src.op.isConstant() && can_increase)
-         can_increase = op_reg.reg_b % next == 0;
+         can_increase = op_reg.reg_b % MIN2(next, max_align) == 0;
       for (unsigned i = 0; !ignore_uses && can_increase && (i < bytes); i++)
          can_increase = (src.uses[offset + bytes + i] == 0) == (src.uses[offset] == 0);
       if (!can_increase)
@@ -952,14 +957,8 @@ void split_copy(unsigned offset, Definition *def, Operand *op, const copy_operat
    *def = Definition(src.def.tempId(), def_reg, def_cls);
    if (src.op.isConstant()) {
       assert(bytes >= 1 && bytes <= 8);
-      if (bytes == 8)
-         *op = Operand(src.op.constantValue64() >> (offset * 8u));
-      else if (bytes == 4)
-         *op = Operand(uint32_t(src.op.constantValue64() >> (offset * 8u)));
-      else if (bytes == 2)
-         *op = Operand(uint16_t(src.op.constantValue64() >> (offset * 8u)));
-      else if (bytes == 1)
-         *op = Operand(uint8_t(src.op.constantValue64() >> (offset * 8u)));
+      uint64_t val = src.op.constantValue64() >> (offset * 8u);
+      *op = Operand::get_const(ctx->program->chip_class, val, bytes);
    } else {
       RegClass op_cls = bytes % 4 == 0 ? RegClass(src.op.regClass().type(), bytes / 4u) :
                         RegClass(src.op.regClass().type(), bytes).as_subdword();
@@ -1012,7 +1011,16 @@ void copy_constant(lower_context *ctx, Builder& bld, Definition dst, Operand op)
    if (dst.regClass() == s1) {
       bld.sop1(aco_opcode::s_mov_b32, dst, op);
    } else if (dst.regClass() == s2) {
+      /* s_ashr_i64 writes SCC, so we can't use it */
+      assert(Operand::is_constant_representable(op.constantValue64(), 8, true, false));
       bld.sop1(aco_opcode::s_mov_b64, dst, op);
+   } else if (dst.regClass() == v2) {
+      if (Operand::is_constant_representable(op.constantValue64(), 8, true, false)) {
+         bld.vop3(aco_opcode::v_lshrrev_b64, dst, Operand(0u), op);
+      } else {
+         assert(Operand::is_constant_representable(op.constantValue64(), 8, false, true));
+         bld.vop3(aco_opcode::v_ashrrev_i64, dst, Operand(0u), op);
+      }
    } else if (dst.regClass() == v1) {
       bld.vop1(aco_opcode::v_mov_b32, dst, op);
    } else if (dst.regClass() == v1b) {
@@ -1072,7 +1080,7 @@ bool do_copy(lower_context* ctx, Builder& bld, const copy_operation& copy, bool 
 
       Definition def;
       Operand op;
-      split_copy(offset, &def, &op, copy, false, 8);
+      split_copy(ctx, offset, &def, &op, copy, false, 8);
 
       if (def.physReg() == scc) {
          bld.sopc(aco_opcode::s_cmp_lg_i32, def, op, Operand(0u));
@@ -1081,6 +1089,8 @@ bool do_copy(lower_context* ctx, Builder& bld, const copy_operation& copy, bool 
          copy_constant(ctx, bld, def, op);
       } else if (def.regClass() == v1) {
          bld.vop1(aco_opcode::v_mov_b32, def, op);
+      } else if (def.regClass() == v2) {
+         bld.vop3(aco_opcode::v_lshrrev_b64, def, Operand(0u), op);
       } else if (def.regClass() == s1) {
          bld.sop1(aco_opcode::s_mov_b32, def, op);
       } else if (def.regClass() == s2) {
@@ -1160,7 +1170,8 @@ void do_swap(lower_context *ctx, Builder& bld, const copy_operation& copy, bool 
    for (; offset < copy.bytes;) {
       Definition def;
       Operand op;
-      split_copy(offset, &def, &op, copy, true, 8);
+      unsigned max_size = copy.def.regClass().type() == RegType::vgpr ? 4 : 8;
+      split_copy(ctx, offset, &def, &op, copy, true, max_size);
 
       assert(op.regClass() == def.regClass());
       Operand def_as_op = Operand(def.physReg(), def.regClass());
@@ -1320,6 +1331,51 @@ void do_pack_2x16(lower_context *ctx, Builder& bld, Definition def, Operand lo, 
    bld.vop3(aco_opcode::v_alignbyte_b32, def, hi, lo, Operand(2u));
 }
 
+void try_coalesce_copies(lower_context *ctx,
+                         std::map<PhysReg, copy_operation>& copy_map,
+                         copy_operation& copy)
+{
+   // TODO try more relaxed alignment for subdword copies
+   unsigned next_def_align = util_next_power_of_two(copy.bytes + 1);
+   unsigned next_op_align = next_def_align;
+   if (copy.def.regClass().type() == RegType::vgpr)
+      next_def_align = MIN2(next_def_align, 4);
+   if (copy.op.regClass().type() == RegType::vgpr)
+      next_op_align = MIN2(next_op_align, 4);
+
+   if (copy.bytes >= 8 || copy.def.physReg().reg_b % next_def_align ||
+       (!copy.op.isConstant() && copy.op.physReg().reg_b % next_op_align))
+      return;
+
+   auto other = copy_map.find(copy.def.physReg().advance(copy.bytes));
+   if (other == copy_map.end() || copy.bytes + other->second.bytes > 8 ||
+       copy.op.isConstant() != other->second.op.isConstant())
+      return;
+
+   /* don't create 64-bit copies before GFX10 */
+   if (copy.bytes >= 4 && copy.def.regClass().type() == RegType::vgpr &&
+       ctx->program->chip_class < GFX10)
+      return;
+
+   unsigned new_size = copy.bytes + other->second.bytes;
+   if (copy.op.isConstant()) {
+      uint64_t val = copy.op.constantValue64() |
+                     (other->second.op.constantValue64() << (copy.bytes * 8u));
+      if (!Operand::is_constant_representable(val, copy.bytes + other->second.bytes, true,
+                                              copy.def.regClass().type() == RegType::vgpr))
+         return;
+      copy.op = Operand::get_const(ctx->program->chip_class, val, new_size);
+   } else {
+      if (other->second.op.physReg() != copy.op.physReg().advance(copy.bytes))
+         return;
+      copy.op = Operand(copy.op.physReg(), RegClass::get(copy.op.regClass().type(), new_size));
+   }
+
+   copy.bytes = new_size;
+   copy.def = Definition(copy.def.physReg(), RegClass::get(copy.def.regClass().type(), copy.bytes));
+   copy_map.erase(other);
+}
+
 void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context* ctx, chip_class chip_class, Pseudo_instruction *pi)
 {
    Builder bld(ctx->program, &ctx->instructions);
@@ -1357,25 +1413,7 @@ void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context*
          it->second.bytes = 8;
       }
 
-      /* try to coalesce copies */
-      if (it->second.bytes < 8 && !it->second.op.isConstant() &&
-          it->first.reg_b % util_next_power_of_two(it->second.bytes + 1) == 0 &&
-          it->second.op.physReg().reg_b % util_next_power_of_two(it->second.bytes + 1) == 0) {
-         // TODO try more relaxed alignment for subdword copies
-         PhysReg other_def_reg = it->first;
-         other_def_reg.reg_b += it->second.bytes;
-         PhysReg other_op_reg = it->second.op.physReg();
-         other_op_reg.reg_b += it->second.bytes;
-         std::map<PhysReg, copy_operation>::iterator other = copy_map.find(other_def_reg);
-         if (other != copy_map.end() &&
-             other->second.op.physReg() == other_op_reg &&
-             it->second.bytes + other->second.bytes <= 8) {
-            it->second.bytes += other->second.bytes;
-            it->second.def = Definition(it->first, RegClass::get(it->second.def.regClass().type(), it->second.bytes));
-            it->second.op = Operand(it->second.op.physReg(), RegClass::get(it->second.op.regClass().type(), it->second.bytes));
-            copy_map.erase(other);
-         }
-      }
+      try_coalesce_copies(ctx, copy_map, it->second);
 
       /* check if the definition reg is used by another copy operation */
       for (std::pair<const PhysReg, copy_operation>& copy : copy_map) {
@@ -1548,7 +1586,7 @@ void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context*
             }
             Definition def;
             Operand op;
-            split_copy(offset, &def, &op, original, false, 8);
+            split_copy(ctx, offset, &def, &op, original, false, 8);
 
             copy_operation new_copy = {op, def, def.bytes()};
             for (unsigned i = 0; i < new_copy.bytes; i++)
@@ -1613,31 +1651,28 @@ void handle_operands(std::map<PhysReg, copy_operation>& copy_map, lower_context*
 
       /* if this is self-intersecting, we have to split it because
        * self-intersecting swaps don't make sense */
-      PhysReg lower = swap.def.physReg();
-      PhysReg higher = swap.op.physReg();
-      if (lower.reg_b > higher.reg_b)
-         std::swap(lower, higher);
-      if (higher.reg_b - lower.reg_b < (int)swap.bytes) {
-         unsigned offset = higher.reg_b - lower.reg_b;
+      PhysReg src = swap.op.physReg(), dst = swap.def.physReg();
+      if (abs((int)src.reg_b - (int)dst.reg_b) < (int)swap.bytes) {
+         unsigned offset = abs((int)src.reg_b - (int)dst.reg_b);
          RegType type = swap.def.regClass().type();
 
          copy_operation middle;
-         lower.reg_b += offset;
-         higher.reg_b += offset;
+         src.reg_b += offset;
+         dst.reg_b += offset;
          middle.bytes = swap.bytes - offset * 2;
          memcpy(middle.uses, swap.uses + offset, middle.bytes);
-         middle.op = Operand(lower, RegClass::get(type, middle.bytes));
-         middle.def = Definition(higher, RegClass::get(type, middle.bytes));
-         copy_map[higher] = middle;
+         middle.op = Operand(src, RegClass::get(type, middle.bytes));
+         middle.def = Definition(dst, RegClass::get(type, middle.bytes));
+         copy_map[dst] = middle;
 
          copy_operation end;
-         lower.reg_b += middle.bytes;
-         higher.reg_b += middle.bytes;
+         src.reg_b += middle.bytes;
+         dst.reg_b += middle.bytes;
          end.bytes = swap.bytes - (offset + middle.bytes);
          memcpy(end.uses, swap.uses + offset + middle.bytes, end.bytes);
-         end.op = Operand(lower, RegClass::get(type, end.bytes));
-         end.def = Definition(higher, RegClass::get(type, end.bytes));
-         copy_map[higher] = end;
+         end.op = Operand(src, RegClass::get(type, end.bytes));
+         end.def = Definition(dst, RegClass::get(type, end.bytes));
+         copy_map[dst] = end;
 
          memset(swap.uses + offset, 0, swap.bytes - offset);
          swap.bytes = offset;

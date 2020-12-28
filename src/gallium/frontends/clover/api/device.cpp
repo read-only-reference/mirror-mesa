@@ -369,9 +369,7 @@ clGetDeviceInfo(cl_device_id d_dev, cl_device_info param,
       break;
 
    case CL_DEVICE_PRINTF_BUFFER_SIZE:
-      // Per the spec, the minimum value for the FULL profile is 1 MB.
-      // However, clover is not ready yet to support it
-      buf.as_scalar<size_t>() = 0 /* 1024 */;
+      buf.as_scalar<size_t>() = dev.max_printf_buffer_size();
       break;
 
    case CL_DEVICE_PREFERRED_INTEROP_USER_SYNC:
@@ -413,6 +411,10 @@ clGetDeviceInfo(cl_device_id d_dev, cl_device_info param,
       buf.as_scalar<cl_version>() = dev.device_version();
       break;
 
+   case CL_DEVICE_OPENCL_C_NUMERIC_VERSION_KHR:
+      buf.as_scalar<cl_version>() = dev.device_clc_version();
+      break;
+
    case CL_DEVICE_OPENCL_C_ALL_VERSIONS:
       buf.as_vector<cl_name_version>() = dev.opencl_c_all_versions();
       break;
@@ -430,9 +432,12 @@ clGetDeviceInfo(cl_device_id d_dev, cl_device_info param,
       break;
 
    case CL_DEVICE_ILS_WITH_VERSION:
-   case CL_DEVICE_BUILT_IN_KERNELS_WITH_VERSION:
       if (r_size)
          *r_size = 0;
+      break;
+
+   case CL_DEVICE_BUILT_IN_KERNELS_WITH_VERSION:
+      buf.as_vector<cl_name_version>() = std::vector<cl_name_version>{};
       break;
 
    case CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS:

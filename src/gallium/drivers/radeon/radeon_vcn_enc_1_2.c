@@ -81,7 +81,7 @@ static void radeon_enc_task_info(struct radeon_encoder *enc, bool need_feedback)
       enc->enc_pic.task_info.allowed_max_num_feedbacks = 0;
 
    RADEON_ENC_BEGIN(enc->cmd.task_info);
-   enc->p_task_size = &enc->cs->current.buf[enc->cs->current.cdw++];
+   enc->p_task_size = &enc->cs.current.buf[enc->cs.current.cdw++];
    RADEON_ENC_CS(enc->enc_pic.task_info.task_id);
    RADEON_ENC_CS(enc->enc_pic.task_info.allowed_max_num_feedbacks);
    RADEON_ENC_END();
@@ -282,7 +282,7 @@ static void radeon_enc_nalu_sps(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.nalu);
    RADEON_ENC_CS(RENCODE_DIRECT_OUTPUT_NALU_TYPE_SPS);
-   uint32_t *size_in_bytes = &enc->cs->current.buf[enc->cs->current.cdw++];
+   uint32_t *size_in_bytes = &enc->cs.current.buf[enc->cs.current.cdw++];
    radeon_enc_reset(enc);
    radeon_enc_set_emulation_prevention(enc, false);
    radeon_enc_code_fixed_bits(enc, 0x00000001, 32);
@@ -364,7 +364,7 @@ static void radeon_enc_nalu_sps_hevc(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.nalu);
    RADEON_ENC_CS(RENCODE_DIRECT_OUTPUT_NALU_TYPE_SPS);
-   uint32_t *size_in_bytes = &enc->cs->current.buf[enc->cs->current.cdw++];
+   uint32_t *size_in_bytes = &enc->cs.current.buf[enc->cs.current.cdw++];
    int i;
 
    radeon_enc_reset(enc);
@@ -455,7 +455,7 @@ static void radeon_enc_nalu_pps(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.nalu);
    RADEON_ENC_CS(RENCODE_DIRECT_OUTPUT_NALU_TYPE_PPS);
-   uint32_t *size_in_bytes = &enc->cs->current.buf[enc->cs->current.cdw++];
+   uint32_t *size_in_bytes = &enc->cs.current.buf[enc->cs.current.cdw++];
    radeon_enc_reset(enc);
    radeon_enc_set_emulation_prevention(enc, false);
    radeon_enc_code_fixed_bits(enc, 0x00000001, 32);
@@ -490,7 +490,7 @@ static void radeon_enc_nalu_pps_hevc(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.nalu);
    RADEON_ENC_CS(RENCODE_DIRECT_OUTPUT_NALU_TYPE_PPS);
-   uint32_t *size_in_bytes = &enc->cs->current.buf[enc->cs->current.cdw++];
+   uint32_t *size_in_bytes = &enc->cs.current.buf[enc->cs.current.cdw++];
    radeon_enc_reset(enc);
    radeon_enc_set_emulation_prevention(enc, false);
    radeon_enc_code_fixed_bits(enc, 0x00000001, 32);
@@ -548,7 +548,7 @@ static void radeon_enc_nalu_vps(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.nalu);
    RADEON_ENC_CS(RENCODE_DIRECT_OUTPUT_NALU_TYPE_VPS);
-   uint32_t *size_in_bytes = &enc->cs->current.buf[enc->cs->current.cdw++];
+   uint32_t *size_in_bytes = &enc->cs.current.buf[enc->cs.current.cdw++];
    int i;
 
    radeon_enc_reset(enc);
@@ -602,7 +602,7 @@ static void radeon_enc_nalu_aud_hevc(struct radeon_encoder *enc)
 {
    RADEON_ENC_BEGIN(enc->cmd.nalu);
    RADEON_ENC_CS(RENCODE_DIRECT_OUTPUT_NALU_TYPE_AUD);
-   uint32_t *size_in_bytes = &enc->cs->current.buf[enc->cs->current.cdw++];
+   uint32_t *size_in_bytes = &enc->cs.current.buf[enc->cs.current.cdw++];
    radeon_enc_reset(enc);
    radeon_enc_set_emulation_prevention(enc, false);
    radeon_enc_code_fixed_bits(enc, 0x00000001, 32);
@@ -640,12 +640,14 @@ static void radeon_enc_slice_header(struct radeon_encoder *enc)
    uint32_t instruction[RENCODE_SLICE_HEADER_TEMPLATE_MAX_NUM_INSTRUCTIONS] = {0};
    uint32_t num_bits[RENCODE_SLICE_HEADER_TEMPLATE_MAX_NUM_INSTRUCTIONS] = {0};
    unsigned int inst_index = 0;
-   unsigned int bit_index = 0;
+   unsigned int cdw_start = 0;
+   unsigned int cdw_filled = 0;
    unsigned int bits_copied = 0;
    RADEON_ENC_BEGIN(enc->cmd.slice_header);
    radeon_enc_reset(enc);
    radeon_enc_set_emulation_prevention(enc, false);
 
+   cdw_start = enc->cs.current.cdw;
    if (enc->enc_pic.is_idr)
       radeon_enc_code_fixed_bits(enc, 0x65, 8);
    else if (enc->enc_pic.not_referenced)
@@ -654,7 +656,6 @@ static void radeon_enc_slice_header(struct radeon_encoder *enc)
       radeon_enc_code_fixed_bits(enc, 0x41, 8);
 
    radeon_enc_flush_headers(enc);
-   bit_index++;
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
    num_bits[inst_index] = enc->bits_output - bits_copied;
    bits_copied = enc->bits_output;
@@ -724,7 +725,6 @@ static void radeon_enc_slice_header(struct radeon_encoder *enc)
       radeon_enc_code_ue(enc, enc->enc_pic.spec_misc.cabac_init_idc);
 
    radeon_enc_flush_headers(enc);
-   bit_index++;
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
    num_bits[inst_index] = enc->bits_output - bits_copied;
    bits_copied = enc->bits_output;
@@ -741,7 +741,6 @@ static void radeon_enc_slice_header(struct radeon_encoder *enc)
    }
 
    radeon_enc_flush_headers(enc);
-   bit_index++;
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
    num_bits[inst_index] = enc->bits_output - bits_copied;
    bits_copied = enc->bits_output;
@@ -749,7 +748,8 @@ static void radeon_enc_slice_header(struct radeon_encoder *enc)
 
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_END;
 
-   for (int i = bit_index; i < RENCODE_SLICE_HEADER_TEMPLATE_MAX_TEMPLATE_SIZE_IN_DWORDS; i++)
+   cdw_filled = enc->cs.current.cdw - cdw_start;
+   for (int i = 0; i < RENCODE_SLICE_HEADER_TEMPLATE_MAX_TEMPLATE_SIZE_IN_DWORDS - cdw_filled; i++)
       RADEON_ENC_CS(0x00000000);
 
    for (int j = 0; j < RENCODE_SLICE_HEADER_TEMPLATE_MAX_NUM_INSTRUCTIONS; j++) {
@@ -765,19 +765,20 @@ static void radeon_enc_slice_header_hevc(struct radeon_encoder *enc)
    uint32_t instruction[RENCODE_SLICE_HEADER_TEMPLATE_MAX_NUM_INSTRUCTIONS] = {0};
    uint32_t num_bits[RENCODE_SLICE_HEADER_TEMPLATE_MAX_NUM_INSTRUCTIONS] = {0};
    unsigned int inst_index = 0;
-   unsigned int bit_index = 0;
+   unsigned int cdw_start = 0;
+   unsigned int cdw_filled = 0;
    unsigned int bits_copied = 0;
    RADEON_ENC_BEGIN(enc->cmd.slice_header);
    radeon_enc_reset(enc);
    radeon_enc_set_emulation_prevention(enc, false);
 
+   cdw_start = enc->cs.current.cdw;
    radeon_enc_code_fixed_bits(enc, 0x0, 1);
    radeon_enc_code_fixed_bits(enc, enc->enc_pic.nal_unit_type, 6);
    radeon_enc_code_fixed_bits(enc, 0x0, 6);
    radeon_enc_code_fixed_bits(enc, 0x1, 3);
 
    radeon_enc_flush_headers(enc);
-   bit_index++;
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
    num_bits[inst_index] = enc->bits_output - bits_copied;
    bits_copied = enc->bits_output;
@@ -792,7 +793,6 @@ static void radeon_enc_slice_header_hevc(struct radeon_encoder *enc)
    radeon_enc_code_ue(enc, 0x0);
 
    radeon_enc_flush_headers(enc);
-   bit_index++;
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
    num_bits[inst_index] = enc->bits_output - bits_copied;
    bits_copied = enc->bits_output;
@@ -840,7 +840,6 @@ static void radeon_enc_slice_header_hevc(struct radeon_encoder *enc)
    }
 
    radeon_enc_flush_headers(enc);
-   bit_index++;
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
    num_bits[inst_index] = enc->bits_output - bits_copied;
    bits_copied = enc->bits_output;
@@ -855,7 +854,6 @@ static void radeon_enc_slice_header_hevc(struct radeon_encoder *enc)
                                  1);
 
       radeon_enc_flush_headers(enc);
-      bit_index++;
       instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_COPY;
       num_bits[inst_index] = enc->bits_output - bits_copied;
       bits_copied = enc->bits_output;
@@ -864,7 +862,8 @@ static void radeon_enc_slice_header_hevc(struct radeon_encoder *enc)
 
    instruction[inst_index] = RENCODE_HEADER_INSTRUCTION_END;
 
-   for (int i = bit_index; i < RENCODE_SLICE_HEADER_TEMPLATE_MAX_TEMPLATE_SIZE_IN_DWORDS; i++)
+   cdw_filled = enc->cs.current.cdw - cdw_start;
+   for (int i = 0; i < RENCODE_SLICE_HEADER_TEMPLATE_MAX_TEMPLATE_SIZE_IN_DWORDS - cdw_filled; i++)
       RADEON_ENC_CS(0x00000000);
 
    for (int j = 0; j < RENCODE_SLICE_HEADER_TEMPLATE_MAX_NUM_INSTRUCTIONS; j++) {
@@ -1157,7 +1156,7 @@ static void encode(struct radeon_encoder *enc)
    enc->feedback(enc);
    enc->intra_refresh(enc);
 
-   enc->op_speed(enc);
+   enc->op_preset(enc);
    enc->op_enc(enc);
    *enc->p_task_size = (enc->total_task_size);
 }
@@ -1194,7 +1193,7 @@ void radeon_enc_1_2_init(struct radeon_encoder *enc)
    enc->op_enc = radeon_enc_op_enc;
    enc->op_init_rc = radeon_enc_op_init_rc;
    enc->op_init_rc_vbv = radeon_enc_op_init_rc_vbv;
-   enc->op_speed = radeon_enc_op_speed;
+   enc->op_preset = radeon_enc_op_speed;
 
    if (u_reduce_video_profile(enc->base.profile) == PIPE_VIDEO_FORMAT_MPEG4_AVC) {
       enc->session_init = radeon_enc_session_init;

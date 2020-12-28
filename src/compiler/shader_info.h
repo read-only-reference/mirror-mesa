@@ -49,6 +49,7 @@ struct spirv_supported_capabilities {
    bool float64_atomic_add;
    bool fragment_shader_sample_interlock;
    bool fragment_shader_pixel_interlock;
+   bool fragment_shading_rate;
    bool generic_pointers;
    bool geometry_streams;
    bool image_ms_array;
@@ -67,6 +68,7 @@ struct spirv_supported_capabilities {
    bool multiview;
    bool physical_storage_buffer_address;
    bool post_depth_coverage;
+   bool printf;
    bool ray_tracing;
    bool ray_query;
    bool ray_traversal_primitive_culling;
@@ -250,7 +252,7 @@ typedef struct shader_info {
          /** 1 .. MAX_GEOMETRY_SHADER_INVOCATIONS */
          uint8_t invocations;
 
-         /** The number of vertices recieves per input primitive (max. 6) */
+         /** The number of vertices received per input primitive (max. 6) */
          uint8_t vertices_in:3;
 
          /** Whether or not this shader uses EndPrimitive */
@@ -284,6 +286,11 @@ typedef struct shader_info {
           * Whether any inputs are declared with the "sample" qualifier.
           */
          bool uses_sample_qualifier:1;
+
+         /**
+          * Whether sample shading is used.
+          */
+         bool uses_sample_shading:1;
 
          /**
           * Whether early fragment tests are enabled as defined by

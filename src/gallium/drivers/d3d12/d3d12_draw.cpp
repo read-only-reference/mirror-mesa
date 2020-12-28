@@ -66,8 +66,8 @@ fill_cbv_descriptors(struct d3d12_context *ctx,
       d3d12_transition_resource_state(ctx, res, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
       D3D12_CONSTANT_BUFFER_VIEW_DESC cbv_desc = {};
       cbv_desc.BufferLocation = d3d12_resource_gpu_virtual_address(res) + buffer->buffer_offset;
-      cbv_desc.SizeInBytes = min(D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16, 
-                                 align(buffer->buffer_size, 256));
+      cbv_desc.SizeInBytes = MIN2(D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16,
+                                  align(buffer->buffer_size, 256));
       d3d12_batch_reference_resource(batch, res);
 
       struct d3d12_descriptor_handle handle;
@@ -89,11 +89,11 @@ fill_srv_descriptors(struct d3d12_context *ctx,
 
    d2d12_descriptor_heap_get_next_handle(batch->view_heap, &table_start);
 
-   for (int i = 0; i < shader->num_srv_bindings; i++)
+   for (unsigned i = 0; i < shader->num_srv_bindings; i++)
    {
       struct d3d12_sampler_view *view;
 
-      if (shader->srv_bindings[i].binding == shader->pstipple_binding) {
+      if ((unsigned)shader->srv_bindings[i].binding == shader->pstipple_binding) {
          view = (struct d3d12_sampler_view*)ctx->pstipple.sampler_view;
       } else {
          int index = shader->srv_bindings[i].index;
@@ -140,11 +140,11 @@ fill_sampler_descriptors(struct d3d12_context *ctx,
 
    d2d12_descriptor_heap_get_next_handle(batch->sampler_heap, &table_start);
 
-   for (int i = 0; i < shader->num_srv_bindings; i++)
+   for (unsigned i = 0; i < shader->num_srv_bindings; i++)
    {
       struct d3d12_sampler_state *sampler;
 
-      if (shader->srv_bindings[i].binding == shader->pstipple_binding) {
+      if ((unsigned)shader->srv_bindings[i].binding == shader->pstipple_binding) {
          sampler = ctx->pstipple.sampler_cso;
       } else {
          int index = shader->srv_bindings[i].index;
@@ -430,7 +430,7 @@ d3d12_draw_vbo(struct pipe_context *pctx,
    struct d3d12_batch *batch;
    struct pipe_resource *index_buffer = NULL;
    unsigned index_offset = 0;
-   enum d3d12_surface_conversion_mode conversion_modes[PIPE_MAX_COLOR_BUFS] = {0};
+   enum d3d12_surface_conversion_mode conversion_modes[PIPE_MAX_COLOR_BUFS] = {};
 
    if (!prim_supported(dinfo->mode) ||
        dinfo->index_size == 1 ||
@@ -577,7 +577,7 @@ d3d12_draw_vbo(struct pipe_context *pctx,
    if (ctx->cmdlist_dirty & D3D12_DIRTY_VIEWPORT) {
       if (ctx->need_zero_one_depth_range) {
          D3D12_VIEWPORT viewports[PIPE_MAX_VIEWPORTS];
-         for (int i = 0; i < ctx->num_viewports; ++i) {
+         for (unsigned i = 0; i < ctx->num_viewports; ++i) {
             viewports[i] = ctx->viewports[i];
             viewports[i].MinDepth = 0.0f;
             viewports[i].MaxDepth = 1.0f;
@@ -664,7 +664,7 @@ d3d12_draw_vbo(struct pipe_context *pctx,
                                                                               : ctx->so_targets;
    D3D12_STREAM_OUTPUT_BUFFER_VIEW *so_buffer_views = ctx->fake_so_buffer_factor ? ctx->fake_so_buffer_views
                                                                                  : ctx->so_buffer_views;
-   for (int i = 0; i < ctx->gfx_pipeline_state.num_so_targets; ++i) {
+   for (unsigned i = 0; i < ctx->gfx_pipeline_state.num_so_targets; ++i) {
       struct d3d12_stream_output_target *target = (struct d3d12_stream_output_target *)so_targets[i];
 
       if (!target)

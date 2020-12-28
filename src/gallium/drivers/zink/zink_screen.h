@@ -25,6 +25,7 @@
 #define ZINK_SCREEN_H
 
 #include "zink_device_info.h"
+#include "zink_instance.h"
 
 #include "pipe/p_screen.h"
 #include "util/slab.h"
@@ -50,7 +51,11 @@ struct zink_screen {
 
    struct slab_parent_pool transfer_pool;
 
+   unsigned shader_id;
+
    VkInstance instance;
+   struct zink_instance_info instance_info;
+
    VkPhysicalDevice pdev;
 
    struct zink_device_info info;
@@ -67,18 +72,14 @@ struct zink_screen {
    uint32_t cur_custom_border_color_samplers;
 
    uint32_t loader_version;
-   bool have_physical_device_prop2_ext;
-
-   bool have_debug_utils_ext;
 
    bool needs_mesa_wsi;
 
-#if defined(MVK_VERSION)
-   bool have_moltenvk;
-#endif
-
    PFN_vkGetPhysicalDeviceFeatures2 vk_GetPhysicalDeviceFeatures2;
    PFN_vkGetPhysicalDeviceProperties2 vk_GetPhysicalDeviceProperties2;
+
+   PFN_vkCmdDrawIndirectCount vk_CmdDrawIndirectCount;
+   PFN_vkCmdDrawIndexedIndirectCount vk_CmdDrawIndexedIndirectCount;
 
    PFN_vkGetMemoryFdKHR vk_GetMemoryFdKHR;
    PFN_vkCmdBeginConditionalRenderingEXT vk_CmdBeginConditionalRenderingEXT;
@@ -122,5 +123,23 @@ zink_get_format(struct zink_screen *screen, enum pipe_format format);
 
 bool
 zink_is_depth_format_supported(struct zink_screen *screen, VkFormat format);
+
+#define GET_PROC_ADDR(x) do {                                               \
+      screen->vk_##x = (PFN_vk##x)vkGetDeviceProcAddr(screen->dev, "vk"#x); \
+      if (!screen->vk_##x) {                                                \
+         debug_printf("vkGetDeviceProcAddr failed: vk"#x"\n");              \
+         return false;                                                      \
+      } \
+   } while (0)
+
+#define GET_PROC_ADDR_INSTANCE(x) do {                                          \
+      screen->vk_##x = (PFN_vk##x)vkGetInstanceProcAddr(screen->instance, "vk"#x); \
+      if (!screen->vk_##x) {                                                \
+         debug_printf("GetInstanceProcAddr failed: vk"#x"\n");        \
+         return false;                                                      \
+      } \
+   } while (0)
+
+#define GET_PROC_ADDR_INSTANCE_LOCAL(instance, x) PFN_vk##x vk_##x = (PFN_vk##x)vkGetInstanceProcAddr(instance, "vk"#x)
 
 #endif

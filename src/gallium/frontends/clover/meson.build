@@ -44,6 +44,10 @@ if with_opencl_icd
   clover_cpp_args += '-DHAVE_CLOVER_ICD'
 endif
 
+if with_opencl_native
+  clover_spirv_cpp_args += '-DHAVE_CLOVER_NATIVE'
+endif
+
 if with_opencl_spirv
   clover_spirv_cpp_args += '-DHAVE_CLOVER_SPIRV'
 endif
@@ -67,7 +71,7 @@ libclllvm = static_library(
     clover_opencl_cpp_args,
     clover_spirv_cpp_args,
     '-DCLANG_RESOURCE_DIR="@0@"'.format(join_paths(
-      dep_llvm.get_configtool_variable('libdir'), 'clang',
+      dep_llvm.get_variable(cmake : 'LLVM_LIBRARY_DIR', configtool: 'libdir'), 'clang',
       dep_llvm.version(), 'include',
     )),
   ],
@@ -128,6 +132,8 @@ clover_files = files(
   'core/object.hpp',
   'core/platform.cpp',
   'core/platform.hpp',
+  'core/printf.cpp',
+  'core/printf.hpp',
   'core/program.cpp',
   'core/program.hpp',
   'core/property.hpp',

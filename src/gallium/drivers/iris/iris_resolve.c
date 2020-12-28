@@ -94,22 +94,22 @@ resolve_sampler_views(struct iris_context *ice,
    while (views) {
       const int i = u_bit_scan(&views);
       struct iris_sampler_view *isv = shs->textures[i];
-      struct iris_resource *res = (void *) isv->base.texture;
 
-      if (res->base.target != PIPE_BUFFER) {
+      if (isv->res->base.target != PIPE_BUFFER) {
          if (consider_framebuffer) {
-            disable_rb_aux_buffer(ice, draw_aux_buffer_disabled,
-                                  res, isv->view.base_level, isv->view.levels,
+            disable_rb_aux_buffer(ice, draw_aux_buffer_disabled, isv->res,
+                                  isv->view.base_level, isv->view.levels,
                                   "for sampling");
          }
 
-         iris_resource_prepare_texture(ice, res, isv->view.format,
+         iris_resource_prepare_texture(ice, isv->res, isv->view.format,
                                        isv->view.base_level, isv->view.levels,
                                        isv->view.base_array_layer,
                                        isv->view.array_len);
       }
 
-      iris_emit_buffer_barrier_for(batch, res->bo, IRIS_DOMAIN_OTHER_READ);
+      iris_emit_buffer_barrier_for(batch, isv->res->bo,
+                                   IRIS_DOMAIN_OTHER_READ);
    }
 }
 
@@ -414,16 +414,8 @@ iris_resolve_color(struct iris_context *ice,
    iris_batch_sync_region_start(batch);
    struct blorp_batch blorp_batch;
    blorp_batch_init(&ice->blorp, &blorp_batch, batch, 0);
-   /* On Gen >= 12, Stencil buffer with lossless compression needs to be
-    * resolve with WM_HZ_OP packet.
-    */
-   if (res->aux.usage == ISL_AUX_USAGE_STC_CCS) {
-      blorp_hiz_stencil_op(&blorp_batch, &surf, level, layer,
-                           1, resolve_op);
-   } else {
-      blorp_ccs_resolve(&blorp_batch, &surf, level, layer, 1,
-                        res->surf.format, resolve_op);
-   }
+   blorp_ccs_resolve(&blorp_batch, &surf, level, layer, 1, res->surf.format,
+                     resolve_op);
    blorp_batch_finish(&blorp_batch);
 
    /* See comment above */
@@ -724,6 +716,8 @@ iris_resource_prepare_access(struct iris_context *ice,
             iris_mcs_partial_resolve(ice, batch, res, layer, 1);
          } else if (isl_aux_usage_has_hiz(res->aux.usage)) {
             iris_hiz_exec(ice, batch, res, level, layer, 1, aux_op, false);
+         } else if (res->aux.usage == ISL_AUX_USAGE_STC_CCS) {
+            unreachable("iris doesn't resolve STC_CCS resources");
          } else {
             assert(isl_aux_usage_has_ccs(res->aux.usage));
             iris_resolve_color(ice, batch, res, level, layer, aux_op);

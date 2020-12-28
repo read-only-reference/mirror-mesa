@@ -80,10 +80,6 @@ _mesa_delete_texture_object( struct gl_context *ctx,
                              struct gl_texture_object *obj );
 
 extern void
-_mesa_copy_texture_object( struct gl_texture_object *dest,
-                           const struct gl_texture_object *src );
-
-extern void
 _mesa_clear_texture_object(struct gl_context *ctx,
                            struct gl_texture_object *obj,
                            struct gl_texture_image *retainTexImage);
@@ -127,7 +123,7 @@ _mesa_is_texture_complete(const struct gl_texture_object *texObj,
                           const struct gl_sampler_object *sampler,
                           bool linear_as_nearest_for_int_tex)
 {
-   struct gl_texture_image *img = texObj->Image[0][texObj->BaseLevel];
+   struct gl_texture_image *img = texObj->Image[0][texObj->Attrib.BaseLevel];
    bool isMultisample = img && img->NumSamples >= 2;
 
    /*
@@ -147,11 +143,11 @@ _mesa_is_texture_complete(const struct gl_texture_object *texObj,
     */
    if (!isMultisample &&
        (texObj->_IsIntegerFormat ||
-        (texObj->StencilSampling &&
+        (texObj->Attrib.StencilSampling &&
          img->_BaseFormat == GL_DEPTH_STENCIL)) &&
-       (sampler->MagFilter != GL_NEAREST ||
-        (sampler->MinFilter != GL_NEAREST &&
-         sampler->MinFilter != GL_NEAREST_MIPMAP_NEAREST))) {
+       (sampler->Attrib.MagFilter != GL_NEAREST ||
+        (sampler->Attrib.MinFilter != GL_NEAREST &&
+         sampler->Attrib.MinFilter != GL_NEAREST_MIPMAP_NEAREST))) {
       /* If the format is integer, only nearest filtering is allowed,
        * but some applications (eg: Grid Autosport) uses the default
        * filtering values.

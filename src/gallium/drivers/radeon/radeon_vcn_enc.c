@@ -204,7 +204,7 @@ static void radeon_vcn_enc_get_param(struct radeon_encoder *enc, struct pipe_pic
 
 static void flush(struct radeon_encoder *enc)
 {
-   enc->ws->cs_flush(enc->cs, PIPE_FLUSH_ASYNC, NULL);
+   enc->ws->cs_flush(&enc->cs, PIPE_FLUSH_ASYNC, NULL);
 }
 
 static void radeon_enc_flush(struct pipe_video_codec *encoder)
@@ -353,7 +353,7 @@ static void radeon_enc_destroy(struct pipe_video_codec *encoder)
    }
 
    si_vid_destroy_buffer(&enc->cpb);
-   enc->ws->cs_destroy(enc->cs);
+   enc->ws->cs_destroy(&enc->cs);
    FREE(enc);
 }
 
@@ -364,7 +364,7 @@ static void radeon_enc_get_feedback(struct pipe_video_codec *encoder, void *feed
    struct rvid_buffer *fb = feedback;
 
    if (size) {
-      uint32_t *ptr = enc->ws->buffer_map(fb->res->buf, enc->cs,
+      uint32_t *ptr = enc->ws->buffer_map(fb->res->buf, &enc->cs,
                                           PIPE_MAP_READ_WRITE | RADEON_MAP_TEMPORARY);
       if (ptr[1])
          *size = ptr[6];
@@ -407,9 +407,8 @@ struct pipe_video_codec *radeon_create_encoder(struct pipe_context *context,
    enc->bits_in_shifter = 0;
    enc->screen = context->screen;
    enc->ws = ws;
-   enc->cs = ws->cs_create(sctx->ctx, RING_VCN_ENC, radeon_enc_cs_flush, enc, false);
 
-   if (!enc->cs) {
+   if (!ws->cs_create(&enc->cs, sctx->ctx, RING_VCN_ENC, radeon_enc_cs_flush, enc, false)) {
       RVID_ERR("Can't get command submission context.\n");
       goto error;
    }
@@ -462,8 +461,7 @@ struct pipe_video_codec *radeon_create_encoder(struct pipe_context *context,
    return &enc->base;
 
 error:
-   if (enc->cs)
-      enc->ws->cs_destroy(enc->cs);
+   enc->ws->cs_destroy(&enc->cs);
 
    si_vid_destroy_buffer(&enc->cpb);
 
@@ -474,7 +472,7 @@ error:
 void radeon_enc_add_buffer(struct radeon_encoder *enc, struct pb_buffer *buf,
                            enum radeon_bo_usage usage, enum radeon_bo_domain domain, signed offset)
 {
-   enc->ws->cs_add_buffer(enc->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED, domain, 0);
+   enc->ws->cs_add_buffer(&enc->cs, buf, usage | RADEON_USAGE_SYNCHRONIZED, domain, 0);
    uint64_t addr;
    addr = enc->ws->buffer_get_virtual_address(buf);
    addr = addr + offset;
@@ -493,21 +491,22 @@ void radeon_enc_set_emulation_prevention(struct radeon_encoder *enc, bool set)
 void radeon_enc_output_one_byte(struct radeon_encoder *enc, unsigned char byte)
 {
    if (enc->byte_index == 0)
-      enc->cs->current.buf[enc->cs->current.cdw] = 0;
-   enc->cs->current.buf[enc->cs->current.cdw] |=
+      enc->cs.current.buf[enc->cs.current.cdw] = 0;
+   enc->cs.current.buf[enc->cs.current.cdw] |=
       ((unsigned int)(byte) << index_to_shifts[enc->byte_index]);
    enc->byte_index++;
 
    if (enc->byte_index >= 4) {
       enc->byte_index = 0;
-      enc->cs->current.cdw++;
+      enc->cs.current.cdw++;
    }
 }
 
 void radeon_enc_emulation_prevention(struct radeon_encoder *enc, unsigned char byte)
 {
    if (enc->emulation_prevention) {
-      if ((enc->num_zeros >= 2) && ((byte == 0x00) || (byte == 0x01) || (byte == 0x03))) {
+      if ((enc->num_zeros >= 2) && ((byte == 0x00) || (byte == 0x01) ||
+         (byte == 0x02) || (byte == 0x03))) {
          radeon_enc_output_one_byte(enc, 0x03);
          enc->bits_output += 8;
          enc->num_zeros = 0;
@@ -575,7 +574,7 @@ void radeon_enc_flush_headers(struct radeon_encoder *enc)
    }
 
    if (enc->byte_index > 0) {
-      enc->cs->current.cdw++;
+      enc->cs.current.cdw++;
       enc->byte_index = 0;
    }
 }

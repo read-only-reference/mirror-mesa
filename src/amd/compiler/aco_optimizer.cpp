@@ -26,6 +26,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <math.h>
 
 #include "aco_ir.h"
@@ -184,37 +185,18 @@ struct ssa_info {
    void set_constant(chip_class chip, uint64_t constant)
    {
       Operand op16((uint16_t)constant);
-      Operand op32((uint32_t)constant);
+      Operand op32 = Operand::get_const(chip, constant, 4);
       add_label(label_literal);
       val = constant;
 
       if (chip >= GFX8 && !op16.isLiteral())
          add_label(label_constant_16bit);
 
-      if (!op32.isLiteral() || ((uint32_t)constant == 0x3e22f983 && chip >= GFX8))
+      if (!op32.isLiteral())
          add_label(label_constant_32bit);
 
-      if (constant <= 64) {
+      if (Operand::is_constant_representable(constant, 8))
          add_label(label_constant_64bit);
-      } else if (constant >= 0xFFFFFFFFFFFFFFF0) { /* [-16 .. -1] */
-         add_label(label_constant_64bit);
-      } else if (constant == 0x3FE0000000000000) { /* 0.5 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0xBFE0000000000000) { /* -0.5 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0x3FF0000000000000) { /* 1.0 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0xBFF0000000000000) { /* -1.0 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0x4000000000000000) { /* 2.0 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0xC000000000000000) { /* -2.0 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0x4010000000000000) { /* 4.0 */
-         add_label(label_constant_64bit);
-      } else if (constant == 0xC010000000000000) { /* -4.0 */
-         add_label(label_constant_64bit);
-      }
 
       if (label & label_constant_64bit) {
          val = Operand(constant).constantValue();
@@ -808,15 +790,9 @@ unsigned get_operand_size(aco_ptr<Instruction>& instr, unsigned index)
 
 Operand get_constant_op(opt_ctx &ctx, ssa_info info, uint32_t bits)
 {
-   if (bits == 8)
-      return Operand((uint8_t)info.val);
-   if (bits == 16)
-      return Operand((uint16_t)info.val);
-   // TODO: this functions shouldn't be needed if we store Operand instead of value.
-   Operand op(info.val, bits == 64);
-   if (info.is_literal(32) && info.val == 0x3e22f983 && ctx.program->chip_class >= GFX8)
-      op.setFixed(PhysReg{248}); /* 1/2 PI can be an inline constant on GFX8+ */
-   return op;
+   if (bits == 64)
+      return Operand(info.val, true);
+   return Operand::get_const(ctx.program->chip_class, info.val, bits / 8u);
 }
 
 bool fixed_to_exec(Operand op)
@@ -1263,7 +1239,7 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
          ctx.info[instr->definitions[0].tempId()].set_vec(instr.get());
          break;
       }
-      /* fallthrough */
+      FALLTHROUGH;
    case aco_opcode::p_as_uniform:
       if (instr->definitions[0].isFixed()) {
          /* don't copy-propagate copies into fixed registers */
@@ -1458,7 +1434,7 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
             }
          }
       }
-      /* fallthrough */
+      FALLTHROUGH;
    case aco_opcode::s_or_b32:
    case aco_opcode::s_or_b64:
    case aco_opcode::s_xor_b32:
@@ -1468,7 +1444,7 @@ void label_instruction(opt_ctx &ctx, Block& block, aco_ptr<Instruction>& instr)
                       })) {
          ctx.info[instr->definitions[0].tempId()].set_uniform_bitwise();
       }
-      /* fallthrough */
+      FALLTHROUGH;
    case aco_opcode::s_lshl_b32:
    case aco_opcode::v_or_b32:
    case aco_opcode::v_lshlrev_b32:
@@ -2031,8 +2007,8 @@ bool match_op3_for_vop3(opt_ctx &ctx, aco_opcode op1, aco_opcode op2,
       return false;
 
    if (inbetween_opsel)
-      *inbetween_opsel = op1_vop3 ? op1_vop3->opsel & (1 << swap) : false;
-   else if (op1_vop3 && op1_vop3->opsel & (1 << swap))
+      *inbetween_opsel = op1_vop3 ? op1_vop3->opsel & (1 << (unsigned)swap) : false;
+   else if (op1_vop3 && op1_vop3->opsel & (1 << (unsigned)swap))
       return false;
 
    *precise = op1_instr->definitions[0].isPrecise() ||
@@ -2046,7 +2022,7 @@ bool match_op3_for_vop3(opt_ctx &ctx, aco_opcode op1, aco_opcode op2,
    operands[shuffle[0]] = op1_instr->operands[!swap];
    neg[shuffle[0]] = op1_vop3 ? op1_vop3->neg[!swap] : false;
    abs[shuffle[0]] = op1_vop3 ? op1_vop3->abs[!swap] : false;
-   if (op1_vop3 && op1_vop3->opsel & (1 << !swap))
+   if (op1_vop3 && (op1_vop3->opsel & (1 << (unsigned)!swap)))
       *opsel |= 1 << shuffle[0];
 
    for (unsigned i = 0; i < 2; i++) {
@@ -2266,10 +2242,10 @@ bool combine_salu_lshl_add(opt_ctx& ctx, aco_ptr<Instruction>& instr)
       instr->operands[0] = op2_instr->operands[0];
       ctx.info[instr->definitions[0].tempId()].label = 0;
 
-      instr->opcode = ((aco_opcode[]){aco_opcode::s_lshl1_add_u32,
-                                      aco_opcode::s_lshl2_add_u32,
-                                      aco_opcode::s_lshl3_add_u32,
-                                      aco_opcode::s_lshl4_add_u32})[shift - 1];
+      instr->opcode = std::array<aco_opcode, 4>{aco_opcode::s_lshl1_add_u32,
+                                                aco_opcode::s_lshl2_add_u32,
+                                                aco_opcode::s_lshl3_add_u32,
+                                                aco_opcode::s_lshl4_add_u32}[shift - 1];
 
       return true;
    }

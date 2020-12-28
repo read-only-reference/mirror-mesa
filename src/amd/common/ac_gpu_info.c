@@ -503,6 +503,9 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       info->vram_vis_size = vram_vis.heap_size;
    }
 
+   /* Add some margin of error, though this shouldn't be needed in theory. */
+   info->all_vram_visible = info->vram_size * 0.9 < info->vram_vis_size;
+
    /* Set chip identification. */
    info->pci_id = amdinfo->asic_id; /* TODO: is this correct? */
    info->pci_rev_id = amdinfo->pci_rev_id;
@@ -930,8 +933,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       info->num_physical_sgprs_per_simd = 128 * info->max_wave64_per_simd;
       info->min_sgpr_alloc = 128;
       info->sgpr_alloc_granularity = 128;
-      /* Don't use late alloc on small chips. */
-      info->use_late_alloc = info->max_render_backends > 4;
+      info->use_late_alloc = true; /* APUs benefit too. */
    } else if (info->chip_class >= GFX8) {
       info->num_physical_sgprs_per_simd = 800;
       info->min_sgpr_alloc = 16;
@@ -1045,6 +1047,7 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    min_alloc_size = %u\n", info->min_alloc_size);
    fprintf(f, "    address32_hi = %u\n", info->address32_hi);
    fprintf(f, "    has_dedicated_vram = %u\n", info->has_dedicated_vram);
+   fprintf(f, "    all_vram_visible = %u\n", info->all_vram_visible);
    fprintf(f, "    num_sdp_interfaces = %u\n", info->num_sdp_interfaces);
    fprintf(f, "    num_tcc_blocks = %i\n", info->num_tcc_blocks);
    fprintf(f, "    tcc_cache_line_size = %u\n", info->tcc_cache_line_size);

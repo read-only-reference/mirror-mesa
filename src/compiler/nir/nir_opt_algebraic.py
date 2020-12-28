@@ -991,12 +991,21 @@ optimizations.extend([
    (('ieq(is_not_used_by_if)', a, False), ('inot', 'a')),
    (('bcsel', a, True, False), a),
    (('bcsel', a, False, True), ('inot', a)),
-   (('bcsel', a, 1.0, 0.0), ('b2f', a)),
-   (('bcsel', a, 0.0, 1.0), ('b2f', ('inot', a))),
-   (('bcsel', a, -1.0, -0.0), ('fneg', ('b2f', a))),
-   (('bcsel', a, -0.0, -1.0), ('fneg', ('b2f', ('inot', a)))),
    (('bcsel', True, b, c), b),
    (('bcsel', False, b, c), c),
+
+   (('bcsel@16', a, 1.0, 0.0), ('b2f', a)),
+   (('bcsel@16', a, 0.0, 1.0), ('b2f', ('inot', a))),
+   (('bcsel@16', a, -1.0, -0.0), ('fneg', ('b2f', a))),
+   (('bcsel@16', a, -0.0, -1.0), ('fneg', ('b2f', ('inot', a)))),
+   (('bcsel@32', a, 1.0, 0.0), ('b2f', a)),
+   (('bcsel@32', a, 0.0, 1.0), ('b2f', ('inot', a))),
+   (('bcsel@32', a, -1.0, -0.0), ('fneg', ('b2f', a))),
+   (('bcsel@32', a, -0.0, -1.0), ('fneg', ('b2f', ('inot', a)))),
+   (('bcsel@64', a, 1.0, 0.0), ('b2f', a), '!(options->lower_doubles_options & nir_lower_fp64_full_software)'),
+   (('bcsel@64', a, 0.0, 1.0), ('b2f', ('inot', a)), '!(options->lower_doubles_options & nir_lower_fp64_full_software)'),
+   (('bcsel@64', a, -1.0, -0.0), ('fneg', ('b2f', a)), '!(options->lower_doubles_options & nir_lower_fp64_full_software)'),
+   (('bcsel@64', a, -0.0, -1.0), ('fneg', ('b2f', ('inot', a))), '!(options->lower_doubles_options & nir_lower_fp64_full_software)'),
 
    (('bcsel', a, b, b), b),
    (('~fcsel', a, b, b), b),
@@ -1055,6 +1064,10 @@ optimizations.extend([
    (('u2u32', ('f2ump', 'a@32')), ('f2u32', a)),
    (('f2f32', ('i2fmp', 'a@32')), ('i2f32', a)),
    (('f2f32', ('u2fmp', 'a@32')), ('u2f32', a)),
+
+   # Conversions from float32 to float64 and back can be removed as long as
+   # it doesn't need to be precise, since the conversion may e.g. flush denorms
+   (('~f2f32', ('f2f64', 'a@32')), a),
 
    (('ffloor', 'a(is_integral)'), a),
    (('fceil', 'a(is_integral)'), a),

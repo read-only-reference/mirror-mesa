@@ -183,16 +183,6 @@ dri_is_thread_safe(void *loaderPrivate)
       return false;
 #endif
 
-#ifdef HAVE_XCB_PLATFORM
-   if (display->Platform == _EGL_PLATFORM_XCB)
-      return true;
-#endif
-
-#ifdef HAVE_WAYLAND_PLATFORM
-   if (display->Platform == _EGL_PLATFORM_WAYLAND)
-      return true;
-#endif
-
    return true;
 }
 
@@ -1026,7 +1016,7 @@ dri2_setup_screen(_EGLDisplay *disp)
    if (dri2_dpy->buffer_damage && dri2_dpy->buffer_damage->set_damage_region)
       disp->Extensions.KHR_partial_update = EGL_TRUE;
 
-   disp->Extensions.EXT_protected_content =
+   disp->Extensions.EXT_protected_surface =
       dri2_renderer_query_integer(dri2_dpy,
                                   __DRI2_RENDERER_HAS_PROTECTED_CONTENT);
 }
@@ -1247,8 +1237,15 @@ dri2_display_destroy(_EGLDisplay *disp)
    }
    if (dri2_dpy->fd >= 0)
       close(dri2_dpy->fd);
+
+   /* Don't dlclose the driver when building with the address sanitizer, so you
+    * get good symbols from the leak reports.
+    */
+#if !BUILT_WITH_ASAN || defined(NDEBUG)
    if (dri2_dpy->driver)
       dlclose(dri2_dpy->driver);
+#endif
+
    free(dri2_dpy->driver_name);
 
 #ifdef HAVE_WAYLAND_PLATFORM
@@ -2464,7 +2461,7 @@ dri2_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
                                               depth,
                                               attrs.GLTextureLevel,
                                               &error,
-                                              dri2_img);
+                                              NULL);
    dri2_create_image_khr_texture_error(error);
 
    if (!dri2_img->dri_image) {

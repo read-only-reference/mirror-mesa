@@ -905,7 +905,7 @@ static bool si_initialize_prim_discard_cmdbuf(struct si_context *sctx)
    if (sctx->index_ring)
       return true;
 
-   if (!sctx->prim_discard_compute_cs) {
+   if (!sctx->prim_discard_compute_cs.priv) {
       struct radeon_winsys *ws = sctx->ws;
       unsigned gds_size =
          VERTEX_COUNTER_GDS_MODE == 1 ? GDS_SIZE_UNORDERED : VERTEX_COUNTER_GDS_MODE == 2 ? 8 : 0;
@@ -917,7 +917,7 @@ static bool si_initialize_prim_discard_cmdbuf(struct si_context *sctx)
          if (!sctx->gds)
             return false;
 
-         ws->cs_add_buffer(sctx->gfx_cs, sctx->gds, RADEON_USAGE_READWRITE, 0, 0);
+         ws->cs_add_buffer(&sctx->gfx_cs, sctx->gds, RADEON_USAGE_READWRITE, 0, 0);
       }
       if (num_oa_counters) {
          assert(gds_size);
@@ -926,12 +926,11 @@ static bool si_initialize_prim_discard_cmdbuf(struct si_context *sctx)
          if (!sctx->gds_oa)
             return false;
 
-         ws->cs_add_buffer(sctx->gfx_cs, sctx->gds_oa, RADEON_USAGE_READWRITE, 0, 0);
+         ws->cs_add_buffer(&sctx->gfx_cs, sctx->gds_oa, RADEON_USAGE_READWRITE, 0, 0);
       }
 
-      sctx->prim_discard_compute_cs =
-         ws->cs_add_parallel_compute_ib(sctx->gfx_cs, num_oa_counters > 0);
-      if (!sctx->prim_discard_compute_cs)
+      if (!ws->cs_add_parallel_compute_ib(&sctx->prim_discard_compute_cs,
+                                          &sctx->gfx_cs, num_oa_counters > 0))
          return false;
    }
 
@@ -966,7 +965,7 @@ si_prepare_prim_discard_or_split_draw(struct si_context *sctx, const struct pipe
    if (!si_initialize_prim_discard_cmdbuf(sctx))
       return SI_PRIM_DISCARD_DISABLED;
 
-   struct radeon_cmdbuf *gfx_cs = sctx->gfx_cs;
+   struct radeon_cmdbuf *gfx_cs = &sctx->gfx_cs;
    unsigned prim = info->mode;
    unsigned count = total_count;
    unsigned instance_count = info->instance_count;
@@ -1093,7 +1092,7 @@ si_prepare_prim_discard_or_split_draw(struct si_context *sctx, const struct pipe
    }
 
    /* The compute IB is always chained, but we need to call cs_check_space to add more space. */
-   struct radeon_cmdbuf *cs = sctx->prim_discard_compute_cs;
+   struct radeon_cmdbuf *cs = &sctx->prim_discard_compute_cs;
    ASSERTED bool compute_has_space = sctx->ws->cs_check_space(cs, need_compute_dw, false);
    assert(compute_has_space);
    assert(si_check_ring_space(sctx, out_indexbuf_size));
@@ -1102,7 +1101,7 @@ si_prepare_prim_discard_or_split_draw(struct si_context *sctx, const struct pipe
 
 void si_compute_signal_gfx(struct si_context *sctx)
 {
-   struct radeon_cmdbuf *cs = sctx->prim_discard_compute_cs;
+   struct radeon_cmdbuf *cs = &sctx->prim_discard_compute_cs;
    unsigned writeback_L2_flags = 0;
 
    /* The writeback L2 flags vary with each chip generation. */
@@ -1141,8 +1140,8 @@ void si_dispatch_prim_discard_cs_and_draw(struct si_context *sctx,
                                           unsigned base_vertex, uint64_t input_indexbuf_va,
                                           unsigned input_indexbuf_num_elements)
 {
-   struct radeon_cmdbuf *gfx_cs = sctx->gfx_cs;
-   struct radeon_cmdbuf *cs = sctx->prim_discard_compute_cs;
+   struct radeon_cmdbuf *gfx_cs = &sctx->gfx_cs;
+   struct radeon_cmdbuf *cs = &sctx->prim_discard_compute_cs;
    unsigned num_prims_per_instance = u_decomposed_prims_for_vertices(info->mode, count);
    if (!num_prims_per_instance)
       return;
@@ -1314,19 +1313,6 @@ void si_dispatch_prim_discard_cs_and_draw(struct si_context *sctx,
    desc[10] = fui(cull_info.translate[0]);
    desc[11] = fui(cull_info.translate[1]);
 
-   /* Better subpixel precision increases the efficiency of small
-    * primitive culling. */
-   unsigned num_samples = sctx->framebuffer.nr_samples;
-   unsigned quant_mode = sctx->viewports.as_scissor[0].quant_mode;
-   float small_prim_cull_precision;
-
-   if (quant_mode == SI_QUANT_MODE_12_12_FIXED_POINT_1_4096TH)
-      small_prim_cull_precision = num_samples / 4096.0;
-   else if (quant_mode == SI_QUANT_MODE_14_10_FIXED_POINT_1_1024TH)
-      small_prim_cull_precision = num_samples / 1024.0;
-   else
-      small_prim_cull_precision = num_samples / 256.0;
-
    /* Set user data SGPRs. */
    /* This can't be greater than 14 if we want the fastest launch rate. */
    unsigned user_sgprs = 13;
@@ -1490,7 +1476,7 @@ void si_dispatch_prim_discard_cs_and_draw(struct si_context *sctx,
          radeon_emit(cs, num_prims_udiv.post_shift | (num_prims_per_instance << 5));
          radeon_emit(cs, info->restart_index);
          /* small-prim culling precision (same as rasterizer precision = QUANT_MODE) */
-         radeon_emit(cs, fui(small_prim_cull_precision));
+         radeon_emit(cs, fui(cull_info.small_prim_precision));
       } else {
          assert(VERTEX_COUNTER_GDS_MODE == 2);
          /* Only update the SGPRs that changed. */

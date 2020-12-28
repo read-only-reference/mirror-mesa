@@ -689,15 +689,15 @@ static void* r300_create_dsa_state(struct pipe_context* pipe,
     dsa->dsa = *state;
 
     /* Depth test setup. - separate write mask depth for decomp flush */
-    if (state->depth.writemask) {
+    if (state->depth_writemask) {
         z_buffer_control |= R300_Z_WRITE_ENABLE;
     }
 
-    if (state->depth.enabled) {
+    if (state->depth_enabled) {
         z_buffer_control |= R300_Z_ENABLE;
 
         z_stencil_control |=
-            (r300_translate_depth_stencil_function(state->depth.func) <<
+            (r300_translate_depth_stencil_function(state->depth_func) <<
                 R300_Z_FUNC_SHIFT);
     }
 
@@ -747,13 +747,13 @@ static void* r300_create_dsa_state(struct pipe_context* pipe,
     }
 
     /* Alpha test setup. */
-    if (state->alpha.enabled) {
+    if (state->alpha_enabled) {
         dsa->alpha_function =
-            r300_translate_alpha_function(state->alpha.func) |
+            r300_translate_alpha_function(state->alpha_func) |
             R300_FG_ALPHA_FUNC_ENABLE;
 
-        dsa->alpha_function |= float_to_ubyte(state->alpha.ref_value);
-        alpha_value_fp16 = _mesa_float_to_half(state->alpha.ref_value);
+        dsa->alpha_function |= float_to_ubyte(state->alpha_ref_value);
+        alpha_value_fp16 = _mesa_float_to_half(state->alpha_ref_value);
     }
 
     BEGIN_CB(&dsa->cb_begin, 8);
@@ -817,11 +817,11 @@ static void r300_delete_dsa_state(struct pipe_context* pipe,
 }
 
 static void r300_set_stencil_ref(struct pipe_context* pipe,
-                                 const struct pipe_stencil_ref* sr)
+                                 const struct pipe_stencil_ref sr)
 {
     struct r300_context* r300 = r300_context(pipe);
 
-    r300->stencil_ref = *sr;
+    r300->stencil_ref = sr;
 
     r300_dsa_inject_stencilref(r300);
     r300_mark_atom_dirty(r300, &r300->dsa_state);

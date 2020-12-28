@@ -1438,23 +1438,15 @@ radv_clear_fmask(struct radv_cmd_buffer *cmd_buffer,
 		 const VkImageSubresourceRange *range, uint32_t value)
 {
 	uint64_t offset = image->offset + image->planes[0].surface.fmask_offset;
+	unsigned slice_size = image->planes[0].surface.fmask_slice_size;
 	uint64_t size;
 
 	/* MSAA images do not support mipmap levels. */
 	assert(range->baseMipLevel == 0 &&
 	       radv_get_levelCount(image, range) == 1);
 
-	if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
-		/* TODO: clear layers. */
-		size = image->planes[0].surface.fmask_size;
-	} else {
-		unsigned fmask_slice_size =
-			image->planes[0].surface.u.legacy.fmask.slice_size;
-
-
-		offset += fmask_slice_size * range->baseArrayLayer;
-		size = fmask_slice_size * radv_get_layerCount(image, range);
-	}
+	offset += slice_size * range->baseArrayLayer;
+	size = slice_size * radv_get_layerCount(image, range);
 
 	return radv_fill_buffer(cmd_buffer, image->bo, offset, size, value);
 }
@@ -1638,7 +1630,7 @@ radv_can_fast_clear_color(struct radv_cmd_buffer *cmd_buffer,
 	if (!radv_image_view_can_fast_clear(cmd_buffer->device, iview))
 		return false;
 
-	if (!radv_layout_can_fast_clear(iview->image, image_layout, in_render_loop,
+	if (!radv_layout_can_fast_clear(cmd_buffer->device, iview->image, image_layout, in_render_loop,
 	                                radv_image_queue_family_mask(iview->image,
 	                                                             cmd_buffer->queue_family_index,
 	                                                             cmd_buffer->queue_family_index)))
@@ -2103,7 +2095,7 @@ radv_clear_image_layer(struct radv_cmd_buffer *cmd_buffer,
 						.framebuffer = fb,
 						.clearValueCount = 0,
 						.pClearValues = NULL,
-					 });
+					 }, NULL);
 
 	radv_cmd_buffer_set_subpass(cmd_buffer,
 				    &cmd_buffer->state.pass->subpasses[0]);

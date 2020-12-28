@@ -195,7 +195,7 @@ os_get_android_option(const char *name)
       opt = ralloc_strdup(options_tbl, value);
    }
 
-   _mesa_hash_table_insert(options_tbl, name, value);
+   _mesa_hash_table_insert(options_tbl, name, (void *)opt);
 
    return opt;
 }
@@ -319,6 +319,44 @@ os_get_available_system_memory(uint64_t *size)
    *size = MIN2(mem_available, rl.rlim_cur);
    return true;
 #else
+   return false;
+#endif
+}
+
+/**
+ * Return the size of a page
+ * \param size returns the size of a page
+ * \return true for success, or false on failure
+ */
+bool
+os_get_page_size(uint64_t *size)
+{
+#if DETECT_OS_UNIX && !DETECT_OS_APPLE && !DETECT_OS_HAIKU
+   const long page_size = sysconf(_SC_PAGE_SIZE);
+
+   if (page_size <= 0)
+      return false;
+
+   *size = (uint64_t)page_size;
+   return true;
+#elif DETECT_OS_HAIKU
+   *size = (uint64_t)B_PAGE_SIZE;
+   return true;
+#elif DETECT_OS_WINDOWS
+   SYSTEM_INFO SysInfo;
+
+   GetSystemInfo(&SysInfo);
+   *size = SysInfo.dwPageSize;
+   return true;
+#elif DETECT_OS_APPLE
+   size_t len = sizeof(*size);
+   int mib[2];
+
+   mib[0] = CTL_HW;
+   mib[1] = HW_PAGESIZE;
+   return (sysctl(mib, 2, size, &len, NULL, 0) == 0);
+#else
+#error unexpected platform in os_sysinfo.c
    return false;
 #endif
 }

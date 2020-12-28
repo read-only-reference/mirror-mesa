@@ -46,6 +46,8 @@ fs_visitor::emit_nir_code()
    last_scratch = ALIGN(nir->scratch_size, 4) * dispatch_width;
 
    nir_emit_impl(nir_shader_get_entrypoint((nir_shader *)nir));
+
+   bld.emit(SHADER_OPCODE_HALT_TARGET);
 }
 
 void
@@ -3497,7 +3499,7 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
       cmp->predicate = BRW_PREDICATE_NORMAL;
       cmp->flag_subreg = sample_mask_flag_subreg(this);
 
-      fs_inst *jump = bld.emit(FS_OPCODE_DISCARD_JUMP);
+      fs_inst *jump = bld.emit(BRW_OPCODE_HALT);
       jump->flag_subreg = sample_mask_flag_subreg(this);
       jump->predicate_inverse = true;
 
@@ -6046,6 +6048,9 @@ fs_visitor::nir_emit_jump(const fs_builder &bld, nir_jump_instr *instr)
       break;
    case nir_jump_continue:
       bld.emit(BRW_OPCODE_CONTINUE);
+      break;
+   case nir_jump_halt:
+      bld.emit(BRW_OPCODE_HALT);
       break;
    case nir_jump_return:
    default:

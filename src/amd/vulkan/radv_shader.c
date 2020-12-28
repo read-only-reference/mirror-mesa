@@ -459,6 +459,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 				.variable_pointers = true,
 				.vk_memory_model = true,
 				.vk_memory_model_device_scope = true,
+				.fragment_shading_rate = device->physical_device->rad_info.chip_class >= GFX10_3,
 			},
 			.ubo_addr_format = nir_address_format_32bit_index_offset,
 			.ssbo_addr_format = nir_address_format_32bit_index_offset,
@@ -762,10 +763,14 @@ radv_alloc_shader_memory(struct radv_device *device,
 	list_for_each_entry(struct radv_shader_slab, slab, &device->shader_slabs, slabs) {
 		uint64_t offset = 0;
 
+#ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wshadow"
+#endif
 		list_for_each_entry(struct radv_shader_variant, s, &slab->shaders, slab_list) {
+#ifdef __GNUC__
 #pragma GCC diagnostic pop
+#endif
 			if (s->bo_offset - offset >= shader->code_size) {
 				shader->bo = slab->bo;
 				shader->bo_offset = offset;
@@ -1288,6 +1293,7 @@ shader_variant_compile(struct radv_device *device,
 	options->has_ls_vgpr_init_bug = device->physical_device->rad_info.has_ls_vgpr_init_bug;
 	options->use_ngg_streamout = device->physical_device->use_ngg_streamout;
 	options->enable_mrt_output_nan_fixup = device->instance->enable_mrt_output_nan_fixup;
+	options->adjust_frag_coord_z = device->adjust_frag_coord_z;
 	options->debug.func = radv_compiler_debug;
 	options->debug.private_data = &debug_data;
 

@@ -100,16 +100,16 @@ struct glthread_batch
    /** The worker thread will access the context with this. */
    struct gl_context *ctx;
 
-   /** Amount of data used by batch commands, in bytes. */
-   int used;
+   /**
+    * Number of uint64_t elements filled already.
+    * This is 0 when it's being filled because glthread::used holds the real
+    * value temporarily, and glthread::used is copied to this variable when
+    * the batch is submitted.
+    */
+   unsigned used;
 
    /** Data contained in the command buffer. */
-#ifdef _MSC_VER
-   __declspec(align(8))
-#else
-   __attribute__((aligned(8)))
-#endif
-   uint8_t buffer[MARSHAL_MAX_CMD_SIZE];
+   uint64_t buffer[MARSHAL_MAX_CMD_SIZE / 8];
 };
 
 struct glthread_client_attrib {
@@ -152,6 +152,9 @@ struct glthread_state
 
    /** Index of the batch being filled and about to be submitted. */
    unsigned next;
+
+   /** Number of uint64_t elements filled already. */
+   unsigned used;
 
    /** Upload buffer. */
    struct gl_buffer_object *upload_buffer;

@@ -86,12 +86,19 @@ tc_debug_check(struct threaded_context *tc)
    }
 }
 
+/* We don't want to read or write min_index and max_index, because
+ * it shouldn't be needed by drivers at this point.
+ */
+#define DRAW_INFO_SIZE_WITHOUT_MIN_MAX_INDEX \
+   offsetof(struct pipe_draw_info, min_index)
+
 static void
 simplify_draw_info(struct pipe_draw_info *info)
 {
    /* Clear these fields to facilitate draw merging.
     * Drivers shouldn't use them.
     */
+   info->has_user_indices = false;
    info->index_bounds_valid = false;
    info->_pad = 0;
 
@@ -130,7 +137,7 @@ is_next_call_a_mergeable_draw(struct tc_draw_single *first_info,
    /* u_threaded_context stores start/count in min/max_index for single draws. */
    return memcmp((uint32_t*)&first_info->info,
                  (uint32_t*)&(*next_info)->info,
-                 sizeof(struct pipe_draw_info) - 8) == 0;
+                 DRAW_INFO_SIZE_WITHOUT_MIN_MAX_INDEX) == 0;
 }
 
 static void
@@ -374,6 +381,8 @@ threaded_resource_init(struct pipe_resource *res)
    tres->base_valid_buffer_range = &tres->valid_buffer_range;
    tres->is_shared = false;
    tres->is_user_ptr = false;
+   tres->pending_staging_uploads = 0;
+   util_range_init(&tres->pending_staging_uploads_range);
 }
 
 void
@@ -384,6 +393,7 @@ threaded_resource_deinit(struct pipe_resource *res)
    if (tres->latest != &tres->b)
            pipe_resource_reference(&tres->latest, NULL);
    util_range_destroy(&tres->valid_buffer_range);
+   util_range_destroy(&tres->pending_staging_uploads_range);
 }
 
 struct pipe_context *
@@ -420,7 +430,7 @@ threaded_context_unwrap_sync(struct pipe_context *pipe)
 TC_FUNC1(set_active_query_state, flags, , bool, , *)
 
 TC_FUNC1(set_blend_color, blend_color, const, struct pipe_blend_color, *, )
-TC_FUNC1(set_stencil_ref, stencil_ref, const, struct pipe_stencil_ref, *, )
+TC_FUNC1(set_stencil_ref, stencil_ref, const, struct pipe_stencil_ref, , *)
 TC_FUNC1(set_clip_state, clip_state, const, struct pipe_clip_state, *, )
 TC_FUNC1(set_sample_mask, sample_mask, , unsigned, , *)
 TC_FUNC1(set_min_samples, min_samples, , unsigned, , *)
@@ -459,7 +469,7 @@ tc_call_destroy_query(struct pipe_context *pipe, union tc_payload *payload)
 {
    struct threaded_query *tq = threaded_query(payload->query);
 
-   if (tq->head_unflushed.next)
+   if (list_is_linked(&tq->head_unflushed))
       list_del(&tq->head_unflushed);
 
    pipe->destroy_query(pipe, payload->query);
@@ -500,7 +510,7 @@ tc_call_end_query(struct pipe_context *pipe, union tc_payload *payload)
    struct tc_end_query_payload *p = (struct tc_end_query_payload *)payload;
    struct threaded_query *tq = threaded_query(p->query);
 
-   if (!tq->head_unflushed.next)
+   if (!list_is_linked(&tq->head_unflushed))
       list_add(&tq->head_unflushed, &p->tc->unflushed_queries);
 
    pipe->end_query(pipe, p->query);
@@ -538,7 +548,7 @@ tc_get_query_result(struct pipe_context *_pipe,
 
    if (success) {
       tq->flushed = true;
-      if (tq->head_unflushed.next) {
+      if (list_is_linked(&tq->head_unflushed)) {
          /* This is safe because it can only happen after we sync'd. */
          list_del(&tq->head_unflushed);
       }
@@ -774,17 +784,29 @@ tc_set_constant_buffer(struct pipe_context *_pipe,
                        const struct pipe_constant_buffer *cb)
 {
    struct threaded_context *tc = threaded_context(_pipe);
-   struct pipe_resource *buffer = NULL;
-   unsigned offset;
 
-   /* This must be done before adding set_constant_buffer, because it could
-    * generate e.g. transfer_unmap and flush partially-uninitialized
-    * set_constant_buffer to the driver if it was done afterwards.
-    */
    if (cb && cb->user_buffer) {
+      struct pipe_resource *buffer = NULL;
+      unsigned offset;
+
+      /* This must be done before adding set_constant_buffer, because it could
+       * generate e.g. transfer_unmap and flush partially-uninitialized
+       * set_constant_buffer to the driver if it was done afterwards.
+       */
       u_upload_data(tc->base.const_uploader, 0, cb->buffer_size, tc->ubo_alignment,
                     cb->user_buffer, &offset, &buffer);
       u_upload_unmap(tc->base.const_uploader);
+
+      struct tc_constant_buffer *p =
+         tc_add_struct_typed_call(tc, TC_CALL_set_constant_buffer,
+                                  tc_constant_buffer);
+      p->shader = shader;
+      p->index = index;
+      p->cb.buffer_size = cb->buffer_size;
+      p->cb.user_buffer = NULL;
+      p->cb.buffer_offset = offset;
+      p->cb.buffer = buffer;
+      return;
    }
 
    struct tc_constant_buffer *p =
@@ -794,18 +816,10 @@ tc_set_constant_buffer(struct pipe_context *_pipe,
    p->index = index;
 
    if (cb) {
-      if (cb->user_buffer) {
-         p->cb.buffer_size = cb->buffer_size;
-         p->cb.user_buffer = NULL;
-         p->cb.buffer_offset = offset;
-         p->cb.buffer = buffer;
-      } else {
-         tc_set_resource_reference(&p->cb.buffer,
-                                   cb->buffer);
-         p->cb.user_buffer = NULL;
-         p->cb.buffer_offset = cb->buffer_offset;
-         p->cb.buffer_size = cb->buffer_size;
-      }
+      tc_set_resource_reference(&p->cb.buffer, cb->buffer);
+      p->cb.user_buffer = NULL;
+      p->cb.buffer_offset = cb->buffer_offset;
+      p->cb.buffer_size = cb->buffer_size;
    } else {
       memset(&p->cb, 0, sizeof(*cb));
    }
@@ -1501,6 +1515,7 @@ tc_improve_map_buffer_flags(struct threaded_context *tc,
        /* Try not to decrement the counter if it's not positive. Still racy,
         * but it makes it harder to wrap the counter from INT_MIN to INT_MAX. */
        tres->max_forced_staging_uploads > 0 &&
+       tc->use_forced_staging_uploads &&
        p_atomic_dec_return(&tres->max_forced_staging_uploads) >= 0) {
       usage &= ~(PIPE_MAP_DISCARD_WHOLE_RESOURCE |
                  PIPE_MAP_UNSYNCHRONIZED);
@@ -1618,15 +1633,34 @@ tc_transfer_map(struct pipe_context *_pipe,
          ttrans->b.stride = 0;
          ttrans->b.layer_stride = 0;
          *transfer = &ttrans->b;
+
+         p_atomic_inc(&tres->pending_staging_uploads);
+         util_range_add(resource, &tres->pending_staging_uploads_range,
+                        box->x, box->x + box->width);
+
          return map + (box->x % tc->map_buffer_alignment);
+      }
+
+      if (usage & PIPE_MAP_UNSYNCHRONIZED &&
+          p_atomic_read(&tres->pending_staging_uploads) &&
+          util_ranges_intersect(&tres->pending_staging_uploads_range, box->x, box->x + box->width)) {
+         /* Write conflict detected between a staging transfer and the direct mapping we're
+          * going to do. Resolve the conflict by ignoring UNSYNCHRONIZED so the direct mapping
+          * will have to wait for the staging transfer completion.
+          * Note: The conflict detection is only based on the mapped range, not on the actual
+          * written range(s).
+          */
+         usage &= ~PIPE_MAP_UNSYNCHRONIZED & ~TC_TRANSFER_MAP_THREADED_UNSYNC;
+         tc->use_forced_staging_uploads = false;
       }
    }
 
    /* Unsychronized buffer mappings don't have to synchronize the thread. */
-   if (!(usage & TC_TRANSFER_MAP_THREADED_UNSYNC))
+   if (!(usage & TC_TRANSFER_MAP_THREADED_UNSYNC)) {
       tc_sync_msg(tc, resource->target != PIPE_BUFFER ? "  texture" :
                       usage & PIPE_MAP_DISCARD_RANGE ? "  discard_range" :
-                      usage & PIPE_MAP_READ ? "  read" : "  ??");
+                      usage & PIPE_MAP_READ ? "  read" : "  staging conflict");
+   }
 
    tc->bytes_mapped_estimate += box->width;
 
@@ -1719,10 +1753,27 @@ tc_transfer_flush_region(struct pipe_context *_pipe,
    p->box = *rel_box;
 }
 
+struct tc_transfer_unmap {
+   union {
+      struct pipe_transfer *transfer;
+      struct pipe_resource *resource;
+   };
+   bool was_staging_transfer;
+};
+
 static void
 tc_call_transfer_unmap(struct pipe_context *pipe, union tc_payload *payload)
 {
-   pipe->transfer_unmap(pipe, payload->transfer);
+   struct tc_transfer_unmap *p = (struct tc_transfer_unmap *) payload;
+   if (p->was_staging_transfer) {
+      struct threaded_resource *tres = threaded_resource(payload->resource);
+      /* Nothing to do except keeping track of staging uploads */
+      assert(tres->pending_staging_uploads > 0);
+      p_atomic_dec(&tres->pending_staging_uploads);
+      pipe_resource_reference(&p->resource, NULL);
+      return;
+   }
+   pipe->transfer_unmap(pipe, p->transfer);
 }
 
 static void
@@ -1751,21 +1802,30 @@ tc_transfer_unmap(struct pipe_context *_pipe, struct pipe_transfer *transfer)
       return;
    }
 
+   bool was_staging_transfer = false;
+
    if (tres->b.target == PIPE_BUFFER) {
       if (transfer->usage & PIPE_MAP_WRITE &&
           !(transfer->usage & PIPE_MAP_FLUSH_EXPLICIT))
          tc_buffer_do_flush_region(tc, ttrans, &transfer->box);
 
-      /* Staging transfers don't send the call to the driver. */
       if (ttrans->staging) {
+         was_staging_transfer = true;
+
          pipe_resource_reference(&ttrans->staging, NULL);
          pipe_resource_reference(&ttrans->b.resource, NULL);
          slab_free(&tc->pool_transfers, ttrans);
-         return;
       }
    }
-
-   tc_add_small_call(tc, TC_CALL_transfer_unmap)->transfer = transfer;
+   struct tc_transfer_unmap *p = tc_add_struct_typed_call(tc, TC_CALL_transfer_unmap,
+                                                          tc_transfer_unmap);
+   if (was_staging_transfer) {
+      tc_set_resource_reference(&p->resource, &tres->b);
+      p->was_staging_transfer = true;
+   } else {
+      p->transfer = transfer;
+      p->was_staging_transfer = false;
+   }
 
    /* tc_transfer_map directly maps the buffers, but tc_transfer_unmap
     * defers the unmap operation to the batch execution.
@@ -2235,15 +2295,18 @@ static void
 tc_call_draw_single(struct pipe_context *pipe, union tc_payload *payload)
 {
    struct tc_draw_single *info = (struct tc_draw_single*)payload;
-   struct pipe_draw_start_count draw;
 
    /* u_threaded_context stores start/count in min/max_index for single draws. */
    /* Drivers using u_threaded_context shouldn't use min/max_index. */
-   draw.start = info->info.min_index;
-   draw.count = info->info.max_index;
-   info->info.index_bounds_valid = false;
+   struct pipe_draw_start_count *draw =
+      (struct pipe_draw_start_count *)&info->info.min_index;
+   STATIC_ASSERT(offsetof(struct pipe_draw_start_count, start) == 0);
+   STATIC_ASSERT(offsetof(struct pipe_draw_start_count, count) == 4);
 
-   pipe->draw_vbo(pipe, &info->info, NULL, &draw, 1);
+   info->info.index_bounds_valid = false;
+   info->info.has_user_indices = false;
+
+   pipe->draw_vbo(pipe, &info->info, NULL, draw, 1);
    if (info->info.index_size)
       pipe_resource_reference(&info->info.index.resource, NULL);
 }
@@ -2258,6 +2321,8 @@ static void
 tc_call_draw_indirect(struct pipe_context *pipe, union tc_payload *payload)
 {
    struct tc_draw_indirect *info = (struct tc_draw_indirect*)payload;
+
+   info->info.index_bounds_valid = false;
 
    pipe->draw_vbo(pipe, &info->info, &info->indirect, &info->draw, 1);
    if (info->info.index_size)
@@ -2279,10 +2344,16 @@ tc_call_draw_multi(struct pipe_context *pipe, union tc_payload *payload)
 {
    struct tc_draw_multi *info = (struct tc_draw_multi*)payload;
 
+   info->info.has_user_indices = false;
+   info->info.index_bounds_valid = false;
+
    pipe->draw_vbo(pipe, &info->info, NULL, info->slot, info->num_draws);
    if (info->info.index_size)
       pipe_resource_reference(&info->info.index.resource, NULL);
 }
+
+#define DRAW_INFO_SIZE_WITHOUT_INDEXBUF_AND_MIN_MAX_INDEX \
+   offsetof(struct pipe_draw_info, index)
 
 static void
 tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
@@ -2290,6 +2361,9 @@ tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
             const struct pipe_draw_start_count *draws,
             unsigned num_draws)
 {
+   STATIC_ASSERT(DRAW_INFO_SIZE_WITHOUT_INDEXBUF_AND_MIN_MAX_INDEX +
+                 sizeof(intptr_t) == offsetof(struct pipe_draw_info, min_index));
+
    struct threaded_context *tc = threaded_context(_pipe);
    unsigned index_size = info->index_size;
    bool has_user_indices = info->has_user_indices;
@@ -2304,7 +2378,7 @@ tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
          tc_set_resource_reference(&p->info.index.resource,
                                    info->index.resource);
       }
-      memcpy(&p->info, info, sizeof(*info));
+      memcpy(&p->info, info, DRAW_INFO_SIZE_WITHOUT_MIN_MAX_INDEX);
 
       tc_set_resource_reference(&p->indirect.buffer, indirect->buffer);
       tc_set_resource_reference(&p->indirect.indirect_draw_count,
@@ -2336,8 +2410,7 @@ tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
 
          struct tc_draw_single *p =
             tc_add_struct_typed_call(tc, TC_CALL_draw_single, tc_draw_single);
-         memcpy(&p->info, info, sizeof(*info));
-         p->info.has_user_indices = false;
+         memcpy(&p->info, info, DRAW_INFO_SIZE_WITHOUT_INDEXBUF_AND_MIN_MAX_INDEX);
          p->info.index.resource = buffer;
          /* u_threaded_context stores start/count in min/max_index for single draws. */
          p->info.min_index = offset >> util_logbase2(index_size);
@@ -2350,7 +2423,7 @@ tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
             tc_set_resource_reference(&p->info.index.resource,
                                       info->index.resource);
          }
-         memcpy(&p->info, info, sizeof(*info));
+         memcpy(&p->info, info, DRAW_INFO_SIZE_WITHOUT_MIN_MAX_INDEX);
          /* u_threaded_context stores start/count in min/max_index for single draws. */
          p->info.min_index = draws[0].start;
          p->info.max_index = draws[0].count;
@@ -2384,8 +2457,7 @@ tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
       struct tc_draw_multi *p =
          tc_add_slot_based_call(tc, TC_CALL_draw_multi, tc_draw_multi,
                                 num_draws);
-      memcpy(&p->info, info, sizeof(*info));
-      p->info.has_user_indices = false;
+      memcpy(&p->info, info, DRAW_INFO_SIZE_WITHOUT_INDEXBUF_AND_MIN_MAX_INDEX);
       p->info.index.resource = buffer;
       p->num_draws = num_draws;
 
@@ -2416,7 +2488,7 @@ tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
          tc_set_resource_reference(&p->info.index.resource,
                                    info->index.resource);
       }
-      memcpy(&p->info, info, sizeof(*info));
+      memcpy(&p->info, info, DRAW_INFO_SIZE_WITHOUT_MIN_MAX_INDEX);
       p->num_draws = num_draws;
       memcpy(p->slot, draws, sizeof(draws[0]) * num_draws);
    }
@@ -2910,6 +2982,8 @@ threaded_context_create(struct pipe_context *pipe,
 
    if (!tc->base.stream_uploader || !tc->base.const_uploader)
       goto fail;
+
+   tc->use_forced_staging_uploads = true;
 
    /* The queue size is the number of batches "waiting". Batches are removed
     * from the queue before being executed, so keep one tc_batch slot for that

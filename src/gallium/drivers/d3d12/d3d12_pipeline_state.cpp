@@ -31,6 +31,8 @@
 #include "util/u_memory.h"
 #include "util/u_prim.h"
 
+#include <dxguids/dxguids.h>
+
 struct d3d12_pso_entry {
    struct d3d12_gfx_pipeline_state key;
    ID3D12PipelineState *pso;
@@ -88,7 +90,6 @@ fill_so_declaration(const struct pipe_stream_output_info *info,
    for (unsigned i = 0; i < info->num_outputs; i++) {
       const struct pipe_stream_output *output = &info->output[i];
       const int buffer = output->output_buffer;
-      const int varying = output->register_index;
       unsigned index;
 
       /* Mesa doesn't store entries for gl_SkipComponents in the Outputs[]
@@ -262,7 +263,7 @@ create_gfx_pipeline_state(struct d3d12_context *ctx)
    pso_desc.PrimitiveTopologyType = topology_type(reduced_prim);
 
    pso_desc.NumRenderTargets = state->num_cbufs;
-   for (int i = 0; i < state->num_cbufs; ++i)
+   for (unsigned i = 0; i < state->num_cbufs; ++i)
       pso_desc.RTVFormats[i] = d3d12_rtv_format(ctx, i);
    pso_desc.DSVFormat = state->dsv_format;
 
@@ -278,8 +279,7 @@ create_gfx_pipeline_state(struct d3d12_context *ctx)
 
    ID3D12PipelineState *ret;
    if (FAILED(screen->dev->CreateGraphicsPipelineState(&pso_desc,
-                                                       __uuidof(ret),
-                                                       (void **)&ret))) {
+                                                       IID_PPV_ARGS(&ret)))) {
       debug_printf("D3D12: CreateGraphicsPipelineState failed!\n");
       return NULL;
    }
@@ -312,8 +312,10 @@ d3d12_get_gfx_pipeline_state(struct d3d12_context *ctx)
 
       data->key = ctx->gfx_pipeline_state;
       data->pso = create_gfx_pipeline_state(ctx);
-      if (!data->pso)
+      if (!data->pso) {
+         FREE(data);
          return NULL;
+      }
 
       entry = _mesa_hash_table_insert_pre_hashed(ctx->pso_cache, hash, &data->key, data);
       assert(entry);

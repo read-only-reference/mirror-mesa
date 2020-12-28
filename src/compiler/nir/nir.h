@@ -36,6 +36,7 @@
 #include "util/set.h"
 #include "util/bitscan.h"
 #include "util/bitset.h"
+#include "util/compiler.h"
 #include "util/enum_operators.h"
 #include "util/macros.h"
 #include "util/format/u_format.h"
@@ -624,7 +625,7 @@ typedef struct nir_variable {
     * Constant expression assigned in the initializer of the variable
     *
     * This field should only be used temporarily by creators of NIR shaders
-    * and then lower_constant_initializers can be used to get rid of them.
+    * and then nir_lower_variable_initializers can be used to get rid of them.
     * Most of the rest of NIR ignores this field or asserts that it's NULL.
     */
    nir_constant *constant_initializer;
@@ -632,7 +633,7 @@ typedef struct nir_variable {
    /**
     * Global variable assigned in the initializer of the variable
     * This field should only be used temporarily by creators of NIR shaders
-    * and then lower_constant_initializers can be used to get rid of them.
+    * and then nir_lower_variable_initializers can be used to get rid of them.
     * Most of the rest of NIR ignores this field or asserts that it's NULL.
     */
    struct nir_variable *pointer_initializer;
@@ -2626,15 +2627,13 @@ typedef struct nir_block {
    uint32_t dom_pre_index, dom_post_index;
 
    /**
-    * nir_instr->index for the first nir_instr in the block.  If the block is
-    * empty, it will be the index of the immediately previous instr, or 0.
-    * Valid when the impl has nir_metadata_instr_index.
+    * Value just before the first nir_instr->index in the block, but after
+    * end_ip that of any predecessor block.
     */
    uint32_t start_ip;
    /**
-    * nir_instr->index for the last nir_instr in the block.  If the block is
-    * empty, it will be the same as start_ip.  Valid when the impl has
-    * nir_metadata_instr_index.
+    * Value just after the last nir_instr->index in the block, but before the
+    * start_ip of any successor block.
     */
    uint32_t end_ip;
 
@@ -3011,6 +3010,13 @@ typedef struct {
    uint8_t bit_size;
 } nir_parameter;
 
+typedef struct nir_printf_info {
+   unsigned num_args;
+   unsigned *arg_sizes;
+   unsigned string_size;
+   char *strings;
+} nir_printf_info;
+
 typedef struct nir_function {
    struct exec_node node;
 
@@ -3070,6 +3076,7 @@ typedef enum {
    nir_divergence_single_patch_per_tcs_subgroup = (1 << 1),
    nir_divergence_single_patch_per_tes_subgroup = (1 << 2),
    nir_divergence_view_index_uniform = (1 << 3),
+   nir_divergence_single_frag_shading_rate_per_subgroup = (1 << 4),
 } nir_divergence_options;
 
 typedef struct nir_shader_compiler_options {
@@ -3407,6 +3414,9 @@ typedef struct nir_shader {
    void *constant_data;
    /** Size of the constant data associated with the shader, in bytes */
    unsigned constant_data_size;
+
+   unsigned printf_info_count;
+   nir_printf_info *printf_info;
 } nir_shader;
 
 #define nir_foreach_function(func, shader) \
@@ -4868,12 +4878,24 @@ bool nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl);
 bool nir_lower_samplers(nir_shader *shader);
 bool nir_lower_ssbo(nir_shader *shader);
 
+typedef struct nir_lower_printf_options {
+   bool treat_doubles_as_floats : 1;
+   unsigned max_buffer_size;
+} nir_lower_printf_options;
+
+bool nir_lower_printf(nir_shader *nir, const nir_lower_printf_options *options);
+
 /* This is here for unit tests. */
 bool nir_opt_comparison_pre_impl(nir_function_impl *impl);
 
 bool nir_opt_comparison_pre(nir_shader *shader);
 
-bool nir_opt_access(nir_shader *shader);
+typedef struct nir_opt_access_options {
+   bool is_vulkan;
+   bool infer_non_readable;
+} nir_opt_access_options;
+
+bool nir_opt_access(nir_shader *shader, const nir_opt_access_options *options);
 bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_before_ffma(nir_shader *shader);
 bool nir_opt_algebraic_late(nir_shader *shader);
@@ -4956,8 +4978,8 @@ bool nir_lower_undef_to_zero(nir_shader *shader);
 
 bool nir_opt_uniform_atomics(nir_shader *shader);
 
-typedef bool (*nir_opt_vectorize_cb)(const nir_instr *a, const nir_instr *b,
-                                     void *data);
+typedef bool (*nir_opt_vectorize_cb)(const nir_instr *instr, void *data);
+
 bool nir_opt_vectorize(nir_shader *shader, nir_opt_vectorize_cb filter,
                        void *data);
 

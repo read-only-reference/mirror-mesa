@@ -38,7 +38,8 @@
 
 #include "frontend/sw_winsys.h"
 
-#include <d3d12.h>
+#include <directx/d3d12.h>
+#include <dxguids/dxguids.h>
 #include <memory>
 
 static bool
@@ -73,7 +74,7 @@ resource_is_busy(struct d3d12_context *ctx,
 {
    bool busy = false;
 
-   for (int i = 0; i < ARRAY_SIZE(ctx->batches); i++)
+   for (unsigned i = 0; i < ARRAY_SIZE(ctx->batches); i++)
       busy |= d3d12_batch_has_references(&ctx->batches[i], res->bo);
 
    return busy;
@@ -172,6 +173,9 @@ init_texture(struct d3d12_screen *screen,
       desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
       desc.DepthOrArraySize = templ->depth0;
       break;
+
+   default:
+      unreachable("Invalid texture type");
    }
 
    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -213,8 +217,7 @@ init_texture(struct d3d12_screen *screen,
                                                    &desc,
                                                    D3D12_RESOURCE_STATE_COMMON,
                                                    NULL,
-                                                   __uuidof(ID3D12Resource),
-                                                   (void **)&d3d12_res);
+                                                   IID_PPV_ARGS(&d3d12_res));
    if (FAILED(hres))
       return false;
 
@@ -251,7 +254,7 @@ d3d12_resource_create(struct pipe_screen *pscreen,
                    templ->usage == PIPE_USAGE_STAGING ? "STAGING " :"",
                    util_format_name(templ->format), templ->nr_samples,
                    templ->width0, templ->height0, templ->depth0,
-                   templ->array_size, templ->last_level, templ);
+                   templ->array_size, templ->last_level);
    }
 
    pipe_reference_init(&res->base.reference, 1);
@@ -302,7 +305,6 @@ d3d12_resource_get_handle(struct pipe_screen *pscreen,
                           struct winsys_handle *handle,
                           unsigned usage)
 {
-   struct d3d12_screen *screen = d3d12_screen(pscreen);
    struct d3d12_resource *res = d3d12_resource(pres);
 
    if (handle->type != WINSYS_HANDLE_TYPE_D3D12_RES)
@@ -620,7 +622,8 @@ synchronize(struct d3d12_context *ctx,
 /* A wrapper to make sure local resources are freed and unmapped with
  * any exit path */
 struct local_resource {
-   local_resource(pipe_screen *s, struct pipe_resource *tmpl)
+   local_resource(pipe_screen *s, struct pipe_resource *tmpl) :
+      mapped(false)
    {
       res = d3d12_resource(d3d12_resource_create(s, tmpl));
    }
@@ -895,6 +898,8 @@ d3d12_transfer_map(struct pipe_context *pctx,
          ptr = read_zs_surface(ctx, res, box, trans);
       } else if (usage & PIPE_MAP_WRITE){
          ptr = prepare_write_zs_surface(res, box, trans);
+      } else {
+         ptr = nullptr;
       }
    } else {
       ptrans->stride = align(util_format_get_stride(pres->format, box->width),

@@ -566,7 +566,7 @@ static void si_shader_hs(struct si_screen *sscreen, struct si_shader *shader)
 static void si_emit_shader_es(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.es->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -584,7 +584,7 @@ static void si_emit_shader_es(struct si_context *sctx)
                                  SI_TRACKED_VGT_VERTEX_REUSE_BLOCK_CNTL,
                                  shader->vgt_vertex_reuse_block_cntl);
 
-   if (initial_cdw != sctx->gfx_cs->current.cdw)
+   if (initial_cdw != sctx->gfx_cs.current.cdw)
       sctx->context_roll = true;
 }
 
@@ -729,7 +729,7 @@ void gfx9_get_gs_info(struct si_shader_selector *es, struct si_shader_selector *
 static void si_emit_shader_gs(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.gs->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -783,7 +783,7 @@ static void si_emit_shader_gs(struct si_context *sctx)
                                     shader->vgt_vertex_reuse_block_cntl);
    }
 
-   if (initial_cdw != sctx->gfx_cs->current.cdw)
+   if (initial_cdw != sctx->gfx_cs.current.cdw)
       sctx->context_roll = true;
 }
 
@@ -929,7 +929,7 @@ static void gfx10_emit_ge_pc_alloc(struct si_context *sctx, unsigned value)
 
    if (((sctx->tracked_regs.reg_saved >> reg) & 0x1) != 0x1 ||
        sctx->tracked_regs.reg_value[reg] != value) {
-      struct radeon_cmdbuf *cs = sctx->gfx_cs;
+      struct radeon_cmdbuf *cs = &sctx->gfx_cs;
 
       if (sctx->chip_class == GFX10) {
          /* SQ_NON_EVENT must be emitted before GE_PC_ALLOC is written. */
@@ -976,7 +976,7 @@ static void gfx10_emit_shader_ngg_tail(struct si_context *sctx, struct si_shader
                                   SI_TRACKED_PA_CL_VS_OUT_CNTL__VS, shader->pa_cl_vs_out_cntl,
                                   SI_TRACKED_PA_CL_VS_OUT_CNTL__VS_MASK);
 
-   if (initial_cdw != sctx->gfx_cs->current.cdw)
+   if (initial_cdw != sctx->gfx_cs.current.cdw)
       sctx->context_roll = true;
 
    /* GE_PC_ALLOC is not a context register, so it doesn't cause a context roll. */
@@ -986,7 +986,7 @@ static void gfx10_emit_shader_ngg_tail(struct si_context *sctx, struct si_shader
 static void gfx10_emit_shader_ngg_notess_nogs(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.gs->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -997,7 +997,7 @@ static void gfx10_emit_shader_ngg_notess_nogs(struct si_context *sctx)
 static void gfx10_emit_shader_ngg_tess_nogs(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.gs->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -1011,7 +1011,7 @@ static void gfx10_emit_shader_ngg_tess_nogs(struct si_context *sctx)
 static void gfx10_emit_shader_ngg_notess_gs(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.gs->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -1025,7 +1025,7 @@ static void gfx10_emit_shader_ngg_notess_gs(struct si_context *sctx)
 static void gfx10_emit_shader_ngg_tess_gs(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.gs->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -1155,7 +1155,10 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
       pm4, R_00B228_SPI_SHADER_PGM_RSRC1_GS,
       S_00B228_VGPRS((shader->config.num_vgprs - 1) / (wave_size == 32 ? 8 : 4)) |
          S_00B228_FLOAT_MODE(shader->config.float_mode) | S_00B228_DX10_CLAMP(1) |
-         S_00B228_MEM_ORDERED(1) | S_00B228_WGP_MODE(1) |
+         S_00B228_MEM_ORDERED(1) |
+         /* Disable the WGP mode on gfx10.3 because it can hang. (it happened on VanGogh)
+          * Let's disable it on all chips that disable exactly 1 CU per SA for GS. */
+         S_00B228_WGP_MODE(sscreen->info.chip_class == GFX10) |
          S_00B228_GS_VGPR_COMP_CNT(gs_vgpr_comp_cnt));
    si_pm4_set_reg(pm4, R_00B22C_SPI_SHADER_PGM_RSRC2_GS,
                   S_00B22C_SCRATCH_EN(shader->config.scratch_bytes_per_wave > 0) |
@@ -1305,7 +1308,7 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
 static void si_emit_shader_vs(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.vs->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -1354,7 +1357,7 @@ static void si_emit_shader_vs(struct si_context *sctx)
                                      SI_TRACKED_PA_CL_VS_OUT_CNTL__VS_MASK);
    }
 
-   if (initial_cdw != sctx->gfx_cs->current.cdw)
+   if (initial_cdw != sctx->gfx_cs.current.cdw)
       sctx->context_roll = true;
 
    /* GE_PC_ALLOC is not a context register, so it doesn't cause a context roll. */
@@ -1533,7 +1536,7 @@ static unsigned si_get_spi_shader_col_format(struct si_shader *shader)
 static void si_emit_shader_ps(struct si_context *sctx)
 {
    struct si_shader *shader = sctx->queued.named.ps->shader;
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
 
    if (!shader)
       return;
@@ -1556,7 +1559,7 @@ static void si_emit_shader_ps(struct si_context *sctx)
    radeon_opt_set_context_reg(sctx, R_02823C_CB_SHADER_MASK, SI_TRACKED_CB_SHADER_MASK,
                               shader->ctx_reg.ps.cb_shader_mask);
 
-   if (initial_cdw != sctx->gfx_cs->current.cdw)
+   if (initial_cdw != sctx->gfx_cs.current.cdw)
       sctx->context_roll = true;
 }
 
@@ -1993,6 +1996,14 @@ static inline void si_shader_selector_key(struct pipe_context *ctx, struct si_sh
          key->part.ps.epilog.color_is_int8 &= sel->info.colors_written;
          key->part.ps.epilog.color_is_int10 &= sel->info.colors_written;
       }
+
+      /* Eliminate shader code computing output values that are unused.
+       * This enables dead code elimination between shader parts.
+       * Check if any output is eliminated.
+       */
+      if (sel->colors_written_4bit &
+          ~(sctx->framebuffer.colorbuf_enabled_4bit & blend->cb_target_enabled_4bit))
+         key->opt.prefer_mono = 1;
 
       bool is_poly = !util_prim_is_points_or_lines(sctx->current_rast_prim);
       bool is_line = util_prim_is_lines(sctx->current_rast_prim);
@@ -2799,7 +2810,6 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 
    bool ngg_culling_allowed =
       sscreen->info.chip_class >= GFX10 &&
-      sscreen->info.has_dedicated_vram &&
       sscreen->use_ngg_culling &&
       (sel->info.stage == MESA_SHADER_VERTEX ||
        sel->info.stage == MESA_SHADER_TESS_EVAL) &&
@@ -2818,21 +2828,20 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
          /* 1000 non-indexed vertices (roughly 8 primgroups) are needed
           * per draw call (no TES/GS) to enable NGG culling by default.
           */
-         sel->ngg_cull_nonindexed_fast_launch_vert_threshold = 1000;
+         if (!(sscreen->debug_flags & DBG(NO_FAST_LAUNCH)))
+            sel->ngg_cull_nonindexed_fast_launch_vert_threshold = 1000;
 
          if (sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_ALL))
             sel->ngg_cull_vert_threshold = 0; /* always enabled */
          else if (sscreen->options.shader_culling ||
-                  (sscreen->info.chip_class == GFX10_3 &&
-                   sscreen->info.has_dedicated_vram) ||
+                  sscreen->info.chip_class == GFX10_3 ||
                   (sscreen->info.chip_class == GFX10 &&
                    sscreen->info.is_pro_graphics))
             sel->ngg_cull_vert_threshold = 1500; /* vertex count must be more than this */
       } else if (sel->info.stage == MESA_SHADER_TESS_EVAL) {
          if (sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_ALL) ||
              sscreen->debug_flags & DBG(ALWAYS_NGG_CULLING_TESS) ||
-             (sscreen->info.chip_class == GFX10_3 &&
-              sscreen->info.has_dedicated_vram))
+             sscreen->info.chip_class == GFX10_3)
             sel->ngg_cull_vert_threshold = 0; /* always enabled */
       }
    }
@@ -2996,11 +3005,13 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
    sctx->vs_shader.cso = sel;
    sctx->vs_shader.current = sel ? sel->first_variant : NULL;
    sctx->num_vs_blit_sgprs = sel ? sel->info.base.vs.blit_sgprs_amd : 0;
+   sctx->vs_uses_draw_id = sel ? sel->info.uses_drawid : false;
 
    if (si_update_ngg(sctx))
       si_shader_change_notify(sctx);
 
    si_update_common_shader_state(sctx, sel, PIPE_SHADER_VERTEX);
+   si_select_draw_vbo(sctx);
    si_update_vs_viewport_state(sctx);
    si_update_streamout_state(sctx);
    si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant, si_get_vs(sctx)->cso,
@@ -3049,6 +3060,7 @@ bool si_update_ngg(struct si_context *sctx)
 
       sctx->ngg = new_ngg;
       sctx->last_gs_out_prim = -1; /* reset this so that it gets updated */
+      si_select_draw_vbo(sctx);
       return true;
    }
    return false;
@@ -3071,6 +3083,7 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
    sctx->ia_multi_vgt_param_key.u.uses_gs = sel != NULL;
 
    si_update_common_shader_state(sctx, sel, PIPE_SHADER_GEOMETRY);
+   si_select_draw_vbo(sctx);
    sctx->last_gs_out_prim = -1; /* reset this so that it gets updated */
 
    ngg_changed = si_update_ngg(sctx);
@@ -3122,6 +3135,7 @@ static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
    si_update_tess_uses_prim_id(sctx);
 
    si_update_common_shader_state(sctx, sel, PIPE_SHADER_TESS_EVAL);
+   si_select_draw_vbo(sctx);
    sctx->last_gs_out_prim = -1; /* reset this so that it gets updated */
 
    bool ngg_changed = si_update_ngg(sctx);
@@ -3368,11 +3382,11 @@ static void si_emit_spi_map(struct si_context *sctx)
    /* R_028644_SPI_PS_INPUT_CNTL_0 */
    /* Dota 2: Only ~16% of SPI map updates set different values. */
    /* Talos: Only ~9% of SPI map updates set different values. */
-   unsigned initial_cdw = sctx->gfx_cs->current.cdw;
+   unsigned initial_cdw = sctx->gfx_cs.current.cdw;
    radeon_opt_set_context_regn(sctx, R_028644_SPI_PS_INPUT_CNTL_0, spi_ps_input_cntl,
                                sctx->tracked_regs.spi_ps_input_cntl, num_interp);
 
-   if (initial_cdw != sctx->gfx_cs->current.cdw)
+   if (initial_cdw != sctx->gfx_cs.current.cdw)
       sctx->context_roll = true;
 }
 
@@ -3496,7 +3510,7 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 
    if (sctx->shadowed_regs) {
       /* These registers will be shadowed, so set them only once. */
-      struct radeon_cmdbuf *cs = sctx->gfx_cs;
+      struct radeon_cmdbuf *cs = &sctx->gfx_cs;
 
       assert(sctx->chip_class >= GFX7);
 
@@ -3777,11 +3791,11 @@ static void si_init_tess_factor_ring(struct si_context *sctx)
    if (sctx->shadowed_regs) {
       /* These registers will be shadowed, so set them only once. */
       /* TODO: tmz + shadowed_regs support */
-      struct radeon_cmdbuf *cs = sctx->gfx_cs;
+      struct radeon_cmdbuf *cs = &sctx->gfx_cs;
 
       assert(sctx->chip_class >= GFX7);
 
-      radeon_add_to_buffer_list(sctx, sctx->gfx_cs, si_resource(sctx->tess_rings),
+      radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, si_resource(sctx->tess_rings),
                                 RADEON_USAGE_READWRITE, RADEON_PRIO_SHADER_RINGS);
       si_emit_vgt_flush(cs);
 
@@ -4029,6 +4043,11 @@ bool si_update_shaders(struct si_context *sctx)
       key.u.ngg_gs_fast_launch = !!(vs->key.opt.ngg_culling & SI_NGG_CULL_GS_FAST_LAUNCH_ALL);
    }
 
+   sctx->vs_uses_base_instance =
+      sctx->vs_shader.current ? sctx->vs_shader.current->uses_base_instance :
+      sctx->queued.named.hs ? sctx->queued.named.hs->shader->uses_base_instance :
+      sctx->gs_shader.current->uses_base_instance;
+
    si_update_vgt_shader_config(sctx, key);
 
    if (old_kill_clip_distances != si_get_vs_state(sctx)->key.opt.kill_clip_distances)
@@ -4070,6 +4089,10 @@ bool si_update_shaders(struct si_context *sctx)
           sctx->ps_shader.current->key.part.ps.epilog.poly_line_smoothing) {
          sctx->smoothing_enabled = sctx->ps_shader.current->key.part.ps.epilog.poly_line_smoothing;
          si_mark_atom_dirty(sctx, &sctx->atoms.s.msaa_config);
+
+         /* NGG cull state uses smoothing_enabled. */
+         if (sctx->screen->use_ngg_culling)
+            si_mark_atom_dirty(sctx, &sctx->atoms.s.ngg_cull_state);
 
          if (sctx->chip_class == GFX6)
             si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
@@ -4124,12 +4147,12 @@ bool si_update_shaders(struct si_context *sctx)
 
 static void si_emit_scratch_state(struct si_context *sctx)
 {
-   struct radeon_cmdbuf *cs = sctx->gfx_cs;
+   struct radeon_cmdbuf *cs = &sctx->gfx_cs;
 
    radeon_set_context_reg(cs, R_0286E8_SPI_TMPRING_SIZE, sctx->spi_tmpring_size);
 
    if (sctx->scratch_buffer) {
-      radeon_add_to_buffer_list(sctx, sctx->gfx_cs, sctx->scratch_buffer, RADEON_USAGE_READWRITE,
+      radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, sctx->scratch_buffer, RADEON_USAGE_READWRITE,
                                 RADEON_PRIO_SCRATCH_BUFFER);
    }
 }

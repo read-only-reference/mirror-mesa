@@ -34,9 +34,9 @@
 #include "util/format/u_format.h"
 
 #include "freedreno_draw.h"
-#include "freedreno_log.h"
 #include "freedreno_state.h"
 #include "freedreno_resource.h"
+#include "freedreno_tracepoints.h"
 
 #include "fd6_blitter.h"
 #include "fd6_gmem.h"
@@ -85,6 +85,7 @@ emit_mrt(struct fd_ringbuffer *ring, struct pipe_framebuffer_state *pfb,
 		struct fd_resource *rsc = NULL;
 		struct fdl_slice *slice = NULL;
 		uint32_t stride = 0;
+		uint32_t array_stride = 0;
 		uint32_t offset;
 		uint32_t tile_mode;
 
@@ -110,6 +111,7 @@ emit_mrt(struct fd_ringbuffer *ring, struct pipe_framebuffer_state *pfb,
 				psurf->u.tex.first_layer);
 
 		stride = fd_resource_pitch(rsc, psurf->u.tex.level);
+		array_stride = fd_resource_layer_stride(rsc, psurf->u.tex.level);
 		swap = fd6_resource_swap(rsc, pformat);
 
 		tile_mode = fd_resource_tile_mode(psurf->texture, psurf->u.tex.level);
@@ -123,7 +125,7 @@ emit_mrt(struct fd_ringbuffer *ring, struct pipe_framebuffer_state *pfb,
 				.color_tile_mode = tile_mode,
 				.color_swap = swap),
 			A6XX_RB_MRT_PITCH(i, .a6xx_rb_mrt_pitch = stride),
-			A6XX_RB_MRT_ARRAY_PITCH(i, .a6xx_rb_mrt_array_pitch = slice->size0),
+			A6XX_RB_MRT_ARRAY_PITCH(i, .a6xx_rb_mrt_array_pitch = array_stride),
 			A6XX_RB_MRT_BASE(i, .bo = rsc->bo, .bo_offset = offset),
 			A6XX_RB_MRT_BASE_GMEM(i, .unknown = base));
 
@@ -150,7 +152,7 @@ emit_zs(struct fd_ringbuffer *ring, struct pipe_surface *zsbuf,
 		struct fd_resource *rsc = fd_resource(zsbuf->texture);
 		enum a6xx_depth_format fmt = fd6_pipe2depth(zsbuf->format);
 		uint32_t stride = fd_resource_pitch(rsc, 0);
-		uint32_t size = fd_resource_slice(rsc, 0)->size0;
+		uint32_t array_stride = fd_resource_layer_stride(rsc, 0);
 		uint32_t base = gmem ? gmem->zsbuf_base[0] : 0;
 		uint32_t offset = fd_resource_offset(rsc, zsbuf->u.tex.level,
 				zsbuf->u.tex.first_layer);
@@ -158,7 +160,7 @@ emit_zs(struct fd_ringbuffer *ring, struct pipe_surface *zsbuf,
 		OUT_REG(ring,
 			A6XX_RB_DEPTH_BUFFER_INFO(.depth_format = fmt),
 			A6XX_RB_DEPTH_BUFFER_PITCH(.a6xx_rb_depth_buffer_pitch = stride),
-			A6XX_RB_DEPTH_BUFFER_ARRAY_PITCH(.a6xx_rb_depth_buffer_array_pitch = size),
+			A6XX_RB_DEPTH_BUFFER_ARRAY_PITCH(.a6xx_rb_depth_buffer_array_pitch = array_stride),
 			A6XX_RB_DEPTH_BUFFER_BASE(.bo = rsc->bo, .bo_offset = offset),
 			A6XX_RB_DEPTH_BUFFER_BASE_GMEM(.dword = base));
 
@@ -192,13 +194,13 @@ emit_zs(struct fd_ringbuffer *ring, struct pipe_surface *zsbuf,
 
 		if (rsc->stencil) {
 			stride = fd_resource_pitch(rsc->stencil, 0);
-			size = fd_resource_slice(rsc->stencil, 0)->size0;
+			array_stride = fd_resource_layer_stride(rsc->stencil, 0);
 			uint32_t base = gmem ? gmem->zsbuf_base[1] : 0;
 
 			OUT_REG(ring,
 				A6XX_RB_STENCIL_INFO(.separate_stencil = true),
 				A6XX_RB_STENCIL_BUFFER_PITCH(.a6xx_rb_stencil_buffer_pitch = stride),
-				A6XX_RB_STENCIL_BUFFER_ARRAY_PITCH(.a6xx_rb_stencil_buffer_array_pitch = size),
+				A6XX_RB_STENCIL_BUFFER_ARRAY_PITCH(.a6xx_rb_stencil_buffer_array_pitch = array_stride),
 				A6XX_RB_STENCIL_BUFFER_BASE(.bo = rsc->stencil->bo),
 				A6XX_RB_STENCIL_BUFFER_BASE_GMEM(.dword = base));
 		} else {
@@ -576,9 +578,9 @@ emit_binning_pass(struct fd_batch *batch)
 			A6XX_SP_TP_WINDOW_OFFSET_Y(0));
 
 	/* emit IB to binning drawcmds: */
-	fd_log(batch, "GMEM: START BINNING IB");
+	trace_start_binning_ib(&batch->trace);
 	fd6_emit_ib(ring, batch->draw);
-	fd_log(batch, "GMEM: END BINNING IB");
+	trace_end_binning_ib(&batch->trace);
 
 	fd_reset_wfi(batch);
 
@@ -598,9 +600,9 @@ emit_binning_pass(struct fd_batch *batch)
 
 	OUT_PKT7(ring, CP_WAIT_FOR_ME, 0);
 
-	fd_log(batch, "START VSC OVERFLOW TEST");
+	trace_start_vsc_overflow_test(&batch->trace);
 	emit_vsc_overflow_test(batch);
-	fd_log(batch, "END VSC OVERFLOW TEST");
+	trace_end_vsc_overflow_test(&batch->trace);
 
 	OUT_PKT7(ring, CP_SET_VISIBILITY_OVERRIDE, 1);
 	OUT_RING(ring, 0x0);
@@ -657,9 +659,9 @@ fd6_emit_tile_init(struct fd_batch *batch)
 	fd6_emit_lrz_flush(ring);
 
 	if (batch->prologue) {
-		fd_log(batch, "START PROLOGUE");
+		trace_start_prologue(&batch->trace);
 		fd6_emit_ib(ring, batch->prologue);
-		fd_log(batch, "END PROLOGUE");
+		trace_end_prologue(&batch->trace);
 	}
 
 	fd6_cache_inv(batch, ring);
@@ -1118,13 +1120,13 @@ fd6_emit_tile_renderprep(struct fd_batch *batch, const struct fd_tile *tile)
 	if (!batch->tile_setup)
 		return;
 
-	fd_log(batch, "TILE: START CLEAR/RESTORE");
+	trace_start_clear_restore(&batch->trace, batch->fast_cleared);
 	if (batch->fast_cleared || !use_hw_binning(batch)) {
 		fd6_emit_ib(batch->gmem, batch->tile_setup);
 	} else {
 		emit_conditional_ib(batch, tile, batch->tile_setup);
 	}
-	fd_log(batch, "TILE: END CLEAR/RESTORE");
+	trace_end_clear_restore(&batch->trace);
 }
 
 static void
@@ -1244,13 +1246,13 @@ fd6_emit_tile_gmem2mem(struct fd_batch *batch, const struct fd_tile *tile)
 	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(RM6_RESOLVE));
 	emit_marker6(ring, 7);
 
-	fd_log(batch, "TILE: START RESOLVE");
+	trace_start_resolve(&batch->trace);
 	if (batch->fast_cleared || !use_hw_binning(batch)) {
 		fd6_emit_ib(batch->gmem, batch->tile_fini);
 	} else {
 		emit_conditional_ib(batch, tile, batch->tile_fini);
 	}
-	fd_log(batch, "TILE: END RESOLVE");
+	trace_end_resolve(&batch->trace);
 }
 
 static void
@@ -1277,6 +1279,11 @@ emit_sysmem_clears(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	struct pipe_framebuffer_state *pfb = &batch->framebuffer;
 
 	uint32_t buffers = batch->fast_cleared;
+
+	if (!buffers)
+		return;
+
+	trace_start_clear_restore(&batch->trace, buffers);
 
 	if (buffers & PIPE_CLEAR_COLOR) {
 		for (int i = 0; i < pfb->nr_cbufs; i++) {
@@ -1321,6 +1328,8 @@ emit_sysmem_clears(struct fd_batch *batch, struct fd_ringbuffer *ring)
 	}
 
 	fd6_event_write(batch, ring, PC_CCU_FLUSH_COLOR_TS, true);
+
+	trace_end_clear_restore(&batch->trace);
 }
 
 static void
@@ -1354,9 +1363,13 @@ fd6_emit_sysmem_prep(struct fd_batch *batch)
 	fd6_emit_lrz_flush(ring);
 
 	if (batch->prologue) {
-		fd_log(batch, "START PROLOGUE");
+		if (!batch->nondraw) {
+			trace_start_prologue(&batch->trace);
+		}
 		fd6_emit_ib(ring, batch->prologue);
-		fd_log(batch, "END PROLOGUE");
+		if (!batch->nondraw) {
+			trace_end_prologue(&batch->trace);
+		}
 	}
 
 	/* remaining setup below here does not apply to blit/compute: */
@@ -1424,6 +1437,7 @@ fd6_emit_sysmem_fini(struct fd_batch *batch)
 	fd6_emit_lrz_flush(ring);
 
 	fd6_event_write(batch, ring, PC_CCU_FLUSH_COLOR_TS, true);
+	fd6_event_write(batch, ring, PC_CCU_FLUSH_DEPTH_TS, true);
 }
 
 void

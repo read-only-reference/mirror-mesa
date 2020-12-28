@@ -27,6 +27,8 @@
 #include "zink_context.h"
 #include "zink_device_info.h"
 #include "zink_fence.h"
+#include "zink_format.h"
+#include "zink_instance.h"
 #include "zink_public.h"
 #include "zink_resource.h"
 
@@ -100,10 +102,21 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TEXCOORD:
    case PIPE_CAP_DRAW_INDIRECT:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
+   case PIPE_CAP_GLSL_TESS_LEVELS_AS_INPUTS:
       return 1;
+
+   case PIPE_CAP_MULTI_DRAW_INDIRECT:
+   case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
+      return screen->vk_CmdDrawIndirectCount &&
+             screen->vk_CmdDrawIndexedIndirectCount;
 
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
       return screen->info.have_EXT_vertex_attribute_divisor;
+
+   case PIPE_CAP_INT64:
+   case PIPE_CAP_INT64_DIVMOD:
+   case PIPE_CAP_DOUBLES:
+      return 1;
 
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
       if (!screen->info.feats.features.dualSrcBlend)
@@ -384,6 +397,13 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_FRAGMENT:
       case PIPE_SHADER_VERTEX:
          return INT_MAX;
+      case PIPE_SHADER_TESS_CTRL:
+      case PIPE_SHADER_TESS_EVAL:
+         if (screen->info.feats.features.tessellationShader &&
+             (screen->instance_info.have_KHR_maintenance2 ||
+              VK_MAKE_VERSION(1,1,0) <= screen->loader_version))
+            return INT_MAX;
+         break;
 
       case PIPE_SHADER_GEOMETRY:
          if (screen->info.feats.features.geometryShader)
@@ -408,6 +428,12 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_VERTEX:
          return MIN2(screen->info.props.limits.maxVertexInputAttributes,
                      PIPE_MAX_SHADER_INPUTS);
+      case PIPE_SHADER_TESS_CTRL:
+         return MIN2(screen->info.props.limits.maxTessellationControlPerVertexInputComponents / 4,
+                     PIPE_MAX_SHADER_INPUTS);
+      case PIPE_SHADER_TESS_EVAL:
+         return MIN2(screen->info.props.limits.maxTessellationEvaluationInputComponents / 4,
+                     PIPE_MAX_SHADER_INPUTS);
       case PIPE_SHADER_GEOMETRY:
          return MIN2(screen->info.props.limits.maxGeometryInputComponents,
                      PIPE_MAX_SHADER_INPUTS);
@@ -422,6 +448,12 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       switch (shader) {
       case PIPE_SHADER_VERTEX:
          return MIN2(screen->info.props.limits.maxVertexOutputComponents / 4,
+                     PIPE_MAX_SHADER_OUTPUTS);
+      case PIPE_SHADER_TESS_CTRL:
+         return MIN2(screen->info.props.limits.maxTessellationControlPerVertexOutputComponents / 4,
+                     PIPE_MAX_SHADER_OUTPUTS);
+      case PIPE_SHADER_TESS_EVAL:
+         return MIN2(screen->info.props.limits.maxTessellationEvaluationOutputComponents / 4,
                      PIPE_MAX_SHADER_OUTPUTS);
       case PIPE_SHADER_GEOMETRY:
          return MIN2(screen->info.props.limits.maxGeometryOutputComponents / 4,
@@ -438,6 +470,8 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       case PIPE_SHADER_VERTEX:
       case PIPE_SHADER_FRAGMENT:
       case PIPE_SHADER_GEOMETRY:
+      case PIPE_SHADER_TESS_CTRL:
+      case PIPE_SHADER_TESS_EVAL:
          /* this might be a bit simplistic... */
          return MIN2(screen->info.props.limits.maxPerStageDescriptorSamplers,
                      PIPE_MAX_SAMPLERS);
@@ -449,7 +483,8 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       return 65536;
 
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-      return  MIN2(screen->info.props.limits.maxPerStageDescriptorUniformBuffers, INT_MAX);
+      return  MIN2(screen->info.props.limits.maxPerStageDescriptorUniformBuffers,
+                   PIPE_MAX_CONSTANT_BUFFERS);
 
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return INT_MAX;
@@ -643,132 +678,6 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    FREE(screen);
 }
 
-static VkInstance
-create_instance(struct zink_screen *screen)
-{
-   const char *layers[4] = { 0 };
-   uint32_t num_layers = 0;
-   const char *extensions[4] = { 0 };
-   uint32_t num_extensions = 0;
-
-   bool have_debug_utils_ext = false;
-#if defined(MVK_VERSION)
-   bool have_moltenvk_layer = false;
-   bool have_moltenvk_layer_ext = false;
-#endif
-
-   {
-      // Build up the extensions from the reported ones but only for the unnamed layer
-      uint32_t extension_count = 0;
-      VkResult err = vkEnumerateInstanceExtensionProperties(NULL, &extension_count, NULL);
-      if (err == VK_SUCCESS) {
-         VkExtensionProperties *extension_props = malloc(extension_count * sizeof(VkExtensionProperties));
-         if (extension_props) {
-            err = vkEnumerateInstanceExtensionProperties(NULL, &extension_count, extension_props);
-            if (err == VK_SUCCESS) {
-               for (uint32_t i = 0; i < extension_count; i++) {
-                  if (!strcmp(extension_props[i].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
-                     have_debug_utils_ext = true;
-                  }
-                  if (!strcmp(extension_props[i].extensionName, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
-                     extensions[num_extensions++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
-                     screen->have_physical_device_prop2_ext = true;
-                  }
-                  if (!strcmp(extension_props[i].extensionName, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME)) {
-                     extensions[num_extensions++] = VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME;
-                  }
-#if defined(MVK_VERSION)
-                  if (!strcmp(extension_props[i].extensionName, VK_MVK_MOLTENVK_EXTENSION_NAME)) {
-                     have_moltenvk_layer_ext = true;
-                     extensions[num_extensions++] = VK_MVK_MOLTENVK_EXTENSION_NAME;
-                  }
-#endif
-               }
-            }
-            free(extension_props);
-         }
-      }
-   }
-
-   // Clear have_debug_utils_ext if we do not want debug info
-   if (!(zink_debug & ZINK_DEBUG_VALIDATION)) {
-      have_debug_utils_ext = false;
-   }
-
-   {
-      // Build up the layers from the reported ones
-      uint32_t layer_count = 0;
-      // Init has_validation_layer so if we have debug_util allow a validation layer to be added.
-      // Once a validation layer has been found, do not add any more.
-      bool has_validation_layer = !have_debug_utils_ext;
-
-      VkResult err = vkEnumerateInstanceLayerProperties(&layer_count, NULL);
-      if (err == VK_SUCCESS) {
-         VkLayerProperties *layer_props = malloc(layer_count * sizeof(VkLayerProperties));
-         if (layer_props) {
-            err = vkEnumerateInstanceLayerProperties(&layer_count, layer_props);
-            if (err == VK_SUCCESS) {
-               for (uint32_t i = 0; i < layer_count; i++) {
-                  if (!strcmp(layer_props[i].layerName, "VK_LAYER_KHRONOS_validation") && !has_validation_layer) {
-                     layers[num_layers++] = "VK_LAYER_KHRONOS_validation";
-                     has_validation_layer = true;
-                  }
-                  if (!strcmp(layer_props[i].layerName, "VK_LAYER_LUNARG_standard_validation") && !has_validation_layer) {
-                     layers[num_layers++] = "VK_LAYER_LUNARG_standard_validation";
-                     has_validation_layer = true;
-                  }
-#if defined(MVK_VERSION)
-                  if (!strcmp(layer_props[i].layerName, "MoltenVK")) {
-                     have_moltenvk_layer = true;
-                     layers[num_layers++] = "MoltenVK";
-                  }
-#endif
-               }
-            }
-            free(layer_props);
-         }
-      }
-   }
-
-   if (have_debug_utils_ext) {
-      extensions[num_extensions++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-      screen->have_debug_utils_ext = have_debug_utils_ext;
-   }
-
-#if defined(MVK_VERSION)
-   if (have_moltenvk_layer_ext && have_moltenvk_layer) {
-      screen->have_moltenvk = true;
-   }
-#endif
-
-   VkApplicationInfo ai = {};
-   ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-
-   char proc_name[128];
-   if (os_get_process_name(proc_name, ARRAY_SIZE(proc_name)))
-      ai.pApplicationName = proc_name;
-   else
-      ai.pApplicationName = "unknown";
-
-   ai.pEngineName = "mesa zink";
-   ai.apiVersion = VK_API_VERSION_1_0;
-
-   VkInstanceCreateInfo ici = {};
-   ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-   ici.pApplicationInfo = &ai;
-   ici.ppEnabledExtensionNames = extensions;
-   ici.enabledExtensionCount = num_extensions;
-   ici.ppEnabledLayerNames = layers;
-   ici.enabledLayerCount = num_layers;
-
-   VkInstance instance = VK_NULL_HANDLE;
-   VkResult err = vkCreateInstance(&ici, NULL, &instance);
-   if (err != VK_SUCCESS)
-      return VK_NULL_HANDLE;
-
-   return instance;
-}
-
 static VkPhysicalDevice
 choose_pdev(const VkInstance instance)
 {
@@ -816,6 +725,7 @@ update_queue_props(struct zink_screen *screen)
 
 static void
 zink_flush_frontbuffer(struct pipe_screen *pscreen,
+                       struct pipe_context *pcontext,
                        struct pipe_resource *pres,
                        unsigned level, unsigned layer,
                        void *winsys_drawable_handle,
@@ -858,53 +768,86 @@ zink_flush_frontbuffer(struct pipe_screen *pscreen,
       winsys->displaytarget_display(winsys, res->dt, winsys_drawable_handle, sub_box);
 }
 
-#define GET_PROC_ADDR(x) do {                                               \
-      screen->vk_##x = (PFN_vk##x)vkGetDeviceProcAddr(screen->dev, "vk"#x); \
-      if (!screen->vk_##x) {                                                \
-         debug_printf("vkGetDeviceProcAddr failed: vk"#x"\n");              \
-         return false;                                                      \
-      } \
-   } while (0)
+bool
+zink_is_depth_format_supported(struct zink_screen *screen, VkFormat format)
+{
+   VkFormatProperties props;
+   vkGetPhysicalDeviceFormatProperties(screen->pdev, format, &props);
+   return (props.linearTilingFeatures | props.optimalTilingFeatures) &
+          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+}
 
-#define GET_PROC_ADDR_INSTANCE(x) do {                                          \
-      screen->vk_##x = (PFN_vk##x)vkGetInstanceProcAddr(screen->instance, "vk"#x); \
-      if (!screen->vk_##x) {                                                \
-         debug_printf("GetInstanceProcAddr failed: vk"#x"\n");        \
-         return false;                                                      \
-      } \
-   } while (0)
+static enum pipe_format
+emulate_x8(enum pipe_format format)
+{
+   /* convert missing X8 variants to A8 */
+   switch (format) {
+   case PIPE_FORMAT_B8G8R8X8_UNORM:
+      return PIPE_FORMAT_B8G8R8A8_UNORM;
 
-#define GET_PROC_ADDR_INSTANCE_LOCAL(instance, x) PFN_vk##x vk_##x = (PFN_vk##x)vkGetInstanceProcAddr(instance, "vk"#x)
+   case PIPE_FORMAT_B8G8R8X8_SRGB:
+      return PIPE_FORMAT_B8G8R8A8_SRGB;
+
+   default:
+      return format;
+   }
+}
+
+VkFormat
+zink_get_format(struct zink_screen *screen, enum pipe_format format)
+{
+   VkFormat ret = zink_pipe_format_to_vk_format(emulate_x8(format));
+
+   if (ret == VK_FORMAT_X8_D24_UNORM_PACK32 &&
+       !screen->have_X8_D24_UNORM_PACK32) {
+      assert(zink_is_depth_format_supported(screen, VK_FORMAT_D32_SFLOAT));
+      return VK_FORMAT_D32_SFLOAT;
+   }
+
+   if (ret == VK_FORMAT_D24_UNORM_S8_UINT &&
+       !screen->have_D24_UNORM_S8_UINT) {
+      assert(zink_is_depth_format_supported(screen,
+                                            VK_FORMAT_D32_SFLOAT_S8_UINT));
+      return VK_FORMAT_D32_SFLOAT_S8_UINT;
+   }
+
+   if ((ret == VK_FORMAT_A4B4G4R4_UNORM_PACK16_EXT &&
+        !screen->info.format_4444_feats.formatA4B4G4R4) ||
+       (ret == VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT &&
+        !screen->info.format_4444_feats.formatA4R4G4B4))
+      return VK_FORMAT_UNDEFINED;
+
+   return ret;
+}
 
 static bool
 load_instance_extensions(struct zink_screen *screen)
 {
-   screen->loader_version = VK_API_VERSION_1_0;
-   {
-      // Get the Loader version
-      GET_PROC_ADDR_INSTANCE_LOCAL(NULL, EnumerateInstanceVersion);
-      if (vk_EnumerateInstanceVersion) {
-         uint32_t loader_version_temp = VK_API_VERSION_1_0;
-         if (VK_SUCCESS == (*vk_EnumerateInstanceVersion)( &loader_version_temp)) {
-            screen->loader_version = loader_version_temp;
-         }
-      }
-   }
    if (zink_debug & ZINK_DEBUG_VALIDATION) {
       printf("zink: Loader %d.%d.%d \n", VK_VERSION_MAJOR(screen->loader_version), VK_VERSION_MINOR(screen->loader_version), VK_VERSION_PATCH(screen->loader_version));
    }
 
-   if (VK_MAKE_VERSION(1,1,0) <= screen->loader_version) {
-      // Get Vk 1.1+ Instance functions
-      GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceFeatures2);
-      GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceProperties2);
-   } else
-   if (screen->have_physical_device_prop2_ext) {
+   if (screen->instance_info.have_KHR_get_physical_device_properties2) {
       // Not Vk 1.1+ so if VK_KHR_get_physical_device_properties2 the use it
       GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, GetPhysicalDeviceFeatures2KHR);
       GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, GetPhysicalDeviceProperties2KHR);
       screen->vk_GetPhysicalDeviceFeatures2 = vk_GetPhysicalDeviceFeatures2KHR;
       screen->vk_GetPhysicalDeviceProperties2 = vk_GetPhysicalDeviceProperties2KHR;
+   } else if (VK_MAKE_VERSION(1,1,0) <= screen->loader_version) {
+      // Get Vk 1.1+ Instance functions
+      GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceFeatures2);
+      GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceProperties2);
+   }
+
+   if (screen->instance_info.have_KHR_draw_indirect_count) {
+      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, CmdDrawIndirectCountKHR);
+      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, CmdDrawIndexedIndirectCountKHR);
+      screen->vk_CmdDrawIndirectCount = vk_CmdDrawIndirectCountKHR;
+      screen->vk_CmdDrawIndexedIndirectCount = vk_CmdDrawIndexedIndirectCountKHR;
+   } else if (VK_MAKE_VERSION(1,2,0) <= screen->loader_version) {
+      // Get Vk 1.1+ Instance functions
+      GET_PROC_ADDR_INSTANCE(CmdDrawIndirectCount);
+      GET_PROC_ADDR_INSTANCE(CmdDrawIndexedIndirectCount);
    }
 
    return true;
@@ -1027,11 +970,11 @@ create_debug(struct zink_screen *screen)
    return true;
 }
 
-#if defined(MVK_VERSION)
 static bool
 zink_internal_setup_moltenvk(struct zink_screen *screen)
 {
-   if (!screen->have_moltenvk)
+#if defined(MVK_VERSION)
+   if (!screen->instance_info.have_MVK_moltenvk)
       return true;
 
    GET_PROC_ADDR_INSTANCE(GetMoltenVKConfigurationMVK);
@@ -1058,15 +1001,15 @@ zink_internal_setup_moltenvk(struct zink_screen *screen)
       VkResult res = (*screen->vk_GetMoltenVKConfigurationMVK)(screen->instance, &molten_config, &molten_config_size);
       if (res == VK_SUCCESS || res == VK_INCOMPLETE) {
          // Needed to allow MoltenVK to accept VkImageView swizzles.
-         // Encounted when using VK_FORMAT_R8G8_UNORM
+         // Encountered when using VK_FORMAT_R8G8_UNORM
          molten_config.fullImageViewSwizzle = VK_TRUE;
          (*screen->vk_SetMoltenVKConfigurationMVK)(screen->instance, &molten_config, &molten_config_size);
       }
    }
+#endif // MVK_VERSION
 
    return true;
 }
-#endif // MVK_VERSION
 
 static void
 check_device_needs_mesa_wsi(struct zink_screen *screen)
@@ -1078,8 +1021,58 @@ check_device_needs_mesa_wsi(struct zink_screen *screen)
    }
 }
 
-static struct pipe_screen *
-zink_internal_create_screen(struct sw_winsys *winsys, int fd, const struct pipe_screen_config *config)
+static uint32_t
+zink_get_loader_version(void)
+{
+
+   uint32_t loader_version = VK_API_VERSION_1_0;
+
+   // Get the Loader version
+   GET_PROC_ADDR_INSTANCE_LOCAL(NULL, EnumerateInstanceVersion);
+   if (vk_EnumerateInstanceVersion) {
+      uint32_t loader_version_temp = VK_API_VERSION_1_0;
+      if (VK_SUCCESS == (*vk_EnumerateInstanceVersion)(&loader_version_temp)) {
+         loader_version = loader_version_temp;
+      }
+   }
+
+   return loader_version;
+}
+
+static VkDevice
+zink_create_logical_device(struct zink_screen *screen)
+{
+   VkDevice dev = VK_NULL_HANDLE;
+
+   VkDeviceQueueCreateInfo qci = {};
+   float dummy = 0.0f;
+   qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+   qci.queueFamilyIndex = screen->gfx_queue;
+   qci.queueCount = 1;
+   qci.pQueuePriorities = &dummy;
+
+   VkDeviceCreateInfo dci = {};
+   dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+   dci.queueCreateInfoCount = 1;
+   dci.pQueueCreateInfos = &qci;
+   /* extensions don't have bool members in pEnabledFeatures.
+    * this requires us to pass the whole VkPhysicalDeviceFeatures2 struct
+    */
+   if (screen->info.feats.sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2) {
+      dci.pNext = &screen->info.feats;
+   } else {
+      dci.pEnabledFeatures = &screen->info.feats.features;
+   }
+
+   dci.ppEnabledExtensionNames = screen->info.extensions;
+   dci.enabledExtensionCount = screen->info.num_extensions;
+
+   vkCreateDevice(screen->pdev, &dci, NULL, &dev);
+   return dev;
+}
+
+static struct zink_screen *
+zink_internal_create_screen(const struct pipe_screen_config *config)
 {
    struct zink_screen *screen = CALLOC_STRUCT(zink_screen);
    if (!screen)
@@ -1087,14 +1080,15 @@ zink_internal_create_screen(struct sw_winsys *winsys, int fd, const struct pipe_
 
    zink_debug = debug_get_option_zink_debug();
 
-   screen->instance = create_instance(screen);
+   screen->loader_version = zink_get_loader_version();
+   screen->instance = zink_create_instance(screen);
    if (!screen->instance)
       goto fail;
 
    if (!load_instance_extensions(screen))
       goto fail;
 
-   if (screen->have_debug_utils_ext && !create_debug(screen))
+   if (screen->instance_info.have_EXT_debug_utils && !create_debug(screen))
       debug_printf("ZINK: failed to setup debug utils\n");
 
    screen->pdev = choose_pdev(screen->instance);
@@ -1115,50 +1109,14 @@ zink_internal_create_screen(struct sw_winsys *winsys, int fd, const struct pipe_
     */
    check_device_needs_mesa_wsi(screen);
 
-#if defined(MVK_VERSION)
    zink_internal_setup_moltenvk(screen);
-#endif
 
-   if (fd >= 0 && !screen->info.have_KHR_external_memory_fd) {
-      debug_printf("ZINK: KHR_external_memory_fd required!\n");
-      goto fail;
-   }
-   
-   VkDeviceQueueCreateInfo qci = {};
-   float dummy = 0.0f;
-   qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-   qci.queueFamilyIndex = screen->gfx_queue;
-   qci.queueCount = 1;
-   qci.pQueuePriorities = &dummy;
-
-   /* TODO: we can probably support non-premul here with some work? */
-   screen->info.have_EXT_blend_operation_advanced = screen->info.have_EXT_blend_operation_advanced &&
-                                                    screen->info.blend_props.advancedBlendNonPremultipliedSrcColor &&
-                                                    screen->info.blend_props.advancedBlendNonPremultipliedDstColor;
-
-   VkDeviceCreateInfo dci = {};
-   dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-   dci.queueCreateInfoCount = 1;
-   dci.pQueueCreateInfos = &qci;
-   /* extensions don't have bool members in pEnabledFeatures.
-    * this requires us to pass the whole VkPhysicalDeviceFeatures2 struct
-    */
-   if (screen->info.feats.sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2) {
-      dci.pNext = &screen->info.feats;
-   } else {
-      dci.pEnabledFeatures = &screen->info.feats.features;
-   }
-
-   dci.ppEnabledExtensionNames = screen->info.extensions;
-   dci.enabledExtensionCount = screen->info.num_extensions;
-
-   if (vkCreateDevice(screen->pdev, &dci, NULL, &screen->dev) != VK_SUCCESS)
+   screen->dev = zink_create_logical_device(screen);
+   if (!screen->dev)
       goto fail;
 
    if (!load_device_extensions(screen))
       goto fail;
-
-   screen->winsys = winsys;
 
    screen->base.get_name = zink_get_name;
    screen->base.get_vendor = zink_get_vendor;
@@ -1177,7 +1135,7 @@ zink_internal_create_screen(struct sw_winsys *winsys, int fd, const struct pipe_
 
    slab_create_parent(&screen->transfer_pool, sizeof(struct zink_transfer), 16);
 
-   return &screen->base;
+   return screen;
 
 fail:
    FREE(screen);
@@ -1187,11 +1145,24 @@ fail:
 struct pipe_screen *
 zink_create_screen(struct sw_winsys *winsys)
 {
-   return zink_internal_create_screen(winsys, -1, NULL);
+   struct zink_screen *ret = zink_internal_create_screen(NULL);
+
+   if (ret)
+      ret->winsys = winsys;
+
+   return &ret->base;
 }
 
 struct pipe_screen *
 zink_drm_create_screen(int fd, const struct pipe_screen_config *config)
 {
-   return zink_internal_create_screen(NULL, fd, config);
+   struct zink_screen *ret = zink_internal_create_screen(config);
+
+   if (ret && !ret->info.have_KHR_external_memory_fd) {
+      debug_printf("ZINK: KHR_external_memory_fd required!\n");
+      free(ret);
+      return NULL;
+   }
+
+   return &ret->base;
 }
