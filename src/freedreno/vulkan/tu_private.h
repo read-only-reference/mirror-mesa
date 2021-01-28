@@ -204,8 +204,6 @@ struct tu_physical_device
    int msm_major_version;
    int msm_minor_version;
 
-   bool limited_z24s8;
-
    /* This is the drivers on-disk cache used as a fallback as opposed to
     * the pipeline cache defined by apps.
     */
@@ -340,6 +338,8 @@ struct tu6_global
       uint32_t offset;
       uint32_t pad[7];
    } flush_base[4];
+
+   ALIGN16 uint32_t cs_indirect_xyz[3];
 
    /* note: larger global bo will be used for customBorderColors */
    struct bcolor_entry bcolor_builtin[TU_BORDER_COLOR_BUILTIN], bcolor[];
@@ -1396,7 +1396,8 @@ tu_image_view_init(struct tu_image_view *iview,
                    bool limited_z24s8);
 
 bool
-ubwc_possible(VkFormat format, VkImageType type, VkImageUsageFlags usage, bool limited_z24s8);
+ubwc_possible(VkFormat format, VkImageType type, VkImageUsageFlags usage, bool limited_z24s8,
+              VkSampleCountFlagBits samples);
 
 struct tu_buffer_view
 {

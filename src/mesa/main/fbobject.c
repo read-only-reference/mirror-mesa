@@ -814,6 +814,7 @@ is_format_color_renderable(const struct gl_context *ctx, mesa_format format,
    case GL_RGB10:
    case GL_RGB9_E5:
    case GL_SR8_EXT:
+   case GL_SRG8_EXT:
       return GL_FALSE;
    default:
       break;
@@ -1092,7 +1093,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    assert(_mesa_is_user_fbo(fb));
 
    /* we're changing framebuffer fields here */
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    numImages = 0;
    fb->Width = 0;
@@ -1984,7 +1985,7 @@ _mesa_DeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers)
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    for (i = 0; i < n; i++) {
       if (renderbuffers[i] > 0) {
@@ -2492,7 +2493,7 @@ _mesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
                                       storageSamples) == GL_NO_ERROR);
    }
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    if (rb->InternalFormat == internalFormat &&
        rb->Width == (GLuint) width &&
@@ -2706,7 +2707,7 @@ _mesa_EGLImageTargetRenderbufferStorageOES(GLenum target, GLeglImageOES image)
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    ctx->Driver.EGLImageTargetRenderbufferStorage(ctx, rb, image);
 }
@@ -3118,16 +3119,13 @@ _mesa_bind_framebuffers(struct gl_context *ctx,
     * that a render-to-texture case.
     */
    if (bindReadBuf) {
-      FLUSH_VERTICES(ctx, _NEW_BUFFERS);
-
-      /* check if old readbuffer was render-to-texture */
-      check_end_texture_render(ctx, oldReadFb);
+      FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
       _mesa_reference_framebuffer(&ctx->ReadBuffer, newReadFb);
    }
 
    if (bindDrawBuf) {
-      FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+      FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
       ctx->NewDriverState |= ctx->DriverFlags.NewSampleLocations;
 
       /* check if old framebuffer had any texture attachments */
@@ -3179,7 +3177,7 @@ _mesa_DeleteFramebuffers(GLsizei n, const GLuint *framebuffers)
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    for (i = 0; i < n; i++) {
       if (framebuffers[i] > 0) {
@@ -3712,7 +3710,7 @@ check_level(struct gl_context *ctx, struct gl_texture_object *texObj,
     *     greater than or equal to zero and smaller than the value of
     *     TEXTURE_VIEW_NUM_LEVELS for texture."
     */
-   const int max_levels = texObj->Immutable ? texObj->ImmutableLevels :
+   const int max_levels = texObj->Immutable ? texObj->Attrib.ImmutableLevels :
                           _mesa_max_texture_levels(ctx, target);
 
    if (level < 0 || level >= max_levels) {
@@ -3766,7 +3764,7 @@ _mesa_framebuffer_texture(struct gl_context *ctx, struct gl_framebuffer *fb,
                           GLint level, GLsizei samples,
                           GLuint layer, GLboolean layered)
 {
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    simple_mtx_lock(&fb->Mutex);
    if (texObj) {
@@ -4174,7 +4172,7 @@ _mesa_framebuffer_renderbuffer(struct gl_context *ctx,
 {
    assert(!_mesa_is_winsys_fbo(fb));
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS, 0);
 
    assert(ctx->Driver.FramebufferRenderbuffer);
    ctx->Driver.FramebufferRenderbuffer(ctx, fb, attachment, rb);

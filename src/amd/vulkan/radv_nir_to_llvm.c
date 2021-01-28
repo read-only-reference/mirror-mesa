@@ -374,7 +374,6 @@ radv_load_resource(struct ac_shader_abi *abi, LLVMValueRef index,
 
 	desc_ptr = LLVMBuildGEP(ctx->ac.builder, desc_ptr, &offset, 1, "");
 	desc_ptr = ac_cast_ptr(&ctx->ac, desc_ptr, ctx->ac.v4i32);
-	LLVMSetMetadata(desc_ptr, ctx->ac.uniform_md_kind, ctx->ac.empty_md);
 
 	return desc_ptr;
 }
@@ -869,12 +868,22 @@ static LLVMValueRef radv_load_base_vertex(struct ac_shader_abi *abi, bool non_in
 }
 
 static LLVMValueRef radv_load_ssbo(struct ac_shader_abi *abi,
-				   LLVMValueRef buffer_ptr, bool write)
+				   LLVMValueRef buffer_ptr, bool write, bool non_uniform)
 {
 	struct radv_shader_context *ctx = radv_shader_context_from_abi(abi);
 	LLVMValueRef result;
 
-	LLVMSetMetadata(buffer_ptr, ctx->ac.uniform_md_kind, ctx->ac.empty_md);
+	if (!non_uniform)
+		LLVMSetMetadata(buffer_ptr, ctx->ac.uniform_md_kind, ctx->ac.empty_md);
+
+	if (non_uniform && LLVMGetPointerAddressSpace(LLVMTypeOf(buffer_ptr)) == AC_ADDR_SPACE_CONST_32BIT) {
+		/* 32-bit seems to always use SMEM. addrspacecast from 32-bit -> 64-bit is broken. */
+		buffer_ptr = LLVMBuildPtrToInt(ctx->ac.builder, buffer_ptr, ctx->ac.i32, ""),
+		buffer_ptr = LLVMBuildZExt(ctx->ac.builder, buffer_ptr, ctx->ac.i64, "");
+		uint64_t hi = (uint64_t)ctx->args->options->address32_hi << 32;
+		buffer_ptr = LLVMBuildOr(ctx->ac.builder, buffer_ptr, LLVMConstInt(ctx->ac.i64, hi, false), "");
+		buffer_ptr = LLVMBuildIntToPtr(ctx->ac.builder, buffer_ptr, LLVMPointerType(ctx->ac.v4i32, AC_ADDR_SPACE_CONST), "");
+	}
 
 	result = LLVMBuildLoad(ctx->ac.builder, buffer_ptr, "");
 	LLVMSetMetadata(result, ctx->ac.invariant_load_md_kind, ctx->ac.empty_md);
@@ -1183,17 +1192,15 @@ handle_vs_input_decl(struct radv_shader_context *ctx,
 		t_offset = LLVMConstInt(ctx->ac.i32, attrib_binding, false);
 		t_list = ac_build_load_to_sgpr(&ctx->ac, t_list_ptr, t_offset);
 
-		/* Perform per-channel vertex fetch operations if unaligned
-		 * access are detected. Only GFX6 and GFX10 are affected.
+		/* Always split typed vertex buffer loads on GFX6 and GFX10+
+		 * to avoid any alignment issues that triggers memory
+		 * violations and eventually a GPU hang. This can happen if
+		 * the stride (static or dynamic) is unaligned and also if the
+		 * VBO offset is aligned to a scalar (eg. stride is 8 and VBO
+		 * offset is 2 for R16G16B16A16_SNORM).
 		 */
-		bool unaligned_vertex_fetches = false;
-		if ((ctx->ac.chip_class == GFX6 || ctx->ac.chip_class >= GFX10) &&
-		    vtx_info->chan_format != data_format &&
-		    ((attrib_offset % vtx_info->element_size) ||
-		     (attrib_stride % vtx_info->element_size)))
-			unaligned_vertex_fetches = true;
-
-		if (unaligned_vertex_fetches) {
+		if (ctx->ac.chip_class == GFX6 ||
+		    ctx->ac.chip_class >= GFX10) {
 			unsigned chan_format = vtx_info->chan_format;
 			LLVMValueRef values[4];
 
@@ -3799,7 +3806,7 @@ static void ac_nir_fixup_ls_hs_input_vgprs(struct radv_shader_context *ctx)
 	LLVMValueRef hs_empty = LLVMBuildICmp(ctx->ac.builder, LLVMIntEQ, count,
 	                                      ctx->ac.i32_0, "");
 	ctx->abi.instance_id = LLVMBuildSelect(ctx->ac.builder, hs_empty,
-					       ac_get_arg(&ctx->ac, ctx->args->ac.vs_rel_patch_id),
+					       ac_get_arg(&ctx->ac, ctx->args->ac.vertex_id),
 					       ctx->abi.instance_id, "");
 	ctx->vs_rel_patch_id = LLVMBuildSelect(ctx->ac.builder, hs_empty,
 					   ac_get_arg(&ctx->ac, ctx->args->ac.tcs_rel_ids),

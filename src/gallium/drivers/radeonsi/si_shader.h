@@ -166,7 +166,7 @@ struct si_context;
 /* SGPR user data indices */
 enum
 {
-   SI_SGPR_RW_BUFFERS, /* rings (& stream-out, VS only) */
+   SI_SGPR_INTERNAL_BINDINGS,
    SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES,
    SI_SGPR_CONST_AND_SHADER_BUFFERS, /* or just a constant buffer 0 pointer */
    SI_SGPR_SAMPLERS_AND_IMAGES,
@@ -363,6 +363,10 @@ struct si_shader_info {
    bool writes_stencil;     /**< does fragment shader write stencil value? */
    bool writes_samplemask;  /**< does fragment shader write sample mask? */
    bool writes_edgeflag;    /**< vertex shader outputs edgeflag */
+   bool uses_interp_color;
+   bool uses_persp_center_color;
+   bool uses_persp_centroid_color;
+   bool uses_persp_sample_color;
    bool uses_persp_center;
    bool uses_persp_centroid;
    bool uses_persp_sample;
@@ -393,6 +397,11 @@ struct si_shader_info {
 
    /** Whether all codepaths write tess factors in all invocations. */
    bool tessfactors_are_def_in_all_invocs;
+
+   /* A flag to check if vrs2x2 can be enabled to reduce number of
+    * fragment shader invocations if flat shading.
+    */
+   bool allow_flat_shading;
 };
 
 /* A shader selector is a gallium CSO and contains shader variants and
@@ -525,7 +534,6 @@ struct si_tcs_epilog_bits {
 
 struct si_gs_prolog_bits {
    unsigned tri_strip_adj_fix : 1;
-   unsigned gfx9_prev_is_vs : 1;
 };
 
 /* Common PS bits between the shader key and the prolog key. */
@@ -576,8 +584,6 @@ union si_shader_part_key {
    } tcs_epilog;
    struct {
       struct si_gs_prolog_bits states;
-      /* Prologs of monolithic shaders shouldn't set EXEC. */
-      unsigned is_monolithic : 1;
       unsigned as_ngg : 1;
    } gs_prolog;
    struct {

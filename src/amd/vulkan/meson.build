@@ -88,7 +88,6 @@ libradv_files = files(
   'radv_pipeline_cache.c',
   'radv_private.h',
   'radv_radeon_winsys.h',
-  'radv_rgp.c',
   'radv_shader.c',
   'radv_shader.h',
   'radv_shader_args.c',
@@ -98,7 +97,6 @@ libradv_files = files(
   'radv_sqtt.c',
   'radv_query.c',
   'radv_util.c',
-  'radv_util.h',
   'radv_wsi.c',
   'si_cmd_buffer.c',
   'vk_format.h',
@@ -142,7 +140,7 @@ if system_has_kms_drm and not with_platform_android
 endif
 
 if with_xlib_lease
-  radv_deps += [dep_xcb_xrandr, dep_xlib_xrandr]
+  radv_deps += [dep_xlib_xrandr]
   radv_flags += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
 endif
 

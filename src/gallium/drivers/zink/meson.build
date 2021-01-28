@@ -24,6 +24,7 @@ files_libzink = files(
   'nir_to_spirv/spirv_builder.c',
   'zink_batch.c',
   'zink_blit.c',
+  'zink_clear.c',
   'zink_compiler.c',
   'zink_context.c',
   'zink_draw.c',
@@ -54,7 +55,7 @@ zink_instance = custom_target(
   input : ['zink_instance.py'],
   output : ['zink_instance.h', 'zink_instance.c'],
   command : [
-    prog_python, '@INPUT@', '@OUTPUT@'
+    prog_python, '@INPUT@', '@OUTPUT@', join_paths(meson.source_root(), 'src/vulkan/registry/vk.xml')
   ]
 )
 

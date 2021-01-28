@@ -100,7 +100,7 @@ const struct radv_dynamic_state default_dynamic_state = {
 	.front_face = 0u,
 	.primitive_topology = 0u,
 	.fragment_shading_rate = {
-		.size = (VkExtent2D) { 1u, 1u },
+		.size = { 1u, 1u },
 		.combiner_ops = { VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
 				  VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR
 		},
@@ -461,6 +461,7 @@ radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 
 		radv_cmd_buffer_upload_alloc(cmd_buffer, 8, 8, &fence_offset,
 					     &fence_ptr);
+		memset(fence_ptr, 0, 8);
 
 		cmd_buffer->gfx9_fence_va =
 			radv_buffer_get_va(cmd_buffer->upload.upload_bo);
@@ -470,6 +471,7 @@ radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 			/* Allocate a buffer for the EOP bug on GFX9. */
 			radv_cmd_buffer_upload_alloc(cmd_buffer, 16 * num_db, 8,
 						     &eop_bug_offset, &fence_ptr);
+			memset(fence_ptr, 0, 16 * num_db);
 			cmd_buffer->gfx9_eop_bug_va =
 				radv_buffer_get_va(cmd_buffer->upload.upload_bo);
 			cmd_buffer->gfx9_eop_bug_va += eop_bug_offset;
@@ -479,6 +481,15 @@ radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 	cmd_buffer->status = RADV_CMD_BUFFER_STATUS_INITIAL;
 
 	return cmd_buffer->record_result;
+}
+
+enum radeon_bo_domain
+radv_cmdbuffer_domain(const struct radeon_info *info, uint32_t perftest)
+{
+	return (info->all_vram_visible &&
+	        info->has_dedicated_vram &&
+	        !(perftest & RADV_PERFTEST_NO_SAM)) ?
+		RADEON_DOMAIN_VRAM : RADEON_DOMAIN_GTT;
 }
 
 static bool
@@ -495,7 +506,8 @@ radv_cmd_buffer_resize_upload_buf(struct radv_cmd_buffer *cmd_buffer,
 
 	bo = device->ws->buffer_create(device->ws,
 				       new_size, 4096,
-				       RADEON_DOMAIN_GTT,
+				       radv_cmdbuffer_domain(&device->physical_device->rad_info,
+							     device->instance->perftest_flags),
 				       RADEON_FLAG_CPU_ACCESS|
 				       RADEON_FLAG_NO_INTERPROCESS_SHARING |
 				       RADEON_FLAG_32BIT |
@@ -615,7 +627,7 @@ static void
 radv_cmd_buffer_after_draw(struct radv_cmd_buffer *cmd_buffer,
 			   enum radv_cmd_flush_bits flags)
 {
-	if (unlikely(cmd_buffer->device->thread_trace_bo)) {
+	if (unlikely(cmd_buffer->device->thread_trace.bo)) {
 		radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_THREAD_TRACE_MARKER) | EVENT_INDEX(0));
 	}
@@ -777,7 +789,7 @@ radv_emit_descriptor_pointers(struct radv_cmd_buffer *cmd_buffer,
 			struct radv_descriptor_set *set =
 				descriptors_state->sets[start + i];
 
-			radv_emit_shader_pointer_body(device, cs, set->va, true);
+			radv_emit_shader_pointer_body(device, cs, set->header.va, true);
 		}
 	}
 }
@@ -1751,7 +1763,7 @@ radv_update_zrange_precision(struct radv_cmd_buffer *cmd_buffer,
 	    !radv_image_is_tc_compat_htile(image))
 		return;
 
-	if (!radv_layout_is_htile_compressed(image, layout, in_render_loop,
+	if (!radv_layout_is_htile_compressed(cmd_buffer->device, image, layout, in_render_loop,
 					     radv_image_queue_family_mask(image,
 									  cmd_buffer->queue_family_index,
 									  cmd_buffer->queue_family_index))) {
@@ -1794,7 +1806,7 @@ radv_emit_fb_ds_state(struct radv_cmd_buffer *cmd_buffer,
 	uint32_t db_z_info = ds->db_z_info;
 	uint32_t db_stencil_info = ds->db_stencil_info;
 
-	if (!radv_layout_is_htile_compressed(image, layout, in_render_loop,
+	if (!radv_layout_is_htile_compressed(cmd_buffer->device, image, layout, in_render_loop,
 					     radv_image_queue_family_mask(image,
 									  cmd_buffer->queue_family_index,
 									  cmd_buffer->queue_family_index))) {
@@ -2046,7 +2058,7 @@ radv_update_ds_clear_metadata(struct radv_cmd_buffer *cmd_buffer,
 	};
 	struct radv_image *image = iview->image;
 
-	assert(radv_image_has_htile(image));
+	assert(radv_htile_enabled(image, range.baseMipLevel));
 
 	radv_set_ds_clear_metadata(cmd_buffer, iview->image, &range,
 				   ds_clear_value, aspects);
@@ -2074,8 +2086,7 @@ radv_load_ds_clear_metadata(struct radv_cmd_buffer *cmd_buffer,
 	uint64_t va = radv_get_ds_clear_value_va(image, iview->base_mip);
 	unsigned reg_offset = 0, reg_count = 0;
 
-	if (!radv_image_has_htile(image))
-		return;
+	assert(radv_image_has_htile(image));
 
 	if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
 		++reg_count;
@@ -2124,7 +2135,7 @@ radv_update_fce_metadata(struct radv_cmd_buffer *cmd_buffer,
 	uint32_t level_count = radv_get_levelCount(image, range);
 	uint32_t count = 2 * level_count;
 
-	assert(radv_dcc_enabled(image, range->baseMipLevel));
+	assert(image->fce_pred_offset != 0);
 
 	radeon_emit(cmd_buffer->cs, PKT3(PKT3_WRITE_DATA, 2 + count, 0));
 	radeon_emit(cmd_buffer->cs, S_370_DST_SEL(V_370_MEM) |
@@ -2407,7 +2418,16 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 			cmd_buffer->state.dirty |= RADV_CMD_DIRTY_DYNAMIC_DEPTH_BIAS;
 			cmd_buffer->state.offset_scale = cmd_buffer->state.attachments[idx].ds.offset_scale;
 		}
-		radv_load_ds_clear_metadata(cmd_buffer, iview);
+
+		if (radv_layout_is_htile_compressed(cmd_buffer->device, iview->image, layout, in_render_loop,
+						    radv_image_queue_family_mask(iview->image,
+										 cmd_buffer->queue_family_index,
+										 cmd_buffer->queue_family_index))) {
+			/* Only load the depth/stencil fast clear values when
+			 * compressed rendering is enabled.
+			 */
+			radv_load_ds_clear_metadata(cmd_buffer, iview);
+		}
 	} else {
 		if (cmd_buffer->device->physical_device->rad_info.chip_class == GFX9)
 			radeon_set_context_reg_seq(cmd_buffer->cs, R_028038_DB_Z_INFO, 2);
@@ -2610,16 +2630,17 @@ radv_flush_push_descriptors(struct radv_cmd_buffer *cmd_buffer,
 {
 	struct radv_descriptor_state *descriptors_state =
 		radv_get_descriptors_state(cmd_buffer, bind_point);
-	struct radv_descriptor_set *set = &descriptors_state->push_set.set;
+	struct radv_descriptor_set *set =
+		(struct radv_descriptor_set *)&descriptors_state->push_set.set;
 	unsigned bo_offset;
 
-	if (!radv_cmd_buffer_upload_data(cmd_buffer, set->size, 32,
-					 set->mapped_ptr,
+	if (!radv_cmd_buffer_upload_data(cmd_buffer, set->header.size, 32,
+					 set->header.mapped_ptr,
 					 &bo_offset))
 		return;
 
-	set->va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
-	set->va += bo_offset;
+	set->header.va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
+	set->header.va += bo_offset;
 }
 
 static void
@@ -2641,7 +2662,7 @@ radv_flush_indirect_descriptor_sets(struct radv_cmd_buffer *cmd_buffer,
 		uint64_t set_va = 0;
 		struct radv_descriptor_set *set = descriptors_state->sets[i];
 		if (descriptors_state->valid & (1u << i))
-			set_va = set->va;
+			set_va = set->header.va;
 		uptr[0] = set_va & 0xffffffff;
 	}
 
@@ -3247,58 +3268,146 @@ static void radv_stage_flush(struct radv_cmd_buffer *cmd_buffer,
 	}
 }
 
-static enum radv_cmd_flush_bits
+/* Determine if the image is affected by the pipe misaligned metadata issue
+ * which requires to invalidate L2.
+ */
+static bool
+radv_image_is_pipe_misaligned(const struct radv_device *device,
+			      const struct radv_image *image)
+{
+	struct radeon_info *rad_info = &device->physical_device->rad_info;
+	unsigned log2_samples = util_logbase2(image->info.samples);
+	unsigned log2_bpp = util_logbase2(vk_format_get_blocksize(image->vk_format));
+	unsigned log2_bpp_and_samples;
+
+	assert(rad_info->chip_class >= GFX10);
+
+	if (rad_info->chip_class >= GFX10_3) {
+		log2_bpp_and_samples = log2_bpp + log2_samples;
+	} else {
+		if (vk_format_is_depth(image->vk_format) &&
+		     image->info.array_size >= 8) {
+			log2_bpp = 2;
+		}
+
+		log2_bpp_and_samples = MIN2(6, log2_bpp + log2_samples);
+	}
+
+	unsigned num_pipes = G_0098F8_NUM_PIPES(rad_info->gb_addr_config);
+	int overlap = MAX2(0, log2_bpp_and_samples + num_pipes - 8);
+
+	if (vk_format_is_depth(image->vk_format)) {
+		if (radv_image_is_tc_compat_htile(image) && overlap) {
+			return true;
+		}
+	} else {
+		unsigned max_compressed_frags = G_0098F8_MAX_COMPRESSED_FRAGS(rad_info->gb_addr_config);
+		int log2_samples_frag_diff = MAX2(0, log2_samples - max_compressed_frags);
+		int samples_overlap = MIN2(log2_samples, overlap);
+
+		/* TODO: It shouldn't be necessary if the image has DCC but
+		 * not readable by shader.
+		 */
+		if ((radv_image_has_dcc(image) ||
+		     radv_image_is_tc_compat_cmask(image)) &&
+		     (samples_overlap > log2_samples_frag_diff)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool
+radv_image_is_l2_coherent(const struct radv_device *device, const struct radv_image *image)
+{
+	if (device->physical_device->rad_info.chip_class >= GFX10) {
+		return !device->physical_device->rad_info.tcc_harvested &&
+			(image && !radv_image_is_pipe_misaligned(device, image));
+	} else if (device->physical_device->rad_info.chip_class == GFX9 && image) {
+		if (image->info.samples == 1 &&
+		    (image->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+				     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
+		    !vk_format_is_stencil(image->vk_format)) {
+			/* Single-sample color and single-sample depth
+			 * (not stencil) are coherent with shaders on
+			 * GFX9.
+			 */
+			return true;
+		}
+	}
+
+	return false;
+}
+
+enum radv_cmd_flush_bits
 radv_src_access_flush(struct radv_cmd_buffer *cmd_buffer,
 		      VkAccessFlags src_flags,
-		      struct radv_image *image)
+		      const struct radv_image *image)
 {
-	bool flush_CB_meta = true, flush_DB_meta = true;
+	bool has_CB_meta = true, has_DB_meta = true;
+	bool image_is_coherent = radv_image_is_l2_coherent(cmd_buffer->device, image);
 	enum radv_cmd_flush_bits flush_bits = 0;
 	uint32_t b;
 
 	if (image) {
 		if (!radv_image_has_CB_metadata(image))
-			flush_CB_meta = false;
+			has_CB_meta = false;
 		if (!radv_image_has_htile(image))
-			flush_DB_meta = false;
+			has_DB_meta = false;
 	}
 
 	for_each_bit(b, src_flags) {
 		switch ((VkAccessFlagBits)(1 << b)) {
 		case VK_ACCESS_SHADER_WRITE_BIT:
+			/* since the STORAGE bit isn't set we know that this is a meta operation.
+			 * on the dst flush side we skip CB/DB flushes without the STORAGE bit, so
+			 * set it here. */
+			if (image && !(image->usage & VK_IMAGE_USAGE_STORAGE_BIT)) {
+				if (vk_format_is_depth_or_stencil(image->vk_format)) {
+					flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB;
+				} else {
+					flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB;
+				}
+			}
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_WB_L2;
+			break;
 		case VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT:
 		case VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT:
-			flush_bits |= RADV_CMD_FLAG_WB_L2;
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_WB_L2;
 			break;
 		case VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:
 			flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB;
-			if (flush_CB_meta)
+			if (has_CB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 			break;
 		case VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT:
 			flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB;
-			if (flush_DB_meta)
+			if (has_DB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 			break;
 		case VK_ACCESS_TRANSFER_WRITE_BIT:
 			flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-			              RADV_CMD_FLAG_FLUSH_AND_INV_DB |
-			              RADV_CMD_FLAG_INV_L2;
+			              RADV_CMD_FLAG_FLUSH_AND_INV_DB;
 
-			if (flush_CB_meta)
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_INV_L2;
+			if (has_CB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
-			if (flush_DB_meta)
+			if (has_DB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 			break;
 		case VK_ACCESS_MEMORY_WRITE_BIT:
-			flush_bits |= RADV_CMD_FLAG_INV_L2 |
-				      RADV_CMD_FLAG_WB_L2 |
-				      RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+			flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
 				      RADV_CMD_FLAG_FLUSH_AND_INV_DB;
 
-			if (flush_CB_meta)
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_INV_L2;
+			if (has_CB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
-			if (flush_DB_meta)
+			if (has_DB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 			break;
 		default:
@@ -3308,15 +3417,15 @@ radv_src_access_flush(struct radv_cmd_buffer *cmd_buffer,
 	return flush_bits;
 }
 
-static enum radv_cmd_flush_bits
+enum radv_cmd_flush_bits
 radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
                       VkAccessFlags dst_flags,
-                      struct radv_image *image)
+                      const struct radv_image *image)
 {
-	bool flush_CB_meta = true, flush_DB_meta = true;
+	bool has_CB_meta = true, has_DB_meta = true;
 	enum radv_cmd_flush_bits flush_bits = 0;
 	bool flush_CB = true, flush_DB = true;
-	bool image_is_coherent = false;
+	bool image_is_coherent = radv_image_is_l2_coherent(cmd_buffer->device, image);
 	uint32_t b;
 
 	if (image) {
@@ -3326,24 +3435,9 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 		}
 
 		if (!radv_image_has_CB_metadata(image))
-			flush_CB_meta = false;
+			has_CB_meta = false;
 		if (!radv_image_has_htile(image))
-			flush_DB_meta = false;
-
-		/* TODO: implement shader coherent for GFX10 */
-
-		if (cmd_buffer->device->physical_device->rad_info.chip_class == GFX9) {
-			if (image->info.samples == 1 &&
-			    (image->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-					     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) &&
-			    !vk_format_is_stencil(image->vk_format)) {
-				/* Single-sample color and single-sample depth
-				 * (not stencil) are coherent with shaders on
-				 * GFX9.
-				 */
-				image_is_coherent = true;
-			}
-		}
+			has_DB_meta = false;
 	}
 
 	for_each_bit(b, dst_flags) {
@@ -3356,10 +3450,15 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 			flush_bits |= RADV_CMD_FLAG_INV_VCACHE | RADV_CMD_FLAG_INV_SCACHE;
 			break;
 		case VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT:
-		case VK_ACCESS_TRANSFER_READ_BIT:
 		case VK_ACCESS_INPUT_ATTACHMENT_READ_BIT:
-			flush_bits |= RADV_CMD_FLAG_INV_VCACHE |
-			              RADV_CMD_FLAG_INV_L2;
+		case VK_ACCESS_TRANSFER_READ_BIT:
+		case VK_ACCESS_TRANSFER_WRITE_BIT:
+			flush_bits |= RADV_CMD_FLAG_INV_VCACHE;
+
+			if (has_CB_meta || has_DB_meta)
+				flush_bits |= RADV_CMD_FLAG_INV_L2_METADATA;
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_INV_L2;
 			break;
 		case VK_ACCESS_SHADER_READ_BIT:
 			flush_bits |= RADV_CMD_FLAG_INV_VCACHE;
@@ -3368,32 +3467,40 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 			if (!cmd_buffer->device->physical_device->use_llvm && !image)
 				flush_bits |= RADV_CMD_FLAG_INV_SCACHE;
 
+			if (has_CB_meta || has_DB_meta)
+				flush_bits |= RADV_CMD_FLAG_INV_L2_METADATA;
 			if (!image_is_coherent)
 				flush_bits |= RADV_CMD_FLAG_INV_L2;
 			break;
+		case VK_ACCESS_SHADER_WRITE_BIT:
+			break;
 		case VK_ACCESS_COLOR_ATTACHMENT_READ_BIT:
+		case VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT:
 			if (flush_CB)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB;
-			if (flush_CB_meta)
+			if (has_CB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 			break;
 		case VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT:
+		case VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT:
 			if (flush_DB)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB;
-			if (flush_DB_meta)
+			if (has_DB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 			break;
 		case VK_ACCESS_MEMORY_READ_BIT:
+		case VK_ACCESS_MEMORY_WRITE_BIT:
 			flush_bits |= RADV_CMD_FLAG_INV_VCACHE |
-				      RADV_CMD_FLAG_INV_SCACHE |
-			              RADV_CMD_FLAG_INV_L2;
+				      RADV_CMD_FLAG_INV_SCACHE;
+			if (!image_is_coherent)
+				flush_bits |= RADV_CMD_FLAG_INV_L2;
 			if (flush_CB)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB;
-			if (flush_CB_meta)
+			if (has_CB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 			if (flush_DB)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB;
-			if (flush_DB_meta)
+			if (has_DB_meta)
 				flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 			break;
 		default:
@@ -3406,11 +3513,28 @@ radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
 void radv_subpass_barrier(struct radv_cmd_buffer *cmd_buffer,
 			  const struct radv_subpass_barrier *barrier)
 {
-	cmd_buffer->state.flush_bits |= radv_src_access_flush(cmd_buffer, barrier->src_access_mask,
-							      NULL);
+	struct radv_framebuffer *fb = cmd_buffer->state.framebuffer;
+	if (fb && !fb->imageless) {
+		for (int i = 0; i < fb->attachment_count; ++i) {
+			cmd_buffer->state.flush_bits |= radv_src_access_flush(cmd_buffer, barrier->src_access_mask,
+									      fb->attachments[i]->image);
+		}
+	} else {
+		cmd_buffer->state.flush_bits |= radv_src_access_flush(cmd_buffer, barrier->src_access_mask,
+								      NULL);
+	}
+
 	radv_stage_flush(cmd_buffer, barrier->src_stage_mask);
-	cmd_buffer->state.flush_bits |= radv_dst_access_flush(cmd_buffer, barrier->dst_access_mask,
-	                                                      NULL);
+
+	if (fb && !fb->imageless) {
+		for (int i = 0; i < fb->attachment_count; ++i) {
+			cmd_buffer->state.flush_bits |= radv_dst_access_flush(cmd_buffer, barrier->dst_access_mask,
+									      fb->attachments[i]->image);
+		}
+	} else {
+		cmd_buffer->state.flush_bits |= radv_dst_access_flush(cmd_buffer, barrier->dst_access_mask,
+		                                                      NULL);
+	}
 }
 
 uint32_t
@@ -3992,13 +4116,13 @@ radv_bind_descriptor_set(struct radv_cmd_buffer *cmd_buffer,
 	assert(set);
 
 	if (!cmd_buffer->device->use_global_bo_list) {
-		for (unsigned j = 0; j < set->buffer_count; ++j)
+		for (unsigned j = 0; j < set->header.buffer_count; ++j)
 			if (set->descriptors[j])
 				radv_cs_add_buffer(ws, cmd_buffer->cs, set->descriptors[j]);
 	}
 
-	if(set->bo)
-		radv_cs_add_buffer(ws, cmd_buffer->cs, set->bo);
+	if(set->header.bo)
+		radv_cs_add_buffer(ws, cmd_buffer->cs, set->header.bo);
 }
 
 void radv_CmdBindDescriptorSets(
@@ -4035,7 +4159,7 @@ void radv_CmdBindDescriptorSets(
 			uint32_t *dst = descriptors_state->dynamic_buffers + idx * 4;
 			assert(dyn_idx < dynamicOffsetCount);
 
-			struct radv_descriptor_range *range = set->dynamic_descriptors + j;
+			struct radv_descriptor_range *range = set->header.dynamic_descriptors + j;
 
 			if (!range->va) {
 				memset(dst, 0, 4 * 4);
@@ -4071,18 +4195,18 @@ static bool radv_init_push_descriptor_set(struct radv_cmd_buffer *cmd_buffer,
 {
 	struct radv_descriptor_state *descriptors_state =
 		radv_get_descriptors_state(cmd_buffer, bind_point);
-	set->size = layout->size;
-	set->layout = layout;
+	set->header.size = layout->size;
+	set->header.layout = layout;
 
-	if (descriptors_state->push_set.capacity < set->size) {
-		size_t new_size = MAX2(set->size, 1024);
+	if (descriptors_state->push_set.capacity < set->header.size) {
+		size_t new_size = MAX2(set->header.size, 1024);
 		new_size = MAX2(new_size, 2 * descriptors_state->push_set.capacity);
 		new_size = MIN2(new_size, 96 * MAX_PUSH_DESCRIPTORS);
 
-		free(set->mapped_ptr);
-		set->mapped_ptr = malloc(new_size);
+		free(set->header.mapped_ptr);
+		set->header.mapped_ptr = malloc(new_size);
 
-		if (!set->mapped_ptr) {
+		if (!set->header.mapped_ptr) {
 			descriptors_state->push_set.capacity = 0;
 			cmd_buffer->record_result = VK_ERROR_OUT_OF_HOST_MEMORY;
 			return false;
@@ -4103,22 +4227,23 @@ void radv_meta_push_descriptor_set(
 	const VkWriteDescriptorSet*          pDescriptorWrites)
 {
 	RADV_FROM_HANDLE(radv_pipeline_layout, layout, _layout);
-	struct radv_descriptor_set *push_set = &cmd_buffer->meta_push_descriptors;
+	struct radv_descriptor_set *push_set =
+		(struct radv_descriptor_set *)&cmd_buffer->meta_push_descriptors;
 	unsigned bo_offset;
 
 	assert(set == 0);
 	assert(layout->set[set].layout->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
-	push_set->size = layout->set[set].layout->size;
-	push_set->layout = layout->set[set].layout;
+	push_set->header.size = layout->set[set].layout->size;
+	push_set->header.layout = layout->set[set].layout;
 
-	if (!radv_cmd_buffer_upload_alloc(cmd_buffer, push_set->size, 32,
+	if (!radv_cmd_buffer_upload_alloc(cmd_buffer, push_set->header.size, 32,
 	                                  &bo_offset,
-	                                  (void**) &push_set->mapped_ptr))
+	                                  (void**) &push_set->header.mapped_ptr))
 		return;
 
-	push_set->va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
-	push_set->va += bo_offset;
+	push_set->header.va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
+	push_set->header.va += bo_offset;
 
 	radv_update_descriptor_sets(cmd_buffer->device, cmd_buffer,
 	                            radv_descriptor_set_to_handle(push_set),
@@ -4139,7 +4264,8 @@ void radv_CmdPushDescriptorSetKHR(
 	RADV_FROM_HANDLE(radv_pipeline_layout, layout, _layout);
 	struct radv_descriptor_state *descriptors_state =
 		radv_get_descriptors_state(cmd_buffer, pipelineBindPoint);
-	struct radv_descriptor_set *push_set = &descriptors_state->push_set.set;
+	struct radv_descriptor_set *push_set =
+		(struct radv_descriptor_set *)&descriptors_state->push_set.set;
 
 	assert(layout->set[set].layout->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
@@ -4176,7 +4302,8 @@ void radv_CmdPushDescriptorSetWithTemplateKHR(
 	RADV_FROM_HANDLE(radv_descriptor_update_template, templ, descriptorUpdateTemplate);
 	struct radv_descriptor_state *descriptors_state =
 		radv_get_descriptors_state(cmd_buffer, templ->bind_point);
-	struct radv_descriptor_set *push_set = &descriptors_state->push_set.set;
+	struct radv_descriptor_set *push_set =
+		(struct radv_descriptor_set *)&descriptors_state->push_set.set;
 
 	assert(layout->set[set].layout->flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
@@ -5984,23 +6111,20 @@ static void radv_initialize_htile(struct radv_cmd_buffer *cmd_buffer,
                                   struct radv_image *image,
                                   const VkImageSubresourceRange *range)
 {
-	assert(range->baseMipLevel == 0);
-	assert(range->levelCount == 1 || range->levelCount == VK_REMAINING_ARRAY_LAYERS);
 	VkImageAspectFlags aspects = VK_IMAGE_ASPECT_DEPTH_BIT;
 	struct radv_cmd_state *state = &cmd_buffer->state;
-	uint32_t htile_value = vk_format_is_stencil(image->vk_format) ? 0xfffff30f : 0xfffc000f;
+	uint32_t htile_value = radv_get_htile_initial_value(cmd_buffer->device, image);
 	VkClearDepthStencilValue value = {0};
 	struct radv_barrier_data barrier = {0};
-
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB |
-			     RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 
 	barrier.layout_transitions.init_mask_ram = 1;
 	radv_describe_layout_transition(cmd_buffer, &barrier);
 
-	state->flush_bits |= radv_clear_htile(cmd_buffer, image, range, htile_value);
+	/* Transitioning from LAYOUT_UNDEFINED layout not everyone is consistent
+	 * in considering previous rendering work for WAW hazards. */
+	state->flush_bits |= radv_src_access_flush(cmd_buffer, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, image);
 
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
+	state->flush_bits |= radv_clear_htile(cmd_buffer, image, range, htile_value);
 
 	if (vk_format_is_stencil(image->vk_format))
 		aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -6028,16 +6152,18 @@ static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffe
 					       const VkImageSubresourceRange *range,
 					       struct radv_sample_locations_state *sample_locs)
 {
-	if (!radv_image_has_htile(image))
+	struct radv_device *device = cmd_buffer->device;
+
+	if (!radv_htile_enabled(image, range->baseMipLevel))
 		return;
 
 	if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
 		radv_initialize_htile(cmd_buffer, image, range);
-	} else if (!radv_layout_is_htile_compressed(image, src_layout, src_render_loop, src_queue_mask) &&
-	           radv_layout_is_htile_compressed(image, dst_layout, dst_render_loop, dst_queue_mask)) {
+	} else if (!radv_layout_is_htile_compressed(device, image, src_layout, src_render_loop, src_queue_mask) &&
+	           radv_layout_is_htile_compressed(device, image, dst_layout, dst_render_loop, dst_queue_mask)) {
 		radv_initialize_htile(cmd_buffer, image, range);
-	} else if (radv_layout_is_htile_compressed(image, src_layout, src_render_loop, src_queue_mask) &&
-	           !radv_layout_is_htile_compressed(image, dst_layout, dst_render_loop, dst_queue_mask)) {
+	} else if (radv_layout_is_htile_compressed(device, image, src_layout, src_render_loop, src_queue_mask) &&
+	           !radv_layout_is_htile_compressed(device, image, dst_layout, dst_render_loop, dst_queue_mask)) {
 		cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB |
 		                                RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 
@@ -6057,15 +6183,14 @@ static void radv_initialise_cmask(struct radv_cmd_buffer *cmd_buffer,
 	struct radv_cmd_state *state = &cmd_buffer->state;
 	struct radv_barrier_data barrier = {0};
 
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-			    RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
-
 	barrier.layout_transitions.init_mask_ram = 1;
 	radv_describe_layout_transition(cmd_buffer, &barrier);
 
-	state->flush_bits |= radv_clear_cmask(cmd_buffer, image, range, value);
+	/* Transitioning from LAYOUT_UNDEFINED layout not everyone is consistent
+	 * in considering previous rendering work for WAW hazards. */
+	state->flush_bits |= radv_src_access_flush(cmd_buffer, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, image);
 
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+	state->flush_bits |= radv_clear_cmask(cmd_buffer, image, range, value);
 }
 
 void radv_initialize_fmask(struct radv_cmd_buffer *cmd_buffer,
@@ -6083,15 +6208,14 @@ void radv_initialize_fmask(struct radv_cmd_buffer *cmd_buffer,
 	uint32_t value = fmask_clear_values[log2_samples];
 	struct radv_barrier_data barrier = {0};
 
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-			     RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
-
 	barrier.layout_transitions.init_mask_ram = 1;
 	radv_describe_layout_transition(cmd_buffer, &barrier);
 
-	state->flush_bits |= radv_clear_fmask(cmd_buffer, image, range, value);
+	/* Transitioning from LAYOUT_UNDEFINED layout not everyone is consistent
+	 * in considering previous rendering work for WAW hazards. */
+	state->flush_bits |= radv_src_access_flush(cmd_buffer, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, image);
 
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+	state->flush_bits |= radv_clear_fmask(cmd_buffer, image, range, value);
 }
 
 void radv_initialize_dcc(struct radv_cmd_buffer *cmd_buffer,
@@ -6102,11 +6226,12 @@ void radv_initialize_dcc(struct radv_cmd_buffer *cmd_buffer,
 	struct radv_barrier_data barrier = {0};
 	unsigned size = 0;
 
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-			     RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
-
 	barrier.layout_transitions.init_mask_ram = 1;
 	radv_describe_layout_transition(cmd_buffer, &barrier);
+
+	/* Transitioning from LAYOUT_UNDEFINED layout not everyone is consistent
+	 * in considering previous rendering work for WAW hazards. */
+	state->flush_bits |= radv_src_access_flush(cmd_buffer, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, image);
 
 	state->flush_bits |= radv_clear_dcc(cmd_buffer, image, range, value);
 
@@ -6131,15 +6256,12 @@ void radv_initialize_dcc(struct radv_cmd_buffer *cmd_buffer,
 		/* Initialize the mipmap levels without DCC. */
 		if (size != image->planes[0].surface.dcc_size) {
 			state->flush_bits |=
-				radv_fill_buffer(cmd_buffer, image->bo,
+				radv_fill_buffer(cmd_buffer, image, image->bo,
 						 image->offset + image->planes[0].surface.dcc_offset + size,
 						 image->planes[0].surface.dcc_size - size,
 						 0xffffffff);
 		}
 	}
-
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-			     RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 }
 
 /**
@@ -6188,12 +6310,12 @@ static void radv_init_color_image_metadata(struct radv_cmd_buffer *cmd_buffer,
 		}
 
 		radv_initialize_dcc(cmd_buffer, image, range, value);
-
-		radv_update_fce_metadata(cmd_buffer, image, range, false);
 	}
 
 	if (radv_image_has_cmask(image) ||
 	    radv_dcc_enabled(image, range->baseMipLevel)) {
+		radv_update_fce_metadata(cmd_buffer, image, range, false);
+
 		uint32_t color_values[2] = {0};
 		radv_set_color_clear_metadata(cmd_buffer, image, range,
 					      color_values);
@@ -6492,14 +6614,28 @@ static void write_event(struct radv_cmd_buffer *cmd_buffer,
 		VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
 		VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
 
+	/* Flags that only require signaling post PS. */
+	VkPipelineStageFlags post_ps_flags =
+		post_index_fetch_flags |
+		VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+		VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+		VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT |
+		VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT |
+		VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT |
+		VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR |
+		VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+		VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+	/* Flags that only require signaling post CS. */
+	VkPipelineStageFlags post_cs_flags =
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
 	/* Make sure CP DMA is idle because the driver might have performed a
 	 * DMA operation for copying or filling buffers/images.
 	 */
 	if (stageMask & (VK_PIPELINE_STAGE_TRANSFER_BIT |
 			 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT))
 		si_cp_dma_wait_for_idle(cmd_buffer);
-
-	/* TODO: Emit EOS events for syncing PS/CS stages. */
 
 	if (!(stageMask & ~top_of_pipe_flags)) {
 		/* Just need to sync the PFP engine. */
@@ -6520,12 +6656,23 @@ static void write_event(struct radv_cmd_buffer *cmd_buffer,
 		radeon_emit(cs, va >> 32);
 		radeon_emit(cs, value);
 	} else {
-		/* Otherwise, sync all prior GPU work using an EOP event. */
+		unsigned event_type;
+
+		if (!(stageMask & ~post_ps_flags)) {
+			/* Sync previous fragment shaders. */
+			event_type = V_028A90_PS_DONE;
+		} else if (!(stageMask & ~post_cs_flags)) {
+			/* Sync previous compute shaders. */
+			event_type = V_028A90_CS_DONE;
+		} else {
+			/* Otherwise, sync all prior GPU work. */
+			event_type = V_028A90_BOTTOM_OF_PIPE_TS;
+		}
+
 		si_cs_emit_write_event_eop(cs,
 					   cmd_buffer->device->physical_device->rad_info.chip_class,
 					   radv_cmd_buffer_uses_mec(cmd_buffer),
-					   V_028A90_BOTTOM_OF_PIPE_TS, 0,
-					   EOP_DST_SEL_MEM,
+					   event_type, 0, EOP_DST_SEL_MEM,
 					   EOP_DATA_SEL_VALUE_32BIT, va, value,
 					   cmd_buffer->gfx9_eop_bug_va);
 	}

@@ -188,6 +188,14 @@ anv_dynamic_state_copy(struct anv_dynamic_state *dest,
    ANV_CMP_COPY(dyn_vbo_stride, ANV_CMD_DIRTY_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE);
    ANV_CMP_COPY(dyn_vbo_size, ANV_CMD_DIRTY_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE);
 
+   if (copy_mask & ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS) {
+      dest->sample_locations.samples = src->sample_locations.samples;
+      typed_memcpy(dest->sample_locations.locations,
+                   src->sample_locations.locations,
+                   dest->sample_locations.samples);
+      changed |= ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS;
+   }
+
 #undef ANV_CMP_COPY
 
    return changed;
@@ -267,6 +275,8 @@ static VkResult anv_create_cmd_buffer(
                          &device->surface_state_pool, 4096);
    anv_state_stream_init(&cmd_buffer->dynamic_state_stream,
                          &device->dynamic_state_pool, 16384);
+   anv_state_stream_init(&cmd_buffer->general_state_stream,
+                         &device->general_state_pool, 16384);
 
    anv_cmd_state_init(cmd_buffer);
 
@@ -319,6 +329,7 @@ anv_cmd_buffer_destroy(struct anv_cmd_buffer *cmd_buffer)
 
    anv_state_stream_finish(&cmd_buffer->surface_state_stream);
    anv_state_stream_finish(&cmd_buffer->dynamic_state_stream);
+   anv_state_stream_finish(&cmd_buffer->general_state_stream);
 
    anv_cmd_state_finish(cmd_buffer);
 
@@ -357,6 +368,11 @@ anv_cmd_buffer_reset(struct anv_cmd_buffer *cmd_buffer)
    anv_state_stream_finish(&cmd_buffer->dynamic_state_stream);
    anv_state_stream_init(&cmd_buffer->dynamic_state_stream,
                          &cmd_buffer->device->dynamic_state_pool, 16384);
+
+   anv_state_stream_finish(&cmd_buffer->general_state_stream);
+   anv_state_stream_init(&cmd_buffer->general_state_stream,
+                         &cmd_buffer->device->general_state_pool, 16384);
+
    return VK_SUCCESS;
 }
 
@@ -677,6 +693,22 @@ void anv_CmdSetStencilReference(
       cmd_buffer->state.gfx.dynamic.stencil_reference.back = reference;
 
    cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_DYNAMIC_STENCIL_REFERENCE;
+}
+
+void anv_CmdSetSampleLocationsEXT(
+    VkCommandBuffer                             commandBuffer,
+    const VkSampleLocationsInfoEXT*             pSampleLocationsInfo)
+{
+   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+
+   struct anv_dynamic_state *dyn_state = &cmd_buffer->state.gfx.dynamic;
+   uint32_t samples = pSampleLocationsInfo->sampleLocationsPerPixel;
+
+   dyn_state->sample_locations.samples = samples;
+   typed_memcpy(dyn_state->sample_locations.locations,
+                pSampleLocationsInfo->pSampleLocations, samples);
+
+   cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS;
 }
 
 void anv_CmdSetLineStippleEXT(
@@ -1038,6 +1070,7 @@ anv_cmd_buffer_gfx_push_constants(struct anv_cmd_buffer *cmd_buffer)
 struct anv_state
 anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
 {
+   const struct gen_device_info *devinfo = &cmd_buffer->device->info;
    struct anv_push_constants *data =
       &cmd_buffer->state.compute.base.push_constants;
    struct anv_compute_pipeline *pipeline = cmd_buffer->state.compute.pipeline;
@@ -1054,10 +1087,16 @@ anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
       cmd_buffer->device->info.gen < 8 ? 32 : 64;
    const unsigned aligned_total_push_constants_size =
       ALIGN(total_push_constants_size, push_constant_alignment);
-   struct anv_state state =
-      anv_cmd_buffer_alloc_dynamic_state(cmd_buffer,
-                                         aligned_total_push_constants_size,
-                                         push_constant_alignment);
+   struct anv_state state;
+   if (devinfo->gen > 12 || gen_device_info_is_12hp(devinfo)) {
+      state = anv_state_stream_alloc(&cmd_buffer->general_state_stream,
+                                     aligned_total_push_constants_size,
+                                     push_constant_alignment);
+   } else {
+      state = anv_cmd_buffer_alloc_dynamic_state(cmd_buffer,
+                                                 aligned_total_push_constants_size,
+                                                 push_constant_alignment);
+   }
 
    void *dst = state.map;
    const void *src = (char *)data + (range->start * 32);

@@ -565,7 +565,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
    st_finalize_nir_before_variants(nir);
 
    if (st->allow_st_finalize_nir_twice)
-      st_finalize_nir(st, prog, shader_program, nir, true);
+      st_finalize_nir(st, prog, shader_program, nir, true, true);
 
    if (st->ctx->_Shader->Flags & GLSL_DUMP) {
       _mesa_log("\n");
@@ -668,7 +668,7 @@ st_nir_lower_wpos_ytransform(struct nir_shader *nir,
       return;
 
    static const gl_state_index16 wposTransformState[STATE_LENGTH] = {
-      STATE_INTERNAL, STATE_FB_WPOS_Y_TRANSFORM
+      STATE_FB_WPOS_Y_TRANSFORM
    };
    nir_lower_wpos_ytransform_options wpos_options = { { 0 } };
 
@@ -690,6 +690,14 @@ st_nir_lower_wpos_ytransform(struct nir_shader *nir,
    if (nir_lower_wpos_ytransform(nir, &wpos_options)) {
       nir_validate_shader(nir, "after nir_lower_wpos_ytransform");
       _mesa_add_state_reference(prog->Parameters, wposTransformState);
+   }
+
+   static const gl_state_index16 pntcTransformState[STATE_LENGTH] = {
+      STATE_FB_PNTC_Y_TRANSFORM
+   };
+
+   if (nir_lower_pntc_ytransform(nir, &pntcTransformState)) {
+      _mesa_add_state_reference(prog->Parameters, pntcTransformState);
    }
 }
 
@@ -1010,7 +1018,8 @@ st_nir_lower_uniforms(struct st_context *st, nir_shader *nir)
 void
 st_finalize_nir(struct st_context *st, struct gl_program *prog,
                 struct gl_shader_program *shader_program,
-                nir_shader *nir, bool finalize_by_driver)
+                nir_shader *nir, bool finalize_by_driver,
+                bool is_before_variants)
 {
    struct pipe_screen *screen = st->screen;
 
@@ -1024,6 +1033,15 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
    nir->num_uniforms = DIV_ROUND_UP(prog->Parameters->NumParameterValues, 4);
 
    st_nir_lower_uniforms(st, nir);
+
+   if (is_before_variants && nir->options->lower_uniforms_to_ubo) {
+      /* This must be done after uniforms are lowered to UBO and all
+       * nir_var_uniform variables are removed from NIR to prevent conflicts
+       * between state parameter merging and shader variant generation.
+       */
+      _mesa_optimize_state_parameters(&st->ctx->Const, prog->Parameters);
+   }
+
    st_nir_lower_samplers(screen, nir, shader_program, prog);
    if (!screen->get_param(screen, PIPE_CAP_NIR_IMAGES_AS_DEREF))
       NIR_PASS_V(nir, gl_nir_lower_images, false);

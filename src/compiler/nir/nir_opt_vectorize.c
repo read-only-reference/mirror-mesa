@@ -80,7 +80,7 @@ srcs_equal(const nir_src *src1, const nir_src *src2)
    assert(src2->is_ssa);
 
    return src1->ssa == src2->ssa ||
-      nir_src_is_const(*src1) == nir_src_is_const(*src2);
+          (nir_src_is_const(*src1) && nir_src_is_const(*src2));
 }
 
 static bool
@@ -158,7 +158,7 @@ instr_can_rewrite(nir_instr *instr, bool vectorize_16bit)
           * outside of max_components: these should better be scalarized */
          uint32_t mask = vectorize_16bit ? ~1 : ~3;
          for (unsigned j = 0; j < alu->dest.dest.ssa.num_components; j++) {
-            if ((alu->src[i].swizzle[0] & mask) != (alu->src[i].swizzle[i] & mask))
+            if ((alu->src[i].swizzle[0] & mask) != (alu->src[i].swizzle[j] & mask))
                return false;
          }
       }
@@ -375,7 +375,7 @@ vec_instr_set_add_or_rewrite(struct nir_shader *nir, struct set *instr_set,
                                                old_instr, instr);
       if (new_instr) {
          if (instr_can_rewrite(new_instr, nir->options->vectorize_vec2_16bit) &&
-             (!filter || filter(instr, data)))
+             (!filter || filter(new_instr, data)))
             _mesa_set_add(instr_set, new_instr);
          return true;
       }

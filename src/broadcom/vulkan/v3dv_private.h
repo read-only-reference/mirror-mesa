@@ -705,15 +705,16 @@ enum v3dv_cmd_dirty_bits {
    V3DV_CMD_DIRTY_STENCIL_WRITE_MASK        = 1 << 3,
    V3DV_CMD_DIRTY_STENCIL_REFERENCE         = 1 << 4,
    V3DV_CMD_DIRTY_PIPELINE                  = 1 << 5,
-   V3DV_CMD_DIRTY_VERTEX_BUFFER             = 1 << 6,
-   V3DV_CMD_DIRTY_INDEX_BUFFER              = 1 << 7,
-   V3DV_CMD_DIRTY_DESCRIPTOR_SETS           = 1 << 8,
-   V3DV_CMD_DIRTY_COMPUTE_DESCRIPTOR_SETS   = 1 << 9,
-   V3DV_CMD_DIRTY_PUSH_CONSTANTS            = 1 << 10,
-   V3DV_CMD_DIRTY_BLEND_CONSTANTS           = 1 << 11,
-   V3DV_CMD_DIRTY_OCCLUSION_QUERY           = 1 << 12,
-   V3DV_CMD_DIRTY_DEPTH_BIAS                = 1 << 13,
-   V3DV_CMD_DIRTY_LINE_WIDTH                = 1 << 14,
+   V3DV_CMD_DIRTY_COMPUTE_PIPELINE          = 1 << 6,
+   V3DV_CMD_DIRTY_VERTEX_BUFFER             = 1 << 7,
+   V3DV_CMD_DIRTY_INDEX_BUFFER              = 1 << 8,
+   V3DV_CMD_DIRTY_DESCRIPTOR_SETS           = 1 << 9,
+   V3DV_CMD_DIRTY_COMPUTE_DESCRIPTOR_SETS   = 1 << 10,
+   V3DV_CMD_DIRTY_PUSH_CONSTANTS            = 1 << 11,
+   V3DV_CMD_DIRTY_BLEND_CONSTANTS           = 1 << 12,
+   V3DV_CMD_DIRTY_OCCLUSION_QUERY           = 1 << 13,
+   V3DV_CMD_DIRTY_DEPTH_BIAS                = 1 << 14,
+   V3DV_CMD_DIRTY_LINE_WIDTH                = 1 << 15,
 };
 
 struct v3dv_dynamic_state {
@@ -896,6 +897,14 @@ struct v3dv_job {
    enum v3dv_ez_state ez_state;
    enum v3dv_ez_state first_ez_state;
 
+   /* If we have already decided if we need to disable Early Z/S completely
+    * for this job.
+    */
+   bool decided_global_ez_enable;
+
+   /* If this job has been configured to use early Z/S clear */
+   bool early_zs_clear;
+
    /* Number of draw calls recorded into the job */
    uint32_t draw_count;
 
@@ -966,6 +975,12 @@ struct v3dv_descriptor_state {
    uint32_t dynamic_offsets[MAX_DYNAMIC_BUFFERS];
 };
 
+struct v3dv_cmd_pipeline_state {
+   struct v3dv_pipeline *pipeline;
+
+   struct v3dv_descriptor_state descriptor_state;
+};
+
 struct v3dv_cmd_buffer_state {
    struct v3dv_render_pass *pass;
    struct v3dv_framebuffer *framebuffer;
@@ -976,8 +991,8 @@ struct v3dv_cmd_buffer_state {
 
    uint32_t subpass_idx;
 
-   struct v3dv_pipeline *pipeline;
-   struct v3dv_descriptor_state descriptor_state[2];
+   struct v3dv_cmd_pipeline_state gfx;
+   struct v3dv_cmd_pipeline_state compute;
 
    struct v3dv_dynamic_state dynamic;
    uint32_t dirty;
@@ -1033,7 +1048,6 @@ struct v3dv_cmd_buffer_state {
    struct {
       uint32_t subpass_idx;
       VkRenderPass pass;
-      VkPipeline pipeline;
       VkFramebuffer framebuffer;
 
       uint32_t attachment_alloc_count;
@@ -1045,7 +1059,7 @@ struct v3dv_cmd_buffer_state {
 
       struct v3dv_dynamic_state dynamic;
 
-      struct v3dv_descriptor_state descriptor_state;
+      struct v3dv_cmd_pipeline_state gfx;
       bool has_descriptor_state;
 
       uint32_t push_constants[MAX_PUSH_CONSTANTS_SIZE / 4];
@@ -1125,16 +1139,6 @@ struct v3dv_combined_image_sampler_descriptor {
    uint8_t sampler_state[cl_aligned_packet_length(SAMPLER_STATE, 32)];
 };
 
-/* Aux struct as it is really common to have a pair bo/address. Called
- * resource because it is really likely that we would need something like that
- * if we work on reuse the same bo at different points (like the shader
- * assembly).
- */
-struct v3dv_resource {
-   struct v3dv_bo *bo;
-   uint32_t offset;
-};
-
 struct v3dv_query {
    bool maybe_available;
    union {
@@ -1189,8 +1193,13 @@ struct v3dv_cmd_buffer {
 
    struct v3dv_cmd_buffer_state state;
 
+   /* FIXME: we have just one client-side and bo for the push constants,
+    * independently of the stageFlags in vkCmdPushConstants, and the
+    * pipelineBindPoint in vkCmdBindPipeline. We could probably do more stage
+    * tunning in the future if it makes sense.
+    */
    uint32_t push_constants_data[MAX_PUSH_CONSTANTS_SIZE / 4];
-   struct v3dv_resource push_constants_resource;
+   struct v3dv_cl_reloc push_constants_resource;
 
    /* Collection of Vulkan objects created internally by the driver (typically
     * during recording of meta operations) that are part of the command buffer
@@ -1548,8 +1557,11 @@ struct v3dv_pipeline_layout {
    } set[MAX_SETS];
 
    uint32_t num_sets;
-   uint32_t dynamic_offset_count;
 
+   /* Shader stages that are declared to use descriptors from this layout */
+   uint32_t shader_stages;
+
+   uint32_t dynamic_offset_count;
    uint32_t push_constant_size;
 };
 
@@ -1649,6 +1661,9 @@ struct v3dv_pipeline {
 
    struct v3dv_pipeline_layout *layout;
 
+   /* Whether this pipeline enables depth writes */
+   bool z_updates_enable;
+
    enum v3dv_ez_state ez_state;
 
    bool msaa;
@@ -1735,6 +1750,16 @@ v3dv_pipeline_get_binding_point(struct v3dv_pipeline *pipeline)
           !(pipeline->active_stages & VK_SHADER_STAGE_COMPUTE_BIT));
    return pipeline->active_stages == VK_SHADER_STAGE_COMPUTE_BIT ?
       VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS;
+}
+
+static inline struct v3dv_descriptor_state*
+v3dv_cmd_buffer_get_descriptor_state(struct v3dv_cmd_buffer *cmd_buffer,
+                                     struct v3dv_pipeline *pipeline)
+{
+   if (v3dv_pipeline_get_binding_point(pipeline) == VK_PIPELINE_BIND_POINT_COMPUTE)
+      return &cmd_buffer->state.compute.descriptor_state;
+   else
+      return &cmd_buffer->state.gfx.descriptor_state;
 }
 
 const nir_shader_compiler_options *v3dv_pipeline_get_nir_options(void);

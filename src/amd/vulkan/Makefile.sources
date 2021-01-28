@@ -74,7 +74,6 @@ VULKAN_FILES := \
 	radv_pipeline_cache.c \
 	radv_private.h \
 	radv_radeon_winsys.h \
-	radv_rgp.c \
 	radv_shader.c \
 	radv_shader_args.c \
 	radv_shader_args.h \
@@ -84,7 +83,6 @@ VULKAN_FILES := \
 	radv_sqtt.c \
 	radv_query.c \
 	radv_util.c \
-	radv_util.h \
 	radv_wsi.c \
 	si_cmd_buffer.c \
 	vk_format.h \

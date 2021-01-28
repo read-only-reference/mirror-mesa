@@ -39,11 +39,12 @@
 #include "util/u_memory.h"
 #include "util/u_screen.h"
 #include "util/u_string.h"
+#include "util/u_transfer_helper.h"
 
 #include "frontend/sw_winsys.h"
 
 static const struct debug_named_value
-debug_options[] = {
+zink_debug_options[] = {
    { "nir", ZINK_DEBUG_NIR, "Dump NIR during program compile" },
    { "spirv", ZINK_DEBUG_SPIRV, "Dump SPIR-V during program compile" },
    { "tgsi", ZINK_DEBUG_TGSI, "Dump TGSI during program compile" },
@@ -51,7 +52,7 @@ debug_options[] = {
    DEBUG_NAMED_VALUE_END
 };
 
-DEBUG_GET_ONCE_FLAGS_OPTION(zink_debug, "ZINK_DEBUG", debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(zink_debug, "ZINK_DEBUG", zink_debug_options, 0)
 
 uint32_t
 zink_debug;
@@ -98,20 +99,38 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    struct zink_screen *screen = zink_screen(pscreen);
 
    switch (param) {
+   case PIPE_CAP_ANISOTROPIC_FILTER:
+      return screen->info.feats.features.samplerAnisotropy;
+
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_TGSI_TEXCOORD:
    case PIPE_CAP_DRAW_INDIRECT:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_GLSL_TESS_LEVELS_AS_INPUTS:
+   case PIPE_CAP_CLEAR_TEXTURE:
+   case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
+   case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
+   case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
+   case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
       return 1;
 
+   case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
+      return screen->info.feats.features.robustBufferAccess;
+
    case PIPE_CAP_MULTI_DRAW_INDIRECT:
+      return screen->info.feats.features.multiDrawIndirect;
+
    case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-      return screen->vk_CmdDrawIndirectCount &&
-             screen->vk_CmdDrawIndexedIndirectCount;
+      return screen->instance_info.have_KHR_draw_indirect_count;
+
+   case PIPE_CAP_START_INSTANCE:
+      return screen->info.feats11.shaderDrawParameters;
 
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
       return screen->info.have_EXT_vertex_attribute_divisor;
+
+   case PIPE_CAP_MAX_VERTEX_STREAMS:
+      return screen->info.tf_props.maxTransformFeedbackStreams;
 
    case PIPE_CAP_INT64:
    case PIPE_CAP_INT64_DIVMOD:
@@ -123,9 +142,6 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
          return 0;
       return screen->info.props.limits.maxFragmentDualSrcAttachments;
 
-   case PIPE_CAP_POINT_SPRITE:
-      return 1;
-
    case PIPE_CAP_MAX_RENDER_TARGETS:
       return screen->info.props.limits.maxColorAttachments;
 
@@ -136,8 +152,10 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return screen->timestamp_valid_bits > 0;
 
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
-   case PIPE_CAP_SAMPLE_SHADING:
       return 1;
+
+   case PIPE_CAP_SAMPLE_SHADING:
+      return screen->info.feats.features.sampleRateShading;
 
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
@@ -149,21 +167,21 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 1 + util_logbase2(screen->info.props.limits.maxImageDimensionCube);
 
-   case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
    case PIPE_CAP_VERTEX_SHADER_SATURATE:
       return 1;
 
+   case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
-      return 1;
+      return screen->info.feats.features.independentBlend;
 
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
       return screen->info.have_EXT_transform_feedback ? screen->info.tf_props.maxTransformFeedbackBuffers : 0;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
-      return 1;
+      return screen->info.have_EXT_transform_feedback;
 
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
       return screen->info.props.limits.maxImageArrayLayers;
@@ -190,7 +208,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       return 130;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
-      return 330;
+      return 420;
 
 #if 0 /* TODO: Enable me */
    case PIPE_CAP_COMPUTE:
@@ -227,7 +245,12 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return PIPE_ENDIAN_NATIVE; /* unsure */
 
    case PIPE_CAP_MAX_VIEWPORTS:
-      return 1; /* TODO: When GS is supported, use screen->info.props.limits.maxViewports */
+      return screen->info.props.limits.maxViewports;
+
+   case PIPE_CAP_IMAGE_LOAD_FORMATTED:
+      return screen->info.feats.features.shaderStorageImageExtendedFormats &&
+             screen->info.feats.features.shaderStorageImageReadWithoutFormat &&
+             screen->info.feats.features.shaderStorageImageWriteWithoutFormat;
 
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
       return 1;
@@ -237,10 +260,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
       return screen->info.props.limits.maxGeometryTotalOutputComponents;
 
-#if 0 /* TODO: Enable me. Enables ARB_texture_gather */
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
       return 4;
-#endif
 
    case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
       return screen->info.props.limits.minTexelGatherOffset;
@@ -265,29 +286,23 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
       return screen->info.props.limits.maxVertexInputBindingStride;
 
-#if 0 /* TODO: Enable me */
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
       return 1;
-#endif
 
 #if 0 /* TODO: Enable me */
    case PIPE_CAP_CLIP_HALFZ:
       return 1;
 #endif
 
-#if 0 /* TODO: Enable me */
    case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
    case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
       return 1;
-#endif
 
    case PIPE_CAP_SHAREABLE_SHADERS:
       return 1;
 
-#if 0 /* TODO: Enable me. Enables GL_ARB_shader_storage_buffer_object */
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
       return screen->info.props.limits.minStorageBufferOffsetAlignment;
-#endif
 
    case PIPE_CAP_PCI_GROUP:
    case PIPE_CAP_PCI_BUS:
@@ -308,7 +323,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return screen->info.props.limits.maxGeometryShaderInvocations;
 
    case PIPE_CAP_MAX_COMBINED_SHADER_BUFFERS:
-      return screen->info.props.limits.maxDescriptorSetStorageBuffers;
+      /* gallium handles this automatically */
+      return 0;
 
    case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
       return 65536;
@@ -399,9 +415,9 @@ zink_get_shader_param(struct pipe_screen *pscreen,
          return INT_MAX;
       case PIPE_SHADER_TESS_CTRL:
       case PIPE_SHADER_TESS_EVAL:
-         if (screen->info.feats.features.tessellationShader &&
-             (screen->instance_info.have_KHR_maintenance2 ||
-              VK_MAKE_VERSION(1,1,0) <= screen->loader_version))
+         if (screen->info.have_KHR_vulkan_memory_model &&
+             screen->info.feats.features.tessellationShader &&
+             screen->instance_info.have_KHR_maintenance2)
             return INT_MAX;
          break;
 
@@ -423,61 +439,53 @@ zink_get_shader_param(struct pipe_screen *pscreen,
          return INT_MAX;
       return 0;
 
-   case PIPE_SHADER_CAP_MAX_INPUTS:
+   case PIPE_SHADER_CAP_MAX_INPUTS: {
+      uint32_t max = 0;
       switch (shader) {
       case PIPE_SHADER_VERTEX:
-         return MIN2(screen->info.props.limits.maxVertexInputAttributes,
-                     PIPE_MAX_SHADER_INPUTS);
+         max = MIN2(screen->info.props.limits.maxVertexInputAttributes, PIPE_MAX_ATTRIBS);
+         break;
       case PIPE_SHADER_TESS_CTRL:
-         return MIN2(screen->info.props.limits.maxTessellationControlPerVertexInputComponents / 4,
-                     PIPE_MAX_SHADER_INPUTS);
+         max = screen->info.props.limits.maxTessellationControlPerVertexInputComponents / 4;
+         break;
       case PIPE_SHADER_TESS_EVAL:
-         return MIN2(screen->info.props.limits.maxTessellationEvaluationInputComponents / 4,
-                     PIPE_MAX_SHADER_INPUTS);
+         max = screen->info.props.limits.maxTessellationEvaluationInputComponents / 4;
+         break;
       case PIPE_SHADER_GEOMETRY:
-         return MIN2(screen->info.props.limits.maxGeometryInputComponents,
-                     PIPE_MAX_SHADER_INPUTS);
+         max = screen->info.props.limits.maxGeometryInputComponents;
+         break;
       case PIPE_SHADER_FRAGMENT:
-         return MIN2(screen->info.props.limits.maxFragmentInputComponents / 4,
-                     PIPE_MAX_SHADER_INPUTS);
+         max = screen->info.props.limits.maxFragmentInputComponents / 4;
+         break;
       default:
          return 0; /* unsupported stage */
       }
+      return MIN2(max, 64); // prevent overflowing struct shader_info::inputs_read
+   }
 
-   case PIPE_SHADER_CAP_MAX_OUTPUTS:
+   case PIPE_SHADER_CAP_MAX_OUTPUTS: {
+      uint32_t max = 0;
       switch (shader) {
       case PIPE_SHADER_VERTEX:
-         return MIN2(screen->info.props.limits.maxVertexOutputComponents / 4,
-                     PIPE_MAX_SHADER_OUTPUTS);
+         max = screen->info.props.limits.maxVertexOutputComponents / 4;
+         break;
       case PIPE_SHADER_TESS_CTRL:
-         return MIN2(screen->info.props.limits.maxTessellationControlPerVertexOutputComponents / 4,
-                     PIPE_MAX_SHADER_OUTPUTS);
+         max = screen->info.props.limits.maxTessellationControlPerVertexOutputComponents / 4;
+         break;
       case PIPE_SHADER_TESS_EVAL:
-         return MIN2(screen->info.props.limits.maxTessellationEvaluationOutputComponents / 4,
-                     PIPE_MAX_SHADER_OUTPUTS);
+         max = screen->info.props.limits.maxTessellationEvaluationOutputComponents / 4;
+         break;
       case PIPE_SHADER_GEOMETRY:
-         return MIN2(screen->info.props.limits.maxGeometryOutputComponents / 4,
-                     PIPE_MAX_SHADER_OUTPUTS);
+         max = screen->info.props.limits.maxGeometryOutputComponents / 4;
+         break;
       case PIPE_SHADER_FRAGMENT:
-         return MIN2(screen->info.props.limits.maxColorAttachments,
-                PIPE_MAX_SHADER_OUTPUTS);
+         max = screen->info.props.limits.maxColorAttachments;
+         break;
       default:
          return 0; /* unsupported stage */
       }
-
-   case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
-      switch (shader) {
-      case PIPE_SHADER_VERTEX:
-      case PIPE_SHADER_FRAGMENT:
-      case PIPE_SHADER_GEOMETRY:
-      case PIPE_SHADER_TESS_CTRL:
-      case PIPE_SHADER_TESS_EVAL:
-         /* this might be a bit simplistic... */
-         return MIN2(screen->info.props.limits.maxPerStageDescriptorSamplers,
-                     PIPE_MAX_SAMPLERS);
-      default:
-         return 0; /* unsupported stage */
-      }
+      return MIN2(max, 64); // prevent overflowing struct shader_info::outputs_read/written
+   }
 
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
       return 65536;
@@ -512,9 +520,11 @@ zink_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 0; /* not implemented */
 
+   case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
-      return MIN2(screen->info.props.limits.maxPerStageDescriptorSampledImages,
-                  PIPE_MAX_SHADER_SAMPLER_VIEWS);
+      return MIN2(MIN2(screen->info.props.limits.maxPerStageDescriptorSamplers,
+                       screen->info.props.limits.maxPerStageDescriptorSampledImages),
+                  PIPE_MAX_SAMPLERS);
 
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
@@ -528,18 +538,20 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       return 32; /* arbitrary */
 
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-      return 0;
+      /* TODO: this limitation is dumb, and will need some fixes in mesa */
+      return MIN2(screen->info.props.limits.maxPerStageDescriptorStorageBuffers, PIPE_MAX_SHADER_BUFFERS);
 
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_TGSI);
 
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-#if 0 /* TODO: needs compiler support */
-      return MIN2(screen->info.props.limits.maxPerStageDescriptorStorageImages,
-                  PIPE_MAX_SHADER_IMAGES);
-#else
+      if (screen->info.have_KHR_vulkan_memory_model &&
+          (screen->info.feats.features.shaderStorageImageExtendedFormats ||
+          (screen->info.feats.features.shaderStorageImageWriteWithoutFormat &&
+           screen->info.feats.features.shaderStorageImageReadWithoutFormat)))
+         return MIN2(screen->info.props.limits.maxPerStageDescriptorStorageImages,
+                     PIPE_MAX_SHADER_IMAGES);
       return 0;
-#endif
 
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
    case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
@@ -627,6 +639,10 @@ zink_is_format_supported(struct pipe_screen *pscreen,
              !(screen->info.props.limits.sampledImageColorSampleCounts & sample_mask))
             return false;
       }
+      if (bind & PIPE_BIND_SHADER_IMAGE) {
+          if (!screen->info.feats.features.shaderStorageImageMultisample)
+             return false;
+      }
    }
 
    VkFormatProperties props;
@@ -673,6 +689,11 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    if (VK_NULL_HANDLE != screen->debugUtilsCallbackHandle) {
       screen->vk_DestroyDebugUtilsMessengerEXT(screen->instance, screen->debugUtilsCallbackHandle, NULL);
    }
+
+   u_transfer_helper_destroy(pscreen->transfer_helper);
+
+   vkDestroyDevice(screen->dev, NULL);
+   vkDestroyInstance(screen->instance, NULL);
 
    slab_destroy_parent(&screen->transfer_pool);
    FREE(screen);
@@ -817,40 +838,12 @@ zink_get_format(struct zink_screen *screen, enum pipe_format format)
         !screen->info.format_4444_feats.formatA4R4G4B4))
       return VK_FORMAT_UNDEFINED;
 
+   if (format == PIPE_FORMAT_X24S8_UINT)
+      /* valid when using aspects to extract stencil,
+       * fails format test because it's emulated */
+      return VK_FORMAT_X8_D24_UNORM_PACK32;
+
    return ret;
-}
-
-static bool
-load_instance_extensions(struct zink_screen *screen)
-{
-   if (zink_debug & ZINK_DEBUG_VALIDATION) {
-      printf("zink: Loader %d.%d.%d \n", VK_VERSION_MAJOR(screen->loader_version), VK_VERSION_MINOR(screen->loader_version), VK_VERSION_PATCH(screen->loader_version));
-   }
-
-   if (screen->instance_info.have_KHR_get_physical_device_properties2) {
-      // Not Vk 1.1+ so if VK_KHR_get_physical_device_properties2 the use it
-      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, GetPhysicalDeviceFeatures2KHR);
-      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, GetPhysicalDeviceProperties2KHR);
-      screen->vk_GetPhysicalDeviceFeatures2 = vk_GetPhysicalDeviceFeatures2KHR;
-      screen->vk_GetPhysicalDeviceProperties2 = vk_GetPhysicalDeviceProperties2KHR;
-   } else if (VK_MAKE_VERSION(1,1,0) <= screen->loader_version) {
-      // Get Vk 1.1+ Instance functions
-      GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceFeatures2);
-      GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceProperties2);
-   }
-
-   if (screen->instance_info.have_KHR_draw_indirect_count) {
-      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, CmdDrawIndirectCountKHR);
-      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, CmdDrawIndexedIndirectCountKHR);
-      screen->vk_CmdDrawIndirectCount = vk_CmdDrawIndirectCountKHR;
-      screen->vk_CmdDrawIndexedIndirectCount = vk_CmdDrawIndexedIndirectCountKHR;
-   } else if (VK_MAKE_VERSION(1,2,0) <= screen->loader_version) {
-      // Get Vk 1.1+ Instance functions
-      GET_PROC_ADDR_INSTANCE(CmdDrawIndirectCount);
-      GET_PROC_ADDR_INSTANCE(CmdDrawIndexedIndirectCount);
-   }
-
-   return true;
 }
 
 static bool
@@ -1014,9 +1007,13 @@ zink_internal_setup_moltenvk(struct zink_screen *screen)
 static void
 check_device_needs_mesa_wsi(struct zink_screen *screen)
 {
-   /* Raspberry Pi 4 V3DV driver */
-   if (screen->info.props.vendorID == 0x14E4 &&
-       screen->info.props.deviceID == 42) {
+   if (
+       /* Raspberry Pi 4 V3DV driver */
+       (screen->info.props.vendorID == 0x14E4 &&
+        screen->info.props.deviceID == 42) ||
+       /* RADV */
+       screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_RADV_KHR
+      ) {
       screen->needs_mesa_wsi = true;
    }
 }
@@ -1085,7 +1082,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    if (!screen->instance)
       goto fail;
 
-   if (!load_instance_extensions(screen))
+   if (!zink_load_instance_extensions(screen))
       goto fail;
 
    if (screen->instance_info.have_EXT_debug_utils && !create_debug(screen))
@@ -1132,6 +1129,8 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
 
    zink_screen_resource_init(&screen->base);
    zink_screen_fence_init(&screen->base);
+
+   zink_screen_init_compiler(screen);
 
    slab_create_parent(&screen->transfer_pool, sizeof(struct zink_transfer), 16);
 

@@ -51,6 +51,7 @@ pre_args = [
 
 with_vulkan_icd_dir = get_option('vulkan-icd-dir')
 with_tests = get_option('build-tests')
+with_glcpp_tests = get_option('enable-glcpp-tests')
 with_aco_tests = get_option('build-aco-tests')
 with_glx_read_only_text = get_option('glx-read-only-text')
 with_glx_direct = get_option('glx-direct')
@@ -432,7 +433,7 @@ if _egl == 'auto'
     with_dri and with_shared_glapi
   )
 elif _egl == 'enabled'
-  if not with_dri
+  if not with_dri and not with_platform_haiku
     error('EGL requires dri')
   elif not with_shared_glapi
     error('EGL requires shared-glapi')
@@ -448,7 +449,7 @@ endif
 
 # Android uses emutls for versions <= P/28. For USE_ELF_TLS we need ELF TLS.
 use_elf_tls = false
-if not ['windows', 'freebsd', 'openbsd'].contains(host_machine.system()) and (not with_platform_android or get_option('platform-sdk-version') >= 29)
+if not ['windows', 'freebsd', 'openbsd', 'haiku'].contains(host_machine.system()) and (not with_platform_android or get_option('platform-sdk-version') >= 29)
   pre_args += '-DUSE_ELF_TLS'
   use_elf_tls = true
 endif
@@ -970,7 +971,7 @@ if cc.compiles('__uint128_t foo(void) { return 0; }',
 endif
 
 # TODO: this is very incomplete
-if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd'].contains(host_machine.system())
+if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd', 'haiku'].contains(host_machine.system())
   pre_args += '-D_GNU_SOURCE'
 elif host_machine.system() == 'sunos'
   pre_args += '-D__EXTENSIONS__'
@@ -1400,7 +1401,7 @@ endif
 dep_thread = dependency('threads')
 if dep_thread.found() and host_machine.system() != 'windows'
   pre_args += '-DHAVE_PTHREAD'
-  if cc.has_function(
+  if host_machine.system() != 'netbsd' and cc.has_function(
       'pthread_setaffinity_np',
       dependencies : dep_thread,
       prefix : '#include <pthread.h>',
@@ -1408,7 +1409,9 @@ if dep_thread.found() and host_machine.system() != 'windows'
     pre_args += '-DHAVE_PTHREAD_SETAFFINITY'
   endif
 endif
-if host_machine.system() != 'windows'
+if host_machine.system() == 'darwin'
+  dep_expat = meson.get_compiler('c').find_library('expat')
+elif host_machine.system() != 'windows'
   dep_expat = dependency('expat', fallback : ['expat', 'expat_dep'],
                          required: not with_platform_android or with_any_broadcom or with_any_intel)
 else
@@ -1417,6 +1420,10 @@ endif
 # this only exists on linux so either this is linux and it will be found, or
 # it's not linux and wont
 dep_m = cc.find_library('m', required : false)
+
+if with_platform_haiku
+  dep_network = cc.find_library('network')
+endif
 
 # Check for libdrm. Various drivers have different libdrm version requirements,
 # but we always want to use the same version for all libdrm modules. That means
@@ -1729,7 +1736,11 @@ elif _libunwind == 'false'
   warning('libunwind option "false" deprecated, please use "disabled" instead.')
 endif
 if _libunwind != 'disabled' and not with_platform_android
-  dep_unwind = dependency('libunwind', required : _libunwind == 'enabled')
+  if host_machine.system() == 'darwin'
+    dep_unwind = meson.get_compiler('c').find_library('System')
+  else
+    dep_unwind = dependency('libunwind', required : _libunwind == 'enabled')
+  endif
   if dep_unwind.found()
     pre_args += '-DHAVE_LIBUNWIND'
   endif

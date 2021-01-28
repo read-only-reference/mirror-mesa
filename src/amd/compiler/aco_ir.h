@@ -60,7 +60,7 @@ enum {
 /**
  * Representation of the instruction's microcode encoding format
  * Note: Some Vector ALU Formats can be combined, such that:
- * - VOP2* | VOP3A represents a VOP2 instruction in VOP3A encoding
+ * - VOP2* | VOP3 represents a VOP2 instruction in VOP3 encoding
  * - VOP2* | DPP represents a VOP2 instruction with data parallel primitive.
  * - VOP2* | SDWA represents a VOP2 instruction with sub-dword addressing.
  *
@@ -101,8 +101,6 @@ enum class Format : std::uint16_t {
    VOP2 = 1 << 9,
    VOPC = 1 << 10,
    VOP3 = 1 << 11,
-   VOP3A = 1 << 11,
-   VOP3B = 1 << 11,
    /* Vector Parameter Interpolation Format */
    VINTRP = 1 << 12,
    DPP = 1 << 13,
@@ -851,7 +849,7 @@ class Definition final
 {
 public:
    constexpr Definition() : temp(Temp(0, s1)), reg_(0), isFixed_(0), hasHint_(0),
-                            isKill_(0), isPrecise_(0), isNUW_(0) {}
+                            isKill_(0), isPrecise_(0), isNUW_(0), isNoCSE_(0) {}
    Definition(uint32_t index, RegClass type) noexcept
       : temp(index, type) {}
    explicit Definition(Temp tmp) noexcept
@@ -884,6 +882,10 @@ public:
 
    constexpr void setTemp(Temp t) noexcept {
       temp = t;
+   }
+
+   void swapTemp(Definition& other) noexcept {
+      std::swap(temp, other.temp);
    }
 
    constexpr RegClass regClass() const noexcept
@@ -959,6 +961,16 @@ public:
       return isNUW_;
    }
 
+   constexpr void setNoCSE(bool noCSE) noexcept
+   {
+      isNoCSE_ = noCSE;
+   }
+
+   constexpr bool isNoCSE() const noexcept
+   {
+      return isNoCSE_;
+   }
+
 private:
    Temp temp = Temp(0, s1);
    PhysReg reg_;
@@ -969,6 +981,7 @@ private:
          uint8_t isKill_:1;
          uint8_t isPrecise_:1;
          uint8_t isNUW_:1;
+         uint8_t isNoCSE_:1;
       };
       /* can't initialize bit-fields in c++11, so work around using a union */
       uint8_t control_ = 0;
@@ -976,6 +989,31 @@ private:
 };
 
 struct Block;
+struct Instruction;
+struct Pseudo_instruction;
+struct SOP1_instruction;
+struct SOP2_instruction;
+struct SOPK_instruction;
+struct SOPP_instruction;
+struct SOPC_instruction;
+struct SMEM_instruction;
+struct DS_instruction;
+struct MTBUF_instruction;
+struct MUBUF_instruction;
+struct MIMG_instruction;
+struct Export_instruction;
+struct FLAT_instruction;
+struct Pseudo_branch_instruction;
+struct Pseudo_barrier_instruction;
+struct Pseudo_reduction_instruction;
+struct VOP3P_instruction;
+struct VOP1_instruction;
+struct VOP2_instruction;
+struct VOPC_instruction;
+struct VOP3_instruction;
+struct Interp_instruction;
+struct DPP_instruction;
+struct SDWA_instruction;
 
 struct Instruction {
    aco_opcode opcode;
@@ -984,53 +1022,6 @@ struct Instruction {
 
    aco::span<Operand> operands;
    aco::span<Definition> definitions;
-
-   constexpr bool isVALU() const noexcept
-   {
-      return ((uint16_t) format & (uint16_t) Format::VOP1) == (uint16_t) Format::VOP1
-          || ((uint16_t) format & (uint16_t) Format::VOP2) == (uint16_t) Format::VOP2
-          || ((uint16_t) format & (uint16_t) Format::VOPC) == (uint16_t) Format::VOPC
-          || ((uint16_t) format & (uint16_t) Format::VOP3A) == (uint16_t) Format::VOP3A
-          || ((uint16_t) format & (uint16_t) Format::VOP3B) == (uint16_t) Format::VOP3B
-          || format == Format::VOP3P;
-   }
-
-   constexpr bool isSALU() const noexcept
-   {
-      return format == Format::SOP1 ||
-             format == Format::SOP2 ||
-             format == Format::SOPC ||
-             format == Format::SOPK ||
-             format == Format::SOPP;
-   }
-
-   constexpr bool isVMEM() const noexcept
-   {
-      return format == Format::MTBUF ||
-             format == Format::MUBUF ||
-             format == Format::MIMG;
-   }
-
-   constexpr bool isDPP() const noexcept
-   {
-      return (uint16_t) format & (uint16_t) Format::DPP;
-   }
-
-   constexpr bool isVOP3() const noexcept
-   {
-      return ((uint16_t) format & (uint16_t) Format::VOP3A) ||
-             ((uint16_t) format & (uint16_t) Format::VOP3B);
-   }
-
-   constexpr bool isSDWA() const noexcept
-   {
-      return (uint16_t) format & (uint16_t) Format::SDWA;
-   }
-
-   constexpr bool isFlatOrGlobal() const noexcept
-   {
-      return format == Format::FLAT || format == Format::GLOBAL;
-   }
 
    constexpr bool usesModifiers() const noexcept;
 
@@ -1041,6 +1032,115 @@ struct Instruction {
             return true;
       }
       return false;
+   }
+
+   Pseudo_instruction& pseudo() noexcept {assert(isPseudo()); return *(Pseudo_instruction *)this;}
+   const Pseudo_instruction& pseudo() const noexcept {assert(isPseudo()); return *(Pseudo_instruction *)this;}
+   constexpr bool isPseudo() const noexcept {return format == Format::PSEUDO;}
+   SOP1_instruction& sop1() noexcept {assert(isSOP1()); return *(SOP1_instruction *)this;}
+   const SOP1_instruction& sop1() const noexcept {assert(isSOP1()); return *(SOP1_instruction *)this;}
+   constexpr bool isSOP1() const noexcept {return format == Format::SOP1;}
+   SOP2_instruction& sop2() noexcept {assert(isSOP2()); return *(SOP2_instruction *)this;}
+   const SOP2_instruction& sop2() const noexcept {assert(isSOP2()); return *(SOP2_instruction *)this;}
+   constexpr bool isSOP2() const noexcept {return format == Format::SOP2;}
+   SOPK_instruction& sopk() noexcept {assert(isSOPK()); return *(SOPK_instruction *)this;}
+   const SOPK_instruction& sopk() const noexcept {assert(isSOPK()); return *(SOPK_instruction *)this;}
+   constexpr bool isSOPK() const noexcept {return format == Format::SOPK;}
+   SOPP_instruction& sopp() noexcept {assert(isSOPP()); return *(SOPP_instruction *)this;}
+   const SOPP_instruction& sopp() const noexcept {assert(isSOPP()); return *(SOPP_instruction *)this;}
+   constexpr bool isSOPP() const noexcept {return format == Format::SOPP;}
+   SOPC_instruction& sopc() noexcept {assert(isSOPC()); return *(SOPC_instruction *)this;}
+   const SOPC_instruction& sopc() const noexcept {assert(isSOPC()); return *(SOPC_instruction *)this;}
+   constexpr bool isSOPC() const noexcept {return format == Format::SOPC;}
+   SMEM_instruction& smem() noexcept {assert(isSMEM()); return *(SMEM_instruction *)this;}
+   const SMEM_instruction& smem() const noexcept {assert(isSMEM()); return *(SMEM_instruction *)this;}
+   constexpr bool isSMEM() const noexcept {return format == Format::SMEM;}
+   DS_instruction& ds() noexcept {assert(isDS()); return *(DS_instruction *)this;}
+   const DS_instruction& ds() const noexcept {assert(isDS()); return *(DS_instruction *)this;}
+   constexpr bool isDS() const noexcept {return format == Format::DS;}
+   MTBUF_instruction& mtbuf() noexcept {assert(isMTBUF()); return *(MTBUF_instruction *)this;}
+   const MTBUF_instruction& mtbuf() const noexcept {assert(isMTBUF()); return *(MTBUF_instruction *)this;}
+   constexpr bool isMTBUF() const noexcept {return format == Format::MTBUF;}
+   MUBUF_instruction& mubuf() noexcept {assert(isMUBUF()); return *(MUBUF_instruction *)this;}
+   const MUBUF_instruction& mubuf() const noexcept {assert(isMUBUF()); return *(MUBUF_instruction *)this;}
+   constexpr bool isMUBUF() const noexcept {return format == Format::MUBUF;}
+   MIMG_instruction& mimg() noexcept {assert(isMIMG()); return *(MIMG_instruction *)this;}
+   const MIMG_instruction& mimg() const noexcept {assert(isMIMG()); return *(MIMG_instruction *)this;}
+   constexpr bool isMIMG() const noexcept {return format == Format::MIMG;}
+   Export_instruction& exp() noexcept {assert(isEXP()); return *(Export_instruction *)this;}
+   const Export_instruction& exp() const noexcept {assert(isEXP()); return *(Export_instruction *)this;}
+   constexpr bool isEXP() const noexcept {return format == Format::EXP;}
+   FLAT_instruction& flat() noexcept {assert(isFlat()); return *(FLAT_instruction *)this;}
+   const FLAT_instruction& flat() const noexcept {assert(isFlat()); return *(FLAT_instruction *)this;}
+   constexpr bool isFlat() const noexcept {return format == Format::FLAT;}
+   FLAT_instruction& global() noexcept {assert(isGlobal()); return *(FLAT_instruction *)this;}
+   const FLAT_instruction& global() const noexcept {assert(isGlobal()); return *(FLAT_instruction *)this;}
+   constexpr bool isGlobal() const noexcept {return format == Format::GLOBAL;}
+   FLAT_instruction& scratch() noexcept {assert(isScratch()); return *(FLAT_instruction *)this;}
+   const FLAT_instruction& scratch() const noexcept {assert(isScratch()); return *(FLAT_instruction *)this;}
+   constexpr bool isScratch() const noexcept {return format == Format::SCRATCH;}
+   Pseudo_branch_instruction& branch() noexcept {assert(isBranch()); return *(Pseudo_branch_instruction *)this;}
+   const Pseudo_branch_instruction& branch() const noexcept {assert(isBranch()); return *(Pseudo_branch_instruction *)this;}
+   constexpr bool isBranch() const noexcept {return format == Format::PSEUDO_BRANCH;}
+   Pseudo_barrier_instruction& barrier() noexcept {assert(isBarrier()); return *(Pseudo_barrier_instruction *)this;}
+   const Pseudo_barrier_instruction& barrier() const noexcept {assert(isBarrier()); return *(Pseudo_barrier_instruction *)this;}
+   constexpr bool isBarrier() const noexcept {return format == Format::PSEUDO_BARRIER;}
+   Pseudo_reduction_instruction& reduction() noexcept {assert(isReduction()); return *(Pseudo_reduction_instruction *)this;}
+   const Pseudo_reduction_instruction& reduction() const noexcept {assert(isReduction()); return *(Pseudo_reduction_instruction *)this;}
+   constexpr bool isReduction() const noexcept {return format == Format::PSEUDO_REDUCTION;}
+   VOP3P_instruction& vop3p() noexcept {assert(isVOP3P()); return *(VOP3P_instruction *)this;}
+   const VOP3P_instruction& vop3p() const noexcept {assert(isVOP3P()); return *(VOP3P_instruction *)this;}
+   constexpr bool isVOP3P() const noexcept {return format == Format::VOP3P;}
+   VOP1_instruction& vop1() noexcept {assert(isVOP1()); return *(VOP1_instruction *)this;}
+   const VOP1_instruction& vop1() const noexcept {assert(isVOP1()); return *(VOP1_instruction *)this;}
+   constexpr bool isVOP1() const noexcept {return (uint16_t)format & (uint16_t)Format::VOP1;}
+   VOP2_instruction& vop2() noexcept {assert(isVOP2()); return *(VOP2_instruction *)this;}
+   const VOP2_instruction& vop2() const noexcept {assert(isVOP2()); return *(VOP2_instruction *)this;}
+   constexpr bool isVOP2() const noexcept {return (uint16_t)format & (uint16_t)Format::VOP2;}
+   VOPC_instruction& vopc() noexcept {assert(isVOPC()); return *(VOPC_instruction *)this;}
+   const VOPC_instruction& vopc() const noexcept {assert(isVOPC()); return *(VOPC_instruction *)this;}
+   constexpr bool isVOPC() const noexcept {return (uint16_t)format & (uint16_t)Format::VOPC;}
+   VOP3_instruction& vop3() noexcept {assert(isVOP3()); return *(VOP3_instruction *)this;}
+   const VOP3_instruction& vop3() const noexcept {assert(isVOP3()); return *(VOP3_instruction *)this;}
+   constexpr bool isVOP3() const noexcept {return (uint16_t)format & (uint16_t)Format::VOP3;}
+   Interp_instruction& vintrp() noexcept {assert(isVINTRP()); return *(Interp_instruction *)this;}
+   const Interp_instruction& vintrp() const noexcept {assert(isVINTRP()); return *(Interp_instruction *)this;}
+   constexpr bool isVINTRP() const noexcept {return (uint16_t)format & (uint16_t)Format::VINTRP;}
+   DPP_instruction& dpp() noexcept {assert(isDPP()); return *(DPP_instruction *)this;}
+   const DPP_instruction& dpp() const noexcept {assert(isDPP()); return *(DPP_instruction *)this;}
+   constexpr bool isDPP() const noexcept {return (uint16_t)format & (uint16_t)Format::DPP;}
+   SDWA_instruction& sdwa() noexcept {assert(isSDWA()); return *(SDWA_instruction *)this;}
+   const SDWA_instruction& sdwa() const noexcept {assert(isSDWA()); return *(SDWA_instruction *)this;}
+   constexpr bool isSDWA() const noexcept {return (uint16_t)format & (uint16_t)Format::SDWA;}
+
+   FLAT_instruction& flatlike()
+   {
+      return *(FLAT_instruction *)this;
+   }
+
+   const FLAT_instruction& flatlike() const
+   {
+      return *(FLAT_instruction *)this;
+   }
+
+   constexpr bool isFlatLike() const noexcept
+   {
+      return isFlat() || isGlobal() || isScratch();
+   }
+
+   constexpr bool isVALU() const noexcept
+   {
+      return isVOP1() || isVOP2() || isVOPC() || isVOP3() || isVOP3P();
+   }
+
+   constexpr bool isSALU() const noexcept
+   {
+      return isSOP1() || isSOP2() || isSOPC() || isSOPK() || isSOPP();
+   }
+
+   constexpr bool isVMEM() const noexcept
+   {
+      return isMTBUF() || isMUBUF() || isMIMG();
    }
 };
 static_assert(sizeof(Instruction) == 16, "Unexpected padding");
@@ -1103,7 +1203,7 @@ struct VOPC_instruction : public Instruction {
 };
 static_assert(sizeof(VOPC_instruction) == sizeof(Instruction) + 0, "Unexpected padding");
 
-struct VOP3A_instruction : public Instruction {
+struct VOP3_instruction : public Instruction {
    bool abs[3];
    bool neg[3];
    uint8_t opsel : 4;
@@ -1112,7 +1212,7 @@ struct VOP3A_instruction : public Instruction {
    uint8_t padding0 : 1;
    uint8_t padding1;
 };
-static_assert(sizeof(VOP3A_instruction) == sizeof(Instruction) + 8, "Unexpected padding");
+static_assert(sizeof(VOP3_instruction) == sizeof(Instruction) + 8, "Unexpected padding");
 
 struct VOP3P_instruction : public Instruction {
    bool neg_lo[3];
@@ -1279,8 +1379,8 @@ static_assert(sizeof(MTBUF_instruction) == sizeof(Instruction) + 8, "Unexpected 
  * Vector Memory Image Instructions
  * Operand(0) SRSRC - Scalar GPR that specifies the resource constant.
  * Operand(1): SSAMP - Scalar GPR that specifies sampler constant.
- *             or VDATA - Vector GPR for write data.
- * Operand(2): VADDR - Address source. Can carry an offset or an index.
+ * Operand(2): VDATA - Vector GPR for write data or zero if TFE/LWE=1.
+ * Operand(3): VADDR - Address source. Can carry an offset or an index.
  * Definition(0): VDATA - Vector GPR for read result.
  *
  */
@@ -1294,7 +1394,7 @@ struct MIMG_instruction : public Instruction {
    bool slc : 1; /* system level coherent */
    bool tfe : 1; /* texture fail enable */
    bool da : 1; /* declare an array */
-   bool lwe : 1; /* Force data to be un-normalized */
+   bool lwe : 1; /* LOD warning enable */
    bool r128 : 1; /* NAVI: Texture resource size */
    bool a16 : 1; /* VEGA, NAVI: Address components are 16-bits */
    bool d16 : 1; /* Convert 32-bit data to 16-bit data */
@@ -1427,20 +1527,24 @@ constexpr bool Instruction::usesModifiers() const noexcept
    if (isDPP() || isSDWA())
       return true;
 
-   if (format == Format::VOP3P) {
-      const VOP3P_instruction *vop3p = static_cast<const VOP3P_instruction*>(this);
+   if (isVOP3P()) {
+      const VOP3P_instruction& vop3p = this->vop3p();
       for (unsigned i = 0; i < operands.size(); i++) {
-         if (vop3p->neg_lo[i] || vop3p->neg_hi[i])
+         if (vop3p.neg_lo[i] || vop3p.neg_hi[i])
+            return true;
+
+         /* opsel_hi must be 1 to not be considered a modifier - even for constants */
+         if (!(vop3p.opsel_hi & (1 << i)))
             return true;
       }
-      return vop3p->opsel_lo || vop3p->opsel_hi || vop3p->clamp;
+      return vop3p.opsel_lo || vop3p.clamp;
    } else if (isVOP3()) {
-      const VOP3A_instruction *vop3 = static_cast<const VOP3A_instruction*>(this);
+      const VOP3_instruction& vop3 = this->vop3();
       for (unsigned i = 0; i < operands.size(); i++) {
-         if (vop3->abs[i] || vop3->neg[i])
+         if (vop3.abs[i] || vop3.neg[i])
             return true;
       }
-      return vop3->opsel || vop3->clamp || vop3->omod;
+      return vop3.opsel || vop3.clamp || vop3.omod;
    }
    return false;
 }
@@ -1720,6 +1824,7 @@ public:
    uint16_t vgpr_limit;
    uint16_t sgpr_limit;
    uint16_t physical_sgprs;
+   uint16_t physical_vgprs;
    uint16_t sgpr_alloc_granule; /* minus one. must be power of two */
    uint16_t vgpr_alloc_granule; /* minus one. must be power of two */
    unsigned workgroup_size; /* if known; otherwise UINT_MAX */
@@ -1727,6 +1832,7 @@ public:
    bool xnack_enabled = false;
    bool sram_ecc_enabled = false;
    bool has_fast_fma32 = false;
+   bool early_rast = false; /* whether rasterization can start as soon as the 1st DONE pos export */
 
    bool needs_vcc = false;
    bool needs_flat_scr = false;

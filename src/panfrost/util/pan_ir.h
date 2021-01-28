@@ -50,6 +50,9 @@ enum {
         PAN_SYSVAL_SSBO = 4,
         PAN_SYSVAL_NUM_WORK_GROUPS = 5,
         PAN_SYSVAL_SAMPLER = 7,
+        PAN_SYSVAL_LOCAL_GROUP_SIZE = 8,
+        PAN_SYSVAL_WORK_DIM = 9,
+        PAN_SYSVAL_IMAGE_SIZE = 10,
 };
 
 #define PAN_TXS_SYSVAL_ID(texidx, dim, is_array)          \
@@ -105,6 +108,10 @@ typedef struct {
          * (register spilling), or zero if no spilling is used */
         unsigned tls_size;
 
+        /* For Bifrost, should the program wait on dependency slots 6/7 before
+         * starting? For ATEST/BLEND in the first clause, which can occur with
+         * extremely simple shaders */
+        bool wait_6, wait_7;
 } panfrost_program;
 
 struct panfrost_compile_inputs {
@@ -239,5 +246,7 @@ bool pan_has_dest_mod(nir_dest **dest, nir_op op);
 
 bool pan_nir_reorder_writeout(nir_shader *nir);
 bool pan_nir_lower_zs_store(nir_shader *nir);
+
+bool pan_nir_lower_64bit_intrin(nir_shader *shader);
 
 #endif

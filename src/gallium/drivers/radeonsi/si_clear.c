@@ -80,7 +80,7 @@ static bool si_set_clear_color(struct si_texture *tex, enum pipe_format surface_
    return true;
 }
 
-/** Linearize and convert luminace/intensity to red. */
+/** Linearize and convert luminance/intensity to red. */
 enum pipe_format si_simplify_cb_format(enum pipe_format format)
 {
    format = util_format_linear(format);
@@ -494,7 +494,7 @@ static void si_do_fast_color_clear(struct si_context *sctx, unsigned *buffers,
          if (too_small)
             continue;
 
-         /* 128-bit formats are unusupported */
+         /* 128-bit formats are unsupported */
          if (tex->surface.bpe > 8) {
             continue;
          }
@@ -659,6 +659,13 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 
       if (needs_db_flush)
          sctx->flags |= SI_CONTEXT_FLUSH_AND_INV_DB;
+   }
+
+   if (unlikely(sctx->thread_trace_enabled)) {
+      if (buffers & PIPE_CLEAR_COLOR)
+         sctx->sqtt_next_event = EventCmdClearColorImage;
+      else if (buffers & PIPE_CLEAR_DEPTHSTENCIL)
+         sctx->sqtt_next_event = EventCmdClearDepthStencilImage;
    }
 
    si_blitter_begin(sctx, SI_CLEAR);

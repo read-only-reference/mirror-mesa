@@ -207,13 +207,14 @@ _mesa_inside_dlist_begin_end(const struct gl_context *ctx)
  * and calls dd_function_table::FlushVertices if so. Marks
  * __struct gl_contextRec::NewState with \p newstate.
  */
-#define FLUSH_VERTICES(ctx, newstate)				\
+#define FLUSH_VERTICES(ctx, newstate, pop_attrib_mask)          \
 do {								\
    if (MESA_VERBOSE & VERBOSE_STATE)				\
       _mesa_debug(ctx, "FLUSH_VERTICES in %s\n", __func__);	\
    if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)		\
       vbo_exec_FlushVertices(ctx, FLUSH_STORED_VERTICES);	\
    ctx->NewState |= newstate;					\
+   ctx->PopAttribState |= pop_attrib_mask;                      \
 } while (0)
 
 /**
@@ -356,7 +357,6 @@ static inline bool
 _mesa_has_half_float_textures(const struct gl_context *ctx)
 {
    return _mesa_has_ARB_texture_float(ctx) ||
-          _mesa_has_ARB_half_float_pixel(ctx) ||
           _mesa_has_OES_texture_half_float(ctx);
 }
 

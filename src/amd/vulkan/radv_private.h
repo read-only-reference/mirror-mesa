@@ -31,7 +31,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
-#include <pthread.h>
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
@@ -44,7 +43,10 @@
 #endif
 
 #include "c11/threads.h"
+#ifndef _WIN32
 #include <amdgpu.h>
+#include <xf86drm.h>
+#endif
 #include "compiler/shader_enums.h"
 #include "util/cnd_monotonic.h"
 #include "util/macros.h"
@@ -54,6 +56,7 @@
 #include "vk_alloc.h"
 #include "vk_debug_report.h"
 #include "vk_object.h"
+#include "vk_format.h"
 
 #include "radv_radeon_winsys.h"
 #include "ac_binary.h"
@@ -66,6 +69,7 @@
 #include "radv_descriptor_set.h"
 #include "radv_extensions.h"
 #include "sid.h"
+#include "ac_sqtt.h"
 
 /* Pre-declarations needed for WSI entrypoints */
 struct wl_surface;
@@ -83,7 +87,6 @@ typedef uint32_t xcb_window_t;
 #include "radv_entrypoints.h"
 
 #include "wsi_common.h"
-#include "wsi_common_display.h"
 
 /* Helper to determine if we should compile
  * any of the Android AHB support.
@@ -95,6 +98,12 @@ typedef uint32_t xcb_window_t;
 #define RADV_SUPPORT_ANDROID_HARDWARE_BUFFER 1
 #else
 #define RADV_SUPPORT_ANDROID_HARDWARE_BUFFER 0
+#endif
+
+#ifdef _WIN32
+#define RADV_SUPPORT_CALIBRATED_TIMESTAMPS 0
+#else
+#define RADV_SUPPORT_CALIBRATED_TIMESTAMPS 1
 #endif
 
 #ifdef _WIN32
@@ -243,18 +252,6 @@ void radv_logi_v(const char *format, va_list va);
 } while (0)
 #endif
 
-#define stub_return(v)					\
-	do {						\
-		radv_finishme("stub %s", __func__);	\
-		return (v);				\
-	} while (0)
-
-#define stub()						\
-	do {						\
-		radv_finishme("stub %s", __func__);	\
-		return;					\
-	} while (0)
-
 int radv_get_instance_entrypoint_index(const char *name);
 int radv_get_device_entrypoint_index(const char *name);
 int radv_get_physical_device_entrypoint_index(const char *name);
@@ -321,7 +318,9 @@ struct radv_physical_device {
 	enum radeon_bo_flag memory_flags[VK_MAX_MEMORY_TYPES];
 	unsigned heaps;
 
+#ifndef _WIN32
 	drmPciBusInfo bus_info;
+#endif
 
 	struct radv_device_extension_table supported_extensions;
 };
@@ -358,6 +357,7 @@ struct radv_instance {
 	 * Workarounds for game bugs.
 	 */
 	bool enable_mrt_output_nan_fixup;
+	bool disable_tc_compat_htile_in_general;
 };
 
 VkResult radv_init_wsi(struct radv_physical_device *physical_device);
@@ -409,6 +409,7 @@ struct radv_pipeline_key {
 	 * VK_EXT_subgroup_size_control.
 	 */
 	uint8_t compute_subgroup_size;
+	bool require_full_subgroups;
 };
 
 struct radv_shader_binary;
@@ -822,8 +823,9 @@ struct radv_device {
 	struct radv_device_extension_table enabled_extensions;
 	struct radv_device_dispatch_table dispatch;
 
-	/* Whether the app has enabled the robustBufferAccess feature. */
+	/* Whether the app has enabled the robustBufferAccess/robustBufferAccess2 features. */
 	bool robust_buffer_access;
+	bool robust_buffer_access2;
 
 	/* Whether gl_FragCoord.z should be adjusted for VRS due to a hw bug
 	 * on some GFX10.3 chips.
@@ -845,13 +847,7 @@ struct radv_device {
 	struct u_cnd_monotonic timeline_cond;
 
 	/* Thread trace. */
-	struct radeon_cmdbuf *thread_trace_start_cs[2];
-	struct radeon_cmdbuf *thread_trace_stop_cs[2];
-	struct radeon_winsys_bo *thread_trace_bo;
-	void *thread_trace_ptr;
-	uint32_t thread_trace_buffer_size;
-	int thread_trace_start_frame;
-	char *thread_trace_trigger_file;
+	struct ac_thread_trace_data thread_trace;
 
 	/* Trap handler. */
 	struct radv_shader_variant *trap_handler_shader;
@@ -903,7 +899,7 @@ struct radv_descriptor_range {
 	uint32_t size;
 };
 
-struct radv_descriptor_set {
+struct radv_descriptor_set_header {
 	struct vk_object_base base;
 	const struct radv_descriptor_set_layout *layout;
 	uint32_t size;
@@ -913,13 +909,17 @@ struct radv_descriptor_set {
 	uint64_t va;
 	uint32_t *mapped_ptr;
 	struct radv_descriptor_range *dynamic_descriptors;
+};
 
-	struct radeon_winsys_bo *descriptors[0];
+struct radv_descriptor_set {
+	struct radv_descriptor_set_header header;
+
+	struct radeon_winsys_bo *descriptors[];
 };
 
 struct radv_push_descriptor_set
 {
-	struct radv_descriptor_set set;
+	struct radv_descriptor_set_header set;
 	uint32_t capacity;
 };
 
@@ -1068,20 +1068,23 @@ enum radv_cmd_flush_bits {
 	 * Only used for coherency with non-L2 clients like CB, DB, CP on GFX6-8.
 	 * GFX6-7 will do complete invalidation, because the writeback is unsupported. */
 	RADV_CMD_FLAG_WB_L2				 = 1 << 4,
+	/* Invalidate the metadata cache. To be used when the DCC/HTILE metadata
+	 * changed and we want to read an image from shaders. */
+	RADV_CMD_FLAG_INV_L2_METADATA			 = 1 << 5,
 	/* Framebuffer caches */
-	RADV_CMD_FLAG_FLUSH_AND_INV_CB_META		 = 1 << 5,
-	RADV_CMD_FLAG_FLUSH_AND_INV_DB_META		 = 1 << 6,
-	RADV_CMD_FLAG_FLUSH_AND_INV_DB			 = 1 << 7,
-	RADV_CMD_FLAG_FLUSH_AND_INV_CB			 = 1 << 8,
+	RADV_CMD_FLAG_FLUSH_AND_INV_CB_META		 = 1 << 6,
+	RADV_CMD_FLAG_FLUSH_AND_INV_DB_META		 = 1 << 7,
+	RADV_CMD_FLAG_FLUSH_AND_INV_DB			 = 1 << 8,
+	RADV_CMD_FLAG_FLUSH_AND_INV_CB			 = 1 << 9,
 	/* Engine synchronization. */
-	RADV_CMD_FLAG_VS_PARTIAL_FLUSH			 = 1 << 9,
-	RADV_CMD_FLAG_PS_PARTIAL_FLUSH			 = 1 << 10,
-	RADV_CMD_FLAG_CS_PARTIAL_FLUSH			 = 1 << 11,
-	RADV_CMD_FLAG_VGT_FLUSH				 = 1 << 12,
+	RADV_CMD_FLAG_VS_PARTIAL_FLUSH			 = 1 << 10,
+	RADV_CMD_FLAG_PS_PARTIAL_FLUSH			 = 1 << 11,
+	RADV_CMD_FLAG_CS_PARTIAL_FLUSH			 = 1 << 12,
+	RADV_CMD_FLAG_VGT_FLUSH				 = 1 << 13,
 	/* Pipeline query controls. */
-	RADV_CMD_FLAG_START_PIPELINE_STATS		 = 1 << 13,
-	RADV_CMD_FLAG_STOP_PIPELINE_STATS		 = 1 << 14,
-	RADV_CMD_FLAG_VGT_STREAMOUT_SYNC		 = 1 << 15,
+	RADV_CMD_FLAG_START_PIPELINE_STATS		 = 1 << 14,
+	RADV_CMD_FLAG_STOP_PIPELINE_STATS		 = 1 << 15,
+	RADV_CMD_FLAG_VGT_STREAMOUT_SYNC		 = 1 << 16,
 
 	RADV_CMD_FLUSH_AND_INV_FRAMEBUFFER = (RADV_CMD_FLAG_FLUSH_AND_INV_CB |
 					      RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
@@ -1452,7 +1455,7 @@ struct radv_cmd_buffer {
 
 	uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
 	VkShaderStageFlags push_constant_stages;
-	struct radv_descriptor_set meta_push_descriptors;
+	struct radv_descriptor_set_header meta_push_descriptors;
 
 	struct radv_descriptor_state descriptors[MAX_BIND_POINTS];
 
@@ -1585,8 +1588,16 @@ void radv_update_fce_metadata(struct radv_cmd_buffer *cmd_buffer,
 void radv_update_dcc_metadata(struct radv_cmd_buffer *cmd_buffer,
 			      struct radv_image *image,
 			      const VkImageSubresourceRange *range, bool value);
-
+enum radv_cmd_flush_bits
+radv_src_access_flush(struct radv_cmd_buffer *cmd_buffer,
+		      VkAccessFlags src_flags,
+		      const struct radv_image *image);
+enum radv_cmd_flush_bits
+radv_dst_access_flush(struct radv_cmd_buffer *cmd_buffer,
+                      VkAccessFlags dst_flags,
+                      const struct radv_image *image);
 uint32_t radv_fill_buffer(struct radv_cmd_buffer *cmd_buffer,
+			  const struct radv_image *image,
 			  struct radeon_winsys_bo *bo,
 			  uint64_t offset, uint64_t size, uint32_t value);
 void radv_cmd_buffer_trace_emit(struct radv_cmd_buffer *cmd_buffer);
@@ -1668,6 +1679,7 @@ struct radv_shader_module;
 #define RADV_HASH_SHADER_LLVM                (1 << 4)
 #define RADV_HASH_SHADER_DISCARD_TO_DEMOTE   (1 << 5)
 #define RADV_HASH_SHADER_MRT_NAN_FIXUP       (1 << 6)
+#define RADV_HASH_SHADER_INVARIANT_GEOM      (1 << 7)
 
 void
 radv_hash_shaders(unsigned char *hash,
@@ -1879,7 +1891,6 @@ struct radv_image {
 	 * of the actual surface formats.
 	 */
 	VkFormat vk_format;
-	VkImageAspectFlags aspects;
 	VkImageUsageFlags usage; /**< Superset of VkImageCreateInfo::usage. */
 	struct ac_surf_info info;
 	VkImageTiling tiling; /** VkImageCreateInfo::tiling */
@@ -1895,7 +1906,6 @@ struct radv_image {
 	/* Set when bound */
 	struct radeon_winsys_bo *bo;
 	VkDeviceSize offset;
-	bool tc_compatible_htile;
 	bool tc_compatible_cmask;
 
 	uint64_t clear_value_offset;
@@ -1923,7 +1933,8 @@ struct radv_image {
  * If this is false reads that don't use the htile should be able to return
  * correct results.
  */
-bool radv_layout_is_htile_compressed(const struct radv_image *image,
+bool radv_layout_is_htile_compressed(const struct radv_device *device,
+				     const struct radv_image *image,
                                      VkImageLayout layout,
                                      bool in_render_loop,
                                      unsigned queue_mask);
@@ -2012,7 +2023,8 @@ radv_image_has_htile(const struct radv_image *image)
 static inline bool
 radv_htile_enabled(const struct radv_image *image, unsigned level)
 {
-	return radv_image_has_htile(image) && level == 0;
+	return radv_image_has_htile(image) &&
+	       level < image->planes[0].surface.num_htile_levels;
 }
 
 /**
@@ -2021,7 +2033,27 @@ radv_htile_enabled(const struct radv_image *image, unsigned level)
 static inline bool
 radv_image_is_tc_compat_htile(const struct radv_image *image)
 {
-	return radv_image_has_htile(image) && image->tc_compatible_htile;
+	return radv_image_has_htile(image) &&
+	       (image->planes[0].surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE);
+}
+
+/**
+ * Return whether the entire HTILE buffer can be used for depth in order to
+ * improve HiZ Z-Range precision.
+ */
+static inline bool
+radv_image_tile_stencil_disabled(const struct radv_device *device,
+				 const struct radv_image *image)
+{
+	if (device->physical_device->rad_info.chip_class >= GFX9) {
+		return !vk_format_is_stencil(image->vk_format);
+	} else {
+		/* Due to a hw bug, TILE_STENCIL_DISABLE must be set to 0 for
+		 * the TC-compat ZRANGE issue even if no stencil is used.
+		 */
+		return !vk_format_is_stencil(image->vk_format) &&
+		       !radv_image_is_tc_compat_htile(image);
+	}
 }
 
 static inline uint64_t
@@ -2067,6 +2099,36 @@ radv_get_ds_clear_value_va(const struct radv_image *image,
 	uint64_t va = radv_buffer_get_va(image->bo);
 	va += image->offset + image->clear_value_offset + base_level * 8;
 	return va;
+}
+
+static inline uint32_t
+radv_get_htile_initial_value(const struct radv_device *device,
+			     const struct radv_image *image)
+{
+	uint32_t initial_value;
+
+	if (radv_image_tile_stencil_disabled(device, image)) {
+		/* Z only (no stencil):
+		 *
+		 * |31     18|17      4|3     0|
+		 * +---------+---------+-------+
+		 * |  Max Z  |  Min Z  | ZMask |
+		 */
+		initial_value = 0xfffc000f;
+	} else {
+		/* Z and stencil:
+		 *
+		 * |31       12|11 10|9    8|7   6|5   4|3     0|
+		 * +-----------+-----+------+-----+-----+-------+
+		 * |  Z Range  |     | SMem | SR1 | SR0 | ZMask |
+		 *
+		 * SR0/SR1 contains the stencil test results. Initializing
+		 * SR0/SR1 to 0x3 means the stencil test result is unknown.
+		 */
+		initial_value = 0xfffff3ff;
+	}
+
+	return initial_value;
 }
 
 unsigned radv_image_queue_family_mask(const struct radv_image *image, uint32_t family, uint32_t queue_family);
@@ -2123,6 +2185,9 @@ struct radv_image_view {
 	uint32_t base_mip;
 	uint32_t level_count;
 	VkExtent3D extent; /**< Extent of VkImageViewCreateInfo::baseMipLevel. */
+
+	/* Whether the image iview supports fast clear. */
+	bool support_fast_clear;
 
 	union radv_descriptor descriptor;
 
@@ -2263,6 +2328,8 @@ struct radv_framebuffer {
 	uint32_t                                     width;
 	uint32_t                                     height;
 	uint32_t                                     layers;
+
+	bool                                         imageless;
 
 	uint32_t                                     attachment_count;
 	struct radv_image_view                       *attachments[0];
@@ -2509,42 +2576,15 @@ void radv_nir_shader_info_pass(const struct nir_shader *nir,
 
 void radv_nir_shader_info_init(struct radv_shader_info *info);
 
-/* radv_sqtt.c */
-struct radv_thread_trace_info {
-	uint32_t cur_offset;
-	uint32_t trace_status;
-	union {
-		uint32_t gfx9_write_counter;
-		uint32_t gfx10_dropped_cntr;
-	};
-};
-
-struct radv_thread_trace_se {
-	struct radv_thread_trace_info info;
-	void *data_ptr;
-	uint32_t shader_engine;
-	uint32_t compute_unit;
-};
-
-struct radv_thread_trace {
-	uint32_t num_traces;
-	struct radv_thread_trace_se traces[4];
-};
-
 bool radv_thread_trace_init(struct radv_device *device);
 void radv_thread_trace_finish(struct radv_device *device);
 bool radv_begin_thread_trace(struct radv_queue *queue);
 bool radv_end_thread_trace(struct radv_queue *queue);
 bool radv_get_thread_trace(struct radv_queue *queue,
-			   struct radv_thread_trace *thread_trace);
+			   struct ac_thread_trace *thread_trace);
 void radv_emit_thread_trace_userdata(const struct radv_device *device,
 				     struct radeon_cmdbuf *cs,
 				     const void *data, uint32_t num_dwords);
-
-/* radv_rgp.c */
-int radv_dump_thread_trace(struct radv_device *device,
-			   const struct radv_thread_trace *trace);
-
 /* radv_sqtt_layer_.c */
 struct radv_barrier_data {
 	union {

@@ -25,6 +25,7 @@
 #include "core/platform.hpp"
 #include "pipe/p_screen.h"
 #include "pipe/p_state.h"
+#include "spirv/invocation.hpp"
 #include "util/bitscan.h"
 #include "util/u_debug.h"
 #include "spirv/invocation.hpp"
@@ -366,6 +367,10 @@ device::supported_extensions() const {
       vec.push_back( cl_name_version{ CL_MAKE_VERSION(1, 0, 0), "cl_khr_fp16" } );
    if (svm_support())
       vec.push_back( cl_name_version{ CL_MAKE_VERSION(1, 0, 0), "cl_arm_shared_virtual_memory" } );
+   if (!clover::spirv::supported_versions().empty() &&
+       supports_ir(PIPE_SHADER_IR_NIR_SERIALIZED))
+      vec.push_back( cl_name_version{ CL_MAKE_VERSION(1, 0, 0), "cl_khr_il_program" } );
+   vec.push_back( cl_name_version{ CL_MAKE_VERSION(1, 0, 0), "cl_khr_extended_versioning" } );
    return vec;
 }
 
@@ -383,6 +388,11 @@ device::supported_extensions_as_string() const {
       extensions_string += extension.name;
    }
    return extensions_string;
+}
+
+std::vector<cl_name_version>
+device::supported_il_versions() const {
+   return clover::spirv::supported_versions();
 }
 
 const void *

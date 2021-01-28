@@ -212,6 +212,7 @@ void fill_desc_set_info(isel_context *ctx, nir_function_impl *impl)
             flags |= has_glc_vmem_load | has_glc_vmem_store;
             break;
          case nir_intrinsic_image_deref_load:
+         case nir_intrinsic_image_deref_sparse_load:
             res = intrin->src[0].ssa;
             flags |= glc ? has_glc_vmem_load : has_nonglc_vmem_load;
             break;
@@ -365,6 +366,15 @@ setup_vs_output_info(isel_context *ctx, nir_shader *nir,
       pos_written |= 1 << 3;
 
    outinfo->pos_exports = util_bitcount(pos_written);
+
+   /* GFX10+ early rasterization:
+    * When there are no param exports in an NGG (or legacy VS) shader,
+    * RADV sets NO_PC_EXPORT=1, which means the HW will start clipping and rasterization
+    * as soon as it encounters a DONE pos export. When this happens, PS waves can launch
+    * before the NGG (or VS) waves finish.
+    */
+   ctx->program->early_rast = ctx->program->chip_class >= GFX10 &&
+                              outinfo->param_exports == 0;
 }
 
 void
@@ -670,7 +680,7 @@ void init_context(isel_context *ctx, nir_shader *shader)
             switch(instr->type) {
             case nir_instr_type_alu: {
                nir_alu_instr *alu_instr = nir_instr_as_alu(instr);
-               RegType type = RegType::sgpr;
+               RegType type = nir_dest_is_divergent(alu_instr->dest.dest) ? RegType::vgpr : RegType::sgpr;
                switch(alu_instr->op) {
                   case nir_op_fmul:
                   case nir_op_fadd:
@@ -735,10 +745,19 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_op_b2f16:
                   case nir_op_b2f32:
                   case nir_op_mov:
-                     type = nir_dest_is_divergent(alu_instr->dest.dest) ? RegType::vgpr : RegType::sgpr;
                      break;
-                  case nir_op_bcsel:
-                     type = nir_dest_is_divergent(alu_instr->dest.dest) ? RegType::vgpr : RegType::sgpr;
+                  case nir_op_iadd:
+                  case nir_op_isub:
+                  case nir_op_imul:
+                  case nir_op_imin:
+                  case nir_op_imax:
+                  case nir_op_umin:
+                  case nir_op_umax:
+                  case nir_op_ishl:
+                  case nir_op_ishr:
+                  case nir_op_ushr:
+                     /* packed 16bit instructions have to be VGPR */
+                     type = alu_instr->dest.dest.ssa.num_components == 2 ? RegType::vgpr : type;
                      FALLTHROUGH;
                   default:
                      for (unsigned i = 0; i < nir_op_infos[alu_instr->op].num_inputs; i++) {
@@ -772,7 +791,6 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_intrinsic_load_num_subgroups:
                   case nir_intrinsic_load_first_vertex:
                   case nir_intrinsic_load_base_instance:
-                  case nir_intrinsic_get_ssbo_size:
                   case nir_intrinsic_vote_all:
                   case nir_intrinsic_vote_any:
                   case nir_intrinsic_read_first_invocation:
@@ -870,6 +888,7 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_intrinsic_load_global:
                   case nir_intrinsic_vulkan_resource_index:
                   case nir_intrinsic_load_shared:
+                  case nir_intrinsic_get_ssbo_size:
                      type = nir_dest_is_divergent(intrinsic->dest) ? RegType::vgpr : RegType::sgpr;
                      break;
                   case nir_intrinsic_load_view_index:

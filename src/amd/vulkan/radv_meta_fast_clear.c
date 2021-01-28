@@ -75,7 +75,7 @@ build_dcc_decompress_compute_shader(struct radv_device *dev)
 	tex->src[1].src = nir_src_for_ssa(nir_imm_int(&b, 0));
 	tex->src[2].src_type = nir_tex_src_texture_deref;
 	tex->src[2].src = nir_src_for_ssa(input_img_deref);
-	tex->dest_type = nir_type_float;
+	tex->dest_type = nir_type_float32;
 	tex->is_array = false;
 	tex->coord_components = 2;
 
@@ -633,14 +633,14 @@ radv_process_color_image_layer(struct radv_cmd_buffer *cmd_buffer,
 				    &cmd_buffer->state.pass->subpasses[0]);
 
 	if (flush_cb)
-		cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-						RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+		cmd_buffer->state.flush_bits |=
+			radv_dst_access_flush(cmd_buffer, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, image);
 
 	radv_CmdDraw(radv_cmd_buffer_to_handle(cmd_buffer), 3, 1, 0, 0);
 
 	if (flush_cb)
-		cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-						RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+		cmd_buffer->state.flush_bits |=
+			radv_src_access_flush(cmd_buffer, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, image);
 
 	radv_cmd_buffer_end_render_pass(cmd_buffer);
 
@@ -740,11 +740,27 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
                            const VkImageSubresourceRange *subresourceRange,
                            bool decompress_dcc)
 {
+	bool use_predication = false;
 	bool old_predicating = false;
 
 	assert(cmd_buffer->queue_family_index == RADV_QUEUE_GENERAL);
 
-	if (radv_dcc_enabled(image, subresourceRange->baseMipLevel)) {
+	if ((decompress_dcc && radv_dcc_enabled(image, subresourceRange->baseMipLevel)) ||
+	    (!(radv_image_has_fmask(image) && !image->tc_compatible_cmask) && image->fce_pred_offset)) {
+		use_predication = true;
+	}
+
+	if (radv_dcc_enabled(image, subresourceRange->baseMipLevel) &&
+	    (image->info.array_size != radv_get_layerCount(image, subresourceRange) ||
+	    subresourceRange->baseArrayLayer != 0)) {
+		/* Only use predication if the image has DCC with mipmaps or
+		 * if the range of layers covers the whole image because the
+		 * predication is based on mip level.
+		 */
+		use_predication = false;
+	}
+
+	if (use_predication) {
 		uint64_t pred_offset = decompress_dcc ? image->dcc_pred_offset :
 							image->fce_pred_offset;
 		pred_offset += 8 * subresourceRange->baseMipLevel;
@@ -758,7 +774,7 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 	radv_process_color_image(cmd_buffer, image, subresourceRange,
 				 decompress_dcc);
 
-	if (radv_dcc_enabled(image, subresourceRange->baseMipLevel)) {
+	if (use_predication) {
 		uint64_t pred_offset = decompress_dcc ? image->dcc_pred_offset :
 							image->fce_pred_offset;
 		pred_offset += 8 * subresourceRange->baseMipLevel;
@@ -776,12 +792,14 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 		}
 	}
 
-	if (radv_dcc_enabled(image, subresourceRange->baseMipLevel)) {
+	if (image->fce_pred_offset != 0) {
 		/* Clear the image's fast-clear eliminate predicate because
 		 * FMASK and DCC also imply a fast-clear eliminate.
 		 */
 		radv_update_fce_metadata(cmd_buffer, image, subresourceRange, false);
+	}
 
+	if (radv_dcc_enabled(image, subresourceRange->baseMipLevel)) {
 		/* Mark the image as being decompressed. */
 		if (decompress_dcc)
 			radv_update_dcc_metadata(cmd_buffer, image, subresourceRange, false);
@@ -823,11 +841,8 @@ radv_decompress_dcc_compute(struct radv_cmd_buffer *cmd_buffer,
 	struct radv_image_view store_iview = {0};
 	struct radv_device *device = cmd_buffer->device;
 
-	/* This assumes the image is 2d with 1 layer */
-	struct radv_cmd_state *state = &cmd_buffer->state;
-
-	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-			     RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+	cmd_buffer->state.flush_bits |= radv_dst_access_flush(cmd_buffer, VK_ACCESS_SHADER_WRITE_BIT,
+	                                                      image);
 
 	if (!cmd_buffer->device->meta_state.fast_clear_flush.cmask_eliminate_pipeline) {
 		VkResult ret = radv_device_init_meta_fast_clear_flush_state_internal(cmd_buffer->device);
@@ -931,12 +946,11 @@ radv_decompress_dcc_compute(struct radv_cmd_buffer *cmd_buffer,
 	/* Mark this image as actually being decompressed. */
 	radv_update_dcc_metadata(cmd_buffer, image, subresourceRange, false);
 
-	/* The fill buffer below does its own saving */
 	radv_meta_restore(&saved_state, cmd_buffer);
 
-	state->flush_bits |= RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
-			     RADV_CMD_FLAG_INV_VCACHE;
-
+	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
+					RADV_CMD_FLAG_INV_VCACHE |
+			radv_src_access_flush(cmd_buffer, VK_ACCESS_SHADER_WRITE_BIT, image);
 
 	/* Initialize the DCC metadata as "fully expanded". */
 	radv_initialize_dcc(cmd_buffer, image, subresourceRange, 0xffffffff);

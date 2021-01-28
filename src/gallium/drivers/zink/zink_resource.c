@@ -120,8 +120,21 @@ resource_create(struct pipe_screen *pscreen,
       bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                   VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-      if (templ->bind & PIPE_BIND_SAMPLER_VIEW)
-         bci.usage |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+      /* apparently gallium thinks this is the jack-of-all-trades bind type */
+      if (templ->bind & PIPE_BIND_SAMPLER_VIEW) {
+         bci.usage |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
+                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                      VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
+         VkFormatProperties props;
+         vkGetPhysicalDeviceFormatProperties(screen->pdev, zink_get_format(screen, templ->format), &props);
+         if (props.bufferFeatures & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+            bci.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+         if (props.bufferFeatures & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)
+            bci.usage |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+      }
 
       if (templ->bind & PIPE_BIND_VERTEX_BUFFER)
          bci.usage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
@@ -158,6 +171,7 @@ resource_create(struct pipe_screen *pscreen,
       res->format = zink_get_format(screen, templ->format);
 
       VkImageCreateInfo ici = {};
+      VkExternalMemoryImageCreateInfo emici = {};
       ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
       ici.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
 
@@ -208,6 +222,12 @@ resource_create(struct pipe_screen *pscreen,
          ici.tiling = VK_IMAGE_TILING_LINEAR;
       }
 
+      if (templ->bind & PIPE_BIND_SHARED) {
+         emici.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+         emici.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+         ici.pNext = &emici;
+      }
+
       if (templ->usage == PIPE_USAGE_STAGING)
          ici.tiling = VK_IMAGE_TILING_LINEAR;
 
@@ -216,8 +236,18 @@ resource_create(struct pipe_screen *pscreen,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                   VK_IMAGE_USAGE_SAMPLED_BIT;
 
-      if (templ->bind & PIPE_BIND_SHADER_IMAGE)
-         ici.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+      if ((templ->nr_samples <= 1 || screen->info.feats.features.shaderStorageImageMultisample) &&
+          (templ->bind & PIPE_BIND_SHADER_IMAGE ||
+          (templ->bind & PIPE_BIND_SAMPLER_VIEW && templ->flags & PIPE_RESOURCE_FLAG_TEXTURING_MORE_LIKELY))) {
+         VkFormatProperties props;
+         vkGetPhysicalDeviceFormatProperties(screen->pdev, res->format, &props);
+         /* gallium doesn't provide any way to actually know whether this will be used as a shader image,
+          * so we have to just assume and set the bit if it's available
+          */
+         if ((ici.tiling == VK_IMAGE_TILING_LINEAR && props.linearTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) ||
+             (ici.tiling == VK_IMAGE_TILING_OPTIMAL && props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+            ici.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+      }
 
       if (templ->bind & PIPE_BIND_RENDER_TARGET)
          ici.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;

@@ -1048,7 +1048,7 @@ tu_emit_input_attachments(struct tu_cmd_buffer *cmd,
          dst[0] &= ~(A6XX_TEX_CONST_0_FMT__MASK |
             A6XX_TEX_CONST_0_SWIZ_X__MASK | A6XX_TEX_CONST_0_SWIZ_Y__MASK |
             A6XX_TEX_CONST_0_SWIZ_Z__MASK | A6XX_TEX_CONST_0_SWIZ_W__MASK);
-         if (cmd->device->physical_device->limited_z24s8) {
+         if (!cmd->device->physical_device->info.a6xx.has_z24uint_s8uint) {
             dst[0] |= A6XX_TEX_CONST_0_FMT(FMT6_8_8_8_8_UINT) |
                A6XX_TEX_CONST_0_SWIZ_X(A6XX_TEX_W) |
                A6XX_TEX_CONST_0_SWIZ_Y(A6XX_TEX_ZERO) |
@@ -3182,10 +3182,18 @@ tu6_emit_tess_consts(struct tu_cmd_buffer *cmd,
    if (result != VK_SUCCESS)
       return result;
 
+   const struct tu_program_descriptor_linkage *hs_link =
+      &pipeline->program.link[MESA_SHADER_TESS_CTRL];
+   bool hs_uses_bo = pipeline->tess.hs_bo_regid < hs_link->constlen;
+
+   const struct tu_program_descriptor_linkage *ds_link =
+      &pipeline->program.link[MESA_SHADER_TESS_EVAL];
+   bool ds_uses_bo = pipeline->tess.ds_bo_regid < ds_link->constlen;
+
    uint64_t tess_factor_size = get_tess_factor_bo_size(pipeline, draw_count);
    uint64_t tess_param_size = get_tess_param_bo_size(pipeline, draw_count);
    uint64_t tess_bo_size =  tess_factor_size + tess_param_size;
-   if (tess_bo_size > 0) {
+   if ((hs_uses_bo || ds_uses_bo) && tess_bo_size > 0) {
       struct tu_bo *tess_bo;
       result = tu_get_scratch_bo(cmd->device, tess_bo_size, &tess_bo);
       if (result != VK_SUCCESS)
@@ -3194,27 +3202,31 @@ tu6_emit_tess_consts(struct tu_cmd_buffer *cmd,
       uint64_t tess_factor_iova = tess_bo->iova;
       uint64_t tess_param_iova = tess_factor_iova + tess_factor_size;
 
-      tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3 + 4);
-      tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(pipeline->tess.hs_bo_regid) |
-            CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-            CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-            CP_LOAD_STATE6_0_STATE_BLOCK(SB6_HS_SHADER) |
-            CP_LOAD_STATE6_0_NUM_UNIT(1));
-      tu_cs_emit(&cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
-      tu_cs_emit(&cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
-      tu_cs_emit_qw(&cs, tess_param_iova);
-      tu_cs_emit_qw(&cs, tess_factor_iova);
+      if (hs_uses_bo) {
+         tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3 + 4);
+         tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(pipeline->tess.hs_bo_regid) |
+               CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+               CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+               CP_LOAD_STATE6_0_STATE_BLOCK(SB6_HS_SHADER) |
+               CP_LOAD_STATE6_0_NUM_UNIT(1));
+         tu_cs_emit(&cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
+         tu_cs_emit(&cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
+         tu_cs_emit_qw(&cs, tess_param_iova);
+         tu_cs_emit_qw(&cs, tess_factor_iova);
+      }
 
-      tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3 + 4);
-      tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(pipeline->tess.ds_bo_regid) |
-            CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-            CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-            CP_LOAD_STATE6_0_STATE_BLOCK(SB6_DS_SHADER) |
-            CP_LOAD_STATE6_0_NUM_UNIT(1));
-      tu_cs_emit(&cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
-      tu_cs_emit(&cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
-      tu_cs_emit_qw(&cs, tess_param_iova);
-      tu_cs_emit_qw(&cs, tess_factor_iova);
+      if (ds_uses_bo) {
+         tu_cs_emit_pkt7(&cs, CP_LOAD_STATE6_GEOM, 3 + 4);
+         tu_cs_emit(&cs, CP_LOAD_STATE6_0_DST_OFF(pipeline->tess.ds_bo_regid) |
+               CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+               CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
+               CP_LOAD_STATE6_0_STATE_BLOCK(SB6_DS_SHADER) |
+               CP_LOAD_STATE6_0_NUM_UNIT(1));
+         tu_cs_emit(&cs, CP_LOAD_STATE6_1_EXT_SRC_ADDR(0));
+         tu_cs_emit(&cs, CP_LOAD_STATE6_2_EXT_SRC_ADDR_HI(0));
+         tu_cs_emit_qw(&cs, tess_param_iova);
+         tu_cs_emit_qw(&cs, tess_factor_iova);
+      }
 
       *factor_iova = tess_factor_iova;
    }
@@ -3786,7 +3798,8 @@ struct tu_dispatch_info
 };
 
 static void
-tu_emit_compute_driver_params(struct tu_cs *cs, struct tu_pipeline *pipeline,
+tu_emit_compute_driver_params(struct tu_cmd_buffer *cmd,
+                              struct tu_cs *cs, struct tu_pipeline *pipeline,
                               const struct tu_dispatch_info *info)
 {
    gl_shader_stage type = MESA_SHADER_COMPUTE;
@@ -3799,17 +3812,16 @@ tu_emit_compute_driver_params(struct tu_cs *cs, struct tu_pipeline *pipeline,
       return;
 
    if (!info->indirect) {
-      uint32_t driver_params[IR3_DP_CS_COUNT] = {
+      uint32_t driver_params[4] = {
          [IR3_DP_NUM_WORK_GROUPS_X] = info->blocks[0],
          [IR3_DP_NUM_WORK_GROUPS_Y] = info->blocks[1],
          [IR3_DP_NUM_WORK_GROUPS_Z] = info->blocks[2],
-         [IR3_DP_LOCAL_GROUP_SIZE_X] = pipeline->compute.local_size[0],
-         [IR3_DP_LOCAL_GROUP_SIZE_Y] = pipeline->compute.local_size[1],
-         [IR3_DP_LOCAL_GROUP_SIZE_Z] = pipeline->compute.local_size[2],
       };
 
       uint32_t num_consts = MIN2(const_state->num_driver_params,
                                  (link->constlen - offset) * 4);
+      assert(num_consts <= ARRAY_SIZE(driver_params));
+
       /* push constants */
       tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3 + num_consts);
       tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
@@ -3822,8 +3834,38 @@ tu_emit_compute_driver_params(struct tu_cs *cs, struct tu_pipeline *pipeline,
       uint32_t i;
       for (i = 0; i < num_consts; i++)
          tu_cs_emit(cs, driver_params[i]);
+   } else if (!(info->indirect_offset & 0xf)) {
+      tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
+      tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+                  CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                  CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+                  CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
+                  CP_LOAD_STATE6_0_NUM_UNIT(1));
+      tu_cs_emit_qw(cs, tu_buffer_iova(info->indirect) + info->indirect_offset);
    } else {
-      tu_finishme("Indirect driver params");
+      /* Vulkan guarantees only 4 byte alignment for indirect_offset.
+       * However, CP_LOAD_STATE.EXT_SRC_ADDR needs 16 byte alignment.
+       */
+
+      uint64_t indirect_iova = tu_buffer_iova(info->indirect) + info->indirect_offset;
+
+      for (uint32_t i = 0; i < 3; i++) {
+         tu_cs_emit_pkt7(cs, CP_MEM_TO_MEM, 5);
+         tu_cs_emit(cs, 0);
+         tu_cs_emit_qw(cs, global_iova(cmd, cs_indirect_xyz[i]));
+         tu_cs_emit_qw(cs, indirect_iova + i * 4);
+      }
+
+      tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+      tu6_emit_event_write(cmd, cs, CACHE_INVALIDATE);
+
+      tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
+      tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(offset) |
+                  CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
+                  CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
+                  CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
+                  CP_LOAD_STATE6_0_NUM_UNIT(1));
+      tu_cs_emit_qw(cs, global_iova(cmd, cs_indirect_xyz[0]));
    }
 }
 
@@ -3845,7 +3887,7 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
    tu_cs_emit_state_ib(cs,
          tu6_emit_consts(cmd, pipeline, descriptors_state, MESA_SHADER_COMPUTE));
 
-   tu_emit_compute_driver_params(cs, pipeline, info);
+   tu_emit_compute_driver_params(cmd, cs, pipeline, info);
 
    if (cmd->state.dirty & TU_CMD_DIRTY_COMPUTE_DESC_SETS_LOAD)
       tu_cs_emit_state_ib(cs, pipeline->load_state);

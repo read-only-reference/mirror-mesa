@@ -805,9 +805,11 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib, const struct ac_surf_config *
       surf_level->mode = RADEON_SURF_MODE_LINEAR_ALIGNED;
       break;
    case ADDR_TM_1D_TILED_THIN1:
+   case ADDR_TM_PRT_TILED_THIN1:
       surf_level->mode = RADEON_SURF_MODE_1D;
       break;
    case ADDR_TM_2D_TILED_THIN1:
+   case ADDR_TM_PRT_2D_TILED_THIN1:
       surf_level->mode = RADEON_SURF_MODE_2D;
       break;
    default:
@@ -818,6 +820,18 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib, const struct ac_surf_config *
       surf->u.legacy.stencil_tiling_index[level] = AddrSurfInfoOut->tileIndex;
    else
       surf->u.legacy.tiling_index[level] = AddrSurfInfoOut->tileIndex;
+
+   if (AddrSurfInfoIn->flags.prt) {
+      if (level == 0) {
+         surf->prt_tile_width = AddrSurfInfoOut->pitchAlign;
+         surf->prt_tile_height = AddrSurfInfoOut->heightAlign;
+      }
+      if (surf_level->nblk_x >= surf->prt_tile_width &&
+          surf_level->nblk_y >= surf->prt_tile_height) {
+         /* +1 because the current level is not in the miptail */
+         surf->first_mip_tail_level = level + 1;
+      }
+   }
 
    surf->surf_size = surf_level->offset + AddrSurfInfoOut->surfSize;
 
@@ -919,6 +933,7 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib, const struct ac_surf_config *
          surf->htile_size = AddrHtileOut->htileBytes;
          surf->htile_slice_size = AddrHtileOut->sliceSize;
          surf->htile_alignment = AddrHtileOut->baseAlign;
+         surf->num_htile_levels = level + 1;
       }
    }
 
@@ -1141,10 +1156,16 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *i
       AddrSurfInfoIn.tileMode = ADDR_TM_LINEAR_ALIGNED;
       break;
    case RADEON_SURF_MODE_1D:
-      AddrSurfInfoIn.tileMode = ADDR_TM_1D_TILED_THIN1;
+      if (surf->flags & RADEON_SURF_PRT)
+         AddrSurfInfoIn.tileMode = ADDR_TM_PRT_TILED_THIN1;
+      else
+         AddrSurfInfoIn.tileMode = ADDR_TM_1D_TILED_THIN1;
       break;
    case RADEON_SURF_MODE_2D:
-      AddrSurfInfoIn.tileMode = ADDR_TM_2D_TILED_THIN1;
+      if (surf->flags & RADEON_SURF_PRT)
+         AddrSurfInfoIn.tileMode = ADDR_TM_PRT_2D_TILED_THIN1;
+      else
+         AddrSurfInfoIn.tileMode = ADDR_TM_2D_TILED_THIN1;
       break;
    default:
       assert(0);
@@ -1189,6 +1210,7 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib, const struct radeon_info *i
    AddrSurfInfoIn.flags.display = get_display_flag(config, surf);
    AddrSurfInfoIn.flags.pow2Pad = config->info.levels > 1;
    AddrSurfInfoIn.flags.tcCompatible = (surf->flags & RADEON_SURF_TC_COMPATIBLE_HTILE) != 0;
+   AddrSurfInfoIn.flags.prt = (surf->flags & RADEON_SURF_PRT) != 0;
 
    /* Only degrade the tile mode for space if TC-compatible HTILE hasn't been
     * requested, because TC-compatible HTILE requires 2D tiling.
@@ -1523,6 +1545,15 @@ static int gfx9_get_preferred_swizzle_mode(ADDR_HANDLE addrlib, struct radeon_su
       sin.flags.fmask = 1;
    }
 
+   /* With PRT images we want to force 64 KiB block size so that the image
+    * created is consistent with the format properties returned in Vulkan
+    * independent of the image. */
+   if (sin.flags.prt) {
+      sin.forbiddenBlock.macroThin4KB = 1;
+      sin.forbiddenBlock.macroThick4KB = 1;
+      sin.forbiddenBlock.linear = 1;
+   }
+
    if (surf->flags & RADEON_SURF_FORCE_MICRO_TILE_MODE) {
       sin.forbiddenBlock.linear = 1;
 
@@ -1642,6 +1673,27 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
    if (ret != ADDR_OK)
       return ret;
 
+   if (in->flags.prt) {
+      surf->prt_tile_width = out.blockWidth;
+      surf->prt_tile_height = out.blockHeight;
+
+      for (surf->first_mip_tail_level = 0; surf->first_mip_tail_level < in->numMipLevels;
+           ++surf->first_mip_tail_level) {
+         if(mip_info[surf->first_mip_tail_level].pitch < out.blockWidth ||
+            mip_info[surf->first_mip_tail_level].height < out.blockHeight)
+            break;
+      }
+
+      for (unsigned i = 0; i < in->numMipLevels; i++) {
+         surf->u.gfx9.prt_level_offset[i] = mip_info[i].macroBlockOffset + mip_info[i].mipTailOffset;
+
+         if (info->chip_class >= GFX10)
+            surf->u.gfx9.prt_level_pitch[i] = mip_info[i].pitch;
+         else
+            surf->u.gfx9.prt_level_pitch[i] = out.mipChainPitch;
+      }
+   }
+
    if (in->flags.stencil) {
       surf->u.gfx9.stencil.swizzle_mode = in->swizzleMode;
       surf->u.gfx9.stencil.epitch =
@@ -1703,9 +1755,11 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
       /* HTILE */
       ADDR2_COMPUTE_HTILE_INFO_INPUT hin = {0};
       ADDR2_COMPUTE_HTILE_INFO_OUTPUT hout = {0};
+      ADDR2_META_MIP_INFO meta_mip_info[RADEON_SURF_MAX_LEVELS] = {0};
 
       hin.size = sizeof(ADDR2_COMPUTE_HTILE_INFO_INPUT);
       hout.size = sizeof(ADDR2_COMPUTE_HTILE_INFO_OUTPUT);
+      hout.pMipInfo = meta_mip_info;
 
       assert(in->flags.metaPipeUnaligned == 0);
       assert(in->flags.metaRbUnaligned == 0);
@@ -1727,6 +1781,24 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
       surf->htile_size = hout.htileBytes;
       surf->htile_slice_size = hout.sliceSize;
       surf->htile_alignment = hout.baseAlign;
+      surf->num_htile_levels = in->numMipLevels;
+
+      for (unsigned i = 0; i < in->numMipLevels; i++) {
+         surf->u.gfx9.htile_levels[i].offset = meta_mip_info[i].offset;
+         surf->u.gfx9.htile_levels[i].size = meta_mip_info[i].sliceSize;
+
+         if (meta_mip_info[i].inMiptail) {
+            /* GFX10 can only compress the first level
+             * in the mip tail.
+             */
+            surf->num_htile_levels = i + 1;
+            break;
+         }
+      }
+
+      if (!surf->num_htile_levels)
+         surf->htile_size = 0;
+
       return 0;
    }
 
@@ -1797,6 +1869,7 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
          surf->u.gfx9.dcc_block_height = dout.compressBlkHeight;
          surf->u.gfx9.dcc_block_depth = dout.compressBlkDepth;
          surf->dcc_size = dout.dccRamSize;
+         surf->dcc_slice_size = dout.dccRamSliceSize;
          surf->dcc_alignment = dout.dccRamBaseAlign;
          surf->num_dcc_levels = in->numMipLevels;
 
@@ -1823,6 +1896,9 @@ static int gfx9_compute_miptree(struct ac_addrlib *addrlib, const struct radeon_
           * - Flush TC L2 after rendering.
           */
          for (unsigned i = 0; i < in->numMipLevels; i++) {
+            surf->u.gfx9.dcc_levels[i].offset = meta_mip_info[i].offset;
+            surf->u.gfx9.dcc_levels[i].size = meta_mip_info[i].sliceSize;
+
             if (meta_mip_info[i].inMiptail) {
                /* GFX10 can only compress the first level
                 * in the mip tail.
@@ -2104,6 +2180,7 @@ static int gfx9_compute_surface(struct ac_addrlib *addrlib, const struct radeon_
    /* flags.texture currently refers to TC-compatible HTILE */
    AddrSurfInfoIn.flags.texture = is_color_surface || surf->flags & RADEON_SURF_TC_COMPATIBLE_HTILE;
    AddrSurfInfoIn.flags.opt4space = 1;
+   AddrSurfInfoIn.flags.prt = (surf->flags & RADEON_SURF_PRT) != 0;
 
    AddrSurfInfoIn.numMipLevels = config->info.levels;
    AddrSurfInfoIn.numSamples = MAX2(1, config->info.samples);
@@ -2904,7 +2981,7 @@ void ac_surface_print_info(FILE *out, const struct radeon_info *info,
       fprintf(out,
               "    Surf: size=%" PRIu64 ", slice_size=%" PRIu64 ", "
               "alignment=%u, swmode=%u, epitch=%u, pitch=%u, blk_w=%u, "
-              "blk_h=%u, bpe=%u, flags=0x%x\n",
+              "blk_h=%u, bpe=%u, flags=0x%"PRIx64"\n",
               surf->surf_size, surf->u.gfx9.surf_slice_size,
               surf->surf_alignment, surf->u.gfx9.surf.swizzle_mode,
               surf->u.gfx9.surf.epitch, surf->u.gfx9.surf_pitch,
@@ -2947,7 +3024,7 @@ void ac_surface_print_info(FILE *out, const struct radeon_info *info,
    } else {
       fprintf(out,
               "    Surf: size=%" PRIu64 ", alignment=%u, blk_w=%u, blk_h=%u, "
-              "bpe=%u, flags=0x%x\n",
+              "bpe=%u, flags=0x%"PRIx64"\n",
               surf->surf_size, surf->surf_alignment, surf->blk_w,
               surf->blk_h, surf->bpe, surf->flags);
 

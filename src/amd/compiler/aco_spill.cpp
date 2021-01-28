@@ -246,10 +246,10 @@ bool should_rematerialize(aco_ptr<Instruction>& instr)
    if (instr->format != Format::VOP1 && instr->format != Format::SOP1 && instr->format != Format::PSEUDO && instr->format != Format::SOPK)
       return false;
    /* TODO: pseudo-instruction rematerialization is only supported for p_create_vector/p_parallelcopy */
-   if (instr->format == Format::PSEUDO && instr->opcode != aco_opcode::p_create_vector &&
+   if (instr->isPseudo() && instr->opcode != aco_opcode::p_create_vector &&
        instr->opcode != aco_opcode::p_parallelcopy)
       return false;
-   if (instr->format == Format::SOPK && instr->opcode != aco_opcode::s_movk_i32)
+   if (instr->isSOPK() && instr->opcode != aco_opcode::s_movk_i32)
       return false;
 
    for (const Operand& op : instr->operands) {
@@ -270,20 +270,20 @@ aco_ptr<Instruction> do_reload(spill_ctx& ctx, Temp tmp, Temp new_name, uint32_t
    std::map<Temp, remat_info>::iterator remat = ctx.remat.find(tmp);
    if (remat != ctx.remat.end()) {
       Instruction *instr = remat->second.instr;
-      assert((instr->format == Format::VOP1 || instr->format == Format::SOP1 || instr->format == Format::PSEUDO || instr->format == Format::SOPK) && "unsupported");
+      assert((instr->isVOP1() || instr->isSOP1() || instr->isPseudo() || instr->isSOPK()) && "unsupported");
       assert((instr->format != Format::PSEUDO || instr->opcode == aco_opcode::p_create_vector || instr->opcode == aco_opcode::p_parallelcopy) && "unsupported");
       assert(instr->definitions.size() == 1 && "unsupported");
 
       aco_ptr<Instruction> res;
-      if (instr->format == Format::VOP1) {
+      if (instr->isVOP1()) {
          res.reset(create_instruction<VOP1_instruction>(instr->opcode, instr->format, instr->operands.size(), instr->definitions.size()));
-      } else if (instr->format == Format::SOP1) {
+      } else if (instr->isSOP1()) {
          res.reset(create_instruction<SOP1_instruction>(instr->opcode, instr->format, instr->operands.size(), instr->definitions.size()));
-      } else if (instr->format == Format::PSEUDO) {
+      } else if (instr->isPseudo()) {
          res.reset(create_instruction<Pseudo_instruction>(instr->opcode, instr->format, instr->operands.size(), instr->definitions.size()));
-      } else if (instr->format == Format::SOPK) {
+      } else if (instr->isSOPK()) {
          res.reset(create_instruction<SOPK_instruction>(instr->opcode, instr->format, instr->operands.size(), instr->definitions.size()));
-         static_cast<SOPK_instruction*>(res.get())->imm = static_cast<SOPK_instruction*>(instr)->imm;
+         res->sopk().imm = instr->sopk().imm;
       }
       for (unsigned i = 0; i < instr->operands.size(); i++) {
          res->operands[i] = instr->operands[i];
@@ -384,26 +384,28 @@ RegisterDemand init_live_in_vars(spill_ctx& ctx, Block* block, unsigned block_id
       }
       unsigned loop_end = i;
 
-      /* keep live-through spilled */
-      for (std::pair<Temp, std::pair<uint32_t, uint32_t>> pair : ctx.next_use_distances_end[block_idx - 1]) {
-         if (pair.second.first < loop_end)
+      for (auto spilled : ctx.spills_exit[block_idx - 1]) {
+         auto map = ctx.next_use_distances_end[block_idx - 1];
+         auto it = map.find(spilled.first);
+
+         /* variable is not even live at the predecessor: probably from a phi */
+         if (it == map.end())
             continue;
 
-         Temp to_spill = pair.first;
-         auto it = ctx.spills_exit[block_idx - 1].find(to_spill);
-         if (it == ctx.spills_exit[block_idx - 1].end())
-            continue;
-
-         ctx.spills_entry[block_idx][to_spill] = it->second;
-         spilled_registers += to_spill;
+         /* keep constants and live-through variables spilled */
+         if (it->second.first >= loop_end || ctx.remat.count(spilled.first)) {
+            ctx.spills_entry[block_idx][spilled.first] = spilled.second;
+            spilled_registers += spilled.first;
+         }
       }
 
-      /* select live-through vgpr variables */
+      /* select live-through vgpr variables and constants */
       while (new_demand.vgpr - spilled_registers.vgpr > ctx.target_pressure.vgpr) {
          unsigned distance = 0;
          Temp to_spill;
          for (std::pair<Temp, std::pair<uint32_t, uint32_t>> pair : ctx.next_use_distances_end[block_idx - 1]) {
             if (pair.first.type() == RegType::vgpr &&
+                (pair.second.first >= loop_end || ctx.remat.count(pair.first)) &&
                 pair.second.first >= loop_end &&
                 pair.second.second > distance &&
                 ctx.spills_entry[block_idx].find(pair.first) == ctx.spills_entry[block_idx].end()) {
@@ -425,13 +427,13 @@ RegisterDemand init_live_in_vars(spill_ctx& ctx, Block* block, unsigned block_id
          spilled_registers.vgpr += to_spill.size();
       }
 
-      /* select live-through sgpr variables */
+      /* select live-through sgpr variables and constants */
       while (new_demand.sgpr - spilled_registers.sgpr > ctx.target_pressure.sgpr) {
          unsigned distance = 0;
          Temp to_spill;
          for (std::pair<Temp, std::pair<uint32_t, uint32_t>> pair : ctx.next_use_distances_end[block_idx - 1]) {
             if (pair.first.type() == RegType::sgpr &&
-                pair.second.first >= loop_end &&
+                (pair.second.first >= loop_end || ctx.remat.count(pair.first)) &&
                 pair.second.second > distance &&
                 ctx.spills_entry[block_idx].find(pair.first) == ctx.spills_entry[block_idx].end()) {
                to_spill = pair.first;
@@ -1587,11 +1589,11 @@ void assign_spill_slots(spill_ctx& ctx, unsigned spills_to_vgpr) {
                   bld.insert(split);
                   for (unsigned i = 0; i < temp.size(); i++) {
                      Instruction *instr = bld.mubuf(opcode, scratch_rsrc, Operand(v1), scratch_offset, split->definitions[i].getTemp(), offset + i * 4, false, true);
-                     static_cast<MUBUF_instruction *>(instr)->sync = memory_sync_info(storage_vgpr_spill, semantic_private);
+                     instr->mubuf().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
                   }
                } else {
                   Instruction *instr = bld.mubuf(opcode, scratch_rsrc, Operand(v1), scratch_offset, temp, offset, false, true);
-                  static_cast<MUBUF_instruction *>(instr)->sync = memory_sync_info(storage_vgpr_spill, semantic_private);
+                  instr->mubuf().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
                }
             } else {
                ctx.program->config->spilled_sgprs += (*it)->operands[0].size();
@@ -1656,12 +1658,12 @@ void assign_spill_slots(spill_ctx& ctx, unsigned spills_to_vgpr) {
                      Temp tmp = bld.tmp(v1);
                      vec->operands[i] = Operand(tmp);
                      Instruction *instr = bld.mubuf(opcode, Definition(tmp), scratch_rsrc, Operand(v1), scratch_offset, offset + i * 4, false, true);
-                     static_cast<MUBUF_instruction *>(instr)->sync = memory_sync_info(storage_vgpr_spill, semantic_private);
+                     instr->mubuf().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
                   }
                   bld.insert(vec);
                } else {
                   Instruction *instr = bld.mubuf(opcode, def, scratch_rsrc, Operand(v1), scratch_offset, offset, false, true);
-                  static_cast<MUBUF_instruction *>(instr)->sync = memory_sync_info(storage_vgpr_spill, semantic_private);
+                  instr->mubuf().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
                }
             } else {
                uint32_t spill_slot = slots[spill_id];

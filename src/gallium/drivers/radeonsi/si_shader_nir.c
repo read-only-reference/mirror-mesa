@@ -266,6 +266,37 @@ static void scan_instruction(const struct nir_shader *nir, struct si_shader_info
          unsigned index = intr->intrinsic == nir_intrinsic_load_color1;
          uint8_t mask = nir_ssa_def_components_read(&intr->dest.ssa);
          info->colors_read |= mask << (index * 4);
+
+         switch (info->color_interpolate[index]) {
+         case INTERP_MODE_SMOOTH:
+            if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_SAMPLE)
+               info->uses_persp_sample = true;
+            else if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_CENTROID)
+               info->uses_persp_centroid = true;
+            else if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_CENTER)
+               info->uses_persp_center = true;
+            break;
+         case INTERP_MODE_NOPERSPECTIVE:
+            if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_SAMPLE)
+               info->uses_linear_sample = true;
+            else if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_CENTROID)
+               info->uses_linear_centroid = true;
+            else if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_CENTER)
+               info->uses_linear_center = true;
+            break;
+         case INTERP_MODE_COLOR:
+            /* We don't know the final value. This will be FLAT if flatshading is enabled
+             * in the rasterizer state, otherwise it will be SMOOTH.
+             */
+            info->uses_interp_color = true;
+            if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_SAMPLE)
+               info->uses_persp_sample_color = true;
+            else if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_CENTROID)
+               info->uses_persp_centroid_color = true;
+            else if (info->color_interpolate_loc[index] == TGSI_INTERPOLATE_LOC_CENTER)
+               info->uses_persp_center_color = true;
+            break;
+         }
          break;
       }
       case nir_intrinsic_load_barycentric_at_offset:   /* uses center */
@@ -343,28 +374,28 @@ void si_nir_scan_shader(const struct nir_shader *nir, struct si_shader_info *inf
       info->tessfactors_are_def_in_all_invocs = ac_are_tessfactors_def_in_all_invocs(nir);
    }
 
-   info->uses_frontface = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_FRONT_FACE);
-   info->uses_instanceid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID);
-   info->uses_base_vertex = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX);
-   info->uses_base_instance = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE);
-   info->uses_invocationid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_INVOCATION_ID);
-   info->uses_grid_size = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_NUM_WORK_GROUPS);
-   info->uses_subgroup_info = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_LOCAL_INVOCATION_INDEX) ||
-                              nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_SUBGROUP_ID) ||
-                              nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_NUM_SUBGROUPS);
-   info->uses_variable_block_size = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_LOCAL_GROUP_SIZE);
-   info->uses_drawid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_DRAW_ID);
-   info->uses_primid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_PRIMITIVE_ID) ||
+   info->uses_frontface = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FRONT_FACE);
+   info->uses_instanceid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID);
+   info->uses_base_vertex = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BASE_VERTEX);
+   info->uses_base_instance = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE);
+   info->uses_invocationid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_INVOCATION_ID);
+   info->uses_grid_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_NUM_WORK_GROUPS);
+   info->uses_subgroup_info = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_LOCAL_INVOCATION_INDEX) ||
+                              BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SUBGROUP_ID) ||
+                              BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_NUM_SUBGROUPS);
+   info->uses_variable_block_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_LOCAL_GROUP_SIZE);
+   info->uses_drawid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_DRAW_ID);
+   info->uses_primid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID) ||
                        nir->info.inputs_read & VARYING_BIT_PRIMITIVE_ID;
-   info->reads_samplemask = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_SAMPLE_MASK_IN);
-   info->reads_tess_factors = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_TESS_LEVEL_INNER) ||
-                              nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_TESS_LEVEL_OUTER);
-   info->uses_linear_sample = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE);
-   info->uses_linear_centroid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID);
-   info->uses_linear_center = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BARYCENTRIC_LINEAR_PIXEL);
-   info->uses_persp_sample = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BARYCENTRIC_PERSP_SAMPLE);
-   info->uses_persp_centroid = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID);
-   info->uses_persp_center = nir->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL);
+   info->reads_samplemask = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_MASK_IN);
+   info->reads_tess_factors = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_TESS_LEVEL_INNER) ||
+                              BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_TESS_LEVEL_OUTER);
+   info->uses_linear_sample = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE);
+   info->uses_linear_centroid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID);
+   info->uses_linear_center = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_LINEAR_PIXEL);
+   info->uses_persp_sample = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_PERSP_SAMPLE);
+   info->uses_persp_centroid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID);
+   info->uses_persp_center = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL);
 
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       info->writes_z = nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH);
@@ -394,6 +425,21 @@ void si_nir_scan_shader(const struct nir_shader *nir, struct si_shader_info *inf
    nir_foreach_block (block, func->impl) {
       nir_foreach_instr (instr, block)
          scan_instruction(nir, info, instr);
+   }
+
+   if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      info->allow_flat_shading = !(info->uses_persp_center || info->uses_persp_centroid ||
+                                   info->uses_persp_sample || info->uses_linear_center ||
+                                   info->uses_linear_centroid || info->uses_linear_sample ||
+                                   info->uses_interp_at_sample || nir->info.writes_memory ||
+                                   nir->info.fs.uses_fbfetch_output ||
+                                   nir->info.fs.needs_quad_helper_invocations ||
+                                   BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FRAG_COORD) ||
+                                   BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_POINT_COORD) ||
+                                   BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_ID) ||
+                                   BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_POS) ||
+                                   BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_MASK_IN) ||
+                                   BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_HELPER_INVOCATION));
    }
 
    /* Add color inputs to the list of inputs. */

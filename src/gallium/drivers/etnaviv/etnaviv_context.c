@@ -228,6 +228,20 @@ etna_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
               const struct pipe_draw_start_count *draws,
               unsigned num_draws)
 {
+   if (num_draws > 1) {
+      struct pipe_draw_info tmp_info = *info;
+
+      for (unsigned i = 0; i < num_draws; i++) {
+         etna_draw_vbo(pctx, &tmp_info, indirect, &draws[i], 1);
+         if (tmp_info.increment_draw_id)
+            tmp_info.drawid++;
+      }
+      return;
+   }
+
+   if (!indirect && (!draws[0].count || !info->instance_count))
+      return;
+
    struct etna_context *ctx = etna_context(pctx);
    struct etna_screen *screen = ctx->screen;
    struct pipe_framebuffer_state *pfb = &ctx->framebuffer_s;

@@ -173,10 +173,6 @@ if [ -n "$INSTALL_KERNEL_MODULES" ]; then
     sed -i 's/=m/=n/g' ${DEFCONFIG}
 fi
 
-# Force db410c to host mode instead of OTG (which is otherwise selected by
-# default due to our micro cable for fastboot)
-sed -i 's/dr_mode = "otg"/dr_mode = "host"/' arch/arm64/boot/dts/qcom/apq8016-sbc.dtsi
-
 ./scripts/kconfig/merge_config.sh ${DEFCONFIG} ../.gitlab-ci/${KERNEL_ARCH}.config
 make ${KERNEL_IMAGE_NAME}
 for image in ${KERNEL_IMAGE_NAME}; do
@@ -243,7 +239,7 @@ rm -rf /libdrm
 
 du -ah /lava-files/rootfs-${DEBIAN_ARCH} | sort -h | tail -100
 pushd /lava-files/rootfs-${DEBIAN_ARCH}
-  tar cvzf /lava-files/lava-rootfs.tgz .
+  tar czf /lava-files/lava-rootfs.tgz .
 popd
 
 if [ ${DEBIAN_ARCH} = arm64 ]; then

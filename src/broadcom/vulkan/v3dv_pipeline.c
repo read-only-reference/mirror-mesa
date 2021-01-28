@@ -205,6 +205,7 @@ static const struct spirv_to_nir_options default_spirv_options =  {
 };
 
 const nir_shader_compiler_options v3dv_nir_options = {
+   .lower_add_sat = true,
    .lower_all_io_to_temps = true,
    .lower_extract_byte = true,
    .lower_extract_word = true,
@@ -250,6 +251,8 @@ const nir_shader_compiler_options v3dv_nir_options = {
    .lower_wpos_pntc = true,
    .lower_rotate = true,
    .lower_to_scalar = true,
+   .has_fsub = true,
+   .has_isub = true,
    .vertex_id_zero_based = false, /* FIXME: to set this to true, the intrinsic
                                    * needs to be supported */
    .lower_interpolate_at = true,
@@ -744,7 +747,7 @@ lower_sampler(nir_builder *b, nir_tex_instr *instr,
               struct v3dv_pipeline *pipeline,
               const struct v3dv_pipeline_layout *layout)
 {
-   uint8_t return_size;
+   uint8_t return_size = 0;
 
    int texture_idx =
       nir_tex_instr_src_index(instr, nir_tex_src_texture_deref);
@@ -2332,6 +2335,8 @@ pack_cfg_bits(struct v3dv_pipeline *pipeline,
 
       config.stencil_enable =
          ds_info ? ds_info->stencilTestEnable && has_ds_attachment: false;
+
+      pipeline->z_updates_enable = config.z_updates_enable;
    };
 }
 

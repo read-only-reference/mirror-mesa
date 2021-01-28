@@ -59,6 +59,7 @@ EXTENSIONS = [
     Extension('VK_KHR_copy_commands2',                    1, True),
     Extension('VK_KHR_create_renderpass2',                1, True),
     Extension('VK_KHR_dedicated_allocation',              3, True),
+    Extension('VK_KHR_deferred_host_operations',          1, True),
     Extension('VK_KHR_depth_stencil_resolve',             1, True),
     Extension('VK_KHR_descriptor_update_template',        1, True),
     Extension('VK_KHR_device_group',                      4, True),
@@ -90,7 +91,7 @@ EXTENSIONS = [
     Extension('VK_KHR_multiview',                         1, True),
     Extension('VK_KHR_performance_query',                 1,
               'device->use_softpin && device->perf && ' +
-              'device->perf->i915_perf_version >= 3 && ' +
+              '(device->perf->i915_perf_version >= 3 || INTEL_DEBUG & DEBUG_NO_OACONFIG) && ' +
               'device->use_call_secondary'),
     Extension('VK_KHR_pipeline_executable_properties',    1, True),
     Extension('VK_KHR_push_descriptor',                   2, True),
@@ -118,6 +119,7 @@ EXTENSIONS = [
     Extension('VK_KHR_variable_pointers',                 1, True),
     Extension('VK_KHR_vulkan_memory_model',               3, True),
     Extension('VK_KHR_wayland_surface',                   6, 'VK_USE_PLATFORM_WAYLAND_KHR'),
+    Extension('VK_KHR_workgroup_memory_explicit_layout',  1, True),
     Extension('VK_KHR_xcb_surface',                       6, 'VK_USE_PLATFORM_XCB_KHR'),
     Extension('VK_KHR_xlib_surface',                      6, 'VK_USE_PLATFORM_XLIB_KHR'),
     Extension('VK_EXT_4444_formats',                      1, True),
@@ -153,6 +155,7 @@ EXTENSIONS = [
     Extension('VK_EXT_private_data',                      1, True),
     Extension('VK_EXT_queue_family_foreign',              1, 'ANDROID'),
     Extension('VK_EXT_robustness2',                       1, True),
+    Extension('VK_EXT_sample_locations',                  1, True),
     Extension('VK_EXT_sampler_filter_minmax',             2, 'device->info.gen >= 9'),
     Extension('VK_EXT_scalar_block_layout',               1, True),
     Extension('VK_EXT_separate_stencil_usage',            1, True),

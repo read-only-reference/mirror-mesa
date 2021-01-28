@@ -1,10 +1,18 @@
 # This file list source dependencies to avoid creating/running jobs
 # those outcome cannot be changed by the modifications from a branch.
 
+# Generic rule to not run the job during scheduled pipelines
+# ----------------------------------------------------------
+.scheduled_pipelines-rules:
+  rules: &ignore_scheduled_pipelines
+    if: '$CI_PIPELINE_SOURCE == "schedule"'
+    when: never
+
 # Mesa core source file dependencies
 # ----------------------------------
 .mesa-rules:
   rules:
+    - *ignore_scheduled_pipelines
     - changes: &mesa_core_file_list
       - .gitlab-ci.yml
       - .gitlab-ci/**/*
@@ -22,13 +30,30 @@
       - src/include/**/*
       - src/loader/**/*
       - src/mapi/**/*
-      - src/mesa/**/*
+      - src/mesa/*
+      - src/mesa/drivers/*
+      - src/mesa/drivers/common/**/*
+      - src/mesa/drivers/dri/*
+      - src/mesa/drivers/dri/common/**/*
+      - src/mesa/main/**/*
+      - src/mesa/math/**/*
+      - src/mesa/program/**/*
+      - src/mesa/sparc/**/*
+      - src/mesa/state_tracker/**/*
+      - src/mesa/swrast/**/*
+      - src/mesa/swrast_setup/**/*
+      - src/mesa/tnl/**/*
+      - src/mesa/tnl_dd/**/*
+      - src/mesa/vbo/**/*
+      - src/mesa/x86/**/*
+      - src/mesa/x86-64/**/*
       - src/util/**/*
 
 # Gallium core source file dependencies
 # -------------------------------------
 .gallium-rules:
   rules:
+    - *ignore_scheduled_pipelines
     - changes: &gallium_core_file_list
       - src/gallium/*
       - src/gallium/auxiliary/**/*
@@ -38,13 +63,6 @@
       - src/gallium/targets/**/*
       - src/gallium/tests/**/*
       - src/gallium/winsys/*
-
-# Generic rule to not run the job during scheduled pipelines
-# ----------------------------------------------------------
-.scheduled_pipelines-rules:
-  rules: &ignore_scheduled_pipelines
-    if: '$CI_PIPELINE_SOURCE == "schedule"'
-    when: never
 
 .softpipe-rules:
   stage: software-renderer
@@ -74,6 +92,7 @@
       when: on_success
     - changes: &llvmpipe_file_list
       - src/gallium/drivers/llvmpipe/**/*
+      - src/gallium/frontends/lavapipe/**/*
       - src/gallium/winsys/sw/**/*
       when: on_success
     - when: never
@@ -148,7 +167,7 @@
     - when: never
 
 .vc4-rules:
-  stage: raspberrypi
+  stage: broadcom
   rules:
     - *ignore_scheduled_pipelines
     - changes:
@@ -238,6 +257,7 @@
 # rules duplication manually
 .windows-build-rules:
   rules:
+    - *ignore_scheduled_pipelines
     - changes: 
         *mesa_core_file_list
       when: on_success

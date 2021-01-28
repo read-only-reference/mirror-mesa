@@ -5,6 +5,8 @@ set -o xtrace
 
 ROOTFS=/lava-files/rootfs-${arch}
 
+INCLUDE_PIGLIT=1
+
 dpkg --add-architecture $arch
 apt-get update
 
@@ -28,6 +30,7 @@ BAREMETAL_EPHEMERAL=" \
         libpython3-dev:$arch \
         libstdc++6:$arch \
         libtinfo-dev:$arch \
+        libudev-dev:$arch \
         libvulkan-dev:$arch \
         libwaffle-dev:$arch \
         libxcb-keysyms1-dev:$arch \
@@ -49,7 +52,7 @@ mkdir /var/cache/apt/archives/$arch
 . .gitlab-ci/container/container_pre_build.sh
 
 ############### Create rootfs
-KERNEL_URL=https://github.com/anholt/linux/archive/cheza-pagetables-2020-09-04.tar.gz
+KERNEL_URL=https://github.com/anholt/linux/archive/mesa-ci-2021-01-27-5.11rc5.tar.gz
 
 DEBIAN_ARCH=$arch INCLUDE_VK_CTS=1 . .gitlab-ci/container/lava_build.sh
 

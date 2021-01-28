@@ -796,8 +796,6 @@ static void si_dump_descriptors(struct si_context *sctx, gl_shader_stage stage,
    } else {
       enabled_constbuf =
          sctx->const_and_shader_buffers[processor].enabled_mask >> SI_NUM_SHADER_BUFFERS;
-      enabled_shaderbuf = sctx->const_and_shader_buffers[processor].enabled_mask &
-                          u_bit_consecutive64(0, SI_NUM_SHADER_BUFFERS);
       enabled_shaderbuf = 0;
       for (int i = 0; i < SI_NUM_SHADER_BUFFERS; i++) {
          enabled_shaderbuf |=
@@ -809,7 +807,7 @@ static void si_dump_descriptors(struct si_context *sctx, gl_shader_stage stage,
    }
 
    if (stage == MESA_SHADER_VERTEX && sctx->vb_descriptors_buffer &&
-       sctx->vb_descriptors_gpu_list && sctx->vertex_elements) {
+       sctx->vb_descriptors_gpu_list) {
       assert(info); /* only CS may not have an info struct */
       struct si_descriptors desc = {};
 
@@ -1091,8 +1089,8 @@ void si_log_draw_state(struct si_context *sctx, struct u_log_context *log)
    si_dump_gfx_shader(sctx, &sctx->gs_shader, log);
    si_dump_gfx_shader(sctx, &sctx->ps_shader, log);
 
-   si_dump_descriptor_list(sctx->screen, &sctx->descriptors[SI_DESCS_RW_BUFFERS], "", "RW buffers",
-                           4, sctx->descriptors[SI_DESCS_RW_BUFFERS].num_active_slots, si_identity,
+   si_dump_descriptor_list(sctx->screen, &sctx->descriptors[SI_DESCS_INTERNAL], "", "RW buffers",
+                           4, sctx->descriptors[SI_DESCS_INTERNAL].num_active_slots, si_identity,
                            log);
    si_dump_gfx_descriptors(sctx, &sctx->vs_shader, log);
    si_dump_gfx_descriptors(sctx, tcs_shader, log);

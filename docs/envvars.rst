@@ -568,6 +568,9 @@ RADV driver environment variables
       Print image info
    ``info``
       show GPU-related information
+   ``invariantgeom``
+      Mark geometry-affecting outputs as invariant. This works around a common
+      class of application bugs appearing as flickering.
    ``metashaders``
       dump internal meta shaders
    ``nobinning``
@@ -631,6 +634,8 @@ RADV driver environment variables
       enable wave32 for vertex/tess/geometry shaders (GFX10+)
    ``localbos``
       enable local BOs
+   ``nosam``
+      disable optimizations that get enabled when all VRAM is CPU visible.
    ``pswave32``
       enable wave32 for pixel shaders (GFX10+)
    ``tccompatcmask``

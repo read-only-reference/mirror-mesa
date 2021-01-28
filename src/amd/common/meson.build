@@ -80,6 +80,10 @@ amd_common_files = files(
   'ac_debug.h',
   'ac_shadowed_regs.c',
   'ac_shadowed_regs.h',
+  'ac_sqtt.c',
+  'ac_sqtt.h',
+  'ac_rgp.c',
+  'ac_rgp.h',
 )
 
 libamd_common = static_library(

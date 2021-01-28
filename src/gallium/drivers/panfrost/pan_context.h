@@ -156,6 +156,9 @@ struct panfrost_context {
         struct pipe_shader_buffer ssbo[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
         uint32_t ssbo_mask[PIPE_SHADER_TYPES];
 
+        struct pipe_image_view images[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_IMAGES];
+        uint32_t image_mask[PIPE_SHADER_TYPES];
+
         struct panfrost_sampler_state *samplers[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
         unsigned sampler_count[PIPE_SHADER_TYPES];
 
@@ -177,6 +180,12 @@ struct panfrost_context {
 
         struct panfrost_blend_state *blit_blend;
         struct hash_table *blend_shaders;
+
+        struct panfrost_query *cond_query;
+        bool cond_cond;
+        enum pipe_render_cond_flag cond_mode;
+
+        bool is_noop;
 };
 
 /* Corresponds to the CSO */
@@ -278,6 +287,7 @@ struct panfrost_vertex_state {
 
 struct panfrost_zsa_state {
         struct pipe_depth_stencil_alpha_state base;
+        enum mali_func alpha_func;
 
         /* Precomputed stencil state */
         struct MALI_STENCIL stencil_front;
@@ -339,6 +349,9 @@ panfrost_flush(
         struct pipe_context *pipe,
         struct pipe_fence_handle **fence,
         unsigned flags);
+
+bool
+pan_render_condition_check(struct pipe_context *pctx);
 
 mali_ptr panfrost_sfbd_fragment(struct panfrost_batch *batch, bool has_draws);
 mali_ptr panfrost_mfbd_fragment(struct panfrost_batch *batch, bool has_draws);

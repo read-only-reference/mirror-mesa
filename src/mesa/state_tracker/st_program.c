@@ -40,6 +40,7 @@
 #include "program/prog_to_nir.h"
 #include "program/programopt.h"
 
+#include "compiler/glsl/gl_nir.h"
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_serialize.h"
 #include "draw/draw_context.h"
@@ -390,7 +391,7 @@ st_prog_to_nir_postprocess(struct st_context *st, nir_shader *nir,
    st_finalize_nir_before_variants(nir);
 
    if (st->allow_st_finalize_nir_twice)
-      st_finalize_nir(st, prog, NULL, nir, true);
+      st_finalize_nir(st, prog, NULL, nir, true, true);
 
    nir_validate_shader(nir, "after st/glsl finalize_nir");
 }
@@ -487,6 +488,72 @@ st_translate_stream_output_info(struct gl_program *prog)
       so_info->stride[i] = info->Buffers[i].Stride;
    }
    so_info->num_outputs = info->NumOutputs;
+}
+
+/**
+ * Creates a driver shader from a NIR shader.  Takes ownership of the
+ * passed nir_shader.
+ */
+struct pipe_shader_state *
+st_create_nir_shader(struct st_context *st, struct pipe_shader_state *state)
+{
+   struct pipe_context *pipe = st->pipe;
+   struct pipe_screen *screen = st->screen;
+
+   assert(state->type == PIPE_SHADER_IR_NIR);
+   nir_shader *nir = state->ir.nir;
+   gl_shader_stage stage = nir->info.stage;
+   enum pipe_shader_type sh = pipe_shader_type_from_mesa(stage);
+
+   if (ST_DEBUG & DEBUG_PRINT_IR) {
+      fprintf(stderr, "NIR before handing off to driver:\n");
+      nir_print_shader(nir, stderr);
+   }
+
+   if (PIPE_SHADER_IR_NIR !=
+       screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_PREFERRED_IR)) {
+      /* u_screen.c defaults to images as deref enabled for some reason (which
+       * is what radeonsi wants), but nir-to-tgsi requires lowered images.
+       */
+      if (screen->get_param(screen, PIPE_CAP_NIR_IMAGES_AS_DEREF))
+         NIR_PASS_V(nir, gl_nir_lower_images, false);
+
+      state->type = PIPE_SHADER_IR_TGSI;
+      state->tokens = nir_to_tgsi(nir, screen);
+
+      if (ST_DEBUG & DEBUG_PRINT_IR) {
+         fprintf(stderr, "TGSI for driver after nir-to-tgsi:\n");
+         tgsi_dump(state->tokens, 0);
+         fprintf(stderr, "\n");
+      }
+   }
+
+   struct pipe_shader_state *shader;
+   switch (stage) {
+   case MESA_SHADER_VERTEX:
+      shader = pipe->create_vs_state(pipe, state);
+      break;
+   case MESA_SHADER_TESS_CTRL:
+      shader = pipe->create_tcs_state(pipe, state);
+      break;
+   case MESA_SHADER_TESS_EVAL:
+      shader = pipe->create_tes_state(pipe, state);
+      break;
+   case MESA_SHADER_GEOMETRY:
+      shader = pipe->create_gs_state(pipe, state);
+      break;
+   case MESA_SHADER_FRAGMENT:
+      shader = pipe->create_fs_state(pipe, state);
+      break;
+   default:
+      unreachable("unsupported shader stage");
+      return NULL;
+   }
+
+   if (state->type == PIPE_SHADER_IR_TGSI)
+      tgsi_free_tokens(state->tokens);
+
+   return shader;
 }
 
 /**
@@ -649,9 +716,8 @@ lower_ucp(struct st_context *st,
             clipplane_state[i][0] = STATE_CLIPPLANE;
             clipplane_state[i][1] = i;
          } else {
-            clipplane_state[i][0] = STATE_INTERNAL;
-            clipplane_state[i][1] = STATE_CLIP_INTERNAL;
-            clipplane_state[i][2] = i;
+            clipplane_state[i][0] = STATE_CLIP_INTERNAL;
+            clipplane_state[i][1] = i;
          }
          _mesa_add_state_reference(params, clipplane_state[i]);
       }
@@ -683,7 +749,7 @@ st_create_vp_variant(struct st_context *st,
    struct pipe_shader_state state = {0};
 
    static const gl_state_index16 point_size_state[STATE_LENGTH] =
-      { STATE_INTERNAL, STATE_POINT_SIZE_CLAMPED, 0 };
+      { STATE_POINT_SIZE_CLAMPED, 0 };
    struct gl_program_parameter_list *params = stvp->Base.Parameters;
 
    vpv->key = *key;
@@ -719,31 +785,17 @@ st_create_vp_variant(struct st_context *st,
 
       if (finalize || !st->allow_st_finalize_nir_twice) {
          st_finalize_nir(st, &stvp->Base, stvp->shader_program, state.ir.nir,
-                         true);
+                         true, false);
 
          /* Some of the lowering above may have introduced new varyings */
          nir_shader_gather_info(state.ir.nir,
                                 nir_shader_get_entrypoint(state.ir.nir));
       }
 
-      if (ST_DEBUG & DEBUG_PRINT_IR)
-         nir_print_shader(state.ir.nir, stderr);
-
-      /* If the driver wants TGSI, then translate before handing off. */
-      if (st->pipe->screen->get_shader_param(st->pipe->screen,
-                                             PIPE_SHADER_VERTEX,
-                                             PIPE_SHADER_CAP_PREFERRED_IR) !=
-          PIPE_SHADER_IR_NIR) {
-         nir_shader *s = state.ir.nir;
-         state.tokens = nir_to_tgsi(s, st->pipe->screen);
-         state.type = PIPE_SHADER_IR_TGSI;
-         ralloc_free(s);
-      }
-
       if (key->is_draw_shader)
          vpv->base.driver_shader = draw_create_vertex_shader(st->draw, &state);
       else
-         vpv->base.driver_shader = pipe->create_vs_state(pipe, &state);
+         vpv->base.driver_shader = st_create_nir_shader(st, &state);
 
       return vpv;
    }
@@ -1176,13 +1228,13 @@ st_create_fp_variant(struct st_context *st,
    struct pipe_shader_state state = {0};
    struct gl_program_parameter_list *params = stfp->Base.Parameters;
    static const gl_state_index16 texcoord_state[STATE_LENGTH] =
-      { STATE_INTERNAL, STATE_CURRENT_ATTRIB, VERT_ATTRIB_TEX0 };
+      { STATE_CURRENT_ATTRIB, VERT_ATTRIB_TEX0 };
    static const gl_state_index16 scale_state[STATE_LENGTH] =
-      { STATE_INTERNAL, STATE_PT_SCALE };
+      { STATE_PT_SCALE };
    static const gl_state_index16 bias_state[STATE_LENGTH] =
-      { STATE_INTERNAL, STATE_PT_BIAS };
+      { STATE_PT_BIAS };
    static const gl_state_index16 alpha_ref_state[STATE_LENGTH] =
-      { STATE_INTERNAL, STATE_ALPHA_REF };
+      { STATE_ALPHA_REF };
 
    if (!variant)
       return NULL;
@@ -1236,6 +1288,13 @@ st_create_fp_variant(struct st_context *st,
           nir_foreach_shader_in_variable(var, shader)
              var->data.sample = true;
           finalize = true;
+      }
+
+      if (key->lower_texcoord_replace) {
+         bool point_coord_is_sysval = st->ctx->Const.GLSLPointCoordIsSysVal;
+         NIR_PASS_V(state.ir.nir, nir_lower_texcoord_replace,
+                    key->lower_texcoord_replace, point_coord_is_sysval);
+         finalize = true;
       }
 
       assert(!(key->bitmap && key->drawpixels));
@@ -1308,7 +1367,7 @@ st_create_fp_variant(struct st_context *st,
 
       if (finalize || !st->allow_st_finalize_nir_twice) {
          st_finalize_nir(st, &stfp->Base, stfp->shader_program, state.ir.nir,
-                         false);
+                         false, false);
       }
 
       /* This pass needs to happen *after* nir_lower_sampler */
@@ -1334,21 +1393,7 @@ st_create_fp_variant(struct st_context *st,
             screen->finalize_nir(screen, state.ir.nir, false);
       }
 
-      if (ST_DEBUG & DEBUG_PRINT_IR)
-         nir_print_shader(state.ir.nir, stderr);
-
-      /* If the driver wants TGSI, then translate before handing off. */
-      if (st->pipe->screen->get_shader_param(st->pipe->screen,
-                                             PIPE_SHADER_FRAGMENT,
-                                             PIPE_SHADER_CAP_PREFERRED_IR) !=
-          PIPE_SHADER_IR_NIR) {
-         nir_shader *s = state.ir.nir;
-         state.tokens = nir_to_tgsi(s, st->pipe->screen);
-         state.type = PIPE_SHADER_IR_TGSI;
-         ralloc_free(s);
-      }
-
-      variant->base.driver_shader = pipe->create_fs_state(pipe, &state);
+      variant->base.driver_shader = st_create_nir_shader(st, &state);
       variant->key = *key;
 
       return variant;
@@ -1709,7 +1754,7 @@ st_get_common_variant(struct st_context *st,
 
             if (key->lower_point_size) {
                static const gl_state_index16 point_size_state[STATE_LENGTH] =
-                  { STATE_INTERNAL, STATE_POINT_SIZE_CLAMPED, 0 };
+                  { STATE_POINT_SIZE_CLAMPED, 0 };
                _mesa_add_state_reference(params, point_size_state);
                NIR_PASS_V(state.ir.nir, nir_lower_point_size_mov,
                           point_size_state);
@@ -1723,7 +1768,7 @@ st_get_common_variant(struct st_context *st,
 
             if (finalize || !st->allow_st_finalize_nir_twice) {
                st_finalize_nir(st, &prog->Base, prog->shader_program,
-                               state.ir.nir, true);
+                               state.ir.nir, true, false);
             }
 
             if (ST_DEBUG & DEBUG_PRINT_IR)

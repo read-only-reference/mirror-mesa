@@ -648,6 +648,7 @@ struct vtn_builder {
 
    const uint32_t *spirv;
    size_t spirv_word_count;
+   uint32_t version;
 
    nir_shader *shader;
    struct spirv_to_nir_options *options;
@@ -673,6 +674,13 @@ struct vtn_builder {
     * to the variable corresponding to it.
     */
    struct hash_table *phi_table;
+
+   /* In Vulkan, when lowering some modes variable access, the derefs of the
+    * variables are replaced with a resource index intrinsics, leaving the
+    * variable hanging.  This set keeps track of them so they can be filtered
+    * (and not removed) in nir_remove_dead_variables.
+    */
+   struct set *vars_used_indirectly;
 
    unsigned num_specializations;
    struct nir_spirv_specialization *specializations;
@@ -907,7 +915,7 @@ void vtn_foreach_execution_mode(struct vtn_builder *b, struct vtn_value *value,
                                 vtn_execution_mode_foreach_cb cb, void *data);
 
 nir_op vtn_nir_alu_op_for_spirv_opcode(struct vtn_builder *b,
-                                       SpvOp opcode, bool *swap,
+                                       SpvOp opcode, bool *swap, bool *exact,
                                        unsigned src_bit_size, unsigned dst_bit_size);
 
 void vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
@@ -915,6 +923,8 @@ void vtn_handle_alu(struct vtn_builder *b, SpvOp opcode,
 
 void vtn_handle_bitcast(struct vtn_builder *b, const uint32_t *w,
                         unsigned count);
+
+void vtn_handle_no_contraction(struct vtn_builder *b, struct vtn_value *val);
 
 void vtn_handle_subgroup(struct vtn_builder *b, SpvOp opcode,
                          const uint32_t *w, unsigned count);

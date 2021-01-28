@@ -131,6 +131,9 @@ panfrost_clear(
 {
         struct panfrost_context *ctx = pan_context(pipe);
 
+        if (!pan_render_condition_check(pipe))
+                return;
+
         /* TODO: panfrost_get_fresh_batch_for_fbo() instantiates a new batch if
          * the existing batch targeting this FBO has draws. We could probably
          * avoid that by replacing plain clears by quad-draws with a specific
@@ -180,6 +183,14 @@ panfrost_texture_barrier(struct pipe_context *pipe, unsigned flags)
 {
         struct panfrost_context *ctx = pan_context(pipe);
         panfrost_flush_all_batches(ctx);
+}
+
+static void
+panfrost_set_frontend_noop(struct pipe_context *pipe, bool enable)
+{
+        struct panfrost_context *ctx = pan_context(pipe);
+        panfrost_flush_all_batches(ctx);
+        ctx->is_noop = enable;
 }
 
 #define DEFINE_CASE(c) case PIPE_PRIM_##c: return MALI_DRAW_MODE_##c;
@@ -327,6 +338,14 @@ panfrost_emit_primitive_size(struct panfrost_context *ctx,
         }
 }
 
+static bool
+panfrost_is_implicit_prim_restart(const struct pipe_draw_info *info)
+{
+        unsigned implicit_index = (1 << (info->index_size * 8)) - 1;
+        bool implicit = info->restart_index == implicit_index;
+        return info->primitive_restart && implicit;
+}
+
 static void
 panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                          const struct pipe_draw_info *info,
@@ -366,8 +385,13 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                 else
                         cfg.first_provoking_vertex = rast->flatshade_first;
 
-                if (info->primitive_restart)
+                if (panfrost_is_implicit_prim_restart(info)) {
                         cfg.primitive_restart = MALI_PRIMITIVE_RESTART_IMPLICIT;
+                } else if (info->primitive_restart) {
+                        cfg.primitive_restart = MALI_PRIMITIVE_RESTART_EXPLICIT;
+                        cfg.primitive_restart_index = info->restart_index;
+                }
+
                 cfg.job_task_split = 6;
 
                 if (info->index_size) {
@@ -408,6 +432,7 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                 cfg.cull_back_face = rast->cull_face & PIPE_FACE_BACK;
                 cfg.position = pos;
                 cfg.state = panfrost_emit_frag_shader_meta(batch);
+                cfg.attributes = panfrost_emit_image_attribs(batch, &cfg.attribute_buffers, PIPE_SHADER_FRAGMENT);
                 cfg.viewport = panfrost_emit_viewport(batch);
                 cfg.varyings = fs_vary;
                 cfg.varying_buffers = fs_vary ? varyings : 0;
@@ -454,8 +479,25 @@ panfrost_draw_vbo(
       const struct pipe_draw_start_count *draws,
       unsigned num_draws)
 {
+	if (num_draws > 1) {
+           struct pipe_draw_info tmp_info = *info;
+
+           for (unsigned i = 0; i < num_draws; i++) {
+              panfrost_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
+              if (tmp_info.increment_draw_id)
+                 tmp_info.drawid++;
+           }
+           return;
+	}
+
+        if (!indirect && (!draws[0].count || !info->instance_count))
+           return;
+
         struct panfrost_context *ctx = pan_context(pipe);
         struct panfrost_device *device = pan_device(ctx->base.screen);
+
+        if (!pan_render_condition_check(pipe))
+                return;
 
         /* First of all, check the scissor to see if anything is drawn at all.
          * If it's not, we drop the draw (mostly a conformance issue;
@@ -465,15 +507,6 @@ panfrost_draw_vbo(
                 return;
 
         int mode = info->mode;
-
-        /* Fallback unsupported restart index */
-        unsigned primitive_index = (1 << (info->index_size * 8)) - 1;
-
-        if (info->primitive_restart && info->index_size
-            && info->restart_index != primitive_index) {
-                util_draw_vbo_without_prim_restart(pipe, info, indirect, &draws[0]);
-                return;
-        }
 
         /* Fallback for unsupported modes */
 
@@ -501,7 +534,7 @@ panfrost_draw_vbo(
         panfrost_batch_set_requirements(batch);
 
         /* Take into account a negative bias */
-        ctx->vertex_count = draws[0].count + abs(info->index_bias);
+        ctx->vertex_count = draws[0].count + (info->index_size ? abs(info->index_bias) : 0);
         ctx->instance_count = info->instance_count;
         ctx->active_prim = info->mode;
 
@@ -603,6 +636,53 @@ panfrost_bind_rasterizer_state(
 {
         struct panfrost_context *ctx = pan_context(pctx);
         ctx->rasterizer = hwcso;
+}
+
+static void
+panfrost_set_shader_images(
+        struct pipe_context *pctx,
+        enum pipe_shader_type shader,
+        unsigned start_slot, unsigned count, unsigned unbind_num_trailing_slots,
+        const struct pipe_image_view *iviews)
+{
+        struct panfrost_context *ctx = pan_context(pctx);
+
+        /* Unbind start_slot...start_slot+count */
+        if (!iviews) {
+                for (int i = start_slot; i < start_slot + count + unbind_num_trailing_slots; i++) {
+                        pipe_resource_reference(&ctx->images[shader][i].resource, NULL);
+                }
+
+                ctx->image_mask[shader] &= ~(((1ull << count) - 1) << start_slot);
+                return;
+        }
+
+        /* Bind start_slot...start_slot+count */
+        for (int i = 0; i < count; i++) {
+                const struct pipe_image_view *image = &iviews[i];
+                SET_BIT(ctx->image_mask[shader], 1 << (start_slot + i), image->resource);
+
+                if (!image->resource) {
+                        util_copy_image_view(&ctx->images[shader][start_slot+i], NULL);
+                        continue;
+                }
+
+                struct panfrost_resource *rsrc = pan_resource(image->resource);
+
+                /* Images don't work with AFBC, since they require pixel-level granularity */
+                if (drm_is_afbc(rsrc->layout.modifier)) {
+                        pan_resource_modifier_convert(ctx, rsrc,
+                                        DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED);
+                }
+
+                util_copy_image_view(&ctx->images[shader][start_slot+i], image);
+        }
+
+        /* Unbind start_slot+count...start_slot+count+unbind_num_trailing_slots */
+        for (int i = 0; i < unbind_num_trailing_slots; i++) {
+                SET_BIT(ctx->image_mask[shader], 1 << (start_slot + count + i), NULL);
+                util_copy_image_view(&ctx->images[shader][start_slot+count+i], NULL);
+        }
 }
 
 static void *
@@ -728,7 +808,10 @@ panfrost_bind_sampler_states(
 
         /* XXX: Should upload, not just copy? */
         ctx->sampler_count[shader] = num_sampler;
-        memcpy(ctx->samplers[shader], sampler, num_sampler * sizeof (void *));
+        if (sampler)
+                memcpy(ctx->samplers[shader], sampler, num_sampler * sizeof (void *));
+        else
+                memset(ctx->samplers[shader], 0, num_sampler * sizeof (void *));
 }
 
 static bool
@@ -931,23 +1014,27 @@ panfrost_set_vertex_buffers(
         struct pipe_context *pctx,
         unsigned start_slot,
         unsigned num_buffers,
+        unsigned unbind_num_trailing_slots,
+        bool take_ownership,
         const struct pipe_vertex_buffer *buffers)
 {
         struct panfrost_context *ctx = pan_context(pctx);
 
-        util_set_vertex_buffers_mask(ctx->vertex_buffers, &ctx->vb_mask, buffers, start_slot, num_buffers);
+        util_set_vertex_buffers_mask(ctx->vertex_buffers, &ctx->vb_mask, buffers,
+                                     start_slot, num_buffers, unbind_num_trailing_slots,
+                                     take_ownership);
 }
 
 static void
 panfrost_set_constant_buffer(
         struct pipe_context *pctx,
-        enum pipe_shader_type shader, uint index,
+        enum pipe_shader_type shader, uint index, bool take_ownership,
         const struct pipe_constant_buffer *buf)
 {
         struct panfrost_context *ctx = pan_context(pctx);
         struct panfrost_constant_buffer *pbuf = &ctx->constant_buffer[shader];
 
-        util_copy_constant_buffer(&pbuf->cb[index], buf);
+        util_copy_constant_buffer(&pbuf->cb[index], buf, take_ownership);
 
         unsigned mask = (1 << index);
 
@@ -976,6 +1063,7 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                                 struct pipe_resource *texture)
 {
         struct panfrost_device *device = pan_device(pctx->screen);
+        bool is_bifrost = device->quirks & IS_BIFROST;
         struct panfrost_resource *prsrc = (struct panfrost_resource *)texture;
         enum pipe_format format = so->base.format;
         assert(prsrc->bo);
@@ -1001,7 +1089,7 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
         }
 
         so->texture_bo = prsrc->bo->ptr.gpu;
-        so->modifier = prsrc->modifier;
+        so->modifier = prsrc->layout.modifier;
 
         unsigned char user_swizzle[4] = {
                 so->base.swizzle_r,
@@ -1031,61 +1119,47 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
         enum mali_texture_dimension type =
                 panfrost_translate_texture_dimension(so->base.target);
 
-        if (device->quirks & IS_BIFROST) {
-                unsigned size = panfrost_estimate_texture_payload_size(
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                type, prsrc->modifier);
+        bool is_buffer = (so->base.target == PIPE_BUFFER);
 
-                so->bo = panfrost_bo_create(device, size, 0);
+        unsigned first_level = is_buffer ? 0 : so->base.u.tex.first_level;
+        unsigned last_level = is_buffer ? 0 : so->base.u.tex.last_level;
+        unsigned first_layer = is_buffer ? 0 : so->base.u.tex.first_layer;
+        unsigned last_layer = is_buffer ? 0 : so->base.u.tex.last_layer;
 
-                panfrost_new_texture_bifrost(
-                                device,
-                                &so->bifrost_descriptor,
-                                texture->width0, texture->height0,
-                                depth, array_size,
-                                format,
-                                type, prsrc->modifier,
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                prsrc->cubemap_stride,
-                                panfrost_translate_swizzle_4(user_swizzle),
-                                prsrc->bo->ptr.gpu,
-                                prsrc->slices, &so->bo->ptr);
-        } else {
-                unsigned size = panfrost_estimate_texture_payload_size(
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                type, prsrc->modifier);
-                size += MALI_MIDGARD_TEXTURE_LENGTH;
+        unsigned size =
+                (is_bifrost ? 0 : MALI_MIDGARD_TEXTURE_LENGTH) +
+                panfrost_estimate_texture_payload_size(device,
+                                                       first_level, last_level,
+                                                       first_layer, last_layer,
+                                                       texture->nr_samples,
+                                                       type,
+                                                       prsrc->layout.modifier);
 
-                so->bo = panfrost_bo_create(device, size, 0);
+        so->bo = panfrost_bo_create(device, size, 0);
 
-                panfrost_new_texture(
-                                so->bo->ptr.cpu,
-                                texture->width0, texture->height0,
-                                depth, array_size,
-                                format,
-                                type, prsrc->modifier,
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                prsrc->cubemap_stride,
-                                panfrost_translate_swizzle_4(user_swizzle),
-                                prsrc->bo->ptr.gpu,
-                                prsrc->slices);
+        unsigned width = is_buffer ?
+                (so->base.u.buf.size / util_format_get_blocksize(so->base.format)) :
+                texture->width0;
+        unsigned offset = is_buffer ? so->base.u.buf.offset : 0;
+
+        struct panfrost_ptr payload = so->bo->ptr;
+        void *tex = is_bifrost ? &so->bifrost_descriptor : so->bo->ptr.cpu;
+
+        if (!is_bifrost) {
+                payload.cpu += MALI_MIDGARD_TEXTURE_LENGTH;
+                payload.gpu += MALI_MIDGARD_TEXTURE_LENGTH;
         }
+
+        panfrost_new_texture(device, &prsrc->layout, tex,
+                             width, texture->height0,
+                             depth, array_size,
+                             format, type,
+                             first_level, last_level,
+                             first_layer, last_layer,
+                             texture->nr_samples,
+                             user_swizzle,
+                             prsrc->bo->ptr.gpu + offset,
+                             &payload);
 }
 
 static struct pipe_sampler_view *
@@ -1113,6 +1187,7 @@ panfrost_set_sampler_views(
         struct pipe_context *pctx,
         enum pipe_shader_type shader,
         unsigned start_slot, unsigned num_views,
+        unsigned unbind_num_trailing_slots,
         struct pipe_sampler_view **views)
 {
         struct panfrost_context *ctx = pan_context(pctx);
@@ -1120,6 +1195,9 @@ panfrost_set_sampler_views(
         unsigned i;
 
         assert(start_slot == 0);
+
+        if (!views)
+                num_views = 0;
 
         for (i = 0; i < num_views; ++i) {
                 if (views[i])
@@ -1223,8 +1301,9 @@ panfrost_create_depth_stencil_state(struct pipe_context *pipe,
                 so->stencil_mask_back = so->stencil_mask_front;
         }
 
-        /* Alpha lowered by frontend */
-        assert(!zsa->alpha_enabled);
+        so->alpha_func = zsa->alpha_enabled ?
+                panfrost_translate_compare_func(zsa->alpha_func) :
+                MALI_FUNC_ALWAYS;
 
         /* TODO: Bounds test should be easy */
         assert(!zsa->depth_bounds_test);
@@ -1311,6 +1390,19 @@ panfrost_set_active_query_state(struct pipe_context *pipe,
 {
         struct panfrost_context *ctx = pan_context(pipe);
         ctx->active_queries = enable;
+}
+
+static void
+panfrost_render_condition(struct pipe_context *pipe,
+                          struct pipe_query *query,
+                          bool condition,
+                          enum pipe_render_cond_flag mode)
+{
+        struct panfrost_context *ctx = pan_context(pipe);
+
+        ctx->cond_query = (struct panfrost_query *)query;
+        ctx->cond_cond = condition;
+        ctx->cond_mode = mode;
 }
 
 static void
@@ -1552,10 +1644,12 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         gallium->clear = panfrost_clear;
         gallium->draw_vbo = panfrost_draw_vbo;
         gallium->texture_barrier = panfrost_texture_barrier;
+        gallium->set_frontend_noop = panfrost_set_frontend_noop;
 
         gallium->set_vertex_buffers = panfrost_set_vertex_buffers;
         gallium->set_constant_buffer = panfrost_set_constant_buffer;
         gallium->set_shader_buffers = panfrost_set_shader_buffers;
+        gallium->set_shader_images = panfrost_set_shader_images;
 
         gallium->set_stencil_ref = panfrost_set_stencil_ref;
 
@@ -1595,6 +1689,7 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         gallium->set_scissor_states = panfrost_set_scissor_states;
         gallium->set_polygon_stipple = panfrost_set_polygon_stipple;
         gallium->set_active_query_state = panfrost_set_active_query_state;
+        gallium->render_condition = panfrost_render_condition;
 
         gallium->create_query = panfrost_create_query;
         gallium->destroy_query = panfrost_destroy_query;

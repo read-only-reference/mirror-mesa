@@ -87,6 +87,8 @@ struct radeon_info {
    /* Memory info. */
    uint32_t pte_fragment_size;
    uint32_t gart_page_size;
+   uint32_t gart_size_kb;
+   uint32_t vram_size_kb;
    uint64_t gart_size;
    uint64_t vram_size;
    uint64_t vram_vis_size;
@@ -99,6 +101,7 @@ struct radeon_info {
    uint32_t address32_hi;
    bool has_dedicated_vram;
    bool all_vram_visible;
+   bool smart_access_memory;
    bool has_l2_uncached;
    bool r600_has_virtual_memory;
    uint32_t num_sdp_interfaces;
@@ -160,6 +163,7 @@ struct radeon_info {
    /* Whether SR-IOV is enabled or amdgpu.mcbp=1 was set on the kernel command line. */
    bool mid_command_buffer_preemption_enabled;
    bool has_tmz_support;
+   bool kernel_has_modifiers;
 
    /* Shader cores. */
    uint32_t cu_mask[4][2];

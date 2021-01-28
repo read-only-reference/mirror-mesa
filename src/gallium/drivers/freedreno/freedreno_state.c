@@ -97,12 +97,13 @@ fd_set_min_samples(struct pipe_context *pctx, unsigned min_samples)
 static void
 fd_set_constant_buffer(struct pipe_context *pctx,
 		enum pipe_shader_type shader, uint index,
+		bool take_ownership,
 		const struct pipe_constant_buffer *cb)
 {
 	struct fd_context *ctx = fd_context(pctx);
 	struct fd_constbuf_stateobj *so = &ctx->constbuf[shader];
 
-	util_copy_constant_buffer(&so->cb[index], cb);
+	util_copy_constant_buffer(&so->cb[index], cb, take_ownership);
 
 	/* Note that gallium frontends can unbind constant buffers by
 	 * passing NULL here.
@@ -164,6 +165,7 @@ void
 fd_set_shader_images(struct pipe_context *pctx,
 		enum pipe_shader_type shader,
 		unsigned start, unsigned count,
+		unsigned unbind_num_trailing_slots,
 		const struct pipe_image_view *images)
 {
 	struct fd_context *ctx = fd_context(pctx);
@@ -204,6 +206,11 @@ fd_set_shader_images(struct pipe_context *pctx,
 
 		so->enabled_mask &= ~mask;
 	}
+
+	for (unsigned i = 0; i < unbind_num_trailing_slots; i++)
+		pipe_resource_reference(&so->si[i + start + count].resource, NULL);
+
+	so->enabled_mask &= ~(BITFIELD_MASK(unbind_num_trailing_slots) << (start + count));
 
 	ctx->dirty_shader[shader] |= FD_DIRTY_SHADER_IMAGE;
 	ctx->dirty |= FD_DIRTY_IMAGE;
@@ -339,6 +346,8 @@ fd_set_viewport_states(struct pipe_context *pctx,
 static void
 fd_set_vertex_buffers(struct pipe_context *pctx,
 		unsigned start_slot, unsigned count,
+		unsigned unbind_num_trailing_slots,
+		bool take_ownership,
 		const struct pipe_vertex_buffer *vb)
 {
 	struct fd_context *ctx = fd_context(pctx);
@@ -362,7 +371,9 @@ fd_set_vertex_buffers(struct pipe_context *pctx,
 		}
 	}
 
-	util_set_vertex_buffers_mask(so->vb, &so->enabled_mask, vb, start_slot, count);
+	util_set_vertex_buffers_mask(so->vb, &so->enabled_mask, vb, start_slot,
+				     count, unbind_num_trailing_slots,
+				     take_ownership);
 	so->count = util_last_bit(so->enabled_mask);
 
 	if (!vb)
@@ -481,32 +492,39 @@ fd_create_stream_output_target(struct pipe_context *pctx,
 		struct pipe_resource *prsc, unsigned buffer_offset,
 		unsigned buffer_size)
 {
-	struct pipe_stream_output_target *target;
+	struct fd_stream_output_target *target;
 	struct fd_resource *rsc = fd_resource(prsc);
 
-	target = CALLOC_STRUCT(pipe_stream_output_target);
+	target = CALLOC_STRUCT(fd_stream_output_target);
 	if (!target)
 		return NULL;
 
-	pipe_reference_init(&target->reference, 1);
-	pipe_resource_reference(&target->buffer, prsc);
+	pipe_reference_init(&target->base.reference, 1);
+	pipe_resource_reference(&target->base.buffer, prsc);
 
-	target->context = pctx;
-	target->buffer_offset = buffer_offset;
-	target->buffer_size = buffer_size;
+	target->base.context = pctx;
+	target->base.buffer_offset = buffer_offset;
+	target->base.buffer_size = buffer_size;
+
+	target->offset_buf = pipe_buffer_create(pctx->screen,
+			PIPE_BIND_CUSTOM, PIPE_USAGE_IMMUTABLE, sizeof(uint32_t));
 
 	assert(rsc->base.target == PIPE_BUFFER);
 	util_range_add(&rsc->base, &rsc->valid_buffer_range,
 		buffer_offset, buffer_offset + buffer_size);
 
-	return target;
+	return &target->base;
 }
 
 static void
 fd_stream_output_target_destroy(struct pipe_context *pctx,
 		struct pipe_stream_output_target *target)
 {
-	pipe_resource_reference(&target->buffer, NULL);
+	struct fd_stream_output_target *cso = fd_stream_output_target(target);
+
+	pipe_resource_reference(&cso->base.buffer, NULL);
+	pipe_resource_reference(&cso->offset_buf, NULL);
+
 	FREE(target);
 }
 

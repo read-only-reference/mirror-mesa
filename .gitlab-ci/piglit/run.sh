@@ -78,13 +78,13 @@ else
 
     # Set up the platform windowing system.
 
+    # Set environment for the waffle library.
+    export __LD_LIBRARY_PATH="/waffle/build/lib:$__LD_LIBRARY_PATH"
+
+    # Set environment for wflinfo executable.
+    export PATH="/waffle/build/bin:$PATH"
+
     if [ "x$EGL_PLATFORM" = "xsurfaceless" ]; then
-
-        # Set environment for the waffle library.
-        export __LD_LIBRARY_PATH="/waffle/build/lib:$__LD_LIBRARY_PATH"
-
-        # Set environment for wflinfo executable.
-        export PATH="/waffle/build/bin:$PATH"
 
         # Use the surfaceless EGL platform.
         export DISPLAY=
@@ -105,6 +105,8 @@ else
 
             sleep 1
         fi
+    elif [ "x$PIGLIT_PLATFORM" = "xgbm" ]; then
+        SANITY_MESA_VERSION_CMD="$SANITY_MESA_VERSION_CMD --platform gbm --api gl"
     else
         SANITY_MESA_VERSION_CMD="$SANITY_MESA_VERSION_CMD --platform glx --api gl --profile core"
         RUN_CMD_WRAPPER="xvfb-run --server-args=\"-noreset\" sh -c"
@@ -126,6 +128,54 @@ if [ "$RUN_CMD_WRAPPER" ]; then
     RUN_CMD="set +e; $RUN_CMD_WRAPPER "$(/usr/bin/printf "%q" "$RUN_CMD")"; set -e"
 fi
 
+print_red() {
+    RED='\033[0;31m'
+    NC='\033[0m' # No Color
+    printf "${RED}"
+    "$@"
+    printf "${NC}"
+}
+
+# wrapper to supress +x to avoid spamming the log
+quiet() {
+    set +x
+    "$@"
+    set -x
+}
+
+replay_minio_upload_images() {
+    find "$RESULTS/$__PREFIX" -type f -name "*.png" -printf "%P\n" \
+        | while read -r line; do
+
+        __TRACE="${line%-*-*}"
+        if grep -q "^$__PREFIX/$__TRACE: pass$" ".gitlab-ci/piglit/$PIGLIT_RESULTS.txt.orig"; then
+            if [ "x$CI_PROJECT_PATH" != "x$FDO_UPSTREAM_REPO" ]; then
+                continue
+            fi
+            __MINIO_PATH="$PIGLIT_REPLAY_REFERENCE_IMAGES_BASE_URL"
+            __DESTINATION_FILE_PATH="${line##*-}"
+            if ci-fairy minio ls "minio://${MINIO_HOST}${__MINIO_PATH}/${__DESTINATION_FILE_PATH}" 2>/dev/null; then
+                continue
+            fi
+        else
+            __MINIO_PATH="$PIGLIT_REPLAY_ARTIFACTS_BASE_URL"
+            __DESTINATION_FILE_PATH="$__MINIO_TRACES_PREFIX/${line##*-}"
+            # Adding to the JUnit the direct link to the diff page in
+            # the dashboard
+            __PIGLIT_TESTCASE_CLASSNAME="piglit\.trace\.$PIGLIT_REPLAY_DEVICE_NAME\.$(dirname $__TRACE | sed 's%/%\\.%g;s@%@\\%@')"
+            __PIGLIT_TESTCASE_NAME="$(basename $__TRACE | sed 's%\.%_%g;s@%@\\%@')"
+            __DASHBOARD_URL="https://tracie.freedesktop.org/dashboard/imagediff/${CI_PROJECT_PATH}/${CI_JOB_ID}/${__TRACE}"
+            sed '\%<testcase classname="'"${__PIGLIT_TESTCASE_CLASSNAME}"'" name="'"${__PIGLIT_TESTCASE_NAME}"'" status="fail"%,\%</system-out><failure type="fail"/></testcase>%{s%</system-out><failure type="fail"/></testcase>%</system-out><failure type="fail">To view the image differences visit: '"${__DASHBOARD_URL}"'</failure></testcase>%}' \
+                -i "$RESULTS"/junit.xml
+        fi
+
+        ci-fairy minio cp "$RESULTS/$__PREFIX/$line" \
+            "minio://${MINIO_HOST}${__MINIO_PATH}/${__DESTINATION_FILE_PATH}"
+    done
+}
+
+FAILURE_MESSAGE=$(printf "%s" "Unexpected change in results:")
+
 eval $RUN_CMD
 
 if [ $? -ne 0 ]; then
@@ -134,6 +184,7 @@ fi
 
 if [ ${PIGLIT_JUNIT_RESULTS:-0} -eq 1 ]; then
     ./piglit summary aggregate "$RESULTS" -o junit.xml
+    FAILURE_MESSAGE=$(printf "${FAILURE_MESSAGE}\n%s" "Check the JUnit report for failures at: ${CI_JOB_URL}/artifacts/file/results/junit.xml")
 fi
 
 PIGLIT_RESULTS="${PIGLIT_RESULTS:-$PIGLIT_PROFILES}"
@@ -152,32 +203,13 @@ if [ "x$PIGLIT_PROFILES" = "xreplay" ] \
     __MINIO_PATH="$PIGLIT_REPLAY_ARTIFACTS_BASE_URL"
     __MINIO_TRACES_PREFIX="traces"
 
-    ci-fairy minio cp "$RESULTS"/junit.xml \
-        "minio://${MINIO_HOST}${__MINIO_PATH}/${__MINIO_TRACES_PREFIX}/junit.xml"
     ci-fairy minio cp "$RESULTS"/results.json.bz2 \
         "minio://${MINIO_HOST}${__MINIO_PATH}/${__MINIO_TRACES_PREFIX}/results.json.bz2"
 
-    find "$RESULTS/$__PREFIX" -type f -name "*.png" -printf "%P\n" \
-        | while read -r line; do
+    quiet replay_minio_upload_images
 
-        __TRACE="${line%-*-*}"
-        if grep -q "^$__PREFIX/$__TRACE: pass$" ".gitlab-ci/piglit/$PIGLIT_RESULTS.txt.orig"; then
-            if [ "x$CI_PROJECT_PATH" != "x$FDO_UPSTREAM_REPO" ]; then
-                continue
-            fi
-            __MINIO_PATH="$PIGLIT_REPLAY_REFERENCE_IMAGES_BASE_URL"
-            __DESTINATION_FILE_PATH="${line##*-}"
-            if ci-fairy minio ls "minio://${MINIO_HOST}${__MINIO_PATH}/${__DESTINATION_FILE_PATH}" 2>/dev/null; then
-                continue
-            fi
-        else
-            __MINIO_PATH="$PIGLIT_REPLAY_ARTIFACTS_BASE_URL"
-            __DESTINATION_FILE_PATH="$__MINIO_TRACES_PREFIX/${line##*-}"
-        fi
-
-        ci-fairy minio cp "$RESULTS/$__PREFIX/$line" \
-            "minio://${MINIO_HOST}${__MINIO_PATH}/${__DESTINATION_FILE_PATH}"
-    done
+    ci-fairy minio cp "$RESULTS"/junit.xml \
+        "minio://${MINIO_HOST}${__MINIO_PATH}/${__MINIO_TRACES_PREFIX}/junit.xml"
 fi
 
 cp "$INSTALL/piglit/$PIGLIT_RESULTS.txt" \
@@ -192,12 +224,14 @@ if [ ${PIGLIT_HTML_SUMMARY:-1} -eq 1 ]; then
 
     if [ "x$PIGLIT_PROFILES" = "xreplay" ]; then
         find "$OLDPWD"/summary -type f -name "*.html" -print0 \
-            | xargs -0 sed -i 's@<img src="file://'"${RESULTS}"'@<img src="https://'"${MINIO_HOST}${PIGLIT_REPLAY_ARTIFACTS_BASE_URL}"'@g'
+            | xargs -0 sed -i 's%<img src="file://'"${RESULTS}"'.*-\([0-9a-f]*\)\.png%<img src="https://'"${MINIO_HOST}${PIGLIT_REPLAY_ARTIFACTS_BASE_URL}"'/traces/\1.png%g'
         find "$OLDPWD"/summary -type f -name "*.html" -print0 \
-            | xargs -0 sed -i 's@<img src="file://@<img src="https://'"${MINIO_HOST}${PIGLIT_REPLAY_REFERENCE_IMAGES_BASE_URL}"'/@g'
+            | xargs -0 sed -i 's%<img src="file://%<img src="https://'"${MINIO_HOST}${PIGLIT_REPLAY_REFERENCE_IMAGES_BASE_URL}"'/%g'
     fi
+
+    FAILURE_MESSAGE=$(printf "${FAILURE_MESSAGE}\n%s" "Check the HTML summary for problems at: ${CI_JOB_URL}/artifacts/file/summary/problems.html")
 fi
 
-printf "%s\n" "Unexpected change in results:"
-diff -u ".gitlab-ci/piglit/$PIGLIT_RESULTS.txt.baseline" $RESULTSFILE
+quiet print_red printf "%s\n" "$FAILURE_MESSAGE"
+quiet print_red diff -u ".gitlab-ci/piglit/$PIGLIT_RESULTS.txt.baseline" $RESULTSFILE
 exit 1

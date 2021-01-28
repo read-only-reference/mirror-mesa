@@ -558,8 +558,8 @@ panfrost_batch_add_resource_bos(struct panfrost_batch *batch,
         panfrost_batch_add_bo(batch, rsrc->bo, flags);
 
         for (unsigned i = 0; i < MAX_MIP_LEVELS; i++)
-                if (rsrc->slices[i].checksum_bo)
-                        panfrost_batch_add_bo(batch, rsrc->slices[i].checksum_bo, flags);
+                if (rsrc->checksum_bo)
+                        panfrost_batch_add_bo(batch, rsrc->checksum_bo, flags);
 
         if (rsrc->separate_stencil)
                 panfrost_batch_add_bo(batch, rsrc->separate_stencil->bo, flags);
@@ -759,7 +759,7 @@ panfrost_load_surface(struct panfrost_batch *batch, struct pipe_surface *surf, u
         struct panfrost_resource *rsrc = pan_resource(surf->texture);
         unsigned level = surf->u.tex.level;
 
-        if (!rsrc->slices[level].initialized)
+        if (!rsrc->layout.slices[level].initialized)
                 return;
 
         if (!rsrc->damage.inverted_len)
@@ -808,16 +808,14 @@ panfrost_load_surface(struct panfrost_batch *batch, struct pipe_surface *surf, u
                 .depth0 = rsrc->base.depth0,
                 .format = format,
                 .dim = dim,
-                .modifier = rsrc->modifier,
                 .array_size = rsrc->base.array_size,
                 .first_level = level,
                 .last_level = level,
                 .first_layer = surf->u.tex.first_layer,
                 .last_layer = surf->u.tex.last_layer,
                 .nr_samples = rsrc->base.nr_samples,
-                .cubemap_stride = rsrc->cubemap_stride,
                 .bo = rsrc->bo,
-                .slices = rsrc->slices
+                .layout = &rsrc->layout,
         };
 
         mali_ptr blend_shader = 0;
@@ -980,12 +978,15 @@ panfrost_batch_submit_ioctl(struct panfrost_batch *batch,
         panfrost_pool_get_bo_handles(&batch->invisible_pool, bo_handles + submit.bo_handle_count);
         submit.bo_handle_count += panfrost_pool_num_bos(&batch->invisible_pool);
 
-        /* Used by all tiler jobs (XXX: skip for compute-only) */
-        if (!(reqs & PANFROST_JD_REQ_FS))
-                bo_handles[submit.bo_handle_count++] = dev->tiler_heap->gem_handle;
+        /* Used by all tiler jobs, and occasionally by fragment jobs.
+         * (XXX: skip for compute-only) */
+        bo_handles[submit.bo_handle_count++] = dev->tiler_heap->gem_handle;
 
         submit.bo_handles = (u64) (uintptr_t) bo_handles;
-        ret = drmIoctl(dev->fd, DRM_IOCTL_PANFROST_SUBMIT, &submit);
+        if (ctx->is_noop)
+                ret = 0;
+        else
+                ret = drmIoctl(dev->fd, DRM_IOCTL_PANFROST_SUBMIT, &submit);
         free(bo_handles);
 
         if (ret) {

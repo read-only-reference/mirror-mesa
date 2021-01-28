@@ -64,7 +64,7 @@
 #include "ir3/ir3_compiler.h"
 #include "a2xx/ir2.h"
 
-static const struct debug_named_value debug_options[] = {
+static const struct debug_named_value fd_debug_options[] = {
 		{"msgs",      FD_DBG_MSGS,   "Print debug messages"},
 		{"disasm",    FD_DBG_DISASM, "Dump TGSI and adreno shader disassembly (a2xx only, see IR3_SHADER_DEBUG)"},
 		{"dclear",    FD_DBG_DCLEAR, "Mark all state dirty after clear"},
@@ -72,7 +72,7 @@ static const struct debug_named_value debug_options[] = {
 		{"noscis",    FD_DBG_NOSCIS, "Disable scissor optimization"},
 		{"direct",    FD_DBG_DIRECT, "Force inline (SS_DIRECT) state loads"},
 		{"nobypass",  FD_DBG_NOBYPASS, "Disable GMEM bypass"},
-		/* BIT(7) */
+		{"perf",      FD_DBG_PERF,   "Enable performance warnings"},
 		{"nobin",     FD_DBG_NOBIN,  "Disable hw binning"},
 		{"nogmem",    FD_DBG_NOGMEM,  "Disable GMEM rendering (bypass only)"},
 		/* BIT(10) */
@@ -97,7 +97,7 @@ static const struct debug_named_value debug_options[] = {
 		DEBUG_NAMED_VALUE_END
 };
 
-DEBUG_GET_ONCE_FLAGS_OPTION(fd_mesa_debug, "FD_MESA_DEBUG", debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(fd_mesa_debug, "FD_MESA_DEBUG", fd_debug_options, 0)
 
 int fd_mesa_debug = 0;
 bool fd_binning_enabled = true;
@@ -310,7 +310,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 	case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
 		if (is_a6xx(screen))
-			return 150;
+			return 330;
 		else if (is_ir3(screen))
 			return 140;
 		else

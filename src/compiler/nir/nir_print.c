@@ -87,7 +87,7 @@ print_register(nir_register *reg, print_state *state)
 }
 
 static const char *sizes[] = { "error", "vec1", "vec2", "vec3", "vec4",
-                               "error", "error", "error", "vec8",
+                               "vec5", "error", "error", "vec8",
                                "error", "error", "error", "error",
                                "error", "error", "error", "vec16"};
 
@@ -1217,6 +1217,10 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
 
    if (instr->sampler_non_uniform) {
       fprintf(fp, ", sampler non-uniform");
+   }
+
+   if (instr->is_sparse) {
+      fprintf(fp, ", sparse");
    }
 }
 

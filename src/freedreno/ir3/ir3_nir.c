@@ -72,6 +72,8 @@ static const nir_shader_compiler_options options = {
 		.lower_rotate = true,
 		.lower_to_scalar = true,
 		.has_imul24 = true,
+		.has_fsub = true,
+		.has_isub = true,
 		.lower_wpos_pntc = true,
 		.lower_cs_local_index_from_id = true,
 
@@ -125,6 +127,8 @@ static const nir_shader_compiler_options options_a6xx = {
 		.vectorize_io = true,
 		.lower_to_scalar = true,
 		.has_imul24 = true,
+		.has_fsub = true,
+		.has_isub = true,
 		.max_unroll_iterations = 32,
 		.lower_wpos_pntc = true,
 		.lower_cs_local_index_from_id = true,
@@ -150,7 +154,8 @@ ir3_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
 		unsigned bit_size,
 		unsigned num_components,
 		nir_intrinsic_instr *low,
-		nir_intrinsic_instr *high)
+		nir_intrinsic_instr *high,
+		void *data)
 {
 	assert(bit_size >= 8);
 	if (bit_size != 32)
@@ -218,8 +223,12 @@ ir3_optimize_loop(nir_shader *s)
 		progress |= OPT(s, nir_lower_pack);
 		progress |= OPT(s, nir_opt_constant_folding);
 
-		progress |= OPT(s, nir_opt_load_store_vectorize, nir_var_mem_ubo,
-				ir3_nir_should_vectorize_mem, 0);
+		nir_load_store_vectorize_options vectorize_opts = {
+		   .modes = nir_var_mem_ubo,
+		   .callback = ir3_nir_should_vectorize_mem,
+		   .robust_modes = 0,
+		};
+		progress |= OPT(s, nir_opt_load_store_vectorize, &vectorize_opts);
 
 		if (lower_flrp != 0) {
 			if (OPT(s, nir_lower_flrp,

@@ -1097,6 +1097,20 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
              const struct pipe_draw_start_count *draws,
              unsigned num_draws)
 {
+	if (num_draws > 1) {
+           struct pipe_draw_info tmp_info = *info;
+
+           for (unsigned i = 0; i < num_draws; i++) {
+              v3d_draw_vbo(pctx, &tmp_info, indirect, &draws[i], 1);
+              if (tmp_info.increment_draw_id)
+                 tmp_info.drawid++;
+           }
+           return;
+	}
+
+        if (!indirect && (!draws[0].count || !info->instance_count))
+           return;
+
         struct v3d_context *v3d = v3d_context(pctx);
 
         if (!indirect &&
@@ -1253,10 +1267,10 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
         /* The Base Vertex/Base Instance packet sets those values to nonzero
          * for the next draw call only.
          */
-        if (info->index_bias || info->start_instance) {
+        if ((info->index_size && info->index_bias) || info->start_instance) {
                 cl_emit(&job->bcl, BASE_VERTEX_BASE_INSTANCE, base) {
                         base.base_instance = info->start_instance;
-                        base.base_vertex = info->index_bias;
+                        base.base_vertex = info->index_size ? info->index_bias : 0;
                 }
         }
 
@@ -1278,10 +1292,11 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 uint32_t offset = draws[0].start * index_size;
                 struct pipe_resource *prsc;
                 if (info->has_user_indices) {
+                        unsigned start_offset = draws[0].start * info->index_size;
                         prsc = NULL;
-                        u_upload_data(v3d->uploader, 0,
+                        u_upload_data(v3d->uploader, start_offset,
                                       draws[0].count * info->index_size, 4,
-                                      info->index.user,
+                                      (char*)info->index.user + start_offset,
                                       &offset, &prsc);
                 } else {
                         prsc = info->index.resource;

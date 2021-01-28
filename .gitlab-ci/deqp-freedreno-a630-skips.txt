@@ -9,6 +9,9 @@ dEQP-GLES[0-9]*.stress.*
 # These are really slow on tiling architectures (including llvmpipe).
 dEQP-GLES[0-9]*.functional.flush_finish.*
 
+# Timeouts, passes otherwise
+KHR-GL33.texture_swizzle.smoke
+
 # Timeout on what looks like an infinite loop in ir3's mark_kill_path()
 dEQP-VK.geometry.layered.cube_array.36_36_12.secondary_cmd_buffer_inherit_framebuffer
 # More timeouts, possibly the same.
@@ -23,3 +26,6 @@ dEQP-VK.geometry.layered.cube_array.64_64_12.readback
 
 # Crashes likely caused by https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/2701
 dEQP-VK.synchronization.cross_instance.*binary_semaphore_fence_fd
+
+# Timeouts, passes otherwise
+dEQP-VK.tessellation.invariance.outer_triangle_set.quads_fractional_odd_spacing

@@ -558,32 +558,25 @@ lower_interpolate_at(nir_intrinsic_instr *intrin, struct lower_io_state *state,
 
    nir_builder_instr_insert(b, &bary_setup->instr);
 
-   nir_intrinsic_instr *load =
-      nir_intrinsic_instr_create(state->builder.shader,
-                                 nir_intrinsic_load_interpolated_input);
-   load->num_components = intrin->num_components;
-
-   nir_intrinsic_set_base(load, var->data.driver_location);
-   nir_intrinsic_set_component(load, component);
-
    nir_io_semantics semantics = {0};
    semantics.location = var->data.location;
    semantics.num_slots = get_number_of_slots(state, var);
    semantics.medium_precision =
       var->data.precision == GLSL_PRECISION_MEDIUM ||
       var->data.precision == GLSL_PRECISION_LOW;
-   nir_intrinsic_set_io_semantics(load, semantics);
-
-   load->src[0] = nir_src_for_ssa(&bary_setup->dest.ssa);
-   load->src[1] = nir_src_for_ssa(offset);
 
    assert(intrin->dest.is_ssa);
-   nir_ssa_dest_init(&load->instr, &load->dest,
-                     intrin->dest.ssa.num_components,
-                     intrin->dest.ssa.bit_size, NULL);
-   nir_builder_instr_insert(b, &load->instr);
+   nir_ssa_def *load =
+      nir_load_interpolated_input(&state->builder,
+                                  intrin->dest.ssa.num_components,
+                                  intrin->dest.ssa.bit_size,
+                                  &bary_setup->dest.ssa,
+                                  offset,
+                                  .base = var->data.driver_location,
+                                  .component = component,
+                                  .io_semantics = semantics);
 
-   return &load->dest.ssa;
+   return load;
 }
 
 static bool
@@ -1992,10 +1985,11 @@ lower_explicit_io_array_length(nir_builder *b, nir_intrinsic_instr *intrin,
    nir_ssa_def *addr = &deref->dest.ssa;
    nir_ssa_def *index = addr_to_index(b, addr, addr_format);
    nir_ssa_def *offset = addr_to_offset(b, addr, addr_format);
+   unsigned access = nir_intrinsic_access(intrin);
 
-   nir_ssa_def *arr_size =
-      nir_idiv(b, nir_isub(b, nir_get_ssbo_size(b, index), offset),
-                  nir_imm_int(b, stride));
+   nir_ssa_def *arr_size = nir_get_ssbo_size(b, index, .access=access);
+   arr_size = nir_imax(b, nir_isub(b, arr_size, offset), nir_imm_int(b, 0u));
+   arr_size = nir_idiv(b, arr_size, nir_imm_int(b, stride));
 
    nir_ssa_def_rewrite_uses(&intrin->dest.ssa, nir_src_for_ssa(arr_size));
    nir_instr_remove(&intrin->instr);
@@ -2309,8 +2303,12 @@ nir_lower_vars_to_explicit_types(nir_shader *shader,
 
    if (modes & nir_var_uniform)
       progress |= lower_vars_to_explicit(shader, &shader->variables, nir_var_uniform, type_info);
-   if (modes & nir_var_mem_shared)
+
+   if (modes & nir_var_mem_shared) {
+      assert(!shader->info.cs.shared_memory_explicit_layout);
       progress |= lower_vars_to_explicit(shader, &shader->variables, nir_var_mem_shared, type_info);
+   }
+
    if (modes & nir_var_shader_temp)
       progress |= lower_vars_to_explicit(shader, &shader->variables, nir_var_shader_temp, type_info);
    if (modes & nir_var_mem_constant)
@@ -2415,6 +2413,7 @@ nir_get_io_offset_src(nir_intrinsic_instr *instr)
    case nir_intrinsic_load_output:
    case nir_intrinsic_load_shared:
    case nir_intrinsic_load_uniform:
+   case nir_intrinsic_load_kernel_input:
    case nir_intrinsic_load_global:
    case nir_intrinsic_load_global_constant:
    case nir_intrinsic_load_scratch:

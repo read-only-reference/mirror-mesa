@@ -72,7 +72,7 @@ static inline bool
 nir_num_components_valid(unsigned num_components)
 {
    return (num_components >= 1  &&
-           num_components <= 4) ||
+           num_components <= 5) ||
            num_components == 8  ||
            num_components == 16;
 }
@@ -1210,6 +1210,7 @@ nir_op_vec(unsigned components)
    case  2: return nir_op_vec2;
    case  3: return nir_op_vec3;
    case  4: return nir_op_vec4;
+   case  5: return nir_op_vec5;
    case  8: return nir_op_vec8;
    case 16: return nir_op_vec16;
    default: unreachable("bad component count");
@@ -1224,6 +1225,7 @@ nir_op_is_vec(nir_op op)
    case nir_op_vec2:
    case nir_op_vec3:
    case nir_op_vec4:
+   case nir_op_vec5:
    case nir_op_vec8:
    case nir_op_vec16:
       return true;
@@ -2034,6 +2036,12 @@ typedef struct {
     */
    bool is_new_style_shadow;
 
+   /**
+    * If this texture instruction should return a sparse residency code. The
+    * code is in the last component of the result.
+    */
+   bool is_sparse;
+
    /* gather component selector */
    unsigned component : 2;
 
@@ -2094,7 +2102,7 @@ nir_tex_instr_need_sampler(const nir_tex_instr *instr)
 }
 
 static inline unsigned
-nir_tex_instr_dest_size(const nir_tex_instr *instr)
+nir_tex_instr_result_size(const nir_tex_instr *instr)
 {
    switch (instr->op) {
    case nir_texop_txs: {
@@ -2138,6 +2146,13 @@ nir_tex_instr_dest_size(const nir_tex_instr *instr)
 
       return 4;
    }
+}
+
+static inline unsigned
+nir_tex_instr_dest_size(const nir_tex_instr *instr)
+{
+   /* One more component is needed for the residency code. */
+   return nir_tex_instr_result_size(instr) + instr->is_sparse;
 }
 
 /* Returns true if this texture operation queries something about the texture
@@ -3054,6 +3069,10 @@ typedef enum {
    nir_lower_extract64 = (1 << 13),
    nir_lower_ufind_msb64 = (1 << 14),
    nir_lower_bit_count64 = (1 << 15),
+   nir_lower_subgroup_shuffle64 = (1 << 16),
+   nir_lower_scan_reduce_bitwise64 = (1 << 17),
+   nir_lower_scan_reduce_iadd64 = (1 << 18),
+   nir_lower_vote_ieq64 = (1 << 19),
 } nir_lower_int64_options;
 
 typedef enum {
@@ -3118,10 +3137,10 @@ typedef struct nir_shader_compiler_options {
    bool lower_usub_borrow;
    /** Lowers imul_high/umul_high to 16-bit multiplies and carry operations. */
    bool lower_mul_high;
-   /** lowers fneg and ineg to fsub and isub. */
-   bool lower_negate;
-   /** lowers fsub and isub to fadd+fneg and iadd+ineg. */
-   bool lower_sub;
+   /** lowers fneg to fmul(x, -1.0). Driver must call nir_opt_algebraic_late() */
+   bool lower_fneg;
+   /** lowers ineg to isub. Driver must call nir_opt_algebraic_late(). */
+   bool lower_ineg;
 
    /* lower {slt,sge,seq,sne} to {flt,fge,feq,fneu} + b2f: */
    bool lower_scmp;
@@ -3237,7 +3256,10 @@ typedef struct nir_shader_compiler_options {
 
    bool lower_device_index_to_zero;
 
-   /* Set if nir_lower_wpos_ytransform() should also invert gl_PointCoord. */
+   /* Set if nir_lower_pntc_ytransform() should invert gl_PointCoord.
+    * Either when frame buffer is flipped or GL_POINT_SPRITE_COORD_ORIGIN
+    * is GL_LOWER_LEFT.
+    */
    bool lower_wpos_pntc;
 
    /**
@@ -3339,6 +3361,14 @@ typedef struct nir_shader_compiler_options {
     * to imul with masked inputs and iadd */
    bool has_umad24;
 
+   /** Backend supports fsub, if not set fsub will automatically be lowered to
+    * fadd(x, fneg(y)). If true, driver should call nir_opt_algebraic_late(). */
+   bool has_fsub;
+
+   /** Backend supports isub, if not set isub will automatically be lowered to
+    * iadd(x, ineg(y)). If true, driver should call nir_opt_algebraic_late(). */
+   bool has_isub;
+
    /* Whether to generate only scoped_barrier intrinsics instead of the set of
     * memory and control barrier intrinsics based on GLSL.
     */
@@ -3364,6 +3394,7 @@ typedef struct nir_shader_compiler_options {
    bool support_16bit_alu;
 
    unsigned max_unroll_iterations;
+   unsigned max_unroll_iterations_aggressive;
 
    /* For the non-zero value of the enum corresponds multiplier when
     * calling lower_uniforms_to_ubo */
@@ -4070,6 +4101,14 @@ static inline bool should_print_nir(nir_shader *shader) { return false; }
  */
 typedef bool (*nir_instr_filter_cb)(const nir_instr *, const void *);
 
+/** An instruction filtering callback with writemask
+ *
+ * Returns true if the instruction should be processed with the associated
+ * writemask and false otherwise.
+ */
+typedef bool (*nir_instr_writemask_filter_cb)(const nir_instr *,
+                                              unsigned writemask, const void *);
+
 /** A simple instruction lowering callback
  *
  * Many instruction lowering passes can be written as a simple function which
@@ -4090,6 +4129,14 @@ typedef nir_ssa_def *(*nir_lower_instr_cb)(struct nir_builder *,
  * SSA def being generated.
  */
 #define NIR_LOWER_INSTR_PROGRESS ((nir_ssa_def *)(uintptr_t)1)
+
+/**
+ * Special return value for nir_lower_instr_cb when some progress occurred
+ * that should remove the current instruction that doesn't create an output
+ * (like a store)
+ */
+
+#define NIR_LOWER_INSTR_PROGRESS_REPLACE ((nir_ssa_def *)(uintptr_t)2)
 
 /** Iterate over all the instructions in a nir_function_impl and lower them
  *  using the provided callbacks
@@ -4433,13 +4480,21 @@ bool nir_lower_vars_to_ssa(nir_shader *shader);
 
 bool nir_remove_dead_derefs(nir_shader *shader);
 bool nir_remove_dead_derefs_impl(nir_function_impl *impl);
+
+typedef struct nir_remove_dead_variables_options {
+   bool (*can_remove_var)(nir_variable *var, void *data);
+   void *can_remove_var_data;
+} nir_remove_dead_variables_options;
+
 bool nir_remove_dead_variables(nir_shader *shader, nir_variable_mode modes,
-                               bool (*can_remove_var)(nir_variable *var));
+                               const nir_remove_dead_variables_options *options);
+
 bool nir_lower_variable_initializers(nir_shader *shader,
                                      nir_variable_mode modes);
 
 bool nir_move_vec_src_uses_to_dest(nir_shader *shader);
-bool nir_lower_vec_to_movs(nir_shader *shader);
+bool nir_lower_vec_to_movs(nir_shader *shader, nir_instr_writemask_filter_cb cb,
+                           const void *_data);
 void nir_lower_alpha_test(nir_shader *shader, enum compare_func func,
                           bool alpha_to_one,
                           const gl_state_index16 *alpha_ref_state_tokens);
@@ -4467,6 +4522,7 @@ void nir_lower_io_arrays_to_elements_no_indirects(nir_shader *shader,
 void nir_lower_io_to_scalar(nir_shader *shader, nir_variable_mode mask);
 bool nir_lower_io_to_scalar_early(nir_shader *shader, nir_variable_mode mask);
 bool nir_lower_io_to_vector(nir_shader *shader, nir_variable_mode mask);
+bool nir_vectorize_tess_levels(nir_shader *shader);
 
 bool nir_lower_fragcolor(nir_shader *shader);
 bool nir_lower_fragcoord_wtrans(nir_shader *shader);
@@ -4759,6 +4815,9 @@ bool nir_lower_wpos_ytransform(nir_shader *shader,
                                const nir_lower_wpos_ytransform_options *options);
 bool nir_lower_wpos_center(nir_shader *shader, const bool for_sample_shading);
 
+bool nir_lower_pntc_ytransform(nir_shader *shader,
+                               const gl_state_index16 clipplane_state_tokens[][STATE_LENGTH]);
+
 bool nir_lower_wrmasks(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
 
 bool nir_lower_fb_read(nir_shader *shader);
@@ -4823,6 +4882,9 @@ bool nir_lower_pack(nir_shader *shader);
 void nir_lower_mediump_outputs(nir_shader *nir);
 
 bool nir_lower_point_size(nir_shader *shader, float min, float max);
+
+void nir_lower_texcoord_replace(nir_shader *s, unsigned coord_replace,
+                                bool point_coord_is_sysval);
 
 typedef enum {
    nir_lower_interpolation_at_sample = (1 << 1),
@@ -4952,6 +5014,7 @@ typedef enum {
     nir_move_load_input  = (1 << 2),
     nir_move_comparisons = (1 << 3),
     nir_move_copies      = (1 << 4),
+    nir_move_load_ssbo   = (1 << 5),
 } nir_move_options;
 
 bool nir_can_move_instr(nir_instr *instr, nir_move_options options);
@@ -4989,11 +5052,17 @@ typedef bool (*nir_should_vectorize_mem_func)(unsigned align_mul,
                                               unsigned align_offset,
                                               unsigned bit_size,
                                               unsigned num_components,
-                                              nir_intrinsic_instr *low, nir_intrinsic_instr *high);
+                                              nir_intrinsic_instr *low, nir_intrinsic_instr *high,
+                                              void *data);
 
-bool nir_opt_load_store_vectorize(nir_shader *shader, nir_variable_mode modes,
-                                  nir_should_vectorize_mem_func callback,
-                                  nir_variable_mode robust_modes);
+typedef struct {
+   nir_should_vectorize_mem_func callback;
+   nir_variable_mode modes;
+   nir_variable_mode robust_modes;
+   void *cb_data;
+} nir_load_store_vectorize_options;
+
+bool nir_opt_load_store_vectorize(nir_shader *shader, const nir_load_store_vectorize_options *options);
 
 void nir_sweep(nir_shader *shader);
 

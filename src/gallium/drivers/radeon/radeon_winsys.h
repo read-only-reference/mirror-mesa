@@ -203,8 +203,8 @@ struct radeon_cmdbuf {
    unsigned prev_dw;  /* Total number of dwords in previous chunks. */
 
    /* Memory usage of the buffer list. These are always 0 for preamble IBs. */
-   uint64_t used_vram;
-   uint64_t used_gart;
+   uint32_t used_vram_kb;
+   uint32_t used_gart_kb;
    uint64_t gpu_address;
 
    /* Private winsys data. */
@@ -284,7 +284,9 @@ struct radeon_winsys {
     * \param ws        The winsys this function is called from.
     * \param info      Return structure
     */
-   void (*query_info)(struct radeon_winsys *ws, struct radeon_info *info);
+   void (*query_info)(struct radeon_winsys *ws, struct radeon_info *info,
+                      bool enable_smart_access_memory,
+                      bool disable_smart_access_memory);
 
    /**
     * A hint for the winsys that it should pin its execution threads to

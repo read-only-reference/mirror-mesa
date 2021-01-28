@@ -54,14 +54,14 @@
 
 #include "disassemble.h"
 
-static const struct debug_named_value debug_options[] = {
+static const struct debug_named_value midgard_debug_options[] = {
         {"msgs",      MIDGARD_DBG_MSGS,		"Print debug messages"},
         {"shaders",   MIDGARD_DBG_SHADERS,	"Dump shaders in NIR and MIR"},
         {"shaderdb",  MIDGARD_DBG_SHADERDB,     "Prints shader-db statistics"},
         DEBUG_NAMED_VALUE_END
 };
 
-DEBUG_GET_ONCE_FLAGS_OPTION(midgard_debug, "MIDGARD_MESA_DEBUG", debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(midgard_debug, "MIDGARD_MESA_DEBUG", midgard_debug_options, 0)
 
 /* TODO: This is not thread safe!! */
 static unsigned SHADER_DB_COUNT = 0;
@@ -143,6 +143,36 @@ M_LOAD(ld_color_buffer_as_fp32, nir_type_float32);
 M_STORE(st_vary_32, nir_type_uint32);
 M_LOAD(ld_cubemap_coords, nir_type_uint32);
 M_LOAD(ld_compute_id, nir_type_uint32);
+M_LOAD(ld_image_32f, nir_type_float32);
+M_LOAD(ld_image_16f, nir_type_float16);
+M_LOAD(ld_image_32u, nir_type_uint32);
+M_LOAD(ld_image_32i, nir_type_int32);
+M_STORE(st_image_32f, nir_type_float32);
+M_STORE(st_image_16f, nir_type_float16);
+M_STORE(st_image_32u, nir_type_uint32);
+M_STORE(st_image_32i, nir_type_int32);
+M_LOAD(lea_tex, nir_type_uint64);
+
+#define M_IMAGE(op) \
+static midgard_instruction \
+op ## _image(nir_alu_type type, unsigned val, unsigned address) \
+{ \
+        switch (type) { \
+        case nir_type_float32: \
+                 return m_ ## op ## _image_32f(val, address); \
+        case nir_type_float16: \
+                 return m_ ## op ## _image_16f(val, address); \
+        case nir_type_uint32: \
+                 return m_ ## op ## _image_32u(val, address); \
+        case nir_type_int32: \
+                 return m_ ## op ## _image_32i(val, address); \
+        default: \
+                 unreachable("Invalid image type"); \
+        } \
+}
+
+M_IMAGE(ld);
+M_IMAGE(st);
 
 static midgard_instruction
 v_branch(bool conditional, bool invert)
@@ -229,6 +259,29 @@ mdg_is_64(const nir_instr *instr, const void *_unused)
         }
 }
 
+/* Only vectorize int64 up to vec2 */
+static bool
+midgard_vectorize_filter(const nir_instr *instr, void *data)
+{
+        if (instr->type != nir_instr_type_alu)
+                return true;
+
+        const nir_alu_instr *alu = nir_instr_as_alu(instr);
+
+        unsigned num_components = alu->dest.dest.ssa.num_components;
+
+        int src_bit_size = nir_src_bit_size(alu->src[0].src);
+        int dst_bit_size = nir_dest_bit_size(alu->dest.dest);
+
+        if (src_bit_size == 64 || dst_bit_size == 64) {
+                if (num_components > 1)
+                        return false;
+        }
+
+        return true;
+}
+
+
 /* Flushes undefined values to zero */
 
 static void
@@ -263,6 +316,9 @@ optimise_nir(nir_shader *nir, unsigned quirks, bool is_blend)
 
         if (quirks & MIDGARD_BROKEN_LOD)
                 NIR_PASS_V(nir, midgard_nir_lod_errata);
+
+        /* Midgard image ops coordinates are 16-bit instead of 32-bit */
+        NIR_PASS(progress, nir, midgard_nir_lower_image_bitsize);
 
         NIR_PASS(progress, nir, midgard_nir_lower_algebraic_early);
 
@@ -308,7 +364,8 @@ optimise_nir(nir_shader *nir, unsigned quirks, bool is_blend)
                          nir_var_shader_out |
                          nir_var_function_temp);
 
-                NIR_PASS(progress, nir, nir_opt_vectorize, NULL, NULL);
+                NIR_PASS(progress, nir, nir_opt_vectorize,
+                         midgard_vectorize_filter, NULL);
         } while (progress);
 
         NIR_PASS_V(nir, nir_lower_alu_to_scalar, mdg_is_64, NULL);
@@ -348,7 +405,7 @@ optimise_nir(nir_shader *nir, unsigned quirks, bool is_blend)
 
         /* We are a vector architecture; write combine where possible */
         NIR_PASS(progress, nir, nir_move_vec_src_uses_to_dest);
-        NIR_PASS(progress, nir, nir_lower_vec_to_movs);
+        NIR_PASS(progress, nir, nir_lower_vec_to_movs, NULL, NULL);
 
         NIR_PASS(progress, nir, nir_opt_dce);
 }
@@ -419,12 +476,19 @@ nir_is_non_scalar_swizzle(nir_alu_src *src, unsigned nr_components)
 
 #define ATOMIC_CASE_IMPL(ctx, instr, nir, op, is_shared) \
         case nir_intrinsic_##nir: \
-                emit_atomic(ctx, instr, is_shared, midgard_op_##op); \
+                emit_atomic(ctx, instr, is_shared, midgard_op_##op, ~0); \
                 break;
 
 #define ATOMIC_CASE(ctx, instr, nir, op) \
         ATOMIC_CASE_IMPL(ctx, instr, shared_atomic_##nir, atomic_##op, true); \
         ATOMIC_CASE_IMPL(ctx, instr, global_atomic_##nir, atomic_##op, false);
+
+#define IMAGE_ATOMIC_CASE(ctx, instr, nir, op) \
+        case nir_intrinsic_image_atomic_##nir: { \
+                midgard_instruction ins = emit_image_op(ctx, instr, true); \
+                emit_atomic(ctx, instr, false, midgard_op_atomic_##op, ins.dest); \
+                break; \
+        }
 
 #define ALU_CASE(nir, _op) \
 	case nir_op_##nir: \
@@ -439,7 +503,7 @@ nir_is_non_scalar_swizzle(nir_alu_src *src, unsigned nr_components)
 		break;
 
 #define ALU_CHECK_CMP() \
-                assert(src_bitsize == 16 || src_bitsize == 32); \
+                assert(src_bitsize == 16 || src_bitsize == 32 || src_bitsize == 64); \
                 assert(dst_bitsize == 16 || dst_bitsize == 32); \
 
 #define ALU_CASE_BCAST(nir, _op, count) \
@@ -1106,7 +1170,7 @@ emit_global(
         bool is_read,
         unsigned srcdest,
         nir_src *offset,
-        bool is_shared)
+        unsigned seg)
 {
         /* TODO: types */
 
@@ -1117,7 +1181,7 @@ emit_global(
         else
                 ins = m_st_int4(srcdest, 0);
 
-        mir_set_offset(ctx, &ins, offset, is_shared);
+        mir_set_offset(ctx, &ins, offset, seg);
         mir_set_intr_mask(instr, &ins, is_read);
 
         /* Set a valid swizzle for masked out components */
@@ -1133,21 +1197,27 @@ emit_global(
 }
 
 /* If is_shared is off, the only other possible value are globals, since
- * SSBO's are being lowered to globals through a NIR pass. */
+ * SSBO's are being lowered to globals through a NIR pass.
+ * `image_direct_address` should be ~0 when instr is not an image_atomic
+ * and the destination register of a lea_tex op when it is an image_atomic. */
 static void
 emit_atomic(
         compiler_context *ctx,
         nir_intrinsic_instr *instr,
         bool is_shared,
-        midgard_load_store_op op)
+        midgard_load_store_op op,
+        unsigned image_direct_address)
 {
-        unsigned bitsize = nir_src_bit_size(instr->src[1]);
         nir_alu_type type =
                 (op == midgard_op_atomic_imin || op == midgard_op_atomic_imax) ?
                 nir_type_int : nir_type_uint;
 
+        bool is_image = image_direct_address != ~0;
+
         unsigned dest = nir_dest_index(&instr->dest);
-        unsigned val = nir_src_index(ctx, &instr->src[1]);
+        unsigned val_src = is_image ? 3 : 1;
+        unsigned val = nir_src_index(ctx, &instr->src[val_src]);
+        unsigned bitsize = nir_src_bit_size(instr->src[val_src]);
         emit_explicit_constant(ctx, val, val);
 
         midgard_instruction ins = {
@@ -1161,14 +1231,15 @@ emit_atomic(
 
         nir_src *src_offset = nir_get_io_offset_src(instr);
 
-        /* cmpxchg takes an extra value in arg_2, so we don't use it for the offset */
         if (op == midgard_op_atomic_cmpxchg) {
-                unsigned addr = nir_src_index(ctx, src_offset);
+                for(unsigned i = 0; i < 2; ++i)
+                        ins.swizzle[1][i] = i;
 
-                ins.src[1] = addr;
-                ins.src_types[1] = nir_type_uint | nir_src_bit_size(*src_offset);
+                ins.src[1] = is_image ? image_direct_address : nir_src_index(ctx, src_offset);
+                ins.src_types[1] = nir_type_uint64;
 
-                unsigned xchg_val = nir_src_index(ctx, &instr->src[2]);
+                unsigned xchg_val_src = is_image ? 4 : 2;
+                unsigned xchg_val = nir_src_index(ctx, &instr->src[xchg_val_src]);
                 emit_explicit_constant(ctx, xchg_val, xchg_val);
 
                 ins.src[2] = val;
@@ -1177,9 +1248,16 @@ emit_atomic(
 
                 if (is_shared)
                         ins.load_store.arg_1 |= 0x6E;
-        } else {
-                mir_set_offset(ctx, &ins, src_offset, is_shared);
-        }
+        } else if (is_image) {
+                for(unsigned i = 0; i < 2; ++i)
+                        ins.swizzle[2][i] = i;
+
+                ins.src[2] = image_direct_address;
+                ins.src_types[2] = nir_type_uint64;
+
+                ins.load_store.arg_1 |= 0x7E;
+        } else
+                mir_set_offset(ctx, &ins, src_offset, is_shared ? LDST_SHARED : LDST_GLOBAL);
 
         mir_set_intr_mask(&instr->instr, &ins, true);
 
@@ -1249,6 +1327,72 @@ emit_varying_read(
         emit_mir_instruction(ctx, ins);
 }
 
+
+/* If `is_atomic` is true, we emit a `lea_tex` since midgard doesn't not have special
+ * image_atomic opcodes. The caller can then use that address to emit a normal atomic opcode. */
+static midgard_instruction
+emit_image_op(compiler_context *ctx, nir_intrinsic_instr *instr, bool is_atomic)
+{
+        enum glsl_sampler_dim dim = nir_intrinsic_image_dim(instr);
+        unsigned nr_attr = ctx->stage == MESA_SHADER_VERTEX ?
+                util_bitcount64(ctx->nir->info.inputs_read) : 0;
+        unsigned nr_dim = glsl_get_sampler_dim_coordinate_components(dim);
+        bool is_array = nir_intrinsic_image_array(instr);
+        bool is_store = instr->intrinsic == nir_intrinsic_image_store;
+
+        /* TODO: MSAA */
+        assert(dim != GLSL_SAMPLER_DIM_MS && "MSAA'd images not supported");
+
+        unsigned coord_reg = nir_src_index(ctx, &instr->src[1]);
+        emit_explicit_constant(ctx, coord_reg, coord_reg);
+
+        nir_src *index = &instr->src[0];
+        bool is_direct = nir_src_is_const(*index);
+
+        /* For image opcodes, address is used as an index into the attribute descriptor */
+        unsigned address = nr_attr;
+        if (is_direct)
+                address += nir_src_as_uint(*index);
+
+        midgard_instruction ins;
+        if (is_store) { /* emit st_image_* */
+                unsigned val = nir_src_index(ctx, &instr->src[3]);
+                emit_explicit_constant(ctx, val, val);
+
+                nir_alu_type type = nir_intrinsic_src_type(instr);
+                ins = st_image(type, val, address);
+                nir_alu_type base_type = nir_alu_type_get_base_type(type);
+                ins.src_types[0] = base_type | nir_src_bit_size(instr->src[3]);
+        } else if (is_atomic) { /* emit lea_tex */
+                unsigned dest = make_compiler_temp_reg(ctx);
+                ins = m_lea_tex(dest, address);
+                ins.mask = mask_of(2); /* 64-bit memory address */
+        } else { /* emit ld_image_* */
+                nir_alu_type type = nir_intrinsic_dest_type(instr);
+                ins = ld_image(type, nir_dest_index(&instr->dest), address);
+                ins.mask = mask_of(nir_intrinsic_dest_components(instr));
+                ins.dest_type = type;
+        }
+
+        /* Coord reg */
+        ins.src[1] = coord_reg;
+        ins.src_types[1] = nir_type_uint16;
+        if (nr_dim == 3 || is_array) {
+                ins.load_store.arg_1 |= 0x20;
+        }
+
+        /* Image index reg */
+        if (!is_direct) {
+                ins.src[2] = nir_src_index(ctx, index);
+                ins.src_types[2] = nir_type_uint32;
+        } else
+                ins.load_store.arg_2 = 0x1E;
+
+        emit_mir_instruction(ctx, ins);
+
+        return ins;
+}
+
 static void
 emit_attr_read(
         compiler_context *ctx,
@@ -1310,6 +1454,9 @@ compute_builtin_arg(nir_op op)
                 return 0x14;
         case nir_intrinsic_load_local_invocation_id:
                 return 0x10;
+        case nir_intrinsic_load_global_invocation_id:
+        case nir_intrinsic_load_global_invocation_id_zero_base:
+                return 0x18;
         default:
                 unreachable("Invalid compute paramater loaded");
         }
@@ -1494,29 +1641,46 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 break;
         }
 
+        case nir_intrinsic_image_load:
+        case nir_intrinsic_image_store:
+                emit_image_op(ctx, instr, false);
+                break;
+
+        case nir_intrinsic_image_size: {
+                unsigned nr_comp = nir_intrinsic_dest_components(instr);
+                emit_sysval_read(ctx, &instr->instr, nr_comp, 0);
+                break;
+        }
+
         case nir_intrinsic_load_uniform:
         case nir_intrinsic_load_ubo:
         case nir_intrinsic_load_global:
+        case nir_intrinsic_load_global_constant:
         case nir_intrinsic_load_shared:
+        case nir_intrinsic_load_scratch:
         case nir_intrinsic_load_input:
+        case nir_intrinsic_load_kernel_input:
         case nir_intrinsic_load_interpolated_input: {
                 bool is_uniform = instr->intrinsic == nir_intrinsic_load_uniform;
                 bool is_ubo = instr->intrinsic == nir_intrinsic_load_ubo;
-                bool is_global = instr->intrinsic == nir_intrinsic_load_global;
+                bool is_global = instr->intrinsic == nir_intrinsic_load_global ||
+                        instr->intrinsic == nir_intrinsic_load_global_constant;
                 bool is_shared = instr->intrinsic == nir_intrinsic_load_shared;
+                bool is_scratch = instr->intrinsic == nir_intrinsic_load_scratch;
                 bool is_flat = instr->intrinsic == nir_intrinsic_load_input;
+                bool is_kernel = instr->intrinsic == nir_intrinsic_load_kernel_input;
                 bool is_interp = instr->intrinsic == nir_intrinsic_load_interpolated_input;
 
                 /* Get the base type of the intrinsic */
                 /* TODO: Infer type? Does it matter? */
                 nir_alu_type t =
-                        (is_ubo || is_global || is_shared) ? nir_type_uint :
                         (is_interp) ? nir_type_float :
-                        nir_intrinsic_dest_type(instr);
+                        (is_uniform || is_flat) ? nir_intrinsic_dest_type(instr) :
+                        nir_type_uint;
 
                 t = nir_alu_type_get_base_type(t);
 
-                if (!(is_ubo || is_global)) {
+                if (!(is_ubo || is_global || is_scratch)) {
                         offset = nir_intrinsic_base(instr);
                 }
 
@@ -1537,6 +1701,8 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
                 if (is_uniform && !ctx->is_blend) {
                         emit_ubo_read(ctx, &instr->instr, reg, (ctx->sysvals.sysval_count + offset) * 16, indirect_offset, 4, 0);
+                } else if (is_kernel) {
+                        emit_ubo_read(ctx, &instr->instr, reg, (ctx->sysvals.sysval_count * 16) + offset, indirect_offset, 0, 0);
                 } else if (is_ubo) {
                         nir_src index = instr->src[0];
 
@@ -1545,8 +1711,9 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
                         uint32_t uindex = nir_src_as_uint(index) + 1;
                         emit_ubo_read(ctx, &instr->instr, reg, offset, indirect_offset, 0, uindex);
-                } else if (is_global || is_shared) {
-                        emit_global(ctx, &instr->instr, true, reg, src_offset, is_shared);
+                } else if (is_global || is_shared || is_scratch) {
+                        unsigned seg = is_global ? LDST_GLOBAL : (is_shared ? LDST_SHARED : LDST_SCRATCH);
+                        emit_global(ctx, &instr->instr, true, reg, src_offset, seg);
                 } else if (ctx->stage == MESA_SHADER_FRAGMENT && !ctx->is_blend) {
                         emit_varying_read(ctx, reg, offset, nr_comp, component, indirect_offset, t | nir_dest_bit_size(instr->dest), is_flat);
                 } else if (ctx->is_blend) {
@@ -1770,13 +1937,23 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
         case nir_intrinsic_store_global:
         case nir_intrinsic_store_shared:
+        case nir_intrinsic_store_scratch:
                 reg = nir_src_index(ctx, &instr->src[0]);
                 emit_explicit_constant(ctx, reg, reg);
 
-                emit_global(ctx, &instr->instr, false, reg, &instr->src[1], instr->intrinsic == nir_intrinsic_store_shared);
+                unsigned seg;
+                if (instr->intrinsic == nir_intrinsic_store_global)
+                        seg = LDST_GLOBAL;
+                else if (instr->intrinsic == nir_intrinsic_store_shared)
+                        seg = LDST_SHARED;
+                else
+                        seg = LDST_SCRATCH;
+
+                emit_global(ctx, &instr->instr, false, reg, &instr->src[1], seg);
                 break;
 
         case nir_intrinsic_load_ssbo_address:
+        case nir_intrinsic_load_work_dim:
                 emit_sysval_read(ctx, &instr->instr, 1, 0);
                 break;
 
@@ -1788,11 +1965,14 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
         case nir_intrinsic_load_viewport_offset:
         case nir_intrinsic_load_num_work_groups:
         case nir_intrinsic_load_sampler_lod_parameters_pan:
+        case nir_intrinsic_load_local_group_size:
                 emit_sysval_read(ctx, &instr->instr, 3, 0);
                 break;
 
         case nir_intrinsic_load_work_group_id:
         case nir_intrinsic_load_local_invocation_id:
+        case nir_intrinsic_load_global_invocation_id:
+        case nir_intrinsic_load_global_invocation_id_zero_base:
                 emit_compute_builtin(ctx, instr);
                 break;
 
@@ -1811,6 +1991,7 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
         case nir_intrinsic_memory_barrier_buffer:
         case nir_intrinsic_memory_barrier_shared:
+        case nir_intrinsic_group_memory_barrier:
                 break;
 
         case nir_intrinsic_control_barrier:
@@ -1829,6 +2010,17 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
         ATOMIC_CASE(ctx, instr, umax, umax);
         ATOMIC_CASE(ctx, instr, umin, umin);
         ATOMIC_CASE(ctx, instr, xor, xor);
+
+        IMAGE_ATOMIC_CASE(ctx, instr, add, add);
+        IMAGE_ATOMIC_CASE(ctx, instr, and, and);
+        IMAGE_ATOMIC_CASE(ctx, instr, comp_swap, cmpxchg);
+        IMAGE_ATOMIC_CASE(ctx, instr, exchange, xchg);
+        IMAGE_ATOMIC_CASE(ctx, instr, imax, imax);
+        IMAGE_ATOMIC_CASE(ctx, instr, imin, imin);
+        IMAGE_ATOMIC_CASE(ctx, instr, or, or);
+        IMAGE_ATOMIC_CASE(ctx, instr, umax, umax);
+        IMAGE_ATOMIC_CASE(ctx, instr, umin, umin);
+        IMAGE_ATOMIC_CASE(ctx, instr, xor, xor);
 
         default:
                 fprintf(stderr, "Unhandled intrinsic %s\n", nir_intrinsic_infos[instr->intrinsic].name);
@@ -2068,7 +2260,6 @@ emit_texop_native(compiler_context *ctx, nir_tex_instr *instr,
         int sampler_index = texture_index;
 
         nir_alu_type dest_base = nir_alu_type_get_base_type(instr->dest_type);
-        nir_alu_type dest_type = dest_base | nir_dest_bit_size(*dest);
 
         /* texture instructions support float outmods */
         unsigned outmod = midgard_outmod_none;
@@ -2081,7 +2272,7 @@ emit_texop_native(compiler_context *ctx, nir_tex_instr *instr,
                 .mask = 0xF,
                 .dest = nir_dest_index(dest),
                 .src = { ~0, ~0, ~0, ~0 },
-                .dest_type = dest_type,
+                .dest_type = instr->dest_type,
                 .swizzle = SWIZZLE_IDENTITY_4,
                 .outmod = outmod,
                 .op = midgard_texop,
@@ -2839,6 +3030,8 @@ midgard_compile_shader_nir(void *mem_ctx, nir_shader *nir,
         NIR_PASS_V(nir, nir_lower_ssbo);
         NIR_PASS_V(nir, pan_nir_lower_zs_store);
 
+        NIR_PASS_V(nir, pan_nir_lower_64bit_intrin);
+
         /* Optimisation passes */
 
         optimise_nir(nir, ctx->quirks, inputs->is_blend);
@@ -2855,6 +3048,7 @@ midgard_compile_shader_nir(void *mem_ctx, nir_shader *nir,
         panfrost_nir_assign_sysvals(&ctx->sysvals, ctx, nir);
         program->sysval_count = ctx->sysvals.sysval_count;
         memcpy(program->sysvals, ctx->sysvals.sysvals, sizeof(ctx->sysvals.sysvals[0]) * ctx->sysvals.sysval_count);
+        ctx->tls_size = nir->scratch_size;
 
         nir_foreach_function(func, nir) {
                 if (!func->impl)

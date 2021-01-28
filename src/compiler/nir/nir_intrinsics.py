@@ -272,12 +272,12 @@ intrinsic("interp_deref_at_vertex", src_comp=[1, 1], dest_comp=0,
 
 # Gets the length of an unsized array at the end of a buffer
 intrinsic("deref_buffer_array_length", src_comp=[-1], dest_comp=1,
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+          indices=[ACCESS], flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # Ask the driver for the size of a given SSBO. It takes the buffer index
 # as source.
 intrinsic("get_ssbo_size", src_comp=[-1], dest_comp=1, bit_sizes=[32],
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+          indices=[ACCESS], flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("get_ubo_size", src_comp=[-1], dest_comp=1,
           flags=[CAN_ELIMINATE, CAN_REORDER])
 
@@ -287,6 +287,12 @@ intrinsic("deref_mode_is", src_comp=[-1], dest_comp=1,
           indices=[MEMORY_MODES], flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("addr_mode_is", src_comp=[-1], dest_comp=1,
           indices=[MEMORY_MODES], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+intrinsic("is_sparse_texels_resident", dest_comp=1, src_comp=[1], bit_sizes=[1],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+# result code is resident only if both inputs are resident
+intrinsic("sparse_residency_code_and", dest_comp=1, src_comp=[1, 1], bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # a barrier is an intrinsic with no inputs/outputs but which can't be moved
 # around/optimized in general
@@ -520,6 +526,7 @@ def image(name, src_comp=[], extra_indices=[], **kwargs):
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
 
 image("load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
+image("sparse_load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
 image("store", src_comp=[4, 1, 0, 1], extra_indices=[SRC_TYPE])
 image("atomic_add",  src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_imin",  src_comp=[4, 1, 1], dest_comp=1)

@@ -75,6 +75,8 @@ struct si_state_rasterizer {
    unsigned pa_cl_clip_cntl;
    float line_width;
    float max_point_size;
+   unsigned ngg_cull_flags : 8;
+   unsigned ngg_cull_flags_y_inverted : 8;
    unsigned sprite_coord_enable : 8;
    unsigned clip_plane_enable : 8;
    unsigned half_pixel_center : 1;
@@ -383,7 +385,7 @@ enum
 
    GFX10_GS_QUERY_BUF,
 
-   SI_NUM_RW_BUFFERS,
+   SI_NUM_INTERNAL_BINDINGS,
 };
 
 /* Indices into sctx->descriptors, laid out so that gfx and compute pipelines
@@ -404,7 +406,7 @@ enum
    SI_NUM_SHADER_DESCS,
 };
 
-#define SI_DESCS_RW_BUFFERS    0
+#define SI_DESCS_INTERNAL      0
 #define SI_DESCS_FIRST_SHADER  1
 #define SI_DESCS_FIRST_COMPUTE (SI_DESCS_FIRST_SHADER + PIPE_SHADER_COMPUTE * SI_NUM_SHADER_DESCS)
 #define SI_NUM_DESCS           (SI_DESCS_FIRST_SHADER + SI_NUM_SHADERS * SI_NUM_SHADER_DESCS)
@@ -478,15 +480,10 @@ struct si_buffer_resources {
 #define si_pm4_bind_state(sctx, member, value)                                                     \
    do {                                                                                            \
       (sctx)->queued.named.member = (value);                                                       \
-      (sctx)->dirty_states |= SI_STATE_BIT(member);                                                \
-   } while (0)
-
-#define si_pm4_delete_state(sctx, member, value)                                                   \
-   do {                                                                                            \
-      if ((sctx)->queued.named.member == (value)) {                                                \
-         (sctx)->queued.named.member = NULL;                                                       \
-      }                                                                                            \
-      si_pm4_free_state(sctx, (struct si_pm4_state *)(value), SI_STATE_IDX(member));               \
+      if (value && value != (sctx)->emitted.named.member)                                          \
+         (sctx)->dirty_states |= SI_STATE_BIT(member);                                             \
+      else                                                                                         \
+         (sctx)->dirty_states &= ~SI_STATE_BIT(member);                                            \
    } while (0)
 
 /* si_descriptors.c */
@@ -512,16 +509,15 @@ bool si_gfx_resources_check_encrypted(struct si_context *sctx);
 bool si_compute_resources_check_encrypted(struct si_context *sctx);
 void si_shader_pointers_mark_dirty(struct si_context *sctx);
 void si_add_all_descriptors_to_bo_list(struct si_context *sctx);
-void si_upload_const_buffer(struct si_context *sctx, struct si_resource **buf, const uint8_t *ptr,
-                            unsigned size, uint32_t *const_offset);
 void si_update_all_texture_descriptors(struct si_context *sctx);
 void si_shader_change_notify(struct si_context *sctx);
 void si_update_needs_color_decompress_masks(struct si_context *sctx);
 void si_emit_graphics_shader_pointers(struct si_context *sctx);
 void si_emit_compute_shader_pointers(struct si_context *sctx);
-void si_set_rw_buffer(struct si_context *sctx, uint slot, const struct pipe_constant_buffer *input);
-void si_set_rw_shader_buffer(struct si_context *sctx, uint slot,
-                             const struct pipe_shader_buffer *sbuffer);
+void si_set_internal_const_buffer(struct si_context *sctx, uint slot,
+                                  const struct pipe_constant_buffer *input);
+void si_set_internal_shader_buffer(struct si_context *sctx, uint slot,
+                                   const struct pipe_shader_buffer *sbuffer);
 void si_set_active_descriptors(struct si_context *sctx, unsigned desc_idx,
                                uint64_t new_active_mask);
 void si_set_active_descriptors_for_shader(struct si_context *sctx, struct si_shader_selector *sel);
@@ -589,11 +585,7 @@ unsigned si_get_input_prim(const struct si_shader_selector *gs);
 bool si_update_ngg(struct si_context *sctx);
 
 /* si_state_draw.c */
-void si_emit_surface_sync(struct si_context *sctx, struct radeon_cmdbuf *cs,
-                          unsigned cp_coher_cntl);
 void si_prim_discard_signal_next_compute_ib_start(struct si_context *sctx);
-void gfx10_emit_cache_flush(struct si_context *sctx);
-void si_emit_cache_flush(struct si_context *sctx);
 void si_trace_emit(struct si_context *sctx);
 void si_init_draw_functions(struct si_context *sctx);
 

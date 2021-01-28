@@ -264,7 +264,7 @@ sample_plane(nir_builder *b, nir_tex_instr *tex, int plane,
    plane_tex->src[tex->num_srcs].src_type = nir_tex_src_plane;
    plane_tex->op = nir_texop_tex;
    plane_tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
-   plane_tex->dest_type = nir_type_float;
+   plane_tex->dest_type = nir_type_float | nir_dest_bit_size(tex->dest);
    plane_tex->coord_components = 2;
 
    plane_tex->texture_index = tex->texture_index;
@@ -732,7 +732,7 @@ get_zero_or_one(nir_builder *b, nir_alu_type type, uint8_t swizzle_val)
       v[0].u32 = v[1].u32 = v[2].u32 = v[3].u32 = 0;
    } else {
       assert(swizzle_val == 5);
-      if (type == nir_type_float)
+      if (type == nir_type_float32)
          v[0].f32 = v[1].f32 = v[2].f32 = v[3].f32 = 1.0;
       else
          v[0].u32 = v[1].u32 = v[2].u32 = v[3].u32 = 1;
@@ -924,7 +924,7 @@ lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
 
    b->cursor = nir_after_instr(&tex->instr);
 
-   nir_ssa_def *dest[4];
+   nir_ssa_def *dest[5] = {NULL};
    for (unsigned i = 0; i < 4; ++i) {
       nir_tex_instr *tex_copy = nir_tex_instr_create(b->shader, tex->num_srcs + 1);
       tex_copy->op = tex->op;
@@ -933,6 +933,7 @@ lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
       tex_copy->is_array = tex->is_array;
       tex_copy->is_shadow = tex->is_shadow;
       tex_copy->is_new_style_shadow = tex->is_new_style_shadow;
+      tex_copy->is_sparse = tex->is_sparse;
       tex_copy->component = tex->component;
       tex_copy->dest_type = tex->dest_type;
 
@@ -953,9 +954,13 @@ lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
       nir_builder_instr_insert(b, &tex_copy->instr);
 
       dest[i] = nir_channel(b, &tex_copy->dest.ssa, 3);
+      if (tex->is_sparse) {
+         nir_ssa_def *code = nir_channel(b, &tex_copy->dest.ssa, 4);
+         dest[4] = dest[4] ? nir_sparse_residency_code_and(b, dest[4], code) : code;
+      }
    }
 
-   nir_ssa_def *res = nir_vec4(b, dest[0], dest[1], dest[2], dest[3]);
+   nir_ssa_def *res = nir_vec(b, dest, tex->dest.ssa.num_components);
    nir_ssa_def_rewrite_uses(&tex->dest.ssa, nir_src_for_ssa(res));
    nir_instr_remove(&tex->instr);
 

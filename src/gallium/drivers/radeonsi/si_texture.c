@@ -162,7 +162,8 @@ static int si_init_surface(struct si_screen *sscreen, struct radeon_surf *surfac
    const struct util_format_description *desc = util_format_description(ptex->format);
    bool is_depth, is_stencil;
    int r;
-   unsigned bpe, flags = 0;
+   unsigned bpe;
+   uint64_t flags = 0;
 
    is_depth = util_format_has_depth(desc);
    is_stencil = util_format_has_stencil(desc);
@@ -431,8 +432,8 @@ static void si_reallocate_texture_inplace(struct si_context *sctx, struct si_tex
    tex->buffer.b.b.bind = templ.bind;
    pb_reference(&tex->buffer.buf, new_tex->buffer.buf);
    tex->buffer.gpu_address = new_tex->buffer.gpu_address;
-   tex->buffer.vram_usage = new_tex->buffer.vram_usage;
-   tex->buffer.gart_usage = new_tex->buffer.gart_usage;
+   tex->buffer.vram_usage_kb = new_tex->buffer.vram_usage_kb;
+   tex->buffer.gart_usage_kb = new_tex->buffer.gart_usage_kb;
    tex->buffer.bo_size = new_tex->buffer.bo_size;
    tex->buffer.bo_alignment = new_tex->buffer.bo_alignment;
    tex->buffer.domains = new_tex->buffer.domains;
@@ -973,8 +974,8 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
       resource->bo_alignment = plane0->buffer.bo_alignment;
       resource->flags = plane0->buffer.flags;
       resource->domains = plane0->buffer.domains;
-      resource->vram_usage = plane0->buffer.vram_usage;
-      resource->gart_usage = plane0->buffer.gart_usage;
+      resource->vram_usage_kb = plane0->buffer.vram_usage_kb;
+      resource->gart_usage_kb = plane0->buffer.gart_usage_kb;
 
       pb_reference(&resource->buf, plane0->buffer.buf);
       resource->gpu_address = plane0->buffer.gpu_address;
@@ -991,9 +992,9 @@ static struct si_texture *si_texture_create_object(struct pipe_screen *screen,
       resource->bo_alignment = imported_buf->alignment;
       resource->domains = sscreen->ws->buffer_get_initial_domain(resource->buf);
       if (resource->domains & RADEON_DOMAIN_VRAM)
-         resource->vram_usage = resource->bo_size;
+         resource->vram_usage_kb = MAX2(1, resource->bo_size / 1024);
       else if (resource->domains & RADEON_DOMAIN_GTT)
-         resource->gart_usage = resource->bo_size;
+         resource->gart_usage_kb = MAX2(1, resource->bo_size / 1024);
       if (sscreen->ws->buffer_get_flags)
          resource->flags = sscreen->ws->buffer_get_flags(resource->buf);
    }
@@ -1506,7 +1507,7 @@ static struct pipe_resource *si_texture_from_winsys_buffer(struct si_screen *ssc
        * surface pitch isn't correctly aligned by default.
        *
        * In order to support it correctly we require multi-image
-       * metadata to be syncrhonized between radv and radeonsi. The
+       * metadata to be synchronized between radv and radeonsi. The
        * semantics of associating multiple image metadata to a memory
        * object on the vulkan export side are not concretely defined
        * either.
@@ -1810,7 +1811,8 @@ static void *si_texture_transfer_map(struct pipe_context *ctx, struct pipe_resou
        * is busy.
        */
       if (!tex->surface.is_linear || (tex->buffer.flags & RADEON_FLAG_ENCRYPTED) ||
-          (tex->buffer.domains & RADEON_DOMAIN_VRAM && !sctx->screen->info.all_vram_visible))
+          (tex->buffer.domains & RADEON_DOMAIN_VRAM &&
+           !sctx->screen->info.smart_access_memory))
          use_staging_texture = true;
       else if (usage & PIPE_MAP_READ)
          use_staging_texture =
@@ -2474,13 +2476,20 @@ void si_init_screen_texture_functions(struct si_screen *sscreen)
    sscreen->b.resource_get_param = si_resource_get_param;
    sscreen->b.resource_get_info = si_texture_get_info;
    sscreen->b.resource_from_memobj = si_resource_from_memobj;
-   sscreen->b.resource_create_with_modifiers = si_texture_create_with_modifiers;
    sscreen->b.memobj_create_from_handle = si_memobj_from_handle;
    sscreen->b.memobj_destroy = si_memobj_destroy;
    sscreen->b.check_resource_capability = si_check_resource_capability;
-   sscreen->b.query_dmabuf_modifiers = si_query_dmabuf_modifiers;
-   sscreen->b.is_dmabuf_modifier_supported = si_is_dmabuf_modifier_supported;
-   sscreen->b.get_dmabuf_modifier_planes = si_get_dmabuf_modifier_planes;
+
+   /* By not setting it the frontend will fall back to non-modifier create,
+    * which works around some applications using modifiers that are not
+    * allowed in combination with lack of error reporting in
+    * gbm_dri_surface_create */
+   if (sscreen->info.chip_class >= GFX9 && sscreen->info.kernel_has_modifiers) {
+      sscreen->b.resource_create_with_modifiers = si_texture_create_with_modifiers;
+      sscreen->b.query_dmabuf_modifiers = si_query_dmabuf_modifiers;
+      sscreen->b.is_dmabuf_modifier_supported = si_is_dmabuf_modifier_supported;
+      sscreen->b.get_dmabuf_modifier_planes = si_get_dmabuf_modifier_planes;
+   }
 }
 
 void si_init_context_texture_functions(struct si_context *sctx)

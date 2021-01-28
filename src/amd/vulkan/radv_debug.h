@@ -60,6 +60,7 @@ enum {
 	RADV_DEBUG_HANG              = 1u << 29,
 	RADV_DEBUG_IMG               = 1u << 30,
 	RADV_DEBUG_NO_UMR            = 1u << 31,
+	RADV_DEBUG_INVARIANT_GEOM    = 1ull << 32,
 };
 
 enum {
@@ -71,6 +72,7 @@ enum {
 	RADV_PERFTEST_PS_WAVE_32      = 1u << 5,
 	RADV_PERFTEST_GE_WAVE_32      = 1u << 6,
 	RADV_PERFTEST_DFSM            = 1u << 7,
+	RADV_PERFTEST_NO_SAM          = 1u << 8,
 };
 
 bool

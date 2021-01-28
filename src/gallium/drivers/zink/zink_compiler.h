@@ -68,17 +68,19 @@ struct zink_shader {
       int index;
       int binding;
       VkDescriptorType type;
-   } bindings[PIPE_MAX_CONSTANT_BUFFERS + PIPE_MAX_SHADER_SAMPLER_VIEWS];
+      unsigned char size;
+   } bindings[PIPE_MAX_CONSTANT_BUFFERS + PIPE_MAX_SAMPLERS + PIPE_MAX_SHADER_BUFFERS + PIPE_MAX_SHADER_IMAGES];
    size_t num_bindings;
    struct set *programs;
 
-   bool has_tess_shader; // vertex shaders need to know if a tesseval shader exists
-   bool has_geometry_shader; // vertex shaders need to know if a geometry shader exists
    union {
       struct zink_shader *generated; // a generated shader that this shader "owns"
       bool is_generated; // if this is a driver-created shader (e.g., tcs)
    };
 };
+
+void
+zink_screen_init_compiler(struct zink_screen *screen);
 
 VkShaderModule
 zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs, struct zink_shader_key *key,

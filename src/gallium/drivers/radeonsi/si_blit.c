@@ -74,28 +74,35 @@ void si_blitter_begin(struct si_context *sctx, enum si_blitter_op op)
    }
 
    if (op & SI_DISABLE_RENDER_COND)
-      sctx->render_cond_force_off = true;
+      sctx->render_cond_enabled = false;
 
    if (sctx->screen->dpbb_allowed) {
       sctx->dpbb_force_off = true;
       si_mark_atom_dirty(sctx, &sctx->atoms.s.dpbb_state);
    }
+
+   sctx->blitter_running = true;
 }
 
 void si_blitter_end(struct si_context *sctx)
 {
+   sctx->blitter_running = false;
+
    if (sctx->screen->dpbb_allowed) {
       sctx->dpbb_force_off = false;
       si_mark_atom_dirty(sctx, &sctx->atoms.s.dpbb_state);
    }
 
-   sctx->render_cond_force_off = false;
+   sctx->render_cond_enabled = sctx->render_cond;
 
    /* Restore shader pointers because the VS blit shader changed all
     * non-global VS user SGPRs. */
    sctx->shader_pointers_dirty |= SI_DESCS_SHADER_MASK(VERTEX);
-   sctx->vertex_buffer_pointer_dirty = sctx->vb_descriptors_buffer != NULL;
-   sctx->vertex_buffer_user_sgprs_dirty = sctx->num_vertex_elements > 0;
+   sctx->vertex_buffer_pointer_dirty = sctx->vb_descriptors_buffer != NULL &&
+                                       sctx->num_vertex_elements >
+                                       sctx->screen->num_vbos_in_user_sgprs;
+   sctx->vertex_buffer_user_sgprs_dirty = sctx->num_vertex_elements > 0 &&
+                                          sctx->screen->num_vbos_in_user_sgprs;
    si_mark_atom_dirty(sctx, &sctx->atoms.s.shader_pointers);
 }
 
@@ -723,7 +730,7 @@ void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
 {
    unsigned compressed_colortex_counter, mask;
 
-   if (sctx->blitter->running)
+   if (sctx->blitter_running)
       return;
 
    /* Update the compressed_colortex_mask if necessary. */
@@ -1141,6 +1148,9 @@ static void si_blit(struct pipe_context *ctx, const struct pipe_blit_info *info)
       return;
    }
 
+   if (unlikely(sctx->thread_trace_enabled))
+      sctx->sqtt_next_event = EventCmdCopyImage;
+
    /* Using compute for copying to a linear texture in GTT is much faster than
     * going through RBs (render backends). This improves DRI PRIME performance.
     */
@@ -1161,6 +1171,9 @@ static void si_blit(struct pipe_context *ctx, const struct pipe_blit_info *info)
                                          info->dst.format);
    si_decompress_subresource(ctx, info->src.resource, PIPE_MASK_RGBAZS, info->src.level,
                              info->src.box.z, info->src.box.z + info->src.box.depth - 1);
+
+   if (unlikely(sctx->thread_trace_enabled))
+      sctx->sqtt_next_event = EventCmdBlitImage;
 
    si_blitter_begin(sctx, SI_BLIT | (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
    util_blitter_blit(sctx->blitter, info);

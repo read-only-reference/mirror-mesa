@@ -361,7 +361,7 @@ compile_setupinst(struct st_translate *t,
       nir_tex_instr *tex = nir_tex_instr_create(t->b->shader, 3);
       tex->op = nir_texop_tex;
       tex->sampler_dim = glsl_get_sampler_dim(tex_var->type);
-      tex->dest_type = nir_type_float;
+      tex->dest_type = nir_type_float32;
       tex->coord_components =
          glsl_get_sampler_dim_coordinate_components(tex->sampler_dim);
 
@@ -540,7 +540,7 @@ st_init_atifs_prog(struct gl_context *ctx, struct gl_program *prog)
    unsigned pass, i, r, optype, arg;
 
    static const gl_state_index16 fog_params_state[STATE_LENGTH] =
-      {STATE_INTERNAL, STATE_FOG_PARAMS_OPTIMIZED, 0, 0};
+      {STATE_FOG_PARAMS_OPTIMIZED, 0, 0};
    static const gl_state_index16 fog_color[STATE_LENGTH] =
       {STATE_FOG_COLOR, 0, 0, 0};
 

@@ -234,6 +234,9 @@ st_invalidate_state(struct gl_context *ctx)
        st_user_clip_planes_enabled(ctx))
       st->dirty |= ST_NEW_CLIP_STATE;
 
+   if (new_state & _NEW_POINT && st->lower_texcoord_replace)
+      st->dirty |= ST_NEW_FS_STATE;
+
    if (new_state & _NEW_PIXEL)
       st->dirty |= ST_NEW_PIXEL_TRANSFER;
 
@@ -586,10 +589,9 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    ctx->st = st;
 
    st->ctx = ctx;
-   st->screen = pipe->screen;
+   st->screen = screen;
    st->pipe = pipe;
    st->dirty = ST_ALL_STATES_MASK;
-   st->screen = screen;
 
    st->can_bind_const_buffer_as_vertex =
       screen->get_param(screen, PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX);
@@ -686,6 +688,8 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       !!(screen->get_param(screen, PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK) &
          (PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 |
           PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600));
+   st->texture_buffer_sampler =
+      screen->get_param(screen, PIPE_CAP_TEXTURE_BUFFER_SAMPLER);
    st->has_time_elapsed =
       screen->get_param(screen, PIPE_CAP_QUERY_TIME_ELAPSED);
    st->has_half_float_packing =
@@ -710,6 +714,10 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       !screen->get_param(screen, PIPE_CAP_CLIP_PLANES);
    st->prefer_real_buffer_in_constbuf0 =
       screen->get_param(screen, PIPE_CAP_PREFER_REAL_BUFFER_IN_CONSTBUF0);
+   st->has_conditional_render =
+      screen->get_param(screen, PIPE_CAP_CONDITIONAL_RENDER);
+   st->lower_texcoord_replace =
+      !screen->get_param(screen, PIPE_CAP_POINT_SPRITE);
    st->allow_st_finalize_nir_twice = screen->finalize_nir != NULL;
 
    st->has_hw_atomics =
@@ -800,7 +808,8 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
          !st->clamp_frag_color_in_shader &&
          !st->clamp_frag_depth_in_shader &&
          !st->force_persample_in_shader &&
-         !st->lower_two_sided_color;
+         !st->lower_two_sided_color &&
+         !st->lower_texcoord_replace;
 
    st->shader_has_one_variant[MESA_SHADER_TESS_CTRL] = st->has_shareable_shaders;
    st->shader_has_one_variant[MESA_SHADER_TESS_EVAL] =
@@ -813,6 +822,10 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
          !st->clamp_vert_color_in_shader &&
          !st->lower_ucp;
    st->shader_has_one_variant[MESA_SHADER_COMPUTE] = st->has_shareable_shaders;
+
+   if (util_cpu_caps.cores_per_L3 == util_cpu_caps.nr_cpus ||
+       !st->pipe->set_context_param)
+      st->pin_thread_counter = ST_L3_PINNING_DISABLED;
 
    st->bitmap.cache.empty = true;
 
@@ -1013,12 +1026,14 @@ st_create_context(gl_api api, struct pipe_context *pipe,
    if (pipe->set_context_param)
       funcs.PinDriverToL3Cache = st_pin_driver_to_l3_cache;
 
-   ctx = calloc(1, sizeof(struct gl_context));
+   /* gl_context must be 16-byte aligned due to the alignment on GLmatrix. */
+   ctx = align_malloc(sizeof(struct gl_context), 16);
    if (!ctx)
       return NULL;
+   memset(ctx, 0, sizeof(*ctx));
 
    if (!_mesa_initialize_context(ctx, api, visual, shareCtx, &funcs)) {
-      free(ctx);
+      align_free(ctx);
       return NULL;
    }
 
@@ -1151,7 +1166,7 @@ st_destroy_context(struct st_context *st)
 
    _mesa_destroy_debug_output(ctx);
 
-   free(ctx);
+   align_free(ctx);
 
    if (save_ctx == ctx) {
       /* unbind the context we just deleted */

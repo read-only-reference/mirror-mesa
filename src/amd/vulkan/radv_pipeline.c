@@ -223,6 +223,8 @@ static uint32_t get_hash_flags(const struct radv_device *device)
 		hash_flags |= RADV_HASH_SHADER_DISCARD_TO_DEMOTE;
 	if (device->instance->enable_mrt_output_nan_fixup)
 		hash_flags |= RADV_HASH_SHADER_MRT_NAN_FIXUP;
+	if (device->instance->debug_flags & RADV_DEBUG_INVARIANT_GEOM)
+		hash_flags |= RADV_HASH_SHADER_INVARIANT_GEOM;
 	return hash_flags;
 }
 
@@ -2330,6 +2332,10 @@ radv_link_shaders(struct radv_pipeline *pipeline, nir_shader **shaders,
 		ordered_shaders[shader_count++] = shaders[MESA_SHADER_COMPUTE];
 	}
 
+	bool has_geom_tess = shaders[MESA_SHADER_GEOMETRY] || shaders[MESA_SHADER_TESS_CTRL];
+	bool merged_gs = shaders[MESA_SHADER_GEOMETRY] &&
+			 pipeline->device->physical_device->rad_info.chip_class >= GFX9;
+
 	if (!optimize_conservatively && shader_count > 1) {
 		unsigned first = ordered_shaders[shader_count - 1]->info.stage;
 		unsigned last = ordered_shaders[0]->info.stage;
@@ -2401,6 +2407,20 @@ radv_link_shaders(struct radv_pipeline *pipeline, nir_shader **shaders,
 
 		nir_compact_varyings(ordered_shaders[i],
 				     ordered_shaders[i - 1], true);
+
+		if (ordered_shaders[i]->info.stage == MESA_SHADER_TESS_CTRL ||
+		    (ordered_shaders[i]->info.stage == MESA_SHADER_VERTEX && has_geom_tess) ||
+		    (ordered_shaders[i]->info.stage == MESA_SHADER_TESS_EVAL && merged_gs)) {
+			nir_lower_io_to_vector(ordered_shaders[i], nir_var_shader_out);
+			if (ordered_shaders[i]->info.stage == MESA_SHADER_TESS_CTRL)
+				nir_vectorize_tess_levels(ordered_shaders[i]);
+			nir_opt_combine_stores(ordered_shaders[i], nir_var_shader_out);
+		}
+		if (ordered_shaders[i - 1]->info.stage == MESA_SHADER_GEOMETRY ||
+		    ordered_shaders[i - 1]->info.stage == MESA_SHADER_TESS_CTRL ||
+		    ordered_shaders[i - 1]->info.stage == MESA_SHADER_TESS_EVAL) {
+			nir_lower_io_to_vector(ordered_shaders[i - 1], nir_var_shader_in);
+		}
 
 		if (progress) {
 			if (nir_lower_global_vars_to_local(ordered_shaders[i])) {
@@ -2769,7 +2789,31 @@ radv_fill_shader_keys(struct radv_device *device,
 	keys[MESA_SHADER_FRAGMENT].fs.is_dual_src = key->is_dual_src;
 
 	if (nir[MESA_SHADER_COMPUTE]) {
-		keys[MESA_SHADER_COMPUTE].cs.subgroup_size = key->compute_subgroup_size;
+		unsigned subgroup_size = key->compute_subgroup_size;
+		unsigned req_subgroup_size = subgroup_size;
+		bool require_full_subgroups = key->require_full_subgroups;
+
+		if (!subgroup_size)
+			subgroup_size = device->physical_device->cs_wave_size;
+
+		unsigned local_size = nir[MESA_SHADER_COMPUTE]->info.cs.local_size[0] *
+				      nir[MESA_SHADER_COMPUTE]->info.cs.local_size[1] *
+				      nir[MESA_SHADER_COMPUTE]->info.cs.local_size[2];
+
+		/* Games don't always request full subgroups when they should,
+		 * which can cause bugs if cswave32 is enabled.
+		 */
+		if (device->physical_device->cs_wave_size == 32 &&
+		    nir[MESA_SHADER_COMPUTE]->info.cs.uses_wide_subgroup_intrinsics &&
+		    !req_subgroup_size && local_size % RADV_SUBGROUP_SIZE == 0)
+			require_full_subgroups = true;
+
+		if (require_full_subgroups && !req_subgroup_size) {
+			/* don't use wave32 pretending to be wave64 */
+			subgroup_size = RADV_SUBGROUP_SIZE;
+		}
+
+		keys[MESA_SHADER_COMPUTE].cs.subgroup_size = subgroup_size;
 	}
 }
 
@@ -2782,11 +2826,7 @@ radv_get_wave_size(struct radv_device *device,
 	if (stage == MESA_SHADER_GEOMETRY && !key->vs_common_out.as_ngg)
 		return 64;
 	else if (stage == MESA_SHADER_COMPUTE) {
-		if (key->cs.subgroup_size) {
-			/* Return the required subgroup size if specified. */
-			return key->cs.subgroup_size;
-		}
-		return device->physical_device->cs_wave_size;
+		return key->cs.subgroup_size;
 	}
 	else if (stage == MESA_SHADER_FRAGMENT)
 		return device->physical_device->ps_wave_size;
@@ -3012,7 +3052,8 @@ static bool
 mem_vectorize_callback(unsigned align_mul, unsigned align_offset,
                        unsigned bit_size,
                        unsigned num_components,
-                       nir_intrinsic_instr *low, nir_intrinsic_instr *high)
+                       nir_intrinsic_instr *low, nir_intrinsic_instr *high,
+                       void *data)
 {
 	if (num_components > 4)
 		return false;
@@ -3114,6 +3155,39 @@ lower_bit_size_callback(const nir_instr *instr, void *_)
 	}
 
 	return 0;
+}
+
+static bool
+opt_vectorize_callback(const nir_instr *instr, void *_)
+{
+   assert(instr->type == nir_instr_type_alu);
+   nir_alu_instr *alu = nir_instr_as_alu(instr);
+   unsigned bit_size = alu->dest.dest.ssa.bit_size;
+   if (bit_size != 16)
+      return false;
+
+   switch (alu->op) {
+   case nir_op_fadd:
+   case nir_op_fsub:
+   case nir_op_fmul:
+   case nir_op_fneg:
+   case nir_op_fsat:
+   case nir_op_fmin:
+   case nir_op_fmax:
+   case nir_op_iadd:
+   case nir_op_isub:
+   case nir_op_imul:
+   case nir_op_imin:
+   case nir_op_imax:
+   case nir_op_umin:
+   case nir_op_umax:
+      return true;
+   case nir_op_ishl: /* TODO: in NIR, these have 32bit shift operands */
+   case nir_op_ishr: /* while Radeon needs 16bit operands when vectorized */
+   case nir_op_ushr:
+   default:
+      return false;
+   }
 }
 
 VkResult radv_create_shaders(struct radv_pipeline *pipeline,
@@ -3250,23 +3324,24 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 			NIR_PASS_V(nir[i], nir_lower_memory_model);
 
 			bool lower_to_scalar = false;
-			bool lower_pack = false;
-			nir_variable_mode robust_modes = (nir_variable_mode)0;
+
+			nir_load_store_vectorize_options vectorize_opts = {
+				.modes = nir_var_mem_ssbo | nir_var_mem_ubo |
+					 nir_var_mem_push_const | nir_var_mem_shared |
+					 nir_var_mem_global,
+				.callback = mem_vectorize_callback,
+				.robust_modes = 0,
+			};
 
 			if (device->robust_buffer_access) {
-				robust_modes = nir_var_mem_ubo |
-					       nir_var_mem_ssbo |
-					       nir_var_mem_global |
-					       nir_var_mem_push_const;
+				vectorize_opts.robust_modes = nir_var_mem_ubo |
+							      nir_var_mem_ssbo |
+							      nir_var_mem_global |
+							      nir_var_mem_push_const;
 			}
 
-			if (nir_opt_load_store_vectorize(nir[i],
-							 nir_var_mem_ssbo | nir_var_mem_ubo |
-							 nir_var_mem_push_const | nir_var_mem_shared |
-							 nir_var_mem_global,
-							 mem_vectorize_callback, robust_modes)) {
+			if (nir_opt_load_store_vectorize(nir[i], &vectorize_opts)) {
 				lower_to_scalar = true;
-				lower_pack = true;
 			}
 
 			/* do this again since information such as outputs_read can be out-of-date */
@@ -3278,8 +3353,6 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 
 			if (lower_to_scalar)
 				nir_lower_alu_to_scalar(nir[i], NULL, NULL);
-			if (lower_pack)
-				nir_lower_pack(nir[i]);
 
 			/* lower ALU operations */
 			/* TODO: Some 64-bit tests crash inside LLVM. */
@@ -3288,7 +3361,7 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 
 			/* TODO: Implement nir_op_uadd_sat with LLVM. */
 			if (!radv_use_llvm_for_stage(device, i))
-				nir_opt_idiv_const(nir[i], 32);
+				nir_opt_idiv_const(nir[i], 8);
 			nir_lower_idiv(nir[i], nir_lower_idiv_precise);
 
 			/* optimize the lowered ALU operations */
@@ -3324,21 +3397,25 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
 				}
 
 				if (nir_lower_bit_size(nir[i], lower_bit_size_callback, device)) {
-					nir_lower_idiv(nir[i], nir_lower_idiv_precise);
-					nir_opt_constant_folding(nir[i]);
-					nir_opt_dce(nir[i]);
+					// TODO: lower idiv beforehand
+					if (nir_lower_idiv(nir[i], nir_lower_idiv_precise))
+						NIR_PASS_V(nir[i], nir_opt_algebraic_late); /* needed for removing ineg again */
+					NIR_PASS_V(nir[i], nir_opt_constant_folding);
+					NIR_PASS_V(nir[i], nir_opt_dce);
 				}
 
 				if (device->physical_device->rad_info.chip_class >= GFX8)
 					nir_opt_remove_phis(nir[i]); /* cleanup LCSSA phis */
+				if (device->physical_device->rad_info.chip_class >= GFX9)
+					NIR_PASS_V(nir[i], nir_opt_vectorize, opt_vectorize_callback, NULL);
 			}
 
 			/* cleanup passes */
 			nir_lower_load_const_to_scalar(nir[i]);
-			nir_move_options move_opts = (nir_move_options)(
+			nir_move_options move_opts =
 				nir_move_const_undef | nir_move_load_ubo | nir_move_load_input |
-				nir_move_comparisons | nir_move_copies);
-			nir_opt_sink(nir[i], move_opts);
+				nir_move_comparisons | nir_move_copies;
+			nir_opt_sink(nir[i], move_opts | nir_move_load_ssbo);
 			nir_opt_move(nir[i], move_opts);
 
 			radv_stop_feedback(stage_feedbacks[i], false);
@@ -4084,7 +4161,7 @@ radv_pipeline_generate_depth_stencil_state(struct radeon_cmdbuf *ctx_cs,
 		db_render_override2 |= S_028010_DECOMPRESS_Z_ON_FLUSH(attachment->samples > 2);
 
 		if (pipeline->device->physical_device->rad_info.chip_class >= GFX10_3)
-			db_render_override2 |= S_028010_CENTROID_COMPUTATION_MODE(2);
+			db_render_override2 |= S_028010_CENTROID_COMPUTATION_MODE(1);
 	}
 
 	if (attachment && extra) {
@@ -5528,6 +5605,8 @@ radv_generate_compute_pipeline_key(struct radv_pipeline *pipeline,
 		assert(subgroup_size->requiredSubgroupSize == 32 ||
 		       subgroup_size->requiredSubgroupSize == 64);
 		key.compute_subgroup_size = subgroup_size->requiredSubgroupSize;
+	} else if (stage->flags & VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT) {
+		key.require_full_subgroups = true;
 	}
 
 	return key;

@@ -125,11 +125,7 @@ blorp_nir_discard_if_outside_rect(nir_builder *b, nir_ssa_def *pos,
    c3 = nir_uge(b, nir_channel(b, pos, 1), dst_y1);
 
    nir_ssa_def *oob = nir_ior(b, nir_ior(b, c0, c1), nir_ior(b, c2, c3));
-
-   nir_intrinsic_instr *discard =
-      nir_intrinsic_instr_create(b->shader, nir_intrinsic_discard_if);
-   discard->src[0] = nir_src_for_ssa(oob);
-   nir_builder_instr_insert(b, &discard->instr);
+   nir_discard_if(b, oob);
 }
 
 static nir_tex_instr *
@@ -141,7 +137,7 @@ blorp_create_nir_tex_instr(nir_builder *b, struct brw_blorp_blit_vars *v,
 
    tex->op = op;
 
-   tex->dest_type = dst_type;
+   tex->dest_type = dst_type | 32;
    tex->is_array = false;
    tex->is_shadow = false;
 

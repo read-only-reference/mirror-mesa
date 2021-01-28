@@ -36,6 +36,7 @@ files_libintel_common = files(
   'gen_l3_config.c',
   'gen_l3_config.h',
   'gen_urb_config.c',
+  'gen_sample_positions.c',
   'gen_sample_positions.h',
   'gen_uuid.c',
   'gen_uuid.h',
@@ -65,7 +66,8 @@ install_intel_gpu_tests = get_option('install-intel-gpu-tests')
 
 if install_intel_gpu_tests
   foreach g : [['70', 'gen7'], ['75', 'hsw'], ['80', 'gen8'],
-               ['90', 'gen9'], ['110', 'gen11'], ['120', 'gen12']]
+               ['90', 'gen9'], ['110', 'gen11'], ['120', 'gen12'],
+               ['125', 'gen125']]
     executable(
       'intel_@0@_mi_builder_test'.format(g[1]),
       files('tests/gen_mi_builder_test.cpp'),

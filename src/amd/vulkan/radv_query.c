@@ -26,7 +26,6 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>
 #include <fcntl.h>
 
 #include "nir/nir_builder.h"
@@ -1428,12 +1427,12 @@ void radv_CmdResetQueryPool(
 	 */
 	cmd_buffer->state.flush_bits |= cmd_buffer->active_query_flush_bits;
 
-	flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
+	flush_bits |= radv_fill_buffer(cmd_buffer, NULL, pool->bo,
 				       firstQuery * pool->stride,
 				       queryCount * pool->stride, value);
 
 	if (pool->type == VK_QUERY_TYPE_PIPELINE_STATISTICS) {
-		flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
+		flush_bits |= radv_fill_buffer(cmd_buffer, NULL, pool->bo,
 					       pool->availability_offset + firstQuery * 4,
 					       queryCount * 4, 0);
 	}
@@ -1542,13 +1541,14 @@ static void emit_begin_query(struct radv_cmd_buffer *cmd_buffer,
 
 			va += 8 * idx;
 
-			si_cs_emit_write_event_eop(cs,
-						   cmd_buffer->device->physical_device->rad_info.chip_class,
-						   radv_cmd_buffer_uses_mec(cmd_buffer),
-						   V_028A90_PS_DONE, 0,
-						   EOP_DST_SEL_TC_L2,
-						   EOP_DATA_SEL_GDS,
-						   va, EOP_DATA_GDS(0, 1), 0);
+			radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
+			radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_GDS) |
+					COPY_DATA_DST_SEL(COPY_DATA_DST_MEM) |
+					COPY_DATA_WR_CONFIRM);
+			radeon_emit(cs, 0);
+			radeon_emit(cs, 0);
+			radeon_emit(cs, va);
+			radeon_emit(cs, va >> 32);
 
 			/* Record that the command buffer needs GDS. */
 			cmd_buffer->gds_needed = true;
@@ -1632,13 +1632,14 @@ static void emit_end_query(struct radv_cmd_buffer *cmd_buffer,
 
 			va += 8 * idx;
 
-			si_cs_emit_write_event_eop(cs,
-						   cmd_buffer->device->physical_device->rad_info.chip_class,
-						   radv_cmd_buffer_uses_mec(cmd_buffer),
-						   V_028A90_PS_DONE, 0,
-						   EOP_DST_SEL_TC_L2,
-						   EOP_DATA_SEL_GDS,
-						   va, EOP_DATA_GDS(0, 1), 0);
+			radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
+			radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_GDS) |
+					COPY_DATA_DST_SEL(COPY_DATA_DST_MEM) |
+					COPY_DATA_WR_CONFIRM);
+			radeon_emit(cs, 0);
+			radeon_emit(cs, 0);
+			radeon_emit(cs, va);
+			radeon_emit(cs, va >> 32);
 
 			cmd_buffer->state.active_pipeline_gds_queries--;
 		}

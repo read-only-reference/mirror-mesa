@@ -368,6 +368,9 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    if (ws->info.drm_minor < 49)
       ws->info.vram_vis_size = MIN2(ws->info.vram_vis_size, 256*1024*1024);
 
+   ws->info.gart_size_kb = DIV_ROUND_UP(ws->info.gart_size, 1024);
+   ws->info.vram_size_kb = DIV_ROUND_UP(ws->info.vram_size, 1024);
+
    /* Radeon allocates all buffers contiguously, which makes large allocations
     * unlikely to succeed. */
    if (ws->info.has_dedicated_vram)
@@ -645,7 +648,9 @@ static void radeon_winsys_destroy(struct radeon_winsys *rws)
 }
 
 static void radeon_query_info(struct radeon_winsys *rws,
-                              struct radeon_info *info)
+                              struct radeon_info *info,
+                              bool enable_smart_access_memory,
+                              bool disable_smart_access_memory)
 {
    *info = ((struct radeon_drm_winsys *)rws)->info;
 }
@@ -803,7 +808,7 @@ static void radeon_pin_threads_to_L3_cache(struct radeon_winsys *ws,
    if (util_queue_is_initialized(&rws->cs_queue)) {
       util_set_thread_affinity(rws->cs_queue.threads[0],
                                util_cpu_caps.L3_affinity_mask[cache],
-                               NULL, UTIL_MAX_CPUS);
+                               NULL, util_cpu_caps.num_cpu_mask_bits);
    }
 }
 

@@ -45,6 +45,8 @@ static const nir_shader_compiler_options options = {
 	.lower_rotate = true,
 	.lower_vector_cmp = true,
 	.lower_fdph = true,
+	.has_fsub = true,
+	.has_isub = true,
 };
 
 const nir_shader_compiler_options *
@@ -1111,7 +1113,7 @@ ir2_nir_compile(struct ir2_context *ctx, bool binning)
 	OPT_V(ctx->nir, nir_convert_from_ssa, true);
 
 	OPT_V(ctx->nir, nir_move_vec_src_uses_to_dest);
-	OPT_V(ctx->nir, nir_lower_vec_to_movs);
+	OPT_V(ctx->nir, nir_lower_vec_to_movs, NULL, NULL);
 
 	OPT_V(ctx->nir, nir_opt_dce);
 

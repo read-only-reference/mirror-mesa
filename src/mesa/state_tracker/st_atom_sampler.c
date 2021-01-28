@@ -168,7 +168,7 @@ st_convert_sampler(const struct st_context *st,
       const GLboolean is_integer = texobj->_IsIntegerFormat;
       GLenum texBaseFormat = _mesa_base_tex_image(texobj)->_BaseFormat;
 
-      if (texobj->Attrib.StencilSampling)
+      if (texobj->StencilSampling)
          texBaseFormat = GL_STENCIL_INDEX;
 
       if (st->apply_texture_swizzle_to_border_color) {
@@ -212,7 +212,7 @@ st_convert_sampler(const struct st_context *st,
       GLenum texBaseFormat = _mesa_base_tex_image(texobj)->_BaseFormat;
 
       if (texBaseFormat == GL_DEPTH_COMPONENT ||
-          (texBaseFormat == GL_DEPTH_STENCIL && !texobj->Attrib.StencilSampling)) {
+          (texBaseFormat == GL_DEPTH_STENCIL && !texobj->StencilSampling)) {
          sampler->compare_mode = PIPE_TEX_COMPARE_R_TO_TEXTURE;
          sampler->compare_func = st_compare_func_to_pipe(msamp->Attrib.CompareFunc);
       }
@@ -239,7 +239,6 @@ st_convert_sampler_from_unit(const struct st_context *st,
 
    texobj = ctx->Texture.Unit[texUnit]._Current;
    assert(texobj);
-   assert(texobj->Target != GL_TEXTURE_BUFFER);
 
    msamp = _mesa_get_samplerobj(ctx, texUnit);
 
@@ -289,7 +288,8 @@ update_shader_samplers(struct st_context *st,
        * states that are NULL.
        */
       if (samplers_used & 1 &&
-          ctx->Texture.Unit[tex_unit]._Current->Target != GL_TEXTURE_BUFFER) {
+          (ctx->Texture.Unit[tex_unit]._Current->Target != GL_TEXTURE_BUFFER ||
+           st->texture_buffer_sampler)) {
          st_convert_sampler_from_unit(st, sampler, tex_unit);
          states[unit] = sampler;
       } else {
