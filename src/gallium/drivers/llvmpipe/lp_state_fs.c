@@ -2355,7 +2355,7 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
          continue;
       }
 
-      /* Ensure we havn't already found all channels */
+      /* Ensure we haven't already found all channels */
       if (dst_channels >= out_format_desc->nr_channels) {
          continue;
       }
@@ -4235,7 +4235,8 @@ llvmpipe_update_fs(struct llvmpipe_context *lp)
             assert(item);
             assert(item->base);
             llvmpipe_remove_shader_variant(lp, item->base);
-            lp_fs_variant_reference(lp, &item->base, NULL);
+            struct lp_fragment_shader_variant *variant = item->base;
+            lp_fs_variant_reference(lp, &variant, NULL);
          }
       }
 

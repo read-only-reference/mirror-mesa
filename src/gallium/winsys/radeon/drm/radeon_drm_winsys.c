@@ -491,25 +491,25 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    switch (ws->info.family) {
    case CHIP_HAINAN:
    case CHIP_KABINI:
-      ws->info.num_tcc_blocks = 2;
+      ws->info.max_tcc_blocks = 2;
       break;
    case CHIP_VERDE:
    case CHIP_OLAND:
    case CHIP_BONAIRE:
    case CHIP_KAVERI:
-      ws->info.num_tcc_blocks = 4;
+      ws->info.max_tcc_blocks = 4;
       break;
    case CHIP_PITCAIRN:
-      ws->info.num_tcc_blocks = 8;
+      ws->info.max_tcc_blocks = 8;
       break;
    case CHIP_TAHITI:
-      ws->info.num_tcc_blocks = 12;
+      ws->info.max_tcc_blocks = 12;
       break;
    case CHIP_HAWAII:
-      ws->info.num_tcc_blocks = 16;
+      ws->info.max_tcc_blocks = 16;
       break;
    default:
-      ws->info.num_tcc_blocks = 0;
+      ws->info.max_tcc_blocks = 0;
       break;
    }
 
@@ -730,6 +730,8 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
    case RADEON_VRAM_VIS_USAGE:
    case RADEON_GFX_BO_LIST_COUNTER:
    case RADEON_GFX_IB_SIZE_COUNTER:
+   case RADEON_SLAB_WASTED_VRAM:
+   case RADEON_SLAB_WASTED_GTT:
       return 0; /* unimplemented */
    case RADEON_VRAM_USAGE:
       radeon_get_drm_value(ws->fd, RADEON_INFO_VRAM_USAGE,
@@ -807,8 +809,8 @@ static void radeon_pin_threads_to_L3_cache(struct radeon_winsys *ws,
 
    if (util_queue_is_initialized(&rws->cs_queue)) {
       util_set_thread_affinity(rws->cs_queue.threads[0],
-                               util_cpu_caps.L3_affinity_mask[cache],
-                               NULL, util_cpu_caps.num_cpu_mask_bits);
+                               util_get_cpu_caps()->L3_affinity_mask[cache],
+                               NULL, util_get_cpu_caps()->num_cpu_mask_bits);
    }
 }
 
@@ -859,7 +861,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
        */
       if (!pb_slabs_init(&ws->bo_slabs,
                          RADEON_SLAB_MIN_SIZE_LOG2, RADEON_SLAB_MAX_SIZE_LOG2,
-                         RADEON_MAX_SLAB_HEAPS,
+                         RADEON_MAX_SLAB_HEAPS, false,
                          ws,
                          radeon_bo_can_reclaim_slab,
                          radeon_bo_slab_alloc,

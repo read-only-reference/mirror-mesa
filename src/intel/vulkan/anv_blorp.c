@@ -338,7 +338,6 @@ copy_image(struct anv_cmd_buffer *cmd_buffer,
    assert(anv_image_aspects_compatible(src_mask, dst_mask));
 
    if (util_bitcount(src_mask) > 1) {
-      uint32_t aspect_bit;
       anv_foreach_image_aspect_bit(aspect_bit, src_image, src_mask) {
          struct blorp_surf src_surf, dst_surf;
          get_blorp_surf_for_anv_image(cmd_buffer->device,
@@ -413,42 +412,6 @@ copy_image(struct anv_cmd_buffer *cmd_buffer,
          }
       }
    }
-}
-
-
-void anv_CmdCopyImage(
-    VkCommandBuffer                             commandBuffer,
-    VkImage                                     srcImage,
-    VkImageLayout                               srcImageLayout,
-    VkImage                                     dstImage,
-    VkImageLayout                               dstImageLayout,
-    uint32_t                                    regionCount,
-    const VkImageCopy*                          pRegions)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_image, src_image, srcImage);
-   ANV_FROM_HANDLE(anv_image, dst_image, dstImage);
-
-   struct blorp_batch batch;
-   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
-
-   for (unsigned r = 0; r < regionCount; r++) {
-      VkImageCopy2KHR copy = {
-         .sType = VK_STRUCTURE_TYPE_IMAGE_COPY_2_KHR,
-         .srcSubresource = pRegions[r].srcSubresource,
-         .srcOffset      = pRegions[r].srcOffset,
-         .dstSubresource = pRegions[r].dstSubresource,
-         .dstOffset      = pRegions[r].dstOffset,
-         .extent         = pRegions[r].extent,
-      };
-
-      copy_image(cmd_buffer, &batch,
-                 src_image, srcImageLayout,
-                 dst_image, dstImageLayout,
-                 &copy);
-   }
-
-   blorp_batch_finish(&batch);
 }
 
 void anv_CmdCopyImage2KHR(
@@ -623,39 +586,6 @@ copy_buffer_to_image(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
-void anv_CmdCopyBufferToImage(
-    VkCommandBuffer                             commandBuffer,
-    VkBuffer                                    srcBuffer,
-    VkImage                                     dstImage,
-    VkImageLayout                               dstImageLayout,
-    uint32_t                                    regionCount,
-    const VkBufferImageCopy*                    pRegions)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_buffer, src_buffer, srcBuffer);
-   ANV_FROM_HANDLE(anv_image, dst_image, dstImage);
-
-   struct blorp_batch batch;
-   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
-
-   for (unsigned r = 0; r < regionCount; r++) {
-      VkBufferImageCopy2KHR copy = {
-         .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2_KHR,
-         .bufferOffset      = pRegions[r].bufferOffset,
-         .bufferRowLength   = pRegions[r].bufferRowLength,
-         .bufferImageHeight = pRegions[r].bufferImageHeight,
-         .imageSubresource  = pRegions[r].imageSubresource,
-         .imageOffset       = pRegions[r].imageOffset,
-         .imageExtent       = pRegions[r].imageExtent,
-      };
-
-      copy_buffer_to_image(cmd_buffer, &batch, src_buffer, dst_image,
-                           dstImageLayout, &copy, true);
-   }
-
-   blorp_batch_finish(&batch);
-}
-
 void anv_CmdCopyBufferToImage2KHR(
     VkCommandBuffer                             commandBuffer,
     const VkCopyBufferToImageInfo2KHR*          pCopyBufferToImageInfo)
@@ -674,41 +604,6 @@ void anv_CmdCopyBufferToImage2KHR(
    }
 
    blorp_batch_finish(&batch);
-}
-
-void anv_CmdCopyImageToBuffer(
-    VkCommandBuffer                             commandBuffer,
-    VkImage                                     srcImage,
-    VkImageLayout                               srcImageLayout,
-    VkBuffer                                    dstBuffer,
-    uint32_t                                    regionCount,
-    const VkBufferImageCopy*                    pRegions)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_image, src_image, srcImage);
-   ANV_FROM_HANDLE(anv_buffer, dst_buffer, dstBuffer);
-
-   struct blorp_batch batch;
-   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
-
-   for (unsigned r = 0; r < regionCount; r++) {
-      VkBufferImageCopy2KHR copy = {
-         .sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2_KHR,
-         .bufferOffset      = pRegions[r].bufferOffset,
-         .bufferRowLength   = pRegions[r].bufferRowLength,
-         .bufferImageHeight = pRegions[r].bufferImageHeight,
-         .imageSubresource  = pRegions[r].imageSubresource,
-         .imageOffset       = pRegions[r].imageOffset,
-         .imageExtent       = pRegions[r].imageExtent,
-      };
-
-      copy_buffer_to_image(cmd_buffer, &batch, dst_buffer, src_image,
-                           srcImageLayout, &copy, false);
-   }
-
-   blorp_batch_finish(&batch);
-
-   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_RENDER_TARGET_BUFFER_WRITES;
 }
 
 void anv_CmdCopyImageToBuffer2KHR(
@@ -784,7 +679,6 @@ blit_image(struct anv_cmd_buffer *cmd_buffer,
    assert(anv_image_aspects_compatible(src_res->aspectMask,
                                        dst_res->aspectMask));
 
-   uint32_t aspect_bit;
    anv_foreach_image_aspect_bit(aspect_bit, src_image, src_res->aspectMask) {
       get_blorp_surf_for_anv_image(cmd_buffer->device,
                                    src_image, 1U << aspect_bit,
@@ -871,47 +765,6 @@ blit_image(struct anv_cmd_buffer *cmd_buffer,
    }
 }
 
-void anv_CmdBlitImage(
-    VkCommandBuffer                             commandBuffer,
-    VkImage                                     srcImage,
-    VkImageLayout                               srcImageLayout,
-    VkImage                                     dstImage,
-    VkImageLayout                               dstImageLayout,
-    uint32_t                                    regionCount,
-    const VkImageBlit*                          pRegions,
-    VkFilter                                    filter)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_image, src_image, srcImage);
-   ANV_FROM_HANDLE(anv_image, dst_image, dstImage);
-
-   struct blorp_batch batch;
-   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
-
-   for (unsigned r = 0; r < regionCount; r++) {
-      VkImageBlit2KHR blit = {
-         .sType          = VK_STRUCTURE_TYPE_IMAGE_BLIT_2_KHR,
-         .srcSubresource = pRegions[r].srcSubresource,
-         .srcOffsets     = {
-            pRegions[r].srcOffsets[0],
-            pRegions[r].srcOffsets[1],
-         },
-         .dstSubresource = pRegions[r].dstSubresource,
-         .dstOffsets     = {
-            pRegions[r].dstOffsets[0],
-            pRegions[r].dstOffsets[1],
-         },
-      };
-
-      blit_image(cmd_buffer, &batch,
-                 src_image, srcImageLayout,
-                 dst_image, dstImageLayout,
-                 &blit, filter);
-   }
-
-   blorp_batch_finish(&batch);
-}
-
 void anv_CmdBlitImage2KHR(
     VkCommandBuffer                             commandBuffer,
     const VkBlitImageInfo2KHR*                  pBlitImageInfo)
@@ -977,36 +830,6 @@ copy_buffer(struct anv_device *device,
    blorp_buffer_copy(batch, src, dst, region->size);
 }
 
-void anv_CmdCopyBuffer(
-    VkCommandBuffer                             commandBuffer,
-    VkBuffer                                    srcBuffer,
-    VkBuffer                                    dstBuffer,
-    uint32_t                                    regionCount,
-    const VkBufferCopy*                         pRegions)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_buffer, src_buffer, srcBuffer);
-   ANV_FROM_HANDLE(anv_buffer, dst_buffer, dstBuffer);
-
-   struct blorp_batch batch;
-   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
-
-   for (unsigned r = 0; r < regionCount; r++) {
-      VkBufferCopy2KHR copy = {
-         .sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2_KHR,
-         .srcOffset = pRegions[r].srcOffset,
-         .dstOffset = pRegions[r].dstOffset,
-         .size = pRegions[r].size,
-      };
-
-      copy_buffer(cmd_buffer->device, &batch, src_buffer, dst_buffer, &copy);
-   }
-
-   blorp_batch_finish(&batch);
-
-   cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_RENDER_TARGET_BUFFER_WRITES;
-}
-
 void anv_CmdCopyBuffer2KHR(
     VkCommandBuffer                             commandBuffer,
     const VkCopyBufferInfo2KHR*                 pCopyBufferInfo)
@@ -1067,7 +890,7 @@ void anv_CmdUpdateBuffer(
          .buffer = cmd_buffer->device->dynamic_state_pool.block_pool.bo,
          .offset = tmp_data.offset,
          .mocs = isl_mocs(&cmd_buffer->device->isl_dev,
-                          ISL_SURF_USAGE_TEXTURE_BIT)
+                          ISL_SURF_USAGE_TEXTURE_BIT, false)
       };
       struct blorp_address dst = {
          .buffer = dst_buffer->address.bo,
@@ -1398,8 +1221,7 @@ clear_color_attachment(struct anv_cmd_buffer *cmd_buffer,
 
    /* If multiview is enabled we ignore baseArrayLayer and layerCount */
    if (subpass->view_mask) {
-      uint32_t view_idx;
-      for_each_bit(view_idx, subpass->view_mask) {
+      u_foreach_bit(view_idx, subpass->view_mask) {
          for (uint32_t r = 0; r < rectCount; ++r) {
             const VkOffset2D offset = pRects[r].rect.offset;
             const VkExtent2D extent = pRects[r].rect.extent;
@@ -1466,8 +1288,7 @@ clear_depth_stencil_attachment(struct anv_cmd_buffer *cmd_buffer,
 
    /* If multiview is enabled we ignore baseArrayLayer and layerCount */
    if (subpass->view_mask) {
-      uint32_t view_idx;
-      for_each_bit(view_idx, subpass->view_mask) {
+      u_foreach_bit(view_idx, subpass->view_mask) {
          for (uint32_t r = 0; r < rectCount; ++r) {
             const VkOffset2D offset = pRects[r].rect.offset;
             const VkExtent2D extent = pRects[r].rect.extent;
@@ -1631,7 +1452,6 @@ resolve_image(struct anv_cmd_buffer *cmd_buffer,
    const uint32_t layer_count =
       anv_get_layerCount(dst_image, &region->dstSubresource);
 
-   uint32_t aspect_bit;
    anv_foreach_image_aspect_bit(aspect_bit, src_image,
                                 region->srcSubresource.aspectMask) {
       enum isl_aux_usage src_aux_usage =
@@ -1660,38 +1480,6 @@ resolve_image(struct anv_cmd_buffer *cmd_buffer,
                              region->extent.width,
                              region->extent.height,
                              layer_count, BLORP_FILTER_NONE);
-   }
-}
-
-void anv_CmdResolveImage(
-    VkCommandBuffer                             commandBuffer,
-    VkImage                                     srcImage,
-    VkImageLayout                               srcImageLayout,
-    VkImage                                     dstImage,
-    VkImageLayout                               dstImageLayout,
-    uint32_t                                    regionCount,
-    const VkImageResolve*                       pRegions)
-{
-   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
-   ANV_FROM_HANDLE(anv_image, src_image, srcImage);
-   ANV_FROM_HANDLE(anv_image, dst_image, dstImage);
-
-   assert(!src_image->format->can_ycbcr);
-
-   for (uint32_t r = 0; r < regionCount; r++) {
-      VkImageResolve2KHR resolve = {
-         .sType = VK_STRUCTURE_TYPE_IMAGE_RESOLVE_2_KHR,
-         .srcSubresource = pRegions[r].srcSubresource,
-         .srcOffset      = pRegions[r].srcOffset,
-         .dstSubresource = pRegions[r].dstSubresource,
-         .dstOffset      = pRegions[r].dstOffset,
-         .extent         = pRegions[r].extent,
-      };
-
-      resolve_image(cmd_buffer,
-                    src_image, srcImageLayout,
-                    dst_image, dstImageLayout,
-                    &resolve);
    }
 }
 

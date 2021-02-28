@@ -1,13 +1,12 @@
 
 lvp_entrypoints = custom_target(
-  'lvp_entrypoints.[ch]',
-  input : ['lvp_entrypoints_gen.py', vk_api_xml],
+  'lvp_entrypoints',
+  input : [vk_entrypoints_gen, vk_api_xml],
   output : ['lvp_entrypoints.h', 'lvp_entrypoints.c'],
   command : [
-    prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--outdir',
-    meson.current_build_dir()
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
+    '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'lvp',
   ],
-  depend_files : files('lvp_extensions.py'),
 )
 
 lvp_extensions_c = custom_target(
@@ -18,6 +17,7 @@ lvp_extensions_c = custom_target(
     prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--out-c', '@OUTPUT0@',
     '--out-h', '@OUTPUT1@'
   ],
+  depend_files : vk_extensions_gen,
 )
 
 liblvp_files = files(
@@ -55,6 +55,11 @@ if with_platform_wayland
   liblvp_files += files('lvp_wsi_wayland.c')
 endif
 
+if with_platform_windows
+  lvp_flags += '-DVK_USE_PLATFORM_WIN32_KHR'
+  liblvp_files += files('lvp_wsi_win32.c')
+endif
+
 liblavapipe_st = static_library(
   'lavapipe_st',
   [liblvp_files, lvp_entrypoints, lvp_extensions_c, sha1_h],
@@ -62,5 +67,5 @@ liblavapipe_st = static_library(
   c_args : [ lvp_flags ],
   gnu_symbol_visibility : 'hidden',
   include_directories : [ inc_include, inc_src, inc_util, inc_gallium, inc_compiler, inc_gallium_aux, inc_vulkan_wsi ],
-  dependencies : [ idep_nir, idep_mesautil, idep_vulkan_util ]
+  dependencies : [ idep_nir, idep_mesautil, idep_vulkan_util, lvp_deps ]
 )

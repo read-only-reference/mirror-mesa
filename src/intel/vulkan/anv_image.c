@@ -395,17 +395,17 @@ add_aux_surface_if_supported(struct anv_device *device,
       }
 
       if (device->info.gen == 7) {
-         anv_perf_warn(device, image, "Implement gen7 HiZ");
+         anv_perf_warn(device, &image->base, "Implement gen7 HiZ");
          return VK_SUCCESS;
       }
 
       if (image->levels > 1) {
-         anv_perf_warn(device, image, "Enable multi-LOD HiZ");
+         anv_perf_warn(device, &image->base, "Enable multi-LOD HiZ");
          return VK_SUCCESS;
       }
 
       if (device->info.gen == 8 && image->samples > 1) {
-         anv_perf_warn(device, image, "Enable gen8 multisampled HiZ");
+         anv_perf_warn(device, &image->base, "Enable gen8 multisampled HiZ");
          return VK_SUCCESS;
       }
 
@@ -470,7 +470,7 @@ add_aux_surface_if_supported(struct anv_device *device,
           * CCS for this case, we currently don't have things hooked up to get
           * it working.
           */
-         anv_perf_warn(device, image,
+         anv_perf_warn(device, &image->base,
                        "This image format doesn't support rendering. "
                        "Not allocating an CCS buffer.");
          return VK_SUCCESS;
@@ -483,7 +483,7 @@ add_aux_surface_if_supported(struct anv_device *device,
           * slice unfortunately. Disable CCS until anv gains more clear color
           * tracking abilities.
           */
-         anv_perf_warn(device, image,
+         anv_perf_warn(device, &image->base,
                        "HW may put fast-clear blocks on more slices than SW "
                        "currently tracks. Not allocating a CCS buffer.");
          return VK_SUCCESS;
@@ -516,7 +516,7 @@ add_aux_surface_if_supported(struct anv_device *device,
           */
          image->planes[plane].aux_usage = ISL_AUX_USAGE_CCS_E;
       } else if (device->info.gen >= 12) {
-         anv_perf_warn(device, image,
+         anv_perf_warn(device, &image->base,
                        "The CCS_D aux mode is not yet handled on "
                        "Gen12+. Not allocating a CCS buffer.");
          image->planes[plane].aux_surface.isl.size_B = 0;
@@ -663,8 +663,7 @@ add_all_surfaces(struct anv_device *device,
    const struct gen_device_info *devinfo = &device->info;
    VkResult result;
 
-   uint32_t b;
-   for_each_bit(b, image->aspects) {
+   u_foreach_bit(b, image->aspects) {
       VkImageAspectFlagBits aspect = 1 << b;
       uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
       const  struct anv_format_plane plane_format =
@@ -1089,29 +1088,6 @@ resolve_ahw_image(struct anv_device *device,
 #endif
 }
 
-VkResult anv_BindImageMemory(
-    VkDevice                                    _device,
-    VkImage                                     _image,
-    VkDeviceMemory                              _memory,
-    VkDeviceSize                                memoryOffset)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
-   ANV_FROM_HANDLE(anv_image, image, _image);
-
-   if (mem->ahw)
-      resolve_ahw_image(device, image, mem);
-
-   uint32_t aspect_bit;
-   anv_foreach_image_aspect_bit(aspect_bit, image, image->aspects) {
-      uint32_t plane =
-         anv_image_aspect_to_plane(image->aspects, 1UL << aspect_bit);
-      anv_image_bind_memory_plane(device, image, plane, mem, memoryOffset);
-   }
-
-   return VK_SUCCESS;
-}
-
 VkResult anv_BindImageMemory2(
     VkDevice                                    _device,
     uint32_t                                    bindInfoCount,
@@ -1148,7 +1124,6 @@ VkResult anv_BindImageMemory2(
             assert(image->aspects == swapchain_image->aspects);
             assert(mem == NULL);
 
-            uint32_t aspect_bit;
             anv_foreach_image_aspect_bit(aspect_bit, image, aspects) {
                uint32_t plane =
                   anv_image_aspect_to_plane(image->aspects, 1UL << aspect_bit);
@@ -1173,7 +1148,6 @@ VkResult anv_BindImageMemory2(
       if (!mem)
          continue;
 
-      uint32_t aspect_bit;
       anv_foreach_image_aspect_bit(aspect_bit, image, aspects) {
          uint32_t plane =
             anv_image_aspect_to_plane(image->aspects, 1UL << aspect_bit);
@@ -2131,7 +2105,7 @@ anv_CreateImageView(VkDevice _device,
    /* Now go through the underlying image selected planes (computed in
     * expanded_aspects) and map them to planes in the image view.
     */
-   uint32_t iaspect_bit, vplane = 0;
+   uint32_t vplane = 0;
    anv_foreach_image_aspect_bit(iaspect_bit, image, expanded_aspects) {
       uint32_t iplane =
          anv_image_aspect_to_plane(image->aspects, 1UL << iaspect_bit);

@@ -746,7 +746,7 @@ emit_ms_state(struct anv_graphics_pipeline *pipeline,
        * default ones will be used either at device initialization time or
        * through 3DSTATE_MULTISAMPLE on Gen7/7.5 by passing NULL locations.
        */
-      if (pipeline->base.device->enabled_extensions.EXT_sample_locations) {
+      if (pipeline->base.device->vk.enabled_extensions.EXT_sample_locations) {
 #if GEN_GEN >= 8
          genX(emit_sample_pattern)(&pipeline->base.batch,
                                    pipeline->dynamic_state.sample_locations.samples,
@@ -1231,11 +1231,9 @@ emit_cb_state(struct anv_graphics_pipeline *pipeline,
            is_dual_src_blend_factor(a->dstColorBlendFactor) ||
            is_dual_src_blend_factor(a->srcAlphaBlendFactor) ||
            is_dual_src_blend_factor(a->dstAlphaBlendFactor))) {
-         vk_debug_report(&device->physical->instance->debug_report_callbacks,
+         vk_debug_report(&device->physical->instance->vk,
                          VK_DEBUG_REPORT_WARNING_BIT_EXT,
-                         VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT,
-                         (uint64_t)(uintptr_t)device,
-                         0, 0, "anv",
+                         &device->vk.base, 0, 0, "anv",
                          "Enabled dual-src blend factors without writing both targets "
                          "in the shader.  Disabling blending to avoid GPU hangs.");
          entry.ColorBufferBlendEnable = false;
@@ -2207,8 +2205,8 @@ emit_3dstate_primitive_replication(struct anv_graphics_pipeline *pipeline)
       pr.ReplicaMask = (1 << view_count) - 1;
       pr.ReplicationCount = view_count - 1;
 
-      int i = 0, view_index;
-      for_each_bit(view_index, view_mask) {
+      int i = 0;
+      u_foreach_bit(view_index, view_mask) {
          pr.RTAIOffset[i] = view_index;
          i++;
       }

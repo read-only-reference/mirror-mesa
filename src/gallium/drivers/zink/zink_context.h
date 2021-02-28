@@ -24,11 +24,13 @@
 #ifndef ZINK_CONTEXT_H
 #define ZINK_CONTEXT_H
 
+#include "zink_clear.h"
 #include "zink_pipeline.h"
 #include "zink_batch.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
+#include "util/u_rect.h"
 
 #include "util/slab.h"
 #include "util/list.h"
@@ -51,6 +53,7 @@ enum zink_blit_flags {
    ZINK_BLIT_NORMAL = 1 << 0,
    ZINK_BLIT_SAVE_FS = 1 << 1,
    ZINK_BLIT_SAVE_FB = 1 << 2,
+   ZINK_BLIT_SAVE_TEXTURES = 1 << 3,
 };
 
 struct zink_sampler_view {
@@ -89,7 +92,18 @@ zink_so_target(struct pipe_stream_output_target *so_target)
    return (struct zink_so_target *)so_target;
 }
 
+struct zink_viewport_state {
+   struct pipe_viewport_state viewport_states[PIPE_MAX_VIEWPORTS];
+   struct pipe_scissor_state scissor_states[PIPE_MAX_VIEWPORTS];
+   uint8_t num_viewports;
+};
+
+
 #define ZINK_SHADER_COUNT (PIPE_SHADER_TYPES - 1)
+#define ZINK_NUM_GFX_BATCHES 4
+#define ZINK_COMPUTE_BATCH_ID ZINK_NUM_GFX_BATCHES
+#define ZINK_COMPUTE_BATCH_COUNT 1
+#define ZINK_NUM_BATCHES (ZINK_NUM_GFX_BATCHES + 1)
 
 struct zink_context {
    struct pipe_context base;
@@ -98,12 +112,13 @@ struct zink_context {
 
    struct pipe_device_reset_callback reset;
 
-   VkCommandPool cmdpool;
-   struct zink_batch batches[4];
+   struct zink_batch batches[ZINK_NUM_GFX_BATCHES];
    bool is_device_lost;
    unsigned curr_batch;
 
    VkQueue queue;
+
+   struct zink_batch compute_batch;
 
    struct pipe_constant_buffer ubos[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
    struct pipe_shader_buffer ssbos[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
@@ -117,8 +132,14 @@ struct zink_context {
 
    struct zink_shader *gfx_stages[ZINK_SHADER_COUNT];
    struct zink_gfx_pipeline_state gfx_pipeline_state;
+   enum pipe_prim_type gfx_prim_mode;
    struct hash_table *program_cache;
    struct zink_gfx_program *curr_program;
+
+   struct zink_shader *compute_stage;
+   struct zink_compute_pipeline_state compute_pipeline_state;
+   struct hash_table *compute_program_cache;
+   struct zink_compute_program *curr_compute;
 
    unsigned dirty_shader_stages : 6; /* mask of changed shader stages */
    bool last_vertex_stage_dirty;
@@ -128,13 +149,10 @@ struct zink_context {
    struct primconvert_context *primconvert;
 
    struct zink_framebuffer *framebuffer;
+   struct zink_framebuffer_clear fb_clears[PIPE_MAX_COLOR_BUFS + 1];
 
-   struct pipe_viewport_state viewport_states[PIPE_MAX_VIEWPORTS];
-   struct pipe_scissor_state scissor_states[PIPE_MAX_VIEWPORTS];
-   VkViewport viewports[PIPE_MAX_VIEWPORTS];
-   VkRect2D scissors[PIPE_MAX_VIEWPORTS];
-   struct pipe_vertex_buffer buffers[PIPE_MAX_ATTRIBS];
-   uint32_t buffers_enabled_mask;
+   struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
+   uint32_t vertex_buffers_enabled_mask;
 
    void *sampler_states[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
    VkSampler samplers[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
@@ -142,8 +160,12 @@ struct zink_context {
    struct pipe_sampler_view *sampler_views[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
    unsigned num_sampler_views[PIPE_SHADER_TYPES];
 
+   struct zink_viewport_state vp_state;
+
    float line_width;
    float blend_constants[4];
+
+   bool drawid_broken;
 
    struct pipe_stencil_ref stencil_ref;
 
@@ -159,7 +181,8 @@ struct zink_context {
    struct list_head primitives_generated_queries;
    bool queries_disabled, render_condition_active;
 
-   struct pipe_resource *dummy_buffer;
+   struct pipe_resource *dummy_vertex_buffer;
+   struct pipe_resource *dummy_xfb_buffer;
    struct pipe_resource *null_buffers[5]; /* used to create zink_framebuffer->null_surface, one buffer per samplecount */
 
    uint32_t num_so_targets;
@@ -181,6 +204,18 @@ zink_curr_batch(struct zink_context *ctx)
    return ctx->batches + ctx->curr_batch;
 }
 
+static inline struct zink_batch *
+zink_prev_batch(struct zink_context *ctx)
+{
+   unsigned curr_batch = ctx->curr_batch;
+   if (!curr_batch)
+      curr_batch = ZINK_NUM_GFX_BATCHES - 1;
+   else
+      curr_batch--;
+   assert(curr_batch < ARRAY_SIZE(ctx->batches));
+   return ctx->batches + curr_batch;
+}
+
 struct zink_batch *
 zink_batch_rp(struct zink_context *ctx);
 
@@ -193,6 +228,9 @@ zink_fence_wait(struct pipe_context *ctx);
 void
 zink_wait_on_batch(struct zink_context *ctx, int batch_id);
 
+void
+zink_flush_compute(struct zink_context *ctx);
+
 bool
 zink_resource_access_is_write(VkAccessFlags flags);
 
@@ -200,16 +238,25 @@ bool
 zink_resource_buffer_needs_barrier(struct zink_resource *res, VkAccessFlags flags, VkPipelineStageFlags pipeline);
 
 void
-zink_resource_buffer_barrier(VkCommandBuffer cmdbuf, struct zink_resource *res, VkAccessFlags flags, VkPipelineStageFlags pipeline);
+zink_resource_buffer_barrier(struct zink_context *ctx, struct zink_batch *batch, struct zink_resource *res, VkAccessFlags flags, VkPipelineStageFlags pipeline);
 
+bool
+zink_resource_image_needs_barrier(struct zink_resource *res, VkImageLayout new_layout, VkAccessFlags flags, VkPipelineStageFlags pipeline);
 void
-zink_resource_barrier(VkCommandBuffer cmdbuf, struct zink_resource *res,
-                      VkImageAspectFlags aspect, VkImageLayout new_layout);
+zink_resource_image_barrier(struct zink_context *ctx, struct zink_batch *batch, struct zink_resource *res,
+                      VkImageLayout new_layout, VkAccessFlags flags, VkPipelineStageFlags pipeline);
+
+bool
+zink_resource_needs_barrier(struct zink_resource *res, VkImageLayout layout, VkAccessFlags flags, VkPipelineStageFlags pipeline);
+void
+zink_resource_barrier(struct zink_context *ctx, struct zink_batch *batch, struct zink_resource *res, VkImageLayout layout, VkAccessFlags flags, VkPipelineStageFlags pipeline);
 
  void
  zink_begin_render_pass(struct zink_context *ctx,
                         struct zink_batch *batch);
 
+VkPipelineStageFlags
+zink_pipeline_flags_from_stage(VkShaderStageFlagBits stage);
 
 VkShaderStageFlagBits
 zink_shader_stage(enum pipe_shader_type type);
@@ -227,18 +274,17 @@ void
 zink_blit(struct pipe_context *pctx,
           const struct pipe_blit_info *info);
 
-void
-zink_clear(struct pipe_context *pctx,
-           unsigned buffers,
-           const struct pipe_scissor_state *scissor_state,
-           const union pipe_color_union *pcolor,
-           double depth, unsigned stencil);
-void
-zink_clear_texture(struct pipe_context *ctx,
-                   struct pipe_resource *p_res,
-                   unsigned level,
-                   const struct pipe_box *box,
-                   const void *data);
+bool
+zink_blit_region_fills(struct u_rect region, unsigned width, unsigned height);
+
+bool
+zink_blit_region_covers(struct u_rect region, struct u_rect covers);
+
+static inline struct u_rect
+zink_rect_from_box(const struct pipe_box *box)
+{
+   return (struct u_rect){box->x, box->x + box->width, box->y, box->y + box->height};
+}
 
 void
 zink_draw_vbo(struct pipe_context *pctx,
@@ -247,4 +293,10 @@ zink_draw_vbo(struct pipe_context *pctx,
               const struct pipe_draw_start_count *draws,
               unsigned num_draws);
 
+void
+zink_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info);
+
+void
+zink_copy_buffer(struct zink_context *ctx, struct zink_batch *batch, struct zink_resource *dst, struct zink_resource *src,
+                 unsigned dst_offset, unsigned src_offset, unsigned size);
 #endif
