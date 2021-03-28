@@ -84,8 +84,8 @@ blit_resolve(struct zink_context *ctx, const struct pipe_blit_info *info)
    region.extent.width = info->dst.box.width;
    region.extent.height = info->dst.box.height;
    region.extent.depth = info->dst.box.depth;
-   vkCmdResolveImage(batch->cmdbuf, src->image, src->layout,
-                     dst->image, dst->layout,
+   vkCmdResolveImage(batch->state->cmdbuf, src->obj->image, src->layout,
+                     dst->obj->image, dst->layout,
                      1, &region);
 
    return true;
@@ -169,8 +169,8 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info)
       region.dstSubresource.layerCount = 1;
    }
 
-   vkCmdBlitImage(batch->cmdbuf, src->image, src->layout,
-                  dst->image, dst->layout,
+   vkCmdBlitImage(batch->state->cmdbuf, src->obj->image, src->layout,
+                  dst->obj->image, dst->layout,
                   1, &region,
                   zink_filter(info->filter));
 
@@ -182,13 +182,22 @@ zink_blit(struct pipe_context *pctx,
           const struct pipe_blit_info *info)
 {
    struct zink_context *ctx = zink_context(pctx);
-   if (info->src.resource->nr_samples > 1 &&
-       info->dst.resource->nr_samples <= 1) {
-      if (blit_resolve(ctx, info))
-         return;
-   } else {
-      if (blit_native(ctx, info))
-         return;
+   const struct util_format_description *src_desc = util_format_description(info->src.format);
+   const struct util_format_description *dst_desc = util_format_description(info->dst.format);
+   if (src_desc == dst_desc ||
+       src_desc->nr_channels != 4 || src_desc->layout != UTIL_FORMAT_LAYOUT_PLAIN ||
+       (src_desc->nr_channels == 4 && src_desc->channel[3].type != UTIL_FORMAT_TYPE_VOID)) {
+      /* we can't blit RGBX -> RGBA formats directly since they're emulated
+       * so we have to use sampler views
+       */
+      if (info->src.resource->nr_samples > 1 &&
+          info->dst.resource->nr_samples <= 1) {
+         if (blit_resolve(ctx, info))
+            return;
+      } else {
+         if (blit_native(ctx, info))
+            return;
+      }
    }
 
    struct zink_resource *src = zink_resource(info->src.resource);

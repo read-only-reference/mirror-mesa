@@ -75,7 +75,9 @@ struct radeon_info {
    bool has_tc_compat_zrange_bug;
    bool has_msaa_sample_loc_bug;
    bool has_ls_vgpr_init_bug;
+   bool has_zero_index_buffer_bug;
    bool has_32bit_predication;
+   bool has_3d_cube_border_color_mipmap;
 
    /* Display features. */
    /* There are 2 display DCC codepaths, because display expects unaligned DCC. */
@@ -107,7 +109,7 @@ struct radeon_info {
    uint32_t max_tcc_blocks;
    uint32_t num_tcc_blocks;
    uint32_t tcc_cache_line_size;
-   bool tcc_harvested;
+   bool tcc_rb_non_coherent; /* whether L2 inv is needed for render->texture transitions */
    unsigned pc_lines;
    uint32_t lds_size_per_workgroup;
    uint32_t lds_alloc_granularity;
@@ -141,10 +143,8 @@ struct radeon_info {
    bool is_amdgpu;
    bool has_userptr;
    bool has_syncobj;
-   bool has_syncobj_wait_for_submit;
    bool has_timeline_syncobj;
    bool has_fence_to_handle;
-   bool has_ctx_priority;
    bool has_local_buffers;
    bool kernel_flushes_hdp_before_ib;
    bool htile_cmask_support_1d_tiling;

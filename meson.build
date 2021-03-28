@@ -51,13 +51,13 @@ pre_args = [
 
 with_vulkan_icd_dir = get_option('vulkan-icd-dir')
 with_tests = get_option('build-tests')
-with_glcpp_tests = get_option('enable-glcpp-tests')
 with_aco_tests = get_option('build-aco-tests')
 with_glx_read_only_text = get_option('glx-read-only-text')
 with_glx_direct = get_option('glx-direct')
 with_osmesa = get_option('osmesa')
 with_swr_arches = get_option('swr-arches')
-with_vulkan_overlay_layer = get_option('vulkan-overlay-layer')
+with_vulkan_overlay_layer = get_option('vulkan-layers').contains('overlay')
+with_vulkan_device_select_layer = get_option('vulkan-layers').contains('device-select')
 with_tools = get_option('tools')
 if with_tools.contains('all')
   with_tools = [
@@ -198,7 +198,7 @@ if gallium_drivers.contains('auto')
       ]
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       gallium_drivers = [
-        'kmsro', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau',
+        'v3d', 'vc4', 'freedreno', 'etnaviv', 'nouveau',
         'tegra', 'virgl', 'lima', 'panfrost', 'swrast'
       ]
     elif ['mips', 'mips64'].contains(host_machine.cpu_family())
@@ -216,7 +216,6 @@ if gallium_drivers.contains('auto')
           host_machine.system()))
   endif
 endif
-with_gallium_kmsro = gallium_drivers.contains('kmsro')
 with_gallium_radeonsi = gallium_drivers.contains('radeonsi')
 with_gallium_r300 = gallium_drivers.contains('r300')
 with_gallium_r600 = gallium_drivers.contains('r600')
@@ -238,6 +237,7 @@ with_gallium_zink = gallium_drivers.contains('zink')
 with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 
 with_gallium = gallium_drivers.length() != 0
+with_gallium_kmsro = with_gallium_v3d or with_gallium_vc4 or with_gallium_etnaviv or with_gallium_panfrost or with_gallium_lima or with_gallium_freedreno
 
 if with_gallium and system_has_kms_drm
   _glx = get_option('glx')
@@ -285,9 +285,6 @@ if with_swrast_vk and not with_gallium_softpipe
 endif
 if with_dri_i915 and with_gallium_i915
   error('Only one i915 provider can be built')
-endif
-if with_gallium_kmsro and not (with_gallium_v3d or with_gallium_vc4 or with_gallium_etnaviv or with_gallium_freedreno or with_gallium_panfrost or with_gallium_lima)
-  error('kmsro driver requires one or more renderonly drivers (vc4, etnaviv, freedreno, panfrost, lima)')
 endif
 if with_gallium_tegra and not with_gallium_nouveau
   error('tegra driver requires nouveau driver')
@@ -941,7 +938,7 @@ if _shader_cache != 'disabled'
   endif
 endif
 
-if with_shader_cache 
+if with_shader_cache
   shader_cache_max_size = get_option('shader-cache-max-size')
   if shader_cache_max_size != ''
     pre_args += '-DMESA_GLSL_CACHE_MAX_SIZE="@0@"'.format(shader_cache_max_size)
@@ -981,7 +978,7 @@ elif host_machine.system() == 'windows'
   pre_args += [
     '-D_WINDOWS', '-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00',
     '-DPIPE_SUBSYSTEM_WINDOWS_USER',
-    '-D_USE_MATH_DEFINES',  # XXX: scons doesn't use this for mingw
+    '-D_USE_MATH_DEFINES',  # XXX: scons didn't use this for mingw
   ]
   if cc.get_id() == 'msvc'
     pre_args += [
@@ -1401,6 +1398,13 @@ else
   dep_zstd = null_dep
 endif
 
+with_compression = dep_zlib.found() or dep_zstd.found()
+if with_compression
+  pre_args += '-DHAVE_COMPRESSION'
+elif with_shader_cache
+  error('Shader Cache requires compression')
+endif
+
 dep_thread = dependency('threads')
 if dep_thread.found() and host_machine.system() != 'windows'
   pre_args += '-DHAVE_PTHREAD'
@@ -1416,7 +1420,7 @@ if host_machine.system() == 'darwin'
   dep_expat = meson.get_compiler('c').find_library('expat')
 elif host_machine.system() != 'windows'
   dep_expat = dependency('expat', fallback : ['expat', 'expat_dep'],
-                         required: not with_platform_android or with_any_broadcom or with_any_intel)
+                         required: not with_platform_android or with_any_intel)
 else
   dep_expat = null_dep
 endif
@@ -1708,7 +1712,7 @@ else
   asan_c_args = ['-DBUILT_WITH_ASAN=0']
 endif
 
-if host_machine.system() == 'windows'
+if build_machine.system() == 'windows'
   # Prefer the winflexbison versions, they're much easier to install and have
   # better windows support.
 

@@ -971,6 +971,13 @@ nir_src_is_const(nir_src src)
 }
 
 static inline bool
+nir_src_is_undef(nir_src src)
+{
+   return src.is_ssa &&
+          src.ssa->parent_instr->type == nir_instr_type_ssa_undef;
+}
+
+static inline bool
 nir_src_is_divergent(nir_src src)
 {
    return src.is_ssa ? src.ssa->divergent : src.reg.reg->divergent;
@@ -3153,6 +3160,8 @@ typedef struct nir_shader_compiler_options {
    bool lower_bit_count;
    /** Lowers ifind_msb to compare and ufind_msb */
    bool lower_ifind_msb;
+   /** Lowers ifind_msb and ufind_msb to reverse variants */
+   bool lower_find_msb_to_reverse;
    /** Lowers find_lsb to ufind_msb and logic ops */
    bool lower_find_lsb;
    bool lower_uadd_carry;
@@ -3382,6 +3391,9 @@ typedef struct nir_shader_compiler_options {
    /** Backend supports umad24, if not set  umad24 will automatically be lowered
     * to imul with masked inputs and iadd */
    bool has_umad24;
+
+   /* Backend supports fused comapre against zero and csel */
+   bool has_fused_comp_and_csel;
 
    /** Backend supports fsub, if not set fsub will automatically be lowered to
     * fadd(x, fneg(y)). If true, driver should call nir_opt_algebraic_late(). */
@@ -3763,6 +3775,15 @@ nir_after_phis(nir_block *block)
 }
 
 static inline nir_cursor
+nir_after_instr_and_phis(nir_instr *instr)
+{
+   if (instr->type == nir_instr_type_phi)
+      return nir_after_phis(instr->block);
+   else
+      return nir_after_instr(instr);
+}
+
+static inline nir_cursor
 nir_after_cf_node_and_phis(nir_cf_node *node)
 {
    if (node->type == nir_cf_node_block)
@@ -3938,12 +3959,18 @@ nir_ssa_dest_init_for_type(nir_instr *instr, nir_dest *dest,
    nir_ssa_dest_init(instr, dest, glsl_get_components(type),
                      glsl_get_bit_size(type), name);
 }
-void nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_src new_src);
-void nir_ssa_def_rewrite_uses_ssa(nir_ssa_def *def, nir_ssa_def *new_ssa);
-void nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
+void nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_ssa_def *new_ssa);
+void nir_ssa_def_rewrite_uses_src(nir_ssa_def *def, nir_src new_src);
+void nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_ssa_def *new_ssa,
                                     nir_instr *after_me);
 
 nir_component_mask_t nir_ssa_def_components_read(const nir_ssa_def *def);
+
+static inline bool
+nir_ssa_def_is_unused(nir_ssa_def *ssa)
+{
+   return list_is_empty(&ssa->uses) && list_is_empty(&ssa->if_uses);
+}
 
 
 /** Returns the next block, disregarding structure
@@ -4034,6 +4061,8 @@ void nir_print_shader(nir_shader *shader, FILE *fp);
 void nir_print_shader_annotated(nir_shader *shader, FILE *fp, struct hash_table *errors);
 void nir_print_instr(const nir_instr *instr, FILE *fp);
 void nir_print_deref(const nir_deref_instr *deref, FILE *fp);
+
+char *nir_shader_as_str(nir_shader *nir, void *mem_ctx);
 
 /** Shallow clone of a single instruction. */
 nir_instr *nir_instr_clone(nir_shader *s, const nir_instr *orig);
@@ -4292,6 +4321,8 @@ bool nir_lower_array_deref_of_vec(nir_shader *shader, nir_variable_mode modes,
 bool nir_lower_indirect_derefs(nir_shader *shader, nir_variable_mode modes,
                                uint32_t max_lower_array_len);
 
+bool nir_lower_indirect_builtin_uniform_derefs(nir_shader *shader);
+
 bool nir_lower_locals_to_regs(nir_shader *shader);
 
 void nir_lower_io_to_temporaries(nir_shader *shader,
@@ -4387,6 +4418,17 @@ typedef enum {
    nir_address_format_64bit_global,
 
    /**
+    * An address format which is a 64-bit global base address and a 32-bit
+    * offset.
+    *
+    * The address is comprised as a 32-bit vec4 where .xy are a uint64_t base
+    * address stored with the low bits in .x and high bits in .y, .z is
+    * undefined, and .w is an offset.  This is intended to match
+    * 64bit_bounded_global but without the bounds checking.
+    */
+   nir_address_format_64bit_global_32bit_offset,
+
+   /**
     * An address format which is a bounds-checked 64-bit global GPU address.
     *
     * The address is comprised as a 32-bit vec4 where .xy are a uint64_t base
@@ -4460,6 +4502,7 @@ nir_address_format_bit_size(nir_address_format addr_format)
    switch (addr_format) {
    case nir_address_format_32bit_global:              return 32;
    case nir_address_format_64bit_global:              return 64;
+   case nir_address_format_64bit_global_32bit_offset: return 32;
    case nir_address_format_64bit_bounded_global:      return 32;
    case nir_address_format_32bit_index_offset:        return 32;
    case nir_address_format_32bit_index_offset_pack64: return 64;
@@ -4478,6 +4521,7 @@ nir_address_format_num_components(nir_address_format addr_format)
    switch (addr_format) {
    case nir_address_format_32bit_global:              return 1;
    case nir_address_format_64bit_global:              return 1;
+   case nir_address_format_64bit_global_32bit_offset: return 4;
    case nir_address_format_64bit_bounded_global:      return 4;
    case nir_address_format_32bit_index_offset:        return 2;
    case nir_address_format_32bit_index_offset_pack64: return 1;
@@ -4969,6 +5013,7 @@ bool nir_shader_uses_view_index(nir_shader *shader);
 bool nir_can_lower_multiview(nir_shader *shader);
 bool nir_lower_multiview(nir_shader *shader, uint32_t view_mask);
 
+bool nir_lower_fp16_casts(nir_shader *shader);
 bool nir_normalize_cubemap_coords(nir_shader *shader);
 
 void nir_live_ssa_defs_impl(nir_function_impl *impl);
@@ -5084,6 +5129,8 @@ bool nir_opt_sink(nir_shader *shader, nir_move_options options);
 
 bool nir_opt_move(nir_shader *shader, nir_move_options options);
 
+bool nir_opt_offsets(nir_shader *shader);
+
 bool nir_opt_peephole_select(nir_shader *shader, unsigned limit,
                              bool indirect_load_ok, bool expensive_alu_ok);
 
@@ -5092,7 +5139,7 @@ bool nir_opt_rematerialize_compares(nir_shader *shader);
 bool nir_opt_remove_phis(nir_shader *shader);
 bool nir_opt_remove_phis_block(nir_block *block);
 
-bool nir_opt_shrink_vectors(nir_shader *shader);
+bool nir_opt_shrink_vectors(nir_shader *shader, bool shrink_image_store);
 
 bool nir_opt_trivial_continues(nir_shader *shader);
 

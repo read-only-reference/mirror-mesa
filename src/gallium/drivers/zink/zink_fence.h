@@ -24,47 +24,48 @@
 #ifndef ZINK_FENCE_H
 #define ZINK_FENCE_H
 
+#include "util/simple_mtx.h"
 #include "util/u_inlines.h"
-#include "util/u_dynarray.h"
 
 #include <vulkan/vulkan.h>
 
 struct pipe_context;
 struct pipe_screen;
+struct zink_batch;
+struct zink_batch_state;
 struct zink_context;
 struct zink_screen;
 
 struct zink_fence {
    struct pipe_reference reference;
-   unsigned batch_id : 3;
    VkFence fence;
-   struct set *active_queries; /* zink_query objects which were active at some point in this batch */
-   struct util_dynarray resources;
    struct pipe_context *deferred_ctx;
+   uint32_t batch_id;
+   simple_mtx_t resource_mtx;
+   struct set *resources; /* resources need access removed asap, so they're on the fence */
    bool submitted;
 };
 
 static inline struct zink_fence *
-zink_fence(struct pipe_fence_handle *pfence)
+zink_fence(void *pfence)
 {
    return (struct zink_fence *)pfence;
 }
-
-void
-zink_fence_init(struct zink_fence *fence, struct zink_batch *batch);
-struct zink_fence *
-zink_create_fence(struct pipe_screen *pscreen, struct zink_batch *batch);
 
 void
 zink_fence_reference(struct zink_screen *screen,
                      struct zink_fence **ptr,
                      struct zink_fence *fence);
 
-bool
-zink_fence_finish(struct zink_screen *screen, struct pipe_context *pctx, struct zink_fence *fence,
-                  uint64_t timeout_ns);
+void
+zink_fence_server_sync(struct pipe_context *pctx, struct pipe_fence_handle *pfence);
 
 void
 zink_screen_fence_init(struct pipe_screen *pscreen);
 
+bool
+zink_vkfence_wait(struct zink_screen *screen, struct zink_fence *fence, uint64_t timeout_ns);
+
+void
+zink_fence_clear_resources(struct zink_screen *screen, struct zink_fence *fence);
 #endif

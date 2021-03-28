@@ -60,6 +60,7 @@
 #include "vk_instance.h"
 #include "vk_format.h"
 #include "vk_physical_device.h"
+#include "vk_shader_module.h"
 
 #include "radv_radeon_winsys.h"
 #include "ac_binary.h"
@@ -329,6 +330,7 @@ struct radv_instance {
 	 */
 	bool enable_mrt_output_nan_fixup;
 	bool disable_tc_compat_htile_in_general;
+	bool disable_shrink_image_store;
 };
 
 VkResult radv_init_wsi(struct radv_physical_device *physical_device);
@@ -366,7 +368,6 @@ struct radv_pipeline_key {
 	uint32_t is_int10;
 	uint8_t log2_ps_iter_samples;
 	uint8_t num_samples;
-	bool is_dual_src;
 	uint32_t has_multiview_view_index : 1;
 	uint32_t optimisations_disabled : 1;
 	uint8_t topology;
@@ -740,7 +741,6 @@ struct radv_device {
 	int queue_count[RADV_MAX_QUEUE_FAMILIES];
 	struct radeon_cmdbuf *empty_cs[RADV_MAX_QUEUE_FAMILIES];
 
-	bool always_use_syncobj;
 	bool pbb_allowed;
 	bool dfsm_allowed;
 	uint32_t tess_offchip_block_dw_size;
@@ -953,64 +953,64 @@ struct radv_buffer {
 };
 
 enum radv_dynamic_state_bits {
-	RADV_DYNAMIC_VIEWPORT				= 1 << 0,
-	RADV_DYNAMIC_SCISSOR				= 1 << 1,
-	RADV_DYNAMIC_LINE_WIDTH				= 1 << 2,
-	RADV_DYNAMIC_DEPTH_BIAS				= 1 << 3,
-	RADV_DYNAMIC_BLEND_CONSTANTS			= 1 << 4,
-	RADV_DYNAMIC_DEPTH_BOUNDS			= 1 << 5,
-	RADV_DYNAMIC_STENCIL_COMPARE_MASK		= 1 << 6,
-	RADV_DYNAMIC_STENCIL_WRITE_MASK			= 1 << 7,
-	RADV_DYNAMIC_STENCIL_REFERENCE			= 1 << 8,
-	RADV_DYNAMIC_DISCARD_RECTANGLE			= 1 << 9,
-	RADV_DYNAMIC_SAMPLE_LOCATIONS			= 1 << 10,
-	RADV_DYNAMIC_LINE_STIPPLE			= 1 << 11,
-	RADV_DYNAMIC_CULL_MODE				= 1 << 12,
-	RADV_DYNAMIC_FRONT_FACE				= 1 << 13,
-	RADV_DYNAMIC_PRIMITIVE_TOPOLOGY			= 1 << 14,
-	RADV_DYNAMIC_DEPTH_TEST_ENABLE			= 1 << 15,
-	RADV_DYNAMIC_DEPTH_WRITE_ENABLE			= 1 << 16,
-	RADV_DYNAMIC_DEPTH_COMPARE_OP			= 1 << 17,
-	RADV_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE		= 1 << 18,
-	RADV_DYNAMIC_STENCIL_TEST_ENABLE		= 1 << 19,
-	RADV_DYNAMIC_STENCIL_OP				= 1 << 20,
-	RADV_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE        = 1 << 21,
-	RADV_DYNAMIC_FRAGMENT_SHADING_RATE              = 1 << 22,
-	RADV_DYNAMIC_ALL				= (1 << 23) - 1,
+	RADV_DYNAMIC_VIEWPORT				= 1ull << 0,
+	RADV_DYNAMIC_SCISSOR				= 1ull << 1,
+	RADV_DYNAMIC_LINE_WIDTH				= 1ull << 2,
+	RADV_DYNAMIC_DEPTH_BIAS				= 1ull << 3,
+	RADV_DYNAMIC_BLEND_CONSTANTS			= 1ull << 4,
+	RADV_DYNAMIC_DEPTH_BOUNDS			= 1ull << 5,
+	RADV_DYNAMIC_STENCIL_COMPARE_MASK		= 1ull << 6,
+	RADV_DYNAMIC_STENCIL_WRITE_MASK			= 1ull << 7,
+	RADV_DYNAMIC_STENCIL_REFERENCE			= 1ull << 8,
+	RADV_DYNAMIC_DISCARD_RECTANGLE			= 1ull << 9,
+	RADV_DYNAMIC_SAMPLE_LOCATIONS			= 1ull << 10,
+	RADV_DYNAMIC_LINE_STIPPLE			= 1ull << 11,
+	RADV_DYNAMIC_CULL_MODE				= 1ull << 12,
+	RADV_DYNAMIC_FRONT_FACE				= 1ull << 13,
+	RADV_DYNAMIC_PRIMITIVE_TOPOLOGY			= 1ull << 14,
+	RADV_DYNAMIC_DEPTH_TEST_ENABLE			= 1ull << 15,
+	RADV_DYNAMIC_DEPTH_WRITE_ENABLE			= 1ull << 16,
+	RADV_DYNAMIC_DEPTH_COMPARE_OP			= 1ull << 17,
+	RADV_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE		= 1ull << 18,
+	RADV_DYNAMIC_STENCIL_TEST_ENABLE		= 1ull << 19,
+	RADV_DYNAMIC_STENCIL_OP				= 1ull << 20,
+	RADV_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE        = 1ull << 21,
+	RADV_DYNAMIC_FRAGMENT_SHADING_RATE              = 1ull << 22,
+	RADV_DYNAMIC_ALL				= (1ull << 23) - 1,
 };
 
 enum radv_cmd_dirty_bits {
 	/* Keep the dynamic state dirty bits in sync with
 	 * enum radv_dynamic_state_bits */
-	RADV_CMD_DIRTY_DYNAMIC_VIEWPORT				= 1 << 0,
-	RADV_CMD_DIRTY_DYNAMIC_SCISSOR				= 1 << 1,
-	RADV_CMD_DIRTY_DYNAMIC_LINE_WIDTH			= 1 << 2,
-	RADV_CMD_DIRTY_DYNAMIC_DEPTH_BIAS			= 1 << 3,
-	RADV_CMD_DIRTY_DYNAMIC_BLEND_CONSTANTS			= 1 << 4,
-	RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS			= 1 << 5,
-	RADV_CMD_DIRTY_DYNAMIC_STENCIL_COMPARE_MASK		= 1 << 6,
-	RADV_CMD_DIRTY_DYNAMIC_STENCIL_WRITE_MASK		= 1 << 7,
-	RADV_CMD_DIRTY_DYNAMIC_STENCIL_REFERENCE		= 1 << 8,
-	RADV_CMD_DIRTY_DYNAMIC_DISCARD_RECTANGLE		= 1 << 9,
-	RADV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS			= 1 << 10,
-	RADV_CMD_DIRTY_DYNAMIC_LINE_STIPPLE			= 1 << 11,
-	RADV_CMD_DIRTY_DYNAMIC_CULL_MODE			= 1 << 12,
-	RADV_CMD_DIRTY_DYNAMIC_FRONT_FACE			= 1 << 13,
-	RADV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY		= 1 << 14,
-	RADV_CMD_DIRTY_DYNAMIC_DEPTH_TEST_ENABLE		= 1 << 15,
-	RADV_CMD_DIRTY_DYNAMIC_DEPTH_WRITE_ENABLE		= 1 << 16,
-	RADV_CMD_DIRTY_DYNAMIC_DEPTH_COMPARE_OP			= 1 << 17,
-	RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE		= 1 << 18,
-	RADV_CMD_DIRTY_DYNAMIC_STENCIL_TEST_ENABLE		= 1 << 19,
-	RADV_CMD_DIRTY_DYNAMIC_STENCIL_OP			= 1 << 20,
-	RADV_CMD_DIRTY_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE      = 1 << 21,
-	RADV_CMD_DIRTY_DYNAMIC_FRAGMENT_SHADING_RATE            = 1 << 22,
-	RADV_CMD_DIRTY_DYNAMIC_ALL				= (1 << 23) - 1,
-	RADV_CMD_DIRTY_PIPELINE					= 1 << 23,
-	RADV_CMD_DIRTY_INDEX_BUFFER				= 1 << 24,
-	RADV_CMD_DIRTY_FRAMEBUFFER				= 1 << 25,
-	RADV_CMD_DIRTY_VERTEX_BUFFER				= 1 << 26,
-	RADV_CMD_DIRTY_STREAMOUT_BUFFER				= 1 << 27,
+	RADV_CMD_DIRTY_DYNAMIC_VIEWPORT				= 1ull << 0,
+	RADV_CMD_DIRTY_DYNAMIC_SCISSOR				= 1ull << 1,
+	RADV_CMD_DIRTY_DYNAMIC_LINE_WIDTH			= 1ull << 2,
+	RADV_CMD_DIRTY_DYNAMIC_DEPTH_BIAS			= 1ull << 3,
+	RADV_CMD_DIRTY_DYNAMIC_BLEND_CONSTANTS			= 1ull << 4,
+	RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS			= 1ull << 5,
+	RADV_CMD_DIRTY_DYNAMIC_STENCIL_COMPARE_MASK		= 1ull << 6,
+	RADV_CMD_DIRTY_DYNAMIC_STENCIL_WRITE_MASK		= 1ull << 7,
+	RADV_CMD_DIRTY_DYNAMIC_STENCIL_REFERENCE		= 1ull << 8,
+	RADV_CMD_DIRTY_DYNAMIC_DISCARD_RECTANGLE		= 1ull << 9,
+	RADV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS			= 1ull << 10,
+	RADV_CMD_DIRTY_DYNAMIC_LINE_STIPPLE			= 1ull << 11,
+	RADV_CMD_DIRTY_DYNAMIC_CULL_MODE			= 1ull << 12,
+	RADV_CMD_DIRTY_DYNAMIC_FRONT_FACE			= 1ull << 13,
+	RADV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY		= 1ull << 14,
+	RADV_CMD_DIRTY_DYNAMIC_DEPTH_TEST_ENABLE		= 1ull << 15,
+	RADV_CMD_DIRTY_DYNAMIC_DEPTH_WRITE_ENABLE		= 1ull << 16,
+	RADV_CMD_DIRTY_DYNAMIC_DEPTH_COMPARE_OP			= 1ull << 17,
+	RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE		= 1ull << 18,
+	RADV_CMD_DIRTY_DYNAMIC_STENCIL_TEST_ENABLE		= 1ull << 19,
+	RADV_CMD_DIRTY_DYNAMIC_STENCIL_OP			= 1ull << 20,
+	RADV_CMD_DIRTY_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE      = 1ull << 21,
+	RADV_CMD_DIRTY_DYNAMIC_FRAGMENT_SHADING_RATE            = 1ull << 22,
+	RADV_CMD_DIRTY_DYNAMIC_ALL				= (1ull << 23) - 1,
+	RADV_CMD_DIRTY_PIPELINE					= 1ull << 23,
+	RADV_CMD_DIRTY_INDEX_BUFFER				= 1ull << 24,
+	RADV_CMD_DIRTY_FRAMEBUFFER				= 1ull << 25,
+	RADV_CMD_DIRTY_VERTEX_BUFFER				= 1ull << 26,
+	RADV_CMD_DIRTY_STREAMOUT_BUFFER				= 1ull << 27,
 };
 
 enum radv_cmd_flush_bits {
@@ -1105,10 +1105,10 @@ struct radv_sample_locations_state {
 
 struct radv_dynamic_state {
 	/**
-	 * Bitmask of (1 << VK_DYNAMIC_STATE_*).
+	 * Bitmask of (1ull << VK_DYNAMIC_STATE_*).
 	 * Defines the set of saved dynamic state.
 	 */
-	uint32_t mask;
+	uint64_t mask;
 
 	struct radv_viewport_state                        viewport;
 
@@ -1304,7 +1304,7 @@ struct radv_cmd_state {
 	unsigned                                      vb_size;
 
 	bool predicating;
-	uint32_t                                      dirty;
+	uint64_t                                      dirty;
 
 	uint32_t                                      prefetch_L2_mask;
 
@@ -1344,6 +1344,7 @@ struct radv_cmd_state {
 	uint32_t last_num_instances;
 	uint32_t last_first_instance;
 	uint32_t last_vertex_offset;
+	uint32_t last_drawid;
 
 	uint32_t last_sx_ps_downconvert;
 	uint32_t last_sx_blend_opt_epsilon;
@@ -1537,6 +1538,10 @@ void radv_update_color_clear_metadata(struct radv_cmd_buffer *cmd_buffer,
 				      int cb_idx,
 				      uint32_t color_values[2]);
 
+bool radv_image_use_dcc_image_stores(const struct radv_device *device,
+				     const struct radv_image *image);
+bool radv_image_use_dcc_predication(const struct radv_device *device,
+				    const struct radv_image *image);
 void radv_update_fce_metadata(struct radv_cmd_buffer *cmd_buffer,
 			      struct radv_image *image,
 			      const VkImageSubresourceRange *range, bool value);
@@ -1626,8 +1631,6 @@ struct radv_event {
 	uint64_t *map;
 };
 
-struct radv_shader_module;
-
 #define RADV_HASH_SHADER_NO_NGG              (1 << 0)
 #define RADV_HASH_SHADER_CS_WAVE32           (1 << 1)
 #define RADV_HASH_SHADER_PS_WAVE32           (1 << 2)
@@ -1636,6 +1639,7 @@ struct radv_shader_module;
 #define RADV_HASH_SHADER_DISCARD_TO_DEMOTE   (1 << 5)
 #define RADV_HASH_SHADER_MRT_NAN_FIXUP       (1 << 6)
 #define RADV_HASH_SHADER_INVARIANT_GEOM      (1 << 7)
+#define RADV_HASH_SHADER_KEEP_STATISTICS     (1 << 8)
 
 void
 radv_hash_shaders(unsigned char *hash,
@@ -1733,6 +1737,8 @@ struct radv_pipeline {
 			uint32_t vtx_base_sgpr;
 			struct radv_ia_multi_vgt_param_helpers ia_multi_vgt_param;
 			uint8_t vtx_emit_num;
+			bool uses_drawid;
+			bool uses_baseinstance;
  			bool can_use_guardband;
 			uint32_t needed_dynamic_state;
 			bool disable_out_of_order_rast_for_occlusion;
@@ -1835,6 +1841,7 @@ bool radv_is_colorbuffer_format_supported(const struct radv_physical_device *pde
                                           VkFormat format, bool *blendable);
 bool radv_dcc_formats_compatible(VkFormat format1,
                                  VkFormat format2);
+bool radv_is_atomic_format_supported(VkFormat format);
 bool radv_device_supports_etc(struct radv_physical_device *physical_device);
 
 struct radv_image_plane {
@@ -2013,12 +2020,12 @@ radv_image_tile_stencil_disabled(const struct radv_device *device,
 				 const struct radv_image *image)
 {
 	if (device->physical_device->rad_info.chip_class >= GFX9) {
-		return !vk_format_is_stencil(image->vk_format);
+		return !vk_format_has_stencil(image->vk_format);
 	} else {
 		/* Due to a hw bug, TILE_STENCIL_DISABLE must be set to 0 for
 		 * the TC-compat ZRANGE issue even if no stencil is used.
 		 */
-		return !vk_format_is_stencil(image->vk_format) &&
+		return !vk_format_has_stencil(image->vk_format) &&
 		       !radv_image_is_tc_compat_htile(image);
 	}
 }
@@ -2115,6 +2122,9 @@ radv_get_levelCount(const struct radv_image *image,
 	return range->levelCount == VK_REMAINING_MIP_LEVELS ?
 		image->info.levels - range->baseMipLevel : range->levelCount;
 }
+
+bool
+radv_image_is_renderable(struct radv_device *device, struct radv_image *image);
 
 struct radeon_bo_metadata;
 void
@@ -2397,7 +2407,6 @@ struct radv_query_pool {
 
 typedef enum {
 	RADV_SEMAPHORE_NONE,
-	RADV_SEMAPHORE_WINSYS,
 	RADV_SEMAPHORE_SYNCOBJ,
 	RADV_SEMAPHORE_TIMELINE_SYNCOBJ,
 	RADV_SEMAPHORE_TIMELINE,
@@ -2450,7 +2459,6 @@ struct radv_semaphore_part {
 	radv_semaphore_kind kind;
 	union {
 		uint32_t syncobj;
-		struct radeon_winsys_sem *ws_sem;
 		struct radv_timeline timeline;
 		struct radv_timeline_syncobj timeline_syncobj;
 	};
@@ -2503,20 +2511,14 @@ void radv_initialize_fmask(struct radv_cmd_buffer *cmd_buffer,
 
 typedef enum {
 	RADV_FENCE_NONE,
-	RADV_FENCE_WINSYS,
 	RADV_FENCE_SYNCOBJ,
 } radv_fence_kind;
 
 struct radv_fence_part {
 	radv_fence_kind kind;
 
-	union {
-		/* AMDGPU winsys fence. */
-		struct radeon_winsys_fence *fence;
-
-		/* DRM syncobj handle for syncobj-based fences. */
-		uint32_t syncobj;
-	};
+	/* DRM syncobj handle for syncobj-based fences. */
+	uint32_t syncobj;
 };
 
 struct radv_fence {
@@ -2615,8 +2617,6 @@ void radv_describe_barrier_end(struct radv_cmd_buffer *cmd_buffer);
 void radv_describe_barrier_end_delayed(struct radv_cmd_buffer *cmd_buffer);
 void radv_describe_layout_transition(struct radv_cmd_buffer *cmd_buffer,
 				     const struct radv_barrier_data *barrier);
-
-struct radeon_winsys_sem;
 
 uint64_t radv_get_current_time(void);
 
@@ -2776,7 +2776,6 @@ RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_query_pool, VkQueryPool)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_render_pass, VkRenderPass)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_sampler, VkSampler)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_sampler_ycbcr_conversion, VkSamplerYcbcrConversion)
-RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_shader_module, VkShaderModule)
 RADV_DEFINE_NONDISP_HANDLE_CASTS(radv_semaphore, VkSemaphore)
 
 #endif /* RADV_PRIVATE_H */

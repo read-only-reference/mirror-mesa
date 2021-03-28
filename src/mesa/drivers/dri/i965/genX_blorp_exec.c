@@ -23,9 +23,9 @@
 
 #include <assert.h>
 
-#include "intel_batchbuffer.h"
-#include "intel_mipmap_tree.h"
-#include "intel_fbo.h"
+#include "brw_batch.h"
+#include "brw_mipmap_tree.h"
+#include "brw_fbo.h"
 
 #include "brw_context.h"
 #include "brw_state.h"
@@ -256,7 +256,7 @@ blorp_flush_range(UNUSED struct blorp_batch *batch, UNUSED void *start,
 }
 
 #if GEN_GEN >= 7
-static const struct gen_l3_config *
+static const struct intel_l3_config *
 blorp_get_l3_config(struct blorp_batch *batch)
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);

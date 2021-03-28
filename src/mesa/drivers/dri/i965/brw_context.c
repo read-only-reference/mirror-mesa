@@ -59,15 +59,15 @@
 #include "brw_draw.h"
 #include "brw_state.h"
 
-#include "intel_batchbuffer.h"
-#include "intel_buffer_objects.h"
-#include "intel_buffers.h"
-#include "intel_fbo.h"
-#include "intel_mipmap_tree.h"
-#include "intel_pixel.h"
-#include "intel_image.h"
-#include "intel_tex.h"
-#include "intel_tex_obj.h"
+#include "brw_batch.h"
+#include "brw_buffer_objects.h"
+#include "brw_buffers.h"
+#include "brw_fbo.h"
+#include "brw_mipmap_tree.h"
+#include "brw_pixel.h"
+#include "brw_image.h"
+#include "brw_tex.h"
+#include "brw_tex_obj.h"
 
 #include "swrast_setup/swrast_setup.h"
 #include "tnl/tnl.h"
@@ -78,7 +78,7 @@
 #include "util/u_memory.h"
 #include "isl/isl.h"
 
-#include "common/gen_defines.h"
+#include "common/intel_defines.h"
 
 #include "compiler/spirv/nir_spirv.h"
 /***************************************
@@ -1072,14 +1072,14 @@ brw_create_context(gl_api api,
    }
 
    if (brw->hw_ctx) {
-      int hw_priority = GEN_CONTEXT_MEDIUM_PRIORITY;
+      int hw_priority = INTEL_CONTEXT_MEDIUM_PRIORITY;
       if (ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_PRIORITY) {
          switch (ctx_config->priority) {
          case __DRI_CTX_PRIORITY_LOW:
-            hw_priority = GEN_CONTEXT_LOW_PRIORITY;
+            hw_priority = INTEL_CONTEXT_LOW_PRIORITY;
             break;
          case __DRI_CTX_PRIORITY_HIGH:
-            hw_priority = GEN_CONTEXT_HIGH_PRIORITY;
+            hw_priority = INTEL_CONTEXT_HIGH_PRIORITY;
             break;
          }
       }

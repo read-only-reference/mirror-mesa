@@ -22,6 +22,7 @@
  */
 
 #include "util/u_blitter.h"
+#include "util/u_draw.h"
 #include "util/u_prim.h"
 #include "util/format/u_format.h"
 #include "util/u_pack_color.h"
@@ -1097,16 +1098,10 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
              const struct pipe_draw_start_count *draws,
              unsigned num_draws)
 {
-	if (num_draws > 1) {
-           struct pipe_draw_info tmp_info = *info;
-
-           for (unsigned i = 0; i < num_draws; i++) {
-              v3d_draw_vbo(pctx, &tmp_info, indirect, &draws[i], 1);
-              if (tmp_info.increment_draw_id)
-                 tmp_info.drawid++;
-           }
-           return;
-	}
+        if (num_draws > 1) {
+                util_draw_multi(pctx, info, indirect, draws, num_draws);
+                return;
+        }
 
         if (!indirect && (!draws[0].count || !info->instance_count))
            return;
@@ -1140,7 +1135,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         if (info->mode >= PIPE_PRIM_QUADS && info->mode <= PIPE_PRIM_POLYGON) {
                 util_primconvert_save_rasterizer_state(v3d->primconvert, &v3d->rasterizer->base);
-                util_primconvert_draw_vbo(v3d->primconvert, info, &draws[0]);
+                util_primconvert_draw_vbo(v3d->primconvert, info, indirect, draws, num_draws);
                 perf_debug("Fallback conversion for %d %s vertices\n",
                            draws[0].count, u_prim_name(info->mode));
                 return;

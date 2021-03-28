@@ -760,6 +760,7 @@ struct v3d_compile {
         uint32_t qpu_inst_count;
         uint32_t qpu_inst_size;
         uint32_t qpu_inst_stalled_count;
+        uint32_t nop_count;
 
         /* For the FS, the number of varying inputs not counting the
          * point/line varyings payload
@@ -834,6 +835,15 @@ struct v3d_vs_prog_data {
 
         /* Value to be programmed in VCM_CACHE_SIZE. */
         uint8_t vcm_cache_size;
+
+        /* Maps the nir->data.location to its
+         * nir->data.driver_location. In general we are using the
+         * driver location as index (like vattr_sizes above), so this
+         * map is useful when what we have is the location
+         *
+         * Returns -1 if the location is not used
+         */
+        int32_t driver_location_map[V3D_MAX_VS_INPUTS];
 };
 
 struct v3d_gs_prog_data {
@@ -895,6 +905,7 @@ struct v3d_compute_prog_data {
         struct v3d_prog_data base;
         /* Size in bytes of the workgroup's shared space. */
         uint32_t shared_size;
+        uint16_t local_size[3];
 };
 
 static inline bool

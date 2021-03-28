@@ -651,6 +651,14 @@ v3d_vs_set_prog_data(struct v3d_compile *c,
                 prog_data->vpm_input_size += c->vattr_sizes[i];
         }
 
+        memset(prog_data->driver_location_map, -1,
+               sizeof(prog_data->driver_location_map));
+
+        nir_foreach_shader_in_variable(var, c->s) {
+                prog_data->driver_location_map[var->data.location] =
+                        var->data.driver_location;
+        }
+
         prog_data->uses_vid = BITSET_TEST(c->s->info.system_values_read,
                                           SYSTEM_VALUE_VERTEX_ID) ||
                               BITSET_TEST(c->s->info.system_values_read,
@@ -786,6 +794,10 @@ v3d_cs_set_prog_data(struct v3d_compile *c,
                      struct v3d_compute_prog_data *prog_data)
 {
         prog_data->shared_size = c->s->info.cs.shared_size;
+
+        prog_data->local_size[0] = c->s->info.cs.local_size[0];
+        prog_data->local_size[1] = c->s->info.cs.local_size[1];
+        prog_data->local_size[2] = c->s->info.cs.local_size[2];
 }
 
 static void
@@ -1072,6 +1084,21 @@ v3d_intrinsic_dependency_cb(nir_intrinsic_instr *intr,
         return false;
 }
 
+static bool
+should_split_wrmask(const nir_instr *instr, const void *data)
+{
+        nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+        switch (intr->intrinsic) {
+        case nir_intrinsic_store_ssbo:
+        case nir_intrinsic_store_shared:
+        case nir_intrinsic_store_global:
+        case nir_intrinsic_store_scratch:
+                return true;
+        default:
+                return false;
+        }
+}
+
 static void
 v3d_attempt_compile(struct v3d_compile *c)
 {
@@ -1136,6 +1163,8 @@ v3d_attempt_compile(struct v3d_compile *c)
            NIR_PASS_V(c->s, nir_copy_prop);
            NIR_PASS_V(c->s, v3d_nir_lower_robust_buffer_access, c);
         }
+
+        NIR_PASS_V(c->s, nir_lower_wrmasks, should_split_wrmask, c->s);
 
         v3d_optimize_nir(c->s);
 
@@ -1209,7 +1238,7 @@ int v3d_shaderdb_dump(struct v3d_compile *c,
         return asprintf(shaderdb_str,
                         "%s shader: %d inst, %d threads, %d loops, "
                         "%d uniforms, %d max-temps, %d:%d spills:fills, "
-                        "%d sfu-stalls, %d inst-and-stalls",
+                        "%d sfu-stalls, %d inst-and-stalls, %d nops",
                         vir_get_stage_name(c),
                         c->qpu_inst_count,
                         c->threads,
@@ -1219,7 +1248,8 @@ int v3d_shaderdb_dump(struct v3d_compile *c,
                         c->spills,
                         c->fills,
                         c->qpu_inst_stalled_count,
-                        c->qpu_inst_count + c->qpu_inst_stalled_count);
+                        c->qpu_inst_count + c->qpu_inst_stalled_count,
+                        c->nop_count);
 }
 
 uint64_t *v3d_compile(const struct v3d_compiler *compiler,

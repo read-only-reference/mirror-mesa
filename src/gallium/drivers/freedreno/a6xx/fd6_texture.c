@@ -160,28 +160,68 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 		const struct pipe_sampler_view *cso)
 {
 	struct fd6_pipe_sampler_view *so = CALLOC_STRUCT(fd6_pipe_sampler_view);
-	struct fd_resource *rsc = fd_resource(prsc);
-	enum pipe_format format = cso->format;
-	bool ubwc_enabled = false;
-	unsigned lvl, layers = 0;
 
 	if (!so)
 		return NULL;
-
-	fd6_validate_format(fd_context(pctx), rsc, format);
-
-	if (format == PIPE_FORMAT_X32_S8X24_UINT) {
-		rsc = rsc->stencil;
-		format = rsc->base.format;
-	}
 
 	so->base = *cso;
 	pipe_reference(NULL, &prsc->reference);
 	so->base.texture = prsc;
 	so->base.reference.count = 1;
 	so->base.context = pctx;
-	so->seqno = ++fd6_context(fd_context(pctx))->tex_seqno;
+	so->needs_validate = true;
+
+	return &so->base;
+}
+
+static void
+fd6_set_sampler_views(struct pipe_context *pctx, enum pipe_shader_type shader,
+		unsigned start, unsigned nr, unsigned unbind_num_trailing_slots,
+		struct pipe_sampler_view **views)
+	in_dt
+{
+	struct fd_context *ctx = fd_context(pctx);
+
+	fd_set_sampler_views(pctx, shader, start, nr, unbind_num_trailing_slots, views);
+
+	if (!views)
+		return;
+
+	for (unsigned i = 0; i < nr; i++) {
+		struct fd6_pipe_sampler_view *so = fd6_pipe_sampler_view(views[i]);
+
+		if (!(so && so->needs_validate))
+			continue;
+
+		struct fd_resource *rsc = fd_resource(so->base.texture);
+
+		fd6_validate_format(ctx, rsc, so->base.format);
+		fd6_sampler_view_update(ctx, so);
+
+		so->needs_validate = false;
+	}
+}
+
+void
+fd6_sampler_view_update(struct fd_context *ctx, struct fd6_pipe_sampler_view *so)
+{
+	const struct pipe_sampler_view *cso = &so->base;
+	struct pipe_resource *prsc = cso->texture;
+	struct fd_resource *rsc = fd_resource(prsc);
+	enum pipe_format format = cso->format;
+	bool ubwc_enabled = false;
+	unsigned lvl, layers = 0;
+
+	fd6_validate_format(ctx, rsc, cso->format);
+
+	if (format == PIPE_FORMAT_X32_S8X24_UINT) {
+		rsc = rsc->stencil;
+		format = rsc->b.b.format;
+	}
+
+	so->seqno = ++fd6_context(ctx)->tex_seqno;
 	so->ptr1 = rsc;
+	so->rsc_seqno = rsc->seqno;
 
 	if (cso->target == PIPE_BUFFER) {
 		unsigned elements = cso->u.buf.size / util_format_get_blocksize(format);
@@ -211,8 +251,8 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 
 		ubwc_enabled = fd_resource_ubwc_enabled(rsc, lvl);
 
-		if (rsc->base.format == PIPE_FORMAT_R8_G8B8_420_UNORM) {
-			struct fd_resource *next = fd_resource(rsc->base.next);
+		if (rsc->b.b.format == PIPE_FORMAT_R8_G8B8_420_UNORM) {
+			struct fd_resource *next = fd_resource(rsc->b.b.next);
 
 			/* In case of biplanar R8_G8B8, the UBWC metadata address in
 			 * dwords 7 and 8, is instead the pointer to the second plane.
@@ -297,10 +337,11 @@ fd6_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 			A6XX_TEX_CONST_10_FLAG_BUFFER_LOGW(util_logbase2_ceil(DIV_ROUND_UP(u_minify(prsc->width0, lvl), block_width))) |
 			A6XX_TEX_CONST_10_FLAG_BUFFER_LOGH(util_logbase2_ceil(DIV_ROUND_UP(u_minify(prsc->height0, lvl), block_height)));
 	}
-
-	return &so->base;
 }
 
+/* NOTE this can be called in either driver thread or frontend thread
+ * depending on where the last unref comes from
+ */
 static void
 fd6_sampler_view_destroy(struct pipe_context *pctx,
 		struct pipe_sampler_view *_view)
@@ -363,6 +404,11 @@ fd6_texture_state(struct fd_context *ctx, enum pipe_shader_type type,
 		struct fd6_pipe_sampler_view *view =
 			fd6_pipe_sampler_view(tex->textures[i]);
 
+		/* NOTE that if the backing rsc was uncompressed between the
+		 * time that the CSO was originally created and now, the rsc
+		 * seqno would have changed, so we don't have to worry about
+		 * getting a bogus cache hit.
+		 */
 		key.view[i].rsc_seqno = fd_resource(view->base.texture)->seqno;
 		key.view[i].seqno = view->seqno;
 	}
@@ -400,8 +446,7 @@ fd6_texture_state(struct fd_context *ctx, enum pipe_shader_type type,
 	state->stateobj = fd_ringbuffer_new_object(ctx->pipe, 0x1000);
 	state->needs_border = needs_border;
 
-	fd6_emit_textures(ctx->pipe, state->stateobj, type, tex, key.bcolor_offset,
-			NULL, NULL);
+	fd6_emit_textures(ctx, state->stateobj, type, tex, key.bcolor_offset, NULL);
 
 	/* NOTE: uses copy of key in state obj, because pointer passed by caller
 	 * is probably on the stack
@@ -463,7 +508,7 @@ fd6_texture_init(struct pipe_context *pctx)
 
 	pctx->create_sampler_view = fd6_sampler_view_create;
 	pctx->sampler_view_destroy = fd6_sampler_view_destroy;
-	pctx->set_sampler_views = fd_set_sampler_views;
+	pctx->set_sampler_views = fd6_set_sampler_views;
 
 	ctx->rebind_resource = fd6_rebind_resource;
 

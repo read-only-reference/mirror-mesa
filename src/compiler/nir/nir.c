@@ -1296,7 +1296,7 @@ nir_instr_rewrite_dest(nir_instr *instr, nir_dest *dest, nir_dest new_dest)
 {
    if (dest->is_ssa) {
       /* We can only overwrite an SSA destination if it has no uses. */
-      assert(list_is_empty(&dest->ssa.uses) && list_is_empty(&dest->ssa.if_uses));
+      assert(nir_ssa_def_is_unused(&dest->ssa));
    } else {
       list_del(&dest->reg.def_link);
       if (dest->reg.indirect)
@@ -1352,7 +1352,7 @@ nir_ssa_dest_init(nir_instr *instr, nir_dest *dest,
 }
 
 void
-nir_ssa_def_rewrite_uses_ssa(nir_ssa_def *def, nir_ssa_def *new_ssa)
+nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_ssa_def *new_ssa)
 {
    assert(def != new_ssa);
    nir_foreach_use_safe(use_src, def)
@@ -1363,10 +1363,10 @@ nir_ssa_def_rewrite_uses_ssa(nir_ssa_def *def, nir_ssa_def *new_ssa)
 }
 
 void
-nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_src new_src)
+nir_ssa_def_rewrite_uses_src(nir_ssa_def *def, nir_src new_src)
 {
    if (new_src.is_ssa) {
-      nir_ssa_def_rewrite_uses_ssa(def, new_src.ssa);
+      nir_ssa_def_rewrite_uses(def, new_src.ssa);
    } else {
       nir_foreach_use_safe(use_src, def)
          nir_instr_rewrite_src(use_src->parent_instr, use_src, new_src);
@@ -1407,10 +1407,10 @@ is_instr_between(nir_instr *start, nir_instr *end, nir_instr *between)
  * def->parent_instr and that after_me comes after def->parent_instr.
  */
 void
-nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
+nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_ssa_def *new_ssa,
                                nir_instr *after_me)
 {
-   if (new_src.is_ssa && def == new_src.ssa)
+   if (def == new_ssa)
       return;
 
    nir_foreach_use_safe(use_src, def) {
@@ -1420,11 +1420,14 @@ nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
        * the instruction list.
        */
       if (!is_instr_between(def->parent_instr, after_me, use_src->parent_instr))
-         nir_instr_rewrite_src(use_src->parent_instr, use_src, new_src);
+         nir_instr_rewrite_src_ssa(use_src->parent_instr, use_src, new_ssa);
    }
 
-   nir_foreach_if_use_safe(use_src, def)
-      nir_if_rewrite_condition(use_src->parent_if, new_src);
+   nir_foreach_if_use_safe(use_src, def) {
+      nir_if_rewrite_condition_ssa(use_src->parent_if,
+                                   &use_src->parent_if->condition,
+                                   new_ssa);
+   }
 }
 
 nir_component_mask_t
@@ -1839,7 +1842,7 @@ nir_function_impl_lower_instructions(nir_function_impl *impl,
          list_for_each_entry_safe(nir_src, use_src, &old_if_uses, use_link)
             nir_if_rewrite_condition(use_src->parent_if, new_src);
 
-         if (list_is_empty(&old_def->uses) && list_is_empty(&old_def->if_uses)) {
+         if (nir_ssa_def_is_unused(old_def)) {
             iter = nir_instr_remove(instr);
          } else {
             iter = nir_after_instr(instr);
@@ -2239,6 +2242,8 @@ nir_rewrite_image_intrinsic(nir_intrinsic_instr *intrin, nir_ssa_def *src,
    CASE(atomic_exchange)
    CASE(atomic_comp_swap)
    CASE(atomic_fadd)
+   CASE(atomic_fmin)
+   CASE(atomic_fmax)
    CASE(atomic_inc_wrap)
    CASE(atomic_dec_wrap)
    CASE(size)

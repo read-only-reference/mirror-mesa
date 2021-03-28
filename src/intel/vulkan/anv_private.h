@@ -43,10 +43,10 @@
 #define VG(x) ((void)0)
 #endif
 
-#include "common/gen_clflush.h"
-#include "common/gen_decoder.h"
-#include "common/gen_gem.h"
-#include "common/gen_l3_config.h"
+#include "common/intel_clflush.h"
+#include "common/intel_decoder.h"
+#include "common/intel_gem.h"
+#include "common/intel_l3_config.h"
 #include "common/intel_measure.h"
 #include "dev/gen_device_info.h"
 #include "blorp/blorp.h"
@@ -67,6 +67,7 @@
 #include "vk_device.h"
 #include "vk_instance.h"
 #include "vk_physical_device.h"
+#include "vk_shader_module.h"
 
 /* Pre-declarations needed for WSI entrypoints */
 struct wl_surface;
@@ -81,7 +82,7 @@ struct anv_buffer_view;
 struct anv_image_view;
 struct anv_instance;
 
-struct gen_aux_map_context;
+struct intel_aux_map_context;
 struct gen_perf_config;
 struct gen_perf_counter_pass;
 struct gen_perf_query_result;
@@ -454,105 +455,9 @@ void anv_loge_v(const char *format, va_list va);
 #define anv_assert(x)
 #endif
 
-/* A multi-pointer allocator
- *
- * When copying data structures from the user (such as a render pass), it's
- * common to need to allocate data for a bunch of different things.  Instead
- * of doing several allocations and having to handle all of the error checking
- * that entails, it can be easier to do a single allocation.  This struct
- * helps facilitate that.  The intended usage looks like this:
- *
- *    ANV_MULTIALLOC(ma)
- *    anv_multialloc_add(&ma, &main_ptr, 1);
- *    anv_multialloc_add(&ma, &substruct1, substruct1Count);
- *    anv_multialloc_add(&ma, &substruct2, substruct2Count);
- *
- *    if (!anv_multialloc_alloc(&ma, pAllocator, VK_ALLOCATION_SCOPE_FOO))
- *       return vk_error(VK_ERROR_OUT_OF_HOST_MEORY);
- */
-struct anv_multialloc {
-    size_t size;
-    size_t align;
-
-    uint32_t ptr_count;
-    void **ptrs[8];
-};
-
-#define ANV_MULTIALLOC_INIT \
-   ((struct anv_multialloc) { 0, })
-
-#define ANV_MULTIALLOC(_name) \
-   struct anv_multialloc _name = ANV_MULTIALLOC_INIT
-
-__attribute__((always_inline))
-static inline void
-_anv_multialloc_add(struct anv_multialloc *ma,
-                    void **ptr, size_t size, size_t align)
-{
-   size_t offset = align_u64(ma->size, align);
-   ma->size = offset + size;
-   ma->align = MAX2(ma->align, align);
-
-   /* Store the offset in the pointer. */
-   *ptr = (void *)(uintptr_t)offset;
-
-   assert(ma->ptr_count < ARRAY_SIZE(ma->ptrs));
-   ma->ptrs[ma->ptr_count++] = ptr;
-}
-
-#define anv_multialloc_add_size(_ma, _ptr, _size) \
-   _anv_multialloc_add((_ma), (void **)(_ptr), (_size), __alignof__(**(_ptr)))
-
-#define anv_multialloc_add(_ma, _ptr, _count) \
-   anv_multialloc_add_size(_ma, _ptr, (_count) * sizeof(**(_ptr)));
-
-__attribute__((always_inline))
-static inline void *
-anv_multialloc_alloc(struct anv_multialloc *ma,
-                     const VkAllocationCallbacks *alloc,
-                     VkSystemAllocationScope scope)
-{
-   void *ptr = vk_alloc(alloc, ma->size, ma->align, scope);
-   if (!ptr)
-      return NULL;
-
-   /* Fill out each of the pointers with their final value.
-    *
-    *   for (uint32_t i = 0; i < ma->ptr_count; i++)
-    *      *ma->ptrs[i] = ptr + (uintptr_t)*ma->ptrs[i];
-    *
-    * Unfortunately, even though ma->ptr_count is basically guaranteed to be a
-    * constant, GCC is incapable of figuring this out and unrolling the loop
-    * so we have to give it a little help.
-    */
-   STATIC_ASSERT(ARRAY_SIZE(ma->ptrs) == 8);
-#define _ANV_MULTIALLOC_UPDATE_POINTER(_i) \
-   if ((_i) < ma->ptr_count) \
-      *ma->ptrs[_i] = ptr + (uintptr_t)*ma->ptrs[_i]
-   _ANV_MULTIALLOC_UPDATE_POINTER(0);
-   _ANV_MULTIALLOC_UPDATE_POINTER(1);
-   _ANV_MULTIALLOC_UPDATE_POINTER(2);
-   _ANV_MULTIALLOC_UPDATE_POINTER(3);
-   _ANV_MULTIALLOC_UPDATE_POINTER(4);
-   _ANV_MULTIALLOC_UPDATE_POINTER(5);
-   _ANV_MULTIALLOC_UPDATE_POINTER(6);
-   _ANV_MULTIALLOC_UPDATE_POINTER(7);
-#undef _ANV_MULTIALLOC_UPDATE_POINTER
-
-   return ptr;
-}
-
-__attribute__((always_inline))
-static inline void *
-anv_multialloc_alloc2(struct anv_multialloc *ma,
-                      const VkAllocationCallbacks *parent_alloc,
-                      const VkAllocationCallbacks *alloc,
-                      VkSystemAllocationScope scope)
-{
-   return anv_multialloc_alloc(ma, alloc ? alloc : parent_alloc, scope);
-}
-
 struct anv_bo {
+   const char *name;
+
    uint32_t gem_handle;
 
    uint32_t refcount;
@@ -688,6 +593,8 @@ struct anv_block_state {
 #define ANV_MAX_BLOCK_POOL_BOS 20
 
 struct anv_block_pool {
+   const char *name;
+
    struct anv_device *device;
    bool use_softpin;
 
@@ -835,6 +742,7 @@ struct anv_state_stream {
  */
 VkResult anv_block_pool_init(struct anv_block_pool *pool,
                              struct anv_device *device,
+                             const char *name,
                              uint64_t start_address,
                              uint32_t initial_size);
 void anv_block_pool_finish(struct anv_block_pool *pool);
@@ -847,6 +755,7 @@ size);
 
 VkResult anv_state_pool_init(struct anv_state_pool *pool,
                              struct anv_device *device,
+                             const char *name,
                              uint64_t base_address,
                              int32_t start_offset,
                              uint32_t block_size);
@@ -894,12 +803,15 @@ anv_state_table_get(struct anv_state_table *table, uint32_t idx)
  * of block_pool except that each block is its own BO.
  */
 struct anv_bo_pool {
+   const char *name;
+
    struct anv_device *device;
 
    struct util_sparse_array_free_list free_list[16];
 };
 
-void anv_bo_pool_init(struct anv_bo_pool *pool, struct anv_device *device);
+void anv_bo_pool_init(struct anv_bo_pool *pool, struct anv_device *device,
+                      const char *name);
 void anv_bo_pool_finish(struct anv_bo_pool *pool);
 VkResult anv_bo_pool_alloc(struct anv_bo_pool *pool, uint32_t size,
                            struct anv_bo **bo_out);
@@ -955,6 +867,12 @@ struct anv_memory_heap {
     * Align it to 64 bits to make atomic operations faster on 32 bit platforms.
     */
    VkDeviceSize      used __attribute__ ((aligned (8)));
+
+   bool              is_local_mem;
+};
+
+struct anv_memregion {
+   uint64_t size;
 };
 
 struct anv_physical_device {
@@ -1050,6 +968,8 @@ struct anv_physical_device {
       struct anv_memory_heap                    heaps[VK_MAX_MEMORY_HEAPS];
     } memory;
 
+    struct anv_memregion                        vram;
+    struct anv_memregion                        sys;
     uint8_t                                     driver_build_sha1[20];
     uint8_t                                     pipeline_cache_uuid[VK_UUID_SIZE];
     uint8_t                                     driver_uuid[VK_UUID_SIZE];
@@ -1323,7 +1243,7 @@ struct anv_device {
     int                                         _lost;
     int                                         lost_reported;
 
-    struct gen_batch_decode_ctx                 decoder_ctx;
+    struct intel_batch_decode_ctx               decoder_ctx;
     /*
      * When decoding a anv_cmd_buffer, we might need to search for BOs through
      * the cmd_buffer's list.
@@ -1333,7 +1253,9 @@ struct anv_device {
     int                                         perf_fd; /* -1 if no opened */
     uint64_t                                    perf_metric; /* 0 if unset */
 
-    struct gen_aux_map_context                  *aux_map_ctx;
+    struct intel_aux_map_context                *aux_map_ctx;
+
+    const struct intel_l3_config                *l3_config;
 
     struct gen_debug_block_frame                *debug_frame_desc;
 };
@@ -1450,7 +1372,8 @@ enum anv_bo_alloc_flags {
    ANV_BO_ALLOC_IMPLICIT_CCS = (1 << 9),
 };
 
-VkResult anv_device_alloc_bo(struct anv_device *device, uint64_t size,
+VkResult anv_device_alloc_bo(struct anv_device *device,
+                             const char *name, uint64_t size,
                              enum anv_bo_alloc_flags alloc_flags,
                              uint64_t explicit_address,
                              struct anv_bo **bo);
@@ -1670,9 +1593,9 @@ static inline uint64_t
 anv_address_physical(struct anv_address addr)
 {
    if (addr.bo && (addr.bo->flags & EXEC_OBJECT_PINNED))
-      return gen_canonical_address(addr.bo->offset + addr.offset);
+      return intel_canonical_address(addr.bo->offset + addr.offset);
    else
-      return gen_canonical_address(addr.offset);
+      return intel_canonical_address(addr.offset);
 }
 
 static inline struct anv_address
@@ -1688,14 +1611,14 @@ write_reloc(const struct anv_device *device, void *p, uint64_t v, bool flush)
    unsigned reloc_size = 0;
    if (device->info.gen >= 8) {
       reloc_size = sizeof(uint64_t);
-      *(uint64_t *)p = gen_canonical_address(v);
+      *(uint64_t *)p = intel_canonical_address(v);
    } else {
       reloc_size = sizeof(uint32_t);
       *(uint32_t *)p = v;
    }
 
    if (flush && !device->info.has_llc)
-      gen_flush_range(p, reloc_size);
+      intel_flush_range(p, reloc_size);
 }
 
 static inline uint64_t
@@ -1768,6 +1691,20 @@ _anv_combine_address(struct anv_batch *batch, void *location,
         ({ __anv_cmd_pack(cmd)(batch, _dst, &name);                     \
            VG(VALGRIND_CHECK_MEM_IS_DEFINED(_dst, __anv_cmd_length(cmd) * 4)); \
            _dst = NULL;                                                 \
+         }))
+
+#define anv_batch_write_reg(batch, reg, name)                           \
+   for (struct reg name = {}, *_cont = (struct reg *)1; _cont != NULL;  \
+        ({                                                              \
+            uint32_t _dw[__anv_cmd_length(reg)];                        \
+            __anv_cmd_pack(reg)(NULL, _dw, &name);                      \
+            for (unsigned i = 0; i < __anv_cmd_length(reg); i++) {      \
+               anv_batch_emit(batch, GENX(MI_LOAD_REGISTER_IMM), lri) { \
+                  lri.RegisterOffset   = __anv_reg_num(reg);            \
+                  lri.DataDWord        = _dw[i];                        \
+               }                                                        \
+            }                                                           \
+           _cont = NULL;                                                \
          }))
 
 /* #define __gen_get_batch_dwords anv_batch_emit_dwords */
@@ -2121,6 +2058,10 @@ struct anv_descriptor_update_template {
 size_t
 anv_descriptor_set_layout_size(const struct anv_descriptor_set_layout *layout,
                                uint32_t var_desc_count);
+
+uint32_t
+anv_descriptor_set_layout_descriptor_buffer_size(const struct anv_descriptor_set_layout *set_layout,
+                                                 uint32_t var_desc_count);
 
 void
 anv_descriptor_set_write_image_view(struct anv_device *device,
@@ -2864,7 +2805,7 @@ struct anv_cmd_compute_state {
 struct anv_cmd_state {
    /* PIPELINE_SELECT.PipelineSelection */
    uint32_t                                     current_pipeline;
-   const struct gen_l3_config *                 current_l3_config;
+   const struct intel_l3_config *               current_l3_config;
    uint32_t                                     last_aux_map_state;
 
    struct anv_cmd_graphics_state                gfx;
@@ -3021,7 +2962,7 @@ struct anv_cmd_buffer {
     * instructions storing performance counters. The array length is
     * anv_physical_device::n_perf_query_commands.
     */
-   struct gen_mi_address_token                  *self_mod_locations;
+   struct mi_address_token                  *self_mod_locations;
 
    /**
     * Index tracking which of the self_mod_locations items have already been
@@ -3279,14 +3220,6 @@ struct anv_semaphore {
 void anv_semaphore_reset_temporary(struct anv_device *device,
                                    struct anv_semaphore *semaphore);
 
-struct anv_shader_module {
-   struct vk_object_base                        base;
-
-   unsigned char                                sha1[20];
-   uint32_t                                     size;
-   char                                         data[0];
-};
-
 static inline gl_shader_stage
 vk_to_mesa_shader_stage(VkShaderStageFlagBits vk_stage)
 {
@@ -3411,7 +3344,7 @@ struct anv_pipeline {
 
    struct util_dynarray                         executables;
 
-   const struct gen_l3_config *                 l3_config;
+   const struct intel_l3_config *               l3_config;
 };
 
 struct anv_graphics_pipeline {
@@ -3558,7 +3491,7 @@ VkResult
 anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
                         struct anv_pipeline_cache *cache,
                         const VkComputePipelineCreateInfo *info,
-                        const struct anv_shader_module *module,
+                        const struct vk_shader_module *module,
                         const char *entrypoint,
                         const VkSpecializationInfo *spec_info);
 
@@ -3671,6 +3604,9 @@ bool anv_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
                                   VkImageTiling vk_tiling,
                                   const VkImageFormatListCreateInfoKHR *fmt_list);
 
+extern VkFormat
+vk_format_from_android(unsigned android_format, unsigned android_usage);
+
 static inline struct isl_swizzle
 anv_swizzle_for_render(struct isl_swizzle swizzle)
 {
@@ -3690,17 +3626,62 @@ void
 anv_pipeline_setup_l3_config(struct anv_pipeline *pipeline, bool needs_slm);
 
 /**
+ * Describes how each part of anv_image will be bound to memory.
+ */
+struct anv_image_memory_range {
+   /**
+    * Disjoint bindings into which each portion of the image will be bound.
+    *
+    * Binding images to memory can be complicated and invold binding different
+    * portions of the image to different memory objects or regions.  For most
+    * images, everything lives in the MAIN binding and gets bound by
+    * vkBindImageMemory.  For disjoint multi-planar images, each plane has
+    * a unique, disjoint binding and gets bound by vkBindImageMemory2 with
+    * VkBindImagePlaneMemoryInfo.  There may also exist bits of memory which are
+    * implicit or driver-managed and live in special-case bindings.
+    */
+   enum anv_image_memory_binding {
+      /**
+       * Used if and only if image is not multi-planar disjoint. Bound by
+       * vkBindImageMemory2 without VkBindImagePlaneMemoryInfo.
+       */
+      ANV_IMAGE_MEMORY_BINDING_MAIN,
+
+      /**
+       * Used if and only if image is multi-planar disjoint.  Bound by
+       * vkBindImageMemory2 with VkBindImagePlaneMemoryInfo.
+       */
+      ANV_IMAGE_MEMORY_BINDING_PLANE_0,
+      ANV_IMAGE_MEMORY_BINDING_PLANE_1,
+      ANV_IMAGE_MEMORY_BINDING_PLANE_2,
+
+      /** Sentinel */
+      ANV_IMAGE_MEMORY_BINDING_END,
+   } binding;
+
+   /**
+    * Offset is relative to the start of the binding created by
+    * vkBindImageMemory, not to the start of the bo.
+    */
+   uint64_t offset;
+
+   uint64_t size;
+   uint32_t alignment;
+};
+
+/**
  * Subsurface of an anv_image.
  */
 struct anv_surface {
-   /** Valid only if isl_surf::size_B > 0. */
    struct isl_surf isl;
-
-   /**
-    * Offset from VkImage's base address, as bound by vkBindImageMemory().
-    */
-   uint32_t offset;
+   struct anv_image_memory_range memory_range;
 };
+
+static inline bool MUST_CHECK
+anv_surface_is_valid(const struct anv_surface *surface)
+{
+   return surface->isl.size_B > 0 && surface->memory_range.size > 0;
+}
 
 struct anv_image {
    struct vk_object_base base;
@@ -3738,16 +3719,37 @@ struct anv_image {
     */
    uint64_t drm_format_mod;
 
-   VkDeviceSize size;
-   uint32_t alignment;
-
-   /* Whether the image is made of several underlying buffer objects rather a
-    * single one with different offsets.
+   /**
+    * Image has multi-planar format and was created with
+    * VK_IMAGE_CREATE_DISJOINT_BIT.
     */
    bool disjoint;
 
    /* Image was created with external format. */
    bool external_format;
+
+   /**
+    * Image was imported from gralloc with VkNativeBufferANDROID. The gralloc bo
+    * must be released when the image is destroyed.
+    */
+   bool from_gralloc;
+
+   /**
+    * The memory bindings created by vkCreateImage and vkBindImageMemory.
+    *
+    * vkCreateImage constructs the `memory_range` for each
+    * anv_image_memory_binding.  After vkCreateImage, each binding is valid if
+    * and only if `memory_range::size > 0`.
+    *
+    * vkBindImageMemory binds each valid `memory_range` to an `address`.
+    * Usually, the app will provide the address via the parameters of
+    * vkBindImageMemory.  However, special-case bindings may be bound to
+    * driver-private memory.
+    */
+   struct anv_image_binding {
+      struct anv_image_memory_range memory_range;
+      struct anv_address address;
+   } bindings[ANV_IMAGE_MEMORY_BINDING_END];
 
    /**
     * Image subsurfaces
@@ -3786,16 +3788,7 @@ struct anv_image {
     * -----------------------
     */
    struct anv_image_plane {
-      /**
-       * Offset of the entire plane (whenever the image is disjoint this is
-       * set to 0).
-       */
-      uint32_t offset;
-
-      VkDeviceSize size;
-      uint32_t alignment;
-
-      struct anv_surface surface;
+      struct anv_surface primary_surface;
 
       /**
        * A surface which shadows the main surface and may have different
@@ -3813,21 +3806,8 @@ struct anv_image {
 
       struct anv_surface aux_surface;
 
-      /**
-       * Offset of the fast clear state (used to compute the
-       * fast_clear_state_offset of the following planes).
-       */
-      uint32_t fast_clear_state_offset;
-
-      /**
-       * BO associated with this plane, set when bound.
-       */
-      struct anv_address address;
-
-      /**
-       * When destroying the image, also free the bo.
-       * */
-      bool bo_is_owned;
+      /** Location of the fast clear state.  */
+      struct anv_image_memory_range fast_clear_memory_range;
    } planes[3];
 };
 
@@ -3874,6 +3854,19 @@ anv_image_aux_layers(const struct anv_image * const image,
    return MAX2(image->array_size, image->extent.depth >> miplevel);
 }
 
+static inline struct anv_address MUST_CHECK
+anv_image_address(const struct anv_image *image,
+                  const struct anv_image_memory_range *mem_range)
+{
+   const struct anv_image_binding *binding = &image->bindings[mem_range->binding];
+   assert(binding->memory_range.offset == 0);
+
+   if (mem_range->size == 0)
+      return ANV_NULL_ADDRESS;
+
+   return anv_address_add(binding->address, mem_range->offset);
+}
+
 static inline struct anv_address
 anv_image_get_clear_color_addr(UNUSED const struct anv_device *device,
                                const struct anv_image *image,
@@ -3882,8 +3875,10 @@ anv_image_get_clear_color_addr(UNUSED const struct anv_device *device,
    assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
 
    uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
-   return anv_address_add(image->planes[plane].address,
-                          image->planes[plane].fast_clear_state_offset);
+   const struct anv_image_memory_range *mem_range =
+      &image->planes[plane].fast_clear_memory_range;
+
+   return anv_image_address(image, mem_range);
 }
 
 static inline struct anv_address
@@ -3911,21 +3906,25 @@ anv_image_get_compression_state_addr(const struct anv_device *device,
    UNUSED uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
    assert(image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E);
 
-   struct anv_address addr =
-      anv_image_get_fast_clear_type_addr(device, image, aspect);
-   addr.offset += 4; /* Go past the fast clear type */
+   /* Relative to start of the plane's fast clear memory range */
+   uint32_t offset;
+
+   offset = 4; /* Go past the fast clear type */
 
    if (image->type == VK_IMAGE_TYPE_3D) {
       for (uint32_t l = 0; l < level; l++)
-         addr.offset += anv_minify(image->extent.depth, l) * 4;
+         offset += anv_minify(image->extent.depth, l) * 4;
    } else {
-      addr.offset += level * image->array_size * 4;
+      offset += level * image->array_size * 4;
    }
-   addr.offset += array_layer * 4;
 
-   assert(addr.offset <
-          image->planes[plane].address.offset + image->planes[plane].size);
-   return addr;
+   offset += array_layer * 4;
+
+   assert(offset < image->planes[plane].fast_clear_memory_range.size);
+
+   return anv_address_add(
+      anv_image_get_fast_clear_type_addr(device, image, aspect),
+      offset);
 }
 
 /* Returns true if a HiZ-enabled depth buffer can be sampled from. */
@@ -4525,8 +4524,6 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_sampler, base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_semaphore, base, VkSemaphore,
                                VK_OBJECT_TYPE_SEMAPHORE)
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_shader_module, base, VkShaderModule,
-                               VK_OBJECT_TYPE_SHADER_MODULE)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_ycbcr_conversion, base,
                                VkSamplerYcbcrConversion,
                                VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION)
@@ -4536,32 +4533,30 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_performance_configuration_intel, base,
 
 #define anv_genX(devinfo, thing) ({             \
    __typeof(&gen9_##thing) genX_thing;          \
-   switch ((devinfo)->gen) {                    \
-   case 7:                                      \
-      if ((devinfo)->is_haswell) {              \
-         genX_thing = &gen75_##thing;           \
-      } else {                                  \
-         genX_thing = &gen7_##thing;            \
-      }                                         \
+   switch ((devinfo)->genx10) {                 \
+   case 70:                                     \
+      genX_thing = &gen7_##thing;               \
       break;                                    \
-   case 8:                                      \
+   case 75:                                     \
+      genX_thing = &gen75_##thing;              \
+      break;                                    \
+   case 80:                                     \
       genX_thing = &gen8_##thing;               \
       break;                                    \
-   case 9:                                      \
+   case 90:                                     \
       genX_thing = &gen9_##thing;               \
       break;                                    \
-   case 11:                                     \
+   case 110:                                    \
       genX_thing = &gen11_##thing;              \
       break;                                    \
-   case 12:                                     \
-      if (gen_device_info_is_12hp(devinfo)) {   \
-         genX_thing = &gen125_##thing;          \
-      } else {                                  \
-         genX_thing = &gen12_##thing;           \
-      }                                         \
+   case 120:                                    \
+      genX_thing = &gen12_##thing;              \
+      break;                                    \
+   case 125:                                    \
+      genX_thing = &gen125_##thing;             \
       break;                                    \
    default:                                     \
-      assert(!"Unknown hardware generation");   \
+      unreachable("Unknown hardware generation"); \
    }                                            \
    genX_thing;                                  \
 })

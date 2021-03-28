@@ -29,9 +29,9 @@
 #include "swrast/swrast.h"
 #include "drivers/common/meta.h"
 
-#include "intel_batchbuffer.h"
-#include "intel_fbo.h"
-#include "intel_mipmap_tree.h"
+#include "brw_batch.h"
+#include "brw_fbo.h"
+#include "brw_mipmap_tree.h"
 
 #include "brw_context.h"
 #include "brw_blorp.h"
@@ -47,7 +47,6 @@ static const char *buffer_names[] = {
    [BUFFER_DEPTH] = "depth",
    [BUFFER_STENCIL] = "stencil",
    [BUFFER_ACCUM] = "accum",
-   [BUFFER_AUX0] = "aux0",
    [BUFFER_COLOR0] = "color0",
    [BUFFER_COLOR1] = "color1",
    [BUFFER_COLOR2] = "color2",

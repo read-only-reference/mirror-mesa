@@ -96,29 +96,27 @@ anv_device_init_blorp(struct anv_device *device)
    device->blorp.compiler = device->physical->compiler;
    device->blorp.lookup_shader = lookup_blorp_shader;
    device->blorp.upload_shader = upload_blorp_shader;
-   switch (device->info.gen) {
-   case 7:
-      if (device->info.is_haswell) {
-         device->blorp.exec = gen75_blorp_exec;
-      } else {
-         device->blorp.exec = gen7_blorp_exec;
-      }
+   switch (device->info.genx10) {
+   case 70:
+      device->blorp.exec = gen7_blorp_exec;
       break;
-   case 8:
+   case 75:
+      device->blorp.exec = gen75_blorp_exec;
+      break;
+   case 80:
       device->blorp.exec = gen8_blorp_exec;
       break;
-   case 9:
+   case 90:
       device->blorp.exec = gen9_blorp_exec;
       break;
-   case 11:
+   case 110:
       device->blorp.exec = gen11_blorp_exec;
       break;
-   case 12:
-      if (gen_device_info_is_12hp(&device->info)) {
-         device->blorp.exec = gen125_blorp_exec;
-      } else {
-         device->blorp.exec = gen12_blorp_exec;
-      }
+   case 120:
+      device->blorp.exec = gen12_blorp_exec;
+      break;
+   case 125:
+      device->blorp.exec = gen125_blorp_exec;
       break;
    default:
       unreachable("Unknown hardware generation");
@@ -219,25 +217,34 @@ get_blorp_surf_for_anv_image(const struct anv_device *device,
       (usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) ?
       ISL_SURF_USAGE_RENDER_TARGET_BIT : ISL_SURF_USAGE_TEXTURE_BIT;
 
-   const struct anv_surface *surface = &image->planes[plane].surface;
+   const struct anv_surface *surface = &image->planes[plane].primary_surface;
+   const struct anv_address address =
+      anv_image_address(image, &surface->memory_range);
+
    *blorp_surf = (struct blorp_surf) {
       .surf = &surface->isl,
       .addr = {
-         .buffer = image->planes[plane].address.bo,
-         .offset = image->planes[plane].address.offset + surface->offset,
-         .mocs = anv_mocs(device, image->planes[plane].address.bo, mocs_usage),
+         .buffer = address.bo,
+         .offset = address.offset,
+         .mocs = anv_mocs(device, address.bo, mocs_usage),
       },
    };
 
    if (aux_usage != ISL_AUX_USAGE_NONE) {
       const struct anv_surface *aux_surface = &image->planes[plane].aux_surface;
-      blorp_surf->aux_surf = &aux_surface->isl,
-      blorp_surf->aux_addr = (struct blorp_address) {
-         .buffer = image->planes[plane].address.bo,
-         .offset = image->planes[plane].address.offset + aux_surface->offset,
-         .mocs = anv_mocs(device, image->planes[plane].address.bo, 0),
-      };
+      const struct anv_address aux_address =
+         anv_image_address(image, &aux_surface->memory_range);
+
       blorp_surf->aux_usage = aux_usage;
+      blorp_surf->aux_surf = &aux_surface->isl;
+
+      if (!anv_address_is_null(aux_address)) {
+         blorp_surf->aux_addr = (struct blorp_address) {
+            .buffer = aux_address.bo,
+            .offset = aux_address.offset,
+            .mocs = anv_mocs(device, aux_address.bo, 0),
+         };
+      }
 
       /* If we're doing a partial resolve, then we need the indirect clear
        * color.  If we are doing a fast clear and want to store/update the
@@ -278,17 +285,19 @@ get_blorp_surf_for_anv_shadow_image(const struct anv_device *device,
 {
 
    uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
-   if (image->planes[plane].shadow_surface.isl.size_B == 0)
+   if (!anv_surface_is_valid(&image->planes[plane].shadow_surface))
       return false;
 
+   const struct anv_surface *surface = &image->planes[plane].shadow_surface;
+   const struct anv_address address =
+      anv_image_address(image, &surface->memory_range);
+
    *blorp_surf = (struct blorp_surf) {
-      .surf = &image->planes[plane].shadow_surface.isl,
+      .surf = &surface->isl,
       .addr = {
-         .buffer = image->planes[plane].address.bo,
-         .offset = image->planes[plane].address.offset +
-                   image->planes[plane].shadow_surface.offset,
-         .mocs = anv_mocs(device, image->planes[plane].address.bo,
-                          ISL_SURF_USAGE_RENDER_TARGET_BIT),
+         .buffer = address.bo,
+         .offset = address.offset,
+         .mocs = anv_mocs(device, address.bo, ISL_SURF_USAGE_RENDER_TARGET_BIT),
       },
    };
 

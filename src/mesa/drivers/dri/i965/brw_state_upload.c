@@ -36,8 +36,8 @@
 #include "brw_state.h"
 #include "brw_program.h"
 #include "drivers/common/meta.h"
-#include "intel_batchbuffer.h"
-#include "intel_buffers.h"
+#include "brw_batch.h"
+#include "brw_buffers.h"
 #include "brw_vs.h"
 #include "brw_ff_gs.h"
 #include "brw_gs.h"
@@ -144,7 +144,7 @@ brw_upload_gen11_slice_hashing_state(struct brw_context *brw)
     */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_3D_MODE  << 16 | (2 - 2));
-   OUT_BATCH(0xffff | SLICE_HASHING_TABLE_ENABLE);
+   OUT_BATCH(0xffff0000 | SLICE_HASHING_TABLE_ENABLE);
    ADVANCE_BATCH();
 }
 

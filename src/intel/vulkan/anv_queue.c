@@ -173,7 +173,7 @@ anv_timeline_add_point_locked(struct anv_device *device,
       if (!(*point))
          result = vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
       if (result == VK_SUCCESS) {
-         result = anv_device_alloc_bo(device, 4096,
+         result = anv_device_alloc_bo(device, "timeline-semaphore", 4096,
                                       ANV_BO_ALLOC_EXTERNAL |
                                       ANV_BO_ALLOC_IMPLICIT_SYNC,
                                       0 /* explicit_address */,
@@ -809,7 +809,7 @@ anv_queue_submit_simple_batch(struct anv_queue *queue,
       result = anv_queue_submit_add_syncobj(submit, device, syncobj,
                                             I915_EXEC_FENCE_SIGNAL, 0);
    } else {
-      result = anv_device_alloc_bo(device, 4096,
+      result = anv_device_alloc_bo(device, "simple-batch-sync", 4096,
                                    ANV_BO_ALLOC_EXTERNAL |
                                    ANV_BO_ALLOC_IMPLICIT_SYNC,
                                    0 /* explicit_address */,
@@ -831,7 +831,7 @@ anv_queue_submit_simple_batch(struct anv_queue *queue,
 
       memcpy(batch_bo->map, batch->start, size);
       if (!device->info.has_llc)
-         gen_flush_range(batch_bo->map, size);
+         intel_flush_range(batch_bo->map, size);
 
       submit->simple_bo = batch_bo;
       submit->simple_bo_size = size;
@@ -938,7 +938,7 @@ anv_queue_submit_add_in_semaphores(struct anv_queue_submit *submit,
                                    const uint64_t *in_values,
                                    uint32_t num_in_semaphores)
 {
-   struct anv_physical_device *pdevice = device->physical;
+   ASSERTED struct anv_physical_device *pdevice = device->physical;
    VkResult result;
 
    for (uint32_t i = 0; i < num_in_semaphores; i++) {
@@ -1035,7 +1035,7 @@ anv_queue_submit_add_out_semaphores(struct anv_queue_submit *submit,
                                     const uint64_t *out_values,
                                     uint32_t num_out_semaphores)
 {
-   struct anv_physical_device *pdevice = device->physical;
+   ASSERTED struct anv_physical_device *pdevice = device->physical;
    VkResult result;
 
    for (uint32_t i = 0; i < num_out_semaphores; i++) {
@@ -1290,7 +1290,7 @@ anv_queue_submit_post_and_alloc_new(struct anv_queue *queue,
       return result;
 
    *submit = anv_queue_submit_alloc(queue->device, perf_pass);
-   if (!submit)
+   if (!*submit)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
    return VK_SUCCESS;
 }
@@ -2175,7 +2175,7 @@ binary_semaphore_create(struct anv_device *device,
    } else {
       impl->type = ANV_SEMAPHORE_TYPE_BO;
       VkResult result =
-         anv_device_alloc_bo(device, 4096,
+         anv_device_alloc_bo(device, "binary-semaphore", 4096,
                              ANV_BO_ALLOC_EXTERNAL |
                              ANV_BO_ALLOC_IMPLICIT_SYNC,
                              0 /* explicit_address */,
@@ -2787,19 +2787,19 @@ VkResult anv_WaitSemaphores(
    ANV_FROM_HANDLE(anv_device, device, _device);
    uint32_t *handles;
    struct anv_timeline **timelines;
-   uint64_t *values;
 
-   ANV_MULTIALLOC(ma);
+   VK_MULTIALLOC(ma);
 
-   anv_multialloc_add(&ma, &values, pWaitInfo->semaphoreCount);
+   VK_MULTIALLOC_DECL(&ma, uint64_t, values, pWaitInfo->semaphoreCount);
    if (device->has_thread_submit) {
-      anv_multialloc_add(&ma, &handles, pWaitInfo->semaphoreCount);
+      vk_multialloc_add(&ma, &handles, uint32_t, pWaitInfo->semaphoreCount);
    } else {
-      anv_multialloc_add(&ma, &timelines, pWaitInfo->semaphoreCount);
+      vk_multialloc_add(&ma, &timelines, struct anv_timeline *,
+                             pWaitInfo->semaphoreCount);
    }
 
-   if (!anv_multialloc_alloc(&ma, &device->vk.alloc,
-                             VK_SYSTEM_ALLOCATION_SCOPE_COMMAND))
+   if (!vk_multialloc_alloc(&ma, &device->vk.alloc,
+                            VK_SYSTEM_ALLOCATION_SCOPE_COMMAND))
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
    uint32_t handle_count = 0;

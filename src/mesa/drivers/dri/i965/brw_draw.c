@@ -51,11 +51,11 @@
 #include "brw_context.h"
 #include "brw_state.h"
 
-#include "intel_batchbuffer.h"
-#include "intel_buffers.h"
-#include "intel_fbo.h"
-#include "intel_mipmap_tree.h"
-#include "intel_buffer_objects.h"
+#include "brw_batch.h"
+#include "brw_buffers.h"
+#include "brw_fbo.h"
+#include "brw_mipmap_tree.h"
+#include "brw_buffer_objects.h"
 
 #define FILE_DEBUG_FLAG DEBUG_PRIMS
 
@@ -478,11 +478,9 @@ mark_textures_used_for_txf(BITSET_WORD *used_for_txf,
    if (!prog)
       return;
 
-   uint32_t mask = prog->info.textures_used_by_txf;
-   while (mask) {
-      int s = u_bit_scan(&mask);
+   unsigned s;
+   BITSET_FOREACH_SET(s, prog->info.textures_used_by_txf, 32)
       BITSET_SET(used_for_txf, prog->SamplerUnits[s]);
-   }
 }
 
 /**
@@ -851,15 +849,15 @@ brw_prepare_drawing(struct gl_context *ctx,
     * index.
     */
    brw->wm.base.sampler_count =
-      util_last_bit(ctx->FragmentProgram._Current->info.textures_used);
+      BITSET_LAST_BIT(ctx->FragmentProgram._Current->info.textures_used);
    brw->gs.base.sampler_count = ctx->GeometryProgram._Current ?
-      util_last_bit(ctx->GeometryProgram._Current->info.textures_used) : 0;
+      BITSET_LAST_BIT(ctx->GeometryProgram._Current->info.textures_used) : 0;
    brw->tes.base.sampler_count = ctx->TessEvalProgram._Current ?
-      util_last_bit(ctx->TessEvalProgram._Current->info.textures_used) : 0;
+      BITSET_LAST_BIT(ctx->TessEvalProgram._Current->info.textures_used) : 0;
    brw->tcs.base.sampler_count = ctx->TessCtrlProgram._Current ?
-      util_last_bit(ctx->TessCtrlProgram._Current->info.textures_used) : 0;
+      BITSET_LAST_BIT(ctx->TessCtrlProgram._Current->info.textures_used) : 0;
    brw->vs.base.sampler_count =
-      util_last_bit(ctx->VertexProgram._Current->info.textures_used);
+      BITSET_LAST_BIT(ctx->VertexProgram._Current->info.textures_used);
 
    brw_prepare_render(brw);
 

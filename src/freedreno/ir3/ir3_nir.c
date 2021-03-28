@@ -139,6 +139,7 @@ static const nir_shader_compiler_options options_a6xx = {
 		 */
 		.lower_int64_options = (nir_lower_int64_options)~0,
 		.lower_uniforms_to_ubo = true,
+		.lower_device_index_to_zero = true,
 };
 
 const nir_shader_compiler_options *
@@ -411,7 +412,7 @@ ir3_nir_lower_view_layer_id(nir_shader *nir, bool layer_zero, bool view_zero)
 				b.cursor = nir_before_instr(&intrin->instr);
 				nir_ssa_def *zero = nir_imm_int(&b, 0);
 				nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-										 nir_src_for_ssa(zero));
+										 zero);
 				nir_instr_remove(&intrin->instr);
 				progress = true;
 			}
@@ -629,6 +630,10 @@ ir3_nir_scan_driver_consts(nir_shader *shader,
 				case nir_intrinsic_load_local_group_size:
 					layout->num_driver_params =
 						MAX2(layout->num_driver_params, IR3_DP_LOCAL_GROUP_SIZE_Z + 1);
+					break;
+				case nir_intrinsic_load_base_work_group_id:
+					layout->num_driver_params =
+						MAX2(layout->num_driver_params, IR3_DP_BASE_GROUP_Z + 1);
 					break;
 				default:
 					break;

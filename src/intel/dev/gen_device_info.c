@@ -29,8 +29,9 @@
 #include <unistd.h>
 #include "gen_device_info.h"
 #include "compiler/shader_enums.h"
-#include "intel/common/gen_gem.h"
+#include "intel/common/intel_gem.h"
 #include "util/bitscan.h"
+#include "util/log.h"
 #include "util/macros.h"
 
 #include "drm-uapi/i915_drm.h"
@@ -85,6 +86,7 @@ gen_device_name_to_pci_device_id(const char *name)
 static const struct gen_device_info gen_device_info_gen3 = {
    .gen = 3,
    .simulator_id = -1,
+   .cs_prefetch_size = 512,
 };
 
 static const struct gen_device_info gen_device_info_i965 = {
@@ -102,10 +104,12 @@ static const struct gen_device_info gen_device_info_i965 = {
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
+   .cs_prefetch_size = 512,
 };
 
 static const struct gen_device_info gen_device_info_g4x = {
    .gen = 4,
+   .genx10 = 45,
    .has_pln = true,
    .has_compr4 = true,
    .has_surface_tile_offset = true,
@@ -122,6 +126,7 @@ static const struct gen_device_info gen_device_info_g4x = {
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
+   .cs_prefetch_size = 512,
 };
 
 static const struct gen_device_info gen_device_info_ilk = {
@@ -141,6 +146,7 @@ static const struct gen_device_info gen_device_info_ilk = {
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
+   .cs_prefetch_size = 512,
 };
 
 static const struct gen_device_info gen_device_info_snb_gt1 = {
@@ -170,6 +176,7 @@ static const struct gen_device_info gen_device_info_snb_gt1 = {
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
+   .cs_prefetch_size = 512,
 };
 
 static const struct gen_device_info gen_device_info_snb_gt2 = {
@@ -199,6 +206,7 @@ static const struct gen_device_info gen_device_info_snb_gt2 = {
    },
    .timestamp_frequency = 12500000,
    .simulator_id = -1,
+   .cs_prefetch_size = 512,
 };
 
 #define GEN7_FEATURES                               \
@@ -209,7 +217,8 @@ static const struct gen_device_info gen_device_info_snb_gt2 = {
    .has_pln = true,                                 \
    .has_64bit_float = true,                         \
    .has_surface_tile_offset = true,                 \
-   .timestamp_frequency = 12500000
+   .timestamp_frequency = 12500000,                 \
+   .cs_prefetch_size = 512
 
 static const struct gen_device_info gen_device_info_ivb_gt1 = {
    GEN7_FEATURES, .is_ivybridge = true, .gt = 1,
@@ -300,6 +309,7 @@ static const struct gen_device_info gen_device_info_byt = {
 #define HSW_FEATURES             \
    GEN7_FEATURES,                \
    .is_haswell = true,           \
+   .genx10 = 75,                 \
    .supports_simd16_3src = true, \
    .has_resource_streamer = true
 
@@ -409,7 +419,8 @@ static const struct gen_device_info gen_device_info_hsw_gt3 = {
    .max_tes_threads = 504,                          \
    .max_gs_threads = 504,                           \
    .max_wm_threads = 384,                           \
-   .timestamp_frequency = 12500000
+   .timestamp_frequency = 12500000,                 \
+   .cs_prefetch_size = 512
 
 static const struct gen_device_info gen_device_info_bdw_gt1 = {
    GEN8_FEATURES, .gt = 1,
@@ -518,6 +529,7 @@ static const struct gen_device_info gen_device_info_chv = {
    .max_tes_threads = 336,                          \
    .max_cs_threads = 56,                            \
    .timestamp_frequency = 12000000,                 \
+   .cs_prefetch_size = 512,                         \
    .urb = {                                         \
       .min_entries = {                              \
          [MESA_SHADER_VERTEX]    = 64,              \
@@ -801,7 +813,8 @@ static const struct gen_device_info gen_device_info_cfl_gt3 = {
    .max_gs_threads = 224,                           \
    .max_tcs_threads = 224,                          \
    .max_tes_threads = 364,                          \
-   .max_cs_threads = 56
+   .max_cs_threads = 56,                            \
+   .cs_prefetch_size = 512
 
 #define GEN11_FEATURES(_gt, _slices, _subslices, _l3) \
    GEN8_FEATURES,                                     \
@@ -934,7 +947,8 @@ static const struct gen_device_info gen_device_info_ehl_2x4 = {
    .has_integer_dword_mul = false,                              \
    .gt = _gt, .num_slices = _slices, .l3_banks = _l3,           \
    .simulator_id = 22,                                          \
-   .num_eu_per_subslice = 16
+   .num_eu_per_subslice = 16,                                   \
+   .cs_prefetch_size = 512
 
 #define dual_subslices(args...) { args, }
 
@@ -1201,7 +1215,7 @@ getparam(int fd, uint32_t param, int *value)
       .value = &tmp,
    };
 
-   int ret = gen_ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp);
+   int ret = intel_ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp);
    if (ret != 0)
       return false;
 
@@ -1226,7 +1240,7 @@ gen_get_device_info_from_pci_id(int pci_id,
 #include "pci_ids/i915_pci_ids.h"
 
    default:
-      fprintf(stderr, "Driver does not support the 0x%x PCI ID.\n", pci_id);
+      mesa_logw("Driver does not support the 0x%x PCI ID.", pci_id);
       return false;
    }
 
@@ -1265,6 +1279,9 @@ gen_get_device_info_from_pci_id(int pci_id,
 
    assert(devinfo->num_slices <= ARRAY_SIZE(devinfo->num_subslices));
 
+   if (devinfo->genx10 == 0)
+      devinfo->genx10 = devinfo->gen * 10;
+
    devinfo->chipset_id = pci_id;
    return true;
 }
@@ -1291,17 +1308,26 @@ getparam_topology(struct gen_device_info *devinfo, int fd)
 {
    int slice_mask = 0;
    if (!getparam(fd, I915_PARAM_SLICE_MASK, &slice_mask))
-      return false;
+      goto maybe_warn;
 
    int n_eus;
    if (!getparam(fd, I915_PARAM_EU_TOTAL, &n_eus))
-      return false;
+      goto maybe_warn;
 
    int subslice_mask = 0;
    if (!getparam(fd, I915_PARAM_SUBSLICE_MASK, &subslice_mask))
-      return false;
+      goto maybe_warn;
 
    return update_from_masks(devinfo, slice_mask, subslice_mask, n_eus);
+
+ maybe_warn:
+   /* Only with Gen8+ are we starting to see devices with fusing that can only
+    * be detected at runtime.
+    */
+   if (devinfo->gen >= 8)
+      mesa_logw("Kernel 4.1 required to properly query GPU properties.");
+
+   return false;
 }
 
 /**
@@ -1318,7 +1344,7 @@ query_topology(struct gen_device_info *devinfo, int fd)
       .items_ptr = (uintptr_t) &item,
    };
 
-   if (gen_ioctl(fd, DRM_IOCTL_I915_QUERY, &query))
+   if (intel_ioctl(fd, DRM_IOCTL_I915_QUERY, &query))
       return false;
 
    if (item.length < 0)
@@ -1328,7 +1354,7 @@ query_topology(struct gen_device_info *devinfo, int fd)
       (struct drm_i915_query_topology_info *) calloc(1, item.length);
    item.data_ptr = (uintptr_t) topo_info;
 
-   if (gen_ioctl(fd, DRM_IOCTL_I915_QUERY, &query) ||
+   if (intel_ioctl(fd, DRM_IOCTL_I915_QUERY, &query) ||
        item.length <= 0)
       return false;
 
@@ -1345,7 +1371,7 @@ gen_get_aperture_size(int fd, uint64_t *size)
 {
    struct drm_i915_gem_get_aperture aperture = { 0 };
 
-   int ret = gen_ioctl(fd, DRM_IOCTL_I915_GEM_GET_APERTURE, &aperture);
+   int ret = intel_ioctl(fd, DRM_IOCTL_I915_GEM_GET_APERTURE, &aperture);
    if (ret == 0 && size)
       *size = aperture.aper_size;
 
@@ -1361,7 +1387,7 @@ gen_has_get_tiling(int fd)
       .size = 4096,
    };
 
-   if (gen_ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &gem_create)) {
+   if (intel_ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &gem_create)) {
       unreachable("Failed to create GEM BO");
       return false;
    }
@@ -1369,12 +1395,12 @@ gen_has_get_tiling(int fd)
    struct drm_i915_gem_get_tiling get_tiling = {
       .handle = gem_create.handle,
    };
-   ret = gen_ioctl(fd, DRM_IOCTL_I915_GEM_SET_TILING, &get_tiling);
+   ret = intel_ioctl(fd, DRM_IOCTL_I915_GEM_SET_TILING, &get_tiling);
 
    struct drm_gem_close close = {
       .handle = gem_create.handle,
    };
-   gen_ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close);
+   intel_ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close);
 
    return ret == 0;
 }
@@ -1392,17 +1418,16 @@ gen_get_device_info_from_fd(int fd, struct gen_device_info *devinfo)
          if (devid <= 0)
             devid = strtol(devid_override, NULL, 0);
          if (devid <= 0) {
-            fprintf(stderr, "Invalid INTEL_DEVID_OVERRIDE=\"%s\". "
+            mesa_loge("Invalid INTEL_DEVID_OVERRIDE=\"%s\". "
                     "Use a valid numeric PCI ID or one of the supported "
-                    "platform names: %s", devid_override, name_map[0].name);
-            for (unsigned i = 1; i < ARRAY_SIZE(name_map); i++)
-               fprintf(stderr, ", %s", name_map[i].name);
-            fprintf(stderr, "\n");
+                    "platform names:", devid_override);
+            for (unsigned i = 0; i < ARRAY_SIZE(name_map); i++)
+               mesa_loge("   %s", name_map[i].name);
             return false;
          }
       } else {
-         fprintf(stderr, "Ignoring INTEL_DEVID_OVERRIDE=\"%s\" because "
-                 "real and effective user ID don't match.\n", devid_override);
+         mesa_logi("Ignoring INTEL_DEVID_OVERRIDE=\"%s\" because "
+                   "real and effective user ID don't match.", devid_override);
       }
    }
 
@@ -1420,7 +1445,7 @@ gen_get_device_info_from_fd(int fd, struct gen_device_info *devinfo)
    }
 
    if (devinfo->gen == 10) {
-      fprintf(stderr, "Gen10 support is redacted.\n");
+      mesa_loge("Gen10 support is redacted.");
       return false;
    }
 
@@ -1432,9 +1457,10 @@ gen_get_device_info_from_fd(int fd, struct gen_device_info *devinfo)
    if (getparam(fd, I915_PARAM_CS_TIMESTAMP_FREQUENCY,
                 &timestamp_frequency))
       devinfo->timestamp_frequency = timestamp_frequency;
-   else if (devinfo->gen >= 10)
-      /* gen10 and later requires the timestamp_frequency to be updated */
+   else if (devinfo->gen >= 10) {
+      mesa_loge("Kernel 4.15 required to read the CS timestamp frequency.");
       return false;
+   }
 
    if (!getparam(fd, I915_PARAM_REVISION, &devinfo->revision))
       devinfo->revision = 0;
