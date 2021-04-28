@@ -197,7 +197,7 @@ choose_instr(struct ir3_postsched_ctx *ctx)
 		if (d > 0)
 			continue;
 
-		if (!is_kill(n->instr))
+		if (!is_kill_or_demote(n->instr))
 			continue;
 
 		if (!chosen || (chosen->max_delay < n->max_delay))
@@ -527,6 +527,13 @@ sched_dag_init(struct ir3_postsched_ctx *ctx)
 	struct util_dynarray kills;
 	util_dynarray_init(&kills, ctx->mem_ctx);
 
+	/* The last bary.f with the (ei) flag must be scheduled before any kills,
+	 * or the hw gets angry. Keep track of inputs here so we can add the
+	 * false dep on the kill instruction.
+	 */
+	struct util_dynarray inputs;
+	util_dynarray_init(&inputs, ctx->mem_ctx);
+
 	/*
 	 * Normal srcs won't be in SSA at this point, those are dealt with in
 	 * calculate_forward_deps() and calculate_reverse_deps().  But we still
@@ -553,7 +560,14 @@ sched_dag_init(struct ir3_postsched_ctx *ctx)
 			dag_add_edge(&sn->dag, &n->dag, NULL);
 		}
 
-		if (is_kill(instr)) {
+		if (is_input(instr)) {
+			util_dynarray_append(&inputs, struct ir3_instruction *, instr);
+		} else if (is_kill_or_demote(instr)) {
+			util_dynarray_foreach(&inputs, struct ir3_instruction *, instrp) {
+				struct ir3_instruction *input = *instrp;
+				struct ir3_postsched_node *in = input->data;
+				dag_add_edge(&in->dag, &n->dag, NULL);
+			}
 			util_dynarray_append(&kills, struct ir3_instruction *, instr);
 		} else if (is_tex(instr) || is_mem(instr)) {
 			util_dynarray_foreach(&kills, struct ir3_instruction *, instrp) {
@@ -658,10 +672,12 @@ is_self_mov(struct ir3_instruction *instr)
 	if (instr->regs[0]->flags & IR3_REG_RELATIV)
 		return false;
 
+	if (instr->cat1.round != ROUND_ZERO)
+		return false;
+
 	if (instr->regs[1]->flags & (IR3_REG_CONST | IR3_REG_IMMED |
 			IR3_REG_RELATIV | IR3_REG_FNEG | IR3_REG_FABS |
-			IR3_REG_SNEG | IR3_REG_SABS | IR3_REG_BNOT |
-			IR3_REG_EVEN | IR3_REG_POS_INF))
+			IR3_REG_SNEG | IR3_REG_SABS | IR3_REG_BNOT))
 		return false;
 
 	return true;

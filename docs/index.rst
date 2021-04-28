@@ -83,6 +83,7 @@ and other operating systems.
 
    drivers/d3d12
    drivers/freedreno
+   drivers/lima
    drivers/llvmpipe
    drivers/openswr
    drivers/panfrost
@@ -109,6 +110,7 @@ and other operating systems.
    dispatch
    gallium/index
    android
+   macos
    Linux Kernel Drivers <https://www.kernel.org/doc/html/latest/gpu/>
 
 .. toctree::

@@ -53,7 +53,7 @@
 #include "glxconfig.h"
 #include "glxhash.h"
 #include "util/macros.h"
-
+#include "loader.h"
 #include "glxextensions.h"
 
 #if defined(USE_LIBGLVND)
@@ -66,11 +66,16 @@
 extern "C" {
 #endif
 
+extern void glx_message(int level, const char *f, ...) PRINTFLIKE(2, 3);
+
+#define DebugMessageF(...) glx_message(_LOADER_DEBUG, __VA_ARGS__)
+#define InfoMessageF(...) glx_message(_LOADER_INFO, __VA_ARGS__)
+#define ErrorMessageF(...) glx_message(_LOADER_WARNING, __VA_ARGS__)
+#define CriticalErrorMessageF(...) glx_message(_LOADER_FATAL, __VA_ARGS__)
+
 
 #define GLX_MAJOR_VERSION 1       /* current version numbers */
 #define GLX_MINOR_VERSION 4
-
-#define __GLX_MAX_TEXTURE_UNITS 32
 
 struct glx_display;
 struct glx_context;
@@ -127,6 +132,8 @@ struct __GLXDRIscreenRec {
    int (*setSwapInterval)(__GLXDRIdrawable *pdraw, int interval);
    int (*getSwapInterval)(__GLXDRIdrawable *pdraw);
    int (*getBufferAge)(__GLXDRIdrawable *pdraw);
+   void (*bindTexImage)(__GLXDRIdrawable *pdraw, int buffer, const int *attribs);
+   void (*releaseTexImage)(__GLXDRIdrawable *pdraw, int buffer);
 };
 
 struct __GLXDRIdrawableRec
@@ -227,10 +234,6 @@ struct glx_context_vtable {
    void (*unbind)(struct glx_context *context, struct glx_context *new_ctx);
    void (*wait_gl)(struct glx_context *ctx);
    void (*wait_x)(struct glx_context *ctx);
-   void (*bind_tex_image)(Display * dpy,
-			  GLXDrawable drawable,
-			  int buffer, const int *attrib_list);
-   void (*release_tex_image)(Display * dpy, GLXDrawable drawable, int buffer);
    int (*interop_query_device_info)(struct glx_context *ctx,
                                     struct mesa_glinterop_device_info *out);
    int (*interop_export_object)(struct glx_context *ctx,
@@ -500,9 +503,13 @@ struct glx_screen
    const struct glx_screen_vtable *vtable;
 
     /**
-     * GLX extension string reported by the X-server.
+     * \name Storage for the GLX vendor, version, and extension strings
      */
+   /*@{ */
    const char *serverGLXexts;
+   const char *serverGLXvendor;
+   const char *serverGLXversion;
+   /*@} */
 
     /**
      * GLX extension string to be reported to applications.  This is the
@@ -553,9 +560,10 @@ struct glx_screen
  */
 struct glx_display
 {
-   /* The extension protocol codes */
-   XExtCodes *codes;
    struct glx_display *next;
+
+   /* The extension protocol codes */
+   XExtCodes codes;
 
     /**
      * Back pointer to the display
@@ -563,29 +571,13 @@ struct glx_display
    Display *dpy;
 
     /**
-     * The \c majorOpcode is common to all connections to the same server.
-     * It is also copied into the context structure.
-     */
-   int majorOpcode;
-
-    /**
-     * \name Server Version
+     * \name Minor Version
      *
-     * Major and minor version returned by the server during initialization.
+     * Minor version returned by the server during initialization. The major
+     * version is asserted to be 1 during extension setup.
      */
    /*@{ */
-   int majorVersion, minorVersion;
-   /*@} */
-
-    /**
-     * \name Storage for the servers GLX vendor and versions strings.
-     *
-     * These are the same for all screens on this display. These fields will
-     * be filled in on demand.
-     */
-   /*@{ */
-   const char *serverGLXvendor;
-   const char *serverGLXversion;
+   int minorVersion;
    /*@} */
 
     /**
@@ -628,7 +620,7 @@ glx_screen_cleanup(struct glx_screen *psc);
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
 extern __GLXDRIdrawable *
-dri2GetGlxDrawableFromXDrawableId(Display *dpy, XID id);
+dri2GetGlxDrawableFromXDrawableId(struct glx_display *priv, XID id);
 #endif
 
 extern GLubyte *__glXFlushRenderBuffer(struct glx_context *, GLubyte *);
@@ -738,12 +730,6 @@ extern void __glEmptyImage(struct glx_context *, GLint, GLint, GLint, GLint, GLe
 extern void __glXInitVertexArrayState(struct glx_context *);
 extern void __glXFreeVertexArrayState(struct glx_context *);
 
-/*
-** Inform the Server of the major and minor numbers and of the client
-** libraries extension string.
-*/
-extern void __glXClientInfo(Display * dpy, int opcode);
-
 _X_HIDDEN void
 __glX_send_client_info(struct glx_display *glx_dpy);
 
@@ -765,13 +751,8 @@ extern void __glXInitializeVisualConfigFromTags(struct glx_config * config,
                                                 Bool tagged_only,
                                                 Bool fbconfig_style_tags);
 
-extern char *__glXQueryServerString(Display * dpy, int opcode,
-                                    CARD32 screen, CARD32 name);
-extern char *__glXGetString(Display * dpy, int opcode,
-                            CARD32 screen, CARD32 name);
-
-extern const char __glXGLClientVersion[];
-extern const char __glXGLClientExtensions[];
+extern char *__glXQueryServerString(Display *dpy, CARD32 screen, CARD32 name);
+extern char *__glXGetString(Display *dpy, CARD32 screen, CARD32 name);
 
 extern GLboolean __glXGetMscRateOML(Display * dpy, GLXDrawable drawable,
                                     int32_t * numerator,
@@ -790,7 +771,7 @@ extern void
 GarbageCollectDRIDrawables(struct glx_screen *psc);
 
 extern __GLXDRIdrawable *
-GetGLXDRIDrawable(Display *dpy, GLXDrawable drawable);
+GetGLXDRIDrawable(struct glx_display *priv, GLXDrawable drawable);
 #endif
 
 extern struct glx_screen *GetGLXScreenConfigs(Display * dpy, int scrn);
@@ -815,10 +796,10 @@ extern Bool validate_renderType_against_config(const struct glx_config *config,
                                                int renderType);
 
 
-extern struct glx_drawable *GetGLXDrawable(Display *dpy, GLXDrawable drawable);
-extern int InitGLXDrawable(Display *dpy, struct glx_drawable *glxDraw,
+extern struct glx_drawable *GetGLXDrawable(struct glx_display *priv, GLXDrawable drawable);
+extern int InitGLXDrawable(struct glx_display *priv, struct glx_drawable *glxDraw,
 			   XID xDrawable, GLXDrawable drawable);
-extern void DestroyGLXDrawable(Display *dpy, GLXDrawable drawable);
+extern void DestroyGLXDrawable(struct glx_display *priv, GLXDrawable drawable);
 
 extern struct glx_context dummyContext;
 
@@ -837,8 +818,9 @@ indirect_create_context_attribs(struct glx_screen *base,
                                 unsigned *error);
 
 
-extern int __glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
-                                     int attribute, unsigned int *value);
+extern int
+__glXGetDrawableAttribute(struct glx_display *priv, GLXDrawable drawable,
+                          int attribute, unsigned int *value);
 
 #ifdef __cplusplus
 }

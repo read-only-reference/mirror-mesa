@@ -84,6 +84,11 @@ static const struct test {
 	/* dEQP-VK.subgroups.ballot.compute.compute */
 	INSTR_6XX(260cc3c0_00000000, "movmsk.w128 r48.x"), /* movmsk.w128 sr48.x */
 
+	INSTR_6XX(240cc004_00030201, "swz.u32u32 r1.x, r0.w, r0.y, r0.z"),
+	INSTR_6XX(2400c105_04030201, "gat.f16u32 r1.y, hr0.y, hr0.z, hr0.w, hr1.x"),
+	INSTR_6XX(240c0205_04030201, "sct.u32f16 hr1.y, hr0.z, hr0.w, hr1.x, r0.y"),
+	INSTR_6XX(2400c205_04030201, "sct.f16u32 r1.y, r0.z, r0.w, r1.x, hr0.y"),
+
 	INSTR_6XX(20510005_0000ffff, "mov.s16s16 hr1.y, -1"),
 	INSTR_6XX(20400005_00003900, "mov.f16f16 hr1.y, h(0.625000)"),
 	INSTR_6XX(20400006_00003800, "mov.f16f16 hr1.z, h(0.500000)"),
@@ -143,6 +148,7 @@ static const struct test {
 
 	INSTR_5XX(c6e60000_00010600, "ldgb.untyped.4d.u32.1 r0.x, g[0], r1.x, r0.x"),
 	INSTR_5XX(d7660204_02000a01, "(sy)stib.typed.2d.u32.1 g[1], r0.x, r0.z, r1.x"),
+	INSTR_6XX(c0240402_00674100, "stib.b.untyped.1d.u16.1.imm.base0 r0.z, r0.x, 2"),
 
 	// TODO is this a real instruction?  Or float -6.0 ?
 	// INSTR_6XX(c0c00000_00000000, "stg.f16 g[hr0.x], hr0.x, hr0.x", .parse_fail=true),
@@ -392,7 +398,7 @@ main(int argc, char **argv)
 
 		unsigned gen = test->gpu_id / 100;
 		if (!compilers[gen]) {
-			compilers[gen] = ir3_compiler_create(NULL, test->gpu_id);
+			compilers[gen] = ir3_compiler_create(NULL, test->gpu_id, false);
 		}
 
 		FILE *fasm = fmemopen((void *)test->expected, strlen(test->expected), "r");

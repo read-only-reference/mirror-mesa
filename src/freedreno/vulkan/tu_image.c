@@ -145,6 +145,7 @@ tu6_texswiz(const VkComponentMapping *comps,
             swiz[1] = A6XX_TEX_ZERO;
          }
       }
+      break;
    default:
       break;
    }
@@ -591,7 +592,7 @@ tu_CreateImage(VkDevice _device,
       if (fmt_list) {
          may_be_swapped = false;
          for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
-            if (tu6_format_color(fmt_list->pViewFormats[i], TILE6_LINEAR).swap) {
+            if (tu6_format_texture(fmt_list->pViewFormats[i], TILE6_LINEAR).swap) {
                may_be_swapped = true;
                break;
             }
@@ -688,7 +689,7 @@ tu_CreateImage(VkDevice _device,
       switch (layout->nr_samples) {
       case 4:
          width *= 2;
-         /* fallthru */
+         FALLTHROUGH;
       case 2:
          height *= 2;
          break;

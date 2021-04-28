@@ -64,16 +64,15 @@ static const char __glXGLXClientVersion[] = "1.4";
 /**
  * Get the __DRIdrawable for the drawable associated with a GLXContext
  *
- * \param dpy       The display associated with \c drawable.
+ * \param priv      The glx_display for the current context
  * \param drawable  GLXDrawable whose __DRIdrawable part is to be retrieved.
  * \param scrn_num  If non-NULL, the drawables screen is stored there
  * \returns  A pointer to the context's __DRIdrawable on success, or NULL if
  *           the drawable is not associated with a direct-rendering context.
  */
 _X_HIDDEN __GLXDRIdrawable *
-GetGLXDRIDrawable(Display * dpy, GLXDrawable drawable)
+GetGLXDRIDrawable(struct glx_display *priv, GLXDrawable drawable)
 {
-   struct glx_display *priv = __glXInitialize(dpy);
    __GLXDRIdrawable *pdraw;
 
    if (priv == NULL)
@@ -88,9 +87,8 @@ GetGLXDRIDrawable(Display * dpy, GLXDrawable drawable)
 #endif
 
 _X_HIDDEN struct glx_drawable *
-GetGLXDrawable(Display *dpy, GLXDrawable drawable)
+GetGLXDrawable(struct glx_display *priv, GLXDrawable drawable)
 {
-   struct glx_display *priv = __glXInitialize(dpy);
    struct glx_drawable *glxDraw;
 
    if (priv == NULL)
@@ -103,14 +101,9 @@ GetGLXDrawable(Display *dpy, GLXDrawable drawable)
 }
 
 _X_HIDDEN int
-InitGLXDrawable(Display *dpy, struct glx_drawable *glxDraw, XID xDrawable,
-		GLXDrawable drawable)
+InitGLXDrawable(struct glx_display *priv, struct glx_drawable *glxDraw,
+                XID xDrawable, GLXDrawable drawable)
 {
-   struct glx_display *priv = __glXInitialize(dpy);
-
-   if (!priv)
-      return -1;
-
    glxDraw->xDrawable = xDrawable;
    glxDraw->drawable = drawable;
    glxDraw->lastEventSbc = 0;
@@ -120,15 +113,11 @@ InitGLXDrawable(Display *dpy, struct glx_drawable *glxDraw, XID xDrawable,
 }
 
 _X_HIDDEN void
-DestroyGLXDrawable(Display *dpy, GLXDrawable drawable)
+DestroyGLXDrawable(struct glx_display *priv, GLXDrawable drawable)
 {
-   struct glx_display *priv = __glXInitialize(dpy);
    struct glx_drawable *glxDraw;
 
-   if (!priv)
-      return;
-
-   glxDraw = GetGLXDrawable(dpy, drawable);
+   glxDraw = GetGLXDrawable(priv, drawable);
    __glxHashDelete(priv->glXDrawHash, drawable);
    free(glxDraw);
 }
@@ -237,7 +226,7 @@ validate_renderType_against_config(const struct glx_config *config,
 {
    /* GLX_EXT_no_config_context supports any render type */
    if (!config)
-      return True;
+      return renderType == GLX_DONT_CARE;
 
    switch (renderType) {
       case GLX_RGBA_TYPE:
@@ -267,6 +256,9 @@ glx_context_init(struct glx_context *gc,
    gc->config = config;
    gc->isDirect = GL_TRUE;
    gc->currentContextTag = -1;
+
+   if (!config)
+      gc->renderType = GLX_DONT_CARE;
 
    return True;
 }
@@ -528,7 +520,7 @@ glXQueryVersion(Display * dpy, int *major, int *minor)
       return False;
 
    if (major)
-      *major = priv->majorVersion;
+      *major = GLX_MAJOR_VERSION;
    if (minor)
       *minor = priv->minorVersion;
    return True;
@@ -675,28 +667,13 @@ glXCopyContext(Display * dpy, GLXContext source_user,
 }
 
 
-/**
- * \todo
- * Shouldn't this function \b always return \c False when
- * \c GLX_DIRECT_RENDERING is not defined?  Do we really need to bother with
- * the GLX protocol here at all?
- */
 _GLX_PUBLIC Bool
 glXIsDirect(Display * dpy, GLXContext gc_user)
 {
    struct glx_context *gc = (struct glx_context *) gc_user;
 
-   if (!gc) {
-      return False;
-   }
-   else if (gc->isDirect) {
-      return True;
-   }
-#ifdef GLX_USE_APPLEGL  /* TODO: indirect on darwin */
-   return False;
-#else
-   return __glXIsDirect(dpy, gc->xid, NULL);
-#endif
+   /* This is set for us at context creation */
+   return gc ? gc->isDirect : False;
 }
 
 _GLX_PUBLIC GLXPixmap
@@ -718,13 +695,10 @@ glXCreateGLXPixmap(Display * dpy, XVisualInfo * vis, Pixmap pixmap)
    struct glx_drawable *glxDraw;
    GLXPixmap xid;
    CARD8 opcode;
-
-#if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
    struct glx_display *const priv = __glXInitialize(dpy);
 
    if (priv == NULL)
       return None;
-#endif
 
    opcode = __glXSetupForCommand(dpy);
    if (!opcode) {
@@ -747,7 +721,7 @@ glXCreateGLXPixmap(Display * dpy, XVisualInfo * vis, Pixmap pixmap)
    UnlockDisplay(dpy);
    SyncHandle();
 
-   if (InitGLXDrawable(dpy, glxDraw, pixmap, req->glxpixmap)) {
+   if (InitGLXDrawable(priv, glxDraw, pixmap, req->glxpixmap)) {
       free(glxDraw);
       return None;
    }
@@ -808,6 +782,10 @@ glXDestroyGLXPixmap(Display * dpy, GLXPixmap glxpixmap)
 #else
    xGLXDestroyGLXPixmapReq *req;
    CARD8 opcode;
+   struct glx_display *const priv = __glXInitialize(dpy);
+
+   if (!priv)
+      return;
 
    opcode = __glXSetupForCommand(dpy);
    if (!opcode) {
@@ -823,12 +801,11 @@ glXDestroyGLXPixmap(Display * dpy, GLXPixmap glxpixmap)
    UnlockDisplay(dpy);
    SyncHandle();
 
-   DestroyGLXDrawable(dpy, glxpixmap);
+   DestroyGLXDrawable(priv, glxpixmap);
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
    {
-      struct glx_display *const priv = __glXInitialize(dpy);
-      __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, glxpixmap);
+      __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, glxpixmap);
 
       if (priv != NULL && pdraw != NULL) {
          (*pdraw->destroyDrawable) (pdraw);
@@ -859,7 +836,8 @@ glXSwapBuffers(Display * dpy, GLXDrawable drawable)
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
    {
-      __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+      struct glx_display *priv = __glXInitialize(dpy);
+      __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, drawable);
 
       if (pdraw != NULL) {
          Bool flush = gc != &dummyContext && drawable == gc->currentDrawable;
@@ -1326,6 +1304,7 @@ glXQueryExtensionsString(Display * dpy, int screen)
 {
    struct glx_screen *psc;
    struct glx_display *priv;
+   int is_direct_capable = GL_FALSE;
 
    if (GetGLXPrivScreenConfig(dpy, screen, &priv, &psc) != Success) {
       return NULL;
@@ -1334,17 +1313,13 @@ glXQueryExtensionsString(Display * dpy, int screen)
    if (!psc->effectiveGLXexts) {
       if (!psc->serverGLXexts) {
          psc->serverGLXexts =
-            __glXQueryServerString(dpy, priv->majorOpcode, screen,
-                                   GLX_EXTENSIONS);
+            __glXQueryServerString(dpy, screen, GLX_EXTENSIONS);
       }
 
-      __glXCalculateUsableExtensions(psc,
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
-                                     (psc->driScreen != NULL),
-#else
-                                     GL_FALSE,
+      is_direct_capable = (psc->driScreen != NULL);
 #endif
-                                     priv->minorVersion);
+      __glXCalculateUsableExtensions(psc, is_direct_capable);
    }
 
    return psc->effectiveGLXexts;
@@ -1361,7 +1336,7 @@ glXGetClientString(Display * dpy, int name)
    case GLX_VERSION:
       return (__glXGLXClientVersion);
    case GLX_EXTENSIONS:
-      return (__glXGetClientExtensions());
+      return (__glXGetClientExtensions(dpy));
    default:
       return NULL;
    }
@@ -1374,17 +1349,16 @@ glXQueryServerString(Display * dpy, int screen, int name)
    struct glx_display *priv;
    const char **str;
 
-
    if (GetGLXPrivScreenConfig(dpy, screen, &priv, &psc) != Success) {
       return NULL;
    }
 
    switch (name) {
    case GLX_VENDOR:
-      str = &priv->serverGLXvendor;
+      str = &psc->serverGLXvendor;
       break;
    case GLX_VERSION:
-      str = &priv->serverGLXversion;
+      str = &psc->serverGLXversion;
       break;
    case GLX_EXTENSIONS:
       str = &psc->serverGLXexts;
@@ -1394,7 +1368,7 @@ glXQueryServerString(Display * dpy, int screen, int name)
    }
 
    if (*str == NULL) {
-      *str = __glXQueryServerString(dpy, priv->majorOpcode, screen, name);
+      *str = __glXQueryServerString(dpy, screen, name);
    }
 
    return *str;
@@ -1458,7 +1432,7 @@ glXImportContextEXT(Display *dpy, GLXContextID contextID)
    /* Send the glXQueryContextInfoEXT request */
    LockDisplay(dpy);
 
-   if (priv->majorVersion > 1 || priv->minorVersion >= 3) {
+   if (priv->minorVersion >= 3) {
       xGLXQueryContextReq *req;
 
       GetReq(GLXQueryContext, req);
@@ -1732,6 +1706,9 @@ glXGetVisualFromFBConfig(Display * dpy, GLXFBConfig fbconfig)
    struct glx_config *config = (struct glx_config *) fbconfig;
    int count;
 
+   if (!config)
+      return NULL;
+
    /*
     ** Get a list of all visuals, return if list is empty
     */
@@ -1749,7 +1726,7 @@ glXSwapIntervalSGI(int interval)
    xGLXVendorPrivateReq *req;
    struct glx_context *gc = __glXGetCurrentContext();
 #ifdef GLX_DIRECT_RENDERING
-   struct glx_screen *psc;
+   struct glx_screen *psc = gc->psc;
 #endif
    Display *dpy;
    CARD32 *interval_ptr;
@@ -1764,12 +1741,10 @@ glXSwapIntervalSGI(int interval)
    }
 
 #ifdef GLX_DIRECT_RENDERING
-   psc = GetGLXScreenConfigs( gc->currentDpy, gc->screen);
-
    if (gc->isDirect && psc && psc->driScreen &&
           psc->driScreen->setSwapInterval) {
       __GLXDRIdrawable *pdraw =
-	 GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
+	 GetGLXDRIDrawable(psc->display, gc->currentDrawable);
       /* Simply ignore the command if the GLX drawable has been destroyed but
        * the context is still bound.
        */
@@ -1817,12 +1792,10 @@ glXSwapIntervalMESA(unsigned int interval)
       return GLX_BAD_VALUE;
 
    if (gc != &dummyContext && gc->isDirect) {
-      struct glx_screen *psc;
-
-      psc = GetGLXScreenConfigs( gc->currentDpy, gc->screen);
+      struct glx_screen *psc = gc->psc;
       if (psc && psc->driScreen && psc->driScreen->setSwapInterval) {
          __GLXDRIdrawable *pdraw =
-	    GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
+	    GetGLXDRIDrawable(psc->display, gc->currentDrawable);
 
          /* Simply ignore the command if the GLX drawable has been destroyed but
           * the context is still bound.
@@ -1846,12 +1819,10 @@ glXGetSwapIntervalMESA(void)
    struct glx_context *gc = __glXGetCurrentContext();
 
    if (gc != &dummyContext && gc->isDirect) {
-      struct glx_screen *psc;
-
-      psc = GetGLXScreenConfigs( gc->currentDpy, gc->screen);
+      struct glx_screen *psc = gc->psc;
       if (psc && psc->driScreen && psc->driScreen->getSwapInterval) {
          __GLXDRIdrawable *pdraw =
-	    GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
+	    GetGLXDRIDrawable(psc->display, gc->currentDrawable);
          if (pdraw)
             return psc->driScreen->getSwapInterval(pdraw);
       }
@@ -1869,7 +1840,8 @@ _X_HIDDEN void
 glXSwapIntervalEXT(Display *dpy, GLXDrawable drawable, int interval)
 {
 #ifdef GLX_DIRECT_RENDERING
-   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+   struct glx_display *priv = __glXInitialize(dpy);
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, drawable);
 
    /*
     * Strictly, this should throw an error if drawable is not a Window or
@@ -1901,7 +1873,7 @@ glXGetVideoSyncSGI(unsigned int *count)
    int64_t ust, msc, sbc;
    int ret;
    struct glx_context *gc = __glXGetCurrentContext();
-   struct glx_screen *psc;
+   struct glx_screen *psc = gc->psc;
    __GLXDRIdrawable *pdraw;
 
    if (gc == &dummyContext)
@@ -1913,8 +1885,7 @@ glXGetVideoSyncSGI(unsigned int *count)
    if (!gc->currentDrawable)
       return GLX_BAD_CONTEXT;
 
-   psc = GetGLXScreenConfigs(gc->currentDpy, gc->screen);
-   pdraw = GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
+   pdraw = GetGLXDRIDrawable(psc->display, gc->currentDrawable);
 
    /* FIXME: Looking at the GLX_SGI_video_sync spec in the extension registry,
     * FIXME: there should be a GLX encoding for this call.  I can find no
@@ -1935,7 +1906,7 @@ glXWaitVideoSyncSGI(int divisor, int remainder, unsigned int *count)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 #ifdef GLX_DIRECT_RENDERING
-   struct glx_screen *psc;
+   struct glx_screen *psc = gc->psc;
    __GLXDRIdrawable *pdraw;
    int64_t ust, msc, sbc;
    int ret;
@@ -1954,8 +1925,7 @@ glXWaitVideoSyncSGI(int divisor, int remainder, unsigned int *count)
    if (!gc->currentDrawable)
       return GLX_BAD_CONTEXT;
 
-   psc = GetGLXScreenConfigs( gc->currentDpy, gc->screen);
-   pdraw = GetGLXDRIDrawable(gc->currentDpy, gc->currentDrawable);
+   pdraw = GetGLXDRIDrawable(psc->display, gc->currentDrawable);
 
    if (psc && psc->driScreen && psc->driScreen->waitForMSC) {
       ret = psc->driScreen->waitForMSC(pdraw, 0, divisor, remainder, &ust, &msc,
@@ -2105,7 +2075,7 @@ glXGetSyncValuesOML(Display *dpy, GLXDrawable drawable,
       return False;
 
 #ifdef GLX_DIRECT_RENDERING
-   pdraw = GetGLXDRIDrawable(dpy, drawable);
+   pdraw = GetGLXDRIDrawable(priv, drawable);
    psc = pdraw ? pdraw->psc : NULL;
    if (pdraw && psc->driScreen->getDrawableMSC) {
       ret = psc->driScreen->getDrawableMSC(psc, pdraw, ust, msc, sbc);
@@ -2195,7 +2165,8 @@ glXGetMscRateOML(Display * dpy, GLXDrawable drawable,
                  int32_t * numerator, int32_t * denominator)
 {
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL) && !defined(GLX_USE_WINDOWSGL)
-   __GLXDRIdrawable *draw = GetGLXDRIDrawable(dpy, drawable);
+   struct glx_display *priv = __glXInitialize(dpy);
+   __GLXDRIdrawable *draw = GetGLXDRIDrawable(priv, drawable);
 
    if (draw == NULL)
       return False;
@@ -2217,7 +2188,7 @@ glXSwapBuffersMscOML(Display *dpy, GLXDrawable drawable,
 {
    struct glx_context *gc = __glXGetCurrentContext();
 #ifdef GLX_DIRECT_RENDERING
-   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(gc->psc->display, drawable);
    struct glx_screen *psc = pdraw ? pdraw->psc : NULL;
 #endif
 
@@ -2258,7 +2229,8 @@ glXWaitForMscOML(Display *dpy, GLXDrawable drawable, int64_t target_msc,
                  int64_t *msc, int64_t *sbc)
 {
 #ifdef GLX_DIRECT_RENDERING
-   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+   struct glx_display *priv = __glXInitialize(dpy);
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, drawable);
    struct glx_screen *psc = pdraw ? pdraw->psc : NULL;
    int ret;
 #endif
@@ -2289,7 +2261,8 @@ glXWaitForSbcOML(Display *dpy, GLXDrawable drawable, int64_t target_sbc,
                  int64_t *ust, int64_t *msc, int64_t *sbc)
 {
 #ifdef GLX_DIRECT_RENDERING
-   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+   struct glx_display *priv = __glXInitialize(dpy);
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, drawable);
    struct glx_screen *psc = pdraw ? pdraw->psc : NULL;
    int ret;
 #endif
@@ -2379,7 +2352,8 @@ glXCopySubBufferMESA(Display * dpy, GLXDrawable drawable,
    CARD8 opcode;
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
-   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+   struct glx_display *priv = __glXInitialize(dpy);
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, drawable);
    if (pdraw != NULL) {
       struct glx_screen *psc = pdraw->psc;
       if (psc->driScreen->copySubBuffer != NULL) {
@@ -2436,23 +2410,103 @@ _X_HIDDEN void
 glXBindTexImageEXT(Display *dpy, GLXDrawable drawable, int buffer,
                    const int *attrib_list)
 {
+   xGLXVendorPrivateReq *req;
    struct glx_context *gc = __glXGetCurrentContext();
+   CARD32 *drawable_ptr;
+   INT32 *buffer_ptr;
+   CARD32 *num_attrib_ptr;
+   CARD32 *attrib_ptr;
+   CARD8 opcode;
+   unsigned int i = 0;
 
-   if (gc->vtable->bind_tex_image == NULL)
+#ifdef GLX_DIRECT_RENDERING
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(gc->psc->display, drawable);
+   if (pdraw != NULL) {
+      struct glx_screen *psc = pdraw->psc;
+      if (psc->driScreen->bindTexImage != NULL)
+         (*psc->driScreen->bindTexImage) (pdraw, buffer, attrib_list);
+
+      return;
+   }
+#endif
+
+   if (attrib_list) {
+      while (attrib_list[i * 2] != None)
+         i++;
+   }
+
+   opcode = __glXSetupForCommand(dpy);
+   if (!opcode)
       return;
 
-   gc->vtable->bind_tex_image(dpy, drawable, buffer, attrib_list);
+   LockDisplay(dpy);
+   GetReqExtra(GLXVendorPrivate, 12 + 8 * i, req);
+   req->reqType = opcode;
+   req->glxCode = X_GLXVendorPrivate;
+   req->vendorCode = X_GLXvop_BindTexImageEXT;
+   req->contextTag = gc->currentContextTag;
+
+   drawable_ptr = (CARD32 *) (req + 1);
+   buffer_ptr = (INT32 *) (drawable_ptr + 1);
+   num_attrib_ptr = (CARD32 *) (buffer_ptr + 1);
+   attrib_ptr = (CARD32 *) (num_attrib_ptr + 1);
+
+   *drawable_ptr = drawable;
+   *buffer_ptr = buffer;
+   *num_attrib_ptr = (CARD32) i;
+
+   i = 0;
+   if (attrib_list) {
+      while (attrib_list[i * 2] != None) {
+         *attrib_ptr++ = (CARD32) attrib_list[i * 2 + 0];
+         *attrib_ptr++ = (CARD32) attrib_list[i * 2 + 1];
+         i++;
+      }
+   }
+
+   UnlockDisplay(dpy);
+   SyncHandle();
 }
 
 _X_HIDDEN void
 glXReleaseTexImageEXT(Display * dpy, GLXDrawable drawable, int buffer)
 {
+   xGLXVendorPrivateReq *req;
    struct glx_context *gc = __glXGetCurrentContext();
+   CARD32 *drawable_ptr;
+   INT32 *buffer_ptr;
+   CARD8 opcode;
 
-   if (gc->vtable->release_tex_image == NULL)
+#ifdef GLX_DIRECT_RENDERING
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(gc->psc->display, drawable);
+   if (pdraw != NULL) {
+      struct glx_screen *psc = pdraw->psc;
+      if (psc->driScreen->releaseTexImage != NULL)
+         (*psc->driScreen->releaseTexImage) (pdraw, buffer);
+
+      return;
+   }
+#endif
+
+   opcode = __glXSetupForCommand(dpy);
+   if (!opcode)
       return;
 
-   gc->vtable->release_tex_image(dpy, drawable, buffer);
+   LockDisplay(dpy);
+   GetReqExtra(GLXVendorPrivate, sizeof(CARD32) + sizeof(INT32), req);
+   req->reqType = opcode;
+   req->glxCode = X_GLXVendorPrivate;
+   req->vendorCode = X_GLXvop_ReleaseTexImageEXT;
+   req->contextTag = gc->currentContextTag;
+
+   drawable_ptr = (CARD32 *) (req + 1);
+   buffer_ptr = (INT32 *) (drawable_ptr + 1);
+
+   *drawable_ptr = drawable;
+   *buffer_ptr = buffer;
+
+   UnlockDisplay(dpy);
+   SyncHandle();
 }
 
 /*@}*/

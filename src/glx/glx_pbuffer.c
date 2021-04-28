@@ -45,30 +45,6 @@
 
 #include "glx_error.h"
 
-#define WARN_ONCE_GLX_1_3(a, b) {		\
-		static int warned=1;		\
-		if(warned) {			\
-			warn_GLX_1_3((a), b );	\
-			warned=0;		\
-		}				\
-	}
-
-/**
- * Emit a warning when clients use GLX 1.3 functions on pre-1.3 systems.
- */
-static void
-warn_GLX_1_3(Display * dpy, const char *function_name)
-{
-   struct glx_display *priv = __glXInitialize(dpy);
-
-   if (priv && priv->minorVersion < 3) {
-      fprintf(stderr,
-              "WARNING: Application calling GLX 1.3 function \"%s\" "
-              "when GLX 1.3 is not supported!  This is an application bug!\n",
-              function_name);
-   }
-}
-
 #ifndef GLX_USE_APPLEGL
 /**
  * Change a drawable's attribute.
@@ -81,10 +57,10 @@ warn_GLX_1_3(Display * dpy, const char *function_name)
  * version of the protocol or the GLX 1.3 version of the protocol.
  */
 static void
-ChangeDrawableAttribute(Display * dpy, GLXDrawable drawable,
+ChangeDrawableAttribute(struct glx_display *priv, GLXDrawable drawable,
                         const CARD32 * attribs, size_t num_attribs)
 {
-   struct glx_display *priv = __glXInitialize(dpy);
+   Display *dpy = priv->dpy;
 #ifdef GLX_DIRECT_RENDERING
    __GLXDRIdrawable *pdraw;
    int i;
@@ -102,7 +78,7 @@ ChangeDrawableAttribute(Display * dpy, GLXDrawable drawable,
 
    LockDisplay(dpy);
 
-   if ((priv->majorVersion > 1) || (priv->minorVersion >= 3)) {
+   if (priv->minorVersion >= 3) {
       xGLXChangeDrawableAttributesReq *req;
 
       GetReqExtra(GLXChangeDrawableAttributes, 8 * num_attribs, req);
@@ -134,7 +110,7 @@ ChangeDrawableAttribute(Display * dpy, GLXDrawable drawable,
    SyncHandle();
 
 #ifdef GLX_DIRECT_RENDERING
-   pdraw = GetGLXDRIDrawable(dpy, drawable);
+   pdraw = GetGLXDRIDrawable(priv, drawable);
 
    if (!pdraw)
       return;
@@ -229,11 +205,11 @@ CreateDRIDrawable(Display *dpy, struct glx_config *config,
 }
 
 static void
-DestroyDRIDrawable(Display *dpy, GLXDrawable drawable, int destroy_xdrawable)
+DestroyDRIDrawable(struct glx_display *priv, GLXDrawable drawable,
+                   int destroy_xdrawable)
 {
 #ifdef GLX_DIRECT_RENDERING
-   struct glx_display *const priv = __glXInitialize(dpy);
-   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(dpy, drawable);
+   __GLXDRIdrawable *pdraw = GetGLXDRIDrawable(priv, drawable);
    XID xid;
 
    if (priv != NULL && pdraw != NULL) {
@@ -262,17 +238,17 @@ DestroyDRIDrawable(Display *dpy, GLXDrawable drawable, int destroy_xdrawable)
  * capture the reply rather than always calling Xmalloc.
  */
 int
-__glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
+__glXGetDrawableAttribute(struct glx_display *priv, GLXDrawable drawable,
                           int attribute, unsigned int *value)
 {
-   struct glx_display *priv;
+   Display *dpy = priv->dpy;
    xGLXGetDrawableAttributesReply reply;
    CARD32 *data;
    CARD8 opcode;
    unsigned int length;
    unsigned int i;
    unsigned int num_attributes;
-   GLboolean use_glx_1_3;
+   int found = 0;
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
    __GLXDRIdrawable *pdraw;
@@ -291,21 +267,14 @@ __glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
       return 0;
    }
 
-   priv = __glXInitialize(dpy);
-   if (priv == NULL)
-      return 0;
-
-   use_glx_1_3 = ((priv->majorVersion > 1) || (priv->minorVersion >= 3));
-
    *value = 0;
-
 
    opcode = __glXSetupForCommand(dpy);
    if (!opcode)
       return 0;
 
 #if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
-   pdraw = GetGLXDRIDrawable(dpy, drawable);
+   pdraw = GetGLXDRIDrawable(priv, drawable);
 
    if (attribute == GLX_BACK_BUFFER_AGE_EXT) {
       struct glx_context *gc = __glXGetCurrentContext();
@@ -350,7 +319,7 @@ __glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
 
    LockDisplay(dpy);
 
-   if (use_glx_1_3) {
+   if (priv->minorVersion >= 3) {
       xGLXGetDrawableAttributesReq *req;
 
       GetReq(GLXGetDrawableAttributes, req);
@@ -380,7 +349,7 @@ __glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
 
    length = reply.length;
    if (length) {
-      num_attributes = (use_glx_1_3) ? reply.numAttribs : length / 2;
+      num_attributes = (priv->minorVersion > 2) ? reply.numAttribs : length / 2;
       data = malloc(length * sizeof(CARD32));
       if (data == NULL) {
          /* Throw data on the floor */
@@ -394,6 +363,7 @@ __glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
           */
          for (i = 0; i < num_attributes; i++) {
             if (data[i * 2] == attribute) {
+               found = 1;
                *value = data[(i * 2) + 1];
                break;
             }
@@ -417,7 +387,7 @@ __glXGetDrawableAttribute(Display * dpy, GLXDrawable drawable,
    UnlockDisplay(dpy);
    SyncHandle();
 
-   return 1;
+   return found;
 }
 
 static void
@@ -445,15 +415,19 @@ protocolDestroyDrawable(Display *dpy, GLXDrawable drawable, CARD32 glxCode)
  * Create a non-pbuffer GLX drawable.
  */
 static GLXDrawable
-CreateDrawable(Display *dpy, struct glx_config *config,
+CreateDrawable(struct glx_display *priv, struct glx_config *config,
                Drawable drawable, const int *attrib_list, CARD8 glxCode)
 {
+   Display *dpy = priv->dpy;
    xGLXCreateWindowReq *req;
    struct glx_drawable *glxDraw;
    CARD32 *data;
    unsigned int i;
    CARD8 opcode;
    GLXDrawable xid;
+
+   if (!config)
+      return None;
 
    i = 0;
    if (attrib_list) {
@@ -487,7 +461,7 @@ CreateDrawable(Display *dpy, struct glx_config *config,
    UnlockDisplay(dpy);
    SyncHandle();
 
-   if (InitGLXDrawable(dpy, glxDraw, drawable, xid)) {
+   if (InitGLXDrawable(priv, glxDraw, drawable, xid)) {
       free(glxDraw);
       return None;
    }
@@ -511,14 +485,16 @@ CreateDrawable(Display *dpy, struct glx_config *config,
 static void
 DestroyDrawable(Display * dpy, GLXDrawable drawable, CARD32 glxCode)
 {
+   struct glx_display *priv = __glXInitialize(dpy);
+
    if ((dpy == NULL) || (drawable == 0)) {
       return;
    }
 
    protocolDestroyDrawable(dpy, drawable, glxCode);
 
-   DestroyGLXDrawable(dpy, drawable);
-   DestroyDRIDrawable(dpy, drawable, GL_FALSE);
+   DestroyGLXDrawable(priv, drawable);
+   DestroyDRIDrawable(priv, drawable, GL_FALSE);
 
    return;
 }
@@ -564,7 +540,7 @@ CreatePbuffer(Display * dpy, struct glx_config *config,
    LockDisplay(dpy);
    id = XAllocID(dpy);
 
-   if ((priv->majorVersion > 1) || (priv->minorVersion >= 3)) {
+   if (priv->minorVersion >= 3) {
       xGLXCreatePbufferReq *req;
       unsigned int extra = (size_in_attribs) ? 0 : 2;
 
@@ -653,7 +629,7 @@ DestroyPbuffer(Display * dpy, GLXDrawable drawable)
 
    LockDisplay(dpy);
 
-   if ((priv->majorVersion > 1) || (priv->minorVersion >= 3)) {
+   if (priv->minorVersion >= 3) {
       xGLXDestroyPbufferReq *req;
 
       GetReq(GLXDestroyPbuffer, req);
@@ -678,7 +654,7 @@ DestroyPbuffer(Display * dpy, GLXDrawable drawable)
    UnlockDisplay(dpy);
    SyncHandle();
 
-   DestroyDRIDrawable(dpy, drawable, GL_TRUE);
+   DestroyDRIDrawable(priv, drawable, GL_TRUE);
 
    return;
 }
@@ -712,8 +688,6 @@ glXCreatePbuffer(Display * dpy, GLXFBConfig config, const int *attrib_list)
 
    width = 0;
    height = 0;
-
-   WARN_ONCE_GLX_1_3(dpy, __func__);
 
 #ifdef GLX_USE_APPLEGL
    for (i = 0; attrib_list[i]; ++i) {
@@ -796,7 +770,6 @@ _GLX_PUBLIC void
 glXQueryDrawable(Display * dpy, GLXDrawable drawable,
                  int attribute, unsigned int *value)
 {
-   WARN_ONCE_GLX_1_3(dpy, __func__);
 #ifdef GLX_USE_APPLEGL
    Window root;
    int x, y;
@@ -832,7 +805,7 @@ glXQueryDrawable(Display * dpy, GLXDrawable drawable,
       }
    }
 #else
-   __glXGetDrawableAttribute(dpy, drawable, attribute, value);
+   __glXGetDrawableAttribute(__glXInitialize(dpy), drawable, attribute, value);
 #endif
 }
 
@@ -845,7 +818,7 @@ _GLX_PUBLIC void
 glXQueryGLXPbufferSGIX(Display * dpy, GLXPbufferSGIX drawable,
                        int attribute, unsigned int *value)
 {
-   __glXGetDrawableAttribute(dpy, drawable, attribute, value);
+   __glXGetDrawableAttribute(__glXInitialize(dpy), drawable, attribute, value);
 }
 #endif
 
@@ -877,7 +850,7 @@ glXSelectEvent(Display * dpy, GLXDrawable drawable, unsigned long mask)
    attribs[0] = (CARD32) GLX_EVENT_MASK;
    attribs[1] = (CARD32) mask;
 
-   ChangeDrawableAttribute(dpy, drawable, attribs, 1);
+   ChangeDrawableAttribute(__glXInitialize(dpy), drawable, attribs, 1);
 #endif
 }
 
@@ -908,15 +881,10 @@ glXGetSelectedEvent(Display * dpy, GLXDrawable drawable, unsigned long *mask)
    __glXSendError(dpy, GLXBadDrawable, drawable, X_GLXGetDrawableAttributes,
                   true);
 #else
+   /* handle unsigned int / unsigned long mismatch */
    unsigned int value = 0;
-
-
-   /* The non-sense with value is required because on LP64 platforms
-    * sizeof(unsigned int) != sizeof(unsigned long).  On little-endian
-    * we could just type-cast the pointer, but why?
-    */
-
-   __glXGetDrawableAttribute(dpy, drawable, GLX_EVENT_MASK_SGIX, &value);
+   __glXGetDrawableAttribute(__glXInitialize(dpy), drawable,
+                             GLX_EVENT_MASK_SGIX, &value);
    *mask = value;
 #endif
 }
@@ -926,8 +894,6 @@ _GLX_PUBLIC GLXPixmap
 glXCreatePixmap(Display * dpy, GLXFBConfig config, Pixmap pixmap,
                 const int *attrib_list)
 {
-   WARN_ONCE_GLX_1_3(dpy, __func__);
-
 #ifdef GLX_USE_APPLEGL
    const struct glx_config *modes = (const struct glx_config *) config;
 
@@ -936,7 +902,7 @@ glXCreatePixmap(Display * dpy, GLXFBConfig config, Pixmap pixmap,
 
    return pixmap;
 #else
-   return CreateDrawable(dpy, (struct glx_config *) config,
+   return CreateDrawable(__glXInitialize(dpy), (struct glx_config *) config,
                          (Drawable) pixmap, attrib_list, X_GLXCreatePixmap);
 #endif
 }
@@ -946,7 +912,6 @@ _GLX_PUBLIC GLXWindow
 glXCreateWindow(Display * dpy, GLXFBConfig config, Window win,
                 const int *attrib_list)
 {
-   WARN_ONCE_GLX_1_3(dpy, __func__);
 #ifdef GLX_USE_APPLEGL
    XWindowAttributes xwattr;
    XVisualInfo *visinfo;
@@ -971,7 +936,7 @@ glXCreateWindow(Display * dpy, GLXFBConfig config, Window win,
 
    return win;
 #else
-   return CreateDrawable(dpy, (struct glx_config *) config,
+   return CreateDrawable(__glXInitialize(dpy), (struct glx_config *) config,
                          (Drawable) win, attrib_list, X_GLXCreateWindow);
 #endif
 }
@@ -980,7 +945,6 @@ glXCreateWindow(Display * dpy, GLXFBConfig config, Window win,
 _GLX_PUBLIC void
 glXDestroyPixmap(Display * dpy, GLXPixmap pixmap)
 {
-   WARN_ONCE_GLX_1_3(dpy, __func__);
 #ifdef GLX_USE_APPLEGL
    if (apple_glx_pixmap_destroy(dpy, pixmap))
       __glXSendError(dpy, GLXBadPixmap, pixmap, X_GLXDestroyPixmap, false);
@@ -993,7 +957,6 @@ glXDestroyPixmap(Display * dpy, GLXPixmap pixmap)
 _GLX_PUBLIC void
 glXDestroyWindow(Display * dpy, GLXWindow win)
 {
-   WARN_ONCE_GLX_1_3(dpy, __func__);
 #ifndef GLX_USE_APPLEGL
    DestroyDrawable(dpy, (GLXDrawable) win, X_GLXDestroyWindow);
 #endif

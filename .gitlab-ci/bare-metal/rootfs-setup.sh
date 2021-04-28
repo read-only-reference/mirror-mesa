@@ -14,6 +14,7 @@ set +x
 touch $rootfs_dst/set-job-env-vars.sh
 chmod +x $rootfs_dst/set-job-env-vars.sh
 for var in \
+    ASAN_OPTIONS \
     BARE_METAL_TEST_SCRIPT \
     BM_KERNEL_MODULES \
     BM_START_XORG \
@@ -60,7 +61,6 @@ for var in \
     MINIO_HOST \
     NIR_VALIDATE \
     PIGLIT_FRACTION \
-    PIGLIT_HTML_SUMMARY \
     PIGLIT_JUNIT_RESULTS \
     PIGLIT_OPTIONS \
     PIGLIT_PLATFORM \

@@ -881,12 +881,6 @@ bi_take_instr(bi_context *ctx, struct bi_worklist st,
                 struct bi_tuple_state *tuple,
                 bool fma)
 {
-#ifndef NDEBUG
-        /* Don't pair instructions if debugging */
-        if ((bifrost_debug & BIFROST_DBG_NOSCHED) && tuple->add)
-                return NULL;
-#endif
-
         if (tuple->add && tuple->add->op == BI_OPCODE_CUBEFACE)
                 return bi_lower_cubeface(ctx, clause, tuple);
         else if (tuple->add && tuple->add->op == BI_OPCODE_PATOM_C_I32)
@@ -897,6 +891,12 @@ bi_take_instr(bi_context *ctx, struct bi_worklist st,
                 return bi_lower_seg_add(ctx, clause, tuple);
         else if (tuple->add && tuple->add->table)
                 return bi_lower_dtsel(ctx, clause, tuple);
+
+#ifndef NDEBUG
+        /* Don't pair instructions if debugging */
+        if ((bifrost_debug & BIFROST_DBG_NOSCHED) && tuple->add)
+                return NULL;
+#endif
 
         unsigned idx = bi_choose_index(st, clause, tuple, fma);
 
@@ -1658,7 +1658,7 @@ bi_test_units(bi_builder *b)
                 assert(bi_reads_t(load, i));
         }
 
-        bi_instr *blend = bi_blend_to(b, TMP(), TMP(), TMP(), TMP(), TMP());
+        bi_instr *blend = bi_blend_to(b, TMP(), TMP(), TMP(), TMP(), TMP(), 4);
         assert(!bi_can_fma(load));
         assert(bi_can_add(load));
         assert(bi_must_last(blend));

@@ -178,7 +178,7 @@ option(
   'vulkan-drivers',
   type : 'array',
   value : ['auto'],
-  choices : ['auto', 'amd', 'broadcom', 'freedreno', 'intel', 'swrast'],
+  choices : ['auto', 'amd', 'broadcom', 'freedreno', 'intel', 'swrast', 'virtio-experimental'],
   description : 'List of vulkan drivers to build. If this is set to auto all drivers applicable to the target OS/architecture will be built'
 )
 option(
@@ -442,7 +442,7 @@ option(
   'platform-sdk-version',
   type : 'integer',
   min : 25,
-  max : 28,
+  max : 30,
   value : 25,
   description : 'Android Platform SDK version. Default: Nougat version.'
 )

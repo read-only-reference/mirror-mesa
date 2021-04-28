@@ -4,7 +4,6 @@ glx@glx-make-current,Crash
 glx@glx-multi-window-single-context,Fail
 glx@glx-query-drawable-glx_fbconfig_id-window,Fail
 glx@glx-swap-pixmap-bad,Fail
-glx@glx-tfp,Fail
 glx@glx-visuals-depth -pixmap,Crash
 glx@glx-visuals-stencil -pixmap,Crash
 glx@glx_arb_create_context_es2_profile@invalid opengl es version,Fail
@@ -228,16 +227,12 @@ spec@ext_framebuffer_object@fbo-stencil-gl_stencil_index8-copypixels,Fail
 spec@ext_framebuffer_object@getteximage-formats init-by-clear-and-render,Fail
 spec@ext_framebuffer_object@getteximage-formats init-by-rendering,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-export,Fail
-spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_ayuv,Fail
-spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_nv12,Crash
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_p010,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_p012,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_p016,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_uyvy,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xyuv,Fail
-spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuv420,Crash
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuyv,Fail
-spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420,Crash
 spec@ext_packed_depth_stencil@fbo-clear-formats,Fail
 spec@ext_packed_depth_stencil@fbo-clear-formats stencil,Fail
 spec@ext_packed_depth_stencil@fbo-depth-gl_depth24_stencil8-blit,Fail
@@ -251,16 +246,11 @@ spec@ext_render_snorm@render,Fail
 spec@ext_texture_integer@fbo-integer,Fail
 spec@ext_texture_snorm@fbo-blending-formats,Fail
 spec@ext_transform_feedback2@draw-auto,Fail
-spec@ext_transform_feedback@change-size base-shrink,Fail
-spec@ext_transform_feedback@change-size offset-shrink,Fail
-spec@ext_transform_feedback@change-size range-shrink,Fail
 spec@ext_transform_feedback@discard-copypixels,Fail
 spec@ext_transform_feedback@generatemipmap prims_generated,Fail
 spec@ext_transform_feedback@immediate-reuse,Fail
 spec@ext_transform_feedback@immediate-reuse-index-buffer,Fail
 spec@ext_transform_feedback@immediate-reuse-uniform-buffer,Fail
-spec@ext_transform_feedback@overflow-edge-cases,Fail
-spec@ext_transform_feedback@query-primitives_written-bufferrange-discard,Fail
 spec@ext_transform_feedback@tessellation line_loop flat_first,Fail
 spec@ext_transform_feedback@tessellation line_loop flat_last,Fail
 spec@ext_transform_feedback@tessellation line_loop monochrome,Fail
@@ -347,11 +337,8 @@ spec@oes_egl_image_external_essl3@oes_egl_image_external_essl3,Crash
 wgl@wgl-multi-context-single-window,Fail
 wgl@wgl-multi-window-single-context,Fail
 wgl@wgl-sanity,Fail
-spec@glsl-1.10@execution@interpolation@interpolation-none-gl_frontcolor-flat-vertex,Fail
-spec@glsl-1.10@execution@interpolation@interpolation-none-gl_frontcolor-smooth-vertex,Fail
-spec@glsl-1.10@execution@interpolation@interpolation-none-gl_frontsecondarycolor-smooth-vertex,Fail
-spec@glsl-1.10@execution@interpolation@interpolation-none-other-flat-vertex,Fail
 spec@glsl-1.30@execution@clipping@fs-clip-distance-interpolated,Crash
 spec@glsl-1.30@execution@fs-large-local-array-vec2,Crash
 spec@glsl-1.30@execution@fs-large-local-array-vec3,Crash
 spec@glsl-1.30@execution@fs-large-local-array-vec4,Crash
+spec@glsl-1.30@execution@range_analysis_fsat_of_nan,Fail

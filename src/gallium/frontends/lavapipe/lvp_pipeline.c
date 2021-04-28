@@ -472,6 +472,11 @@ lvp_shader_compile_to_ir(struct lvp_pipeline *pipeline,
          .multiview = true,
          .physical_storage_buffer_address = true,
          .int64_atomics = true,
+         .subgroup_arithmetic = true,
+         .subgroup_basic = true,
+         .subgroup_ballot = true,
+         .subgroup_quad = true,
+         .subgroup_vote = true,
       },
       .ubo_addr_format = nir_address_format_32bit_index_offset,
       .ssbo_addr_format = nir_address_format_32bit_index_offset,
@@ -669,7 +674,7 @@ lvp_pipeline_compile(struct lvp_pipeline *pipeline,
       struct pipe_compute_state shstate = {0};
       shstate.prog = (void *)pipeline->pipeline_nir[MESA_SHADER_COMPUTE];
       shstate.ir_type = PIPE_SHADER_IR_NIR;
-      shstate.req_local_mem = pipeline->pipeline_nir[MESA_SHADER_COMPUTE]->info.cs.shared_size;
+      shstate.req_local_mem = pipeline->pipeline_nir[MESA_SHADER_COMPUTE]->info.shared_size;
       pipeline->shader_cso[PIPE_SHADER_COMPUTE] = device->queue.ctx->create_compute_state(device->queue.ctx, &shstate);
    } else {
       struct pipe_shader_state shstate = {0};
@@ -681,13 +686,14 @@ lvp_pipeline_compile(struct lvp_pipeline *pipeline,
           stage == MESA_SHADER_TESS_EVAL) {
          xfb_info = nir_gather_xfb_info(pipeline->pipeline_nir[stage], NULL);
          if (xfb_info) {
-            unsigned num_outputs = 0;
             uint8_t output_mapping[VARYING_SLOT_TESS_MAX];
             memset(output_mapping, 0, sizeof(output_mapping));
 
-            for (unsigned attr = 0; attr < VARYING_SLOT_MAX; attr++) {
-               if (pipeline->pipeline_nir[stage]->info.outputs_written & BITFIELD64_BIT(attr))
-                  output_mapping[attr] = num_outputs++;
+            nir_foreach_shader_out_variable(var, pipeline->pipeline_nir[stage]) {
+               unsigned slots = var->data.compact ? DIV_ROUND_UP(glsl_get_length(var->type), 4)
+                                                  : glsl_count_attribute_slots(var->type, false);
+               for (unsigned i = 0; i < slots; i++)
+                  output_mapping[var->data.location + i] = var->data.driver_location + i;
             }
 
             shstate.stream_output.num_outputs = xfb_info->output_count;
@@ -748,6 +754,12 @@ lvp_graphics_pipeline_init(struct lvp_pipeline *pipeline,
    /* recreate createinfo */
    deep_copy_graphics_create_info(pipeline->mem_ctx, &pipeline->graphics_create_info, pCreateInfo);
    pipeline->is_compute_pipeline = false;
+
+   const VkPipelineRasterizationProvokingVertexStateCreateInfoEXT *pv_state =
+      vk_find_struct_const(pCreateInfo->pRasterizationState,
+                           PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT);
+   pipeline->provoking_vertex_last = pv_state && pv_state->provokingVertexMode == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+
 
    for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
       VK_FROM_HANDLE(vk_shader_module, module,

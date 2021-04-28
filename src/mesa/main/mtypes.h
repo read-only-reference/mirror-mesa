@@ -178,9 +178,6 @@ struct gl_config
 
    /* EXT_framebuffer_sRGB */
    GLint sRGBCapable;
-
-   /* EGL_KHR_mutable_render_buffer */
-   GLuint mutableRenderBuffer; /* bool */
 };
 
 
@@ -3256,6 +3253,7 @@ struct gl_shader_compiler_options
    GLboolean LowerPrecisionFloat16;
    GLboolean LowerPrecisionInt16;
    GLboolean LowerPrecisionDerivatives;
+   GLboolean LowerPrecisionFloat16Uniforms;
 
    /**
     * This enables lowering of 16b constants.  Some drivers may not
@@ -4394,6 +4392,7 @@ struct gl_extensions
    GLboolean ARB_texture_env_crossbar;
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_filter_anisotropic;
+   GLboolean ARB_texture_filter_minmax;
    GLboolean ARB_texture_float;
    GLboolean ARB_texture_gather;
    GLboolean ARB_texture_mirror_clamp_to_edge;
@@ -5460,8 +5459,6 @@ struct gl_context
    GLboolean _ForceEyeCoords;
 
    GLuint TextureStateTimestamp; /**< detect changes to shared state */
-
-   struct gl_list_extensions *ListExt; /**< driver dlist extensions */
 
    /** \name For debugging/development only */
    /*@{*/

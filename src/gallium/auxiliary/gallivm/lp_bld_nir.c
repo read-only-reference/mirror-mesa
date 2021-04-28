@@ -97,15 +97,6 @@ static LLVMValueRef cast_type(struct lp_build_nir_context *bld_base, LLVMValueRe
 }
 
 
-static struct lp_build_context *get_flt_bld(struct lp_build_nir_context *bld_base,
-                                            unsigned op_bit_size)
-{
-   if (op_bit_size == 64)
-      return &bld_base->dbl_bld;
-   else
-      return &bld_base->base;
-}
-
 static unsigned glsl_sampler_to_pipe(int sampler_dim, bool is_array)
 {
    unsigned pipe_target = PIPE_BUFFER;
@@ -215,7 +206,9 @@ static LLVMValueRef int_to_bool32(struct lp_build_nir_context *bld_base,
    LLVMBuilderRef builder = bld_base->base.gallivm->builder;
    struct lp_build_context *int_bld = get_int_bld(bld_base, is_unsigned, src_bit_size);
    LLVMValueRef result = lp_build_compare(bld_base->base.gallivm, int_bld->type, PIPE_FUNC_NOTEQUAL, val, int_bld->zero);
-   if (src_bit_size == 64)
+   if (src_bit_size == 16)
+      result = LLVMBuildSExt(builder, result, bld_base->int_bld.vec_type, "");
+   else if (src_bit_size == 64)
       result = LLVMBuildTrunc(builder, result, bld_base->int_bld.vec_type, "");
    return result;
 }
@@ -1685,6 +1678,9 @@ static void visit_intrinsic(struct lp_build_nir_context *bld_base,
    case nir_intrinsic_load_sample_pos:
    case nir_intrinsic_load_sample_mask_in:
    case nir_intrinsic_load_view_index:
+   case nir_intrinsic_load_subgroup_invocation:
+   case nir_intrinsic_load_subgroup_id:
+   case nir_intrinsic_load_num_subgroups:
       bld_base->sysval_intrin(bld_base, instr, result);
       break;
    case nir_intrinsic_load_helper_invocation:
@@ -1789,8 +1785,29 @@ static void visit_intrinsic(struct lp_build_nir_context *bld_base,
    case nir_intrinsic_vote_all:
    case nir_intrinsic_vote_any:
    case nir_intrinsic_vote_ieq:
-      bld_base->vote(bld_base, cast_type(bld_base, get_src(bld_base, instr->src[0]), nir_type_int, 32), instr, result);
+   case nir_intrinsic_vote_feq:
+      bld_base->vote(bld_base, cast_type(bld_base, get_src(bld_base, instr->src[0]), nir_type_int, nir_src_bit_size(instr->src[0])), instr, result);
       break;
+   case nir_intrinsic_elect:
+      bld_base->elect(bld_base, result);
+      break;
+   case nir_intrinsic_reduce:
+   case nir_intrinsic_inclusive_scan:
+   case nir_intrinsic_exclusive_scan:
+      bld_base->reduce(bld_base, cast_type(bld_base, get_src(bld_base, instr->src[0]), nir_type_int, nir_src_bit_size(instr->src[0])), instr, result);
+      break;
+   case nir_intrinsic_ballot:
+      bld_base->ballot(bld_base, cast_type(bld_base, get_src(bld_base, instr->src[0]), nir_type_int, 32), instr, result);
+      break;
+   case nir_intrinsic_read_invocation:
+   case nir_intrinsic_read_first_invocation: {
+      LLVMValueRef src1 = NULL;
+
+      if (instr->intrinsic == nir_intrinsic_read_invocation)
+         src1 = cast_type(bld_base, get_src(bld_base, instr->src[1]), nir_type_int, 32);
+      bld_base->read_invocation(bld_base, get_src(bld_base, instr->src[0]), nir_src_bit_size(instr->src[0]), src1, result);
+      break;
+   }
    case nir_intrinsic_interp_deref_at_offset:
    case nir_intrinsic_interp_deref_at_centroid:
    case nir_intrinsic_interp_deref_at_sample:
@@ -2302,6 +2319,25 @@ void lp_build_opt_nir(struct nir_shader *nir)
 
       nir_lower_tex_options options = { .lower_tex_without_implicit_lod = true };
       NIR_PASS_V(nir, nir_lower_tex, &options);
+
+      const nir_lower_subgroups_options subgroups_options = {
+	.subgroup_size = lp_native_vector_width / 32,
+	.ballot_bit_size = 32,
+	.lower_to_scalar = true,
+	.lower_subgroup_masks = true,
+      };
+      NIR_PASS_V(nir, nir_lower_subgroups, &subgroups_options);
+
    } while (progress);
    nir_lower_bool_to_int32(nir);
+
+   do {
+      progress = false;
+      NIR_PASS(progress, nir, nir_opt_algebraic_late);
+      if (progress) {
+         NIR_PASS_V(nir, nir_copy_prop);
+         NIR_PASS_V(nir, nir_opt_dce);
+         NIR_PASS_V(nir, nir_opt_cse);
+      }
+   } while (progress);
 }

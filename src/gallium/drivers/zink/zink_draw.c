@@ -180,6 +180,9 @@ static struct zink_compute_program *
 get_compute_program(struct zink_context *ctx)
 {
    unsigned bits = 1 << PIPE_SHADER_COMPUTE;
+   ctx->dirty_shader_stages |= ctx->inlinable_uniforms_dirty_mask &
+                               ctx->inlinable_uniforms_valid_mask &
+                               ctx->shader_has_inlinable_uniforms_mask & bits;
    if (ctx->dirty_shader_stages & bits) {
       struct hash_entry *entry = _mesa_hash_table_search(ctx->compute_program_cache,
                                                          &ctx->compute_stage->shader_id);
@@ -194,6 +197,7 @@ get_compute_program(struct zink_context *ctx)
          ctx->compute_pipeline_state.dirty = true;
       ctx->curr_compute = entry->data;
       ctx->dirty_shader_stages &= bits;
+      ctx->inlinable_uniforms_dirty_mask &= bits;
    }
 
    assert(ctx->curr_compute);
@@ -213,6 +217,9 @@ get_gfx_program(struct zink_context *ctx)
       ctx->last_vertex_stage_dirty = false;
    }
    unsigned bits = u_bit_consecutive(PIPE_SHADER_VERTEX, 5);
+   ctx->dirty_shader_stages |= ctx->inlinable_uniforms_dirty_mask &
+                               ctx->inlinable_uniforms_valid_mask &
+                               ctx->shader_has_inlinable_uniforms_mask & bits;
    if (ctx->dirty_shader_stages & bits) {
       struct hash_entry *entry = _mesa_hash_table_search(ctx->program_cache,
                                                          ctx->gfx_stages);
@@ -229,6 +236,7 @@ get_gfx_program(struct zink_context *ctx)
          ctx->gfx_pipeline_state.combined_dirty = true;
       ctx->curr_program = entry->data;
       ctx->dirty_shader_stages &= ~bits;
+      ctx->inlinable_uniforms_dirty_mask &= ~bits;
    }
 
    assert(ctx->curr_program);
@@ -266,7 +274,7 @@ update_drawid(struct zink_context *ctx, unsigned draw_id)
    struct zink_batch *batch = &ctx->batch;
    if (ctx->drawid_broken) {
       vkCmdPushConstants(batch->state->cmdbuf, ctx->curr_program->base.layout, VK_SHADER_STAGE_VERTEX_BIT,
-                         offsetof(struct zink_push_constant, draw_id), sizeof(unsigned),
+                         offsetof(struct zink_gfx_push_constant, draw_id), sizeof(unsigned),
                          &draw_id);
    }
 }
@@ -274,8 +282,9 @@ update_drawid(struct zink_context *ctx, unsigned draw_id)
 void
 zink_draw_vbo(struct pipe_context *pctx,
               const struct pipe_draw_info *dinfo,
+              unsigned drawid_offset,
               const struct pipe_draw_indirect_info *dindirect,
-              const struct pipe_draw_start_count *draws,
+              const struct pipe_draw_start_count_bias *draws,
               unsigned num_draws)
 {
    if (!dindirect && (!draws[0].count || !dinfo->instance_count))
@@ -289,14 +298,14 @@ zink_draw_vbo(struct pipe_context *pctx,
       dindirect && dindirect->count_from_stream_output ?
          zink_so_target(dindirect->count_from_stream_output) : NULL;
    VkBuffer counter_buffers[PIPE_MAX_SO_OUTPUTS];
-   VkDeviceSize counter_buffer_offsets[PIPE_MAX_SO_OUTPUTS] = {};
+   VkDeviceSize counter_buffer_offsets[PIPE_MAX_SO_OUTPUTS];
    bool need_index_buffer_unref = false;
 
    /* check memory usage and flush/stall as needed to avoid oom */
    zink_maybe_flush_or_stall(ctx);
 
    if (dinfo->primitive_restart && !restart_supported(dinfo->mode)) {
-       util_draw_vbo_without_prim_restart(pctx, dinfo, dindirect, &draws[0]);
+       util_draw_vbo_without_prim_restart(pctx, dinfo, drawid_offset, dindirect, &draws[0]);
        return;
    }
    if (dinfo->mode == PIPE_PRIM_QUADS ||
@@ -305,7 +314,7 @@ zink_draw_vbo(struct pipe_context *pctx,
        (dinfo->mode == PIPE_PRIM_TRIANGLE_FAN && !screen->have_triangle_fans) ||
        dinfo->mode == PIPE_PRIM_LINE_LOOP) {
       util_primconvert_save_rasterizer_state(ctx->primconvert, &rast_state->base);
-      util_primconvert_draw_vbo(ctx->primconvert, dinfo, dindirect, draws, num_draws);
+      util_primconvert_draw_vbo(ctx->primconvert, dinfo, drawid_offset, dindirect, draws, num_draws);
       return;
    }
    if (ctx->gfx_pipeline_state.vertices_per_patch != dinfo->vertices_per_patch)
@@ -412,7 +421,7 @@ zink_draw_vbo(struct pipe_context *pctx,
       zink_descriptors_update(ctx, screen, false);
 
    struct zink_batch *batch = zink_batch_rp(ctx);
-   VkViewport viewports[PIPE_MAX_VIEWPORTS] = {};
+   VkViewport viewports[PIPE_MAX_VIEWPORTS];
    for (unsigned i = 0; i < ctx->vp_state.num_viewports; i++) {
       VkViewport viewport = {
          ctx->vp_state.viewport_states[i].translate[0] - ctx->vp_state.viewport_states[i].scale[0],
@@ -430,7 +439,7 @@ zink_draw_vbo(struct pipe_context *pctx,
       screen->vk_CmdSetViewportWithCountEXT(batch->state->cmdbuf, ctx->vp_state.num_viewports, viewports);
    else
       vkCmdSetViewport(batch->state->cmdbuf, 0, ctx->vp_state.num_viewports, viewports);
-   VkRect2D scissors[PIPE_MAX_VIEWPORTS] = {};
+   VkRect2D scissors[PIPE_MAX_VIEWPORTS];
    if (ctx->rast_state->base.scissor) {
       for (unsigned i = 0; i < ctx->vp_state.num_viewports; i++) {
          scissors[i].offset.x = ctx->vp_state.scissor_states[i].minx;
@@ -438,8 +447,10 @@ zink_draw_vbo(struct pipe_context *pctx,
          scissors[i].extent.width = ctx->vp_state.scissor_states[i].maxx - ctx->vp_state.scissor_states[i].minx;
          scissors[i].extent.height = ctx->vp_state.scissor_states[i].maxy - ctx->vp_state.scissor_states[i].miny;
       }
-   } else if (ctx->fb_state.width && ctx->fb_state.height) {
+   } else {
       for (unsigned i = 0; i < ctx->vp_state.num_viewports; i++) {
+         scissors[i].offset.x = 0;
+         scissors[i].offset.y = 0;
          scissors[i].extent.width = ctx->fb_state.width;
          scissors[i].extent.height = ctx->fb_state.height;
       }
@@ -487,12 +498,12 @@ zink_draw_vbo(struct pipe_context *pctx,
    if (BITSET_TEST(ctx->gfx_stages[PIPE_SHADER_VERTEX]->nir->info.system_values_read, SYSTEM_VALUE_BASE_VERTEX)) {
       unsigned draw_mode_is_indexed = dinfo->index_size > 0;
       vkCmdPushConstants(batch->state->cmdbuf, gfx_program->base.layout, VK_SHADER_STAGE_VERTEX_BIT,
-                         offsetof(struct zink_push_constant, draw_mode_is_indexed), sizeof(unsigned),
+                         offsetof(struct zink_gfx_push_constant, draw_mode_is_indexed), sizeof(unsigned),
                          &draw_mode_is_indexed);
    }
    if (gfx_program->shaders[PIPE_SHADER_TESS_CTRL] && gfx_program->shaders[PIPE_SHADER_TESS_CTRL]->is_generated)
       vkCmdPushConstants(batch->state->cmdbuf, gfx_program->base.layout, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
-                         offsetof(struct zink_push_constant, default_inner_level), sizeof(float) * 6,
+                         offsetof(struct zink_gfx_push_constant, default_inner_level), sizeof(float) * 6,
                          &ctx->tess_levels[0]);
 
    zink_query_update_gs_states(ctx);
@@ -513,7 +524,7 @@ zink_draw_vbo(struct pipe_context *pctx,
       screen->vk_CmdBeginTransformFeedbackEXT(batch->state->cmdbuf, 0, ctx->num_so_targets, counter_buffers, counter_buffer_offsets);
    }
 
-   unsigned draw_id = dinfo->drawid;
+   unsigned draw_id = drawid_offset;
    if (dinfo->index_size > 0) {
       VkIndexType index_type;
       unsigned index_size = dinfo->index_size;
@@ -555,7 +566,7 @@ zink_draw_vbo(struct pipe_context *pctx,
             update_drawid(ctx, draw_id);
             vkCmdDrawIndexed(batch->state->cmdbuf,
                draws[i].count, dinfo->instance_count,
-               need_index_buffer_unref ? 0 : draws[i].start, dinfo->index_bias, dinfo->start_instance);
+               need_index_buffer_unref ? 0 : draws[i].start, draws[i].index_bias, dinfo->start_instance);
             if (dinfo->increment_draw_id)
                draw_id++;
         }
@@ -631,6 +642,11 @@ zink_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
 
 
    vkCmdBindPipeline(batch->state->cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+
+   if (BITSET_TEST(comp_program->shader->nir->info.system_values_read, SYSTEM_VALUE_WORK_DIM))
+      vkCmdPushConstants(batch->state->cmdbuf, comp_program->base.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                         offsetof(struct zink_cs_push_constant, work_dim), sizeof(uint32_t),
+                         &info->work_dim);
 
    if (info->indirect) {
       vkCmdDispatchIndirect(batch->state->cmdbuf, zink_resource(info->indirect)->obj->buffer, info->indirect_offset);

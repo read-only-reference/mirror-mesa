@@ -110,6 +110,15 @@ EXTENSIONS = [
     Extension('VK_KHR_storage_buffer_storage_class',      1, True),
     Extension('VK_KHR_external_fence_capabilities',       1, True),
     Extension('VK_KHR_pipeline_executable_properties',    1, True),
+    Extension('VK_KHR_shader_float_controls',             1, True),
+    Extension('VK_KHR_shader_float16_int8',               1, True),
+    Extension('VK_KHR_16bit_storage',                     1, 'device->gpu_id >= 650'),
+    Extension('VK_EXT_scalar_block_layout',               1, True),
+    Extension('VK_KHR_spirv_1_4',                         1, True),
+    Extension('VK_KHR_relaxed_block_layout',              1, True),
+    Extension('VK_EXT_robustness2',                       1, True),
+    Extension('VK_EXT_shader_demote_to_helper_invocation', 1, True),
+    Extension('VK_KHR_shader_terminate_invocation',       1, True),
 ]
 
 MAX_API_VERSION = VkVersion(MAX_API_VERSION)

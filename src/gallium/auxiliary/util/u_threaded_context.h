@@ -105,6 +105,9 @@
  *    indicate this. Ignoring the flag will lead to failures.
  *    The threaded context uses its own buffer invalidation mechanism.
  *
+ * 4) PIPE_MAP_ONCE can no longer be used to infer that a buffer will not be mapped
+ *    a second time before it is unmapped.
+ *
  *
  * Rules for fences
  * ----------------
@@ -407,8 +410,9 @@ threaded_context_flush(struct pipe_context *_pipe,
 
 void
 tc_draw_vbo(struct pipe_context *_pipe, const struct pipe_draw_info *info,
+            unsigned drawid_offset,
             const struct pipe_draw_indirect_info *indirect,
-            const struct pipe_draw_start_count *draws,
+            const struct pipe_draw_start_count_bias *draws,
             unsigned num_draws);
 
 static inline struct threaded_context *
