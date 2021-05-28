@@ -74,7 +74,6 @@
 #include "perfcntrs/freedreno_perfcntr.h"
 
 #include "tu_descriptor_set.h"
-#include "tu_extensions.h"
 #include "tu_util.h"
 
 /* Pre-declarations needed for WSI entrypoints */
@@ -300,6 +299,9 @@ struct tu_queue
 
    uint32_t msm_queue_id;
    int fence;
+
+   /* Queue containing deferred submits */
+   struct list_head queued_submits;
 };
 
 struct tu_bo
@@ -400,6 +402,11 @@ struct tu_device
    /* Command streams to set pass index to a scratch reg */
    struct tu_cs *perfcntrs_pass_cs;
    struct tu_cs_entry *perfcntrs_pass_cs_entries;
+
+   /* Condition variable for timeline semaphore to notify waiters when a
+    * new submit is executed. */
+   pthread_cond_t timeline_cond;
+   pthread_mutex_t submit_mutex;
 };
 
 VkResult _tu_device_set_lost(struct tu_device *device,
@@ -414,7 +421,18 @@ tu_device_is_lost(struct tu_device *device)
 }
 
 VkResult
-tu_bo_init_new(struct tu_device *dev, struct tu_bo *bo, uint64_t size, bool dump);
+tu_device_submit_deferred_locked(struct tu_device *dev);
+
+enum tu_bo_alloc_flags
+{
+   TU_BO_ALLOC_NO_FLAGS = 0,
+   TU_BO_ALLOC_ALLOW_DUMP = 1 << 0,
+   TU_BO_ALLOC_GPU_READ_ONLY = 1 << 1,
+};
+
+VkResult
+tu_bo_init_new(struct tu_device *dev, struct tu_bo *bo, uint64_t size,
+               enum tu_bo_alloc_flags flags);
 VkResult
 tu_bo_init_dmabuf(struct tu_device *dev,
                   struct tu_bo *bo,
@@ -852,6 +870,7 @@ struct tu_lrz_pipeline
    uint32_t force_disable_mask;
    bool fs_has_kill;
    bool force_late_z;
+   bool early_fragment_tests;
 };
 
 struct tu_lrz_state
@@ -1090,6 +1109,9 @@ struct tu_pipeline
    struct vk_object_base base;
 
    struct tu_cs cs;
+
+   /* Separate BO for private memory since it should GPU writable */
+   struct tu_bo pvtmem_bo;
 
    struct tu_pipeline_layout *layout;
 
@@ -1417,7 +1439,7 @@ tu_image_view_init(struct tu_image_view *iview,
                    bool limited_z24s8);
 
 bool
-ubwc_possible(VkFormat format, VkImageType type, VkImageUsageFlags usage, bool limited_z24s8,
+ubwc_possible(VkFormat format, VkImageType type, VkImageUsageFlags usage, VkImageUsageFlags stencil_usage, bool limited_z24s8,
               VkSampleCountFlagBits samples);
 
 struct tu_buffer_view

@@ -35,21 +35,17 @@ spec@!opengl 1.0@gl-1.0-edgeflag,Fail
 spec@!opengl 1.0@gl-1.0-edgeflag-quads,Fail
 spec@!opengl 1.0@gl-1.0-no-op-paths,Fail
 spec@!opengl 1.0@gl-1.0-swapbuffers-behavior,Fail
-spec@!opengl 1.1@clipflat,Fail
 spec@!opengl 1.1@linestipple,Fail
-spec@!opengl 1.1@max-texture-size,Crash
 spec@!opengl 1.1@polygon-mode,Fail
 spec@!opengl 1.1@polygon-mode-facing,Fail
 spec@!opengl 1.1@polygon-mode-offset,Fail
 spec@!opengl 1.1@polygon-offset,Fail
-spec@!opengl 1.1@ppgtt_memory_alignment,Crash
 spec@!opengl 1.1@read-front,Fail
 spec@!opengl 1.1@read-front clear-front-first,Fail
 spec@!opengl 1.1@read-front clear-front-first samples=2,Fail
 spec@!opengl 1.1@read-front clear-front-first samples=4,Fail
 spec@!opengl 1.1@read-front samples=2,Fail
 spec@!opengl 1.1@read-front samples=4,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled,Fail
 spec@!opengl 1.2@copyteximage 3d,Fail
 spec@!opengl 1.4@gl-1.4-polygon-offset,Fail
 spec@!opengl 2.0@depth-tex-modes-glsl,Fail
@@ -66,8 +62,6 @@ spec@!opengl 3.2@gl-3.2-adj-prims pv-first,Fail
 spec@!opengl es 2.0@glsl-fs-pointcoord,Fail
 spec@!opengl es 3.0@gles-3.0-transform-feedback-uniform-buffer-object,Fail
 spec@arb_depth_texture@depth-tex-modes,Fail
-spec@arb_es2_compatibility@texwrap formats bordercolor-swizzled,Fail
-spec@arb_fragment_program@fp-abs-01,Crash
 spec@arb_framebuffer_object@fbo-blit-scaled-linear,Fail
 spec@arb_framebuffer_object@fbo-gl_pointcoord,Fail
 spec@arb_get_program_binary@restore-sso-program,Fail
@@ -77,7 +71,6 @@ spec@arb_point_parameters@arb_point_parameters-point-attenuation,Fail
 spec@arb_point_sprite@arb_point_sprite-checkerboard,Fail
 spec@arb_point_sprite@arb_point_sprite-mipmap,Fail
 spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
-spec@arb_provoking_vertex@arb-provoking-vertex-render,Fail
 spec@arb_sample_shading@ignore-centroid-qualifier 2,Fail
 spec@arb_sample_shading@ignore-centroid-qualifier 4,Fail
 spec@arb_sample_shading@interpolate-at-sample-position 2,Fail
@@ -89,23 +82,12 @@ spec@arb_sample_shading@samplemask 4 all,Fail
 spec@arb_seamless_cube_map@arb_seamless_cubemap,Fail
 spec@arb_shader_storage_buffer_object@array-ssbo-binding,Crash
 spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgrad,Fail
-spec@arb_tessellation_shader@arb_tessellation_shader-tes-gs-max-output -small -scan 1 50,Crash
-spec@arb_texture_buffer_object@indexed,Fail
 spec@arb_texture_buffer_object@render-no-bo,Crash
 spec@arb_texture_buffer_range@ranges-2 compat,Fail
-spec@arb_texture_compression@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_compression_bptc@texwrap formats bordercolor-swizzled,Fail
 spec@arb_texture_cube_map_array@arb_texture_cube_map_array-sampler-cube-array-shadow,Fail
 spec@arb_texture_float@fbo-blending-formats,Fail
-spec@arb_texture_float@texwrap formats bordercolor-swizzled,Fail
 spec@arb_texture_rg@multisample-fast-clear gl_arb_texture_rg-int,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_rg@texwrap formats-float bordercolor-swizzled,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled,Fail
-spec@arb_texture_rgb10_a2ui@texwrap formats bordercolor-swizzled,Fail
 spec@arb_texture_view@rendering-formats,Fail
-spec@arb_texture_view@sampling-2d-array-as-cubemap-array,Fail
-spec@arb_uniform_buffer_object@maxblocks,Crash
 spec@egl 1.4@egl-copy-buffers,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24,Fail
@@ -119,6 +101,7 @@ spec@ext_external_objects@vk-image-overwrite,Fail
 spec@ext_external_objects@vk-pix-buf-update-errors,Fail
 spec@ext_external_objects@vk-semaphores-2,Fail
 spec@ext_external_objects@vk-semaphores,Fail
+spec@ext_external_objects@vk-stencil-display,Fail
 spec@ext_external_objects@vk-vert-buf-reuse,Fail
 spec@ext_external_objects@vk-vert-buf-update-errors,Fail
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
@@ -172,16 +155,8 @@ spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-transcode-nv12-as-r8-gr88,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-unsupported_format,Fail
 spec@ext_packed_float@query-rgba-signed-components,Fail
-spec@ext_packed_float@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_compression_rgtc@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled,Fail
 spec@ext_texture_integer@multisample-fast-clear gl_ext_texture_integer,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_shared_exponent@texwrap formats bordercolor-swizzled,Fail
 spec@ext_texture_snorm@fbo-blending-formats,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_srgb@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled,Fail
 spec@ext_texture_swizzle@depth_texture_mode_and_swizzle,Fail
 spec@ext_transform_feedback2@counting with pause,Fail
 spec@ext_transform_feedback@generatemipmap prims_generated,Fail
@@ -201,7 +176,6 @@ spec@glsl-1.50@execution@geometry@primitive-id-restart gl_triangles ffs,Fail
 spec@glsl-1.50@execution@geometry@primitive-id-restart gl_triangles other,Fail
 spec@glsl-1.50@execution@geometry@primitive-id-restart gl_triangles_adjacency ffs,Fail
 spec@glsl-1.50@execution@geometry@primitive-id-restart gl_triangles_adjacency other,Fail
-spec@glsl-1.50@gs-max-output,Crash
 spec@intel_performance_query@intel_performance_query-issue_2235,Fail
 spec@khr_texture_compression_astc@array-gl,Fail
 spec@khr_texture_compression_astc@miptree-gl ldr,Fail

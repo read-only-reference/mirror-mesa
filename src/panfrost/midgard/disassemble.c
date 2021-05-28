@@ -202,7 +202,7 @@ print_alu_reg(FILE *fp, unsigned reg, bool is_write)
         else if (reg == REGISTER_LDST_BASE || reg == REGISTER_LDST_BASE + 1)
                 fprintf(fp, "AL%u", reg - REGISTER_LDST_BASE);
         else if (is_uniform)
-                fprintf(fp, "RMU%u", uniform_reg);
+                fprintf(fp, "U%u", uniform_reg);
         else if (reg == 31 && !is_write)
                 fprintf(fp, "PC_SP");
         else
@@ -812,7 +812,7 @@ print_tex_mask(FILE *fp, unsigned mask, bool upper)
 
 static void
 print_vector_field(FILE *fp, const char *name, uint16_t *words, uint16_t reg_word,
-                   const midgard_constants *consts, unsigned tabs)
+                   const midgard_constants *consts, unsigned tabs, bool verbose)
 {
         midgard_reg_info *reg_info = (midgard_reg_info *)&reg_word;
         midgard_vector_alu *alu_field = (midgard_vector_alu *) words;
@@ -820,15 +820,15 @@ print_vector_field(FILE *fp, const char *name, uint16_t *words, uint16_t reg_wor
         midgard_alu_op op = alu_field->op;
         unsigned shrink_mode = alu_field->shrink_mode;
         bool is_int = midgard_is_integer_op(op);
+        bool is_int_out = midgard_is_integer_out_op(op);
 
-        /* For now, prefix instruction names with their unit, until we
-         * understand how this works on a deeper level */
-        fprintf(fp, "%s.", name);
+        if (verbose)
+                fprintf(fp, "%s.", name);
 
         print_alu_opcode(fp, alu_field->op);
 
         /* Print lane width */
-        fprintf(fp, ".%c%d", is_int ? 'i' : 'f', bits_for_mode(mode));
+        fprintf(fp, ".%c%d", is_int_out ? 'i' : 'f', bits_for_mode(mode));
 
         fprintf(fp, " ");
 
@@ -861,7 +861,7 @@ print_vector_field(FILE *fp, const char *name, uint16_t *words, uint16_t reg_wor
 
         /* Print output modifiers */
 
-        print_alu_outmod(fp, alu_field->outmod, is_int, shrink_mode != midgard_shrink_mode_none);
+        print_alu_outmod(fp, alu_field->outmod, is_int_out, shrink_mode != midgard_shrink_mode_none);
 
         /* Mask out unused components based on the writemask, but don't mask out
          * components that are used for interlane instructions like fdot3. */
@@ -928,22 +928,25 @@ decode_scalar_imm(unsigned src2_reg, unsigned imm)
 
 static void
 print_scalar_field(FILE *fp, const char *name, uint16_t *words, uint16_t reg_word,
-                   const midgard_constants *consts, unsigned tabs)
+                   const midgard_constants *consts, unsigned tabs, bool verbose)
 {
         midgard_reg_info *reg_info = (midgard_reg_info *)&reg_word;
         midgard_scalar_alu *alu_field = (midgard_scalar_alu *) words;
         bool is_int = midgard_is_integer_op(alu_field->op);
+        bool is_int_out = midgard_is_integer_out_op(alu_field->op);
         bool full = alu_field->output_full;
 
         if (alu_field->unknown)
                 fprintf(fp, "scalar ALU unknown bit set\n");
 
-        fprintf(fp, "%s.", name);
+        if (verbose)
+                fprintf(fp, "%s.", name);
+
         print_alu_opcode(fp, alu_field->op);
 
         /* Print lane width, in this case the lane width is always 32-bit, but
          * we print it anyway to make it consistent with the other instructions. */
-        fprintf(fp, ".%c32", is_int ? 'i' : 'f');
+        fprintf(fp, ".%c32", is_int_out ? 'i' : 'f');
 
         fprintf(fp, " ");
 
@@ -957,7 +960,7 @@ print_scalar_field(FILE *fp, const char *name, uint16_t *words, uint16_t reg_wor
 
         fprintf(fp, ".%c", components[c]);
 
-        print_alu_outmod(fp, alu_field->outmod, is_int, !full);
+        print_alu_outmod(fp, alu_field->outmod, is_int_out, !full);
 
         fprintf(fp, ", ");
 
@@ -1163,7 +1166,7 @@ num_alu_fields_enabled(uint32_t control_word)
 
 static bool
 print_alu_word(FILE *fp, uint32_t *words, unsigned num_quad_words,
-               unsigned tabs, unsigned next)
+               unsigned tabs, unsigned next, bool verbose)
 {
         uint32_t control_word = words[0];
         uint16_t *beginning_ptr = (uint16_t *)(words + 1);
@@ -1204,7 +1207,7 @@ print_alu_word(FILE *fp, uint32_t *words, unsigned num_quad_words,
                 fprintf(fp, "unknown bit 16 enabled\n");
 
         if ((control_word >> 17) & 1) {
-                print_vector_field(fp, "vmul", word_ptr, *beginning_ptr, consts, tabs);
+                print_vector_field(fp, "vmul", word_ptr, *beginning_ptr, consts, tabs, verbose);
                 beginning_ptr += 1;
                 word_ptr += 3;
         }
@@ -1213,7 +1216,7 @@ print_alu_word(FILE *fp, uint32_t *words, unsigned num_quad_words,
                 fprintf(fp, "unknown bit 18 enabled\n");
 
         if ((control_word >> 19) & 1) {
-                print_scalar_field(fp, "sadd", word_ptr, *beginning_ptr, consts, tabs);
+                print_scalar_field(fp, "sadd", word_ptr, *beginning_ptr, consts, tabs, verbose);
                 beginning_ptr += 1;
                 word_ptr += 2;
         }
@@ -1222,7 +1225,7 @@ print_alu_word(FILE *fp, uint32_t *words, unsigned num_quad_words,
                 fprintf(fp, "unknown bit 20 enabled\n");
 
         if ((control_word >> 21) & 1) {
-                print_vector_field(fp, "vadd", word_ptr, *beginning_ptr, consts, tabs);
+                print_vector_field(fp, "vadd", word_ptr, *beginning_ptr, consts, tabs, verbose);
                 beginning_ptr += 1;
                 word_ptr += 3;
         }
@@ -1231,7 +1234,7 @@ print_alu_word(FILE *fp, uint32_t *words, unsigned num_quad_words,
                 fprintf(fp, "unknown bit 22 enabled\n");
 
         if ((control_word >> 23) & 1) {
-                print_scalar_field(fp, "smul", word_ptr, *beginning_ptr, consts, tabs);
+                print_scalar_field(fp, "smul", word_ptr, *beginning_ptr, consts, tabs, verbose);
                 beginning_ptr += 1;
                 word_ptr += 2;
         }
@@ -1240,7 +1243,7 @@ print_alu_word(FILE *fp, uint32_t *words, unsigned num_quad_words,
                 fprintf(fp, "unknown bit 24 enabled\n");
 
         if ((control_word >> 25) & 1) {
-                print_vector_field(fp, "lut", word_ptr, *beginning_ptr, consts, tabs);
+                print_vector_field(fp, "lut", word_ptr, *beginning_ptr, consts, tabs, verbose);
                 word_ptr += 3;
         }
 
@@ -1348,7 +1351,7 @@ update_stats(signed *stat, unsigned address)
 }
 
 static void
-print_load_store_instr(FILE *fp, uint64_t data)
+print_load_store_instr(FILE *fp, uint64_t data, bool verbose)
 {
         midgard_load_store_word *word = (midgard_load_store_word *) &data;
 
@@ -1361,9 +1364,30 @@ print_load_store_instr(FILE *fp, uint64_t data)
 
         /* Print opcode modifiers */
 
-        if (OP_USES_ATTRIB(word->op)) /* which attrib table? */
-                fprintf(fp, ".%s", (word->index_format >> 1) ? "secondary" : "primary");
-        else if (word->op == midgard_op_ld_cubemap_coords || OP_IS_PROJECTION(word->op))
+        if (OP_USES_ATTRIB(word->op)) {
+                /* Print non-default attribute tables */
+                bool default_secondary =
+                        (word->op == midgard_op_st_vary_32) ||
+                        (word->op == midgard_op_st_vary_16) ||
+                        (word->op == midgard_op_st_vary_32u) ||
+                        (word->op == midgard_op_st_vary_32i) ||
+                        (word->op == midgard_op_ld_vary_32) ||
+                        (word->op == midgard_op_ld_vary_16) ||
+                        (word->op == midgard_op_ld_vary_32u) ||
+                        (word->op == midgard_op_ld_vary_32i);
+
+                bool default_primary =
+                        (word->op == midgard_op_ld_attr_32) ||
+                        (word->op == midgard_op_ld_attr_16) ||
+                        (word->op == midgard_op_ld_attr_32u) ||
+                        (word->op == midgard_op_ld_attr_32i);
+
+                bool has_default = (default_secondary || default_primary);
+                bool is_secondary = (word->index_format >> 1);
+
+                if (has_default && (is_secondary != default_secondary))
+                        fprintf(fp, ".%s", is_secondary ? "secondary" : "primary");
+        } else if (word->op == midgard_op_ld_cubemap_coords || OP_IS_PROJECTION(word->op))
                 fprintf(fp, ".%s", word->bitsize_toggle ? "f32" : "f16");
 
         fprintf(fp, " ");
@@ -1402,30 +1426,40 @@ print_load_store_instr(FILE *fp, uint64_t data)
 
                 fprintf(fp, ", ");
                 print_ldst_read_reg(fp, word->index_reg);
-                fprintf(fp, ".%c << %u", components[word->index_comp], word->index_shift);
+                fprintf(fp, ".%c", components[word->index_comp]);
+                if (word->index_shift)
+                        fprintf(fp, " lsl %u",  word->index_shift);
                 midgard_print_sint(fp, UNPACK_LDST_UBO_OFS(word->signed_offset));
         }
 
         /* mem addr expression */
         if (OP_HAS_ADDRESS(word->op)) {
-                fprintf(fp, ", [ ");
-                print_ldst_read_reg(fp, word->arg_reg);
-                fprintf(fp, ".u%d.%c",
-                        word->bitsize_toggle ? 64 : 32, components[word->arg_comp]);
+                fprintf(fp, ", ");
+                bool first = true;
+
+                /* Skip printing zero */
+                if (word->arg_reg != 7 || verbose) {
+                        print_ldst_read_reg(fp, word->arg_reg);
+                        fprintf(fp, ".u%d.%c",
+                                word->bitsize_toggle ? 64 : 32, components[word->arg_comp]);
+                        first = false;
+                }
 
                 if ((word->op < midgard_op_atomic_cmpxchg ||
                      word->op > midgard_op_atomic_cmpxchg64_be) &&
                      word->index_reg != 0x7) {
-                        fprintf(fp, " + (");
+                        if (!first)
+                                fprintf(fp, " + ");
+
                         print_ldst_read_reg(fp, word->index_reg);
-                        fprintf(fp, "%s.%c << %u)",
+                        fprintf(fp, "%s.%c",
                                 index_format_names[word->index_format],
-                                components[word->index_comp], word->index_shift);
+                                components[word->index_comp]);
+                        if (word->index_shift)
+                                fprintf(fp, " lsl %u",  word->index_shift);
                 }
 
                 midgard_print_sint(fp, word->signed_offset);
-
-                fprintf(fp, " ]");
         }
 
         /* src reg for reg2reg ldst opcodes */
@@ -1457,7 +1491,9 @@ print_load_store_instr(FILE *fp, uint64_t data)
         if (OP_IS_SPECIAL(word->op) || OP_USES_ATTRIB(word->op)) {
                 fprintf(fp, ", ");
                 print_ldst_read_reg(fp, word->index_reg);
-                fprintf(fp, ".%c << %u", components[word->index_comp], word->index_shift);
+                fprintf(fp, ".%c", components[word->index_comp]);
+                if (word->index_shift)
+                        fprintf(fp, " lsl %u",  word->index_shift);
                 midgard_print_sint(fp, UNPACK_LDST_ATTRIB_OFS(word->signed_offset));
         }
 
@@ -1513,16 +1549,16 @@ print_load_store_instr(FILE *fp, uint64_t data)
 }
 
 static void
-print_load_store_word(FILE *fp, uint32_t *word)
+print_load_store_word(FILE *fp, uint32_t *word, bool verbose)
 {
         midgard_load_store *load_store = (midgard_load_store *) word;
 
         if (load_store->word1 != 3) {
-                print_load_store_instr(fp, load_store->word1);
+                print_load_store_instr(fp, load_store->word1, verbose);
         }
 
         if (load_store->word2 != 3) {
-                print_load_store_instr(fp, load_store->word2);
+                print_load_store_instr(fp, load_store->word2, verbose);
         }
 }
 
@@ -1853,7 +1889,7 @@ print_texture_word(FILE *fp, uint32_t *word, unsigned tabs, unsigned in_reg_base
 }
 
 struct midgard_disasm_stats
-disassemble_midgard(FILE *fp, uint8_t *code, size_t size, unsigned gpu_id)
+disassemble_midgard(FILE *fp, uint8_t *code, size_t size, unsigned gpu_id, bool verbose)
 {
         uint32_t *words = (uint32_t *) code;
         unsigned num_words = size / 4;
@@ -1936,11 +1972,11 @@ disassemble_midgard(FILE *fp, uint8_t *code, size_t size, unsigned gpu_id)
                 }
 
                 case TAG_LOAD_STORE_4:
-                        print_load_store_word(fp, &words[i]);
+                        print_load_store_word(fp, &words[i], verbose);
                         break;
 
                 case TAG_ALU_4 ... TAG_ALU_16_WRITEOUT:
-                        branch_forward = print_alu_word(fp, &words[i], num_quad_words, tabs, i + 4*num_quad_words);
+                        branch_forward = print_alu_word(fp, &words[i], num_quad_words, tabs, i + 4*num_quad_words, verbose);
 
                         /* TODO: infer/verify me */
                         if (tag >= TAG_ALU_4_WRITEOUT)

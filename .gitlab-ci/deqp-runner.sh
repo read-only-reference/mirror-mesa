@@ -78,6 +78,10 @@ if [ -n "$DEQP_CASELIST_FILTER" ]; then
     sed -ni "/$DEQP_CASELIST_FILTER/p" /tmp/case-list.txt
 fi
 
+if [ -n "$DEQP_CASELIST_INV_FILTER" ]; then
+    sed -ni "/$DEQP_CASELIST_INV_FILTER/!p" /tmp/case-list.txt
+fi
+
 if [ ! -s /tmp/case-list.txt ]; then
     echo "Caselist generation failed"
     exit 1
@@ -206,7 +210,7 @@ check_vk_device_name() {
     export LD_PRELOAD=
     DEVICENAME=`grep deviceName $RESULTS/deqp-info.qpa | sed 's|deviceName: ||g'`
     echo "deviceName: $DEVICENAME"
-    if [ -n "$DEQP_EXPECTED_RENDERER" -a "x$DEVICENAME" != "x$DEQP_EXPECTED_RENDERER" ]; then
+    if ! echo $DEVICENAME | grep -q "$DEQP_EXPECTED_RENDERER"; then
         echo "Expected deviceName $DEQP_EXPECTED_RENDERER"
         exit 1
     fi

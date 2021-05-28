@@ -44,11 +44,15 @@
 /* for fd_get_driver/device_uuid() */
 #include "freedreno/common/freedreno_uuid.h"
 
-#define TU_HAS_SURFACE \
-   (VK_USE_PLATFORM_WAYLAND_KHR || \
-    VK_USE_PLATFORM_XCB_KHR || \
-    VK_USE_PLATFORM_XLIB_KHR || \
-    VK_USE_PLATFORM_DISPLAY_KHR)
+#if defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
+     defined(VK_USE_PLATFORM_XCB_KHR) || \
+     defined(VK_USE_PLATFORM_XLIB_KHR) || \
+     defined(VK_USE_PLATFORM_DISPLAY_KHR)
+#define TU_HAS_SURFACE 1
+#else
+#define TU_HAS_SURFACE 0
+#endif
+
 
 static int
 tu_device_get_cache_uuid(uint16_t family, void *uuid)
@@ -64,6 +68,120 @@ tu_device_get_cache_uuid(uint16_t family, void *uuid)
    memcpy((char *) uuid + 4, &f, 2);
    snprintf((char *) uuid + 6, VK_UUID_SIZE - 10, "tu");
    return 0;
+}
+
+#define TU_API_VERSION VK_MAKE_VERSION(1, 1, VK_HEADER_VERSION)
+
+VkResult tu_EnumerateInstanceVersion(uint32_t *pApiVersion)
+{
+    *pApiVersion = TU_API_VERSION;
+    return VK_SUCCESS;
+}
+
+static const struct vk_instance_extension_table tu_instance_extensions_supported = {
+   .KHR_device_group_creation           = true,
+   .KHR_external_fence_capabilities     = true,
+   .KHR_external_memory_capabilities    = true,
+   .KHR_external_semaphore_capabilities = true,
+   .KHR_get_physical_device_properties2 = true,
+   .KHR_surface                         = TU_HAS_SURFACE,
+   .KHR_get_surface_capabilities2       = TU_HAS_SURFACE,
+   .EXT_debug_report                    = true,
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
+   .KHR_wayland_surface                 = true,
+#endif
+#ifdef VK_USE_PLATFORM_XCB_KHR
+   .KHR_xcb_surface                     = true,
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+   .KHR_xlib_surface                    = true,
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_XRANDR_EXT
+   .EXT_acquire_xlib_display            = true,
+#endif
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+   .KHR_display                         = true,
+   .KHR_get_display_properties2         = true,
+   .EXT_direct_mode_display             = true,
+   .EXT_display_surface_counter         = true,
+#endif
+};
+
+static void
+get_device_extensions(const struct tu_physical_device *device,
+                      struct vk_device_extension_table *ext)
+{
+   *ext = (struct vk_device_extension_table) {
+      .KHR_16bit_storage = device->gpu_id >= 650,
+      .KHR_bind_memory2 = true,
+      .KHR_create_renderpass2 = true,
+      .KHR_dedicated_allocation = true,
+      .KHR_depth_stencil_resolve = true,
+      .KHR_descriptor_update_template = true,
+      .KHR_device_group = true,
+      .KHR_draw_indirect_count = true,
+      .KHR_external_fence = true,
+      .KHR_external_fence_fd = true,
+      .KHR_external_memory = true,
+      .KHR_external_memory_fd = true,
+      .KHR_external_semaphore = true,
+      .KHR_external_semaphore_fd = true,
+      .KHR_get_memory_requirements2 = true,
+      .KHR_incremental_present = TU_HAS_SURFACE,
+      .KHR_image_format_list = true,
+      .KHR_maintenance1 = true,
+      .KHR_maintenance2 = true,
+      .KHR_maintenance3 = true,
+      .KHR_multiview = true,
+      .KHR_performance_query = device->instance->debug_flags & TU_DEBUG_PERFC,
+      .KHR_pipeline_executable_properties = true,
+      .KHR_push_descriptor = true,
+      .KHR_relaxed_block_layout = true,
+      .KHR_sampler_mirror_clamp_to_edge = true,
+      .KHR_sampler_ycbcr_conversion = true,
+      .KHR_shader_draw_parameters = true,
+      .KHR_shader_float_controls = true,
+      .KHR_shader_float16_int8 = true,
+      .KHR_shader_terminate_invocation = true,
+      .KHR_spirv_1_4 = true,
+      .KHR_storage_buffer_storage_class = true,
+      .KHR_swapchain = TU_HAS_SURFACE,
+      .KHR_variable_pointers = true,
+      .KHR_vulkan_memory_model = true,
+#ifndef ANDROID
+      .KHR_timeline_semaphore = true,
+#endif
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+      .EXT_display_control = true,
+#endif
+      .EXT_external_memory_dma_buf = true,
+      .EXT_image_drm_format_modifier = true,
+      .EXT_sample_locations = device->gpu_id == 650,
+      .EXT_sampler_filter_minmax = true,
+      .EXT_transform_feedback = true,
+      .EXT_4444_formats = true,
+      .EXT_conditional_rendering = true,
+      .EXT_custom_border_color = true,
+      .EXT_depth_clip_enable = true,
+      .EXT_descriptor_indexing = true,
+      .EXT_extended_dynamic_state = true,
+      .EXT_filter_cubic = device->gpu_id == 650,
+      .EXT_host_query_reset = true,
+      .EXT_index_type_uint8 = true,
+      .EXT_memory_budget = true,
+      .EXT_private_data = true,
+      .EXT_robustness2 = true,
+      .EXT_scalar_block_layout = true,
+      .EXT_separate_stencil_usage = true,
+      .EXT_shader_demote_to_helper_invocation = true,
+      .EXT_shader_stencil_export = true,
+      .EXT_shader_viewport_index_layer = true,
+      .EXT_vertex_attribute_divisor = true,
+#ifdef ANDROID
+      .ANDROID_native_buffer = true,
+#endif
+      .IMG_filter_cubic = device->gpu_id == 650,
+   };
 }
 
 VkResult
@@ -108,7 +226,7 @@ tu_physical_device_init(struct tu_physical_device *device,
    fd_get_device_uuid(device->device_uuid, device->gpu_id);
 
    struct vk_device_extension_table supported_extensions;
-   tu_physical_device_get_supported_extensions(device, &supported_extensions);
+   get_device_extensions(device, &supported_extensions);
 
    struct vk_physical_device_dispatch_table dispatch_table;
    vk_physical_device_dispatch_table_from_entrypoints(
@@ -450,13 +568,13 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->shaderSubgroupExtendedTypes         = false;
          features->separateDepthStencilLayouts         = false;
          features->hostQueryReset                      = true;
-         features->timelineSemaphore                   = false;
+         features->timelineSemaphore                   = true;
          features->bufferDeviceAddress                 = false;
          features->bufferDeviceAddressCaptureReplay    = false;
          features->bufferDeviceAddressMultiDevice      = false;
-         features->vulkanMemoryModel                   = false;
-         features->vulkanMemoryModelDeviceScope        = false;
-         features->vulkanMemoryModelAvailabilityVisibilityChains = false;
+         features->vulkanMemoryModel                   = true;
+         features->vulkanMemoryModelDeviceScope        = true;
+         features->vulkanMemoryModelAvailabilityVisibilityChains = true;
          features->shaderOutputViewportIndex           = true;
          features->shaderOutputLayer                   = true;
          features->subgroupBroadcastDynamicId          = false;
@@ -634,6 +752,20 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->shaderTerminateInvocation = true;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES_KHR: {
+         VkPhysicalDeviceVulkanMemoryModelFeaturesKHR *feature =
+            (VkPhysicalDeviceVulkanMemoryModelFeaturesKHR *)ext;
+         feature->vulkanMemoryModel = true;
+         feature->vulkanMemoryModelDeviceScope = true;
+         feature->vulkanMemoryModelAvailabilityVisibilityChains = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES: {
+         VkPhysicalDeviceTimelineSemaphoreFeaturesKHR *features =
+            (VkPhysicalDeviceTimelineSemaphoreFeaturesKHR *) ext;
+         features->timelineSemaphore = true;
+         break;
+      }
 
       default:
          break;
@@ -754,11 +886,11 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       .maxClipDistances = 8,
       .maxCullDistances = 8,
       .maxCombinedClipAndCullDistances = 8,
-      .discreteQueuePriorities = 1,
+      .discreteQueuePriorities = 2,
       .pointSizeRange = { 1, 4092 },
-      .lineWidthRange = { 0.0, 7.9921875 },
+      .lineWidthRange = { 1.0, 1.0 },
       .pointSizeGranularity = 	0.0625,
-      .lineWidthGranularity = (1.0 / 128.0),
+      .lineWidthGranularity = 0.0,
       .strictLines = false, /* FINISHME */
       .standardSampleLocations = true,
       .optimalBufferCopyOffsetAlignment = 128,
@@ -767,7 +899,7 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
    };
 
    pProperties->properties = (VkPhysicalDeviceProperties) {
-      .apiVersion = tu_physical_device_api_version(pdevice),
+      .apiVersion = TU_API_VERSION,
       .driverVersion = vk_get_driver_version(),
       .vendorID = 0, /* TODO */
       .deviceID = 0,
@@ -953,6 +1085,12 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          props->robustUniformBufferAccessSizeAlignment = 16;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES: {
+         VkPhysicalDeviceTimelineSemaphorePropertiesKHR *props =
+            (VkPhysicalDeviceTimelineSemaphorePropertiesKHR *) ext;
+         props->maxTimelineSemaphoreValueDifference = UINT64_MAX;
+         break;
+      }
       default:
          break;
       }
@@ -1075,6 +1213,8 @@ tu_queue_init(struct tu_device *device,
    queue->queue_idx = idx;
    queue->flags = flags;
 
+   list_inithead(&queue->queued_submits);
+
    int ret = tu_drm_submitqueue_new(device, 0, &queue->msm_queue_id);
    if (ret)
       return vk_startup_errorf(device->instance, VK_ERROR_INITIALIZATION_FAILED,
@@ -1171,6 +1311,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    device->_lost = false;
 
    mtx_init(&device->bo_mutex, mtx_plain);
+   pthread_mutex_init(&device->submit_mutex, NULL);
 
    for (unsigned i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
       const VkDeviceQueueCreateInfo *queue_create =
@@ -1216,7 +1357,8 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    if (custom_border_colors)
       global_size += TU_BORDER_COLOR_COUNT * sizeof(struct bcolor_entry);
 
-   result = tu_bo_init_new(device, &device->global_bo, global_size, false);
+   result = tu_bo_init_new(device, &device->global_bo, global_size,
+                           TU_BO_ALLOC_NO_FLAGS);
    if (result != VK_SUCCESS) {
       vk_startup_errorf(device->instance, result, "BO init");
       goto fail_global_bo;
@@ -1301,6 +1443,24 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       }
    }
 
+   /* Initialize a condition variable for timeline semaphore */
+   pthread_condattr_t condattr;
+   if (pthread_condattr_init(&condattr) != 0) {
+      result = VK_ERROR_INITIALIZATION_FAILED;
+      goto fail_timeline_cond;
+   }
+   if (pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC) != 0) {
+      pthread_condattr_destroy(&condattr);
+      result = VK_ERROR_INITIALIZATION_FAILED;
+      goto fail_timeline_cond;
+   }
+   if (pthread_cond_init(&device->timeline_cond, &condattr) != 0) {
+      pthread_condattr_destroy(&condattr);
+      result = VK_ERROR_INITIALIZATION_FAILED;
+      goto fail_timeline_cond;
+   }
+   pthread_condattr_destroy(&condattr);
+
    device->mem_cache = tu_pipeline_cache_from_handle(pc);
 
    for (unsigned i = 0; i < ARRAY_SIZE(device->scratch_bos); i++)
@@ -1311,6 +1471,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    *pDevice = tu_device_to_handle(device);
    return VK_SUCCESS;
 
+fail_timeline_cond:
 fail_prepare_perfcntrs_pass_cs:
    free(device->perfcntrs_pass_cs_entries);
    tu_cs_finish(device->perfcntrs_pass_cs);
@@ -1369,6 +1530,7 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
       free(device->perfcntrs_pass_cs);
    }
 
+   pthread_cond_destroy(&device->timeline_cond);
    vk_free(&device->vk.alloc, device->bo_list);
    vk_free(&device->vk.alloc, device->bo_idx);
    vk_device_finish(&device->vk);
@@ -1427,7 +1589,8 @@ tu_get_scratch_bo(struct tu_device *dev, uint64_t size, struct tu_bo **bo)
    }
 
    unsigned bo_size = 1ull << size_log2;
-   VkResult result = tu_bo_init_new(dev, &dev->scratch_bos[index].bo, bo_size, false);
+   VkResult result = tu_bo_init_new(dev, &dev->scratch_bos[index].bo, bo_size,
+                                    TU_BO_ALLOC_NO_FLAGS);
    if (result != VK_SUCCESS) {
       mtx_unlock(&dev->scratch_bos[index].construct_mtx);
       return result;
@@ -1485,6 +1648,20 @@ tu_QueueWaitIdle(VkQueue _queue)
 
    if (queue->fence < 0)
       return VK_SUCCESS;
+
+   pthread_mutex_lock(&queue->device->submit_mutex);
+
+   do {
+      tu_device_submit_deferred_locked(queue->device);
+
+      if (list_is_empty(&queue->queued_submits))
+         break;
+
+      pthread_cond_wait(&queue->device->timeline_cond,
+            &queue->device->submit_mutex);
+   } while (!list_is_empty(&queue->queued_submits));
+
+   pthread_mutex_unlock(&queue->device->submit_mutex);
 
    struct pollfd fds = { .fd = queue->fence, .events = POLLIN };
    int ret;
@@ -1603,7 +1780,8 @@ tu_AllocateMemory(VkDevice _device,
       }
    } else {
       result =
-         tu_bo_init_new(device, &mem->bo, pAllocateInfo->allocationSize, false);
+         tu_bo_init_new(device, &mem->bo, pAllocateInfo->allocationSize,
+                        TU_BO_ALLOC_NO_FLAGS);
    }
 
 
@@ -1830,7 +2008,8 @@ tu_CreateEvent(VkDevice _device,
    if (!event)
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   VkResult result = tu_bo_init_new(device, &event->bo, 0x1000, false);
+   VkResult result = tu_bo_init_new(device, &event->bo, 0x1000,
+                                    TU_BO_ALLOC_NO_FLAGS);
    if (result != VK_SUCCESS)
       goto fail_alloc;
 

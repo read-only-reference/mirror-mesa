@@ -321,7 +321,7 @@ brw_set_src0(struct brw_codegen *p, brw_inst *inst, struct brw_reg reg)
                 * descriptions for registers in align_16 as align_1:
                 */
                brw_inst_set_src0_vstride(devinfo, inst, BRW_VERTICAL_STRIDE_4);
-            } else if (devinfo->ver == 7 && !devinfo->is_haswell &&
+            } else if (devinfo->verx10 == 70 &&
                        reg.type == BRW_REGISTER_TYPE_DF &&
                        reg.vstride == BRW_VERTICAL_STRIDE_2) {
                /* From SNB PRM:
@@ -428,7 +428,7 @@ brw_set_src1(struct brw_codegen *p, brw_inst *inst, struct brw_reg reg)
                 * descriptions for registers in align_16 as align_1:
                 */
                brw_inst_set_src1_vstride(devinfo, inst, BRW_VERTICAL_STRIDE_4);
-            } else if (devinfo->ver == 7 && !devinfo->is_haswell &&
+            } else if (devinfo->verx10 == 70 &&
                        reg.type == BRW_REGISTER_TYPE_DF &&
                        reg.vstride == BRW_VERTICAL_STRIDE_2) {
                /* From SNB PRM:
@@ -1108,7 +1108,7 @@ brw_MOV(struct brw_codegen *p, struct brw_reg dest, struct brw_reg src0)
     * To avoid the problems that causes, we use an <X,2,0> source region to
     * read each element twice.
     */
-   if (devinfo->ver == 7 && !devinfo->is_haswell &&
+   if (devinfo->verx10 == 70 &&
        brw_get_default_access_mode(p) == BRW_ALIGN_1 &&
        dest.type == BRW_REGISTER_TYPE_DF &&
        (src0.type == BRW_REGISTER_TYPE_F ||
@@ -2224,8 +2224,7 @@ void brw_oword_block_write_scratch(struct brw_codegen *p,
                    brw_message_desc(devinfo, mlen, send_commit_msg, true) |
                    brw_dp_write_desc(devinfo, brw_scratch_surface_idx(p),
                                      BRW_DATAPORT_OWORD_BLOCK_DWORDS(num_regs * 8),
-                                     msg_type, 0, /* not a render target */
-                                     send_commit_msg));
+                                     msg_type, send_commit_msg));
    }
 }
 
@@ -2434,7 +2433,6 @@ brw_fb_WRITE(struct brw_codegen *p,
       (devinfo->ver >= 6 ? GFX6_SFID_DATAPORT_RENDER_CACHE :
        BRW_SFID_DATAPORT_WRITE);
    brw_inst *insn;
-   unsigned msg_type;
    struct brw_reg dest, src0;
 
    if (brw_get_default_exec_size(p) >= BRW_EXECUTE_16)
@@ -2453,14 +2451,10 @@ brw_fb_WRITE(struct brw_codegen *p,
    if (devinfo->ver >= 6) {
       /* headerless version, just submit color payload */
       src0 = payload;
-
-      msg_type = GFX6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE;
    } else {
       assert(payload.file == BRW_MESSAGE_REGISTER_FILE);
       brw_inst_set_base_mrf(devinfo, insn, payload.nr);
       src0 = implied_header;
-
-      msg_type = BRW_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE;
    }
 
    brw_set_dest(p, insn, dest);
@@ -2468,9 +2462,9 @@ brw_fb_WRITE(struct brw_codegen *p,
    brw_set_desc(p, insn,
                 brw_message_desc(devinfo, msg_length, response_length,
                                  header_present) |
-                brw_dp_write_desc(devinfo, binding_table_index, msg_control,
-                                  msg_type, last_render_target,
-                                  0 /* send_commit_msg */));
+                brw_fb_write_desc(devinfo, binding_table_index, msg_control,
+                                  last_render_target,
+                                  false /* coarse_write */));
    brw_inst_set_eot(devinfo, insn, eot);
 
    return insn;
@@ -2487,8 +2481,6 @@ gfx9_fb_READ(struct brw_codegen *p,
 {
    const struct intel_device_info *devinfo = p->devinfo;
    assert(devinfo->ver >= 9);
-   const unsigned msg_subtype =
-      brw_get_default_exec_size(p) == BRW_EXECUTE_16 ? 0 : 1;
    brw_inst *insn = next_insn(p, BRW_OPCODE_SENDC);
 
    brw_inst_set_sfid(devinfo, insn, GFX6_SFID_DATAPORT_RENDER_CACHE);
@@ -2497,10 +2489,8 @@ gfx9_fb_READ(struct brw_codegen *p,
    brw_set_desc(
       p, insn,
       brw_message_desc(devinfo, msg_length, response_length, true) |
-      brw_dp_read_desc(devinfo, binding_table_index,
-                       per_sample << 5 | msg_subtype,
-                       GFX9_DATAPORT_RC_RENDER_TARGET_READ,
-                       BRW_DATAPORT_READ_TARGET_RENDER_CACHE));
+      brw_fb_read_desc(devinfo, binding_table_index, 0 /* msg_control */,
+                       1 << brw_get_default_exec_size(p), per_sample));
    brw_inst_set_rt_slot_group(devinfo, insn, brw_get_default_group(p) / 16);
 
    return insn;
@@ -2583,7 +2573,7 @@ void brw_adjust_sampler_state_pointer(struct brw_codegen *p,
       uint32_t sampler = sampler_index.ud;
 
       if (sampler >= 16) {
-         assert(devinfo->is_haswell || devinfo->ver >= 8);
+         assert(devinfo->verx10 >= 75);
          brw_ADD(p,
                  get_element_ud(header, 3),
                  get_element_ud(brw_vec8_grf(0, 0), 3),
@@ -2591,7 +2581,7 @@ void brw_adjust_sampler_state_pointer(struct brw_codegen *p,
       }
    } else {
       /* Non-const sampler array indexing case */
-      if (devinfo->ver < 8 && !devinfo->is_haswell) {
+      if (devinfo->verx10 <= 70) {
          return;
       }
 
@@ -3077,10 +3067,8 @@ brw_svb_write(struct brw_codegen *p,
               bool   send_commit_msg)
 {
    const struct intel_device_info *devinfo = p->devinfo;
-   const unsigned target_cache =
-      (devinfo->ver >= 7 ? GFX7_SFID_DATAPORT_DATA_CACHE :
-       devinfo->ver >= 6 ? GFX6_SFID_DATAPORT_RENDER_CACHE :
-       BRW_SFID_DATAPORT_WRITE);
+   assert(devinfo->ver == 6);
+   const unsigned target_cache = GFX6_SFID_DATAPORT_RENDER_CACHE;
    brw_inst *insn;
 
    gfx6_resolve_implied_move(p, &src0, msg_reg_nr);
@@ -3094,7 +3082,6 @@ brw_svb_write(struct brw_codegen *p,
                 brw_dp_write_desc(devinfo, binding_table_index,
                                   0, /* msg_control: ignored */
                                   GFX6_DATAPORT_WRITE_MESSAGE_STREAMED_VB_WRITE,
-                                  0, /* last_render_target: ignored */
                                   send_commit_msg)); /* send_commit_msg */
 }
 
@@ -3121,12 +3108,12 @@ brw_untyped_atomic(struct brw_codegen *p,
                    bool header_present)
 {
    const struct intel_device_info *devinfo = p->devinfo;
-   const unsigned sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+   const unsigned sfid = (devinfo->verx10 >= 75 ?
                           HSW_SFID_DATAPORT_DATA_CACHE_1 :
                           GFX7_SFID_DATAPORT_DATA_CACHE);
    const bool align1 = brw_get_default_access_mode(p) == BRW_ALIGN_1;
    /* SIMD4x2 untyped atomic instructions only exist on HSW+ */
-   const bool has_simd4x2 = devinfo->ver >= 8 || devinfo->is_haswell;
+   const bool has_simd4x2 = devinfo->verx10 >= 75;
    const unsigned exec_size = align1 ? 1 << brw_get_default_exec_size(p) :
                               has_simd4x2 ? 0 : 8;
    const unsigned response_length =
@@ -3156,7 +3143,7 @@ brw_untyped_surface_read(struct brw_codegen *p,
                          unsigned num_channels)
 {
    const struct intel_device_info *devinfo = p->devinfo;
-   const unsigned sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+   const unsigned sfid = (devinfo->verx10 >= 75 ?
                           HSW_SFID_DATAPORT_DATA_CACHE_1 :
                           GFX7_SFID_DATAPORT_DATA_CACHE);
    const bool align1 = brw_get_default_access_mode(p) == BRW_ALIGN_1;
@@ -3179,12 +3166,12 @@ brw_untyped_surface_write(struct brw_codegen *p,
                           bool header_present)
 {
    const struct intel_device_info *devinfo = p->devinfo;
-   const unsigned sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+   const unsigned sfid = (devinfo->verx10 >= 75 ?
                           HSW_SFID_DATAPORT_DATA_CACHE_1 :
                           GFX7_SFID_DATAPORT_DATA_CACHE);
    const bool align1 = brw_get_default_access_mode(p) == BRW_ALIGN_1;
    /* SIMD4x2 untyped surface write instructions only exist on HSW+ */
-   const bool has_simd4x2 = devinfo->ver >= 8 || devinfo->is_haswell;
+   const bool has_simd4x2 = devinfo->verx10 >= 75;
    const unsigned exec_size = align1 ? 1 << brw_get_default_exec_size(p) :
                               has_simd4x2 ? 0 : 8;
    const unsigned desc =
@@ -3259,6 +3246,7 @@ brw_pixel_interpolator_query(struct brw_codegen *p,
                              struct brw_reg dest,
                              struct brw_reg mrf,
                              bool noperspective,
+                             bool coarse_pixel_rate,
                              unsigned mode,
                              struct brw_reg data,
                              unsigned msg_length,
@@ -3270,8 +3258,8 @@ brw_pixel_interpolator_query(struct brw_codegen *p,
    const unsigned simd_mode = (exec_size == BRW_EXECUTE_16);
    const unsigned desc =
       brw_message_desc(devinfo, msg_length, response_length, false) |
-      brw_pixel_interp_desc(devinfo, mode, noperspective, simd_mode,
-                            slot_group);
+      brw_pixel_interp_desc(devinfo, mode, noperspective, coarse_pixel_rate,
+                            simd_mode, slot_group);
 
    /* brw_send_indirect_message will automatically use a direct send message
     * if data is actually immediate.
@@ -3563,7 +3551,7 @@ void brw_shader_time_add(struct brw_codegen *p,
                          uint32_t surf_index)
 {
    const struct intel_device_info *devinfo = p->devinfo;
-   const unsigned sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+   const unsigned sfid = (devinfo->verx10 >= 75 ?
                           HSW_SFID_DATAPORT_DATA_CACHE_1 :
                           GFX7_SFID_DATAPORT_DATA_CACHE);
    assert(devinfo->ver >= 7);

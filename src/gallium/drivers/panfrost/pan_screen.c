@@ -61,14 +61,15 @@ static const struct debug_named_value panfrost_debug_options[] = {
         {"msgs",      PAN_DBG_MSGS,	"Print debug messages"},
         {"trace",     PAN_DBG_TRACE,    "Trace the command stream"},
         {"deqp",      PAN_DBG_DEQP,     "Hacks for dEQP"},
-        {"sync",      PAN_DBG_SYNC,     "Wait for each job's completion and check for any GPU fault"},
+        {"dirty",     PAN_DBG_DIRTY,    "Always re-emit all state"},
+        {"sync",      PAN_DBG_SYNC,     "Wait for each job's completion and abort on GPU faults"},
         {"precompile", PAN_DBG_PRECOMPILE, "Precompile shaders for shader-db"},
-        {"fp16",     PAN_DBG_FP16,     "Enable 16-bit support"},
         {"nofp16",     PAN_DBG_NOFP16,     "Disable 16-bit support"},
         {"gl3",       PAN_DBG_GL3,      "Enable experimental GL 3.x implementation, up to 3.3"},
         {"noafbc",    PAN_DBG_NO_AFBC,  "Disable AFBC support"},
         {"nocrc",     PAN_DBG_NO_CRC,   "Disable transaction elimination"},
         {"msaa16",    PAN_DBG_MSAA16,   "Enable MSAA 8x and 16x support"},
+        {"panblit",   PAN_DBG_PANBLIT,  "Use pan_blitter instead of u_blitter"},
         DEBUG_NAMED_VALUE_END
 };
 
@@ -180,10 +181,12 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
                 return 0;
 
         case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-                return 4;
+                return PIPE_MAX_SO_BUFFERS;
+
         case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
         case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-                return 64;
+                return PIPE_MAX_SO_OUTPUTS;
+
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
         case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
                 return 1;
@@ -283,7 +286,7 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
                 return 4;
 
         case PIPE_CAP_MAX_VARYINGS:
-                return 16;
+                return PIPE_MAX_ATTRIBS;
 
         /* Removed in v6 (Bifrost) */
         case PIPE_CAP_ALPHA_TEST:
@@ -304,11 +307,12 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
         case PIPE_CAP_NIR_IMAGES_AS_DEREF:
                 return 0;
 
-        case PIPE_CAP_SHAREABLE_SHADERS:
-                return 0;
-
         case PIPE_CAP_DRAW_INDIRECT:
                 return has_heap && is_deqp;
+
+        case PIPE_CAP_START_INSTANCE:
+        case PIPE_CAP_DRAW_PARAMETERS:
+                return pan_is_bifrost(dev) && is_deqp;
 
         default:
                 return u_pipe_screen_get_param_defaults(screen, param);
@@ -322,7 +326,6 @@ panfrost_get_shader_param(struct pipe_screen *screen,
 {
         struct panfrost_device *dev = pan_device(screen);
         bool is_deqp = dev->debug & PAN_DBG_DEQP;
-        bool is_fp16 = dev->debug & PAN_DBG_FP16;
         bool is_nofp16 = dev->debug & PAN_DBG_NOFP16;
 
         if (shader != PIPE_SHADER_VERTEX &&
@@ -330,30 +333,31 @@ panfrost_get_shader_param(struct pipe_screen *screen,
             !(shader == PIPE_SHADER_COMPUTE && is_deqp))
                 return 0;
 
-        /* this is probably not totally correct.. but it's a start: */
         switch (param) {
         case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
         case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
         case PIPE_SHADER_CAP_MAX_TEX_INSTRUCTIONS:
         case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
-                return 16384;
+                return 16384; /* arbitrary */
 
         case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
-                return 1024;
+                return 1024; /* arbitrary */
 
         case PIPE_SHADER_CAP_MAX_INPUTS:
+                /* Used as ABI on Midgard */
                 return 16;
 
         case PIPE_SHADER_CAP_MAX_OUTPUTS:
-                return shader == PIPE_SHADER_FRAGMENT ? 8 : 16;
+                return shader == PIPE_SHADER_FRAGMENT ? 8 : PIPE_MAX_ATTRIBS;
 
         case PIPE_SHADER_CAP_MAX_TEMPS:
-                return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
+                return 256; /* arbitrary */
 
         case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
                 return 16 * 1024 * sizeof(float);
 
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
+                STATIC_ASSERT(PAN_MAX_CONST_BUFFERS < 0x100);
                 return PAN_MAX_CONST_BUFFERS;
 
         case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
@@ -379,13 +383,21 @@ panfrost_get_shader_param(struct pipe_screen *screen,
         case PIPE_SHADER_CAP_INTEGERS:
                 return 1;
 
+        /* The Bifrost compiler supports full 16-bit. Midgard could but int16
+         * support is untested, so restrict INT16 to Bifrost. Midgard
+         * architecturally cannot support fp16 derivatives. */
+
         case PIPE_SHADER_CAP_FP16:
         case PIPE_SHADER_CAP_GLSL_16BIT_CONSTS:
-                return (!is_nofp16 && !pan_is_bifrost(dev)) || is_fp16;
-
+                return !is_nofp16;
         case PIPE_SHADER_CAP_FP16_DERIVATIVES:
         case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
+                return pan_is_bifrost(dev) && !is_nofp16;
         case PIPE_SHADER_CAP_INT16:
+                /* XXX: Advertise this CAP when a proper fix to lower_precision
+                 * lands. GLSL IR validation failure in glmark2 -bterrain */
+                return pan_is_bifrost(dev) && !is_nofp16 && is_deqp;
+
         case PIPE_SHADER_CAP_INT64_ATOMICS:
         case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
@@ -395,8 +407,12 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return 0;
 
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+                STATIC_ASSERT(PIPE_MAX_SAMPLERS < 0x10000);
+                return PIPE_MAX_SAMPLERS;
+
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
-                return 16; /* XXX: How many? */
+                STATIC_ASSERT(PIPE_MAX_SHADER_SAMPLER_VIEWS < 0x10000);
+                return PIPE_MAX_SHADER_SAMPLER_VIEWS;
 
         case PIPE_SHADER_CAP_PREFERRED_IR:
                 return PIPE_SHADER_IR_NIR;
@@ -404,25 +420,20 @@ panfrost_get_shader_param(struct pipe_screen *screen,
         case PIPE_SHADER_CAP_SUPPORTED_IRS:
                 return (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_NIR_SERIALIZED);
 
-        case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-                return 32;
-
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
                 return is_deqp ? 16 : 0;
 
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
                 return (pan_is_bifrost(dev) && !is_deqp) ? 0 : PIPE_MAX_SHADER_IMAGES;
 
+        case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-                return 0;
-
         case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
         case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
                 return 0;
 
         default:
-                /* Other params are unknown */
                 return 0;
         }
 
@@ -516,15 +527,6 @@ panfrost_is_format_supported( struct pipe_screen *screen,
 
         /* Z16 causes dEQP failures on t720 */
         if (format == PIPE_FORMAT_Z16_UNORM && dev->quirks & MIDGARD_SFBD)
-                return false;
-
-        /* Don't confuse poorly written apps (workaround dEQP bug) that expect
-         * more alpha than they ask for */
-
-        bool scanout = bind & (PIPE_BIND_SCANOUT | PIPE_BIND_SHARED | PIPE_BIND_DISPLAY_TARGET);
-        bool renderable = bind & PIPE_BIND_RENDER_TARGET;
-
-        if (scanout && renderable && !util_format_is_rgba8_variant(format_desc))
                 return false;
 
         /* Check we support the format with the given bind */
@@ -724,15 +726,14 @@ panfrost_fence_reference(struct pipe_screen *pscreen,
                          struct pipe_fence_handle *fence)
 {
         struct panfrost_device *dev = pan_device(pscreen);
-        struct panfrost_fence **p = (struct panfrost_fence **)ptr;
-        struct panfrost_fence *f = (struct panfrost_fence *)fence;
-        struct panfrost_fence *old = *p;
+        struct pipe_fence_handle *old = *ptr;
 
-        if (pipe_reference(&(*p)->reference, &f->reference)) {
+        if (pipe_reference(&old->reference, &fence->reference)) {
                 drmSyncobjDestroy(dev->fd, old->syncobj);
                 free(old);
         }
-        *p = f;
+
+        *ptr = fence;
 }
 
 static bool
@@ -742,29 +743,28 @@ panfrost_fence_finish(struct pipe_screen *pscreen,
                       uint64_t timeout)
 {
         struct panfrost_device *dev = pan_device(pscreen);
-        struct panfrost_fence *f = (struct panfrost_fence *)fence;
         int ret;
 
-        if (f->signaled)
+        if (fence->signaled)
                 return true;
 
         uint64_t abs_timeout = os_time_get_absolute_timeout(timeout);
         if (abs_timeout == OS_TIMEOUT_INFINITE)
                 abs_timeout = INT64_MAX;
 
-        ret = drmSyncobjWait(dev->fd, &f->syncobj,
+        ret = drmSyncobjWait(dev->fd, &fence->syncobj,
                              1,
                              abs_timeout, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL,
                              NULL);
 
-        f->signaled = (ret >= 0);
-        return f->signaled;
+        fence->signaled = (ret >= 0);
+        return fence->signaled;
 }
 
-struct panfrost_fence *
+struct pipe_fence_handle *
 panfrost_fence_create(struct panfrost_context *ctx)
 {
-        struct panfrost_fence *f = calloc(1, sizeof(*f));
+        struct pipe_fence_handle *f = calloc(1, sizeof(*f));
         if (!f)
                 return NULL;
 
@@ -847,6 +847,7 @@ panfrost_create_screen(int fd, struct renderonly *ro)
         case 0x6221: /* G72 */
         case 0x7093: /* G31 */
         case 0x7212: /* G52 */
+        case 0x7402: /* G52r1 */
                 break;
         default:
                 /* Fail to load against untested models */

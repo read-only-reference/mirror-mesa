@@ -36,6 +36,7 @@ vn_CreateCommandPool(VkDevice device,
    vn_object_base_init(&pool->base, VK_OBJECT_TYPE_COMMAND_POOL, &dev->base);
 
    pool->allocator = *alloc;
+   pool->queue_family_index = pCreateInfo->queueFamilyIndex;
    list_inithead(&pool->command_buffers);
 
    VkCommandPool pool_handle = vn_command_pool_to_handle(pool);
@@ -135,6 +136,8 @@ vn_AllocateCommandBuffers(VkDevice device,
                           &dev->base);
       cmd->device = dev;
       cmd->allocator = pool->allocator;
+      cmd->level = pAllocateInfo->level;
+      cmd->queue_family_index = pool->queue_family_index;
 
       list_addtail(&cmd->head, &pool->command_buffers);
 
@@ -171,8 +174,8 @@ vn_FreeCommandBuffers(VkDevice device,
       if (!cmd)
          continue;
 
-      if (cmd->image_barriers)
-         vk_free(alloc, cmd->image_barriers);
+      if (cmd->builder.image_barriers)
+         vk_free(alloc, cmd->builder.image_barriers);
 
       vn_cs_encoder_fini(&cmd->cs);
       list_del(&cmd->head);
@@ -207,6 +210,14 @@ vn_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    size_t cmd_size;
 
    vn_cs_encoder_reset(&cmd->cs);
+
+   VkCommandBufferBeginInfo local_begin_info;
+   if (pBeginInfo->pInheritanceInfo &&
+       cmd->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY) {
+      local_begin_info = *pBeginInfo;
+      local_begin_info.pInheritanceInfo = NULL;
+      pBeginInfo = &local_begin_info;
+   }
 
    cmd_size = vn_sizeof_vkBeginCommandBuffer(commandBuffer, pBeginInfo);
    if (!vn_cs_encoder_reserve(&cmd->cs, cmd_size)) {
@@ -963,17 +974,17 @@ vn_get_intercepted_barriers(struct vn_command_buffer *cmd,
 
    size_t size = sizeof(VkImageMemoryBarrier) * count;
    /* avoid shrinking in case of non efficient reallocation implementation */
-   VkImageMemoryBarrier *barriers = cmd->image_barriers;
-   if (count > cmd->image_barrier_count) {
+   VkImageMemoryBarrier *barriers = cmd->builder.image_barriers;
+   if (count > cmd->builder.image_barrier_count) {
       barriers =
-         vk_realloc(&cmd->allocator, cmd->image_barriers, size,
+         vk_realloc(&cmd->allocator, cmd->builder.image_barriers, size,
                     VN_DEFAULT_ALIGN, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
       if (!barriers)
          return img_barriers;
 
       /* update upon successful reallocation */
-      cmd->image_barrier_count = count;
-      cmd->image_barriers = barriers;
+      cmd->builder.image_barrier_count = count;
+      cmd->builder.image_barriers = barriers;
    }
    memcpy(barriers, img_barriers, size);
    for (uint32_t i = 0; i < count; i++) {

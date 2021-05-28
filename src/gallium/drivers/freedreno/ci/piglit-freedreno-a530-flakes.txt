@@ -1,5 +1,7 @@
+glx@glx-swap-event_interval
 glx@glx_arb_sync_control@swapbuffersmsc-divisor-zero
 glx@glx_arb_sync_control@waitformsc
+glx@glx-copy-sub-buffer.*
 glx@glx-multithread-texture
 glx@glx-swap-event_async
 spec@!opengl 1.0@gl-1.0-blend-func
@@ -12,6 +14,29 @@ spec@ext_packed_depth_stencil@fbo-depthstencil-gl_depth24_stencil8-drawpixels-24
 spec@arb_texture_cube_map_array@texsubimage cube_map_array
 
 # Flakes since around when the go-fast branch landed
-spec@arb_copy_buffer@copy_buffer_coherency,Fail
-spec@glsl-1.30@execution@tex-miplevel-selection texture(bias) 3d,Fail
-spec@glsl-1.30@execution@tex-miplevel-selection texturegrad 2d,Fail
+spec@arb_copy_buffer@copy_buffer_coherency
+.*tex-miplevel-selection.*
+.*glsl-1.30@execution@texelfetch.*
+
+# Flakes since introduction of piglit testing, possibly increased in frequency
+# around Apr 16 or more likely Apr 23
+spec@arb_texture_gather@texturegather.*
+
+# Flakes since around Apr 30th on a clearly innocent MR.
+.*texwrap.formats.*bordercolor
+
+# First flake on Apr 29th on a clearly innocent MR
+spec@arb_direct_state_access@dsa-textures
+spec@arb_depth_buffer_float@depthstencil-render-miplevels_292_ds=z32f_s8
+
+# First flaked on May 3 on a clearly innocent MR.
+spec@arb_draw_instanced@arb_draw_instanced-drawarrays
+
+# Intermittent crashes.  First flaked on May 11th in the piglit 3351e8952
+# uprev, so presumably it regressed some time earlier and then showed up in the
+# piglit reshuffle.
+spec@arb_copy_buffer@intra-buffer-copy
+spec@arb_copy_buffer@dlist
+
+# Intermittent failure, mostly passes but sometimes fails. Was noticed on May 26th.
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420

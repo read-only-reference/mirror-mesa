@@ -176,10 +176,13 @@ void * ir3_shader_assemble(struct ir3_shader_variant *v)
 	if (compiler->gpu_id >= 400)
 		v->constlen = align(v->constlen, 4);
 
-	/* Use the per-wave layout by default on a6xx. It should result in better
-	 * performance when loads/stores are to a uniform index.
+	/* Use the per-wave layout by default on a6xx for compute shaders. It
+	 * should result in better performance when loads/stores are to a uniform
+	 * index.
 	 */
-	v->pvtmem_per_wave = compiler->gpu_id >= 600 && !info->multi_dword_ldp_stp;
+	v->pvtmem_per_wave =
+		compiler->gpu_id >= 600 && !info->multi_dword_ldp_stp &&
+		v->type == MESA_SHADER_COMPUTE;
 
 	fixup_regfootprint(v);
 
@@ -659,17 +662,6 @@ ir3_shader_disasm(struct ir3_shader_variant *so, uint32_t *bin, FILE *out)
 				fetch->dst >> 2, "xyzw"[fetch->dst & 0x3],
 				fetch->src, fetch->samp_id, fetch->tex_id,
 				fetch->wrmask, fetch->cmd);
-	}
-
-	foreach_output_n (instr, i, ir) {
-		reg = instr->regs[0];
-		regid = reg->num;
-		fprintf(out, "@out(%sr%d.%c)\tout%d",
-				(reg->flags & IR3_REG_HALF) ? "h" : "",
-				(regid >> 2), "xyzw"[regid & 0x3], i);
-		if (reg->wrmask > 0x1)
-			fprintf(out, " (wrmask=0x%x)", reg->wrmask);
-		fprintf(out, "\n");
 	}
 
 	const struct ir3_const_state *const_state = ir3_const_state(so);

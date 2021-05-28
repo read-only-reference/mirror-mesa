@@ -36,16 +36,16 @@ struct zink_rt_attrib {
   VkSampleCountFlagBits samples;
   bool clear_color;
   bool clear_stencil;
+  bool swapchain;
 };
 
 struct zink_render_pass_state {
    uint8_t num_cbufs : 4; /* PIPE_MAX_COLOR_BUFS = 8 */
    uint8_t have_zsbuf : 1;
+   bool swapchain_init;
    struct zink_rt_attrib rts[PIPE_MAX_COLOR_BUFS + 1];
    unsigned num_rts;
-#ifndef NDEBUG
-   uint32_t clears; //for extra verification
-#endif
+   uint32_t clears; //for extra verification and update flagging
 };
 
 struct zink_render_pass {

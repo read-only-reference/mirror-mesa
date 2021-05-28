@@ -27,6 +27,16 @@ struct vn_instance {
 
    struct vn_renderer *renderer;
    struct vn_renderer_info renderer_info;
+
+   /* Between the driver and the app, VN_MAX_API_VERSION is what we advertise
+    * and base.base.app_info.api_version is what the app requests.
+    *
+    * Between the driver and the renderer, renderer_api_version is the api
+    * version we request internally, which can be higher than
+    * base.base.app_info.api_version.  renderer_version is the instance
+    * version we can use internally.
+    */
+   uint32_t renderer_api_version;
    uint32_t renderer_version;
 
    /* to synchronize renderer/ring */
@@ -64,9 +74,21 @@ struct vn_physical_device {
 
    struct vn_instance *instance;
 
+   /* Between the driver and the app, properties.properties.apiVersion is what
+    * we advertise and is capped by VN_MAX_API_VERSION and others.
+    *
+    * Between the driver and the renderer, renderer_version is the device
+    * version we can use internally.
+    */
    uint32_t renderer_version;
-   struct vk_device_extension_table renderer_extensions;
 
+   /* Between the driver and the app, base.base.supported_extensions is what
+    * we advertise.
+    *
+    * Between the driver and the renderer, renderer_extensions is what we can
+    * use internally (after enabling).
+    */
+   struct vk_device_extension_table renderer_extensions;
    uint32_t *extension_spec_versions;
 
    VkPhysicalDeviceFeatures2 features;

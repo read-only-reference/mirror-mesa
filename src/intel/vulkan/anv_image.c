@@ -45,7 +45,7 @@ vk_to_isl_surf_dim[] = {
    [VK_IMAGE_TYPE_3D] = ISL_SURF_DIM_3D,
 };
 
-static uint64_t MUST_CHECK
+static uint64_t MUST_CHECK UNUSED
 memory_range_end(struct anv_image_memory_range memory_range)
 {
    assert(anv_is_aligned(memory_range.offset, memory_range.alignment));
@@ -817,7 +817,7 @@ struct check_memory_range_params {
 #define check_memory_range(...) \
    check_memory_range_s(&(struct check_memory_range_params) { __VA_ARGS__ })
 
-static void
+static void UNUSED
 check_memory_range_s(const struct check_memory_range_params *p)
 {
    assert((p->test_surface == NULL) != (p->test_range == NULL));
@@ -2167,6 +2167,7 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
       vk_image_layout_to_usage_flags(layout, aspect) & image_aspect_usage;
 
    bool aux_supported = true;
+   bool clear_supported = isl_aux_usage_has_fast_clears(aux_usage);
 
    if ((usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) && !read_only) {
       /* This image could be used as both an input attachment and a render
@@ -2178,24 +2179,31 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
        *
        * TODO: Should we be disabling this in more cases?
        */
-      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
+      if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
          aux_supported = false;
+         clear_supported = false;
+      }
    }
 
-   if (usage & VK_IMAGE_USAGE_STORAGE_BIT)
+   if (usage & VK_IMAGE_USAGE_STORAGE_BIT) {
       aux_supported = false;
+      clear_supported = false;
+   }
 
    if (usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                 VK_IMAGE_USAGE_SAMPLED_BIT |
                 VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) {
       switch (aux_usage) {
       case ISL_AUX_USAGE_HIZ:
-         if (!anv_can_sample_with_hiz(devinfo, image))
+         if (!anv_can_sample_with_hiz(devinfo, image)) {
             aux_supported = false;
+            clear_supported = false;
+         }
          break;
 
       case ISL_AUX_USAGE_HIZ_CCS:
          aux_supported = false;
+         clear_supported = false;
          break;
 
       case ISL_AUX_USAGE_HIZ_CCS_WT:
@@ -2203,10 +2211,15 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
 
       case ISL_AUX_USAGE_CCS_D:
          aux_supported = false;
+         clear_supported = false;
+         break;
+
+      case ISL_AUX_USAGE_MCS:
+         if (!anv_can_sample_mcs_with_clear(devinfo, image))
+            clear_supported = false;
          break;
 
       case ISL_AUX_USAGE_CCS_E:
-      case ISL_AUX_USAGE_MCS:
       case ISL_AUX_USAGE_STC_CCS:
          break;
 
@@ -2220,6 +2233,7 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
    case ISL_AUX_USAGE_HIZ_CCS:
    case ISL_AUX_USAGE_HIZ_CCS_WT:
       if (aux_supported) {
+         assert(clear_supported);
          return ISL_AUX_STATE_COMPRESSED_CLEAR;
       } else if (read_only) {
          return ISL_AUX_STATE_RESOLVED;
@@ -2231,21 +2245,31 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
       /* We only support clear in exactly one state */
       if (layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
          assert(aux_supported);
+         assert(clear_supported);
          return ISL_AUX_STATE_PARTIAL_CLEAR;
       } else {
          return ISL_AUX_STATE_PASS_THROUGH;
       }
 
    case ISL_AUX_USAGE_CCS_E:
-   case ISL_AUX_USAGE_MCS:
       if (aux_supported) {
+         assert(clear_supported);
          return ISL_AUX_STATE_COMPRESSED_CLEAR;
       } else {
          return ISL_AUX_STATE_PASS_THROUGH;
       }
 
+   case ISL_AUX_USAGE_MCS:
+      assert(aux_supported);
+      if (clear_supported) {
+         return ISL_AUX_STATE_COMPRESSED_CLEAR;
+      } else {
+         return ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
+      }
+
    case ISL_AUX_USAGE_STC_CCS:
       assert(aux_supported);
+      assert(!clear_supported);
       return ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
 
    default:
@@ -2352,7 +2376,7 @@ anv_layout_to_fast_clear_type(const struct intel_device_info * const devinfo,
    /* We don't support MSAA fast-clears on Ivybridge or Bay Trail because they
     * lack the MI ALU which we need to determine the predicates.
     */
-   if (devinfo->ver == 7 && !devinfo->is_haswell && image->samples > 1)
+   if (devinfo->verx10 == 70 && image->samples > 1)
       return ANV_FAST_CLEAR_NONE;
 
    enum isl_aux_state aux_state =
@@ -2476,7 +2500,7 @@ anv_image_fill_surface_state(struct anv_device *device,
       view.swizzle = anv_swizzle_for_render(view.swizzle);
 
    /* On Ivy Bridge and Bay Trail we do the swizzle in the shader */
-   if (device->info.ver == 7 && !device->info.is_haswell)
+   if (device->info.verx10 == 70)
       view.swizzle = ISL_SWIZZLE_IDENTITY;
 
    /* If this is a HiZ buffer we can sample from with a programmable clear
@@ -2872,17 +2896,30 @@ anv_CreateImageView(VkDevice _device,
 
       /* NOTE: This one needs to go last since it may stomp isl_view.format */
       if (view_usage & VK_IMAGE_USAGE_STORAGE_BIT) {
-         iview->planes[vplane].storage_surface_state.state = alloc_surface_state(device);
+         if (isl_is_storage_image_format(format.isl_format)) {
+            iview->planes[vplane].storage_surface_state.state =
+               alloc_surface_state(device);
+
+            anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
+                                         &iview->planes[vplane].isl,
+                                         ISL_SURF_USAGE_STORAGE_BIT,
+                                         ISL_AUX_USAGE_NONE, NULL,
+                                         0,
+                                         &iview->planes[vplane].storage_surface_state,
+                                         &iview->planes[vplane].storage_image_param);
+         } else {
+            /* In this case, we support the format but, because there's no
+             * SPIR-V format specifier corresponding to it, we only support
+             * NonReadable (writeonly in GLSL) access.  Instead of hanging in
+             * these invalid cases, we give them a NULL descriptor.
+             */
+            assert(isl_format_supports_typed_writes(&device->info,
+                                                    format.isl_format));
+            iview->planes[vplane].storage_surface_state.state =
+               device->null_surface_state;
+         }
+
          iview->planes[vplane].writeonly_storage_surface_state.state = alloc_surface_state(device);
-
-         anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                      &iview->planes[vplane].isl,
-                                      ISL_SURF_USAGE_STORAGE_BIT,
-                                      ISL_AUX_USAGE_NONE, NULL,
-                                      0,
-                                      &iview->planes[vplane].storage_surface_state,
-                                      &iview->planes[vplane].storage_image_param);
-
          anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
                                       &iview->planes[vplane].isl,
                                       ISL_SURF_USAGE_STORAGE_BIT,
@@ -2911,22 +2948,26 @@ anv_DestroyImageView(VkDevice _device, VkImageView _iview,
       return;
 
    for (uint32_t plane = 0; plane < iview->n_planes; plane++) {
-      if (iview->planes[plane].optimal_sampler_surface_state.state.alloc_size > 0) {
+      /* Check offset instead of alloc_size because this they might be
+       * device->null_surface_state which always has offset == 0.  We don't
+       * own that one so we don't want to accidentally free it.
+       */
+      if (iview->planes[plane].optimal_sampler_surface_state.state.offset) {
          anv_state_pool_free(&device->surface_state_pool,
                              iview->planes[plane].optimal_sampler_surface_state.state);
       }
 
-      if (iview->planes[plane].general_sampler_surface_state.state.alloc_size > 0) {
+      if (iview->planes[plane].general_sampler_surface_state.state.offset) {
          anv_state_pool_free(&device->surface_state_pool,
                              iview->planes[plane].general_sampler_surface_state.state);
       }
 
-      if (iview->planes[plane].storage_surface_state.state.alloc_size > 0) {
+      if (iview->planes[plane].storage_surface_state.state.offset) {
          anv_state_pool_free(&device->surface_state_pool,
                              iview->planes[plane].storage_surface_state.state);
       }
 
-      if (iview->planes[plane].writeonly_storage_surface_state.state.alloc_size > 0) {
+      if (iview->planes[plane].writeonly_storage_surface_state.state.offset) {
          anv_state_pool_free(&device->surface_state_pool,
                              iview->planes[plane].writeonly_storage_surface_state.state);
       }

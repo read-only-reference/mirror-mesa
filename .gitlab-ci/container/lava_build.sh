@@ -33,6 +33,7 @@ if [[ "$DEBIAN_ARCH" = "arm64" ]]; then
     DEVICE_TREES+=" arch/arm64/boot/dts/qcom/apq8016-sbc.dtb"
     DEVICE_TREES+=" arch/arm64/boot/dts/qcom/apq8096-db820c.dtb"
     DEVICE_TREES+=" arch/arm64/boot/dts/amlogic/meson-g12b-a311d-khadas-vim3.dtb"
+    DEVICE_TREES+=" arch/arm64/boot/dts/mediatek/mt8183-kukui-jacuzzi-juniper-sku16.dtb"
     KERNEL_IMAGE_NAME="Image"
 elif [[ "$DEBIAN_ARCH" = "armhf" ]]; then
     GCC_ARCH="arm-linux-gnueabihf"
@@ -77,6 +78,7 @@ apt-get install -y --no-remove \
                    libegl1-mesa-dev \
                    libgbm-dev \
                    libgles2-mesa-dev \
+                   libpng-dev \
                    libssl-dev \
                    libudev-dev \
                    libvulkan-dev \
@@ -98,6 +100,7 @@ if [[ "$DEBIAN_ARCH" = "armhf" ]]; then
                        libelf-dev:armhf \
                        libgbm-dev:armhf \
                        libgles2-mesa-dev:armhf \
+                       libpng-dev:armhf \
                        libudev-dev:armhf \
                        libvulkan-dev:armhf \
                        libwaffle-dev:armhf \
@@ -110,6 +113,13 @@ fi
 ############### Building
 STRIP_CMD="${GCC_ARCH}-strip"
 mkdir -p /lava-files/rootfs-${DEBIAN_ARCH}
+
+
+############### Build apitrace
+. .gitlab-ci/container/build-apitrace.sh
+mkdir -p /lava-files/rootfs-${DEBIAN_ARCH}/apitrace
+mv /apitrace/build /lava-files/rootfs-${DEBIAN_ARCH}/apitrace
+rm -rf /apitrace
 
 
 ############### Build dEQP runner

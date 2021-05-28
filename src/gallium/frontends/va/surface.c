@@ -200,7 +200,7 @@ upload_sampler(struct pipe_context *pipe, struct pipe_sampler_view *dst,
    struct pipe_transfer *transfer;
    void *map;
 
-   map = pipe->transfer_map(pipe, dst->texture, 0, PIPE_MAP_WRITE,
+   map = pipe->texture_map(pipe, dst->texture, 0, PIPE_MAP_WRITE,
                             dst_box, &transfer);
    if (!map)
       return;
@@ -209,7 +209,7 @@ upload_sampler(struct pipe_context *pipe, struct pipe_sampler_view *dst,
                   dst_box->width, dst_box->height,
                   src, src_stride, src_x, src_y);
 
-   pipe->transfer_unmap(pipe, transfer);
+   pipe->texture_unmap(pipe, transfer);
 }
 
 static VAStatus
@@ -615,10 +615,16 @@ surface_from_external_memory(VADriverContextP ctx, vlVaSurface *surface,
    // Create a resource for each plane.
    memset(resources, 0, sizeof resources);
    for (i = 0; i < memory_attribute->num_planes; i++) {
+      unsigned num_planes = util_format_get_num_planes(templat->buffer_format);
+
       res_templ.format = resource_formats[i];
       if (res_templ.format == PIPE_FORMAT_NONE) {
-         result = VA_STATUS_ERROR_INVALID_PARAMETER;
-         goto fail;
+         if (i < num_planes) {
+            result = VA_STATUS_ERROR_INVALID_PARAMETER;
+            goto fail;
+         } else {
+            continue;
+         }
       }
 
       res_templ.width0 = util_format_get_plane_width(templat->buffer_format, i,

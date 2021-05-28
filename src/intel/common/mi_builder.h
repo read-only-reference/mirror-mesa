@@ -499,6 +499,7 @@ _mi_copy_no_unref(struct mi_builder *b,
 
       case MI_VALUE_TYPE_MEM32:
       case MI_VALUE_TYPE_MEM64:
+#if GFX_VER >= 7
          mi_builder_emit(b, GENX(MI_LOAD_REGISTER_MEM), lrm) {
             struct mi_reg_num reg = mi_adjust_reg_num(dst.reg);
             lrm.RegisterAddress = reg.num;
@@ -507,6 +508,9 @@ _mi_copy_no_unref(struct mi_builder *b,
 #endif
             lrm.MemoryAddress = src.addr;
          }
+#else
+         unreachable("Cannot load do mem -> reg copy on SNB and earlier");
+#endif
          break;
 
       case MI_VALUE_TYPE_REG32:
@@ -1184,7 +1188,8 @@ _mi_resolve_address_token(struct mi_builder *b,
 {
    __gen_address_type addr = __gen_get_batch_address(b->user_data,
                                                     batch_location);
-   uint64_t addr_addr_u64 = __gen_combine_address(b->user_data, NULL, addr, 0);
+   uint64_t addr_addr_u64 = __gen_combine_address(b->user_data, batch_location,
+                                                  addr, 0);
    *(token.ptrs[0]) = addr_addr_u64;
    *(token.ptrs[1]) = addr_addr_u64 + 4;
 }

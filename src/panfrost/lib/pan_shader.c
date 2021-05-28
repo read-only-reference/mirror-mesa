@@ -114,7 +114,8 @@ collect_varyings(nir_shader *s, nir_variable_mode varying_mode,
                  */
                 if (type == nir_type_float &&
                     (var->data.precision == GLSL_PRECISION_MEDIUM ||
-                     var->data.precision == GLSL_PRECISION_LOW)) {
+                     var->data.precision == GLSL_PRECISION_LOW) &&
+                    !s->info.has_transform_feedback_varyings) {
                         type |= 16;
                 } else {
                         type |= 32;
@@ -129,6 +130,30 @@ collect_varyings(nir_shader *s, nir_variable_mode varying_mode,
                 }
 
                 *varying_count = MAX2(*varying_count, loc + sz);
+        }
+}
+
+static enum mali_bifrost_register_file_format
+bifrost_blend_type_from_nir(nir_alu_type nir_type)
+{
+        switch(nir_type) {
+        case 0: /* Render target not in use */
+                return 0;
+        case nir_type_float16:
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_F16;
+        case nir_type_float32:
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_F32;
+        case nir_type_int32:
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_I32;
+        case nir_type_uint32:
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_U32;
+        case nir_type_int16:
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_I16;
+        case nir_type_uint16:
+                return MALI_BIFROST_REGISTER_FILE_FORMAT_U16;
+        default:
+                unreachable("Unsupported blend shader type for NIR alu type");
+                return 0;
         }
 }
 
@@ -149,6 +174,7 @@ pan_shader_compile(const struct panfrost_device *dev,
         info->stage = s->info.stage;
         info->contains_barrier = s->info.uses_memory_barrier ||
                                  s->info.uses_control_barrier;
+        info->separable = s->info.separate_shader;
 
         switch (info->stage) {
         case MESA_SHADER_VERTEX:
@@ -177,20 +203,12 @@ pan_shader_compile(const struct panfrost_device *dev,
                 if (s->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK))
                         info->fs.writes_coverage = true;
 
-                uint64_t outputs_read = s->info.outputs_read;
-                uint64_t outputs_written = s->info.outputs_written;
-
-                if (outputs_read & BITFIELD64_BIT(FRAG_RESULT_COLOR))
-                        outputs_read |= BITFIELD64_BIT(FRAG_RESULT_DATA0);
-                if (outputs_written & BITFIELD64_BIT(FRAG_RESULT_COLOR))
-                        outputs_written |= BITFIELD64_BIT(FRAG_RESULT_DATA0);
-
-                info->fs.outputs_read = outputs_read >> FRAG_RESULT_DATA0;
-                info->fs.outputs_written = outputs_written >> FRAG_RESULT_DATA0;
+                info->fs.outputs_read = s->info.outputs_read >> FRAG_RESULT_DATA0;
+                info->fs.outputs_written = s->info.outputs_written >> FRAG_RESULT_DATA0;
 
                 /* EXT_shader_framebuffer_fetch requires per-sample */
                 info->fs.sample_shading = s->info.fs.uses_sample_shading ||
-                                          outputs_read;
+                                          info->fs.outputs_read;
 
                 info->fs.can_discard = s->info.fs.uses_discard;
                 info->fs.helper_invocations = s->info.fs.needs_quad_helper_invocations;
@@ -202,6 +220,22 @@ pan_shader_compile(const struct panfrost_device *dev,
                 info->fs.sidefx = s->info.writes_memory ||
                                   s->info.fs.uses_discard ||
                                   s->info.fs.uses_demote;
+
+                /* With suitable ZSA/blend, is early-z possible? */
+                info->fs.can_early_z =
+                        !info->fs.sidefx &&
+                        !info->fs.writes_depth &&
+                        !info->fs.writes_stencil &&
+                        !info->fs.writes_coverage;
+
+                /* Similiarly with suitable state, is FPK possible? */
+                info->fs.can_fpk =
+                        !info->fs.writes_depth &&
+                        !info->fs.writes_stencil &&
+                        !info->fs.writes_coverage &&
+                        !info->fs.can_discard &&
+                        !info->fs.outputs_read;
+
                 info->fs.reads_frag_coord =
                         (s->info.inputs_read & (1 << VARYING_SLOT_POS)) ||
                         BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_FRAG_COORD);
@@ -240,4 +274,12 @@ pan_shader_compile(const struct panfrost_device *dev,
         info->writes_global = s->info.writes_memory;
 
         info->sampler_count = info->texture_count = BITSET_LAST_BIT(s->info.textures_used);
+
+        /* This is "redundant" information, but is needed in a draw-time hot path */
+        if (pan_is_bifrost(dev)) {
+                for (unsigned i = 0; i < ARRAY_SIZE(info->bifrost.blend); ++i) {
+                        info->bifrost.blend[i].format =
+                                bifrost_blend_type_from_nir(info->bifrost.blend[i].type);
+                }
+        }
 }

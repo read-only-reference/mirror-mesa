@@ -133,6 +133,10 @@ struct pan_image_view {
         unsigned char swizzle[4];
         const struct pan_image *image;
 
+        /* If EXT_multisampled_render_to_texture is used, this may be
+         * greater than image->layout.nr_samples. */
+        unsigned nr_samples;
+
         /* Only valid if dim == 1D, needed to implement buffer views */
         struct {
                 unsigned offset;
@@ -173,13 +177,7 @@ panfrost_block_dim(uint64_t modifier, bool width, unsigned plane);
 
 unsigned
 panfrost_estimate_texture_payload_size(const struct panfrost_device *dev,
-                                       unsigned first_level,
-                                       unsigned last_level,
-                                       unsigned first_layer,
-                                       unsigned last_layer,
-                                       unsigned nr_samples,
-                                       enum mali_texture_dimension dim,
-                                       uint64_t modifier);
+                                       const struct pan_image_view *iview);
 
 void
 panfrost_new_texture(const struct panfrost_device *dev,

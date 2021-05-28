@@ -55,8 +55,12 @@ pan_shader_prepare_midgard_rsd(const struct pan_shader_info *info,
 
         /* For fragment shaders, work register count, early-z, reads at draw-time */
 
-        if (info->stage != MESA_SHADER_FRAGMENT)
+        if (info->stage != MESA_SHADER_FRAGMENT) {
                 rsd->properties.midgard.work_register_count = info->work_reg_count;
+        } else {
+                rsd->properties.midgard.shader_reads_tilebuffer =
+                        info->fs.outputs_read;
+        }
 }
 
 /* Classify a shader into the following pixel kill categories:
@@ -127,6 +131,9 @@ pan_shader_prepare_bifrost_rsd(const struct panfrost_device *dev,
                         rsd->properties.bifrost.shader_wait_dependency_7 = info->bifrost.wait_7;
                 }
 
+                rsd->properties.bifrost.allow_forward_pixel_to_be_killed =
+                        !info->fs.sidefx;
+
                 rsd->preload.fragment.fragment_position = info->fs.reads_frag_coord;
                 rsd->preload.fragment.coverage = true;
                 rsd->preload.fragment.primitive_flags = info->fs.reads_face;
@@ -140,6 +147,9 @@ pan_shader_prepare_bifrost_rsd(const struct panfrost_device *dev,
                         info->fs.reads_sample_mask_in |
                         info->fs.reads_helper_invocation |
                         info->fs.sample_shading;
+
+                rsd->message_preload_1 = info->bifrost.messages[0];
+                rsd->message_preload_2 = info->bifrost.messages[1];
                 break;
 
         case MESA_SHADER_COMPUTE:
@@ -185,6 +195,11 @@ pan_shader_prepare_rsd(const struct panfrost_device *dev,
                         shader_info->fs.writes_depth ?
                         MALI_DEPTH_SOURCE_SHADER :
                         MALI_DEPTH_SOURCE_FIXED_FUNCTION;
+
+                /* This also needs to be set if the API forces per-sample
+                 * shading, but that'll just got ORed in */
+                rsd->multisample_misc.evaluate_per_sample =
+                        shader_info->fs.sample_shading;
         } else {
                 rsd->properties.depth_source =
                         MALI_DEPTH_SOURCE_FIXED_FUNCTION;

@@ -211,6 +211,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_external_memory_fd                = true,
       .KHR_external_semaphore                = true,
       .KHR_external_semaphore_fd             = true,
+      .KHR_fragment_shading_rate             = device->info.ver >= 11,
       .KHR_get_memory_requirements2          = true,
       .KHR_image_format_list                 = true,
       .KHR_imageless_framebuffer             = true,
@@ -257,8 +258,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_buffer_device_address             = device->has_a64_buffer_access,
       .EXT_calibrated_timestamps             = device->has_reg_timestamp,
       .EXT_color_write_enable                = true,
-      .EXT_conditional_rendering             = device->info.ver >= 8 ||
-                                               device->info.is_haswell,
+      .EXT_conditional_rendering             = device->info.verx10 >= 75,
       .EXT_conservative_rasterization        = device->info.ver >= 9,
       .EXT_custom_border_color               = device->info.ver >= 8,
       .EXT_depth_clip_enable                 = true,
@@ -1396,10 +1396,8 @@ void anv_GetPhysicalDeviceFeatures2(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT: {
          VkPhysicalDeviceConditionalRenderingFeaturesEXT *features =
             (VkPhysicalDeviceConditionalRenderingFeaturesEXT*)ext;
-         features->conditionalRendering = pdevice->info.ver >= 8 ||
-                                          pdevice->info.is_haswell;
-         features->inheritedConditionalRendering = pdevice->info.ver >= 8 ||
-                                                   pdevice->info.is_haswell;
+         features->conditionalRendering = pdevice->info.verx10 >= 75;
+         features->inheritedConditionalRendering = pdevice->info.verx10 >= 75;
          break;
       }
 
@@ -1464,6 +1462,13 @@ void anv_GetPhysicalDeviceFeatures2(
          CORE_FEATURE(1, 2, descriptorBindingPartiallyBound);
          CORE_FEATURE(1, 2, descriptorBindingVariableDescriptorCount);
          CORE_FEATURE(1, 2, runtimeDescriptorArray);
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR: {
+         VkPhysicalDeviceFragmentShadingRateFeaturesKHR *features =
+            (VkPhysicalDeviceFragmentShadingRateFeaturesKHR *)ext;
+         features->pipelineFragmentShadingRate = true;
          break;
       }
 
@@ -1793,7 +1798,7 @@ void anv_GetPhysicalDeviceProperties(
       pdevice->has_bindless_images ? UINT16_MAX : 128;
    const uint32_t max_samplers =
       pdevice->has_bindless_samplers ? UINT16_MAX :
-      (devinfo->ver >= 8 || devinfo->is_haswell) ? 128 : 16;
+      (devinfo->verx10 >= 75) ? 128 : 16;
    const uint32_t max_images =
       pdevice->has_bindless_images ? UINT16_MAX : MAX_IMAGES;
 
@@ -2210,6 +2215,33 @@ void anv_GetPhysicalDeviceProperties2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR: {
+         VkPhysicalDeviceFragmentShadingRatePropertiesKHR *props =
+            (VkPhysicalDeviceFragmentShadingRatePropertiesKHR *)ext;
+         /* Those must be 0 if attachmentFragmentShadingRate is not
+          * supported.
+          */
+         props->minFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 0, 0 };
+         props->maxFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 0, 0 };
+         props->maxFragmentShadingRateAttachmentTexelSizeAspectRatio = 0;
+
+         props->primitiveFragmentShadingRateWithMultipleViewports = pdevice->info.ver >= 12;
+         props->layeredShadingRateAttachments = false;
+         props->fragmentShadingRateNonTrivialCombinerOps = true;
+         props->maxFragmentSize = (VkExtent2D) { 4, 4 };
+         props->maxFragmentSizeAspectRatio = 4;
+         props->maxFragmentShadingRateCoverageSamples = 4 * 4;
+         props->maxFragmentShadingRateRasterizationSamples = VK_SAMPLE_COUNT_16_BIT;
+         props->fragmentShadingRateWithShaderDepthStencilWrites = false;
+         props->fragmentShadingRateWithSampleMask = true;
+         props->fragmentShadingRateWithShaderSampleMask = false;
+         props->fragmentShadingRateWithConservativeRasterization = true;
+         props->fragmentShadingRateWithFragmentShaderInterlock = true;
+         props->fragmentShadingRateWithCustomSampleLocations = true;
+         props->fragmentShadingRateStrictMultiplyCombiner = false;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES_KHR: {
          VkPhysicalDeviceDriverPropertiesKHR *properties =
             (VkPhysicalDeviceDriverPropertiesKHR *) ext;
@@ -2482,8 +2514,7 @@ void anv_GetPhysicalDeviceProperties2(
          props->transformFeedbackStreamsLinesTriangles = false;
          props->transformFeedbackRasterizationStreamSelect = false;
          /* This requires MI_MATH */
-         props->transformFeedbackDraw = pdevice->info.is_haswell ||
-                                        pdevice->info.ver >= 8;
+         props->transformFeedbackDraw = pdevice->info.verx10 >= 75;
          break;
       }
 
@@ -3797,13 +3828,6 @@ VkResult anv_AllocateMemory(
       if (result != VK_SUCCESS)
          goto fail;
 
-      const VkImportAndroidHardwareBufferInfoANDROID import_info = {
-         .buffer = mem->ahw,
-      };
-      result = anv_import_ahw_memory(_device, mem, &import_info);
-      if (result != VK_SUCCESS)
-         goto fail;
-
       goto success;
    }
 
@@ -4736,4 +4760,37 @@ vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t* pSupportedVersion)
     */
    *pSupportedVersion = MIN2(*pSupportedVersion, 4u);
    return VK_SUCCESS;
+}
+
+VkResult anv_GetPhysicalDeviceFragmentShadingRatesKHR(
+    VkPhysicalDevice                            physicalDevice,
+    uint32_t*                                   pFragmentShadingRateCount,
+    VkPhysicalDeviceFragmentShadingRateKHR*     pFragmentShadingRates)
+{
+   ANV_FROM_HANDLE(anv_physical_device, physical_device, physicalDevice);
+   VK_OUTARRAY_MAKE(out, pFragmentShadingRates, pFragmentShadingRateCount);
+
+#define append_rate(_samples, _width, _height)                          \
+   do {                                                                 \
+      vk_outarray_append(&out, __r) {                                   \
+         __r->sampleCounts = _samples;                                  \
+         __r->fragmentSize = (VkExtent2D) {                             \
+            .width = _width,                                            \
+            .height = _height,                                          \
+         };                                                             \
+      }                                                                 \
+   } while (0)
+
+   VkSampleCountFlags sample_counts =
+      isl_device_get_sample_counts(&physical_device->isl_dev);
+
+   for (uint32_t x = 4; x >= 1; x /= 2) {
+       for (uint32_t y = 4; y >= 1; y /= 2) {
+         append_rate(sample_counts, x, y);
+      }
+   }
+
+#undef append_rate
+
+   return vk_outarray_status(&out);
 }

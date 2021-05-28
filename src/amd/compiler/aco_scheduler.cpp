@@ -74,12 +74,13 @@ struct MoveState {
    /* for moving instructions after the first use of the current instruction upwards */
    void upwards_init(int source_idx, bool improved_rar);
    bool upwards_check_deps();
-   void upwards_set_insert_idx(int before);
+   void upwards_update_insert_idx();
    MoveResult upwards_move();
    void upwards_skip();
 
 private:
    void downwards_advance_helper();
+   void upwards_verify_invariants();
 };
 
 struct sched_ctx {
@@ -115,7 +116,22 @@ void move_element(T begin_it, size_t idx, size_t before) {
 void MoveState::downwards_advance_helper()
 {
    source_idx--;
-   total_demand.update(register_demand[source_idx]);
+
+   assert(source_idx < insert_idx_clause);
+   assert(insert_idx_clause < insert_idx);
+
+#ifndef NDEBUG
+   RegisterDemand reference_demand;
+   for (int i = source_idx + 1; i < insert_idx_clause; ++i) {
+      reference_demand.update(register_demand[i]);
+   }
+   assert(total_demand_clause == reference_demand);
+
+   for (int i = insert_idx_clause; i < insert_idx; ++i) {
+      reference_demand.update(register_demand[i]);
+   }
+   assert(total_demand == reference_demand);
+#endif
 }
 
 void MoveState::downwards_init(int current_idx, bool improved_rar_, bool may_form_clauses)
@@ -126,7 +142,8 @@ void MoveState::downwards_init(int current_idx, bool improved_rar_, bool may_for
    insert_idx = current_idx + 1;
    insert_idx_clause = current_idx;
 
-   total_demand = total_demand_clause = register_demand[current_idx];
+   total_demand = register_demand[current_idx];
+   total_demand_clause = {};
 
    std::fill(depends_on.begin(), depends_on.end(), false);
    if (improved_rar) {
@@ -174,8 +191,8 @@ MoveResult MoveState::downwards_move(bool clause)
       }
    }
 
-   int dest_insert_idx = clause ? insert_idx_clause : insert_idx;
-   RegisterDemand register_pressure = clause ? total_demand_clause : total_demand;
+   const int dest_insert_idx = clause ? insert_idx_clause : insert_idx;
+   const RegisterDemand register_pressure = clause ? total_demand_clause : total_demand;
 
    const RegisterDemand candidate_diff = get_live_changes(instr);
    const RegisterDemand temp = get_temp_registers(instr);
@@ -194,11 +211,22 @@ MoveResult MoveState::downwards_move(bool clause)
    for (int i = source_idx; i < dest_insert_idx - 1; i++)
       register_demand[i] -= candidate_diff;
    register_demand[dest_insert_idx - 1] = new_demand;
-   total_demand_clause -= candidate_diff;
    insert_idx_clause--;
+   total_demand_clause -= candidate_diff;
+   if (source_idx == insert_idx_clause) {
+      total_demand_clause = RegisterDemand{};
+   }
    if (!clause) {
       total_demand -= candidate_diff;
       insert_idx--;
+   } else {
+      /* The local demand of clause instructions did not change. But if
+       * previously total_demand_clause was greater than or equal to
+       * total_demand, the global maximum may have changed still */
+      total_demand = total_demand_clause;
+      for (int i = insert_idx_clause; i < insert_idx; ++i) {
+         total_demand.update(register_demand[i]);
+      }
    }
 
    downwards_advance_helper();
@@ -219,8 +247,25 @@ void MoveState::downwards_skip()
       }
    }
    total_demand_clause.update(register_demand[source_idx]);
+   total_demand.update(register_demand[source_idx]);
 
    downwards_advance_helper();
+}
+
+void MoveState::upwards_verify_invariants() {
+#ifndef NDEBUG
+   if (insert_idx < 0) {
+      return;
+   }
+
+   assert(insert_idx < source_idx);
+
+   RegisterDemand reference_demand;
+   for (int i = insert_idx; i < source_idx; ++i) {
+      reference_demand.update(register_demand[i]);
+   }
+   assert(total_demand == reference_demand);
+#endif
 }
 
 void MoveState::upwards_init(int source_idx_, bool improved_rar_)
@@ -249,10 +294,10 @@ bool MoveState::upwards_check_deps()
    return true;
 }
 
-void MoveState::upwards_set_insert_idx(int before)
+void MoveState::upwards_update_insert_idx()
 {
-   insert_idx = before;
-   total_demand = register_demand[before - 1];
+   insert_idx = source_idx;
+   total_demand = register_demand[insert_idx];
 }
 
 MoveResult MoveState::upwards_move()
@@ -296,6 +341,8 @@ MoveResult MoveState::upwards_move()
    total_demand.update(register_demand[source_idx]);
    source_idx++;
 
+   upwards_verify_invariants();
+
    return move_success;
 }
 
@@ -315,6 +362,8 @@ void MoveState::upwards_skip()
    }
 
    source_idx++;
+
+   upwards_verify_invariants();
 }
 
 bool is_gs_or_done_sendmsg(const Instruction *instr)
@@ -623,7 +672,7 @@ void schedule_SMEM(sched_ctx& ctx, Block* block,
 
       if (is_dependency) {
          if (!found_dependency) {
-            ctx.mv.upwards_set_insert_idx(candidate_idx);
+            ctx.mv.upwards_update_insert_idx();
             init_hazard_query(&hq);
             found_dependency = true;
          }
@@ -692,13 +741,11 @@ void schedule_VMEM(sched_ctx& ctx, Block* block,
 
       bool part_of_clause = false;
       if (current->isVMEM() == candidate->isVMEM()) {
-         bool same_resource = true;
-         if (current->isVMEM())
-            same_resource = candidate->operands[0].tempId() == current->operands[0].tempId();
          int grab_dist = ctx.mv.insert_idx_clause - candidate_idx;
          /* We can't easily tell how much this will decrease the def-to-use
           * distances, so just use how far it will be moved as a heuristic. */
-         part_of_clause = same_resource && grab_dist < clause_max_grab_dist;
+         part_of_clause = grab_dist < clause_max_grab_dist &&
+                          should_form_clause(current, candidate.get());
       }
 
       /* if current depends on candidate, add additional dependencies and continue */
@@ -766,7 +813,7 @@ void schedule_VMEM(sched_ctx& ctx, Block* block,
       is_dependency |= !found_dependency && !ctx.mv.upwards_check_deps();
       if (is_dependency) {
          if (!found_dependency) {
-            ctx.mv.upwards_set_insert_idx(candidate_idx);
+            ctx.mv.upwards_update_insert_idx();
             init_hazard_query(&indep_hq);
             found_dependency = true;
          }

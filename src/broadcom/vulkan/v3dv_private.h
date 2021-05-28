@@ -56,6 +56,7 @@
 
 #include "common/v3d_device_info.h"
 #include "common/v3d_limits.h"
+#include "common/v3d_util.h"
 
 #include "compiler/shader_enums.h"
 #include "compiler/spirv/nir_spirv.h"
@@ -123,6 +124,9 @@ struct v3dv_instance;
 
 struct v3d_simulator_file;
 
+/* Minimum required by the Vulkan 1.1 spec */
+#define MAX_MEMORY_ALLOCATION_SIZE (1ull << 30)
+
 struct v3dv_physical_device {
    struct vk_physical_device vk;
 
@@ -162,6 +166,8 @@ VkResult v3dv_physical_device_acquire_display(struct v3dv_instance *instance,
 
 VkResult v3dv_wsi_init(struct v3dv_physical_device *physical_device);
 void v3dv_wsi_finish(struct v3dv_physical_device *physical_device);
+struct v3dv_image *v3dv_wsi_get_image_from_swapchain(VkSwapchainKHR swapchain,
+                                                     uint32_t index);
 
 void v3dv_meta_clear_init(struct v3dv_device *device);
 void v3dv_meta_clear_finish(struct v3dv_device *device);
@@ -284,17 +290,17 @@ struct v3dv_pipeline_cache_stats {
  *
  * FIXME: perhaps move to common
  */
-typedef enum {
+enum broadcom_shader_stage {
    BROADCOM_SHADER_VERTEX,
    BROADCOM_SHADER_VERTEX_BIN,
    BROADCOM_SHADER_FRAGMENT,
    BROADCOM_SHADER_COMPUTE,
-} broadcom_shader_stage;
+};
 
 #define BROADCOM_SHADER_STAGES (BROADCOM_SHADER_COMPUTE + 1)
 
 /* Assumes that coordinate shaders will be custom-handled by the caller */
-static inline broadcom_shader_stage
+static inline enum broadcom_shader_stage
 gl_shader_stage_to_broadcom(gl_shader_stage stage)
 {
    switch (stage) {
@@ -310,7 +316,7 @@ gl_shader_stage_to_broadcom(gl_shader_stage stage)
 }
 
 static inline gl_shader_stage
-broadcom_shader_stage_to_gl(broadcom_shader_stage stage)
+broadcom_shader_stage_to_gl(enum broadcom_shader_stage stage)
 {
    switch (stage) {
    case BROADCOM_SHADER_VERTEX:
@@ -326,7 +332,7 @@ broadcom_shader_stage_to_gl(broadcom_shader_stage stage)
 }
 
 static inline const char *
-broadcom_shader_stage_name(broadcom_shader_stage stage)
+broadcom_shader_stage_name(enum broadcom_shader_stage stage)
 {
    switch(stage) {
    case BROADCOM_SHADER_VERTEX_BIN:
@@ -514,6 +520,7 @@ struct v3dv_image {
 
    uint64_t drm_format_mod;
    bool tiled;
+   bool external;
 
    struct v3d_resource_slice slices[V3D_MAX_MIP_LEVELS];
    uint64_t size; /* Total size in bytes */
@@ -999,6 +1006,7 @@ struct v3dv_job {
    struct {
       struct v3dv_bo *shared_memory;
       uint32_t wg_count[3];
+      uint32_t wg_base[3];
       struct drm_v3d_submit_csd submit;
    } csd;
 };
@@ -1385,7 +1393,7 @@ struct v3dv_event {
 };
 
 struct v3dv_shader_variant {
-   broadcom_shader_stage stage;
+   enum broadcom_shader_stage stage;
 
    union {
       struct v3d_prog_data *base;
@@ -1424,7 +1432,7 @@ struct v3dv_shader_variant {
 struct v3dv_pipeline_stage {
    struct v3dv_pipeline *pipeline;
 
-   broadcom_shader_stage stage;
+   enum broadcom_shader_stage stage;
 
    const struct vk_shader_module *module;
    const char *entrypoint;
@@ -1514,6 +1522,8 @@ struct v3dv_descriptor_set {
     */
    struct v3dv_descriptor descriptors[0];
 };
+
+uint32_t v3dv_max_descriptor_bo_size(void);
 
 struct v3dv_descriptor_set_binding_layout {
    VkDescriptorType type;
@@ -1830,25 +1840,6 @@ v3dv_zs_buffer_from_aspect_bits(VkImageAspectFlags aspects)
 }
 
 static inline uint32_t
-v3dv_zs_buffer_from_vk_format(VkFormat format)
-{
-   switch (format) {
-   case VK_FORMAT_D16_UNORM_S8_UINT:
-   case VK_FORMAT_D24_UNORM_S8_UINT:
-   case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      return ZSTENCIL;
-   case VK_FORMAT_D16_UNORM:
-   case VK_FORMAT_D32_SFLOAT:
-   case VK_FORMAT_X8_D24_UNORM_PACK32:
-      return Z;
-   case VK_FORMAT_S8_UINT:
-      return STENCIL;
-   default:
-      return NONE;
-   }
-}
-
-static inline uint32_t
 v3dv_zs_buffer(bool depth, bool stencil)
 {
    if (depth && stencil)
@@ -1941,7 +1932,7 @@ v3dv_get_shader_variant(struct v3dv_pipeline_stage *p_stage,
 
 struct v3dv_shader_variant *
 v3dv_shader_variant_create(struct v3dv_device *device,
-                           broadcom_shader_stage stage,
+                           enum broadcom_shader_stage stage,
                            struct v3d_prog_data *prog_data,
                            uint32_t prog_data_size,
                            uint32_t assembly_offset,

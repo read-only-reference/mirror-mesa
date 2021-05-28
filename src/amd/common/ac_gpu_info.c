@@ -620,9 +620,13 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       identify_chip(SIENNA_CICHLID);
       identify_chip(NAVY_FLOUNDER);
       identify_chip(DIMGREY_CAVEFISH);
+      identify_chip(BEIGE_GOBY);
       break;
    case FAMILY_VGH:
       identify_chip(VANGOGH);
+      break;
+   case FAMILY_YC:
+      identify_chip(YELLOW_CARP);
       break;
    }
 
@@ -878,14 +882,26 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
 
    info->has_ls_vgpr_init_bug = info->family == CHIP_VEGA10 || info->family == CHIP_RAVEN;
 
-   /* Drawing from 0-sized index buffers causes hangs on Navi10/14. */
-   info->has_zero_index_buffer_bug = info->family == CHIP_NAVI10 || info->family == CHIP_NAVI14;
+   /* Drawing from 0-sized index buffers causes hangs on gfx10. */
+   info->has_zero_index_buffer_bug = info->chip_class == GFX10;
 
    /* Whether chips are affected by the image load/sample/gather hw bug when
     * DCC is enabled (ie. WRITE_COMPRESS_ENABLE should be 0).
     */
    info->has_image_load_dcc_bug = info->family == CHIP_DIMGREY_CAVEFISH ||
-                                  info->family == CHIP_VANGOGH;
+                                  info->family == CHIP_VANGOGH ||
+                                  info->family == CHIP_YELLOW_CARP;
+
+   /* DB has a bug when ITERATE_256 is set to 1 that can cause a hang. The
+    * workaround is to set DECOMPRESS_ON_Z_PLANES to 2 for 4X MSAA D/S images.
+    */
+   info->has_two_planes_iterate256_bug = info->chip_class == GFX10;
+
+   /* GE has a bug when a legacy GS draw follows an NGG draw and it requires
+    * a VGT_FLUSH to fix that.
+    */
+   info->has_vgt_flush_ngg_legacy_bug = info->chip_class == GFX10 ||
+                                        info->family == CHIP_SIENNA_CICHLID;
 
    /* Support for GFX10.3 was added with F32_ME_FEATURE_VERSION_31 but the
     * firmware version wasn't bumped.
@@ -997,9 +1013,11 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
          pc_lines = 1024;
          break;
       case CHIP_NAVI14:
+      case CHIP_BEIGE_GOBY:
          pc_lines = 512;
          break;
       case CHIP_VANGOGH:
+      case CHIP_YELLOW_CARP:
          pc_lines = 256;
          break;
       default:

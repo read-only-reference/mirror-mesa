@@ -4,6 +4,7 @@ bifrost_FILES := \
         bifrost/bifrost_compile.h \
         bifrost/bi_layout.c \
         bifrost/bi_liveness.c \
+        bifrost/bi_lower_divergent_indirects.c \
         bifrost/bi_lower_swizzle.c \
         bifrost/bi_schedule.c \
         bifrost/bi_scoreboard.c \
@@ -11,6 +12,7 @@ bifrost_FILES := \
         bifrost/bi_print.c \
         bifrost/bi_print.h \
         bifrost/bi_ra.c \
+        bifrost/bi_opt_constant_fold.c \
         bifrost/bi_opt_copy_prop.c \
         bifrost/bi_opt_dce.c \
         bifrost/bi_opt_push_ubo.c \
@@ -109,8 +111,6 @@ shared_FILES := \
 util_FILES := \
         util/lcra.c \
         util/lcra.h \
-        util/nir_lower_blend.c \
-        util/nir_lower_blend.h \
         util/nir_mod_helpers.c \
         util/pan_ir.c \
         util/pan_ir.h \

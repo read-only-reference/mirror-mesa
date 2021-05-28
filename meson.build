@@ -71,6 +71,7 @@ if with_tools.contains('all')
     'nir',
     'nouveau',
     'xvmc',
+    'asahi',
   ]
 endif
 with_clc = false
@@ -235,6 +236,7 @@ with_gallium_swr = gallium_drivers.contains('swr')
 with_gallium_lima = gallium_drivers.contains('lima')
 with_gallium_zink = gallium_drivers.contains('zink')
 with_gallium_d3d12 = gallium_drivers.contains('d3d12')
+with_gallium_asahi = gallium_drivers.contains('asahi')
 
 with_gallium = gallium_drivers.length() != 0
 with_gallium_kmsro = with_gallium_v3d or with_gallium_vc4 or with_gallium_etnaviv or with_gallium_panfrost or with_gallium_lima or with_gallium_freedreno
@@ -785,6 +787,12 @@ if with_gallium_st_nine
     error('Using nine with wine requires dri3')
   endif
 endif
+with_gallium_st_d3d10umd =  get_option('gallium-d3d10umd')
+if with_gallium_st_d3d10umd
+  if not with_gallium_softpipe
+    error('The d3d10umd state tracker requires gallium softpipe/llvmpipe.')
+  endif
+endif
 _power8 = get_option('power8')
 if _power8 == 'true'
   _power8 = 'enabled'
@@ -1139,30 +1147,30 @@ if host_machine.system() == 'windows'
   endif
 endif
 
-if get_option('sse2') and host_machine.system() == 'windows' and host_machine.cpu_family() == 'x86' and cc.get_id() == 'gcc'
-  # These settings make generated MinGW code match MSVC and follow
-  # GCC advice on https://gcc.gnu.org/wiki/FloatingPointMath#x86note
-  #
-  # NOTE: We need to ensure stack is realigned given that we
-  # produce shared objects, and have no control over the stack
-  # alignment policy of the application. Therefore we need
-  # -mstackrealign or -mincoming-stack-boundary=2.
-  #
-  # XXX: We could have SSE without -mstackrealign if we always used
-  # __attribute__((force_align_arg_pointer)), but that's not
-  # always the case.
-  c_args += ['-msse', '-msse2', '-mfpmath=sse', '-mstackrealign']
-endif
-
 if host_machine.cpu_family().startswith('x86') and cc.get_id() != 'msvc'
   pre_args += '-DUSE_SSE41'
   with_sse41 = true
   sse41_args = ['-msse4.1']
 
-  # GCC on x86 (not x86_64) with -msse* assumes a 16 byte aligned stack, but
-  # that's not guaranteed
   if host_machine.cpu_family() == 'x86'
-    sse41_args += '-mstackrealign'
+    if get_option('sse2')
+      # These settings make generated GCC code match MSVC and follow
+      # GCC advice on https://gcc.gnu.org/wiki/FloatingPointMath#x86note
+      #
+      # NOTE: We need to ensure stack is realigned given that we
+      # produce shared objects, and have no control over the stack
+      # alignment policy of the application. Therefore we need
+      # -mstackrealign or -mincoming-stack-boundary=2.
+      #
+      # XXX: We could have SSE without -mstackrealign if we always used
+      # __attribute__((force_align_arg_pointer)), but that's not
+      # always the case.
+      c_args += ['-msse2', '-mfpmath=sse', '-mstackrealign']
+    else
+      # GCC on x86 (not x86_64) with -msse* assumes a 16 byte aligned stack, but
+      # that's not guaranteed
+      sse41_args += '-mstackrealign'
+    endif
   endif
 else
   with_sse41 = false
@@ -1970,6 +1978,14 @@ else
   dep_lmsensors = null_dep
 endif
 
+with_perfetto = get_option('perfetto')
+with_datasources = get_option('datasources')
+with_any_datasource = with_datasources.length() != 0
+if with_perfetto
+  dep_perfetto = dependency('perfetto', fallback: ['perfetto', 'dep_perfetto'])
+  pre_args += '-DHAVE_PERFETTO'
+endif
+
 # If the compiler supports it, put function and data symbols in their
 # own sections and GC the sections after linking.  This lets drivers
 # drop shared code unused by that specific driver (particularly
@@ -2169,6 +2185,12 @@ lines += 'HUD lmsensors:   ' + (dep_lmsensors.found() ? 'yes' : 'no')
 
 lines += ''
 lines += 'Shared-glapi:    ' + (with_shared_glapi ? 'yes' : 'no')
+
+lines += ''
+lines += 'Perfetto:        ' + (with_perfetto ? 'yes' : 'no')
+if with_any_datasource
+  lines += 'Perfetto ds:     ' + ' '.join(with_datasources)
+endif
 
 
 indent = '        '

@@ -272,8 +272,9 @@ st_nir_opts(nir_shader *nir)
       NIR_PASS(progress, nir, nir_opt_dead_write_vars);
 
       if (nir->options->lower_to_scalar) {
-         NIR_PASS_V(nir, nir_lower_alu_to_scalar, NULL, NULL);
-         NIR_PASS_V(nir, nir_lower_phis_to_scalar);
+         NIR_PASS_V(nir, nir_lower_alu_to_scalar,
+                    nir->options->lower_to_scalar_filter, NULL);
+         NIR_PASS_V(nir, nir_lower_phis_to_scalar, false);
       }
 
       NIR_PASS_V(nir, nir_lower_alu);
@@ -403,7 +404,8 @@ st_nir_preprocess(struct st_context *st, struct gl_program *prog,
    NIR_PASS_V(nir, nir_lower_var_copies);
 
    if (options->lower_to_scalar) {
-     NIR_PASS_V(nir, nir_lower_alu_to_scalar, NULL, NULL);
+     NIR_PASS_V(nir, nir_lower_alu_to_scalar,
+                options->lower_to_scalar_filter, NULL);
    }
 
    /* before buffers and vars_to_ssa */
@@ -538,7 +540,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
        * vectorize them afterwards again */
       if (!nir->options->lower_to_scalar) {
          NIR_PASS_V(nir, nir_lower_alu_to_scalar, filter_64_bit_instr, nullptr);
-         NIR_PASS_V(nir, nir_lower_phis_to_scalar);
+         NIR_PASS_V(nir, nir_lower_phis_to_scalar, false);
       }
 
       if (nir->options->lower_doubles_options) {

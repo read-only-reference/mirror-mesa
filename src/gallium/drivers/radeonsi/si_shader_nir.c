@@ -534,7 +534,7 @@ void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first)
 
    NIR_PASS_V(nir, nir_lower_vars_to_ssa);
    NIR_PASS_V(nir, nir_lower_alu_to_scalar, si_alu_to_scalar_filter, sscreen);
-   NIR_PASS_V(nir, nir_lower_phis_to_scalar);
+   NIR_PASS_V(nir, nir_lower_phis_to_scalar, false);
 
    do {
       progress = false;
@@ -560,7 +560,7 @@ void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first)
       if (lower_alu_to_scalar)
          NIR_PASS_V(nir, nir_lower_alu_to_scalar, si_alu_to_scalar_filter, sscreen);
       if (lower_phis_to_scalar)
-         NIR_PASS_V(nir, nir_lower_phis_to_scalar);
+         NIR_PASS_V(nir, nir_lower_phis_to_scalar, false);
       progress |= lower_alu_to_scalar | lower_phis_to_scalar;
 
       NIR_PASS(progress, nir, nir_opt_cse);
@@ -594,6 +594,9 @@ void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first)
       if (nir->options->max_unroll_iterations) {
          NIR_PASS(progress, nir, nir_opt_loop_unroll, 0);
       }
+
+      if (nir->info.stage == MESA_SHADER_FRAGMENT)
+         NIR_PASS_V(nir, nir_opt_move_discards_to_top);
 
       if (sscreen->options.fp16)
          NIR_PASS(progress, nir, nir_opt_vectorize, NULL, NULL);
@@ -822,6 +825,9 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
    };
    NIR_PASS_V(nir, nir_lower_subgroups, &subgroups_options);
 
+   NIR_PASS_V(nir, nir_lower_discard_or_demote,
+              sscreen->debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL));
+
    /* Lower load constants to scalar and then clean up the mess */
    NIR_PASS_V(nir, nir_lower_load_const_to_scalar);
    NIR_PASS_V(nir, nir_lower_var_copies);
@@ -883,9 +889,6 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       si_late_optimize_16bit_samplers(sscreen, nir);
 
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
-
-   NIR_PASS_V(nir, nir_lower_discard_or_demote,
-              sscreen->debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL));
 }
 
 void si_finalize_nir(struct pipe_screen *screen, void *nirptr, bool optimize)

@@ -254,6 +254,12 @@ emit_system_values_block(nir_block *block, fs_visitor *v)
          }
          break;
 
+      case nir_intrinsic_load_frag_shading_rate:
+         reg = &v->nir_system_values[SYSTEM_VALUE_FRAG_SHADING_RATE];
+         if (reg->file == BAD_FILE)
+            *reg = *v->emit_shading_rate_setup();
+         break;
+
       default:
          break;
       }
@@ -3320,7 +3326,8 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
 
    case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_load_sample_mask_in:
-   case nir_intrinsic_load_sample_id: {
+   case nir_intrinsic_load_sample_id:
+   case nir_intrinsic_load_frag_shading_rate: {
       gl_system_value sv = nir_system_value_from_intrinsic(instr->intrinsic);
       fs_reg val = nir_system_values[sv];
       assert(val.file != BAD_FILE);
@@ -4331,7 +4338,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
        * to flush it too.
        */
       const bool needs_render_fence =
-         devinfo->ver == 7 && !devinfo->is_haswell;
+         devinfo->verx10 == 70;
 
       /* Be conservative in Gfx11+ and always stall in a fence.  Since there
        * are two different fences, and shader might want to synchronize

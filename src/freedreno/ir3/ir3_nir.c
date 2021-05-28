@@ -82,6 +82,7 @@ static const nir_shader_compiler_options options = {
 		 */
 		.lower_int64_options = (nir_lower_int64_options)~0,
 		.lower_uniforms_to_ubo = true,
+		.use_scoped_barrier = true,
 };
 
 /* we don't want to lower vertex_id to _zero_based on newer gpus: */
@@ -138,6 +139,7 @@ static const nir_shader_compiler_options options_a6xx = {
 		.lower_int64_options = (nir_lower_int64_options)~0,
 		.lower_uniforms_to_ubo = true,
 		.lower_device_index_to_zero = true,
+		.use_scoped_barrier = true,
 };
 
 const nir_shader_compiler_options *
@@ -203,7 +205,7 @@ ir3_optimize_loop(struct ir3_compiler *compiler, nir_shader *s)
 		progress |= OPT(s, nir_opt_copy_prop_vars);
 		progress |= OPT(s, nir_opt_dead_write_vars);
 		progress |= OPT(s, nir_lower_alu_to_scalar, NULL, NULL);
-		progress |= OPT(s, nir_lower_phis_to_scalar);
+		progress |= OPT(s, nir_lower_phis_to_scalar, false);
 
 		progress |= OPT(s, nir_copy_prop);
 		progress |= OPT(s, nir_opt_dce);
@@ -551,10 +553,13 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 	 * expensive.
 	 */
 	if (so->shader->compiler->has_pvtmem) {
-		NIR_PASS_V(s, nir_lower_vars_to_scratch, nir_var_function_temp,
-				   16 * 16 /* bytes */, glsl_get_natural_size_align_bytes);
+		progress |=
+			OPT(s, nir_lower_vars_to_scratch, nir_var_function_temp,
+				16 * 16 /* bytes */, glsl_get_natural_size_align_bytes);
 	}
 
+	/* Lower scratch writemasks */
+	progress |= OPT(s, nir_lower_wrmasks, should_split_wrmask, s);
 
 	OPT_V(s, nir_lower_amul, ir3_glsl_type_size);
 

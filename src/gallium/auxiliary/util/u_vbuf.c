@@ -437,8 +437,11 @@ u_vbuf_translate_buffers(struct u_vbuf *mgr, struct translate_key *key,
          unsigned size = vb->stride ? num_vertices * vb->stride
                                     : sizeof(double)*4;
 
-         if (!vb->buffer.resource)
+         if (!vb->buffer.resource) {
+            static uint64_t dummy_buf[4] = { 0 };
+            tr->set_buffer(tr, i, dummy_buf, 0, 0);
             continue;
+        }
 
          if (offset + size > vb->buffer.resource->width0) {
             /* Don't try to map past end of buffer.  This often happens when
@@ -1268,8 +1271,25 @@ static void u_vbuf_set_driver_vertex_buffers(struct u_vbuf *mgr)
    start_slot = ffs(mgr->dirty_real_vb_mask) - 1;
    count = util_last_bit(mgr->dirty_real_vb_mask >> start_slot);
 
-   pipe->set_vertex_buffers(pipe, start_slot, count, 0, false,
-                            mgr->real_vertex_buffer + start_slot);
+   if (mgr->dirty_real_vb_mask == mgr->enabled_vb_mask &&
+       mgr->dirty_real_vb_mask == mgr->user_vb_mask) {
+      /* Fast path that allows us to transfer the VBO references to the driver
+       * to skip atomic reference counting there. These are freshly uploaded
+       * user buffers that can be discarded after this call.
+       */
+      pipe->set_vertex_buffers(pipe, start_slot, count, 0, true,
+                               mgr->real_vertex_buffer + start_slot);
+
+      /* We don't own the VBO references now. Set them to NULL. */
+      for (unsigned i = 0; i < count; i++) {
+         assert(!mgr->real_vertex_buffer[start_slot + i].is_user_buffer);
+         mgr->real_vertex_buffer[start_slot + i].buffer.resource = NULL;
+      }
+   } else {
+      /* Slow path where we have to keep VBO references. */
+      pipe->set_vertex_buffers(pipe, start_slot, count, 0, false,
+                               mgr->real_vertex_buffer + start_slot);
+   }
    mgr->dirty_real_vb_mask = 0;
 }
 
@@ -1597,7 +1617,8 @@ void u_vbuf_draw_vbo(struct u_vbuf *mgr, const struct pipe_draw_info *info,
    */
 
    u_upload_unmap(pipe->stream_uploader);
-   u_vbuf_set_driver_vertex_buffers(mgr);
+   if (mgr->dirty_real_vb_mask)
+      u_vbuf_set_driver_vertex_buffers(mgr);
 
    pipe->draw_vbo(pipe, &new_info, drawid_offset, indirect, &new_draw, 1);
 

@@ -43,17 +43,17 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
 {
    VkPipelineVertexInputStateCreateInfo vertex_input_state = {};
    vertex_input_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-   vertex_input_state.pVertexBindingDescriptions = state->bindings;
+   vertex_input_state.pVertexBindingDescriptions = state->element_state->bindings;
    vertex_input_state.vertexBindingDescriptionCount = state->element_state->num_bindings;
    vertex_input_state.pVertexAttributeDescriptions = state->element_state->attribs;
    vertex_input_state.vertexAttributeDescriptionCount = state->element_state->num_attribs;
 
    VkPipelineVertexInputDivisorStateCreateInfoEXT vdiv_state = {};
-   if (state->divisors_present) {
+   if (state->element_state->divisors_present) {
        vertex_input_state.pNext = &vdiv_state;
        vdiv_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT;
-       vdiv_state.vertexBindingDivisorCount = state->divisors_present;
-       vdiv_state.pVertexBindingDivisors = state->divisors;
+       vdiv_state.vertexBindingDivisorCount = state->element_state->divisors_present;
+       vdiv_state.pVertexBindingDivisors = state->element_state->divisors;
    }
 
    VkPipelineInputAssemblyStateCreateInfo primitive_state = {};
@@ -106,7 +106,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    rast_state.rasterizerDiscardEnable = state->rast_state->rasterizer_discard;
    rast_state.polygonMode = state->rast_state->polygon_mode;
    rast_state.cullMode = state->rast_state->cull_mode;
-   rast_state.frontFace = state->rast_state->front_face;
+   rast_state.frontFace = state->front_face;
 
    rast_state.depthBiasEnable = VK_TRUE;
    rast_state.depthBiasConstantFactor = 0.0;
@@ -145,7 +145,17 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    if (screen->info.have_EXT_extended_dynamic_state) {
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT_EXT;
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_STENCIL_OP_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE_EXT;
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_FRONT_FACE_EXT;
    } else {
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_VIEWPORT;
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_SCISSOR;

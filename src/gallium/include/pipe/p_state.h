@@ -581,11 +581,16 @@ struct pipe_memory_allocation;
 struct pipe_transfer
 {
    struct pipe_resource *resource; /**< resource to transfer to/from  */
-   unsigned level;                 /**< texture mipmap level */
-   enum pipe_map_flags usage;
+   enum pipe_map_flags usage:24;
+   unsigned level:8;               /**< texture mipmap level */
    struct pipe_box box;            /**< region of the resource to access */
    unsigned stride;                /**< row stride in bytes */
    unsigned layer_stride;          /**< image/layer stride in bytes */
+
+   /* Offset into a driver-internal staging buffer to make use of unused
+    * padding in this structure.
+    */
+   unsigned offset;
 };
 
 

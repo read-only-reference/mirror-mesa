@@ -139,11 +139,15 @@ nir_assign_var_locations(nir_shader *shader, nir_variable_mode mode,
 }
 
 /**
- * Return true if the given variable is a per-vertex input/output array.
- * (such as geometry shader inputs).
+ * Some inputs and outputs are arrayed, meaning that there is an extra level
+ * of array indexing to handle mismatches between the shader interface and the
+ * dispatch pattern of the shader.  For instance, geometry shaders are
+ * executed per-primitive while their inputs and outputs are specified
+ * per-vertex so all inputs and outputs have to be additionally indexed with
+ * the vertex index within the primitive.
  */
 bool
-nir_is_per_vertex_io(const nir_variable *var, gl_shader_stage stage)
+nir_is_arrayed_io(const nir_variable *var, gl_shader_stage stage)
 {
    if (var->data.patch || !glsl_type_is_array(var->type))
       return false;
@@ -164,7 +168,7 @@ static unsigned get_number_of_slots(struct lower_io_state *state,
 {
    const struct glsl_type *type = var->type;
 
-   if (nir_is_per_vertex_io(var, state->builder.shader->info.stage)) {
+   if (nir_is_arrayed_io(var, state->builder.shader->info.stage)) {
       assert(glsl_type_is_array(type));
       type = glsl_get_array_element(type);
    }
@@ -299,14 +303,7 @@ emit_load(struct lower_io_state *state,
       nir_intrinsic_set_range(load,
                               state->type_size(var->type, var->data.bindless));
 
-   if (load->intrinsic == nir_intrinsic_load_input ||
-       load->intrinsic == nir_intrinsic_load_input_vertex ||
-       load->intrinsic == nir_intrinsic_load_interpolated_input ||
-       load->intrinsic == nir_intrinsic_load_per_vertex_input ||
-       load->intrinsic == nir_intrinsic_load_output ||
-       load->intrinsic == nir_intrinsic_load_per_vertex_output ||
-       load->intrinsic == nir_intrinsic_load_uniform)
-      nir_intrinsic_set_dest_type(load, dest_type);
+   nir_intrinsic_set_dest_type(load, dest_type);
 
    if (load->intrinsic != nir_intrinsic_load_uniform) {
       nir_io_semantics semantics = {0};
@@ -393,9 +390,8 @@ emit_store(struct lower_io_state *state, nir_ssa_def *data,
            nir_component_mask_t write_mask, nir_alu_type src_type)
 {
    nir_builder *b = &state->builder;
-   nir_variable_mode mode = var->data.mode;
 
-   assert(mode == nir_var_shader_out);
+   assert(var->data.mode == nir_var_shader_out);
    nir_intrinsic_op op;
    op = vertex_index ? nir_intrinsic_store_per_vertex_output :
                        nir_intrinsic_store_output;
@@ -407,13 +403,8 @@ emit_store(struct lower_io_state *state, nir_ssa_def *data,
    store->src[0] = nir_src_for_ssa(data);
 
    nir_intrinsic_set_base(store, var->data.driver_location);
-
-   if (mode == nir_var_shader_out)
-      nir_intrinsic_set_component(store, component);
-
-   if (store->intrinsic == nir_intrinsic_store_output ||
-       store->intrinsic == nir_intrinsic_store_per_vertex_output)
-      nir_intrinsic_set_src_type(store, src_type);
+   nir_intrinsic_set_component(store, component);
+   nir_intrinsic_set_src_type(store, src_type);
 
    nir_intrinsic_set_write_mask(store, write_mask);
 
@@ -625,7 +616,7 @@ nir_lower_io_block(nir_block *block,
 
       b->cursor = nir_before_instr(instr);
 
-      const bool per_vertex = nir_is_per_vertex_io(var, b->shader->info.stage);
+      const bool per_vertex = nir_is_arrayed_io(var, b->shader->info.stage);
 
       nir_ssa_def *offset;
       nir_ssa_def *vertex_index = NULL;
@@ -2277,7 +2268,11 @@ lower_vars_to_explicit(nir_shader *shader,
       if (explicit_type != var->type)
          var->type = explicit_type;
 
-      assert(util_is_power_of_two_nonzero(align));
+      UNUSED bool is_empty_struct =
+         glsl_type_is_struct_or_ifc(explicit_type) &&
+         glsl_get_length(explicit_type) == 0;
+
+      assert(util_is_power_of_two_nonzero(align) || is_empty_struct);
       var->data.driver_location = ALIGN_POT(offset, align);
       offset = var->data.driver_location + size;
       progress = true;
@@ -2334,7 +2329,7 @@ nir_lower_vars_to_explicit_types(nir_shader *shader,
       progress |= lower_vars_to_explicit(shader, &shader->variables, nir_var_uniform, type_info);
 
    if (modes & nir_var_mem_shared) {
-      assert(!shader->info.cs.shared_memory_explicit_layout);
+      assert(!shader->info.shared_memory_explicit_layout);
       progress |= lower_vars_to_explicit(shader, &shader->variables, nir_var_mem_shared, type_info);
    }
 

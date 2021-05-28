@@ -1477,7 +1477,7 @@ radv_can_fast_clear_color(struct radv_cmd_buffer *cmd_buffer, const struct radv_
       return false;
 
    if (!radv_layout_can_fast_clear(
-          cmd_buffer->device, iview->image, image_layout, in_render_loop,
+          cmd_buffer->device, iview->image, iview->base_mip, image_layout, in_render_loop,
           radv_image_queue_family_mask(iview->image, cmd_buffer->queue_family_index,
                                        cmd_buffer->queue_family_index)))
       return false;
@@ -1521,18 +1521,25 @@ radv_can_fast_clear_color(struct radv_cmd_buffer *cmd_buffer, const struct radv_
             return false;
       }
 
-      if (iview->image->info.levels > 1 &&
-          cmd_buffer->device->physical_device->rad_info.chip_class == GFX8) {
-         for (uint32_t l = 0; l < iview->level_count; l++) {
-            uint32_t level = iview->base_mip + l;
-            struct legacy_surf_dcc_level *dcc_level =
-               &iview->image->planes[0].surface.u.legacy.color.dcc_level[level];
-
-            /* Do not fast clears if one level can't be
-             * fast cleared.
-             */
-            if (!dcc_level->dcc_fast_clear_size)
+      if (iview->image->info.levels > 1) {
+         if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
+            uint32_t last_level = iview->base_mip + iview->level_count - 1;
+            if (last_level >= iview->image->planes[0].surface.num_meta_levels) {
+               /* Do not fast clears if one level can't be fast cleard. */
                return false;
+            }
+         } else {
+            for (uint32_t l = 0; l < iview->level_count; l++) {
+               uint32_t level = iview->base_mip + l;
+               struct legacy_surf_dcc_level *dcc_level =
+                  &iview->image->planes[0].surface.u.legacy.color.dcc_level[level];
+
+               /* Do not fast clears if one level can't be
+                * fast cleared.
+                */
+               if (!dcc_level->dcc_fast_clear_size)
+                  return false;
+            }
          }
       }
    }
@@ -2034,9 +2041,16 @@ radv_cmd_clear_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image *imag
          uint32_t queue_mask = radv_image_queue_family_mask(image, cmd_buffer->queue_family_index,
                                                             cmd_buffer->queue_family_index);
 
-         /* Don't use compressed image stores because they will use an incompatible format. */
-         if (radv_layout_dcc_compressed(cmd_buffer->device, image, image_layout, false, queue_mask))
-            disable_compression = cs;
+         for (uint32_t r = 0; r < range_count; r++) {
+            const VkImageSubresourceRange *range = &ranges[r];
+
+            /* Don't use compressed image stores because they will use an incompatible format. */
+            if (radv_layout_dcc_compressed(cmd_buffer->device, image, range->baseMipLevel,
+                                           image_layout, false, queue_mask)) {
+               disable_compression = cs;
+               break;
+            }
+         }
       }
    }
 

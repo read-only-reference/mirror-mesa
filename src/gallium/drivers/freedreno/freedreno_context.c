@@ -240,7 +240,7 @@ fd_emit_string_marker(struct pipe_context *pctx, const char *string,
 
    struct fd_batch *batch = fd_context_batch_locked(ctx);
 
-   ctx->batch->needs_flush = true;
+   fd_batch_needs_flush(batch);
 
    if (ctx->screen->gpu_id >= 500) {
       fd_emit_string5(batch->draw, string, len);
@@ -695,8 +695,12 @@ fd_context_init_tc(struct pipe_context *pctx, unsigned flags)
       return pctx;
 
    struct pipe_context *tc = threaded_context_create(
-      pctx, &ctx->screen->transfer_pool, fd_replace_buffer_storage,
-      fd_fence_create_unflushed, &ctx->tc);
+      pctx, &ctx->screen->transfer_pool,
+      fd_replace_buffer_storage,
+      fd_fence_create_unflushed,
+      fd_resource_busy,
+      false,
+      &ctx->tc);
 
    uint64_t total_ram;
    if (tc && tc != pctx && os_get_total_physical_memory(&total_ram)) {

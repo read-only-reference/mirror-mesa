@@ -55,7 +55,7 @@ extern "C" {
 static inline void
 pipe_reference_init(struct pipe_reference *dst, unsigned count)
 {
-   p_atomic_set(&dst->count, count);
+   dst->count = count;
 }
 
 static inline boolean
@@ -134,6 +134,20 @@ pipe_surface_release(struct pipe_context *pipe, struct pipe_surface **ptr)
    *ptr = NULL;
 }
 
+static inline void
+pipe_resource_destroy(struct pipe_resource *res)
+{
+   /* Avoid recursion, which would prevent inlining this function */
+   do {
+      struct pipe_resource *next = res->next;
+
+      res->screen->resource_destroy(res->screen, res);
+      res = next;
+   } while (pipe_reference_described(res ? &res->reference : NULL,
+                                     NULL,
+                                     (debug_reference_descriptor)
+                                     debug_describe_resource));
+}
 
 static inline void
 pipe_resource_reference(struct pipe_resource **dst, struct pipe_resource *src)
@@ -144,16 +158,7 @@ pipe_resource_reference(struct pipe_resource **dst, struct pipe_resource *src)
                                 src ? &src->reference : NULL,
                                 (debug_reference_descriptor)
                                 debug_describe_resource)) {
-      /* Avoid recursion, which would prevent inlining this function */
-      do {
-         struct pipe_resource *next = old_dst->next;
-
-         old_dst->screen->resource_destroy(old_dst->screen, old_dst);
-         old_dst = next;
-      } while (pipe_reference_described(old_dst ? &old_dst->reference : NULL,
-                                        NULL,
-                                        (debug_reference_descriptor)
-                                        debug_describe_resource));
+      pipe_resource_destroy(old_dst);
    }
    *dst = src;
 }
@@ -350,7 +355,7 @@ pipe_buffer_map_range(struct pipe_context *pipe,
 
    u_box_1d(offset, length, &box);
 
-   map = pipe->transfer_map(pipe, buffer, 0, access, &box, transfer);
+   map = pipe->buffer_map(pipe, buffer, 0, access, &box, transfer);
    if (!map) {
       return NULL;
    }
@@ -379,7 +384,7 @@ static inline void
 pipe_buffer_unmap(struct pipe_context *pipe,
                   struct pipe_transfer *transfer)
 {
-   pipe->transfer_unmap(pipe, transfer);
+   pipe->buffer_unmap(pipe, transfer);
 }
 
 static inline void
@@ -499,21 +504,18 @@ pipe_buffer_read(struct pipe_context *pipe,
  * \param access  bitmask of PIPE_MAP_x flags
  */
 static inline void *
-pipe_transfer_map(struct pipe_context *context,
-                  struct pipe_resource *resource,
-                  unsigned level, unsigned layer,
-                  unsigned access,
-                  unsigned x, unsigned y,
-                  unsigned w, unsigned h,
-                  struct pipe_transfer **transfer)
+pipe_texture_map(struct pipe_context *context,
+                 struct pipe_resource *resource,
+                 unsigned level, unsigned layer,
+                 unsigned access,
+                 unsigned x, unsigned y,
+                 unsigned w, unsigned h,
+                 struct pipe_transfer **transfer)
 {
    struct pipe_box box;
    u_box_2d_zslice(x, y, layer, w, h, &box);
-   return context->transfer_map(context,
-                                resource,
-                                level,
-                                access,
-                                &box, transfer);
+   return context->texture_map(context, resource, level, access,
+                               &box, transfer);
 }
 
 
@@ -522,28 +524,25 @@ pipe_transfer_map(struct pipe_context *context,
  * \param access  bitmask of PIPE_MAP_x flags
  */
 static inline void *
-pipe_transfer_map_3d(struct pipe_context *context,
-                     struct pipe_resource *resource,
-                     unsigned level,
-                     unsigned access,
-                     unsigned x, unsigned y, unsigned z,
-                     unsigned w, unsigned h, unsigned d,
-                     struct pipe_transfer **transfer)
+pipe_texture_map_3d(struct pipe_context *context,
+                    struct pipe_resource *resource,
+                    unsigned level,
+                    unsigned access,
+                    unsigned x, unsigned y, unsigned z,
+                    unsigned w, unsigned h, unsigned d,
+                    struct pipe_transfer **transfer)
 {
    struct pipe_box box;
    u_box_3d(x, y, z, w, h, d, &box);
-   return context->transfer_map(context,
-                                resource,
-                                level,
-                                access,
-                                &box, transfer);
+   return context->texture_map(context, resource, level, access,
+                               &box, transfer);
 }
 
 static inline void
-pipe_transfer_unmap(struct pipe_context *context,
-                    struct pipe_transfer *transfer)
+pipe_texture_unmap(struct pipe_context *context,
+                   struct pipe_transfer *transfer)
 {
-   context->transfer_unmap(context, transfer);
+   context->texture_unmap(context, transfer);
 }
 
 static inline void

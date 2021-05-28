@@ -34,7 +34,12 @@
 #include "util/u_trace.h"
 
 #include "freedreno_context.h"
+#include "freedreno_fence.h"
 #include "freedreno_util.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifdef DEBUG
 #define BATCH_DEBUG FD_DBG(MSGS)
@@ -359,6 +364,17 @@ fd_batch_lock_submit(struct fd_batch *batch)
    return ret;
 }
 
+/**
+ * Mark the batch as having something worth flushing (rendering, blit, query,
+ * etc)
+ */
+static inline void
+fd_batch_needs_flush(struct fd_batch *batch)
+{
+   batch->needs_flush = true;
+   fd_fence_ref(&batch->ctx->last_fence, NULL);
+}
+
 /* Since we reorder batches and can pause/resume queries (notably for disabling
  * queries dueing some meta operations), we update the current query state for
  * the batch before each draw.
@@ -404,12 +420,18 @@ fd_event_write(struct fd_batch *batch, struct fd_ringbuffer *ring,
 static inline struct fd_ringbuffer *
 fd_batch_get_epilogue(struct fd_batch *batch)
 {
-   if (batch->epilogue == NULL)
-      batch->epilogue = fd_submit_new_ringbuffer(batch->submit, 0x1000, 0);
+   if (batch->epilogue == NULL) {
+      batch->epilogue = fd_submit_new_ringbuffer(batch->submit, 0x1000,
+                                                 (enum fd_ringbuffer_flags)0);
+   }
 
    return batch->epilogue;
 }
 
 struct fd_ringbuffer *fd_batch_get_prologue(struct fd_batch *batch);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* FREEDRENO_BATCH_H_ */

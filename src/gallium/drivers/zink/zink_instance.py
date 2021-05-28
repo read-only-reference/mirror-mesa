@@ -44,7 +44,8 @@ EXTENSIONS = [
     Extension("VK_EXT_debug_utils"),
     Extension("VK_KHR_get_physical_device_properties2",
         functions=["GetPhysicalDeviceFeatures2", "GetPhysicalDeviceProperties2",
-                   "GetPhysicalDeviceFormatProperties2", "GetPhysicalDeviceImageFormatProperties2"]),
+                   "GetPhysicalDeviceFormatProperties2", "GetPhysicalDeviceImageFormatProperties2",
+                   "GetPhysicalDeviceMemoryProperties2"]),
     Extension("VK_MVK_moltenvk",
         nonstandard=True),
     Extension("VK_KHR_surface"),
@@ -54,9 +55,9 @@ EXTENSIONS = [
 LAYERS = [
     # if we have debug_util, allow a validation layer to be added.
     Layer("VK_LAYER_KHRONOS_validation",
-      conditions=["have_EXT_debug_utils"]),
+      conditions=["zink_debug & ZINK_DEBUG_VALIDATION"]),
     Layer("VK_LAYER_LUNARG_standard_validation",
-      conditions=["have_EXT_debug_utils", "!have_layer_KHRONOS_validation"]),
+      conditions=["zink_debug & ZINK_DEBUG_VALIDATION", "!have_layer_KHRONOS_validation"]),
 ]
 
 REPLACEMENTS = {
@@ -143,11 +144,6 @@ zink_create_instance(struct zink_instance_info *instance_info)
            }
        free(extension_props);
        }
-   }
-
-   // Clear have_EXT_debug_utils if we do not want debug info
-   if (!(zink_debug & ZINK_DEBUG_VALIDATION)) {
-      have_EXT_debug_utils = false;
    }
 
     // Build up the layers from the reported ones

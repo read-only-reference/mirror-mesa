@@ -253,6 +253,8 @@ bool validate_ir(Program* program)
                uint32_t scalar_mask = instr->isVOP3() || instr->isVOP3P() ? 0x7 : 0x5;
                if (instr->isSDWA())
                   scalar_mask = program->chip_class >= GFX9 ? 0x7 : 0x4;
+               else if (instr->isDPP())
+                  scalar_mask = 0x0;
 
                if (instr->isVOPC() ||
                    instr->opcode == aco_opcode::v_readfirstlane_b32 ||
@@ -378,7 +380,7 @@ bool validate_ir(Program* program)
                check(op.regClass().type() == RegType::vgpr, "All operands of PSEUDO_REDUCTION instructions must be in VGPRs.", instr.get());
 
             if (instr->opcode == aco_opcode::p_reduce && instr->reduction().cluster_size == program->wave_size)
-               check(instr->definitions[0].regClass().type() == RegType::sgpr, "The result of unclustered reductions must go into an SGPR.", instr.get());
+               check(instr->definitions[0].regClass().type() == RegType::sgpr || program->wave_size == 32, "The result of unclustered reductions must go into an SGPR.", instr.get());
             else
                check(instr->definitions[0].regClass().type() == RegType::vgpr, "The result of scans and clustered reductions must go into a VGPR.", instr.get());
 

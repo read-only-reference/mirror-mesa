@@ -82,20 +82,10 @@ get_ubos(struct pan_pool *pool,
 
         memcpy(inputs_buf.cpu, inputs, sizeof(*inputs));
 
-        /* The midgard compiler calls the uniform -> UBO lowering pass which
-         * increments UBOs index even if there's no uniform to move to UBO0.
-         */
-        unsigned num_ubos = pan_is_bifrost(pool->dev) ? 1 : 2;
         struct panfrost_ptr ubos_buf =
-                panfrost_pool_alloc_desc_array(pool, num_ubos, UNIFORM_BUFFER);
+                panfrost_pool_alloc_desc(pool, UNIFORM_BUFFER);
 
-        void *inputs_ubo = ubos_buf.cpu;
-        if (num_ubos > 1) {
-                memset(ubos_buf.cpu, 0, MALI_UNIFORM_BUFFER_LENGTH);
-                inputs_ubo += MALI_UNIFORM_BUFFER_LENGTH;
-        }
-
-        pan_pack(inputs_ubo, UNIFORM_BUFFER, cfg) {
+        pan_pack(ubos_buf.cpu, UNIFORM_BUFFER, cfg) {
                 cfg.entries = DIV_ROUND_UP(sizeof(*inputs), 16);
                 cfg.pointer = inputs_buf.gpu;
         }
@@ -171,6 +161,7 @@ pan_indirect_dispatch_init(struct panfrost_device *dev)
                 nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
                                                pan_shader_get_compiler_options(dev),
                                                "%s", "indirect_dispatch");
+        b.shader->info.internal = true;
         nir_variable_create(b.shader, nir_var_mem_ubo,
                             glsl_uint_type(), "inputs");
         b.shader->info.num_ubos++;
@@ -246,7 +237,8 @@ pan_indirect_dispatch_init(struct panfrost_device *dev)
         assert(!shader_info.sysvals.sysval_count);
 
         dev->indirect_dispatch.bin =
-                panfrost_bo_create(dev, binary.size, PAN_BO_EXECUTE);
+                panfrost_bo_create(dev, binary.size, PAN_BO_EXECUTE,
+                                "Indirect dispatch shader");
 
         memcpy(dev->indirect_dispatch.bin->ptr.cpu, binary.data, binary.size);
         util_dynarray_fini(&binary);
@@ -256,7 +248,7 @@ pan_indirect_dispatch_init(struct panfrost_device *dev)
                 panfrost_bo_create(dev,
                                    MALI_RENDERER_STATE_LENGTH +
                                    MALI_LOCAL_STORAGE_LENGTH,
-                                   0);
+                                   0, "Indirect dispatch descriptors");
 
         mali_ptr address = dev->indirect_dispatch.bin->ptr.gpu;
         if (!pan_is_bifrost(dev))

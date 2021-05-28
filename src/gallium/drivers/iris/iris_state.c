@@ -237,14 +237,14 @@ translate_shadow_func(enum pipe_compare_func pipe_func)
     * So we need to flip the operator and also negate.
     */
    static const unsigned map[] = {
-      [PIPE_FUNC_NEVER]    = PREFILTEROPALWAYS,
-      [PIPE_FUNC_LESS]     = PREFILTEROPLEQUAL,
-      [PIPE_FUNC_EQUAL]    = PREFILTEROPNOTEQUAL,
-      [PIPE_FUNC_LEQUAL]   = PREFILTEROPLESS,
-      [PIPE_FUNC_GREATER]  = PREFILTEROPGEQUAL,
-      [PIPE_FUNC_NOTEQUAL] = PREFILTEROPEQUAL,
-      [PIPE_FUNC_GEQUAL]   = PREFILTEROPGREATER,
-      [PIPE_FUNC_ALWAYS]   = PREFILTEROPNEVER,
+      [PIPE_FUNC_NEVER]    = PREFILTEROP_ALWAYS,
+      [PIPE_FUNC_LESS]     = PREFILTEROP_LEQUAL,
+      [PIPE_FUNC_EQUAL]    = PREFILTEROP_NOTEQUAL,
+      [PIPE_FUNC_LEQUAL]   = PREFILTEROP_LESS,
+      [PIPE_FUNC_GREATER]  = PREFILTEROP_GEQUAL,
+      [PIPE_FUNC_NOTEQUAL] = PREFILTEROP_EQUAL,
+      [PIPE_FUNC_GEQUAL]   = PREFILTEROP_GREATER,
+      [PIPE_FUNC_ALWAYS]   = PREFILTEROP_NEVER,
    };
    return map[pipe_func];
 }
@@ -1281,10 +1281,12 @@ iris_create_blend_state(struct pipe_context *ctx,
 
          be.ColorBlendFunction          = rt->rgb_func;
          be.AlphaBlendFunction          = rt->alpha_func;
-         be.SourceBlendFactor           = src_rgb;
-         be.SourceAlphaBlendFactor      = src_alpha;
-         be.DestinationBlendFactor      = dst_rgb;
-         be.DestinationAlphaBlendFactor = dst_alpha;
+
+         /* The casts prevent warnings about implicit enum type conversions. */
+         be.SourceBlendFactor           = (int) src_rgb;
+         be.SourceAlphaBlendFactor      = (int) src_alpha;
+         be.DestinationBlendFactor      = (int) dst_rgb;
+         be.DestinationAlphaBlendFactor = (int) dst_alpha;
 
          be.WriteDisableRed   = !(rt->colormask & PIPE_MASK_R);
          be.WriteDisableGreen = !(rt->colormask & PIPE_MASK_G);
@@ -1305,14 +1307,15 @@ iris_create_blend_state(struct pipe_context *ctx,
       pb.AlphaToCoverageEnable = state->alpha_to_coverage;
       pb.IndependentAlphaBlendEnable = indep_alpha_blend;
 
+      /* The casts prevent warnings about implicit enum type conversions. */
       pb.SourceBlendFactor =
-         fix_blendfactor(state->rt[0].rgb_src_factor, state->alpha_to_one);
+         (int) fix_blendfactor(state->rt[0].rgb_src_factor, state->alpha_to_one);
       pb.SourceAlphaBlendFactor =
-         fix_blendfactor(state->rt[0].alpha_src_factor, state->alpha_to_one);
+         (int) fix_blendfactor(state->rt[0].alpha_src_factor, state->alpha_to_one);
       pb.DestinationBlendFactor =
-         fix_blendfactor(state->rt[0].rgb_dst_factor, state->alpha_to_one);
+         (int) fix_blendfactor(state->rt[0].rgb_dst_factor, state->alpha_to_one);
       pb.DestinationAlphaBlendFactor =
-         fix_blendfactor(state->rt[0].alpha_dst_factor, state->alpha_to_one);
+         (int) fix_blendfactor(state->rt[0].alpha_dst_factor, state->alpha_to_one);
    }
 
    iris_pack_state(GENX(BLEND_STATE), cso->blend_state, bs) {
@@ -2174,8 +2177,8 @@ fmt_swizzle(const struct iris_format_info *fmt, enum pipe_swizzle swz)
    case PIPE_SWIZZLE_Y: return fmt->swizzle.g;
    case PIPE_SWIZZLE_Z: return fmt->swizzle.b;
    case PIPE_SWIZZLE_W: return fmt->swizzle.a;
-   case PIPE_SWIZZLE_1: return SCS_ONE;
-   case PIPE_SWIZZLE_0: return SCS_ZERO;
+   case PIPE_SWIZZLE_1: return ISL_CHANNEL_SELECT_ONE;
+   case PIPE_SWIZZLE_0: return ISL_CHANNEL_SELECT_ZERO;
    default: unreachable("invalid swizzle");
    }
 }
@@ -3791,7 +3794,7 @@ iris_set_stream_output_targets(struct pipe_context *ctx,
       }
 
       if (!tgt->offset.res)
-         upload_state(ctx->stream_uploader, &tgt->offset, sizeof(uint32_t), 4);
+         upload_state(ctx->const_uploader, &tgt->offset, sizeof(uint32_t), 4);
 
       struct iris_resource *res = (void *) tgt->base.buffer;
 
@@ -6228,7 +6231,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
       uint32_t clear_length = GENX(3DSTATE_CLEAR_PARAMS_length) * 4;
       uint32_t cso_z_size = batch->screen->isl_dev.ds.size - clear_length;;
 
-#if GFX_VER == 12
+#if GFX_VERx10 == 120
       /* Wa_14010455700
        *
        * ISL will change some CHICKEN registers depending on the depth surface
@@ -6614,7 +6617,7 @@ iris_upload_render_state(struct iris_context *ice,
       if (draw->has_user_indices) {
          unsigned start_offset = draw->index_size * sc->start;
 
-         u_upload_data(ice->ctx.stream_uploader, start_offset,
+         u_upload_data(ice->ctx.const_uploader, start_offset,
                        sc->count * draw->index_size, 4,
                        (char*)draw->index.user + start_offset,
                        &offset, &ice->state.last_res.index_buffer);
@@ -6853,10 +6856,8 @@ iris_upload_compute_walker(struct iris_context *ice,
       ice->shaders.prog[MESA_SHADER_COMPUTE];
    struct brw_stage_prog_data *prog_data = shader->prog_data;
    struct brw_cs_prog_data *cs_prog_data = (void *) prog_data;
-   const uint32_t group_size = grid->block[0] * grid->block[1] * grid->block[2];
-   const unsigned simd_size =
-      brw_cs_simd_size_for_group_size(devinfo, cs_prog_data, group_size);
-   const unsigned threads = DIV_ROUND_UP(group_size, simd_size);
+   const struct brw_cs_dispatch_info dispatch =
+      brw_cs_get_dispatch_info(devinfo, cs_prog_data, grid->block);
 
    if (stage_dirty & IRIS_STAGE_DIRTY_CS) {
       iris_emit_cmd(batch, GENX(CFE_STATE), cfe) {
@@ -6871,22 +6872,20 @@ iris_upload_compute_walker(struct iris_context *ice,
    if (grid->indirect)
       iris_load_indirect_location(ice, batch, grid);
 
-   const uint32_t last_mask = brw_cs_right_mask(group_size, simd_size);
-
    iris_emit_cmd(batch, GENX(COMPUTE_WALKER), cw) {
       cw.IndirectParameterEnable        = grid->indirect;
-      cw.SIMDSize                       = simd_size / 16;
+      cw.SIMDSize                       = dispatch.simd_size / 16;
       cw.LocalXMaximum                  = grid->block[0] - 1;
       cw.LocalYMaximum                  = grid->block[1] - 1;
       cw.LocalZMaximum                  = grid->block[2] - 1;
       cw.ThreadGroupIDXDimension        = grid->grid[0];
       cw.ThreadGroupIDYDimension        = grid->grid[1];
       cw.ThreadGroupIDZDimension        = grid->grid[2];
-      cw.ExecutionMask                  = last_mask;
+      cw.ExecutionMask                  = dispatch.right_mask;
 
       cw.InterfaceDescriptor = (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
          .KernelStartPointer = KSP(shader),
-         .NumberofThreadsinGPGPUThreadGroup = threads,
+         .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
          .SharedLocalMemorySize =
             encode_slm_size(GFX_VER, prog_data->total_shared),
          .BarrierEnable = cs_prog_data->uses_barrier,
@@ -6894,7 +6893,7 @@ iris_upload_compute_walker(struct iris_context *ice,
          .BindingTablePointer = binder->bt_offset[MESA_SHADER_COMPUTE],
       };
 
-      assert(brw_cs_push_const_total_size(cs_prog_data, threads) == 0);
+      assert(brw_cs_push_const_total_size(cs_prog_data, dispatch.threads) == 0);
    }
 
 }
@@ -6917,11 +6916,8 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
       ice->shaders.prog[MESA_SHADER_COMPUTE];
    struct brw_stage_prog_data *prog_data = shader->prog_data;
    struct brw_cs_prog_data *cs_prog_data = (void *) prog_data;
-   const uint32_t group_size = grid->block[0] * grid->block[1] * grid->block[2];
-   const unsigned simd_size =
-      brw_cs_simd_size_for_group_size(devinfo, cs_prog_data, group_size);
-   const unsigned threads = DIV_ROUND_UP(group_size, simd_size);
-
+   const struct brw_cs_dispatch_info dispatch =
+      brw_cs_get_dispatch_info(devinfo, cs_prog_data, grid->block);
 
    if (stage_dirty & IRIS_STAGE_DIRTY_CS) {
       /* The MEDIA_VFE_STATE documentation for Gfx8+ says:
@@ -6959,7 +6955,7 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
          vfe.URBEntryAllocationSize = 2;
 
          vfe.CURBEAllocationSize =
-            ALIGN(cs_prog_data->push.per_thread.regs * threads +
+            ALIGN(cs_prog_data->push.per_thread.regs * dispatch.threads +
                   cs_prog_data->push.cross_thread.regs, 2);
       }
    }
@@ -6972,7 +6968,7 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
              cs_prog_data->push.per_thread.dwords == 1 &&
              cs_prog_data->base.param[0] == BRW_PARAM_BUILTIN_SUBGROUP_ID);
       const unsigned push_const_size =
-         brw_cs_push_const_total_size(cs_prog_data, threads);
+         brw_cs_push_const_total_size(cs_prog_data, dispatch.threads);
       uint32_t *curbe_data_map =
          stream_state(batch, ice->state.dynamic_uploader,
                       &ice->state.last_res.cs_thread_ids,
@@ -6980,7 +6976,8 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
                       &curbe_data_offset);
       assert(curbe_data_map);
       memset(curbe_data_map, 0x5a, ALIGN(push_const_size, 64));
-      iris_fill_cs_push_const_buffer(cs_prog_data, threads, curbe_data_map);
+      iris_fill_cs_push_const_buffer(cs_prog_data, dispatch.threads,
+                                     curbe_data_map);
 
       iris_emit_cmd(batch, GENX(MEDIA_CURBE_LOAD), curbe) {
          curbe.CURBETotalDataLength = ALIGN(push_const_size, 64);
@@ -7007,10 +7004,11 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
          idd.SharedLocalMemorySize =
             encode_slm_size(GFX_VER, ish->kernel_shared_size);
          idd.KernelStartPointer =
-            KSP(shader) + brw_cs_prog_data_prog_offset(cs_prog_data, simd_size);
+            KSP(shader) + brw_cs_prog_data_prog_offset(cs_prog_data,
+                                                       dispatch.simd_size);
          idd.SamplerStatePointer = shs->sampler_table.offset;
          idd.BindingTablePointer = binder->bt_offset[MESA_SHADER_COMPUTE];
-         idd.NumberofThreadsinGPGPUThreadGroup = threads;
+         idd.NumberofThreadsinGPGPUThreadGroup = dispatch.threads;
       }
 
       for (int i = 0; i < GENX(INTERFACE_DESCRIPTOR_DATA_length); i++)
@@ -7028,20 +7026,18 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
    if (grid->indirect)
       iris_load_indirect_location(ice, batch, grid);
 
-   const uint32_t right_mask = brw_cs_right_mask(group_size, simd_size);
-
    iris_measure_snapshot(ice, batch, INTEL_SNAPSHOT_COMPUTE, NULL, NULL, NULL);
 
    iris_emit_cmd(batch, GENX(GPGPU_WALKER), ggw) {
       ggw.IndirectParameterEnable    = grid->indirect != NULL;
-      ggw.SIMDSize                   = simd_size / 16;
+      ggw.SIMDSize                   = dispatch.simd_size / 16;
       ggw.ThreadDepthCounterMaximum  = 0;
       ggw.ThreadHeightCounterMaximum = 0;
-      ggw.ThreadWidthCounterMaximum  = threads - 1;
+      ggw.ThreadWidthCounterMaximum  = dispatch.threads - 1;
       ggw.ThreadGroupIDXDimension    = grid->grid[0];
       ggw.ThreadGroupIDYDimension    = grid->grid[1];
       ggw.ThreadGroupIDZDimension    = grid->grid[2];
-      ggw.RightExecutionMask         = right_mask;
+      ggw.RightExecutionMask         = dispatch.right_mask;
       ggw.BottomExecutionMask        = 0xffffffff;
    }
 

@@ -43,6 +43,8 @@
 
 #include "vk_util.h"
 
+#define DOUBLE_EQ(a, b) (fabs((a) - (b)) < DBL_EPSILON)
+
 struct rendering_state {
    struct pipe_context *pctx;
 
@@ -510,6 +512,11 @@ static void handle_graphics_pipeline(struct lvp_cmd_buffer_entry *cmd,
       state->min_samples_dirty = true;
    } else {
       state->rs_state.multisample = false;
+      state->sample_mask_dirty = state->sample_mask != 0xffffffff;
+      state->sample_mask = 0xffffffff;
+      state->min_samples_dirty = state->min_samples;
+      state->min_samples = 0;
+      state->blend_dirty |= state->blend_state.alpha_to_coverage || state->blend_state.alpha_to_one;
       state->blend_state.alpha_to_coverage = false;
       state->blend_state.alpha_to_one = false;
       state->rs_dirty = true;
@@ -566,9 +573,9 @@ static void handle_graphics_pipeline(struct lvp_cmd_buffer_entry *cmd,
             state->stencil_ref_dirty = true;
          }
       }
-
-      state->dsa_dirty = true;
-   }
+   } else
+      memset(&state->dsa_state, 0, sizeof(state->dsa_state));
+   state->dsa_dirty = true;
 
    if (pipeline->graphics_create_info.pColorBlendState) {
       const VkPipelineColorBlendStateCreateInfo *cb = pipeline->graphics_create_info.pColorBlendState;
@@ -612,6 +619,9 @@ static void handle_graphics_pipeline(struct lvp_cmd_buffer_entry *cmd,
          memcpy(state->blend_color.color, cb->blendConstants, 4 * sizeof(float));
          state->blend_color_dirty = true;
       }
+   } else {
+      memset(&state->blend_state, 0, sizeof(state->blend_state));
+      state->blend_dirty = true;
    }
 
    {
@@ -845,6 +855,8 @@ static void fill_sampler_view_stage(struct rendering_state *state,
       templ.target = PIPE_TEXTURE_2D;
    if (iv->view_type == VK_IMAGE_VIEW_TYPE_CUBE)
       templ.target = PIPE_TEXTURE_CUBE;
+   if (iv->view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY)
+      templ.target = PIPE_TEXTURE_CUBE_ARRAY;
    templ.u.tex.first_layer = iv->subresourceRange.baseArrayLayer;
    templ.u.tex.last_layer = iv->subresourceRange.baseArrayLayer + lvp_get_layerCount(iv->image, &iv->subresourceRange) - 1;
    templ.u.tex.first_level = iv->subresourceRange.baseMipLevel;
@@ -1646,9 +1658,10 @@ static void handle_set_blend_constants(struct lvp_cmd_buffer_entry *cmd,
 static void handle_set_depth_bounds(struct lvp_cmd_buffer_entry *cmd,
                                     struct rendering_state *state)
 {
+   state->dsa_dirty |= !DOUBLE_EQ(state->dsa_state.depth_bounds_min, cmd->u.set_depth_bounds.min_depth);
+   state->dsa_dirty |= !DOUBLE_EQ(state->dsa_state.depth_bounds_max, cmd->u.set_depth_bounds.max_depth);
    state->dsa_state.depth_bounds_min = cmd->u.set_depth_bounds.min_depth;
    state->dsa_state.depth_bounds_max = cmd->u.set_depth_bounds.max_depth;
-   state->dsa_dirty = true;
 }
 
 static void handle_set_stencil_compare_mask(struct lvp_cmd_buffer_entry *cmd,
@@ -1811,7 +1824,7 @@ static void handle_copy_image_to_buffer(struct lvp_cmd_buffer_entry *cmd,
       box.height = copycmd->regions[i].imageExtent.height;
       box.depth = copycmd->src->type == VK_IMAGE_TYPE_3D ? copycmd->regions[i].imageExtent.depth : copycmd->regions[i].imageSubresource.layerCount;
 
-      src_data = state->pctx->transfer_map(state->pctx,
+      src_data = state->pctx->texture_map(state->pctx,
                                            copycmd->src->bo,
                                            copycmd->regions[i].imageSubresource.mipLevel,
                                            PIPE_MAP_READ,
@@ -1824,7 +1837,7 @@ static void handle_copy_image_to_buffer(struct lvp_cmd_buffer_entry *cmd,
       dbox.width = copycmd->dst->bo->width0;
       dbox.height = 1;
       dbox.depth = 1;
-      dst_data = state->pctx->transfer_map(state->pctx,
+      dst_data = state->pctx->buffer_map(state->pctx,
                                            copycmd->dst->bo,
                                            0,
                                            PIPE_MAP_WRITE,
@@ -1866,8 +1879,8 @@ static void handle_copy_image_to_buffer(struct lvp_cmd_buffer_entry *cmd,
                        box.depth,
                        src_data, src_t->stride, src_t->layer_stride, 0, 0, 0);
       }
-      state->pctx->transfer_unmap(state->pctx, src_t);
-      state->pctx->transfer_unmap(state->pctx, dst_t);
+      state->pctx->texture_unmap(state->pctx, src_t);
+      state->pctx->buffer_unmap(state->pctx, dst_t);
    }
 }
 
@@ -1890,7 +1903,7 @@ static void handle_copy_buffer_to_image(struct lvp_cmd_buffer_entry *cmd,
       sbox.width = copycmd->src->bo->width0;
       sbox.height = 1;
       sbox.depth = 1;
-      src_data = state->pctx->transfer_map(state->pctx,
+      src_data = state->pctx->buffer_map(state->pctx,
                                            copycmd->src->bo,
                                            0,
                                            PIPE_MAP_READ,
@@ -1905,7 +1918,7 @@ static void handle_copy_buffer_to_image(struct lvp_cmd_buffer_entry *cmd,
       box.height = copycmd->regions[i].imageExtent.height;
       box.depth = copycmd->dst->type == VK_IMAGE_TYPE_3D ? copycmd->regions[i].imageExtent.depth : copycmd->regions[i].imageSubresource.layerCount;
 
-      dst_data = state->pctx->transfer_map(state->pctx,
+      dst_data = state->pctx->texture_map(state->pctx,
                                            copycmd->dst->bo,
                                            copycmd->regions[i].imageSubresource.mipLevel,
                                            PIPE_MAP_WRITE,
@@ -1949,8 +1962,8 @@ static void handle_copy_buffer_to_image(struct lvp_cmd_buffer_entry *cmd,
                        src_data,
                        buffer_row_len, img_stride, 0, 0, 0);
       }
-      state->pctx->transfer_unmap(state->pctx, src_t);
-      state->pctx->transfer_unmap(state->pctx, dst_t);
+      state->pctx->buffer_unmap(state->pctx, src_t);
+      state->pctx->texture_unmap(state->pctx, dst_t);
    }
 }
 
@@ -2118,7 +2131,7 @@ static void handle_update_buffer(struct lvp_cmd_buffer_entry *cmd,
    struct pipe_box box;
 
    u_box_1d(updcmd->offset, updcmd->data_size, &box);
-   dst = state->pctx->transfer_map(state->pctx,
+   dst = state->pctx->buffer_map(state->pctx,
                                    updcmd->buffer->bo,
                                    0,
                                    PIPE_MAP_WRITE,
@@ -2126,7 +2139,7 @@ static void handle_update_buffer(struct lvp_cmd_buffer_entry *cmd,
                                    &dst_t);
 
    memcpy(dst, updcmd->data, updcmd->data_size);
-   state->pctx->transfer_unmap(state->pctx, dst_t);
+   state->pctx->buffer_unmap(state->pctx, dst_t);
 }
 
 static void handle_draw_indexed(struct lvp_cmd_buffer_entry *cmd,
@@ -2407,12 +2420,12 @@ static void handle_copy_query_pool_results(struct lvp_cmd_buffer_entry *cmd,
             box.width = copycmd->stride;
             box.height = 1;
             box.depth = 1;
-            map = state->pctx->transfer_map(state->pctx,
+            map = state->pctx->buffer_map(state->pctx,
                                             copycmd->dst->bo, 0, PIPE_MAP_READ, &box,
                                             &src_t);
 
             memset(map, 0, box.width);
-            state->pctx->transfer_unmap(state->pctx, src_t);
+            state->pctx->buffer_unmap(state->pctx, src_t);
          }
       }
    }
@@ -2860,37 +2873,38 @@ static void handle_set_primitive_topology(struct lvp_cmd_buffer_entry *cmd,
 static void handle_set_depth_test_enable(struct lvp_cmd_buffer_entry *cmd,
                                          struct rendering_state *state)
 {
+   state->dsa_dirty |= state->dsa_state.depth_enabled != cmd->u.set_depth_test_enable.depth_test_enable;
    state->dsa_state.depth_enabled = cmd->u.set_depth_test_enable.depth_test_enable;
-   state->dsa_dirty = true;
 }
 
 static void handle_set_depth_write_enable(struct lvp_cmd_buffer_entry *cmd,
                                           struct rendering_state *state)
 {
+   state->dsa_dirty |= state->dsa_state.depth_writemask != cmd->u.set_depth_write_enable.depth_write_enable;
    state->dsa_state.depth_writemask = cmd->u.set_depth_write_enable.depth_write_enable;
-   state->dsa_dirty = true;
 }
 
 static void handle_set_depth_compare_op(struct lvp_cmd_buffer_entry *cmd,
                                         struct rendering_state *state)
 {
+   state->dsa_dirty |= state->dsa_state.depth_func != cmd->u.set_depth_compare_op.depth_op;
    state->dsa_state.depth_func = cmd->u.set_depth_compare_op.depth_op;
-   state->dsa_dirty = true;
 }
 
 static void handle_set_depth_bounds_test_enable(struct lvp_cmd_buffer_entry *cmd,
                                                 struct rendering_state *state)
 {
+   state->dsa_dirty |= state->dsa_state.depth_bounds_test != cmd->u.set_depth_bounds_test_enable.depth_bounds_test_enable;
    state->dsa_state.depth_bounds_test = cmd->u.set_depth_bounds_test_enable.depth_bounds_test_enable;
-   state->dsa_dirty = true;
 }
 
 static void handle_set_stencil_test_enable(struct lvp_cmd_buffer_entry *cmd,
                                            struct rendering_state *state)
 {
+   state->dsa_dirty |= state->dsa_state.stencil[0].enabled != cmd->u.set_stencil_test_enable.stencil_test_enable ||
+                       state->dsa_state.stencil[1].enabled != cmd->u.set_stencil_test_enable.stencil_test_enable;
    state->dsa_state.stencil[0].enabled = cmd->u.set_stencil_test_enable.stencil_test_enable;
    state->dsa_state.stencil[1].enabled = cmd->u.set_stencil_test_enable.stencil_test_enable;
-   state->dsa_dirty = true;
 }
 
 static void handle_set_stencil_op(struct lvp_cmd_buffer_entry *cmd,
@@ -2916,6 +2930,8 @@ static void lvp_execute_cmd_buffer(struct lvp_cmd_buffer *cmd_buffer,
                                    struct rendering_state *state)
 {
    struct lvp_cmd_buffer_entry *cmd;
+   bool first = true;
+   bool did_flush = false;
 
    LIST_FOR_EACH_ENTRY(cmd, &cmd_buffer->cmds, cmd_link) {
       switch (cmd->cmd_type) {
@@ -3023,8 +3039,14 @@ static void lvp_execute_cmd_buffer(struct lvp_cmd_buffer *cmd_buffer,
          handle_wait_events(cmd, state);
          break;
       case LVP_CMD_PIPELINE_BARRIER:
+         /* skip flushes since every cmdbuf does a flush
+            after iterating its cmds and so this is redundant
+          */
+         if (first || did_flush || cmd->cmd_link.next == &cmd_buffer->cmds)
+            continue;
          handle_pipeline_barrier(cmd, state);
-         break;
+         did_flush = true;
+         continue;
       case LVP_CMD_BEGIN_QUERY:
          maybe_emit_state_for_begin_query(cmd, state);
          handle_begin_query(cmd, state);
@@ -3114,16 +3136,16 @@ static void lvp_execute_cmd_buffer(struct lvp_cmd_buffer *cmd_buffer,
          handle_set_stencil_op(cmd, state);
          break;
       }
+      first = false;
+      did_flush = false;
    }
 }
 
 VkResult lvp_execute_cmds(struct lvp_device *device,
                           struct lvp_queue *queue,
-                          struct lvp_fence *fence,
                           struct lvp_cmd_buffer *cmd_buffer)
 {
    struct rendering_state state;
-   struct pipe_fence_handle *handle = NULL;
    memset(&state, 0, sizeof(state));
    state.pctx = queue->ctx;
    state.blend_dirty = true;
@@ -3133,12 +3155,6 @@ VkResult lvp_execute_cmds(struct lvp_device *device,
    /* create a gallium context */
    lvp_execute_cmd_buffer(cmd_buffer, &state);
 
-   state.pctx->flush(state.pctx, fence ? &handle : NULL, 0);
-   if (fence) {
-      mtx_lock(&device->fence_lock);
-      fence->handle = handle;
-      mtx_unlock(&device->fence_lock);
-   }
    state.start_vb = -1;
    state.num_vb = 0;
    state.pctx->set_vertex_buffers(state.pctx, 0, 0, PIPE_MAX_ATTRIBS, false, NULL);
@@ -3183,6 +3199,13 @@ VkResult lvp_execute_cmds(struct lvp_device *device,
       state.pctx->set_constant_buffer(state.pctx, s, 0, false, NULL);
       for (unsigned idx = 0; idx < state.num_const_bufs[s]; idx++)
          state.pctx->set_constant_buffer(state.pctx, s, idx + 1, false, NULL);
+   }
+
+   state.pctx->set_stream_output_targets(state.pctx, 0, NULL, NULL);
+   for (unsigned i = 0; i < PIPE_MAX_SO_BUFFERS; i++) {
+      if (state.so_targets[i]) {
+         state.pctx->stream_output_target_destroy(state.pctx, state.so_targets[i]);
+      }
    }
 
    free(state.pending_clear_aspects);

@@ -714,7 +714,7 @@ fs_visitor::limit_dispatch_width(unsigned n, const char *msg)
    if (dispatch_width > n) {
       fail("%s", msg);
    } else {
-      max_dispatch_width = n;
+      max_dispatch_width = MIN2(max_dispatch_width, n);
       compiler->shader_perf_log(log_data,
                                 "Shader dispatch width limited to SIMD%d: %s",
                                 n, msg);
@@ -754,8 +754,11 @@ fs_inst::components_read(unsigned i) const
 
    case FS_OPCODE_PIXEL_X:
    case FS_OPCODE_PIXEL_Y:
-      assert(i == 0);
-      return 2;
+      assert(i < 2);
+      if (i == 0)
+         return 2;
+      else
+         return 1;
 
    case FS_OPCODE_FB_WRITE_LOGICAL:
       assert(src[FB_WRITE_LOGICAL_SRC_COMPONENTS].file == IMM);
@@ -1241,7 +1244,7 @@ fs_visitor::emit_fragcoord_interpolation(fs_reg wpos)
 
    /* gl_FragCoord.z */
    if (devinfo->ver >= 6) {
-      bld.MOV(wpos, fetch_payload_reg(bld, payload.source_depth_reg));
+      bld.MOV(wpos, this->pixel_z);
    } else {
       bld.emit(FS_OPCODE_LINTERP, wpos,
                this->delta_xy[BRW_BARYCENTRIC_PERSPECTIVE_PIXEL],
@@ -1514,6 +1517,9 @@ fs_visitor::emit_samplemaskin_setup()
 
    fs_reg *reg = new(this->mem_ctx) fs_reg(vgrf(glsl_type::int_type));
 
+   /* The HW doesn't provide us with expected values. */
+   assert(!wm_prog_data->per_coarse_pixel_dispatch);
+
    fs_reg coverage_mask =
       fetch_payload_reg(bld, payload.sample_mask_in_reg, BRW_REGISTER_TYPE_D);
 
@@ -1542,6 +1548,47 @@ fs_visitor::emit_samplemaskin_setup()
       /* In per-pixel mode, the coverage mask is sufficient. */
       *reg = coverage_mask;
    }
+   return reg;
+}
+
+fs_reg *
+fs_visitor::emit_shading_rate_setup()
+{
+   assert(devinfo->ver >= 11);
+
+   const fs_builder abld = bld.annotate("compute fragment shading rate");
+
+   fs_reg *reg = new(this->mem_ctx) fs_reg(bld.vgrf(BRW_REGISTER_TYPE_UD));
+
+   struct brw_wm_prog_data *wm_prog_data =
+      brw_wm_prog_data(bld.shader->stage_prog_data);
+
+   /* Coarse pixel shading size fields overlap with other fields of not in
+    * coarse pixel dispatch mode, so report 0 when that's not the case.
+    */
+   if (wm_prog_data->per_coarse_pixel_dispatch) {
+      /* The shading rates provided in the shader are the actual 2D shading
+       * rate while the SPIR-V built-in is the enum value that has the shading
+       * rate encoded as a bitfield.  Fortunately, the bitfield value is just
+       * the shading rate divided by two and shifted.
+       */
+
+      /* r1.0 - 0:7 ActualCoarsePixelShadingSize.X */
+      fs_reg actual_x = fs_reg(retype(brw_vec1_grf(1, 0), BRW_REGISTER_TYPE_UB));
+      /* r1.0 - 15:8 ActualCoarsePixelShadingSize.Y */
+      fs_reg actual_y = byte_offset(actual_x, 1);
+
+      fs_reg int_rate_x = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      fs_reg int_rate_y = bld.vgrf(BRW_REGISTER_TYPE_UD);
+
+      abld.SHR(int_rate_y, actual_y, brw_imm_ud(1));
+      abld.SHR(int_rate_x, actual_x, brw_imm_ud(1));
+      abld.SHL(int_rate_x, int_rate_x, brw_imm_ud(2));
+      abld.OR(*reg, int_rate_x, int_rate_y);
+   } else {
+      abld.MOV(*reg, brw_imm_ud(0));
+   }
+
    return reg;
 }
 
@@ -1827,6 +1874,11 @@ calculate_urb_setup(const struct intel_device_info *devinfo,
           * arbitrarily rearrange them to suit our whim; we have to put them
           * in an order that matches the output of the previous pipeline stage
           * (geometry or vertex shader).
+          */
+
+         /* Re-compute the VUE map here in the case that the one coming from
+          * geometry has more than one position slot (used for Primitive
+          * Replication).
           */
          struct brw_vue_map prev_stage_vue_map;
          brw_compute_vue_map(devinfo, &prev_stage_vue_map,
@@ -4176,7 +4228,7 @@ fs_visitor::lower_mulh_inst(fs_inst *inst, bblock_t *block)
       if (mul->src[1].file == IMM) {
          mul->src[1] = brw_imm_uw(mul->src[1].ud);
       }
-   } else if (devinfo->ver == 7 && !devinfo->is_haswell &&
+   } else if (devinfo->verx10 == 70 &&
               inst->group > 0) {
       /* Among other things the quarter control bits influence which
        * accumulator register is used by the hardware for instructions
@@ -4503,7 +4555,7 @@ lower_fb_write_logical_send(const fs_builder &bld, fs_inst *inst,
 
       assert(length == 0);
       length = 2;
-   } else if ((devinfo->ver <= 7 && !devinfo->is_haswell &&
+   } else if ((devinfo->verx10 <= 70 &&
                prog_data->uses_kill) ||
               (devinfo->ver < 11 &&
                (color1.file != BAD_FILE || key->nr_color_regions > 1))) {
@@ -4663,9 +4715,8 @@ lower_fb_write_logical_send(const fs_builder &bld, fs_inst *inst,
 
       inst->desc =
          (inst->group / 16) << 11 | /* rt slot group */
-         brw_dp_write_desc(devinfo, inst->target, msg_ctl,
-                           GFX6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE,
-                           inst->last_rt, false);
+         brw_fb_write_desc(devinfo, inst->target, msg_ctl, inst->last_rt,
+                           prog_data->per_coarse_pixel_dispatch);
 
       uint32_t ex_desc = 0;
       if (devinfo->ver >= 11) {
@@ -4962,7 +5013,7 @@ lower_sampler_logical_send_gfx5(const fs_builder &bld, fs_inst *inst, opcode op,
 static bool
 is_high_sampler(const struct intel_device_info *devinfo, const fs_reg &sampler)
 {
-   if (devinfo->ver < 8 && !devinfo->is_haswell)
+   if (devinfo->verx10 <= 70)
       return false;
 
    return sampler.file != IMM || sampler.ud >= 16;
@@ -4990,7 +5041,7 @@ sampler_msg_type(const intel_device_info *devinfo,
    case SHADER_OPCODE_IMAGE_SIZE_LOGICAL:
       return GFX5_SAMPLER_MESSAGE_SAMPLE_RESINFO;
    case SHADER_OPCODE_TXD:
-      assert(!shadow_compare || devinfo->ver >= 8 || devinfo->is_haswell);
+      assert(!shadow_compare || devinfo->verx10 >= 75);
       return shadow_compare ? HSW_SAMPLER_MESSAGE_SAMPLE_DERIV_COMPARE :
                               GFX5_SAMPLER_MESSAGE_SAMPLE_DERIVS;
    case SHADER_OPCODE_TXF:
@@ -5342,7 +5393,7 @@ lower_sampler_logical_send_gfx7(const fs_builder &bld, fs_inst *inst, opcode op,
                                     simd_mode,
                                     0 /* return_format unused on gfx7+ */);
       inst->src[0] = brw_imm_ud(0);
-      inst->src[1] = brw_imm_ud(0); /* ex_desc */
+      inst->src[1] = brw_imm_ud(0);
    } else if (surface_handle.file != BAD_FILE) {
       /* Bindless surface */
       assert(devinfo->ver >= 9);
@@ -5399,6 +5450,8 @@ lower_sampler_logical_send_gfx7(const fs_builder &bld, fs_inst *inst, opcode op,
       inst->src[0] = component(desc, 0);
       inst->src[1] = brw_imm_ud(0); /* ex_desc */
    }
+
+   inst->ex_desc = 0;
 
    inst->src[2] = src_payload;
    inst->resize_sources(3);
@@ -5667,7 +5720,7 @@ lower_surface_logical_send(const fs_builder &bld, fs_inst *inst)
       /* Untyped Surface messages go through the data cache but the SFID value
        * changed on Haswell.
        */
-      sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+      sfid = (devinfo->verx10 >= 75 ?
               HSW_SFID_DATAPORT_DATA_CACHE_1 :
               GFX7_SFID_DATAPORT_DATA_CACHE);
       break;
@@ -5678,7 +5731,7 @@ lower_surface_logical_send(const fs_builder &bld, fs_inst *inst)
       /* Typed surface messages go through the render cache on IVB and the
        * data cache on HSW+.
        */
-      sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+      sfid = (devinfo->verx10 >= 75 ?
               HSW_SFID_DATAPORT_DATA_CACHE_1 :
               GFX6_SFID_DATAPORT_RENDER_CACHE);
       break;
@@ -6068,7 +6121,7 @@ lower_varying_pull_constant_logical_send(const fs_builder &bld, fs_inst *inst)
                                         GFX5_SAMPLER_MESSAGE_SAMPLE_LD,
                                         simd_mode, 0);
       } else if (alignment >= 4) {
-         inst->sfid = (devinfo->ver >= 8 || devinfo->is_haswell ?
+         inst->sfid = (devinfo->verx10 >= 75 ?
                        HSW_SFID_DATAPORT_DATA_CACHE_1 :
                        GFX7_SFID_DATAPORT_DATA_CACHE);
          inst->desc |= brw_dp_untyped_surface_rw_desc(devinfo, inst->exec_size,
@@ -6631,7 +6684,7 @@ get_fpu_lowered_simd_width(const struct intel_device_info *devinfo,
        * the compressed instruction which will be just wrong under
        * non-uniform control flow.
        */
-      if (devinfo->ver == 7 && !devinfo->is_haswell &&
+      if (devinfo->verx10 == 70 &&
           (exec_type_size == 8 || type_sz(inst->dst.type) == 8))
          max_width = MIN2(max_width, 4);
    }
@@ -6801,7 +6854,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
        * coissuing would affect CMP instructions not otherwise affected by
        * the errata.
        */
-      const unsigned max_width = (devinfo->ver == 7 && !devinfo->is_haswell &&
+      const unsigned max_width = (devinfo->verx10 == 70 &&
                                   !inst->dst.is_null() ? 8 : ~0);
       return MIN2(max_width, get_fpu_lowered_simd_width(devinfo, inst));
    }
@@ -6902,7 +6955,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
        * numbers don't appear to work on Sandybridge either.
        */
       return (devinfo->ver == 4 || devinfo->ver == 6 ||
-              (devinfo->ver == 7 && !devinfo->is_haswell) ?
+              (devinfo->verx10 == 70) ?
               MIN2(8, inst->exec_size) : MIN2(16, inst->exec_size));
 
    case SHADER_OPCODE_MULH:
@@ -7786,6 +7839,12 @@ fs_visitor::setup_fs_payload_gfx6()
          assert(devinfo->ver >= 7);
          payload.sample_mask_in_reg[j] = payload.num_regs;
          payload.num_regs += payload_width / 8;
+      }
+
+      /* R66: Source Depth and/or W Attribute Vertex Deltas */
+      if (prog_data->uses_depth_w_coefficients) {
+         payload.depth_w_coef_reg[j] = payload.num_regs;
+         payload.num_regs++;
       }
    }
 
@@ -9057,9 +9116,6 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
                               const struct brw_wm_prog_key *key,
                               struct brw_wm_prog_data *prog_data)
 {
-   prog_data->uses_src_depth = prog_data->uses_src_w =
-      BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_FRAG_COORD);
-
    /* key->alpha_test_func means simulating alpha testing via discards,
     * so the shader definitely kills pixels.
     */
@@ -9104,6 +9160,22 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
 
    prog_data->barycentric_interp_modes =
       brw_compute_barycentric_interp_modes(devinfo, shader);
+
+   prog_data->per_coarse_pixel_dispatch =
+      key->coarse_pixel &&
+      !prog_data->persample_dispatch &&
+      !prog_data->uses_sample_mask &&
+      (prog_data->computed_depth_mode == BRW_PSCDEPTH_OFF) &&
+      !prog_data->computed_stencil;
+
+   prog_data->uses_src_w =
+      BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_FRAG_COORD);
+   prog_data->uses_src_depth =
+      BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_FRAG_COORD) &&
+      !prog_data->per_coarse_pixel_dispatch;
+   prog_data->uses_depth_w_coefficients =
+      BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_FRAG_COORD) &&
+      prog_data->per_coarse_pixel_dispatch;
 
    calculate_urb_setup(devinfo, key, prog_data, shader);
    brw_compute_flat_inputs(prog_data, shader);
@@ -9196,6 +9268,15 @@ brw_compile_fs(const struct brw_compiler *compiler,
       assert(!params->use_rep_send);
       v8->limit_dispatch_width(8, "gfx8 workaround: "
                                "using SIMD8 when dual src blending.\n");
+   }
+
+   if (key->coarse_pixel) {
+      if (prog_data->dual_src_blend) {
+         v8->limit_dispatch_width(8, "SIMD16 coarse pixel shading cannot"
+                                  " use SIMD8 messages.\n");
+      }
+      v8->limit_dispatch_width(16, "SIMD32 not supported with coarse"
+                               " pixel shading.\n");
    }
 
    if (!has_spilled &&
@@ -9393,7 +9474,7 @@ cs_fill_push_const_info(const struct intel_device_info *devinfo,
 {
    const struct brw_stage_prog_data *prog_data = &cs_prog_data->base;
    int subgroup_id_index = get_subgroup_id_param_index(devinfo, prog_data);
-   bool cross_thread_supported = devinfo->ver > 7 || devinfo->is_haswell;
+   bool cross_thread_supported = devinfo->verx10 >= 75;
 
    /* The thread ID should be stored in the last param dword */
    assert(subgroup_id_index == -1 ||
@@ -9734,7 +9815,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
    return ret;
 }
 
-unsigned
+static unsigned
 brw_cs_simd_size_for_group_size(const struct intel_device_info *devinfo,
                                 const struct brw_cs_prog_data *cs_prog_data,
                                 unsigned group_size)
@@ -9767,6 +9848,31 @@ brw_cs_simd_size_for_group_size(const struct intel_device_info *devinfo,
    assert(mask & simd32);
    assert(group_size <= 32 * max_threads);
    return 32;
+}
+
+struct brw_cs_dispatch_info
+brw_cs_get_dispatch_info(const struct intel_device_info *devinfo,
+                         const struct brw_cs_prog_data *prog_data,
+                         const unsigned *override_local_size)
+{
+   struct brw_cs_dispatch_info info = {};
+
+   const unsigned *sizes =
+      override_local_size ? override_local_size :
+                            prog_data->local_size;
+
+   info.group_size = sizes[0] * sizes[1] * sizes[2];
+   info.simd_size =
+      brw_cs_simd_size_for_group_size(devinfo, prog_data, info.group_size);
+   info.threads = DIV_ROUND_UP(info.group_size, info.simd_size);
+
+   const uint32_t remainder = info.group_size & (info.simd_size - 1);
+   if (remainder > 0)
+      info.right_mask = ~0u >> (32 - remainder);
+   else
+      info.right_mask = ~0u >> (32 - info.simd_size);
+
+   return info;
 }
 
 const unsigned *

@@ -62,6 +62,7 @@ EXTENSIONS = [
     Extension("VK_KHR_maintenance1",
         required=True),
     Extension("VK_KHR_maintenance2"),
+    Extension("VK_KHR_maintenance3"),
     Extension("VK_KHR_external_memory"),
     Extension("VK_KHR_external_memory_fd"),
     Extension("VK_EXT_provoking_vertex",
@@ -74,6 +75,7 @@ EXTENSIONS = [
     Extension("VK_KHR_driver_properties",
         alias="driver",
         properties=True),
+    Extension("VK_EXT_memory_budget"),
     Extension("VK_KHR_draw_indirect_count"),
     Extension("VK_EXT_fragment_shader_interlock",
        alias="interlock",
@@ -159,6 +161,11 @@ EXTENSIONS = [
     Extension("VK_KHR_shader_float16_int8",
               alias="shader_float16_int8",
               features=True),
+    Extension("VK_KHR_push_descriptor",
+        alias="push",
+        properties=True),
+    Extension("VK_KHR_descriptor_update_template",
+        alias="template"),
 ]
 
 # constructor: Versions(device_version(major, minor, patch), struct_version(major, minor))

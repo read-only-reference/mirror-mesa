@@ -76,13 +76,17 @@ static const uint64_t priority_to_modifier[] = {
 
 static bool
 modifier_is_supported(const struct intel_device_info *devinfo,
-                      enum pipe_format pfmt, uint64_t modifier)
+                      enum pipe_format pfmt, unsigned bind,
+                      uint64_t modifier)
 {
    /* Check for basic device support. */
    switch (modifier) {
    case DRM_FORMAT_MOD_LINEAR:
    case I915_FORMAT_MOD_X_TILED:
+      break;
    case I915_FORMAT_MOD_Y_TILED:
+      if (devinfo->ver <= 8 && (bind & PIPE_BIND_SCANOUT))
+         return false;
       break;
    case I915_FORMAT_MOD_Y_TILED_CCS:
       if (devinfo->ver <= 8 || devinfo->ver >= 12)
@@ -138,14 +142,16 @@ modifier_is_supported(const struct intel_device_info *devinfo,
 }
 
 static uint64_t
-select_best_modifier(struct intel_device_info *devinfo, enum pipe_format pfmt,
+select_best_modifier(struct intel_device_info *devinfo,
+                     const struct pipe_resource *templ,
                      const uint64_t *modifiers,
                      int count)
 {
    enum modifier_priority prio = MODIFIER_PRIORITY_INVALID;
 
    for (int i = 0; i < count; i++) {
-      if (!modifier_is_supported(devinfo, pfmt, modifiers[i]))
+      if (!modifier_is_supported(devinfo, templ->format, templ->bind,
+                                 modifiers[i]))
          continue;
 
       switch (modifiers[i]) {
@@ -213,7 +219,7 @@ iris_query_dmabuf_modifiers(struct pipe_screen *pscreen,
    int supported_mods = 0;
 
    for (int i = 0; i < ARRAY_SIZE(all_modifiers); i++) {
-      if (!modifier_is_supported(devinfo, pfmt, all_modifiers[i]))
+      if (!modifier_is_supported(devinfo, pfmt, 0, all_modifiers[i]))
          continue;
 
       if (supported_mods < max) {
@@ -240,7 +246,7 @@ iris_is_dmabuf_modifier_supported(struct pipe_screen *pscreen,
    struct iris_screen *screen = (void *) pscreen;
    const struct intel_device_info *devinfo = &screen->devinfo;
 
-   if (modifier_is_supported(devinfo, pfmt, modifier)) {
+   if (modifier_is_supported(devinfo, pfmt, 0, modifier)) {
       if (external_only)
          *external_only = is_modifier_external_only(pfmt, modifier);
 
@@ -456,7 +462,7 @@ iris_resource_destroy(struct pipe_screen *screen,
 
    threaded_resource_deinit(p_res);
    iris_bo_unreference(res->bo);
-   iris_pscreen_unref(res->base.b.screen);
+   iris_pscreen_unref(res->orig_screen);
 
    free(res);
 }
@@ -470,7 +476,8 @@ iris_alloc_resource(struct pipe_screen *pscreen,
       return NULL;
 
    res->base.b = *templ;
-   res->base.b.screen = iris_pscreen_ref(pscreen);
+   res->base.b.screen = pscreen;
+   res->orig_screen = iris_pscreen_ref(pscreen);
    pipe_reference_init(&res->base.b.reference, 1);
    threaded_resource_init(&res->base.b);
 
@@ -985,7 +992,7 @@ iris_resource_create_with_modifiers(struct pipe_screen *pscreen,
       return NULL;
 
    uint64_t modifier =
-      select_best_modifier(devinfo, templ->format, modifiers, modifiers_count);
+      select_best_modifier(devinfo, templ, modifiers, modifiers_count);
 
    if (modifier == DRM_FORMAT_MOD_INVALID && modifiers_count > 0) {
       fprintf(stderr, "Unsupported modifier, resource creation failed.\n");
@@ -1453,7 +1460,8 @@ resource_is_busy(struct iris_context *ice,
 void
 iris_replace_buffer_storage(struct pipe_context *ctx,
                             struct pipe_resource *p_dst,
-                            struct pipe_resource *p_src)
+                            struct pipe_resource *p_src,
+                            uint32_t delete_buffer_id)
 {
    struct iris_screen *screen = (void *) ctx->screen;
    struct iris_context *ice = (void *) ctx;
@@ -2063,8 +2071,7 @@ iris_transfer_map(struct pipe_context *ctx,
       no_gpu = true;
 
    if (!map_would_stall &&
-       res->aux.usage != ISL_AUX_USAGE_CCS_E &&
-       res->aux.usage != ISL_AUX_USAGE_GFX12_CCS_E) {
+       !isl_aux_usage_has_compression(res->aux.usage)) {
       no_gpu = true;
    }
 
@@ -2208,8 +2215,7 @@ iris_texture_subdata(struct pipe_context *ctx,
     * stall-avoidance blits.
     */
    if (surf->tiling == ISL_TILING_LINEAR ||
-       (isl_aux_usage_has_ccs(res->aux.usage) &&
-        res->aux.usage != ISL_AUX_USAGE_CCS_D) ||
+       isl_aux_usage_has_compression(res->aux.usage) ||
        resource_is_busy(ice, res)) {
       return u_default_texture_subdata(ctx, resource, level, usage, box,
                                        data, stride, layer_stride);
@@ -2390,9 +2396,11 @@ iris_init_resource_functions(struct pipe_context *ctx)
 {
    ctx->flush_resource = iris_flush_resource;
    ctx->invalidate_resource = iris_invalidate_resource;
-   ctx->transfer_map = u_transfer_helper_transfer_map;
+   ctx->buffer_map = u_transfer_helper_transfer_map;
+   ctx->texture_map = u_transfer_helper_transfer_map;
    ctx->transfer_flush_region = u_transfer_helper_transfer_flush_region;
-   ctx->transfer_unmap = u_transfer_helper_transfer_unmap;
+   ctx->buffer_unmap = u_transfer_helper_transfer_unmap;
+   ctx->texture_unmap = u_transfer_helper_transfer_unmap;
    ctx->buffer_subdata = u_default_buffer_subdata;
    ctx->texture_subdata = iris_texture_subdata;
 }

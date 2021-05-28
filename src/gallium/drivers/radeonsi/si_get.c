@@ -197,6 +197,9 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return SI_MAP_BUFFER_ALIGNMENT;
 
+   case PIPE_CAP_MAX_VERTEX_BUFFERS:
+      return SI_MAX_ATTRIBS;
+
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
@@ -551,6 +554,9 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
 
    switch (param) {
    case PIPE_VIDEO_CAP_SUPPORTED:
+      if (codec < PIPE_VIDEO_FORMAT_MPEG4_AVC &&
+          sscreen->info.family >= CHIP_BEIGE_GOBY)
+         return false;
       switch (codec) {
       case PIPE_VIDEO_FORMAT_MPEG12:
          return profile != PIPE_VIDEO_PROFILE_MPEG1;

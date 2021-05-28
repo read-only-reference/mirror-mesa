@@ -55,6 +55,7 @@ struct draw_data {
         nir_ssa_def *index_buf;
         nir_ssa_def *restart_index;
         nir_ssa_def *vertex_count;
+        nir_ssa_def *start_instance;
         nir_ssa_def *instance_count;
         nir_ssa_def *vertex_start;
         nir_ssa_def *index_bias;
@@ -72,6 +73,9 @@ struct jobs_data {
         nir_ssa_def *vertex_job;
         nir_ssa_def *tiler_job;
         nir_ssa_def *base_vertex_offset;
+        nir_ssa_def *first_vertex_sysval;
+        nir_ssa_def *base_vertex_sysval;
+        nir_ssa_def *base_instance_sysval;
         nir_ssa_def *offset_start;
         nir_ssa_def *invocation;
 };
@@ -105,6 +109,13 @@ struct indirect_draw_shader_builder {
 /* Describes an indirect draw (see glDrawArraysIndirect()) */
 
 struct indirect_draw_info {
+        uint32_t count;
+        uint32_t instance_count;
+        uint32_t start;
+        uint32_t start_instance;
+};
+
+struct indirect_indexed_draw_info {
         uint32_t count;
         uint32_t instance_count;
         uint32_t start;
@@ -149,6 +160,11 @@ struct indirect_draw_inputs {
 
         /* index buffer */
         mali_ptr index_buf;
+
+        /* {base,first}_{vertex,instance} sysvals */
+        mali_ptr first_vertex_sysval;
+        mali_ptr base_vertex_sysval;
+        mali_ptr base_instance_sysval;
 
         /* Pointers to various cmdstream structs that need to be patched */
         mali_ptr vertex_job;
@@ -280,6 +296,12 @@ update_max(struct indirect_draw_shader_builder *builder, nir_ssa_def *val)
                                     offsetof(struct indirect_draw_info, field)), \
                     1, sizeof(((struct indirect_draw_info *)0)->field) * 8)
 
+#define get_indexed_draw_field(b, draw_ptr, field) \
+        load_global(b, \
+                    get_address_imm(b, draw_ptr, \
+                                    offsetof(struct indirect_indexed_draw_info, field)), \
+                    1, sizeof(((struct indirect_indexed_draw_info *)0)->field) * 8)
+
 static void
 extract_inputs(struct indirect_draw_shader_builder *builder)
 {
@@ -301,6 +323,9 @@ extract_inputs(struct indirect_draw_shader_builder *builder)
         if (builder->index_min_max_search)
                 return;
 
+        builder->jobs.first_vertex_sysval = get_input_field(b, first_vertex_sysval);
+        builder->jobs.base_vertex_sysval = get_input_field(b, base_vertex_sysval);
+        builder->jobs.base_instance_sysval = get_input_field(b, base_instance_sysval);
         builder->jobs.vertex_job = get_input_field(b, vertex_job);
         builder->jobs.tiler_job = get_input_field(b, tiler_job);
         builder->attribs.attrib_bufs = get_input_field(b, attrib_bufs);
@@ -349,6 +374,7 @@ init_shader_builder(struct indirect_draw_shader_builder *builder,
         }
 
         nir_builder *b = &builder->b;
+        b->shader->info.internal = true;
         nir_variable_create(b->shader, nir_var_mem_ubo,
                             glsl_uint_type(), "inputs");
         b->shader->info.num_ubos++;
@@ -489,7 +515,8 @@ update_vertex_attrib_buf(struct indirect_draw_shader_builder *builder,
 
 static void
 adjust_attrib_offset(struct indirect_draw_shader_builder *builder,
-                     nir_ssa_def *attrib_ptr, nir_ssa_def *attrib_buf_ptr)
+                     nir_ssa_def *attrib_ptr, nir_ssa_def *attrib_buf_ptr,
+                     nir_ssa_def *instance_div)
 {
         nir_builder *b = &builder->b;
         nir_ssa_def *zero = nir_imm_int(b, 0);
@@ -498,18 +525,34 @@ adjust_attrib_offset(struct indirect_draw_shader_builder *builder,
                 nir_iand(b, nir_ine(b, builder->jobs.offset_start, zero),
                          nir_ige(b, builder->draw.instance_count, two));
 
-        IF (sub_cur_offset) {
+        nir_ssa_def *add_base_inst_offset =
+                nir_iand(b, nir_ine(b, builder->draw.start_instance, zero),
+                         nir_ine(b, instance_div, zero));
+
+        IF (nir_ior(b, sub_cur_offset, add_base_inst_offset)) {
+                nir_ssa_def *offset =
+                        load_global(b, get_address_imm(b, attrib_ptr, WORD(1)), 1, 32);
+                nir_ssa_def *stride =
+                        load_global(b, get_address_imm(b, attrib_buf_ptr, WORD(2)), 1, 32);
+
                 /* Per-instance data needs to be offset in response to a
                  * delayed start in an indexed draw.
                  */
-                nir_ssa_def *stride =
-                        load_global(b, get_address_imm(b, attrib_buf_ptr, WORD(2)), 1, 32);
-                nir_ssa_def *offset =
-                        load_global(b, get_address_imm(b, attrib_ptr, WORD(1)), 1, 32);
 
-                offset = nir_isub(b, offset,
-                                  nir_imul(b, stride,
-                                  builder->jobs.offset_start));
+                IF (add_base_inst_offset) {
+                        offset = nir_iadd(b, offset,
+                                          nir_idiv(b,
+                                                   nir_imul(b, stride,
+                                                            builder->draw.start_instance),
+                                                   instance_div));
+                } ENDIF
+
+                IF (sub_cur_offset) {
+                        offset = nir_isub(b, offset,
+                                          nir_imul(b, stride,
+                                                   builder->jobs.offset_start));
+                } ENDIF
+
                 store_global(b, get_address_imm(b, attrib_ptr, WORD(1)),
                              offset, 1);
         } ENDIF
@@ -583,10 +626,10 @@ update_vertex_attribs(struct indirect_draw_shader_builder *builder)
                         } ENDIF
                 }
 
-                nir_ssa_def *div =
+                nir_ssa_def *instance_div =
                         load_global(b, get_address_imm(b, attrib_buf_ptr, WORD(7)), 1, 32);
 
-                div = nir_imul(b, div, builder->instance_size.padded);
+                nir_ssa_def *div = nir_imul(b, instance_div, builder->instance_size.padded);
 
                 nir_ssa_def *multi_instance =
                         nir_ige(b, builder->draw.instance_count, nir_imm_int(b, 2));
@@ -619,7 +662,7 @@ update_vertex_attribs(struct indirect_draw_shader_builder *builder)
                                                          nir_imm_int(b, 31), NULL);
                         } ENDIF
 
-                        adjust_attrib_offset(builder, attrib_ptr, attrib_buf_ptr);
+                        adjust_attrib_offset(builder, attrib_ptr, attrib_buf_ptr, instance_div);
                 } ELSE {
                         IF (multi_instance) {
                                 update_vertex_attrib_buf(builder, attrib_buf_ptr,
@@ -869,15 +912,21 @@ patch(struct indirect_draw_shader_builder *builder)
 
         nir_ssa_def *draw_ptr = builder->draw.draw_buf;
 
-        builder->draw.vertex_count = get_draw_field(b, draw_ptr, count);
-        assert(builder->draw.vertex_count->num_components);
-        builder->draw.instance_count =
-                get_draw_field(b, draw_ptr, instance_count);
-        builder->draw.vertex_start = get_draw_field(b, draw_ptr, start);
         if (index_size) {
-                builder->draw.index_bias =
-                        get_draw_field(b, draw_ptr, index_bias);
+                builder->draw.vertex_count = get_indexed_draw_field(b, draw_ptr, count);
+                builder->draw.start_instance = get_indexed_draw_field(b, draw_ptr, start_instance);
+                builder->draw.instance_count =
+                        get_indexed_draw_field(b, draw_ptr, instance_count);
+                builder->draw.vertex_start = get_indexed_draw_field(b, draw_ptr, start);
+                builder->draw.index_bias = get_indexed_draw_field(b, draw_ptr, index_bias);
+        } else {
+                builder->draw.vertex_count = get_draw_field(b, draw_ptr, count);
+                builder->draw.start_instance = get_draw_field(b, draw_ptr, start_instance);
+                builder->draw.instance_count = get_draw_field(b, draw_ptr, instance_count);
+                builder->draw.vertex_start = get_draw_field(b, draw_ptr, start);
         }
+
+        assert(builder->draw.vertex_count->num_components);
 
         get_instance_size(builder);
 
@@ -888,6 +937,25 @@ patch(struct indirect_draw_shader_builder *builder)
         update_varyings(builder);
         update_jobs(builder);
         update_vertex_attribs(builder);
+
+        IF (nir_ine(b, builder->jobs.first_vertex_sysval, nir_imm_int64(b, 0))) {
+                store_global(b, builder->jobs.first_vertex_sysval,
+                             builder->jobs.offset_start, 1);
+        } ENDIF
+
+        IF (nir_ine(b, builder->jobs.base_vertex_sysval, nir_imm_int64(b, 0))) {
+                store_global(b, builder->jobs.base_vertex_sysval,
+                             index_size ?
+                             builder->draw.index_bias :
+                             nir_imm_int(b, 0),
+                             1);
+        } ENDIF
+
+        IF (nir_ine(b, builder->jobs.base_instance_sysval, nir_imm_int64(b, 0))) {
+                store_global(b, builder->jobs.base_instance_sysval,
+                             builder->draw.start_instance, 1);
+        } ENDIF
+
 }
 
 /* Search the min/max index in the range covered by the indirect draw call */
@@ -1120,7 +1188,7 @@ panfrost_indirect_draw_alloc_deps(struct panfrost_device *dev)
                                  MALI_LOCAL_STORAGE_LENGTH;
 
         dev->indirect_draw_shaders.states =
-                panfrost_bo_create(dev, state_bo_size, 0);
+                panfrost_bo_create(dev, state_bo_size, 0, "Indirect draw states");
 
         /* Prepare the thread storage descriptor now since it's invariant. */
         void *tsd = dev->indirect_draw_shaders.states->ptr.cpu +
@@ -1138,7 +1206,8 @@ panfrost_indirect_draw_alloc_deps(struct panfrost_device *dev)
          */
         dev->indirect_draw_shaders.varying_heap =
                 panfrost_bo_create(dev, 512 * 1024 * 1024,
-                                   PAN_BO_INVISIBLE | PAN_BO_GROWABLE);
+                                   PAN_BO_INVISIBLE | PAN_BO_GROWABLE,
+                                   "Indirect draw varying heap");
 
 out:
         pthread_mutex_unlock(&dev->indirect_draw_shaders.lock);
@@ -1228,6 +1297,9 @@ panfrost_emit_indirect_draw(struct pan_pool *pool,
                 .draw_ctx = draw_ctx_ptr.gpu,
                 .draw_buf = draw_info->draw_buf,
                 .index_buf = draw_info->index_buf,
+                .first_vertex_sysval = draw_info->first_vertex_sysval,
+                .base_vertex_sysval = draw_info->base_vertex_sysval,
+                .base_instance_sysval = draw_info->base_instance_sysval,
                 .vertex_job = draw_info->vertex_job,
                 .tiler_job = draw_info->tiler_job,
                 .attrib_bufs = draw_info->attrib_bufs,
@@ -1300,7 +1372,7 @@ panfrost_init_indirect_draw_shaders(struct panfrost_device *dev)
          */
         pthread_mutex_init(&dev->indirect_draw_shaders.lock, NULL);
         panfrost_pool_init(&dev->indirect_draw_shaders.bin_pool, NULL, dev,
-                           PAN_BO_EXECUTE, false);
+                           PAN_BO_EXECUTE, 65536, "Indirect draw shaders", false, true);
 }
 
 void

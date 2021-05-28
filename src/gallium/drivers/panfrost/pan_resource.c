@@ -111,7 +111,7 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
                 return NULL;
         }
         if (rsc->image.layout.crc_mode == PAN_IMAGE_CRC_OOB)
-                rsc->image.crc.bo = panfrost_bo_create(dev, rsc->image.layout.crc_size, 0);
+                rsc->image.crc.bo = panfrost_bo_create(dev, rsc->image.layout.crc_size, 0, "CRC data");
 
         rsc->modifier_constant = true;
 
@@ -646,10 +646,27 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
 
         panfrost_resource_setup(dev, so, modifier, template->format);
 
+        /* Guess a label based on the bind */
+        unsigned bind = template->bind;
+        const char *label =
+                (bind & PIPE_BIND_INDEX_BUFFER) ? "Index buffer" :
+                (bind & PIPE_BIND_SCANOUT) ? "Scanout" :
+                (bind & PIPE_BIND_DISPLAY_TARGET) ? "Display target" :
+                (bind & PIPE_BIND_SHARED) ? "Shared resource" :
+                (bind & PIPE_BIND_RENDER_TARGET) ? "Render target" :
+                (bind & PIPE_BIND_DEPTH_STENCIL) ? "Depth/stencil buffer" :
+                (bind & PIPE_BIND_SAMPLER_VIEW) ? "Texture" :
+                (bind & PIPE_BIND_VERTEX_BUFFER) ? "Vertex buffer" :
+                (bind & PIPE_BIND_CONSTANT_BUFFER) ? "Constant buffer" :
+                (bind & PIPE_BIND_GLOBAL) ? "Global memory" :
+                (bind & PIPE_BIND_SHADER_BUFFER) ? "Shader buffer" :
+                (bind & PIPE_BIND_SHADER_IMAGE) ? "Shader image" :
+                "Other resource";
+
         /* We create a BO immediately but don't bother mapping, since we don't
          * care to map e.g. FBOs which the CPU probably won't touch */
         so->image.data.bo =
-                panfrost_bo_create(dev, so->image.layout.data_size, PAN_BO_DELAY_MMAP);
+                panfrost_bo_create(dev, so->image.layout.data_size, PAN_BO_DELAY_MMAP, label);
 
         if (drm_is_afbc(so->image.layout.modifier))
                 panfrost_resource_init_afbc_headers(so);
@@ -911,7 +928,7 @@ panfrost_ptr_map(struct pipe_context *pctx,
                          */
                         if (!(bo->flags & PAN_BO_SHARED))
                                 newbo = panfrost_bo_create(dev, bo->size,
-                                                           flags);
+                                                           flags, bo->label);
 
                         if (newbo) {
                                 if (copy_resource)
@@ -1131,9 +1148,10 @@ panfrost_ptr_unmap(struct pipe_context *pctx,
                                         panfrost_resource_setup(dev, prsrc, DRM_FORMAT_MOD_LINEAR,
                                                                 prsrc->image.layout.format);
                                         if (prsrc->image.layout.data_size > bo->size) {
+                                                const char *label = bo->label;
                                                 panfrost_bo_unreference(bo);
                                                 bo = prsrc->image.data.bo =
-                                                        panfrost_bo_create(dev, prsrc->image.layout.data_size, 0);
+                                                        panfrost_bo_create(dev, prsrc->image.layout.data_size, 0, label);
                                                 assert(bo);
                                         }
 
@@ -1193,9 +1211,21 @@ panfrost_ptr_flush_region(struct pipe_context *pctx,
 }
 
 static void
-panfrost_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
+panfrost_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsrc)
 {
-        /* TODO */
+        struct panfrost_context *ctx = pan_context(pctx);
+        struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+
+        /* Handle the glInvalidateFramebuffer case */
+        if (batch->key.zsbuf && batch->key.zsbuf->texture == prsrc)
+                batch->resolve &= ~PIPE_CLEAR_DEPTHSTENCIL;
+
+        for (unsigned i = 0; i < batch->key.nr_cbufs; ++i) {
+                struct pipe_surface *surf = batch->key.cbufs[i];
+
+                if (surf && surf->texture == prsrc)
+                        batch->resolve &= ~(PIPE_CLEAR_COLOR0 << i);
+        }
 }
 
 static enum pipe_format
@@ -1284,6 +1314,9 @@ panfrost_resource_set_stencil(struct pipe_resource *prsrc,
 static struct pipe_resource *
 panfrost_resource_get_stencil(struct pipe_resource *prsrc)
 {
+        if (!pan_resource(prsrc)->separate_stencil)
+                return NULL;
+
         return &pan_resource(prsrc)->separate_stencil->base;
 }
 
@@ -1319,8 +1352,10 @@ panfrost_resource_screen_init(struct pipe_screen *pscreen)
 void
 panfrost_resource_context_init(struct pipe_context *pctx)
 {
-        pctx->transfer_map = u_transfer_helper_transfer_map;
-        pctx->transfer_unmap = u_transfer_helper_transfer_unmap;
+        pctx->buffer_map = u_transfer_helper_transfer_map;
+        pctx->buffer_unmap = u_transfer_helper_transfer_unmap;
+        pctx->texture_map = u_transfer_helper_transfer_map;
+        pctx->texture_unmap = u_transfer_helper_transfer_unmap;
         pctx->create_surface = panfrost_create_surface;
         pctx->surface_destroy = panfrost_surface_destroy;
         pctx->resource_copy_region = util_resource_copy_region;

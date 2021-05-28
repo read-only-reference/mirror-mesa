@@ -180,6 +180,15 @@ void finish_ra_test(ra_test_policy policy)
       fail_test("Validation after register allocation failed");
       return;
    }
+
+   finish_program(program.get());
+   aco::optimize_postRA(program.get());
+}
+
+void finish_optimizer_postRA_test()
+{
+   finish_program(program.get());
+   aco::optimize_postRA(program.get());
    aco_print_program(program.get(), output);
 }
 
@@ -220,6 +229,21 @@ void writeout(unsigned i, Temp tmp)
       bld.pseudo(aco_opcode::p_unit_test, Operand(i), tmp);
    else
       bld.pseudo(aco_opcode::p_unit_test, Operand(i));
+}
+
+void writeout(unsigned i, aco::Builder::Result res)
+{
+   bld.pseudo(aco_opcode::p_unit_test, Operand(i), res);
+}
+
+void writeout(unsigned i, Operand op)
+{
+   bld.pseudo(aco_opcode::p_unit_test, Operand(i), op);
+}
+
+void writeout(unsigned i, Operand op0, Operand op1)
+{
+   bld.pseudo(aco_opcode::p_unit_test, Operand(i), op0, op1);
 }
 
 VkDevice get_vk_device(enum chip_class chip_class)

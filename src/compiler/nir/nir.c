@@ -958,6 +958,22 @@ nir_instr_insert(nir_cursor cursor, nir_instr *instr)
    impl->valid_metadata &= ~nir_metadata_instr_index;
 }
 
+bool
+nir_instr_move(nir_cursor cursor, nir_instr *instr)
+{
+   /* If the cursor happens to refer to this instruction (either before or
+    * after), don't do anything.
+    */
+   if ((cursor.option == nir_cursor_before_instr ||
+        cursor.option == nir_cursor_after_instr) &&
+       cursor.instr == instr)
+      return false;
+
+   nir_instr_remove(instr);
+   nir_instr_insert(cursor, instr);
+   return true;
+}
+
 static bool
 src_is_valid(const nir_src *src)
 {
@@ -2411,6 +2427,9 @@ nir_binding nir_chase_binding(nir_src rsrc)
 
 nir_variable *nir_get_binding_variable(nir_shader *shader, nir_binding binding)
 {
+   nir_variable *binding_var = NULL;
+   unsigned count = 0;
+
    if (!binding.success)
       return NULL;
 
@@ -2418,9 +2437,17 @@ nir_variable *nir_get_binding_variable(nir_shader *shader, nir_binding binding)
       return binding.var;
 
    nir_foreach_variable_with_modes(var, shader, nir_var_mem_ubo | nir_var_mem_ssbo) {
-      if (var->data.descriptor_set == binding.desc_set && var->data.binding == binding.binding)
-         return var;
+      if (var->data.descriptor_set == binding.desc_set && var->data.binding == binding.binding) {
+         binding_var = var;
+         count++;
+      }
    }
 
-   return NULL;
+   /* Be conservative if another variable is using the same binding/desc_set
+    * because the access mask might be different and we can't get it reliably.
+    */
+   if (count > 1)
+      return NULL;
+
+   return binding_var;
 }

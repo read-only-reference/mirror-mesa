@@ -678,8 +678,9 @@ radv_meta_resolve_compute_image(struct radv_cmd_buffer *cmd_buffer, struct radv_
    uint32_t queue_mask = radv_image_queue_family_mask(dest_image, cmd_buffer->queue_family_index,
                                                       cmd_buffer->queue_family_index);
 
-   if (radv_layout_dcc_compressed(cmd_buffer->device, dest_image, dest_image_layout, false,
-                                  queue_mask) &&
+   if (!radv_image_use_dcc_image_stores(cmd_buffer->device, dest_image) &&
+       radv_layout_dcc_compressed(cmd_buffer->device, dest_image, region->dstSubresource.mipLevel,
+                                  dest_image_layout, false, queue_mask) &&
        (region->dstOffset.x || region->dstOffset.y || region->dstOffset.z ||
         region->extent.width != dest_image->info.width ||
         region->extent.height != dest_image->info.height ||
@@ -760,8 +761,8 @@ radv_meta_resolve_compute_image(struct radv_cmd_buffer *cmd_buffer, struct radv_
    radv_meta_restore(&saved_state, cmd_buffer);
 
    if (!radv_image_use_dcc_image_stores(cmd_buffer->device, dest_image) &&
-       radv_layout_dcc_compressed(cmd_buffer->device, dest_image, dest_image_layout, false,
-                                  queue_mask)) {
+       radv_layout_dcc_compressed(cmd_buffer->device, dest_image, region->dstSubresource.mipLevel,
+                                  dest_image_layout, false, queue_mask)) {
 
       cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_CS_PARTIAL_FLUSH | RADV_CMD_FLAG_INV_VCACHE;
 
