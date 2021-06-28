@@ -687,11 +687,14 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    info->max_tcc_blocks = device_info.num_tcc_blocks;
    info->max_se = amdinfo->num_shader_engines;
    info->max_sa_per_se = amdinfo->num_shader_arrays_per_engine;
-   info->has_hw_decode = (uvd.available_rings != 0) || (vcn_dec.available_rings != 0) ||
-                         (vcn_jpeg.available_rings != 0);
    info->uvd_fw_version = uvd.available_rings ? uvd_version : 0;
    info->vce_fw_version = vce.available_rings ? vce_version : 0;
-   info->uvd_enc_supported = uvd_enc.available_rings ? true : false;
+   info->has_video_hw.uvd_decode = uvd.available_rings != 0;
+   info->has_video_hw.vcn_decode = vcn_dec.available_rings != 0;
+   info->has_video_hw.jpeg_decode = vcn_jpeg.available_rings != 0;
+   info->has_video_hw.vce_encode = vce.available_rings != 0;
+   info->has_video_hw.uvd_encode = uvd_enc.available_rings != 0;
+   info->has_video_hw.vcn_encode = vcn_enc.available_rings != 0;
    info->has_userptr = true;
    info->has_syncobj = has_syncobj(fd);
    info->has_timeline_syncobj = has_timeline_syncobj(fd);
@@ -904,10 +907,12 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
                                         info->family == CHIP_SIENNA_CICHLID;
 
    /* Support for GFX10.3 was added with F32_ME_FEATURE_VERSION_31 but the
-    * firmware version wasn't bumped.
+    * feature version wasn't bumped.
     */
-   info->has_32bit_predication = info->chip_class >= GFX10_3 &&
-                                 info->me_fw_version >= 32;
+   info->has_32bit_predication = (info->chip_class >= GFX10 &&
+                                  info->me_fw_feature >= 32) ||
+                                 (info->chip_class == GFX9 &&
+                                  info->me_fw_feature >= 52);
 
    /* Get the number of good compute units. */
    info->num_good_compute_units = 0;
@@ -1046,7 +1051,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       info->num_physical_sgprs_per_simd = 128 * info->max_wave64_per_simd;
       info->min_sgpr_alloc = 128;
       info->sgpr_alloc_granularity = 128;
-      info->use_late_alloc = true; /* APUs benefit too. */
+      info->use_late_alloc = info->min_good_cu_per_sa > 2;
    } else if (info->chip_class >= GFX8) {
       info->num_physical_sgprs_per_simd = 800;
       info->min_sgpr_alloc = 16;
@@ -1194,8 +1199,12 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    ce_fw_feature = %i\n", info->ce_fw_feature);
 
    fprintf(f, "Multimedia info:\n");
-   fprintf(f, "    has_hw_decode = %u\n", info->has_hw_decode);
-   fprintf(f, "    uvd_enc_supported = %u\n", info->uvd_enc_supported);
+   fprintf(f, "    uvd_decode = %u\n", info->has_video_hw.uvd_decode);
+   fprintf(f, "    vcn_decode = %u\n", info->has_video_hw.vcn_decode);
+   fprintf(f, "    jpeg_decode = %u\n", info->has_video_hw.jpeg_decode);
+   fprintf(f, "    vce_encode = %u\n", info->has_video_hw.vce_encode);
+   fprintf(f, "    uvd_encode = %u\n", info->has_video_hw.uvd_encode);
+   fprintf(f, "    vcn_encode = %u\n", info->has_video_hw.vcn_encode);
    fprintf(f, "    uvd_fw_version = %u\n", info->uvd_fw_version);
    fprintf(f, "    vce_fw_version = %u\n", info->vce_fw_version);
    fprintf(f, "    vce_harvest_config = %i\n", info->vce_harvest_config);

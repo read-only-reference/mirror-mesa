@@ -194,6 +194,12 @@ is_outstanding_tex_or_prefetch(struct ir3_instruction *instr, struct ir3_sched_c
 	if (!is_tex_or_prefetch(instr))
 		return false;
 
+	/* The sched node is only valid within the same block, we cannot
+	 * really say anything about src's from other blocks
+	 */
+	if (instr->block != ctx->block)
+		return true;
+
 	struct ir3_sched_node *n = instr->data;
 	return n->tex_index >= ctx->first_outstanding_tex_index;
 }
@@ -204,8 +210,32 @@ is_outstanding_sfu(struct ir3_instruction *instr, struct ir3_sched_ctx *ctx)
 	if (!is_sfu(instr))
 		return false;
 
+	/* The sched node is only valid within the same block, we cannot
+	 * really say anything about src's from other blocks
+	 */
+	if (instr->block != ctx->block)
+		return true;
+
 	struct ir3_sched_node *n = instr->data;
 	return n->sfu_index >= ctx->first_outstanding_sfu_index;
+}
+
+static unsigned
+cycle_count(struct ir3_instruction *instr)
+{
+	if (instr->opc == OPC_META_COLLECT) {
+		/* Assume that only immed/const sources produce moves */
+		unsigned n = 0;
+		foreach_src(src, instr) {
+			if (src->flags & (IR3_REG_IMMED | IR3_REG_CONST))
+				n++;
+		}
+		return n;
+	} else if (is_meta(instr)) {
+		return 0;
+	} else {
+		return 1;
+	}
 }
 
 static void
@@ -260,17 +290,17 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 
 	dag_prune_head(ctx->dag, &n->dag);
 
-	if (is_meta(instr) && (instr->opc != OPC_META_TEX_PREFETCH))
-		return;
+	unsigned cycles = cycle_count(instr);
 
 	if (is_sfu(instr)) {
 		ctx->sfu_delay = 8;
 		n->sfu_index = ctx->sfu_index++;
-	} else if (sched_check_src_cond(instr, is_outstanding_sfu, ctx)) {
+	} else if (!is_meta(instr) &&
+			   sched_check_src_cond(instr, is_outstanding_sfu, ctx)) {
 		ctx->sfu_delay = 0;
 		ctx->first_outstanding_sfu_index = ctx->sfu_index;
 	} else if (ctx->sfu_delay > 0) {
-		ctx->sfu_delay--;
+		ctx->sfu_delay -= MIN2(cycles, ctx->sfu_delay);
 	}
 
 	if (is_tex_or_prefetch(instr)) {
@@ -283,11 +313,12 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 		assert(ctx->remaining_tex > 0);
 		ctx->remaining_tex--;
 		n->tex_index = ctx->tex_index++;
-	} else if (sched_check_src_cond(instr, is_outstanding_tex_or_prefetch, ctx)) {
+	} else if (!is_meta(instr) &&
+			   sched_check_src_cond(instr, is_outstanding_tex_or_prefetch, ctx)) {
 		ctx->tex_delay = 0;
 		ctx->first_outstanding_tex_index = ctx->tex_index;
 	} else if (ctx->tex_delay > 0) {
-		ctx->tex_delay--;
+		ctx->tex_delay -= MIN2(cycles, ctx->tex_delay);
 	}
 }
 
@@ -350,7 +381,7 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 			struct ir3_instruction *indirect = ir->a0_users[i];
 			if (!indirect)
 				continue;
-			if (indirect->address != instr)
+			if (indirect->address->def != instr->dsts[0])
 				continue;
 			ready = could_sched(indirect, instr);
 		}
@@ -367,7 +398,7 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 			struct ir3_instruction *indirect = ir->a1_users[i];
 			if (!indirect)
 				continue;
-			if (indirect->address != instr)
+			if (indirect->address->def != instr->dsts[0])
 				continue;
 			ready = could_sched(indirect, instr);
 		}
@@ -405,7 +436,7 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 	 *
 	 * We could do this by adding each bary.f instruction as
 	 * virtual ssa src for the kill instruction.  But we have
-	 * fixed length instr->regs[].
+	 * fixed length instr->srcs[].
 	 *
 	 * TODO we could handle this by false-deps now, probably.
 	 */
@@ -455,14 +486,15 @@ nearest_use(struct ir3_instruction *instr)
 	return nearest;
 }
 
-static int
-use_count(struct ir3_instruction *instr)
+static bool
+is_only_nonscheduled_use(struct ir3_instruction *instr, struct ir3_instruction *use)
 {
-	unsigned cnt = 0;
-	foreach_ssa_use (use, instr)
-		if (!is_scheduled(use))
-			cnt++;
-	return cnt;
+	foreach_ssa_use (other_use, instr) {
+		if (other_use != use && !is_scheduled(other_use))
+			return false;
+	}
+
+	return true;
 }
 
 /* find net change to live values if instruction were scheduled: */
@@ -470,14 +502,14 @@ static int
 live_effect(struct ir3_instruction *instr)
 {
 	struct ir3_sched_node *n = instr->data;
-	int new_live = n->partially_live ? 0 : dest_regs(instr);
+	int new_live = (n->partially_live || !instr->uses || instr->uses->entries == 0) ? 0 : dest_regs(instr);
 	int freed_live = 0;
 
 	/* if we schedule something that causes a vecN to be live,
 	 * then count all it's other components too:
 	 */
 	if (n->collect)
-		new_live *= n->collect->regs_count - 1;
+		new_live *= n->collect->srcs_count;
 
 	foreach_ssa_src_n (src, n, instr) {
 		if (__is_false_dep(instr, n))
@@ -486,7 +518,7 @@ live_effect(struct ir3_instruction *instr)
 		if (instr->block != src->block)
 			continue;
 
-		if (use_count(src) == 1)
+		if (is_only_nonscheduled_use(src, instr))
 			freed_live += dest_regs(src);
 	}
 
@@ -555,7 +587,8 @@ choose_instr_dec(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 		if (defer && should_defer(ctx, n->instr))
 			continue;
 
-		unsigned d = ir3_delay_calc(ctx->block, n->instr, false, false);
+		/* Note: mergedregs is only used post-RA, just set it to false */
+		unsigned d = ir3_delay_calc_prera(ctx->block, n->instr);
 
 		if (d > 0)
 			continue;
@@ -608,7 +641,7 @@ choose_instr_dec(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 		if (defer && should_defer(ctx, n->instr))
 			continue;
 
-		unsigned d = ir3_delay_calc(ctx->block, n->instr, false, false);
+		unsigned d = ir3_delay_calc_prera(ctx->block, n->instr);
 
 		if (d > 0)
 			continue;
@@ -676,7 +709,7 @@ choose_instr_inc(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
 		if (defer && should_defer(ctx, n->instr))
 			continue;
 
-		unsigned d = ir3_delay_calc(ctx->block, n->instr, false, false);
+		unsigned d = ir3_delay_calc_prera(ctx->block, n->instr);
 
 		if (d > 0)
 			continue;
@@ -733,7 +766,16 @@ choose_instr_prio(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes)
 	struct ir3_sched_node *chosen = NULL;
 
 	foreach_sched_node (n, &ctx->dag->heads) {
-		if (!is_meta(n->instr))
+		/*
+		 * - phi nodes and inputs must be scheduled first
+		 * - split should be scheduled first, so that the vector value is
+		 *   killed as soon as possible. RA cannot split up the vector and
+		 *   reuse components that have been killed until it's been killed.
+		 * - collect, on the other hand, should be treated as a "normal"
+		 *   instruction, and may add to register pressure if its sources are
+		 *   part of another vector or immediates.
+		 */
+		if (!is_meta(n->instr) || n->instr->opc == OPC_META_COLLECT)
 			continue;
 
 		if (!chosen || (chosen->max_delay < n->max_delay))
@@ -757,7 +799,7 @@ dump_state(struct ir3_sched_ctx *ctx)
 	foreach_sched_node (n, &ctx->dag->heads) {
 		di(n->instr, "maxdel=%3d le=%d del=%u ",
 				n->max_delay, live_effect(n->instr),
-				ir3_delay_calc(ctx->block, n->instr, false, false));
+				ir3_delay_calc_prera(ctx->block, n->instr));
 
 		util_dynarray_foreach(&n->dag.edges, struct dag_edge, edge) {
 			struct ir3_sched_node *child = (struct ir3_sched_node *)edge->child;
@@ -829,13 +871,13 @@ split_addr(struct ir3_sched_ctx *ctx, struct ir3_instruction **addr,
 		/* remap remaining instructions using current addr
 		 * to new addr:
 		 */
-		if (indirect->address == *addr) {
+		if (indirect->address->def == (*addr)->dsts[0]) {
 			if (!new_addr) {
 				new_addr = split_instr(ctx, *addr);
 				/* original addr is scheduled, but new one isn't: */
 				new_addr->flags &= ~IR3_INSTR_MARK;
 			}
-			indirect->address = new_addr;
+			indirect->address->def = new_addr->dsts[0];
 			/* don't need to remove old dag edge since old addr is
 			 * already scheduled:
 			 */
@@ -878,13 +920,13 @@ split_pred(struct ir3_sched_ctx *ctx)
 		 * TODO is there ever a case when pred isn't first
 		 * (and only) src?
 		 */
-		if (ssa(predicated->regs[1]) == ctx->pred) {
+		if (ssa(predicated->srcs[0]) == ctx->pred) {
 			if (!new_pred) {
 				new_pred = split_instr(ctx, ctx->pred);
 				/* original pred is scheduled, but new one isn't: */
 				new_pred->flags &= ~IR3_INSTR_MARK;
 			}
-			predicated->regs[1]->instr = new_pred;
+			predicated->srcs[0]->instr = new_pred;
 			/* don't need to remove old dag edge since old pred is
 			 * already scheduled:
 			 */
@@ -936,15 +978,7 @@ sched_node_add_dep(struct ir3_instruction *instr, struct ir3_instruction *src, i
 	dag_add_edge(&sn->dag, &n->dag, NULL);
 
 
-	/* There's a mismatch between the indices foreach_ssa_src_n uses and the
-	 * indices that ir3_delayslots expects, and additionally we don't want to
-	 * call it and get bogus answers on false dependencies.
-	 */
-	unsigned d = 0;
-	if (i < instr->regs_count)
-		d = ir3_delayslots(src, instr, i + 1, true);
-	else if (src == instr->address)
-		d = ir3_delayslots(src, instr, 0, true);
+	unsigned d = ir3_delayslots(src, instr, i, true);
 
 	n->delay = MAX2(n->delay, d);
 }
@@ -989,7 +1023,7 @@ is_output_only(struct ir3_instruction *instr)
 	if (!writes_gpr(instr))
 		return false;
 
-	if (!(instr->regs[0]->flags & IR3_REG_SSA))
+	if (!(instr->dsts[0]->flags & IR3_REG_SSA))
 		return false;
 
 	foreach_ssa_use (use, instr)
@@ -1002,6 +1036,13 @@ is_output_only(struct ir3_instruction *instr)
 static void
 sched_node_add_deps(struct ir3_instruction *instr)
 {
+	/* There's nothing to do for phi nodes, since they always go first. And
+	 * phi nodes can reference sources later in the same block, so handling
+	 * sources is not only unnecessary but could cause problems.
+	 */
+	if (instr->opc == OPC_META_PHI)
+		return;
+
 	/* Since foreach_ssa_src() already handles false-dep's we can construct
 	 * the DAG easily in a single pass.
 	 */
@@ -1088,17 +1129,19 @@ sched_block(struct ir3_sched_ctx *ctx, struct ir3_block *block)
 			ctx->remaining_tex++;
 	}
 
-	/* First schedule all meta:input instructions, followed by
-	 * tex-prefetch.  We want all of the instructions that load
-	 * values into registers before the shader starts to go
-	 * before any other instructions.  But in particular we
-	 * want inputs to come before prefetches.  This is because
-	 * a FS's bary_ij input may not actually be live in the
-	 * shader, but it should not be scheduled on top of any
-	 * other input (but can be overwritten by a tex prefetch)
+	/* First schedule all meta:input and meta:phi instructions, followed by
+	 * tex-prefetch.  We want all of the instructions that load values into
+	 * registers before the shader starts to go before any other instructions.
+	 * But in particular we want inputs to come before prefetches.  This is
+	 * because a FS's bary_ij input may not actually be live in the shader,
+	 * but it should not be scheduled on top of any other input (but can be
+	 * overwritten by a tex prefetch)
+	 *
+	 * Note: Because the first block cannot have predecessors, meta:input and
+	 * meta:phi cannot exist in the same block.
 	 */
 	foreach_instr_safe (instr, &ctx->unscheduled_list)
-		if (instr->opc == OPC_META_INPUT)
+		if (instr->opc == OPC_META_INPUT || instr->opc == OPC_META_PHI)
 			schedule(ctx, instr);
 
 	foreach_instr_safe (instr, &ctx->unscheduled_list)
@@ -1111,7 +1154,7 @@ sched_block(struct ir3_sched_ctx *ctx, struct ir3_block *block)
 
 		instr = choose_instr(ctx, &notes);
 		if (instr) {
-			unsigned delay = ir3_delay_calc(ctx->block, instr, false, false);
+			unsigned delay = ir3_delay_calc_prera(ctx->block, instr);
 			d("delay=%u", delay);
 
 			/* and if we run out of instructions that can be scheduled,
@@ -1192,9 +1235,12 @@ get_array_id(struct ir3_instruction *instr)
 	 * src or dst, ir3_cp should enforce this.
 	 */
 
-	for (unsigned i = 0; i < instr->regs_count; i++)
-		if (instr->regs[i]->flags & IR3_REG_ARRAY)
-			return instr->regs[i]->array.id;
+	foreach_dst (dst, instr)
+		if (dst->flags & IR3_REG_ARRAY)
+			return dst->array.id;
+	foreach_src (src, instr)
+		if (src->flags & IR3_REG_ARRAY)
+			return src->array.id;
 
 	unreachable("this was unexpected");
 }

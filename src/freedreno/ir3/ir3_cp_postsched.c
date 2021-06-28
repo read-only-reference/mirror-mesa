@@ -50,7 +50,7 @@
 static bool
 has_conflicting_write(struct ir3_instruction *src,
 		struct ir3_instruction *use,
-		struct ir3_instruction **def,
+		struct ir3_register **def,
 		unsigned id, int offset)
 {
 	assert(src->block == use->block);
@@ -67,13 +67,13 @@ has_conflicting_write(struct ir3_instruction *src,
 		 * it past an a0.x write:
 		 */
 		if ((offset < 0) && (dest_regs(instr) > 0) &&
-				(instr->regs[0]->num == regid(REG_A0, 0)))
+				(instr->dsts[0]->num == regid(REG_A0, 0)))
 			return true;
 
 		if (!writes_gpr(instr))
 			continue;
 
-		struct ir3_register *dst = instr->regs[0];
+		struct ir3_register *dst = instr->dsts[0];
 		if (!(dst->flags & IR3_REG_ARRAY))
 			continue;
 
@@ -99,7 +99,7 @@ has_conflicting_write(struct ir3_instruction *src,
 			return true;
 
 		if (last_write)
-			*def = instr;
+			*def = dst;
 
 		last_write = false;
 	}
@@ -111,7 +111,7 @@ has_conflicting_write(struct ir3_instruction *src,
 static bool
 valid_flags(struct ir3_instruction *use, struct ir3_instruction *mov)
 {
-	struct ir3_register *src = mov->regs[1];
+	struct ir3_register *src = mov->srcs[0];
 
 	foreach_src_n (reg, n, use) {
 		if (ssa(reg) != mov)
@@ -127,7 +127,7 @@ valid_flags(struct ir3_instruction *use, struct ir3_instruction *mov)
 static bool
 instr_cp_postsched(struct ir3_instruction *mov)
 {
-	struct ir3_register *src = mov->regs[1];
+	struct ir3_register *src = mov->srcs[0];
 
 	/* only consider mov's from "arrays", other cases we have
 	 * already considered already:
@@ -152,7 +152,7 @@ instr_cp_postsched(struct ir3_instruction *mov)
 		if (is_meta(use))
 			continue;
 
-		struct ir3_instruction *def = src->instr;
+		struct ir3_register *def = src->def;
 		if (has_conflicting_write(mov, use, &def, src->array.id, offset))
 			continue;
 
@@ -169,15 +169,15 @@ instr_cp_postsched(struct ir3_instruction *mov)
 			if (ssa(reg) != mov)
 				continue;
 
-			use->regs[n + 1] = ir3_reg_clone(mov->block->shader, src);
+			use->srcs[n] = ir3_reg_clone(mov->block->shader, src);
 
 			/* preserve (abs)/etc modifiers: */
-			use->regs[n + 1]-> flags |= reg->flags;
+			use->srcs[n]-> flags |= reg->flags;
 
 			/* If we're sinking the array read past any writes, make
 			 * sure to update it to point to the new previous write:
 			 */
-			use->regs[n + 1]->instr = def;
+			use->srcs[n]->def = def;
 
 			removed = true;
 		}
@@ -188,7 +188,7 @@ instr_cp_postsched(struct ir3_instruction *mov)
 		 */
 		if (removed) {
 			if (src->flags & IR3_REG_RELATIV)
-				ir3_instr_set_address(use, mov->address);
+				ir3_instr_set_address(use, mov->address->def->instr);
 
 			util_dynarray_append(&newdeps, struct ir3_instruction *, use);
 

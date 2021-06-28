@@ -61,6 +61,77 @@ unsigned get_interp_input(nir_intrinsic_op intrin, enum glsl_interp_mode interp)
    return 0;
 }
 
+bool is_loop_header_block(nir_block *block)
+{
+   return block->cf_node.parent->type == nir_cf_node_loop &&
+          block == nir_loop_first_block(nir_cf_node_as_loop(block->cf_node.parent));
+}
+
+/* similar to nir_block_is_unreachable(), but does not require dominance information */
+bool
+is_block_reachable(nir_function_impl *impl, nir_block *known_reachable, nir_block *block)
+{
+   if (block == nir_start_block(impl) || block == known_reachable)
+      return true;
+
+   /* skip loop back-edges */
+   if (is_loop_header_block(block)) {
+      nir_loop *loop = nir_cf_node_as_loop(block->cf_node.parent);
+      nir_block *preheader = nir_block_cf_tree_prev(nir_loop_first_block(loop));
+      return is_block_reachable(impl, known_reachable, preheader);
+   }
+
+   set_foreach(block->predecessors, entry) {
+      if (is_block_reachable(impl, known_reachable, (nir_block *)entry->key))
+         return true;
+   }
+
+   return false;
+}
+
+/* Check whether the given SSA def is only used by cross-lane instructions. */
+bool
+only_used_by_cross_lane_instrs(nir_ssa_def *ssa, bool follow_phis = true)
+{
+   nir_foreach_use (src, ssa) {
+      switch (src->parent_instr->type) {
+      case nir_instr_type_alu: {
+         nir_alu_instr *alu = nir_instr_as_alu(src->parent_instr);
+         if (alu->op != nir_op_unpack_64_2x32_split_x && alu->op != nir_op_unpack_64_2x32_split_y)
+            return false;
+         if (!only_used_by_cross_lane_instrs(&alu->dest.dest.ssa, follow_phis))
+            return false;
+
+         continue;
+      }
+      case nir_instr_type_intrinsic: {
+         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(src->parent_instr);
+         if (intrin->intrinsic != nir_intrinsic_read_invocation &&
+             intrin->intrinsic != nir_intrinsic_read_first_invocation &&
+             intrin->intrinsic != nir_intrinsic_lane_permute_16_amd)
+            return false;
+
+         continue;
+      }
+      case nir_instr_type_phi: {
+         /* Don't follow more than 1 phis, this avoids infinite loops. */
+         if (!follow_phis)
+            return false;
+
+         nir_phi_instr *phi = nir_instr_as_phi(src->parent_instr);
+         if (!only_used_by_cross_lane_instrs(&phi->dest.ssa, false))
+            return false;
+
+         continue;
+      }
+      default:
+         return false;
+      }
+   }
+
+   return true;
+}
+
 /* If one side of a divergent IF ends in a branch and the other doesn't, we
  * might have to emit the contents of the side without the branch at the merge
  * block instead. This is so that we can use any SGPR live-out of the side
@@ -72,8 +143,10 @@ sanitize_if(nir_function_impl *impl, nir_if *nif)
 
    nir_block *then_block = nir_if_last_then_block(nif);
    nir_block *else_block = nir_if_last_else_block(nif);
-   bool then_jump = nir_block_ends_in_jump(then_block) || nir_block_is_unreachable(then_block);
-   bool else_jump = nir_block_ends_in_jump(else_block) || nir_block_is_unreachable(else_block);
+   bool then_jump = nir_block_ends_in_jump(then_block) ||
+                    !is_block_reachable(impl, nir_if_first_then_block(nif), then_block);
+   bool else_jump = nir_block_ends_in_jump(else_block) ||
+                    !is_block_reachable(impl, nir_if_first_else_block(nif), else_block);
    if (then_jump == else_jump)
       return false;
 
@@ -99,12 +172,6 @@ sanitize_if(nir_function_impl *impl, nir_if *nif)
    nir_cf_extract(&tmp, nir_before_block(first_continue_from_blk),
                         nir_after_block(last_continue_from_blk));
    nir_cf_reinsert(&tmp, nir_after_cf_node(&nif->cf_node));
-
-   /* nir_cf_extract() invalidates dominance metadata, but it should still be
-    * correct because of the specific type of transformation we did. Block
-    * indices are not valid except for block_0's, which is all we care about for
-    * nir_block_is_unreachable(). */
-   impl->valid_metadata = impl->valid_metadata | nir_metadata_dominance | nir_metadata_block_index;
 
    return true;
 }
@@ -135,116 +202,6 @@ sanitize_cf_list(nir_function_impl *impl, struct exec_list *cf_list)
    }
 
    return progress;
-}
-
-void fill_desc_set_info(isel_context *ctx, nir_function_impl *impl)
-{
-   radv_pipeline_layout *pipeline_layout = ctx->options->layout;
-
-   unsigned resource_flag_count = 1; /* +1 to reserve flags[0] for aliased resources */
-   for (unsigned i = 0; i < pipeline_layout->num_sets; i++) {
-      radv_descriptor_set_layout *layout = pipeline_layout->set[i].layout;
-      ctx->resource_flag_offsets[i] = resource_flag_count;
-      resource_flag_count += layout->binding_count;
-   }
-   ctx->buffer_resource_flags = std::vector<uint8_t>(resource_flag_count);
-
-   nir_foreach_variable_with_modes(var, impl->function->shader, nir_var_mem_ssbo) {
-      if (var->data.access & ACCESS_RESTRICT) {
-         uint32_t offset = ctx->resource_flag_offsets[var->data.descriptor_set];
-         ctx->buffer_resource_flags[offset + var->data.binding] |= buffer_is_restrict;
-      }
-   }
-
-   nir_foreach_block(block, impl) {
-      nir_foreach_instr(instr, block) {
-         if (instr->type != nir_instr_type_intrinsic)
-            continue;
-         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-         if (!nir_intrinsic_has_access(intrin))
-            continue;
-
-         nir_ssa_def *res = NULL;
-         unsigned access = nir_intrinsic_access(intrin);
-         unsigned flags = 0;
-         bool glc = access & (ACCESS_VOLATILE | ACCESS_COHERENT | ACCESS_NON_READABLE);
-         switch (intrin->intrinsic) {
-         case nir_intrinsic_load_ssbo: {
-            if (nir_dest_is_divergent(intrin->dest) && (!glc || ctx->program->chip_class >= GFX8))
-               flags |= glc ? has_glc_vmem_load : has_nonglc_vmem_load;
-            res = intrin->src[0].ssa;
-            break;
-         }
-         case nir_intrinsic_ssbo_atomic_add:
-         case nir_intrinsic_ssbo_atomic_imin:
-         case nir_intrinsic_ssbo_atomic_umin:
-         case nir_intrinsic_ssbo_atomic_imax:
-         case nir_intrinsic_ssbo_atomic_umax:
-         case nir_intrinsic_ssbo_atomic_and:
-         case nir_intrinsic_ssbo_atomic_or:
-         case nir_intrinsic_ssbo_atomic_xor:
-         case nir_intrinsic_ssbo_atomic_exchange:
-         case nir_intrinsic_ssbo_atomic_comp_swap:
-            flags |= has_glc_vmem_load | has_glc_vmem_store;
-            res = intrin->src[0].ssa;
-            break;
-         case nir_intrinsic_store_ssbo:
-            flags |= glc ? has_glc_vmem_store : has_nonglc_vmem_store;
-            res = intrin->src[1].ssa;
-            break;
-         case nir_intrinsic_load_global:
-            if (!(access & ACCESS_NON_WRITEABLE))
-               flags |= glc ? has_glc_vmem_load : has_nonglc_vmem_load;
-            break;
-         case nir_intrinsic_store_global:
-            flags |= glc ? has_glc_vmem_store : has_nonglc_vmem_store;
-            break;
-         case nir_intrinsic_global_atomic_add:
-         case nir_intrinsic_global_atomic_imin:
-         case nir_intrinsic_global_atomic_umin:
-         case nir_intrinsic_global_atomic_imax:
-         case nir_intrinsic_global_atomic_umax:
-         case nir_intrinsic_global_atomic_and:
-         case nir_intrinsic_global_atomic_or:
-         case nir_intrinsic_global_atomic_xor:
-         case nir_intrinsic_global_atomic_exchange:
-         case nir_intrinsic_global_atomic_comp_swap:
-            flags |= has_glc_vmem_load | has_glc_vmem_store;
-            break;
-         case nir_intrinsic_image_deref_load:
-         case nir_intrinsic_image_deref_sparse_load:
-            res = intrin->src[0].ssa;
-            flags |= glc ? has_glc_vmem_load : has_nonglc_vmem_load;
-            break;
-         case nir_intrinsic_image_deref_store:
-            res = intrin->src[0].ssa;
-            flags |= (glc || ctx->program->chip_class == GFX6) ? has_glc_vmem_store : has_nonglc_vmem_store;
-            break;
-         case nir_intrinsic_image_deref_atomic_add:
-         case nir_intrinsic_image_deref_atomic_umin:
-         case nir_intrinsic_image_deref_atomic_imin:
-         case nir_intrinsic_image_deref_atomic_umax:
-         case nir_intrinsic_image_deref_atomic_imax:
-         case nir_intrinsic_image_deref_atomic_and:
-         case nir_intrinsic_image_deref_atomic_or:
-         case nir_intrinsic_image_deref_atomic_xor:
-         case nir_intrinsic_image_deref_atomic_exchange:
-         case nir_intrinsic_image_deref_atomic_comp_swap:
-            res = intrin->src[0].ssa;
-            flags |= has_glc_vmem_load | has_glc_vmem_store;
-            break;
-         default:
-            continue;
-         }
-
-         uint8_t *flags_ptr;
-         uint32_t count;
-         get_buffer_resource_flags(ctx, res, access, &flags_ptr, &count);
-
-         for (unsigned i = 0; i < count; i++)
-            flags_ptr[i] |= flags;
-      }
-   }
 }
 
 void apply_nuw_to_ssa(isel_context *ctx, nir_ssa_def *ssa)
@@ -279,8 +236,6 @@ void apply_nuw_to_ssa(isel_context *ctx, nir_ssa_def *ssa)
 
 void apply_nuw_to_offsets(isel_context *ctx, nir_function_impl *impl)
 {
-   nir_metadata_require(impl, nir_metadata_dominance);
-
    nir_foreach_block(block, impl) {
       nir_foreach_instr(instr, block) {
          if (instr->type != nir_instr_type_intrinsic)
@@ -487,7 +442,7 @@ setup_nir(isel_context *ctx, nir_shader *nir)
    setup_variables(ctx, nir);
 
    nir_convert_to_lcssa(nir, true, false);
-   nir_lower_phis_to_scalar(nir, false);
+   nir_lower_phis_to_scalar(nir, true);
 
    nir_function_impl *func = nir_shader_get_entrypoint(nir);
    nir_index_ssa_defs(func);
@@ -498,8 +453,6 @@ setup_nir(isel_context *ctx, nir_shader *nir)
 void init_context(isel_context *ctx, nir_shader *shader)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
-   unsigned lane_mask_size = ctx->program->lane_mask.size();
-
    ctx->shader = shader;
 
    /* Init NIR range analysis. */
@@ -510,13 +463,13 @@ void init_context(isel_context *ctx, nir_shader *shader)
       ctx->ub_config.min_subgroup_size = ctx->options->key.cs.subgroup_size;
       ctx->ub_config.max_subgroup_size = ctx->options->key.cs.subgroup_size;
    }
-   ctx->ub_config.max_work_group_invocations = 2048;
-   ctx->ub_config.max_work_group_count[0] = 65535;
-   ctx->ub_config.max_work_group_count[1] = 65535;
-   ctx->ub_config.max_work_group_count[2] = 65535;
-   ctx->ub_config.max_work_group_size[0] = 2048;
-   ctx->ub_config.max_work_group_size[1] = 2048;
-   ctx->ub_config.max_work_group_size[2] = 2048;
+   ctx->ub_config.max_workgroup_invocations = 2048;
+   ctx->ub_config.max_workgroup_count[0] = 65535;
+   ctx->ub_config.max_workgroup_count[1] = 65535;
+   ctx->ub_config.max_workgroup_count[2] = 65535;
+   ctx->ub_config.max_workgroup_size[0] = 2048;
+   ctx->ub_config.max_workgroup_size[1] = 2048;
+   ctx->ub_config.max_workgroup_size[2] = 2048;
    for (unsigned i = 0; i < MAX_VERTEX_ATTRIBS; i++) {
       unsigned attrib_format = ctx->options->key.vs.vertex_attribute_formats[i];
       unsigned dfmt = attrib_format & 0xf;
@@ -561,17 +514,14 @@ void init_context(isel_context *ctx, nir_shader *shader)
    nir_divergence_analysis(shader);
    nir_opt_uniform_atomics(shader);
 
-   fill_desc_set_info(ctx, impl);
-
    apply_nuw_to_offsets(ctx, impl);
 
    /* sanitize control flow */
-   nir_metadata_require(impl, nir_metadata_dominance);
    sanitize_cf_list(impl, &impl->body);
    nir_metadata_preserve(impl, nir_metadata_none);
 
    /* we'll need these for isel */
-   nir_metadata_require(impl, nir_metadata_block_index | nir_metadata_dominance);
+   nir_metadata_require(impl, nir_metadata_block_index);
 
    if (!ctx->stage.has(SWStage::GSCopy) && ctx->options->dump_preoptir) {
       fprintf(stderr, "NIR shader before instruction selection:\n");
@@ -586,7 +536,7 @@ void init_context(isel_context *ctx, nir_shader *shader)
 
    std::unique_ptr<unsigned[]> nir_to_aco{new unsigned[impl->num_blocks]()};
 
-   /* TODO: make this recursive to improve compile times and merge with fill_desc_set_info() */
+   /* TODO: make this recursive to improve compile times */
    bool done = false;
    while (!done) {
       done = true;
@@ -642,8 +592,9 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_op_ldexp:
                   case nir_op_frexp_sig:
                   case nir_op_frexp_exp:
-                  case nir_op_cube_face_index:
-                  case nir_op_cube_face_coord:
+                  case nir_op_cube_face_index_amd:
+                  case nir_op_cube_face_coord_amd:
+                  case nir_op_sad_u8x4:
                      type = RegType::vgpr;
                      break;
                   case nir_op_f2i16:
@@ -700,8 +651,8 @@ void init_context(isel_context *ctx, nir_shader *shader)
                RegType type = RegType::sgpr;
                switch(intrinsic->intrinsic) {
                   case nir_intrinsic_load_push_constant:
-                  case nir_intrinsic_load_work_group_id:
-                  case nir_intrinsic_load_num_work_groups:
+                  case nir_intrinsic_load_workgroup_id:
+                  case nir_intrinsic_load_num_workgroups:
                   case nir_intrinsic_load_subgroup_id:
                   case nir_intrinsic_load_num_subgroups:
                   case nir_intrinsic_load_first_vertex:
@@ -752,6 +703,8 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_intrinsic_load_tess_coord:
                   case nir_intrinsic_write_invocation_amd:
                   case nir_intrinsic_mbcnt_amd:
+                  case nir_intrinsic_byte_permute_amd:
+                  case nir_intrinsic_lane_permute_16_amd:
                   case nir_intrinsic_load_instance_id:
                   case nir_intrinsic_ssbo_atomic_add:
                   case nir_intrinsic_ssbo_atomic_imin:
@@ -808,6 +761,16 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_intrinsic_bvh64_intersect_ray_amd:
                      type = RegType::vgpr;
                      break;
+                  case nir_intrinsic_load_shared:
+                     /* When the result of these loads is only used by cross-lane instructions,
+                     * it is beneficial to use a VGPR destination. This is because this allows
+                     * to put the s_waitcnt further down, which decreases latency.
+                     */
+                     if (only_used_by_cross_lane_instrs(&intrinsic->dest.ssa)) {
+                        type = RegType::vgpr;
+                        break;
+                     }
+                     FALLTHROUGH;
                   case nir_intrinsic_shuffle:
                   case nir_intrinsic_quad_broadcast:
                   case nir_intrinsic_quad_swap_horizontal:
@@ -822,7 +785,6 @@ void init_context(isel_context *ctx, nir_shader *shader)
                   case nir_intrinsic_load_ssbo:
                   case nir_intrinsic_load_global:
                   case nir_intrinsic_vulkan_resource_index:
-                  case nir_intrinsic_load_shared:
                   case nir_intrinsic_get_ssbo_size:
                      type = nir_dest_is_divergent(intrinsic->dest) ? RegType::vgpr : RegType::sgpr;
                      break;
@@ -915,36 +877,23 @@ void init_context(isel_context *ctx, nir_shader *shader)
             }
             case nir_instr_type_phi: {
                nir_phi_instr* phi = nir_instr_as_phi(instr);
-               RegType type;
-               unsigned size = phi->dest.ssa.num_components;
-
-               if (phi->dest.ssa.bit_size == 1) {
-                  assert(size == 1 && "multiple components not yet supported on boolean phis.");
-                  type = RegType::sgpr;
-                  size *= lane_mask_size;
-                  regclasses[phi->dest.ssa.index] = RegClass(type, size);
-                  break;
-               }
+               RegType type = RegType::sgpr;
+               unsigned num_components = phi->dest.ssa.num_components;
+               assert((phi->dest.ssa.bit_size != 1 || num_components == 1) &&
+                      "Multiple components not supported on boolean phis.");
 
                if (nir_dest_is_divergent(phi->dest)) {
                   type = RegType::vgpr;
                } else {
-                  type = RegType::sgpr;
                   nir_foreach_phi_src (src, phi) {
                      if (regclasses[src->src.ssa->index].type() == RegType::vgpr)
                         type = RegType::vgpr;
-                     if (regclasses[src->src.ssa->index].type() == RegType::none)
-                        done = false;
                   }
                }
 
-               RegClass rc = get_reg_class(ctx, type, phi->dest.ssa.num_components, phi->dest.ssa.bit_size);
-               if (rc != regclasses[phi->dest.ssa.index]) {
+               RegClass rc = get_reg_class(ctx, type, num_components, phi->dest.ssa.bit_size);
+               if (rc != regclasses[phi->dest.ssa.index])
                   done = false;
-               } else {
-                  nir_foreach_phi_src(src, phi)
-                     assert(regclasses[src->src.ssa->index].size() == rc.size());
-               }
                regclasses[phi->dest.ssa.index] = rc;
                break;
             }
@@ -1072,9 +1021,9 @@ setup_isel_context(Program* program,
       program->workgroup_size = program->wave_size;
    } else if (program->stage == compute_cs) {
       /* CS sets the workgroup size explicitly */
-      program->workgroup_size = shaders[0]->info.cs.local_size[0] *
-                                shaders[0]->info.cs.local_size[1] *
-                                shaders[0]->info.cs.local_size[2];
+      program->workgroup_size = shaders[0]->info.workgroup_size[0] *
+                                shaders[0]->info.workgroup_size[1] *
+                                shaders[0]->info.workgroup_size[2];
    } else if (program->stage.hw == HWStage::ES || program->stage == geometry_gs) {
       /* Unmerged ESGS operate in workgroups if on-chip GS (LDS rings) are enabled on GFX7-8 (not implemented in Mesa)  */
       program->workgroup_size = program->wave_size;

@@ -44,6 +44,7 @@
 #include "util/format/u_format.h"
 #include "util/u_prim.h"
 #include "util/u_prim_restart.h"
+#include "util/u_draw.h"
 #include "indices/u_primconvert.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_from_mesa.h"
@@ -131,7 +132,7 @@ panfrost_set_frontend_noop(struct pipe_context *pipe, bool enable)
 
 #define DEFINE_CASE(c) case PIPE_PRIM_##c: return MALI_DRAW_MODE_##c;
 
-static int
+static uint8_t
 pan_draw_mode(enum pipe_prim_type mode)
 {
         switch (mode) {
@@ -152,19 +153,6 @@ pan_draw_mode(enum pipe_prim_type mode)
 }
 
 #undef DEFINE_CASE
-
-static bool
-panfrost_scissor_culls_everything(struct panfrost_context *ctx)
-{
-        const struct pipe_scissor_state *ss = &ctx->scissor;
-
-        /* Check if we're scissoring at all */
-
-        if (!ctx->rasterizer->base.scissor)
-                return false;
-
-        return (ss->minx == ss->maxx) || (ss->miny == ss->maxy);
-}
 
 /* Count generated primitives (when there is no geom/tess shaders) for
  * transform feedback */
@@ -207,28 +195,27 @@ pan_emit_draw_descs(struct panfrost_batch *batch,
         d->instance_size = batch->ctx->instance_count > 1 ?
                            batch->ctx->padded_count : 1;
 
-        d->uniform_buffers = panfrost_emit_const_buf(batch, st, &d->push_uniforms);
+        d->uniform_buffers = batch->uniform_buffers[st];
+        d->push_uniforms = batch->push_uniforms[st];
         d->textures = batch->textures[st];
         d->samplers = batch->samplers[st];
 }
 
-static enum mali_index_type
+static inline enum mali_index_type
 panfrost_translate_index_size(unsigned size)
 {
-        switch (size) {
-        case 1: return MALI_INDEX_TYPE_UINT8;
-        case 2: return MALI_INDEX_TYPE_UINT16;
-        case 4: return MALI_INDEX_TYPE_UINT32;
-        default: unreachable("Invalid index size");
-        }
+        STATIC_ASSERT(MALI_INDEX_TYPE_NONE  == 0);
+        STATIC_ASSERT(MALI_INDEX_TYPE_UINT8  == 1);
+        STATIC_ASSERT(MALI_INDEX_TYPE_UINT16 == 2);
+
+        return (size == 4) ? MALI_INDEX_TYPE_UINT32 : size;
 }
 
 static void
 panfrost_draw_emit_vertex(struct panfrost_batch *batch,
                           const struct pipe_draw_info *info,
                           void *invocation_template,
-                          mali_ptr shared_mem, mali_ptr vs_vary,
-                          mali_ptr varyings,
+                          mali_ptr vs_vary, mali_ptr varyings,
                           mali_ptr attribs, mali_ptr attrib_bufs,
                           void *job)
 {
@@ -252,7 +239,7 @@ panfrost_draw_emit_vertex(struct panfrost_batch *batch,
                 cfg.attribute_buffers = attrib_bufs;
                 cfg.varyings = vs_vary;
                 cfg.varying_buffers = vs_vary ? varyings : 0;
-                cfg.thread_storage = shared_mem;
+                cfg.thread_storage = batch->tls.gpu;
                 pan_emit_draw_descs(batch, &cfg, PIPE_SHADER_VERTEX);
         }
 
@@ -289,7 +276,11 @@ static inline void
 panfrost_update_state_tex(struct panfrost_batch *batch,
                           enum pipe_shader_type st)
 {
-        unsigned dirty = batch->ctx->dirty_shader[st];
+        struct panfrost_context *ctx = batch->ctx;
+        struct panfrost_shader_state *ss = panfrost_get_shader_state(ctx, st);
+
+        unsigned dirty_3d = ctx->dirty;
+        unsigned dirty = ctx->dirty_shader[st];
 
         if (dirty & PAN_DIRTY_STAGE_TEXTURE) {
                 batch->textures[st] =
@@ -300,6 +291,11 @@ panfrost_update_state_tex(struct panfrost_batch *batch,
                 batch->samplers[st] =
                         panfrost_emit_sampler_descriptors(batch, st);
         }
+
+        if ((dirty & ss->dirty_shader) || (dirty_3d & ss->dirty_3d)) {
+                batch->uniform_buffers[st] = panfrost_emit_const_buf(batch, st,
+                                &batch->push_uniforms[st]);
+        }
 }
 
 static inline void
@@ -309,6 +305,9 @@ panfrost_update_state_3d(struct panfrost_batch *batch)
 
         if (dirty & (PAN_DIRTY_VIEWPORT | PAN_DIRTY_SCISSOR))
                 batch->viewport = panfrost_emit_viewport(batch);
+
+        if (dirty & PAN_DIRTY_TLS_SIZE)
+                panfrost_batch_adjust_stack_size(batch);
 }
 
 static void
@@ -345,8 +344,7 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                          const struct pipe_draw_info *info,
                          const struct pipe_draw_start_count_bias *draw,
                          void *invocation_template,
-                         mali_ptr shared_mem, mali_ptr indices,
-                         mali_ptr fs_vary, mali_ptr varyings,
+                         mali_ptr indices, mali_ptr fs_vary, mali_ptr varyings,
                          mali_ptr pos, mali_ptr psiz, void *job)
 {
         struct panfrost_context *ctx = batch->ctx;
@@ -387,8 +385,9 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                 cfg.job_task_split = 6;
 
                 cfg.index_count = ctx->indirect_draw ? 1 : draw->count;
-                if (info->index_size) {
-                        cfg.index_type = panfrost_translate_index_size(info->index_size);
+                cfg.index_type = panfrost_translate_index_size(info->index_size);
+
+                if (cfg.index_type) {
                         cfg.indices = indices;
                         cfg.base_vertex_offset = draw->index_bias - ctx->offset_start;
                 }
@@ -425,7 +424,7 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                 cfg.viewport = batch->viewport;
                 cfg.varyings = fs_vary;
                 cfg.varying_buffers = fs_vary ? varyings : 0;
-                cfg.thread_storage = shared_mem;
+                cfg.thread_storage = batch->tls.gpu;
 
                 /* For all primitives but lines DRAW.flat_shading_vertex must
                  * be set to 0 and the provoking vertex is selected with the
@@ -473,10 +472,8 @@ panfrost_direct_draw(struct panfrost_batch *batch,
         struct panfrost_context *ctx = batch->ctx;
         struct panfrost_device *device = pan_device(ctx->base.screen);
 
-        int mode = info->mode;
-
         /* Fallback for unsupported modes */
-        if (!(ctx->draw_modes & (1 << mode))) {
+        if (!(ctx->draw_modes & BITFIELD_BIT(info->mode))) {
                 if (draw->count < 4) {
                         /* Degenerate case? */
                         return;
@@ -505,8 +502,6 @@ panfrost_direct_draw(struct panfrost_batch *batch,
 
         unsigned vertex_count = ctx->vertex_count;
 
-        mali_ptr shared_mem = panfrost_batch_reserve_tls(batch, false);
-
         unsigned min_index = 0, max_index = 0;
         mali_ptr indices = 0;
 
@@ -522,8 +517,6 @@ panfrost_direct_draw(struct panfrost_batch *batch,
                 ctx->offset_start = draw->start;
         }
 
-        /* Encode the padded vertex count */
-
         if (info->instance_count > 1)
                 ctx->padded_count = panfrost_padded_vertex_count(vertex_count);
         else
@@ -535,7 +528,7 @@ panfrost_direct_draw(struct panfrost_batch *batch,
         if (info->instance_count > 1) {
                 panfrost_pack_work_groups_compute(&invocation,
                                                   1, vertex_count, info->instance_count,
-                                                  1, 1, 1, true);
+                                                  1, 1, 1, true, false);
         } else {
                 pan_pack(&invocation, INVOCATION, cfg) {
                         cfg.invocations = MALI_POSITIVE(vertex_count);
@@ -544,34 +537,34 @@ panfrost_direct_draw(struct panfrost_batch *batch,
                         cfg.workgroups_x_shift = 0;
                         cfg.workgroups_y_shift = 0;
                         cfg.workgroups_z_shift = 32;
-                        cfg.unknown_shift = 2;
+                        cfg.thread_group_split = MALI_SPLIT_MIN_EFFICIENT;
                 }
         }
 
         /* Emit all sort of descriptors. */
         mali_ptr varyings = 0, vs_vary = 0, fs_vary = 0, pos = 0, psiz = 0;
 
-        bool point_coord_replace = (info->mode == PIPE_PRIM_POINTS);
-
         panfrost_emit_varying_descriptor(batch,
                                          ctx->padded_count *
                                          ctx->instance_count,
                                          &vs_vary, &fs_vary, &varyings,
                                          NULL, &pos, &psiz,
-                                         point_coord_replace);
+                                         info->mode == PIPE_PRIM_POINTS);
 
         mali_ptr attribs, attrib_bufs;
         attribs = panfrost_emit_vertex_data(batch, &attrib_bufs);
 
+        panfrost_update_state_3d(batch);
+        panfrost_update_state_vs(batch);
+        panfrost_update_state_fs(batch);
+        panfrost_clean_state_3d(ctx);
+
         /* Fire off the draw itself */
-        panfrost_draw_emit_vertex(batch, info, &invocation, shared_mem,
+        panfrost_draw_emit_vertex(batch, info, &invocation,
                                   vs_vary, varyings, attribs, attrib_bufs, vertex.cpu);
-        panfrost_draw_emit_tiler(batch, info, draw, &invocation, shared_mem, indices,
+        panfrost_draw_emit_tiler(batch, info, draw, &invocation, indices,
                                  fs_vary, varyings, pos, psiz, tiler.cpu);
         panfrost_emit_vertex_tiler_jobs(batch, &vertex, &tiler);
-
-        /* Adjust the batch stack size based on the new shader stack sizes. */
-        panfrost_batch_adjust_stack_size(batch);
 
         /* Increment transform feedback offsets */
         panfrost_update_streamout_offsets(ctx);
@@ -598,8 +591,6 @@ panfrost_indirect_draw(struct panfrost_batch *batch,
         ctx->active_prim = info->mode;
         ctx->drawid = drawid_offset;
         ctx->indirect_draw = true;
-
-        mali_ptr shared_mem = panfrost_batch_reserve_tls(batch, false);
 
         struct panfrost_ptr tiler =
                 panfrost_pool_alloc_aligned(&batch->pool,
@@ -642,6 +633,11 @@ panfrost_indirect_draw(struct panfrost_batch *batch,
         ctx->base_vertex_sysval_ptr = 0;
         ctx->base_instance_sysval_ptr = 0;
 
+        panfrost_update_state_3d(batch);
+        panfrost_update_state_vs(batch);
+        panfrost_update_state_fs(batch);
+        panfrost_clean_state_3d(ctx);
+
         bool point_coord_replace = (info->mode == PIPE_PRIM_POINTS);
 
         panfrost_emit_varying_descriptor(batch, 0,
@@ -656,10 +652,9 @@ panfrost_indirect_draw(struct panfrost_batch *batch,
         static struct mali_invocation_packed invocation;
 
         /* Fire off the draw itself */
-        panfrost_draw_emit_vertex(batch, info, &invocation, shared_mem,
-                                  vs_vary, varyings, attribs, attrib_bufs,
-                                  vertex.cpu);
-        panfrost_draw_emit_tiler(batch, info, draw, &invocation, shared_mem,
+        panfrost_draw_emit_vertex(batch, info, &invocation, vs_vary, varyings,
+                                  attribs, attrib_bufs, vertex.cpu);
+        panfrost_draw_emit_tiler(batch, info, draw, &invocation,
                                  index_buf ? index_buf->ptr.gpu : 0,
                                  fs_vary, varyings, pos, psiz, tiler.cpu);
 
@@ -719,9 +714,6 @@ panfrost_indirect_draw(struct panfrost_batch *batch,
                                             &batch->indirect_draw_ctx);
 
         panfrost_emit_vertex_tiler_jobs(batch, &vertex, &tiler);
-
-        /* Adjust the batch stack size based on the new shader stack sizes. */
-        panfrost_batch_adjust_stack_size(batch);
 }
 
 static void
@@ -735,15 +727,15 @@ panfrost_draw_vbo(struct pipe_context *pipe,
         struct panfrost_context *ctx = pan_context(pipe);
         struct panfrost_device *dev = pan_device(pipe->screen);
 
-        /* First of all, check the scissor to see if anything is drawn at all.
-         * If it's not, we drop the draw (mostly a conformance issue;
-         * well-behaved apps shouldn't hit this) */
-
-        if (panfrost_scissor_culls_everything(ctx))
-                return;
-
         if (!panfrost_render_condition_check(ctx))
                 return;
+
+        /* Emulate indirect draws when debugging */
+        if (dev->debug & PAN_DBG_NOINDIRECT && indirect && indirect->buffer) {
+                assert(num_draws == 1);
+                util_draw_indirect(pipe, info, indirect);
+                return;
+        }
 
         /* Do some common setup */
         struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
@@ -762,10 +754,8 @@ panfrost_draw_vbo(struct pipe_context *pipe,
         if (unlikely(dev->debug & PAN_DBG_DIRTY))
                 panfrost_dirty_state_all(ctx);
 
-        panfrost_update_state_3d(batch);
-        panfrost_update_state_vs(batch);
-        panfrost_update_state_fs(batch);
-        panfrost_clean_state_3d(ctx);
+        /* Conservatively assume draw parameters always change */
+        ctx->dirty |= PAN_DIRTY_PARAMS | PAN_DIRTY_DRAWID;
 
         if (indirect) {
                 assert(num_draws == 1);
@@ -791,8 +781,11 @@ panfrost_draw_vbo(struct pipe_context *pipe,
 
         for (unsigned i = 0; i < num_draws; i++) {
                 panfrost_direct_draw(batch, &tmp_info, drawid, &draws[i]);
-                if (tmp_info.increment_draw_id)
-                       drawid++;
+
+                if (tmp_info.increment_draw_id) {
+                        ctx->dirty |= PAN_DIRTY_DRAWID;
+                        drawid++;
+                }
         }
 
 }
@@ -897,6 +890,31 @@ panfrost_set_shader_images(
         }
 }
 
+/* Assigns a vertex buffer for a given (index, divisor) tuple */
+
+static unsigned
+pan_assign_vertex_buffer(struct pan_vertex_buffer *buffers,
+                         unsigned *nr_bufs,
+                         unsigned vbi,
+                         unsigned divisor)
+{
+        /* Look up the buffer */
+        for (unsigned i = 0; i < (*nr_bufs); ++i) {
+                if (buffers[i].vbi == vbi && buffers[i].divisor == divisor)
+                        return i;
+        }
+
+        /* Else, create a new buffer */
+        unsigned idx = (*nr_bufs)++;
+
+        buffers[idx] = (struct pan_vertex_buffer) {
+                .vbi = vbi,
+                .divisor = divisor
+        };
+
+        return idx;
+}
+
 static void *
 panfrost_create_vertex_elements_state(
         struct pipe_context *pctx,
@@ -908,6 +926,15 @@ panfrost_create_vertex_elements_state(
 
         so->num_elements = num_elements;
         memcpy(so->pipe, elements, sizeof(*elements) * num_elements);
+
+        /* Assign attribute buffers corresponding to the vertex buffers, keyed
+         * for a particular divisor since that's how instancing works on Mali */
+        for (unsigned i = 0; i < num_elements; ++i) {
+                so->element_buffer[i] = pan_assign_vertex_buffer(
+                                so->buffers, &so->nr_bufs,
+                                elements[i].vertex_buffer_index,
+                                elements[i].instance_divisor);
+        }
 
         for (int i = 0; i < num_elements; ++i) {
                 enum pipe_format fmt = elements[i].src_format;
@@ -1107,6 +1134,8 @@ panfrost_bind_shader_state(
         struct panfrost_context *ctx = pan_context(pctx);
         struct panfrost_device *dev = pan_device(ctx->base.screen);
         ctx->shader[type] = hwcso;
+
+        ctx->dirty |= PAN_DIRTY_TLS_SIZE;
         ctx->dirty_shader[type] |= PAN_DIRTY_STAGE_RENDERER;
 
         if (!hwcso) return;
@@ -1259,6 +1288,7 @@ panfrost_set_constant_buffer(
 
         pbuf->enabled_mask |= mask;
         pbuf->dirty_mask |= mask;
+        ctx->dirty_shader[shader] |= PAN_DIRTY_STAGE_CONST;
 }
 
 static void
@@ -1654,6 +1684,7 @@ panfrost_set_active_query_state(struct pipe_context *pipe,
 {
         struct panfrost_context *ctx = pan_context(pipe);
         ctx->active_queries = enable;
+        ctx->dirty_shader[PIPE_SHADER_FRAGMENT] |= PAN_DIRTY_STAGE_RENDERER;
 }
 
 static void
@@ -1736,6 +1767,7 @@ panfrost_begin_query(struct pipe_context *pipe, struct pipe_query *q)
 
                 query->msaa = (ctx->pipe_framebuffer.samples > 1);
                 ctx->occlusion_query = query;
+                ctx->dirty_shader[PIPE_SHADER_FRAGMENT] |= PAN_DIRTY_STAGE_RENDERER;
                 break;
         }
 
@@ -1768,6 +1800,7 @@ panfrost_end_query(struct pipe_context *pipe, struct pipe_query *q)
         case PIPE_QUERY_OCCLUSION_PREDICATE:
         case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
                 ctx->occlusion_query = NULL;
+                ctx->dirty_shader[PIPE_SHADER_FRAGMENT] |= PAN_DIRTY_STAGE_RENDERER;
                 break;
         case PIPE_QUERY_PRIMITIVES_GENERATED:
                 query->end = ctx->prims_generated;

@@ -1,5 +1,6 @@
 /*
  * Copyright 2021 Alyssa Rosenzweig
+ * Copyright (C) 2019-2021 Collabora, Ltd.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -35,6 +36,22 @@
 #include "compiler/nir/nir_lower_blend.h"
 #include "util/hash_table.h"
 #include "util/bitset.h"
+
+struct agx_streamout_target {
+   struct pipe_stream_output_target base;
+   uint32_t offset;
+};
+
+struct agx_streamout {
+   struct pipe_stream_output_target *targets[PIPE_MAX_SO_BUFFERS];
+   unsigned num_targets;
+};
+
+static inline struct agx_streamout_target *
+agx_so_target(struct pipe_stream_output_target *target)
+{
+   return (struct agx_streamout_target *)target;
+}
 
 struct agx_compiled_shader {
    /* Mapped executable memory */
@@ -146,6 +163,7 @@ struct agx_context {
    struct pipe_blend_color blend_color;
    struct pipe_viewport_state viewport;
    struct pipe_scissor_state scissor;
+   struct agx_streamout streamout;
 
    uint8_t render_target[8][AGX_RENDER_TARGET_LENGTH];
 };
@@ -159,6 +177,7 @@ agx_context(struct pipe_context *pctx)
 struct agx_rasterizer {
    struct pipe_rasterizer_state base;
    uint8_t cull[AGX_CULL_LENGTH];
+   uint8_t line_width;
 };
 
 struct agx_query {
@@ -207,8 +226,9 @@ struct agx_resource {
    struct sw_displaytarget	*dt;
    unsigned dt_stride;
 
+   BITSET_DECLARE(data_valid, PIPE_MAX_TEXTURE_LEVELS);
+
    struct {
-      bool data_valid;
       unsigned offset;
       unsigned line_stride;
    } slices[PIPE_MAX_TEXTURE_LEVELS];

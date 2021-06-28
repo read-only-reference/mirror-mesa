@@ -20,24 +20,7 @@
 /* venus implements VK_ANDROID_native_buffer up to spec version 7 */
 #define VN_ANDROID_NATIVE_BUFFER_SPEC_VERSION 7
 
-struct vn_android_wsi {
-   /* command pools, one per queue family */
-   VkCommandPool *cmd_pools;
-   /* use one lock to simplify */
-   mtx_t cmd_pools_lock;
-   /* for forcing VK_SHARING_MODE_CONCURRENT */
-   uint32_t *queue_family_indices;
-};
-
 #ifdef ANDROID
-
-VkResult
-vn_android_wsi_init(struct vn_device *dev,
-                    const VkAllocationCallbacks *alloc);
-
-void
-vn_android_wsi_fini(struct vn_device *dev,
-                    const VkAllocationCallbacks *alloc);
 
 static inline const VkNativeBufferANDROID *
 vn_android_find_native_buffer(const VkImageCreateInfo *create_info)
@@ -71,34 +54,22 @@ VkResult
 vn_android_device_import_ahb(struct vn_device *dev,
                              struct vn_device_memory *mem,
                              const VkMemoryAllocateInfo *alloc_info,
+                             const VkAllocationCallbacks *alloc,
                              struct AHardwareBuffer *ahb);
 
 VkResult
 vn_android_device_allocate_ahb(struct vn_device *dev,
                                struct vn_device_memory *mem,
-                               const VkMemoryAllocateInfo *alloc_info);
+                               const VkMemoryAllocateInfo *alloc_info,
+                               const VkAllocationCallbacks *alloc);
 
 void
 vn_android_release_ahb(struct AHardwareBuffer *ahb);
 
 VkFormat
-vn_android_ahb_format_to_vk_format(uint32_t format);
+vn_android_drm_format_to_vk_format(uint32_t format);
 
 #else
-
-static inline VkResult
-vn_android_wsi_init(UNUSED struct vn_device *dev,
-                    UNUSED const VkAllocationCallbacks *alloc)
-{
-   return VK_SUCCESS;
-}
-
-static inline void
-vn_android_wsi_fini(UNUSED struct vn_device *dev,
-                    UNUSED const VkAllocationCallbacks *alloc)
-{
-   return;
-}
 
 static inline const VkNativeBufferANDROID *
 vn_android_find_native_buffer(UNUSED const VkImageCreateInfo *create_info)
@@ -144,6 +115,7 @@ static inline VkResult
 vn_android_device_import_ahb(UNUSED struct vn_device *dev,
                              UNUSED struct vn_device_memory *mem,
                              UNUSED const VkMemoryAllocateInfo *alloc_info,
+                             UNUSED const VkAllocationCallbacks *alloc,
                              UNUSED struct AHardwareBuffer *ahb)
 {
    return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -152,7 +124,8 @@ vn_android_device_import_ahb(UNUSED struct vn_device *dev,
 static inline VkResult
 vn_android_device_allocate_ahb(UNUSED struct vn_device *dev,
                                UNUSED struct vn_device_memory *mem,
-                               UNUSED const VkMemoryAllocateInfo *alloc_info)
+                               UNUSED const VkMemoryAllocateInfo *alloc_info,
+                               UNUSED const VkAllocationCallbacks *alloc)
 {
    return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
@@ -164,7 +137,7 @@ vn_android_release_ahb(UNUSED struct AHardwareBuffer *ahb)
 }
 
 static inline VkFormat
-vn_android_ahb_format_to_vk_format(UNUSED uint32_t format)
+vn_android_drm_format_to_vk_format(UNUSED uint32_t format)
 {
    return VK_FORMAT_UNDEFINED;
 }

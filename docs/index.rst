@@ -89,9 +89,10 @@ Linux, FreeBSD, and other operating systems.
    drivers/llvmpipe
    drivers/openswr
    drivers/panfrost
+   drivers/svga3d
    drivers/v3d
    drivers/vc4
-   drivers/vmware-guest
+   drivers/venus
    drivers/zink
 
 .. toctree::
@@ -110,6 +111,8 @@ Linux, FreeBSD, and other operating systems.
    release-calendar
    dispatch
    gallium/index
+   nir/index
+   isl/index
    android
    macos
    Linux Kernel Drivers <https://www.kernel.org/doc/html/latest/gpu/>

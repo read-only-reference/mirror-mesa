@@ -320,6 +320,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
 
 #if GFX_VER <= 5
    s.ColorBufferComponentWriteDisables = info->write_disables;
+   s.ColorBlendEnable = info->blend_enable;
 #else
    assert(info->write_disables == 0);
 #endif
@@ -825,8 +826,9 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
     *
     *  buffer_size = (surface_size & ~3) - (surface_size & 3)
     */
-   if (info->format == ISL_FORMAT_RAW  ||
-       info->stride_B < isl_format_get_layout(info->format)->bpb / 8) {
+   if ((info->format == ISL_FORMAT_RAW  ||
+        info->stride_B < isl_format_get_layout(info->format)->bpb / 8) &&
+       !info->is_scratch) {
       assert(info->stride_B == 1);
       uint64_t aligned_size = isl_align(buffer_size, 4);
       buffer_size = aligned_size + (aligned_size - buffer_size);
@@ -854,8 +856,27 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
 
    struct GENX(RENDER_SURFACE_STATE) s = { 0, };
 
-   s.SurfaceType = SURFTYPE_BUFFER;
    s.SurfaceFormat = info->format;
+
+   s.SurfaceType = SURFTYPE_BUFFER;
+#if GFX_VERx10 >= 125
+   if (info->is_scratch) {
+      /* From the BSpec:
+       *
+       *    "For surfaces of type SURFTYPE_SCRATCH, valid range of pitch is:
+       *    [63,262143] -> [64B, 256KB].  Also, for SURFTYPE_SCRATCH, the
+       *    pitch must be a multiple of 64bytes."
+       */
+      assert(info->format == ISL_FORMAT_RAW);
+      assert(info->stride_B % 64 == 0);
+      assert(info->stride_B <= 256 * 1024);
+      s.SurfaceType = SURFTYPE_SCRATCH;
+   }
+#else
+   assert(!info->is_scratch);
+#endif
+
+   s.SurfacePitch = info->stride_B - 1;
 
 #if GFX_VER >= 6
    s.SurfaceVerticalAlignment = isl_encode_valign[4];
@@ -894,8 +915,6 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
       }
    }
 
-   s.SurfacePitch = info->stride_B - 1;
-
 #if GFX_VER >= 6
    s.NumberofMultisamples = MULTISAMPLECOUNT_1;
 #endif
@@ -928,7 +947,8 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
 }
 
 void
-isl_genX(null_fill_state)(void *state, struct isl_extent3d size)
+isl_genX(null_fill_state)(void *state,
+                          const struct isl_null_fill_state_info *restrict info)
 {
    struct GENX(RENDER_SURFACE_STATE) s = {
       .SurfaceType = SURFTYPE_NULL,
@@ -939,7 +959,7 @@ isl_genX(null_fill_state)(void *state, struct isl_extent3d size)
        */
       .SurfaceFormat = ISL_FORMAT_R32_UINT,
 #if GFX_VER >= 7
-      .SurfaceArray = size.depth > 1,
+      .SurfaceArray = info->size.depth > 1,
 #endif
 #if GFX_VER >= 8
       .TileMode = YMAJOR,
@@ -960,11 +980,13 @@ isl_genX(null_fill_state)(void *state, struct isl_extent3d size)
        */
       .SurfaceVerticalAlignment = VALIGN_4,
 #endif
-      .Width = size.width - 1,
-      .Height = size.height - 1,
-      .Depth = size.depth - 1,
-      .RenderTargetViewExtent = size.depth - 1,
+      .MIPCountLOD = info->levels,
+      .Width = info->size.width - 1,
+      .Height = info->size.height - 1,
+      .Depth = info->size.depth - 1,
+      .RenderTargetViewExtent = info->size.depth - 1,
 #if GFX_VER <= 5
+      .MinimumArrayElement = info->minimum_array_element,
       .ColorBufferComponentWriteDisables = 0xf,
 #endif
    };

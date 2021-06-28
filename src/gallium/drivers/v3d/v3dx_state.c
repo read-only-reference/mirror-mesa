@@ -33,7 +33,7 @@
 #include "util/u_upload_mgr.h"
 
 #include "v3d_context.h"
-#include "v3d_tiling.h"
+#include "broadcom/common/v3d_tiling.h"
 #include "broadcom/common/v3d_macros.h"
 #include "broadcom/compiler/v3d_compiler.h"
 #include "broadcom/cle/v3dx_pack.h"
@@ -550,7 +550,8 @@ v3d_upload_sampler_state_variant(void *map,
 
                 sampler.min_level_of_detail = MIN2(MAX2(0, cso->min_lod),
                                                    15);
-                sampler.max_level_of_detail = MIN2(cso->max_lod, 15);
+                sampler.max_level_of_detail = MIN2(MAX2(cso->max_lod,
+                                                        cso->min_lod), 15);
 
                 /* If we're not doing inter-miplevel filtering, we need to
                  * clamp the LOD so that we only sample from baselevel.

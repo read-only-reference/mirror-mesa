@@ -90,6 +90,8 @@ nir_options = {
    .lower_bitfield_extract_to_shifts = true,
    .lower_extract_word = true,
    .lower_extract_byte = true,
+   .lower_insert_word = true,
+   .lower_insert_byte = true,
    .lower_all_io_to_elements = true,
    .lower_all_io_to_temps = true,
    .lower_hadd = true,
@@ -1160,9 +1162,9 @@ static const struct dxil_mdnode *
 emit_threads(struct ntd_context *ctx)
 {
    const nir_shader *s = ctx->shader;
-   const struct dxil_mdnode *threads_x = dxil_get_metadata_int32(&ctx->mod, MAX2(s->info.cs.local_size[0], 1));
-   const struct dxil_mdnode *threads_y = dxil_get_metadata_int32(&ctx->mod, MAX2(s->info.cs.local_size[1], 1));
-   const struct dxil_mdnode *threads_z = dxil_get_metadata_int32(&ctx->mod, MAX2(s->info.cs.local_size[2], 1));
+   const struct dxil_mdnode *threads_x = dxil_get_metadata_int32(&ctx->mod, MAX2(s->info.workgroup_size[0], 1));
+   const struct dxil_mdnode *threads_y = dxil_get_metadata_int32(&ctx->mod, MAX2(s->info.workgroup_size[1], 1));
+   const struct dxil_mdnode *threads_z = dxil_get_metadata_int32(&ctx->mod, MAX2(s->info.workgroup_size[2], 1));
    if (!threads_x || !threads_y || !threads_z)
       return false;
 
@@ -1338,7 +1340,8 @@ emit_metadata(struct ntd_context *ctx)
          return false;
    }
 
-   const struct dxil_mdnode *signatures = get_signatures(&ctx->mod, ctx->shader);
+   const struct dxil_mdnode *signatures = get_signatures(&ctx->mod, ctx->shader,
+                                                         ctx->opts->vulkan_environment);
 
    const struct dxil_mdnode *dx_entry_point = emit_entrypoint(ctx, main_func,
        "main", signatures, resources_node, shader_properties);
@@ -2264,7 +2267,7 @@ emit_load_local_invocation_id(struct ntd_context *ctx,
 }
 
 static bool
-emit_load_local_work_group_id(struct ntd_context *ctx,
+emit_load_local_workgroup_id(struct ntd_context *ctx,
                               nir_intrinsic_instr *intr)
 {
    assert(intr->dest.is_ssa);
@@ -3145,6 +3148,36 @@ emit_image_size(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 }
 
 static bool
+emit_get_ssbo_size(struct ntd_context *ctx, nir_intrinsic_instr *intr)
+{
+   const struct dxil_value* handle = NULL;
+   if (ctx->opts->vulkan_environment) {
+      handle = get_src_ssa(ctx, intr->src[0].ssa, 0);
+   } else {
+      int binding = nir_src_as_int(intr->src[0]);
+      handle = ctx->uav_handles[binding];
+   }
+   
+   if (!handle)
+     return false;
+
+   struct texop_parameters params = {
+      .tex = handle,
+      .lod_or_sample = dxil_module_get_undef(
+                        &ctx->mod, dxil_module_get_int_type(&ctx->mod, 32))
+   };
+
+   const struct dxil_value *dimensions = emit_texture_size(ctx, &params);
+   if (!dimensions)
+      return false;
+
+   const struct dxil_value *retval = dxil_emit_extractval(&ctx->mod, dimensions, 0);
+   store_dest(ctx, &intr->dest, 0, retval, nir_type_uint);
+
+   return true;
+}
+
+static bool
 emit_ssbo_atomic(struct ntd_context *ctx, nir_intrinsic_instr *intr,
                    enum dxil_atomic_op op, nir_alu_type type)
 {
@@ -3354,9 +3387,9 @@ emit_intrinsic(struct ntd_context *ctx, nir_intrinsic_instr *intr)
       return emit_load_global_invocation_id(ctx, intr);
    case nir_intrinsic_load_local_invocation_id:
       return emit_load_local_invocation_id(ctx, intr);
-   case nir_intrinsic_load_work_group_id:
-   case nir_intrinsic_load_work_group_id_zero_base:
-      return emit_load_local_work_group_id(ctx, intr);
+   case nir_intrinsic_load_workgroup_id:
+   case nir_intrinsic_load_workgroup_id_zero_base:
+      return emit_load_local_workgroup_id(ctx, intr);
    case nir_intrinsic_load_ssbo:
       return emit_load_ssbo(ctx, intr);
    case nir_intrinsic_store_ssbo:
@@ -3449,14 +3482,16 @@ emit_intrinsic(struct ntd_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_image_deref_size:
    case nir_intrinsic_image_size:
       return emit_image_size(ctx, intr);
+   case nir_intrinsic_get_ssbo_size:
+      return emit_get_ssbo_size(ctx, intr);
 
    case nir_intrinsic_vulkan_resource_index:
       return emit_vulkan_resource_index(ctx, intr);
    case nir_intrinsic_load_vulkan_descriptor:
       return emit_load_vulkan_descriptor(ctx, intr);
 
-   case nir_intrinsic_load_num_work_groups:
-   case nir_intrinsic_load_local_group_size:
+   case nir_intrinsic_load_num_workgroups:
+   case nir_intrinsic_load_workgroup_size:
    default:
       NIR_INSTR_UNSUPPORTED(&intr->instr);
       assert("Unimplemented intrinsic instruction");
@@ -4753,24 +4788,6 @@ out:
    ralloc_free(ctx->ralloc_ctx);
    free(ctx);
    return retval;
-}
-
-static const char *generics_semantics[] = {
-   "GENERICAA", "GENERICAB", "GENERICAC", "GENERICAD",
-   "GENERICAE", "GENERICAF", "GENERICAG", "GENERICAH",
-   "GENERICBA", "GENERICBB", "GENERICBC", "GENERICBD",
-   "GENERICBE", "GENERICBF", "GENERICBG", "GENERICBH",
-   "GENERICCA", "GENERICCB", "GENERICCC", "GENERICCD",
-   "GENERICCE", "GENERICCF", "GENERICCG", "GENERICCH",
-   "GENERICDA", "GENERICDB", "GENERICDC", "GENERICDD",
-   "GENERICDE", "GENERICDF", "GENERICDG", "GENERICDH"
-};
-
-const char *
-dxil_vs_attr_index_to_name(unsigned index)
-{
-   assert(index < 32);
-   return generics_semantics[index];
 }
 
 enum dxil_sysvalue_type

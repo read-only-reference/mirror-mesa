@@ -38,8 +38,6 @@ struct ir3_shader;
 struct ir3_compiler {
 	struct fd_device *dev;
 	uint32_t gpu_id;
-	struct ir3_ra_reg_set *set;
-	struct ir3_ra_reg_set *mergedregs_set;
 	uint32_t shader_count;
 
 	struct disk_cache *disk_cache;
@@ -227,7 +225,7 @@ static inline void
 ir3_debug_print(struct ir3 *ir, const char *when)
 {
 	if (ir3_shader_debug & IR3_DBG_OPTMSGS) {
-		printf("%s:\n", when);
+		mesa_logi("%s:", when);
 		ir3_print(ir);
 	}
 }

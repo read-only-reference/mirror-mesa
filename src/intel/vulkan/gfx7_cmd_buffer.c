@@ -206,12 +206,42 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
    struct anv_graphics_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
    struct anv_dynamic_state *d = &cmd_buffer->state.gfx.dynamic;
 
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY) {
+      uint32_t topology;
+      if (anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL))
+         topology = pipeline->topology;
+      else
+         topology = genX(vk_to_intel_primitive_type)[d->primitive_topology];
+
+      cmd_buffer->state.gfx.primitive_topology = topology;
+   }
+
    if (cmd_buffer->state.gfx.dirty & (ANV_CMD_DIRTY_PIPELINE |
                                       ANV_CMD_DIRTY_RENDER_TARGETS |
                                       ANV_CMD_DIRTY_DYNAMIC_LINE_WIDTH |
                                       ANV_CMD_DIRTY_DYNAMIC_DEPTH_BIAS |
                                       ANV_CMD_DIRTY_DYNAMIC_CULL_MODE |
-                                      ANV_CMD_DIRTY_DYNAMIC_FRONT_FACE)) {
+                                      ANV_CMD_DIRTY_DYNAMIC_FRONT_FACE |
+                                      ANV_CMD_DIRTY_DYNAMIC_DEPTH_BIAS_ENABLE |
+                                      ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY)) {
+      /* Take dynamic primitive topology in to account with
+       *    3DSTATE_SF::MultisampleRasterizationMode
+       */
+      uint32_t ms_rast_mode = 0;
+
+      if (cmd_buffer->state.gfx.pipeline->dynamic_states &
+          ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY) {
+         VkPrimitiveTopology primitive_topology =
+            cmd_buffer->state.gfx.dynamic.primitive_topology;
+
+         VkPolygonMode dynamic_raster_mode =
+            genX(raster_polygon_mode)(cmd_buffer->state.gfx.pipeline,
+                                      primitive_topology);
+
+         ms_rast_mode =
+            genX(ms_rasterization_mode)(pipeline, dynamic_raster_mode);
+      }
+
       uint32_t sf_dw[GENX(3DSTATE_SF_length)];
       struct GENX(3DSTATE_SF) sf = {
          GENX(3DSTATE_SF_header),
@@ -222,6 +252,10 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
          .GlobalDepthOffsetClamp = d->depth_bias.clamp,
          .FrontWinding            = genX(vk_to_intel_front_face)[d->front_face],
          .CullMode                = genX(vk_to_intel_cullmode)[d->cull_mode],
+         .GlobalDepthOffsetEnableSolid = d->depth_bias_enable,
+         .GlobalDepthOffsetEnableWireframe = d->depth_bias_enable,
+         .GlobalDepthOffsetEnablePoint = d->depth_bias_enable,
+         .MultisampleRasterizationMode = ms_rast_mode,
       };
       GENX(3DSTATE_SF_pack)(NULL, sf_dw, &sf);
 
@@ -308,20 +342,21 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
 
    if (cmd_buffer->state.gfx.gfx7.index_buffer &&
        cmd_buffer->state.gfx.dirty & (ANV_CMD_DIRTY_PIPELINE |
-                                      ANV_CMD_DIRTY_INDEX_BUFFER)) {
+                                      ANV_CMD_DIRTY_INDEX_BUFFER |
+                                      ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_RESTART_ENABLE)) {
       struct anv_buffer *buffer = cmd_buffer->state.gfx.gfx7.index_buffer;
       uint32_t offset = cmd_buffer->state.gfx.gfx7.index_offset;
 
 #if GFX_VERx10 == 75
       anv_batch_emit(&cmd_buffer->batch, GFX75_3DSTATE_VF, vf) {
-         vf.IndexedDrawCutIndexEnable  = pipeline->primitive_restart;
+         vf.IndexedDrawCutIndexEnable  = d->primitive_restart_enable;
          vf.CutIndex                   = cmd_buffer->state.restart_index;
       }
 #endif
 
       anv_batch_emit(&cmd_buffer->batch, GENX(3DSTATE_INDEX_BUFFER), ib) {
 #if GFX_VERx10 != 75
-         ib.CutIndexEnable        = pipeline->primitive_restart;
+         ib.CutIndexEnable        = d->primitive_restart_enable;
 #endif
          ib.IndexFormat           = cmd_buffer->state.gfx.gfx7.index_type;
          ib.MOCS                  = anv_mocs(cmd_buffer->device,
@@ -334,15 +369,42 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
       }
    }
 
-   if (cmd_buffer->state.gfx.dirty & (ANV_CMD_DIRTY_PIPELINE |
-                                      ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY)) {
-      uint32_t topology;
-      if (anv_pipeline_has_stage(pipeline, MESA_SHADER_TESS_EVAL))
-         topology = d->primitive_topology;
-      else
-         topology = genX(vk_to_intel_primitive_type)[d->primitive_topology];
+   /* 3DSTATE_WM in the hope we can avoid spawning fragment shaders
+    * threads or if we have dirty dynamic primitive topology state and
+    * need to toggle 3DSTATE_WM::MultisampleRasterizationMode dynamically.
+    */
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_COLOR_BLEND_STATE ||
+       cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY) {
+      const uint8_t color_writes = cmd_buffer->state.gfx.dynamic.color_writes;
 
-      cmd_buffer->state.gfx.primitive_topology = topology;
+      bool dirty_color_blend =
+         cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_COLOR_BLEND_STATE;
+
+      bool dirty_primitive_topology =
+         cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_TOPOLOGY;
+
+      VkPolygonMode dynamic_raster_mode;
+      VkPrimitiveTopology primitive_topology =
+         cmd_buffer->state.gfx.dynamic.primitive_topology;
+      dynamic_raster_mode =
+         genX(raster_polygon_mode)(cmd_buffer->state.gfx.pipeline,
+                                   primitive_topology);
+
+      if (dirty_color_blend || dirty_primitive_topology) {
+         uint32_t dwords[GENX(3DSTATE_WM_length)];
+         struct GENX(3DSTATE_WM) wm = {
+            GENX(3DSTATE_WM_header),
+
+            .ThreadDispatchEnable = pipeline->force_fragment_thread_dispatch ||
+                                    color_writes,
+            .MultisampleRasterizationMode =
+               genX(ms_rasterization_mode)(pipeline, dynamic_raster_mode),
+         };
+         GENX(3DSTATE_WM_pack)(NULL, dwords, &wm);
+
+         anv_batch_emit_merge(&cmd_buffer->batch, dwords, pipeline->gfx7.wm);
+      }
+
    }
 
    if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS) {
@@ -351,21 +413,11 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
                              cmd_buffer->state.gfx.dynamic.sample_locations.locations);
    }
 
-   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_COLOR_BLEND_STATE) {
+   if (cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_COLOR_BLEND_STATE ||
+       cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_LOGIC_OP) {
       const uint8_t color_writes = cmd_buffer->state.gfx.dynamic.color_writes;
-      /* 3DSTATE_WM in the hope we can avoid spawning fragment shaders
-       * threads.
-       */
-      uint32_t dwords[GENX(3DSTATE_WM_length)];
-      struct GENX(3DSTATE_WM) wm = {
-         GENX(3DSTATE_WM_header),
-
-         .ThreadDispatchEnable = pipeline->force_fragment_thread_dispatch ||
-                                 color_writes,
-      };
-      GENX(3DSTATE_WM_pack)(NULL, dwords, &wm);
-
-      anv_batch_emit_merge(&cmd_buffer->batch, dwords, pipeline->gfx7.wm);
+      bool dirty_color_blend =
+         cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_COLOR_BLEND_STATE;
 
       /* Blend states of each RT */
       uint32_t surface_count = 0;
@@ -383,14 +435,20 @@ genX(cmd_buffer_flush_dynamic_state)(struct anv_cmd_buffer *cmd_buffer)
       /* Skip this part */
       dws += GENX(BLEND_STATE_length);
 
+      bool dirty_logic_op =
+         cmd_buffer->state.gfx.dirty & ANV_CMD_DIRTY_DYNAMIC_LOGIC_OP;
+
       for (uint32_t i = 0; i < surface_count; i++) {
          struct anv_pipeline_binding *binding = &map->surface_to_descriptor[i];
-         bool write_disabled = (color_writes & (1u << binding->index)) == 0;
+         bool write_disabled =
+            dirty_color_blend && (color_writes & (1u << binding->index)) == 0;
          struct GENX(BLEND_STATE_ENTRY) entry = {
             .WriteDisableAlpha = write_disabled,
             .WriteDisableRed   = write_disabled,
             .WriteDisableGreen = write_disabled,
             .WriteDisableBlue  = write_disabled,
+            .LogicOpFunction =
+               dirty_logic_op ? genX(vk_to_intel_logic_op)[d->logic_op] : 0,
          };
          GENX(BLEND_STATE_ENTRY_pack)(NULL, dws, &entry);
          dws += GENX(BLEND_STATE_ENTRY_length);

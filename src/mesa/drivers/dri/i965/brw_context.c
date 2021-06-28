@@ -302,7 +302,7 @@ brw_display_shared_buffer(struct brw_context *brw)
 }
 
 static void
-brw_glFlush(struct gl_context *ctx)
+brw_glFlush(struct gl_context *ctx, unsigned gallium_flush_flags)
 {
    struct brw_context *brw = brw_context(ctx);
 
@@ -342,7 +342,7 @@ brw_finish(struct gl_context * ctx)
 {
    struct brw_context *brw = brw_context(ctx);
 
-   brw_glFlush(ctx);
+   brw_glFlush(ctx, 0);
 
    if (brw->batch.last_bo)
       brw_bo_wait_rendering(brw->batch.last_bo);
@@ -1038,6 +1038,12 @@ brw_create_context(gl_api api,
    brw->has_separate_stencil = devinfo->has_hiz_and_separate_stencil;
 
    brw->has_swizzling = screen->hw_has_swizzling;
+
+   /* We don't push UBOs on IVB and earlier because the restrictions on
+    * 3DSTATE_CONSTANT_* make it really annoying to use push constants
+    * without dynamic state base address.
+    */
+   brw->can_push_ubos = devinfo->verx10 >= 75;
 
    brw->isl_dev = screen->isl_dev;
 

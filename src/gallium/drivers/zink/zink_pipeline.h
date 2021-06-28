@@ -40,6 +40,7 @@ struct zink_vertex_elements_state;
 struct zink_gfx_pipeline_state {
    struct zink_render_pass *render_pass;
 
+   uint8_t void_alpha_attachments:PIPE_MAX_COLOR_BUFS;
    uint32_t num_attachments;
    struct zink_blend_state *blend_state;
 
@@ -74,6 +75,7 @@ struct zink_gfx_pipeline_state {
 
    uint32_t vertex_buffers_enabled_mask;
    uint32_t vertex_strides[PIPE_MAX_ATTRIBS];
+   bool sample_locations_enabled;
    bool have_EXT_extended_dynamic_state;
 
    VkPipeline pipeline;

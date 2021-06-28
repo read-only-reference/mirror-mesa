@@ -25,6 +25,7 @@
 #include "v3d_compiler.h"
 #include "util/u_prim.h"
 #include "compiler/nir/nir_schedule.h"
+#include "compiler/nir/nir_builder.h"
 
 int
 vir_get_nsrc(struct qinst *inst)
@@ -804,9 +805,11 @@ v3d_cs_set_prog_data(struct v3d_compile *c,
 {
         prog_data->shared_size = c->s->info.shared_size;
 
-        prog_data->local_size[0] = c->s->info.cs.local_size[0];
-        prog_data->local_size[1] = c->s->info.cs.local_size[1];
-        prog_data->local_size[2] = c->s->info.cs.local_size[2];
+        prog_data->local_size[0] = c->s->info.workgroup_size[0];
+        prog_data->local_size[1] = c->s->info.workgroup_size[1];
+        prog_data->local_size[2] = c->s->info.workgroup_size[2];
+
+        prog_data->has_subgroups = c->has_subgroups;
 }
 
 static void
@@ -1351,6 +1354,77 @@ v3d_nir_sort_constant_ubo_loads(nir_shader *s, struct v3d_compile *c)
 }
 
 static void
+lower_load_num_subgroups(struct v3d_compile *c,
+                         nir_builder *b,
+                         nir_intrinsic_instr *intr)
+{
+        assert(c->s->info.stage == MESA_SHADER_COMPUTE);
+        assert(intr->intrinsic == nir_intrinsic_load_num_subgroups);
+
+        b->cursor = nir_after_instr(&intr->instr);
+        uint32_t num_subgroups =
+                DIV_ROUND_UP(c->s->info.workgroup_size[0] *
+                             c->s->info.workgroup_size[1] *
+                             c->s->info.workgroup_size[2], V3D_CHANNELS);
+        nir_ssa_def *result = nir_imm_int(b, num_subgroups);
+        nir_ssa_def_rewrite_uses(&intr->dest.ssa, result);
+        nir_instr_remove(&intr->instr);
+}
+
+static bool
+lower_subgroup_intrinsics(struct v3d_compile *c,
+                          nir_block *block, nir_builder *b)
+{
+        bool progress = false;
+        nir_foreach_instr_safe(inst, block) {
+                if (inst->type != nir_instr_type_intrinsic)
+                        continue;;
+
+                nir_intrinsic_instr *intr =
+                        nir_instr_as_intrinsic(inst);
+                if (!intr)
+                        continue;
+
+                switch (intr->intrinsic) {
+                case nir_intrinsic_load_num_subgroups:
+                        lower_load_num_subgroups(c, b, intr);
+                        progress = true;
+                        FALLTHROUGH;
+                case nir_intrinsic_load_subgroup_id:
+                case nir_intrinsic_load_subgroup_size:
+                case nir_intrinsic_load_subgroup_invocation:
+                case nir_intrinsic_elect:
+                        c->has_subgroups = true;
+                        break;
+                default:
+                        break;
+                }
+        }
+
+        return progress;
+}
+
+static bool
+v3d_nir_lower_subgroup_intrinsics(nir_shader *s, struct v3d_compile *c)
+{
+        bool progress = false;
+        nir_foreach_function(function, s) {
+                if (function->impl) {
+                        nir_builder b;
+                        nir_builder_init(&b, function->impl);
+
+                        nir_foreach_block(block, function->impl)
+                                progress |= lower_subgroup_intrinsics(c, block, &b);
+
+                        nir_metadata_preserve(function->impl,
+                                              nir_metadata_block_index |
+                                              nir_metadata_dominance);
+                }
+        }
+        return progress;
+}
+
+static void
 v3d_attempt_compile(struct v3d_compile *c)
 {
         switch (c->s->info.stage) {
@@ -1410,16 +1484,19 @@ v3d_attempt_compile(struct v3d_compile *c)
 
         if (c->key->robust_buffer_access) {
            /* v3d_nir_lower_robust_buffer_access assumes constant buffer
-            * indices on ubo/ssbo intrinsics so run a copy propagation pass
-            * before we run the lowering to warrant this. We also want to run
-            * the lowering before v3d_optimize to clean-up redundant
-            * get_buffer_size calls produced in the pass.
+            * indices on ubo/ssbo intrinsics so run copy propagation and
+            * constant folding passes before we run the lowering to warrant
+            * this. We also want to run the lowering before v3d_optimize to
+            * clean-up redundant get_buffer_size calls produced in the pass.
             */
            NIR_PASS_V(c->s, nir_copy_prop);
+           NIR_PASS_V(c->s, nir_opt_constant_folding);
            NIR_PASS_V(c->s, v3d_nir_lower_robust_buffer_access, c);
         }
 
         NIR_PASS_V(c->s, nir_lower_wrmasks, should_split_wrmask, c->s);
+
+        NIR_PASS_V(c->s, v3d_nir_lower_subgroup_intrinsics, c);
 
         v3d_optimize_nir(c, c->s);
 

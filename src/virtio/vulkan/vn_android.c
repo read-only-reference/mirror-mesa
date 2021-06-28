@@ -11,12 +11,12 @@
 #include "vn_android.h"
 
 #include <dlfcn.h>
-#include <drm/drm_fourcc.h>
 #include <hardware/gralloc.h>
 #include <hardware/hwvulkan.h>
 #include <vndk/hardware_buffer.h>
 #include <vulkan/vk_icd.h>
 
+#include "drm-uapi/drm_fourcc.h"
 #include "util/libsync.h"
 #include "util/os_file.h"
 
@@ -118,18 +118,6 @@ vn_android_ahb_format_from_vk_format(VkFormat format)
       return AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT;
    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
       return AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM;
-   case VK_FORMAT_D16_UNORM:
-      return AHARDWAREBUFFER_FORMAT_D16_UNORM;
-   case VK_FORMAT_X8_D24_UNORM_PACK32:
-      return AHARDWAREBUFFER_FORMAT_D24_UNORM;
-   case VK_FORMAT_D24_UNORM_S8_UINT:
-      return AHARDWAREBUFFER_FORMAT_D24_UNORM_S8_UINT;
-   case VK_FORMAT_D32_SFLOAT:
-      return AHARDWAREBUFFER_FORMAT_D32_FLOAT;
-   case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      return AHARDWAREBUFFER_FORMAT_D32_FLOAT_S8_UINT;
-   case VK_FORMAT_S8_UINT:
-      return AHARDWAREBUFFER_FORMAT_S8_UINT;
    case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
       return AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
    default:
@@ -138,33 +126,22 @@ vn_android_ahb_format_from_vk_format(VkFormat format)
 }
 
 VkFormat
-vn_android_ahb_format_to_vk_format(uint32_t format)
+vn_android_drm_format_to_vk_format(uint32_t format)
 {
    switch (format) {
-   case AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM:
-   case AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM:
+   case DRM_FORMAT_ABGR8888:
+   case DRM_FORMAT_XBGR8888:
       return VK_FORMAT_R8G8B8A8_UNORM;
-   case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
+   case DRM_FORMAT_BGR888:
       return VK_FORMAT_R8G8B8_UNORM;
-   case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:
+   case DRM_FORMAT_RGB565:
       return VK_FORMAT_R5G6B5_UNORM_PACK16;
-   case AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT:
+   case DRM_FORMAT_ABGR16161616F:
       return VK_FORMAT_R16G16B16A16_SFLOAT;
-   case AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM:
+   case DRM_FORMAT_ABGR2101010:
       return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-   case AHARDWAREBUFFER_FORMAT_D16_UNORM:
-      return VK_FORMAT_D16_UNORM;
-   case AHARDWAREBUFFER_FORMAT_D24_UNORM:
-      return VK_FORMAT_X8_D24_UNORM_PACK32;
-   case AHARDWAREBUFFER_FORMAT_D24_UNORM_S8_UINT:
-      return VK_FORMAT_D24_UNORM_S8_UINT;
-   case AHARDWAREBUFFER_FORMAT_D32_FLOAT:
-      return VK_FORMAT_D32_SFLOAT;
-   case AHARDWAREBUFFER_FORMAT_D32_FLOAT_S8_UINT:
-      return VK_FORMAT_D32_SFLOAT_S8_UINT;
-   case AHARDWAREBUFFER_FORMAT_S8_UINT:
-      return VK_FORMAT_S8_UINT;
-   case AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420:
+   case DRM_FORMAT_YVU420:
+   case DRM_FORMAT_NV12:
       return VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
    default:
       return VK_FORMAT_UNDEFINED;
@@ -229,9 +206,16 @@ vn_GetSwapchainGrallocUsage2ANDROID(
 }
 
 struct cros_gralloc0_buffer_info {
-   uint32_t drm_fourcc; /* ignored */
+   uint32_t drm_fourcc;
    int num_fds;         /* ignored */
    int fds[4];          /* ignored */
+   uint64_t modifier;
+   uint32_t offset[4];
+   uint32_t stride[4];
+};
+
+struct vn_android_gralloc_buffer_properties {
+   uint32_t drm_fourcc;
    uint64_t modifier;
    uint32_t offset[4];
    uint32_t stride[4];
@@ -260,10 +244,9 @@ vn_android_get_dma_buf_from_native_handle(const native_handle_t *handle,
 }
 
 static bool
-vn_android_get_gralloc_buffer_info(buffer_handle_t handle,
-                                   uint32_t out_strides[4],
-                                   uint32_t out_offsets[4],
-                                   uint64_t *out_format_modifier)
+vn_android_get_gralloc_buffer_properties(
+   buffer_handle_t handle,
+   struct vn_android_gralloc_buffer_properties *out_props)
 {
    static const int32_t CROS_GRALLOC_DRM_GET_BUFFER_INFO = 4;
    struct cros_gralloc0_buffer_info info;
@@ -274,22 +257,25 @@ vn_android_get_gralloc_buffer_info(buffer_handle_t handle,
    if (info.modifier == DRM_FORMAT_MOD_INVALID)
       return false;
 
+   out_props->drm_fourcc = info.drm_fourcc;
    for (uint32_t i = 0; i < 4; i++) {
-      out_strides[i] = info.stride[i];
-      out_offsets[i] = info.offset[i];
+      out_props->stride[i] = info.stride[i];
+      out_props->offset[i] = info.offset[i];
    }
-   *out_format_modifier = info.modifier;
+   out_props->modifier = info.modifier;
 
    return true;
 }
 
 static VkResult
-vn_android_get_modifier_properties(VkPhysicalDevice physical_device,
+vn_android_get_modifier_properties(struct vn_device *dev,
                                    VkFormat format,
                                    uint64_t modifier,
                                    const VkAllocationCallbacks *alloc,
                                    VkDrmFormatModifierPropertiesEXT *out_props)
 {
+   VkPhysicalDevice physical_device =
+      vn_physical_device_to_handle(dev->physical_device);
    VkDrmFormatModifierPropertiesListEXT mod_prop_list = {
       .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
       .pNext = NULL,
@@ -300,17 +286,21 @@ vn_android_get_modifier_properties(VkPhysicalDevice physical_device,
       .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
       .pNext = &mod_prop_list,
    };
+   VkDrmFormatModifierPropertiesEXT *mod_props = NULL;
+   bool modifier_found = false;
+
    vn_GetPhysicalDeviceFormatProperties2(physical_device, format,
                                          &format_prop);
 
-   if (!mod_prop_list.drmFormatModifierCount)
+   if (!mod_prop_list.drmFormatModifierCount) {
+      vn_log(dev->instance, "No compatible modifier for VkFormat(%u)",
+             format);
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
 
-   VkDrmFormatModifierPropertiesEXT *mod_props =
-      vk_zalloc(alloc,
-                sizeof(VkDrmFormatModifierPropertiesEXT) *
-                   mod_prop_list.drmFormatModifierCount,
-                VN_DEFAULT_ALIGN, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   mod_props = vk_zalloc(
+      alloc, sizeof(*mod_props) * mod_prop_list.drmFormatModifierCount,
+      VN_DEFAULT_ALIGN, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
    if (!mod_props)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
@@ -321,17 +311,77 @@ vn_android_get_modifier_properties(VkPhysicalDevice physical_device,
    for (uint32_t i = 0; i < mod_prop_list.drmFormatModifierCount; i++) {
       if (mod_props[i].drmFormatModifier == modifier) {
          *out_props = mod_props[i];
+         modifier_found = true;
          break;
       }
    }
 
    vk_free(alloc, mod_props);
+
+   if (!modifier_found) {
+      vn_log(dev->instance,
+             "No matching modifier(%" PRIu64 ") properties for VkFormat(%u)",
+             modifier, format);
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+
+   return VK_SUCCESS;
+}
+
+struct vn_android_image_builder {
+   VkImageCreateInfo create;
+   VkSubresourceLayout layouts[4];
+   VkImageDrmFormatModifierExplicitCreateInfoEXT modifier;
+   VkExternalMemoryImageCreateInfo external;
+};
+
+static VkResult
+vn_android_get_image_builder(struct vn_device *dev,
+                             const VkImageCreateInfo *create_info,
+                             const native_handle_t *handle,
+                             const VkAllocationCallbacks *alloc,
+                             struct vn_android_image_builder *out_builder)
+{
+   VkResult result = VK_SUCCESS;
+   struct vn_android_gralloc_buffer_properties buf_props;
+   VkDrmFormatModifierPropertiesEXT mod_props;
+
+   if (!vn_android_get_gralloc_buffer_properties(handle, &buf_props))
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   result = vn_android_get_modifier_properties(
+      dev, create_info->format, buf_props.modifier, alloc, &mod_props);
+   if (result != VK_SUCCESS)
+      return result;
+
+   memset(out_builder->layouts, 0, sizeof(out_builder->layouts));
+   for (uint32_t i = 0; i < mod_props.drmFormatModifierPlaneCount; i++) {
+      out_builder->layouts[i].offset = buf_props.offset[i];
+      out_builder->layouts[i].rowPitch = buf_props.stride[i];
+   }
+   out_builder->modifier = (VkImageDrmFormatModifierExplicitCreateInfoEXT){
+      .sType =
+         VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+      .pNext = create_info->pNext,
+      .drmFormatModifier = buf_props.modifier,
+      .drmFormatModifierPlaneCount = mod_props.drmFormatModifierPlaneCount,
+      .pPlaneLayouts = out_builder->layouts,
+   };
+   out_builder->external = (VkExternalMemoryImageCreateInfo){
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+      .pNext = &out_builder->modifier,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+   };
+   out_builder->create = *create_info;
+   out_builder->create.pNext = &out_builder->external;
+   out_builder->create.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+
    return VK_SUCCESS;
 }
 
 VkResult
 vn_android_image_from_anb(struct vn_device *dev,
-                          const VkImageCreateInfo *image_info,
+                          const VkImageCreateInfo *create_info,
                           const VkNativeBufferANDROID *anb_info,
                           const VkAllocationCallbacks *alloc,
                           struct vn_image **out_img)
@@ -347,8 +397,6 @@ vn_android_image_from_anb(struct vn_device *dev,
     */
    VkResult result = VK_SUCCESS;
    VkDevice device = vn_device_to_handle(dev);
-   VkPhysicalDevice physical_device =
-      vn_physical_device_to_handle(dev->physical_device);
    VkDeviceMemory memory = VK_NULL_HANDLE;
    VkImage image = VK_NULL_HANDLE;
    struct vn_image *img = NULL;
@@ -356,90 +404,24 @@ vn_android_image_from_anb(struct vn_device *dev,
    uint32_t mem_type_bits = 0;
    int dma_buf_fd = -1;
    int dup_fd = -1;
-   uint32_t strides[4] = { 0, 0, 0, 0 };
-   uint32_t offsets[4] = { 0, 0, 0, 0 };
-   uint64_t format_modifier = 0;
+   struct vn_android_image_builder builder;
 
    result = vn_android_get_dma_buf_from_native_handle(anb_info->handle,
                                                       &dma_buf_fd);
    if (result != VK_SUCCESS)
       goto fail;
 
-   if (!vn_android_get_gralloc_buffer_info(anb_info->handle, strides, offsets,
-                                           &format_modifier)) {
-      result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
-      goto fail;
-   }
-
-   VkDrmFormatModifierPropertiesEXT mod_props;
-   result =
-      vn_android_get_modifier_properties(physical_device, image_info->format,
-                                         format_modifier, alloc, &mod_props);
+   result = vn_android_get_image_builder(dev, create_info, anb_info->handle,
+                                         alloc, &builder);
    if (result != VK_SUCCESS)
       goto fail;
 
-   /* TODO support multi-planar format */
-   if (mod_props.drmFormatModifierPlaneCount != 1) {
-      if (VN_DEBUG(WSI))
-         vn_log(dev->instance, "plane count is %d, expected 1",
-                mod_props.drmFormatModifierPlaneCount);
-      result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
-      goto fail;
-   }
-
-   const VkSubresourceLayout layout = {
-      .offset = offsets[0],
-      .size = 0,
-      .rowPitch = strides[0],
-      .arrayPitch = 0,
-      .depthPitch = 0,
-   };
-   const VkImageDrmFormatModifierExplicitCreateInfoEXT drm_mod_info = {
-      .sType =
-         VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-      .pNext = image_info->pNext,
-      .drmFormatModifier = format_modifier,
-      .drmFormatModifierPlaneCount = 1,
-      .pPlaneLayouts = &layout,
-   };
-   const VkExternalMemoryImageCreateInfo external_img_info = {
-      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-      .pNext = &drm_mod_info,
-      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-   };
-   VkImageCreateInfo local_image_info = *image_info;
-   local_image_info.pNext = &external_img_info;
-   local_image_info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-
-   /* Force VK_SHARING_MODE_CONCURRENT if necessary.
-    * For physical devices supporting multiple queue families, if a swapchain is
-    * created with exclusive mode, we must transfer the image ownership into the
-    * queue family of the present queue. However, there's no way to get that
-    * queue at the 1st acquire of the image. Thus, when multiple queue families
-    * are supported in a physical device, we include all queue families in the
-    * image create info along with VK_SHARING_MODE_CONCURRENT, which forces us
-    * to transfer the ownership into VK_QUEUE_FAMILY_IGNORED. Then if there's
-    * only one queue family, we can safely use queue family index 0.
-    */
-   if (dev->physical_device->queue_family_count > 1) {
-      local_image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-      local_image_info.queueFamilyIndexCount =
-         dev->physical_device->queue_family_count;
-      local_image_info.pQueueFamilyIndices =
-         dev->android_wsi->queue_family_indices;
-   }
-
    /* encoder will strip the Android specific pNext structs */
-   result = vn_image_create(dev, &local_image_info, alloc, &img);
+   result = vn_image_create(dev, &builder.create, alloc, &img);
    if (result != VK_SUCCESS)
       goto fail;
 
    image = vn_image_to_handle(img);
-
-   result = vn_image_android_wsi_init(dev, img, alloc);
-   if (result != VK_SUCCESS)
-      goto fail;
-
    VkMemoryRequirements mem_req;
    vn_GetImageMemoryRequirements(device, image, &mem_req);
    if (!mem_req.memoryTypeBits) {
@@ -459,9 +441,11 @@ vn_android_image_from_anb(struct vn_device *dev,
              mem_req.size, alloc_size, mem_req.memoryTypeBits, mem_type_bits);
    }
 
-   /* TODO When alloc_size is fixed to return host storage size, we will
-    * also check alloc_size is not smaller than mem_req.size here.
-    */
+   if (alloc_size < mem_req.size) {
+      result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+      goto fail;
+   }
+
    mem_type_bits &= mem_req.memoryTypeBits;
    if (!mem_type_bits) {
       result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
@@ -498,6 +482,7 @@ vn_android_image_from_anb(struct vn_device *dev,
    if (result != VK_SUCCESS)
       goto fail;
 
+   img->is_wsi = true;
    /* Android WSI image owns the memory */
    img->private_memory = memory;
    *out_img = img;
@@ -512,79 +497,91 @@ fail:
    return vn_error(dev->instance, result);
 }
 
-static bool
-vn_is_queue_compatible_with_wsi(struct vn_queue *queue)
-{
-   static const int32_t compatible_flags =
-      VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
-   return compatible_flags & queue->device->physical_device
-                                ->queue_family_properties[queue->family]
-                                .queueFamilyProperties.queueFlags;
-}
-
 VkResult
 vn_AcquireImageANDROID(VkDevice device,
-                       VkImage image,
+                       UNUSED VkImage image,
                        int nativeFenceFd,
                        VkSemaphore semaphore,
                        VkFence fence)
 {
-   /* At this moment, out semaphore and fence are filled with already signaled
-    * payloads, and the native fence fd is waited inside until signaled.
-    */
    struct vn_device *dev = vn_device_from_handle(device);
-   struct vn_semaphore *sem = vn_semaphore_from_handle(semaphore);
-   struct vn_fence *fen = vn_fence_from_handle(fence);
-   struct vn_image *img = vn_image_from_handle(image);
-   struct vn_queue *queue = img->acquire_queue;
+   VkResult result = VK_SUCCESS;
 
-   if (nativeFenceFd >= 0) {
-      int ret = sync_wait(nativeFenceFd, INT32_MAX);
-      /* Android loader expects the ICD to always close the fd */
-      close(nativeFenceFd);
-      if (ret)
-         return vn_error(dev->instance, VK_ERROR_SURFACE_LOST_KHR);
+   if (dev->instance->experimental.globalFencing == VK_FALSE) {
+      /* Fallback when VkVenusExperimentalFeatures100000MESA::globalFencing is
+       * VK_FALSE, out semaphore and fence are filled with already signaled
+       * payloads, and the native fence fd is waited inside until signaled.
+       */
+      if (nativeFenceFd >= 0) {
+         int ret = sync_wait(nativeFenceFd, -1);
+         /* Android loader expects the ICD to always close the fd */
+         close(nativeFenceFd);
+         if (ret)
+            return vn_error(dev->instance, VK_ERROR_SURFACE_LOST_KHR);
+      }
+
+      if (semaphore != VK_NULL_HANDLE)
+         vn_semaphore_signal_wsi(dev, vn_semaphore_from_handle(semaphore));
+
+      if (fence != VK_NULL_HANDLE)
+         vn_fence_signal_wsi(dev, vn_fence_from_handle(fence));
+
+      return VK_SUCCESS;
    }
 
-   if (sem)
-      vn_semaphore_signal_wsi(dev, sem);
-
-   if (fen)
-      vn_fence_signal_wsi(dev, fen);
-
-   if (!queue) {
-      /* pick a compatible queue for the 1st acquire of this image */
-      for (uint32_t i = 0; i < dev->queue_count; i++) {
-         if (vn_is_queue_compatible_with_wsi(&dev->queues[i])) {
-            queue = &dev->queues[i];
-            break;
+   int semaphore_fd = -1;
+   int fence_fd = -1;
+   if (nativeFenceFd >= 0) {
+      if (semaphore != VK_NULL_HANDLE && fence != VK_NULL_HANDLE) {
+         semaphore_fd = nativeFenceFd;
+         fence_fd = os_dupfd_cloexec(nativeFenceFd);
+         if (fence_fd < 0) {
+            result = (errno == EMFILE) ? VK_ERROR_TOO_MANY_OBJECTS
+                                       : VK_ERROR_OUT_OF_HOST_MEMORY;
+            close(nativeFenceFd);
+            return vn_error(dev->instance, result);
          }
+      } else if (semaphore != VK_NULL_HANDLE) {
+         semaphore_fd = nativeFenceFd;
+      } else if (fence != VK_NULL_HANDLE) {
+         fence_fd = nativeFenceFd;
+      } else {
+         close(nativeFenceFd);
       }
    }
-   if (!queue)
-      return vn_error(dev->instance, VK_ERROR_UNKNOWN);
 
-   const VkSubmitInfo submit_info = {
-      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-      .pNext = NULL,
-      .waitSemaphoreCount = 0,
-      .pWaitSemaphores = NULL,
-      .pWaitDstStageMask = NULL,
-      .commandBufferCount = 1,
-      .pCommandBuffers =
-         &img->ownership_cmds[queue->family].cmds[VN_IMAGE_OWNERSHIP_ACQUIRE],
-      .signalSemaphoreCount = 0,
-      .pSignalSemaphores = NULL,
-   };
+   if (semaphore != VK_NULL_HANDLE) {
+      const VkImportSemaphoreFdInfoKHR info = {
+         .sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
+         .pNext = NULL,
+         .semaphore = semaphore,
+         .flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT,
+         .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+         .fd = semaphore_fd,
+      };
+      result = vn_ImportSemaphoreFdKHR(device, &info);
+      if (result == VK_SUCCESS)
+         semaphore_fd = -1;
+   }
 
-   VkResult result = vn_QueueSubmit(vn_queue_to_handle(queue), 1,
-                                    &submit_info, queue->wait_fence);
-   if (result != VK_SUCCESS)
-      return vn_error(dev->instance, result);
+   if (result == VK_SUCCESS && fence != VK_NULL_HANDLE) {
+      const VkImportFenceFdInfoKHR info = {
+         .sType = VK_STRUCTURE_TYPE_IMPORT_FENCE_FD_INFO_KHR,
+         .pNext = NULL,
+         .fence = fence,
+         .flags = VK_FENCE_IMPORT_TEMPORARY_BIT,
+         .handleType = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT,
+         .fd = fence_fd,
+      };
+      result = vn_ImportFenceFdKHR(device, &info);
+      if (result == VK_SUCCESS)
+         fence_fd = -1;
+   }
 
-   result =
-      vn_WaitForFences(device, 1, &queue->wait_fence, VK_TRUE, UINT64_MAX);
-   vn_ResetFences(device, 1, &queue->wait_fence);
+   if (semaphore_fd >= 0)
+      close(semaphore_fd);
+   if (fence_fd >= 0)
+      close(fence_fd);
 
    return vn_result(dev->instance, result);
 }
@@ -596,29 +593,26 @@ vn_QueueSignalReleaseImageANDROID(VkQueue queue,
                                   VkImage image,
                                   int *pNativeFenceFd)
 {
-   /* At this moment, the wait semaphores are converted to a VkFence via an
-    * empty submit. The VkFence is then waited inside until signaled, and the
-    * out native fence fd is set to -1.
-    */
-   VkResult result = VK_SUCCESS;
    struct vn_queue *que = vn_queue_from_handle(queue);
-   struct vn_image *img = vn_image_from_handle(image);
-   const VkAllocationCallbacks *alloc = &que->device->base.base.alloc;
-   VkDevice device = vn_device_to_handle(que->device);
+   struct vn_device *dev = que->device;
+   const VkAllocationCallbacks *alloc = &dev->base.base.alloc;
+   VkDevice device = vn_device_to_handle(dev);
    VkPipelineStageFlags local_stage_masks[8];
    VkPipelineStageFlags *stage_masks = local_stage_masks;
+   VkResult result = VK_SUCCESS;
+   int fd = -1;
 
-   if (!vn_is_queue_compatible_with_wsi(que))
-      return vn_error(que->device->instance, VK_ERROR_UNKNOWN);
+   if (waitSemaphoreCount == 0) {
+      *pNativeFenceFd = -1;
+      return VK_SUCCESS;
+   }
 
    if (waitSemaphoreCount > ARRAY_SIZE(local_stage_masks)) {
       stage_masks =
-         vk_alloc(alloc, sizeof(VkPipelineStageFlags) * waitSemaphoreCount,
+         vk_alloc(alloc, sizeof(*stage_masks) * waitSemaphoreCount,
                   VN_DEFAULT_ALIGN, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-      if (!stage_masks) {
-         result = VK_ERROR_OUT_OF_HOST_MEMORY;
-         goto out;
-      }
+      if (!stage_masks)
+         return vn_error(dev->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
    for (uint32_t i = 0; i < waitSemaphoreCount; i++)
@@ -630,117 +624,49 @@ vn_QueueSignalReleaseImageANDROID(VkQueue queue,
       .waitSemaphoreCount = waitSemaphoreCount,
       .pWaitSemaphores = pWaitSemaphores,
       .pWaitDstStageMask = stage_masks,
-      .commandBufferCount = 1,
-      .pCommandBuffers =
-         &img->ownership_cmds[que->family].cmds[VN_IMAGE_OWNERSHIP_RELEASE],
+      .commandBufferCount = 0,
+      .pCommandBuffers = NULL,
       .signalSemaphoreCount = 0,
       .pSignalSemaphores = NULL,
    };
-   result = vn_QueueSubmit(queue, 1, &submit_info, que->wait_fence);
+   /* XXX When globalFencing is supported, our implementation is not able to
+    * reset the fence during vn_GetFenceFdKHR currently. Thus to ensure proper
+    * host driver behavior, we pass VK_NULL_HANDLE here.
+    */
+   result = vn_QueueSubmit(
+      queue, 1, &submit_info,
+      dev->instance->experimental.globalFencing == VK_TRUE ? VK_NULL_HANDLE
+                                                           : que->wait_fence);
+
    if (stage_masks != local_stage_masks)
       vk_free(alloc, stage_masks);
+
    if (result != VK_SUCCESS)
-      goto out;
+      return vn_error(dev->instance, result);
 
-   result =
-      vn_WaitForFences(device, 1, &que->wait_fence, VK_TRUE, UINT64_MAX);
-   vn_ResetFences(device, 1, &que->wait_fence);
-
-   img->acquire_queue = que;
-
-out:
-   *pNativeFenceFd = -1;
-   return result;
-}
-
-VkResult
-vn_android_wsi_init(struct vn_device *dev, const VkAllocationCallbacks *alloc)
-{
-   VkResult result = VK_SUCCESS;
-
-   struct vn_android_wsi *android_wsi =
-      vk_zalloc(alloc, sizeof(struct vn_android_wsi), VN_DEFAULT_ALIGN,
-                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-   if (!android_wsi)
-      return vn_error(dev->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   const uint32_t count = dev->physical_device->queue_family_count;
-   if (count > 1) {
-      android_wsi->queue_family_indices =
-         vk_alloc(alloc, sizeof(uint32_t) * count, VN_DEFAULT_ALIGN,
-                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-      if (!android_wsi->queue_family_indices) {
-         result = VK_ERROR_OUT_OF_HOST_MEMORY;
-         goto fail;
-      }
-
-      for (uint32_t i = 0; i < count; i++)
-         android_wsi->queue_family_indices[i] = i;
-   }
-
-   android_wsi->cmd_pools =
-      vk_zalloc(alloc, sizeof(VkCommandPool) * count, VN_DEFAULT_ALIGN,
-                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-   if (!android_wsi->cmd_pools) {
-      result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      goto fail;
-   }
-
-   VkDevice device = vn_device_to_handle(dev);
-   for (uint32_t i = 0; i < count; i++) {
-      const VkCommandPoolCreateInfo cmd_pool_info = {
-         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+   if (dev->instance->experimental.globalFencing == VK_TRUE) {
+      const VkFenceGetFdInfoKHR fd_info = {
+         .sType = VK_STRUCTURE_TYPE_FENCE_GET_FD_INFO_KHR,
          .pNext = NULL,
-         .flags = 0,
-         .queueFamilyIndex = i,
+         .fence = que->wait_fence,
+         .handleType = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT,
       };
-      result = vn_CreateCommandPool(device, &cmd_pool_info, alloc,
-                                    &android_wsi->cmd_pools[i]);
+      result = vn_GetFenceFdKHR(device, &fd_info, &fd);
+   } else {
+      result =
+         vn_WaitForFences(device, 1, &que->wait_fence, VK_TRUE, UINT64_MAX);
       if (result != VK_SUCCESS)
-         goto fail;
+         return vn_error(dev->instance, result);
+
+      result = vn_ResetFences(device, 1, &que->wait_fence);
    }
 
-   mtx_init(&android_wsi->cmd_pools_lock, mtx_plain);
+   if (result != VK_SUCCESS)
+      return vn_error(dev->instance, result);
 
-   dev->android_wsi = android_wsi;
+   *pNativeFenceFd = fd;
 
    return VK_SUCCESS;
-
-fail:
-   if (android_wsi->cmd_pools) {
-      for (uint32_t i = 0; i < count; i++) {
-         if (android_wsi->cmd_pools[i] != VK_NULL_HANDLE)
-            vn_DestroyCommandPool(device, android_wsi->cmd_pools[i], alloc);
-      }
-      vk_free(alloc, android_wsi->cmd_pools);
-   }
-
-   if (android_wsi->queue_family_indices)
-      vk_free(alloc, android_wsi->queue_family_indices);
-
-   vk_free(alloc, android_wsi);
-
-   return vn_error(dev->instance, result);
-}
-
-void
-vn_android_wsi_fini(struct vn_device *dev, const VkAllocationCallbacks *alloc)
-{
-   if (!dev->android_wsi)
-      return;
-
-   mtx_destroy(&dev->android_wsi->cmd_pools_lock);
-
-   VkDevice device = vn_device_to_handle(dev);
-   for (uint32_t i = 0; i < dev->physical_device->queue_family_count; i++) {
-      vn_DestroyCommandPool(device, dev->android_wsi->cmd_pools[i], alloc);
-   }
-   vk_free(alloc, dev->android_wsi->cmd_pools);
-
-   if (dev->android_wsi->queue_family_indices)
-      vk_free(alloc, dev->android_wsi->queue_family_indices);
-
-   vk_free(alloc, dev->android_wsi);
 }
 
 static VkResult
@@ -749,16 +675,29 @@ vn_android_get_ahb_format_properties(
    const struct AHardwareBuffer *ahb,
    VkAndroidHardwareBufferFormatPropertiesANDROID *out_props)
 {
-   VkPhysicalDevice physical_device =
-      vn_physical_device_to_handle(dev->physical_device);
-
    AHardwareBuffer_Desc desc;
-   AHardwareBuffer_describe(ahb, &desc);
+   VkFormat format;
+   struct vn_android_gralloc_buffer_properties buf_props;
+   VkDrmFormatModifierPropertiesEXT mod_props;
 
-   /* AHB usage must include at least one GPU bit for image or buffer */
+   AHardwareBuffer_describe(ahb, &desc);
    if (!(desc.usage & (AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                        AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER |
-                       AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER)))
+                       AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER))) {
+      vn_log(dev->instance,
+             "AHB usage(%" PRIu64 ") must include at least one GPU bit",
+             desc.usage);
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
+
+   /* Handle the special AHARDWAREBUFFER_FORMAT_BLOB for VkBuffer case. */
+   if (desc.format == AHARDWAREBUFFER_FORMAT_BLOB) {
+      out_props->format = VK_FORMAT_UNDEFINED;
+      return VK_SUCCESS;
+   }
+
+   if (!vn_android_get_gralloc_buffer_properties(
+          AHardwareBuffer_getNativeHandle(ahb), &buf_props))
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
 
    /* We implement AHB extension support with EXT_image_drm_format_modifier.
@@ -766,28 +705,15 @@ vn_android_get_ahb_format_properties(
     * the ahb is not intended for backing a VkBuffer, error out early if the
     * format is VK_FORMAT_UNDEFINED.
     */
-   VkFormat format = vn_android_ahb_format_to_vk_format(desc.format);
+   format = vn_android_drm_format_to_vk_format(buf_props.drm_fourcc);
    if (format == VK_FORMAT_UNDEFINED) {
-      if (desc.format != AHARDWAREBUFFER_FORMAT_BLOB)
-         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
-
-      out_props->format = format;
-      out_props->externalFormat = desc.format;
-      return VK_SUCCESS;
+      vn_log(dev->instance, "Unknown drm_fourcc(%u) from AHB format(0x%X)",
+             buf_props.drm_fourcc, desc.format);
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
    }
 
-   uint32_t strides[4] = { 0, 0, 0, 0 };
-   uint32_t offsets[4] = { 0, 0, 0, 0 };
-   uint64_t format_modifier = 0;
-   const native_handle_t *handle = AHardwareBuffer_getNativeHandle(ahb);
-   if (!vn_android_get_gralloc_buffer_info(handle, strides, offsets,
-                                           &format_modifier))
-      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
-
-   VkDrmFormatModifierPropertiesEXT mod_props;
    VkResult result = vn_android_get_modifier_properties(
-      physical_device, format, format_modifier, &dev->base.base.alloc,
-      &mod_props);
+      dev, format, buf_props.modifier, &dev->base.base.alloc, &mod_props);
    if (result != VK_SUCCESS)
       return result;
 
@@ -802,7 +728,7 @@ vn_android_get_ahb_format_properties(
       .sType = out_props->sType,
       .pNext = out_props->pNext,
       .format = format,
-      .externalFormat = desc.format,
+      .externalFormat = buf_props.drm_fourcc,
       .formatFeatures = format_features,
       .samplerYcbcrConversionComponents = {
          .r = VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -898,12 +824,9 @@ vn_android_get_drm_format_modifier_info(
     * sharing mode, we assume VK_SHARING_MODE_EXCLUSIVE for now.
     */
    AHardwareBuffer *ahb = NULL;
-   const native_handle_t *handle = NULL;
    uint32_t format = 0;
    uint64_t usage = 0;
-   uint32_t strides[4] = { 0, 0, 0, 0 };
-   uint32_t offsets[4] = { 0, 0, 0, 0 };
-   uint64_t format_modifier = 0;
+   struct vn_android_gralloc_buffer_properties buf_props;
 
    assert(format_info->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT);
 
@@ -916,9 +839,8 @@ vn_android_get_drm_format_modifier_info(
    if (!ahb)
       return false;
 
-   handle = AHardwareBuffer_getNativeHandle(ahb);
-   if (!vn_android_get_gralloc_buffer_info(handle, strides, offsets,
-                                           &format_modifier)) {
+   if (!vn_android_get_gralloc_buffer_properties(
+          AHardwareBuffer_getNativeHandle(ahb), &buf_props)) {
       AHardwareBuffer_release(ahb);
       return false;
    }
@@ -927,7 +849,7 @@ vn_android_get_drm_format_modifier_info(
       .sType =
          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT,
       .pNext = NULL,
-      .drmFormatModifier = format_modifier,
+      .drmFormatModifier = buf_props.modifier,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .queueFamilyIndexCount = 0,
       .pQueueFamilyIndices = NULL,
@@ -955,7 +877,7 @@ vn_android_image_from_ahb(struct vn_device *dev,
 
       local_info = *create_info;
       local_info.format =
-         vn_android_ahb_format_to_vk_format(ext_info->externalFormat);
+         vn_android_drm_format_to_vk_format(ext_info->externalFormat);
       create_info = &local_info;
    }
 
@@ -966,6 +888,7 @@ VkResult
 vn_android_device_import_ahb(struct vn_device *dev,
                              struct vn_device_memory *mem,
                              const VkMemoryAllocateInfo *alloc_info,
+                             const VkAllocationCallbacks *alloc,
                              struct AHardwareBuffer *ahb)
 {
    VkDevice device = vn_device_to_handle(dev);
@@ -993,72 +916,41 @@ vn_android_device_import_ahb(struct vn_device *dev,
 
    /* If ahb is for an image, finish the deferred image creation first */
    if (dedicated_info && dedicated_info->image != VK_NULL_HANDLE) {
-      const VkAllocationCallbacks *alloc = &dev->base.base.alloc;
       struct vn_image *img = vn_image_from_handle(dedicated_info->image);
-      VkImageCreateInfo *image_info = &img->deferred_info->create;
-      uint32_t strides[4] = { 0, 0, 0, 0 };
-      uint32_t offsets[4] = { 0, 0, 0, 0 };
-      uint64_t format_modifier = 0;
-      VkDrmFormatModifierPropertiesEXT mod_props;
+      struct vn_android_image_builder builder;
 
-      if (!vn_android_get_gralloc_buffer_info(handle, strides, offsets,
-                                              &format_modifier))
-         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
-
-      result = vn_android_get_modifier_properties(
-         vn_physical_device_to_handle(dev->physical_device),
-         image_info->format, format_modifier, alloc, &mod_props);
+      result = vn_android_get_image_builder(dev, &img->deferred_info->create,
+                                            handle, alloc, &builder);
       if (result != VK_SUCCESS)
          return result;
 
-      /* XXX fix plane count > 1 case for external memory  */
-      if (mod_props.drmFormatModifierPlaneCount != 1) {
-         vn_log(dev->instance, "plane count is %d, expected 1",
-                mod_props.drmFormatModifierPlaneCount);
+      result = vn_image_init_deferred(dev, &builder.create, img);
+      if (result != VK_SUCCESS)
+         return result;
+
+      VkMemoryRequirements mem_req;
+      vn_GetImageMemoryRequirements(device, dedicated_info->image, &mem_req);
+      if (alloc_size < mem_req.size) {
+         vn_log(dev->instance,
+                "alloc_size(%" PRIu64 ") mem_req.size(%" PRIu64 ")",
+                alloc_size, mem_req.size);
          return VK_ERROR_INVALID_EXTERNAL_HANDLE;
       }
 
-      const VkSubresourceLayout layout = {
-         .offset = offsets[0],
-         .size = 0,
-         .rowPitch = strides[0],
-         .arrayPitch = 0,
-         .depthPitch = 0,
-      };
-      const VkImageDrmFormatModifierExplicitCreateInfoEXT drm_mod_info = {
-         .sType =
-            VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-         .pNext = image_info->pNext,
-         .drmFormatModifier = format_modifier,
-         .drmFormatModifierPlaneCount = 1,
-         .pPlaneLayouts = &layout,
-      };
-      const VkExternalMemoryImageCreateInfo external_img_info = {
-         .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-         .pNext = &drm_mod_info,
-         .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-      };
-      image_info->pNext = &external_img_info;
-      image_info->tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-      result = vn_image_init_deferred(dev, image_info, img);
-      if (result != VK_SUCCESS)
-         return result;
-
-      /* TODO When alloc_size is fixed to return host storage size, we will
-       * also check alloc_size is not smaller than mem_req.size here.
-       */
-      VkMemoryRequirements mem_req;
-      vn_GetImageMemoryRequirements(device, dedicated_info->image, &mem_req);
       alloc_size = mem_req.size;
    }
 
    if (dedicated_info && dedicated_info->buffer != VK_NULL_HANDLE) {
-      /* TODO When alloc_size is fixed to return host storage size, we will
-       * also check alloc_size is not smaller than mem_req.size here.
-       */
       VkMemoryRequirements mem_req;
       vn_GetBufferMemoryRequirements(device, dedicated_info->buffer,
                                      &mem_req);
+      if (alloc_size < mem_req.size) {
+         vn_log(dev->instance,
+                "alloc_size(%" PRIu64 ") mem_req.size(%" PRIu64 ")",
+                alloc_size, mem_req.size);
+         return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+      }
+
       alloc_size = mem_req.size;
    }
 
@@ -1101,7 +993,8 @@ vn_android_device_import_ahb(struct vn_device *dev,
 VkResult
 vn_android_device_allocate_ahb(struct vn_device *dev,
                                struct vn_device_memory *mem,
-                               const VkMemoryAllocateInfo *alloc_info)
+                               const VkMemoryAllocateInfo *alloc_info,
+                               const VkAllocationCallbacks *alloc)
 {
    const VkMemoryDedicatedAllocateInfo *dedicated_info =
       vk_find_struct_const(alloc_info->pNext, MEMORY_DEDICATED_ALLOCATE_INFO);
@@ -1120,26 +1013,29 @@ vn_android_device_allocate_ahb(struct vn_device *dev,
       height = image_info->extent.height;
       layers = image_info->arrayLayers;
       format = vn_android_ahb_format_from_vk_format(image_info->format);
-      /* TODO Need to further resolve the gralloc usage bits for image format
-       * list info, which might involve disabling compression if there exists
-       * no universally applied compression strategy across the formats.
-       */
       usage = vn_android_get_ahb_usage(image_info->usage, image_info->flags);
    } else {
+      const VkPhysicalDeviceMemoryProperties *mem_props =
+         &dev->physical_device->memory_properties.memoryProperties;
+
+      assert(alloc_info->memoryTypeIndex < mem_props->memoryTypeCount);
+
       width = alloc_info->allocationSize;
       format = AHARDWAREBUFFER_FORMAT_BLOB;
-      /* TODO AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER is not supported by cros
-       * gralloc. So here we work around with CPU usage bits for VkBuffer.
-       */
-      usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
-              AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+      usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+      if (mem_props->memoryTypes[alloc_info->memoryTypeIndex].propertyFlags &
+          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+         usage |= AHARDWAREBUFFER_USAGE_CPU_READ_RARELY |
+                  AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+      }
    }
 
    ahb = vn_android_ahb_allocate(width, height, layers, format, usage);
    if (!ahb)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   VkResult result = vn_android_device_import_ahb(dev, mem, alloc_info, ahb);
+   VkResult result =
+      vn_android_device_import_ahb(dev, mem, alloc_info, alloc, ahb);
 
    /* ahb alloc has already acquired a ref and import will acquire another,
     * must release one here to avoid leak.

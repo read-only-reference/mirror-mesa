@@ -36,7 +36,6 @@ STABLE_EPHEMERAL=" \
       patch \
       pkg-config \
       python3-distutils \
-      unzip \
       wget \
       xz-utils \
       "
@@ -120,6 +119,10 @@ wine \
 ############### Building ...
 
 . .gitlab-ci/container/container_pre_build.sh
+
+############### Build parallel-deqp-runner's hang-detection tool
+
+. .gitlab-ci/container/build-hang-detection.sh
 
 ############### Build piglit
 

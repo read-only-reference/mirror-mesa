@@ -32,7 +32,10 @@ cp -Rp .gitlab-ci/fossils.yml install/
 cp -Rp .gitlab-ci/fossils install/
 cp -Rp .gitlab-ci/fossilize-runner.sh install/
 cp -Rp .gitlab-ci/deqp-runner.sh install/
+cp -Rp .gitlab-ci/crosvm-runner.sh install/
+cp -Rp .gitlab-ci/crosvm-init.sh install/
 cp -Rp .gitlab-ci/deqp-*.txt install/
+cp -Rp .gitlab-ci/report-flakes.py install/
 cp -Rp .gitlab-ci/vkd3d-proton install/
 find . -path \*/ci/\*.txt \
     -o -path \*/ci/\*traces\*.yml \
@@ -42,15 +45,13 @@ find . -path \*/ci/\*.txt \
 # packed separately in the zip file.
 mkdir -p artifacts/
 tar -cf artifacts/install.tar install
+cp -Rp .gitlab-ci/common artifacts/ci-common
+cp -Rp .gitlab-ci/lava artifacts/
 
 if [ -n "$MINIO_ARTIFACT_NAME" ]; then
     # Pass needed files to the test stage
-    cp $CI_PROJECT_DIR/.gitlab-ci/generate_lava.py artifacts/.
-    cp $CI_PROJECT_DIR/.gitlab-ci/lava.yml.jinja2 artifacts/.
-
     MINIO_ARTIFACT_NAME="$MINIO_ARTIFACT_NAME.tar.gz"
     gzip -c artifacts/install.tar > ${MINIO_ARTIFACT_NAME}
-    MINIO_PATH=${MINIO_HOST}/artifacts/${CI_PROJECT_PATH}/${CI_PIPELINE_ID}
     ci-fairy minio login $CI_JOB_JWT
-    ci-fairy minio cp ${MINIO_ARTIFACT_NAME} minio://${MINIO_PATH}/${MINIO_ARTIFACT_NAME}
+    ci-fairy minio cp ${MINIO_ARTIFACT_NAME} minio://${PIPELINE_ARTIFACTS_BASE}/${MINIO_ARTIFACT_NAME}
 fi

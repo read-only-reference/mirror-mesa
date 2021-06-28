@@ -64,7 +64,7 @@ create_input(struct ir3_context *ctx, unsigned compmask)
 {
 	struct ir3_instruction *in;
 
-	in = ir3_instr_create(ctx->in_block, OPC_META_INPUT, 1);
+	in = ir3_instr_create(ctx->in_block, OPC_META_INPUT, 1, 0);
 	in->input.sysval = ~0;
 	__ssa_dst(in)->wrmask = compmask;
 
@@ -89,7 +89,7 @@ create_frag_input(struct ir3_context *ctx, struct ir3_instruction *coord, unsign
 		instr->cat6.iim_val = 1;
 	} else {
 		instr = ir3_BARY_F(block, inloc, 0, ctx->ij[IJ_PERSP_PIXEL], 0);
-		instr->regs[2]->wrmask = 0x3;
+		instr->srcs[1]->wrmask = 0x3;
 	}
 
 	return instr;
@@ -647,8 +647,8 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 		 */
 		if (cond->opc == OPC_ABSNEG_S &&
 				cond->flags == 0 &&
-				(cond->regs[1]->flags & (IR3_REG_SNEG | IR3_REG_SABS)) == IR3_REG_SNEG) {
-			cond = cond->regs[1]->instr;
+				(cond->srcs[0]->flags & (IR3_REG_SNEG | IR3_REG_SABS)) == IR3_REG_SNEG) {
+			cond = cond->srcs[0]->def->instr;
 		}
 
 		compile_assert(ctx, bs[1] == bs[2]);
@@ -688,11 +688,11 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 		// TODO maybe the builders should default to making dst half-precision
 		// if the src's were half precision, to make this less awkward.. otoh
 		// we should probably just do this lowering in NIR.
-		hi->regs[0]->flags |= IR3_REG_HALF;
-		lo->regs[0]->flags |= IR3_REG_HALF;
+		hi->dsts[0]->flags |= IR3_REG_HALF;
+		lo->dsts[0]->flags |= IR3_REG_HALF;
 
 		dst[0] = ir3_ADD_S(b, hi, 0, lo, 0);
-		dst[0]->regs[0]->flags |= IR3_REG_HALF;
+		dst[0]->dsts[0]->flags |= IR3_REG_HALF;
 		dst[0] = ir3_COV(b, dst[0], TYPE_U16, TYPE_U32);
 		break;
 	}
@@ -759,7 +759,7 @@ emit_intrinsic_load_ubo_ldc(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 	struct ir3_instruction *offset = ir3_get_src(ctx, &intr->src[1])[0];
 	struct ir3_instruction *idx = ir3_get_src(ctx, &intr->src[0])[0];
 	struct ir3_instruction *ldc = ir3_LDC(b, idx, 0, offset, 0);
-	ldc->regs[0]->wrmask = MASK(ncomp);
+	ldc->dsts[0]->wrmask = MASK(ncomp);
 	ldc->cat6.iim_val = ncomp;
 	ldc->cat6.d = nir_intrinsic_component(intr);
 	ldc->cat6.type = TYPE_U32;
@@ -789,9 +789,9 @@ emit_intrinsic_load_ubo(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 	/* First src is ubo index, which could either be an immed or not: */
 	src0 = ir3_get_src(ctx, &intr->src[0])[0];
 	if (is_same_type_mov(src0) &&
-			(src0->regs[1]->flags & IR3_REG_IMMED)) {
-		base_lo = create_uniform(b, ubo + (src0->regs[1]->iim_val * ptrsz));
-		base_hi = create_uniform(b, ubo + (src0->regs[1]->iim_val * ptrsz) + 1);
+			(src0->srcs[0]->flags & IR3_REG_IMMED)) {
+		base_lo = create_uniform(b, ubo + (src0->srcs[0]->iim_val * ptrsz));
+		base_hi = create_uniform(b, ubo + (src0->srcs[0]->iim_val * ptrsz) + 1);
 	} else {
 		base_lo = create_uniform_indirect(b, ubo, TYPE_U32, ir3_get_addr0(ctx, src0, ptrsz));
 		base_hi = create_uniform_indirect(b, ubo + 1, TYPE_U32, ir3_get_addr0(ctx, src0, ptrsz));
@@ -865,7 +865,7 @@ emit_intrinsic_ssbo_size(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 		resinfo->cat6.type = TYPE_U32;
 		resinfo->cat6.typed = false;
 		/* resinfo has no writemask and always writes out 3 components */
-		resinfo->regs[0]->wrmask = MASK(3);
+		resinfo->dsts[0]->wrmask = MASK(3);
 		ir3_handle_bindless_cat6(resinfo, intr->src[0]);
 		struct ir3_instruction *resinfo_dst;
 		ir3_split_dest(b, &resinfo_dst, resinfo, 0, 1);
@@ -906,7 +906,7 @@ emit_intrinsic_load_shared(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 			create_immed(b, intr->num_components), 0);
 
 	ldl->cat6.type = utype_dst(intr->dest);
-	ldl->regs[0]->wrmask = MASK(intr->num_components);
+	ldl->dsts[0]->wrmask = MASK(intr->num_components);
 
 	ldl->barrier_class = IR3_BARRIER_SHARED_R;
 	ldl->barrier_conflict = IR3_BARRIER_SHARED_W;
@@ -964,7 +964,7 @@ emit_intrinsic_load_shared_ir3(struct ir3_context *ctx, nir_intrinsic_instr *int
 		load->opc = OPC_LDL;
 
 	load->cat6.type = utype_dst(intr->dest);
-	load->regs[0]->wrmask = MASK(intr->num_components);
+	load->dsts[0]->wrmask = MASK(intr->num_components);
 
 	load->barrier_class = IR3_BARRIER_SHARED_R;
 	load->barrier_conflict = IR3_BARRIER_SHARED_W;
@@ -1095,7 +1095,7 @@ emit_intrinsic_load_scratch(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 			create_immed(b, intr->num_components), 0);
 
 	ldp->cat6.type = utype_dst(intr->dest);
-	ldp->regs[0]->wrmask = MASK(intr->num_components);
+	ldp->dsts[0]->wrmask = MASK(intr->num_components);
 
 	ldp->barrier_class = IR3_BARRIER_PRIVATE_R;
 	ldp->barrier_conflict = IR3_BARRIER_PRIVATE_W;
@@ -1735,54 +1735,12 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		end->barrier_conflict = IR3_BARRIER_EVERYTHING;
 		break;
 
-	case nir_intrinsic_store_global_ir3: {
-		struct ir3_instruction *value, *addr, *offset;
-		unsigned ncomp = nir_intrinsic_src_components(intr, 0);
-
-		addr = ir3_create_collect(ctx, (struct ir3_instruction*[]){
-				ir3_get_src(ctx, &intr->src[1])[0],
-				ir3_get_src(ctx, &intr->src[1])[1]
-		}, 2);
-
-		offset = ir3_get_src(ctx, &intr->src[2])[0];
-
-		value = ir3_create_collect(ctx, ir3_get_src(ctx, &intr->src[0]), ncomp);
-
-		struct ir3_instruction *stg =
-			ir3_STG_G(ctx->block, addr, 0, value, 0,
-					  create_immed(ctx->block, ncomp), 0, offset, 0);
-		stg->cat6.type = TYPE_U32;
-		stg->cat6.iim_val = 1;
-
-		array_insert(b, b->keeps, stg);
-
-		stg->barrier_class = IR3_BARRIER_BUFFER_W;
-		stg->barrier_conflict = IR3_BARRIER_BUFFER_R | IR3_BARRIER_BUFFER_W;
+	case nir_intrinsic_store_global_ir3:
+		ctx->funcs->emit_intrinsic_store_global_ir3(ctx, intr);
 		break;
-	}
-
-	case nir_intrinsic_load_global_ir3: {
-		struct ir3_instruction *addr, *offset;
-
-		addr = ir3_create_collect(ctx, (struct ir3_instruction*[]){
-				ir3_get_src(ctx, &intr->src[0])[0],
-				ir3_get_src(ctx, &intr->src[0])[1]
-		}, 2);
-
-		offset = ir3_get_src(ctx, &intr->src[1])[0];
-
-		struct ir3_instruction *load =
-			ir3_LDG(b, addr, 0, offset, 0,
-					create_immed(ctx->block, dest_components), 0);
-		load->cat6.type = TYPE_U32;
-		load->regs[0]->wrmask = MASK(dest_components);
-
-		load->barrier_class = IR3_BARRIER_BUFFER_R;
-		load->barrier_conflict = IR3_BARRIER_BUFFER_W;
-
-		ir3_split_dest(b, dst, load, 0, dest_components);
+	case nir_intrinsic_load_global_ir3:
+		ctx->funcs->emit_intrinsic_load_global_ir3(ctx, intr, dst);
 		break;
-	}
 
 	case nir_intrinsic_load_ubo:
 		emit_intrinsic_load_ubo(ctx, intr, dst);
@@ -1799,7 +1757,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		 */
 		struct ir3_instruction *offset =
 			ir3_RGETPOS(b, ir3_get_src(ctx, &intr->src[0])[0], 0);
-		offset->regs[0]->wrmask = 0x3;
+		offset->dsts[0]->wrmask = 0x3;
 		offset->cat5.type = TYPE_F32;
 
 		ir3_split_dest(b, dst, offset, 0, 2);
@@ -1985,7 +1943,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 	case nir_intrinsic_load_sample_id_no_per_sample:
 		if (!ctx->samp_id) {
 			ctx->samp_id = create_sysval_input(ctx, SYSTEM_VALUE_SAMPLE_ID, 0x1);
-			ctx->samp_id->regs[0]->flags |= IR3_REG_HALF;
+			ctx->samp_id->dsts[0]->flags |= IR3_REG_HALF;
 		}
 		dst[0] = ir3_COV(b, ctx->samp_id, TYPE_U16, TYPE_U32);
 		break;
@@ -2006,7 +1964,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		if (!ctx->frag_face) {
 			ctx->so->frag_face = true;
 			ctx->frag_face = create_sysval_input(ctx, SYSTEM_VALUE_FRONT_FACE, 0x1);
-			ctx->frag_face->regs[0]->flags |= IR3_REG_HALF;
+			ctx->frag_face->dsts[0]->flags |= IR3_REG_HALF;
 		}
 		/* for fragface, we get -1 for back and 0 for front. However this is
 		 * the inverse of what nir expects (where ~0 is true).
@@ -2023,26 +1981,26 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		}
 		ir3_split_dest(b, dst, ctx->local_invocation_id, 0, 3);
 		break;
-	case nir_intrinsic_load_work_group_id:
-	case nir_intrinsic_load_work_group_id_zero_base:
+	case nir_intrinsic_load_workgroup_id:
+	case nir_intrinsic_load_workgroup_id_zero_base:
 		if (!ctx->work_group_id) {
 			ctx->work_group_id =
-				create_sysval_input(ctx, SYSTEM_VALUE_WORK_GROUP_ID, 0x7);
-			ctx->work_group_id->regs[0]->flags |= IR3_REG_SHARED;
+				create_sysval_input(ctx, SYSTEM_VALUE_WORKGROUP_ID, 0x7);
+			ctx->work_group_id->dsts[0]->flags |= IR3_REG_SHARED;
 		}
 		ir3_split_dest(b, dst, ctx->work_group_id, 0, 3);
 		break;
-	case nir_intrinsic_load_base_work_group_id:
+	case nir_intrinsic_load_base_workgroup_id:
 		for (int i = 0; i < dest_components; i++) {
 			dst[i] = create_driver_param(ctx, IR3_DP_BASE_GROUP_X + i);
 		}
 		break;
-	case nir_intrinsic_load_num_work_groups:
+	case nir_intrinsic_load_num_workgroups:
 		for (int i = 0; i < dest_components; i++) {
 			dst[i] = create_driver_param(ctx, IR3_DP_NUM_WORK_GROUPS_X + i);
 		}
 		break;
-	case nir_intrinsic_load_local_group_size:
+	case nir_intrinsic_load_workgroup_size:
 		for (int i = 0; i < dest_components; i++) {
 			dst[i] = create_driver_param(ctx, IR3_DP_LOCAL_GROUP_SIZE_X + i);
 		}
@@ -2072,8 +2030,8 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		cond->cat2.condition = IR3_COND_NE;
 
 		/* condition always goes in predicate register: */
-		cond->regs[0]->num = regid(REG_P0, 0);
-		cond->regs[0]->flags &= ~IR3_REG_SSA;
+		cond->dsts[0]->num = regid(REG_P0, 0);
+		cond->dsts[0]->flags &= ~IR3_REG_SSA;
 
 		if (intr->intrinsic == nir_intrinsic_demote ||
 			intr->intrinsic == nir_intrinsic_demote_if) {
@@ -2085,7 +2043,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		/* Side-effects should not be moved on a different side of the kill */
 		kill->barrier_class = IR3_BARRIER_IMAGE_W | IR3_BARRIER_BUFFER_W;
 		kill->barrier_conflict = IR3_BARRIER_IMAGE_W | IR3_BARRIER_BUFFER_W;
-		kill->regs[1]->num = regid(REG_P0, 0);
+		kill->srcs[0]->num = regid(REG_P0, 0);
 		array_insert(ctx->ir, ctx->ir->predicates, kill);
 
 		array_insert(b, b->keeps, kill);
@@ -2105,7 +2063,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		cond->cat2.condition = IR3_COND_NE;
 
 		/* condition always goes in predicate register: */
-		cond->regs[0]->num = regid(REG_P0, 0);
+		cond->dsts[0]->num = regid(REG_P0, 0);
 
 		kill = ir3_PREDT(b, cond, 0);
 
@@ -2636,7 +2594,7 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
 		assert(opc != OPC_META_TEX_PREFETCH);
 
 		/* only need first 3 components: */
-		sam->regs[0]->wrmask = 0x7;
+		sam->dsts[0]->wrmask = 0x7;
 		ir3_split_dest(b, dst, sam, 0, 3);
 
 		/* we need to sample the alpha separately with a non-ASTC
@@ -2749,6 +2707,60 @@ emit_tex_txs(struct ir3_context *ctx, nir_tex_instr *tex)
 	ir3_put_dst(ctx, &tex->dest);
 }
 
+/* phi instructions are left partially constructed.  We don't resolve
+ * their srcs until the end of the shader, since (eg. loops) one of
+ * the phi's srcs might be defined after the phi due to back edges in
+ * the CFG.
+ */
+static void
+emit_phi(struct ir3_context *ctx, nir_phi_instr *nphi)
+{
+	struct ir3_instruction *phi, **dst;
+
+	/* NOTE: phi's should be lowered to scalar at this point */
+	compile_assert(ctx, nphi->dest.ssa.num_components == 1);
+
+	dst = ir3_get_dst(ctx, &nphi->dest, 1);
+
+	phi = ir3_instr_create(ctx->block, OPC_META_PHI,
+			1, exec_list_length(&nphi->srcs));
+	__ssa_dst(phi);
+	phi->phi.nphi = nphi;
+
+	dst[0] = phi;
+
+	ir3_put_dst(ctx, &nphi->dest);
+}
+
+static struct ir3_block *get_block(struct ir3_context *ctx, const nir_block *nblock);
+
+static void
+resolve_phis(struct ir3_context *ctx, struct ir3_block *block)
+{
+	foreach_instr (phi, &block->instr_list) {
+		if (phi->opc != OPC_META_PHI)
+			break;
+
+		nir_phi_instr *nphi = phi->phi.nphi;
+
+		for (unsigned i = 0; i < block->predecessors_count; i++) {
+			struct ir3_block *pred = block->predecessors[i];
+			nir_foreach_phi_src(nsrc, nphi) {
+				if (get_block(ctx, nsrc->pred) == pred) {
+					if (nsrc->src.ssa->parent_instr->type == nir_instr_type_ssa_undef) {
+						/* Create an ir3 undef */
+						ir3_src_create(phi, INVALID_REG, phi->dsts[0]->flags);
+					} else {
+						struct ir3_instruction *src = ir3_get_src(ctx, &nsrc->src)[0];
+						__ssa_src(phi, src, 0);
+					}
+					break;
+				}
+			}
+		}
+	}
+}
+
 static void
 emit_jump(struct ir3_context *ctx, nir_jump_instr *jump)
 {
@@ -2810,8 +2822,7 @@ emit_instr(struct ir3_context *ctx, nir_instr *instr)
 		emit_jump(ctx, nir_instr_as_jump(instr));
 		break;
 	case nir_instr_type_phi:
-		/* we have converted phi webs to regs in NIR by now */
-		ir3_context_error(ctx, "Unexpected NIR instruction type: %d\n", instr->type);
+		emit_phi(ctx, nir_instr_as_phi(instr));
 		break;
 	case nir_instr_type_call:
 	case nir_instr_type_parallel_copy:
@@ -2989,8 +3000,8 @@ emit_stream_out(struct ir3_context *ctx)
 
 	/* setup 'if (vtxcnt < maxvtxcnt)' condition: */
 	cond = ir3_CMPS_S(ctx->block, vtxcnt, 0, maxvtxcnt, 0);
-	cond->regs[0]->num = regid(REG_P0, 0);
-	cond->regs[0]->flags &= ~IR3_REG_SSA;
+	cond->dsts[0]->num = regid(REG_P0, 0);
+	cond->dsts[0]->flags &= ~IR3_REG_SSA;
 	cond->cat2.condition = IR3_COND_LT;
 
 	/* condition goes on previous block to the conditional,
@@ -3032,10 +3043,12 @@ emit_stream_out(struct ir3_context *ctx)
 			base = bases[strmout->output[i].output_buffer];
 			out = ctx->outputs[regid(strmout->output[i].register_index, c)];
 
-			stg = ir3_STG(ctx->block, base, 0, out, 0,
-					create_immed(ctx->block, 1), 0);
+			stg = ir3_STG(ctx->block,
+						  base, 0,
+						  create_immed(ctx->block, (strmout->output[i].dst_offset + j) * 4), 0,
+						  out, 0,
+						  create_immed(ctx->block, 1), 0);
 			stg->cat6.type = TYPE_U32;
-			stg->cat6.dst_offset = (strmout->output[i].dst_offset + j) * 4;
 
 			array_insert(ctx->block, ctx->block->keeps, stg);
 		}
@@ -3092,6 +3105,9 @@ emit_function(struct ir3_context *ctx, nir_function_impl *impl)
 	}
 
 	setup_predecessors(ctx->ir);
+	foreach_block (block, &ctx->ir->block_list) {
+		resolve_phis(ctx, block);
+	}
 }
 
 static void
@@ -3160,7 +3176,7 @@ setup_input(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 			 * first see a vec2 index at slot N, and then later a vec4,
 			 * the wrmask of the resulting overlapped vec2 and vec4 is 0xf
 			 */
-			input->regs[0]->wrmask |= compmask;
+			input->dsts[0]->wrmask |= compmask;
 		}
 
 		for (int i = 0; i < ncomp + frac; i++) {
@@ -3169,7 +3185,7 @@ setup_input(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 
 			/* fixup the src wrmask to avoid validation fail */
 			if (ctx->inputs[idx] && (ctx->inputs[idx] != input)) {
-				ctx->inputs[idx]->regs[1]->wrmask = input->regs[0]->wrmask;
+				ctx->inputs[idx]->srcs[0]->wrmask = input->dsts[0]->wrmask;
 				continue;
 			}
 
@@ -3203,11 +3219,11 @@ pack_inlocs(struct ir3_context *ctx)
 	foreach_block (block, &ctx->ir->block_list) {
 		foreach_instr (instr, &block->instr_list) {
 			if (is_input(instr)) {
-				unsigned inloc = instr->regs[1]->iim_val;
+				unsigned inloc = instr->srcs[0]->iim_val;
 				unsigned i = inloc / 4;
 				unsigned j = inloc % 4;
 
-				compile_assert(ctx, instr->regs[1]->flags & IR3_REG_IMMED);
+				compile_assert(ctx, instr->srcs[0]->flags & IR3_REG_IMMED);
 				compile_assert(ctx, i < so->inputs_count);
 
 				used_components[i] |= 1 << j;
@@ -3287,11 +3303,11 @@ pack_inlocs(struct ir3_context *ctx)
 	foreach_block (block, &ctx->ir->block_list) {
 		foreach_instr (instr, &block->instr_list) {
 			if (is_input(instr)) {
-				unsigned inloc = instr->regs[1]->iim_val;
+				unsigned inloc = instr->srcs[0]->iim_val;
 				unsigned i = inloc / 4;
 				unsigned j = inloc % 4;
 
-				instr->regs[1]->iim_val = so->inputs[i].inloc + j;
+				instr->srcs[0]->iim_val = so->inputs[i].inloc + j;
 			} else if (instr->opc == OPC_META_TEX_PREFETCH) {
 				unsigned i = instr->prefetch.input_offset / 4;
 				unsigned j = instr->prefetch.input_offset % 4;
@@ -3640,17 +3656,17 @@ fixup_binning_pass(struct ir3_context *ctx, struct ir3_instruction *end)
 	unsigned i, j;
 
 	/* first pass, remove unused outputs from the IR level outputs: */
-	for (i = 0, j = 0; i < end->regs_count - 1; i++) {
+	for (i = 0, j = 0; i < end->srcs_count; i++) {
 		unsigned outidx = end->end.outidxs[i];
 		unsigned slot = so->outputs[outidx].slot;
 
 		if (output_slot_used_for_binning(slot)) {
-			end->regs[j + 1] = end->regs[i + 1];
+			end->srcs[j] = end->srcs[i];
 			end->end.outidxs[j] = end->end.outidxs[i];
 			j++;
 		}
 	}
-	end->regs_count = j + 1;
+	end->srcs_count = j;
 
 	/* second pass, cleanup the unused slots in ir3_shader_variant::outputs
 	 * table:
@@ -3662,7 +3678,7 @@ fixup_binning_pass(struct ir3_context *ctx, struct ir3_instruction *end)
 			so->outputs[j] = so->outputs[i];
 
 			/* fixup outidx to point to new output table entry: */
-			for (unsigned k = 0; k < end->regs_count - 1; k++) {
+			for (unsigned k = 0; k < end->srcs_count; k++) {
 				if (end->end.outidxs[k] == i) {
 					end->end.outidxs[k] = j;
 					break;
@@ -3701,8 +3717,8 @@ collect_tex_prefetches(struct ir3_context *ctx, struct ir3 *ir)
 					fetch->tex_id = instr->prefetch.tex;
 					fetch->samp_id = instr->prefetch.samp;
 				}
-				fetch->wrmask = instr->regs[0]->wrmask;
-				fetch->dst = instr->regs[0]->num;
+				fetch->wrmask = instr->dsts[0]->wrmask;
+				fetch->dst = instr->dsts[0]->num;
 				fetch->src = instr->prefetch.input_offset;
 
 				/* These are the limits on a5xx/a6xx, we might need to
@@ -3715,7 +3731,7 @@ collect_tex_prefetches(struct ir3_context *ctx, struct ir3 *ir)
 				ctx->so->total_in =
 					MAX2(ctx->so->total_in, instr->prefetch.input_offset + 2);
 
-				fetch->half_precision = !!(instr->regs[0]->flags & IR3_REG_HALF);
+				fetch->half_precision = !!(instr->dsts[0]->flags & IR3_REG_HALF);
 
 				/* Remove the prefetch placeholder instruction: */
 				list_delinit(&instr->node);
@@ -3755,13 +3771,17 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	/* Vertex shaders in a tessellation or geometry pipeline treat END as a
 	 * NOP and has an epilogue that writes the VS outputs to local storage, to
 	 * be read by the HS.  Then it resets execution mask (chmask) and chains
-	 * to the next shader (chsh).
+	 * to the next shader (chsh). There are also a few output values which we
+	 * must send to the next stage via registers, and in order for both stages
+	 * to agree on the register used we must force these to be in specific
+	 * registers.
 	 */
 	if ((so->type == MESA_SHADER_VERTEX &&
 				(so->key.has_gs || so->key.tessellation)) ||
 			(so->type == MESA_SHADER_TESS_EVAL && so->key.has_gs)) {
 		struct ir3_instruction *outputs[3];
 		unsigned outidxs[3];
+		unsigned regids[3];
 		unsigned outputs_count = 0;
 
 		if (ctx->primitive_id) {
@@ -3772,6 +3792,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 				ir3_create_collect(ctx, &ctx->primitive_id, 1);
 			outputs[outputs_count] = out;
 			outidxs[outputs_count] = n;
+			regids[outputs_count] = regid(0, 1);
 			outputs_count++;
 		}
 
@@ -3782,6 +3803,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 				ir3_create_collect(ctx, &ctx->gs_header, 1);
 			outputs[outputs_count] = out;
 			outidxs[outputs_count] = n;
+			regids[outputs_count] = regid(0, 0);
 			outputs_count++;
 		}
 
@@ -3792,17 +3814,17 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 				ir3_create_collect(ctx, &ctx->tcs_header, 1);
 			outputs[outputs_count] = out;
 			outidxs[outputs_count] = n;
+			regids[outputs_count] = regid(0, 0);
 			outputs_count++;
 		}
 
 		struct ir3_instruction *chmask =
-			ir3_instr_create(ctx->block, OPC_CHMASK, outputs_count + 1);
+			ir3_instr_create(ctx->block, OPC_CHMASK, 0, outputs_count);
 		chmask->barrier_class = IR3_BARRIER_EVERYTHING;
 		chmask->barrier_conflict = IR3_BARRIER_EVERYTHING;
 
-		__ssa_dst(chmask);
 		for (unsigned i = 0; i < outputs_count; i++)
-			__ssa_src(chmask, outputs[i], 0);
+			__ssa_src(chmask, outputs[i], 0)->num = regids[i];
 
 		chmask->end.outidxs = ralloc_array(chmask, unsigned, outputs_count);
 		memcpy(chmask->end.outidxs, outidxs, sizeof(unsigned) * outputs_count);
@@ -3818,6 +3840,15 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 		unsigned outidxs[ctx->noutputs / 4];
 		struct ir3_instruction *outputs[ctx->noutputs / 4];
 		unsigned outputs_count = 0;
+
+		struct ir3_block *old_block = ctx->block;
+		/* Insert these collect's in the block before the end-block if
+		 * possible, so that any moves they generate can be shuffled around to
+		 * reduce nop's:
+		 */
+		if (ctx->block->predecessors_count == 1)
+			ctx->block = ctx->block->predecessors[0];
+
 
 		/* Setup IR level outputs, which are "collects" that gather
 		 * the scalar components of outputs.
@@ -3880,10 +3911,11 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 			}
 		}
 
-		struct ir3_instruction *end = ir3_instr_create(ctx->block, OPC_END,
-				outputs_count + 1);
+		ctx->block = old_block;
 
-		__ssa_dst(end);
+		struct ir3_instruction *end = ir3_instr_create(ctx->block, OPC_END,
+				0, outputs_count);
+
 		for (unsigned i = 0; i < outputs_count; i++) {
 			__ssa_src(end, outputs[i], 0);
 		}
@@ -3903,11 +3935,14 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	ir3_debug_print(ir, "AFTER: nir->ir3");
 	ir3_validate(ir);
 
+	IR3_PASS(ir, ir3_array_to_ssa);
+
 	do {
 		progress = false;
 
 		progress |= IR3_PASS(ir, ir3_cf);
 		progress |= IR3_PASS(ir, ir3_cp, so);
+		progress |= IR3_PASS(ir, ir3_cse);
 		progress |= IR3_PASS(ir, ir3_dce, so);
 	} while (progress);
 
@@ -3923,11 +3958,6 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	}
 
 	IR3_PASS(ir, ir3_sched_add_deps);
-
-	/* Group left/right neighbors, inserting mov's where needed to
-	 * solve conflicts:
-	 */
-	IR3_PASS(ir, ir3_group);
 
 	/* At this point, all the dead code should be long gone: */
 	assert(!IR3_PASS(ir, ir3_dce, so));
@@ -3956,70 +3986,49 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 			so->binning_pass;
 
 	if (pre_assign_inputs) {
-		for (unsigned i = 0; i < ctx->ninputs; i++) {
-			struct ir3_instruction *instr = ctx->inputs[i];
+		foreach_input (in, ir) {
+			assert(in->opc == OPC_META_INPUT);
+			unsigned inidx = in->input.inidx;
 
-			if (!instr)
-				continue;
-
-			unsigned n = i / 4;
-			unsigned c = i % 4;
-			unsigned regid = so->nonbinning->inputs[n].regid + c;
-
-			instr->regs[0]->num = regid;
+			in->dsts[0]->num = so->nonbinning->inputs[inidx].regid;
 		}
-
-		ret = ir3_ra(so, ctx->inputs, ctx->ninputs);
 	} else if (ctx->tcs_header) {
 		/* We need to have these values in the same registers between VS and TCS
 		 * since the VS chains to TCS and doesn't get the sysvals redelivered.
 		 */
 
-		ctx->tcs_header->regs[0]->num = regid(0, 0);
-		ctx->primitive_id->regs[0]->num = regid(0, 1);
-		struct ir3_instruction *precolor[] = { ctx->tcs_header, ctx->primitive_id };
-		ret = ir3_ra(so, precolor, ARRAY_SIZE(precolor));
+		ctx->tcs_header->dsts[0]->num = regid(0, 0);
+		ctx->primitive_id->dsts[0]->num = regid(0, 1);
 	} else if (ctx->gs_header) {
 		/* We need to have these values in the same registers between producer
 		 * (VS or DS) and GS since the producer chains to GS and doesn't get
 		 * the sysvals redelivered.
 		 */
 
-		ctx->gs_header->regs[0]->num = regid(0, 0);
-		ctx->primitive_id->regs[0]->num = regid(0, 1);
-		struct ir3_instruction *precolor[] = { ctx->gs_header, ctx->primitive_id };
-		ret = ir3_ra(so, precolor, ARRAY_SIZE(precolor));
+		ctx->gs_header->dsts[0]->num = regid(0, 0);
+		ctx->primitive_id->dsts[0]->num = regid(0, 1);
 	} else if (so->num_sampler_prefetch) {
 		assert(so->type == MESA_SHADER_FRAGMENT);
-		struct ir3_instruction *precolor[2];
 		int idx = 0;
 
 		foreach_input (instr, ir) {
 			if (instr->input.sysval != SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL)
 				continue;
 
-			assert(idx < ARRAY_SIZE(precolor));
-
-			precolor[idx] = instr;
-			instr->regs[0]->num = idx;
-
+			assert(idx < 2);
+			instr->dsts[0]->num = idx;
 			idx++;
 		}
-		ret = ir3_ra(so, precolor, idx);
-	} else {
-		ret = ir3_ra(so, NULL, 0);
 	}
 
+	ret = ir3_ra(so);
+
 	if (ret) {
-		DBG("RA failed!");
+		mesa_loge("ir3_ra() failed!");
 		goto out;
 	}
 
 	IR3_PASS(ir, ir3_postsched, so);
-
-	if (compiler->gpu_id >= 600) {
-		IR3_PASS(ir, ir3_a6xx_fixup_atomic_dests, so);
-	}
 
 	if (so->type == MESA_SHADER_FRAGMENT)
 		pack_inlocs(ctx);
@@ -4040,9 +4049,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
 	struct ir3_instruction *end = find_end(so->ir);
 
-	for (unsigned i = 1; i < end->regs_count; i++) {
-		unsigned outidx = end->end.outidxs[i - 1];
-		struct ir3_register *reg = end->regs[i];
+	for (unsigned i = 0; i < end->srcs_count; i++) {
+		unsigned outidx = end->end.outidxs[i];
+		struct ir3_register *reg = end->srcs[i];
 
 		so->outputs[outidx].regid = reg->num;
 		so->outputs[outidx].half = !!(reg->flags & IR3_REG_HALF);
@@ -4054,16 +4063,16 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
 		if (pre_assign_inputs && !so->inputs[inidx].sysval) {
 			if (VALIDREG(so->nonbinning->inputs[inidx].regid)) {
-				compile_assert(ctx, in->regs[0]->num ==
+				compile_assert(ctx, in->dsts[0]->num ==
 						so->nonbinning->inputs[inidx].regid);
-				compile_assert(ctx, !!(in->regs[0]->flags & IR3_REG_HALF) ==
+				compile_assert(ctx, !!(in->dsts[0]->flags & IR3_REG_HALF) ==
 						so->nonbinning->inputs[inidx].half);
 			}
 			so->inputs[inidx].regid = so->nonbinning->inputs[inidx].regid;
 			so->inputs[inidx].half  = so->nonbinning->inputs[inidx].half;
 		} else {
-			so->inputs[inidx].regid = in->regs[0]->num;
-			so->inputs[inidx].half  = !!(in->regs[0]->flags & IR3_REG_HALF);
+			so->inputs[inidx].regid = in->dsts[0]->num;
+			so->inputs[inidx].half  = !!(in->dsts[0]->flags & IR3_REG_HALF);
 		}
 	}
 
@@ -4102,10 +4111,10 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 		so->need_pixlod = true;
 
 	if (so->type == MESA_SHADER_COMPUTE) {
-		so->local_size[0] = ctx->s->info.cs.local_size[0];
-		so->local_size[1] = ctx->s->info.cs.local_size[1];
-		so->local_size[2] = ctx->s->info.cs.local_size[2];
-		so->local_size_variable = ctx->s->info.cs.local_size_variable;
+		so->local_size[0] = ctx->s->info.workgroup_size[0];
+		so->local_size[1] = ctx->s->info.workgroup_size[1];
+		so->local_size[2] = ctx->s->info.workgroup_size[2];
+		so->local_size_variable = ctx->s->info.workgroup_size_variable;
 	}
 
 out:

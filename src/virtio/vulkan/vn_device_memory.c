@@ -220,6 +220,34 @@ vn_device_memory_import_dma_buf(struct vn_device *dev,
    return VK_SUCCESS;
 }
 
+static VkResult
+vn_device_memory_alloc(struct vn_device *dev,
+                       struct vn_device_memory *mem,
+                       const VkMemoryAllocateInfo *alloc_info,
+                       bool need_bo,
+                       VkMemoryPropertyFlags flags,
+                       VkExternalMemoryHandleTypeFlags external_handles)
+{
+   VkDevice dev_handle = vn_device_to_handle(dev);
+   VkDeviceMemory mem_handle = vn_device_memory_to_handle(mem);
+   VkResult result = vn_call_vkAllocateMemory(dev->instance, dev_handle,
+                                              alloc_info, NULL, &mem_handle);
+   if (result != VK_SUCCESS || !need_bo)
+      return result;
+
+   result = vn_renderer_bo_create_from_device_memory(
+      dev->renderer, mem->size, mem->base.id, flags, external_handles,
+      &mem->base_bo);
+   if (result != VK_SUCCESS) {
+      vn_async_vkFreeMemory(dev->instance, dev_handle, mem_handle, NULL);
+      return result;
+   }
+
+   vn_instance_roundtrip(dev->instance);
+
+   return VK_SUCCESS;
+}
+
 VkResult
 vn_AllocateMemory(VkDevice device,
                   const VkMemoryAllocateInfo *pAllocateInfo,
@@ -263,7 +291,7 @@ vn_AllocateMemory(VkDevice device,
        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID);
    const bool need_bo =
       (mem_type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ||
-      export_info;
+      export_info || import_ahb_info || import_fd_info;
    const bool suballocate =
       need_bo && !pAllocateInfo->pNext &&
       !(mem_type->propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) &&
@@ -281,40 +309,29 @@ vn_AllocateMemory(VkDevice device,
    VkDeviceMemory mem_handle = vn_device_memory_to_handle(mem);
    VkResult result;
    if (import_ahb_info) {
-      result = vn_android_device_import_ahb(dev, mem, pAllocateInfo,
+      result = vn_android_device_import_ahb(dev, mem, pAllocateInfo, alloc,
                                             import_ahb_info->buffer);
-      assert(mem->base_bo);
    } else if (export_ahb) {
-      result = vn_android_device_allocate_ahb(dev, mem, pAllocateInfo);
-      assert(mem->base_bo);
+      result = vn_android_device_allocate_ahb(dev, mem, pAllocateInfo, alloc);
    } else if (import_fd_info) {
       result = vn_device_memory_import_dma_buf(dev, mem, pAllocateInfo,
                                                import_fd_info->fd);
-      assert(mem->base_bo);
    } else if (suballocate) {
       result = vn_device_memory_pool_alloc(
          dev, pAllocateInfo->memoryTypeIndex, mem->size, &mem->base_memory,
          &mem->base_bo, &mem->base_offset);
    } else {
-      result = vn_call_vkAllocateMemory(dev->instance, device, pAllocateInfo,
-                                        NULL, &mem_handle);
+      result = vn_device_memory_alloc(
+         dev, mem, pAllocateInfo, need_bo, mem_type->propertyFlags,
+         export_info ? export_info->handleTypes : 0);
    }
    if (result != VK_SUCCESS) {
       vk_free(alloc, mem);
       return vn_error(dev->instance, result);
    }
 
-   if (need_bo && !mem->base_bo) {
-      result = vn_renderer_bo_create_from_device_memory(
-         dev->renderer, mem->size, mem->base.id, mem_type->propertyFlags,
-         export_info ? export_info->handleTypes : 0, &mem->base_bo);
-      if (result != VK_SUCCESS) {
-         vn_async_vkFreeMemory(dev->instance, device, mem_handle, NULL);
-         vk_free(alloc, mem);
-         return vn_error(dev->instance, result);
-      }
-      vn_instance_roundtrip(dev->instance);
-   }
+   if (need_bo)
+      assert(mem->base_bo);
 
    *pMemory = mem_handle;
 
@@ -354,7 +371,8 @@ vn_GetDeviceMemoryOpaqueCaptureAddress(
    VkDevice device, const VkDeviceMemoryOpaqueCaptureAddressInfo *pInfo)
 {
    struct vn_device *dev = vn_device_from_handle(device);
-   struct vn_device_memory *mem = vn_device_memory_from_handle(pInfo->memory);
+   ASSERTED struct vn_device_memory *mem =
+      vn_device_memory_from_handle(pInfo->memory);
 
    assert(!mem->base_memory);
    return vn_call_vkGetDeviceMemoryOpaqueCaptureAddress(dev->instance, device,
@@ -438,7 +456,8 @@ vn_GetDeviceMemoryCommitment(VkDevice device,
                              VkDeviceSize *pCommittedMemoryInBytes)
 {
    struct vn_device *dev = vn_device_from_handle(device);
-   struct vn_device_memory *mem = vn_device_memory_from_handle(memory);
+   ASSERTED struct vn_device_memory *mem =
+      vn_device_memory_from_handle(memory);
 
    assert(!mem->base_memory);
    vn_call_vkGetDeviceMemoryCommitment(dev->instance, device, memory,
@@ -483,9 +502,18 @@ vn_get_memory_dma_buf_properties(struct vn_device *dev,
 
    vn_instance_roundtrip(dev->instance);
 
+   VkMemoryResourceAllocationSizeProperties100000MESA alloc_size_props = {
+      .sType =
+         VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_100000_MESA,
+      .pNext = NULL,
+      .allocationSize = 0,
+   };
    VkMemoryResourcePropertiesMESA props = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_RESOURCE_PROPERTIES_MESA,
-      .pNext = NULL,
+      .pNext =
+         dev->instance->experimental.memoryResourceAllocationSize == VK_TRUE
+            ? &alloc_size_props
+            : NULL,
       .memoryTypeBits = 0,
    };
    result = vn_call_vkGetMemoryResourcePropertiesMESA(dev->instance, device,
@@ -494,8 +522,7 @@ vn_get_memory_dma_buf_properties(struct vn_device *dev,
    if (result != VK_SUCCESS)
       return result;
 
-   /* XXX extend VkMemoryResourcePropertiesMESA for host storage size */
-   *out_alloc_size = lseek(fd, 0, SEEK_END);
+   *out_alloc_size = alloc_size_props.allocationSize;
    *out_mem_type_bits = props.memoryTypeBits;
 
    return VK_SUCCESS;

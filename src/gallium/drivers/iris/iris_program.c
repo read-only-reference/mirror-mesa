@@ -440,8 +440,8 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
             offset = nir_umin(&b, offset, nir_imm_int(&b, max_offset));
 
             nir_ssa_def *const_data_base_addr = nir_pack_64_2x32_split(&b,
-               nir_load_reloc_const_intel(&b, IRIS_SHADER_RELOC_CONST_DATA_ADDR_LOW),
-               nir_load_reloc_const_intel(&b, IRIS_SHADER_RELOC_CONST_DATA_ADDR_HIGH));
+               nir_load_reloc_const_intel(&b, BRW_SHADER_RELOC_CONST_DATA_ADDR_LOW),
+               nir_load_reloc_const_intel(&b, BRW_SHADER_RELOC_CONST_DATA_ADDR_HIGH));
 
             nir_ssa_def *data =
                nir_load_global(&b, nir_iadd(&b, const_data_base_addr,
@@ -527,8 +527,8 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
                                nir_intrinsic_base(intrin) * 16));
             break;
          }
-         case nir_intrinsic_load_local_group_size: {
-            assert(nir->info.cs.local_size_variable);
+         case nir_intrinsic_load_workgroup_size: {
+            assert(nir->info.workgroup_size_variable);
             if (variable_group_size_idx == -1) {
                variable_group_size_idx = num_system_values;
                num_system_values += 3;
@@ -852,7 +852,7 @@ iris_setup_binding_table(const struct intel_device_info *devinfo,
 
          nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
          switch (intrin->intrinsic) {
-         case nir_intrinsic_load_num_work_groups:
+         case nir_intrinsic_load_num_workgroups:
             bt->used_mask[IRIS_SURFACE_GROUP_CS_WORK_GROUPS] = 1;
             break;
 
@@ -1660,7 +1660,7 @@ iris_compile_gs(struct iris_screen *screen,
    char *error_str = NULL;
    const unsigned *program =
       brw_compile_gs(compiler, dbg, mem_ctx, &brw_key, gs_prog_data,
-                     nir, NULL, -1, NULL, &error_str);
+                     nir, -1, NULL, &error_str);
    if (program == NULL) {
       dbg_printf("Failed to compile geometry shader: %s\n", error_str);
       ralloc_free(mem_ctx);
@@ -2150,6 +2150,15 @@ iris_get_scratch_space(struct iris_context *ice,
 
    unsigned encoded_size = ffs(per_thread_scratch) - 11;
    assert(encoded_size < ARRAY_SIZE(ice->shaders.scratch_bos));
+   assert(per_thread_scratch == 1 << (encoded_size + 10));
+
+   /* On GFX version 12.5, scratch access changed to a surface-based model.
+    * Instead of each shader type having its own layout based on IDs passed
+    * from the relevant fixed-function unit, all scratch access is based on
+    * thread IDs like it always has been for compute.
+    */
+   if (devinfo->verx10 >= 125)
+      stage = MESA_SHADER_COMPUTE;
 
    struct iris_bo **bop = &ice->shaders.scratch_bos[encoded_size][stage];
 
@@ -2168,7 +2177,9 @@ iris_get_scratch_space(struct iris_context *ice,
     * in the base configuration.
     */
    unsigned subslice_total = screen->subslice_total;
-   if (devinfo->ver == 12)
+   if (devinfo->verx10 == 125)
+      subslice_total = 32;
+   else if (devinfo->ver == 12)
       subslice_total = (devinfo->is_dg1 || devinfo->gt == 2 ? 6 : 2);
    else if (devinfo->ver == 11)
       subslice_total = 8;
@@ -2207,10 +2218,46 @@ iris_get_scratch_space(struct iris_context *ice,
 
       uint32_t size = per_thread_scratch * max_threads[stage];
 
-      *bop = iris_bo_alloc(bufmgr, "scratch", size, IRIS_MEMZONE_SHADER);
+      *bop = iris_bo_alloc(bufmgr, "scratch", size, 1, IRIS_MEMZONE_SHADER, 0);
    }
 
    return *bop;
+}
+
+const struct iris_state_ref *
+iris_get_scratch_surf(struct iris_context *ice,
+                      unsigned per_thread_scratch)
+{
+   struct iris_screen *screen = (struct iris_screen *)ice->ctx.screen;
+   ASSERTED const struct intel_device_info *devinfo = &screen->devinfo;
+
+   assert(devinfo->verx10 >= 125);
+
+   unsigned encoded_size = ffs(per_thread_scratch) - 11;
+   assert(encoded_size < ARRAY_SIZE(ice->shaders.scratch_surfs));
+   assert(per_thread_scratch == 1 << (encoded_size + 10));
+
+   struct iris_state_ref *ref = &ice->shaders.scratch_surfs[encoded_size];
+
+   if (ref->res)
+      return ref;
+
+   struct iris_bo *scratch_bo =
+      iris_get_scratch_space(ice, per_thread_scratch, MESA_SHADER_COMPUTE);
+
+   void *map = upload_state(ice->state.bindless_uploader, ref,
+                            screen->isl_dev.ss.size, 64);
+
+   isl_buffer_fill_state(&screen->isl_dev, map,
+                         .address = scratch_bo->gtt_offset,
+                         .size_B = scratch_bo->size,
+                         .format = ISL_FORMAT_RAW,
+                         .swizzle = ISL_SWIZZLE_IDENTITY,
+                         .mocs = iris_mocs(scratch_bo, &screen->isl_dev, 0),
+                         .stride_B = per_thread_scratch,
+                         .is_scratch = true);
+
+   return ref;
 }
 
 /* ------------------------------------------------------------------- */

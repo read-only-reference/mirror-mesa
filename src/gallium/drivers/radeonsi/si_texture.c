@@ -482,7 +482,7 @@ static void si_reallocate_texture_inplace(struct si_context *sctx, struct si_tex
    tex->db_render_format = new_tex->db_render_format;
    memcpy(tex->stencil_clear_value, new_tex->stencil_clear_value, sizeof(tex->stencil_clear_value));
    tex->tc_compatible_htile = new_tex->tc_compatible_htile;
-   tex->depth_cleared_level_mask = new_tex->depth_cleared_level_mask;
+   tex->depth_cleared_level_mask_once = new_tex->depth_cleared_level_mask_once;
    tex->stencil_cleared_level_mask = new_tex->stencil_cleared_level_mask;
    tex->upgraded_depth = new_tex->upgraded_depth;
    tex->db_compatible = new_tex->db_compatible;
@@ -749,7 +749,7 @@ static bool si_texture_get_handle(struct pipe_screen *screen, struct pipe_contex
          sctx->b.resource_copy_region(&sctx->b, newb, 0, 0, 0, 0, &res->b.b, 0, &box);
          flush = true;
          /* Move the new buffer storage to the old pipe_resource. */
-         si_replace_buffer_storage(&sctx->b, &res->b.b, newb, 0);
+         si_replace_buffer_storage(&sctx->b, &res->b.b, newb, 0, 0, 0);
          pipe_resource_reference(&newb, NULL);
 
          assert(res->b.b.bind & PIPE_BIND_SHARED);
@@ -1728,7 +1728,7 @@ static void *si_texture_transfer_map(struct pipe_context *ctx, struct pipe_resou
    struct si_resource *buf;
    unsigned offset = 0;
    char *map;
-   bool use_staging_texture = false;
+   bool use_staging_texture = tex->buffer.flags & RADEON_FLAG_ENCRYPTED;
 
    assert(!(texture->flags & SI_RESOURCE_FLAG_FORCE_LINEAR));
    assert(box->width && box->height && box->depth);
@@ -1736,7 +1736,7 @@ static void *si_texture_transfer_map(struct pipe_context *ctx, struct pipe_resou
    if (tex->buffer.b.b.flags & SI_RESOURCE_AUX_PLANE)
       return NULL;
 
-   if (tex->buffer.flags & RADEON_FLAG_ENCRYPTED)
+   if ((tex->buffer.flags & RADEON_FLAG_ENCRYPTED) && usage & PIPE_MAP_READ)
       return NULL;
 
    if (tex->is_depth) {

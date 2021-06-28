@@ -719,7 +719,13 @@ dri2_flush_frontbuffer(struct dri_context *ctx,
       pipe->flush_resource(pipe, drawable->textures[statt]);
    }
 
-   pipe->flush(pipe, ctx->is_shared_buffer_bound ? &fence : NULL, 0);
+   if (ctx->is_shared_buffer_bound) {
+      /* is_shared_buffer_bound should only be true with image extension: */
+      assert(image);
+      pipe->flush(pipe, &fence, PIPE_FLUSH_FENCE_FD);
+   } else {
+      pipe->flush(pipe, NULL, 0);
+   }
 
    if (image) {
       image->flushFrontBuffer(dri_drawable, dri_drawable->loaderPrivate);
@@ -729,6 +735,8 @@ dri2_flush_frontbuffer(struct dri_context *ctx,
 
          shared_buffer_loader->displaySharedBuffer(dri_drawable, fence_fd,
                                                    dri_drawable->loaderPrivate);
+
+         pipe->screen->fence_reference(pipe->screen, &fence, NULL);
       }
    }
    else if (loader->flushFrontBuffer) {
@@ -811,8 +819,6 @@ dri2_create_image_from_winsys(__DRIscreen *_screen,
    if (pscreen->is_format_supported(pscreen, map->pipe_format, screen->target, 0, 0,
                                     PIPE_BIND_SAMPLER_VIEW))
       tex_usage |= PIPE_BIND_SAMPLER_VIEW;
-   if (is_protected_content)
-      tex_usage |= PIPE_BIND_PROTECTED;
 
    /* For NV12, see if we have support for sampling r8_b8g8 */
    if (!tex_usage && map->pipe_format == PIPE_FORMAT_NV12 &&
@@ -853,6 +859,9 @@ dri2_create_image_from_winsys(__DRIscreen *_screen,
 
    if (!tex_usage)
       return NULL;
+
+   if (is_protected_content)
+      tex_usage |= PIPE_BIND_PROTECTED;
 
    img = CALLOC_STRUCT(__DRIimageRec);
    if (!img)
@@ -907,7 +916,7 @@ dri2_create_image_from_winsys(__DRIscreen *_screen,
        */
       const struct driOptionCache *optionCache = &screen->dev->option_cache;
       if (!driQueryOptionb(optionCache, "disable_protected_content_check") &&
-          (tex->bind & PIPE_BIND_PROTECTED) != is_protected_content) {
+          (bool)(tex->bind & PIPE_BIND_PROTECTED) != is_protected_content) {
          pipe_resource_reference(&img->texture, NULL);
          pipe_resource_reference(&tex, NULL);
          FREE(img);

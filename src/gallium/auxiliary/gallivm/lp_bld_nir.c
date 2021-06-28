@@ -997,8 +997,8 @@ static void visit_alu(struct lp_build_nir_context *bld_base, const nir_alu_instr
    case nir_op_unpack_half_2x16:
       src_components = 1;
       break;
-   case nir_op_cube_face_coord:
-   case nir_op_cube_face_index:
+   case nir_op_cube_face_coord_amd:
+   case nir_op_cube_face_index_amd:
       src_components = 3;
       break;
    case nir_op_fsum2:
@@ -1690,13 +1690,13 @@ static void visit_intrinsic(struct lp_build_nir_context *bld_base,
    case nir_intrinsic_load_base_instance:
    case nir_intrinsic_load_base_vertex:
    case nir_intrinsic_load_first_vertex:
-   case nir_intrinsic_load_work_group_id:
+   case nir_intrinsic_load_workgroup_id:
    case nir_intrinsic_load_local_invocation_id:
-   case nir_intrinsic_load_num_work_groups:
+   case nir_intrinsic_load_num_workgroups:
    case nir_intrinsic_load_invocation_id:
    case nir_intrinsic_load_front_face:
    case nir_intrinsic_load_draw_id:
-   case nir_intrinsic_load_local_group_size:
+   case nir_intrinsic_load_workgroup_size:
    case nir_intrinsic_load_work_dim:
    case nir_intrinsic_load_tess_coord:
    case nir_intrinsic_load_tess_level_outer:

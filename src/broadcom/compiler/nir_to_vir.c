@@ -68,6 +68,39 @@
 #define V3D_TSY_DEC_SEMAPHORE       14
 #define V3D_TSY_SET_QUORUM_FREE_ALL 15
 
+enum v3d_tmu_op_type
+{
+        V3D_TMU_OP_TYPE_REGULAR,
+        V3D_TMU_OP_TYPE_ATOMIC,
+        V3D_TMU_OP_TYPE_CACHE
+};
+
+static enum v3d_tmu_op_type
+v3d_tmu_get_type_from_op(uint32_t tmu_op, bool is_write)
+{
+        switch(tmu_op) {
+        case V3D_TMU_OP_WRITE_ADD_READ_PREFETCH:
+        case V3D_TMU_OP_WRITE_SUB_READ_CLEAR:
+        case V3D_TMU_OP_WRITE_XCHG_READ_FLUSH:
+        case V3D_TMU_OP_WRITE_CMPXCHG_READ_FLUSH:
+        case V3D_TMU_OP_WRITE_UMIN_FULL_L1_CLEAR:
+                return is_write ? V3D_TMU_OP_TYPE_ATOMIC : V3D_TMU_OP_TYPE_CACHE;
+        case V3D_TMU_OP_WRITE_UMAX:
+        case V3D_TMU_OP_WRITE_SMIN:
+        case V3D_TMU_OP_WRITE_SMAX:
+                assert(is_write);
+                FALLTHROUGH;
+        case V3D_TMU_OP_WRITE_AND_READ_INC:
+        case V3D_TMU_OP_WRITE_OR_READ_DEC:
+        case V3D_TMU_OP_WRITE_XOR_READ_NOT:
+                return V3D_TMU_OP_TYPE_ATOMIC;
+        case V3D_TMU_OP_REGULAR:
+                return V3D_TMU_OP_TYPE_REGULAR;
+
+        default:
+                unreachable("Unknown tmu_op\n");
+        }
+}
 static void
 ntq_emit_cf_list(struct v3d_compile *c, struct exec_list *list);
 
@@ -567,11 +600,10 @@ ntq_emit_tmu_general(struct v3d_compile *c, nir_intrinsic_instr *instr,
                                                         &tmu_writes);
                 }
 
-                /* The spec says that for atomics, the TYPE field is
-                 * ignored, but that doesn't seem to be the case for
-                 * CMPXCHG.  Just use the number of tmud writes we did
-                 * to decide the type (or choose "32bit" for atomic
-                 * reads, which has been fine).
+                /* For atomics we use 32bit except for CMPXCHG, that we need
+                 * to use VEC2. For the rest of the cases we use the number of
+                 * tmud writes we did to decide the type. For cache operations
+                 * the type is ignored.
                  */
                 uint32_t config = 0;
                 if (mode == MODE_EMIT) {
@@ -582,6 +614,9 @@ ntq_emit_tmu_general(struct v3d_compile *c, nir_intrinsic_instr *instr,
                                 assert(tmu_writes > 0);
                                 num_components = tmu_writes - 1;
                         }
+                        bool is_atomic =
+                                v3d_tmu_get_type_from_op(tmu_op, !is_load) ==
+                                V3D_TMU_OP_TYPE_ATOMIC;
 
                         uint32_t perquad =
                                 is_load && !vir_in_nonuniform_control_flow(c)
@@ -589,7 +624,9 @@ ntq_emit_tmu_general(struct v3d_compile *c, nir_intrinsic_instr *instr,
                                 : GENERAL_TMU_LOOKUP_PER_PIXEL;
                         config = 0xffffff00 | tmu_op << 3 | perquad;
 
-                        if (num_components == 1) {
+                        if (tmu_op == V3D_TMU_OP_WRITE_CMPXCHG_READ_FLUSH) {
+                                config |= GENERAL_TMU_LOOKUP_TYPE_VEC2;
+                        } else if (is_atomic || num_components == 1) {
                                 config |= GENERAL_TMU_LOOKUP_TYPE_32BIT_UI;
                         } else {
                                 config |= GENERAL_TMU_LOOKUP_TYPE_VEC2 +
@@ -1193,6 +1230,18 @@ out:
         return V3D_QPU_COND_IFNA;
 }
 
+static struct qreg
+ntq_emit_cond_to_bool(struct v3d_compile *c, enum v3d_qpu_cond cond)
+{
+        struct qreg result =
+                vir_MOV(c, vir_SEL(c, cond,
+                                   vir_uniform_ui(c, ~0),
+                                   vir_uniform_ui(c, 0)));
+        c->flags_temp = result.index;
+        c->flags_cond = cond;
+        return result;
+}
+
 static void
 ntq_emit_alu(struct v3d_compile *c, nir_alu_instr *instr)
 {
@@ -1356,11 +1405,7 @@ ntq_emit_alu(struct v3d_compile *c, nir_alu_instr *instr)
                 enum v3d_qpu_cond cond;
                 ASSERTED bool ok = ntq_emit_comparison(c, instr, &cond);
                 assert(ok);
-                result = vir_MOV(c, vir_SEL(c, cond,
-                                            vir_uniform_ui(c, ~0),
-                                            vir_uniform_ui(c, 0)));
-                c->flags_temp = result.index;
-                c->flags_cond = cond;
+                result = ntq_emit_cond_to_bool(c, cond);
                 break;
         }
 
@@ -1440,11 +1485,7 @@ ntq_emit_alu(struct v3d_compile *c, nir_alu_instr *instr)
         case nir_op_uadd_carry:
                 vir_set_pf(c, vir_ADD_dest(c, vir_nop_reg(), src[0], src[1]),
                            V3D_QPU_PF_PUSHC);
-                result = vir_MOV(c, vir_SEL(c, V3D_QPU_COND_IFA,
-                                            vir_uniform_ui(c, ~0),
-                                            vir_uniform_ui(c, 0)));
-                c->flags_temp = result.index;
-                c->flags_cond = V3D_QPU_COND_IFA;
+                result = ntq_emit_cond_to_bool(c, V3D_QPU_COND_IFA);
                 break;
 
         case nir_op_pack_half_2x16_split:
@@ -1853,15 +1894,11 @@ v3d_optimize_nir(struct v3d_compile *c, struct nir_shader *s)
 }
 
 static int
-driver_location_compare(const void *in_a, const void *in_b)
+driver_location_compare(const nir_variable *a, const nir_variable *b)
 {
-        const nir_variable *const *a = in_a;
-        const nir_variable *const *b = in_b;
-
-        if ((*a)->data.driver_location == (*b)->data.driver_location)
-                return (*a)->data.location_frac - (*b)->data.location_frac;
-
-        return (*a)->data.driver_location - (*b)->data.driver_location;
+        return a->data.driver_location == b->data.driver_location ?
+               a->data.location_frac - b->data.location_frac :
+               a->data.driver_location - b->data.driver_location;
 }
 
 static struct qreg
@@ -2001,38 +2038,12 @@ program_reads_point_coord(struct v3d_compile *c)
 }
 
 static void
-get_sorted_input_variables(struct v3d_compile *c,
-                           unsigned *num_entries,
-                           nir_variable ***vars)
-{
-        *num_entries = 0;
-        nir_foreach_shader_in_variable(var, c->s)
-                (*num_entries)++;
-
-        *vars = ralloc_array(c, nir_variable *, *num_entries);
-
-        unsigned i = 0;
-        nir_foreach_shader_in_variable(var, c->s)
-                (*vars)[i++] = var;
-
-        /* Sort the variables so that we emit the input setup in
-         * driver_location order.  This is required for VPM reads, whose data
-         * is fetched into the VPM in driver_location (TGSI register index)
-         * order.
-         */
-        qsort(*vars, *num_entries, sizeof(**vars), driver_location_compare);
-}
-
-static void
 ntq_setup_gs_inputs(struct v3d_compile *c)
 {
-        nir_variable **vars;
-        unsigned num_entries;
-        get_sorted_input_variables(c, &num_entries, &vars);
+        nir_sort_variables_with_modes(c->s, driver_location_compare,
+                                      nir_var_shader_in);
 
-        for (unsigned i = 0; i < num_entries; i++) {
-                nir_variable *var = vars[i];
-
+        nir_foreach_shader_in_variable(var, c->s) {
                 /* All GS inputs are arrays with as many entries as vertices
                  * in the input primitive, but here we only care about the
                  * per-vertex input type.
@@ -2061,12 +2072,10 @@ ntq_setup_gs_inputs(struct v3d_compile *c)
 static void
 ntq_setup_fs_inputs(struct v3d_compile *c)
 {
-        nir_variable **vars;
-        unsigned num_entries;
-        get_sorted_input_variables(c, &num_entries, &vars);
+        nir_sort_variables_with_modes(c->s, driver_location_compare,
+                                      nir_var_shader_in);
 
-        for (unsigned i = 0; i < num_entries; i++) {
-                nir_variable *var = vars[i];
+        nir_foreach_shader_in_variable(var, c->s) {
                 unsigned var_len = glsl_count_vec4_slots(var->type, false, false);
                 unsigned loc = var->data.driver_location;
 
@@ -2736,6 +2745,41 @@ ntq_emit_load_ubo_unifa(struct v3d_compile *c, nir_intrinsic_instr *instr)
         }
 }
 
+static inline struct qreg
+emit_load_local_invocation_index(struct v3d_compile *c)
+{
+        return vir_SHR(c, c->cs_payload[1],
+                       vir_uniform_ui(c, 32 - c->local_invocation_index_bits));
+}
+
+/* Various subgroup operations rely on the A flags, so this helper ensures that
+ * A flags represents currently active lanes in the subgroup.
+ */
+static void
+set_a_flags_for_subgroup(struct v3d_compile *c)
+{
+        /* MSF returns 0 for disabled lanes in compute shaders so
+         * PUSHZ will set A=1 for disabled lanes. We want the inverse
+         * of this but we don't have any means to negate the A flags
+         * directly, but we can do it by repeating the same operation
+         * with NORZ (A = ~A & ~Z).
+         */
+        assert(c->s->info.stage == MESA_SHADER_COMPUTE);
+        vir_set_pf(c, vir_MSF_dest(c, vir_nop_reg()), V3D_QPU_PF_PUSHZ);
+        vir_set_uf(c, vir_MSF_dest(c, vir_nop_reg()), V3D_QPU_UF_NORZ);
+
+        /* If we are under non-uniform control flow we also need to
+         * AND the A flags with the current execute mask.
+         */
+        if (vir_in_nonuniform_control_flow(c)) {
+                const uint32_t bidx = c->cur_block->index;
+                vir_set_uf(c, vir_XOR_dest(c, vir_nop_reg(),
+                                           c->execute,
+                                           vir_uniform_ui(c, bidx)),
+                           V3D_QPU_UF_ANDZ);
+        }
+}
+
 static void
 ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
 {
@@ -2801,7 +2845,7 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
         case nir_intrinsic_get_ssbo_size:
                 ntq_store_dest(c, &instr->dest, 0,
                                vir_uniform(c, QUNIFORM_GET_SSBO_SIZE,
-                                           nir_src_as_uint(instr->src[0])));
+                                           nir_src_comp_as_uint(instr->src[0], 0)));
                 break;
 
         case nir_intrinsic_get_ubo_size:
@@ -2859,11 +2903,7 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
 
         case nir_intrinsic_load_helper_invocation:
                 vir_set_pf(c, vir_MSF_dest(c, vir_nop_reg()), V3D_QPU_PF_PUSHZ);
-                struct qreg qdest = vir_MOV(c, vir_SEL(c, V3D_QPU_COND_IFA,
-                                                       vir_uniform_ui(c, ~0),
-                                                       vir_uniform_ui(c, 0)));
-                c->flags_temp = qdest.index;
-                c->flags_cond = V3D_QPU_COND_IFA;
+                struct qreg qdest = ntq_emit_cond_to_bool(c, V3D_QPU_COND_IFA);
                 ntq_store_dest(c, &instr->dest, 0, qdest);
                 break;
 
@@ -2989,7 +3029,7 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
                 vir_emit_thrsw(c);
                 break;
 
-        case nir_intrinsic_load_num_work_groups:
+        case nir_intrinsic_load_num_workgroups:
                 for (int i = 0; i < 3; i++) {
                         ntq_store_dest(c, &instr->dest, i,
                                        vir_uniform(c, QUNIFORM_NUM_WORK_GROUPS,
@@ -2997,13 +3037,7 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
                 }
                 break;
 
-        case nir_intrinsic_load_local_invocation_index:
-                ntq_store_dest(c, &instr->dest, 0,
-                               vir_SHR(c, c->cs_payload[1],
-                                       vir_uniform_ui(c, 32 - c->local_invocation_index_bits)));
-                break;
-
-        case nir_intrinsic_load_work_group_id: {
+        case nir_intrinsic_load_workgroup_id: {
                 struct qreg x = vir_AND(c, c->cs_payload[0],
                                          vir_uniform_ui(c, 0xffff));
 
@@ -3029,9 +3063,23 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
                 break;
         }
 
-        case nir_intrinsic_load_subgroup_id:
-                ntq_store_dest(c, &instr->dest, 0, vir_EIDX(c));
+        case nir_intrinsic_load_local_invocation_index:
+                ntq_store_dest(c, &instr->dest, 0,
+                               emit_load_local_invocation_index(c));
                 break;
+
+        case nir_intrinsic_load_subgroup_id: {
+                /* This is basically the batch index, which is the Local
+                 * Invocation Index divided by the SIMD width).
+                 */
+                STATIC_ASSERT(util_is_power_of_two_nonzero(V3D_CHANNELS));
+                const uint32_t divide_shift = ffs(V3D_CHANNELS) - 1;
+                struct qreg lii = emit_load_local_invocation_index(c);
+                ntq_store_dest(c, &instr->dest, 0,
+                               vir_SHR(c, lii,
+                                       vir_uniform_ui(c, divide_shift)));
+                break;
+        }
 
         case nir_intrinsic_load_per_vertex_input: {
                 /* The vertex shader writes all its used outputs into
@@ -3188,6 +3236,32 @@ ntq_emit_intrinsic(struct v3d_compile *c, nir_intrinsic_instr *instr)
                 }
                 break;
         }
+
+        case nir_intrinsic_load_subgroup_size:
+                ntq_store_dest(c, &instr->dest, 0,
+                               vir_uniform_ui(c, V3D_CHANNELS));
+                break;
+
+        case nir_intrinsic_load_subgroup_invocation:
+                ntq_store_dest(c, &instr->dest, 0, vir_EIDX(c));
+                break;
+
+        case nir_intrinsic_elect: {
+                set_a_flags_for_subgroup(c);
+                struct qreg first = vir_FLAFIRST(c);
+
+                /* Produce a boolean result from Flafirst */
+                vir_set_pf(c, vir_XOR_dest(c, vir_nop_reg(),
+                                           first, vir_uniform_ui(c, 1)),
+                                           V3D_QPU_PF_PUSHZ);
+                struct qreg result = ntq_emit_cond_to_bool(c, V3D_QPU_COND_IFA);
+                ntq_store_dest(c, &instr->dest, 0, result);
+                break;
+        }
+
+        case nir_intrinsic_load_num_subgroups:
+                unreachable("Should have been lowered");
+                break;
 
         default:
                 fprintf(stderr, "Unknown intrinsic: ");
@@ -3707,9 +3781,9 @@ nir_to_vir(struct v3d_compile *c)
                 /* Set up the division between gl_LocalInvocationIndex and
                  * wg_in_mem in the payload reg.
                  */
-                int wg_size = (c->s->info.cs.local_size[0] *
-                               c->s->info.cs.local_size[1] *
-                               c->s->info.cs.local_size[2]);
+                int wg_size = (c->s->info.workgroup_size[0] *
+                               c->s->info.workgroup_size[1] *
+                               c->s->info.workgroup_size[2]);
                 c->local_invocation_index_bits =
                         ffs(util_next_power_of_two(MAX2(wg_size, 64))) - 1;
                 assert(c->local_invocation_index_bits <= 8);
@@ -3717,9 +3791,9 @@ nir_to_vir(struct v3d_compile *c)
                 if (c->s->info.shared_size) {
                         struct qreg wg_in_mem = vir_SHR(c, c->cs_payload[1],
                                                         vir_uniform_ui(c, 16));
-                        if (c->s->info.cs.local_size[0] != 1 ||
-                            c->s->info.cs.local_size[1] != 1 ||
-                            c->s->info.cs.local_size[2] != 1) {
+                        if (c->s->info.workgroup_size[0] != 1 ||
+                            c->s->info.workgroup_size[1] != 1 ||
+                            c->s->info.workgroup_size[2] != 1) {
                                 int wg_bits = (16 -
                                                c->local_invocation_index_bits);
                                 int wg_mask = (1 << wg_bits) - 1;

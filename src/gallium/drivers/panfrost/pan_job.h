@@ -76,6 +76,9 @@ struct panfrost_batch {
         unsigned minx, miny;
         unsigned maxx, maxy;
 
+        /* Acts as a rasterizer discard */
+        bool scissor_culls_everything;
+
         /* BOs referenced not in the pool */
         struct hash_table *bos;
 
@@ -122,6 +125,8 @@ struct panfrost_batch {
         mali_ptr samplers[PIPE_SHADER_TYPES];
         mali_ptr attribs[PIPE_SHADER_TYPES];
         mali_ptr attrib_bufs[PIPE_SHADER_TYPES];
+        mali_ptr uniform_buffers[PIPE_SHADER_TYPES];
+        mali_ptr push_uniforms[PIPE_SHADER_TYPES];
 };
 
 /* Functions for managing the above */
@@ -186,8 +191,5 @@ panfrost_batch_intersection_scissor(struct panfrost_batch *batch,
 
 mali_ptr
 panfrost_batch_get_bifrost_tiler(struct panfrost_batch *batch, unsigned vertex_count);
-
-mali_ptr
-panfrost_batch_reserve_tls(struct panfrost_batch *batch, bool compute);
 
 #endif

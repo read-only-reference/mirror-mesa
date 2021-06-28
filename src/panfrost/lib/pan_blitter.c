@@ -1145,7 +1145,7 @@ pan_preload_emit_midgard_tiler_job(struct pan_pool *desc_pool,
                                       MIDGARD_TILER_JOB,
                                       INVOCATION);
         panfrost_pack_work_groups_compute(invoc, 1, 4,
-                                          1, 1, 1, 1, true);
+                                          1, 1, 1, 1, true, false);
 
         panfrost_add_job(desc_pool, scoreboard, MALI_JOB_TYPE_TILER,
                          false, false, 0, 0, &job, true);
@@ -1180,7 +1180,7 @@ pan_blit_emit_midgard_tiler_job(struct pan_pool *desc_pool,
                                       MIDGARD_TILER_JOB,
                                       INVOCATION);
         panfrost_pack_work_groups_compute(invoc, 1, 4,
-                                          1, 1, 1, 1, true);
+                                          1, 1, 1, 1, true, false);
 
         panfrost_add_job(desc_pool, scoreboard, MALI_JOB_TYPE_TILER,
                          false, false, 0, 0, &job, false);
@@ -1216,7 +1216,7 @@ pan_blit_emit_bifrost_tiler_job(struct pan_pool *desc_pool,
                                       BIFROST_TILER_JOB,
                                       INVOCATION);
         panfrost_pack_work_groups_compute(invoc, 1, 4,
-                                          1, 1, 1, 1, true);
+                                          1, 1, 1, 1, true, false);
 
         pan_section_pack(job.cpu, BIFROST_TILER_JOB, PADDING, cfg);
         pan_section_pack(job.cpu, BIFROST_TILER_JOB, TILER, cfg) {
@@ -1248,13 +1248,12 @@ pan_preload_emit_bifrost_pre_frame_dcd(struct pan_pool *desc_pool,
         /* If CRC data is currently invalid and this batch will make it valid,
          * write even clean tiles to make sure CRC data is updated. */
         if (crc_rt >= 0) {
-                unsigned level = fb->rts[crc_rt].view->first_level;
-                bool valid = fb->rts[crc_rt].state->slices[level].crc_valid;
+                bool *valid = fb->rts[crc_rt].crc_valid;
                 bool full = !fb->extent.minx && !fb->extent.miny &&
                         fb->extent.maxx == (fb->width - 1) &&
                         fb->extent.maxy == (fb->height - 1);
 
-                if (full && !valid)
+                if (full && !(*valid))
                         always_write = true;
         }
 

@@ -156,7 +156,7 @@ cs_program_emit(struct fd_ringbuffer *ring, struct kernel *kernel)
    uint32_t local_invocation_id, work_group_id;
    local_invocation_id =
       ir3_find_sysval_regid(v, SYSTEM_VALUE_LOCAL_INVOCATION_ID);
-   work_group_id = ir3_find_sysval_regid(v, SYSTEM_VALUE_WORK_GROUP_ID);
+   work_group_id = ir3_find_sysval_regid(v, SYSTEM_VALUE_WORKGROUP_ID);
 
    OUT_PKT4(ring, REG_A6XX_HLSQ_CS_CNTL_0, 2);
    OUT_RING(ring, A6XX_HLSQ_CS_CNTL_0_WGIDCONSTID(work_group_id) |
@@ -230,6 +230,18 @@ cs_const_emit(struct fd_ringbuffer *ring, struct kernel *kernel,
       const_state->immediates[idx * 4 + 0] = grid[0];
       const_state->immediates[idx * 4 + 1] = grid[1];
       const_state->immediates[idx * 4 + 2] = grid[2];
+   }
+
+   for (int i = 0; i < MAX_BUFS; i++) {
+      if (kernel->buf_addr_regs[i] != INVALID_REG) {
+         assert((kernel->buf_addr_regs[i] & 0x3) == 0);
+         int idx = kernel->buf_addr_regs[i] >> 2;
+
+         uint64_t iova = fd_bo_get_iova(kernel->bufs[i]);
+
+         const_state->immediates[idx * 4 + 1] = iova >> 32;
+         const_state->immediates[idx * 4 + 0] = (iova << 32) >> 32;
+      }
    }
 
    /* truncate size to avoid writing constants that shader

@@ -549,10 +549,10 @@ enum v3d_compilation_result {
 struct v3d_compiler {
         const struct v3d_device_info *devinfo;
         struct ra_regs *regs;
-        unsigned int reg_class_any[3];
-        unsigned int reg_class_r5[3];
-        unsigned int reg_class_phys[3];
-        unsigned int reg_class_phys_or_acc[3];
+        struct ra_class *reg_class_any[3];
+        struct ra_class *reg_class_r5[3];
+        struct ra_class *reg_class_phys[3];
+        struct ra_class *reg_class_phys_or_acc[3];
 };
 
 /**
@@ -727,6 +727,9 @@ struct v3d_compile {
         struct qreg cs_payload[2];
         struct qreg cs_shared_offset;
         int local_invocation_index_bits;
+
+        /* If the shader uses subgroup functionality */
+        bool has_subgroups;
 
         uint8_t vattr_sizes[V3D_MAX_VS_INPUTS / 4];
         uint32_t vpm_output_size;
@@ -947,6 +950,8 @@ struct v3d_compute_prog_data {
         /* Size in bytes of the workgroup's shared space. */
         uint32_t shared_size;
         uint16_t local_size[3];
+        /* If the shader uses subgroup functionality */
+        bool has_subgroups;
 };
 
 static inline bool
@@ -1234,6 +1239,8 @@ VIR_A_ALU1(NEG)
 VIR_A_ALU1(FLAPUSH)
 VIR_A_ALU1(FLBPUSH)
 VIR_A_ALU1(FLPOP)
+VIR_A_ALU0(FLAFIRST)
+VIR_A_ALU0(FLNAFIRST)
 VIR_A_ALU1(SETMSF)
 VIR_A_ALU1(SETREVF)
 VIR_A_ALU0(TIDX)

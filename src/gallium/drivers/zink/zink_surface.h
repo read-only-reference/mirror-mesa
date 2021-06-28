@@ -37,8 +37,9 @@ struct zink_surface {
    VkImageView simage_view;//old iview after storage replacement/rebind
    void *obj; //backing resource object
    uint32_t hash;
-   struct zink_batch_usage batch_uses;
+   struct zink_batch_usage *batch_uses;
    struct util_dynarray framebuffer_refs;
+   struct zink_descriptor_refs desc_set_refs;
 };
 
 static inline struct zink_surface *
@@ -99,4 +100,7 @@ zink_surface_clamp_viewtype(VkImageViewType viewType, unsigned first_layer, unsi
 
 bool
 zink_rebind_surface(struct zink_context *ctx, struct pipe_surface **psurface);
+
+struct pipe_surface *
+zink_surface_create_null(struct zink_context *ctx, enum pipe_texture_target target, unsigned width, unsigned height, unsigned samples);
 #endif

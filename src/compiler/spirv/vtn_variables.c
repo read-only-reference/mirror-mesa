@@ -914,16 +914,16 @@ vtn_get_builtin_location(struct vtn_builder *b,
       set_mode_system_value(b, mode);
       break;
    case SpvBuiltInNumWorkgroups:
-      *location = SYSTEM_VALUE_NUM_WORK_GROUPS;
+      *location = SYSTEM_VALUE_NUM_WORKGROUPS;
       set_mode_system_value(b, mode);
       break;
    case SpvBuiltInWorkgroupSize:
    case SpvBuiltInEnqueuedWorkgroupSize:
-      *location = SYSTEM_VALUE_LOCAL_GROUP_SIZE;
+      *location = SYSTEM_VALUE_WORKGROUP_SIZE;
       set_mode_system_value(b, mode);
       break;
    case SpvBuiltInWorkgroupId:
-      *location = SYSTEM_VALUE_WORK_GROUP_ID;
+      *location = SYSTEM_VALUE_WORKGROUP_ID;
       set_mode_system_value(b, mode);
       break;
    case SpvBuiltInLocalInvocationId:
@@ -1831,6 +1831,8 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
    case vtn_variable_mode_ubo:
    case vtn_variable_mode_ssbo:
    case vtn_variable_mode_push_constant:
+   case vtn_variable_mode_accel_struct:
+   case vtn_variable_mode_shader_record:
       var->var = rzalloc(b->shader, nir_variable);
       var->var->name = ralloc_strdup(var->var, val->name);
 
@@ -1935,11 +1937,6 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
       break;
    }
 
-   case vtn_variable_mode_accel_struct:
-   case vtn_variable_mode_shader_record:
-      /* These don't need actual variables. */
-      break;
-
    case vtn_variable_mode_image:
    case vtn_variable_mode_phys_ssbo:
    case vtn_variable_mode_generic:
@@ -1960,7 +1957,7 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
                      "as initializer, but have %u instead",
                      vtn_id_for_value(b, val),
                      vtn_id_for_value(b, initializer));
-         b->shader->info.cs.zero_initialize_shared_memory = true;
+         b->shader->info.zero_initialize_shared_memory = true;
          break;
 
       case SpvStorageClassUniformConstant:

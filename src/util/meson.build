@@ -79,6 +79,8 @@ files_mesa_util = files(
   'os_socket.h',
   'u_process.c',
   'u_process.h',
+  'u_qsort.cpp',
+  'u_qsort.h',
   'rwlock.h',
   'sha1/sha1.c',
   'sha1/sha1.h',
@@ -342,28 +344,18 @@ if with_tests
     )
   endif
 
-  test(
-    'bitset',
-    executable(
-       'bitset_test',
-       files('bitset_test.cpp'),
-       include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-       dependencies : [idep_mesautil, idep_gtest],
-     ),
-     suite : ['util'],
-  )
-
-  test(
-    'u_debug_stack',
-    executable(
-      'u_debug_stack_test',
-      files('u_debug_stack_test.cpp'),
-      include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
-      dependencies : [idep_mesautil, idep_gtest],
-      c_args : [c_msvc_compat_args],
-    ),
-     suite : ['util'],
-  )
+  foreach t: ['bitset', 'register_allocate', 'u_debug_stack', 'u_qsort']
+    test(
+      t,
+      executable(
+        t + '_test',
+        files(t + '_test.cpp'),
+        include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+        dependencies : [idep_mesautil, idep_gtest],
+      ),
+      suite : ['util'],
+    )
+  endforeach
 
   process_test_exe = executable(
     'process_test',

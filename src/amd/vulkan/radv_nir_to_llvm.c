@@ -2935,7 +2935,7 @@ radv_nir_get_max_workgroup_size(enum chip_class chip_class, gl_shader_stage stag
    const unsigned backup_sizes[] = {chip_class >= GFX9 ? 128 : 64, 1, 1};
    unsigned sizes[3];
    for (unsigned i = 0; i < 3; i++)
-      sizes[i] = nir ? nir->info.cs.local_size[i] : backup_sizes[i];
+      sizes[i] = nir ? nir->info.workgroup_size[i] : backup_sizes[i];
    return radv_get_max_workgroup_size(chip_class, stage, sizes);
 }
 
@@ -3077,6 +3077,10 @@ ac_translate_nir_to_llvm(struct ac_llvm_compiler *ac_llvm, struct nir_shader *co
          LLVMSetInitializer(ctx.gs_ngg_scratch, LLVMGetUndef(asi32));
          LLVMSetAlignment(ctx.gs_ngg_scratch, 4);
       }
+
+      /* GFX10 hang workaround - there needs to be an s_barrier before gs_alloc_req always */
+      if (ctx.ac.chip_class == GFX10 && shader_count == 1)
+         ac_build_s_barrier(&ctx.ac);
    }
 
    for (int shader_idx = 0; shader_idx < shader_count; ++shader_idx) {

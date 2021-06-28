@@ -1276,23 +1276,23 @@ ntq_emit_alu(struct vc4_compile *c, nir_alu_instr *instr)
                 result = ntq_emit_ubfe(c, src[0], src[1], src[2]);
                 break;
 
-        case nir_op_usadd_4x8:
+        case nir_op_usadd_4x8_vc4:
                 result = qir_V8ADDS(c, src[0], src[1]);
                 break;
 
-        case nir_op_ussub_4x8:
+        case nir_op_ussub_4x8_vc4:
                 result = qir_V8SUBS(c, src[0], src[1]);
                 break;
 
-        case nir_op_umin_4x8:
+        case nir_op_umin_4x8_vc4:
                 result = qir_V8MIN(c, src[0], src[1]);
                 break;
 
-        case nir_op_umax_4x8:
+        case nir_op_umax_4x8_vc4:
                 result = qir_V8MAX(c, src[0], src[1]);
                 break;
 
-        case nir_op_umul_unorm_4x8:
+        case nir_op_umul_unorm_4x8_vc4:
                 result = qir_V8MULD(c, src[0], src[1]);
                 break;
 
@@ -2173,6 +2173,8 @@ static const nir_shader_compiler_options nir_options = {
         .lower_all_io_to_temps = true,
         .lower_extract_byte = true,
         .lower_extract_word = true,
+        .lower_insert_byte = true,
+        .lower_insert_word = true,
         .lower_fdiv = true,
         .lower_ffma16 = true,
         .lower_ffma32 = true,

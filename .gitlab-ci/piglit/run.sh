@@ -3,6 +3,7 @@
 set -ex
 
 INSTALL=$(realpath -s "$PWD"/install)
+MINIO_ARGS="--credentials=/tmp/.minio_credentials"
 
 RESULTS=$(realpath -s "$PWD"/results)
 mkdir -p "$RESULTS"
@@ -55,6 +56,8 @@ if [ "$VK_DRIVER" ]; then
 
     SANITY_MESA_VERSION_CMD="vulkaninfo"
 
+    HANG_DETECTION_CMD="/parallel-deqp-runner/build/bin/hang-detection"
+
 
     # Set up the Window System Interface (WSI)
 
@@ -84,6 +87,8 @@ else
     fi
 
     SANITY_MESA_VERSION_CMD="wflinfo"
+
+    HANG_DETECTION_CMD=""
 
 
     # Set up the platform windowing system.
@@ -147,13 +152,13 @@ replay_minio_upload_images() {
             if [ "x$CI_PROJECT_PATH" != "x$FDO_UPSTREAM_REPO" ]; then
                 continue
             fi
-            __MINIO_PATH="$PIGLIT_REPLAY_REFERENCE_IMAGES_BASE_URL"
+            __MINIO_PATH="$PIGLIT_REPLAY_REFERENCE_IMAGES_BASE"
             __DESTINATION_FILE_PATH="${line##*-}"
-            if wget -q --method=HEAD "${MINIO_HOST}${__MINIO_PATH}/${__DESTINATION_FILE_PATH}" 2>/dev/null; then
+            if wget -q --method=HEAD "https://${__MINIO_PATH}/${__DESTINATION_FILE_PATH}" 2>/dev/null; then
                 continue
             fi
         else
-            __MINIO_PATH="$PIGLIT_REPLAY_ARTIFACTS_BASE_URL"
+            __MINIO_PATH="$JOB_ARTIFACTS_BASE"
             __DESTINATION_FILE_PATH="$__MINIO_TRACES_PREFIX/${line##*-}"
             # Adding to the JUnit the direct link to the diff page in
             # the dashboard
@@ -169,8 +174,8 @@ replay_minio_upload_images() {
                 -i "$RESULTS"/junit.xml
         fi
 
-        ci-fairy minio cp "$RESULTS/$__PREFIX/$line" \
-            "minio://${MINIO_HOST}${__MINIO_PATH}/${__DESTINATION_FILE_PATH}"
+        ci-fairy minio cp $MINIO_ARGS "$RESULTS/$__PREFIX/$line" \
+            "minio://${__MINIO_PATH}/${__DESTINATION_FILE_PATH}"
     done
 }
 
@@ -199,7 +204,7 @@ PIGLIT_TESTS=$(printf "%s" "$PIGLIT_TESTS")
 
 PIGLIT_CMD="./piglit run --timeout 300 -j${FDO_CI_CONCURRENT:-4} $PIGLIT_OPTIONS $PIGLIT_TESTS $PIGLIT_PROFILES "$(/usr/bin/printf "%q" "$RESULTS")
 
-RUN_CMD="export LD_LIBRARY_PATH=$__LD_LIBRARY_PATH; $SANITY_MESA_VERSION_CMD && $PIGLIT_CMD"
+RUN_CMD="export LD_LIBRARY_PATH=$__LD_LIBRARY_PATH; $SANITY_MESA_VERSION_CMD && $HANG_DETECTION_CMD $PIGLIT_CMD"
 
 if [ "$RUN_CMD_WRAPPER" ]; then
     RUN_CMD="set +e; $RUN_CMD_WRAPPER "$(/usr/bin/printf "%q" "$RUN_CMD")"; set -e"
@@ -232,7 +237,7 @@ mkdir -p .gitlab-ci/piglit
 if [ "x$PIGLIT_PROFILES" = "xreplay" ] \
        && [ ${PIGLIT_REPLAY_UPLOAD_TO_MINIO:-0} -eq 1 ]; then
 
-    ci-fairy minio login $CI_JOB_JWT
+    ci-fairy minio login $MINIO_ARGS $CI_JOB_JWT
 
     __PREFIX="trace/$PIGLIT_REPLAY_DEVICE_NAME"
     __MINIO_PATH="$PIGLIT_REPLAY_ARTIFACTS_BASE_URL"
@@ -267,9 +272,9 @@ fi
 
 if [ "x$PIGLIT_PROFILES" = "xreplay" ]; then
 find "$RESULTS"/summary -type f -name "*.html" -print0 \
-        | xargs -0 sed -i 's%<img src="file://'"${RESULTS}"'.*-\([0-9a-f]*\)\.png%<img src="https://'"${MINIO_HOST}${PIGLIT_REPLAY_ARTIFACTS_BASE_URL}"'/traces/\1.png%g'
+        | xargs -0 sed -i 's%<img src="file://'"${RESULTS}"'.*-\([0-9a-f]*\)\.png%<img src="https://'"${JOB_ARTIFACTS_BASE}"'/traces/\1.png%g'
 find "$RESULTS"/summary -type f -name "*.html" -print0 \
-        | xargs -0 sed -i 's%<img src="file://%<img src="https://'"${MINIO_HOST}${PIGLIT_REPLAY_REFERENCE_IMAGES_BASE_URL}"'/%g'
+        | xargs -0 sed -i 's%<img src="file://%<img src="https://'"${PIGLIT_REPLAY_REFERENCE_IMAGES_BASE}"'/%g'
 fi
 
 FAILURE_MESSAGE=$(printf "${FAILURE_MESSAGE}\n%s" "Check the HTML summary for problems at: ${ARTIFACTS_BASE_URL}/results/summary/problems.html")

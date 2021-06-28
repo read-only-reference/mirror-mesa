@@ -184,8 +184,15 @@ index("bool", "image_array")
 # Image format for image intrinsics
 index("enum pipe_format", "format")
 
-# Access qualifiers for image and memory access intrinsics
+# Access qualifiers for image and memory access intrinsics. ACCESS_RESTRICT is
+# not set at the intrinsic if the NIR was created from SPIR-V.
 index("enum gl_access_qualifier", "access")
+
+# call index for split raytracing shaders
+index("unsigned", "call_idx")
+
+# The stack size increment/decrement for split raytracing shaders
+index("unsigned", "stack_size")
 
 # Alignment for offsets and addresses
 #
@@ -428,7 +435,12 @@ intrinsic("masked_swizzle_amd", src_comp=[0], dest_comp=0, bit_sizes=src0,
           indices=[SWIZZLE_MASK], flags=[CAN_ELIMINATE])
 intrinsic("write_invocation_amd", src_comp=[0, 0, 1], dest_comp=0, bit_sizes=src0,
           flags=[CAN_ELIMINATE])
-intrinsic("mbcnt_amd", src_comp=[1], dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE])
+# src = [ mask, addition ]
+intrinsic("mbcnt_amd", src_comp=[1, 1], dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE])
+# Compiled to v_perm_b32. src = [ in_bytes_hi, in_bytes_lo, selector ]
+intrinsic("byte_permute_amd", src_comp=[1, 1, 1], dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
+# Compiled to v_permlane16_b32. src = [ value, lanesel_lo, lanesel_hi ]
+intrinsic("lane_permute_16_amd", src_comp=[1, 1, 1], dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE])
 
 # Basic Geometry Shader intrinsics.
 #
@@ -475,6 +487,27 @@ intrinsic("accept_ray_intersection") # Not in SPIR-V; useful for lowering
 intrinsic("terminate_ray")
 # src[] = { sbt_index, payload }
 intrinsic("execute_callable", src_comp=[1, -1])
+
+# Driver independent raytracing helpers
+
+# rt_resume is a helper that that be the first instruction accesing the
+# stack/scratch in a resume shader for a raytracing pipeline. It includes the
+# resume index (for nir_lower_shader_calls_internal reasons) and the stack size
+# of the variables spilled during the call. The stack size can be use to e.g.
+# adjust a stack pointer.
+intrinsic("rt_resume", indices=[CALL_IDX, STACK_SIZE])
+
+# Lowered version of execute_callabe that includes the index of the resume
+# shader, and the amount of scratch space needed for this call (.ie. how much
+# to increase a stack pointer by).
+# src[] = { sbt_index, payload }
+intrinsic("rt_execute_callable", src_comp=[1, -1], indices=[CALL_IDX,STACK_SIZE])
+
+# Lowered version of trace_ray in a similar vein to rt_execute_callable.
+# src same as trace_ray
+intrinsic("rt_trace_ray", src_comp=[-1, 1, 1, 1, 1, 1, 3, 1, 3, 1, -1],
+          indices=[CALL_IDX, STACK_SIZE])
+
 
 # Atomic counters
 #
@@ -685,11 +718,11 @@ system_value("local_invocation_id", 3)
 system_value("local_invocation_index", 1)
 # zero_base indicates it starts from 0 for the current dispatch
 # non-zero_base indicates the base is included
-system_value("work_group_id", 3, bit_sizes=[32, 64])
-system_value("work_group_id_zero_base", 3)
-system_value("base_work_group_id", 3, bit_sizes=[32, 64])
+system_value("workgroup_id", 3, bit_sizes=[32, 64])
+system_value("workgroup_id_zero_base", 3)
+system_value("base_workgroup_id", 3, bit_sizes=[32, 64])
 system_value("user_clip_plane", 4, indices=[UCP_ID])
-system_value("num_work_groups", 3, bit_sizes=[32, 64])
+system_value("num_workgroups", 3, bit_sizes=[32, 64])
 system_value("helper_invocation", 1, bit_sizes=[1, 32])
 system_value("layer_id", 1)
 system_value("view_index", 1)
@@ -702,10 +735,10 @@ system_value("subgroup_le_mask", 0, bit_sizes=[32, 64])
 system_value("subgroup_lt_mask", 0, bit_sizes=[32, 64])
 system_value("num_subgroups", 1)
 system_value("subgroup_id", 1)
-system_value("local_group_size", 3)
+system_value("workgroup_size", 3)
 # note: the definition of global_invocation_id_zero_base is based on
-# (work_group_id * local_group_size) + local_invocation_id.
-# it is *not* based on work_group_id_zero_base, meaning the work group
+# (workgroup_id * workgroup_size) + local_invocation_id.
+# it is *not* based on workgroup_id_zero_base, meaning the work group
 # base is already accounted for, and the global base is additive on top of that
 system_value("global_invocation_id", 3, bit_sizes=[32, 64])
 system_value("global_invocation_id_zero_base", 3, bit_sizes=[32, 64])
@@ -1183,6 +1216,9 @@ store("tlb_sample_color_v3d", [1], [BASE, COMPONENT, SRC_TYPE], [])
 # the target framebuffer
 intrinsic("load_fb_layers_v3d", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
 
+# Logical complement of load_front_face, mapping to an AGX system value
+system_value("back_face_agx", 1, bit_sizes=[1, 32])
+
 # Intel-specific query for loading from the brw_image_param struct passed
 # into the shader as a uniform.  The variable is a deref to the image
 # variable. The const index specifies which of the six parameters to load.
@@ -1244,9 +1280,7 @@ system_value("btd_resume_sbt_addr_intel", 1, bit_sizes=[64])
 # src[] = { global_arg_addr, btd_record }
 intrinsic("btd_spawn_intel", src_comp=[1, 1])
 # RANGE=stack_size
-intrinsic("btd_stack_push_intel", indices=[RANGE])
-# BASE=call_idx RANGE=stack_size
-intrinsic("btd_resume_intel", indices=[BASE, RANGE])
+intrinsic("btd_stack_push_intel", indices=[STACK_SIZE])
 # src[] = { }
 intrinsic("btd_retire_intel")
 

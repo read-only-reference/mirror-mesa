@@ -263,7 +263,8 @@ panfrost_fs_required(
                 struct panfrost_blend_state *blend,
                 struct pipe_framebuffer_state *state)
 {
-        /* If we generally have side effects */
+        /* If we generally have side effects. This inclues use of discard,
+         * which can affect the results of an occlusion query. */
         if (fs->info.fs.sidefx)
                 return true;
 
@@ -291,7 +292,7 @@ panfrost_emit_bifrost_blend(struct panfrost_batch *batch,
         /* Always have at least one render target for depth-only passes */
         for (unsigned i = 0; i < MAX2(rt_count, 1); ++i) {
                 /* Disable blending for unbacked render targets */
-                if (rt_count == 0 || !batch->key.cbufs[i]) {
+                if (rt_count == 0 || !batch->key.cbufs[i] || so->info[i].no_colour) {
                         pan_pack(rts + i * MALI_BLEND_LENGTH, BLEND, cfg) {
                                 cfg.enable = false;
                                 cfg.bifrost.internal.mode = MALI_BIFROST_BLEND_MODE_OFF;
@@ -322,16 +323,10 @@ panfrost_emit_bifrost_blend(struct panfrost_batch *batch,
 
                 /* Word 0: Flags and constant */
                 pan_pack(packed, BLEND, cfg) {
-                        if (info.no_colour) {
-                                cfg.enable = false;
-                        } else {
-                                cfg.srgb = util_format_is_srgb(batch->key.cbufs[i]->format);
-                                cfg.load_destination = info.load_dest;
-
-                                cfg.round_to_fb_precision = !ctx->blend->base.dither;
-                                cfg.alpha_to_one = ctx->blend->base.alpha_to_one;
-                        }
-
+                        cfg.srgb = util_format_is_srgb(batch->key.cbufs[i]->format);
+                        cfg.load_destination = info.load_dest;
+                        cfg.round_to_fb_precision = !ctx->blend->base.dither;
+                        cfg.alpha_to_one = ctx->blend->base.alpha_to_one;
                         cfg.bifrost.constant = constant;
                 }
 
@@ -393,15 +388,9 @@ panfrost_emit_midgard_blend(struct panfrost_batch *batch,
                 struct mali_blend_packed *packed = rts + (i * MALI_BLEND_LENGTH);
 
                 /* Disable blending for unbacked render targets */
-                if (rt_count == 0 || !batch->key.cbufs[i]) {
+                if (rt_count == 0 || !batch->key.cbufs[i] || so->info[i].no_colour) {
                         pan_pack(packed, BLEND, cfg) {
-                                cfg.midgard.equation.color_mask = 0xf;
-                                cfg.midgard.equation.rgb.a = MALI_BLEND_OPERAND_A_SRC;
-                                cfg.midgard.equation.rgb.b = MALI_BLEND_OPERAND_B_SRC;
-                                cfg.midgard.equation.rgb.c = MALI_BLEND_OPERAND_C_ZERO;
-                                cfg.midgard.equation.alpha.a = MALI_BLEND_OPERAND_A_SRC;
-                                cfg.midgard.equation.alpha.b = MALI_BLEND_OPERAND_B_SRC;
-                                cfg.midgard.equation.alpha.c = MALI_BLEND_OPERAND_C_ZERO;
+                                cfg.enable = false;
                         }
 
                         continue;
@@ -409,11 +398,6 @@ panfrost_emit_midgard_blend(struct panfrost_batch *batch,
 
                 pan_pack(packed, BLEND, cfg) {
                         struct pan_blend_info info = so->info[i];
-
-                        if (info.no_colour) {
-                                cfg.enable = false;
-                                continue;
-                        }
 
                         cfg.srgb = util_format_is_srgb(batch->key.cbufs[i]->format);
                         cfg.load_destination = info.load_dest;
@@ -541,14 +525,16 @@ panfrost_prepare_fs_state(struct panfrost_context *ctx,
                                 else
                                         cfg.properties.midgard.work_register_count = fs->info.work_reg_count;
 
-                                /* Workaround a hardware errata where early-z cannot be enabled
-                                 * when discarding even when the depth buffer is read-only, by
-                                 * lying to the hardware about the discard and setting the
-                                 * reads tilebuffer? flag to compensate */
+                                /* Hardware quirks around early-zs forcing
+                                 * without a depth buffer. Note this breaks
+                                 * occlusion queries. */
+                                bool has_oq = ctx->occlusion_query && ctx->active_queries;
+                                bool force_ez_with_discard = !zsa->enabled && !has_oq;
+
                                 cfg.properties.midgard.shader_reads_tilebuffer =
-                                        !zsa->enabled && fs->info.fs.can_discard;
+                                        force_ez_with_discard && fs->info.fs.can_discard;
                                 cfg.properties.midgard.shader_contains_discard =
-                                        zsa->enabled && fs->info.fs.can_discard;
+                                        !force_ez_with_discard && fs->info.fs.can_discard;
                         }
 
                         if (dev->quirks & MIDGARD_SFBD && rt_count > 0) {
@@ -770,6 +756,8 @@ panfrost_emit_viewport(struct panfrost_batch *batch)
         }
 
         panfrost_batch_union_scissor(batch, minx, miny, maxx, maxy);
+        batch->scissor_culls_everything = (minx >= maxx || miny >= maxy);
+
         return T.gpu;
 }
 
@@ -915,11 +903,15 @@ panfrost_upload_ssbo_sysval(struct panfrost_batch *batch,
         struct pipe_shader_buffer sb = ctx->ssbo[st][ssbo_id];
 
         /* Compute address */
-        struct panfrost_bo *bo = pan_resource(sb.buffer)->image.data.bo;
+        struct panfrost_resource *rsrc = pan_resource(sb.buffer);
+        struct panfrost_bo *bo = rsrc->image.data.bo;
 
         panfrost_batch_add_bo(batch, bo,
                               PAN_BO_ACCESS_SHARED | PAN_BO_ACCESS_RW |
                               panfrost_bo_access_for_stage(st));
+
+        util_range_add(&rsrc->base, &rsrc->valid_buffer_range,
+                        sb.buffer_offset, sb.buffer_size);
 
         /* Upload address and size as sysval */
         uniform->du[0] = bo->ptr.gpu + sb.buffer_offset;
@@ -1019,6 +1011,61 @@ panfrost_upload_rt_conversion_sysval(struct panfrost_batch *batch,
                 pan_pack(&uniform->u[0], BIFROST_INTERNAL_CONVERSION, cfg)
                         cfg.memory_format = dev->formats[PIPE_FORMAT_NONE].hw;
         }
+}
+
+void
+panfrost_analyze_sysvals(struct panfrost_shader_state *ss)
+{
+        unsigned dirty = 0;
+        unsigned dirty_shader =
+                PAN_DIRTY_STAGE_RENDERER | PAN_DIRTY_STAGE_CONST;
+
+        for (unsigned i = 0; i < ss->info.sysvals.sysval_count; ++i) {
+                switch (PAN_SYSVAL_TYPE(ss->info.sysvals.sysvals[i])) {
+                case PAN_SYSVAL_VIEWPORT_SCALE:
+                case PAN_SYSVAL_VIEWPORT_OFFSET:
+                        dirty |= PAN_DIRTY_VIEWPORT;
+                        break;
+
+                case PAN_SYSVAL_TEXTURE_SIZE:
+                        dirty_shader |= PAN_DIRTY_STAGE_TEXTURE;
+                        break;
+
+                case PAN_SYSVAL_SSBO:
+                        dirty_shader |= PAN_DIRTY_STAGE_SSBO;
+                        break;
+
+                case PAN_SYSVAL_SAMPLER:
+                        dirty_shader |= PAN_DIRTY_STAGE_SAMPLER;
+                        break;
+
+                case PAN_SYSVAL_IMAGE_SIZE:
+                        dirty_shader |= PAN_DIRTY_STAGE_IMAGE;
+                        break;
+
+                case PAN_SYSVAL_NUM_WORK_GROUPS:
+                case PAN_SYSVAL_LOCAL_GROUP_SIZE:
+                case PAN_SYSVAL_WORK_DIM:
+                case PAN_SYSVAL_VERTEX_INSTANCE_OFFSETS:
+                        dirty |= PAN_DIRTY_PARAMS;
+                        break;
+
+                case PAN_SYSVAL_DRAWID:
+                        dirty |= PAN_DIRTY_DRAWID;
+                        break;
+
+                case PAN_SYSVAL_SAMPLE_POSITIONS:
+                case PAN_SYSVAL_MULTISAMPLED:
+                case PAN_SYSVAL_RT_CONVERSION:
+                        /* Nothing beyond the batch itself */
+                        break;
+                default:
+                        unreachable("Invalid sysval");
+                }
+        }
+
+        ss->dirty_3d = dirty;
+        ss->dirty_shader = dirty_shader;
 }
 
 static void
@@ -1229,6 +1276,9 @@ panfrost_emit_const_buf(struct panfrost_batch *batch,
                                 case 2:
                                         batch->ctx->base_instance_sysval_ptr = ptr;
                                         break;
+                                case 3:
+                                        /* Spurious (Midgard doesn't pack) */
+                                        break;
                                 default:
                                         unreachable("Invalid vertex/instance offset component\n");
                                 }
@@ -1265,25 +1315,30 @@ panfrost_emit_shared_memory(struct panfrost_batch *batch,
         struct panfrost_device *dev = pan_device(ctx->base.screen);
         struct panfrost_shader_variants *all = ctx->shader[PIPE_SHADER_COMPUTE];
         struct panfrost_shader_state *ss = &all->variants[all->active_variant];
-        unsigned single_size = util_next_power_of_two(MAX2(ss->info.wls_size,
-                                                           128));
-
-        unsigned instances =
-                util_next_power_of_two(info->grid[0]) *
-                util_next_power_of_two(info->grid[1]) *
-                util_next_power_of_two(info->grid[2]);
-
-        unsigned shared_size = single_size * instances * dev->core_count;
-        struct panfrost_bo *bo = panfrost_batch_get_shared_memory(batch,
-                                                                  shared_size,
-                                                                  1);
         struct panfrost_ptr t =
                 panfrost_pool_alloc_desc(&batch->pool, LOCAL_STORAGE);
 
         pan_pack(t.cpu, LOCAL_STORAGE, ls) {
-                ls.wls_base_pointer = bo->ptr.gpu;
-                ls.wls_instances = instances;
-                ls.wls_size_scale = util_logbase2(single_size) + 1;
+                unsigned wls_single_size =
+                        util_next_power_of_two(MAX2(ss->info.wls_size, 128));
+
+                if (ss->info.wls_size) {
+                        ls.wls_instances =
+                                util_next_power_of_two(info->grid[0]) *
+                                util_next_power_of_two(info->grid[1]) *
+                                util_next_power_of_two(info->grid[2]);
+
+                        ls.wls_size_scale = util_logbase2(wls_single_size) + 1;
+
+                        unsigned wls_size = wls_single_size * ls.wls_instances * dev->core_count;
+
+                        ls.wls_base_pointer =
+                                (panfrost_batch_get_shared_memory(batch,
+                                                                  wls_size,
+                                                                  1))->ptr.gpu;
+                } else {
+                        ls.wls_instances = MALI_LOCAL_STORAGE_NO_WORKGROUP_MEM;
+                }
 
                 if (ss->info.tls_size) {
                         unsigned shift =
@@ -1421,16 +1476,45 @@ panfrost_emit_sampler_descriptors(struct panfrost_batch *batch,
  * `first_image_buf_index` must be the index of the first image attribute buffer descriptor.
  */
 static void
-emit_image_attribs(struct panfrost_batch *batch, enum pipe_shader_type shader,
-                   struct mali_attribute_packed *attribs,
-                   struct mali_attribute_buffer_packed *bufs,
-                   unsigned first_image_buf_index)
+emit_image_attribs(struct panfrost_context *ctx, enum pipe_shader_type shader,
+                   struct mali_attribute_packed *attribs, unsigned first_buf)
+{
+        struct panfrost_device *dev = pan_device(ctx->base.screen);
+        unsigned last_bit = util_last_bit(ctx->image_mask[shader]);
+
+        for (unsigned i = 0; i < last_bit; ++i) {
+                enum pipe_format format = ctx->images[shader][i].format;
+
+                pan_pack(attribs + i, ATTRIBUTE, cfg) {
+                        /* Continuation record means 2 buffers per image */
+                        cfg.buffer_index = first_buf + (i * 2);
+                        cfg.offset_enable = !pan_is_bifrost(dev);
+                        cfg.format = dev->formats[format].hw;
+                }
+        }
+}
+
+static enum mali_attribute_type
+pan_modifier_to_attr_type(uint64_t modifier)
+{
+        switch (modifier) {
+        case DRM_FORMAT_MOD_LINEAR:
+                return MALI_ATTRIBUTE_TYPE_3D_LINEAR;
+        case DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED:
+                return MALI_ATTRIBUTE_TYPE_3D_INTERLEAVED;
+        default:
+                unreachable("Invalid modifier for attribute record");
+        }
+}
+
+static void
+emit_image_bufs(struct panfrost_batch *batch, enum pipe_shader_type shader,
+                struct mali_attribute_buffer_packed *bufs,
+                unsigned first_image_buf_index)
 {
         struct panfrost_context *ctx = batch->ctx;
-        struct panfrost_device *dev = pan_device(ctx->base.screen);
-
-        unsigned k = 0;
         unsigned last_bit = util_last_bit(ctx->image_mask[shader]);
+
         for (unsigned i = 0; i < last_bit; ++i) {
                 struct pipe_image_view *image = &ctx->images[shader][i];
 
@@ -1438,10 +1522,8 @@ emit_image_attribs(struct panfrost_batch *batch, enum pipe_shader_type shader,
                 if (!(ctx->image_mask[shader] & (1 << i)) ||
                     !(image->shader_access & PIPE_IMAGE_ACCESS_READ_WRITE)) {
                         /* Unused image bindings */
-                        pan_pack(bufs + (k * 2), ATTRIBUTE_BUFFER, cfg);
-                        pan_pack(bufs + (k * 2) + 1, ATTRIBUTE_BUFFER, cfg);
-                        pan_pack(attribs + k, ATTRIBUTE, cfg);
-                        k++;
+                        pan_pack(bufs + (i * 2), ATTRIBUTE_BUFFER, cfg);
+                        pan_pack(bufs + (i * 2) + 1, ATTRIBUTE_BUFFER, cfg);
                         continue;
                 }
 
@@ -1451,7 +1533,6 @@ emit_image_attribs(struct panfrost_batch *batch, enum pipe_shader_type shader,
                 assert(image->resource->nr_samples <= 1 && "MSAA'd images not supported");
 
                 bool is_3d = rsrc->base.target == PIPE_TEXTURE_3D;
-                bool is_linear = rsrc->image.layout.modifier == DRM_FORMAT_MOD_LINEAR;
                 bool is_buffer = rsrc->base.target == PIPE_BUFFER;
 
                 unsigned offset = is_buffer ? image->u.buf.offset :
@@ -1460,9 +1541,6 @@ emit_image_attribs(struct panfrost_batch *batch, enum pipe_shader_type shader,
                                                 is_3d ? 0 : image->u.tex.first_layer,
                                                 is_3d ? image->u.tex.first_layer : 0);
 
-                /* AFBC should've been converted to tiled on panfrost_set_shader_image */
-                assert(!drm_is_afbc(rsrc->image.layout.modifier));
-
                 /* Add a dependency of the batch on the shader image buffer */
                 uint32_t flags = PAN_BO_ACCESS_SHARED | PAN_BO_ACCESS_VERTEX_TILER;
                 if (image->shader_access & PIPE_IMAGE_ACCESS_READ)
@@ -1470,46 +1548,50 @@ emit_image_attribs(struct panfrost_batch *batch, enum pipe_shader_type shader,
                 if (image->shader_access & PIPE_IMAGE_ACCESS_WRITE) {
                         flags |= PAN_BO_ACCESS_WRITE;
                         unsigned level = is_buffer ? 0 : image->u.tex.level;
-                        rsrc->state.slices[level].data_valid = true;
+                        BITSET_SET(rsrc->valid.data, level);
+
+                        if (is_buffer) {
+                                util_range_add(&rsrc->base, &rsrc->valid_buffer_range,
+                                                0, rsrc->base.width0);
+                        }
                 }
                 panfrost_batch_add_bo(batch, rsrc->image.data.bo, flags);
 
-                pan_pack(bufs + (k * 2), ATTRIBUTE_BUFFER, cfg) {
-                        cfg.type = is_linear ?
-                                MALI_ATTRIBUTE_TYPE_3D_LINEAR :
-                                MALI_ATTRIBUTE_TYPE_3D_INTERLEAVED;
-
+                pan_pack(bufs + (i * 2), ATTRIBUTE_BUFFER, cfg) {
+                        cfg.type = pan_modifier_to_attr_type(rsrc->image.layout.modifier);
                         cfg.pointer = rsrc->image.data.bo->ptr.gpu + offset;
                         cfg.stride = util_format_get_blocksize(image->format);
-                        cfg.size = rsrc->image.data.bo->size;
+                        cfg.size = rsrc->image.data.bo->size - offset;
                 }
 
-                pan_pack(bufs + (k * 2) + 1, ATTRIBUTE_BUFFER_CONTINUATION_3D, cfg) {
-                        cfg.s_dimension = rsrc->base.width0;
-                        cfg.t_dimension = rsrc->base.height0;
-                        cfg.r_dimension = is_3d ? rsrc->base.depth0 :
+                if (is_buffer) {
+                        pan_pack(bufs + (i * 2) + 1, ATTRIBUTE_BUFFER_CONTINUATION_3D, cfg) {
+                                cfg.s_dimension = rsrc->base.width0 /
+                                        util_format_get_blocksize(image->format);
+                                cfg.t_dimension = cfg.r_dimension = 1;
+                        }
+
+                        continue;
+                }
+
+                pan_pack(bufs + (i * 2) + 1, ATTRIBUTE_BUFFER_CONTINUATION_3D, cfg) {
+                        unsigned level = image->u.tex.level;
+
+                        cfg.s_dimension = u_minify(rsrc->base.width0, level);
+                        cfg.t_dimension = u_minify(rsrc->base.height0, level);
+                        cfg.r_dimension = is_3d ?
+                                u_minify(rsrc->base.depth0, level) :
                                 image->u.tex.last_layer - image->u.tex.first_layer + 1;
 
                         cfg.row_stride =
-                                is_buffer ? 0 : rsrc->image.layout.slices[image->u.tex.level].row_stride;
+                                rsrc->image.layout.slices[level].row_stride;
 
-                        if (rsrc->base.target != PIPE_TEXTURE_2D && !is_buffer) {
+                        if (rsrc->base.target != PIPE_TEXTURE_2D) {
                                 cfg.slice_stride =
                                         panfrost_get_layer_stride(&rsrc->image.layout,
-                                                                  image->u.tex.level);
+                                                                  level);
                         }
                 }
-
-                /* We map compute shader attributes 1:2 with attribute buffers, because
-                 * every image attribute buffer needs an ATTRIBUTE_BUFFER_CONTINUATION_3D */
-                pan_pack(attribs + k, ATTRIBUTE, cfg) {
-                        cfg.buffer_index = first_image_buf_index + (k * 2);
-                        cfg.offset_enable = !pan_is_bifrost(dev);
-                        cfg.format =
-                                dev->formats[image->format].hw;
-                }
-
-                k++;
         }
 }
 
@@ -1538,7 +1620,8 @@ panfrost_emit_image_attribs(struct panfrost_batch *batch,
         struct panfrost_ptr attribs =
                 panfrost_pool_alloc_desc_array(&batch->pool, attr_count, ATTRIBUTE);
 
-        emit_image_attribs(batch, type, attribs.cpu, bufs.cpu, 0);
+        emit_image_attribs(ctx, type, attribs.cpu, 0);
+        emit_image_bufs(batch, type, bufs.cpu, 0);
 
         /* We need an empty attrib buf to stop the prefetching on Bifrost */
         if (pan_is_bifrost(dev)) {
@@ -1561,15 +1644,21 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
         struct panfrost_shader_state *vs = panfrost_get_shader_state(ctx, PIPE_SHADER_VERTEX);
         bool instanced = ctx->indirect_draw || ctx->instance_count > 1;
         uint32_t image_mask = ctx->image_mask[PIPE_SHADER_VERTEX];
-        unsigned nr_images = util_bitcount(image_mask);
+        unsigned nr_images = util_last_bit(image_mask);
 
         /* Worst case: everything is NPOT, which is only possible if instancing
          * is enabled. Otherwise single record is gauranteed.
          * Also, we allocate more memory than what's needed here if either instancing
          * is enabled or images are present, this can be improved. */
         unsigned bufs_per_attrib = (instanced || nr_images > 0) ? 2 : 1;
-        unsigned nr_bufs = (vs->info.attribute_count * bufs_per_attrib) +
+        unsigned nr_bufs = ((so->nr_bufs + nr_images) * bufs_per_attrib) +
                            (pan_is_bifrost(dev) ? 1 : 0);
+
+        /* Midgard needs vertexid/instanceid handled specially */
+        bool special_vbufs = dev->arch < 6 && vs->info.attribute_count >= PAN_VERTEX_ID;
+
+        if (special_vbufs)
+                nr_bufs += 2;
 
         if (!nr_bufs) {
                 *buffers = 0;
@@ -1593,14 +1682,9 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
         unsigned attrib_to_buffer[PIPE_MAX_ATTRIBS] = { 0 };
         unsigned k = 0;
 
-        for (unsigned i = 0; i < so->num_elements; ++i) {
-                /* We map buffers 1:1 with the attributes, which
-                 * means duplicating some vertex buffers (who cares? aside from
-                 * maybe some caching implications but I somehow doubt that
-                 * matters) */
-
-                struct pipe_vertex_element *elem = &so->pipe[i];
-                unsigned vbi = elem->vertex_buffer_index;
+        for (unsigned i = 0; i < so->nr_bufs; ++i) {
+                unsigned vbi = so->buffers[i].vbi;
+                unsigned divisor = so->buffers[i].divisor;
                 attrib_to_buffer[i] = k;
 
                 if (!(ctx->vb_mask & (1 << vbi)))
@@ -1630,15 +1714,18 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
 
                 /* When there is a divisor, the hardware-level divisor is
                  * the product of the instance divisor and the padded count */
-                unsigned divisor = elem->instance_divisor;
                 unsigned stride = buf->stride;
 
                 if (ctx->indirect_draw) {
+                        /* We allocated 2 records for each attribute buffer */
+                        assert((k & 1) == 0);
+
                         /* With indirect draws we can't guess the vertex_count.
                          * Pre-set the address, stride and size fields, the
                          * compute shader do the rest.
                          */
                         pan_pack(bufs + k, ATTRIBUTE_BUFFER, cfg) {
+                                cfg.type = MALI_ATTRIBUTE_TYPE_1D;
                                 cfg.pointer = addr;
                                 cfg.stride = stride;
                                 cfg.size = size;
@@ -1657,22 +1744,23 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
 
                 unsigned hw_divisor = ctx->padded_count * divisor;
 
-                /* If there's a divisor(=1) but no instancing, we want every
-                 * attribute to be the same */
+                if (ctx->instance_count <= 1) {
+                        /* Per-instance would be every attribute equal */
+                        if (divisor)
+                                stride = 0;
 
-                if (divisor && ctx->instance_count == 1)
-                        stride = 0;
-
-                if (!divisor || ctx->instance_count <= 1) {
                         pan_pack(bufs + k, ATTRIBUTE_BUFFER, cfg) {
-                                if (ctx->instance_count > 1) {
-                                        cfg.type = MALI_ATTRIBUTE_TYPE_1D_MODULUS;
-                                        cfg.divisor = ctx->padded_count;
-                                }
-
                                 cfg.pointer = addr;
                                 cfg.stride = stride;
                                 cfg.size = size;
+                        }
+                } else if (!divisor) {
+                        pan_pack(bufs + k, ATTRIBUTE_BUFFER, cfg) {
+                                cfg.type = MALI_ATTRIBUTE_TYPE_1D_MODULUS;
+                                cfg.pointer = addr;
+                                cfg.stride = stride;
+                                cfg.size = size;
+                                cfg.divisor = ctx->padded_count;
                         }
                 } else if (util_is_power_of_two_or_zero(hw_divisor)) {
                         pan_pack(bufs + k, ATTRIBUTE_BUFFER, cfg) {
@@ -1688,6 +1776,10 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
 
                         unsigned magic_divisor =
                                 panfrost_compute_magic_divisor(hw_divisor, &shift, &extra_flags);
+
+                        /* Records with continuations must be aligned */
+                        k = ALIGN_POT(k, 2);
+                        attrib_to_buffer[i] = k;
 
                         pan_pack(bufs + k, ATTRIBUTE_BUFFER, cfg) {
                                 cfg.type = MALI_ATTRIBUTE_TYPE_1D_NPOT_DIVISOR;
@@ -1711,8 +1803,7 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
         }
 
         /* Add special gl_VertexID/gl_InstanceID buffers */
-
-        if (unlikely(vs->info.attribute_count >= PAN_VERTEX_ID)) {
+        if (unlikely(special_vbufs)) {
                 panfrost_vertex_id(ctx->padded_count, &bufs[k], ctx->instance_count > 1);
 
                 pan_pack(out + PAN_VERTEX_ID, ATTRIBUTE, cfg) {
@@ -1729,8 +1820,9 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
         }
 
         k = ALIGN_POT(k, 2);
-        emit_image_attribs(batch, PIPE_SHADER_VERTEX, out + so->num_elements, bufs + k, k);
-        k += util_bitcount(ctx->image_mask[PIPE_SHADER_VERTEX]);
+        emit_image_attribs(ctx, PIPE_SHADER_VERTEX, out + so->num_elements, k);
+        emit_image_bufs(batch, PIPE_SHADER_VERTEX, bufs + k, k);
+        k += (util_last_bit(ctx->image_mask[PIPE_SHADER_VERTEX]) * 2);
 
         /* We need an empty attrib buf to stop the prefetching on Bifrost */
         if (pan_is_bifrost(dev))
@@ -1749,13 +1841,8 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
                 unsigned vbi = so->pipe[i].vertex_buffer_index;
                 struct pipe_vertex_buffer *buf = &ctx->vertex_buffers[vbi];
 
-                /* Adjust by the masked off bits of the offset. Make sure we
-                 * read src_offset from so->hw (which is not GPU visible)
-                 * rather than target (which is) due to caching effects */
-
-                unsigned src_offset = so->pipe[i].src_offset;
-
-                /* BOs aligned to 4k so guaranteed aligned to 64 */
+                /* BOs are aligned; just fixup for buffer_offset */
+                signed src_offset = so->pipe[i].src_offset;
                 src_offset += (buf->buffer_offset & 63);
 
                 /* Base instance offset */
@@ -1771,7 +1858,7 @@ panfrost_emit_vertex_data(struct panfrost_batch *batch,
                         src_offset -= buf->stride * ctx->offset_start;
 
                 pan_pack(out + i, ATTRIBUTE, cfg) {
-                        cfg.buffer_index = attrib_to_buffer[i];
+                        cfg.buffer_index = attrib_to_buffer[so->element_buffer[i]];
                         cfg.format = so->formats[i];
                         cfg.offset = src_offset;
                 }
@@ -1816,7 +1903,8 @@ panfrost_emit_streamout(struct panfrost_batch *batch,
         unsigned expected_size = stride * count;
 
         /* Grab the BO and bind it to the batch */
-        struct panfrost_bo *bo = pan_resource(target->buffer)->image.data.bo;
+        struct panfrost_resource *rsrc = pan_resource(target->buffer);
+        struct panfrost_bo *bo = rsrc->image.data.bo;
 
         /* Varyings are WRITE from the perspective of the VERTEX but READ from
          * the perspective of the TILER and FRAGMENT.
@@ -1827,12 +1915,15 @@ panfrost_emit_streamout(struct panfrost_batch *batch,
                               PAN_BO_ACCESS_VERTEX_TILER |
                               PAN_BO_ACCESS_FRAGMENT);
 
-        mali_ptr addr = bo->ptr.gpu + panfrost_xfb_offset(stride, target);
+        unsigned offset = panfrost_xfb_offset(stride, target);
 
         pan_pack(slot, ATTRIBUTE_BUFFER, cfg) {
-                cfg.pointer = (addr & ~63);
+                cfg.pointer = bo->ptr.gpu + (offset & ~63);
                 cfg.stride = stride;
-                cfg.size = MIN2(max_size, expected_size) + (addr & 63);
+                cfg.size = MIN2(max_size, expected_size) + (offset & 63);
+
+                util_range_add(&rsrc->base, &rsrc->valid_buffer_range,
+                                offset, cfg.size);
         }
 }
 
@@ -2004,7 +2095,7 @@ pan_assign_varyings(const struct panfrost_device *dev,
                 if (loc >= 0) {
                         offsets[i] = stride;
 
-                        enum pipe_format format = producer_vars[i].format;
+                        enum pipe_format format = consumer_vars[loc].format;
                         stride += util_format_get_blocksize(format);
                 } else {
                         offsets[i] = -1;
@@ -2116,9 +2207,16 @@ panfrost_emit_varying_descs(
         }
 
         for (unsigned i = 0; i < producer_count; ++i) {
+                signed j = pan_find_vary(consumer->info.varyings.input,
+                                consumer->info.varyings.input_count,
+                                producer->info.varyings.output[i].location);
+
+                enum pipe_format format = (j >= 0) ?
+                        consumer->info.varyings.input[j].format :
+                        producer->info.varyings.output[i].format;
+
                 panfrost_emit_varying(dev, descs + i,
-                                producer->info.varyings.output[i],
-                                producer->info.varyings.output[i].format,
+                                producer->info.varyings.output[i], format,
                                 out->present, 0, &producer->stream_output,
                                 producer->so_mask, xfb->num_targets,
                                 xfb_offsets, offsets[i], PAN_VARY_POSITION);
@@ -2133,7 +2231,7 @@ panfrost_emit_varying_descs(
 
                 panfrost_emit_varying(dev, descs + producer_count + i,
                                 consumer->info.varyings.input[i],
-                                producer->info.varyings.output[j].format,
+                                consumer->info.varyings.input[i].format,
                                 out->present, point_coord_mask,
                                 &producer->stream_output, producer->so_mask,
                                 xfb->num_targets, xfb_offsets, offset,
@@ -2218,10 +2316,11 @@ panfrost_emit_varying_descriptor(struct panfrost_batch *batch,
         /* Suppress prefetch on Bifrost */
         memset(varyings + (xfb_base * ctx->streamout.num_targets), 0, sizeof(*varyings));
 
-        /* Emit the stream out buffers */
+        /* Emit the stream out buffers. We need enough room for all the
+         * vertices we emit across all instances */
 
-        unsigned out_count = u_stream_outputs_for_vertices(ctx->active_prim,
-                                                           ctx->vertex_count);
+        unsigned out_count = ctx->instance_count *
+                u_stream_outputs_for_vertices(ctx->active_prim, ctx->vertex_count);
 
         for (unsigned i = 0; i < ctx->streamout.num_targets; ++i) {
                 panfrost_emit_streamout(batch, &varyings[xfb_base + i],
@@ -2230,9 +2329,11 @@ panfrost_emit_varying_descriptor(struct panfrost_batch *batch,
                                         ctx->streamout.targets[i]);
         }
 
-        panfrost_emit_varyings(batch,
-                        &varyings[pan_varying_index(present, PAN_VARY_GENERAL)],
-                        stride, vertex_count);
+        if (stride) {
+                panfrost_emit_varyings(batch,
+                                &varyings[pan_varying_index(present, PAN_VARY_GENERAL)],
+                                stride, vertex_count);
+        }
 
         /* fp32 vec4 gl_Position */
         *position = panfrost_emit_varyings(batch,
@@ -2264,15 +2365,18 @@ panfrost_emit_vertex_tiler_jobs(struct panfrost_batch *batch,
 {
         struct panfrost_context *ctx = batch->ctx;
 
-        /* If rasterizer discard is enable, only submit the vertex */
+        /* If rasterizer discard is enable, only submit the vertex. XXX - set
+         * job_barrier in case buffers get ping-ponged and we need to enforce
+         * ordering, this has a perf hit! See
+         * KHR-GLES31.core.vertex_attrib_binding.advanced-iterations */
 
         unsigned vertex = panfrost_add_job(&batch->pool, &batch->scoreboard,
-                                           MALI_JOB_TYPE_VERTEX, false, false,
+                                           MALI_JOB_TYPE_VERTEX, true, false,
                                            ctx->indirect_draw ?
                                            batch->indirect_draw_job_id : 0,
                                            0, vertex_job, false);
 
-        if (ctx->rasterizer->base.rasterizer_discard)
+        if (ctx->rasterizer->base.rasterizer_discard || batch->scissor_culls_everything)
                 return;
 
         panfrost_add_job(&batch->pool, &batch->scoreboard,
@@ -2337,13 +2441,10 @@ static void
 panfrost_initialize_surface(struct panfrost_batch *batch,
                             struct pipe_surface *surf)
 {
-        if (!surf)
-                return;
-
-        unsigned level = surf->u.tex.level;
-        struct panfrost_resource *rsrc = pan_resource(surf->texture);
-
-        rsrc->state.slices[level].data_valid = true;
+        if (surf) {
+                struct panfrost_resource *rsrc = pan_resource(surf->texture);
+                BITSET_SET(rsrc->valid.data, surf->u.tex.level);
+        }
 }
 
 void

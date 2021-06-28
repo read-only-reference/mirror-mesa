@@ -53,6 +53,8 @@ static const nir_shader_compiler_options options = {
 		.vertex_id_zero_based = true,
 		.lower_extract_byte = true,
 		.lower_extract_word = true,
+		.lower_insert_byte = true,
+		.lower_insert_word = true,
 		.lower_helper_invocation = true,
 		.lower_bitfield_insert_to_shifts = true,
 		.lower_bitfield_extract_to_shifts = true,
@@ -107,6 +109,8 @@ static const nir_shader_compiler_options options_a6xx = {
 		.vertex_id_zero_based = false,
 		.lower_extract_byte = true,
 		.lower_extract_word = true,
+		.lower_insert_byte = true,
+		.lower_insert_word = true,
 		.lower_helper_invocation = true,
 		.lower_bitfield_insert_to_shifts = true,
 		.lower_bitfield_extract_to_shifts = true,
@@ -219,6 +223,20 @@ ir3_optimize_loop(struct ir3_compiler *compiler, nir_shader *s)
 			progress |= OPT(s, nir_opt_gcm, false);
 		progress |= OPT(s, nir_opt_peephole_select, 16, true, true);
 		progress |= OPT(s, nir_opt_intrinsics);
+		/* NOTE: GS lowering inserts an output var with varying slot that
+		 * is larger than VARYING_SLOT_MAX (ie. GS_VERTEX_FLAGS_IR3),
+		 * which triggers asserts in nir_shader_gather_info().  To work
+		 * around that skip lowering phi precision for GS.
+		 *
+		 * Calling nir_shader_gather_info() late also seems to cause
+		 * problems for tess lowering, for now since we only enable
+		 * fp16/int16 for frag and compute, skip phi precision lowering
+		 * for other stages.
+		 */
+		if ((s->info.stage == MESA_SHADER_FRAGMENT) ||
+				(s->info.stage == MESA_SHADER_COMPUTE)) {
+			progress |= OPT(s, nir_opt_phi_precision);
+		}
 		progress |= OPT(s, nir_opt_algebraic);
 		progress |= OPT(s, nir_lower_alu);
 		progress |= OPT(s, nir_lower_pack);
@@ -333,9 +351,9 @@ ir3_finalize_nir(struct ir3_compiler *compiler, nir_shader *s)
 	}
 
 	if (ir3_shader_debug & IR3_DBG_DISASM) {
-		debug_printf("----------------------\n");
-		nir_print_shader(s, stdout);
-		debug_printf("----------------------\n");
+		mesa_logi("----------------------");
+		nir_log_shaderi(s);
+		mesa_logi("----------------------");
 	}
 
 	if (s->info.stage == MESA_SHADER_GEOMETRY)
@@ -368,9 +386,9 @@ ir3_finalize_nir(struct ir3_compiler *compiler, nir_shader *s)
 	OPT_V(s, nir_remove_dead_variables, nir_var_function_temp, NULL);
 
 	if (ir3_shader_debug & IR3_DBG_DISASM) {
-		debug_printf("----------------------\n");
-		nir_print_shader(s, stdout);
-		debug_printf("----------------------\n");
+		mesa_logi("----------------------");
+		nir_log_shaderi(s);
+		mesa_logi("----------------------");
 	}
 
 	/* st_program.c's parameter list optimization requires that future nir
@@ -484,9 +502,9 @@ void
 ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 {
 	if (ir3_shader_debug & IR3_DBG_DISASM) {
-		debug_printf("----------------------\n");
-		nir_print_shader(s, stdout);
-		debug_printf("----------------------\n");
+		mesa_logi("----------------------");
+		nir_log_shaderi(s);
+		mesa_logi("----------------------");
 	}
 
 	bool progress = false;
@@ -598,9 +616,9 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
 	OPT_V(s, nir_opt_sink, nir_move_const_undef);
 
 	if (ir3_shader_debug & IR3_DBG_DISASM) {
-		debug_printf("----------------------\n");
-		nir_print_shader(s, stdout);
-		debug_printf("----------------------\n");
+		mesa_logi("----------------------");
+		nir_log_shaderi(s);
+		mesa_logi("----------------------");
 	}
 
 	nir_sweep(s);
@@ -676,15 +694,15 @@ ir3_nir_scan_driver_consts(nir_shader *shader,
 					layout->num_driver_params =
 						MAX2(layout->num_driver_params, IR3_DP_UCP0_X + (idx + 1) * 4);
 					break;
-				case nir_intrinsic_load_num_work_groups:
+				case nir_intrinsic_load_num_workgroups:
 					layout->num_driver_params =
 						MAX2(layout->num_driver_params, IR3_DP_NUM_WORK_GROUPS_Z + 1);
 					break;
-				case nir_intrinsic_load_local_group_size:
+				case nir_intrinsic_load_workgroup_size:
 					layout->num_driver_params =
 						MAX2(layout->num_driver_params, IR3_DP_LOCAL_GROUP_SIZE_Z + 1);
 					break;
-				case nir_intrinsic_load_base_work_group_id:
+				case nir_intrinsic_load_base_workgroup_id:
 					layout->num_driver_params =
 						MAX2(layout->num_driver_params, IR3_DP_BASE_GROUP_Z + 1);
 					break;

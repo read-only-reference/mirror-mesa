@@ -23,6 +23,7 @@ SOFTWARE.
 
 opcodes = {}
 immediates = {}
+enums = {}
 
 class Opcode(object):
    def __init__(self, name, dests, srcs, imms, is_float, can_eliminate, encoding_16, encoding_32):
@@ -67,6 +68,10 @@ def immediate(name, ctype = "uint32_t"):
    immediates[name] = imm
    return imm
 
+def enum(name, value_dict):
+   enums[name] = value_dict
+   return immediate(name, "enum agx_" + name)
+
 L = (1 << 15)
 _ = None
 
@@ -90,6 +95,29 @@ NEST = immediate("nest")
 INVERT_COND = immediate("invert_cond")
 NEST = immediate("nest")
 TARGET = immediate("target", "agx_block *")
+SR = enum("sr", {
+   0:  'threadgroup_position_in_grid.x',
+   1:  'threadgroup_position_in_grid.y',
+   2:  'threadgroup_position_in_grid.z',
+   4:  'threads_per_threadgroup.x',
+   5:  'threads_per_threadgroup.y',
+   6:  'threads_per_threadgroup.z',
+   8:  'dispatch_threads_per_threadgroup.x',
+   9:  'dispatch_threads_per_threadgroup.y',
+   10: 'dispatch_threads_per_threadgroup.z',
+   48: 'thread_position_in_threadgroup.x',
+   49: 'thread_position_in_threadgroup.y',
+   50: 'thread_position_in_threadgroup.z',
+   51: 'thread_index_in_threadgroup',
+   52: 'thread_index_in_subgroup',
+   53: 'subgroup_index_in_threadgroup',
+   56: 'active_thread_index_in_quad',
+   58: 'active_thread_index_in_subgroup',
+   62: 'backfacing',
+   80: 'thread_position_in_grid.x',
+   81: 'thread_position_in_grid.y',
+   82: 'thread_position_in_grid.z',
+})
 
 FUNOP = lambda x: (x << 28)
 FUNOP_MASK = FUNOP((1 << 14) - 1)
@@ -175,6 +203,8 @@ op("device_load",
 
 op("wait", (0x38, 0xFF, 2, _), dests = 0,
       can_eliminate = False, imms = [SCOREBOARD])
+
+op("get_sr", (0x72, 0x7F | L, 4, _), dests = 1, imms = [SR])
 
 # Essentially same encoding
 op("ld_tile", (0x49, 0x7F, 8, _), dests = 1, srcs = 0,

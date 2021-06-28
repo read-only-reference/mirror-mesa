@@ -51,7 +51,6 @@ struct radv_blend_state {
    uint32_t blend_enable_4bit;
    uint32_t need_src_alpha;
 
-   uint32_t cb_color_control;
    uint32_t cb_target_mask;
    uint32_t cb_target_enabled_4bit;
    uint32_t sx_mrt_blend_opt[8];
@@ -273,47 +272,6 @@ radv_pipeline_init_scratch(const struct radv_device *device, struct radv_pipelin
 
    pipeline->scratch_bytes_per_wave = scratch_bytes_per_wave;
    pipeline->max_waves = max_waves;
-}
-
-static uint32_t
-si_translate_blend_logic_op(VkLogicOp op)
-{
-   switch (op) {
-   case VK_LOGIC_OP_CLEAR:
-      return V_028808_ROP3_CLEAR;
-   case VK_LOGIC_OP_AND:
-      return V_028808_ROP3_AND;
-   case VK_LOGIC_OP_AND_REVERSE:
-      return V_028808_ROP3_AND_REVERSE;
-   case VK_LOGIC_OP_COPY:
-      return V_028808_ROP3_COPY;
-   case VK_LOGIC_OP_AND_INVERTED:
-      return V_028808_ROP3_AND_INVERTED;
-   case VK_LOGIC_OP_NO_OP:
-      return V_028808_ROP3_NO_OP;
-   case VK_LOGIC_OP_XOR:
-      return V_028808_ROP3_XOR;
-   case VK_LOGIC_OP_OR:
-      return V_028808_ROP3_OR;
-   case VK_LOGIC_OP_NOR:
-      return V_028808_ROP3_NOR;
-   case VK_LOGIC_OP_EQUIVALENT:
-      return V_028808_ROP3_EQUIVALENT;
-   case VK_LOGIC_OP_INVERT:
-      return V_028808_ROP3_INVERT;
-   case VK_LOGIC_OP_OR_REVERSE:
-      return V_028808_ROP3_OR_REVERSE;
-   case VK_LOGIC_OP_COPY_INVERTED:
-      return V_028808_ROP3_COPY_INVERTED;
-   case VK_LOGIC_OP_OR_INVERTED:
-      return V_028808_ROP3_OR_INVERTED;
-   case VK_LOGIC_OP_NAND:
-      return V_028808_ROP3_NAND;
-   case VK_LOGIC_OP_SET:
-      return V_028808_ROP3_SET;
-   default:
-      unreachable("Unhandled logic op");
-   }
 }
 
 static uint32_t
@@ -656,7 +614,7 @@ radv_blend_check_commutativity(struct radv_blend_state *blend, VkBlendOp op, VkB
 }
 
 static struct radv_blend_state
-radv_pipeline_init_blend_state(const struct radv_pipeline *pipeline,
+radv_pipeline_init_blend_state(struct radv_pipeline *pipeline,
                                const VkGraphicsPipelineCreateInfo *pCreateInfo,
                                const struct radv_graphics_pipeline_create_info *extra)
 {
@@ -666,6 +624,7 @@ radv_pipeline_init_blend_state(const struct radv_pipeline *pipeline,
       radv_pipeline_get_multisample_state(pCreateInfo);
    struct radv_blend_state blend = {0};
    unsigned mode = V_028808_CB_NORMAL;
+   unsigned cb_color_control = 0;
    int i;
 
    if (extra && extra->custom_blend_mode) {
@@ -673,12 +632,11 @@ radv_pipeline_init_blend_state(const struct radv_pipeline *pipeline,
       mode = extra->custom_blend_mode;
    }
 
-   blend.cb_color_control = 0;
    if (vkblend) {
       if (vkblend->logicOpEnable)
-         blend.cb_color_control |= S_028808_ROP3(si_translate_blend_logic_op(vkblend->logicOp));
+         cb_color_control |= S_028808_ROP3(si_translate_blend_logic_op(vkblend->logicOp));
       else
-         blend.cb_color_control |= S_028808_ROP3(V_028808_ROP3_COPY);
+         cb_color_control |= S_028808_ROP3(V_028808_ROP3_COPY);
    }
 
    blend.db_alpha_to_mask = S_028B70_ALPHA_TO_MASK_OFFSET0(3) | S_028B70_ALPHA_TO_MASK_OFFSET1(1) |
@@ -819,15 +777,18 @@ radv_pipeline_init_blend_state(const struct radv_pipeline *pipeline,
        */
       if (blend.mrt0_is_dual_src || (vkblend && vkblend->logicOpEnable) ||
           mode == V_028808_CB_RESOLVE)
-         blend.cb_color_control |= S_028808_DISABLE_DUAL_QUAD(1);
+         cb_color_control |= S_028808_DISABLE_DUAL_QUAD(1);
    }
 
    if (blend.cb_target_mask)
-      blend.cb_color_control |= S_028808_MODE(mode);
+      cb_color_control |= S_028808_MODE(mode);
    else
-      blend.cb_color_control |= S_028808_MODE(V_028808_CB_DISABLE);
+      cb_color_control |= S_028808_MODE(V_028808_CB_DISABLE);
 
    radv_pipeline_compute_spi_color_formats(pipeline, pCreateInfo, &blend);
+
+   pipeline->graphics.cb_color_control = cb_color_control;
+
    return blend;
 }
 
@@ -1392,13 +1353,14 @@ radv_pipeline_needed_dynamic_state(const VkGraphicsPipelineCreateInfo *pCreateIn
 
    /* If rasterization is disabled we do not care about any of the
     * dynamic states, since they are all rasterization related only,
-    * except primitive topology, primitive restart enable and vertex
-    * binding stride.
+    * except primitive topology, primitive restart enable, vertex
+    * binding stride and rasterization discard itself.
     */
    if (pCreateInfo->pRasterizationState->rasterizerDiscardEnable &&
-       !radv_is_state_dynamic(pCreateInfo, VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE_EXT))
+       !radv_is_state_dynamic(pCreateInfo, VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE_EXT)) {
       return RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_VERTEX_INPUT_BINDING_STRIDE |
-             RADV_DYNAMIC_PRIMITIVE_RESTART_ENABLE;
+             RADV_DYNAMIC_PRIMITIVE_RESTART_ENABLE | RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE;
+   }
 
    if (!pCreateInfo->pRasterizationState->depthBiasEnable &&
        !radv_is_state_dynamic(pCreateInfo, VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE_EXT))
@@ -1757,6 +1719,14 @@ radv_pipeline_init_dynamic_state(struct radv_pipeline *pipeline,
    if (states & RADV_DYNAMIC_RASTERIZER_DISCARD_ENABLE) {
       dynamic->rasterizer_discard_enable =
          pCreateInfo->pRasterizationState->rasterizerDiscardEnable;
+   }
+
+   if (subpass->has_color_att && states & RADV_DYNAMIC_LOGIC_OP) {
+      if (pCreateInfo->pColorBlendState->logicOpEnable) {
+         dynamic->logic_op = si_translate_blend_logic_op(pCreateInfo->pColorBlendState->logicOp);
+      } else {
+         dynamic->logic_op = V_028808_ROP3_COPY;
+      }
    }
 
    pipeline->dynamic_state.mask = states;
@@ -2585,6 +2555,17 @@ radv_generate_graphics_pipeline_key(const struct radv_pipeline *pipeline,
       key.vertex_attribute_bindings[location] = desc->binding;
       key.vertex_attribute_offsets[location] = desc->offset;
 
+      const struct ac_data_format_info *dfmt_info = ac_get_data_format_info(data_format);
+      unsigned attrib_align =
+         dfmt_info->chan_byte_size ? dfmt_info->chan_byte_size : dfmt_info->element_size;
+
+      /* If desc->offset is misaligned, then the buffer offset must be too. Just
+       * skip updating vertex_binding_align in this case.
+       */
+      if (desc->offset % attrib_align == 0)
+         key.vertex_binding_align[desc->binding] =
+            MAX2(key.vertex_binding_align[desc->binding], attrib_align);
+
       if (!uses_dynamic_stride) {
          /* From the Vulkan spec 1.2.157:
           *
@@ -2708,6 +2689,8 @@ radv_fill_shader_keys(struct radv_device *device, struct radv_shader_variant_key
       keys[MESA_SHADER_VERTEX].vs.vertex_attribute_strides[i] = key->vertex_attribute_strides[i];
       keys[MESA_SHADER_VERTEX].vs.alpha_adjust[i] = key->vertex_alpha_adjust[i];
    }
+   for (unsigned i = 0; i < MAX_VBS; ++i)
+      keys[MESA_SHADER_VERTEX].vs.vertex_binding_align[i] = key->vertex_binding_align[i];
    keys[MESA_SHADER_VERTEX].vs.outprim = si_conv_prim_to_gs_out(key->topology);
    keys[MESA_SHADER_VERTEX].vs.provoking_vtx_last = key->provoking_vtx_last;
 
@@ -2791,9 +2774,9 @@ radv_fill_shader_keys(struct radv_device *device, struct radv_shader_variant_key
       if (!subgroup_size)
          subgroup_size = device->physical_device->cs_wave_size;
 
-      unsigned local_size = nir[MESA_SHADER_COMPUTE]->info.cs.local_size[0] *
-                            nir[MESA_SHADER_COMPUTE]->info.cs.local_size[1] *
-                            nir[MESA_SHADER_COMPUTE]->info.cs.local_size[2];
+      unsigned local_size = nir[MESA_SHADER_COMPUTE]->info.workgroup_size[0] *
+                            nir[MESA_SHADER_COMPUTE]->info.workgroup_size[1] *
+                            nir[MESA_SHADER_COMPUTE]->info.workgroup_size[2];
 
       /* Games don't always request full subgroups when they should,
        * which can cause bugs if cswave32 is enabled.
@@ -3124,13 +3107,23 @@ mem_vectorize_callback(unsigned align_mul, unsigned align_offset, unsigned bit_s
    case nir_intrinsic_load_shared:
    case nir_intrinsic_store_shared:
       if (bit_size * num_components ==
-          96) /* 96 bit loads require 128 bit alignment and are split otherwise */
+          96) { /* 96 bit loads require 128 bit alignment and are split otherwise */
          return align % 16 == 0;
-      else if (bit_size * num_components ==
-               128) /* 128 bit loads require 64 bit alignment and are split otherwise */
-         return align % 8 == 0;
-      else
-         return align % (bit_size == 8 ? 2 : 4) == 0;
+      } else if (bit_size == 16 && (align % 4)) {
+         /* AMD hardware can't do 2-byte aligned f16vec2 loads, but they are useful for ALU
+          * vectorization, because our vectorizer requires the scalar IR to already contain vectors.
+          */
+         return (align % 2 == 0) && num_components <= 2;
+      } else {
+         if (num_components == 3) {
+            /* AMD hardware can't do 3-component loads except for 96-bit loads, handled above. */
+            return false;
+         }
+         unsigned req = bit_size * num_components;
+         if (req == 64 || req == 128) /* 64-bit and 128-bit loads can use ds_read2_b{32,64} */
+            req /= 2u;
+         return align % (req / 8u) == 0;
+      }
    default:
       return false;
    }
@@ -3363,8 +3356,10 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_device *device,
    radv_fill_shader_keys(device, keys, pipeline_key, nir);
    radv_fill_shader_info(pipeline, pStages, keys, infos, nir);
 
-   if ((nir[MESA_SHADER_VERTEX] && keys[MESA_SHADER_VERTEX].vs_common_out.as_ngg) ||
-       (nir[MESA_SHADER_TESS_EVAL] && keys[MESA_SHADER_TESS_EVAL].vs_common_out.as_ngg)) {
+   bool pipeline_has_ngg = (nir[MESA_SHADER_VERTEX] && keys[MESA_SHADER_VERTEX].vs_common_out.as_ngg) ||
+                           (nir[MESA_SHADER_TESS_EVAL] && keys[MESA_SHADER_TESS_EVAL].vs_common_out.as_ngg);
+
+   if (pipeline_has_ngg) {
       struct gfx10_ngg_info *ngg_info;
 
       if (nir[MESA_SHADER_GEOMETRY])
@@ -3510,27 +3505,9 @@ radv_create_shaders(struct radv_pipeline *pipeline, struct radv_device *device,
          nir_print_shader(nir[i], stderr);
    }
 
-   if ((nir[MESA_SHADER_VERTEX] && keys[MESA_SHADER_VERTEX].vs_common_out.as_ngg) ||
-       (nir[MESA_SHADER_TESS_EVAL] && keys[MESA_SHADER_TESS_EVAL].vs_common_out.as_ngg)) {
-      struct gfx10_ngg_info *ngg_info;
-
-      if (nir[MESA_SHADER_GEOMETRY])
-         ngg_info = &infos[MESA_SHADER_GEOMETRY].ngg_info;
-      else if (nir[MESA_SHADER_TESS_CTRL])
-         ngg_info = &infos[MESA_SHADER_TESS_EVAL].ngg_info;
-      else
-         ngg_info = &infos[MESA_SHADER_VERTEX].ngg_info;
-
-      gfx10_get_ngg_info(pipeline_key, pipeline, nir, infos, ngg_info);
-   } else if (nir[MESA_SHADER_GEOMETRY]) {
-      struct gfx9_gs_info *gs_info = &infos[MESA_SHADER_GEOMETRY].gs_ring_info;
-
-      gfx9_get_gs_info(pipeline_key, pipeline, nir, infos, gs_info);
-   }
-
    if (modules[MESA_SHADER_GEOMETRY]) {
       struct radv_shader_binary *gs_copy_binary = NULL;
-      if (!radv_pipeline_has_ngg(pipeline)) {
+      if (!pipeline_has_ngg) {
          struct radv_shader_info info = {0};
          struct radv_shader_variant_key key = {0};
 
@@ -4245,7 +4222,6 @@ radv_pipeline_generate_blend_state(struct radeon_cmdbuf *ctx_cs,
 {
    radeon_set_context_reg_seq(ctx_cs, R_028780_CB_BLEND0_CONTROL, 8);
    radeon_emit_array(ctx_cs, blend->cb_blend_control, 8);
-   radeon_set_context_reg(ctx_cs, R_028808_CB_COLOR_CONTROL, blend->cb_color_control);
    radeon_set_context_reg(ctx_cs, R_028B70_DB_ALPHA_TO_MASK, blend->db_alpha_to_mask);
 
    if (pipeline->device->physical_device->rad_info.has_rbplus) {
@@ -4271,27 +4247,29 @@ radv_pipeline_generate_raster_state(struct radeon_cmdbuf *ctx_cs,
 
    radeon_set_context_reg(ctx_cs, R_028BDC_PA_SC_LINE_CNTL, S_028BDC_DX10_DIAMOND_TEST_ENA(1));
 
-   /* Conservative rasterization. */
-   if (mode != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT) {
-      pa_sc_conservative_rast = S_028C4C_PREZ_AA_MASK_ENABLE(1) | S_028C4C_POSTZ_AA_MASK_ENABLE(1) |
-                                S_028C4C_CENTROID_SAMPLE_OVERRIDE(1);
+   if (pipeline->device->physical_device->rad_info.chip_class >= GFX9) {
+      /* Conservative rasterization. */
+      if (mode != VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT) {
+         pa_sc_conservative_rast = S_028C4C_PREZ_AA_MASK_ENABLE(1) | S_028C4C_POSTZ_AA_MASK_ENABLE(1) |
+                                   S_028C4C_CENTROID_SAMPLE_OVERRIDE(1);
 
-      if (mode == VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT) {
-         pa_sc_conservative_rast |=
-            S_028C4C_OVER_RAST_ENABLE(1) | S_028C4C_OVER_RAST_SAMPLE_SELECT(0) |
-            S_028C4C_UNDER_RAST_ENABLE(0) | S_028C4C_UNDER_RAST_SAMPLE_SELECT(1) |
-            S_028C4C_PBB_UNCERTAINTY_REGION_ENABLE(1);
-      } else {
-         assert(mode == VK_CONSERVATIVE_RASTERIZATION_MODE_UNDERESTIMATE_EXT);
-         pa_sc_conservative_rast |=
-            S_028C4C_OVER_RAST_ENABLE(0) | S_028C4C_OVER_RAST_SAMPLE_SELECT(1) |
-            S_028C4C_UNDER_RAST_ENABLE(1) | S_028C4C_UNDER_RAST_SAMPLE_SELECT(0) |
-            S_028C4C_PBB_UNCERTAINTY_REGION_ENABLE(0);
+         if (mode == VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT) {
+            pa_sc_conservative_rast |=
+               S_028C4C_OVER_RAST_ENABLE(1) | S_028C4C_OVER_RAST_SAMPLE_SELECT(0) |
+               S_028C4C_UNDER_RAST_ENABLE(0) | S_028C4C_UNDER_RAST_SAMPLE_SELECT(1) |
+               S_028C4C_PBB_UNCERTAINTY_REGION_ENABLE(1);
+         } else {
+            assert(mode == VK_CONSERVATIVE_RASTERIZATION_MODE_UNDERESTIMATE_EXT);
+            pa_sc_conservative_rast |=
+               S_028C4C_OVER_RAST_ENABLE(0) | S_028C4C_OVER_RAST_SAMPLE_SELECT(1) |
+               S_028C4C_UNDER_RAST_ENABLE(1) | S_028C4C_UNDER_RAST_SAMPLE_SELECT(0) |
+               S_028C4C_PBB_UNCERTAINTY_REGION_ENABLE(0);
+         }
       }
-   }
 
-   radeon_set_context_reg(ctx_cs, R_028C4C_PA_SC_CONSERVATIVE_RASTERIZATION_CNTL,
-                          pa_sc_conservative_rast);
+      radeon_set_context_reg(ctx_cs, R_028C4C_PA_SC_CONSERVATIVE_RASTERIZATION_CNTL,
+                             pa_sc_conservative_rast);
+   }
 }
 
 static void
@@ -5086,8 +5064,10 @@ radv_pipeline_generate_vgt_shader_config(struct radeon_cmdbuf *ctx_cs,
       else if (pipeline->shaders[MESA_SHADER_VERTEX])
          vs_size = pipeline->shaders[MESA_SHADER_VERTEX]->info.wave_size;
 
-      if (radv_pipeline_has_ngg(pipeline))
+      if (radv_pipeline_has_ngg(pipeline)) {
+         assert(!radv_pipeline_has_gs_copy_shader(pipeline));
          gs_size = vs_size;
+      }
 
       /* legacy GS only supports Wave64 */
       stages |= S_028B54_HS_W32_EN(hs_size == 32 ? 1 : 0) |
@@ -5325,6 +5305,7 @@ radv_pipeline_init_vertex_input_state(struct radv_pipeline *pipeline,
 
    pipeline->use_per_attribute_vb_descs = info->vs.use_per_attribute_vb_descs;
    pipeline->vb_desc_usage_mask = info->vs.vb_desc_usage_mask;
+   pipeline->vb_desc_alloc_size = util_bitcount(pipeline->vb_desc_usage_mask) * 16;
 }
 
 static struct radv_shader_variant *

@@ -133,8 +133,8 @@ optimizations = [
    (('fadd(is_only_used_as_float)', 'a@16', 0.0), a, '!'+signed_zero_inf_nan_preserve_16),
    (('fadd(is_only_used_as_float)', 'a@32', 0.0), a, '!'+signed_zero_inf_nan_preserve_32),
    (('iadd', a, 0), a),
-   (('usadd_4x8', a, 0), a),
-   (('usadd_4x8', a, ~0), ~0),
+   (('usadd_4x8_vc4', a, 0), a),
+   (('usadd_4x8_vc4', a, ~0), ~0),
    (('~fadd', ('fmul', a, b), ('fmul', a, c)), ('fmul', a, ('fadd', b, c))),
    (('iadd', ('imul', a, b), ('imul', a, c)), ('imul', a, ('iadd', b, c))),
    (('iand', ('ior', a, b), ('ior', a, c)), ('ior', a, ('iand', b, c))),
@@ -151,8 +151,8 @@ optimizations = [
    (('fmul', 'a@16', 0.0), 0.0, '!'+signed_zero_inf_nan_preserve_16),
    (('fmul', 'a@32', 0.0), 0.0, '!'+signed_zero_inf_nan_preserve_32),
    (('imul', a, 0), 0),
-   (('umul_unorm_4x8', a, 0), 0),
-   (('umul_unorm_4x8', a, ~0), a),
+   (('umul_unorm_4x8_vc4', a, 0), 0),
+   (('umul_unorm_4x8_vc4', a, ~0), a),
    (('~fmul', a, 1.0), a),
    # The only effect a*1.0 can have is flushing denormals. If it's only used by
    # a floating point instruction, they should flush any input denormals and
@@ -1258,6 +1258,9 @@ optimizations.extend([
    (('ibfe', a, 16, 8), ('extract_i8', a, 2), '!options->lower_extract_byte'),
    (('ibfe', a, 24, 8), ('extract_i8', a, 3), '!options->lower_extract_byte'),
 
+   (('extract_u8', ('extract_i8', a, b), 0), ('extract_u8', a, b)),
+   (('extract_u8', ('extract_u8', a, b), 0), ('extract_u8', a, b)),
+
     # Word extraction
    (('ushr', ('ishl', 'a@32', 16), 16), ('extract_u16', a, 0), '!options->lower_extract_word'),
    (('ushr', 'a@32', 16), ('extract_u16', a, 1), '!options->lower_extract_word'),
@@ -1269,6 +1272,9 @@ optimizations.extend([
    (('ubfe', a, 16, 16), ('extract_u16', a, 1), '!options->lower_extract_word'),
    (('ibfe', a,  0, 16), ('extract_i16', a, 0), '!options->lower_extract_word'),
    (('ibfe', a, 16, 16), ('extract_i16', a, 1), '!options->lower_extract_word'),
+
+   (('extract_u16', ('extract_i16', a, b), 0), ('extract_u16', a, b)),
+   (('extract_u16', ('extract_u16', a, b), 0), ('extract_u16', a, b)),
 
    # Lower pack/unpack
    (('pack_64_2x32_split', a, b), ('ior', ('u2u64', a), ('ishl', ('u2u64', b), 32)), 'options->lower_pack_64_2x32_split'),
@@ -1327,8 +1333,8 @@ for op in ('extract_u8', 'extract_i8'):
 
 optimizations.extend([
    # Subtracts
-   (('ussub_4x8', a, 0), a),
-   (('ussub_4x8', a, ~0), 0),
+   (('ussub_4x8_vc4', a, 0), a),
+   (('ussub_4x8_vc4', a, ~0), 0),
    # Lower all Subtractions first - they can get recombined later
    (('fsub', a, b), ('fadd', a, ('fneg', b))),
    (('isub', a, b), ('iadd', a, ('ineg', b))),
@@ -2423,6 +2429,19 @@ for N in [16, 32]:
                 ((x2xN, ('i2i16', aN)), (extract_x16, a, 0), '!options->lower_extract_word'),
             ])
 
+# Byte insertion
+late_optimizations.extend([(('ishl', ('extract_u8', 'a@32', 0), 8 * i), ('insert_u8', a, i), '!options->lower_insert_byte') for i in range(1, 4)])
+late_optimizations.extend([(('iand', ('ishl', 'a@32', 8 * i), 0xff << (8 * i)), ('insert_u8', a, i), '!options->lower_insert_byte') for i in range(1, 4)])
+late_optimizations.append((('ishl', 'a@32', 24), ('insert_u8', a, 3), '!options->lower_insert_byte'))
+
+late_optimizations += [
+   # Word insertion
+   (('ishl', 'a@32', 16), ('insert_u16', a, 1), '!options->lower_insert_word'),
+
+   # Extract and then insert
+   (('insert_u8', ('extract_u8', 'a', 0), b), ('insert_u8', a, b)),
+   (('insert_u16', ('extract_u16', 'a', 0), b), ('insert_u16', a, b)),
+]
 
 # Integer sizes
 for s in [8, 16, 32, 64]:

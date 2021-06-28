@@ -301,12 +301,12 @@ static void scan_instruction(const struct nir_shader *nir, struct si_shader_info
             info->uses_indirect_descriptor = true;
          break;
       case nir_intrinsic_load_local_invocation_id:
-      case nir_intrinsic_load_work_group_id: {
+      case nir_intrinsic_load_workgroup_id: {
          unsigned mask = nir_ssa_def_components_read(&intr->dest.ssa);
          while (mask) {
             unsigned i = u_bit_scan(&mask);
 
-            if (intr->intrinsic == nir_intrinsic_load_work_group_id)
+            if (intr->intrinsic == nir_intrinsic_load_workgroup_id)
                info->uses_block_id[i] = true;
             else
                info->uses_thread_id[i] = true;
@@ -418,6 +418,10 @@ void si_nir_scan_shader(const struct nir_shader *nir, struct si_shader_info *inf
       info->color_interpolate_loc[1] = nir->info.fs.color1_sample ? TGSI_INTERPOLATE_LOC_SAMPLE :
                                        nir->info.fs.color1_centroid ? TGSI_INTERPOLATE_LOC_CENTROID :
                                                                       TGSI_INTERPOLATE_LOC_CENTER;
+      /* Set an invalid value. Will be determined at draw time if needed when the expected
+       * conditions are met.
+       */
+      info->writes_1_if_tex_is_1 = nir->info.writes_memory ? 0 : 0xff;
    }
 
    info->constbuf0_num_slots = nir->num_uniforms;
@@ -431,11 +435,11 @@ void si_nir_scan_shader(const struct nir_shader *nir, struct si_shader_info *inf
    info->uses_base_vertex = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BASE_VERTEX);
    info->uses_base_instance = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE);
    info->uses_invocationid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_INVOCATION_ID);
-   info->uses_grid_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_NUM_WORK_GROUPS);
+   info->uses_grid_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_NUM_WORKGROUPS);
    info->uses_subgroup_info = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_LOCAL_INVOCATION_INDEX) ||
                               BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SUBGROUP_ID) ||
                               BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_NUM_SUBGROUPS);
-   info->uses_variable_block_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_LOCAL_GROUP_SIZE);
+   info->uses_variable_block_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_WORKGROUP_SIZE);
    info->uses_drawid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_DRAW_ID);
    info->uses_primid = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_PRIMITIVE_ID) ||
                        nir->info.inputs_read & VARYING_BIT_PRIMITIVE_ID;

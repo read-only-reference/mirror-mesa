@@ -94,6 +94,25 @@ panfrost_batch_init(struct panfrost_context *ctx,
                         PAN_BO_INVISIBLE, 65536, "Varyings", false, true);
 
         panfrost_batch_add_fbo_bos(batch);
+
+        /* Reserve the framebuffer and local storage descriptors */
+        batch->framebuffer =
+                (dev->quirks & MIDGARD_SFBD) ?
+                panfrost_pool_alloc_desc(&batch->pool, SINGLE_TARGET_FRAMEBUFFER) :
+                panfrost_pool_alloc_desc_aggregate(&batch->pool,
+                                                   PAN_DESC(MULTI_TARGET_FRAMEBUFFER),
+                                                   PAN_DESC(ZS_CRC_EXTENSION),
+                                                   PAN_DESC_ARRAY(MAX2(key->nr_cbufs, 1), RENDER_TARGET));
+
+        /* Add the MFBD tag now, other tags will be added at submit-time */
+        if (!(dev->quirks & MIDGARD_SFBD))
+                batch->framebuffer.gpu |= MALI_FBD_TAG_IS_MFBD;
+
+        /* On Midgard, the TLS is embedded in the FB descriptor */
+        if (pan_is_bifrost(dev))
+                batch->tls = panfrost_pool_alloc_desc(&batch->pool, LOCAL_STORAGE);
+        else
+                batch->tls = batch->framebuffer;
 }
 
 static void
@@ -638,24 +657,24 @@ panfrost_batch_to_fb_info(const struct panfrost_batch *batch,
                 rts[i].image = &prsrc->image;
                 rts[i].nr_samples = surf->nr_samples ? : MAX2(surf->texture->nr_samples, 1);
                 memcpy(rts[i].swizzle, id_swz, sizeof(rts[i].swizzle));
-                fb->rts[i].state = &prsrc->state;
+                fb->rts[i].crc_valid = &prsrc->valid.crc;
                 fb->rts[i].view = &rts[i];
 
                 /* Preload if the RT is read or updated */
                 if (!(batch->clear & mask) &&
                     ((batch->read & mask) ||
                      ((batch->draws & mask) &&
-                      fb->rts[i].state->slices[fb->rts[i].view->first_level].data_valid)))
+                      BITSET_TEST(prsrc->valid.data, fb->rts[i].view->first_level))))
                         fb->rts[i].preload = true;
 
         }
 
         const struct pan_image_view *s_view = NULL, *z_view = NULL;
-        const struct pan_image_state *s_state = NULL, *z_state = NULL;
+        struct panfrost_resource *z_rsrc = NULL, *s_rsrc = NULL;
 
         if (batch->key.zsbuf) {
                 struct pipe_surface *surf = batch->key.zsbuf;
-                struct panfrost_resource *prsrc = pan_resource(surf->texture);
+                z_rsrc = pan_resource(surf->texture);
 
                 zs->format = surf->format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT ?
                              PIPE_FORMAT_Z32_FLOAT : surf->format;
@@ -663,31 +682,28 @@ panfrost_batch_to_fb_info(const struct panfrost_batch *batch,
                 zs->last_level = zs->first_level = surf->u.tex.level;
                 zs->first_layer = surf->u.tex.first_layer;
                 zs->last_layer = surf->u.tex.last_layer;
-                zs->image = &prsrc->image;
+                zs->image = &z_rsrc->image;
                 zs->nr_samples = surf->nr_samples ? : MAX2(surf->texture->nr_samples, 1);
                 memcpy(zs->swizzle, id_swz, sizeof(zs->swizzle));
                 fb->zs.view.zs = zs;
-                fb->zs.state.zs = &prsrc->state;
                 z_view = zs;
-                z_state = &prsrc->state;
                 if (util_format_is_depth_and_stencil(zs->format)) {
                         s_view = zs;
-                        s_state = &prsrc->state;
+                        s_rsrc = z_rsrc;
                 }
 
-                if (prsrc->separate_stencil) {
+                if (z_rsrc->separate_stencil) {
+                        s_rsrc = z_rsrc->separate_stencil;
                         s->format = PIPE_FORMAT_S8_UINT;
                         s->dim = MALI_TEXTURE_DIMENSION_2D;
                         s->last_level = s->first_level = surf->u.tex.level;
                         s->first_layer = surf->u.tex.first_layer;
                         s->last_layer = surf->u.tex.last_layer;
-                        s->image = &prsrc->separate_stencil->image;
+                        s->image = &s_rsrc->image;
                         s->nr_samples = surf->nr_samples ? : MAX2(surf->texture->nr_samples, 1);
                         memcpy(s->swizzle, id_swz, sizeof(s->swizzle));
                         fb->zs.view.s = s;
-                        fb->zs.state.s = &prsrc->separate_stencil->state;
                         s_view = s;
-                        s_state = &prsrc->separate_stencil->state;
                 }
         }
 
@@ -707,86 +723,26 @@ panfrost_batch_to_fb_info(const struct panfrost_batch *batch,
         if (!fb->zs.clear.z &&
             ((batch->read & PIPE_CLEAR_DEPTH) ||
              ((batch->draws & PIPE_CLEAR_DEPTH) &&
-              z_state->slices[z_view->first_level].data_valid)))
+              z_rsrc && BITSET_TEST(z_rsrc->valid.data, z_view->first_level))))
                 fb->zs.preload.z = true;
 
         if (!fb->zs.clear.s &&
             ((batch->read & PIPE_CLEAR_STENCIL) ||
              ((batch->draws & PIPE_CLEAR_STENCIL) &&
-              s_state->slices[s_view->first_level].data_valid)))
+              s_rsrc && BITSET_TEST(s_rsrc->valid.data, s_view->first_level))))
                 fb->zs.preload.s = true;
 
         /* Preserve both component if we have a combined ZS view and
          * one component needs to be preserved.
          */
         if (s_view == z_view && fb->zs.discard.z != fb->zs.discard.s) {
-                bool valid = z_state->slices[z_view->first_level].data_valid;
+                bool valid = BITSET_TEST(z_rsrc->valid.data, z_view->first_level);
 
                 fb->zs.discard.z = false;
                 fb->zs.discard.s = false;
                 fb->zs.preload.z = !fb->zs.clear.z && valid;
                 fb->zs.preload.s = !fb->zs.clear.s && valid;
         }
-}
-
-static mali_ptr
-panfrost_batch_reserve_framebuffer(struct panfrost_batch *batch)
-{
-        struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
-
-        if (batch->framebuffer.gpu)
-                return batch->framebuffer.gpu;
-
-        /* If we haven't, reserve space for a framebuffer descriptor */
-
-        struct pan_image_view rts[8];
-        struct pan_image_view zs;
-        struct pan_image_view s;
-        struct pan_fb_info fb;
-
-        panfrost_batch_to_fb_info(batch, &fb, rts, &zs, &s, true);
-
-        unsigned zs_crc_count = pan_fbd_has_zs_crc_ext(dev, &fb) ? 1 : 0;
-        unsigned rt_count = MAX2(fb.rt_count, 1);
-        batch->framebuffer =
-                (dev->quirks & MIDGARD_SFBD) ?
-                panfrost_pool_alloc_desc(&batch->pool, SINGLE_TARGET_FRAMEBUFFER) :
-                panfrost_pool_alloc_desc_aggregate(&batch->pool,
-                                                   PAN_DESC(MULTI_TARGET_FRAMEBUFFER),
-                                                   PAN_DESC_ARRAY(zs_crc_count, ZS_CRC_EXTENSION),
-                                                   PAN_DESC_ARRAY(rt_count, RENDER_TARGET));
-
-        /* Add the MFBD tag now, other tags will be added when emitting the
-         * FB desc.
-         */
-        if (!(dev->quirks & MIDGARD_SFBD))
-                batch->framebuffer.gpu |= MALI_FBD_TAG_IS_MFBD;
-
-        return batch->framebuffer.gpu;
-}
-
-mali_ptr
-panfrost_batch_reserve_tls(struct panfrost_batch *batch, bool compute)
-{
-        struct panfrost_device *dev = pan_device(batch->ctx->base.screen);
-
-        /* If we haven't, reserve space for the thread storage descriptor */
-
-        if (batch->tls.gpu)
-                return batch->tls.gpu;
-
-        if (pan_is_bifrost(dev) || compute) {
-                batch->tls = panfrost_pool_alloc_desc(&batch->pool, LOCAL_STORAGE);
-        } else {
-                /* On Midgard, the FB descriptor contains a thread storage
-                 * descriptor, and tiler jobs need more than thread storage
-                 * info. Let's point to the FB desc in that case.
-                 */
-                panfrost_batch_reserve_framebuffer(batch);
-                batch->tls = batch->framebuffer;
-        }
-
-        return batch->tls.gpu;
 }
 
 static void
@@ -879,12 +835,8 @@ panfrost_batch_submit_ioctl(struct panfrost_batch *batch,
                 ret = drmIoctl(dev->fd, DRM_IOCTL_PANFROST_SUBMIT, &submit);
         free(bo_handles);
 
-        if (ret) {
-                if (dev->debug & PAN_DBG_MSGS)
-                        fprintf(stderr, "Error submitting: %m\n");
-
+        if (ret)
                 return errno;
-        }
 
         /* Trace the job if we're doing that */
         if (dev->debug & (PAN_DBG_TRACE | PAN_DBG_SYNC)) {
@@ -927,7 +879,9 @@ panfrost_batch_submit_jobs(struct panfrost_batch *batch,
         if (has_draws) {
                 ret = panfrost_batch_submit_ioctl(batch, batch->scoreboard.first_job,
                                                   0, in_sync, has_frag ? 0 : out_sync);
-                assert(!ret);
+
+                if (ret)
+                        goto done;
         }
 
         if (has_frag) {
@@ -942,9 +896,11 @@ panfrost_batch_submit_jobs(struct panfrost_batch *batch,
                 ret = panfrost_batch_submit_ioctl(batch, fragjob,
                                                   PANFROST_JD_REQ_FS, 0,
                                                   out_sync);
-                assert(!ret);
+                if (ret)
+                        goto done;
         }
 
+done:
         if (has_tiler)
                 pthread_mutex_unlock(&dev->submit_lock);
 
@@ -962,15 +918,11 @@ panfrost_batch_submit(struct panfrost_batch *batch,
         if (!batch->scoreboard.first_job && !batch->clear)
                 goto out;
 
-        if (batch->scoreboard.first_tiler || batch->clear)
-                panfrost_batch_reserve_framebuffer(batch);
-
         struct pan_fb_info fb;
         struct pan_image_view rts[8], zs, s;
 
         panfrost_batch_to_fb_info(batch, &fb, rts, &zs, &s, false);
 
-        panfrost_batch_reserve_tls(batch, false);
         panfrost_batch_draw_wallpaper(batch, &fb);
 
 
@@ -981,18 +933,17 @@ panfrost_batch_submit(struct panfrost_batch *batch,
         }
 
         /* Now that all draws are in, we can finally prepare the
-         * FBD for the batch */
+         * FBD for the batch (if there is one). */
 
         panfrost_emit_tls(batch);
-
         panfrost_emit_tile_map(batch, &fb);
 
-        if (batch->framebuffer.gpu)
+        if (batch->scoreboard.first_tiler || batch->clear)
                 panfrost_emit_fbd(batch, &fb);
 
         ret = panfrost_batch_submit_jobs(batch, &fb, in_sync, out_sync);
 
-        if (ret && dev->debug & PAN_DBG_MSGS)
+        if (ret)
                 fprintf(stderr, "panfrost_batch_submit failed: %d\n", ret);
 
         /* We must reset the damage info of our render targets here even

@@ -178,6 +178,29 @@ vn_instance_init_ring(struct vn_instance *instance)
    return VK_SUCCESS;
 }
 
+static void
+vn_instance_init_experimental_features(struct vn_instance *instance)
+{
+   if (instance->renderer_info.vk_mesa_venus_protocol_spec_version !=
+       100000) {
+      if (VN_DEBUG(INIT))
+         vn_log(instance, "renderer supports no experimental features");
+      return;
+   }
+
+   size_t size = sizeof(instance->experimental);
+   vn_call_vkGetVenusExperimentalFeatureData100000MESA(
+      instance, &size, &instance->experimental);
+   if (VN_DEBUG(INIT)) {
+      vn_log(instance,
+             "VkVenusExperimentalFeatures100000MESA is as below:"
+             "\n\tmemoryResourceAllocationSize = %u"
+             "\n\tglobalFencing = %u",
+             instance->experimental.memoryResourceAllocationSize,
+             instance->experimental.globalFencing);
+   }
+}
+
 static VkResult
 vn_instance_init_renderer(struct vn_instance *instance)
 {
@@ -579,7 +602,7 @@ void
 vn_instance_submit_command(struct vn_instance *instance,
                            struct vn_instance_submit_command *submit)
 {
-   void *reply_ptr;
+   void *reply_ptr = NULL;
    submit->reply_shmem = NULL;
 
    mtx_lock(&instance->ring.mutex);
@@ -1268,11 +1291,15 @@ vn_physical_device_init_properties(struct vn_physical_device *physical_dev)
    }
 
    props->driverVersion = vk_get_driver_version();
-   props->vendorID = instance->renderer_info.pci.vendor_id;
-   props->deviceID = instance->renderer_info.pci.device_id;
-   /* some apps don't like VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU */
-   props->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
-   snprintf(props->deviceName, sizeof(props->deviceName), "Virtio GPU");
+
+   char device_name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
+   int device_name_len = snprintf(device_name, sizeof(device_name),
+                                  "Virtio-GPU Venus (%s)", props->deviceName);
+   if (device_name_len >= VK_MAX_PHYSICAL_DEVICE_NAME_SIZE) {
+      memcpy(device_name + VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 5, "...)", 4);
+      device_name_len = VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1;
+   }
+   memcpy(props->deviceName, device_name, device_name_len + 1);
 
    vk12_props->driverID = 0;
    snprintf(vk12_props->driverName, sizeof(vk12_props->driverName), "venus");
@@ -1408,6 +1435,13 @@ vn_physical_device_init_external_fence_handles(
     * and idle waiting.
     */
    physical_dev->external_fence_handles = 0;
+
+#ifdef ANDROID
+   if (physical_dev->instance->experimental.globalFencing) {
+      physical_dev->external_fence_handles =
+         VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT;
+   }
+#endif
 }
 
 static void
@@ -1434,6 +1468,13 @@ vn_physical_device_init_external_semaphore_handles(
     */
    physical_dev->external_binary_semaphore_handles = 0;
    physical_dev->external_timeline_semaphore_handles = 0;
+
+#ifdef ANDROID
+   if (physical_dev->instance->experimental.globalFencing) {
+      physical_dev->external_binary_semaphore_handles =
+         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+   }
+#endif
 }
 
 static void
@@ -1449,26 +1490,35 @@ vn_physical_device_get_native_extensions(
    memset(exts, 0, sizeof(*exts));
 
    /* see vn_physical_device_init_external_memory */
-   if (renderer_exts->EXT_external_memory_dma_buf &&
-       renderer_info->has_dma_buf_import) {
+   const bool can_external_mem = renderer_exts->EXT_external_memory_dma_buf &&
+                                 renderer_info->has_dma_buf_import;
+
 #ifdef ANDROID
-      if (renderer_exts->EXT_image_drm_format_modifier &&
-          renderer_exts->EXT_queue_family_foreign) {
-         exts->ANDROID_external_memory_android_hardware_buffer = true;
-         exts->ANDROID_native_buffer = true;
-      }
-#else
+   if (can_external_mem && renderer_exts->EXT_image_drm_format_modifier &&
+       renderer_exts->EXT_queue_family_foreign &&
+       instance->experimental.memoryResourceAllocationSize == VK_TRUE) {
+      exts->ANDROID_external_memory_android_hardware_buffer = true;
+      exts->ANDROID_native_buffer = true;
+   }
+
+   /* we have a very poor implementation */
+   if (instance->experimental.globalFencing) {
+      exts->KHR_external_fence_fd = true;
+      exts->KHR_external_semaphore_fd = true;
+   }
+#else /* ANDROID */
+   if (can_external_mem) {
       exts->KHR_external_memory_fd = true;
       exts->EXT_external_memory_dma_buf = true;
-#endif
    }
 
 #ifdef VN_USE_WSI_PLATFORM
+   /* XXX we should check for EXT_queue_family_foreign */
    exts->KHR_incremental_present = true;
    exts->KHR_swapchain = true;
    exts->KHR_swapchain_mutable_format = true;
 #endif
-
+#endif /* ANDROID */
 }
 
 static void
@@ -1653,8 +1703,8 @@ vn_physical_device_init_renderer_version(
       instance, vn_physical_device_to_handle(physical_dev), &props);
    if (props.apiVersion < VN_MIN_RENDERER_VERSION) {
       if (VN_DEBUG(INIT)) {
-         vn_log(instance, "unsupported renderer device version %d.%d",
-                VK_VERSION_MAJOR(props.apiVersion),
+         vn_log(instance, "%s has unsupported renderer device version %d.%d",
+                props.deviceName, VK_VERSION_MAJOR(props.apiVersion),
                 VK_VERSION_MINOR(props.apiVersion));
       }
       return VK_ERROR_INITIALIZATION_FAILED;
@@ -1853,7 +1903,7 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                   VkInstance *pInstance)
 {
    const VkAllocationCallbacks *alloc =
-      pAllocator ? pAllocator : vn_default_allocator();
+      pAllocator ? pAllocator : vk_default_allocator();
    struct vn_instance *instance;
    VkResult result;
 
@@ -1895,6 +1945,8 @@ vn_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    result = vn_instance_init_ring(instance);
    if (result != VK_SUCCESS)
       goto fail;
+
+   vn_instance_init_experimental_features(instance);
 
    result = vn_instance_init_renderer_versions(instance);
    if (result != VK_SUCCESS)
@@ -3068,12 +3120,20 @@ vn_queue_init(struct vn_device *dev,
    queue->index = queue_index;
    queue->flags = queue_info->flags;
 
-   VkResult result =
-      vn_CreateFence(vn_device_to_handle(dev),
-                     &(const VkFenceCreateInfo){
-                        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-                     },
-                     NULL, &queue->wait_fence);
+   const VkExportFenceCreateInfo export_fence_info = {
+      .sType = VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO,
+      .pNext = NULL,
+      .handleTypes = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT,
+   };
+   const VkFenceCreateInfo fence_info = {
+      .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+      .pNext = dev->instance->experimental.globalFencing == VK_TRUE
+                  ? &export_fence_info
+                  : NULL,
+      .flags = 0,
+   };
+   VkResult result = vn_CreateFence(vn_device_to_handle(dev), &fence_info,
+                                    NULL, &queue->wait_fence);
    if (result != VK_SUCCESS)
       return result;
 
@@ -3188,7 +3248,11 @@ vn_device_fix_create_info(const struct vn_device *dev,
       app_exts->KHR_swapchain || app_exts->ANDROID_native_buffer ||
       app_exts->ANDROID_external_memory_android_hardware_buffer;
    if (has_wsi) {
-      if (!app_exts->EXT_image_drm_format_modifier) {
+      /* KHR_swapchain may be advertised without the renderer support for
+       * EXT_image_drm_format_modifier
+       */
+      if (!app_exts->EXT_image_drm_format_modifier &&
+          physical_dev->renderer_extensions.EXT_image_drm_format_modifier) {
          extra_exts[extra_count++] =
             VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME;
 
@@ -3199,7 +3263,11 @@ vn_device_fix_create_info(const struct vn_device *dev,
          }
       }
 
-      if (!app_exts->EXT_queue_family_foreign) {
+      /* XXX KHR_swapchain may be advertised without the renderer support for
+       * EXT_queue_family_foreign
+       */
+      if (!app_exts->EXT_queue_family_foreign &&
+          physical_dev->renderer_extensions.EXT_queue_family_foreign) {
          extra_exts[extra_count++] =
             VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME;
       }
@@ -3313,12 +3381,6 @@ vn_CreateDevice(VkPhysicalDevice physicalDevice,
       goto fail;
    }
 
-   if (dev->base.base.enabled_extensions.ANDROID_native_buffer) {
-      result = vn_android_wsi_init(dev, alloc);
-      if (result != VK_SUCCESS)
-         goto fail;
-   }
-
    for (uint32_t i = 0; i < ARRAY_SIZE(dev->memory_pools); i++) {
       struct vn_device_memory_pool *pool = &dev->memory_pools[i];
       mtx_init(&pool->mutex, mtx_plain);
@@ -3348,9 +3410,6 @@ vn_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator)
 
    if (!dev)
       return;
-
-   if (dev->base.base.enabled_extensions.ANDROID_native_buffer)
-      vn_android_wsi_fini(dev, alloc);
 
    for (uint32_t i = 0; i < ARRAY_SIZE(dev->memory_pools); i++)
       vn_device_memory_pool_fini(dev, i);

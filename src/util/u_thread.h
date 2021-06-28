@@ -65,6 +65,31 @@
 #define UTIL_MAX_CPUS               1024  /* this should be enough */
 #define UTIL_MAX_L3_CACHES          UTIL_MAX_CPUS
 
+/* Some highly performance-sensitive thread-local variables like the current GL
+ * context are declared with the initial-exec model on Linux.  glibc allocates a
+ * fixed number of extra slots for initial-exec TLS variables at startup, and
+ * Mesa relies on (even if it's dlopen()ed after init) being able to fit into
+ * those.  This model saves the call to look up the address of the TLS variable.
+ *
+ * However, if we don't have this TLS model available on the platform, then we
+ * still want to use normal TLS (which involves a function call, but not the
+ * expensive pthread_getspecific() or its equivalent).
+ */
+#ifdef _MSC_VER
+#define __THREAD_INITIAL_EXEC __declspec(thread)
+#elif defined(ANDROID)
+/* Android 29 gained ELF TLS support, but it doesn't support initial-exec and
+ * it will throw:
+ *
+ *     dlopen failed: TLS symbol "(null)" in dlopened
+ *     "/vendor/lib64/egl/libEGL_mesa.so" referenced from
+ *     "/vendor/lib64/egl/libEGL_mesa.so" using IE access model.
+ */
+#define __THREAD_INITIAL_EXEC __thread
+#else
+#define __THREAD_INITIAL_EXEC __thread __attribute__((tls_model("initial-exec")))
+#endif
+
 static inline int
 util_get_current_cpu(void)
 {
@@ -150,7 +175,7 @@ util_set_thread_affinity(thrd_t thread,
       if (pthread_getaffinity_np(thread, sizeof(cpuset), &cpuset) != 0)
          return false;
 
-      memset(old_mask, 0, num_mask_bits / 32);
+      memset(old_mask, 0, num_mask_bits / 8);
       for (unsigned i = 0; i < num_mask_bits && i < CPU_SETSIZE; i++) {
          if (CPU_ISSET(i, &cpuset))
             old_mask[i / 32] |= 1u << (i % 32);
@@ -175,7 +200,7 @@ util_set_thread_affinity(thrd_t thread,
       return false;
 
    if (old_mask) {
-      memset(old_mask, 0, num_mask_bits / 32);
+      memset(old_mask, 0, num_mask_bits / 8);
 
       old_mask[0] = m;
 #ifdef _WIN64

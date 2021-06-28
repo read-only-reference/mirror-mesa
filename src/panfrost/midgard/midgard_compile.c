@@ -60,6 +60,7 @@ static const struct debug_named_value midgard_debug_options[] = {
         {"shaderdb",  MIDGARD_DBG_SHADERDB,     "Prints shader-db statistics"},
         {"inorder",   MIDGARD_DBG_INORDER,      "Disables out-of-order scheduling"},
         {"verbose",   MIDGARD_DBG_VERBOSE,      "Dump shaders verbosely"},
+        {"internal",  MIDGARD_DBG_INTERNAL,     "Dump internal shaders"},
         DEBUG_NAMED_VALUE_END
 };
 
@@ -585,9 +586,9 @@ mir_accept_dest_mod(compiler_context *ctx, nir_dest **dest, nir_op op)
 static unsigned
 mir_determine_float_outmod(compiler_context *ctx, nir_dest **dest, unsigned prior_outmod)
 {
-        bool clamp_0_inf = mir_accept_dest_mod(ctx, dest, nir_op_fclamp_pos);
+        bool clamp_0_inf = mir_accept_dest_mod(ctx, dest, nir_op_fclamp_pos_mali);
         bool clamp_0_1 = mir_accept_dest_mod(ctx, dest, nir_op_fsat);
-        bool clamp_m1_1 = mir_accept_dest_mod(ctx, dest, nir_op_fsat_signed);
+        bool clamp_m1_1 = mir_accept_dest_mod(ctx, dest, nir_op_fsat_signed_mali);
         bool prior = (prior_outmod != midgard_outmod_none);
         int count = (int) prior + (int) clamp_0_inf + (int) clamp_0_1 + (int) clamp_m1_1;
 
@@ -659,7 +660,7 @@ mir_is_bcsel_float(nir_alu_instr *instr)
         };
 
         nir_op floatdestmods[] = {
-                nir_op_fsat, nir_op_fsat_signed, nir_op_fclamp_pos,
+                nir_op_fsat, nir_op_fsat_signed_mali, nir_op_fclamp_pos_mali,
                 nir_op_f2f16, nir_op_f2f32
         };
 
@@ -744,6 +745,10 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                 ALU_CASE(fdot4, fdot4);
                 ALU_CASE(iadd, iadd);
                 ALU_CASE(isub, isub);
+                ALU_CASE(iadd_sat, iaddsat);
+                ALU_CASE(isub_sat, isubsat);
+                ALU_CASE(uadd_sat, uaddsat);
+                ALU_CASE(usub_sat, usubsat);
                 ALU_CASE(imul, imul);
                 ALU_CASE(imul_high, imul);
                 ALU_CASE(umul_high, imul);
@@ -843,8 +848,8 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                 ALU_CASE(fabs, fmov);
                 ALU_CASE(fneg, fmov);
                 ALU_CASE(fsat, fmov);
-                ALU_CASE(fsat_signed, fmov);
-                ALU_CASE(fclamp_pos, fmov);
+                ALU_CASE(fsat_signed_mali, fmov);
+                ALU_CASE(fclamp_pos_mali, fmov);
 
         /* For size conversion, we use a move. Ideally though we would squash
          * these ops together; maybe that has to happen after in NIR as part of
@@ -935,9 +940,9 @@ emit_alu(compiler_context *ctx, nir_alu_instr *instr)
                 outmod = midgard_outmod_keeplo;
         } else if (instr->op == nir_op_fsat) {
                 outmod = midgard_outmod_clamp_0_1;
-        } else if (instr->op == nir_op_fsat_signed) {
+        } else if (instr->op == nir_op_fsat_signed_mali) {
                 outmod = midgard_outmod_clamp_m1_1;
-        } else if (instr->op == nir_op_fclamp_pos) {
+        } else if (instr->op == nir_op_fclamp_pos_mali) {
                 outmod = midgard_outmod_clamp_0_inf;
         }
 
@@ -1515,7 +1520,7 @@ static unsigned
 compute_builtin_arg(nir_intrinsic_op op)
 {
         switch (op) {
-        case nir_intrinsic_load_work_group_id:
+        case nir_intrinsic_load_workgroup_id:
                 return REGISTER_LDST_GROUP_ID;
         case nir_intrinsic_load_local_invocation_id:
                 return REGISTER_LDST_LOCAL_THREAD_ID;
@@ -1598,7 +1603,7 @@ static unsigned
 vertex_builtin_arg(nir_intrinsic_op op)
 {
         switch (op) {
-        case nir_intrinsic_load_vertex_id:
+        case nir_intrinsic_load_vertex_id_zero_base:
                 return PAN_VERTEX_ID;
         case nir_intrinsic_load_instance_id:
                 return PAN_INSTANCE_ID;
@@ -2008,9 +2013,18 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 emit_global(ctx, &instr->instr, false, reg, &instr->src[1], seg);
                 break;
 
+        case nir_intrinsic_load_first_vertex:
         case nir_intrinsic_load_ssbo_address:
         case nir_intrinsic_load_work_dim:
                 emit_sysval_read(ctx, &instr->instr, 1, 0);
+                break;
+
+        case nir_intrinsic_load_base_vertex:
+                emit_sysval_read(ctx, &instr->instr, 1, 4);
+                break;
+
+        case nir_intrinsic_load_base_instance:
+                emit_sysval_read(ctx, &instr->instr, 1, 8);
                 break;
 
         case nir_intrinsic_load_sample_positions_pan:
@@ -2023,20 +2037,20 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
 
         case nir_intrinsic_load_viewport_scale:
         case nir_intrinsic_load_viewport_offset:
-        case nir_intrinsic_load_num_work_groups:
+        case nir_intrinsic_load_num_workgroups:
         case nir_intrinsic_load_sampler_lod_parameters_pan:
-        case nir_intrinsic_load_local_group_size:
+        case nir_intrinsic_load_workgroup_size:
                 emit_sysval_read(ctx, &instr->instr, 3, 0);
                 break;
 
-        case nir_intrinsic_load_work_group_id:
+        case nir_intrinsic_load_workgroup_id:
         case nir_intrinsic_load_local_invocation_id:
         case nir_intrinsic_load_global_invocation_id:
         case nir_intrinsic_load_global_invocation_id_zero_base:
                 emit_compute_builtin(ctx, instr);
                 break;
 
-        case nir_intrinsic_load_vertex_id:
+        case nir_intrinsic_load_vertex_id_zero_base:
         case nir_intrinsic_load_instance_id:
                 emit_vertex_builtin(ctx, instr);
                 break;
@@ -2049,7 +2063,10 @@ emit_intrinsic(compiler_context *ctx, nir_intrinsic_instr *instr)
                 emit_special(ctx, instr, 97);
                 break;
 
+        /* Midgard doesn't seem to want special handling */
+        case nir_intrinsic_memory_barrier:
         case nir_intrinsic_memory_barrier_buffer:
+        case nir_intrinsic_memory_barrier_image:
         case nir_intrinsic_memory_barrier_shared:
         case nir_intrinsic_group_memory_barrier:
                 break;
@@ -3092,7 +3109,8 @@ midgard_compile_shader_nir(nir_shader *nir,
 
         NIR_PASS_V(nir, pan_nir_reorder_writeout);
 
-        if ((midgard_debug & MIDGARD_DBG_SHADERS) && !nir->info.internal) {
+        if ((midgard_debug & MIDGARD_DBG_SHADERS) &&
+            ((midgard_debug & MIDGARD_DBG_INTERNAL) || !nir->info.internal)) {
                 nir_print_shader(nir, stdout);
         }
 
@@ -3212,12 +3230,19 @@ midgard_compile_shader_nir(nir_shader *nir,
         /* Report the very first tag executed */
         info->midgard.first_tag = midgard_get_first_tag_from_block(ctx, 0);
 
-        if ((midgard_debug & MIDGARD_DBG_SHADERS) && !nir->info.internal) {
+        if ((midgard_debug & MIDGARD_DBG_SHADERS) &&
+            ((midgard_debug & MIDGARD_DBG_INTERNAL) || !nir->info.internal)) {
                 disassemble_midgard(stdout, binary->data,
                                     binary->size, inputs->gpu_id,
                                     midgard_debug & MIDGARD_DBG_VERBOSE);
                 fflush(stdout);
         }
+
+        /* A shader ending on a 16MB boundary causes INSTR_INVALID_PC faults,
+         * workaround by adding some padding to the end of the shader. (The
+         * kernel makes sure shader BOs can't cross 16MB boundaries.) */
+        if (binary->size)
+                memset(util_dynarray_grow(binary, uint8_t, 16), 0, 16);
 
         if ((midgard_debug & MIDGARD_DBG_SHADERDB || inputs->shaderdb) &&
             !nir->info.internal) {

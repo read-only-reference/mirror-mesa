@@ -50,13 +50,7 @@ struct brw_compiler {
        * Array of the ra classes for the unaligned contiguous register
        * block sizes used.
        */
-      int *classes;
-
-      /**
-       * Mapping for register-allocated objects in *regs to the first
-       * GRF for that object.
-       */
-      uint8_t *ra_reg_to_grf;
+      struct ra_class **classes;
    } vec4_reg_set;
 
    struct {
@@ -66,29 +60,13 @@ struct brw_compiler {
        * Array of the ra classes for the unaligned contiguous register
        * block sizes used, indexed by register size.
        */
-      int classes[16];
-
-      /**
-       * Mapping from classes to ra_reg ranges.  Each of the per-size
-       * classes corresponds to a range of ra_reg nodes.  This array stores
-       * those ranges in the form of first ra_reg in each class and the
-       * total number of ra_reg elements in the last array element.  This
-       * way the range of the i'th class is given by:
-       * [ class_to_ra_reg_range[i], class_to_ra_reg_range[i+1] )
-       */
-      int class_to_ra_reg_range[17];
-
-      /**
-       * Mapping for register-allocated objects in *regs to the first
-       * GRF for that object.
-       */
-      uint8_t *ra_reg_to_grf;
+      struct ra_class *classes[16];
 
       /**
        * ra class for the aligned barycentrics we use for PLN, which doesn't
        * appear in *classes.
        */
-      int aligned_bary_class;
+      struct ra_class *aligned_bary_class;
    } fs_reg_sets[3];
 
    void (*shader_debug_log)(void *, const char *str, ...) PRINTFLIKE(2, 3);
@@ -254,10 +232,8 @@ struct brw_base_prog_key {
    unsigned program_string_id;
 
    enum brw_subgroup_size_type subgroup_size_type;
-
-   struct brw_sampler_prog_key_data tex;
-
    bool robust_buffer_access;
+   struct brw_sampler_prog_key_data tex;
 };
 
 /**
@@ -699,6 +675,21 @@ enum brw_param_builtin {
 #define BRW_PARAM_BUILTIN_CLIP_PLANE_COMP(param) \
    (((param) - BRW_PARAM_BUILTIN_CLIP_PLANE_0_X) & 0x3)
 
+enum brw_shader_reloc_id {
+   BRW_SHADER_RELOC_CONST_DATA_ADDR_LOW,
+   BRW_SHADER_RELOC_CONST_DATA_ADDR_HIGH,
+   BRW_SHADER_RELOC_SHADER_START_OFFSET,
+   BRW_SHADER_RELOC_RESUME_SBT_ADDR_LOW,
+   BRW_SHADER_RELOC_RESUME_SBT_ADDR_HIGH,
+};
+
+enum brw_shader_reloc_type {
+   /** An arbitrary 32-bit value */
+   BRW_SHADER_RELOC_TYPE_U32,
+   /** A MOV instruction with an immediate source */
+   BRW_SHADER_RELOC_TYPE_MOV_IMM,
+};
+
 /** Represents a code relocation
  *
  * Relocatable constants are immediates in the code which we want to be able
@@ -708,12 +699,18 @@ struct brw_shader_reloc {
    /** The 32-bit ID of the relocatable constant */
    uint32_t id;
 
-   /** The offset in the shader to the relocatable instruction
+   /** Type of this relocation */
+   enum brw_shader_reloc_type type;
+
+   /** The offset in the shader to the relocated value
     *
-    * This is the offset to the instruction rather than the immediate value
-    * itself.  This allows us to do some sanity checking while we relocate.
+    * For MOV_IMM relocs, this is an offset to the MOV instruction.  This
+    * allows us to do some sanity checking while we update the value.
     */
    uint32_t offset;
+
+   /** Value to be added to the relocated value before it is written */
+   uint32_t delta;
 };
 
 /** A value to write to a relocation */
@@ -1038,6 +1035,7 @@ struct brw_cs_prog_data {
 
    bool uses_barrier;
    bool uses_num_work_groups;
+   bool uses_inline_data;
    bool uses_btd_stack_ids;
 
    struct {
@@ -1068,8 +1066,15 @@ brw_cs_prog_data_prog_offset(const struct brw_cs_prog_data *prog_data,
 
 struct brw_bs_prog_data {
    struct brw_stage_prog_data base;
+
+   /** SIMD size of the root shader */
    uint8_t simd_size;
-   uint32_t stack_size;
+
+   /** Maximum stack size of all shaders */
+   uint32_t max_stack_size;
+
+   /** Offset into the shader where the resume SBT is located */
+   uint32_t resume_sbt_offset;
 };
 
 struct brw_ff_gs_prog_data {
@@ -1496,6 +1501,7 @@ struct brw_compile_vs_params {
    const struct brw_vs_prog_key *key;
    struct brw_vs_prog_data *prog_data;
 
+   bool edgeflag_is_last; /* true for gallium */
    bool shader_time;
    int shader_time_index;
 
@@ -1562,7 +1568,6 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                const struct brw_gs_prog_key *key,
                struct brw_gs_prog_data *prog_data,
                nir_shader *nir,
-               struct gl_program *prog,
                int shader_time_index,
                struct brw_compile_stats *stats,
                char **error_str);
@@ -1681,6 +1686,8 @@ brw_compile_bs(const struct brw_compiler *compiler, void *log_data,
                const struct brw_bs_prog_key *key,
                struct brw_bs_prog_data *prog_data,
                struct nir_shader *shader,
+               unsigned num_resume_shaders,
+               struct nir_shader **resume_shaders,
                struct brw_compile_stats *stats,
                char **error_str);
 

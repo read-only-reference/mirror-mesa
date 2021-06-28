@@ -14,7 +14,6 @@ sed -i -e 's/http:\/\/deb/https:\/\/deb/g' /etc/apt/sources.list
 STABLE_EPHEMERAL=" \
         python3-pip \
         python3-setuptools \
-        unzip \
         "
 
 apt-get update
@@ -76,7 +75,6 @@ apt-get install -y --no-remove \
 
 # Needed for ci-fairy, this revision is able to upload files to MinIO
 pip3 install git+http://gitlab.freedesktop.org/freedesktop/ci-templates@6f5af7e5574509726c79109e3c147cee95e81366
-
 
 ############### Uninstall ephemeral packages
 
