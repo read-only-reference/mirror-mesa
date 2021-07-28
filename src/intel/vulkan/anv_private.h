@@ -893,7 +893,6 @@ struct anv_physical_device {
     struct anv_instance *                       instance;
     bool                                        no_hw;
     char                                        path[20];
-    const char *                                name;
     struct {
        uint16_t                                 domain;
        uint8_t                                  bus;
@@ -922,7 +921,6 @@ struct anv_physical_device {
     bool                                        has_exec_async;
     bool                                        has_exec_capture;
     bool                                        has_exec_fence;
-    bool                                        has_syncobj;
     bool                                        has_syncobj_wait;
     bool                                        has_syncobj_wait_available;
     bool                                        has_context_priority;
@@ -961,7 +959,6 @@ struct anv_physical_device {
 
     bool                                        always_flush_cache;
 
-    uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
 
     struct {
@@ -1037,11 +1034,6 @@ struct anv_queue_submit {
    uint32_t                                  temporary_semaphore_count;
    uint32_t                                  temporary_semaphore_array_length;
    struct anv_semaphore_impl *               temporary_semaphores;
-
-   /* Semaphores to be signaled with a SYNC_FD. */
-   struct anv_semaphore **                   sync_fd_semaphores;
-   uint32_t                                  sync_fd_semaphore_count;
-   uint32_t                                  sync_fd_semaphore_array_length;
 
    /* Allocated only with non shareable timelines. */
    union {
@@ -3342,9 +3334,7 @@ struct anv_event {
 enum anv_semaphore_type {
    ANV_SEMAPHORE_TYPE_NONE = 0,
    ANV_SEMAPHORE_TYPE_DUMMY,
-   ANV_SEMAPHORE_TYPE_BO,
    ANV_SEMAPHORE_TYPE_WSI_BO,
-   ANV_SEMAPHORE_TYPE_SYNC_FILE,
    ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ,
    ANV_SEMAPHORE_TYPE_TIMELINE,
    ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ_TIMELINE,
@@ -3387,12 +3377,6 @@ struct anv_semaphore_impl {
        */
       struct anv_bo *bo;
 
-      /* The sync file descriptor when type == ANV_SEMAPHORE_TYPE_SYNC_FILE.
-       * If the semaphore is in the unsignaled state due to either just being
-       * created or because it has been used for a wait, fd will be -1.
-       */
-      int fd;
-
       /* Sync object handle when type == ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ.
        * Unlike GEM BOs, DRM sync objects aren't deduplicated by the kernel on
        * import so we don't need to bother with a userspace cache.
@@ -3409,8 +3393,6 @@ struct anv_semaphore_impl {
 
 struct anv_semaphore {
    struct vk_object_base base;
-
-   uint32_t refcount;
 
    /* Permanent semaphore state.  Every semaphore has some form of permanent
     * state (type != ANV_SEMAPHORE_TYPE_NONE).  This may be a BO to fence on
@@ -4001,8 +3983,16 @@ struct anv_image {
     */
    bool disjoint;
 
-   /* Image was created with external format. */
-   bool external_format;
+   /**
+    * Image was imported from an struct AHardwareBuffer.  We have to delay
+    * final image creation until bind time.
+    */
+   bool from_ahb;
+
+   /**
+    * True if an external format was specified
+    */
+   bool has_android_external_format;
 
    /**
     * Image was imported from gralloc with VkNativeBufferANDROID. The gralloc bo
@@ -4452,8 +4442,6 @@ struct anv_image_create_info {
 
    /** These flags will be added to any derived from VkImageCreateInfo. */
    isl_surf_usage_flags_t isl_extra_usage_flags;
-
-   bool external_format;
 };
 
 VkResult anv_image_create(VkDevice _device,

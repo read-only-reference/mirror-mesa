@@ -47,13 +47,11 @@ panvk_varying_hw_format(const struct panvk_device *dev,
    case VARYING_SLOT_PSIZ:
       return (MALI_R16F << 12) |
              (pdev->quirks & HAS_SWIZZLES ?
-              panfrost_get_default_swizzle(1) :
-              panfrost_bifrost_swizzle(1));
+              panfrost_get_default_swizzle(1) : 0);
    case VARYING_SLOT_POS:
       return ((fs ? MALI_RGBA32F : MALI_SNAP_4) << 12) |
              (pdev->quirks & HAS_SWIZZLES ?
-              panfrost_get_default_swizzle(4) :
-              panfrost_bifrost_swizzle(4));
+              panfrost_get_default_swizzle(4) : 0);
    default:
       assert(!panvk_varying_is_builtin(stage, loc));
       return pdev->formats[varyings->varying[loc].format].hw;
@@ -790,7 +788,6 @@ unsigned
 panvk_emit_fb(const struct panvk_device *dev,
               const struct panvk_batch *batch,
               const struct panvk_subpass *subpass,
-              const struct panvk_pipeline *pipeline,
               const struct panvk_framebuffer *fb,
               const struct panvk_clear_value *clears,
               const struct pan_tls_info *tlsinfo,

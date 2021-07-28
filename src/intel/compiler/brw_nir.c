@@ -674,6 +674,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
          OPT(nir_opt_loop_unroll, loop_indirect_mask);
       }
       OPT(nir_opt_remove_phis);
+      OPT(nir_opt_gcm, false);
       OPT(nir_opt_undef);
       OPT(nir_lower_pack);
    } while (progress);
@@ -830,7 +831,6 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
       .lower_txp = ~0,
       .lower_txf_offset = true,
       .lower_rect_offset = true,
-      .lower_tex_without_implicit_lod = true,
       .lower_txd_cube_map = true,
       .lower_txd_3d = devinfo->verx10 >= 125,
       .lower_txb_shadow_clamp = true,
@@ -874,6 +874,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
 
    const nir_lower_subgroups_options subgroups_options = {
       .ballot_bit_size = 32,
+      .ballot_components = 1,
       .lower_to_scalar = true,
       .lower_vote_trivial = !is_scalar,
       .lower_shuffle = true,
@@ -1191,6 +1192,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    OPT(nir_copy_prop);
    OPT(nir_opt_dce);
    OPT(nir_opt_move, nir_move_comparisons);
+   OPT(nir_opt_dead_cf);
 
    OPT(nir_lower_bool_to_int32);
    OPT(nir_copy_prop);
@@ -1354,6 +1356,7 @@ brw_nir_apply_key(nir_shader *nir,
       .subgroup_size = get_subgroup_size(nir->info.stage, key,
                                          max_subgroup_size),
       .ballot_bit_size = 32,
+      .ballot_components = 1,
       .lower_subgroup_masks = true,
    };
    OPT(nir_lower_subgroups, &subgroups_options);

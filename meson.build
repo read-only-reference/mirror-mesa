@@ -79,6 +79,7 @@ if with_tools.contains('all')
 endif
 with_clc = false
 
+with_any_vulkan_layers = get_option('vulkan-layers').length() != 0
 with_intel_tools = with_tools.contains('intel') or with_tools.contains('intel-ui')
 with_imgui = with_intel_tools or with_vulkan_overlay_layer
 
@@ -89,6 +90,11 @@ endif
 dri_search_path = get_option('dri-search-path')
 if dri_search_path == ''
   dri_search_path = dri_drivers_path
+endif
+
+gbm_backends_path = get_option('gbm-backends-path')
+if gbm_backends_path == ''
+  gbm_backends_path = join_paths(get_option('prefix'), get_option('libdir'), 'gbm')
 endif
 
 with_gles1 = get_option('gles1')
@@ -352,12 +358,6 @@ with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 
-if _platforms.length() != 0
-  egl_native_platform = _platforms[0]
-else
-  egl_native_platform = 'surfaceless'
-endif
-
 with_glx = get_option('glx')
 if with_glx == 'auto'
   if with_platform_android
@@ -450,6 +450,26 @@ elif _egl == 'enabled'
   with_egl = true
 else
   with_egl = false
+endif
+
+if with_egl
+  _platforms += 'surfaceless'
+  if with_gbm and not with_platform_android
+    _platforms += 'drm'
+  endif
+endif
+
+egl_native_platform = get_option('egl-native-platform')
+if egl_native_platform.contains('auto')
+  if _platforms.length() != 0
+    egl_native_platform = _platforms[0]
+  else
+    egl_native_platform = 'surfaceless'
+  endif
+endif
+
+if with_egl and not _platforms.contains(egl_native_platform)
+  error('-Degl-native-platform does not specify an enabled platform')
 endif
 
 # Android uses emutls for versions <= P/28. For USE_ELF_TLS we need ELF TLS.
@@ -1279,6 +1299,11 @@ elif host_machine.cpu_family().startswith('ppc64') and host_machine.endian() == 
     with_asm_arch = 'ppc64le'
     pre_args += ['-DUSE_PPC64LE_ASM']
   endif
+elif host_machine.cpu_family() == 'mips64' and host_machine.endian() == 'little'
+  if system_has_kms_drm
+    with_asm_arch = 'mips64el'
+    pre_args += ['-DUSE_MIPS64EL_ASM']
+  endif
 endif
 
 # Check for standard headers and functions
@@ -1492,7 +1517,7 @@ dep_libdrm_radeon = null_dep
 dep_libdrm_nouveau = null_dep
 dep_libdrm_intel = null_dep
 
-_drm_amdgpu_ver = '2.4.105'
+_drm_amdgpu_ver = '2.4.107'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.102'
 _drm_intel_ver = '2.4.75'
@@ -2161,7 +2186,6 @@ if with_egl
   endif
   lines += 'EGL drivers:     ' + ' '.join(egl_drivers)
 endif
-lines += 'GBM:             ' + (with_gbm ? 'yes' : 'no')
 if with_egl or with_any_vk
   _platforms += 'surfaceless'
   if with_gbm and not with_platform_android
@@ -2169,11 +2193,18 @@ if with_egl or with_any_vk
   endif
   lines += 'EGL/Vulkan/VL platforms:   ' + ' '.join(_platforms)
 endif
+lines += 'GBM:             ' + (with_gbm ? 'yes' : 'no')
+if with_gbm
+  lines += 'GBM backends path: ' + gbm_backends_path
+endif
 
 lines += ''
 if with_any_vk
   lines += 'Vulkan drivers:  ' + ' '.join(_vulkan_drivers)
   lines += 'Vulkan ICD dir:  ' + with_vulkan_icd_dir
+  if with_any_vulkan_layers
+    lines += 'Vulkan layers:   ' + ' '.join(get_option('vulkan-layers'))
+  endif
 else
   lines += 'Vulkan drivers:  no'
 endif

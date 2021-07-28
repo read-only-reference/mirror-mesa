@@ -38,6 +38,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 #include "util/debug.h"
+#include "util/u_cpu_detect.h"
 #include "util/u_inlines.h"
 #include "util/format/u_format.h"
 #include "util/u_transfer_helper.h"
@@ -144,13 +145,10 @@ static const char *
 iris_get_name(struct pipe_screen *pscreen)
 {
    struct iris_screen *screen = (struct iris_screen *)pscreen;
+   const struct intel_device_info *devinfo = &screen->devinfo;
    static char buf[128];
-   const char *name = intel_get_device_name(screen->pci_id);
 
-   if (!name)
-      name = "Intel Unknown";
-
-   snprintf(buf, sizeof(buf), "Mesa %s", name);
+   snprintf(buf, sizeof(buf), "Mesa %s", devinfo->name);
    return buf;
 }
 
@@ -300,14 +298,7 @@ iris_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return IRIS_MAP_BUFFER_ALIGNMENT;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
-      /* Choose a cacheline (64 bytes) so that we can safely have the CPU and
-       * GPU writing the same SSBO on non-coherent systems (Atom CPUs).  With
-       * UBOs, the GPU never writes, so there's no problem.  For an SSBO, the
-       * GPU and the CPU can be updating disjoint regions of the buffer
-       * simultaneously and that will break if the regions overlap the same
-       * cacheline.
-       */
-      return 64;
+      return 4;
    case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
       return 1 << 27;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -526,9 +517,7 @@ iris_get_compute_param(struct pipe_screen *pscreen,
    struct iris_screen *screen = (struct iris_screen *)pscreen;
    const struct intel_device_info *devinfo = &screen->devinfo;
 
-   /* Limit max_threads to 64 for the GPGPU_WALKER command. */
-   const unsigned max_threads = MIN2(64, devinfo->max_cs_threads);
-   const uint32_t max_invocations = 32 * max_threads;
+   const uint32_t max_invocations = 32 * devinfo->max_cs_workgroup_threads;
 
 #define RET(x) do {                  \
    if (ret)                          \
@@ -621,6 +610,7 @@ void
 iris_screen_destroy(struct iris_screen *screen)
 {
    iris_destroy_screen_measure(screen);
+   util_queue_destroy(&screen->shader_compiler_queue);
    glsl_type_singleton_decref();
    iris_bo_unreference(screen->workaround_bo);
    u_transfer_helper_destroy(screen->base.transfer_helper);
@@ -659,6 +649,38 @@ iris_get_disk_shader_cache(struct pipe_screen *pscreen)
 {
    struct iris_screen *screen = (struct iris_screen *) pscreen;
    return screen->disk_cache;
+}
+
+static void
+iris_set_max_shader_compiler_threads(struct pipe_screen *pscreen,
+                                     unsigned max_threads)
+{
+   struct iris_screen *screen = (struct iris_screen *) pscreen;
+   util_queue_adjust_num_threads(&screen->shader_compiler_queue, max_threads);
+}
+
+static bool
+iris_is_parallel_shader_compilation_finished(struct pipe_screen *pscreen,
+                                             void *v_shader,
+                                             enum pipe_shader_type p_stage)
+{
+   struct iris_screen *screen = (struct iris_screen *) pscreen;
+
+   /* Threaded compilation is only used for the precompile.  If precompile is
+    * disabled, threaded compilation is "done."
+    */
+   if (!screen->precompile)
+      return true;
+
+   struct iris_uncompiled_shader *ish = v_shader;
+
+   /* When precompile is enabled, the first entry is the precompile variant.
+    * Check the ready fence of the precompile variant.
+    */
+   struct iris_compiled_shader *first =
+      list_first_entry(&ish->variants, struct iris_compiled_shader, link);
+
+   return util_queue_fence_is_signalled(&first->ready);
 }
 
 static int
@@ -828,6 +850,8 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
       driQueryOptionb(config->options, "disable_throttling");
    screen->driconf.always_flush_cache =
       driQueryOptionb(config->options, "always_flush_cache");
+   screen->driconf.sync_compile =
+      driQueryOptionb(config->options, "sync_compile");
 
    screen->precompile = env_var_as_boolean("shader_precompile", true);
 
@@ -879,10 +903,36 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
    pscreen->query_memory_info = iris_query_memory_info;
    pscreen->get_driver_query_group_info = iris_get_monitor_group_info;
    pscreen->get_driver_query_info = iris_get_monitor_info;
+   pscreen->is_parallel_shader_compilation_finished = iris_is_parallel_shader_compilation_finished;
+   pscreen->set_max_shader_compiler_threads = iris_set_max_shader_compiler_threads;
 
    genX_call(&screen->devinfo, init_screen_state, screen);
 
    glsl_type_singleton_init_or_ref();
+
+   /* FINISHME: Big core vs little core (for CPUs that have both kinds of
+    * cores) and, possibly, thread vs core should be considered here too.
+    */
+   unsigned compiler_threads = 1;
+   const struct util_cpu_caps_t *caps = util_get_cpu_caps();
+   unsigned hw_threads = caps->nr_cpus;
+
+   if (hw_threads >= 12) {
+      compiler_threads = hw_threads * 3 / 4;
+   } else if (hw_threads >= 6) {
+      compiler_threads = hw_threads - 2;
+   } else if (hw_threads >= 2) {
+      compiler_threads = hw_threads - 1;
+   }
+
+   if (!util_queue_init(&screen->shader_compiler_queue,
+                        "sh", 64, compiler_threads,
+                        UTIL_QUEUE_INIT_RESIZE_IF_FULL |
+                        UTIL_QUEUE_INIT_SET_FULL_THREAD_AFFINITY,
+                        NULL)) {
+      iris_screen_destroy(screen);
+      return NULL;
+   }
 
    return pscreen;
 }

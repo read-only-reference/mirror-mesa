@@ -157,6 +157,7 @@ files_libnir = files(
   'nir_lower_load_const_to_scalar.c',
   'nir_lower_locals_to_regs.c',
   'nir_lower_idiv.c',
+  'nir_lower_image.c',
   'nir_lower_indirect_derefs.c',
   'nir_lower_input_attachments.c',
   'nir_lower_int64.c',
@@ -384,6 +385,19 @@ if with_tests
     executable(
       'nir_control_flow_test',
       files('tests/control_flow_tests.cpp'),
+      cpp_args : [cpp_msvc_compat_args],
+      gnu_symbol_visibility : 'hidden',
+      include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
+      dependencies : [dep_thread, idep_gtest, idep_nir, idep_mesautil],
+    ),
+    suite : ['compiler', 'nir'],
+  )
+
+  test(
+    'nir_core',
+    executable(
+      'nir_core_test',
+      files('tests/core_tests.cpp'),
       cpp_args : [cpp_msvc_compat_args],
       gnu_symbol_visibility : 'hidden',
       include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],

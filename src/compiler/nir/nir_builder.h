@@ -409,6 +409,18 @@ nir_imm_ivec2(nir_builder *build, int x, int y)
 }
 
 static inline nir_ssa_def *
+nir_imm_ivec3(nir_builder *build, int x, int y, int z)
+{
+   nir_const_value v[3] = {
+      nir_const_value_for_int(x, 32),
+      nir_const_value_for_int(y, 32),
+      nir_const_value_for_int(z, 32),
+   };
+
+   return nir_build_imm(build, 3, 32, v);
+}
+
+static inline nir_ssa_def *
 nir_imm_ivec4(nir_builder *build, int x, int y, int z, int w)
 {
    nir_const_value v[4] = {
@@ -1136,6 +1148,30 @@ nir_pad_vector(nir_builder *b, nir_ssa_def *src, unsigned num_components)
       components[i] = nir_channel(b, src, i);
    for (; i < num_components; i++)
       components[i] = undef;
+
+   return nir_vec(b, components, num_components);
+}
+
+/**
+ * Pad a value to N components with copies of the given immediate of matching
+ * bit size. If the value already contains >= num_components, it is returned
+ * without change.
+ */
+static inline nir_ssa_def *
+nir_pad_vector_imm_int(nir_builder *b, nir_ssa_def *src, uint64_t imm_val,
+                       unsigned num_components)
+{
+   assert(src->num_components <= num_components);
+   if (src->num_components == num_components)
+      return src;
+
+   nir_ssa_def *components[NIR_MAX_VEC_COMPONENTS];
+   nir_ssa_def *imm = nir_imm_intN_t(b, imm_val, src->bit_size);
+   unsigned i = 0;
+   for (; i < src->num_components; i++)
+      components[i] = nir_channel(b, src, i);
+   for (; i < num_components; i++)
+      components[i] = imm;
 
    return nir_vec(b, components, num_components);
 }

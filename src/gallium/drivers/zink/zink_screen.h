@@ -61,6 +61,18 @@ enum zink_descriptor_mode {
    ZINK_DESCRIPTOR_MODE_NOTEMPLATES,
 };
 
+struct zink_modifier_prop {
+    uint32_t                             drmFormatModifierCount;
+    VkDrmFormatModifierPropertiesEXT*    pDrmFormatModifierProperties;
+};
+
+struct zink_mem_cache {
+   simple_mtx_t mem_cache_mtx;
+   struct hash_table resource_mem_cache;
+   uint64_t mem_cache_size;
+   unsigned mem_cache_count;
+};
+
 struct zink_screen {
    struct pipe_screen base;
    bool threaded;
@@ -81,21 +93,16 @@ struct zink_screen {
    simple_mtx_t bufferview_mtx;
 
    struct slab_parent_pool transfer_pool;
-   VkPipelineCache pipeline_cache;
-   size_t pipeline_cache_size;
    struct disk_cache *disk_cache;
-   cache_key disk_cache_key;
+   struct util_queue cache_put_thread;
+   struct util_queue cache_get_thread;
 
    struct util_live_shader_cache shaders;
 
-   simple_mtx_t mem_cache_mtx;
-   struct hash_table *resource_mem_cache;
-   uint64_t mem_cache_size;
-   unsigned mem_cache_count;
-
-   unsigned shader_id;
+   struct zink_mem_cache *mem;
 
    uint64_t total_video_mem;
+   uint64_t clamp_video_mem;
    uint64_t total_mem;
 
    VkInstance instance;
@@ -147,6 +154,7 @@ struct zink_screen {
    } driconf;
 
    VkFormatProperties format_props[PIPE_FORMAT_COUNT];
+   struct zink_modifier_prop modifier_props[PIPE_FORMAT_COUNT];
    struct {
       uint32_t image_view;
       uint32_t buffer_view;
@@ -227,6 +235,9 @@ VkFormat
 zink_get_format(struct zink_screen *screen, enum pipe_format format);
 
 bool
+zink_screen_batch_id_wait(struct zink_screen *screen, uint32_t batch_id, uint64_t timeout);
+
+bool
 zink_screen_timeline_wait(struct zink_screen *screen, uint32_t batch_id, uint64_t timeout);
 
 bool
@@ -235,7 +246,10 @@ zink_is_depth_format_supported(struct zink_screen *screen, VkFormat format);
 #define GET_PROC_ADDR_INSTANCE_LOCAL(instance, x) PFN_vk##x vk_##x = (PFN_vk##x)vkGetInstanceProcAddr(instance, "vk"#x)
 
 void
-zink_screen_update_pipeline_cache(struct zink_screen *screen);
+zink_screen_update_pipeline_cache(struct zink_screen *screen, struct zink_program *pg);
+
+void
+zink_screen_get_pipeline_cache(struct zink_screen *screen, struct zink_program *pg);
 
 void
 zink_screen_init_descriptor_funcs(struct zink_screen *screen, bool fallback);

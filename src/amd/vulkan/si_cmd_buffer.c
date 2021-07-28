@@ -345,8 +345,6 @@ si_emit_graphics(struct radv_device *device, struct radeon_cmdbuf *cs)
           */
          if (!physical_device->rad_info.use_late_alloc) {
             late_alloc_wave64 = 0;
-         } else if (num_cu_per_sh <= 6) {
-            late_alloc_wave64 = num_cu_per_sh - 2;
          } else {
             late_alloc_wave64 = (num_cu_per_sh - 2) * 4;
 
@@ -496,22 +494,22 @@ si_emit_graphics(struct radv_device *device, struct radeon_cmdbuf *cs)
          radeon_emit(cs, EVENT_TYPE(V_028A90_SQ_NON_EVENT) | EVENT_INDEX(0));
       }
 
-      /* TODO: For culling, replace 128 with 256. */
+      /* When culling is enabled, this will be overwritten accordingly */
       radeon_set_uconfig_reg(cs, R_030980_GE_PC_ALLOC,
                              S_030980_OVERSUB_EN(physical_device->rad_info.use_late_alloc) |
-                                S_030980_NUM_PC_LINES(128 * physical_device->rad_info.max_se - 1));
+                             S_030980_NUM_PC_LINES(physical_device->rad_info.pc_lines / 4 - 1));
    }
 
    if (physical_device->rad_info.chip_class >= GFX9) {
       radeon_set_context_reg(cs, R_028B50_VGT_TESS_DISTRIBUTION,
                              S_028B50_ACCUM_ISOLINE(40) | S_028B50_ACCUM_TRI(30) |
-                                S_028B50_ACCUM_QUAD(24) | S_028B50_DONUT_SPLIT(24) |
+                                S_028B50_ACCUM_QUAD(24) | S_028B50_DONUT_SPLIT_GFX9(24) |
                                 S_028B50_TRAP_SPLIT(6));
    } else if (physical_device->rad_info.chip_class >= GFX8) {
       uint32_t vgt_tess_distribution;
 
       vgt_tess_distribution = S_028B50_ACCUM_ISOLINE(32) | S_028B50_ACCUM_TRI(11) |
-                              S_028B50_ACCUM_QUAD(11) | S_028B50_DONUT_SPLIT(16);
+                              S_028B50_ACCUM_QUAD(11) | S_028B50_DONUT_SPLIT_GFX81(16);
 
       if (physical_device->rad_info.family == CHIP_FIJI ||
           physical_device->rad_info.family >= CHIP_POLARIS10)
@@ -544,11 +542,11 @@ si_emit_graphics(struct radv_device *device, struct radeon_cmdbuf *cs)
    }
 
    unsigned tmp = (unsigned)(1.0 * 8.0);
-   radeon_set_context_reg_seq(cs, R_028A00_PA_SU_POINT_SIZE, 1);
-   radeon_emit(cs, S_028A00_HEIGHT(tmp) | S_028A00_WIDTH(tmp));
-   radeon_set_context_reg_seq(cs, R_028A04_PA_SU_POINT_MINMAX, 1);
-   radeon_emit(cs, S_028A04_MIN_SIZE(radv_pack_float_12p4(0)) |
-                      S_028A04_MAX_SIZE(radv_pack_float_12p4(8191.875 / 2)));
+   radeon_set_context_reg(cs, R_028A00_PA_SU_POINT_SIZE,
+                              S_028A00_HEIGHT(tmp) | S_028A00_WIDTH(tmp));
+   radeon_set_context_reg(cs, R_028A04_PA_SU_POINT_MINMAX,
+                              S_028A04_MIN_SIZE(radv_pack_float_12p4(0)) |
+                              S_028A04_MAX_SIZE(radv_pack_float_12p4(8191.875 / 2)));
 
    if (!has_clear_state) {
       radeon_set_context_reg(cs, R_028004_DB_COUNT_CONTROL, S_028004_ZPASS_INCREMENT_DISABLE(1));
@@ -628,12 +626,12 @@ cik_create_gfx_config(struct radv_device *device)
          radeon_emit(cs, PKT3_NOP_PAD);
    }
 
-   device->gfx_init =
+   VkResult result =
       device->ws->buffer_create(device->ws, cs->cdw * 4, 4096, device->ws->cs_domain(device->ws),
                                 RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING |
                                    RADEON_FLAG_READ_ONLY | RADEON_FLAG_GTT_WC,
-                                RADV_BO_PRIORITY_CS);
-   if (!device->gfx_init)
+                                RADV_BO_PRIORITY_CS, 0, &device->gfx_init);
+   if (result != VK_SUCCESS)
       goto fail;
 
    void *map = device->ws->buffer_map(device->gfx_init);
@@ -650,8 +648,8 @@ fail:
    device->ws->cs_destroy(cs);
 }
 
-static void
-get_viewport_xform(const VkViewport *viewport, float scale[3], float translate[3])
+void
+radv_get_viewport_xform(const VkViewport *viewport, float scale[3], float translate[3])
 {
    float x = viewport->x;
    float y = viewport->y;
@@ -669,42 +667,13 @@ get_viewport_xform(const VkViewport *viewport, float scale[3], float translate[3
    translate[2] = n;
 }
 
-void
-si_write_viewport(struct radeon_cmdbuf *cs, int first_vp, int count, const VkViewport *viewports)
-{
-   int i;
-
-   assert(count);
-   radeon_set_context_reg_seq(cs, R_02843C_PA_CL_VPORT_XSCALE + first_vp * 4 * 6, count * 6);
-
-   for (i = 0; i < count; i++) {
-      float scale[3], translate[3];
-
-      get_viewport_xform(&viewports[i], scale, translate);
-      radeon_emit(cs, fui(scale[0]));
-      radeon_emit(cs, fui(translate[0]));
-      radeon_emit(cs, fui(scale[1]));
-      radeon_emit(cs, fui(translate[1]));
-      radeon_emit(cs, fui(scale[2]));
-      radeon_emit(cs, fui(translate[2]));
-   }
-
-   radeon_set_context_reg_seq(cs, R_0282D0_PA_SC_VPORT_ZMIN_0 + first_vp * 4 * 2, count * 2);
-   for (i = 0; i < count; i++) {
-      float zmin = MIN2(viewports[i].minDepth, viewports[i].maxDepth);
-      float zmax = MAX2(viewports[i].minDepth, viewports[i].maxDepth);
-      radeon_emit(cs, fui(zmin));
-      radeon_emit(cs, fui(zmax));
-   }
-}
-
 static VkRect2D
 si_scissor_from_viewport(const VkViewport *viewport)
 {
    float scale[3], translate[3];
    VkRect2D rect;
 
-   get_viewport_xform(viewport, scale, translate);
+   radv_get_viewport_xform(viewport, scale, translate);
 
    rect.offset.x = translate[0] - fabsf(scale[0]);
    rect.offset.y = translate[1] - fabsf(scale[1]);
@@ -742,7 +711,7 @@ si_write_scissors(struct radeon_cmdbuf *cs, int first, int count, const VkRect2D
       VkRect2D viewport_scissor = si_scissor_from_viewport(viewports + i);
       VkRect2D scissor = si_intersect_scissor(&scissors[i], &viewport_scissor);
 
-      get_viewport_xform(viewports + i, scale, translate);
+      radv_get_viewport_xform(viewports + i, scale, translate);
       scale[0] = fabsf(scale[0]);
       scale[1] = fabsf(scale[1]);
 

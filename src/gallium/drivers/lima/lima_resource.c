@@ -370,9 +370,9 @@ lima_resource_from_handle(struct pipe_screen *pscreen,
          goto err_out;
       }
 
-      if (res->bo->size < size) {
+      if ((res->bo->size - res->levels[0].offset) < size) {
          fprintf(stderr, "imported bo size is smaller than expected: %d (BO) < %d (expected)\n",
-                 res->bo->size, size);
+                 (res->bo->size - res->levels[0].offset), size);
          goto err_out;
       }
 
@@ -416,9 +416,8 @@ lima_resource_get_handle(struct pipe_screen *pscreen,
 
    res->modifier_constant = true;
 
-   if (handle->type == WINSYS_HANDLE_TYPE_KMS && screen->ro &&
-       renderonly_get_handle(res->scanout, handle))
-      return true;
+   if (handle->type == WINSYS_HANDLE_TYPE_KMS && screen->ro)
+      return renderonly_get_handle(res->scanout, handle);
 
    if (!lima_bo_export(res->bo, handle))
       return false;

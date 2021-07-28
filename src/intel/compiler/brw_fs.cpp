@@ -2656,16 +2656,23 @@ fs_visitor::assign_constant_locations()
    /* Now that we know how many regular uniforms we'll push, reduce the
     * UBO push ranges so we don't exceed the 3DSTATE_CONSTANT limits.
     */
+   /* For gen4/5:
+    * Only allow 16 registers (128 uniform components) as push constants.
+    *
+    * If changing this value, note the limitation about total_regs in
+    * brw_curbe.c/crocus_state.c
+    */
+   const unsigned max_push_length = compiler->devinfo->ver < 6 ? 16 : 64;
    unsigned push_length = DIV_ROUND_UP(stage_prog_data->nr_params, 8);
    for (int i = 0; i < 4; i++) {
       struct brw_ubo_range *range = &prog_data->ubo_ranges[i];
 
-      if (push_length + range->length > 64)
-         range->length = 64 - push_length;
+      if (push_length + range->length > max_push_length)
+         range->length = max_push_length - push_length;
 
       push_length += range->length;
    }
-   assert(push_length <= 64);
+   assert(push_length <= max_push_length);
 }
 
 bool
@@ -7322,6 +7329,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
    case BRW_OPCODE_SAD2:
    case BRW_OPCODE_MAD:
    case BRW_OPCODE_LRP:
+   case BRW_OPCODE_ADD3:
    case FS_OPCODE_PACK:
    case SHADER_OPCODE_SEL_EXEC:
    case SHADER_OPCODE_CLUSTER_BROADCAST:
@@ -10099,7 +10107,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
                                       prog_data->local_size[2];
 
       /* Limit max_threads to 64 for the GPGPU_WALKER command */
-      const uint32_t max_threads = MIN2(64, compiler->devinfo->max_cs_threads);
+      const uint32_t max_threads = compiler->devinfo->max_cs_workgroup_threads;
       min_dispatch_width = util_next_power_of_two(
          MAX2(8, DIV_ROUND_UP(local_workgroup_size, max_threads)));
       assert(min_dispatch_width <= 32);
@@ -10316,8 +10324,7 @@ brw_cs_simd_size_for_group_size(const struct intel_device_info *devinfo,
    if ((INTEL_DEBUG & DEBUG_DO32) && (mask & simd32))
       return 32;
 
-   /* Limit max_threads to 64 for the GPGPU_WALKER command */
-   const uint32_t max_threads = MIN2(64, devinfo->max_cs_threads);
+   const uint32_t max_threads = devinfo->max_cs_workgroup_threads;
 
    if ((mask & simd8) && group_size <= 8 * max_threads) {
       /* Prefer SIMD16 if can do without spilling.  Matches logic in

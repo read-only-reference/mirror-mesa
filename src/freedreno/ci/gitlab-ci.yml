@@ -1,7 +1,7 @@
 .freedreno-test:
   extends:
     - .baremetal-test
-    - .use-arm_test
+    - .use-debian/arm_test
     - .freedreno-rules
   variables:
     MINIO_ARTIFACT_NAME: mesa-arm64
@@ -12,8 +12,8 @@
   script:
     - ./install/bare-metal/fastboot.sh
   needs:
-    - arm_test
-    - job: meson-arm64
+    - debian/arm_test
+    - job: debian-arm64
       artifacts: false
   tags:
     - google-freedreno-db410c
@@ -279,3 +279,12 @@ a630-traces:
     # missing.
     MESA_GLSL_VERSION_OVERRIDE: "460"
     MESA_GL_VERSION_OVERRIDE: "4.6"
+
+a630-traces-restricted:
+  extends:
+    - a630-traces
+    - .freedreno-rules-restricted
+  variables:
+    PIGLIT_REPLAY_DESCRIPTION_FILE: "/install/restricted-traces-freedreno.yml"
+    PIGLIT_REPLAY_EXTRA_ARGS:  --keep-image --db-path ${CI_PROJECT_DIR}/replayer-db/ --minio_host=minio-packet.freedesktop.org --minio_bucket=mesa-tracie-private --role-session-name=${CI_PROJECT_PATH}:${CI_JOB_ID} --jwt=${CI_JOB_JWT}
+  allow_failure: true
