@@ -273,6 +273,7 @@ libfreedreno = static_library(
   cpp_args : [freedreno_cpp_args],
   gnu_symbol_visibility : 'hidden',
   dependencies : libfreedreno_dependencies,
+  override_options : ['cpp_std=c++17'],
 )
 
 driver_freedreno = declare_dependency(
@@ -286,7 +287,10 @@ driver_freedreno = declare_dependency(
     libfreedreno_layout,
     libfreedreno_perfcntrs
   ],
-  dependencies : idep_nir,
+  dependencies : [
+    idep_nir,
+    idep_xmlconfig,
+  ],
 )
 
 ir3_compiler = executable(
@@ -320,6 +324,7 @@ gmemtool = executable(
     idep_nir,
     idep_mesautil,
     idep_u_tracepoints,
+    idep_xmlconfig,
   ],
   link_with : [
     libfreedreno,

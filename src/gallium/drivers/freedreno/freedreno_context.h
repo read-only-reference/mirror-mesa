@@ -27,7 +27,6 @@
 #ifndef FREEDRENO_CONTEXT_H_
 #define FREEDRENO_CONTEXT_H_
 
-#include "indices/u_primconvert.h"
 #include "pipe/p_context.h"
 #include "util/libsync.h"
 #include "util/list.h"
@@ -219,7 +218,6 @@ struct fd_context {
 
    struct blitter_context *blitter dt;
    void *clear_rs_state[2] dt;
-   struct primconvert_context *primconvert dt;
 
    /* slab for pipe_transfer allocations: */
    struct slab_child_pool transfer_pool dt;
@@ -249,6 +247,8 @@ struct fd_context {
    /* list of active accumulating queries: */
    struct list_head acc_active_queries dt;
    /*@}*/
+
+   uint8_t patch_vertices;
 
    /* Whether we need to recheck the active_queries list next
     * fd_batch_update_queries().

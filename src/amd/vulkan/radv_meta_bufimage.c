@@ -92,7 +92,8 @@ build_nir_itob_compute_shader(struct radv_device *dev, bool is_3d)
 
    nir_ssa_def *outval = &tex->dest.ssa;
    nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, coord,
-                         nir_ssa_undef(&b, 1, 32), outval, nir_imm_int(&b, 0));
+                         nir_ssa_undef(&b, 1, 32), outval, nir_imm_int(&b, 0),
+                         .image_dim = GLSL_SAMPLER_DIM_BUF);
 
    return b.shader;
 }
@@ -279,7 +280,7 @@ build_nir_btoi_compute_shader(struct radv_device *dev, bool is_3d)
 
    nir_ssa_def *outval = &tex->dest.ssa;
    nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, img_coord,
-                         nir_ssa_undef(&b, 1, 32), outval, nir_imm_int(&b, 0));
+                         nir_ssa_undef(&b, 1, 32), outval, nir_imm_int(&b, 0), .image_dim = dim);
 
    return b.shader;
 }
@@ -472,7 +473,7 @@ build_nir_btoi_r32g32b32_compute_shader(struct radv_device *dev)
 
       nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, coord,
                             nir_ssa_undef(&b, 1, 32), nir_channel(&b, outval, chan),
-                            nir_imm_int(&b, 0));
+                            nir_imm_int(&b, 0), .image_dim = GLSL_SAMPLER_DIM_BUF);
    }
 
    return b.shader;
@@ -628,7 +629,7 @@ build_nir_itoi_compute_shader(struct radv_device *dev, bool is_3d, int samples)
    for (uint32_t i = 0; i < samples; i++) {
       nir_ssa_def *outval = &tex_instr[i]->dest.ssa;
       nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, dst_coord,
-                            nir_imm_int(&b, i), outval, nir_imm_int(&b, 0));
+                            nir_imm_int(&b, i), outval, nir_imm_int(&b, 0), .image_dim = dim);
    }
 
    return b.shader;
@@ -843,7 +844,7 @@ build_nir_itoi_r32g32b32_compute_shader(struct radv_device *dev)
 
       nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, dst_coord,
                             nir_ssa_undef(&b, 1, 32), nir_channel(&b, outval, 0),
-                            nir_imm_int(&b, 0));
+                            nir_imm_int(&b, 0), .image_dim = GLSL_SAMPLER_DIM_BUF);
    }
 
    return b.shader;
@@ -972,7 +973,7 @@ build_nir_cleari_compute_shader(struct radv_device *dev, bool is_3d, int samples
 
    for (uint32_t i = 0; i < samples; i++) {
       nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, global_id,
-                            nir_imm_int(&b, i), clear_val, nir_imm_int(&b, 0));
+                            nir_imm_int(&b, i), clear_val, nir_imm_int(&b, 0), .image_dim = dim);
    }
 
    return b.shader;
@@ -1140,7 +1141,7 @@ build_nir_cleari_r32g32b32_compute_shader(struct radv_device *dev)
 
       nir_image_deref_store(&b, &nir_build_deref_var(&b, output_img)->dest.ssa, coord,
                             nir_ssa_undef(&b, 1, 32), nir_channel(&b, clear_val, chan),
-                            nir_imm_int(&b, 0));
+                            nir_imm_int(&b, 0), .image_dim = GLSL_SAMPLER_DIM_BUF);
    }
 
    return b.shader;
@@ -1287,18 +1288,22 @@ fail_itob:
 
 static void
 create_iview(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_blit2d_surf *surf,
-             struct radv_image_view *iview)
+             struct radv_image_view *iview, VkFormat format, VkImageAspectFlagBits aspects)
 {
    VkImageViewType view_type = cmd_buffer->device->physical_device->rad_info.chip_class < GFX9
                                   ? VK_IMAGE_VIEW_TYPE_2D
                                   : radv_meta_get_view_type(surf->image);
+
+   if (format == VK_FORMAT_UNDEFINED)
+      format = surf->format;
+
    radv_image_view_init(iview, cmd_buffer->device,
                         &(VkImageViewCreateInfo){
                            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                            .image = radv_image_to_handle(surf->image),
                            .viewType = view_type,
-                           .format = surf->format,
-                           .subresourceRange = {.aspectMask = surf->aspect_mask,
+                           .format = format,
+                           .subresourceRange = {.aspectMask = aspects,
                                                 .baseMipLevel = surf->level,
                                                 .levelCount = 1,
                                                 .baseArrayLayer = surf->layer,
@@ -1439,7 +1444,7 @@ radv_meta_image_to_buffer(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_b
    struct radv_image_view src_view;
    struct radv_buffer_view dst_view;
 
-   create_iview(cmd_buffer, src, &src_view);
+   create_iview(cmd_buffer, src, &src_view, VK_FORMAT_UNDEFINED, src->aspect_mask);
    create_bview(cmd_buffer, dst->buffer, dst->offset, dst->format, &dst_view);
    itob_bind_descriptors(cmd_buffer, &src_view, &dst_view);
 
@@ -1585,7 +1590,7 @@ radv_meta_buffer_to_image_cs(struct radv_cmd_buffer *cmd_buffer,
    }
 
    create_bview(cmd_buffer, src->buffer, src->offset, src->format, &src_view);
-   create_iview(cmd_buffer, dst, &dst_view);
+   create_iview(cmd_buffer, dst, &dst_view, VK_FORMAT_UNDEFINED, dst->aspect_mask);
    btoi_bind_descriptors(cmd_buffer, &src_view, &dst_view);
 
    if (device->physical_device->rad_info.chip_class >= GFX9 && dst->image->type == VK_IMAGE_TYPE_3D)
@@ -1740,27 +1745,36 @@ radv_meta_image_to_image_cs(struct radv_cmd_buffer *cmd_buffer, struct radv_meta
       return;
    }
 
-   create_iview(cmd_buffer, src, &src_view);
-   create_iview(cmd_buffer, dst, &dst_view);
+   u_foreach_bit(i, dst->aspect_mask) {
+      unsigned aspect_mask = 1u << i;
+      VkFormat depth_format = 0;
+      if (aspect_mask == VK_IMAGE_ASPECT_STENCIL_BIT)
+         depth_format = vk_format_stencil_only(dst->image->vk_format);
+      else if (aspect_mask == VK_IMAGE_ASPECT_DEPTH_BIT)
+         depth_format = vk_format_depth_only(dst->image->vk_format);
 
-   itoi_bind_descriptors(cmd_buffer, &src_view, &dst_view);
+      create_iview(cmd_buffer, src, &src_view, depth_format, aspect_mask);
+      create_iview(cmd_buffer, dst, &dst_view, depth_format, aspect_mask);
 
-   VkPipeline pipeline = cmd_buffer->device->meta_state.itoi.pipeline[samples_log2];
-   if (device->physical_device->rad_info.chip_class >= GFX9 &&
-       (src->image->type == VK_IMAGE_TYPE_3D || dst->image->type == VK_IMAGE_TYPE_3D))
-      pipeline = cmd_buffer->device->meta_state.itoi.pipeline_3d;
-   radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,
-                        pipeline);
+      itoi_bind_descriptors(cmd_buffer, &src_view, &dst_view);
 
-   for (unsigned r = 0; r < num_rects; ++r) {
-      unsigned push_constants[6] = {
-         rects[r].src_x, rects[r].src_y, src->layer, rects[r].dst_x, rects[r].dst_y, dst->layer,
-      };
-      radv_CmdPushConstants(radv_cmd_buffer_to_handle(cmd_buffer),
-                            device->meta_state.itoi.img_p_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                            24, push_constants);
+      VkPipeline pipeline = cmd_buffer->device->meta_state.itoi.pipeline[samples_log2];
+      if (device->physical_device->rad_info.chip_class >= GFX9 &&
+          (src->image->type == VK_IMAGE_TYPE_3D || dst->image->type == VK_IMAGE_TYPE_3D))
+         pipeline = cmd_buffer->device->meta_state.itoi.pipeline_3d;
+      radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,
+                           pipeline);
 
-      radv_unaligned_dispatch(cmd_buffer, rects[r].width, rects[r].height, 1);
+      for (unsigned r = 0; r < num_rects; ++r) {
+         unsigned push_constants[6] = {
+            rects[r].src_x, rects[r].src_y, src->layer, rects[r].dst_x, rects[r].dst_y, dst->layer,
+         };
+         radv_CmdPushConstants(radv_cmd_buffer_to_handle(cmd_buffer),
+                               device->meta_state.itoi.img_p_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               24, push_constants);
+
+         radv_unaligned_dispatch(cmd_buffer, rects[r].width, rects[r].height, 1);
+      }
    }
 }
 
@@ -1865,7 +1879,7 @@ radv_meta_clear_image_cs(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_bl
       return;
    }
 
-   create_iview(cmd_buffer, dst, &dst_iview);
+   create_iview(cmd_buffer, dst, &dst_iview, VK_FORMAT_UNDEFINED, dst->aspect_mask);
    cleari_bind_descriptors(cmd_buffer, &dst_iview);
 
    VkPipeline pipeline = cmd_buffer->device->meta_state.cleari.pipeline[samples_log2];

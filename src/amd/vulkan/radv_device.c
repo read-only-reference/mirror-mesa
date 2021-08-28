@@ -62,6 +62,7 @@ typedef void *drmDevicePtr;
 #include "git_sha1.h"
 #include "sid.h"
 #include "vk_format.h"
+#include "vulkan/vk_icd.h"
 
 /* The number of IBs per submit isn't infinite, it depends on the ring type
  * (ie. some initial setup needed for a submit) and the number of IBs (4 DW).
@@ -485,6 +486,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_pipeline_creation_cache_control = true,
       .EXT_pipeline_creation_feedback = true,
       .EXT_post_depth_coverage = device->rad_info.chip_class >= GFX10,
+      .EXT_primitive_topology_list_restart = true,
       .EXT_private_data = true,
       .EXT_provoking_vertex = true,
       .EXT_queue_family_foreign = true,
@@ -874,7 +876,7 @@ radv_init_dri_options(struct radv_instance *instance)
 {
    driParseOptionInfo(&instance->available_dri_options, radv_dri_options,
                       ARRAY_SIZE(radv_dri_options));
-   driParseConfigFiles(&instance->dri_options, &instance->available_dri_options, 0, "radv", NULL,
+   driParseConfigFiles(&instance->dri_options, &instance->available_dri_options, 0, "radv", NULL, NULL,
                        instance->vk.app_info.app_name, instance->vk.app_info.app_version,
                        instance->vk.app_info.engine_name, instance->vk.app_info.engine_version);
 
@@ -1691,6 +1693,13 @@ radv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->sparseImageFloat32AtomicMinMax = has_shader_float_minmax;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT: {
+         VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT *features =
+            (VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT *)ext;
+         features->primitiveTopologyListRestart = true;
+         features->primitiveTopologyPatchListRestart = false;
+         break;
+      }
       default:
          break;
       }
@@ -2237,17 +2246,8 @@ radv_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLE_LOCATIONS_PROPERTIES_EXT: {
          VkPhysicalDeviceSampleLocationsPropertiesEXT *properties =
             (VkPhysicalDeviceSampleLocationsPropertiesEXT *)ext;
-
-         VkSampleCountFlagBits supported_samples = VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT;
-         if (pdevice->rad_info.chip_class < GFX10) {
-            /* FIXME: Some MSAA8x tests fail for weird
-             * reasons on GFX10+ when the same pattern is
-             * used inside the same render pass.
-             */
-            supported_samples |= VK_SAMPLE_COUNT_8_BIT;
-         }
-
-         properties->sampleLocationSampleCounts = supported_samples;
+         properties->sampleLocationSampleCounts = VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT |
+                                                  VK_SAMPLE_COUNT_8_BIT;
          properties->maxSampleLocationGridSize = (VkExtent2D){2, 2};
          properties->sampleLocationCoordinateRange[0] = 0.0f;
          properties->sampleLocationCoordinateRange[1] = 0.9375f;
@@ -2351,15 +2351,15 @@ radv_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          props->layeredShadingRateAttachments = false; /* TODO */
          props->fragmentShadingRateNonTrivialCombinerOps = true;
          props->maxFragmentSize = (VkExtent2D){2, 2};
-         props->maxFragmentSizeAspectRatio = 1;
-         props->maxFragmentShadingRateCoverageSamples = 2 * 2;
+         props->maxFragmentSizeAspectRatio = 2;
+         props->maxFragmentShadingRateCoverageSamples = 32;
          props->maxFragmentShadingRateRasterizationSamples = VK_SAMPLE_COUNT_8_BIT;
          props->fragmentShadingRateWithShaderDepthStencilWrites = false;
          props->fragmentShadingRateWithSampleMask = true;
          props->fragmentShadingRateWithShaderSampleMask = false;
          props->fragmentShadingRateWithConservativeRasterization = true;
          props->fragmentShadingRateWithFragmentShaderInterlock = false;
-         props->fragmentShadingRateWithCustomSampleLocations = true;
+         props->fragmentShadingRateWithCustomSampleLocations = false;
          props->fragmentShadingRateStrictMultiplyCombiner = true;
          break;
       }
@@ -5210,6 +5210,12 @@ radv_GetInstanceProcAddr(VkInstance _instance, const char *pName)
    return vk_instance_get_proc_addr(&instance->vk, &radv_instance_entrypoints, pName);
 }
 
+/* Windows will use a dll definition file to avoid build errors. */
+#ifdef _WIN32
+#undef PUBLIC
+#define PUBLIC
+#endif
+
 /* The loader wants us to expose a second GetInstanceProcAddr function
  * to work around certain LD_PRELOAD issues seen in apps.
  */
@@ -6707,8 +6713,8 @@ radv_initialise_color_surface(struct radv_device *device, struct radv_color_buff
    ntype = radv_translate_color_numformat(iview->vk_format, desc,
                                           vk_format_get_first_non_void_channel(iview->vk_format));
    format = radv_translate_colorformat(iview->vk_format);
-   if (format == V_028C70_COLOR_INVALID || ntype == ~0u)
-      radv_finishme("Illegal color\n");
+   assert(format != V_028C70_COLOR_INVALID);
+
    swap = radv_translate_colorswap(iview->vk_format, false);
    endian = radv_colorformat_endian_swap(format);
 
@@ -7941,11 +7947,8 @@ radv_GetPhysicalDeviceMultisamplePropertiesEXT(VkPhysicalDevice physicalDevice,
                                                VkSampleCountFlagBits samples,
                                                VkMultisamplePropertiesEXT *pMultisampleProperties)
 {
-   RADV_FROM_HANDLE(radv_physical_device, physical_device, physicalDevice);
-   VkSampleCountFlagBits supported_samples = VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT;
-
-   if (physical_device->rad_info.chip_class < GFX10)
-      supported_samples |= VK_SAMPLE_COUNT_8_BIT;
+   VkSampleCountFlagBits supported_samples = VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT |
+                                             VK_SAMPLE_COUNT_8_BIT;
 
    if (samples & supported_samples) {
       pMultisampleProperties->maxSampleLocationGridSize = (VkExtent2D){2, 2};
@@ -7974,9 +7977,16 @@ radv_GetPhysicalDeviceFragmentShadingRatesKHR(
 
    for (uint32_t x = 2; x >= 1; x--) {
       for (uint32_t y = 2; y >= 1; y--) {
-         append_rate(x, y,
-                     VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT |
-                        VK_SAMPLE_COUNT_8_BIT);
+         VkSampleCountFlagBits samples;
+
+         if (x == 1 && y == 1) {
+            samples = ~0;
+         } else {
+            samples = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT |
+                      VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT;
+         }
+
+         append_rate(x, y, samples);
       }
    }
 #undef append_rate

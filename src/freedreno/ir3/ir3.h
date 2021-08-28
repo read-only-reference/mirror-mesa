@@ -57,6 +57,8 @@ struct ir3_info {
    uint16_t nops_count;   /* # of nop instructions, including nopN */
    uint16_t mov_count;
    uint16_t cov_count;
+   uint16_t stp_count;
+   uint16_t ldp_count;
    /* NOTE: max_reg, etc, does not include registers not touched
     * by the shader (ie. vertex fetched via VFD_DECODE but not
     * touched by shader)
@@ -89,6 +91,7 @@ struct ir3_merge_set {
    uint16_t alignment;
 
    unsigned interval_start;
+   unsigned spill_slot;
 
    unsigned regs_count;
    struct ir3_register **regs;
@@ -126,13 +129,28 @@ struct ir3_register {
       /* meta-flags, for intermediate stages of IR, ie.
        * before register assignment is done:
        */
-      IR3_REG_SSA = 0x4000, /* 'instr' is ptr to assigning instr */
+      IR3_REG_SSA = 0x4000, /* 'def' is ptr to assigning destination */
       IR3_REG_ARRAY = 0x8000,
 
+      /* Set on a use whenever the SSA value becomes dead after the current
+       * instruction.
+       */
       IR3_REG_KILL = 0x10000,
+
+      /* Similar to IR3_REG_KILL, except that if there are multiple uses of the
+       * same SSA value in a single instruction, this is only set on the first
+       * use.
+       */
       IR3_REG_FIRST_KILL = 0x20000,
+
+      /* Set when a destination doesn't have any uses and is dead immediately
+       * after the instruction. This can happen even after optimizations for
+       * corner cases such as destinations of atomic instructions.
+       */
       IR3_REG_UNUSED = 0x40000,
    } flags;
+
+   unsigned name;
 
    /* used for cat5 instructions, but also for internal/IR level
     * tracking of what registers are read/written by an instruction.
@@ -155,7 +173,6 @@ struct ir3_register {
     * rN.x becomes: (N << 2) | x
     */
    uint16_t num;
-   uint16_t name;
    union {
       /* immediate: */
       int32_t iim_val;
@@ -188,6 +205,8 @@ struct ir3_register {
     * they must have "tied" pointing to each other.
     */
    struct ir3_register *tied;
+
+   unsigned spill_slot, next_use;
 
    unsigned merge_set_offset;
    struct ir3_merge_set *merge_set;
@@ -365,9 +384,8 @@ struct ir3_instruction {
       } input;
    };
 
-   /* When we get to the RA stage, we need instruction's position/name: */
-   uint16_t ip;
-   uint16_t name;
+   /* For assigning jump offsets, we need instruction's position: */
+   uint32_t ip;
 
    /* used for per-pass extra instruction data.
     *
@@ -575,6 +593,7 @@ struct ir3_block {
    uint32_t dom_post_index;
 
    uint32_t loop_id;
+   uint32_t loop_depth;
 
 #ifdef DEBUG
    uint32_t serialno;
@@ -602,6 +621,8 @@ void ir3_block_add_physical_predecessor(struct ir3_block *block,
                                         struct ir3_block *pred);
 void ir3_block_remove_predecessor(struct ir3_block *block,
                                   struct ir3_block *pred);
+void ir3_block_remove_physical_predecessor(struct ir3_block *block,
+                                           struct ir3_block *pred);
 unsigned ir3_block_get_pred_index(struct ir3_block *block,
                                   struct ir3_block *pred);
 
@@ -695,6 +716,17 @@ ir3_instr_move_after(struct ir3_instruction *instr,
    list_add(&instr->node, &before->node);
 }
 
+/**
+ * Move 'instr' to the beginning of the block:
+ */
+static inline void
+ir3_instr_move_before_block(struct ir3_instruction *instr,
+                            struct ir3_block *block)
+{
+   list_delinit(&instr->node);
+   list_add(&instr->node, &block->instr_list);
+}
+
 void ir3_find_ssa_uses(struct ir3 *ir, void *mem_ctx, bool falsedeps);
 
 void ir3_set_dst_type(struct ir3_instruction *instr, bool half);
@@ -786,6 +818,8 @@ is_same_type_mov(struct ir3_instruction *instr)
       if (!is_same_type_reg(instr->dsts[0], instr->srcs[0]))
          return false;
       break;
+   case OPC_META_PHI:
+      return instr->srcs_count == 1;
    default:
       return false;
    }
@@ -1568,6 +1602,9 @@ void ir3_validate(struct ir3 *ir);
 void ir3_print(struct ir3 *ir);
 void ir3_print_instr(struct ir3_instruction *instr);
 
+struct log_stream;
+void ir3_print_instr_stream(struct log_stream *stream, struct ir3_instruction *instr);
+
 /* delay calculation: */
 int ir3_delayslots(struct ir3_instruction *assigner,
                    struct ir3_instruction *consumer, unsigned n, bool soft);
@@ -1579,6 +1616,9 @@ unsigned ir3_delay_calc_postra(struct ir3_block *block,
 unsigned ir3_delay_calc_exact(struct ir3_block *block,
                               struct ir3_instruction *instr, bool mergedregs);
 void ir3_remove_nops(struct ir3 *ir);
+
+/* unreachable block elimination: */
+bool ir3_remove_unreachable(struct ir3 *ir);
 
 /* dead code elimination: */
 struct ir3_shader_variant;

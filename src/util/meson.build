@@ -383,6 +383,26 @@ if with_tests
     env: ['BUILD_FULL_PATH='+process_test_exe_full_path]
   )
 
+  test('int_min_max',
+    executable('int_min_max_test',
+    files('tests/int_min_max.cpp'),
+      include_directories : [inc_include, inc_src],
+      dependencies : [idep_mesautil, idep_gtest],
+    ),
+    suite : ['util'],
+  )
+
+  test(
+    'dag',
+    executable(
+      'dag_test',
+      'tests/dag_test.cpp',
+      dependencies : [idep_mesautil, idep_gtest],
+      include_directories : [inc_include, inc_src],
+    ),
+    suite : ['util'],
+  )
+
   subdir('tests/cache')
   subdir('tests/fast_idiv_by_const')
   subdir('tests/fast_urem_by_const')

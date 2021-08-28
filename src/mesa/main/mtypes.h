@@ -996,6 +996,7 @@ struct gl_texture_object
    bool StencilSampling;       /**< Should we sample stencil instead of depth? */
 
    /** GL_OES_EGL_image_external */
+   GLboolean External;
    GLubyte RequiredTextureImageUnits;
 
    /** GL_EXT_memory_object */
@@ -4301,6 +4302,7 @@ struct gl_constants
    struct spirv_supported_extensions *SpirVExtensions;
 
    char *VendorOverride;
+   char *RendererOverride;
 
    /** Buffer size used to upload vertices from glBegin/glEnd. */
    unsigned glBeginEndBufferSize;
@@ -4798,8 +4800,9 @@ struct gl_driver_flags
 
    /**
     * gl_context::TessCtrlProgram::patch_default_*
+    * gl_context::TessCtrlProgram::patch_vertices
     */
-   uint64_t NewDefaultTessLevels;
+   uint64_t NewTessState;
 
    /**
     * gl_context::IntelConservativeRasterization

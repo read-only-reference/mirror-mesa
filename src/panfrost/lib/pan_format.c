@@ -25,7 +25,6 @@
  */
 
 #include "gen_macros.h"
-#include "midgard_pack.h"
 #include "pan_format.h"
 #include "util/format/u_format.h"
 
@@ -49,15 +48,18 @@
         [PIPE_FORMAT_##pipe] = { \
                 MALI_COLOR_BUFFER_INTERNAL_FORMAT_## internal, \
                 MALI_MFBD_COLOR_FORMAT_## writeback, \
-                MALI_BLEND_AU_ ## internal | (srgb ? (1 << 20) : 0) | \
-                PAN_V6_SWIZZLE(R, G, B, A) \
+                { MALI_BLEND_PU_ ## internal | (srgb ? (1 << 20) : 0) | \
+                        PAN_V6_SWIZZLE(R, G, B, A), \
+                  MALI_BLEND_AU_ ## internal | (srgb ? (1 << 20) : 0) | \
+                        PAN_V6_SWIZZLE(R, G, B, A) } \
         }
 #else
 #define BFMT2(pipe, internal, writeback, srgb) \
         [PIPE_FORMAT_##pipe] = { \
                 MALI_COLOR_BUFFER_INTERNAL_FORMAT_## internal, \
                 MALI_MFBD_COLOR_FORMAT_## writeback, \
-                MALI_BLEND_AU_ ## internal | (srgb ? (1 << 20) : 0) \
+                { MALI_BLEND_PU_ ## internal | (srgb ? (1 << 20) : 0), \
+                  MALI_BLEND_AU_ ## internal | (srgb ? (1 << 20) : 0) } \
         }
 #endif
 
@@ -87,6 +89,7 @@ GENX(panfrost_blendable_formats)[PIPE_FORMAT_COUNT] = {
 
         BFMT2(A8_UNORM, R8G8B8A8, R8, 0),
         BFMT2(I8_UNORM, R8G8B8A8, R8, 0),
+        BFMT2(R5G6B5_UNORM, R5G6B5A0, R5G6B5, 0),
         BFMT2(B5G6R5_UNORM, R5G6B5A0, R5G6B5, 0),
 
         BFMT(A4B4G4R4_UNORM, R4G4B4A4),
@@ -334,7 +337,11 @@ const struct panfrost_format GENX(panfrost_pipe_format)[PIPE_FORMAT_COUNT] = {
         FMT(R32G32_UNORM,            RG32_UNORM,      RG01, L, VT__),
         FMT(R8G8B8_UNORM,            RGB8_UNORM,      RGB1, L, VTR_),
         FMT(R16G16B16_UNORM,         RGB16_UNORM,     RGB1, L, VT__),
+#if PAN_ARCH <= 6
         FMT(R32G32B32_UNORM,         RGB32_UNORM,     RGB1, L, VT__),
+#else
+        FMT(R32G32B32_UNORM,         RGB32_UNORM,     RGB1, L, V___),
+#endif
         FMT(R4G4B4A4_UNORM,          RGBA4_UNORM,     RGBA, L, VTR_),
         FMT(B4G4R4A4_UNORM,          RGBA4_UNORM,     BGRA, L, VTR_),
         FMT(R16G16B16A16_UNORM,      RGBA16_UNORM,    RGBA, L, VT__),

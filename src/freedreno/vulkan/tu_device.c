@@ -147,6 +147,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_spirv_1_4 = true,
       .KHR_storage_buffer_storage_class = true,
       .KHR_swapchain = TU_HAS_SURFACE,
+      .KHR_uniform_buffer_standard_layout = true,
       .KHR_variable_pointers = true,
       .KHR_vulkan_memory_model = true,
 #ifndef TU_USE_KGSL
@@ -166,6 +167,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_depth_clip_enable = true,
       .EXT_descriptor_indexing = true,
       .EXT_extended_dynamic_state = true,
+      .EXT_extended_dynamic_state2 = true,
       .EXT_filter_cubic = device->info->a6xx.has_tex_filter_cubic,
       .EXT_host_query_reset = true,
       .EXT_index_type_uint8 = true,
@@ -193,15 +195,15 @@ tu_physical_device_init(struct tu_physical_device *device,
 {
    VkResult result = VK_SUCCESS;
 
-   device->name = fd_dev_name(device->gpu_id);
+   device->name = fd_dev_name(&device->dev_id);
 
-   const struct fd_dev_info *info = fd_dev_info(device->gpu_id);
+   const struct fd_dev_info *info = fd_dev_info(&device->dev_id);
    if (!info) {
       result = vk_startup_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
                                  "device %s is unsupported", device->name);
       return result;
    }
-   switch (device->gpu_id / 100) {
+   switch (fd_dev_gen(&device->dev_id)) {
    case 6:
       device->info = info;
       device->ccu_offset_bypass = device->info->num_ccu * A6XX_CCU_DEPTH_SIZE;
@@ -213,7 +215,7 @@ tu_physical_device_init(struct tu_physical_device *device,
                                  "device %s is unsupported", device->name);
       return result;
    }
-   if (tu_device_get_cache_uuid(device->gpu_id, device->cache_uuid)) {
+   if (tu_device_get_cache_uuid(fd_dev_gpu_id(&device->dev_id), device->cache_uuid)) {
       result = vk_startup_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
                                  "cannot generate UUID");
       return result;
@@ -229,7 +231,7 @@ tu_physical_device_init(struct tu_physical_device *device,
    vk_warn_non_conformant_implementation("tu");
 
    fd_get_driver_uuid(device->driver_uuid);
-   fd_get_device_uuid(device->device_uuid, device->gpu_id);
+   fd_get_device_uuid(device->device_uuid, &device->dev_id);
 
    struct vk_device_extension_table supported_extensions;
    get_device_extensions(device, &supported_extensions);
@@ -281,6 +283,8 @@ static const struct debug_control tu_debug_options[] = {
    { "nomultipos", TU_DEBUG_NOMULTIPOS },
    { "nolrz", TU_DEBUG_NOLRZ },
    { "perfc", TU_DEBUG_PERFC },
+   { "flushall", TU_DEBUG_FLUSHALL },
+   { "syncdraw", TU_DEBUG_SYNCDRAW },
    { NULL, 0 }
 };
 
@@ -640,6 +644,12 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->vertexAttributeInstanceRateZeroDivisor = true;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES_KHR: {
+         VkPhysicalDeviceUniformBufferStandardLayoutFeaturesKHR *features =
+            (VkPhysicalDeviceUniformBufferStandardLayoutFeaturesKHR *)ext;
+         features->uniformBufferStandardLayout = true;
+         break;
+      }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_FEATURES_EXT: {
          VkPhysicalDevicePrivateDataFeaturesEXT *features =
             (VkPhysicalDevicePrivateDataFeaturesEXT *)ext;
@@ -673,6 +683,14 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT: {
          VkPhysicalDeviceExtendedDynamicStateFeaturesEXT *features = (void *)ext;
          features->extendedDynamicState = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_2_FEATURES_EXT: {
+         VkPhysicalDeviceExtendedDynamicState2FeaturesEXT *features =
+            (VkPhysicalDeviceExtendedDynamicState2FeaturesEXT *)ext;
+         features->extendedDynamicState2 = true;
+         features->extendedDynamicState2LogicOp = false;
+         features->extendedDynamicState2PatchControlPoints = false;
          break;
       }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR: {
@@ -824,7 +842,7 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       .maxComputeSharedMemorySize = 32768,
       .maxComputeWorkGroupCount = { 65535, 65535, 65535 },
       .maxComputeWorkGroupInvocations = 2048,
-      .maxComputeWorkGroupSize = { 2048, 2048, 2048 },
+      .maxComputeWorkGroupSize = { 1024, 1024, 1024 },
       .subPixelPrecisionBits = 8,
       .subTexelPrecisionBits = 8,
       .mipmapPrecisionBits = 8,
@@ -1028,9 +1046,9 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          props->maxPerStageUpdateAfterBindResources = max_descriptor_set_size;
          props->maxDescriptorSetUpdateAfterBindSamplers = max_descriptor_set_size;
          props->maxDescriptorSetUpdateAfterBindUniformBuffers = max_descriptor_set_size;
-         props->maxDescriptorSetUpdateAfterBindUniformBuffersDynamic = MAX_DYNAMIC_BUFFERS / 2;
+         props->maxDescriptorSetUpdateAfterBindUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS;
          props->maxDescriptorSetUpdateAfterBindStorageBuffers = max_descriptor_set_size;
-         props->maxDescriptorSetUpdateAfterBindStorageBuffersDynamic = MAX_DYNAMIC_BUFFERS / 2;
+         props->maxDescriptorSetUpdateAfterBindStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS;
          props->maxDescriptorSetUpdateAfterBindSampledImages = max_descriptor_set_size;
          props->maxDescriptorSetUpdateAfterBindStorageImages = max_descriptor_set_size;
          props->maxDescriptorSetUpdateAfterBindInputAttachments = max_descriptor_set_size;
@@ -1328,7 +1346,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       }
    }
 
-   device->compiler = ir3_compiler_create(NULL, physical_device->gpu_id,
+   device->compiler = ir3_compiler_create(NULL, &physical_device->dev_id,
                                           robust_buffer_access2);
    if (!device->compiler) {
       result = vk_startup_errorf(physical_device->instance,
@@ -1477,7 +1495,8 @@ fail_pipeline_cache:
    tu_destroy_clear_blit_shaders(device);
 fail_global_bo_map:
    tu_bo_finish(device, &device->global_bo);
-
+   vk_free(&device->vk.alloc, device->bo_idx);
+   vk_free(&device->vk.alloc, device->bo_list);
 fail_global_bo:
    ir3_compiler_destroy(device->compiler);
 

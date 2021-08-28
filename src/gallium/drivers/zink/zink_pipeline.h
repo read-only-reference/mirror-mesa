@@ -27,6 +27,7 @@
 #include <vulkan/vulkan.h>
 
 #include "pipe/p_state.h"
+#include "zink_state.h"
 
 struct zink_blend_state;
 struct zink_depth_stencil_alpha_state;
@@ -38,29 +39,27 @@ struct zink_screen;
 struct zink_vertex_elements_state;
 
 struct zink_gfx_pipeline_state {
-   struct zink_render_pass *render_pass;
-
-   uint8_t void_alpha_attachments:PIPE_MAX_COLOR_BUFS;
-   uint32_t num_attachments;
-   struct zink_blend_state *blend_state;
-
-   struct zink_rasterizer_hw_state *rast_state;
-
+   uint32_t rast_state : ZINK_RAST_HW_STATE_SIZE; //zink_rasterizer_hw_state
+   uint32_t vertices_per_patch:5;
+   uint32_t rast_samples:7;
+   uint32_t void_alpha_attachments:PIPE_MAX_COLOR_BUFS;
    VkSampleMask sample_mask;
-   uint8_t rast_samples;
-   uint8_t vertices_per_patch;
 
-   unsigned num_viewports;
-
-   bool primitive_restart;
+   struct zink_render_pass *render_pass;
+   struct zink_blend_state *blend_state;
 
    /* Pre-hashed value for table lookup, invalid when zero.
     * Members after this point are not included in pipeline state hash key */
    uint32_t hash;
    bool dirty;
 
-   struct zink_depth_stencil_alpha_hw_state *depth_stencil_alpha_state; //non-dynamic state
-   VkFrontFace front_face;
+   struct {
+      struct zink_depth_stencil_alpha_hw_state *depth_stencil_alpha_state; //non-dynamic state
+      VkFrontFace front_face;
+      unsigned num_viewports;
+   } dyn_state1;
+
+   bool primitive_restart; //dynamic state2
 
    VkShaderModule modules[PIPE_SHADER_TYPES - 1];
    uint32_t module_hash;
@@ -76,9 +75,10 @@ struct zink_gfx_pipeline_state {
    uint32_t vertex_strides[PIPE_MAX_ATTRIBS];
    bool sample_locations_enabled;
    bool have_EXT_extended_dynamic_state;
-
+   bool have_EXT_extended_dynamic_state2;
    VkPipeline pipeline;
-   enum pipe_prim_type mode : 8;
+   uint8_t patch_vertices;
+   unsigned idx : 8;
 };
 
 struct zink_compute_pipeline_state {

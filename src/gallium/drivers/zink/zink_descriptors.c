@@ -391,12 +391,38 @@ equals_descriptor_layout(const void *a, const void *b)
           !memcmp(a_k->bindings, b_k->bindings, a_k->num_descriptors * sizeof(VkDescriptorSetLayoutBinding));
 }
 
+static struct zink_descriptor_layout *
+create_layout(struct zink_context *ctx, enum zink_descriptor_type type,
+              VkDescriptorSetLayoutBinding *bindings, unsigned num_bindings,
+              struct zink_descriptor_layout_key **layout_key)
+{
+   struct zink_screen *screen = zink_screen(ctx->base.screen);
+   VkDescriptorSetLayout dsl = descriptor_layout_create(screen, type, bindings, MAX2(num_bindings, 1));
+   if (!dsl)
+      return VK_NULL_HANDLE;
+
+   struct zink_descriptor_layout_key *k = ralloc(ctx, struct zink_descriptor_layout_key);
+   k->num_descriptors = num_bindings;
+   size_t bindings_size = MAX2(num_bindings, 1) * sizeof(VkDescriptorSetLayoutBinding);
+   k->bindings = ralloc_size(k, bindings_size);
+   if (!k->bindings) {
+      ralloc_free(k);
+      vkDestroyDescriptorSetLayout(screen->dev, dsl, NULL);
+      return VK_NULL_HANDLE;
+   }
+   memcpy(k->bindings, bindings, bindings_size);
+
+   struct zink_descriptor_layout *layout = rzalloc(ctx, struct zink_descriptor_layout);
+   layout->layout = dsl;
+   *layout_key = k;
+   return layout;
+}
+
 struct zink_descriptor_layout *
 zink_descriptor_util_layout_get(struct zink_context *ctx, enum zink_descriptor_type type,
                       VkDescriptorSetLayoutBinding *bindings, unsigned num_bindings,
                       struct zink_descriptor_layout_key **layout_key)
 {
-   struct zink_screen *screen = zink_screen(ctx->base.screen);
    uint32_t hash = 0;
    struct zink_descriptor_layout_key key = {
       .num_descriptors = num_bindings,
@@ -424,47 +450,61 @@ zink_descriptor_util_layout_get(struct zink_context *ctx, enum zink_descriptor_t
       }
    }
 
-   VkDescriptorSetLayout dsl = descriptor_layout_create(screen, type, key.bindings, MAX2(num_bindings, 1));
-   if (!dsl)
-      return VK_NULL_HANDLE;
-
-   struct zink_descriptor_layout_key *k = ralloc(ctx, struct zink_descriptor_layout_key);
-   k->num_descriptors = num_bindings;
-   size_t bindings_size = MAX2(num_bindings, 1) * sizeof(VkDescriptorSetLayoutBinding);
-   k->bindings = ralloc_size(k, bindings_size);
-   if (!k->bindings) {
-      ralloc_free(k);
-      vkDestroyDescriptorSetLayout(screen->dev, dsl, NULL);
-      return VK_NULL_HANDLE;
+   struct zink_descriptor_layout *layout = create_layout(ctx, type, bindings ? bindings : &null_binding, num_bindings, layout_key);
+   if (layout && type != ZINK_DESCRIPTOR_TYPES) {
+      _mesa_hash_table_insert_pre_hashed(&ctx->desc_set_layouts[type], hash, *layout_key, layout);
    }
-   memcpy(k->bindings, key.bindings, bindings_size);
-
-   struct zink_descriptor_layout *layout = rzalloc(ctx, struct zink_descriptor_layout);
-   layout->layout = dsl;
-   if (type != ZINK_DESCRIPTOR_TYPES) {
-      _mesa_hash_table_insert_pre_hashed(&ctx->desc_set_layouts[type], hash, k, layout);
-   }
-   *layout_key = k;
    return layout;
+}
+
+static void
+init_push_binding(VkDescriptorSetLayoutBinding *binding, unsigned i, VkDescriptorType type)
+{
+   binding->binding = tgsi_processor_to_shader_stage(i);
+   binding->descriptorType = type;
+   binding->descriptorCount = 1;
+   binding->stageFlags = zink_shader_stage(i);
+   binding->pImmutableSamplers = NULL;
+}
+
+static VkDescriptorType
+get_push_types(struct zink_screen *screen, enum zink_descriptor_type *dsl_type)
+{
+   *dsl_type = screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY &&
+               screen->info.have_KHR_push_descriptor ? ZINK_DESCRIPTOR_TYPES : ZINK_DESCRIPTOR_TYPE_UBO;
+   return screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY ?
+          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+}
+
+static struct zink_descriptor_layout *
+create_gfx_layout(struct zink_context *ctx, struct zink_descriptor_layout_key **layout_key, bool fbfetch)
+{
+   struct zink_screen *screen = zink_screen(ctx->base.screen);
+   VkDescriptorSetLayoutBinding bindings[PIPE_SHADER_TYPES];
+   enum zink_descriptor_type dsl_type;
+   VkDescriptorType vktype = get_push_types(screen, &dsl_type);
+   for (unsigned i = 0; i < ZINK_SHADER_COUNT; i++)
+      init_push_binding(&bindings[i], i, vktype);
+   if (fbfetch) {
+      bindings[ZINK_SHADER_COUNT].binding = ZINK_FBFETCH_BINDING;
+      bindings[ZINK_SHADER_COUNT].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+      bindings[ZINK_SHADER_COUNT].descriptorCount = 1;
+      bindings[ZINK_SHADER_COUNT].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+      bindings[ZINK_SHADER_COUNT].pImmutableSamplers = NULL;
+   }
+   return create_layout(ctx, dsl_type, bindings, fbfetch ? ARRAY_SIZE(bindings) : ARRAY_SIZE(bindings) - 1, layout_key);
 }
 
 bool
 zink_descriptor_util_push_layouts_get(struct zink_context *ctx, struct zink_descriptor_layout **dsls, struct zink_descriptor_layout_key **layout_keys)
 {
    struct zink_screen *screen = zink_screen(ctx->base.screen);
-   VkDescriptorSetLayoutBinding bindings[PIPE_SHADER_TYPES];
-   for (unsigned i = 0; i < PIPE_SHADER_TYPES; i++) {
-      bindings[i].binding = tgsi_processor_to_shader_stage(i);
-      bindings[i].descriptorType = screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY ?
-                                   VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-      bindings[i].descriptorCount = 1;
-      bindings[i].stageFlags = zink_shader_stage(i);
-      bindings[i].pImmutableSamplers = NULL;
-   }
-   enum zink_descriptor_type dsl_type = screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY &&
-                                        screen->info.have_KHR_push_descriptor ? ZINK_DESCRIPTOR_TYPES : ZINK_DESCRIPTOR_TYPE_UBO;
-   dsls[0] = zink_descriptor_util_layout_get(ctx, dsl_type, bindings, ZINK_SHADER_COUNT, &layout_keys[0]);
-   dsls[1] = zink_descriptor_util_layout_get(ctx, dsl_type, &bindings[PIPE_SHADER_COMPUTE], 1, &layout_keys[1]);
+   VkDescriptorSetLayoutBinding compute_binding;
+   enum zink_descriptor_type dsl_type;
+   VkDescriptorType vktype = get_push_types(screen, &dsl_type);
+   init_push_binding(&compute_binding, PIPE_SHADER_COMPUTE, vktype);
+   dsls[0] = create_gfx_layout(ctx, &layout_keys[0], false);
+   dsls[1] = create_layout(ctx, dsl_type, &compute_binding, 1, &layout_keys[1]);
    return dsls[0] && dsls[1];
 }
 
@@ -1069,12 +1109,14 @@ zink_descriptor_pool_init(struct zink_context *ctx)
          return false;
    }
    struct zink_screen *screen = zink_screen(ctx->base.screen);
-   VkDescriptorPoolSize sizes;
-   sizes.type = screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-   sizes.descriptorCount = ZINK_SHADER_COUNT * ZINK_DEFAULT_MAX_DESCS;
-   ctx->dd->push_pool[0] = descriptor_pool_get(ctx, 0, ctx->dd->push_layout_keys[0], &sizes, 1);
-   sizes.descriptorCount = ZINK_DEFAULT_MAX_DESCS;
-   ctx->dd->push_pool[1] = descriptor_pool_get(ctx, 0, ctx->dd->push_layout_keys[1], &sizes, 1);
+   VkDescriptorPoolSize sizes[2];
+   sizes[0].type = screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+   sizes[0].descriptorCount = ZINK_SHADER_COUNT * ZINK_DEFAULT_MAX_DESCS;
+   sizes[1].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+   sizes[1].descriptorCount = ZINK_DEFAULT_MAX_DESCS;
+   ctx->dd->push_pool[0] = descriptor_pool_get(ctx, 0, ctx->dd->push_layout_keys[0], sizes, ctx->dd->has_fbfetch ? 2 : 1);
+   sizes[0].descriptorCount = ZINK_DEFAULT_MAX_DESCS;
+   ctx->dd->push_pool[1] = descriptor_pool_get(ctx, 0, ctx->dd->push_layout_keys[1], sizes, 1);
    return ctx->dd->push_pool[0] && ctx->dd->push_pool[1];
 }
 
@@ -1157,7 +1199,8 @@ init_write_descriptor(struct zink_shader *shader, struct zink_descriptor_set *zd
     wd->dstBinding = shader ? shader->bindings[type][idx].binding : idx;
     wd->dstArrayElement = 0;
     wd->descriptorCount = shader ? shader->bindings[type][idx].size : 1;
-    wd->descriptorType = shader ? shader->bindings[type][idx].type : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    wd->descriptorType = shader ? shader->bindings[type][idx].type :
+                                  idx == ZINK_FBFETCH_BINDING ? VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     wd->dstSet = zds->desc_set;
     return num_wds + 1;
 }
@@ -1167,11 +1210,13 @@ update_push_ubo_descriptors(struct zink_context *ctx, struct zink_descriptor_set
                             bool is_compute, bool cache_hit, uint32_t *dynamic_offsets)
 {
    struct zink_screen *screen = zink_screen(ctx->base.screen);
-   VkWriteDescriptorSet wds[ZINK_SHADER_COUNT];
+   VkWriteDescriptorSet wds[ZINK_SHADER_COUNT + 1];
    VkDescriptorBufferInfo buffer_infos[ZINK_SHADER_COUNT];
    struct zink_shader **stages;
+   bool fbfetch = false;
 
    unsigned num_stages = is_compute ? 1 : ZINK_SHADER_COUNT;
+   struct zink_program *pg = is_compute ? &ctx->curr_compute->base : &ctx->curr_program->base;
    if (is_compute)
       stages = &ctx->curr_compute->shader;
    else
@@ -1190,20 +1235,38 @@ update_push_ubo_descriptors(struct zink_context *ctx, struct zink_descriptor_set
        * because of this, we have to populate the dynamic offsets by their shader stage to ensure they
        * match what the driver expects
        */
-      dynamic_offsets[dynamic_idx] = info->offset;
+      const bool used = (pg->dd->push_usage & BITFIELD_BIT(pstage)) == BITFIELD_BIT(pstage);
+      dynamic_offsets[dynamic_idx] = used ? info->offset : 0;
       if (!cache_hit) {
-         struct zink_resource *res = zink_get_resource_for_descriptor(ctx, ZINK_DESCRIPTOR_TYPE_UBO, pstage, 0);
+         zink_get_resource_for_descriptor(ctx, ZINK_DESCRIPTOR_TYPE_UBO, pstage, 0);
          init_write_descriptor(NULL, zds, ZINK_DESCRIPTOR_TYPE_UBO, tgsi_processor_to_shader_stage(pstage), &wds[i], 0);
-         desc_set_res_add(zds, res, i, cache_hit);
+         if (used) {
+            desc_set_res_add(zds, ctx->di.descriptor_res[ZINK_DESCRIPTOR_TYPE_UBO][pstage][0], i, cache_hit);
+            buffer_infos[i].buffer = info->buffer;
+            buffer_infos[i].range = info->range;
+         } else {
+            desc_set_res_add(zds, NULL, i, cache_hit);
+            if (unlikely(!screen->info.rb2_feats.nullDescriptor))
+               buffer_infos[i].buffer = zink_resource(ctx->dummy_vertex_buffer)->obj->buffer;
+            else
+               buffer_infos[i].buffer = VK_NULL_HANDLE;
+            buffer_infos[i].range = VK_WHOLE_SIZE;
+         }
          /* these are dynamic UBO descriptors, so we have to always set 0 as the descriptor offset */
-         buffer_infos[i] = *info;
          buffer_infos[i].offset = 0;
          wds[i].pBufferInfo = &buffer_infos[i];
       }
    }
+   if (unlikely(!cache_hit && !is_compute && ctx->fbfetch_outputs)) {
+      struct zink_resource *res = zink_resource(ctx->fb_state.cbufs[0]->texture);
+      init_write_descriptor(NULL, zds, 0, MESA_SHADER_STAGES, &wds[ZINK_SHADER_COUNT], 0);
+      desc_set_res_add(zds, res, ZINK_SHADER_COUNT, cache_hit);
+      wds[ZINK_SHADER_COUNT].pImageInfo = &ctx->di.fbfetch;
+      fbfetch = true;
+   }
 
    if (!cache_hit)
-      vkUpdateDescriptorSets(screen->dev, num_stages, wds, 0, NULL);
+      vkUpdateDescriptorSets(screen->dev, num_stages + !!fbfetch, wds, 0, NULL);
    return num_stages;
 }
 
@@ -1361,7 +1424,6 @@ zink_descriptors_update(struct zink_context *ctx, bool is_compute)
       ctx->dd->changed[is_compute][h] = false;
    }
    struct zink_batch *batch = &ctx->batch;
-   zink_batch_reference_program(batch, pg);
 
    uint32_t dynamic_offsets[PIPE_MAX_CONSTANT_BUFFERS];
    unsigned dynamic_offset_idx = 0;
@@ -1665,4 +1727,21 @@ zink_descriptor_layouts_deinit(struct zink_context *ctx)
          _mesa_hash_table_remove(&ctx->desc_set_layouts[i], he);
       }
    }
+}
+
+
+void
+zink_descriptor_util_init_fbfetch(struct zink_context *ctx)
+{
+   if (ctx->dd->has_fbfetch)
+      return;
+
+   struct zink_screen *screen = zink_screen(ctx->base.screen);
+   vkDestroyDescriptorSetLayout(screen->dev, ctx->dd->push_dsl[0]->layout, NULL);
+   ralloc_free(ctx->dd->push_dsl[0]);
+   ralloc_free(ctx->dd->push_layout_keys[0]);
+   ctx->dd->push_dsl[0] = create_gfx_layout(ctx, &ctx->dd->push_layout_keys[0], true);
+   ctx->dd->has_fbfetch = true;
+   if (screen->descriptor_mode != ZINK_DESCRIPTOR_MODE_LAZY)
+      zink_descriptor_pool_init(ctx);
 }

@@ -263,7 +263,7 @@ vec4_instruction::can_do_cmod()
     */
    for (unsigned i = 0; i < 3; i++) {
       if (src[i].file != BAD_FILE &&
-          type_is_unsigned_int(src[i].type) && src[i].negate)
+          brw_reg_type_is_unsigned_integer(src[i].type) && src[i].negate)
          return false;
    }
 
@@ -1141,7 +1141,7 @@ vec4_instruction::can_reswizzle(const struct intel_device_info *devinfo,
    /* If we write to the flag register changing the swizzle would change
     * what channels are written to the flag register.
     */
-   if (writes_flag())
+   if (writes_flag(devinfo))
       return false;
 
    /* We can't swizzle implicit accumulator access.  We'd have to
@@ -2848,11 +2848,11 @@ vec4_visitor::run()
    bool allocated_without_spills = reg_allocate();
 
    if (!allocated_without_spills) {
-      compiler->shader_perf_log(log_data,
-                                "%s shader triggered register spilling.  "
-                                "Try reducing the number of live vec4 values "
-                                "to improve performance.\n",
-                                stage_name);
+      brw_shader_perf_log(compiler, log_data,
+                          "%s shader triggered register spilling.  "
+                          "Try reducing the number of live vec4 values "
+                          "to improve performance.\n",
+                          stage_name);
 
       while (!reg_allocate()) {
          if (failed)

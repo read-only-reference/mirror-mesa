@@ -97,6 +97,7 @@ struct rendering_state {
    int num_viewports;
    struct pipe_viewport_state viewports[16];
 
+   uint8_t patch_vertices;
    ubyte index_size;
    unsigned index_offset;
    struct pipe_resource *index_buffer;
@@ -203,7 +204,7 @@ static void emit_compute_state(struct rendering_state *state)
 
    if (state->sv_dirty[PIPE_SHADER_COMPUTE]) {
       state->pctx->set_sampler_views(state->pctx, PIPE_SHADER_COMPUTE, 0, state->num_sampler_views[PIPE_SHADER_COMPUTE],
-                                     0, state->sv[PIPE_SHADER_COMPUTE]);
+                                     0, false, state->sv[PIPE_SHADER_COMPUTE]);
       state->sv_dirty[PIPE_SHADER_COMPUTE] = false;
    }
 
@@ -332,7 +333,7 @@ static void emit_state(struct rendering_state *state)
          continue;
 
       state->pctx->set_sampler_views(state->pctx, sh, 0, state->num_sampler_views[sh],
-                                     0, state->sv[sh]);
+                                     0, false, state->sv[sh]);
       state->sv_dirty[sh] = false;
    }
 
@@ -718,6 +719,7 @@ static void handle_graphics_pipeline(struct lvp_cmd_buffer_entry *cmd,
          state->velem.velems[location].src_offset = vi->pVertexAttributeDescriptions[i].offset;
          state->velem.velems[location].vertex_buffer_index = vi->pVertexAttributeDescriptions[i].binding;
          state->velem.velems[location].src_format = lvp_vk_format_to_pipe_format(vi->pVertexAttributeDescriptions[i].format);
+         state->velem.velems[location].dual_slot = false;
 
          switch (vi->pVertexBindingDescriptions[vi->pVertexAttributeDescriptions[i].binding].inputRate) {
          case VK_VERTEX_INPUT_RATE_VERTEX:
@@ -763,10 +765,10 @@ static void handle_graphics_pipeline(struct lvp_cmd_buffer_entry *cmd,
    if (pipeline->graphics_create_info.pTessellationState) {
       if (!dynamic_states[conv_dynamic_state_idx(VK_DYNAMIC_STATE_PATCH_CONTROL_POINTS_EXT)]) {
          const VkPipelineTessellationStateCreateInfo *ts = pipeline->graphics_create_info.pTessellationState;
-         state->info.vertices_per_patch = ts->patchControlPoints;
+         state->patch_vertices = ts->patchControlPoints;
       }
    } else
-      state->info.vertices_per_patch = 0;
+      state->patch_vertices = 0;
 
    if (pipeline->graphics_create_info.pViewportState) {
       const VkPipelineViewportStateCreateInfo *vpi= pipeline->graphics_create_info.pViewportState;
@@ -1543,6 +1545,60 @@ slow_clear:
 static void render_pass_resolve(struct rendering_state *state)
 {
    const struct lvp_subpass *subpass = &state->pass->subpasses[state->subpass];
+
+   if (subpass->depth_stencil_attachment && subpass->ds_resolve_attachment) {
+      struct lvp_subpass_attachment src_att = *subpass->depth_stencil_attachment;
+      struct lvp_subpass_attachment dst_att = *subpass->ds_resolve_attachment;
+      if (dst_att.attachment != VK_ATTACHMENT_UNUSED) {
+         int num_blits = 1;
+         if (subpass->depth_resolve_mode != subpass->stencil_resolve_mode)
+            num_blits = 2;
+
+         for (unsigned i = 0; i < num_blits; i++) {
+
+            if (i == 0 && subpass->depth_resolve_mode == VK_RESOLVE_MODE_NONE)
+               continue;
+
+            if (i == 1 && subpass->stencil_resolve_mode == VK_RESOLVE_MODE_NONE)
+               continue;
+
+            struct lvp_image_view *src_imgv = get_attachment(state, src_att.attachment);
+            struct lvp_image_view *dst_imgv = get_attachment(state, dst_att.attachment);
+
+            struct pipe_blit_info info;
+            memset(&info, 0, sizeof(info));
+
+            info.src.resource = src_imgv->image->bo;
+            info.dst.resource = dst_imgv->image->bo;
+            info.src.format = src_imgv->pformat;
+            info.dst.format = dst_imgv->pformat;
+            info.filter = PIPE_TEX_FILTER_NEAREST;
+
+            if (num_blits == 1)
+               info.mask = PIPE_MASK_ZS;
+            else if (i == 0)
+               info.mask = PIPE_MASK_Z;
+            else
+               info.mask = PIPE_MASK_S;
+
+            if (i == 0 && subpass->depth_resolve_mode == VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)
+               info.sample0_only = true;
+            if (i == 1 && subpass->stencil_resolve_mode == VK_RESOLVE_MODE_SAMPLE_ZERO_BIT)
+               info.sample0_only = true;
+
+            info.src.box.x = state->render_area.offset.x;
+            info.src.box.y = state->render_area.offset.y;
+            info.src.box.width = state->render_area.extent.width;
+            info.src.box.height = state->render_area.extent.height;
+            info.src.box.depth = state->vk_framebuffer->layers;
+
+            info.dst.box = info.src.box;
+
+            state->pctx->blit(state->pctx, &info);
+         }
+      }
+   }
+
    if (!subpass->has_color_resolve)
       return;
    for (uint32_t i = 0; i < subpass->color_count; i++) {
@@ -1675,6 +1731,7 @@ static void handle_draw(struct lvp_cmd_buffer_entry *cmd,
    if (cmd->u.draw.draw_count > 1)
       state->info.increment_draw_id = true;
 
+   state->pctx->set_patch_vertices(state->pctx, state->patch_vertices);
    state->pctx->draw_vbo(state->pctx, &state->info, 0, NULL, cmd->u.draw.draws, cmd->u.draw.draw_count);
 }
 
@@ -2251,6 +2308,7 @@ static void handle_draw_indexed(struct lvp_cmd_buffer_entry *cmd,
       cmd->u.draw_indexed.calc_start = false;
    }
    state->info.index_bias_varies = cmd->u.draw_indexed.vertex_offset_changes;
+   state->pctx->set_patch_vertices(state->pctx, state->patch_vertices);
    state->pctx->draw_vbo(state->pctx, &state->info, 0, NULL, cmd->u.draw_indexed.draws, cmd->u.draw_indexed.draw_count);
 }
 
@@ -2272,6 +2330,7 @@ static void handle_draw_indirect(struct lvp_cmd_buffer_entry *cmd,
    state->indirect_info.buffer = cmd->u.draw_indirect.buffer->bo;
    state->info.view_mask = subpass->view_mask;
 
+   state->pctx->set_patch_vertices(state->pctx, state->patch_vertices);
    state->pctx->draw_vbo(state->pctx, &state->info, 0, &state->indirect_info, &draw, 1);
 }
 
@@ -2745,6 +2804,7 @@ static void handle_draw_indirect_count(struct lvp_cmd_buffer_entry *cmd,
    state->indirect_info.indirect_draw_count = cmd->u.draw_indirect_count.count_buffer->bo;
    state->info.view_mask = subpass->view_mask;
 
+   state->pctx->set_patch_vertices(state->pctx, state->patch_vertices);
    state->pctx->draw_vbo(state->pctx, &state->info, 0, &state->indirect_info, &draw, 1);
 }
 
@@ -2919,6 +2979,7 @@ static void handle_draw_indirect_byte_count(struct lvp_cmd_buffer_entry *cmd,
 
    draw.count /= cmd->u.draw_indirect_byte_count.vertex_stride;
    state->info.view_mask = subpass->view_mask;
+   state->pctx->set_patch_vertices(state->pctx, state->patch_vertices);
    state->pctx->draw_vbo(state->pctx, &state->info, 0, &state->indirect_info, &draw, 1);
 }
 
@@ -3078,7 +3139,7 @@ static void handle_set_logic_op(struct lvp_cmd_buffer_entry *cmd,
 static void handle_set_patch_control_points(struct lvp_cmd_buffer_entry *cmd,
                                             struct rendering_state *state)
 {
-   state->info.vertices_per_patch = cmd->u.set_patch_control_points.vertices_per_patch;
+   state->patch_vertices = cmd->u.set_patch_control_points.vertices_per_patch;
 }
 
 static void handle_set_primitive_restart_enable(struct lvp_cmd_buffer_entry *cmd,

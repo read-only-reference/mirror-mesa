@@ -18,7 +18,7 @@ if [ -n "$CROSS" ]; then
 else
     STRIP="strip"
 fi
-if [ -z "$ARTIFACTS_DEBUG_SYMBOLS"]; then
+if [ -z "$ARTIFACTS_DEBUG_SYMBOLS" ]; then
     find install -name \*.so -exec $STRIP {} \;
 fi
 
@@ -38,6 +38,7 @@ cp -Rp .gitlab-ci/deqp-*.txt install/
 cp -Rp .gitlab-ci/report-flakes.py install/
 cp -Rp .gitlab-ci/vkd3d-proton install/
 find . -path \*/ci/\*.txt \
+    -o -path \*/ci/\*.toml \
     -o -path \*/ci/\*traces\*.yml \
     | xargs -I '{}' cp -p '{}' install/
 

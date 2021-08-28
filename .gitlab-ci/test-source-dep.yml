@@ -151,6 +151,8 @@
 .freedreno-rules:
   stage: freedreno
   rules:
+    - if: '$FD_FARM == "offline"'
+      when: never
     - *ignore_scheduled_pipelines
     - changes:
         *mesa_core_file_list
@@ -176,6 +178,8 @@
 .freedreno-rules-restricted:
   stage: freedreno
   rules:
+    - if: '$FD_FARM == "offline"'
+      when: never
     # If the triggerer has access to the restricted traces and if it is pre-merge
     - if: '($GITLAB_USER_LOGIN !~ "/^(robclark|anholt|flto|cwabbott0|Danil|tomeu)$/") &&
            ($GITLAB_USER_LOGIN != "marge-bot" || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_COMMIT_REF_NAME)'
@@ -193,6 +197,31 @@
     - changes:
         *freedreno_file_list
       when: on_success
+    - when: never
+
+# Unfortunately YAML doesn't let us concatenate arrays, so we have to do the
+# rules duplication manually
+.freedreno-rules-performance:
+  stage: freedreno
+  rules:
+    - if: '$FD_FARM == "offline"'
+      when: never
+    - *ignore_scheduled_pipelines
+    # Run only on pre-merge pipelines from Marge
+    - if: '$GITLAB_USER_LOGIN != "marge-bot" || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_COMMIT_REF_NAME'
+      when: never
+    - changes:
+        *mesa_core_file_list
+      when: manual
+    - changes:
+        *gallium_core_file_list
+      when: manual
+    - changes:
+        *vulkan_file_list
+      when: manual
+    - changes:
+        *freedreno_file_list
+      when: manual
     - when: never
 
 .panfrost-midgard-rules:
@@ -389,11 +418,31 @@
     - changes:
         *gallium_core_file_list
       when: on_success
-    - changes:
+    - changes: &iris_file_list
       - src/gallium/drivers/iris/**/*
       - src/gallium/winsys/iris/**/*
       - src/intel/**/*
       when: on_success
+    - when: never
+
+# Unfortunately YAML doesn't let us concatenate arrays, so we have to do the
+# rules duplication manually
+.iris-rules-performance:
+  stage: intel
+  rules:
+    - *ignore_scheduled_pipelines
+    # Run only on pre-merge pipelines from Marge
+    - if: '$GITLAB_USER_LOGIN != "marge-bot" || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_COMMIT_REF_NAME'
+      when: never
+    - changes:
+        *mesa_core_file_list
+      when: manual
+    - changes:
+        *gallium_core_file_list
+      when: manual
+    - changes:
+        *iris_file_list
+      when: manual
     - when: never
 
 .anv-rules:

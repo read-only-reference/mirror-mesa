@@ -314,6 +314,9 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return modes;
    }
 
+   case PIPE_CAP_FBFETCH:
+      return 1;
+
    case PIPE_CAP_QUERY_MEMORY_INFO:
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_TGSI_TEXCOORD:
@@ -389,7 +392,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return screen->info.props.limits.maxColorAttachments;
 
    case PIPE_CAP_OCCLUSION_QUERY:
-      return 1;
+      return screen->info.feats.features.occlusionQueryPrecise;
 
    case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
       return screen->info.have_EXT_sample_locations && screen->info.have_EXT_extended_dynamic_state;
@@ -479,7 +482,6 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
      return screen->info.have_EXT_conditional_rendering;
 
    case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
-      return 130;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return 460;
 
@@ -585,8 +587,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return screen->info.feats.features.shaderCullDistance;
 
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-      /* this is the spec minimum */
-      return screen->info.feats.features.sparseBinding ? 64 * 1024 : 0;
+      
+      return screen->info.feats.features.sparseBinding ? ZINK_SPARSE_BUFFER_PAGE_SIZE : 0;
 
    case PIPE_CAP_VIEWPORT_SUBPIXEL_BITS:
       return screen->info.props.limits.viewportSubPixelBits;
@@ -1038,16 +1040,6 @@ zink_is_format_supported(struct pipe_screen *pscreen,
 }
 
 static void
-resource_cache_entry_destroy(struct zink_screen *screen, struct hash_entry *he)
-{
-   struct util_dynarray *array = (void*)he->data;
-   util_dynarray_foreach(array, struct mem_cache_entry, mc) {
-      vkFreeMemory(screen->dev, mc->mem, NULL);
-   }
-   util_dynarray_fini(array);
-}
-
-static void
 zink_destroy_screen(struct pipe_screen *pscreen)
 {
    struct zink_screen *screen = zink_screen(pscreen);
@@ -1087,15 +1079,7 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    }
 #endif
    disk_cache_destroy(screen->disk_cache);
-
-   for (uint32_t i = 0; i < screen->info.mem_props.memoryHeapCount; ++i) {
-      simple_mtx_lock(&screen->mem[i].mem_cache_mtx);
-      hash_table_foreach(&screen->mem[i].resource_mem_cache, he)
-         resource_cache_entry_destroy(screen, he);
-      simple_mtx_unlock(&screen->mem[i].mem_cache_mtx);
-      simple_mtx_destroy(&screen->mem[i].mem_cache_mtx);
-   }
-
+   zink_bo_deinit(screen);
    util_live_shader_cache_deinit(&screen->shaders);
 
    if (screen->sem)
@@ -1650,12 +1634,12 @@ zink_query_memory_info(struct pipe_screen *pscreen, struct pipe_memory_info *inf
       for (unsigned i = 0; i < mem.memoryProperties.memoryHeapCount; i++) {
          if (mem.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
             /* VRAM */
-            info->total_device_memory = mem.memoryProperties.memoryHeaps[i].size / 1024;
-            info->avail_device_memory = (budget.heapBudget[i] - budget.heapUsage[i]) / 1024;
-         } else if (mem.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+            info->total_device_memory += mem.memoryProperties.memoryHeaps[i].size / 1024;
+            info->avail_device_memory += (budget.heapBudget[i] - budget.heapUsage[i]) / 1024;
+         } else {
             /* GART */
-            info->total_staging_memory = mem.memoryProperties.memoryHeaps[i].size / 1024;
-            info->avail_staging_memory = (budget.heapBudget[i] - budget.heapUsage[i]) / 1024;
+            info->total_staging_memory += mem.memoryProperties.memoryHeaps[i].size / 1024;
+            info->avail_staging_memory += (budget.heapBudget[i] - budget.heapUsage[i]) / 1024;
          }
       }
       /* evictions not yet supported in vulkan */
@@ -1663,14 +1647,14 @@ zink_query_memory_info(struct pipe_screen *pscreen, struct pipe_memory_info *inf
       for (unsigned i = 0; i < screen->info.mem_props.memoryHeapCount; i++) {
          if (screen->info.mem_props.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
             /* VRAM */
-            info->total_device_memory = screen->info.mem_props.memoryHeaps[i].size / 1024;
+            info->total_device_memory += screen->info.mem_props.memoryHeaps[i].size / 1024;
             /* free real estate! */
-            info->avail_device_memory = info->total_device_memory;
-         } else if (screen->info.mem_props.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+            info->avail_device_memory += info->total_device_memory;
+         } else {
             /* GART */
-            info->total_staging_memory = screen->info.mem_props.memoryHeaps[i].size / 1024;
+            info->total_staging_memory += screen->info.mem_props.memoryHeaps[i].size / 1024;
             /* free real estate! */
-            info->avail_staging_memory = info->total_staging_memory;
+            info->avail_staging_memory += info->total_staging_memory;
          }
       }
    }
@@ -1724,19 +1708,12 @@ check_base_requirements(struct zink_screen *screen)
        !screen->info.feats.features.fillModeNonSolid ||
        !screen->info.feats.features.wideLines ||
        !screen->info.feats.features.largePoints ||
-       !screen->info.feats.features.alphaToOne ||
        !screen->info.feats.features.shaderClipDistance ||
        !(screen->info.feats12.scalarBlockLayout ||
          screen->info.have_EXT_scalar_block_layout) ||
        !screen->info.have_KHR_maintenance1 ||
        !screen->info.have_EXT_custom_border_color ||
-       !screen->info.have_EXT_line_rasterization ||
-       !screen->info.line_rast_feats.rectangularLines ||
-       !screen->info.line_rast_feats.bresenhamLines ||
-       !screen->info.line_rast_feats.smoothLines ||
-       !screen->info.line_rast_feats.stippledRectangularLines ||
-       !screen->info.line_rast_feats.stippledBresenhamLines ||
-       !screen->info.line_rast_feats.stippledSmoothLines) {
+       !screen->info.have_EXT_line_rasterization) {
       fprintf(stderr, "WARNING: Some incorrect rendering "
               "might occur because the selected Vulkan device (%s) doesn't support "
               "base Zink requirements: ", screen->info.props.deviceName);
@@ -1747,21 +1724,12 @@ check_base_requirements(struct zink_screen *screen)
       CHECK_OR_PRINT(feats.features.fillModeNonSolid);
       CHECK_OR_PRINT(feats.features.wideLines);
       CHECK_OR_PRINT(feats.features.largePoints);
-      CHECK_OR_PRINT(feats.features.alphaToOne);
       CHECK_OR_PRINT(feats.features.shaderClipDistance);
       if (!screen->info.feats12.scalarBlockLayout && !screen->info.have_EXT_scalar_block_layout)
          printf("scalarBlockLayout OR EXT_scalar_block_layout ");
       CHECK_OR_PRINT(have_KHR_maintenance1);
       CHECK_OR_PRINT(have_EXT_custom_border_color);
       CHECK_OR_PRINT(have_EXT_line_rasterization);
-      if (screen->info.have_EXT_line_rasterization) {
-         CHECK_OR_PRINT(line_rast_feats.rectangularLines);
-         CHECK_OR_PRINT(line_rast_feats.bresenhamLines);
-         CHECK_OR_PRINT(line_rast_feats.smoothLines);
-         CHECK_OR_PRINT(line_rast_feats.stippledRectangularLines);
-         CHECK_OR_PRINT(line_rast_feats.stippledBresenhamLines);
-         CHECK_OR_PRINT(line_rast_feats.stippledSmoothLines);
-      }
       fprintf(stderr, "\n");
    }
 }
@@ -1892,6 +1860,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
 
    if (!zink_screen_resource_init(&screen->base))
       goto fail;
+   zink_bo_init(screen);
    zink_screen_fence_init(&screen->base);
 
    zink_screen_init_compiler(screen);
@@ -1902,9 +1871,12 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    slab_create_parent(&screen->transfer_pool, sizeof(struct zink_transfer), 16);
 
 #if WITH_XMLCONFIG
-   if (config)
+   if (config) {
+      driParseConfigFiles(config->options, config->options_info, 0, "zink",
+                          NULL, NULL, NULL, 0, NULL, 0);
       screen->driconf.dual_color_blend_by_location = driQueryOptionb(config->options, "dual_color_blend_by_location");
       //screen->driconf.inline_uniforms = driQueryOptionb(config->options, "radeonsi_inline_uniforms");
+   }
 #endif
    screen->driconf.inline_uniforms = debug_get_bool_option("ZINK_INLINE_UNIFORMS", false);
 
@@ -1917,6 +1889,33 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
       screen->info.have_KHR_timeline_semaphore = false;
    if (screen->info.have_KHR_timeline_semaphore)
       zink_screen_init_semaphore(screen);
+
+   memset(&screen->heap_map, UINT8_MAX, sizeof(screen->heap_map));
+   for (enum zink_heap i = 0; i < ZINK_HEAP_MAX; i++) {
+      for (unsigned j = 0; j < screen->info.mem_props.memoryTypeCount; j++) {
+         VkMemoryPropertyFlags domains = vk_domain_from_heap(i);
+         if ((screen->info.mem_props.memoryTypes[j].propertyFlags & domains) == domains) {
+            assert(screen->heap_map[i] == UINT8_MAX);
+            screen->heap_map[i] = j;
+            break;
+         }
+      }
+
+      /* not found: use compatible heap */
+      if (screen->heap_map[i] == UINT8_MAX) {
+         /* only cached mem has a failure case for now */
+         assert(i == ZINK_HEAP_HOST_VISIBLE_CACHED);
+         screen->heap_map[i] = screen->heap_map[ZINK_HEAP_HOST_VISIBLE_ANY];
+      }
+   }
+   {
+      unsigned vis_vram = screen->heap_map[ZINK_HEAP_DEVICE_LOCAL_VISIBLE];
+      unsigned vram = screen->heap_map[ZINK_HEAP_DEVICE_LOCAL];
+      /* determine if vis vram is roughly equal to total vram */
+      if (screen->info.mem_props.memoryHeaps[screen->info.mem_props.memoryTypes[vis_vram].heapIndex].size >
+          screen->info.mem_props.memoryHeaps[screen->info.mem_props.memoryTypes[vram].heapIndex].size * 0.9)
+         screen->resizable_bar = true;
+   }
 
    simple_mtx_init(&screen->surface_mtx, mtx_plain);
    simple_mtx_init(&screen->bufferview_mtx, mtx_plain);

@@ -22,7 +22,8 @@ project(
   'mesa',
   ['c', 'cpp'],
   version : run_command(
-    [find_program('python', 'python3'), 'bin/meson_get_version.py']
+    [find_program('python3', 'python'), 'bin/meson_get_version.py'],
+    check : true
   ).stdout(),
   license : 'MIT',
   meson_version : '>= 0.52',
@@ -204,7 +205,7 @@ if gallium_drivers.contains('auto')
     if ['x86', 'x86_64'].contains(host_machine.cpu_family())
       gallium_drivers = [
         'r300', 'r600', 'radeonsi', 'nouveau', 'virgl', 'svga', 'swrast',
-        'iris'
+        'iris', 'crocus'
       ]
     elif ['arm', 'aarch64'].contains(host_machine.cpu_family())
       gallium_drivers = [
@@ -766,7 +767,7 @@ endif
 with_gallium_va = false
 dep_va = null_dep
 if _va != 'disabled'
-  dep_va = dependency('libva', version : '>= 1.1.0', required : _va == 'enabled')
+  dep_va = dependency('libva', version : '>= 1.8.0', required : _va == 'enabled')
   if dep_va.found()
     dep_va_headers = dep_va.partial_dependency(compile_args : true)
     with_gallium_va = true
@@ -1332,7 +1333,7 @@ if not ['linux'].contains(host_machine.system())
   endif
 endif
 
-foreach h : ['xlocale.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'execinfo.h', 'sys/shm.h', 'cet.h', 'pthread_np.h']
+foreach h : ['xlocale.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'sys/shm.h', 'cet.h', 'pthread_np.h']
   if cc.check_header(h)
     pre_args += '-DHAVE_@0@'.format(h.to_upper().underscorify())
   endif
@@ -1487,7 +1488,7 @@ if host_machine.system() == 'darwin'
   dep_expat = meson.get_compiler('c').find_library('expat')
 elif host_machine.system() != 'windows'
   dep_expat = dependency('expat', fallback : ['expat', 'expat_dep'],
-                         required: not with_platform_android or with_any_intel)
+                         required: not with_platform_android)
 else
   dep_expat = null_dep
 endif
@@ -1985,6 +1986,7 @@ if with_platform_x11
           dep_xcb_present.version().version_compare('>= 1.13'))
         pre_args += '-DHAVE_DRI3_MODIFIERS'
       endif
+      dep_xcb_shm = dependency('xcb-shm')
       dep_xcb_sync = dependency('xcb-sync')
       dep_xshmfence = dependency('xshmfence', version : '>= 1.1')
     endif
@@ -2112,7 +2114,9 @@ pkg = import('pkgconfig')
 if host_machine.system() == 'windows'
   prog_dumpbin = find_program('dumpbin', required : false)
   with_symbols_check = prog_dumpbin.found() and with_tests
-  symbols_check_args = ['--dumpbin', prog_dumpbin.path()]
+  if with_symbols_check
+    symbols_check_args = ['--dumpbin', prog_dumpbin.path()]
+  endif
 else
   prog_nm = find_program('nm')
   with_symbols_check = with_tests
@@ -2223,9 +2227,6 @@ if with_gallium
   gallium_st = ['mesa']
   if with_gallium_xa
     gallium_st += 'xa'
-  endif
-  if with_gallium_xvmc
-    gallium_st += 'xvmc'
   endif
   if with_gallium_xvmc
     gallium_st += 'xvmc'

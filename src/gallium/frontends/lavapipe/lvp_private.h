@@ -219,6 +219,7 @@ struct lvp_device_memory {
    uint32_t                                     type_index;
    VkDeviceSize                                 map_size;
    void *                                       map;
+   bool is_user_ptr;
 };
 
 struct lvp_image {
@@ -289,6 +290,8 @@ struct lvp_subpass {
    struct lvp_subpass_attachment *              resolve_attachments;
    struct lvp_subpass_attachment *              depth_stencil_attachment;
    struct lvp_subpass_attachment *              ds_resolve_attachment;
+   VkResolveModeFlagBits                        depth_resolve_mode;
+   VkResolveModeFlagBits                        stencil_resolve_mode;
 
    /** Subpass has at least one color resolve attachment */
    bool                                         has_color_resolve;

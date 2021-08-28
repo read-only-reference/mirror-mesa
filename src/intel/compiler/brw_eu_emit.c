@@ -1106,6 +1106,7 @@ ALU2(DP4)
 ALU2(DPH)
 ALU2(DP3)
 ALU2(DP2)
+ALU3(DP4A)
 ALU3(MAD)
 ALU3F(LRP)
 ALU1(BFREV)
@@ -2103,6 +2104,13 @@ void gfx6_math(struct brw_codegen *p,
       assert(src1.type != BRW_REGISTER_TYPE_F);
       assert(src1.file == BRW_GENERAL_REGISTER_FILE ||
              (devinfo->ver >= 8 && src1.file == BRW_IMMEDIATE_VALUE));
+      /* From BSpec 6647/47428 "[Instruction] Extended Math Function":
+       *     INT DIV function does not support source modifiers.
+       */
+      assert(!src0.negate);
+      assert(!src0.abs);
+      assert(!src1.negate);
+      assert(!src1.abs);
    } else {
       assert(src0.type == BRW_REGISTER_TYPE_F ||
              (src0.type == BRW_REGISTER_TYPE_HF && devinfo->ver >= 9));
@@ -3251,7 +3259,7 @@ gfx12_set_memory_fence_message(struct brw_codegen *p,
    enum lsc_flush_type flush_type = LSC_FLUSH_TYPE_NONE;
 
    if (sfid == GFX12_SFID_TGM) {
-      scope = LSC_FENCE_GPU;
+      scope = LSC_FENCE_TILE;
       flush_type = LSC_FLUSH_TYPE_EVICT;
    }
 

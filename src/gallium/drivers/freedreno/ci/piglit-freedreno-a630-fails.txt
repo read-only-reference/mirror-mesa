@@ -1,4 +1,5 @@
 glx@glx_arb_create_context_es2_profile@invalid opengl es version,Fail
+glx@glx_arb_create_context_no_error@no error,Fail
 glx@glx_arb_create_context_robustness@invalid reset notification strategy,Fail
 glx@glx_ext_import_context@free context,Fail
 glx@glx_ext_import_context@get context id,Fail
@@ -90,7 +91,6 @@ spec@arb_sample_shading@samplemask 4@sample mask_in_one,Fail
 spec@arb_shader_image_load_store@indexing,Crash
 spec@arb_shader_storage_buffer_object@array-ssbo-auto-binding,Fail
 spec@arb_shader_storage_buffer_object@linker@instance-matching-shader-storage-blocks-member-array-size-mismatch,Fail
-spec@arb_tessellation_shader@execution@fs-primitiveid-instanced,Fail
 spec@arb_tessellation_shader@execution@gs-primitiveid-instanced,Fail
 spec@arb_tessellation_shader@execution@invocation-counting-even,Fail
 spec@arb_tessellation_shader@execution@invocation-counting-odd,Fail
@@ -187,7 +187,6 @@ spec@arb_texture_view@bug-layers-image,Crash
 spec@arb_texture_view@mipgen,Fail
 spec@arb_texture_view@rendering-layers-image,Fail
 spec@arb_texture_view@rendering-layers-image@layers rendering of image1DArray,Fail
-spec@arb_texture_view@rendering-layers-image@layers rendering of imageCubeArray,Fail
 spec@arb_timer_query@timestamp-get,Fail
 spec@arb_transform_feedback3@arb_transform_feedback3-ext_interleaved_two_bufs_vs,Fail
 spec@arb_transform_feedback3@gl_skipcomponents1-1,Fail
@@ -206,8 +205,6 @@ spec@egl_chromium_sync_control@conformance,Fail
 spec@egl_ext_protected_content@conformance,Fail
 spec@egl_khr_surfaceless_context@viewport,Fail
 spec@egl_mesa_configless_context@basic,Fail
-spec@ext_direct_state_access@vao@VertexArrayVertexOffsetEXT,Fail
-spec@ext_external_objects@semaphore-api-errors@gen-semaphores-bad-value,Fail
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
 spec@ext_framebuffer_multisample@accuracy 2 depth_resolve depthstencil,Fail
 spec@ext_framebuffer_multisample@accuracy 2 depth_resolve small depthstencil,Fail
@@ -314,7 +311,6 @@ spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SR
 spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_S3TC_DXT1_EXT- swizzled- border color only,Fail
 spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB- swizzled- border color only,Fail
 spec@ext_transform_feedback@geometry-shaders-basic,Fail
-spec@ext_transform_feedback@immediate-reuse-index-buffer,Fail
 spec@ext_transform_feedback@intervening-read prims_generated,Fail
 spec@ext_transform_feedback@intervening-read prims_generated use_gs,Fail
 spec@ext_transform_feedback@overflow-edge-cases,Fail
@@ -349,7 +345,6 @@ spec@glsl-1.50@execution@compatibility@vs-gs-ff-frag,Crash
 spec@glsl-1.50@execution@compatibility@vs-gs-texcoord-array-2,Crash
 spec@glsl-1.50@execution@compatibility@vs-gs-texcoord-array,Crash
 spec@glsl-1.50@execution@geometry@end-primitive 0,Fail
-spec@glsl-1.50@execution@geometry@max-input-components,Fail
 spec@glsl-1.50@execution@geometry@primitive-id-restart gl_line_loop ffs,Fail
 spec@glsl-1.50@execution@geometry@primitive-id-restart gl_line_loop other,Fail
 spec@glsl-1.50@execution@geometry@primitive-id-restart gl_lines_adjacency ffs,Fail
@@ -389,11 +384,7 @@ spec@glsl-1.50@execution@geometry@tri-strip-ordering-with-prim-restart gl_triang
 spec@glsl-1.50@execution@geometry@tri-strip-ordering-with-prim-restart gl_triangle_strip other,Fail
 spec@glsl-1.50@execution@primitive-id-no-gs-quads,Fail
 spec@glsl-1.50@execution@primitive-id-no-gs-quad-strip,Fail
-spec@glsl-1.50@execution@variable-indexing@gs-input-array-vec2-index-rd,Fail
-spec@glsl-1.50@execution@variable-indexing@gs-input-array-vec3-index-rd,Fail
-spec@glsl-1.50@execution@variable-indexing@gs-output-array-vec3-index-wr,Fail
 spec@glsl-1.50@execution@variable-indexing@gs-output-array-vec4-index-wr,Crash
-spec@glsl-1.50@execution@variable-indexing@vs-output-array-vec4-index-wr-before-gs,Fail
 spec@glsl-1.50@gs-max-output-components,Fail
 spec@intel_performance_query@intel_performance_query-issue_2235,Fail
 spec@khr_texture_compression_astc@array-gl@12x12 Block Dim,Fail
@@ -443,9 +434,6 @@ spec@nv_copy_depth_to_color@nv_copy_depth_to_color 0 0x76356278,Crash
 spec@nv_copy_depth_to_color@nv_copy_depth_to_color 1 0x223344ff,Crash
 spec@nv_copy_depth_to_color@nv_copy_depth_to_color 1 0x76356278,Crash
 spec@nv_copy_depth_to_color@nv_copy_depth_to_color,Crash
-spec@nv_primitive_restart@primitive-restart-draw-mode-polygon,Fail
-spec@nv_primitive_restart@primitive-restart-draw-mode-quads,Fail
-spec@nv_primitive_restart@primitive-restart-draw-mode-quad_strip,Fail
 spec@oes_egl_image_external_essl3@oes_egl_image_external_essl3,Crash
 spec@!opengl 1.0@gl-1.0-edgeflag,Crash
 spec@!opengl 1.0@gl-1.0-edgeflag-quads,Crash

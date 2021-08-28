@@ -246,10 +246,8 @@ tu_bo_init(struct tu_device *dev,
       struct drm_msm_gem_submit_bo *new_ptr =
          vk_realloc(&dev->vk.alloc, dev->bo_list, new_len * sizeof(*dev->bo_list),
                     8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-      if (!new_ptr) {
-         tu_gem_close(dev, gem_handle);
-         return VK_ERROR_OUT_OF_HOST_MEMORY;
-      }
+      if (!new_ptr)
+         goto fail_bo_list;
 
       dev->bo_list = new_ptr;
       dev->bo_list_size = new_len;
@@ -261,10 +259,8 @@ tu_bo_init(struct tu_device *dev,
       uint32_t *new_ptr =
          vk_realloc(&dev->vk.alloc, dev->bo_idx, new_len * sizeof(*dev->bo_idx),
                     8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
-      if (!new_ptr) {
-         tu_gem_close(dev, gem_handle);
-         return VK_ERROR_OUT_OF_HOST_MEMORY;
-      }
+      if (!new_ptr)
+         goto fail_bo_idx;
 
       dev->bo_idx = new_ptr;
       dev->bo_idx_size = new_len;
@@ -280,6 +276,12 @@ tu_bo_init(struct tu_device *dev,
    mtx_unlock(&dev->bo_mutex);
 
    return VK_SUCCESS;
+
+fail_bo_idx:
+   vk_free(&dev->vk.alloc, dev->bo_list);
+fail_bo_list:
+   tu_gem_close(dev, gem_handle);
+   return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
 VkResult
@@ -445,9 +447,15 @@ tu_drm_device_init(struct tu_physical_device *device,
    device->master_fd = master_fd;
    device->local_fd = fd;
 
-   if (tu_drm_get_gpu_id(device, &device->gpu_id)) {
+   if (tu_drm_get_gpu_id(device, &device->dev_id.gpu_id)) {
       result = vk_startup_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
                                  "could not get GPU ID");
+      goto fail;
+   }
+
+   if (tu_drm_get_param(device, MSM_PARAM_CHIP_ID, &device->dev_id.chip_id)) {
+      result = vk_startup_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
+                                 "could not get CHIP ID");
       goto fail;
    }
 

@@ -231,7 +231,7 @@ update_draw_stats(struct fd_context *ctx, const struct pipe_draw_info *info,
 {
    ctx->stats.draw_calls++;
 
-   if (ctx->screen->gpu_id < 600) {
+   if (ctx->screen->gen < 6) {
       /* Counting prims in sw doesn't work for GS and tesselation. For older
        * gens we don't have those stages and don't have the hw counters enabled,
        * so keep the count accurate for non-patch geometry.
@@ -285,16 +285,6 @@ fd_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    /* TODO: push down the region versions into the tiles */
    if (!fd_render_condition_check(pctx))
       return;
-
-   /* emulate unsupported primitives: */
-   if (!fd_supported_prim(ctx, info->mode)) {
-      if (ctx->streamout.num_targets > 0)
-         mesa_loge("stream-out with emulated prims");
-      util_primconvert_save_rasterizer_state(ctx->primconvert, ctx->rasterizer);
-      util_primconvert_draw_vbo(ctx->primconvert, info, drawid_offset, indirect, draws,
-                                num_draws);
-      return;
-   }
 
    /* Upload a user index buffer. */
    struct pipe_resource *indexbuf = NULL;

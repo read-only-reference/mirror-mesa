@@ -76,8 +76,13 @@ reads_work_dim(nir_shader *shader)
 }
 
 static bool
-lower_discard_if_instr(nir_intrinsic_instr *instr, nir_builder *b)
+lower_discard_if_instr(nir_builder *b, nir_instr *instr_, UNUSED void *cb_data)
 {
+   if (instr_->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *instr = nir_instr_as_intrinsic(instr_);
+
    if (instr->intrinsic == nir_intrinsic_discard_if) {
       b->cursor = nir_before_instr(&instr->instr);
 
@@ -137,26 +142,10 @@ lower_discard_if_instr(nir_intrinsic_instr *instr, nir_builder *b)
 static bool
 lower_discard_if(nir_shader *shader)
 {
-   bool progress = false;
-
-   nir_foreach_function(function, shader) {
-      if (function->impl) {
-         nir_builder builder;
-         nir_builder_init(&builder, function->impl);
-         nir_foreach_block(block, function->impl) {
-            nir_foreach_instr_safe(instr, block) {
-               if (instr->type == nir_instr_type_intrinsic)
-                  progress |= lower_discard_if_instr(
-                                                  nir_instr_as_intrinsic(instr),
-                                                  &builder);
-            }
-         }
-
-         nir_metadata_preserve(function->impl, nir_metadata_dominance);
-      }
-   }
-
-   return progress;
+   return nir_shader_instructions_pass(shader,
+                                       lower_discard_if_instr,
+                                       nir_metadata_dominance,
+                                       NULL);
 }
 
 static bool
@@ -459,6 +448,56 @@ optimize_nir(struct nir_shader *s)
    } while (progress);
 }
 
+/* - copy the lowered fbfetch variable
+ * - set the new one up as an input attachment for descriptor 0.6
+ * - load it as an image
+ * - overwrite the previous load
+ */
+static bool
+lower_fbfetch_instr(nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   if (intr->intrinsic != nir_intrinsic_load_deref)
+      return false;
+   nir_variable *var = nir_deref_instr_get_variable(nir_src_as_deref(intr->src[0]));
+   if (var != data)
+      return false;
+   b->cursor = nir_after_instr(instr);
+   nir_variable *fbfetch = nir_variable_clone(data, b->shader);
+   /* If Dim is SubpassData, ... Image Format must be Unknown
+    * - SPIRV OpTypeImage specification
+    */
+   fbfetch->data.image.format = 0;
+   fbfetch->data.index = 0; /* fix this if more than 1 fbfetch target is supported */
+   fbfetch->data.mode = nir_var_uniform;
+   fbfetch->data.binding = ZINK_FBFETCH_BINDING;
+   fbfetch->type = glsl_image_type(GLSL_SAMPLER_DIM_SUBPASS, false, GLSL_TYPE_FLOAT);
+   nir_shader_add_variable(b->shader, fbfetch);
+   nir_ssa_def *deref = &nir_build_deref_var(b, fbfetch)->dest.ssa;
+   nir_ssa_def *load = nir_image_deref_load(b, 4, 32, deref, nir_imm_vec4(b, 0, 0, 0, 1), nir_ssa_undef(b, 1, 32), nir_imm_int(b, 0));
+   unsigned swiz[4] = {2, 1, 0, 3};
+   nir_ssa_def *swizzle = nir_swizzle(b, load, swiz, 4);
+   nir_ssa_def_rewrite_uses(&intr->dest.ssa, swizzle);
+   return true;
+}
+
+static bool
+lower_fbfetch(nir_shader *shader, nir_variable **fbfetch)
+{
+   nir_foreach_shader_out_variable(var, shader) {
+      if (var->data.fb_fetch_output) {
+         *fbfetch = var;
+         break;
+      }
+   }
+   assert(*fbfetch);
+   if (!*fbfetch)
+      return false;
+   return nir_shader_instructions_pass(shader, lower_fbfetch_instr, nir_metadata_dominance, *fbfetch);
+}
+
 /* check for a genuine gl_PointSize output vs one from nir_lower_point_size_mov */
 static bool
 check_psiz(struct nir_shader *s)
@@ -687,48 +726,57 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs, nir_shad
          NIR_PASS_V(nir, nir_io_add_const_offset_to_base, nir_var_shader_in |
                                                           nir_var_shader_out);
       }
-   }
 
-   /* TODO: use a separate mem ctx here for ralloc */
-   switch (zs->nir->info.stage) {
-   case MESA_SHADER_VERTEX:
-   case MESA_SHADER_TESS_EVAL:
-   case MESA_SHADER_GEOMETRY:
-      if (zink_vs_key(key)->last_vertex_stage) {
-         if (zs->streamout.have_xfb)
-            streamout = &zs->streamout;
+      /* TODO: use a separate mem ctx here for ralloc */
+      switch (zs->nir->info.stage) {
+      case MESA_SHADER_VERTEX:
+      case MESA_SHADER_TESS_EVAL:
+      case MESA_SHADER_GEOMETRY:
+         if (zink_vs_key(key)->last_vertex_stage) {
+            if (zs->streamout.have_xfb)
+               streamout = &zs->streamout;
 
-         if (!zink_vs_key(key)->clip_halfz) {
-            NIR_PASS_V(nir, nir_lower_clip_halfz);
+            if (!zink_vs_key(key)->clip_halfz) {
+               NIR_PASS_V(nir, nir_lower_clip_halfz);
+            }
+            if (zink_vs_key(key)->push_drawid) {
+               NIR_PASS_V(nir, lower_drawid);
+            }
          }
-         if (zink_vs_key(key)->push_drawid) {
-            NIR_PASS_V(nir, lower_drawid);
+         break;
+      case MESA_SHADER_FRAGMENT:
+         if (!zink_fs_key(key)->samples &&
+            nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK)) {
+            /* VK will always use gl_SampleMask[] values even if sample count is 0,
+            * so we need to skip this write here to mimic GL's behavior of ignoring it
+            */
+            nir_foreach_shader_out_variable(var, nir) {
+               if (var->data.location == FRAG_RESULT_SAMPLE_MASK)
+                  var->data.mode = nir_var_shader_temp;
+            }
+            nir_fixup_deref_modes(nir);
+            NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
+            optimize_nir(nir);
          }
-      }
-      break;
-   case MESA_SHADER_FRAGMENT:
-      if (!zink_fs_key(key)->samples &&
-          nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK)) {
-         /* VK will always use gl_SampleMask[] values even if sample count is 0,
-          * so we need to skip this write here to mimic GL's behavior of ignoring it
-          */
-         nir_foreach_shader_out_variable(var, nir) {
-            if (var->data.location == FRAG_RESULT_SAMPLE_MASK)
-               var->data.mode = nir_var_shader_temp;
+         if (zink_fs_key(key)->force_dual_color_blend && nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DATA1)) {
+            NIR_PASS_V(nir, lower_dual_blend);
          }
-         nir_fixup_deref_modes(nir);
-         NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
-         optimize_nir(nir);
+         if (zink_fs_key(key)->coord_replace_bits) {
+            NIR_PASS_V(nir, nir_lower_texcoord_replace, zink_fs_key(key)->coord_replace_bits,
+                     false, zink_fs_key(key)->coord_replace_yinvert);
+         }
+         if (nir->info.fs.uses_fbfetch_output) {
+            nir_variable *fbfetch = NULL;
+            NIR_PASS_V(nir, lower_fbfetch, &fbfetch);
+            /* old variable must be deleted to avoid spirv errors */
+            fbfetch->data.mode = nir_var_shader_temp;
+            nir_fixup_deref_modes(nir);
+            NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_shader_temp, NULL);
+            optimize_nir(nir);
+         }
+         break;
+      default: break;
       }
-      if (zink_fs_key(key)->force_dual_color_blend && nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DATA1)) {
-         NIR_PASS_V(nir, lower_dual_blend);
-      }
-      if (zink_fs_key(key)->coord_replace_bits) {
-         NIR_PASS_V(nir, nir_lower_texcoord_replace, zink_fs_key(key)->coord_replace_bits,
-                    false, zink_fs_key(key)->coord_replace_yinvert);
-      }
-      break;
-   default: break;
    }
    NIR_PASS_V(nir, nir_convert_from_ssa, true);
 
@@ -1054,7 +1102,7 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
 }
 
 void
-zink_shader_finalize(struct pipe_screen *pscreen, void *nirptr, bool optimize)
+zink_shader_finalize(struct pipe_screen *pscreen, void *nirptr)
 {
    struct zink_screen *screen = zink_screen(pscreen);
    nir_shader *nir = nirptr;
@@ -1082,30 +1130,25 @@ zink_shader_free(struct zink_context *ctx, struct zink_shader *shader)
    set_foreach(shader->programs, entry) {
       if (shader->nir->info.stage == MESA_SHADER_COMPUTE) {
          struct zink_compute_program *comp = (void*)entry->key;
-         _mesa_hash_table_remove_key(ctx->compute_program_cache, comp->shader);
+         if (!comp->base.removed) {
+            _mesa_hash_table_remove_key(&ctx->compute_program_cache, comp->shader);
+            comp->base.removed = true;
+         }
          comp->shader = NULL;
-         bool in_use = comp == ctx->curr_compute;
-         if (in_use)
-            ctx->compute_stage = NULL;
-         if (zink_compute_program_reference(screen, &comp, NULL) && in_use)
-            ctx->curr_compute = NULL;
+         zink_compute_program_reference(screen, &comp, NULL);
       } else {
          struct zink_gfx_program *prog = (void*)entry->key;
          enum pipe_shader_type pstage = pipe_shader_type_from_mesa(shader->nir->info.stage);
          assert(pstage < ZINK_SHADER_COUNT);
-         bool in_use = prog == ctx->curr_program;
-         if (shader->nir->info.stage != MESA_SHADER_TESS_CTRL || !shader->is_generated)
-            _mesa_hash_table_remove_key(ctx->program_cache, prog->shaders);
+         if (!prog->base.removed && (shader->nir->info.stage != MESA_SHADER_TESS_CTRL || !shader->is_generated)) {
+            _mesa_hash_table_remove_key(&ctx->program_cache[prog->stages_present >> 2], prog->shaders);
+            prog->base.removed = true;
+         }
          prog->shaders[pstage] = NULL;
          if (shader->nir->info.stage == MESA_SHADER_TESS_EVAL && shader->generated)
             /* automatically destroy generated tcs shaders when tes is destroyed */
             zink_shader_free(ctx, shader->generated);
-         if (in_use) {
-            ctx->gfx_pipeline_state.modules[pstage] = VK_NULL_HANDLE;
-            ctx->gfx_stages[pstage] = NULL;
-         }
-         if (zink_gfx_program_reference(screen, &prog, NULL) && in_use)
-            ctx->curr_program = NULL;
+         zink_gfx_program_reference(screen, &prog, NULL);
       }
    }
    _mesa_set_destroy(shader->programs, NULL);
@@ -1138,7 +1181,7 @@ void main()
 struct zink_shader *
 zink_shader_tcs_create(struct zink_context *ctx, struct zink_shader *vs)
 {
-   unsigned vertices_per_patch = ctx->gfx_pipeline_state.vertices_per_patch;
+   unsigned vertices_per_patch = ctx->gfx_pipeline_state.vertices_per_patch + 1;
    struct zink_shader *ret = CALLOC_STRUCT(zink_shader);
    ret->programs = _mesa_pointer_set_create(NULL);
    simple_mtx_init(&ret->lock, mtx_plain);

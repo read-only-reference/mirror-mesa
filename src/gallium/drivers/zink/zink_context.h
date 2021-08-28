@@ -24,6 +24,7 @@
 #ifndef ZINK_CONTEXT_H
 #define ZINK_CONTEXT_H
 
+#define ZINK_FBFETCH_BINDING 6 //COMPUTE+1
 #define ZINK_SHADER_COUNT (PIPE_SHADER_TYPES - 1)
 
 #define ZINK_DEFAULT_MAX_DESCS 5000
@@ -156,6 +157,11 @@ typedef enum {
    ZINK_DYNAMIC_STATE,
 } zink_dynamic_state;
 
+typedef enum {
+   ZINK_NO_DYNAMIC_STATE2,
+   ZINK_DYNAMIC_STATE2,
+} zink_dynamic_state2;
+
 struct zink_context {
    struct pipe_context base;
    struct threaded_context *tc;
@@ -203,16 +209,20 @@ struct zink_context {
    bool shader_reads_basevertex;
    struct zink_gfx_pipeline_state gfx_pipeline_state;
    enum pipe_prim_type gfx_prim_mode;
-   struct hash_table *program_cache;
+   /* there are 5 gfx stages, but VS and FS are assumed to be always present,
+    * thus only 3 stages need to be considered, giving 2^3 = 8 program caches.
+    */
+   struct hash_table program_cache[8];
    struct zink_gfx_program *curr_program;
 
    struct zink_descriptor_data *dd;
 
    struct zink_shader *compute_stage;
    struct zink_compute_pipeline_state compute_pipeline_state;
-   struct hash_table *compute_program_cache;
+   struct hash_table compute_program_cache;
    struct zink_compute_program *curr_compute;
 
+   unsigned shader_stages : ZINK_SHADER_COUNT; /* mask of bound gfx shader stages */
    unsigned dirty_shader_stages : 6; /* mask of changed shader stages */
    bool last_vertex_stage_dirty;
 
@@ -225,6 +235,7 @@ struct zink_context {
    struct zink_framebuffer_clear fb_clears[PIPE_MAX_COLOR_BUFS + 1];
    uint16_t clears_enabled;
    uint16_t rp_clears_enabled;
+   uint16_t fbfetch_outputs;
 
    VkBuffer vbufs[PIPE_MAX_ATTRIBS];
    unsigned vbuf_offsets[PIPE_MAX_ATTRIBS];
@@ -269,6 +280,8 @@ struct zink_context {
    struct pipe_surface *dummy_surface;
    struct zink_buffer_view *dummy_bufferview;
 
+   unsigned buffer_rebind_counter;
+
    struct {
       /* descriptor info */
       VkDescriptorBufferInfo ubos[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
@@ -287,6 +300,8 @@ struct zink_context {
       VkBufferView texel_images[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_IMAGES];
       uint8_t num_images[PIPE_SHADER_TYPES];
 
+      VkDescriptorImageInfo fbfetch;
+
       struct zink_resource *descriptor_res[ZINK_DESCRIPTOR_TYPES][PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
       struct zink_descriptor_surface sampler_surfaces[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
       struct zink_descriptor_surface image_surfaces[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_IMAGES];
@@ -294,6 +309,7 @@ struct zink_context {
    struct set *need_barriers[2]; //gfx, compute
    struct set update_barriers[2][2]; //[gfx, compute][current, next]
    uint8_t barrier_set_idx[2];
+   unsigned memory_barrier;
 
    uint32_t num_so_targets;
    struct pipe_stream_output_target *so_targets[PIPE_MAX_SO_OUTPUTS];
@@ -302,7 +318,10 @@ struct zink_context {
    bool first_frame_done;
    bool have_timelines;
 
+   bool gfx_dirty;
+
    bool is_device_lost;
+   bool primitive_restart;
    bool vertex_state_changed : 1;
    bool blend_state_changed : 1;
    bool rast_state_changed : 1;
@@ -335,7 +354,8 @@ zink_check_batch_completion(struct zink_context *ctx, uint32_t batch_id, bool ha
 
 void
 zink_flush_queue(struct zink_context *ctx);
-
+void
+zink_update_fbfetch(struct zink_context *ctx);
 bool
 zink_resource_access_is_write(VkAccessFlags flags);
 
@@ -407,6 +427,11 @@ zink_pipeline_flags_from_pipe_stage(enum pipe_shader_type pstage)
 }
 
 void
+zink_rebind_all_buffers(struct zink_context *ctx);
+
+void
+zink_flush_memory_barrier(struct zink_context *ctx, bool is_compute);
+void
 zink_init_draw_functions(struct zink_context *ctx, struct zink_screen *screen);
 void
 zink_init_grid_functions(struct zink_context *ctx);
@@ -447,7 +472,26 @@ zink_rect_from_box(const struct pipe_box *box)
    return (struct u_rect){box->x, box->x + box->width, box->y, box->y + box->height};
 }
 
-void
+static inline VkComponentSwizzle
+zink_component_mapping(enum pipe_swizzle swizzle)
+{
+   switch (swizzle) {
+   case PIPE_SWIZZLE_X: return VK_COMPONENT_SWIZZLE_R;
+   case PIPE_SWIZZLE_Y: return VK_COMPONENT_SWIZZLE_G;
+   case PIPE_SWIZZLE_Z: return VK_COMPONENT_SWIZZLE_B;
+   case PIPE_SWIZZLE_W: return VK_COMPONENT_SWIZZLE_A;
+   case PIPE_SWIZZLE_0: return VK_COMPONENT_SWIZZLE_ZERO;
+   case PIPE_SWIZZLE_1: return VK_COMPONENT_SWIZZLE_ONE;
+   case PIPE_SWIZZLE_NONE: return VK_COMPONENT_SWIZZLE_IDENTITY; // ???
+   default:
+      unreachable("unexpected swizzle");
+   }
+}
+
+enum pipe_swizzle
+zink_clamp_void_swizzle(const struct util_format_description *desc, enum pipe_swizzle swizzle);
+
+bool
 zink_resource_rebind(struct zink_context *ctx, struct zink_resource *res);
 
 void

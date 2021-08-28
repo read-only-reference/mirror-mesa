@@ -2444,7 +2444,7 @@ ttn_optimize_nir(nir_shader *nir)
       NIR_PASS(progress, nir, nir_opt_conditional_discard);
 
       if (nir->options->max_unroll_iterations) {
-         NIR_PASS(progress, nir, nir_opt_loop_unroll, (nir_variable_mode)0);
+         NIR_PASS(progress, nir, nir_opt_loop_unroll);
       }
 
    } while (progress);
@@ -2483,7 +2483,7 @@ ttn_finalize_nir(struct ttn_compile *c, struct pipe_screen *screen)
       NIR_PASS_V(nir, nir_lower_samplers);
 
    if (screen->finalize_nir) {
-      screen->finalize_nir(screen, nir, true);
+      screen->finalize_nir(screen, nir);
    } else {
       ttn_optimize_nir(nir);
       nir_shader_gather_info(nir, c->build.impl);

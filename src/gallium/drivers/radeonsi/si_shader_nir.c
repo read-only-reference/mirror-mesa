@@ -596,7 +596,7 @@ void si_nir_opts(struct si_screen *sscreen, struct nir_shader *nir, bool first)
       NIR_PASS(progress, nir, nir_opt_undef);
       NIR_PASS(progress, nir, nir_opt_conditional_discard);
       if (nir->options->max_unroll_iterations) {
-         NIR_PASS(progress, nir, nir_opt_loop_unroll, 0);
+         NIR_PASS(progress, nir, nir_opt_loop_unroll);
       }
 
       if (nir->info.stage == MESA_SHADER_FRAGMENT)
@@ -903,7 +903,7 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp, NULL);
 }
 
-void si_finalize_nir(struct pipe_screen *screen, void *nirptr, bool optimize)
+void si_finalize_nir(struct pipe_screen *screen, void *nirptr)
 {
    struct si_screen *sscreen = (struct si_screen *)screen;
    struct nir_shader *nir = (struct nir_shader *)nirptr;

@@ -1525,7 +1525,9 @@ blorp_emit_null_surface_state(struct blorp_batch *batch,
       .SurfaceArray = surface->surf.dim != ISL_SURF_DIM_3D,
 #endif
 
-#if GFX_VER >= 8
+#if GFX_VERx10 >= 125
+      .TileMode = TILE4,
+#elif GFX_VER >= 8
       .TileMode = YMAJOR,
 #else
       .TiledSurface = true,
@@ -1657,7 +1659,7 @@ blorp_emit_depth_stencil_config(struct blorp_batch *batch,
           * anyway by manually offsetting to the specified miplevel.
           */
          assert(info.hiz_surf->dim_layout == ISL_DIM_LAYOUT_GFX6_STENCIL_HIZ);
-         uint32_t offset_B;
+         uint64_t offset_B;
          isl_surf_get_image_offset_B_tile_sa(info.hiz_surf,
                                              info.view->base_level, 0, 0,
                                              &offset_B, NULL, NULL);
@@ -1683,7 +1685,7 @@ blorp_emit_depth_stencil_config(struct blorp_batch *batch,
        * anyway by manually offsetting to the specified miplevel.
        */
       assert(info.stencil_surf->dim_layout == ISL_DIM_LAYOUT_GFX6_STENCIL_HIZ);
-      uint32_t offset_B;
+      uint64_t offset_B;
       isl_surf_get_image_offset_B_tile_sa(info.stencil_surf,
                                           info.view->base_level, 0, 0,
                                           &offset_B, NULL, NULL);

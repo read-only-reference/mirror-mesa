@@ -209,7 +209,7 @@ iris_upload_ubo_ssbo_surf_state(struct iris_context *ice,
    const bool dataport = ssbo || !screen->compiler->indirect_ubos_use_sampler;
 
    isl_buffer_fill_state(&screen->isl_dev, map,
-                         .address = res->bo->gtt_offset + res->offset +
+                         .address = res->bo->address + res->offset +
                                     buf->buffer_offset,
                          .size_B = buf->buffer_size - res->offset,
                          .format = dataport ? ISL_FORMAT_RAW
@@ -1069,10 +1069,10 @@ iris_debug_recompile(struct iris_screen *screen,
    const struct brw_compiler *c = screen->compiler;
    const struct shader_info *info = &ish->nir->info;
 
-   c->shader_perf_log(dbg, "Recompiling %s shader for program %s: %s\n",
-                      _mesa_shader_stage_to_string(info->stage),
-                      info->name ? info->name : "(no identifier)",
-                      info->label ? info->label : "");
+   brw_shader_perf_log(c, dbg, "Recompiling %s shader for program %s: %s\n",
+                       _mesa_shader_stage_to_string(info->stage),
+                       info->name ? info->name : "(no identifier)",
+                       info->label ? info->label : "");
 
    struct iris_compiled_shader *shader =
       list_first_entry(&ish->variants, struct iris_compiled_shader, link);
@@ -1372,9 +1372,9 @@ iris_update_compiled_vs(struct iris_context *ice)
                                 IRIS_STAGE_DIRTY_CONSTANTS_VS;
       shs->sysvals_need_upload = true;
 
-      const struct brw_vue_prog_data *vue_prog_data =
-         (void *) shader->prog_data;
-      check_urb_size(ice, vue_prog_data->urb_entry_size, MESA_SHADER_VERTEX);
+      unsigned urb_entry_size = shader ?
+         ((struct brw_vue_prog_data *) shader->prog_data)->urb_entry_size : 0;
+      check_urb_size(ice, urb_entry_size, MESA_SHADER_VERTEX);
    }
 }
 
@@ -1604,8 +1604,9 @@ iris_update_compiled_tcs(struct iris_context *ice)
                                 IRIS_STAGE_DIRTY_CONSTANTS_TCS;
       shs->sysvals_need_upload = true;
 
-      const struct brw_vue_prog_data *prog_data = (void *) shader->prog_data;
-      check_urb_size(ice, prog_data->urb_entry_size, MESA_SHADER_TESS_CTRL);
+      unsigned urb_entry_size = shader ?
+         ((struct brw_vue_prog_data *) shader->prog_data)->urb_entry_size : 0;
+      check_urb_size(ice, urb_entry_size, MESA_SHADER_TESS_CTRL);
    }
 }
 
@@ -1730,8 +1731,9 @@ iris_update_compiled_tes(struct iris_context *ice)
                                 IRIS_STAGE_DIRTY_CONSTANTS_TES;
       shs->sysvals_need_upload = true;
 
-      const struct brw_vue_prog_data *prog_data = (void *) shader->prog_data;
-      check_urb_size(ice, prog_data->urb_entry_size, MESA_SHADER_TESS_EVAL);
+      unsigned urb_entry_size = shader ?
+         ((struct brw_vue_prog_data *) shader->prog_data)->urb_entry_size : 0;
+      check_urb_size(ice, urb_entry_size, MESA_SHADER_TESS_EVAL);
    }
 
    /* TODO: Could compare and avoid flagging this. */
@@ -2405,7 +2407,7 @@ iris_get_scratch_surf(struct iris_context *ice,
                             screen->isl_dev.ss.size, 64);
 
    isl_buffer_fill_state(&screen->isl_dev, map,
-                         .address = scratch_bo->gtt_offset,
+                         .address = scratch_bo->address,
                          .size_B = scratch_bo->size,
                          .format = ISL_FORMAT_RAW,
                          .swizzle = ISL_SWIZZLE_IDENTITY,

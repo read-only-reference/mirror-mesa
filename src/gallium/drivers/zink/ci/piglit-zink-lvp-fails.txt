@@ -2,7 +2,6 @@ glx@glx-copy-sub-buffer,Fail
 glx@glx-copy-sub-buffer samples=2,Fail
 glx@glx-copy-sub-buffer samples=4,Fail
 glx@glx-multi-window-single-context,Fail
-glx@glx-multithread-buffer,Fail
 glx@glx-multithread-texture,Fail
 glx@glx-swap-copy,Fail
 glx@glx-swap-pixmap-bad,Fail
@@ -13,6 +12,7 @@ glx@glx-visuals-stencil,Crash
 glx@glx-visuals-stencil -pixmap,Crash
 glx@glx-query-drawable-glx_fbconfig_id-window,Fail
 glx@glx_arb_create_context_es2_profile@invalid opengl es version,Fail
+glx@glx_arb_create_context_no_error@no error,Fail
 glx@glx_ext_import_context@free context,Fail
 glx@glx_ext_import_context@get context id,Fail
 glx@glx_ext_import_context@get current display,Fail
@@ -22,7 +22,6 @@ glx@glx_ext_import_context@imported context has same context id,Fail
 glx@glx_ext_import_context@make current- multi process,Fail
 glx@glx_ext_import_context@make current- single process,Fail
 glx@glx_ext_import_context@query context info,Fail
-shaders@glsl-bug-110796,Fail
 shaders@glsl-fs-pointcoord,Fail
 shaders@point-vertex-id divisor,Fail
 shaders@point-vertex-id gl_instanceid,Fail
@@ -125,7 +124,6 @@ spec@arb_sample_shading@samplemask 4 all@noms partition,Fail
 spec@arb_sample_shading@samplemask 4 all@sample mask_in_one,Fail
 spec@arb_seamless_cube_map@arb_seamless_cubemap,Fail
 spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgrad,Fail
-spec@arb_texture_buffer_range@ranges-2 compat,Fail
 spec@arb_texture_cube_map_array@arb_texture_cube_map_array-sampler-cube-array-shadow,Fail
 spec@arb_texture_float@fbo-blending-formats,Fail
 spec@arb_texture_float@fbo-blending-formats@GL_INTENSITY16F_ARB,Fail
@@ -425,7 +423,6 @@ spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24,Fail
 spec@egl_khr_surfaceless_context@viewport,Fail
 spec@egl_mesa_configless_context@basic,Fail
-spec@ext_direct_state_access@vao@VertexArrayVertexOffsetEXT,Fail
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
 spec@ext_framebuffer_multisample@blit-mismatched-formats,Fail
 spec@ext_framebuffer_multisample@clip-and-scissor-blit 2 msaa,Fail
@@ -815,3 +812,15 @@ spec@oes_texture_view@rendering-formats@clear GL_RGBA8_SNORM as GL_RGB10_A2UI,Fa
 spec@oes_texture_view@rendering-formats@clear GL_RGBA8_SNORM as GL_RGBA8,Fail
 spec@oes_texture_view@rendering-formats@clear GL_RGBA8_SNORM as GL_RGBA8I,Fail
 spec@oes_texture_view@rendering-formats@clear GL_RGBA8_SNORM as GL_RGBA8UI,Fail
+
+
+#literally no driver can pass these
+spec@!opengl 1.0@rasterpos,Fail
+spec@!opengl 1.0@rasterpos@glsl_vs_gs_linked,Fail
+spec@!opengl 1.0@rasterpos@glsl_vs_tes_linked,Fail
+spec@arb_direct_state_access@gettextureimage-formats,Crash
+spec@ext_texture_integer@fbo-integer,Fail
+
+#these need format conversions that gallium doesn't implement yet
+spec@arb_texture_buffer_object@formats (fs- arb),Crash
+spec@arb_texture_buffer_object@formats (vs- arb),Crash

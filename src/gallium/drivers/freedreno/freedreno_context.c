@@ -244,7 +244,7 @@ fd_emit_string_marker(struct pipe_context *pctx, const char *string,
 
    fd_batch_needs_flush(batch);
 
-   if (ctx->screen->gpu_id >= 500) {
+   if (ctx->screen->gen >= 5) {
       fd_emit_string5(batch->draw, string, len);
    } else {
       fd_emit_string(batch->draw, string, len);
@@ -367,9 +367,6 @@ fd_context_destroy(struct pipe_context *pctx)
    for (i = 0; i < ARRAY_SIZE(ctx->clear_rs_state); i++)
       if (ctx->clear_rs_state[i])
          pctx->delete_rasterizer_state(pctx, ctx->clear_rs_state[i]);
-
-   if (ctx->primconvert)
-      util_primconvert_destroy(ctx->primconvert);
 
    slab_destroy_child(&ctx->transfer_pool);
    slab_destroy_child(&ctx->transfer_pool_unsync);
@@ -658,10 +655,6 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 
    ctx->blitter = util_blitter_create(pctx);
    if (!ctx->blitter)
-      goto fail;
-
-   ctx->primconvert = util_primconvert_create(pctx, ctx->primtype_mask);
-   if (!ctx->primconvert)
       goto fail;
 
    list_inithead(&ctx->hw_active_queries);

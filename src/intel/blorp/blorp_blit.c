@@ -1589,12 +1589,12 @@ blorp_surf_convert_to_single_slice(const struct isl_device *isl_dev,
    else
       layer = info->view.base_array_layer;
 
-   uint32_t byte_offset;
+   uint64_t offset_B;
    isl_surf_get_image_surf(isl_dev, &info->surf,
                            info->view.base_level, layer, z,
                            &info->surf,
-                           &byte_offset, &info->tile_x_sa, &info->tile_y_sa);
-   info->addr.offset += byte_offset;
+                           &offset_B, &info->tile_x_sa, &info->tile_y_sa);
+   info->addr.offset += offset_B;
 
    uint32_t tile_x_px, tile_y_px;
    surf_get_intratile_offset_px(info, &tile_x_px, &tile_y_px);
@@ -1650,8 +1650,8 @@ blorp_surf_retile_w_to_y(const struct isl_device *isl_dev,
       blorp_surf_fake_interleaved_msaa(isl_dev, info);
    }
 
-   if (isl_dev->info->ver == 6) {
-      /* Gfx6 stencil buffers have a very large alignment coming in from the
+   if (isl_dev->info->ver == 6 || isl_dev->info->ver == 7) {
+      /* Gfx6-7 stencil buffers have a very large alignment coming in from the
        * miptree.  It's out-of-bounds for what the surface state can handle.
        * Since we have a single layer and level, it doesn't really matter as
        * long as we don't pass a bogus value into isl_surf_fill_state().
@@ -1785,6 +1785,18 @@ surf_fake_rgb_with_red(const struct isl_device *isl_dev,
           isl_format_get_layout(info->view.format)->channels.r.bits);
 
    info->surf.format = info->view.format = red_format;
+
+   if (isl_dev->info->verx10 >= 125) {
+      /* The horizontal alignment is in units of texels for NPOT formats, and
+       * bytes for other formats. Since the only allowed alignment units are
+       * powers of two, there's no way to convert the alignment.
+       *
+       * Thankfully, the value doesn't matter since we're only a single slice.
+       * Pick one allowed by isl_gfx125_choose_image_alignment_el.
+       */
+      info->surf.image_alignment_el.w =
+         128 / (isl_format_get_layout(red_format)->bpb / 8);
+   }
 }
 
 enum blit_shrink_status {
@@ -2182,7 +2194,8 @@ shrink_surface_params(const struct isl_device *dev,
                       struct brw_blorp_surface_info *info,
                       double *x0, double *x1, double *y0, double *y1)
 {
-   uint32_t byte_offset, x_offset_sa, y_offset_sa, size;
+   uint64_t offset_B;
+   uint32_t x_offset_sa, y_offset_sa, size;
    struct isl_extent2d px_size_sa;
    int adjust;
 
@@ -2197,16 +2210,18 @@ shrink_surface_params(const struct isl_device *dev,
    x_offset_sa = (uint32_t)*x0 * px_size_sa.w + info->tile_x_sa;
    y_offset_sa = (uint32_t)*y0 * px_size_sa.h + info->tile_y_sa;
    uint32_t tile_z_sa, tile_a;
-   isl_tiling_get_intratile_offset_sa(info->surf.tiling,
-                                      info->surf.format, info->surf.row_pitch_B,
+   isl_tiling_get_intratile_offset_sa(info->surf.tiling, info->surf.dim,
+                                      info->surf.msaa_layout,
+                                      info->surf.format, info->surf.samples,
+                                      info->surf.row_pitch_B,
                                       info->surf.array_pitch_el_rows,
                                       x_offset_sa, y_offset_sa, 0, 0,
-                                      &byte_offset,
+                                      &offset_B,
                                       &info->tile_x_sa, &info->tile_y_sa,
                                       &tile_z_sa, &tile_a);
    assert(tile_z_sa == 0 && tile_a == 0);
 
-   info->addr.offset += byte_offset;
+   info->addr.offset += offset_B;
 
    adjust = (int)info->tile_x_sa / px_size_sa.w - (int)*x0;
    *x0 += adjust;
@@ -2621,7 +2636,7 @@ blorp_surf_convert_to_uncompressed(const struct isl_device *isl_dev,
       info->z_offset = 0;
    }
 
-   uint32_t offset_B;
+   uint64_t offset_B;
    ASSERTED bool ok =
       isl_surf_get_uncompressed_surf(isl_dev, &info->surf, &info->view,
                                      &info->surf, &info->view, &offset_B,

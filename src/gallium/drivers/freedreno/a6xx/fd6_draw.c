@@ -161,6 +161,7 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
       .sprite_coord_enable = ctx->rasterizer->sprite_coord_enable,
       .sprite_coord_mode = ctx->rasterizer->sprite_coord_mode,
       .primitive_restart = info->primitive_restart && info->index_size,
+      .patch_vertices = ctx->patch_vertices,
    };
 
    if (!(ctx->prog.vs && ctx->prog.fs))
@@ -176,6 +177,12 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
       struct shader_info *ds_info = ir3_get_shader_info(emit.key.ds);
       emit.key.key.tessellation = ir3_tess_mode(ds_info->tess.primitive_mode);
       ctx->gen_dirty |= BIT(FD6_GROUP_PRIMITIVE_PARAMS);
+
+      struct shader_info *fs_info = ir3_get_shader_info(emit.key.fs);
+      emit.key.key.tcs_store_primid =
+         BITSET_TEST(ds_info->system_values_read, SYSTEM_VALUE_PRIMITIVE_ID) ||
+         (gs_info && BITSET_TEST(gs_info->system_values_read, SYSTEM_VALUE_PRIMITIVE_ID)) ||
+         (fs_info && (fs_info->inputs_read & (1ull << VARYING_SLOT_PRIMITIVE_ID)));
    }
 
    if (emit.key.gs) {
@@ -264,7 +271,7 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
          unreachable("bad tessmode");
       }
 
-      draw0.prim_type = DI_PT_PATCHES0 + info->vertices_per_patch;
+      draw0.prim_type = DI_PT_PATCHES0 + ctx->patch_vertices;
       draw0.tess_enable = true;
 
       const unsigned max_count = 2048;
@@ -275,10 +282,10 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
        * limit.  But in the indirect-draw case we must assume the worst.
        */
       if (indirect && indirect->buffer) {
-         count = ALIGN_NPOT(max_count, info->vertices_per_patch);
+         count = ALIGN_NPOT(max_count, ctx->patch_vertices);
       } else {
          count = MIN2(max_count, draw->count);
-         count = ALIGN_NPOT(count, info->vertices_per_patch);
+         count = ALIGN_NPOT(count, ctx->patch_vertices);
       }
 
       OUT_PKT7(ring, CP_SET_SUBDRAW_SIZE, 1);
