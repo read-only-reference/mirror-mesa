@@ -2258,15 +2258,6 @@ struct gl_program
          GLuint NumBindlessImages;
          GLboolean HasBoundBindlessImage;
          struct gl_bindless_image *BindlessImages;
-
-         union {
-            struct {
-               /**
-                * A bitmask of gl_advanced_blend_mode values
-                */
-               GLbitfield BlendSupport;
-            } fs;
-         };
       } sh;
 
       /** ARB assembly-style program fields */
@@ -3303,6 +3294,9 @@ struct gl_shader_compiler_options
 
    /** (driconf) Force gl_Position to be considered invariant */
    GLboolean PositionAlwaysInvariant;
+
+   /** (driconf) Force gl_Position to be considered precise */
+   GLboolean PositionAlwaysPrecise;
 
    const struct nir_shader_compiler_options *NirOptions;
 };

@@ -99,6 +99,8 @@ modifier_is_supported(const struct intel_device_info *devinfo,
    case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
       if (devinfo->verx10 != 120)
          return false;
+      if (devinfo->display_ver != 12)
+         return false;
       break;
    case DRM_FORMAT_MOD_INVALID:
    default:
@@ -898,12 +900,11 @@ import_aux_info(struct iris_resource *res,
    res->aux.offset = aux_res->aux.offset;
 }
 
-void
+static void
 iris_resource_finish_aux_import(struct pipe_screen *pscreen,
                                 struct iris_resource *res)
 {
    struct iris_screen *screen = (struct iris_screen *)pscreen;
-   assert(iris_resource_unfinished_aux_import(res));
 
    /* Create an array of resources. Combining main and aux planes is easier
     * with indexing as opposed to scanning the linked list.
@@ -929,7 +930,10 @@ iris_resource_finish_aux_import(struct pipe_screen *pscreen,
    }
 
    /* Combine main and aux plane information. */
-   if (num_main_planes == 1 && num_planes == 2) {
+   switch (res->mod_info->modifier) {
+   case I915_FORMAT_MOD_Y_TILED_CCS:
+   case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS:
+      assert(num_main_planes == 1 && num_planes == 2);
       import_aux_info(r[0], r[1]);
       map_aux_addresses(screen, r[0], format, 0);
 
@@ -940,7 +944,9 @@ iris_resource_finish_aux_import(struct pipe_screen *pscreen,
                           iris_get_aux_clear_color_state_size(screen), 1,
                           IRIS_MEMZONE_OTHER, BO_ALLOC_ZEROED);
       }
-   } else if (num_main_planes == 1 && num_planes == 3) {
+      break;
+   case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
+      assert(num_main_planes == 1 && num_planes == 3);
       import_aux_info(r[0], r[1]);
       map_aux_addresses(screen, r[0], format, 0);
 
@@ -949,18 +955,29 @@ iris_resource_finish_aux_import(struct pipe_screen *pscreen,
       r[0]->aux.clear_color_bo = r[2]->aux.clear_color_bo;
       r[0]->aux.clear_color_offset = r[2]->aux.clear_color_offset;
       r[0]->aux.clear_color_unknown = true;
-   } else if (num_main_planes == 2 && num_planes == 4) {
-      import_aux_info(r[0], r[2]);
-      import_aux_info(r[1], r[3]);
-      map_aux_addresses(screen, r[0], format, 0);
-      map_aux_addresses(screen, r[1], format, 1);
-   } else {
-      /* Gallium has lowered a single main plane into two. */
-      assert(num_main_planes == 2 && num_planes == 3);
-      assert(isl_format_is_yuv(format) && !isl_format_is_planar(format));
-      import_aux_info(r[0], r[2]);
-      import_aux_info(r[1], r[2]);
-      map_aux_addresses(screen, r[0], format, 0);
+      break;
+   case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
+      if (num_main_planes == 1 && num_planes == 2) {
+         import_aux_info(r[0], r[1]);
+         map_aux_addresses(screen, r[0], format, 0);
+      } else if (num_main_planes == 2 && num_planes == 4) {
+         import_aux_info(r[0], r[2]);
+         import_aux_info(r[1], r[3]);
+         map_aux_addresses(screen, r[0], format, 0);
+         map_aux_addresses(screen, r[1], format, 1);
+      } else {
+         /* Gallium has lowered a single main plane into two. */
+         assert(num_main_planes == 2 && num_planes == 3);
+         assert(isl_format_is_yuv(format) && !isl_format_is_planar(format));
+         import_aux_info(r[0], r[2]);
+         import_aux_info(r[1], r[2]);
+         map_aux_addresses(screen, r[0], format, 0);
+      }
+      assert(!isl_aux_usage_has_fast_clears(res->mod_info->aux_usage));
+      break;
+   default:
+      assert(res->mod_info->aux_usage == ISL_AUX_USAGE_NONE);
+      break;
    }
 }
 
@@ -1182,6 +1199,16 @@ mod_plane_is_clear_color(uint64_t modifier, uint32_t plane)
    }
 }
 
+static unsigned
+get_num_planes(const struct pipe_resource *resource)
+{
+   unsigned count = 0;
+   for (const struct pipe_resource *cur = resource; cur; cur = cur->next)
+      count++;
+
+   return count;
+}
+
 static struct pipe_resource *
 iris_resource_from_handle(struct pipe_screen *pscreen,
                           const struct pipe_resource *templ,
@@ -1248,6 +1275,12 @@ iris_resource_from_handle(struct pipe_screen *pscreen,
       res->aux.offset = whandle->offset;
       res->aux.bo = res->bo;
       res->bo = NULL;
+   }
+
+   if (get_num_planes(&res->base.b) ==
+       iris_get_dmabuf_modifier_planes(pscreen, whandle->modifier,
+                                       whandle->format)) {
+      iris_resource_finish_aux_import(pscreen, res);
    }
 
    return &res->base.b;
@@ -1392,13 +1425,9 @@ iris_resource_get_param(struct pipe_screen *pscreen,
    bool mod_with_aux =
       res->mod_info && res->mod_info->aux_usage != ISL_AUX_USAGE_NONE;
    bool wants_aux = mod_with_aux && plane > 0;
+   struct iris_bo *bo = wants_aux ? res->aux.bo : res->bo;
    bool result;
    unsigned handle;
-
-   if (iris_resource_unfinished_aux_import(res))
-      iris_resource_finish_aux_import(pscreen, res);
-
-   struct iris_bo *bo = wants_aux ? res->aux.bo : res->bo;
 
    iris_resource_disable_aux_on_first_query(resource, handle_usage);
 
@@ -1409,10 +1438,7 @@ iris_resource_get_param(struct pipe_screen *pscreen,
                                                   res->mod_info->modifier,
                                                   res->external_format);
       } else {
-         unsigned count = 0;
-         for (struct pipe_resource *cur = resource; cur; cur = cur->next)
-            count++;
-         *value = count;
+         *value = get_num_planes(&res->base.b);
       }
       return true;
    case PIPE_RESOURCE_PARAM_STRIDE:
@@ -2020,9 +2046,6 @@ iris_transfer_map(struct pipe_context *ctx,
    struct iris_resource *res = (struct iris_resource *)resource;
    struct isl_surf *surf = &res->surf;
 
-   if (iris_resource_unfinished_aux_import(res))
-      iris_resource_finish_aux_import(ctx->screen, res);
-
    if (usage & PIPE_MAP_DISCARD_WHOLE_RESOURCE) {
       /* Replace the backing storage with a fresh buffer for non-async maps */
       if (!(usage & (PIPE_MAP_UNSYNCHRONIZED |
@@ -2052,7 +2075,7 @@ iris_transfer_map(struct pipe_context *ctx,
     * other devices that I915_GEM_MMAP cannot work with.
     */
    if ((usage & PIPE_MAP_DIRECTLY) &&
-       (surf->tiling != ISL_TILING_LINEAR || res->bo->imported))
+       (surf->tiling != ISL_TILING_LINEAR || iris_bo_is_imported(res->bo)))
       return NULL;
 
    bool map_would_stall = false;
@@ -2095,7 +2118,7 @@ iris_transfer_map(struct pipe_context *ctx,
    if (usage & PIPE_MAP_WRITE)
       util_range_add(&res->base.b, &res->valid_buffer_range, box->x, box->x + box->width);
 
-   if (res->bo->mmap_mode != IRIS_MMAP_NONE) {
+   if (iris_bo_mmap_mode(res->bo) != IRIS_MMAP_NONE) {
       /* GPU copies are not useful for buffer reads.  Instead of stalling to
        * read from the original buffer, we'd simply copy it to a temporary...
        * then stall (a bit longer) to read from that buffer.
@@ -2119,7 +2142,8 @@ iris_transfer_map(struct pipe_context *ctx,
        */
       if (!map_would_stall &&
           !isl_aux_usage_has_compression(res->aux.usage) &&
-          !((usage & PIPE_MAP_READ) && res->bo->mmap_mode != IRIS_MMAP_WB)) {
+          !((usage & PIPE_MAP_READ) &&
+            iris_bo_mmap_mode(res->bo) != IRIS_MMAP_WB)) {
          usage |= PIPE_MAP_DIRECTLY;
       }
    }
@@ -2257,9 +2281,6 @@ iris_texture_subdata(struct pipe_context *ctx,
 
    assert(resource->target != PIPE_BUFFER);
 
-   if (iris_resource_unfinished_aux_import(res))
-      iris_resource_finish_aux_import(ctx->screen, res);
-
    /* Just use the transfer-based path for linear buffers - it will already
     * do a direct mapping, or a simple linear staging buffer.
     *
@@ -2273,7 +2294,7 @@ iris_texture_subdata(struct pipe_context *ctx,
        surf->tiling == ISL_TILING_4 ||
        isl_aux_usage_has_compression(res->aux.usage) ||
        resource_is_busy(ice, res) ||
-       res->bo->mmap_mode == IRIS_MMAP_NONE) {
+       iris_bo_mmap_mode(res->bo) == IRIS_MMAP_NONE) {
       return u_default_texture_subdata(ctx, resource, level, usage, box,
                                        data, stride, layer_stride);
    }
@@ -2324,13 +2345,39 @@ void
 iris_dirty_for_history(struct iris_context *ice,
                        struct iris_resource *res)
 {
+   const uint64_t stages = res->bind_stages;
+   uint64_t dirty = 0ull;
    uint64_t stage_dirty = 0ull;
 
    if (res->bind_history & PIPE_BIND_CONSTANT_BUFFER) {
-      stage_dirty |= ((uint64_t)res->bind_stages)
-                        << IRIS_SHIFT_FOR_STAGE_DIRTY_CONSTANTS;
+      for (unsigned stage = 0; stage < MESA_SHADER_STAGES; stage++) {
+         if (stages & (1u << stage)) {
+            struct iris_shader_state *shs = &ice->state.shaders[stage];
+            shs->dirty_cbufs |= ~0u;
+         }
+      }
+      dirty |= IRIS_DIRTY_RENDER_MISC_BUFFER_FLUSHES |
+               IRIS_DIRTY_COMPUTE_MISC_BUFFER_FLUSHES;
+      stage_dirty |= (stages << IRIS_SHIFT_FOR_STAGE_DIRTY_CONSTANTS);
    }
 
+   if (res->bind_history & (PIPE_BIND_SAMPLER_VIEW |
+                            PIPE_BIND_SHADER_IMAGE)) {
+      dirty |= IRIS_DIRTY_RENDER_RESOLVES_AND_FLUSHES |
+               IRIS_DIRTY_COMPUTE_RESOLVES_AND_FLUSHES;
+      stage_dirty |= (stages << IRIS_SHIFT_FOR_STAGE_DIRTY_BINDINGS);
+   }
+
+   if (res->bind_history & PIPE_BIND_SHADER_BUFFER) {
+      dirty |= IRIS_DIRTY_RENDER_MISC_BUFFER_FLUSHES |
+               IRIS_DIRTY_COMPUTE_MISC_BUFFER_FLUSHES;
+      stage_dirty |= (stages << IRIS_SHIFT_FOR_STAGE_DIRTY_BINDINGS);
+   }
+
+   if (res->bind_history & PIPE_BIND_VERTEX_BUFFER)
+      dirty |= IRIS_DIRTY_VERTEX_BUFFER_FLUSHES;
+
+   ice->state.dirty |= dirty;
    ice->state.stage_dirty |= stage_dirty;
 }
 
@@ -2395,20 +2442,6 @@ iris_resource_set_clear_color(struct iris_context *ice,
    }
 
    return false;
-}
-
-union isl_color_value
-iris_resource_get_clear_color(const struct iris_resource *res,
-                              struct iris_bo **clear_color_bo,
-                              uint64_t *clear_color_offset)
-{
-   assert(res->aux.bo);
-
-   if (clear_color_bo)
-      *clear_color_bo = res->aux.clear_color_bo;
-   if (clear_color_offset)
-      *clear_color_offset = res->aux.clear_color_offset;
-   return res->aux.clear_color;
 }
 
 static enum pipe_format

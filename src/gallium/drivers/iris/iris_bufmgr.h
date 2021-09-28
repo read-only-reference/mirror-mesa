@@ -31,13 +31,15 @@
 #include "c11/threads.h"
 #include "util/macros.h"
 #include "util/u_atomic.h"
+#include "util/u_dynarray.h"
 #include "util/list.h"
+#include "util/simple_mtx.h"
 #include "pipe/p_defines.h"
 
-struct iris_batch;
 struct intel_device_info;
 struct pipe_debug_callback;
 struct isl_surf;
+struct iris_syncobj;
 
 /**
  * Memory zones.  When allocating a buffer, you can request that it is
@@ -103,8 +105,12 @@ enum iris_domain {
    IRIS_DOMAIN_RENDER_WRITE = 0,
    /** (Hi)Z/stencil cache. */
    IRIS_DOMAIN_DEPTH_WRITE,
+   /** Data port (HDC) cache. */
+   IRIS_DOMAIN_DATA_WRITE,
    /** Any other read-write cache. */
    IRIS_DOMAIN_OTHER_WRITE,
+   /** Vertex cache. */
+   IRIS_DOMAIN_VF_READ,
    /** Any other read-only cache. */
    IRIS_DOMAIN_OTHER_READ,
    /** Number of caching domains. */
@@ -119,7 +125,8 @@ enum iris_domain {
 static inline bool
 iris_domain_is_read_only(enum iris_domain access)
 {
-   return access == IRIS_DOMAIN_OTHER_READ;
+   return access == IRIS_DOMAIN_OTHER_READ ||
+          access == IRIS_DOMAIN_VF_READ;
 }
 
 enum iris_mmap_mode {
@@ -127,6 +134,13 @@ enum iris_mmap_mode {
    IRIS_MMAP_UC, /**< Fully uncached memory map */
    IRIS_MMAP_WC, /**< Write-combining map with no caching of reads */
    IRIS_MMAP_WB, /**< Write-back mapping with CPU caches enabled */
+};
+
+#define IRIS_BATCH_COUNT 2
+
+struct iris_bo_screen_deps {
+   struct iris_syncobj *write_syncobjs[IRIS_BATCH_COUNT];
+   struct iris_syncobj *read_syncobjs[IRIS_BATCH_COUNT];
 };
 
 struct iris_bo {
@@ -162,12 +176,13 @@ struct iris_bo {
    uint64_t aux_map_address;
 
    /**
-    * The validation list index for this buffer, or -1 when not in a batch.
-    * Note that a single buffer may be in multiple batches (contexts), and
-    * this is a global field, which refers to the last batch using the BO.
-    * It should not be considered authoritative, but can be used to avoid a
-    * linear walk of the validation list in the common case by guessing that
-    * exec_bos[bo->index] == bo and confirming whether that's the case.
+    * If this BO is referenced by a batch, this _may_ be the index into the
+    * batch->exec_bos[] list.
+    *
+    * Note that a single buffer may be used by multiple batches/contexts,
+    * and thus appear in multiple lists, but we only track one index here.
+    * In the common case one can guess that batch->exec_bos[bo->index] == bo
+    * and double check if that's true to avoid a linear list walk.
     *
     * XXX: this is not ideal now that we have more than one batch per context,
     * XXX: as the index will flop back and forth between the render index and
@@ -212,6 +227,10 @@ struct iris_bo {
     * bit platforms.
     */
    uint64_t last_seqnos[NUM_IRIS_DOMAINS] __attribute__ ((aligned (8)));
+
+   /** Up to one per screen, may need realloc. */
+   struct iris_bo_screen_deps *deps;
+   int deps_size;
 
    /**
     * Boolean of whether the GPU is definitely not accessing the buffer.
@@ -340,16 +359,34 @@ iris_bo_is_external(const struct iris_bo *bo)
    return bo->exported || bo->imported;
 }
 
+static inline bool
+iris_bo_is_imported(const struct iris_bo *bo)
+{
+   return bo->imported;
+}
+
+static inline bool
+iris_bo_is_exported(const struct iris_bo *bo)
+{
+   return bo->exported;
+}
+
+static inline enum iris_mmap_mode
+iris_bo_mmap_mode(const struct iris_bo *bo)
+{
+   return bo->mmap_mode;
+}
+
 /**
  * Mark a buffer as being shared with other external clients.
  */
 void iris_bo_mark_exported(struct iris_bo *bo);
 
 /**
- * Returns 1 if mapping the buffer for write could cause the process
+ * Returns true  if mapping the buffer for write could cause the process
  * to block, due to the object being active in the GPU.
  */
-int iris_bo_busy(struct iris_bo *bo);
+bool iris_bo_busy(struct iris_bo *bo);
 
 /**
  * Specify the volatility of the buffer.
@@ -365,7 +402,6 @@ int iris_bo_busy(struct iris_bo *bo);
  */
 int iris_bo_madvise(struct iris_bo *bo, int madv);
 
-/* drm_bacon_bufmgr_gem.c */
 struct iris_bufmgr *iris_bufmgr_get_for_fd(struct intel_device_info *devinfo,
                                            int fd, bool bo_reuse);
 int iris_bufmgr_get_fd(struct iris_bufmgr *bufmgr);
@@ -448,5 +484,9 @@ iris_bo_bump_seqno(struct iris_bo *bo, uint64_t seqno,
 }
 
 enum iris_memory_zone iris_memzone_for_address(uint64_t address);
+
+int iris_bufmgr_create_screen_id(struct iris_bufmgr *bufmgr);
+
+simple_mtx_t *iris_bufmgr_get_bo_deps_lock(struct iris_bufmgr *bufmgr);
 
 #endif /* IRIS_BUFMGR_H */

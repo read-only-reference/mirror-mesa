@@ -301,8 +301,12 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    }
 
    device->master_fd = master_fd;
-   device->pdev.debug = PAN_DBG_TRACE;
+   if (instance->debug_flags & PANVK_DEBUG_TRACE)
+      device->pdev.debug |= PAN_DBG_TRACE;
+
+   device->pdev.debug |= PAN_DBG_NO_CACHE;
    panfrost_open_device(NULL, fd, &device->pdev);
+   fd = -1;
 
    if (device->pdev.quirks & MIDGARD_SFBD) {
       result = vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
@@ -319,7 +323,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    if (panvk_device_get_cache_uuid(device->pdev.gpu_id, device->cache_uuid)) {
       result = vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
                          "cannot generate UUID");
-      goto fail;
+      goto fail_close_device;
    }
 
    fprintf(stderr, "WARNING: panvk is not a conformant vulkan implementation, "
@@ -331,13 +335,16 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    result = panvk_wsi_init(device);
    if (result != VK_SUCCESS) {
       vk_error(instance, result);
-      goto fail;
+      goto fail_close_device;
    }
 
    return VK_SUCCESS;
 
+fail_close_device:
+   panfrost_close_device(&device->pdev);
 fail:
-   close(fd);
+   if (fd != -1)
+      close(fd);
    if (master_fd != -1)
       close(master_fd);
    return result;
@@ -693,7 +700,8 @@ panvk_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       }
    }
 
-   VkSampleCountFlags sample_counts = 0xf;
+   VkSampleCountFlags sample_counts =
+      VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
 
    /* make sure that the entire descriptor set is addressable with a signed
     * 32-bit int. So the sum of all limits scaled by descriptor size has to
@@ -900,24 +908,25 @@ panvk_GetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
 static VkResult
 panvk_queue_init(struct panvk_device *device,
                  struct panvk_queue *queue,
-                 uint32_t queue_family_index,
                  int idx,
-                 VkDeviceQueueCreateFlags flags)
+                 const VkDeviceQueueCreateInfo *create_info)
 {
    const struct panfrost_device *pdev = &device->physical_device->pdev;
 
-   vk_object_base_init(&device->vk, &queue->base, VK_OBJECT_TYPE_QUEUE);
+   VkResult result = vk_queue_init(&queue->vk, &device->vk, create_info, idx);
+   if (result != VK_SUCCESS)
+      return result;
    queue->device = device;
-   queue->queue_family_index = queue_family_index;
-   queue->flags = flags;
 
    struct drm_syncobj_create create = {
       .flags = DRM_SYNCOBJ_CREATE_SIGNALED,
    };
 
    int ret = drmIoctl(pdev->fd, DRM_IOCTL_SYNCOBJ_CREATE, &create);
-   if (ret)
+   if (ret) {
+      vk_queue_finish(&queue->vk);
       return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
 
    queue->sync = create.handle;
    return VK_SUCCESS;
@@ -926,6 +935,7 @@ panvk_queue_init(struct panvk_device *device,
 static void
 panvk_queue_finish(struct panvk_queue *queue)
 {
+   vk_queue_finish(&queue->vk);
 }
 
 VkResult
@@ -1012,8 +1022,8 @@ panvk_CreateDevice(VkPhysicalDevice physicalDevice,
       device->queue_count[qfi] = queue_create->queueCount;
 
       for (unsigned q = 0; q < queue_create->queueCount; q++) {
-         result = panvk_queue_init(device, &device->queues[qfi][q], qfi, q,
-                                   queue_create->flags);
+         result = panvk_queue_init(device, &device->queues[qfi][q], q,
+                                   queue_create);
          if (result != VK_SUCCESS)
             goto fail;
       }
@@ -1060,46 +1070,6 @@ panvk_EnumerateInstanceLayerProperties(uint32_t *pPropertyCount,
    return VK_SUCCESS;
 }
 
-void
-panvk_GetDeviceQueue2(VkDevice _device,
-                      const VkDeviceQueueInfo2 *pQueueInfo,
-                      VkQueue *pQueue)
-{
-   VK_FROM_HANDLE(panvk_device, device, _device);
-   struct panvk_queue *queue;
-
-   queue = &device->queues[pQueueInfo->queueFamilyIndex][pQueueInfo->queueIndex];
-   if (pQueueInfo->flags != queue->flags) {
-      /* From the Vulkan 1.1.70 spec:
-       *
-       * "The queue returned by vkGetDeviceQueue2 must have the same
-       * flags value from this structure as that used at device
-       * creation time in a VkDeviceQueueCreateInfo instance. If no
-       * matching flags were specified at device creation time then
-       * pQueue will return VK_NULL_HANDLE."
-       */
-      *pQueue = VK_NULL_HANDLE;
-      return;
-   }
-
-   *pQueue = panvk_queue_to_handle(queue);
-}
-
-void
-panvk_GetDeviceQueue(VkDevice _device,
-                     uint32_t queueFamilyIndex,
-                     uint32_t queueIndex,
-                     VkQueue *pQueue)
-{
-   const VkDeviceQueueInfo2 info = (VkDeviceQueueInfo2) {
-      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2,
-      .queueFamilyIndex = queueFamilyIndex,
-      .queueIndex = queueIndex
-   };
-
-   panvk_GetDeviceQueue2(_device, &info, pQueue);
-}
-
 VkResult
 panvk_QueueWaitIdle(VkQueue _queue)
 {
@@ -1120,22 +1090,6 @@ panvk_QueueWaitIdle(VkQueue _queue)
    ret = drmIoctl(pdev->fd, DRM_IOCTL_SYNCOBJ_WAIT, &wait);
    assert(!ret);
 
-   return VK_SUCCESS;
-}
-
-VkResult
-panvk_DeviceWaitIdle(VkDevice _device)
-{
-   VK_FROM_HANDLE(panvk_device, device, _device);
-
-   if (panvk_device_is_lost(device))
-      return VK_ERROR_DEVICE_LOST;
-
-   for (unsigned i = 0; i < PANVK_MAX_QUEUE_FAMILIES; i++) {
-      for (unsigned q = 0; q < device->queue_count[i]; q++) {
-         panvk_QueueWaitIdle(panvk_queue_to_handle(&device->queues[i][q]));
-      }
-   }
    return VK_SUCCESS;
 }
 
@@ -1305,7 +1259,7 @@ panvk_GetBufferMemoryRequirements(VkDevice _device,
    pMemoryRequirements->memoryTypeBits = 1;
    pMemoryRequirements->alignment = 64;
    pMemoryRequirements->size =
-      align64(buffer->size, pMemoryRequirements->alignment);
+      MAX2(align64(buffer->size, pMemoryRequirements->alignment), buffer->size);
 }
 
 void
@@ -1408,7 +1362,6 @@ panvk_BindImageMemory2(VkDevice device,
       VK_FROM_HANDLE(panvk_device_memory, mem, pBindInfos[i].memory);
 
       if (mem) {
-         panfrost_bo_reference(mem->bo);
          image->pimage.data.bo = mem->bo;
          image->pimage.data.offset = pBindInfos[i].memoryOffset;
          /* Reset the AFBC headers */
@@ -1425,7 +1378,6 @@ panvk_BindImageMemory2(VkDevice device,
             }
          }
       } else {
-         panfrost_bo_unreference(image->pimage.data.bo);
          image->pimage.data.bo = NULL;
          image->pimage.data.offset = pBindInfos[i].memoryOffset;
       }

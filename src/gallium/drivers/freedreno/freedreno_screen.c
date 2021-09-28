@@ -155,7 +155,6 @@ fd_screen_destroy(struct pipe_screen *pscreen)
    if (screen->ro)
       screen->ro->destroy(screen->ro);
 
-   fd_bc_fini(&screen->batch_cache);
    fd_gmem_screen_fini(pscreen);
 
    slab_destroy_parent(&screen->transfer_pool);
@@ -241,7 +240,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_SUPPORTED_PRIM_MODES:
    case PIPE_CAP_SUPPORTED_PRIM_MODES_WITH_RESTART:
-      return screen->primtypes;
+      return screen->primtypes_mask;
 
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
@@ -1035,6 +1034,8 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro,
       goto fail;
    }
 
+   screen->info = info;
+
    /* explicitly checking for GPU revisions that are known to work.  This
     * may be overly conservative for a3xx, where spoofing the gpu_id with
     * the blob driver seems to generate identical cmdstream dumps.  But
@@ -1067,13 +1068,12 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro,
       goto fail;
    }
 
-   screen->info = info;
-
-   if (is_a6xx(screen)) {
-      screen->ccu_offset_bypass = screen->info->num_ccu * A6XX_CCU_DEPTH_SIZE;
-      screen->ccu_offset_gmem = (screen->gmemsize_bytes -
-         screen->info->num_ccu * A6XX_CCU_GMEM_COLOR_SIZE);
-   }
+   /* fdN_screen_init() should set this: */
+   assert(screen->primtypes);
+   screen->primtypes_mask = 0;
+   for (unsigned i = 0; i <= PIPE_PRIM_MAX; i++)
+      if (screen->primtypes[i])
+         screen->primtypes_mask |= (1 << i);
 
    if (FD_DBG(PERFC)) {
       screen->perfcntr_groups =
@@ -1086,8 +1086,6 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro,
     */
    if (fd_device_version(dev) >= FD_VERSION_UNLIMITED_CMDS)
       screen->reorder = !FD_DBG(INORDER);
-
-   fd_bc_init(&screen->batch_cache);
 
    list_inithead(&screen->context_list);
 

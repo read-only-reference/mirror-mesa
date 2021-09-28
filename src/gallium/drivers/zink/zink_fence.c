@@ -34,9 +34,7 @@
 static void
 destroy_fence(struct zink_screen *screen, struct zink_tc_fence *mfence)
 {
-   struct zink_batch_state *bs = zink_batch_state(mfence->fence);
    mfence->fence = NULL;
-   zink_batch_state_reference(screen, &bs, NULL);
    tc_unflushed_batch_token_reference(&mfence->tc_token, NULL);
    FREE(mfence);
 }
@@ -133,9 +131,9 @@ zink_vkfence_wait(struct zink_screen *screen, struct zink_fence *fence, uint64_t
 
    VkResult ret;
    if (timeout_ns)
-      ret = vkWaitForFences(screen->dev, 1, &fence->fence, VK_TRUE, timeout_ns);
+      ret = VKSCR(WaitForFences)(screen->dev, 1, &fence->fence, VK_TRUE, timeout_ns);
    else
-      ret = vkGetFenceStatus(screen->dev, fence->fence);
+      ret = VKSCR(GetFenceStatus)(screen->dev, fence->fence);
    success = zink_screen_handle_vkresult(screen, ret);
 
    if (success) {

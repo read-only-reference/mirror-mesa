@@ -64,6 +64,7 @@ enum zink_descriptor_type;
 enum zink_descriptor_mode {
    ZINK_DESCRIPTOR_MODE_AUTO,
    ZINK_DESCRIPTOR_MODE_LAZY,
+   ZINK_DESCRIPTOR_MODE_NOFALLBACK,
    ZINK_DESCRIPTOR_MODE_NOTEMPLATES,
 };
 
@@ -85,13 +86,10 @@ struct zink_screen {
 
    bool device_lost;
    struct sw_winsys *winsys;
+   int drm_fd;
 
    struct hash_table framebuffer_cache;
    simple_mtx_t framebuffer_mtx;
-   struct hash_table surface_cache;
-   simple_mtx_t surface_mtx;
-   struct hash_table bufferview_cache;
-   simple_mtx_t bufferview_mtx;
 
    struct slab_parent_pool transfer_pool;
    struct disk_cache *disk_cache;
@@ -240,6 +238,9 @@ struct mem_cache_entry {
    VkDeviceMemory mem;
    void *map;
 };
+
+#define VKCTX(fn) zink_screen(ctx->base.screen)->vk.fn
+#define VKSCR(fn) screen->vk.fn
 
 VkFormat
 zink_get_format(struct zink_screen *screen, enum pipe_format format);

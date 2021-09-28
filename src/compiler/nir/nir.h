@@ -768,6 +768,7 @@ typedef enum PACKED {
 
 typedef struct nir_instr {
    struct exec_node node;
+   struct list_head gc_node;
    struct nir_block *block;
    nir_instr_type type;
 
@@ -1026,8 +1027,8 @@ nir_is_sequential_comp_swizzle(uint8_t *swiz, unsigned nr_comp)
    return true;
 }
 
-void nir_src_copy(nir_src *dest, const nir_src *src, void *instr_or_if);
-void nir_dest_copy(nir_dest *dest, const nir_dest *src, nir_instr *instr);
+void nir_src_copy(nir_src *dest, const nir_src *src);
+void nir_dest_copy(nir_dest *dest, const nir_dest *src);
 
 typedef struct {
    /** Base source */
@@ -1456,10 +1457,8 @@ typedef struct nir_alu_instr {
    nir_alu_src src[];
 } nir_alu_instr;
 
-void nir_alu_src_copy(nir_alu_src *dest, const nir_alu_src *src,
-                      nir_alu_instr *instr);
-void nir_alu_dest_copy(nir_alu_dest *dest, const nir_alu_dest *src,
-                       nir_alu_instr *instr);
+void nir_alu_src_copy(nir_alu_src *dest, const nir_alu_src *src);
+void nir_alu_dest_copy(nir_alu_dest *dest, const nir_alu_dest *src);
 
 bool nir_alu_instr_is_copy(nir_alu_instr *instr);
 
@@ -3416,6 +3415,16 @@ typedef enum {
    nir_divergence_multiple_workgroup_per_compute_subgroup = (1 << 5),
 } nir_divergence_options;
 
+typedef enum {
+   nir_pack_varying_interp_mode_none          = (1 << 0),
+   nir_pack_varying_interp_mode_smooth        = (1 << 1),
+   nir_pack_varying_interp_mode_flat          = (1 << 2),
+   nir_pack_varying_interp_mode_noperspective = (1 << 3),
+   nir_pack_varying_interp_loc_sample         = (1 << 16),
+   nir_pack_varying_interp_loc_centroid       = (1 << 17),
+   nir_pack_varying_interp_loc_center         = (1 << 18),
+} nir_pack_varying_options;
+
 /** An instruction filtering callback
  *
  * Returns true if the instruction should be processed and false otherwise.
@@ -3615,7 +3624,7 @@ typedef struct nir_shader_compiler_options {
    bool lower_hadd64;
 
    /**
-    * Set if nir_op_add_sat and nir_op_usub_sat should be lowered to simple
+    * Set if nir_op_uadd_sat and nir_op_usub_sat should be lowered to simple
     * arithmetic.
     *
     * If this flag is set, the lowering will be applied to all bit-sizes of
@@ -3623,7 +3632,7 @@ typedef struct nir_shader_compiler_options {
     *
     * \sa ::lower_usub_sat64
     */
-   bool lower_add_sat;
+   bool lower_uadd_sat;
 
    /**
     * Set if only 64-bit nir_op_usub_sat should be lowered to simple
@@ -3632,6 +3641,15 @@ typedef struct nir_shader_compiler_options {
     * \sa ::lower_add_sat
     */
    bool lower_usub_sat64;
+
+   /**
+    * Set if nir_op_iadd_sat and nir_op_isub_sat should be lowered to simple
+    * arithmetic.
+    *
+    * If this flag is set, the lowering will be applied to all bit-sizes of
+    * these instructions.
+    */
+   bool lower_iadd_sat;
 
    /**
     * Should IO be re-vectorized?  Some scalar ISAs still operate on vec4's
@@ -3719,6 +3737,9 @@ typedef struct nir_shader_compiler_options {
    /** Backend supports sudot_4x8 opcodes. */
    bool has_sudot_4x8;
 
+   /** Backend supports sdot_2x16 and udot_2x16 opcodes. */
+   bool has_dot_2x16;
+
    /* Whether to generate only scoped_barrier intrinsics instead of the set of
     * memory and control barrier intrinsics based on GLSL.
     */
@@ -3765,6 +3786,13 @@ typedef struct nir_shader_compiler_options {
    nir_lower_int64_options lower_int64_options;
    nir_lower_doubles_options lower_doubles_options;
    nir_divergence_options divergence_analysis_options;
+
+   /**
+    * Support pack varyings with different interpolation location
+    * (center, centroid, sample) and mode (flat, noperspective, smooth)
+    * into same slot.
+    */
+   nir_pack_varying_options pack_varying_options;
 } nir_shader_compiler_options;
 
 typedef struct nir_shader {
@@ -3782,6 +3810,8 @@ typedef struct nir_shader {
    struct shader_info info;
 
    struct exec_list functions; /** < list of nir_function */
+
+   struct list_head gc_list; /** < list of all nir_instrs allocated on the shader but not yet freed. */
 
    /**
     * The size of the variable space for load_input_*, load_uniform_*, etc.
@@ -4196,6 +4226,8 @@ nir_instr_insert_after_cf_list(struct exec_list *list, nir_instr *after)
 }
 
 void nir_instr_remove_v(nir_instr *instr);
+void nir_instr_free(nir_instr *instr);
+void nir_instr_free_list(struct exec_list *list);
 
 static inline nir_cursor
 nir_instr_remove(nir_instr *instr)
@@ -4295,6 +4327,7 @@ void nir_ssa_def_rewrite_uses_src(nir_ssa_def *def, nir_src new_src);
 void nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_ssa_def *new_ssa,
                                     nir_instr *after_me);
 
+nir_component_mask_t nir_src_components_read(const nir_src *src);
 nir_component_mask_t nir_ssa_def_components_read(const nir_ssa_def *def);
 
 static inline bool

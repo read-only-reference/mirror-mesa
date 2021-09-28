@@ -186,9 +186,19 @@ radv_are_formats_dcc_compatible(const struct radv_physical_device *pdev, const v
 }
 
 static bool
-radv_formats_is_atomic_allowed(const void *pNext, VkFormat format, VkImageCreateFlags flags)
+radv_format_is_atomic_allowed(struct radv_device *device, VkFormat format)
 {
-   if (radv_is_atomic_format_supported(format))
+   if (format == VK_FORMAT_R32_SFLOAT && !device->image_float32_atomics)
+      return false;
+
+   return radv_is_atomic_format_supported(format);
+}
+
+static bool
+radv_formats_is_atomic_allowed(struct radv_device *device, const void *pNext, VkFormat format,
+                               VkImageCreateFlags flags)
+{
+   if (radv_format_is_atomic_allowed(device, format))
       return true;
 
    if (flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) {
@@ -199,7 +209,7 @@ radv_formats_is_atomic_allowed(const void *pNext, VkFormat format, VkImageCreate
       /* We have to ignore the existence of the list if viewFormatCount = 0 */
       if (format_list && format_list->viewFormatCount) {
          for (unsigned i = 0; i < format_list->viewFormatCount; ++i) {
-            if (radv_is_atomic_format_supported(format_list->pViewFormats[i]))
+            if (radv_format_is_atomic_allowed(device, format_list->pViewFormats[i]))
                return true;
          }
       }
@@ -232,7 +242,7 @@ radv_use_dcc_for_image(struct radv_device *device, struct radv_image *image,
     */
    if ((pCreateInfo->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
        (device->physical_device->rad_info.chip_class < GFX10 ||
-        radv_formats_is_atomic_allowed(pCreateInfo->pNext, format, pCreateInfo->flags)))
+        radv_formats_is_atomic_allowed(device, pCreateInfo->pNext, format, pCreateInfo->flags)))
       return false;
 
    /* Do not enable DCC for fragment shading rate attachments. */
@@ -285,16 +295,18 @@ radv_image_use_dcc_image_stores(const struct radv_device *device, const struct r
    if (device->physical_device->rad_info.chip_class < GFX10)
       return false;
 
-   if ((device->physical_device->rad_info.family == CHIP_NAVI12 ||
-        device->physical_device->rad_info.family == CHIP_NAVI14) &&
-       !image->planes[0].surface.u.gfx9.color.dcc.independent_128B_blocks) {
-      /* Do not enable DCC image stores because INDEPENDENT_128B_BLOCKS is required, and 64B is used
-       * for displayable DCC on NAVI12-14.
-       */
-      return false;
-   }
-
-   return true;
+   /* DCC image stores require the following settings:
+    * - INDEPENDENT_64B_BLOCKS = 0
+    * - INDEPENDENT_128B_BLOCKS = 1
+    * - MAX_COMPRESSED_BLOCK_SIZE = 128B
+    * - MAX_UNCOMPRESSED_BLOCK_SIZE = 256B (always used)
+    *
+    * The same limitations apply to SDMA compressed stores because
+    * SDMA uses the same DCC codec.
+    */
+   return !image->planes[0].surface.u.gfx9.color.dcc.independent_64B_blocks  &&
+           image->planes[0].surface.u.gfx9.color.dcc.independent_128B_blocks &&
+           image->planes[0].surface.u.gfx9.color.dcc.max_compressed_block_size == V_028C78_MAX_BLOCK_SIZE_128B;
 }
 
 /*
@@ -1437,10 +1449,6 @@ radv_image_use_comp_to_single(const struct radv_device *device, const struct rad
    if (!radv_image_has_dcc(image))
       return false;
 
-   /* TODO: DCC fast clears with MSAA aren't fully supported. */
-   if (image->info.samples > 1)
-      return false;
-
    /* It seems 8bpp and 16bpp require RB+ to work. */
    unsigned bytes_per_pixel = vk_format_get_blocksize(image->vk_format);
    if (bytes_per_pixel <= 2 && !device->physical_device->rad_info.rbplus_allowed)
@@ -1513,6 +1521,15 @@ radv_image_create_layout(struct radv_device *device, struct radv_image_create_in
       }
 
       device->ws->surface_init(device->ws, &info, &image->planes[plane].surface);
+
+      if (plane == 0) {
+        /* TODO: Fix storage images with DCC without DCC image stores.
+         * Disabling it for now. */
+         if(radv_image_has_dcc(image) && (image->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+            !radv_image_use_dcc_image_stores(device, image)) {
+            ac_surface_zero_dcc_fields(&image->planes[0].surface);
+         }
+      }
 
       if (create_info.bo_metadata && !mod_info &&
           !ac_surface_set_umd_metadata(&device->physical_device->rad_info,
@@ -2046,7 +2063,8 @@ radv_layout_is_htile_compressed(const struct radv_device *device, const struct r
    case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL_KHR:
       return radv_image_has_htile(image);
    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-      return radv_image_has_htile(image) && queue_mask == (1u << RADV_QUEUE_GENERAL);
+      return radv_image_is_tc_compat_htile(image) ||
+             (radv_image_has_htile(image) && queue_mask == (1u << RADV_QUEUE_GENERAL));
    case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
    case VK_IMAGE_LAYOUT_GENERAL:
       /* It should be safe to enable TC-compat HTILE with

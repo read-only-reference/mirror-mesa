@@ -29,6 +29,7 @@
 #include "pipe/p_state.h"
 
 struct zink_vertex_elements_hw_state {
+   uint32_t hash;
    union {
       VkVertexInputAttributeDescription attribs[PIPE_MAX_ATTRIBS];
       VkVertexInputAttributeDescription2EXT dynattribs[PIPE_MAX_ATTRIBS];
@@ -51,6 +52,10 @@ struct zink_vertex_elements_state {
    } bindings[PIPE_MAX_ATTRIBS];
    uint32_t divisor[PIPE_MAX_ATTRIBS];
    uint8_t binding_map[PIPE_MAX_ATTRIBS];
+   uint32_t decomposed_attrs;
+   unsigned decomposed_attrs_size;
+   uint32_t decomposed_attrs_without_w;
+   unsigned decomposed_attrs_without_w_size;
    struct zink_vertex_elements_hw_state hw_state;
 };
 
@@ -78,6 +83,7 @@ struct zink_rasterizer_state {
 };
 
 struct zink_blend_state {
+   uint32_t hash;
    VkPipelineColorBlendAttachmentState attachments[PIPE_MAX_COLOR_BUFS];
 
    VkBool32 logicop_enable;

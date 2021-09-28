@@ -38,6 +38,7 @@
 #include "freedreno_state.h"
 #include "freedreno_texture.h"
 #include "freedreno_util.h"
+#include "util/u_trace_gallium.h"
 
 static void
 fd_context_flush(struct pipe_context *pctx, struct pipe_fence_handle **fencep,
@@ -352,9 +353,7 @@ fd_context_destroy(struct pipe_context *pctx)
 
    util_copy_framebuffer_state(&ctx->framebuffer, NULL);
    fd_batch_reference(&ctx->batch, NULL); /* unref current batch */
-
-   /* Make sure nothing in the batch cache references our context any more. */
-   fd_bc_flush(ctx, false);
+   fd_bc_fini(ctx);
 
    fd_prog_fini(pctx);
 
@@ -451,30 +450,32 @@ fd_get_device_reset_status(struct pipe_context *pctx)
 }
 
 static void
-fd_trace_record_ts(struct u_trace *ut, struct pipe_resource *timestamps,
+fd_trace_record_ts(struct u_trace *ut, void *cs, void *timestamps,
                    unsigned idx)
 {
    struct fd_batch *batch = container_of(ut, struct fd_batch, trace);
-   struct fd_ringbuffer *ring = batch->nondraw ? batch->draw : batch->gmem;
+   struct fd_ringbuffer *ring = cs;
+   struct pipe_resource *buffer = timestamps;
 
    if (ring->cur == batch->last_timestamp_cmd) {
-      uint64_t *ts = fd_bo_map(fd_resource(timestamps)->bo);
+      uint64_t *ts = fd_bo_map(fd_resource(buffer)->bo);
       ts[idx] = U_TRACE_NO_TIMESTAMP;
       return;
    }
 
    unsigned ts_offset = idx * sizeof(uint64_t);
-   batch->ctx->record_timestamp(ring, fd_resource(timestamps)->bo, ts_offset);
+   batch->ctx->record_timestamp(ring, fd_resource(buffer)->bo, ts_offset);
    batch->last_timestamp_cmd = ring->cur;
 }
 
 static uint64_t
 fd_trace_read_ts(struct u_trace_context *utctx,
-                 struct pipe_resource *timestamps, unsigned idx)
+                 void *timestamps, unsigned idx, void *flush_data)
 {
    struct fd_context *ctx =
       container_of(utctx, struct fd_context, trace_context);
-   struct fd_bo *ts_bo = fd_resource(timestamps)->bo;
+   struct pipe_resource *buffer = timestamps;
+   struct fd_bo *ts_bo = fd_resource(buffer)->bo;
 
    /* Only need to stall on results for the first entry: */
    if (idx == 0) {
@@ -495,6 +496,12 @@ fd_trace_read_ts(struct u_trace_context *utctx,
       return U_TRACE_NO_TIMESTAMP;
 
    return ctx->ts_to_ns(ts[idx]);
+}
+
+static void
+fd_trace_delete_flush_data(struct u_trace_context *utctx, void *flush_data)
+{
+   /* We don't use flush_data at the moment. */
 }
 
 /* TODO we could combine a few of these small buffers (solid_vbuf,
@@ -580,13 +587,12 @@ fd_context_cleanup_common_vbos(struct fd_context *ctx)
 
 struct pipe_context *
 fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
-                const uint8_t *primtypes, void *priv,
-                unsigned flags) disable_thread_safety_analysis
+                void *priv, unsigned flags)
+   disable_thread_safety_analysis
 {
    struct fd_screen *screen = fd_screen(pscreen);
    struct pipe_context *pctx;
    unsigned prio = 1;
-   int i;
 
    /* lower numerical value == higher priority: */
    if (FD_DBG(HIPRIO))
@@ -611,12 +617,6 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
       ctx->context_reset_count = fd_get_reset_count(ctx, true);
       ctx->global_reset_count = fd_get_reset_count(ctx, false);
    }
-
-   ctx->primtypes = primtypes;
-   ctx->primtype_mask = 0;
-   for (i = 0; i <= PIPE_PRIM_MAX; i++)
-      if (primtypes[i])
-         ctx->primtype_mask |= (1 << i);
 
    simple_mtx_init(&ctx->gmem_lock, mtx_plain);
 
@@ -647,6 +647,8 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
    slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
    slab_create_child(&ctx->transfer_pool_unsync, &screen->transfer_pool);
 
+   fd_bc_init(ctx);
+
    fd_draw_init(pctx);
    fd_resource_context_init(pctx);
    fd_query_context_init(pctx);
@@ -667,8 +669,10 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 
    ctx->current_scissor = &ctx->disabled_scissor;
 
-   u_trace_context_init(&ctx->trace_context, pctx, fd_trace_record_ts,
-                        fd_trace_read_ts);
+   u_trace_pipe_context_init(&ctx->trace_context, pctx,
+                             fd_trace_record_ts,
+                             fd_trace_read_ts,
+                             fd_trace_delete_flush_data);
 
    fd_autotune_init(&ctx->autotune, screen->dev);
 

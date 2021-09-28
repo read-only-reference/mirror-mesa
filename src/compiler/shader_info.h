@@ -57,6 +57,7 @@ struct spirv_supported_capabilities {
    bool fragment_shading_rate;
    bool generic_pointers;
    bool geometry_streams;
+   bool groups;
    bool image_ms_array;
    bool image_read_without_format;
    bool image_write_without_format;
@@ -91,6 +92,7 @@ struct spirv_supported_capabilities {
    bool subgroup_arithmetic;
    bool subgroup_ballot;
    bool subgroup_basic;
+   bool subgroup_dispatch;
    bool subgroup_quad;
    bool subgroup_shuffle;
    bool subgroup_uniform_control_flow;
@@ -297,6 +299,9 @@ typedef struct shader_info {
 
          /* True if the shader writes position in window space coordinates pre-transform */
          bool window_space_position:1;
+
+         /** Is an edge flag input needed? */
+         bool needs_edge_flag:1;
       } vs;
 
       struct {
@@ -410,6 +415,11 @@ typedef struct shader_info {
          unsigned color1_interp:3; /* glsl_interp_mode */
          bool color1_sample:1;
          bool color1_centroid:1;
+
+         /* Bitmask of gl_advanced_blend_mode values that may be used with this
+          * shader.
+          */
+         unsigned advanced_blend_modes;
       } fs;
 
       struct {
@@ -422,6 +432,11 @@ typedef struct shader_info {
           * shader.  From NV_compute_shader_derivatives.
           */
          enum gl_derivative_group derivative_group:2;
+
+         /**
+          * Explicit subgroup size if set by the shader, otherwise 0.
+          */
+         unsigned subgroup_size;
 
          /**
           * pointer size is:

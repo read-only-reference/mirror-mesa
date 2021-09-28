@@ -489,7 +489,11 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
       if (*value & 0x1000)
          fprintf(fp, ", shader writes stencil");
       fprintf(fp, " */\n\t\t\t\t\t\t/* %s(3)", render_state_infos[i].info);
-      fprintf(fp, ": unknown bits 4-9: 0x%08x", *value & 0x000003f0);
+      if ((*value & 0x00000010) == 0x00000010)
+         fprintf(fp, ": ignore depth clip near");
+      if ((*value & 0x00000020) == 0x00000020)
+         fprintf(fp, ", ignore depth clip far");
+      fprintf(fp, ", unknown bits 6-9: 0x%08x", *value & 0x000003c0);
       fprintf(fp, ", unknown bits 13-15: 0x%08x */\n", *value & 0x00000e000);
       break;
    case 4: /* DEPTH RANGE */
@@ -637,6 +641,12 @@ parse_rsw(FILE *fp, uint32_t *value, int i, uint32_t *helper)
       fprintf(fp, ": ");
       if ((*value & 0x00002000) == 0x00002000)
          fprintf(fp, "blend->base.dither true, ");
+
+      if ((*value & 0x00001000) == 0x00001000)
+         fprintf(fp, "glFrontFace(GL_CCW), ");
+      else
+         fprintf(fp, "glFrontFace(GL_CW), ");
+
       if ((*value & 0x00010000) == 0x00010000)
          fprintf(fp, "ctx->const_buffer[PIPE_SHADER_FRAGMENT].buffer true ");
       fprintf(fp, "*/\n");

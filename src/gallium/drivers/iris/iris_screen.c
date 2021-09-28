@@ -559,7 +559,7 @@ iris_get_compute_param(struct pipe_screen *pscreen,
       RET((uint64_t []) { 64 * 1024 });
 
    case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
-      RET((uint32_t []) { 0 });
+      RET((uint32_t []) { 1 });
 
    case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
       RET((uint32_t []) { BRW_SUBGROUP_SIZE });
@@ -649,38 +649,6 @@ iris_get_disk_shader_cache(struct pipe_screen *pscreen)
 {
    struct iris_screen *screen = (struct iris_screen *) pscreen;
    return screen->disk_cache;
-}
-
-static void
-iris_set_max_shader_compiler_threads(struct pipe_screen *pscreen,
-                                     unsigned max_threads)
-{
-   struct iris_screen *screen = (struct iris_screen *) pscreen;
-   util_queue_adjust_num_threads(&screen->shader_compiler_queue, max_threads);
-}
-
-static bool
-iris_is_parallel_shader_compilation_finished(struct pipe_screen *pscreen,
-                                             void *v_shader,
-                                             enum pipe_shader_type p_stage)
-{
-   struct iris_screen *screen = (struct iris_screen *) pscreen;
-
-   /* Threaded compilation is only used for the precompile.  If precompile is
-    * disabled, threaded compilation is "done."
-    */
-   if (!screen->precompile)
-      return true;
-
-   struct iris_uncompiled_shader *ish = v_shader;
-
-   /* When precompile is enabled, the first entry is the precompile variant.
-    * Check the ready fence of the precompile variant.
-    */
-   struct iris_compiled_shader *first =
-      list_first_entry(&ish->variants, struct iris_compiled_shader, link);
-
-   return util_queue_fence_is_signalled(&first->ready);
 }
 
 static int
@@ -830,6 +798,8 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
    screen->fd = iris_bufmgr_get_fd(screen->bufmgr);
    screen->winsys_fd = fd;
 
+   screen->id = iris_bufmgr_create_screen_id(screen->bufmgr);
+
    screen->workaround_bo =
       iris_bo_alloc(screen->bufmgr, "workaround", 4096, 1,
                     IRIS_MEMZONE_OTHER, 0);
@@ -870,9 +840,6 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
    slab_create_parent(&screen->transfer_pool,
                       sizeof(struct iris_transfer), 64);
 
-   screen->subslice_total = intel_device_info_subslice_total(&screen->devinfo);
-   assert(screen->subslice_total >= 1);
-
    iris_detect_kernel_features(screen);
 
    struct pipe_screen *pscreen = &screen->base;
@@ -900,8 +867,7 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
    pscreen->query_memory_info = iris_query_memory_info;
    pscreen->get_driver_query_group_info = iris_get_monitor_group_info;
    pscreen->get_driver_query_info = iris_get_monitor_info;
-   pscreen->is_parallel_shader_compilation_finished = iris_is_parallel_shader_compilation_finished;
-   pscreen->set_max_shader_compiler_threads = iris_set_max_shader_compiler_threads;
+   iris_init_screen_program_functions(pscreen);
 
    genX_call(&screen->devinfo, init_screen_state, screen);
 

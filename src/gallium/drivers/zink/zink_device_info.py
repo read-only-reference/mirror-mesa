@@ -65,6 +65,8 @@ EXTENSIONS = [
     Extension("VK_KHR_maintenance3"),
     Extension("VK_KHR_external_memory"),
     Extension("VK_KHR_external_memory_fd"),
+    Extension("VK_EXT_external_memory_dma_buf"),
+    Extension("VK_EXT_queue_family_foreign"),
     Extension("VK_EXT_provoking_vertex",
        alias="pv",
        features=True,
@@ -73,6 +75,14 @@ EXTENSIONS = [
     Extension("VK_EXT_shader_viewport_index_layer"),
     Extension("VK_KHR_get_memory_requirements2"),
     Extension("VK_EXT_post_depth_coverage"),
+    Extension("VK_KHR_8bit_storage",
+              alias="storage_8bit",
+              features=True,
+              conditions=["$feats.storageBuffer8BitAccess"]),
+    Extension("VK_KHR_16bit_storage",
+              alias="storage_16bit",
+              features=True,
+              conditions=["$feats.storageBuffer16BitAccess"]),
     Extension("VK_KHR_driver_properties",
         alias="driver",
         properties=True),
@@ -104,6 +114,10 @@ EXTENSIONS = [
         alias="index_uint8",
         features=True,
         conditions=["$feats.indexTypeUint8"]),
+    Extension("VK_KHR_imageless_framebuffer",
+        alias="imgless",
+        features=True,
+        conditions=["$feats.imagelessFramebuffer"]),
     Extension("VK_EXT_robustness2",
         alias="rb2",
         properties=True,
@@ -153,7 +167,7 @@ EXTENSIONS = [
         properties=True,
         features=True,
         guard=True),
-    Extension("VK_KHR_timeline_semaphore"),
+    Extension("VK_KHR_timeline_semaphore", alias="timeline", features=True),
     Extension("VK_EXT_4444_formats",
         alias="format_4444",
         features=True),
@@ -183,8 +197,17 @@ EXTENSIONS = [
         alias="vertex_input",
 	features=True,
 	conditions=["$feats.vertexInputDynamicState"]),
+    Extension("VK_EXT_primitive_topology_list_restart",
+        alias="list_restart",
+	features=True,
+	conditions=["$feats.primitiveTopologyListRestart"]),
     Extension("VK_KHR_dedicated_allocation",
         alias="dedicated"),
+    Extension("VK_EXT_descriptor_indexing",
+        alias="desc_indexing",
+        features=True,
+        properties=True,
+        conditions=["$feats.descriptorBindingPartiallyBound"]),
 ]
 
 # constructor: Versions(device_version(major, minor, patch), struct_version(major, minor))
@@ -342,22 +365,6 @@ zink_get_physical_device_info(struct zink_screen *screen)
          FREE(extensions);
       }
    }
-
-   %for version in versions:
-   if (${version.version()} <= screen->vk_version) {
-   %for ext in extensions:
-   %if ext.core_since and ext.core_since.struct_version == version.struct_version:
-   <%helpers:guard ext="${ext}">
-   %if not (ext.has_features or ext.has_properties):
-       info->have_${ext.name_with_vendor()} = true;
-   %else:
-       support_${ext.name_with_vendor()} = true;
-   %endif
-   </%helpers:guard>
-   %endif
-   %endfor
-   }
-   %endfor
 
    // get device features
    if (screen->vk.GetPhysicalDeviceFeatures2) {

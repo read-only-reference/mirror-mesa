@@ -339,8 +339,7 @@ setup_vs_variables(isel_context* ctx, nir_shader* nir)
 {
    if (ctx->stage == vertex_vs || ctx->stage == vertex_ngg) {
       radv_vs_output_info* outinfo = &ctx->program->info->vs.outinfo;
-      setup_vs_output_info(ctx, nir, outinfo->export_prim_id,
-                           ctx->options->key.vs_common_out.export_clip_dists, outinfo);
+      setup_vs_output_info(ctx, nir, outinfo->export_prim_id, outinfo->export_clip_dists, outinfo);
 
       /* TODO: NGG streamout */
       if (ctx->stage.hw == HWStage::NGG)
@@ -363,8 +362,7 @@ setup_gs_variables(isel_context* ctx, nir_shader* nir)
          ctx->program->info->gs_ring_info.lds_size; /* Already in units of the alloc granularity */
    } else if (ctx->stage == vertex_geometry_ngg || ctx->stage == tess_eval_geometry_ngg) {
       radv_vs_output_info* outinfo = &ctx->program->info->vs.outinfo;
-      setup_vs_output_info(ctx, nir, false, ctx->options->key.vs_common_out.export_clip_dists,
-                           outinfo);
+      setup_vs_output_info(ctx, nir, false, outinfo->export_clip_dists, outinfo);
 
       ctx->program->config->lds_size =
          DIV_ROUND_UP(nir->info.shared_size, ctx->program->dev.lds_encoding_granule);
@@ -392,8 +390,7 @@ setup_tes_variables(isel_context* ctx, nir_shader* nir)
 
    if (ctx->stage == tess_eval_vs || ctx->stage == tess_eval_ngg) {
       radv_vs_output_info* outinfo = &ctx->program->info->tes.outinfo;
-      setup_vs_output_info(ctx, nir, outinfo->export_prim_id,
-                           ctx->options->key.vs_common_out.export_clip_dists, outinfo);
+      setup_vs_output_info(ctx, nir, outinfo->export_prim_id, outinfo->export_clip_dists, outinfo);
 
       /* TODO: NGG streamout */
       if (ctx->stage.hw == HWStage::NGG)
@@ -468,9 +465,9 @@ init_context(isel_context* ctx, nir_shader* shader)
    ctx->range_ht = _mesa_pointer_hash_table_create(NULL);
    ctx->ub_config.min_subgroup_size = 64;
    ctx->ub_config.max_subgroup_size = 64;
-   if (ctx->shader->info.stage == MESA_SHADER_COMPUTE && ctx->options->key.cs.subgroup_size) {
-      ctx->ub_config.min_subgroup_size = ctx->options->key.cs.subgroup_size;
-      ctx->ub_config.max_subgroup_size = ctx->options->key.cs.subgroup_size;
+   if (ctx->shader->info.stage == MESA_SHADER_COMPUTE && ctx->args->shader_info->cs.subgroup_size) {
+      ctx->ub_config.min_subgroup_size = ctx->args->shader_info->cs.subgroup_size;
+      ctx->ub_config.max_subgroup_size = ctx->args->shader_info->cs.subgroup_size;
    }
    ctx->ub_config.max_workgroup_invocations = 2048;
    ctx->ub_config.max_workgroup_count[0] = 65535;
@@ -593,7 +590,16 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_op_frexp_exp:
                case nir_op_cube_face_index_amd:
                case nir_op_cube_face_coord_amd:
-               case nir_op_sad_u8x4: type = RegType::vgpr; break;
+               case nir_op_sad_u8x4:
+               case nir_op_iadd_sat:
+               case nir_op_udot_4x8_uadd:
+               case nir_op_sdot_4x8_iadd:
+               case nir_op_udot_4x8_uadd_sat:
+               case nir_op_sdot_4x8_iadd_sat:
+               case nir_op_udot_2x16_uadd:
+               case nir_op_sdot_2x16_iadd:
+               case nir_op_udot_2x16_uadd_sat:
+               case nir_op_sdot_2x16_iadd_sat: type = RegType::vgpr; break;
                case nir_op_f2i16:
                case nir_op_f2u16:
                case nir_op_f2i32:
@@ -650,6 +656,7 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_intrinsic_load_push_constant:
                case nir_intrinsic_load_workgroup_id:
                case nir_intrinsic_load_num_workgroups:
+               case nir_intrinsic_load_ray_launch_size:
                case nir_intrinsic_load_subgroup_id:
                case nir_intrinsic_load_num_subgroups:
                case nir_intrinsic_load_first_vertex:
@@ -769,7 +776,6 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_intrinsic_load_initial_edgeflags_amd:
                case nir_intrinsic_load_packed_passthrough_primitive_amd:
                case nir_intrinsic_gds_atomic_add_amd:
-               case nir_intrinsic_load_sbt_amd:
                case nir_intrinsic_bvh64_intersect_ray_amd:
                case nir_intrinsic_load_cull_small_prim_precision_amd: type = RegType::vgpr; break;
                case nir_intrinsic_load_shared:
@@ -792,9 +798,11 @@ init_context(isel_context* ctx, nir_shader* shader)
                case nir_intrinsic_inclusive_scan:
                case nir_intrinsic_exclusive_scan:
                case nir_intrinsic_reduce:
+               case nir_intrinsic_load_sbt_amd:
                case nir_intrinsic_load_ubo:
                case nir_intrinsic_load_ssbo:
                case nir_intrinsic_load_global:
+               case nir_intrinsic_load_global_constant:
                case nir_intrinsic_vulkan_resource_index:
                case nir_intrinsic_get_ssbo_size:
                   type = nir_dest_is_divergent(intrinsic->dest) ? RegType::vgpr : RegType::sgpr;
@@ -927,7 +935,7 @@ init_context(isel_context* ctx, nir_shader* shader)
    ctx->program->config->spi_ps_input_ena = spi_ps_inputs;
    ctx->program->config->spi_ps_input_addr = spi_ps_inputs;
 
-   ctx->cf_info.nir_to_aco.reset(nir_to_aco.release());
+   ctx->cf_info.nir_to_aco = std::move(nir_to_aco);
 
    /* align and copy constant data */
    while (ctx->program->constant_data.size() % 4u)

@@ -32,6 +32,7 @@
 #include "nir/nir_xfb_info.h"
 #include "vk_util.h"
 #include "vk_format.h"
+#include "vk_log.h"
 
 static uint32_t
 vertex_element_comp_control(enum isl_format format, unsigned comp)
@@ -1330,11 +1331,9 @@ emit_cb_state(struct anv_graphics_pipeline *pipeline,
            is_dual_src_blend_factor(a->dstColorBlendFactor) ||
            is_dual_src_blend_factor(a->srcAlphaBlendFactor) ||
            is_dual_src_blend_factor(a->dstAlphaBlendFactor))) {
-         vk_debug_report(&device->physical->instance->vk,
-                         VK_DEBUG_REPORT_WARNING_BIT_EXT,
-                         &device->vk.base, 0, 0, "anv",
-                         "Enabled dual-src blend factors without writing both targets "
-                         "in the shader.  Disabling blending to avoid GPU hangs.");
+         vk_logw(VK_LOG_OBJS(&device->vk.base),
+                 "Enabled dual-src blend factors without writing both targets "
+                 "in the shader.  Disabling blending to avoid GPU hangs.");
          entry.ColorBufferBlendEnable = false;
       }
 
@@ -2589,14 +2588,12 @@ emit_compute_state(struct anv_compute_pipeline *pipeline,
    const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(pipeline);
    anv_pipeline_setup_l3_config(&pipeline->base, cs_prog_data->base.total_shared > 0);
 
-   const uint32_t subslices = MAX2(device->physical->subslice_total, 1);
-
    const UNUSED struct anv_shader_bin *cs_bin = pipeline->cs;
    const struct intel_device_info *devinfo = &device->info;
 
    anv_batch_emit(&pipeline->base.batch, GENX(CFE_STATE), cfe) {
       cfe.MaximumNumberofThreads =
-         devinfo->max_cs_threads * subslices - 1;
+         devinfo->max_cs_threads * devinfo->subslice_total - 1;
       cfe.ScratchSpaceBuffer = get_scratch_surf(&pipeline->base, cs_bin);
    }
 }
@@ -2618,8 +2615,6 @@ emit_compute_state(struct anv_compute_pipeline *pipeline,
       ALIGN(cs_prog_data->push.per_thread.regs * dispatch.threads +
             cs_prog_data->push.cross_thread.regs, 2);
 
-   const uint32_t subslices = MAX2(device->physical->subslice_total, 1);
-
    const struct anv_shader_bin *cs_bin = pipeline->cs;
 
    anv_batch_emit(&pipeline->base.batch, GENX(MEDIA_VFE_STATE), vfe) {
@@ -2629,7 +2624,7 @@ emit_compute_state(struct anv_compute_pipeline *pipeline,
       vfe.GPGPUMode              = true;
 #endif
       vfe.MaximumNumberofThreads =
-         devinfo->max_cs_threads * subslices - 1;
+         devinfo->max_cs_threads * devinfo->subslice_total - 1;
       vfe.NumberofURBEntries     = GFX_VER <= 7 ? 0 : 2;
 #if GFX_VER < 11
       vfe.ResetGatewayTimer      = true;

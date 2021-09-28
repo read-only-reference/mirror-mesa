@@ -1101,10 +1101,7 @@ vn_physical_device_init(struct vn_physical_device *physical_dev)
 {
    struct vn_instance *instance = physical_dev->instance;
    const VkAllocationCallbacks *alloc = &instance->base.base.alloc;
-
-   VkResult result = vn_physical_device_init_renderer_version(physical_dev);
-   if (result != VK_SUCCESS)
-      return result;
+   VkResult result;
 
    result = vn_physical_device_init_renderer_extensions(physical_dev);
    if (result != VK_SUCCESS)
@@ -1252,46 +1249,39 @@ vn_instance_enumerate_physical_device_groups_locked(
 
    vk_free(alloc, temp_objs);
 
-   instance->physical_device_groups = groups;
-   instance->physical_device_group_count = count;
+   instance->physical_device.groups = groups;
+   instance->physical_device.group_count = count;
 
    return VK_SUCCESS;
 }
 
 static VkResult
-vn_instance_enumerate_physical_devices(struct vn_instance *instance)
+enumerate_physical_devices(struct vn_instance *instance,
+                           struct vn_physical_device **out_physical_devs,
+                           uint32_t *out_count)
 {
    const VkAllocationCallbacks *alloc = &instance->base.base.alloc;
    struct vn_physical_device *physical_devs = NULL;
+   VkPhysicalDevice *handles = NULL;
    VkResult result;
-
-   mtx_lock(&instance->physical_device_mutex);
-
-   if (instance->physical_devices) {
-      result = VK_SUCCESS;
-      goto out;
-   }
 
    uint32_t count;
    result = vn_call_vkEnumeratePhysicalDevices(
       instance, vn_instance_to_handle(instance), &count, NULL);
    if (result != VK_SUCCESS || !count)
-      goto out;
+      return result;
 
    physical_devs =
       vk_zalloc(alloc, sizeof(*physical_devs) * count, VN_DEFAULT_ALIGN,
                 VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-   if (!physical_devs) {
-      result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      goto out;
-   }
+   if (!physical_devs)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   VkPhysicalDevice *handles =
-      vk_alloc(alloc, sizeof(*handles) * count, VN_DEFAULT_ALIGN,
-               VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+   handles = vk_alloc(alloc, sizeof(*handles) * count, VN_DEFAULT_ALIGN,
+                      VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
    if (!handles) {
-      result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      goto out;
+      vk_free(alloc, physical_devs);
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
 
    for (uint32_t i = 0; i < count; i++) {
@@ -1304,7 +1294,7 @@ vn_instance_enumerate_physical_devices(struct vn_instance *instance)
          &physical_dev->base, &instance->base, NULL, &dispatch_table);
       if (result != VK_SUCCESS) {
          count = i;
-         goto out;
+         goto fail;
       }
 
       physical_dev->instance = instance;
@@ -1314,17 +1304,34 @@ vn_instance_enumerate_physical_devices(struct vn_instance *instance)
 
    result = vn_call_vkEnumeratePhysicalDevices(
       instance, vn_instance_to_handle(instance), &count, handles);
-   vk_free(alloc, handles);
-
    if (result != VK_SUCCESS)
-      goto out;
+      goto fail;
 
-   /* fully initialize physical devices and discard unsupported ones */
+   vk_free(alloc, handles);
+   *out_physical_devs = physical_devs;
+   *out_count = count;
+
+   return VK_SUCCESS;
+
+fail:
+   for (uint32_t i = 0; i < count; i++)
+      vn_physical_device_base_fini(&physical_devs[i].base);
+   vk_free(alloc, physical_devs);
+   vk_free(alloc, handles);
+   return result;
+}
+
+static uint32_t
+filter_physical_devices(struct vn_physical_device *physical_devs,
+                        uint32_t count)
+{
    uint32_t supported_count = 0;
    for (uint32_t i = 0; i < count; i++) {
       struct vn_physical_device *physical_dev = &physical_devs[i];
 
-      result = vn_physical_device_init(physical_dev);
+      /* init renderer version and discard unsupported devices */
+      VkResult result =
+         vn_physical_device_init_renderer_version(physical_dev);
       if (result != VK_SUCCESS) {
          vn_physical_device_base_fini(&physical_dev->base);
          continue;
@@ -1335,30 +1342,62 @@ vn_instance_enumerate_physical_devices(struct vn_instance *instance)
       supported_count++;
    }
 
-   count = supported_count;
-   if (!count)
-      goto out;
+   return supported_count;
+}
+
+static VkResult
+vn_instance_enumerate_physical_devices_and_groups(struct vn_instance *instance)
+{
+   const VkAllocationCallbacks *alloc = &instance->base.base.alloc;
+   struct vn_physical_device *physical_devs = NULL;
+   uint32_t count = 0;
+   VkResult result = VK_SUCCESS;
+
+   mtx_lock(&instance->physical_device.mutex);
+
+   if (instance->physical_device.initialized)
+      goto unlock;
+   instance->physical_device.initialized = true;
+
+   result = enumerate_physical_devices(instance, &physical_devs, &count);
+   if (result != VK_SUCCESS)
+      goto unlock;
+
+   count = filter_physical_devices(physical_devs, count);
+   if (!count) {
+      vk_free(alloc, physical_devs);
+      goto unlock;
+   }
+
+   /* fully initialize physical devices */
+   for (uint32_t i = 0; i < count; i++) {
+      struct vn_physical_device *physical_dev = &physical_devs[i];
+
+      result = vn_physical_device_init(physical_dev);
+      if (result != VK_SUCCESS) {
+         for (uint32_t j = 0; j < i; j++)
+            vn_physical_device_fini(&physical_devs[j]);
+         for (uint32_t j = i; j < count; j++)
+            vn_physical_device_base_fini(&physical_devs[j].base);
+         vk_free(alloc, physical_devs);
+         goto unlock;
+      }
+   }
 
    result = vn_instance_enumerate_physical_device_groups_locked(
       instance, physical_devs, count);
    if (result != VK_SUCCESS) {
       for (uint32_t i = 0; i < count; i++)
          vn_physical_device_fini(&physical_devs[i]);
-      count = 0;
-      goto out;
-   }
-
-   instance->physical_devices = physical_devs;
-   instance->physical_device_count = count;
-
-out:
-   if (result != VK_SUCCESS && physical_devs) {
-      for (uint32_t i = 0; i < count; i++)
-         vn_physical_device_base_fini(&physical_devs[i].base);
       vk_free(alloc, physical_devs);
+      goto unlock;
    }
 
-   mtx_unlock(&instance->physical_device_mutex);
+   instance->physical_device.devices = physical_devs;
+   instance->physical_device.device_count = count;
+
+unlock:
+   mtx_unlock(&instance->physical_device.mutex);
    return result;
 }
 
@@ -1371,15 +1410,16 @@ vn_EnumeratePhysicalDevices(VkInstance _instance,
 {
    struct vn_instance *instance = vn_instance_from_handle(_instance);
 
-   VkResult result = vn_instance_enumerate_physical_devices(instance);
+   VkResult result =
+      vn_instance_enumerate_physical_devices_and_groups(instance);
    if (result != VK_SUCCESS)
       return vn_error(instance, result);
 
    VK_OUTARRAY_MAKE(out, pPhysicalDevices, pPhysicalDeviceCount);
-   for (uint32_t i = 0; i < instance->physical_device_count; i++) {
+   for (uint32_t i = 0; i < instance->physical_device.device_count; i++) {
       vk_outarray_append(&out, physical_dev) {
-         *physical_dev =
-            vn_physical_device_to_handle(&instance->physical_devices[i]);
+         *physical_dev = vn_physical_device_to_handle(
+            &instance->physical_device.devices[i]);
       }
    }
 
@@ -1394,15 +1434,16 @@ vn_EnumeratePhysicalDeviceGroups(
 {
    struct vn_instance *instance = vn_instance_from_handle(_instance);
 
-   VkResult result = vn_instance_enumerate_physical_devices(instance);
+   VkResult result =
+      vn_instance_enumerate_physical_devices_and_groups(instance);
    if (result != VK_SUCCESS)
       return vn_error(instance, result);
 
    VK_OUTARRAY_MAKE(out, pPhysicalDeviceGroupProperties,
                     pPhysicalDeviceGroupCount);
-   for (uint32_t i = 0; i < instance->physical_device_group_count; i++) {
+   for (uint32_t i = 0; i < instance->physical_device.group_count; i++) {
       vk_outarray_append(&out, props) {
-         *props = instance->physical_device_groups[i];
+         *props = instance->physical_device.groups[i];
       }
    }
 
@@ -2055,14 +2096,14 @@ vn_physical_device_fix_image_format_info(
    local_info->format = *info;
    VkBaseOutStructure *dst = (void *)&local_info->format;
 
-   bool use_modifier = false;
+   bool is_ahb = false;
    /* we should generate deep copy functions... */
    vk_foreach_struct_const(src, info->pNext) {
       void *pnext = NULL;
       switch (src->sType) {
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO:
          memcpy(&local_info->external, src, sizeof(local_info->external));
-         use_modifier =
+         is_ahb =
             local_info->external.handleType ==
             VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
          local_info->external.handleType =
@@ -2078,6 +2119,10 @@ vn_physical_device_fix_image_format_info(
                 sizeof(local_info->stencil_usage));
          pnext = &local_info->stencil_usage;
          break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT:
+         memcpy(&local_info->modifier, src, sizeof(local_info->modifier));
+         pnext = &local_info->modifier;
+         break;
       default:
          break;
       }
@@ -2088,14 +2133,19 @@ vn_physical_device_fix_image_format_info(
       }
    }
 
-   if (use_modifier) {
+   if (is_ahb) {
+      assert(local_info->format.tiling !=
+             VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT);
       local_info->format.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
       if (!vn_android_get_drm_format_modifier_info(&local_info->format,
                                                    &local_info->modifier))
          return NULL;
+
+      dst->pNext = (void *)&local_info->modifier;
+      dst = dst->pNext;
    }
 
-   dst->pNext = use_modifier ? (void *)&local_info->modifier : NULL;
+   dst->pNext = NULL;
 
    return &local_info->format;
 }
@@ -2215,6 +2265,9 @@ vn_GetPhysicalDeviceExternalBufferProperties(
       physical_dev->external_memory.renderer_handle_type;
    const VkExternalMemoryHandleTypeFlags supported_handle_types =
       physical_dev->external_memory.supported_handle_types;
+   const bool is_ahb =
+      pExternalBufferInfo->handleType ==
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
 
    VkExternalMemoryProperties *props =
       &pExternalBufferProperties->externalMemoryProperties;
@@ -2237,8 +2290,7 @@ vn_GetPhysicalDeviceExternalBufferProperties(
       physical_dev->instance, physicalDevice, pExternalBufferInfo,
       pExternalBufferProperties);
 
-   if (pExternalBufferInfo->handleType ==
-       VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
+   if (is_ahb) {
       props->compatibleHandleTypes =
          VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
       /* AHB backed buffer requires renderer to support import bit while it

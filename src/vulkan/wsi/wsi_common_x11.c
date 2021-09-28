@@ -39,6 +39,7 @@
 #include <xf86drm.h>
 #include "drm-uapi/drm_fourcc.h"
 #include "util/hash_table.h"
+#include "util/u_debug.h"
 #include "util/u_thread.h"
 #include "util/xmlconfig.h"
 
@@ -834,7 +835,7 @@ struct x11_image {
    uint32_t                                  sync_fence;
    uint32_t                                  serial;
    xcb_shm_seg_t                             shmseg;
-   uint32_t                                  shmid;
+   int                                       shmid;
    uint8_t *                                 shmaddr;
 };
 
@@ -1077,9 +1078,11 @@ x11_acquire_next_image_poll_x11(struct x11_swapchain *chain,
        * in which case we need to update the status and continue.
        */
       VkResult result = x11_handle_dri3_present_event(chain, (void *)event);
+      /* Ensure that VK_SUBOPTIMAL_KHR is reported to the application */
+      result = x11_swapchain_result(chain, result);
       free(event);
       if (result < 0)
-         return x11_swapchain_result(chain, result);
+         return result;
    }
 }
 
@@ -1146,10 +1149,11 @@ x11_present_to_x11_dri3(struct x11_swapchain *chain, uint32_t image_index,
    xcb_generic_event_t *event;
    while ((event = xcb_poll_for_special_event(chain->conn, chain->special_event))) {
       VkResult result = x11_handle_dri3_present_event(chain, (void *)event);
+      /* Ensure that VK_SUBOPTIMAL_KHR is reported to the application */
+      result = x11_swapchain_result(chain, result);
       free(event);
       if (result < 0)
-         return x11_swapchain_result(chain, result);
-      x11_swapchain_result(chain, result);
+         return result;
    }
 
    xshmfence_reset(image->shm_fence);
@@ -1262,6 +1266,25 @@ x11_queue_present(struct wsi_swapchain *anv_chain,
    }
 }
 
+static bool
+x11_needs_wait_for_fences(const struct wsi_device *wsi_device,
+                          struct wsi_x11_connection *wsi_conn,
+                          VkPresentModeKHR present_mode)
+{
+   if (wsi_conn->is_xwayland && !wsi_device->x11.xwaylandWaitReady) {
+      return false;
+   }
+
+   switch (present_mode) {
+   case VK_PRESENT_MODE_MAILBOX_KHR:
+      return true;
+   case VK_PRESENT_MODE_IMMEDIATE_KHR:
+      return wsi_conn->is_xwayland;
+   default:
+      return false;
+   }
+}
+
 static void *
 x11_manage_fifo_queues(void *state)
 {
@@ -1291,9 +1314,8 @@ x11_manage_fifo_queues(void *state)
          return NULL;
       }
 
-      if (chain->base.present_mode == VK_PRESENT_MODE_MAILBOX_KHR ||
-          (chain->base.present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR &&
-           wsi_conn->is_xwayland)) {
+      if (x11_needs_wait_for_fences(chain->base.wsi, wsi_conn,
+                                    chain->base.present_mode)) {
          result = chain->base.wsi->WaitForFences(chain->base.device, 1,
                                         &chain->base.fences[image_index],
                                         true, UINT64_MAX);
@@ -1326,6 +1348,8 @@ x11_manage_fifo_queues(void *state)
             }
 
             result = x11_handle_dri3_present_event(chain, (void *)event);
+            /* Ensure that VK_SUBOPTIMAL_KHR is reported to the application */
+            result = x11_swapchain_result(chain, result);
             free(event);
             if (result < 0)
                goto fail;
@@ -1679,9 +1703,7 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    unsigned num_images = pCreateInfo->minImageCount;
    if (wsi_device->x11.strict_imageCount)
       num_images = pCreateInfo->minImageCount;
-   else if (present_mode == VK_PRESENT_MODE_MAILBOX_KHR ||
-            (present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR &&
-             wsi_conn->is_xwayland))
+   else if (x11_needs_wait_for_fences(wsi_device, wsi_conn, present_mode))
       num_images = MAX2(num_images, 5);
    else if (wsi_device->x11.ensure_minImageCount)
       num_images = MAX2(num_images, x11_get_min_image_count(wsi_device));
@@ -1698,7 +1720,7 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    free(geometry);
 
    size_t size = sizeof(*chain) + num_images * sizeof(chain->images[0]);
-   chain = vk_alloc(pAllocator, size, 8,
+   chain = vk_zalloc(pAllocator, size, 8,
                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (chain == NULL)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -1791,10 +1813,10 @@ x11_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    }
 
    if ((chain->base.present_mode == VK_PRESENT_MODE_FIFO_KHR ||
-       chain->base.present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ||
-       chain->base.present_mode == VK_PRESENT_MODE_MAILBOX_KHR ||
-        (chain->base.present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR &&
-         wsi_conn->is_xwayland)) && !chain->base.wsi->sw) {
+        chain->base.present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ||
+        x11_needs_wait_for_fences(wsi_device, wsi_conn,
+                                  chain->base.present_mode)) &&
+       !chain->base.wsi->sw) {
       chain->has_present_queue = true;
 
       /* Initialize our queues.  We make them base.image_count + 1 because we will
@@ -1912,7 +1934,11 @@ wsi_x11_init_wsi(struct wsi_device *wsi_device,
          wsi_device->x11.ensure_minImageCount =
             driQueryOptionb(dri_options, "vk_x11_ensure_min_image_count");
       }
-
+      wsi_device->x11.xwaylandWaitReady = true;
+      if (driCheckOption(dri_options, "vk_xwayland_wait_ready", DRI_BOOL)) {
+         wsi_device->x11.xwaylandWaitReady =
+            driQueryOptionb(dri_options, "vk_xwayland_wait_ready");
+      }
    }
 
    wsi->base.get_support = x11_surface_get_support;
