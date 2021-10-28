@@ -63,6 +63,8 @@ radv_pipeline_cache_unlock(struct radv_pipeline_cache *cache)
 void
 radv_pipeline_cache_init(struct radv_pipeline_cache *cache, struct radv_device *device)
 {
+   vk_object_base_init(&device->vk, &cache->base, VK_OBJECT_TYPE_PIPELINE_CACHE);
+
    cache->device = device;
    mtx_init(&cache->mutex, mtx_plain);
    cache->flags = 0;
@@ -96,6 +98,8 @@ radv_pipeline_cache_finish(struct radv_pipeline_cache *cache)
       }
    mtx_destroy(&cache->mutex);
    free(cache->hash_table);
+
+   vk_object_base_finish(&cache->base);
 }
 
 static uint32_t
@@ -243,7 +247,7 @@ radv_pipeline_cache_grow(struct radv_pipeline_cache *cache)
 
    table = malloc(byte_size);
    if (table == NULL)
-      return vk_error(cache->device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(cache, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    cache->hash_table = table;
    cache->table_size = table_size;
@@ -349,7 +353,7 @@ radv_create_shader_variants_from_pipeline_cache(
          memcpy(binary, p, entry->binary_sizes[i]);
          p += entry->binary_sizes[i];
 
-         entry->variants[i] = radv_shader_variant_create(device, binary, false);
+         entry->variants[i] = radv_shader_variant_create(device, binary, false, true);
          free(binary);
       } else if (entry->binary_sizes[i]) {
          p += entry->binary_sizes[i];
@@ -545,9 +549,7 @@ radv_CreatePipelineCache(VkDevice _device, const VkPipelineCacheCreateInfo *pCre
    cache = vk_alloc2(&device->vk.alloc, pAllocator, sizeof(*cache), 8,
                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (cache == NULL)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   vk_object_base_init(&device->vk, &cache->base, VK_OBJECT_TYPE_PIPELINE_CACHE);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    if (pAllocator)
       cache->alloc = *pAllocator;
@@ -575,9 +577,8 @@ radv_DestroyPipelineCache(VkDevice _device, VkPipelineCache _cache,
 
    if (!cache)
       return;
-   radv_pipeline_cache_finish(cache);
 
-   vk_object_base_finish(&cache->base);
+   radv_pipeline_cache_finish(cache);
    vk_free2(&device->vk.alloc, pAllocator, cache);
 }
 

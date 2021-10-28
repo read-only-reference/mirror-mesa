@@ -376,7 +376,7 @@ struct brw_cache {
 
 #define perf_debug(...) do {                                    \
    static GLuint msg_id = 0;                                    \
-   if (INTEL_DEBUG & DEBUG_PERF)                                \
+   if (INTEL_DEBUG(DEBUG_PERF))                                 \
       dbg_printf(__VA_ARGS__);                                  \
    if (brw->perf_debug)                                         \
       _mesa_gl_debugf(&brw->ctx, &msg_id,                       \
@@ -710,6 +710,7 @@ struct brw_context
       void (*emit_raw_pipe_control)(struct brw_context *brw, uint32_t flags,
                                     struct brw_bo *bo, uint32_t offset,
                                     uint64_t imm);
+      void (*emit_state_base_address)(struct brw_context *brw);
    } vtbl;
 
    struct brw_bufmgr *bufmgr;

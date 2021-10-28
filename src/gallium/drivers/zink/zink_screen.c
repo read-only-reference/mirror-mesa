@@ -827,8 +827,7 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       return screen->info.feats11.uniformAndStorageBuffer16BitAccess ||
              (screen->info.have_KHR_16bit_storage && screen->info.storage_16bit_feats.uniformAndStorageBuffer16BitAccess);
    case PIPE_SHADER_CAP_FP16_DERIVATIVES:
-      return screen->info.feats11.storageInputOutput16 ||
-             (screen->info.have_KHR_16bit_storage && screen->info.storage_16bit_feats.storageInputOutput16);
+      return 0; //spirv requires 32bit derivative srcs and dests
    case PIPE_SHADER_CAP_FP16:
       return screen->info.feats12.shaderFloat16 ||
              (screen->info.have_KHR_shader_float16_int8 &&
@@ -1252,6 +1251,15 @@ emulate_x8(enum pipe_format format)
    case PIPE_FORMAT_R8G8B8X8_UNORM:
       return PIPE_FORMAT_R8G8B8A8_UNORM;
 
+   case PIPE_FORMAT_R16G16B16X16_FLOAT:
+      return PIPE_FORMAT_R16G16B16A16_FLOAT;
+   case PIPE_FORMAT_R16G16B16X16_SINT:
+      return PIPE_FORMAT_R16G16B16A16_SINT;
+   case PIPE_FORMAT_R16G16B16X16_SNORM:
+      return PIPE_FORMAT_R16G16B16A16_SNORM;
+   case PIPE_FORMAT_R16G16B16X16_UNORM:
+      return PIPE_FORMAT_R16G16B16A16_UNORM;
+
    default:
       return format;
    }
@@ -1328,10 +1336,11 @@ static bool
 check_have_device_time(struct zink_screen *screen)
 {
    uint32_t num_domains = 0;
+   VkTimeDomainEXT domains[8]; //current max is 4
    VKSCR(GetPhysicalDeviceCalibrateableTimeDomainsEXT)(screen->pdev, &num_domains, NULL);
    assert(num_domains > 0);
+   assert(num_domains < ARRAY_SIZE(domains));
 
-   VkTimeDomainEXT *domains = malloc(sizeof(VkTimeDomainEXT) * num_domains);
    VKSCR(GetPhysicalDeviceCalibrateableTimeDomainsEXT)(screen->pdev, &num_domains, domains);
 
    /* VK_TIME_DOMAIN_DEVICE_EXT is used for the ctx->get_timestamp hook and is the only one we really need */
@@ -1341,7 +1350,6 @@ check_have_device_time(struct zink_screen *screen)
       }
    }
 
-   free(domains);
    return false;
 }
 

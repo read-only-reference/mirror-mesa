@@ -1053,6 +1053,8 @@ radv_meta_resolve_fragment_image(struct radv_cmd_buffer *cmd_buffer, struct radv
 
       radv_cmd_buffer_end_render_pass(cmd_buffer);
 
+      radv_image_view_finish(&src_iview);
+      radv_image_view_finish(&dest_iview);
       radv_DestroyFramebuffer(radv_device_to_handle(cmd_buffer->device), fb,
                               &cmd_buffer->pool->alloc);
    }
@@ -1106,7 +1108,7 @@ radv_cmd_buffer_resolve_subpass_fs(struct radv_cmd_buffer *cmd_buffer)
                    &(VkExtent2D){fb->width, fb->height});
    }
 
-   radv_cmd_buffer_set_subpass(cmd_buffer, subpass);
+   radv_cmd_buffer_restore_subpass(cmd_buffer, subpass);
 
    radv_meta_restore(&saved_state, cmd_buffer);
 }
@@ -1179,7 +1181,9 @@ radv_depth_stencil_resolve_subpass_fs(struct radv_cmd_buffer *cmd_buffer,
    emit_depth_stencil_resolve(cmd_buffer, &tsrc_iview, dst_iview,
                               &(VkExtent2D){fb->width, fb->height}, aspects, resolve_mode);
 
-   radv_cmd_buffer_set_subpass(cmd_buffer, subpass);
+   radv_cmd_buffer_restore_subpass(cmd_buffer, subpass);
+
+   radv_image_view_finish(&tsrc_iview);
 
    radv_meta_restore(&saved_state, cmd_buffer);
 }

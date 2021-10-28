@@ -195,12 +195,11 @@ struct zink_context {
 
    struct pipe_device_reset_callback reset;
 
-   uint32_t curr_batch; //the current batch id
-
    simple_mtx_t batch_mtx;
    struct zink_fence *deferred_fence;
    struct zink_fence *last_fence; //the last command buffer submitted
-   struct hash_table batch_states; //submitted batch states
+   struct zink_batch_state *batch_states; //list of submitted batch states: ordered by increasing timeline id
+   unsigned batch_states_count; //number of states in `batch_states`
    struct util_dynarray free_batch_states; //unused batch states
    bool oom_flush;
    bool oom_stall;
@@ -225,6 +224,7 @@ struct zink_context {
    struct zink_depth_stencil_alpha_state *dsa_state;
 
    struct hash_table desc_set_layouts[ZINK_DESCRIPTOR_TYPES];
+   struct set desc_pool_keys[ZINK_DESCRIPTOR_TYPES];
    bool pipeline_changed[2]; //gfx, compute
 
    struct zink_shader *gfx_stages[ZINK_SHADER_COUNT];

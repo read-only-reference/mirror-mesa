@@ -131,8 +131,8 @@ static void load_input_vs(struct si_shader_context *ctx, unsigned input_index, L
     * of dword-sized data that needs fixups. We need to insert conversion
     * code anyway, and the amd/common code does it for us.
     */
-   bool opencode = ctx->shader->key.mono.vs_fetch_opencode & (1 << input_index);
-   fix_fetch.bits = ctx->shader->key.mono.vs_fix_fetch[input_index].bits;
+   bool opencode = ctx->shader->key.ge.mono.vs_fetch_opencode & (1 << input_index);
+   fix_fetch.bits = ctx->shader->key.ge.mono.vs_fix_fetch[input_index].bits;
    if (opencode || (fix_fetch.u.log_size == 3 && fix_fetch.u.format == AC_FETCH_FORMAT_FLOAT) ||
        (fix_fetch.u.log_size == 2)) {
       tmp = ac_build_opencoded_load_format(&ctx->ac, fix_fetch.u.log_size,
@@ -400,7 +400,7 @@ static void si_llvm_emit_clipvertex(struct si_shader_context *ctx, struct ac_exp
    LLVMValueRef constbuf_index = LLVMConstInt(ctx->ac.i32, SI_VS_CONST_CLIP_PLANES, 0);
    LLVMValueRef const_resource = ac_build_load_to_sgpr(&ctx->ac, ptr, constbuf_index);
    unsigned clipdist_mask = ctx->shader->selector->clipdist_mask &
-                            ~ctx->shader->key.opt.kill_clip_distances;
+                            ~ctx->shader->key.ge.opt.kill_clip_distances;
 
    for (reg_index = 0; reg_index < 2; reg_index++) {
       struct ac_export_args *args = &pos[2 + reg_index];
@@ -484,7 +484,7 @@ static void si_prepare_param_exports(struct si_shader_context *ctx,
       }
 
       if ((semantic <= VARYING_SLOT_VAR31 || semantic >= VARYING_SLOT_VAR0_16BIT) &&
-          shader->key.opt.kill_outputs &
+          shader->key.ge.opt.kill_outputs &
              (1ull << si_shader_io_get_unique_index(semantic, true)))
          continue;
 
@@ -575,7 +575,7 @@ void si_llvm_build_vs_exports(struct si_shader_context *ctx,
                 viewport_index_value = NULL;
    unsigned pos_idx, index;
    unsigned clipdist_mask = (shader->selector->clipdist_mask &
-                             ~shader->key.opt.kill_clip_distances) |
+                             ~shader->key.ge.opt.kill_clip_distances) |
                             shader->selector->culldist_mask;
    int i;
 
@@ -629,8 +629,8 @@ void si_llvm_build_vs_exports(struct si_shader_context *ctx,
       pos_args[0].out[3] = ctx->ac.f32_1; /* W */
    }
 
-   bool writes_psize = shader->selector->info.writes_psize && !shader->key.opt.kill_pointsize;
-   bool pos_writes_edgeflag = shader->selector->info.writes_edgeflag && !shader->key.as_ngg;
+   bool writes_psize = shader->selector->info.writes_psize && !shader->key.ge.opt.kill_pointsize;
+   bool pos_writes_edgeflag = shader->selector->info.writes_edgeflag && !shader->key.ge.as_ngg;
    bool writes_vrs = ctx->screen->options.vrs2x2;
 
    /* Write the misc vector (point size, edgeflag, layer, viewport). */
@@ -783,7 +783,7 @@ void si_llvm_emit_vs_epilogue(struct ac_shader_abi *abi)
       si_llvm_emit_streamout(ctx, outputs, i, 0);
 
    /* Export PrimitiveID. */
-   if (ctx->shader->key.mono.u.vs_export_prim_id) {
+   if (ctx->shader->key.ge.mono.u.vs_export_prim_id) {
       outputs[i].semantic = VARYING_SLOT_PRIMITIVE_ID;
       outputs[i].values[0] = ac_to_float(&ctx->ac, si_get_primitive_id(ctx, 0));
       for (j = 1; j < 4; j++)
@@ -839,8 +839,6 @@ void si_llvm_build_vs_prolog(struct si_shader_context *ctx, union si_shader_part
       returns[num_returns++] = ctx->ac.i32;
    }
 
-   struct ac_arg merged_wave_info = input_sgpr_param[3];
-
    /* Preloaded VGPRs (outputs must be floats) */
    for (i = 0; i < num_input_vgprs; i++) {
       ac_add_arg(&ctx->args, AC_ARG_VGPR, 1, AC_ARG_INT, &input_vgpr_param[i]);
@@ -889,109 +887,6 @@ void si_llvm_build_vs_prolog(struct si_shader_context *ctx, union si_shader_part
          input_vgprs[i] = LLVMBuildLoad(ctx->ac.builder, input_vgprs[i], "");
          if (is_tes_rel_patch_id)
             input_vgprs[i] = LLVMBuildZExt(ctx->ac.builder, input_vgprs[i], ctx->ac.i32, "");
-      }
-   }
-
-   if (key->vs_prolog.gs_fast_launch_tri_list || key->vs_prolog.gs_fast_launch_tri_strip) {
-      LLVMValueRef wave_id, thread_id_in_tg;
-
-      wave_id = si_unpack_param(ctx, input_sgpr_param[3], 24, 4);
-      thread_id_in_tg =
-         ac_build_imad(&ctx->ac, wave_id, LLVMConstInt(ctx->ac.i32, ctx->ac.wave_size, false),
-                       ac_get_thread_id(&ctx->ac));
-
-      /* The GS fast launch initializes all VGPRs to the value of
-       * the first thread, so we have to add the thread ID.
-       *
-       * Only these are initialized by the hw:
-       *   VGPR2: Base Primitive ID
-       *   VGPR5: Base Vertex ID
-       *   VGPR6: Instance ID
-       */
-
-      /* Put the vertex thread IDs into VGPRs as-is instead of packing them.
-       * The NGG cull shader will read them from there.
-       */
-      if (key->vs_prolog.gs_fast_launch_tri_list) {
-         input_vgprs[0] = ac_build_imad(&ctx->ac, thread_id_in_tg,       /* gs_vtx01_offset */
-                                        LLVMConstInt(ctx->ac.i32, 3, 0), /* Vertex 0 */
-                                        LLVMConstInt(ctx->ac.i32, 0, 0));
-         input_vgprs[1] = ac_build_imad(&ctx->ac, thread_id_in_tg,       /* gs_vtx23_offset */
-                                        LLVMConstInt(ctx->ac.i32, 3, 0), /* Vertex 1 */
-                                        LLVMConstInt(ctx->ac.i32, 1, 0));
-         input_vgprs[4] = ac_build_imad(&ctx->ac, thread_id_in_tg,       /* gs_vtx45_offset */
-                                        LLVMConstInt(ctx->ac.i32, 3, 0), /* Vertex 2 */
-                                        LLVMConstInt(ctx->ac.i32, 2, 0));
-      } else {
-         assert(key->vs_prolog.gs_fast_launch_tri_strip);
-         LLVMBuilderRef builder = ctx->ac.builder;
-         /* Triangle indices: */
-         LLVMValueRef index[3] = {
-            thread_id_in_tg,
-            LLVMBuildAdd(builder, thread_id_in_tg, LLVMConstInt(ctx->ac.i32, 1, 0), ""),
-            LLVMBuildAdd(builder, thread_id_in_tg, LLVMConstInt(ctx->ac.i32, 2, 0), ""),
-         };
-         LLVMValueRef is_odd = LLVMBuildTrunc(ctx->ac.builder, thread_id_in_tg, ctx->ac.i1, "");
-         LLVMValueRef flatshade_first = LLVMBuildICmp(
-            builder, LLVMIntEQ,
-            si_unpack_param(ctx, input_sgpr_param[8 + SI_SGPR_VS_STATE_BITS], 4, 2),
-            ctx->ac.i32_0, "");
-
-         ac_build_triangle_strip_indices_to_triangle(&ctx->ac, is_odd, flatshade_first, index);
-         input_vgprs[0] = index[0];
-         input_vgprs[1] = index[1];
-         input_vgprs[4] = index[2];
-      }
-
-      /* Triangles always have all edge flags set initially. */
-      input_vgprs[3] = LLVMConstInt(ctx->ac.i32, 0x7 << 8, 0);
-
-      input_vgprs[2] =
-         LLVMBuildAdd(ctx->ac.builder, input_vgprs[2], thread_id_in_tg, ""); /* PrimID */
-      input_vgprs[5] =
-         LLVMBuildAdd(ctx->ac.builder, input_vgprs[5], thread_id_in_tg, ""); /* VertexID */
-      input_vgprs[8] = input_vgprs[6];                                       /* InstanceID */
-
-      if (key->vs_prolog.gs_fast_launch_index_size_packed) {
-         LLVMTypeRef index_type = ctx->ac.voidt;
-
-         switch (key->vs_prolog.gs_fast_launch_index_size_packed) {
-         case 1:
-            index_type = ctx->ac.i8;
-            break;
-         case 2:
-            index_type = ctx->ac.i16;
-            break;
-         case 3:
-            index_type = ctx->ac.i32;
-            break;
-         default:
-            unreachable("invalid gs_fast_launch_index_size_packed");
-         }
-
-         LLVMValueRef sgprs[2] = {
-            ac_get_arg(&ctx->ac, input_sgpr_param[0]),
-            ac_get_arg(&ctx->ac, input_sgpr_param[1]),
-         };
-         LLVMValueRef indices = ac_build_gather_values(&ctx->ac, sgprs, 2);
-         indices = LLVMBuildBitCast(ctx->ac.builder, indices, ctx->ac.i64, "");
-         indices = LLVMBuildIntToPtr(ctx->ac.builder, indices,
-                                     LLVMPointerType(index_type, AC_ADDR_SPACE_CONST), "");
-
-         LLVMValueRef vertex_id = ac_build_alloca_init(&ctx->ac, input_vgprs[5], "");
-
-         /* if (is ES thread...) */
-         ac_build_ifcc(&ctx->ac,
-                       LLVMBuildICmp(ctx->ac.builder, LLVMIntULT, ac_get_thread_id(&ctx->ac),
-                                     si_unpack_param(ctx, merged_wave_info, 0, 8), ""), 0);
-         /* VertexID = indexBufferLoad(VertexID); */
-         LLVMValueRef index = LLVMBuildGEP(ctx->ac.builder, indices, &input_vgprs[5], 1, "");
-         index = LLVMBuildLoad(ctx->ac.builder, index, "");
-         index = LLVMBuildZExt(ctx->ac.builder, index, ctx->ac.i32, "");
-         LLVMBuildStore(ctx->ac.builder, index, vertex_id);
-         ac_build_endif(&ctx->ac, 0);
-
-         input_vgprs[5] = LLVMBuildLoad(ctx->ac.builder, vertex_id, "");
       }
    }
 
@@ -1095,13 +990,13 @@ void si_llvm_init_vs_callbacks(struct si_shader_context *ctx, bool ngg_cull_shad
 {
    struct si_shader *shader = ctx->shader;
 
-   if (shader->key.as_ls)
+   if (shader->key.ge.as_ls)
       ctx->abi.emit_outputs = si_llvm_emit_ls_epilogue;
-   else if (shader->key.as_es)
+   else if (shader->key.ge.as_es)
       ctx->abi.emit_outputs = si_llvm_emit_es_epilogue;
    else if (ngg_cull_shader)
       ctx->abi.emit_outputs = gfx10_emit_ngg_culling_epilogue;
-   else if (shader->key.as_ngg)
+   else if (shader->key.ge.as_ngg)
       ctx->abi.emit_outputs = gfx10_emit_ngg_epilogue;
    else
       ctx->abi.emit_outputs = si_llvm_emit_vs_epilogue;

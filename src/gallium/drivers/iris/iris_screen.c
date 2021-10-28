@@ -705,7 +705,7 @@ iris_shader_perf_log(void *data, unsigned *id, const char *fmt, ...)
    va_list args;
    va_start(args, fmt);
 
-   if (INTEL_DEBUG & DEBUG_PERF) {
+   if (INTEL_DEBUG(DEBUG_PERF)) {
       va_list args_copy;
       va_copy(args_copy, args);
       vfprintf(stderr, fmt, args_copy);
@@ -736,7 +736,10 @@ iris_init_identifier_bo(struct iris_screen *screen)
    if (!bo_map)
       return false;
 
-   screen->workaround_bo->kflags |= EXEC_OBJECT_CAPTURE | EXEC_OBJECT_ASYNC;
+   assert(iris_bo_is_real(screen->workaround_bo));
+
+   screen->workaround_bo->real.kflags |=
+      EXEC_OBJECT_CAPTURE | EXEC_OBJECT_ASYNC;
    screen->workaround_address = (struct iris_address) {
       .bo = screen->workaround_bo,
       .offset = ALIGN(
@@ -802,7 +805,7 @@ iris_screen_create(int fd, const struct pipe_screen_config *config)
 
    screen->workaround_bo =
       iris_bo_alloc(screen->bufmgr, "workaround", 4096, 1,
-                    IRIS_MEMZONE_OTHER, 0);
+                    IRIS_MEMZONE_OTHER, BO_ALLOC_NO_SUBALLOC);
    if (!screen->workaround_bo)
       return NULL;
 

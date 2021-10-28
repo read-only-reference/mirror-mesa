@@ -427,12 +427,12 @@ static void transform_LRP(struct radeon_compiler* c,
 {
 	struct rc_dst_register dst = try_to_reuse_dst(c, inst);
 
-	emit2(c, inst->Prev, RC_OPCODE_ADD, 0,
+	emit3(c, inst->Prev, RC_OPCODE_MAD, 0,
 		dst,
-		inst->U.I.SrcReg[1], negate(inst->U.I.SrcReg[2]));
+		negate(inst->U.I.SrcReg[0]), inst->U.I.SrcReg[2], inst->U.I.SrcReg[2]);
 	emit3(c, inst->Prev, RC_OPCODE_MAD, &inst->U.I,
 		inst->U.I.DstReg,
-		inst->U.I.SrcReg[0], srcreg(RC_FILE_TEMPORARY, dst.Index), inst->U.I.SrcReg[2]);
+		inst->U.I.SrcReg[0], inst->U.I.SrcReg[1], srcreg(RC_FILE_TEMPORARY, dst.Index));
 
 	rc_remove_instruction(inst);
 }
@@ -858,7 +858,7 @@ static void transform_r300_vertex_SSG(struct radeon_compiler* c,
 	 *   SLT tmp1, x, 0;
 	 *   ADD result, tmp0, -tmp1;
 	 */
-	struct rc_dst_register dst0 = try_to_reuse_dst(c, inst);
+	struct rc_dst_register dst0;
 	unsigned tmp1;
 
 	/* 0 < x */

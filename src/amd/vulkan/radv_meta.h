@@ -249,6 +249,9 @@ uint32_t radv_clear_dcc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *i
 uint32_t radv_clear_htile(struct radv_cmd_buffer *cmd_buffer, const struct radv_image *image,
                           const VkImageSubresourceRange *range, uint32_t value);
 
+void radv_update_buffer_cp(struct radv_cmd_buffer *cmd_buffer, uint64_t va, const void *data,
+                           uint64_t size);
+
 /**
  * Return whether the bound pipeline is the FMASK decompress pass.
  */
@@ -287,6 +290,8 @@ void radv_meta_build_resolve_shader_core(nir_builder *b, bool is_integer, int sa
                                          nir_ssa_def *img_coord);
 
 nir_ssa_def *radv_meta_load_descriptor(nir_builder *b, unsigned desc_set, unsigned binding);
+
+nir_ssa_def *get_global_ids(nir_builder *b, unsigned num_components);
 
 #ifdef __cplusplus
 }

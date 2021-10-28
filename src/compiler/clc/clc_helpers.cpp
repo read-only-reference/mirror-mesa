@@ -60,7 +60,10 @@
 
 #include "clc_helpers.h"
 
-constexpr spv_target_env spirv_target = SPV_ENV_UNIVERSAL_1_0;
+/* Use the highest version of SPIRV supported by SPIRV-Tools. */
+constexpr spv_target_env spirv_target = SPV_ENV_UNIVERSAL_1_5;
+
+constexpr SPIRV::VersionNumber invalid_spirv_trans_version = static_cast<SPIRV::VersionNumber>(0);
 
 using ::llvm::Function;
 using ::llvm::LLVMContext;
@@ -855,15 +858,69 @@ clc_compile_to_llvm_module(const struct clc_compile_args *args,
    return { act.takeModule(), std::move(llvm_ctx) };
 }
 
+static SPIRV::VersionNumber
+spirv_version_to_llvm_spirv_translator_version(enum clc_spirv_version version)
+{
+   switch (version) {
+   case CLC_SPIRV_VERSION_MAX: return SPIRV::VersionNumber::MaximumVersion;
+   case CLC_SPIRV_VERSION_1_0: return SPIRV::VersionNumber::SPIRV_1_0;
+   case CLC_SPIRV_VERSION_1_1: return SPIRV::VersionNumber::SPIRV_1_1;
+   case CLC_SPIRV_VERSION_1_2: return SPIRV::VersionNumber::SPIRV_1_2;
+   case CLC_SPIRV_VERSION_1_3: return SPIRV::VersionNumber::SPIRV_1_3;
+#ifdef HAS_SPIRV_1_4
+   case CLC_SPIRV_VERSION_1_4: return SPIRV::VersionNumber::SPIRV_1_4;
+#endif
+   default:      return invalid_spirv_trans_version;
+   }
+}
+
 static int
 llvm_mod_to_spirv(std::unique_ptr<::llvm::Module> mod,
                   std::unique_ptr<LLVMContext> context,
+                  const struct clc_compile_args *args,
                   const struct clc_logger *logger,
                   struct clc_binary *out_spirv)
 {
    std::string log;
+
+   SPIRV::VersionNumber version =
+      spirv_version_to_llvm_spirv_translator_version(args->spirv_version);
+   if (version == invalid_spirv_trans_version) {
+      clc_error(logger, "Invalid/unsupported SPIRV specified.\n");
+      return -1;
+   }
+
+   const char *const *extensions = NULL;
+   if (args)
+      extensions = args->allowed_spirv_extensions;
+   if (!extensions) {
+      /* The SPIR-V parser doesn't handle all extensions */
+      static const char *default_extensions[] = {
+         "SPV_EXT_shader_atomic_float_add",
+         "SPV_EXT_shader_atomic_float_min_max",
+         "SPV_KHR_float_controls",
+         NULL,
+      };
+      extensions = default_extensions;
+   }
+
+   SPIRV::TranslatorOpts::ExtensionsStatusMap ext_map;
+   for (int i = 0; extensions[i]; i++) {
+#define EXT(X) \
+      if (strcmp(#X, extensions[i]) == 0) \
+         ext_map.insert(std::make_pair(SPIRV::ExtensionID::X, true));
+#include "LLVMSPIRVLib/LLVMSPIRVExtensions.inc"
+#undef EXT
+   }
+   SPIRV::TranslatorOpts spirv_opts = SPIRV::TranslatorOpts(version, ext_map);
+
+#if LLVM_VERSION_MAJOR >= 13
+   /* This was the default in 12.0 and older, but currently we'll fail to parse without this */
+   spirv_opts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
+#endif
+
    std::ostringstream spv_stream;
-   if (!::llvm::writeSpirv(mod.get(), spv_stream, log)) {
+   if (!::llvm::writeSpirv(mod.get(), spirv_opts, spv_stream, log)) {
       clc_error(logger, "%sTranslation from LLVM IR to SPIR-V failed.\n",
                 log.c_str());
       return -1;
@@ -905,7 +962,7 @@ clc_c_to_spirv(const struct clc_compile_args *args,
    auto pair = clc_compile_to_llvm_module(args, logger);
    if (!pair.first)
       return -1;
-   return llvm_mod_to_spirv(std::move(pair.first), std::move(pair.second), logger, out_spirv);
+   return llvm_mod_to_spirv(std::move(pair.first), std::move(pair.second), args, logger, out_spirv);
 }
 
 int
@@ -924,7 +981,7 @@ clc_spir_to_spirv(const struct clc_binary *in_spir,
    if (!mod)
       return -1;
 
-   return llvm_mod_to_spirv(std::move(mod.get()), std::move(llvm_ctx), logger, out_spirv);
+   return llvm_mod_to_spirv(std::move(mod.get()), std::move(llvm_ctx), NULL, logger, out_spirv);
 }
 
 class SPIRVMessageConsumer {
@@ -938,12 +995,12 @@ public:
       case SPV_MSG_FATAL:
       case SPV_MSG_INTERNAL_ERROR:
       case SPV_MSG_ERROR:
-         clc_error(logger, "(file=%s,line=%ld,column=%ld,index=%ld): %s",
+         clc_error(logger, "(file=%s,line=%ld,column=%ld,index=%ld): %s\n",
                    src, pos.line, pos.column, pos.index, msg);
          break;
 
       case SPV_MSG_WARNING:
-         clc_warning(logger, "(file=%s,line=%ld,column=%ld,index=%ld): %s",
+         clc_warning(logger, "(file=%s,line=%ld,column=%ld,index=%ld): %s\n",
                      src, pos.line, pos.column, pos.index, msg);
          break;
 

@@ -24,10 +24,15 @@ inc_src = include_directories('.')
 inc_gallium = include_directories('gallium/include')
 inc_gallium_aux = include_directories('gallium/auxiliary')
 inc_amd_common = include_directories('amd/common')
-inc_amd_common_llvm = include_directories('amd/llvm')
 inc_tool = include_directories('tool')
 pps_datasources = []
 pps_includes = []
+
+if with_llvm
+  inc_amd_common_llvm = include_directories('amd/llvm')
+else
+  inc_amd_common_llvm = []
+endif
 
 libglsl_util = static_library(
   'glsl_util',
@@ -83,7 +88,7 @@ endif
 if with_gallium_etnaviv
   subdir('etnaviv')
 endif
-if with_gallium_freedreno or with_freedreno_vk
+if with_gallium_freedreno or with_freedreno_vk or with_tools.contains('freedreno')
   subdir('freedreno')
 endif
 if with_gallium_panfrost or with_gallium_lima or with_panfrost_vk or with_tools.contains('panfrost')

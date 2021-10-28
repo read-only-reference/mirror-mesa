@@ -97,22 +97,29 @@ dump_fence_list(struct iris_batch *batch)
  * Debugging code to dump the validation list, used by INTEL_DEBUG=submit.
  */
 static void
-dump_validation_list(struct iris_batch *batch,
-                     struct drm_i915_gem_exec_object2 *validation_list)
+dump_bo_list(struct iris_batch *batch)
 {
-   fprintf(stderr, "Validation list (length %d):\n", batch->exec_count);
+   fprintf(stderr, "BO list (length %d):\n", batch->exec_count);
 
    for (int i = 0; i < batch->exec_count; i++) {
-      uint64_t flags = validation_list[i].flags;
-      assert(validation_list[i].handle == batch->exec_bos[i]->gem_handle);
-      fprintf(stderr, "[%2d]: %2d %-14s @ 0x%"PRIx64" (%"PRIu64"B)\t %2d refs %s\n",
+      struct iris_bo *bo = batch->exec_bos[i];
+      struct iris_bo *backing = iris_get_backing_bo(bo);
+      bool written = BITSET_TEST(batch->bos_written, i);
+      bool exported = iris_bo_is_exported(bo);
+      bool imported = iris_bo_is_imported(bo);
+
+      fprintf(stderr, "[%2d]: %3d (%3d) %-14s @ 0x%016"PRIx64" (%-6s %8"PRIu64"B) %2d refs %s%s%s\n",
               i,
-              validation_list[i].handle,
-              batch->exec_bos[i]->name,
-              (uint64_t)validation_list[i].offset,
-              batch->exec_bos[i]->size,
-              batch->exec_bos[i]->refcount,
-              (flags & EXEC_OBJECT_WRITE) ? " (write)" : "");
+              bo->gem_handle,
+              backing->gem_handle,
+              bo->name,
+              bo->address,
+              backing->real.local ? "local" : "system",
+              bo->size,
+              bo->refcount,
+              written ? " write" : "",
+              exported ? " exported" : "",
+              imported ? " imported" : "");
    }
 }
 
@@ -196,6 +203,7 @@ iris_init_batch(struct iris_context *ice,
    util_dynarray_init(&batch->syncobjs, ralloc_context(NULL));
 
    batch->exec_count = 0;
+   batch->max_gem_handle = 0;
    batch->exec_array_size = 128;
    batch->exec_bos =
       malloc(batch->exec_array_size * sizeof(batch->exec_bos[0]));
@@ -212,10 +220,10 @@ iris_init_batch(struct iris_context *ice,
          batch->other_batches[j++] = &ice->batches[i];
    }
 
-   if (INTEL_DEBUG) {
+   if (INTEL_DEBUG(DEBUG_ANY)) {
       const unsigned decode_flags =
          INTEL_BATCH_DECODE_FULL |
-         ((INTEL_DEBUG & DEBUG_COLOR) ? INTEL_BATCH_DECODE_IN_COLOR : 0) |
+         (INTEL_DEBUG(DEBUG_COLOR) ? INTEL_BATCH_DECODE_IN_COLOR : 0) |
          INTEL_BATCH_DECODE_OFFSETS |
          INTEL_BATCH_DECODE_FLOATS;
 
@@ -281,6 +289,9 @@ add_bo_to_batch(struct iris_batch *batch, struct iris_bo *bo, bool writable)
    bo->index = batch->exec_count;
    batch->exec_count++;
    batch->aperture_space += bo->size;
+
+   batch->max_gem_handle =
+      MAX2(batch->max_gem_handle, iris_get_backing_bo(bo)->gem_handle);
 }
 
 /**
@@ -294,7 +305,7 @@ iris_use_pinned_bo(struct iris_batch *batch,
                    struct iris_bo *bo,
                    bool writable, enum iris_domain access)
 {
-   assert(bo->kflags & EXEC_OBJECT_PINNED);
+   assert(iris_get_backing_bo(bo)->real.kflags & EXEC_OBJECT_PINNED);
    assert(bo != batch->bo);
 
    /* Never mark the workaround BO with EXEC_OBJECT_WRITE.  We don't care
@@ -359,10 +370,11 @@ create_batch(struct iris_batch *batch)
    struct iris_screen *screen = batch->screen;
    struct iris_bufmgr *bufmgr = screen->bufmgr;
 
+   /* TODO: We probably could suballocate batches... */
    batch->bo = iris_bo_alloc(bufmgr, "command buffer",
                              BATCH_SZ + BATCH_RESERVED, 1,
-                             IRIS_MEMZONE_OTHER, 0);
-   batch->bo->kflags |= EXEC_OBJECT_CAPTURE;
+                             IRIS_MEMZONE_OTHER, BO_ALLOC_NO_SUBALLOC);
+   iris_get_backing_bo(batch->bo)->real.kflags |= EXEC_OBJECT_CAPTURE;
    batch->map = iris_bo_map(NULL, batch->bo, MAP_READ | MAP_WRITE);
    batch->map_next = batch->map;
 
@@ -403,6 +415,9 @@ iris_batch_reset(struct iris_batch *batch)
 
    create_batch(batch);
    assert(batch->bo->index == 0);
+
+   memset(batch->bos_written, 0,
+          sizeof(BITSET_WORD) * BITSET_WORDS(batch->exec_array_size));
 
    struct iris_syncobj *syncobj = iris_create_syncobj(bufmgr);
    iris_batch_add_syncobj(batch, syncobj, I915_EXEC_FENCE_SIGNAL);
@@ -455,7 +470,7 @@ iris_batch_free(struct iris_batch *batch)
 
    _mesa_hash_table_destroy(batch->cache.render, NULL);
 
-   if (INTEL_DEBUG)
+   if (INTEL_DEBUG(DEBUG_ANY))
       intel_batch_decode_ctx_finish(&batch->decoder);
 }
 
@@ -748,29 +763,40 @@ submit_batch(struct iris_batch *batch)
    struct drm_i915_gem_exec_object2 *validation_list =
       malloc(batch->exec_count * sizeof(*validation_list));
 
+   unsigned *index_for_handle =
+      calloc(batch->max_gem_handle + 1, sizeof(unsigned));
+
+   unsigned validation_count = 0;
    for (int i = 0; i < batch->exec_count; i++) {
-      struct iris_bo *bo = batch->exec_bos[i];
+      struct iris_bo *bo = iris_get_backing_bo(batch->exec_bos[i]);
+      assert(bo->gem_handle != 0);
+
       bool written = BITSET_TEST(batch->bos_written, i);
-      unsigned extra_flags = 0;
-
-      if (written)
-         extra_flags |= EXEC_OBJECT_WRITE;
-      if (!iris_bo_is_external(bo))
-         extra_flags |= EXEC_OBJECT_ASYNC;
-
-      validation_list[i] = (struct drm_i915_gem_exec_object2) {
-         .handle = bo->gem_handle,
-         .offset = bo->address,
-         .flags  = bo->kflags | extra_flags,
-      };
+      unsigned prev_index = index_for_handle[bo->gem_handle];
+      if (prev_index > 0) {
+         if (written)
+            validation_list[prev_index].flags |= EXEC_OBJECT_WRITE;
+      } else {
+         index_for_handle[bo->gem_handle] = validation_count;
+         validation_list[validation_count] =
+            (struct drm_i915_gem_exec_object2) {
+               .handle = bo->gem_handle,
+               .offset = bo->address,
+               .flags  = bo->real.kflags | (written ? EXEC_OBJECT_WRITE : 0) |
+                         (iris_bo_is_external(bo) ? 0 : EXEC_OBJECT_ASYNC),
+            };
+         ++validation_count;
+      }
    }
 
-   if (INTEL_DEBUG & (DEBUG_BATCH | DEBUG_SUBMIT)) {
+   free(index_for_handle);
+
+   if (INTEL_DEBUG(DEBUG_BATCH | DEBUG_SUBMIT)) {
       dump_fence_list(batch);
-      dump_validation_list(batch, validation_list);
+      dump_bo_list(batch);
    }
 
-   if (INTEL_DEBUG & DEBUG_BATCH) {
+   if (INTEL_DEBUG(DEBUG_BATCH)) {
       decode_batch(batch);
    }
 
@@ -788,7 +814,7 @@ submit_batch(struct iris_batch *batch)
     */
    struct drm_i915_gem_execbuffer2 execbuf = {
       .buffers_ptr = (uintptr_t) validation_list,
-      .buffer_count = batch->exec_count,
+      .buffer_count = validation_count,
       .batch_start_offset = 0,
       /* This must be QWord aligned. */
       .batch_len = ALIGN(batch->primary_batch_size, 8),
@@ -816,6 +842,8 @@ submit_batch(struct iris_batch *batch)
 
       bo->idle = false;
       bo->index = -1;
+
+      iris_get_backing_bo(bo)->idle = false;
 
       iris_bo_unreference(bo);
    }
@@ -854,7 +882,7 @@ _iris_batch_flush(struct iris_batch *batch, const char *file, int line)
 
    update_batch_syncobjs(batch);
 
-   if (INTEL_DEBUG & (DEBUG_BATCH | DEBUG_SUBMIT | DEBUG_PIPE_CONTROL)) {
+   if (INTEL_DEBUG(DEBUG_BATCH | DEBUG_SUBMIT | DEBUG_PIPE_CONTROL)) {
       const char *basefile = strstr(file, "iris/");
       if (basefile)
          file = basefile + 5;
@@ -887,6 +915,7 @@ _iris_batch_flush(struct iris_batch *batch, const char *file, int line)
       iris_syncobj_signal(screen->bufmgr, iris_batch_get_signal_syncobj(batch));
 
    batch->exec_count = 0;
+   batch->max_gem_handle = 0;
    batch->aperture_space = 0;
 
    util_dynarray_foreach(&batch->syncobjs, struct iris_syncobj *, s)
@@ -895,7 +924,7 @@ _iris_batch_flush(struct iris_batch *batch, const char *file, int line)
 
    util_dynarray_clear(&batch->exec_fences);
 
-   if (INTEL_DEBUG & DEBUG_SYNC) {
+   if (INTEL_DEBUG(DEBUG_SYNC)) {
       dbg_printf("waiting for idle\n");
       iris_bo_wait_rendering(batch->bo); /* if execbuf failed; this is a nop */
    }
@@ -920,7 +949,7 @@ _iris_batch_flush(struct iris_batch *batch, const char *file, int line)
 
    if (ret < 0) {
 #ifdef DEBUG
-      const bool color = INTEL_DEBUG & DEBUG_COLOR;
+      const bool color = INTEL_DEBUG(DEBUG_COLOR);
       fprintf(stderr, "%siris: Failed to submit batchbuffer: %-80s%s\n",
               color ? "\e[1;41m" : "", strerror(-ret), color ? "\e[0m" : "");
 #endif

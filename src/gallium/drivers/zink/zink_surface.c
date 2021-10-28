@@ -37,7 +37,9 @@ create_ivci(struct zink_screen *screen,
             const struct pipe_surface *templ,
             enum pipe_texture_target target)
 {
-   VkImageViewCreateInfo ivci = {0};
+   VkImageViewCreateInfo ivci;
+   /* zero holes since this is hashed */
+   memset(&ivci, 0, sizeof(VkImageViewCreateInfo));
    ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
    ivci.image = res->obj->image;
 
@@ -101,6 +103,18 @@ create_ivci(struct zink_screen *screen,
    return ivci;
 }
 
+static void
+init_surface_info(struct zink_surface *surface, struct zink_resource *res, VkImageViewCreateInfo *ivci)
+{
+   surface->info.flags = res->obj->vkflags;
+   surface->info.usage = res->obj->vkusage;
+   surface->info.width = surface->base.width;
+   surface->info.height = surface->base.height;
+   surface->info.layerCount = ivci->subresourceRange.layerCount;
+   surface->info.format = ivci->format;
+   surface->info_hash = _mesa_hash_data(&surface->info, sizeof(surface->info));
+}
+
 static struct zink_surface *
 create_surface(struct pipe_context *pctx,
                struct pipe_resource *pres,
@@ -131,13 +145,7 @@ create_surface(struct pipe_context *pctx,
    util_dynarray_init(&surface->framebuffer_refs, NULL);
    util_dynarray_init(&surface->desc_set_refs.refs, NULL);
 
-   surface->info.flags = res->obj->vkflags;
-   surface->info.usage = res->obj->vkusage;
-   surface->info.width = surface->base.width;
-   surface->info.height = surface->base.height;
-   surface->info.layerCount = ivci->subresourceRange.layerCount;
-   surface->info.format = ivci->format;
-   surface->info_hash = _mesa_hash_data(&surface->info, sizeof(surface->info));
+   init_surface_info(surface, res, ivci);
 
    if (VKSCR(CreateImageView)(screen->dev, ivci, NULL,
                          &surface->image_view) != VK_SUCCESS) {
@@ -273,6 +281,11 @@ zink_destroy_surface(struct zink_screen *screen, struct pipe_surface *psurface)
    struct zink_resource *res = zink_resource(psurface->texture);
    if (!psurface->nr_samples) {
       simple_mtx_lock(&res->surface_mtx);
+      if (psurface->reference.count) {
+         /* got a cache hit during deletion */
+         simple_mtx_unlock(&res->surface_mtx);
+         return;
+      }
       struct hash_entry *he = _mesa_hash_table_search_pre_hashed(&res->surface_cache, surface->hash, &surface->ivci);
       assert(he);
       assert(he->data == surface);

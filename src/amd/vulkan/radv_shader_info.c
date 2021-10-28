@@ -25,6 +25,8 @@
 #include "radv_private.h"
 #include "radv_shader.h"
 
+#include "ac_exp_param.h"
+
 static void
 mark_sampler_desc(const nir_variable *var, struct radv_shader_info *info)
 {
@@ -128,26 +130,41 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
    switch (instr->intrinsic) {
    case nir_intrinsic_load_barycentric_sample:
    case nir_intrinsic_load_barycentric_pixel:
-   case nir_intrinsic_load_barycentric_centroid: {
+   case nir_intrinsic_load_barycentric_centroid:
+   case nir_intrinsic_load_barycentric_at_sample:
+   case nir_intrinsic_load_barycentric_at_offset: {
       enum glsl_interp_mode mode = nir_intrinsic_interp_mode(instr);
       switch (mode) {
-      case INTERP_MODE_NONE:
       case INTERP_MODE_SMOOTH:
+      case INTERP_MODE_NONE:
+         if (instr->intrinsic == nir_intrinsic_load_barycentric_pixel ||
+             instr->intrinsic == nir_intrinsic_load_barycentric_at_sample ||
+             instr->intrinsic == nir_intrinsic_load_barycentric_at_offset)
+            info->ps.reads_persp_center = true;
+         else if (instr->intrinsic == nir_intrinsic_load_barycentric_centroid)
+            info->ps.reads_persp_centroid = true;
+         else if (instr->intrinsic == nir_intrinsic_load_barycentric_sample)
+            info->ps.reads_persp_sample = true;
+         break;
       case INTERP_MODE_NOPERSPECTIVE:
-         info->ps.uses_persp_or_linear_interp = true;
+         if (instr->intrinsic == nir_intrinsic_load_barycentric_pixel ||
+             instr->intrinsic == nir_intrinsic_load_barycentric_at_sample ||
+             instr->intrinsic == nir_intrinsic_load_barycentric_at_offset)
+            info->ps.reads_linear_center = true;
+         else if (instr->intrinsic == nir_intrinsic_load_barycentric_centroid)
+            info->ps.reads_linear_centroid = true;
+         else if (instr->intrinsic == nir_intrinsic_load_barycentric_sample)
+            info->ps.reads_linear_sample = true;
          break;
       default:
          break;
       }
-      break;
-   }
-   case nir_intrinsic_load_barycentric_at_offset:
-   case nir_intrinsic_load_barycentric_at_sample:
-      if (nir_intrinsic_interp_mode(instr) != INTERP_MODE_FLAT)
-         info->ps.uses_persp_or_linear_interp = true;
-
       if (instr->intrinsic == nir_intrinsic_load_barycentric_at_sample)
          info->ps.needs_sample_positions = true;
+      break;
+   }
+   case nir_intrinsic_load_barycentric_model:
+      info->ps.reads_barycentric_model = true;
       break;
    case nir_intrinsic_load_draw_id:
       info->vs.needs_draw_id = true;
@@ -185,14 +202,23 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
    case nir_intrinsic_load_sample_mask_in:
       info->ps.reads_sample_mask_in = true;
       break;
-   case nir_intrinsic_load_view_index:
-      info->needs_multiview_view_index = true;
-      if (nir->info.stage == MESA_SHADER_FRAGMENT)
-         info->ps.layer_input = true;
+   case nir_intrinsic_load_sample_id:
+      info->ps.reads_sample_id = true;
       break;
-   case nir_intrinsic_load_layer_id:
-      if (nir->info.stage == MESA_SHADER_FRAGMENT)
-         info->ps.layer_input = true;
+   case nir_intrinsic_load_frag_shading_rate:
+      info->ps.reads_frag_shading_rate = true;
+      break;
+   case nir_intrinsic_load_front_face:
+      info->ps.reads_front_face = true;
+      break;
+   case nir_intrinsic_load_frag_coord:
+      info->ps.reads_frag_coord_mask = nir_ssa_def_components_read(&instr->dest.ssa);
+      break;
+   case nir_intrinsic_load_sample_pos:
+      info->ps.reads_sample_pos_mask = nir_ssa_def_components_read(&instr->dest.ssa);
+      break;
+   case nir_intrinsic_load_view_index:
+      info->uses_view_index = true;
       break;
    case nir_intrinsic_load_invocation_id:
       info->uses_invocation_id = true;
@@ -221,7 +247,8 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
    case nir_intrinsic_image_deref_atomic_comp_swap:
    case nir_intrinsic_image_deref_atomic_fmin:
    case nir_intrinsic_image_deref_atomic_fmax:
-   case nir_intrinsic_image_deref_size: {
+   case nir_intrinsic_image_deref_size:
+   case nir_intrinsic_image_deref_samples: {
       nir_variable *var =
          nir_deref_instr_get_variable(nir_instr_as_deref(instr->src[0].ssa->parent_instr));
       mark_sampler_desc(var, info);
@@ -459,30 +486,45 @@ gather_info_output_decl_gs(const nir_shader *nir, const nir_variable *var,
    info->gs.output_streams[idx] = stream;
 }
 
+static struct radv_vs_output_info *
+get_vs_output_info(const nir_shader *nir, struct radv_shader_info *info)
+{
+
+   switch (nir->info.stage) {
+   case MESA_SHADER_VERTEX:
+      if (!info->vs.as_ls && !info->vs.as_es)
+         return &info->vs.outinfo;
+      break;
+   case MESA_SHADER_GEOMETRY:
+      return &info->vs.outinfo;
+      break;
+   case MESA_SHADER_TESS_EVAL:
+      if (!info->tes.as_es)
+         return &info->tes.outinfo;
+      break;
+   default:
+      break;
+   }
+
+   return NULL;
+}
+
 static void
 gather_info_output_decl(const nir_shader *nir, const nir_variable *var,
                         struct radv_shader_info *info)
 {
-   struct radv_vs_output_info *vs_info = NULL;
+   struct radv_vs_output_info *vs_info = get_vs_output_info(nir, info);
 
    switch (nir->info.stage) {
    case MESA_SHADER_FRAGMENT:
       gather_info_output_decl_ps(nir, var, info);
       break;
    case MESA_SHADER_VERTEX:
-      if (!info->vs.as_ls && !info->vs.as_es)
-         vs_info = &info->vs.outinfo;
-
-      if (!info->vs.as_ls && info->is_ngg)
-         gather_info_output_decl_gs(nir, var, info);
       break;
    case MESA_SHADER_GEOMETRY:
-      vs_info = &info->vs.outinfo;
       gather_info_output_decl_gs(nir, var, info);
       break;
    case MESA_SHADER_TESS_EVAL:
-      if (!info->tes.as_es)
-         vs_info = &info->tes.outinfo;
       break;
    default:
       break;
@@ -567,11 +609,22 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
    }
 
    if (nir->info.stage == MESA_SHADER_VERTEX) {
+      if (pipeline_key->vs.dynamic_input_state && nir->info.inputs_read) {
+         info->vs.has_prolog = true;
+         info->vs.dynamic_inputs = true;
+      }
+
       /* Use per-attribute vertex descriptors to prevent faults and
        * for correct bounds checking.
        */
-      info->vs.use_per_attribute_vb_descs = device->robust_buffer_access;
+      info->vs.use_per_attribute_vb_descs = device->robust_buffer_access || info->vs.dynamic_inputs;
    }
+
+   /* We have to ensure consistent input register assignments between the main shader and the
+    * prolog. */
+   info->vs.needs_instance_id |= info->vs.has_prolog;
+   info->vs.needs_base_instance |= info->vs.has_prolog;
+   info->vs.needs_draw_id |= info->vs.has_prolog;
 
    nir_foreach_shader_in_variable (variable, nir)
       gather_info_input_decl(nir, variable, pipeline_key, info);
@@ -600,6 +653,54 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
          break;
       default:
          break;
+      }
+   }
+
+   struct radv_vs_output_info *outinfo = get_vs_output_info(nir, info);
+   if (outinfo) {
+      bool writes_primitive_shading_rate =
+         outinfo->writes_primitive_shading_rate || device->force_vrs != RADV_FORCE_VRS_NONE;
+      int pos_written = 0x1;
+
+      if (outinfo->writes_pointsize || outinfo->writes_viewport_index || outinfo->writes_layer ||
+          writes_primitive_shading_rate)
+         pos_written |= 1 << 1;
+
+      unsigned num_clip_distances = util_bitcount(outinfo->clip_dist_mask);
+      unsigned num_cull_distances = util_bitcount(outinfo->cull_dist_mask);
+
+      if (num_clip_distances + num_cull_distances > 0)
+         pos_written |= 1 << 2;
+      if (num_clip_distances + num_cull_distances > 4)
+         pos_written |= 1 << 3;
+
+      outinfo->pos_exports = util_bitcount(pos_written);
+
+      memset(outinfo->vs_output_param_offset, AC_EXP_PARAM_UNDEFINED,
+             sizeof(outinfo->vs_output_param_offset));
+      outinfo->param_exports = 0;
+
+      uint64_t mask = nir->info.outputs_written;
+      while (mask) {
+         int idx = u_bit_scan64(&mask);
+         if (idx >= VARYING_SLOT_VAR0 || idx == VARYING_SLOT_LAYER ||
+             idx == VARYING_SLOT_PRIMITIVE_ID || idx == VARYING_SLOT_VIEWPORT ||
+             ((idx == VARYING_SLOT_CLIP_DIST0 || idx == VARYING_SLOT_CLIP_DIST1) &&
+              outinfo->export_clip_dists)) {
+            if (outinfo->vs_output_param_offset[idx] == AC_EXP_PARAM_UNDEFINED)
+               outinfo->vs_output_param_offset[idx] = outinfo->param_exports++;
+         }
+      }
+      if (outinfo->writes_layer &&
+          outinfo->vs_output_param_offset[VARYING_SLOT_LAYER] == AC_EXP_PARAM_UNDEFINED) {
+         /* when ctx->options->key.has_multiview_view_index = true, the layer
+          * variable isn't declared in NIR and it's isel's job to get the layer */
+         outinfo->vs_output_param_offset[VARYING_SLOT_LAYER] = outinfo->param_exports++;
+      }
+
+      if (outinfo->export_prim_id) {
+         assert(outinfo->vs_output_param_offset[VARYING_SLOT_PRIMITIVE_ID] == AC_EXP_PARAM_UNDEFINED);
+         outinfo->vs_output_param_offset[VARYING_SLOT_PRIMITIVE_ID] = outinfo->param_exports++;
       }
    }
 
@@ -657,11 +758,16 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
       es_info->esgs_itemsize = num_outputs_written * 16;
    }
 
-   info->float_controls_mode = nir->info.float_controls_execution_mode;
-
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+      bool uses_persp_or_linear_interp = info->ps.reads_persp_center ||
+                                         info->ps.reads_persp_centroid ||
+                                         info->ps.reads_persp_sample ||
+                                         info->ps.reads_linear_center ||
+                                         info->ps.reads_linear_centroid ||
+                                         info->ps.reads_linear_sample;
+
       info->ps.allow_flat_shading =
-         !(info->ps.uses_persp_or_linear_interp || info->ps.needs_sample_positions ||
+         !(uses_persp_or_linear_interp || info->ps.needs_sample_positions ||
            info->ps.writes_memory || nir->info.fs.needs_quad_helper_invocations ||
            BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FRAG_COORD) ||
            BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_POINT_COORD) ||
@@ -669,5 +775,7 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
            BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_POS) ||
            BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_MASK_IN) ||
            BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_HELPER_INVOCATION));
+
+      info->ps.spi_ps_input = radv_compute_spi_ps_input(device, info);
    }
 }

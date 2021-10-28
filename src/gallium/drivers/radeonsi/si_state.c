@@ -30,6 +30,7 @@
 #include "util/format/u_format.h"
 #include "util/format/u_format_s3tc.h"
 #include "util/u_dual_blend.h"
+#include "util/u_helpers.h"
 #include "util/u_memory.h"
 #include "util/u_resource.h"
 #include "util/u_upload_mgr.h"
@@ -122,7 +123,7 @@ static void si_emit_cb_render_state(struct si_context *sctx)
    /* RB+ register settings. */
    if (sctx->screen->info.rbplus_allowed) {
       unsigned spi_shader_col_format =
-         sctx->shader.ps.cso ? sctx->shader.ps.current->key.part.ps.epilog.spi_shader_col_format
+         sctx->shader.ps.cso ? sctx->shader.ps.current->key.ps.part.epilog.spi_shader_col_format
                              : 0;
       unsigned sx_ps_downconvert = 0;
       unsigned sx_blend_opt_epsilon = 0;
@@ -636,19 +637,13 @@ static void *si_create_blend_state(struct pipe_context *ctx, const struct pipe_b
    return si_create_blend_state_mode(ctx, state, V_028808_CB_NORMAL);
 }
 
-static void si_draw_blend_dst_sampler_noop(struct pipe_context *ctx,
-                                           const struct pipe_draw_info *info,
-                                           unsigned drawid_offset,
-                                           const struct pipe_draw_indirect_info *indirect,
-                                           const struct pipe_draw_start_count_bias *draws,
-                                           unsigned num_draws) {
-   struct si_context *sctx = (struct si_context *)ctx;
-
+static bool si_check_blend_dst_sampler_noop(struct si_context *sctx)
+{
    if (sctx->framebuffer.state.nr_cbufs == 1) {
       struct si_shader_selector *sel = sctx->shader.ps.cso;
       bool free_nir;
       if (unlikely(sel->info.writes_1_if_tex_is_1 == 0xff)) {
-         struct nir_shader *nir = si_get_nir_shader(sel, NULL, &free_nir);
+         struct nir_shader *nir = si_get_nir_shader(sel, &sctx->shader.ps.key, &free_nir);
 
          /* Determine if this fragment shader always writes vec4(1) if a specific texture
           * is all 1s.
@@ -677,14 +672,42 @@ static void si_draw_blend_dst_sampler_noop(struct pipe_context *ctx,
             if (tex->is_depth &&
                 tex->depth_cleared_level_mask & BITFIELD_BIT(samp->views[unit]->u.tex.first_level) &&
                 tex->depth_clear_value[0] == 1) {
-               return;
+               return false;
             }
             /* TODO: handle color textures */
          }
       }
    }
 
+   return true;
+}
+
+static void si_draw_blend_dst_sampler_noop(struct pipe_context *ctx,
+                                           const struct pipe_draw_info *info,
+                                           unsigned drawid_offset,
+                                           const struct pipe_draw_indirect_info *indirect,
+                                           const struct pipe_draw_start_count_bias *draws,
+                                           unsigned num_draws) {
+   struct si_context *sctx = (struct si_context *)ctx;
+
+   if (!si_check_blend_dst_sampler_noop(sctx))
+      return;
+
    sctx->real_draw_vbo(ctx, info, drawid_offset, indirect, draws, num_draws);
+}
+
+static void si_draw_vstate_blend_dst_sampler_noop(struct pipe_context *ctx,
+                                                  struct pipe_vertex_state *state,
+                                                  uint32_t partial_velem_mask,
+                                                  struct pipe_draw_vertex_state_info info,
+                                                  const struct pipe_draw_start_count_bias *draws,
+                                                  unsigned num_draws) {
+   struct si_context *sctx = (struct si_context *)ctx;
+
+   if (!si_check_blend_dst_sampler_noop(sctx))
+      return;
+
+   sctx->real_draw_vertex_state(ctx, state, partial_velem_mask, info, draws, num_draws);
 }
 
 static void si_bind_blend_state(struct pipe_context *ctx, void *state)
@@ -731,9 +754,10 @@ static void si_bind_blend_state(struct pipe_context *ctx, void *state)
 
    if (likely(!radeon_uses_secure_bos(sctx->ws))) {
       if (unlikely(blend->allows_noop_optimization)) {
-         si_install_draw_wrapper(sctx, si_draw_blend_dst_sampler_noop);
+         si_install_draw_wrapper(sctx, si_draw_blend_dst_sampler_noop,
+                                 si_draw_vstate_blend_dst_sampler_noop);
       } else {
-         si_install_draw_wrapper(sctx, NULL);
+         si_install_draw_wrapper(sctx, NULL, NULL);
       }
    }
 }
@@ -813,7 +837,6 @@ static void si_emit_clip_regs(struct si_context *sctx)
    unsigned clipdist_mask = vs_sel->clipdist_mask;
    unsigned ucp_mask = clipdist_mask ? 0 : rs->clip_plane_enable & SIX_BITS;
    unsigned culldist_mask = vs_sel->culldist_mask;
-   unsigned vs_out_mask = (clipdist_mask & ~vs->key.opt.kill_clip_distances) | culldist_mask;
 
    /* Clip distances on points have no effect, so need to be implemented
     * as cull distances. This applies for the clipvertex case as well.
@@ -824,23 +847,14 @@ static void si_emit_clip_regs(struct si_context *sctx)
    clipdist_mask &= rs->clip_plane_enable;
    culldist_mask |= clipdist_mask;
 
-   unsigned pa_cl_cntl = S_02881C_VS_OUT_CCDIST0_VEC_ENA((vs_out_mask & 0x0F) != 0) |
-                         S_02881C_VS_OUT_CCDIST1_VEC_ENA((vs_out_mask & 0xF0) != 0) |
-                         S_02881C_BYPASS_VTX_RATE_COMBINER(sctx->chip_class >= GFX10_3 &&
+   unsigned pa_cl_cntl = S_02881C_BYPASS_VTX_RATE_COMBINER(sctx->chip_class >= GFX10_3 &&
                                                            !sctx->screen->options.vrs2x2) |
                          S_02881C_BYPASS_PRIM_RATE_COMBINER(sctx->chip_class >= GFX10_3) |
                          clipdist_mask | (culldist_mask << 8);
 
    radeon_begin(&sctx->gfx_cs);
-
-   if (sctx->chip_class >= GFX10) {
-      radeon_opt_set_context_reg_rmw(sctx, R_02881C_PA_CL_VS_OUT_CNTL,
-                                     SI_TRACKED_PA_CL_VS_OUT_CNTL__CL, pa_cl_cntl,
-                                     ~SI_TRACKED_PA_CL_VS_OUT_CNTL__VS_MASK);
-   } else {
-      radeon_opt_set_context_reg(sctx, R_02881C_PA_CL_VS_OUT_CNTL, SI_TRACKED_PA_CL_VS_OUT_CNTL__CL,
-                                 vs_sel->pa_cl_vs_out_cntl | pa_cl_cntl);
-   }
+   radeon_opt_set_context_reg(sctx, R_02881C_PA_CL_VS_OUT_CNTL, SI_TRACKED_PA_CL_VS_OUT_CNTL,
+			      pa_cl_cntl | vs->pa_cl_vs_out_cntl);
    radeon_opt_set_context_reg(sctx, R_028810_PA_CL_CLIP_CNTL, SI_TRACKED_PA_CL_CLIP_CNTL,
                               rs->pa_cl_clip_cntl | ucp_mask | S_028810_CLIP_DISABLE(window_space));
    radeon_end_update_context_roll(sctx);
@@ -1536,8 +1550,8 @@ static void si_emit_db_render_state(struct si_context *sctx)
 /*
  * format translation
  */
-static uint32_t si_translate_colorformat(enum chip_class chip_class,
-                                         enum pipe_format format)
+uint32_t si_translate_colorformat(enum chip_class chip_class,
+                                  enum pipe_format format)
 {
    const struct util_format_description *desc = util_format_description(format);
    if (!desc)
@@ -2657,6 +2671,21 @@ static void si_init_depth_surface(struct si_context *sctx, struct si_surface *su
    surf->depth_initialized = true;
 }
 
+void si_set_sampler_depth_decompress_mask(struct si_context *sctx, struct si_texture *tex)
+{
+   /* Check all sampler bindings in all shaders where depth textures are bound, and update
+    * which samplers should be decompressed.
+    */
+   u_foreach_bit(sh, sctx->shader_has_depth_tex) {
+      u_foreach_bit(i, sctx->samplers[sh].has_depth_tex_mask) {
+         if (sctx->samplers[sh].views[i]->texture == &tex->buffer.b.b) {
+            sctx->samplers[sh].needs_depth_decompress_mask |= 1 << i;
+            sctx->shader_needs_decompress_mask |= 1 << sh;
+         }
+      }
+   }
+}
+
 void si_update_fb_dirtiness_after_rendering(struct si_context *sctx)
 {
    if (sctx->decompression_enabled)
@@ -2670,6 +2699,8 @@ void si_update_fb_dirtiness_after_rendering(struct si_context *sctx)
 
       if (tex->surface.has_stencil)
          tex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;
+
+      si_set_sampler_depth_decompress_mask(sctx, tex);
    }
 
    unsigned compressed_cb_mask = sctx->framebuffer.compressed_cb_mask;
@@ -3049,12 +3080,12 @@ static void si_emit_framebuffer_state(struct si_context *sctx)
 
       tex = (struct si_texture *)cb->base.texture;
       radeon_add_to_buffer_list(
-         sctx, &sctx->gfx_cs, &tex->buffer, RADEON_USAGE_READWRITE | RADEON_USAGE_NEEDS_IMPLICIT_SYNC,
-         tex->buffer.b.b.nr_samples > 1 ? RADEON_PRIO_COLOR_BUFFER_MSAA : RADEON_PRIO_COLOR_BUFFER);
+         sctx, &sctx->gfx_cs, &tex->buffer, RADEON_USAGE_READWRITE | RADEON_USAGE_NEEDS_IMPLICIT_SYNC |
+         (tex->buffer.b.b.nr_samples > 1 ? RADEON_PRIO_COLOR_BUFFER_MSAA : RADEON_PRIO_COLOR_BUFFER));
 
       if (tex->cmask_buffer && tex->cmask_buffer != &tex->buffer) {
          radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, tex->cmask_buffer,
-                                   RADEON_USAGE_READWRITE | RADEON_USAGE_NEEDS_IMPLICIT_SYNC,
+                                   RADEON_USAGE_READWRITE | RADEON_USAGE_NEEDS_IMPLICIT_SYNC |
                                    RADEON_PRIO_SEPARATE_META);
       }
 
@@ -3259,9 +3290,9 @@ static void si_emit_framebuffer_state(struct si_context *sctx)
       unsigned db_stencil_info = zb->db_stencil_info;
       unsigned db_htile_surface = zb->db_htile_surface;
 
-      radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, &tex->buffer, RADEON_USAGE_READWRITE,
-                                zb->base.texture->nr_samples > 1 ? RADEON_PRIO_DEPTH_BUFFER_MSAA
-                                                                 : RADEON_PRIO_DEPTH_BUFFER);
+      radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, &tex->buffer, RADEON_USAGE_READWRITE |
+                                (zb->base.texture->nr_samples > 1 ? RADEON_PRIO_DEPTH_BUFFER_MSAA
+                                                                  : RADEON_PRIO_DEPTH_BUFFER));
 
       /* Set fields dependent on tc_compatile_htile. */
       if (sctx->chip_class >= GFX9 &&
@@ -4297,7 +4328,7 @@ struct pipe_sampler_view *si_create_sampler_view_custom(struct pipe_context *ctx
                                                         unsigned force_level)
 {
    struct si_context *sctx = (struct si_context *)ctx;
-   struct si_sampler_view *view = CALLOC_STRUCT(si_sampler_view);
+   struct si_sampler_view *view = CALLOC_STRUCT_CL(si_sampler_view);
    struct si_texture *tex = (struct si_texture *)texture;
    unsigned base_level, first_level, last_level;
    unsigned char state_swizzle[4];
@@ -4431,7 +4462,7 @@ static void si_sampler_view_destroy(struct pipe_context *ctx, struct pipe_sample
    struct si_sampler_view *view = (struct si_sampler_view *)state;
 
    pipe_resource_reference(&state->texture, NULL);
-   FREE(view);
+   FREE_CL(view);
 }
 
 static bool wrap_mode_uses_border_color(unsigned wrap, bool linear_filter)
@@ -4478,9 +4509,13 @@ static uint32_t si_translate_border_color(struct si_context *sctx,
 
    if (i >= SI_MAX_BORDER_COLORS) {
       /* Getting 4096 unique border colors is very unlikely. */
-      fprintf(stderr, "radeonsi: The border color table is full. "
-                      "Any new border colors will be just black. "
-                      "Please file a bug.\n");
+      static bool printed;
+      if (!printed) {
+         fprintf(stderr, "radeonsi: The border color table is full. "
+                         "Any new border colors will be just black. "
+                         "This is a hardware limitation.\n");
+         printed = true;
+      }
       return S_008F3C_BORDER_COLOR_TYPE(V_008F3C_SQ_TEX_BORDER_COLOR_TRANS_BLACK);
    }
 
@@ -4963,7 +4998,7 @@ static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned start_slot,
 
             si_context_add_resource_size(sctx, buf);
             if (buf)
-               si_resource(buf)->bind_history |= PIPE_BIND_VERTEX_BUFFER;
+               si_resource(buf)->bind_history |= SI_BIND_VERTEX_BUFFER;
          }
          /* take_ownership allows us to copy pipe_resource pointers without refcounting. */
          memcpy(dst, buffers, count * sizeof(struct pipe_vertex_buffer));
@@ -4983,7 +5018,7 @@ static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned start_slot,
 
             si_context_add_resource_size(sctx, buf);
             if (buf)
-               si_resource(buf)->bind_history |= PIPE_BIND_VERTEX_BUFFER;
+               si_resource(buf)->bind_history |= SI_BIND_VERTEX_BUFFER;
          }
       }
    } else {
@@ -5009,6 +5044,78 @@ static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned start_slot,
       si_vs_key_update_inputs(sctx);
       sctx->do_update_shaders = true;
    }
+}
+
+static struct pipe_vertex_state *
+si_create_vertex_state(struct pipe_screen *screen,
+                       struct pipe_vertex_buffer *buffer,
+                       const struct pipe_vertex_element *elements,
+                       unsigned num_elements,
+                       struct pipe_resource *indexbuf,
+                       uint32_t full_velem_mask)
+{
+   struct si_screen *sscreen = (struct si_screen *)screen;
+   struct si_vertex_state *state = CALLOC_STRUCT(si_vertex_state);
+
+   util_init_pipe_vertex_state(screen, buffer, elements, num_elements, indexbuf, full_velem_mask,
+                               &state->b);
+
+   /* Initialize the vertex element state in state->element.
+    * Do it by creating a vertex element state object and copying it there.
+    */
+   struct si_context ctx = {};
+   ctx.b.screen = screen;
+   struct si_vertex_elements *velems = si_create_vertex_elements(&ctx.b, num_elements, elements);
+   state->velems = *velems;
+   si_delete_vertex_element(&ctx.b, velems);
+
+   assert(!state->velems.instance_divisor_is_one);
+   assert(!state->velems.instance_divisor_is_fetched);
+   assert(!state->velems.fix_fetch_always);
+   assert(buffer->stride % 4 == 0);
+   assert(buffer->buffer_offset % 4 == 0);
+   assert(!buffer->is_user_buffer);
+   for (unsigned i = 0; i < num_elements; i++) {
+      assert(elements[i].src_offset % 4 == 0);
+      assert(!elements[i].dual_slot);
+   }
+
+   for (unsigned i = 0; i < num_elements; i++) {
+      si_set_vertex_buffer_descriptor(sscreen, &state->velems, &state->b.input.vbuffer, i,
+                                      &state->descriptors[i * 4]);
+   }
+
+   return &state->b;
+}
+
+static void si_vertex_state_destroy(struct pipe_screen *screen,
+                                    struct pipe_vertex_state *state)
+{
+   pipe_vertex_buffer_unreference(&state->input.vbuffer);
+   pipe_resource_reference(&state->input.indexbuf, NULL);
+   FREE(state);
+}
+
+static struct pipe_vertex_state *
+si_pipe_create_vertex_state(struct pipe_screen *screen,
+                            struct pipe_vertex_buffer *buffer,
+                            const struct pipe_vertex_element *elements,
+                            unsigned num_elements,
+                            struct pipe_resource *indexbuf,
+                            uint32_t full_velem_mask)
+{
+   struct si_screen *sscreen = (struct si_screen *)screen;
+
+   return util_vertex_state_cache_get(screen, buffer, elements, num_elements, indexbuf,
+                                      full_velem_mask, &sscreen->vertex_state_cache);
+}
+
+static void si_pipe_vertex_state_destroy(struct pipe_screen *screen,
+                                         struct pipe_vertex_state *state)
+{
+   struct si_screen *sscreen = (struct si_screen *)screen;
+
+   util_vertex_state_destroy(screen, &sscreen->vertex_state_cache, state);
 }
 
 /*
@@ -5177,12 +5284,17 @@ void si_init_state_functions(struct si_context *sctx)
 void si_init_screen_state_functions(struct si_screen *sscreen)
 {
    sscreen->b.is_format_supported = si_is_format_supported;
+   sscreen->b.create_vertex_state = si_pipe_create_vertex_state;
+   sscreen->b.vertex_state_destroy = si_pipe_vertex_state_destroy;
 
    if (sscreen->info.chip_class >= GFX10) {
       sscreen->make_texture_descriptor = gfx10_make_texture_descriptor;
    } else {
       sscreen->make_texture_descriptor = si_make_texture_descriptor;
    }
+
+   util_vertex_state_cache_init(&sscreen->vertex_state_cache,
+                                si_create_vertex_state, si_vertex_state_destroy);
 }
 
 static void si_set_grbm_gfx_index(struct si_context *sctx, struct si_pm4_state *pm4, unsigned value)

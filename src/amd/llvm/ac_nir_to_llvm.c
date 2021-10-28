@@ -1573,8 +1573,8 @@ static LLVMValueRef build_tex_intrinsic(struct ac_nir_context *ctx, const nir_te
    case nir_texop_lod:
       args->opcode = ac_image_get_lod;
       break;
-   case nir_texop_fragment_fetch:
-   case nir_texop_fragment_mask_fetch:
+   case nir_texop_fragment_fetch_amd:
+   case nir_texop_fragment_mask_fetch_amd:
       args->opcode = ac_image_load;
       args->level_zero = false;
       break;
@@ -1644,7 +1644,12 @@ static LLVMValueRef visit_load_push_constant(struct ac_nir_context *ctx, nir_int
 
       offset -= ctx->args->base_inline_push_consts;
 
-      unsigned num_inline_push_consts = ctx->args->num_inline_push_consts;
+      unsigned num_inline_push_consts = 0;
+      for (unsigned i = 0; i < ARRAY_SIZE(ctx->args->inline_push_consts); i++) {
+         if (ctx->args->inline_push_consts[i].used)
+            num_inline_push_consts++;
+      }
+
       if (offset + count <= num_inline_push_consts) {
          LLVMValueRef *const push_constants = alloca(num_inline_push_consts * sizeof(LLVMValueRef));
          for (unsigned i = 0; i < num_inline_push_consts; i++)
@@ -2387,6 +2392,9 @@ static LLVMValueRef adjust_sample_index_using_fmask(struct ac_llvm_context *ctx,
                                                     LLVMValueRef coord_z, LLVMValueRef sample_index,
                                                     LLVMValueRef fmask_desc_ptr)
 {
+   if (!fmask_desc_ptr)
+      return sample_index;
+
    unsigned sample_chan = coord_z ? 3 : 2;
    LLVMValueRef addr[4] = {coord_x, coord_y, coord_z};
    addr[sample_chan] = sample_index;
@@ -2834,6 +2842,18 @@ static LLVMValueRef visit_image_samples(struct ac_nir_context *ctx, nir_intrinsi
    LLVMValueRef rsrc = get_image_descriptor(ctx, instr, dynamic_index, AC_DESC_IMAGE, false);
 
    LLVMValueRef ret = ac_build_image_get_sample_count(&ctx->ac, rsrc);
+   if (ctx->abi->robust_buffer_access) {
+      LLVMValueRef dword1, is_null_descriptor;
+
+      /* Extract the second dword of the descriptor, if it's
+       * all zero, then it's a null descriptor.
+       */
+      dword1 =
+         LLVMBuildExtractElement(ctx->ac.builder, rsrc, LLVMConstInt(ctx->ac.i32, 1, false), "");
+      is_null_descriptor = LLVMBuildICmp(ctx->ac.builder, LLVMIntEQ, dword1,
+                                         LLVMConstInt(ctx->ac.i32, 0, false), "");
+      ret = LLVMBuildSelect(ctx->ac.builder, is_null_descriptor, ctx->ac.i32_0, ret, "");
+   }
 
    return exit_waterfall(ctx, &wctx, ret);
 }
@@ -3328,11 +3348,7 @@ static LLVMValueRef load_interpolated_input(struct ac_nir_context *ctx, LLVMValu
 
    /* Workaround for issue 2647: kill threads with infinite interpolation coeffs */
    if (ctx->verified_interp && !_mesa_hash_table_search(ctx->verified_interp, interp_param)) {
-      LLVMValueRef args[2];
-      args[0] = i;
-      args[1] = LLVMConstInt(ctx->ac.i32, S_NAN | Q_NAN | N_INFINITY | P_INFINITY, false);
-      LLVMValueRef cond = ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.class.f32", ctx->ac.i1, args, 2,
-                                             AC_FUNC_ATTR_READNONE);
+      LLVMValueRef cond = ac_build_is_inf_or_nan(&ctx->ac, i);
       ac_build_kill_if_false(&ctx->ac, LLVMBuildNot(ctx->ac.builder, cond, ""));
       _mesa_hash_table_insert(ctx->verified_interp, interp_param, interp_param);
    }
@@ -3843,7 +3859,7 @@ static void visit_intrinsic(struct ac_nir_context *ctx, nir_intrinsic_instr *ins
       nir_variable_mode modes = nir_intrinsic_memory_modes(instr);
 
       unsigned wait_flags = 0;
-      if (modes & (nir_var_mem_global | nir_var_mem_ssbo))
+      if (modes & (nir_var_mem_global | nir_var_mem_ssbo | nir_var_image))
          wait_flags |= AC_WAIT_VLOAD | AC_WAIT_VSTORE;
       if (modes & nir_var_mem_shared)
          wait_flags |= AC_WAIT_LGKM;
@@ -4493,7 +4509,7 @@ static void tex_fetch_ptrs(struct ac_nir_context *ctx, nir_tex_instr *instr,
       main_descriptor = AC_DESC_PLANE_0 + plane;
    }
 
-   if (instr->op == nir_texop_fragment_mask_fetch) {
+   if (instr->op == nir_texop_fragment_mask_fetch_amd) {
       /* The fragment mask is fetched from the compressed
        * multisampled surface.
        */
@@ -4730,7 +4746,7 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
         instr->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS ||
         instr->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS) &&
        instr->is_array && instr->op != nir_texop_txf && instr->op != nir_texop_txf_ms &&
-       instr->op != nir_texop_fragment_fetch && instr->op != nir_texop_fragment_mask_fetch) {
+       instr->op != nir_texop_fragment_fetch_amd && instr->op != nir_texop_fragment_mask_fetch_amd) {
       args.coords[2] = apply_round_slice(&ctx->ac, args.coords[2]);
    }
 
@@ -4748,7 +4764,7 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
    }
 
    /* Pack sample index */
-   if (sample_index && (instr->op == nir_texop_txf_ms || instr->op == nir_texop_fragment_fetch))
+   if (sample_index && (instr->op == nir_texop_txf_ms || instr->op == nir_texop_fragment_fetch_amd))
       args.coords[instr->coord_components] = sample_index;
 
    if (instr->op == nir_texop_samples_identical) {
@@ -4767,8 +4783,8 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
 
    if ((instr->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS ||
         instr->sampler_dim == GLSL_SAMPLER_DIM_MS) &&
-       instr->op != nir_texop_txs && instr->op != nir_texop_fragment_fetch &&
-       instr->op != nir_texop_fragment_mask_fetch) {
+       instr->op != nir_texop_txs && instr->op != nir_texop_fragment_fetch_amd &&
+       instr->op != nir_texop_fragment_mask_fetch_amd) {
       unsigned sample_chan = instr->is_array ? 3 : 2;
       args.coords[sample_chan] = adjust_sample_index_using_fmask(
          &ctx->ac, args.coords[0], args.coords[1], instr->is_array ? args.coords[2] : NULL,
@@ -4811,7 +4827,7 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
     * multisampled images and (x,y,layer) for 2D multisampled layered
     * images or for multisampled input attachments.
     */
-   if (instr->op == nir_texop_fragment_mask_fetch) {
+   if (instr->op == nir_texop_fragment_mask_fetch_amd) {
       if (args.dim == ac_image_2dmsaa) {
          args.dim = ac_image_2d;
       } else {
@@ -4850,6 +4866,14 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
       LLVMValueRef two = LLVMConstInt(ctx->ac.i32, 2, false);
       LLVMValueRef layers = LLVMBuildExtractElement(ctx->ac.builder, result, two, "");
       result = LLVMBuildInsertElement(ctx->ac.builder, result, layers, ctx->ac.i32_1, "");
+   } else if (instr->op == nir_texop_fragment_mask_fetch_amd) {
+      /* Use 0x76543210 if the image doesn't have FMASK. */
+      LLVMValueRef tmp = LLVMBuildBitCast(ctx->ac.builder, args.resource, ctx->ac.v8i32, "");
+      tmp = LLVMBuildExtractElement(ctx->ac.builder, tmp, ctx->ac.i32_1, "");
+      tmp = LLVMBuildICmp(ctx->ac.builder, LLVMIntNE, tmp, ctx->ac.i32_0, "");
+      result = LLVMBuildSelect(ctx->ac.builder, tmp,
+                               LLVMBuildExtractElement(ctx->ac.builder, result, ctx->ac.i32_0, ""),
+                               LLVMConstInt(ctx->ac.i32, 0x76543210, false), "");
    } else if (nir_tex_instr_result_size(instr) != 4)
       result = ac_trim_vector(&ctx->ac, result, instr->dest.ssa.num_components);
 

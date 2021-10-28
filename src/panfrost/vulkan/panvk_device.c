@@ -175,6 +175,9 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    vk_instance_dispatch_table_from_entrypoints(&dispatch_table,
                                                &panvk_instance_entrypoints,
                                                true);
+   vk_instance_dispatch_table_from_entrypoints(&dispatch_table,
+                                               &wsi_instance_entrypoints,
+                                               false);
    result = vk_instance_init(&instance->vk,
                              &panvk_instance_extensions,
                              &dispatch_table,
@@ -279,6 +282,9 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    vk_physical_device_dispatch_table_from_entrypoints(&dispatch_table,
                                                       &panvk_physical_device_entrypoints,
                                                       true);
+   vk_physical_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                                      &wsi_physical_device_entrypoints,
+                                                      false);
 
    result = vk_physical_device_init(&device->vk, &instance->vk,
                                     &supported_extensions,
@@ -948,27 +954,10 @@ panvk_CreateDevice(VkPhysicalDevice physicalDevice,
    VkResult result;
    struct panvk_device *device;
 
-   /* Check enabled features */
-   if (pCreateInfo->pEnabledFeatures) {
-      VkPhysicalDeviceFeatures2 supported_features = {
-         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-      };
-      panvk_GetPhysicalDeviceFeatures2(physicalDevice, &supported_features);
-      VkBool32 *supported_feature = (VkBool32 *) &supported_features.features;
-      VkBool32 *enabled_feature = (VkBool32 *) pCreateInfo->pEnabledFeatures;
-      unsigned num_features =
-         sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
-      for (uint32_t i = 0; i < num_features; i++) {
-         if (enabled_feature[i] && !supported_feature[i])
-            return vk_error(physical_device->instance,
-                            VK_ERROR_FEATURE_NOT_PRESENT);
-      }
-   }
-
    device = vk_zalloc2(&physical_device->instance->vk.alloc, pAllocator,
                        sizeof(*device), 8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
    if (!device)
-      return vk_error(physical_device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(physical_device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    const struct vk_device_entrypoint_table *dev_entrypoints;
    struct vk_device_dispatch_table dispatch_table;
@@ -993,11 +982,14 @@ panvk_CreateDevice(VkPhysicalDevice physicalDevice,
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
                                              &panvk_device_entrypoints,
                                              false);
+   vk_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                             &wsi_device_entrypoints,
+                                             false);
    result = vk_device_init(&device->vk, &physical_device->vk, &dispatch_table,
                            pCreateInfo, pAllocator);
    if (result != VK_SUCCESS) {
       vk_free(&device->vk.alloc, device);
-      return vk_errorf(physical_device->instance, result, "vk_device_init failed");
+      return result;
    }
 
    device->instance = physical_device->instance;
@@ -1148,7 +1140,7 @@ panvk_AllocateMemory(VkDevice _device,
    mem = vk_object_alloc(&device->vk, pAllocator, sizeof(*mem),
                          VK_OBJECT_TYPE_DEVICE_MEMORY);
    if (mem == NULL)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    const VkImportMemoryFdInfoKHR *fd_info =
       vk_find_struct_const(pAllocateInfo->pNext,
@@ -1225,7 +1217,7 @@ panvk_MapMemory(VkDevice _device,
       return VK_SUCCESS;
    }
 
-   return vk_error(device->instance, VK_ERROR_MEMORY_MAP_FAILED);
+   return vk_error(device, VK_ERROR_MEMORY_MAP_FAILED);
 }
 
 void
@@ -1423,7 +1415,7 @@ panvk_CreateEvent(VkDevice _device,
       vk_object_zalloc(&device->vk, pAllocator, sizeof(*event),
                        VK_OBJECT_TYPE_EVENT);
    if (!event)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    struct drm_syncobj_create create = {
       .flags = 0,
@@ -1542,7 +1534,7 @@ panvk_CreateBuffer(VkDevice _device,
    buffer = vk_object_alloc(&device->vk, pAllocator, sizeof(*buffer),
                             VK_OBJECT_TYPE_BUFFER);
    if (buffer == NULL)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    buffer->size = pCreateInfo->size;
    buffer->usage = pCreateInfo->usage;
@@ -1583,7 +1575,7 @@ panvk_CreateFramebuffer(VkDevice _device,
    framebuffer = vk_object_alloc(&device->vk, pAllocator, size,
                                  VK_OBJECT_TYPE_FRAMEBUFFER);
    if (framebuffer == NULL)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    framebuffer->attachment_count = pCreateInfo->attachmentCount;
    framebuffer->width = pCreateInfo->width;
@@ -1686,7 +1678,7 @@ panvk_GetMemoryFdKHR(VkDevice _device,
 
    int prime_fd = panfrost_bo_export(memory->bo);
    if (prime_fd < 0)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
    *pFd = prime_fd;
    return VK_SUCCESS;

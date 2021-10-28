@@ -183,7 +183,8 @@ ir3_shader_assemble(struct ir3_shader_variant *v)
     * index.
     */
    v->pvtmem_per_wave = compiler->gen >= 6 && !info->multi_dword_ldp_stp &&
-                        v->type == MESA_SHADER_COMPUTE;
+                        ((v->type == MESA_SHADER_COMPUTE) ||
+                         (v->type == MESA_SHADER_KERNEL));
 
    fixup_regfootprint(v);
 
@@ -822,14 +823,16 @@ ir3_link_stream_out(struct ir3_shader_linkage *l,
          continue;
 
       for (idx = 0; idx < l->cnt; idx++) {
-         if (l->var[idx].regid == v->outputs[k].regid)
+         if (l->var[idx].slot == v->outputs[k].slot)
             break;
          nextloc = MAX2(nextloc, l->var[idx].loc + 4);
       }
 
       /* add if not already in linkage map: */
-      if (idx == l->cnt)
-         ir3_link_add(l, v->outputs[k].regid, compmask, nextloc);
+      if (idx == l->cnt) {
+         ir3_link_add(l, v->outputs[k].slot, v->outputs[k].regid,
+                      compmask, nextloc);
+      }
 
       /* expand component-mask if needed, ie streaming out all components
        * but frag shader doesn't consume all components:

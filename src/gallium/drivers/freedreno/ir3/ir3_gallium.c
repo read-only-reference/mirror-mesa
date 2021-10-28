@@ -133,7 +133,7 @@ ir3_shader_variant(struct ir3_shader *shader, struct ir3_shader_key key,
 
    if (created) {
       if (shader->initial_variants_done) {
-         pipe_debug_message(debug, SHADER_INFO,
+         perf_debug_message(debug, SHADER_INFO,
                             "%s shader: recompiling at draw time: global "
                             "0x%08x, vfsamples %x/%x, astc %x/%x\n",
                             ir3_shader_stage(v), key.global, key.vsamples,
@@ -297,6 +297,9 @@ ir3_shader_compute_state_create(struct pipe_context *pctx,
    }
 
    struct ir3_shader *shader = ir3_shader_from_nir(compiler, nir, 0, NULL);
+   shader->cs.req_input_mem = align(cso->req_input_mem, 4) / 4;     /* byte->dword */
+   shader->cs.req_local_mem = cso->req_local_mem;
+
    struct ir3_shader_state *hwcso = calloc(1, sizeof(*hwcso));
 
    util_queue_fence_init(&hwcso->ready);

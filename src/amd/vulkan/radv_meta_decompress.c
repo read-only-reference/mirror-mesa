@@ -45,11 +45,11 @@ build_expand_depth_stencil_compute_shader(struct radv_device *dev)
    b.shader->info.workgroup_size[0] = 8;
    b.shader->info.workgroup_size[1] = 8;
    b.shader->info.workgroup_size[2] = 1;
-   nir_variable *input_img = nir_variable_create(b.shader, nir_var_uniform, img_type, "in_img");
+   nir_variable *input_img = nir_variable_create(b.shader, nir_var_image, img_type, "in_img");
    input_img->data.descriptor_set = 0;
    input_img->data.binding = 0;
 
-   nir_variable *output_img = nir_variable_create(b.shader, nir_var_uniform, img_type, "out_img");
+   nir_variable *output_img = nir_variable_create(b.shader, nir_var_image, img_type, "out_img");
    output_img->data.descriptor_set = 0;
    output_img->data.binding = 1;
 
@@ -541,6 +541,7 @@ radv_process_depth_image_layer(struct radv_cmd_buffer *cmd_buffer, struct radv_i
    radv_CmdDraw(radv_cmd_buffer_to_handle(cmd_buffer), 3, 1, 0, 0);
    radv_cmd_buffer_end_render_pass(cmd_buffer);
 
+   radv_image_view_finish(&iview);
    radv_DestroyFramebuffer(radv_device_to_handle(device), fb_h, &cmd_buffer->pool->alloc);
 }
 
@@ -700,6 +701,9 @@ radv_expand_depth_stencil_compute(struct radv_cmd_buffer *cmd_buffer, struct rad
                                       }}});
 
          radv_unaligned_dispatch(cmd_buffer, width, height, 1);
+
+         radv_image_view_finish(&load_iview);
+         radv_image_view_finish(&store_iview);
       }
    }
 

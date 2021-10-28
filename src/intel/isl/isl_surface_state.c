@@ -705,6 +705,10 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
          }
       }
 
+#if GFX_VERx10 >= 125
+      s.RenderCompressionFormat =
+         isl_get_render_compression_format(info->surf->format);
+#endif
 #if GFX_VER >= 12
       s.MemoryCompressionEnable = info->aux_usage == ISL_AUX_USAGE_MC;
 #endif
@@ -875,21 +879,15 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
 
    uint32_t num_elements = buffer_size / info->stride_B;
 
-   if (GFX_VER >= 7) {
+   assert(num_elements > 0);
+   if (info->format == ISL_FORMAT_RAW) {
+      assert(num_elements <= dev->max_buffer_size);
+   } else {
       /* From the IVB PRM, SURFACE_STATE::Height,
        *
        *    For typed buffer and structured buffer surfaces, the number
-       *    of entries in the buffer ranges from 1 to 2^27. For raw buffer
-       *    surfaces, the number of entries in the buffer is the number of bytes
-       *    which can range from 1 to 2^30.
+       *    of entries in the buffer ranges from 1 to 2^27.
        */
-      if (info->format == ISL_FORMAT_RAW) {
-         assert(num_elements <= (1ull << 30));
-         assert(num_elements > 0);
-      } else {
-         assert(num_elements <= (1ull << 27));
-      }
-   } else {
       assert(num_elements <= (1ull << 27));
    }
 
@@ -988,7 +986,7 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
 }
 
 void
-isl_genX(null_fill_state)(void *state,
+isl_genX(null_fill_state)(const struct isl_device *dev, void *state,
                           const struct isl_null_fill_state_info *restrict info)
 {
    struct GENX(RENDER_SURFACE_STATE) s = {
@@ -1009,6 +1007,9 @@ isl_genX(null_fill_state)(void *state,
 #else
       .TiledSurface = true,
       .TileWalk = TILEWALK_YMAJOR,
+#endif
+#if GFX_VER >= 6
+      .MOCS = isl_mocs(dev, 0, false),
 #endif
 #if GFX_VER == 7
       /* According to PRMs: "Volume 4 Part 1: Subsystem and Cores – Shared

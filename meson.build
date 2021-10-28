@@ -30,6 +30,13 @@ project(
   default_options : ['buildtype=debugoptimized', 'b_ndebug=if-release', 'c_std=c11', 'cpp_std=c++14']
 )
 
+# For meson >= 0.55.0, meson can inject some extra arguments to get richer
+# results from gtest based tests.
+gtest_test_protocol = 'exitcode'
+if meson.version().version_compare('>= 0.55.0')
+  gtest_test_protocol = 'gtest'
+endif
+
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 
@@ -412,6 +419,35 @@ if _xlib_lease == 'auto'
   with_xlib_lease = with_platform_x11 and system_has_kms_drm
 else
   with_xlib_lease = _xlib_lease == 'enabled'
+endif
+
+if with_platform_wayland
+  c_args += '-DVK_USE_PLATFORM_WAYLAND_KHR'
+  #add this once aco and other places can build with it
+  #cpp_args += '-DVK_USE_PLATFORM_WAYLAND_KHR'
+endif
+if with_platform_x11
+  c_args += ['-DVK_USE_PLATFORM_XCB_KHR', '-DVK_USE_PLATFORM_XLIB_KHR']
+  #add this once aco and other places can build with it
+  #cpp_args += ['-DVK_USE_PLATFORM_XCB_KHR', '-DVK_USE_PLATFORM_XLIB_KHR']
+endif
+if with_platform_windows
+  c_args += '-DVK_USE_PLATFORM_WIN32_KHR'
+  #add this once aco and other places can build with it
+  #cpp_args += '-DVK_USE_PLATFORM_WIN32_KHR'
+endif
+if with_platform_android
+  c_args += '-DVK_USE_PLATFORM_ANDROID_KHR'
+  cpp_args += '-DVK_USE_PLATFORM_ANDROID_KHR'
+endif
+if with_xlib_lease
+  c_args += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
+  #add this once aco and other places can build with it
+  #cpp_args += '-DVK_USE_PLATFORM_XLIB_XRANDR_EXT'
+endif
+if system_has_kms_drm and not with_platform_android
+  c_args += '-DVK_USE_PLATFORM_DISPLAY_KHR'
+  cpp_args += '-DVK_USE_PLATFORM_DISPLAY_KHR'
 endif
 
 _egl = get_option('egl')
@@ -1095,7 +1131,6 @@ else
     '-Werror=incompatible-pointer-types',
     '-Werror=int-conversion',
     '-Wimplicit-fallthrough',
-    '-Werror=thread-safety',
     '-Wno-missing-field-initializers',
     '-Wno-format-truncation',
     '-fno-math-errno',
@@ -1106,6 +1141,10 @@ else
   # MinGW chokes on format specifiers and I can't get it all working
   if not (cc.get_id() == 'gcc' and host_machine.system() == 'windows')
     _trial += ['-Werror=format', '-Wformat-security']
+  endif
+  # FreeBSD annotated <pthread.h> but Mesa isn't ready
+  if not (cc.get_id() == 'clang' and host_machine.system() == 'freebsd')
+    _trial += ['-Werror=thread-safety']
   endif
   foreach a : _trial
     if cc.has_argument(a)
@@ -1711,8 +1750,10 @@ if with_llvm
       language : ['c', 'cpp'],
     )
   endif
-elif with_amd_vk or with_gallium_radeonsi or with_gallium_swr or with_swrast_vk
-  error('The following drivers require LLVM: Radv, RadeonSI, SWR, Lavapipe. One of these is enabled, but LLVM is disabled.')
+elif with_amd_vk and with_aco_tests
+  error('ACO tests require LLVM, but LLVM is disabled.')
+elif with_gallium_radeonsi or with_gallium_swr or with_swrast_vk
+  error('The following drivers require LLVM: RadeonSI, SWR, Lavapipe. One of these is enabled, but LLVM is disabled.')
 elif with_gallium_opencl
   error('The OpenCL "Clover" state tracker requires LLVM, but LLVM is disabled.')
 elif with_clc

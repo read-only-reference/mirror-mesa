@@ -63,9 +63,6 @@ struct zink_resource_object {
    unsigned persistent_maps; //if nonzero, requires vkFlushMappedMemoryRanges during batch use
    struct zink_descriptor_refs desc_set_refs;
 
-   struct zink_batch_usage *reads;
-   struct zink_batch_usage *writes;
-
    struct util_dynarray tmp;
 
    union {
@@ -103,7 +100,7 @@ struct zink_resource {
          struct util_range valid_buffer_range;
          uint32_t vbo_bind_mask : PIPE_MAX_ATTRIBS;
          uint8_t ubo_bind_count[2];
-         uint8_t so_bind_count;
+         uint8_t so_bind_count; //not counted in all_binds
          bool so_valid;
          uint32_t ubo_bind_mask[PIPE_SHADER_TYPES];
          uint32_t ssbo_bind_mask[PIPE_SHADER_TYPES];
@@ -113,7 +110,7 @@ struct zink_resource {
          VkImageLayout layout;
          VkImageAspectFlags aspect;
          bool optimal_tiling;
-         uint8_t fb_binds;
+         uint8_t fb_binds; //not counted in all_binds
       };
    };
    uint32_t sampler_binds[PIPE_SHADER_TYPES];

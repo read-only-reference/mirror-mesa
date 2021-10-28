@@ -37,7 +37,6 @@
 #include "util/perf/u_trace.h"
 
 #include "freedreno_autotune.h"
-#include "freedreno_batch_cache.h"
 #include "freedreno_gmem.h"
 #include "freedreno_perfetto.h"
 #include "freedreno_screen.h"
@@ -199,6 +198,8 @@ struct ir3_shader_key;
 struct fd_context {
    struct pipe_context base;
 
+   unsigned flags;      /* PIPE_CONTEXT_x */
+
    struct threaded_context *tc;
 
    struct list_head node; /* node in screen->context_list */
@@ -212,8 +213,6 @@ struct fd_context {
     * a ctxA batch
     */
    simple_mtx_t gmem_lock;
-
-   struct fd_batch_cache batch_cache;
 
    struct fd_device *dev;
    struct fd_screen *screen;
@@ -323,9 +322,12 @@ struct fd_context {
     * count increases, it means some other context crashed.  If
     * per-context reset count increases, it means we crashed the
     * gpu.
+    *
+    * Only accessed by front-end thread, never accessed by TC driver
+    * thread.
     */
-   uint32_t context_reset_count dt;
-   uint32_t global_reset_count dt;
+   uint32_t context_reset_count;
+   uint32_t global_reset_count;
 
    /* Context sequence #, used for batch-cache key: */
    uint16_t seqno;

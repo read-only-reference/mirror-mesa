@@ -1597,7 +1597,7 @@ to upconvert to 32b float internally?
 		<bitfield name="LINEHALFWIDTH" low="3" high="10" radix="2" type="fixed"/>
 		<bitfield name="POLY_OFFSET" pos="11" type="boolean"/>
 		<bitfield name="UNK12" pos="12"/>
-		<bitfield name="MSAA_ENABLE" pos="13" type="boolean"/>
+		<bitfield name="LINE_MODE" pos="13" type="a5xx_line_mode"/>
 		<bitfield name="UNK15" low="15" high="16"/>
 		<!--
 		This is set by the blob when multiview is enabled, but doesn't seem
@@ -1798,7 +1798,7 @@ to upconvert to 32b float internally?
 		<bitfield name="FRAGCOORDSAMPLEMODE" low="1" high="2" type="a6xx_fragcoord_sample_mode"/>
 	</reg32>
 
-	<reg32 offset="0x8102" name="GRAS_2D_BLIT_INFO">
+	<reg32 offset="0x8102" name="GRAS_LRZ_MRT_BUF_INFO_0">
 		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a6xx_format"/>
 	</reg32>
 	<reg64 offset="0x8103" name="GRAS_LRZ_BUFFER_BASE" align="256" type="waddress"/>

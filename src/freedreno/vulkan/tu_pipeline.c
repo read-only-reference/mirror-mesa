@@ -774,7 +774,7 @@ tu6_setup_streamout(struct tu_cs *cs,
        * a bit less ideal here..
        */
       for (idx = 0; idx < l->cnt; idx++)
-         if (l->var[idx].regid == v->outputs[k].regid)
+         if (l->var[idx].slot == v->outputs[k].slot)
             break;
 
       debug_assert(idx < l->cnt);
@@ -1006,12 +1006,12 @@ tu6_emit_vpc(struct tu_cs *cs,
 
    if (layer_regid != regid(63, 0)) {
       layer_loc = linkage.max_loc;
-      ir3_link_add(&linkage, layer_regid, 0x1, linkage.max_loc);
+      ir3_link_add(&linkage, VARYING_SLOT_LAYER, layer_regid, 0x1, linkage.max_loc);
    }
 
    if (view_regid != regid(63, 0)) {
       view_loc = linkage.max_loc;
-      ir3_link_add(&linkage, view_regid, 0x1, linkage.max_loc);
+      ir3_link_add(&linkage, VARYING_SLOT_VIEWPORT, view_regid, 0x1, linkage.max_loc);
    }
 
    unsigned extra_pos = 0;
@@ -1023,14 +1023,15 @@ tu6_emit_vpc(struct tu_cs *cs,
       if (position_loc == 0xff)
          position_loc = linkage.max_loc;
 
-      ir3_link_add(&linkage, last_shader->outputs[i].regid,
+      ir3_link_add(&linkage, last_shader->outputs[i].slot,
+                   last_shader->outputs[i].regid,
                    0xf, position_loc + 4 * last_shader->outputs[i].view);
       extra_pos = MAX2(extra_pos, last_shader->outputs[i].view);
    }
 
    if (pointsize_regid != regid(63, 0)) {
       pointsize_loc = linkage.max_loc;
-      ir3_link_add(&linkage, pointsize_regid, 0x1, linkage.max_loc);
+      ir3_link_add(&linkage, VARYING_SLOT_PSIZ, pointsize_regid, 0x1, linkage.max_loc);
    }
 
    uint8_t clip_cull_mask = last_shader->clip_mask | last_shader->cull_mask;
@@ -1039,11 +1040,13 @@ tu6_emit_vpc(struct tu_cs *cs,
    uint32_t clip0_loc = linkage.clip0_loc, clip1_loc = linkage.clip1_loc;
    if (clip0_loc == 0xff && clip0_regid != regid(63, 0)) {
       clip0_loc = linkage.max_loc;
-      ir3_link_add(&linkage, clip0_regid, clip_cull_mask & 0xf, linkage.max_loc);
+      ir3_link_add(&linkage, VARYING_SLOT_CLIP_DIST0, clip0_regid,
+                   clip_cull_mask & 0xf, linkage.max_loc);
    }
    if (clip1_loc == 0xff && clip1_regid != regid(63, 0)) {
       clip1_loc = linkage.max_loc;
-      ir3_link_add(&linkage, clip1_regid, clip_cull_mask >> 4, linkage.max_loc);
+      ir3_link_add(&linkage, VARYING_SLOT_CLIP_DIST1, clip1_regid,
+                   clip_cull_mask >> 4, linkage.max_loc);
    }
 
    tu6_setup_streamout(cs, last_shader, &linkage);
@@ -1054,7 +1057,7 @@ tu6_emit_vpc(struct tu_cs *cs,
     * any unused code and make sure that optimizations don't remove it.
     */
    if (linkage.cnt == 0)
-      ir3_link_add(&linkage, 0, 0x1, linkage.max_loc);
+      ir3_link_add(&linkage, 0, 0, 0x1, linkage.max_loc);
 
    /* map outputs of the last shader to VPC */
    assert(linkage.cnt <= 32);
@@ -1970,7 +1973,7 @@ tu6_emit_sample_locations(struct tu_cs *cs, const VkSampleLocationsInfoEXT *samp
 
 static uint32_t
 tu6_gras_su_cntl(const VkPipelineRasterizationStateCreateInfo *rast_info,
-                 VkSampleCountFlagBits samples,
+                 enum a5xx_line_mode line_mode,
                  bool multiview)
 {
    uint32_t gras_su_cntl = 0;
@@ -1989,8 +1992,7 @@ tu6_gras_su_cntl(const VkPipelineRasterizationStateCreateInfo *rast_info,
    if (rast_info->depthBiasEnable)
       gras_su_cntl |= A6XX_GRAS_SU_CNTL_POLY_OFFSET;
 
-   if (samples > VK_SAMPLE_COUNT_1_BIT)
-      gras_su_cntl |= A6XX_GRAS_SU_CNTL_MSAA_ENABLE;
+   gras_su_cntl |= A6XX_GRAS_SU_CNTL_LINE_MODE(line_mode);
 
    if (multiview) {
       gras_su_cntl |=
@@ -2650,7 +2652,11 @@ tu_pipeline_builder_parse_vertex_input(struct tu_pipeline_builder *builder,
    const struct ir3_shader_variant *vs = builder->variants[MESA_SHADER_VERTEX];
    const struct ir3_shader_variant *bs = builder->binning_variant;
 
-   pipeline->num_vbs = vi_info->vertexBindingDescriptionCount;
+   /* Bindings may contain holes */
+   for (unsigned i = 0; i < vi_info->vertexBindingDescriptionCount; i++) {
+      pipeline->num_vbs =
+         MAX2(pipeline->num_vbs, vi_info->pVertexBindingDescriptions[i].binding + 1);
+   }
 
    struct tu_cs vi_cs;
    tu_cs_begin_sub_stream(&pipeline->cs,
@@ -2759,6 +2765,19 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
    if (depth_clip_state)
       depth_clip_disable = !depth_clip_state->depthClipEnable;
 
+   pipeline->line_mode = RECTANGULAR;
+
+   if (tu6_primtype_line(pipeline->ia.primtype)) {
+      const VkPipelineRasterizationLineStateCreateInfoEXT *rast_line_state =
+         vk_find_struct_const(rast_info->pNext,
+                              PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT);
+
+      if (rast_line_state && rast_line_state->lineRasterizationMode ==
+               VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT) {
+         pipeline->line_mode = BRESENHAM;
+      }
+   }
+
    struct tu_cs cs;
    uint32_t cs_size = 9 + (builder->emit_msaa_state ? 11 : 0);
    pipeline->rast_state = tu_cs_draw_state(&pipeline->cs, &cs, cs_size);
@@ -2794,7 +2813,7 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
     * It happens when subpass doesn't use any color/depth attachment.
     */
    if (builder->emit_msaa_state)
-      tu6_emit_msaa(&cs, builder->samples);
+      tu6_emit_msaa(&cs, builder->samples, pipeline->line_mode);
 
    const VkPipelineRasterizationStateStreamCreateInfoEXT *stream_info =
       vk_find_struct_const(rast_info->pNext,
@@ -2814,7 +2833,7 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
    }
 
    pipeline->gras_su_cntl =
-      tu6_gras_su_cntl(rast_info, builder->samples, builder->multiview_mask != 0);
+      tu6_gras_su_cntl(rast_info, pipeline->line_mode, builder->multiview_mask != 0);
 
    if (tu_pipeline_static_state(pipeline, &cs, TU_DYNAMIC_STATE_GRAS_SU_CNTL, 2))
       tu_cs_emit_regs(&cs, A6XX_GRAS_SU_CNTL(.dword = pipeline->gras_su_cntl));

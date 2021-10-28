@@ -66,7 +66,7 @@
 #include "drm-uapi/i915_drm.h"
 #endif
 
-#define V3DV_API_VERSION VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION)
+#define V3DV_API_VERSION VK_MAKE_VERSION(1, 1, VK_HEADER_VERSION)
 
 VKAPI_ATTR VkResult VKAPI_CALL
 v3dv_EnumerateInstanceVersion(uint32_t *pApiVersion)
@@ -94,6 +94,7 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef V3DV_HAS_SURFACE
    .KHR_get_surface_capabilities2       = true,
    .KHR_surface                         = true,
+   .KHR_surface_protected_capabilities  = true,
 #endif
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
    .KHR_wayland_surface                 = true,
@@ -136,12 +137,14 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .KHR_uniform_buffer_standard_layout  = true,
 #ifdef V3DV_HAS_SURFACE
       .KHR_swapchain                       = true,
+      .KHR_swapchain_mutable_format        = true,
       .KHR_incremental_present             = true,
 #endif
       .KHR_variable_pointers               = true,
       .EXT_color_write_enable              = true,
       .EXT_custom_border_color             = true,
       .EXT_external_memory_dma_buf         = true,
+      .EXT_host_query_reset                = true,
       .EXT_index_type_uint8                = true,
       .EXT_physical_device_drm             = true,
       .EXT_pipeline_creation_cache_control = true,
@@ -186,6 +189,8 @@ v3dv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    struct vk_instance_dispatch_table dispatch_table;
    vk_instance_dispatch_table_from_entrypoints(
       &dispatch_table, &v3dv_instance_entrypoints, true);
+   vk_instance_dispatch_table_from_entrypoints(
+      &dispatch_table, &wsi_instance_entrypoints, false);
 
    result = vk_instance_init(&instance->vk,
                              &instance_extensions,
@@ -194,7 +199,7 @@ v3dv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    if (result != VK_SUCCESS) {
       vk_free(pAllocator, instance);
-      return vk_error(instance, result);
+      return vk_error(NULL, result);
    }
 
    v3d_process_debug_variable();
@@ -614,14 +619,14 @@ init_uuids(struct v3dv_physical_device *device)
    const struct build_id_note *note =
       build_id_find_nhdr_for_addr(init_uuids);
    if (!note) {
-      return vk_errorf((struct v3dv_instance*) device->vk.instance,
+      return vk_errorf(device->vk.instance,
                        VK_ERROR_INITIALIZATION_FAILED,
                        "Failed to find build-id");
    }
 
    unsigned build_id_len = build_id_length(note);
    if (build_id_len < 20) {
-      return vk_errorf((struct v3dv_instance*) device->vk.instance,
+      return vk_errorf(device->vk.instance,
                        VK_ERROR_INITIALIZATION_FAILED,
                        "build-id too short.  It needs to be a SHA");
    }
@@ -691,6 +696,8 @@ physical_device_init(struct v3dv_physical_device *device,
    struct vk_physical_device_dispatch_table dispatch_table;
    vk_physical_device_dispatch_table_from_entrypoints
       (&dispatch_table, &v3dv_physical_device_entrypoints, true);
+   vk_physical_device_dispatch_table_from_entrypoints(
+      &dispatch_table, &wsi_physical_device_entrypoints, false);
 
    result = vk_physical_device_init(&device->vk, &instance->vk, NULL,
                                     &dispatch_table);
@@ -727,8 +734,7 @@ physical_device_init(struct v3dv_physical_device *device,
    device->has_primary = primary_path;
    if (device->has_primary) {
       if (stat(primary_path, &primary_stat) != 0) {
-         result = vk_errorf(instance,
-                            VK_ERROR_INITIALIZATION_FAILED,
+         result = vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
                             "failed to stat DRM primary node %s",
                             primary_path);
          goto fail;
@@ -738,8 +744,7 @@ physical_device_init(struct v3dv_physical_device *device,
    }
 
    if (fstat(render_fd, &render_stat) != 0) {
-      result = vk_errorf(instance,
-                         VK_ERROR_INITIALIZATION_FAILED,
+      result = vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
                          "failed to stat DRM render node %s",
                          path);
       goto fail;
@@ -1131,6 +1136,14 @@ v3dv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
             (void *) ext;
          features->vertexAttributeInstanceRateDivisor = true;
          features->vertexAttributeInstanceRateZeroDivisor = false;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES: {
+         VkPhysicalDeviceHostQueryResetFeatures *features =
+            (void *) ext;
+
+         features->hostQueryReset = true;
          break;
       }
 
@@ -1671,8 +1684,7 @@ v3dv_EnumerateDeviceLayerProperties(VkPhysicalDevice physicalDevice,
       return VK_SUCCESS;
    }
 
-   return vk_error((struct v3dv_instance*) physical_device->vk.instance,
-                   VK_ERROR_LAYER_NOT_PRESENT);
+   return vk_error(physical_device, VK_ERROR_LAYER_NOT_PRESENT);
 }
 
 static VkResult
@@ -1732,19 +1744,6 @@ v3dv_CreateDevice(VkPhysicalDevice physicalDevice,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
 
-   /* Check enabled features */
-   if (pCreateInfo->pEnabledFeatures) {
-      VkPhysicalDeviceFeatures supported_features;
-      v3dv_GetPhysicalDeviceFeatures(physicalDevice, &supported_features);
-      VkBool32 *supported_feature = (VkBool32 *)&supported_features;
-      VkBool32 *enabled_feature = (VkBool32 *)pCreateInfo->pEnabledFeatures;
-      unsigned num_features = sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
-      for (uint32_t i = 0; i < num_features; i++) {
-         if (enabled_feature[i] && !supported_feature[i])
-            return vk_error(instance, VK_ERROR_FEATURE_NOT_PRESENT);
-      }
-   }
-
    /* Check requested queues (we only expose one queue ) */
    assert(pCreateInfo->queueCreateInfoCount == 1);
    for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
@@ -1763,11 +1762,13 @@ v3dv_CreateDevice(VkPhysicalDevice physicalDevice,
    struct vk_device_dispatch_table dispatch_table;
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
                                              &v3dv_device_entrypoints, true);
+   vk_device_dispatch_table_from_entrypoints(&dispatch_table,
+                                             &wsi_device_entrypoints, false);
    result = vk_device_init(&device->vk, &physical_device->vk,
                            &dispatch_table, pCreateInfo, pAllocator);
    if (result != VK_SUCCESS) {
       vk_free(&device->vk.alloc, device);
-      return vk_error(instance, result);
+      return vk_error(NULL, result);
    }
 
    device->instance = instance;
@@ -2157,7 +2158,7 @@ v3dv_AllocateMemory(VkDevice _device,
 
    if (result != VK_SUCCESS) {
       vk_object_free(&device->vk, pAllocator, mem);
-      return vk_error(device->instance, result);
+      return vk_error(device, result);
    }
 
    *pMem = v3dv_device_memory_to_handle(mem);
@@ -2208,7 +2209,7 @@ v3dv_MapMemory(VkDevice _device,
     */
    VkResult result = device_map(device, mem);
    if (result != VK_SUCCESS)
-      return vk_error(device->instance, result);
+      return vk_error(device, result);
 
    *ppData = ((uint8_t *) mem->bo->map) + offset;
    return VK_SUCCESS;
@@ -2397,7 +2398,7 @@ v3dv_CreateBuffer(VkDevice  _device,
    buffer = vk_object_zalloc(&device->vk, pAllocator, sizeof(*buffer),
                              VK_OBJECT_TYPE_BUFFER);
    if (buffer == NULL)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    buffer->size = pCreateInfo->size;
    buffer->usage = pCreateInfo->usage;
@@ -2443,7 +2444,7 @@ v3dv_CreateFramebuffer(VkDevice _device,
    framebuffer = vk_object_zalloc(&device->vk, pAllocator, size,
                                   VK_OBJECT_TYPE_FRAMEBUFFER);
    if (framebuffer == NULL)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    framebuffer->width = pCreateInfo->width;
    framebuffer->height = pCreateInfo->height;
@@ -2493,7 +2494,7 @@ v3dv_GetMemoryFdPropertiesKHR(VkDevice _device,
          (1 << pdevice->memory.memoryTypeCount) - 1;
       return VK_SUCCESS;
    default:
-      return vk_error(device->instance, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+      return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
    }
 }
 
@@ -2514,7 +2515,7 @@ v3dv_GetMemoryFdKHR(VkDevice _device,
                             mem->bo->handle,
                             DRM_CLOEXEC, &fd);
    if (ret)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    *pFd = fd;
 
@@ -2532,7 +2533,7 @@ v3dv_CreateEvent(VkDevice _device,
       vk_object_zalloc(&device->vk, pAllocator, sizeof(*event),
                        VK_OBJECT_TYPE_EVENT);
    if (!event)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    /* Events are created in the unsignaled state */
    event->state = false;
@@ -2592,7 +2593,7 @@ v3dv_CreateSampler(VkDevice _device,
    sampler = vk_object_zalloc(&device->vk, pAllocator, sizeof(*sampler),
                               VK_OBJECT_TYPE_SAMPLER);
    if (!sampler)
-      return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    sampler->compare_enable = pCreateInfo->compareEnable;
    sampler->unnormalized_coordinates = pCreateInfo->unnormalizedCoordinates;

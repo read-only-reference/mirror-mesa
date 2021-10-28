@@ -45,6 +45,7 @@ enum ir3_driver_param {
    IR3_DP_NUM_WORK_GROUPS_X = 0,
    IR3_DP_NUM_WORK_GROUPS_Y = 1,
    IR3_DP_NUM_WORK_GROUPS_Z = 2,
+   IR3_DP_WORK_DIM          = 3,
    IR3_DP_BASE_GROUP_X = 4,
    IR3_DP_BASE_GROUP_Y = 5,
    IR3_DP_BASE_GROUP_Z = 6,
@@ -145,12 +146,14 @@ struct ir3_ubo_analysis_state {
  *    user consts
  *    UBO addresses
  *    SSBO sizes
+ *    image dimensions
  *    if (vertex shader) {
- *        driver params (IR3_DP_*)
+ *        driver params (IR3_DP_VS_COUNT)
  *        if (stream_output.num_outputs > 0)
  *           stream-out addresses
  *    } else if (compute_shader) {
- *        driver params (IR3_DP_*)
+ *        kernel params
+ *        driver params (IR3_DP_CS_COUNT)
  *    }
  *    immediates
  *
@@ -170,6 +173,7 @@ struct ir3_const_state {
       /* user const start at zero */
       unsigned ubo;
       unsigned image_dims;
+      unsigned kernel_params;
       unsigned driver_param;
       unsigned tfbo;
       unsigned primitive_param;
@@ -695,6 +699,7 @@ ir3_shader_stage(struct ir3_shader_variant *v)
    case MESA_SHADER_FRAGMENT:
       return "FRAG";
    case MESA_SHADER_COMPUTE:
+   case MESA_SHADER_KERNEL:
       return "CL";
    default:
       unreachable("invalid type");
@@ -738,6 +743,15 @@ struct ir3_shader {
    struct nir_shader *nir;
    struct ir3_stream_output_info stream_output;
 
+   /* per shader stage specific info: */
+   union {
+      /* for compute shaders: */
+      struct {
+         unsigned req_input_mem;    /* in dwords */
+         unsigned req_local_mem;
+      } cs;
+   };
+
    struct ir3_shader_variant *variants;
    mtx_t variants_lock;
 
@@ -770,7 +784,8 @@ ir3_max_const(const struct ir3_shader_variant *v)
 {
    const struct ir3_compiler *compiler = v->shader->compiler;
 
-   if (v->shader->type == MESA_SHADER_COMPUTE) {
+   if ((v->shader->type == MESA_SHADER_COMPUTE) ||
+       (v->shader->type == MESA_SHADER_KERNEL)) {
       return compiler->max_const_compute;
    } else if (v->key.safe_constlen) {
       return compiler->max_const_safe;
@@ -876,6 +891,7 @@ struct ir3_shader_linkage {
 
    /* Map from VS output to location. */
    struct {
+      uint8_t slot;
       uint8_t regid;
       uint8_t compmask;
       uint8_t loc;
@@ -892,8 +908,8 @@ struct ir3_shader_linkage {
 };
 
 static inline void
-ir3_link_add(struct ir3_shader_linkage *l, uint8_t regid_, uint8_t compmask,
-             uint8_t loc)
+ir3_link_add(struct ir3_shader_linkage *l, uint8_t slot, uint8_t regid_,
+             uint8_t compmask, uint8_t loc)
 {
    for (int j = 0; j < util_last_bit(compmask); j++) {
       uint8_t comploc = loc + j;
@@ -906,6 +922,7 @@ ir3_link_add(struct ir3_shader_linkage *l, uint8_t regid_, uint8_t compmask,
       int i = l->cnt++;
       debug_assert(i < ARRAY_SIZE(l->var));
 
+      l->var[i].slot = slot;
       l->var[i].regid = regid_;
       l->var[i].compmask = compmask;
       l->var[i].loc = loc;
@@ -959,7 +976,8 @@ ir3_link_shaders(struct ir3_shader_linkage *l,
       if (fs->inputs[j].slot == VARYING_SLOT_CLIP_DIST1)
          l->clip1_loc = fs->inputs[j].inloc;
 
-      ir3_link_add(l, k >= 0 ? vs->outputs[k].regid : default_regid,
+      ir3_link_add(l, fs->inputs[j].slot,
+                   k >= 0 ? vs->outputs[k].regid : default_regid,
                    fs->inputs[j].compmask, fs->inputs[j].inloc);
    }
 }
