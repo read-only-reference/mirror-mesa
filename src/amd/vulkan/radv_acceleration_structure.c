@@ -29,7 +29,7 @@
 #include "radv_cs.h"
 #include "radv_meta.h"
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_GetAccelerationStructureBuildSizesKHR(
    VkDevice _device, VkAccelerationStructureBuildTypeKHR buildType,
    const VkAccelerationStructureBuildGeometryInfoKHR *pBuildInfo,
@@ -84,7 +84,7 @@ radv_GetAccelerationStructureBuildSizesKHR(
       MAX2(4096, 2 * (boxes + instances + triangles) * sizeof(uint32_t));
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateAccelerationStructureKHR(VkDevice _device,
                                     const VkAccelerationStructureCreateInfoKHR *pCreateInfo,
                                     const VkAllocationCallbacks *pAllocator,
@@ -109,7 +109,7 @@ radv_CreateAccelerationStructureKHR(VkDevice _device,
    return VK_SUCCESS;
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_DestroyAccelerationStructureKHR(VkDevice _device,
                                      VkAccelerationStructureKHR accelerationStructure,
                                      const VkAllocationCallbacks *pAllocator)
@@ -124,7 +124,7 @@ radv_DestroyAccelerationStructureKHR(VkDevice _device,
    vk_free2(&device->vk.alloc, pAllocator, accel);
 }
 
-VkDeviceAddress
+VKAPI_ATTR VkDeviceAddress VKAPI_CALL
 radv_GetAccelerationStructureDeviceAddressKHR(
    VkDevice _device, const VkAccelerationStructureDeviceAddressInfoKHR *pInfo)
 {
@@ -132,7 +132,7 @@ radv_GetAccelerationStructureDeviceAddressKHR(
    return radv_accel_struct_get_va(accel);
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_WriteAccelerationStructuresPropertiesKHR(
    VkDevice _device, uint32_t accelerationStructureCount,
    const VkAccelerationStructureKHR *pAccelerationStructures, VkQueryType queryType,
@@ -473,6 +473,9 @@ bvh_opt_compare(const void *_a, const void *_b)
 static void
 optimize_bvh(const char *base_ptr, uint32_t *node_ids, uint32_t node_count)
 {
+   if (node_count == 0)
+      return;
+
    float bounds[6];
    for (unsigned i = 0; i < 3; ++i)
       bounds[i] = INFINITY;
@@ -658,7 +661,7 @@ fail:
    return result;
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_BuildAccelerationStructuresKHR(
    VkDevice _device, VkDeferredOperationKHR deferredOperation, uint32_t infoCount,
    const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
@@ -675,7 +678,7 @@ radv_BuildAccelerationStructuresKHR(
    return result;
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CopyAccelerationStructureKHR(VkDevice _device, VkDeferredOperationKHR deferredOperation,
                                   const VkCopyAccelerationStructureInfoKHR *pInfo)
 {
@@ -1769,7 +1772,7 @@ struct bvh_state {
    uint32_t instance_count;
 };
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdBuildAccelerationStructuresKHR(
    VkCommandBuffer commandBuffer, uint32_t infoCount,
    const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
@@ -1872,9 +1875,9 @@ radv_CmdBuildAccelerationStructuresKHR(
          if (!progress) {
             cmd_buffer->state.flush_bits |=
                RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
-               radv_src_access_flush(cmd_buffer, VK_ACCESS_SHADER_WRITE_BIT, NULL) |
+               radv_src_access_flush(cmd_buffer, VK_ACCESS_2_SHADER_WRITE_BIT_KHR, NULL) |
                radv_dst_access_flush(cmd_buffer,
-                                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, NULL);
+                                     VK_ACCESS_2_SHADER_READ_BIT_KHR | VK_ACCESS_2_SHADER_WRITE_BIT_KHR, NULL);
          }
          progress = true;
          uint32_t dst_node_count = MAX2(1, DIV_ROUND_UP(bvh_states[i].node_count, 4));
@@ -1932,7 +1935,7 @@ radv_CmdBuildAccelerationStructuresKHR(
    radv_meta_restore(&saved_state, cmd_buffer);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyAccelerationStructureKHR(VkCommandBuffer commandBuffer,
                                      const VkCopyAccelerationStructureInfoKHR *pInfo)
 {
@@ -1966,7 +1969,7 @@ radv_CmdCopyAccelerationStructureKHR(VkCommandBuffer commandBuffer,
    radv_meta_restore(&saved_state, cmd_buffer);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_GetDeviceAccelerationStructureCompatibilityKHR(
    VkDevice _device, const VkAccelerationStructureVersionInfoKHR *pVersionInfo,
    VkAccelerationStructureCompatibilityKHR *pCompatibility)
@@ -1982,7 +1985,7 @@ radv_GetDeviceAccelerationStructureCompatibilityKHR(
                             : VK_ACCELERATION_STRUCTURE_COMPATIBILITY_INCOMPATIBLE_KHR;
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CopyMemoryToAccelerationStructureKHR(VkDevice _device,
                                           VkDeferredOperationKHR deferredOperation,
                                           const VkCopyMemoryToAccelerationStructureInfoKHR *pInfo)
@@ -2012,7 +2015,7 @@ radv_CopyMemoryToAccelerationStructureKHR(VkDevice _device,
    return VK_SUCCESS;
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CopyAccelerationStructureToMemoryKHR(VkDevice _device,
                                           VkDeferredOperationKHR deferredOperation,
                                           const VkCopyAccelerationStructureToMemoryInfoKHR *pInfo)
@@ -2049,7 +2052,7 @@ radv_CopyAccelerationStructureToMemoryKHR(VkDevice _device,
    return VK_SUCCESS;
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyMemoryToAccelerationStructureKHR(
    VkCommandBuffer commandBuffer, const VkCopyMemoryToAccelerationStructureInfoKHR *pInfo)
 {
@@ -2080,7 +2083,7 @@ radv_CmdCopyMemoryToAccelerationStructureKHR(
    radv_meta_restore(&saved_state, cmd_buffer);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyAccelerationStructureToMemoryKHR(
    VkCommandBuffer commandBuffer, const VkCopyAccelerationStructureToMemoryInfoKHR *pInfo)
 {

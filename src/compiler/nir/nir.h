@@ -4660,6 +4660,14 @@ void nir_gs_count_vertices_and_primitives(const nir_shader *shader,
                                           int *out_prmcnt,
                                           unsigned num_streams);
 
+typedef enum {
+   nir_group_all,
+   nir_group_same_resource_only,
+} nir_load_grouping;
+
+void nir_group_loads(nir_shader *shader, nir_load_grouping grouping,
+                     unsigned max_distance);
+
 bool nir_shrink_vec_array_vars(nir_shader *shader, nir_variable_mode modes);
 bool nir_split_array_vars(nir_shader *shader, nir_variable_mode modes);
 bool nir_split_var_copies(nir_shader *shader);
@@ -4966,7 +4974,7 @@ nir_lower_shader_calls(nir_shader *shader,
                        void *mem_ctx);
 
 nir_src *nir_get_io_offset_src(nir_intrinsic_instr *instr);
-nir_src *nir_get_io_vertex_index_src(nir_intrinsic_instr *instr);
+nir_src *nir_get_io_arrayed_index_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_shader_call_payload_src(nir_intrinsic_instr *call);
 
 bool nir_is_arrayed_io(const nir_variable *var, gl_shader_stage stage);
@@ -5059,6 +5067,7 @@ typedef struct nir_lower_compute_system_values_options {
    bool has_base_workgroup_id:1;
    bool shuffle_local_ids_for_quad_derivatives:1;
    bool lower_local_invocation_index:1;
+   bool lower_cs_local_id_from_index:1;
 } nir_lower_compute_system_values_options;
 
 bool nir_lower_compute_system_values(nir_shader *shader,
@@ -5548,6 +5557,7 @@ bool nir_opt_combine_memory_barriers(nir_shader *shader,
 
 bool nir_opt_combine_stores(nir_shader *shader, nir_variable_mode modes);
 
+bool nir_copy_prop_impl(nir_function_impl *impl);
 bool nir_copy_prop(nir_shader *shader);
 
 bool nir_opt_copy_prop_vars(nir_shader *shader);

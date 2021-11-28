@@ -92,7 +92,12 @@ upload_blorp_shader(struct blorp_batch *batch, uint32_t stage,
 void
 anv_device_init_blorp(struct anv_device *device)
 {
-   blorp_init(&device->blorp, device, &device->isl_dev);
+   const struct intel_device_info *devinfo = &device->info;
+   const struct blorp_config config = {
+      .use_mesh_shading = devinfo->has_mesh_shading,
+   };
+
+   blorp_init(&device->blorp, device, &device->isl_dev, &config);
    device->blorp.compiler = device->physical->compiler;
    device->blorp.lookup_shader = lookup_blorp_shader;
    device->blorp.upload_shader = upload_blorp_shader;
@@ -156,22 +161,7 @@ get_blorp_surf_for_anv_buffer(struct anv_device *device,
                               struct blorp_surf *blorp_surf,
                               struct isl_surf *isl_surf)
 {
-   const struct isl_format_layout *fmtl =
-      isl_format_get_layout(format);
    bool ok UNUSED;
-
-   /* ASTC is the only format which doesn't support linear layouts.
-    * Create an equivalently sized surface with ISL to get around this.
-    */
-   if (fmtl->txc == ISL_TXC_ASTC) {
-      /* Use an equivalently sized format */
-      format = ISL_FORMAT_R32G32B32A32_UINT;
-      assert(fmtl->bpb == isl_format_get_layout(format)->bpb);
-
-      /* Shrink the dimensions for the new format */
-      width = DIV_ROUND_UP(width, fmtl->bw);
-      height = DIV_ROUND_UP(height, fmtl->bh);
-   }
 
    *blorp_surf = (struct blorp_surf) {
       .surf = isl_surf,
@@ -541,10 +531,8 @@ copy_buffer_to_image(struct anv_cmd_buffer *cmd_buffer,
       buffer_row_pitch;
 
    /* Some formats have additional restrictions which may cause ISL to
-    * fail to create a surface for us.  Some examples include:
-    *
-    *    1. ASTC formats are not allowed to be LINEAR and must be tiled
-    *    2. YCbCr formats have to have 2-pixel aligned strides
+    * fail to create a surface for us.  For example, YCbCr formats
+    * have to have 2-pixel aligned strides.
     *
     * To avoid these issues, we always bind the buffer as if it's a
     * "normal" format like RGBA32_UINT.  Since we're using blorp_copy,

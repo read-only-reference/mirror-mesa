@@ -29,6 +29,7 @@
 #include "compiler/shader_enums.h"
 #include "util/half_float.h"
 #include "util/memstream.h"
+#include "util/mesa-sha1.h"
 #include "vulkan/vulkan_core.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1604,6 +1605,10 @@ nir_print_shader_annotated(nir_shader *shader, FILE *fp,
 
    fprintf(fp, "shader: %s\n", gl_shader_stage_name(shader->info.stage));
 
+   fprintf(fp, "source_sha1: {");
+   _mesa_sha1_print(fp, shader->info.source_sha1);
+   fprintf(fp, "}\n");
+
    if (shader->info.name)
       fprintf(fp, "name: %s\n", shader->info.name);
 
@@ -1638,6 +1643,10 @@ nir_print_shader_annotated(nir_shader *shader, FILE *fp,
       fprintf(fp, "output primitive: %s\n", primitive_name(shader->info.gs.output_primitive));
       fprintf(fp, "active_stream_mask: 0x%x\n", shader->info.gs.active_stream_mask);
       fprintf(fp, "uses_end_primitive: %u\n", shader->info.gs.uses_end_primitive);
+   } else if (shader->info.stage == MESA_SHADER_MESH) {
+      fprintf(fp, "output primitive: %s\n", primitive_name(shader->info.mesh.primitive_type));
+      fprintf(fp, "max primitives out: %u\n", shader->info.mesh.max_primitives_out);
+      fprintf(fp, "max vertices out: %u\n", shader->info.mesh.max_vertices_out);
    }
 
    nir_foreach_variable_in_shader(var, shader)

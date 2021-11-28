@@ -472,7 +472,7 @@ files_libmesa_classic = files(
 files_libmesa_gallium = files(
   'state_tracker/st_atifs_to_nir.c',
   'state_tracker/st_atifs_to_nir.h',
-  'state_tracker/st_atom_array.c',
+  'state_tracker/st_atom_array.cpp',
   'state_tracker/st_atom_atomicbuf.c',
   'state_tracker/st_atom_blend.c',
   'state_tracker/st_atom.c',
@@ -587,6 +587,7 @@ files_libmesa_gallium = files(
   'state_tracker/st_nir_lower_builtin.c',
   'state_tracker/st_nir_lower_tex_src_plane.c',
   'state_tracker/st_pbo.c',
+  'state_tracker/st_pbo_compute.c',
   'state_tracker/st_pbo.h',
   'state_tracker/st_program.c',
   'state_tracker/st_program.h',

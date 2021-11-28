@@ -84,7 +84,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
    case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
-   case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_COMPUTE:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
@@ -163,6 +162,9 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_COMPUTE_SHADER_DERIVATIVES:
    case PIPE_CAP_TGSI_ATOMINC_WRAP:
       return 1;
+
+   case PIPE_CAP_TEXTURE_TRANSFER_MODES:
+      return PIPE_TEXTURE_TRANSFER_BLIT;
 
    case PIPE_CAP_DRAW_VERTEX_STATE:
       return !(sscreen->debug_flags & DBG(NO_FAST_DISPLAY_LIST));
@@ -354,13 +356,21 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 static float si_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 {
    switch (param) {
+   case PIPE_CAPF_MIN_LINE_WIDTH:
+   case PIPE_CAPF_MIN_LINE_WIDTH_AA:
+      return 1; /* due to axis-aligned end caps at line width 1 */
+   case PIPE_CAPF_MIN_POINT_SIZE:
+   case PIPE_CAPF_MIN_POINT_SIZE_AA:
+   case PIPE_CAPF_POINT_SIZE_GRANULARITY:
+   case PIPE_CAPF_LINE_WIDTH_GRANULARITY:
+      return 1.0 / 8.0; /* due to the register field precision */
    case PIPE_CAPF_MAX_LINE_WIDTH:
    case PIPE_CAPF_MAX_LINE_WIDTH_AA:
       /* This depends on the quant mode, though the precise interactions
        * are unknown. */
       return 2048;
-   case PIPE_CAPF_MAX_POINT_WIDTH:
-   case PIPE_CAPF_MAX_POINT_WIDTH_AA:
+   case PIPE_CAPF_MAX_POINT_SIZE:
+   case PIPE_CAPF_MAX_POINT_SIZE_AA:
       return SI_MAX_POINT_SIZE;
    case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
       return 16.0f;
@@ -871,7 +881,7 @@ static int si_get_compute_param(struct pipe_screen *screen, enum pipe_shader_ir 
    case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
       if (ret) {
          uint32_t *subgroup_size = ret;
-         *subgroup_size = sscreen->compute_wave_size;
+         *subgroup_size = si_determine_wave_size(sscreen, NULL);
       }
       return sizeof(uint32_t);
    case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
@@ -990,6 +1000,10 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
 
    si_init_renderer_string(sscreen);
 
+   /* fma32 is too slow for gpu < gfx9, so force it only when gpu >= gfx9 */
+   bool force_fma32 =
+      sscreen->info.chip_class >= GFX9 && sscreen->options.force_use_fma32;
+
    const struct nir_shader_compiler_options nir_options = {
       .lower_scmp = true,
       .lower_flrp16 = true,
@@ -1018,10 +1032,10 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
        * gfx10 and older prefer MAD for F32 because of the legacy instruction.
        */
       .lower_ffma16 = sscreen->info.chip_class < GFX9,
-      .lower_ffma32 = sscreen->info.chip_class < GFX10_3,
+      .lower_ffma32 = sscreen->info.chip_class < GFX10_3 && !force_fma32,
       .lower_ffma64 = false,
       .fuse_ffma16 = sscreen->info.chip_class >= GFX9,
-      .fuse_ffma32 = sscreen->info.chip_class >= GFX10_3,
+      .fuse_ffma32 = sscreen->info.chip_class >= GFX10_3 || force_fma32,
       .fuse_ffma64 = true,
       .lower_fmod = true,
       .lower_pack_snorm_4x8 = true,

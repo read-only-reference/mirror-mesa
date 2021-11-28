@@ -532,6 +532,14 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
 
 #if GFX_VER >= 8
    assert(GFX_VER < 12 || info->surf->tiling != ISL_TILING_W);
+
+   /* From the SKL+ PRMs, RENDER_SURFACE_STATE:TileMode,
+    *
+    *    If Surface Format is ASTC*, this field must be TILEMODE_YMAJOR.
+    */
+   if (isl_format_get_layout(info->view->format)->txc == ISL_TXC_ASTC)
+      assert(info->surf->tiling == ISL_TILING_Y0);
+
    s.TileMode = isl_encode_tiling[info->surf->tiling];
 #else
    s.TiledSurface = info->surf->tiling != ISL_TILING_LINEAR,
@@ -760,7 +768,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
     *    This bit must be set for the following surface types: BC2_UNORM
     *    BC3_UNORM BC5_UNORM BC5_SNORM BC7_UNORM
     */
-   if (GFX_VER >= 9 || dev->info->is_cherryview) {
+   if (GFX_VER >= 9 || dev->info->platform == INTEL_PLATFORM_CHV) {
       switch (info->view->format) {
       case ISL_FORMAT_BC2_UNORM:
       case ISL_FORMAT_BC3_UNORM:

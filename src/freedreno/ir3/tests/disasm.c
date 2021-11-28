@@ -43,6 +43,8 @@
 #include "isa/isa.h"
 
 /* clang-format off */
+/* Note: @anholt's 4xx disasm was done on an a418 Nexus 5x */
+#define INSTR_4XX(i, d, ...) { .gpu_id = 420, .instr = #i, .expected = d, __VA_ARGS__ }
 #define INSTR_5XX(i, d, ...) { .gpu_id = 540, .instr = #i, .expected = d, __VA_ARGS__ }
 #define INSTR_6XX(i, d, ...) { .gpu_id = 630, .instr = #i, .expected = d, __VA_ARGS__ }
 /* clang-format on */
@@ -103,6 +105,7 @@ static const struct test {
    INSTR_6XX(40104002_0c210001, "add.f hr0.z, r0.y, c<a0.x + 33>"),
    INSTR_6XX(40b80804_10408004, "(nop3) cmps.f.lt r1.x, (abs)r1.x, c16.x"),
    INSTR_6XX(47308a02_00002000, "(rpt2)bary.f (ei)r0.z, (r)0, r0.x"),
+   INSTR_6XX(47348000_00002000, "flat.b (ei)r0.x, 0, r0.x"),
    INSTR_6XX(43480801_00008001, "(nop3) absneg.s hr0.y, (abs)hr0.y"),
    INSTR_6XX(50600004_2c010004, "(sy)mul.f hr1.x, hr1.x, h(0.5)"),
    INSTR_6XX(42280807_27ff0000, "(nop3) add.s hr1.w, hr0.x, h(-1)"),
@@ -212,7 +215,7 @@ static const struct test {
    /* dEQP-VK.image.image_size.cube_array.readonly_writeonly_1x1x12 */
    INSTR_6XX(c0260200_03676100, "stib.b.untyped.1d.u32.3.imm.base0 r0.x, r0.w, 1"), /* stib.untyped.u32.1d.3.mode4.base0 r0.x, r0.w, 1 */
 
-   INSTR_6XX(c0240402_00674100, "stib.b.untyped.1d.u16.1.imm.base0 r0.z, r0.x, 2"),
+   INSTR_6XX(c0240402_00674100, "stib.b.untyped.1d.u16.1.imm.base0 hr0.z, r0.x, 2"),
 #if 0
    /* TODO blob sometimes/frequently sets b0, although there does not seem
     * to be an obvious pattern and our encoding never sets it.  AFAICT it
@@ -306,6 +309,13 @@ static const struct test {
    INSTR_6XX(c0260000_00c78080, "ldc.offset0.1.nonuniform r0.x, 0, r0.x"), /* ldc.1.mode2.base0 r0.x, 0, r0.x */
    INSTR_6XX(c0260201_00c78080, "ldc.offset0.1.nonuniform r0.y, 0, r0.y"), /* ldc.1.mode2.base0 r0.y, 0, r0.y */
 
+   /* a4xx-a5xx has the exact same instrs in
+    * dEQP-GLES31.functional.shaders.opaque_type_indexing.ubo.(dynamically_)uniform_fragment
+    * with no change based on the mode. Note that we can't decode this yet.
+    */
+   /* INSTR_4XX(c7860000_00810001), */ /* ldc.1 r0.x, g[r1.x], 0, r0.x */
+   /* INSTR_5XX(c7860000_00800000), */ /* ldc.a.1 r0.x, g[r0.x], 0, r0.x */
+
    /* custom */
    INSTR_6XX(c0260201_ffc78080, "ldc.offset0.1.nonuniform r0.y, 255, r0.y"), /* ldc.1.mode2.base0 r0.y, 255, r0.y */
 
@@ -326,13 +336,16 @@ static const struct test {
    /* Atomic: */
 #if 0
    /* TODO our encoding differs in b53 for these two */
-   INSTR_5XX(c4d60002_00008001, "atomic.inc.untyped.1d.u32.1.g r0.z, g[0], r0.z, r0.x, r0.x"),
-   INSTR_5XX(c4160205_03000001, "atomic.add.untyped.1d.u32.1.g r1.y, g[1], r0.x, r0.w, r0.x"),
+   INSTR_5XX(c4f60002_00008001, "atomic.s.inc.untyped.1d.u32.1.g r0.z, g[0], r0.z, r0.x, r0.x"),
+   INSTR_5XX(c4360205_03000001, "atomic.s.add.untyped.1d.u32.1.g r1.y, g[1], r0.x, r0.w, r0.x"),
 #else
-   INSTR_5XX(c4f60002_00008001, "atomic.inc.untyped.1d.u32.1.g r0.z, g[0], r0.z, r0.x, r0.x"),
-   INSTR_5XX(c4360205_03000001, "atomic.add.untyped.1d.u32.1.g r1.y, g[1], r0.x, r0.w, r0.x"),
+   INSTR_5XX(c4f60002_00008001, "atomic.s.inc.untyped.1d.u32.1.g r0.z, g[0], r0.z, r0.x, r0.x"),
+   INSTR_5XX(c4360205_03000001, "atomic.s.add.untyped.1d.u32.1.g r1.y, g[1], r0.x, r0.w, r0.x"),
 #endif
    INSTR_6XX(d5c60003_03008001, "(sy)atomic.max.untyped.1d.u32.1.l r0.w, l[r0.z], r0.w"),
+
+   /* dEQP-VK.glsl.atomic_operations.add_unsigned_compute_reference */
+   INSTR_6XX(c4160002_02000001, "atomic.g.add.untyped.1d.u32.1.g r0.z, r0.x, r0.z"),
 
    /* Bindless atomic: */
    INSTR_6XX(c03a0003_01640000, "atomic.b.add.untyped.1d.s32.1.imm r0.w, r0.y, 0"), /* atomic.b.add.g.s32.1d.mode0.base0 r0.w,r0.y,0 */
@@ -341,10 +354,14 @@ static const struct test {
 
    /* dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.const_literal.fragment.sampler2d */
    INSTR_6XX(a0c01f04_0cc00005, "sam (f32)(xyzw)r1.x, r0.z, s#6, t#6"),
-   /* dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.fragment.sampler2d (looks like maybe the compiler didn't figure out */
-   INSTR_6XX(a0c81f07_0100000b, "sam.s2en (f32)(xyzw)r1.w, r1.y, hr2.x"), /* sam.s2en.mode0 (f32)(xyzw)r1.w, r1.y, hr2.x */
+
+   /* dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.uniform.fragment.sampler2d */
+   INSTR_4XX(a0c81f02_00800001, "sam.s2en.uniform (f32)(xyzw)r0.z, r0.x, hr1.x"), /* sam.s2en.mode0 (f32)(xyzw)r0.z, r0.x, hr1.x */ /* same for 5xx */
+   INSTR_6XX(a0c81f07_0100000b, "sam.s2en.uniform (f32)(xyzw)r1.w, r1.y, hr2.x"), /* sam.s2en.mode0 (f32)(xyzw)r1.w, r1.y, hr2.x */
+
    /* dEQP-GLES31.functional.shaders.opaque_type_indexing.sampler.dynamically_uniform.fragment.sampler2d */
-   INSTR_6XX(a0c81f07_8100000b, "sam.s2en.uniform (f32)(xyzw)r1.w, r1.y, hr2.x", .parse_fail=true), /* sam.s2en.mode4 (f32)(xyzw)r1.w, r1.y, hr2.x */
+   INSTR_4XX(a0c81f02_80800001, "sam.s2en.nonuniform (f32)(xyzw)r0.z, r0.x, hr1.x"), /* sam.s2en.uniform (f32)(xyzw)r0.z, r0.x, hr1.x */ /* same for 5xx */
+   INSTR_6XX(a0c81f07_8100000b, "sam.s2en.nonuniform (f32)(xyzw)r1.w, r1.y, hr2.x"), /* sam.s2en.mode4 (f32)(xyzw)r1.w, r1.y, hr2.x */
 
    /* NonUniform: */
    /* dEQP-VK.descriptor_indexing.storage_buffer */

@@ -78,7 +78,8 @@ Core Mesa environment variables
 :envvar:`MESA_EXTENSION_OVERRIDE`
    can be used to enable/disable extensions. A value such as
    ``GL_EXT_foo -GL_EXT_bar`` will enable the ``GL_EXT_foo`` extension
-   and disable the ``GL_EXT_bar`` extension.
+   and disable the ``GL_EXT_bar`` extension. Note that this will override
+   extensions override configured using driconf.
 :envvar:`MESA_EXTENSION_MAX_YEAR`
    The ``GL_EXTENSIONS`` string returned by Mesa is sorted by extension
    year. If this variable is set to year X, only extensions defined on
@@ -188,6 +189,14 @@ Core Mesa environment variables
    overrides the WSI present mode clients specify in
    ``VkSwapchainCreateInfoKHR::presentMode``. Values can be ``fifo``,
    ``relaxed``, ``mailbox`` or ``immediate``.
+:envvar:`MESA_VK_ABORT_ON_DEVICE_LOSS`
+   causes the Vulkan driver to call abort() immediately after detecting a
+   lost device.  This is extremely useful when testing as it prevents the
+   test suite from continuing on with a lost device.
+:envvar:`MESA_VK_ENABLE_SUBMIT_THREAD`
+   for Vulkan drivers which support real timeline semaphores, this forces
+   them to use a submit thread from the beginning, regardless of whether or
+   not they ever see a wait-before-signal condition.
 :envvar:`MESA_LOADER_DRIVER_OVERRIDE`
    chooses a different driver binary such as ``etnaviv`` or ``zink``.
 
@@ -688,7 +697,7 @@ RADV driver environment variables
       initialize all memory allocated in VRAM as zero
 
 :envvar:`RADV_FORCE_FAMILY`
-   create a null device to compile shaders without a AMD GPU (e.g. vega10)
+   create a null device to compile shaders without a AMD GPU (e.g. VEGA10)
 
 :envvar:`RADV_FORCE_VRS`
    allow to force per-pipeline vertex VRS rates on GFX10.3+. This is only
@@ -724,6 +733,22 @@ RADV driver environment variables
 
 :envvar:`RADV_TEX_ANISO`
    force anisotropy filter (up to 16)
+
+:envvar:`RADV_THREAD_TRACE`
+   enable frame based SQTT/RGP captures (eg. `export RADV_THREAD_TRACE=100`
+   will capture the frame #100)
+
+:envvar:`RADV_THREAD_TRACE_BUFFER_SIZE`
+   set the SQTT/RGP buffer size in bytes (default value is 32MiB, the buffer is
+   automatically resized if too small)
+
+:envvar:`RADV_THREAD_TRACE_INSTRUCTION_TIMING`
+   enable/disable SQTT/RGP instruction timing (enabled by default)
+
+:envvar:`RADV_THREAD_TRACE_TRIGGER`
+   enable trigger file based SQTT/RGP captures (eg.
+   `export RADV_THREAD_TRACE_TRIGGER=/tmp/radv_sqtt_trigger` and then
+   `touch /tmp/radv_sqtt_trigger` to capture a frame)
 
 :envvar:`ACO_DEBUG`
    a comma-separated list of named flags, which do various things:

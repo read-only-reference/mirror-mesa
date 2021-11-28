@@ -1444,7 +1444,7 @@ iris_reallocate_resource_inplace(struct iris_context *ice,
             .depth = util_num_layers(&templ, l),
          };
 
-         iris_copy_region(&ice->blorp, batch, &new_res->base.b, 0, 0, 0, l,
+         iris_copy_region(&ice->blorp, batch, &new_res->base.b, l, 0, 0, 0,
                           &old_res->base.b, l, &box);
       }
    }
@@ -2153,12 +2153,17 @@ iris_map_direct(struct iris_transfer *map)
       const unsigned cpp = fmtl->bpb / 8;
       unsigned x0_el, y0_el;
 
+      assert(box->x % fmtl->bw == 0);
+      assert(box->y % fmtl->bh == 0);
       get_image_offset_el(surf, xfer->level, box->z, &x0_el, &y0_el);
+
+      x0_el += box->x / fmtl->bw;
+      y0_el += box->y / fmtl->bh;
 
       xfer->stride = isl_surf_get_row_pitch_B(surf);
       xfer->layer_stride = isl_surf_get_array_pitch(surf);
 
-      map->ptr = ptr + (y0_el + box->y) * xfer->stride + (x0_el + box->x) * cpp;
+      map->ptr = ptr + y0_el * xfer->stride + x0_el * cpp;
    }
 }
 
@@ -2274,11 +2279,6 @@ iris_transfer_map(struct pipe_context *ctx,
           !iris_has_invalid_primary(res, level, 1, box->z, box->depth)) {
          usage |= PIPE_MAP_DIRECTLY;
       }
-
-      const struct isl_format_layout *fmtl =
-         isl_format_get_layout(surf->format);
-      if (fmtl->txc == ISL_TXC_ASTC)
-         usage |= PIPE_MAP_DIRECTLY;
 
       /* We can map directly if it wouldn't stall, there's no compression,
        * and we aren't doing an uncached read.
@@ -2406,7 +2406,7 @@ iris_transfer_unmap(struct pipe_context *ctx, struct pipe_transfer *xfer)
  * The pipe->texture_subdata() driver hook.
  *
  * Mesa's state tracker takes this path whenever possible, even with
- * PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER set.
+ * PIPE_CAP_TEXTURE_TRANSFER_MODES set.
  */
 static void
 iris_texture_subdata(struct pipe_context *ctx,

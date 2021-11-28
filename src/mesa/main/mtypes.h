@@ -52,6 +52,7 @@
 #include "util/u_idalloc.h"
 #include "util/simple_mtx.h"
 #include "util/u_dynarray.h"
+#include "util/mesa-sha1.h"
 #include "vbo/vbo.h"
 
 
@@ -1639,8 +1640,9 @@ struct gl_vertex_array_object
    /** "Enabled" with the position/generic0 attribute aliasing resolved */
    GLbitfield _EnabledWithMapMode;
 
-   /** Mask of VERT_BIT_* values indicating changed/dirty arrays */
-   GLbitfield NewArrays;
+   /** Which states have been changed according to the gallium definitions. */
+   bool NewVertexBuffers;
+   bool NewVertexElements;
 
    /** The index buffer (also known as the element array buffer in OpenGL). */
    struct gl_buffer_object *IndexBufferObj;
@@ -1704,6 +1706,17 @@ struct gl_array_attrib
     * array draw is executed.
     */
    GLbitfield _DrawVAOEnabledAttribs;
+
+   /**
+    * If gallium vertex buffers are dirty, this flag indicates whether gallium
+    * vertex elements are dirty too. If this is false, GL states corresponding
+    * to vertex elements have not been changed. Thus, this affects what will
+    * happen when gl_driver_flags::NewArray is set.
+    *
+    * The driver should clear this when it's done.
+    */
+   bool NewVertexElements;
+
    /**
     * Initially or if the VAO referenced by _DrawVAO is deleted the _DrawVAO
     * pointer is set to the _EmptyVAO which is just an empty VAO all the time.
@@ -2597,9 +2610,8 @@ struct gl_linked_shader
 {
    gl_shader_stage Stage;
 
-#ifdef DEBUG
-   unsigned SourceChecksum;
-#endif
+   /** All gl_shader::compiled_source_sha1 combined. */
+   uint8_t linked_source_sha1[SHA1_DIGEST_LENGTH];
 
    struct gl_program *Program;  /**< Post-compile assembly code */
 
@@ -2668,17 +2680,21 @@ struct gl_shader
    GLuint Name;  /**< AKA the handle */
    GLint RefCount;  /**< Reference count */
    GLchar *Label;   /**< GL_KHR_debug */
-   unsigned char sha1[20]; /**< SHA1 hash of pre-processed source */
    GLboolean DeletePending;
    bool IsES;              /**< True if this shader uses GLSL ES */
 
    enum gl_compile_status CompileStatus;
 
-#ifdef DEBUG
-   unsigned SourceChecksum;       /**< for debug/logging purposes */
-#endif
-   const GLchar *Source;  /**< Source code string */
+   /** SHA1 of the pre-processed source used by the disk cache. */
+   uint8_t disk_cache_sha1[SHA1_DIGEST_LENGTH];
+   /** SHA1 of the original source before replacement, set by glShaderSource. */
+   uint8_t source_sha1[SHA1_DIGEST_LENGTH];
+   /** SHA1 of FallbackSource (a copy of some original source before replacement). */
+   uint8_t fallback_source_sha1[SHA1_DIGEST_LENGTH];
+   /** SHA1 of the current compiled source, set by successful glCompileShader. */
+   uint8_t compiled_source_sha1[SHA1_DIGEST_LENGTH];
 
+   const GLchar *Source;  /**< Source code string */
    const GLchar *FallbackSource;  /**< Fallback string used by on-disk cache*/
 
    GLchar *InfoLog;
@@ -3792,6 +3808,11 @@ struct gl_program_constants
  */
 struct gl_constants
 {
+   /**
+    * Bitmask of valid primitive types supported by the driver,
+    */
+   GLbitfield DriverSupportedPrimMask;
+
    GLuint MaxTextureMbytes;      /**< Max memory per image, in MB */
    GLuint MaxTextureSize;        /**< Max 1D/2D texture size, in pixels*/
    GLuint Max3DTextureLevels;    /**< Max mipmap levels for 3D textures */
@@ -3953,6 +3974,12 @@ struct gl_constants
     * features are unimplemented and might not work correctly.
     */
    GLboolean AllowHigherCompatVersion;
+
+   /**
+    * Allow GLSL shaders with the compatibility version directive
+    * in non-compatibility profiles. (for shader-db)
+    */
+   GLboolean AllowGLSLCompatShaders;
 
    /**
     * Allow extra tokens at end of preprocessor directives. The CTS now tests
@@ -4142,6 +4169,14 @@ struct gl_constants
     * This variable is mutually exlusive with DisableVaryingPacking.
     */
    GLboolean DisableTransformFeedbackPacking;
+
+   /**
+    * Align varyings to POT in a slot
+    *
+    * Drivers that prefer varyings to be aligned to POT must set this value to GL_TRUE
+    */
+   GLboolean PreferPOTAlignedVaryings;
+
 
    /**
     * UBOs and SSBOs can be packed tightly by the OpenGL implementation when
@@ -4553,10 +4588,12 @@ struct gl_extensions
    GLboolean KHR_texture_compression_astc_ldr;
    GLboolean KHR_texture_compression_astc_sliced_3d;
    GLboolean MESA_framebuffer_flip_y;
+   GLboolean MESA_pack_invert;
    GLboolean MESA_tile_raster_order;
    GLboolean EXT_shader_framebuffer_fetch;
    GLboolean EXT_shader_framebuffer_fetch_non_coherent;
    GLboolean MESA_shader_integer_functions;
+   GLboolean MESA_window_pos;
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_alpha_to_coverage_dither_control;
    GLboolean NV_compute_shader_derivatives;
@@ -5144,7 +5181,7 @@ struct gl_texture_attrib_node
    /* For saving per texture object state (wrap modes, filters, etc),
     * SavedObj[][].Target is unused, so the value is invalid.
     */
-   struct gl_texture_object SavedObj[MAX_TEXTURE_UNITS][NUM_TEXTURE_TARGETS];
+   struct gl_texture_object SavedObj[MAX_COMBINED_TEXTURE_IMAGE_UNITS][NUM_TEXTURE_TARGETS];
 };
 
 

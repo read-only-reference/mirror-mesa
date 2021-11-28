@@ -46,7 +46,7 @@
 #define MESA_LOG_TAG "TU"
 
 #include "c11/threads.h"
-#include "main/macros.h"
+#include "util/rounding.h"
 #include "util/bitscan.h"
 #include "util/list.h"
 #include "util/log.h"
@@ -94,6 +94,7 @@ typedef uint32_t xcb_window_t;
 #include "tu_entrypoints.h"
 
 #include "vk_format.h"
+#include "vk_image.h"
 #include "vk_command_buffer.h"
 #include "vk_queue.h"
 

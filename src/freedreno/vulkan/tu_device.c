@@ -72,7 +72,7 @@ tu_device_get_cache_uuid(uint16_t family, void *uuid)
    return 0;
 }
 
-#define TU_API_VERSION VK_MAKE_VERSION(1, 1, VK_HEADER_VERSION)
+#define TU_API_VERSION VK_MAKE_VERSION(1, 2, VK_HEADER_VERSION)
 
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_EnumerateInstanceVersion(uint32_t *pApiVersion)
@@ -154,6 +154,9 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_uniform_buffer_standard_layout = true,
       .KHR_variable_pointers = true,
       .KHR_vulkan_memory_model = true,
+      .KHR_driver_properties = true,
+      .KHR_separate_depth_stencil_layouts = true,
+      .KHR_buffer_device_address = true,
 #ifndef TU_USE_KGSL
       .KHR_timeline_semaphore = true,
 #endif
@@ -251,8 +254,6 @@ tu_physical_device_init(struct tu_physical_device *device,
    char buf[VK_UUID_SIZE * 2 + 1];
    disk_cache_format_hex_id(buf, device->cache_uuid, VK_UUID_SIZE * 2);
    device->disk_cache = disk_cache_create(device->name, buf, 0);
-
-   vk_warn_non_conformant_implementation("tu");
 
    fd_get_driver_uuid(device->driver_uuid);
    fd_get_device_uuid(device->device_uuid, &device->dev_id);
@@ -557,10 +558,10 @@ tu_get_physical_device_features_1_2(struct tu_physical_device *pdevice,
    features->imagelessFramebuffer                = true;
    features->uniformBufferStandardLayout         = true;
    features->shaderSubgroupExtendedTypes         = true;
-   features->separateDepthStencilLayouts         = false;
+   features->separateDepthStencilLayouts         = true;
    features->hostQueryReset                      = true;
    features->timelineSemaphore                   = true;
-   features->bufferDeviceAddress                 = false;
+   features->bufferDeviceAddress                 = true;
    features->bufferDeviceAddressCaptureReplay    = false;
    features->bufferDeviceAddressMultiDevice      = false;
    features->vulkanMemoryModel                   = true;
@@ -568,7 +569,7 @@ tu_get_physical_device_features_1_2(struct tu_physical_device *pdevice,
    features->vulkanMemoryModelAvailabilityVisibilityChains = true;
    features->shaderOutputViewportIndex           = true;
    features->shaderOutputLayer                   = true;
-   features->subgroupBroadcastDynamicId          = false;
+   features->subgroupBroadcastDynamicId          = true;
 }
 
 void
@@ -845,12 +846,11 @@ tu_get_physical_device_properties_1_2(struct tu_physical_device *pdevice,
    memset(p->driverInfo, 0, sizeof(p->driverInfo));
    snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE_KHR,
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
-   /* XXX: VK 1.2: Need to pass conformance. */
    p->conformanceVersion = (VkConformanceVersionKHR) {
-      .major = 0,
-      .minor = 0,
-      .subminor = 0,
-      .patch = 0,
+      .major = 1,
+      .minor = 2,
+      .subminor = 7,
+      .patch = 1,
    };
 
    p->denormBehaviorIndependence =
@@ -2569,4 +2569,29 @@ tu_GetPhysicalDeviceMultisamplePropertiesEXT(
       pMultisampleProperties->maxSampleLocationGridSize = (VkExtent2D){ 1, 1 };
    else
       pMultisampleProperties->maxSampleLocationGridSize = (VkExtent2D){ 0, 0 };
+}
+
+VkDeviceAddress
+tu_GetBufferDeviceAddress(VkDevice _device,
+                          const VkBufferDeviceAddressInfoKHR* pInfo)
+{
+   TU_FROM_HANDLE(tu_buffer, buffer, pInfo->buffer);
+
+   return tu_buffer_iova(buffer);
+}
+
+uint64_t tu_GetBufferOpaqueCaptureAddress(
+    VkDevice                                    device,
+    const VkBufferDeviceAddressInfoKHR*         pInfo)
+{
+   tu_stub();
+   return 0;
+}
+
+uint64_t tu_GetDeviceMemoryOpaqueCaptureAddress(
+    VkDevice                                    device,
+    const VkDeviceMemoryOpaqueCaptureAddressInfoKHR* pInfo)
+{
+   tu_stub();
+   return 0;
 }

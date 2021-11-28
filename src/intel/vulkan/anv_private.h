@@ -66,11 +66,14 @@
 #include "vk_alloc.h"
 #include "vk_debug_report.h"
 #include "vk_device.h"
+#include "vk_drm_syncobj.h"
 #include "vk_enum_defines.h"
 #include "vk_image.h"
 #include "vk_instance.h"
 #include "vk_physical_device.h"
 #include "vk_shader_module.h"
+#include "vk_sync.h"
+#include "vk_sync_timeline.h"
 #include "vk_util.h"
 #include "vk_command_buffer.h"
 #include "vk_queue.h"
@@ -244,6 +247,8 @@ struct intel_perf_query_result;
  * Other code which uses the MI ALU should leave it alone.
  */
 #define ANV_PERF_QUERY_OFFSET_REG 0x2670 /* MI_ALU_REG14 */
+
+#define ANV_GRAPHICS_SHADER_STAGE_COUNT (MESA_SHADER_MESH + 1)
 
 /* For gfx12 we set the streamout buffers using 4 separate commands
  * (3DSTATE_SO_BUFFER_INDEX_*) instead of 3DSTATE_SO_BUFFER. However the layout
@@ -436,7 +441,7 @@ struct anv_bo {
     * validation list building alrogithm to track which buffers are already
     * in the validation list so that we can ensure uniqueness.
     */
-   uint32_t index;
+   uint32_t exec_obj_index;
 
    /* Index for use with util_sparse_array_free_list */
    uint32_t free_index;
@@ -452,7 +457,8 @@ struct anv_bo {
 
    /* Map for internally mapped BOs.
     *
-    * If ANV_BO_WRAPPER is set in flags, map points to the wrapped BO.
+    * If ANV_BO_ALLOC_MAPPED is set in flags, this is the map for the whole
+    * BO. If ANV_BO_WRAPPER is set in flags, map points to the wrapped BO.
     */
    void *map;
 
@@ -523,6 +529,28 @@ anv_bo_unwrap(struct anv_bo *bo)
    return bo;
 }
 
+static inline bool
+anv_bo_is_pinned(struct anv_bo *bo)
+{
+#if defined(GFX_VERx10) && GFX_VERx10 >= 90
+   /* Sky Lake and later always uses softpin */
+   assert(bo->flags & EXEC_OBJECT_PINNED);
+   return true;
+#elif defined(GFX_VERx10) && GFX_VERx10 < 80
+   /* Haswell and earlier never use softpin */
+   assert(!(bo->flags & EXEC_OBJECT_PINNED));
+   assert(!bo->has_fixed_address);
+   return false;
+#else
+   /* If we don't have a GFX_VERx10 #define, we need to look at the BO.  Also,
+    * for GFX version 8, we need to look at the BO because Broadwell softpins
+    * but Cherryview doesn't.
+    */
+   assert((bo->flags & EXEC_OBJECT_PINNED) || !bo->has_fixed_address);
+   return (bo->flags & EXEC_OBJECT_PINNED) != 0;
+#endif
+}
+
 /* Represents a lock-free linked list of "free" things.  This is used by
  * both the block pool and the state pools.  Unfortunately, in order to
  * solve the ABA problem, we can't use a single uint32_t head.
@@ -566,7 +594,7 @@ struct anv_block_pool {
    const char *name;
 
    struct anv_device *device;
-   bool use_softpin;
+   bool use_relocations;
 
    /* Wrapper BO for use in relocation lists.  This BO is simply a wrapper
     * around the actual BO so that we grow the pool after the wrapper BO has
@@ -890,16 +918,13 @@ struct anv_physical_device {
     int                                         cmd_parser_version;
     bool                                        has_exec_async;
     bool                                        has_exec_capture;
-    bool                                        has_exec_fence;
-    bool                                        has_syncobj_wait;
-    bool                                        has_syncobj_wait_available;
     int                                         max_context_priority;
     bool                                        has_context_isolation;
-    bool                                        has_thread_submit;
     bool                                        has_mmap_offset;
     bool                                        has_userptr_probe;
     uint64_t                                    gtt_size;
 
+    bool                                        use_relocations;
     bool                                        use_softpin;
     bool                                        always_use_bindless;
     bool                                        use_call_secondary;
@@ -949,6 +974,10 @@ struct anv_physical_device {
     uint8_t                                     driver_uuid[VK_UUID_SIZE];
     uint8_t                                     device_uuid[VK_UUID_SIZE];
 
+    struct vk_sync_type                         sync_syncobj_type;
+    struct vk_sync_timeline_type                sync_timeline_type;
+    const struct vk_sync_type *                 sync_types[4];
+
     struct disk_cache *                         disk_cache;
 
     struct wsi_device                       wsi_device;
@@ -989,57 +1018,6 @@ struct anv_instance {
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
 void anv_finish_wsi(struct anv_physical_device *physical_device);
 
-struct anv_queue_submit {
-   struct anv_cmd_buffer **                  cmd_buffers;
-   uint32_t                                  cmd_buffer_count;
-   uint32_t                                  cmd_buffer_array_length;
-
-   uint32_t                                  fence_count;
-   uint32_t                                  fence_array_length;
-   struct drm_i915_gem_exec_fence *          fences;
-   uint64_t *                                fence_values;
-
-   uint32_t                                  temporary_semaphore_count;
-   uint32_t                                  temporary_semaphore_array_length;
-   struct anv_semaphore_impl *               temporary_semaphores;
-
-   /* Allocated only with non shareable timelines. */
-   union {
-      struct anv_timeline **                 wait_timelines;
-      uint32_t *                             wait_timeline_syncobjs;
-   };
-   uint32_t                                  wait_timeline_count;
-   uint32_t                                  wait_timeline_array_length;
-   uint64_t *                                wait_timeline_values;
-
-   struct anv_timeline **                    signal_timelines;
-   uint32_t                                  signal_timeline_count;
-   uint32_t                                  signal_timeline_array_length;
-   uint64_t *                                signal_timeline_values;
-
-   int                                       in_fence;
-   bool                                      need_out_fence;
-   int                                       out_fence;
-
-   uint32_t                                  fence_bo_count;
-   uint32_t                                  fence_bo_array_length;
-   /* An array of struct anv_bo pointers with lower bit used as a flag to
-    * signal we will wait on that BO (see anv_(un)pack_ptr).
-    */
-   uintptr_t *                               fence_bos;
-
-   int                                       perf_query_pass;
-   struct anv_query_pool *                   perf_query_pool;
-
-   const VkAllocationCallbacks *             alloc;
-   VkSystemAllocationScope                   alloc_scope;
-
-   struct anv_bo *                           simple_bo;
-   uint32_t                                  simple_bo_size;
-
-   struct list_head                          link;
-};
-
 struct anv_queue {
    struct vk_queue                           vk;
 
@@ -1048,31 +1026,6 @@ struct anv_queue {
    const struct anv_queue_family *           family;
 
    uint32_t                                  exec_flags;
-
-   /* Set once from the device api calls. */
-   bool                                      lost_signaled;
-
-   /* Only set once atomically by the queue */
-   int                                       lost;
-   int                                       error_line;
-   const char *                              error_file;
-   char                                      error_msg[80];
-
-   /*
-    * This mutext protects the variables below.
-    */
-   pthread_mutex_t                           mutex;
-
-   pthread_t                                 thread;
-   pthread_cond_t                            cond;
-
-   /*
-    * A list of struct anv_queue_submit to be submitted to i915.
-    */
-   struct list_head                          queued_submits;
-
-   /* Set to true to stop the submission thread */
-   bool                                      quit;
 };
 
 struct anv_pipeline_cache {
@@ -1161,7 +1114,6 @@ struct anv_device {
     int                                         fd;
     bool                                        can_chain_batches;
     bool                                        robust_buffer_access;
-    bool                                        has_thread_submit;
 
     pthread_mutex_t                             vma_mutex;
     struct util_vma_heap                        vma_lo;
@@ -1216,8 +1168,6 @@ struct anv_device {
 
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
-    int                                         _lost;
-    int                                         lost_reported;
 
     struct intel_batch_decode_ctx               decoder_ctx;
     /*
@@ -1243,42 +1193,42 @@ struct anv_device {
 #endif
 
 static inline bool
-anv_use_softpin(const struct anv_physical_device *pdevice)
+anv_use_relocations(const struct anv_physical_device *pdevice)
 {
 #if defined(GFX_VERx10) && GFX_VERx10 >= 90
    /* Sky Lake and later always uses softpin */
-   assert(pdevice->use_softpin);
-   return true;
+   assert(!pdevice->use_relocations);
+   return false;
 #elif defined(GFX_VERx10) && GFX_VERx10 < 80
    /* Haswell and earlier never use softpin */
-   assert(!pdevice->use_softpin);
-   return false;
+   assert(pdevice->use_relocations);
+   return true;
 #else
    /* If we don't have a GFX_VERx10 #define, we need to look at the physical
     * device.  Also, for GFX version 8, we need to look at the physical
     * device because Broadwell softpins but Cherryview doesn't.
     */
-   return pdevice->use_softpin;
+   return pdevice->use_relocations;
 #endif
 }
 
 static inline struct anv_state_pool *
 anv_binding_table_pool(struct anv_device *device)
 {
-   if (anv_use_softpin(device->physical))
-      return &device->binding_table_pool;
-   else
+   if (anv_use_relocations(device->physical))
       return &device->surface_state_pool;
+   else
+      return &device->binding_table_pool;
 }
 
 static inline struct anv_state
 anv_binding_table_pool_alloc(struct anv_device *device)
 {
-   if (anv_use_softpin(device->physical))
+   if (anv_use_relocations(device->physical))
+      return anv_state_pool_alloc_back(&device->surface_state_pool);
+   else
       return anv_state_pool_alloc(&device->binding_table_pool,
                                   device->binding_table_pool.block_size, 0);
-   else
-      return anv_state_pool_alloc_back(&device->surface_state_pool);
 }
 
 static inline void
@@ -1296,34 +1246,6 @@ anv_mocs(const struct anv_device *device,
 
 void anv_device_init_blorp(struct anv_device *device);
 void anv_device_finish_blorp(struct anv_device *device);
-
-void _anv_device_report_lost(struct anv_device *device);
-VkResult _anv_device_set_lost(struct anv_device *device,
-                              const char *file, int line,
-                              const char *msg, ...)
-   anv_printflike(4, 5);
-VkResult _anv_queue_set_lost(struct anv_queue *queue,
-                              const char *file, int line,
-                              const char *msg, ...)
-   anv_printflike(4, 5);
-#define anv_device_set_lost(dev, ...) \
-   _anv_device_set_lost(dev, __FILE__, __LINE__, __VA_ARGS__)
-#define anv_queue_set_lost(queue, ...) \
-   (queue)->device->has_thread_submit ? \
-   _anv_queue_set_lost(queue, __FILE__, __LINE__, __VA_ARGS__) : \
-   _anv_device_set_lost(queue->device, __FILE__, __LINE__, __VA_ARGS__)
-
-static inline bool
-anv_device_is_lost(struct anv_device *device)
-{
-   int lost = p_atomic_read(&device->_lost);
-   if (unlikely(lost && !device->lost_reported))
-      _anv_device_report_lost(device);
-   return lost;
-}
-
-VkResult anv_device_query_status(struct anv_device *device);
-
 
 enum anv_bo_alloc_flags {
    /** Specifies that the BO must have a 32-bit address
@@ -1377,6 +1299,15 @@ VkResult anv_device_alloc_bo(struct anv_device *device,
                              enum anv_bo_alloc_flags alloc_flags,
                              uint64_t explicit_address,
                              struct anv_bo **bo);
+VkResult anv_device_map_bo(struct anv_device *device,
+                           struct anv_bo *bo,
+                           uint64_t offset,
+                           size_t size,
+                           uint32_t gem_flags,
+                           void **map_out);
+void anv_device_unmap_bo(struct anv_device *device,
+                         struct anv_bo *bo,
+                         void *map, size_t map_size);
 VkResult anv_device_import_bo_from_host_ptr(struct anv_device *device,
                                             void *host_ptr, uint32_t size,
                                             enum anv_bo_alloc_flags alloc_flags,
@@ -1388,6 +1319,13 @@ VkResult anv_device_import_bo(struct anv_device *device, int fd,
                               struct anv_bo **bo);
 VkResult anv_device_export_bo(struct anv_device *device,
                               struct anv_bo *bo, int *fd_out);
+VkResult anv_device_get_bo_tiling(struct anv_device *device,
+                                  struct anv_bo *bo,
+                                  enum isl_tiling *tiling_out);
+VkResult anv_device_set_bo_tiling(struct anv_device *device,
+                                  struct anv_bo *bo,
+                                  uint32_t row_pitch_B,
+                                  enum isl_tiling tiling);
 void anv_device_release_bo(struct anv_device *device,
                            struct anv_bo *bo);
 
@@ -1397,7 +1335,6 @@ anv_device_lookup_bo(struct anv_device *device, uint32_t gem_handle)
    return util_sparse_array_get(&device->bo_cache.bo_map, gem_handle);
 }
 
-VkResult anv_device_bo_busy(struct anv_device *device, struct anv_bo *bo);
 VkResult anv_device_wait(struct anv_device *device, struct anv_bo *bo,
                          int64_t timeout);
 
@@ -1407,12 +1344,10 @@ VkResult anv_queue_init(struct anv_device *device, struct anv_queue *queue,
                         uint32_t index_in_family);
 void anv_queue_finish(struct anv_queue *queue);
 
-VkResult anv_queue_execbuf_locked(struct anv_queue *queue, struct anv_queue_submit *submit);
+VkResult anv_queue_submit(struct vk_queue *queue,
+                          struct vk_queue_submit *submit);
 VkResult anv_queue_submit_simple_batch(struct anv_queue *queue,
                                        struct anv_batch *batch);
-
-uint64_t anv_gettime_ns(void);
-uint64_t anv_get_absolute_timeout(uint64_t timeout);
 
 void* anv_gem_mmap(struct anv_device *device,
                    uint32_t gem_handle, uint64_t offset, uint64_t size, uint32_t flags);
@@ -1441,9 +1376,7 @@ int anv_gem_set_context_param(int fd, int context, uint32_t param,
 int anv_gem_get_context_param(int fd, int context, uint32_t param,
                               uint64_t *value);
 int anv_gem_get_param(int fd, uint32_t param);
-uint64_t anv_gem_get_drm_cap(int fd, uint32_t capability);
 int anv_gem_get_tiling(struct anv_device *device, uint32_t gem_handle);
-bool anv_gem_get_bit6_swizzle(int fd, uint32_t tiling);
 int anv_gem_context_get_reset_stats(int fd, int context,
                                     uint32_t *active, uint32_t *pending);
 int anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle);
@@ -1452,30 +1385,6 @@ uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
 int anv_gem_set_domain(struct anv_device *device, uint32_t gem_handle,
                        uint32_t read_domains, uint32_t write_domain);
-int anv_gem_sync_file_merge(struct anv_device *device, int fd1, int fd2);
-uint32_t anv_gem_syncobj_create(struct anv_device *device, uint32_t flags);
-void anv_gem_syncobj_destroy(struct anv_device *device, uint32_t handle);
-int anv_gem_syncobj_handle_to_fd(struct anv_device *device, uint32_t handle);
-uint32_t anv_gem_syncobj_fd_to_handle(struct anv_device *device, int fd);
-int anv_gem_syncobj_export_sync_file(struct anv_device *device,
-                                     uint32_t handle);
-int anv_gem_syncobj_import_sync_file(struct anv_device *device,
-                                     uint32_t handle, int fd);
-void anv_gem_syncobj_reset(struct anv_device *device, uint32_t handle);
-bool anv_gem_supports_syncobj_wait(int fd);
-int anv_gem_syncobj_wait(struct anv_device *device,
-                         const uint32_t *handles, uint32_t num_handles,
-                         int64_t abs_timeout_ns, bool wait_all);
-int anv_gem_syncobj_timeline_wait(struct anv_device *device,
-                                  const uint32_t *handles, const uint64_t *points,
-                                  uint32_t num_items, int64_t abs_timeout_ns,
-                                  bool wait_all, bool wait_materialize);
-int anv_gem_syncobj_timeline_signal(struct anv_device *device,
-                                    const uint32_t *handles, const uint64_t *points,
-                                    uint32_t num_items);
-int anv_gem_syncobj_timeline_query(struct anv_device *device,
-                                   const uint32_t *handles, uint64_t *points,
-                                   uint32_t num_items);
 int anv_i915_query(int fd, uint64_t query_id, void *buffer,
                    int32_t *buffer_len);
 struct drm_i915_query_engine_info *anv_gem_get_engine_info(int fd);
@@ -1632,9 +1541,7 @@ anv_address_is_null(struct anv_address addr)
 static inline uint64_t
 anv_address_physical(struct anv_address addr)
 {
-   if (addr.bo && (ANV_ALWAYS_SOFTPIN ||
-                   (addr.bo->flags & EXEC_OBJECT_PINNED))) {
-      assert(addr.bo->flags & EXEC_OBJECT_PINNED);
+   if (addr.bo && anv_bo_is_pinned(addr.bo)) {
       return intel_canonical_address(addr.bo->offset + addr.offset);
    } else {
       return intel_canonical_address(addr.offset);
@@ -1671,7 +1578,7 @@ _anv_combine_address(struct anv_batch *batch, void *location,
    if (address.bo == NULL) {
       return address.offset + delta;
    } else if (batch == NULL) {
-      assert(address.bo->flags & EXEC_OBJECT_PINNED);
+      assert(anv_bo_is_pinned(address.bo));
       return anv_address_physical(anv_address_add(address, delta));
    } else {
       assert(batch->start <= location && location < batch->end);
@@ -1766,8 +1673,12 @@ struct anv_device_memory {
 
    struct anv_bo *                              bo;
    const struct anv_memory_type *               type;
-   VkDeviceSize                                 map_size;
+
    void *                                       map;
+   size_t                                       map_size;
+
+   /* The map, from the user PoV is map + map_delta */
+   uint64_t                                     map_delta;
 
    /* If set, we are holding reference to AHardwareBuffer
     * which we must release when memory is freed.
@@ -3168,7 +3079,7 @@ struct anv_cmd_buffer {
 static inline bool
 anv_cmd_buffer_is_chainable(struct anv_cmd_buffer *cmd_buffer)
 {
-   return anv_use_softpin(cmd_buffer->device->physical) &&
+   return !anv_use_relocations(cmd_buffer->device->physical) &&
       !(cmd_buffer->usage_flags & VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT);
 }
 
@@ -3242,162 +3153,42 @@ void anv_cmd_buffer_dump(struct anv_cmd_buffer *cmd_buffer);
 
 void anv_cmd_emit_conditional_render_predicate(struct anv_cmd_buffer *cmd_buffer);
 
-enum anv_fence_type {
-   ANV_FENCE_TYPE_NONE = 0,
-   ANV_FENCE_TYPE_BO,
-   ANV_FENCE_TYPE_WSI_BO,
-   ANV_FENCE_TYPE_SYNCOBJ,
-   ANV_FENCE_TYPE_WSI,
-};
-
-enum anv_bo_fence_state {
+enum anv_bo_sync_state {
    /** Indicates that this is a new (or newly reset fence) */
-   ANV_BO_FENCE_STATE_RESET,
+   ANV_BO_SYNC_STATE_RESET,
 
    /** Indicates that this fence has been submitted to the GPU but is still
     * (as far as we know) in use by the GPU.
     */
-   ANV_BO_FENCE_STATE_SUBMITTED,
+   ANV_BO_SYNC_STATE_SUBMITTED,
 
-   ANV_BO_FENCE_STATE_SIGNALED,
+   ANV_BO_SYNC_STATE_SIGNALED,
 };
 
-struct anv_fence_impl {
-   enum anv_fence_type type;
+struct anv_bo_sync {
+   struct vk_sync sync;
 
-   union {
-      /** Fence implementation for BO fences
-       *
-       * These fences use a BO and a set of CPU-tracked state flags.  The BO
-       * is added to the object list of the last execbuf call in a QueueSubmit
-       * and is marked EXEC_WRITE.  The state flags track when the BO has been
-       * submitted to the kernel.  We need to do this because Vulkan lets you
-       * wait on a fence that has not yet been submitted and I915_GEM_BUSY
-       * will say it's idle in this case.
-       */
-      struct {
-         struct anv_bo *bo;
-         enum anv_bo_fence_state state;
-      } bo;
-
-      /** DRM syncobj handle for syncobj-based fences */
-      uint32_t syncobj;
-
-      /** WSI fence */
-      struct wsi_fence *fence_wsi;
-   };
+   enum anv_bo_sync_state state;
+   struct anv_bo *bo;
 };
 
-struct anv_fence {
-   struct vk_object_base base;
+extern const struct vk_sync_type anv_bo_sync_type;
 
-   /* Permanent fence state.  Every fence has some form of permanent state
-    * (type != ANV_SEMAPHORE_TYPE_NONE).  This may be a BO to fence on (for
-    * cross-process fences) or it could just be a dummy for use internally.
-    */
-   struct anv_fence_impl permanent;
+static inline bool
+vk_sync_is_anv_bo_sync(const struct vk_sync *sync)
+{
+   return sync->type == &anv_bo_sync_type;
+}
 
-   /* Temporary fence state.  A fence *may* have temporary state.  That state
-    * is added to the fence by an import operation and is reset back to
-    * ANV_SEMAPHORE_TYPE_NONE when the fence is reset.  A fence with temporary
-    * state cannot be signaled because the fence must already be signaled
-    * before the temporary state can be exported from the fence in the other
-    * process and imported here.
-    */
-   struct anv_fence_impl temporary;
-};
-
-void anv_fence_reset_temporary(struct anv_device *device,
-                               struct anv_fence *fence);
+VkResult anv_sync_create_for_bo(struct anv_device *device,
+                                struct anv_bo *bo,
+                                struct vk_sync **sync_out);
 
 struct anv_event {
    struct vk_object_base                        base;
    uint64_t                                     semaphore;
    struct anv_state                             state;
 };
-
-enum anv_semaphore_type {
-   ANV_SEMAPHORE_TYPE_NONE = 0,
-   ANV_SEMAPHORE_TYPE_DUMMY,
-   ANV_SEMAPHORE_TYPE_WSI_BO,
-   ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ,
-   ANV_SEMAPHORE_TYPE_TIMELINE,
-   ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ_TIMELINE,
-};
-
-struct anv_timeline_point {
-   struct list_head link;
-
-   uint64_t serial;
-
-   /* Number of waiter on this point, when > 0 the point should not be garbage
-    * collected.
-    */
-   int waiting;
-
-   /* BO used for synchronization. */
-   struct anv_bo *bo;
-};
-
-struct anv_timeline {
-   pthread_mutex_t mutex;
-   pthread_cond_t  cond;
-
-   uint64_t highest_past;
-   uint64_t highest_pending;
-
-   struct list_head points;
-   struct list_head free_points;
-};
-
-struct anv_semaphore_impl {
-   enum anv_semaphore_type type;
-
-   union {
-      /* A BO representing this semaphore when type == ANV_SEMAPHORE_TYPE_BO
-       * or type == ANV_SEMAPHORE_TYPE_WSI_BO.  This BO will be added to the
-       * object list on any execbuf2 calls for which this semaphore is used as
-       * a wait or signal fence.  When used as a signal fence or when type ==
-       * ANV_SEMAPHORE_TYPE_WSI_BO, the EXEC_OBJECT_WRITE flag will be set.
-       */
-      struct anv_bo *bo;
-
-      /* Sync object handle when type == ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ.
-       * Unlike GEM BOs, DRM sync objects aren't deduplicated by the kernel on
-       * import so we don't need to bother with a userspace cache.
-       */
-      uint32_t syncobj;
-
-      /* Non shareable timeline semaphore
-       *
-       * Used when kernel don't have support for timeline semaphores.
-       */
-      struct anv_timeline timeline;
-   };
-};
-
-struct anv_semaphore {
-   struct vk_object_base base;
-
-   /* Permanent semaphore state.  Every semaphore has some form of permanent
-    * state (type != ANV_SEMAPHORE_TYPE_NONE).  This may be a BO to fence on
-    * (for cross-process semaphores0 or it could just be a dummy for use
-    * internally.
-    */
-   struct anv_semaphore_impl permanent;
-
-   /* Temporary semaphore state.  A semaphore *may* have temporary state.
-    * That state is added to the semaphore by an import operation and is reset
-    * back to ANV_SEMAPHORE_TYPE_NONE when the semaphore is waited on.  A
-    * semaphore with temporary state cannot be signaled because the semaphore
-    * must already be signaled before the temporary state can be exported from
-    * the semaphore in the other process and imported here.
-    */
-   struct anv_semaphore_impl temporary;
-};
-
-void anv_semaphore_reset_temporary(struct anv_device *device,
-                                   struct anv_semaphore *semaphore);
 
 #define ANV_STAGE_MASK ((1 << MESA_VULKAN_SHADER_STAGES) - 1)
 
@@ -3554,7 +3345,7 @@ struct anv_graphics_pipeline {
 
    struct anv_subpass *                         subpass;
 
-   struct anv_shader_bin *                      shaders[MESA_SHADER_STAGES];
+   struct anv_shader_bin *                      shaders[ANV_GRAPHICS_SHADER_STAGE_COUNT];
 
    VkShaderStageFlags                           active_stages;
 
@@ -4754,7 +4545,6 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_descriptor_update_template, base,
                                VK_OBJECT_TYPE_DESCRIPTOR_UPDATE_TEMPLATE)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_device_memory, base, VkDeviceMemory,
                                VK_OBJECT_TYPE_DEVICE_MEMORY)
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_fence, base, VkFence, VK_OBJECT_TYPE_FENCE)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_event, base, VkEvent, VK_OBJECT_TYPE_EVENT)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_framebuffer, base, VkFramebuffer,
                                VK_OBJECT_TYPE_FRAMEBUFFER)
@@ -4773,8 +4563,6 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_render_pass, base, VkRenderPass,
                                VK_OBJECT_TYPE_RENDER_PASS)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_sampler, base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_semaphore, base, VkSemaphore,
-                               VK_OBJECT_TYPE_SEMAPHORE)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_ycbcr_conversion, base,
                                VkSamplerYcbcrConversion,
                                VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION)

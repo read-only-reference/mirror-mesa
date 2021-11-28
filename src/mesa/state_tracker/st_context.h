@@ -147,6 +147,7 @@ struct st_context
    boolean has_astc_2d_ldr;
    boolean has_astc_5x5_ldr;
    boolean prefer_blit_based_texture_transfer;
+   boolean allow_compute_based_texture_transfer;
    boolean force_persample_in_shader;
    boolean has_shareable_shaders;
    boolean has_half_float_packing;
@@ -326,6 +327,7 @@ struct st_context
       void *gs;
       void *upload_fs[5][2];
       void *download_fs[5][PIPE_MAX_TEXTURE_TYPES][2];
+      struct hash_table *shaders;
       bool upload_enabled;
       bool download_enabled;
       bool rgba_only;
@@ -345,6 +347,7 @@ struct st_context
 
    /* The number of vertex buffers from the last call of validate_arrays. */
    unsigned last_num_vbuffers;
+   bool uses_user_vertex_buffers;
 
    unsigned last_used_atomic_bindings[PIPE_SHADER_TYPES];
    unsigned last_num_ssbos[PIPE_SHADER_TYPES];

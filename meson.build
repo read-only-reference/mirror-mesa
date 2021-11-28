@@ -26,7 +26,7 @@ project(
     check : true
   ).stdout(),
   license : 'MIT',
-  meson_version : '>= 0.52',
+  meson_version : '>= 0.53',
   default_options : ['buildtype=debugoptimized', 'b_ndebug=if-release', 'c_std=c11', 'cpp_std=c++14']
 )
 
@@ -333,6 +333,11 @@ else
   with_dri_platform = 'none'
 endif
 
+with_vulkan_beta = get_option('vulkan-beta')
+if with_vulkan_beta
+  pre_args += '-DVK_ENABLE_BETA_EXTENSIONS'
+endif
+
 _platforms = get_option('platforms')
 if _platforms.contains('auto')
   if system_has_kms_drm
@@ -484,14 +489,10 @@ if with_egl
   if with_gbm and not with_platform_android
     _platforms += 'drm'
   endif
-endif
 
-egl_native_platform = get_option('egl-native-platform')
-if egl_native_platform.contains('auto')
-  if _platforms.length() != 0
+  egl_native_platform = get_option('egl-native-platform')
+  if egl_native_platform.contains('auto')
     egl_native_platform = _platforms[0]
-  else
-    egl_native_platform = 'surfaceless'
   endif
 endif
 
@@ -499,20 +500,49 @@ if with_egl and not _platforms.contains(egl_native_platform)
   error('-Degl-native-platform does not specify an enabled platform')
 endif
 
-# Android uses emutls for versions <= P/28. For USE_ELF_TLS we need ELF TLS.
+if 'x11' in _platforms
+  _platforms += 'xcb'
+endif
+
+foreach platform : _platforms
+  pre_args += '-DHAVE_@0@_PLATFORM'.format(platform.to_upper())
+endforeach
+
 use_elf_tls = false
-if (not ['freebsd', 'openbsd', 'haiku'].contains(host_machine.system()) and
-    (not with_platform_android or get_option('platform-sdk-version') >= 29) and
-    (not with_platform_windows or not with_shared_glapi))
+if not with_platform_windows or not with_shared_glapi
   pre_args += '-DUSE_ELF_TLS'
   use_elf_tls = true
 
-  if with_platform_android
+  if with_platform_android and get_option('platform-sdk-version') >= 29
     # By default the NDK compiler, at least, emits emutls references instead of
     # ELF TLS, even when building targeting newer API levels.  Make it actually do
     # ELF TLS instead.
     c_args += '-fno-emulated-tls'
     cpp_args += '-fno-emulated-tls'
+  endif
+
+  # -mtls-dialect=gnu2 speeds up non-initial-exec TLS significantly but requires
+  # full toolchain (including libc) support.
+  have_mtls_dialect = false
+  foreach c_arg : get_option('c_args')
+    if c_arg.startswith('-mtls-dialect=')
+      have_mtls_dialect = true
+      break
+    endif
+  endforeach
+  if not have_mtls_dialect
+    # need .run to check libc support. meson aborts when calling .run when
+    # cross-compiling, but because this is just an optimization we can skip it
+    if meson.is_cross_build()
+      warning('cannot auto-detect -mtls-dialect when cross-compiling, using compiler default')
+    else
+      # -fpic to force dynamic tls, otherwise TLS relaxation defeats check
+      gnu2_test = cc.run('int __thread x; int main() { return x; }', args: ['-mtls-dialect=gnu2', '-fpic'], name: '-mtls-dialect=gnu2')
+      if gnu2_test.returncode() == 0
+        c_args += '-mtls-dialect=gnu2'
+        cpp_args += '-mtls-dialect=gnu2'
+      endif
+    endif
   endif
 endif
 
@@ -639,9 +669,12 @@ endif
 
 dep_dxheaders = null_dep
 if with_gallium_d3d12 or with_microsoft_clc
-  dep_dxheaders = dependency('DirectX-Headers', fallback : ['DirectX-Headers', 'dep_dxheaders'],
-    required : with_gallium_d3d12
-  )
+  dep_dxheaders = dependency('directx-headers', required : false)
+  if not dep_dxheaders.found()
+    dep_dxheaders = dependency('DirectX-Headers', fallback : ['DirectX-Headers', 'dep_dxheaders'],
+      required : with_gallium_d3d12
+    )
+  endif
 endif
 
 if with_vulkan_overlay_layer or with_aco_tests
@@ -900,9 +933,13 @@ if get_option('vmware-mks-stats')
 endif
 
 _opencl = get_option('gallium-opencl')
+_rtti = get_option('cpp_rtti')
 if _opencl != 'disabled'
   if not with_gallium
     error('OpenCL Clover implementation requires at least one gallium driver.')
+  endif
+  if not _rtti
+    error('The Clover OpenCL state tracker requires rtti')
   endif
 
   with_libclc = true
@@ -920,10 +957,6 @@ endif
 
 gl_pkgconfig_c_flags = []
 if with_platform_x11
-  if with_any_vk or with_egl or (with_glx == 'dri' and with_dri_platform == 'drm')
-    pre_args += '-DHAVE_X11_PLATFORM'
-    pre_args += '-DHAVE_XCB_PLATFORM'
-  endif
   if with_glx == 'xlib' or with_glx == 'gallium-xlib'
     pre_args += '-DUSE_XSHM'
   else
@@ -942,12 +975,6 @@ if with_platform_x11
 else
   pre_args += '-DEGL_NO_X11'
   gl_pkgconfig_c_flags += '-DEGL_NO_X11'
-endif
-if with_gbm and not with_platform_android
-  pre_args += '-DHAVE_DRM_PLATFORM'
-endif
-if with_platform_windows
-  pre_args += '-DHAVE_WINDOWS_PLATFORM'
 endif
 
 with_android_stub = get_option('android-stub')
@@ -972,13 +999,9 @@ if with_platform_android
     endif
   endif
   pre_args += [
-    '-DHAVE_ANDROID_PLATFORM',
     '-DANDROID',
     '-DANDROID_API_LEVEL=' + get_option('platform-sdk-version').to_string()
   ]
-endif
-if with_platform_haiku
-  pre_args += '-DHAVE_HAIKU_PLATFORM'
 endif
 
 prog_python = import('python').find_installation('python3')
@@ -1095,35 +1118,31 @@ c_msvc_compat_args = []
 no_override_init_args = []
 cpp_msvc_compat_args = []
 if cc.get_id() == 'msvc'
-  foreach a : ['/wd4018',  # signed/unsigned mismatch
-               '/wd4056',  # overflow in floating-point constant arithmetic
-               '/wd4244',  # conversion from 'type1' to 'type2', possible loss of data
-               '/wd4267',  # 'var' : conversion from 'size_t' to 'type', possible loss of data
-               '/wd4305',  # trancation from 'type1' to 'type2'
-               '/wd4351',  # new behavior: elements of array 'array' will be default initialized
-               '/wd4756',  # overflow in constant arithmetic
-               '/wd4800',  # forcing value to bool 'true' or 'false' (performance warning)
-               '/wd4996',  # disabled deprecated POSIX name warnings
-               '/wd4291',  # no matching operator delete found
-               '/wd4146',  # unary minus operator applied to unsigned type, result still unsigned
-               '/wd4200',  # nonstandard extension used: zero-sized array in struct/union
-               '/wd4624',  # destructor was implicitly defined as deleted [from LLVM]
-               '/wd4309',  # 'initializing': truncation of constant value
-               '/wd4838',  # conversion from 'int' to 'const char' requires a narrowing conversion
-               '/wd5105',  # macro expansion producing 'defined' has undefined behavior (winbase.h, need Windows SDK upgrade)
-               '/we4020',  # Error when passing the wrong number of parameters
-               '/we4024',  # Error when passing different type of parameter
-               '/Zc:__cplusplus', #Set __cplusplus macro to match the /std:c++<version> on the command line
-              ]
-    if cc.has_argument(a)
-      c_args += a
-    endif
-    if cpp.has_argument(a)
-      cpp_args += a
-    endif
-  endforeach
-else
   _trial = [
+    '/wd4018',  # signed/unsigned mismatch
+    '/wd4056',  # overflow in floating-point constant arithmetic
+    '/wd4244',  # conversion from 'type1' to 'type2', possible loss of data
+    '/wd4267',  # 'var' : conversion from 'size_t' to 'type', possible loss of data
+    '/wd4305',  # trancation from 'type1' to 'type2'
+    '/wd4351',  # new behavior: elements of array 'array' will be default initialized
+    '/wd4756',  # overflow in constant arithmetic
+    '/wd4800',  # forcing value to bool 'true' or 'false' (performance warning)
+    '/wd4996',  # disabled deprecated POSIX name warnings
+    '/wd4291',  # no matching operator delete found
+    '/wd4146',  # unary minus operator applied to unsigned type, result still unsigned
+    '/wd4200',  # nonstandard extension used: zero-sized array in struct/union
+    '/wd4624',  # destructor was implicitly defined as deleted [from LLVM]
+    '/wd4309',  # 'initializing': truncation of constant value
+    '/wd4838',  # conversion from 'int' to 'const char' requires a narrowing conversion
+    '/wd5105',  # macro expansion producing 'defined' has undefined behavior (winbase.h, need Windows SDK upgrade)
+    '/we4020',  # Error when passing the wrong number of parameters
+    '/we4024',  # Error when passing different type of parameter
+    '/Zc:__cplusplus', #Set __cplusplus macro to match the /std:c++<version> on the command line
+  ]
+  c_args += cc.get_supported_arguments(_trial)
+  cpp_args += cpp.get_supported_arguments(_trial)
+else
+  _trial_c = [
     '-Werror=implicit-function-declaration',
     '-Werror=missing-prototypes',
     '-Werror=return-type',
@@ -1137,22 +1156,10 @@ else
     '-fno-trapping-math',
     '-Qunused-arguments',
     '-fno-common',
+    # Clang
+    '-Wno-microsoft-enum-value',
   ]
-  # MinGW chokes on format specifiers and I can't get it all working
-  if not (cc.get_id() == 'gcc' and host_machine.system() == 'windows')
-    _trial += ['-Werror=format', '-Wformat-security']
-  endif
-  # FreeBSD annotated <pthread.h> but Mesa isn't ready
-  if not (cc.get_id() == 'clang' and host_machine.system() == 'freebsd')
-    _trial += ['-Werror=thread-safety']
-  endif
-  foreach a : _trial
-    if cc.has_argument(a)
-      c_args += a
-    endif
-  endforeach
-
-  _trial = [
+  _trial_cpp = [
     '-Werror=return-type',
     '-Werror=empty-body',
     '-Wno-non-virtual-dtor',
@@ -1166,39 +1173,43 @@ else
     # to the memory before the constructor as "dead stores".
     # For now we disable this optimization.
     '-flifetime-dse=1',
+    # Clang
+    '-Wno-microsoft-enum-value',
   ]
+
   # MinGW chokes on format specifiers and I can't get it all working
   if not (cc.get_id() == 'gcc' and host_machine.system() == 'windows')
-    _trial += ['-Werror=format', '-Wformat-security']
+    _trial_c += ['-Werror=format', '-Wformat-security']
+    _trial_cpp += ['-Werror=format', '-Wformat-security']
   endif
-  foreach a : _trial
-    if cpp.has_argument(a)
-      cpp_args += a
-    endif
-  endforeach
 
-  foreach a : ['-Wno-override-init', '-Wno-initializer-overrides']
-    if cc.has_argument(a)
-      no_override_init_args += a
-    endif
-  endforeach
+  # FreeBSD annotated <pthread.h> but Mesa isn't ready
+  if not (cc.get_id() == 'clang' and host_machine.system() == 'freebsd')
+    _trial_c += ['-Werror=thread-safety']
+  endif
+
+  # If the compiler supports it, put function and data symbols in their
+  # own sections and GC the sections after linking.  This lets drivers
+  # drop shared code unused by that specific driver (particularly
+  # relevant for Vulkan drivers).
+  if cc.has_link_argument('-Wl,--gc-sections')
+    _trial_c += ['-ffunction-sections', '-fdata-sections']
+    _trial_cpp += ['-ffunction-sections', '-fdata-sections']
+  endif
+
+  c_args += cc.get_supported_arguments(_trial_c)
+  cpp_args += cpp.get_supported_arguments(_trial_cpp)
+
+  no_override_init_args += cc.get_supported_arguments(
+    ['-Wno-override-init', '-Wno-initializer-overrides']
+  )
 
   # Check for C and C++ arguments for MSVC compatibility. These are only used
   # in parts of the mesa code base that need to compile with MSVC, mainly
   # common code
-  foreach a : ['-Werror=pointer-arith', '-Werror=gnu-empty-initializer']
-    if cc.has_argument(a)
-      c_msvc_compat_args += a
-    endif
-    if cpp.has_argument(a)
-      cpp_msvc_compat_args += a
-    endif
-  endforeach
-
-  if cc.has_argument('-Wmicrosoft-enum-value')  # Clang
-    c_args += '-Wno-microsoft-enum-value'
-    cpp_args += '-Wno-microsoft-enum-value'
-  endif
+  _trial_msvc = ['-Werror=pointer-arith', '-Werror=gnu-empty-initializer']
+  c_msvc_compat_args += cc.get_supported_arguments(_trial_msvc)
+  cpp_msvc_compat_args += cpp.get_supported_arguments(_trial_msvc)
 endif
 
 # set linker arguments
@@ -1218,11 +1229,22 @@ if host_machine.system() == 'windows'
     endif
   else
     add_project_link_arguments(
-      '-Wl,--nxcompat',
-      '-Wl,--dynamicbase',
-      '-static-libgcc',
-      '-static-libstdc++',
-      language : ['c', 'cpp'],
+      cc.get_supported_arguments(
+        '-Wl,--nxcompat',
+        '-Wl,--dynamicbase',
+        '-static-libgcc',
+        '-static-libstdc++',
+      ),
+      language : ['c'],
+    )
+    add_project_link_arguments(
+      cpp.get_supported_arguments(
+        '-Wl,--nxcompat',
+        '-Wl,--dynamicbase',
+        '-static-libgcc',
+        '-static-libstdc++',
+      ),
+      language : ['cpp'],
     )
   endif
 endif
@@ -1562,7 +1584,7 @@ _drm_amdgpu_ver = '2.4.107'
 _drm_radeon_ver = '2.4.71'
 _drm_nouveau_ver = '2.4.102'
 _drm_intel_ver = '2.4.75'
-_drm_ver = '2.4.81'
+_drm_ver = '2.4.109'
 
 _libdrm_checks = [
   ['intel', with_dri_i915 or with_gallium_i915],
@@ -1571,17 +1593,6 @@ _libdrm_checks = [
               with_gallium_r300 or with_gallium_r600)],
   ['nouveau', (with_gallium_nouveau or with_dri_nouveau)],
 ]
-
-# VC4 only needs core libdrm support of this version, not a libdrm_vc4
-# library.
-if with_gallium_vc4
-  _drm_ver = '2.4.89'
-endif
-
-# etnaviv only needs core libdrm
-if with_gallium_etnaviv
-  _drm_ver = '2.4.89'
-endif
 
 # Loop over the enables versions and get the highest libdrm requirement for all
 # active drivers.
@@ -1618,6 +1629,11 @@ if dep_libdrm.found()
   if with_dri_platform == 'drm' and with_dri
     with_gallium_drisw_kms = true
   endif
+endif
+
+dep_libudev = dependency('libudev', required : false)
+if dep_libudev.found()
+  pre_args += '-DHAVE_LIBUDEV'
 endif
 
 llvm_modules = ['bitwriter', 'engine', 'mcdisassembler', 'mcjit', 'core', 'executionengine', 'scalaropts', 'transformutils', 'instcombine']
@@ -1719,31 +1735,29 @@ if with_llvm
     error('SWR requires LLVM draw support.')
   endif
 
-  # LLVM can be built without rtti, turning off rtti changes the ABI of C++
-  # programs, so we need to build all C++ code in mesa without rtti as well to
-  # ensure that linking works.
-  #
-  # In meson 0.51.0 we can use cmake to find LLVM in addittion to meson's
-  # builtin llvm-config based finder. A new generic variable getter method
-  # has also been added, so we'll use that if we can, to cover the cmake case.
-  if dep_llvm.type_name() == 'internal'
-    _rtti = subproject('llvm').get_variable('has_rtti', true)
-  else
-    # The CMake finder will return 'ON', the llvm-config will return 'YES'
-    _rtti = ['ON', 'YES'].contains(dep_llvm.get_variable(cmake : 'LLVM_ENABLE_RTTI', configtool: 'has-rtti'))
-  endif
-  if not _rtti
-    if with_gallium_opencl
-      error('The Clover OpenCL state tracker requires rtti, you need to turn off clover or use an LLVM built with LLVM_ENABLE_RTTI.')
-    endif
-    if cc.get_id() == 'msvc'
-      cpp_args += '/GR-'
+  if cc.get_id() != 'msvc'
+    # LLVM can be built without rtti, turning off rtti changes the ABI of C++
+    # programs, so we need to build all C++ code in mesa without rtti as well to
+    # ensure that linking works. Note that MSVC does handle mismatching RTTI
+    # without issues, so only apply this for other compilers.
+    #
+    # In meson 0.51.0 we can use cmake to find LLVM in addittion to meson's
+    # builtin llvm-config based finder. A new generic variable getter method
+    # has also been added, so we'll use that if we can, to cover the cmake case.
+    if dep_llvm.type_name() == 'internal'
+      _llvm_rtti = subproject('llvm').get_variable('has_rtti', true)
     else
-      cpp_args += '-fno-rtti'
+      # The CMake finder will return 'ON', the llvm-config will return 'YES'
+      _llvm_rtti = ['ON', 'YES'].contains(dep_llvm.get_variable(cmake : 'LLVM_ENABLE_RTTI', configtool: 'has-rtti'))
     endif
-  endif
-
-  if cc.get_id() == 'msvc'
+    if _rtti != _llvm_rtti
+      if _llvm_rtti
+        error('LLVM was built with RTTI, cannot build Mesa with RTTI disabled. Remove cpp_rtti disable switch or use LLVM built without LLVM_ENABLE_RTTI.')
+      else
+        error('LLVM was built without RTTI, so Mesa must also disable RTTI. Use an LLVM built with LLVM_ENABLE_RTTI or add cpp_rtti=false.')
+      endif
+    endif
+  else
     # Suppress "/DELAYLOAD:ole32.dll/shell32.dll ignored" warnings that LLVM adds
     add_project_link_arguments(
       '/ignore:4199',
@@ -1976,7 +1990,7 @@ if with_platform_wayland
   else
     wl_scanner_arg = 'code'
   endif
-  dep_wl_protocols = dependency('wayland-protocols', version : '>= 1.8')
+  dep_wl_protocols = dependency('wayland-protocols', version : '>= 1.24')
   dep_wayland_client = dependency('wayland-client', version : '>=1.18')
   dep_wayland_server = dependency('wayland-server', version : '>=1.18')
   if with_egl
@@ -1987,7 +2001,7 @@ if with_platform_wayland
     dep_wl_protocols.get_pkgconfig_variable('pkgdatadir'), 'unstable',
     'linux-dmabuf', 'linux-dmabuf-unstable-v1.xml'
   )
-  pre_args += ['-DHAVE_WAYLAND_PLATFORM', '-DWL_HIDE_DEPRECATED']
+  pre_args += '-DWL_HIDE_DEPRECATED'
 endif
 
 dep_x11 = null_dep
@@ -2117,27 +2131,9 @@ if with_perfetto
   pre_args += '-DHAVE_PERFETTO'
 endif
 
-# If the compiler supports it, put function and data symbols in their
-# own sections and GC the sections after linking.  This lets drivers
-# drop shared code unused by that specific driver (particularly
-# relevant for Vulkan drivers).
-if cc.has_link_argument('-Wl,--gc-sections')
-  foreach a: ['-ffunction-sections', '-fdata-sections']
-    if cc.has_argument(a)
-      add_project_arguments(a, language : ['c', 'cpp'])
-    endif
-  endforeach
-endif
-
-foreach a : pre_args
-  add_project_arguments(a, language : ['c', 'cpp'])
-endforeach
-foreach a : c_args
-  add_project_arguments(a, language : ['c'])
-endforeach
-foreach a : cpp_args
-  add_project_arguments(a, language : ['cpp'])
-endforeach
+add_project_arguments(pre_args, language : ['c', 'cpp'])
+add_project_arguments(c_args,   language : ['c'])
+add_project_arguments(cpp_args, language : ['cpp'])
 
 gl_priv_reqs = []
 
@@ -2260,10 +2256,6 @@ if with_egl
   lines += 'EGL drivers:     ' + ' '.join(egl_drivers)
 endif
 if with_egl or with_any_vk
-  _platforms += 'surfaceless'
-  if with_gbm and not with_platform_android
-    _platforms += 'drm'
-  endif
   lines += 'EGL/Vulkan/VL platforms:   ' + ' '.join(_platforms)
 endif
 lines += 'GBM:             ' + (with_gbm ? 'yes' : 'no')

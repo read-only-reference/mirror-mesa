@@ -109,13 +109,6 @@ KHR-GLES31.core.tessellation_shader.tessellation_shader_tc_barriers.barrier_guar
 # looks like a cache flushing issue, and it does sometimes pass.
 bypass-dEQP-GLES31.functional.blend_equation_advanced.msaa.*
 
-# Testcase was mostly fixed in 23f7e06cd8d40569f8bfabde9c01d1597573abef, but has
-# flaked in CI since then:
-# " [775] Check failed. Received: [3,0,0,2] instead of: [5,0,0,2]
-#   [806] Check failed. Received: [3,0,0,2] instead of: [5,0,0,2]
-#   ..."
-KHR-GLES31.core.shader_image_load_store.basic-glsl-misc-fs
-
 # Flakes, all seen since merge of:
 # https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/12258
 # Failures seen so far in different flakes:
@@ -141,10 +134,6 @@ glx@glx-visuals-stencil
 # Occasionally flakes preceded by a GPU fault;
 #  [  375.034086] adreno 5000000.gpu: [drm:a6xx_irq] *ERROR* gpu fault ring 0 fence aefe8 status 00E51005 rb 0602/06d2 ib1 000000010023D000/0000 ib2 0000000100246170/0000
 glx@glx-tfp
-
-# async shader compiler asserts in get_image_samp_tex_src()'s nir_src_comp_as_uint().
-# https://gitlab.freedesktop.org/mesa/mesa/-/issues/4474
-spec@arb_shader_image_load_store@invalid
 
 # Flaky since around 2021-03-20.  First appeared on the autotune branch.
 spec@arb_draw_indirect@arb_draw_indirect-transform-feedback

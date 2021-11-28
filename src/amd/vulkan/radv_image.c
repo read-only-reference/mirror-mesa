@@ -352,6 +352,11 @@ radv_use_htile_for_image(const struct radv_device *device, const struct radv_ima
    bool use_htile_for_mips =
       image->info.array_size == 1 && device->physical_device->rad_info.chip_class >= GFX10;
 
+   /* Stencil texturing with HTILE doesn't work with mipmapping on Navi10-14. */
+   if (device->physical_device->rad_info.chip_class == GFX10 &&
+       image->vk_format == VK_FORMAT_D32_SFLOAT_S8_UINT && image->info.levels > 1)
+      return false;
+
    /* Do not enable HTILE for very small images because it seems less performant but make sure it's
     * allowed with VRS attachments because we need HTILE.
     */
@@ -373,7 +378,9 @@ radv_use_tc_compat_cmask_for_image(struct radv_device *device, struct radv_image
    if (device->instance->debug_flags & RADV_DEBUG_NO_TC_COMPAT_CMASK)
       return false;
 
-   if (image->usage & VK_IMAGE_USAGE_STORAGE_BIT)
+   /* TC-compat CMASK with storage images is supported on GFX10+. */
+   if ((image->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+       device->physical_device->rad_info.chip_class < GFX10)
       return false;
 
    /* Do not enable TC-compatible if the image isn't readable by a shader
@@ -902,8 +909,8 @@ gfx10_make_texture_descriptor(struct radv_device *device, struct radv_image *ima
                               bool is_storage_image, VkImageViewType view_type, VkFormat vk_format,
                               const VkComponentMapping *mapping, unsigned first_level,
                               unsigned last_level, unsigned first_layer, unsigned last_layer,
-                              unsigned width, unsigned height, unsigned depth, uint32_t *state,
-                              uint32_t *fmask_state)
+                              unsigned width, unsigned height, unsigned depth, float min_lod,
+                              uint32_t *state, uint32_t *fmask_state)
 {
    const struct util_format_description *desc;
    enum pipe_swizzle swizzle[4];
@@ -927,7 +934,9 @@ gfx10_make_texture_descriptor(struct radv_device *device, struct radv_image *ima
       depth = image->info.array_size / 6;
 
    state[0] = 0;
-   state[1] = S_00A004_FORMAT(img_format) | S_00A004_WIDTH_LO(width - 1);
+   state[1] = S_00A004_MIN_LOD(radv_float_to_ufixed(CLAMP(min_lod, 0, 15), 8)) |
+              S_00A004_FORMAT(img_format) |
+              S_00A004_WIDTH_LO(width - 1);
    state[2] = S_00A008_WIDTH_HI((width - 1) >> 2) | S_00A008_HEIGHT(height - 1) |
               S_00A008_RESOURCE_LEVEL(1);
    state[3] = S_00A00C_DST_SEL_X(radv_map_swizzle(swizzle[0])) |
@@ -1022,8 +1031,8 @@ si_make_texture_descriptor(struct radv_device *device, struct radv_image *image,
                            bool is_storage_image, VkImageViewType view_type, VkFormat vk_format,
                            const VkComponentMapping *mapping, unsigned first_level,
                            unsigned last_level, unsigned first_layer, unsigned last_layer,
-                           unsigned width, unsigned height, unsigned depth, uint32_t *state,
-                           uint32_t *fmask_state)
+                           unsigned width, unsigned height, unsigned depth, float min_lod,
+                           uint32_t *state, uint32_t *fmask_state)
 {
    const struct util_format_description *desc;
    enum pipe_swizzle swizzle[4];
@@ -1066,7 +1075,9 @@ si_make_texture_descriptor(struct radv_device *device, struct radv_image *image,
       depth = image->info.array_size / 6;
 
    state[0] = 0;
-   state[1] = (S_008F14_DATA_FORMAT(data_format) | S_008F14_NUM_FORMAT(num_format));
+   state[1] = (S_008F14_MIN_LOD(radv_float_to_ufixed(CLAMP(min_lod, 0, 15), 8)) |
+               S_008F14_DATA_FORMAT(data_format) |
+               S_008F14_NUM_FORMAT(num_format));
    state[2] = (S_008F18_WIDTH(width - 1) | S_008F18_HEIGHT(height - 1) | S_008F18_PERF_MOD(4));
    state[3] = (S_008F1C_DST_SEL_X(radv_map_swizzle(swizzle[0])) |
                S_008F1C_DST_SEL_Y(radv_map_swizzle(swizzle[1])) |
@@ -1212,17 +1223,17 @@ radv_make_texture_descriptor(struct radv_device *device, struct radv_image *imag
                              bool is_storage_image, VkImageViewType view_type, VkFormat vk_format,
                              const VkComponentMapping *mapping, unsigned first_level,
                              unsigned last_level, unsigned first_layer, unsigned last_layer,
-                             unsigned width, unsigned height, unsigned depth, uint32_t *state,
+                             unsigned width, unsigned height, unsigned depth, float min_lod, uint32_t *state,
                              uint32_t *fmask_state)
 {
    if (device->physical_device->rad_info.chip_class >= GFX10) {
       gfx10_make_texture_descriptor(device, image, is_storage_image, view_type, vk_format, mapping,
                                     first_level, last_level, first_layer, last_layer, width, height,
-                                    depth, state, fmask_state);
+                                    depth, min_lod, state, fmask_state);
    } else {
       si_make_texture_descriptor(device, image, is_storage_image, view_type, vk_format, mapping,
                                  first_level, last_level, first_layer, last_layer, width, height,
-                                 depth, state, fmask_state);
+                                 depth, min_lod, state, fmask_state);
    }
 }
 
@@ -1238,7 +1249,7 @@ radv_query_opaque_metadata(struct radv_device *device, struct radv_image *image,
    radv_make_texture_descriptor(device, image, false, (VkImageViewType)image->type,
                                 image->vk_format, &fixedmapping, 0, image->info.levels - 1, 0,
                                 image->info.array_size - 1, image->info.width, image->info.height,
-                                image->info.depth, desc, NULL);
+                                image->info.depth, 0.0f, desc, NULL);
 
    si_set_mutable_tex_desc_fields(device, image, &image->planes[0].surface.u.legacy.level[0], 0, 0,
                                   0, image->planes[0].surface.blk_w, false, false, false, false,
@@ -1805,6 +1816,7 @@ radv_image_create(VkDevice _device, const struct radv_image_create_info *create_
 static void
 radv_image_view_make_descriptor(struct radv_image_view *iview, struct radv_device *device,
                                 VkFormat vk_format, const VkComponentMapping *components,
+                                float min_lod,
                                 bool is_storage_image, bool disable_compression,
                                 bool enable_compression, unsigned plane_id,
                                 unsigned descriptor_plane_id)
@@ -1835,7 +1847,7 @@ radv_image_view_make_descriptor(struct radv_image_view *iview, struct radv_devic
       iview->base_layer + iview->layer_count - 1,
       vk_format_get_plane_width(image->vk_format, plane_id, iview->extent.width),
       vk_format_get_plane_height(image->vk_format, plane_id, iview->extent.height),
-      iview->extent.depth, descriptor->plane_descriptors[descriptor_plane_id],
+      iview->extent.depth, min_lod, descriptor->plane_descriptors[descriptor_plane_id],
       descriptor_plane_id || is_storage_image ? NULL : descriptor->fmask_descriptor);
 
    const struct legacy_surf_level *base_level_info = NULL;
@@ -1929,6 +1941,13 @@ radv_image_view_init(struct radv_image_view *iview, struct radv_device *device,
    RADV_FROM_HANDLE(radv_image, image, pCreateInfo->image);
    const VkImageSubresourceRange *range = &pCreateInfo->subresourceRange;
    uint32_t plane_count = 1;
+   float min_lod = 0.0f;
+
+   const struct VkImageViewMinLodCreateInfoEXT *min_lod_info =
+      vk_find_struct_const(pCreateInfo->pNext, IMAGE_VIEW_MIN_LOD_CREATE_INFO_EXT);
+
+   if (min_lod_info)
+      min_lod = min_lod_info->minLod;
 
    vk_object_base_init(&device->vk, &iview->base, VK_OBJECT_TYPE_IMAGE_VIEW);
 
@@ -2058,10 +2077,10 @@ radv_image_view_init(struct radv_image_view *iview, struct radv_device *device,
    bool enable_compression = extra_create_info ? extra_create_info->enable_compression : false;
    for (unsigned i = 0; i < plane_count; ++i) {
       VkFormat format = vk_format_get_plane_format(iview->vk_format, i);
-      radv_image_view_make_descriptor(iview, device, format, &pCreateInfo->components, false,
+      radv_image_view_make_descriptor(iview, device, format, &pCreateInfo->components, min_lod, false,
                                       disable_compression, enable_compression, iview->plane_id + i,
                                       i);
-      radv_image_view_make_descriptor(iview, device, format, &pCreateInfo->components, true,
+      radv_image_view_make_descriptor(iview, device, format, &pCreateInfo->components, min_lod, true,
                                       disable_compression, enable_compression, iview->plane_id + i,
                                       i);
    }
@@ -2079,8 +2098,9 @@ radv_layout_is_htile_compressed(const struct radv_device *device, const struct r
 {
    switch (layout) {
    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-   case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL_KHR:
-   case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL_KHR:
+   case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+   case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
+   case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR:
       return radv_image_has_htile(image);
    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
       return radv_image_is_tc_compat_htile(image) ||
@@ -2132,7 +2152,8 @@ radv_layout_can_fast_clear(const struct radv_device *device, const struct radv_i
    if (!(image->usage & RADV_IMAGE_USAGE_WRITE_BITS))
       return false;
 
-   if (layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+   if (layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+       layout != VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR)
       return false;
 
    /* Exclusive images with CMASK or DCC can always be fast-cleared on the gfx queue. Concurrent
@@ -2196,7 +2217,7 @@ radv_image_queue_family_mask(const struct radv_image *image, uint32_t family, ui
    return 1u << family;
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
                  const VkAllocationCallbacks *pAllocator, VkImage *pImage)
 {
@@ -2220,7 +2241,7 @@ radv_CreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
                             pAllocator, pImage);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_DestroyImage(VkDevice _device, VkImage _image, const VkAllocationCallbacks *pAllocator)
 {
    RADV_FROM_HANDLE(radv_device, device, _device);
@@ -2232,7 +2253,7 @@ radv_DestroyImage(VkDevice _device, VkImage _image, const VkAllocationCallbacks 
    radv_destroy_image(device, pAllocator, image);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_GetImageSubresourceLayout(VkDevice _device, VkImage _image,
                                const VkImageSubresource *pSubresource, VkSubresourceLayout *pLayout)
 {
@@ -2300,7 +2321,7 @@ radv_GetImageSubresourceLayout(VkDevice _device, VkImage _image,
    }
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_GetImageDrmFormatModifierPropertiesEXT(VkDevice _device, VkImage _image,
                                             VkImageDrmFormatModifierPropertiesEXT *pProperties)
 {
@@ -2310,7 +2331,7 @@ radv_GetImageDrmFormatModifierPropertiesEXT(VkDevice _device, VkImage _image,
    return VK_SUCCESS;
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateImageView(VkDevice _device, const VkImageViewCreateInfo *pCreateInfo,
                      const VkAllocationCallbacks *pAllocator, VkImageView *pView)
 {
@@ -2329,7 +2350,7 @@ radv_CreateImageView(VkDevice _device, const VkImageViewCreateInfo *pCreateInfo,
    return VK_SUCCESS;
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_DestroyImageView(VkDevice _device, VkImageView _iview, const VkAllocationCallbacks *pAllocator)
 {
    RADV_FROM_HANDLE(radv_device, device, _device);
@@ -2365,7 +2386,7 @@ radv_buffer_view_finish(struct radv_buffer_view *view)
    vk_object_base_finish(&view->base);
 }
 
-VkResult
+VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInfo,
                       const VkAllocationCallbacks *pAllocator, VkBufferView *pView)
 {
@@ -2384,7 +2405,7 @@ radv_CreateBufferView(VkDevice _device, const VkBufferViewCreateInfo *pCreateInf
    return VK_SUCCESS;
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_DestroyBufferView(VkDevice _device, VkBufferView bufferView,
                        const VkAllocationCallbacks *pAllocator)
 {

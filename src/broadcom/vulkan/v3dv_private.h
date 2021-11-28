@@ -37,6 +37,7 @@
 #include <vk_enum_to_str.h>
 
 #include "vk_device.h"
+#include "vk_format.h"
 #include "vk_instance.h"
 #include "vk_image.h"
 #include "vk_log.h"
@@ -274,7 +275,7 @@ struct v3dv_pipeline_key {
    uint8_t cbufs;
    struct {
       enum pipe_format format;
-      const uint8_t *swizzle;
+      uint8_t swizzle[4];
    } color_fmt[V3D_MAX_DRAW_BUFFERS];
    uint8_t f32_color_rb;
    uint32_t va_swap_rb_mask;
@@ -637,7 +638,7 @@ struct v3dv_subpass {
 };
 
 struct v3dv_render_pass_attachment {
-   VkAttachmentDescription desc;
+   VkAttachmentDescription2 desc;
 
    uint32_t first_subpass;
    uint32_t last_subpass;
@@ -842,8 +843,6 @@ struct v3dv_dynamic_state {
 
    uint32_t color_write_enable;
 };
-
-extern const struct v3dv_dynamic_state default_dynamic_state;
 
 void v3dv_viewport_compute_xform(const VkViewport *viewport,
                                  float scale[3],
@@ -1810,6 +1809,9 @@ struct v3dv_pipeline {
    enum pipe_prim_type topology;
 
    struct v3dv_pipeline_shared_data *shared_data;
+
+   /* It is the combined stages sha1, plus the pipeline key sha1. */
+   unsigned char sha1[20];
 
    /* In general we can reuse v3dv_device->default_attribute_float, so note
     * that the following can be NULL.

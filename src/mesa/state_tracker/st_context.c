@@ -241,8 +241,11 @@ st_invalidate_state(struct gl_context *ctx)
    if (new_state & _NEW_PIXEL)
       st->dirty |= ST_NEW_PIXEL_TRANSFER;
 
-   if (new_state & _NEW_CURRENT_ATTRIB && st_vp_uses_current_values(ctx))
+   if (new_state & _NEW_CURRENT_ATTRIB && st_vp_uses_current_values(ctx)) {
       st->dirty |= ST_NEW_VERTEX_ARRAYS;
+      /* glColor3f -> glColor4f changes the vertex format. */
+      ctx->Array.NewVertexElements = true;
+   }
 
    if (st->clamp_frag_depth_in_shader && (new_state & _NEW_VIEWPORT)) {
       if (ctx->GeometryProgram._Current)
@@ -584,6 +587,8 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    uint i;
    struct st_context *st = ST_CALLOC_STRUCT( st_context);
 
+   util_cpu_detect();
+
    st->options = *options;
 
    ctx->st = st;
@@ -620,6 +625,11 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
 
    st_init_atoms(st);
    st_init_clear(st);
+   {
+      enum pipe_texture_transfer_mode val = screen->get_param(screen, PIPE_CAP_TEXTURE_TRANSFER_MODES);
+      st->prefer_blit_based_texture_transfer = (val & PIPE_TEXTURE_TRANSFER_BLIT) != 0;
+      st->allow_compute_based_texture_transfer = (val & PIPE_TEXTURE_TRANSFER_COMPUTE) != 0;
+   }
    st_init_pbo_helpers(st);
 
    /* Choose texture target for glDrawPixels, glBitmap, renderbuffers */
@@ -684,8 +694,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    st->has_astc_5x5_ldr =
       screen->is_format_supported(screen, PIPE_FORMAT_ASTC_5x5_SRGB,
                                   PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_SAMPLER_VIEW);
-   st->prefer_blit_based_texture_transfer = screen->get_param(screen,
-                              PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER);
    st->force_persample_in_shader =
       screen->get_param(screen, PIPE_CAP_SAMPLE_SHADING) &&
       !screen->get_param(screen, PIPE_CAP_FORCE_PERSAMPLE_INTERP);
@@ -842,8 +850,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
          !st->lower_ucp;
    st->shader_has_one_variant[MESA_SHADER_COMPUTE] = st->has_shareable_shaders;
 
-   util_cpu_detect();
-
    if (util_get_cpu_caps()->num_L3_caches == 1 ||
        !st->pipe->set_context_param)
       st->pin_thread_counter = ST_L3_PINNING_DISABLED;
@@ -895,6 +901,10 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    simple_mtx_init(&st->zombie_sampler_views.mutex, mtx_plain);
    list_inithead(&st->zombie_shaders.list.node);
    simple_mtx_init(&st->zombie_shaders.mutex, mtx_plain);
+
+   ctx->Const.DriverSupportedPrimMask = screen->get_param(screen, PIPE_CAP_SUPPORTED_PRIM_MODES) |
+                                        /* patches is always supported */
+                                        BITFIELD_BIT(PIPE_PRIM_PATCHES);
 
    return st;
 }

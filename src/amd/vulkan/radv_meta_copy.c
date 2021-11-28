@@ -243,7 +243,7 @@ copy_buffer_to_image(struct radv_cmd_buffer *cmd_buffer, struct radv_buffer *buf
    radv_meta_restore(&saved_state, cmd_buffer);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyBufferToImage2KHR(VkCommandBuffer commandBuffer,
                               const VkCopyBufferToImageInfo2KHR *pCopyBufferToImageInfo)
 {
@@ -361,7 +361,7 @@ copy_image_to_buffer(struct radv_cmd_buffer *cmd_buffer, struct radv_buffer *buf
    radv_meta_restore(&saved_state, cmd_buffer);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyImageToBuffer2KHR(VkCommandBuffer commandBuffer,
                               const VkCopyImageToBufferInfo2KHR *pCopyImageToBufferInfo)
 {
@@ -535,7 +535,11 @@ copy_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image *src_image,
          if (cs) {
             radv_meta_image_to_image_cs(cmd_buffer, &b_src, &b_dst, 1, &rect);
          } else {
-            radv_meta_blit2d(cmd_buffer, &b_src, NULL, &b_dst, 1, &rect);
+            if (radv_can_use_fmask_copy(cmd_buffer, b_src.image, b_dst.image, 1, &rect)) {
+               radv_fmask_copy(cmd_buffer, &b_src, &b_dst);
+            } else {
+               radv_meta_blit2d(cmd_buffer, &b_src, NULL, &b_dst, 1, &rect);
+            }
          }
 
          b_src.layer++;
@@ -577,7 +581,7 @@ copy_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image *src_image,
    radv_meta_restore(&saved_state, cmd_buffer);
 }
 
-void
+VKAPI_ATTR void VKAPI_CALL
 radv_CmdCopyImage2KHR(VkCommandBuffer commandBuffer, const VkCopyImageInfo2KHR *pCopyImageInfo)
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
