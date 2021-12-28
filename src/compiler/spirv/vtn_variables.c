@@ -1119,7 +1119,8 @@ vtn_get_builtin_location(struct vtn_builder *b,
       break;
    case SpvBuiltInPrimitiveShadingRateKHR:
       if (b->shader->info.stage == MESA_SHADER_VERTEX ||
-          b->shader->info.stage == MESA_SHADER_GEOMETRY) {
+          b->shader->info.stage == MESA_SHADER_GEOMETRY ||
+          b->shader->info.stage == MESA_SHADER_MESH) {
          *location = VARYING_SLOT_PRIMITIVE_SHADING_RATE;
          *mode = nir_var_shader_out;
       } else {
@@ -1791,6 +1792,12 @@ vtn_get_call_payload_for_location(struct vtn_builder *b, uint32_t location_id)
             "or RayPayloadKHR and location %d", location);
 }
 
+static bool
+vtn_type_is_ray_query(struct vtn_type *type)
+{
+   return vtn_type_without_array(type)->base_type == vtn_base_type_ray_query;
+}
+
 static void
 vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
                     struct vtn_type *ptr_type, SpvStorageClass storage_class,
@@ -1887,6 +1894,7 @@ vtn_create_variable(struct vtn_builder *b, struct vtn_value *val,
 
       var->var->data.mode = nir_mode;
       var->var->data.location = -1;
+      var->var->data.ray_query = vtn_type_is_ray_query(var->type);
       var->var->interface_type = NULL;
       break;
 

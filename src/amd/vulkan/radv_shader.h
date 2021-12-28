@@ -191,11 +191,15 @@ struct radv_vs_output_info {
    uint8_t clip_dist_mask;
    uint8_t cull_dist_mask;
    uint8_t param_exports;
+   uint8_t prim_param_exports;
    bool writes_pointsize;
    bool writes_layer;
+   bool writes_layer_per_primitive;
    bool writes_viewport_index;
+   bool writes_viewport_index_per_primitive;
    bool writes_primitive_shading_rate;
    bool export_prim_id;
+   bool export_prim_id_per_primitive;
    bool export_clip_dists;
    unsigned pos_exports;
 };
@@ -302,10 +306,12 @@ struct radv_shader_info {
       bool viewport_index_input;
       uint8_t num_input_clips_culls;
       uint32_t input_mask;
+      uint32_t input_per_primitive_mask;
       uint32_t flat_shaded_mask;
       uint32_t explicit_shaded_mask;
       uint32_t float16_shaded_mask;
       uint32_t num_interp;
+      uint32_t num_prim_interp;
       bool can_discard;
       bool early_fragment_test;
       bool post_depth_coverage;
@@ -348,6 +354,10 @@ struct radv_shader_info {
       uint8_t num_linked_patch_outputs;
       bool tes_reads_tess_factors : 1;
    } tcs;
+   struct {
+      struct radv_vs_output_info outinfo;
+      uint16_t output_prim; /* Output primitive type: GL_POINTS, GL_LINES or GL_TRIANGLES. */
+   } ms;
 
    struct radv_streamout_info so;
 
@@ -454,8 +464,8 @@ union radv_shader_arena_block {
 struct radv_shader {
    uint32_t ref_count;
 
-   struct radeon_winsys_bo *bo;
-   union radv_shader_arena_block *alloc;
+   uint64_t va;
+
    struct ac_shader_config config;
    uint8_t *code_ptr;
    uint32_t code_size;
@@ -513,6 +523,13 @@ struct radv_shader *radv_shader_compile(
    int shader_count, struct radv_pipeline_layout *layout, const struct radv_pipeline_key *key,
    struct radv_shader_info *info, bool keep_shader_info, bool keep_statistic_info,
    struct radv_shader_binary **binary_out);
+
+bool radv_shader_binary_upload(struct radv_device *device, const struct radv_shader_binary *binary,
+                               struct radv_shader *shader, void *dest_ptr);
+
+union radv_shader_arena_block *radv_alloc_shader_memory(struct radv_device *device, uint32_t size,
+                                                        void *ptr);
+void radv_free_shader_memory(struct radv_device *device, union radv_shader_arena_block *alloc);
 
 struct radv_shader *
 radv_create_gs_copy_shader(struct radv_device *device, struct nir_shader *nir,

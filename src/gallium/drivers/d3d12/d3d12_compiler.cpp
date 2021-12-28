@@ -145,7 +145,8 @@ compile_nir(struct d3d12_context *ctx, struct d3d12_shader_selector *sel,
    NIR_PASS_V(nir, dxil_nir_split_typed_samplers);
 
    NIR_PASS_V(nir, nir_opt_dce);
-   struct nir_remove_dead_variables_options dead_var_opts = { .can_remove_var = can_remove_dead_sampler };
+   struct nir_remove_dead_variables_options dead_var_opts = {};
+   dead_var_opts.can_remove_var = can_remove_dead_sampler;
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_uniform, &dead_var_opts);
 
    if (key->samples_int_textures)
@@ -172,6 +173,7 @@ compile_nir(struct d3d12_context *ctx, struct d3d12_shader_selector *sel,
    NIR_PASS_V(nir, d3d12_lower_load_first_vertex);
    NIR_PASS_V(nir, d3d12_lower_state_vars, shader);
    NIR_PASS_V(nir, dxil_nir_lower_bool_input);
+   NIR_PASS_V(nir, dxil_nir_lower_loads_stores_to_dxil);
 
    struct nir_to_dxil_options opts = {};
    opts.interpolate_at_vertex = screen->have_load_at_vertex;

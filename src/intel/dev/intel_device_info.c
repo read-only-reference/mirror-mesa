@@ -1224,6 +1224,22 @@ getparam(int fd, uint32_t param, int *value)
    return true;
 }
 
+static bool
+get_context_param(int fd, uint32_t context, uint32_t param, uint64_t *value)
+{
+   struct drm_i915_gem_context_param gp = {
+      .ctx_id = context,
+      .param = param,
+   };
+
+   int ret = intel_ioctl(fd, DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM, &gp);
+   if (ret != 0)
+      return false;
+
+   *value = gp.value;
+   return true;
+}
+
 static void
 update_cs_workgroup_threads(struct intel_device_info *devinfo)
 {
@@ -1247,7 +1263,7 @@ intel_get_device_info_from_pci_id(int pci_id,
 #undef CHIPSET
 #define CHIPSET(id, family, fam_str, name) \
       case id: *devinfo = intel_device_info_##family; break;
-#include "pci_ids/i965_pci_ids.h"
+#include "pci_ids/crocus_pci_ids.h"
 #include "pci_ids/iris_pci_ids.h"
 
 #undef CHIPSET
@@ -1269,7 +1285,7 @@ intel_get_device_info_from_pci_id(int pci_id,
                     sizeof(devinfo->name)); \
       strncpy(devinfo->name, _name " (" _fam_str ")", sizeof(devinfo->name)); \
       break;
-#include "pci_ids/i965_pci_ids.h"
+#include "pci_ids/crocus_pci_ids.h"
 #include "pci_ids/iris_pci_ids.h"
    default:
       strncpy(devinfo->name, "Intel Unknown", sizeof(devinfo->name));
@@ -1701,6 +1717,7 @@ intel_get_device_info_from_fd(int fd, struct intel_device_info *devinfo)
    devinfo->has_bit6_swizzle = devinfo->ver < 8 && has_bit6_swizzle(fd);
 
    intel_get_aperture_size(fd, &devinfo->aperture_bytes);
+   get_context_param(fd, 0, I915_CONTEXT_PARAM_GTT_SIZE, &devinfo->gtt_size);
    devinfo->has_tiling_uapi = has_get_tiling(fd);
 
    devinfo->subslice_total = 0;

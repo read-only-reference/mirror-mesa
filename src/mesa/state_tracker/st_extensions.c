@@ -237,14 +237,7 @@ void st_init_limits(struct pipe_screen *screen,
 
          if (!screen->get_param(screen, PIPE_CAP_POINT_SIZE_FIXED))
             pc->MaxUniformComponents -= 4;
-
-         if (screen->get_param(screen, PIPE_CAP_DEPTH_CLIP_DISABLE) == 2)
-            pc->MaxUniformComponents -= 4;
-
       } else if (sh == PIPE_SHADER_FRAGMENT) {
-         if (screen->get_param(screen, PIPE_CAP_DEPTH_CLIP_DISABLE) == 2)
-            pc->MaxUniformComponents -= 4;
-
          if (!screen->get_param(screen, PIPE_CAP_ALPHA_TEST))
             pc->MaxUniformComponents -= 4;
       }
@@ -493,8 +486,6 @@ void st_init_limits(struct pipe_screen *screen,
    temp = screen->get_param(screen, PIPE_CAP_MAX_VERTEX_ELEMENT_SRC_OFFSET);
    c->MaxVertexAttribRelativeOffset = MIN2(0xffff, temp);
 
-   c->StripTextureBorder = GL_TRUE;
-
    c->GLSLSkipStrictMaxUniformLimitCheck =
       screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS);
 
@@ -642,12 +633,20 @@ void st_init_limits(struct pipe_screen *screen,
    c->VertexBufferOffsetIsInt32 =
       screen->get_param(screen, PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET);
 
-   c->MultiDrawWithUserIndices = true;
    c->AllowDynamicVAOFastPath =
          screen->get_param(screen, PIPE_CAP_ALLOW_DYNAMIC_VAO_FASTPATH);
 
    c->glBeginEndBufferSize =
       screen->get_param(screen, PIPE_CAP_GL_BEGIN_END_BUFFER_SIZE);
+
+   c->MaxSparseTextureSize =
+      screen->get_param(screen, PIPE_CAP_MAX_SPARSE_TEXTURE_SIZE);
+   c->MaxSparse3DTextureSize =
+      screen->get_param(screen, PIPE_CAP_MAX_SPARSE_3D_TEXTURE_SIZE);
+   c->MaxSparseArrayTextureLayers =
+      screen->get_param(screen, PIPE_CAP_MAX_SPARSE_ARRAY_TEXTURE_LAYERS);
+   c->SparseTextureFullArrayCubeMipmaps =
+      screen->get_param(screen, PIPE_CAP_SPARSE_TEXTURE_FULL_ARRAY_CUBE_MIPMAPS);
 }
 
 
@@ -822,6 +821,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_shader_texture_lod),           PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD      },
       { o(ARB_shadow),                       PIPE_CAP_TEXTURE_SHADOW_MAP               },
       { o(ARB_sparse_buffer),                PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE          },
+      { o(ARB_sparse_texture),               PIPE_CAP_MAX_SPARSE_TEXTURE_SIZE          },
       { o(ARB_spirv_extensions),             PIPE_CAP_GL_SPIRV                         },
       { o(ARB_texture_buffer_object),        PIPE_CAP_TEXTURE_BUFFER_OBJECTS           },
       { o(ARB_texture_cube_map_array),       PIPE_CAP_CUBE_MAP_ARRAY                   },
@@ -1100,55 +1100,6 @@ void st_init_extensions(struct pipe_screen *screen,
         } },
    };
 
-   /*
-    * Extensions that are supported by all Gallium drivers:
-    */
-   extensions->ARB_ES2_compatibility = GL_TRUE;
-   extensions->ARB_depth_texture = GL_TRUE;
-   extensions->ARB_draw_elements_base_vertex = GL_TRUE;
-   extensions->ARB_explicit_attrib_location = GL_TRUE;
-   extensions->ARB_explicit_uniform_location = GL_TRUE;
-   extensions->ARB_fragment_coord_conventions = GL_TRUE;
-   extensions->ARB_fragment_program = GL_TRUE;
-   extensions->ARB_fragment_shader = GL_TRUE;
-   extensions->ARB_half_float_vertex = GL_TRUE;
-   extensions->ARB_internalformat_query = GL_TRUE;
-   extensions->ARB_internalformat_query2 = GL_TRUE;
-   extensions->ARB_map_buffer_range = GL_TRUE;
-   extensions->ARB_sync = GL_TRUE;
-   extensions->ARB_texture_border_clamp = GL_TRUE;
-   extensions->ARB_texture_cube_map = GL_TRUE;
-   extensions->ARB_texture_env_combine = GL_TRUE;
-   extensions->ARB_texture_env_crossbar = GL_TRUE;
-   extensions->ARB_texture_env_dot3 = GL_TRUE;
-   extensions->ARB_vertex_program = GL_TRUE;
-   extensions->ARB_vertex_shader = GL_TRUE;
-
-   extensions->EXT_blend_color = GL_TRUE;
-   extensions->EXT_blend_func_separate = GL_TRUE;
-   extensions->EXT_blend_minmax = GL_TRUE;
-   extensions->EXT_EGL_image_storage = GL_TRUE;
-   extensions->EXT_gpu_program_parameters = GL_TRUE;
-   extensions->EXT_pixel_buffer_object = GL_TRUE;
-   extensions->EXT_point_parameters = GL_TRUE;
-   extensions->EXT_provoking_vertex = GL_TRUE;
-   extensions->EXT_stencil_two_side = GL_TRUE;
-   extensions->EXT_texture_env_dot3 = GL_TRUE;
-
-   extensions->ATI_fragment_shader = GL_TRUE;
-   extensions->ATI_texture_env_combine3 = GL_TRUE;
-
-   extensions->MESA_framebuffer_flip_y = GL_TRUE;
-
-   extensions->NV_copy_image = GL_TRUE;
-   extensions->NV_fog_distance = GL_TRUE;
-   extensions->NV_texture_env_combine4 = GL_TRUE;
-   extensions->NV_texture_rectangle = GL_TRUE;
-
-   extensions->OES_EGL_image = GL_TRUE;
-   extensions->OES_EGL_image_external = GL_TRUE;
-   extensions->OES_draw_texture = GL_TRUE;
-
    /* Expose the extensions which directly correspond to gallium caps. */
    for (i = 0; i < ARRAY_SIZE(cap_mapping); i++) {
       if (screen->get_param(screen, cap_mapping[i].cap)) {
@@ -1195,6 +1146,8 @@ void st_init_extensions(struct pipe_screen *screen,
        options->force_glsl_version <= GLSLVersion) {
       consts->ForceGLSLVersion = options->force_glsl_version;
    }
+
+   consts->ForceCompatShaders = options->force_compat_shaders;
 
    consts->AllowExtraPPTokens = options->allow_extra_pp_tokens;
 
@@ -1251,6 +1204,11 @@ void st_init_extensions(struct pipe_screen *screen,
    if (GLSLVersion >= 130) {
       consts->NativeIntegers = GL_TRUE;
       consts->MaxClipPlanes = 8;
+
+      uint32_t drv_clip_planes = screen->get_param(screen, PIPE_CAP_CLIP_PLANES);
+      /* only override for > 1 - 0 if none, 1 is MAX, >2 overrides MAX */
+      if (drv_clip_planes > 1)
+         consts->MaxClipPlanes = drv_clip_planes;
 
       if (screen->get_param(screen, PIPE_CAP_VERTEXID_NOBASE)) {
          consts->VertexID_is_zero_based = GL_TRUE;
@@ -1770,7 +1728,6 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->ARB_gpu_shader5 &&
       extensions->OES_primitive_bounding_box &&
       extensions->ARB_tessellation_shader &&
-      extensions->ARB_texture_border_clamp &&
       extensions->OES_texture_buffer &&
       extensions->OES_texture_cube_map_array &&
       extensions->EXT_texture_sRGB_decode;
@@ -1789,7 +1746,6 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->ARB_gpu_shader5 &&
       extensions->ARB_sample_shading &&
       extensions->ARB_tessellation_shader &&
-      extensions->ARB_texture_border_clamp &&
       extensions->OES_texture_buffer &&
       extensions->ARB_texture_cube_map_array &&
       extensions->ARB_texture_stencil8 &&

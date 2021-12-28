@@ -629,6 +629,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
    case nir_intrinsic_load_front_face:
    case nir_intrinsic_load_sample_id:
    case nir_intrinsic_load_sample_pos:
+   case nir_intrinsic_load_sample_pos_or_center:
    case nir_intrinsic_load_sample_mask_in:
    case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_load_tess_coord:
@@ -951,6 +952,24 @@ nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint)
                glsl_count_attribute_slots(var->type, false);
             shader->info.per_primitive_inputs |= BITFIELD64_RANGE(var->data.location, slots);
          }
+      }
+   }
+
+   shader->info.ray_queries = 0;
+   nir_foreach_variable_in_shader(var, shader) {
+      if (!var->data.ray_query)
+         continue;
+
+      shader->info.ray_queries += MAX2(glsl_get_aoa_size(var->type), 1);
+   }
+   nir_foreach_function(func, shader) {
+      if (!func->impl)
+         continue;
+      nir_foreach_function_temp_variable(var, func->impl) {
+         if (!var->data.ray_query)
+            continue;
+
+         shader->info.ray_queries += MAX2(glsl_get_aoa_size(var->type), 1);
       }
    }
 }
