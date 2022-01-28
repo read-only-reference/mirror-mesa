@@ -2329,10 +2329,9 @@ emit_3dstate_ps(struct anv_graphics_pipeline *pipeline,
       ps.SampleMask                 = 0xff;
 #endif
 
-#if GFX_VER >= 9
-      ps.MaximumNumberofThreadsPerPSD  = 64 - 1;
-#elif GFX_VER >= 8
-      ps.MaximumNumberofThreadsPerPSD  = 64 - 2;
+#if GFX_VER >= 8
+      ps.MaximumNumberofThreadsPerPSD =
+         devinfo->max_threads_per_psd - (GFX_VER == 8 ? 2 : 1);
 #else
       ps.MaximumNumberofThreads        = devinfo->max_wm_threads - 1;
 #endif
@@ -2496,8 +2495,6 @@ genX(graphics_pipeline_create)(
     VkPipeline*                                 pPipeline)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_render_pass, pass, pCreateInfo->renderPass);
-   struct anv_subpass *subpass = &pass->subpasses[pCreateInfo->subpass];
    struct anv_graphics_pipeline *pipeline;
    VkResult result;
 
@@ -2520,6 +2517,9 @@ genX(graphics_pipeline_create)(
          *pPipeline = VK_NULL_HANDLE;
       return result;
    }
+
+   struct anv_render_pass *pass = pipeline->pass;
+   struct anv_subpass *subpass = pipeline->subpass;
 
    /* Information on which states are considered dynamic. */
    const VkPipelineDynamicStateCreateInfo *dyn_info =

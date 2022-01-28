@@ -235,7 +235,8 @@ static struct radeon_cmdbuf *
 radv_amdgpu_cs_create(struct radeon_winsys *ws, enum ring_type ring_type)
 {
    struct radv_amdgpu_cs *cs;
-   uint32_t ib_size = 20 * 1024 * 4;
+   uint32_t ib_pad_dw_mask = MAX2(3, radv_amdgpu_winsys(ws)->info.ib_pad_dw_mask[ring_type]);
+   uint32_t ib_size = align(20 * 1024 * 4, ib_pad_dw_mask + 1);
    cs = calloc(1, sizeof(struct radv_amdgpu_cs));
    if (!cs)
       return NULL;
@@ -340,13 +341,8 @@ radv_amdgpu_cs_grow(struct radeon_cmdbuf *_cs, size_t min_size)
       return;
    }
 
-   uint64_t ib_size = MAX2(min_size * 4 + 16, cs->base.max_dw * 4 * 2);
-
-   /* max that fits in the chain size field. */
-   ib_size = MIN2(ib_size, 0xfffff);
-
    enum ring_type ring_type = hw_ip_to_ring(cs->hw_ip);
-   uint32_t ib_pad_dw_mask = cs->ws->info.ib_pad_dw_mask[ring_type];
+   uint32_t ib_pad_dw_mask = MAX2(3, cs->ws->info.ib_pad_dw_mask[ring_type]);
    while (!cs->base.cdw || (cs->base.cdw & ib_pad_dw_mask) != ib_pad_dw_mask - 3)
       radeon_emit(&cs->base, PKT3_NOP_PAD);
 
@@ -366,6 +362,11 @@ radv_amdgpu_cs_grow(struct radeon_cmdbuf *_cs, size_t min_size)
 
    cs->old_ib_buffers[cs->num_old_ib_buffers].bo = cs->ib_buffer;
    cs->old_ib_buffers[cs->num_old_ib_buffers++].cdw = cs->base.cdw;
+
+   uint64_t ib_size = MAX2(min_size * 4 + 16, cs->base.max_dw * 4 * 2);
+
+   /* max that fits in the chain size field. */
+   ib_size = align(MIN2(ib_size, 0xfffff), ib_pad_dw_mask + 1);
 
    VkResult result =
       cs->ws->base.buffer_create(&cs->ws->base, ib_size, 0, radv_amdgpu_cs_domain(&cs->ws->base),
@@ -410,14 +411,23 @@ radv_amdgpu_cs_finalize(struct radeon_cmdbuf *_cs)
 
    if (cs->ws->use_ib_bos) {
       enum ring_type ring_type = hw_ip_to_ring(cs->hw_ip);
-      uint32_t ib_pad_dw_mask = cs->ws->info.ib_pad_dw_mask[ring_type];
+      uint32_t ib_pad_dw_mask = MAX2(3, cs->ws->info.ib_pad_dw_mask[ring_type]);
 
-      while (!cs->base.cdw || (cs->base.cdw & ib_pad_dw_mask) != 0)
+      /* Ensure that with the 4 dword reservation we subtract from max_dw we always
+       * have 4 nops at the end for chaining. */
+      while (!cs->base.cdw || (cs->base.cdw & ib_pad_dw_mask) != ib_pad_dw_mask - 3)
          radeon_emit(&cs->base, PKT3_NOP_PAD);
+
+      radeon_emit(&cs->base, PKT3_NOP_PAD);
+      radeon_emit(&cs->base, PKT3_NOP_PAD);
+      radeon_emit(&cs->base, PKT3_NOP_PAD);
+      radeon_emit(&cs->base, PKT3_NOP_PAD);
 
       *cs->ib_size_ptr |= cs->base.cdw;
 
       cs->is_chained = false;
+
+      assert(cs->base.cdw <= cs->base.max_dw + 4);
    }
 
    return cs->status;
@@ -860,21 +870,24 @@ radv_amdgpu_winsys_cs_submit_chained(struct radeon_winsys_ctx *_ctx, int queue_i
       struct radv_amdgpu_cs *cs = radv_amdgpu_cs(cs_array[i]);
 
       if (cs->is_chained) {
-         *cs->ib_size_ptr -= 4;
+         assert(cs->base.cdw <= cs->base.max_dw + 4);
          cs->is_chained = false;
+         cs->base.buf[cs->base.cdw - 4] =  PKT3_NOP_PAD;
+         cs->base.buf[cs->base.cdw - 3] =  PKT3_NOP_PAD;
+         cs->base.buf[cs->base.cdw - 2] =  PKT3_NOP_PAD;
+         cs->base.buf[cs->base.cdw - 1] =  PKT3_NOP_PAD;
       }
 
       if (i + 1 < cs_count) {
          struct radv_amdgpu_cs *next = radv_amdgpu_cs(cs_array[i + 1]);
-         assert(cs->base.cdw + 4 <= cs->base.max_dw);
+         assert(cs->base.cdw <= cs->base.max_dw + 4);
 
          cs->is_chained = true;
-         *cs->ib_size_ptr += 4;
 
-         cs->base.buf[cs->base.cdw + 0] = PKT3(PKT3_INDIRECT_BUFFER_CIK, 2, 0);
-         cs->base.buf[cs->base.cdw + 1] = next->ib.ib_mc_address;
-         cs->base.buf[cs->base.cdw + 2] = next->ib.ib_mc_address >> 32;
-         cs->base.buf[cs->base.cdw + 3] = S_3F2_CHAIN(1) | S_3F2_VALID(1) | next->ib.size;
+         cs->base.buf[cs->base.cdw - 4] = PKT3(PKT3_INDIRECT_BUFFER_CIK, 2, 0);
+         cs->base.buf[cs->base.cdw - 3] = next->ib.ib_mc_address;
+         cs->base.buf[cs->base.cdw - 2] = next->ib.ib_mc_address >> 32;
+         cs->base.buf[cs->base.cdw - 1] = S_3F2_CHAIN(1) | S_3F2_VALID(1) | next->ib.size;
       }
    }
 
@@ -967,7 +980,10 @@ radv_amdgpu_winsys_cs_submit_fallback(struct radeon_winsys_ctx *_ctx, int queue_
       ibs[i + !!initial_preamble_cs] = cs->ib;
 
       if (cs->is_chained) {
-         *cs->ib_size_ptr -= 4;
+         cs->base.buf[cs->base.cdw - 4] =  PKT3_NOP_PAD;
+         cs->base.buf[cs->base.cdw - 3] =  PKT3_NOP_PAD;
+         cs->base.buf[cs->base.cdw - 2] =  PKT3_NOP_PAD;
+         cs->base.buf[cs->base.cdw - 1] =  PKT3_NOP_PAD;
          cs->is_chained = false;
       }
    }
@@ -1077,8 +1093,8 @@ radv_amdgpu_winsys_cs_submit_sysmem(struct radeon_winsys_ctx *_ctx, int queue_id
 
             ws->buffer_create(
                ws, 4 * size, 4096, radv_amdgpu_cs_domain(ws),
-               RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_READ_ONLY,
-               RADV_BO_PRIORITY_CS, 0, &bos[j]);
+               RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_READ_ONLY |
+               RADEON_FLAG_GTT_WC, RADV_BO_PRIORITY_CS, 0, &bos[j]);
             ptr = ws->buffer_map(bos[j]);
 
             if (needs_preamble) {
@@ -1120,8 +1136,8 @@ radv_amdgpu_winsys_cs_submit_sysmem(struct radeon_winsys_ctx *_ctx, int queue_id
 
          ws->buffer_create(
             ws, 4 * size, 4096, radv_amdgpu_cs_domain(ws),
-            RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_READ_ONLY,
-            RADV_BO_PRIORITY_CS, 0, &bos[0]);
+            RADEON_FLAG_CPU_ACCESS | RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_READ_ONLY |
+            RADEON_FLAG_GTT_WC, RADV_BO_PRIORITY_CS, 0, &bos[0]);
          ptr = ws->buffer_map(bos[0]);
 
          if (preamble_cs) {
@@ -1248,10 +1264,24 @@ radv_amdgpu_cs_submit_zero(struct radv_amdgpu_ctx *ctx, enum ring_type ring_type
    }
 
    for (unsigned i = 0; i < sem_info->signal.syncobj_count; ++i) {
-      ret = amdgpu_cs_syncobj_transfer(ctx->ws->dev, sem_info->signal.syncobj[i], 0, queue_syncobj,
-                                       0, 0);
-      if (ret < 0)
-         return VK_ERROR_DEVICE_LOST;
+      uint32_t dst_handle = sem_info->signal.syncobj[i];
+      uint32_t src_handle = queue_syncobj;
+
+      if (ctx->ws->info.has_timeline_syncobj) {
+         ret = amdgpu_cs_syncobj_transfer(ctx->ws->dev, dst_handle, 0, src_handle, 0, 0);
+         if (ret < 0)
+            return VK_ERROR_DEVICE_LOST;
+      } else {
+         int fd;
+         ret = amdgpu_cs_syncobj_export_sync_file(ctx->ws->dev, src_handle, &fd);
+         if (ret < 0)
+            return VK_ERROR_DEVICE_LOST;
+
+         ret = amdgpu_cs_syncobj_import_sync_file(ctx->ws->dev, dst_handle, fd);
+         close(fd);
+         if (ret < 0)
+            return VK_ERROR_DEVICE_LOST;
+      }
    }
    for (unsigned i = 0; i < sem_info->signal.timeline_syncobj_count; ++i) {
       ret = amdgpu_cs_syncobj_transfer(ctx->ws->dev,
@@ -1738,140 +1768,6 @@ error_out:
    return result;
 }
 
-static int
-radv_amdgpu_create_syncobj(struct radeon_winsys *_ws, bool create_signaled, uint32_t *handle)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   uint32_t flags = 0;
-
-   if (create_signaled)
-      flags |= DRM_SYNCOBJ_CREATE_SIGNALED;
-
-   return amdgpu_cs_create_syncobj2(ws->dev, flags, handle);
-}
-
-static void
-radv_amdgpu_destroy_syncobj(struct radeon_winsys *_ws, uint32_t handle)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   amdgpu_cs_destroy_syncobj(ws->dev, handle);
-}
-
-static void
-radv_amdgpu_reset_syncobj(struct radeon_winsys *_ws, uint32_t handle)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   amdgpu_cs_syncobj_reset(ws->dev, &handle, 1);
-}
-
-static void
-radv_amdgpu_signal_syncobj(struct radeon_winsys *_ws, uint32_t handle, uint64_t point)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   if (point)
-      amdgpu_cs_syncobj_timeline_signal(ws->dev, &handle, &point, 1);
-   else
-      amdgpu_cs_syncobj_signal(ws->dev, &handle, 1);
-}
-
-static VkResult
-radv_amdgpu_query_syncobj(struct radeon_winsys *_ws, uint32_t handle, uint64_t *point)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   int ret = amdgpu_cs_syncobj_query(ws->dev, &handle, point, 1);
-   if (ret == 0)
-      return VK_SUCCESS;
-   else if (ret == -ENOMEM)
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
-   else {
-      /* Remaining error are driver internal issues: EFAULT for
-       * dangling pointers and ENOENT for non-existing syncobj. */
-      fprintf(stderr, "amdgpu: internal error in radv_amdgpu_query_syncobj. (%d)\n", ret);
-      return VK_ERROR_UNKNOWN;
-   }
-}
-
-static bool
-radv_amdgpu_wait_syncobj(struct radeon_winsys *_ws, const uint32_t *handles, uint32_t handle_count,
-                         bool wait_all, uint64_t timeout)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-   uint32_t tmp;
-
-   /* The timeouts are signed, while vulkan timeouts are unsigned. */
-   timeout = MIN2(timeout, INT64_MAX);
-
-   int ret = amdgpu_cs_syncobj_wait(
-      ws->dev, (uint32_t *)handles, handle_count, timeout,
-      DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT | (wait_all ? DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL : 0),
-      &tmp);
-   if (ret == 0) {
-      return true;
-   } else if (ret == -ETIME) {
-      return false;
-   } else {
-      fprintf(stderr, "amdgpu: radv_amdgpu_wait_syncobj failed! (%d)\n", ret);
-      return false;
-   }
-}
-
-static VkResult
-radv_amdgpu_wait_timeline_syncobj(struct radeon_winsys *_ws, const uint32_t *handles,
-                                  const uint64_t *points, uint32_t handle_count, bool wait_all,
-                                  bool available, uint64_t timeout)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-
-   /* The timeouts are signed, while vulkan timeouts are unsigned. */
-   timeout = MIN2(timeout, INT64_MAX);
-
-   int ret = amdgpu_cs_syncobj_timeline_wait(
-      ws->dev, (uint32_t *)handles, (uint64_t *)points, handle_count, timeout,
-      DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT | (wait_all ? DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL : 0) |
-         (available ? DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE : 0),
-      NULL);
-   if (ret == 0) {
-      return VK_SUCCESS;
-   } else if (ret == -ETIME) {
-      return VK_TIMEOUT;
-   } else {
-      fprintf(stderr, "amdgpu: radv_amdgpu_wait_timeline_syncobj failed! (%d)\n", ret);
-      return VK_ERROR_UNKNOWN;
-   }
-}
-
-static int
-radv_amdgpu_export_syncobj(struct radeon_winsys *_ws, uint32_t syncobj, int *fd)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-
-   return amdgpu_cs_export_syncobj(ws->dev, syncobj, fd);
-}
-
-static int
-radv_amdgpu_import_syncobj(struct radeon_winsys *_ws, int fd, uint32_t *syncobj)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-
-   return amdgpu_cs_import_syncobj(ws->dev, fd, syncobj);
-}
-
-static int
-radv_amdgpu_export_syncobj_to_sync_file(struct radeon_winsys *_ws, uint32_t syncobj, int *fd)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-
-   return amdgpu_cs_syncobj_export_sync_file(ws->dev, syncobj, fd);
-}
-
-static int
-radv_amdgpu_import_syncobj_from_sync_file(struct radeon_winsys *_ws, uint32_t syncobj, int fd)
-{
-   struct radv_amdgpu_winsys *ws = radv_amdgpu_winsys(_ws);
-
-   return amdgpu_cs_syncobj_import_sync_file(ws->dev, syncobj, fd);
-}
-
 void
 radv_amdgpu_cs_init_functions(struct radv_amdgpu_winsys *ws)
 {
@@ -1888,15 +1784,4 @@ radv_amdgpu_cs_init_functions(struct radv_amdgpu_winsys *ws)
    ws->base.cs_execute_secondary = radv_amdgpu_cs_execute_secondary;
    ws->base.cs_submit = radv_amdgpu_winsys_cs_submit;
    ws->base.cs_dump = radv_amdgpu_winsys_cs_dump;
-   ws->base.create_syncobj = radv_amdgpu_create_syncobj;
-   ws->base.destroy_syncobj = radv_amdgpu_destroy_syncobj;
-   ws->base.reset_syncobj = radv_amdgpu_reset_syncobj;
-   ws->base.signal_syncobj = radv_amdgpu_signal_syncobj;
-   ws->base.query_syncobj = radv_amdgpu_query_syncobj;
-   ws->base.wait_syncobj = radv_amdgpu_wait_syncobj;
-   ws->base.wait_timeline_syncobj = radv_amdgpu_wait_timeline_syncobj;
-   ws->base.export_syncobj = radv_amdgpu_export_syncobj;
-   ws->base.import_syncobj = radv_amdgpu_import_syncobj;
-   ws->base.export_syncobj_to_sync_file = radv_amdgpu_export_syncobj_to_sync_file;
-   ws->base.import_syncobj_from_sync_file = radv_amdgpu_import_syncobj_from_sync_file;
 }

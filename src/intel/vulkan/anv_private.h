@@ -31,6 +31,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include "drm-uapi/i915_drm.h"
+#include "drm-uapi/drm_fourcc.h"
 
 #ifdef HAVE_VALGRIND
 #include <valgrind.h>
@@ -52,11 +53,13 @@
 #include "blorp/blorp.h"
 #include "compiler/brw_compiler.h"
 #include "compiler/brw_rt.h"
+#include "ds/intel_driver_ds.h"
 #include "util/bitset.h"
 #include "util/bitscan.h"
 #include "util/macros.h"
 #include "util/hash_table.h"
 #include "util/list.h"
+#include "util/perf/u_trace.h"
 #include "util/sparse_array.h"
 #include "util/u_atomic.h"
 #include "util/u_vector.h"
@@ -160,7 +163,7 @@ struct intel_perf_query_result;
    (DYNAMIC_STATE_POOL_MAX_ADDRESS - DYNAMIC_STATE_POOL_MIN_ADDRESS + 1)
 #define BINDING_TABLE_POOL_SIZE     \
    (BINDING_TABLE_POOL_MAX_ADDRESS - BINDING_TABLE_POOL_MIN_ADDRESS + 1)
-#define BINDING_TABLE_POOL_BLOCK_SIZE (4096)
+#define BINDING_TABLE_POOL_BLOCK_SIZE (65536)
 #define SURFACE_STATE_POOL_SIZE     \
    (SURFACE_STATE_POOL_MAX_ADDRESS - SURFACE_STATE_POOL_MIN_ADDRESS + 1)
 #define INSTRUCTION_STATE_POOL_SIZE \
@@ -552,6 +555,46 @@ anv_bo_is_pinned(struct anv_bo *bo)
 #endif
 }
 
+struct anv_address {
+   struct anv_bo *bo;
+   int64_t offset;
+};
+
+#define ANV_NULL_ADDRESS ((struct anv_address) { NULL, 0 })
+
+static inline struct anv_address
+anv_address_from_u64(uint64_t addr_u64)
+{
+   assert(addr_u64 == intel_canonical_address(addr_u64));
+   return (struct anv_address) {
+      .bo = NULL,
+      .offset = addr_u64,
+   };
+}
+
+static inline bool
+anv_address_is_null(struct anv_address addr)
+{
+   return addr.bo == NULL && addr.offset == 0;
+}
+
+static inline uint64_t
+anv_address_physical(struct anv_address addr)
+{
+   if (addr.bo && anv_bo_is_pinned(addr.bo)) {
+      return intel_canonical_address(addr.bo->offset + addr.offset);
+   } else {
+      return intel_canonical_address(addr.offset);
+   }
+}
+
+static inline struct anv_address
+anv_address_add(struct anv_address addr, uint64_t offset)
+{
+   addr.offset += offset;
+   return addr;
+}
+
 /* Represents a lock-free linked list of "free" things.  This is used by
  * both the block pool and the state pools.  Unfortunately, in order to
  * solve the ABA problem, we can't use a single uint32_t head.
@@ -890,12 +933,6 @@ struct anv_physical_device {
 
     struct anv_instance *                       instance;
     char                                        path[20];
-    struct {
-       uint16_t                                 domain;
-       uint8_t                                  bus;
-       uint8_t                                  device;
-       uint8_t                                  function;
-    }                                           pci_info;
     struct intel_device_info                      info;
     /** Amount of "GPU memory" we want to advertise
      *
@@ -992,7 +1029,7 @@ struct anv_physical_device {
     int64_t                                     master_minor;
     struct drm_i915_query_engine_info *         engine_info;
 
-    void (*cmd_emit_timestamp)(struct anv_batch *, struct anv_bo *, uint32_t );
+    void (*cmd_emit_timestamp)(struct anv_batch *, struct anv_device *, struct anv_address, bool);
     struct intel_measure_device                 measure_device;
 };
 
@@ -1026,7 +1063,11 @@ struct anv_queue {
 
    const struct anv_queue_family *           family;
 
+   uint32_t                                  index_in_family;
+
    uint32_t                                  exec_flags;
+
+   struct intel_ds_queue *                   ds;
 };
 
 struct anv_pipeline_cache {
@@ -1099,11 +1140,6 @@ anv_device_upload_nir(struct anv_device *device,
                       struct anv_pipeline_cache *cache,
                       const struct nir_shader *nir,
                       unsigned char sha1_key[20]);
-
-struct anv_address {
-   struct anv_bo *bo;
-   int64_t offset;
-};
 
 struct anv_device {
     struct vk_device                            vk;
@@ -1185,6 +1221,8 @@ struct anv_device {
     const struct intel_l3_config                *l3_config;
 
     struct intel_debug_block_frame              *debug_frame_desc;
+
+    struct intel_ds_device                       ds;
 };
 
 #if defined(GFX_VERx10) && GFX_VERx10 >= 90
@@ -1512,42 +1550,6 @@ anv_batch_emit_reloc(struct anv_batch *batch,
    return address_u64;
 }
 
-
-#define ANV_NULL_ADDRESS ((struct anv_address) { NULL, 0 })
-
-static inline struct anv_address
-anv_address_from_u64(uint64_t addr_u64)
-{
-   assert(addr_u64 == intel_canonical_address(addr_u64));
-   return (struct anv_address) {
-      .bo = NULL,
-      .offset = addr_u64,
-   };
-}
-
-static inline bool
-anv_address_is_null(struct anv_address addr)
-{
-   return addr.bo == NULL && addr.offset == 0;
-}
-
-static inline uint64_t
-anv_address_physical(struct anv_address addr)
-{
-   if (addr.bo && anv_bo_is_pinned(addr.bo)) {
-      return intel_canonical_address(addr.bo->offset + addr.offset);
-   } else {
-      return intel_canonical_address(addr.offset);
-   }
-}
-
-static inline struct anv_address
-anv_address_add(struct anv_address addr, uint64_t offset)
-{
-   addr.offset += offset;
-   return addr;
-}
-
 static inline void
 write_reloc(const struct anv_device *device, void *p, uint64_t v, bool flush)
 {
@@ -1799,14 +1801,12 @@ struct anv_descriptor_set_binding_layout {
    /* Offset into the descriptor buffer where this descriptor lives */
    uint32_t descriptor_offset;
 
+   /* Pre computed stride */
+   unsigned descriptor_stride;
+
    /* Immutable samplers (or NULL if no immutable samplers) */
    struct anv_sampler **immutable_samplers;
 };
-
-unsigned anv_descriptor_size(const struct anv_descriptor_set_binding_layout *layout);
-
-unsigned anv_descriptor_type_size(const struct anv_physical_device *pdevice,
-                                  VkDescriptorType type);
 
 bool anv_descriptor_supports_bindless(const struct anv_physical_device *pdevice,
                                       const struct anv_descriptor_set_binding_layout *binding,
@@ -2346,6 +2346,7 @@ enum anv_pipe_bits {
     * must reinterpret this flush as ANV_PIPE_DATA_CACHE_FLUSH_BIT.
     */
    ANV_PIPE_HDC_PIPELINE_FLUSH_BIT           = (1 << 14),
+   ANV_PIPE_PSS_STALL_SYNC_BIT               = (1 << 15),
    ANV_PIPE_CS_STALL_BIT                     = (1 << 20),
    ANV_PIPE_END_OF_PIPE_SYNC_BIT             = (1 << 21),
 
@@ -2397,6 +2398,9 @@ enum anv_pipe_bits {
    ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT | \
    ANV_PIPE_INSTRUCTION_CACHE_INVALIDATE_BIT | \
    ANV_PIPE_AUX_TABLE_INVALIDATE_BIT)
+
+enum intel_ds_stall_flag
+anv_pipe_flush_bit_to_ds_stall_flag(enum anv_pipe_bits bits);
 
 static inline enum anv_pipe_bits
 anv_pipe_flush_bits_for_access_flags(struct anv_device *device,
@@ -2754,7 +2758,6 @@ struct anv_attachment_state {
    VkImageLayout                                current_layout;
    VkImageLayout                                current_stencil_layout;
    VkImageAspectFlags                           pending_clear_aspects;
-   VkImageAspectFlags                           pending_load_aspects;
    bool                                         fast_clear;
    VkClearValue                                 clear_value;
 
@@ -2788,6 +2791,37 @@ struct anv_vb_cache_range {
     */
    uint64_t end;
 };
+
+/* Check whether we need to apply the Gfx8-9 vertex buffer workaround*/
+static inline bool
+anv_gfx8_9_vb_cache_range_needs_workaround(struct anv_vb_cache_range *bound,
+                                           struct anv_vb_cache_range *dirty,
+                                           struct anv_address vb_address,
+                                           uint32_t vb_size)
+{
+   if (vb_size == 0) {
+      bound->start = 0;
+      bound->end = 0;
+      return false;
+   }
+
+   assert(vb_address.bo && anv_bo_is_pinned(vb_address.bo));
+   bound->start = intel_48b_address(anv_address_physical(vb_address));
+   bound->end = bound->start + vb_size;
+   assert(bound->end > bound->start); /* No overflow */
+
+   /* Align everything to a cache line */
+   bound->start &= ~(64ull - 1ull);
+   bound->end = align_u64(bound->end, 64);
+
+   /* Compute the dirty range */
+   dirty->start = MIN2(dirty->start, bound->start);
+   dirty->end = MAX2(dirty->end, bound->end);
+
+   /* If our range is larger than 32 bits, we have to flush */
+   assert(bound->end - bound->start <= (1ull << 32));
+   return (dirty->end - dirty->start) > (1ull << 32);
+}
 
 /** State tracking for particular pipeline bind point
  *
@@ -2878,6 +2912,103 @@ struct anv_cmd_ray_tracing_state {
    } scratch;
 };
 
+struct anv_framebuffer {
+   struct vk_object_base                        base;
+
+   uint32_t                                     width;
+   uint32_t                                     height;
+   uint32_t                                     layers;
+
+   uint32_t                                     attachment_count;
+   struct anv_image_view *                      attachments[0];
+};
+
+struct anv_subpass_attachment {
+   VkImageUsageFlagBits usage;
+   uint32_t attachment;
+   VkImageLayout layout;
+
+   /* Used only with attachment containing stencil data. */
+   VkImageLayout stencil_layout;
+};
+
+struct anv_subpass {
+   uint32_t                                     attachment_count;
+
+   /**
+    * A pointer to all attachment references used in this subpass.
+    * Only valid if ::attachment_count > 0.
+    */
+   struct anv_subpass_attachment *              attachments;
+   uint32_t                                     input_count;
+   struct anv_subpass_attachment *              input_attachments;
+   uint32_t                                     color_count;
+   struct anv_subpass_attachment *              color_attachments;
+   struct anv_subpass_attachment *              resolve_attachments;
+
+   struct anv_subpass_attachment *              depth_stencil_attachment;
+   struct anv_subpass_attachment *              ds_resolve_attachment;
+   VkResolveModeFlagBitsKHR                     depth_resolve_mode;
+   VkResolveModeFlagBitsKHR                     stencil_resolve_mode;
+
+   uint32_t                                     view_mask;
+
+   /** Subpass has a depth/stencil self-dependency */
+   bool                                         has_ds_self_dep;
+
+   /** Subpass has at least one color resolve attachment */
+   bool                                         has_color_resolve;
+};
+
+struct anv_render_pass_attachment {
+   /* TODO: Consider using VkAttachmentDescription instead of storing each of
+    * its members individually.
+    */
+   VkFormat                                     format;
+   uint32_t                                     samples;
+   VkImageUsageFlags                            usage;
+   VkAttachmentLoadOp                           load_op;
+   VkAttachmentStoreOp                          store_op;
+   VkAttachmentLoadOp                           stencil_load_op;
+   VkImageLayout                                initial_layout;
+   VkImageLayout                                final_layout;
+   VkImageLayout                                first_subpass_layout;
+
+   VkImageLayout                                stencil_initial_layout;
+   VkImageLayout                                stencil_final_layout;
+
+   /* The subpass id in which the attachment will be used last. */
+   uint32_t                                     last_subpass_idx;
+};
+
+struct anv_render_pass {
+   struct vk_object_base                        base;
+
+   uint32_t                                     attachment_count;
+   uint32_t                                     subpass_count;
+   /* An array of subpass_count+1 flushes, one per subpass boundary */
+   enum anv_pipe_bits *                         subpass_flushes;
+   struct anv_render_pass_attachment *          attachments;
+   struct anv_subpass                           subpasses[0];
+};
+
+/* RTs * 2 (for resolve attachments)
+ * depth/sencil * 2
+ */
+#define MAX_DYN_RENDER_ATTACHMENTS (MAX_RTS * 2 + 2 * 2)
+
+/* And this, kids, is what we call a nasty hack. */
+struct anv_dynamic_render_pass {
+   struct anv_render_pass                    pass;
+   struct anv_subpass                        subpass;
+   struct anv_framebuffer                    framebuffer;
+   struct anv_render_pass_attachment         rp_attachments[MAX_DYN_RENDER_ATTACHMENTS];
+   struct anv_subpass_attachment             sp_attachments[MAX_DYN_RENDER_ATTACHMENTS];
+
+   bool suspending;
+   bool resuming;
+};
+
 /** State required while building cmd buffer */
 struct anv_cmd_state {
    /* PIPELINE_SELECT.PipelineSelection */
@@ -2955,6 +3086,8 @@ struct anv_cmd_state {
     * is one of the states in attachment_states.
     */
    struct anv_state                             null_surface_state;
+
+   struct anv_dynamic_render_pass               dynamic_render_pass;
 };
 
 struct anv_cmd_pool {
@@ -3062,6 +3195,11 @@ struct anv_cmd_buffer {
     * Used to increase allocation size for long command buffers.
     */
    uint32_t                                     total_batch_size;
+
+   /**
+    *
+    */
+   struct u_trace                               trace;
 };
 
 /* Determine whether we can chain a given cmd_buffer to another one. We need
@@ -3338,6 +3476,7 @@ struct anv_graphics_pipeline {
    uint32_t                                     rasterization_samples;
 
    struct anv_subpass *                         subpass;
+   struct anv_render_pass *                     pass;
 
    struct anv_shader_bin *                      shaders[ANV_GRAPHICS_SHADER_STAGE_COUNT];
 
@@ -3392,6 +3531,8 @@ struct anv_graphics_pipeline {
    struct {
       uint32_t                                  wm_depth_stencil[4];
    } gfx9;
+
+   struct anv_dynamic_render_pass               dynamic_render_pass;
 };
 
 struct anv_compute_pipeline {
@@ -3732,6 +3873,11 @@ struct anv_image {
    bool disjoint;
 
    /**
+    * Image is a WSI image
+    */
+   bool from_wsi;
+
+   /**
     * Image was imported from an struct AHardwareBuffer.  We have to delay
     * final image creation until bind time.
     */
@@ -3798,6 +3944,21 @@ struct anv_image {
       struct anv_image_memory_range fast_clear_memory_range;
    } planes[3];
 };
+
+static inline bool
+anv_image_is_externally_shared(const struct anv_image *image)
+{
+   return image->vk.drm_format_mod != DRM_FORMAT_MOD_INVALID ||
+          image->vk.external_handle_types != 0;
+}
+
+static inline bool
+anv_image_has_private_binding(const struct anv_image *image)
+{
+   const struct anv_image_binding private_binding =
+      image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE];
+   return private_binding.memory_range.size != 0;
+}
 
 /* The ordering of this enum is important */
 enum anv_fast_clear_type {
@@ -4315,91 +4476,11 @@ struct anv_sampler {
    struct anv_state             custom_border_color;
 };
 
-struct anv_framebuffer {
-   struct vk_object_base                        base;
-
-   uint32_t                                     width;
-   uint32_t                                     height;
-   uint32_t                                     layers;
-
-   uint32_t                                     attachment_count;
-   struct anv_image_view *                      attachments[0];
-};
-
-struct anv_subpass_attachment {
-   VkImageUsageFlagBits usage;
-   uint32_t attachment;
-   VkImageLayout layout;
-
-   /* Used only with attachment containing stencil data. */
-   VkImageLayout stencil_layout;
-};
-
-struct anv_subpass {
-   uint32_t                                     attachment_count;
-
-   /**
-    * A pointer to all attachment references used in this subpass.
-    * Only valid if ::attachment_count > 0.
-    */
-   struct anv_subpass_attachment *              attachments;
-   uint32_t                                     input_count;
-   struct anv_subpass_attachment *              input_attachments;
-   uint32_t                                     color_count;
-   struct anv_subpass_attachment *              color_attachments;
-   struct anv_subpass_attachment *              resolve_attachments;
-
-   struct anv_subpass_attachment *              depth_stencil_attachment;
-   struct anv_subpass_attachment *              ds_resolve_attachment;
-   VkResolveModeFlagBitsKHR                     depth_resolve_mode;
-   VkResolveModeFlagBitsKHR                     stencil_resolve_mode;
-
-   uint32_t                                     view_mask;
-
-   /** Subpass has a depth/stencil self-dependency */
-   bool                                         has_ds_self_dep;
-
-   /** Subpass has at least one color resolve attachment */
-   bool                                         has_color_resolve;
-};
-
 static inline unsigned
 anv_subpass_view_count(const struct anv_subpass *subpass)
 {
    return MAX2(1, util_bitcount(subpass->view_mask));
 }
-
-struct anv_render_pass_attachment {
-   /* TODO: Consider using VkAttachmentDescription instead of storing each of
-    * its members individually.
-    */
-   VkFormat                                     format;
-   uint32_t                                     samples;
-   VkImageUsageFlags                            usage;
-   VkAttachmentLoadOp                           load_op;
-   VkAttachmentStoreOp                          store_op;
-   VkAttachmentLoadOp                           stencil_load_op;
-   VkImageLayout                                initial_layout;
-   VkImageLayout                                final_layout;
-   VkImageLayout                                first_subpass_layout;
-
-   VkImageLayout                                stencil_initial_layout;
-   VkImageLayout                                stencil_final_layout;
-
-   /* The subpass id in which the attachment will be used last. */
-   uint32_t                                     last_subpass_idx;
-};
-
-struct anv_render_pass {
-   struct vk_object_base                        base;
-
-   uint32_t                                     attachment_count;
-   uint32_t                                     subpass_count;
-   /* An array of subpass_count+1 flushes, one per subpass boundary */
-   enum anv_pipe_bits *                         subpass_flushes;
-   struct anv_render_pass_attachment *          attachments;
-   struct anv_subpass                           subpasses[0];
-};
 
 #define ANV_PIPELINE_STATISTICS_MASK 0x000007ff
 
@@ -4423,6 +4504,22 @@ struct anv_query_pool {
    uint32_t                                     n_passes;
    struct intel_perf_query_info                 **pass_query;
 };
+
+struct anv_dynamic_pass_create_info {
+   uint32_t                 viewMask;
+   uint32_t                 colorAttachmentCount;
+   const VkFormat*          pColorAttachmentFormats;
+   VkFormat                 depthAttachmentFormat;
+   VkFormat                 stencilAttachmentFormat;
+   VkSampleCountFlagBits    rasterizationSamples;
+};
+
+void
+anv_dynamic_pass_init(struct anv_dynamic_render_pass *dyn_render_pass,
+                      const struct anv_dynamic_pass_create_info *info);
+void
+anv_dynamic_pass_init_full(struct anv_dynamic_render_pass *dyn_render_pass,
+                           const VkRenderingInfoKHR *info);
 
 static inline uint32_t khr_perf_query_preamble_offset(const struct anv_query_pool *pool,
                                                       uint32_t pass)
@@ -4505,6 +4602,66 @@ void anv_perf_write_pass_results(struct intel_perf_config *perf,
                                  struct anv_query_pool *pool, uint32_t pass,
                                  const struct intel_perf_query_result *accumulated_results,
                                  union VkPerformanceCounterResultKHR *results);
+
+/* Use to emit a series of memcpy operations */
+struct anv_memcpy_state {
+   struct anv_device *device;
+   struct anv_batch *batch;
+
+   struct anv_vb_cache_range vb_bound;
+   struct anv_vb_cache_range vb_dirty;
+};
+
+struct anv_utrace_flush_copy {
+   /* Needs to be the first field */
+   struct intel_ds_flush_data ds;
+
+   /* Batch stuff to implement of copy of timestamps recorded in another
+    * buffer.
+    */
+   struct anv_reloc_list relocs;
+   struct anv_batch batch;
+   struct anv_bo *batch_bo;
+
+   /* Buffer of 64bits timestamps */
+   struct anv_bo *trace_bo;
+
+   /* Syncobj to be signaled when the batch completes */
+   struct vk_sync *sync;
+
+   /* Queue on which all the recorded traces are submitted */
+   struct anv_queue *queue;
+
+   struct anv_memcpy_state memcpy_state;
+};
+
+void anv_device_utrace_init(struct anv_device *device);
+void anv_device_utrace_finish(struct anv_device *device);
+VkResult
+anv_device_utrace_flush_cmd_buffers(struct anv_queue *queue,
+                                    uint32_t cmd_buffer_count,
+                                    struct anv_cmd_buffer **cmd_buffers,
+                                    struct anv_utrace_flush_copy **out_flush_data);
+
+#ifdef HAVE_PERFETTO
+void anv_perfetto_init(void);
+uint64_t anv_perfetto_begin_submit(struct anv_queue *queue);
+void anv_perfetto_end_submit(struct anv_queue *queue, uint32_t submission_id,
+                             uint64_t start_ts);
+#else
+static inline void anv_perfetto_init(void)
+{
+}
+static inline uint64_t anv_perfetto_begin_submit(struct anv_queue *queue)
+{
+   return 0;
+}
+static inline void anv_perfetto_end_submit(struct anv_queue *queue,
+                                           uint32_t submission_id,
+                                           uint64_t start_ts)
+{}
+#endif
+
 
 #define ANV_FROM_HANDLE(__anv_type, __name, __handle) \
    VK_FROM_HANDLE(__anv_type, __name, __handle)

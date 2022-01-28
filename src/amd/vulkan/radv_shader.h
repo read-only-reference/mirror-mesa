@@ -122,6 +122,7 @@ struct radv_nir_compiler_options {
    bool enable_mrt_output_nan_fixup;
    bool wgp_mode;
    bool remap_spi_ps_input;
+   bool disable_aniso_single_level;
    enum radeon_family family;
    enum chip_class chip_class;
    const struct radeon_info *info;
@@ -198,6 +199,7 @@ struct radv_vs_output_info {
    bool writes_viewport_index;
    bool writes_viewport_index_per_primitive;
    bool writes_primitive_shading_rate;
+   bool writes_primitive_shading_rate_per_primitive;
    bool export_prim_id;
    bool export_prim_id_per_primitive;
    bool export_clip_dists;
@@ -230,8 +232,8 @@ struct gfx10_ngg_info {
 struct radv_shader_info {
    bool loads_push_constants;
    bool loads_dynamic_offsets;
-   uint8_t min_push_constant_used;
-   uint8_t max_push_constant_used;
+   uint16_t min_push_constant_used;
+   uint16_t max_push_constant_used;
    bool has_only_32bit_push_constants;
    bool has_indirect_push_constants;
    uint32_t desc_set_used_mask;
@@ -285,7 +287,7 @@ struct radv_shader_info {
       struct radv_vs_output_info outinfo;
       struct radv_es_output_info es_info;
       bool as_es;
-      unsigned primitive_mode;
+      enum tess_primitive_mode _primitive_mode;
       enum gl_tess_spacing spacing;
       bool ccw;
       bool point_mode;
@@ -356,7 +358,7 @@ struct radv_shader_info {
    } tcs;
    struct {
       struct radv_vs_output_info outinfo;
-      uint16_t output_prim; /* Output primitive type: GL_POINTS, GL_LINES or GL_TRIANGLES. */
+      enum shader_prim output_prim;
    } ms;
 
    struct radv_streamout_info so;
@@ -436,6 +438,7 @@ struct radv_prolog_binary {
    uint8_t num_vgprs;
    uint8_t num_preserved_sgprs;
    unsigned code_size;
+   unsigned disasm_size;
    uint8_t data[0];
 };
 
@@ -487,6 +490,9 @@ struct radv_shader_prolog {
    uint32_t rsrc1;
    uint8_t num_preserved_sgprs;
    bool nontrivial_divisors;
+
+   /* debug only */
+   char *disasm_string;
 };
 
 void radv_optimize_nir(const struct radv_device *device, struct nir_shader *shader,
@@ -509,8 +515,8 @@ VkResult radv_create_shaders(struct radv_pipeline *pipeline,
                              const struct radv_pipeline_key *key,
                              const VkPipelineShaderStageCreateInfo **pStages,
                              const VkPipelineCreateFlags flags, const uint8_t *custom_hash,
-                             VkPipelineCreationFeedbackEXT *pipeline_feedback,
-                             VkPipelineCreationFeedbackEXT **stage_feedbacks);
+                             VkPipelineCreationFeedback *pipeline_feedback,
+                             VkPipelineCreationFeedback **stage_feedbacks);
 
 struct radv_shader_args;
 

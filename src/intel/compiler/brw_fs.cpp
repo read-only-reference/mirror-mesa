@@ -1785,31 +1785,68 @@ calculate_urb_setup(const struct intel_device_info *devinfo,
 
    int urb_next = 0;
 
-   /* Per-Primitive Attributes are laid out by Hardware before the regular
-    * attributes, so order them like this to make easy later to map setup into
-    * real HW registers.
-    */
-   if (nir->info.per_primitive_inputs) {
-      assert(mue_map);
-      for (unsigned i = 0; i < VARYING_SLOT_MAX; i++) {
-         if (nir->info.per_primitive_inputs & BITFIELD64_BIT(i)) {
-            prog_data->urb_setup[i] = urb_next++;
-         }
-      }
-
-      /* The actual setup attributes later must be aligned to a full GRF. */
-      urb_next = ALIGN(urb_next, 2);
-
-      prog_data->num_per_primitive_inputs = urb_next;
-   }
-
    const uint64_t inputs_read =
       nir->info.inputs_read & ~nir->info.per_primitive_inputs;
 
    /* Figure out where each of the incoming setup attributes lands. */
-   if (devinfo->ver >= 6) {
-      if (util_bitcount64(inputs_read &
-                          BRW_FS_VARYING_INPUT_MASK) <= 16) {
+   if (mue_map) {
+      /* Per-Primitive Attributes are laid out by Hardware before the regular
+       * attributes, so order them like this to make easy later to map setup
+       * into real HW registers.
+       */
+      if (nir->info.per_primitive_inputs) {
+         for (unsigned i = 0; i < VARYING_SLOT_MAX; i++) {
+            if (nir->info.per_primitive_inputs & BITFIELD64_BIT(i)) {
+               prog_data->urb_setup[i] = urb_next++;
+            }
+         }
+
+         /* The actual setup attributes later must be aligned to a full GRF. */
+         urb_next = ALIGN(urb_next, 2);
+
+         prog_data->num_per_primitive_inputs = urb_next;
+      }
+
+      const uint64_t clip_dist_bits = VARYING_BIT_CLIP_DIST0 |
+                                      VARYING_BIT_CLIP_DIST1;
+
+      uint64_t unique_fs_attrs = inputs_read & BRW_FS_VARYING_INPUT_MASK;
+
+      if (inputs_read & clip_dist_bits) {
+         assert(mue_map->per_vertex_header_size_dw > 8);
+         unique_fs_attrs &= ~clip_dist_bits;
+      }
+
+      /* In Mesh, CLIP_DIST slots are always at the beginning, because
+       * they come from MUE Vertex Header, not Per-Vertex Attributes.
+       */
+      if (inputs_read & clip_dist_bits) {
+         prog_data->urb_setup[VARYING_SLOT_CLIP_DIST0] = urb_next++;
+         prog_data->urb_setup[VARYING_SLOT_CLIP_DIST1] = urb_next++;
+      }
+
+      /* Per-Vertex attributes are laid out ordered.  Because we always link
+       * Mesh and Fragment shaders, the which slots are written and read by
+       * each of them will match. */
+      for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
+         if (unique_fs_attrs & BITFIELD64_BIT(i))
+            prog_data->urb_setup[i] = urb_next++;
+      }
+   } else if (devinfo->ver >= 6) {
+      uint64_t vue_header_bits =
+         VARYING_BIT_PSIZ | VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT;
+
+      uint64_t unique_fs_attrs = inputs_read & BRW_FS_VARYING_INPUT_MASK;
+
+      /* VUE header fields all live in the same URB slot, so we pass them
+       * as a single FS input attribute.  We want to only count them once.
+       */
+      if (inputs_read & vue_header_bits) {
+         unique_fs_attrs &= ~vue_header_bits;
+         unique_fs_attrs |= VARYING_BIT_PSIZ;
+      }
+
+      if (util_bitcount64(unique_fs_attrs) <= 16) {
          /* The SF/SBE pipeline stage can do arbitrary rearrangement of the
           * first 16 varying inputs, so we can put them wherever we want.
           * Just put them in order.
@@ -1818,9 +1855,22 @@ calculate_urb_setup(const struct intel_device_info *devinfo,
           * fragment shader won't take up valuable register space, and (b) we
           * won't have to recompile the fragment shader if it gets paired with
           * a different vertex (or geometry) shader.
+          *
+          * VUE header fields share the same FS input attribute.
           */
+         if (inputs_read & vue_header_bits) {
+            if (inputs_read & VARYING_BIT_PSIZ)
+               prog_data->urb_setup[VARYING_SLOT_PSIZ] = urb_next;
+            if (inputs_read & VARYING_BIT_LAYER)
+               prog_data->urb_setup[VARYING_SLOT_LAYER] = urb_next;
+            if (inputs_read & VARYING_BIT_VIEWPORT)
+               prog_data->urb_setup[VARYING_SLOT_VIEWPORT] = urb_next;
+
+            urb_next++;
+         }
+
          for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
-            if (inputs_read & BRW_FS_VARYING_INPUT_MASK &
+            if (inputs_read & BRW_FS_VARYING_INPUT_MASK & ~vue_header_bits &
                 BITFIELD64_BIT(i)) {
                prog_data->urb_setup[i] = urb_next++;
             }
@@ -1831,12 +1881,6 @@ calculate_urb_setup(const struct intel_device_info *devinfo,
           * in an order that matches the output of the previous pipeline stage
           * (geometry or vertex shader).
           */
-
-         /* TODO(mesh): Implement this case for Mesh. Basically have a large
-          * number of outputs in Mesh (hence a lot of inputs in Fragment)
-          * should already trigger this.
-          */
-         assert(mue_map == NULL);
 
          /* Re-compute the VUE map here in the case that the one coming from
           * geometry has more than one position slot (used for Primitive
@@ -8816,12 +8860,19 @@ fs_visitor::set_tcs_invocation_id()
    struct brw_tcs_prog_data *tcs_prog_data = brw_tcs_prog_data(prog_data);
    struct brw_vue_prog_data *vue_prog_data = &tcs_prog_data->base;
 
+   const bool dg2_plus =
+      devinfo->ver > 12 || intel_device_info_is_dg2(devinfo);
    const unsigned instance_id_mask =
-      devinfo->ver >= 11 ? INTEL_MASK(22, 16) : INTEL_MASK(23, 17);
+      dg2_plus ? INTEL_MASK(7, 0) :
+      (devinfo->ver >= 11) ? INTEL_MASK(22, 16) : INTEL_MASK(23, 17);
    const unsigned instance_id_shift =
-      devinfo->ver >= 11 ? 16 : 17;
+      dg2_plus ? 0 : (devinfo->ver >= 11) ? 16 : 17;
 
-   /* Get instance number from g0.2 bits 22:16 or 23:17 */
+   /* Get instance number from g0.2 bits:
+    *  * 7:0 on DG2+
+    *  * 22:16 on gfx11+
+    *  * 23:17 otherwise
+    */
    fs_reg t = bld.vgrf(BRW_REGISTER_TYPE_UD);
    bld.AND(t, fs_reg(retype(brw_vec1_grf(0, 2), BRW_REGISTER_TYPE_UD)),
            brw_imm_ud(instance_id_mask));
@@ -9074,7 +9125,7 @@ fs_visitor::run_fs(bool allow_spilling, bool do_rep_send)
       if (failed)
 	 return false;
 
-      if (wm_key->alpha_test_func)
+      if (wm_key->emit_alpha_test)
          emit_alpha_test();
 
       emit_fb_writes();
@@ -9499,7 +9550,7 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
     * so the shader definitely kills pixels.
     */
    prog_data->uses_kill = shader->info.fs.uses_discard ||
-      key->alpha_test_func;
+      key->emit_alpha_test;
    prog_data->uses_omask = !key->ignore_sample_mask_out &&
       (shader->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK));
    prog_data->computed_depth_mode = computed_depth_mode(shader);
@@ -9545,6 +9596,7 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
 
    prog_data->per_coarse_pixel_dispatch =
       key->coarse_pixel &&
+      !prog_data->uses_omask &&
       !prog_data->persample_dispatch &&
       !prog_data->uses_sample_mask &&
       (prog_data->computed_depth_mode == BRW_PSCDEPTH_OFF) &&

@@ -287,6 +287,7 @@ struct radv_physical_device {
    uint8_t ps_wave_size;
    uint8_t cs_wave_size;
    uint8_t ge_wave_size;
+   uint8_t rt_wave_size;
 
    /* Whether to use the LLVM compiler backend */
    bool use_llvm;
@@ -312,7 +313,7 @@ struct radv_physical_device {
    dev_t render_devid;
 #endif
 
-   nir_shader_compiler_options nir_options;
+   nir_shader_compiler_options nir_options[MESA_VULKAN_SHADER_STAGES];
 };
 
 struct radv_instance {
@@ -338,6 +339,7 @@ struct radv_instance {
    bool absolute_depth_bias;
    bool report_apu_as_dgpu;
    bool disable_htile_layers;
+   bool disable_aniso_single_level;
 };
 
 VkResult radv_init_wsi(struct radv_physical_device *physical_device);
@@ -826,10 +828,6 @@ struct radv_device {
 
    struct radv_device_border_color_data border_color_data;
 
-   /* Condition variable for legacy timelines, to notify waiters when a
-    * new point gets submitted. */
-   struct u_cnd_monotonic timeline_cond;
-
    /* Thread trace. */
    struct ac_thread_trace_data thread_trace;
 
@@ -861,6 +859,9 @@ struct radv_device {
 
    struct u_rwlock vs_prologs_lock;
    struct hash_table *vs_prologs;
+
+   /* Prime blit sdma queue */
+   struct radv_queue *private_sdma_queue;
 
    struct radv_shader_prolog *simple_vs_prologs[MAX_VERTEX_ATTRIBS];
    struct radv_shader_prolog *instance_rate_vs_prologs[816];
@@ -1710,7 +1711,9 @@ struct radv_event {
 #define RADV_HASH_SHADER_USE_NGG_CULLING   (1 << 13)
 #define RADV_HASH_SHADER_ROBUST_BUFFER_ACCESS (1 << 14)
 #define RADV_HASH_SHADER_ROBUST_BUFFER_ACCESS2 (1 << 15)
-#define RADV_HASH_SHADER_FORCE_EMULATE_RT (1 << 16)
+#define RADV_HASH_SHADER_FORCE_EMULATE_RT      (1 << 16)
+#define RADV_HASH_SHADER_SPLIT_FMA             (1 << 17)
+#define RADV_HASH_SHADER_RT_WAVE64             (1 << 18)
 
 struct radv_pipeline_key;
 
@@ -2333,6 +2336,7 @@ struct radv_image_create_info {
    const VkImageCreateInfo *vk_info;
    bool scanout;
    bool no_metadata_planes;
+   bool prime_blit_src;
    const struct radeon_bo_metadata *bo_metadata;
 };
 
@@ -2545,6 +2549,10 @@ struct radv_query_pool {
 
 bool radv_queue_internal_submit(struct radv_queue *queue, struct radeon_cmdbuf *cs);
 
+int radv_queue_init(struct radv_device *device, struct radv_queue *queue, int idx,
+                    const VkDeviceQueueCreateInfo *create_info,
+                    const VkDeviceQueueGlobalPriorityCreateInfoEXT *global_priority);
+
 void radv_set_descriptor_set(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoint bind_point,
                              struct radv_descriptor_set *set, unsigned idx);
 
@@ -2599,6 +2607,9 @@ bool radv_get_thread_trace(struct radv_queue *queue, struct ac_thread_trace *thr
 void radv_emit_thread_trace_userdata(const struct radv_device *device, struct radeon_cmdbuf *cs,
                                      const void *data, uint32_t num_dwords);
 bool radv_is_instruction_timing_enabled(void);
+
+bool radv_sdma_copy_image(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
+                          struct radv_buffer *buffer, const VkBufferImageCopy2KHR *region);
 
 /* radv_sqtt_layer_.c */
 struct radv_barrier_data {
@@ -2661,22 +2672,22 @@ void radv_describe_layout_transition(struct radv_cmd_buffer *cmd_buffer,
 uint64_t radv_get_current_time(void);
 
 static inline uint32_t
-si_conv_gl_prim_to_vertices(unsigned gl_prim)
+si_conv_gl_prim_to_vertices(enum shader_prim gl_prim)
 {
    switch (gl_prim) {
-   case 0: /* GL_POINTS */
+   case SHADER_PRIM_POINTS:
       return 1;
-   case 1: /* GL_LINES */
-   case 3: /* GL_LINE_STRIP */
+   case SHADER_PRIM_LINES:
+   case SHADER_PRIM_LINE_STRIP:
       return 2;
-   case 4: /* GL_TRIANGLES */
-   case 5: /* GL_TRIANGLE_STRIP */
+   case SHADER_PRIM_TRIANGLES:
+   case SHADER_PRIM_TRIANGLE_STRIP:
       return 3;
-   case 0xA: /* GL_LINE_STRIP_ADJACENCY_ARB */
+   case SHADER_PRIM_LINES_ADJACENCY:
       return 4;
-   case 0xc: /* GL_TRIANGLES_ADJACENCY_ARB */
+   case SHADER_PRIM_TRIANGLES_ADJACENCY:
       return 6;
-   case 7: /* GL_QUADS */
+   case SHADER_PRIM_QUADS:
       return V_028A6C_TRISTRIP;
    default:
       assert(0);

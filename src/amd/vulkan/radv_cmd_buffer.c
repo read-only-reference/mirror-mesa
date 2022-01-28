@@ -758,6 +758,23 @@ radv_save_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer, uint64_t vb_ptr
    radv_emit_write_data_packet(cmd_buffer, V_370_ME, va, 2, data);
 }
 
+static void
+radv_save_vs_prolog(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader_prolog *prolog)
+{
+   struct radv_device *device = cmd_buffer->device;
+   uint32_t data[2];
+   uint64_t va;
+
+   va = radv_buffer_get_va(device->trace_bo);
+   va += 32;
+
+   uint64_t prolog_address = (uintptr_t)prolog;
+   data[0] = prolog_address;
+   data[1] = prolog_address >> 32;
+
+   radv_emit_write_data_packet(cmd_buffer, V_370_ME, va, 2, data);
+}
+
 void
 radv_set_descriptor_set(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoint bind_point,
                         struct radv_descriptor_set *set, unsigned idx)
@@ -779,7 +796,7 @@ radv_save_descriptors(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoint bi
    struct radv_device *device = cmd_buffer->device;
    uint32_t data[MAX_SETS * 2] = {0};
    uint64_t va;
-   va = radv_buffer_get_va(device->trace_bo) + 32;
+   va = radv_buffer_get_va(device->trace_bo) + 40;
 
    u_foreach_bit(i, descriptors_state->valid)
    {
@@ -1324,7 +1341,7 @@ radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_pipeline *pipeline = cmd_buffer->state.pipeline;
 
-   if (!pipeline || cmd_buffer->state.emitted_pipeline == pipeline)
+   if (cmd_buffer->state.emitted_pipeline == pipeline)
       return;
 
    radv_update_multisample_state(cmd_buffer, pipeline);
@@ -1633,7 +1650,7 @@ radv_emit_fragment_shading_rate(struct radv_cmd_buffer *cmd_buffer)
    uint32_t rate_x = MIN2(2, d->fragment_shading_rate.size.width) - 1;
    uint32_t rate_y = MIN2(2, d->fragment_shading_rate.size.height) - 1;
    uint32_t pa_cl_vrs_cntl = pipeline->graphics.vrs.pa_cl_vrs_cntl;
-   uint32_t vertex_comb_mode = d->fragment_shading_rate.combiner_ops[0];
+   uint32_t pipeline_comb_mode = d->fragment_shading_rate.combiner_ops[0];
    uint32_t htile_comb_mode = d->fragment_shading_rate.combiner_ops[1];
 
    assert(cmd_buffer->device->physical_device->rad_info.chip_class >= GFX10_3);
@@ -1653,7 +1670,7 @@ radv_emit_fragment_shading_rate(struct radv_cmd_buffer *cmd_buffer)
          /* As the result of min(A, 1x1) or replace(A, 1x1) are always 1x1, set the vertex rate
           * combiner mode as passthrough.
           */
-         vertex_comb_mode = V_028848_VRS_COMB_MODE_PASSTHRU;
+         pipeline_comb_mode = V_028848_VRS_COMB_MODE_PASSTHRU;
          break;
       case VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_KHR:
          /* The result of max(A, 1x1) is always A. */
@@ -1673,7 +1690,13 @@ radv_emit_fragment_shading_rate(struct radv_cmd_buffer *cmd_buffer)
    /* VERTEX_RATE_COMBINER_MODE controls the combiner mode between the
     * draw rate and the vertex rate.
     */
-   pa_cl_vrs_cntl |= S_028848_VERTEX_RATE_COMBINER_MODE(vertex_comb_mode);
+   if (cmd_buffer->state.mesh_shading) {
+      pa_cl_vrs_cntl |= S_028848_VERTEX_RATE_COMBINER_MODE(V_028848_VRS_COMB_MODE_PASSTHRU) |
+                        S_028848_PRIMITIVE_RATE_COMBINER_MODE(pipeline_comb_mode);
+   } else {
+      pa_cl_vrs_cntl |= S_028848_VERTEX_RATE_COMBINER_MODE(pipeline_comb_mode) |
+                        S_028848_PRIMITIVE_RATE_COMBINER_MODE(V_028848_VRS_COMB_MODE_PASSTHRU);
+   }
 
    /* HTILE_RATE_COMBINER_MODE controls the combiner mode between the primitive rate and the HTILE
     * rate.
@@ -1897,6 +1920,7 @@ radv_emit_fb_ds_state(struct radv_cmd_buffer *cmd_buffer, struct radv_ds_buffer_
    const struct radv_image *image = iview->image;
    uint32_t db_z_info = ds->db_z_info;
    uint32_t db_stencil_info = ds->db_stencil_info;
+   uint32_t db_htile_surface = ds->db_htile_surface;
 
    if (!radv_layout_is_htile_compressed(
           cmd_buffer->device, image, layout, in_render_loop,
@@ -1906,8 +1930,13 @@ radv_emit_fb_ds_state(struct radv_cmd_buffer *cmd_buffer, struct radv_ds_buffer_
       db_stencil_info |= S_028044_TILE_STENCIL_DISABLE(1);
    }
 
+   if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX10_3 &&
+       !cmd_buffer->state.subpass->vrs_attachment) {
+      db_htile_surface &= C_028ABC_VRS_HTILE_ENCODING;
+   }
+
    radeon_set_context_reg(cmd_buffer->cs, R_028008_DB_DEPTH_VIEW, ds->db_depth_view);
-   radeon_set_context_reg(cmd_buffer->cs, R_028ABC_DB_HTILE_SURFACE, ds->db_htile_surface);
+   radeon_set_context_reg(cmd_buffer->cs, R_028ABC_DB_HTILE_SURFACE, db_htile_surface);
 
    if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX10) {
       radeon_set_context_reg(cmd_buffer->cs, R_028014_DB_HTILE_DATA_BASE, ds->db_htile_data_base);
@@ -2530,7 +2559,7 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
           */
          radv_load_ds_clear_metadata(cmd_buffer, iview);
       }
-   } else if (subpass->vrs_attachment && cmd_buffer->device->vrs.image) {
+   } else if (subpass->vrs_attachment && radv_cmd_buffer_get_vrs_image(cmd_buffer)) {
       /* When a subpass uses a VRS attachment without binding a depth/stencil attachment, we have to
        * bind our internal depth buffer that contains the VRS data as part of HTILE.
        */
@@ -3006,6 +3035,9 @@ radv_emit_vertex_input(struct radv_cmd_buffer *cmd_buffer, bool pipeline_is_dirt
    emit_prolog_inputs(cmd_buffer, vs_shader, nontrivial_divisors, pipeline_is_dirty);
 
    cmd_buffer->state.emitted_vs_prolog = prolog;
+
+   if (unlikely(cmd_buffer->device->trace_bo))
+      radv_save_vs_prolog(cmd_buffer, prolog);
 }
 
 static void
@@ -3169,7 +3201,7 @@ radv_flush_descriptors(struct radv_cmd_buffer *cmd_buffer, VkShaderStageFlags st
    if (descriptors_state->push_dirty)
       radv_flush_push_descriptors(cmd_buffer, bind_point);
 
-   flush_indirect_descriptors = pipeline && pipeline->need_indirect_descriptor_sets;
+   flush_indirect_descriptors = pipeline->need_indirect_descriptor_sets;
 
    if (flush_indirect_descriptors)
       radv_flush_indirect_descriptor_sets(cmd_buffer, pipeline, bind_point);
@@ -3177,18 +3209,15 @@ radv_flush_descriptors(struct radv_cmd_buffer *cmd_buffer, VkShaderStageFlags st
    ASSERTED unsigned cdw_max =
       radeon_check_space(cmd_buffer->device->ws, cmd_buffer->cs, MAX_SETS * MESA_VULKAN_SHADER_STAGES * 4);
 
-   if (pipeline) {
-      if (stages & VK_SHADER_STAGE_COMPUTE_BIT) {
-         radv_emit_descriptor_pointers(cmd_buffer, pipeline, descriptors_state,
-                                       MESA_SHADER_COMPUTE);
-      } else {
-         radv_foreach_stage(stage, stages)
-         {
-            if (!cmd_buffer->state.pipeline->shaders[stage])
-               continue;
+   if (stages & VK_SHADER_STAGE_COMPUTE_BIT) {
+      radv_emit_descriptor_pointers(cmd_buffer, pipeline, descriptors_state, MESA_SHADER_COMPUTE);
+   } else {
+      radv_foreach_stage(stage, stages)
+      {
+         if (!cmd_buffer->state.pipeline->shaders[stage])
+            continue;
 
-            radv_emit_descriptor_pointers(cmd_buffer, pipeline, descriptors_state, stage);
-         }
+         radv_emit_descriptor_pointers(cmd_buffer, pipeline, descriptors_state, stage);
       }
    }
 
@@ -4591,7 +4620,6 @@ radv_CmdBindVertexBuffers2EXT(VkCommandBuffer commandBuffer, uint32_t firstBindi
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_vertex_binding *vb = cmd_buffer->vertex_bindings;
    const struct radv_vs_input_state *state = &cmd_buffer->state.dynamic_vs_input;
-   bool changed = false;
 
    /* We have to defer setting up vertex buffer since we need the buffer
     * stride from the pipeline. */
@@ -4604,12 +4632,6 @@ radv_CmdBindVertexBuffers2EXT(VkCommandBuffer commandBuffer, uint32_t firstBindi
       uint32_t idx = firstBinding + i;
       VkDeviceSize size = pSizes ? pSizes[i] : 0;
       VkDeviceSize stride = pStrides ? pStrides[i] : 0;
-
-      /* pSizes and pStrides are optional. */
-      if (!changed && (vb[idx].buffer != buffer || vb[idx].offset != pOffsets[i] ||
-                       vb[idx].size != size || (pStrides && vb[idx].stride != stride))) {
-         changed = true;
-      }
 
       vb[idx].buffer = buffer;
       vb[idx].offset = pOffsets[i];
@@ -4641,11 +4663,6 @@ radv_CmdBindVertexBuffers2EXT(VkCommandBuffer commandBuffer, uint32_t firstBindi
       if (buffer) {
          radv_cs_add_buffer(cmd_buffer->device->ws, cmd_buffer->cs, vb[idx].buffer->bo);
       }
-   }
-
-   if (!changed) {
-      /* No state changes. */
-      return;
    }
 
    cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VERTEX_BUFFER |
@@ -4688,12 +4705,6 @@ radv_CmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDevice
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    RADV_FROM_HANDLE(radv_buffer, index_buffer, buffer);
-
-   if (cmd_buffer->state.index_buffer == index_buffer && cmd_buffer->state.index_offset == offset &&
-       cmd_buffer->state.index_type == indexType) {
-      /* No state changes. */
-      return;
-   }
 
    cmd_buffer->state.index_buffer = index_buffer;
    cmd_buffer->state.index_offset = offset;
@@ -4974,7 +4985,7 @@ radv_EndCommandBuffer(VkCommandBuffer commandBuffer)
 static void
 radv_emit_compute_pipeline(struct radv_cmd_buffer *cmd_buffer, struct radv_pipeline *pipeline)
 {
-   if (!pipeline || pipeline == cmd_buffer->state.emitted_compute_pipeline)
+   if (pipeline == cmd_buffer->state.emitted_compute_pipeline)
       return;
 
    assert(!pipeline->ctx_cs.cdw);
@@ -5045,7 +5056,13 @@ radv_CmdBindPipeline(VkCommandBuffer commandBuffer, VkPipelineBindPoint pipeline
       if (!pipeline)
          break;
 
-      cmd_buffer->state.mesh_shading = radv_pipeline_has_mesh(pipeline);
+      bool mesh_shading = radv_pipeline_has_mesh(pipeline);
+      if (mesh_shading != cmd_buffer->state.mesh_shading) {
+         /* Re-emit VRS state because the combiner is different (vertex vs primitive). */
+         cmd_buffer->state.dirty |= RADV_CMD_DIRTY_DYNAMIC_FRAGMENT_SHADING_RATE;
+      }
+
+      cmd_buffer->state.mesh_shading = mesh_shading;
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PIPELINE | RADV_CMD_DIRTY_DYNAMIC_VERTEX_INPUT;
       cmd_buffer->push_constant_stages |= pipeline->active_stages;
 
@@ -5099,12 +5116,6 @@ radv_CmdSetViewport(VkCommandBuffer commandBuffer, uint32_t firstViewport, uint3
    assert(firstViewport < MAX_VIEWPORTS);
    assert(total_count >= 1 && total_count <= MAX_VIEWPORTS);
 
-   if (total_count <= state->dynamic.viewport.count &&
-       !memcmp(state->dynamic.viewport.viewports + firstViewport, pViewports,
-               viewportCount * sizeof(*pViewports))) {
-      return;
-   }
-
    if (state->dynamic.viewport.count < total_count)
       state->dynamic.viewport.count = total_count;
 
@@ -5130,12 +5141,6 @@ radv_CmdSetScissor(VkCommandBuffer commandBuffer, uint32_t firstScissor, uint32_
    assert(firstScissor < MAX_SCISSORS);
    assert(total_count >= 1 && total_count <= MAX_SCISSORS);
 
-   if (total_count <= state->dynamic.scissor.count &&
-       !memcmp(state->dynamic.scissor.scissors + firstScissor, pScissors,
-               scissorCount * sizeof(*pScissors))) {
-      return;
-   }
-
    if (state->dynamic.scissor.count < total_count)
       state->dynamic.scissor.count = total_count;
 
@@ -5150,9 +5155,6 @@ radv_CmdSetLineWidth(VkCommandBuffer commandBuffer, float lineWidth)
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 
-   if (cmd_buffer->state.dynamic.line_width == lineWidth)
-      return;
-
    cmd_buffer->state.dynamic.line_width = lineWidth;
    cmd_buffer->state.dirty |= RADV_CMD_DIRTY_DYNAMIC_LINE_WIDTH;
 }
@@ -5163,12 +5165,6 @@ radv_CmdSetDepthBias(VkCommandBuffer commandBuffer, float depthBiasConstantFacto
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.depth_bias.bias == depthBiasConstantFactor &&
-       state->dynamic.depth_bias.clamp == depthBiasClamp &&
-       state->dynamic.depth_bias.slope == depthBiasSlopeFactor) {
-      return;
-   }
 
    state->dynamic.depth_bias.bias = depthBiasConstantFactor;
    state->dynamic.depth_bias.clamp = depthBiasClamp;
@@ -5183,9 +5179,6 @@ radv_CmdSetBlendConstants(VkCommandBuffer commandBuffer, const float blendConsta
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (!memcmp(state->dynamic.blend_constants, blendConstants, sizeof(float) * 4))
-      return;
-
    memcpy(state->dynamic.blend_constants, blendConstants, sizeof(float) * 4);
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_BLEND_CONSTANTS;
@@ -5196,11 +5189,6 @@ radv_CmdSetDepthBounds(VkCommandBuffer commandBuffer, float minDepthBounds, floa
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.depth_bounds.min == minDepthBounds &&
-       state->dynamic.depth_bounds.max == maxDepthBounds) {
-      return;
-   }
 
    state->dynamic.depth_bounds.min = minDepthBounds;
    state->dynamic.depth_bounds.max = maxDepthBounds;
@@ -5214,13 +5202,6 @@ radv_CmdSetStencilCompareMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags 
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-   bool front_same = state->dynamic.stencil_compare_mask.front == compareMask;
-   bool back_same = state->dynamic.stencil_compare_mask.back == compareMask;
-
-   if ((!(faceMask & VK_STENCIL_FACE_FRONT_BIT) || front_same) &&
-       (!(faceMask & VK_STENCIL_FACE_BACK_BIT) || back_same)) {
-      return;
-   }
 
    if (faceMask & VK_STENCIL_FACE_FRONT_BIT)
       state->dynamic.stencil_compare_mask.front = compareMask;
@@ -5236,13 +5217,6 @@ radv_CmdSetStencilWriteMask(VkCommandBuffer commandBuffer, VkStencilFaceFlags fa
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-   bool front_same = state->dynamic.stencil_write_mask.front == writeMask;
-   bool back_same = state->dynamic.stencil_write_mask.back == writeMask;
-
-   if ((!(faceMask & VK_STENCIL_FACE_FRONT_BIT) || front_same) &&
-       (!(faceMask & VK_STENCIL_FACE_BACK_BIT) || back_same)) {
-      return;
-   }
 
    if (faceMask & VK_STENCIL_FACE_FRONT_BIT)
       state->dynamic.stencil_write_mask.front = writeMask;
@@ -5257,14 +5231,6 @@ radv_CmdSetStencilReference(VkCommandBuffer commandBuffer, VkStencilFaceFlags fa
                             uint32_t reference)
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
-   struct radv_cmd_state *state = &cmd_buffer->state;
-   bool front_same = state->dynamic.stencil_reference.front == reference;
-   bool back_same = state->dynamic.stencil_reference.back == reference;
-
-   if ((!(faceMask & VK_STENCIL_FACE_FRONT_BIT) || front_same) &&
-       (!(faceMask & VK_STENCIL_FACE_BACK_BIT) || back_same)) {
-      return;
-   }
 
    if (faceMask & VK_STENCIL_FACE_FRONT_BIT)
       cmd_buffer->state.dynamic.stencil_reference.front = reference;
@@ -5284,11 +5250,6 @@ radv_CmdSetDiscardRectangleEXT(VkCommandBuffer commandBuffer, uint32_t firstDisc
 
    assert(firstDiscardRectangle < MAX_DISCARD_RECTANGLES);
    assert(total_count >= 1 && total_count <= MAX_DISCARD_RECTANGLES);
-
-   if (!memcmp(state->dynamic.discard_rectangle.rectangles + firstDiscardRectangle,
-               pDiscardRectangles, discardRectangleCount * sizeof(*pDiscardRectangles))) {
-      return;
-   }
 
    typed_memcpy(&state->dynamic.discard_rectangle.rectangles[firstDiscardRectangle],
                 pDiscardRectangles, discardRectangleCount);
@@ -5321,10 +5282,6 @@ radv_CmdSetLineStippleEXT(VkCommandBuffer commandBuffer, uint32_t lineStippleFac
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.line_stipple.factor == lineStippleFactor &&
-       state->dynamic.line_stipple.pattern == lineStipplePattern)
-      return;
-
    state->dynamic.line_stipple.factor = lineStippleFactor;
    state->dynamic.line_stipple.pattern = lineStipplePattern;
 
@@ -5337,9 +5294,6 @@ radv_CmdSetCullModeEXT(VkCommandBuffer commandBuffer, VkCullModeFlags cullMode)
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.cull_mode == cullMode)
-      return;
-
    state->dynamic.cull_mode = cullMode;
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_CULL_MODE;
@@ -5350,9 +5304,6 @@ radv_CmdSetFrontFaceEXT(VkCommandBuffer commandBuffer, VkFrontFace frontFace)
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.front_face == frontFace)
-      return;
 
    state->dynamic.front_face = frontFace;
 
@@ -5366,9 +5317,6 @@ radv_CmdSetPrimitiveTopologyEXT(VkCommandBuffer commandBuffer,
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
    unsigned primitive_topology = si_translate_prim(primitiveTopology);
-
-   if (state->dynamic.primitive_topology == primitive_topology)
-      return;
 
    state->dynamic.primitive_topology = primitive_topology;
 
@@ -5396,9 +5344,6 @@ radv_CmdSetDepthTestEnableEXT(VkCommandBuffer commandBuffer, VkBool32 depthTestE
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.depth_test_enable == depthTestEnable)
-      return;
-
    state->dynamic.depth_test_enable = depthTestEnable;
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_DEPTH_TEST_ENABLE;
@@ -5409,9 +5354,6 @@ radv_CmdSetDepthWriteEnableEXT(VkCommandBuffer commandBuffer, VkBool32 depthWrit
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.depth_write_enable == depthWriteEnable)
-      return;
 
    state->dynamic.depth_write_enable = depthWriteEnable;
 
@@ -5424,9 +5366,6 @@ radv_CmdSetDepthCompareOpEXT(VkCommandBuffer commandBuffer, VkCompareOp depthCom
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.depth_compare_op == depthCompareOp)
-      return;
-
    state->dynamic.depth_compare_op = depthCompareOp;
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_DEPTH_COMPARE_OP;
@@ -5438,9 +5377,6 @@ radv_CmdSetDepthBoundsTestEnableEXT(VkCommandBuffer commandBuffer, VkBool32 dept
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.depth_bounds_test_enable == depthBoundsTestEnable)
-      return;
-
    state->dynamic.depth_bounds_test_enable = depthBoundsTestEnable;
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE;
@@ -5451,9 +5387,6 @@ radv_CmdSetStencilTestEnableEXT(VkCommandBuffer commandBuffer, VkBool32 stencilT
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.stencil_test_enable == stencilTestEnable)
-      return;
 
    state->dynamic.stencil_test_enable = stencilTestEnable;
 
@@ -5467,18 +5400,6 @@ radv_CmdSetStencilOpEXT(VkCommandBuffer commandBuffer, VkStencilFaceFlags faceMa
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-   bool front_same = state->dynamic.stencil_op.front.fail_op == failOp &&
-                     state->dynamic.stencil_op.front.pass_op == passOp &&
-                     state->dynamic.stencil_op.front.depth_fail_op == depthFailOp &&
-                     state->dynamic.stencil_op.front.compare_op == compareOp;
-   bool back_same = state->dynamic.stencil_op.back.fail_op == failOp &&
-                    state->dynamic.stencil_op.back.pass_op == passOp &&
-                    state->dynamic.stencil_op.back.depth_fail_op == depthFailOp &&
-                    state->dynamic.stencil_op.back.compare_op == compareOp;
-
-   if ((!(faceMask & VK_STENCIL_FACE_FRONT_BIT) || front_same) &&
-       (!(faceMask & VK_STENCIL_FACE_BACK_BIT) || back_same))
-      return;
 
    if (faceMask & VK_STENCIL_FACE_FRONT_BIT) {
       state->dynamic.stencil_op.front.fail_op = failOp;
@@ -5504,12 +5425,6 @@ radv_CmdSetFragmentShadingRateKHR(VkCommandBuffer commandBuffer, const VkExtent2
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.fragment_shading_rate.size.width == pFragmentSize->width &&
-       state->dynamic.fragment_shading_rate.size.height == pFragmentSize->height &&
-       state->dynamic.fragment_shading_rate.combiner_ops[0] == combinerOps[0] &&
-       state->dynamic.fragment_shading_rate.combiner_ops[1] == combinerOps[1])
-      return;
-
    state->dynamic.fragment_shading_rate.size = *pFragmentSize;
    for (unsigned i = 0; i < 2; i++)
       state->dynamic.fragment_shading_rate.combiner_ops[i] = combinerOps[i];
@@ -5523,9 +5438,6 @@ radv_CmdSetDepthBiasEnableEXT(VkCommandBuffer commandBuffer, VkBool32 depthBiasE
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
 
-   if (state->dynamic.depth_bias_enable == depthBiasEnable)
-      return;
-
    state->dynamic.depth_bias_enable = depthBiasEnable;
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_DEPTH_BIAS_ENABLE;
@@ -5536,9 +5448,6 @@ radv_CmdSetPrimitiveRestartEnableEXT(VkCommandBuffer commandBuffer, VkBool32 pri
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.primitive_restart_enable == primitiveRestartEnable)
-      return;
 
    state->dynamic.primitive_restart_enable = primitiveRestartEnable;
 
@@ -5551,9 +5460,6 @@ radv_CmdSetRasterizerDiscardEnableEXT(VkCommandBuffer commandBuffer,
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_cmd_state *state = &cmd_buffer->state;
-
-   if (state->dynamic.rasterizer_discard_enable == rasterizerDiscardEnable)
-      return;
 
    state->dynamic.rasterizer_discard_enable = rasterizerDiscardEnable;
 
@@ -5573,9 +5479,6 @@ radv_CmdSetLogicOpEXT(VkCommandBuffer commandBuffer, VkLogicOp logicOp)
    struct radv_cmd_state *state = &cmd_buffer->state;
    unsigned logic_op = si_translate_blend_logic_op(logicOp);
 
-   if (state->dynamic.logic_op == logic_op)
-      return;
-
    state->dynamic.logic_op = logic_op;
 
    state->dirty |= RADV_CMD_DIRTY_DYNAMIC_LOGIC_OP;
@@ -5594,9 +5497,6 @@ radv_CmdSetColorWriteEnableEXT(VkCommandBuffer commandBuffer, uint32_t attachmen
    for (uint32_t i = 0; i < attachmentCount; i++) {
       color_write_enable |= pColorWriteEnables[i] ? (0xfu << (i * 4)) : 0;
    }
-
-   if (state->dynamic.color_write_enable == color_write_enable)
-      return;
 
    state->dynamic.color_write_enable = color_write_enable;
 
@@ -5896,6 +5796,10 @@ radv_cmd_buffer_begin_subpass(struct radv_cmd_buffer *cmd_buffer, uint32_t subpa
       radv_handle_subpass_image_transition(cmd_buffer, subpass->attachments[i], true);
    }
 
+   radv_describe_barrier_end(cmd_buffer);
+
+   radv_cmd_buffer_clear_subpass(cmd_buffer);
+
    if (subpass->vrs_attachment) {
       int idx = subpass->vrs_attachment->attachment;
       struct radv_image_view *vrs_iview = cmd_buffer->state.attachments[idx].iview;
@@ -5907,15 +5811,17 @@ radv_cmd_buffer_begin_subpass(struct radv_cmd_buffer *cmd_buffer, uint32_t subpa
          int ds_idx = subpass->depth_stencil_attachment->attachment;
          struct radv_image_view *ds_iview = cmd_buffer->state.attachments[ds_idx].iview;
          struct radv_image *ds_image = ds_iview->image;
+         uint32_t level = ds_iview->base_mip;
 
          VkExtent2D extent = {
-            .width = ds_image->info.width,
-            .height = ds_image->info.height,
+            .width = radv_minify(ds_image->info.width, level),
+            .height = radv_minify(ds_image->info.height, level),
          };
 
          /* HTILE buffer */
-         uint64_t htile_offset = ds_image->offset + ds_image->planes[0].surface.meta_offset;
-         uint64_t htile_size = ds_image->planes[0].surface.meta_slice_size;
+         uint64_t htile_offset = ds_image->offset + ds_image->planes[0].surface.meta_offset +
+                                 ds_image->planes[0].surface.u.gfx9.meta_levels[level].offset;
+         uint64_t htile_size = ds_image->planes[0].surface.u.gfx9.meta_levels[level].size;
          struct radv_buffer htile_buffer;
 
          radv_buffer_init(&htile_buffer, cmd_buffer->device, ds_image->bo, htile_size, htile_offset);
@@ -5945,10 +5851,6 @@ radv_cmd_buffer_begin_subpass(struct radv_cmd_buffer *cmd_buffer, uint32_t subpa
          }
       }
    }
-
-   radv_describe_barrier_end(cmd_buffer);
-
-   radv_cmd_buffer_clear_subpass(cmd_buffer);
 
    assert(cmd_buffer->cs->cdw <= cdw_max);
 }
@@ -7369,7 +7271,7 @@ radv_dispatch(struct radv_cmd_buffer *cmd_buffer, const struct radv_dispatch_inf
               struct radv_pipeline *pipeline, VkPipelineBindPoint bind_point)
 {
    bool has_prefetch = cmd_buffer->device->physical_device->rad_info.chip_class >= GFX7;
-   bool pipeline_is_dirty = pipeline && pipeline != cmd_buffer->state.emitted_compute_pipeline;
+   bool pipeline_is_dirty = pipeline != cmd_buffer->state.emitted_compute_pipeline;
    bool cs_regalloc_hang = cmd_buffer->device->physical_device->rad_info.has_cs_regalloc_hang_bug &&
                            info->blocks[0] * info->blocks[1] * info->blocks[2] > 256;
 
@@ -7910,6 +7812,10 @@ radv_CmdBeginRenderingKHR(VkCommandBuffer commandBuffer, const VkRenderingInfoKH
    unsigned h = pRenderingInfo->renderArea.offset.y + pRenderingInfo->renderArea.extent.height;
    for (unsigned i = 0; i < att_count; ++i) {
       RADV_FROM_HANDLE(radv_image_view, iview, iviews[i]);
+
+      if (vrs_info && vrs_info->imageView == iviews[i])
+         continue;
+
       w = MIN2(w, iview->extent.width);
       h = MIN2(h, iview->extent.height);
    }

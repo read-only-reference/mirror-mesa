@@ -24,7 +24,7 @@
 
 #include "aco_instruction_selection.h"
 
-#include "common/ac_exp_param.h"
+#include "common/ac_nir.h"
 #include "common/sid.h"
 #include "vulkan/radv_descriptor_set.h"
 
@@ -480,9 +480,11 @@ init_context(isel_context* ctx, nir_shader* shader)
                   nir_dest_is_divergent(alu_instr->dest.dest) ? RegType::vgpr : RegType::sgpr;
                switch (alu_instr->op) {
                case nir_op_fmul:
+               case nir_op_fmulz:
                case nir_op_fadd:
                case nir_op_fsub:
                case nir_op_ffma:
+               case nir_op_ffmaz:
                case nir_op_fmax:
                case nir_op_fmin:
                case nir_op_fneg:
