@@ -201,6 +201,29 @@
     <reserved/>
   </enum>
 
+  <enum name="Half-swizzles (8-bit)">
+    <desc>
+      Used to select the 2 bytes to convert for conversions from 8-bit vectors
+      to 16-bit vectors
+    </desc>
+    <value>b00</value>
+    <value>b10</value>
+    <value>b20</value>
+    <value>b30</value>
+    <value>b01</value>
+    <value>b11</value>
+    <value>b21</value>
+    <value>b31</value>
+    <value>b02</value>
+    <value>b12</value>
+    <value>b22</value>
+    <value>b32</value>
+    <value>b03</value>
+    <value>b13</value>
+    <value>b23</value>
+    <value>b33</value>
+  </enum>
+
   <enum name="Swizzles (16-bit)">
     <value>h00</value> <!-- 0,2 -->
     <value>h10</value>
@@ -257,7 +280,7 @@
     <value>b3</value>
   </enum>
 
-  <enum name="Lane (32-bit)">
+  <enum name="Combine">
     <desc>
       Used for the lane select of `BRANCHZ`. To use an 8-bit condition, a
       separate `ICMP` is required to cast to 16-bit.
@@ -265,7 +288,8 @@
     <value default="true">none</value>
     <value>h0</value>
     <value>h1</value>
-    <reserved/>
+    <value>and</value>
+    <value>lowbits</value>
   </enum>
 
   <enum name="Lane (16-bit)" implied="true">
@@ -494,6 +518,50 @@
     <value>sr7</value>
   </enum>
 
+  <enum name="Staging register write count" implied="true">
+    <value>write1</value>
+    <value>write2</value>
+    <value>write3</value>
+    <value>write4</value>
+    <value>write5</value>
+    <value>write6</value>
+    <value>write7</value>
+    <value>write8</value>
+  </enum>
+
+  <enum name="Write mask">
+    <reserved/>
+    <value>r</value>
+    <value>g</value>
+    <value>rg</value>
+    <value>b</value>
+    <value>rb</value>
+    <value>gb</value>
+    <value>rgb</value>
+    <value>a</value>
+    <value>ra</value>
+    <value>ga</value>
+    <value>rga</value>
+    <value>ba</value>
+    <value>rba</value>
+    <value>gba</value>
+    <value default="true">rgba</value>
+  </enum>
+
+  <enum name="Register type">
+    <desc>Unsized type, part of a register format.</desc>
+    <reserved/>
+    <value name="Float">f</value>
+    <value name="Unsigned">u</value>
+    <value name="Signed">s</value>
+  </enum>
+
+  <enum name="Register width">
+    <desc>Untyped size, part of a register format.</desc>
+    <value>16</value>
+    <value>32</value>
+  </enum>
+
   <enum name="Vector size">
     <desc>Number of channels loaded/stored for general memory access.</desc>
     <value default="true" desc="Scalar">none</value>
@@ -638,8 +706,9 @@
       source to a nonzero constant to implement a jump. May introduce
       divergence, so generally requires `.reconverge` flow control.
     </desc>
-    <src lane="37">Value to compare against zero</src>
+    <src combine="true">Value to compare against zero</src>
     <imm name="offset" start="8" size="27" signed="true"/>
+    <conservative/>
     <mod name="eq" start="36" size="1"/>
   </ins>
 
@@ -657,12 +726,14 @@
 
   <ins name="BRANCHZI" title="Compare to zero and branch indirect" opcode="0x2F" unit="CVT">
     <desc>
-      Jump to an indirectly specified address. Used to jump to blend shaders at
-      the end of a fragment shader.
+      Jump to an indirectly specified (absolute or relative) address. Used to
+      jump to blend shaders at the end of a fragment shader.
     </desc>
-    <src>Value to compare against zero</src>
+    <src combine="true">Value to compare against zero</src>
     <src>Branch target</src>
+    <conservative/>
     <mod name="eq" start="36" size="1"/>
+    <mod name="absolute" start="40" size="1"/>
   </ins>
 
   <ins name="BARRIER" title="Execution and memory barrier" opcode="0x45" unit="NONE">
@@ -753,7 +824,7 @@
     <imm name="table" start="16" size="4"/>
   </ins>
 
-  <ins name="LEA_IMAGE_IMM" title="Load effective address of image texel" opcode="0x67" unit="LS">
+  <ins name="LEA_TEX_IMM" title="Load effective address of image texel" opcode="0x67" unit="LS">
     <desc>
       Load the effective address of a texel from the image specified with the
       given immediate index. Returns three staging register: the low/high
@@ -771,8 +842,8 @@
     <imm name="unk" start="36" size="4"/>
     <src>X/Y coordinates (16:16)</src>
     <src>Z/W coordinates (16:16)</src>
+    <imm name="table" start="16" size="4"/>
     <imm name="index" start="20" size="4"/>
-    <imm name="unk2" start="16" size="4"/>
   </ins>
 
   <ins name="LD_BUFFER.i8" title="Global memory load" opcode="0x6a" opcode2="0" unit="LS">
@@ -1080,6 +1151,8 @@
     </desc>
     <sr write="true"/>
     <sr_count/>
+    <vecsize/>
+    <regfmt/>
     <slot/>
     <src>Pixel indices descriptor</src>
     <src>Coverage mask</src>
@@ -1155,20 +1228,29 @@
       is specified where it makes sense.
     </desc>
 
-    <ins name="S16_TO_S32" opcode2="0x4"/>
-    <ins name="S16_TO_F32" opcode2="0x5"/>
     <ins name="V2S16_TO_V2F16" opcode2="0x7"/>
 
     <ins name="S32_TO_F32" opcode2="0x9"/>
 
-    <ins name="U16_TO_U32" opcode2="0x14"/>
-    <ins name="U16_TO_F32" opcode2="0x15"/>
     <ins name="V2U16_TO_V2F16" opcode2="0x17"/>
 
     <ins name="U32_TO_F32" opcode2="0x19"/>
 
     <roundmode/>
     <src widen="true">Value to convert</src>
+  </group>
+
+  <group name="CONVERT" title="16->32 integer data conversions" dests="1" opcode="0x90" unit="CVT">
+    <desc>
+      Performs the given data conversion.
+    </desc>
+
+    <ins name="S16_TO_S32" opcode2="0x4"/>
+    <ins name="S16_TO_F32" opcode2="0x5"/>
+    <ins name="U16_TO_U32" opcode2="0x14"/>
+    <ins name="U16_TO_F32" opcode2="0x15"/>
+
+    <src swizzle="true" size="16">Value to convert</src>
   </group>
 
   <group name="CONVERT" title="Float-to-int data conversions" dests="1" opcode="0x90" unit="CVT">
@@ -1195,22 +1277,32 @@
     <src lane="28" size="16" absneg="true">Value to convert</src>
   </ins>
 
-  <group name="CONVERT" title="8-bit data conversions" dests="1" opcode="0x90" unit="CVT">
+  <group name="CONVERT" title="8-bit to 32-bit data conversions" dests="1" opcode="0x90" unit="CVT">
     <desc>
       Performs the given data conversion.
     </desc>
 
     <ins name="S8_TO_S32" opcode2="0x0"/>
     <ins name="S8_TO_F32" opcode2="0x1"/>
-    <ins name="S8_TO_S16" opcode2="0x2"/>
-    <ins name="S8_TO_F16" opcode2="0x3"/>
 
     <ins name="U8_TO_U32" opcode2="0x10"/>
     <ins name="U8_TO_F32" opcode2="0x11"/>
-    <ins name="U8_TO_U16" opcode2="0x12"/>
-    <ins name="U8_TO_F16" opcode2="0x13"/>
 
     <src lane="28" size="8">Value to convert</src>
+  </group>
+
+  <group name="CONVERT" title="8-bit to 16-bit data conversions" dests="1" opcode="0x90" unit="CVT">
+    <desc>
+      Performs the given data conversion.
+    </desc>
+
+    <ins name="V2S8_TO_V2S16" opcode2="0x2"/>
+    <ins name="V2S8_TO_V2F16" opcode2="0x3"/>
+
+    <ins name="V2U8_TO_V2U16" opcode2="0x12"/>
+    <ins name="V2U8_TO_V2F16" opcode2="0x13"/>
+
+    <src halfswizzle="true" size="8">Value to convert</src>
   </group>
 
   <group name="FROUND" title="Floating-point rounding" dests="1" opcode="0x90" unit="CVT">
@@ -1299,8 +1391,7 @@
     <src/>
   </ins>
 
-  <ins name="WMASK" title="Warp mask" dests="1" opcode="0x95" unit="SFU">
-    <!-- TODO: confirm unit -->
+  <ins name="WMASK" title="Warp mask" dests="1" opcode="0x95" unit="CVT">
     <desc>
       Returns the mask of lanes ever active within the warp (subgroup), such
       that the source is nonzero. The number of work-items in a subgroup is
@@ -1391,6 +1482,7 @@
       Given a pair of 32-bit floats, output a pair of 16-bit floats packed into
       a 32-bit destination.
     </desc>
+    <clamp/>
     <src>A</src>
     <src>B</src>
   </group>
@@ -1452,8 +1544,8 @@
 
   <ins name="MKVEC.v2i16" title="Make 16-bit vector" dests="1" opcode="0xA1" opcode2="0x5" unit="CVT">
     <desc>Calculates $A | (B \ll 16)$. Used to implement `(ushort2)(A, B)`</desc>
-    <src widen="true">A</src>
-    <src widen="true">B</src>
+    <src swizzle="true">A</src>
+    <src swizzle="true">B</src>
   </ins>
 
   <group name="ISUB" title="Integer subtract" dests="1" opcode2="1" unit="CVT">
@@ -1506,7 +1598,6 @@
   </group>
 
   <group name="HADD" title="Integer half-add" dests="1" opcode2="0x0B" unit="CVT">
-    <!-- TODO: confirm unit -->
     <ins name="HADD.u32" opcode="0xA0"/>
     <ins name="HADD.v2u16" opcode="0xA1"/>
     <ins name="HADD.v4u8" opcode="0xA2"/>
@@ -1661,6 +1752,34 @@
   </group>
 
   <ins name="MUX.i32" title="Mux" dests="1" opcode="0xB8" unit="SFU">
+    <desc>
+      Mux between A and B based on the provided mask. The condition specified
+      as the `mux` modifier is evaluated on the mask. If true, `A` is chosen,
+      else `B` is chosen. The `bit` modifier acts bitwise, equivalent to
+      `bitselect()` in OpenCL, so `MUX.i32.bit A, B, mask` calculates
+      `(A &amp; mask) | (A &amp; ~mask)`.
+    </desc>
+    <mod name="mux" start="32" size="2"/>
+    <src>A</src>
+    <src>B</src>
+    <src>Mask</src>
+  </ins>
+
+  <ins name="MUX.v2i16" title="Mux" dests="1" opcode="0xB9" unit="SFU">
+    <desc>
+      Mux between A and B based on the provided mask. The condition specified
+      as the `mux` modifier is evaluated on the mask. If true, `A` is chosen,
+      else `B` is chosen. The `bit` modifier acts bitwise, equivalent to
+      `bitselect()` in OpenCL, so `MUX.i32.bit A, B, mask` calculates
+      `(A &amp; mask) | (A &amp; ~mask)`.
+    </desc>
+    <mod name="mux" start="32" size="2"/>
+    <src swizzle="true">A</src>
+    <src swizzle="true">B</src>
+    <src swizzle="true">Mask</src>
+  </ins>
+
+  <ins name="MUX.v4i8" title="Mux" dests="1" opcode="0xBA" unit="SFU">
     <desc>
       Mux between A and B based on the provided mask. The condition specified
       as the `mux` modifier is evaluated on the mask. If true, `A` is chosen,
@@ -1897,28 +2016,46 @@
 
   <ins name="TEX_FETCH" title="Texel fetch" opcode="0x125" unit="T">
     <desc>Unfiltered textured instruction.</desc>
-    <sr read="true"/>
-    <sr write="true" count="4"/>
-    <mod name="explicit_offset" start="11" size="1"/>
-    <mod name="dimension" start="28" size="2"/>
-    <mod name="skip" start="39" size="1"/>
-    <sr_count/>
     <slot/>
+    <skip/>
+    <register_type/>
+    <register_width/>
+    <write_mask/>
+    <dimension/>
+    <wide_indices/>
+    <array_enable/>
+    <texel_offset/>
+
+    <!-- Leave secondary_register_width as 0 -->
+    <sr_count/>
+    <sr_write_count/>
+
+    <sr write="true" flags="false"/>
+    <sr read="true" flags="false"/>
     <src>Image to read from</src>
   </ins>
 
-  <ins name="TEX" title="Texture load" opcode="0x128" unit="T">
+  <ins name="TEX_SINGLE" title="Texture load" opcode="0x128" unit="T">
     <desc>Ordinary texturing instruction using a sampler.</desc>
-    <sr read="true"/>
-    <sr write="true" count="4"/>
-    <src>Image to read from</src>
-    <mod name="explicit_offset" start="11" size="1"/>
-    <mod name="shadow" start="12" size="1"/>
-    <mod name="lod_mode" start="13" size="3"/>
-    <mod name="dimension" start="28" size="2"/>
-    <mod name="skip" start="39" size="1"/>
-    <sr_count/>
     <slot/>
+    <skip/>
+    <register_type/>
+    <register_width/>
+    <write_mask/>
+    <dimension/>
+    <wide_indices/>
+    <array_enable/>
+    <texel_offset/>
+    <shadow/>
+    <lod_mode/>
+
+    <!-- Leave secondary_register_width as 0 -->
+    <sr_count/>
+    <sr_write_count/>
+
+    <sr write="true" flags="false"/>
+    <sr read="true" flags="false"/>
+    <src>Image to read from</src>
   </ins>
 
   <ins name="TODO.VAR_TEX" title="Fused varying-texturing" opcode="0x130" unit="VT">
@@ -1930,6 +2067,7 @@
     <mod name="dimension" start="28" size="2"/>
     <mod name="skip" start="39" size="1"/>
     <slot/>
+    <sr_write_count/>
     <src>Image to read from</src>
   </ins>
 

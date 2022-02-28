@@ -1,5 +1,5 @@
 /*
- * Copyright © 2019 Raspberry Pi
+ * Copyright © 2019 Raspberry Pi Ltd
  *
  * based in part on anv driver which is:
  * Copyright © 2015 Intel Corporation
@@ -46,6 +46,7 @@
 #include "vk_util.h"
 
 #include "vk_command_buffer.h"
+#include "vk_command_pool.h"
 #include "vk_queue.h"
 
 #include <xf86drm.h>
@@ -815,13 +816,6 @@ v3dv_do_double_initial_tile_clear(const struct v3dv_frame_tiling *tiling)
            tiling->layers > 1);
 }
 
-struct v3dv_cmd_pool {
-   struct vk_object_base base;
-
-   VkAllocationCallbacks alloc;
-   struct list_head cmd_buffers;
-};
-
 enum v3dv_cmd_buffer_status {
    V3DV_CMD_BUFFER_STATUS_NEW           = 0,
    V3DV_CMD_BUFFER_STATUS_INITIALIZED   = 1,
@@ -1414,9 +1408,6 @@ struct v3dv_cmd_buffer {
 
    struct v3dv_device *device;
 
-   struct v3dv_cmd_pool *pool;
-   struct list_head pool_link;
-
    /* Used at submit time to link command buffers in the submission that have
     * spawned wait threads, so we can then wait on all of them to complete
     * before we process any signal sempahores or fences.
@@ -1424,7 +1415,6 @@ struct v3dv_cmd_buffer {
    struct list_head list_link;
 
    VkCommandBufferUsageFlags usage_flags;
-   VkCommandBufferLevel level;
 
    enum v3dv_cmd_buffer_status status;
 
@@ -2158,8 +2148,6 @@ VK_DEFINE_HANDLE_CASTS(v3dv_physical_device, vk.base, VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 VK_DEFINE_HANDLE_CASTS(v3dv_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
-VK_DEFINE_NONDISP_HANDLE_CASTS(v3dv_cmd_pool, base, VkCommandPool,
-                               VK_OBJECT_TYPE_COMMAND_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(v3dv_buffer, base, VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)
 VK_DEFINE_NONDISP_HANDLE_CASTS(v3dv_buffer_view, base, VkBufferView,

@@ -60,6 +60,7 @@
 #include "perf/intel_perf.h"
 
 #include "genxml/gen7_pack.h"
+#include "genxml/genX_bits.h"
 
 static const driOptionDescription anv_dri_options[] = {
    DRI_CONF_SECTION_PERFORMANCE
@@ -176,6 +177,9 @@ get_device_extensions(const struct anv_physical_device *device,
    const bool has_syncobj_wait =
       (device->sync_syncobj_type.features & VK_SYNC_FEATURE_CPU_WAIT) != 0;
 
+   const bool nv_mesh_shading_enabled =
+      env_var_as_boolean("ANV_EXPERIMENTAL_NV_MESH_SHADER", false);
+
    *ext = (struct vk_device_extension_table) {
       .KHR_8bit_storage                      = device->info.ver >= 8,
       .KHR_16bit_storage                     = device->info.ver >= 8,
@@ -217,6 +221,7 @@ get_device_extensions(const struct anv_physical_device *device,
          device->use_call_secondary,
       .KHR_pipeline_executable_properties    = true,
       .KHR_push_descriptor                   = true,
+      .KHR_ray_query                         = device->info.has_ray_tracing,
       .KHR_relaxed_block_layout              = true,
       .KHR_sampler_mirror_clamp_to_edge      = true,
       .KHR_sampler_ycbcr_conversion          = true,
@@ -311,6 +316,8 @@ get_device_extensions(const struct anv_physical_device *device,
       .INTEL_shader_integer_functions2       = device->info.ver >= 8,
       .EXT_multi_draw                        = true,
       .NV_compute_shader_derivatives         = true,
+      .NV_mesh_shader                        = device->info.has_mesh_shading &&
+                                               nv_mesh_shading_enabled,
       .VALVE_mutable_descriptor_type         = true,
    };
 }
@@ -1554,7 +1561,10 @@ void anv_GetPhysicalDeviceFeatures2(
             (VkPhysicalDeviceFragmentShadingRateFeaturesKHR *)ext;
          features->attachmentFragmentShadingRate = false;
          features->pipelineFragmentShadingRate = true;
-         features->primitiveFragmentShadingRate = false;
+         features->primitiveFragmentShadingRate =
+            pdevice->info.has_coarse_pixel_primitive_and_cb;
+         features->attachmentFragmentShadingRate =
+            pdevice->info.has_coarse_pixel_primitive_and_cb;
          break;
       }
 
@@ -1592,6 +1602,14 @@ void anv_GetPhysicalDeviceFeatures2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV: {
+         VkPhysicalDeviceMeshShaderFeaturesNV *features =
+            (VkPhysicalDeviceMeshShaderFeaturesNV *)ext;
+         features->taskShader = pdevice->vk.supported_extensions.NV_mesh_shader;
+         features->meshShader = pdevice->vk.supported_extensions.NV_mesh_shader;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MUTABLE_DESCRIPTOR_TYPE_FEATURES_VALVE: {
          VkPhysicalDeviceMutableDescriptorTypeFeaturesVALVE *features =
             (VkPhysicalDeviceMutableDescriptorTypeFeaturesVALVE *)ext;
@@ -1623,6 +1641,12 @@ void anv_GetPhysicalDeviceFeatures2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR: {
+         VkPhysicalDeviceRayQueryFeaturesKHR *features = (void *)ext;
+         features->rayQuery = pdevice->info.has_ray_tracing;
+         break;
+      }
+
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT: {
          VkPhysicalDeviceRobustness2FeaturesEXT *features = (void *)ext;
          features->robustBufferAccess2 = true;
@@ -1635,7 +1659,8 @@ void anv_GetPhysicalDeviceFeatures2(
          VkPhysicalDeviceShaderAtomicFloatFeaturesEXT *features = (void *)ext;
          features->shaderBufferFloat32Atomics =    true;
          features->shaderBufferFloat32AtomicAdd =  pdevice->info.has_lsc;
-         features->shaderBufferFloat64Atomics =    pdevice->info.has_lsc;
+         features->shaderBufferFloat64Atomics =
+            pdevice->info.has_64bit_float && pdevice->info.has_lsc;
          features->shaderBufferFloat64AtomicAdd =  false;
          features->shaderSharedFloat32Atomics =    true;
          features->shaderSharedFloat32AtomicAdd =  false;
@@ -1654,7 +1679,8 @@ void anv_GetPhysicalDeviceFeatures2(
          features->shaderBufferFloat16AtomicAdd    = false;
          features->shaderBufferFloat16AtomicMinMax = false;
          features->shaderBufferFloat32AtomicMinMax = pdevice->info.ver >= 9;
-         features->shaderBufferFloat64AtomicMinMax = pdevice->info.has_lsc;
+         features->shaderBufferFloat64AtomicMinMax =
+            pdevice->info.has_64bit_float && pdevice->info.has_lsc;
          features->shaderSharedFloat16Atomics      = false;
          features->shaderSharedFloat16AtomicAdd    = false;
          features->shaderSharedFloat16AtomicMinMax = false;
@@ -1809,12 +1835,12 @@ void anv_GetPhysicalDeviceProperties(
       .maxImageDimensionCube                    = (1 << 14),
       .maxImageArrayLayers                      = (1 << 11),
       .maxTexelBufferElements                   = 128 * 1024 * 1024,
-      .maxUniformBufferRange                    = (1ul << 27),
+      .maxUniformBufferRange                    = pdevice->compiler->indirect_ubos_use_sampler ? (1u << 27) : (1u << 30),
       .maxStorageBufferRange                    = pdevice->isl_dev.max_buffer_size,
       .maxPushConstantsSize                     = MAX_PUSH_CONSTANTS_SIZE,
       .maxMemoryAllocationCount                 = UINT32_MAX,
       .maxSamplerAllocationCount                = 64 * 1024,
-      .bufferImageGranularity                   = 64, /* A cache line */
+      .bufferImageGranularity                   = 1,
       .sparseAddressSpaceSize                   = 0,
       .maxBoundDescriptorSets                   = MAX_SETS,
       .maxPerStageDescriptorSamplers            = max_samplers,
@@ -1832,10 +1858,22 @@ void anv_GetPhysicalDeviceProperties(
       .maxDescriptorSetSampledImages            = 6 * max_textures, /* number of stages * maxPerStageDescriptorSampledImages */
       .maxDescriptorSetStorageImages            = 6 * max_images,   /* number of stages * maxPerStageDescriptorStorageImages */
       .maxDescriptorSetInputAttachments         = MAX_DESCRIPTOR_SET_INPUT_ATTACHMENTS,
-      .maxVertexInputAttributes                 = MAX_VBS,
+      .maxVertexInputAttributes                 = MAX_VES,
       .maxVertexInputBindings                   = MAX_VBS,
+      /* Broadwell PRMs: Volume 2d: Command Reference: Structures:
+       *
+       * VERTEX_ELEMENT_STATE::Source Element Offset: [0,2047]
+       */
       .maxVertexInputAttributeOffset            = 2047,
-      .maxVertexInputBindingStride              = 2048,
+      /* Broadwell PRMs: Volume 2d: Command Reference: Structures:
+       *
+       * VERTEX_BUFFER_STATE::Buffer Pitch: [0,2048]
+       *
+       * Skylake PRMs: Volume 2d: Command Reference: Structures:
+       *
+       * VERTEX_BUFFER_STATE::Buffer Pitch: [0,4095]
+       */
+      .maxVertexInputBindingStride              = devinfo->ver < 9 ? 2048 : 4095,
       .maxVertexOutputComponents                = 128,
       .maxTessellationGenerationLevel           = 64,
       .maxTessellationPatchSize                 = 32,
@@ -1967,6 +2005,10 @@ anv_get_physical_device_properties_1_1(struct anv_physical_device *pdevice,
                        VK_SHADER_STAGE_INTERSECTION_BIT_KHR |
                        VK_SHADER_STAGE_CALLABLE_BIT_KHR;
    }
+   if (pdevice->vk.supported_extensions.NV_mesh_shader) {
+      scalar_stages |= VK_SHADER_STAGE_TASK_BIT_NV |
+                       VK_SHADER_STAGE_MESH_BIT_NV;
+   }
    p->subgroupSupportedStages = scalar_stages;
    p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT |
                                     VK_SUBGROUP_FEATURE_VOTE_BIT |
@@ -2023,7 +2065,7 @@ anv_get_physical_device_properties_1_2(struct anv_physical_device *pdevice,
    else {
       p->conformanceVersion = (VkConformanceVersionKHR) {
          .major = 1,
-         .minor = 2,
+         .minor = 3,
          .subminor = 0,
          .patch = 0,
       };
@@ -2135,7 +2177,9 @@ anv_get_physical_device_properties_1_3(struct anv_physical_device *pdevice,
    p->minSubgroupSize = 8;
    p->maxSubgroupSize = 32;
    p->maxComputeWorkgroupSubgroups = pdevice->info.max_cs_workgroup_threads;
-   p->requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT;
+   p->requiredSubgroupSizeStages = VK_SHADER_STAGE_COMPUTE_BIT |
+                                   VK_SHADER_STAGE_TASK_BIT_NV |
+                                   VK_SHADER_STAGE_MESH_BIT_NV;
 
    p->maxInlineUniformBlockSize = MAX_INLINE_UNIFORM_BLOCK_SIZE;
    p->maxPerStageDescriptorInlineUniformBlocks =
@@ -2288,27 +2332,48 @@ void anv_GetPhysicalDeviceProperties2(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR: {
          VkPhysicalDeviceFragmentShadingRatePropertiesKHR *props =
             (VkPhysicalDeviceFragmentShadingRatePropertiesKHR *)ext;
-         /* Those must be 0 if attachmentFragmentShadingRate is not
-          * supported.
-          */
-         props->minFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 0, 0 };
-         props->maxFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 0, 0 };
-         props->maxFragmentShadingRateAttachmentTexelSizeAspectRatio = 0;
-
-         props->primitiveFragmentShadingRateWithMultipleViewports = false;
-         props->layeredShadingRateAttachments = false;
-         props->fragmentShadingRateNonTrivialCombinerOps = false;
+         props->primitiveFragmentShadingRateWithMultipleViewports =
+            pdevice->info.has_coarse_pixel_primitive_and_cb;
+         props->layeredShadingRateAttachments = pdevice->info.has_coarse_pixel_primitive_and_cb;
+         props->fragmentShadingRateNonTrivialCombinerOps =
+            pdevice->info.has_coarse_pixel_primitive_and_cb;
          props->maxFragmentSize = (VkExtent2D) { 4, 4 };
-         props->maxFragmentSizeAspectRatio = 4;
-         props->maxFragmentShadingRateCoverageSamples = 4 * 4 * 16;
-         props->maxFragmentShadingRateRasterizationSamples = VK_SAMPLE_COUNT_16_BIT;
+         props->maxFragmentSizeAspectRatio =
+            pdevice->info.has_coarse_pixel_primitive_and_cb ?
+            2 : 4;
+         props->maxFragmentShadingRateCoverageSamples = 4 * 4 *
+            (pdevice->info.has_coarse_pixel_primitive_and_cb ? 4 : 16);
+         props->maxFragmentShadingRateRasterizationSamples =
+            pdevice->info.has_coarse_pixel_primitive_and_cb ?
+            VK_SAMPLE_COUNT_4_BIT :  VK_SAMPLE_COUNT_16_BIT;
          props->fragmentShadingRateWithShaderDepthStencilWrites = false;
          props->fragmentShadingRateWithSampleMask = true;
          props->fragmentShadingRateWithShaderSampleMask = false;
          props->fragmentShadingRateWithConservativeRasterization = true;
          props->fragmentShadingRateWithFragmentShaderInterlock = true;
          props->fragmentShadingRateWithCustomSampleLocations = true;
-         props->fragmentShadingRateStrictMultiplyCombiner = false;
+
+         /* Fix in DG2_G10_C0 and DG2_G11_B0. Consider any other Sku as having
+          * the fix.
+          */
+         props->fragmentShadingRateStrictMultiplyCombiner =
+            pdevice->info.platform == INTEL_PLATFORM_DG2_G10 ?
+            pdevice->info.revision >= 8 :
+            pdevice->info.platform == INTEL_PLATFORM_DG2_G11 ?
+            pdevice->info.revision >= 4 : true;
+
+         if (pdevice->info.has_coarse_pixel_primitive_and_cb) {
+            props->minFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 8, 8 };
+            props->maxFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 8, 8 };
+            props->maxFragmentShadingRateAttachmentTexelSizeAspectRatio = 1;
+         } else {
+            /* Those must be 0 if attachmentFragmentShadingRate is not
+             * supported.
+             */
+            props->minFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 0, 0 };
+            props->maxFragmentShadingRateAttachmentTexelSize = (VkExtent2D) { 0, 0 };
+            props->maxFragmentShadingRateAttachmentTexelSizeAspectRatio = 0;
+         }
          break;
       }
 
@@ -2358,6 +2423,66 @@ void anv_GetPhysicalDeviceProperties2(
          VkPhysicalDeviceMaintenance4PropertiesKHR *properties =
             (VkPhysicalDeviceMaintenance4PropertiesKHR *)ext;
          properties->maxBufferSize = pdevice->isl_dev.max_buffer_size;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_NV: {
+         VkPhysicalDeviceMeshShaderPropertiesNV *props =
+            (VkPhysicalDeviceMeshShaderPropertiesNV *)ext;
+
+         /* Bounded by the maximum representable size in
+          * 3DSTATE_MESH_SHADER_BODY::SharedLocalMemorySize.  Same for Task.
+          */
+         const uint32_t max_slm_size = 64 * 1024;
+
+         /* Bounded by the maximum representable size in
+          * 3DSTATE_MESH_SHADER_BODY::LocalXMaximum.  Same for Task.
+          */
+         const uint32_t max_workgroup_size = 1 << 10;
+
+         /* Bounded by the maximum representable count in
+          * 3DSTATE_MESH_SHADER_BODY::MaximumPrimitiveCount.
+          */
+         const uint32_t max_primitives = 1024;
+
+         /* TODO(mesh): Multiview. */
+         const uint32_t max_view_count = 1;
+
+         props->maxDrawMeshTasksCount = UINT32_MAX;
+
+         /* TODO(mesh): Implement workgroup Y and Z sizes larger than one by
+          * mapping them to/from the single value that HW provides us
+          * (currently used for X).
+          */
+
+         props->maxTaskWorkGroupInvocations = max_workgroup_size;
+         props->maxTaskWorkGroupSize[0] = max_workgroup_size;
+         props->maxTaskWorkGroupSize[1] = 1;
+         props->maxTaskWorkGroupSize[2] = 1;
+         props->maxTaskTotalMemorySize = max_slm_size;
+         props->maxTaskOutputCount = UINT16_MAX;
+
+         props->maxMeshWorkGroupInvocations = max_workgroup_size;
+         props->maxMeshWorkGroupSize[0] = max_workgroup_size;
+         props->maxMeshWorkGroupSize[1] = 1;
+         props->maxMeshWorkGroupSize[2] = 1;
+         props->maxMeshTotalMemorySize = max_slm_size / max_view_count;
+         props->maxMeshOutputPrimitives = max_primitives / max_view_count;
+         props->maxMeshMultiviewViewCount = max_view_count;
+
+         /* Depends on what indices can be represented with IndexFormat.  For
+          * now we always use U32, so bound to the maximum unique vertices we
+          * need for the maximum primitives.
+          *
+          * TODO(mesh): Revisit this if we drop "U32" IndexFormat when adding
+          * support for others.
+          */
+         props->maxMeshOutputVertices = 3 * props->maxMeshOutputPrimitives;
+
+
+         props->meshOutputPerVertexGranularity = 32;
+         props->meshOutputPerPrimitiveGranularity = 32;
+
          break;
       }
 
@@ -3229,9 +3354,44 @@ VkResult anv_CreateDevice(
                                        device->workaround_bo->size,
                                        INTEL_DEBUG_BLOCK_TYPE_FRAME);
 
+   if (device->vk.enabled_extensions.KHR_ray_query) {
+      uint32_t ray_queries_size =
+         align_u32(brw_rt_ray_queries_hw_stacks_size(&device->info), 4096);
+
+      result = anv_device_alloc_bo(device, "ray queries",
+                                   ray_queries_size,
+                                   ANV_BO_ALLOC_LOCAL_MEM,
+                                   0 /* explicit_address */,
+                                   &device->ray_query_bo);
+      if (result != VK_SUCCESS)
+         goto fail_workaround_bo;
+   }
+
    result = anv_device_init_trivial_batch(device);
    if (result != VK_SUCCESS)
-      goto fail_workaround_bo;
+      goto fail_ray_query_bo;
+
+   if (device->info.ver >= 12 &&
+       device->vk.enabled_extensions.KHR_fragment_shading_rate) {
+      uint32_t n_cps_states = 3 * 3; /* All combinaisons of X by Y CP sizes (1, 2, 4) */
+
+      if (device->info.has_coarse_pixel_primitive_and_cb)
+         n_cps_states *= 5 * 5; /* 5 combiners by 2 operators */
+
+      n_cps_states += 1; /* Disable CPS */
+
+       /* Each of the combinaison must be replicated on all viewports */
+      n_cps_states *= MAX_VIEWPORTS;
+
+      device->cps_states =
+         anv_state_pool_alloc(&device->dynamic_state_pool,
+                              n_cps_states * CPS_STATE_length(&device->info) * 4,
+                              32);
+      if (device->cps_states.map == NULL)
+         goto fail_trivial_batch;
+
+      anv_genX(&device->info, init_cps_device_state)(device);
+   }
 
    /* Allocate a null surface state at surface state offset 0.  This makes
     * NULL descriptor handling trivial because we can just memset structures
@@ -3277,7 +3437,11 @@ VkResult anv_CreateDevice(
    anv_pipeline_cache_finish(&device->default_pipeline_cache);
  fail_trivial_batch_bo_and_scratch_pool:
    anv_scratch_pool_finish(device, &device->scratch_pool);
+ fail_trivial_batch:
    anv_device_release_bo(device, device->trivial_batch_bo);
+ fail_ray_query_bo:
+   if (device->ray_query_bo)
+      anv_device_release_bo(device, device->ray_query_bo);
  fail_workaround_bo:
    anv_device_release_bo(device, device->workaround_bo);
  fail_surface_aux_map_pool:
@@ -3352,6 +3516,7 @@ void anv_DestroyDevice(
       anv_state_reserved_pool_finish(&device->custom_border_colors);
    anv_state_pool_free(&device->dynamic_state_pool, device->border_colors);
    anv_state_pool_free(&device->dynamic_state_pool, device->slice_hash);
+   anv_state_pool_free(&device->dynamic_state_pool, device->cps_states);
 #endif
 
    for (unsigned i = 0; i < ARRAY_SIZE(device->rt_scratch_bos); i++) {
@@ -3361,6 +3526,13 @@ void anv_DestroyDevice(
 
    anv_scratch_pool_finish(device, &device->scratch_pool);
 
+   if (device->vk.enabled_extensions.KHR_ray_query) {
+      for (unsigned i = 0; i < ARRAY_SIZE(device->ray_query_shadow_bos); i++) {
+         if (device->ray_query_shadow_bos[i] != NULL)
+            anv_device_release_bo(device, device->ray_query_shadow_bos[i]);
+      }
+      anv_device_release_bo(device, device->ray_query_bo);
+   }
    anv_device_release_bo(device, device->workaround_bo);
    anv_device_release_bo(device, device->trivial_batch_bo);
 
@@ -4651,14 +4823,45 @@ VkResult anv_GetPhysicalDeviceFragmentShadingRatesKHR(
    VkSampleCountFlags sample_counts =
       isl_device_get_sample_counts(&physical_device->isl_dev);
 
+   /* BSpec 47003: There are a number of restrictions on the sample count
+    * based off the coarse pixel size.
+    */
+   static const VkSampleCountFlags cp_size_sample_limits[] = {
+      [1]  = ISL_SAMPLE_COUNT_16_BIT | ISL_SAMPLE_COUNT_8_BIT |
+             ISL_SAMPLE_COUNT_4_BIT | ISL_SAMPLE_COUNT_2_BIT | ISL_SAMPLE_COUNT_1_BIT,
+      [2]  = ISL_SAMPLE_COUNT_4_BIT | ISL_SAMPLE_COUNT_2_BIT | ISL_SAMPLE_COUNT_1_BIT,
+      [4]  = ISL_SAMPLE_COUNT_4_BIT | ISL_SAMPLE_COUNT_2_BIT | ISL_SAMPLE_COUNT_1_BIT,
+      [8]  = ISL_SAMPLE_COUNT_2_BIT | ISL_SAMPLE_COUNT_1_BIT,
+      [16] = ISL_SAMPLE_COUNT_1_BIT,
+   };
+
    for (uint32_t x = 4; x >= 1; x /= 2) {
        for (uint32_t y = 4; y >= 1; y /= 2) {
-          /* For size {1, 1}, the sample count must be ~0 */
-          if (x == 1 && y == 1)
-             append_rate(~0, x, y);
-          else
-             append_rate(sample_counts, x, y);
-      }
+          if (physical_device->info.has_coarse_pixel_primitive_and_cb) {
+             /* BSpec 47003:
+              *   "CPsize 1x4 and 4x1 are not supported"
+              */
+             if ((x == 1 && y == 4) || (x == 4 && y == 1))
+                continue;
+
+             /* For size {1, 1}, the sample count must be ~0
+              *
+              * 4x2 is also a specially case.
+              */
+             if (x == 1 && y == 1)
+                append_rate(~0, x, y);
+             else if (x == 4 && y == 2)
+                append_rate(ISL_SAMPLE_COUNT_1_BIT, x, y);
+             else
+                append_rate(cp_size_sample_limits[x * y], x, y);
+          } else {
+             /* For size {1, 1}, the sample count must be ~0 */
+             if (x == 1 && y == 1)
+                append_rate(~0, x, y);
+             else
+                append_rate(sample_counts, x, y);
+          }
+       }
    }
 
 #undef append_rate

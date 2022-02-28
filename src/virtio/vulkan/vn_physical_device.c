@@ -25,6 +25,20 @@
                    offsetof(__typeof__(tbl), ext)) -                         \
     (tbl).extensions)
 
+#define stype_prefix(stype) (VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_##stype)
+#define VN_ADD_TO_PNEXT(physical_dev, ext, elem, s_type, head)               \
+   do {                                                                      \
+      if ((physical_dev)->renderer_extensions.ext) {                         \
+         (physical_dev)->elem.sType = stype_prefix(s_type);                  \
+         (physical_dev)->elem.pNext = (physical_dev)->head.pNext;            \
+         (physical_dev)->head.pNext = &(physical_dev)->elem;                 \
+      }                                                                      \
+   } while (0)
+#define VN_ADD_FEAT_TO_PNEXT(physical_dev, ext, feat_name, s_type)           \
+   VN_ADD_TO_PNEXT(physical_dev, ext, feat_name, s_type, features)
+#define VN_ADD_PROP_TO_PNEXT(physical_dev, ext, prop_name, s_type)           \
+   VN_ADD_TO_PNEXT(physical_dev, ext, prop_name, s_type, properties)
+
 static void
 vn_physical_device_init_features(struct vn_physical_device *physical_dev)
 {
@@ -145,14 +159,17 @@ vn_physical_device_init_features(struct vn_physical_device *physical_dev)
       local_feats.vulkan_memory_model.pNext = NULL;
    }
 
-   if (physical_dev->renderer_extensions.EXT_transform_feedback) {
-      physical_dev->transform_feedback_features.sType =
-         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT;
-      physical_dev->transform_feedback_features.pNext =
-         physical_dev->features.pNext;
-      physical_dev->features.pNext =
-         &physical_dev->transform_feedback_features;
-   }
+   VN_ADD_FEAT_TO_PNEXT(physical_dev, EXT_4444_formats,
+                        argb_4444_formats_features, 4444_FORMATS_FEATURES_EXT);
+   VN_ADD_FEAT_TO_PNEXT(physical_dev, EXT_transform_feedback,
+                        transform_feedback_features,
+                        TRANSFORM_FEEDBACK_FEATURES_EXT);
+   VN_ADD_FEAT_TO_PNEXT(physical_dev, EXT_extended_dynamic_state,
+                        extended_dynamic_state_features,
+                        EXTENDED_DYNAMIC_STATE_FEATURES_EXT);
+   VN_ADD_FEAT_TO_PNEXT(physical_dev, EXT_custom_border_color,
+                        custom_border_color_features,
+                        CUSTOM_BORDER_COLOR_FEATURES_EXT);
 
    vn_call_vkGetPhysicalDeviceFeatures2(
       instance, vn_physical_device_to_handle(physical_dev),
@@ -458,14 +475,12 @@ vn_physical_device_init_properties(struct vn_physical_device *physical_dev)
       local_props.timeline_semaphore.pNext = NULL;
    }
 
-   if (physical_dev->renderer_extensions.EXT_transform_feedback) {
-      physical_dev->transform_feedback_properties.sType =
-         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
-      physical_dev->transform_feedback_properties.pNext =
-         physical_dev->properties.pNext;
-      physical_dev->properties.pNext =
-         &physical_dev->transform_feedback_properties;
-   }
+   VN_ADD_PROP_TO_PNEXT(physical_dev, EXT_transform_feedback,
+                        transform_feedback_properties,
+                        TRANSFORM_FEEDBACK_PROPERTIES_EXT);
+   VN_ADD_PROP_TO_PNEXT(physical_dev, EXT_custom_border_color,
+                        custom_border_color_properties,
+                        CUSTOM_BORDER_COLOR_PROPERTIES_EXT);
 
    vn_call_vkGetPhysicalDeviceProperties2(
       instance, vn_physical_device_to_handle(physical_dev),
@@ -660,7 +675,7 @@ vn_physical_device_init_properties(struct vn_physical_device *physical_dev)
    } else {
       /* cap the advertised api version */
       uint32_t version = MIN3(props->apiVersion, VN_MAX_API_VERSION,
-                              instance->renderer_info.vk_xml_version);
+                              instance->renderer->info.vk_xml_version);
       if (VK_VERSION_PATCH(version) > VK_VERSION_PATCH(props->apiVersion)) {
          version = version - VK_VERSION_PATCH(version) +
                    VK_VERSION_PATCH(props->apiVersion);
@@ -736,7 +751,7 @@ vn_physical_device_init_memory_properties(
       instance, vn_physical_device_to_handle(physical_dev),
       &physical_dev->memory_properties);
 
-   if (!instance->renderer_info.has_cache_management) {
+   if (!instance->renderer->info.has_cache_management) {
       VkPhysicalDeviceMemoryProperties *props =
          &physical_dev->memory_properties.memoryProperties;
       const uint32_t host_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -772,7 +787,7 @@ vn_physical_device_init_external_memory(
     * the extension.
     */
 
-   if (!physical_dev->instance->renderer_info.has_dma_buf_import)
+   if (!physical_dev->instance->renderer->info.has_dma_buf_import)
       return;
 
    /* TODO We assume the renderer uses dma-bufs here.  This should be
@@ -861,7 +876,6 @@ vn_physical_device_get_native_extensions(
    struct vk_device_extension_table *exts)
 {
    const struct vn_instance *instance = physical_dev->instance;
-   const struct vn_renderer_info *renderer_info = &instance->renderer_info;
    const struct vk_device_extension_table *renderer_exts =
       &physical_dev->renderer_extensions;
 
@@ -869,7 +883,7 @@ vn_physical_device_get_native_extensions(
 
    /* see vn_physical_device_init_external_memory */
    const bool can_external_mem = renderer_exts->EXT_external_memory_dma_buf &&
-                                 renderer_info->has_dma_buf_import;
+                                 instance->renderer->info.has_dma_buf_import;
 
 #ifdef ANDROID
    if (can_external_mem && renderer_exts->EXT_image_drm_format_modifier &&
@@ -954,7 +968,11 @@ vn_physical_device_get_passthrough_extensions(
       .EXT_separate_stencil_usage = true,
       .EXT_shader_viewport_index_layer = true,
 
-   /* EXT */
+      /* promoted to VK_VERSION_1_3 */
+      .EXT_4444_formats = true,
+      .EXT_extended_dynamic_state = true,
+      /* EXT */
+      .EXT_custom_border_color = true,
 #ifndef ANDROID
       .EXT_image_drm_format_modifier = true,
 #endif
@@ -1048,14 +1066,14 @@ vn_physical_device_init_renderer_extensions(
             continue;
 
          /* check encoder support */
-         const uint32_t spec_version =
-            vn_info_extension_spec_version(props->extensionName);
-         if (!spec_version)
+         const struct vn_info_extension *enc_ext =
+            vn_info_extension_get(props->extensionName);
+         if (!enc_ext)
             continue;
 
          physical_dev->renderer_extensions.extensions[i] = true;
          physical_dev->extension_spec_versions[i] =
-            MIN2(exts[j].specVersion, spec_version);
+            MIN2(exts[j].specVersion, enc_ext->spec_version);
 
          break;
       }
@@ -1091,7 +1109,7 @@ vn_physical_device_init_renderer_version(
    /* device version for internal use is capped */
    physical_dev->renderer_version =
       MIN3(props.apiVersion, instance->renderer_api_version,
-           instance->renderer_info.vk_xml_version);
+           instance->renderer->info.vk_xml_version);
 
    return VK_SUCCESS;
 }
@@ -1127,6 +1145,10 @@ vn_physical_device_init(struct vn_physical_device *physical_dev)
    if (result != VK_SUCCESS)
       goto fail;
 
+   simple_mtx_init(&physical_dev->format_update_mutex, mtx_plain);
+   util_sparse_array_init(&physical_dev->format_properties,
+                          sizeof(struct vn_format_properties_entry), 64);
+
    return VK_SUCCESS;
 
 fail:
@@ -1140,6 +1162,9 @@ vn_physical_device_fini(struct vn_physical_device *physical_dev)
 {
    struct vn_instance *instance = physical_dev->instance;
    const VkAllocationCallbacks *alloc = &instance->base.base.alloc;
+
+   simple_mtx_destroy(&physical_dev->format_update_mutex);
+   util_sparse_array_finish(&physical_dev->format_properties);
 
    vn_wsi_fini(physical_dev);
    vk_free(alloc, physical_dev->extension_spec_versions);
@@ -1535,6 +1560,27 @@ vn_GetPhysicalDeviceMemoryProperties(
    *pMemoryProperties = physical_dev->memory_properties.memoryProperties;
 }
 
+static struct vn_format_properties_entry *
+vn_physical_device_get_format_properties(
+   struct vn_physical_device *physical_dev, VkFormat format)
+{
+   return util_sparse_array_get(&physical_dev->format_properties, format);
+}
+
+static void
+vn_physical_device_add_format_properties(
+   struct vn_physical_device *physical_dev,
+   struct vn_format_properties_entry *entry,
+   const VkFormatProperties *props)
+{
+   simple_mtx_lock(&physical_dev->format_update_mutex);
+   if (!entry->valid) {
+      entry->properties = *props;
+      entry->valid = true;
+   }
+   simple_mtx_unlock(&physical_dev->format_update_mutex);
+}
+
 void
 vn_GetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice,
                                      VkFormat format,
@@ -1542,10 +1588,19 @@ vn_GetPhysicalDeviceFormatProperties(VkPhysicalDevice physicalDevice,
 {
    struct vn_physical_device *physical_dev =
       vn_physical_device_from_handle(physicalDevice);
+   struct vn_format_properties_entry *entry =
+      vn_physical_device_get_format_properties(physical_dev, format);
 
-   /* TODO query all formats during init */
+   if (entry->valid) {
+      *pFormatProperties = entry->properties;
+      return;
+   }
+
    vn_call_vkGetPhysicalDeviceFormatProperties(
       physical_dev->instance, physicalDevice, format, pFormatProperties);
+
+   vn_physical_device_add_format_properties(physical_dev, entry,
+                                            pFormatProperties);
 }
 
 VkResult
@@ -1628,7 +1683,10 @@ vn_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       VkPhysicalDeviceBufferDeviceAddressFeatures *buffer_device_address;
       VkPhysicalDeviceVulkanMemoryModelFeatures *vulkan_memory_model;
 
+      VkPhysicalDevice4444FormatsFeaturesEXT *argb_4444_formats;
       VkPhysicalDeviceTransformFeedbackFeaturesEXT *transform_feedback;
+      VkPhysicalDeviceExtendedDynamicStateFeaturesEXT *extended_dynamic_state;
+      VkPhysicalDeviceCustomBorderColorFeaturesEXT *custom_border_color;
    } u;
 
    u.pnext = (VkBaseOutStructure *)pFeatures;
@@ -1785,10 +1843,23 @@ vn_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          u.vulkan_memory_model->vulkanMemoryModelAvailabilityVisibilityChains =
             vk12_feats->vulkanMemoryModelAvailabilityVisibilityChains;
          break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT:
+         memcpy(u.argb_4444_formats, &physical_dev->argb_4444_formats_features,
+                sizeof(physical_dev->argb_4444_formats_features));
+         break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT:
          memcpy(u.transform_feedback,
                 &physical_dev->transform_feedback_features,
                 sizeof(physical_dev->transform_feedback_features));
+         break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT:
+         u.extended_dynamic_state->extendedDynamicState =
+            physical_dev->extended_dynamic_state_features.extendedDynamicState;
+         break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT:
+         memcpy(u.custom_border_color,
+                &physical_dev->custom_border_color_features,
+                sizeof(physical_dev->custom_border_color_features));
          break;
       default:
          break;
@@ -1830,6 +1901,7 @@ vn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
 
       VkPhysicalDevicePCIBusInfoPropertiesEXT *pci_bus_info;
       VkPhysicalDeviceTransformFeedbackPropertiesEXT *transform_feedback;
+      VkPhysicalDeviceCustomBorderColorPropertiesEXT *custom_border_color;
       VkPhysicalDevicePresentationPropertiesANDROID *presentation_properties;
    } u;
 
@@ -2011,21 +2083,26 @@ vn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PCI_BUS_INFO_PROPERTIES_EXT:
          /* this is used by WSI */
-         if (physical_dev->instance->renderer_info.pci.has_bus_info) {
+         if (physical_dev->instance->renderer->info.pci.has_bus_info) {
             u.pci_bus_info->pciDomain =
-               physical_dev->instance->renderer_info.pci.domain;
+               physical_dev->instance->renderer->info.pci.domain;
             u.pci_bus_info->pciBus =
-               physical_dev->instance->renderer_info.pci.bus;
+               physical_dev->instance->renderer->info.pci.bus;
             u.pci_bus_info->pciDevice =
-               physical_dev->instance->renderer_info.pci.device;
+               physical_dev->instance->renderer->info.pci.device;
             u.pci_bus_info->pciFunction =
-               physical_dev->instance->renderer_info.pci.function;
+               physical_dev->instance->renderer->info.pci.function;
          }
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT:
          memcpy(u.transform_feedback,
                 &physical_dev->transform_feedback_properties,
                 sizeof(physical_dev->transform_feedback_properties));
+         break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT:
+         memcpy(u.custom_border_color,
+                &physical_dev->custom_border_color_properties,
+                sizeof(physical_dev->custom_border_color_properties));
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID:
          u.presentation_properties->sharedImage = VK_FALSE;
@@ -2076,9 +2153,22 @@ vn_GetPhysicalDeviceFormatProperties2(VkPhysicalDevice physicalDevice,
    struct vn_physical_device *physical_dev =
       vn_physical_device_from_handle(physicalDevice);
 
-   /* TODO query all formats during init */
+   struct vn_format_properties_entry *entry = NULL;
+   if (!pFormatProperties->pNext) {
+      entry = vn_physical_device_get_format_properties(physical_dev, format);
+      if (entry->valid) {
+         pFormatProperties->formatProperties = entry->properties;
+         return;
+      }
+   }
+
    vn_call_vkGetPhysicalDeviceFormatProperties2(
       physical_dev->instance, physicalDevice, format, pFormatProperties);
+
+   if (entry) {
+      vn_physical_device_add_format_properties(
+         physical_dev, entry, &pFormatProperties->formatProperties);
+   }
 }
 
 struct vn_physical_device_image_format_info {
@@ -2099,6 +2189,7 @@ vn_physical_device_fix_image_format_info(
    VkBaseOutStructure *dst = (void *)&local_info->format;
 
    bool is_ahb = false;
+   bool has_format_list = false;
    /* we should generate deep copy functions... */
    vk_foreach_struct_const(src, info->pNext) {
       void *pnext = NULL;
@@ -2113,6 +2204,7 @@ vn_physical_device_fix_image_format_info(
          pnext = &local_info->external;
          break;
       case VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO:
+         has_format_list = true;
          memcpy(&local_info->list, src, sizeof(local_info->list));
          pnext = &local_info->list;
          break;
@@ -2145,6 +2237,35 @@ vn_physical_device_fix_image_format_info(
 
       dst->pNext = (void *)&local_info->modifier;
       dst = dst->pNext;
+
+      if ((info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
+          !local_info->list.viewFormatCount) {
+         /* 12.3. Images
+          *
+          * If tiling is VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT and flags
+          * contains VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, then the pNext chain
+          * must include a VkImageFormatListCreateInfo structure with non-zero
+          * viewFormatCount.
+          */
+         VkImageFormatListCreateInfo *list = &local_info->list;
+         uint32_t vcount = 0;
+         const VkFormat *vformats =
+            vn_android_format_to_view_formats(info->format, &vcount);
+         if (!vformats) {
+            /* local_info persists through the image format query call */
+            vformats = &local_info->format.format;
+            vcount = 1;
+         }
+
+         list->sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+         list->viewFormatCount = vcount;
+         list->pViewFormats = vformats;
+
+         if (!has_format_list) {
+            dst->pNext = (void *)list;
+            dst = dst->pNext;
+         }
+      }
    }
 
    dst->pNext = NULL;

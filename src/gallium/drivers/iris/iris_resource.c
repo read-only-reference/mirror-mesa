@@ -401,8 +401,6 @@ iris_resource_disable_aux(struct iris_resource *res)
    free(res->aux.state);
 
    res->aux.usage = ISL_AUX_USAGE_NONE;
-   res->aux.possible_usages = 1 << ISL_AUX_USAGE_NONE;
-   res->aux.sampler_usages = 1 << ISL_AUX_USAGE_NONE;
    res->aux.surf.size_B = 0;
    res->aux.bo = NULL;
    res->aux.extra_aux.surf.size_B = 0;
@@ -486,9 +484,6 @@ iris_alloc_resource(struct pipe_screen *pscreen,
    pipe_reference_init(&res->base.b.reference, 1);
    threaded_resource_init(&res->base.b, false, 0);
 
-   res->aux.possible_usages = 1 << ISL_AUX_USAGE_NONE;
-   res->aux.sampler_usages = 1 << ISL_AUX_USAGE_NONE;
-
    if (templ->target == PIPE_BUFFER)
       util_range_init(&res->valid_buffer_range);
 
@@ -554,7 +549,7 @@ iris_get_aux_clear_color_state_size(struct iris_screen *screen,
     * sampler via render surface state objects.
     */
    if (isl_surf_usage_is_depth(res->surf.usage) &&
-       res->aux.sampler_usages == 1 << ISL_AUX_USAGE_NONE)
+       !iris_sample_with_depth_aux(&screen->devinfo, res))
       return 0;
 
    return screen->isl_dev.ss.clear_color_state_size;
@@ -772,43 +767,38 @@ iris_resource_configure_aux(struct iris_screen *screen,
       assert(!res->mod_info);
       assert(!has_hiz);
       if (has_ccs) {
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_MCS_CCS;
+         res->aux.usage = ISL_AUX_USAGE_MCS_CCS;
       } else {
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_MCS;
+         res->aux.usage = ISL_AUX_USAGE_MCS;
       }
    } else if (has_hiz) {
       assert(!res->mod_info);
       assert(!has_mcs);
       if (!has_ccs) {
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_HIZ;
+         res->aux.usage = ISL_AUX_USAGE_HIZ;
       } else if (res->surf.samples == 1 &&
                  (res->surf.usage & ISL_SURF_USAGE_TEXTURE_BIT)) {
          /* If this resource is single-sampled and will be used as a texture,
           * put the HiZ surface in write-through mode so that we can sample
           * from it.
           */
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_HIZ_CCS_WT;
+         res->aux.usage = ISL_AUX_USAGE_HIZ_CCS_WT;
       } else {
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_HIZ_CCS;
+         res->aux.usage = ISL_AUX_USAGE_HIZ_CCS;
       }
    } else if (has_ccs) {
       if (res->mod_info) {
-         res->aux.possible_usages |= 1 << res->mod_info->aux_usage;
+         res->aux.usage = res->mod_info->aux_usage;
       } else if (isl_surf_usage_is_stencil(res->surf.usage)) {
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_STC_CCS;
+         res->aux.usage = ISL_AUX_USAGE_STC_CCS;
       } else if (want_ccs_e_for_format(devinfo, res->surf.format)) {
-         res->aux.possible_usages |= devinfo->ver < 12 ?
-            1 << ISL_AUX_USAGE_CCS_E : 1 << ISL_AUX_USAGE_GFX12_CCS_E;
+         res->aux.usage = devinfo->ver < 12 ?
+            ISL_AUX_USAGE_CCS_E : ISL_AUX_USAGE_GFX12_CCS_E;
       } else {
          assert(isl_format_supports_ccs_d(devinfo, res->surf.format));
-         res->aux.possible_usages |= 1 << ISL_AUX_USAGE_CCS_D;
+         res->aux.usage = ISL_AUX_USAGE_CCS_D;
       }
    }
-
-   res->aux.usage = util_last_bit(res->aux.possible_usages) - 1;
-
-   if (!has_hiz || iris_sample_with_depth_aux(devinfo, res))
-      res->aux.sampler_usages = res->aux.possible_usages;
 
    enum isl_aux_state initial_state;
    switch (res->aux.usage) {
@@ -1335,6 +1325,7 @@ iris_resource_from_memobj(struct pipe_screen *pscreen,
    res->bo = memobj->bo;
    res->offset = offset;
    res->external_format = memobj->format;
+   res->internal_format = templ->format;
 
    iris_bo_reference(memobj->bo);
 
@@ -1404,9 +1395,9 @@ iris_flush_resource(struct pipe_context *ctx, struct pipe_resource *resource)
        * sure to get rid of any compression that a consumer wouldn't know how
        * to handle.
        */
-      for (int i = 0; i < IRIS_BATCH_COUNT; i++) {
-         if (iris_batch_references(&ice->batches[i], res->bo))
-            iris_batch_flush(&ice->batches[i]);
+      iris_foreach_batch(ice, batch) {
+         if (iris_batch_references(batch, res->bo))
+            iris_batch_flush(batch);
       }
 
       iris_resource_disable_aux(res);
@@ -1484,8 +1475,6 @@ iris_reallocate_resource_inplace(struct iris_context *ice,
    old_res->aux.clear_color_bo = new_res->aux.clear_color_bo;
    old_res->aux.clear_color_offset = new_res->aux.clear_color_offset;
    old_res->aux.usage = new_res->aux.usage;
-   old_res->aux.possible_usages = new_res->aux.possible_usages;
-   old_res->aux.sampler_usages = new_res->aux.sampler_usages;
 
    if (new_res->aux.state) {
       assert(old_res->aux.state);
@@ -1741,8 +1730,8 @@ resource_is_busy(struct iris_context *ice,
 {
    bool busy = iris_bo_busy(res->bo);
 
-   for (int i = 0; i < IRIS_BATCH_COUNT; i++)
-      busy |= iris_batch_references(&ice->batches[i], res->bo);
+   iris_foreach_batch(ice, batch)
+      busy |= iris_batch_references(batch, res->bo);
 
    return busy;
 }
@@ -2339,9 +2328,9 @@ iris_transfer_map(struct pipe_context *ctx,
       }
 
       if (!(usage & PIPE_MAP_UNSYNCHRONIZED)) {
-         for (int i = 0; i < IRIS_BATCH_COUNT; i++) {
-            if (iris_batch_references(&ice->batches[i], res->bo))
-               iris_batch_flush(&ice->batches[i]);
+         iris_foreach_batch(ice, batch) {
+            if (iris_batch_references(batch, res->bo))
+               iris_batch_flush(batch);
          }
       }
 
@@ -2384,8 +2373,7 @@ iris_transfer_flush_region(struct pipe_context *ctx,
    }
 
    if (history_flush & ~PIPE_CONTROL_CS_STALL) {
-      for (int i = 0; i < IRIS_BATCH_COUNT; i++) {
-         struct iris_batch *batch = &ice->batches[i];
+      iris_foreach_batch(ice, batch) {
          if (batch->contains_draw || batch->cache.render->entries) {
             iris_batch_maybe_flush(batch, 24);
             iris_emit_pipe_control_flush(batch,
@@ -2474,9 +2462,9 @@ iris_texture_subdata(struct pipe_context *ctx,
 
    iris_resource_access_raw(ice, res, level, box->z, box->depth, true);
 
-   for (int i = 0; i < IRIS_BATCH_COUNT; i++) {
-      if (iris_batch_references(&ice->batches[i], res->bo))
-         iris_batch_flush(&ice->batches[i]);
+   iris_foreach_batch(ice, batch) {
+      if (iris_batch_references(batch, res->bo))
+         iris_batch_flush(batch);
    }
 
    uint8_t *dst = iris_bo_map(&ice->dbg, res->bo, MAP_WRITE | MAP_RAW);

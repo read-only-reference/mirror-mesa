@@ -768,7 +768,8 @@ st_link_nir(struct gl_context *ctx,
       NIR_PASS_V(nir, nir_lower_system_values);
       NIR_PASS_V(nir, nir_lower_compute_system_values, NULL);
 
-      NIR_PASS_V(nir, nir_lower_clip_cull_distance_arrays);
+      if (!st->screen->get_param(st->screen, PIPE_CAP_CULL_DISTANCE_NOCOMBINE))
+         NIR_PASS_V(nir, nir_lower_clip_cull_distance_arrays);
 
       st_shader_gather_info(nir, shader->Program);
       if (shader->Stage == MESA_SHADER_VERTEX) {
@@ -854,10 +855,6 @@ st_link_nir(struct gl_context *ctx,
 
       st_release_variants(st, prog);
       st_finalize_program(st, prog);
-
-      /* The GLSL IR won't be needed anymore. */
-      ralloc_free(shader->ir);
-      shader->ir = NULL;
    }
 
    return true;

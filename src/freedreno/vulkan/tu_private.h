@@ -51,6 +51,7 @@
 #include "util/list.h"
 #include "util/log.h"
 #include "util/macros.h"
+#include "util/sparse_array.h"
 #include "util/u_atomic.h"
 #include "util/u_dynarray.h"
 #include "util/xmlconfig.h"
@@ -97,6 +98,7 @@ typedef uint32_t xcb_window_t;
 #include "vk_format.h"
 #include "vk_image.h"
 #include "vk_command_buffer.h"
+#include "vk_command_pool.h"
 #include "vk_queue.h"
 #include "vk_object.h"
 #include "vk_sync.h"
@@ -355,6 +357,13 @@ struct tu_bo
    uint64_t size;
    uint64_t iova;
    void *map;
+
+#ifndef TU_USE_KGSL
+   int32_t refcnt;
+   uint32_t bo_list_idx;
+#endif
+
+   bool implicit_sync : 1;
 };
 
 enum global_shader {
@@ -399,7 +408,7 @@ struct tu6_global
    struct bcolor_entry bcolor_builtin[TU_BORDER_COLOR_BUILTIN], bcolor[];
 };
 #define gb_offset(member) offsetof(struct tu6_global, member)
-#define global_iova(cmd, member) ((cmd)->device->global_bo.iova + gb_offset(member))
+#define global_iova(cmd, member) ((cmd)->device->global_bo->iova + gb_offset(member))
 
 /* extra space in vsc draw/prim streams */
 #define VSC_PAD 0x40
@@ -426,19 +435,21 @@ struct tu_device
     * should be impossible to go beyond 48 bits.
     */
    struct {
-      struct tu_bo bo;
+      struct tu_bo *bo;
       mtx_t construct_mtx;
       bool initialized;
    } scratch_bos[48 - MIN_SCRATCH_BO_SIZE_LOG2];
 
-   struct tu_bo global_bo;
+   struct tu_bo *global_bo;
+
+   uint32_t implicit_sync_bo_count;
 
    /* the blob seems to always use 8K factor and 128K param sizes, copy them */
 #define TU_TESS_FACTOR_SIZE (8 * 1024)
 #define TU_TESS_PARAM_SIZE (128 * 1024)
 #define TU_TESS_BO_SIZE (TU_TESS_FACTOR_SIZE + TU_TESS_PARAM_SIZE)
    /* Lazily allocated, protected by the device mutex. */
-   struct tu_bo tess_bo;
+   struct tu_bo *tess_bo;
 
    struct ir3_shader_variant *global_shaders[GLOBAL_SH_COUNT];
    uint64_t global_shader_va[GLOBAL_SH_COUNT];
@@ -451,9 +462,27 @@ struct tu_device
    /* bo list for submits: */
    struct drm_msm_gem_submit_bo *bo_list;
    /* map bo handles to bo list index: */
-   uint32_t *bo_idx;
-   uint32_t bo_count, bo_list_size, bo_idx_size;
+   uint32_t bo_count, bo_list_size;
    mtx_t bo_mutex;
+   /* protects imported BOs creation/freeing */
+   struct u_rwlock dma_bo_lock;
+
+   /* This array holds all our 'struct tu_bo' allocations. We use this
+    * so we can add a refcount to our BOs and check if a particular BO
+    * was already allocated in this device using its GEM handle. This is
+    * necessary to properly manage BO imports, because the kernel doesn't
+    * refcount the underlying BO memory.
+    *
+    * Specifically, when self-importing (i.e. importing a BO into the same
+    * device that created it), the kernel will give us the same BO handle
+    * for both BOs and we must only free it once when  both references are
+    * freed. Otherwise, if we are not self-importing, we get two different BO
+    * handles, and we want to free each one individually.
+    *
+    * The BOs in this map all have a refcnt with the reference counter and
+    * only self-imported BOs will ever have a refcnt > 1.
+    */
+   struct util_sparse_array bo_map;
 
    /* Command streams to set pass index to a scratch reg */
    struct tu_cs *perfcntrs_pass_cs;
@@ -505,11 +534,11 @@ enum tu_bo_alloc_flags
 };
 
 VkResult
-tu_bo_init_new(struct tu_device *dev, struct tu_bo *bo, uint64_t size,
+tu_bo_init_new(struct tu_device *dev, struct tu_bo **bo, uint64_t size,
                enum tu_bo_alloc_flags flags);
 VkResult
 tu_bo_init_dmabuf(struct tu_device *dev,
-                  struct tu_bo *bo,
+                  struct tu_bo **bo,
                   uint64_t size,
                   int fd);
 int
@@ -518,6 +547,12 @@ void
 tu_bo_finish(struct tu_device *dev, struct tu_bo *bo);
 VkResult
 tu_bo_map(struct tu_device *dev, struct tu_bo *bo);
+
+static inline struct tu_bo *
+tu_device_lookup_bo(struct tu_device *device, uint32_t handle)
+{
+   return (struct tu_bo *) util_sparse_array_get(&device->bo_map, handle);
+}
 
 /* Get a scratch bo for use inside a command buffer. This will always return
  * the same bo given the same size or similar sizes, so only one scratch bo
@@ -580,8 +615,9 @@ enum tu_draw_state_group_id
    TU_DRAW_STATE_VS_PARAMS,
    TU_DRAW_STATE_INPUT_ATTACHMENTS_GMEM,
    TU_DRAW_STATE_INPUT_ATTACHMENTS_SYSMEM,
-   TU_DRAW_STATE_LRZ,
-   TU_DRAW_STATE_DEPTH_PLANE,
+   TU_DRAW_STATE_LRZ_AND_DEPTH_PLANE,
+   TU_DRAW_STATE_PRIM_MODE_GMEM,
+   TU_DRAW_STATE_PRIM_MODE_SYSMEM,
 
    /* dynamic state related draw states */
    TU_DRAW_STATE_DYNAMIC,
@@ -649,7 +685,7 @@ struct tu_device_memory
 {
    struct vk_object_base base;
 
-   struct tu_bo bo;
+   struct tu_bo *bo;
 };
 
 struct tu_descriptor_range
@@ -686,7 +722,7 @@ struct tu_descriptor_pool
 {
    struct vk_object_base base;
 
-   struct tu_bo bo;
+   struct tu_bo *bo;
    uint64_t current_offset;
    uint64_t size;
 
@@ -748,14 +784,8 @@ struct tu_buffer
    VkBufferCreateFlags flags;
 
    struct tu_bo *bo;
-   VkDeviceSize bo_offset;
+   uint64_t iova;
 };
-
-static inline uint64_t
-tu_buffer_iova(struct tu_buffer *buffer)
-{
-   return buffer->bo->iova + buffer->bo_offset;
-}
 
 const char *
 tu_get_debug_option_name(int id);
@@ -983,7 +1013,6 @@ struct tu_lrz_state
    /* Depth/Stencil image currently on use to do LRZ */
    struct tu_image *image;
    bool valid : 1;
-   struct tu_draw_state state;
    enum tu_lrz_direction prev_direction;
 };
 
@@ -1098,19 +1127,17 @@ struct tu_cmd_state
 
    struct tu_lrz_state lrz;
 
-   struct tu_draw_state depth_plane_state;
+   struct tu_draw_state lrz_and_depth_plane_state;
 
    struct tu_vs_params last_vs_params;
 };
 
 struct tu_cmd_pool
 {
-   struct vk_object_base base;
+   struct vk_command_pool vk;
 
-   VkAllocationCallbacks alloc;
    struct list_head cmd_buffers;
    struct list_head free_cmd_buffers;
-   uint32_t queue_family_index;
 };
 
 enum tu_cmd_buffer_status
@@ -1138,7 +1165,6 @@ struct tu_cmd_buffer
    struct list_head renderpass_autotune_results;
 
    VkCommandBufferUsageFlags usage_flags;
-   VkCommandBufferLevel level;
    enum tu_cmd_buffer_status status;
 
    struct tu_cmd_state state;
@@ -1198,7 +1224,7 @@ tu_get_descriptors_state(struct tu_cmd_buffer *cmd_buffer,
 struct tu_event
 {
    struct vk_object_base base;
-   struct tu_bo bo;
+   struct tu_bo *bo;
 };
 
 struct tu_push_constant_range
@@ -1265,7 +1291,7 @@ struct tu_pipeline
    struct tu_cs cs;
 
    /* Separate BO for private memory since it should GPU writable */
-   struct tu_bo pvtmem_bo;
+   struct tu_bo *pvtmem_bo;
 
    struct tu_pipeline_layout *layout;
 
@@ -1293,6 +1319,7 @@ struct tu_pipeline
 
    /* draw states for the pipeline */
    struct tu_draw_state load_state, rast_state, blend_state;
+   struct tu_draw_state prim_order_state_sysmem, prim_order_state_gmem;
 
    /* for vertex buffers state */
    uint32_t num_vbs;
@@ -1334,6 +1361,10 @@ struct tu_pipeline
    bool provoking_vertex_last;
 
    struct tu_lrz_pipeline lrz;
+
+   /* In other words - framebuffer fetch support */
+   bool raster_order_attachment_access;
+   bool subpass_feedback_loop_ds;
 
    /* Base drawcall cost for sysmem vs gmem autotuner */
    uint8_t drawcall_base_cost;
@@ -1489,7 +1520,7 @@ struct tu_image
 
    /* Set when bound */
    struct tu_bo *bo;
-   VkDeviceSize bo_offset;
+   uint64_t iova;
 
    uint32_t lrz_height;
    uint32_t lrz_pitch;
@@ -1669,11 +1700,14 @@ struct tu_subpass
    uint32_t resolve_count;
    bool resolve_depth_stencil;
 
-   /* True if there is any feedback loop at all. */
-   bool feedback;
+   bool feedback_loop_color;
+   bool feedback_loop_ds;
 
    /* True if we must invalidate UCHE thanks to a feedback loop. */
    bool feedback_invalidate;
+
+   /* In other words - framebuffer fetch support */
+   bool raster_order_attachment_access;
 
    struct tu_subpass_attachment *input_attachments;
    struct tu_subpass_attachment *color_attachments;
@@ -1737,7 +1771,7 @@ struct tu_query_pool
    uint32_t stride;
    uint64_t size;
    uint32_t pipeline_statistics;
-   struct tu_bo bo;
+   struct tu_bo *bo;
 
    /* For performance query */
    const struct fd_perfcntr_group *perf_group;
@@ -1853,7 +1887,7 @@ VK_DEFINE_HANDLE_CASTS(tu_physical_device, vk.base, VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
-VK_DEFINE_NONDISP_HANDLE_CASTS(tu_cmd_pool, base, VkCommandPool,
+VK_DEFINE_NONDISP_HANDLE_CASTS(tu_cmd_pool, vk.base, VkCommandPool,
                                VK_OBJECT_TYPE_COMMAND_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_buffer, base, VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)

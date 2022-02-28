@@ -87,6 +87,7 @@ ir3_optimize_loop(struct ir3_compiler *compiler, nir_shader *s)
       progress |= OPT(s, nir_lower_phis_to_scalar, false);
 
       progress |= OPT(s, nir_copy_prop);
+      progress |= OPT(s, nir_opt_deref);
       progress |= OPT(s, nir_opt_dce);
       progress |= OPT(s, nir_opt_cse);
       static int gcm = -1;
@@ -123,7 +124,7 @@ ir3_optimize_loop(struct ir3_compiler *compiler, nir_shader *s)
           */
          .uniform_max = (1 << 9) - 1,
 
-         .shared_max = ~0,
+         .shared_max = (1 << 13) - 1,
 
          .buffer_max = ~0,
       };
@@ -458,6 +459,8 @@ ir3_nir_post_finalize(struct ir3_shader *shader)
              .lower_vote_eq = true,
              .lower_subgroup_masks = true,
              .lower_read_invocation_to_cond = true,
+             .lower_shuffle = true,
+             .lower_relative_shuffle = true,
           });
    }
 

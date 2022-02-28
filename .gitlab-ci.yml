@@ -17,6 +17,7 @@ variables:
   # Individual CI farm status, set to "offline" to disable jobs
   # running on a particular CI farm (ie. for outages, etc):
   FD_FARM: "online"
+  COLLABORA_FARM: "online"
 
 default:
   before_script:
@@ -93,29 +94,26 @@ stages:
 # --------------------------------
 .rules-anchors:
   rules:
-    # For Marge Bot
-    - if: &is-for-marge '$GITLAB_USER_LOGIN == "marge-bot"'
-      when: never
-    # Forked project branch
-    - if: &is-forked-branch '$CI_PROJECT_NAMESPACE != "mesa" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_COMMIT_REF_NAME'
+    # Pipeline for forked project branch
+    - if: &is-forked-branch '$CI_COMMIT_BRANCH && $CI_PROJECT_NAMESPACE != "mesa"'
       when: manual
     # Forked project branch / pre-merge pipeline not for Marge bot
-    - if: &is-forked-branch-or-pre-merge-not-for-marge '$CI_PROJECT_NAMESPACE != "mesa" || ($GITLAB_USER_LOGIN != "marge-bot" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == $CI_COMMIT_REF_NAME)'
+    - if: &is-forked-branch-or-pre-merge-not-for-marge '$CI_PROJECT_NAMESPACE != "mesa" || ($GITLAB_USER_LOGIN != "marge-bot" && $CI_PIPELINE_SOURCE == "merge_request_event")'
       when: manual
     # Pipeline runs for the main branch of the upstream Mesa project
-    - if: &is-mesa-main '$CI_PROJECT_NAMESPACE == "mesa" && $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_DEFAULT_BRANCH'
+    - if: &is-mesa-main '$CI_PROJECT_NAMESPACE == "mesa" && $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH && $CI_COMMIT_BRANCH'
       when: always
     # Post-merge pipeline
-    - if: &is-post-merge '$CI_PROJECT_NAMESPACE == "mesa" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_COMMIT_REF_NAME'
+    - if: &is-post-merge '$CI_PROJECT_NAMESPACE == "mesa" && $CI_COMMIT_BRANCH'
       when: on_success
     # Post-merge pipeline, not for Marge Bot
-    - if: &is-post-merge-not-for-marge '$CI_PROJECT_NAMESPACE == "mesa" && $GITLAB_USER_LOGIN != "marge-bot" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != $CI_COMMIT_REF_NAME'
+    - if: &is-post-merge-not-for-marge '$CI_PROJECT_NAMESPACE == "mesa" && $GITLAB_USER_LOGIN != "marge-bot" && $CI_COMMIT_BRANCH'
       when: on_success
     # Pre-merge pipeline
-    - if: &is-pre-merge '$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == $CI_COMMIT_REF_NAME'
+    - if: &is-pre-merge '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
     # Pre-merge pipeline for Marge Bot
-    - if: &is-pre-merge-for-marge '$GITLAB_USER_LOGIN == "marge-bot" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == $CI_COMMIT_REF_NAME'
+    - if: &is-pre-merge-for-marge '$GITLAB_USER_LOGIN == "marge-bot" && $CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
 
 
@@ -589,7 +587,7 @@ debian/arm_test:
   script:
     - .\.gitlab-ci\windows\mesa_container.ps1 $CI_REGISTRY $CI_REGISTRY_USER $CI_REGISTRY_PASSWORD $MESA_IMAGE $MESA_UPSTREAM_IMAGE ${DOCKERFILE} ${MESA_BASE_IMAGE}
 
-windows_build_vs2019:
+.windows_build_vs2019:
   inherit:
     default: false
   extends:
@@ -600,7 +598,7 @@ windows_build_vs2019:
     DOCKERFILE: Dockerfile_build
   timeout: 2h 30m # LLVM takes ages
 
-windows_test_vs2019:
+.windows_test_vs2019:
   inherit:
     default: false
   extends:
@@ -618,7 +616,7 @@ windows_test_vs2019:
   script:
     - .\.gitlab-ci\windows\mesa_container.ps1 $CI_REGISTRY $CI_REGISTRY_USER $CI_REGISTRY_PASSWORD $MESA_IMAGE $MESA_UPSTREAM_IMAGE Dockerfile_test ${MESA_BASE_IMAGE}
   needs:
-    - windows_build_vs2019
+    - .windows_build_vs2019
 
 .use-windows_build_vs2019:
   inherit:
@@ -629,7 +627,7 @@ windows_test_vs2019:
     MESA_IMAGE_PATH: *windows_build_image_path
     MESA_IMAGE_TAG: *windows_build_image_tag
   needs:
-    - windows_build_vs2019
+    - .windows_build_vs2019
 
 .use-windows_test_vs2019:
   inherit:
@@ -711,9 +709,13 @@ sanity:
     - !reference [default, before_script]
     - export PATH="/usr/lib/ccache:$PATH"
     - export CCACHE_BASEDIR="$PWD"
+    - echo -e "\e[0Ksection_start:$(date +%s):ccache_before[collapsed=true]\r\e[0Kccache stats before build"
     - ccache --show-stats
+    - echo -e "\e[0Ksection_end:$(date +%s):ccache_before\r\e[0K"
   after_script:
+    - echo -e "\e[0Ksection_start:$(date +%s):ccache_after[collapsed=true]\r\e[0Kccache stats after build"
     - ccache --show-stats
+    - echo -e "\e[0Ksection_end:$(date +%s):ccache_after\r\e[0K"
     - !reference [default, after_script]
 
 .build-windows:
@@ -759,8 +761,12 @@ debian-testing:
       -D valgrind=false
     MINIO_ARTIFACT_NAME: mesa-amd64
   script:
+    - .gitlab-ci/lava/lava-pytest.sh
     - .gitlab-ci/meson/build.sh
     - .gitlab-ci/prepare-artifacts.sh
+  artifacts:
+    reports:
+      junit: artifacts/ci_scripts_report.xml
 
 debian-testing-asan:
   extends:
@@ -1079,7 +1085,7 @@ debian-clang:
     CC: clang
     CXX: clang++
 
-windows-vs2019:
+.windows-vs2019:
   extends:
     - .build-windows
     - .use-windows_build_vs2019
@@ -1207,7 +1213,9 @@ debian-mingw32-x86_64:
     # Note: Build dir (and thus install) may be dirty due to GIT_STRATEGY
     - rm -rf install
     - tar -xf artifacts/install.tar
+    - echo -e "\e[0Ksection_start:$(date +%s):ldd_section[collapsed=true]\r\e[0KChecking ldd on driver build"
     - LD_LIBRARY_PATH=install/lib find install/lib -name "*.so" -print -exec ldd {} \;
+    - echo -e "\e[0Ksection_end:$(date +%s):ldd_section\r\e[0K"
   artifacts:
     when: always
     name: "mesa_${CI_JOB_NAME}"

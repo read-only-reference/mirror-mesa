@@ -355,6 +355,28 @@ bi_is_word_equiv(bi_index left, bi_index right)
         return bi_is_equiv(left, right) && left.offset == right.offset;
 }
 
+/* An even stronger equivalence that checks if indices correspond to the
+ * right value when evaluated
+ */
+static inline bool
+bi_is_value_equiv(bi_index left, bi_index right)
+{
+        if (left.type == BI_INDEX_CONSTANT && right.type == BI_INDEX_CONSTANT) {
+                return (bi_apply_swizzle(left.value, left.swizzle) ==
+                        bi_apply_swizzle(right.value, right.swizzle)) &&
+                       (left.abs == right.abs) &&
+                       (left.neg == right.neg);
+        } else {
+                return (left.value == right.value) &&
+                       (left.abs == right.abs) &&
+                       (left.neg == right.neg) &&
+                       (left.swizzle == right.swizzle) &&
+                       (left.offset == right.offset) &&
+                       (left.reg == right.reg) &&
+                       (left.type == right.type);
+        }
+}
+
 #define BI_MAX_DESTS 2
 #define BI_MAX_SRCS 5
 
@@ -595,6 +617,15 @@ typedef struct {
         bool td;
 } bi_clause;
 
+#define BI_NUM_SLOTS 8
+
+/* A model for the state of the scoreboard */
+struct bi_scoreboard_state {
+        /** Bitmap of registers read/written by a slot */
+        uint64_t read[BI_NUM_SLOTS];
+        uint64_t write[BI_NUM_SLOTS];
+};
+
 typedef struct bi_block {
         /* Link to next block. Must be first for mir_get_block */
         struct list_head link;
@@ -621,9 +652,28 @@ typedef struct bi_block {
         /* Post-RA liveness */
         uint64_t reg_live_in, reg_live_out;
 
+        /* Scoreboard state at the start/end of block */
+        struct bi_scoreboard_state scoreboard_in, scoreboard_out;
+
         /* Flags available for pass-internal use */
         uint8_t pass_flags;
 } bi_block;
+
+static inline bi_block *
+bi_start_block(struct list_head *blocks)
+{
+        bi_block *first = list_first_entry(blocks, bi_block, link);
+        assert(first->predecessors->entries == 0);
+        return first;
+}
+
+static inline bi_block *
+bi_exit_block(struct list_head *blocks)
+{
+        bi_block *last = list_last_entry(blocks, bi_block, link);
+        assert(!last->successors[0] && !last->successors[1]);
+        return last;
+}
 
 /* Subset of pan_shader_info needed per-variant, in order to support IDVS */
 struct bi_shader_info {
@@ -632,6 +682,7 @@ struct bi_shader_info {
         struct panfrost_sysvals *sysvals;
         unsigned tls_size;
         unsigned work_reg_count;
+        unsigned push_offset;
 };
 
 /* State of index-driven vertex shading for current shader */
@@ -739,19 +790,6 @@ bi_temp_reg(bi_context *ctx)
         return bi_get_index(ctx->reg_alloc++, true, 0);
 }
 
-/* NIR booleans are 1-bit (0/1). For now, backend IR booleans are N-bit
- * (0/~0) where N depends on the context. This requires us to sign-extend
- * when converting constants from NIR to the backend IR.
- */
-static inline uint32_t
-bi_extend_constant(uint32_t constant, unsigned bit_size)
-{
-        if (bit_size == 1 && constant != 0)
-                return ~0;
-        else
-                return constant;
-}
-
 /* Inline constants automatically, will be lowered out by bi_lower_fau where a
  * constant is not allowed. load_const_to_scalar gaurantees that this makes
  * sense */
@@ -759,13 +797,11 @@ bi_extend_constant(uint32_t constant, unsigned bit_size)
 static inline bi_index
 bi_src_index(nir_src *src)
 {
-        if (nir_src_is_const(*src) && nir_src_bit_size(*src) <= 32) {
-                uint32_t v = nir_src_as_uint(*src);
-
-                return bi_imm_u32(bi_extend_constant(v, nir_src_bit_size(*src)));
-        } else if (src->is_ssa) {
+        if (nir_src_is_const(*src) && nir_src_bit_size(*src) <= 32)
+                return bi_imm_u32(nir_src_as_uint(*src));
+        else if (src->is_ssa)
                 return bi_get_index(src->ssa->index, false, 0);
-        } else {
+        else {
                 assert(!src->reg.indirect);
                 return bi_get_index(src->reg.reg->index, true, 0);
         }
@@ -950,7 +986,9 @@ void bi_opt_mod_prop_backward(bi_context *ctx);
 void bi_opt_dead_code_eliminate(bi_context *ctx);
 void bi_opt_fuse_dual_texture(bi_context *ctx);
 void bi_opt_dce_post_ra(bi_context *ctx);
+void bi_opt_message_preload(bi_context *ctx);
 void bi_opt_push_ubo(bi_context *ctx);
+void bi_opt_reorder_push(bi_context *ctx);
 void bi_lower_swizzle(bi_context *ctx);
 void bi_lower_fau(bi_context *ctx);
 void bi_assign_scoreboard(bi_context *ctx);
@@ -1094,6 +1132,15 @@ bi_after_instr(bi_instr *instr)
         .option = bi_cursor_after_instr,
         .instr = instr
     };
+}
+
+static inline bi_cursor
+bi_before_nonempty_block(bi_block *block)
+{
+        bi_instr *I = list_first_entry(&block->instructions, bi_instr, link);
+        assert(I != NULL);
+
+        return bi_before_instr(I);
 }
 
 /* Invariant: a tuple must be nonempty UNLESS it is the last tuple of a clause,

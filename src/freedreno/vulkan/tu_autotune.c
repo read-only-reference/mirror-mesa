@@ -362,8 +362,7 @@ tu_autotune_init(struct tu_autotune *at, struct tu_device *dev)
                                     renderpass_key_equals);
    u_rwlock_init(&at->ht_lock);
 
-   at->results_bo = malloc(sizeof(struct tu_bo));
-   result = tu_bo_init_new(dev, at->results_bo,
+   result = tu_bo_init_new(dev, &at->results_bo,
                            sizeof(struct tu_autotune_results),
                            TU_BO_ALLOC_NO_FLAGS);
    if (result != VK_SUCCESS) {
@@ -389,7 +388,6 @@ fail_map_bo:
    tu_bo_finish(dev, at->results_bo);
 
 fail_bo:
-   free(at->results_bo);
    u_rwlock_destroy(&at->ht_lock);
    _mesa_hash_table_destroy(at->ht, NULL);
 
@@ -428,7 +426,6 @@ tu_autotune_fini(struct tu_autotune *at, struct tu_device *dev)
    _mesa_hash_table_destroy(at->ht, NULL);
    u_rwlock_destroy(&at->ht_lock);
    tu_bo_finish(dev, at->results_bo);
-   free(at->results_bo);
 }
 
 bool
@@ -476,6 +473,19 @@ tu_autotune_use_bypass(struct tu_autotune *at,
 {
    const struct tu_render_pass *pass = cmd_buffer->state.pass;
    const struct tu_framebuffer *framebuffer = cmd_buffer->state.framebuffer;
+
+   for (unsigned i = 0; i < pass->subpass_count; i++) {
+      const struct tu_subpass *subpass = &pass->subpasses[i];
+      /* GMEM works much faster in this case */
+      if (subpass->raster_order_attachment_access)
+         return false;
+
+      /* Would be very slow in sysmem mode because we have to enable
+       * SINGLE_PRIM_MODE(FLUSH_PER_OVERLAP_AND_OVERWRITE)
+       */
+      if (subpass->feedback_loop_color || subpass->feedback_loop_ds)
+         return false;
+   }
 
    /* If we would want to support buffers that could be submitted
     * several times we would have to copy the sample counts of renderpasses

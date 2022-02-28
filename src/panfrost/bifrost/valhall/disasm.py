@@ -134,11 +134,11 @@ va_disasm_instr(FILE *fp, uint64_t instr)
 % endif
             fputs("${op.name}", fp);
 % for mod in op.modifiers:
-% if mod.name not in ["left", "staging_register_count"]:
-% if mod.size == 1:
-            if (instr & BIT(${mod.start})) fputs(".${mod.name}", fp);
-% else:
+% if mod.name not in ["left", "staging_register_count", "staging_register_write_count"]:
+% if mod.is_enum:
             fputs(valhall_${safe_name(mod.name)}[(instr >> ${mod.start}) & ${hex((1 << mod.size) - 1)}], fp);
+% else:
+            if (instr & BIT(${mod.start})) fputs(".${mod.name}", fp);
 % endif
 % endif
 % endfor
@@ -154,7 +154,15 @@ va_disasm_instr(FILE *fp, uint64_t instr)
 % endif
 <%
     no_comma = False
-    sr_count = "((instr >> 33) & MASK(3))" if sr.count == 0 else sr.count
+
+    if sr.count != 0:
+        sr_count = sr.count
+    elif "staging_register_write_count" in [x.name for x in op.modifiers] and sr.write:
+        sr_count = "(((instr >> 36) & MASK(3)) + 1)"
+    elif "staging_register_count" in [x.name for x in op.modifiers]:
+        sr_count = "((instr >> 33) & MASK(3))"
+    else:
+        assert(0)
 %>
 //            assert(((instr >> ${sr.start}) & 0xC0) == ${sr.encoded_flags});
             for (unsigned i = 0; i < ${sr_count}; ++i) {
@@ -185,8 +193,12 @@ va_disasm_instr(FILE *fp, uint64_t instr)
 % endif
 % if src.lanes:
             fputs(valhall_lanes_8_bit[(instr >> ${src.offset['widen']}) & 0xF], fp);
+% elif src.halfswizzle:
+            fputs(valhall_half_swizzles_8_bit[(instr >> ${src.offset['widen']}) & 0xF], fp);
 % elif src.widen:
 		    fputs(valhall_swizzles_${src.size}_bit[(instr >> ${src.offset['widen']}) & 0xF], fp);
+% elif src.combine:
+            fputs(valhall_combine[(instr >> ${src.offset['combine']}) & 0x7], fp);
 % endif
 % if src.lane:
             fputs(valhall_lane_${src.size}_bit[(instr >> ${src.lane}) & 0x3], fp);

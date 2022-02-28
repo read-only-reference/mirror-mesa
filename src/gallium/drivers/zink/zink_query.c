@@ -882,7 +882,7 @@ zink_set_active_query_state(struct pipe_context *pctx, bool enable)
 void
 zink_start_conditional_render(struct zink_context *ctx)
 {
-   if (unlikely(!zink_screen(ctx->base.screen)->info.have_EXT_conditional_rendering))
+   if (unlikely(!zink_screen(ctx->base.screen)->info.have_EXT_conditional_rendering) || ctx->render_condition.active)
       return;
    struct zink_batch *batch = &ctx->batch;
    VkConditionalRenderingFlagsEXT begin_flags = 0;
@@ -894,6 +894,7 @@ zink_start_conditional_render(struct zink_context *ctx)
    begin_info.flags = begin_flags;
    VKCTX(CmdBeginConditionalRenderingEXT)(batch->state->cmdbuf, &begin_info);
    zink_batch_reference_resource_rw(batch, ctx->render_condition.query->predicate, false);
+   ctx->render_condition.active = true;
 }
 
 void
@@ -901,9 +902,10 @@ zink_stop_conditional_render(struct zink_context *ctx)
 {
    struct zink_batch *batch = &ctx->batch;
    zink_clear_apply_conditionals(ctx);
-   if (unlikely(!zink_screen(ctx->base.screen)->info.have_EXT_conditional_rendering))
+   if (unlikely(!zink_screen(ctx->base.screen)->info.have_EXT_conditional_rendering) || !ctx->render_condition.active)
       return;
    VKCTX(CmdEndConditionalRenderingEXT)(batch->state->cmdbuf);
+   ctx->render_condition.active = false;
 }
 
 bool
@@ -935,8 +937,7 @@ zink_render_condition(struct pipe_context *pctx,
       /* force conditional clears if they exist */
       if (ctx->clears_enabled && !ctx->batch.in_rp)
          zink_batch_rp(ctx);
-      if (ctx->batch.in_rp)
-         zink_stop_conditional_render(ctx);
+      zink_stop_conditional_render(ctx);
       ctx->render_condition_active = false;
       ctx->render_condition.query = NULL;
       return;
@@ -967,6 +968,7 @@ zink_render_condition(struct pipe_context *pctx,
          /* these need special handling */
          force_cpu_read(ctx, pquery, PIPE_QUERY_TYPE_U32, &res->base.b, 0);
       }
+      zink_resource_buffer_barrier(ctx, res, VK_ACCESS_CONDITIONAL_RENDERING_READ_BIT_EXT, VK_PIPELINE_STAGE_CONDITIONAL_RENDERING_BIT_EXT);
       query->predicate_dirty = false;
    }
    ctx->render_condition.inverted = condition;
@@ -979,7 +981,7 @@ zink_render_condition(struct pipe_context *pctx,
 static void
 zink_get_query_result_resource(struct pipe_context *pctx,
                                struct pipe_query *pquery,
-                               bool wait,
+                               enum pipe_query_flags flags,
                                enum pipe_query_value_type result_type,
                                int index,
                                struct pipe_resource *pres,

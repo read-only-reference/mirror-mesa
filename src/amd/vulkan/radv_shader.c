@@ -145,8 +145,7 @@ radv_can_dump_shader_stats(struct radv_device *device, struct vk_shader_module *
 }
 
 void
-radv_optimize_nir(const struct radv_device *device, struct nir_shader *shader,
-                  bool optimize_conservatively, bool allow_copies)
+radv_optimize_nir(struct nir_shader *shader, bool optimize_conservatively, bool allow_copies)
 {
    bool progress;
 
@@ -192,8 +191,7 @@ radv_optimize_nir(const struct radv_device *device, struct nir_shader *shader,
       NIR_PASS(progress, shader, nir_opt_algebraic);
 
       NIR_PASS(progress, shader, nir_opt_undef);
-      NIR_PASS(progress, shader, nir_opt_shrink_vectors,
-               !device->instance->disable_shrink_image_store);
+      NIR_PASS(progress, shader, nir_opt_shrink_vectors);
       if (shader->options->max_unroll_iterations) {
          NIR_PASS(progress, shader, nir_opt_loop_unroll);
       }
@@ -452,6 +450,65 @@ radv_lower_primitive_shading_rate(nir_shader *nir)
          progress = true;
          if (nir->info.stage == MESA_SHADER_VERTEX)
             return progress;
+      }
+   }
+
+   return progress;
+}
+
+bool
+radv_force_primitive_shading_rate(nir_shader *nir, struct radv_device *device)
+{
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   bool progress = false;
+
+   nir_builder b;
+   nir_builder_init(&b, impl);
+
+   nir_foreach_block_reverse(block, impl) {
+      nir_foreach_instr_reverse(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic != nir_intrinsic_store_deref)
+            continue;
+
+         nir_variable *var = nir_intrinsic_get_var(intr, 0);
+         if (var->data.mode != nir_var_shader_out ||
+             var->data.location != VARYING_SLOT_POS)
+            continue;
+
+         b.cursor = nir_after_instr(instr);
+
+         nir_ssa_scalar scalar_idx = nir_ssa_scalar_resolved(intr->src[1].ssa, 3);
+
+         /* Use coarse shading if the value of Pos.W can't be determined or if its value is != 1
+          * (typical for non-GUI elements).
+          */
+         if (!nir_ssa_scalar_is_const(scalar_idx) ||
+             nir_ssa_scalar_as_uint(scalar_idx) != 0x3f800000u) {
+
+            var = nir_variable_create(nir, nir_var_shader_out, glsl_int_type(), "vrs rate");
+            var->data.location = VARYING_SLOT_PRIMITIVE_SHADING_RATE;
+            var->data.interpolation = INTERP_MODE_NONE;
+
+            nir_ssa_def *vrs_rates = nir_load_force_vrs_rates_amd(&b);
+
+            nir_ssa_def *pos_w = nir_channel(&b, intr->src[1].ssa, 3);
+            nir_ssa_def *val = nir_bcsel(&b, nir_fneu(&b, pos_w, nir_imm_float(&b, 1.0f)),
+                                             vrs_rates, nir_imm_int(&b, 0));
+
+            nir_deref_instr *deref = nir_build_deref_var(&b, var);
+            nir_store_deref(&b, deref, val, 0x1);
+
+            /* Update outputs_written to reflect that the pass added a new output. */
+            nir->info.outputs_written |= BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_SHADING_RATE);
+
+            progress = true;
+            if (nir->info.stage == MESA_SHADER_VERTEX)
+               return progress;
+         }
       }
    }
 
@@ -730,7 +787,7 @@ radv_shader_compile_to_nir(struct radv_device *device, struct vk_shader_module *
                                .ballot_components = 1,
                                .lower_to_scalar = 1,
                                .lower_subgroup_masks = 1,
-                               .lower_shuffle = 1,
+                               .lower_relative_shuffle = 1,
                                .lower_shuffle_to_32bit = 1,
                                .lower_vote_eq = 1,
                                .lower_quad_broadcast_dynamic = 1,
@@ -739,9 +796,10 @@ radv_shader_compile_to_nir(struct radv_device *device, struct vk_shader_module *
                             });
 
    nir_lower_load_const_to_scalar(nir);
+   nir_opt_shrink_stores(nir, !device->instance->disable_shrink_image_store);
 
    if (!key->optimisations_disabled)
-      radv_optimize_nir(device, nir, false, true);
+      radv_optimize_nir(nir, false, true);
 
    /* call radv_nir_lower_ycbcr_textures() late as there might still be
     * tex with undef texture/sampler before first optimization */
@@ -802,6 +860,7 @@ radv_shader_compile_to_nir(struct radv_device *device, struct vk_shader_module *
         nir->info.stage == MESA_SHADER_GEOMETRY ||
         nir->info.stage == MESA_SHADER_MESH) &&
        nir->info.outputs_written & BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_SHADING_RATE)) {
+      /* Lower primitive shading rate to match HW requirements. */
       NIR_PASS_V(nir, radv_lower_primitive_shading_rate);
    }
 
@@ -813,7 +872,7 @@ radv_shader_compile_to_nir(struct radv_device *device, struct vk_shader_module *
    if (ac_nir_lower_indirect_derefs(nir, device->physical_device->rad_info.chip_class) &&
        !key->optimisations_disabled && nir->info.stage != MESA_SHADER_COMPUTE) {
       /* Optimize the lowered code before the linking optimizations. */
-      radv_optimize_nir(device, nir, false, false);
+      radv_optimize_nir(nir, false, false);
    }
 
    return nir;
@@ -1215,7 +1274,10 @@ radv_alloc_shader_memory(struct radv_device *device, uint32_t size, void *ptr)
    if (!arena)
       goto fail;
 
-   unsigned arena_size = MAX2(RADV_SHADER_ALLOC_MIN_ARENA_SIZE, size);
+   unsigned arena_size =
+      MAX2(RADV_SHADER_ALLOC_MIN_ARENA_SIZE
+              << MIN2(RADV_SHADER_ALLOC_MAX_ARENA_SIZE_SHIFT, device->shader_arena_shift),
+           size);
    VkResult result = device->ws->buffer_create(
       device->ws, arena_size, RADV_SHADER_ALLOC_ALIGNMENT, RADEON_DOMAIN_VRAM,
       RADEON_FLAG_NO_INTERPROCESS_SHARING | RADEON_FLAG_32BIT |
@@ -1251,6 +1313,7 @@ radv_alloc_shader_memory(struct radv_device *device, uint32_t size, void *ptr)
       add_hole(device, hole);
    }
 
+   ++device->shader_arena_shift;
    list_addtail(&arena->list, &device->shader_arenas);
 
    mtx_unlock(&device->shader_arena_mutex);
@@ -1868,20 +1931,6 @@ shader_compile(struct radv_device *device, struct vk_shader_module *module,
    options->debug.func = radv_compiler_debug;
    options->debug.private_data = &debug_data;
 
-   switch (options->key.ps.force_vrs) {
-   case RADV_FORCE_VRS_2x2:
-      options->force_vrs_rates = (1u << 2) | (1u << 4);
-      break;
-   case RADV_FORCE_VRS_2x1:
-      options->force_vrs_rates = (1u << 2) | (0u << 4);
-      break;
-   case RADV_FORCE_VRS_1x2:
-      options->force_vrs_rates = (0u << 2) | (1u << 4);
-      break;
-   default:
-      break;
-   }
-
    struct radv_shader_args args = {0};
    args.is_gs_copy_shader = gs_copy_shader;
    args.is_trap_handler_shader = trap_handler_shader;
@@ -1987,13 +2036,18 @@ radv_create_gs_copy_shader(struct radv_device *device, struct nir_shader *shader
                          keep_shader_info, keep_statistic_info, binary_out);
 }
 
-struct radv_shader *
+struct radv_trap_handler_shader *
 radv_create_trap_handler_shader(struct radv_device *device)
 {
    struct radv_nir_compiler_options options = {0};
    struct radv_shader *shader = NULL;
    struct radv_shader_binary *binary = NULL;
    struct radv_shader_info info = {0};
+   struct radv_trap_handler_shader *trap;
+
+   trap = malloc(sizeof(struct radv_trap_handler_shader));
+   if (!trap)
+      return NULL;
 
    nir_builder b = radv_meta_init_shader(MESA_SHADER_COMPUTE, "meta_trap_handler");
 
@@ -2004,10 +2058,34 @@ radv_create_trap_handler_shader(struct radv_device *device)
    shader = shader_compile(device, NULL, &b.shader, 1, MESA_SHADER_COMPUTE, &info, &options, false,
                            true, true, false, &binary);
 
+   trap->alloc = radv_alloc_shader_memory(device, shader->code_size, NULL);
+
+   trap->bo = trap->alloc->arena->bo;
+   char *dest_ptr = trap->alloc->arena->ptr + trap->alloc->offset;
+
+   struct radv_shader_binary_legacy *bin = (struct radv_shader_binary_legacy *)binary;
+   memcpy(dest_ptr, bin->data, bin->code_size);
+
    ralloc_free(b.shader);
+   free(shader);
    free(binary);
 
-   return shader;
+   return trap;
+}
+
+uint64_t radv_trap_handler_shader_get_va(const struct radv_trap_handler_shader *trap)
+{
+   return radv_buffer_get_va(trap->alloc->arena->bo) + trap->alloc->offset;
+}
+
+void
+radv_trap_handler_shader_destroy(struct radv_device *device, struct radv_trap_handler_shader *trap)
+{
+   if (!trap)
+      return;
+
+   radv_free_shader_memory(device, trap->alloc);
+   free(trap);
 }
 
 static struct radv_shader_prolog *
@@ -2144,7 +2222,17 @@ radv_find_shader(struct radv_device *device, uint64_t pc)
          uint64_t start = radv_buffer_get_va(block->arena->bo) + block->offset;
          if (!block->freelist.prev && pc >= start && pc < start + block->size) {
             mtx_unlock(&device->shader_arena_mutex);
-            return (struct radv_shader *)block->freelist.next;
+
+            struct radv_pipeline *pipeline = (struct radv_pipeline *)block->freelist.next;
+            for (uint32_t i = 0; i < MESA_VULKAN_SHADER_STAGES; i++) {
+               struct radv_shader *shader = pipeline->shaders[i];
+               if (!shader)
+                  continue;
+
+               if (pc >= shader->va &&
+                   pc < shader->va + align(shader->code_size, RADV_SHADER_ALLOC_ALIGNMENT))
+                  return shader;
+            }
          }
       }
    }

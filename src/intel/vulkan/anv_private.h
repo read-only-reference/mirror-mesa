@@ -67,6 +67,8 @@
 #include "util/vma.h"
 #include "util/xmlconfig.h"
 #include "vk_alloc.h"
+#include "vk_command_buffer.h"
+#include "vk_command_pool.h"
 #include "vk_debug_report.h"
 #include "vk_device.h"
 #include "vk_drm_syncobj.h"
@@ -78,7 +80,6 @@
 #include "vk_sync.h"
 #include "vk_sync_timeline.h"
 #include "vk_util.h"
-#include "vk_command_buffer.h"
 #include "vk_queue.h"
 #include "vk_log.h"
 
@@ -139,7 +140,7 @@ struct intel_perf_query_result;
  * various reasons. This healthy margin prevents reads from wrapping around
  * 48-bit addresses.
  */
-#define GENERAL_STATE_POOL_MIN_ADDRESS     0x000000010000ULL /* 64 KiB */
+#define GENERAL_STATE_POOL_MIN_ADDRESS     0x000000200000ULL /* 2 MiB */
 #define GENERAL_STATE_POOL_MAX_ADDRESS     0x00003fffffffULL
 #define LOW_HEAP_MIN_ADDRESS               0x000040000000ULL /* 1 GiB */
 #define LOW_HEAP_MAX_ADDRESS               0x00007fffffffULL
@@ -186,10 +187,19 @@ struct intel_perf_query_result;
  */
 #define ANV_HZ_FC_VAL 1.0f
 
-#define MAX_VBS         28
+/* 3DSTATE_VERTEX_BUFFER supports 33 VBs, we use 2 for base & drawid SGVs */
+#define MAX_VBS         (33 - 2)
+
+/* 3DSTATE_VERTEX_ELEMENTS supports up to 34 VEs, but our backend compiler
+ * only supports the push model of VS inputs, and we only have 128 GRFs,
+ * minus the g0 and g1 payload, which gives us a maximum of 31 VEs.  Plus,
+ * we use two of them for SGVs.
+ */
+#define MAX_VES         (31 - 2)
+
 #define MAX_XFB_BUFFERS  4
 #define MAX_XFB_STREAMS  4
-#define MAX_SETS         8
+#define MAX_SETS        32
 #define MAX_RTS          8
 #define MAX_VIEWPORTS   16
 #define MAX_SCISSORS    16
@@ -1194,11 +1204,36 @@ struct anv_device {
 
     struct anv_state                            slice_hash;
 
+    /** An array of CPS_STATE structures grouped by MAX_VIEWPORTS elements
+     *
+     * We need to emit CPS_STATE structures for each viewport accessible by a
+     * pipeline. So rather than write many identical CPS_STATE structures
+     * dynamically, we can enumerate all possible combinaisons and then just
+     * emit a 3DSTATE_CPS_POINTERS instruction with the right offset into this
+     * array.
+     */
+    struct anv_state                            cps_states;
+
     uint32_t                                    queue_count;
     struct anv_queue  *                         queues;
 
     struct anv_scratch_pool                     scratch_pool;
     struct anv_bo                              *rt_scratch_bos[16];
+
+    /** Shadow ray query BO
+     *
+     * The ray_query_bo only holds the current ray being traced. When using
+     * more than 1 ray query per thread, we cannot fit all the queries in
+     * there, so we need a another buffer to hold query data that is not
+     * currently being used by the HW for tracing, similar to a scratch space.
+     *
+     * The size of the shadow buffer depends on the number of queries per
+     * shader.
+     */
+    struct anv_bo                              *ray_query_shadow_bos[16];
+    /** Ray query buffer used to communicated with HW unit.
+     */
+    struct anv_bo                              *ray_query_bo;
 
     struct anv_shader_bin                      *rt_trampoline;
     struct anv_shader_bin                      *rt_trivial_return;
@@ -1879,6 +1914,7 @@ struct anv_descriptor {
       };
 
       struct {
+         struct anv_buffer_view *set_buffer_view;
          struct anv_buffer *buffer;
          uint64_t offset;
          uint64_t range;
@@ -1982,6 +2018,8 @@ struct anv_descriptor_pool {
    void *surface_state_free_list;
 
    struct list_head desc_sets;
+
+   bool allocate_surface_states;
 
    char data[0];
 };
@@ -2608,8 +2646,8 @@ struct anv_push_constants {
    /* Robust access pushed registers. */
    uint64_t push_reg_mask[MESA_SHADER_STAGES];
 
-   /** Pad out to a multiple of 32 bytes */
-   uint32_t pad[2];
+   /** Ray query globals (RT_DISPATCH_GLOBALS) */
+   uint64_t ray_query_globals;
 
    /* Base addresses for descriptor sets */
    uint64_t desc_sets[MAX_SETS];
@@ -2696,7 +2734,10 @@ struct anv_dynamic_state {
       VkSampleLocationEXT                       locations[MAX_SAMPLE_LOCATIONS];
    } sample_locations;
 
-   VkExtent2D                                   fragment_shading_rate;
+   struct {
+      VkExtent2D                                rate;
+      VkFragmentShadingRateCombinerOpKHR        ops[2];
+   } fragment_shading_rate;
 
    VkCullModeFlags                              cull_mode;
    VkFrontFace                                  front_face;
@@ -2951,6 +2992,9 @@ struct anv_subpass {
    VkResolveModeFlagBitsKHR                     depth_resolve_mode;
    VkResolveModeFlagBitsKHR                     stencil_resolve_mode;
 
+   struct anv_subpass_attachment *              fsr_attachment;
+   VkExtent2D                                   fsr_extent;
+
    uint32_t                                     view_mask;
 
    /** Subpass has a depth/stencil self-dependency */
@@ -2994,8 +3038,9 @@ struct anv_render_pass {
 
 /* RTs * 2 (for resolve attachments)
  * depth/sencil * 2
+ * fragment shading rate * 1
  */
-#define MAX_DYN_RENDER_ATTACHMENTS (MAX_RTS * 2 + 2 * 2)
+#define MAX_DYN_RENDER_ATTACHMENTS (MAX_RTS * 2 + 2 * 2 + 1)
 
 /* And this, kids, is what we call a nasty hack. */
 struct anv_dynamic_render_pass {
@@ -3035,9 +3080,9 @@ struct anv_cmd_state {
    struct anv_state                             binding_tables[MESA_VULKAN_SHADER_STAGES];
    struct anv_state                             samplers[MESA_VULKAN_SHADER_STAGES];
 
-   unsigned char                                sampler_sha1s[MESA_SHADER_STAGES][20];
-   unsigned char                                surface_sha1s[MESA_SHADER_STAGES][20];
-   unsigned char                                push_sha1s[MESA_SHADER_STAGES][20];
+   unsigned char                                sampler_sha1s[MESA_VULKAN_SHADER_STAGES][20];
+   unsigned char                                surface_sha1s[MESA_VULKAN_SHADER_STAGES][20];
+   unsigned char                                push_sha1s[MESA_VULKAN_SHADER_STAGES][20];
 
    /**
     * Whether or not the gfx8 PMA fix is enabled.  We ensure that, at the top
@@ -3088,15 +3133,11 @@ struct anv_cmd_state {
    struct anv_state                             null_surface_state;
 
    struct anv_dynamic_render_pass               dynamic_render_pass;
-};
 
-struct anv_cmd_pool {
-   struct vk_object_base                        base;
-   VkAllocationCallbacks                        alloc;
-   struct list_head                             cmd_buffers;
-
-   VkCommandPoolCreateFlags                     flags;
-   struct anv_queue_family *                    queue_family;
+   /**
+    * A buffer used for spill/fill of ray queries.
+    */
+   struct anv_bo *                              ray_query_shadow_bo;
 };
 
 #define ANV_MIN_CMD_BUFFER_BATCH_SIZE 8192
@@ -3117,9 +3158,7 @@ struct anv_cmd_buffer {
    struct vk_command_buffer                     vk;
 
    struct anv_device *                          device;
-
-   struct anv_cmd_pool *                        pool;
-   struct list_head                             pool_link;
+   struct anv_queue_family *                    queue_family;
 
    struct anv_batch                             batch;
 
@@ -3163,7 +3202,6 @@ struct anv_cmd_buffer {
    struct anv_state_stream                      general_state_stream;
 
    VkCommandBufferUsageFlags                    usage_flags;
-   VkCommandBufferLevel                         level;
 
    struct anv_query_pool                       *perf_query_pool;
 
@@ -3272,7 +3310,13 @@ struct anv_state
 anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer);
 
 const struct anv_image_view *
+anv_cmd_buffer_get_first_color_view(const struct anv_cmd_buffer *cmd_buffer);
+
+const struct anv_image_view *
 anv_cmd_buffer_get_depth_stencil_view(const struct anv_cmd_buffer *cmd_buffer);
+
+const struct anv_image_view *
+anv_cmd_buffer_get_fsr_view(const struct anv_cmd_buffer *cmd_buffer);
 
 VkResult
 anv_cmd_buffer_alloc_blorp_binding_table(struct anv_cmd_buffer *cmd_buffer,
@@ -3407,7 +3451,8 @@ anv_shader_bin_unref(struct anv_device *device, struct anv_shader_bin *shader)
                                                                      \
    (struct GFX_BINDLESS_SHADER_RECORD) {                             \
       .OffsetToLocalArguments = (local_arg_offset) / 8,              \
-      .BindlessShaderDispatchMode = prog_data->simd_size / 16,       \
+      .BindlessShaderDispatchMode =                                  \
+         prog_data->simd_size == 16 ? RT_SIMD16 : RT_SIMD8,          \
       .KernelStartPointer = bin->kernel.offset,                      \
    };                                                                \
 })
@@ -3439,6 +3484,8 @@ struct anv_pipeline {
 
    enum anv_pipeline_type                       type;
    VkPipelineCreateFlags                        flags;
+
+   uint32_t                                     ray_queries;
 
    struct util_dynarray                         executables;
 
@@ -3498,8 +3545,6 @@ struct anv_graphics_pipeline {
    bool                                         use_primitive_replication;
 
    struct anv_state                             blend_state;
-
-   struct anv_state                             cps_state;
 
    uint32_t                                     vb_used;
    struct anv_pipeline_vertex_binding {
@@ -3596,6 +3641,12 @@ anv_pipeline_is_primitive(const struct anv_graphics_pipeline *pipeline)
    return anv_pipeline_has_stage(pipeline, MESA_SHADER_VERTEX);
 }
 
+static inline bool
+anv_pipeline_is_mesh(const struct anv_graphics_pipeline *pipeline)
+{
+   return anv_pipeline_has_stage(pipeline, MESA_SHADER_MESH);
+}
+
 #define ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(prefix, stage)             \
 static inline const struct brw_##prefix##_prog_data *                   \
 get_##prefix##_prog_data(const struct anv_graphics_pipeline *pipeline)  \
@@ -3613,6 +3664,8 @@ ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(tcs, MESA_SHADER_TESS_CTRL)
 ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(tes, MESA_SHADER_TESS_EVAL)
 ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(gs, MESA_SHADER_GEOMETRY)
 ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(wm, MESA_SHADER_FRAGMENT)
+ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(mesh, MESA_SHADER_MESH)
+ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(task, MESA_SHADER_TASK)
 
 static inline const struct brw_cs_prog_data *
 get_cs_prog_data(const struct anv_compute_pipeline *pipeline)
@@ -4677,8 +4730,6 @@ VK_DEFINE_HANDLE_CASTS(anv_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_acceleration_structure, base,
                                VkAccelerationStructureKHR,
                                VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR)
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_cmd_pool, base, VkCommandPool,
-                               VK_OBJECT_TYPE_COMMAND_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_buffer, base, VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_buffer_view, base, VkBufferView,

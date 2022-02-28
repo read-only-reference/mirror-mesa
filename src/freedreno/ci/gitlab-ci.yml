@@ -148,16 +148,21 @@ a618_vk:
     DTB: sc7180-trogdor-lazor-limozeen-nots
     BOOT_METHOD: depthcharge
     KERNEL_IMAGE_TYPE: ""
-  tags:
-    - mesa-ci-x86-64-lava-sc7180-trogdor-lazor-limozeen
+    RUNNER_TAG: mesa-ci-x86-64-lava-sc7180-trogdor-lazor-limozeen
 
 a618_vk_full:
   extends:
     - a618_vk
     - .test-manual-mr
+  # We use a longer timeout to keep the parallel down so that we don't lock up
+  # too many runners for a long time when a dev is trying out at full VK status.
+  timeout: 2h
   parallel: 2
   variables:
+    # ran into OOM with VK-GL-CTS 1.2.8.0 at 6
+    FDO_CI_CONCURRENT: 4
     DEQP_SUITE: freedreno-a618-vk-full
+    JOB_TIMEOUT: 120
 
 .a630-test:
   extends:
@@ -209,8 +214,8 @@ a630_skqp:
     - .a630-test
   variables:
     # Possible skqp backends: gl, gles, unitTest and vk
-    # Note: vk backend is not working yet.
-    SKQP_BACKENDS: gl gles unitTest  # space separated values
+    SKQP_BACKENDS: gl gles vk unitTest  # space separated values
+    VK_DRIVER: freedreno
 
 a630_vk:
   extends:
@@ -220,6 +225,9 @@ a630_vk:
     DEQP_SUITE: freedreno-a630-vk
 
 a630_vk_full:
+  # We use a longer timeout to keep the parallel down so that we don't lock up
+  # too many runners for a long time when a dev is trying out at full VK status.
+  timeout: 2h
   extends:
     - a630_vk
     - .test-manual-mr

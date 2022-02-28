@@ -31,8 +31,16 @@
 
 #ifdef __FreeBSD__
 #include <sys/types.h>
-#elif !defined(_WIN32)
+#endif
+#ifdef MAJOR_IN_MKDEV
+#include <sys/mkdev.h>
+#endif
+#ifdef MAJOR_IN_SYSMACROS
 #include <sys/sysmacros.h>
+#endif
+
+#ifdef __linux__
+#include <sys/inotify.h>
 #endif
 
 #include "util/debug.h"
@@ -2925,6 +2933,143 @@ radv_create_sync_for_memory(struct vk_device *device,
    return vk_sync_create(device, &vk_sync_dummy_type, 0, 1, sync_out);
 }
 
+static enum radv_force_vrs
+radv_parse_vrs_rates(const char *str)
+{
+   if (!strcmp(str, "2x2")) {
+      return RADV_FORCE_VRS_2x2;
+   } else if (!strcmp(str, "2x1")) {
+      return RADV_FORCE_VRS_2x1;
+   } else if (!strcmp(str, "1x2")) {
+      return RADV_FORCE_VRS_1x2;
+   } else if (!strcmp(str, "1x1")) {
+      return RADV_FORCE_VRS_1x1;
+   }
+
+   fprintf(stderr, "radv: Invalid VRS rates specified (valid values are 2x2, 2x1, 1x2 and 1x1)\n");
+   return RADV_FORCE_VRS_1x1;
+}
+
+static const char *
+radv_get_force_vrs_config_file(void)
+{
+   return getenv("RADV_FORCE_VRS_CONFIG_FILE");
+}
+
+static enum radv_force_vrs
+radv_parse_force_vrs_config_file(const char *config_file)
+{
+   enum radv_force_vrs force_vrs = RADV_FORCE_VRS_1x1;
+   char buf[4];
+   FILE *f;
+
+   f = fopen(config_file, "r");
+   if (!f) {
+      fprintf(stderr, "radv: Can't open file: '%s'.\n", config_file);
+      return force_vrs;
+   }
+
+   if (fread(buf, sizeof(buf), 1, f) == 1) {
+      buf[3] = '\0';
+      force_vrs = radv_parse_vrs_rates(buf);
+   }
+
+   fclose(f);
+   return force_vrs;
+}
+
+#ifdef __linux__
+
+#define BUF_LEN ((10 * (sizeof(struct inotify_event) + NAME_MAX + 1)))
+
+static int
+radv_notifier_thread_run(void *data)
+{
+   struct radv_device *device = data;
+   struct radv_notifier *notifier = &device->notifier;
+   char buf[BUF_LEN];
+
+   while (!notifier->quit) {
+      const char *file = radv_get_force_vrs_config_file();
+      struct timespec tm = { .tv_nsec = 100000000 }; /* 1OOms */
+      int length, i = 0;
+
+      length = read(notifier->fd, buf, BUF_LEN);
+      while (i < length) {
+         struct inotify_event *event = (struct inotify_event *)&buf[i];
+
+         i += sizeof(struct inotify_event) + event->len;
+         if (event->mask & IN_MODIFY || event->mask & IN_DELETE_SELF) {
+            /* Sleep 100ms for editors that use a temporary file and delete the original. */
+            thrd_sleep(&tm, NULL);
+            device->force_vrs = radv_parse_force_vrs_config_file(file);
+
+            fprintf(stderr, "radv: Updated the per-vertex VRS rate to '%d'.\n", device->force_vrs);
+
+            if (event->mask & IN_DELETE_SELF) {
+               inotify_rm_watch(notifier->fd, notifier->watch);
+               notifier->watch = inotify_add_watch(notifier->fd, file, IN_MODIFY | IN_DELETE_SELF);
+            }
+         }
+      }
+
+      thrd_sleep(&tm, NULL);
+   }
+
+   return 0;
+}
+
+#endif
+
+static int
+radv_device_init_notifier(struct radv_device *device)
+{
+#ifndef __linux__
+   return true;
+#else
+   struct radv_notifier *notifier = &device->notifier;
+   const char *file = radv_get_force_vrs_config_file();
+   int ret;
+
+   notifier->fd = inotify_init1(IN_NONBLOCK);
+   if (notifier->fd < 0)
+      return false;
+
+   notifier->watch = inotify_add_watch(notifier->fd, file, IN_MODIFY | IN_DELETE_SELF);
+   if (notifier->watch < 0)
+      goto fail_watch;
+
+   ret = thrd_create(&notifier->thread, radv_notifier_thread_run, device);
+   if (ret)
+      goto fail_thread;
+
+   return true;
+
+fail_thread:
+   inotify_rm_watch(notifier->fd, notifier->watch);
+fail_watch:
+   close(notifier->fd);
+
+   return false;
+#endif
+}
+
+static void
+radv_device_finish_notifier(struct radv_device *device)
+{
+#ifdef __linux__
+   struct radv_notifier *notifier = &device->notifier;
+
+   if (!notifier->thread)
+      return;
+
+   notifier->quit = true;
+   thrd_join(notifier->thread, NULL);
+   inotify_rm_watch(notifier->fd, notifier->watch);
+   close(notifier->fd);
+#endif
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo,
                   const VkAllocationCallbacks *pAllocator, VkDevice *pDevice)
@@ -3038,6 +3183,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
 
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
+   simple_mtx_init(&device->trace_mtx, mtx_plain);
 
    device->ws = physical_device->ws;
    device->vk.create_sync_for_memory = radv_create_sync_for_memory;
@@ -3211,25 +3357,27 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
          goto fail;
    }
 
-   if (getenv("RADV_FORCE_VRS")) {
-      const char *vrs_rates = getenv("RADV_FORCE_VRS");
+   if (device->physical_device->rad_info.chip_class >= GFX10_3) {
+      if (getenv("RADV_FORCE_VRS_CONFIG_FILE")) {
+         const char *file = radv_get_force_vrs_config_file();
 
-      if (device->physical_device->rad_info.chip_class < GFX10_3)
-         fprintf(stderr, "radv: VRS is only supported on RDNA2+\n");
-      else if (!strcmp(vrs_rates, "2x2"))
-         device->force_vrs = RADV_FORCE_VRS_2x2;
-      else if (!strcmp(vrs_rates, "2x1"))
-         device->force_vrs = RADV_FORCE_VRS_2x1;
-      else if (!strcmp(vrs_rates, "1x2"))
-         device->force_vrs = RADV_FORCE_VRS_1x2;
-      else
-         fprintf(stderr, "radv: Invalid VRS rates specified "
-                         "(valid values are 2x2, 2x1 and 1x2)\n");
+         device->force_vrs = radv_parse_force_vrs_config_file(file);
+
+         if (radv_device_init_notifier(device)) {
+            device->force_vrs_enabled = true;
+         } else {
+            fprintf(stderr, "radv: Failed to initialize the notifier for RADV_FORCE_VRS_CONFIG_FILE!\n");
+         }
+      } else if (getenv("RADV_FORCE_VRS")) {
+         const char *vrs_rates = getenv("RADV_FORCE_VRS");
+
+         device->force_vrs = radv_parse_vrs_rates(vrs_rates);
+         device->force_vrs_enabled = device->force_vrs != RADV_FORCE_VRS_1x1;
+      }
    }
 
    device->adjust_frag_coord_z =
-      (device->vk.enabled_extensions.KHR_fragment_shading_rate ||
-       device->force_vrs != RADV_FORCE_VRS_NONE) &&
+      (device->vk.enabled_extensions.KHR_fragment_shading_rate || device->force_vrs_enabled) &&
       (device->physical_device->rad_info.family == CHIP_SIENNA_CICHLID ||
        device->physical_device->rad_info.family == CHIP_NAVY_FLOUNDER ||
        device->physical_device->rad_info.family == CHIP_VANGOGH);
@@ -3292,6 +3440,7 @@ fail:
    if (device->gfx_init)
       device->ws->buffer_destroy(device->ws, device->gfx_init);
 
+   radv_device_finish_notifier(device);
    radv_device_finish_vs_prologs(device);
    radv_device_finish_border_color(device);
 
@@ -3307,6 +3456,7 @@ fail:
          device->ws->ctx_destroy(device->hw_ctx[i]);
    }
 
+   simple_mtx_destroy(&device->trace_mtx);
    mtx_destroy(&device->overallocation_mutex);
 
    vk_device_finish(&device->vk);
@@ -3346,6 +3496,7 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    }
 
    mtx_destroy(&device->overallocation_mutex);
+   simple_mtx_destroy(&device->trace_mtx);
 
    radv_device_finish_meta(device);
 
@@ -3644,7 +3795,7 @@ radv_emit_tess_factor_ring(struct radv_queue *queue, struct radeon_cmdbuf *cs,
       radeon_set_uconfig_reg(cs, R_030940_VGT_TF_MEMORY_BASE, tf_va >> 8);
 
       if (queue->device->physical_device->rad_info.chip_class >= GFX10) {
-         radeon_set_uconfig_reg(cs, R_030984_VGT_TF_MEMORY_BASE_HI_UMD,
+         radeon_set_uconfig_reg(cs, R_030984_VGT_TF_MEMORY_BASE_HI,
                                 S_030984_BASE_HI(tf_va >> 40));
       } else if (queue->device->physical_device->rad_info.chip_class == GFX9) {
          radeon_set_uconfig_reg(cs, R_030944_VGT_TF_MEMORY_BASE_HI, S_030944_BASE_HI(tf_va >> 40));
@@ -4336,7 +4487,7 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
 
    result =
       radv_get_preambles(queue, submission->command_buffers, submission->command_buffer_count,
-                         &initial_preamble_cs, &initial_flush_preamble_cs, &continue_preamble_cs);
+                         &initial_flush_preamble_cs, &initial_preamble_cs, &continue_preamble_cs);
    if (result != VK_SUCCESS)
       goto fail;
 
@@ -4370,13 +4521,16 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
       if (result != VK_SUCCESS)
          goto fail;
    } else {
+      if (queue->device->trace_bo)
+         simple_mtx_lock(&queue->device->trace_mtx);
+
       struct radeon_cmdbuf **cs_array =
          malloc(sizeof(struct radeon_cmdbuf *) * (submission->command_buffer_count));
 
       for (uint32_t j = 0; j < submission->command_buffer_count; j++) {
          struct radv_cmd_buffer *cmd_buffer =
             (struct radv_cmd_buffer *)submission->command_buffers[j];
-         assert(cmd_buffer->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+         assert(cmd_buffer->vk.level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
          cs_array[j] = cmd_buffer->cs;
          if ((cmd_buffer->usage_flags & VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT))
@@ -4386,8 +4540,11 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
       }
 
       for (uint32_t j = 0; j < submission->command_buffer_count; j += advance) {
+         /* For fences on the same queue/vm amdgpu doesn't wait till all processing is finished
+          * before starting the next cmdbuffer, so we need to do it here. */
+         bool need_wait = !j && submission->wait_count > 0;
          struct radeon_cmdbuf *initial_preamble =
-            !j ? initial_flush_preamble_cs : initial_preamble_cs;
+            need_wait ? initial_flush_preamble_cs : initial_preamble_cs;
          advance = MIN2(max_cs_submission, submission->command_buffer_count - j);
          bool last_submit = j + advance == submission->command_buffer_count;
 
@@ -4401,6 +4558,8 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
             can_patch);
          if (result != VK_SUCCESS) {
             free(cs_array);
+            if (queue->device->trace_bo)
+               simple_mtx_unlock(&queue->device->trace_mtx);
             goto fail;
          }
 
@@ -4414,6 +4573,8 @@ radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission)
       }
 
       free(cs_array);
+      if (queue->device->trace_bo)
+         simple_mtx_unlock(&queue->device->trace_mtx);
    }
 
 fail:
@@ -4963,29 +5124,25 @@ radv_BindBufferMemory2(VkDevice _device, uint32_t bindInfoCount,
       RADV_FROM_HANDLE(radv_device_memory, mem, pBindInfos[i].memory);
       RADV_FROM_HANDLE(radv_buffer, buffer, pBindInfos[i].buffer);
 
-      if (mem) {
-         if (mem->alloc_size) {
-            VkBufferMemoryRequirementsInfo2 info = {
-               .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
-               .buffer = pBindInfos[i].buffer,
-            };
-            VkMemoryRequirements2 reqs = {
-               .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
-            };
+      if (mem->alloc_size) {
+         VkBufferMemoryRequirementsInfo2 info = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2,
+            .buffer = pBindInfos[i].buffer,
+         };
+         VkMemoryRequirements2 reqs = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
+         };
 
-            radv_GetBufferMemoryRequirements2(_device, &info, &reqs);
+         radv_GetBufferMemoryRequirements2(_device, &info, &reqs);
 
-            if (pBindInfos[i].memoryOffset + reqs.memoryRequirements.size > mem->alloc_size) {
-               return vk_errorf(device, VK_ERROR_UNKNOWN,
-                                "Device memory object too small for the buffer.\n");
-            }
+         if (pBindInfos[i].memoryOffset + reqs.memoryRequirements.size > mem->alloc_size) {
+            return vk_errorf(device, VK_ERROR_UNKNOWN,
+                             "Device memory object too small for the buffer.\n");
          }
-
-         buffer->bo = mem->bo;
-         buffer->offset = pBindInfos[i].memoryOffset;
-      } else {
-         buffer->bo = NULL;
       }
+
+      buffer->bo = mem->bo;
+      buffer->offset = pBindInfos[i].memoryOffset;
    }
    return VK_SUCCESS;
 }
@@ -5000,30 +5157,25 @@ radv_BindImageMemory2(VkDevice _device, uint32_t bindInfoCount,
       RADV_FROM_HANDLE(radv_device_memory, mem, pBindInfos[i].memory);
       RADV_FROM_HANDLE(radv_image, image, pBindInfos[i].image);
 
-      if (mem) {
-         if (mem->alloc_size) {
-            VkImageMemoryRequirementsInfo2 info = {
-               .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
-               .image = pBindInfos[i].image,
-            };
-            VkMemoryRequirements2 reqs = {
-               .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
-            };
+      if (mem->alloc_size) {
+         VkImageMemoryRequirementsInfo2 info = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2,
+            .image = pBindInfos[i].image,
+         };
+         VkMemoryRequirements2 reqs = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
+         };
 
-            radv_GetImageMemoryRequirements2(_device, &info, &reqs);
+         radv_GetImageMemoryRequirements2(_device, &info, &reqs);
 
-            if (pBindInfos[i].memoryOffset + reqs.memoryRequirements.size > mem->alloc_size) {
-               return vk_errorf(device, VK_ERROR_UNKNOWN,
-                                "Device memory object too small for the image.\n");
-            }
+         if (pBindInfos[i].memoryOffset + reqs.memoryRequirements.size > mem->alloc_size) {
+            return vk_errorf(device, VK_ERROR_UNKNOWN,
+                             "Device memory object too small for the image.\n");
          }
-
-         image->bo = mem->bo;
-         image->offset = pBindInfos[i].memoryOffset;
-      } else {
-         image->bo = NULL;
-         image->offset = 0;
       }
+
+      image->bo = mem->bo;
+      image->offset = pBindInfos[i].memoryOffset;
    }
    return VK_SUCCESS;
 }
@@ -5179,9 +5331,6 @@ radv_CreateBuffer(VkDevice _device, const VkBufferCreateInfo *pCreateInfo,
 
    buffer->usage = pCreateInfo->usage;
    buffer->flags = pCreateInfo->flags;
-
-   buffer->shareable =
-      vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_MEMORY_BUFFER_CREATE_INFO) != NULL;
 
    if (pCreateInfo->flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
       enum radeon_bo_flag flags = RADEON_FLAG_VIRTUAL;

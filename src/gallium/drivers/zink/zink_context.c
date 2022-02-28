@@ -1327,17 +1327,36 @@ create_image_surface(struct zink_context *ctx, const struct pipe_image_view *vie
 {
    struct zink_resource *res = zink_resource(view->resource);
    struct pipe_surface tmpl = {0};
+   enum pipe_texture_target target = res->base.b.target;
    tmpl.format = view->format;
    tmpl.u.tex.level = view->u.tex.level;
    tmpl.u.tex.first_layer = view->u.tex.first_layer;
    tmpl.u.tex.last_layer = view->u.tex.last_layer;
-   struct pipe_surface *psurf = ctx->base.create_surface(&ctx->base, &res->base.b, &tmpl);
+   unsigned depth = 1 + tmpl.u.tex.last_layer - tmpl.u.tex.first_layer;
+   switch (target) {
+   case PIPE_TEXTURE_3D:
+      if (depth < res->base.b.depth0) {
+         assert(depth == 1);
+         target = PIPE_TEXTURE_2D;
+      } else {
+         assert(tmpl.u.tex.first_layer == 0);
+         tmpl.u.tex.last_layer = 0;
+      }
+      break;
+   case PIPE_TEXTURE_2D_ARRAY:
+   case PIPE_TEXTURE_1D_ARRAY:
+      if (depth < res->base.b.array_size && depth == 1)
+         target = target == PIPE_TEXTURE_2D_ARRAY ? PIPE_TEXTURE_2D : PIPE_TEXTURE_1D;
+      break;
+   default: break;
+   }
+   VkImageViewCreateInfo ivci = create_ivci(zink_screen(ctx->base.screen), res, &tmpl, target);
+   struct pipe_surface *psurf = zink_get_surface(ctx, view->resource, &tmpl, &ivci);
    if (!psurf)
       return NULL;
-   /* this is actually a zink_ctx_surface, but we just want the inner surface */
-   struct zink_surface *surface = zink_csurface(psurf);
-   FREE(psurf);
-   flush_pending_clears(ctx, res);
+   struct zink_surface *surface = zink_surface(psurf);
+   if (is_compute)
+      flush_pending_clears(ctx, res);
    return surface;
 }
 
@@ -1487,7 +1506,8 @@ zink_set_sampler_views(struct pipe_context *pctx,
                 update |= iv != b->image_view->image_view;
              } else  if (a != b)
                 update = true;
-             flush_pending_clears(ctx, res);
+             if (shader_type == PIPE_SHADER_COMPUTE)
+                flush_pending_clears(ctx, res);
              check_for_layout_update(ctx, res, shader_type == PIPE_SHADER_COMPUTE);
              zink_batch_usage_set(&b->image_view->batch_uses, ctx->batch.state);
              if (!a)
@@ -1816,7 +1836,10 @@ static void
 zink_set_patch_vertices(struct pipe_context *pctx, uint8_t patch_vertices)
 {
    struct zink_context *ctx = zink_context(pctx);
-   ctx->gfx_pipeline_state.patch_vertices = patch_vertices;
+   if (zink_set_tcs_key_patches(ctx, patch_vertices)) {
+      ctx->gfx_pipeline_state.vertices_per_patch = patch_vertices ? patch_vertices - 1 : 0;
+      ctx->gfx_pipeline_state.dirty = true;
+   }
 }
 
 void
@@ -2437,6 +2460,8 @@ flush_batch(struct zink_context *ctx, bool sync)
    if (ctx->clears_enabled)
       /* start rp to do all the clears */
       zink_begin_render_pass(ctx);
+   bool conditional_render_active = ctx->render_condition.active;
+   zink_stop_conditional_render(ctx);
    zink_end_render_pass(ctx);
    zink_end_batch(ctx, batch);
    ctx->deferred_fence = NULL;
@@ -2460,6 +2485,8 @@ flush_batch(struct zink_context *ctx, bool sync)
       ctx->oom_stall = false;
       ctx->dd->bindless_bound = false;
       ctx->di.bindless_refs_dirty = true;
+      if (conditional_render_active)
+         zink_start_conditional_render(ctx);
    }
 }
 
@@ -3613,6 +3640,11 @@ zink_set_stream_output_targets(struct pipe_context *pctx,
 {
    struct zink_context *ctx = zink_context(pctx);
 
+   /* always set counter_buffer_valid=false on unbind:
+    * - on resume (indicated by offset==-1), set counter_buffer_valid=true
+    * - otherwise the counter buffer is invalidated
+    */
+
    if (num_targets == 0) {
       for (unsigned i = 0; i < ctx->num_so_targets; i++) {
          if (ctx->so_targets[i]) {
@@ -3632,14 +3664,16 @@ zink_set_stream_output_targets(struct pipe_context *pctx,
          if (!t)
             continue;
          struct zink_resource *res = zink_resource(t->counter_buffer);
-         if (offsets[0] == (unsigned)-1)
+         if (offsets[0] == (unsigned)-1) {
             ctx->xfb_barrier |= zink_resource_buffer_needs_barrier(res,
                                                                    VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT,
                                                                    VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
-         else
+         } else {
             ctx->xfb_barrier |= zink_resource_buffer_needs_barrier(res,
                                                                    VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT,
                                                                    VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT);
+            t->counter_buffer_valid = false;
+         }
          struct zink_resource *so = zink_resource(ctx->so_targets[i]->buffer);
          if (so) {
             so->so_bind_count++;
@@ -3913,7 +3947,7 @@ rebind_image(struct zink_context *ctx, struct zink_resource *res)
        for (unsigned j = 0; j < ctx->di.num_images[i]; j++) {
           if (zink_resource(ctx->image_views[i][j].base.resource) == res) {
              zink_screen(ctx->base.screen)->context_invalidate_descriptor_state(ctx, i, ZINK_DESCRIPTOR_TYPE_IMAGE, j, 1);
-             update_descriptor_state_sampler(ctx, i, j, res);
+             update_descriptor_state_image(ctx, i, j, res);
              _mesa_set_add(ctx->need_barriers[i == PIPE_SHADER_COMPUTE], res);
           }
        }
@@ -4092,6 +4126,7 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->base.set_patch_vertices = zink_set_patch_vertices;
 
    ctx->base.set_sample_mask = zink_set_sample_mask;
+   ctx->gfx_pipeline_state.sample_mask = UINT32_MAX;
 
    ctx->base.clear = zink_clear;
    ctx->base.clear_texture = zink_clear_texture;
@@ -4150,6 +4185,7 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
    ctx->last_vertex_stage_dirty = true;
    ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_VERTEX].size = sizeof(struct zink_vs_key_base);
    ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_TESS_EVAL].size = sizeof(struct zink_vs_key_base);
+   ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_TESS_CTRL].size = sizeof(struct zink_tcs_key);
    ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_GEOMETRY].size = sizeof(struct zink_vs_key_base);
    ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_FRAGMENT].size = sizeof(struct zink_fs_key);
    _mesa_hash_table_init(&ctx->compute_program_cache, ctx, _mesa_hash_pointer, _mesa_key_pointer_equal);

@@ -51,6 +51,8 @@ static const struct debug_named_value nir_debug_control[] = {
      "Disable shader validation at each successful lowering/optimization call" },
    { "validate_ssa_dominance", NIR_DEBUG_VALIDATE_SSA_DOMINANCE,
      "Validate SSA dominance in shader at each successful lowering/optimization call" },
+   { "validate_gc_list", NIR_DEBUG_VALIDATE_GC_LIST,
+     "Validate the instruction GC list at each successful lowering/optimization call" },
    { "tgsi", NIR_DEBUG_TGSI,
      "Dump NIR/TGSI shaders when doing a NIR<->TGSI translation" },
    { "print", NIR_DEBUG_PRINT,
@@ -283,6 +285,7 @@ nir_shader_add_variable(nir_shader *shader, nir_variable *var)
    case nir_var_mem_constant:
    case nir_var_shader_call_data:
    case nir_var_ray_hit_attrib:
+   case nir_var_mem_task_payload:
       break;
 
    case nir_var_mem_global:
@@ -1469,6 +1472,43 @@ nir_instr_ssa_def(nir_instr *instr)
    case nir_instr_type_call:
    case nir_instr_type_jump:
       return NULL;
+   }
+
+   unreachable("Invalid instruction type");
+}
+
+bool
+nir_instr_def_is_register(nir_instr *instr)
+{
+   switch (instr->type) {
+   case nir_instr_type_alu:
+      return !nir_instr_as_alu(instr)->dest.dest.is_ssa;
+
+   case nir_instr_type_deref:
+      return !nir_instr_as_deref(instr)->dest.is_ssa;
+
+   case nir_instr_type_tex:
+      return !nir_instr_as_tex(instr)->dest.is_ssa;
+
+   case nir_instr_type_intrinsic: {
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+      return nir_intrinsic_infos[intrin->intrinsic].has_dest &&
+             !intrin->dest.is_ssa;
+   }
+
+   case nir_instr_type_phi:
+      return !nir_instr_as_phi(instr)->dest.is_ssa;
+
+   case nir_instr_type_parallel_copy:
+      unreachable("Parallel copies are unsupported by this function");
+
+   case nir_instr_type_load_const:
+   case nir_instr_type_ssa_undef:
+      return false;
+
+   case nir_instr_type_call:
+   case nir_instr_type_jump:
+      return false;
    }
 
    unreachable("Invalid instruction type");
@@ -3057,22 +3097,34 @@ nir_ssa_alu_instr_src_components(const nir_alu_instr *instr, unsigned src)
    return nir_dest_num_components(instr->dest.dest);
 }
 
+#define CASE_ALL_SIZES(op) \
+   case op: \
+   case op ## 8: \
+   case op ## 16: \
+   case op ## 32: \
+
 bool
 nir_alu_instr_is_comparison(const nir_alu_instr *instr)
 {
    switch (instr->op) {
-   case nir_op_flt:
-   case nir_op_fge:
-   case nir_op_feq:
-   case nir_op_fneu:
-   case nir_op_ilt:
-   case nir_op_ult:
-   case nir_op_ige:
-   case nir_op_uge:
-   case nir_op_ieq:
-   case nir_op_ine:
+   CASE_ALL_SIZES(nir_op_flt)
+   CASE_ALL_SIZES(nir_op_fge)
+   CASE_ALL_SIZES(nir_op_feq)
+   CASE_ALL_SIZES(nir_op_fneu)
+   CASE_ALL_SIZES(nir_op_ilt)
+   CASE_ALL_SIZES(nir_op_ult)
+   CASE_ALL_SIZES(nir_op_ige)
+   CASE_ALL_SIZES(nir_op_uge)
+   CASE_ALL_SIZES(nir_op_ieq)
+   CASE_ALL_SIZES(nir_op_ine)
    case nir_op_i2b1:
+   case nir_op_i2b8:
+   case nir_op_i2b16:
+   case nir_op_i2b32:
    case nir_op_f2b1:
+   case nir_op_f2b8:
+   case nir_op_f2b16:
+   case nir_op_f2b32:
    case nir_op_inot:
       return true;
    default:
@@ -3080,6 +3132,7 @@ nir_alu_instr_is_comparison(const nir_alu_instr *instr)
    }
 }
 
+#undef CASE_ALL_SIZES
 
 unsigned
 nir_intrinsic_src_components(const nir_intrinsic_instr *intr, unsigned srcn)

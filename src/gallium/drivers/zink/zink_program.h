@@ -303,6 +303,23 @@ zink_get_fs_key(struct zink_context *ctx)
    return (const struct zink_fs_key *)&ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_FRAGMENT];
 }
 
+static inline bool
+zink_set_tcs_key_patches(struct zink_context *ctx, uint8_t patch_vertices)
+{
+   struct zink_tcs_key *tcs = (struct zink_tcs_key*)&ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_TESS_CTRL];
+   if (tcs->patch_vertices == patch_vertices)
+      return false;
+   ctx->dirty_shader_stages |= BITFIELD_BIT(PIPE_SHADER_TESS_CTRL);
+   tcs->patch_vertices = patch_vertices;
+   return true;
+}
+
+static inline const struct zink_tcs_key *
+zink_get_tcs_key(struct zink_context *ctx)
+{
+   return (const struct zink_tcs_key *)&ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_TESS_CTRL];
+}
+
 void
 zink_update_fs_key_samples(struct zink_context *ctx);
 

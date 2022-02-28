@@ -336,14 +336,17 @@ panfrost_emit_blend(struct panfrost_batch *batch, void *rts, mali_ptr *blend_sha
                                         (blend_shaders[i] & (0xffffffffull << 32)) ==
                                         (fs->bin.gpu & (0xffffffffull << 32)));
 
-                        unsigned ret_offset = fs->info.bifrost.blend[i].return_offset;
-                        assert(!(ret_offset & 0x7));
-
                         pan_pack(&packed->opaque[2], INTERNAL_BLEND, cfg) {
                                 cfg.mode = MALI_BLEND_MODE_SHADER;
                                 cfg.shader.pc = (u32) blend_shaders[i];
+
+#if PAN_ARCH <= 7
+                                unsigned ret_offset = fs->info.bifrost.blend[i].return_offset;
+                                assert(!(ret_offset & 0x7));
+
                                 cfg.shader.return_value = ret_offset ?
                                         fs->bin.gpu + ret_offset : 0;
+#endif
                         }
                 } else {
                         pan_pack(&packed->opaque[2], INTERNAL_BLEND, cfg) {
@@ -1373,6 +1376,12 @@ panfrost_emit_texture_descriptors(struct panfrost_batch *batch,
 
         for (int i = 0; i < ctx->sampler_view_count[stage]; ++i) {
                 struct panfrost_sampler_view *view = ctx->sampler_views[stage][i];
+
+                if (!view) {
+                        memset(&out[i], 0, sizeof(out[i]));
+                        continue;
+                }
+
                 struct pipe_sampler_view *pview = &view->base;
                 struct panfrost_resource *rsrc = pan_resource(pview->texture);
 
@@ -1385,10 +1394,13 @@ panfrost_emit_texture_descriptors(struct panfrost_batch *batch,
 
         return T.gpu;
 #else
-        uint64_t trampolines[PIPE_MAX_SHADER_SAMPLER_VIEWS];
+        uint64_t trampolines[PIPE_MAX_SHADER_SAMPLER_VIEWS] = { 0 };
 
         for (int i = 0; i < ctx->sampler_view_count[stage]; ++i) {
                 struct panfrost_sampler_view *view = ctx->sampler_views[stage][i];
+
+                if (!view)
+                        continue;
 
                 panfrost_update_sampler_view(view, &ctx->base);
 
@@ -1417,8 +1429,11 @@ panfrost_emit_sampler_descriptors(struct panfrost_batch *batch,
                                           SAMPLER);
         struct mali_sampler_packed *out = (struct mali_sampler_packed *) T.cpu;
 
-        for (unsigned i = 0; i < ctx->sampler_count[stage]; ++i)
-                out[i] = ctx->samplers[stage][i]->hw;
+        for (unsigned i = 0; i < ctx->sampler_count[stage]; ++i) {
+                struct panfrost_sampler_state *st = ctx->samplers[stage][i];
+
+                out[i] = st ? st->hw : (struct mali_sampler_packed){0};
+        }
 
         return T.gpu;
 }
@@ -2751,10 +2766,6 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
 
         section = pan_section_ptr(job, TILER_JOB, DRAW);
         pan_pack(section, DRAW, cfg) {
-                cfg.four_components_per_vertex = true;
-                cfg.draw_descriptor_is_64b = true;
-                cfg.front_face_ccw = rast->front_ccw;
-
                 /*
                  * From the Gallium documentation,
                  * pipe_rasterizer_state::cull_face "indicates which faces of
@@ -2765,6 +2776,7 @@ panfrost_draw_emit_tiler(struct panfrost_batch *batch,
                  */
                 cfg.cull_front_face = polygon && (rast->cull_face & PIPE_FACE_FRONT);
                 cfg.cull_back_face = polygon && (rast->cull_face & PIPE_FACE_BACK);
+                cfg.front_face_ccw = rast->front_ccw;
                 cfg.position = pos;
                 cfg.state = batch->rsd[PIPE_SHADER_FRAGMENT];
                 cfg.attributes = batch->attribs[PIPE_SHADER_FRAGMENT];

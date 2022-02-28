@@ -98,6 +98,8 @@ create_ivci(struct zink_screen *screen,
    ivci.subresourceRange.levelCount = 1;
    ivci.subresourceRange.baseArrayLayer = templ->u.tex.first_layer;
    ivci.subresourceRange.layerCount = 1 + templ->u.tex.last_layer - templ->u.tex.first_layer;
+   assert(ivci.viewType != VK_IMAGE_VIEW_TYPE_3D || ivci.subresourceRange.baseArrayLayer == 0);
+   assert(ivci.viewType != VK_IMAGE_VIEW_TYPE_3D || ivci.subresourceRange.layerCount == 1);
    ivci.viewType = zink_surface_clamp_viewtype(ivci.viewType, templ->u.tex.first_layer, templ->u.tex.last_layer, res->base.b.array_size);
 
    return ivci;
@@ -228,11 +230,11 @@ zink_create_surface(struct pipe_context *pctx,
                     struct pipe_resource *pres,
                     const struct pipe_surface *templ)
 {
-
-   VkImageViewCreateInfo ivci = create_ivci(zink_screen(pctx->screen),
-                                            zink_resource(pres), templ, pres->target);
-   if (pres->target == PIPE_TEXTURE_3D)
-      ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+   struct zink_resource *res = zink_resource(pres);
+   bool is_array = templ->u.tex.last_layer != templ->u.tex.first_layer;
+   enum pipe_texture_target target_2d[] = {PIPE_TEXTURE_2D, PIPE_TEXTURE_2D_ARRAY};
+   VkImageViewCreateInfo ivci = create_ivci(zink_screen(pctx->screen), res, templ,
+                                            pres->target == PIPE_TEXTURE_3D ? target_2d[is_array] : pres->target);
 
    struct pipe_surface *psurf = zink_get_surface(zink_context(pctx), pres, templ, &ivci);
    if (!psurf)

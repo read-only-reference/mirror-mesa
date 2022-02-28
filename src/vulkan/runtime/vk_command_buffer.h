@@ -25,14 +25,32 @@
 #define VK_COMMAND_BUFFER_H
 
 #include "vk_object.h"
+#include "util/list.h"
 #include "util/u_dynarray.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+struct vk_command_pool;
+
 struct vk_command_buffer {
    struct vk_object_base base;
+
+   struct vk_command_pool *pool;
+
+   /** VkCommandBufferAllocateInfo::level */
+   VkCommandBufferLevel level;
+
+   /** Link in vk_command_pool::command_buffers if pool != NULL */
+   struct list_head pool_link;
+
+   /** Destroys the command buffer
+    *
+    * Used by the common command pool implementation.  This function MUST
+    * call vk_command_buffer_finish().
+    */
+   void (*destroy)(struct vk_command_buffer *);
 
    /**
     * VK_EXT_debug_utils
@@ -80,7 +98,8 @@ VK_DEFINE_HANDLE_CASTS(vk_command_buffer, base, VkCommandBuffer,
 
 VkResult MUST_CHECK
 vk_command_buffer_init(struct vk_command_buffer *command_buffer,
-                       struct vk_device *device);
+                       struct vk_command_pool *pool,
+                       VkCommandBufferLevel level);
 
 void
 vk_command_buffer_reset(struct vk_command_buffer *command_buffer);

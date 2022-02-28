@@ -63,6 +63,7 @@ typedef uint32_t xcb_window_t;
 #include "vk_format.h"
 #include "vk_cmd_queue.h"
 #include "vk_command_buffer.h"
+#include "vk_command_pool.h"
 #include "vk_queue.h"
 
 #include "wsi_common.h"
@@ -180,10 +181,12 @@ struct lvp_queue_work {
    uint32_t cmd_buffer_count;
    uint32_t timeline_count;
    uint32_t wait_count;
+   uint32_t signal_count;
    uint64_t timeline;
    struct lvp_fence *fence;
    struct lvp_cmd_buffer **cmd_buffers;
    struct lvp_semaphore_timeline **timelines;
+   struct lvp_semaphore **signals;
    VkSemaphore *waits;
    uint64_t *wait_vals;
 };
@@ -471,6 +474,7 @@ struct lvp_pipeline {
    bool line_rectangular;
    bool gs_output_lines;
    bool provoking_vertex_last;
+   bool negative_one_to_one;
 };
 
 struct lvp_event {
@@ -504,6 +508,12 @@ struct lvp_semaphore {
    struct util_dynarray links;
    struct lvp_semaphore_timeline *timeline;
    struct lvp_semaphore_timeline *latest;
+   struct pipe_fence_handle *handle;
+};
+
+struct lvp_queue_noop {
+   struct lvp_fence *fence;
+   struct lvp_semaphore *sema;
 };
 
 struct lvp_buffer {
@@ -538,8 +548,7 @@ struct lvp_query_pool {
 };
 
 struct lvp_cmd_pool {
-   struct vk_object_base                        base;
-   VkAllocationCallbacks                        alloc;
+   struct vk_command_pool                       vk;
    struct list_head                             cmd_buffers;
    struct list_head                             free_cmd_buffers;
 };
@@ -558,7 +567,6 @@ struct lvp_cmd_buffer {
 
    struct lvp_device *                          device;
 
-   VkCommandBufferLevel                         level;
    enum lvp_cmd_buffer_status status;
    struct lvp_cmd_pool *                        pool;
    struct list_head                             pool_link;
@@ -580,8 +588,8 @@ VK_DEFINE_HANDLE_CASTS(lvp_physical_device, vk.base, VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 VK_DEFINE_HANDLE_CASTS(lvp_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
-   VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_cmd_pool, base,VkCommandPool,
-                                  VK_OBJECT_TYPE_COMMAND_POOL)
+VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_cmd_pool, vk.base, VkCommandPool,
+                               VK_OBJECT_TYPE_COMMAND_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_buffer, base, VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)
 VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_buffer_view, base, VkBufferView,

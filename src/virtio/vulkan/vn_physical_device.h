@@ -13,7 +13,14 @@
 
 #include "vn_common.h"
 
+#include "util/sparse_array.h"
+
 #include "vn_wsi.h"
+
+struct vn_format_properties_entry {
+   atomic_bool valid;
+   VkFormatProperties properties;
+};
 
 struct vn_physical_device {
    struct vn_physical_device_base base;
@@ -41,12 +48,18 @@ struct vn_physical_device {
    VkPhysicalDeviceVulkan11Features vulkan_1_1_features;
    VkPhysicalDeviceVulkan12Features vulkan_1_2_features;
    VkPhysicalDeviceTransformFeedbackFeaturesEXT transform_feedback_features;
+   VkPhysicalDevice4444FormatsFeaturesEXT argb_4444_formats_features;
+   VkPhysicalDeviceExtendedDynamicStateFeaturesEXT
+      extended_dynamic_state_features;
+   VkPhysicalDeviceCustomBorderColorFeaturesEXT custom_border_color_features;
 
    VkPhysicalDeviceProperties2 properties;
    VkPhysicalDeviceVulkan11Properties vulkan_1_1_properties;
    VkPhysicalDeviceVulkan12Properties vulkan_1_2_properties;
    VkPhysicalDeviceTransformFeedbackPropertiesEXT
       transform_feedback_properties;
+   VkPhysicalDeviceCustomBorderColorPropertiesEXT
+      custom_border_color_properties;
 
    VkQueueFamilyProperties2 *queue_family_properties;
    uint32_t queue_family_count;
@@ -63,6 +76,9 @@ struct vn_physical_device {
    VkExternalSemaphoreHandleTypeFlags external_timeline_semaphore_handles;
 
    struct wsi_device wsi_device;
+
+   simple_mtx_t format_update_mutex;
+   struct util_sparse_array format_properties;
 };
 VK_DEFINE_HANDLE_CASTS(vn_physical_device,
                        base.base.base,

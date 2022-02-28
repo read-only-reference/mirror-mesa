@@ -369,6 +369,8 @@ vir_add_inst(enum v3d_qpu_add_op op, struct qreg dst, struct qreg src0, struct q
         inst->src[1] = src1;
         inst->uniform = ~0;
 
+        inst->ip = -1;
+
         return inst;
 }
 
@@ -384,6 +386,8 @@ vir_mul_inst(enum v3d_qpu_mul_op op, struct qreg dst, struct qreg src0, struct q
         inst->src[0] = src0;
         inst->src[1] = src1;
         inst->uniform = ~0;
+
+        inst->ip = -1;
 
         return inst;
 }
@@ -404,12 +408,16 @@ vir_branch_inst(struct v3d_compile *c, enum v3d_qpu_branch_cond cond)
         inst->dst = vir_nop_reg();
         inst->uniform = vir_get_uniform_index(c, QUNIFORM_CONSTANT, 0);
 
+        inst->ip = -1;
+
         return inst;
 }
 
 static void
 vir_emit(struct v3d_compile *c, struct qinst *inst)
 {
+        inst->ip = -1;
+
         switch (c->cursor.mode) {
         case vir_cursor_add:
                 list_add(&inst->link, c->cursor.link);
@@ -541,7 +549,7 @@ vir_compile_init(const struct v3d_compiler *compiler,
                  int program_id, int variant_id,
                  uint32_t max_threads,
                  uint32_t min_threads_for_reg_alloc,
-                 bool tmu_spilling_allowed,
+                 uint32_t max_tmu_spills,
                  bool disable_loop_unrolling,
                  bool disable_constant_ubo_load_sorting,
                  bool disable_tmu_pipelining,
@@ -559,7 +567,7 @@ vir_compile_init(const struct v3d_compiler *compiler,
         c->debug_output_data = debug_output_data;
         c->compilation_result = V3D_COMPILATION_SUCCEEDED;
         c->min_threads_for_reg_alloc = min_threads_for_reg_alloc;
-        c->tmu_spilling_allowed = tmu_spilling_allowed;
+        c->max_tmu_spills = max_tmu_spills;
         c->fallback_scheduler = fallback_scheduler;
         c->disable_tmu_pipelining = disable_tmu_pipelining;
         c->disable_constant_ubo_load_sorting = disable_constant_ubo_load_sorting;
@@ -1560,6 +1568,8 @@ v3d_attempt_compile(struct v3d_compile *c)
         if (!c->disable_constant_ubo_load_sorting)
                 NIR_PASS_V(c->s, v3d_nir_sort_constant_ubo_loads, c);
 
+        NIR_PASS_V(c->s, nir_opt_move, nir_move_load_uniform);
+
         v3d_nir_to_vir(c);
 }
 
@@ -1624,17 +1634,17 @@ struct v3d_compiler_strategy {
         bool disable_loop_unrolling;
         bool disable_ubo_load_sorting;
         bool disable_tmu_pipelining;
-        bool tmu_spilling_allowed;
+        uint32_t max_tmu_spills;
 } static const strategies[] = {
-  /*0*/ { "default",                        4, 4, false, false, false, false },
-  /*1*/ { "disable loop unrolling",         4, 4, true,  false, false, false },
-  /*2*/ { "disable UBO load sorting",       4, 4, true,  true,  false, false },
-  /*3*/ { "disable TMU pipelining",         4, 4, true,  true,  true,  false },
-  /*4*/ { "lower thread count",             2, 1, false, false, false, false },
-  /*5*/ { "disable loop unrolling (ltc)",   2, 1, true,  false, false, false },
-  /*6*/ { "disable UBO load sorting (ltc)", 2, 1, true,  true,  false, false },
-  /*7*/ { "disable TMU pipelining (ltc)",   2, 1, true,  true,  true,  true  },
-  /*8*/ { "fallback scheduler",             2, 1, true,  true,  true,  true  }
+  /*0*/ { "default",                        4, 4, false, false, false,  0 },
+  /*1*/ { "disable loop unrolling",         4, 4, true,  false, false,  0 },
+  /*2*/ { "disable UBO load sorting",       4, 4, true,  true,  false,  0 },
+  /*3*/ { "disable TMU pipelining",         4, 4, true,  true,  true,   0 },
+  /*4*/ { "lower thread count",             2, 1, false, false, false, -1 },
+  /*5*/ { "disable loop unrolling (ltc)",   2, 1, true,  false, false, -1 },
+  /*6*/ { "disable UBO load sorting (ltc)", 2, 1, true,  true,  false, -1 },
+  /*7*/ { "disable TMU pipelining (ltc)",   2, 1, true,  true,  true,  -1 },
+  /*8*/ { "fallback scheduler",             2, 1, true,  true,  true,  -1 }
 };
 
 /**
@@ -1655,8 +1665,8 @@ skip_compile_strategy(struct v3d_compile *c, uint32_t idx)
    assert(idx > 0);
 
    /* Don't skip a strategy that changes spilling behavior */
-   if (strategies[idx].tmu_spilling_allowed !=
-       strategies[idx - 1].tmu_spilling_allowed) {
+   if (strategies[idx].max_tmu_spills !=
+       strategies[idx - 1].max_tmu_spills) {
            return false;
    }
 
@@ -1691,18 +1701,23 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
                       uint32_t *final_assembly_size)
 {
         struct v3d_compile *c = NULL;
-        for (int i = 0; i < ARRAY_SIZE(strategies); i++) {
+
+        uint32_t best_spill_fill_count = UINT32_MAX;
+        struct v3d_compile *best_c = NULL;
+        for (int32_t strat = 0; strat < ARRAY_SIZE(strategies); strat++) {
                 /* Fallback strategy */
-                if (i > 0) {
+                if (strat > 0) {
                         assert(c);
-                        if (skip_compile_strategy(c, i))
+                        if (skip_compile_strategy(c, strat))
                                 continue;
 
                         char *debug_msg;
                         int ret = asprintf(&debug_msg,
-                                           "Falling back to strategy '%s' for %s",
-                                           strategies[i].name,
-                                           vir_get_stage_name(c));
+                                           "Falling back to strategy '%s' "
+                                           "for %s prog %d/%d",
+                                           strategies[strat].name,
+                                           vir_get_stage_name(c),
+                                           c->program_id, c->variant_id);
 
                         if (ret >= 0) {
                                 if (unlikely(V3D_DEBUG & V3D_DEBUG_PERF))
@@ -1712,27 +1727,74 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
                                 free(debug_msg);
                         }
 
-                        vir_compile_destroy(c);
+                        if (c != best_c)
+                                vir_compile_destroy(c);
                 }
 
                 c = vir_compile_init(compiler, key, s,
                                      debug_output, debug_output_data,
                                      program_id, variant_id,
-                                     strategies[i].max_threads,
-                                     strategies[i].min_threads,
-                                     strategies[i].tmu_spilling_allowed,
-                                     strategies[i].disable_loop_unrolling,
-                                     strategies[i].disable_ubo_load_sorting,
-                                     strategies[i].disable_tmu_pipelining,
-                                     i == ARRAY_SIZE(strategies) - 1);
+                                     strategies[strat].max_threads,
+                                     strategies[strat].min_threads,
+                                     strategies[strat].max_tmu_spills,
+                                     strategies[strat].disable_loop_unrolling,
+                                     strategies[strat].disable_ubo_load_sorting,
+                                     strategies[strat].disable_tmu_pipelining,
+                                     strat == ARRAY_SIZE(strategies) - 1);
 
                 v3d_attempt_compile(c);
 
-                if (i >= ARRAY_SIZE(strategies) - 1 ||
-                    c->compilation_result !=
-                    V3D_COMPILATION_FAILED_REGISTER_ALLOCATION) {
+                /* Broken shader or driver bug */
+                if (c->compilation_result == V3D_COMPILATION_FAILED)
                         break;
+
+                /* If we compiled without spills, choose this.
+                 * Otherwise if this is a 4-thread compile, choose this (these
+                 * have a very low cap on the allowed TMU spills so we assume
+                 * it will be better than a 2-thread compile without spills).
+                 * Otherwise, keep going while tracking the strategy with the
+                 * lowest spill count.
+                 */
+                if (c->compilation_result == V3D_COMPILATION_SUCCEEDED) {
+                        if (c->spills == 0 ||
+                            strategies[strat].min_threads == 4) {
+                                best_c = c;
+                                break;
+                        } else if (c->spills + c->fills <
+                                   best_spill_fill_count) {
+                                best_c = c;
+                                best_spill_fill_count = c->spills + c->fills;
+                        }
+
+                        if (unlikely(V3D_DEBUG & V3D_DEBUG_PERF)) {
+                                char *debug_msg;
+                                int ret = asprintf(&debug_msg,
+                                                   "Compiled %s prog %d/%d with %d "
+                                                   "spills and %d fills. Will try "
+                                                   "more strategies.",
+                                                   vir_get_stage_name(c),
+                                                   c->program_id, c->variant_id,
+                                                   c->spills, c->fills);
+                                if (ret >= 0) {
+                                        fprintf(stderr, "%s\n", debug_msg);
+                                        c->debug_output(debug_msg, c->debug_output_data);
+                                        free(debug_msg);
+                                }
+                        }
                 }
+
+                /* Only try next streategy if we failed to register allocate
+                 * or we had to spill.
+                 */
+                assert(c->compilation_result ==
+                       V3D_COMPILATION_FAILED_REGISTER_ALLOCATION ||
+                       c->spills > 0);
+        }
+
+        /* If the best strategy was not the last, choose that */
+        if (best_c && c != best_c) {
+                vir_compile_destroy(c);
+                c = best_c;
         }
 
         if (unlikely(V3D_DEBUG & V3D_DEBUG_PERF) &&
@@ -1741,8 +1803,10 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
             c->spills > 0) {
                 char *debug_msg;
                 int ret = asprintf(&debug_msg,
-                                   "Compiled %s with %d spills and %d fills",
+                                   "Compiled %s prog %d/%d with %d "
+                                   "spills and %d fills",
                                    vir_get_stage_name(c),
+                                   c->program_id, c->variant_id,
                                    c->spills, c->fills);
                 fprintf(stderr, "%s\n", debug_msg);
 
@@ -1753,8 +1817,9 @@ uint64_t *v3d_compile(const struct v3d_compiler *compiler,
         }
 
         if (c->compilation_result != V3D_COMPILATION_SUCCEEDED) {
-                fprintf(stderr, "Failed to compile %s with any strategy.\n",
-                        vir_get_stage_name(c));
+                fprintf(stderr, "Failed to compile %s prog %d/%d "
+                        "with any strategy.\n",
+                        vir_get_stage_name(c), c->program_id, c->variant_id);
         }
 
         struct v3d_prog_data *prog_data;

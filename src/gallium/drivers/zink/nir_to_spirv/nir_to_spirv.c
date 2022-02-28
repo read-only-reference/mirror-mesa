@@ -601,11 +601,13 @@ emit_output(struct ntv_context *ctx, struct nir_variable *var)
       HANDLE_EMIT_BUILTIN(TESS_LEVEL_INNER, TessLevelInner);
 
       default:
-         spirv_builder_emit_location(&ctx->builder, var_id,
-                                     var->data.driver_location);
+         /* non-xfb psiz output will have location -1 */
+         if (var->data.location >= 0)
+            spirv_builder_emit_location(&ctx->builder, var_id,
+                                        var->data.driver_location);
       }
       /* tcs can't do xfb */
-      if (ctx->stage != MESA_SHADER_TESS_CTRL) {
+      if (ctx->stage != MESA_SHADER_TESS_CTRL && var->data.location >= 0) {
          unsigned idx = var->data.location << 2 | var->data.location_frac;
          ctx->outputs[idx] = var_id;
          ctx->so_output_gl_types[idx] = var->type;
@@ -3851,6 +3853,7 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
 
    if (sinfo->last_vertex)
       emit_so_info(&ctx, sinfo, max_output + 1);
+   uint32_t tcs_vertices_out_word = 0;
 
    /* we have to reverse iterate to match what's done in zink_compiler.c */
    foreach_list_typed_reverse(nir_variable, var, node, &s->variables)
@@ -3896,9 +3899,9 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
          spirv_builder_emit_exec_mode(&ctx.builder, entry_point, SpvExecutionModeSampleInterlockUnorderedEXT);
       break;
    case MESA_SHADER_TESS_CTRL:
-      spirv_builder_emit_exec_mode_literal(&ctx.builder, entry_point,
-                                           SpvExecutionModeOutputVertices,
-                                           s->info.tess.tcs_vertices_out);
+      tcs_vertices_out_word = spirv_builder_emit_exec_mode_literal(&ctx.builder, entry_point,
+                                                                   SpvExecutionModeOutputVertices,
+                                                                   s->info.tess.tcs_vertices_out);
       break;
    case MESA_SHADER_TESS_EVAL:
       spirv_builder_emit_exec_mode(&ctx.builder, entry_point,
@@ -4035,7 +4038,8 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
    if (!ret->words)
       goto fail;
 
-   ret->num_words = spirv_builder_get_words(&ctx.builder, ret->words, num_words, spirv_version);
+   ret->num_words = spirv_builder_get_words(&ctx.builder, ret->words, num_words, spirv_version, &tcs_vertices_out_word);
+   ret->tcs_vertices_out_word = tcs_vertices_out_word;
    assert(ret->num_words == num_words);
 
    ralloc_free(ctx.mem_ctx);
