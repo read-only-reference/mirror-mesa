@@ -944,7 +944,7 @@ VkResult anv_CreateDescriptorPool(
    pool->size = pool_size;
    pool->next = 0;
    pool->free_list = EMPTY;
-   pool->allocate_surface_states = (pCreateInfo->flags & VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_VALVE) == 0;
+   pool->host_only = pCreateInfo->flags & VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_VALVE;
 
    if (descriptor_bo_size > 0) {
       VkResult result = anv_device_alloc_bo(device,
@@ -1091,7 +1091,7 @@ struct surface_state_free_list_entry {
 static struct anv_state
 anv_descriptor_pool_alloc_state(struct anv_descriptor_pool *pool)
 {
-   assert(pool->allocate_surface_states);
+   assert(!pool->host_only);
 
    struct surface_state_free_list_entry *entry =
       pool->surface_state_free_list;
@@ -1132,7 +1132,7 @@ anv_descriptor_set_layout_size(const struct anv_descriptor_set_layout *layout,
           buffer_view_count * sizeof(struct anv_buffer_view);
 }
 
-VkResult
+static VkResult
 anv_descriptor_set_create(struct anv_device *device,
                           struct anv_descriptor_pool *pool,
                           struct anv_descriptor_set_layout *layout,
@@ -1174,7 +1174,7 @@ anv_descriptor_set_create(struct anv_device *device,
          anv_isl_format_for_descriptor_type(device,
                                             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
 
-      if (pool->allocate_surface_states) {
+      if (!pool->host_only) {
          set->desc_surface_state = anv_descriptor_pool_alloc_state(pool);
          anv_fill_buffer_surface_state(device, set->desc_surface_state, format,
                                        ISL_SURF_USAGE_CONSTANT_BUFFER_BIT,
@@ -1230,9 +1230,11 @@ anv_descriptor_set_create(struct anv_device *device,
    /* Allocate null surface state for the buffer views since
     * we lazy allocate this in the write anyway.
     */
-   for (uint32_t b = 0; b < set->buffer_view_count; b++) {
-      set->buffer_views[b].surface_state = ANV_STATE_NULL;
-      set->buffer_views[b].range = 0;
+   if (!pool->host_only) {
+      for (uint32_t b = 0; b < set->buffer_view_count; b++) {
+         set->buffer_views[b].surface_state =
+            anv_descriptor_pool_alloc_state(pool);
+      }
    }
 
    list_addtail(&set->pool_link, &pool->desc_sets);
@@ -1242,7 +1244,7 @@ anv_descriptor_set_create(struct anv_device *device,
    return VK_SUCCESS;
 }
 
-void
+static void
 anv_descriptor_set_destroy(struct anv_device *device,
                            struct anv_descriptor_pool *pool,
                            struct anv_descriptor_set *set)
@@ -1257,9 +1259,11 @@ anv_descriptor_set_destroy(struct anv_device *device,
          anv_descriptor_pool_free_state(pool, set->desc_surface_state);
    }
 
-   for (uint32_t b = 0; b < set->buffer_view_count; b++) {
-      if (set->buffer_views[b].surface_state.alloc_size)
-         anv_descriptor_pool_free_state(pool, set->buffer_views[b].surface_state);
+   if (!pool->host_only) {
+      for (uint32_t b = 0; b < set->buffer_view_count; b++) {
+         if (set->buffer_views[b].surface_state.alloc_size)
+            anv_descriptor_pool_free_state(pool, set->buffer_views[b].surface_state);
+      }
    }
 
    list_del(&set->pool_link);
@@ -1277,7 +1281,7 @@ VkResult anv_AllocateDescriptorSets(
    ANV_FROM_HANDLE(anv_descriptor_pool, pool, pAllocateInfo->descriptorPool);
 
    VkResult result = VK_SUCCESS;
-   struct anv_descriptor_set *set;
+   struct anv_descriptor_set *set = NULL;
    uint32_t i;
 
    const VkDescriptorSetVariableDescriptorCountAllocateInfo *vdcai =
@@ -1413,7 +1417,7 @@ anv_descriptor_set_write_image_view(struct anv_device *device,
       .sampler = sampler,
    };
 
-   if (set->pool && !set->pool->allocate_surface_states)
+   if (set->pool && set->pool->host_only)
       return;
 
    void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset +
@@ -1518,7 +1522,7 @@ anv_descriptor_set_write_buffer_view(struct anv_device *device,
       .buffer_view = buffer_view,
    };
 
-   if (set->pool && !set->pool->allocate_surface_states)
+   if (set->pool && set->pool->host_only)
       return;
 
    enum anv_descriptor_data data =
@@ -1586,7 +1590,7 @@ anv_descriptor_set_write_buffer(struct anv_device *device,
       .buffer = buffer,
    };
 
-   if (set->pool && !set->pool->allocate_surface_states)
+   if (set->pool && set->pool->host_only)
       return;
 
    void *desc_map = set->desc_mem.map + bind_layout->descriptor_offset +
@@ -1637,9 +1641,9 @@ anv_descriptor_set_write_buffer(struct anv_device *device,
       * vkAllocateDescriptorSets. */
    if (alloc_stream) {
       bview->surface_state = anv_state_stream_alloc(alloc_stream, 64, 64);
-   } else if (bview->surface_state.alloc_size == 0) {
-      bview->surface_state = anv_descriptor_pool_alloc_state(set->pool);
    }
+
+   assert(bview->surface_state.alloc_size);
 
    isl_surf_usage_flags_t usage =
       (type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
@@ -1686,7 +1690,11 @@ anv_descriptor_set_write_acceleration_structure(struct anv_device *device,
    assert(bind_layout->data & ANV_DESCRIPTOR_ADDRESS_RANGE);
    *desc = (struct anv_descriptor) {
       .type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+      .accel_struct = accel,
    };
+
+   if (set->pool && set->pool->host_only)
+      return;
 
    struct anv_address_range_descriptor desc_data = { };
    if (accel != NULL) {
@@ -1804,12 +1812,6 @@ void anv_UpdateDescriptorSets(
          &src->descriptors[src_layout->descriptor_index];
       src_desc += copy->srcArrayElement;
 
-      const struct anv_descriptor_set_binding_layout *dst_layout =
-         &dst->layout->binding[copy->dstBinding];
-      struct anv_descriptor *dst_desc =
-         &dst->descriptors[dst_layout->descriptor_index];
-      dst_desc += copy->dstArrayElement;
-
       if (src_layout->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
          anv_descriptor_set_write_inline_uniform_data(device, dst,
                                                       copy->dstBinding,
@@ -1867,13 +1869,8 @@ void anv_UpdateDescriptorSets(
          }
 
          case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
-            const VkWriteDescriptorSetAccelerationStructureKHR *accel_write =
-               vk_find_struct_const(dst_desc, WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
-            assert(accel_write->accelerationStructureCount ==
-                   copy->descriptorCount);
-            ANV_FROM_HANDLE(anv_acceleration_structure, accel, accel_write->pAccelerationStructures[j]);
             anv_descriptor_set_write_acceleration_structure(device, dst,
-                                                            accel,
+                                                            src_desc[j].accel_struct,
                                                             copy->dstBinding,
                                                             copy->dstArrayElement + j);
             break;

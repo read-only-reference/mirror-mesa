@@ -1389,7 +1389,7 @@ emit_begin_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *poo
             cmd_buffer->state.perfect_occlusion_queries_enabled = true;
          }
 
-         radv_set_db_count_control(cmd_buffer);
+         radv_set_db_count_control(cmd_buffer, true);
       } else {
          if ((flags & VK_QUERY_CONTROL_PRECISE_BIT) &&
              !cmd_buffer->state.perfect_occlusion_queries_enabled) {
@@ -1399,7 +1399,7 @@ emit_begin_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *poo
              */
             cmd_buffer->state.perfect_occlusion_queries_enabled = true;
 
-            radv_set_db_count_control(cmd_buffer);
+            radv_set_db_count_control(cmd_buffer, true);
          }
       }
 
@@ -1472,7 +1472,7 @@ emit_end_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *pool,
 
       cmd_buffer->state.active_occlusion_queries--;
       if (cmd_buffer->state.active_occlusion_queries == 0) {
-         radv_set_db_count_control(cmd_buffer);
+         radv_set_db_count_control(cmd_buffer, false);
 
          /* Reset the perfect occlusion queries hint now that no
           * queries are active.
@@ -1615,8 +1615,8 @@ radv_CmdEndQuery(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uint32_t 
 }
 
 VKAPI_ATTR void VKAPI_CALL
-radv_CmdWriteTimestamp2KHR(VkCommandBuffer commandBuffer, VkPipelineStageFlags2KHR stage,
-                           VkQueryPool queryPool, uint32_t query)
+radv_CmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 stage,
+                        VkQueryPool queryPool, uint32_t query)
 {
    RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    RADV_FROM_HANDLE(radv_query_pool, pool, queryPool);
@@ -1636,7 +1636,7 @@ radv_CmdWriteTimestamp2KHR(VkCommandBuffer commandBuffer, VkPipelineStageFlags2K
    ASSERTED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 28 * num_queries);
 
    for (unsigned i = 0; i < num_queries; i++) {
-      if (stage == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR) {
+      if (stage == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT) {
          radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
          radeon_emit(cs, COPY_DATA_COUNT_SEL | COPY_DATA_WR_CONFIRM |
                             COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) | COPY_DATA_DST_SEL(V_370_MEM));

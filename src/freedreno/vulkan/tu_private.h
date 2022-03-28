@@ -119,8 +119,10 @@ typedef uint32_t xcb_window_t;
 #define MAX_PUSH_DESCRIPTORS 32
 #define MAX_DYNAMIC_UNIFORM_BUFFERS 16
 #define MAX_DYNAMIC_STORAGE_BUFFERS 8
-#define MAX_DYNAMIC_BUFFERS                                                  \
-   (MAX_DYNAMIC_UNIFORM_BUFFERS + MAX_DYNAMIC_STORAGE_BUFFERS)
+#define MAX_DYNAMIC_BUFFERS_SIZE                                             \
+   (MAX_DYNAMIC_UNIFORM_BUFFERS + 2 * MAX_DYNAMIC_STORAGE_BUFFERS) *         \
+   A6XX_TEX_CONST_DWORDS
+
 #define TU_MAX_DRM_DEVICES 8
 #define MAX_VIEWS 16
 #define MAX_BIND_POINTS 2 /* compute + graphics */
@@ -215,7 +217,13 @@ struct tu_physical_device
    struct wsi_device wsi_device;
 
    int local_fd;
+   bool has_local;
+   int64_t local_major;
+   int64_t local_minor;
    int master_fd;
+   bool has_master;
+   int64_t master_major;
+   int64_t master_minor;
 
    uint32_t gmem_size;
    uint64_t gmem_base;
@@ -227,6 +235,9 @@ struct tu_physical_device
 
    int msm_major_version;
    int msm_minor_version;
+
+   /* Address space and global fault count for this local_fd with DRM backend */
+   uint64_t fault_count;
 
    /* This is the drivers on-disk cache used as a fallback as opposed to
     * the pipeline cache defined by apps.
@@ -255,6 +266,7 @@ enum tu_debug_flags
    TU_DEBUG_SYNCDRAW = 1 << 11,
    TU_DEBUG_DONT_CARE_AS_LOAD = 1 << 12,
    TU_DEBUG_GMEM = 1 << 13,
+   TU_DEBUG_RAST_ORDER = 1 << 14,
 };
 
 struct tu_instance
@@ -404,6 +416,9 @@ struct tu6_global
 
    ALIGN16 uint32_t cs_indirect_xyz[3];
 
+   /* To know when renderpass stats for autotune are valid */
+   volatile uint32_t autotune_fence;
+
    /* note: larger global bo will be used for customBorderColors */
    struct bcolor_entry bcolor_builtin[TU_BORDER_COLOR_BUILTIN], bcolor[];
 };
@@ -525,6 +540,9 @@ tu_device_wait_u_trace(struct tu_device *dev, struct tu_u_trace_syncobj *syncobj
 
 uint64_t
 tu_device_ticks_to_ns(struct tu_device *dev, uint64_t ts);
+
+VkResult
+tu_device_check_status(struct vk_device *vk_device);
 
 enum tu_bo_alloc_flags
 {
@@ -797,7 +815,7 @@ struct tu_descriptor_state
 {
    struct tu_descriptor_set *sets[MAX_SETS];
    struct tu_descriptor_set push_set;
-   uint32_t dynamic_descriptors[MAX_DYNAMIC_BUFFERS * A6XX_TEX_CONST_DWORDS];
+   uint32_t dynamic_descriptors[MAX_DYNAMIC_BUFFERS_SIZE];
 };
 
 enum tu_cmd_dirty_bits
@@ -813,8 +831,9 @@ enum tu_cmd_dirty_bits
    TU_CMD_DIRTY_LRZ = BIT(8),
    TU_CMD_DIRTY_VS_PARAMS = BIT(9),
    TU_CMD_DIRTY_RASTERIZER_DISCARD = BIT(10),
+   TU_CMD_DIRTY_VIEWPORTS = BIT(11),
    /* all draw states were disabled and need to be re-enabled: */
-   TU_CMD_DIRTY_DRAW_STATE = BIT(11)
+   TU_CMD_DIRTY_DRAW_STATE = BIT(12)
 };
 
 /* There are only three cache domains we have to care about: the CCU, or
@@ -1095,6 +1114,7 @@ struct tu_cmd_state
    bool predication_active;
    bool disable_gmem;
    enum a5xx_line_mode line_mode;
+   bool z_negative_one_to_one;
 
    uint32_t drawcall_count;
 
@@ -1163,6 +1183,7 @@ struct tu_cmd_buffer
    struct u_trace_iterator trace_renderpass_end;
 
    struct list_head renderpass_autotune_results;
+   struct tu_autotune_results_buffer* autotune_buffer;
 
    VkCommandBufferUsageFlags usage_flags;
    enum tu_cmd_buffer_status status;
@@ -1248,6 +1269,7 @@ tu_nir_lower_multiview(nir_shader *nir, uint32_t mask, bool *multi_pos_output,
 
 nir_shader *
 tu_spirv_to_nir(struct tu_device *dev,
+                void *mem_ctx,
                 const VkPipelineShaderStageCreateInfo *stage_info,
                 gl_shader_stage stage);
 
@@ -1366,6 +1388,8 @@ struct tu_pipeline
    bool raster_order_attachment_access;
    bool subpass_feedback_loop_ds;
 
+   bool z_negative_one_to_one;
+
    /* Base drawcall cost for sysmem vs gmem autotuner */
    uint8_t drawcall_base_cost;
 
@@ -1375,7 +1399,8 @@ struct tu_pipeline
 };
 
 void
-tu6_emit_viewport(struct tu_cs *cs, const VkViewport *viewport, uint32_t num_viewport);
+tu6_emit_viewport(struct tu_cs *cs, const VkViewport *viewport, uint32_t num_viewport,
+                  bool z_negative_one_to_one);
 
 void
 tu6_emit_scissor(struct tu_cs *cs, const VkRect2D *scs, uint32_t scissor_count);

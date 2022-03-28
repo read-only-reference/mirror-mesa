@@ -121,31 +121,27 @@ panfrost_sample_pattern(unsigned samples)
 static unsigned
 translate_tex_wrap(enum pipe_tex_wrap w, bool using_nearest)
 {
-        /* Bifrost doesn't support the GL_CLAMP wrap mode, so instead use
-         * CLAMP_TO_EDGE and CLAMP_TO_BORDER. On Midgard, CLAMP is broken for
-         * nearest filtering, so use CLAMP_TO_EDGE in that case. */
+        /* CLAMP is only supported on Midgard, where it is broken for nearest
+         * filtering. Use CLAMP_TO_EDGE in that case.
+         */
 
         switch (w) {
         case PIPE_TEX_WRAP_REPEAT: return MALI_WRAP_MODE_REPEAT;
-        case PIPE_TEX_WRAP_CLAMP:
-                return using_nearest ? MALI_WRAP_MODE_CLAMP_TO_EDGE :
-#if PAN_ARCH <= 5
-                     MALI_WRAP_MODE_CLAMP;
-#else
-                     MALI_WRAP_MODE_CLAMP_TO_BORDER;
-#endif
         case PIPE_TEX_WRAP_CLAMP_TO_EDGE: return MALI_WRAP_MODE_CLAMP_TO_EDGE;
         case PIPE_TEX_WRAP_CLAMP_TO_BORDER: return MALI_WRAP_MODE_CLAMP_TO_BORDER;
         case PIPE_TEX_WRAP_MIRROR_REPEAT: return MALI_WRAP_MODE_MIRRORED_REPEAT;
-        case PIPE_TEX_WRAP_MIRROR_CLAMP:
-                return using_nearest ? MALI_WRAP_MODE_MIRRORED_CLAMP_TO_EDGE :
-#if PAN_ARCH <= 5
-                     MALI_WRAP_MODE_MIRRORED_CLAMP;
-#else
-                     MALI_WRAP_MODE_MIRRORED_CLAMP_TO_BORDER;
-#endif
         case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_EDGE: return MALI_WRAP_MODE_MIRRORED_CLAMP_TO_EDGE;
         case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER: return MALI_WRAP_MODE_MIRRORED_CLAMP_TO_BORDER;
+
+#if PAN_ARCH <= 5
+        case PIPE_TEX_WRAP_CLAMP:
+                return using_nearest ? MALI_WRAP_MODE_CLAMP_TO_EDGE :
+                                       MALI_WRAP_MODE_CLAMP;
+        case PIPE_TEX_WRAP_MIRROR_CLAMP:
+                return using_nearest ? MALI_WRAP_MODE_MIRRORED_CLAMP_TO_EDGE :
+                                       MALI_WRAP_MODE_MIRRORED_CLAMP;
+#endif
+
         default: unreachable("Invalid wrap");
         }
 }
@@ -304,7 +300,8 @@ panfrost_emit_blend(struct panfrost_batch *batch, void *rts, mali_ptr *blend_sha
                         cfg.round_to_fb_precision = !dithered;
                         cfg.alpha_to_one = ctx->blend->base.alpha_to_one;
 #if PAN_ARCH >= 6
-                        cfg.constant = pack_blend_constant(format, cons);
+                        if (!blend_shaders[i])
+                                cfg.constant = pack_blend_constant(format, cons);
 #else
                         cfg.blend_shader = (blend_shaders[i] != 0);
 
@@ -780,8 +777,18 @@ static void panfrost_upload_txs_sysval(struct panfrost_batch *batch,
                 uniform->i[2] = u_minify(tex->texture->depth0,
                                          tex->u.tex.first_level);
 
-        if (is_array)
-                uniform->i[dim] = tex->texture->array_size;
+        if (is_array) {
+                unsigned size = tex->texture->array_size;
+
+                /* Internally, we store the number of 2D images (faces * array
+                 * size). Externally, we report the array size in terms of
+                 * complete cubes. So divide by the # of faces per cube.
+                 */
+                if (tex->target == PIPE_TEXTURE_CUBE_ARRAY)
+                        size /= 6;
+
+                uniform->i[dim] = size;
+        }
 }
 
 static void panfrost_upload_image_size_sysval(struct panfrost_batch *batch,
@@ -1394,13 +1401,15 @@ panfrost_emit_texture_descriptors(struct panfrost_batch *batch,
 
         return T.gpu;
 #else
-        uint64_t trampolines[PIPE_MAX_SHADER_SAMPLER_VIEWS] = { 0 };
+        uint64_t trampolines[PIPE_MAX_SHADER_SAMPLER_VIEWS];
 
         for (int i = 0; i < ctx->sampler_view_count[stage]; ++i) {
                 struct panfrost_sampler_view *view = ctx->sampler_views[stage][i];
 
-                if (!view)
+                if (!view) {
+                        trampolines[i] = 0;
                         continue;
+                }
 
                 panfrost_update_sampler_view(view, &ctx->base);
 
@@ -2409,9 +2418,9 @@ panfrost_initialize_surface(struct panfrost_batch *batch,
         }
 }
 
-/* Generate a fragment job. This should be called once per frame. (According to
- * presentations, this is supposed to correspond to eglSwapBuffers) */
-
+/* Generate a fragment job. This should be called once per frame. (Usually,
+ * this corresponds to eglSwapBuffers or one of glFlush, glFinish)
+ */
 static mali_ptr
 emit_fragment_job(struct panfrost_batch *batch, const struct pan_fb_info *pfb)
 {
@@ -2597,7 +2606,7 @@ panfrost_emit_primitive_size(struct panfrost_context *ctx,
 static bool
 panfrost_is_implicit_prim_restart(const struct pipe_draw_info *info)
 {
-        unsigned implicit_index = (1 << (info->index_size * 8)) - 1;
+        unsigned implicit_index = BITFIELD_MASK(info->index_size * 8);
         bool implicit = info->restart_index == implicit_index;
         return info->primitive_restart && implicit;
 }
@@ -2632,9 +2641,6 @@ static inline void
 panfrost_update_state_3d(struct panfrost_batch *batch)
 {
         unsigned dirty = batch->ctx->dirty;
-
-        if (dirty & (PAN_DIRTY_VIEWPORT | PAN_DIRTY_SCISSOR))
-                batch->viewport = panfrost_emit_viewport(batch);
 
         if (dirty & PAN_DIRTY_TLS_SIZE)
                 panfrost_batch_adjust_stack_size(batch);
@@ -3135,6 +3141,19 @@ panfrost_draw_vbo(struct pipe_context *pipe,
         /* Do some common setup */
         struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
 
+        /* Don't add too many jobs to a single batch. Hardware has a hard limit
+         * of 65536 jobs, but we choose a smaller soft limit (arbitrary) to
+         * avoid the risk of timeouts. This might not be a good idea. */
+        if (unlikely(batch->scoreboard.job_index > 10000))
+                batch = panfrost_get_fresh_batch_for_fbo(ctx, "Too many draws");
+
+        /* panfrost_batch_skip_rasterization reads
+         * batch->scissor_culls_everything, which is set by
+         * panfrost_emit_viewport, so call that first.
+         */
+        if (ctx->dirty & (PAN_DIRTY_VIEWPORT | PAN_DIRTY_SCISSOR))
+                batch->viewport = panfrost_emit_viewport(batch);
+
         /* If rasterization discard is enabled but the vertex shader does not
          * have side effects (including transform feedback), skip the draw
          * altogether. This is always an optimization. Additionally, this is
@@ -3150,12 +3169,6 @@ panfrost_draw_vbo(struct pipe_context *pipe,
                 if (!vs->info.writes_global)
                         return;
         }
-
-        /* Don't add too many jobs to a single batch. Hardware has a hard limit
-         * of 65536 jobs, but we choose a smaller soft limit (arbitrary) to
-         * avoid the risk of timeouts. This might not be a good idea. */
-        if (unlikely(batch->scoreboard.job_index > 10000))
-                batch = panfrost_get_fresh_batch_for_fbo(ctx, "Too many draws");
 
         unsigned zs_draws = ctx->depth_stencil->draws;
         batch->draws |= zs_draws;
@@ -3623,7 +3636,7 @@ panfrost_create_blend_state(struct pipe_context *pipe,
 }
 
 static void
-prepare_rsd(struct panfrost_shader_state *state,
+prepare_shader(struct panfrost_shader_state *state,
             struct panfrost_pool *pool, bool upload)
 {
         struct mali_renderer_state_packed *out =
@@ -3791,7 +3804,7 @@ GENX(panfrost_cmdstream_screen_init)(struct panfrost_screen *screen)
 {
         struct panfrost_device *dev = &screen->dev;
 
-        screen->vtbl.prepare_rsd = prepare_rsd;
+        screen->vtbl.prepare_shader = prepare_shader;
         screen->vtbl.emit_tls    = emit_tls;
         screen->vtbl.emit_fbd    = emit_fbd;
         screen->vtbl.emit_fragment_job = emit_fragment_job;

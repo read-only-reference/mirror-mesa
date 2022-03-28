@@ -139,8 +139,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    /* Supported features (boolean caps). */
    case PIPE_CAP_POINT_SPRITE:
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
-   case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+   case PIPE_CAP_FS_COORD_ORIGIN_UPPER_LEFT:
+   case PIPE_CAP_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
    case PIPE_CAP_VERTEX_SHADER_SATURATE:
@@ -158,10 +158,10 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_NATIVE_FENCE_FD:
       return screen->drm_version >= ETNA_DRM_VERSION_FENCE_FD;
-   case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
-   case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL: /* note: not integer */
+   case PIPE_CAP_FS_POSITION_IS_SYSVAL:
+   case PIPE_CAP_FS_FACE_IS_INTEGER_SYSVAL: /* note: not integer */
       return 1;
-   case PIPE_CAP_TGSI_FS_POINT_IS_SYSVAL:
+   case PIPE_CAP_FS_POINT_IS_SYSVAL:
       return 0;
 
    /* Memory */

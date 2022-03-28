@@ -71,6 +71,11 @@ struct radv_meta_saved_state {
    bool stencil_test_enable;
 
    struct {
+      uint32_t front;
+      uint32_t back;
+   } stencil_write_mask;
+
+   struct {
       struct {
          VkStencilOp fail_op;
          VkStencilOp pass_op;
@@ -239,18 +244,18 @@ void radv_meta_resolve_compute_image(struct radv_cmd_buffer *cmd_buffer,
                                      struct radv_image *src_image, VkFormat src_format,
                                      VkImageLayout src_image_layout, struct radv_image *dest_image,
                                      VkFormat dest_format, VkImageLayout dest_image_layout,
-                                     const VkImageResolve2KHR *region);
+                                     const VkImageResolve2 *region);
 
 void radv_meta_resolve_fragment_image(struct radv_cmd_buffer *cmd_buffer,
                                       struct radv_image *src_image, VkImageLayout src_image_layout,
                                       struct radv_image *dest_image,
                                       VkImageLayout dest_image_layout,
-                                      const VkImageResolve2KHR *region);
+                                      const VkImageResolve2 *region);
 
 void radv_decompress_resolve_subpass_src(struct radv_cmd_buffer *cmd_buffer);
 
 void radv_decompress_resolve_src(struct radv_cmd_buffer *cmd_buffer, struct radv_image *src_image,
-                                 VkImageLayout src_image_layout, const VkImageResolve2KHR *region);
+                                 VkImageLayout src_image_layout, const VkImageResolve2 *region);
 
 uint32_t radv_clear_cmask(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
                           const VkImageSubresourceRange *range, uint32_t value);

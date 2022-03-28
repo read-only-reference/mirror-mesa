@@ -116,6 +116,7 @@ static const nir_shader_compiler_options i915_compiler_options = {
    .lower_flrp32 = true,
    .lower_fmod = true,
    .lower_rotate = true,
+   .lower_sincos = true,
    .lower_uniforms_to_ubo = true,
    .lower_vector_cmp = true,
    .use_interpolated_input_intrinsics = true,
@@ -160,7 +161,7 @@ static const struct nir_shader_compiler_options gallivm_nir_options = {
    .lower_ifind_msb = true,
    .max_unroll_iterations = 32,
    .use_interpolated_input_intrinsics = true,
-   .lower_cs_local_index_from_id = true,
+   .lower_cs_local_index_to_id = true,
    .lower_uniforms_to_ubo = true,
    .lower_vector_cmp = true,
    .lower_device_index_to_zero = true,
@@ -398,7 +399,7 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
-   case PIPE_CAP_TGSI_INSTANCEID:
+   case PIPE_CAP_VS_INSTANCEID:
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
@@ -457,8 +458,8 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
       return 2048;
 
    /* Fragment coordinate conventions. */
-   case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+   case PIPE_CAP_FS_COORD_ORIGIN_UPPER_LEFT:
+   case PIPE_CAP_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
       return 1;
    case PIPE_CAP_ENDIANNESS:
       return PIPE_ENDIAN_LITTLE;

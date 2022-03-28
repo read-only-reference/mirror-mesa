@@ -177,6 +177,11 @@ struct zink_screen {
    } null_descriptor_hashes;
 
    VkExtent2D maxSampleLocationGridSize[5];
+
+   struct {
+      bool color_write_missing;
+      bool depth_clip_control_missing;
+   } driver_workarounds;
 };
 
 

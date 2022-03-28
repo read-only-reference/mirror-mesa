@@ -79,16 +79,16 @@ class Modifier:
         self.size = size
         self.implied = implied
         self.is_enum = (force_enum is not None) or size > 1
+        self.enum = force_enum or name
 
         if not self.is_enum:
             self.bare_values = ['', name]
             self.default = 0
         else:
-            enum = enums[force_enum or name]
-            self.bare_values = [x.value for x in enum.values]
-            defaults = [x for x in enum.values if x.default]
+            self.bare_values = [x.value for x in enums[self.enum].values]
+            defaults = [x for x in enums[self.enum].values if x.default]
             assert(len(defaults) <= 1)
-            
+
             if len(defaults) > 0:
                 self.default = self.bare_values.index(defaults[0].value)
             else:
@@ -102,6 +102,7 @@ class Source:
     def __init__(self, index, size, is_float = False, swizzle = False,
             halfswizzle = False, widen = False, lanes = False, combine = False, lane = None, absneg = False, notted = False, name = ""):
         self.is_float = is_float or absneg
+        self.start = (index * 8)
         self.size = size
         self.absneg = absneg
         self.notted = notted
@@ -142,15 +143,15 @@ class Dest:
         self.name = name
 
 class Staging:
-    def __init__(self, read = False, write = False, count = 0, flags = True, name = ""):
+    def __init__(self, read = False, write = False, count = 0, flags = 'true', name = ""):
         self.name = name
         self.read = read
         self.write = write
         self.count = count
-        self.flags = flags
+        self.flags = (flags != 'false')
         self.start = 40
 
-        if write and not flags:
+        if write and not self.flags:
             self.start = 16
 
         # For compatibility
@@ -160,11 +161,16 @@ class Staging:
         self.widen = False
         self.lanes = False
         self.lane = False
+        self.halfswizzle = False
+        self.combine = False
         self.size = 32
 
-        if not flags:
+        if not self.flags:
             self.encoded_flags = 0
+        elif flags == 'rw':
+            self.encoded_flags = 0xc0
         else:
+            assert(flags == 'true')
             self.encoded_flags = (0x80 if write else 0) | (0x40 if read else 0)
 
 class Immediate:
@@ -198,6 +204,12 @@ class Instruction:
         if name.startswith("LOAD.i") or name.startswith("STORE.i") or name.startswith("LD_BUFFER.i"):
             self.secondary_shift = 27 # Alias with memory_size
             self.secondary_mask = 0x7
+        if "descriptor_type" in [x.name for x in self.modifiers]:
+            self.secondary_mask = 0x3
+            self.secondary_shift = 37
+        elif "memory_width" in [x.name for x in self.modifiers]:
+            self.secondary_mask = 0x7
+            self.secondary_shift = 27
 
         assert(len(dests) == 0 or not staging)
         assert(not opcode2 or (opcode2 & self.secondary_mask) == opcode2)
@@ -233,7 +245,7 @@ def build_staging(i, el):
     r = xmlbool(el.attrib.get('read', 'false'))
     w = xmlbool(el.attrib.get('write', 'false'))
     count = int(el.attrib.get('count', '0'))
-    flags = xmlbool(el.attrib.get('flags', 'true'))
+    flags = el.attrib.get('flags', 'true')
 
     return Staging(r, w, count, flags, el.text or '')
 
@@ -257,7 +269,20 @@ def build_instr(el, overrides = {}):
 
     # Get explicit sources/dests
     tsize = typesize(name)
-    sources = [build_source(src, i, tsize) for i, src in enumerate(el.findall('src'))]
+    sources = []
+    i = 0
+
+    for src in el.findall('src'):
+        built = build_source(src, i, tsize)
+        sources += [built]
+
+        # 64-bit sources in a 32-bit (message) instruction count as two slots
+        # Affects BLEND, ST_CVT
+        if tsize != 64 and built.size == 64:
+            i = i + 2
+        else:
+            i = i + 1
+
     dests = [Dest(dest.text or '') for dest in el.findall('dest')]
 
     # Get implicit ones
@@ -349,6 +374,8 @@ MODIFIERS = {
     "array_enable": Flag("array_enable", 10),
     "texel_offset": Flag("texel_offset", 11),
     "shadow": Flag("shadow", 12),
+    "integer_coordinates": Flag("integer_coordinates", 13),
+    "fetch_component": Modifier("fetch_component", 14, 2),
     "lod_mode": Modifier("lod_mode", 13, 3),
     "write_mask": Modifier("write_mask", 22, 4),
     "register_type": Modifier("register_type", 26, 2),
@@ -357,9 +384,12 @@ MODIFIERS = {
     "register_width": Modifier("register_width", 46, 1, force_enum = "register_width"),
     "secondary_register_width": Modifier("secondary_register_width", 47, 1, force_enum = "register_width"),
 
+    "atom_opc": Modifier("atomic_operation", 22, 4),
+    "atom_opc_1": Modifier("atomic_operation_with_1", 22, 4),
     "inactive_result": Modifier("inactive_result", 22, 4),
-    "store_segment": Modifier("store_segment", 24, 2),
+    "memory_access": Modifier("memory_access", 24, 2),
     "regfmt": Modifier("register_format", 24, 3),
+    "source_format": Modifier("source_format", 24, 4),
     "vecsize": Modifier("vector_size", 28, 2),
 
     "slot": Modifier("slot", 30, 3),

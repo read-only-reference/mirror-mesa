@@ -43,7 +43,6 @@ dEQP-GLES2.functional.shaders.loops.for_constant_iterations.conditional_continue
 dEQP-GLES2.functional.shaders.loops.for_constant_iterations.double_continue_fragment,Fail
 dEQP-GLES2.functional.shaders.loops.for_constant_iterations.mixed_break_continue_fragment,Fail
 
-dEQP-GLES2.functional.shaders.random.all_features.fragment.22,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.38,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.5,Fail
 dEQP-GLES2.functional.shaders.random.all_features.fragment.79,Fail
@@ -894,10 +893,8 @@ spec@glsl-1.10@execution@variable-indexing@fs-input-array-vec2-index-rd,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-input-array-vec3-index-rd,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-input-array-vec4-index-rd,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-temp-array-mat3-index-col-row-wr,Fail
-spec@glsl-1.10@execution@variable-indexing@fs-temp-array-mat3-index-col-wr,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-temp-array-mat4-index-col-row-wr,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-temp-array-mat4-index-col-wr,Fail
-spec@glsl-1.10@execution@variable-indexing@fs-temp-array-mat4-index-row-wr,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-uniform-array-mat4-index-col-row-rd,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-varying-array-mat3-index-col-rd,Fail
 spec@glsl-1.10@execution@variable-indexing@fs-varying-array-mat3-index-col-row-rd,Fail

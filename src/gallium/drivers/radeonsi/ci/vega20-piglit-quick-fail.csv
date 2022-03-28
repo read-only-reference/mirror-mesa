@@ -1,5 +1,4 @@
 glx@extension string sanity,Fail
-glx@glx-make-glxdrawable-current,Fail
 spec@!opengl 1.1@windowoverlap,Fail
 spec@arb_shader_clock@execution@clock,Fail
 spec@egl_chromium_sync_control@conformance,Fail
@@ -48,8 +47,6 @@ spec@!opengl 3.2@gl-3.2-adj-prims pv-first,Fail
 spec@!opengl 3.2@gl-3.2-adj-prims pv-last,Fail
 spec@arb_bindless_texture@compiler@images@arith-bound-image.frag,Crash
 spec@arb_bindless_texture@compiler@samplers@arith-bound-sampler-texture2d.frag,Crash
-spec@arb_enhanced_layouts@compiler@block-member-locations@arrayed-block-member-location.frag,Fail
-spec@arb_enhanced_layouts@compiler@block-member-locations@arrayed-block-member-location.vert,Fail
 spec@arb_gpu_shader_fp64@execution@conversion@frag-conversion-explicit-dmat2-mat2,Fail
 spec@arb_gpu_shader_fp64@execution@conversion@frag-conversion-explicit-dmat2x3-mat2x3,Fail
 spec@arb_gpu_shader_fp64@execution@conversion@frag-conversion-explicit-dmat2x4-mat2x4,Fail
@@ -99,22 +96,14 @@ spec@arb_sparse_buffer@buffer-data,Fail
 spec@arb_sparse_buffer@commit,Fail
 spec@egl_ext_protected_content@conformance,Fail
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
-spec@ext_framebuffer_multisample@turn-on-off 2,Fail
-spec@ext_framebuffer_multisample@turn-on-off 4,Fail
-spec@ext_framebuffer_multisample@turn-on-off 6,Fail
-spec@ext_framebuffer_multisample@turn-on-off 8,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_uyvy,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y210,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y212,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y216,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuyv,Fail
-spec@ext_transform_feedback@order arrays lines,Fail
-spec@ext_transform_feedback@order arrays points,Fail
-spec@ext_transform_feedback@order arrays triangles,Fail
-spec@ext_transform_feedback@order elements lines,Fail
-spec@ext_transform_feedback@order elements points,Fail
-spec@ext_transform_feedback@order elements triangles,Fail
 spec@glsl-1.20@compiler@invalid-vec4-array-to-vec3-array-conversion.vert,Fail
+spec@glsl-1.30@execution@glsl-fs-continue-in-switch-in-do-while,Fail
+spec@glsl-1.30@execution@glsl-vs-continue-in-switch-in-do-while,Fail
 spec@glsl-1.50@execution@geometry@primitive-types gl_triangle_strip_adjacency,Fail
 spec@glsl-1.50@execution@geometry@tri-strip-ordering-with-prim-restart gl_triangle_strip_adjacency ffs,Fail
 spec@glsl-1.50@execution@geometry@tri-strip-ordering-with-prim-restart gl_triangle_strip_adjacency other,Fail

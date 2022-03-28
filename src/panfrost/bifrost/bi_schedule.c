@@ -360,7 +360,7 @@ bi_lower_atom_c1(bi_context *ctx, struct bi_clause_state *clause, struct
         pinstr->op = BI_OPCODE_ATOM_CX;
         pinstr->src[2] = pinstr->src[1];
         pinstr->src[1] = pinstr->src[0];
-        pinstr->src[3] = bi_dontcare();
+        pinstr->src[3] = bi_dontcare(&b);
         pinstr->src[0] = bi_null();
 
         return atom_c;
@@ -1060,16 +1060,21 @@ bi_instr_schedulable(bi_instr *instr,
          * same clause (most likely they will not), so if a later instruction
          * in the clause accesses the destination, the message-passing
          * instruction can't be scheduled */
-        if (bi_opcode_props[instr->op].sr_write && !bi_is_null(instr->dest[0])) {
-                unsigned nr = bi_count_write_registers(instr, 0);
-                assert(instr->dest[0].type == BI_INDEX_REGISTER);
-                unsigned reg = instr->dest[0].value;
+        if (bi_opcode_props[instr->op].sr_write) {
+                bi_foreach_dest(instr, d) {
+                        if (bi_is_null(instr->dest[d]))
+                                continue;
 
-                for (unsigned i = 0; i < clause->access_count; ++i) {
-                        bi_index idx = clause->accesses[i];
-                        for (unsigned d = 0; d < nr; ++d) {
-                                if (bi_is_equiv(bi_register(reg + d), idx))
-                                        return false;
+                        unsigned nr = bi_count_write_registers(instr, d);
+                        assert(instr->dest[d].type == BI_INDEX_REGISTER);
+                        unsigned reg = instr->dest[d].value;
+
+                        for (unsigned i = 0; i < clause->access_count; ++i) {
+                                bi_index idx = clause->accesses[i];
+                                for (unsigned d = 0; d < nr; ++d) {
+                                        if (bi_is_equiv(bi_register(reg + d), idx))
+                                                return false;
+                                }
                         }
                 }
         }
@@ -1229,9 +1234,9 @@ bi_take_instr(bi_context *ctx, struct bi_worklist st,
 {
         if (tuple->add && tuple->add->op == BI_OPCODE_CUBEFACE)
                 return bi_lower_cubeface(ctx, clause, tuple);
-        else if (tuple->add && tuple->add->op == BI_OPCODE_PATOM_C_I32)
+        else if (tuple->add && tuple->add->op == BI_OPCODE_ATOM_RETURN_I32)
                 return bi_lower_atom_c(ctx, clause, tuple);
-        else if (tuple->add && tuple->add->op == BI_OPCODE_PATOM_C1_I32)
+        else if (tuple->add && tuple->add->op == BI_OPCODE_ATOM1_RETURN_I32)
                 return bi_lower_atom_c1(ctx, clause, tuple);
         else if (tuple->add && tuple->add->op == BI_OPCODE_SEG_ADD_I64)
                 return bi_lower_seg_add(ctx, clause, tuple);

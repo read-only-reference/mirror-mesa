@@ -1405,7 +1405,7 @@ static_assert(sizeof(VOP3_instruction) == sizeof(Instruction) + 8, "Unexpected p
 
 struct VOP3P_instruction : public Instruction {
    bool neg_lo[3];
-   bool neg_hi[3];
+   bool neg_hi[3]; /* abs modifier, for v_mad_mix/v_fma_mix */
    uint8_t opsel_lo : 3;
    uint8_t opsel_hi : 3;
    bool clamp : 1;
@@ -1777,7 +1777,7 @@ memory_sync_info get_sync_info(const Instruction* instr);
 
 bool is_dead(const std::vector<uint16_t>& uses, Instruction* instr);
 
-bool can_use_opsel(chip_class chip, aco_opcode op, int idx, bool high);
+bool can_use_opsel(chip_class chip, aco_opcode op, int idx);
 bool instr_is_16bit(chip_class chip, aco_opcode op);
 bool can_use_SDWA(chip_class chip, const aco_ptr<Instruction>& instr, bool pre_ra);
 bool can_use_DPP(const aco_ptr<Instruction>& instr, bool pre_ra, bool dpp8);
@@ -1914,7 +1914,6 @@ struct Block {
    /* this information is needed for predecessors to blocks with phis when
     * moving out of ssa */
    bool scc_live_out = false;
-   PhysReg scratch_sgpr = PhysReg(); /* only needs to be valid if scc_live_out != false */
 
    Block() : index(0) {}
 };
@@ -2047,6 +2046,7 @@ struct DeviceInfo {
    unsigned simd_per_cu;
    bool has_fast_fma32 = false;
    bool has_mac_legacy32 = false;
+   bool fused_mad_mix = false;
    bool xnack_enabled = false;
    bool sram_ecc_enabled = false;
 };

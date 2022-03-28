@@ -718,6 +718,7 @@ init_state_base_address(struct iris_batch *batch)
       sba.InstructionBaseAddressModifyEnable    = true;
       sba.GeneralStateBufferSizeModifyEnable    = true;
       sba.DynamicStateBufferSizeModifyEnable    = true;
+      sba.SurfaceStateBaseAddressModifyEnable   = true;
 #if GFX_VER >= 9
       sba.BindlessSurfaceStateBaseAddress = ro_bo(NULL, IRIS_MEMZONE_BINDLESS_START);
       sba.BindlessSurfaceStateSize = (IRIS_BINDLESS_SIZE >> 12) - 1;
@@ -732,6 +733,7 @@ init_state_base_address(struct iris_batch *batch)
 
       sba.InstructionBaseAddress  = ro_bo(NULL, IRIS_MEMZONE_SHADER_START);
       sba.DynamicStateBaseAddress = ro_bo(NULL, IRIS_MEMZONE_DYNAMIC_START);
+      sba.SurfaceStateBaseAddress = ro_bo(NULL, IRIS_MEMZONE_BINDER_START);
 
       sba.GeneralStateBufferSize   = 0xfffff;
       sba.IndirectObjectBufferSize = 0xfffff;
@@ -1016,6 +1018,22 @@ iris_init_common_context(struct iris_batch *batch)
       reg.EnabledTexelOffsetPrecisionFixMask = 1;
    }
 #endif
+
+   /* Select 256B-aligned binding table mode on Icelake through Tigerlake,
+    * which gives us larger binding table pointers, at the cost of higher
+    * alignment requirements (bits 18:8 are valid instead of 15:5).  When
+    * using this mode, we have to shift binding table pointers by 3 bits,
+    * as they're still stored in the same bit-location in the field.
+    */
+#if GFX_VER >= 11 && GFX_VERx10 < 125
+   iris_emit_reg(batch, GENX(GT_MODE), reg) {
+      reg.BindingTableAlignment = BTP_18_8;
+      reg.BindingTableAlignmentMask = true;
+   }
+#define IRIS_BT_OFFSET_SHIFT 3
+#else
+#define IRIS_BT_OFFSET_SHIFT 0
+#endif
 }
 
 /**
@@ -1141,7 +1159,7 @@ iris_init_compute_context(struct iris_batch *batch)
     *
     *  Start with pipeline in 3D mode to set the STATE_BASE_ADDRESS.
     */
-#if GFX_VER == 12
+#if GFX_VERx10 == 120
    emit_pipeline_select(batch, _3D);
 #else
    emit_pipeline_select(batch, GPGPU);
@@ -1153,7 +1171,7 @@ iris_init_compute_context(struct iris_batch *batch)
 
    iris_init_common_context(batch);
 
-#if GFX_VER == 12
+#if GFX_VERx10 == 120
    emit_pipeline_select(batch, GPGPU);
 #endif
 
@@ -2548,6 +2566,10 @@ iris_create_sampler_view(struct pipe_context *ctx,
          isv->view.base_array_layer = 0;
          isv->view.array_len = 1;
       } else {
+#if GFX_VER < 9
+         /* Hardware older than skylake ignores this value */
+         assert(tex->target != PIPE_TEXTURE_3D || !tmpl->u.tex.first_layer);
+#endif
          isv->view.base_array_layer = tmpl->u.tex.first_layer;
          isv->view.array_len =
             tmpl->u.tex.last_layer - tmpl->u.tex.first_layer + 1;
@@ -5033,9 +5055,9 @@ use_image(struct iris_batch *batch, struct iris_context *ice,
 }
 
 #define push_bt_entry(addr) \
-   assert(addr >= binder_addr); \
+   assert(addr >= surf_base_offset); \
    assert(s < shader->bt.size_bytes / sizeof(uint32_t)); \
-   if (!pin_only) bt_map[s++] = (addr) - binder_addr;
+   if (!pin_only) bt_map[s++] = (addr) - surf_base_offset;
 
 #define bt_assert(section) \
    if (!pin_only && shader->bt.used_mask[section] != 0) \
@@ -5062,7 +5084,7 @@ iris_populate_binding_table(struct iris_context *ice,
    struct iris_binding_table *bt = &shader->bt;
    UNUSED struct brw_stage_prog_data *prog_data = shader->prog_data;
    struct iris_shader_state *shs = &ice->state.shaders[stage];
-   uint32_t binder_addr = binder->bo->address;
+   uint32_t surf_base_offset = GFX_VER < 11 ? binder->bo->address : 0;
 
    uint32_t *bt_map = binder->map + binder->bt_offset[stage];
    int s = 0;
@@ -5431,10 +5453,10 @@ iris_restore_compute_saved_bos(struct iris_context *ice,
  * Possibly emit STATE_BASE_ADDRESS to update Surface State Base Address.
  */
 static void
-iris_update_surface_base_address(struct iris_batch *batch,
-                                 struct iris_binder *binder)
+iris_update_binder_address(struct iris_batch *batch,
+                           struct iris_binder *binder)
 {
-   if (batch->last_surface_base_address == binder->bo->address)
+   if (batch->last_binder_address == binder->bo->address)
       return;
 
    struct isl_device *isl_dev = &batch->screen->isl_dev;
@@ -5442,9 +5464,10 @@ iris_update_surface_base_address(struct iris_batch *batch,
 
    iris_batch_sync_region_start(batch);
 
-   flush_before_state_base_change(batch);
+#if GFX_VER >= 11
+   /* Use 3DSTATE_BINDING_TABLE_POOL_ALLOC on Icelake and later */
 
-#if GFX_VER == 12
+#if GFX_VERx10 == 120
    /* Wa_1607854226:
     *
     *  Workaround the non pipelined state not applying in MEDIA/GPGPU pipeline
@@ -5453,6 +5476,30 @@ iris_update_surface_base_address(struct iris_batch *batch,
    if (batch->name == IRIS_BATCH_COMPUTE)
       emit_pipeline_select(batch, _3D);
 #endif
+
+   iris_emit_pipe_control_flush(batch, "Stall for binder realloc",
+                                PIPE_CONTROL_CS_STALL);
+
+   iris_emit_cmd(batch, GENX(3DSTATE_BINDING_TABLE_POOL_ALLOC), btpa) {
+      btpa.BindingTablePoolBaseAddress = ro_bo(binder->bo, 0);
+      btpa.BindingTablePoolBufferSize = binder->size / 4096;
+#if GFX_VERx10 < 125
+      btpa.BindingTablePoolEnable = true;
+#endif
+      btpa.MOCS = mocs;
+   }
+
+#if GFX_VERx10 == 120
+   /* Wa_1607854226:
+    *
+    *  Put the pipeline back into compute mode.
+    */
+   if (batch->name == IRIS_BATCH_COMPUTE)
+      emit_pipeline_select(batch, GPGPU);
+#endif
+#else
+   /* Use STATE_BASE_ADDRESS on older platforms */
+   flush_before_state_base_change(batch);
 
    iris_emit_cmd(batch, GENX(STATE_BASE_ADDRESS), sba) {
       sba.SurfaceStateBaseAddressModifyEnable = true;
@@ -5470,35 +5517,13 @@ iris_update_surface_base_address(struct iris_batch *batch,
 #if GFX_VER >= 9
       sba.BindlessSurfaceStateMOCS    = mocs;
 #endif
-#if GFX_VER >= 11
-      sba.BindlessSamplerStateMOCS    = mocs;
-#endif
    }
-
-#if GFX_VER == 12
-   /* Wa_1607854226:
-    *
-    *  Put the pipeline back into compute mode.
-    */
-   if (batch->name == IRIS_BATCH_COMPUTE)
-      emit_pipeline_select(batch, GPGPU);
 #endif
-
-   if (GFX_VERx10 >= 125) {
-      iris_emit_cmd(batch, GENX(3DSTATE_BINDING_TABLE_POOL_ALLOC), btpa) {
-         btpa.BindingTablePoolBaseAddress = ro_bo(binder->bo, 0);
-         btpa.BindingTablePoolBufferSize = IRIS_BINDER_SIZE / 4096;
-#if GFX_VERx10 < 125
-         btpa.BindingTablePoolEnable = true;
-#endif
-         btpa.MOCS = mocs;
-      }
-   }
 
    flush_after_state_base_change(batch);
    iris_batch_sync_region_end(batch);
 
-   batch->last_surface_base_address = binder->bo->address;
+   batch->last_binder_address = binder->bo->address;
 }
 
 static inline void
@@ -5829,7 +5854,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
          float vp_ymin = viewport_extent(state, 1, -1.0f);
          float vp_ymax = viewport_extent(state, 1,  1.0f);
 
-         intel_calculate_guardband_size(cso_fb->width, cso_fb->height,
+         intel_calculate_guardband_size(0, cso_fb->width, 0, cso_fb->height,
                                         state->scale[0], state->scale[1],
                                         state->translate[0], state->translate[1],
                                         &gb_xmin, &gb_xmax, &gb_ymin, &gb_ymax);
@@ -6022,7 +6047,8 @@ iris_upload_dirty_render_state(struct iris_context *ice,
                             << stage)) {
          iris_emit_cmd(batch, GENX(3DSTATE_BINDING_TABLE_POINTERS_VS), ptr) {
             ptr._3DCommandSubOpcode = 38 + stage;
-            ptr.PointertoVSBindingTable = binder->bt_offset[stage];
+            ptr.PointertoVSBindingTable =
+               binder->bt_offset[stage] >> IRIS_BT_OFFSET_SHIFT;
          }
       }
    }
@@ -6200,6 +6226,17 @@ iris_upload_dirty_render_state(struct iris_context *ice,
 
    if (ice->state.streamout_active) {
       if (dirty & IRIS_DIRTY_SO_BUFFERS) {
+         /* Wa_16011411144
+          * SW must insert a PIPE_CONTROL cmd before and after the
+          * 3dstate_so_buffer_index_0/1/2/3 states to ensure so_buffer_index_* state is
+          * not combined with other state changes.
+          */
+         if (intel_device_info_is_dg2(&batch->screen->devinfo)) {
+            iris_emit_pipe_control_flush(batch,
+                                         "SO pre change stall WA",
+                                         PIPE_CONTROL_CS_STALL);
+         }
+
          for (int i = 0; i < 4; i++) {
             struct iris_stream_output_target *tgt =
                (void *) ice->state.so_target[i];
@@ -6228,6 +6265,13 @@ iris_upload_dirty_render_state(struct iris_context *ice,
             } else {
                iris_batch_emit(batch, so_buffers, 4 * dwords);
             }
+         }
+
+         /* Wa_16011411144 */
+         if (intel_device_info_is_dg2(&batch->screen->devinfo)) {
+            iris_emit_pipe_control_flush(batch,
+                                         "SO post change stall WA",
+                                         PIPE_CONTROL_CS_STALL);
          }
       }
 
@@ -7236,7 +7280,8 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
             KSP(shader) + brw_cs_prog_data_prog_offset(cs_prog_data,
                                                        dispatch.simd_size);
          idd.SamplerStatePointer = shs->sampler_table.offset;
-         idd.BindingTablePointer = binder->bt_offset[MESA_SHADER_COMPUTE];
+         idd.BindingTablePointer =
+            binder->bt_offset[MESA_SHADER_COMPUTE] >> IRIS_BT_OFFSET_SHIFT;
          idd.NumberofThreadsinGPGPUThreadGroup = dispatch.threads;
       }
 
@@ -8310,7 +8355,7 @@ genX(init_screen_state)(struct iris_screen *screen)
    screen->vtbl.init_render_context = iris_init_render_context;
    screen->vtbl.init_compute_context = iris_init_compute_context;
    screen->vtbl.upload_render_state = iris_upload_render_state;
-   screen->vtbl.update_surface_base_address = iris_update_surface_base_address;
+   screen->vtbl.update_binder_address = iris_update_binder_address;
    screen->vtbl.upload_compute_state = iris_upload_compute_state;
    screen->vtbl.emit_raw_pipe_control = iris_emit_raw_pipe_control;
    screen->vtbl.emit_mi_report_perf_count = iris_emit_mi_report_perf_count;

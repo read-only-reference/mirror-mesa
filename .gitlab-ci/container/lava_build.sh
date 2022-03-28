@@ -34,6 +34,7 @@ if [[ "$DEBIAN_ARCH" = "arm64" ]]; then
     DEVICE_TREES+=" arch/arm64/boot/dts/qcom/apq8096-db820c.dtb"
     DEVICE_TREES+=" arch/arm64/boot/dts/amlogic/meson-g12b-a311d-khadas-vim3.dtb"
     DEVICE_TREES+=" arch/arm64/boot/dts/mediatek/mt8183-kukui-jacuzzi-juniper-sku16.dtb"
+    DEVICE_TREES+=" arch/arm64/boot/dts/nvidia/tegra210-p3450-0000.dtb"
     DEVICE_TREES+=" arch/arm64/boot/dts/qcom/sc7180-trogdor-lazor-limozeen-nots.dtb"
     KERNEL_IMAGE_NAME="Image"
 elif [[ "$DEBIAN_ARCH" = "armhf" ]]; then
@@ -51,7 +52,7 @@ else
     DEFCONFIG="arch/x86/configs/x86_64_defconfig"
     DEVICE_TREES=""
     KERNEL_IMAGE_NAME="bzImage"
-    ARCH_PACKAGES="libva-dev"
+    ARCH_PACKAGES="libasound2-dev libcap-dev libfdt-dev libva-dev wayland-protocols"
 fi
 
 # Determine if we're in a cross build.
@@ -128,7 +129,7 @@ fi
 
 ############### Building
 STRIP_CMD="${GCC_ARCH}-strip"
-mkdir -p /lava-files/rootfs-${DEBIAN_ARCH}
+mkdir -p /lava-files/rootfs-${DEBIAN_ARCH}/usr/lib/$GCC_ARCH
 
 
 ############### Build apitrace
@@ -167,6 +168,13 @@ if [[ "$DEBIAN_ARCH" = "amd64" ]]; then
     mv /va/bin/* /lava-files/rootfs-${DEBIAN_ARCH}/usr/bin/
 fi
 
+############### Build Crosvm
+if [[ ${DEBIAN_ARCH} = "amd64" ]]; then
+    . .gitlab-ci/container/build-crosvm.sh
+    mv /usr/local/bin/crosvm /lava-files/rootfs-${DEBIAN_ARCH}/usr/bin/
+    mv /usr/local/lib/$GCC_ARCH/libvirglrenderer.* /lava-files/rootfs-${DEBIAN_ARCH}/usr/lib/$GCC_ARCH/
+fi
+
 ############### Build libdrm
 EXTRA_MESON_ARGS+=" -D prefix=/libdrm"
 . .gitlab-ci/container/build-libdrm.sh
@@ -201,7 +209,6 @@ rm /lava-files/rootfs-${DEBIAN_ARCH}/create-rootfs.sh
 # Dependencies pulled during the creation of the rootfs may overwrite
 # the built libdrm. Hence, we add it after the rootfs has been already
 # created.
-mkdir -p /lava-files/rootfs-${DEBIAN_ARCH}/usr/lib/$GCC_ARCH
 find /libdrm/ -name lib\*\.so\* | xargs cp -t /lava-files/rootfs-${DEBIAN_ARCH}/usr/lib/$GCC_ARCH/.
 mkdir -p /lava-files/rootfs-${DEBIAN_ARCH}/libdrm/
 cp -Rp /libdrm/share /lava-files/rootfs-${DEBIAN_ARCH}/libdrm/share

@@ -536,6 +536,8 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_split_array_vars, nir_var_function_temp);
       OPT(nir_shrink_vec_array_vars, nir_var_function_temp);
       OPT(nir_opt_deref);
+      if (OPT(nir_opt_memcpy))
+         OPT(nir_split_var_copies);
       OPT(nir_lower_vars_to_ssa);
       if (allow_copies) {
          /* Only run this pass in the first call to brw_nir_optimize.  Later
@@ -595,6 +597,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_opt_intrinsics);
       OPT(nir_opt_idiv_const, 32);
       OPT(nir_opt_algebraic);
+      OPT(nir_lower_constant_convert_alu_types);
       OPT(nir_opt_constant_folding);
 
       if (lower_flrp != 0) {
@@ -818,7 +821,8 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
       .lower_txf_offset = true,
       .lower_rect_offset = true,
       .lower_txd_cube_map = true,
-      .lower_txd_3d = devinfo->verx10 >= 125,
+      .lower_txd_3d = devinfo->verx10 >= 125,    /* Wa_1209978020 */
+      .lower_txd_array = devinfo->verx10 >= 125, /* Wa_1209978020 */
       .lower_txb_shadow_clamp = true,
       .lower_txd_shadow_clamp = true,
       .lower_txd_offset_clamp = true,
@@ -912,6 +916,25 @@ void
 brw_nir_link_shaders(const struct brw_compiler *compiler,
                      nir_shader *producer, nir_shader *consumer)
 {
+   if (producer->info.stage == MESA_SHADER_MESH &&
+       consumer->info.stage == MESA_SHADER_FRAGMENT) {
+      /* gl_MeshPerPrimitiveNV[].gl_ViewportIndex, gl_PrimitiveID and gl_Layer
+       * are per primitive, but fragment shader does not have them marked as
+       * such. Add the annotation here.
+       */
+      nir_foreach_shader_in_variable(var, consumer) {
+         switch (var->data.location) {
+            case VARYING_SLOT_LAYER:
+            case VARYING_SLOT_PRIMITIVE_ID:
+            case VARYING_SLOT_VIEWPORT:
+               var->data.per_primitive = 1;
+               break;
+            default:
+               continue;
+         }
+      }
+   }
+
    nir_lower_io_arrays_to_elements(producer, consumer);
    nir_validate_shader(producer, "after nir_lower_io_arrays_to_elements");
    nir_validate_shader(consumer, "after nir_lower_io_arrays_to_elements");
@@ -1190,6 +1213,27 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    OPT(nir_opt_dce);
    OPT(nir_opt_move, nir_move_comparisons);
    OPT(nir_opt_dead_cf);
+
+   NIR_PASS_V(nir, nir_convert_to_lcssa, true, true);
+   NIR_PASS_V(nir, nir_divergence_analysis);
+
+   /* TODO: Enable nir_opt_uniform_atomics on Gfx7.x too.
+    * It currently fails Vulkan tests on Haswell for an unknown reason.
+    */
+   if (devinfo->ver >= 8 && OPT(nir_opt_uniform_atomics)) {
+      const nir_lower_subgroups_options subgroups_options = {
+         .ballot_bit_size = 32,
+         .ballot_components = 1,
+         .lower_elect = true,
+      };
+      OPT(nir_lower_subgroups, &subgroups_options);
+
+      if (OPT(nir_lower_int64))
+         brw_nir_optimize(nir, compiler, is_scalar, false);
+   }
+
+   /* Clean up LCSSA phis */
+   OPT(nir_opt_remove_phis);
 
    OPT(nir_lower_bool_to_int32);
    OPT(nir_copy_prop);

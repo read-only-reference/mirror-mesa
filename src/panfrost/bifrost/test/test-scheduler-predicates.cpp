@@ -69,7 +69,7 @@ TEST_F(SchedulerPredicates, FMA)
 
 TEST_F(SchedulerPredicates, LOAD)
 {
-   bi_instr *load = bi_load_i128_to(b, TMP(), TMP(), TMP(), BI_SEG_UBO);
+   bi_instr *load = bi_load_i128_to(b, TMP(), TMP(), TMP(), BI_SEG_UBO, 0);
    ASSERT_FALSE(bi_can_fma(load));
    ASSERT_TRUE(bi_can_add(load));
    ASSERT_TRUE(bi_must_message(load));
@@ -81,7 +81,8 @@ TEST_F(SchedulerPredicates, LOAD)
 
 TEST_F(SchedulerPredicates, BLEND)
 {
-   bi_instr *blend = bi_blend_to(b, TMP(), TMP(), TMP(), TMP(), TMP(), TMP(), 4, 4);
+   bi_instr *blend = bi_blend_to(b, TMP(), TMP(), TMP(), TMP(), TMP(), TMP(),
+                                 BI_REGISTER_FORMAT_F32, 4, 4);
    ASSERT_FALSE(bi_can_fma(blend));
    ASSERT_TRUE(bi_can_add(blend));
    ASSERT_TRUE(bi_must_message(blend));

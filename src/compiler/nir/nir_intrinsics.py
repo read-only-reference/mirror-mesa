@@ -248,6 +248,10 @@ index("nir_scope", "execution_scope")
 # Semantics of an IO instruction
 index("struct nir_io_semantics", "io_semantics")
 
+# Transform feedback info
+index("struct nir_io_xfb", "io_xfb")
+index("struct nir_io_xfb", "io_xfb2")
+
 # Rounding mode for conversions
 index("nir_rounding_mode", "rounding_mode")
 
@@ -598,7 +602,7 @@ def image(name, src_comp=[], extra_indices=[], **kwargs):
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
     intrinsic("image_" + name, src_comp=[1] + src_comp,
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
-    intrinsic("bindless_image_" + name, src_comp=[1] + src_comp,
+    intrinsic("bindless_image_" + name, src_comp=[-1] + src_comp,
               indices=[IMAGE_DIM, IMAGE_ARRAY, FORMAT, ACCESS] + extra_indices, **kwargs)
 
 image("load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
@@ -768,6 +772,9 @@ system_value("local_invocation_index", 1)
 # non-zero_base indicates the base is included
 system_value("workgroup_id", 3, bit_sizes=[32, 64])
 system_value("workgroup_id_zero_base", 3)
+# The workgroup_index is intended for situations when a 3 dimensional
+# workgroup_id is not available on the HW, but a 1 dimensional index is.
+system_value("workgroup_index", 1)
 system_value("base_workgroup_id", 3, bit_sizes=[32, 64])
 system_value("user_clip_plane", 4, indices=[UCP_ID])
 system_value("num_workgroups", 3, bit_sizes=[32, 64])
@@ -799,6 +806,7 @@ system_value("aa_line_width", 1)
 system_value("scratch_base_ptr", 0, bit_sizes=[32,64], indices=[BASE])
 system_value("constant_base_ptr", 0, bit_sizes=[32,64])
 system_value("shared_base_ptr", 0, bit_sizes=[32,64])
+system_value("global_base_ptr", 0, bit_sizes=[32,64])
 
 # System values for ray tracing.
 system_value("ray_launch_id", 3)
@@ -1001,7 +1009,7 @@ def store(name, srcs, indices=[], flags=[]):
     intrinsic("store_" + name, [0] + srcs, indices=indices, flags=flags)
 
 # src[] = { value, offset }.
-store("output", [1], [BASE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
+store("output", [1], [BASE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS, IO_XFB, IO_XFB2])
 # src[] = { value, vertex, offset }.
 store("per_vertex_output", [1, 1], [BASE, WRITE_MASK, COMPONENT, SRC_TYPE, IO_SEMANTICS])
 # src[] = { value, primitive, offset }.
@@ -1039,6 +1047,13 @@ system_value("printf_buffer_address", 1, bit_sizes=[32,64])
 # Mesh shading MultiView intrinsics
 system_value("mesh_view_count", 1)
 load("mesh_view_indices", [1], [BASE, RANGE], [CAN_ELIMINATE, CAN_REORDER])
+
+# Used to pass values from the preamble to the main shader.
+# This should use something similar to Vulkan push constants and load_preamble
+# should be relatively cheap.
+# For now we only support accesses with a constant offset.
+load("preamble", [], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
+store("preamble", [], indices=[BASE])
 
 # IR3-specific version of most SSBO intrinsics. The only different
 # compare to the originals is that they add an extra source to hold
@@ -1114,6 +1129,31 @@ load("global_ir3", [2, 1], indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=[CAN
 # rather than a (binding, index) pair. We may also want to use this with GL.
 # Note that this doesn't actually turn into a HW instruction.
 intrinsic("bindless_resource_ir3", [1], dest_comp=1, indices=[DESC_SET], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# IR3-specific intrinsics for shader preamble. These are meant to be used like
+# this:
+#
+# if (preamble_start()) {
+#    if (subgroupElect()) {
+#       // preamble
+#       ...
+#       preamble_end();
+#    }
+# }
+# // main shader
+# ...
+
+intrinsic("preamble_start_ir3", [], dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
+
+barrier("preamble_end_ir3")
+
+# IR3-specific intrinsic for stc. Should be used in the shader preamble.
+store("uniform_ir3", [], indices=[BASE])
+
+# IR3-specific intrinsic for ldc.k. Copies UBO to constant file.
+# base is the const file base in components, range is the amount to copy in
+# vec4's.
+intrinsic("copy_ubo_to_uniform_ir3", [1, 1], indices=[BASE, RANGE])
 
 # DXIL specific intrinsics
 # src[] = { value, mask, index, offset }.
@@ -1290,6 +1330,14 @@ system_value("intersection_opaque_amd", 1, bit_sizes=[1])
 
 # Load forced VRS rates.
 intrinsic("load_force_vrs_rates_amd", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+intrinsic("load_scalar_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("load_vector_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# src[] = { 64-bit base address, 32-bit offset }.
+intrinsic("load_smem_amd", src_comp=[1, 1], dest_comp=0, bit_sizes=[32],
+                           indices=[ALIGN_MUL, ALIGN_OFFSET],
+                           flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # V3D-specific instrinc for tile buffer color reads.
 #

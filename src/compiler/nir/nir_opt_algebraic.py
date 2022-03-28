@@ -1158,6 +1158,23 @@ optimizations.extend([
    (('bany_fnequal3', a, b), ('ior', ('ior', ('fneu', 'a.x', 'b.x'), ('fneu', 'a.y', 'b.y')), ('fneu', 'a.z', 'b.z')), 'options->lower_vector_cmp'),
    (('bany_fnequal4', a, b), ('ior', ('ior', ('fneu', 'a.x', 'b.x'), ('fneu', 'a.y', 'b.y')), ('ior', ('fneu', 'a.z', 'b.z'), ('fneu', 'a.w', 'b.w'))), 'options->lower_vector_cmp'),
 
+   (('feq', ('seq', a, b), 1.0), ('feq', a, b)),
+   (('feq', ('sne', a, b), 1.0), ('fneu', a, b)),
+   (('feq', ('slt', a, b), 1.0), ('flt', a, b)),
+   (('feq', ('sge', a, b), 1.0), ('fge', a, b)),
+   (('fneu', ('seq', a, b), 0.0), ('feq', a, b)),
+   (('fneu', ('sne', a, b), 0.0), ('fneu', a, b)),
+   (('fneu', ('slt', a, b), 0.0), ('flt', a, b)),
+   (('fneu', ('sge', a, b), 0.0), ('fge', a, b)),
+   (('feq', ('seq', a, b), 0.0), ('fneu', a, b)),
+   (('feq', ('sne', a, b), 0.0), ('feq', a, b)),
+   (('feq', ('slt', a, b), 0.0), ('fge', a, b)),
+   (('feq', ('sge', a, b), 0.0), ('flt', a, b)),
+   (('fneu', ('seq', a, b), 1.0), ('fneu', a, b)),
+   (('fneu', ('sne', a, b), 1.0), ('feq', a, b)),
+   (('fneu', ('slt', a, b), 1.0), ('fge', a, b)),
+   (('fneu', ('sge', a, b), 1.0), ('flt', a, b)),
+
    (('fneu', ('fneg', a), a), ('fneu', a, 0.0)),
    (('feq', ('fneg', a), a), ('feq', a, 0.0)),
    # Emulating booleans
@@ -1653,7 +1670,7 @@ optimizations.extend([
    (('uadd_sat@64', a, b), ('bcsel', ('ult', ('iadd', a, b), a), -1, ('iadd', a, b)), 'options->lower_uadd_sat || (options->lower_int64_options & nir_lower_iadd64) != 0'),
    (('uadd_sat', a, b), ('bcsel', ('ult', ('iadd', a, b), a), -1, ('iadd', a, b)), 'options->lower_uadd_sat'),
    (('usub_sat', a, b), ('bcsel', ('ult', a, b), 0, ('isub', a, b)), 'options->lower_uadd_sat'),
-   (('usub_sat@64', a, b), ('bcsel', ('ult', a, b), 0, ('isub', a, b)), 'options->lower_usub_sat64 || (options->lower_int64_options & nir_lower_iadd64) != 0'),
+   (('usub_sat@64', a, b), ('bcsel', ('ult', a, b), 0, ('isub', a, b)), '(options->lower_int64_options & nir_lower_usub_sat64) != 0'),
 
    # int64_t sum = a + b;
    #
@@ -1685,7 +1702,7 @@ optimizations.extend([
                              ('ior', ('ior', ('ilt', a, 0), ('ilt', b, 0)), ('ige', ('iadd', a, b), 0)),
                              ('iadd', a, b),
                              0x7fffffffffffffff)),
-    '(options->lower_int64_options & nir_lower_iadd64) != 0'),
+    '(options->lower_int64_options & nir_lower_iadd_sat64) != 0'),
 
    # int64_t sum = a - b;
    #
@@ -1703,7 +1720,7 @@ optimizations.extend([
                              ('ior', ('ior', ('ilt', a, 0), ('ige', b, 0)), ('ige', ('isub', a, b), 0)),
                              ('isub', a, b),
                              0x7fffffffffffffff)),
-    '(options->lower_int64_options & nir_lower_iadd64) != 0'),
+    '(options->lower_int64_options & nir_lower_iadd_sat64) != 0'),
 
    # These are done here instead of in the backend because the int64 lowering
    # pass will make a mess of the patterns.  The first patterns are

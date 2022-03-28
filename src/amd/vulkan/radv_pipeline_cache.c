@@ -46,7 +46,7 @@ struct cache_entry {
 static void
 radv_pipeline_cache_lock(struct radv_pipeline_cache *cache)
 {
-   if (cache->flags & VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT_EXT)
+   if (cache->flags & VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT)
       return;
 
    mtx_lock(&cache->mutex);
@@ -55,7 +55,7 @@ radv_pipeline_cache_lock(struct radv_pipeline_cache *cache)
 static void
 radv_pipeline_cache_unlock(struct radv_pipeline_cache *cache)
 {
-   if (cache->flags & VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT_EXT)
+   if (cache->flags & VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT)
       return;
 
    mtx_unlock(&cache->mutex);
@@ -288,9 +288,7 @@ radv_pipeline_cache_add_entry(struct radv_pipeline_cache *cache, struct cache_en
 static bool
 radv_is_cache_disabled(struct radv_device *device)
 {
-   /* Pipeline caches can be disabled with RADV_DEBUG=nocache, with
-    * MESA_GLSL_CACHE_DISABLE=1, and when VK_AMD_shader_info is requested.
-    */
+   /* Pipeline caches can be disabled with RADV_DEBUG=nocache and with MESA_SHADER_CACHE_DISABLE=1. */
    return (device->instance->debug_flags & RADV_DEBUG_NO_CACHE);
 }
 

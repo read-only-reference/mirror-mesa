@@ -199,10 +199,9 @@ anv_dynamic_state_copy(struct anv_dynamic_state *dest,
    ANV_CMP_COPY(logic_op, ANV_CMD_DIRTY_DYNAMIC_LOGIC_OP);
 
    if (copy_mask & ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS) {
-      dest->sample_locations.samples = src->sample_locations.samples;
       typed_memcpy(dest->sample_locations.locations,
                    src->sample_locations.locations,
-                   dest->sample_locations.samples);
+                   ARRAY_SIZE(src->sample_locations.locations));
       changed |= ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS;
    }
 
@@ -250,8 +249,6 @@ anv_cmd_state_finish(struct anv_cmd_buffer *cmd_buffer)
 
    anv_cmd_pipeline_state_finish(cmd_buffer, &state->gfx.base);
    anv_cmd_pipeline_state_finish(cmd_buffer, &state->compute.base);
-
-   vk_free(&cmd_buffer->vk.pool->alloc, state->attachments);
 }
 
 static void
@@ -618,7 +615,7 @@ void anv_CmdBindPipeline(
    }
 
    default:
-      assert(!"invalid bind point");
+      unreachable("invalid bind point");
       break;
    }
 
@@ -859,7 +856,6 @@ void anv_CmdSetSampleLocationsEXT(
    struct anv_dynamic_state *dyn_state = &cmd_buffer->state.gfx.dynamic;
    uint32_t samples = pSampleLocationsInfo->sampleLocationsPerPixel;
 
-   dyn_state->sample_locations.samples = samples;
    typed_memcpy(dyn_state->sample_locations.locations,
                 pSampleLocationsInfo->pSampleLocations, samples);
 
@@ -993,6 +989,17 @@ anv_cmd_buffer_bind_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
                                    uint32_t *dynamic_offset_count,
                                    const uint32_t **dynamic_offsets)
 {
+   /* Either we have no pool because it's a push descriptor or the pool is not
+    * host only :
+    *
+    * VUID-vkCmdBindDescriptorSets-pDescriptorSets-04616:
+    *
+    *    "Each element of pDescriptorSets must not have been allocated from a
+    *     VkDescriptorPool with the
+    *     VK_DESCRIPTOR_POOL_CREATE_HOST_ONLY_BIT_VALVE flag set"
+    */
+   assert(!set->pool || !set->pool->host_only);
+
    struct anv_descriptor_set_layout *set_layout =
       layout->set[set_index].layout;
 
@@ -1356,64 +1363,6 @@ void anv_CmdPushConstants(
    cmd_buffer->state.push_constants_dirty |= stageFlags;
 }
 
-/**
- * Return NULL if the current subpass has no color attachment.
- */
-const struct anv_image_view *
-anv_cmd_buffer_get_first_color_view(const struct anv_cmd_buffer *cmd_buffer)
-{
-   const struct anv_subpass *subpass = cmd_buffer->state.subpass;
-
-   if (subpass->color_count == 0)
-      return NULL;
-
-   const struct anv_image_view *iview =
-      cmd_buffer->state.attachments[subpass->color_attachments[0].attachment].image_view;
-
-   assert(iview->vk.aspects & VK_IMAGE_ASPECT_COLOR_BIT);
-
-   return iview;
-}
-
-/**
- * Return NULL if the current subpass has no depthstencil attachment.
- */
-const struct anv_image_view *
-anv_cmd_buffer_get_depth_stencil_view(const struct anv_cmd_buffer *cmd_buffer)
-{
-   const struct anv_subpass *subpass = cmd_buffer->state.subpass;
-
-   if (subpass->depth_stencil_attachment == NULL)
-      return NULL;
-
-   const struct anv_image_view *iview =
-      cmd_buffer->state.attachments[subpass->depth_stencil_attachment->attachment].image_view;
-
-   assert(iview->vk.aspects & (VK_IMAGE_ASPECT_DEPTH_BIT |
-                               VK_IMAGE_ASPECT_STENCIL_BIT));
-
-   return iview;
-}
-
-/**
- * Return NULL if the current subpass has no fragment shading rate attachment.
- */
-const struct anv_image_view *
-anv_cmd_buffer_get_fsr_view(const struct anv_cmd_buffer *cmd_buffer)
-{
-   const struct anv_subpass *subpass = cmd_buffer->state.subpass;
-
-   if (subpass->fsr_attachment == NULL)
-      return NULL;
-
-   const struct anv_image_view *iview =
-      cmd_buffer->state.attachments[subpass->fsr_attachment->attachment].image_view;
-
-   assert(iview->image->vk.usage & VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR);
-
-   return iview;
-}
-
 static struct anv_descriptor_set *
 anv_cmd_buffer_push_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
                                    VkPipelineBindPoint bind_point,
@@ -1647,11 +1596,18 @@ void anv_CmdSetColorWriteEnableEXT(
 {
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
 
-   assert(attachmentCount < MAX_RTS);
+   assert(attachmentCount <= MAX_RTS);
 
-   uint8_t color_writes = 0;
-   for (uint32_t i = 0; i < attachmentCount; i++)
-      color_writes |= pColorWriteEnables[i] ? (1 << i) : 0;
+   /* Keep the existing values outside the color attachments count of the
+    * current pipeline.
+    */
+   uint8_t color_writes = cmd_buffer->state.gfx.dynamic.color_writes;
+   for (uint32_t i = 0; i < attachmentCount; i++) {
+      if (pColorWriteEnables[i])
+         color_writes |= BITFIELD_BIT(i);
+      else
+         color_writes &= ~BITFIELD_BIT(i);
+   }
 
    if (cmd_buffer->state.gfx.dynamic.color_writes != color_writes) {
       cmd_buffer->state.gfx.dynamic.color_writes = color_writes;

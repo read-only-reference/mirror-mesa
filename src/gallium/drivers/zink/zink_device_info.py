@@ -174,6 +174,7 @@ EXTENSIONS = [
         features=True,
         guard=True),
     Extension("VK_KHR_timeline_semaphore", alias="timeline", features=True),
+    Extension("VK_EXT_color_write_enable", alias="cwrite", features=True),
     Extension("VK_EXT_4444_formats",
         alias="format_4444",
         features=True),
@@ -349,11 +350,15 @@ zink_get_physical_device_info(struct zink_screen *screen)
    vkGetPhysicalDeviceMemoryProperties(screen->pdev, &info->mem_props);
 
    // enumerate device supported extensions
-   if (vkEnumerateDeviceExtensionProperties(screen->pdev, NULL, &num_extensions, NULL) == VK_SUCCESS) {
+   if (vkEnumerateDeviceExtensionProperties(screen->pdev, NULL, &num_extensions, NULL) != VK_SUCCESS) {
+      mesa_loge("ZINK: vkEnumerateDeviceExtensionProperties failed");
+   } else {
       if (num_extensions > 0) {
          VkExtensionProperties *extensions = MALLOC(sizeof(VkExtensionProperties) * num_extensions);
          if (!extensions) goto fail;
-         vkEnumerateDeviceExtensionProperties(screen->pdev, NULL, &num_extensions, extensions);
+         if (vkEnumerateDeviceExtensionProperties(screen->pdev, NULL, &num_extensions, extensions) != VK_SUCCESS) {
+            mesa_loge("ZINK: vkEnumerateDeviceExtensionProperties failed");
+         }
 
          for (uint32_t i = 0; i < num_extensions; ++i) {
          %for ext in extensions:

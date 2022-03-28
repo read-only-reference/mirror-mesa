@@ -589,7 +589,6 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
 
    assert(rs_state->depth_clip_far == rs_state->depth_clip_near);
    state->hw_state.depth_clamp = rs_state->depth_clip_near == 0;
-   state->hw_state.rasterizer_discard = rs_state->rasterizer_discard;
    state->hw_state.force_persample_interp = rs_state->force_persample_interp;
    state->hw_state.pv_last = !rs_state->flatshade_first;
    state->hw_state.clip_halfz = rs_state->clip_halfz;
@@ -682,6 +681,7 @@ zink_bind_rasterizer_state(struct pipe_context *pctx, void *cso)
    bool pv_last = ctx->rast_state ? ctx->rast_state->hw_state.pv_last : false;
    bool force_persample_interp = ctx->rast_state ? ctx->rast_state->hw_state.force_persample_interp : false;
    bool clip_halfz = ctx->rast_state ? ctx->rast_state->hw_state.clip_halfz : false;
+   bool rasterizer_discard = ctx->rast_state ? ctx->rast_state->base.rasterizer_discard : false;
    ctx->rast_state = cso;
 
    if (ctx->rast_state) {
@@ -698,7 +698,7 @@ zink_bind_rasterizer_state(struct pipe_context *pctx, void *cso)
       ctx->rast_state_changed = true;
 
       if (clip_halfz != ctx->rast_state->base.clip_halfz) {
-         if (screen->info.have_EXT_depth_clip_control)
+         if (!screen->driver_workarounds.depth_clip_control_missing)
             ctx->gfx_pipeline_state.dirty = true;
          else
             zink_set_last_vertex_key(ctx)->clip_halfz = ctx->rast_state->base.clip_halfz;
@@ -709,6 +709,11 @@ zink_bind_rasterizer_state(struct pipe_context *pctx, void *cso)
          ctx->gfx_pipeline_state.dyn_state1.front_face = ctx->rast_state->front_face;
          ctx->gfx_pipeline_state.dirty |= !zink_screen(pctx->screen)->info.have_EXT_extended_dynamic_state;
       }
+      if (!ctx->primitives_generated_active)
+         zink_set_rasterizer_discard(ctx, false);
+      else if (rasterizer_discard != ctx->rast_state->base.rasterizer_discard)
+         zink_set_color_write_enables(ctx);
+
       if (ctx->rast_state->base.point_quad_rasterization != point_quad_rasterization)
          zink_set_fs_point_coord_key(ctx);
       if (ctx->rast_state->base.scissor != scissor)

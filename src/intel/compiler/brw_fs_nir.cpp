@@ -108,8 +108,7 @@ fs_visitor::nir_setup_uniforms()
 
    uniforms = nir->num_uniforms / 4;
 
-   if ((stage == MESA_SHADER_COMPUTE || stage == MESA_SHADER_KERNEL) &&
-       devinfo->verx10 < 125) {
+   if (gl_shader_stage_is_compute(stage) && devinfo->verx10 < 125) {
       /* Add uniforms for builtins after regular NIR uniforms. */
       assert(uniforms == prog_data->nr_params);
 
@@ -1889,7 +1888,7 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
 
    case nir_op_sdot_4x8_iadd:
    case nir_op_sdot_4x8_iadd_sat:
-      inst = bld.DP4A(result,
+      inst = bld.DP4A(retype(result, BRW_REGISTER_TYPE_D),
                       retype(op[2], BRW_REGISTER_TYPE_D),
                       retype(op[0], BRW_REGISTER_TYPE_D),
                       retype(op[1], BRW_REGISTER_TYPE_D));
@@ -1900,7 +1899,7 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
 
    case nir_op_udot_4x8_uadd:
    case nir_op_udot_4x8_uadd_sat:
-      inst = bld.DP4A(result,
+      inst = bld.DP4A(retype(result, BRW_REGISTER_TYPE_UD),
                       retype(op[2], BRW_REGISTER_TYPE_UD),
                       retype(op[0], BRW_REGISTER_TYPE_UD),
                       retype(op[1], BRW_REGISTER_TYPE_UD));
@@ -1911,7 +1910,7 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
 
    case nir_op_sudot_4x8_iadd:
    case nir_op_sudot_4x8_iadd_sat:
-      inst = bld.DP4A(result,
+      inst = bld.DP4A(retype(result, BRW_REGISTER_TYPE_D),
                       retype(op[2], BRW_REGISTER_TYPE_D),
                       retype(op[0], BRW_REGISTER_TYPE_D),
                       retype(op[1], BRW_REGISTER_TYPE_UD));
@@ -3459,22 +3458,9 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
       bld.MOV(dest, fetch_render_target_array_index(bld));
       break;
 
-   case nir_intrinsic_is_helper_invocation: {
-      /* Unlike the regular gl_HelperInvocation, that is defined at dispatch,
-       * the helperInvocationEXT() (aka SpvOpIsHelperInvocationEXT) takes into
-       * consideration demoted invocations.  That information is stored in
-       * f0.1.
-       */
-      dest.type = BRW_REGISTER_TYPE_UD;
-
-      bld.MOV(dest, brw_imm_ud(0));
-
-      fs_inst *mov = bld.MOV(dest, brw_imm_ud(~0));
-      mov->predicate = BRW_PREDICATE_NORMAL;
-      mov->predicate_inverse = true;
-      mov->flag_subreg = sample_mask_flag_subreg(this);
+   case nir_intrinsic_is_helper_invocation:
+      emit_is_helper_invocation(dest);
       break;
-   }
 
    case nir_intrinsic_load_helper_invocation:
    case nir_intrinsic_load_sample_mask_in:
@@ -3689,7 +3675,7 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
          const fs_reg sample_src = retype(get_nir_src(instr->src[0]),
                                           BRW_REGISTER_TYPE_UD);
 
-         if (nir_src_is_dynamically_uniform(instr->src[0])) {
+         if (nir_src_is_always_uniform(instr->src[0])) {
             const fs_reg sample_id = bld.emit_uniformize(sample_src);
             const fs_reg msg_data = vgrf(glsl_type::uint_type);
             bld.exec_all().group(1, 0)
@@ -5438,6 +5424,14 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_first_invocation: {
       fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD);
       bld.exec_all().emit(SHADER_OPCODE_FIND_LIVE_CHANNEL, tmp);
+      bld.MOV(retype(dest, BRW_REGISTER_TYPE_UD),
+              fs_reg(component(tmp, 0)));
+      break;
+   }
+
+   case nir_intrinsic_last_invocation: {
+      fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD);
+      bld.exec_all().emit(SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL, tmp);
       bld.MOV(retype(dest, BRW_REGISTER_TYPE_UD),
               fs_reg(component(tmp, 0)));
       break;

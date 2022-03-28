@@ -301,6 +301,7 @@ generate_quad_mask(struct gallivm_state *gallivm,
 #define LATE_DEPTH_TEST   0x2
 #define EARLY_DEPTH_WRITE 0x4
 #define LATE_DEPTH_WRITE  0x8
+#define EARLY_DEPTH_TEST_INFERRED  0x10 //only with EARLY_DEPTH_TEST
 
 static int
 find_output_by_semantic( const struct tgsi_shader_info *info,
@@ -637,10 +638,10 @@ generate_fs_loop(struct gallivm_state *gallivm,
                                              key->stencil[1].writemask)))
                depth_mode = LATE_DEPTH_TEST | LATE_DEPTH_WRITE;
             else
-               depth_mode = EARLY_DEPTH_TEST | LATE_DEPTH_WRITE;
+               depth_mode = EARLY_DEPTH_TEST | LATE_DEPTH_WRITE | EARLY_DEPTH_TEST_INFERRED;
          }
          else
-            depth_mode = EARLY_DEPTH_TEST | EARLY_DEPTH_WRITE;
+            depth_mode = EARLY_DEPTH_TEST | EARLY_DEPTH_WRITE | EARLY_DEPTH_TEST_INFERRED;
       }
       else {
          depth_mode = LATE_DEPTH_TEST | LATE_DEPTH_WRITE;
@@ -1146,8 +1147,10 @@ generate_fs_loop(struct gallivm_state *gallivm,
       if (key->min_samples == 1)
          s_mask = LLVMBuildAnd(builder, s_mask, lp_build_mask_value(&mask), "");
 
-      /* if the shader writes sample mask use that */
-      if (shader->info.base.writes_samplemask) {
+      /* if the shader writes sample mask use that,
+       * but only if this isn't genuine early-depth to avoid breaking occlusion query */
+      if (shader->info.base.writes_samplemask &&
+          (!(depth_mode & EARLY_DEPTH_TEST) || (depth_mode & (EARLY_DEPTH_TEST_INFERRED)))) {
          LLVMValueRef out_smask_idx = LLVMBuildShl(builder, lp_build_const_int32(gallivm, 1), sample_loop_state.counter, "");
          out_smask_idx = lp_build_broadcast(gallivm, int_vec_type, out_smask_idx);
          LLVMValueRef output_smask = LLVMBuildLoad(builder, out_sample_mask_storage, "");
@@ -1262,6 +1265,23 @@ generate_fs_loop(struct gallivm_state *gallivm,
       lp_build_occlusion_count(gallivm, type,
                                key->multisample ? s_mask : lp_build_mask_value(&mask), counter);
    }
+
+   /* if this is genuine early-depth in the shader, write samplemask now
+    * after occlusion count has been updated
+    */
+   if (key->multisample && shader->info.base.writes_samplemask &&
+       (depth_mode & (EARLY_DEPTH_TEST_INFERRED | EARLY_DEPTH_TEST)) == EARLY_DEPTH_TEST) {
+      /* if the shader writes sample mask use that */
+         LLVMValueRef out_smask_idx = LLVMBuildShl(builder, lp_build_const_int32(gallivm, 1), sample_loop_state.counter, "");
+         out_smask_idx = lp_build_broadcast(gallivm, int_vec_type, out_smask_idx);
+         LLVMValueRef output_smask = LLVMBuildLoad(builder, out_sample_mask_storage, "");
+         LLVMValueRef smask_bit = LLVMBuildAnd(builder, output_smask, out_smask_idx, "");
+         LLVMValueRef cmp = LLVMBuildICmp(builder, LLVMIntNE, smask_bit, lp_build_const_int_vec(gallivm, int_type, 0), "");
+         smask_bit = LLVMBuildSExt(builder, cmp, int_vec_type, "");
+
+         s_mask = LLVMBuildAnd(builder, s_mask, smask_bit, "");
+   }
+
 
    if (key->multisample) {
       /* store the sample mask for this loop */
@@ -3374,6 +3394,9 @@ dump_fs_variant_key(struct lp_fragment_shader_variant_key *key)
    if (key->flatshade) {
       debug_printf("flatshade = 1\n");
    }
+   if (key->depth_clamp)
+      debug_printf("depth_clamp = 1\n");
+
    if (key->multisample) {
       debug_printf("multisample = 1\n");
       debug_printf("coverage samples = %d\n", key->coverage_samples);
@@ -3878,7 +3901,7 @@ llvmpipe_create_fs_state(struct pipe_context *pipe,
    if (templ->type == PIPE_SHADER_IR_TGSI)
      llvmpipe_fs_analyse(shader, templ->tokens);
    else
-     shader->kind = LP_FS_KIND_GENERAL;
+     llvmpipe_fs_analyse_nir(shader);
 
    return shader;
 }
@@ -4294,6 +4317,9 @@ make_variant_key(struct llvmpipe_context *lp,
     */
    key->nr_samplers = shader->info.base.file_max[TGSI_FILE_SAMPLER] + 1;
 
+   if (shader->info.base.file_max[TGSI_FILE_SAMPLER_VIEW] != -1)
+      key->nr_sampler_views = shader->info.base.file_max[TGSI_FILE_SAMPLER_VIEW] + 1;
+
    struct lp_sampler_static_state *fs_sampler;
 
    fs_sampler = lp_fs_variant_key_samplers(key);
@@ -4313,7 +4339,6 @@ make_variant_key(struct llvmpipe_context *lp,
     * if we want to skip the holes here (without rescanning tgsi).
     */
    if (shader->info.base.file_max[TGSI_FILE_SAMPLER_VIEW] != -1) {
-      key->nr_sampler_views = shader->info.base.file_max[TGSI_FILE_SAMPLER_VIEW] + 1;
       for(i = 0; i < key->nr_sampler_views; ++i) {
          /*
           * Note sview may exceed what's representable by file_mask.

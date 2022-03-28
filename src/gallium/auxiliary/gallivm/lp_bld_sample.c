@@ -445,6 +445,10 @@ lp_build_rho(struct lp_build_sample_context *bld,
             }
          }
       }
+
+      LLVMValueRef rho_is_inf = lp_build_is_inf_or_nan(gallivm, coord_bld->type, rho);
+      rho = lp_build_select(coord_bld, rho_is_inf, coord_bld->zero, rho);
+
       if (rho_per_quad) {
          /*
           * rho_vec contains per-pixel rho, convert to scalar per quad.
@@ -1726,7 +1730,10 @@ lp_build_cube_imapos(struct lp_build_context *coord_bld, LLVMValueRef coord)
    /* ima = +0.5 / abs(coord); */
    LLVMValueRef posHalf = lp_build_const_vec(coord_bld->gallivm, coord_bld->type, 0.5);
    LLVMValueRef absCoord = lp_build_abs(coord_bld, coord);
-   LLVMValueRef ima = lp_build_div(coord_bld, posHalf, absCoord);
+   /* avoid div by zero */
+   LLVMValueRef sel = lp_build_cmp(coord_bld, PIPE_FUNC_GREATER, absCoord, coord_bld->zero);
+   LLVMValueRef div = lp_build_div(coord_bld, posHalf, absCoord);
+   LLVMValueRef ima = lp_build_select(coord_bld, sel, div, coord_bld->zero);
    return ima;
 }
 

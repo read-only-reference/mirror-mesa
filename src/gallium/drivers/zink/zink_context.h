@@ -287,8 +287,12 @@ struct zink_context {
       float tess_levels[6];
    };
 
+   struct list_head query_pools;
    struct list_head suspended_queries;
    struct list_head primitives_generated_queries;
+   struct zink_query *vertices_query;
+   bool disable_color_writes;
+   bool primitives_generated_active;
    bool queries_disabled, render_condition_active;
    struct {
       struct zink_query *query;
@@ -364,6 +368,7 @@ struct zink_context {
    bool rast_state_changed : 1;
    bool dsa_state_changed : 1;
    bool stencil_ref_changed : 1;
+   bool rasterizer_discard_changed : 1;
 };
 
 static inline struct zink_context *
@@ -523,7 +528,10 @@ zink_resource_rebind(struct zink_context *ctx, struct zink_resource *res);
 
 void
 zink_rebind_framebuffer(struct zink_context *ctx, struct zink_resource *res);
-
+bool
+zink_use_dummy_attachments(const struct zink_context *ctx);
+void
+zink_set_color_write_enables(struct zink_context *ctx);
 void
 zink_copy_buffer(struct zink_context *ctx, struct zink_resource *dst, struct zink_resource *src,
                  unsigned dst_offset, unsigned src_offset, unsigned size);

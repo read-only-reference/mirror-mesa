@@ -136,8 +136,8 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
         case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
-        case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+        case PIPE_CAP_FS_COORD_ORIGIN_UPPER_LEFT:
+        case PIPE_CAP_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
         case PIPE_CAP_CONDITIONAL_RENDER:
         case PIPE_CAP_TEXTURE_BARRIER:
         case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
@@ -190,7 +190,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_PRIMITIVE_RESTART:
         case PIPE_CAP_PRIMITIVE_RESTART_FIXED_INDEX:
         case PIPE_CAP_USER_VERTEX_BUFFERS:
-        case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+        case PIPE_CAP_VS_WINDOW_SPACE_POSITION:
             return !r300screen->caps.has_tcl;
 
         /* HWTCL-only features / limitations. */

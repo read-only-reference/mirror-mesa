@@ -144,7 +144,6 @@ zink_bind_vertex_buffers(struct zink_batch *batch, struct zink_context *ctx)
          buffer_strides[i] = vb->stride;
          if (DYNAMIC_STATE == ZINK_DYNAMIC_VERTEX_INPUT)
             elems->hw_state.dynbindings[i].stride = vb->stride;
-         zink_batch_resource_usage_set(&ctx->batch, zink_resource(vb->buffer.resource), false);
       } else {
          buffers[i] = zink_resource(ctx->dummy_vertex_buffer)->obj->buffer;
          buffer_offsets[i] = 0;
@@ -215,6 +214,8 @@ update_gfx_program(struct zink_context *ctx)
          prog = (struct zink_gfx_program*)entry->data;
          u_foreach_bit(stage, prog->stages_present & ~ctx->dirty_shader_stages)
             ctx->gfx_pipeline_state.modules[stage] = prog->modules[stage]->shader;
+         /* ensure variants are always updated if keys have changed since last use */
+         ctx->dirty_shader_stages |= prog->stages_present;
       } else {
          ctx->dirty_shader_stages |= bits;
          prog = zink_create_gfx_program(ctx, ctx->gfx_stages, ctx->gfx_pipeline_state.vertices_per_patch + 1);
@@ -564,6 +565,8 @@ zink_draw(struct pipe_context *pctx,
 
    barrier_draw_buffers(ctx, dinfo, dindirect, index_buffer);
 
+   zink_query_update_gs_states(ctx, dinfo->was_line_loop);
+
    zink_batch_rp(ctx);
 
    if (BATCH_CHANGED)
@@ -601,9 +604,9 @@ zink_draw(struct pipe_context *pctx,
       VKCTX(CmdBindIndexBuffer)(batch->state->cmdbuf, res->obj->buffer, index_offset, index_type[index_size >> 1]);
    }
    if (DYNAMIC_STATE < ZINK_DYNAMIC_STATE2) {
-      if (ctx->gfx_pipeline_state.primitive_restart != dinfo->primitive_restart)
+      if (ctx->gfx_pipeline_state.dyn_state2.primitive_restart != dinfo->primitive_restart)
          ctx->gfx_pipeline_state.dirty = true;
-      ctx->gfx_pipeline_state.primitive_restart = dinfo->primitive_restart;
+      ctx->gfx_pipeline_state.dyn_state2.primitive_restart = dinfo->primitive_restart;
    }
 
    if (have_streamout && ctx->dirty_so_targets)
@@ -766,8 +769,6 @@ zink_draw(struct pipe_context *pctx,
    else if (BATCH_CHANGED || ctx->vertex_buffers_dirty)
       zink_bind_vertex_buffers<DYNAMIC_STATE>(batch, ctx);
 
-   zink_query_update_gs_states(ctx);
-
    if (BATCH_CHANGED) {
       ctx->pipeline_changed[0] = false;
       zink_select_draw_vbo(ctx);
@@ -782,6 +783,11 @@ zink_draw(struct pipe_context *pctx,
    if (DYNAMIC_STATE >= ZINK_DYNAMIC_STATE2 && (BATCH_CHANGED || ctx->primitive_restart != dinfo->primitive_restart)) {
       VKCTX(CmdSetPrimitiveRestartEnableEXT)(batch->state->cmdbuf, dinfo->primitive_restart);
       ctx->primitive_restart = dinfo->primitive_restart;
+   }
+
+   if (DYNAMIC_STATE >= ZINK_DYNAMIC_STATE2 && (BATCH_CHANGED || ctx->rasterizer_discard_changed)) {
+      VKCTX(CmdSetRasterizerDiscardEnableEXT)(batch->state->cmdbuf, ctx->gfx_pipeline_state.dyn_state2.rasterizer_discard);
+      ctx->rasterizer_discard_changed = false;
    }
 
    if (zink_program_has_descriptors(&ctx->curr_program->base))
@@ -958,19 +964,19 @@ zink_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
 
    zink_program_update_compute_pipeline_state(ctx, ctx->curr_compute, info->block);
    VkPipeline prev_pipeline = ctx->compute_pipeline_state.pipeline;
-   VkPipeline pipeline = zink_get_compute_pipeline(screen, ctx->curr_compute,
-                                               &ctx->compute_pipeline_state);
 
    if (BATCH_CHANGED) {
       zink_update_descriptor_refs(ctx, true);
       zink_batch_reference_program(&ctx->batch, &ctx->curr_compute->base);
    }
-
    if (ctx->dirty_shader_stages & BITFIELD_BIT(PIPE_SHADER_COMPUTE)) {
       /* update inlinable constants */
       zink_update_compute_program(ctx);
       ctx->dirty_shader_stages &= ~BITFIELD_BIT(PIPE_SHADER_COMPUTE);
    }
+
+   VkPipeline pipeline = zink_get_compute_pipeline(screen, ctx->curr_compute,
+                                               &ctx->compute_pipeline_state);
 
    if (prev_pipeline != pipeline || BATCH_CHANGED)
       VKCTX(CmdBindPipeline)(batch->state->cmdbuf, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);

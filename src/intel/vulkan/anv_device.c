@@ -256,6 +256,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_conditional_rendering             = device->info.verx10 >= 75,
       .EXT_conservative_rasterization        = device->info.ver >= 9,
       .EXT_custom_border_color               = device->info.ver >= 8,
+      .EXT_depth_clip_control                = true,
       .EXT_depth_clip_enable                 = true,
       .EXT_descriptor_indexing               = device->has_a64_buffer_access &&
                                                device->has_bindless_images,
@@ -301,6 +302,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_shader_viewport_index_layer       = true,
       .EXT_subgroup_size_control             = true,
       .EXT_texel_buffer_alignment            = true,
+      .EXT_tooling_info                      = true,
       .EXT_transform_feedback                = true,
       .EXT_vertex_attribute_divisor          = true,
       .EXT_ycbcr_image_arrays                = true,
@@ -1215,7 +1217,8 @@ VkResult anv_EnumeratePhysicalDevices(
     VkPhysicalDevice*                           pPhysicalDevices)
 {
    ANV_FROM_HANDLE(anv_instance, instance, _instance);
-   VK_OUTARRAY_MAKE(out, pPhysicalDevices, pPhysicalDeviceCount);
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDevice, out,
+                          pPhysicalDevices, pPhysicalDeviceCount);
 
    VkResult result = anv_enumerate_physical_devices(instance);
    if (result != VK_SUCCESS)
@@ -1223,7 +1226,7 @@ VkResult anv_EnumeratePhysicalDevices(
 
    list_for_each_entry(struct anv_physical_device, pdevice,
                        &instance->physical_devices, link) {
-      vk_outarray_append(&out, i) {
+      vk_outarray_append_typed(VkPhysicalDevice, &out, i) {
          *i = anv_physical_device_to_handle(pdevice);
       }
    }
@@ -1237,8 +1240,9 @@ VkResult anv_EnumeratePhysicalDeviceGroups(
     VkPhysicalDeviceGroupProperties*            pPhysicalDeviceGroupProperties)
 {
    ANV_FROM_HANDLE(anv_instance, instance, _instance);
-   VK_OUTARRAY_MAKE(out, pPhysicalDeviceGroupProperties,
-                         pPhysicalDeviceGroupCount);
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceGroupProperties, out,
+                          pPhysicalDeviceGroupProperties,
+                          pPhysicalDeviceGroupCount);
 
    VkResult result = anv_enumerate_physical_devices(instance);
    if (result != VK_SUCCESS)
@@ -1246,7 +1250,7 @@ VkResult anv_EnumeratePhysicalDeviceGroups(
 
    list_for_each_entry(struct anv_physical_device, pdevice,
                        &instance->physical_devices, link) {
-      vk_outarray_append(&out, p) {
+      vk_outarray_append_typed(VkPhysicalDeviceGroupProperties, &out, p) {
          p->physicalDeviceCount = 1;
          memset(p->physicalDevices, 0, sizeof(p->physicalDevices));
          p->physicalDevices[0] = anv_physical_device_to_handle(pdevice);
@@ -1780,6 +1784,13 @@ void anv_GetPhysicalDeviceFeatures2(
             (VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT *)ext;
          features->primitiveTopologyListRestart = true;
          features->primitiveTopologyPatchListRestart = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT: {
+         VkPhysicalDeviceDepthClipControlFeaturesEXT *features =
+            (VkPhysicalDeviceDepthClipControlFeaturesEXT *)ext;
+         features->depthClipControl = true;
          break;
       }
 
@@ -2621,35 +2632,18 @@ anv_queue_family_properties_template = {
    .minImageTransferGranularity = { 1, 1, 1 },
 };
 
-void anv_GetPhysicalDeviceQueueFamilyProperties(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t*                                   pCount,
-    VkQueueFamilyProperties*                    pQueueFamilyProperties)
-{
-   ANV_FROM_HANDLE(anv_physical_device, pdevice, physicalDevice);
-   VK_OUTARRAY_MAKE(out, pQueueFamilyProperties, pCount);
-
-   for (uint32_t i = 0; i < pdevice->queue.family_count; i++) {
-      struct anv_queue_family *queue_family = &pdevice->queue.families[i];
-      vk_outarray_append(&out, p) {
-         *p = anv_queue_family_properties_template;
-         p->queueFlags = queue_family->queueFlags;
-         p->queueCount = queue_family->queueCount;
-      }
-   }
-}
-
 void anv_GetPhysicalDeviceQueueFamilyProperties2(
     VkPhysicalDevice                            physicalDevice,
     uint32_t*                                   pQueueFamilyPropertyCount,
     VkQueueFamilyProperties2*                   pQueueFamilyProperties)
 {
    ANV_FROM_HANDLE(anv_physical_device, pdevice, physicalDevice);
-   VK_OUTARRAY_MAKE(out, pQueueFamilyProperties, pQueueFamilyPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties2, out,
+                          pQueueFamilyProperties, pQueueFamilyPropertyCount);
 
    for (uint32_t i = 0; i < pdevice->queue.family_count; i++) {
       struct anv_queue_family *queue_family = &pdevice->queue.families[i];
-      vk_outarray_append(&out, p) {
+      vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p) {
          p->queueFamilyProperties = anv_queue_family_properties_template;
          p->queueFamilyProperties.queueFlags = queue_family->queueFlags;
          p->queueFamilyProperties.queueCount = queue_family->queueCount;
@@ -3312,7 +3306,15 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_instruction_state_pool;
 
-   if (!anv_use_relocations(physical_device)) {
+   if (device->info.verx10 >= 125) {
+      /* We're using 3DSTATE_BINDING_TABLE_POOL_ALLOC to give the binding
+       * table its own base address separately from surface state base.
+       */
+      result = anv_state_pool_init(&device->binding_table_pool, device,
+                                   "binding table pool",
+                                   BINDING_TABLE_POOL_MIN_ADDRESS, 0,
+                                   BINDING_TABLE_POOL_BLOCK_SIZE);
+   } else if (!anv_use_relocations(physical_device)) {
       int64_t bt_pool_offset = (int64_t)BINDING_TABLE_POOL_MIN_ADDRESS -
                                (int64_t)SURFACE_STATE_POOL_MIN_ADDRESS;
       assert(INT32_MIN < bt_pool_offset && bt_pool_offset < 0);
@@ -3321,9 +3323,9 @@ VkResult anv_CreateDevice(
                                    SURFACE_STATE_POOL_MIN_ADDRESS,
                                    bt_pool_offset,
                                    BINDING_TABLE_POOL_BLOCK_SIZE);
-      if (result != VK_SUCCESS)
-         goto fail_surface_state_pool;
    }
+   if (result != VK_SUCCESS)
+      goto fail_surface_state_pool;
 
    if (device->info.has_aux_map) {
       device->aux_map_ctx = intel_aux_map_init(device, &aux_map_allocator,
@@ -4528,63 +4530,6 @@ void anv_DestroySampler(
    vk_object_free(&device->vk, pAllocator, sampler);
 }
 
-VkResult anv_CreateFramebuffer(
-    VkDevice                                    _device,
-    const VkFramebufferCreateInfo*              pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkFramebuffer*                              pFramebuffer)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   struct anv_framebuffer *framebuffer;
-
-   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
-
-   size_t size = sizeof(*framebuffer);
-
-   /* VK_KHR_imageless_framebuffer extension says:
-    *
-    *    If flags includes VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT_KHR,
-    *    parameter pAttachments is ignored.
-    */
-   if (!(pCreateInfo->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT_KHR))
-      size += sizeof(struct anv_image_view *) * pCreateInfo->attachmentCount;
-
-   framebuffer = vk_object_alloc(&device->vk, pAllocator, size,
-                                 VK_OBJECT_TYPE_FRAMEBUFFER);
-   if (framebuffer == NULL)
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   framebuffer->width = pCreateInfo->width;
-   framebuffer->height = pCreateInfo->height;
-   framebuffer->layers = pCreateInfo->layers;
-
-   if (!(pCreateInfo->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT_KHR)) {
-      for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
-         ANV_FROM_HANDLE(anv_image_view, iview, pCreateInfo->pAttachments[i]);
-         framebuffer->attachments[i] = iview;
-      }
-      framebuffer->attachment_count = pCreateInfo->attachmentCount;
-   }
-
-   *pFramebuffer = anv_framebuffer_to_handle(framebuffer);
-
-   return VK_SUCCESS;
-}
-
-void anv_DestroyFramebuffer(
-    VkDevice                                    _device,
-    VkFramebuffer                               _fb,
-    const VkAllocationCallbacks*                pAllocator)
-{
-   ANV_FROM_HANDLE(anv_device, device, _device);
-   ANV_FROM_HANDLE(anv_framebuffer, fb, _fb);
-
-   if (!fb)
-      return;
-
-   vk_object_free(&device->vk, pAllocator, fb);
-}
-
 static const VkTimeDomainEXT anv_time_domains[] = {
    VK_TIME_DOMAIN_DEVICE_EXT,
    VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT,
@@ -4599,10 +4544,10 @@ VkResult anv_GetPhysicalDeviceCalibrateableTimeDomainsEXT(
    VkTimeDomainEXT                              *pTimeDomains)
 {
    int d;
-   VK_OUTARRAY_MAKE(out, pTimeDomains, pTimeDomainCount);
+   VK_OUTARRAY_MAKE_TYPED(VkTimeDomainEXT, out, pTimeDomains, pTimeDomainCount);
 
    for (d = 0; d < ARRAY_SIZE(anv_time_domains); d++) {
-      vk_outarray_append(&out, i) {
+      vk_outarray_append_typed(VkTimeDomainEXT, &out, i) {
          *i = anv_time_domains[d];
       }
    }
@@ -4807,17 +4752,18 @@ VkResult anv_GetPhysicalDeviceFragmentShadingRatesKHR(
     VkPhysicalDeviceFragmentShadingRateKHR*     pFragmentShadingRates)
 {
    ANV_FROM_HANDLE(anv_physical_device, physical_device, physicalDevice);
-   VK_OUTARRAY_MAKE(out, pFragmentShadingRates, pFragmentShadingRateCount);
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceFragmentShadingRateKHR, out,
+                          pFragmentShadingRates, pFragmentShadingRateCount);
 
-#define append_rate(_samples, _width, _height)                          \
-   do {                                                                 \
-      vk_outarray_append(&out, __r) {                                   \
-         __r->sampleCounts = _samples;                                  \
-         __r->fragmentSize = (VkExtent2D) {                             \
-            .width = _width,                                            \
-            .height = _height,                                          \
-         };                                                             \
-      }                                                                 \
+#define append_rate(_samples, _width, _height)                                      \
+   do {                                                                             \
+      vk_outarray_append_typed(VkPhysicalDeviceFragmentShadingRateKHR, &out, __r) { \
+         __r->sampleCounts = _samples;                                              \
+         __r->fragmentSize = (VkExtent2D) {                                         \
+            .width = _width,                                                        \
+            .height = _height,                                                      \
+         };                                                                         \
+      }                                                                             \
    } while (0)
 
    VkSampleCountFlags sample_counts =

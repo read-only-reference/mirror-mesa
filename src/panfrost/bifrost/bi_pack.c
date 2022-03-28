@@ -120,6 +120,12 @@ bi_assign_slots(bi_tuple *now, bi_tuple *prev)
 
         if (now->add) {
                 bi_foreach_src(now->add, src) {
+                        /* This is not a real source, we shouldn't assign a
+                         * slot for it.
+                         */
+                        if (now->add->op == BI_OPCODE_BLEND && src == 4)
+                                continue;
+
                         if (!(src == 0 && read_dreg))
                                 bi_assign_slot_read(&now->regs, (now->add)->src[src]);
                 }
@@ -303,8 +309,6 @@ bi_get_src_new(bi_instr *ins, bi_registers *regs, unsigned s)
                 return bi_get_src_slot(regs, src.value);
         else if (src.type == BI_INDEX_PASS)
                 return src.value;
-        else if (bi_is_null(src) && ins->op == BI_OPCODE_ZS_EMIT && s < 2)
-                return BIFROST_SRC_STAGE;
         else {
                 /* TODO make safer */
                 return BIFROST_SRC_STAGE;

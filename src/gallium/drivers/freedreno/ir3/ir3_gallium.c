@@ -108,13 +108,13 @@ upload_shader_variant(struct ir3_shader_variant *v)
    assert(!v->bo);
 
    v->bo =
-      fd_bo_new(compiler->dev, v->info.size, 0,
+      fd_bo_new(compiler->dev, v->info.size, FD_BO_NOMAP,
                 "%s:%s", ir3_shader_stage(v), info->name);
 
    /* Always include shaders in kernel crash dumps. */
    fd_bo_mark_for_dump(v->bo);
 
-   memcpy(fd_bo_map(v->bo), v->bin, v->info.size);
+   fd_bo_upload(v->bo, v->bin, v->info.size);
 }
 
 struct ir3_shader_variant *
@@ -548,7 +548,8 @@ ir3_screen_init(struct pipe_screen *pscreen)
 {
    struct fd_screen *screen = fd_screen(pscreen);
 
-   screen->compiler = ir3_compiler_create(screen->dev, screen->dev_id, false);
+   screen->compiler = ir3_compiler_create(screen->dev, screen->dev_id,
+                                          &(struct ir3_compiler_options) {});
 
    /* TODO do we want to limit things to # of fast cores, or just limit
     * based on total # of both big and little cores.  The little cores

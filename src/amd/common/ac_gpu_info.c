@@ -25,6 +25,7 @@
 
 #include "ac_gpu_info.h"
 #include "ac_shader_util.h"
+#include "ac_debug.h"
 
 #include "addrlib/src/amdgpu_asic_addr.h"
 #include "sid.h"
@@ -66,6 +67,7 @@
 #define AMDGPU_INFO_MEMORY 0x19
 #define AMDGPU_INFO_VIDEO_CAPS_DECODE 0
 #define AMDGPU_INFO_VIDEO_CAPS_ENCODE 1
+#define AMDGPU_INFO_FW_GFX_MEC 0x08
 struct drm_amdgpu_heap_info {
    uint64_t total_heap_size;
 };
@@ -590,6 +592,13 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       return false;
    }
 
+   r = amdgpu_query_firmware_version(dev, AMDGPU_INFO_FW_GFX_MEC, 0, 0, &info->mec_fw_version,
+                                     &info->mec_fw_feature);
+   if (r) {
+      fprintf(stderr, "amdgpu: amdgpu_query_firmware_version(mec) failed.\n");
+      return false;
+   }
+
    r = amdgpu_query_firmware_version(dev, AMDGPU_INFO_FW_GFX_PFP, 0, 0, &info->pfp_fw_version,
                                      &info->pfp_fw_feature);
    if (r) {
@@ -764,6 +773,12 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    case FAMILY_YC:
       identify_chip(YELLOW_CARP);
       break;
+   case FAMILY_GC_10_3_6:
+      identify_chip(GFX1036);
+      break;
+   case FAMILY_GC_10_3_7:
+      identify_chip2(GFX1037, GFX1036);
+      break;
    }
 
    if (!info->name) {
@@ -934,6 +949,9 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       break;
    default:
       info->l2_cache_size = info->num_tcc_blocks * 256 * 1024;
+      break;
+   case CHIP_YELLOW_CARP:
+      info->l2_cache_size = info->num_tcc_blocks * 512 * 1024;
       break;
    }
 
@@ -1191,6 +1209,7 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
          break;
       case CHIP_VANGOGH:
       case CHIP_YELLOW_CARP:
+      case CHIP_GFX1036:
          pc_lines = 256;
          break;
       default:
@@ -1248,6 +1267,28 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    info->num_simd_per_compute_unit = info->chip_class >= GFX10 ? 2 : 4;
 
    set_custom_cu_en_mask(info);
+
+   const char *ib_filename = debug_get_option("AMD_PARSE_IB", NULL);
+   if (ib_filename) {
+	   FILE *f = fopen(ib_filename, "r");
+	   if (f) {
+		   fseek(f, 0, SEEK_END);
+         size_t size = ftell(f);
+		   uint32_t *ib = (uint32_t *)malloc(size);
+		   fseek(f, 0, SEEK_SET);
+         size_t n_read = fread(ib, 1, size, f);
+         fclose(f);
+
+         if (n_read != size) {
+            fprintf(stderr, "failed to read %zu bytes from '%s'\n", size, ib_filename);
+            exit(1);
+         }
+
+         ac_parse_ib(stdout, ib, size / 4, NULL, 0, "IB", info->chip_class, NULL, NULL);
+		   free(ib);
+		   exit(0);
+	   }
+   }
    return true;
 }
 
@@ -1362,6 +1403,8 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    ib_alignment = %u\n", info->ib_alignment);
    fprintf(f, "    me_fw_version = %i\n", info->me_fw_version);
    fprintf(f, "    me_fw_feature = %i\n", info->me_fw_feature);
+   fprintf(f, "    mec_fw_version = %i\n", info->mec_fw_version);
+   fprintf(f, "    mec_fw_feature = %i\n", info->mec_fw_feature);
    fprintf(f, "    pfp_fw_version = %i\n", info->pfp_fw_version);
    fprintf(f, "    pfp_fw_feature = %i\n", info->pfp_fw_feature);
    fprintf(f, "    ce_fw_version = %i\n", info->ce_fw_version);

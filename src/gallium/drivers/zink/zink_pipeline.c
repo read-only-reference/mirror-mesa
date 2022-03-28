@@ -90,12 +90,12 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
       case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY:
       case VK_PRIMITIVE_TOPOLOGY_PATCH_LIST:
-         if (state->primitive_restart)
+         if (state->dyn_state2.primitive_restart)
             debug_printf("restart_index set with unsupported primitive topology %u\n", primitive_topology);
          primitive_state.primitiveRestartEnable = VK_FALSE;
          break;
       default:
-         primitive_state.primitiveRestartEnable = state->primitive_restart ? VK_TRUE : VK_FALSE;
+         primitive_state.primitiveRestartEnable = state->dyn_state2.primitive_restart ? VK_TRUE : VK_FALSE;
       }
    }
 
@@ -155,14 +155,14 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    viewport_state.pViewports = NULL;
    viewport_state.scissorCount = screen->info.have_EXT_extended_dynamic_state ? 0 : state->dyn_state1.num_viewports;
    viewport_state.pScissors = NULL;
-   if (screen->info.have_EXT_depth_clip_control && !hw_rast_state->clip_halfz)
+   if (!screen->driver_workarounds.depth_clip_control_missing && !hw_rast_state->clip_halfz)
       viewport_state.pNext = &clip;
 
    VkPipelineRasterizationStateCreateInfo rast_state = {0};
    rast_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
 
    rast_state.depthClampEnable = hw_rast_state->depth_clamp;
-   rast_state.rasterizerDiscardEnable = hw_rast_state->rasterizer_discard;
+   rast_state.rasterizerDiscardEnable = state->dyn_state2.rasterizer_discard;
    rast_state.polygonMode = hw_rast_state->polygon_mode;
    rast_state.cullMode = hw_rast_state->cull_mode;
    rast_state.frontFace = state->dyn_state1.front_face;
@@ -228,8 +228,12 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       else if (screen->info.have_EXT_extended_dynamic_state)
          dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT;
    }
-   if (screen->info.have_EXT_extended_dynamic_state2)
+   if (screen->info.have_EXT_extended_dynamic_state2) {
       dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE_EXT;
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE_EXT;
+   }
+   if (!screen->driver_workarounds.color_write_missing)
+      dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT;
 
    VkPipelineRasterizationLineStateCreateInfoEXT rast_line_state;
    if (screen->info.have_EXT_line_rasterization) {
@@ -244,6 +248,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       }
       rast_state.pNext = &rast_line_state;
    }
+   assert(state_count < ARRAY_SIZE(dynamicStateEnables));
 
    VkPipelineDynamicStateCreateInfo pipelineDynamicStateCreateInfo = {0};
    pipelineDynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -296,7 +301,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    VkPipeline pipeline;
    if (vkCreateGraphicsPipelines(screen->dev, prog->base.pipeline_cache, 1, &pci,
                                  NULL, &pipeline) != VK_SUCCESS) {
-      debug_printf("vkCreateGraphicsPipelines failed\n");
+      mesa_loge("ZINK: vkCreateGraphicsPipelines failed");
       return VK_NULL_HANDLE;
    }
 
@@ -313,7 +318,7 @@ zink_create_compute_pipeline(struct zink_screen *screen, struct zink_compute_pro
    VkPipelineShaderStageCreateInfo stage = {0};
    stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-   stage.module = comp->module->shader;
+   stage.module = comp->curr->shader;
    stage.pName = "main";
 
    VkSpecializationInfo sinfo = {0};
@@ -337,7 +342,7 @@ zink_create_compute_pipeline(struct zink_screen *screen, struct zink_compute_pro
    VkPipeline pipeline;
    if (vkCreateComputePipelines(screen->dev, comp->base.pipeline_cache, 1, &pci,
                                  NULL, &pipeline) != VK_SUCCESS) {
-      debug_printf("vkCreateComputePipelines failed\n");
+      mesa_loge("ZINK: vkCreateComputePipelines failed");
       return VK_NULL_HANDLE;
    }
    zink_screen_update_pipeline_cache(screen, &comp->base);

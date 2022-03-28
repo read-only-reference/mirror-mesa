@@ -219,11 +219,11 @@ d3d12_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
       return 4;
 
-   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
-   case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
+   case PIPE_CAP_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+   case PIPE_CAP_FS_COORD_ORIGIN_UPPER_LEFT:
       return 1;
 
-   case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
+   case PIPE_CAP_FS_FACE_IS_INTEGER_SYSVAL:
       return 1;
 
    case PIPE_CAP_ACCELERATED:
@@ -268,7 +268,7 @@ d3d12_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
-   case PIPE_CAP_TGSI_INSTANCEID:
+   case PIPE_CAP_VS_INSTANCEID:
    case PIPE_CAP_TGSI_TEX_TXF_LZ:
    case PIPE_CAP_OCCLUSION_QUERY:
    case PIPE_CAP_POINT_SPRITE:

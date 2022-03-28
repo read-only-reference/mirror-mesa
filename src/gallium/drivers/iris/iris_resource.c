@@ -108,7 +108,7 @@ modifier_is_supported(const struct intel_device_info *devinfo,
    /* Check remaining requirements. */
    switch (modifier) {
    case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
-      if (INTEL_DEBUG(DEBUG_NO_RBC))
+      if (INTEL_DEBUG(DEBUG_NO_CCS))
          return false;
 
       if (pfmt != PIPE_FORMAT_BGRA8888_UNORM &&
@@ -127,7 +127,7 @@ modifier_is_supported(const struct intel_device_info *devinfo,
    case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
    case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS:
    case I915_FORMAT_MOD_Y_TILED_CCS: {
-      if (INTEL_DEBUG(DEBUG_NO_RBC))
+      if (INTEL_DEBUG(DEBUG_NO_CCS))
          return false;
 
       enum isl_format rt_format =
@@ -432,10 +432,7 @@ iris_resource_alloc_flags(const struct iris_screen *screen,
       break;
    }
 
-   /* Scanout and shared buffers need to be WC (shared because they might be
-    * used for scanout)
-    */
-   if (templ->bind & (PIPE_BIND_SCANOUT | PIPE_BIND_SHARED))
+   if (templ->bind & PIPE_BIND_SCANOUT)
       flags |= BO_ALLOC_SCANOUT;
 
    if (templ->flags & (PIPE_RESOURCE_FLAG_MAP_COHERENT |
@@ -482,7 +479,7 @@ iris_alloc_resource(struct pipe_screen *pscreen,
    res->base.b.screen = pscreen;
    res->orig_screen = iris_pscreen_ref(pscreen);
    pipe_reference_init(&res->base.b.reference, 1);
-   threaded_resource_init(&res->base.b, false, 0);
+   threaded_resource_init(&res->base.b, false);
 
    if (templ->target == PIPE_BUFFER)
       util_range_init(&res->valid_buffer_range);
@@ -759,7 +756,7 @@ iris_resource_configure_aux(struct iris_screen *screen,
    const bool has_hiz = !INTEL_DEBUG(DEBUG_NO_HIZ) &&
       isl_surf_get_hiz_surf(&screen->isl_dev, &res->surf, &res->aux.surf);
 
-   const bool has_ccs = !INTEL_DEBUG(DEBUG_NO_RBC) &&
+   const bool has_ccs = !INTEL_DEBUG(DEBUG_NO_CCS) &&
       iris_get_ccs_surf_or_support(&screen->isl_dev, &res->surf,
                                    &res->aux.surf, &res->aux.extra_aux.surf);
 
@@ -2258,16 +2255,15 @@ iris_transfer_map(struct pipe_context *ctx,
    struct iris_transfer *map;
 
    if (usage & TC_TRANSFER_MAP_THREADED_UNSYNC)
-      map = slab_alloc(&ice->transfer_pool_unsync);
+      map = slab_zalloc(&ice->transfer_pool_unsync);
    else
-      map = slab_alloc(&ice->transfer_pool);
+      map = slab_zalloc(&ice->transfer_pool);
 
    if (!map)
       return NULL;
 
    struct pipe_transfer *xfer = &map->base.b;
 
-   memset(map, 0, sizeof(*map));
    map->dbg = &ice->dbg;
 
    pipe_resource_reference(&xfer->resource, resource);
@@ -2639,7 +2635,7 @@ iris_init_screen_resource_functions(struct pipe_screen *pscreen)
    pscreen->memobj_create_from_handle = iris_memobj_create_from_handle;
    pscreen->memobj_destroy = iris_memobj_destroy;
    pscreen->transfer_helper =
-      u_transfer_helper_create(&transfer_vtbl, true, true, false, true);
+      u_transfer_helper_create(&transfer_vtbl, true, true, false, true, false);
 }
 
 void

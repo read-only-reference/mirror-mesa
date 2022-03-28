@@ -16,6 +16,7 @@
  *
  *   vkGetMemoryFdKHR
  *   vkGetMemoryFdPropertiesKHR
+ *   vkImportFenceFdKHR
  */
 
 /* struct VkCommandStreamDescriptionMESA */

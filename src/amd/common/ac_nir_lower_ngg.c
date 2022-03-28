@@ -107,6 +107,10 @@ typedef struct
    unsigned prim_vtx_indices_addr;
    unsigned numprims_lds_addr;
    unsigned wave_size;
+   unsigned api_workgroup_size;
+   unsigned hw_workgroup_size;
+
+   nir_ssa_def *workgroup_index;
 
    struct {
       /* Bitmask of components used: 4 bits per slot, 1 bit per component. */
@@ -2265,6 +2269,15 @@ lower_ms_load_per_primitive_output(nir_builder *b,
 }
 
 static nir_ssa_def *
+lower_ms_load_workgroup_id(nir_builder *b,
+                           UNUSED nir_intrinsic_instr *intrin,
+                           lower_ngg_ms_state *s)
+{
+   /* NV_mesh_shader: workgroup ID is 1 dimensional  */
+   return nir_vec3(b, s->workgroup_index, nir_imm_int(b, 0), nir_imm_int(b, 0));
+}
+
+static nir_ssa_def *
 update_ms_scoped_barrier(nir_builder *b,
                          nir_intrinsic_instr *intrin,
                          lower_ngg_ms_state *s)
@@ -2305,6 +2318,8 @@ lower_ms_intrinsic(nir_builder *b, nir_instr *instr, void *state)
       return lower_ms_store_per_primitive_output(b, intrin, s);
    else if (intrin->intrinsic == nir_intrinsic_load_per_primitive_output)
       return lower_ms_load_per_primitive_output(b, intrin, s);
+   else if (intrin->intrinsic == nir_intrinsic_load_workgroup_id)
+      return lower_ms_load_workgroup_id(b, intrin, s);
    else if (intrin->intrinsic == nir_intrinsic_scoped_barrier)
       return update_ms_scoped_barrier(b, intrin, s);
    else
@@ -2325,7 +2340,8 @@ filter_ms_intrinsic(const nir_instr *instr,
           intrin->intrinsic == nir_intrinsic_load_per_vertex_output ||
           intrin->intrinsic == nir_intrinsic_store_per_primitive_output ||
           intrin->intrinsic == nir_intrinsic_load_per_primitive_output ||
-          intrin->intrinsic == nir_intrinsic_scoped_barrier;
+          intrin->intrinsic == nir_intrinsic_scoped_barrier ||
+          intrin->intrinsic == nir_intrinsic_load_workgroup_id;
 }
 
 static void
@@ -2367,33 +2383,86 @@ ms_emit_arrayed_outputs(nir_builder *b,
 }
 
 static void
-emit_ms_finale(nir_shader *shader, lower_ngg_ms_state *s)
+emit_ms_prelude(nir_builder *b, lower_ngg_ms_state *s)
 {
-   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
-   assert(impl);
-   nir_block *last_block = nir_impl_last_block(impl);
-   assert(last_block);
+   bool uses_workgroup_id =
+      BITSET_TEST(b->shader->info.system_values_read, SYSTEM_VALUE_WORKGROUP_ID);
 
-   /* We assume there is always a single end block in the shader. */
+   if (!uses_workgroup_id)
+      return;
 
-   nir_builder builder;
-   nir_builder *b = &builder; /* This is to avoid the & */
-   nir_builder_init(b, impl);
-   b->cursor = nir_after_block(last_block);
+   b->cursor = nir_before_cf_list(&b->impl->body);
 
-   nir_scoped_barrier(b, .execution_scope=NIR_SCOPE_WORKGROUP, .memory_scope=NIR_SCOPE_WORKGROUP,
-                         .memory_semantics=NIR_MEMORY_ACQ_REL, .memory_modes=nir_var_shader_out|nir_var_mem_shared);
+   /* The HW doesn't support a proper workgroup index for vertex processing stages,
+    * so we use the vertex ID which is equivalent to the index of the current workgroup
+    * within the current dispatch.
+    *
+    * Due to the register programming of mesh shaders, this value is only filled for
+    * the first invocation of the first wave. To let other waves know, we use LDS.
+    *
+    * NV_mesh_shader: firstTask is emulated using first_vertex here.
+    */
+   nir_ssa_def *workgroup_index = nir_load_vertex_id_zero_base(b);
 
+   if (s->api_workgroup_size <= s->wave_size) {
+      /* API workgroup is small, so we don't need to use LDS. */
+      workgroup_index = nir_read_first_invocation(b, workgroup_index);
+      workgroup_index = nir_iadd(b, workgroup_index, nir_load_first_vertex(b));
+
+      s->workgroup_index = workgroup_index;
+      return;
+   }
+
+   unsigned workgroup_index_lds_addr = s->numprims_lds_addr + 8;
+
+   nir_ssa_def *zero = nir_imm_int(b, 0);
+   nir_ssa_def *dont_care = nir_ssa_undef(b, 1, 32);
+   nir_ssa_def *loaded_workgroup_index = NULL;
+
+   /* Use elect to make sure only 1 invocation uses LDS. */
+   nir_if *if_elected = nir_push_if(b, nir_elect(b, 1));
+   {
+      nir_ssa_def *wave_id = nir_load_subgroup_id(b);
+      nir_if *if_wave_0 = nir_push_if(b, nir_ieq_imm(b, wave_id, 0));
+      {
+         nir_store_shared(b, workgroup_index, zero, .base = workgroup_index_lds_addr);
+         nir_scoped_barrier(b, .execution_scope = NIR_SCOPE_WORKGROUP,
+                               .memory_scope = NIR_SCOPE_WORKGROUP,
+                               .memory_semantics = NIR_MEMORY_ACQ_REL,
+                               .memory_modes = nir_var_mem_shared);
+      }
+      nir_push_else(b, if_wave_0);
+      {
+         nir_scoped_barrier(b, .execution_scope = NIR_SCOPE_WORKGROUP,
+                               .memory_scope = NIR_SCOPE_WORKGROUP,
+                               .memory_semantics = NIR_MEMORY_ACQ_REL,
+                               .memory_modes = nir_var_mem_shared);
+         loaded_workgroup_index = nir_load_shared(b, 1, 32, zero, .base = workgroup_index_lds_addr);
+      }
+      nir_pop_if(b, if_wave_0);
+
+      workgroup_index = nir_if_phi(b, workgroup_index, loaded_workgroup_index);
+   }
+   nir_pop_if(b, if_elected);
+
+   workgroup_index = nir_if_phi(b, workgroup_index, dont_care);
+   workgroup_index = nir_read_first_invocation(b, workgroup_index);
+   workgroup_index = nir_iadd(b, workgroup_index, nir_load_first_vertex(b));
+
+   s->workgroup_index = workgroup_index;
+}
+
+static void
+set_nv_ms_final_output_counts(nir_builder *b,
+                               lower_ngg_ms_state *s,
+                               nir_ssa_def **out_num_prm,
+                               nir_ssa_def **out_num_vtx)
+{
    /* Limitations of the NV extension:
     * - Number of primitives can be written and read by any invocation,
     *   so we have to store/load it to/from LDS to make sure the general case works.
     * - Number of vertices is not actually known, so we just always use the
     *   maximum number here.
-    *
-    * TODO: in a possible cross-vendor extension we expect to be able do this smarter:
-    * - Lower SetMeshOutputCounts (not present in NV) directly to alloc_vertices_and_primitives.
-    * - We'll know the exact number of output vertices.
-    * - No longer need to ensure that these variables are readable by any invocation.
     */
    nir_ssa_def *loaded_num_prm;
    nir_ssa_def *dont_care = nir_ssa_undef(b, 1, 32);
@@ -2404,8 +2473,8 @@ emit_ms_finale(nir_shader *shader, lower_ngg_ms_state *s)
    nir_pop_if(b, if_elected);
    loaded_num_prm = nir_if_phi(b, loaded_num_prm, dont_care);
    nir_ssa_def *num_prm = nir_read_first_invocation(b, loaded_num_prm);
-   nir_ssa_def *num_vtx = nir_imm_int(b, shader->info.mesh.max_vertices_out);
-   num_prm = nir_umin(b, num_prm, nir_imm_int(b, shader->info.mesh.max_primitives_out));
+   nir_ssa_def *num_vtx = nir_imm_int(b, b->shader->info.mesh.max_vertices_out);
+   num_prm = nir_umin(b, num_prm, nir_imm_int(b, b->shader->info.mesh.max_primitives_out));
 
    /* If the shader doesn't actually create any primitives, don't allocate any output. */
    num_vtx = nir_bcsel(b, nir_ieq_imm(b, num_prm, 0), nir_imm_int(b, 0), num_vtx);
@@ -2417,6 +2486,25 @@ emit_ms_finale(nir_shader *shader, lower_ngg_ms_state *s)
       nir_alloc_vertices_and_primitives_amd(b, num_vtx, num_prm);
    }
    nir_pop_if(b, if_wave_0);
+
+   *out_num_prm = num_prm;
+   *out_num_vtx = num_vtx;
+}
+
+static void
+emit_ms_finale(nir_builder *b, lower_ngg_ms_state *s)
+{
+   /* We assume there is always a single end block in the shader. */
+   nir_block *last_block = nir_impl_last_block(b->impl);
+   b->cursor = nir_after_block(last_block);
+
+   nir_scoped_barrier(b, .execution_scope=NIR_SCOPE_WORKGROUP, .memory_scope=NIR_SCOPE_WORKGROUP,
+                         .memory_semantics=NIR_MEMORY_ACQ_REL, .memory_modes=nir_var_shader_out|nir_var_mem_shared);
+
+   nir_ssa_def *num_prm;
+   nir_ssa_def *num_vtx;
+
+   set_nv_ms_final_output_counts(b, s, &num_prm, &num_vtx);
 
    nir_ssa_def *invocation_index = nir_load_local_invocation_index(b);
 
@@ -2451,10 +2539,11 @@ emit_ms_finale(nir_shader *shader, lower_ngg_ms_state *s)
       nir_ssa_def *prim_idx_addr = nir_imul_imm(b, invocation_index, s->vertices_per_prim);
       nir_ssa_def *indices_loaded = nir_load_shared(b, s->vertices_per_prim, 8, prim_idx_addr, .base = s->prim_vtx_indices_addr);
       nir_ssa_def *indices[3];
+      nir_ssa_def *max_vtx_idx = nir_iadd_imm(b, num_vtx, -1u);
 
       for (unsigned i = 0; i < s->vertices_per_prim; ++i) {
          indices[i] = nir_u2u32(b, nir_channel(b, indices_loaded, i));
-         indices[i] = nir_umin(b, indices[i], nir_imm_int(b, shader->info.mesh.max_vertices_out - 1));
+         indices[i] = nir_umin(b, indices[i], max_vtx_idx);
       }
 
       nir_ssa_def *prim_exp_arg = emit_pack_ngg_prim_exp_arg(b, s->vertices_per_prim, indices, NULL, false);
@@ -2464,12 +2553,12 @@ emit_ms_finale(nir_shader *shader, lower_ngg_ms_state *s)
 }
 
 static void
-handle_smaller_ms_api_workgroup(nir_function_impl *impl,
-                                nir_builder *b,
-                                unsigned api_workgroup_size,
-                                unsigned hw_workgroup_size,
+handle_smaller_ms_api_workgroup(nir_builder *b,
                                 lower_ngg_ms_state *s)
 {
+   if (s->api_workgroup_size >= s->hw_workgroup_size)
+      return;
+
    /* Handle barriers manually when the API workgroup
     * size is less than the HW workgroup size.
     *
@@ -2485,19 +2574,19 @@ handle_smaller_ms_api_workgroup(nir_function_impl *impl,
     *    all. In this case, we emit code that consumes every
     *    barrier on the extra waves.
     */
-   assert(hw_workgroup_size % s->wave_size == 0);
-   bool scan_barriers = ALIGN(api_workgroup_size, s->wave_size) < hw_workgroup_size;
-   bool can_shrink_barriers = api_workgroup_size <= s->wave_size;
+   assert(s->hw_workgroup_size % s->wave_size == 0);
+   bool scan_barriers = ALIGN(s->api_workgroup_size, s->wave_size) < s->hw_workgroup_size;
+   bool can_shrink_barriers = s->api_workgroup_size <= s->wave_size;
    bool need_additional_barriers = scan_barriers && !can_shrink_barriers;
 
    unsigned api_waves_in_flight_addr = s->numprims_lds_addr + 12;
-   unsigned num_api_waves = DIV_ROUND_UP(api_workgroup_size, s->wave_size);
+   unsigned num_api_waves = DIV_ROUND_UP(s->api_workgroup_size, s->wave_size);
 
    /* Scan the shader for workgroup barriers. */
    if (scan_barriers) {
       bool has_any_workgroup_barriers = false;
 
-      nir_foreach_block(block, impl) {
+      nir_foreach_block(block, b->impl) {
          nir_foreach_instr_safe(instr, block) {
             if (instr->type != nir_instr_type_intrinsic)
                continue;
@@ -2528,8 +2617,8 @@ handle_smaller_ms_api_workgroup(nir_function_impl *impl,
 
    /* Extract the full control flow of the shader. */
    nir_cf_list extracted;
-   nir_cf_extract(&extracted, nir_before_cf_list(&impl->body), nir_after_cf_list(&impl->body));
-   b->cursor = nir_before_cf_list(&impl->body);
+   nir_cf_extract(&extracted, nir_before_cf_list(&b->impl->body), nir_after_cf_list(&b->impl->body));
+   b->cursor = nir_before_cf_list(&b->impl->body);
 
    /* Wrap the shader in an if to ensure that only the necessary amount of lanes run it. */
    nir_ssa_def *invocation_index = nir_load_local_invocation_index(b);
@@ -2549,7 +2638,7 @@ handle_smaller_ms_api_workgroup(nir_function_impl *impl,
                             .memory_modes = nir_var_shader_out | nir_var_mem_shared);
    }
 
-   nir_ssa_def *has_api_ms_invocation = nir_ult(b, invocation_index, nir_imm_int(b, api_workgroup_size));
+   nir_ssa_def *has_api_ms_invocation = nir_ult(b, invocation_index, nir_imm_int(b, s->api_workgroup_size));
    nir_if *if_has_api_ms_invocation = nir_push_if(b, has_api_ms_invocation);
    {
       nir_cf_reinsert(&extracted, b->cursor);
@@ -2628,7 +2717,7 @@ ac_nir_lower_ngg_ms(nir_shader *shader,
    /* LDS area for total number of output primitives and other info.
     * DW0: number of primitives
     * DW1: reserved for later use
-    * DW2: reserved for later use
+    * DW2: workgroup index within the current dispatch
     * DW3: number of API workgroups in flight
     */
    unsigned numprims_lds_addr = ALIGN(shader->info.shared_size, 16);
@@ -2645,19 +2734,6 @@ ac_nir_lower_ngg_ms(nir_shader *shader,
 
    shader->info.shared_size = prim_vtx_indices_addr + prim_vtx_indices_size;
 
-   lower_ngg_ms_state state = {
-      .wave_size = wave_size,
-      .per_vertex_outputs = per_vertex_outputs,
-      .per_primitive_outputs = per_primitive_outputs,
-      .num_per_vertex_outputs = num_per_vertex_outputs,
-      .num_per_primitive_outputs = num_per_primitive_outputs,
-      .vertices_per_prim = vertices_per_prim,
-      .vertex_attr_lds_addr = vertex_attr_lds_addr,
-      .prim_attr_lds_addr = prim_attr_lds_addr,
-      .prim_vtx_indices_addr = prim_vtx_indices_addr,
-      .numprims_lds_addr = numprims_lds_addr,
-   };
-
    /* The workgroup size that is specified by the API shader may be different
     * from the size of the workgroup that actually runs on the HW, due to the
     * limitations of NGG: max 0/1 vertex and 0/1 primitive per lane is allowed.
@@ -2672,6 +2748,21 @@ ac_nir_lower_ngg_ms(nir_shader *shader,
    unsigned hw_workgroup_size =
       ALIGN(MAX3(api_workgroup_size, max_primitives, max_vertices), wave_size);
 
+   lower_ngg_ms_state state = {
+      .wave_size = wave_size,
+      .per_vertex_outputs = per_vertex_outputs,
+      .per_primitive_outputs = per_primitive_outputs,
+      .num_per_vertex_outputs = num_per_vertex_outputs,
+      .num_per_primitive_outputs = num_per_primitive_outputs,
+      .vertices_per_prim = vertices_per_prim,
+      .vertex_attr_lds_addr = vertex_attr_lds_addr,
+      .prim_attr_lds_addr = prim_attr_lds_addr,
+      .prim_vtx_indices_addr = prim_vtx_indices_addr,
+      .numprims_lds_addr = numprims_lds_addr,
+      .api_workgroup_size = api_workgroup_size,
+      .hw_workgroup_size = hw_workgroup_size,
+   };
+
    nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    assert(impl);
 
@@ -2680,14 +2771,15 @@ ac_nir_lower_ngg_ms(nir_shader *shader,
    nir_builder_init(b, impl);
    b->cursor = nir_before_cf_list(&impl->body);
 
-   if (api_workgroup_size < hw_workgroup_size) {
-      handle_smaller_ms_api_workgroup(impl, b, api_workgroup_size, hw_workgroup_size, &state);
-   }
+   handle_smaller_ms_api_workgroup(b, &state);
+   emit_ms_prelude(b, &state);
+   nir_metadata_preserve(impl, nir_metadata_none);
 
    lower_ms_intrinsics(shader, &state);
-   emit_ms_finale(shader, &state);
+
+   emit_ms_finale(b, &state);
+   nir_metadata_preserve(impl, nir_metadata_none);
 
    /* Cleanup */
    nir_validate_shader(shader, "after emitting NGG MS");
-   nir_metadata_preserve(impl, nir_metadata_none);
 }

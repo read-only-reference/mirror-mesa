@@ -317,21 +317,16 @@ static void *si_buffer_get_transfer(struct pipe_context *ctx, struct pipe_resour
    struct si_transfer *transfer;
 
    if (usage & PIPE_MAP_THREAD_SAFE)
-      transfer = malloc(sizeof(*transfer));
+      transfer = calloc(1, sizeof(*transfer));
    else if (usage & TC_TRANSFER_MAP_THREADED_UNSYNC)
-      transfer = slab_alloc(&sctx->pool_transfers_unsync);
+      transfer = slab_zalloc(&sctx->pool_transfers_unsync);
    else
-      transfer = slab_alloc(&sctx->pool_transfers);
+      transfer = slab_zalloc(&sctx->pool_transfers);
 
-   transfer->b.b.resource = NULL;
    pipe_resource_reference(&transfer->b.b.resource, resource);
-   transfer->b.b.level = 0;
    transfer->b.b.usage = usage;
    transfer->b.b.box = *box;
-   transfer->b.b.stride = 0;
-   transfer->b.b.layer_stride = 0;
    transfer->b.b.offset = offset;
-   transfer->b.staging = NULL;
    transfer->staging = staging;
    *ptransfer = &transfer->b.b;
    return data;
@@ -571,7 +566,7 @@ static struct si_resource *si_alloc_buffer_struct(struct pipe_screen *screen,
    pipe_reference_init(&buf->b.b.reference, 1);
    buf->b.b.screen = screen;
 
-   threaded_resource_init(&buf->b.b, allow_cpu_storage, SI_MAP_BUFFER_ALIGNMENT);
+   threaded_resource_init(&buf->b.b, allow_cpu_storage);
 
    buf->buf = NULL;
    buf->bind_history = 0;
@@ -669,13 +664,13 @@ struct pipe_resource *si_buffer_from_winsys_buffer(struct pipe_screen *screen,
    if (!res)
       return NULL;
 
-   enum radeon_bo_domain domains = sscreen->ws->buffer_get_initial_domain(res->buf);
+   enum radeon_bo_domain domains = sscreen->ws->buffer_get_initial_domain(imported_buf);
 
    /* Get or guess the BO flags. */
    unsigned flags = RADEON_FLAG_NO_SUBALLOC;
 
    if (sscreen->ws->buffer_get_flags)
-      res->flags |= sscreen->ws->buffer_get_flags(res->buf);
+      res->flags |= sscreen->ws->buffer_get_flags(imported_buf);
    else
       flags |= RADEON_FLAG_GTT_WC; /* unknown flags, guess them */
 
@@ -709,8 +704,8 @@ struct pipe_resource *si_buffer_from_winsys_buffer(struct pipe_screen *screen,
    if (res->flags & RADEON_FLAG_NO_CPU_ACCESS)
       res->b.b.flags |= PIPE_RESOURCE_FLAG_UNMAPPABLE;
 
-   util_range_add((struct pipe_resource *)templ, &res->valid_buffer_range, 0, templ->width0);
-   util_range_add((struct pipe_resource *)templ, &res->b.valid_buffer_range, 0, templ->width0);
+   util_range_add(&res->b.b, &res->valid_buffer_range, 0, templ->width0);
+   util_range_add(&res->b.b, &res->b.valid_buffer_range, 0, templ->width0);
 
    return &res->b.b;
 }

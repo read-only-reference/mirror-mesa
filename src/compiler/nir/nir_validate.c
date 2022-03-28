@@ -634,7 +634,6 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
       if (glsl_type_is_boolean(dst->type))
          src_bit_sizes[1] |= 32;
       validate_assert(state, !nir_deref_mode_may_be(dst, nir_var_read_only_modes));
-      validate_assert(state, (nir_intrinsic_write_mask(instr) & ~((1 << instr->num_components) - 1)) == 0);
       break;
    }
 
@@ -822,6 +821,37 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
 
    if (!vectorized_intrinsic(instr))
       validate_assert(state, instr->num_components == 0);
+
+   if (nir_intrinsic_has_write_mask(instr)) {
+      unsigned component_mask = BITFIELD_MASK(instr->num_components);
+      validate_assert(state, (nir_intrinsic_write_mask(instr) & ~component_mask) == 0);
+   }
+
+   if (nir_intrinsic_has_io_xfb(instr)) {
+      unsigned used_mask = 0;
+
+      for (unsigned i = 0; i < 4; i++) {
+         nir_io_xfb xfb = i < 2 ? nir_intrinsic_io_xfb(instr) :
+                                  nir_intrinsic_io_xfb2(instr);
+         unsigned xfb_mask = BITFIELD_RANGE(i, xfb.out[i % 2].num_components);
+
+         /* Each component can be used only once by transform feedback info. */
+         validate_assert(state, (xfb_mask & used_mask) == 0);
+         used_mask |= xfb_mask;
+      }
+   }
+
+   if (nir_intrinsic_has_io_semantics(instr) &&
+       !nir_intrinsic_infos[instr->intrinsic].has_dest) {
+      nir_io_semantics sem = nir_intrinsic_io_semantics(instr);
+
+      /* An output that has no effect shouldn't be present in the IR. */
+      validate_assert(state,
+                      (nir_slot_is_sysval_output(sem.location) &&
+                       !sem.no_sysval_output) ||
+                      (nir_slot_is_varying(sem.location) && !sem.no_varying) ||
+                      nir_instr_xfb_write_mask(instr));
+   }
 }
 
 static void
@@ -1589,6 +1619,11 @@ validate_function_impl(nir_function_impl *impl, validate_state *state)
    validate_assert(state, impl->function->impl == impl);
    validate_assert(state, impl->cf_node.parent == NULL);
 
+   if (impl->preamble) {
+      validate_assert(state, impl->function->is_entrypoint);
+      validate_assert(state, impl->preamble->is_preamble);
+   }
+
    validate_assert(state, exec_list_is_empty(&impl->end_block->instr_list));
    validate_assert(state, impl->end_block->successors[0] == NULL);
    validate_assert(state, impl->end_block->successors[1] == NULL);
@@ -1737,6 +1772,7 @@ nir_validate_shader(nir_shader *shader, const char *when)
       nir_var_system_value |
       nir_var_mem_ssbo |
       nir_var_mem_shared |
+      nir_var_mem_global |
       nir_var_mem_push_const |
       nir_var_mem_constant |
       nir_var_image;

@@ -39,6 +39,7 @@
 #include "util/debug.h"
 #include "util/disk_cache.h"
 #include "util/driconf.h"
+#include "util/os_misc.h"
 #include "util/u_atomic.h"
 #include "vk_format.h"
 #include "vk_util.h"
@@ -165,13 +166,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .KHR_timeline_semaphore = true,
 #endif
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
-      /* This extension is supported by common code across drivers, but it is
-       * missing some core functionality and fails
-       * dEQP-VK.wsi.display_control.register_device_event. Once some variant of
-       * https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/12305 lands,
-       * then we can re-enable it.
-       */
-      /* .EXT_display_control = true, */
+      .EXT_display_control = true,
 #endif
       .EXT_external_memory_dma_buf = true,
       .EXT_image_drm_format_modifier = true,
@@ -181,6 +176,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_4444_formats = true,
       .EXT_conditional_rendering = true,
       .EXT_custom_border_color = true,
+      .EXT_depth_clip_control = true,
       .EXT_depth_clip_enable = true,
       .EXT_descriptor_indexing = true,
       .EXT_extended_dynamic_state = true,
@@ -198,11 +194,15 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_shader_demote_to_helper_invocation = true,
       .EXT_shader_stencil_export = true,
       .EXT_shader_viewport_index_layer = true,
+      .EXT_texel_buffer_alignment = true,
       .EXT_vertex_attribute_divisor = true,
       .EXT_provoking_vertex = true,
       .EXT_line_rasterization = true,
       .EXT_subgroup_size_control = true,
       .EXT_image_robustness = true,
+#ifndef TU_USE_KGSL
+      .EXT_physical_device_drm = true,
+#endif
       /* For Graphics Flight Recorder (GFR) */
       .AMD_buffer_marker = true,
       .ARM_rasterization_order_attachment_access = true,
@@ -333,6 +333,7 @@ static const struct debug_control tu_debug_options[] = {
    { "flushall", TU_DEBUG_FLUSHALL },
    { "syncdraw", TU_DEBUG_SYNCDRAW },
    { "dontcare_as_load", TU_DEBUG_DONT_CARE_AS_LOAD },
+   { "rast_order", TU_DEBUG_RAST_ORDER },
    { NULL, 0 }
 };
 
@@ -407,7 +408,7 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->physical_device_count = -1;
 
    instance->debug_flags =
-      parse_debug_string(getenv("TU_DEBUG"), tu_debug_options);
+      parse_debug_string(os_get_option("TU_DEBUG"), tu_debug_options);
 
 #ifdef DEBUG
    /* Enable startup debugging by default on debug drivers.  You almost always
@@ -461,7 +462,8 @@ tu_EnumeratePhysicalDevices(VkInstance _instance,
                             VkPhysicalDevice *pPhysicalDevices)
 {
    TU_FROM_HANDLE(tu_instance, instance, _instance);
-   VK_OUTARRAY_MAKE(out, pPhysicalDevices, pPhysicalDeviceCount);
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDevice, out,
+                          pPhysicalDevices, pPhysicalDeviceCount);
 
    VkResult result;
 
@@ -472,7 +474,7 @@ tu_EnumeratePhysicalDevices(VkInstance _instance,
    }
 
    for (uint32_t i = 0; i < instance->physical_device_count; ++i) {
-      vk_outarray_append(&out, p)
+      vk_outarray_append_typed(VkPhysicalDevice, &out, p)
       {
          *p = tu_physical_device_to_handle(instance->physical_devices + i);
       }
@@ -488,8 +490,9 @@ tu_EnumeratePhysicalDeviceGroups(
    VkPhysicalDeviceGroupProperties *pPhysicalDeviceGroupProperties)
 {
    TU_FROM_HANDLE(tu_instance, instance, _instance);
-   VK_OUTARRAY_MAKE(out, pPhysicalDeviceGroupProperties,
-                    pPhysicalDeviceGroupCount);
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceGroupProperties, out,
+                          pPhysicalDeviceGroupProperties,
+                          pPhysicalDeviceGroupCount);
    VkResult result;
 
    if (instance->physical_device_count < 0) {
@@ -499,7 +502,7 @@ tu_EnumeratePhysicalDeviceGroups(
    }
 
    for (uint32_t i = 0; i < instance->physical_device_count; ++i) {
-      vk_outarray_append(&out, p)
+      vk_outarray_append_typed(VkPhysicalDeviceGroupProperties, &out, p)
       {
          p->physicalDeviceCount = 1;
          p->physicalDevices[0] =
@@ -554,7 +557,7 @@ tu_get_physical_device_features_1_2(struct tu_physical_device *pdevice,
    features->shaderInputAttachmentArrayNonUniformIndexing       = false;
    features->shaderUniformTexelBufferArrayNonUniformIndexing    = true;
    features->shaderStorageTexelBufferArrayNonUniformIndexing    = true;
-   features->descriptorBindingUniformBufferUpdateAfterBind      = false;
+   features->descriptorBindingUniformBufferUpdateAfterBind      = true;
    features->descriptorBindingSampledImageUpdateAfterBind       = true;
    features->descriptorBindingStorageImageUpdateAfterBind       = true;
    features->descriptorBindingStorageBufferUpdateAfterBind      = true;
@@ -819,6 +822,18 @@ tu_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->rasterizationOrderStencilAttachmentAccess = true;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT: {
+         VkPhysicalDeviceDepthClipControlFeaturesEXT *features =
+            (VkPhysicalDeviceDepthClipControlFeaturesEXT *)ext;
+         features->depthClipControl = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_FEATURES_EXT: {
+         VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT *features =
+            (VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT *)ext;
+         features->texelBufferAlignment = true;
+         break;
+      }
 
       default:
          break;
@@ -845,7 +860,8 @@ tu_get_physical_device_properties_1_1(struct tu_physical_device *pdevice,
                                     VK_SUBGROUP_FEATURE_VOTE_BIT |
                                     VK_SUBGROUP_FEATURE_BALLOT_BIT |
                                     VK_SUBGROUP_FEATURE_SHUFFLE_BIT |
-                                    VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+                                    VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT |
+                                    VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
    if (pdevice->info->a6xx.has_getfiberid) {
       p->subgroupSupportedStages |= VK_SHADER_STAGE_ALL_GRAPHICS;
       p->subgroupSupportedOperations |= VK_SUBGROUP_FEATURE_QUAD_BIT;
@@ -1013,10 +1029,9 @@ tu_get_physical_device_properties_1_3(struct tu_physical_device *pdevice,
    p->integerDotProductAccumulatingSaturating64BitSignedAccelerated = false;
    p->integerDotProductAccumulatingSaturating64BitMixedSignednessAccelerated = false;
 
-   /* VK_EXT_texel_buffer_alignment is not implemented */
-   p->storageTexelBufferOffsetAlignmentBytes = 0;
+   p->storageTexelBufferOffsetAlignmentBytes = 64;
    p->storageTexelBufferOffsetSingleTexelAlignment = false;
-   p->uniformTexelBufferOffsetAlignmentBytes = 0;
+   p->uniformTexelBufferOffsetAlignmentBytes = 64;
    p->uniformTexelBufferOffsetSingleTexelAlignment = false;
 
    /* TODO: find out the limit */
@@ -1252,6 +1267,18 @@ tu_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          props->lineSubPixelPrecisionBits = 8;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT: {
+         VkPhysicalDeviceDrmPropertiesEXT *props =
+            (VkPhysicalDeviceDrmPropertiesEXT *)ext;
+         props->hasPrimary = pdevice->has_master;
+         props->primaryMajor = pdevice->master_major;
+         props->primaryMinor = pdevice->master_minor;
+
+         props->hasRender = pdevice->has_local;
+         props->renderMajor = pdevice->local_major;
+         props->renderMinor = pdevice->local_minor;
+         break;
+      }
 
       default:
          break;
@@ -1273,9 +1300,10 @@ tu_GetPhysicalDeviceQueueFamilyProperties2(
    uint32_t *pQueueFamilyPropertyCount,
    VkQueueFamilyProperties2 *pQueueFamilyProperties)
 {
-   VK_OUTARRAY_MAKE(out, pQueueFamilyProperties, pQueueFamilyPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties2, out,
+                          pQueueFamilyProperties, pQueueFamilyPropertyCount);
 
-   vk_outarray_append(&out, p)
+   vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p)
    {
       p->queueFamilyProperties = tu_queue_family_properties;
    }
@@ -1680,6 +1708,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
    device->fd = physical_device->local_fd;
+   device->vk.check_status = tu_device_check_status;
 
    mtx_init(&device->bo_mutex, mtx_plain);
    u_rwlock_init(&device->dma_bo_lock);
@@ -1716,8 +1745,12 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       }
    }
 
-   device->compiler = ir3_compiler_create(NULL, &physical_device->dev_id,
-                                          robust_buffer_access2);
+   device->compiler =
+      ir3_compiler_create(NULL, &physical_device->dev_id,
+                          &(struct ir3_compiler_options) {
+                              .robust_ubo_access = robust_buffer_access2,
+                              .push_ubo_with_preamble = true,
+                           });
    if (!device->compiler) {
       result = vk_startup_errorf(physical_device->instance,
                                  VK_ERROR_INITIALIZATION_FAILED,
@@ -2692,9 +2725,9 @@ vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t *pSupportedVersion)
     *
     *    - Loader interface v4 differs from v3 in:
     *        - The ICD must implement vk_icdGetPhysicalDeviceProcAddr().
-    * 
+    *
     *    - Loader interface v5 differs from v4 in:
-    *        - The ICD must support Vulkan API version 1.1 and must not return 
+    *        - The ICD must support Vulkan API version 1.1 and must not return
     *          VK_ERROR_INCOMPATIBLE_DRIVER from vkCreateInstance() unless a
     *          Vulkan Loader with interface v4 or smaller is being used and the
     *          application provides an API version that is greater than 1.0.

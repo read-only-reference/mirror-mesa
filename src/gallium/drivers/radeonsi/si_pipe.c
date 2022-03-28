@@ -34,6 +34,7 @@
 #include "si_shader_internal.h"
 #include "sid.h"
 #include "ac_shadowed_regs.h"
+#include "compiler/nir/nir.h"
 #include "util/disk_cache.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_log.h"
@@ -62,7 +63,6 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"preoptir", DBG(PREOPT_IR), "Print the LLVM IR before initial optimizations"},
 
    /* Shader compiler options the shader cache should be aware of: */
-   {"gisel", DBG(GISEL), "Enable LLVM global instruction selector."},
    {"w32ge", DBG(W32_GE), "Use Wave32 for vertex, tessellation, and geometry shaders."},
    {"w32ps", DBG(W32_PS), "Use Wave32 for pixel shaders."},
    {"w32psdiscard", DBG(W32_PS_DISCARD), "Use Wave32 for pixel shaders even if they contain discard and LLVM is buggy."},
@@ -90,6 +90,9 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"reserve_vmid", DBG(RESERVE_VMID), "Force VMID reservation per context."},
    {"shadowregs", DBG(SHADOW_REGS), "Enable CP register shadowing."},
    {"nofastdlist", DBG(NO_FAST_DISPLAY_LIST), "Disable fast display lists"},
+
+   /* Multimedia options: */
+   { "noefc", DBG(NO_EFC), "Disable hardware based encoder colour format conversion."},
 
    /* 3D engine options: */
    {"nogfx", DBG(NO_GFX), "Disable graphics. Only multimedia compute paths can be used."},
@@ -141,7 +144,6 @@ void si_init_compiler(struct si_screen *sscreen, struct ac_llvm_compiler *compil
       !sscreen->info.has_dedicated_vram && sscreen->info.chip_class <= GFX8;
 
    enum ac_target_machine_options tm_options =
-      (sscreen->debug_flags & DBG(GISEL) ? AC_TM_ENABLE_GLOBAL_ISEL : 0) |
       (sscreen->debug_flags & DBG(CHECK_IR) ? AC_TM_CHECK_IR : 0) |
       (create_low_opt_compiler ? AC_TM_CREATE_LOW_OPT : 0);
 
@@ -254,10 +256,10 @@ static void si_destroy_context(struct pipe_context *context)
       sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_buffer_rmw);
    if (sctx->cs_copy_buffer)
       sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_buffer);
-   if (sctx->cs_copy_image)
-      sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_image);
-   if (sctx->cs_copy_image_1d_array)
-      sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_image_1d_array);
+   if (sctx->cs_copy_image_1D)
+      sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_image_1D);
+   if (sctx->cs_copy_image_2D)
+      sctx->b.delete_compute_state(&sctx->b, sctx->cs_copy_image_2D);
    if (sctx->cs_clear_render_target)
       sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_render_target);
    if (sctx->cs_clear_render_target_1d_array)
@@ -1162,6 +1164,18 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
       num_comp_hi_threads = 1;
       num_comp_lo_threads = 1;
    }
+
+#ifndef NDEBUG
+   nir_process_debug_variable();
+
+   /* Use a single compilation thread if NIR printing is enabled to avoid
+    * multiple shaders being printed at the same time.
+    */
+   if (NIR_DEBUG(PRINT)) {
+      num_comp_hi_threads = 1;
+      num_comp_lo_threads = 1;
+   }
+#endif
 
    num_comp_hi_threads = MIN2(num_comp_hi_threads, ARRAY_SIZE(sscreen->compiler));
    num_comp_lo_threads = MIN2(num_comp_lo_threads, ARRAY_SIZE(sscreen->compiler_lowp));

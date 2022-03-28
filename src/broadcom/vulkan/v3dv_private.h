@@ -260,6 +260,9 @@ struct v3dv_queue {
    /* A mutex to prevent concurrent access to the list of wait threads */
    mtx_t mutex;
 
+   /* A mutex to prevent concurrent noop job submissions */
+   mtx_t noop_mutex;
+
    struct v3dv_job *noop_job;
 };
 
@@ -1350,8 +1353,8 @@ struct v3dv_descriptor {
 
       struct {
          struct v3dv_buffer *buffer;
-         uint32_t offset;
-         uint32_t range;
+         size_t offset;
+         size_t range;
       };
 
       struct v3dv_buffer_view *buffer_view;
@@ -1513,6 +1516,7 @@ struct v3dv_semaphore {
 
    /* A temporary syncobject handle produced from a vkImportSemaphoreFd. */
    uint32_t temp_sync;
+   bool has_temp;
 };
 
 struct v3dv_fence {
@@ -1523,6 +1527,7 @@ struct v3dv_fence {
 
    /* A temporary syncobject handle produced from a vkImportFenceFd. */
    uint32_t temp_sync;
+   bool has_temp;
 };
 
 struct v3dv_event {
@@ -1640,7 +1645,7 @@ struct v3dv_descriptor_set {
 
    struct v3dv_descriptor_pool *pool;
 
-   const struct v3dv_descriptor_set_layout *layout;
+   struct v3dv_descriptor_set_layout *layout;
 
    /* Offset relative to the descriptor pool bo for this set */
    uint32_t base_offset;
@@ -1694,9 +1699,34 @@ struct v3dv_descriptor_set_layout {
    /* Number of dynamic offsets used by this descriptor set */
    uint16_t dynamic_offset_count;
 
+   /* Descriptor set layouts can be destroyed even if they are still being
+    * used.
+    */
+   uint32_t ref_cnt;
+
    /* Bindings in this descriptor set */
    struct v3dv_descriptor_set_binding_layout binding[0];
 };
+
+void
+v3dv_descriptor_set_layout_destroy(struct v3dv_device *device,
+                                   struct v3dv_descriptor_set_layout *set_layout);
+
+static inline void
+v3dv_descriptor_set_layout_ref(struct v3dv_descriptor_set_layout *set_layout)
+{
+   assert(set_layout && set_layout->ref_cnt >= 1);
+   p_atomic_inc(&set_layout->ref_cnt);
+}
+
+static inline void
+v3dv_descriptor_set_layout_unref(struct v3dv_device *device,
+                                 struct v3dv_descriptor_set_layout *set_layout)
+{
+   assert(set_layout && set_layout->ref_cnt >= 1);
+   if (p_atomic_dec_zero(&set_layout->ref_cnt))
+      v3dv_descriptor_set_layout_destroy(device, set_layout);
+}
 
 struct v3dv_pipeline_layout {
    struct vk_object_base base;
@@ -1722,8 +1752,8 @@ struct v3dv_pipeline_layout {
  * FIXME: one alternative would be to allocate the map as big as you need for
  * each descriptor type. That would means more individual allocations.
  */
-#define DESCRIPTOR_MAP_SIZE MAX3(V3D_MAX_TEXTURE_SAMPLERS, \
-                                 MAX_UNIFORM_BUFFERS,      \
+#define DESCRIPTOR_MAP_SIZE MAX3(V3D_MAX_TEXTURE_SAMPLERS,                         \
+                                 MAX_UNIFORM_BUFFERS + MAX_INLINE_UNIFORM_BUFFERS, \
                                  MAX_STORAGE_BUFFERS)
 
 
@@ -1734,6 +1764,7 @@ struct v3dv_descriptor_map {
    int binding[DESCRIPTOR_MAP_SIZE];
    int array_index[DESCRIPTOR_MAP_SIZE];
    int array_size[DESCRIPTOR_MAP_SIZE];
+   bool used[DESCRIPTOR_MAP_SIZE];
 
    /* NOTE: the following is only for sampler, but this is the easier place to
     * put it.
@@ -2067,6 +2098,14 @@ v3dv_descriptor_map_get_descriptor(struct v3dv_descriptor_state *descriptor_stat
                                    struct v3dv_pipeline_layout *pipeline_layout,
                                    uint32_t index,
                                    uint32_t *dynamic_offset);
+
+struct v3dv_cl_reloc
+v3dv_descriptor_map_get_descriptor_bo(struct v3dv_device *device,
+                                      struct v3dv_descriptor_state *descriptor_state,
+                                      struct v3dv_descriptor_map *map,
+                                      struct v3dv_pipeline_layout *pipeline_layout,
+                                      uint32_t index,
+                                      VkDescriptorType *out_type);
 
 const struct v3dv_sampler *
 v3dv_descriptor_map_get_sampler(struct v3dv_descriptor_state *descriptor_state,

@@ -413,6 +413,14 @@
     <value name="Mirrored Clamp to Border" value="15"/>
   </enum>
 
+  <enum name="Tile Render Order">
+    <value name="Z Order" value="0"/>
+    <value name="Horizontal" value="1"/>
+    <value name="Vertical" value="2"/>
+    <value name="Reverse horizontal" value="5"/>
+    <value name="Reverse vertical" value="6"/>
+  </enum>
+
   <enum name="Task Axis">
     <value name="X" value="0"/>
     <value name="Y" value="1"/>
@@ -432,7 +440,7 @@
     <field name="Table" size="6" start="1:0" type="uint"/>
     <field name="Frequency" size="2" start="1:6" type="Attribute Frequency"/> <!-- Internally, ID select -->
     <field name="Divisor R" size="5" start="1:24" type="uint"/>
-    <field name="Divisor E" size="1" start="1:29" type="bool"/>
+    <field name="Divisor E" size="1" start="1:29" type="uint"/>
     <field name="Offset" size="32" start="2:0" type="int"/>
     <field name="Buffer index" size="32" start="3:0" type="uint"/> 
     <field name="Stride" size="32" start="4:0" type="uint"/>
@@ -742,8 +750,8 @@
   </struct>
 
   <struct name="Plane ASTC Overlay" size="8">
-    <field name="Decode Narrow" size="1" start="24" type="bool"/>
-    <field name="Decode HDR" size="1" start="25" type="bool"/>
+    <field name="Decode HDR" size="1" start="24" type="bool"/>
+    <field name="Decode Wide" size="1" start="25" type="bool"/>
 
     <field name="2D" size="32" start="0" type="Plane ASTC 2D Overlay"/>
     <field name="3D" size="32" start="0" type="Plane ASTC 3D Overlay"/>
@@ -813,7 +821,7 @@
     <field name="R63" size="1" start="0:15" type="bool"/>
   </struct>
 
-  <struct name="Shader Program" align="32">
+  <struct name="Shader Program" size="8" align="32">
     <field name="Type" size="4" start="0:0" type="Descriptor Type" default="Shader"/>
     <field name="Stage" size="4" start="0:4" type="Shader stage"/>
     <field name="Primary shader" size="1" start="0:8" type="bool"/>
@@ -1201,7 +1209,6 @@
     <!--- All jobs are 64-bit -->
     <field name="Type" size="7" start="4:1" type="Job Type"/>
     <field name="Barrier" size="1" start="4:8" type="bool"/>
-    <field name="Invalidate Cache" size="1" start="4:9" type="bool"/>
     <field name="Suppress Prefetch" size="1" start="4:11" type="bool"/>
     <field name="Relax Dependency 1" size="1" start="4:14" type="bool"/>
     <field name="Relax Dependency 2" size="1" start="4:15" type="bool"/>
@@ -1216,6 +1223,7 @@
     <field name="Bound Min Y" size="12" start="0:16" type="uint"/>
     <field name="Bound Max X" size="12" start="1:0" type="uint"/>
     <field name="Bound Max Y" size="12" start="1:16" type="uint"/>
+    <field name="Tile render order" size="3" start="1:28" type="Tile Render Order" default="Z Order"/>
     <field name="Has Tile Enable Map" size="1" start="1:31" type="bool"/>
     <field name="Framebuffer" size="64" start="2:0" type="address"/>
     <field name="Tile Enable Map" size="64" start="4:0" type="address"/>
@@ -1298,7 +1306,7 @@
 
   <struct name="Resource" size="4" align="16">
     <field name="Address" start="0:0" size="56" type="address"/>
-    <field name="Unk" start="1:24" size="1" type="bool" default="true"/>
+    <field name="Contains descriptors" start="1:24" size="1" type="bool" default="true"/>
     <field name="Size" start="2:0" size="64" type="uint"/> <!-- bytes -->
   </struct>
 
@@ -1342,7 +1350,7 @@
     <field name="Vertex attribute stride" size="16" start="2:16" type="uint"/>
   </struct>
 
-  <struct name="Draw" size="64">
+  <struct name="Draw" align="64">
     <field name="Allow forward pixel to kill" size="1" start="0:0" type="bool"/>
     <field name="Allow forward pixel to be killed" size="1" start="0:1" type="bool"/>
     <field name="Pixel kill operation" size="2" start="0:2" type="Pixel Kill"/>
@@ -1372,17 +1380,16 @@
     <field name="Blend count" start="12:0" size="4" type="uint" default="2"/>
     <field name="Blend" start="12:4" size="60" type="address" modifier="shr(4)"/>
     <field name="Occlusion" size="64" start="14:0" type="address"/>
-
-    <field name="Fragment" start="16:0" size="512" type="Shader Environment"/>
-    <field name="Position" start="32:0" size="512" type="Shader Environment"/>
-    <field name="Varying" start="48:0" size="512" type="Shader Environment"/>
+    <field name="Shader" start="16:0" size="512" type="Shader Environment"/>
   </struct>
 
-  <struct name="IDVS Counts" size="4">
-    <field name="Instance count" start="0:0" size="32" type="uint"/>
-    <field name="Vertex packet stride" start="1:0" size="16" type="uint"/>
-    <field name="Vertex attribute stride" start="1:16" size="16" type="uint"/>
-    <field name="Tiler" size="64" start="2:0" type="address"/>
+  <struct name="Count" size="1">
+    <field name="Count" start="0:0" size="32" type="uint"/>
+  </struct>
+
+  <struct name="Allocation" size="1">
+    <field name="Vertex packet stride" start="0:0" size="16" type="uint"/>
+    <field name="Vertex attribute stride" start="0:16" size="16" type="uint"/>
   </struct>
 
   <struct name="Tiler Pointer" size="2">
@@ -1401,11 +1408,27 @@
   <aggregate name="Malloc Vertex Job" size="384" align="128">
     <section name="Header" offset="0" type="Job Header"/>
     <section name="Primitive" offset="32" type="Primitive"/>
-    <section name="Counts" offset="48" type="IDVS Counts"/>
+    <section name="Instance Count" offset="48" type="Count"/>
+    <section name="Allocation" offset="52" type="Allocation"/>
+    <section name="Tiler" offset="56" type="Tiler Pointer"/>
+    <section name="Scissor" offset="104" type="Scissor"/>
+    <section name="Primitive Size" offset="112" type="Primitive Size"/>
+    <section name="Indices" offset="120" type="Indices"/>
+    <section name="Draw" offset="128" type="Draw"/>
+    <section name="Position" offset="256" type="Shader Environment"/>
+    <section name="Varying" offset="320" type="Shader Environment"/>
+  </aggregate>
+
+  <aggregate name="Tiler Job" size="256" align="128">
+    <section name="Header" offset="0" type="Job Header"/>
+    <section name="Primitive" offset="32" type="Primitive"/>
+    <section name="Instance Count" offset="48" type="Count"/>
+    <section name="Vertex Count" offset="52" type="Count"/>
     <section name="Tiler" offset="56" type="Tiler Pointer"/>
     <section name="Scissor" offset="104" type="Scissor"/>
     <section name="Primitive Size" offset="112" type="Primitive Size"/>
     <section name="Indices" offset="120" type="Indices"/>
     <section name="Draw" offset="128" type="Draw"/>
   </aggregate>
+
 </panxml>

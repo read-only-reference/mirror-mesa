@@ -213,7 +213,7 @@ hash_gfx_pipeline_state(const void *key)
    const struct zink_gfx_pipeline_state *state = key;
    uint32_t hash = _mesa_hash_data(key, offsetof(struct zink_gfx_pipeline_state, hash));
    if (!state->have_EXT_extended_dynamic_state2)
-      hash = XXH32(&state->primitive_restart, 1, hash);
+      hash = XXH32(&state->dyn_state2, sizeof(state->dyn_state2), hash);
    if (state->have_EXT_extended_dynamic_state)
       return hash;
    return XXH32(&state->dyn_state1, sizeof(state->dyn_state1), hash);
@@ -245,7 +245,7 @@ equals_gfx_pipeline_state(const void *a, const void *b)
          return false;
    }
    if (!sa->have_EXT_extended_dynamic_state2) {
-      if (sa->primitive_restart != sb->primitive_restart)
+      if (sa->dyn_state2.primitive_restart != sb->dyn_state2.primitive_restart)
          return false;
    }
    return !memcmp(sa->modules, sb->modules, sizeof(sa->modules)) &&
@@ -369,7 +369,7 @@ zink_pipeline_layout_create(struct zink_screen *screen, struct zink_program *pg,
 
    VkPipelineLayout layout;
    if (VKSCR(CreatePipelineLayout)(screen->dev, &plci, NULL, &layout) != VK_SUCCESS) {
-      debug_printf("vkCreatePipelineLayout failed!\n");
+      mesa_loge("vkCreatePipelineLayout failed");
       return VK_NULL_HANDLE;
    }
 
@@ -657,6 +657,7 @@ zink_destroy_gfx_program(struct zink_context *ctx,
                          struct zink_gfx_program *prog)
 {
    struct zink_screen *screen = zink_screen(ctx->base.screen);
+   util_queue_fence_wait(&prog->base.cache_fence);
    if (prog->base.layout)
       VKSCR(DestroyPipelineLayout)(screen->dev, prog->base.layout, NULL);
 
@@ -702,6 +703,7 @@ zink_destroy_compute_program(struct zink_context *ctx,
                              struct zink_compute_program *comp)
 {
    struct zink_screen *screen = zink_screen(ctx->base.screen);
+   util_queue_fence_wait(&comp->base.cache_fence);
    if (comp->base.layout)
       VKSCR(DestroyPipelineLayout)(screen->dev, comp->base.layout, NULL);
 
@@ -1127,4 +1129,18 @@ zink_program_init(struct zink_context *ctx)
    ctx->base.create_compute_state = zink_create_cs_state;
    ctx->base.bind_compute_state = zink_bind_cs_state;
    ctx->base.delete_compute_state = zink_delete_shader_state;
+}
+
+bool
+zink_set_rasterizer_discard(struct zink_context *ctx, bool disable)
+{
+   bool value = disable ? false : (ctx->rast_state ? ctx->rast_state->base.rasterizer_discard : false);
+   bool changed = ctx->gfx_pipeline_state.dyn_state2.rasterizer_discard != value;
+   ctx->gfx_pipeline_state.dyn_state2.rasterizer_discard = value;
+   if (!changed)
+      return false;
+   if (!zink_screen(ctx->base.screen)->info.have_EXT_extended_dynamic_state2)
+      ctx->gfx_pipeline_state.dirty |= true;
+   ctx->rasterizer_discard_changed = true;
+   return true;
 }

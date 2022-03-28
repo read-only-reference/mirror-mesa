@@ -1221,50 +1221,8 @@ tu_emit_renderpass_begin(struct tu_cmd_buffer *cmd,
 }
 
 static void
-tu6_autotune_begin(struct tu_cs *cs, struct tu_autotune *at,
-                   const struct tu_renderpass_result *autotune_result)
-{
-   if (!autotune_result)
-      return;
-
-   uint32_t result_idx = autotune_result->idx % TU_AUTOTUNE_MAX_RESULTS;
-   uint64_t begin_iova = autotune_results_ptr(at, result[result_idx].samples_start);
-
-   tu_cs_emit_regs(cs,
-                   A6XX_RB_SAMPLE_COUNT_CONTROL(.copy = true));
-
-   tu_cs_emit_regs(cs,
-                   A6XX_RB_SAMPLE_COUNT_ADDR(.qword = begin_iova));
-
-   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
-   tu_cs_emit(cs, ZPASS_DONE);
-}
-
-static void
-tu6_autotune_end(struct tu_cs *cs, struct tu_autotune *at,
-                 const struct tu_renderpass_result *autotune_result)
-{
-   if (!autotune_result)
-      return;
-
-   uint32_t result_idx = autotune_result->idx % TU_AUTOTUNE_MAX_RESULTS;
-   uint64_t end_iova = autotune_results_ptr(at, result[result_idx].samples_end);
-
-   tu_cs_emit_regs(cs,
-                   A6XX_RB_SAMPLE_COUNT_CONTROL(.copy = true));
-
-   tu_cs_emit_regs(cs,
-                   A6XX_RB_SAMPLE_COUNT_ADDR(.qword = end_iova));
-
-   tu_cs_emit_pkt7(cs, CP_EVENT_WRITE, 1);
-   tu_cs_emit(cs, ZPASS_DONE);
-
-   /* A fence would be emitted at the submission time */
-}
-
-static void
 tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
-                        const struct tu_renderpass_result *autotune_result)
+                        struct tu_renderpass_result *autotune_result)
 {
    const struct tu_framebuffer *fb = cmd->state.framebuffer;
 
@@ -1294,16 +1252,16 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
    tu_cs_emit_pkt7(cs, CP_SET_MODE, 1);
    tu_cs_emit(cs, 0x0);
 
-   tu6_autotune_begin(cs, &cmd->device->autotune, autotune_result);
+   tu_autotune_begin_renderpass(cmd, cs, autotune_result);
 
    tu_cs_sanity_check(cs);
 }
 
 static void
 tu6_sysmem_render_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
-                      const struct tu_renderpass_result *autotune_result)
+                      struct tu_renderpass_result *autotune_result)
 {
-   tu6_autotune_end(cs, &cmd->device->autotune, autotune_result);
+   tu_autotune_end_renderpass(cmd, cs, autotune_result);
 
    /* Do any resolves of the last subpass. These are handled in the
     * tile_store_cs in the gmem path.
@@ -1322,7 +1280,7 @@ tu6_sysmem_render_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 
 static void
 tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
-                      const struct tu_renderpass_result *autotune_result)
+                      struct tu_renderpass_result *autotune_result)
 {
    struct tu_physical_device *phys_dev = cmd->device->physical_device;
 
@@ -1372,7 +1330,7 @@ tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
                         A6XX_RB_BIN_CONTROL_LRZ_FEEDBACK_ZMODE_MASK(0x6));
    }
 
-   tu6_autotune_begin(cs, &cmd->device->autotune, autotune_result);
+   tu_autotune_begin_renderpass(cmd, cs, autotune_result);
 
    tu_cs_sanity_check(cs);
 }
@@ -1403,9 +1361,9 @@ tu6_render_tile(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 
 static void
 tu6_tile_render_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
-                    const struct tu_renderpass_result *autotune_result)
+                    struct tu_renderpass_result *autotune_result)
 {
-   tu6_autotune_end(cs, &cmd->device->autotune, autotune_result);
+   tu_autotune_end_renderpass(cmd, cs, autotune_result);
 
    tu_cs_emit_call(cs, &cmd->draw_epilogue_cs);
 
@@ -1421,7 +1379,7 @@ tu6_tile_render_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
 
 static void
 tu_cmd_render_tiles(struct tu_cmd_buffer *cmd,
-                    const struct tu_renderpass_result *autotune_result)
+                    struct tu_renderpass_result *autotune_result)
 {
    const struct tu_framebuffer *fb = cmd->state.framebuffer;
 
@@ -1458,7 +1416,7 @@ tu_cmd_render_tiles(struct tu_cmd_buffer *cmd,
 
 static void
 tu_cmd_render_sysmem(struct tu_cmd_buffer *cmd,
-                     const struct tu_renderpass_result *autotune_result)
+                     struct tu_renderpass_result *autotune_result)
 {
    tu6_sysmem_render_begin(cmd, &cmd->cs, autotune_result);
 
@@ -1536,6 +1494,8 @@ tu_cmd_buffer_destroy(struct tu_cmd_buffer *cmd_buffer)
 
    u_trace_fini(&cmd_buffer->trace);
 
+   if (cmd_buffer->autotune_buffer)
+      tu_autotune_results_buffer_unref(cmd_buffer->autotune_buffer);
    tu_autotune_free_results(&cmd_buffer->renderpass_autotune_results);
 
    for (unsigned i = 0; i < MAX_BIND_POINTS; i++) {
@@ -1561,6 +1521,15 @@ tu_reset_cmd_buffer(struct tu_cmd_buffer *cmd_buffer)
    tu_cs_reset(&cmd_buffer->tile_store_cs);
    tu_cs_reset(&cmd_buffer->draw_epilogue_cs);
    tu_cs_reset(&cmd_buffer->sub_cs);
+
+   /* We can't just reset the autotune_buffer's contents, because it is also
+    * referenced by the submission_data if the command buffer was submitted
+    * and we may be accessing it after cmdbuf reset/free.
+    */
+   if (cmd_buffer->autotune_buffer) {
+      tu_autotune_results_buffer_unref(cmd_buffer->autotune_buffer);
+      cmd_buffer->autotune_buffer = NULL;
+   }
 
    tu_autotune_free_results(&cmd_buffer->renderpass_autotune_results);
 
@@ -1870,34 +1839,46 @@ tu_CmdBindDescriptorSets(VkCommandBuffer commandBuffer,
 
       descriptors_state->sets[idx] = set;
 
-      for(unsigned j = 0; j < set->layout->dynamic_offset_count; ++j, ++dyn_idx) {
-         /* update the contents of the dynamic descriptor set */
-         unsigned src_idx = j;
-         unsigned dst_idx = j + layout->set[idx].dynamic_offset_start;
-         assert(dyn_idx < dynamicOffsetCount);
+      if (!set->layout->dynamic_offset_size)
+         continue;
 
-         uint32_t *dst =
-            &descriptors_state->dynamic_descriptors[dst_idx * A6XX_TEX_CONST_DWORDS];
-         uint32_t *src =
-            &set->dynamic_descriptors[src_idx * A6XX_TEX_CONST_DWORDS];
-         uint32_t offset = pDynamicOffsets[dyn_idx];
+      uint32_t *src = set->dynamic_descriptors;
+      uint32_t *dst = descriptors_state->dynamic_descriptors +
+         layout->set[idx].dynamic_offset_start / 4;
+      for (unsigned j = 0; j < set->layout->binding_count; j++) {
+         struct tu_descriptor_set_binding_layout *binding =
+            &set->layout->binding[j];
+         if (binding->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
+             binding->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC) {
+            for (unsigned k = 0; k < binding->array_size; k++, dyn_idx++) {
+               assert(dyn_idx < dynamicOffsetCount);
+               uint32_t offset = pDynamicOffsets[dyn_idx];
+               memcpy(dst, src, binding->size);
 
-         /* Patch the storage/uniform descriptors right away. */
-         if (layout->set[idx].layout->dynamic_ubo & (1 << j)) {
-            /* Note: we can assume here that the addition won't roll over and
-             * change the SIZE field.
-             */
-            uint64_t va = src[0] | ((uint64_t)src[1] << 32);
-            va += offset;
-            dst[0] = va;
-            dst[1] = va >> 32;
-         } else {
-            memcpy(dst, src, A6XX_TEX_CONST_DWORDS * 4);
-            /* Note: A6XX_TEX_CONST_5_DEPTH is always 0 */
-            uint64_t va = dst[4] | ((uint64_t)dst[5] << 32);
-            va += offset;
-            dst[4] = va;
-            dst[5] = va >> 32;
+               if (binding->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC) {
+                  /* Note: we can assume here that the addition won't roll
+                   * over and change the SIZE field.
+                   */
+                  uint64_t va = src[0] | ((uint64_t)src[1] << 32);
+                  va += offset;
+                  dst[0] = va;
+                  dst[1] = va >> 32;
+               } else {
+                  uint32_t *dst_desc = dst;
+                  for (unsigned i = 0;
+                       i < binding->size / (4 * A6XX_TEX_CONST_DWORDS);
+                       i++, dst_desc += A6XX_TEX_CONST_DWORDS) {
+                     /* Note: A6XX_TEX_CONST_5_DEPTH is always 0 */
+                     uint64_t va = dst_desc[4] | ((uint64_t)dst_desc[5] << 32);
+                     va += offset;
+                     dst_desc[4] = va;
+                     dst_desc[5] = va >> 32;
+                  }
+               }
+
+               dst += binding->size / 4;
+               src += binding->size / 4;
+            }
          }
       }
    }
@@ -1913,10 +1894,11 @@ tu_CmdBindDescriptorSets(VkCommandBuffer commandBuffer,
          addr[i] = set->va | 3;
    }
 
-   if (layout->dynamic_offset_count) {
+   if (layout->dynamic_offset_size) {
       /* allocate and fill out dynamic descriptor set */
       struct tu_cs_memory dynamic_desc_set;
-      VkResult result = tu_cs_alloc(&cmd->sub_cs, layout->dynamic_offset_count,
+      VkResult result = tu_cs_alloc(&cmd->sub_cs,
+                                    layout->dynamic_offset_size / (4 * A6XX_TEX_CONST_DWORDS),
                                     A6XX_TEX_CONST_DWORDS, &dynamic_desc_set);
       if (result != VK_SUCCESS) {
          cmd->record_result = result;
@@ -1924,7 +1906,7 @@ tu_CmdBindDescriptorSets(VkCommandBuffer commandBuffer,
       }
 
       memcpy(dynamic_desc_set.map, descriptors_state->dynamic_descriptors,
-             layout->dynamic_offset_count * A6XX_TEX_CONST_DWORDS * 4);
+             layout->dynamic_offset_size);
       addr[MAX_SETS] = dynamic_desc_set.iova | 3;
    }
 
@@ -1934,7 +1916,7 @@ tu_CmdBindDescriptorSets(VkCommandBuffer commandBuffer,
       hlsq_invalidate_value = A6XX_HLSQ_INVALIDATE_CMD_GFX_BINDLESS(0x1f);
 
       cmd->state.desc_sets = tu_cs_draw_state(&cmd->sub_cs, &state_cs, 24);
-      cmd->state.dirty |= TU_CMD_DIRTY_DESC_SETS_LOAD | TU_CMD_DIRTY_SHADER_CONSTS;
+      cmd->state.dirty |= TU_CMD_DIRTY_DESC_SETS_LOAD;
       cs = &state_cs;
    } else {
       assert(pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE);
@@ -2361,6 +2343,12 @@ tu_CmdBindPipeline(VkCommandBuffer commandBuffer,
       }
    }
 
+   if ((pipeline->dynamic_state_mask & BIT(VK_DYNAMIC_STATE_VIEWPORT)) &&
+       (pipeline->z_negative_one_to_one != cmd->state.z_negative_one_to_one)) {
+      cmd->state.z_negative_one_to_one = pipeline->z_negative_one_to_one;
+      cmd->state.dirty |= TU_CMD_DIRTY_VIEWPORTS;
+   }
+
    /* the vertex_buffers draw state always contains all the currently
     * bound vertex buffers. update its size to only emit the vbs which
     * are actually used by the pipeline
@@ -2414,13 +2402,15 @@ tu_CmdSetViewport(VkCommandBuffer commandBuffer,
                   const VkViewport *pViewports)
 {
    TU_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
-   struct tu_cs cs;
 
    memcpy(&cmd->state.viewport[firstViewport], pViewports, viewportCount * sizeof(*pViewports));
    cmd->state.max_viewport = MAX2(cmd->state.max_viewport, firstViewport + viewportCount);
 
-   cs = tu_cmd_dynamic_state(cmd, VK_DYNAMIC_STATE_VIEWPORT, 8 + 10 * cmd->state.max_viewport);
-   tu6_emit_viewport(&cs, cmd->state.viewport, cmd->state.max_viewport);
+   /* With VK_EXT_depth_clip_control we have to take into account
+    * negativeOneToOne property of the pipeline, so the viewport calculations
+    * are deferred until it is known.
+    */
+   cmd->state.dirty |= TU_CMD_DIRTY_VIEWPORTS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -2878,6 +2868,9 @@ tu_flush_for_stage(struct tu_cache_state *cache,
     * for any WFI's to finish. This is already done for draw calls, including
     * before indirect param reads, for the most part, so we just need to WFI.
     *
+    * However, some indirect draw opcodes, depending on firmware, don't have
+    * implicit CP_WAIT_FOR_ME so we have to handle it manually.
+    *
     * Transform feedback counters are read via CP_MEM_TO_REG, which implicitly
     * does CP_WAIT_FOR_ME, but we still need a WFI if the GPU writes it.
     *
@@ -2889,8 +2882,11 @@ tu_flush_for_stage(struct tu_cache_state *cache,
     * future, or if CP_DRAW_PRED_SET grows the capability to do 32-bit
     * comparisons, then this will have to be dealt with.
     */
-   if (src_stage > dst_stage)
+   if (src_stage > dst_stage) {
       cache->flush_bits |= TU_CMD_FLAG_WAIT_FOR_IDLE;
+      if (dst_stage == TU_STAGE_CP)
+         cache->pending_flush_bits |= TU_CMD_FLAG_WAIT_FOR_ME;
+   }
 }
 
 static enum tu_cmd_access_mask
@@ -3437,43 +3433,11 @@ tu6_user_consts_size(const struct tu_pipeline *pipeline,
 {
    const struct tu_program_descriptor_linkage *link =
       &pipeline->program.link[type];
-   const struct ir3_ubo_analysis_state *state = &link->const_state.ubo_state;
    uint32_t dwords = 0;
 
    if (link->push_consts.count > 0) {
       unsigned num_units = link->push_consts.count;
       dwords += 4 + num_units * 4;
-   }
-
-   for (uint32_t i = 0; i < state->num_enabled; i++) {
-      uint32_t size = state->range[i].end - state->range[i].start;
-
-      size = MIN2(size, (16 * link->constlen) - state->range[i].offset);
-
-      if (size == 0)
-         continue;
-
-      if (!state->range[i].ubo.bindless)
-         continue;
-
-      uint32_t *base = state->range[i].ubo.bindless_base == MAX_SETS ?
-         descriptors_state->dynamic_descriptors :
-         descriptors_state->sets[state->range[i].ubo.bindless_base]->mapped_ptr;
-      unsigned block = state->range[i].ubo.block;
-      uint32_t *desc = base + block * A6XX_TEX_CONST_DWORDS;
-      uint32_t desc_size = (desc[1] >> A6XX_UBO_1_SIZE__SHIFT) * 16;
-      desc_size = desc_size > state->range[i].start ?
-         desc_size - state->range[i].start : 0;
-
-      if (desc_size < size) {
-         uint32_t zero_size = size - desc_size;
-         dwords += 4 + zero_size / 4;
-         size = desc_size;
-      }
-
-      if (size > 0) {
-         dwords += 4;
-      }
    }
 
    return dwords;
@@ -3487,8 +3451,6 @@ tu6_emit_user_consts(struct tu_cs *cs, const struct tu_pipeline *pipeline,
 {
    const struct tu_program_descriptor_linkage *link =
       &pipeline->program.link[type];
-   const struct ir3_const_state *const_state = &link->const_state;
-   const struct ir3_ubo_analysis_state *state = &const_state->ubo_state;
 
    if (link->push_consts.count > 0) {
       unsigned num_units = link->push_consts.count;
@@ -3503,74 +3465,6 @@ tu6_emit_user_consts(struct tu_cs *cs, const struct tu_pipeline *pipeline,
       tu_cs_emit(cs, 0);
       for (unsigned i = 0; i < num_units * 4; i++)
          tu_cs_emit(cs, push_constants[i + offset * 4]);
-   }
-
-   for (uint32_t i = 0; i < state->num_enabled; i++) {
-      uint32_t size = state->range[i].end - state->range[i].start;
-      uint32_t offset = state->range[i].start;
-
-      /* and even if the start of the const buffer is before
-       * first_immediate, the end may not be:
-       */
-      size = MIN2(size, (16 * link->constlen) - state->range[i].offset);
-
-      if (size == 0)
-         continue;
-
-      /* things should be aligned to vec4: */
-      debug_assert((state->range[i].offset % 16) == 0);
-      debug_assert((size % 16) == 0);
-      debug_assert((offset % 16) == 0);
-
-      /* Dig out the descriptor from the descriptor state and read the VA from
-       * it.  All our UBOs are bindless with the exception of the NIR
-       * constant_data, which is uploaded once in the pipeline.
-       */
-      if (!state->range[i].ubo.bindless) {
-         assert(state->range[i].ubo.block == const_state->constant_data_ubo);
-         continue;
-      }
-
-      uint32_t *base = state->range[i].ubo.bindless_base == MAX_SETS ?
-         descriptors_state->dynamic_descriptors :
-         descriptors_state->sets[state->range[i].ubo.bindless_base]->mapped_ptr;
-      unsigned block = state->range[i].ubo.block;
-      uint32_t *desc = base + block * A6XX_TEX_CONST_DWORDS;
-      uint64_t va = desc[0] | ((uint64_t)(desc[1] & A6XX_UBO_1_BASE_HI__MASK) << 32);
-      uint32_t desc_size = (desc[1] >> A6XX_UBO_1_SIZE__SHIFT) * 16;
-      desc_size = desc_size > state->range[i].start ?
-         desc_size - state->range[i].start : 0;
-
-      /* Handle null UBO descriptors and out-of-range UBO reads by filling the
-       * rest with 0, simulating what reading with ldc would do. This behavior
-       * is required by VK_EXT_robustness2.
-       */
-      if (desc_size < size) {
-         uint32_t zero_size = size - desc_size;
-         uint32_t zero_offset = state->range[i].offset + desc_size;
-         tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3 + zero_size / 4);
-         tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(zero_offset / 16) |
-               CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-               CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) |
-               CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
-               CP_LOAD_STATE6_0_NUM_UNIT(zero_size / 16));
-         tu_cs_emit_qw(cs, 0);
-         for (unsigned i = 0; i < zero_size / 4; i++) {
-            tu_cs_emit(cs, 0);
-         }
-         size = desc_size;
-      }
-
-      if (size > 0) {
-         assert(va);
-         tu_cs_emit_pkt7(cs, tu6_stage2opcode(type), 3);
-         tu_cs_emit(cs, CP_LOAD_STATE6_0_DST_OFF(state->range[i].offset / 16) |
-               CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
-               CP_LOAD_STATE6_0_STATE_SRC(SS6_INDIRECT) |
-               CP_LOAD_STATE6_0_STATE_BLOCK(tu6_stage2shadersb(type)) |
-               CP_LOAD_STATE6_0_NUM_UNIT(size / 16));
-         tu_cs_emit_qw(cs, va + offset);
-      }
    }
 }
 
@@ -3962,6 +3856,12 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
          tu6_emit_consts_geom(cmd, pipeline, descriptors_state);
       cmd->state.shader_const[1] =
          tu6_emit_consts(cmd, pipeline, descriptors_state, MESA_SHADER_FRAGMENT);
+   }
+
+   if (cmd->state.dirty & TU_CMD_DIRTY_VIEWPORTS) {
+      struct tu_cs cs = tu_cmd_dynamic_state(cmd, VK_DYNAMIC_STATE_VIEWPORT, 8 + 10 * cmd->state.max_viewport);
+      tu6_emit_viewport(&cs, cmd->state.viewport, cmd->state.max_viewport,
+                        pipeline->z_negative_one_to_one);
    }
 
    /* for the first draw in a renderpass, re-emit all the draw states

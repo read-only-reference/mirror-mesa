@@ -17,6 +17,46 @@
 
 #include "vn_wsi.h"
 
+struct vn_physical_device_features {
+   VkPhysicalDeviceFeatures vulkan_1_0;
+   VkPhysicalDeviceVulkan11Features vulkan_1_1;
+   VkPhysicalDeviceVulkan12Features vulkan_1_2;
+
+   /* Vulkan 1.3 */
+   VkPhysicalDevice4444FormatsFeaturesEXT argb_4444_formats;
+   VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extended_dynamic_state;
+   VkPhysicalDeviceExtendedDynamicState2FeaturesEXT extended_dynamic_state_2;
+   VkPhysicalDeviceImageRobustnessFeaturesEXT image_robustness;
+   VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures
+      shader_demote_to_helper_invocation;
+
+   /* EXT */
+   VkPhysicalDeviceCustomBorderColorFeaturesEXT custom_border_color;
+   VkPhysicalDeviceDepthClipEnableFeaturesEXT depth_clip_enable;
+   VkPhysicalDeviceLineRasterizationFeaturesEXT line_rasterization;
+   VkPhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex;
+   VkPhysicalDeviceRobustness2FeaturesEXT robustness_2;
+   VkPhysicalDeviceTransformFeedbackFeaturesEXT transform_feedback;
+   VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT vertex_attribute_divisor;
+};
+
+struct vn_physical_device_properties {
+   VkPhysicalDeviceProperties vulkan_1_0;
+   VkPhysicalDeviceVulkan11Properties vulkan_1_1;
+   VkPhysicalDeviceVulkan12Properties vulkan_1_2;
+
+   /* EXT */
+   VkPhysicalDeviceConservativeRasterizationPropertiesEXT
+      conservative_rasterization;
+   VkPhysicalDeviceCustomBorderColorPropertiesEXT custom_border_color;
+   VkPhysicalDeviceLineRasterizationPropertiesEXT line_rasterization;
+   VkPhysicalDeviceProvokingVertexPropertiesEXT provoking_vertex;
+   VkPhysicalDeviceRobustness2PropertiesEXT robustness_2;
+   VkPhysicalDeviceTransformFeedbackPropertiesEXT transform_feedback;
+   VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT
+      vertex_attribute_divisor;
+};
+
 struct vn_format_properties_entry {
    atomic_bool valid;
    VkFormatProperties properties;
@@ -44,22 +84,8 @@ struct vn_physical_device {
    struct vk_device_extension_table renderer_extensions;
    uint32_t *extension_spec_versions;
 
-   VkPhysicalDeviceFeatures2 features;
-   VkPhysicalDeviceVulkan11Features vulkan_1_1_features;
-   VkPhysicalDeviceVulkan12Features vulkan_1_2_features;
-   VkPhysicalDeviceTransformFeedbackFeaturesEXT transform_feedback_features;
-   VkPhysicalDevice4444FormatsFeaturesEXT argb_4444_formats_features;
-   VkPhysicalDeviceExtendedDynamicStateFeaturesEXT
-      extended_dynamic_state_features;
-   VkPhysicalDeviceCustomBorderColorFeaturesEXT custom_border_color_features;
-
-   VkPhysicalDeviceProperties2 properties;
-   VkPhysicalDeviceVulkan11Properties vulkan_1_1_properties;
-   VkPhysicalDeviceVulkan12Properties vulkan_1_2_properties;
-   VkPhysicalDeviceTransformFeedbackPropertiesEXT
-      transform_feedback_properties;
-   VkPhysicalDeviceCustomBorderColorPropertiesEXT
-      custom_border_color_properties;
+   struct vn_physical_device_features features;
+   struct vn_physical_device_properties properties;
 
    VkQueueFamilyProperties2 *queue_family_properties;
    uint32_t queue_family_count;
