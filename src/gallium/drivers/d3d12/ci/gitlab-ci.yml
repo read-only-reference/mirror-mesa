@@ -2,7 +2,7 @@
   extends:
     - .build-windows
     - .use-windows_test_vs2019
-    - .windows-test-rules
+    - .glon12-test-rules
   stage: layered-backends
   dependencies:
     - windows-vs2019
@@ -12,6 +12,7 @@
   variables:
     GIT_STRATEGY: none # testing doesn't build anything from source
     GALLIUM_DRIVER: d3d12
+    WGL_DISABLE_ERROR_DIALOGS: "true"
 
 .d3d12-test-piglit:
   extends:

@@ -237,6 +237,7 @@ static void si_emit_cb_render_state(struct si_context *sctx)
             break;
 
          case V_028C70_COLOR_2_10_10_10:
+         case V_028C70_COLOR_10_10_10_2:
             if (spi_format == V_028714_SPI_SHADER_FP16_ABGR) {
                sx_ps_downconvert |= V_028754_SX_RT_EXPORT_2_10_10_10 << (i * 4);
                sx_blend_opt_epsilon |= V_028758_10BIT_FORMAT << (i * 4);
@@ -395,20 +396,9 @@ static void si_blend_check_commutativity(struct si_screen *sscreen, struct si_st
       (1u << PIPE_BLENDFACTOR_INV_CONST_ALPHA) | (1u << PIPE_BLENDFACTOR_INV_SRC1_COLOR) |
       (1u << PIPE_BLENDFACTOR_INV_SRC1_ALPHA);
 
-   if (dst == PIPE_BLENDFACTOR_ONE && (src_allowed & (1u << src))) {
-      /* Addition is commutative, but floating point addition isn't
-       * associative: subtle changes can be introduced via different
-       * rounding.
-       *
-       * Out-of-order is also non-deterministic, which means that
-       * this breaks OpenGL invariance requirements. So only enable
-       * out-of-order additive blending if explicitly allowed by a
-       * setting.
-       */
-      if (func == PIPE_BLEND_MAX || func == PIPE_BLEND_MIN ||
-          (func == PIPE_BLEND_ADD && sscreen->commutative_blend_add))
-         blend->commutative_4bit |= chanmask;
-   }
+   if (dst == PIPE_BLENDFACTOR_ONE && (src_allowed & (1u << src)) &&
+       (func == PIPE_BLEND_MAX || func == PIPE_BLEND_MIN))
+      blend->commutative_4bit |= chanmask;
 }
 
 /**
@@ -832,11 +822,11 @@ static void si_emit_clip_regs(struct si_context *sctx)
    struct si_shader_selector *vs_sel = vs->selector;
    struct si_shader_info *info = &vs_sel->info;
    struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
-   bool window_space = info->stage == MESA_SHADER_VERTEX ?
+   bool window_space = vs_sel->stage == MESA_SHADER_VERTEX ?
                           info->base.vs.window_space_position : 0;
-   unsigned clipdist_mask = vs_sel->clipdist_mask;
-   unsigned ucp_mask = clipdist_mask ? 0 : rs->clip_plane_enable & SIX_BITS;
-   unsigned culldist_mask = vs_sel->culldist_mask;
+   unsigned clipdist_mask = vs_sel->info.clipdist_mask;
+   unsigned ucp_mask = clipdist_mask ? 0 : rs->clip_plane_enable & SI_USER_CLIP_PLANE_MASK;
+   unsigned culldist_mask = vs_sel->info.culldist_mask;
 
    /* Clip distances on points have no effect, so need to be implemented
     * as cull distances. This applies for the clipvertex case as well.
@@ -1050,6 +1040,28 @@ static void *si_create_rs_state(struct pipe_context *ctx, const struct pipe_rast
                      S_028814_KEEP_TOGETHER_ENABLE(sscreen->info.chip_class >= GFX10 ?
                                                       polygon_mode_enabled ||
                                                       rs->perpendicular_end_caps : 0));
+
+   if (state->bottom_edge_rule) {
+      /* OpenGL windows should set this. */
+      si_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE,
+                     S_028230_ER_TRI(0xA) |
+                     S_028230_ER_POINT(0x5) |
+                     S_028230_ER_RECT(0x9) |
+                     S_028230_ER_LINE_LR(0x29) |
+                     S_028230_ER_LINE_RL(0x29) |
+                     S_028230_ER_LINE_TB(0xA) |
+                     S_028230_ER_LINE_BT(0xA));
+   } else {
+      /* OpenGL FBOs and Direct3D should set this. */
+      si_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE,
+                     S_028230_ER_TRI(0xA) |
+                     S_028230_ER_POINT(0xA) |
+                     S_028230_ER_RECT(0xA) |
+                     S_028230_ER_LINE_LR(0x1A) |
+                     S_028230_ER_LINE_RL(0x26) |
+                     S_028230_ER_LINE_TB(0xA) |
+                     S_028230_ER_LINE_BT(0xA));
+   }
 
    if (!rs->uses_poly_offset)
       return rs;
@@ -1273,7 +1285,6 @@ static bool si_order_invariant_stencil_state(const struct pipe_stencil_state *st
 static void *si_create_dsa_state(struct pipe_context *ctx,
                                  const struct pipe_depth_stencil_alpha_state *state)
 {
-   struct si_context *sctx = (struct si_context *)ctx;
    struct si_state_dsa *dsa = CALLOC_STRUCT(si_state_dsa);
    struct si_pm4_state *pm4 = &dsa->pm4;
    unsigned db_depth_control;
@@ -1361,12 +1372,6 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
    dsa->order_invariance[0].pass_set =
       !dsa->depth_write_enabled ||
       (state->depth_func == PIPE_FUNC_ALWAYS || state->depth_func == PIPE_FUNC_NEVER);
-
-   dsa->order_invariance[1].pass_last = sctx->screen->assume_no_z_fights &&
-                                        !dsa->stencil_write_enabled && dsa->depth_write_enabled &&
-                                        zfunc_is_ordered;
-   dsa->order_invariance[0].pass_last =
-      sctx->screen->assume_no_z_fights && dsa->depth_write_enabled && zfunc_is_ordered;
 
    return dsa;
 }
@@ -1594,6 +1599,16 @@ uint32_t si_translate_colorformat(enum chip_class chip_class,
    if (desc->is_mixed && desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS)
       return V_028C70_COLOR_INVALID;
 
+   int first_non_void = util_format_get_first_non_void_channel(format);
+
+   /* Reject SCALED formats because we don't implement them for CB. */
+   if (first_non_void >= 0 && first_non_void <= 3 &&
+       (desc->channel[first_non_void].type == UTIL_FORMAT_TYPE_UNSIGNED ||
+        desc->channel[first_non_void].type == UTIL_FORMAT_TYPE_SIGNED) &&
+       !desc->channel[first_non_void].normalized &&
+       !desc->channel[first_non_void].pure_integer)
+      return V_028C70_COLOR_INVALID;
+
    switch (desc->nr_channels) {
    case 1:
       switch (desc->channel[0].size) {
@@ -1648,6 +1663,8 @@ uint32_t si_translate_colorformat(enum chip_class chip_class,
          return V_028C70_COLOR_5_5_5_1;
       } else if (HAS_SIZE(10, 10, 10, 2)) {
          return V_028C70_COLOR_2_10_10_10;
+      } else if (HAS_SIZE(2, 10, 10, 10)) {
+         return V_028C70_COLOR_10_10_10_2;
       }
       break;
    }
@@ -1673,6 +1690,7 @@ static uint32_t si_colorformat_endian_swap(uint32_t colorformat)
       /* 32-bit buffers. */
       case V_028C70_COLOR_8_8_8_8:
       case V_028C70_COLOR_2_10_10_10:
+      case V_028C70_COLOR_10_10_10_2:
       case V_028C70_COLOR_8_24:
       case V_028C70_COLOR_24_8:
       case V_028C70_COLOR_16_16:
@@ -1921,6 +1939,13 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen, enum pipe_for
    if (first_non_void < 0 || first_non_void > 3)
       goto out_unknown;
 
+   /* Reject SCALED formats because we don't implement them for CB and do the same for texturing. */
+   if ((desc->channel[first_non_void].type == UTIL_FORMAT_TYPE_UNSIGNED ||
+        desc->channel[first_non_void].type == UTIL_FORMAT_TYPE_SIGNED) &&
+       !desc->channel[first_non_void].normalized &&
+       !desc->channel[first_non_void].pure_integer)
+      goto out_unknown;
+
    /* uniform formats */
    switch (desc->channel[first_non_void].size) {
    case 4:
@@ -2092,6 +2117,12 @@ static unsigned si_tex_dim(struct si_screen *sscreen, struct si_texture *tex, un
 static bool si_is_sampler_format_supported(struct pipe_screen *screen, enum pipe_format format)
 {
    struct si_screen *sscreen = (struct si_screen *)screen;
+   const struct util_format_description *desc = util_format_description(format);
+
+   /* Samplers don't support 64 bits per channel. */
+   if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN &&
+       desc->channel[0].size == 64)
+      return false;
 
    if (sscreen->info.chip_class >= GFX10) {
       const struct gfx10_format *fmt = &gfx10_format_table[format];
@@ -2100,7 +2131,6 @@ static bool si_is_sampler_format_supported(struct pipe_screen *screen, enum pipe
       return true;
    }
 
-   const struct util_format_description *desc = util_format_description(format);
    if (!desc)
       return false;
 
@@ -2269,7 +2299,7 @@ static bool si_is_colorbuffer_format_supported(enum chip_class chip_class,
                                                enum pipe_format format)
 {
    return si_translate_colorformat(chip_class, format) != V_028C70_COLOR_INVALID &&
-          si_translate_colorswap(format, false) != ~0U;
+          si_translate_colorswap(chip_class, format, false) != ~0U;
 }
 
 static bool si_is_zs_format_supported(enum pipe_format format)
@@ -2288,6 +2318,12 @@ static bool si_is_format_supported(struct pipe_screen *screen, enum pipe_format 
       PRINT_ERR("radeonsi: unsupported texture type %d\n", target);
       return false;
    }
+
+   /* Require PIPE_BIND_SAMPLER_VIEW support when PIPE_BIND_RENDER_TARGET
+    * is requested.
+    */
+   if (usage & PIPE_BIND_RENDER_TARGET)
+      usage |= PIPE_BIND_SAMPLER_VIEW;
 
    if ((target == PIPE_TEXTURE_3D || target == PIPE_TEXTURE_CUBE) &&
         !sscreen->info.has_3d_cube_border_color_mipmap)
@@ -2430,7 +2466,7 @@ static void si_initialize_color_surface(struct si_context *sctx, struct si_surfa
       PRINT_ERR("Invalid CB format: %d, disabling CB.\n", surf->base.format);
    }
    assert(format != V_028C70_COLOR_INVALID);
-   swap = si_translate_colorswap(surf->base.format, false);
+   swap = si_translate_colorswap(sctx->chip_class, surf->base.format, false);
    endian = si_colorformat_endian_swap(format);
 
    /* blend clamp should be set for all NORM/SRGB types */
@@ -3517,8 +3553,7 @@ static bool si_out_of_order_rasterization(struct si_context *sctx)
       return false;
 
    struct si_dsa_order_invariance dsa_order_invariant = {.zs = true,
-                                                         .pass_set = true,
-                                                         .pass_last = false};
+                                                         .pass_set = true};
 
    if (sctx->framebuffer.state.zsbuf) {
       struct si_texture *zstex = (struct si_texture *)sctx->framebuffer.state.zsbuf->texture;
@@ -3552,10 +3587,8 @@ static bool si_out_of_order_rasterization(struct si_context *sctx)
          return false;
    }
 
-   if (colormask & ~blendmask) {
-      if (!dsa_order_invariant.pass_last)
-         return false;
-   }
+   if (colormask & ~blendmask)
+      return false;
 
    return true;
 }
@@ -4332,22 +4365,15 @@ static void si_make_texture_descriptor(struct si_screen *screen, struct si_textu
  * @param ctx		context
  * @param texture	texture
  * @param state		sampler view template
- * @param width0	width0 override (for compressed textures as int)
- * @param height0	height0 override (for compressed textures as int)
- * @param force_level   set the base address to the level (for compressed textures)
  */
-struct pipe_sampler_view *si_create_sampler_view_custom(struct pipe_context *ctx,
+static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx,
                                                         struct pipe_resource *texture,
-                                                        const struct pipe_sampler_view *state,
-                                                        unsigned width0, unsigned height0,
-                                                        unsigned force_level)
+                                                        const struct pipe_sampler_view *state)
 {
    struct si_context *sctx = (struct si_context *)ctx;
    struct si_sampler_view *view = CALLOC_STRUCT_CL(si_sampler_view);
    struct si_texture *tex = (struct si_texture *)texture;
-   unsigned base_level, first_level, last_level;
    unsigned char state_swizzle[4];
-   unsigned height, depth, width;
    unsigned last_layer = state->u.tex.last_layer;
    enum pipe_format pipe_format;
    const struct legacy_surf_level *surflevel;
@@ -4379,23 +4405,6 @@ struct pipe_sampler_view *si_create_sampler_view_custom(struct pipe_context *ctx
    state_swizzle[1] = state->swizzle_g;
    state_swizzle[2] = state->swizzle_b;
    state_swizzle[3] = state->swizzle_a;
-
-   base_level = 0;
-   first_level = state->u.tex.first_level;
-   last_level = state->u.tex.last_level;
-   width = width0;
-   height = height0;
-   depth = texture->depth0;
-
-   if (sctx->chip_class <= GFX8 && force_level) {
-      assert(force_level == first_level && force_level == last_level);
-      base_level = force_level;
-      first_level = 0;
-      last_level = 0;
-      width = u_minify(width, force_level);
-      height = u_minify(height, force_level);
-      depth = u_minify(depth, force_level);
-   }
 
    /* This is not needed if gallium frontends set last_layer correctly. */
    if (state->target == PIPE_TEXTURE_1D || state->target == PIPE_TEXTURE_2D ||
@@ -4455,21 +4464,14 @@ struct pipe_sampler_view *si_create_sampler_view_custom(struct pipe_context *ctx
       vi_dcc_formats_are_incompatible(texture, state->u.tex.first_level, state->format);
 
    sctx->screen->make_texture_descriptor(
-      sctx->screen, tex, true, state->target, pipe_format, state_swizzle, first_level, last_level,
-      state->u.tex.first_layer, last_layer, width, height, depth, view->state, view->fmask_state);
+      sctx->screen, tex, true, state->target, pipe_format, state_swizzle,
+      state->u.tex.first_level, state->u.tex.last_level,
+      state->u.tex.first_layer, last_layer, texture->width0, texture->height0, texture->depth0,
+            view->state, view->fmask_state);
 
-   view->base_level_info = &surflevel[base_level];
-   view->base_level = base_level;
+   view->base_level_info = &surflevel[0];
    view->block_width = util_format_get_blockwidth(pipe_format);
    return &view->base;
-}
-
-static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx,
-                                                        struct pipe_resource *texture,
-                                                        const struct pipe_sampler_view *state)
-{
-   return si_create_sampler_view_custom(ctx, texture, state, texture ? texture->width0 : 0,
-                                        texture ? texture->height0 : 0, 0);
 }
 
 static void si_sampler_view_destroy(struct pipe_context *ctx, struct pipe_sampler_view *state)
@@ -5406,11 +5408,6 @@ void si_init_cs_preamble_state(struct si_context *sctx, bool uses_reg_shadowing)
       si_pm4_set_reg(pm4, R_028A1C_VGT_HOS_MIN_TESS_LEVEL, fui(0));
 
    if (!has_clear_state) {
-      si_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE,
-                     S_028230_ER_TRI(0xA) | S_028230_ER_POINT(0xA) | S_028230_ER_RECT(0xA) |
-                        /* Required by DX10_DIAMOND_TEST_ENA: */
-                        S_028230_ER_LINE_LR(0x1A) | S_028230_ER_LINE_RL(0x26) |
-                        S_028230_ER_LINE_TB(0xA) | S_028230_ER_LINE_BT(0xA));
       si_pm4_set_reg(pm4, R_028820_PA_CL_NANINF_CNTL, 0);
       si_pm4_set_reg(pm4, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 0x0);
       si_pm4_set_reg(pm4, R_028AC4_DB_SRESULTS_COMPARE_STATE1, 0x0);
@@ -5429,6 +5426,14 @@ void si_init_cs_preamble_state(struct si_context *sctx, bool uses_reg_shadowing)
    if (sctx->chip_class == GFX6) {
       si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE,
                      S_008A14_NUM_CLIP_SEQ(3) | S_008A14_CLIP_VTX_REORDER_ENA(1));
+   }
+
+   if (sctx->chip_class >= GFX7) {
+      si_pm4_set_reg(pm4, R_030A00_PA_SU_LINE_STIPPLE_VALUE, 0);
+      si_pm4_set_reg(pm4, R_030A04_PA_SC_LINE_STIPPLE_STATE, 0);
+   } else {
+      si_pm4_set_reg(pm4, R_008A60_PA_SU_LINE_STIPPLE_VALUE, 0);
+      si_pm4_set_reg(pm4, R_008B10_PA_SC_LINE_STIPPLE_STATE, 0);
    }
 
    if (sctx->chip_class <= GFX7 || !has_clear_state) {

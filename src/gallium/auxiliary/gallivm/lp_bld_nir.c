@@ -1397,8 +1397,9 @@ static void visit_load_ssbo(struct lp_build_nir_context *bld_base,
 {
    LLVMValueRef idx = cast_type(bld_base, get_src(bld_base, instr->src[0]), nir_type_uint, 32);
    LLVMValueRef offset = get_src(bld_base, instr->src[1]);
+   bool index_and_offset_are_uniform = nir_src_is_always_uniform(instr->src[0]) && nir_src_is_always_uniform(instr->src[1]);
    bld_base->load_mem(bld_base, nir_dest_num_components(instr->dest), nir_dest_bit_size(instr->dest),
-                       idx, offset, result);
+                      index_and_offset_are_uniform, idx, offset, result);
 }
 
 static void visit_store_ssbo(struct lp_build_nir_context *bld_base,
@@ -1634,8 +1635,9 @@ static void visit_shared_load(struct lp_build_nir_context *bld_base,
                                 LLVMValueRef result[NIR_MAX_VEC_COMPONENTS])
 {
    LLVMValueRef offset = get_src(bld_base, instr->src[0]);
+   bool offset_is_uniform = nir_src_is_always_uniform(instr->src[0]);
    bld_base->load_mem(bld_base, nir_dest_num_components(instr->dest), nir_dest_bit_size(instr->dest),
-                      NULL, offset, result);
+                      offset_is_uniform, NULL, offset, result);
 }
 
 static void visit_shared_store(struct lp_build_nir_context *bld_base,
@@ -1695,9 +1697,10 @@ static void visit_load_global(struct lp_build_nir_context *bld_base,
                               nir_intrinsic_instr *instr, LLVMValueRef result[NIR_MAX_VEC_COMPONENTS])
 {
    LLVMValueRef addr = get_src(bld_base, instr->src[0]);
+   bool offset_is_uniform = nir_src_is_always_uniform(instr->src[0]);
    bld_base->load_global(bld_base, nir_dest_num_components(instr->dest), nir_dest_bit_size(instr->dest),
                          nir_src_bit_size(instr->src[0]),
-                         addr, result);
+                         offset_is_uniform, addr, result);
 }
 
 static void visit_store_global(struct lp_build_nir_context *bld_base,
@@ -1727,6 +1730,20 @@ static void visit_global_atomic(struct lp_build_nir_context *bld_base,
    bld_base->atomic_global(bld_base, instr->intrinsic, addr_bitsize,
                            val_bitsize, addr, val, val2, &result[0]);
 }
+
+#if LLVM_VERSION_MAJOR >= 10
+static void visit_shuffle(struct lp_build_nir_context *bld_base,
+                          nir_intrinsic_instr *instr,
+                          LLVMValueRef dst[4])
+{
+   LLVMValueRef src = get_src(bld_base, instr->src[0]);
+   src = cast_type(bld_base, src, nir_type_int, nir_src_bit_size(instr->src[0]));
+   LLVMValueRef index = get_src(bld_base, instr->src[1]);
+   index = cast_type(bld_base, index, nir_type_uint, nir_src_bit_size(instr->src[1]));
+
+   bld_base->shuffle(bld_base, src, index, instr, dst);
+}
+#endif
 
 static void visit_interp(struct lp_build_nir_context *bld_base,
                          nir_intrinsic_instr *instr,
@@ -1956,6 +1973,11 @@ static void visit_intrinsic(struct lp_build_nir_context *bld_base,
    case nir_intrinsic_ballot:
       bld_base->ballot(bld_base, cast_type(bld_base, get_src(bld_base, instr->src[0]), nir_type_int, 32), instr, result);
       break;
+#if LLVM_VERSION_MAJOR >= 10
+   case nir_intrinsic_shuffle:
+      visit_shuffle(bld_base, instr, result);
+      break;
+#endif
    case nir_intrinsic_read_invocation:
    case nir_intrinsic_read_first_invocation: {
       LLVMValueRef src1 = NULL;
@@ -2494,6 +2516,7 @@ void lp_build_opt_nir(struct nir_shader *nir)
    static const struct nir_lower_tex_options lower_tex_options = {
       .lower_tg4_offsets = true,
       .lower_txp = ~0u,
+      .lower_invalid_implicit_lod = true,
    };
    NIR_PASS_V(nir, nir_lower_tex, &lower_tex_options);
    NIR_PASS_V(nir, nir_lower_frexp);
@@ -2506,7 +2529,7 @@ void lp_build_opt_nir(struct nir_shader *nir)
       NIR_PASS(progress, nir, nir_opt_algebraic);
       NIR_PASS(progress, nir, nir_lower_pack);
 
-      nir_lower_tex_options options = { 0, };
+      nir_lower_tex_options options = { .lower_invalid_implicit_lod = true, };
       NIR_PASS_V(nir, nir_lower_tex, &options);
 
       const nir_lower_subgroups_options subgroups_options = {
@@ -2515,6 +2538,7 @@ void lp_build_opt_nir(struct nir_shader *nir)
         .ballot_components = 1,
 	.lower_to_scalar = true,
 	.lower_subgroup_masks = true,
+        .lower_relative_shuffle = true,
       };
       NIR_PASS_V(nir, nir_lower_subgroups, &subgroups_options);
 

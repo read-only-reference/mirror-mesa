@@ -48,7 +48,6 @@ static const nir_shader_compiler_options bifrost_nir_options = {
         .lower_fdph = true,
         .lower_fsqrt = true,
 
-        .lower_wpos_pntc = true,
         .lower_fsign = true,
 
         .lower_bitfield_insert_to_shifts = true,
@@ -91,7 +90,6 @@ static const nir_shader_compiler_options bifrost_nir_options = {
         .lower_uniforms_to_ubo = true,
 
         .has_cs_global_id = true,
-        .vertex_id_zero_based = true,
         .lower_cs_local_index_to_id = true,
         .max_unroll_iterations = 32,
         .force_indirect_unrolling = (nir_var_shader_in | nir_var_shader_out | nir_var_function_temp),

@@ -27,7 +27,6 @@
 
 #include "ac_llvm_build.h"
 #include "c11/threads.h"
-#include "gallivm/lp_bld_misc.h"
 #include "util/bitscan.h"
 #include "util/u_math.h"
 #include <llvm-c/Core.h>
@@ -189,10 +188,17 @@ static LLVMTargetMachineRef ac_create_target_machine(enum radeon_family family,
    assert(family >= CHIP_TAHITI);
    const char *triple = (tm_options & AC_TM_SUPPORTS_SPILL) ? "amdgcn-mesa-mesa3d" : "amdgcn--";
    LLVMTargetRef target = ac_get_llvm_target(triple);
+   const char *name = ac_get_llvm_processor_name(family);
 
    LLVMTargetMachineRef tm =
-      LLVMCreateTargetMachine(target, triple, ac_get_llvm_processor_name(family), "", level,
+      LLVMCreateTargetMachine(target, triple, name, "", level,
                               LLVMRelocDefault, LLVMCodeModelDefault);
+
+   if (!ac_is_llvm_processor_supported(tm, name)) {
+      LLVMDisposeTargetMachine(tm);
+      fprintf(stderr, "amd: LLVM doesn't support %s, bailing out...\n", name);
+      return NULL;
+   }
 
    if (out_triple)
       *out_triple = triple;

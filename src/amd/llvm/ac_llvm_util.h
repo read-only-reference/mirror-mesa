@@ -90,6 +90,7 @@ struct ac_llvm_compiler {
 };
 
 const char *ac_get_llvm_processor_name(enum radeon_family family);
+bool ac_is_llvm_processor_supported(LLVMTargetMachineRef tm, const char *processor);
 void ac_add_attr_dereferenceable(LLVMValueRef val, uint64_t bytes);
 void ac_add_attr_alignment(LLVMValueRef val, uint64_t bytes);
 bool ac_is_sgpr_param(LLVMValueRef param);
@@ -97,11 +98,7 @@ void ac_add_function_attr(LLVMContextRef ctx, LLVMValueRef function, int attr_id
                           enum ac_func_attr attr);
 void ac_add_func_attributes(LLVMContextRef ctx, LLVMValueRef function, unsigned attrib_mask);
 void ac_dump_module(LLVMModuleRef module);
-
-LLVMValueRef ac_llvm_get_called_value(LLVMValueRef call);
-bool ac_llvm_is_function(LLVMValueRef v);
 LLVMModuleRef ac_create_module(LLVMTargetMachineRef tm, LLVMContextRef ctx);
-
 LLVMBuilderRef ac_create_builder(LLVMContextRef ctx, enum ac_float_mode float_mode);
 void ac_enable_signed_zeros(struct ac_llvm_context *ctx);
 void ac_disable_signed_zeros(struct ac_llvm_context *ctx);

@@ -48,7 +48,13 @@ void add_subdword_definition(Program* program, aco_ptr<Instruction>& instr, Phys
 struct assignment {
    PhysReg reg;
    RegClass rc;
-   bool assigned = false;
+   union {
+      struct {
+         bool assigned : 1;
+         bool vcc : 1;
+      };
+      uint8_t _ = 0;
+   };
    uint32_t affinity = 0;
    assignment() = default;
    assignment(PhysReg reg_, RegClass rc_) : reg(reg_), rc(rc_), assigned(-1) {}
@@ -90,7 +96,7 @@ struct ra_ctx {
       phi_dummy.reset(
          create_instruction<Instruction>(aco_opcode::p_linear_phi, Format::PSEUDO, 0, 0));
       sgpr_limit = get_addr_sgpr_from_waves(program, program->min_waves);
-      vgpr_limit = get_addr_sgpr_from_waves(program, program->min_waves);
+      vgpr_limit = get_addr_vgpr_from_waves(program, program->min_waves);
    }
 };
 
@@ -1398,7 +1404,7 @@ get_reg_specified(ra_ctx& ctx, RegisterFile& reg_file, RegClass rc, aco_ptr<Inst
    PhysRegInterval bounds = get_reg_bounds(ctx.program, rc.type());
    PhysRegInterval vcc_win = {vcc, 2};
    /* VCC is outside the bounds */
-   bool is_vcc = rc.type() == RegType::sgpr && vcc_win.contains(reg_win);
+   bool is_vcc = rc.type() == RegType::sgpr && vcc_win.contains(reg_win) && ctx.program->needs_vcc;
    bool is_m0 = rc == s1 && reg == m0;
    if (!bounds.contains(reg_win) && !is_vcc && !is_m0)
       return false;
@@ -1623,6 +1629,10 @@ get_reg(ra_ctx& ctx, RegisterFile& reg_file, Temp temp,
          if (get_reg_specified(ctx, reg_file, temp.regClass(), instr, affinity.reg))
             return affinity.reg;
       }
+   }
+   if (ctx.assignments[temp.id()].vcc) {
+      if (get_reg_specified(ctx, reg_file, temp.regClass(), instr, vcc))
+         return vcc;
    }
 
    std::pair<PhysReg, bool> res;
@@ -2042,12 +2052,18 @@ void
 get_regs_for_phis(ra_ctx& ctx, Block& block, RegisterFile& register_file,
                   std::vector<aco_ptr<Instruction>>& instructions, IDSet& live_in)
 {
-   /* assign phis with all-matching registers to that register */
+   /* move all phis to instructions */
    for (aco_ptr<Instruction>& phi : block.instructions) {
       if (!is_phi(phi))
          break;
+      if (!phi->definitions[0].isKill())
+         instructions.emplace_back(std::move(phi));
+   }
+
+   /* assign phis with all-matching registers to that register */
+   for (aco_ptr<Instruction>& phi : instructions) {
       Definition& definition = phi->definitions[0];
-      if (definition.isKill() || definition.isFixed())
+      if (definition.isFixed())
          continue;
 
       if (!phi->operands[0].isTemp())
@@ -2069,11 +2085,9 @@ get_regs_for_phis(ra_ctx& ctx, Block& block, RegisterFile& register_file,
    }
 
    /* try to find a register that is used by at least one operand */
-   for (aco_ptr<Instruction>& phi : block.instructions) {
-      if (!is_phi(phi))
-         break;
+   for (aco_ptr<Instruction>& phi : instructions) {
       Definition& definition = phi->definitions[0];
-      if (definition.isKill() || definition.isFixed())
+      if (definition.isFixed())
          continue;
 
       /* use affinity if available */
@@ -2106,25 +2120,16 @@ get_regs_for_phis(ra_ctx& ctx, Block& block, RegisterFile& register_file,
    }
 
    /* find registers for phis where the register was blocked or no operand was assigned */
-   for (aco_ptr<Instruction>& phi : block.instructions) {
-      if (!is_phi(phi))
-         break;
-
+   for (aco_ptr<Instruction>& phi : instructions) {
       Definition& definition = phi->definitions[0];
-      if (definition.isKill())
+      if (definition.isFixed())
          continue;
-
-      if (definition.isFixed()) {
-         instructions.emplace_back(std::move(phi));
-         continue;
-      }
 
       definition.setFixed(
          get_reg_phi(ctx, live_in, register_file, instructions, block, phi, definition.getTemp()));
 
       register_file.fill(definition);
       ctx.assignments[definition.tempId()].set(definition);
-      instructions.emplace_back(std::move(phi));
    }
 }
 
@@ -2380,11 +2385,27 @@ get_affinities(ra_ctx& ctx, std::vector<IDSet>& live_out_per_block)
          } else if (instr->format == Format::MIMG && instr->operands.size() > 4) {
             for (unsigned i = 3; i < instr->operands.size(); i++)
                ctx.vectors[instr->operands[i].tempId()] = instr.get();
-         }
-
-         if (instr->opcode == aco_opcode::p_split_vector &&
-             instr->operands[0].isFirstKillBeforeDef())
+         } else if (instr->opcode == aco_opcode::p_split_vector &&
+                    instr->operands[0].isFirstKillBeforeDef()) {
             ctx.split_vectors[instr->operands[0].tempId()] = instr.get();
+         } else if (instr->isVOPC() && !instr->isVOP3()) {
+            if (!instr->isSDWA() || ctx.program->chip_class == GFX8)
+               ctx.assignments[instr->definitions[0].tempId()].vcc = true;
+         } else if (instr->isVOP2() && !instr->isVOP3()) {
+            if (instr->operands.size() == 3 && instr->operands[2].isTemp() &&
+                instr->operands[2].regClass().type() == RegType::sgpr)
+               ctx.assignments[instr->operands[2].tempId()].vcc = true;
+            if (instr->definitions.size() == 2)
+               ctx.assignments[instr->definitions[1].tempId()].vcc = true;
+         } else if (instr->opcode == aco_opcode::s_and_b32 ||
+                    instr->opcode == aco_opcode::s_and_b64) {
+            /* If SCC is used by a branch, we might be able to use
+             * s_cbranch_vccz/s_cbranch_vccnz if the operand is VCC.
+             */
+            if (!instr->definitions[1].isKill() && instr->operands[0].isTemp() &&
+                instr->operands[1].isFixed() && instr->operands[1].physReg() == exec)
+               ctx.assignments[instr->operands[0].tempId()].vcc = true;
+         }
 
          /* add operands to live variables */
          for (const Operand& op : instr->operands) {
@@ -2690,7 +2711,12 @@ register_allocation(Program* program, std::vector<IDSet>& live_out_per_block, ra
             }
          }
 
-         /* handle definitions which must have the same register as an operand */
+         /* Handle definitions which must have the same register as an operand.
+          * We expect that the definition has the same size as the operand, otherwise the new
+          * location for the operand (if it's not killed) might intersect with the old one.
+          * We can't read from the old location because it's corrupted, and we can't write the new
+          * location because that's used by a live-through operand.
+          */
          if (instr->opcode == aco_opcode::v_interp_p2_f32 ||
              instr->opcode == aco_opcode::v_mac_f32 || instr->opcode == aco_opcode::v_fmac_f32 ||
              instr->opcode == aco_opcode::v_mac_f16 || instr->opcode == aco_opcode::v_fmac_f16 ||
@@ -2700,15 +2726,20 @@ register_allocation(Program* program, std::vector<IDSet>& live_out_per_block, ra
              instr->opcode == aco_opcode::v_writelane_b32 ||
              instr->opcode == aco_opcode::v_writelane_b32_e64 ||
              instr->opcode == aco_opcode::v_dot4c_i32_i8) {
+            assert(instr->definitions[0].bytes() == instr->operands[2].bytes() ||
+                   instr->operands[2].regClass() == v1);
             instr->definitions[0].setFixed(instr->operands[2].physReg());
          } else if (instr->opcode == aco_opcode::s_addk_i32 ||
                     instr->opcode == aco_opcode::s_mulk_i32) {
+            assert(instr->definitions[0].bytes() == instr->operands[0].bytes());
             instr->definitions[0].setFixed(instr->operands[0].physReg());
          } else if (instr->isMUBUF() && instr->definitions.size() == 1 &&
                     instr->operands.size() == 4) {
+            assert(instr->definitions[0].bytes() == instr->operands[3].bytes());
             instr->definitions[0].setFixed(instr->operands[3].physReg());
          } else if (instr->isMIMG() && instr->definitions.size() == 1 &&
                     !instr->operands[2].isUndefined()) {
+            assert(instr->definitions[0].bytes() == instr->operands[2].bytes());
             instr->definitions[0].setFixed(instr->operands[2].physReg());
          }
 
@@ -2760,16 +2791,26 @@ register_allocation(Program* program, std::vector<IDSet>& live_out_per_block, ra
                continue;
 
             /* find free reg */
-            if (definition->hasHint() &&
-                get_reg_specified(ctx, register_file, definition->regClass(), instr,
-                                  definition->physReg())) {
-               definition->setFixed(definition->physReg());
-            } else if (instr->opcode == aco_opcode::p_split_vector) {
+            if (instr->opcode == aco_opcode::p_split_vector) {
                PhysReg reg = instr->operands[0].physReg();
+               RegClass rc = definition->regClass();
                for (unsigned j = 0; j < i; j++)
                   reg.reg_b += instr->definitions[j].bytes();
-               if (get_reg_specified(ctx, register_file, definition->regClass(), instr, reg))
+               if (get_reg_specified(ctx, register_file, rc, instr, reg)) {
                   definition->setFixed(reg);
+               } else if (i == 0) {
+                  RegClass vec_rc = RegClass::get(rc.type(), instr->operands[0].bytes());
+                  DefInfo info(ctx, ctx.pseudo_dummy, vec_rc, -1);
+                  std::pair<PhysReg, bool> res = get_reg_simple(ctx, register_file, info);
+                  reg = res.first;
+                  if (res.second && get_reg_specified(ctx, register_file, rc, instr, reg))
+                     definition->setFixed(reg);
+               } else if (instr->definitions[i - 1].isFixed()) {
+                  reg = instr->definitions[i - 1].physReg();
+                  reg.reg_b += instr->definitions[i - 1].bytes();
+                  if (get_reg_specified(ctx, register_file, rc, instr, reg))
+                     definition->setFixed(reg);
+               }
             } else if (instr->opcode == aco_opcode::p_wqm ||
                        instr->opcode == aco_opcode::p_parallelcopy) {
                PhysReg reg = instr->operands[i].physReg();

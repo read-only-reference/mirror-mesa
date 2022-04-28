@@ -1023,7 +1023,7 @@ tu_queue_submit_locked(struct tu_queue *queue, struct tu_queue_submit *submit)
       .flags = flags,
       .queueid = queue->msm_queue_id,
       .bos = (uint64_t)(uintptr_t) queue->device->bo_list,
-      .nr_bos = queue->device->bo_count,
+      .nr_bos = submit->entry_count ? queue->device->bo_count : 0,
       .cmds = (uint64_t)(uintptr_t)submit->cmds,
       .nr_cmds = submit->entry_count,
       .in_syncobjs = (uint64_t)(uintptr_t)submit->in_syncobjs,
@@ -1142,6 +1142,11 @@ tu_queue_submit(struct vk_queue *vk_queue, struct vk_queue_submit *submit)
    uint32_t perf_pass_index = queue->device->perfcntrs_pass_cs ?
                               submit->perf_pass_index : ~0;
    struct tu_queue_submit submit_req;
+
+   if (unlikely(queue->device->physical_device->instance->debug_flags &
+                 TU_DEBUG_LOG_SKIP_GMEM_OPS)) {
+      tu_dbg_log_gmem_load_store_skips(queue->device);
+   }
 
    pthread_mutex_lock(&queue->device->submit_mutex);
 

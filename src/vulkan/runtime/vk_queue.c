@@ -303,8 +303,16 @@ vk_queue_submit_final(struct vk_queue *queue,
          continue;
 
       /* Waits on dummy vk_syncs are no-ops */
-      if (vk_sync_type_is_dummy(submit->waits[i].sync->type))
+      if (vk_sync_type_is_dummy(submit->waits[i].sync->type)) {
+         /* We are about to lose track of this wait, if it has a temporary
+          * we need to destroy it now, as vk_queue_submit_cleanup will not
+          * know about it */
+         if (submit->_wait_temps[i] != NULL) {
+            vk_sync_destroy(queue->base.device, submit->_wait_temps[i]);
+            submit->waits[i].sync = NULL;
+         }
          continue;
+      }
 
       /* For emulated timelines, we have a binary vk_sync associated with
        * each time point and pass the binary vk_sync to the driver.
@@ -512,7 +520,9 @@ vk_queue_start_submit_thread(struct vk_queue *queue)
 {
    int ret;
 
+   mtx_lock(&queue->submit.mutex);
    queue->submit.thread_run = true;
+   mtx_unlock(&queue->submit.mutex);
 
    ret = thrd_create(&queue->submit.thread,
                      vk_queue_submit_thread_func,
@@ -790,7 +800,7 @@ vk_queue_submit(struct vk_queue *queue,
       assert(submit->signals[signal_count].sync == NULL);
       submit->signals[signal_count++] = (struct vk_sync_signal) {
          .sync = mem_sync,
-         .stage_mask = ~(VkPipelineStageFlags2KHR)0,
+         .stage_mask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
       };
    }
 
@@ -798,7 +808,7 @@ vk_queue_submit(struct vk_queue *queue,
       assert(submit->signals[signal_count].sync == NULL);
       submit->signals[signal_count++] = (struct vk_sync_signal) {
          .sync = vk_fence_get_active_sync(info->fence),
-         .stage_mask = ~(VkPipelineStageFlags2KHR)0,
+         .stage_mask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
       };
    }
 
@@ -1061,7 +1071,7 @@ vk_queue_signal_sync(struct vk_queue *queue,
 
    submit->signals[0] = (struct vk_sync_signal) {
       .sync = sync,
-      .stage_mask = ~(VkPipelineStageFlags2KHR)0,
+      .stage_mask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
       .signal_value = signal_value,
    };
 

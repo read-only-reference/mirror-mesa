@@ -484,7 +484,7 @@ crocus_get_shader_param(struct pipe_screen *pscreen,
       return devinfo->ver >= 6 ? 16 : 1;
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
-   case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+   case PIPE_SHADER_CAP_CONT_SUPPORTED:
       return 0;
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
@@ -520,13 +520,10 @@ crocus_get_shader_param(struct pipe_screen *pscreen,
       return PIPE_SHADER_IR_NIR;
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return 1 << PIPE_SHADER_IR_NIR;
-   case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_DROUND_SUPPORTED:
+   case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
       return 1;
-   case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
-   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+   case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
    case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
@@ -680,21 +677,21 @@ crocus_get_default_l3_config(const struct intel_device_info *devinfo,
 static void
 crocus_shader_debug_log(void *data, unsigned *id, const char *fmt, ...)
 {
-   struct pipe_debug_callback *dbg = data;
+   struct util_debug_callback *dbg = data;
    va_list args;
 
    if (!dbg->debug_message)
       return;
 
    va_start(args, fmt);
-   dbg->debug_message(dbg->data, id, PIPE_DEBUG_TYPE_SHADER_INFO, fmt, args);
+   dbg->debug_message(dbg->data, id, UTIL_DEBUG_TYPE_SHADER_INFO, fmt, args);
    va_end(args);
 }
 
 static void
 crocus_shader_perf_log(void *data, unsigned *id, const char *fmt, ...)
 {
-   struct pipe_debug_callback *dbg = data;
+   struct util_debug_callback *dbg = data;
    va_list args;
    va_start(args, fmt);
 
@@ -706,7 +703,7 @@ crocus_shader_perf_log(void *data, unsigned *id, const char *fmt, ...)
    }
 
    if (dbg->debug_message) {
-      dbg->debug_message(dbg->data, id, PIPE_DEBUG_TYPE_PERF_INFO, fmt, args);
+      dbg->debug_message(dbg->data, id, UTIL_DEBUG_TYPE_PERF_INFO, fmt, args);
    }
 
    va_end(args);

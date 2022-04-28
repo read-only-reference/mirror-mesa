@@ -266,7 +266,7 @@ END_TEST
 
 Temp create_subbrev_co(Operand op0, Operand op1, Operand op2)
 {
-   return bld.vop2_e64(aco_opcode::v_subbrev_co_u32, bld.def(v1), bld.hint_vcc(bld.def(bld.lm)), op0, op1, op2);
+   return bld.vop2_e64(aco_opcode::v_subbrev_co_u32, bld.def(v1), bld.def(bld.lm), op0, op1, op2);
 }
 
 BEGIN_TEST(optimize.cndmask)
@@ -1164,6 +1164,8 @@ BEGIN_TEST(optimize.mad_mix.input_conv.basic)
       if (!setup_cs("v1 v2b", (chip_class)i))
          continue;
 
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
+
       Temp a = inputs[0];
       Temp a16 = inputs[1];
 
@@ -1196,6 +1198,8 @@ BEGIN_TEST(optimize.mad_mix.input_conv.precision)
       //>> v1: %a, v2b: %a16 = p_startpgm
       if (!setup_cs("v1 v2b", (chip_class)i))
          continue;
+
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
 
       Temp a = inputs[0];
       Temp a16 = inputs[1];
@@ -1247,6 +1251,8 @@ BEGIN_TEST(optimize.mad_mix.input_conv.modifiers)
       //>> v1: %a, v2b: %a16 = p_startpgm
       if (!setup_cs("v1 v2b", (chip_class)i))
          continue;
+
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
 
       Temp a = inputs[0];
       Temp a16 = inputs[1];
@@ -1341,6 +1347,8 @@ BEGIN_TEST(optimize.mad_mix.output_conv.basic)
       if (!setup_cs("v1 v1 v1 v2b v2b", (chip_class)i))
          continue;
 
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
+
       Temp a = inputs[0];
       Temp b = inputs[1];
       Temp c = inputs[2];
@@ -1381,6 +1389,8 @@ BEGIN_TEST(optimize.mad_mix.output_conv.precision)
       if (!setup_cs("v2b", (chip_class)i))
          continue;
 
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
+
       Temp a16 = inputs[0];
 
       //! v2b: %res0_tmp = v_mul_f16 %a16, %a16
@@ -1402,6 +1412,8 @@ BEGIN_TEST(optimize.mad_mix.output_conv.modifiers)
       //>> v1: %a, v1: %b, v2b: %a16, v2b: %b16 = p_startpgm
       if (!setup_cs("v1 v1 v2b v2b", (chip_class)i))
          continue;
+
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
 
       Temp a = inputs[0];
       Temp b = inputs[1];
@@ -1449,6 +1461,8 @@ BEGIN_TEST(optimize.mad_mix.fma.basic)
       //>> v1: %a, v1: %b, v1: %c, v2b: %a16, v2b: %c16 = p_startpgm
       if (!setup_cs("v1 v1 v1 v2b v2b", (chip_class)i))
          continue;
+
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
 
       Temp a = inputs[0];
       Temp b = inputs[1];
@@ -1501,6 +1515,8 @@ BEGIN_TEST(optimize.mad_mix.fma.precision)
       //>> v1: %a, v1: %b, v1: %c, v2b: %a16, v2b: %b16 = p_startpgm
       if (!setup_cs("v1 v1 v1 v2b v2b", (chip_class)i))
          continue;
+
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
 
       Temp a = inputs[0];
       Temp b = inputs[1];
@@ -1562,6 +1578,8 @@ BEGIN_TEST(optimize.mad_mix.clamp)
       if (!setup_cs("v1 v2b", (chip_class)i))
          continue;
 
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
+
       Temp a = inputs[0];
       Temp a16 = inputs[1];
 
@@ -1586,6 +1604,8 @@ BEGIN_TEST(optimize.mad_mix.cast)
       //>> v1: %a, v2b: %a16 = p_startpgm
       if (!setup_cs("v1 v2b", (chip_class)i))
          continue;
+
+      program->blocks[0].fp_mode.denorm16_64 = fp_denorm_flush;
 
       Temp a = inputs[0];
       Temp a16 = inputs[1];

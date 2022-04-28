@@ -89,7 +89,6 @@ libradv_files = files(
   'radv_spm.c',
   'radv_sqtt.c',
   'radv_query.c',
-  'radv_util.c',
   'radv_wsi.c',
   'si_cmd_buffer.c',
   'vk_format.h',
@@ -121,6 +120,9 @@ if with_llvm
   )
 endif
 
+subdir('radix_sort')
+libradv_files += radix_sort_files
+
 radv_deps = []
 radv_flags = cc.get_supported_arguments(['-Wimplicit-fallthrough', '-Wshadow'])
 
@@ -150,12 +152,10 @@ if with_ld_version_script
   libvulkan_radeon_link_depends += files('vulkan.sym')
 endif
 
-vulkan_radv_def = 'vulkan_radv.def'
-
 libvulkan_radeon = shared_library(
   'vulkan_radeon',
-  [libradv_files, radv_entrypoints, sha1_h],
-  vs_module_defs : vulkan_radv_def,
+  [libradv_files, radv_entrypoints, sha1_h, radix_sort_spv],
+  vs_module_defs : vulkan_api_def,
   include_directories : [
     inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_amd, inc_amd_common, inc_amd_common_llvm, inc_compiler, inc_util,
   ],

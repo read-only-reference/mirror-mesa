@@ -226,6 +226,19 @@ the :doc:`Xlib software driver page <xlibdriver>` for details.
 :envvar:`MESA_GLX_ALPHA_BITS`
    specifies default number of bits for alpha channel.
 
+Mesa WGL driver environment variables
+-------------------------------------
+
+The following are only applicable to the Mesa WGL driver, which is in use
+on Windows.
+
+:envvar:`WGL_FORCE_MSAA`
+   if set to a positive value, specifies the number of MSAA samples to
+   force when choosing the display configuration.
+:envvar:`WGL_DISABLE_ERROR_DIALOGS`
+   if set to 1, true or yes, disables Win32 error dialogs. Useful for
+   automated test-runs.
+
 Intel driver environment variables
 ----------------------------------------------------
 
@@ -313,11 +326,14 @@ Intel driver environment variables
    ``spill_vec4``
       force spilling of all registers in the vec4 backend (useful to
       debug spilling code)
+   ``stall``
+      inserts a stall on the GPU after each draw/dispatch command to
+      wait for it to finish before starting any new work.
    ``submit``
       emit batchbuffer usage statistics
    ``sync``
-      after sending each batch, emit a message and wait for that batch
-      to finish rendering
+      after sending each batch, wait on the CPU for that batch to
+      finish rendering
    ``task``
       dump shader assembly for task shaders
    ``tcs``
@@ -419,6 +435,19 @@ DRI environment variables
 
 :envvar:`DRI_NO_MSAA`
    disable MSAA for GLX/EGL MSAA visuals
+
+
+Vulkan mesa device select layer environment variables
+-----------------------------------------------------
+
+:envvar:`MESA_VK_DEVICE_SELECT`
+   when set to "list" prints the list of devices.
+   when set to "vid:did" number from pci device. That pci device is
+   selected as default. The default device is returned as the first
+   device in vkEnumeratePhysicalDevices api.
+:envvar:`MESA_VK_DEVICE_SELECT_FORCE_DEFAULT_DEVICE`
+   when set to 1, the device identified as default will be the only
+   one returned in vkEnumeratePhysicalDevices api.
 
 
 EGL environment variables

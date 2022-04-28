@@ -355,7 +355,9 @@ static VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
       goto err_vk_free_master_path;
    }
 
-   ret = pdevice->ws->ops->device_info_init(pdevice->ws, &pdevice->dev_info);
+   ret = pdevice->ws->ops->device_info_init(pdevice->ws,
+                                            &pdevice->dev_info,
+                                            &pdevice->dev_runtime_info);
    if (ret) {
       result = VK_ERROR_INITIALIZATION_FAILED;
       goto err_pvr_winsys_destroy;
@@ -507,9 +509,11 @@ VkResult pvr_EnumeratePhysicalDevices(VkInstance _instance,
                                       uint32_t *pPhysicalDeviceCount,
                                       VkPhysicalDevice *pPhysicalDevices)
 {
+   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDevice,
+                          out,
+                          pPhysicalDevices,
+                          pPhysicalDeviceCount);
    PVR_FROM_HANDLE(pvr_instance, instance, _instance);
-   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDevice, out,
-                          pPhysicalDevices, pPhysicalDeviceCount);
    VkResult result;
 
    if (instance->physical_devices_count < 0) {
@@ -522,7 +526,7 @@ VkResult pvr_EnumeratePhysicalDevices(VkInstance _instance,
       return VK_SUCCESS;
 
    assert(instance->physical_devices_count == 1);
-   vk_outarray_append_typed(VkPhysicalDevice, &out, p) {
+   vk_outarray_append_typed (VkPhysicalDevice, &out, p) {
       *p = pvr_physical_device_to_handle(&instance->physical_device);
    }
 
@@ -848,9 +852,12 @@ void pvr_GetPhysicalDeviceQueueFamilyProperties(
    uint32_t *pCount,
    VkQueueFamilyProperties *pQueueFamilyProperties)
 {
-   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties, out, pQueueFamilyProperties, pCount);
+   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties,
+                          out,
+                          pQueueFamilyProperties,
+                          pCount);
 
-   vk_outarray_append_typed(VkQueueFamilyProperties, &out, p) {
+   vk_outarray_append_typed (VkQueueFamilyProperties, &out, p) {
       *p = pvr_queue_family_properties;
    }
 }
@@ -860,9 +867,12 @@ void pvr_GetPhysicalDeviceQueueFamilyProperties2(
    uint32_t *pQueueFamilyPropertyCount,
    VkQueueFamilyProperties2 *pQueueFamilyProperties)
 {
-   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties2, out, pQueueFamilyProperties, pQueueFamilyPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkQueueFamilyProperties2,
+                          out,
+                          pQueueFamilyProperties,
+                          pQueueFamilyPropertyCount);
 
-   vk_outarray_append_typed(VkQueueFamilyProperties2, &out, p) {
+   vk_outarray_append_typed (VkQueueFamilyProperties2, &out, p) {
       p->queueFamilyProperties = pvr_queue_family_properties;
 
       vk_foreach_struct (ext, p->pNext) {
@@ -1053,11 +1063,6 @@ VkResult pvr_CreateDevice(VkPhysicalDevice physicalDevice,
 
    device->instance = instance;
    device->pdevice = pdevice;
-
-   if (pAllocator)
-      device->vk.alloc = *pAllocator;
-   else
-      device->vk.alloc = pdevice->vk.instance->alloc;
 
    device->ws = pvr_winsys_create(device->master_fd,
                                   device->render_fd,

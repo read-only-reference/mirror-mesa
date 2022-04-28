@@ -31,6 +31,7 @@
 #include "zink_context.h"
 #include "zink_descriptors.h"
 #include "zink_program.h"
+#include "zink_render_pass.h"
 #include "zink_resource.h"
 #include "zink_screen.h"
 
@@ -559,7 +560,7 @@ zink_descriptor_util_push_layouts_get(struct zink_context *ctx, struct zink_desc
 }
 
 VkImageLayout
-zink_descriptor_util_image_layout_eval(const struct zink_resource *res, bool is_compute)
+zink_descriptor_util_image_layout_eval(const struct zink_context *ctx, const struct zink_resource *res, bool is_compute)
 {
    if (res->bindless[0] || res->bindless[1]) {
       /* bindless needs most permissive layout */
@@ -567,15 +568,16 @@ zink_descriptor_util_image_layout_eval(const struct zink_resource *res, bool is_
          return VK_IMAGE_LAYOUT_GENERAL;
       return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
    }
-   return res->image_bind_count[is_compute] ? VK_IMAGE_LAYOUT_GENERAL :
-                          res->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) ?
-                             //Vulkan-Docs#1490
-                             //(res->aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL :
-                              //res->aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL :
-                             (res->aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
-                              res->aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
-                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL) :
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+   if (res->image_bind_count[is_compute])
+      return VK_IMAGE_LAYOUT_GENERAL;
+   if (res->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+      if (!is_compute && res->fb_binds &&
+          ctx->gfx_pipeline_state.render_pass && ctx->gfx_pipeline_state.render_pass->state.rts[ctx->fb_state.nr_cbufs].mixed_zs)
+         return VK_IMAGE_LAYOUT_GENERAL;
+      if (res->obj->vkusage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+         return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+   }
+   return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 static struct zink_descriptor_pool *

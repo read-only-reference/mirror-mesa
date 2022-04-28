@@ -748,10 +748,12 @@ radv_physical_device_get_format_properties(struct radv_physical_device *physical
    if (radv_is_buffer_format_supported(format, &scaled)) {
       if (format != VK_FORMAT_R64_UINT && format != VK_FORMAT_R64_SINT) {
          buffer |= VK_FORMAT_FEATURE_2_VERTEX_BUFFER_BIT;
-         if (!scaled)
+         if (!scaled && !vk_format_is_srgb(format))
             buffer |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT;
       }
-      buffer |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
+      buffer |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT |
+                VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
    }
 
    if (vk_format_is_depth_or_stencil(format)) {
@@ -847,8 +849,14 @@ radv_physical_device_get_format_properties(struct radv_physical_device *physical
    case VK_FORMAT_R16G16B16_SFLOAT:
    case VK_FORMAT_R16G16B16A16_SFLOAT:
    case VK_FORMAT_R16G16_SNORM:
+   case VK_FORMAT_R16G16_UNORM:
    case VK_FORMAT_R16G16B16A16_SNORM:
    case VK_FORMAT_R16G16B16A16_UNORM:
+   case VK_FORMAT_R8G8_SNORM:
+   case VK_FORMAT_R8G8_UNORM:
+   case VK_FORMAT_R8G8B8A8_SNORM:
+   case VK_FORMAT_R8G8B8A8_UNORM:
+   case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
       buffer |= VK_FORMAT_FEATURE_2_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR;
       break;
    default:

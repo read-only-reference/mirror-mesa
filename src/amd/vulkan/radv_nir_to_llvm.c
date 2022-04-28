@@ -280,7 +280,7 @@ visit_emit_vertex_with_counter(struct ac_shader_abi *abi, unsigned stream, LLVMV
          out_val = LLVMBuildZExtOrBitCast(ctx->ac.builder, out_val, ctx->ac.i32, "");
 
          ac_build_buffer_store_dword(&ctx->ac, ctx->gsvs_ring[stream], out_val, NULL, voffset,
-                                     ac_get_arg(&ctx->ac, ctx->args->ac.gs2vs_offset), 0,
+                                     ac_get_arg(&ctx->ac, ctx->args->ac.gs2vs_offset),
                                      ac_glc | ac_slc | ac_swizzled);
       }
    }
@@ -515,7 +515,7 @@ load_vs_input(struct radv_shader_context *ctx, unsigned driver_location, LLVMTyp
 
          values[chan] = ac_build_struct_tbuffer_load(
             &ctx->ac, t_list, chan_index, LLVMConstInt(ctx->ac.i32, chan_offset, false),
-            ctx->ac.i32_0, ctx->ac.i32_0, 1, chan_format, num_format, 0, true);
+            ctx->ac.i32_0, 1, chan_format, num_format, 0, true);
       }
 
       input = ac_build_gather_values(&ctx->ac, values, num_channels);
@@ -531,7 +531,7 @@ load_vs_input(struct radv_shader_context *ctx, unsigned driver_location, LLVMTyp
 
       input = ac_build_struct_tbuffer_load(
          &ctx->ac, t_list, buffer_index, LLVMConstInt(ctx->ac.i32, attrib_offset, false),
-         ctx->ac.i32_0, ctx->ac.i32_0, num_channels, data_format, num_format, 0, true);
+         ctx->ac.i32_0, num_channels, data_format, num_format, 0, true);
    }
 
    input = radv_fixup_vertex_input_fetches(ctx, input, num_channels, is_float);
@@ -649,6 +649,7 @@ si_llvm_init_export_args(struct radv_shader_context *ctx, LLVMValueRef *values,
       unsigned col_format = (ctx->options->key.ps.col_format >> (4 * index)) & 0xf;
       bool is_int8 = (ctx->options->key.ps.is_int8 >> index) & 1;
       bool is_int10 = (ctx->options->key.ps.is_int10 >> index) & 1;
+      bool enable_mrt_output_nan_fixup = (ctx->options->key.ps.enable_mrt_output_nan_fixup >> index) & 1;
 
       LLVMValueRef (*packf)(struct ac_llvm_context * ctx, LLVMValueRef args[2]) = NULL;
       LLVMValueRef (*packi)(struct ac_llvm_context * ctx, LLVMValueRef args[2], unsigned bits,
@@ -728,13 +729,8 @@ si_llvm_init_export_args(struct radv_shader_context *ctx, LLVMValueRef *values,
          break;
       }
 
-      /* Replace NaN by zero (only 32-bit) to fix game bugs if
-       * requested.
-       */
-      if (ctx->options->enable_mrt_output_nan_fixup && !is_16bit &&
-          (col_format == V_028714_SPI_SHADER_32_R || col_format == V_028714_SPI_SHADER_32_GR ||
-           col_format == V_028714_SPI_SHADER_32_AR || col_format == V_028714_SPI_SHADER_32_ABGR ||
-           col_format == V_028714_SPI_SHADER_FP16_ABGR)) {
+      /* Replace NaN by zero (for 32-bit float formats) to fix game bugs if requested. */
+      if (enable_mrt_output_nan_fixup && !is_16bit) {
          for (unsigned i = 0; i < 4; i++) {
             LLVMValueRef class_args[2] = {values[i],
                                           LLVMConstInt(ctx->ac.i32, S_NAN | Q_NAN, false)};
@@ -838,8 +834,10 @@ radv_emit_stream_output(struct radv_shader_context *ctx, LLVMValueRef const *so_
       break;
    }
 
-   ac_build_buffer_store_dword(&ctx->ac, so_buffers[buf], vdata, NULL,
-                               so_write_offsets[buf], ctx->ac.i32_0, offset, ac_glc | ac_slc);
+   LLVMValueRef voffset = LLVMBuildAdd(ctx->ac.builder, so_write_offsets[buf],
+                                       LLVMConstInt(ctx->ac.i32, offset, 0), "");
+   ac_build_buffer_store_dword(&ctx->ac, so_buffers[buf], vdata, NULL, voffset, ctx->ac.i32_0,
+                               ac_glc | ac_slc);
 }
 
 static void
@@ -2398,7 +2396,7 @@ ac_gs_copy_shader_emit(struct radv_shader_context *ctx)
             offset++;
 
             value = ac_build_buffer_load(&ctx->ac, ctx->gsvs_ring[0], 1, ctx->ac.i32_0, vtx_offset,
-                                         soffset, 0, ctx->ac.f32, ac_glc | ac_slc, true, false);
+                                         soffset, ctx->ac.f32, ac_glc | ac_slc, true, false);
 
             LLVMTypeRef type = LLVMGetAllocatedType(ctx->abi.outputs[ac_llvm_reg_index_soa(i, j)]);
             if (ac_get_type_size(type) == 2) {

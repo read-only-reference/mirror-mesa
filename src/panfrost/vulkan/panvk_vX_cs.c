@@ -408,10 +408,9 @@ panvk_per_arch(emit_ubos)(const struct panvk_pipeline *pipeline,
    unsigned offset = pipeline->layout->num_ubos;
    for (unsigned i = 0; i < pipeline->layout->num_dyn_ubos; i++) {
       const struct panvk_buffer_desc *bdesc = &state->dyn.ubos[i];
-      size_t size = (bdesc->size == VK_WHOLE_SIZE && bdesc->buffer) ?
-                    (bdesc->buffer->bo->size - bdesc->offset) :
-                    bdesc->size;
-      mali_ptr address = bdesc->buffer ? bdesc->buffer->bo->ptr.gpu + bdesc->offset : 0;
+      mali_ptr address = panvk_buffer_gpu_ptr(bdesc->buffer, bdesc->offset);
+      size_t size = panvk_buffer_range(bdesc->buffer,
+                                       bdesc->offset, bdesc->size);
 
       if (size)
          panvk_per_arch(emit_ubo)(address, size, &ubos[offset + i]);
@@ -845,13 +844,13 @@ panvk_per_arch(emit_base_fs_rsd)(const struct panvk_device *dev,
                  !pipeline->blend.reads_dest;
 #endif
       } else {
+         cfg.properties.depth_source = MALI_DEPTH_SOURCE_FIXED_FUNCTION;
+
 #if PAN_ARCH == 5
          cfg.shader.shader = 0x1;
          cfg.properties.work_register_count = 1;
-         cfg.properties.depth_source = MALI_DEPTH_SOURCE_FIXED_FUNCTION;
          cfg.properties.force_early_z = true;
 #else
-         cfg.properties.shader_modifies_coverage = true;
          cfg.properties.allow_forward_pixel_to_kill = true;
          cfg.properties.allow_forward_pixel_to_be_killed = true;
          cfg.properties.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;

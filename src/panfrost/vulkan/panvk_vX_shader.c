@@ -4,6 +4,9 @@
  * Derived from tu_shader.c which is:
  * Copyright © 2019 Google LLC
  *
+ * Also derived from anv_pipeline.c which is
+ * Copyright © 2015 Intel Corporation
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
@@ -218,7 +221,20 @@ lower_intrinsic(nir_builder *b, nir_intrinsic_instr *intr,
       lower_load_vulkan_descriptor(b, intr);
       return true;
    case nir_intrinsic_image_deref_store:
-   case nir_intrinsic_image_deref_load: {
+   case nir_intrinsic_image_deref_load:
+   case nir_intrinsic_image_deref_atomic_add:
+   case nir_intrinsic_image_deref_atomic_imin:
+   case nir_intrinsic_image_deref_atomic_umin:
+   case nir_intrinsic_image_deref_atomic_imax:
+   case nir_intrinsic_image_deref_atomic_umax:
+   case nir_intrinsic_image_deref_atomic_and:
+   case nir_intrinsic_image_deref_atomic_or:
+   case nir_intrinsic_image_deref_atomic_xor:
+   case nir_intrinsic_image_deref_atomic_exchange:
+   case nir_intrinsic_image_deref_atomic_comp_swap:
+   case nir_intrinsic_image_deref_atomic_fadd:
+   case nir_intrinsic_image_deref_size:
+   case nir_intrinsic_image_deref_samples: {
       nir_deref_instr *deref = nir_src_as_deref(intr->src[0]);
 
       b->cursor = nir_before_instr(&intr->instr);
@@ -493,6 +509,18 @@ panvk_lower_load_push_constant(nir_builder *b, nir_instr *instr, void *data)
    return true;
 }
 
+static void
+shared_type_info(const struct glsl_type *type, unsigned *size, unsigned *align)
+{
+   assert(glsl_type_is_vector_or_scalar(type));
+
+   uint32_t comp_size = glsl_type_is_boolean(type)
+      ? 4 : glsl_get_bit_size(type) / 8;
+   unsigned length = glsl_get_vector_elements(type);
+   *size = comp_size * length,
+   *align = comp_size * (length == 3 ? 4 : length);
+}
+
 struct panvk_shader *
 panvk_per_arch(shader_create)(struct panvk_device *dev,
                               gl_shader_stage stage,
@@ -567,6 +595,19 @@ panvk_per_arch(shader_create)(struct panvk_device *dev,
    NIR_PASS_V(nir, nir_lower_explicit_io,
               nir_var_mem_push_const,
               nir_address_format_32bit_offset);
+
+   if (gl_shader_stage_uses_workgroup(stage)) {
+      if (!nir->info.shared_memory_explicit_layout) {
+         NIR_PASS_V(nir, nir_lower_vars_to_explicit_types,
+                    nir_var_mem_shared,
+                    shared_type_info);
+      }
+
+      NIR_PASS_V(nir, nir_lower_explicit_io,
+                 nir_var_mem_shared,
+                 nir_address_format_32bit_offset);
+   }
+
    NIR_PASS_V(nir, nir_shader_instructions_pass,
               panvk_lower_load_push_constant,
               nir_metadata_block_index |
@@ -581,6 +622,11 @@ panvk_per_arch(shader_create)(struct panvk_device *dev,
 
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
+
+   /* Needed to turn shader_temp into function_temp since the backend only
+    * handles the latter for now.
+    */
+   NIR_PASS_V(nir, nir_lower_global_vars_to_local);
 
    struct panvk_lower_misc_ctx ctx = {
       .shader = shader,

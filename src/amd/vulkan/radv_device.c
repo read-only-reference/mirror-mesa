@@ -400,7 +400,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
    *ext = (struct vk_device_extension_table){
       .KHR_8bit_storage = true,
       .KHR_16bit_storage = true,
-      .KHR_acceleration_structure = !!(device->instance->perftest_flags & RADV_PERFTEST_RT),
+      .KHR_acceleration_structure = radv_enable_rt(device),
       .KHR_bind_memory2 = true,
       .KHR_buffer_device_address = true,
       .KHR_copy_commands2 = true,
@@ -433,13 +433,10 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_maintenance4 = true,
       .KHR_multiview = true,
       .KHR_pipeline_executable_properties = true,
-      .KHR_pipeline_library =
-         (device->instance->perftest_flags & RADV_PERFTEST_RT) && !device->use_llvm,
+      .KHR_pipeline_library = !device->use_llvm,
       .KHR_push_descriptor = true,
-      .KHR_ray_query =
-         (device->instance->perftest_flags & RADV_PERFTEST_RT) && !device->use_llvm,
-      .KHR_ray_tracing_pipeline =
-         (device->instance->perftest_flags & RADV_PERFTEST_RT) && !device->use_llvm,
+      .KHR_ray_query = radv_enable_rt(device),
+      .KHR_ray_tracing_pipeline = radv_enable_rt(device),
       .KHR_relaxed_block_layout = true,
       .KHR_sampler_mirror_clamp_to_edge = true,
       .KHR_sampler_ycbcr_conversion = true,
@@ -514,6 +511,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_sample_locations = device->rad_info.chip_class < GFX10,
       .EXT_sampler_filter_minmax = true,
       .EXT_scalar_block_layout = device->rad_info.chip_class >= GFX7,
+      .EXT_separate_stencil_usage = true,
       .EXT_shader_atomic_float = true,
 #ifdef LLVM_AVAILABLE
       .EXT_shader_atomic_float2 = !device->use_llvm || LLVM_VERSION_MAJOR >= 14,
@@ -632,7 +630,7 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
       drmFreeVersion(version);
 
       if (instance->debug_flags & RADV_DEBUG_STARTUP)
-         radv_logi("Found compatible device '%s'.", path);
+         fprintf(stderr, "radv: info: Found compatible device '%s'.\n", path);
    }
 #endif
 
@@ -961,6 +959,7 @@ static const driOptionDescription radv_dri_options[] = {
       DRI_CONF_RADV_REQUIRE_ETC2(false)
       DRI_CONF_RADV_DISABLE_HTILE_LAYERS(false)
       DRI_CONF_RADV_DISABLE_ANISO_SINGLE_LEVEL(false)
+      DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(false)
    DRI_CONF_SECTION_END
 };
 // clang-format on
@@ -1012,6 +1011,9 @@ radv_init_dri_options(struct radv_instance *instance)
 
    instance->disable_aniso_single_level =
       driQueryOptionb(&instance->dri_options, "radv_disable_aniso_single_level");
+
+   instance->disable_sinking_load_input_fs =
+      driQueryOptionb(&instance->dri_options, "radv_disable_sinking_load_input_fs");
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -1045,7 +1047,7 @@ radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->perftest_flags = parse_debug_string(getenv("RADV_PERFTEST"), radv_perftest_options);
 
    if (instance->debug_flags & RADV_DEBUG_STARTUP)
-      radv_logi("Created an instance");
+      fprintf(stderr, "radv: info: Created an instance.\n");
 
    instance->physical_devices_enumerated = false;
    list_inithead(&instance->physical_devices);
@@ -1112,7 +1114,7 @@ radv_enumerate_physical_devices(struct radv_instance *instance)
    int max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
 
    if (instance->debug_flags & RADV_DEBUG_STARTUP)
-      radv_logi("Found %d drm nodes", max_devices);
+      fprintf(stderr, "radv: info: Found %d drm nodes.\n", max_devices);
 
    if (max_devices < 1)
       return vk_error(instance, VK_SUCCESS);
@@ -1622,10 +1624,7 @@ radv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_2_FEATURES_EXT: {
          VkPhysicalDeviceShaderAtomicFloat2FeaturesEXT *features =
             (VkPhysicalDeviceShaderAtomicFloat2FeaturesEXT *)ext;
-         bool has_shader_buffer_float_minmax = ((pdevice->rad_info.chip_class == GFX6 ||
-                                                 pdevice->rad_info.chip_class == GFX7) &&
-                                                !pdevice->use_llvm) ||
-                                               pdevice->rad_info.chip_class >= GFX10;
+         bool has_shader_buffer_float_minmax = radv_has_shader_buffer_float_minmax(pdevice);
          bool has_shader_image_float_minmax = pdevice->rad_info.chip_class != GFX8 &&
                                               pdevice->rad_info.chip_class != GFX9;
          features->shaderBufferFloat16Atomics = false;
@@ -1662,7 +1661,7 @@ radv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->rayTracingPipelineShaderGroupHandleCaptureReplay = false;
          features->rayTracingPipelineShaderGroupHandleCaptureReplayMixed = false;
          features->rayTracingPipelineTraceRaysIndirect = false;
-         features->rayTraversalPrimitiveCulling = false;
+         features->rayTraversalPrimitiveCulling = true;
          break;
       }
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES: {
@@ -3420,12 +3419,6 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
          device->force_vrs_enabled = device->force_vrs != RADV_FORCE_VRS_1x1;
       }
    }
-
-   device->adjust_frag_coord_z =
-      (device->vk.enabled_extensions.KHR_fragment_shading_rate || device->force_vrs_enabled) &&
-      (device->physical_device->rad_info.family == CHIP_SIENNA_CICHLID ||
-       device->physical_device->rad_info.family == CHIP_NAVY_FLOUNDER ||
-       device->physical_device->rad_info.family == CHIP_VANGOGH);
 
    /* PKT3_LOAD_SH_REG_INDEX is supported on GFX8+, but it hangs with compute queues until GFX10.3. */
    device->load_grid_size_from_user_sgpr = device->physical_device->rad_info.chip_class >= GFX10_3;
@@ -5716,7 +5709,7 @@ radv_initialise_color_surface(struct radv_device *device, struct radv_color_buff
        !(device->instance->debug_flags & RADV_DEBUG_NO_FAST_CLEARS))
       cb->cb_color_info |= S_028C70_FAST_CLEAR(1);
 
-   if (radv_dcc_enabled(iview->image, iview->base_mip))
+   if (radv_dcc_enabled(iview->image, iview->base_mip) && !iview->disable_dcc_mrt)
       cb->cb_color_info |= S_028C70_DCC_ENABLE(1);
 
    cb->cb_dcc_control = radv_init_dcc_control_reg(device, iview);
@@ -6005,57 +5998,6 @@ radv_initialise_ds_surface(struct radv_device *device, struct radv_ds_buffer_inf
    ds->db_stencil_read_base = ds->db_stencil_write_base = s_offs >> 8;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-radv_CreateFramebuffer(VkDevice _device, const VkFramebufferCreateInfo *pCreateInfo,
-                       const VkAllocationCallbacks *pAllocator, VkFramebuffer *pFramebuffer)
-{
-   RADV_FROM_HANDLE(radv_device, device, _device);
-   struct radv_framebuffer *framebuffer;
-   const VkFramebufferAttachmentsCreateInfo *imageless_create_info =
-      vk_find_struct_const(pCreateInfo->pNext, FRAMEBUFFER_ATTACHMENTS_CREATE_INFO);
-
-   assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
-
-   size_t size = sizeof(*framebuffer);
-   if (!imageless_create_info)
-      size += sizeof(struct radv_image_view *) * pCreateInfo->attachmentCount;
-   framebuffer =
-      vk_alloc2(&device->vk.alloc, pAllocator, size, 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
-   if (framebuffer == NULL)
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   vk_object_base_init(&device->vk, &framebuffer->base, VK_OBJECT_TYPE_FRAMEBUFFER);
-
-   framebuffer->attachment_count = pCreateInfo->attachmentCount;
-   framebuffer->width = pCreateInfo->width;
-   framebuffer->height = pCreateInfo->height;
-   framebuffer->layers = pCreateInfo->layers;
-
-   if (!imageless_create_info) {
-      for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
-         VkImageView _iview = pCreateInfo->pAttachments[i];
-         struct radv_image_view *iview = radv_image_view_from_handle(_iview);
-         framebuffer->attachments[i] = iview;
-      }
-   }
-
-   *pFramebuffer = radv_framebuffer_to_handle(framebuffer);
-   return VK_SUCCESS;
-}
-
-VKAPI_ATTR void VKAPI_CALL
-radv_DestroyFramebuffer(VkDevice _device, VkFramebuffer _fb,
-                        const VkAllocationCallbacks *pAllocator)
-{
-   RADV_FROM_HANDLE(radv_device, device, _device);
-   RADV_FROM_HANDLE(radv_framebuffer, fb, _fb);
-
-   if (!fb)
-      return;
-   vk_object_base_finish(&fb->base);
-   vk_free2(&device->vk.alloc, pAllocator, fb);
-}
-
 static unsigned
 radv_tex_wrap(VkSamplerAddressMode address_mode)
 {
@@ -6157,15 +6099,7 @@ radv_tex_bordercolor(VkBorderColor bcolor)
 static unsigned
 radv_tex_aniso_filter(unsigned filter)
 {
-   if (filter < 2)
-      return 0;
-   if (filter < 4)
-      return 1;
-   if (filter < 8)
-      return 2;
-   if (filter < 16)
-      return 3;
-   return 4;
+   return MIN2(util_logbase2(filter), 4);
 }
 
 static unsigned

@@ -63,15 +63,16 @@ emit_load_state(struct tu_cs *cs, unsigned opcode, enum a6xx_state_type st,
 }
 
 static unsigned
-tu6_load_state_size(struct tu_pipeline *pipeline, bool compute)
+tu6_load_state_size(struct tu_pipeline *pipeline,
+                    struct tu_pipeline_layout *layout, bool compute)
 {
    const unsigned load_state_size = 4;
    unsigned size = 0;
-   for (unsigned i = 0; i < pipeline->layout->num_sets; i++) {
+   for (unsigned i = 0; i < layout->num_sets; i++) {
       if (!(pipeline->active_desc_sets & (1u << i)))
          continue;
 
-      struct tu_descriptor_set_layout *set_layout = pipeline->layout->set[i].layout;
+      struct tu_descriptor_set_layout *set_layout = layout->set[i].layout;
       for (unsigned j = 0; j < set_layout->binding_count; j++) {
          struct tu_descriptor_set_binding_layout *binding = &set_layout->binding[j];
          unsigned count = 0;
@@ -125,16 +126,16 @@ tu6_load_state_size(struct tu_pipeline *pipeline, bool compute)
 }
 
 static void
-tu6_emit_load_state(struct tu_pipeline *pipeline, bool compute)
+tu6_emit_load_state(struct tu_pipeline *pipeline,
+                    struct tu_pipeline_layout *layout, bool compute)
 {
-   unsigned size = tu6_load_state_size(pipeline, compute);
+   unsigned size = tu6_load_state_size(pipeline, layout, compute);
    if (size == 0)
       return;
 
    struct tu_cs cs;
    tu_cs_begin_sub_stream(&pipeline->cs, size, &cs);
 
-   struct tu_pipeline_layout *layout = pipeline->layout;
    for (unsigned i = 0; i < layout->num_sets; i++) {
       /* From 13.2.7. Descriptor Set Binding:
        *
@@ -421,7 +422,16 @@ tu_xs_get_immediates_packet_size_dwords(const struct ir3_shader_variant *xs)
 static uint32_t
 tu_xs_get_additional_cs_size_dwords(const struct ir3_shader_variant *xs)
 {
+   const struct ir3_const_state *const_state = ir3_const_state(xs);
+
    uint32_t size = tu_xs_get_immediates_packet_size_dwords(xs);
+
+   /* Variable number of UBO upload ranges. */
+   size += 4 * const_state->ubo_state.num_enabled;
+
+   /* Variable number of dwords for the primitive map */
+   size += DIV_ROUND_UP(xs->input_size, 4);
+
    return size;
 }
 
@@ -493,7 +503,6 @@ tu6_emit_xs(struct tu_cs *cs,
                .fullregfootprint = xs->info.max_reg + 1,
                .halfregfootprint = xs->info.max_half_reg + 1,
                .branchstack = ir3_shader_branchstack_hw(xs),
-               .mergedregs = xs->mergedregs,
       ));
       break;
    case MESA_SHADER_GEOMETRY:
@@ -2255,25 +2264,22 @@ tu_setup_pvtmem(struct tu_device *dev,
 static VkResult
 tu_pipeline_allocate_cs(struct tu_device *dev,
                         struct tu_pipeline *pipeline,
+                        struct tu_pipeline_layout *layout,
                         struct tu_pipeline_builder *builder,
+                        struct tu_pipeline_cache *cache,
                         struct ir3_shader_variant *compute)
 {
-   uint32_t size = 2048 + tu6_load_state_size(pipeline, compute);
+   uint32_t size = 1024 + tu6_load_state_size(pipeline, layout, compute);
 
    /* graphics case: */
    if (builder) {
-      uint32_t pvtmem_bytes = 0;
       for (uint32_t i = 0; i < ARRAY_SIZE(builder->variants); i++) {
          if (builder->variants[i]) {
             size += builder->variants[i]->info.size / 4;
-            pvtmem_bytes = MAX2(pvtmem_bytes, builder->variants[i]->pvtmem_size);
          }
       }
 
       size += builder->binning_variant->info.size / 4;
-      pvtmem_bytes = MAX2(pvtmem_bytes, builder->binning_variant->pvtmem_size);
-
-      size += calc_pvtmem_size(dev, NULL, pvtmem_bytes) / 4;
 
       builder->additional_cs_reserve_size = 0;
       for (unsigned i = 0; i < ARRAY_SIZE(builder->variants); i++) {
@@ -2292,18 +2298,31 @@ tu_pipeline_allocate_cs(struct tu_device *dev,
       size += builder->additional_cs_reserve_size;
    } else {
       size += compute->info.size / 4;
-      size += calc_pvtmem_size(dev, NULL, compute->pvtmem_size) / 4;
 
       size += tu_xs_get_additional_cs_size_dwords(compute);
    }
 
-   tu_cs_init(&pipeline->cs, dev, TU_CS_MODE_SUB_STREAM, size);
+   /* Allocate the space for the pipeline out of the device's RO suballocator.
+    *
+    * Sub-allocating BOs saves memory and also kernel overhead in refcounting of
+    * BOs at exec time.
+    *
+    * The pipeline cache would seem like a natural place to stick the
+    * suballocator, except that it is not guaranteed to outlive the pipelines
+    * created from it, so you can't store any long-lived state there, and you
+    * can't use its EXTERNALLY_SYNCHRONIZED flag to avoid atomics because
+    * pipeline destroy isn't synchronized by the cache.
+    */
+   pthread_mutex_lock(&dev->pipeline_mutex);
+   VkResult result = tu_suballoc_bo_alloc(&pipeline->bo, &dev->pipeline_suballoc,
+                                          size * 4, 128);
+   pthread_mutex_unlock(&dev->pipeline_mutex);
+   if (result != VK_SUCCESS)
+      return result;
 
-   /* Reserve the space now such that tu_cs_begin_sub_stream never fails. Note
-    * that LOAD_STATE can potentially take up a large amount of space so we
-    * calculate its size explicitly.
-   */
-   return tu_cs_reserve_space(&pipeline->cs, size);
+   tu_cs_init_suballoc(&pipeline->cs, dev, &pipeline->bo);
+
+   return VK_SUCCESS;
 }
 
 static void
@@ -3264,6 +3283,9 @@ tu_pipeline_finish(struct tu_pipeline *pipeline,
                    const VkAllocationCallbacks *alloc)
 {
    tu_cs_finish(&pipeline->cs);
+   pthread_mutex_lock(&dev->pipeline_mutex);
+   tu_suballoc_bo_free(&dev->pipeline_suballoc, &pipeline->bo);
+   pthread_mutex_unlock(&dev->pipeline_mutex);
 
    if (pipeline->pvtmem_bo)
       tu_bo_finish(dev, pipeline->pvtmem_bo);
@@ -3282,7 +3304,6 @@ tu_pipeline_builder_build(struct tu_pipeline_builder *builder,
    if (!*pipeline)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   (*pipeline)->layout = builder->layout;
    (*pipeline)->executables_mem_ctx = ralloc_context(NULL);
    util_dynarray_init(&(*pipeline)->executables, (*pipeline)->executables_mem_ctx);
 
@@ -3293,7 +3314,8 @@ tu_pipeline_builder_build(struct tu_pipeline_builder *builder,
       return result;
    }
 
-   result = tu_pipeline_allocate_cs(builder->device, *pipeline, builder, NULL);
+   result = tu_pipeline_allocate_cs(builder->device, *pipeline,
+                                    builder->layout, builder, builder->cache, NULL);
    if (result != VK_SUCCESS) {
       vk_object_free(&builder->device->vk, builder->alloc, *pipeline);
       return result;
@@ -3343,12 +3365,7 @@ tu_pipeline_builder_build(struct tu_pipeline_builder *builder,
    tu_pipeline_builder_parse_depth_stencil(builder, *pipeline);
    tu_pipeline_builder_parse_multisample_and_color_blend(builder, *pipeline);
    tu_pipeline_builder_parse_rasterization_order(builder, *pipeline);
-   tu6_emit_load_state(*pipeline, false);
-
-   /* we should have reserved enough space upfront such that the CS never
-    * grows
-    */
-   assert((*pipeline)->cs.bo_count == 1);
+   tu6_emit_load_state(*pipeline, builder->layout, false);
 
    return VK_SUCCESS;
 }
@@ -3497,12 +3514,13 @@ tu_CreateGraphicsPipelines(VkDevice device,
 
 static VkResult
 tu_compute_pipeline_create(VkDevice device,
-                           VkPipelineCache _cache,
+                           VkPipelineCache pipelineCache,
                            const VkComputePipelineCreateInfo *pCreateInfo,
                            const VkAllocationCallbacks *pAllocator,
                            VkPipeline *pPipeline)
 {
    TU_FROM_HANDLE(tu_device, dev, device);
+   TU_FROM_HANDLE(tu_pipeline_cache, cache, pipelineCache);
    TU_FROM_HANDLE(tu_pipeline_layout, layout, pCreateInfo->layout);
    const VkPipelineShaderStageCreateInfo *stage_info = &pCreateInfo->stage;
    VkResult result;
@@ -3515,8 +3533,6 @@ tu_compute_pipeline_create(VkDevice device,
                                VK_OBJECT_TYPE_PIPELINE);
    if (!pipeline)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
-
-   pipeline->layout = layout;
 
    pipeline->executables_mem_ctx = ralloc_context(NULL);
    util_dynarray_init(&pipeline->executables, pipeline->executables_mem_ctx);
@@ -3552,7 +3568,7 @@ tu_compute_pipeline_create(VkDevice device,
    tu_pipeline_set_linkage(&pipeline->program.link[MESA_SHADER_COMPUTE],
                            shader, v);
 
-   result = tu_pipeline_allocate_cs(dev, pipeline, NULL, v);
+   result = tu_pipeline_allocate_cs(dev, pipeline, layout, NULL, cache, v);
    if (result != VK_SUCCESS)
       goto fail;
 
@@ -3572,7 +3588,7 @@ tu_compute_pipeline_create(VkDevice device,
    tu6_emit_cs_config(&prog_cs, shader, v, &pvtmem, shader_iova);
    pipeline->program.state = tu_cs_end_draw_state(&pipeline->cs, &prog_cs);
 
-   tu6_emit_load_state(pipeline, true);
+   tu6_emit_load_state(pipeline, layout, true);
 
    tu_append_executable(pipeline, v, nir_initial_disasm);
 

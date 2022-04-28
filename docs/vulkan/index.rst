@@ -9,4 +9,6 @@ hardware-agnostic bits in common code.
 .. toctree::
    :maxdepth: 2
 
+   base-objs
+   dispatch
    renderpass

@@ -91,6 +91,7 @@ struct lp_build_nir_context
    void (*load_global)(struct lp_build_nir_context *bld_base,
                        unsigned nc, unsigned bit_size,
                        unsigned offset_bit_size,
+                       bool offset_is_global,
                        LLVMValueRef offset, LLVMValueRef result[NIR_MAX_VEC_COMPONENTS]);
 
    void (*store_global)(struct lp_build_nir_context *bld_base,
@@ -110,6 +111,7 @@ struct lp_build_nir_context
    /* for SSBO and shared memory */
    void (*load_mem)(struct lp_build_nir_context *bld_base,
                     unsigned nc, unsigned bit_size,
+                    bool index_and_offset_are_uniform,
                     LLVMValueRef index, LLVMValueRef offset, LLVMValueRef result[NIR_MAX_VEC_COMPONENTS]);
    void (*store_mem)(struct lp_build_nir_context *bld_base,
                      unsigned writemask, unsigned nc, unsigned bit_size,
@@ -207,6 +209,13 @@ struct lp_build_nir_context
    void (*elect)(struct lp_build_nir_context *bld_base, LLVMValueRef dst[4]);
    void (*reduce)(struct lp_build_nir_context *bld_base, LLVMValueRef src, nir_intrinsic_instr *instr, LLVMValueRef dst[4]);
    void (*ballot)(struct lp_build_nir_context *bld_base, LLVMValueRef src, nir_intrinsic_instr *instr, LLVMValueRef dst[4]);
+#if LLVM_VERSION_MAJOR >= 10
+   void (*shuffle)(struct lp_build_nir_context *bld_base,
+                   LLVMValueRef src,
+                   LLVMValueRef index,
+                   nir_intrinsic_instr *instr,
+                   LLVMValueRef dst[4]);
+#endif
    void (*read_invocation)(struct lp_build_nir_context *bld_base,
                            LLVMValueRef src, unsigned bit_size, LLVMValueRef invoc,
                            LLVMValueRef dst[4]);

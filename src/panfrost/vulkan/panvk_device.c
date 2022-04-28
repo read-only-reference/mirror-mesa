@@ -137,6 +137,9 @@ panvk_EnumerateInstanceVersion(uint32_t *pApiVersion)
 
 static const struct vk_instance_extension_table panvk_instance_extensions = {
    .KHR_get_physical_device_properties2 = true,
+   .EXT_debug_report = true,
+   .EXT_debug_utils = true,
+
 #ifdef PANVK_USE_WSI_PLATFORM
    .KHR_surface = true,
 #endif
@@ -339,8 +342,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
       goto fail_close_device;
    }
 
-   fprintf(stderr, "WARNING: panvk is not a conformant vulkan implementation, "
-                   "testing use only.\n");
+   vk_warn_non_conformant_implementation("panvk");
 
    panvk_get_driver_uuid(&device->device_uuid);
    panvk_get_device_uuid(&device->device_uuid);
@@ -752,9 +754,9 @@ panvk_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       .maxCullDistances = 8,
       .maxCombinedClipAndCullDistances = 8,
       .discreteQueuePriorities = 1,
-      .pointSizeRange = { 0.125, 255.875 },
+      .pointSizeRange = { 0.125, 4095.9375 },
       .lineWidthRange = { 0.0, 7.9921875 },
-      .pointSizeGranularity = (1.0 / 8.0),
+      .pointSizeGranularity = (1.0 / 16.0),
       .lineWidthGranularity = (1.0 / 128.0),
       .strictLines = false, /* FINISHME */
       .standardSampleLocations = true,

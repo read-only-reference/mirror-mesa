@@ -470,7 +470,7 @@ static void si_set_sampler_view_desc(struct si_context *sctx, struct si_sampler_
    bool is_separate_stencil = tex->db_compatible && sview->is_stencil_sampler;
 
    memcpy(desc, sview->state, 8 * 4);
-   si_set_mutable_tex_desc_fields(sctx->screen, tex, sview->base_level_info, sview->base_level,
+   si_set_mutable_tex_desc_fields(sctx->screen, tex, sview->base_level_info, 0,
                                   sview->base.u.tex.first_level, sview->block_width,
                                   is_separate_stencil, 0, desc);
 
@@ -763,7 +763,6 @@ static void si_set_shader_image_desc(struct si_context *ctx, const struct pipe_i
       static const unsigned char swizzle[4] = {0, 1, 2, 3};
       struct si_texture *tex = (struct si_texture *)res;
       unsigned level = view->u.tex.level;
-      unsigned width, height, depth, hw_level;
       bool uses_dcc = vi_dcc_enabled(tex, level);
       unsigned access = view->access;
 
@@ -785,25 +784,36 @@ static void si_set_shader_image_desc(struct si_context *ctx, const struct pipe_i
             si_decompress_dcc(ctx, tex);
       }
 
-      if (ctx->chip_class >= GFX9) {
-         /* Always set the base address. The swizzle modes don't
-          * allow setting mipmap level offsets as the base.
-          */
-         width = res->b.b.width0;
-         height = res->b.b.height0;
-         depth = res->b.b.depth0;
-         hw_level = level;
-      } else {
+      unsigned width = res->b.b.width0;
+      unsigned height = res->b.b.height0;
+      unsigned depth = res->b.b.depth0;
+      unsigned hw_level = level;
+
+      if (ctx->chip_class <= GFX8) {
          /* Always force the base level to the selected level.
           *
           * This is required for 3D textures, where otherwise
           * selecting a single slice for non-layered bindings
           * fails. It doesn't hurt the other targets.
           */
-         width = u_minify(res->b.b.width0, level);
-         height = u_minify(res->b.b.height0, level);
-         depth = u_minify(res->b.b.depth0, level);
+         width = u_minify(width, level);
+         height = u_minify(height, level);
+         depth = u_minify(depth, level);
          hw_level = 0;
+      }
+
+      if (access & SI_IMAGE_ACCESS_BLOCK_FORMAT_AS_UINT) {
+         if (ctx->chip_class >= GFX9) {
+            /* Since the aligned width and height are derived from the width and height
+             * by the hw, set them directly as the width and height, so that UINT formats
+             * get exactly the same layout as BCn formats.
+             */
+            width = tex->surface.u.gfx9.base_mip_width;
+            height = tex->surface.u.gfx9.base_mip_height;
+         } else {
+            width = util_format_get_nblocksx(tex->buffer.b.b.format, width);
+            height = util_format_get_nblocksy(tex->buffer.b.b.format, height);
+         }
       }
 
       screen->make_texture_descriptor(

@@ -162,6 +162,12 @@ static VkResult
 panvk_pipeline_builder_upload_shaders(struct panvk_pipeline_builder *builder,
                                       struct panvk_pipeline *pipeline)
 {
+   /* In some cases, the optimized shader is empty. Don't bother allocating
+    * anything in this case.
+    */
+   if (builder->shader_total_size == 0)
+      return VK_SUCCESS;
+
    struct panfrost_bo *bin_bo =
       panfrost_bo_create(&builder->device->physical_device->pdev,
                          builder->shader_total_size, PAN_BO_EXECUTE,
@@ -206,7 +212,7 @@ panvk_pipeline_builder_alloc_static_state_bo(struct panvk_pipeline_builder *buil
 
    for (uint32_t i = 0; i < MESA_SHADER_STAGES; i++) {
       const struct panvk_shader *shader = builder->shaders[i];
-      if (!shader)
+      if (!shader && i != MESA_SHADER_FRAGMENT)
          continue;
 
       if (pipeline->fs.dynamic_rsd && i == MESA_SHADER_FRAGMENT)
@@ -332,39 +338,58 @@ panvk_pipeline_builder_init_shaders(struct panvk_pipeline_builder *builder,
       if (shader->has_img_access)
          pipeline->img_access_mask |= BITFIELD_BIT(i);
 
-      if (i == MESA_SHADER_VERTEX && shader->info.vs.writes_point_size)
-         pipeline->ia.writes_point_size = true;
+      if (i == MESA_SHADER_VERTEX && shader->info.vs.writes_point_size) {
+         VkPrimitiveTopology topology =
+            builder->create_info.gfx->pInputAssemblyState->topology;
+         bool points = (topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST);
 
-      mali_ptr shader_ptr = pipeline->binary_bo->ptr.gpu +
-                            builder->stages[i].shader_offset;
-
-      void *rsd = pipeline->state_bo->ptr.cpu + builder->stages[i].rsd_offset;
-      mali_ptr gpu_rsd = pipeline->state_bo->ptr.gpu + builder->stages[i].rsd_offset;
-
-      if (i != MESA_SHADER_FRAGMENT) {
-         panvk_per_arch(emit_non_fs_rsd)(builder->device, &shader->info, shader_ptr, rsd);
-      } else if (!pipeline->fs.dynamic_rsd) {
-         void *bd = rsd + pan_size(RENDERER_STATE);
-
-         panvk_per_arch(emit_base_fs_rsd)(builder->device, pipeline, rsd);
-         for (unsigned rt = 0; rt < MAX2(pipeline->blend.state.rt_count, 1); rt++) {
-            panvk_per_arch(emit_blend)(builder->device, pipeline, rt, bd);
-            bd += pan_size(BLEND);
-         }
-      } else {
-         gpu_rsd = 0;
-         panvk_per_arch(emit_base_fs_rsd)(builder->device, pipeline, &pipeline->fs.rsd_template);
-         for (unsigned rt = 0; rt < MAX2(pipeline->blend.state.rt_count, 1); rt++) {
-            panvk_per_arch(emit_blend)(builder->device, pipeline, rt,
-                                       &pipeline->blend.bd_template[rt]);
-         }
+         /* Even if the vertex shader writes point size, we only consider the
+          * pipeline to write point size when we're actually drawing points.
+          * Otherwise the point size write would conflict with wide lines.
+          */
+         pipeline->ia.writes_point_size = points;
       }
 
-      pipeline->rsds[i] = gpu_rsd;
+      mali_ptr shader_ptr = 0;
+
+      /* Handle empty shaders gracefully */
+      if (util_dynarray_num_elements(&builder->shaders[i]->binary, uint8_t)) {
+         shader_ptr = pipeline->binary_bo->ptr.gpu +
+                      builder->stages[i].shader_offset;
+      }
+
+      if (i != MESA_SHADER_FRAGMENT) {
+         void *rsd = pipeline->state_bo->ptr.cpu + builder->stages[i].rsd_offset;
+         mali_ptr gpu_rsd = pipeline->state_bo->ptr.gpu + builder->stages[i].rsd_offset;
+
+         panvk_per_arch(emit_non_fs_rsd)(builder->device, &shader->info, shader_ptr, rsd);
+         pipeline->rsds[i] = gpu_rsd;
+      }
+
       panvk_pipeline_builder_init_sysvals(builder, pipeline, i);
 
       if (i == MESA_SHADER_COMPUTE)
          pipeline->cs.local_size = shader->local_size;
+   }
+
+   if (builder->create_info.gfx && !pipeline->fs.dynamic_rsd) {
+      void *rsd = pipeline->state_bo->ptr.cpu + builder->stages[MESA_SHADER_FRAGMENT].rsd_offset;
+      mali_ptr gpu_rsd = pipeline->state_bo->ptr.gpu + builder->stages[MESA_SHADER_FRAGMENT].rsd_offset;
+      void *bd = rsd + pan_size(RENDERER_STATE);
+
+      panvk_per_arch(emit_base_fs_rsd)(builder->device, pipeline, rsd);
+      for (unsigned rt = 0; rt < pipeline->blend.state.rt_count; rt++) {
+         panvk_per_arch(emit_blend)(builder->device, pipeline, rt, bd);
+         bd += pan_size(BLEND);
+      }
+
+      pipeline->rsds[MESA_SHADER_FRAGMENT] = gpu_rsd;
+   } else if (builder->create_info.gfx) {
+      panvk_per_arch(emit_base_fs_rsd)(builder->device, pipeline, &pipeline->fs.rsd_template);
+      for (unsigned rt = 0; rt < MAX2(pipeline->blend.state.rt_count, 1); rt++) {
+         panvk_per_arch(emit_blend)(builder->device, pipeline, rt,
+                                    &pipeline->blend.bd_template[rt]);
+      }
    }
 
    pipeline->num_ubos = builder->layout->num_ubos + builder->layout->num_dyn_ubos;
@@ -692,7 +717,19 @@ panvk_pipeline_builder_parse_zs(struct panvk_pipeline_builder *builder,
       return;
 
    pipeline->zs.z_test = builder->create_info.gfx->pDepthStencilState->depthTestEnable;
-   pipeline->zs.z_write = builder->create_info.gfx->pDepthStencilState->depthWriteEnable;
+
+   /* The Vulkan spec says:
+    *
+    *    depthWriteEnable controls whether depth writes are enabled when
+    *    depthTestEnable is VK_TRUE. Depth writes are always disabled when
+    *    depthTestEnable is VK_FALSE.
+    *
+    * The hardware does not make this distinction, though, so we AND in the
+    * condition ourselves.
+    */
+   pipeline->zs.z_write = pipeline->zs.z_test &&
+      builder->create_info.gfx->pDepthStencilState->depthWriteEnable;
+
    pipeline->zs.z_compare_func =
       panvk_per_arch(translate_compare_func)(builder->create_info.gfx->pDepthStencilState->depthCompareOp);
    pipeline->zs.s_test = builder->create_info.gfx->pDepthStencilState->stencilTestEnable;
@@ -739,6 +776,8 @@ panvk_pipeline_builder_parse_rast(struct panvk_pipeline_builder *builder,
    pipeline->rast.front_ccw = builder->create_info.gfx->pRasterizationState->frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE;
    pipeline->rast.cull_front_face = builder->create_info.gfx->pRasterizationState->cullMode & VK_CULL_MODE_FRONT_BIT;
    pipeline->rast.cull_back_face = builder->create_info.gfx->pRasterizationState->cullMode & VK_CULL_MODE_BACK_BIT;
+   pipeline->rast.line_width = builder->create_info.gfx->pRasterizationState->lineWidth;
+   pipeline->rast.enable = !builder->create_info.gfx->pRasterizationState->rasterizerDiscardEnable;
 }
 
 static bool
@@ -890,15 +929,6 @@ panvk_pipeline_builder_parse_vertex_input(struct panvk_pipeline_builder *builder
       attribs->buf[desc->binding].special = false;
    }
 
-   for (unsigned i = 0; i < info->vertexAttributeDescriptionCount; i++) {
-      const VkVertexInputAttributeDescription *desc =
-         &info->pVertexAttributeDescriptions[i];
-      attribs->attrib[desc->location].buf = desc->binding;
-      attribs->attrib[desc->location].format =
-         vk_format_to_pipe_format(desc->format);
-      attribs->attrib[desc->location].offset = desc->offset;
-   }
-
    if (div_info) {
       for (unsigned i = 0; i < div_info->vertexBindingDivisorCount; i++) {
          const VkVertexInputBindingDivisorDescriptionEXT *div =
@@ -909,6 +939,20 @@ panvk_pipeline_builder_parse_vertex_input(struct panvk_pipeline_builder *builder
 
    const struct pan_shader_info *vs =
       &builder->shaders[MESA_SHADER_VERTEX]->info;
+
+   for (unsigned i = 0; i < info->vertexAttributeDescriptionCount; i++) {
+      const VkVertexInputAttributeDescription *desc =
+         &info->pVertexAttributeDescriptions[i];
+
+      unsigned attrib = desc->location + VERT_ATTRIB_GENERIC0;
+      unsigned slot = util_bitcount64(vs->attributes_read &
+                                      BITFIELD64_MASK(attrib));
+
+      attribs->attrib[slot].buf = desc->binding;
+      attribs->attrib[slot].format =
+         vk_format_to_pipe_format(desc->format);
+      attribs->attrib[slot].offset = desc->offset;
+   }
 
    if (vs->attribute_count >= PAN_VERTEX_ID) {
       attribs->buf[attribs->buf_count].special = true;

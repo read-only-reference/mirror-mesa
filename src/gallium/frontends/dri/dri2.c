@@ -209,7 +209,12 @@ dri2_drawable_get_buffers(struct dri_drawable *drawable,
    return buffers;
 }
 
-static bool
+bool
+dri_image_drawable_get_buffers(struct dri_drawable *drawable,
+                               struct __DRIimageList *images,
+                               const enum st_attachment_type *statts,
+                               unsigned statts_count);
+bool
 dri_image_drawable_get_buffers(struct dri_drawable *drawable,
                                struct __DRIimageList *images,
                                const enum st_attachment_type *statts,
@@ -622,11 +627,25 @@ dri2_allocate_textures(struct dri_context *ctx,
             continue;
 
          if (drawable->textures[statt]) {
+            struct pipe_screen *screen = ctx->st->pipe->screen;
+
             templ.format = drawable->textures[statt]->format;
             templ.bind = drawable->textures[statt]->bind &
                          ~(PIPE_BIND_SCANOUT | PIPE_BIND_SHARED);
             templ.nr_samples = drawable->stvis.samples;
             templ.nr_storage_samples = drawable->stvis.samples;
+
+            /* The MSAA component order doesn't have to match the single-sample
+             * one. Allow the DRI frontend to swap channels for MSAA.
+             */
+            if (!screen->is_format_supported(screen, templ.format,
+                                             PIPE_TEXTURE_2D,
+                                             templ.nr_samples,
+                                             templ.nr_storage_samples,
+                                             templ.bind)) {
+               templ.format = util_format_rgb_to_bgr(templ.format);
+               assert(templ.format);
+            }
 
             /* Try to reuse the resource.
              * (the other resource parameters should be constant)
@@ -638,8 +657,7 @@ dri2_allocate_textures(struct dri_context *ctx,
                pipe_resource_reference(&drawable->msaa_textures[statt], NULL);
 
                drawable->msaa_textures[statt] =
-                  screen->base.screen->resource_create(screen->base.screen,
-                                                       &templ);
+                  screen->resource_create(screen, &templ);
                assert(drawable->msaa_textures[statt]);
 
                /* If there are any MSAA resources, we should initialize them
@@ -1862,6 +1880,58 @@ static const __DRIimageExtension dri2ImageExtensionTempl = {
     .queryDmaBufFormatModifierAttribs = NULL,
     .createImageFromRenderbuffer2 = dri2_create_image_from_renderbuffer2,
     .createImageWithModifiers2    = NULL,
+};
+
+const __DRIimageExtension driVkImageExtension = {
+    .base = { __DRI_IMAGE, 20 },
+
+    .createImageFromName          = dri2_create_image_from_name,
+    .createImageFromRenderbuffer  = dri2_create_image_from_renderbuffer,
+    .destroyImage                 = dri2_destroy_image,
+    .createImage                  = dri2_create_image,
+    .queryImage                   = dri2_query_image,
+    .dupImage                     = dri2_dup_image,
+    .validateUsage                = dri2_validate_usage,
+    .createImageFromNames         = dri2_from_names,
+    .fromPlanar                   = dri2_from_planar,
+    .createImageFromTexture       = dri2_create_from_texture,
+    .createImageFromFds           = dri2_from_fds,
+    .createImageFromFds2          = dri2_from_fds2,
+    .createImageFromDmaBufs       = dri2_from_dma_bufs,
+    .blitImage                    = dri2_blit_image,
+    .getCapabilities              = dri2_get_capabilities,
+    .mapImage                     = dri2_map_image,
+    .unmapImage                   = dri2_unmap_image,
+    .createImageWithModifiers     = dri2_create_image_with_modifiers,
+    .createImageFromDmaBufs2      = dri2_from_dma_bufs2,
+    .createImageFromDmaBufs3      = dri2_from_dma_bufs3,
+    .queryDmaBufFormats           = dri2_query_dma_buf_formats,
+    .queryDmaBufModifiers         = dri2_query_dma_buf_modifiers,
+    .queryDmaBufFormatModifierAttribs = dri2_query_dma_buf_format_modifier_attribs,
+    .createImageFromRenderbuffer2 = dri2_create_image_from_renderbuffer2,
+    .createImageWithModifiers2    = dri2_create_image_with_modifiers2,
+};
+
+const __DRIimageExtension driVkImageExtensionSw = {
+    .base = { __DRI_IMAGE, 20 },
+
+    .createImageFromName          = dri2_create_image_from_name,
+    .createImageFromRenderbuffer  = dri2_create_image_from_renderbuffer,
+    .destroyImage                 = dri2_destroy_image,
+    .createImage                  = dri2_create_image,
+    .queryImage                   = dri2_query_image,
+    .dupImage                     = dri2_dup_image,
+    .validateUsage                = dri2_validate_usage,
+    .createImageFromNames         = dri2_from_names,
+    .fromPlanar                   = dri2_from_planar,
+    .createImageFromTexture       = dri2_create_from_texture,
+    .createImageFromFds           = dri2_from_fds,
+    .createImageFromFds2          = dri2_from_fds2,
+    .blitImage                    = dri2_blit_image,
+    .getCapabilities              = dri2_get_capabilities,
+    .mapImage                     = dri2_map_image,
+    .unmapImage                   = dri2_unmap_image,
+    .createImageFromRenderbuffer2 = dri2_create_image_from_renderbuffer2,
 };
 
 static const __DRIrobustnessExtension dri2Robustness = {

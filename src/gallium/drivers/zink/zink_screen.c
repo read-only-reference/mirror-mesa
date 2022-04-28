@@ -23,6 +23,7 @@
 
 #include "zink_screen.h"
 
+#include "zink_kopper.h"
 #include "zink_compiler.h"
 #include "zink_context.h"
 #include "zink_device_info.h"
@@ -49,6 +50,8 @@
 #include "util/xmlconfig.h"
 
 #include "util/u_cpu_detect.h"
+
+#include "driver_trace/tr_context.h"
 
 #include "frontend/sw_winsys.h"
 
@@ -133,20 +136,6 @@ zink_get_device_uuid(struct pipe_screen *pscreen, char *uuid)
    } else {
       memcpy(uuid, screen->info.deviceid_props.deviceUUID, VK_UUID_SIZE);
    }
-}
-
-static uint32_t
-hash_framebuffer_state(const void *key)
-{
-   struct zink_framebuffer_state* s = (struct zink_framebuffer_state*)key;
-   return _mesa_hash_data(key, offsetof(struct zink_framebuffer_state, attachments) + sizeof(s->attachments[0]) * s->num_attachments);
-}
-
-static bool
-equals_framebuffer_state(const void *a, const void *b)
-{
-   struct zink_framebuffer_state *s = (struct zink_framebuffer_state*)a;
-   return memcmp(a, b, offsetof(struct zink_framebuffer_state, attachments) + sizeof(s->attachments[0]) * s->num_attachments) == 0;
 }
 
 static VkDeviceSize
@@ -330,6 +319,9 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    struct zink_screen *screen = zink_screen(pscreen);
 
    switch (param) {
+   case PIPE_CAP_TEXRECT:
+   case PIPE_CAP_MULTI_DRAW_INDIRECT_PARTIAL_STRIDE:
+      return 0;
    case PIPE_CAP_ANISOTROPIC_FILTER:
       return screen->info.feats.features.samplerAnisotropy;
    case PIPE_CAP_EMULATE_NONFIXED_PRIMITIVE_RESTART:
@@ -344,6 +336,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       if (screen->info.have_EXT_primitive_topology_list_restart) {
          modes |= BITFIELD_BIT(PIPE_PRIM_POINTS) |
                   BITFIELD_BIT(PIPE_PRIM_LINES) |
+                  BITFIELD_BIT(PIPE_PRIM_LINES_ADJACENCY) |
                   BITFIELD_BIT(PIPE_PRIM_TRIANGLES) |
                   BITFIELD_BIT(PIPE_PRIM_TRIANGLES_ADJACENCY);
          if (screen->info.list_restart_feats.primitiveTopologyPatchListRestart)
@@ -370,6 +363,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_FENCE_SIGNAL:
       return screen->info.have_KHR_external_semaphore_fd;
 
+   case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
    case PIPE_CAP_QUERY_MEMORY_INFO:
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_TGSI_TEXCOORD:
@@ -395,6 +389,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_PACKED_UNIFORMS:
    case PIPE_CAP_SHADER_PACK_HALF_FLOAT:
    case PIPE_CAP_CULL_DISTANCE_NOCOMBINE:
+   case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return 1;
 
    case PIPE_CAP_DRAW_VERTEX_STATE:
@@ -864,7 +859,7 @@ zink_get_shader_param(struct pipe_screen *pscreen,
          max = screen->info.props.limits.maxTessellationEvaluationInputComponents / 4;
          break;
       case PIPE_SHADER_GEOMETRY:
-         max = screen->info.props.limits.maxGeometryInputComponents;
+         max = screen->info.props.limits.maxGeometryInputComponents / 4;
          break;
       case PIPE_SHADER_FRAGMENT:
          /* intel drivers report fewer components, but it's a value that's compatible
@@ -968,9 +963,8 @@ zink_get_shader_param(struct pipe_screen *pscreen,
                        screen->info.props.limits.maxPerStageDescriptorSampledImages),
                   PIPE_MAX_SAMPLERS);
 
-   case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+   case PIPE_SHADER_CAP_DROUND_SUPPORTED:
+   case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
       return 0; /* not implemented */
 
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
@@ -1008,18 +1002,14 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       if (screen->info.feats.features.shaderStorageImageExtendedFormats &&
           screen->info.feats.features.shaderStorageImageWriteWithoutFormat)
          return MIN2(screen->info.props.limits.maxPerStageDescriptorStorageImages,
-                     PIPE_MAX_SHADER_IMAGES);
+                     ZINK_MAX_SHADER_IMAGES);
       return 0;
 
-   case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
-      return 0; /* unsure */
-
-   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
       return 0; /* not implemented */
-   case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+   case PIPE_SHADER_CAP_CONT_SUPPORTED:
       return 1;
    }
 
@@ -1204,16 +1194,12 @@ zink_destroy_screen(struct pipe_screen *pscreen)
 {
    struct zink_screen *screen = zink_screen(pscreen);
 
+   hash_table_foreach(&screen->dts, entry)
+      zink_kopper_deinit_displaytarget(screen, entry->data);
+   simple_mtx_destroy(&screen->dt_lock);
+
    if (VK_NULL_HANDLE != screen->debugUtilsCallbackHandle) {
       VKSCR(DestroyDebugUtilsMessengerEXT)(screen->instance, screen->debugUtilsCallbackHandle, NULL);
-   }
-
-   if (!screen->info.have_KHR_imageless_framebuffer) {
-      hash_table_foreach(&screen->framebuffer_cache, entry) {
-         struct zink_framebuffer* fb = (struct zink_framebuffer*)entry->data;
-         zink_destroy_framebuffer(screen, fb);
-      }
-      simple_mtx_destroy(&screen->framebuffer_mtx);
    }
 
    u_transfer_helper_destroy(pscreen->transfer_helper);
@@ -1243,9 +1229,6 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    vkDestroyInstance(screen->instance, NULL);
    util_idalloc_mt_fini(&screen->buffer_ids);
 
-   if (screen->drm_fd != -1)
-      close(screen->drm_fd);
-
    slab_destroy_parent(&screen->transfer_pool);
    ralloc_free(screen);
    glsl_type_singleton_decref();
@@ -1270,29 +1253,52 @@ choose_pdev(struct zink_screen *screen)
    assert(result == VK_SUCCESS);
    assert(pdev_count > 0);
 
-   VkPhysicalDeviceProperties *props = &screen->info.props;
-   for (i = 0; i < pdev_count; ++i) {
-      vkGetPhysicalDeviceProperties(pdevs[i], props);
+   VkPhysicalDeviceProperties props;
+   bool cpu = debug_get_bool_option("LIBGL_ALWAYS_SOFTWARE", false);
+   /* priority when multiple drivers are available (highest to lowest):
+      VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU
+      VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+      VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+      VK_PHYSICAL_DEVICE_TYPE_CPU
+      VK_PHYSICAL_DEVICE_TYPE_OTHER
 
-#ifdef ZINK_WITH_SWRAST_VK
-      char *use_lavapipe = getenv("ZINK_USE_LAVAPIPE");
-      if (use_lavapipe) {
-         if (props->deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
-            screen->pdev = pdevs[i];
-            screen->info.device_version = props->apiVersion;
-            is_cpu = true;
+    * users should specify VK_ICD_FILENAMES since this is a standardized variable
+    * used by all vulkan applications
+    */
+   unsigned prio_map[] = {
+      [VK_PHYSICAL_DEVICE_TYPE_OTHER] = 0,
+      [VK_PHYSICAL_DEVICE_TYPE_CPU] = 1,
+      [VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU] = 2,
+      [VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU] = 3,
+      [VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU] = 4,
+   };
+   unsigned idx = 0;
+   int cur_prio = 0;
+   for (i = 0; i < pdev_count; ++i) {
+      vkGetPhysicalDeviceProperties(pdevs[i], &props);
+
+      if (cpu) {
+         /* if user wants cpu, only give them cpu */
+         if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+            idx = i;
+            cur_prio = prio_map[props.deviceType];
             break;
          }
-         continue;
-      }
-#endif
-      if (props->deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) {
-         screen->pdev = pdevs[i];
-         screen->info.device_version = props->apiVersion;
-         break;
+      } else {
+         assert(props.deviceType <= VK_PHYSICAL_DEVICE_TYPE_CPU);
+         if (prio_map[props.deviceType] > cur_prio) {
+            idx = i;
+            cur_prio = prio_map[props.deviceType];
+         }
       }
    }
-   free(pdevs);
+   is_cpu = cur_prio == prio_map[VK_PHYSICAL_DEVICE_TYPE_CPU];
+   if (cpu && !is_cpu)
+      goto out;
+
+   screen->pdev = pdevs[idx];
+   vkGetPhysicalDeviceProperties(screen->pdev, &screen->info.props);
+   screen->info.device_version = screen->info.props.apiVersion;
 
    /* runtime version is the lesser of the instance version and device version */
    screen->vk_version = MIN2(screen->info.device_version, screen->instance_info.loader_version);
@@ -1304,6 +1310,8 @@ choose_pdev(struct zink_screen *screen)
       screen->spirv_version = SPIRV_VERSION(1, 3);
    else
       screen->spirv_version = SPIRV_VERSION(1, 0);
+out:
+   free(pdevs);
    return is_cpu;
 }
 
@@ -1341,36 +1349,43 @@ init_queue(struct zink_screen *screen)
 
 static void
 zink_flush_frontbuffer(struct pipe_screen *pscreen,
-                       struct pipe_context *pcontext,
+                       struct pipe_context *pctx,
                        struct pipe_resource *pres,
                        unsigned level, unsigned layer,
                        void *winsys_drawable_handle,
                        struct pipe_box *sub_box)
 {
    struct zink_screen *screen = zink_screen(pscreen);
-   struct sw_winsys *winsys = screen->winsys;
    struct zink_resource *res = zink_resource(pres);
+   struct zink_context *ctx = zink_context(pctx);
 
-   if (!winsys)
-     return;
-   void *map = winsys->displaytarget_map(winsys, res->dt, 0);
+   /* if the surface has never been acquired, there's nothing to present,
+    * so this is a no-op */
+   if (!res->obj->acquired && res->obj->last_dt_idx == UINT32_MAX)
+      return;
 
-   if (map) {
-      struct pipe_transfer *transfer = NULL;
-      void *res_map = pipe_texture_map(pcontext, pres, level, layer, PIPE_MAP_READ, 0, 0,
-                                        u_minify(pres->width0, level),
-                                        u_minify(pres->height0, level),
-                                        &transfer);
-      if (res_map) {
-         util_copy_rect((ubyte*)map, pres->format, res->dt_stride, 0, 0,
-                        transfer->box.width, transfer->box.height,
-                        (const ubyte*)res_map, transfer->stride, 0, 0);
-         pipe_texture_unmap(pcontext, transfer);
+   /* need to get the actual zink_context, not the threaded context */
+   if (screen->threaded)
+      pctx = threaded_context_unwrap_sync(pctx);
+   pctx = trace_get_possibly_threaded_context(pctx);
+   ctx = zink_context(pctx);
+   if (ctx->batch.swapchain) {
+      pctx->flush(pctx, NULL, 0);
+      if (ctx->last_fence && screen->threaded) {
+         struct zink_batch_state *bs = zink_batch_state(ctx->last_fence);
+         util_queue_fence_wait(&bs->flush_completed);
       }
-      winsys->displaytarget_unmap(winsys, res->dt);
    }
 
-   winsys->displaytarget_display(winsys, res->dt, winsys_drawable_handle, sub_box);
+   if (res->obj->acquired)
+      zink_kopper_present_queue(screen, res);
+   else {
+      assert(res->obj->last_dt_idx != UINT32_MAX);
+      if (!zink_kopper_last_present_eq(res->obj->dt, res->obj->last_dt_idx)) {
+         zink_kopper_acquire_readback(ctx, res);
+         zink_kopper_present_readback(ctx, res);
+      }
+   }
 }
 
 bool
@@ -1620,23 +1635,6 @@ zink_internal_setup_moltenvk(struct zink_screen *screen)
 }
 
 static void
-check_device_needs_mesa_wsi(struct zink_screen *screen)
-{
-   if (
-       /* Raspberry Pi 4 V3DV driver */
-       (screen->info.props.vendorID == 0x14E4 &&
-        screen->info.props.deviceID == 42) ||
-       /* RADV */
-       screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_RADV_KHR
-      ) {
-      screen->needs_mesa_wsi = true;
-   } else if (screen->info.driver_props.driverID == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA_KHR ||
-              screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_VENUS)
-      screen->needs_mesa_flush_wsi = true;
-
-}
-
-static void
 populate_format_props(struct zink_screen *screen)
 {
    for (unsigned i = 0; i < PIPE_FORMAT_COUNT; i++) {
@@ -1656,8 +1654,14 @@ populate_format_props(struct zink_screen *screen)
             mod_props.pDrmFormatModifierProperties = mods;
             props.pNext = &mod_props;
          }
+         VkFormatProperties3 props3 = {0};
+         props3.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
+         props3.pNext = props.pNext;
+         props.pNext = &props3;
          VKSCR(GetPhysicalDeviceFormatProperties2)(screen->pdev, format, &props);
          screen->format_props[i] = props.formatProperties;
+         if (props3.linearTilingFeatures & VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV)
+            screen->format_props[i].linearTilingFeatures |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
          if (screen->info.have_EXT_image_drm_format_modifier && mod_props.drmFormatModifierCount) {
             screen->modifier_props[i].drmFormatModifierCount = mod_props.drmFormatModifierCount;
             screen->modifier_props[i].pDrmFormatModifierProperties = ralloc_array(screen, VkDrmFormatModifierPropertiesEXT, mod_props.drmFormatModifierCount);
@@ -1704,7 +1708,6 @@ zink_screen_init_semaphore(struct zink_screen *screen)
    } else {
       mesa_loge("ZINK: vkCreateSemaphore failed");
    }
-   screen->info.have_KHR_timeline_semaphore = false;
    return false;
 }
 
@@ -1730,81 +1733,6 @@ zink_screen_timeline_wait(struct zink_screen *screen, uint32_t batch_id, uint64_
 
    if (success)
       zink_screen_update_last_finished(screen, batch_id);
-
-   return success;
-}
-
-struct noop_submit_info {
-   struct zink_screen *screen;
-   VkFence fence;
-};
-
-static void
-noop_submit(void *data, void *gdata, int thread_index)
-{
-   struct noop_submit_info *n = data;
-   VkSubmitInfo si = {0};
-   si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-   simple_mtx_lock(&n->screen->queue_lock);
-   if (n->VKSCR(QueueSubmit)(n->screen->threaded ? n->screen->thread_queue : n->screen->queue,
-                     1, &si, n->fence) != VK_SUCCESS) {
-      mesa_loge("ZINK: vkQueueSubmit failed");
-      n->screen->device_lost = true;
-   }
-   simple_mtx_unlock(&n->screen->queue_lock);
-}
-
-bool
-zink_screen_batch_id_wait(struct zink_screen *screen, uint32_t batch_id, uint64_t timeout)
-{
-   if (zink_screen_check_last_finished(screen, batch_id))
-      return true;
-
-   if (screen->info.have_KHR_timeline_semaphore)
-      return zink_screen_timeline_wait(screen, batch_id, timeout);
-
-   if (!timeout)
-      return false;
-
-   uint32_t new_id = 0;
-   while (!new_id)
-      new_id = p_atomic_inc_return(&screen->curr_batch);
-   VkResult ret;
-   struct noop_submit_info n;
-   uint64_t abs_timeout = os_time_get_absolute_timeout(timeout);
-   uint64_t remaining = PIPE_TIMEOUT_INFINITE;
-   VkFenceCreateInfo fci = {0};
-   struct util_queue_fence fence;
-   util_queue_fence_init(&fence);
-   fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-
-   if (VKSCR(CreateFence)(screen->dev, &fci, NULL, &n.fence) != VK_SUCCESS) {
-      mesa_loge("ZINK: vkCreateFence failed");
-      return false;
-   }
-
-   n.screen = screen;
-   if (screen->threaded) {
-      /* must use thread dispatch for sanity */
-      util_queue_add_job(&screen->flush_queue, &n, &fence, noop_submit, NULL, 0);
-      util_queue_fence_wait(&fence);
-   } else {
-      noop_submit(&n, NULL, 0);
-   }
-   if (timeout != PIPE_TIMEOUT_INFINITE) {
-      int64_t time_ns = os_time_get_nano();
-      remaining = abs_timeout > time_ns ? abs_timeout - time_ns : 0;
-   }
-
-   if (remaining)
-      ret = VKSCR(WaitForFences)(screen->dev, 1, &n.fence, VK_TRUE, remaining);
-   else
-      ret = VKSCR(GetFenceStatus)(screen->dev, n.fence);
-   VKSCR(DestroyFence)(screen->dev, n.fence, NULL);
-   bool success = zink_screen_handle_vkresult(screen, ret);
-
-   if (success)
-      zink_screen_update_last_finished(screen, new_id);
 
    return success;
 }
@@ -2085,6 +2013,9 @@ init_driver_workarounds(struct zink_screen *screen)
 {
    screen->driver_workarounds.color_write_missing = !screen->info.have_EXT_color_write_enable;
    screen->driver_workarounds.depth_clip_control_missing = !screen->info.have_EXT_depth_clip_control;
+   if (screen->info.driver_props.driverID == VK_DRIVER_ID_AMD_PROPRIETARY)
+      /* this completely breaks xfb somehow */
+      screen->info.have_EXT_extended_dynamic_state2 = false;
    if (screen->info.driver_props.driverID == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA) {
       /* #6186 */
       screen->driver_workarounds.depth_clip_control_missing = true;
@@ -2094,14 +2025,16 @@ init_driver_workarounds(struct zink_screen *screen)
 static struct zink_screen *
 zink_internal_create_screen(const struct pipe_screen_config *config)
 {
+   if (getenv("ZINK_USE_LAVAPIPE")) {
+      mesa_loge("ZINK_USE_LAVAPIPE is obsolete. Use LIBGL_ALWAYS_SOFTWARE\n");
+      return NULL;
+   }
+
    struct zink_screen *screen = rzalloc(NULL, struct zink_screen);
    if (!screen)
       return NULL;
 
-   util_cpu_detect();
    screen->threaded = util_get_cpu_caps()->nr_cpus > 1 && debug_get_bool_option("GALLIUM_THREAD", util_get_cpu_caps()->nr_cpus > 1);
-   if (screen->threaded)
-      util_queue_init(&screen->flush_queue, "zfq", 8, 1, UTIL_QUEUE_INIT_RESIZE_IF_FULL, NULL);
 
    zink_debug = debug_get_option_zink_debug();
    screen->descriptor_mode = debug_get_option_zink_descriptor_mode();
@@ -2111,6 +2044,15 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    }
 
    screen->instance_info.loader_version = zink_get_loader_version();
+#if WITH_XMLCONFIG
+   if (config) {
+      driParseConfigFiles(config->options, config->options_info, 0, "zink",
+                          NULL, NULL, NULL, 0, NULL, 0);
+      screen->driconf.dual_color_blend_by_location = driQueryOptionb(config->options, "dual_color_blend_by_location");
+      //screen->driconf.inline_uniforms = driQueryOptionb(config->options, "radeonsi_inline_uniforms");
+      screen->instance_info.disable_xcb_surface = driQueryOptionb(config->options, "disable_xcb_surface");
+   }
+#endif
    screen->instance = zink_create_instance(&screen->instance_info);
 
    if (!screen->instance)
@@ -2141,12 +2083,14 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
       goto fail;
    }
 
-   /* Some Vulkan implementations have special requirements for WSI
-    * allocations.
-    */
-   check_device_needs_mesa_wsi(screen);
+   if (screen->threaded)
+      util_queue_init(&screen->flush_queue, "zfq", 8, 1, UTIL_QUEUE_INIT_RESIZE_IF_FULL, screen);
 
    zink_internal_setup_moltenvk(screen);
+   if (!screen->info.have_KHR_timeline_semaphore) {
+      mesa_loge("zink: KHR_timeline_semaphore is required");
+      goto fail;
+   }
 
    screen->dev = zink_create_logical_device(screen);
    if (!screen->dev)
@@ -2227,14 +2171,6 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
 
    slab_create_parent(&screen->transfer_pool, sizeof(struct zink_transfer), 16);
 
-#if WITH_XMLCONFIG
-   if (config) {
-      driParseConfigFiles(config->options, config->options_info, 0, "zink",
-                          NULL, NULL, NULL, 0, NULL, 0);
-      screen->driconf.dual_color_blend_by_location = driQueryOptionb(config->options, "dual_color_blend_by_location");
-      //screen->driconf.inline_uniforms = driQueryOptionb(config->options, "radeonsi_inline_uniforms");
-   }
-#endif
    screen->driconf.inline_uniforms = debug_get_bool_option("ZINK_INLINE_UNIFORMS", screen->is_cpu);
 
    screen->total_video_mem = get_video_mem(screen);
@@ -2242,19 +2178,10 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    if (!os_get_total_physical_memory(&screen->total_mem))
       goto fail;
 
-   switch (screen->info.driver_props.driverID) {
-   case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
-      screen->max_fences = 500;
-      break;
-   default:
-      screen->max_fences = 5000;
-      break;
+   if (!zink_screen_init_semaphore(screen)) {
+      mesa_loge("zink: failed to create timeline semaphore");
+      goto fail;
    }
-
-   if (debug_get_bool_option("ZINK_NO_TIMELINES", false))
-      screen->info.have_KHR_timeline_semaphore = false;
-   if (screen->info.have_KHR_timeline_semaphore)
-      zink_screen_init_semaphore(screen);
 
    memset(&screen->heap_map, UINT8_MAX, sizeof(screen->heap_map));
    for (enum zink_heap i = 0; i < ZINK_HEAP_MAX; i++) {
@@ -2287,10 +2214,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
          screen->resizable_bar = true;
    }
 
-   if (!screen->info.have_KHR_imageless_framebuffer) {
-      simple_mtx_init(&screen->framebuffer_mtx, mtx_plain);
-      _mesa_hash_table_init(&screen->framebuffer_cache, screen, hash_framebuffer_state, equals_framebuffer_state);
-   }
+   simple_mtx_init(&screen->dt_lock, mtx_plain);
 
    zink_screen_init_descriptor_funcs(screen, false);
    util_idalloc_mt_init_tc(&screen->buffer_ids);
@@ -2311,12 +2235,11 @@ fail:
 }
 
 struct pipe_screen *
-zink_create_screen(struct sw_winsys *winsys)
+zink_create_screen(struct sw_winsys *winsys, const struct pipe_screen_config *config)
 {
-   struct zink_screen *ret = zink_internal_create_screen(NULL);
+   struct zink_screen *ret = zink_internal_create_screen(config);
    if (ret) {
-      ret->winsys = winsys;
-      ret->drm_fd = -1;
+      ret->sw_winsys = winsys;
    }
 
    return &ret->base;
@@ -2327,8 +2250,6 @@ zink_drm_create_screen(int fd, const struct pipe_screen_config *config)
 {
    struct zink_screen *ret = zink_internal_create_screen(config);
 
-   if (ret)
-      ret->drm_fd = os_dupfd_cloexec(fd);
    if (ret && !ret->info.have_KHR_external_memory_fd) {
       debug_printf("ZINK: KHR_external_memory_fd required!\n");
       zink_destroy_screen(&ret->base);

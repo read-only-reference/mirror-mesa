@@ -356,6 +356,7 @@ optimizations.extend([
 
    (('~flrp', a, 0.0, c), ('fadd', ('fmul', ('fneg', a), c), a)),
    (('ftrunc', a), ('bcsel', ('flt', a, 0.0), ('fneg', ('ffloor', ('fabs', a))), ('ffloor', ('fabs', a))), 'options->lower_ftrunc'),
+
    (('ffloor', a), ('fsub', a, ('ffract', a)), 'options->lower_ffloor'),
    (('fadd', a, ('fneg', ('ffract', a))), ('ffloor', a), '!options->lower_ffloor'),
    (('ffract', a), ('fsub', a, ('ffloor', a)), 'options->lower_ffract'),
@@ -1377,6 +1378,8 @@ optimizations.extend([
    (('ffloor', 'a(is_integral)'), a),
    (('fceil', 'a(is_integral)'), a),
    (('ftrunc', 'a(is_integral)'), a),
+   (('fround_even', 'a(is_integral)'), a),
+
    # fract(x) = x - floor(x), so fract(NaN) = NaN
    (('~ffract', 'a(is_integral)'), 0.0),
    (('fabs', 'a(is_not_negative)'), a),
@@ -1652,7 +1655,7 @@ optimizations.extend([
    (('fmod', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod'),
    (('frem', a, b), ('fsub', a, ('fmul', b, ('ftrunc', ('fdiv', a, b)))), 'options->lower_fmod'),
    (('uadd_carry', a, b), ('b2i', ('ult', ('iadd', a, b), a)), 'options->lower_uadd_carry'),
-   (('usub_borrow@32', a, b), ('b2i', ('ult', a, b)), 'options->lower_usub_borrow'),
+   (('usub_borrow', a, b), ('b2i', ('ult', a, b)), 'options->lower_usub_borrow'),
 
    (('bitfield_insert', 'base', 'insert', 'offset', 'bits'),
     ('bcsel', ('ult', 31, 'bits'), 'insert',
@@ -2416,7 +2419,9 @@ for op in ['ineg', 'iabs', 'inot', 'isign']:
     ]
 
 optimizations.extend([
-    (('fisnormal', 'a@32'), ('ult', 0x1ffffff, ('iadd', ('ishl', a, 1), 0x1000000)), 'options->lower_fisnormal')
+    (('fisnormal', 'a@16'), ('ult', 0xfff, ('iadd', ('ishl', a, 1), 0x800)), 'options->lower_fisnormal'),
+    (('fisnormal', 'a@32'), ('ult', 0x1ffffff, ('iadd', ('ishl', a, 1), 0x1000000)), 'options->lower_fisnormal'),
+    (('fisnormal', 'a@64'), ('ult', 0x3fffffffffffff, ('iadd', ('ishl', a, 1), 0x20000000000000)), 'options->lower_fisnormal')
     ])
 
 # This section contains optimizations to propagate downsizing conversions of
@@ -2553,7 +2558,11 @@ late_optimizations = [
    (('~fadd@32', ('fmulz', a, b), c), ('ffmaz', a, b, c), 'options->fuse_ffma32'),
 
    # Subtractions get lowered during optimization, so we need to recombine them
-   (('fadd', a, ('fneg', 'b')), ('fsub', 'a', 'b'), 'options->has_fsub'),
+   (('fadd@8', a, ('fneg', 'b')), ('fsub', 'a', 'b'), 'options->has_fsub'),
+   (('fadd@16', a, ('fneg', 'b')), ('fsub', 'a', 'b'), 'options->has_fsub'),
+   (('fadd@32', a, ('fneg', 'b')), ('fsub', 'a', 'b'), 'options->has_fsub'),
+   (('fadd@64', a, ('fneg', 'b')), ('fsub', 'a', 'b'), 'options->has_fsub && !(options->lower_doubles_options & nir_lower_dsub)'),
+
    (('fneg', a), ('fmul', a, -1.0), 'options->lower_fneg'),
    (('iadd', a, ('ineg', 'b')), ('isub', 'a', 'b'), 'options->has_isub || options->lower_ineg'),
    (('ineg', a), ('isub', 0, a), 'options->lower_ineg'),
@@ -2603,6 +2612,15 @@ late_optimizations = [
    (('fdph', a, b), ('fdph_replicated', a, b), 'options->fdot_replicates'),
 
    (('~flrp', ('fadd(is_used_once)', a, b), ('fadd(is_used_once)', a, c), d), ('fadd', ('flrp', b, c, d), a)),
+
+   # Approximate handling of fround_even for DX9 addressing from gallium nine on
+   # DX9-class hardware with no proper fround support.  This is in
+   # late_optimizations so that the is_integral() opts in the main pass get a
+   # chance to eliminate the fround_even first.
+   (('fround_even', a), ('bcsel',
+                         ('feq', ('ffract', a), 0.5),
+                         ('fadd', ('ffloor', ('fadd', a, 0.5)), 1.0),
+                         ('ffloor', ('fadd', a, 0.5))), 'options->lower_fround_even'),
 
    # A similar operation could apply to any ffma(#a, b, #(-a/2)), but this
    # particular operation is common for expanding values stored in a texture

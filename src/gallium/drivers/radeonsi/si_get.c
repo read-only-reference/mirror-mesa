@@ -23,9 +23,9 @@
  */
 
 #include "compiler/nir/nir.h"
-#include "radeon/radeon_uvd_enc.h"
-#include "radeon/radeon_vce.h"
-#include "radeon/radeon_video.h"
+#include "radeon_uvd_enc.h"
+#include "radeon_vce.h"
+#include "radeon_video.h"
 #include "si_pipe.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_screen.h"
@@ -166,6 +166,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_COMPUTE_SHADER_DERIVATIVES:
    case PIPE_CAP_IMAGE_ATOMIC_INC_WRAP:
    case PIPE_CAP_IMAGE_STORE_FORMATTED:
+   case PIPE_CAP_ALLOW_DRAW_OUT_OF_ORDER:
       return 1;
 
    case PIPE_CAP_TEXTURE_TRANSFER_MODES:
@@ -436,8 +437,6 @@ static int si_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_typ
       return 0;
    case PIPE_SHADER_CAP_PREFERRED_IR:
       return PIPE_SHADER_IR_NIR;
-   case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-      return 4;
 
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       if (shader == PIPE_SHADER_COMPUTE) {
@@ -450,18 +449,16 @@ static int si_get_shader_param(struct pipe_screen *pscreen, enum pipe_shader_typ
              (1 << PIPE_SHADER_IR_NIR);
 
    /* Supported boolean features. */
-   case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+   case PIPE_SHADER_CAP_CONT_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
    case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
    case PIPE_SHADER_CAP_INTEGERS:
    case PIPE_SHADER_CAP_INT64_ATOMICS:
-   case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
-   case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
-   case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_DROUND_SUPPORTED:
+   case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
+   case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR: /* lowered in finalize_nir */
    case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR: /* lowered in finalize_nir */
       return 1;
@@ -977,12 +974,9 @@ static void si_init_renderer_string(struct si_screen *sscreen)
    char first_name[256], second_name[32] = {}, kernel_version[128] = {};
    struct utsname uname_data;
 
-   if (sscreen->info.marketing_name) {
-      snprintf(first_name, sizeof(first_name), "%s", sscreen->info.marketing_name);
-      snprintf(second_name, sizeof(second_name), "%s, ", sscreen->info.lowercase_name);
-   } else {
-      snprintf(first_name, sizeof(first_name), "AMD %s", sscreen->info.name);
-   }
+   snprintf(first_name, sizeof(first_name), "%s",
+            sscreen->info.marketing_name ? sscreen->info.marketing_name : sscreen->info.name);
+   snprintf(second_name, sizeof(second_name), "%s, ", sscreen->info.lowercase_name);
 
    if (uname(&uname_data) == 0)
       snprintf(kernel_version, sizeof(kernel_version), ", %s", uname_data.release);
@@ -994,8 +988,6 @@ static void si_init_renderer_string(struct si_screen *sscreen)
 
 void si_init_screen_get_functions(struct si_screen *sscreen)
 {
-   util_cpu_detect();
-
    sscreen->b.get_name = si_get_name;
    sscreen->b.get_vendor = si_get_vendor;
    sscreen->b.get_device_vendor = si_get_device_vendor;

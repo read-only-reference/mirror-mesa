@@ -849,6 +849,9 @@ lvp_shader_compile_to_ir(struct lvp_pipeline *pipeline,
          .subgroup_basic = true,
          .subgroup_ballot = true,
          .subgroup_quad = true,
+#if LLVM_VERSION_MAJOR >= 10
+         .subgroup_shuffle = true,
+#endif
          .subgroup_vote = true,
          .vk_memory_model = true,
          .vk_memory_model_device_scope = true,
@@ -896,6 +899,12 @@ lvp_shader_compile_to_ir(struct lvp_pipeline *pipeline,
          exec_node_remove(&func->node);
    }
    assert(exec_list_length(&nir->functions) == 1);
+
+   struct nir_lower_subgroups_options subgroup_opts = {0};
+   subgroup_opts.lower_quad = true;
+   subgroup_opts.ballot_components = 4;
+   subgroup_opts.ballot_bit_size = 32;
+   NIR_PASS_V(nir, nir_lower_subgroups, &subgroup_opts);
 
    NIR_PASS_V(nir, nir_lower_variable_initializers, ~0);
    NIR_PASS_V(nir, nir_split_var_copies);
@@ -948,6 +957,11 @@ lvp_shader_compile_to_ir(struct lvp_pipeline *pipeline,
    } else if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS_V(nir, nir_lower_io_arrays_to_elements_no_indirects, true);
    }
+
+   // TODO: also optimize the tex srcs. see radeonSI for reference */
+   /* Skip if there are potentially conflicting rounding modes */
+   if (!nir_has_any_rounding_mode_enabled(nir->info.float_controls_execution_mode))
+      NIR_PASS_V(nir, nir_fold_16bit_sampler_conversions, 0, UINT32_MAX);
 
    optimize(nir);
 

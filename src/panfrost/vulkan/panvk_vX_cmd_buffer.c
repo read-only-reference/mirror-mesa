@@ -165,8 +165,11 @@ panvk_per_arch(cmd_close_batch)(struct panvk_cmd_buffer *cmdbuf)
    }
 
    if (batch->tlsinfo.tls.size) {
+      unsigned size = panfrost_get_total_stack_size(batch->tlsinfo.tls.size,
+                                                    pdev->thread_tls_alloc,
+                                                    pdev->core_count);
       batch->tlsinfo.tls.ptr =
-         pan_pool_alloc_aligned(&cmdbuf->tls_pool.base, batch->tlsinfo.tls.size, 4096).gpu;
+         pan_pool_alloc_aligned(&cmdbuf->tls_pool.base, size, 4096).gpu;
    }
 
    if (batch->tlsinfo.wls.size) {
@@ -315,12 +318,9 @@ panvk_sysval_upload_ssbo_info(struct panvk_cmd_buffer *cmdbuf,
          ssbo = &desc_state->dyn.ssbos[ssbo_id - pipeline->layout->num_ssbos];
 
       if (ssbo) {
-         data->u64[0] = ssbo->buffer->bo->ptr.gpu +
-                        ssbo->buffer->bo_offset +
-                        ssbo->offset;
-         data->u32[2] = ssbo->size == VK_WHOLE_SIZE ?
-                        ssbo->buffer->size - ssbo->offset :
-                        ssbo->size;
+         data->u64[0] = panvk_buffer_gpu_ptr(ssbo->buffer, ssbo->offset);
+         data->u32[2] = panvk_buffer_range(ssbo->buffer,
+                                           ssbo->offset, ssbo->size);
       }
    }
 }
@@ -661,7 +661,7 @@ panvk_draw_prepare_varyings(struct panvk_cmd_buffer *cmdbuf,
                        varyings->varying[VARYING_SLOT_POS].offset;
    }
 
-   if (BITSET_TEST(varyings->active, VARYING_SLOT_PSIZ)) {
+   if (pipeline->ia.writes_point_size) {
       draw->psiz = varyings->buf[varyings->varying[VARYING_SLOT_PSIZ].buf].address +
                        varyings->varying[VARYING_SLOT_POS].offset;
    } else if (pipeline->ia.topology == MALI_DRAW_MODE_LINES ||
@@ -900,7 +900,7 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf,
       batch = panvk_cmd_open_batch(cmdbuf);
    }
 
-   if (pipeline->fs.required)
+   if (pipeline->rast.enable)
       panvk_per_arch(cmd_alloc_fb_desc)(cmdbuf);
 
    panvk_per_arch(cmd_alloc_tls_desc)(cmdbuf, true);
@@ -949,7 +949,7 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf,
                        MALI_JOB_TYPE_VERTEX, false, false, 0, 0,
                        &draw->jobs.vertex, false);
 
-   if (pipeline->fs.required) {
+   if (pipeline->rast.enable) {
       panfrost_add_job(&cmdbuf->desc_pool.base, &batch->scoreboard,
                        MALI_JOB_TYPE_TILER, false, false, vjob_id, 0,
                        &draw->jobs.tiler, false);
@@ -989,6 +989,7 @@ panvk_per_arch(CmdDraw)(VkCommandBuffer commandBuffer,
 static void
 panvk_index_minmax_search(struct panvk_cmd_buffer *cmdbuf,
                           uint32_t start, uint32_t count,
+                          bool restart,
                           uint32_t *min, uint32_t *max)
 {
    void *ptr = cmdbuf->state.ib.buffer->bo->ptr.cpu +
@@ -1013,6 +1014,7 @@ panvk_index_minmax_search(struct panvk_cmd_buffer *cmdbuf,
       uint ## sz ## _t *indices = ptr; \
       *min = UINT ## sz ## _MAX; \
       for (uint32_t i = 0; i < count; i++) { \
+         if (restart && indices[i + start] == UINT ## sz ##_MAX) continue; \
          *min = MIN2(indices[i + start], *min); \
          *max = MAX2(indices[i + start], *max); \
       } \
@@ -1041,7 +1043,11 @@ panvk_per_arch(CmdDrawIndexed)(VkCommandBuffer commandBuffer,
    if (instanceCount == 0 || indexCount == 0)
       return;
 
-   panvk_index_minmax_search(cmdbuf, firstIndex, indexCount,
+   const struct panvk_pipeline *pipeline =
+      panvk_cmd_get_pipeline(cmdbuf, GRAPHICS);
+   bool primitive_restart = pipeline->ia.primitive_restart;
+
+   panvk_index_minmax_search(cmdbuf, firstIndex, indexCount, primitive_restart,
                              &min_vertex, &max_vertex);
 
    unsigned vertex_range = max_vertex - min_vertex + 1;
@@ -1058,9 +1064,8 @@ panvk_per_arch(CmdDrawIndexed)(VkCommandBuffer commandBuffer,
                              panfrost_padded_vertex_count(vertex_range) :
                              vertex_range,
       .offset_start = min_vertex + vertexOffset,
-      .indices = cmdbuf->state.ib.buffer->bo->ptr.gpu +
-                 cmdbuf->state.ib.buffer->bo_offset +
-                 cmdbuf->state.ib.offset +
+      .indices = panvk_buffer_gpu_ptr(cmdbuf->state.ib.buffer,
+                                      cmdbuf->state.ib.offset) +
                  (firstIndex * (cmdbuf->state.ib.index_size / 8)),
    };
 

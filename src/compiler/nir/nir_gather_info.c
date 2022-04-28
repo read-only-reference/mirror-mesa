@@ -409,6 +409,7 @@ nir_intrinsic_writes_external_memory(const nir_intrinsic_instr *instr)
    case nir_intrinsic_ssbo_atomic_xor_ir3:
    case nir_intrinsic_store_global:
    case nir_intrinsic_store_global_ir3:
+   case nir_intrinsic_store_global_amd:
    case nir_intrinsic_store_ssbo:
    case nir_intrinsic_store_ssbo_ir3:
       return true;
@@ -522,6 +523,18 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
       }
       if (nir_intrinsic_writes_external_memory(instr))
          shader->info.writes_memory = true;
+      break;
+   }
+   case nir_intrinsic_image_deref_load: {
+      nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+      enum glsl_sampler_dim dim = glsl_get_sampler_dim(glsl_without_array(var->type));
+      if (dim != GLSL_SAMPLER_DIM_SUBPASS &&
+          dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
+         break;
+
+      var->data.fb_fetch_output = true;
+      shader->info.fs.uses_fbfetch_output = true;
       break;
    }
 
@@ -652,6 +665,21 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader,
    case nir_intrinsic_load_user_data_amd:
    case nir_intrinsic_load_view_index:
    case nir_intrinsic_load_barycentric_model:
+   case nir_intrinsic_load_ray_launch_id:
+   case nir_intrinsic_load_ray_launch_size:
+   case nir_intrinsic_load_ray_world_origin:
+   case nir_intrinsic_load_ray_world_direction:
+   case nir_intrinsic_load_ray_object_origin:
+   case nir_intrinsic_load_ray_object_direction:
+   case nir_intrinsic_load_ray_t_min:
+   case nir_intrinsic_load_ray_t_max:
+   case nir_intrinsic_load_ray_object_to_world:
+   case nir_intrinsic_load_ray_world_to_object:
+   case nir_intrinsic_load_ray_hit_kind:
+   case nir_intrinsic_load_ray_flags:
+   case nir_intrinsic_load_ray_geometry_index:
+   case nir_intrinsic_load_ray_instance_custom_index:
+   case nir_intrinsic_load_mesh_view_count:
    case nir_intrinsic_load_gs_header_ir3:
    case nir_intrinsic_load_tcs_header_ir3:
       BITSET_SET(shader->info.system_values_read,
@@ -914,7 +942,8 @@ nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint)
       shader->info.tess.tcs_cross_invocation_outputs_read = 0;
    }
 
-   shader->info.writes_memory = shader->info.has_transform_feedback_varyings;
+   if (shader->info.stage != MESA_SHADER_FRAGMENT)
+      shader->info.writes_memory = shader->info.has_transform_feedback_varyings;
 
    void *dead_ctx = ralloc_context(NULL);
    nir_foreach_block(block, entrypoint) {

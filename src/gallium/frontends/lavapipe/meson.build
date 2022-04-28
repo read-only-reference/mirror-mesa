@@ -21,6 +21,7 @@ liblvp_files = files(
     'lvp_lower_vulkan_resource.c',
     'lvp_lower_vulkan_resource.h',
     'lvp_lower_input_attachments.c',
+    'lvp_pipe_sync.c',
     'lvp_pipeline.c',
     'lvp_pipeline_cache.c',
     'lvp_query.c',
@@ -43,6 +44,6 @@ liblavapipe_st = static_library(
   c_args : [ c_msvc_compat_args, lvp_flags ],
   gnu_symbol_visibility : 'hidden',
   include_directories : [ inc_include, inc_src, inc_util, inc_gallium, inc_compiler, inc_gallium_aux ],
-  dependencies : [ idep_nir, idep_mesautil, idep_vulkan_util, idep_vulkan_wsi,
+  dependencies : [ dep_llvm, idep_nir, idep_mesautil, idep_vulkan_util, idep_vulkan_wsi,
                    idep_vulkan_runtime, lvp_deps ]
 )

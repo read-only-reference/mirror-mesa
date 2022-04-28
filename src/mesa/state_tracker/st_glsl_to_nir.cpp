@@ -173,15 +173,6 @@ st_nir_lookup_parameter_index(struct gl_program *prog, nir_variable *var)
     * fails.  In this case just find the first matching "color.*"..
     *
     * Note for arrays you could end up w/ color[n].f, for example.
-    *
-    * glsl_to_tgsi works slightly differently in this regard.  It is
-    * emitting something more low level, so it just translates the
-    * params list 1:1 to CONST[] regs.  Going from GLSL IR to TGSI,
-    * it just calculates the additional offset of struct field members
-    * in glsl_to_tgsi_visitor::visit(ir_dereference_record *ir) or
-    * glsl_to_tgsi_visitor::visit(ir_dereference_array *ir).  It never
-    * needs to work backwards to get base var loc from the param-list
-    * which already has them separated out.
     */
    if (!prog->sh.data->spirv) {
       int namelen = strlen(var->name);
@@ -255,29 +246,38 @@ st_nir_assign_uniform_locations(struct gl_context *ctx,
  * - find every gl_Position write
  * - store 1.0 to gl_PointSizeMESA after every gl_Position write
  */
-static void
+void
 st_nir_add_point_size(nir_shader *nir)
 {
    nir_variable *psiz = nir_variable_create(nir, nir_var_shader_out, glsl_float_type(), "gl_PointSizeMESA");
    psiz->data.location = VARYING_SLOT_PSIZ;
+   psiz->data.how_declared = nir_var_hidden;
 
    nir_builder b;
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
    nir_builder_init(&b, impl);
+   bool found = false;
    nir_foreach_block_safe(block, impl) {
       nir_foreach_instr_safe(instr, block) {
          if (instr->type == nir_instr_type_intrinsic) {
             nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-            if (intr->intrinsic == nir_intrinsic_store_deref) {
+            if (intr->intrinsic == nir_intrinsic_store_deref ||
+                intr->intrinsic == nir_intrinsic_copy_deref) {
                nir_variable *var = nir_intrinsic_get_var(intr, 0);
                if (var->data.location == VARYING_SLOT_POS) {
                   b.cursor = nir_after_instr(instr);
                   nir_deref_instr *deref = nir_build_deref_var(&b, psiz);
                   nir_store_deref(&b, deref, nir_imm_float(&b, 1.0), BITFIELD_BIT(0));
+                  found = true;
                }
             }
          }
       }
+   }
+   if (!found) {
+      b.cursor = nir_before_cf_list(&impl->body);
+      nir_deref_instr *deref = nir_build_deref_var(&b, psiz);
+      nir_store_deref(&b, deref, nir_imm_float(&b, 1.0), BITFIELD_BIT(0));
    }
 }
 
@@ -336,27 +336,10 @@ st_nir_preprocess(struct st_context *st, struct gl_program *prog,
    }
 
    prog->skip_pointsize_xfb = !(nir->info.outputs_written & VARYING_BIT_PSIZ);
-   if (st->lower_point_size && _mesa_is_gles(st->ctx) && prog->skip_pointsize_xfb &&
-       (stage == MESA_SHADER_TESS_EVAL || stage == MESA_SHADER_GEOMETRY) &&
+   if (st->lower_point_size && prog->skip_pointsize_xfb &&
+       stage < MESA_SHADER_FRAGMENT && stage != MESA_SHADER_TESS_CTRL &&
        st_can_add_pointsize_to_program(st, prog)) {
-      struct gl_shader *sh = NULL;
-      for (unsigned i = 0; i < shader_program->NumShaders; i++) {
-         if (shader_program->Shaders[i]->Stage == nir->info.stage) {
-            sh = shader_program->Shaders[i];
-            break;
-         }
-      }
-      assert(sh);
-      bool add_point_size = false;
-      if (nir->info.stage == MESA_SHADER_TESS_EVAL) {
-         if (!sh->OES_tessellation_point_size_enable)
-            add_point_size = true;
-      } else {
-         if (!sh->OES_geometry_point_size_enable)
-            add_point_size = true;
-      }
-      if (add_point_size)
-         NIR_PASS_V(nir, st_nir_add_point_size);
+      NIR_PASS_V(nir, st_nir_add_point_size);
    }
 
    /* ES has strict SSO validation rules for shader IO matching so we can't
@@ -570,9 +553,14 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
 static void
 st_nir_vectorize_io(nir_shader *producer, nir_shader *consumer)
 {
+   if (consumer)
+      NIR_PASS_V(consumer, nir_lower_io_to_vector, nir_var_shader_in);
+
+   if (!producer)
+      return;
+
    NIR_PASS_V(producer, nir_lower_io_to_vector, nir_var_shader_out);
    NIR_PASS_V(producer, nir_opt_combine_stores, nir_var_shader_out);
-   NIR_PASS_V(consumer, nir_lower_io_to_vector, nir_var_shader_in);
 
    if ((producer)->info.stage != MESA_SHADER_TESS_CTRL) {
       /* Calling lower_io_to_vector creates output variable writes with
@@ -796,6 +784,27 @@ st_link_nir(struct gl_context *ctx,
    for (unsigned i = 0; i < num_shaders; i++) {
       struct gl_linked_shader *shader = linked_shader[i];
       nir_shader *nir = shader->Program->nir;
+      gl_shader_stage stage = shader->Stage;
+      const struct gl_shader_compiler_options *options =
+            &ctx->Const.ShaderCompilerOptions[stage];
+
+      /* If there are forms of indirect addressing that the driver
+       * cannot handle, perform the lowering pass.
+       */
+      if (options->EmitNoIndirectInput || options->EmitNoIndirectOutput ||
+          options->EmitNoIndirectTemp || options->EmitNoIndirectUniform) {
+         nir_variable_mode mode = options->EmitNoIndirectInput ?
+            nir_var_shader_in : (nir_variable_mode)0;
+         mode |= options->EmitNoIndirectOutput ?
+            nir_var_shader_out : (nir_variable_mode)0;
+         mode |= options->EmitNoIndirectTemp ?
+            nir_var_function_temp : (nir_variable_mode)0;
+         mode |= options->EmitNoIndirectUniform ?
+            nir_var_uniform | nir_var_mem_ubo | nir_var_mem_ssbo :
+            (nir_variable_mode)0;
+
+         nir_lower_indirect_derefs(nir, mode, UINT32_MAX);
+      }
 
       /* don't infer ACCESS_NON_READABLE so that Program->sh.ImageAccess is
        * correct: https://gitlab.freedesktop.org/mesa/mesa/-/issues/3278
@@ -855,6 +864,23 @@ st_link_nir(struct gl_context *ctx,
       }
    }
 
+   /* If the program is a separate shader program check if we need to vectorise
+    * the first and last program interfaces too.
+    */
+   if (shader_program->SeparateShader && num_shaders > 0) {
+      struct gl_linked_shader *first_shader = linked_shader[0];
+      struct gl_linked_shader *last_shader = linked_shader[num_shaders - 1];
+      if (first_shader->Stage != MESA_SHADER_COMPUTE) {
+         if (ctx->Const.ShaderCompilerOptions[first_shader->Stage].NirOptions->vectorize_io &&
+             first_shader->Stage > MESA_SHADER_VERTEX)
+            st_nir_vectorize_io(NULL, first_shader->Program->nir);
+
+         if (ctx->Const.ShaderCompilerOptions[last_shader->Stage].NirOptions->vectorize_io &&
+             last_shader->Stage < MESA_SHADER_FRAGMENT)
+            st_nir_vectorize_io(last_shader->Program->nir, NULL);
+      }
+   }
+
    struct shader_info *prev_info = NULL;
 
    for (unsigned i = 0; i < num_shaders; i++) {
@@ -899,7 +925,7 @@ st_link_nir(struct gl_context *ctx,
 
       /* Initialize st_vertex_program members. */
       if (shader->Stage == MESA_SHADER_VERTEX)
-         st_prepare_vertex_program(prog, NULL);
+         st_prepare_vertex_program(prog);
 
       /* Get pipe_stream_output_info. */
       if (shader->Stage == MESA_SHADER_VERTEX ||
@@ -907,7 +933,7 @@ st_link_nir(struct gl_context *ctx,
           shader->Stage == MESA_SHADER_GEOMETRY)
          st_translate_stream_output_info(prog);
 
-      st_store_ir_in_disk_cache(st, prog, true);
+      st_store_nir_in_disk_cache(st, prog);
 
       st_release_variants(st, prog);
       st_finalize_program(st, prog);

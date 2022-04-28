@@ -1116,7 +1116,6 @@ struct_member_decoration_cb(struct vtn_builder *b,
    case SpvDecorationGLSLShared:
    case SpvDecorationGLSLPacked:
    case SpvDecorationInvariant:
-   case SpvDecorationRestrict:
    case SpvDecorationAliased:
    case SpvDecorationConstant:
    case SpvDecorationIndex:
@@ -1128,6 +1127,14 @@ struct_member_decoration_cb(struct vtn_builder *b,
    case SpvDecorationCPacked:
       vtn_warn("Decoration not allowed on struct members: %s",
                spirv_decoration_to_string(dec->decoration));
+      break;
+
+   case SpvDecorationRestrict:
+      /* While "Restrict" is invalid for struct members, glslang incorrectly
+       * generates it and it ends up hiding actual driver issues in a wall of
+       * spam from deqp-vk.  Return it to the above block once the issue is
+       * resolved.  https://github.com/KhronosGroup/glslang/issues/703
+       */
       break;
 
    case SpvDecorationXfbBuffer:
@@ -3150,7 +3157,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       unsigned result_size = glsl_get_vector_elements(ret_type->type);
       dest->elems[0]->def = nir_channel(&b->nb, &instr->dest.ssa, result_size);
       dest->elems[1]->def = nir_channels(&b->nb, &instr->dest.ssa,
-                                         BITFIELD_MASK(result_size));
+                                         nir_component_mask(result_size));
       vtn_push_ssa_value(b, w[2], dest);
    } else {
       vtn_push_nir_ssa(b, w[2], &instr->dest.ssa);
@@ -3556,15 +3563,24 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       if (nir_intrinsic_infos[op].dest_components == 0)
          intrin->num_components = dest_components;
 
+      unsigned bit_size = glsl_get_bit_size(type->type);
+      if (opcode == SpvOpImageQuerySize ||
+          opcode == SpvOpImageQuerySizeLod)
+         bit_size = MIN2(bit_size, 32);
+
       nir_ssa_dest_init(&intrin->instr, &intrin->dest,
                         nir_intrinsic_dest_components(intrin),
-                        glsl_get_bit_size(type->type), NULL);
+                        bit_size, NULL);
 
       nir_builder_instr_insert(&b->nb, &intrin->instr);
 
       nir_ssa_def *result = &intrin->dest.ssa;
       if (nir_intrinsic_dest_components(intrin) != dest_components)
          result = nir_channels(&b->nb, result, (1 << dest_components) - 1);
+
+      if (opcode == SpvOpImageQuerySize ||
+          opcode == SpvOpImageQuerySizeLod)
+         result = nir_u2u(&b->nb, result, glsl_get_bit_size(type->type));
 
       if (opcode == SpvOpImageSparseRead) {
          struct vtn_ssa_value *dest = vtn_create_ssa_value(b, struct_type->type);
@@ -3573,7 +3589,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
          if (intrin->dest.ssa.bit_size != 32)
             dest->elems[0]->def = nir_u2u32(&b->nb, dest->elems[0]->def);
          dest->elems[1]->def = nir_channels(&b->nb, result,
-                                            BITFIELD_MASK(res_type_size));
+                                            nir_component_mask(res_type_size));
          vtn_push_ssa_value(b, w[2], dest);
       } else {
          vtn_push_nir_ssa(b, w[2], result);

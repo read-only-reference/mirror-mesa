@@ -309,7 +309,6 @@ struct gl_extensions
 struct gl_shader_compiler_options
 {
    /** Driver-selectable options: */
-   GLboolean EmitNoLoops;
    GLboolean EmitNoCont;                  /**< Emit CONT opcode? */
    GLboolean EmitNoMainReturn;            /**< Emit CONT/RET opcodes? */
    GLboolean EmitNoSat;                   /**< Emit SAT opcodes? */
@@ -359,9 +358,6 @@ struct gl_shader_compiler_options
     *     matrix * vector operations, such as position transformation.
     */
    GLboolean OptimizeForAOS;
-
-   /** Lower UBO and SSBO access to intrinsics. */
-   GLboolean LowerBufferInterfaceBlocks;
 
    /** Clamp UBO and SSBO block indices so they don't go out-of-bounds. */
    GLboolean ClampBlockIndicesToArrayBounds;
@@ -955,9 +951,6 @@ struct gl_constants
 
    /** Is the drivers uniform storage packed or padded to 16 bytes. */
    bool PackedDriverUniformStorage;
-
-   /** Does the driver make use of the NIR based GLSL linker */
-   bool UseNIRGLSLLinker;
 
    /** Wether or not glBitmap uses red textures rather than alpha */
    bool BitmapUsesRed;

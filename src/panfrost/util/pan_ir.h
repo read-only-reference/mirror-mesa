@@ -43,6 +43,7 @@ enum pan_resource_table {
         PAN_TABLE_ATTRIBUTE_BUFFER,
         PAN_TABLE_SAMPLER,
         PAN_TABLE_TEXTURE,
+        PAN_TABLE_IMAGE,
 
         PAN_NUM_RESOURCE_TABLES
 };
@@ -189,6 +190,16 @@ struct panfrost_compile_inputs {
         uint8_t raw_fmt_mask;
         unsigned nr_cbufs;
 
+        /* Used on Valhall.
+         *
+         * Bit mask of special desktop-only varyings (e.g VARYING_SLOT_TEX0)
+         * written by the previous stage (fragment shader) or written by this
+         * stage (vertex shader). Bits are slots from gl_varying_slot.
+         *
+         * For modern APIs (GLES or VK), this should be 0.
+         */
+        uint32_t fixed_varying_mask;
+
         union {
                 struct {
                         bool static_rt_conv;
@@ -230,11 +241,11 @@ struct bifrost_message_preload {
         unsigned num_components;
 
         /* If texture is set, performs a texture instruction according to
-         * sampler_index, skip, and zero_lod. If texture is unset, only the
+         * texture_index, skip, and zero_lod. If texture is unset, only the
          * varying load is performed.
          */
         bool texture, skip, zero_lod;
-        unsigned sampler_index;
+        unsigned texture_index;
 };
 
 struct bifrost_shader_info {
@@ -277,6 +288,16 @@ struct pan_shader_info {
                 struct {
                         bool writes_point_size;
 
+                        /* If the primary shader writes point size, the Valhall
+                         * driver may need a variant that does not write point
+                         * size. Offset to such a shader in the program binary.
+                         *
+                         * Zero if no such variant is required.
+                         *
+                         * Only used with IDVS on Valhall.
+                         */
+                        unsigned no_psiz_offset;
+
                         /* Set if Index-Driven Vertex Shading is in use */
                         bool idvs;
 
@@ -298,6 +319,15 @@ struct pan_shader_info {
                          */
                         uint64_t secondary_preload;
                 } vs;
+
+                struct {
+                        /* Is it legal to merge workgroups? This is true if the
+                         * shader uses neither barriers nor shared memory.
+                         *
+                         * Used by the Valhall hardware.
+                         */
+                        bool allow_merging_workgroups;
+                } cs;
         };
 
         /* Does the shader contains a barrier? or (for fragment shaders) does it
@@ -314,6 +344,7 @@ struct pan_shader_info {
         unsigned texture_count;
         unsigned ubo_count;
         unsigned attribute_count;
+        unsigned attributes_read;
 
         struct {
                 unsigned input_count;

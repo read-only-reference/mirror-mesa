@@ -64,7 +64,7 @@ build_resolve_compute_shader(struct radv_device *dev, bool is_integer, bool is_s
    const struct glsl_type *sampler_type =
       glsl_sampler_type(GLSL_SAMPLER_DIM_MS, false, false, GLSL_TYPE_FLOAT);
    const struct glsl_type *img_type = glsl_image_type(GLSL_SAMPLER_DIM_2D, false, GLSL_TYPE_FLOAT);
-   nir_builder b = radv_meta_init_shader(MESA_SHADER_COMPUTE, "meta_resolve_cs-%d-%s", samples,
+   nir_builder b = radv_meta_init_shader(dev, MESA_SHADER_COMPUTE, "meta_resolve_cs-%d-%s", samples,
                                          is_integer ? "int" : (is_srgb ? "srgb" : "float"));
    b.shader->info.workgroup_size[0] = 8;
    b.shader->info.workgroup_size[1] = 8;
@@ -79,7 +79,7 @@ build_resolve_compute_shader(struct radv_device *dev, bool is_integer, bool is_s
 
    nir_ssa_def *global_id = get_global_ids(&b, 2);
 
-   nir_ssa_def *src_offset = nir_load_push_constant(&b, 2, 32, nir_imm_int(&b, 0), .range = 16);
+   nir_ssa_def *src_offset = nir_load_push_constant(&b, 2, 32, nir_imm_int(&b, 0), .range = 8);
    nir_ssa_def *dst_offset = nir_load_push_constant(&b, 2, 32, nir_imm_int(&b, 8), .range = 16);
 
    nir_ssa_def *src_coord = nir_iadd(&b, global_id, src_offset);
@@ -134,7 +134,7 @@ build_depth_stencil_resolve_compute_shader(struct radv_device *dev, int samples,
       glsl_sampler_type(GLSL_SAMPLER_DIM_MS, false, true, GLSL_TYPE_FLOAT);
    const struct glsl_type *img_type = glsl_image_type(GLSL_SAMPLER_DIM_2D, true, GLSL_TYPE_FLOAT);
 
-   nir_builder b = radv_meta_init_shader(MESA_SHADER_COMPUTE, "meta_resolve_cs_%s-%s-%d",
+   nir_builder b = radv_meta_init_shader(dev, MESA_SHADER_COMPUTE, "meta_resolve_cs_%s-%s-%d",
                                          index == DEPTH_RESOLVE ? "depth" : "stencil",
                                          get_resolve_mode_str(resolve_mode), samples);
    b.shader->info.workgroup_size[0] = 8;
@@ -778,7 +778,7 @@ radv_meta_resolve_compute_image(struct radv_cmd_buffer *cmd_buffer, struct radv_
 void
 radv_cmd_buffer_resolve_subpass_cs(struct radv_cmd_buffer *cmd_buffer)
 {
-   struct radv_framebuffer *fb = cmd_buffer->state.framebuffer;
+   struct vk_framebuffer *fb = cmd_buffer->state.framebuffer;
    const struct radv_subpass *subpass = cmd_buffer->state.subpass;
    struct radv_subpass_barrier barrier;
    uint32_t layer_count = fb->layers;
@@ -840,7 +840,7 @@ radv_depth_stencil_resolve_subpass_cs(struct radv_cmd_buffer *cmd_buffer,
                                       VkImageAspectFlags aspects,
                                       VkResolveModeFlagBits resolve_mode)
 {
-   struct radv_framebuffer *fb = cmd_buffer->state.framebuffer;
+   struct vk_framebuffer *fb = cmd_buffer->state.framebuffer;
    const struct radv_subpass *subpass = cmd_buffer->state.subpass;
    struct radv_meta_saved_state saved_state;
    uint32_t layer_count = fb->layers;

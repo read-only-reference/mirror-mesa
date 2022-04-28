@@ -31,20 +31,18 @@ dzn_entrypoints = custom_target(
 )
 
 libdzn_files = files(
-  'dzn_cmd_buffer.cpp',
-  'dzn_descriptor_set.cpp',
-  'dzn_device.cpp',
-  'dzn_image.cpp',
-  'dzn_meta.cpp',
+  'dzn_cmd_buffer.c',
+  'dzn_descriptor_set.c',
+  'dzn_device.c',
+  'dzn_image.c',
+  'dzn_meta.c',
   'dzn_nir.c',
-  'dzn_pass.cpp',
-  'dzn_pipeline_cache.cpp',
-  'dzn_pipeline.cpp',
-  'dzn_query.cpp',
-  'dzn_sync.cpp',
-  'dzn_util.cpp',
+  'dzn_pipeline_cache.c',
+  'dzn_pipeline.c',
+  'dzn_query.c',
+  'dzn_sync.c',
   'dzn_util.c',
-  'dzn_wsi.cpp',
+  'dzn_wsi.c',
 )
 
 dzn_deps = [
@@ -67,18 +65,17 @@ endif
 libvulkan_dzn = shared_library(
   'vulkan_dzn',
   [libdzn_files, dzn_entrypoints, sha1_h],
-  vs_module_defs : 'vulkan_dzn.def',
+  vs_module_defs : vulkan_api_def,
   include_directories : [
     inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux,
     inc_compiler, inc_util
   ],
   dependencies : [dzn_deps, idep_vulkan_wsi],
   c_args : dzn_flags,
-  cpp_args : dzn_flags,
   gnu_symbol_visibility : 'hidden',
   link_args : [ld_args_bsymbolic, ld_args_gc_sections],
   name_prefix : host_machine.system() == 'windows' ? '' : 'lib',
-  install : true
+  install : true,
 )
 
 icd_file_name = 'libvulkan_dzn.so'

@@ -40,6 +40,7 @@
 #include "util/vma.h"
 
 struct pvr_device_info;
+struct pvr_device_runtime_info;
 
 /* device virtual address */
 typedef struct pvr_dev_addr {
@@ -55,6 +56,7 @@ struct pvr_winsys_heaps {
    struct pvr_winsys_heap *pds_heap;
    struct pvr_winsys_heap *rgn_hdr_heap;
    struct pvr_winsys_heap *usc_heap;
+   struct pvr_winsys_heap *vis_test_heap;
 };
 
 struct pvr_winsys_static_data_offsets {
@@ -229,14 +231,12 @@ struct pvr_winsys_compute_ctx_create_info {
    enum pvr_winsys_ctx_priority priority;
 
    struct pvr_winsys_compute_ctx_static_state {
-      uint64_t cdm_ctx_state_base_addr;
-
       uint64_t cdm_ctx_store_pds0;
       uint64_t cdm_ctx_store_pds0_b;
-      uint64_t cdm_ctx_store_pds1;
+      uint32_t cdm_ctx_store_pds1;
 
       uint64_t cdm_ctx_terminate_pds;
-      uint64_t cdm_ctx_terminate_pds1;
+      uint32_t cdm_ctx_terminate_pds1;
 
       uint64_t cdm_ctx_resume_pds0;
       uint64_t cdm_ctx_resume_pds0_b;
@@ -262,8 +262,9 @@ struct pvr_winsys_compute_submit_info {
    struct {
       uint64_t tpu_border_colour_table;
       uint64_t cdm_item;
-      uint64_t compute_cluster;
+      uint32_t compute_cluster;
       uint64_t cdm_ctrl_stream_base;
+      uint64_t cdm_ctx_state_base_addr;
       uint32_t tpu;
       uint32_t cdm_resume_pds1;
    } regs;
@@ -309,7 +310,7 @@ struct pvr_winsys_render_submit_info {
 
    struct pvr_winsys_geometry_state {
       struct {
-         uint32_t pds_ctrl;
+         uint64_t pds_ctrl;
          uint32_t ppp_ctrl;
          uint32_t te_psg;
          uint32_t tpu;
@@ -336,7 +337,7 @@ struct pvr_winsys_render_submit_info {
          uint64_t isp_stencil_load_store_base;
          uint64_t isp_zload_store_base;
          uint64_t isp_zlsctl;
-         uint64_t isp_zls_pixels;
+         uint32_t isp_zls_pixels;
          uint64_t pbe_word[PVR_MAX_COLOR_ATTACHMENTS]
                           [ROGUE_NUM_PBESTATE_REG_WORDS];
          uint32_t pixel_phantom;
@@ -357,7 +358,8 @@ struct pvr_winsys_render_submit_info {
 struct pvr_winsys_ops {
    void (*destroy)(struct pvr_winsys *ws);
    int (*device_info_init)(struct pvr_winsys *ws,
-                           struct pvr_device_info *dev_info);
+                           struct pvr_device_info *dev_info,
+                           struct pvr_device_runtime_info *runtime_info);
    void (*get_heaps_info)(struct pvr_winsys *ws,
                           struct pvr_winsys_heaps *heaps);
 

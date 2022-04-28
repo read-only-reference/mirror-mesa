@@ -54,10 +54,51 @@
 #include <OS.h>
 #endif
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
+enum util_debug_type
+{
+   UTIL_DEBUG_TYPE_OUT_OF_MEMORY = 1,
+   UTIL_DEBUG_TYPE_ERROR,
+   UTIL_DEBUG_TYPE_SHADER_INFO,
+   UTIL_DEBUG_TYPE_PERF_INFO,
+   UTIL_DEBUG_TYPE_INFO,
+   UTIL_DEBUG_TYPE_FALLBACK,
+   UTIL_DEBUG_TYPE_CONFORMANCE,
+};
+
+/**
+ * Structure that contains a callback for debug messages from the driver back
+ * to the gallium frontend.
+ */
+struct util_debug_callback
+{
+   /**
+    * When set to \c true, the callback may be called asynchronously from a
+    * driver-created thread.
+    */
+   bool async;
+
+   /**
+    * Callback for the driver to report debug/performance/etc information back
+    * to the gallium frontend.
+    *
+    * \param data       user-supplied data pointer
+    * \param id         message type identifier, if pointed value is 0, then a
+    *                   new id is assigned
+    * \param type       UTIL_DEBUG_TYPE_*
+    * \param format     printf-style format string
+    * \param args       args for format string
+    */
+   void (*debug_message)(void *data,
+                         unsigned *id,
+                         enum util_debug_type type,
+                         const char *fmt,
+                         va_list args);
+   void *data;
+};
 
 #define _util_printf_format(fmt, list) PRINTFLIKE(fmt, list)
 
@@ -136,13 +177,15 @@ void debug_print_blob( const char *name, const void *blob, unsigned size );
 #endif
 
 
+#ifdef _WIN32
 /**
- * Disable interactive error message boxes.
+ * Disable Win32 interactive error message boxes.
  *
  * Should be called as soon as possible for effectiveness.
  */
 void
-debug_disable_error_message_boxes(void);
+debug_disable_win32_error_dialogs(void);
+#endif
 
 
 /**
@@ -266,22 +309,20 @@ void _debug_assert_fail(const char *expr,
 /**
  * Output a debug log message to the debug info callback.
  */
-#define pipe_debug_message(cb, type, fmt, ...) do { \
+#define util_debug_message(cb, type, fmt, ...) do { \
    static unsigned id = 0; \
    if ((cb) && (cb)->debug_message) { \
-      _pipe_debug_message(cb, &id, \
-                          PIPE_DEBUG_TYPE_ ## type, \
+      _util_debug_message(cb, &id, \
+                          UTIL_DEBUG_TYPE_ ## type, \
                           fmt, ##__VA_ARGS__); \
    } \
 } while (0)
 
-struct pipe_debug_callback;
-
 void
-_pipe_debug_message(
-   struct pipe_debug_callback *cb,
+_util_debug_message(
+   struct util_debug_callback *cb,
    unsigned *id,
-   enum pipe_debug_type type,
+   enum util_debug_type type,
    const char *fmt, ...) _util_printf_format(4, 5);
 
 
@@ -490,7 +531,7 @@ debug_get_option_ ## sufix (void) \
 }
 
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 }
 #endif
 

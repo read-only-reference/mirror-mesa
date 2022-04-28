@@ -512,6 +512,32 @@ struct panvk_buffer {
    VkDeviceSize bo_offset;
 };
 
+static inline mali_ptr
+panvk_buffer_gpu_ptr(const struct panvk_buffer *buffer, uint64_t offset)
+{
+   if (buffer->bo == NULL)
+      return 0;
+
+   return buffer->bo->ptr.gpu + buffer->bo_offset + offset;
+}
+
+static inline uint64_t
+panvk_buffer_range(const struct panvk_buffer *buffer,
+                   uint64_t offset, uint64_t range)
+{
+   if (buffer->bo == NULL)
+      return 0;
+
+   assert(offset <= buffer->size);
+   if (range == VK_WHOLE_SIZE) {
+      return buffer->size - offset;
+   } else {
+      assert(range + offset >= range);
+      assert(range + offset <= buffer->size);
+      return range;
+   }
+}
+
 enum panvk_dynamic_state_bits {
    PANVK_DYNAMIC_VIEWPORT = 1 << 0,
    PANVK_DYNAMIC_SCISSOR = 1 << 1,
@@ -870,6 +896,7 @@ struct panvk_pipeline {
       bool front_ccw;
       bool cull_front_face;
       bool cull_back_face;
+      bool enable;
    } rast;
 
    struct {
@@ -908,49 +935,6 @@ struct panvk_pipeline {
 
    VkViewport viewport;
    VkRect2D scissor;
-};
-
-struct panvk_image_level {
-   VkDeviceSize offset;
-   VkDeviceSize size;
-   uint32_t pitch;
-};
-
-struct panvk_slice_layout {
-   unsigned width;
-   unsigned height;
-   unsigned depth;
-   unsigned offset;
-   unsigned line_stride;
-   unsigned size;
-
-   /* If there is a header preceding each slice, how big is
-    * that header? Used for AFBC.
-    */
-   unsigned afbc_header_size;
-
-   /* If checksumming is enabled following the slice, what
-    * is its offset/stride?
-    */
-   struct {
-      unsigned offset;
-      unsigned stride;
-      unsigned size;
-   } checksum;
-};
-
-#define PANVK_MAX_MIP_LEVELS 13
-
-struct panvk_plane_layout {
-   struct panvk_slice_layout slices[PANVK_MAX_MIP_LEVELS];
-   unsigned offset;
-   unsigned array_stride;
-   unsigned size;
-};
-
-struct panvk_plane_memory {
-   const struct panfrost_bo *bo;
-   unsigned offset;
 };
 
 #define PANVK_MAX_PLANES 1

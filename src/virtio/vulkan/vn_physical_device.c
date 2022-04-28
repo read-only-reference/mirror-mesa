@@ -135,11 +135,16 @@ vn_physical_device_init_features(struct vn_physical_device *physical_dev)
                        features2);
 
    /* EXT */
+   VN_ADD_EXT_TO_PNEXT(exts->EXT_conditional_rendering,
+                       feats->conditional_rendering,
+                       CONDITIONAL_RENDERING_FEATURES_EXT, features2);
    VN_ADD_EXT_TO_PNEXT(exts->EXT_custom_border_color,
                        feats->custom_border_color,
                        CUSTOM_BORDER_COLOR_FEATURES_EXT, features2);
    VN_ADD_EXT_TO_PNEXT(exts->EXT_depth_clip_enable, feats->depth_clip_enable,
                        DEPTH_CLIP_ENABLE_FEATURES_EXT, features2);
+   VN_ADD_EXT_TO_PNEXT(exts->EXT_index_type_uint8, feats->index_type_uint8,
+                       INDEX_TYPE_UINT8_FEATURES_EXT, features2);
    VN_ADD_EXT_TO_PNEXT(exts->EXT_line_rasterization,
                        feats->line_rasterization,
                        LINE_RASTERIZATION_FEATURES_EXT, features2);
@@ -942,18 +947,21 @@ vn_physical_device_get_passthrough_extensions(
       /* promoted to VK_VERSION_1_3 */
       .EXT_4444_formats = true,
       .EXT_extended_dynamic_state = true,
-      .EXT_extended_dynamic_state2 = true,
+      /* TODO re-enable with fixed extended_dynamic_state.*_raster cts */
+      .EXT_extended_dynamic_state2 = false,
       .EXT_image_robustness = true,
       .EXT_shader_demote_to_helper_invocation = true,
 
       /* EXT */
       .EXT_calibrated_timestamps = true,
+      .EXT_conditional_rendering = true,
       .EXT_conservative_rasterization = true,
       .EXT_custom_border_color = true,
       .EXT_depth_clip_enable = true,
 #ifndef ANDROID
       .EXT_image_drm_format_modifier = true,
 #endif
+      .EXT_index_type_uint8 = true,
       .EXT_line_rasterization = true,
       .EXT_provoking_vertex = true,
       .EXT_queue_family_foreign = true,
@@ -1581,8 +1589,10 @@ vn_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          *shader_demote_to_helper_invocation;
 
       /* EXT */
+      VkPhysicalDeviceConditionalRenderingFeaturesEXT *conditional_rendering;
       VkPhysicalDeviceCustomBorderColorFeaturesEXT *custom_border_color;
       VkPhysicalDeviceDepthClipEnableFeaturesEXT *depth_clip_enable;
+      VkPhysicalDeviceIndexTypeUint8FeaturesEXT *index_type_uint8;
       VkPhysicalDeviceLineRasterizationFeaturesEXT *line_rasterization;
       VkPhysicalDeviceProvokingVertexFeaturesEXT *provoking_vertex;
       VkPhysicalDeviceRobustness2FeaturesEXT *robustness_2;
@@ -1768,11 +1778,17 @@ vn_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          break;
 
       /* EXT */
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT:
+         *u.conditional_rendering = feats->conditional_rendering;
+         break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT:
          *u.custom_border_color = feats->custom_border_color;
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_ENABLE_FEATURES_EXT:
          *u.depth_clip_enable = feats->depth_clip_enable;
+         break;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES_EXT:
+         *u.index_type_uint8 = feats->index_type_uint8;
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT:
          *u.line_rasterization = feats->line_rasterization;
@@ -2051,7 +2067,9 @@ vn_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          }
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENTATION_PROPERTIES_ANDROID:
-         u.presentation_properties->sharedImage = VK_FALSE;
+         u.presentation_properties->sharedImage =
+            vn_android_gralloc_get_shared_present_usage() ? VK_TRUE
+                                                          : VK_FALSE;
          break;
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT:
          *u.provoking_vertex = props->provoking_vertex;

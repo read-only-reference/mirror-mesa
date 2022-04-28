@@ -71,6 +71,8 @@
 
 #define VK_VENDOR_ID_IMAGINATION 0x1010
 
+#define PVR_WORKGROUP_DIMENSIONS 3U
+
 #define PVR_STATE_PBE_DWORDS 2U
 
 #define PVR_PIPELINE_LAYOUT_SUPPORTED_DESCRIPTOR_TYPE_COUNT \
@@ -135,11 +137,11 @@ enum pvr_pipeline_stage_bits {
 #define PVR_PIPELINE_STAGE_ALL_GRAPHICS_BITS \
    (PVR_PIPELINE_STAGE_GEOM_BIT | PVR_PIPELINE_STAGE_FRAG_BIT)
 
-#define PVR_PIPELINE_STAGE_ALL_BITS \
-   (PVR_PIPELINE_STAGE_ALL_GRAPHICS_BITS | PVR_PIPELINE_STAGE_TRANSFER_BIT)
+#define PVR_PIPELINE_STAGE_ALL_BITS                                         \
+   (PVR_PIPELINE_STAGE_ALL_GRAPHICS_BITS | PVR_PIPELINE_STAGE_COMPUTE_BIT | \
+    PVR_PIPELINE_STAGE_TRANSFER_BIT)
 
-/* TODO: This number must be changed when we add compute support. */
-#define PVR_NUM_SYNC_PIPELINE_STAGES 3U
+#define PVR_NUM_SYNC_PIPELINE_STAGES 4U
 
 /* Warning: Do not define an invalid stage as 0 since other code relies on 0
  * being the first shader stage. This allows for stages to be split or added
@@ -200,6 +202,10 @@ struct pvr_physical_device {
 
    struct pvr_winsys *ws;
    struct pvr_device_info dev_info;
+
+   struct pvr_device_runtime_info {
+      uint32_t core_count;
+   } dev_runtime_info;
 
    VkPhysicalDeviceMemoryProperties memory;
 
@@ -852,6 +858,7 @@ struct pvr_cmd_buffer_state {
    uint32_t pds_vertex_attrib_offset;
 
    uint32_t pds_fragment_uniform_data_offset;
+   uint32_t pds_compute_uniform_data_offset;
 };
 
 static_assert(
@@ -1019,8 +1026,20 @@ struct pvr_compute_pipeline {
    struct pvr_pipeline base;
 
    struct {
-      /* Pointer to a buffer object that contains the shader binary. */
-      struct pvr_bo *bo;
+      struct {
+         /* Pointer to a buffer object that contains the shader binary. */
+         struct pvr_bo *bo;
+
+         bool uses_atomic_ops;
+         bool uses_barrier;
+         /* E.g. GLSL shader uses gl_NumWorkGroups. */
+         bool uses_num_workgroups;
+
+         uint32_t const_shared_reg_count;
+         uint32_t input_register_count;
+         uint32_t work_size;
+         uint32_t coefficient_register_count;
+      } shader;
 
       struct {
          uint32_t base_workgroup : 1;
@@ -1031,12 +1050,17 @@ struct pvr_compute_pipeline {
       struct pvr_pds_upload primary_program;
       struct pvr_pds_info primary_program_info;
 
-      struct pvr_pds_upload primary_program_base_workgroup_variant;
-      struct pvr_pds_info primary_program_base_workgroup_variant_info;
-      /* Offset within the PDS data section at which the base workgroup id
-       * resides.
-       */
-      uint32_t base_workgroup_ids_dword_offset;
+      struct pvr_pds_base_workgroup_program {
+         struct pvr_pds_upload code_upload;
+
+         uint32_t *data_section;
+         /* Offset within the PDS data section at which the base workgroup id
+          * resides.
+          */
+         uint32_t base_workgroup_data_patching_offset;
+
+         struct pvr_pds_info info;
+      } primary_base_workgroup_variant_program;
    } state;
 };
 
@@ -1081,6 +1105,18 @@ struct pvr_graphics_pipeline {
 
    struct pvr_vertex_shader_state vertex_shader_state;
    struct pvr_fragment_shader_state fragment_shader_state;
+};
+
+struct pvr_query_pool {
+   struct vk_object_base base;
+
+   /* Stride of result_buffer to get to the start of the results for the next
+    * Phantom.
+    */
+   uint32_t result_stride;
+
+   struct pvr_bo *result_buffer;
+   struct pvr_bo *availability_buffer;
 };
 
 struct pvr_render_target {
@@ -1355,6 +1391,10 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_pipeline,
                                base,
                                VkPipeline,
                                VK_OBJECT_TYPE_PIPELINE)
+VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_query_pool,
+                               base,
+                               VkQueryPool,
+                               VK_OBJECT_TYPE_QUERY_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(pvr_framebuffer,
                                base,
                                VkFramebuffer,

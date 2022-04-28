@@ -32,6 +32,7 @@
 #include "util/u_dual_blend.h"
 #include "util/u_memory.h"
 #include "util/u_helpers.h"
+#include "vulkan/util/vk_format.h"
 
 #include <math.h>
 
@@ -118,6 +119,7 @@ zink_create_vertex_elements_state(struct pipe_context *pctx,
          ves->hw_state.attribs[i].format = format;
          assert(ves->hw_state.attribs[i].format != VK_FORMAT_UNDEFINED);
          ves->hw_state.attribs[i].offset = elem->src_offset;
+         ves->min_stride[binding] = MAX2(ves->min_stride[binding], elem->src_offset + vk_format_get_blocksize(format));
       }
    }
    assert(num_decomposed + num_elements <= PIPE_MAX_ATTRIBS);
@@ -561,18 +563,6 @@ line_width(float width, float granularity, const float range[2])
    return CLAMP(width, range[0], range[1]);
 }
 
-#define warn_line_feature(feat) \
-   do { \
-      static bool warned = false; \
-      if (!warned) { \
-         fprintf(stderr, "WARNING: Incorrect rendering will happen, " \
-                         "because the Vulkan device doesn't support " \
-                         "the %s feature of " \
-                         "VK_EXT_line_rasterization\n", feat); \
-         warned = true; \
-      } \
-   } while (0)
-
 static void *
 zink_create_rasterizer_state(struct pipe_context *pctx,
                              const struct pipe_rasterizer_state *rs_state)
@@ -603,56 +593,17 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
                        VK_FRONT_FACE_COUNTER_CLOCKWISE :
                        VK_FRONT_FACE_CLOCKWISE;
 
-   VkPhysicalDeviceLineRasterizationFeaturesEXT *line_feats =
-            &screen->info.line_rast_feats;
-   state->hw_state.line_mode =
-      VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT;
-
-   if (rs_state->line_stipple_enable) {
-      if (screen->info.have_EXT_line_rasterization) {
-         if (rs_state->line_rectangular) {
-            if (rs_state->line_smooth) {
-               if (line_feats->stippledSmoothLines)
-                  state->hw_state.line_mode =
-                     VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT;
-               else
-                  warn_line_feature("stippledSmoothLines");
-            } else if (line_feats->stippledRectangularLines)
-               state->hw_state.line_mode =
-                  VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT;
-            else
-               warn_line_feature("stippledRectangularLines");
-         } else if (line_feats->stippledBresenhamLines)
-            state->hw_state.line_mode =
-               VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
-         else {
-            warn_line_feature("stippledBresenhamLines");
-
-            /* no suitable mode that supports line stippling */
-            state->base.line_stipple_factor = 0;
-            state->base.line_stipple_pattern = UINT16_MAX;
-         }
-      }
+   state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT;
+   if (rs_state->line_rectangular) {
+      if (rs_state->line_smooth)
+         state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT;
+      else
+         state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT;
    } else {
-      if (screen->info.have_EXT_line_rasterization) {
-         if (rs_state->line_rectangular) {
-            if (rs_state->line_smooth) {
-               if (line_feats->smoothLines)
-                  state->hw_state.line_mode =
-                     VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT;
-               else
-                  warn_line_feature("smoothLines");
-            } else if (line_feats->rectangularLines)
-               state->hw_state.line_mode =
-                  VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT;
-            else
-               warn_line_feature("rectangularLines");
-         } else if (line_feats->bresenhamLines)
-            state->hw_state.line_mode =
-               VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
-         else
-            warn_line_feature("bresenhamLines");
-      }
+      state->hw_state.line_mode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
+   }
+
+   if (!rs_state->line_stipple_enable) {
       state->base.line_stipple_factor = 0;
       state->base.line_stipple_pattern = UINT16_MAX;
    }

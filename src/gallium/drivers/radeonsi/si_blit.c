@@ -882,9 +882,30 @@ struct texture_orig_info {
    unsigned npix0_y;
 };
 
+static bool si_can_use_compute_blit(struct si_context *sctx, enum pipe_format format,
+                                    unsigned num_samples, bool is_store, bool has_dcc)
+{
+   /* TODO: This format fails AMD_TEST=imagecopy. */
+   if (format == PIPE_FORMAT_A8R8_UNORM && is_store)
+      return false;
+
+   if (num_samples > 1)
+      return false;
+
+   if (util_format_is_depth_or_stencil(format))
+      return false;
+
+   /* Image stores support DCC since GFX10. */
+   if (has_dcc && is_store && sctx->chip_class < GFX10)
+      return false;
+
+   return true;
+}
+
 static void si_use_compute_copy_for_float_formats(struct si_context *sctx,
                                                   struct pipe_resource *texture,
-                                                  unsigned level) {
+                                                  unsigned level)
+{
    struct si_texture *tex = (struct si_texture *)texture;
 
    /* If we are uploading into FP16 or R11G11B10_FLOAT via a blit, CB clobbers NaNs,
@@ -898,7 +919,9 @@ static void si_use_compute_copy_for_float_formats(struct si_context *sctx,
     */
    if (vi_dcc_enabled(tex, level) &&
        util_format_is_float(texture->format) &&
-       sctx->chip_class < GFX10) {
+       /* Check if disabling DCC enables the compute copy. */
+       !si_can_use_compute_blit(sctx, texture->format, texture->nr_samples, true, true) &&
+       si_can_use_compute_blit(sctx, texture->format, texture->nr_samples, true, false)) {
       si_texture_disable_dcc(sctx, tex);
    }
 }
@@ -913,9 +936,7 @@ void si_resource_copy_region(struct pipe_context *ctx, struct pipe_resource *dst
    struct si_texture *sdst = (struct si_texture *)dst;
    struct pipe_surface *dst_view, dst_templ;
    struct pipe_sampler_view src_templ, *src_view;
-   unsigned dst_width, dst_height, src_width0, src_height0;
-   unsigned dst_width0, dst_height0, src_force_level = 0;
-   struct pipe_box sbox, dstbox;
+   struct pipe_box dstbox;
 
    /* Handle buffers first. */
    if (dst->target == PIPE_BUFFER && src->target == PIPE_BUFFER) {
@@ -925,12 +946,10 @@ void si_resource_copy_region(struct pipe_context *ctx, struct pipe_resource *dst
 
    si_use_compute_copy_for_float_formats(sctx, dst, dst_level);
 
-   if (!util_format_is_compressed(src->format) && !util_format_is_compressed(dst->format) &&
-       !util_format_is_depth_or_stencil(src->format) && src->nr_samples <= 1 &&
-       /* DCC compression from image store is enabled for GFX10+. */
-       (!vi_dcc_enabled(sdst, dst_level) || sctx->chip_class >= GFX10) &&
-       !(dst->target != src->target &&
-         (src->target == PIPE_TEXTURE_1D_ARRAY || dst->target == PIPE_TEXTURE_1D_ARRAY))) {
+   if (si_can_use_compute_blit(sctx, dst->format, dst->nr_samples, true,
+                               vi_dcc_enabled(sdst, dst_level)) &&
+       si_can_use_compute_blit(sctx, src->format, src->nr_samples, false,
+                               vi_dcc_enabled(ssrc, src_level))) {
       si_compute_copy_image(sctx, dst, dst_level, src, src_level, dstx, dsty, dstz,
                             src_box, false, SI_OP_SYNC_BEFORE_AFTER);
       return;
@@ -943,116 +962,64 @@ void si_resource_copy_region(struct pipe_context *ctx, struct pipe_resource *dst
    si_decompress_subresource(ctx, src, PIPE_MASK_RGBAZS, src_level, src_box->z,
                              src_box->z + src_box->depth - 1);
 
-   dst_width = u_minify(dst->width0, dst_level);
-   dst_height = u_minify(dst->height0, dst_level);
-   dst_width0 = dst->width0;
-   dst_height0 = dst->height0;
-   src_width0 = src->width0;
-   src_height0 = src->height0;
-
    util_blitter_default_dst_texture(&dst_templ, dst, dst_level, dstz);
    util_blitter_default_src_texture(sctx->blitter, &src_templ, src, src_level);
 
-   if (util_format_is_compressed(src->format) || util_format_is_compressed(dst->format)) {
-      unsigned blocksize = ssrc->surface.bpe;
+   assert(!util_format_is_compressed(src->format) && !util_format_is_compressed(dst->format));
+   assert(!util_format_is_subsampled_422(src->format));
 
-      if (blocksize == 8)
-         src_templ.format = PIPE_FORMAT_R16G16B16A16_UINT; /* 64-bit block */
-      else
-         src_templ.format = PIPE_FORMAT_R32G32B32A32_UINT; /* 128-bit block */
-      dst_templ.format = src_templ.format;
-
-      dst_width = util_format_get_nblocksx(dst->format, dst_width);
-      dst_height = util_format_get_nblocksy(dst->format, dst_height);
-      dst_width0 = util_format_get_nblocksx(dst->format, dst_width0);
-      dst_height0 = util_format_get_nblocksy(dst->format, dst_height0);
-      src_width0 = util_format_get_nblocksx(src->format, src_width0);
-      src_height0 = util_format_get_nblocksy(src->format, src_height0);
-
-      dstx = util_format_get_nblocksx(dst->format, dstx);
-      dsty = util_format_get_nblocksy(dst->format, dsty);
-
-      sbox.x = util_format_get_nblocksx(src->format, src_box->x);
-      sbox.y = util_format_get_nblocksy(src->format, src_box->y);
-      sbox.z = src_box->z;
-      sbox.width = util_format_get_nblocksx(src->format, src_box->width);
-      sbox.height = util_format_get_nblocksy(src->format, src_box->height);
-      sbox.depth = src_box->depth;
-      src_box = &sbox;
-
-      src_force_level = src_level;
-   } else if (!util_blitter_is_copy_supported(sctx->blitter, dst, src)) {
-      if (util_format_is_subsampled_422(src->format)) {
-         src_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
-         dst_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
-
-         dst_width = util_format_get_nblocksx(dst->format, dst_width);
-         dst_width0 = util_format_get_nblocksx(dst->format, dst_width0);
-         src_width0 = util_format_get_nblocksx(src->format, src_width0);
-
-         dstx = util_format_get_nblocksx(dst->format, dstx);
-
-         sbox = *src_box;
-         sbox.x = util_format_get_nblocksx(src->format, src_box->x);
-         sbox.width = util_format_get_nblocksx(src->format, src_box->width);
-         src_box = &sbox;
-      } else {
-         unsigned blocksize = ssrc->surface.bpe;
-
-         switch (blocksize) {
-         case 1:
-            dst_templ.format = PIPE_FORMAT_R8_UNORM;
-            src_templ.format = PIPE_FORMAT_R8_UNORM;
-            break;
-         case 2:
-            dst_templ.format = PIPE_FORMAT_R8G8_UNORM;
-            src_templ.format = PIPE_FORMAT_R8G8_UNORM;
-            break;
-         case 4:
-            dst_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
-            src_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
-            break;
-         case 8:
-            dst_templ.format = PIPE_FORMAT_R16G16B16A16_UINT;
-            src_templ.format = PIPE_FORMAT_R16G16B16A16_UINT;
-            break;
-         case 16:
-            dst_templ.format = PIPE_FORMAT_R32G32B32A32_UINT;
-            src_templ.format = PIPE_FORMAT_R32G32B32A32_UINT;
-            break;
-         default:
-            fprintf(stderr, "Unhandled format %s with blocksize %u\n",
-                    util_format_short_name(src->format), blocksize);
-            assert(0);
-         }
+   if (!util_blitter_is_copy_supported(sctx->blitter, dst, src)) {
+      switch (ssrc->surface.bpe) {
+      case 1:
+         dst_templ.format = PIPE_FORMAT_R8_UNORM;
+         src_templ.format = PIPE_FORMAT_R8_UNORM;
+         break;
+      case 2:
+         dst_templ.format = PIPE_FORMAT_R8G8_UNORM;
+         src_templ.format = PIPE_FORMAT_R8G8_UNORM;
+         break;
+      case 4:
+         dst_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
+         src_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
+         break;
+      case 8:
+         dst_templ.format = PIPE_FORMAT_R16G16B16A16_UINT;
+         src_templ.format = PIPE_FORMAT_R16G16B16A16_UINT;
+         break;
+      case 16:
+         dst_templ.format = PIPE_FORMAT_R32G32B32A32_UINT;
+         src_templ.format = PIPE_FORMAT_R32G32B32A32_UINT;
+         break;
+      default:
+         fprintf(stderr, "Unhandled format %s with blocksize %u\n",
+                 util_format_short_name(src->format), ssrc->surface.bpe);
+         assert(0);
       }
    }
 
-   /* SNORM8 blitting has precision issues on some chips. Use the SINT
+   /* SNORM blitting has precision issues on some chips. Use the SINT
     * equivalent instead, which doesn't force DCC decompression.
     */
-   if (util_format_is_snorm8(dst_templ.format)) {
-      dst_templ.format = src_templ.format = util_format_snorm8_to_sint8(dst_templ.format);
+   if (util_format_is_snorm(dst_templ.format)) {
+      dst_templ.format = src_templ.format = util_format_snorm_to_sint(dst_templ.format);
    }
 
    vi_disable_dcc_if_incompatible_format(sctx, dst, dst_level, dst_templ.format);
    vi_disable_dcc_if_incompatible_format(sctx, src, src_level, src_templ.format);
 
    /* Initialize the surface. */
-   dst_view = si_create_surface_custom(ctx, dst, &dst_templ, dst_width0, dst_height0, dst_width,
-                                       dst_height);
+   dst_view = ctx->create_surface(ctx, dst, &dst_templ);
 
    /* Initialize the sampler view. */
-   src_view =
-      si_create_sampler_view_custom(ctx, src, &src_templ, src_width0, src_height0, src_force_level);
+   src_view = ctx->create_sampler_view(ctx, src, &src_templ);
 
    u_box_3d(dstx, dsty, dstz, abs(src_box->width), abs(src_box->height), abs(src_box->depth),
             &dstbox);
 
    /* Copy. */
    si_blitter_begin(sctx, SI_COPY);
-   util_blitter_blit_generic(sctx->blitter, dst_view, &dstbox, src_view, src_box, src_width0,
-                             src_height0, PIPE_MASK_RGBAZS, PIPE_TEX_FILTER_NEAREST, NULL, false, false);
+   util_blitter_blit_generic(sctx->blitter, dst_view, &dstbox, src_view, src_box, src->width0,
+                             src->height0, PIPE_MASK_RGBAZS, PIPE_TEX_FILTER_NEAREST, NULL, false, false);
    si_blitter_end(sctx);
 
    pipe_surface_reference(&dst_view, NULL);

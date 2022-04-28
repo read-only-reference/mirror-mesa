@@ -398,8 +398,8 @@ drisw_allocate_textures(struct dri_context *stctx,
       templ.nr_storage_samples = 0;
 
       if (statts[i] == ST_ATTACHMENT_FRONT_LEFT &&
-          screen->base.screen->resource_create_front &&
-          loader->base.version >= 3) {
+                 screen->base.screen->resource_create_front &&
+                 loader->base.version >= 3) {
          drawable->textures[statts[i]] =
             screen->base.screen->resource_create_front(screen->base.screen, &templ, (const void *)drawable);
       } else

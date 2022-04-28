@@ -382,7 +382,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		goto error;
 	}
 
-	pipe_debug_message(&rctx->b.debug, SHADER_INFO, "%s shader: %d dw, %d gprs, %d loops, %d cf, %d stack",
+	util_debug_message(&rctx->b.debug, SHADER_INFO, "%s shader: %d dw, %d gprs, %d loops, %d cf, %d stack",
 		           _mesa_shader_stage_to_abbrev(tgsi_processor_to_shader_stage(processor)),
 	                   shader->shader.bc.ndw,
 	                   shader->shader.bc.ngpr,
@@ -1206,7 +1206,6 @@ static int tgsi_declaration(struct r600_shader_ctx *ctx)
 		ctx->shader->atomics[i].start = d->Range.First;
 		ctx->shader->atomics[i].end = d->Range.Last;
 		ctx->shader->atomics[i].hw_idx = ctx->shader->atomic_base + ctx->shader->nhwatomic;
-		ctx->shader->atomics[i].array_id = d->Array.ArrayID;
 		ctx->shader->atomics[i].buffer_id = d->Dim.Index2D;
 		ctx->shader->nhwatomic_ranges++;
 		ctx->shader->nhwatomic += count;
@@ -4492,18 +4491,16 @@ static void tgsi_dst(struct r600_shader_ctx *ctx,
 
 				if (tgsi_dst->Register.Indirect) {
 					cf.index_gpr = ctx->bc->ar_reg;
-			}
-			else {
-				cf.array_base += idx;
-				cf.array_size = 0;
-			}
+				} else {
+					cf.array_base += idx;
+					cf.array_size = 0;
+				}
 
-			r = r600_bytecode_add_pending_output(ctx->bc, &cf);
-			if (r)
-				return;
+				r = r600_bytecode_add_pending_output(ctx->bc, &cf);
+				if (r)
+					return;
 
-			r600_bytecode_add_ack(ctx->bc);
-
+				r600_bytecode_add_ack(ctx->bc);
 			}
 			return;
 		}
@@ -8665,23 +8662,16 @@ static int find_hw_atomic_counter(struct r600_shader_ctx *ctx,
 {
 	unsigned i;
 
-	if (src->Register.Indirect) {
-		for (i = 0; i < ctx->shader->nhwatomic_ranges; i++) {
-			if (src->Indirect.ArrayID == ctx->shader->atomics[i].array_id)
-				return ctx->shader->atomics[i].hw_idx;
-		}
-	} else {
-		uint32_t index = src->Register.Index;
-		for (i = 0; i < ctx->shader->nhwatomic_ranges; i++) {
-			if (ctx->shader->atomics[i].buffer_id != (unsigned)src->Dimension.Index)
-				continue;
-			if (index > ctx->shader->atomics[i].end)
-				continue;
-			if (index < ctx->shader->atomics[i].start)
-				continue;
-			uint32_t offset = (index - ctx->shader->atomics[i].start);
-			return ctx->shader->atomics[i].hw_idx + offset;
-		}
+	uint32_t index = src->Register.Index;
+	for (i = 0; i < ctx->shader->nhwatomic_ranges; i++) {
+		if (ctx->shader->atomics[i].buffer_id != (unsigned)src->Dimension.Index)
+			continue;
+		if (index > ctx->shader->atomics[i].end)
+			continue;
+		if (index < ctx->shader->atomics[i].start)
+			continue;
+		uint32_t offset = (index - ctx->shader->atomics[i].start);
+		return ctx->shader->atomics[i].hw_idx + offset;
 	}
 	assert(0);
 	return -1;
@@ -8859,6 +8849,20 @@ static int load_buffer_coord(struct r600_shader_ctx *ctx, int src_idx,
 	return 0;
 }
 
+/* ADDR[1,2] are stored in index_reg[0,1] on EG, and can be used for indexing
+ * images and ssbos.  We assume that indirects are indexed by ADDR[2], as that's
+ * what GLSL-to-TGSI emitted.
+ */
+static unsigned tgsi_indirect_to_rat_index_mode(struct tgsi_ind_register ind)
+{
+	if (ind.File == TGSI_FILE_NULL)
+		return 0; /* CF_INDEX_NONE */
+	else {
+		assert(ind.Index == 2);
+		return 2; /* CF_INDEX_1 */
+	}
+}
+
 static int tgsi_load_buffer(struct r600_shader_ctx *ctx)
 {
 	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
@@ -8867,10 +8871,9 @@ static int tgsi_load_buffer(struct r600_shader_ctx *ctx)
 	struct r600_bytecode_cf *cf;
 	int r;
 	int temp_reg = r600_get_temp(ctx);
-	unsigned rat_index_mode;
+	unsigned rat_index_mode = tgsi_indirect_to_rat_index_mode(inst->Src[0].Indirect);
 	unsigned base;
 
-	rat_index_mode = inst->Src[0].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
 	base = R600_IMAGE_REAL_RESOURCE_OFFSET + ctx->info.file_count[TGSI_FILE_IMAGE];
 
 	r = load_buffer_coord(ctx, 1, temp_reg);
@@ -8925,10 +8928,8 @@ static int tgsi_load_rat(struct r600_shader_ctx *ctx)
 	int idx_gpr;
 	unsigned format, num_format, format_comp, endian;
 	const struct util_format_description *desc;
-	unsigned rat_index_mode;
+	unsigned rat_index_mode = tgsi_indirect_to_rat_index_mode(inst->Src[0].Indirect);
 	unsigned immed_base;
-
-	rat_index_mode = inst->Src[0].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
 
 	immed_base = R600_IMAGE_IMMED_RESOURCE_OFFSET;
 	r = load_index_src(ctx, 1, &idx_gpr);
@@ -9030,7 +9031,7 @@ static int tgsi_store_buffer_rat(struct r600_shader_ctx *ctx)
 	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
 	struct r600_bytecode_cf *cf;
 	int r, i;
-	unsigned rat_index_mode;
+	unsigned rat_index_mode = tgsi_indirect_to_rat_index_mode(inst->Dst[0].Indirect);
 	int lasti;
 	int temp_reg = r600_get_temp(ctx), treg2 = r600_get_temp(ctx);
 
@@ -9038,7 +9039,6 @@ static int tgsi_store_buffer_rat(struct r600_shader_ctx *ctx)
 	if (r)
 		return r;
 
-	rat_index_mode = inst->Dst[0].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
 	if (rat_index_mode)
 		egcm_load_index_reg(ctx->bc, 1, false);
 
@@ -9115,9 +9115,7 @@ static int tgsi_store_rat(struct r600_shader_ctx *ctx)
 	bool src_requires_loading = false;
 	int val_gpr, idx_gpr;
 	int r, i;
-	unsigned rat_index_mode;
-
-	rat_index_mode = inst->Dst[0].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
+	unsigned rat_index_mode = tgsi_indirect_to_rat_index_mode(inst->Dst[0].Indirect);
 
 	r = load_index_src(ctx, 0, &idx_gpr);
 	if (r)
@@ -9260,7 +9258,7 @@ static int tgsi_atomic_op_rat(struct r600_shader_ctx *ctx)
 	int idx_gpr;
 	unsigned format, num_format, format_comp, endian;
 	const struct util_format_description *desc;
-	unsigned rat_index_mode;
+	unsigned rat_index_mode = tgsi_indirect_to_rat_index_mode(inst->Src[0].Indirect);
 	unsigned immed_base;
 	unsigned rat_base;
 
@@ -9280,8 +9278,6 @@ static int tgsi_atomic_op_rat(struct r600_shader_ctx *ctx)
 		if (r)
 			return r;
 	}
-
-	rat_index_mode = inst->Src[0].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
 
 	if (ctx->inst_info->op == V_RAT_INST_CMPXCHG_INT_RTN) {
 		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
@@ -9397,6 +9393,10 @@ static int get_gds_op(int opcode)
 		return FETCH_OP_GDS_MIN_UINT_RET;
 	case TGSI_OPCODE_ATOMUMAX:
 		return FETCH_OP_GDS_MAX_UINT_RET;
+        case TGSI_OPCODE_ATOMIMIN:
+		return FETCH_OP_GDS_MIN_INT_RET;
+	case TGSI_OPCODE_ATOMIMAX:
+		return FETCH_OP_GDS_MAX_INT_RET;
 	case TGSI_OPCODE_ATOMXCHG:
 		return FETCH_OP_GDS_XCHG_RET;
 	case TGSI_OPCODE_ATOMCAS:

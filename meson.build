@@ -231,6 +231,9 @@ with_gallium_lima = gallium_drivers.contains('lima')
 with_gallium_zink = gallium_drivers.contains('zink')
 with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 with_gallium_asahi = gallium_drivers.contains('asahi')
+foreach gallium_driver : gallium_drivers
+  pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
+endforeach
 
 with_gallium = gallium_drivers.length() != 0
 with_gallium_kmsro = with_gallium_v3d or with_gallium_vc4 or with_gallium_etnaviv or with_gallium_panfrost or with_gallium_lima or with_gallium_freedreno
@@ -316,6 +319,11 @@ with_vulkan_beta = get_option('vulkan-beta')
 if with_vulkan_beta
   pre_args += '-DVK_ENABLE_BETA_EXTENSIONS'
 endif
+
+_codecs = get_option('video-codecs')
+foreach c : ['vc1dec', 'h264dec', 'h264enc', 'h265dec', 'h265enc']
+   pre_args += '-DVIDEO_CODEC_@0@=@1@'.format(c.to_upper(), _codecs.contains(c).to_int())
+endforeach
 
 _platforms = get_option('platforms')
 if _platforms.contains('auto')
@@ -677,8 +685,13 @@ if with_gallium_d3d12 or with_microsoft_clc or with_microsoft_vk
   endif
 endif
 
-if with_vulkan_overlay_layer or with_aco_tests
+if with_vulkan_overlay_layer or with_aco_tests or with_amd_vk
   prog_glslang = find_program('glslangValidator')
+  if run_command(prog_glslang, [ '--quiet', '--version' ], check : false).returncode() == 0
+    glslang_quiet = ['--quiet']
+  else
+    glslang_quiet = []
+  endif
 endif
 
 _xvmc = get_option('gallium-xvmc')
@@ -781,10 +794,10 @@ omx_drivers_path = get_option('omx-libs-path')
 if with_gallium_omx != 'disabled'
   # Figure out where to put the omx driver.
   # FIXME: this could all be vastly simplified by adding a 'defined_variable'
-  # argument to meson's get_pkgconfig_variable method.
+  # argument to meson's get_variable method.
   if omx_drivers_path == ''
-    _omx_libdir = dep_omx.get_pkgconfig_variable('libdir')
-    _omx_drivers_dir = dep_omx.get_pkgconfig_variable('pluginsdir')
+    _omx_libdir = dep_omx.get_variable(pkgconfig : 'libdir')
+    _omx_drivers_dir = dep_omx.get_variable(pkgconfig : 'pluginsdir')
     if _omx_libdir == get_option('libdir')
       omx_drivers_path = _omx_drivers_dir
     else
@@ -1164,6 +1177,7 @@ else
     '-fno-common',
     # Clang
     '-Wno-microsoft-enum-value',
+    '-Wno-unused-function',
   ]
   _trial_cpp = [
     '-Werror=return-type',
@@ -1201,6 +1215,14 @@ else
   if cc.has_link_argument('-Wl,--gc-sections')
     _trial_c += ['-ffunction-sections', '-fdata-sections']
     _trial_cpp += ['-ffunction-sections', '-fdata-sections']
+  endif
+
+  # Variables that are only used for assertions are considered unused in release
+  # builds. Don't treat this as an error, since we build with -Werror even for
+  # release in CI.
+  if get_option('buildtype') == 'release'
+    _trial_c += ['-Wno-unused-variable', '-Wno-unused-but-set-variable']
+    _trial_cpp += ['-Wno-unused-variable', '-Wno-unused-but-set-variable']
   endif
 
   c_args += cc.get_supported_arguments(_trial_c)
@@ -1419,6 +1441,11 @@ if cc.has_header_symbol('errno.h', 'program_invocation_name',
    pre_args += '-DHAVE_PROGRAM_INVOCATION_NAME'
 elif with_tools.contains('intel')
   error('Intel tools require the program_invocation_name variable')
+endif
+
+if cc.has_header_symbol('math.h', 'issignaling',
+                        args : '-D_GNU_SOURCE')
+   pre_args += '-DHAVE_ISSIGNALING'
 endif
 
 # MinGW provides a __builtin_posix_memalign function, but not a posix_memalign.
@@ -1968,14 +1995,8 @@ if with_osmesa
     osmesa_lib_name = 'OSMesa'
   endif
   osmesa_bits = get_option('osmesa-bits')
-  if osmesa_bits != '8'
-    if with_dri or with_glx != 'disabled'
-      error('OSMesa bits must be 8 if building glx or dri based drivers')
-    endif
-    osmesa_lib_name = osmesa_lib_name + osmesa_bits
-    pre_args += [
-      '-DCHAN_BITS=@0@'.format(osmesa_bits), '-DDEFAULT_SOFTWARE_DEPTH_BITS=31'
-    ]
+  if osmesa_bits != 'unspecified'
+    warning('osmesa-bits option is deprecated and have no effect, please remove it.')
   endif
 endif
 
@@ -1983,7 +2004,7 @@ endif
 
 if with_platform_wayland
   dep_wl_scanner = dependency('wayland-scanner', native: true)
-  prog_wl_scanner = find_program(dep_wl_scanner.get_pkgconfig_variable('wayland_scanner'))
+  prog_wl_scanner = find_program(dep_wl_scanner.get_variable(pkgconfig : 'wayland_scanner'))
   if dep_wl_scanner.version().version_compare('>= 1.15')
     wl_scanner_arg = 'private-code'
   else
@@ -1997,7 +2018,7 @@ if with_platform_wayland
     dep_wayland_egl_headers = dep_wayland_egl.partial_dependency(compile_args : true)
   endif
   wayland_dmabuf_xml = join_paths(
-    dep_wl_protocols.get_pkgconfig_variable('pkgdatadir'), 'unstable',
+    dep_wl_protocols.get_variable(pkgconfig : 'pkgdatadir'), 'unstable',
     'linux-dmabuf', 'linux-dmabuf-unstable-v1.xml'
   )
   pre_args += '-DWL_HIDE_DEPRECATED'
@@ -2261,6 +2282,9 @@ if with_gbm
 endif
 
 lines += ''
+lines += 'Video Codecs: ' + ' '.join(_codecs)
+lines += ''
+
 if with_any_vk
   lines += 'Vulkan drivers:  ' + ' '.join(_vulkan_drivers)
   lines += 'Vulkan ICD dir:  ' + with_vulkan_icd_dir

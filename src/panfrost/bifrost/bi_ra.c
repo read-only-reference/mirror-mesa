@@ -314,6 +314,10 @@ bi_allocate_registers(bi_context *ctx, bool *success, bool full_regs)
                 full_regs ? BITFIELD64_MASK(64) :
                 (BITFIELD64_MASK(16) | (BITFIELD64_MASK(16) << 48));
 
+        /* To test spilling, mimic a small register file */
+        if (bifrost_debug & BIFROST_DBG_SPILL && !ctx->inputs->is_blend)
+                default_affinity &= BITFIELD64_MASK(48) << 8;
+
         bi_foreach_instr_global(ctx, ins) {
                 bi_foreach_dest(ins, d) {
                         unsigned dest = bi_get_node(ins->dest[d]);
@@ -479,12 +483,18 @@ bi_count_read_index(bi_instr *I, bi_index index)
  * for the target, so the spill/fill code becomes architecture-independent.
  */
 
+static bi_index
+bi_tls_ptr(bool hi)
+{
+        return bi_fau(BIR_FAU_TLS_PTR, hi);
+}
+
 static bi_instr *
 bi_load_tl(bi_builder *b, unsigned bits, bi_index src, unsigned offset)
 {
         if (b->shader->arch >= 9) {
-                return bi_load_to(b, bits, src, va_zero_lut(), va_zero_lut(),
-                                  BI_SEG_TL, offset);
+                return bi_load_to(b, bits, src, bi_tls_ptr(false),
+                                  bi_tls_ptr(true), BI_SEG_TL, offset);
         } else {
                 return bi_load_to(b, bits, src, bi_imm_u32(offset), bi_zero(),
                                   BI_SEG_TL, 0);
@@ -495,7 +505,7 @@ static void
 bi_store_tl(bi_builder *b, unsigned bits, bi_index src, unsigned offset)
 {
         if (b->shader->arch >= 9) {
-                bi_store(b, bits, src, va_zero_lut(), va_zero_lut(), BI_SEG_TL, offset);
+                bi_store(b, bits, src, bi_tls_ptr(false), bi_tls_ptr(true), BI_SEG_TL, offset);
         } else {
                 bi_store(b, bits, src, bi_imm_u32(offset), bi_zero(), BI_SEG_TL, 0);
         }
@@ -584,6 +594,17 @@ bi_register_allocate(bi_context *ctx)
 
                         if (spill_node == -1)
                                 unreachable("Failed to choose spill node\n");
+
+                        if (ctx->inputs->is_blend)
+                                unreachable("Blend shaders may not spill");
+
+                        /* By default, we use packed TLS addressing on Valhall.
+                         * We cannot cross 16 byte boundaries with packed TLS
+                         * addressing. Align to ensure this doesn't happen. This
+                         * could be optimized a bit.
+                         */
+                        if (ctx->arch >= 9)
+                                spill_count = ALIGN_POT(spill_count, 16);
 
                         spill_count += bi_spill_register(ctx,
                                         bi_node_to_index(spill_node, bi_max_temp(ctx)),

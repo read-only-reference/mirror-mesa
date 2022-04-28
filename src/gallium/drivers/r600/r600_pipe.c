@@ -317,8 +317,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
 	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
-        case PIPE_CAP_NIR_ATOMICS_AS_DEREF:
 		return 1;
+
+        case PIPE_CAP_NIR_ATOMICS_AS_DEREF:
+		return rscreen->b.debug_flags & DBG_NIR_PREFERRED;
 
 	case PIPE_CAP_TEXTURE_TRANSFER_MODES:
 		return PIPE_TEXTURE_TRANSFER_BLIT;
@@ -606,7 +608,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 		}
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return R600_MAX_USER_CONST_BUFFERS;
-	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
+	case PIPE_SHADER_CAP_CONT_SUPPORTED:
 		return 1;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
 		return 1;
@@ -630,32 +632,22 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
 		return 16;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
-		if (is_nir_enabled(&rscreen->b))
-			return PIPE_SHADER_IR_NIR;
-		return PIPE_SHADER_IR_TGSI;
+		if (rscreen->b.debug_flags & DBG_USE_TGSI)
+			return PIPE_SHADER_IR_TGSI;
+		return PIPE_SHADER_IR_NIR;
 	case PIPE_SHADER_CAP_SUPPORTED_IRS: {
 		int ir = 0;
 		if (shader == PIPE_SHADER_COMPUTE)
 			ir = 1 << PIPE_SHADER_IR_NATIVE;
 		if (rscreen->b.family >= CHIP_CEDAR) {
 			ir |= 1 << PIPE_SHADER_IR_TGSI;
-			if (is_nir_enabled(&rscreen->b))
-				ir |= 1 << PIPE_SHADER_IR_NIR;
+			ir |= 1 << PIPE_SHADER_IR_NIR;
 		}
 		return ir;
 	}
-	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
-		if (rscreen->b.family == CHIP_ARUBA ||
-		    rscreen->b.family == CHIP_CAYMAN ||
-		    rscreen->b.family == CHIP_CYPRESS ||
-		    rscreen->b.family == CHIP_HEMLOCK)
-			return 1;
-		return 0;
-	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
-	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
-	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
-	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
-	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+	case PIPE_SHADER_CAP_DROUND_SUPPORTED:
+	case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
+	case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
 		return 0;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:

@@ -61,7 +61,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       vertex_input_state.vertexBindingDescriptionCount = state->element_state->num_bindings;
       vertex_input_state.pVertexAttributeDescriptions = state->element_state->attribs;
       vertex_input_state.vertexAttributeDescriptionCount = state->element_state->num_attribs;
-      if (!screen->info.have_EXT_extended_dynamic_state) {
+      if (!screen->info.have_EXT_extended_dynamic_state || !state->uses_dynamic_stride) {
          for (int i = 0; i < state->element_state->num_bindings; ++i) {
             const unsigned buffer_id = binding_map[i];
             VkVertexInputBindingDescription *binding = &state->element_state->b.bindings[i];
@@ -86,12 +86,17 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       switch (primitive_topology) {
       case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
       case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
-      case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
       case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
+      case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
       case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY:
+         if (screen->info.have_EXT_primitive_topology_list_restart) {
+            primitive_state.primitiveRestartEnable = state->dyn_state2.primitive_restart ? VK_TRUE : VK_FALSE;
+            break;
+         }
+         FALLTHROUGH;
       case VK_PRIMITIVE_TOPOLOGY_PATCH_LIST:
          if (state->dyn_state2.primitive_restart)
-            debug_printf("restart_index set with unsupported primitive topology %u\n", primitive_topology);
+            mesa_loge("zink: restart_index set with unsupported primitive topology %u\n", primitive_topology);
          primitive_state.primitiveRestartEnable = VK_FALSE;
          break;
       default:
@@ -128,8 +133,10 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    ms_state.rasterizationSamples = state->rast_samples + 1;
    if (state->blend_state) {
       ms_state.alphaToCoverageEnable = state->blend_state->alpha_to_coverage;
-      if (state->blend_state->alpha_to_one && !screen->info.feats.features.alphaToOne)
-         warn_missing_feature("alphaToOne");
+      if (state->blend_state->alpha_to_one && !screen->info.feats.features.alphaToOne) {
+         static bool warned = false;
+         warn_missing_feature(warned, "alphaToOne");
+      }
       ms_state.alphaToOneEnable = state->blend_state->alpha_to_one;
    }
    /* "If pSampleMask is NULL, it is treated as if the mask has all bits set to 1."
@@ -225,7 +232,7 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
    if (state->element_state->num_attribs) {
       if (screen->info.have_EXT_vertex_input_dynamic_state)
          dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_VERTEX_INPUT_EXT;
-      else if (screen->info.have_EXT_extended_dynamic_state)
+      else if (screen->info.have_EXT_extended_dynamic_state && state->uses_dynamic_stride)
          dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT;
    }
    if (screen->info.have_EXT_extended_dynamic_state2) {
@@ -240,12 +247,62 @@ zink_create_gfx_pipeline(struct zink_screen *screen,
       rast_line_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT;
       rast_line_state.pNext = rast_state.pNext;
       rast_line_state.stippledLineEnable = VK_FALSE;
-      rast_line_state.lineRasterizationMode = hw_rast_state->line_mode;
+      rast_line_state.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT;
+
+      bool check_warn = false;
+      switch (primitive_topology) {
+      case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+      case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+      case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
+      case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
+         check_warn = true;
+         break;
+      default: break;
+      }
+      if (prog->nir[PIPE_SHADER_TESS_EVAL]) {
+         check_warn |= !prog->nir[PIPE_SHADER_TESS_EVAL]->info.tess.point_mode &&
+                       prog->nir[PIPE_SHADER_TESS_EVAL]->info.tess._primitive_mode == TESS_PRIMITIVE_ISOLINES;
+      }
+      if (prog->nir[PIPE_SHADER_GEOMETRY]) {
+         switch (prog->nir[PIPE_SHADER_GEOMETRY]->info.gs.output_primitive) {
+         case SHADER_PRIM_LINES:
+         case SHADER_PRIM_LINE_LOOP:
+         case SHADER_PRIM_LINE_STRIP:
+         case SHADER_PRIM_LINES_ADJACENCY:
+         case SHADER_PRIM_LINE_STRIP_ADJACENCY:
+            check_warn = true;
+            break;
+         default: break;
+         }
+      }
+
+      if (check_warn) {
+         const char *features[4][2] = {
+            [VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT] = {"",""},
+            [VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT] = {"rectangularLines", "stippledRectangularLines"},
+            [VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT] = {"bresenhamLines", "stippledBresenhamLines"},
+            [VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT] = {"smoothLines", "stippledSmoothLines"},
+         };
+         static bool warned[6] = {0};
+         const VkPhysicalDeviceLineRasterizationFeaturesEXT *line_feats = &screen->info.line_rast_feats;
+         /* line features can be represented as an array VkBool32[6],
+          * with the 3 base features preceding the 3 (matching) stippled features
+          */
+         const VkBool32 *feat = &line_feats->rectangularLines;
+         unsigned mode_idx = hw_rast_state->line_mode - VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT;
+         /* add base mode index, add 3 if stippling is enabled */
+         mode_idx += hw_rast_state->line_stipple_enable * 3;
+         if (*(feat + mode_idx))
+            rast_line_state.lineRasterizationMode = hw_rast_state->line_mode;
+         else
+            warn_missing_feature(warned[mode_idx], features[hw_rast_state->line_mode][hw_rast_state->line_stipple_enable]);
+      }
 
       if (hw_rast_state->line_stipple_enable) {
          dynamicStateEnables[state_count++] = VK_DYNAMIC_STATE_LINE_STIPPLE_EXT;
          rast_line_state.stippledLineEnable = VK_TRUE;
       }
+
       rast_state.pNext = &rast_line_state;
    }
    assert(state_count < ARRAY_SIZE(dynamicStateEnables));

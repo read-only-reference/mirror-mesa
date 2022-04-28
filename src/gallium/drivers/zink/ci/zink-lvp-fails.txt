@@ -1,4 +1,27 @@
-KHR-GL46.texture_view.view_sampling,Fail
+# #6115
+spec@arb_tessellation_shader@execution@variable-indexing@tes-both-input-array-float-index-rd,Crash
+spec@arb_tessellation_shader@execution@variable-indexing@tes-both-input-array-vec2-index-rd,Crash
+spec@arb_tessellation_shader@execution@variable-indexing@tes-both-input-array-vec3-index-rd,Crash
+spec@arb_tessellation_shader@execution@variable-indexing@tes-both-input-array-vec4-index-rd,Crash
+
+# #6322
+spec@arb_framebuffer_object@fbo-attachments-blit-scaled-linear,Fail
+spec@arb_framebuffer_object@fbo-blit-scaled-linear,Fail
+
+
+# #6270
+spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgradcube,Fail
+
+#kopper regressions/changes
+fast_color_clear@fcc-front-buffer-distraction,Fail
+glx@extension string sanity,Fail
+spec@!opengl 1.0@gl-1.0-drawbuffer-modes,Fail
+spec@!opengl 1.0@gl-1.0-front-invalidate-back,Fail
+spec@egl_chromium_sync_control@conformance,Fail
+spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_msc_and_sbc_test,Fail
+spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_ust_test,Fail
+spec@ext_framebuffer_blit@fbo-sys-blit,Fail
+spec@ext_framebuffer_blit@fbo-sys-sub-blit,Fail
 
 dEQP-GLES2.functional.clipping.point.wide_point_clip,Fail
 dEQP-GLES2.functional.clipping.point.wide_point_clip_viewport_center,Fail
@@ -92,11 +115,12 @@ dEQP-GLES31.functional.primitive_bounding_box.wide_points.tessellation_set_per_d
 dEQP-GLES31.functional.primitive_bounding_box.wide_points.tessellation_set_per_primitive.vertex_tessellation_fragment.default_framebuffer,Fail
 dEQP-GLES31.functional.primitive_bounding_box.wide_points.tessellation_set_per_primitive.vertex_tessellation_fragment.fbo,Fail
 
+# this test tries to be error-compatible with nvidia. spoiler: mesa isn't, and no driver can pass it
+glx@glx_arb_create_context@invalid flag,Fail
+
 glx@glx-copy-sub-buffer,Fail
 glx@glx-copy-sub-buffer samples=2,Fail
 glx@glx-copy-sub-buffer samples=4,Fail
-glx@glx-multithread-texture,Fail
-glx@glx-swap-copy,Fail
 glx@glx-swap-pixmap-bad,Fail
 glx@glx-visuals-depth,Crash
 glx@glx-visuals-depth -pixmap,Crash
@@ -147,12 +171,6 @@ spec@!opengl 1.1@polygon-mode-offset@config 5: Expected blue pixel in center,Fai
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected blue pixel in center,Fail
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on right edge,Fail
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on top edge,Fail
-spec@!opengl 1.1@read-front,Fail
-spec@!opengl 1.1@read-front clear-front-first,Fail
-spec@!opengl 1.1@read-front clear-front-first samples=2,Fail
-spec@!opengl 1.1@read-front clear-front-first samples=4,Fail
-spec@!opengl 1.1@read-front samples=2,Fail
-spec@!opengl 1.1@read-front samples=4,Fail
 spec@!opengl 1.2@copyteximage 3d,Fail
 spec@!opengl 2.0@depth-tex-modes-glsl,Fail
 spec@!opengl 2.0@gl-2.0-edgeflag,Fail
@@ -160,7 +178,6 @@ spec@!opengl 2.0@gl-2.0-edgeflag-immediate,Fail
 spec@!opengl 2.1@pbo,Fail
 spec@!opengl 2.1@pbo@test_polygon_stip,Fail
 spec@!opengl 2.1@polygon-stipple-fs,Fail
-spec@!opengl 3.0@sampler-cube-shadow,Fail
 spec@!opengl 3.2@gl-3.2-adj-prims cull-back pv-first,Fail
 spec@!opengl 3.2@gl-3.2-adj-prims cull-front pv-first,Fail
 spec@!opengl 3.2@gl-3.2-adj-prims line cull-back pv-first,Fail
@@ -212,9 +229,7 @@ spec@arb_sample_shading@samplemask 4 all@1.000000 mask_in_one,Fail
 spec@arb_sample_shading@samplemask 4 all@noms mask_in_one,Fail
 spec@arb_sample_shading@samplemask 4 all@noms partition,Fail
 spec@arb_sample_shading@samplemask 4 all@sample mask_in_one,Fail
-spec@arb_seamless_cube_map@arb_seamless_cubemap,Fail
 spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgrad,Fail
-spec@arb_texture_cube_map_array@arb_texture_cube_map_array-sampler-cube-array-shadow,Fail
 spec@arb_texture_float@fbo-blending-formats,Fail
 spec@arb_texture_float@fbo-blending-formats@GL_INTENSITY16F_ARB,Fail
 spec@arb_texture_float@fbo-blending-formats@GL_INTENSITY32F_ARB,Fail
@@ -222,7 +237,6 @@ spec@arb_texture_float@fbo-blending-formats@GL_LUMINANCE16F_ARB,Fail
 spec@arb_texture_float@fbo-blending-formats@GL_LUMINANCE32F_ARB,Fail
 spec@arb_texture_float@fbo-blending-formats@GL_RGB32F,Fail
 
-spec@egl 1.4@egl-copy-buffers,Fail
 spec@egl 1.4@eglterminate then unbind context,Fail
 spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24,Fail
 spec@egl_khr_surfaceless_context@viewport,Fail
@@ -253,8 +267,6 @@ spec@ext_framebuffer_object@fbo-blending-formats@GL_INTENSITY8,Fail
 spec@ext_framebuffer_object@fbo-blending-formats@GL_LUMINANCE12,Fail
 spec@ext_framebuffer_object@fbo-blending-formats@GL_LUMINANCE16,Fail
 spec@ext_framebuffer_object@fbo-blending-formats@GL_RGB10,Fail
-spec@ext_image_dma_buf_import@ext_image_dma_buf_import-export,Fail
-spec@ext_image_dma_buf_import@ext_image_dma_buf_import-export-tex,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-intel_external_sampler_only,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-invalid_attributes,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-invalid_hints,Fail
@@ -291,7 +303,6 @@ spec@ext_texture_snorm@fbo-blending-formats@GL_LUMINANCE16_SNORM,Fail
 spec@ext_texture_snorm@fbo-blending-formats@GL_LUMINANCE8_SNORM,Fail
 spec@ext_texture_snorm@fbo-blending-formats@GL_LUMINANCE_SNORM,Fail
 spec@ext_texture_swizzle@depth_texture_mode_and_swizzle,Fail
-spec@ext_transform_feedback@generatemipmap prims_generated,Fail
 spec@intel_performance_query@intel_performance_query-issue_2235,Fail
 spec@khr_texture_compression_astc@array-gl,Fail
 spec@khr_texture_compression_astc@array-gl@12x12 Block Dim,Fail
@@ -328,8 +339,16 @@ spec@!opengl 3.0@clearbuffer-depth-cs-probe,Fail
 spec@arb_post_depth_coverage@arb_post_depth_coverage-multisampling,Fail
 spec@arb_shader_image_load_store@early-z,Fail
 spec@arb_shader_image_load_store@early-z@occlusion query test/early-z pass,Fail
+
+spec@arb_shader_image_load_store@execution@image-array-out-of-bounds-access-load,Crash
+spec@arb_shader_image_load_store@execution@image-array-out-of-bounds-access-store,Crash
+
 spec@arb_shader_image_load_store@invalid,Fail
 spec@arb_shader_image_load_store@invalid@imageLoad/incompatible format test/imageBuffer,Fail
+
+spec@arb_tessellation_shader@execution@tcs-tes-levels-out-of-bounds-read,Crash
+spec@arb_tessellation_shader@execution@tcs-tes-levels-out-of-bounds-write,Crash
+
 spec@khr_texture_compression_astc@array-gles,Fail
 spec@khr_texture_compression_astc@array-gles@12x12 Block Dim,Fail
 spec@khr_texture_compression_astc@array-gles@5x5 Block Dim,Fail
@@ -404,7 +423,6 @@ spec@arb_shader_texture_lod@execution@glsl-fs-shadow2dgradarb-03,Fail
 spec@arb_shader_texture_lod@execution@glsl-fs-shadow2dgradarb-07,Fail
 spec@arb_shader_texture_lod@execution@glsl-fs-shadow2dgradarb-08,Fail
 spec@arb_shader_texture_lod@execution@glsl-fs-shadow2dgradarb-cumulative,Fail
-spec@arb_tessellation_shader@execution@fs-primitiveid-instanced,Crash
 spec@arb_tessellation_shader@execution@gs-primitiveid-instanced,Fail
 spec@arb_texture_rectangle@glsl-fs-shadow2drect,Fail
 spec@arb_texture_rectangle@glsl-fs-shadow2drect-01,Fail
