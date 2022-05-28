@@ -843,6 +843,7 @@ CodeEmitterGV100::emitALD()
    emitField(74, 2, (insn->getDef(0)->reg.size / 4) - 1);
    emitGPR  (32, insn->src(0).getIndirect(1));
    emitO    (79);
+   emitField(77, 1, insn->subOp); // .PHYS
    emitP    (76);
    emitADDR (24, 40, 10, 0, insn->src(0));
    emitGPR  (16, insn->def(0));
@@ -854,6 +855,7 @@ CodeEmitterGV100::emitAST()
    emitInsn (0x322);
    emitField(74, 2, (typeSizeof(insn->dType) / 4) - 1);
    emitGPR  (64, insn->src(0).getIndirect(1));
+   emitField(77, 1, insn->subOp); // .PHYS
    emitP    (76);
    emitADDR (24, 40, 10, 0, insn->src(0));
    emitGPR  (32, insn->src(1));
@@ -902,8 +904,12 @@ CodeEmitterGV100::emitATOM()
    }
 
    emitPRED (81);
-   emitField(79, 2, 2); // .INVALID0/./.STRONG/.INVALID3
-   emitField(77, 2, 3); // .CTA/.SM/.GPU/.SYS
+   if (targ->getChipset() < 0x170) {
+      emitField(79, 2, 2); // .INVALID0/./.STRONG/.INVALID3
+      emitField(77, 2, 3); // .CTA/.SM/.GPU/.SYS
+   } else {
+      emitField(77, 4, 0xa); // .STRONG.SYS
+   }
    emitField(72, 1, insn->src(0).getIndirect(0)->getSize() == 8);
    emitGPR  (32, insn->src(1));
    emitADDR (24, 40, 24, 0, insn->src(0));
@@ -1036,18 +1042,23 @@ CodeEmitterGV100::emitLDSTc(int posm, int poso)
 {
    int mode = 0;
    int order = 1;
+   int sm80 = 0;
 
    switch (insn->cache) {
-   case CACHE_CA: mode = 0; order = 1; break;
-   case CACHE_CG: mode = 2; order = 2; break;
-   case CACHE_CV: mode = 3; order = 2; break;
+   case CACHE_CA: mode = 0; order = 1; sm80 = 0x0; break; // .CTA
+   case CACHE_CG: mode = 2; order = 2; sm80 = 0x7; break; // .STRONG.GPU
+   case CACHE_CV: mode = 3; order = 2; sm80 = 0xa; break; // .STRONG.SYS
    default:
       assert(!"invalid caching mode");
       break;
    }
 
-   emitField(poso, 2, order);
-   emitField(posm, 2, mode);
+   if (targ->getChipset() < 0x170) {
+      emitField(poso, 2, order);
+      emitField(posm, 2, mode);
+   } else {
+      emitField(posm, 4, sm80);
+   }
 }
 
 void
@@ -1073,8 +1084,12 @@ void
 CodeEmitterGV100::emitLD()
 {
    emitInsn (0x980);
-   emitField(79, 2, 2); // .CONSTANT/./.STRONG/.MMIO
-   emitField(77, 2, 2); // .CTA/.SM/.GPU/.SYS
+   if (targ->getChipset() < 0x170) {
+      emitField(79, 2, 2); // .CONSTANT/./.STRONG/.MMIO
+      emitField(77, 2, 2); // .CTA/.SM/.GPU/.SYS
+   } else {
+      emitField(77, 4, 0x7); // .STRONG.GPU
+   }
    emitLDSTs(73, insn->dType);
    emitField(72, 1, insn->src(0).getIndirect(0)->getSize() == 8);
    emitADDR (24, 32, 32, 0, insn->src(0));
@@ -1117,8 +1132,11 @@ CodeEmitterGV100::emitOUT()
 
    if (insn->op != OP_FINAL)
       emitFormA(0x124, FA_RRR | FA_RIR, __(0), __(1), EMPTY);
-   else
+   else {
       emitFormA(0x124, FA_RRR | FA_RIR, __(0), EMPTY, EMPTY);
+      if (targ->getChipset() >= 0x170)
+         emitGPR(32);
+   }
    emitField(78, 2, (cut << 1) | emit);
 }
 
@@ -1140,8 +1158,12 @@ CodeEmitterGV100::emitRED()
    emitInsn (0x98e);
    emitField(87, 3, insn->subOp);
    emitField(84, 3, 1); // 0=.EF, 1=, 2=.EL, 3=.LU, 4=.EU, 5=.NA
-   emitField(79, 2, 2); // .INVALID0/./.STRONG/.INVALID3
-   emitField(77, 2, 3); // .CTA/.SM/.GPU/.SYS
+   if (targ->getChipset() < 0x170) {
+      emitField(79, 2, 2); // .INVALID0/./.STRONG/.INVALID3
+      emitField(77, 2, 3); // .CTA/.SM/.GPU/.SYS
+   } else {
+      emitField(77, 4, 0xa); // .STRONG.SYS
+   }
    emitField(73, 3, dType);
    emitField(72, 1, insn->src(0).getIndirect(0)->getSize() == 8);
    emitGPR  (32, insn->src(1));
@@ -1152,8 +1174,12 @@ void
 CodeEmitterGV100::emitST()
 {
    emitInsn (0x385);
-   emitField(79, 2, 2); // .INVALID0/./.STRONG/.MMIO
-   emitField(77, 2, 2); // .CTA/.SM/.GPU/.SYS
+   if (targ->getChipset() < 0x170) {
+      emitField(79, 2, 2); // .INVALID0/./.STRONG/.MMIO
+      emitField(77, 2, 2); // .CTA/.SM/.GPU/.SYS
+   } else {
+      emitField(77, 4, 0x7); // .STRONG.GPU
+   }
    emitLDSTs(73, insn->dType);
    emitField(72, 1, insn->src(0).getIndirect(0)->getSize() == 8);
    emitGPR  (64, insn->src(1));
@@ -1469,7 +1495,8 @@ CodeEmitterGV100::emitSUATOM()
 
    emitField(87, 4, subOp);
    emitPRED (81);
-   emitField(79, 2, 1);
+   if (targ->getChipset() < 0x170)
+      emitField(79, 2, 1);
    emitField(73, 3, type);
    emitField(72, 1, 0); // .BA
    emitGPR  (32, insn->src(1));

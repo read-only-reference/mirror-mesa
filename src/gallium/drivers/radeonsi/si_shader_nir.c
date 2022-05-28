@@ -160,7 +160,7 @@ static void si_late_optimize_16bit_samplers(struct si_screen *sscreen, nir_shade
     * based on those two.
     */
    /* TODO: The constraints can't represent the ddx constraint. */
-   /*bool has_g16 = sscreen->info.chip_class >= GFX10 && LLVM_VERSION_MAJOR >= 12;*/
+   /*bool has_g16 = sscreen->info.gfx_level >= GFX10 && LLVM_VERSION_MAJOR >= 12;*/
    bool has_g16 = false;
    nir_tex_src_type_constraints tex_constraints = {
       [nir_tex_src_comparator]   = {true, 32},
@@ -182,6 +182,7 @@ static void si_late_optimize_16bit_samplers(struct si_screen *sscreen, nir_shade
             (has_g16 ? 1 << nir_tex_src_ddx : 0),
             sampler_dims);
    NIR_PASS(changed, nir, nir_legalize_16bit_sampler_srcs, tex_constraints);
+   NIR_PASS(changed, nir, nir_fold_16bit_image_load_store_conversions);
 
    if (changed) {
       si_nir_opts(sscreen, nir, false);
@@ -204,6 +205,8 @@ lower_intrinsic_instr(nir_builder *b, nir_instr *instr, void *dummy)
    case nir_intrinsic_is_sparse_texels_resident:
       /* code==0 means sparse texels are resident */
       return nir_ieq_imm(b, intrin->src[0].ssa, 0);
+   case nir_intrinsic_sparse_residency_code_and:
+      return nir_ior(b, intrin->src[0].ssa, intrin->src[1].ssa);
    default:
       return NULL;
    }
@@ -316,7 +319,7 @@ char *si_finalize_nir(struct pipe_screen *screen, void *nirptr)
    struct si_screen *sscreen = (struct si_screen *)screen;
    struct nir_shader *nir = (struct nir_shader *)nirptr;
 
-   nir_lower_io_passes(nir, NULL);
+   nir_lower_io_passes(nir);
 
    /* Remove dead derefs, so that we can remove uniforms. */
    NIR_PASS_V(nir, nir_opt_dce);

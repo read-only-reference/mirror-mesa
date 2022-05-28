@@ -245,14 +245,14 @@ radv_copy_vrs_htile(struct radv_cmd_buffer *cmd_buffer, struct radv_image *vrs_i
                            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                            .image = radv_image_to_handle(vrs_image),
                            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                           .format = vrs_image->vk_format,
+                           .format = vrs_image->vk.format,
                            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                                 .baseMipLevel = 0,
                                                 .levelCount = 1,
                                                 .baseArrayLayer = 0,
                                                 .layerCount = 1},
                         },
-                        NULL);
+                        0, NULL);
 
    radv_meta_push_descriptor_set(
       cmd_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, state->copy_vrs_htile_p_layout, 0, /* set */
@@ -278,7 +278,7 @@ radv_copy_vrs_htile(struct radv_cmd_buffer *cmd_buffer, struct radv_image *vrs_i
           .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
           .pBufferInfo = &(VkDescriptorBufferInfo){.buffer = radv_buffer_to_handle(htile_buffer),
                                                    .offset = 0,
-                                                   .range = htile_buffer->size}}});
+                                                   .range = htile_buffer->vk.size}}});
 
    const unsigned constants[3] = {
       dst_image->planes[0].surface.meta_pitch, dst_image->planes[0].surface.meta_slice_size,

@@ -42,8 +42,12 @@ mod_to_block_fmt(uint64_t mod)
                 return MALI_BLOCK_FORMAT_TILED_U_INTERLEAVED;
         default:
 #if PAN_ARCH >= 5
-                if (drm_is_afbc(mod))
+                if (drm_is_afbc(mod) && !(mod & AFBC_FORMAT_MOD_TILED))
                         return MALI_BLOCK_FORMAT_AFBC;
+#endif
+#if PAN_ARCH >= 7
+                if (drm_is_afbc(mod) && (mod & AFBC_FORMAT_MOD_TILED))
+                        return MALI_BLOCK_FORMAT_AFBC_TILED;
 #endif
 
                 unreachable("Unsupported modifer");
@@ -206,8 +210,7 @@ pan_prepare_zs(const struct pan_fb_info *fb,
 #if PAN_ARCH >= 6
                 const struct pan_image_slice_layout *slice = &zs->image->layout.slices[level];
 
-                ext->zs_afbc_row_stride = slice->row_stride /
-                                          AFBC_HEADER_BYTES_PER_TILE;
+                ext->zs_afbc_row_stride = pan_afbc_stride_blocks(zs->image->layout.modifier, slice->row_stride);
 #else
                 ext->zs_block_format = MALI_BLOCK_FORMAT_AFBC;
                 ext->zs_afbc_body_size = 0x1000;
@@ -448,8 +451,7 @@ pan_prepare_rt(const struct pan_fb_info *fb, unsigned idx,
                 const struct pan_image_slice_layout *slice = &rt->image->layout.slices[level];
 
 #if PAN_ARCH >= 6
-                cfg->afbc.row_stride = slice->row_stride /
-                                       AFBC_HEADER_BYTES_PER_TILE;
+                cfg->afbc.row_stride = pan_afbc_stride_blocks(rt->image->layout.modifier, slice->row_stride);
                 cfg->afbc.afbc_wide_block_enable =
                         panfrost_afbc_is_wide(rt->image->layout.modifier);
 #else

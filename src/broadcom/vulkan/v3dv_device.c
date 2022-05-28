@@ -129,6 +129,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .KHR_external_memory_fd              = true,
       .KHR_external_semaphore              = true,
       .KHR_external_semaphore_fd           = true,
+      .KHR_format_feature_flags2           = true,
       .KHR_get_memory_requirements2        = true,
       .KHR_image_format_list               = true,
       .KHR_imageless_framebuffer           = true,
@@ -137,9 +138,12 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .KHR_maintenance2                    = true,
       .KHR_maintenance3                    = true,
       .KHR_multiview                       = true,
+      .KHR_pipeline_executable_properties  = true,
       .KHR_separate_depth_stencil_layouts  = true,
+      .KHR_shader_float_controls           = true,
       .KHR_shader_non_semantic_info        = true,
       .KHR_sampler_mirror_clamp_to_edge    = true,
+      .KHR_spirv_1_4                       = true,
       .KHR_storage_buffer_storage_class    = true,
       .KHR_timeline_semaphore              = true,
       .KHR_uniform_buffer_standard_layout  = true,
@@ -149,6 +153,7 @@ get_device_extensions(const struct v3dv_physical_device *device,
       .KHR_incremental_present             = true,
 #endif
       .KHR_variable_pointers               = true,
+      .KHR_vulkan_memory_model             = true,
       .EXT_4444_formats                    = true,
       .EXT_color_write_enable              = true,
       .EXT_custom_border_color             = true,
@@ -1181,14 +1186,18 @@ v3dv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
        *    generally don't care about layouts, so again, we don't get any
        *    benefits from this to limit the scope of image layout transitions.
        *
-       * Since we cannot offer any advantages to applications that use separate
-       * layouts for D/S, don't expose the feature.
+       * Still, Vulkan 1.2 requires this feature to be supported so we
+       * advertise it even though we don't really take advantage of it.
        */
-      .separateDepthStencilLayouts = false,
+      .separateDepthStencilLayouts = true,
       .storageBuffer8BitAccess = true,
       .storagePushConstant8 = true,
       .imagelessFramebuffer = true,
       .timelineSemaphore = true,
+
+      .vulkanMemoryModel = true,
+      .vulkanMemoryModelDeviceScope = true,
+      .vulkanMemoryModelAvailabilityVisibilityChains = true,
    };
 
    VkPhysicalDeviceVulkan11Features vk11 = {
@@ -1255,6 +1264,13 @@ v3dv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
           VkPhysicalDeviceColorWriteEnableFeaturesEXT *features = (void *) ext;
           features->colorWriteEnable = true;
           break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR: {
+         VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR *features =
+            (VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR *) ext;
+         features->pipelineExecutableInfo = true;
+         break;
       }
 
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT: {
@@ -1549,6 +1565,24 @@ v3dv_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
       .independentResolveNone = false,
       .independentResolve = false,
       .maxTimelineSemaphoreValueDifference = UINT64_MAX,
+
+      .denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL,
+      .roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL,
+      .shaderSignedZeroInfNanPreserveFloat16 = true,
+      .shaderSignedZeroInfNanPreserveFloat32 = true,
+      .shaderSignedZeroInfNanPreserveFloat64 = false,
+      .shaderDenormPreserveFloat16 = true,
+      .shaderDenormPreserveFloat32 = true,
+      .shaderDenormPreserveFloat64 = false,
+      .shaderDenormFlushToZeroFloat16 = false,
+      .shaderDenormFlushToZeroFloat32 = false,
+      .shaderDenormFlushToZeroFloat64 = false,
+      .shaderRoundingModeRTEFloat16 = true,
+      .shaderRoundingModeRTEFloat32 = true,
+      .shaderRoundingModeRTEFloat64 = false,
+      .shaderRoundingModeRTZFloat16 = false,
+      .shaderRoundingModeRTZFloat32 = false,
+      .shaderRoundingModeRTZFloat64 = false,
    };
    memset(vk12.driverName, 0, VK_MAX_DRIVER_NAME_SIZE_KHR);
    snprintf(vk12.driverName, VK_MAX_DRIVER_NAME_SIZE_KHR, "V3DV Mesa");

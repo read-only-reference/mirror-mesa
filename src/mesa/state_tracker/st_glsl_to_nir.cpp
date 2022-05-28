@@ -44,7 +44,6 @@
 
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
-#include "nir_xfb_info.h"
 #include "compiler/glsl_types.h"
 #include "compiler/glsl/glsl_to_nir.h"
 #include "compiler/glsl/gl_nir.h"
@@ -293,6 +292,17 @@ shared_type_info(const struct glsl_type *type, unsigned *size, unsigned *align)
    *align = comp_size * (length == 3 ? 4 : length);
 }
 
+static bool
+st_can_remove_varying_before_linking(nir_variable *var, void *data)
+{
+   bool *is_sso = (bool *) data;
+   if (*is_sso) {
+      /* Allow the removal of unused builtins in SSO */
+      return var->data.location > -1 && var->data.location < VARYING_SLOT_VAR0;
+   } else
+      return true;
+}
+
 /* First third of converting glsl_to_nir.. this leaves things in a pre-
  * nir_lower_io state, so that shader variants can more easily insert/
  * replace variables, etc.
@@ -342,15 +352,12 @@ st_nir_preprocess(struct st_context *st, struct gl_program *prog,
       NIR_PASS_V(nir, st_nir_add_point_size);
    }
 
-   /* ES has strict SSO validation rules for shader IO matching so we can't
-    * remove dead IO until the resource list has been built. Here we skip
-    * removing them until later. This will potentially make the IO lowering
-    * calls below do a little extra work but should otherwise have no impact.
-    */
-   if (!_mesa_is_gles(st->ctx) || !nir->info.separate_shader) {
-      nir_variable_mode mask = nir_var_shader_in | nir_var_shader_out;
-      nir_remove_dead_variables(nir, mask, NULL);
-   }
+   struct nir_remove_dead_variables_options opts;
+   bool is_sso = nir->info.separate_shader;
+   opts.can_remove_var_data = &is_sso;
+   opts.can_remove_var = &st_can_remove_varying_before_linking;
+   nir_variable_mode mask = nir_var_shader_in | nir_var_shader_out;
+   nir_remove_dead_variables(nir, mask, &opts);
 
    if (options->lower_all_io_to_temps ||
        nir->info.stage == MESA_SHADER_VERTEX ||
@@ -481,15 +488,8 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
     * storage don't need to lower builtins.
     */
    if (!shader_program->data->spirv &&
-       !st->ctx->Const.PackedDriverUniformStorage) {
-      /* at this point, array uniforms have been split into separate
-       * nir_variable structs where possible. this codepath can't handle dynamic
-       * array indexing, however, so all indirect uniform derefs
-       * must be eliminated beforehand to avoid trying to lower one of those builtins
-       */
-      NIR_PASS_V(nir, nir_lower_indirect_builtin_uniform_derefs);
+       !st->ctx->Const.PackedDriverUniformStorage)
       NIR_PASS_V(nir, st_nir_lower_builtin);
-   }
 
    if (!screen->get_param(screen, PIPE_CAP_NIR_ATOMICS_AS_DEREF))
       NIR_PASS_V(nir, gl_nir_lower_atomics, shader_program, true);
@@ -744,15 +744,6 @@ st_link_nir(struct gl_context *ctx,
 
    st_lower_patch_vertices_in(shader_program);
 
-   /* Linking the stages in the opposite order (from fragment to vertex)
-    * ensures that inter-shader outputs written to in an earlier stage
-    * are eliminated if they are (transitively) not used in a later
-    * stage.
-    */
-   for (int i = num_shaders - 2; i >= 0; i--) {
-      st_nir_link_shaders(linked_shader[i]->Program->nir,
-                          linked_shader[i + 1]->Program->nir);
-   }
    /* Linking shaders also optimizes them. Separate shaders, compute shaders
     * and shaders with a fixed-func VS or FS that don't need linking are
     * optimized here.
@@ -761,15 +752,42 @@ st_link_nir(struct gl_context *ctx,
       gl_nir_opts(linked_shader[0]->Program->nir);
 
    if (shader_program->data->spirv) {
+      /* Linking the stages in the opposite order (from fragment to vertex)
+       * ensures that inter-shader outputs written to in an earlier stage
+       * are eliminated if they are (transitively) not used in a later
+       * stage.
+       */
+      for (int i = num_shaders - 2; i >= 0; i--) {
+         st_nir_link_shaders(linked_shader[i]->Program->nir,
+                             linked_shader[i + 1]->Program->nir);
+      }
+
       static const gl_nir_linker_options opts = {
          true /*fill_parameters */
       };
       if (!gl_nir_link_spirv(&ctx->Const, shader_program, &opts))
          return GL_FALSE;
    } else {
-      if (!gl_nir_link_glsl(&ctx->Const, &ctx->Extensions,
+      if (!gl_nir_link_glsl(&ctx->Const, &ctx->Extensions, ctx->API,
                             shader_program))
          return GL_FALSE;
+
+      /* Linking the stages in the opposite order (from fragment to vertex)
+       * ensures that inter-shader outputs written to in an earlier stage
+       * are eliminated if they are (transitively) not used in a later
+       * stage.
+       */
+      for (int i = num_shaders - 2; i >= 0; i--) {
+         st_nir_link_shaders(linked_shader[i]->Program->nir,
+                             linked_shader[i + 1]->Program->nir);
+      }
+
+      /* Tidy up any left overs from the linking process for single shaders.
+       * For example varying arrays that get packed may have dead elements that
+       * can be now be eliminated now that array access has been lowered.
+       */
+      if (num_shaders == 1)
+         gl_nir_opts(linked_shader[0]->Program->nir);
    }
 
    for (unsigned i = 0; i < num_shaders; i++) {
@@ -990,7 +1008,10 @@ st_nir_lower_samplers(struct pipe_screen *screen, nir_shader *nir,
    if (prog) {
       BITSET_COPY(prog->info.textures_used, nir->info.textures_used);
       BITSET_COPY(prog->info.textures_used_by_txf, nir->info.textures_used_by_txf);
-      prog->info.images_used = nir->info.images_used;
+      BITSET_COPY(prog->info.samplers_used, nir->info.samplers_used);
+      BITSET_COPY(prog->info.images_used, nir->info.images_used);
+      BITSET_COPY(prog->info.image_buffers, nir->info.image_buffers);
+      BITSET_COPY(prog->info.msaa_images, nir->info.msaa_images);
    }
 }
 
@@ -1025,41 +1046,6 @@ st_nir_lower_uniforms(struct st_context *st, nir_shader *nir)
                  !st->ctx->Const.NativeIntegers);
 }
 
-static nir_xfb_info *
-st_get_nir_xfb_info(struct gl_program *prog)
-{
-   struct gl_transform_feedback_info *info = prog->sh.LinkedTransformFeedback;
-   if (!info || !info->NumOutputs)
-      return NULL;
-
-   nir_xfb_info *xfb =
-      (nir_xfb_info *)calloc(1, nir_xfb_info_size(info->NumOutputs));
-   if (!xfb)
-      return NULL;
-
-   xfb->output_count = info->NumOutputs;
-
-   for (unsigned i = 0; i < MAX_FEEDBACK_BUFFERS; i++) {
-      xfb->buffers[i].stride = info->Buffers[i].Stride;
-      xfb->buffers[i].varying_count = info->Buffers[i].NumVaryings;
-      xfb->buffer_to_stream[i] = info->Buffers[i].Stream;
-   }
-
-   for (unsigned i = 0; i < info->NumOutputs; i++) {
-      xfb->outputs[i].buffer = info->Outputs[i].OutputBuffer;
-      xfb->outputs[i].offset = info->Outputs[i].DstOffset * 4;
-      xfb->outputs[i].location = info->Outputs[i].OutputRegister;
-      xfb->outputs[i].component_offset = info->Outputs[i].ComponentOffset;
-      xfb->outputs[i].component_mask =
-         BITFIELD_RANGE(info->Outputs[i].ComponentOffset,
-                        info->Outputs[i].NumComponents);
-      xfb->buffers_written |= BITFIELD_BIT(info->Outputs[i].OutputBuffer);
-      xfb->streams_written |= BITFIELD_BIT(info->Outputs[i].StreamId);
-   }
-
-   return xfb;
-}
-
 /* Last third of preparing nir from glsl, which happens after shader
  * variant lowering.
  */
@@ -1088,11 +1074,8 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
    /* Lower load_deref/store_deref of inputs and outputs.
     * This depends on st_nir_assign_varying_locations.
     */
-   if (nir->options->lower_io_variables) {
-      nir_xfb_info *xfb = shader_program ? st_get_nir_xfb_info(prog) : NULL;
-      nir_lower_io_passes(nir, xfb);
-      free(xfb);
-   }
+   if (nir->options->lower_io_variables)
+      nir_lower_io_passes(nir);
 
    /* Set num_uniforms in number of attribute slots (vec4s) */
    nir->num_uniforms = DIV_ROUND_UP(prog->Parameters->NumParameterValues, 4);

@@ -31,12 +31,10 @@
 #include "state_tracker/st_context.h"
 #include "os/os_process.h"
 #include "zink/zink_public.h"
-#include "zink/zink_instance.h"
 #include "zink/zink_kopper.h"
 #include "driver_trace/tr_screen.h"
 
 #include "dri_screen.h"
-#include "utils.h"
 #include "dri_context.h"
 #include "dri_drawable.h"
 #include "dri_helpers.h"
@@ -44,7 +42,7 @@
 
 #include <vulkan/vulkan.h>
 
-
+#ifdef VK_USE_PLATFORM_XCB_KHR
 #include <xcb/xcb.h>
 #include <xcb/dri3.h>
 #include <xcb/present.h>
@@ -52,6 +50,7 @@
 #include "util/libsync.h"
 #include <X11/Xlib-xcb.h>
 #include "drm-uapi/drm_fourcc.h"
+#endif
 
 struct kopper_drawable {
    struct dri_drawable base;

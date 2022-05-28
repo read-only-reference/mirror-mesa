@@ -589,16 +589,15 @@ v3dv_cmd_buffer_finish_job(struct v3dv_cmd_buffer *cmd_buffer)
    if (!job)
       return;
 
-   /* If a job is serialized it means it consumed a barrier. If the barrier
-    * had the BCL sync flag and the job actually required to apply it, then
-    * it would have done so and cleared it, but if the flag was not applied
-    * because the job's binning shaders didn't require it, we want to clear
-    * that state before we start a new job or record a new pipeline barrier
-    * (we always finish the current job before processing a pipeline barrier).
+   /* Always clear BCL state after a job has been finished if we don't have
+    * a pending graphics barrier that could consume it (BCL barriers only
+    * apply to graphics jobs). This can happen if the application recorded
+    * a barrier involving geometry stages but none of the draw calls in the
+    * job actually required a binning sync.
     */
-   if (job->serialize) {
-      cmd_buffer->state.bcl_barrier_buffer_access = 0;
-      cmd_buffer->state.bcl_barrier_image_access = 0;
+   if (!(cmd_buffer->state.barrier.dst_mask & V3DV_BARRIER_GRAPHICS_BIT)) {
+      cmd_buffer->state.barrier.bcl_buffer_access = 0;
+      cmd_buffer->state.barrier.bcl_image_access = 0;
    }
 
    if (cmd_buffer->state.oom) {
@@ -678,17 +677,40 @@ cmd_buffer_serialize_job_if_needed(struct v3dv_cmd_buffer *cmd_buffer,
 {
    assert(cmd_buffer && job);
 
-   if (!cmd_buffer->state.has_barrier)
-      return;
-
    /* Serialization only affects GPU jobs, CPU jobs are always automatically
     * serialized.
     */
    if (!v3dv_job_type_is_gpu(job))
       return;
 
-   job->serialize = true;
-   cmd_buffer->state.has_barrier = false;
+   uint8_t barrier_mask = cmd_buffer->state.barrier.dst_mask;
+   if (barrier_mask == 0)
+      return;
+
+   uint8_t bit = 0;
+   uint8_t *src_mask;
+   if (job->type == V3DV_JOB_TYPE_GPU_CSD) {
+      assert(!job->is_transfer);
+      bit = V3DV_BARRIER_COMPUTE_BIT;
+      src_mask = &cmd_buffer->state.barrier.src_mask_compute;
+   } else if (job->is_transfer) {
+      assert(job->type == V3DV_JOB_TYPE_GPU_CL ||
+             job->type == V3DV_JOB_TYPE_GPU_CL_SECONDARY ||
+             job->type == V3DV_JOB_TYPE_GPU_TFU);
+      bit = V3DV_BARRIER_TRANSFER_BIT;
+      src_mask = &cmd_buffer->state.barrier.src_mask_transfer;
+   } else {
+      assert(job->type == V3DV_JOB_TYPE_GPU_CL ||
+             job->type == V3DV_JOB_TYPE_GPU_CL_SECONDARY);
+      bit = V3DV_BARRIER_GRAPHICS_BIT;
+      src_mask = &cmd_buffer->state.barrier.src_mask_graphics;
+   }
+
+   if (barrier_mask & bit) {
+      job->serialize = *src_mask;
+      *src_mask = 0;
+      cmd_buffer->state.barrier.dst_mask &= ~bit;
+   }
 }
 
 void
@@ -751,6 +773,8 @@ v3dv_job_init(struct v3dv_job *job,
        */
       if (cmd_buffer->state.pass)
          job->first_subpass = subpass_idx;
+
+      job->is_transfer = cmd_buffer->state.is_transfer;
 
       cmd_buffer_serialize_job_if_needed(cmd_buffer, job);
    }
@@ -1661,9 +1685,7 @@ cmd_buffer_execute_outside_pass(struct v3dv_cmd_buffer *primary,
                                 uint32_t cmd_buffer_count,
                                 const VkCommandBuffer *cmd_buffers)
 {
-   bool pending_barrier = false;
-   VkAccessFlags pending_bcl_barrier_buffer_access = 0;
-   VkAccessFlags pending_bcl_barrier_image_access = 0;
+   struct v3dv_barrier_state pending_barrier = { 0 };
    for (uint32_t i = 0; i < cmd_buffer_count; i++) {
       V3DV_FROM_HANDLE(v3dv_cmd_buffer, secondary, cmd_buffers[i]);
 
@@ -1691,15 +1713,18 @@ cmd_buffer_execute_outside_pass(struct v3dv_cmd_buffer *primary,
          if (!job)
             return;
 
-         if (pending_barrier) {
-            job->serialize = true;
-            if (pending_bcl_barrier_buffer_access ||
-                pending_bcl_barrier_image_access) {
+         if (pending_barrier.dst_mask) {
+            /* FIXME: do the same we do for primaries and only choose the
+             * relevant src masks.
+             */
+            job->serialize = pending_barrier.src_mask_graphics |
+                             pending_barrier.src_mask_transfer |
+                             pending_barrier.src_mask_compute;
+            if (pending_barrier.bcl_buffer_access ||
+                pending_barrier.bcl_image_access) {
                job->needs_bcl_sync = true;
             }
-            pending_barrier = false;
-            pending_bcl_barrier_buffer_access = 0;
-            pending_bcl_barrier_image_access = 0;
+            memset(&pending_barrier, 0, sizeof(pending_barrier));
          }
       }
 
@@ -1707,23 +1732,14 @@ cmd_buffer_execute_outside_pass(struct v3dv_cmd_buffer *primary,
        * barrier state consumed with whatever comes after it (first job in
        * the next secondary or the primary, if this was the last secondary).
        */
-      assert(secondary->state.has_barrier ||
-             (!secondary->state.bcl_barrier_buffer_access &&
-              !secondary->state.bcl_barrier_image_access));
-      pending_barrier = secondary->state.has_barrier;
-      pending_bcl_barrier_buffer_access =
-         secondary->state.bcl_barrier_buffer_access;
-      pending_bcl_barrier_image_access =
-         secondary->state.bcl_barrier_image_access;
+      assert(secondary->state.barrier.dst_mask ||
+             (!secondary->state.barrier.bcl_buffer_access &&
+              !secondary->state.barrier.bcl_image_access));
+      pending_barrier = secondary->state.barrier;
    }
 
-   if (pending_barrier) {
-      primary->state.has_barrier = true;
-      primary->state.bcl_barrier_buffer_access |=
-         pending_bcl_barrier_buffer_access;
-      primary->state.bcl_barrier_image_access |=
-         pending_bcl_barrier_image_access;
-   }
+   if (pending_barrier.dst_mask)
+      primary->state.barrier = pending_barrier;
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -2430,9 +2446,9 @@ cmd_buffer_binning_sync_required(struct v3dv_cmd_buffer *cmd_buffer,
    const struct v3dv_descriptor_maps *gs_bin_maps =
       pipeline->shared_data->maps[BROADCOM_SHADER_GEOMETRY_BIN];
 
-   if (cmd_buffer->state.bcl_barrier_buffer_access) {
-      VkAccessFlags buffer_access = cmd_buffer->state.bcl_barrier_buffer_access;
-
+  VkAccessFlags buffer_access =
+      cmd_buffer->state.barrier.bcl_buffer_access;
+   if (buffer_access) {
       /* Index buffer read */
       if (indexed && (buffer_access & VK_ACCESS_INDEX_READ_BIT))
          return true;
@@ -2479,9 +2495,9 @@ cmd_buffer_binning_sync_required(struct v3dv_cmd_buffer *cmd_buffer,
       }
    }
 
-   if (cmd_buffer->state.bcl_barrier_image_access) {
-      VkAccessFlags image_access = cmd_buffer->state.bcl_barrier_image_access;
-
+   VkAccessFlags image_access =
+      cmd_buffer->state.barrier.bcl_image_access;
+   if (image_access) {
       /* Image load / store */
       if (image_access & (VK_ACCESS_SHADER_READ_BIT |
                           VK_ACCESS_SHADER_WRITE_BIT |
@@ -2501,8 +2517,8 @@ static void
 consume_bcl_sync(struct v3dv_cmd_buffer *cmd_buffer, struct v3dv_job *job)
 {
    job->needs_bcl_sync = true;
-   cmd_buffer->state.bcl_barrier_buffer_access = 0;
-   cmd_buffer->state.bcl_barrier_image_access = 0;
+   cmd_buffer->state.barrier.bcl_buffer_access = 0;
+   cmd_buffer->state.barrier.bcl_image_access = 0;
 }
 
 void
@@ -2534,14 +2550,15 @@ v3dv_cmd_buffer_emit_pre_draw(struct v3dv_cmd_buffer *cmd_buffer,
     * to sync at the binning stage by testing if the binning shaders involved
     * with the draw call require access to external resources.
     */
-   if (job->serialize && (cmd_buffer->state.bcl_barrier_buffer_access ||
-                          cmd_buffer->state.bcl_barrier_image_access)) {
+   if (job->serialize && (cmd_buffer->state.barrier.bcl_buffer_access ||
+                          cmd_buffer->state.barrier.bcl_image_access)) {
       assert(!job->needs_bcl_sync);
       struct v3dv_pipeline *pipeline = cmd_buffer->state.gfx.pipeline;
       if (cmd_buffer_binning_sync_required(cmd_buffer, pipeline,
                                            indexed, indirect)) {
          consume_bcl_sync(cmd_buffer, job);
       }
+      /* FIXME: clear bc flags whether consumed bcl barrier or not? */
    }
 
    /* GL shader state binds shaders, uniform and vertex attribute state. The
@@ -2795,29 +2812,64 @@ v3dv_CmdPipelineBarrier(VkCommandBuffer commandBuffer,
    if (job)
       v3dv_cmd_buffer_finish_job(cmd_buffer);
 
-   cmd_buffer->state.has_barrier = true;
-   if (dstStageMask & (VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
-                       VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                       VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT |
-                       VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
-                       VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT |
-                       VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
-                       VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT |
+   /* Track the source of the barrier */
+   uint8_t src_mask = 0;
+   if (srcStageMask & (VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
-      for (int i = 0; i < memoryBarrierCount; i++) {
-         cmd_buffer->state.bcl_barrier_buffer_access |=
-            pMemoryBarriers[i].dstAccessMask;
-         cmd_buffer->state.bcl_barrier_image_access |=
-            pMemoryBarriers[i].dstAccessMask;
-      }
-      for (int i = 0; i < bufferBarrierCount; i++) {
-         cmd_buffer->state.bcl_barrier_buffer_access |=
-            pBufferBarriers[i].dstAccessMask;
-      }
-      for (int i = 0; i < imageBarrierCount; i++) {
-         if (pImageBarriers[i].oldLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
-            cmd_buffer->state.bcl_barrier_image_access |=
-               pImageBarriers[i].dstAccessMask;
+      src_mask |= V3DV_BARRIER_COMPUTE_BIT;
+   }
+
+   if (srcStageMask & (VK_PIPELINE_STAGE_TRANSFER_BIT |
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+      src_mask |= V3DV_BARRIER_TRANSFER_BIT;
+   }
+
+   if (srcStageMask & (~(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                         VK_PIPELINE_STAGE_TRANSFER_BIT))) {
+      src_mask |= V3DV_BARRIER_GRAPHICS_BIT;
+   }
+
+   /* Track consumer of the barrier */
+   if (dstStageMask & (VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+      cmd_buffer->state.barrier.dst_mask |= V3DV_BARRIER_COMPUTE_BIT;
+      cmd_buffer->state.barrier.src_mask_compute |= src_mask;
+   }
+
+   if (dstStageMask & (VK_PIPELINE_STAGE_TRANSFER_BIT |
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+      cmd_buffer->state.barrier.dst_mask |= V3DV_BARRIER_TRANSFER_BIT;
+      cmd_buffer->state.barrier.src_mask_transfer |= src_mask;
+   }
+
+   if (dstStageMask & (~(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                         VK_PIPELINE_STAGE_TRANSFER_BIT))) {
+      cmd_buffer->state.barrier.dst_mask |= V3DV_BARRIER_GRAPHICS_BIT;
+      cmd_buffer->state.barrier.src_mask_graphics |= src_mask;
+
+      if (dstStageMask & (VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+                          VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                          VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT |
+                          VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+                          VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT |
+                          VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                          VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT |
+                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+         for (int i = 0; i < memoryBarrierCount; i++) {
+            cmd_buffer->state.barrier.bcl_buffer_access |=
+               pMemoryBarriers[i].dstAccessMask;
+            cmd_buffer->state.barrier.bcl_image_access |=
+               pMemoryBarriers[i].dstAccessMask;
+         }
+         for (int i = 0; i < bufferBarrierCount; i++) {
+            cmd_buffer->state.barrier.bcl_buffer_access |=
+               pBufferBarriers[i].dstAccessMask;
+         }
+         for (int i = 0; i < imageBarrierCount; i++) {
+            if (pImageBarriers[i].oldLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+               cmd_buffer->state.barrier.bcl_image_access |=
+                  pImageBarriers[i].dstAccessMask;
+            }
          }
       }
    }

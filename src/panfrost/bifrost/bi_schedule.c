@@ -125,7 +125,7 @@ struct bi_clause_state {
         /* Indices already accessed, this needs to be tracked to avoid hazards
          * around message-passing instructions */
         unsigned access_count;
-        bi_index accesses[(BI_MAX_SRCS + 2) * 16];
+        bi_index accesses[(BI_MAX_SRCS + BI_MAX_DESTS) * 16];
 
         unsigned tuple_count;
         struct bi_const_state consts[8];
@@ -786,6 +786,10 @@ bi_reads_t(bi_instr *ins, unsigned src)
                 return src != 2;
         case BI_OPCODE_BLEND:
                 return src != 2 && src != 3;
+
+        /* +JUMP can't read the offset from T */
+        case BI_OPCODE_JUMP:
+                return false;
 
         /* Else, just check if we can read any temps */
         default:

@@ -1197,18 +1197,6 @@ void anv_CmdBindVertexBuffers2(
    }
 }
 
-void anv_CmdBindVertexBuffers(
-    VkCommandBuffer                             commandBuffer,
-    uint32_t                                    firstBinding,
-    uint32_t                                    bindingCount,
-    const VkBuffer*                             pBuffers,
-    const VkDeviceSize*                         pOffsets)
-{
-   return anv_CmdBindVertexBuffers2(commandBuffer, firstBinding,
-                                    bindingCount, pBuffers, pOffsets,
-                                    NULL, NULL);
-}
-
 void anv_CmdBindTransformFeedbackBuffersEXT(
     VkCommandBuffer                             commandBuffer,
     uint32_t                                    firstBinding,
@@ -1232,8 +1220,8 @@ void anv_CmdBindTransformFeedbackBuffersEXT(
          xfb[firstBinding + i].buffer = buffer;
          xfb[firstBinding + i].offset = pOffsets[i];
          xfb[firstBinding + i].size =
-            anv_buffer_get_range(buffer, pOffsets[i],
-                                 pSizes ? pSizes[i] : VK_WHOLE_SIZE);
+            vk_buffer_range(&buffer->vk, pOffsets[i],
+                            pSizes ? pSizes[i] : VK_WHOLE_SIZE);
       }
    }
 }

@@ -530,11 +530,13 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
          sbe_mesh.PerPrimitiveURBEntryOutputReadOffset = mue->per_primitive_header_size_dw / 8;
          sbe_mesh.PerPrimitiveURBEntryOutputReadLength = DIV_ROUND_UP(mue->per_primitive_data_size_dw, 8);
 
-         /* Just like with clip distances, if Viewport Index or Layer is read
-          * back in the FS, adjust the offset and length to cover the Primitive
-          * Header, where Viewport Index & Layer are stored.
+         /* Just like with clip distances, if Primitive Shading Rate,
+          * Viewport Index or Layer is read back in the FS, adjust
+          * the offset and length to cover the Primitive Header, where
+          * PSR, Viewport Index & Layer are stored.
           */
          if (wm_prog_data->urb_setup[VARYING_SLOT_VIEWPORT] >= 0 ||
+             wm_prog_data->urb_setup[VARYING_SLOT_PRIMITIVE_SHADING_RATE] >= 0 ||
              wm_prog_data->urb_setup[VARYING_SLOT_LAYER] >= 0) {
             assert(sbe_mesh.PerPrimitiveURBEntryOutputReadOffset > 0);
             sbe_mesh.PerPrimitiveURBEntryOutputReadOffset -= 1;
@@ -2349,7 +2351,8 @@ emit_3dstate_ps(struct anv_graphics_pipeline *pipeline,
                                brw_wm_prog_data_prog_offset(wm_prog_data, ps, 2);
 
       ps.SingleProgramFlow          = false;
-      ps.VectorMaskEnable           = GFX_VER >= 8;
+      ps.VectorMaskEnable           = GFX_VER >= 8 &&
+                                      wm_prog_data->uses_vmask;
       /* Wa_1606682166 */
       ps.SamplerCount               = GFX_VER == 11 ? 0 : get_sampler_count(fs_bin);
       ps.BindingTableEntryCount     = fs_bin->bind_map.surface_count;
@@ -2579,10 +2582,10 @@ emit_task_state(struct anv_graphics_pipeline *pipeline)
    /* Recommended values from "Task and Mesh Distribution Programming". */
    anv_batch_emit(&pipeline->base.batch, GENX(3DSTATE_TASK_REDISTRIB), redistrib) {
       redistrib.LocalBOTAccumulatorThreshold = MULTIPLIER_1;
-      redistrib.SmallTaskThreshold = MULTIPLIER_2;
-      redistrib.TargetMeshBatchSize = MULTIPLIER_4;
+      redistrib.SmallTaskThreshold = 1; /* 2^N */
+      redistrib.TargetMeshBatchSize = devinfo->num_slices > 2 ? 3 : 5; /* 2^N */
       redistrib.TaskRedistributionLevel = TASKREDISTRIB_BOM;
-      redistrib.TaskRedistributionMode = TASKREDISTRIB_RR_FREE;
+      redistrib.TaskRedistributionMode = TASKREDISTRIB_RR_STRICT;
    }
 }
 
@@ -2653,8 +2656,8 @@ emit_mesh_state(struct anv_graphics_pipeline *pipeline)
    /* Recommended values from "Task and Mesh Distribution Programming". */
    anv_batch_emit(&pipeline->base.batch, GENX(3DSTATE_MESH_DISTRIB), distrib) {
       distrib.DistributionMode = MESH_RR_FREE;
-      distrib.TaskDistributionBatchSize = 2; /* 2^2 thread groups */
-      distrib.MeshDistributionBatchSize = 3; /* 2^3 thread groups */
+      distrib.TaskDistributionBatchSize = devinfo->num_slices > 2 ? 8 : 9; /* 2^N thread groups */
+      distrib.MeshDistributionBatchSize = devinfo->num_slices > 2 ? 5 : 3; /* 2^N thread groups */
    }
 }
 #endif
@@ -2710,16 +2713,7 @@ genX(graphics_pipeline_create)(
       return result;
    }
 
-   /* Information on which states are considered dynamic. */
-   const VkPipelineDynamicStateCreateInfo *dyn_info =
-      pCreateInfo->pDynamicState;
-   uint32_t dynamic_states = 0;
-   if (dyn_info) {
-      for (unsigned i = 0; i < dyn_info->dynamicStateCount; i++)
-         dynamic_states |=
-            anv_cmd_dirty_bit_for_vk_dynamic_state(dyn_info->pDynamicStates[i]);
-   }
-
+   uint32_t dynamic_states = pipeline->dynamic_states;
 
    /* If rasterization is not enabled, various CreateInfo structs must be
     * ignored.
@@ -2807,6 +2801,12 @@ genX(graphics_pipeline_create)(
 #endif
    } else {
       assert(anv_pipeline_is_mesh(pipeline));
+
+      /* BSpec 46303 forbids both 3DSTATE_MESH_CONTROL.MeshShaderEnable
+       * and 3DSTATE_STREAMOUT.SOFunctionEnable to be 1.
+       */
+      anv_batch_emit(&pipeline->base.batch, GENX(3DSTATE_STREAMOUT), so) {}
+
 #if GFX_VERx10 >= 125
       emit_task_state(pipeline);
       emit_mesh_state(pipeline);

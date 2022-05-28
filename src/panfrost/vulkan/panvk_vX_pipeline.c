@@ -58,7 +58,6 @@ struct panvk_pipeline_builder
    struct {
       uint32_t shader_offset;
       uint32_t rsd_offset;
-      uint32_t sysvals_offset;
    } stages[MESA_SHADER_STAGES];
    uint32_t blend_shader_offsets[MAX_RTS];
    uint32_t shader_total_size;
@@ -126,8 +125,6 @@ panvk_pipeline_builder_compile_shaders(struct panvk_pipeline_builder *builder,
    }
 
    /* compile shaders in reverse order */
-   unsigned sysval_ubo = builder->layout->num_ubos + builder->layout->num_dyn_ubos;
-
    for (gl_shader_stage stage = MESA_SHADER_STAGES - 1;
         stage > MESA_SHADER_NONE; stage--) {
       const VkPipelineShaderStageCreateInfo *stage_info = stage_infos[stage];
@@ -137,16 +134,14 @@ panvk_pipeline_builder_compile_shaders(struct panvk_pipeline_builder *builder,
       struct panvk_shader *shader;
 
       shader = panvk_per_arch(shader_create)(builder->device, stage, stage_info,
-                                             builder->layout, sysval_ubo,
+                                             builder->layout,
+                                             PANVK_SYSVAL_UBO_INDEX,
                                              &pipeline->blend.state,
                                              panvk_pipeline_static_state(pipeline,
                                                                          VK_DYNAMIC_STATE_BLEND_CONSTANTS),
                                              builder->alloc);
       if (!shader)
          return VK_ERROR_OUT_OF_HOST_MEMORY;
-
-      if (shader->info.sysvals.sysval_count)
-         sysval_ubo++;
  
       builder->shaders[stage] = shader;
       builder->shader_total_size = ALIGN_POT(builder->shader_total_size, 128);
@@ -233,64 +228,10 @@ panvk_pipeline_builder_alloc_static_state_bo(struct panvk_pipeline_builder *buil
       bo_size += pan_size(VIEWPORT);
    }
 
-   for (uint32_t i = 0; i < MESA_SHADER_STAGES; i++) {
-      const struct panvk_shader *shader = builder->shaders[i];
-      if (!shader || !shader->info.sysvals.sysval_count)
-         continue;
-
-      bool static_sysvals = true;
-      for (unsigned s = 0; s < shader->info.sysvals.sysval_count; s++) {
-         unsigned id = shader->info.sysvals.sysvals[i];
-         static_sysvals &= panvk_pipeline_static_sysval(pipeline, id);
-         switch (PAN_SYSVAL_TYPE(id)) {
-         case PAN_SYSVAL_VIEWPORT_SCALE:
-         case PAN_SYSVAL_VIEWPORT_OFFSET:
-            pipeline->sysvals[i].dirty_mask |= PANVK_DYNAMIC_VIEWPORT;
-            break;
-         case PAN_SYSVAL_SSBO:
-            pipeline->sysvals[i].dirty_mask |= PANVK_DYNAMIC_SSBO;
-            break;
-         case PAN_SYSVAL_VERTEX_INSTANCE_OFFSETS:
-            pipeline->sysvals[i].dirty_mask |= PANVK_DYNAMIC_VERTEX_INSTANCE_OFFSETS;
-            break;
-         default:
-            break;
-         }
-      }
-
-      if (!static_sysvals) {
-         builder->stages[i].sysvals_offset = ~0;
-         continue;
-      }
-
-      bo_size = ALIGN_POT(bo_size, 16);
-      builder->stages[i].sysvals_offset = bo_size;
-      bo_size += shader->info.sysvals.sysval_count * 16;
-   }
-
    if (bo_size) {
       pipeline->state_bo =
          panfrost_bo_create(pdev, bo_size, 0, "Pipeline descriptors");
       panfrost_bo_mmap(pipeline->state_bo);
-   }
-}
-
-static void
-panvk_pipeline_builder_upload_sysval(struct panvk_pipeline_builder *builder,
-                                     struct panvk_pipeline *pipeline,
-                                     unsigned id, union panvk_sysval_data *data)
-{
-   switch (PAN_SYSVAL_TYPE(id)) {
-   case PAN_SYSVAL_VIEWPORT_SCALE:
-      panvk_sysval_upload_viewport_scale(builder->create_info.gfx->pViewportState->pViewports,
-                                         data);
-      break;
-   case PAN_SYSVAL_VIEWPORT_OFFSET:
-      panvk_sysval_upload_viewport_offset(builder->create_info.gfx->pViewportState->pViewports,
-                                          data);
-      break;
-   default:
-      unreachable("Invalid static sysval");
    }
 }
 
@@ -303,24 +244,6 @@ panvk_pipeline_builder_init_sysvals(struct panvk_pipeline_builder *builder,
 
    pipeline->sysvals[stage].ids = shader->info.sysvals;
    pipeline->sysvals[stage].ubo_idx = shader->sysval_ubo;
-
-   if (!shader->info.sysvals.sysval_count ||
-       builder->stages[stage].sysvals_offset == ~0)
-      return;
-
-   union panvk_sysval_data *static_data =
-      pipeline->state_bo->ptr.cpu + builder->stages[stage].sysvals_offset;
-
-   pipeline->sysvals[stage].ubo =
-      pipeline->state_bo->ptr.gpu + builder->stages[stage].sysvals_offset;
-
-   for (unsigned i = 0; i < shader->info.sysvals.sysval_count; i++) {
-      unsigned id = shader->info.sysvals.sysvals[i];
-
-      panvk_pipeline_builder_upload_sysval(builder,
-                                           pipeline,
-                                           id, &static_data[i]);
-   }
 }
 
 static void
@@ -392,15 +315,9 @@ panvk_pipeline_builder_init_shaders(struct panvk_pipeline_builder *builder,
       }
    }
 
-   pipeline->num_ubos = builder->layout->num_ubos + builder->layout->num_dyn_ubos;
-   for (unsigned i = 0; i < ARRAY_SIZE(pipeline->sysvals); i++) {
-      if (pipeline->sysvals[i].ids.sysval_count)
-         pipeline->num_ubos = MAX2(pipeline->num_ubos, pipeline->sysvals[i].ubo_idx + 1);
-   }
-
-   pipeline->num_sysvals = 0;
-   for (unsigned i = 0; i < ARRAY_SIZE(pipeline->sysvals); i++)
-      pipeline->num_sysvals += pipeline->sysvals[i].ids.sysval_count;
+   pipeline->num_ubos = PANVK_NUM_BUILTIN_UBOS +
+                        builder->layout->num_ubos +
+                        builder->layout->num_dyn_ubos;
 }
 
 

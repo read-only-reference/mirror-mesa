@@ -457,6 +457,16 @@ typedef struct nir_variable {
       unsigned precision:2;
 
       /**
+       * Has this variable been statically assigned?
+       *
+       * This answers whether the variable was assigned in any path of
+       * the shader during ast_to_hir.  This doesn't answer whether it is
+       * still written after dead code removal, nor is it maintained in
+       * non-ast_to_hir.cpp (GLSL parsing) paths.
+       */
+      unsigned assigned:1;
+
+      /**
        * Can this variable be coalesced with another?
        *
        * This is set by nir_lower_io_to_temporaries to say that any
@@ -528,6 +538,20 @@ typedef struct nir_variable {
       unsigned explicit_location:1;
 
       /**
+       * Is this varying used by transform feedback?
+       *
+       * This is used by the linker to decide if it's safe to pack the varying.
+       */
+      unsigned is_xfb:1;
+
+      /**
+       * Is this varying used only by transform feedback?
+       *
+       * This is used by the linker to decide if its safe to pack the varying.
+       */
+      unsigned is_xfb_only:1;
+
+      /**
        * Was a transfer feedback buffer set in the shader?
        */
       unsigned explicit_xfb_buffer:1;
@@ -552,6 +576,12 @@ typedef struct nir_variable {
        * block.
        */
       unsigned from_named_ifc_block:1;
+
+      /**
+       * Non-zero if the variable must be a shader input. This is useful for
+       * constraints on function parameters.
+       */
+      unsigned must_be_shader_input:1;
 
       /**
        * How the variable was declared.  See nir_var_declaration_type.
@@ -3548,6 +3578,18 @@ typedef struct nir_shader_compiler_options {
     * vectorized IO can pack more varyings when linking. */
    bool linker_ignore_precision;
 
+   /* Specifies if indirect sampler array access will trigger forced loop
+    * unrolling.
+    */
+   bool force_indirect_unrolling_sampler;
+
+   /* Some older drivers don't support GLSL versions with the concept of flat
+    * varyings and also don't support integers. This setting helps us avoid
+    * marking varyings as flat and potentially having them changed to ints via
+    * varying packing.
+    */
+   bool no_integers;
+
    /**
     * Specifies which type of indirectly accessed variables should force
     * loop unrolling.
@@ -3639,6 +3681,8 @@ typedef struct nir_shader {
    /** Size of the constant data associated with the shader, in bytes */
    unsigned constant_data_size;
 
+   struct nir_xfb_info *xfb_info;
+
    unsigned printf_info_count;
    nir_printf_info *printf_info;
 } nir_shader;
@@ -3668,6 +3712,8 @@ nir_shader_get_entrypoint(const nir_shader *shader)
    assert(func->impl);
    return func->impl;
 }
+
+void nir_remove_non_entrypoints(nir_shader *shader);
 
 nir_shader *nir_shader_create(void *mem_ctx,
                               gl_shader_stage stage,
@@ -4303,7 +4349,8 @@ static inline bool should_print_nir(UNUSED nir_shader *shader) { return false; }
    if (should_print_nir(nir))                                        \
       printf("%s\n", #pass);                                         \
    if (pass(nir, ##__VA_ARGS__)) {                                   \
-      nir_validate_shader(nir, "after " #pass);                      \
+      nir_validate_shader(nir, "after " #pass " in " __FILE__);      \
+      UNUSED bool _;                                                 \
       progress = true;                                               \
       if (should_print_nir(nir))                                     \
          nir_print_shader(nir, stdout);                              \
@@ -4315,7 +4362,7 @@ static inline bool should_print_nir(UNUSED nir_shader *shader) { return false; }
    if (should_print_nir(nir))                                        \
       printf("%s\n", #pass);                                         \
    pass(nir, ##__VA_ARGS__);                                         \
-   nir_validate_shader(nir, "after " #pass);                         \
+   nir_validate_shader(nir, "after " #pass " in " __FILE__);         \
    if (should_print_nir(nir))                                        \
       nir_print_shader(nir, stdout);                                 \
 )
@@ -4464,7 +4511,8 @@ bool nir_lower_array_deref_of_vec(nir_shader *shader, nir_variable_mode modes,
 bool nir_lower_indirect_derefs(nir_shader *shader, nir_variable_mode modes,
                                uint32_t max_lower_array_len);
 
-bool nir_lower_indirect_builtin_uniform_derefs(nir_shader *shader);
+bool nir_lower_indirect_var_derefs(nir_shader *shader,
+                                   const struct set *vars);
 
 bool nir_lower_locals_to_regs(nir_shader *shader);
 
@@ -4546,7 +4594,7 @@ bool nir_lower_io(nir_shader *shader,
 bool nir_io_add_const_offset_to_base(nir_shader *nir, nir_variable_mode modes);
 
 void
-nir_lower_io_passes(nir_shader *nir, struct nir_xfb_info *xfb);
+nir_lower_io_passes(nir_shader *nir);
 
 bool
 nir_lower_vars_to_explicit_types(nir_shader *shader,
@@ -5203,6 +5251,12 @@ typedef enum {
 
 bool nir_lower_gs_intrinsics(nir_shader *shader, nir_lower_gs_intrinsics_flags options);
 
+typedef struct {
+   bool payload_to_shared_for_atomics : 1;
+} nir_lower_task_shader_options;
+
+bool nir_lower_task_shader(nir_shader *shader, nir_lower_task_shader_options options);
+
 typedef unsigned (*nir_lower_bit_size_callback)(const nir_instr *, void *);
 
 bool nir_lower_bit_size(nir_shader *shader,
@@ -5279,7 +5333,8 @@ void nir_live_ssa_defs_impl(nir_function_impl *impl);
 const BITSET_WORD *nir_get_live_ssa_defs(nir_cursor cursor, void *mem_ctx);
 
 void nir_loop_analyze_impl(nir_function_impl *impl,
-                           nir_variable_mode indirect_mask);
+                           nir_variable_mode indirect_mask,
+                           bool force_unroll_sampler_indirect);
 
 bool nir_ssa_defs_interfere(nir_ssa_def *a, nir_ssa_def *b);
 

@@ -185,7 +185,6 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    /* Unsupported features. */
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-   case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
    case PIPE_CAP_TEXRECT:
       return 0;
@@ -416,7 +415,6 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
       return (1 << PIPE_SHADER_IR_TGSI) |
              (1 << PIPE_SHADER_IR_NIR);
    case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-      return 32;
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
@@ -871,7 +869,7 @@ etna_get_specs(struct etna_screen *screen)
       } else {
          screen->specs.vs_offset = 0x4000;
          screen->specs.ps_offset = 0x6000;
-         screen->specs.max_instructions = instruction_count / 2;
+         screen->specs.max_instructions = instruction_count;
       }
       screen->specs.has_icache = false;
    }
@@ -1118,6 +1116,8 @@ etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
       .lower_sincos = !screen->specs.has_sin_cos_sqrt,
       .lower_uniforms_to_ubo = screen->specs.halti >= 2,
       .force_indirect_unrolling = nir_var_all,
+      .max_unroll_iterations = 32,
+      .vectorize_io = true,
    };
 
    /* apply debug options that disable individual features */

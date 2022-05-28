@@ -187,11 +187,6 @@ struct pan_blitter_views {
         const struct pan_image_view *dst_z;
         const struct pan_image_view *src_s;
         const struct pan_image_view *dst_s;
-
-        /* Image view used when patching stencil formats for combined
-         * depth/stencil preloads.
-         */
-        struct pan_image_view patched_s;
 };
 
 static bool
@@ -604,6 +599,7 @@ pan_blitter_get_blit_shader(struct panfrost_device *dev,
                 .gpu_id = dev->gpu_id,
                 .is_blit = true,
                 .no_idvs = true,
+                .fixed_sysval_ubo = -1,
         };
         struct util_dynarray binary;
 
@@ -618,6 +614,9 @@ pan_blitter_get_blit_shader(struct panfrost_device *dev,
                 BITSET_SET(b.shader->info.textures_used, i);
 
         GENX(pan_shader_compile)(b.shader, &inputs, &binary, &shader->info);
+
+        /* Blit shaders shouldn't have sysvals */
+        assert(shader->info.sysvals.sysval_count == 0);
 
         shader->key = *key;
         shader->address =
@@ -798,7 +797,7 @@ pan_blit_get_rsd(struct panfrost_device *dev,
 #endif
 
 static struct pan_blitter_views
-pan_preload_get_views(const struct pan_fb_info *fb, bool zs)
+pan_preload_get_views(const struct pan_fb_info *fb, bool zs, struct pan_image_view *patched_s)
 {
         struct pan_blitter_views views = { 0 };
 
@@ -817,9 +816,9 @@ pan_preload_get_views(const struct pan_fb_info *fb, bool zs)
                         }
 
                         if (fmt != view->format) {
-                                views.patched_s = *view;
-                                views.patched_s.format = fmt;
-                                views.src_s = views.dst_s = &views.patched_s;
+                                *patched_s = *view;
+                                patched_s->format = fmt;
+                                views.src_s = views.dst_s = patched_s;
                         } else {
                                 views.src_s = views.dst_s = view;
                         }
@@ -1082,7 +1081,13 @@ pan_preload_emit_dcd(struct pan_pool *pool,
          * for colour and Z/S), allowing us to suppress unnecessary writeback
          */
         UNUSED bool clean_fragment_write = !always_write;
-        struct pan_blitter_views views = pan_preload_get_views(fb, zs);
+
+        /* Image view used when patching stencil formats for combined
+         * depth/stencil preloads.
+         */
+        struct pan_image_view patched_s;
+
+        struct pan_blitter_views views = pan_preload_get_views(fb, zs, &patched_s);
 
 #if PAN_ARCH <= 7
         pan_pack(out, DRAW, cfg) {

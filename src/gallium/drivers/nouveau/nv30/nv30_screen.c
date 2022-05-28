@@ -218,7 +218,6 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SHADER_ARRAY_COMPONENTS:
    case PIPE_CAP_SHADER_CAN_READ_OUTPUTS:
    case PIPE_CAP_NATIVE_FENCE_FD:
-   case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_FBFETCH:
    case PIPE_CAP_TGSI_MUL_ZERO_WINS:
    case PIPE_CAP_DOUBLES:
@@ -497,7 +496,9 @@ static const nir_shader_compiler_options nv30_base_compiler_options = {
    .lower_rotate = true,
    .lower_uniforms_to_ubo = true,
    .lower_vector_cmp = true,
+   .force_indirect_unrolling_sampler = true,
    .max_unroll_iterations = 32,
+   .no_integers = true,
 
    .use_interpolated_input_intrinsics = true,
 };

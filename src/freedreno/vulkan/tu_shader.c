@@ -54,6 +54,9 @@ tu_spirv_to_nir(struct tu_device *dev,
       /* Accessed via stg/ldg (not used with Vulkan?) */
       .global_addr_format = nir_address_format_64bit_global,
 
+      /* Use 16-bit math for RelaxedPrecision ALU ops */
+      .mediump_16bit_alu = true,
+
       /* ViewID is a sysval in geometry stages and an input in the FS */
       .view_index_is_input = stage == MESA_SHADER_FRAGMENT,
       .caps = {
@@ -658,10 +661,12 @@ shared_type_info(const struct glsl_type *type, unsigned *size, unsigned *align)
 static void
 tu_gather_xfb_info(nir_shader *nir, struct ir3_stream_output_info *info)
 {
-   nir_xfb_info *xfb = nir_gather_xfb_info(nir, NULL);
+   nir_shader_gather_xfb_info(nir);
 
-   if (!xfb)
+   if (!nir->xfb_info)
       return;
+
+   nir_xfb_info *xfb = nir->xfb_info;
 
    uint8_t output_map[VARYING_SLOT_TESS_MAX];
    memset(output_map, 0, sizeof(output_map));
@@ -674,7 +679,7 @@ tu_gather_xfb_info(nir_shader *nir, struct ir3_stream_output_info *info)
          output_map[var->data.location + i] = var->data.driver_location + i;
    }
 
-   assert(xfb->output_count < IR3_MAX_SO_OUTPUTS);
+   assert(xfb->output_count <= IR3_MAX_SO_OUTPUTS);
    info->num_outputs = xfb->output_count;
 
    for (int i = 0; i < IR3_MAX_SO_BUFFERS; i++) {
@@ -693,15 +698,12 @@ tu_gather_xfb_info(nir_shader *nir, struct ir3_stream_output_info *info)
       info->output[i].dst_offset = xfb->outputs[i].offset / 4;
       info->output[i].stream = xfb->buffer_to_stream[xfb->outputs[i].buffer];
    }
-
-   ralloc_free(xfb);
 }
 
 struct tu_shader *
 tu_shader_create(struct tu_device *dev,
                  nir_shader *nir,
-                 const VkPipelineShaderStageCreateInfo *stage_info,
-                 unsigned multiview_mask,
+                 const struct tu_shader_key *key,
                  struct tu_pipeline_layout *layout,
                  const VkAllocationCallbacks *alloc)
 {
@@ -729,7 +731,7 @@ tu_shader_create(struct tu_device *dev,
                       * sampling function. gl_Layer doesn't work when
                       * multiview is enabled.
                       */
-                     .use_view_id_for_layer = multiview_mask != 0,
+                     .use_view_id_for_layer = key->multiview_mask != 0,
                  });
    }
 
@@ -740,8 +742,8 @@ tu_shader_create(struct tu_device *dev,
     */
    ir3_nir_lower_io_to_temporaries(nir);
 
-   if (nir->info.stage == MESA_SHADER_VERTEX && multiview_mask) {
-      tu_nir_lower_multiview(nir, multiview_mask,
+   if (nir->info.stage == MESA_SHADER_VERTEX && key->multiview_mask) {
+      tu_nir_lower_multiview(nir, key->multiview_mask,
                              &shader->multi_pos_output, dev);
    }
 
@@ -801,46 +803,11 @@ tu_shader_create(struct tu_device *dev,
 
    ir3_finalize_nir(dev->compiler, nir);
 
-   enum ir3_wavesize_option api_wavesize, real_wavesize;
-
-   if (stage_info) {
-      if (stage_info->flags &
-          VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT_EXT) {
-         api_wavesize = real_wavesize = IR3_SINGLE_OR_DOUBLE;
-      } else {
-         const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT *size_info =
-            vk_find_struct_const(stage_info->pNext,
-                                 PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT);
-
-         if (size_info) {
-            if (size_info->requiredSubgroupSize == dev->compiler->threadsize_base) {
-               api_wavesize = IR3_SINGLE_ONLY;
-            } else {
-               assert(size_info->requiredSubgroupSize == dev->compiler->threadsize_base * 2);
-               api_wavesize = IR3_DOUBLE_ONLY;
-            }
-         } else {
-            /* Match the exposed subgroupSize. */
-            api_wavesize = IR3_DOUBLE_ONLY;
-         }
-
-         if (stage_info->flags &
-             VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT)
-            real_wavesize = api_wavesize;
-         else if (api_wavesize == IR3_SINGLE_ONLY)
-            real_wavesize = IR3_SINGLE_ONLY;
-         else
-            real_wavesize = IR3_SINGLE_OR_DOUBLE;
-      }
-   } else {
-      api_wavesize = real_wavesize = IR3_SINGLE_OR_DOUBLE;
-   }
-
    shader->ir3_shader =
       ir3_shader_from_nir(dev->compiler, nir, &(struct ir3_shader_options) {
                            .reserved_user_consts = align(shader->push_consts.count, 4),
-                           .api_wavesize = api_wavesize,
-                           .real_wavesize = real_wavesize,
+                           .api_wavesize = key->api_wavesize,
+                           .real_wavesize = key->real_wavesize,
                           }, &so_info);
 
    return shader;

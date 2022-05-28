@@ -49,7 +49,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    struct si_screen *sscreen = (struct si_screen *)pscreen;
 
    /* Gfx8 (Polaris11) hangs, so don't enable this on Gfx8 and older chips. */
-   bool enable_sparse = sscreen->info.chip_class >= GFX9 &&
+   bool enable_sparse = sscreen->info.gfx_level >= GFX9 &&
       sscreen->info.has_sparse_vm_mappings;
 
    switch (param) {
@@ -128,7 +128,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CULL_DISTANCE:
    case PIPE_CAP_SHADER_ARRAY_COMPONENTS:
    case PIPE_CAP_SHADER_CAN_READ_OUTPUTS:
-   case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_DOUBLES:
@@ -154,7 +153,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_PREFER_COMPUTE_FOR_MULTIMEDIA:
    case PIPE_CAP_TGSI_DIV:
    case PIPE_CAP_PACKED_UNIFORMS:
-   case PIPE_CAP_SHADER_SAMPLES_IDENTICAL:
    case PIPE_CAP_GL_SPIRV:
    case PIPE_CAP_ALPHA_TO_COVERAGE_DITHER_CONTROL:
    case PIPE_CAP_MAP_UNSYNCHRONIZED_THREAD_SAFE:
@@ -175,6 +173,9 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_DRAW_VERTEX_STATE:
       return !(sscreen->debug_flags & DBG(NO_FAST_DISPLAY_LIST));
 
+   case PIPE_CAP_SHADER_SAMPLES_IDENTICAL:
+      return sscreen->info.gfx_level < GFX11;
+
    case PIPE_CAP_GLSL_ZERO_INIT:
       return 2;
 
@@ -188,7 +189,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return !sscreen->use_ngg_streamout;
 
    case PIPE_CAP_POST_DEPTH_COVERAGE:
-      return sscreen->info.chip_class >= GFX10;
+      return sscreen->info.gfx_level >= GFX10;
 
    case PIPE_CAP_GRAPHICS:
       return sscreen->info.has_graphics;
@@ -253,6 +254,13 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_PREFER_IMM_ARRAYS_AS_CONSTBUF:
       return 0;
 
+   case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+      if (!(sscreen->info.is_amdgpu && sscreen->info.drm_minor >= 22))
+         return 0;
+      return PIPE_CONTEXT_PRIORITY_LOW |
+             PIPE_CONTEXT_PRIORITY_MEDIUM |
+             PIPE_CONTEXT_PRIORITY_HIGH;
+
    case PIPE_CAP_FENCE_SIGNAL:
       return sscreen->info.has_syncobj;
 
@@ -274,7 +282,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 32;
 
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-      return sscreen->info.chip_class <= GFX8 ? PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600 : 0;
+      return sscreen->info.gfx_level <= GFX8 ? PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600 : 0;
 
    /* Stream output. */
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
@@ -306,12 +314,12 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
       if (!sscreen->info.has_3d_cube_border_color_mipmap)
          return 0;
-      if (sscreen->info.chip_class >= GFX10)
+      if (sscreen->info.gfx_level >= GFX10)
          return 14;
       /* textures support 8192, but layered rendering supports 2048 */
       return 12;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-      if (sscreen->info.chip_class >= GFX10)
+      if (sscreen->info.gfx_level >= GFX10)
          return 8192;
       /* textures support 8192, but layered rendering supports 2048 */
       return 2048;
@@ -592,7 +600,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
             return 0;
       case PIPE_VIDEO_CAP_EFC_SUPPORTED:
          return ((sscreen->info.family >= CHIP_RENOIR) &&
-                 (sscreen->info.family < CHIP_SIENNA_CICHLID) &&
+                 (sscreen->info.family < CHIP_NAVI21) &&
                  !(sscreen->debug_flags & DBG(NO_EFC)));
       default:
          return 0;
@@ -602,7 +610,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
    switch (param) {
    case PIPE_VIDEO_CAP_SUPPORTED:
       if (codec < PIPE_VIDEO_FORMAT_MPEG4_AVC &&
-          sscreen->info.family >= CHIP_BEIGE_GOBY)
+          sscreen->info.family >= CHIP_NAVI24)
          return false;
       if (codec != PIPE_VIDEO_FORMAT_JPEG &&
           !(sscreen->info.has_video_hw.uvd_decode ||
@@ -611,9 +619,15 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
 
       switch (codec) {
       case PIPE_VIDEO_FORMAT_MPEG12:
-         return profile != PIPE_VIDEO_PROFILE_MPEG1;
+         if (sscreen->info.gfx_level >= GFX11)
+            return false;
+         else
+            return profile != PIPE_VIDEO_PROFILE_MPEG1;
       case PIPE_VIDEO_FORMAT_MPEG4:
-         return 1;
+         if (sscreen->info.gfx_level >= GFX11)
+            return false;
+         else
+            return true;
       case PIPE_VIDEO_FORMAT_MPEG4_AVC:
          if ((sscreen->info.family == CHIP_POLARIS10 || sscreen->info.family == CHIP_POLARIS11) &&
              sscreen->info.uvd_fw_version < UVD_FW_1_66_16) {
@@ -622,7 +636,10 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
          }
          return true;
       case PIPE_VIDEO_FORMAT_VC1:
-         return true;
+         if (sscreen->info.gfx_level >= GFX11)
+            return false;
+         else
+            return true;
       case PIPE_VIDEO_FORMAT_HEVC:
          /* Carrizo only supports HEVC Main */
          if (sscreen->info.family >= CHIP_STONEY)
@@ -650,7 +667,7 @@ static int si_get_video_param(struct pipe_screen *screen, enum pipe_video_profil
             return false;
          return true;
       case PIPE_VIDEO_FORMAT_AV1:
-         if (sscreen->info.family < CHIP_SIENNA_CICHLID)
+         if (sscreen->info.family < CHIP_NAVI21)
             return false;
          return true;
       default:
@@ -1016,7 +1033,7 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
 
    /* fma32 is too slow for gpu < gfx9, so force it only when gpu >= gfx9 */
    bool force_fma32 =
-      sscreen->info.chip_class >= GFX9 && sscreen->options.force_use_fma32;
+      sscreen->info.gfx_level >= GFX9 && sscreen->options.force_use_fma32;
 
    const struct nir_shader_compiler_options nir_options = {
       .lower_scmp = true,
@@ -1045,11 +1062,11 @@ void si_init_screen_get_functions(struct si_screen *sscreen)
        * gfx9 and newer prefer FMA for F16 because of the packed instruction.
        * gfx10 and older prefer MAD for F32 because of the legacy instruction.
        */
-      .lower_ffma16 = sscreen->info.chip_class < GFX9,
-      .lower_ffma32 = sscreen->info.chip_class < GFX10_3 && !force_fma32,
+      .lower_ffma16 = sscreen->info.gfx_level < GFX9,
+      .lower_ffma32 = sscreen->info.gfx_level < GFX10_3 && !force_fma32,
       .lower_ffma64 = false,
-      .fuse_ffma16 = sscreen->info.chip_class >= GFX9,
-      .fuse_ffma32 = sscreen->info.chip_class >= GFX10_3 || force_fma32,
+      .fuse_ffma16 = sscreen->info.gfx_level >= GFX9,
+      .fuse_ffma32 = sscreen->info.gfx_level >= GFX10_3 || force_fma32,
       .fuse_ffma64 = true,
       .lower_fmod = true,
       .lower_pack_snorm_4x8 = true,

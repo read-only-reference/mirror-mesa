@@ -121,6 +121,31 @@ shared_atomic_for_deref(nir_intrinsic_op deref_op)
    }
 }
 
+static nir_intrinsic_op
+task_payload_atomic_for_deref(nir_intrinsic_op deref_op)
+{
+   switch (deref_op) {
+#define OP(O) case nir_intrinsic_deref_##O: return nir_intrinsic_task_payload_##O;
+   OP(atomic_exchange)
+   OP(atomic_comp_swap)
+   OP(atomic_add)
+   OP(atomic_imin)
+   OP(atomic_umin)
+   OP(atomic_imax)
+   OP(atomic_umax)
+   OP(atomic_and)
+   OP(atomic_or)
+   OP(atomic_xor)
+   OP(atomic_fadd)
+   OP(atomic_fmin)
+   OP(atomic_fmax)
+   OP(atomic_fcomp_swap)
+#undef OP
+   default:
+      unreachable("Invalid task payload atomic");
+   }
+}
+
 void
 nir_assign_var_locations(nir_shader *shader, nir_variable_mode mode,
                          unsigned *size,
@@ -1734,6 +1759,10 @@ build_explicit_io_atomic(nir_builder *b, nir_intrinsic_instr *intrin,
       assert(addr_format_is_offset(addr_format, mode));
       op = shared_atomic_for_deref(intrin->intrinsic);
       break;
+   case nir_var_mem_task_payload:
+      assert(addr_format_is_offset(addr_format, mode));
+      op = task_payload_atomic_for_deref(intrin->intrinsic);
+      break;
    default:
       unreachable("Unsupported explicit IO variable mode");
    }
@@ -2560,6 +2589,20 @@ nir_get_io_offset_src(nir_intrinsic_instr *instr)
    case nir_intrinsic_shared_atomic_umax:
    case nir_intrinsic_shared_atomic_umin:
    case nir_intrinsic_shared_atomic_xor:
+   case nir_intrinsic_task_payload_atomic_add:
+   case nir_intrinsic_task_payload_atomic_imin:
+   case nir_intrinsic_task_payload_atomic_umin:
+   case nir_intrinsic_task_payload_atomic_imax:
+   case nir_intrinsic_task_payload_atomic_umax:
+   case nir_intrinsic_task_payload_atomic_and:
+   case nir_intrinsic_task_payload_atomic_or:
+   case nir_intrinsic_task_payload_atomic_xor:
+   case nir_intrinsic_task_payload_atomic_exchange:
+   case nir_intrinsic_task_payload_atomic_comp_swap:
+   case nir_intrinsic_task_payload_atomic_fadd:
+   case nir_intrinsic_task_payload_atomic_fmin:
+   case nir_intrinsic_task_payload_atomic_fmax:
+   case nir_intrinsic_task_payload_atomic_fcomp_swap:
    case nir_intrinsic_global_atomic_add:
    case nir_intrinsic_global_atomic_and:
    case nir_intrinsic_global_atomic_comp_swap:
@@ -2827,11 +2870,17 @@ nir_io_add_const_offset_to_base(nir_shader *nir, nir_variable_mode modes)
 
    nir_foreach_function(f, nir) {
       if (f->impl) {
+         bool impl_progress = false;
          nir_builder b;
          nir_builder_init(&b, f->impl);
          nir_foreach_block(block, f->impl) {
-            progress |= add_const_offset_to_base_block(block, &b, modes);
+            impl_progress |= add_const_offset_to_base_block(block, &b, modes);
          }
+         progress |= impl_progress;
+         if (impl_progress)
+            nir_metadata_preserve(f->impl, nir_metadata_block_index | nir_metadata_dominance);
+         else
+            nir_metadata_preserve(f->impl, nir_metadata_all);
       }
    }
 
@@ -2895,13 +2944,13 @@ nir_lower_color_inputs(nir_shader *nir)
 }
 
 static bool
-nir_add_xfb_info(nir_shader *nir, nir_xfb_info *info)
+nir_add_xfb_info(nir_shader *nir)
 {
    nir_function_impl *impl = nir_shader_get_entrypoint(nir);
    bool progress = false;
 
    for (unsigned i = 0; i < NIR_MAX_XFB_BUFFERS; i++)
-      nir->info.xfb_stride[i] = info->buffers[i].stride;
+      nir->info.xfb_stride[i] = nir->xfb_info->buffers[i].stride;
 
    nir_foreach_block (block, impl) {
       nir_foreach_instr_safe (instr, block) {
@@ -2931,9 +2980,9 @@ nir_add_xfb_info(nir_shader *nir, nir_xfb_info *info)
          nir_io_xfb xfb[2];
          memset(xfb, 0, sizeof(xfb));
 
-         for (unsigned i = 0; i < info->output_count; i++) {
-            if (info->outputs[i].location == sem.location) {
-               nir_xfb_output_info *out = &info->outputs[i];
+         for (unsigned i = 0; i < nir->xfb_info->output_count; i++) {
+            nir_xfb_output_info *out = &nir->xfb_info->outputs[i];
+            if (out->location == sem.location) {
                unsigned xfb_mask = writemask & out->component_mask;
 
                /*fprintf(stdout, "output%u: buffer=%u, offset=%u, location=%u, "
@@ -2977,23 +3026,18 @@ type_size_vec4(const struct glsl_type *type, bool bindless)
 }
 
 void
-nir_lower_io_passes(nir_shader *nir, nir_xfb_info *xfb)
+nir_lower_io_passes(nir_shader *nir)
 {
    if (!nir->options->lower_io_variables)
       return;
-
-   /* Ignore transform feedback for stages that can't have it. */
-   if (nir->info.stage != MESA_SHADER_VERTEX &&
-       nir->info.stage != MESA_SHADER_TESS_EVAL &&
-       nir->info.stage != MESA_SHADER_GEOMETRY)
-      xfb = NULL;
 
    bool has_indirect_inputs =
       (nir->options->support_indirect_inputs >> nir->info.stage) & 0x1;
 
    /* Transform feedback requires that indirect outputs are lowered. */
    bool has_indirect_outputs =
-      (nir->options->support_indirect_outputs >> nir->info.stage) & 0x1 && !xfb;
+      (nir->options->support_indirect_outputs >> nir->info.stage) & 0x1 &&
+      nir->xfb_info == NULL;
 
    if (!has_indirect_inputs || !has_indirect_outputs) {
       NIR_PASS_V(nir, nir_lower_io_to_temporaries,
@@ -3026,8 +3070,8 @@ nir_lower_io_passes(nir_shader *nir, nir_xfb_info *xfb)
    NIR_PASS_V(nir, nir_remove_dead_variables, nir_var_function_temp |
               nir_var_shader_in | nir_var_shader_out, NULL);
 
-   if (xfb)
-      NIR_PASS_V(nir, nir_add_xfb_info, xfb);
+   if (nir->xfb_info)
+      NIR_PASS_V(nir, nir_add_xfb_info);
 
    nir->info.io_lowered = true;
 }

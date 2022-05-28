@@ -152,6 +152,11 @@ struct zink_bindless_descriptor {
    uint32_t access; //PIPE_ACCESS_...
 };
 
+struct zink_rendering_info {
+   VkPipelineRenderingCreateInfo info;
+   unsigned id;
+};
+
 static inline struct zink_resource *
 zink_descriptor_surface_resource(struct zink_descriptor_surface *ds)
 {
@@ -214,6 +219,7 @@ struct zink_context {
    uint32_t writable_ssbos[PIPE_SHADER_TYPES];
    struct zink_image_view image_views[PIPE_SHADER_TYPES][ZINK_MAX_SHADER_IMAGES];
 
+   uint32_t transient_attachments;
    struct pipe_framebuffer_state fb_state;
    struct hash_table framebuffer_cache;
 
@@ -248,6 +254,11 @@ struct zink_context {
    unsigned dirty_shader_stages : 6; /* mask of changed shader stages */
    bool last_vertex_stage_dirty;
 
+   struct {
+      VkRenderingAttachmentInfo attachments[PIPE_MAX_COLOR_BUFS + 2]; //+depth, +stencil
+      VkRenderingInfo info;
+   } dynamic_fb;
+   struct set rendering_state_cache;
    struct set render_pass_state_cache;
    struct hash_table *render_pass_cache;
    bool new_swapchain;
@@ -309,6 +320,7 @@ struct zink_context {
    struct zink_buffer_view *dummy_bufferview;
 
    unsigned buffer_rebind_counter;
+   unsigned image_rebind_counter;
 
    struct {
       /* descriptor info */
@@ -360,7 +372,6 @@ struct zink_context {
    uint32_t num_so_targets;
    struct pipe_stream_output_target *so_targets[PIPE_MAX_SO_OUTPUTS];
    bool dirty_so_targets;
-   bool first_frame_done;
 
    bool gfx_dirty;
 
@@ -422,23 +433,15 @@ void
 zink_init_vk_sample_locations(struct zink_context *ctx, VkSampleLocationsInfoEXT *loc);
 
 void
-zink_begin_render_pass(struct zink_context *ctx);
+zink_batch_rp(struct zink_context *ctx);
+
 void
-zink_end_render_pass(struct zink_context *ctx);
+zink_batch_no_rp(struct zink_context *ctx);
 
-static inline void
-zink_batch_rp(struct zink_context *ctx)
-{
-   if (!ctx->batch.in_rp)
-      zink_begin_render_pass(ctx);
-}
-
-static inline void
-zink_batch_no_rp(struct zink_context *ctx)
-{
-   zink_end_render_pass(ctx);
-   assert(!ctx->batch.in_rp);
-}
+VkImageView
+zink_prep_fb_attachment(struct zink_context *ctx, struct zink_surface *surf, unsigned i);
+void
+zink_update_vk_sample_locations(struct zink_context *ctx);
 
 static inline VkPipelineStageFlags
 zink_pipeline_flags_from_pipe_stage(enum pipe_shader_type pstage)
@@ -463,6 +466,8 @@ zink_pipeline_flags_from_pipe_stage(enum pipe_shader_type pstage)
 
 void
 zink_rebind_all_buffers(struct zink_context *ctx);
+void
+zink_rebind_all_images(struct zink_context *ctx);
 
 void
 zink_flush_memory_barrier(struct zink_context *ctx, bool is_compute);

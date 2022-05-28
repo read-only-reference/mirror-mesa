@@ -119,6 +119,7 @@ static const struct debug_control panvk_debug_options[] = {
    { "sync", PANVK_DEBUG_SYNC },
    { "afbc", PANVK_DEBUG_AFBC },
    { "linear", PANVK_DEBUG_LINEAR },
+   { "dump", PANVK_DEBUG_DUMP },
    { NULL, 0 }
 };
 
@@ -154,10 +155,12 @@ panvk_get_device_extensions(const struct panvk_physical_device *device,
 {
    *ext = (struct vk_device_extension_table) {
       .KHR_copy_commands2 = true,
+      .KHR_storage_buffer_storage_class = true,
 #ifdef PANVK_USE_WSI_PLATFORM
       .KHR_swapchain = true,
 #endif
       .KHR_synchronization2 = true,
+      .KHR_variable_pointers = true,
       .EXT_custom_border_color = true,
       .EXT_index_type_uint8 = true,
       .EXT_vertex_attribute_divisor = true,
@@ -474,8 +477,10 @@ panvk_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
                                  VkPhysicalDeviceFeatures2 *pFeatures)
 {
    pFeatures->features = (VkPhysicalDeviceFeatures) {
+      .robustBufferAccess = true,
       .fullDrawIndexUint32 = true,
       .independentBlend = true,
+      .logicOp = true,
       .wideLines = true,
       .largePoints = true,
       .textureCompressionETC2 = true,
@@ -1299,7 +1304,7 @@ panvk_GetBufferMemoryRequirements2(VkDevice device,
    VK_FROM_HANDLE(panvk_buffer, buffer, pInfo->buffer);
 
    const uint64_t align = 64;
-   const uint64_t size = align64(buffer->size, align);
+   const uint64_t size = align64(buffer->vk.size, align);
 
    pMemoryRequirements->memoryRequirements.memoryTypeBits = 1;
    pMemoryRequirements->memoryRequirements.alignment = align;
@@ -1519,14 +1524,10 @@ panvk_CreateBuffer(VkDevice _device,
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
 
-   buffer = vk_object_alloc(&device->vk, pAllocator, sizeof(*buffer),
-                            VK_OBJECT_TYPE_BUFFER);
+   buffer = vk_buffer_create(&device->vk, pCreateInfo,
+                             pAllocator, sizeof(*buffer));
    if (buffer == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   buffer->size = pCreateInfo->size;
-   buffer->usage = pCreateInfo->usage;
-   buffer->flags = pCreateInfo->flags;
 
    *pBuffer = panvk_buffer_to_handle(buffer);
 
@@ -1544,7 +1545,7 @@ panvk_DestroyBuffer(VkDevice _device,
    if (!buffer)
       return;
 
-   vk_object_free(&device->vk, pAllocator, buffer);
+   vk_buffer_destroy(&device->vk, pAllocator, &buffer->vk);
 }
 
 VkResult

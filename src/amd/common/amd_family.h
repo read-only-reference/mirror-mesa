@@ -121,17 +121,21 @@ enum radeon_family
    CHIP_NAVI12,         /* Radeon Pro 5600M */
    CHIP_NAVI14,         /* Radeon 5300, 5500 */
    /* GFX10.3 (RDNA 2) */
-   CHIP_SIENNA_CICHLID, /* Radeon 6800, 6900 */
-   CHIP_NAVY_FLOUNDER,  /* Radeon 6700 */
+   CHIP_NAVI21,         /* Radeon 6800, 6900 (formerly "Sienna Cichlid") */
+   CHIP_NAVI22,         /* Radeon 6700 (formerly "Navy Flounder") */
    CHIP_VANGOGH,        /* Steam Deck */
-   CHIP_DIMGREY_CAVEFISH, /* Radeon 6600 */
-   CHIP_BEIGE_GOBY,     /* Radeon 6400, 6500 */
-   CHIP_YELLOW_CARP,    /* Ryzen 6000 */
+   CHIP_NAVI23,         /* Radeon 6600 (formerly "Dimgrey Cavefish") */
+   CHIP_NAVI24,         /* Radeon 6400, 6500 (formerly "Beige Goby") */
+   CHIP_REMBRANDT,      /* Ryzen 6000 (formerly "Yellow Carp") */
    CHIP_GFX1036,
+   CHIP_GFX1100,
+   CHIP_GFX1101,
+   CHIP_GFX1102,
+   CHIP_GFX1103,
    CHIP_LAST,
 };
 
-enum chip_class
+enum amd_gfx_level
 {
    CLASS_UNKNOWN = 0,
    R300,
@@ -147,22 +151,23 @@ enum chip_class
    GFX9,
    GFX10,
    GFX10_3,
+   GFX11,
 
    NUM_GFX_VERSIONS,
 };
 
-enum ring_type
+enum amd_ip_type
 {
-   RING_GFX = 0,
-   RING_COMPUTE,
-   RING_DMA,
-   RING_UVD,
-   RING_VCE,
-   RING_UVD_ENC,
-   RING_VCN_DEC,
-   RING_VCN_ENC,
-   RING_VCN_JPEG,
-   NUM_RING_TYPES,
+   AMD_IP_GFX = 0,
+   AMD_IP_COMPUTE,
+   AMD_IP_SDMA,
+   AMD_IP_UVD,
+   AMD_IP_VCE,
+   AMD_IP_UVD_ENC,
+   AMD_IP_VCN_DEC,
+   AMD_IP_VCN_ENC,
+   AMD_IP_VCN_JPEG,
+   AMD_NUM_IP_TYPES,
 };
 
 const char *ac_get_family_name(enum radeon_family family);

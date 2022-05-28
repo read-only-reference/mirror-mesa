@@ -1301,7 +1301,7 @@ Converter::storeTo(nir_intrinsic_instr *insn, DataFile file, operation op,
 bool
 Converter::parseNIR()
 {
-   info_out->bin.tlsSpace = ALIGN(nir->scratch_size, 0x10);
+   info_out->bin.tlsSpace = nir->scratch_size;
    info_out->io.clipDistances = nir->info.clip_distance_array_size;
    info_out->io.cullDistances = nir->info.cull_distance_array_size;
    info_out->io.layer_viewport_relative = nir->info.layer_viewport_relative;
@@ -3379,6 +3379,7 @@ nvir_nir_shader_compiler_options(int chipset)
    op.lower_rotate = (chipset < NVISA_GV100_CHIPSET);
    op.has_imul24 = false;
    op.intel_vec4 = false;
+   op.force_indirect_unrolling_sampler = (chipset < NVISA_GF100_CHIPSET),
    op.max_unroll_iterations = 32;
    op.lower_int64_options = (nir_lower_int64_options) (
       ((chipset >= NVISA_GV100_CHIPSET) ? nir_lower_imul64 : 0) |

@@ -148,6 +148,7 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_SAMPLER_VIEW_TARGET:
         case PIPE_CAP_ANISOTROPIC_FILTER:
         case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
+        case PIPE_CAP_INDEP_BLEND_FUNC:
                 return 1;
 
         case PIPE_CAP_TEXTURE_QUERY_LOD:
@@ -738,6 +739,7 @@ static const nir_shader_compiler_options v3d_nir_options = {
          * limit register pressure impact.
          */
         .max_unroll_iterations = 16,
+        .force_indirect_unrolling_sampler = true,
 };
 
 static const void *
@@ -826,6 +828,14 @@ v3d_screen_get_compatible_tlb_format(struct pipe_screen *screen,
         }
 }
 
+static struct disk_cache *
+v3d_screen_get_disk_shader_cache(struct pipe_screen *pscreen)
+{
+        struct v3d_screen *screen = v3d_screen(pscreen);
+
+        return screen->disk_cache;
+}
+
 struct pipe_screen *
 v3d_screen_create(int fd, const struct pipe_screen_config *config,
                   struct renderonly *ro)
@@ -892,6 +902,7 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
         pscreen->get_vendor = v3d_screen_get_vendor;
         pscreen->get_device_vendor = v3d_screen_get_vendor;
         pscreen->get_compiler_options = v3d_screen_get_compiler_options;
+        pscreen->get_disk_shader_cache = v3d_screen_get_disk_shader_cache;
         pscreen->query_dmabuf_modifiers = v3d_screen_query_dmabuf_modifiers;
         pscreen->is_dmabuf_modifier_supported =
                 v3d_screen_is_dmabuf_modifier_supported;

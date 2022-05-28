@@ -44,7 +44,7 @@
 extern "C" {
 #endif
 
-#define PAN_MODIFIER_COUNT 4
+#define PAN_MODIFIER_COUNT 6
 extern uint64_t pan_best_modifiers[PAN_MODIFIER_COUNT];
 
 struct pan_image_slice_layout {
@@ -168,11 +168,11 @@ panfrost_afbc_format(const struct panfrost_device *dev, enum pipe_format format)
 
 #define AFBC_HEADER_BYTES_PER_TILE 16
 
-unsigned
-panfrost_afbc_header_size(unsigned width, unsigned height);
-
 bool
 panfrost_afbc_can_ytr(enum pipe_format format);
+
+bool
+panfrost_afbc_can_tile(const struct panfrost_device *dev);
 
 /*
  * Represents the block size of a single plane. For AFBC, this represents the
@@ -192,7 +192,11 @@ unsigned panfrost_afbc_superblock_width(uint64_t modifier);
 
 unsigned panfrost_afbc_superblock_height(uint64_t modifier);
 
-unsigned panfrost_afbc_is_wide(uint64_t modifier);
+bool panfrost_afbc_is_wide(uint64_t modifier);
+
+uint32_t pan_afbc_row_stride(uint64_t modifier, uint32_t width);
+
+uint32_t pan_afbc_stride_blocks(uint64_t modifier, uint32_t row_stride_bytes);
 
 struct pan_block_size
 panfrost_block_size(uint64_t modifier, enum pipe_format format);

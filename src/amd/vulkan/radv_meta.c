@@ -81,7 +81,7 @@ radv_meta_save(struct radv_meta_saved_state *state, struct radv_cmd_buffer *cmd_
    if (state->flags & RADV_META_SAVE_GRAPHICS_PIPELINE) {
       assert(!(state->flags & RADV_META_SAVE_COMPUTE_PIPELINE));
 
-      state->old_pipeline = cmd_buffer->state.pipeline;
+      state->old_graphics_pipeline = cmd_buffer->state.graphics_pipeline;
 
       /* Save all viewports. */
       state->dynamic.viewport.count = cmd_buffer->state.dynamic.viewport.count;
@@ -171,7 +171,7 @@ radv_meta_save(struct radv_meta_saved_state *state, struct radv_cmd_buffer *cmd_
    if (state->flags & RADV_META_SAVE_COMPUTE_PIPELINE) {
       assert(!(state->flags & RADV_META_SAVE_GRAPHICS_PIPELINE));
 
-      state->old_pipeline = cmd_buffer->state.compute_pipeline;
+      state->old_compute_pipeline = cmd_buffer->state.compute_pipeline;
    }
 
    if (state->flags & RADV_META_SAVE_DESCRIPTORS) {
@@ -204,7 +204,7 @@ radv_meta_restore(const struct radv_meta_saved_state *state, struct radv_cmd_buf
 
    if (state->flags & RADV_META_SAVE_GRAPHICS_PIPELINE) {
       radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                           radv_pipeline_to_handle(state->old_pipeline));
+                           radv_pipeline_to_handle(&state->old_graphics_pipeline->base));
 
       cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PIPELINE;
 
@@ -313,9 +313,9 @@ radv_meta_restore(const struct radv_meta_saved_state *state, struct radv_cmd_buf
    }
 
    if (state->flags & RADV_META_SAVE_COMPUTE_PIPELINE) {
-      if (state->old_pipeline) {
+      if (state->old_compute_pipeline) {
          radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,
-                              radv_pipeline_to_handle(state->old_pipeline));
+                              radv_pipeline_to_handle(&state->old_compute_pipeline->base));
       }
    }
 
@@ -349,7 +349,7 @@ radv_meta_restore(const struct radv_meta_saved_state *state, struct radv_cmd_buf
 VkImageViewType
 radv_meta_get_view_type(const struct radv_image *image)
 {
-   switch (image->type) {
+   switch (image->vk.image_type) {
    case VK_IMAGE_TYPE_1D:
       return VK_IMAGE_VIEW_TYPE_1D;
    case VK_IMAGE_TYPE_2D:
@@ -370,7 +370,7 @@ radv_meta_get_iview_layer(const struct radv_image *dest_image,
                           const VkImageSubresourceLayers *dest_subresource,
                           const VkOffset3D *dest_offset)
 {
-   switch (dest_image->type) {
+   switch (dest_image->vk.image_type) {
    case VK_IMAGE_TYPE_1D:
    case VK_IMAGE_TYPE_2D:
       return dest_subresource->baseArrayLayer;
@@ -587,7 +587,7 @@ radv_device_init_meta(struct radv_device *device)
    if (result != VK_SUCCESS)
       goto fail_fmask_expand;
 
-   if (radv_enable_rt(device->physical_device)) {
+   if (radv_enable_rt(device->physical_device, false)) {
       result = radv_device_init_accel_struct_build_state(device);
       if (result != VK_SUCCESS)
          goto fail_accel_struct_build;

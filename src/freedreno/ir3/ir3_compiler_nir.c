@@ -769,7 +769,7 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
       break;
    }
    case nir_op_bit_count: {
-      if (ctx->compiler->gen < 5) {
+      if (ctx->compiler->gen < 5 || (src[0]->dsts[0]->flags & IR3_REG_HALF)) {
          dst[0] = ir3_CBITS_B(b, src[0], 0);
          break;
       }
@@ -2071,7 +2071,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
           */
          ctx->so->constlen =
             MAX2(ctx->so->constlen,
-                 ctx->so->shader->num_reserved_user_consts +
+                 ctx->so->num_reserved_user_consts +
                  const_state->ubo_state.size / 16);
       }
       break;
@@ -3280,12 +3280,15 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
 
    /* GETLOD returns results in 4.8 fixed point */
    if (opc == OPC_GETLOD) {
-      struct ir3_instruction *factor = create_immed(b, fui(1.0 / 256));
+      bool half = nir_dest_bit_size(tex->dest) == 16;
+      struct ir3_instruction *factor =
+         half ? create_immed_typed(b, _mesa_float_to_half(1.0 / 256), TYPE_F16)
+              : create_immed(b, fui(1.0 / 256));
 
-      compile_assert(ctx, tex->dest_type == nir_type_float32);
       for (i = 0; i < 2; i++) {
-         dst[i] =
-            ir3_MUL_F(b, ir3_COV(b, dst[i], TYPE_S32, TYPE_F32), 0, factor, 0);
+         dst[i] = ir3_MUL_F(
+            b, ir3_COV(b, dst[i], TYPE_S32, half ? TYPE_F16 : TYPE_F32), 0,
+            factor, 0);
       }
    }
 
@@ -3756,7 +3759,7 @@ static void
 emit_stream_out(struct ir3_context *ctx)
 {
    struct ir3 *ir = ctx->ir;
-   struct ir3_stream_output_info *strmout = &ctx->so->shader->stream_output;
+   struct ir3_stream_output_info *strmout = &ctx->so->stream_output;
    struct ir3_block *orig_end_block, *stream_out_block, *new_end_block;
    struct ir3_instruction *vtxcnt, *maxvtxcnt, *cond;
    struct ir3_instruction *bases[IR3_MAX_SO_BUFFERS];
@@ -3894,7 +3897,7 @@ emit_function(struct ir3_context *ctx, nir_function_impl *impl)
     * out instructions.
     */
    if ((ctx->compiler->gen < 5) &&
-       (ctx->so->shader->stream_output.num_outputs > 0) &&
+       (ctx->so->stream_output.num_outputs > 0) &&
        !ctx->so->binning_pass) {
       debug_assert(ctx->so->type == MESA_SHADER_VERTEX);
       emit_stream_out(ctx);
@@ -4592,6 +4595,7 @@ collect_tex_prefetches(struct ir3_context *ctx, struct ir3 *ir)
 
 int
 ir3_compile_shader_nir(struct ir3_compiler *compiler,
+                       struct ir3_shader *shader,
                        struct ir3_shader_variant *so)
 {
    struct ir3_context *ctx;
@@ -4601,7 +4605,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
    assert(!so->ir);
 
-   ctx = ir3_context_init(compiler, so);
+   ctx = ir3_context_init(compiler, shader, so);
    if (!ctx) {
       DBG("INIT failed!");
       ret = -1;

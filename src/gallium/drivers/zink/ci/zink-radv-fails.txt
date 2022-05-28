@@ -1,45 +1,7 @@
-# probable ACO bug: #6276
-KHR-GL46.shader_storage_buffer_object.basic-operations-case1-cs,Fail
-KHR-GL46.shader_storage_buffer_object.basic-operations-case1-vs,Fail
-
-# probable sparse binding bug: #6245
-KHR-GL46.sparse_buffer_tests.BufferStorageTest,Fail
-
 # 3D isn't supported by radv yet: #5822
 KHR-GL46.sparse_texture_tests.InternalFormatQueries,Fail
 KHR-GL46.sparse_texture_tests.SparseTextureAllocation,Fail
 KHR-GL46.sparse_texture_tests.SparseTextureCommitment,Fail
-
-#4562
-dEQP-GLES31.functional.image_load_store.3d.load_store.r32f_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.r32i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.r32ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba16f_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba16i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba16ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba32f_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba32i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba32ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba8_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba8_snorm_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba8i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.load_store.rgba8ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.r32f_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.r32i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.r32ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba16f_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba16i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba16ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba32f_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba32i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba32ui_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba8_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba8_snorm_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba8i_single_layer,Fail
-dEQP-GLES31.functional.image_load_store.3d.store.rgba8ui_single_layer,Fail
-
-# probably fixed by EXT_2d_view_of_3d support
-KHR-GL46.shader_image_load_store.non-layered_binding,Fail
 
 # amd issue #6305
 KHR-GL46.shader_ballot_tests.ShaderBallotFunctionRead,Fail
@@ -132,10 +94,6 @@ dEQP-GLES31.functional.primitive_bounding_box.wide_points.tessellation_set_per_p
 dEQP-GLES31.functional.shaders.multisample_interpolation.interpolate_at_sample.non_multisample_buffer.sample_n_default_framebuffer,Fail
 dEQP-GLES31.functional.shaders.multisample_interpolation.interpolate_at_sample.non_multisample_buffer.sample_n_singlesample_rbo,Fail
 dEQP-GLES31.functional.shaders.multisample_interpolation.interpolate_at_sample.non_multisample_buffer.sample_n_singlesample_texture,Fail
-dEQP-GLES31.functional.stencil_texturing.render.depth24_stencil8_clear,Fail
-dEQP-GLES31.functional.stencil_texturing.render.depth32f_stencil8_clear,Fail
-dEQP-GLES31.functional.synchronization.in_invocation.ssbo_alias_write,Fail
-dEQP-GLES31.functional.synchronization.inter_invocation.ssbo_alias_write,Fail
 dEQP-GLES31.functional.texture.border_clamp.formats.depth24_stencil8_sample_stencil.nearest_size_npot,Fail
 dEQP-GLES31.functional.texture.border_clamp.formats.depth24_stencil8_sample_stencil.nearest_size_pot,Fail
 dEQP-GLES31.functional.texture.border_clamp.formats.depth32f_stencil8_sample_stencil.nearest_size_npot,Fail
@@ -173,7 +131,6 @@ dEQP-GLES3.functional.fbo.depth.depth_write_clamp.depth24_stencil8,Fail
 dEQP-GLES3.functional.fbo.depth.depth_write_clamp.depth32f_stencil8,Fail
 dEQP-GLES3.functional.fbo.depth.depth_write_clamp.depth_component24,Fail
 dEQP-GLES3.functional.fbo.depth.depth_write_clamp.depth_component32f,Fail
-dEQP-GLES3.functional.polygon_offset.fixed16_render_with_units,Fail
 dEQP-GLES3.functional.rasterization.primitives.line_loop_wide,Fail
 dEQP-GLES3.functional.rasterization.primitives.line_strip_wide,Fail
 dEQP-GLES3.functional.shaders.metamorphic.bubblesort_flag.variant_1,Fail
@@ -425,10 +382,6 @@ spec@arb_sample_shading@samplemask 8@sample mask_in_one,Fail
 
 spec@arb_shader_clock@execution@clock2x32,Fail
 spec@arb_shader_clock@execution@clock,Fail
-spec@arb_shader_image_load_store@layer,Fail
-spec@arb_shader_image_load_store@layer@image3D/non-layered binding test,Fail
-spec@arb_shader_image_load_store@level@3D level binding test,Fail
-spec@arb_shader_image_load_store@level,Fail
 spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgradcube,Fail
 spec@arb_shader_texture_lod@execution@glsl-fs-shadow2dgradarb-01,Fail
 spec@arb_shader_texture_lod@execution@glsl-fs-shadow2dgradarb-03,Fail
@@ -506,15 +459,6 @@ spec@egl_khr_surfaceless_context@viewport,Fail
 spec@egl_mesa_configless_context@basic,Fail
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
 
-# need to investigate this at some point
-spec@ext_framebuffer_multisample@accuracy 6 depth_resolve small depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy 8 depth_resolve small depthstencil,Fail
-spec@ext_framebuffer_multisample@accuracy all_samples depth_resolve small depthstencil,Fail
-
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 2,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 4,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 6,Fail
-spec@ext_framebuffer_multisample@alpha-to-coverage-no-draw-buffer-zero 8,Fail
 spec@ext_framebuffer_multisample@alpha-to-one-dual-src-blend 2,Fail
 spec@ext_framebuffer_multisample@alpha-to-one-dual-src-blend 4,Fail
 spec@ext_framebuffer_multisample@alpha-to-one-dual-src-blend 6,Fail
@@ -733,7 +677,6 @@ spec@!opengl 1.1@polygon-mode-offset@config 6: Expected blue pixel in center,Fai
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on right edge,Fail
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on top edge,Fail
 spec@!opengl 1.1@polygon-mode-offset,Fail
-spec@!opengl 1.1@polygon-offset,Fail
 spec@!opengl 1.1@texwrap formats bordercolor-swizzled,Fail
 spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_R3_G3_B2- swizzled- border color only,Fail
 spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB10_A2- swizzled- border color only,Fail

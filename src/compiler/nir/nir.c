@@ -2481,6 +2481,8 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_ray_launch_id;
    case SYSTEM_VALUE_RAY_LAUNCH_SIZE:
       return nir_intrinsic_load_ray_launch_size;
+   case SYSTEM_VALUE_RAY_LAUNCH_SIZE_ADDR_AMD:
+      return nir_intrinsic_load_ray_launch_size_addr_amd;
    case SYSTEM_VALUE_RAY_WORLD_ORIGIN:
       return nir_intrinsic_load_ray_world_origin;
    case SYSTEM_VALUE_RAY_WORLD_DIRECTION:
@@ -2624,6 +2626,8 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_RAY_LAUNCH_ID;
    case nir_intrinsic_load_ray_launch_size:
       return SYSTEM_VALUE_RAY_LAUNCH_SIZE;
+   case nir_intrinsic_load_ray_launch_size_addr_amd:
+      return SYSTEM_VALUE_RAY_LAUNCH_SIZE_ADDR_AMD;
    case nir_intrinsic_load_ray_world_origin:
       return SYSTEM_VALUE_RAY_WORLD_ORIGIN;
    case nir_intrinsic_load_ray_world_direction:
@@ -3463,6 +3467,7 @@ nir_slot_is_varying(gl_varying_slot slot)
           slot == VARYING_SLOT_BFC1 ||
           slot == VARYING_SLOT_FOGC ||
           (slot >= VARYING_SLOT_TEX0 && slot <= VARYING_SLOT_TEX7) ||
+          slot == VARYING_SLOT_PNTC ||
           slot == VARYING_SLOT_CLIP_DIST0 ||
           slot == VARYING_SLOT_CLIP_DIST1 ||
           slot == VARYING_SLOT_CULL_DIST0 ||
@@ -3515,4 +3520,13 @@ void nir_remove_sysval_output(nir_intrinsic_instr *intr)
    } else {
       nir_instr_remove(&intr->instr);
    }
+}
+
+void nir_remove_non_entrypoints(nir_shader *nir)
+{
+   foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
+      if (!func->is_entrypoint)
+         exec_node_remove(&func->node);
+   }
+   assert(exec_list_length(&nir->functions) == 1);
 }

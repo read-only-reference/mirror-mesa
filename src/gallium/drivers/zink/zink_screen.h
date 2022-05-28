@@ -40,13 +40,17 @@
 #include "util/u_vertex_state_cache.h"
 #include "pipebuffer/pb_cache.h"
 #include "pipebuffer/pb_slab.h"
-#include "frontend/sw_winsys.h"
-#include "kopper_interface.h"
 
 #include <vulkan/vulkan.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern uint32_t zink_debug;
 struct hash_table;
+struct util_dl_library;
 
 struct zink_batch_state;
 struct zink_context;
@@ -62,16 +66,24 @@ enum zink_descriptor_type;
 #define ZINK_DEBUG_SPIRV 0x2
 #define ZINK_DEBUG_TGSI 0x4
 #define ZINK_DEBUG_VALIDATION 0x8
+#define ZINK_DEBUG_SYNC 0x10
+#define ZINK_DEBUG_COMPACT (1<<5)
 
 #define NUM_SLAB_ALLOCATORS 3
 #define MIN_SLAB_ORDER 8
+
+#define ZINK_CONTEXT_COPY_ONLY (1<<30)
 
 enum zink_descriptor_mode {
    ZINK_DESCRIPTOR_MODE_AUTO,
    ZINK_DESCRIPTOR_MODE_LAZY,
    ZINK_DESCRIPTOR_MODE_NOFALLBACK,
    ZINK_DESCRIPTOR_MODE_NOTEMPLATES,
+   ZINK_DESCRIPTOR_MODE_COMPACT,
 };
+
+//keep in sync with zink_descriptor_type since headers can't be cross-included
+#define ZINK_MAX_DESCRIPTOR_SETS 6
 
 struct zink_modifier_prop {
     uint32_t                             drmFormatModifierCount;
@@ -80,6 +92,11 @@ struct zink_modifier_prop {
 
 struct zink_screen {
    struct pipe_screen base;
+
+   struct util_dl_library *loader_lib;
+   PFN_vkGetInstanceProcAddr vk_GetInstanceProcAddr;
+   PFN_vkGetDeviceProcAddr vk_GetDeviceProcAddr;
+
    bool threaded;
    bool is_cpu;
    uint32_t curr_batch; //the current batch id
@@ -87,16 +104,15 @@ struct zink_screen {
    VkSemaphore sem;
    VkSemaphore prev_sem;
    struct util_queue flush_queue;
+   struct zink_context *copy_context;
 
    unsigned buffer_rebind_counter;
+   unsigned image_rebind_counter;
 
    struct hash_table dts;
    simple_mtx_t dt_lock;
 
    bool device_lost;
-   struct sw_winsys winsys;
-   struct sw_winsys *sw_winsys; // wrapped
-   __DRIkopperLoaderExtension *loader;
 
    struct hash_table framebuffer_cache;
 
@@ -137,6 +153,7 @@ struct zink_screen {
    bool have_D24_UNORM_S8_UINT;
    bool have_triangle_fans;
    bool need_2D_zs;
+   bool need_2D_sparse;
    bool faked_e5sparse; //drivers may not expose R9G9B9E5 but cts requires it
 
    uint32_t gfx_queue;
@@ -152,6 +169,8 @@ struct zink_screen {
 
    struct vk_dispatch_table vk;
 
+   bool compact_descriptors;
+   uint8_t desc_set_id[ZINK_MAX_DESCRIPTOR_SETS];
    bool (*descriptor_program_init)(struct zink_context *ctx, struct zink_program *pg);
    void (*descriptor_program_deinit)(struct zink_context *ctx, struct zink_program *pg);
    void (*descriptors_update)(struct zink_context *ctx, bool is_compute);
@@ -266,7 +285,7 @@ zink_screen_timeline_wait(struct zink_screen *screen, uint32_t batch_id, uint64_
 bool
 zink_is_depth_format_supported(struct zink_screen *screen, VkFormat format);
 
-#define GET_PROC_ADDR_INSTANCE_LOCAL(instance, x) PFN_vk##x vk_##x = (PFN_vk##x)vkGetInstanceProcAddr(instance, "vk"#x)
+#define GET_PROC_ADDR_INSTANCE_LOCAL(screen, instance, x) PFN_vk##x vk_##x = (PFN_vk##x)(screen)->vk_GetInstanceProcAddr(instance, "vk"#x)
 
 void
 zink_screen_update_pipeline_cache(struct zink_screen *screen, struct zink_program *pg);
@@ -289,5 +308,9 @@ zink_stub_function_not_loaded(void);
          warned = true; \
       } \
    } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

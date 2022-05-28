@@ -1578,7 +1578,8 @@ cmd_buffer_subpass_split_for_barrier(struct v3dv_cmd_buffer *cmd_buffer,
    if (!job)
       return NULL;
 
-   job->serialize = true;
+   /* FIXME: we can do better than all barriers */
+   job->serialize = V3DV_BARRIER_ALL;
    job->needs_bcl_sync = is_bcl_barrier;
    return job;
 }
@@ -1630,9 +1631,7 @@ v3dX(cmd_buffer_execute_inside_pass)(struct v3dv_cmd_buffer *primary,
     * pipelines used by the secondaries do, we need to re-start the primary
     * job to enable MSAA. See cmd_buffer_restart_job_for_msaa_if_needed.
     */
-   bool pending_barrier = false;
-   VkAccessFlags pending_bcl_barrier_buffer_access = 0;
-   VkAccessFlags pending_bcl_barrier_image_access = 0;
+   struct v3dv_barrier_state pending_barrier = { 0 };
    for (uint32_t i = 0; i < cmd_buffer_count; i++) {
       V3DV_FROM_HANDLE(v3dv_cmd_buffer, secondary, cmd_buffers[i]);
 
@@ -1666,11 +1665,12 @@ v3dX(cmd_buffer_execute_inside_pass)(struct v3dv_cmd_buffer *primary,
              * branch?
              */
             struct v3dv_job *primary_job = primary->state.job;
-            if (!primary_job || secondary_job->serialize || pending_barrier) {
+            if (!primary_job || secondary_job->serialize ||
+                pending_barrier.dst_mask) {
                const bool needs_bcl_barrier =
                   secondary_job->needs_bcl_sync ||
-                  pending_bcl_barrier_buffer_access ||
-                  pending_bcl_barrier_image_access;
+                  pending_barrier.bcl_buffer_access ||
+                  pending_barrier.bcl_image_access;
 
                primary_job =
                   cmd_buffer_subpass_split_for_barrier(primary,
@@ -1711,18 +1711,21 @@ v3dX(cmd_buffer_execute_inside_pass)(struct v3dv_cmd_buffer *primary,
              */
             v3dv_cmd_buffer_finish_job(primary);
             v3dv_job_clone_in_cmd_buffer(secondary_job, primary);
-            if (pending_barrier) {
-               secondary_job->serialize = true;
-               if (pending_bcl_barrier_buffer_access ||
-                   pending_bcl_barrier_image_access) {
+            if (pending_barrier.dst_mask) {
+               /* FIXME: do the same we do for primaries and only choose the
+                * relevant src masks.
+                */
+               secondary_job->serialize = pending_barrier.src_mask_graphics |
+                                          pending_barrier.src_mask_transfer |
+                                          pending_barrier.src_mask_compute;
+               if (pending_barrier.bcl_buffer_access ||
+                   pending_barrier.bcl_image_access) {
                   secondary_job->needs_bcl_sync = true;
                }
             }
          }
 
-         pending_barrier = false;
-         pending_bcl_barrier_buffer_access = 0;
-         pending_bcl_barrier_image_access = 0;
+         memset(&pending_barrier, 0, sizeof(pending_barrier));
       }
 
       /* If the secondary has recorded any vkCmdEndQuery commands, we need to
@@ -1734,22 +1737,15 @@ v3dX(cmd_buffer_execute_inside_pass)(struct v3dv_cmd_buffer *primary,
       /* If this secondary had any pending barrier state we will need that
        * barrier state consumed with whatever comes next in the primary.
        */
-      assert(secondary->state.has_barrier ||
-             (!secondary->state.bcl_barrier_buffer_access &&
-              !secondary->state.bcl_barrier_image_access));
+      assert(secondary->state.barrier.dst_mask ||
+             (!secondary->state.barrier.bcl_buffer_access &&
+              !secondary->state.barrier.bcl_image_access));
 
-      pending_barrier = secondary->state.has_barrier;
-      pending_bcl_barrier_buffer_access =
-         secondary->state.bcl_barrier_buffer_access;
-      pending_bcl_barrier_image_access =
-         secondary->state.bcl_barrier_image_access;
+      pending_barrier = secondary->state.barrier;
    }
 
-   if (pending_barrier) {
-      primary->state.has_barrier = true;
-      primary->state.bcl_barrier_buffer_access |= pending_bcl_barrier_buffer_access;
-      primary->state.bcl_barrier_image_access |= pending_bcl_barrier_image_access;
-   }
+   if (pending_barrier.dst_mask)
+      primary->state.barrier = pending_barrier;
 }
 
 static void
@@ -2337,7 +2333,7 @@ v3dX(cmd_buffer_render_pass_setup_render_target)(struct v3dv_cmd_buffer *cmd_buf
    assert(attachment_idx < state->framebuffer->attachment_count &&
           attachment_idx < state->attachment_alloc_count);
    struct v3dv_image_view *iview = state->attachments[attachment_idx].image_view;
-   assert(iview->vk.aspects & VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(vk_format_is_color(iview->vk.format));
 
    *rt_bpp = iview->internal_bpp;
    *rt_type = iview->internal_type;

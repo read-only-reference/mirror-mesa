@@ -21,7 +21,7 @@ Write-Host "Installing Chocolatey packages"
 For ($i = 0; $i -lt 5; $i++) {
   choco install -y python3 --params="/InstallDir:C:\python3"
   $python_install = $?
-  choco install --allow-empty-checksums -y cmake git git-lfs ninja pkgconfiglite winflexbison vulkan-sdk --installargs "ADD_CMAKE_TO_PATH=System"
+  choco install --allow-empty-checksums --no-progress -y cmake git git-lfs ninja pkgconfiglite winflexbison --installargs "ADD_CMAKE_TO_PATH=System"
   $other_install = $?
   $choco_installed = $other_install -and $python_install
   if ($choco_installed) {
@@ -39,6 +39,14 @@ Update-SessionEnvironment
 # Python and CMake add themselves to the system environment path, which doesn't get refreshed
 # until we start a new shell
 $env:PATH = "C:\python3;C:\python3\scripts;C:\Program Files\CMake\bin;$env:PATH"
+
+Invoke-WebRequest -Uri 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe' -OutFile 'C:\vulkan_sdk.exe'
+C:\vulkan_sdk.exe --am --al -c in
+if (!$?) {
+    Write-Host "Failed to install Vulkan SDK"
+    Exit 1
+}
+Remove-Item C:\vulkan_sdk.exe -Force
 
 Start-Process -NoNewWindow -Wait git -ArgumentList 'config --global core.autocrlf false'
 
@@ -81,7 +89,7 @@ Get-Date
 $llvm_build = New-Item -ItemType Directory -Path ".\llvm-project" -Name "build"
 Push-Location -Path $llvm_build.FullName
 Write-Host "Compiling LLVM and Clang"
-cmd.exe /C 'C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=amd64 && cmake ../llvm -GNinja -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_CRT_RELEASE=MT -DCMAKE_INSTALL_PREFIX="C:\llvm-10" -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TARGETS_TO_BUILD=AMDGPU;X86 -DLLVM_OPTIMIZED_TABLEGEN=TRUE -DLLVM_ENABLE_ASSERTIONS=TRUE -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_RUNTIMES=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_GO_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_BUILD_LLVM_C_DYLIB=OFF -DLLVM_ENABLE_DIA_SDK=OFF -DCLANG_BUILD_TOOLS=ON -DLLVM_SPIRV_INCLUDE_TESTS=OFF && ninja -j32 install'
+cmd.exe /C 'C:\BuildTools\Common7\Tools\VsDevCmd.bat -host_arch=amd64 -arch=amd64 && cmake ../llvm -GNinja -DCMAKE_BUILD_TYPE=Release -DLLVM_USE_CRT_RELEASE=MT -DCMAKE_INSTALL_PREFIX="C:\llvm-10" -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TARGETS_TO_BUILD=AMDGPU;X86 -DLLVM_OPTIMIZED_TABLEGEN=TRUE -DLLVM_ENABLE_ASSERTIONS=TRUE -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_RUNTIMES=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_GO_TESTS=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_BUILD_LLVM_C_DYLIB=OFF -DLLVM_ENABLE_DIA_SDK=OFF -DCLANG_BUILD_TOOLS=ON -DLLVM_SPIRV_INCLUDE_TESTS=OFF -Wno-dev && ninja -j32 install'
 $buildstatus = $?
 Pop-Location
 if (!$buildstatus) {
@@ -129,8 +137,6 @@ if (!$buildstatus) {
   Exit 1
 }
 
-# See https://gitlab.freedesktop.org/mesa/mesa/-/issues/3855
-# Until that's resolved, we need the vulkan-runtime as a build dependency to be able to run any unit tests on GL
 Get-Date
 Write-Host "Downloading Vulkan-Runtime"
 Invoke-WebRequest -Uri 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-runtime.exe' -OutFile 'C:\vulkan-runtime.exe' | Out-Null

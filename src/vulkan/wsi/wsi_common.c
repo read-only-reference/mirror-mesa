@@ -39,6 +39,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 VkResult
 wsi_device_init(struct wsi_device *wsi,
                 VkPhysicalDevice pdevice,
@@ -476,7 +480,10 @@ wsi_create_image(const struct wsi_swapchain *chain,
    VkResult result;
 
    memset(image, 0, sizeof(*image));
+
+#ifndef _WIN32
    image->dma_buf_fd = -1;
+#endif
 
    result = wsi->CreateImage(chain->device, &info->create,
                              &chain->alloc, &image->image);
@@ -511,11 +518,16 @@ wsi_destroy_image(const struct wsi_swapchain *chain,
 {
    const struct wsi_device *wsi = chain->wsi;
 
+#ifndef _WIN32
    if (image->dma_buf_fd >= 0)
       close(image->dma_buf_fd);
+#endif
 
    if (image->buffer.blit_cmd_buffers) {
-      for (uint32_t i = 0; i < wsi->queue_family_count; i++) {
+      int cmd_buffer_count =
+         chain->buffer_blit_queue != VK_NULL_HANDLE ? 1 : wsi->queue_family_count;
+
+      for (uint32_t i = 0; i < cmd_buffer_count; i++) {
          wsi->FreeCommandBuffers(chain->device, chain->cmd_pools[i],
                                  1, &image->buffer.blit_cmd_buffers[i]);
       }

@@ -2874,8 +2874,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
        */
       vtn_fail_if(coord->num_components < coord_components,
                   "Coordinate value passed has fewer components than sampler dimensionality.");
-      p->src = nir_src_for_ssa(nir_channels(&b->nb, coord,
-                                            (1 << coord_components) - 1));
+      p->src = nir_src_for_ssa(nir_trim_vector(&b->nb, coord, coord_components));
 
       /* OpenCL allows integer sampling coordinates */
       if (glsl_type_is_integer(coord_val->type) &&
@@ -3156,8 +3155,8 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       struct vtn_ssa_value *dest = vtn_create_ssa_value(b, struct_type->type);
       unsigned result_size = glsl_get_vector_elements(ret_type->type);
       dest->elems[0]->def = nir_channel(&b->nb, &instr->dest.ssa, result_size);
-      dest->elems[1]->def = nir_channels(&b->nb, &instr->dest.ssa,
-                                         nir_component_mask(result_size));
+      dest->elems[1]->def = nir_trim_vector(&b->nb, &instr->dest.ssa,
+                                              result_size);
       vtn_push_ssa_value(b, w[2], dest);
    } else {
       vtn_push_nir_ssa(b, w[2], &instr->dest.ssa);
@@ -3574,9 +3573,8 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
 
       nir_builder_instr_insert(&b->nb, &intrin->instr);
 
-      nir_ssa_def *result = &intrin->dest.ssa;
-      if (nir_intrinsic_dest_components(intrin) != dest_components)
-         result = nir_channels(&b->nb, result, (1 << dest_components) - 1);
+      nir_ssa_def *result = nir_trim_vector(&b->nb, &intrin->dest.ssa,
+                                              dest_components);
 
       if (opcode == SpvOpImageQuerySize ||
           opcode == SpvOpImageQuerySizeLod)
@@ -3588,8 +3586,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
          dest->elems[0]->def = nir_channel(&b->nb, result, res_type_size);
          if (intrin->dest.ssa.bit_size != 32)
             dest->elems[0]->def = nir_u2u32(&b->nb, dest->elems[0]->def);
-         dest->elems[1]->def = nir_channels(&b->nb, result,
-                                            nir_component_mask(res_type_size));
+         dest->elems[1]->def = nir_trim_vector(&b->nb, result, res_type_size);
          vtn_push_ssa_value(b, w[2], dest);
       } else {
          vtn_push_nir_ssa(b, w[2], result);
@@ -3875,19 +3872,16 @@ vtn_ssa_transpose(struct vtn_builder *b, struct vtn_ssa_value *src)
       vtn_create_ssa_value(b, glsl_transposed_type(src->type));
 
    for (unsigned i = 0; i < glsl_get_matrix_columns(dest->type); i++) {
-      nir_alu_instr *vec = create_vec(b, glsl_get_matrix_columns(src->type),
-                                         glsl_get_bit_size(src->type));
       if (glsl_type_is_vector_or_scalar(src->type)) {
-          vec->src[0].src = nir_src_for_ssa(src->def);
-          vec->src[0].swizzle[0] = i;
+         dest->elems[i]->def = nir_channel(&b->nb, src->def, i);
       } else {
-         for (unsigned j = 0; j < glsl_get_matrix_columns(src->type); j++) {
-            vec->src[j].src = nir_src_for_ssa(src->elems[j]->def);
-            vec->src[j].swizzle[0] = i;
+         unsigned cols = glsl_get_matrix_columns(src->type);
+         nir_ssa_scalar srcs[NIR_MAX_MATRIX_COLUMNS];
+         for (unsigned j = 0; j < cols; j++) {
+            srcs[j] = nir_get_ssa_scalar(src->elems[j]->def, i);
          }
+         dest->elems[i]->def = nir_vec_scalars(&b->nb, srcs, cols);
       }
-      nir_builder_instr_insert(&b->nb, &vec->instr);
-      dest->elems[i]->def = &vec->dest.dest.ssa;
    }
 
    dest->transposed = src;
@@ -3904,6 +3898,11 @@ vtn_vector_shuffle(struct vtn_builder *b, unsigned num_components,
 
    for (unsigned i = 0; i < num_components; i++) {
       uint32_t index = indices[i];
+      unsigned total_components = src0->num_components + src1->num_components;
+      vtn_fail_if(index != 0xffffffff && index >= total_components,
+                  "OpVectorShuffle: All Component literals must either be "
+                  "FFFFFFFF or in [0, N - 1] (inclusive)");
+
       if (index == 0xffffffff) {
          vec->src[i].src =
             nir_src_for_ssa(nir_ssa_undef(&b->nb, 1, src0->bit_size));
@@ -4080,8 +4079,10 @@ vtn_handle_composite(struct vtn_builder *b, SpvOp opcode,
       assume(elems >= 1);
       if (glsl_type_is_vector_or_scalar(type->type)) {
          nir_ssa_def *srcs[NIR_MAX_VEC_COMPONENTS];
-         for (unsigned i = 0; i < elems; i++)
+         for (unsigned i = 0; i < elems; i++) {
             srcs[i] = vtn_get_nir_ssa(b, w[3 + i]);
+            vtn_assert(glsl_get_bit_size(type->type) == srcs[i]->bit_size);
+         }
          ssa->def =
             vtn_vector_construct(b, glsl_get_vector_elements(type->type),
                                  elems, srcs);
@@ -4148,8 +4149,8 @@ vtn_emit_memory_barrier(struct vtn_builder *b, SpvScope scope,
       return;
    }
 
-   /* There's only two scopes thing left */
-   vtn_assert(scope == SpvScopeInvocation || scope == SpvScopeDevice);
+   /* There's only three scopes left */
+   vtn_assert(scope == SpvScopeInvocation || scope == SpvScopeDevice || scope == SpvScopeQueueFamily);
 
    /* Map the GLSL memoryBarrier() construct and any barriers with more than one
     * semantic to the corresponding NIR one.

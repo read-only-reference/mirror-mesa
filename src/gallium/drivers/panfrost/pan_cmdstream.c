@@ -315,6 +315,32 @@ pack_blend_constant(enum pipe_format format, float cons)
         return unorm << (16 - chan_size);
 }
 
+/*
+ * Determine whether to set the respective overdraw alpha flag.
+ *
+ * The overdraw alpha=1 flag should be set when alpha=1 implies full overdraw,
+ * equivalently, all enabled render targets have alpha_one_store set. Likewise,
+ * overdraw alpha=0 should be set when alpha=0 implies no overdraw,
+ * equivalently, all enabled render targets have alpha_zero_nop set.
+ */
+static bool
+panfrost_overdraw_alpha(const struct panfrost_context *ctx, bool zero)
+{
+        const struct panfrost_blend_state *so = ctx->blend;
+
+        for (unsigned i = 0; i < ctx->pipe_framebuffer.nr_cbufs; ++i) {
+                const struct pan_blend_info info = so->info[i];
+
+                bool enabled = ctx->pipe_framebuffer.cbufs[i] && info.no_colour;
+                bool flag = zero ? info.alpha_zero_nop : info.alpha_one_store;
+
+                if (enabled && !flag)
+                        return false;
+        }
+
+        return true;
+}
+
 static void
 panfrost_emit_blend(struct panfrost_batch *batch, void *rts, mali_ptr *blend_shaders)
 {
@@ -468,6 +494,10 @@ pan_merge_empty_fs(struct mali_renderer_state_packed *rsd)
                 cfg.properties.allow_forward_pixel_to_kill = true;
                 cfg.properties.allow_forward_pixel_to_be_killed = true;
                 cfg.properties.zs_update_operation = MALI_PIXEL_KILL_STRONG_EARLY;
+
+                /* Alpha isn't written so these are vacuous */
+                cfg.multisample_misc.overdraw_alpha0 = true;
+                cfg.multisample_misc.overdraw_alpha1 = true;
 #else
                 cfg.shader.shader = 0x1;
                 cfg.properties.work_register_count = 1;
@@ -580,6 +610,9 @@ panfrost_prepare_fs_state(struct panfrost_context *ctx,
                  */
                 cfg.properties.point_sprite_coord_origin_max_y =
                         (rast->sprite_coord_mode == PIPE_SPRITE_COORD_LOWER_LEFT);
+
+                cfg.multisample_misc.overdraw_alpha0 = panfrost_overdraw_alpha(ctx, 0);
+                cfg.multisample_misc.overdraw_alpha1 = panfrost_overdraw_alpha(ctx, 1);
 #endif
 
                 cfg.stencil_mask_misc.alpha_to_coverage = alpha_to_coverage;
@@ -2902,9 +2935,10 @@ panfrost_emit_primitive_size(struct panfrost_context *ctx,
 static bool
 panfrost_is_implicit_prim_restart(const struct pipe_draw_info *info)
 {
-        unsigned implicit_index = BITFIELD_MASK(info->index_size * 8);
-        bool implicit = info->restart_index == implicit_index;
-        return info->primitive_restart && implicit;
+       /* As a reminder primitive_restart should always be checked before any
+          access to restart_index. */
+        return info->primitive_restart &&
+                info->restart_index == (unsigned)BITFIELD_MASK(info->index_size * 8);
 }
 
 /* On Bifrost and older, the Renderer State Descriptor aggregates many pieces of
@@ -3053,6 +3087,10 @@ panfrost_emit_primitive(struct panfrost_context *ctx,
 {
         UNUSED struct pipe_rasterizer_state *rast = &ctx->rasterizer->base;
 
+        bool lines = (info->mode == PIPE_PRIM_LINES ||
+                      info->mode == PIPE_PRIM_LINE_LOOP ||
+                      info->mode == PIPE_PRIM_LINE_STRIP);
+
         pan_pack(out, PRIMITIVE, cfg) {
                 cfg.draw_mode = pan_draw_mode(info->mode);
                 if (panfrost_writes_point_size(ctx))
@@ -3063,9 +3101,7 @@ panfrost_emit_primitive(struct panfrost_context *ctx,
                  * be set to true and the provoking vertex is selected with
                  * DRAW.flat_shading_vertex.
                  */
-                if (info->mode == PIPE_PRIM_LINES ||
-                    info->mode == PIPE_PRIM_LINE_LOOP ||
-                    info->mode == PIPE_PRIM_LINE_STRIP)
+                if (lines)
                         cfg.first_provoking_vertex = true;
                 else
                         cfg.first_provoking_vertex = rast->flatshade_first;
@@ -3079,7 +3115,10 @@ panfrost_emit_primitive(struct panfrost_context *ctx,
 
                 cfg.job_task_split = 6;
 #else
-                cfg.allow_rotating_primitives = false;
+                struct panfrost_shader_state *fs =
+                        panfrost_get_shader_state(ctx, PIPE_SHADER_FRAGMENT);
+
+                cfg.allow_rotating_primitives = !(lines || fs->info.bifrost.uses_flat_shading);
                 cfg.primitive_restart = info->primitive_restart;
 
                 /* Non-fixed restart indices should have been lowered */
@@ -3250,6 +3289,7 @@ panfrost_emit_draw(void *out,
                         cfg.pixel_kill_operation = kill.pixel_kill;
                         cfg.zs_update_operation = kill.zs_update;
 
+                        cfg.allow_forward_pixel_to_kill = pan_allow_forward_pixel_to_kill(ctx, fs);
                         cfg.allow_forward_pixel_to_be_killed = !fs->info.fs.sidefx;
 
                         /* Mask of render targets that may be written. A render
@@ -3281,6 +3321,9 @@ panfrost_emit_draw(void *out,
                         cfg.blend_count = MAX2(batch->key.nr_cbufs, 1);
                         cfg.alpha_to_coverage = ctx->blend->base.alpha_to_coverage;
 
+                        cfg.overdraw_alpha0 = panfrost_overdraw_alpha(ctx, 0);
+                        cfg.overdraw_alpha1 = panfrost_overdraw_alpha(ctx, 1);
+
                         panfrost_emit_shader(batch, &cfg.shader, PIPE_SHADER_FRAGMENT,
                                              batch->rsd[PIPE_SHADER_FRAGMENT],
                                              batch->tls.gpu);
@@ -3300,6 +3343,10 @@ panfrost_emit_draw(void *out,
 
                         /* No shader => no shader side effects */
                         cfg.allow_forward_pixel_to_be_killed = true;
+
+                        /* Alpha isn't written so these are vacuous */
+                        cfg.overdraw_alpha0 = true;
+                        cfg.overdraw_alpha1 = true;
                 }
 #else
                 cfg.position = pos;

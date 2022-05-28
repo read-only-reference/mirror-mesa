@@ -620,11 +620,20 @@ create_conversion_shader(struct st_context *st, enum pipe_texture_target target,
    nir_ssa_def *iid = nir_load_local_invocation_id(&b);
    nir_ssa_def *tile = nir_imul(&b, wid, bsize);
    nir_ssa_def *global_id = nir_iadd(&b, tile, iid);
-   nir_ssa_def *start = nir_iadd(&b, global_id, sd.offset);
+   nir_ssa_def *start = nir_iadd(&b, nir_trim_vector(&b, global_id, 2), sd.offset);
 
-   nir_ssa_def *coord = nir_channels(&b, start, (1<<coord_components)-1);
-   nir_ssa_def *max = nir_iadd(&b, sd.offset, sd.range);
-   nir_push_if(&b, nir_ball(&b, nir_ilt(&b, coord, nir_channels(&b, max, (1<<coord_components)-1))));
+   nir_ssa_def *coord;
+   if (coord_components < 3)
+      coord = start;
+   else {
+      /* pad offset vec with global_id to get correct z offset */
+      assert(coord_components == 3);
+      coord = nir_vec3(&b, nir_channel(&b, start, 0),
+                           nir_channel(&b, start, 1),
+                           nir_channel(&b, global_id, 2));
+   }
+   nir_ssa_def *max = nir_iadd(&b, nir_pad_vector_imm_int(&b, sd.offset, 0, 3), sd.range);
+   nir_push_if(&b, nir_ball(&b, nir_ilt(&b, coord, nir_trim_vector(&b, max, coord_components))));
    nir_tex_instr *txf = nir_tex_instr_create(b.shader, 3);
    txf->is_array = glsl_sampler_type_is_array(sampler->type);
    txf->op = nir_texop_txf;
@@ -743,6 +752,16 @@ enum swizzle_clamp {
    /* reverse ordering for format emulation */
    SWIZZLE_CLAMP_BGRA = 32,
 };
+
+static bool
+can_copy_direct(const struct gl_pixelstore_attrib *pack)
+{
+   return !(pack->RowLength ||
+            pack->SkipPixels ||
+            pack->SkipRows ||
+            pack->ImageHeight ||
+            pack->SkipImages);
+}
 
 static struct pipe_resource *
 download_texture_compute(struct st_context *st,
@@ -919,15 +938,24 @@ download_texture_compute(struct st_context *st,
    }
 
    /* Set up destination buffer */
-   unsigned img_stride = _mesa_image_image_stride(pack, width, height, format, type);
+   unsigned img_stride = src->target == PIPE_TEXTURE_3D ||
+                         src->target == PIPE_TEXTURE_2D_ARRAY ||
+                         src->target == PIPE_TEXTURE_CUBE_ARRAY ?
+                         /* only use image stride for 3d images to avoid pulling in IMAGE_HEIGHT pixelstore */
+                         _mesa_image_image_stride(pack, width, height, format, type) :
+                         _mesa_image_row_stride(pack, width, format, type) * height;
    unsigned buffer_size = (depth + (dim == 3 ? pack->SkipImages : 0)) * img_stride;
    {
-      dst = pipe_buffer_create(screen, PIPE_BIND_SHADER_BUFFER, PIPE_USAGE_STAGING, buffer_size);
-      if (!dst)
-         goto fail;
-
       struct pipe_shader_buffer buffer;
       memset(&buffer, 0, sizeof(buffer));
+      if (can_copy_direct(pack) && pack->BufferObj) {
+         dst = pack->BufferObj->buffer;
+         assert(pack->BufferObj->Size >= buffer_size);
+      } else {
+         dst = pipe_buffer_create(screen, PIPE_BIND_SHADER_BUFFER, PIPE_USAGE_STAGING, buffer_size);
+         if (!dst)
+            goto fail;
+      }
       buffer.buffer = dst;
       buffer.buffer_size = buffer_size;
 
@@ -983,12 +1011,7 @@ copy_converted_buffer(struct gl_context * ctx,
 
    pixels = _mesa_map_pbo_dest(ctx, pack, pixels);
    /* compute shader doesn't handle these to cut down on uniform size */
-   if (pack->RowLength ||
-       pack->SkipPixels ||
-       pack->SkipRows ||
-       pack->ImageHeight ||
-       pack->SkipImages) {
-
+   if (!can_copy_direct(pack)) {
       if (view_target == PIPE_TEXTURE_1D_ARRAY) {
          depth = height;
          height = 1;
@@ -1101,10 +1124,12 @@ st_GetTexSubImage_shader(struct gl_context * ctx,
                                   level, layer, format, type, src_format, view_target, src, dst_format,
                                   swizzle_clamp);
 
-   copy_converted_buffer(ctx, &ctx->Pack, view_target, dst, dst_format, xoffset, yoffset, zoffset,
-                       width, height, depth, format, type, pixels);
+   if (!can_copy_direct(&ctx->Pack) || !ctx->Pack.BufferObj) {
+      copy_converted_buffer(ctx, &ctx->Pack, view_target, dst, dst_format, xoffset, yoffset, zoffset,
+                          width, height, depth, format, type, pixels);
 
-   pipe_resource_reference(&dst, NULL);
+      pipe_resource_reference(&dst, NULL);
+   }
 
    return true;
 }

@@ -163,7 +163,9 @@ unsigned
 pan_lookup_pushed_ubo(struct panfrost_ubo_push *push, unsigned ubo, unsigned offs);
 
 struct hash_table_u64 *
-panfrost_init_sysvals(struct panfrost_sysvals *sysvals, void *memctx);
+panfrost_init_sysvals(struct panfrost_sysvals *sysvals,
+                      struct panfrost_sysvals *fixed_sysvals,
+                      void *memctx);
 
 unsigned
 pan_lookup_sysval(struct hash_table_u64 *sysval_to_id,
@@ -181,7 +183,8 @@ struct panfrost_compile_inputs {
                 unsigned nr_samples;
                 uint64_t bifrost_blend_desc;
         } blend;
-        unsigned sysval_ubo;
+        int fixed_sysval_ubo;
+        struct panfrost_sysvals *fixed_sysval_layout;
         bool shaderdb;
         bool no_idvs;
         bool no_ubo_to_push;
@@ -253,6 +256,12 @@ struct bifrost_shader_info {
         nir_alu_type blend_src1_type;
         bool wait_6, wait_7;
         struct bifrost_message_preload messages[2];
+
+        /* Whether any flat varyings are loaded. This may disable optimizations
+         * that change the provoking vertex, since that would load incorrect
+         * values for flat varyings.
+         */
+        bool uses_flat_shading;
 };
 
 struct midgard_shader_info {

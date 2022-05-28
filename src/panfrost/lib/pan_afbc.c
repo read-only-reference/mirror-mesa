@@ -66,10 +66,6 @@
  * generate a linear staging buffer and use the GPU to blit AFBC<--->linear.
  */
 
-#define AFBC_TILE_WIDTH 16
-#define AFBC_TILE_HEIGHT 16
-#define AFBC_CACHE_ALIGN 64
-
 /* AFBC supports compressing a few canonical formats. Additional formats are
  * available by using a canonical internal format. Given a PIPE format, find
  * the canonical AFBC internal format if it exists, or NONE if the format
@@ -135,26 +131,6 @@ panfrost_format_supports_afbc(const struct panfrost_device *dev, enum pipe_forma
         return panfrost_afbc_format(dev, format) != PIPE_FORMAT_NONE;
 }
 
-unsigned
-panfrost_afbc_header_size(unsigned width, unsigned height)
-{
-        /* Align to tile */
-        unsigned aligned_width  = ALIGN_POT(width,  AFBC_TILE_WIDTH);
-        unsigned aligned_height = ALIGN_POT(height, AFBC_TILE_HEIGHT);
-
-        /* Compute size in tiles, rather than pixels */
-        unsigned tile_count_x = aligned_width  / AFBC_TILE_WIDTH;
-        unsigned tile_count_y = aligned_height / AFBC_TILE_HEIGHT;
-        unsigned tile_count = tile_count_x * tile_count_y;
-
-        /* Multiply to find the header size */
-        unsigned header_bytes = tile_count * AFBC_HEADER_BYTES_PER_TILE;
-
-        /* Align and go */
-        return ALIGN_POT(header_bytes, AFBC_CACHE_ALIGN);
-
-}
-
 /* The lossless colour transform (AFBC_FORMAT_MOD_YTR) requires RGB. */
 
 bool
@@ -169,4 +145,14 @@ panfrost_afbc_can_ytr(enum pipe_format format)
 
         /* The fourth channel if it exists doesn't matter */
         return desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB;
+}
+
+/*
+ * Check if the device supports AFBC with tiled headers (and hence also solid
+ * colour blocks).
+ */
+bool
+panfrost_afbc_can_tile(const struct panfrost_device *dev)
+{
+        return (dev->arch >= 7);
 }

@@ -1796,8 +1796,42 @@ calculate_urb_setup(const struct intel_device_info *devinfo,
        * into real HW registers.
        */
       if (nir->info.per_primitive_inputs) {
+         uint64_t per_prim_inputs_read =
+               nir->info.inputs_read & nir->info.per_primitive_inputs;
+
+         /* In Mesh, PRIMITIVE_SHADING_RATE, VIEWPORT and LAYER slots
+          * are always at the beginning, because they come from MUE
+          * Primitive Header, not Per-Primitive Attributes.
+          */
+         const uint64_t primitive_header_bits = VARYING_BIT_VIEWPORT |
+                                                VARYING_BIT_LAYER |
+                                                VARYING_BIT_PRIMITIVE_SHADING_RATE;
+
+         if (per_prim_inputs_read & primitive_header_bits) {
+            /* Primitive Shading Rate, Layer and Viewport live in the same
+             * 4-dwords slot (psr is dword 0, layer is dword 1, and viewport
+             * is dword 2).
+             */
+            if (per_prim_inputs_read & VARYING_BIT_PRIMITIVE_SHADING_RATE)
+               prog_data->urb_setup[VARYING_SLOT_PRIMITIVE_SHADING_RATE] = 0;
+
+            if (per_prim_inputs_read & VARYING_BIT_LAYER)
+               prog_data->urb_setup[VARYING_SLOT_LAYER] = 0;
+
+            if (per_prim_inputs_read & VARYING_BIT_VIEWPORT)
+               prog_data->urb_setup[VARYING_SLOT_VIEWPORT] = 0;
+
+            /* 3DSTATE_SBE_MESH.Per[Primitive|Vertex]URBEntryOutputRead[Offset|Length]
+             * are in full GRFs (8 dwords) and MUE Primitive Header is 8 dwords,
+             * so next per-primitive attribute must be placed in slot 2 (each slot
+             * is 4 dwords long).
+             */
+            urb_next = 2;
+            per_prim_inputs_read &= ~primitive_header_bits;
+         }
+
          for (unsigned i = 0; i < VARYING_SLOT_MAX; i++) {
-            if (nir->info.per_primitive_inputs & BITFIELD64_BIT(i)) {
+            if (per_prim_inputs_read & BITFIELD64_BIT(i)) {
                prog_data->urb_setup[i] = urb_next++;
             }
          }
@@ -3183,7 +3217,7 @@ fs_visitor::eliminate_find_live_channel()
          /* This can potentially make control flow non-uniform until the end
           * of the program.
           */
-         return progress;
+         goto out;
 
       case SHADER_OPCODE_FIND_LIVE_CHANNEL:
          if (depth == 0) {
@@ -3200,6 +3234,7 @@ fs_visitor::eliminate_find_live_channel()
       }
    }
 
+out:
    if (progress)
       invalidate_analysis(DEPENDENCY_INSTRUCTION_DETAIL);
 
@@ -9739,6 +9774,7 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
                           key->emit_alpha_test;
    prog_data->uses_omask = !key->ignore_sample_mask_out &&
       (shader->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK));
+   prog_data->color_outputs_written = key->color_outputs_valid;
    prog_data->computed_depth_mode = computed_depth_mode(shader);
    prog_data->computed_stencil =
       shader->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_STENCIL);
@@ -9787,6 +9823,14 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
       !prog_data->uses_sample_mask &&
       (prog_data->computed_depth_mode == BRW_PSCDEPTH_OFF) &&
       !prog_data->computed_stencil;
+
+   /* We choose to always enable VMask prior to XeHP, as it would cause
+    * us to lose out on the eliminate_find_live_channel() optimization.
+    */
+   prog_data->uses_vmask = devinfo->verx10 < 125 ||
+                           shader->info.fs.needs_quad_helper_invocations ||
+                           shader->info.fs.needs_all_helper_invocations ||
+                           prog_data->per_coarse_pixel_dispatch;
 
    prog_data->uses_src_w =
       BITSET_TEST(shader->info.system_values_read, SYSTEM_VALUE_FRAG_COORD);
@@ -10533,13 +10577,15 @@ static UNUSED void
 brw_fs_test_dispatch_packing(const fs_builder &bld)
 {
    const gl_shader_stage stage = bld.shader->stage;
+   const bool uses_vmask =
+      stage == MESA_SHADER_FRAGMENT &&
+      brw_wm_prog_data(bld.shader->stage_prog_data)->uses_vmask;
 
    if (brw_stage_has_packed_dispatch(bld.shader->devinfo, stage,
                                      bld.shader->stage_prog_data)) {
       const fs_builder ubld = bld.exec_all().group(1, 0);
       const fs_reg tmp = component(bld.vgrf(BRW_REGISTER_TYPE_UD), 0);
-      const fs_reg mask = (stage == MESA_SHADER_FRAGMENT ? brw_vmask_reg() :
-                           brw_dmask_reg());
+      const fs_reg mask = uses_vmask ? brw_vmask_reg() : brw_dmask_reg();
 
       ubld.ADD(tmp, mask, brw_imm_ud(1));
       ubld.AND(tmp, mask, tmp);

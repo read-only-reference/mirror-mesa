@@ -197,17 +197,20 @@ typedef struct shader_info {
    uint64_t patch_outputs_accessed_indirectly;
 
    /** Bitfield of which textures are used */
-   BITSET_DECLARE(textures_used, 32);
+   BITSET_DECLARE(textures_used, 128);
 
    /** Bitfield of which textures are used by texelFetch() */
-   BITSET_DECLARE(textures_used_by_txf, 32);
+   BITSET_DECLARE(textures_used_by_txf, 128);
+
+   /** Bitfield of which samplers are used */
+   BITSET_DECLARE(samplers_used, 32);
 
    /** Bitfield of which images are used */
-   uint32_t images_used;
+   BITSET_DECLARE(images_used, 64);
    /** Bitfield of which images are buffers. */
-   uint32_t image_buffers;
+   BITSET_DECLARE(image_buffers, 64);
    /** Bitfield of which images are MSAA. */
-   uint32_t msaa_images;
+   BITSET_DECLARE(msaa_images, 64);
 
    /* SPV_KHR_float_controls: execution mode for floating point ops */
    uint16_t float_controls_execution_mode;
@@ -502,6 +505,11 @@ typedef struct shader_info {
 
       /* Applies to MESH. */
       struct {
+         /* Bit mask of MS outputs that are used
+          * with an index that is NOT the local invocation index.
+          */
+         uint64_t ms_cross_invocation_output_access;
+
          uint16_t max_vertices_out;
          uint16_t max_primitives_out;
          uint16_t primitive_type;  /* GL_POINTS, GL_LINES or GL_TRIANGLES. */

@@ -338,7 +338,6 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_SHADER_CAN_READ_OUTPUTS:
    case PIPE_CAP_NATIVE_FENCE_FD:
-   case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_FBFETCH:
    case PIPE_CAP_DOUBLES:
    case PIPE_CAP_INT64:
@@ -941,6 +940,7 @@ static int nv50_tls_alloc(struct nv50_screen *screen, unsigned tls_space,
    struct nouveau_device *dev = screen->base.device;
    int ret;
 
+   assert(tls_space % ONE_TEMP_SIZE == 0);
    screen->cur_tls_space = util_next_power_of_two(tls_space / ONE_TEMP_SIZE) *
          ONE_TEMP_SIZE;
    if (nouveau_mesa_debug)

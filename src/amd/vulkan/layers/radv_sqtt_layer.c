@@ -645,11 +645,13 @@ sqtt_CmdBindIndexBuffer(VkCommandBuffer commandBuffer, VkBuffer buffer, VkDevice
 }
 
 VKAPI_ATTR void VKAPI_CALL
-sqtt_CmdBindVertexBuffers(VkCommandBuffer commandBuffer, uint32_t firstBinding,
-                          uint32_t bindingCount, const VkBuffer *pBuffers,
-                          const VkDeviceSize *pOffsets)
+sqtt_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding,
+                           uint32_t bindingCount, const VkBuffer *pBuffers,
+                           const VkDeviceSize *pOffsets, const VkDeviceSize* pSizes,
+                           const VkDeviceSize* pStrides)
 {
-   API_MARKER(BindVertexBuffers, commandBuffer, firstBinding, bindingCount, pBuffers, pOffsets);
+   API_MARKER_ALIAS(BindVertexBuffers2, BindVertexBuffers, commandBuffer, firstBinding,
+                    bindingCount, pBuffers, pOffsets, pSizes, pStrides);
 }
 
 VKAPI_ATTR void VKAPI_CALL

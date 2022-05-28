@@ -61,6 +61,10 @@ static void ac_init_llvm_target(void)
       "-structurizecfg-skip-uniform-regions",
 #endif
    };
+
+#if LLVM_VERSION_MAJOR > 11
+   ac_reset_llvm_command_line_parser();
+#endif
    LLVMParseCommandLineOptions(ARRAY_SIZE(argv), argv, NULL);
 }
 
@@ -87,7 +91,7 @@ void ac_init_llvm_once(void)
 #endif
 }
 
-static LLVMTargetRef ac_get_llvm_target(const char *triple)
+LLVMTargetRef ac_get_llvm_target(const char *triple)
 {
    LLVMTargetRef target = NULL;
    char *err_message = NULL;
@@ -161,20 +165,28 @@ const char *ac_get_llvm_processor_name(enum radeon_family family)
       return "gfx1011";
    case CHIP_NAVI14:
       return "gfx1012";
-   case CHIP_SIENNA_CICHLID:
+   case CHIP_NAVI21:
       return "gfx1030";
-   case CHIP_NAVY_FLOUNDER:
+   case CHIP_NAVI22:
       return LLVM_VERSION_MAJOR >= 12 ? "gfx1031" : "gfx1030";
-   case CHIP_DIMGREY_CAVEFISH:
+   case CHIP_NAVI23:
       return LLVM_VERSION_MAJOR >= 12 ? "gfx1032" : "gfx1030";
    case CHIP_VANGOGH:
       return LLVM_VERSION_MAJOR >= 12 ? "gfx1033" : "gfx1030";
-   case CHIP_BEIGE_GOBY:
+   case CHIP_NAVI24:
       return LLVM_VERSION_MAJOR >= 13 ? "gfx1034" : "gfx1030";
-   case CHIP_YELLOW_CARP:
+   case CHIP_REMBRANDT:
       return LLVM_VERSION_MAJOR >= 13 ? "gfx1035" : "gfx1030";
    case CHIP_GFX1036: /* TODO: LLVM 15 doesn't support this yet */
       return "gfx1030";
+   case CHIP_GFX1100:
+      return "gfx1100";
+   case CHIP_GFX1101:
+      return "gfx1101";
+   case CHIP_GFX1102:
+      return "gfx1102";
+   case CHIP_GFX1103:
+      return "gfx1103";
    default:
       return "";
    }
@@ -320,9 +332,9 @@ void ac_llvm_set_target_features(LLVMValueRef F, struct ac_llvm_context *ctx)
 
    snprintf(features, sizeof(features), "+DumpCode%s%s",
             /* GFX9 has broken VGPR indexing, so always promote alloca to scratch. */
-            ctx->chip_class == GFX9 ? ",-promote-alloca" : "",
+            ctx->gfx_level == GFX9 ? ",-promote-alloca" : "",
             /* Wave32 is the default. */
-            ctx->chip_class >= GFX10 && ctx->wave_size == 64 ?
+            ctx->gfx_level >= GFX10 && ctx->wave_size == 64 ?
                ",+wavefrontsize64,-wavefrontsize32" : "");
 
    LLVMAddTargetDependentFunctionAttr(F, "target-features", features);

@@ -234,6 +234,9 @@ index("uint8_t", "offset1")
 # in hardware, instead of 4).
 index("bool", "st64")
 
+# When set, range analysis will use it for nir_unsigned_upper_bound
+index("unsigned", "arg_upper_bound_u32_amd")
+
 # Separate source/dest access flags for copies
 index("enum gl_access_qualifier", "dst_access")
 index("enum gl_access_qualifier", "src_access")
@@ -484,6 +487,19 @@ intrinsic("end_primitive_with_counter", src_comp=[1, 1], indices=[STREAM_ID])
 # Contains the final total vertex and primitive counts in the current GS thread.
 intrinsic("set_vertex_and_primitive_count", src_comp=[1, 1], indices=[STREAM_ID])
 
+# Launches mesh shader workgroups from a task shader, with explicit task_payload.
+# Rules:
+# - This is a terminating instruction.
+# - May only occur in workgroup-uniform control flow.
+# - Dispatch sizes may be divergent (in which case the values
+#   from the first invocation are used).
+# Meaning of indices:
+# - BASE: address of the task_payload variable used.
+# - RANGE: size of the task_payload variable used.
+#
+# src[] = {vec(x, y, z)}
+intrinsic("launch_mesh_workgroups", src_comp=[3], indices=[BASE, RANGE])
+
 # Trace a ray through an acceleration structure
 #
 # This instruction has a lot of parameters:
@@ -689,7 +705,8 @@ intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
 #    in ssbo_atomic_add, etc).
 # 3: For CompSwap only: the second data parameter.
 #
-# All shared variable operations take 2 sources except CompSwap that takes 3.
+# All shared (and task payload) variable operations take 2 sources
+# except CompSwap that takes 3.
 # These sources represent:
 #
 # 0: The offset into the shared variable storage region that the atomic
@@ -713,6 +730,7 @@ def memory_atomic_data1(name):
     intrinsic("deref_atomic_" + name,  src_comp=[-1, 1], dest_comp=1, indices=[ACCESS])
     intrinsic("ssbo_atomic_" + name,  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS])
     intrinsic("shared_atomic_" + name,  src_comp=[1, 1], dest_comp=1, indices=[BASE])
+    intrinsic("task_payload_atomic_" + name,  src_comp=[1, 1], dest_comp=1, indices=[BASE])
     intrinsic("global_atomic_" + name,  src_comp=[1, 1], dest_comp=1, indices=[])
     intrinsic("global_atomic_" + name + "_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE])
     if not name.startswith('f'):
@@ -722,6 +740,7 @@ def memory_atomic_data2(name):
     intrinsic("deref_atomic_" + name,  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS])
     intrinsic("ssbo_atomic_" + name,  src_comp=[-1, 1, 1, 1], dest_comp=1, indices=[ACCESS])
     intrinsic("shared_atomic_" + name,  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE])
+    intrinsic("task_payload_atomic_" + name,  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE])
     intrinsic("global_atomic_" + name,  src_comp=[1, 1, 1], dest_comp=1, indices=[])
     intrinsic("global_atomic_" + name + "_amd",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[BASE])
     if not name.startswith('f'):
@@ -1219,7 +1238,7 @@ intrinsic("shared_atomic_comp_swap_dxil", src_comp=[1, 1, 1], dest_comp=1)
 
 # src[] = { value }
 store("raw_output_pan", [], [])
-store("combined_output_pan", [1, 1, 1, 4], [COMPONENT, SRC_TYPE, DEST_TYPE])
+store("combined_output_pan", [1, 1, 1, 4], [BASE, COMPONENT, SRC_TYPE, DEST_TYPE])
 load("raw_output_pan", [1], [BASE], [CAN_ELIMINATE, CAN_REORDER])
 
 # Loads the sampler paramaters <min_lod, max_lod, lod_bias>
@@ -1270,6 +1289,15 @@ system_value("ring_tess_factors_offset_amd", 1)
 # Descriptor where ES outputs are stored for GS to read on GFX6-8
 system_value("ring_esgs_amd", 4)
 system_value("ring_es2gs_offset_amd", 1)
+# Address of the task shader draw ring (used for VARYING_SLOT_TASK_COUNT)
+system_value("ring_task_draw_amd", 4)
+# Address of the task shader payload ring (used for all other outputs)
+system_value("ring_task_payload_amd", 4)
+# Pointer into the draw and payload rings
+system_value("task_ring_entry_amd", 1)
+# Pointer into the draw and payload rings
+system_value("task_ib_addr", 2)
+system_value("task_ib_stride", 1)
 
 # Number of patches processed by each TCS workgroup
 system_value("tcs_num_patches_amd", 1)
@@ -1343,11 +1371,14 @@ system_value("rt_arg_scratch_offset_amd", 1)
 # Whether to call the anyhit shader for an intersection in an intersection shader.
 system_value("intersection_opaque_amd", 1, bit_sizes=[1])
 
+# Used for indirect ray tracing.
+system_value("ray_launch_size_addr_amd", 1, bit_sizes=[64])
+
 # Load forced VRS rates.
 intrinsic("load_force_vrs_rates_amd", dest_comp=1, bit_sizes=[32], flags=[CAN_ELIMINATE, CAN_REORDER])
 
-intrinsic("load_scalar_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
-intrinsic("load_vector_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("load_scalar_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE, ARG_UPPER_BOUND_U32_AMD], flags=[CAN_ELIMINATE, CAN_REORDER])
+intrinsic("load_vector_arg_amd", dest_comp=0, bit_sizes=[32], indices=[BASE, ARG_UPPER_BOUND_U32_AMD], flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # src[] = { 64-bit base address, 32-bit offset }.
 intrinsic("load_smem_amd", src_comp=[1, 1], dest_comp=0, bit_sizes=[32],

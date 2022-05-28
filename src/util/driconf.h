@@ -291,6 +291,10 @@
    DRI_CONF_OPT_B(vk_dont_care_as_load, def, \
                   "Treat VK_ATTACHMENT_LOAD_OP_DONT_CARE as LOAD_OP_LOAD, workaround on tiler GPUs for games that confuse these two load ops")
 
+#define DRI_CONF_LIMIT_TRIG_INPUT_RANGE(def) \
+   DRI_CONF_OPT_B(limit_trig_input_range, def, \
+                  "Limit trig input range to [-2p : 2p] to improve sin/cos calculation precision on Intel")
+
 /**
  * \brief Image quality-related options
  */
@@ -579,5 +583,9 @@
 #define DRI_CONF_ANV_ASSUME_FULL_SUBGROUPS(def) \
    DRI_CONF_OPT_B(anv_assume_full_subgroups, def, \
                   "Allow assuming full subgroups requirement even when it's not specified explicitly")
+
+#define DRI_CONF_ANV_SAMPLE_MASK_OUT_OPENGL_BEHAVIOUR(def) \
+   DRI_CONF_OPT_B(anv_sample_mask_out_opengl_behaviour, def, \
+                  "Ignore sample mask out when having single sampled target")
 
 #endif

@@ -491,6 +491,11 @@ zink_draw(struct pipe_context *pctx,
       zink_rebind_all_buffers(ctx);
    }
 
+   if (unlikely(ctx->image_rebind_counter < screen->image_rebind_counter)) {
+      ctx->image_rebind_counter = screen->image_rebind_counter;
+      zink_rebind_all_images(ctx);
+   }
+
    unsigned index_offset = 0;
    unsigned index_size = dinfo->index_size;
    struct pipe_resource *index_buffer = NULL;
@@ -541,6 +546,19 @@ zink_draw(struct pipe_context *pctx,
    barrier_draw_buffers(ctx, dinfo, dindirect, index_buffer);
 
    zink_query_update_gs_states(ctx, dinfo->was_line_loop);
+
+   if (unlikely(zink_debug & ZINK_DEBUG_SYNC)) {
+      zink_batch_no_rp(ctx);
+      VkMemoryBarrier mb;
+      mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+      mb.pNext = NULL;
+      mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+      mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+      VKSCR(CmdPipelineBarrier)(ctx->batch.state->cmdbuf,
+                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                0, 1, &mb, 0, NULL, 0, NULL);
+   }
 
    zink_batch_rp(ctx);
    /* check dead swapchain */
@@ -930,6 +948,19 @@ zink_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
    update_barriers(ctx, true);
    if (ctx->memory_barrier)
       zink_flush_memory_barrier(ctx, true);
+
+   if (unlikely(zink_debug & ZINK_DEBUG_SYNC)) {
+      zink_batch_no_rp(ctx);
+      VkMemoryBarrier mb;
+      mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+      mb.pNext = NULL;
+      mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+      mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+      VKSCR(CmdPipelineBarrier)(ctx->batch.state->cmdbuf,
+                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                0, 1, &mb, 0, NULL, 0, NULL);
+   }
 
    if (zink_program_has_descriptors(&ctx->curr_compute->base))
       screen->descriptors_update(ctx, true);

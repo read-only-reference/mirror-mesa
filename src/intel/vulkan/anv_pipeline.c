@@ -314,26 +314,28 @@ populate_sampler_prog_key(const struct intel_device_info *devinfo,
 }
 
 static void
-populate_base_prog_key(const struct intel_device_info *devinfo,
+populate_base_prog_key(const struct anv_device *device,
                        enum brw_subgroup_size_type subgroup_size_type,
                        bool robust_buffer_acccess,
                        struct brw_base_prog_key *key)
 {
    key->subgroup_size_type = subgroup_size_type;
    key->robust_buffer_access = robust_buffer_acccess;
+   key->limit_trig_input_range =
+      device->physical->instance->limit_trig_input_range;
 
-   populate_sampler_prog_key(devinfo, &key->tex);
+   populate_sampler_prog_key(&device->info, &key->tex);
 }
 
 static void
-populate_vs_prog_key(const struct intel_device_info *devinfo,
+populate_vs_prog_key(const struct anv_device *device,
                      enum brw_subgroup_size_type subgroup_size_type,
                      bool robust_buffer_acccess,
                      struct brw_vs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type,
+   populate_base_prog_key(device, subgroup_size_type,
                           robust_buffer_acccess, &key->base);
 
    /* XXX: Handle vertex input work-arounds */
@@ -342,7 +344,7 @@ populate_vs_prog_key(const struct intel_device_info *devinfo,
 }
 
 static void
-populate_tcs_prog_key(const struct intel_device_info *devinfo,
+populate_tcs_prog_key(const struct anv_device *device,
                       enum brw_subgroup_size_type subgroup_size_type,
                       bool robust_buffer_acccess,
                       unsigned input_vertices,
@@ -350,33 +352,33 @@ populate_tcs_prog_key(const struct intel_device_info *devinfo,
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type,
+   populate_base_prog_key(device, subgroup_size_type,
                           robust_buffer_acccess, &key->base);
 
    key->input_vertices = input_vertices;
 }
 
 static void
-populate_tes_prog_key(const struct intel_device_info *devinfo,
+populate_tes_prog_key(const struct anv_device *device,
                       enum brw_subgroup_size_type subgroup_size_type,
                       bool robust_buffer_acccess,
                       struct brw_tes_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type,
+   populate_base_prog_key(device, subgroup_size_type,
                           robust_buffer_acccess, &key->base);
 }
 
 static void
-populate_gs_prog_key(const struct intel_device_info *devinfo,
+populate_gs_prog_key(const struct anv_device *device,
                      enum brw_subgroup_size_type subgroup_size_type,
                      bool robust_buffer_acccess,
                      struct brw_gs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type,
+   populate_base_prog_key(device, subgroup_size_type,
                           robust_buffer_acccess, &key->base);
 }
 
@@ -436,25 +438,25 @@ pipeline_has_coarse_pixel(const struct anv_graphics_pipeline *pipeline,
 }
 
 static void
-populate_task_prog_key(const struct intel_device_info *devinfo,
+populate_task_prog_key(const struct anv_device *device,
                        enum brw_subgroup_size_type subgroup_size_type,
                        bool robust_buffer_access,
                        struct brw_task_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type, robust_buffer_access, &key->base);
+   populate_base_prog_key(device, subgroup_size_type, robust_buffer_access, &key->base);
 }
 
 static void
-populate_mesh_prog_key(const struct intel_device_info *devinfo,
+populate_mesh_prog_key(const struct anv_device *device,
                        enum brw_subgroup_size_type subgroup_size_type,
                        bool robust_buffer_access,
                        struct brw_mesh_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type, robust_buffer_access, &key->base);
+   populate_base_prog_key(device, subgroup_size_type, robust_buffer_access, &key->base);
 }
 
 static void
@@ -467,11 +469,10 @@ populate_wm_prog_key(const struct anv_graphics_pipeline *pipeline,
                      struct brw_wm_prog_key *key)
 {
    const struct anv_device *device = pipeline->base.device;
-   const struct intel_device_info *devinfo = &device->info;
 
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, flags, robust_buffer_acccess, &key->base);
+   populate_base_prog_key(device, flags, robust_buffer_acccess, &key->base);
 
    /* We set this to 0 here and set to the actual value before we call
     * brw_compile_fs.
@@ -507,6 +508,9 @@ populate_wm_prog_key(const struct anv_graphics_pipeline *pipeline,
             (ms_info->minSampleShading * ms_info->rasterizationSamples) > 1;
          key->multisample_fbo = true;
       }
+
+      if (device->physical->instance->sample_mask_out_opengl_behaviour)
+         key->ignore_sample_mask_out = !key->multisample_fbo;
    }
 
    key->coarse_pixel =
@@ -515,26 +519,26 @@ populate_wm_prog_key(const struct anv_graphics_pipeline *pipeline,
 }
 
 static void
-populate_cs_prog_key(const struct intel_device_info *devinfo,
+populate_cs_prog_key(const struct anv_device *device,
                      enum brw_subgroup_size_type subgroup_size_type,
                      bool robust_buffer_acccess,
                      struct brw_cs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, subgroup_size_type,
+   populate_base_prog_key(device, subgroup_size_type,
                           robust_buffer_acccess, &key->base);
 }
 
 static void
-populate_bs_prog_key(const struct intel_device_info *devinfo,
+populate_bs_prog_key(const struct anv_device *device,
                      VkPipelineShaderStageCreateFlags flags,
                      bool robust_buffer_access,
                      struct brw_bs_prog_key *key)
 {
    memset(key, 0, sizeof(*key));
 
-   populate_base_prog_key(devinfo, flags, robust_buffer_access, &key->base);
+   populate_base_prog_key(device, flags, robust_buffer_access, &key->base);
 }
 
 struct anv_pipeline_stage {
@@ -845,6 +849,11 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
    if (gl_shader_stage_is_compute(nir->info.stage) ||
        gl_shader_stage_is_mesh(nir->info.stage))
       NIR_PASS_V(nir, brw_nir_lower_cs_intrinsics);
+
+   if (nir->info.stage == MESA_SHADER_VERTEX ||
+       nir->info.stage == MESA_SHADER_TESS_EVAL ||
+       nir->info.stage == MESA_SHADER_GEOMETRY)
+      NIR_PASS_V(nir, nir_shader_gather_xfb_info);
 
    stage->nir = nir;
 }
@@ -1208,21 +1217,6 @@ anv_pipeline_compile_fs(const struct brw_compiler *compiler,
    fs_stage->num_stats = (uint32_t)fs_stage->prog_data.wm.dispatch_8 +
                          (uint32_t)fs_stage->prog_data.wm.dispatch_16 +
                          (uint32_t)fs_stage->prog_data.wm.dispatch_32;
-
-   if (fs_stage->key.wm.color_outputs_valid == 0 &&
-       !fs_stage->prog_data.wm.has_side_effects &&
-       !fs_stage->prog_data.wm.uses_omask &&
-       !fs_stage->key.wm.alpha_to_coverage &&
-       !fs_stage->prog_data.wm.uses_kill &&
-       fs_stage->prog_data.wm.computed_depth_mode == BRW_PSCDEPTH_OFF &&
-       !fs_stage->prog_data.wm.computed_stencil) {
-      /* This fragment shader has no outputs and no side effects.  Go ahead
-       * and return the code pointer so we don't accidentally think the
-       * compile failed but zero out prog_data which will set program_size to
-       * zero and disable the stage.
-       */
-      memset(&fs_stage->prog_data, 0, sizeof(fs_stage->prog_data));
-   }
 }
 
 static void
@@ -1432,15 +1426,7 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
    const struct brw_compiler *compiler = pipeline->base.device->physical->compiler;
    struct anv_pipeline_stage stages[ANV_GRAPHICS_SHADER_STAGE_COUNT] = {};
 
-   /* Information on which states are considered dynamic. */
-   const VkPipelineDynamicStateCreateInfo *dyn_info =
-      info->pDynamicState;
-   uint32_t dynamic_states = 0;
-   if (dyn_info) {
-      for (unsigned i = 0; i < dyn_info->dynamicStateCount; i++)
-         dynamic_states |=
-            anv_cmd_dirty_bit_for_vk_dynamic_state(dyn_info->pDynamicStates[i]);
-   }
+   uint32_t dynamic_states = pipeline->dynamic_states;
 
    VkResult result;
    for (uint32_t i = 0; i < info->stageCount; i++) {
@@ -1466,26 +1452,26 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
       enum brw_subgroup_size_type subgroup_size_type =
          anv_subgroup_size_type(stage, stages[stage].module, sinfo->flags, rss_info);
 
-      const struct intel_device_info *devinfo = &pipeline->base.device->info;
+      const struct anv_device *device = pipeline->base.device;
       switch (stage) {
       case MESA_SHADER_VERTEX:
-         populate_vs_prog_key(devinfo, subgroup_size_type,
+         populate_vs_prog_key(device, subgroup_size_type,
                               pipeline->base.device->robust_buffer_access,
                               &stages[stage].key.vs);
          break;
       case MESA_SHADER_TESS_CTRL:
-         populate_tcs_prog_key(devinfo, subgroup_size_type,
+         populate_tcs_prog_key(device, subgroup_size_type,
                                pipeline->base.device->robust_buffer_access,
                                info->pTessellationState->patchControlPoints,
                                &stages[stage].key.tcs);
          break;
       case MESA_SHADER_TESS_EVAL:
-         populate_tes_prog_key(devinfo, subgroup_size_type,
+         populate_tes_prog_key(device, subgroup_size_type,
                                pipeline->base.device->robust_buffer_access,
                                &stages[stage].key.tes);
          break;
       case MESA_SHADER_GEOMETRY:
-         populate_gs_prog_key(devinfo, subgroup_size_type,
+         populate_gs_prog_key(device, subgroup_size_type,
                               pipeline->base.device->robust_buffer_access,
                               &stages[stage].key.gs);
          break;
@@ -1503,12 +1489,12 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
          break;
       }
       case MESA_SHADER_TASK:
-         populate_task_prog_key(devinfo, subgroup_size_type,
+         populate_task_prog_key(device, subgroup_size_type,
                                 pipeline->base.device->robust_buffer_access,
                                 &stages[stage].key.task);
          break;
       case MESA_SHADER_MESH:
-         populate_mesh_prog_key(devinfo, subgroup_size_type,
+         populate_mesh_prog_key(device, subgroup_size_type,
                                 pipeline->base.device->robust_buffer_access,
                                 &stages[stage].key.mesh);
          break;
@@ -1789,12 +1775,6 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
 
       void *stage_ctx = ralloc_context(NULL);
 
-      nir_xfb_info *xfb_info = NULL;
-      if (s == MESA_SHADER_VERTEX ||
-          s == MESA_SHADER_TESS_EVAL ||
-          s == MESA_SHADER_GEOMETRY)
-         xfb_info = nir_gather_xfb_info(stages[s].nir, stage_ctx);
-
       switch (s) {
       case MESA_SHADER_VERTEX:
          anv_pipeline_compile_vs(compiler, stage_ctx, pipeline,
@@ -1845,7 +1825,8 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
                                   &stages[s].prog_data.base,
                                   brw_prog_data_size(s),
                                   stages[s].stats, stages[s].num_stats,
-                                  xfb_info, &stages[s].bind_map);
+                                  stages[s].nir->xfb_info,
+                                  &stages[s].bind_map);
       if (!bin) {
          ralloc_free(stage_ctx);
          result = vk_error(pipeline, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -1866,15 +1847,25 @@ anv_pipeline_compile_graphics(struct anv_graphics_pipeline *pipeline,
 
 done:
 
-   if (pipeline->shaders[MESA_SHADER_FRAGMENT] &&
-       pipeline->shaders[MESA_SHADER_FRAGMENT]->prog_data->program_size == 0) {
-      /* This can happen if we decided to implicitly disable the fragment
-       * shader.  See anv_pipeline_compile_fs().
-       */
-      anv_shader_bin_unref(pipeline->base.device,
-                           pipeline->shaders[MESA_SHADER_FRAGMENT]);
-      pipeline->shaders[MESA_SHADER_FRAGMENT] = NULL;
-      pipeline->active_stages &= ~VK_SHADER_STAGE_FRAGMENT_BIT;
+   if (pipeline->shaders[MESA_SHADER_FRAGMENT] != NULL) {
+      struct anv_shader_bin *fs = pipeline->shaders[MESA_SHADER_FRAGMENT];
+      const struct brw_wm_prog_data *wm_prog_data =
+         brw_wm_prog_data_const(fs->prog_data);
+
+      if (wm_prog_data->color_outputs_written == 0 &&
+          !wm_prog_data->has_side_effects &&
+          !wm_prog_data->uses_omask &&
+          !wm_prog_data->uses_kill &&
+          wm_prog_data->computed_depth_mode == BRW_PSCDEPTH_OFF &&
+          !wm_prog_data->computed_stencil &&
+          fs->xfb_info == NULL) {
+         /* This can happen if we decided to implicitly disable the fragment
+          * shader.  See anv_pipeline_compile_fs().
+          */
+         anv_shader_bin_unref(pipeline->base.device, fs);
+         pipeline->shaders[MESA_SHADER_FRAGMENT] = NULL;
+         pipeline->active_stages &= ~VK_SHADER_STAGE_FRAGMENT_BIT;
+      }
    }
 
    pipeline_feedback.duration = os_time_get_nano() - pipeline_start;
@@ -1947,7 +1938,7 @@ anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
    const enum brw_subgroup_size_type subgroup_size_type =
       anv_subgroup_size_type(MESA_SHADER_COMPUTE, stage.module, info->stage.flags, rss_info);
 
-   populate_cs_prog_key(&device->info, subgroup_size_type,
+   populate_cs_prog_key(device, subgroup_size_type,
                         device->robust_buffer_access,
                         &stage.key.cs);
 
@@ -2437,7 +2428,6 @@ anv_graphics_pipeline_init(struct anv_graphics_pipeline *pipeline,
    assert(pCreateInfo->pRasterizationState);
 
    if (pCreateInfo->pDynamicState) {
-      /* Remove all of the states that are marked as dynamic */
       uint32_t count = pCreateInfo->pDynamicState->dynamicStateCount;
       for (uint32_t s = 0; s < count; s++) {
          pipeline->dynamic_states |= anv_cmd_dirty_bit_for_vk_dynamic_state(
@@ -2749,7 +2739,7 @@ anv_pipeline_init_ray_tracing_stages(struct anv_ray_tracing_pipeline *pipeline,
          },
       };
 
-      populate_bs_prog_key(&pipeline->base.device->info, sinfo->flags,
+      populate_bs_prog_key(pipeline->base.device, sinfo->flags,
                            pipeline->base.device->robust_buffer_access,
                            &stages[i].key.bs);
 
@@ -3063,7 +3053,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
       },
    };
    device->rt_trampoline =
-      anv_device_search_for_kernel(device, device->default_pipeline_cache,
+      anv_device_search_for_kernel(device, device->internal_cache,
                                    &trampoline_key, sizeof(trampoline_key),
                                    &cache_hit);
    if (device->rt_trampoline == NULL) {
@@ -3093,7 +3083,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
          brw_compile_cs(device->physical->compiler, tmp_ctx, &params);
 
       device->rt_trampoline =
-         anv_device_upload_kernel(device, device->default_pipeline_cache,
+         anv_device_upload_kernel(device, device->internal_cache,
                                   MESA_SHADER_COMPUTE,
                                   &trampoline_key, sizeof(trampoline_key),
                                   tramp_data,
@@ -3108,6 +3098,11 @@ anv_device_init_rt_shaders(struct anv_device *device)
          return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
+   /* The cache already has a reference and it's not going anywhere so there
+    * is no need to hold a second reference.
+    */
+   anv_shader_bin_unref(device, device->rt_trampoline);
+
    struct brw_rt_trivial_return {
       char name[16];
       struct brw_bs_prog_key key;
@@ -3115,7 +3110,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
       .name = "rt-trivial-ret",
    };
    device->rt_trivial_return =
-      anv_device_search_for_kernel(device, device->default_pipeline_cache,
+      anv_device_search_for_kernel(device, device->internal_cache,
                                    &return_key, sizeof(return_key),
                                    &cache_hit);
    if (device->rt_trivial_return == NULL) {
@@ -3141,7 +3136,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
          brw_compile_bs(device->physical->compiler, tmp_ctx, &params);
 
       device->rt_trivial_return =
-         anv_device_upload_kernel(device, device->default_pipeline_cache,
+         anv_device_upload_kernel(device, device->internal_cache,
                                   MESA_SHADER_CALLABLE,
                                   &return_key, sizeof(return_key),
                                   return_data, return_prog_data.base.program_size,
@@ -3150,11 +3145,14 @@ anv_device_init_rt_shaders(struct anv_device *device)
 
       ralloc_free(tmp_ctx);
 
-      if (device->rt_trivial_return == NULL) {
-         anv_shader_bin_unref(device, device->rt_trampoline);
+      if (device->rt_trivial_return == NULL)
          return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-      }
    }
+
+   /* The cache already has a reference and it's not going anywhere so there
+    * is no need to hold a second reference.
+    */
+   anv_shader_bin_unref(device, device->rt_trivial_return);
 
    return VK_SUCCESS;
 }
@@ -3164,8 +3162,6 @@ anv_device_finish_rt_shaders(struct anv_device *device)
 {
    if (!device->vk.enabled_extensions.KHR_ray_tracing_pipeline)
       return;
-
-   anv_shader_bin_unref(device, device->rt_trampoline);
 }
 
 VkResult

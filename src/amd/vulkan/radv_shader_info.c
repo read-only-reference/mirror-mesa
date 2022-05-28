@@ -399,13 +399,13 @@ gather_info_output_decl(const nir_shader *nir, const nir_variable *var,
 static void
 gather_xfb_info(const nir_shader *nir, struct radv_shader_info *info)
 {
-   nir_xfb_info *xfb = nir_gather_xfb_info(nir, NULL);
    struct radv_streamout_info *so = &info->so;
 
-   if (!xfb)
+   if (!nir->xfb_info)
       return;
 
-   assert(xfb->output_count < MAX_SO_OUTPUTS);
+   const nir_xfb_info *xfb = nir->xfb_info;
+   assert(xfb->output_count <= MAX_SO_OUTPUTS);
    so->num_outputs = xfb->output_count;
 
    for (unsigned i = 0; i < xfb->output_count; i++) {
@@ -423,8 +423,6 @@ gather_xfb_info(const nir_shader *nir, struct radv_shader_info *info)
    for (unsigned i = 0; i < NIR_MAX_XFB_BUFFERS; i++) {
       so->strides[i] = xfb->buffers[i].stride / 4;
    }
-
-   ralloc_free(xfb);
 }
 
 static void
@@ -509,6 +507,12 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
       uint64_t per_vtx_mask =
          nir->info.outputs_written & ~nir->info.per_primitive_outputs & ~special_mask;
 
+      /* Mesh multivew is only lowered in ac_nir_lower_ngg, so we have to fake it here. */
+      if (nir->info.stage == MESA_SHADER_MESH && pipeline_key->has_multiview_view_index) {
+         per_prim_mask |= VARYING_BIT_LAYER;
+         info->uses_view_index = true;
+      }
+
       /* Per vertex outputs. */
       outinfo->writes_pointsize = per_vtx_mask & VARYING_BIT_PSIZ;
       outinfo->writes_viewport_index = per_vtx_mask & VARYING_BIT_VIEWPORT;
@@ -561,8 +565,6 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
          assign_outinfo_param(outinfo, VARYING_SLOT_LAYER, &total_param_exports);
       if (outinfo->writes_viewport_index_per_primitive)
          assign_outinfo_param(outinfo, VARYING_SLOT_VIEWPORT, &total_param_exports);
-      if (outinfo->export_prim_id_per_primitive)
-         assign_outinfo_param(outinfo, VARYING_SLOT_PRIMITIVE_ID, &total_param_exports);
 
       outinfo->prim_param_exports = total_param_exports - outinfo->param_exports;
    }
@@ -590,9 +592,25 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
                                         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_NUM_SUBGROUPS);
    switch (nir->info.stage) {
    case MESA_SHADER_COMPUTE:
+   case MESA_SHADER_TASK:
       for (int i = 0; i < 3; ++i)
          info->cs.block_size[i] = nir->info.workgroup_size[i];
-      info->cs.uses_ray_launch_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_RAY_LAUNCH_SIZE);
+      info->cs.uses_ray_launch_size = BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_RAY_LAUNCH_SIZE_ADDR_AMD);
+
+      /* Task shaders always need these for the I/O lowering even if
+       * the API shader doesn't actually use them.
+       */
+      if (nir->info.stage == MESA_SHADER_TASK) {
+         /* Needed to address the IB to read firstTask. */
+         info->vs.needs_draw_id |=
+            BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_WORKGROUP_ID);
+
+         /* Needed to address the task draw/payload rings. */
+         info->cs.uses_block_id[0] = true;
+
+         /* Needed for storing draw ready only on the 1st thread. */
+         info->cs.uses_local_invocation_idx = true;
+      }
       break;
    case MESA_SHADER_FRAGMENT:
       info->ps.can_discard = nir->info.fs.uses_discard;

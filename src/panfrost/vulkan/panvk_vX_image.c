@@ -97,7 +97,7 @@ panvk_per_arch(CreateImageView)(VkDevice _device,
    VK_FROM_HANDLE(panvk_image, image, pCreateInfo->image);
    struct panvk_image_view *view;
 
-   view = vk_image_view_create(&device->vk, pCreateInfo,
+   view = vk_image_view_create(&device->vk, false, pCreateInfo,
                                pAllocator, sizeof(*view));
    if (view == NULL)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -201,11 +201,11 @@ panvk_per_arch(CreateBufferView)(VkDevice _device,
    unsigned size = panvk_buffer_range(buffer, pCreateInfo->offset,
                                       pCreateInfo->range);
    unsigned blksz = util_format_get_blocksize(view->fmt);
-   unsigned width = size / blksz;
+   view->elems = size / blksz;
 
    assert(!(address & 63));
 
-   if (buffer->usage & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT) {
+   if (buffer->vk.usage & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT) {
       unsigned bo_size =
          PAN_ARCH <= 5 ? (pan_size(SURFACE) + pan_size(TEXTURE)) :
                          pan_size(SURFACE_WITH_STRIDE);
@@ -225,7 +225,7 @@ panvk_per_arch(CreateBufferView)(VkDevice _device,
       pan_pack(tex, TEXTURE, cfg) {
          cfg.dimension = MALI_TEXTURE_DIMENSION_1D;
          cfg.format = pdev->formats[view->fmt].hw;
-         cfg.width = width;
+         cfg.width = view->elems;
          cfg.depth = cfg.height = 1;
          cfg.swizzle = PAN_V6_SWIZZLE(R, G, B, A);
          cfg.texel_ordering = MALI_TEXTURE_LAYOUT_LINEAR;
@@ -240,22 +240,22 @@ panvk_per_arch(CreateBufferView)(VkDevice _device,
       }
    }
 
-   if (buffer->usage & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) {
+   if (buffer->vk.usage & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) {
       uint8_t *attrib_buf = (uint8_t *)view->descs.img_attrib_buf;
 
       pan_pack(attrib_buf, ATTRIBUTE_BUFFER, cfg) {
          cfg.type = MALI_ATTRIBUTE_TYPE_3D_LINEAR;
          cfg.pointer = address;
          cfg.stride = blksz;
-         cfg.size = width * blksz;
+         cfg.size = view->elems * blksz;
       }
 
       attrib_buf += pan_size(ATTRIBUTE_BUFFER);
       pan_pack(attrib_buf, ATTRIBUTE_BUFFER_CONTINUATION_3D, cfg) {
-         cfg.s_dimension = width;
+         cfg.s_dimension = view->elems;
          cfg.t_dimension = 1;
          cfg.r_dimension = 1;
-         cfg.row_stride = width * blksz;
+         cfg.row_stride = view->elems * blksz;
       }
    }
 

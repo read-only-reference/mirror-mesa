@@ -3026,7 +3026,9 @@ iris_set_global_binding(struct pipe_context *ctx,
          util_range_add(&res->base.b, &res->valid_buffer_range,
                         0, res->base.b.width0);
 
-         uint64_t addr = res->bo->address + res->offset;
+         uint64_t addr = 0;
+         memcpy(&addr, handles[i], sizeof(addr));
+         addr += res->bo->address + res->offset;
          memcpy(handles[i], &addr, sizeof(addr));
       } else {
          pipe_resource_reference(&ice->state.global_bindings[start_slot + i],
@@ -4652,7 +4654,7 @@ iris_store_fs_state(const struct intel_device_info *devinfo,
    uint32_t *psx_state = ps_state + GENX(3DSTATE_PS_length);
 
    iris_pack_command(GENX(3DSTATE_PS), ps_state, ps) {
-      ps.VectorMaskEnable = true;
+      ps.VectorMaskEnable = wm_prog_data->uses_vmask;
       ps.BindingTableEntryCount = shader->bt.size_bytes / 4;
       ps.FloatingPointMode = prog_data->use_alt_mode;
       ps.MaximumNumberofThreadsPerPSD =
@@ -4720,6 +4722,7 @@ iris_store_cs_state(const struct intel_device_info *devinfo,
       assert(cs_prog_data->push.cross_thread.regs == 0);
 #endif
       desc.BarrierEnable = cs_prog_data->uses_barrier;
+      desc.BindingTableEntryCount = MIN2(shader->bt.size_bytes / 4, 31);
 #if GFX_VER >= 12
       /* TODO: Check if we are missing workarounds and enable mid-thread
        * preemption.
@@ -6064,7 +6067,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
    }
 
    if (dirty & IRIS_DIRTY_RENDER_BUFFER)
-      trace_framebuffer_state(&batch->trace, batch, &ice->state.framebuffer);
+      trace_framebuffer_state(&batch->trace, NULL, &ice->state.framebuffer);
 
    for (int stage = 0; stage <= MESA_SHADER_FRAGMENT; stage++) {
       if (stage_dirty & (IRIS_STAGE_DIRTY_BINDINGS_VS << stage)) {
@@ -6857,7 +6860,7 @@ iris_upload_render_state(struct iris_context *ice,
 {
    bool use_predicate = ice->state.predicate == IRIS_PREDICATE_STATE_USE_BIT;
 
-   trace_intel_begin_draw(&batch->trace, batch);
+   trace_intel_begin_draw(&batch->trace);
 
    if (ice->state.dirty & IRIS_DIRTY_VERTEX_BUFFER_FLUSHES)
       flush_vbos(ice, batch);
@@ -7071,7 +7074,7 @@ iris_upload_render_state(struct iris_context *ice,
 
    iris_batch_sync_region_end(batch);
 
-   trace_intel_end_draw(&batch->trace, batch, 0);
+   trace_intel_end_draw(&batch->trace, 0);
 }
 
 static void
@@ -7116,7 +7119,7 @@ iris_upload_compute_walker(struct iris_context *ice,
    const struct brw_cs_dispatch_info dispatch =
       brw_cs_get_dispatch_info(devinfo, cs_prog_data, grid->block);
 
-   trace_intel_begin_compute(&batch->trace, batch);
+   trace_intel_begin_compute(&batch->trace);
 
    if (stage_dirty & IRIS_STAGE_DIRTY_CS) {
       iris_emit_cmd(batch, GENX(CFE_STATE), cfe) {
@@ -7151,12 +7154,13 @@ iris_upload_compute_walker(struct iris_context *ice,
          .NumberOfBarriers = cs_prog_data->uses_barrier,
          .SamplerStatePointer = shs->sampler_table.offset,
          .BindingTablePointer = binder->bt_offset[MESA_SHADER_COMPUTE],
+         .BindingTableEntryCount = MIN2(shader->bt.size_bytes / 4, 31),
       };
 
       assert(brw_cs_push_const_total_size(cs_prog_data, dispatch.threads) == 0);
    }
 
-   trace_intel_end_compute(&batch->trace, batch, grid->grid[0], grid->grid[1], grid->grid[2]);
+   trace_intel_end_compute(&batch->trace, grid->grid[0], grid->grid[1], grid->grid[2]);
 }
 
 #else /* #if GFX_VERx10 >= 125 */
@@ -7180,7 +7184,7 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
    const struct brw_cs_dispatch_info dispatch =
       brw_cs_get_dispatch_info(devinfo, cs_prog_data, grid->block);
 
-   trace_intel_begin_compute(&batch->trace, batch);
+   trace_intel_begin_compute(&batch->trace);
 
    if ((stage_dirty & IRIS_STAGE_DIRTY_CS) ||
        cs_prog_data->local_size[0] == 0 /* Variable local group size */) {
@@ -7308,7 +7312,7 @@ iris_upload_gpgpu_walker(struct iris_context *ice,
 
    iris_emit_cmd(batch, GENX(MEDIA_STATE_FLUSH), msf);
 
-   trace_intel_end_compute(&batch->trace, batch, grid->grid[0], grid->grid[1], grid->grid[2]);
+   trace_intel_end_compute(&batch->trace, grid->grid[0], grid->grid[1], grid->grid[2]);
 }
 
 #endif /* #if GFX_VERx10 >= 125 */
@@ -7806,18 +7810,6 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
                                  0, NULL, 0, 0);
    }
 
-   /* Wa_1409226450, Wait for EU to be idle before pipe control which
-    * invalidates the instruction cache
-    */
-   if (GFX_VER == 12 && (flags & PIPE_CONTROL_INSTRUCTION_INVALIDATE)) {
-      iris_emit_raw_pipe_control(batch,
-                                 "workaround: CS stall before instruction "
-                                 "cache invalidate",
-                                 PIPE_CONTROL_CS_STALL |
-                                 PIPE_CONTROL_STALL_AT_SCOREBOARD, bo, offset,
-                                 imm);
-   }
-
    if (GFX_VER == 9 && IS_COMPUTE_PIPELINE(batch) && post_sync_flags) {
       /* Project: SKL / Argument: LRI Post Sync Operation [23]
        *
@@ -8139,7 +8131,7 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
       (flags & (PIPE_CONTROL_CACHE_FLUSH_BITS | PIPE_CONTROL_CACHE_INVALIDATE_BITS)) != 0;
 
    if (trace_pc)
-      trace_intel_begin_stall(&batch->trace, batch);
+      trace_intel_begin_stall(&batch->trace);
 
    iris_emit_cmd(batch, GENX(PIPE_CONTROL), pc) {
 #if GFX_VERx10 >= 125
@@ -8187,7 +8179,7 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
    }
 
    if (trace_pc) {
-      trace_intel_end_stall(&batch->trace, batch, flags,
+      trace_intel_end_stall(&batch->trace, flags,
                             iris_utrace_pipe_flush_bit_to_ds_stall_flag,
                             reason);
    }

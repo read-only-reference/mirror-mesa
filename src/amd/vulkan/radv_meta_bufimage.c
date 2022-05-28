@@ -60,7 +60,7 @@ build_nir_itob_compute_shader(struct radv_device *dev, bool is_3d)
    tex->sampler_dim = dim;
    tex->op = nir_texop_txf;
    tex->src[0].src_type = nir_tex_src_coord;
-   tex->src[0].src = nir_src_for_ssa(nir_channels(&b, img_coord, is_3d ? 0x7 : 0x3));
+   tex->src[0].src = nir_src_for_ssa(nir_trim_vector(&b, img_coord, 2 + is_3d));
    tex->src[1].src_type = nir_tex_src_lod;
    tex->src[1].src = nir_src_for_ssa(nir_imm_int(&b, 0));
    tex->src[2].src_type = nir_tex_src_texture_deref;
@@ -570,7 +570,7 @@ build_nir_itoi_compute_shader(struct radv_device *dev, bool is_3d, int samples)
       tex->sampler_dim = dim;
       tex->op = is_multisampled ? nir_texop_txf_ms : nir_texop_txf;
       tex->src[0].src_type = nir_tex_src_coord;
-      tex->src[0].src = nir_src_for_ssa(nir_channels(&b, src_coord, is_3d ? 0x7 : 0x3));
+      tex->src[0].src = nir_src_for_ssa(nir_trim_vector(&b, src_coord, 2 + is_3d));
       tex->src[1].src_type = nir_tex_src_lod;
       tex->src[1].src = nir_src_for_ssa(nir_imm_int(&b, 0));
       tex->src[2].src_type = nir_tex_src_texture_deref;
@@ -1237,7 +1237,7 @@ create_iview(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_blit2d_surf *s
                                                 .baseArrayLayer = surf->layer,
                                                 .layerCount = 1},
                         },
-                        &(struct radv_image_view_extra_create_info){
+                        0, &(struct radv_image_view_extra_create_info){
                            .disable_compression = surf->disable_compression,
                         });
 }
@@ -1324,7 +1324,7 @@ get_image_stride_for_r32g32b32(struct radv_cmd_buffer *cmd_buffer,
 {
    unsigned stride;
 
-if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
+   if (cmd_buffer->device->physical_device->rad_info.gfx_level >= GFX9) {
       stride = surf->image->planes[0].surface.u.gfx9.surf_pitch;
    } else {
       stride = surf->image->planes[0].surface.u.legacy.level[0].nblk_x * 3;
@@ -1380,7 +1380,7 @@ radv_meta_image_to_buffer(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_b
    create_bview(cmd_buffer, dst->buffer, dst->offset, dst->format, &dst_view);
    itob_bind_descriptors(cmd_buffer, &src_view, &dst_view);
 
-   if (src->image->type == VK_IMAGE_TYPE_3D)
+   if (src->image->vk.image_type == VK_IMAGE_TYPE_3D)
       pipeline = cmd_buffer->device->meta_state.itob.pipeline_3d;
 
    radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -1519,9 +1519,9 @@ radv_meta_buffer_to_image_cs(struct radv_cmd_buffer *cmd_buffer,
    struct radv_buffer_view src_view;
    struct radv_image_view dst_view;
 
-   if (dst->image->vk_format == VK_FORMAT_R32G32B32_UINT ||
-       dst->image->vk_format == VK_FORMAT_R32G32B32_SINT ||
-       dst->image->vk_format == VK_FORMAT_R32G32B32_SFLOAT) {
+   if (dst->image->vk.format == VK_FORMAT_R32G32B32_UINT ||
+       dst->image->vk.format == VK_FORMAT_R32G32B32_SINT ||
+       dst->image->vk.format == VK_FORMAT_R32G32B32_SFLOAT) {
       radv_meta_buffer_to_image_cs_r32g32b32(cmd_buffer, src, dst, num_rects, rects);
       return;
    }
@@ -1530,7 +1530,7 @@ radv_meta_buffer_to_image_cs(struct radv_cmd_buffer *cmd_buffer,
    create_iview(cmd_buffer, dst, &dst_view, VK_FORMAT_UNDEFINED, dst->aspect_mask);
    btoi_bind_descriptors(cmd_buffer, &src_view, &dst_view);
 
-   if (dst->image->type == VK_IMAGE_TYPE_3D)
+   if (dst->image->vk.image_type == VK_IMAGE_TYPE_3D)
       pipeline = cmd_buffer->device->meta_state.btoi.pipeline_3d;
    radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,
                         pipeline);
@@ -1691,9 +1691,9 @@ radv_meta_image_to_image_cs(struct radv_cmd_buffer *cmd_buffer, struct radv_meta
       unsigned aspect_mask = 1u << i;
       VkFormat depth_format = 0;
       if (aspect_mask == VK_IMAGE_ASPECT_STENCIL_BIT)
-         depth_format = vk_format_stencil_only(dst->image->vk_format);
+         depth_format = vk_format_stencil_only(dst->image->vk.format);
       else if (aspect_mask == VK_IMAGE_ASPECT_DEPTH_BIT)
-         depth_format = vk_format_depth_only(dst->image->vk_format);
+         depth_format = vk_format_depth_only(dst->image->vk.format);
 
       create_iview(cmd_buffer, src, &src_view, depth_format, aspect_mask);
       create_iview(cmd_buffer, dst, &dst_view, depth_format, aspect_mask);
@@ -1701,7 +1701,8 @@ radv_meta_image_to_image_cs(struct radv_cmd_buffer *cmd_buffer, struct radv_meta
       itoi_bind_descriptors(cmd_buffer, &src_view, &dst_view);
 
       VkPipeline pipeline = cmd_buffer->device->meta_state.itoi.pipeline[samples_log2];
-      if (src->image->type == VK_IMAGE_TYPE_3D || dst->image->type == VK_IMAGE_TYPE_3D)
+      if (src->image->vk.image_type == VK_IMAGE_TYPE_3D ||
+          dst->image->vk.image_type == VK_IMAGE_TYPE_3D)
          pipeline = cmd_buffer->device->meta_state.itoi.pipeline_3d;
       radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,
                            pipeline);
@@ -1828,7 +1829,7 @@ radv_meta_clear_image_cs(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_bl
    cleari_bind_descriptors(cmd_buffer, &dst_iview);
 
    VkPipeline pipeline = cmd_buffer->device->meta_state.cleari.pipeline[samples_log2];
-   if (dst->image->type == VK_IMAGE_TYPE_3D)
+   if (dst->image->vk.image_type == VK_IMAGE_TYPE_3D)
       pipeline = cmd_buffer->device->meta_state.cleari.pipeline_3d;
 
    radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer), VK_PIPELINE_BIND_POINT_COMPUTE,

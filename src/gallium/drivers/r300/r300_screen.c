@@ -176,8 +176,6 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_VERTEX_SHADER_SATURATE:
             return is_r500 ? 1 : 0;
 
-        case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
-            return 0;
         case PIPE_CAP_SHAREABLE_SHADERS:
             return 0;
 
@@ -318,9 +316,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-            return 0;
         case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-            return 32;
+            return 0;
         default:
             break;
         }
@@ -411,9 +408,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-            return 0;
         case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-            return 32;
+            return 0;
         default:
             break;
         }
@@ -519,6 +515,7 @@ static const nir_shader_compiler_options r500_vs_compiler_options = {
    .max_unroll_iterations = 32,
 
    .use_interpolated_input_intrinsics = true,
+   .no_integers = true,
 };
 
 static const nir_shader_compiler_options r500_fs_compiler_options = {
@@ -547,6 +544,7 @@ static const nir_shader_compiler_options r500_fs_compiler_options = {
    .max_unroll_iterations = 32,
 
    .use_interpolated_input_intrinsics = true,
+   .no_integers = true,
 };
 
 static const nir_shader_compiler_options r300_vs_compiler_options = {
@@ -574,6 +572,7 @@ static const nir_shader_compiler_options r300_vs_compiler_options = {
    .max_unroll_iterations = 32,
 
    .use_interpolated_input_intrinsics = true,
+   .no_integers = true,
 };
 
 static const nir_shader_compiler_options r300_fs_compiler_options = {
@@ -601,6 +600,7 @@ static const nir_shader_compiler_options r300_fs_compiler_options = {
    .max_unroll_iterations = 64,
 
    .use_interpolated_input_intrinsics = true,
+   .no_integers = true,
 };
 
 static const void *

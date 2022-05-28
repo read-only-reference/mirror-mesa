@@ -290,8 +290,10 @@ void st_init_limits(struct pipe_screen *screen,
          pc->MaxAtomicBuffers = pc->MaxShaderStorageBlocks / 2;
          pc->MaxShaderStorageBlocks -= pc->MaxAtomicBuffers;
       }
-      pc->MaxImageUniforms = screen->get_shader_param(
-            screen, sh, PIPE_SHADER_CAP_MAX_SHADER_IMAGES);
+      pc->MaxImageUniforms =
+         _min(screen->get_shader_param(screen, sh,
+                                       PIPE_SHADER_CAP_MAX_SHADER_IMAGES),
+              MAX_IMAGE_UNIFORMS);
 
       /* Gallium doesn't really care about local vs. env parameters so use the
        * same limits.
@@ -387,8 +389,6 @@ void st_init_limits(struct pipe_screen *screen,
       c->Program[MESA_SHADER_GEOMETRY].MaxUniformComponents +
       c->Program[MESA_SHADER_FRAGMENT].MaxUniformComponents;
 
-   c->GLSLOptimizeConservatively =
-      screen->get_param(screen, PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY);
    c->GLSLLowerConstArrays =
       screen->get_param(screen, PIPE_CAP_PREFER_IMM_ARRAYS_AS_CONSTBUF);
    c->GLSLTessLevelsAsInputs =
@@ -830,10 +830,16 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(EXT_memory_object),                PIPE_CAP_MEMOBJ                           },
 #ifndef _WIN32
       { o(EXT_memory_object_fd),             PIPE_CAP_MEMOBJ                           },
+#else
+      { o(EXT_memory_object_win32),          PIPE_CAP_MEMOBJ                           },
 #endif
       { o(EXT_multisampled_render_to_texture), PIPE_CAP_SURFACE_SAMPLE_COUNT           },
       { o(EXT_semaphore),                    PIPE_CAP_FENCE_SIGNAL                     },
+#ifndef _WIN32
       { o(EXT_semaphore_fd),                 PIPE_CAP_FENCE_SIGNAL                     },
+#else
+      { o(EXT_semaphore_win32),              PIPE_CAP_FENCE_SIGNAL                     },
+#endif
       { o(EXT_shader_samples_identical),     PIPE_CAP_SHADER_SAMPLES_IDENTICAL         },
       { o(EXT_texture_array),                PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS         },
       { o(EXT_texture_filter_anisotropic),   PIPE_CAP_ANISOTROPIC_FILTER               },

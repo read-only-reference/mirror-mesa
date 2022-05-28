@@ -1826,13 +1826,6 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
    int start_offset = p->next_insn_offset;
 
-   /* `send_count` explicitly does not include spills or fills, as we'd
-    * like to use it as a metric for intentional memory access or other
-    * shared function use.  Otherwise, subtle changes to scheduling or
-    * register allocation could cause it to fluctuate wildly - and that
-    * effect is already counted in spill/fill counts.
-    */
-   int spill_count = 0, fill_count = 0;
    int loop_count = 0, send_count = 0, nop_count = 0;
    bool is_accum_used = false;
 
@@ -2265,15 +2258,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       case SHADER_OPCODE_SEND:
          generate_send(inst, dst, src[0], src[1], src[2],
                        inst->ex_mlen > 0 ? src[3] : brw_null_reg());
-         if ((inst->desc & 0xff) == BRW_BTI_STATELESS ||
-             (inst->desc & 0xff) == GFX8_BTI_STATELESS_NON_COHERENT) {
-            if (inst->size_written)
-               fill_count++;
-            else
-               spill_count++;
-         } else {
-            send_count++;
-         }
+         send_count++;
          break;
 
       case SHADER_OPCODE_GET_BUFFER_SIZE:
@@ -2306,17 +2291,17 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
       case SHADER_OPCODE_GFX4_SCRATCH_WRITE:
 	 generate_scratch_write(inst, src[0]);
-         spill_count++;
+         send_count++;
 	 break;
 
       case SHADER_OPCODE_GFX4_SCRATCH_READ:
 	 generate_scratch_read(inst, dst);
-         fill_count++;
+         send_count++;
 	 break;
 
       case SHADER_OPCODE_GFX7_SCRATCH_READ:
 	 generate_scratch_read_gfx7(inst, dst);
-         fill_count++;
+         send_count++;
 	 break;
 
       case SHADER_OPCODE_SCRATCH_HEADER:
@@ -2426,21 +2411,27 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
          break;
 
       case SHADER_OPCODE_FIND_LIVE_CHANNEL: {
+         const bool uses_vmask =
+            stage == MESA_SHADER_FRAGMENT &&
+            brw_wm_prog_data(this->prog_data)->uses_vmask;
          const struct brw_reg mask =
             brw_stage_has_packed_dispatch(devinfo, stage,
                                           prog_data) ? brw_imm_ud(~0u) :
-            stage == MESA_SHADER_FRAGMENT ? brw_vmask_reg() :
-            brw_dmask_reg();
+            uses_vmask ? brw_vmask_reg() : brw_dmask_reg();
 
          brw_find_live_channel(p, dst, mask, false);
          break;
       }
       case SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL: {
+         const bool uses_vmask =
+            stage == MESA_SHADER_FRAGMENT &&
+            brw_wm_prog_data(this->prog_data)->uses_vmask;
+
          /* ce0 doesn't consider the thread dispatch mask, so if we want
           * to find the true last enabled channel, we need to apply that too.
           */
          const struct brw_reg mask =
-            stage == MESA_SHADER_FRAGMENT ? brw_vmask_reg() : brw_dmask_reg();
+            uses_vmask ? brw_vmask_reg() : brw_dmask_reg();
 
          brw_find_live_channel(p, dst, mask, true);
          break;
@@ -2630,6 +2621,15 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
    /* end of program sentinel */
    disasm_new_inst_group(disasm_info, p->next_insn_offset);
 
+   /* `send_count` explicitly does not include spills or fills, as we'd
+    * like to use it as a metric for intentional memory access or other
+    * shared function use.  Otherwise, subtle changes to scheduling or
+    * register allocation could cause it to fluctuate wildly - and that
+    * effect is already counted in spill/fill counts.
+    */
+   send_count -= shader_stats.spill_count;
+   send_count -= shader_stats.fill_count;
+
 #ifndef NDEBUG
    bool validated =
 #else
@@ -2661,7 +2661,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
               shader_name, sha1buf,
               dispatch_width, before_size / 16,
               loop_count, perf.latency,
-              spill_count, fill_count, send_count,
+              shader_stats.spill_count,
+              shader_stats.fill_count,
+              send_count,
               shader_stats.scheduler_mode,
               shader_stats.promoted_constants,
               before_size, after_size,
@@ -2693,7 +2695,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
                         _mesa_shader_stage_to_abbrev(stage),
                         dispatch_width, before_size / 16 - nop_count,
                         loop_count, perf.latency,
-                        spill_count, fill_count, send_count,
+                        shader_stats.spill_count,
+                        shader_stats.fill_count,
+                        send_count,
                         shader_stats.scheduler_mode,
                         shader_stats.promoted_constants,
                         before_size, after_size);
@@ -2703,8 +2707,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       stats->sends = send_count;
       stats->loops = loop_count;
       stats->cycles = perf.latency;
-      stats->spills = spill_count;
-      stats->fills = fill_count;
+      stats->spills = shader_stats.spill_count;
+      stats->fills = shader_stats.fill_count;
    }
 
    return start_offset;

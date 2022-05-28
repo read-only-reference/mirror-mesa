@@ -26,17 +26,21 @@
 #include "radv_acceleration_structure.h"
 
 bool
-radv_enable_rt(const struct radv_physical_device *pdevice)
+radv_enable_rt(const struct radv_physical_device *pdevice, bool rt_pipelines)
 {
-   return (pdevice->instance->perftest_flags & RADV_PERFTEST_RT) && !pdevice->use_llvm;
+   if ((pdevice->rad_info.gfx_level < GFX10_3 && !radv_emulate_rt(pdevice)) || pdevice->use_llvm)
+      return false;
+
+   if (rt_pipelines)
+      return pdevice->instance->perftest_flags & RADV_PERFTEST_RT;
+
+   return true;
 }
 
 bool
 radv_emulate_rt(const struct radv_physical_device *pdevice)
 {
-   assert(radv_enable_rt(pdevice));
-   return pdevice->rad_info.chip_class < GFX10_3 ||
-          (pdevice->instance->perftest_flags & RADV_PERFTEST_FORCE_EMULATE_RT);
+   return pdevice->instance->perftest_flags & RADV_PERFTEST_EMULATE_RT;
 }
 
 void
@@ -348,7 +352,7 @@ build_node_to_addr(struct radv_device *device, nir_builder *b, nir_ssa_def *node
    addr = nir_ishl_imm(b, addr, 3);
    /* Assumes everything is in the top half of address space, which is true in
     * GFX9+ for now. */
-   return device->physical_device->rad_info.chip_class >= GFX9
+   return device->physical_device->rad_info.gfx_level >= GFX9
              ? nir_ior_imm(b, addr, 0xffffull << 48)
              : addr;
 }
