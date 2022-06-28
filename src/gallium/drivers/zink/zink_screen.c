@@ -531,11 +531,13 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 0;
 
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-      /* This is also broken on the other AMD drivers for old HW, but
-       * there's no obvious way to test for that.
+      /* assume that if drivers don't implement this extension they either:
+       * - don't support custom border colors
+       * - handle things correctly
+       * - hate border color accuracy
        */
-      if (screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_RADV ||
-          screen->info.driver_props.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY)
+      if (screen->info.have_EXT_border_color_swizzle &&
+          !screen->info.border_swizzle_feats.borderColorSwizzleFromImage)
          return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50;
       return 0;
 
@@ -548,13 +550,15 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
-   case PIPE_CAP_VERTEX_SHADER_SATURATE:
       return 1;
 
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
       return screen->info.feats.features.independentBlend;
+
+   case PIPE_CAP_DITHERING:
+      return 0;
 
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
       return screen->info.have_EXT_transform_feedback ? screen->info.tf_props.maxTransformFeedbackBuffers : 0;
@@ -611,9 +615,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
 
    case PIPE_CAP_BINDLESS_TEXTURE:
-      return screen->info.have_EXT_descriptor_indexing &&
-             /* push, 4 types, bindless */
-             screen->info.props.limits.maxBoundDescriptorSets >= 6;
+      return screen->info.have_EXT_descriptor_indexing;
 
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
       return screen->info.props.limits.minTexelBufferOffsetAlignment;
@@ -621,6 +623,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_TRANSFER_MODES: {
       enum pipe_texture_transfer_mode mode = PIPE_TEXTURE_TRANSFER_BLIT;
       if (!screen->is_cpu &&
+          /* this needs substantial perf tuning */
+          screen->info.driver_props.driverID != VK_DRIVER_ID_MESA_TURNIP &&
           screen->info.have_KHR_8bit_storage &&
           screen->info.have_KHR_16bit_storage &&
           screen->info.have_KHR_shader_float16_int8)
@@ -628,7 +632,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return mode;
    }
 
-   case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
+   case PIPE_CAP_MAX_TEXEL_BUFFER_ELEMENTS_UINT:
       return MIN2(get_smallest_buffer_heap(screen),
                   screen->info.props.limits.maxTexelBufferElements);
 
@@ -672,7 +676,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return screen->info.props.deviceID;
 
    case PIPE_CAP_ACCELERATED:
-      return 1;
+      return !screen->is_cpu;
    case PIPE_CAP_VIDEO_MEMORY:
       return get_video_mem(screen) >> 20;
    case PIPE_CAP_UMA:
@@ -736,7 +740,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       /* gallium handles this automatically */
       return 0;
 
-   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE_UINT:
       /* 1<<27 is required by VK spec */
       assert(screen->info.props.limits.maxStorageBufferRange >= 1 << 27);
       /* but Gallium can't handle values that are too big, so clamp to VK spec minimum */
@@ -950,7 +954,7 @@ zink_get_shader_param(struct pipe_screen *pscreen,
       return MIN2(max, 64); // prevent overflowing struct shader_info::outputs_read/written
    }
 
-   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
       /* At least 16384 is guaranteed by VK spec */
       assert(screen->info.props.limits.maxUniformBufferRange >= 16384);
       /* but Gallium can't handle values that are too big */
@@ -1011,9 +1015,6 @@ zink_get_shader_param(struct pipe_screen *pscreen,
 
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       return 0; /* no idea */
-
-   case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
-      return 0;
 
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
       switch (shader) {
@@ -1263,8 +1264,9 @@ zink_destroy_screen(struct pipe_screen *pscreen)
 
    if (screen->sem)
       VKSCR(DestroySemaphore)(screen->dev, screen->sem, NULL);
-   if (screen->prev_sem)
-      VKSCR(DestroySemaphore)(screen->dev, screen->prev_sem, NULL);
+
+   if (screen->fence)
+      VKSCR(DestroyFence)(screen->dev, screen->fence, NULL);
 
    if (screen->threaded)
       util_queue_destroy(&screen->flush_queue);
@@ -1275,6 +1277,8 @@ zink_destroy_screen(struct pipe_screen *pscreen)
    util_idalloc_mt_fini(&screen->buffer_ids);
 
    util_dl_close(screen->loader_lib);
+   if (screen->drm_fd != -1)
+      close(screen->drm_fd);
 
    slab_destroy_parent(&screen->transfer_pool);
    ralloc_free(screen);
@@ -1372,14 +1376,22 @@ update_queue_props(struct zink_screen *screen)
    VkQueueFamilyProperties *props = malloc(sizeof(*props) * num_queues);
    VKSCR(GetPhysicalDeviceQueueFamilyProperties)(screen->pdev, &num_queues, props);
 
+   bool found_gfx = false;
+   uint32_t sparse_only = UINT32_MAX;
+   screen->sparse_queue = UINT32_MAX;
    for (uint32_t i = 0; i < num_queues; i++) {
-      if (props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+      if (!found_gfx && (props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
          screen->gfx_queue = i;
          screen->max_queues = props[i].queueCount;
          screen->timestamp_valid_bits = props[i].timestampValidBits;
-         break;
-      }
+         found_gfx = true;
+         if (props[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT)
+            screen->sparse_queue = i;
+      } else if (props[i].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT)
+         sparse_only = i;
    }
+   if (screen->sparse_queue == UINT32_MAX)
+      screen->sparse_queue = sparse_only;
    free(props);
 }
 
@@ -1388,10 +1400,12 @@ init_queue(struct zink_screen *screen)
 {
    simple_mtx_init(&screen->queue_lock, mtx_plain);
    VKSCR(GetDeviceQueue)(screen->dev, screen->gfx_queue, 0, &screen->queue);
-   if (screen->threaded && screen->max_queues > 1)
-      VKSCR(GetDeviceQueue)(screen->dev, screen->gfx_queue, 1, &screen->thread_queue);
-   else
-      screen->thread_queue = screen->queue;
+   if (screen->sparse_queue != UINT32_MAX) {
+      if (screen->sparse_queue != screen->gfx_queue)
+         VKSCR(GetDeviceQueue)(screen->dev, screen->sparse_queue, 0, &screen->queue_sparse);
+      else
+         screen->queue_sparse = screen->queue;
+   }
 }
 
 static void
@@ -1408,7 +1422,7 @@ zink_flush_frontbuffer(struct pipe_screen *pscreen,
 
    /* if the surface has never been acquired, there's nothing to present,
     * so this is a no-op */
-   if (!res->obj->acquired && res->obj->last_dt_idx == UINT32_MAX)
+   if (!zink_is_swapchain(res) || (!zink_kopper_acquired(res->obj->dt, res->obj->dt_idx) && res->obj->last_dt_idx == UINT32_MAX))
       return;
 
    /* need to get the actual zink_context, not the threaded context */
@@ -1416,15 +1430,16 @@ zink_flush_frontbuffer(struct pipe_screen *pscreen,
       pctx = threaded_context_unwrap_sync(pctx);
    pctx = trace_get_possibly_threaded_context(pctx);
    ctx = zink_context(pctx);
-   if (ctx->batch.swapchain) {
-      pctx->flush(pctx, NULL, 0);
+   if (ctx->batch.swapchain || ctx->needs_present) {
+      ctx->batch.has_work = true;
+      pctx->flush(pctx, NULL, PIPE_FLUSH_END_OF_FRAME);
       if (ctx->last_fence && screen->threaded) {
          struct zink_batch_state *bs = zink_batch_state(ctx->last_fence);
          util_queue_fence_wait(&bs->flush_completed);
       }
    }
 
-   if (res->obj->acquired)
+   if (zink_kopper_acquired(res->obj->dt, res->obj->dt_idx))
       zink_kopper_present_queue(screen, res);
    else {
       assert(res->obj->last_dt_idx != UINT32_MAX);
@@ -1740,29 +1755,16 @@ zink_screen_init_semaphore(struct zink_screen *screen)
 {
    VkSemaphoreCreateInfo sci = {0};
    VkSemaphoreTypeCreateInfo tci = {0};
-   VkSemaphore sem;
    sci.pNext = &tci;
    sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
    tci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
    tci.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
 
-   if (VKSCR(CreateSemaphore)(screen->dev, &sci, NULL, &sem) == VK_SUCCESS) {
-      /* semaphore signal values can never decrease,
-       * so we need a new semaphore anytime we overflow
-       */
-      if (screen->prev_sem)
-         VKSCR(DestroySemaphore)(screen->dev, screen->prev_sem, NULL);
-      screen->prev_sem = screen->sem;
-      screen->sem = sem;
-      return true;
-   } else {
-      mesa_loge("ZINK: vkCreateSemaphore failed");
-   }
-   return false;
+   return VKSCR(CreateSemaphore)(screen->dev, &sci, NULL, &screen->sem) == VK_SUCCESS;
 }
 
 bool
-zink_screen_timeline_wait(struct zink_screen *screen, uint32_t batch_id, uint64_t timeout)
+zink_screen_timeline_wait(struct zink_screen *screen, uint64_t batch_id, uint64_t timeout)
 {
    VkSemaphoreWaitInfo wi = {0};
 
@@ -1771,10 +1773,8 @@ zink_screen_timeline_wait(struct zink_screen *screen, uint32_t batch_id, uint64_
 
    wi.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
    wi.semaphoreCount = 1;
-   /* handle batch_id overflow */
-   wi.pSemaphores = batch_id > screen->curr_batch ? &screen->prev_sem : &screen->sem;
-   uint64_t batch_id64 = batch_id;
-   wi.pValues = &batch_id64;
+   wi.pSemaphores = &screen->sem;
+   wi.pValues = &batch_id;
    bool success = false;
    if (screen->device_lost)
       return true;
@@ -2066,14 +2066,29 @@ zink_get_sample_pixel_grid(struct pipe_screen *pscreen, unsigned sample_count,
 static void
 init_driver_workarounds(struct zink_screen *screen)
 {
+   /* enable implicit sync for all non-mesa drivers */
+   screen->driver_workarounds.implicit_sync = true;
+   switch (screen->info.driver_props.driverID) {
+   case VK_DRIVER_ID_MESA_RADV:
+   case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
+   case VK_DRIVER_ID_MESA_LLVMPIPE:
+   case VK_DRIVER_ID_MESA_TURNIP:
+   case VK_DRIVER_ID_MESA_V3DV:
+   case VK_DRIVER_ID_MESA_PANVK:
+   case VK_DRIVER_ID_MESA_VENUS:
+      screen->driver_workarounds.implicit_sync = false;
+      break;
+   default:
+      break;
+   }
    screen->driver_workarounds.color_write_missing = !screen->info.have_EXT_color_write_enable;
    screen->driver_workarounds.depth_clip_control_missing = !screen->info.have_EXT_depth_clip_control;
    if (screen->info.driver_props.driverID == VK_DRIVER_ID_AMD_PROPRIETARY)
       /* this completely breaks xfb somehow */
       screen->info.have_EXT_extended_dynamic_state2 = false;
-   if (screen->info.driver_props.driverID == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA) {
-      /* #6186 */
-      screen->driver_workarounds.depth_clip_control_missing = true;
+   if (screen->info.driver_props.driverID == VK_DRIVER_ID_MESA_TURNIP) {
+      /* #6602 */
+      screen->info.have_EXT_primitives_generated_query = false;
    }
 }
 
@@ -2304,6 +2319,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
          else
             screen->heap_map[i] = screen->heap_map[ZINK_HEAP_DEVICE_LOCAL];
       }
+      screen->heap_flags[i] = screen->info.mem_props.memoryTypes[screen->heap_map[i]].propertyFlags;
    }
    {
       unsigned vis_vram = screen->heap_map[ZINK_HEAP_DEVICE_LOCAL_VISIBLE];
@@ -2348,6 +2364,9 @@ struct pipe_screen *
 zink_create_screen(struct sw_winsys *winsys, const struct pipe_screen_config *config)
 {
    struct zink_screen *ret = zink_internal_create_screen(config);
+   if (ret) {
+      ret->drm_fd = -1;
+   }
 
    return &ret->base;
 }
@@ -2357,6 +2376,8 @@ zink_drm_create_screen(int fd, const struct pipe_screen_config *config)
 {
    struct zink_screen *ret = zink_internal_create_screen(config);
 
+   if (ret)
+      ret->drm_fd = os_dupfd_cloexec(fd);
    if (ret && !ret->info.have_KHR_external_memory_fd) {
       debug_printf("ZINK: KHR_external_memory_fd required!\n");
       zink_destroy_screen(&ret->base);

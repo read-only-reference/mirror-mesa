@@ -254,6 +254,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_workgroup_memory_explicit_layout  = true,
       .KHR_zero_initialize_workgroup_memory  = true,
       .EXT_4444_formats                      = true,
+      .EXT_border_color_swizzle              = device->info.ver >= 8,
       .EXT_buffer_device_address             = device->has_a64_buffer_access,
       .EXT_calibrated_timestamps             = device->has_reg_timestamp,
       .EXT_color_write_enable                = true,
@@ -285,6 +286,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_inline_uniform_block              = true,
       .EXT_line_rasterization                = true,
       .EXT_memory_budget                     = device->sys.available,
+      .EXT_non_seamless_cube_map             = true,
       .EXT_pci_bus_info                      = true,
       .EXT_physical_device_drm               = true,
       .EXT_pipeline_creation_cache_control   = true,
@@ -365,91 +367,34 @@ anv_compute_sys_heap_size(struct anv_physical_device *device,
 }
 
 static VkResult MUST_CHECK
-anv_gather_meminfo(struct anv_physical_device *device, int fd, bool update)
-{
-   char sys_mem_regions[sizeof(struct drm_i915_query_memory_regions) +
-	                sizeof(struct drm_i915_memory_region_info)];
-
-   struct drm_i915_query_memory_regions *mem_regions =
-      intel_i915_query_alloc(fd, DRM_I915_QUERY_MEMORY_REGIONS, NULL);
-   if (mem_regions == NULL) {
-      if (device->info.has_local_mem) {
-         return vk_errorf(device, VK_ERROR_INCOMPATIBLE_DRIVER,
-                          "failed to memory regions: %m");
-      }
-
-      uint64_t total_phys;
-      if (!os_get_total_physical_memory(&total_phys)) {
-         return vk_errorf(device, VK_ERROR_INITIALIZATION_FAILED,
-                          "failed to get total physical memory: %m");
-      }
-
-      uint64_t available;
-      if (!os_get_available_system_memory(&available))
-         available = 0; /* Silently disable VK_EXT_memory_budget */
-
-      /* The kernel query failed.  Fake it using OS memory queries.  This
-       * should be roughly the same for integrated GPUs.
-       */
-      mem_regions = (void *)sys_mem_regions;
-      mem_regions->num_regions = 1;
-      mem_regions->regions[0] = (struct drm_i915_memory_region_info) {
-         .region.memory_class = I915_MEMORY_CLASS_SYSTEM,
-         .probed_size = total_phys,
-         .unallocated_size = available,
-      };
-   }
-
-   for(int i = 0; i < mem_regions->num_regions; i++) {
-      struct drm_i915_memory_region_info *info = &mem_regions->regions[i];
-
-      struct anv_memregion *region;
-      switch (info->region.memory_class) {
-      case I915_MEMORY_CLASS_SYSTEM:
-         region = &device->sys;
-         break;
-      case I915_MEMORY_CLASS_DEVICE:
-         region = &device->vram;
-         break;
-      default:
-         /* We don't know what kind of memory this is */
-         continue;
-      }
-
-      uint64_t size = info->probed_size;
-      if (info->region.memory_class == I915_MEMORY_CLASS_SYSTEM)
-         size = anv_compute_sys_heap_size(device, size);
-
-      uint64_t available = MIN2(size, info->unallocated_size);
-
-      if (update) {
-         assert(region->region.memory_class == info->region.memory_class);
-         assert(region->region.memory_instance == info->region.memory_instance);
-         assert(region->size == size);
-      } else {
-         region->region = info->region;
-         region->size = size;
-      }
-      region->available = available;
-   }
-
-   if (mem_regions != (void *)sys_mem_regions)
-      free(mem_regions);
-
-   return VK_SUCCESS;
-}
-
-static VkResult MUST_CHECK
 anv_init_meminfo(struct anv_physical_device *device, int fd)
 {
-   return anv_gather_meminfo(device, fd, false);
+   const struct intel_device_info *devinfo = &device->info;
+
+   device->sys.region.memory_class = devinfo->mem.sram.mem_class;
+   device->sys.region.memory_instance = devinfo->mem.sram.mem_instance;
+   device->sys.size =
+      anv_compute_sys_heap_size(device, devinfo->mem.sram.mappable.size);
+   device->sys.available = devinfo->mem.sram.mappable.free;
+
+   device->vram.region.memory_class = devinfo->mem.vram.mem_class;
+   device->vram.region.memory_instance =
+      devinfo->mem.vram.mem_instance;
+   device->vram.size = devinfo->mem.vram.mappable.size;
+   device->vram.available = devinfo->mem.vram.mappable.free;
+
+   return VK_SUCCESS;
 }
 
 static void
 anv_update_meminfo(struct anv_physical_device *device, int fd)
 {
-   ASSERTED VkResult result = anv_gather_meminfo(device, fd, true);
-   assert(result == VK_SUCCESS);
+   if (!intel_device_info_update_memory_info(&device->info, fd))
+      return;
+
+   const struct intel_device_info *devinfo = &device->info;
+   device->sys.available = devinfo->mem.sram.mappable.free;
+   device->vram.available = devinfo->mem.vram.mappable.free;
 }
 
 
@@ -699,6 +644,11 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
                                  I915_ENGINE_CLASS_RENDER);
       int g_count = 0;
       int c_count = 0;
+      if (env_var_as_boolean("INTEL_COMPUTE_CLASS", false))
+         c_count = intel_gem_count_engines(pdevice->engine_info,
+                                           I915_ENGINE_CLASS_COMPUTE);
+      enum drm_i915_gem_engine_class compute_class =
+         c_count < 1 ? I915_ENGINE_CLASS_RENDER : I915_ENGINE_CLASS_COMPUTE;
 
       anv_override_engine_counts(&gc_count, &g_count, &c_count);
 
@@ -724,7 +674,7 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
             .queueFlags = VK_QUEUE_COMPUTE_BIT |
                           VK_QUEUE_TRANSFER_BIT,
             .queueCount = c_count,
-            .engine_class = I915_ENGINE_CLASS_RENDER,
+            .engine_class = compute_class,
          };
       }
       /* Increase count below when other families are added as a reminder to
@@ -1394,7 +1344,7 @@ anv_get_physical_device_features_1_2(struct anv_physical_device *pdevice,
    f->shaderInputAttachmentArrayDynamicIndexing          = false;
    f->shaderUniformTexelBufferArrayDynamicIndexing       = descIndexing;
    f->shaderStorageTexelBufferArrayDynamicIndexing       = descIndexing;
-   f->shaderUniformBufferArrayNonUniformIndexing         = descIndexing;
+   f->shaderUniformBufferArrayNonUniformIndexing         = false;
    f->shaderSampledImageArrayNonUniformIndexing          = descIndexing;
    f->shaderStorageBufferArrayNonUniformIndexing         = descIndexing;
    f->shaderStorageImageArrayNonUniformIndexing          = descIndexing;
@@ -1511,6 +1461,13 @@ void anv_GetPhysicalDeviceFeatures2(
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BORDER_COLOR_SWIZZLE_FEATURES_EXT: {
+         VkPhysicalDeviceBorderColorSwizzleFeaturesEXT *features =
+            (VkPhysicalDeviceBorderColorSwizzleFeaturesEXT *)ext;
+         features->borderColorSwizzle = true;
+         features->borderColorSwizzleFromImage = true;
+         break;
+      }
 
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COLOR_WRITE_ENABLE_FEATURES_EXT: {
          VkPhysicalDeviceColorWriteEnableFeaturesEXT *features =
@@ -1555,13 +1512,6 @@ void anv_GetPhysicalDeviceFeatures2(
          VkPhysicalDeviceDepthClipEnableFeaturesEXT *features =
             (VkPhysicalDeviceDepthClipEnableFeaturesEXT *)ext;
          features->depthClipEnable = true;
-         break;
-      }
-
-      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR: {
-         VkPhysicalDeviceDynamicRenderingFeaturesKHR *features =
-            (VkPhysicalDeviceDynamicRenderingFeaturesKHR *)ext;
-         features->dynamicRendering = true;
          break;
       }
 
@@ -1628,13 +1578,6 @@ void anv_GetPhysicalDeviceFeatures2(
          features->stippledRectangularLines = false;
          features->stippledBresenhamLines = true;
          features->stippledSmoothLines = false;
-         break;
-      }
-
-      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR: {
-         VkPhysicalDeviceMaintenance4FeaturesKHR *features =
-            (VkPhysicalDeviceMaintenance4FeaturesKHR *)ext;
-         features->maintenance4 = true;
          break;
       }
 
@@ -1817,6 +1760,13 @@ void anv_GetPhysicalDeviceFeatures2(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTI_DRAW_FEATURES_EXT: {
          VkPhysicalDeviceMultiDrawFeaturesEXT *features = (VkPhysicalDeviceMultiDrawFeaturesEXT *)ext;
          features->multiDraw = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NON_SEAMLESS_CUBE_MAP_FEATURES_EXT : {
+         VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT *features =
+            (VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT *)ext;
+         features->nonSeamlessCubeMap = true;
          break;
       }
 
@@ -3136,6 +3086,7 @@ VkResult anv_CreateDevice(
          INTEL_BATCH_DECODE_FLOATS;
 
       intel_batch_decode_ctx_init(&device->decoder_ctx,
+                                  &physical_device->compiler->isa,
                                   &physical_device->info,
                                   stderr, decode_flags, NULL,
                                   decode_get_bo, NULL, device);
@@ -4698,7 +4649,7 @@ VkResult anv_GetCalibratedTimestampsEXT(
      * clock edges is when the sampled clock with the largest period is
      * sampled at the end of that period but right at the beginning of the
      * sampling interval and some other clock is sampled right at the
-     * begining of its sampling period and right at the end of the
+     * beginning of its sampling period and right at the end of the
      * sampling interval. Let's assume the GPU has the longest clock
      * period and that the application is sampling GPU and monotonic:
      *

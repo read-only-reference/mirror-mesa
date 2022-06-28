@@ -37,6 +37,7 @@ from lava.lava_job_submitter import (
     DEVICE_HANGING_TIMEOUT_SEC,
     NUMBER_OF_RETRIES_TIMEOUT_DETECTION,
     LAVAJob,
+    filter_debug_messages,
     fix_lava_color_log,
     fix_lava_gitlab_section_log,
     follow_job_execution,
@@ -364,6 +365,24 @@ COLOR_MANGLED_SCENARIOS = {
         ),
         "\x1b[0mPass: 26718, ExpectedFail: 95, Skip: 25187, Duration: 8:18, Remaining: 13",
     ),
+    "Mangled error message with bold formatting at target level": (
+        create_lava_yaml_msg(msg="[1;31mReview the image changes...", lvl="target"),
+        "\x1b[1;31mReview the image changes...",
+    ),
+    "Mangled error message with high intensity background at target level": (
+        create_lava_yaml_msg(msg="[100mReview the image changes...", lvl="target"),
+        "\x1b[100mReview the image changes...",
+    ),
+    "Mangled error message with underline+bg color+fg color at target level": (
+        create_lava_yaml_msg(msg="[4;41;97mReview the image changes...", lvl="target"),
+        "\x1b[4;41;97mReview the image changes...",
+    ),
+    "Bad input for color code.": (
+        create_lava_yaml_msg(
+            msg="[4;97 This message is missing the `m`.", lvl="target"
+        ),
+        "[4;97 This message is missing the `m`.",
+    ),
 }
 
 
@@ -412,3 +431,85 @@ def test_fix_lava_gitlab_section_log(message, fixed_message):
     fix_lava_gitlab_section_log(message)
 
     assert message["msg"] == fixed_message
+
+
+LAVA_DEBUG_SPAM_MESSAGES = {
+    "Listened to connection in debug level": (
+        create_lava_yaml_msg(
+            msg="Listened to connection for namespace 'common' for up to 1s",
+            lvl="debug",
+        ),
+        True,
+    ),
+    "Listened to connection in debug level - v2": (
+        create_lava_yaml_msg(
+            msg="Listened to connection for namespace 'prepare' for up to 9s",
+            lvl="debug",
+        ),
+        True,
+    ),
+    "Listened to connection in target level": (
+        create_lava_yaml_msg(
+            msg="Listened to connection for namespace 'common' for up to 1s",
+            lvl="target",
+        ),
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "message, expectation",
+    LAVA_DEBUG_SPAM_MESSAGES.values(),
+    ids=LAVA_DEBUG_SPAM_MESSAGES.keys(),
+)
+def test_filter_debug_messages(message, expectation):
+    assert filter_debug_messages(message) == expectation
+
+
+LAVA_RESULT_LOG_SCENARIOS = {
+    # the submitter should accept xtrace logs
+    "Bash xtrace echo with kmsg interleaving": (
+        create_lava_yaml_msg(
+            msg="echo hwci: mesa: pass[  737.673352] <LAVA_SIGNAL_ENDTC mesa-ci>",
+            lvl="target",
+        ),
+        "pass",
+    ),
+    # the submitter should accept xtrace logs
+    "kmsg result print": (
+        create_lava_yaml_msg(
+            msg="[  737.673352] hwci: mesa: pass",
+            lvl="target",
+        ),
+        "pass",
+    ),
+    # if the job result echo has a very bad luck, it still can be interleaved
+    # with kmsg
+    "echo output with kmsg interleaving": (
+        create_lava_yaml_msg(
+            msg="hwci: mesa: pass[  737.673352] <LAVA_SIGNAL_ENDTC mesa-ci>",
+            lvl="target",
+        ),
+        "pass",
+    ),
+    "fail case": (
+        create_lava_yaml_msg(
+            msg="hwci: mesa: fail",
+            lvl="target",
+        ),
+        "fail",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "message, expectation",
+    LAVA_RESULT_LOG_SCENARIOS.values(),
+    ids=LAVA_RESULT_LOG_SCENARIOS.keys(),
+)
+def test_filter_debug_messages(message, expectation, mock_proxy):
+    job = LAVAJob(mock_proxy(), "")
+    job.parse_job_result_from_log([message])
+
+    assert job.status == expectation

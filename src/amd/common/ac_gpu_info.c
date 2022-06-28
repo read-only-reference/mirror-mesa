@@ -650,8 +650,8 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
       info->vram_vis_size = vram_vis.heap_size;
    }
 
-   info->gart_size_kb = DIV_ROUND_UP(info->gart_size, 1024);
-   info->vram_size_kb = DIV_ROUND_UP(info->vram_size, 1024);
+   info->gart_size_kb = MIN2(DIV_ROUND_UP(info->gart_size, 1024), UINT32_MAX);
+   info->vram_size_kb = MIN2(DIV_ROUND_UP(info->vram_size, 1024), UINT32_MAX);
 
    if (info->drm_minor >= 41) {
       amdgpu_query_video_caps_info(dev, AMDGPU_INFO_VIDEO_CAPS_DECODE,
@@ -803,9 +803,9 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
     * allocations can fail or cause buffer movement failures in the kernel.
     */
    if (info->has_dedicated_vram)
-      info->max_alloc_size = info->vram_size * 0.8;
+      info->max_heap_size_kb = info->vram_size_kb;
    else
-      info->max_alloc_size = info->gart_size * 0.7;
+      info->max_heap_size_kb = info->gart_size_kb;
 
    info->vram_type = amdinfo->vram_type;
    info->vram_bit_width = amdinfo->vram_bit_width;
@@ -823,7 +823,12 @@ bool ac_query_gpu_info(int fd, void *dev_p, struct radeon_info *info,
    info->uvd_fw_version = info->ip[AMD_IP_UVD].num_queues ? uvd_version : 0;
    info->vce_fw_version = info->ip[AMD_IP_VCE].num_queues ? vce_version : 0;
    info->has_video_hw.uvd_decode = info->ip[AMD_IP_UVD].num_queues != 0;
-   info->has_video_hw.vcn_decode = info->ip[AMD_IP_VCN_DEC].num_queues != 0;
+
+   /* unified ring */
+   info->has_video_hw.vcn_decode
+                  = info->family >= CHIP_GFX1100
+                    ? info->ip[AMD_IP_VCN_UNIFIED].num_queues != 0
+                    : info->ip[AMD_IP_VCN_DEC].num_queues != 0;
    info->has_video_hw.jpeg_decode = info->ip[AMD_IP_VCN_JPEG].num_queues != 0;
    info->has_video_hw.vce_encode = info->ip[AMD_IP_VCE].num_queues != 0;
    info->has_video_hw.uvd_encode = info->ip[AMD_IP_UVD_ENC].num_queues != 0;
@@ -1334,6 +1339,9 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
       }
    }
 
+   if (info->family >= CHIP_GFX1100)
+      ip_string[AMD_IP_VCN_UNIFIED] = "VCN_UNIFIED";
+
    fprintf(f, "    has_graphics = %i\n", info->has_graphics);
    fprintf(f, "    has_clear_state = %u\n", info->has_clear_state);
    fprintf(f, "    has_distributed_tess = %u\n", info->has_distributed_tess);
@@ -1367,7 +1375,7 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
    fprintf(f, "    vram_vis_size = %i MB\n", (int)DIV_ROUND_UP(info->vram_vis_size, 1024 * 1024));
    fprintf(f, "    vram_type = %i\n", info->vram_type);
    fprintf(f, "    vram_bit_width = %i\n", info->vram_bit_width);
-   fprintf(f, "    max_alloc_size = %i MB\n", (int)DIV_ROUND_UP(info->max_alloc_size, 1024 * 1024));
+   fprintf(f, "    max_heap_size_kb = %i MB\n", (int)DIV_ROUND_UP(info->max_heap_size_kb, 1024));
    fprintf(f, "    min_alloc_size = %u\n", info->min_alloc_size);
    fprintf(f, "    address32_hi = 0x%x\n", info->address32_hi);
    fprintf(f, "    has_dedicated_vram = %u\n", info->has_dedicated_vram);
@@ -1397,11 +1405,17 @@ void ac_print_gpu_info(struct radeon_info *info, FILE *f)
 
    fprintf(f, "Multimedia info:\n");
    fprintf(f, "    uvd_decode = %u\n", info->has_video_hw.uvd_decode);
-   fprintf(f, "    vcn_decode = %u\n", info->has_video_hw.vcn_decode);
    fprintf(f, "    jpeg_decode = %u\n", info->has_video_hw.jpeg_decode);
    fprintf(f, "    vce_encode = %u\n", info->has_video_hw.vce_encode);
    fprintf(f, "    uvd_encode = %u\n", info->has_video_hw.uvd_encode);
-   fprintf(f, "    vcn_encode = %u\n", info->has_video_hw.vcn_encode);
+
+   if (info->family >= CHIP_GFX1100)
+      fprintf(f, "    vcn_unified = %u\n", info->has_video_hw.vcn_decode);
+   else {
+      fprintf(f, "    vcn_decode = %u\n", info->has_video_hw.vcn_decode);
+      fprintf(f, "    vcn_encode = %u\n", info->has_video_hw.vcn_encode);
+   }
+
    fprintf(f, "    uvd_fw_version = %u\n", info->uvd_fw_version);
    fprintf(f, "    vce_fw_version = %u\n", info->vce_fw_version);
    fprintf(f, "    vce_harvest_config = %i\n", info->vce_harvest_config);
@@ -1857,4 +1871,43 @@ void ac_get_hs_info(struct radeon_info *info,
    hs->tess_factor_ring_size = 48 * 1024 * info->max_se;
    hs->tess_offchip_ring_offset = align(hs->tess_factor_ring_size, 64 * 1024);
    hs->tess_offchip_ring_size = hs->max_offchip_buffers * hs->tess_offchip_block_dw_size * 4;
+}
+
+static uint16_t get_task_num_entries(enum radeon_family fam)
+{
+   /* Number of task shader ring entries. Needs to be a power of two.
+    * Use a low number on smaller chips so we don't waste space,
+    * but keep it high on bigger chips so it doesn't inhibit parallelism.
+    *
+    * This number is compiled into task/mesh shaders as a constant.
+    * In order to ensure this works fine with the shader cache, we must
+    * base this decision on the chip family, not the number of CUs in
+    * the current GPU. (So, the cache remains consistent for all
+    * chips in the same family.)
+    */
+   switch (fam) {
+   case CHIP_VANGOGH:
+   case CHIP_NAVI24:
+   case CHIP_REMBRANDT:
+      return 256;
+   case CHIP_NAVI21:
+   case CHIP_NAVI22:
+   case CHIP_NAVI23:
+   default:
+      return 1024;
+   }
+}
+
+void ac_get_task_info(struct radeon_info *info,
+                      struct ac_task_info *task_info)
+{
+   const uint16_t num_entries = get_task_num_entries(info->family);
+   const uint32_t draw_ring_bytes = num_entries * AC_TASK_DRAW_ENTRY_BYTES;
+   const uint32_t payload_ring_bytes = num_entries * AC_TASK_PAYLOAD_ENTRY_BYTES;
+
+   /* Ensure that the addresses of each ring are 256 byte aligned. */
+   task_info->num_entries = num_entries;
+   task_info->draw_ring_offset = ALIGN(AC_TASK_CTRLBUF_BYTES, 256);
+   task_info->payload_ring_offset = ALIGN(task_info->draw_ring_offset + draw_ring_bytes, 256);
+   task_info->bo_size_bytes = task_info->payload_ring_offset + payload_ring_bytes;
 }

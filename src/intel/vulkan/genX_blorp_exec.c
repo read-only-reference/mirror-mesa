@@ -288,7 +288,7 @@ blorp_exec_on_render(struct blorp_batch *batch,
 #if GFX_VER >= 11
    /* The PIPE_CONTROL command description says:
     *
-    *    "Whenever a Binding Table Index (BTI) used by a Render Taget Message
+    *    "Whenever a Binding Table Index (BTI) used by a Render Target Message
     *     points to a different RENDER_SURFACE_STATE, SW must issue a Render
     *     Target Cache Flush by enabling this bit. When render target flush
     *     is set due to new association of BTI, PS Scoreboard Stall bit must
@@ -321,7 +321,7 @@ blorp_exec_on_render(struct blorp_batch *batch,
 #if GFX_VER >= 11
    /* The PIPE_CONTROL command description says:
     *
-    *    "Whenever a Binding Table Index (BTI) used by a Render Taget Message
+    *    "Whenever a Binding Table Index (BTI) used by a Render Target Message
     *     points to a different RENDER_SURFACE_STATE, SW must issue a Render
     *     Target Cache Flush by enabling this bit. When render target flush
     *     is set due to new association of BTI, PS Scoreboard Stall bit must
@@ -337,11 +337,9 @@ blorp_exec_on_render(struct blorp_batch *batch,
     * Flush everything else.
     */
    anv_cmd_dirty_mask_t skip_bits = ANV_CMD_DIRTY_DYNAMIC_SCISSOR |
-                                    ANV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS |
                                     ANV_CMD_DIRTY_INDEX_BUFFER |
                                     ANV_CMD_DIRTY_XFB_ENABLE |
                                     ANV_CMD_DIRTY_DYNAMIC_LINE_STIPPLE |
-                                    ANV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS_TEST_ENABLE |
                                     ANV_CMD_DIRTY_DYNAMIC_SAMPLE_LOCATIONS |
                                     ANV_CMD_DIRTY_DYNAMIC_SHADING_RATE |
                                     ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_RESTART_ENABLE;

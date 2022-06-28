@@ -1098,7 +1098,7 @@ if cc.compiles('__uint128_t foo(void) { return 0; }',
 endif
 
 # TODO: this is very incomplete
-if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd', 'haiku'].contains(host_machine.system())
+if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd', 'haiku', 'android'].contains(host_machine.system())
   pre_args += '-D_GNU_SOURCE'
 elif host_machine.system() == 'sunos'
   pre_args += '-D__EXTENSIONS__'
@@ -1108,7 +1108,7 @@ elif host_machine.system() == 'windows'
     '-DPIPE_SUBSYSTEM_WINDOWS_USER',
     '-D_USE_MATH_DEFINES',  # XXX: scons didn't use this for mingw
   ]
-  if cc.get_id() == 'msvc'
+  if cc.get_argument_syntax() == 'msvc'
     pre_args += [
       '-DVC_EXTRALEAN',
       '-D_CRT_SECURE_NO_WARNINGS',
@@ -1141,7 +1141,7 @@ endif
 c_msvc_compat_args = []
 no_override_init_args = []
 cpp_msvc_compat_args = []
-if cc.get_id() == 'msvc'
+if cc.get_argument_syntax() == 'msvc'
   _trial = [
     '/wd4018',  # signed/unsigned mismatch
     '/wd4056',  # overflow in floating-point constant arithmetic
@@ -1203,7 +1203,7 @@ else
   ]
 
   # MinGW chokes on format specifiers and I can't get it all working
-  if not (cc.get_id() == 'gcc' and host_machine.system() == 'windows')
+  if not (cc.get_argument_syntax() == 'gcc' and host_machine.system() == 'windows')
     _trial_c += ['-Werror=format', '-Wformat-security']
     _trial_cpp += ['-Werror=format', '-Wformat-security']
   endif
@@ -1240,14 +1240,14 @@ else
   # Check for C and C++ arguments for MSVC compatibility. These are only used
   # in parts of the mesa code base that need to compile with MSVC, mainly
   # common code
-  _trial_msvc = ['-Werror=pointer-arith', '-Werror=gnu-empty-initializer']
+  _trial_msvc = ['-Werror=pointer-arith', '-Werror=vla', '-Werror=gnu-empty-initializer']
   c_msvc_compat_args += cc.get_supported_arguments(_trial_msvc)
   cpp_msvc_compat_args += cpp.get_supported_arguments(_trial_msvc)
 endif
 
 # set linker arguments
 if host_machine.system() == 'windows'
-  if cc.get_id() == 'msvc'
+  if cc.get_argument_syntax() == 'msvc'
     add_project_link_arguments(
       '/fixed:no',
       '/dynamicbase',
@@ -1282,7 +1282,7 @@ if host_machine.system() == 'windows'
   endif
 endif
 
-if host_machine.cpu_family().startswith('x86') and cc.get_id() != 'msvc'
+if host_machine.cpu_family().startswith('x86') and cc.get_argument_syntax() != 'msvc'
   pre_args += '-DUSE_SSE41'
   with_sse41 = true
   sse41_args = ['-msse4.1']
@@ -1434,12 +1434,28 @@ foreach h : ['xlocale.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'sys/shm.h', '
   endif
 endforeach
 
-foreach f : ['strtof', 'mkostemp', 'timespec_get', 'memfd_create', 'random_r',
-             'flock', 'strtok_r', 'getrandom', 'qsort_r', 'qsort_s']
-  if cc.has_function(f)
+functions_to_detect = {
+  'strtof': '',
+  'mkostemp': '',
+  'timespec_get': '#include <time.h>',
+  'memfd_create': '',
+  'random_r': '',
+  'flock': '',
+  'strtok_r': '',
+  'getrandom': '',
+  'qsort_r': '',
+  'qsort_s': '',
+}
+
+foreach f, prefix: functions_to_detect
+  if cc.has_function(f, prefix: prefix)
     pre_args += '-DHAVE_@0@'.format(f.to_upper())
   endif
 endforeach
+
+if cc.has_header_symbol('time.h', 'struct timespec')
+   pre_args += '-DHAVE_STRUCT_TIMESPEC'
+endif
 
 if cc.has_header_symbol('errno.h', 'program_invocation_name',
                         args : '-D_GNU_SOURCE')
@@ -1519,12 +1535,14 @@ ld_args_build_id = cc.get_supported_link_arguments('-Wl,--build-id=sha1')
 
 # check for dl support
 dep_dl = null_dep
-if not cc.has_function('dlopen')
-  dep_dl = cc.find_library('dl', required : host_machine.system() != 'windows')
-endif
-if cc.has_function('dladdr', dependencies : dep_dl)
-  # This is really only required for util/disk_cache.h
-  pre_args += '-DHAVE_DLADDR'
+if host_machine.system() != 'windows'
+  if not cc.has_function('dlopen')
+    dep_dl = cc.find_library('dl', required : true)
+  endif
+  if cc.has_function('dladdr', dependencies : dep_dl)
+    # This is really only required for util/disk_cache.h
+    pre_args += '-DHAVE_DLADDR'
+  endif
 endif
 
 if cc.has_function('dl_iterate_phdr')
@@ -1766,10 +1784,10 @@ if with_llvm
     error('Lavapipe requires LLVM draw support.')
   endif
 
-  if cc.get_id() != 'msvc'
+  if host_machine.system() != 'windows'
     # LLVM can be built without rtti, turning off rtti changes the ABI of C++
     # programs, so we need to build all C++ code in mesa without rtti as well to
-    # ensure that linking works. Note that MSVC does handle mismatching RTTI
+    # ensure that linking works. Note that Win32 compilers does handle mismatching RTTI
     # without issues, so only apply this for other compilers.
     if dep_llvm.type_name() == 'internal'
       _llvm_rtti = subproject('llvm').get_variable('has_rtti', true)
@@ -1784,7 +1802,9 @@ if with_llvm
         error('LLVM was built without RTTI, so Mesa must also disable RTTI. Use an LLVM built with LLVM_ENABLE_RTTI or add cpp_rtti=false.')
       endif
     endif
-  else
+  endif
+
+  if cc.get_argument_syntax() == 'msvc'
     # Suppress "/DELAYLOAD:ole32.dll/shell32.dll ignored" warnings that LLVM adds
     add_project_link_arguments(
       '/ignore:4199',
@@ -1916,22 +1936,19 @@ if build_machine.system() == 'windows'
     # windows compatibility (uses <io.h> instead of <unistd.h> and _isatty,
     # _fileno functions)
     prog_flex = [prog_flex, '--wincompat']
-    if get_option('c_std') == 'c99'
-      prog_flex += '-D__STDC_VERSION__=199901'
-    endif
   else
     prog_flex = [find_program('flex', 'lex', required : with_any_opengl)]
   endif
   # Force flex to use const keyword in prototypes, as relies on __cplusplus or
-  # __STDC__ macro to determine whether it's safe to use const keyword, but
-  # MSVC only defines __STDC_VERSION__ for C11/C17.
+  # __STDC__ macro to determine whether it's safe to use const keyword
   prog_flex += '-DYY_USE_CONST='
 
   prog_flex_cpp = prog_flex
-  if get_option('c_std') != 'c99'
-    # Convince win_flex to use <inttypes.h> for C++ files
-    prog_flex_cpp += '-D__STDC_VERSION__=199901'
-  endif
+  # Convince win_flex to use <inttypes.h> for C++ files
+  # Note that we are using a C99 version here rather than C11,
+  # because using a C11 version can cause the MSVC CRT headers to define
+  # static_assert to _Static_assert, which breaks other parts of the CRT
+  prog_flex_cpp += '-D__STDC_VERSION__=199901'
 
   prog_bison = find_program('win_bison', required : false)
   if not prog_bison.found()

@@ -104,6 +104,21 @@ va_lower_isel(bi_instr *I)
 
       break;
 
+   case BI_OPCODE_MUX_I32:
+   case BI_OPCODE_MUX_V2I16:
+      if (bi_can_replace_with_csel(I))
+         bi_replace_mux_with_csel(I, true);
+
+      break;
+
+   /* FADD_RSCALE.f32(x, y, z) -> FMA_RSCALE.f32(x, 1.0, y, z) */
+   case BI_OPCODE_FADD_RSCALE_F32:
+      I->op = BI_OPCODE_FMA_RSCALE_F32;
+      I->src[3] = I->src[2];
+      I->src[2] = I->src[1];
+      I->src[1] = bi_imm_f32(1.0);
+      break;
+
    default:
       break;
    }

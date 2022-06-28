@@ -1321,7 +1321,7 @@ vec4_visitor::dump_instruction(const backend_instruction *be_inst, FILE *file) c
               pred_ctrl_align16[inst->predicate]);
    }
 
-   fprintf(file, "%s(%d)", brw_instruction_name(devinfo, inst->opcode),
+   fprintf(file, "%s(%d)", brw_instruction_name(&compiler->isa, inst->opcode),
            inst->exec_size);
    if (inst->saturate)
       fprintf(file, ".sat");
@@ -1697,7 +1697,7 @@ vec4_visitor::fixup_3src_null_dest()
    bool progress = false;
 
    foreach_block_and_inst_safe (block, vec4_instruction, inst, cfg) {
-      if (inst->is_3src(devinfo) && inst->dst.is_null()) {
+      if (inst->is_3src(compiler) && inst->dst.is_null()) {
          const unsigned size_written = type_sz(inst->dst.type);
          const unsigned num_regs = DIV_ROUND_UP(size_written, REG_SIZE);
 
@@ -1790,7 +1790,7 @@ vec4_visitor::convert_to_hw_regs()
             src.vstride = src.width + src.hstride;
       }
 
-      if (inst->is_3src(devinfo)) {
+      if (inst->is_3src(compiler)) {
          /* 3-src instructions with scalar sources support arbitrary subnr,
           * but don't actually use swizzles.  Convert swizzle into subnr.
           * Skip this for double-precision instructions: RepCtrl=1 is not
@@ -2329,7 +2329,7 @@ vec4_visitor::apply_logical_swizzle(struct brw_reg *hw_reg,
        * second half of a register and needs a vertical stride of 0 so we:
        *
        * 1. Don't violate register region restrictions.
-       * 2. Activate the gfx7 instruction decompresion bug exploit when
+       * 2. Activate the gfx7 instruction decompression bug exploit when
        *    execsize > 4
        */
       if (hw_reg->subnr % REG_SIZE == 16) {
@@ -2461,7 +2461,7 @@ vec4_visitor::run()
 
    OPT(lower_64bit_mad_to_mul_add);
 
-   /* Run this before payload setup because tesselation shaders
+   /* Run this before payload setup because tessellation shaders
     * rely on it to prevent cross dvec2 regioning on DF attributes
     * that are setup so that XY are on the second half of register and
     * ZW are in the first half of the next.

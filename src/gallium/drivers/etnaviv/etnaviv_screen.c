@@ -143,7 +143,6 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
-   case PIPE_CAP_VERTEX_SHADER_SATURATE:
    case PIPE_CAP_TEXTURE_BARRIER:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
@@ -400,7 +399,7 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
                 : screen->specs.vertex_sampler_count;
    case PIPE_SHADER_CAP_PREFERRED_IR:
       return PIPE_SHADER_IR_NIR;
-   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
       if (ubo_enable)
          return 16384; /* 16384 so state tracker enables UBOs */
       return shader == PIPE_SHADER_FRAGMENT
@@ -414,7 +413,6 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_TGSI) |
              (1 << PIPE_SHADER_IR_NIR);
-   case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:

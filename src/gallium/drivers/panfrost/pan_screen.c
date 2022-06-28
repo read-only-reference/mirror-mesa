@@ -109,7 +109,6 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
         case PIPE_CAP_NPOT_TEXTURES:
         case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
         case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
-        case PIPE_CAP_VERTEX_SHADER_SATURATE:
         case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
         case PIPE_CAP_POINT_SPRITE:
         case PIPE_CAP_DEPTH_CLIP_DISABLE:
@@ -196,12 +195,12 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
         case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
                 return is_gl3 ? 330 : 140;
         case PIPE_CAP_ESSL_FEATURE_LEVEL:
-                return pan_is_bifrost(dev) ? 320 : 310;
+                return dev->arch >= 6 ? 320 : 310;
 
         case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
                 return 16;
 
-        case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
+        case PIPE_CAP_MAX_TEXEL_BUFFER_ELEMENTS_UINT:
                 return 65536;
 
         /* Must be at least 64 for correct behaviour */
@@ -326,6 +325,14 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
                         modes |= BITFIELD_BIT(PIPE_PRIM_POLYGON);
                 }
 
+                if (dev->arch >= 9) {
+                        /* Although Valhall is supposed to support quads, they
+                         * don't seem to work correctly. Disable to fix
+                         * arb-provoking-vertex-render.
+                         */
+                        modes &= ~BITFIELD_BIT(PIPE_PRIM_QUADS);
+                }
+
                 return modes;
         }
 
@@ -355,6 +362,16 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return 0;
         }
 
+        /* We only allow observable side effects (memory writes) in compute and
+         * fragment shaders. Side effects in the geometry pipeline cause
+         * trouble with IDVS.
+         *
+         * This restriction doesn't apply to Midgard, which does not implement
+         * IDVS and therefore executes vertex shaders exactly once.
+         */
+        bool allow_side_effects = (shader != PIPE_SHADER_VERTEX) ||
+                                  (dev->arch <= 5);
+
         switch (param) {
         case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
         case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
@@ -375,7 +392,7 @@ panfrost_get_shader_param(struct pipe_screen *screen,
         case PIPE_SHADER_CAP_MAX_TEMPS:
                 return 256; /* arbitrary */
 
-        case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+        case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
                 return 16 * 1024 * sizeof(float);
 
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
@@ -391,7 +408,7 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return 0;
 
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
-                return pan_is_bifrost(dev);
+                return dev->arch >= 6;
 
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
                 return 1;
@@ -414,11 +431,11 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return !is_nofp16;
         case PIPE_SHADER_CAP_FP16_DERIVATIVES:
         case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
-                return pan_is_bifrost(dev) && !is_nofp16;
+                return dev->arch >= 6 && !is_nofp16;
         case PIPE_SHADER_CAP_INT16:
                 /* XXX: Advertise this CAP when a proper fix to lower_precision
                  * lands. GLSL IR validation failure in glmark2 -bterrain */
-                return pan_is_bifrost(dev) && !is_nofp16 && is_deqp;
+                return dev->arch >= 6 && !is_nofp16 && is_deqp;
 
         case PIPE_SHADER_CAP_INT64_ATOMICS:
         case PIPE_SHADER_CAP_DROUND_SUPPORTED:
@@ -442,12 +459,11 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_NIR_SERIALIZED);
 
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-                return 16;
+                return allow_side_effects ? 16 : 0;
 
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-                return PIPE_MAX_SHADER_IMAGES;
+                return allow_side_effects ? PIPE_MAX_SHADER_IMAGES : 0;
 
-        case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
                 return 0;
@@ -854,12 +870,6 @@ panfrost_create_screen(int fd, struct renderonly *ro)
         panfrost_open_device(screen, fd, dev);
 
         if (dev->debug & PAN_DBG_NO_AFBC)
-                dev->has_afbc = false;
-
-        /* It's early days for Valhall support... disable AFBC for now to keep
-         * hardware bring-up simple
-         */
-        if (dev->arch >= 9)
                 dev->has_afbc = false;
 
         /* Bail early on unsupported hardware */

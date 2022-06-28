@@ -327,7 +327,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    panfrost_open_device(NULL, fd, &device->pdev);
    fd = -1;
 
-   if (device->pdev.arch < 5) {
+   if (device->pdev.arch <= 5) {
       result = vk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                          "%s not supported",
                          device->pdev.model->name);
@@ -917,7 +917,6 @@ panvk_queue_init(struct panvk_device *device,
    }
 
    switch (pdev->arch) {
-   case 5: queue->vk.driver_submit = panvk_v5_queue_submit; break;
    case 6: queue->vk.driver_submit = panvk_v6_queue_submit; break;
    case 7: queue->vk.driver_submit = panvk_v7_queue_submit; break;
    default: unreachable("Invalid arch");
@@ -931,25 +930,6 @@ static void
 panvk_queue_finish(struct panvk_queue *queue)
 {
    vk_queue_finish(&queue->vk);
-}
-
-static void
-panvk_ref_pipeline_layout(struct vk_device *dev,
-                          VkPipelineLayout layout)
-{
-   VK_FROM_HANDLE(panvk_pipeline_layout, playout, layout);
-
-   panvk_pipeline_layout_ref(playout);
-}
-
-static void
-panvk_unref_pipeline_layout(struct vk_device *dev,
-                            VkPipelineLayout layout)
-{
-   struct panvk_device *device = container_of(dev, struct panvk_device, vk);
-   VK_FROM_HANDLE(panvk_pipeline_layout, playout, layout);
-
-   panvk_pipeline_layout_unref(device, playout);
 }
 
 VkResult
@@ -971,9 +951,6 @@ panvk_CreateDevice(VkPhysicalDevice physicalDevice,
    struct vk_device_dispatch_table dispatch_table;
 
    switch (physical_device->pdev.arch) {
-   case 5:
-      dev_entrypoints = &panvk_v5_device_entrypoints;
-      break;
    case 6:
       dev_entrypoints = &panvk_v6_device_entrypoints;
       break;
@@ -1024,8 +1001,6 @@ panvk_CreateDevice(VkPhysicalDevice physicalDevice,
     * whole struct.
     */
    device->vk.command_dispatch_table = &device->cmd_dispatch;
-   device->vk.ref_pipeline_layout = panvk_ref_pipeline_layout;
-   device->vk.unref_pipeline_layout = panvk_unref_pipeline_layout;
 
    device->instance = physical_device->instance;
    device->physical_device = physical_device;

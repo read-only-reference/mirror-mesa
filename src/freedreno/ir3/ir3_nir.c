@@ -37,10 +37,17 @@ ir3_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
                              nir_intrinsic_instr *low,
                              nir_intrinsic_instr *high, void *data)
 {
+   unsigned byte_size = bit_size / 8;
+
+   if (low->intrinsic != nir_intrinsic_load_ubo) {
+      return bit_size <= 32 && align_mul >= byte_size &&
+         align_offset % byte_size == 0 &&
+         num_components <= 4;
+   }
+
    assert(bit_size >= 8);
    if (bit_size != 32)
       return false;
-   unsigned byte_size = bit_size / 8;
 
    int size = num_components * byte_size;
 
@@ -134,9 +141,9 @@ ir3_optimize_loop(struct ir3_compiler *compiler, nir_shader *s)
       progress |= OPT(s, nir_opt_offsets, &offset_options);
 
       nir_load_store_vectorize_options vectorize_opts = {
-         .modes = nir_var_mem_ubo,
+         .modes = nir_var_mem_ubo | nir_var_mem_ssbo,
          .callback = ir3_nir_should_vectorize_mem,
-         .robust_modes = compiler->robust_ubo_access ? nir_var_mem_ubo : 0,
+         .robust_modes = compiler->robust_buffer_access2 ? nir_var_mem_ubo | nir_var_mem_ssbo: 0,
       };
       progress |= OPT(s, nir_opt_load_store_vectorize, &vectorize_opts);
 
@@ -264,6 +271,45 @@ ir3_nir_lower_io_to_temporaries(nir_shader *s)
    NIR_PASS_V(s, nir_lower_indirect_derefs, 0, UINT32_MAX);
 }
 
+/**
+ * Inserts an add of 0.5 to floating point array index values in texture coordinates.
+ */
+static bool
+ir3_nir_lower_array_sampler_cb(struct nir_builder *b, nir_instr *instr, void *_data)
+{
+   if (instr->type != nir_instr_type_tex)
+      return false;
+
+   nir_tex_instr *tex = nir_instr_as_tex(instr);
+   if (!tex->is_array || tex->op == nir_texop_lod)
+      return false;
+
+   int coord_idx = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   if (coord_idx == -1 ||
+       nir_tex_instr_src_type(tex, coord_idx) != nir_type_float)
+      return false;
+
+   b->cursor = nir_before_instr(&tex->instr);
+
+   unsigned ncomp = tex->coord_components;
+   nir_ssa_def *src = nir_ssa_for_src(b, tex->src[coord_idx].src, ncomp);
+
+   assume(ncomp >= 1);
+   nir_ssa_def *ai = nir_channel(b, src, ncomp - 1);
+   ai = nir_fadd(b, ai, nir_imm_floatN_t(b, 0.5, src->bit_size));
+   nir_instr_rewrite_src(&tex->instr, &tex->src[coord_idx].src,
+                         nir_src_for_ssa(nir_vector_insert_imm(b, src, ai, ncomp - 1)));
+   return true;
+}
+
+static bool
+ir3_nir_lower_array_sampler(nir_shader *shader)
+{
+   return nir_shader_instructions_pass(
+      shader, ir3_nir_lower_array_sampler_cb,
+      nir_metadata_block_index | nir_metadata_dominance, NULL);
+}
+
 void
 ir3_finalize_nir(struct ir3_compiler *compiler, nir_shader *s)
 {
@@ -297,6 +343,9 @@ ir3_finalize_nir(struct ir3_compiler *compiler, nir_shader *s)
 
    OPT_V(s, nir_lower_tex, &tex_options);
    OPT_V(s, nir_lower_load_const_to_scalar);
+
+   if (compiler->array_index_add_half)
+      OPT_V(s, ir3_nir_lower_array_sampler);
 
    ir3_optimize_loop(compiler, s);
 
@@ -696,8 +745,45 @@ ir3_nir_lower_variant(struct ir3_shader_variant *so, nir_shader *s)
    bool more_late_algebraic = true;
    while (more_late_algebraic) {
       more_late_algebraic = OPT(s, nir_opt_algebraic_late);
-      if (!more_late_algebraic)
-         OPT(s, nir_fold_16bit_sampler_conversions, 0, ~0);
+      if (!more_late_algebraic) {
+         /* Lowers texture operations that have only f2f16 or u2u16 called on
+          * them to have a 16-bit destination.  Also, lower 16-bit texture
+          * coordinates that had been upconverted to 32-bits just for the
+          * sampler to just be 16-bit texture sources.
+          */
+         OPT(s, nir_fold_16bit_sampler_conversions,
+            (1 << nir_tex_src_coord) |
+            (1 << nir_tex_src_lod) |
+            (1 << nir_tex_src_bias) |
+            (1 << nir_tex_src_comparator) |
+            (1 << nir_tex_src_min_lod) |
+            (1 << nir_tex_src_ms_index) |
+            (1 << nir_tex_src_ddx) |
+            (1 << nir_tex_src_ddy),
+            ~0);
+
+         /* blob dumps have no half regs on pixel 2's ldib or stib, so only enable for a6xx+. */
+         if (so->compiler->gen >= 6)
+            OPT(s, nir_fold_16bit_image_load_store_conversions);
+
+         /* Now that we stripped off the 16-bit conversions, legalize so that we
+          * don't have a mix of 16- and 32-bit args that will need to be
+          * collected together in the coordinate vector.
+          */
+         nir_tex_src_type_constraints tex_constraints = {
+            [nir_tex_src_lod] = {true, 0, nir_tex_src_coord},
+            [nir_tex_src_bias] = {true, 0, nir_tex_src_coord},
+            [nir_tex_src_offset] = {true, 0, nir_tex_src_coord},
+            [nir_tex_src_comparator] = {true, 0, nir_tex_src_coord},
+
+            [nir_tex_src_min_lod] = {true, 0, nir_tex_src_coord},
+            [nir_tex_src_ms_index] = {true, 0, nir_tex_src_coord},
+            [nir_tex_src_ddx] = {true, 0, nir_tex_src_coord},
+            [nir_tex_src_ddy] = {true, 0, nir_tex_src_coord},
+
+         };
+         NIR_PASS_V(s, nir_legalize_16bit_sampler_srcs, tex_constraints);
+      }
       OPT_V(s, nir_opt_constant_folding);
       OPT_V(s, nir_copy_prop);
       OPT_V(s, nir_opt_dce);

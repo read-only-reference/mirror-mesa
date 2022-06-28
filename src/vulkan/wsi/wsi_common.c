@@ -33,6 +33,8 @@
 #include "vk_physical_device.h"
 #include "vk_queue.h"
 #include "vk_semaphore.h"
+#include "vk_sync.h"
+#include "vk_sync_dummy.h"
 #include "vk_util.h"
 
 #include <time.h>
@@ -62,6 +64,7 @@ wsi_device_init(struct wsi_device *wsi,
    wsi->sw = sw_device;
 #define WSI_GET_CB(func) \
    PFN_vk##func func = (PFN_vk##func)proc_addr(pdevice, "vk" #func)
+   WSI_GET_CB(GetPhysicalDeviceExternalSemaphoreProperties);
    WSI_GET_CB(GetPhysicalDeviceProperties2);
    WSI_GET_CB(GetPhysicalDeviceMemoryProperties);
    WSI_GET_CB(GetPhysicalDeviceQueueFamilyProperties);
@@ -80,6 +83,23 @@ wsi_device_init(struct wsi_device *wsi,
 
    GetPhysicalDeviceMemoryProperties(pdevice, &wsi->memory_props);
    GetPhysicalDeviceQueueFamilyProperties(pdevice, &wsi->queue_family_count, NULL);
+
+   for (VkExternalSemaphoreHandleTypeFlags handle_type = 1;
+        handle_type <= VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        handle_type <<= 1) {
+      const VkPhysicalDeviceExternalSemaphoreInfo esi = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO,
+         .handleType = handle_type,
+      };
+      VkExternalSemaphoreProperties esp = {
+         .sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES,
+      };
+      GetPhysicalDeviceExternalSemaphoreProperties(pdevice, &esi, &esp);
+
+      if (esp.externalSemaphoreFeatures &
+          VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT)
+         wsi->semaphore_export_handle_types |= handle_type;
+   }
 
    list_inithead(&wsi->hotplug_fences);
 
@@ -114,6 +134,7 @@ wsi_device_init(struct wsi_device *wsi,
    WSI_GET_CB(GetPhysicalDeviceFormatProperties);
    WSI_GET_CB(GetPhysicalDeviceFormatProperties2KHR);
    WSI_GET_CB(GetPhysicalDeviceImageFormatProperties2);
+   WSI_GET_CB(GetSemaphoreFdKHR);
    WSI_GET_CB(ResetFences);
    WSI_GET_CB(QueueSubmit);
    WSI_GET_CB(WaitForFences);
@@ -226,24 +247,25 @@ wsi_device_setup_syncobj_fd(struct wsi_device *wsi_device,
 VkResult
 wsi_swapchain_init(const struct wsi_device *wsi,
                    struct wsi_swapchain *chain,
-                   VkDevice device,
+                   VkDevice _device,
                    const VkSwapchainCreateInfoKHR *pCreateInfo,
                    const VkAllocationCallbacks *pAllocator,
                    bool use_buffer_blit)
 {
+   VK_FROM_HANDLE(vk_device, device, _device);
    VkResult result;
 
    memset(chain, 0, sizeof(*chain));
 
-   vk_object_base_init(NULL, &chain->base, VK_OBJECT_TYPE_SWAPCHAIN_KHR);
+   vk_object_base_init(device, &chain->base, VK_OBJECT_TYPE_SWAPCHAIN_KHR);
 
    chain->wsi = wsi;
-   chain->device = device;
+   chain->device = _device;
    chain->alloc = *pAllocator;
    chain->use_buffer_blit = use_buffer_blit;
    chain->buffer_blit_queue = VK_NULL_HANDLE;
    if (use_buffer_blit && wsi->get_buffer_blit_queue)
-      chain->buffer_blit_queue = wsi->get_buffer_blit_queue(device);
+      chain->buffer_blit_queue = wsi->get_buffer_blit_queue(_device);
 
    int cmd_pools_count = chain->buffer_blit_queue != VK_NULL_HANDLE ? 1 : wsi->queue_family_count;
 
@@ -266,7 +288,7 @@ wsi_swapchain_init(const struct wsi_device *wsi,
          .flags = 0,
          .queueFamilyIndex = queue_family_index,
       };
-      result = wsi->CreateCommandPool(device, &cmd_pool_info, &chain->alloc,
+      result = wsi->CreateCommandPool(_device, &cmd_pool_info, &chain->alloc,
                                       &chain->cmd_pools[i]);
       if (result != VK_SUCCESS)
          goto fail;
@@ -347,6 +369,8 @@ wsi_swapchain_finish(struct wsi_swapchain *chain)
 
       vk_free(&chain->alloc, chain->buffer_blit_semaphores);
    }
+   chain->wsi->DestroySemaphore(chain->device, chain->dma_buf_semaphore,
+                                &chain->alloc);
 
    int cmd_pools_count = chain->buffer_blit_queue != VK_NULL_HANDLE ?
       1 : chain->wsi->queue_family_count;
@@ -834,15 +858,30 @@ wsi_signal_semaphore_for_image(struct vk_device *device,
                                const struct wsi_image *image,
                                VkSemaphore _semaphore)
 {
-   VK_FROM_HANDLE(vk_semaphore, semaphore, _semaphore);
-
-   if (!chain->wsi->signal_fence_with_memory)
+   if (device->physical->supported_sync_types == NULL)
       return VK_SUCCESS;
 
+   VK_FROM_HANDLE(vk_semaphore, semaphore, _semaphore);
+
    vk_semaphore_reset_temporary(device, semaphore);
-   return device->create_sync_for_memory(device, image->memory,
-                                         false /* signal_memory */,
-                                         &semaphore->temporary);
+
+#ifdef HAVE_LIBDRM
+   VkResult result = wsi_create_sync_for_dma_buf_wait(chain, image,
+                                                      VK_SYNC_FEATURE_GPU_WAIT,
+                                                      &semaphore->temporary);
+   if (result != VK_ERROR_FEATURE_NOT_PRESENT)
+      return result;
+#endif
+
+   if (chain->wsi->signal_semaphore_with_memory) {
+      return device->create_sync_for_memory(device, image->memory,
+                                            false /* signal_memory */,
+                                            &semaphore->temporary);
+   } else {
+      return vk_sync_create(device, &vk_sync_dummy_type,
+                            0 /* flags */, 0 /* initial_value */,
+                            &semaphore->temporary);
+   }
 }
 
 static VkResult
@@ -851,15 +890,30 @@ wsi_signal_fence_for_image(struct vk_device *device,
                            const struct wsi_image *image,
                            VkFence _fence)
 {
-   VK_FROM_HANDLE(vk_fence, fence, _fence);
-
-   if (!chain->wsi->signal_fence_with_memory)
+   if (device->physical->supported_sync_types == NULL)
       return VK_SUCCESS;
 
+   VK_FROM_HANDLE(vk_fence, fence, _fence);
+
    vk_fence_reset_temporary(device, fence);
-   return device->create_sync_for_memory(device, image->memory,
-                                         false /* signal_memory */,
-                                         &fence->temporary);
+
+#ifdef HAVE_LIBDRM
+   VkResult result = wsi_create_sync_for_dma_buf_wait(chain, image,
+                                                      VK_SYNC_FEATURE_CPU_WAIT,
+                                                      &fence->temporary);
+   if (result != VK_ERROR_FEATURE_NOT_PRESENT)
+      return result;
+#endif
+
+   if (chain->wsi->signal_fence_with_memory) {
+      return device->create_sync_for_memory(device, image->memory,
+                                            false /* signal_memory */,
+                                            &fence->temporary);
+   } else {
+      return vk_sync_create(device, &vk_sync_dummy_type,
+                            0 /* flags */, 0 /* initial_value */,
+                            &fence->temporary);
+   }
 }
 
 VkResult
@@ -875,12 +929,6 @@ wsi_common_acquire_next_image2(const struct wsi_device *wsi,
                                                    pImageIndex);
    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
       return result;
-
-   if (wsi->set_memory_ownership) {
-      VkDeviceMemory mem = swapchain->get_wsi_image(swapchain, *pImageIndex)->memory;
-      wsi->set_memory_ownership(swapchain->device, mem, true);
-   }
-
    struct wsi_image *image =
       swapchain->get_wsi_image(swapchain, *pImageIndex);
 
@@ -899,6 +947,9 @@ wsi_common_acquire_next_image2(const struct wsi_device *wsi,
       if (signal_result != VK_SUCCESS)
          return signal_result;
    }
+
+   if (wsi->set_memory_ownership)
+      wsi->set_memory_ownership(swapchain->device, image->memory, true);
 
    return result;
 }
@@ -922,6 +973,11 @@ wsi_common_queue_present(const struct wsi_device *wsi,
                          const VkPresentInfoKHR *pPresentInfo)
 {
    VkResult final_result = VK_SUCCESS;
+
+   STACK_ARRAY(VkPipelineStageFlags, stage_flags,
+               pPresentInfo->waitSemaphoreCount);
+   for (uint32_t s = 0; s < pPresentInfo->waitSemaphoreCount; s++)
+      stage_flags[s] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 
    const VkPresentRegionsKHR *regions =
       vk_find_struct_const(pPresentInfo->pNext, PRESENT_REGIONS_KHR);
@@ -963,90 +1019,104 @@ wsi_common_queue_present(const struct wsi_device *wsi,
             goto fail_present;
       }
 
-      struct wsi_image *image =
-         swapchain->get_wsi_image(swapchain, image_index);
-
-      struct wsi_memory_signal_submit_info mem_signal = {
-         .sType = VK_STRUCTURE_TYPE_WSI_MEMORY_SIGNAL_SUBMIT_INFO_MESA,
-         .pNext = NULL,
-         .memory = image->memory,
-      };
+      result = wsi->ResetFences(device, 1, &swapchain->fences[image_index]);
+      if (result != VK_SUCCESS)
+         goto fail_present;
 
       VkSubmitInfo submit_info = {
          .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-         .pNext = &mem_signal,
       };
 
-      VkPipelineStageFlags *stage_flags = NULL;
       if (i == 0) {
          /* We only need/want to wait on semaphores once.  After that, we're
           * guaranteed ordering since it all happens on the same queue.
           */
          submit_info.waitSemaphoreCount = pPresentInfo->waitSemaphoreCount;
          submit_info.pWaitSemaphores = pPresentInfo->pWaitSemaphores;
-
-         /* Set up the pWaitDstStageMasks */
-         stage_flags = vk_alloc(&swapchain->alloc,
-                                sizeof(VkPipelineStageFlags) *
-                                pPresentInfo->waitSemaphoreCount,
-                                8,
-                                VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
-         if (!stage_flags) {
-            result = VK_ERROR_OUT_OF_HOST_MEMORY;
-            goto fail_present;
-         }
-         for (uint32_t s = 0; s < pPresentInfo->waitSemaphoreCount; s++)
-            stage_flags[s] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-
          submit_info.pWaitDstStageMask = stage_flags;
       }
 
-      result = wsi->ResetFences(device, 1, &swapchain->fences[image_index]);
-      if (result != VK_SUCCESS)
-         goto fail_present;
+      struct wsi_image *image =
+         swapchain->get_wsi_image(swapchain, image_index);
 
-      VkFence fence = swapchain->fences[image_index];
+      VkQueue submit_queue = queue;
       if (swapchain->use_buffer_blit) {
          if (swapchain->buffer_blit_queue == VK_NULL_HANDLE) {
-            /* If we are using default buffer blits, we need to perform the blit now.  The
-             * command buffer is attached to the image.
-             */
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers =
                &image->buffer.blit_cmd_buffers[queue_family_index];
-            mem_signal.memory = image->buffer.memory;
          } else {
-            /* If we are using a blit using the driver's private queue, then do an empty
-             * submit signalling a semaphore, and then submit the blit.
+            /* If we are using a blit using the driver's private queue, then
+             * do an empty submit signalling a semaphore, and then submit the
+             * blit waiting on that.  This ensures proper queue ordering of
+             * vkQueueSubmit() calls.
              */
-            fence = VK_NULL_HANDLE;
             submit_info.signalSemaphoreCount = 1;
-            submit_info.pSignalSemaphores = &swapchain->buffer_blit_semaphores[image_index];
-         }
-      }
+            submit_info.pSignalSemaphores =
+               &swapchain->buffer_blit_semaphores[image_index];
 
-      result = wsi->QueueSubmit(queue, 1, &submit_info, fence);
-      vk_free(&swapchain->alloc, stage_flags);
-      if (result != VK_SUCCESS)
-         goto fail_present;
+            result = wsi->QueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+            if (result != VK_SUCCESS)
+               goto fail_present;
 
-      if (swapchain->use_buffer_blit && swapchain->buffer_blit_queue != VK_NULL_HANDLE) {
-         submit_info.commandBufferCount = 1;
-
-         if (swapchain->buffer_blit_queue != VK_NULL_HANDLE) {
-            submit_info.pCommandBuffers = &image->buffer.blit_cmd_buffers[0];
+            /* Now prepare the blit submit.  It needs to then wait on the
+             * semaphore we signaled above.
+             */
+            submit_queue = swapchain->buffer_blit_queue;
             submit_info.waitSemaphoreCount = 1;
             submit_info.pWaitSemaphores = submit_info.pSignalSemaphores;
             submit_info.signalSemaphoreCount = 0;
             submit_info.pSignalSemaphores = NULL;
-            /* Submit the copy to the private transfer queue */
-            result = wsi->QueueSubmit(swapchain->buffer_blit_queue,
-                                      1,
-                                      &submit_info,
-                                      swapchain->fences[image_index]);
+            submit_info.commandBufferCount = 1;
+            submit_info.pCommandBuffers = &image->buffer.blit_cmd_buffers[0];
          }
-         mem_signal.memory = image->buffer.memory;
       }
+
+      VkFence fence = swapchain->fences[image_index];
+
+      bool has_signal_dma_buf = false;
+#ifdef HAVE_LIBDRM
+      result = wsi_prepare_signal_dma_buf_from_semaphore(swapchain, image);
+      if (result == VK_SUCCESS) {
+         assert(submit_info.signalSemaphoreCount == 0);
+         submit_info.signalSemaphoreCount = 1;
+         submit_info.pSignalSemaphores = &swapchain->dma_buf_semaphore;
+         has_signal_dma_buf = true;
+      } else if (result == VK_ERROR_FEATURE_NOT_PRESENT) {
+         result = VK_SUCCESS;
+         has_signal_dma_buf = false;
+      } else {
+         goto fail_present;
+      }
+#endif
+
+      struct wsi_memory_signal_submit_info mem_signal;
+      if (!has_signal_dma_buf) {
+         /* If we don't have dma-buf signaling, signal the memory object by
+          * chaining wsi_memory_signal_submit_info into VkSubmitInfo.
+          */
+         result = VK_SUCCESS;
+         has_signal_dma_buf = false;
+         mem_signal = (struct wsi_memory_signal_submit_info) {
+            .sType = VK_STRUCTURE_TYPE_WSI_MEMORY_SIGNAL_SUBMIT_INFO_MESA,
+            .memory = image->memory,
+         };
+         __vk_append_struct(&submit_info, &mem_signal);
+      }
+
+      result = wsi->QueueSubmit(submit_queue, 1, &submit_info, fence);
+      if (result != VK_SUCCESS)
+         goto fail_present;
+
+#ifdef HAVE_LIBDRM
+      if (has_signal_dma_buf) {
+         result = wsi_signal_dma_buf_from_semaphore(swapchain, image);
+         if (result != VK_SUCCESS)
+            goto fail_present;
+      }
+#else
+      assert(!has_signal_dma_buf);
+#endif
 
       if (wsi->sw)
 	      wsi->WaitForFences(device, 1, &swapchain->fences[image_index],
@@ -1073,6 +1143,8 @@ wsi_common_queue_present(const struct wsi_device *wsi,
       if (final_result == VK_SUCCESS)
          final_result = result;
    }
+
+   STACK_ARRAY_FINISH(stage_flags);
 
    return final_result;
 }

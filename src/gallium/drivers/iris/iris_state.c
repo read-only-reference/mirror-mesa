@@ -2345,7 +2345,7 @@ static void
 alloc_surface_states(struct iris_surface_state *surf_state,
                      unsigned aux_usages)
 {
-   const unsigned surf_size = 4 * GENX(RENDER_SURFACE_STATE_length);
+   enum { surf_size = 4 * GENX(RENDER_SURFACE_STATE_length) };
 
    /* If this changes, update this to explicitly align pointers */
    STATIC_ASSERT(surf_size == SURFACE_STATE_ALIGNMENT);
@@ -3966,12 +3966,12 @@ static uint32_t *
 iris_create_so_decl_list(const struct pipe_stream_output_info *info,
                          const struct brw_vue_map *vue_map)
 {
-   struct GENX(SO_DECL) so_decl[MAX_VERTEX_STREAMS][128];
-   int buffer_mask[MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
-   int next_offset[MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
-   int decls[MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
+   struct GENX(SO_DECL) so_decl[PIPE_MAX_VERTEX_STREAMS][128];
+   int buffer_mask[PIPE_MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
+   int next_offset[PIPE_MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
+   int decls[PIPE_MAX_VERTEX_STREAMS] = {0, 0, 0, 0};
    int max_decls = 0;
-   STATIC_ASSERT(ARRAY_SIZE(so_decl[0]) >= MAX_PROGRAM_OUTPUTS);
+   STATIC_ASSERT(ARRAY_SIZE(so_decl[0]) >= PIPE_MAX_SO_OUTPUTS);
 
    memset(so_decl, 0, sizeof(so_decl));
 
@@ -3983,7 +3983,7 @@ iris_create_so_decl_list(const struct pipe_stream_output_info *info,
       const int buffer = output->output_buffer;
       const int varying = output->register_index;
       const unsigned stream_id = output->stream;
-      assert(stream_id < MAX_VERTEX_STREAMS);
+      assert(stream_id < PIPE_MAX_VERTEX_STREAMS);
 
       buffer_mask[stream_id] |= 1 << buffer;
 
@@ -6235,7 +6235,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
          for (int i = 0; i < 4; i++) {
             struct iris_stream_output_target *tgt =
                (void *) ice->state.so_target[i];
-            const uint32_t dwords = GENX(3DSTATE_SO_BUFFER_length);
+            enum { dwords = GENX(3DSTATE_SO_BUFFER_length) };
             uint32_t *so_buffers = genx->so_buffers + i * dwords;
             bool zero_offset = false;
 

@@ -203,12 +203,12 @@ gl_to_nir_xfb_info(struct gl_transform_feedback_info *info, void *mem_ctx)
       return NULL;
 
    nir_xfb_info *xfb =
-      ralloc_size(mem_ctx, nir_xfb_info_size(info->NumOutputs));
+      rzalloc_size(mem_ctx, nir_xfb_info_size(info->NumOutputs));
 
    xfb->output_count = info->NumOutputs;
 
    for (unsigned i = 0; i < MAX_FEEDBACK_BUFFERS; i++) {
-      xfb->buffers[i].stride = info->Buffers[i].Stride;
+      xfb->buffers[i].stride = info->Buffers[i].Stride * 4;
       xfb->buffers[i].varying_count = info->Buffers[i].NumVaryings;
       xfb->buffer_to_stream[i] = info->Buffers[i].Stream;
    }

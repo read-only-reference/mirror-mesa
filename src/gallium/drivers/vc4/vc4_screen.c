@@ -275,7 +275,7 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen,
                 return shader == PIPE_SHADER_FRAGMENT ? 1 : 8;
         case PIPE_SHADER_CAP_MAX_TEMPS:
                 return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
-        case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+        case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
                 return 16 * 1024 * sizeof(float);
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
                 return 1;
@@ -311,7 +311,6 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen,
                 return PIPE_SHADER_IR_NIR;
         case PIPE_SHADER_CAP_SUPPORTED_IRS:
                 return 1 << PIPE_SHADER_IR_NIR;
-        case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
         case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:

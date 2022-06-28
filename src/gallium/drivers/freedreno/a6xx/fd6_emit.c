@@ -68,7 +68,7 @@ struct PACKED bcolor_entry {
    uint8_t ui8[4];
    int8_t si8[4];
    uint32_t rgb10a2;
-   uint32_t z24; /* also s8? */
+   uint32_t z24;
    uint16_t
       srgb[4]; /* appears to duplicate fp16[], but clamped, used for srgb */
    uint8_t __pad1[56];
@@ -80,10 +80,12 @@ struct PACKED bcolor_entry {
 
 static void
 setup_border_colors(struct fd_texture_stateobj *tex,
-                    struct bcolor_entry *entries)
+                    struct bcolor_entry *entries,
+                    struct fd_screen *screen)
 {
    unsigned i, j;
    STATIC_ASSERT(sizeof(struct bcolor_entry) == FD6_BORDER_COLOR_SIZE);
+   const bool has_z24uint_s8uint = screen->info->a6xx.has_z24uint_s8uint;
 
    for (i = 0; i < tex->num_samplers; i++) {
       struct bcolor_entry *e = &entries[i];
@@ -120,8 +122,7 @@ setup_border_colors(struct fd_texture_stateobj *tex,
 
       unsigned char swiz[4];
 
-      fd6_tex_swiz(format, swiz, view->swizzle_r, view->swizzle_g,
-                   view->swizzle_b, view->swizzle_a);
+      fdl6_format_swiz(format, false, swiz);
 
       for (j = 0; j < 4; j++) {
          int c = swiz[j];
@@ -132,14 +133,15 @@ setup_border_colors(struct fd_texture_stateobj *tex,
           * stencil border color value in bc->ui[0] but according
           * to desc->swizzle and desc->channel, the .x/.w component
           * is NONE and the stencil value is in the y component.
-          * Meanwhile the hardware wants this in the .w component
-          * for x24s8 and the .x component for x32_s8x24.
+          * Meanwhile the hardware wants this in the .x component
+          * for x24s8 and x32_s8x24, or the .y component for x24s8 with the
+          * special Z24UINT_S8UINT format.
           */
          if ((format == PIPE_FORMAT_X24S8_UINT) ||
              (format == PIPE_FORMAT_X32_S8X24_UINT)) {
             if (j == 0) {
                c = 1;
-               cd = (format == PIPE_FORMAT_X32_S8X24_UINT) ? 0 : 3;
+               cd = (format == PIPE_FORMAT_X24S8_UINT && has_z24uint_s8uint) ? 1 : 0;
             } else {
                continue;
             }
@@ -232,9 +234,10 @@ emit_border_color(struct fd_context *ctx, struct fd_ringbuffer *ring) assert_dt
 
    entries = ptr;
 
-   setup_border_colors(&ctx->tex[PIPE_SHADER_VERTEX], &entries[0]);
+   setup_border_colors(&ctx->tex[PIPE_SHADER_VERTEX], &entries[0], ctx->screen);
    setup_border_colors(&ctx->tex[PIPE_SHADER_FRAGMENT],
-                       &entries[ctx->tex[PIPE_SHADER_VERTEX].num_samplers]);
+                       &entries[ctx->tex[PIPE_SHADER_VERTEX].num_samplers],
+                       ctx->screen);
 
    OUT_PKT4(ring, REG_A6XX_SP_TP_BORDER_COLOR_BASE_ADDR, 2);
    OUT_RELOC(ring, fd_resource(fd6_ctx->border_color_buf)->bo, off, 0, 0);
@@ -980,11 +983,11 @@ fd6_emit_non_ring(struct fd_ringbuffer *ring, struct fd6_emit *emit) assert_dt
                                                     .vert = guardband_y));
    }
 
-   /* The clamp ranges are only used when the rasterizer wants depth
-    * clamping.
+   /* The clamp ranges are only used when the rasterizer disables
+    * depth clip.
     */
    if ((dirty & (FD_DIRTY_VIEWPORT | FD_DIRTY_RASTERIZER)) &&
-       fd_depth_clamp_enabled(ctx)) {
+       fd_depth_clip_disabled(ctx)) {
       float zmin, zmax;
       util_viewport_zmin_zmax(&ctx->viewport, ctx->rasterizer->clip_halfz,
                               &zmin, &zmax);
@@ -1034,7 +1037,7 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
          state = fd6_zsa_state(
             ctx,
             util_format_is_pure_integer(pipe_surface_format(pfb->cbufs[0])),
-            fd_depth_clamp_enabled(ctx));
+            fd_depth_clip_disabled(ctx));
          fd_ringbuffer_ref(state);
          break;
       case FD6_GROUP_LRZ:

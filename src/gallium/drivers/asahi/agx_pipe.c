@@ -724,7 +724,6 @@ agx_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
-   case PIPE_CAP_VERTEX_SHADER_SATURATE:
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -792,7 +791,7 @@ agx_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
 
-   case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
+   case PIPE_CAP_MAX_TEXEL_BUFFER_ELEMENTS_UINT:
       return 65536;
 
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -819,6 +818,7 @@ agx_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return true;
+   case PIPE_CAP_POINT_COORD_ORIGIN_UPPER_LEFT:
    case PIPE_CAP_FS_POINT_IS_SYSVAL:
       return false;
 
@@ -933,7 +933,7 @@ agx_get_shader_param(struct pipe_screen* pscreen,
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
 
-   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
       return 16 * 1024 * sizeof(float);
 
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
@@ -981,7 +981,6 @@ agx_get_shader_param(struct pipe_screen* pscreen,
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_NIR) | (1 << PIPE_SHADER_IR_NIR_SERIALIZED);
 
-   case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:

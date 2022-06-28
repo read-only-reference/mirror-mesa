@@ -225,6 +225,7 @@ zink_descriptor_program_init_lazy(struct zink_context *ctx, struct zink_program 
             init_template_entry(shader, j, k, &entries[desc_set][entry_idx[desc_set]], &entry_idx[desc_set], screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_LAZY);
             num_bindings[desc_set]++;
             has_bindings |= BITFIELD_BIT(desc_set);
+            pg->dd->real_binding_usage |= BITFIELD_BIT(j);
          }
          num_type_sizes[desc_set] = screen->compact_descriptors ?
                                     descriptor_program_num_sizes_compact(sizes, desc_set) :
@@ -301,7 +302,8 @@ zink_descriptor_program_init_lazy(struct zink_context *ctx, struct zink_program 
    pg->layout = zink_pipeline_layout_create(screen, pg, &pg->compat_id);
    if (!pg->layout)
       return false;
-   if (!screen->info.have_KHR_descriptor_update_template || screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_NOTEMPLATES)
+   /* TODO: figure out uncached+notemplate and return on screen->descriptor_mode == ZINK_DESCRIPTOR_MODE_NOTEMPLATES */
+   if (!screen->info.have_KHR_descriptor_update_template)
       return true;
 
    VkDescriptorUpdateTemplateCreateInfo template[ZINK_DESCRIPTOR_TYPES + 1] = {0};
@@ -653,7 +655,7 @@ zink_context_invalidate_descriptor_state_lazy(struct zink_context *ctx, enum pip
       dd_lazy(ctx)->push_state_changed[shader == PIPE_SHADER_COMPUTE] = true;
    else {
       if (zink_screen(ctx->base.screen)->compact_descriptors && type > ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW)
-         type -= 2;
+         type -= ZINK_DESCRIPTOR_COMPACT;
       dd_lazy(ctx)->state_changed[shader == PIPE_SHADER_COMPUTE] |= BITFIELD_BIT(type);
    }
 }

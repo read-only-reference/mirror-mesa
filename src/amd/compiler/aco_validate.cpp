@@ -379,8 +379,9 @@ validate_ir(Program* program)
             }
 
             if (instr->isSOP1() || instr->isSOP2()) {
-               check(instr->definitions[0].getTemp().type() == RegType::sgpr,
-                     "Wrong Definition type for SALU instruction", instr.get());
+               if (!instr->definitions.empty())
+                  check(instr->definitions[0].getTemp().type() == RegType::sgpr,
+                        "Wrong Definition type for SALU instruction", instr.get());
                for (const Operand& op : instr->operands) {
                   check(op.isConstant() || op.regClass().type() <= RegType::sgpr,
                         "Wrong Operand type for SALU instruction", instr.get());
@@ -840,6 +841,7 @@ validate_subdword_definition(amd_gfx_level gfx_level, const aco_ptr<Instruction>
       return true;
 
    switch (instr->opcode) {
+   case aco_opcode::v_fma_mixhi_f16:
    case aco_opcode::buffer_load_ubyte_d16_hi:
    case aco_opcode::buffer_load_sbyte_d16_hi:
    case aco_opcode::buffer_load_short_d16_hi:

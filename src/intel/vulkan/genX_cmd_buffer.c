@@ -120,7 +120,7 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
    /* Emit a render target cache flush.
     *
     * This isn't documented anywhere in the PRM.  However, it seems to be
-    * necessary prior to changing the surface state base adress.  Without
+    * necessary prior to changing the surface state base address.  Without
     * this, we get GPU hangs when using multi-level command buffers which
     * clear depth, reset state base address, and then go render stuff.
     */
@@ -237,7 +237,7 @@ genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer)
 #endif /* GFX_VERx10 < 125 */
 
    /* After re-setting the surface state base address, we have to do some
-    * cache flusing so that the sampler engine will pick up the new
+    * cache flushing so that the sampler engine will pick up the new
     * SURFACE_STATE objects and binding tables. From the Broadwell PRM,
     * Shared Function > 3D Sampler > State > State Caching (page 96):
     *
@@ -1678,7 +1678,7 @@ genX(BeginCommandBuffer)(
    }
 
    /* We send an "Indirect State Pointers Disable" packet at
-    * EndCommandBuffer, so all push contant packets are ignored during a
+    * EndCommandBuffer, so all push constant packets are ignored during a
     * context restore. Documentation says after that command, we need to
     * emit push constants again before any rendering operation. So we
     * flag them dirty here to make sure they get emitted.
@@ -1689,28 +1689,23 @@ genX(BeginCommandBuffer)(
        VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) {
       struct anv_cmd_graphics_state *gfx = &cmd_buffer->state.gfx;
 
-      const VkCommandBufferInheritanceRenderingInfo *inheritance_info =
-         vk_get_command_buffer_inheritance_rendering_info(cmd_buffer->vk.level,
-                                                          pBeginInfo);
-
-      /* We can't get this information from the inheritance info */
-      gfx->render_area = (VkRect2D) { };
-      gfx->layer_count = 0;
-      gfx->samples = 0;
-      gfx->depth_att = (struct anv_attachment) { };
-      gfx->stencil_att = (struct anv_attachment) { };
-
-      if (inheritance_info == NULL) {
-         gfx->rendering_flags = 0;
-         gfx->view_mask = 0;
-         gfx->samples = 0;
-         result = anv_cmd_buffer_init_attachments(cmd_buffer, 0, 0);
-         if (result != VK_SUCCESS)
-            return result;
+      char gcbiar_data[VK_GCBIARR_DATA_SIZE(MAX_RTS)];
+      const VkRenderingInfo *resume_info =
+         vk_get_command_buffer_inheritance_as_rendering_resume(cmd_buffer->vk.level,
+                                                               pBeginInfo,
+                                                               gcbiar_data);
+      if (resume_info != NULL) {
+         genX(CmdBeginRendering)(commandBuffer, resume_info);
       } else {
+         const VkCommandBufferInheritanceRenderingInfo *inheritance_info =
+            vk_get_command_buffer_inheritance_rendering_info(cmd_buffer->vk.level,
+                                                             pBeginInfo);
+
          gfx->rendering_flags = inheritance_info->flags;
-         gfx->view_mask = inheritance_info->viewMask;
+         gfx->render_area = (VkRect2D) { };
+         gfx->layer_count = 0;
          gfx->samples = inheritance_info->rasterizationSamples;
+         gfx->view_mask = inheritance_info->viewMask;
 
          uint32_t color_att_valid = 0;
          uint32_t color_att_count = inheritance_info->colorAttachmentCount;
@@ -1733,59 +1728,9 @@ genX(BeginCommandBuffer)(
             inheritance_info->depthAttachmentFormat;
          gfx->stencil_att.vk_format =
             inheritance_info->stencilAttachmentFormat;
+
+         cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
       }
-
-      /* Try to figure out the depth buffer if we can */
-      if (pBeginInfo->pInheritanceInfo->renderPass != VK_NULL_HANDLE &&
-          pBeginInfo->pInheritanceInfo->framebuffer != VK_NULL_HANDLE) {
-         VK_FROM_HANDLE(vk_render_pass, pass,
-                        pBeginInfo->pInheritanceInfo->renderPass);
-         VK_FROM_HANDLE(vk_framebuffer, fb,
-                        pBeginInfo->pInheritanceInfo->framebuffer);
-         const struct vk_subpass *subpass =
-            &pass->subpasses[pBeginInfo->pInheritanceInfo->subpass];
-
-         if (!(fb->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT_KHR) &&
-             subpass->depth_stencil_attachment != NULL) {
-            const struct vk_subpass_attachment *att =
-               subpass->depth_stencil_attachment;
-
-            assert(att->attachment < fb->attachment_count);
-            ANV_FROM_HANDLE(anv_image_view, iview,
-                            fb->attachments[att->attachment]);
-
-            if (iview->vk.image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
-               assert(gfx->depth_att.vk_format == iview->vk.format);
-               gfx->depth_att.iview = iview;
-               gfx->depth_att.layout = att->layout;
-               gfx->depth_att.aux_usage =
-                  anv_layout_to_aux_usage(&cmd_buffer->device->info,
-                                          iview->image,
-                                          VK_IMAGE_ASPECT_DEPTH_BIT,
-                                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                          att->layout);
-            }
-
-            if (iview->vk.image->aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
-               assert(gfx->stencil_att.vk_format == iview->vk.format);
-               gfx->stencil_att.iview = iview;
-               gfx->stencil_att.layout = att->stencil_layout;
-               gfx->stencil_att.aux_usage =
-                  anv_layout_to_aux_usage(&cmd_buffer->device->info,
-                                          iview->image,
-                                          VK_IMAGE_ASPECT_STENCIL_BIT,
-                                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                          att->stencil_layout);
-            }
-         }
-      }
-
-      if (gfx->depth_att.iview != NULL) {
-         cmd_buffer->state.hiz_enabled =
-            isl_aux_usage_has_hiz(gfx->depth_att.aux_usage);
-      }
-
-      cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
    }
 
 #if GFX_VER >= 8
@@ -6336,21 +6281,31 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    if (dw == NULL)
       return;
 
+   struct isl_view isl_view = {};
    struct isl_depth_stencil_hiz_emit_info info = {
+      .view = &isl_view,
       .mocs = anv_mocs(device, NULL, ISL_SURF_USAGE_DEPTH_BIT),
    };
 
    if (gfx->depth_att.iview != NULL) {
-      info.view = &gfx->depth_att.iview->planes[0].isl;
+      isl_view = gfx->depth_att.iview->planes[0].isl;
    } else if (gfx->stencil_att.iview != NULL) {
-      info.view = &gfx->stencil_att.iview->planes[0].isl;
+      isl_view = gfx->stencil_att.iview->planes[0].isl;
+   }
+
+   if (gfx->view_mask) {
+      assert(isl_view.array_len == 0 ||
+             isl_view.array_len >= util_last_bit(gfx->view_mask));
+      isl_view.array_len = util_last_bit(gfx->view_mask);
+   } else {
+      assert(isl_view.array_len == 0 ||
+             isl_view.array_len >= util_last_bit(gfx->layer_count));
+      isl_view.array_len = gfx->layer_count;
    }
 
    if (gfx->depth_att.iview != NULL) {
       const struct anv_image_view *iview = gfx->depth_att.iview;
       const struct anv_image *image = iview->image;
-
-      info.view = &iview->planes[0].isl;
 
       const uint32_t depth_plane =
          anv_image_aspect_to_plane(image, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -6391,9 +6346,6 @@ cmd_buffer_emit_depth_stencil(struct anv_cmd_buffer *cmd_buffer)
    if (gfx->stencil_att.iview != NULL) {
       const struct anv_image_view *iview = gfx->stencil_att.iview;
       const struct anv_image *image = iview->image;
-
-      if (info.view == NULL)
-         info.view = &iview->planes[0].isl;
 
       const uint32_t stencil_plane =
          anv_image_aspect_to_plane(image, VK_IMAGE_ASPECT_STENCIL_BIT);
@@ -6689,10 +6641,19 @@ void genX(CmdBeginRendering)(
       gfx->color_att[i].layout = att->imageLayout;
       gfx->color_att[i].aux_usage = aux_usage;
 
+      struct isl_view isl_view = iview->planes[0].isl;
+      if (pRenderingInfo->viewMask) {
+         assert(isl_view.array_len >= util_last_bit(pRenderingInfo->viewMask));
+         isl_view.array_len = util_last_bit(pRenderingInfo->viewMask);
+      } else {
+         assert(isl_view.array_len >= pRenderingInfo->layerCount);
+         isl_view.array_len = pRenderingInfo->layerCount;
+      }
+
       anv_image_fill_surface_state(cmd_buffer->device,
                                    iview->image,
                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                   &iview->planes[0].isl,
+                                   &isl_view,
                                    ISL_SURF_USAGE_RENDER_TARGET_BIT,
                                    aux_usage, &fast_clear_color,
                                    0, /* anv_image_view_state_flags */
@@ -6965,7 +6926,7 @@ void genX(CmdBeginRendering)(
 #if GFX_VER >= 11
    /* The PIPE_CONTROL command description says:
     *
-    *    "Whenever a Binding Table Index (BTI) used by a Render Taget Message
+    *    "Whenever a Binding Table Index (BTI) used by a Render Target Message
     *     points to a different RENDER_SURFACE_STATE, SW must issue a Render
     *     Target Cache Flush by enabling this bit. When render target flush
     *     is set due to new association of BTI, PS Scoreboard Stall bit must
@@ -7208,6 +7169,7 @@ void genX(CmdEndRendering)(
     *  - VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     *  - VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL
     *  - VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL
+    *  - VK_IMAGE_LAYOUT_SUBPASS_SELF_DEPENDENCY_MESA
     *
     * For general, we have no nice opportunity to transition so we do the copy
     * to the shadow unconditionally at the end of the subpass. For transfer
@@ -7221,7 +7183,8 @@ void genX(CmdEndRendering)(
          anv_image_aspect_to_plane(image, VK_IMAGE_ASPECT_STENCIL_BIT);
 
       if (anv_surface_is_valid(&image->planes[plane].shadow_surface) &&
-          gfx->stencil_att.layout == VK_IMAGE_LAYOUT_GENERAL) {
+          (gfx->stencil_att.layout == VK_IMAGE_LAYOUT_GENERAL ||
+           gfx->stencil_att.layout == VK_IMAGE_LAYOUT_SUBPASS_SELF_DEPENDENCY_MESA)) {
          anv_image_copy_to_shadow(cmd_buffer, image,
                                   VK_IMAGE_ASPECT_STENCIL_BIT,
                                   iview->planes[plane].isl.base_level, 1,
@@ -7407,6 +7370,51 @@ void genX(CmdWaitEvents2)(
 #endif
 
    cmd_buffer_barrier(cmd_buffer, pDependencyInfos, "wait event");
+}
+
+static uint32_t vk_to_intel_index_type(VkIndexType type)
+{
+   switch (type) {
+   case VK_INDEX_TYPE_UINT8_EXT:
+      return INDEX_BYTE;
+   case VK_INDEX_TYPE_UINT16:
+      return INDEX_WORD;
+   case VK_INDEX_TYPE_UINT32:
+      return INDEX_DWORD;
+   default:
+      unreachable("invalid index type");
+   }
+}
+
+static uint32_t restart_index_for_type(VkIndexType type)
+{
+   switch (type) {
+   case VK_INDEX_TYPE_UINT8_EXT:
+      return UINT8_MAX;
+   case VK_INDEX_TYPE_UINT16:
+      return UINT16_MAX;
+   case VK_INDEX_TYPE_UINT32:
+      return UINT32_MAX;
+   default:
+      unreachable("invalid index type");
+   }
+}
+
+void genX(CmdBindIndexBuffer)(
+    VkCommandBuffer                             commandBuffer,
+    VkBuffer                                    _buffer,
+    VkDeviceSize                                offset,
+    VkIndexType                                 indexType)
+{
+   ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+   ANV_FROM_HANDLE(anv_buffer, buffer, _buffer);
+
+   cmd_buffer->state.restart_index = restart_index_for_type(indexType);
+   cmd_buffer->state.gfx.index_buffer = buffer;
+   cmd_buffer->state.gfx.index_type = vk_to_intel_index_type(indexType);
+   cmd_buffer->state.gfx.index_offset = offset;
+
+   cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_INDEX_BUFFER;
 }
 
 VkResult genX(CmdSetPerformanceOverrideINTEL)(

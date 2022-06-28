@@ -130,12 +130,12 @@ typedef struct {
          * write mask. Identity for the full 32-bit, H00 for only caring about
          * the lower half, other values unused. */
         enum bi_swizzle swizzle : 4;
-        uint32_t offset : 2;
+        uint32_t offset : 3;
         bool reg : 1;
         enum bi_index_type type : 3;
 
         /* Must be zeroed so we can hash the whole 64-bits at a time */
-        unsigned padding : (32 - 13);
+        unsigned padding : (32 - 14);
 } bi_index;
 
 static inline bi_index
@@ -366,7 +366,7 @@ bi_is_value_equiv(bi_index left, bi_index right)
 
 #define BI_MAX_VEC 8
 #define BI_MAX_DESTS 4
-#define BI_MAX_SRCS 5
+#define BI_MAX_SRCS 6
 
 typedef struct {
         /* Must be first */
@@ -389,6 +389,9 @@ typedef struct {
 
         /* Flow control associated with a Valhall instruction */
         uint8_t flow;
+
+        /* Slot associated with a message-passing instruction */
+        uint8_t slot;
 
         /* Can we spill the value written here? Used to prevent
          * useless double fills */
@@ -539,7 +542,7 @@ typedef struct {
 } bi_instr;
 
 static inline bool
-bi_is_staging_src(bi_instr *I, unsigned s)
+bi_is_staging_src(const bi_instr *I, unsigned s)
 {
         return (s == 0 || s == 4) && bi_opcode_props[I->op].sr_read;
 }
@@ -646,6 +649,10 @@ struct bi_scoreboard_state {
         /** Bitmap of registers read/written by a slot */
         uint64_t read[BI_NUM_SLOTS];
         uint64_t write[BI_NUM_SLOTS];
+
+        /* Nonregister dependencies present by a slot */
+        uint8_t varying : BI_NUM_SLOTS;
+        uint8_t memory : BI_NUM_SLOTS;
 };
 
 typedef struct bi_block {
@@ -677,6 +684,11 @@ typedef struct bi_block {
         /* Scoreboard state at the start/end of block */
         struct bi_scoreboard_state scoreboard_in, scoreboard_out;
 
+        /* On Valhall, indicates we need a terminal NOP to implement jumps to
+         * the end of the shader.
+         */
+        bool needs_nop;
+
         /* Flags available for pass-internal use */
         uint8_t pass_flags;
 } bi_block;
@@ -701,6 +713,31 @@ bi_exit_block(struct list_head *blocks)
         bi_block *last = list_last_entry(blocks, bi_block, link);
         assert(!last->successors[0] && !last->successors[1]);
         return last;
+}
+
+static inline void
+bi_block_add_successor(bi_block *block, bi_block *successor)
+{
+        assert(block != NULL && successor != NULL);
+
+        /* Cull impossible edges */
+        if (block->unconditional_jumps)
+                return;
+
+        for (unsigned i = 0; i < ARRAY_SIZE(block->successors); ++i) {
+                if (block->successors[i]) {
+                       if (block->successors[i] == successor)
+                               return;
+                       else
+                               continue;
+                }
+
+                block->successors[i] = successor;
+                util_dynarray_append(&successor->predecessors, bi_block *, block);
+                return;
+        }
+
+        unreachable("Too many successors");
 }
 
 /* Subset of pan_shader_info needed per-variant, in order to support IDVS */
@@ -1033,6 +1070,9 @@ bi_clause * bi_next_clause(bi_context *ctx, bi_block *block, bi_clause *clause);
 bool bi_side_effects(const bi_instr *I);
 bool bi_reconverge_branches(bi_block *block);
 
+bool bi_can_replace_with_csel(bi_instr *I);
+void bi_replace_mux_with_csel(bi_instr *I, bool must_sign);
+
 void bi_print_instr(const bi_instr *I, FILE *fp);
 void bi_print_slots(bi_registers *regs, FILE *fp);
 void bi_print_tuple(bi_tuple *tuple, FILE *fp);
@@ -1042,7 +1082,11 @@ void bi_print_shader(bi_context *ctx, FILE *fp);
 
 /* BIR passes */
 
+bool bi_instr_uses_helpers(bi_instr *I);
+bool bi_block_terminates_helpers(bi_block *block);
 void bi_analyze_helper_terminate(bi_context *ctx);
+void bi_mark_clauses_td(bi_context *ctx);
+
 void bi_analyze_helper_requirements(bi_context *ctx);
 void bi_opt_copy_prop(bi_context *ctx);
 void bi_opt_cse(bi_context *ctx);
@@ -1089,7 +1133,7 @@ void bi_compute_liveness(bi_context *ctx);
 void bi_liveness_ins_update(uint8_t *live, bi_instr *ins, unsigned max);
 
 void bi_postra_liveness(bi_context *ctx);
-uint64_t bi_postra_liveness_ins(uint64_t live, bi_instr *ins);
+uint64_t MUST_CHECK bi_postra_liveness_ins(uint64_t live, bi_instr *ins);
 
 /* Layout */
 

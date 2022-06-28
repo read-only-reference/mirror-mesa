@@ -272,6 +272,9 @@ const char *gl_vert_attrib_name(gl_vert_attrib attrib);
 #define VERT_BIT_MAT(i)	         VERT_BIT(VERT_ATTRIB_MAT(i))
 #define VERT_BIT_MAT_ALL         \
    BITFIELD_RANGE(VERT_ATTRIB_MAT(0), VERT_ATTRIB_MAT_MAX)
+
+#define VERT_ATTRIB_SELECT_RESULT_OFFSET VERT_ATTRIB_GENERIC(3)
+#define VERT_BIT_SELECT_RESULT_OFFSET VERT_BIT_GENERIC(3)
 /*@}*/
 
 #define MAX_VARYING 32 /**< number of float[4] vectors */
@@ -822,6 +825,7 @@ typedef enum
    SYSTEM_VALUE_RAY_FLAGS,
    SYSTEM_VALUE_RAY_GEOMETRY_INDEX,
    SYSTEM_VALUE_RAY_INSTANCE_CUSTOM_INDEX,
+   SYSTEM_VALUE_CULL_MASK,
    /*@}*/
 
    /**

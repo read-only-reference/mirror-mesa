@@ -89,12 +89,6 @@ stages:
   - layered-backends
   - deploy
 
-# Generic rule to not run the job during scheduled pipelines
-# ----------------------------------------------------------
-.scheduled_pipelines-rules:
-  rules: &ignore_scheduled_pipelines
-    if: &is-scheduled-pipeline '$CI_PIPELINE_SOURCE == "schedule"'
-    when: never
 
 # YAML anchors for rule conditions
 # --------------------------------
@@ -141,7 +135,7 @@ pages:
     - public
   needs: []
   rules:
-    - *ignore_scheduled_pipelines
+    - !reference [.no_scheduled_pipelines-rules, rules]
     - if: *is-mesa-main
       changes: &docs-or-ci
       - docs/**/*
@@ -156,7 +150,7 @@ test-docs:
   stage: deploy
   needs: []
   rules:
-    - *ignore_scheduled_pipelines
+    - !reference [.no_scheduled_pipelines-rules, rules]
     - if: *is-forked-branch
       changes: *docs-or-ci
       when: manual
@@ -180,7 +174,7 @@ test-docs-mr:
 # When to automatically run the CI
 .ci-run-policy:
   rules:
-    - *ignore_scheduled_pipelines
+    - !reference [.no_scheduled_pipelines-rules, rules]
     # If any files affecting the pipeline are changed, build/test jobs run
     # automatically once all dependency jobs have passed
     - changes: &all_paths
@@ -200,8 +194,7 @@ test-docs-mr:
       - include/**/*
       - src/**/*
       when: on_success
-    # Otherwise, build/test jobs won't run
-    - when: never
+    # Otherwise, build/test jobs won't run because no rule matched.
   retry:
     max: 2
     when:
@@ -224,7 +217,7 @@ test-docs-mr:
   extends:
     - .ci-run-policy
   rules:
-    - *ignore_scheduled_pipelines
+    - !reference [.no_scheduled_pipelines-rules, rules]
     # Run pipeline by default in the main project if any CI pipeline
     # configuration files were changed, to ensure docker images are up to date
     - if: *is-post-merge
@@ -249,8 +242,7 @@ test-docs-mr:
     - changes:
         *all_paths
       when: manual
-    # Otherwise, container jobs won't run
-    - when: never
+    # Otherwise, container jobs won't run because no rule matched.
 
 # Git archive
 
@@ -259,8 +251,7 @@ make git archive:
     - .fdo.ci-fairy
   stage: git-archive
   rules:
-    - if: *is-scheduled-pipeline
-      when: on_success
+    - !reference [.scheduled_pipeline-rules, rules]
   # ensure we are running on packet
   tags:
     - packet.net
@@ -294,33 +285,17 @@ sanity:
     reports:
       junit: check-*.xml
 
-# Rules for tests that should not be present in MRs or the main
-# project's pipeline (don't block marge or report red on
-# mesa/mesa main) but should be present on pipelines in personal
-# branches (so you can opt in to running the flaky test when you want
-# to).
-.test-manual:
-  rules:
-    - *ignore_scheduled_pipelines
-    - if: *is-forked-branch
-      changes:
-        *all_paths
-      when: manual
-    - when: never
-  variables:
-    GIT_STRATEGY: none
-    JOB_TIMEOUT: 80
-
-# The above .test-manual rules doesn't allow the jobs to be available for MRs
-# but we should have an option to have manual jobs in MRs as well.
+# Rules for tests that should not block merging, but should be available to
+# optionally run with the "play" button in the UI in pre-merge non-marge
+# pipelines.  This should appear in "extends:" after any includes of
+# test-source-dep.yml rules, so that these rules replace those.
 .test-manual-mr:
   rules:
-    - *ignore_scheduled_pipelines
+    - !reference [.no_scheduled_pipelines-rules, rules]
     - if: *is-forked-branch-or-pre-merge-not-for-marge
       changes:
         *all_paths
       when: manual
-    - when: never
   variables:
     GIT_STRATEGY: none
     JOB_TIMEOUT: 80

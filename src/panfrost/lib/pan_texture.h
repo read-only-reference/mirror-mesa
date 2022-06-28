@@ -164,7 +164,7 @@ panfrost_format_supports_afbc(const struct panfrost_device *dev,
                 enum pipe_format format);
 
 enum pipe_format
-panfrost_afbc_format(const struct panfrost_device *dev, enum pipe_format format);
+panfrost_afbc_format(unsigned arch, enum pipe_format format);
 
 #define AFBC_HEADER_BYTES_PER_TILE 16
 
@@ -262,6 +262,12 @@ void
 pan_iview_get_surface(const struct pan_image_view *iview,
                       unsigned level, unsigned layer, unsigned sample,
                       struct pan_surface *surf);
+
+
+#if PAN_ARCH >= 9
+enum mali_afbc_compression_mode
+pan_afbc_compression_mode(enum pipe_format format);
+#endif
 
 #ifdef __cplusplus
 } /* extern C */

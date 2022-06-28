@@ -67,14 +67,7 @@ struct ac_shader_abi {
    LLVMValueRef (*load_tess_varyings)(struct ac_shader_abi *abi, LLVMTypeRef type,
                                       LLVMValueRef vertex_index, LLVMValueRef param_index,
                                       unsigned driver_location, unsigned component,
-                                      unsigned num_components,
-                                      bool load_inputs, bool vertex_index_is_invoc_id);
-
-   void (*store_tcs_outputs)(struct ac_shader_abi *abi,
-                             LLVMValueRef vertex_index, LLVMValueRef param_index,
-                             LLVMValueRef src, unsigned writemask,
-                             unsigned component, unsigned location, unsigned driver_location);
-
+                                      unsigned num_components, bool load_inputs);
 
    LLVMValueRef (*load_ubo)(struct ac_shader_abi *abi, LLVMValueRef index);
 

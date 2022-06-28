@@ -342,6 +342,13 @@ panfrost_delete_shader_state(
                 panfrost_bo_unreference(shader_state->bin.bo);
                 panfrost_bo_unreference(shader_state->state.bo);
                 panfrost_bo_unreference(shader_state->linkage.bo);
+
+                if (shader_state->xfb) {
+                        panfrost_bo_unreference(shader_state->xfb->bin.bo);
+                        panfrost_bo_unreference(shader_state->xfb->state.bo);
+                        panfrost_bo_unreference(shader_state->xfb->linkage.bo);
+                        free(shader_state->xfb);
+                }
         }
 
         simple_mtx_destroy(&cso->lock);
@@ -1047,12 +1054,13 @@ panfrost_set_stream_output_targets(struct pipe_context *pctx,
                 pipe_so_target_reference(&so->targets[i], NULL);
 
         so->num_targets = num_targets;
+        ctx->dirty |= PAN_DIRTY_SO;
 }
 
 struct pipe_context *
 panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
 {
-        struct panfrost_context *ctx = rzalloc(screen, struct panfrost_context);
+        struct panfrost_context *ctx = rzalloc(NULL, struct panfrost_context);
         struct pipe_context *gallium = (struct pipe_context *) ctx;
         struct panfrost_device *dev = pan_device(screen);
 

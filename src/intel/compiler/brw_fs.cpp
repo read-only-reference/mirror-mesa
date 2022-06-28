@@ -45,7 +45,7 @@
 
 using namespace brw;
 
-static unsigned get_lowered_simd_width(const struct intel_device_info *devinfo,
+static unsigned get_lowered_simd_width(const struct brw_compiler *compiler,
                                        const fs_inst *inst);
 
 void
@@ -1048,7 +1048,7 @@ unsigned
 fs_inst::flags_written(const intel_device_info *devinfo) const
 {
    /* On Gfx4 and Gfx5, sel.l (for min) and sel.ge (for max) are implemented
-    * using a separte cmpn and sel instruction.  This lowering occurs in
+    * using a separate cmpn and sel instruction.  This lowering occurs in
     * fs_vistor::lower_minmax which is called very, very late.
     */
    if ((conditional_mod && ((opcode != BRW_OPCODE_SEL || devinfo->ver <= 5) &&
@@ -1405,7 +1405,7 @@ fs_visitor::emit_sampleid_setup()
        */
 
       /* SKL+ has an extra bit for the Starting Sample Pair Index to
-       * accomodate 16x MSAA.
+       * accommodate 16x MSAA.
        */
       abld.exec_all().group(1, 0)
           .AND(t1, fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UD)),
@@ -2550,9 +2550,24 @@ fs_visitor::opt_algebraic()
       switch (inst->opcode) {
       case BRW_OPCODE_MOV:
          if (!devinfo->has_64bit_float &&
-             !devinfo->has_64bit_int &&
-             (inst->dst.type == BRW_REGISTER_TYPE_DF ||
-              inst->dst.type == BRW_REGISTER_TYPE_UQ ||
+             inst->dst.type == BRW_REGISTER_TYPE_DF) {
+            assert(inst->dst.type == inst->src[0].type);
+            assert(!inst->saturate);
+            assert(!inst->src[0].abs);
+            assert(!inst->src[0].negate);
+            const brw::fs_builder ibld(this, block, inst);
+
+            ibld.MOV(subscript(inst->dst, BRW_REGISTER_TYPE_F, 1),
+                     subscript(inst->src[0], BRW_REGISTER_TYPE_F, 1));
+            ibld.MOV(subscript(inst->dst, BRW_REGISTER_TYPE_F, 0),
+                     subscript(inst->src[0], BRW_REGISTER_TYPE_F, 0));
+
+            inst->remove(block);
+            progress = true;
+         }
+
+         if (!devinfo->has_64bit_int &&
+             (inst->dst.type == BRW_REGISTER_TYPE_UQ ||
               inst->dst.type == BRW_REGISTER_TYPE_Q)) {
             assert(inst->dst.type == inst->src[0].type);
             assert(!inst->saturate);
@@ -4049,7 +4064,7 @@ fs_visitor::lower_mulh_inst(fs_inst *inst, bblock_t *block)
       lower_src_modifiers(this, block, inst, 1);
 
    /* Should have been lowered to 8-wide. */
-   assert(inst->exec_size <= get_lowered_simd_width(devinfo, inst));
+   assert(inst->exec_size <= get_lowered_simd_width(compiler, inst));
    const fs_reg acc = retype(brw_acc_reg(inst->exec_size), inst->dst.type);
    fs_inst *mul = ibld.MUL(acc, inst->src[0], inst->src[1]);
    fs_inst *mach = ibld.MACH(inst->dst, inst->src[0], inst->src[1]);
@@ -6168,12 +6183,22 @@ static fs_reg
 emit_a64_oword_block_header(const fs_builder &bld, const fs_reg &addr)
 {
    const fs_builder ubld = bld.exec_all().group(8, 0);
+
+   assert(type_sz(addr.type) == 8 && addr.stride == 0);
+
+   fs_reg expanded_addr = addr;
+   if (addr.file == UNIFORM) {
+      /* We can't do stride 1 with the UNIFORM file, it requires stride 0 */
+      expanded_addr = ubld.vgrf(BRW_REGISTER_TYPE_UQ);
+      expanded_addr.stride = 0;
+      ubld.MOV(expanded_addr, addr);
+   }
+
    fs_reg header = ubld.vgrf(BRW_REGISTER_TYPE_UD);
    ubld.MOV(header, brw_imm_ud(0));
 
    /* Use a 2-wide MOV to fill out the address */
-   assert(type_sz(addr.type) == 8 && addr.stride == 0);
-   fs_reg addr_vec2 = addr;
+   fs_reg addr_vec2 = expanded_addr;
    addr_vec2.type = BRW_REGISTER_TYPE_UD;
    addr_vec2.stride = 1;
    ubld.group(2, 0).MOV(header, addr_vec2);
@@ -7047,9 +7072,11 @@ is_mixed_float_with_packed_fp16_dst(const fs_inst *inst)
  * excessively restrictive.
  */
 static unsigned
-get_fpu_lowered_simd_width(const struct intel_device_info *devinfo,
+get_fpu_lowered_simd_width(const struct brw_compiler *compiler,
                            const fs_inst *inst)
 {
+   const struct intel_device_info *devinfo = compiler->devinfo;
+
    /* Maximum execution size representable in the instruction controls. */
    unsigned max_width = MIN2(32, inst->exec_size);
 
@@ -7148,7 +7175,7 @@ get_fpu_lowered_simd_width(const struct intel_device_info *devinfo,
     * From the BDW PRMs (applies to later hardware too):
     *  "Ternary instruction with condition modifiers must not use SIMD32."
     */
-   if (inst->conditional_mod && (devinfo->ver < 8 || inst->is_3src(devinfo)))
+   if (inst->conditional_mod && (devinfo->ver < 8 || inst->is_3src(compiler)))
       max_width = MIN2(max_width, 16);
 
    /* From the IVB PRMs (applies to other devices that don't have the
@@ -7156,7 +7183,7 @@ get_fpu_lowered_simd_width(const struct intel_device_info *devinfo,
     *  "In Align16 access mode, SIMD16 is not allowed for DW operations and
     *   SIMD8 is not allowed for DF operations."
     */
-   if (inst->is_3src(devinfo) && !devinfo->supports_simd16_3src)
+   if (inst->is_3src(compiler) && !devinfo->supports_simd16_3src)
       max_width = MIN2(max_width, inst->exec_size / reg_count);
 
    /* Pre-Gfx8 EUs are hardwired to use the QtrCtrl+1 (where QtrCtrl is
@@ -7305,9 +7332,11 @@ get_sampler_lowered_simd_width(const struct intel_device_info *devinfo,
  * original execution size.
  */
 static unsigned
-get_lowered_simd_width(const struct intel_device_info *devinfo,
+get_lowered_simd_width(const struct brw_compiler *compiler,
                        const fs_inst *inst)
 {
+   const struct intel_device_info *devinfo = compiler->devinfo;
+
    switch (inst->opcode) {
    case BRW_OPCODE_MOV:
    case BRW_OPCODE_SEL:
@@ -7346,7 +7375,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
    case SHADER_OPCODE_SEL_EXEC:
    case SHADER_OPCODE_CLUSTER_BROADCAST:
    case SHADER_OPCODE_MOV_RELOC_IMM:
-      return get_fpu_lowered_simd_width(devinfo, inst);
+      return get_fpu_lowered_simd_width(compiler, inst);
 
    case BRW_OPCODE_CMP: {
       /* The Ivybridge/BayTrail WaCMPInstFlagDepClearedEarly workaround says that
@@ -7362,7 +7391,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
        */
       const unsigned max_width = (devinfo->verx10 == 70 &&
                                   !inst->dst.is_null() ? 8 : ~0);
-      return MIN2(max_width, get_fpu_lowered_simd_width(devinfo, inst));
+      return MIN2(max_width, get_fpu_lowered_simd_width(compiler, inst));
    }
    case BRW_OPCODE_BFI1:
    case BRW_OPCODE_BFI2:
@@ -7371,7 +7400,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
        *  "Force BFI instructions to be executed always in SIMD8."
        */
       return MIN2(devinfo->platform == INTEL_PLATFORM_HSW ? 8 : ~0u,
-                  get_fpu_lowered_simd_width(devinfo, inst));
+                  get_fpu_lowered_simd_width(compiler, inst));
 
    case BRW_OPCODE_IF:
       assert(inst->src[0].file == BAD_FILE || inst->exec_size <= 16);
@@ -7407,7 +7436,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
 
    case SHADER_OPCODE_USUB_SAT:
    case SHADER_OPCODE_ISUB_SAT:
-      return get_fpu_lowered_simd_width(devinfo, inst);
+      return get_fpu_lowered_simd_width(compiler, inst);
 
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
@@ -7469,7 +7498,7 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
        * is 8-wide on Gfx7+.
        */
       return (devinfo->ver >= 7 ? 8 :
-              get_fpu_lowered_simd_width(devinfo, inst));
+              get_fpu_lowered_simd_width(compiler, inst));
 
    case FS_OPCODE_FB_WRITE_LOGICAL:
       /* Gfx6 doesn't support SIMD16 depth writes but we cannot handle them
@@ -7572,10 +7601,10 @@ get_lowered_simd_width(const struct intel_device_info *devinfo,
    case SHADER_OPCODE_QUAD_SWIZZLE: {
       const unsigned swiz = inst->src[1].ud;
       return (is_uniform(inst->src[0]) ?
-                 get_fpu_lowered_simd_width(devinfo, inst) :
+                 get_fpu_lowered_simd_width(compiler, inst) :
               devinfo->ver < 11 && type_sz(inst->src[0].type) == 4 ? 8 :
               swiz == BRW_SWIZZLE_XYXY || swiz == BRW_SWIZZLE_ZWZW ? 4 :
-              get_fpu_lowered_simd_width(devinfo, inst));
+              get_fpu_lowered_simd_width(compiler, inst));
    }
    case SHADER_OPCODE_MOV_INDIRECT: {
       /* From IVB and HSW PRMs:
@@ -7785,7 +7814,7 @@ fs_visitor::lower_simd_width()
    bool progress = false;
 
    foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
-      const unsigned lower_width = get_lowered_simd_width(devinfo, inst);
+      const unsigned lower_width = get_lowered_simd_width(compiler, inst);
 
       if (lower_width != inst->exec_size) {
          /* Builder matching the original instruction.  We may also need to
@@ -8088,7 +8117,7 @@ fs_visitor::dump_instruction(const backend_instruction *be_inst, FILE *file) con
               inst->flag_subreg % 2);
    }
 
-   fprintf(file, "%s", brw_instruction_name(devinfo, inst->opcode));
+   fprintf(file, "%s", brw_instruction_name(&compiler->isa, inst->opcode));
    if (inst->saturate)
       fprintf(file, ".sat");
    if (inst->conditional_mod) {
@@ -8682,7 +8711,7 @@ fs_visitor::fixup_3src_null_dest()
    bool progress = false;
 
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
-      if (inst->is_3src(devinfo) && inst->dst.is_null()) {
+      if (inst->is_3src(compiler) && inst->dst.is_null()) {
          inst->dst = fs_reg(VGRF, alloc.allocate(dispatch_width / 8),
                             inst->dst.type);
          progress = true;

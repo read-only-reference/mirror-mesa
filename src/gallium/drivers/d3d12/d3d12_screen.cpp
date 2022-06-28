@@ -158,7 +158,6 @@ d3d12_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_INDEP_BLEND_FUNC:
    case PIPE_CAP_FRAGMENT_SHADER_TEXTURE_LOD:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
-   case PIPE_CAP_VERTEX_SHADER_SATURATE:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_RGB_OVERRIDE_DST_ALPHA_BLEND:
@@ -230,7 +229,7 @@ d3d12_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
 
    case PIPE_CAP_ACCELERATED:
-      return 1;
+      return screen->vendor_id != HW_VENDOR_MICROSOFT;
 
    case PIPE_CAP_VIDEO_MEMORY:
       return d3d12_get_video_mem(pscreen);
@@ -424,7 +423,7 @@ d3d12_get_shader_param(struct pipe_screen *pscreen,
          return 16;
       return PIPE_MAX_SAMPLERS;
 
-   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
       return 65536;
 
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
@@ -483,7 +482,6 @@ d3d12_get_shader_param(struct pipe_screen *pscreen,
           screen->opts.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3) ?
          PIPE_MAX_SHADER_IMAGES : D3D12_PS_CS_UAV_REGISTER_COUNT;
 
-   case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
    case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:

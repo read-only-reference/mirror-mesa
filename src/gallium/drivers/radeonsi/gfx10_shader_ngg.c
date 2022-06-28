@@ -106,7 +106,7 @@ static LLVMValueRef ngg_get_vertices_per_prim(struct si_shader_context *ctx, uns
          *num_vertices = 3;
 
          /* Extract OUTPRIM field. */
-         LLVMValueRef num = si_unpack_param(ctx, ctx->vs_state_bits, 2, 2);
+         LLVMValueRef num = GET_FIELD(ctx, GS_STATE_OUTPRIM);
          return LLVMBuildAdd(ctx->ac.builder, num, ctx->ac.i32_1, "");
       }
    } else {
@@ -303,8 +303,6 @@ static void build_streamout(struct si_shader_context *ctx, struct ngg_streamout 
    unsigned scratch_offset_base = isgs ? 8 : 4;
    LLVMValueRef scratch_offset_basev = isgs ? i32_8 : i32_4;
 
-   ac_llvm_add_target_dep_function_attr(ctx->main_fn, "amdgpu-gds-size", 256);
-
    /* Determine the mapping of streamout buffers to vertex streams. */
    for (unsigned i = 0; i < so->num_outputs; ++i) {
       unsigned buf = so->output[i].output_buffer;
@@ -371,18 +369,79 @@ static void build_streamout(struct si_shader_context *ctx, struct ngg_streamout 
          tmp = ac_build_quad_swizzle(&ctx->ac, tmp, swizzle[0], swizzle[1], swizzle[2], swizzle[3]);
          tmp = LLVMBuildMul(builder, tmp, prim_stride_dw_vgpr, "");
 
-         LLVMValueRef args[] = {
+         LLVMValueRef args[8] = {
             LLVMBuildIntToPtr(builder, ngg_get_ordered_id(ctx), gdsptr, ""),
-            tmp,
-            ctx->ac.i32_0,                             // ordering
-            ctx->ac.i32_0,                             // scope
-            ctx->ac.i1false,                           // isVolatile
-            LLVMConstInt(ctx->ac.i32, 4 << 24, false), // OA index
-            ctx->ac.i1true,                            // wave release
-            ctx->ac.i1true,                            // wave done
+            ctx->ac.i32_0,                             /* value to add */
+            ctx->ac.i32_0,                             /* ordering */
+            ctx->ac.i32_0,                             /* scope */
+            ctx->ac.i1false,                           /* isVolatile */
+            LLVMConstInt(ctx->ac.i32, 1 << 24, false), /* OA index, bits 24+: lane count */
+            ctx->ac.i1true,                            /* wave release */
+            ctx->ac.i1true,                            /* wave done */
          };
-         tmp = ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.ordered.add", ctx->ac.i32, args,
-                                  ARRAY_SIZE(args), 0);
+
+         if (ctx->screen->info.gfx_level >= GFX11) {
+            /* Gfx11 GDS instructions only operate on the first active lane. All other lanes are
+             * ignored. So are their EXEC bits. This uses the mutex feature of ds_ordered_count
+             * to emulate a multi-dword atomic.
+             *
+             * This is the expected code:
+             *    ds_ordered_count release=0 done=0   // lock mutex
+             *    ds_add_rtn_u32 dwords_written0
+             *    ds_add_rtn_u32 dwords_written1
+             *    ds_add_rtn_u32 dwords_written2
+             *    ds_add_rtn_u32 dwords_written3
+             *    ds_ordered_count release=1 done=1   // unlock mutex
+             *
+             * TODO: Increment GDS_STRMOUT registers instead of GDS memory.
+             */
+            LLVMValueRef dwords_written[4] = {tmp, tmp, tmp, tmp};
+
+            /* Move all 4 VGPRs from other lanes to lane 0. */
+            for (unsigned i = 1; i < 4; i++) {
+               if (ctx->shader->selector->info.base.xfb_stride[i])
+                  dwords_written[i] = ac_build_quad_swizzle(&ctx->ac, tmp, i, i, i, i);
+            }
+
+            /* Set release=0 to start a GDS mutex. Set done=0 because it's not the last one. */
+            args[6] = args[7] = ctx->ac.i1false;
+            ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.ordered.add", ctx->ac.i32,
+                               args, ARRAY_SIZE(args), 0);
+            ac_build_waitcnt(&ctx->ac, AC_WAIT_LGKM);
+
+            for (unsigned i = 0; i < 4; i++) {
+               if (ctx->shader->selector->info.base.xfb_stride[i]) {
+                  LLVMValueRef gds_ptr =
+                     ac_build_gep_ptr(&ctx->ac, gdsbase, LLVMConstInt(ctx->ac.i32, i, 0));
+
+                  dwords_written[i] = LLVMBuildAtomicRMW(builder, LLVMAtomicRMWBinOpAdd,
+                                                         gds_ptr, dwords_written[i],
+                                                         LLVMAtomicOrderingMonotonic, false);
+               }
+            }
+
+            /* TODO: This might not be needed if GDS executes instructions in order. */
+            ac_build_waitcnt(&ctx->ac, AC_WAIT_LGKM);
+
+            /* Set release=1 to end a GDS mutex. Set done=1 because it's the last one. */
+            args[6] = args[7] = ctx->ac.i1true;
+            ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.ordered.add", ctx->ac.i32,
+                               args, ARRAY_SIZE(args), 0);
+
+            tmp = dwords_written[0];
+            for (unsigned i = 1; i < 4; i++) {
+               if (ctx->shader->selector->info.base.xfb_stride[i]) {
+                  dwords_written[i] = ac_build_readlane(&ctx->ac, dwords_written[i], ctx->ac.i32_0);
+                  tmp = ac_build_writelane(&ctx->ac, tmp, dwords_written[i], LLVMConstInt(ctx->ac.i32, i, 0));
+               }
+            }
+         } else {
+            args[1] = tmp; /* value to add */
+            args[5] = LLVMConstInt(ctx->ac.i32, 4 << 24, false), /* bits 24+: lane count */
+
+            tmp = ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.ds.ordered.add", ctx->ac.i32,
+                                     args, ARRAY_SIZE(args), 0);
+         }
 
          /* Keep offsets in a VGPR for quick retrieval via readlane by
           * the first wave for bounds checking, and also store in LDS
@@ -453,9 +512,28 @@ static void build_streamout(struct si_shader_context *ctx, struct ngg_streamout 
          {
             tmp = LLVMBuildSub(builder, generated, emit, "");
             tmp = LLVMBuildMul(builder, tmp, prim_stride_dw_vgpr, "");
-            tmp2 = LLVMBuildGEP(builder, gdsbase, &tid, 1, "");
-            LLVMBuildAtomicRMW(builder, LLVMAtomicRMWBinOpSub, tmp2, tmp,
-                               LLVMAtomicOrderingMonotonic, false);
+
+            if (ctx->screen->info.gfx_level >= GFX11) {
+               /* Gfx11 GDS instructions only operate on the first active lane.
+                * This is an unrolled waterfall loop. We only get here when we overflow,
+                * so it doesn't have to be fast.
+                */
+               for (unsigned i = 0; i < 4; i++) {
+                  if (bufmask_for_stream[stream] & BITFIELD_BIT(i)) {
+                     LLVMValueRef index = LLVMConstInt(ctx->ac.i32, i, 0);
+
+                     ac_build_ifcc(&ctx->ac, LLVMBuildICmp(builder, LLVMIntEQ, tid, index, ""), 0);
+                     LLVMBuildAtomicRMW(builder, LLVMAtomicRMWBinOpSub,
+                                        LLVMBuildGEP(builder, gdsbase, &index, 1, ""),
+                                        tmp, LLVMAtomicOrderingMonotonic, false);
+                     ac_build_endif(&ctx->ac, 0);
+                  }
+               }
+            } else {
+               LLVMBuildAtomicRMW(builder, LLVMAtomicRMWBinOpSub,
+                                  LLVMBuildGEP(builder, gdsbase, &tid, 1, ""),
+                                  tmp, LLVMAtomicOrderingMonotonic, false);
+            }
          }
          ac_build_endif(&ctx->ac, 5222);
          ac_build_endif(&ctx->ac, 5221);
@@ -617,7 +695,7 @@ static unsigned ngg_nogs_vertex_size(struct si_shader *shader)
 
    /* The edgeflag is always stored in the last element that's also
     * used for padding to reduce LDS bank conflicts. */
-   if (shader->selector->info.enabled_streamout_buffer_mask)
+   if (si_shader_uses_streamout(shader))
       lds_vertex_size = 4 * shader->selector->info.num_outputs + 1;
    if (gfx10_ngg_writes_user_edgeflags(shader))
       lds_vertex_size = MAX2(lds_vertex_size, 1);
@@ -895,7 +973,7 @@ static void cull_primitive(struct si_shader_context *ctx,
       assert(!(shader->key.ge.opt.ngg_culling & SI_NGG_CULL_FRONT_FACE));
    } else {
       /* Get the small prim filter precision. */
-      small_prim_precision = si_unpack_param(ctx, ctx->vs_state_bits, 7, 4);
+      small_prim_precision = GET_FIELD(ctx, GS_STATE_SMALL_PRIM_PRECISION);
       small_prim_precision =
          LLVMBuildOr(builder, small_prim_precision, LLVMConstInt(ctx->ac.i32, 0x70, 0), "");
       small_prim_precision =
@@ -1553,7 +1631,7 @@ void gfx10_ngg_build_end(struct si_shader_context *ctx)
 
       ac_build_ifcc(&ctx->ac, is_gs_thread, 5400);
       /* Extract the PROVOKING_VTX_INDEX field. */
-      LLVMValueRef provoking_vtx_in_prim = si_unpack_param(ctx, ctx->vs_state_bits, 4, 2);
+      LLVMValueRef provoking_vtx_in_prim = GET_FIELD(ctx, GS_STATE_PROVOKING_VTX_INDEX);
 
       /* provoking_vtx_index = vtxindex[provoking_vtx_in_prim]; */
       LLVMValueRef indices = ac_build_gather_values(&ctx->ac, vtxindex, 3);
@@ -1570,7 +1648,7 @@ void gfx10_ngg_build_end(struct si_shader_context *ctx)
    if (ctx->screen->use_ngg_streamout && !info->base.vs.blit_sgprs_amd) {
       assert(!unterminated_es_if_block);
 
-      tmp = si_unpack_param(ctx, ctx->vs_state_bits, 6, 1);
+      tmp = GET_FIELD(ctx, GS_STATE_STREAMOUT_QUERY_ENABLED);
       tmp = LLVMBuildTrunc(builder, tmp, ctx->ac.i1, "");
       ac_build_ifcc(&ctx->ac, tmp, 5029); /* if (STREAMOUT_QUERY_ENABLED) */
       tmp = LLVMBuildICmp(builder, LLVMIntEQ, get_wave_id_in_tg(ctx), ctx->ac.i32_0, "");
@@ -1857,15 +1935,14 @@ void gfx10_ngg_gs_emit_begin(struct si_shader_context *ctx)
       tmp = si_is_gs_thread(ctx);
       ac_build_ifcc(&ctx->ac, tmp, 15090);
          {
-            tmp = si_unpack_param(ctx, ctx->vs_state_bits, 31, 1);
+            tmp = GET_FIELD(ctx, GS_STATE_PIPELINE_STATS_EMU);
             tmp = LLVMBuildTrunc(builder, tmp, ctx->ac.i1, "");
             ac_build_ifcc(&ctx->ac, tmp, 5109); /* if (GS_PIPELINE_STATS_EMU) */
             LLVMValueRef args[] = {
                ctx->ac.i32_1,
                ngg_get_emulated_counters_buf(ctx),
                LLVMConstInt(ctx->ac.i32,
-                            (si_hw_query_dw_offset(PIPE_STAT_QUERY_GS_INVOCATIONS) +
-                                SI_QUERY_STATS_END_OFFSET_DW) * 4,
+                            si_query_pipestat_end_dw_offset(ctx->screen, PIPE_STAT_QUERY_GS_INVOCATIONS) * 4,
                             false),
                ctx->ac.i32_0,                            /* soffset */
                ctx->ac.i32_0,                            /* cachepolicy */
@@ -1977,7 +2054,7 @@ void gfx10_ngg_gs_build_end(struct si_shader_context *ctx)
 
    /* Write shader query data. */
    if (ctx->screen->use_ngg_streamout) {
-      tmp = si_unpack_param(ctx, ctx->vs_state_bits, 6, 1);
+      tmp = GET_FIELD(ctx, GS_STATE_STREAMOUT_QUERY_ENABLED);
       tmp = LLVMBuildTrunc(builder, tmp, ctx->ac.i1, "");
       ac_build_ifcc(&ctx->ac, tmp, 5109); /* if (STREAMOUT_QUERY_ENABLED) */
       unsigned num_query_comps = ctx->so.num_outputs ? 8 : 4;
@@ -2178,7 +2255,7 @@ void gfx10_ngg_gs_build_end(struct si_shader_context *ctx)
          LLVMValueRef is_odd = LLVMBuildLShr(builder, flags, ctx->ac.i8_1, "");
          is_odd = LLVMBuildTrunc(builder, is_odd, ctx->ac.i1, "");
          LLVMValueRef flatshade_first = LLVMBuildICmp(
-            builder, LLVMIntEQ, si_unpack_param(ctx, ctx->vs_state_bits, 4, 2), ctx->ac.i32_0, "");
+            builder, LLVMIntEQ, GET_FIELD(ctx, GS_STATE_PROVOKING_VTX_INDEX), ctx->ac.i32_0, "");
 
          ac_build_triangle_strip_indices_to_triangle(&ctx->ac, is_odd, flatshade_first, prim.index);
       }
@@ -2186,7 +2263,7 @@ void gfx10_ngg_gs_build_end(struct si_shader_context *ctx)
       ac_build_export_prim(&ctx->ac, &prim);
 
       if (ctx->screen->info.gfx_level < GFX11) {
-         tmp = si_unpack_param(ctx, ctx->vs_state_bits, 31, 1);
+         tmp = GET_FIELD(ctx, GS_STATE_PIPELINE_STATS_EMU);
          tmp = LLVMBuildTrunc(builder, tmp, ctx->ac.i1, "");
          ac_build_ifcc(&ctx->ac, tmp, 5229); /* if (GS_PIPELINE_STATS_EMU) */
          ac_build_ifcc(&ctx->ac, LLVMBuildNot(builder, prim.isnull, ""), 5237);
@@ -2195,8 +2272,7 @@ void gfx10_ngg_gs_build_end(struct si_shader_context *ctx)
                ctx->ac.i32_1,
                ngg_get_emulated_counters_buf(ctx),
                LLVMConstInt(ctx->ac.i32,
-                            (si_hw_query_dw_offset(PIPE_STAT_QUERY_GS_PRIMITIVES) +
-                                SI_QUERY_STATS_END_OFFSET_DW) * 4,
+                            si_query_pipestat_end_dw_offset(ctx->screen, PIPE_STAT_QUERY_GS_PRIMITIVES) * 4,
                             false),
                ctx->ac.i32_0,                            /* soffset */
                ctx->ac.i32_0,                            /* cachepolicy */
@@ -2252,7 +2328,7 @@ unsigned gfx10_ngg_get_scratch_dw_size(struct si_shader *shader)
 {
    const struct si_shader_selector *sel = shader->selector;
 
-   if (sel->stage == MESA_SHADER_GEOMETRY && sel->info.enabled_streamout_buffer_mask)
+   if (sel->stage == MESA_SHADER_GEOMETRY && si_shader_uses_streamout(shader))
       return 44;
 
    return 8;
@@ -2287,6 +2363,7 @@ bool gfx10_ngg_calculate_subgroup_info(struct si_shader *shader)
 
    /* All these are per subgroup: */
    const unsigned min_esverts =
+      gs_sel->screen->info.gfx_level >= GFX11 ? 3 : /* gfx11 requires at least 1 primitive per TG */
       gs_sel->screen->info.gfx_level >= GFX10_3 ? 29 : (24 - 1 + max_verts_per_prim);
    bool max_vert_out_per_gs_instance = false;
    unsigned max_gsprims_base = gs_sel->screen->ngg_subgroup_size; /* default prim group size clamp */

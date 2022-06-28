@@ -261,6 +261,9 @@
 #define DRI_CONF_FORCE_GL_NAMES_REUSE(def) \
    DRI_CONF_OPT_B(force_gl_names_reuse, def, "Force GL names reuse")
 
+#define DRI_CONF_FORCE_GL_MAP_BUFFER_SYNCHRONIZED(def) \
+   DRI_CONF_OPT_B(force_gl_map_buffer_synchronized, def, "Override GL_MAP_UNSYNCHRONIZED_BIT.")
+
 #define DRI_CONF_TRANSCODE_ETC(def) \
    DRI_CONF_OPT_B(transcode_etc, def, "Transcode ETC formats to DXTC if unsupported")
 
@@ -503,6 +506,13 @@
 #define DRI_CONF_FORMAT_L8_SRGB_ENABLE_READBACK(def) \
    DRI_CONF_OPT_B(format_l8_srgb_enable_readback, def, \
                   "Force-enable reading back L8_SRGB textures")
+
+/**
+ * \brief venus specific configuration options
+ */
+#define DRI_CONF_VENUS_IMPLICIT_FENCING(def) \
+   DRI_CONF_OPT_B(venus_implicit_fencing, def, \
+                  "Assume the virtio-gpu kernel driver supports implicit fencing")
 
 /**
  * \brief RADV specific configuration options

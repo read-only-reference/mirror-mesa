@@ -27,9 +27,9 @@
 #include <stdio.h>
 #include "c11/threads.h"
 #include "dev/intel_device_info.h"
-#include "main/config.h"
 #include "util/ralloc.h"
 #include "util/u_math.h"
+#include "brw_isa_info.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +50,8 @@ struct brw_compiler {
     * including adding something to the ralloc child list.
     */
    mtx_t mutex;
+
+   struct brw_isa_info isa;
 
    struct {
       struct ra_regs *regs;
@@ -177,6 +179,8 @@ enum PACKED gfx6_gather_sampler_wa {
    WA_16BIT = 4,     /* if we have a 16bit format needing wa */
 };
 
+#define BRW_MAX_SAMPLERS 32
+
 /**
  * Sampler information needed by VS, WM, and GS program cache keys.
  */
@@ -184,7 +188,7 @@ struct brw_sampler_prog_key_data {
    /**
     * EXT_texture_swizzle and DEPTH_TEXTURE_MODE swizzles.
     */
-   uint16_t swizzles[MAX_SAMPLERS];
+   uint16_t swizzles[BRW_MAX_SAMPLERS];
 
    uint32_t gl_clamp_mask[3];
 
@@ -208,7 +212,7 @@ struct brw_sampler_prog_key_data {
    /**
     * For Sandybridge, which shader w/a we need for gather quirks.
     */
-   enum gfx6_gather_sampler_wa gfx6_gather_wa[MAX_SAMPLERS];
+   enum gfx6_gather_sampler_wa gfx6_gather_wa[BRW_MAX_SAMPLERS];
 
    /**
     * Texture units that have a YUV image bound.
@@ -223,7 +227,7 @@ struct brw_sampler_prog_key_data {
    uint32_t bt2020_mask;
 
    /* Scale factor for each texture. */
-   float scale_factors[32];
+   float scale_factors[BRW_MAX_SAMPLERS];
 };
 
 /** An enum representing what kind of input gl_SubgroupSize is. */
@@ -311,7 +315,7 @@ struct brw_vs_prog_key {
     *
     * For each attribute, a combination of BRW_ATTRIB_WA_*.
     *
-    * For OpenGL, where we expose a maximum of 16 user input atttributes
+    * For OpenGL, where we expose a maximum of 16 user input attributes
     * we only need up to VERT_ATTRIB_MAX slots, however, in Vulkan
     * slots preceding VERT_ATTRIB_GENERIC0 are unused and we can
     * expose up to 28 user input vertex attributes that are mapped to slots
@@ -1404,7 +1408,7 @@ struct brw_sf_prog_data {
    uint32_t urb_read_length;
    uint32_t total_grf;
 
-   /* Each vertex may have upto 12 attributes, 4 components each,
+   /* Each vertex may have up to 12 attributes, 4 components each,
     * except WPOS which requires only 2.  (11*4 + 2) == 44 ==> 11
     * rows.
     *
@@ -1909,7 +1913,7 @@ brw_cs_push_const_total_size(const struct brw_cs_prog_data *cs_prog_data,
                              unsigned threads);
 
 void
-brw_write_shader_relocs(const struct intel_device_info *devinfo,
+brw_write_shader_relocs(const struct brw_isa_info *isa,
                         void *program,
                         const struct brw_stage_prog_data *prog_data,
                         struct brw_shader_reloc_value *values,

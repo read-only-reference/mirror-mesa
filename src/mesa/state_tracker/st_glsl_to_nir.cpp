@@ -479,9 +479,7 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
     * storage is only associated with the original parameter list.
     * This should be enough for Bitmap and DrawPixels constants.
     */
-   _mesa_ensure_and_associate_uniform_storage(st->ctx, shader_program, prog, 16);
-
-   st_set_prog_affected_state_flags(prog);
+   _mesa_ensure_and_associate_uniform_storage(st->ctx, shader_program, prog, 28);
 
    /* None of the builtins being lowered here can be produced by SPIR-V.  See
     * _mesa_builtin_uniform_desc. Also drivers that support packed uniform
@@ -503,22 +501,21 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
       bool lowered_64bit_ops = false;
       bool revectorize = false;
 
-      /* nir_lower_doubles is not prepared for vector ops, so if the backend doesn't
-       * request lower_alu_to_scalar until now, lower all 64 bit ops, and try to
-       * vectorize them afterwards again */
-      if (!nir->options->lower_to_scalar) {
-         NIR_PASS(revectorize, nir, nir_lower_alu_to_scalar, filter_64_bit_instr, nullptr);
-         NIR_PASS(revectorize, nir, nir_lower_phis_to_scalar, false);
-      }
-
       if (nir->options->lower_doubles_options) {
+         /* nir_lower_doubles is not prepared for vector ops, so if the backend doesn't
+          * request lower_alu_to_scalar until now, lower all 64 bit ops, and try to
+          * vectorize them afterwards again */
+         if (!nir->options->lower_to_scalar) {
+            NIR_PASS(revectorize, nir, nir_lower_alu_to_scalar, filter_64_bit_instr, nullptr);
+            NIR_PASS(revectorize, nir, nir_lower_phis_to_scalar, false);
+         }
          NIR_PASS(lowered_64bit_ops, nir, nir_lower_doubles,
                   st->ctx->SoftFP64, nir->options->lower_doubles_options);
       }
       if (nir->options->lower_int64_options)
          NIR_PASS(lowered_64bit_ops, nir, nir_lower_int64);
 
-      if (revectorize)
+      if (revectorize && !nir->options->vectorize_vec2_16bit)
          NIR_PASS_V(nir, nir_opt_vectorize, nullptr, nullptr);
 
       if (revectorize || lowered_64bit_ops)
@@ -529,8 +526,20 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
       nir_var_shader_in | nir_var_shader_out | nir_var_function_temp;
    nir_remove_dead_variables(nir, mask, NULL);
 
-   if (!st->has_hw_atomics && !screen->get_param(screen, PIPE_CAP_NIR_ATOMICS_AS_DEREF))
-      NIR_PASS_V(nir, nir_lower_atomics_to_ssbo);
+   if (!st->has_hw_atomics && !screen->get_param(screen, PIPE_CAP_NIR_ATOMICS_AS_DEREF)) {
+      unsigned align_offset_state = 0;
+      if (st->ctx->Const.ShaderStorageBufferOffsetAlignment > 4) {
+         struct gl_program_parameter_list *params = prog->Parameters;
+         for (unsigned i = 0; i < shader_program->data->NumAtomicBuffers; i++) {
+            gl_state_index16 state[STATE_LENGTH] = { STATE_ATOMIC_COUNTER_OFFSET, (short)shader_program->data->AtomicBuffers[i].Binding };
+            _mesa_add_state_reference(params, state);
+         }
+         align_offset_state = STATE_ATOMIC_COUNTER_OFFSET;
+      }
+      NIR_PASS_V(nir, nir_lower_atomics_to_ssbo, align_offset_state);
+   }
+
+   st_set_prog_affected_state_flags(prog);
 
    st_finalize_nir_before_variants(nir);
 
@@ -582,45 +591,6 @@ st_nir_vectorize_io(nir_shader *producer, nir_shader *consumer)
    NIR_PASS_V(producer, nir_lower_vars_to_ssa);
    NIR_PASS_V(producer, nir_opt_undef);
    NIR_PASS_V(producer, nir_opt_dce);
-}
-
-static void
-st_nir_link_shaders(nir_shader *producer, nir_shader *consumer)
-{
-   if (producer->options->lower_to_scalar) {
-      NIR_PASS_V(producer, nir_lower_io_to_scalar_early, nir_var_shader_out);
-      NIR_PASS_V(consumer, nir_lower_io_to_scalar_early, nir_var_shader_in);
-   }
-
-   nir_lower_io_arrays_to_elements(producer, consumer);
-
-   gl_nir_opts(producer);
-   gl_nir_opts(consumer);
-
-   if (nir_link_opt_varyings(producer, consumer))
-      gl_nir_opts(consumer);
-
-   NIR_PASS_V(producer, nir_remove_dead_variables, nir_var_shader_out, NULL);
-   NIR_PASS_V(consumer, nir_remove_dead_variables, nir_var_shader_in, NULL);
-
-   if (nir_remove_unused_varyings(producer, consumer)) {
-      NIR_PASS_V(producer, nir_lower_global_vars_to_local);
-      NIR_PASS_V(consumer, nir_lower_global_vars_to_local);
-
-      gl_nir_opts(producer);
-      gl_nir_opts(consumer);
-
-      /* Optimizations can cause varyings to become unused.
-       * nir_compact_varyings() depends on all dead varyings being removed so
-       * we need to call nir_remove_dead_variables() again here.
-       */
-      NIR_PASS_V(producer, nir_remove_dead_variables, nir_var_shader_out,
-                 NULL);
-      NIR_PASS_V(consumer, nir_remove_dead_variables, nir_var_shader_in,
-                 NULL);
-   }
-
-   nir_link_varying_precision(producer, consumer);
 }
 
 static void
@@ -752,16 +722,6 @@ st_link_nir(struct gl_context *ctx,
       gl_nir_opts(linked_shader[0]->Program->nir);
 
    if (shader_program->data->spirv) {
-      /* Linking the stages in the opposite order (from fragment to vertex)
-       * ensures that inter-shader outputs written to in an earlier stage
-       * are eliminated if they are (transitively) not used in a later
-       * stage.
-       */
-      for (int i = num_shaders - 2; i >= 0; i--) {
-         st_nir_link_shaders(linked_shader[i]->Program->nir,
-                             linked_shader[i + 1]->Program->nir);
-      }
-
       static const gl_nir_linker_options opts = {
          true /*fill_parameters */
       };
@@ -771,23 +731,6 @@ st_link_nir(struct gl_context *ctx,
       if (!gl_nir_link_glsl(&ctx->Const, &ctx->Extensions, ctx->API,
                             shader_program))
          return GL_FALSE;
-
-      /* Linking the stages in the opposite order (from fragment to vertex)
-       * ensures that inter-shader outputs written to in an earlier stage
-       * are eliminated if they are (transitively) not used in a later
-       * stage.
-       */
-      for (int i = num_shaders - 2; i >= 0; i--) {
-         st_nir_link_shaders(linked_shader[i]->Program->nir,
-                             linked_shader[i + 1]->Program->nir);
-      }
-
-      /* Tidy up any left overs from the linking process for single shaders.
-       * For example varying arrays that get packed may have dead elements that
-       * can be now be eliminated now that array access has been lowered.
-       */
-      if (num_shaders == 1)
-         gl_nir_opts(linked_shader[0]->Program->nir);
    }
 
    for (unsigned i = 0; i < num_shaders; i++) {
@@ -908,7 +851,7 @@ st_link_nir(struct gl_context *ctx,
       char *msg = st_glsl_to_nir_post_opts(st, shader->Program, shader_program);
       if (msg) {
          linker_error(shader_program, msg);
-         break;
+         return false;
       }
 
       if (prev_info &&

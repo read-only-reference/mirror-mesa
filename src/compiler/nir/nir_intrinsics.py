@@ -807,6 +807,7 @@ system_value("workgroup_index", 1)
 system_value("base_workgroup_id", 3, bit_sizes=[32, 64])
 system_value("user_clip_plane", 4, indices=[UCP_ID])
 system_value("num_workgroups", 3, bit_sizes=[32, 64])
+system_value("num_vertices", 1)
 system_value("helper_invocation", 1, bit_sizes=[1, 32])
 system_value("layer_id", 1)
 system_value("view_index", 1)
@@ -836,6 +837,8 @@ system_value("scratch_base_ptr", 0, bit_sizes=[32,64], indices=[BASE])
 system_value("constant_base_ptr", 0, bit_sizes=[32,64])
 system_value("shared_base_ptr", 0, bit_sizes=[32,64])
 system_value("global_base_ptr", 0, bit_sizes=[32,64])
+# Address of a transform feedback buffer, indexed by BASE
+system_value("xfb_address", 1, bit_sizes=[32,64], indices=[BASE])
 
 # System values for ray tracing.
 system_value("ray_launch_id", 3)
@@ -853,6 +856,7 @@ system_value("ray_flags", 1)
 system_value("ray_geometry_index", 1)
 system_value("ray_instance_custom_index", 1)
 system_value("shader_record_ptr", 1, bit_sizes=[64])
+system_value("cull_mask", 1)
 
 # Driver-specific viewport scale/offset parameters.
 #
@@ -1293,6 +1297,9 @@ system_value("ring_es2gs_offset_amd", 1)
 system_value("ring_task_draw_amd", 4)
 # Address of the task shader payload ring (used for all other outputs)
 system_value("ring_task_payload_amd", 4)
+# Address of the mesh shader scratch ring (used for excess mesh shader outputs)
+system_value("ring_mesh_scratch_amd", 4)
+system_value("ring_mesh_scratch_offset_amd", 1)
 # Pointer into the draw and payload rings
 system_value("task_ring_entry_amd", 1)
 # Pointer into the draw and payload rings
@@ -1349,10 +1356,8 @@ intrinsic("overwrite_vs_arguments_amd", src_comp=[1, 1], indices=[])
 # Overwrites TES input registers, for use with vertex compaction after culling. src = {tes_u, tes_v, rel_patch_id, patch_id}.
 intrinsic("overwrite_tes_arguments_amd", src_comp=[1, 1, 1, 1], indices=[])
 
-# loads a descriptor for an sbt.
-# src = [index] BINDING = which table
-intrinsic("load_sbt_amd", dest_comp=4, bit_sizes=[32], indices=[BINDING],
-          flags=[CAN_ELIMINATE, CAN_REORDER])
+# The address of the sbt descriptors.
+system_value("sbt_base_amd", 1, bit_sizes=[64])
 
 # 1. HW descriptor
 # 2. BVH node(64-bit pointer as 2x32 ...)
@@ -1390,6 +1395,12 @@ intrinsic("load_shared2_amd", [1], dest_comp=2, indices=[OFFSET0, OFFSET1, ST64]
 
 # src[] = { value, offset }.
 intrinsic("store_shared2_amd", [2, 1], indices=[OFFSET0, OFFSET1, ST64])
+
+# Vertex stride in LS-HS buffer
+system_value("lshs_vertex_stride_amd", 1)
+
+# Per patch data offset in HS VRAM output buffer
+system_value("hs_out_patch_data_offset_amd", 1)
 
 # V3D-specific instrinc for tile buffer color reads.
 #

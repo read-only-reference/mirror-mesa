@@ -476,7 +476,7 @@ struct anv_bo {
    uint32_t refcount;
 
    /* Index into the current validation list.  This is used by the
-    * validation list building alrogithm to track which buffers are already
+    * validation list building algorithm to track which buffers are already
     * in the validation list so that we can ensure uniqueness.
     */
    uint32_t exec_obj_index;
@@ -1824,7 +1824,7 @@ struct anv_descriptor_set_binding_layout {
     */
    uint32_t array_size;
 
-   /* Index into the flattend descriptor set */
+   /* Index into the flattened descriptor set */
    uint32_t descriptor_index;
 
    /* Index into the dynamic state array for a dynamic buffer */
@@ -2230,7 +2230,7 @@ enum anv_cmd_dirty_bits {
    ANV_CMD_DIRTY_DYNAMIC_LOGIC_OP                    = 1 << 29, /* VK_DYNAMIC_STATE_LOGIC_OP_EXT */
    ANV_CMD_DIRTY_DYNAMIC_PRIMITIVE_RESTART_ENABLE    = 1 << 30, /* VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE */
 };
-typedef uint32_t anv_cmd_dirty_mask_t;
+typedef enum anv_cmd_dirty_bits anv_cmd_dirty_mask_t;
 
 #define ANV_CMD_DIRTY_DYNAMIC_ALL                       \
    (ANV_CMD_DIRTY_DYNAMIC_VIEWPORT |                    \
@@ -2728,9 +2728,9 @@ struct anv_dynamic_state {
 extern const struct anv_dynamic_state default_dynamic_state;
 
 void anv_dynamic_state_init(struct anv_dynamic_state *state);
-uint32_t anv_dynamic_state_copy(struct anv_dynamic_state *dest,
-                                const struct anv_dynamic_state *src,
-                                uint32_t copy_mask);
+anv_cmd_dirty_mask_t anv_dynamic_state_copy(struct anv_dynamic_state *dest,
+                                            const struct anv_dynamic_state *src,
+                                            anv_cmd_dirty_mask_t copy_mask);
 
 static inline struct intel_sample_position *
 anv_dynamic_state_get_sample_locations(struct anv_dynamic_state *state,
@@ -2888,11 +2888,9 @@ struct anv_cmd_graphics_state {
 
    uint32_t primitive_topology;
 
-   struct {
-      struct anv_buffer *index_buffer;
-      uint32_t index_type; /**< 3DSTATE_INDEX_BUFFER.IndexFormat */
-      uint32_t index_offset;
-   } gfx7;
+   struct anv_buffer *index_buffer;
+   uint32_t index_type; /**< 3DSTATE_INDEX_BUFFER.IndexFormat */
+   uint32_t index_offset;
 };
 
 enum anv_depth_reg_mode {
@@ -2973,7 +2971,7 @@ struct anv_cmd_state {
     */
    bool                                         hiz_enabled;
 
-   /* We ensure the registers for the gfx12 D16 fix are initalized at the
+   /* We ensure the registers for the gfx12 D16 fix are initialized at the
     * first non-NULL depth stencil packet emission of every command buffer.
     * For secondary command buffer execution, we transfer the state from the
     * last command buffer to the primary (if known).
@@ -4225,38 +4223,6 @@ void anv_image_get_memory_requirements(struct anv_device *device,
 enum isl_format
 anv_isl_format_for_descriptor_type(const struct anv_device *device,
                                    VkDescriptorType type);
-
-static inline VkExtent3D
-anv_sanitize_image_extent(const VkImageType imageType,
-                          const VkExtent3D imageExtent)
-{
-   switch (imageType) {
-   case VK_IMAGE_TYPE_1D:
-      return (VkExtent3D) { imageExtent.width, 1, 1 };
-   case VK_IMAGE_TYPE_2D:
-      return (VkExtent3D) { imageExtent.width, imageExtent.height, 1 };
-   case VK_IMAGE_TYPE_3D:
-      return imageExtent;
-   default:
-      unreachable("invalid image type");
-   }
-}
-
-static inline VkOffset3D
-anv_sanitize_image_offset(const VkImageType imageType,
-                          const VkOffset3D imageOffset)
-{
-   switch (imageType) {
-   case VK_IMAGE_TYPE_1D:
-      return (VkOffset3D) { imageOffset.x, 0, 0 };
-   case VK_IMAGE_TYPE_2D:
-      return (VkOffset3D) { imageOffset.x, imageOffset.y, 0 };
-   case VK_IMAGE_TYPE_3D:
-      return imageOffset;
-   default:
-      unreachable("invalid image type");
-   }
-}
 
 static inline uint32_t
 anv_rasterization_aa_mode(VkPolygonMode raster_mode,

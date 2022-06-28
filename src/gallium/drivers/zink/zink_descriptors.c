@@ -803,7 +803,7 @@ zink_descriptor_set_get(struct zink_context *ctx,
     */
    if (last_set && ((push_set && !ctx->dd->changed[is_compute][ZINK_DESCRIPTOR_TYPES]) ||
                     (!push_set && (screen->compact_descriptors ?
-                                   !ctx->dd->changed[is_compute][type] && !ctx->dd->changed[is_compute][type+2] :
+                                   !ctx->dd->changed[is_compute][type] && !ctx->dd->changed[is_compute][type+ZINK_DESCRIPTOR_COMPACT] :
                                    !ctx->dd->changed[is_compute][type])))) {
       *cache_hit = true;
       return last_set;
@@ -913,8 +913,8 @@ quick_out:
          if (zink_desc_type_from_vktype(pool->key->sizes[0].type) == type)
             zds->compacted |= BITFIELD_BIT(type);
          for (unsigned i = 0; i < pool->key->num_type_sizes; i++) {
-            if (zink_desc_type_from_vktype(pool->key->sizes[0].type) == type + 2) {
-               zds->compacted |= BITFIELD_BIT(type + 2);
+            if (zink_desc_type_from_vktype(pool->key->sizes[0].type) == type + ZINK_DESCRIPTOR_COMPACT) {
+               zds->compacted |= BITFIELD_BIT(type + ZINK_DESCRIPTOR_COMPACT);
                break;
             }
          }
@@ -1340,9 +1340,9 @@ static void
 set_descriptor_set_refs(struct zink_context *ctx, struct zink_descriptor_set *zds, struct zink_program *pg, bool cache_hit)
 {
    const bool compact_descriptors = zink_screen(ctx->base.screen)->compact_descriptors;
-   STATIC_ASSERT(ZINK_DESCRIPTOR_TYPE_UBO + 2 == ZINK_DESCRIPTOR_TYPE_SSBO);
-   STATIC_ASSERT(ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW + 2 == ZINK_DESCRIPTOR_TYPE_IMAGE);
-   const enum zink_descriptor_type types[] = {zds->pool->type, zds->pool->type + 2};
+   STATIC_ASSERT(ZINK_DESCRIPTOR_TYPE_UBO + ZINK_DESCRIPTOR_COMPACT == ZINK_DESCRIPTOR_TYPE_SSBO);
+   STATIC_ASSERT(ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW + ZINK_DESCRIPTOR_COMPACT == ZINK_DESCRIPTOR_TYPE_IMAGE);
+   const enum zink_descriptor_type types[] = {zds->pool->type, zds->pool->type + ZINK_DESCRIPTOR_COMPACT};
    unsigned num_types = compact_descriptors ? 2 : 1;
    for (unsigned n = 0; n < num_types; n++) {
       const enum zink_descriptor_type type = types[n];
@@ -1390,7 +1390,7 @@ update_descriptors_internal(struct zink_context *ctx, enum zink_descriptor_type 
    VkWriteDescriptorSet wds[ZINK_MAX_DESCRIPTORS_PER_TYPE];
    unsigned num_wds = 0;
 
-   const enum zink_descriptor_type types[2] = {type, type + 2};
+   const enum zink_descriptor_type types[2] = {type, type + ZINK_DESCRIPTOR_COMPACT};
    for (unsigned n = 0; n < ARRAY_SIZE(types); n++) {
       if (!(zds->compacted & BITFIELD_BIT(types[n])))
          continue;
@@ -1472,8 +1472,13 @@ zink_descriptors_update(struct zink_context *ctx, bool is_compute)
 
    if (ctx->dd->pg[is_compute] != pg) {
       for (int h = 0; h < ZINK_DESCRIPTOR_TYPES; h++) {
-            bool has_usage = !!pg->dsl[h + 1];
-            ctx->dd->changed[is_compute][h] |= has_usage;
+         if (pg->dd->real_binding_usage & BITFIELD_BIT(h))
+            ctx->dd->changed[is_compute][h] = true;
+         ctx->dd->descriptor_states[is_compute].valid[h] = false;
+         if (!is_compute) {
+            for (unsigned i = 0; i < ZINK_SHADER_COUNT; i++)
+               ctx->dd->gfx_descriptor_states[i].valid[h] = false;
+         }
       }
    }
    zink_context_update_descriptor_states(ctx, pg);
@@ -1603,33 +1608,37 @@ zink_batch_descriptor_init(struct zink_screen *screen, struct zink_batch_state *
 }
 
 static uint32_t
-calc_descriptor_state_hash_ubo(struct zink_context *ctx, enum pipe_shader_type shader, int idx, uint32_t hash, bool need_offset)
+calc_descriptor_state_hash_ubo(struct zink_context *ctx, struct zink_shader *zs, enum pipe_shader_type shader, int i, int idx, uint32_t hash, bool need_offset)
 {
-   struct zink_resource *res = ctx->di.descriptor_res[ZINK_DESCRIPTOR_TYPE_UBO][shader][idx];
-   struct zink_resource_object *obj = res ? res->obj : NULL;
-   hash = XXH32(&obj, sizeof(void*), hash);
-   void *hash_data = &ctx->di.ubos[shader][idx].range;
-   size_t data_size = sizeof(unsigned);
-   hash = XXH32(hash_data, data_size, hash);
-   if (need_offset)
-      hash = XXH32(&ctx->di.ubos[shader][idx].offset, sizeof(unsigned), hash);
+   for (unsigned k = 0; k < zs->bindings[ZINK_DESCRIPTOR_TYPE_UBO][i].size; k++) {
+      struct zink_resource *res = ctx->di.descriptor_res[ZINK_DESCRIPTOR_TYPE_UBO][shader][idx + k];
+      struct zink_resource_object *obj = res ? res->obj : NULL;
+      hash = XXH32(&obj, sizeof(void*), hash);
+      void *hash_data = &ctx->di.ubos[shader][idx + k].range;
+      size_t data_size = sizeof(unsigned);
+      hash = XXH32(hash_data, data_size, hash);
+      if (need_offset)
+         hash = XXH32(&ctx->di.ubos[shader][idx + k].offset, sizeof(unsigned), hash);
+   }
    return hash;
 }
 
 static uint32_t
 calc_descriptor_state_hash_ssbo(struct zink_context *ctx, struct zink_shader *zs, enum pipe_shader_type shader, int i, int idx, uint32_t hash)
 {
-   struct zink_resource *res = ctx->di.descriptor_res[ZINK_DESCRIPTOR_TYPE_SSBO][shader][idx];
-   struct zink_resource_object *obj = res ? res->obj : NULL;
-   hash = XXH32(&obj, sizeof(void*), hash);
-   if (obj) {
-      struct pipe_shader_buffer *ssbo = &ctx->ssbos[shader][idx];
-      hash = XXH32(&ssbo->buffer_offset, sizeof(ssbo->buffer_offset), hash);
-      hash = XXH32(&ssbo->buffer_size, sizeof(ssbo->buffer_size), hash);
-      /* compacted sets need a way to differentiate between a buffer bound as a ubo vs ssbo */
-      if (zink_screen(ctx->base.screen)->compact_descriptors) {
-         uint32_t writable = ctx->writable_ssbos[shader] & BITFIELD_BIT(idx);
-         hash = XXH32(&writable, sizeof(writable), hash);
+   for (unsigned k = 0; k < zs->bindings[ZINK_DESCRIPTOR_TYPE_SSBO][i].size; k++) {
+      struct zink_resource *res = ctx->di.descriptor_res[ZINK_DESCRIPTOR_TYPE_SSBO][shader][idx + k];
+      struct zink_resource_object *obj = res ? res->obj : NULL;
+      hash = XXH32(&obj, sizeof(void*), hash);
+      if (obj) {
+         struct pipe_shader_buffer *ssbo = &ctx->ssbos[shader][idx + k];
+         hash = XXH32(&ssbo->buffer_offset, sizeof(ssbo->buffer_offset), hash);
+         hash = XXH32(&ssbo->buffer_size, sizeof(ssbo->buffer_size), hash);
+         /* compacted sets need a way to differentiate between a buffer bound as a ubo vs ssbo */
+         if (zink_screen(ctx->base.screen)->compact_descriptors) {
+            uint32_t writable = ctx->writable_ssbos[shader] & BITFIELD_BIT(idx + k);
+            hash = XXH32(&writable, sizeof(writable), hash);
+         }
       }
    }
    return hash;
@@ -1683,7 +1692,7 @@ update_descriptor_stage_state(struct zink_context *ctx, enum pipe_shader_type sh
       int idx = zs->bindings[type][i].index;
       switch (type) {
       case ZINK_DESCRIPTOR_TYPE_UBO:
-         hash = calc_descriptor_state_hash_ubo(ctx, shader, idx, hash, true);
+         hash = calc_descriptor_state_hash_ubo(ctx, zs, shader, i, idx, hash, true);
          break;
       case ZINK_DESCRIPTOR_TYPE_SSBO:
          hash = calc_descriptor_state_hash_ssbo(ctx, zs, shader, i, idx, hash);
@@ -1755,12 +1764,12 @@ zink_context_update_descriptor_states(struct zink_context *ctx, struct zink_prog
                                            pg->dd->push_usage != ctx->dd->last_push_usage[pg->is_compute])) {
       uint32_t hash = 0;
       if (pg->is_compute) {
-          hash = calc_descriptor_state_hash_ubo(ctx, PIPE_SHADER_COMPUTE, 0, 0, false);
+          hash = calc_descriptor_state_hash_ubo(ctx, ctx->compute_stage, PIPE_SHADER_COMPUTE, 0, 0, 0, false);
       } else {
          bool first = true;
          u_foreach_bit(stage, pg->dd->push_usage) {
             if (!ctx->dd->gfx_push_valid[stage]) {
-               ctx->dd->gfx_push_state[stage] = calc_descriptor_state_hash_ubo(ctx, stage, 0, 0, false);
+               ctx->dd->gfx_push_state[stage] = calc_descriptor_state_hash_ubo(ctx, ctx->gfx_stages[stage], stage, 0, 0, 0, false);
                ctx->dd->gfx_push_valid[stage] = true;
             }
             if (first)
@@ -1788,20 +1797,20 @@ zink_context_update_descriptor_states(struct zink_context *ctx, struct zink_prog
 
    for (unsigned n = 0; n < 2; n++) {
       ctx->dd->compact_descriptor_states[pg->is_compute].valid[n] = ctx->dd->descriptor_states[pg->is_compute].valid[n] |
-                                                                    ctx->dd->descriptor_states[pg->is_compute].valid[n + 2];
+                                                                    ctx->dd->descriptor_states[pg->is_compute].valid[n + ZINK_DESCRIPTOR_COMPACT];
       if (ctx->dd->compact_descriptor_states[pg->is_compute].valid[n]) {
          if (pg->is_compute) {
             ctx->dd->compact_descriptor_states[pg->is_compute].state[n] = ctx->dd->descriptor_states[pg->is_compute].state[n] ^
-                                                                          ctx->dd->descriptor_states[pg->is_compute].state[n + 2];
+                                                                          ctx->dd->descriptor_states[pg->is_compute].state[n + ZINK_DESCRIPTOR_COMPACT];
          } else {
             uint32_t hash = 0;
             bool first = true;
             for (unsigned i = 0; i < ZINK_SHADER_COUNT; i++) {
                ctx->dd->compact_gfx_descriptor_states[i].valid[n] = ctx->dd->gfx_descriptor_states[i].valid[n] |
-                                                                    ctx->dd->gfx_descriptor_states[i].valid[n + 2];
+                                                                    ctx->dd->gfx_descriptor_states[i].valid[n + ZINK_DESCRIPTOR_COMPACT];
                if (ctx->dd->compact_gfx_descriptor_states[i].valid[n]) {
                   ctx->dd->compact_gfx_descriptor_states[i].state[n] = ctx->dd->gfx_descriptor_states[i].state[n] ^
-                                                                       ctx->dd->gfx_descriptor_states[i].state[n + 2];
+                                                                       ctx->dd->gfx_descriptor_states[i].state[n + ZINK_DESCRIPTOR_COMPACT];
                   if (first)
                      hash = ctx->dd->compact_gfx_descriptor_states[i].state[n];
                   else

@@ -630,7 +630,8 @@ union packed_instr {
       unsigned deref_type:3;
       unsigned cast_type_same_as_last:1;
       unsigned modes:5; /* See (de|en)code_deref_modes() */
-      unsigned _pad:10;
+      unsigned _pad:9;
+      unsigned in_bounds:1;
       unsigned packed_src_ssa_16bit:1; /* deref_var redefines this */
       unsigned dest:8;
    } deref;
@@ -664,9 +665,9 @@ union packed_instr {
    struct {
       unsigned instr_type:4;
       unsigned num_srcs:4;
-      unsigned op:4;
+      unsigned op:5;
+      unsigned _pad:11;
       unsigned dest:8;
-      unsigned _pad:12;
    } tex;
    struct {
       unsigned instr_type:4;
@@ -1039,6 +1040,8 @@ write_deref(write_ctx *ctx, const nir_deref_instr *deref)
       header.deref.packed_src_ssa_16bit =
          deref->parent.is_ssa && deref->arr.index.is_ssa &&
          are_object_ids_16bit(ctx);
+
+      header.deref.in_bounds = deref->arr.in_bounds;
    }
 
    write_dest(ctx, &deref->dest, header, deref->instr.type);
@@ -1125,6 +1128,8 @@ read_deref(read_ctx *ctx, union packed_instr header)
          read_src(ctx, &deref->parent, &deref->instr);
          read_src(ctx, &deref->arr.index, &deref->instr);
       }
+
+      deref->arr.in_bounds = header.deref.in_bounds;
 
       parent = nir_src_as_deref(deref->parent);
       if (deref->deref_type == nir_deref_type_array)
@@ -1314,7 +1319,7 @@ write_load_const(write_ctx *ctx, const nir_load_const_instr *lc)
             /* packed_value contains high 19 bits, low bits are 0 */
             header.load_const.packing = load_const_scalar_hi_19bits;
             header.load_const.packed_value = lc->value[0].u64 >> 45;
-         } else if (((lc->value[0].i64 << 45) >> 45) == lc->value[0].i64) {
+         } else if (util_sign_extend(lc->value[0].i64 & BITFIELD64_MASK(19), 19) == lc->value[0].i64) {
             /* packed_value contains low 19 bits, high bits are sign-extended */
             header.load_const.packing = load_const_scalar_lo_19bits_sext;
             header.load_const.packed_value = lc->value[0].u64;
@@ -1325,7 +1330,7 @@ write_load_const(write_ctx *ctx, const nir_load_const_instr *lc)
          if ((lc->value[0].u32 & 0x1fff) == 0) {
             header.load_const.packing = load_const_scalar_hi_19bits;
             header.load_const.packed_value = lc->value[0].u32 >> 13;
-         } else if (((lc->value[0].i32 << 13) >> 13) == lc->value[0].i32) {
+         } else if (util_sign_extend(lc->value[0].i32 & BITFIELD_MASK(19), 19) == lc->value[0].i32) {
             header.load_const.packing = load_const_scalar_lo_19bits_sext;
             header.load_const.packed_value = lc->value[0].u32;
          }
@@ -1499,7 +1504,7 @@ static void
 write_tex(write_ctx *ctx, const nir_tex_instr *tex)
 {
    assert(tex->num_srcs < 16);
-   assert(tex->op < 16);
+   assert(tex->op < 32);
 
    union packed_instr header;
    header.u32 = 0;

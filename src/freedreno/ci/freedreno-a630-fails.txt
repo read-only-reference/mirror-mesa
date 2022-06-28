@@ -74,20 +74,6 @@ spec@arb_depth_buffer_float@fbo-clear-formats stencil@GL_DEPTH32F_STENCIL8,Fail
 spec@arb_depth_buffer_float@fbo-generatemipmap-formats,Fail
 spec@arb_depth_buffer_float@fbo-generatemipmap-formats@GL_DEPTH_COMPONENT32F,Fail
 spec@arb_depth_buffer_float@fbo-generatemipmap-formats@GL_DEPTH_COMPONENT32F NPOT,Fail
-spec@arb_depth_buffer_float@texwrap formats bordercolor,Fail
-spec@arb_depth_buffer_float@texwrap formats bordercolor@GL_DEPTH32F_STENCIL8- border color only,Fail
-spec@arb_depth_buffer_float@texwrap formats bordercolor@GL_DEPTH_COMPONENT32F- border color only,Fail
-spec@arb_depth_buffer_float@texwrap formats bordercolor-swizzled,Fail
-spec@arb_depth_buffer_float@texwrap formats bordercolor-swizzled@GL_DEPTH32F_STENCIL8- swizzled- border color only,Fail
-spec@arb_depth_buffer_float@texwrap formats bordercolor-swizzled@GL_DEPTH_COMPONENT32F- swizzled- border color only,Fail
-spec@arb_depth_texture@texwrap formats bordercolor,Fail
-spec@arb_depth_texture@texwrap formats bordercolor@GL_DEPTH_COMPONENT16- border color only,Fail
-spec@arb_depth_texture@texwrap formats bordercolor@GL_DEPTH_COMPONENT24- border color only,Fail
-spec@arb_depth_texture@texwrap formats bordercolor@GL_DEPTH_COMPONENT32- border color only,Fail
-spec@arb_depth_texture@texwrap formats bordercolor-swizzled,Fail
-spec@arb_depth_texture@texwrap formats bordercolor-swizzled@GL_DEPTH_COMPONENT16- swizzled- border color only,Fail
-spec@arb_depth_texture@texwrap formats bordercolor-swizzled@GL_DEPTH_COMPONENT24- swizzled- border color only,Fail
-spec@arb_depth_texture@texwrap formats bordercolor-swizzled@GL_DEPTH_COMPONENT32- swizzled- border color only,Fail
 
 # "0 primitives generated:
 #  Incorrect number of prims generated.
@@ -97,8 +83,6 @@ spec@arb_direct_state_access@transformfeedback-bufferbase@general test,Fail
 spec@arb_direct_state_access@transformfeedback-bufferrange,Fail
 spec@arb_direct_state_access@transformfeedback-bufferrange@general test,Fail
 
-spec@arb_es2_compatibility@texwrap formats bordercolor-swizzled,Fail
-spec@arb_es2_compatibility@texwrap formats bordercolor-swizzled@GL_RGB565- swizzled- border color only,Fail
 spec@arb_occlusion_query@occlusion_query_order,Fail
 spec@arb_point_sprite@arb_point_sprite-interactions 1.0,Fail
 spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
@@ -186,45 +170,7 @@ spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-quads,F
 spec@arb_tessellation_shader@execution@vs-tes-tessinner-tessouter-inputs-tris,Fail
 spec@arb_tessellation_shader@execution@vs-tes-vertex,Fail
 
-spec@arb_texture_compression_bptc@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_compression_bptc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_BPTC_UNORM- swizzled- border color only,Fail
-spec@arb_texture_compression_bptc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT- swizzled- border color only,Fail
-spec@arb_texture_compression_bptc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT- swizzled- border color only,Fail
-spec@arb_texture_compression_bptc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM- swizzled- border color only,Fail
-spec@arb_texture_compression@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_compression@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA- swizzled- border color only,Fail
-spec@arb_texture_compression@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGB- swizzled- border color only,Fail
-spec@arb_texture_float@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_float@texwrap formats bordercolor-swizzled@GL_RGB16F- swizzled- border color only,Fail
-spec@arb_texture_float@texwrap formats bordercolor-swizzled@GL_RGB32F- swizzled- border color only,Fail
-spec@arb_texture_float@texwrap formats bordercolor-swizzled@GL_RGBA16F- swizzled- border color only,Fail
-spec@arb_texture_float@texwrap formats bordercolor-swizzled@GL_RGBA32F- swizzled- border color only,Fail
 spec@arb_texture_rectangle@1-1-linear-texture,Fail
-spec@arb_texture_rgb10_a2ui@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_rgb10_a2ui@texwrap formats bordercolor-swizzled@GL_RGB10_A2UI- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled@GL_R16- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled@GL_R8- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled@GL_RG16- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats bordercolor-swizzled@GL_RG8- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-float bordercolor-swizzled,Fail
-spec@arb_texture_rg@texwrap formats-float bordercolor-swizzled@GL_R16F- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-float bordercolor-swizzled@GL_R32F- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-float bordercolor-swizzled@GL_RG16F- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-float bordercolor-swizzled@GL_RG32F- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_R16I- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_R16UI- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_R32I- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_R32UI- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_R8I- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_R8UI- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG16I- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG16UI- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG32I- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG32UI- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG8I- swizzled- border color only,Fail
-spec@arb_texture_rg@texwrap formats-int bordercolor-swizzled@GL_RG8UI- swizzled- border color only,Fail
 
 spec@arb_timer_query@timestamp-get,Fail
 
@@ -248,6 +194,47 @@ spec@egl_chromium_sync_control@conformance,Fail
 spec@egl_ext_protected_content@conformance,Fail
 spec@egl_khr_surfaceless_context@viewport,Fail
 spec@egl_mesa_configless_context@basic,Fail
+
+# D32S8 skips (GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT), others fail.
+# The test is importing a z buffer from tu, and rendering a blue fullscreen quad
+# in gl that zfails to leave the green clear color in the middle.
+#
+# TU sysmem mode gets green on the bottom half-ish with some noise at the boundary.
+# TU gmem mode gets fullscreen green.
+spec@ext_external_objects@vk-depth-display,Fail
+spec@ext_external_objects@vk-depth-display@D16,Fail
+spec@ext_external_objects@vk-depth-display@D24S8,Fail
+
+# "Failed to submit queue." from the test some of the time.  No validation failures.
+# When it doesn't fail with that message, gets a set of corrupted colors (supposed
+# to be vertical stripes).
+spec@ext_external_objects@vk-image-display,Fail
+spec@ext_external_objects@vk-image-display-muliple-textures,Fail
+spec@ext_external_objects@vk-image-display-overwrite,Fail
+
+# Linear cases seem to do fine, optimal tiling fails.
+spec@ext_external_objects@vk-image-overwrite,Fail
+spec@ext_external_objects@vk-image-overwrite@RGB 10 A2 UINT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGB 10 A2 UNORM optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGB 5 A1 UNORM optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 16 INT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 16 SFLOAT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 16 UINT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 32 INT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 32 UINT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 4 UNORM optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 8 INT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 8 SRGB optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 8 UINT optimal: Failed to initialize OpenGL FBO/RBO,Fail
+spec@ext_external_objects@vk-image-overwrite@RGBA 8 UNORM optimal: Failed to initialize OpenGL FBO/RBO,Fail
+
+spec@ext_external_objects@vk-semaphores,Fail
+spec@ext_external_objects@vk-semaphores-2,Fail
+
+# D32S8 skips (GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT), D24S8 fails.
+spec@ext_external_objects@vk-stencil-display,Fail
+spec@ext_external_objects@vk-stencil-display@D24S8,Fail
+
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Fail
 
 spec@ext_framebuffer_multisample@alpha-to-coverage-dual-src-blend 2,Fail
@@ -271,39 +258,9 @@ spec@ext_framebuffer_multisample@sample-alpha-to-coverage 4 color,Fail
 spec@ext_framebuffer_multisample@sample-alpha-to-coverage 4 depth,Fail
 spec@ext_framebuffer_object@fbo-alphatest-nocolor,Fail
 spec@ext_framebuffer_object@fbo-alphatest-nocolor-ff,Fail
-spec@ext_packed_depth_stencil@texwrap formats bordercolor,Fail
-spec@ext_packed_depth_stencil@texwrap formats bordercolor@GL_DEPTH24_STENCIL8- border color only,Fail
-spec@ext_packed_depth_stencil@texwrap formats bordercolor-swizzled,Fail
-spec@ext_packed_depth_stencil@texwrap formats bordercolor-swizzled@GL_DEPTH24_STENCIL8- swizzled- border color only,Fail
 spec@ext_packed_float@query-rgba-signed-components,Fail
-spec@ext_packed_float@texwrap formats bordercolor-swizzled,Fail
-spec@ext_packed_float@texwrap formats bordercolor-swizzled@GL_R11F_G11F_B10F- swizzled- border color only,Fail
 
-spec@ext_texture_compression_rgtc@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_compression_rgtc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RED_RGTC1- swizzled- border color only,Fail
-spec@ext_texture_compression_rgtc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RG_RGTC2- swizzled- border color only,Fail
-spec@ext_texture_compression_rgtc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_SIGNED_RG_RGTC2- swizzled- border color only,Fail
-spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_S3TC_DXT1_EXT- swizzled- border color only,Fail
-spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_S3TC_DXT3_EXT- swizzled- border color only,Fail
-spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGBA_S3TC_DXT5_EXT- swizzled- border color only,Fail
-spec@ext_texture_compression_s3tc@texwrap formats bordercolor-swizzled@GL_COMPRESSED_RGB_S3TC_DXT1_EXT- swizzled- border color only,Fail
 spec@ext_texture_integer@multisample-formats 4 gl_ext_texture_integer,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGB16I- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGB16UI- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGB32I- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGB32UI- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGB8I- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGB8UI- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGBA16I- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGBA16UI- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGBA32I- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGBA32UI- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGBA8I- swizzled- border color only,Fail
-spec@ext_texture_integer@texwrap formats bordercolor-swizzled@GL_RGBA8UI- swizzled- border color only,Fail
-spec@ext_texture_shared_exponent@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_shared_exponent@texwrap formats bordercolor-swizzled@GL_RGB9_E5- swizzled- border color only,Fail
 
 # These failures go away with FD_MESA_DEBUG=noblit, but don't seem to be related
 # to the actual mipmap generation blits (which we do fall back on)
@@ -323,25 +280,6 @@ spec@ext_texture_snorm@fbo-generatemipmap-formats@GL_LUMINANCE16_SNORM NPOT,Fail
 
 spec@ext_texture_snorm@multisample-formats 2 gl_ext_texture_snorm,Fail
 spec@ext_texture_snorm@multisample-formats 4 gl_ext_texture_snorm,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_R16_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_R8_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_RG16_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_RG8_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_RGB16_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_RGB8_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_RGBA16_SNORM- swizzled- border color only,Fail
-spec@ext_texture_snorm@texwrap formats bordercolor-swizzled@GL_RGBA8_SNORM- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats bordercolor-swizzled,Fail
-spec@ext_texture_srgb@texwrap formats bordercolor-swizzled@GL_SRGB8_ALPHA8- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats bordercolor-swizzled@GL_SRGB8- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_ALPHA- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB_S3TC_DXT1_EXT- swizzled- border color only,Fail
-spec@ext_texture_srgb@texwrap formats-s3tc bordercolor-swizzled@GL_COMPRESSED_SRGB- swizzled- border color only,Fail
 spec@ext_transform_feedback@geometry-shaders-basic,Fail
 spec@ext_transform_feedback@intervening-read prims_generated,Fail
 spec@ext_transform_feedback@intervening-read prims_generated use_gs,Fail
@@ -514,21 +452,6 @@ spec@!opengl 1.1@polygon-mode-offset@config 6: Expected blue pixel in center,Fai
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on right edge,Fail
 spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on top edge,Fail
 spec@!opengl 1.1@polygon-mode-offset,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_R3_G3_B2- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB10_A2- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB10- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB12- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB16- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB4- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB5_A1- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB5- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGB8- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGBA12- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGBA16- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGBA2- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGBA4- swizzled- border color only,Fail
-spec@!opengl 1.1@texwrap formats bordercolor-swizzled@GL_RGBA8- swizzled- border color only,Fail
 spec@!opengl 1.4@gl-1.4-polygon-offset,Fail
 
 # "MESA: error: unknown vertex shader output name: VARYING_SLOT_EDGE
@@ -601,30 +524,12 @@ spec@!opengl 2.1@pbo@test_polygon_stip,Fail
 spec@!opengl 2.1@polygon-stipple-fs,Fail
 spec@!opengl 3.0@clearbuffer-depth-cs-probe,Timeout
 spec@!opengl 3.1@primitive-restart-xfb generated,Fail
+spec@!opengl 3.2@gl-3.2-adj-prims cull-back pv-first,Fail
+spec@!opengl 3.2@gl-3.2-adj-prims cull-front pv-first,Fail
+spec@!opengl 3.2@gl-3.2-adj-prims line cull-back pv-first,Fail
+spec@!opengl 3.2@gl-3.2-adj-prims line cull-front pv-first,Fail
+spec@!opengl 3.2@gl-3.2-adj-prims pv-first,Fail
 
-# Failures with unaligned gmem store
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint_separate_layouts.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_4.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_4.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_8_32.samples_2.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_8_32.samples_2.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_8_32.samples_4.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_8_32.samples_4.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_49_13.samples_2.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_49_13.samples_2.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_49_13.samples_4.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_49_13.samples_4.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_5_1.samples_2.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_5_1.samples_2.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_5_1.samples_4.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_5_1.samples_4.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_17_1.samples_2.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_17_1.samples_2.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_17_1.samples_4.d24_unorm_s8_uint.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
-gmem-unaligned-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_17_1.samples_4.d24_unorm_s8_uint_separate_layouts.depth_zero_stencil_zero_testing_stencil_samplemask,Fail
 spec@!opengl 1.0@depth-clear-precision-check,Fail
 spec@!opengl 1.0@depth-clear-precision-check@depth24,Fail
 spec@!opengl 1.0@depth-clear-precision-check@depth24_stencil8,Fail
@@ -913,37 +818,6 @@ dEQP-VK.pipeline.fast_linked_library.multisample_with_fragment_shading_rate.mixe
 dEQP-VK.pipeline.fast_linked_library.multisample_with_fragment_shading_rate.sample_mask.mask_random.samples_16.primitive_point_sparse,Fail
 dEQP-VK.pipeline.fast_linked_library.no_position.explicit_declarations.basic.single_view.v1_c0_e0_g0,Fail
 dEQP-VK.pipeline.fast_linked_library.render_to_image.dedicated_allocation.2d.small.a2b10g10r10_unorm_pack32_s8_uint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.a1r5g5b5_unorm_pack16.rg1a.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.a2b10g10r10_snorm_pack32.r1ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.a2r10g10b10_unorm_pack32.rgbi.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.a8b8g8r8_unorm_pack32.rg0a.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b4g4r4a4_unorm_pack16.rgb0.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b5g5r5a1_unorm_pack16.gbar.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b8g8r8_sint.rgia.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b8g8r8_snorm.r0ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b8g8r8_unorm.igba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b8g8r8a8_snorm.argb.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b8g8r8a8_srgb.riba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.b8g8r8a8_uint.0gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16_snorm.barg.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16_uint.rgb1.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16g16_uint.rgia.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16g16b16_uint.gbar.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16g16b16_unorm.1gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16g16b16a16_sint.riba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16g16b16a16_snorm.0gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r16g16b16a16_unorm.argb.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r32g32_sint.r1ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r32g32_uint.rgba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r32g32b32a32_sint.r0ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r4g4b4a4_unorm_pack16.rgia.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8_snorm.argb.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8_uint.0gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8g8_srgb.rgba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8g8b8_uint.barg.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8g8b8a8_sint.gbar.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8g8b8a8_snorm.1gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.fast_linked_library.sampler.border_swizzle.r8g8b8a8_srgb.rg1a.opaque_black.no_gather.with_swizzle_hint,Fail
 dEQP-VK.pipeline.fast_linked_library.sampler.exact_sampling.r32_sfloat.gradient.unnormalized_coords.edge_left,Fail
 dEQP-VK.pipeline.fast_linked_library.sampler.separate_stencil_usage.view_type.cube_array.format.d16_unorm_s8_uint.mipmap.nearest.lod.select_min_1,Fail
 dEQP-VK.pipeline.fast_linked_library.sampler.view_type.1d.format.a2b10g10r10_unorm_pack32.mag_reduce.comp_r_zero_zero_zero.max,Fail
@@ -1059,38 +933,6 @@ dEQP-VK.pipeline.monolithic.interface_matching.vector_length.out_ivec4_in_ivec4_
 dEQP-VK.pipeline.monolithic.multisample.variable_rate.4_32_1,Fail
 dEQP-VK.pipeline.monolithic.multisample_with_fragment_shading_rate.min_sample_shading.min_0_0.samples_32.primitive_triangle_sparse,Fail
 dEQP-VK.pipeline.monolithic.multisample_with_fragment_shading_rate.variable_rate.1_32_fb_8,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.a1r5g5b5_unorm_pack16.rgia.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.a2r10g10b10_snorm_pack32.0gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.a2r10g10b10_unorm_pack32.argb.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.a8b8g8r8_unorm_pack32.rg1a.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.b4g4r4a4_unorm_pack16.rgb1.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.b5g6r5_unorm_pack16.igba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.b8g8r8_srgb.rgb1.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.b8g8r8a8_srgb.gbar.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.b8g8r8a8_uint.1gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.b8g8r8a8_unorm.rgb0.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16_sfloat.rgba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16_sint.rgb1.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16_uint.barg.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16_unorm.r1ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16b16_sint.rgia.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16b16_unorm.igba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16b16a16_sfloat.rg1a.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16b16a16_sint.gbar.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r16g16b16a16_snorm.1gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r32_sfloat.0gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r32_sint.argb.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r32g32_sint.riba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r32g32b32a32_sint.r1ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r32g32b32a32_uint.rgba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r4g4b4a4_unorm_pack16.barg.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r5g5b5a1_unorm_pack16.r0ba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8_uint.1gba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8g8b8_sint.rgbi.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8g8b8_unorm.riba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8g8b8a8_snorm.igba.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8g8b8a8_srgb.rgia.opaque_black.no_gather.with_swizzle_hint,Fail
-dEQP-VK.pipeline.monolithic.sampler.border_swizzle.r8g8b8a8_uint.r0ba.opaque_black.no_gather.with_swizzle_hint,Fail
 dEQP-VK.pipeline.monolithic.sampler.exact_sampling.r8_unorm.gradient.normalized_coords.centered,Fail
 dEQP-VK.pipeline.monolithic.sampler.view_type.1d.format.b8g8r8a8_sint.address_modes.uvw_mode_clamp_to_edge_mode_mirrored_repeat_mode_clamp_to_edge,Fail
 dEQP-VK.pipeline.monolithic.sampler.view_type.1d.format.r32_sint.address_modes.uvw_mode_clamp_to_edge_mode_repeat_mode_mirror_clamp_to_edge,Fail
@@ -1203,36 +1045,6 @@ dEQP-VK.pipeline.pipeline_library.multisample_with_fragment_shading_rate.mixed_a
 dEQP-VK.pipeline.pipeline_library.multisample_with_fragment_shading_rate.variable_rate.64_1_fb_2_unused,Fail
 dEQP-VK.pipeline.pipeline_library.no_position.explicit_declarations.basic.single_view.v1_c1_e1_g0,Fail
 dEQP-VK.pipeline.pipeline_library.render_to_image.dedicated_allocation.2d.small.r5g6b5_unorm_pack16_d24_unorm_s8_uint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.a1r5g5b5_unorm_pack16.rg1a.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.a2b10g10r10_snorm_pack32.r1ba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.a2b10g10r10_unorm_pack32.rgba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.a2r10g10b10_unorm_pack32.rgbi.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.b8g8r8_sint.rgia.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.b8g8r8_srgb.rgb0.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.b8g8r8a8_snorm.argb.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.b8g8r8a8_uint.0gba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16_sfloat.igba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16_snorm.barg.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16_uint.rgb1.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16_sint.rgb0.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16_uint.rgia.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16_unorm.r0ba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16b16_uint.gbar.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16b16_unorm.1gba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16b16a16_sfloat.rg0a.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16b16a16_sint.riba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r16g16b16a16_snorm.0gba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r32g32_uint.rgba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r32g32b32_sint.rgb1.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r32g32b32_uint.barg.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r32g32b32a32_uint.igba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8_snorm.argb.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8_srgb.riba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8g8_uint.rgbi.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8g8b8_sint.rgb1.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8g8b8_unorm.r1ba.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8g8b8a8_sint.gbar.opaque_black.gather_2.with_swizzle_hint,Fail
-dEQP-VK.pipeline.pipeline_library.sampler.border_swizzle.r8g8b8a8_srgb.rg1a.opaque_black.gather_2.with_swizzle_hint,Fail
 dEQP-VK.pipeline.pipeline_library.sampler.exact_sampling.r32_sfloat.solid_color.unnormalized_coords.edge_left,Fail
 dEQP-VK.pipeline.pipeline_library.sampler.view_type.1d.format.a2b10g10r10_unorm_pack32.mag_reduce.comp_b_g_r_a.max,Fail
 dEQP-VK.pipeline.pipeline_library.sampler.view_type.1d.format.b8g8r8_sint.address_modes.all_mode_clamp_to_border_custom_1001,Fail
@@ -1567,3 +1379,32 @@ dEQP-VK.ycbcr.copy_dimensions.src4x32768_dst4x32768.g10x6_b10x6_r10x6_3plane_420
 dEQP-VK.ycbcr.format.g10x6_b10x6_r10x6_3plane_444_unorm_3pack16.tess_eval_linear_mapped,Fail
 dEQP-VK.ycbcr.plane_view.image_view.g16_b16_r16_3plane_444_unorm_disjoint_plane_2_compatible_format_r16_sint,Fail
 dEQP-VK.ycbcr.query.levels.fragment.r10x6g10x6_unorm_2pack16,Fail
+
+# https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/3672
+dEQP-VK.synchronization2.none_stage.transfer_dst_to_transfer_src,Fail
+dEQP-VK.synchronization2.none_stage.transfer_dst_to_general,Fail
+dEQP-VK.synchronization2.none_stage.general_to_transfer_src,Fail
+dEQP-VK.synchronization2.none_stage.general_to_general,Fail
+dEQP-VK.synchronization2.none_stage.old_access_transfer_dst_to_transfer_src,Fail
+dEQP-VK.synchronization2.none_stage.old_access_transfer_dst_to_general,Fail
+dEQP-VK.synchronization2.none_stage.old_access_general_to_transfer_src,Fail
+dEQP-VK.synchronization2.none_stage.old_access_general_to_general,Fail
+dEQP-VK.synchronization2.none_stage.legacy_transfer_dst_to_transfer_src,Fail
+dEQP-VK.synchronization2.none_stage.legacy_transfer_dst_to_general,Fail
+dEQP-VK.synchronization2.none_stage.legacy_general_to_transfer_src,Fail
+dEQP-VK.synchronization2.none_stage.legacy_general_to_general,Fail
+gmem-dEQP-VK.synchronization2.none_stage.transfer_dst_to_transfer_src,Fail
+gmem-dEQP-VK.synchronization2.none_stage.transfer_dst_to_general,Fail
+gmem-dEQP-VK.synchronization2.none_stage.general_to_transfer_src,Fail
+gmem-dEQP-VK.synchronization2.none_stage.general_to_general,Fail
+gmem-dEQP-VK.synchronization2.none_stage.old_access_transfer_dst_to_transfer_src,Fail
+gmem-dEQP-VK.synchronization2.none_stage.old_access_transfer_dst_to_general,Fail
+gmem-dEQP-VK.synchronization2.none_stage.old_access_general_to_transfer_src,Fail
+gmem-dEQP-VK.synchronization2.none_stage.old_access_general_to_general,Fail
+gmem-dEQP-VK.synchronization2.none_stage.legacy_transfer_dst_to_transfer_src,Fail
+gmem-dEQP-VK.synchronization2.none_stage.legacy_transfer_dst_to_general,Fail
+gmem-dEQP-VK.synchronization2.none_stage.legacy_general_to_transfer_src,Fail
+gmem-dEQP-VK.synchronization2.none_stage.legacy_general_to_general,Fail
+
+dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
+dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d32_sfloat_s8_uint.compatibility_depth_zero_stencil_zero_testing_stencil,Fail

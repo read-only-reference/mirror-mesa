@@ -29,11 +29,11 @@
 #include <string.h>
 #include <vulkan/vulkan.h>
 
-#include "c11_compat.h"
 #include "hwdef/rogue_hw_defs.h"
 #include "hwdef/rogue_hw_utils.h"
 #include "pvr_bo.h"
 #include "pvr_csb.h"
+#include "pvr_csb_enum_helpers.h"
 #include "pvr_device_info.h"
 #include "pvr_end_of_tile.h"
 #include "pvr_formats.h"
@@ -697,7 +697,7 @@ static inline uint32_t pvr_stride_from_pitch(uint32_t pitch, VkFormat vk_format)
 }
 
 static void pvr_setup_pbe_state(
-   struct pvr_device *const device,
+   const struct pvr_device_info *dev_info,
    struct pvr_framebuffer *framebuffer,
    uint32_t mrt_index,
    const struct usc_mrt_resource *mrt_resource,
@@ -708,7 +708,6 @@ static void pvr_setup_pbe_state(
    uint32_t pbe_cs_words[static const ROGUE_NUM_PBESTATE_STATE_WORDS],
    uint64_t pbe_reg_words[static const ROGUE_NUM_PBESTATE_REG_WORDS])
 {
-   const struct pvr_device_info *dev_info = &device->pdevice->dev_info;
    const struct pvr_image *image = iview->image;
    uint32_t level_pitch = image->mip_levels[iview->vk.base_mip_level].pitch;
 
@@ -818,7 +817,7 @@ static void pvr_setup_pbe_state(
    render_params.slice = 0;
    render_params.mrt_index = mrt_index;
 
-   pvr_pbe_pack_state(device,
+   pvr_pbe_pack_state(dev_info,
                       &surface_params,
                       &render_params,
                       pbe_cs_words,
@@ -868,11 +867,10 @@ pvr_pass_get_pixel_output_width(const struct pvr_render_pass *pass,
    return util_next_power_of_two(width);
 }
 
-static VkResult pvr_sub_cmd_gfx_job_init(struct pvr_device *device,
+static VkResult pvr_sub_cmd_gfx_job_init(const struct pvr_device_info *dev_info,
                                          struct pvr_cmd_buffer *cmd_buffer,
                                          struct pvr_sub_cmd *sub_cmd)
 {
-   const struct pvr_device_info *dev_info = &device->pdevice->dev_info;
    struct pvr_render_pass_info *render_pass_info =
       &cmd_buffer->state.render_pass_info;
    const struct pvr_renderpass_hwsetup_render *hw_render =
@@ -899,7 +897,7 @@ static VkResult pvr_sub_cmd_gfx_job_init(struct pvr_device *device,
       if (surface->need_resolve)
          pvr_finishme("Set up job resolve information.");
 
-      pvr_setup_pbe_state(device,
+      pvr_setup_pbe_state(dev_info,
                           render_pass_info->framebuffer,
                           surface->mrt_index,
                           mrt_resource,
@@ -1065,12 +1063,10 @@ static VkResult pvr_sub_cmd_gfx_job_init(struct pvr_device *device,
  */
 #define PVR_IDF_WDF_IN_REGISTER_CONST_COUNT 12U
 
-static void pvr_sub_cmd_compute_job_init(struct pvr_device *device,
+static void pvr_sub_cmd_compute_job_init(const struct pvr_device_info *dev_info,
                                          struct pvr_cmd_buffer *cmd_buffer,
                                          struct pvr_sub_cmd *sub_cmd)
 {
-   const struct pvr_device_info *dev_info = &device->pdevice->dev_info;
-
    if (sub_cmd->compute.uses_barrier) {
       sub_cmd->compute.submit_info.flags |=
          PVR_WINSYS_COMPUTE_FLAG_PREVENT_ALL_OVERLAP;
@@ -1392,7 +1388,9 @@ static VkResult pvr_cmd_buffer_end_sub_cmd(struct pvr_cmd_buffer *cmd_buffer)
          return result;
       }
 
-      result = pvr_sub_cmd_gfx_job_init(device, cmd_buffer, sub_cmd);
+      result = pvr_sub_cmd_gfx_job_init(&device->pdevice->dev_info,
+                                        cmd_buffer,
+                                        sub_cmd);
       if (result != VK_SUCCESS) {
          state->status = result;
          return result;
@@ -1409,7 +1407,9 @@ static VkResult pvr_cmd_buffer_end_sub_cmd(struct pvr_cmd_buffer *cmd_buffer)
          return result;
       }
 
-      pvr_sub_cmd_compute_job_init(device, cmd_buffer, sub_cmd);
+      pvr_sub_cmd_compute_job_init(&device->pdevice->dev_info,
+                                   cmd_buffer,
+                                   sub_cmd);
       break;
 
    case PVR_SUB_CMD_TYPE_TRANSFER:
@@ -3197,46 +3197,6 @@ static void pvr_setup_output_select(struct pvr_cmd_buffer *const cmd_buffer)
    }
 }
 
-/* clang-format off */
-static enum PVRX(TA_OBJTYPE)
-pvr_ppp_state_get_ispa_objtype_from_vk(const VkPrimitiveTopology topology)
-/* clang-format on */
-{
-   switch (topology) {
-   case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
-      return PVRX(TA_OBJTYPE_SPRITE_01UV);
-
-   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
-      return PVRX(TA_OBJTYPE_LINE);
-
-   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
-   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
-   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
-   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY:
-   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY:
-      return PVRX(TA_OBJTYPE_TRIANGLE);
-
-   default:
-      unreachable("Invalid topology.");
-      return 0;
-   }
-}
-
-static inline enum PVRX(TA_CMPMODE) pvr_cmpmode(VkCompareOp op)
-{
-   /* enum values are identical, so we can just cast the input directly. */
-   return (enum PVRX(TA_CMPMODE))op;
-}
-
-static inline enum PVRX(TA_ISPB_STENCILOP) pvr_stencilop(VkStencilOp op)
-{
-   /* enum values are identical, so we can just cast the input directly. */
-   return (enum PVRX(TA_ISPB_STENCILOP))op;
-}
-
 static void pvr_setup_isp_faces_and_control(
    struct pvr_cmd_buffer *const cmd_buffer,
    struct pvr_cmd_struct(TA_STATE_ISPA) *const ispa_out)
@@ -3263,8 +3223,7 @@ static void pvr_setup_isp_faces_and_control(
    const bool disable_all = raster_discard_enabled || !attachment;
 
    const VkPrimitiveTopology topology = gfx_pipeline->input_asm_state.topology;
-   const enum PVRX(TA_OBJTYPE)
-      obj_type = pvr_ppp_state_get_ispa_objtype_from_vk(topology);
+   const enum PVRX(TA_OBJTYPE) obj_type = pvr_ta_objtype(topology);
 
    const bool disable_stencil_write = disable_all;
    const bool disable_stencil_test =
@@ -3305,7 +3264,7 @@ static void pvr_setup_isp_faces_and_control(
       if (disable_depth_test)
          ispa.dcmpmode = PVRX(TA_CMPMODE_ALWAYS);
       else
-         ispa.dcmpmode = pvr_cmpmode(gfx_pipeline->depth_compare_op);
+         ispa.dcmpmode = pvr_ta_cmpmode(gfx_pipeline->depth_compare_op);
 
       /* FIXME: Can we just have this and remove the assignment above?
        * The user provides a depthTestEnable at vkCreateGraphicsPipelines()
@@ -3361,11 +3320,12 @@ static void pvr_setup_isp_faces_and_control(
             (!disable_stencil_write) * dynamic_state->write_mask.front;
          ispb.scmpmask = dynamic_state->compare_mask.front;
 
-         ispb.sop3 = pvr_stencilop(gfx_pipeline->stencil_front.pass_op);
-         ispb.sop2 = pvr_stencilop(gfx_pipeline->stencil_front.depth_fail_op);
-         ispb.sop1 = pvr_stencilop(gfx_pipeline->stencil_front.fail_op);
+         ispb.sop3 = pvr_ta_stencilop(gfx_pipeline->stencil_front.pass_op);
+         ispb.sop2 =
+            pvr_ta_stencilop(gfx_pipeline->stencil_front.depth_fail_op);
+         ispb.sop1 = pvr_ta_stencilop(gfx_pipeline->stencil_front.fail_op);
 
-         ispb.scmpmode = pvr_cmpmode(gfx_pipeline->stencil_front.compare_op);
+         ispb.scmpmode = pvr_ta_cmpmode(gfx_pipeline->stencil_front.compare_op);
       }
 
       pvr_csb_pack (&back_b, TA_STATE_ISPB, ispb) {
@@ -3373,11 +3333,11 @@ static void pvr_setup_isp_faces_and_control(
             (!disable_stencil_write) * dynamic_state->write_mask.back;
          ispb.scmpmask = dynamic_state->compare_mask.back;
 
-         ispb.sop3 = pvr_stencilop(gfx_pipeline->stencil_back.pass_op);
-         ispb.sop2 = pvr_stencilop(gfx_pipeline->stencil_back.depth_fail_op);
-         ispb.sop1 = pvr_stencilop(gfx_pipeline->stencil_back.fail_op);
+         ispb.sop3 = pvr_ta_stencilop(gfx_pipeline->stencil_back.pass_op);
+         ispb.sop2 = pvr_ta_stencilop(gfx_pipeline->stencil_back.depth_fail_op);
+         ispb.sop1 = pvr_ta_stencilop(gfx_pipeline->stencil_back.fail_op);
 
-         ispb.scmpmode = pvr_cmpmode(gfx_pipeline->stencil_back.compare_op);
+         ispb.scmpmode = pvr_ta_cmpmode(gfx_pipeline->stencil_back.compare_op);
       }
    }
 
@@ -3649,77 +3609,6 @@ pvr_setup_triangle_merging_flag(struct pvr_cmd_buffer *const cmd_buffer,
       ppp_state->pds.size_info2 = merge_word;
       emit_state->pds_fragment_stateptr0 = true;
    }
-}
-
-/* TODO: See if this function can be improved once fully implemented. */
-static uint32_t pvr_calc_fscommon_size_and_tiles_in_flight(
-   const struct pvr_device_info *dev_info,
-   uint32_t fs_common_size,
-   uint32_t min_tiles_in_flight)
-{
-   uint32_t max_tiles_in_flight;
-   uint32_t num_allocs;
-
-   if (PVR_HAS_FEATURE(dev_info, s8xe)) {
-      num_allocs = PVR_GET_FEATURE_VALUE(dev_info, num_raster_pipes, 0U);
-   } else {
-      uint32_t num_phantoms = rogue_get_num_phantoms(dev_info);
-      uint32_t min_cluster_per_phantom = 0;
-
-      if (num_phantoms > 1) {
-         pvr_finishme("Unimplemented path!!");
-      } else {
-         min_cluster_per_phantom =
-            PVR_GET_FEATURE_VALUE(dev_info, num_clusters, 1U);
-      }
-
-      if (num_phantoms > 1)
-         pvr_finishme("Unimplemented path!!");
-
-      if (num_phantoms > 2)
-         pvr_finishme("Unimplemented path!!");
-
-      if (num_phantoms > 3)
-         pvr_finishme("Unimplemented path!!");
-
-      if (min_cluster_per_phantom >= 4)
-         num_allocs = 1;
-      else if (min_cluster_per_phantom == 2)
-         num_allocs = 2;
-      else
-         num_allocs = 4;
-   }
-
-   max_tiles_in_flight =
-      PVR_GET_FEATURE_VALUE(dev_info, isp_max_tiles_in_flight, 1U);
-
-   if (fs_common_size == UINT_MAX) {
-      uint32_t max_common_size;
-
-      num_allocs *= MIN2(min_tiles_in_flight, max_tiles_in_flight);
-
-      if (!PVR_HAS_ERN(dev_info, 38748)) {
-         /* Hardware needs space for one extra shared allocation. */
-         num_allocs += 1;
-      }
-
-      max_common_size = rogue_get_reserved_shared_size(dev_info) -
-                        rogue_get_max_coeffs(dev_info);
-
-      /* Double resource requirements to deal with fragmentation. */
-      max_common_size /= num_allocs * 2;
-      max_common_size =
-         ROUND_DOWN_TO(max_common_size,
-                       PVRX(TA_STATE_PDS_SIZEINFO2_USC_SHAREDSIZE_UNIT_SIZE));
-
-      return max_common_size;
-   } else if (fs_common_size == 0) {
-      return max_tiles_in_flight;
-   }
-
-   pvr_finishme("Unimplemented path!!");
-
-   return 0;
 }
 
 static void
@@ -4614,6 +4503,10 @@ static void pvr_emit_vdm_index_list(struct pvr_cmd_buffer *cmd_buffer,
    unsigned int index_stride = 0;
 
    pvr_csb_emit (csb, VDMCTRL_INDEX_LIST0, list0) {
+      const bool vertex_shader_has_side_effects =
+         cmd_buffer->state.gfx_pipeline->vertex_shader_state.stage_state
+            .has_side_effects;
+
       list0.primitive_topology = pvr_get_hw_primitive_topology(topology);
 
       /* First instance is not handled in the VDM state, it's implemented as
@@ -4651,6 +4544,11 @@ static void pvr_emit_vdm_index_list(struct pvr_cmd_buffer *cmd_buffer,
          index_buffer_addr.addr += first_index * index_stride;
          list0.index_base_addrmsb = index_buffer_addr;
       }
+
+      list0.degen_cull_enable =
+         PVR_HAS_FEATURE(&cmd_buffer->device->pdevice->dev_info,
+                         vdm_degenerate_culling) &&
+         !vertex_shader_has_side_effects;
 
       list_hdr = list0;
    }

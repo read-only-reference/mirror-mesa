@@ -68,6 +68,7 @@ struct radv_pipeline_key {
    uint32_t disable_aniso_single_level : 1;
    uint32_t disable_sinking_load_input_fs : 1;
    uint32_t image_2d_view_of_3d : 1;
+   uint32_t primitives_generated_query : 1;
 
    struct {
       uint32_t instance_rate_inputs;
@@ -143,7 +144,7 @@ enum radv_ud_index {
    AC_UD_INDIRECT_DESCRIPTOR_SETS = 3,
    AC_UD_VIEW_INDEX = 4,
    AC_UD_STREAMOUT_BUFFERS = 5,
-   AC_UD_NGG_GS_STATE = 6,
+   AC_UD_NGG_QUERY_STATE = 6,
    AC_UD_NGG_CULLING_SETTINGS = 7,
    AC_UD_NGG_VIEWPORT = 8,
    AC_UD_FORCE_VRS_RATES = 9,
@@ -364,6 +365,7 @@ struct radv_shader_info {
    struct {
       struct radv_vs_output_info outinfo;
       enum shader_prim output_prim;
+      bool needs_ms_scratch_ring;
    } ms;
 
    struct radv_streamout_info so;
@@ -439,7 +441,7 @@ struct radv_shader_binary_rtld {
    uint8_t data[0];
 };
 
-struct radv_prolog_binary {
+struct radv_shader_part_binary {
    uint8_t num_sgprs;
    uint8_t num_vgprs;
    uint8_t num_preserved_sgprs;
@@ -495,7 +497,7 @@ struct radv_trap_handler_shader {
    union radv_shader_arena_block *alloc;
 };
 
-struct radv_shader_prolog {
+struct radv_shader_part {
    struct radeon_winsys_bo *bo;
    union radv_shader_arena_block *alloc;
    uint32_t rsrc1;
@@ -576,12 +578,12 @@ uint64_t radv_trap_handler_shader_get_va(const struct radv_trap_handler_shader *
 void radv_trap_handler_shader_destroy(struct radv_device *device,
                                       struct radv_trap_handler_shader *trap);
 
-struct radv_shader_prolog *radv_create_vs_prolog(struct radv_device *device,
-                                                 const struct radv_vs_prolog_key *key);
+struct radv_shader_part *radv_create_vs_prolog(struct radv_device *device,
+                                               const struct radv_vs_prolog_key *key);
 
 void radv_shader_destroy(struct radv_device *device, struct radv_shader *shader);
 
-void radv_prolog_destroy(struct radv_device *device, struct radv_shader_prolog *prolog);
+void radv_shader_part_destroy(struct radv_device *device, struct radv_shader_part *shader_part);
 
 uint64_t radv_shader_get_va(const struct radv_shader *shader);
 struct radv_shader *radv_find_shader(struct radv_device *device, uint64_t pc);

@@ -37,7 +37,6 @@ libdzn_files = files(
   'dzn_image.c',
   'dzn_meta.c',
   'dzn_nir.c',
-  'dzn_pipeline_cache.c',
   'dzn_pipeline.c',
   'dzn_query.c',
   'dzn_sync.c',
@@ -60,6 +59,16 @@ dzn_flags = [ ]
 
 if with_platform_windows
   dzn_flags += '-DVK_USE_PLATFORM_WIN32_KHR'
+endif
+
+if cc.get_argument_syntax() != 'msvc'
+  dzn_flags += [
+    '-Werror=unused-variable',
+    '-Werror=unused-but-set-variable',
+    '-Werror=unused-value',
+    '-Werror=format',
+    '-Werror=switch',
+  ]
 endif
 
 libvulkan_dzn = shared_library(

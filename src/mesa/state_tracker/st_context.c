@@ -64,6 +64,7 @@
 #include "util/u_upload_mgr.h"
 #include "util/u_vbuf.h"
 #include "util/u_memory.h"
+#include "util/hash_table.h"
 #include "cso_cache/cso_context.h"
 #include "compiler/glsl/glsl_parser_extras.h"
 #include "nir/nir_to_tgsi.h"
@@ -446,6 +447,9 @@ st_init_driver_flags(struct st_context *st)
                                 ST_NEW_VS_STATE | ST_NEW_TCS_STATE |
                                 ST_NEW_TES_STATE | ST_NEW_GS_STATE |
                                 ST_NEW_FS_STATE | ST_NEW_CS_STATE;
+
+   if (!st->has_hw_atomics && st->ctx->Const.ShaderStorageBufferOffsetAlignment > 4)
+      f->NewAtomicBuffer |= ST_NEW_CONSTANTS;
 }
 
 static bool
@@ -477,7 +481,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
                        const struct st_config_options *options)
 {
    struct pipe_screen *screen = pipe->screen;
-   uint i;
    struct st_context *st = CALLOC_STRUCT( st_context);
 
    st->options = *options;
@@ -610,6 +613,8 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       screen->get_param(screen, PIPE_CAP_INDEP_BLEND_FUNC);
    st->needs_rgb_dst_alpha_override =
       screen->get_param(screen, PIPE_CAP_RGB_OVERRIDE_DST_ALPHA_BLEND);
+   st->can_dither =
+      screen->get_param(screen, PIPE_CAP_DITHERING);
    st->lower_flatshade =
       !screen->get_param(screen, PIPE_CAP_FLATSHADE);
    st->lower_alpha_test =
@@ -679,14 +684,11 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    ctx->Point.MaxSize = MAX2(ctx->Const.MaxPointSize,
                              ctx->Const.MaxPointSizeAA);
 
+   ctx->Const.PointCoordOriginUpperLeft =
+      screen->get_param(screen, PIPE_CAP_POINT_COORD_ORIGIN_UPPER_LEFT);
+
    ctx->Const.NoClippingOnCopyTex = screen->get_param(screen,
                                                       PIPE_CAP_NO_CLIP_ON_COPY_TEX);
-
-   /* For vertex shaders, make sure not to emit saturate when SM 3.0
-    * is not supported
-    */
-   ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].EmitNoSat =
-      !screen->get_param(screen, PIPE_CAP_VERTEX_SHADER_SATURATE);
 
    ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].PositionAlwaysInvariant = options->vs_position_always_invariant;
 
@@ -699,11 +701,6 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    assert(ctx->Const.GLSLTessLevelsAsInputs ||
       !screen->get_param(screen, PIPE_CAP_NIR_COMPACT_ARRAYS) ||
       !ctx->Extensions.ARB_tessellation_shader);
-
-   if (ctx->Const.GLSLVersion < 400) {
-      for (i = 0; i < MESA_SHADER_STAGES; i++)
-         ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectSampler = true;
-   }
 
    /* Set which shader types can be compiled at link time. */
    st->shader_has_one_variant[MESA_SHADER_VERTEX] =
@@ -960,6 +957,12 @@ st_destroy_context(struct st_context *st)
    st_release_program(st, &st->tcp);
    st_release_program(st, &st->tep);
    st_release_program(st, &st->cp);
+
+   if (st->hw_select_shaders) {
+      hash_table_foreach(st->hw_select_shaders, entry)
+         st->pipe->delete_gs_state(st->pipe, entry->data);
+      _mesa_hash_table_destroy(st->hw_select_shaders, NULL);
+   }
 
    /* release framebuffer in the winsys buffers list */
    LIST_FOR_EACH_ENTRY_SAFE_REV(stfb, next, &st->winsys_buffers, head) {

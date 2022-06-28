@@ -28,6 +28,24 @@
 #include "vk_format.h"
 #include "vk_util.h"
 
+void
+dzn_image_align_extent(const struct dzn_image *image,
+                       VkExtent3D *extent)
+{
+   enum pipe_format pfmt = vk_format_to_pipe_format(image->vk.format);
+   uint32_t blkw = util_format_get_blockwidth(pfmt);
+   uint32_t blkh = util_format_get_blockheight(pfmt);
+   uint32_t blkd = util_format_get_blockdepth(pfmt);
+
+   assert(util_is_power_of_two_nonzero(blkw) &&
+          util_is_power_of_two_nonzero(blkh) &&
+          util_is_power_of_two_nonzero(blkh));
+
+   extent->width = ALIGN_POT(extent->width, blkw);
+   extent->height = ALIGN_POT(extent->height, blkh);
+   extent->depth = ALIGN_POT(extent->depth, blkd);
+}
+
 static void
 dzn_image_destroy(struct dzn_image *image,
                   const VkAllocationCallbacks *pAllocator)
@@ -58,10 +76,6 @@ dzn_image_create(struct dzn_device *device,
 
    if (!image)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-   const VkExternalMemoryImageCreateInfo *create_info =
-      (const VkExternalMemoryImageCreateInfo *)
-      vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
 
 #if 0
     VkExternalMemoryHandleTypeFlags supported =
@@ -339,12 +353,8 @@ dzn_image_get_copy_loc(const struct dzn_image *image,
    };
 
    assert((subres->aspectMask & aspect) != 0);
-   VkFormat format = dzn_image_get_plane_format(image->vk.format, aspect);
 
    if (image->desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
-      VkImageUsageFlags usage =
-         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-
       assert((subres->baseArrayLayer + layer) == 0);
       assert(subres->mipLevel == 0);
       loc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -419,6 +429,12 @@ dzn_image_get_dsv_desc(const struct dzn_image *image,
       dsv_desc.Texture2DArray.FirstArraySlice = range->baseArrayLayer;
       dsv_desc.Texture2DArray.ArraySize = layer_count;
       break;
+   case D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY:
+      dsv_desc.Texture2DMSArray.FirstArraySlice = range->baseArrayLayer;
+      dsv_desc.Texture2DMSArray.ArraySize = layer_count;
+      break;
+   default:
+      unreachable("Invalid view dimension");
    }
 
    return dsv_desc;
@@ -503,14 +519,30 @@ dzn_image_get_rtv_desc(const struct dzn_image *image,
       rtv_desc.Texture3D.WSize =
          range->layerCount == VK_REMAINING_ARRAY_LAYERS ? -1 : layer_count;
       break;
+   default:
+      unreachable("Invalid ViewDimension");
    }
 
    return rtv_desc;
 }
 
 D3D12_RESOURCE_STATES
-dzn_image_layout_to_state(VkImageLayout layout, VkImageAspectFlagBits aspect)
+dzn_image_layout_to_state(const struct dzn_image *image,
+                          VkImageLayout layout,
+                          VkImageAspectFlagBits aspect)
 {
+   /* Handle VK_IMAGE_LAYOUT_SUBPASS_SELF_DEPENDENCY_MESA separately to
+    * silence -Wswitch warnings (VK_IMAGE_LAYOUT_SUBPASS_SELF_DEPENDENCY_MESA is
+    * not part of the official VkImageLayout enum, it's a define in
+    * vk_render_pass.h)
+    */
+   if (layout == VK_IMAGE_LAYOUT_SUBPASS_SELF_DEPENDENCY_MESA)
+      return D3D12_RESOURCE_STATE_COMMON;
+
+   D3D12_RESOURCE_STATES shaders_access =
+      (image->desc.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE) ?
+      0 : D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
    switch (layout) {
    case VK_IMAGE_LAYOUT_PREINITIALIZED:
    case VK_IMAGE_LAYOUT_UNDEFINED:
@@ -530,20 +562,21 @@ dzn_image_layout_to_state(VkImageLayout layout, VkImageAspectFlagBits aspect)
 
    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+   case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
       return D3D12_RESOURCE_STATE_DEPTH_WRITE;
 
    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
    case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
-      return D3D12_RESOURCE_STATE_DEPTH_READ;
+      return D3D12_RESOURCE_STATE_DEPTH_READ | shaders_access;
 
    case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
       return aspect == VK_IMAGE_ASPECT_STENCIL_BIT ?
              D3D12_RESOURCE_STATE_DEPTH_WRITE :
-             D3D12_RESOURCE_STATE_DEPTH_READ;
+             (D3D12_RESOURCE_STATE_DEPTH_READ | shaders_access);
 
    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
       return aspect == VK_IMAGE_ASPECT_STENCIL_BIT ?
-             D3D12_RESOURCE_STATE_DEPTH_READ :
+             (D3D12_RESOURCE_STATE_DEPTH_READ | shaders_access) :
              D3D12_RESOURCE_STATE_DEPTH_WRITE;
 
    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
@@ -636,7 +669,7 @@ dzn_BindImageMemory2(VkDevice dev,
                                                       mem->initial_state,
                                                       NULL,
                                                       &IID_ID3D12Resource,
-                                                      &image->res)))
+                                                      (void **)&image->res)))
             return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
          did_bind = true;
       }
@@ -1061,10 +1094,7 @@ dzn_image_view_init(struct dzn_device *device,
    VK_FROM_HANDLE(dzn_image, image, pCreateInfo->image);
 
    const VkImageSubresourceRange *range = &pCreateInfo->subresourceRange;
-   uint32_t level_count = dzn_get_level_count(image, range);
    uint32_t layer_count = dzn_get_layer_count(image, range);
-   uint32_t plane_slice =
-      pCreateInfo->subresourceRange.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT ? 1 : 0;
 
    vk_image_view_init(&device->vk, &iview->vk, false, pCreateInfo);
 

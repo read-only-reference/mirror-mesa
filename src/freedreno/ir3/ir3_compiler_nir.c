@@ -1747,29 +1747,27 @@ create_sysval_input(struct ir3_context *ctx, gl_system_value slot,
 static struct ir3_instruction *
 get_barycentric(struct ir3_context *ctx, enum ir3_bary bary)
 {
-   static const gl_system_value sysval_base =
-      SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL;
-
-   STATIC_ASSERT(sysval_base + IJ_PERSP_PIXEL ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_PERSP_PIXEL ==
                  SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL);
-   STATIC_ASSERT(sysval_base + IJ_PERSP_SAMPLE ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_PERSP_SAMPLE ==
                  SYSTEM_VALUE_BARYCENTRIC_PERSP_SAMPLE);
-   STATIC_ASSERT(sysval_base + IJ_PERSP_CENTROID ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_PERSP_CENTROID ==
                  SYSTEM_VALUE_BARYCENTRIC_PERSP_CENTROID);
-   STATIC_ASSERT(sysval_base + IJ_PERSP_SIZE ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_PERSP_SIZE ==
                  SYSTEM_VALUE_BARYCENTRIC_PERSP_SIZE);
-   STATIC_ASSERT(sysval_base + IJ_LINEAR_PIXEL ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_LINEAR_PIXEL ==
                  SYSTEM_VALUE_BARYCENTRIC_LINEAR_PIXEL);
-   STATIC_ASSERT(sysval_base + IJ_LINEAR_CENTROID ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_LINEAR_CENTROID ==
                  SYSTEM_VALUE_BARYCENTRIC_LINEAR_CENTROID);
-   STATIC_ASSERT(sysval_base + IJ_LINEAR_SAMPLE ==
+   STATIC_ASSERT(SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL + IJ_LINEAR_SAMPLE ==
                  SYSTEM_VALUE_BARYCENTRIC_LINEAR_SAMPLE);
 
    if (!ctx->ij[bary]) {
       struct ir3_instruction *xy[2];
       struct ir3_instruction *ij;
 
-      ij = create_sysval_input(ctx, sysval_base + bary, 0x3);
+      ij = create_sysval_input(ctx, SYSTEM_VALUE_BARYCENTRIC_PERSP_PIXEL +
+                               bary, 0x3);
       ir3_split_dest(ctx->in_block, xy, ij, 0, 2);
 
       ctx->ij[bary] = ir3_create_collect(ctx->in_block, xy, 2);
@@ -2027,6 +2025,14 @@ static void setup_input(struct ir3_context *ctx, nir_intrinsic_instr *intr);
 static void setup_output(struct ir3_context *ctx, nir_intrinsic_instr *intr);
 
 static void
+switch_to_late_z_if_fs(struct ir3_context *ctx)
+{
+   if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
+       !ctx->s->info.fs.early_fragment_tests)
+      ctx->so->no_earlyz = true;
+}
+
+static void
 emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 {
    const nir_intrinsic_info *info = &nir_intrinsic_infos[intr->intrinsic];
@@ -2142,6 +2148,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       break;
 
    case nir_intrinsic_store_global_ir3:
+      switch_to_late_z_if_fs(ctx);
       ctx->funcs->emit_intrinsic_store_global_ir3(ctx, intr);
       break;
    case nir_intrinsic_load_global_ir3:
@@ -2200,9 +2207,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       emit_intrinsic_load_ssbo(ctx, intr, dst);
       break;
    case nir_intrinsic_store_ssbo_ir3:
-      if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
-          !ctx->s->info.fs.early_fragment_tests)
-         ctx->so->no_earlyz = true;
+      switch_to_late_z_if_fs(ctx);
       ctx->funcs->emit_intrinsic_store_ssbo(ctx, intr);
       break;
    case nir_intrinsic_get_ssbo_size:
@@ -2218,9 +2223,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_ssbo_atomic_xor_ir3:
    case nir_intrinsic_ssbo_atomic_exchange_ir3:
    case nir_intrinsic_ssbo_atomic_comp_swap_ir3:
-      if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
-          !ctx->s->info.fs.early_fragment_tests)
-         ctx->so->no_earlyz = true;
+      switch_to_late_z_if_fs(ctx);
       dst[0] = ctx->funcs->emit_intrinsic_atomic_ssbo(ctx, intr);
       break;
    case nir_intrinsic_load_shared:
@@ -2253,9 +2256,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       break;
    case nir_intrinsic_image_store:
    case nir_intrinsic_bindless_image_store:
-      if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
-          !ctx->s->info.fs.early_fragment_tests)
-         ctx->so->no_earlyz = true;
+      switch_to_late_z_if_fs(ctx);
       ctx->funcs->emit_intrinsic_store_image(ctx, intr);
       break;
    case nir_intrinsic_image_size:
@@ -2282,9 +2283,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_bindless_image_atomic_exchange:
    case nir_intrinsic_image_atomic_comp_swap:
    case nir_intrinsic_bindless_image_atomic_comp_swap:
-      if ((ctx->so->type == MESA_SHADER_FRAGMENT) &&
-          !ctx->s->info.fs.early_fragment_tests)
-         ctx->so->no_earlyz = true;
+      switch_to_late_z_if_fs(ctx);
       dst[0] = ctx->funcs->emit_intrinsic_atomic_image(ctx, intr);
       break;
    case nir_intrinsic_scoped_barrier:
@@ -2630,6 +2629,7 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_global_atomic_xor_ir3:
    case nir_intrinsic_global_atomic_exchange_ir3:
    case nir_intrinsic_global_atomic_comp_swap_ir3: {
+      switch_to_late_z_if_fs(ctx);
       dst[0] = ctx->funcs->emit_intrinsic_atomic_global(ctx, intr);
       break;
    }
@@ -3058,6 +3058,7 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
 
    nsrc0 = i;
 
+   type_t coord_pad_type = is_half(coord[0]) ? TYPE_U16 : TYPE_U32;
    /* scale up integer coords for TXF based on the LOD */
    if (ctx->compiler->unminify_coords && (opc == OPC_ISAML)) {
       assert(has_lod);
@@ -3070,24 +3071,19 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
        * height of 1, and patch up the y coord.
        */
       if (is_isam(opc)) {
-         src0[nsrc0++] = create_immed(b, 0);
+         src0[nsrc0++] = create_immed_typed(b, 0, coord_pad_type);
+      } else if (is_half(coord[0])) {
+         src0[nsrc0++] = create_immed_typed(b, _mesa_float_to_half(0.5), coord_pad_type);
       } else {
-         src0[nsrc0++] = create_immed(b, fui(0.5));
+         src0[nsrc0++] = create_immed_typed(b, fui(0.5), coord_pad_type);
       }
    }
 
    if (tex->is_shadow && tex->op != nir_texop_lod)
       src0[nsrc0++] = compare;
 
-   if (tex->is_array && tex->op != nir_texop_lod) {
-      struct ir3_instruction *idx = coord[coords];
-
-      /* the array coord for cube arrays needs 0.5 added to it */
-      if (ctx->compiler->array_index_add_half && !is_isam(opc))
-         idx = ir3_ADD_F(b, idx, 0, create_immed(b, fui(0.5)), 0);
-
-      src0[nsrc0++] = idx;
-   }
+   if (tex->is_array && tex->op != nir_texop_lod)
+      src0[nsrc0++] = coord[coords];
 
    if (has_proj) {
       src0[nsrc0++] = proj;
@@ -3097,15 +3093,15 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
    /* pad to 4, then ddx/ddy: */
    if (tex->op == nir_texop_txd) {
       while (nsrc0 < 4)
-         src0[nsrc0++] = create_immed(b, fui(0.0));
+         src0[nsrc0++] = create_immed_typed(b, fui(0.0), coord_pad_type);
       for (i = 0; i < coords; i++)
          src0[nsrc0++] = ddx[i];
       if (coords < 2)
-         src0[nsrc0++] = create_immed(b, fui(0.0));
+         src0[nsrc0++] = create_immed_typed(b, fui(0.0), coord_pad_type);
       for (i = 0; i < coords; i++)
          src0[nsrc0++] = ddy[i];
       if (coords < 2)
-         src0[nsrc0++] = create_immed(b, fui(0.0));
+         src0[nsrc0++] = create_immed_typed(b, fui(0.0), coord_pad_type);
    }
 
    /* NOTE a3xx (and possibly a4xx?) might be different, using isaml
@@ -3143,7 +3139,7 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
          for (i = 0; i < off_coords; i++)
             src1[nsrc1++] = off[i];
          if (off_coords < 2)
-            src1[nsrc1++] = create_immed(b, fui(0.0));
+            src1[nsrc1++] = create_immed_typed(b, fui(0.0), coord_pad_type);
          flags |= IR3_INSTR_O;
       }
 

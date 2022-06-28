@@ -143,6 +143,8 @@ vn_physical_device_init_features(struct vn_physical_device *physical_dev)
                        CUSTOM_BORDER_COLOR_FEATURES_EXT, features2);
    VN_ADD_EXT_TO_PNEXT(exts->EXT_depth_clip_enable, feats->depth_clip_enable,
                        DEPTH_CLIP_ENABLE_FEATURES_EXT, features2);
+   VN_ADD_EXT_TO_PNEXT(exts->EXT_image_view_min_lod, feats->image_view_min_lod,
+                       IMAGE_VIEW_MIN_LOD_FEATURES_EXT, features2);
    VN_ADD_EXT_TO_PNEXT(exts->EXT_index_type_uint8, feats->index_type_uint8,
                        INDEX_TYPE_UINT8_FEATURES_EXT, features2);
    VN_ADD_EXT_TO_PNEXT(exts->EXT_line_rasterization,
@@ -163,6 +165,30 @@ vn_physical_device_init_features(struct vn_physical_device *physical_dev)
       instance, vn_physical_device_to_handle(physical_dev), &features2);
 
    feats->vulkan_1_0 = features2.features;
+
+   /* TODO allow sparse resource along with sync feedback
+    *
+    * vkQueueBindSparse relies on explicit sync primitives. To intercept the
+    * timeline semaphores within each bind info to write the feedback buffer,
+    * we have to split the call into bindInfoCount number of calls while
+    * inserting vkQueueSubmit to wait on the signal timeline semaphores before
+    * filling the feedback buffer. To intercept the fence to be signaled, we
+    * have to relocate the fence to another vkQueueSubmit call and potentially
+    * have to use an internal timeline semaphore to synchronize between them.
+    * Those would make the code overly complex, so we disable sparse binding
+    * for simplicity.
+    */
+   if (!VN_PERF(NO_FENCE_FEEDBACK)) {
+      feats->vulkan_1_0.sparseBinding = false;
+      feats->vulkan_1_0.sparseResidencyBuffer = false;
+      feats->vulkan_1_0.sparseResidencyImage2D = false;
+      feats->vulkan_1_0.sparseResidencyImage3D = false;
+      feats->vulkan_1_0.sparseResidency2Samples = false;
+      feats->vulkan_1_0.sparseResidency4Samples = false;
+      feats->vulkan_1_0.sparseResidency8Samples = false;
+      feats->vulkan_1_0.sparseResidency16Samples = false;
+      feats->vulkan_1_0.sparseResidencyAliased = false;
+   }
 
    struct VkPhysicalDeviceVulkan11Features *vk11_feats = &feats->vulkan_1_1;
    struct VkPhysicalDeviceVulkan12Features *vk12_feats = &feats->vulkan_1_2;
@@ -465,6 +491,13 @@ vn_physical_device_init_properties(struct vn_physical_device *physical_dev)
       instance, vn_physical_device_to_handle(physical_dev), &properties2);
 
    props->vulkan_1_0 = properties2.properties;
+
+   /* TODO allow sparse resource along with sync feedback */
+   if (!VN_PERF(NO_FENCE_FEEDBACK)) {
+      props->vulkan_1_0.limits.sparseAddressSpaceSize = 0;
+      props->vulkan_1_0.sparseProperties =
+         (VkPhysicalDeviceSparseProperties){ 0 };
+   }
 
    struct VkPhysicalDeviceProperties *vk10_props = &props->vulkan_1_0;
    struct VkPhysicalDeviceVulkan11Properties *vk11_props = &props->vulkan_1_1;
@@ -951,6 +984,7 @@ vn_physical_device_get_passthrough_extensions(
       .EXT_extended_dynamic_state2 = false,
       .EXT_image_robustness = true,
       .EXT_shader_demote_to_helper_invocation = true,
+      .KHR_copy_commands2 = true,
 
       /* EXT */
       .EXT_calibrated_timestamps = true,
@@ -961,6 +995,7 @@ vn_physical_device_get_passthrough_extensions(
 #ifndef ANDROID
       .EXT_image_drm_format_modifier = true,
 #endif
+      .EXT_image_view_min_lod = true,
       .EXT_index_type_uint8 = true,
       .EXT_line_rasterization = true,
       .EXT_provoking_vertex = true,

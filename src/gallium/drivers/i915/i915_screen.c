@@ -339,7 +339,7 @@ i915_get_shader_param(struct pipe_screen *screen, enum pipe_shader_type shader,
          return 10;
       case PIPE_SHADER_CAP_MAX_OUTPUTS:
          return 1;
-      case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+      case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
          return 32 * sizeof(float[4]);
       case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
          return 1;
@@ -370,7 +370,6 @@ i915_get_shader_param(struct pipe_screen *screen, enum pipe_shader_type shader,
       case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
       case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
-      case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
          return 0;
 
       default:
@@ -424,7 +423,7 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_MAX_GS_INVOCATIONS:
       return 32;
 
-   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE:
+   case PIPE_CAP_MAX_SHADER_BUFFER_SIZE_UINT:
       return 1 << 27;
 
    case PIPE_CAP_MAX_VIEWPORTS:

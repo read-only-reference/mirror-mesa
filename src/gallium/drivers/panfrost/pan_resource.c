@@ -332,7 +332,7 @@ panfrost_should_afbc(struct panfrost_device *dev,
         case PIPE_TEXTURE_3D:
                 /* 3D AFBC is only supported on Bifrost v7+. It's supposed to
                  * be supported on Midgard but it doesn't seem to work */
-                if (dev->arch < 7)
+                if (dev->arch != 7)
                         return false;
 
                 break;
@@ -619,8 +619,7 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
 
         util_range_init(&so->valid_buffer_range);
 
-        if (template->bind & (PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT |
-                              PIPE_BIND_SHARED)) {
+        if (template->bind & PAN_BIND_SHARED_MASK) {
                 /* For compatibility with older consumers that may not be
                  * modifiers aware, treat INVALID as LINEAR for shared
                  * resources.
@@ -719,6 +718,8 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
 
                 so->image.data.bo =
                         panfrost_bo_create(dev, so->image.layout.data_size, PAN_BO_DELAY_MMAP, label);
+
+                so->constant_stencil = true;
         }
 
         if (drm_is_afbc(so->image.layout.modifier))
@@ -812,7 +813,7 @@ pan_alloc_staging(struct panfrost_context *ctx, struct panfrost_resource *rsc,
         }
         tmpl.last_level = 0;
         tmpl.bind |= PIPE_BIND_LINEAR;
-        tmpl.bind &= ~(PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED);
+        tmpl.bind &= ~PAN_BIND_SHARED_MASK;
 
         struct pipe_resource *pstaging =
                 pctx->screen->resource_create(pctx->screen, &tmpl);
@@ -961,6 +962,9 @@ panfrost_ptr_map(struct pipe_context *pctx,
 
         pipe_resource_reference(&transfer->base.resource, resource);
         *out_transfer = &transfer->base;
+
+        if (usage & PIPE_MAP_WRITE)
+                rsrc->constant_stencil = false;
 
         /* We don't have s/w routines for AFBC, so use a staging texture */
         if (drm_is_afbc(rsrc->image.layout.modifier)) {
@@ -1201,8 +1205,8 @@ pan_legalize_afbc_format(struct panfrost_context *ctx,
         if (!drm_is_afbc(rsrc->image.layout.modifier))
                 return;
 
-        if (panfrost_afbc_format(dev, pan_blit_format(rsrc->base.format)) ==
-            panfrost_afbc_format(dev, pan_blit_format(format)))
+        if (panfrost_afbc_format(dev->arch, pan_blit_format(rsrc->base.format)) ==
+            panfrost_afbc_format(dev->arch, pan_blit_format(format)))
                 return;
 
         pan_resource_modifier_convert(ctx, rsrc,
@@ -1361,6 +1365,9 @@ panfrost_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *pr
 {
         struct panfrost_context *ctx = pan_context(pctx);
         struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+        struct panfrost_resource *rsrc = pan_resource(prsrc);
+
+        rsrc->constant_stencil = true;
 
         /* Handle the glInvalidateFramebuffer case */
         if (batch->key.zsbuf && batch->key.zsbuf->texture == prsrc)
@@ -1480,4 +1487,5 @@ panfrost_resource_context_init(struct pipe_context *pctx)
         pctx->transfer_flush_region = u_transfer_helper_transfer_flush_region;
         pctx->buffer_subdata = u_default_buffer_subdata;
         pctx->texture_subdata = u_default_texture_subdata;
+        pctx->clear_buffer = u_default_clear_buffer;
 }

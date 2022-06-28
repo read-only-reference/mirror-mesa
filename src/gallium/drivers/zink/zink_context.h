@@ -50,6 +50,12 @@
 
 #include <vulkan/vulkan.h>
 
+#define GFX_SHADER_BITS (VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | \
+                         VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT | \
+                         VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT | \
+                         VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT | \
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)
+
 #define pipe_buffer_write "use tc_buffer_write to avoid breaking threaded context"
 
 #ifdef __cplusplus
@@ -76,11 +82,12 @@ enum zink_blit_flags {
 
 struct zink_sampler_state {
    VkSampler sampler;
+   VkSampler sampler_clamped;
    uint32_t hash;
    struct zink_descriptor_refs desc_set_refs;
    struct zink_batch_usage *batch_uses;
    bool custom_border_color;
-   bool nonseamless;
+   bool emulate_nonseamless;
 };
 
 struct zink_buffer_view {
@@ -195,6 +202,8 @@ struct zink_context {
    struct slab_child_pool transfer_pool;
    struct slab_child_pool transfer_pool_unsync;
    struct blitter_context *blitter;
+
+   unsigned flags;
 
    pipe_draw_vbo_func draw_vbo[2]; //batch changed
    pipe_draw_vertex_state_func draw_state[2]; //batch changed
@@ -333,7 +342,7 @@ struct zink_context {
 
       VkDescriptorImageInfo textures[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
       VkBufferView tbos[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
-      uint32_t nonseamless[PIPE_SHADER_TYPES];
+      uint32_t emulate_nonseamless[PIPE_SHADER_TYPES];
       uint32_t cubes[PIPE_SHADER_TYPES];
       uint8_t num_samplers[PIPE_SHADER_TYPES];
       uint8_t num_sampler_views[PIPE_SHADER_TYPES];
@@ -403,10 +412,10 @@ void
 zink_fence_wait(struct pipe_context *ctx);
 
 void
-zink_wait_on_batch(struct zink_context *ctx, uint32_t batch_id);
+zink_wait_on_batch(struct zink_context *ctx, uint64_t batch_id);
 
 bool
-zink_check_batch_completion(struct zink_context *ctx, uint32_t batch_id);
+zink_check_batch_completion(struct zink_context *ctx, uint64_t batch_id);
 
 void
 zink_flush_queue(struct zink_context *ctx);

@@ -107,6 +107,7 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_num_subgroups:
    case nir_intrinsic_load_ray_launch_size:
    case nir_intrinsic_load_ray_launch_size_addr_amd:
+   case nir_intrinsic_load_sbt_base_amd:
    case nir_intrinsic_load_subgroup_size:
    case nir_intrinsic_load_subgroup_eq_mask:
    case nir_intrinsic_load_subgroup_ge_mask:
@@ -138,12 +139,16 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_blend_const_color_rgba8888_unorm:
    case nir_intrinsic_load_line_width:
    case nir_intrinsic_load_aa_line_width:
+   case nir_intrinsic_load_xfb_address:
+   case nir_intrinsic_load_num_vertices:
    case nir_intrinsic_load_fb_layers_v3d:
    case nir_intrinsic_load_tcs_num_patches_amd:
    case nir_intrinsic_load_ring_tess_factors_amd:
    case nir_intrinsic_load_ring_tess_offchip_amd:
    case nir_intrinsic_load_ring_tess_factors_offset_amd:
    case nir_intrinsic_load_ring_tess_offchip_offset_amd:
+   case nir_intrinsic_load_ring_mesh_scratch_amd:
+   case nir_intrinsic_load_ring_mesh_scratch_offset_amd:
    case nir_intrinsic_load_ring_esgs_amd:
    case nir_intrinsic_load_ring_es2gs_offset_amd:
    case nir_intrinsic_load_ring_task_draw_amd:
@@ -173,6 +178,9 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_btd_global_arg_addr_intel:
    case nir_intrinsic_load_btd_local_arg_addr_intel:
    case nir_intrinsic_load_mesh_inline_data_intel:
+   case nir_intrinsic_load_ray_num_dss_rt_stacks_intel:
+   case nir_intrinsic_load_lshs_vertex_stride_amd:
+   case nir_intrinsic_load_hs_out_patch_data_offset_amd:
       is_divergent = false;
       break;
 
@@ -367,7 +375,6 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_masked_swizzle_amd:
    case nir_intrinsic_is_sparse_texels_resident:
    case nir_intrinsic_sparse_residency_code_and:
-   case nir_intrinsic_load_sbt_amd:
    case nir_intrinsic_bvh64_intersect_ray_amd:
    case nir_intrinsic_image_deref_load_param_intel:
    case nir_intrinsic_image_load_raw_intel:
@@ -592,6 +599,7 @@ visit_intrinsic(nir_shader *shader, nir_intrinsic_instr *instr)
    case nir_intrinsic_load_vector_arg_amd:
    case nir_intrinsic_load_btd_stack_id_intel:
    case nir_intrinsic_load_topology_id_intel:
+   case nir_intrinsic_load_scratch_base_ptr:
       is_divergent = true;
       break;
 

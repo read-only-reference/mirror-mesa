@@ -206,6 +206,7 @@ deps_for_libmesa_util = [
   dep_zstd,
   dep_dl,
   dep_unwind,
+  idep_mesautilc11
 ]
 
 if with_platform_android
@@ -249,12 +250,20 @@ u_unfilled_gen_c = custom_target(
   capture : true,
 )
 
+libmesa_util_sse41 = static_library(
+		'mesa_util_sse41',
+		files('streaming-load-memcpy.c'),
+		c_args : [c_msvc_compat_args, sse41_args],
+		include_directories : [inc_include, inc_src, inc_mesa],
+		gnu_symbol_visibility : 'hidden',
+)
+
 _libmesa_util = static_library(
   'mesa_util',
   [files_mesa_util, files_debug_stack, format_srgb, u_indices_gen_c, u_unfilled_gen_c],
   include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux],
   dependencies : deps_for_libmesa_util,
-  link_with: libmesa_format,
+  link_with: [libmesa_format, libmesa_util_sse41],
   c_args : [c_msvc_compat_args],
   gnu_symbol_visibility : 'hidden',
   build_by_default : false
@@ -331,6 +340,7 @@ if with_tests
     'tests/roundeven_test.cpp',
     'tests/set_test.cpp',
     'tests/sparse_array_test.cpp',
+    'tests/timespec_test.cpp',
     'tests/u_atomic_test.cpp',
     'tests/u_debug_stack_test.cpp',
     'tests/u_printf_test.cpp',
@@ -342,12 +352,6 @@ if with_tests
     # FIXME: These tests fail with mingw, but not with msvc.
     files_util_tests += files(
       'tests/string_buffer_test.cpp',
-    )
-  endif
-
-  if cc.has_header('sys/time.h')  # MinGW has this, but Vanilla windows doesn't
-    files_util_tests += files(
-      'tests/timespec_test.cpp'
     )
   endif
 

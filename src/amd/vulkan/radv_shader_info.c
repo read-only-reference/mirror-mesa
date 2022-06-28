@@ -197,7 +197,7 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
    case nir_intrinsic_store_output:
       gather_intrinsic_store_output_info(nir, instr, info);
       break;
-   case nir_intrinsic_load_sbt_amd:
+   case nir_intrinsic_load_sbt_base_amd:
       info->cs.uses_sbt = true;
       break;
    case nir_intrinsic_load_force_vrs_rates_amd:
@@ -607,6 +607,9 @@ radv_nir_shader_info_pass(struct radv_device *device, const struct nir_shader *n
 
          /* Needed to address the task draw/payload rings. */
          info->cs.uses_block_id[0] = true;
+         info->cs.uses_block_id[1] = true;
+         info->cs.uses_block_id[2] = true;
+         info->cs.uses_grid_size = true;
 
          /* Needed for storing draw ready only on the 1st thread. */
          info->cs.uses_local_invocation_idx = true;

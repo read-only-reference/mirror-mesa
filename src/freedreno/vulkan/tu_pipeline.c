@@ -37,6 +37,7 @@
 #include "util/mesa-sha1.h"
 #include "util/u_atomic.h"
 #include "vk_format.h"
+#include "vk_pipeline.h"
 #include "vk_util.h"
 
 #include "tu_cs.h"
@@ -267,6 +268,7 @@ struct tu_pipeline_builder
    bool rasterizer_discard;
    /* these states are affectd by rasterizer_discard */
    bool emit_msaa_state;
+   bool depth_clip_disable;
    VkSampleCountFlagBits samples;
    bool use_color_attachments;
    bool use_dual_src_blend;
@@ -1580,9 +1582,6 @@ tu6_emit_fs_outputs(struct tu_cs *cs,
           (fs->no_earlyz || fs->has_kill || fs->writes_pos || fs->writes_stencilref || no_earlyz || fs->writes_smask)) {
          pipeline->lrz.force_late_z = true;
       }
-
-      pipeline->drawcall_base_cost +=
-         util_bitcount(fs_render_components) / util_bitcount(0xf);
    }
 }
 
@@ -1716,7 +1715,7 @@ tu6_emit_program(struct tu_cs *cs,
       stage++;
    }
 
-   for (; stage < ARRAY_SIZE(builder->shaders->variants); stage++) {
+   for (; stage < ARRAY_SIZE(builder->shader_iova); stage++) {
       const struct ir3_shader_variant *xs = builder->shaders->variants[stage];
 
       if (stage == MESA_SHADER_FRAGMENT && binning_pass)
@@ -1950,13 +1949,16 @@ tu6_emit_viewport(struct tu_cs *cs, const VkViewport *viewports, uint32_t num_vi
 
       min.x = MAX2(min.x, 0);
       min.y = MAX2(min.y, 0);
+      max.x = MAX2(max.x, 1);
+      max.y = MAX2(max.y, 1);
 
       assert(min.x < max.x);
       assert(min.y < max.y);
+
       tu_cs_emit(cs, A6XX_GRAS_SC_VIEWPORT_SCISSOR_TL_X(min.x) |
                      A6XX_GRAS_SC_VIEWPORT_SCISSOR_TL_Y(min.y));
-      tu_cs_emit(cs, A6XX_GRAS_SC_VIEWPORT_SCISSOR_TL_X(max.x - 1) |
-                     A6XX_GRAS_SC_VIEWPORT_SCISSOR_TL_Y(max.y - 1));
+      tu_cs_emit(cs, A6XX_GRAS_SC_VIEWPORT_SCISSOR_BR_X(max.x - 1) |
+                     A6XX_GRAS_SC_VIEWPORT_SCISSOR_BR_Y(max.y - 1));
    }
 
    tu_cs_emit_pkt4(cs, REG_A6XX_GRAS_CL_Z_CLAMP(0), num_viewport * 2);
@@ -2140,23 +2142,44 @@ tu6_rb_mrt_control(const VkPipelineColorBlendAttachmentState *att,
    return rb_mrt_control;
 }
 
+uint32_t
+tu6_rb_mrt_control_rop(VkLogicOp op, bool *rop_reads_dst)
+{
+   *rop_reads_dst = tu_logic_op_reads_dst(op);
+   return A6XX_RB_MRT_CONTROL_ROP_ENABLE |
+          A6XX_RB_MRT_CONTROL_ROP_CODE(tu6_rop(op));
+}
+
 static void
-tu6_emit_rb_mrt_controls(struct tu_cs *cs,
+tu6_emit_rb_mrt_controls(struct tu_pipeline *pipeline,
                          const VkPipelineColorBlendStateCreateInfo *blend_info,
                          const VkFormat attachment_formats[MAX_RTS],
-                         uint32_t *blend_enable_mask)
+                         bool *rop_reads_dst,
+                         uint32_t *color_bandwidth_per_sample)
 {
-   *blend_enable_mask = 0;
+   const VkPipelineColorWriteCreateInfoEXT *color_info =
+      vk_find_struct_const(blend_info->pNext,
+                           PIPELINE_COLOR_WRITE_CREATE_INFO_EXT);
 
-   bool rop_reads_dst = false;
+   /* The static state is ignored if it's dynamic. In that case assume
+    * everything is enabled and then the appropriate registers will be zero'd
+    * dynamically.
+    */
+   if (pipeline->dynamic_state_mask & BIT(TU_DYNAMIC_STATE_COLOR_WRITE_ENABLE))
+      color_info = NULL;
+
+   *rop_reads_dst = false;
+   *color_bandwidth_per_sample = 0;
+
    uint32_t rb_mrt_control_rop = 0;
    if (blend_info->logicOpEnable) {
-      rop_reads_dst = tu_logic_op_reads_dst(blend_info->logicOp);
-      rb_mrt_control_rop =
-         A6XX_RB_MRT_CONTROL_ROP_ENABLE |
-         A6XX_RB_MRT_CONTROL_ROP_CODE(tu6_rop(blend_info->logicOp));
+      pipeline->logic_op_enabled = true;
+      rb_mrt_control_rop = tu6_rb_mrt_control_rop(blend_info->logicOp,
+                                                  rop_reads_dst);
    }
 
+   uint32_t total_bpp = 0;
+   pipeline->num_rts = blend_info->attachmentCount;
    for (uint32_t i = 0; i < blend_info->attachmentCount; i++) {
       const VkPipelineColorBlendAttachmentState *att =
          &blend_info->pAttachments[i];
@@ -2164,25 +2187,47 @@ tu6_emit_rb_mrt_controls(struct tu_cs *cs,
 
       uint32_t rb_mrt_control = 0;
       uint32_t rb_mrt_blend_control = 0;
-      if (format != VK_FORMAT_UNDEFINED) {
+      if (format != VK_FORMAT_UNDEFINED &&
+          (!color_info || color_info->pColorWriteEnables[i])) {
          const bool has_alpha = vk_format_has_alpha(format);
 
          rb_mrt_control =
             tu6_rb_mrt_control(att, rb_mrt_control_rop, has_alpha);
          rb_mrt_blend_control = tu6_rb_mrt_blend_control(att, has_alpha);
 
-         if (att->blendEnable || rop_reads_dst)
-            *blend_enable_mask |= 1 << i;
+         /* calculate bpp based on format and write mask */
+         uint32_t write_bpp = 0;
+         if (att->colorWriteMask == 0xf) {
+            write_bpp = vk_format_get_blocksizebits(format);
+         } else {
+            const enum pipe_format pipe_format = vk_format_to_pipe_format(format);
+            for (uint32_t i = 0; i < 4; i++) {
+               if (att->colorWriteMask & (1 << i)) {
+                  write_bpp += util_format_get_component_bits(pipe_format,
+                        UTIL_FORMAT_COLORSPACE_RGB, i);
+               }
+            }
+         }
+         total_bpp += write_bpp;
+
+         pipeline->color_write_enable |= BIT(i);
+         if (att->blendEnable)
+            pipeline->blend_enable |= BIT(i);
+
+         if (att->blendEnable || *rop_reads_dst) {
+            total_bpp += write_bpp;
+         }
       }
 
-      tu_cs_emit_pkt4(cs, REG_A6XX_RB_MRT_CONTROL(i), 2);
-      tu_cs_emit(cs, rb_mrt_control);
-      tu_cs_emit(cs, rb_mrt_blend_control);
+      pipeline->rb_mrt_control[i] = rb_mrt_control & pipeline->rb_mrt_control_mask;
+      pipeline->rb_mrt_blend_control[i] = rb_mrt_blend_control;
    }
+
+   *color_bandwidth_per_sample = total_bpp / 8;
 }
 
 static void
-tu6_emit_blend_control(struct tu_cs *cs,
+tu6_emit_blend_control(struct tu_pipeline *pipeline,
                        uint32_t blend_enable_mask,
                        bool dual_src_blend,
                        const VkPipelineMultisampleStateCreateInfo *msaa_info)
@@ -2191,20 +2236,36 @@ tu6_emit_blend_control(struct tu_cs *cs,
       msaa_info->pSampleMask ? (*msaa_info->pSampleMask & 0xffff)
                              : ((1 << msaa_info->rasterizationSamples) - 1);
 
-   tu_cs_emit_regs(cs,
-                   A6XX_SP_BLEND_CNTL(.enable_blend = blend_enable_mask,
-                                      .dual_color_in_enable = dual_src_blend,
-                                      .alpha_to_coverage = msaa_info->alphaToCoverageEnable,
-                                      .unk8 = true));
+
+   pipeline->sp_blend_cntl =
+       A6XX_SP_BLEND_CNTL(.enable_blend = blend_enable_mask,
+                          .dual_color_in_enable = dual_src_blend,
+                          .alpha_to_coverage = msaa_info->alphaToCoverageEnable,
+                          .unk8 = true).value & pipeline->sp_blend_cntl_mask;
 
    /* set A6XX_RB_BLEND_CNTL_INDEPENDENT_BLEND only when enabled? */
-   tu_cs_emit_regs(cs,
-                   A6XX_RB_BLEND_CNTL(.enable_blend = blend_enable_mask,
-                                      .independent_blend = true,
-                                      .sample_mask = sample_mask,
-                                      .dual_color_in_enable = dual_src_blend,
-                                      .alpha_to_coverage = msaa_info->alphaToCoverageEnable,
-                                      .alpha_to_one = msaa_info->alphaToOneEnable));
+   pipeline->rb_blend_cntl =
+       A6XX_RB_BLEND_CNTL(.enable_blend = blend_enable_mask,
+                          .independent_blend = true,
+                          .sample_mask = sample_mask,
+                          .dual_color_in_enable = dual_src_blend,
+                          .alpha_to_coverage = msaa_info->alphaToCoverageEnable,
+                          .alpha_to_one = msaa_info->alphaToOneEnable).value &
+      pipeline->rb_blend_cntl_mask;
+}
+
+static void
+tu6_emit_blend(struct tu_cs *cs,
+               struct tu_pipeline *pipeline)
+{
+   tu_cs_emit_regs(cs, A6XX_SP_BLEND_CNTL(.dword = pipeline->sp_blend_cntl));
+   tu_cs_emit_regs(cs, A6XX_RB_BLEND_CNTL(.dword = pipeline->rb_blend_cntl));
+
+   for (unsigned i = 0; i < pipeline->num_rts; i++) {
+      tu_cs_emit_regs(cs,
+                      A6XX_RB_MRT_CONTROL(i, .dword = pipeline->rb_mrt_control[i]),
+                      A6XX_RB_MRT_BLEND_CONTROL(i, .dword = pipeline->rb_mrt_blend_control[i]));
+   }
 }
 
 static uint32_t
@@ -2338,8 +2399,32 @@ tu_pipeline_shader_key_init(struct ir3_shader_key *key,
       key->msaa = true;
    }
 
-   /* note: not actually used by ir3, just checked in tu6_emit_fs_inputs */
-   if (msaa_info->sampleShadingEnable)
+   /* The 1.3.215 spec says:
+    *
+    *    Sample shading can be used to specify a minimum number of unique
+    *    samples to process for each fragment. If sample shading is enabled,
+    *    an implementation must provide a minimum of
+    *
+    *       max(ceil(minSampleShadingFactor * totalSamples), 1)
+    *
+    *    unique associated data for each fragment, where
+    *    minSampleShadingFactor is the minimum fraction of sample shading.
+    *
+    * The definition is pretty much the same as OpenGL's GL_SAMPLE_SHADING.
+    * They both require unique associated data.
+    *
+    * There are discussions to change the definition, such that
+    * sampleShadingEnable does not imply unique associated data.  Before the
+    * discussions are settled and before apps (i.e., ANGLE) are fixed to
+    * follow the new and incompatible definition, we should stick to the
+    * current definition.
+    *
+    * Note that ir3_shader_key::sample_shading is not actually used by ir3,
+    * just checked in tu6_emit_fs_inputs.  We will also copy the value to
+    * tu_shader_key::force_sample_interp in a bit.
+    */
+   if (msaa_info->sampleShadingEnable &&
+       (msaa_info->minSampleShading * msaa_info->rasterizationSamples) > 1.0f)
       key->sample_shading = true;
 
    /* We set this after we compile to NIR because we need the prim mode */
@@ -2387,14 +2472,11 @@ static void
 tu_append_executable(struct tu_pipeline *pipeline, struct ir3_shader_variant *variant,
                      char *nir_from_spirv)
 {
-   ralloc_steal(pipeline->executables_mem_ctx, variant->disasm_info.nir);
-   ralloc_steal(pipeline->executables_mem_ctx, variant->disasm_info.disasm);
-
    struct tu_pipeline_executable exe = {
       .stage = variant->type,
       .nir_from_spirv = nir_from_spirv,
-      .nir_final = variant->disasm_info.nir,
-      .disasm = variant->disasm_info.disasm,
+      .nir_final = ralloc_strdup(pipeline->executables_mem_ctx, variant->disasm_info.nir),
+      .disasm = ralloc_strdup(pipeline->executables_mem_ctx, variant->disasm_info.disasm),
       .stats = variant->info,
       .is_binning = variant->binning_pass,
    };
@@ -2492,17 +2574,10 @@ tu_hash_stage(struct mesa_sha1 *ctx,
               const VkPipelineShaderStageCreateInfo *stage,
               const struct tu_shader_key *key)
 {
-   VK_FROM_HANDLE(vk_shader_module, module, stage->module);
-   const VkSpecializationInfo *spec_info = stage->pSpecializationInfo;
+   unsigned char stage_hash[SHA1_DIGEST_LENGTH];
 
-   _mesa_sha1_update(ctx, module->sha1, sizeof(module->sha1));
-   _mesa_sha1_update(ctx, stage->pName, strlen(stage->pName));
-   if (spec_info && spec_info->mapEntryCount) {
-      _mesa_sha1_update(ctx, spec_info->pMapEntries,
-                        spec_info->mapEntryCount * sizeof spec_info->pMapEntries[0]);
-      _mesa_sha1_update(ctx, spec_info->pData, spec_info->dataSize);
-   }
-
+   vk_pipeline_hash_shader_stage(stage, stage_hash);
+   _mesa_sha1_update(ctx, stage_hash, sizeof(stage_hash));
    _mesa_sha1_update(ctx, key, sizeof(*key));
 }
 
@@ -2512,8 +2587,8 @@ tu_hash_stage(struct mesa_sha1 *ctx,
 static void
 tu_hash_compiler(struct mesa_sha1 *ctx, const struct ir3_compiler *compiler)
 {
-   _mesa_sha1_update(ctx, &compiler->robust_ubo_access,
-                     sizeof(compiler->robust_ubo_access));
+   _mesa_sha1_update(ctx, &compiler->robust_buffer_access2,
+                     sizeof(compiler->robust_buffer_access2));
    _mesa_sha1_update(ctx, &ir3_shader_debug, sizeof(ir3_shader_debug));
 }
 
@@ -2717,6 +2792,7 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
 
    keys[MESA_SHADER_VERTEX].multiview_mask = builder->multiview_mask;
    keys[MESA_SHADER_FRAGMENT].multiview_mask = builder->multiview_mask;
+   keys[MESA_SHADER_FRAGMENT].force_sample_interp = ir3_key.sample_shading;
 
    unsigned char pipeline_sha1[20];
    tu_hash_shaders(pipeline_sha1, stage_infos, builder->layout, keys, &ir3_key, compiler);
@@ -2984,6 +3060,9 @@ tu_pipeline_builder_parse_dynamic(struct tu_pipeline_builder *builder,
    pipeline->rb_stencil_cntl_mask = ~0u;
    pipeline->pc_raster_cntl_mask = ~0u;
    pipeline->vpc_unknown_9107_mask = ~0u;
+   pipeline->sp_blend_cntl_mask = ~0u;
+   pipeline->rb_blend_cntl_mask = ~0u;
+   pipeline->rb_mrt_control_mask = ~0u;
 
    if (!dynamic_info)
       return;
@@ -3066,6 +3145,24 @@ tu_pipeline_builder_parse_dynamic(struct tu_pipeline_builder *builder,
          pipeline->pc_raster_cntl_mask &= ~A6XX_PC_RASTER_CNTL_DISCARD;
          pipeline->vpc_unknown_9107_mask &= ~A6XX_VPC_UNKNOWN_9107_RASTER_DISCARD;
          pipeline->dynamic_state_mask |= BIT(TU_DYNAMIC_STATE_RASTERIZER_DISCARD);
+         break;
+      case VK_DYNAMIC_STATE_LOGIC_OP_EXT:
+         pipeline->sp_blend_cntl_mask &= ~A6XX_SP_BLEND_CNTL_ENABLE_BLEND__MASK;
+         pipeline->rb_blend_cntl_mask &= ~A6XX_RB_BLEND_CNTL_ENABLE_BLEND__MASK;
+         pipeline->rb_mrt_control_mask &= ~A6XX_RB_MRT_CONTROL_ROP_CODE__MASK;
+         pipeline->dynamic_state_mask |= BIT(TU_DYNAMIC_STATE_BLEND);
+         pipeline->dynamic_state_mask |= BIT(TU_DYNAMIC_STATE_LOGIC_OP);
+         break;
+      case VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT:
+         pipeline->sp_blend_cntl_mask &= ~A6XX_SP_BLEND_CNTL_ENABLE_BLEND__MASK;
+         pipeline->rb_blend_cntl_mask &= ~A6XX_RB_BLEND_CNTL_ENABLE_BLEND__MASK;
+         pipeline->dynamic_state_mask |= BIT(TU_DYNAMIC_STATE_BLEND);
+
+         /* Dynamic color write enable doesn't directly change any of the
+          * registers, but it causes us to make some of the registers 0, so we
+          * set this dynamic state instead of making the register dynamic.
+          */
+         pipeline->dynamic_state_mask |= BIT(TU_DYNAMIC_STATE_COLOR_WRITE_ENABLE);
          break;
       default:
          assert(!"unsupported dynamic state");
@@ -3244,16 +3341,18 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
 
    enum a6xx_polygon_mode mode = tu6_polygon_mode(rast_info->polygonMode);
 
-   bool depth_clip_disable = rast_info->depthClampEnable;
+   builder->depth_clip_disable = rast_info->depthClampEnable;
 
    const VkPipelineRasterizationDepthClipStateCreateInfoEXT *depth_clip_state =
       vk_find_struct_const(rast_info, PIPELINE_RASTERIZATION_DEPTH_CLIP_STATE_CREATE_INFO_EXT);
    if (depth_clip_state)
-      depth_clip_disable = !depth_clip_state->depthClipEnable;
+      builder->depth_clip_disable = !depth_clip_state->depthClipEnable;
 
    pipeline->line_mode = RECTANGULAR;
 
-   if (tu6_primtype_line(pipeline->ia.primtype)) {
+   if (tu6_primtype_line(pipeline->ia.primtype) ||
+       (tu6_primtype_patches(pipeline->ia.primtype) &&
+        pipeline->tess.patch_type == IR3_TESS_ISOLINES)) {
       const VkPipelineRasterizationLineStateCreateInfoEXT *rast_line_state =
          vk_find_struct_const(rast_info->pNext,
                               PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT);
@@ -3272,8 +3371,8 @@ tu_pipeline_builder_parse_rasterization(struct tu_pipeline_builder *builder,
 
    tu_cs_emit_regs(&cs,
                    A6XX_GRAS_CL_CNTL(
-                     .znear_clip_disable = depth_clip_disable,
-                     .zfar_clip_disable = depth_clip_disable,
+                     .znear_clip_disable = builder->depth_clip_disable,
+                     .zfar_clip_disable = builder->depth_clip_disable,
                      /* TODO should this be depth_clip_disable instead? */
                      .unk5 = rast_info->depthClampEnable,
                      .zero_gb_scale_z = pipeline->z_negative_one_to_one ? 0 : 1,
@@ -3352,8 +3451,8 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
     */
    const VkPipelineDepthStencilStateCreateInfo *ds_info =
       builder->create_info->pDepthStencilState;
-   const VkPipelineRasterizationStateCreateInfo *rast_info =
-      builder->create_info->pRasterizationState;
+   const enum pipe_format pipe_format =
+      vk_format_to_pipe_format(builder->depth_attachment_format);
    uint32_t rb_depth_cntl = 0, rb_stencil_cntl = 0;
    struct tu_cs cs;
 
@@ -3365,8 +3464,8 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
             A6XX_RB_DEPTH_CNTL_ZFUNC(tu6_compare_func(ds_info->depthCompareOp)) |
             A6XX_RB_DEPTH_CNTL_Z_READ_ENABLE; /* TODO: don't set for ALWAYS/NEVER */
 
-         if (rast_info->depthClampEnable)
-            rb_depth_cntl |= A6XX_RB_DEPTH_CNTL_Z_CLAMP_ENABLE;
+         if (builder->depth_clip_disable)
+            rb_depth_cntl |= A6XX_RB_DEPTH_CNTL_Z_CLIP_DISABLE;
 
          if (ds_info->depthWriteEnable)
             rb_depth_cntl |= A6XX_RB_DEPTH_CNTL_Z_WRITE_ENABLE;
@@ -3377,6 +3476,9 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
 
       if (ds_info->depthBoundsTestEnable && !ds_info->depthTestEnable)
          tu6_apply_depth_bounds_workaround(builder->device, &rb_depth_cntl);
+
+      pipeline->depth_cpp_per_sample = util_format_get_component_bits(
+            pipe_format, UTIL_FORMAT_COLORSPACE_ZS, 0) / 8;
    } else {
       /* if RB_DEPTH_CNTL is set dynamically, we need to make sure it is set
        * to 0 when this pipeline is used, as enabling depth test when there
@@ -3406,6 +3508,9 @@ tu_pipeline_builder_parse_depth_stencil(struct tu_pipeline_builder *builder,
             A6XX_RB_STENCIL_CONTROL_STENCIL_ENABLE_BF |
             A6XX_RB_STENCIL_CONTROL_STENCIL_READ;
       }
+
+      pipeline->stencil_cpp_per_sample = util_format_get_component_bits(
+            pipe_format, UTIL_FORMAT_COLORSPACE_ZS, 1) / 8;
    }
 
    if (tu_pipeline_static_state(pipeline, &cs, TU_DYNAMIC_STATE_RB_DEPTH_CNTL, 2)) {
@@ -3488,42 +3593,46 @@ tu_pipeline_builder_parse_multisample_and_color_blend(
                                      : &dummy_blend_info;
 
    struct tu_cs cs;
-   pipeline->blend_state =
-      tu_cs_draw_state(&pipeline->cs, &cs, blend_info->attachmentCount * 3 + 4);
-
-   uint32_t blend_enable_mask;
-   tu6_emit_rb_mrt_controls(&cs, blend_info,
+   tu6_emit_rb_mrt_controls(pipeline, blend_info,
                             builder->color_attachment_formats,
-                            &blend_enable_mask);
+                            &pipeline->rop_reads_dst,
+                            &pipeline->color_bandwidth_per_sample);
 
-   tu6_emit_blend_control(&cs, blend_enable_mask,
+   uint32_t blend_enable_mask =
+      pipeline->rop_reads_dst ? pipeline->color_write_enable : pipeline->blend_enable;
+   tu6_emit_blend_control(pipeline, blend_enable_mask,
                           builder->use_dual_src_blend, msaa_info);
 
-   assert(cs.cur == cs.end); /* validate draw state size */
+   if (tu_pipeline_static_state(pipeline, &cs, TU_DYNAMIC_STATE_BLEND,
+                                blend_info->attachmentCount * 3 + 4)) {
+      tu6_emit_blend(&cs, pipeline);
+      assert(cs.cur == cs.end); /* validate draw state size */
+   }
 
-   if (blend_enable_mask) {
-      for (int i = 0; i < blend_info->attachmentCount; i++) {
-         VkPipelineColorBlendAttachmentState blendAttachment = blend_info->pAttachments[i];
-         /* Disable LRZ writes when blend is enabled, since the
-          * resulting pixel value from the blend-draw
-          * depends on an earlier draw, which LRZ in the draw pass
-          * could early-reject if the previous blend-enabled draw wrote LRZ.
-          *
-          * From the PoV of LRZ, having masked color channels is
-          * the same as having blend enabled, in that the draw will
-          * care about the fragments from an earlier draw.
-          *
-          * TODO: We need to disable LRZ writes only for the binning pass.
-          * Therefore, we need to emit it in a separate draw state. We keep
-          * it disabled for sysmem path as well for the moment.
-          */
-         if (blendAttachment.blendEnable || blendAttachment.colorWriteMask != 0xf) {
-            pipeline->lrz.force_disable_mask |= TU_LRZ_FORCE_DISABLE_WRITE;
-         }
+   /* Disable LRZ writes when blend or logic op that reads the destination is
+    * enabled, since the resulting pixel value from the blend-draw depends on
+    * an earlier draw, which LRZ in the draw pass could early-reject if the
+    * previous blend-enabled draw wrote LRZ.
+    *
+    * TODO: We need to disable LRZ writes only for the binning pass.
+    * Therefore, we need to emit it in a separate draw state. We keep
+    * it disabled for sysmem path as well for the moment.
+    */
+   if (blend_enable_mask)
+      pipeline->lrz.force_disable_mask |= TU_LRZ_FORCE_DISABLE_WRITE;
 
-         if (blendAttachment.blendEnable) {
-            pipeline->drawcall_base_cost++;
-         }
+   for (int i = 0; i < blend_info->attachmentCount; i++) {
+      VkPipelineColorBlendAttachmentState blendAttachment = blend_info->pAttachments[i];
+      /* From the PoV of LRZ, having masked color channels is
+       * the same as having blend enabled, in that the draw will
+       * care about the fragments from an earlier draw.
+       */
+      VkFormat format = builder->color_attachment_formats[i];
+      unsigned mask = MASK(vk_format_get_nr_components(format));
+      if (format != VK_FORMAT_UNDEFINED &&
+          ((blendAttachment.colorWriteMask & mask) != mask ||
+           !(pipeline->color_write_enable & BIT(i)))) {
+         pipeline->lrz.force_disable_mask |= TU_LRZ_FORCE_DISABLE_WRITE;
       }
    }
 

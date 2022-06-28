@@ -40,6 +40,8 @@ extern "C" {
 #define ZINK_SHADER_COUNT (PIPE_SHADER_TYPES - 1)
 #endif
 
+#define ZINK_DESCRIPTOR_COMPACT 2
+
 enum zink_descriptor_type {
    ZINK_DESCRIPTOR_TYPE_UBO,
    ZINK_DESCRIPTOR_TYPE_SAMPLER_VIEW,
@@ -158,6 +160,7 @@ struct zink_program_descriptor_data {
    bool bindless;
    bool fbfetch;
    uint8_t binding_usage;
+   uint8_t real_binding_usage;
    struct zink_descriptor_pool_key *pool_key[ZINK_DESCRIPTOR_TYPES]; //push set doesn't need one
    struct zink_descriptor_layout *layouts[ZINK_DESCRIPTOR_TYPES + 1];
    VkDescriptorUpdateTemplateKHR templates[ZINK_DESCRIPTOR_TYPES + 1];
