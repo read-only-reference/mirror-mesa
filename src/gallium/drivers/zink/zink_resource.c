@@ -785,7 +785,7 @@ resource_object_create(struct zink_screen *screen, const struct pipe_resource *t
          }
       }
       if (result != VK_SUCCESS) {
-         mesa_loge("ZINK: vkCreateImage failed");
+         mesa_loge("ZINK: vkCreateImage failed (%s)", vk_Result_to_str(result));
          goto fail1;
       }
 
@@ -1135,7 +1135,7 @@ resource_create(struct pipe_screen *pscreen,
       if (zink_kopper_has_srgb(cdt))
          res->obj->vkflags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
       if (cdt->swapchain->scci.flags == VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR)
-         res->obj->vkflags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT_KHR;
+         res->obj->vkflags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
       res->obj->vkusage = cdt->swapchain->scci.imageUsage;
       res->base.b.bind |= PIPE_BIND_DISPLAY_TARGET;
       res->optimal_tiling = true;
@@ -1562,7 +1562,7 @@ zink_resource_invalidate(struct pipe_context *pctx, struct pipe_resource *pres)
    else {
       struct zink_resource *res = zink_resource(pres);
       if (res->valid && res->fb_binds)
-         zink_context(pctx)->rp_changed = true;
+         zink_context(pctx)->rp_loadop_changed = true;
       res->valid = false;
    }
 }
@@ -1957,7 +1957,7 @@ zink_image_map(struct pipe_context *pctx,
       goto fail;
    if (usage & PIPE_MAP_WRITE) {
       if (!res->valid && res->fb_binds)
-         ctx->rp_changed = true;
+         ctx->rp_loadop_changed = true;
       res->valid = true;
    }
 

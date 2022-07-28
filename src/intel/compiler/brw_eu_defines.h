@@ -467,15 +467,10 @@ enum opcode {
    SHADER_OPCODE_SCRATCH_HEADER,
 
    /**
-    * Gfx8+ SIMD8 URB Read messages.
+    * Gfx8+ SIMD8 URB messages.
     */
-   SHADER_OPCODE_URB_READ_SIMD8,
-   SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT,
-
-   SHADER_OPCODE_URB_WRITE_SIMD8,
-   SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT,
-   SHADER_OPCODE_URB_WRITE_SIMD8_MASKED,
-   SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT,
+   SHADER_OPCODE_URB_READ_LOGICAL,
+   SHADER_OPCODE_URB_WRITE_LOGICAL,
 
    /**
     * Return the index of the first enabled live channel and assign it to
@@ -580,7 +575,7 @@ enum opcode {
    FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET,
    FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET,
 
-   VS_OPCODE_URB_WRITE,
+   VEC4_VS_OPCODE_URB_WRITE,
    VS_OPCODE_PULL_CONSTANT_LOAD,
    VS_OPCODE_PULL_CONSTANT_LOAD_GFX7,
 
@@ -589,11 +584,11 @@ enum opcode {
    /**
     * Write geometry shader output data to the URB.
     *
-    * Unlike VS_OPCODE_URB_WRITE, this opcode doesn't do an implied move from
+    * Unlike VEC4_VS_OPCODE_URB_WRITE, this opcode doesn't do an implied move from
     * R0 to the first MRF.  This allows the geometry shader to override the
     * "Slot {0,1} Offset" fields in the message header.
     */
-   GS_OPCODE_URB_WRITE,
+   VEC4_GS_OPCODE_URB_WRITE,
 
    /**
     * Write geometry shader output data to the URB and request a new URB
@@ -601,7 +596,7 @@ enum opcode {
     *
     * This opcode doesn't do an implied move from R0 to the first MRF.
     */
-   GS_OPCODE_URB_WRITE_ALLOCATE,
+   VEC4_GS_OPCODE_URB_WRITE_ALLOCATE,
 
    /**
     * Terminate the geometry shader thread by doing an empty URB write.
@@ -775,9 +770,9 @@ enum opcode {
 
    VEC4_OPCODE_URB_READ,
    TCS_OPCODE_GET_INSTANCE_ID,
-   TCS_OPCODE_URB_WRITE,
-   TCS_OPCODE_SET_INPUT_URB_OFFSETS,
-   TCS_OPCODE_SET_OUTPUT_URB_OFFSETS,
+   VEC4_TCS_OPCODE_URB_WRITE,
+   VEC4_TCS_OPCODE_SET_INPUT_URB_OFFSETS,
+   VEC4_TCS_OPCODE_SET_OUTPUT_URB_OFFSETS,
    TCS_OPCODE_GET_PRIMITIVE_ID,
    TCS_OPCODE_CREATE_BARRIER_HEADER,
    TCS_OPCODE_SRC0_010_IS_ZERO,
@@ -949,6 +944,17 @@ enum rt_logical_srcs {
 
    RT_LOGICAL_NUM_SRCS
 };
+
+enum urb_logical_srcs {
+   URB_LOGICAL_SRC_HANDLE,
+   URB_LOGICAL_SRC_PER_SLOT_OFFSETS,
+   URB_LOGICAL_SRC_CHANNEL_MASK,
+   /** Data to be written.  BAD_FILE for reads. */
+   URB_LOGICAL_SRC_DATA,
+
+   URB_LOGICAL_NUM_SRCS
+};
+
 
 #ifdef __cplusplus
 /**

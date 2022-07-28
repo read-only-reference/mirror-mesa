@@ -389,8 +389,9 @@ zink_pipeline_layout_create(struct zink_screen *screen, struct zink_program *pg,
    plci.pPushConstantRanges = &pcr[0];
 
    VkPipelineLayout layout;
-   if (VKSCR(CreatePipelineLayout)(screen->dev, &plci, NULL, &layout) != VK_SUCCESS) {
-      mesa_loge("vkCreatePipelineLayout failed");
+   VkResult result = VKSCR(CreatePipelineLayout)(screen->dev, &plci, NULL, &layout);
+   if (result != VK_SUCCESS) {
+      mesa_loge("vkCreatePipelineLayout failed (%s)", vk_Result_to_str(result));
       return VK_NULL_HANDLE;
    }
 
@@ -757,10 +758,10 @@ zink_destroy_compute_program(struct zink_context *ctx,
 static unsigned
 get_pipeline_idx(bool have_EXT_extended_dynamic_state, enum pipe_prim_type mode, VkPrimitiveTopology vkmode)
 {
-   /* VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY_EXT specifies that the topology state in
+   /* VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY specifies that the topology state in
     * VkPipelineInputAssemblyStateCreateInfo only specifies the topology class,
     * and the specific topology order and adjacency must be set dynamically
-    * with vkCmdSetPrimitiveTopologyEXT before any drawing commands.
+    * with vkCmdSetPrimitiveTopology before any drawing commands.
     */
    if (have_EXT_extended_dynamic_state) {
       if (mode == PIPE_PRIM_PATCHES)
@@ -997,6 +998,24 @@ bind_last_vertex_stage(struct zink_context *ctx)
          /* always unset vertex shader values when changing to a non-vs last stage */
          memset(&ctx->gfx_pipeline_state.shader_keys.key[PIPE_SHADER_VERTEX].key.vs_base, 0, sizeof(struct zink_vs_key_base));
       }
+
+      unsigned num_viewports = ctx->vp_state.num_viewports;
+      struct zink_screen *screen = zink_screen(ctx->base.screen);
+      /* number of enabled viewports is based on whether last vertex stage writes viewport index */
+      if (ctx->last_vertex_stage) {
+         if (ctx->last_vertex_stage->nir->info.outputs_written & (VARYING_BIT_VIEWPORT | VARYING_BIT_VIEWPORT_MASK))
+            ctx->vp_state.num_viewports = MIN2(screen->info.props.limits.maxViewports, PIPE_MAX_VIEWPORTS);
+         else
+            ctx->vp_state.num_viewports = 1;
+      } else {
+         ctx->vp_state.num_viewports = 1;
+      }
+      ctx->vp_state_changed |= num_viewports != ctx->vp_state.num_viewports;
+      if (!screen->info.have_EXT_extended_dynamic_state) {
+         if (ctx->gfx_pipeline_state.dyn_state1.num_viewports != ctx->vp_state.num_viewports)
+            ctx->gfx_pipeline_state.dirty = true;
+         ctx->gfx_pipeline_state.dyn_state1.num_viewports = ctx->vp_state.num_viewports;
+      }
       ctx->last_vertex_stage_dirty = true;
    }
 }
@@ -1008,8 +1027,8 @@ zink_bind_vs_state(struct pipe_context *pctx,
    struct zink_context *ctx = zink_context(pctx);
    if (!cso && !ctx->gfx_stages[PIPE_SHADER_VERTEX])
       return;
-   void *prev = ctx->gfx_stages[PIPE_SHADER_VERTEX];
    bind_stage(ctx, PIPE_SHADER_VERTEX, cso);
+   bind_last_vertex_stage(ctx);
    if (cso) {
       struct zink_shader *zs = cso;
       ctx->shader_reads_drawid = BITSET_TEST(zs->nir->info.system_values_read, SYSTEM_VALUE_DRAW_ID);
@@ -1018,9 +1037,6 @@ zink_bind_vs_state(struct pipe_context *pctx,
       ctx->shader_reads_drawid = false;
       ctx->shader_reads_basevertex = false;
    }
-   if (ctx->last_vertex_stage == prev)
-      ctx->last_vertex_stage = cso;
-
 }
 
 /* if gl_SampleMask[] is written to, we have to ensure that we get a shader with the same sample count:

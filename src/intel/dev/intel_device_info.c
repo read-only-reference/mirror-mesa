@@ -1603,7 +1603,7 @@ query_regions(struct intel_device_info *devinfo, int fd, bool update)
    for (int i = 0; i < meminfo->num_regions; i++) {
       const struct drm_i915_memory_region_info *mem = &meminfo->regions[i];
       switch (mem->region.memory_class) {
-      case I915_MEMORY_CLASS_SYSTEM:
+      case I915_MEMORY_CLASS_SYSTEM: {
          if (!update) {
             devinfo->mem.sram.mem_class = mem->region.memory_class;
             devinfo->mem.sram.mem_instance = mem->region.memory_instance;
@@ -1613,21 +1613,52 @@ query_regions(struct intel_device_info *devinfo, int fd, bool update)
             assert(devinfo->mem.sram.mem_instance == mem->region.memory_instance);
             assert(devinfo->mem.sram.mappable.size == mem->probed_size);
          }
-         if (mem->unallocated_size != -1)
-            devinfo->mem.sram.mappable.free = mem->unallocated_size;
+         /* The kernel uAPI only reports an accurate unallocated_size value
+          * for I915_MEMORY_CLASS_DEVICE.
+          */
+         uint64_t available;
+         if (os_get_available_system_memory(&available))
+            devinfo->mem.sram.mappable.free = MIN2(available, mem->probed_size);
          break;
+      }
       case I915_MEMORY_CLASS_DEVICE:
          if (!update) {
             devinfo->mem.vram.mem_class = mem->region.memory_class;
             devinfo->mem.vram.mem_instance = mem->region.memory_instance;
-            devinfo->mem.vram.mappable.size = mem->probed_size;
+            if (mem->probed_cpu_visible_size > 0) {
+               devinfo->mem.vram.mappable.size = mem->probed_cpu_visible_size;
+               devinfo->mem.vram.unmappable.size =
+                  mem->probed_size - mem->probed_cpu_visible_size;
+            } else {
+               /* We are running on an older kernel without support for the
+                * small-bar uapi. These kernels only support systems where the
+                * entire vram is mappable.
+                */
+               devinfo->mem.vram.mappable.size = mem->probed_size;
+               devinfo->mem.vram.unmappable.size = 0;
+            }
          } else {
             assert(devinfo->mem.vram.mem_class == mem->region.memory_class);
             assert(devinfo->mem.vram.mem_instance == mem->region.memory_instance);
-            assert(devinfo->mem.vram.mappable.size == mem->probed_size);
+            assert((devinfo->mem.vram.mappable.size +
+                    devinfo->mem.vram.unmappable.size) == mem->probed_size);
          }
-         if (mem->unallocated_size != -1)
-            devinfo->mem.vram.mappable.free = mem->unallocated_size;
+         if (mem->unallocated_cpu_visible_size > 0) {
+            if (mem->unallocated_size != -1) {
+               devinfo->mem.vram.mappable.free = mem->unallocated_cpu_visible_size;
+               devinfo->mem.vram.unmappable.free =
+                  mem->unallocated_size - mem->unallocated_cpu_visible_size;
+            }
+         } else {
+            /* We are running on an older kernel without support for the
+             * small-bar uapi. These kernels only support systems where the
+             * entire vram is mappable.
+             */
+            if (mem->unallocated_size != -1) {
+               devinfo->mem.vram.mappable.free = mem->unallocated_size;
+               devinfo->mem.vram.unmappable.free = 0;
+            }
+         }
          break;
       default:
          break;

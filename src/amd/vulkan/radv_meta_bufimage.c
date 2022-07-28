@@ -1174,48 +1174,33 @@ radv_device_init_meta_bufimage_state(struct radv_device *device)
 
    result = radv_device_init_meta_itob_state(device);
    if (result != VK_SUCCESS)
-      goto fail_itob;
+      return result;
 
    result = radv_device_init_meta_btoi_state(device);
    if (result != VK_SUCCESS)
-      goto fail_btoi;
+      return result;
 
    result = radv_device_init_meta_btoi_r32g32b32_state(device);
    if (result != VK_SUCCESS)
-      goto fail_btoi_r32g32b32;
+      return result;
 
    result = radv_device_init_meta_itoi_state(device);
    if (result != VK_SUCCESS)
-      goto fail_itoi;
+      return result;
 
    result = radv_device_init_meta_itoi_r32g32b32_state(device);
    if (result != VK_SUCCESS)
-      goto fail_itoi_r32g32b32;
+      return result;
 
    result = radv_device_init_meta_cleari_state(device);
    if (result != VK_SUCCESS)
-      goto fail_cleari;
+      return result;
 
    result = radv_device_init_meta_cleari_r32g32b32_state(device);
    if (result != VK_SUCCESS)
-      goto fail_cleari_r32g32b32;
+      return result;
 
    return VK_SUCCESS;
-fail_cleari_r32g32b32:
-   radv_device_finish_meta_cleari_r32g32b32_state(device);
-fail_cleari:
-   radv_device_finish_meta_cleari_state(device);
-fail_itoi_r32g32b32:
-   radv_device_finish_meta_itoi_r32g32b32_state(device);
-fail_itoi:
-   radv_device_finish_meta_itoi_state(device);
-fail_btoi_r32g32b32:
-   radv_device_finish_meta_btoi_r32g32b32_state(device);
-fail_btoi:
-   radv_device_finish_meta_btoi_state(device);
-fail_itob:
-   radv_device_finish_meta_itob_state(device);
-   return result;
 }
 
 static void
@@ -1264,7 +1249,7 @@ create_buffer_from_image(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_bl
    struct radv_device *device = cmd_buffer->device;
    struct radv_device_memory mem;
 
-   radv_device_memory_init(&mem, device, surf->image->bo);
+   radv_device_memory_init(&mem, device, surf->image->bindings[0].bo);
 
    radv_CreateBuffer(radv_device_to_handle(device),
                      &(VkBufferCreateInfo){
@@ -1281,7 +1266,7 @@ create_buffer_from_image(struct radv_cmd_buffer *cmd_buffer, struct radv_meta_bl
                              .sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO,
                              .buffer = *buffer,
                              .memory = radv_device_memory_to_handle(&mem),
-                             .memoryOffset = surf->image->offset,
+                             .memoryOffset = surf->image->bindings[0].offset,
                           }});
 
    radv_device_memory_finish(&mem);

@@ -44,8 +44,11 @@ blit_resolve(struct zink_context *ctx, const struct pipe_blit_info *info, bool *
    struct zink_resource *dst = zink_resource(info->dst.resource);
 
    struct zink_screen *screen = zink_screen(ctx->base.screen);
+   /* aliased/swizzled formats need u_blitter */
    if (src->format != zink_get_format(screen, info->src.format) ||
        dst->format != zink_get_format(screen, info->dst.format))
+      return false;
+   if (src->format != dst->format)
       return false;
 
    apply_dst_clears(ctx, info, false);
@@ -55,11 +58,12 @@ blit_resolve(struct zink_context *ctx, const struct pipe_blit_info *info, bool *
       *needs_present_readback = zink_kopper_acquire_readback(ctx, src);
 
    struct zink_batch *batch = &ctx->batch;
-   zink_batch_no_rp(ctx);
+   zink_resource_setup_transfer_layouts(ctx, src, dst);
+   VkCommandBuffer cmdbuf = *needs_present_readback ?
+                            ctx->batch.state->cmdbuf :
+                            zink_get_cmdbuf(ctx, src, dst);
    zink_batch_reference_resource_rw(batch, src, false);
    zink_batch_reference_resource_rw(batch, dst, true);
-
-   zink_resource_setup_transfer_layouts(ctx, src, dst);
 
    VkImageResolve region = {0};
 
@@ -98,7 +102,7 @@ blit_resolve(struct zink_context *ctx, const struct pipe_blit_info *info, bool *
    region.extent.width = info->dst.box.width;
    region.extent.height = info->dst.box.height;
    region.extent.depth = info->dst.box.depth;
-   VKCTX(CmdResolveImage)(batch->state->cmdbuf, src->obj->image, src->layout,
+   VKCTX(CmdResolveImage)(cmdbuf, src->obj->image, src->layout,
                      dst->obj->image, dst->layout,
                      1, &region);
 
@@ -164,11 +168,13 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info, bool *n
       *needs_present_readback = zink_kopper_acquire_readback(ctx, src);
 
    struct zink_batch *batch = &ctx->batch;
-   zink_batch_no_rp(ctx);
+   zink_resource_setup_transfer_layouts(ctx, src, dst);
+   VkCommandBuffer cmdbuf = *needs_present_readback ?
+                            ctx->batch.state->cmdbuf :
+                            zink_get_cmdbuf(ctx, src, dst);
    zink_batch_reference_resource_rw(batch, src, false);
    zink_batch_reference_resource_rw(batch, dst, true);
 
-   zink_resource_setup_transfer_layouts(ctx, src, dst);
    VkImageBlit region = {0};
    region.srcSubresource.aspectMask = src->aspect;
    region.srcSubresource.mipLevel = info->src.level;
@@ -245,7 +251,7 @@ blit_native(struct zink_context *ctx, const struct pipe_blit_info *info, bool *n
    }
    assert(region.dstOffsets[0].z != region.dstOffsets[1].z);
 
-   VKCTX(CmdBlitImage)(batch->state->cmdbuf, src->obj->image, src->layout,
+   VKCTX(CmdBlitImage)(cmdbuf, src->obj->image, src->layout,
                   dst->obj->image, dst->layout,
                   1, &region,
                   zink_filter(info->filter));
@@ -331,8 +337,11 @@ zink_blit(struct pipe_context *pctx,
       }
    }
 
-   if (src->obj->dt)
+   if (src->obj->dt) {
+      zink_fb_clears_apply_region(ctx, info->src.resource, zink_rect_from_box(&info->src.box));
       needs_present_readback = zink_kopper_acquire_readback(ctx, src);
+   }
+
    /* this is discard_only because we're about to start a renderpass that will
     * flush all pending clears anyway
     */

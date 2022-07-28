@@ -24,6 +24,8 @@
 #ifndef DZN_PRIVATE_H
 #define DZN_PRIVATE_H
 
+#define COBJMACROS
+
 #include "vk_command_pool.h"
 #include "vk_command_buffer.h"
 #include "vk_cmd_queue.h"
@@ -51,17 +53,17 @@
 
 #include "dzn_entrypoints.h"
 #include "dzn_nir.h"
+#include "dzn_physical_device_enum.h"
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_icd.h>
 
 #define D3D12_IGNORE_SDK_LAYERS
-#define COBJMACROS
 #include <unknwn.h>
-#include <dxgi1_4.h>
 #include <directx/d3d12.h>
 
 #include "spirv_to_dxil.h"
+#include "dzn_abi_helper.h"
 
 #define DZN_SWAP(t, a, b) \
    do { \
@@ -181,8 +183,8 @@ struct dzn_physical_device {
    struct vk_device_extension_table supported_extensions;
    struct vk_physical_device_dispatch_table dispatch;
 
-   IDXGIAdapter1 *adapter;
-   DXGI_ADAPTER_DESC1 adapter_desc;
+   IUnknown *adapter;
+   struct dzn_physical_device_desc desc;
 
    uint32_t queue_family_count;
    struct dzn_queue_family {
@@ -202,6 +204,7 @@ struct dzn_physical_device {
    D3D12_FEATURE_DATA_ARCHITECTURE1 architecture;
    D3D12_FEATURE_DATA_D3D12_OPTIONS options;
    D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2;
+   D3D12_FEATURE_DATA_D3D12_OPTIONS3 options3;
    VkPhysicalDeviceMemoryProperties memory;
    D3D12_HEAP_FLAGS heap_flags_for_mem_type[VK_MAX_MEMORY_TYPES];
    const struct vk_sync_type *sync_types[MAX_SYNC_TYPES + 1];
@@ -219,9 +222,6 @@ dzn_physical_device_get_mem_type_mask_for_resource(const struct dzn_physical_dev
 #define dzn_debug_ignored_stype(sType) \
    mesa_logd("%s: ignored VkStructureType %u\n", __func__, (sType))
 
-IDXGIFactory4 *
-dxgi_get_factory(bool debug);
-
 PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE
 d3d12_get_serialize_root_sig(void);
 
@@ -232,7 +232,7 @@ void
 d3d12_enable_gpu_validation(void);
 
 ID3D12Device2 *
-d3d12_create_device(IDXGIAdapter1 *adapter, bool experimental_features);
+d3d12_create_device(IUnknown *adapter, bool experimental_features);
 
 struct dzn_queue {
    struct vk_queue vk;
@@ -877,6 +877,12 @@ struct dzn_image {
    VkDeviceSize mem_offset;
 };
 
+bool
+dzn_image_formats_are_compatible(const struct dzn_device *device,
+                                 VkFormat orig_fmt, VkFormat new_fmt,
+                                 VkImageUsageFlags usage,
+                                 VkImageAspectFlagBits aspect);
+
 void
 dzn_image_align_extent(const struct dzn_image *image,
                        VkExtent3D *extent);
@@ -957,13 +963,13 @@ dzn_buffer_get_dxgi_format(VkFormat format);
 
 D3D12_TEXTURE_COPY_LOCATION
 dzn_buffer_get_copy_loc(const struct dzn_buffer *buf, VkFormat format,
-                        const VkBufferImageCopy2KHR *info,
+                        const VkBufferImageCopy2 *info,
                         VkImageAspectFlagBits aspect,
                         uint32_t layer);
 
 D3D12_TEXTURE_COPY_LOCATION
 dzn_buffer_get_line_copy_loc(const struct dzn_buffer *buf, VkFormat format,
-                             const VkBufferImageCopy2KHR *region,
+                             const VkBufferImageCopy2 *region,
                              const D3D12_TEXTURE_COPY_LOCATION *loc,
                              uint32_t y, uint32_t z, uint32_t *start_x);
 
@@ -997,6 +1003,7 @@ struct dzn_sampler {
     (_image)->vk.mip_levels - (_range)->baseMipLevel : (_range)->levelCount)
 
 DXGI_FORMAT dzn_pipe_to_dxgi_format(enum pipe_format in);
+DXGI_FORMAT dzn_get_typeless_dxgi_format(DXGI_FORMAT in);
 D3D12_FILTER dzn_translate_sampler_filter(const VkSamplerCreateInfo *create_info);
 D3D12_COMPARISON_FUNC dzn_translate_compare_op(VkCompareOp in);
 void dzn_translate_viewport(D3D12_VIEWPORT *out, const VkViewport *in);

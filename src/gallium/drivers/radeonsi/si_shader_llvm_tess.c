@@ -49,7 +49,7 @@ LLVMValueRef si_get_rel_patch_id(struct si_shader_context *ctx)
  * The LDS layout is:
  * - TCS inputs for patch 0
  * - TCS inputs for patch 1
- * - TCS inputs for patch 2		= get_tcs_in_current_patch_offset (if RelPatchID==2)
+ * - TCS inputs for patch 2             = get_tcs_in_current_patch_offset (if RelPatchID==2)
  * - ...
  * - TCS outputs for patch 0            = get_tcs_out_patch0_offset
  * - Per-patch TCS outputs for patch 0  = get_tcs_out_patch0_patch_data_offset
@@ -183,9 +183,9 @@ static LLVMValueRef get_tcs_tes_buffer_address(struct si_shader_context *ctx,
 /**
  * Load from LSHS LDS storage.
  *
- * \param type		output value type
- * \param swizzle	offset (typically 0..3); it can be ~0, which loads a vec4
- * \param dw_addr	address in dwords
+ * \param type     output value type
+ * \param swizzle  offset (typically 0..3); it can be ~0, which loads a vec4
+ * \param dw_addr  address in dwords
  */
 static LLVMValueRef lshs_lds_load(struct si_shader_context *ctx, LLVMTypeRef type, unsigned swizzle,
                                   LLVMValueRef dw_addr)
@@ -523,7 +523,7 @@ void si_llvm_tcs_build_end(struct si_shader_context *ctx)
       for (unsigned i = 0; i < 6; i++) {
          int loc = i < 4 ? outer_loc : inner_loc;
          LLVMValueRef value = loc < 0 ? LLVMGetUndef(ctx->ac.f32) :
-            LLVMBuildLoad(builder, ctx->abi.outputs[loc * 4 + i % 4], "");
+            LLVMBuildLoad2(builder, ctx->ac.f32, ctx->abi.outputs[loc * 4 + i % 4], "");
          value = ac_to_float(&ctx->ac, value);
          ret = LLVMBuildInsertValue(builder, ret, value, vgpr++, "");
       }
@@ -585,7 +585,7 @@ void si_llvm_ls_build_end(struct si_shader_context *ctx)
             if (!(info->output_usagemask[i] & (1 << chan)))
                continue;
 
-            LLVMValueRef value = LLVMBuildLoad(ctx->ac.builder, addrs[4 * i + chan], "");
+            LLVMValueRef value = LLVMBuildLoad2(ctx->ac.builder, ctx->ac.f32, addrs[4 * i + chan], "");
 
             ctx->return_value = LLVMBuildInsertValue(ctx->ac.builder, ctx->return_value,
                                                      value, ret_offset + param * 4 + chan, "");

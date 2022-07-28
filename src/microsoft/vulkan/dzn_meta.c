@@ -43,11 +43,18 @@ dzn_meta_compile_shader(struct dzn_device *device, nir_shader *nir,
        (instance->debug_flags & DZN_DEBUG_INTERNAL))
       nir_print_shader(nir, stderr);
 
-   struct nir_to_dxil_options opts = { .environment = DXIL_ENVIRONMENT_VULKAN };
+   struct nir_to_dxil_options opts = {
+      .environment = DXIL_ENVIRONMENT_VULKAN,
+      .shader_model_max = SHADER_MODEL_6_2,
+#ifdef _WIN32
+      .validator_version_max = dxil_get_validator_version(instance->dxil_validator),
+#endif
+   };
    struct blob dxil_blob;
-   bool ret = nir_to_dxil(nir, &opts, &dxil_blob);
+   ASSERTED bool ret = nir_to_dxil(nir, &opts, &dxil_blob);
    assert(ret);
 
+#ifdef _WIN32
    char *err = NULL;
    bool res = dxil_validate_module(instance->dxil_validator,
                                    dxil_blob.data,
@@ -79,6 +86,7 @@ dzn_meta_compile_shader(struct dzn_device *device, nir_shader *nir,
       ralloc_free(err);
    }
    assert(res);
+#endif
 
    void *data;
    size_t size;

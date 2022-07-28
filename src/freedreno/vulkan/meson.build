@@ -34,11 +34,13 @@ libtu_files = files(
   'tu_autotune.c',
   'tu_clear_blit.c',
   'tu_cmd_buffer.c',
+  'tu_cs_breadcrumbs.c',
   'tu_cs.c',
   'tu_cs.h',
   'tu_device.c',
   'tu_descriptor_set.c',
   'tu_descriptor_set.h',
+  'tu_dynamic_rendering.c',
   'tu_formats.c',
   'tu_image.c',
   'tu_lrz.c',
@@ -52,7 +54,6 @@ libtu_files = files(
   'tu_util.c',
   'tu_util.h',
   'tu_perfetto.h',
-  'vk_format.h',
 )
 
 tu_deps = []
@@ -118,7 +119,7 @@ endif
 
 libvulkan_freedreno = shared_library(
   'vulkan_freedreno',
-  [libtu_files, tu_entrypoints, tu_tracepoints, freedreno_xml_header_files, sha1_h],
+  [libtu_files, tu_entrypoints, tu_tracepoints, freedreno_xml_header_files, sha1_h, u_format_pack_h],
   include_directories : [
     inc_include,
     inc_src,

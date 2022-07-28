@@ -825,12 +825,10 @@ dzn_descriptor_heap_init(struct dzn_descriptor_heap *heap,
                       VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
-   D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle;
-   ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart(heap->heap, &cpu_handle);
+   D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = dzn_ID3D12DescriptorHeap_GetCPUDescriptorHandleForHeapStart(heap->heap);
    heap->cpu_base = cpu_handle.ptr;
    if (shader_visible) {
-      D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle;
-      ID3D12DescriptorHeap_GetGPUDescriptorHandleForHeapStart(heap->heap, &gpu_handle);
+      D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = dzn_ID3D12DescriptorHeap_GetGPUDescriptorHandleForHeapStart(heap->heap);
       heap->gpu_base = gpu_handle.ptr;
    }
 
@@ -1819,7 +1817,7 @@ dzn_descriptor_set_copy(const VkCopyDescriptorSet *pDescriptorCopy)
           copied_count < pDescriptorCopy->descriptorCount) {
       VkDescriptorType src_type =
          dzn_descriptor_set_ptr_get_vk_type(src_set->layout, &src_ptr);
-      VkDescriptorType dst_type =
+      ASSERTED VkDescriptorType dst_type =
          dzn_descriptor_set_ptr_get_vk_type(dst_set->layout, &dst_ptr);
 
       assert(src_type == dst_type);
@@ -1928,7 +1926,7 @@ dzn_descriptor_update_template_create(struct dzn_device *device,
                                   info->pDescriptorUpdateEntries[e].dstBinding,
                                   info->pDescriptorUpdateEntries[e].dstArrayElement);
       uint32_t desc_count = info->pDescriptorUpdateEntries[e].descriptorCount;
-      VkDescriptorType type = info->pDescriptorUpdateEntries[e].descriptorType;
+      ASSERTED VkDescriptorType type = info->pDescriptorUpdateEntries[e].descriptorType;
       uint32_t d = 0;
 
       while (dzn_descriptor_set_ptr_is_valid(&ptr) && d < desc_count) {

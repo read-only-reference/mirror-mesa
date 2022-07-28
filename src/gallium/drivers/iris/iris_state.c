@@ -2634,22 +2634,10 @@ iris_create_surface(struct pipe_context *ctx,
    }
 
    struct iris_surface *surf = calloc(1, sizeof(struct iris_surface));
-   struct pipe_surface *psurf = &surf->base;
    struct iris_resource *res = (struct iris_resource *) tex;
 
    if (!surf)
       return NULL;
-
-   pipe_reference_init(&psurf->reference, 1);
-   pipe_resource_reference(&psurf->texture, tex);
-   psurf->context = ctx;
-   psurf->format = tmpl->format;
-   psurf->width = tex->width0;
-   psurf->height = tex->height0;
-   psurf->texture = tex;
-   psurf->u.tex.first_layer = tmpl->u.tex.first_layer;
-   psurf->u.tex.last_layer = tmpl->u.tex.last_layer;
-   psurf->u.tex.level = tmpl->u.tex.level;
 
    uint32_t array_len = tmpl->u.tex.last_layer - tmpl->u.tex.first_layer + 1;
 
@@ -2710,13 +2698,54 @@ iris_create_surface(struct pipe_context *ctx,
    }
 #endif
 
+   struct isl_surf isl_surf = res->surf;
+   uint64_t offset_B = 0;
+   uint32_t tile_x_el = 0, tile_y_el = 0;
+   if (isl_format_is_compressed(res->surf.format)) {
+      /* The resource has a compressed format, which is not renderable, but we
+       * have a renderable view format.  We must be attempting to upload
+       * blocks of compressed data via an uncompressed view.
+       *
+       * In this case, we can assume there are no auxiliary buffers, a single
+       * miplevel, and that the resource is single-sampled.  Gallium may try
+       * and create an uncompressed view with multiple layers, however.
+       */
+      assert(res->aux.usage == ISL_AUX_USAGE_NONE);
+      assert(res->surf.samples == 1);
+      assert(view->levels == 1);
+
+      bool ok = isl_surf_get_uncompressed_surf(&screen->isl_dev,
+                                               &res->surf, view,
+                                               &isl_surf, view, &offset_B,
+                                               &tile_x_el, &tile_y_el);
+      if (!ok) {
+         free(surf);
+         return NULL;
+      }
+   }
+
    surf->clear_color = res->aux.clear_color;
+
+   struct pipe_surface *psurf = &surf->base;
+   pipe_reference_init(&psurf->reference, 1);
+   pipe_resource_reference(&psurf->texture, tex);
+   psurf->context = ctx;
+   psurf->format = tmpl->format;
+   psurf->width = isl_surf.logical_level0_px.width;
+   psurf->height = isl_surf.logical_level0_px.height;
+   psurf->texture = tex;
+   psurf->u.tex.first_layer = tmpl->u.tex.first_layer;
+   psurf->u.tex.last_layer = tmpl->u.tex.last_layer;
+   psurf->u.tex.level = tmpl->u.tex.level;
 
    /* Bail early for depth/stencil - we don't want SURFACE_STATE for them. */
    if (res->surf.usage & (ISL_SURF_USAGE_DEPTH_BIT |
                           ISL_SURF_USAGE_STENCIL_BIT))
       return psurf;
 
+   /* Fill out a SURFACE_STATE for each possible auxiliary surface mode and
+    * return the pipe_surface.
+    */
    unsigned aux_usages = 0;
 
    if ((res->aux.usage == ISL_AUX_USAGE_CCS_E ||
@@ -2730,64 +2759,16 @@ iris_create_surface(struct pipe_context *ctx,
 
    alloc_surface_states(&surf->surface_state, aux_usages);
    surf->surface_state.bo_address = res->bo->address;
+   fill_surface_states(&screen->isl_dev, &surf->surface_state, res,
+                       &isl_surf, view, offset_B, tile_x_el, tile_y_el);
 
 #if GFX_VER == 8
    alloc_surface_states(&surf->surface_state_read, aux_usages);
    surf->surface_state_read.bo_address = res->bo->address;
+   fill_surface_states(&screen->isl_dev, &surf->surface_state_read, res,
+                       &read_surf, read_view, read_surf_offset_B,
+                       read_surf_tile_x_sa, read_surf_tile_y_sa);
 #endif
-
-   if (!isl_format_is_compressed(res->surf.format)) {
-      /* This is a normal surface.  Fill out a SURFACE_STATE for each possible
-       * auxiliary surface mode and return the pipe_surface.
-       */
-      fill_surface_states(&screen->isl_dev, &surf->surface_state, res,
-                          &res->surf, view, 0, 0, 0);
-#if GFX_VER == 8
-      fill_surface_states(&screen->isl_dev, &surf->surface_state_read, res,
-                          &read_surf, read_view, read_surf_offset_B,
-                          read_surf_tile_x_sa, read_surf_tile_y_sa);
-#endif
-      return psurf;
-   }
-
-   /* The resource has a compressed format, which is not renderable, but we
-    * have a renderable view format.  We must be attempting to upload blocks
-    * of compressed data via an uncompressed view.
-    *
-    * In this case, we can assume there are no auxiliary buffers, a single
-    * miplevel, and that the resource is single-sampled.  Gallium may try
-    * and create an uncompressed view with multiple layers, however.
-    */
-   assert(!isl_format_is_compressed(fmt.fmt));
-   assert(res->aux.usage == ISL_AUX_USAGE_NONE);
-   assert(res->surf.samples == 1);
-   assert(view->levels == 1);
-
-   struct isl_surf isl_surf;
-   uint64_t offset_B = 0;
-   uint32_t tile_x_el = 0, tile_y_el = 0;
-   bool ok = isl_surf_get_uncompressed_surf(&screen->isl_dev, &res->surf,
-                                            view, &isl_surf, view,
-                                            &offset_B, &tile_x_el, &tile_y_el);
-   if (!ok) {
-      free(surf);
-      return NULL;
-   }
-
-   psurf->width = isl_surf.logical_level0_px.width;
-   psurf->height = isl_surf.logical_level0_px.height;
-
-   struct isl_surf_fill_state_info f = {
-      .surf = &isl_surf,
-      .view = view,
-      .mocs = iris_mocs(res->bo, &screen->isl_dev,
-                        ISL_SURF_USAGE_RENDER_TARGET_BIT),
-      .address = res->bo->address + offset_B,
-      .x_offset_sa = tile_x_el, /* Single-sampled, so el == sa */
-      .y_offset_sa = tile_y_el, /* Single-sampled, so el == sa */
-   };
-
-   isl_surf_fill_state_s(&screen->isl_dev, surf->surface_state.cpu, &f);
 
    return psurf;
 }
@@ -6332,9 +6313,7 @@ iris_upload_dirty_render_state(struct iris_context *ice,
          cl.PerspectiveDivideDisable = ice->state.window_space_position;
          cl.ViewportXYClipTestEnable = !points_or_lines;
 
-         if (wm_prog_data->barycentric_interp_modes &
-             BRW_BARYCENTRIC_NONPERSPECTIVE_BITS)
-            cl.NonPerspectiveBarycentricEnable = true;
+         cl.NonPerspectiveBarycentricEnable = wm_prog_data->uses_nonperspective_interp_modes;
 
          cl.ForceZeroRTAIndexEnable = cso_fb->layers <= 1;
          cl.MaximumVPIndex = ice->state.num_viewports - 1;
@@ -7124,7 +7103,7 @@ iris_upload_compute_walker(struct iris_context *ice,
    if (stage_dirty & IRIS_STAGE_DIRTY_CS) {
       iris_emit_cmd(batch, GENX(CFE_STATE), cfe) {
          cfe.MaximumNumberofThreads =
-            devinfo->max_cs_threads * devinfo->subslice_total - 1;
+            devinfo->max_cs_threads * devinfo->subslice_total;
          uint32_t scratch_addr = pin_scratch_space(ice, batch, prog_data,
                                                    MESA_SHADER_COMPUTE);
          cfe.ScratchSpaceBuffer = scratch_addr >> 4;

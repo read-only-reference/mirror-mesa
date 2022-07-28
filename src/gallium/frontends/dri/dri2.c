@@ -304,6 +304,10 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
    unsigned bind = 0;
    struct winsys_handle whandle;
 
+   /* struct pipe_resource height0 is 16-bit, avoid overflow */
+   if (height > 0xffff)
+      return NULL;
+
    switch (attachment) {
       case __DRI_BUFFER_FRONT_LEFT:
       case __DRI_BUFFER_FAKE_FRONT_LEFT:
@@ -1442,6 +1446,7 @@ dri2_dup_image(__DRIimage *image, void *loaderPrivate)
    img->level = image->level;
    img->layer = image->layer;
    img->dri_format = image->dri_format;
+   img->internal_format = image->internal_format;
    /* This should be 0 for sub images, but dup is also used for base images. */
    img->dri_components = image->dri_components;
    img->use = image->use;
@@ -2523,10 +2528,12 @@ dri_swrast_kms_init_screen(__DRIscreen * sPriv)
 
    sPriv->driverPrivate = (void *)screen;
 
+#ifdef HAVE_DRISW_KMS
    if (pipe_loader_sw_probe_kms(&screen->dev, screen->fd)) {
       pscreen = pipe_loader_create_screen(screen->dev);
       dri_init_options(screen);
    }
+#endif
 
    if (!pscreen)
        goto release_pipe;

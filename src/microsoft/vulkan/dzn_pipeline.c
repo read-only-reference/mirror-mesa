@@ -347,6 +347,10 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
       container_of(device->vk.physical->instance, struct dzn_instance, vk);
    struct nir_to_dxil_options opts = {
       .environment = DXIL_ENVIRONMENT_VULKAN,
+      .shader_model_max = SHADER_MODEL_6_2,
+#ifdef _WIN32
+      .validator_version_max = dxil_get_validator_version(instance->dxil_validator),
+#endif
    };
    struct blob dxil_blob;
    VkResult result = VK_SUCCESS;
@@ -356,7 +360,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
 
    if (nir_to_dxil(nir, &opts, &dxil_blob)) {
       blob_finish_get_buffer(&dxil_blob, (void **)&slot->pShaderBytecode,
-                             &slot->BytecodeLength);
+                             (size_t *)&slot->BytecodeLength);
    } else {
       result = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
@@ -367,6 +371,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
    if (result != VK_SUCCESS)
       return result;
 
+#ifdef _WIN32
    char *err;
    bool res = dxil_validate_module(instance->dxil_validator,
                                    (void *)slot->pShaderBytecode,
@@ -397,6 +402,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
       }
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
+#endif
 
    return VK_SUCCESS;
 }
@@ -1521,7 +1527,7 @@ dzn_pipeline_init(struct dzn_pipeline *pipeline,
    memcpy(pipeline->sets, layout->sets, sizeof(pipeline->sets));
    vk_object_base_init(&device->vk, &pipeline->base, VK_OBJECT_TYPE_PIPELINE);
 
-   uint32_t max_streamsz =
+   ASSERTED uint32_t max_streamsz =
       type == VK_PIPELINE_BIND_POINT_GRAPHICS ?
       MAX_GFX_PIPELINE_STATE_STREAM_SIZE :
       MAX_COMPUTE_PIPELINE_STATE_STREAM_SIZE;
@@ -1853,9 +1859,9 @@ dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
          }
       }
 
-      HRESULT hres = ID3D12Device2_CreatePipelineState(device->dev, &stream_desc,
-                                                       &IID_ID3D12PipelineState,
-                                                       (void**)(&variant->state));
+      ASSERTED HRESULT hres = ID3D12Device2_CreatePipelineState(device->dev, &stream_desc,
+                                                                &IID_ID3D12PipelineState,
+                                                                (void**)(&variant->state));
       assert(!FAILED(hres));
       he = _mesa_hash_table_insert(pipeline->variants, &variant->key, variant);
       assert(he);
@@ -1971,10 +1977,10 @@ dzn_CreateGraphicsPipelines(VkDevice dev,
          /* Bail out on the first error != VK_PIPELINE_COMPILE_REQUIRED_EX as it
           * is not obvious what error should be report upon 2 different failures.
           */
-         if (result != VK_PIPELINE_COMPILE_REQUIRED_EXT)
+         if (result != VK_PIPELINE_COMPILE_REQUIRED)
             break;
 
-         if (pCreateInfos[i].flags & VK_PIPELINE_CREATE_EARLY_RETURN_ON_FAILURE_BIT_EXT)
+         if (pCreateInfos[i].flags & VK_PIPELINE_CREATE_EARLY_RETURN_ON_FAILURE_BIT)
             break;
       }
    }
@@ -2258,10 +2264,10 @@ dzn_CreateComputePipelines(VkDevice dev,
          /* Bail out on the first error != VK_PIPELINE_COMPILE_REQUIRED_EX as it
           * is not obvious what error should be report upon 2 different failures.
           */
-         if (result != VK_PIPELINE_COMPILE_REQUIRED_EXT)
+         if (result != VK_PIPELINE_COMPILE_REQUIRED)
             break;
 
-         if (pCreateInfos[i].flags & VK_PIPELINE_CREATE_EARLY_RETURN_ON_FAILURE_BIT_EXT)
+         if (pCreateInfos[i].flags & VK_PIPELINE_CREATE_EARLY_RETURN_ON_FAILURE_BIT)
             break;
       }
    }

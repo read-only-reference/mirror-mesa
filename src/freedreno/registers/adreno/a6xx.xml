@@ -2000,7 +2000,7 @@ to upconvert to 32b float internally?
 		<bitfield name="FACENESS" pos="2" type="boolean"/>
 		<bitfield name="SAMPLEID" pos="3" type="boolean"/>
 		<bitfield name="FRAGCOORDSAMPLEMODE" low="4" high="5" type="a6xx_fragcoord_sample_mode"/>
-		<bitfield name="SIZE" pos="6" type="boolean"/>
+		<bitfield name="CENTERRHW" pos="6" type="boolean"/>
 		<bitfield name="LINELENGTHEN" pos="7" type="boolean"/>
 		<bitfield name="FOVEATION" pos="8" type="boolean"/>
 	</reg32>
@@ -2500,7 +2500,7 @@ to upconvert to 32b float internally?
 	<array offset="0x921a" name="VPC_SO" stride="7" length="4">
 		<reg64 offset="0" name="BUFFER_BASE" type="waddress" align="32"/>
 		<reg32 offset="2" name="BUFFER_SIZE" low="2" high="31" shr="2"/>
-		<reg32 offset="3" name="NCOMP" low="0" high="9"/>  <!-- component count -->
+		<reg32 offset="3" name="BUFFER_STRIDE" low="0" high="9" shr="2"/>
 		<reg32 offset="4" name="BUFFER_OFFSET" low="2" high="31" shr="2"/>
 		<reg64 offset="5" name="FLUSH_BASE" type="waddress" align="32"/>
 	</array>
@@ -2778,12 +2778,12 @@ to upconvert to 32b float internally?
 	<reg32 offset="0xa002" name="VFD_CONTROL_2">
 		<bitfield name="REGID_HSRELPATCHID" low="0" high="7" type="a3xx_regid">
 			<doc>
-                                This is the ID of the current patch within the
-                                subdraw, used to calculate the offset of the
-                                patch within the HS->DS buffers. When a draw is
-                                split into multiple subdraws then this differs
-                                from gl_PrimitiveID on the second, third, etc.
-                                subdraws.
+				This is the ID of the current patch within the
+				subdraw, used to calculate the offset of the
+				patch within the HS->DS buffers. When a draw is
+				split into multiple subdraws then this differs
+				from gl_PrimitiveID on the second, third, etc.
+				subdraws.
 			</doc>
 		</bitfield>
 		<bitfield name="REGID_INVOCATIONID" low="8" high="15" type="a3xx_regid"/>
@@ -2851,6 +2851,9 @@ to upconvert to 32b float internally?
 
 	<reg32 offset="0xa0f8" name="VFD_POWER_CNTL" low="0" high="2"/>
 
+	<reg32 offset="0xa601" name="VFD_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
+	<array offset="0xa610" name="VFD_PERFCTR_VFD_SEL" stride="1" length="8"/>
+
 	<!--
 	Note: this seems to always be paired with another bit in another
 	block.
@@ -2859,8 +2862,6 @@ to upconvert to 32b float internally?
 		<value value="0" name="THREAD64"/>
 		<value value="1" name="THREAD128"/>
 	</enum>
-	<reg32 offset="0xa601" name="VFD_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
-	<array offset="0xa610" name="VFD_PERFCTR_VFD_SEL" stride="1" length="8"/>
 
 	<bitset name="a6xx_sp_xs_ctrl_reg0" inline="yes">
 		<!-- if set to SINGLE, only use 1 concurrent wave on each SP -->
@@ -3553,12 +3554,7 @@ to upconvert to 32b float internally?
 		<!-- SAMPLEID is loaded into a half-precision register: -->
 		<bitfield name="SAMPLEID" low="8" high="15" type="a3xx_regid"/>
 		<bitfield name="SAMPLEMASK" low="16" high="23" type="a3xx_regid"/>
-		<!--
-		SIZE is the "size" of the primitive, ie. what the i/j coords need
-		to be divided by to scale to a single fragment.  It is probably
-		the longer of the two lines that form the tri (ie v0v1 and v0v2)?
-		 -->
-		<bitfield name="SIZE" low="24" high="31" type="a3xx_regid"/>
+		<bitfield name="CENTERRHW" low="24" high="31" type="a3xx_regid"/>
 	</reg32>
 	<reg32 offset="0xb984" name="HLSQ_CONTROL_3_REG">
 		<!-- register loaded with position (bary.f) -->

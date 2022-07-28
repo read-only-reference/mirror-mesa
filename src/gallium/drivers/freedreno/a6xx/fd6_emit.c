@@ -497,7 +497,7 @@ fd6_emit_combined_textures(struct fd_ringbuffer *ring, struct fd6_emit *emit,
       [PIPE_SHADER_FRAGMENT] = {FD6_GROUP_FS_TEX, ENABLE_DRAW},
    };
 
-   debug_assert(s[type].state_id);
+   assert(s[type].state_id);
 
    if (!v->image_mapping.num_tex && !v->fb_read) {
       /* in the fast-path, when we don't have to mix in any image/SSBO
@@ -555,12 +555,22 @@ build_vbo_state(struct fd6_emit *emit) assert_dt
 {
    const struct fd_vertex_state *vtx = emit->vtx;
 
-   struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(
-      emit->ctx->batch->submit, 4 * (1 + vtx->vertexbuf.count * 4),
-      FD_RINGBUFFER_STREAMING);
+   /* Limit PKT4 size, because at max count (32) we would overflow the
+    * size of the PKT4 size field:
+    */
+   const unsigned maxcnt = 16;
+   const unsigned cnt = vtx->vertexbuf.count;
+   const unsigned dwords = (cnt * 4) /* per vbo: reg64 + two reg32 */
+               + (1 + cnt / maxcnt); /* PKT4 hdr every 16 vbo's */
 
-   OUT_PKT4(ring, REG_A6XX_VFD_FETCH(0), 4 * vtx->vertexbuf.count);
-   for (int32_t j = 0; j < vtx->vertexbuf.count; j++) {
+   struct fd_ringbuffer *ring = fd_submit_new_ringbuffer(
+      emit->ctx->batch->submit, 4 * dwords, FD_RINGBUFFER_STREAMING);
+
+   for (int32_t j = 0; j < cnt; j++) {
+      if ((j % maxcnt) == 0) {
+         unsigned sz = MIN2(maxcnt, cnt - j);
+         OUT_PKT4(ring, REG_A6XX_VFD_FETCH(j), 4 * sz);
+      }
       const struct pipe_vertex_buffer *vb = &vtx->vertexbuf.vb[j];
       struct fd_resource *rsc = fd_resource(vb->buffer.resource);
       if (rsc == NULL) {
@@ -820,11 +830,11 @@ build_ibo(struct fd6_emit *emit) assert_dt
    struct fd_context *ctx = emit->ctx;
 
    if (emit->hs) {
-      debug_assert(ir3_shader_nibo(emit->hs) == 0);
-      debug_assert(ir3_shader_nibo(emit->ds) == 0);
+      assert(ir3_shader_nibo(emit->hs) == 0);
+      assert(ir3_shader_nibo(emit->ds) == 0);
    }
    if (emit->gs) {
-      debug_assert(ir3_shader_nibo(emit->gs) == 0);
+      assert(ir3_shader_nibo(emit->gs) == 0);
    }
 
    struct fd_ringbuffer *ibo_state =
@@ -1090,8 +1100,8 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
       case FD6_GROUP_CONST:
          state = fd6_build_user_consts(emit);
          break;
-      case FD6_GROUP_VS_DRIVER_PARAMS:
-         state = fd6_build_vs_driver_params(emit);
+      case FD6_GROUP_DRIVER_PARAMS:
+         state = fd6_build_driver_params(emit);
          break;
       case FD6_GROUP_PRIMITIVE_PARAMS:
          state = fd6_build_tess_consts(emit);
@@ -1144,7 +1154,7 @@ fd6_emit_state(struct fd_ringbuffer *ring, struct fd6_emit *emit)
          struct fd6_state_group *g = &emit->groups[i];
          unsigned n = g->stateobj ? fd_ringbuffer_size(g->stateobj) / 4 : 0;
 
-         debug_assert((g->enable_mask & ~ENABLE_ALL) == 0);
+         assert((g->enable_mask & ~ENABLE_ALL) == 0);
 
          if (n == 0) {
             OUT_RING(ring, CP_SET_DRAW_STATE__0_COUNT(0) |
@@ -1341,6 +1351,15 @@ fd6_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring)
 
    OUT_PKT4(ring, REG_A6XX_RB_LRZ_CNTL, 1);
    OUT_RING(ring, 0x00000000);
+
+   /* Initialize VFD_FETCH[n].SIZE to zero to avoid iova faults trying
+    * to fetch from a VFD_FETCH[n].BASE which we've potentially inherited
+    * from another process:
+    */
+   for (int32_t i = 0; i < 32; i++) {
+      OUT_PKT4(ring, REG_A6XX_VFD_FETCH_SIZE(i), 1);
+      OUT_RING(ring, 0);
+   }
 
    /* This happens after all drawing has been emitted to the draw CS, so we know
     * whether we need the tess BO pointers.

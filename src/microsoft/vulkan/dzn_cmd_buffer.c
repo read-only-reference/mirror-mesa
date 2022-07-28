@@ -53,6 +53,10 @@ dzn_cmd_buffer_exec_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
    if (flush_count)
       ID3D12GraphicsCommandList1_ResourceBarrier(cmdbuf->cmdlist, flush_count,
                                                  &barriers[barrier_count - flush_count]);
+
+   /* Set Before = After so we don't execute the same barrier twice. */
+   for (uint32_t b = 0; b < barrier_count; b++)
+      barriers[b].Transition.StateBefore = barriers[b].Transition.StateAfter;
 }
 
 static void
@@ -69,10 +73,6 @@ dzn_cmd_buffer_flush_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
       return;
 
    dzn_cmd_buffer_exec_transition_barriers(cmdbuf, &barriers[first_subres], subres_count);
-
-   /* Set Before = After so we don't execute the same barrier twice */
-   for (uint32_t b = first_subres; b < first_subres + subres_count; b++)
-      barriers[b].Transition.StateBefore = barriers[b].Transition.StateAfter;
 }
 
 enum dzn_queue_transition_flags {
@@ -95,8 +95,7 @@ dzn_cmd_buffer_queue_transition_barriers(struct dzn_cmd_buffer *cmdbuf,
    struct D3D12_RESOURCE_BARRIER *barriers = he ? he->data : NULL;
 
    if (!barriers) {
-      D3D12_RESOURCE_DESC desc;
-      ID3D12Resource_GetDesc(res, &desc);
+      D3D12_RESOURCE_DESC desc = dzn_ID3D12Resource_GetDesc(res);
       D3D12_FEATURE_DATA_FORMAT_INFO fmt_info = { desc.Format, 0 };
       ID3D12Device_CheckFeatureSupport(device->dev, D3D12_FEATURE_FORMAT_INFO, &fmt_info, sizeof(fmt_info));
       uint32_t barrier_count =
@@ -1064,8 +1063,7 @@ dzn_cmd_buffer_alloc_internal_buf(struct dzn_cmd_buffer *cmdbuf,
    /* Align size on 64k (the default alignment) */
    size = ALIGN_POT(size, 64 * 1024);
 
-   D3D12_HEAP_PROPERTIES hprops;
-   ID3D12Device1_GetCustomHeapProperties(device->dev, &hprops, 0, heap_type);
+   D3D12_HEAP_PROPERTIES hprops = dzn_ID3D12Device2_GetCustomHeapProperties(device->dev, 0, heap_type);
    D3D12_RESOURCE_DESC rdesc = {
       .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
       .Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
@@ -3013,9 +3011,24 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
 
    assert(src->vk.samples == dst->vk.samples);
 
-   bool requires_temp_res = src->vk.format != dst->vk.format &&
-                            src->vk.tiling != VK_IMAGE_TILING_LINEAR &&
-                            dst->vk.tiling != VK_IMAGE_TILING_LINEAR;
+   bool requires_temp_res = false;
+
+   for (uint32_t i = 0; i < info->regionCount && !requires_temp_res; i++) {
+      const VkImageCopy2 *region = &info->pRegions[i];
+
+      dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
+         assert(aspect & region->dstSubresource.aspectMask);
+
+         if (!dzn_image_formats_are_compatible(device, src->vk.format, dst->vk.format,
+                                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT, aspect) &&
+             src->vk.tiling != VK_IMAGE_TILING_LINEAR &&
+             dst->vk.tiling != VK_IMAGE_TILING_LINEAR) {
+            requires_temp_res = true;
+            break;
+         }
+      }
+   }
+
    bool use_blit = false;
    if (src->vk.samples > 1) {
       use_blit = requires_temp_res;

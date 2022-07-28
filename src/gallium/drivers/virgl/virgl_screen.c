@@ -421,7 +421,9 @@ virgl_get_shader_param(struct pipe_screen *screen,
       case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
          return 32;
       case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
-         return 4096 * sizeof(float[4]);
+         if (vscreen->caps.caps.v2.host_feature_check_version < 12)
+            return 4096 * sizeof(float[4]);
+         return vscreen->caps.caps.v2.max_const_buffer_size[shader];
       case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
          if (shader == PIPE_SHADER_FRAGMENT || shader == PIPE_SHADER_COMPUTE)
             return vscreen->caps.caps.v2.max_shader_buffer_frag_compute;
@@ -572,8 +574,6 @@ virgl_is_vertex_format_supported(struct pipe_screen *screen,
    int i;
 
    format_desc = util_format_description(format);
-   if (!format_desc)
-      return false;
 
    if (format == PIPE_FORMAT_R11G11B10_FLOAT) {
       int vformat = VIRGL_FORMAT_R11G11B10_FLOAT;
@@ -681,8 +681,6 @@ virgl_is_format_supported( struct pipe_screen *screen,
           target == PIPE_TEXTURE_CUBE_ARRAY);
 
    format_desc = util_format_description(format);
-   if (!format_desc)
-      return false;
 
    if (util_format_is_intensity(format))
       return false;
@@ -1090,6 +1088,7 @@ virgl_create_screen(struct virgl_winsys *vws, const struct pipe_screen_config *c
        * ffract+fsub back into ffloor.
        */
       screen->compiler_options.lower_ffloor = true;
+      screen->compiler_options.lower_fneg = true;
    }
 
    slab_create_parent(&screen->transfer_pool, sizeof(struct virgl_transfer), 16);

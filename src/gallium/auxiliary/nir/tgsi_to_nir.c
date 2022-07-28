@@ -1585,11 +1585,13 @@ ttn_txq(struct ttn_compile *c, nir_alu_dest dest, nir_ssa_def **src)
 
    txs = nir_tex_instr_create(b->shader, 2);
    txs->op = nir_texop_txs;
+   txs->dest_type = nir_type_uint32;
    get_texture_info(tgsi_inst->Texture.Texture,
                     &txs->sampler_dim, &txs->is_shadow, &txs->is_array);
 
    qlv = nir_tex_instr_create(b->shader, 1);
    qlv->op = nir_texop_query_levels;
+   qlv->dest_type = nir_type_uint32;
    get_texture_info(tgsi_inst->Texture.Texture,
                     &qlv->sampler_dim, &qlv->is_shadow, &qlv->is_array);
 
@@ -2323,6 +2325,8 @@ ttn_compile_init(const void *tgsi_tokens,
       c->cap_face_is_sysval = true;
    }
 
+   s->info.subgroup_size = SUBGROUP_SIZE_UNIFORM;
+
    if (s->info.stage == MESA_SHADER_FRAGMENT)
       s->info.fs.untyped_color_outputs = true;
 
@@ -2340,6 +2344,9 @@ ttn_compile_init(const void *tgsi_tokens,
    BITSET_ZERO(s->info.textures_used_by_txf); /* No scan information yet */
    BITSET_SET32(s->info.samplers_used, scan.samplers_declared);
    s->info.internal = false;
+
+   /* Default for TGSI is separate, this is assumed throughout the tree */
+   s->info.separate_shader = true;
 
    for (unsigned i = 0; i < TGSI_PROPERTY_COUNT; i++) {
       unsigned value = scan.properties[i];

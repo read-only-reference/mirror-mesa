@@ -618,6 +618,19 @@ is_packed(unsigned vstride, unsigned width, unsigned hstride)
 }
 
 /**
+ * Returns whether a region is linear
+ *
+ * A region is linear if its elements do not overlap and are not replicated.
+ * Unlike a packed region, intervening space (i.e. strided values) is allowed.
+ */
+static bool
+is_linear(unsigned vstride, unsigned width, unsigned hstride)
+{
+   return vstride == width * hstride ||
+          (hstride == 0 && width == 1);
+}
+
+/**
  * Returns whether an instruction is an explicit or implicit conversion
  * to/from half-float.
  */
@@ -1887,7 +1900,7 @@ special_requirements_for_handling_double_precision_data_types(
       }
 #undef DO_SRC
 
-      const unsigned src_stride = hstride * type_size;
+      const unsigned src_stride = (hstride ? hstride : vstride) * type_size;
       const unsigned dst_stride = dst_hstride * dst_type_size;
 
       /* The PRMs say that for CHV, BXT:
@@ -1961,13 +1974,19 @@ special_requirements_for_handling_double_precision_data_types(
 
       /* From the hardware spec section "Register Region Restrictions":
        *
-       * "In case where source or destination datatype is 64b or operation is
-       *  integer DWord multiply [or in case where a floating point data type
-       *  is used as destination]:
+       * There are two rules:
        *
-       *   1. Register Regioning patterns where register data bit locations
-       *      are changed between source and destination are not supported on
-       *      Src0 and Src1 except for broadcast of a scalar.
+       * "In case of all floating point data types used in destination:" and
+       *
+       * "In case where source or destination datatype is 64b or operation is
+       *  integer DWord multiply:"
+       *
+       * both of which list the same restrictions:
+       *
+       *  "1. Register Regioning patterns where register data bit location
+       *      of the LSB of the channels are changed between source and
+       *      destination are not supported on Src0 and Src1 except for
+       *      broadcast of a scalar.
        *
        *   2. Explicit ARF registers except null and accumulator must not be
        *      used."
@@ -1976,12 +1995,14 @@ special_requirements_for_handling_double_precision_data_types(
           (brw_reg_type_is_floating_point(dst_type) ||
            is_double_precision)) {
          ERROR_IF(!is_scalar_region &&
-                  (vstride != width * hstride ||
+                  BRW_ADDRESS_REGISTER_INDIRECT_REGISTER != address_mode &&
+                  (!is_linear(vstride, width, hstride) ||
                    src_stride != dst_stride ||
                    subreg != dst_subreg),
                   "Register Regioning patterns where register data bit "
-                  "locations are changed between source and destination are not "
-                  "supported except for broadcast of a scalar.");
+                  "location of the LSB of the channels are changed between "
+                  "source and destination are not supported except for "
+                  "broadcast of a scalar.");
 
          ERROR_IF((file == BRW_ARCHITECTURE_REGISTER_FILE &&
                    reg != BRW_ARF_NULL && !(reg >= BRW_ARF_ACCUMULATOR && reg < BRW_ARF_FLAG)) ||
@@ -2187,12 +2208,90 @@ send_descriptor_restrictions(const struct brw_isa_info *isa,
       break;
    }
 
+   if (brw_inst_sfid(devinfo, inst) == BRW_SFID_URB) {
+      /* Gfx4 doesn't have a "header present" bit in the SEND message. */
+      ERROR_IF(devinfo->ver > 4 && !brw_inst_header_present(devinfo, inst),
+               "Header must be present for all URB messages.");
+
+      switch (brw_inst_urb_opcode(devinfo, inst)) {
+      case BRW_URB_OPCODE_WRITE_HWORD:
+         break;
+
+      /* case FF_SYNC: */
+      case BRW_URB_OPCODE_WRITE_OWORD:
+         /* Gfx5 / Gfx6 FF_SYNC message and Gfx7+ URB_WRITE_OWORD have the
+          * same opcode value.
+          */
+         if (devinfo->ver == 5 || devinfo->ver == 6) {
+            ERROR_IF(brw_inst_urb_global_offset(devinfo, inst) != 0,
+                     "FF_SYNC global offset must be zero.");
+            ERROR_IF(brw_inst_urb_swizzle_control(devinfo, inst) != 0,
+                     "FF_SYNC swizzle control must be zero.");
+            ERROR_IF(brw_inst_urb_used(devinfo, inst) != 0,
+                     "FF_SYNC used must be zero.");
+            ERROR_IF(brw_inst_urb_complete(devinfo, inst) != 0,
+                     "FF_SYNC complete must be zero.");
+
+            /* Volume 4 part 2 of the Sandybridge PRM (page 28) says:
+             *
+             *    A message response (writeback) length of 1 GRF will be
+             *    indicated on the ‘send’ instruction if the thread requires
+             *    response data and/or synchronization.
+             */
+            ERROR_IF((unsigned)brw_inst_rlen(devinfo, inst) > 1,
+                     "FF_SYNC read length must be 0 or 1.");
+         } else {
+            ERROR_IF(devinfo->ver < 7,
+                     "URB OWORD write messages only valid on gfx >= 7");
+         }
+         break;
+
+      case BRW_URB_OPCODE_READ_HWORD:
+      case BRW_URB_OPCODE_READ_OWORD:
+         ERROR_IF(devinfo->ver < 7,
+                  "URB read messages only valid on gfx >= 7");
+         break;
+
+      case GFX7_URB_OPCODE_ATOMIC_MOV:
+      case GFX7_URB_OPCODE_ATOMIC_INC:
+         ERROR_IF(devinfo->ver < 7,
+                  "URB atomic move and increment messages only valid on gfx >= 7");
+         break;
+
+      case GFX8_URB_OPCODE_ATOMIC_ADD:
+         /* The Haswell PRM lists this opcode as valid on page 317. */
+         ERROR_IF(devinfo->verx10 < 75,
+                  "URB atomic add message only valid on gfx >= 7.5");
+         break;
+
+      case GFX8_URB_OPCODE_SIMD8_READ:
+         ERROR_IF(brw_inst_rlen(devinfo, inst) == 0,
+                  "URB SIMD8 read message must read some data.");
+         FALLTHROUGH;
+
+      case GFX8_URB_OPCODE_SIMD8_WRITE:
+         ERROR_IF(devinfo->ver < 8,
+                  "URB SIMD8 messages only valid on gfx >= 8");
+         break;
+
+      case GFX125_URB_OPCODE_FENCE:
+         ERROR_IF(devinfo->verx10 < 125,
+                  "URB fence message only valid on gfx >= 12.5");
+         break;
+
+      default:
+         ERROR_IF(true, "Invalid URB message");
+         break;
+      }
+   }
+
    return error_msg;
 }
 
 bool
 brw_validate_instruction(const struct brw_isa_info *isa,
                          const brw_inst *inst, int offset,
+                         unsigned inst_size,
                          struct disasm_info *disasm)
 {
    struct string error_msg = { .str = NULL, .len = 0 };
@@ -2218,7 +2317,7 @@ brw_validate_instruction(const struct brw_isa_info *isa,
    }
 
    if (error_msg.str && disasm) {
-      disasm_insert_error(disasm, offset, error_msg.str);
+      disasm_insert_error(disasm, offset, inst_size, error_msg.str);
    }
    free(error_msg.str);
 
@@ -2246,7 +2345,8 @@ brw_validate_instructions(const struct brw_isa_info *isa,
          inst = &uncompacted;
       }
 
-      bool v = brw_validate_instruction(isa, inst, src_offset, disasm);
+      bool v = brw_validate_instruction(isa, inst, src_offset,
+                                        inst_size, disasm);
       valid = valid && v;
 
       src_offset += inst_size;

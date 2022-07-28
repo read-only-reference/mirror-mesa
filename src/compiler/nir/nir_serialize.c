@@ -214,7 +214,7 @@ union packed_var {
       unsigned data_encoding:2;
       unsigned type_same_as_last:1;
       unsigned interface_type_same_as_last:1;
-      unsigned _pad:1;
+      unsigned ray_query:1;
       unsigned num_members:16;
    } u;
 };
@@ -284,6 +284,8 @@ write_variable(write_ctx *ctx, const nir_variable *var)
       else
          flags.u.data_encoding = var_encode_full;
    }
+
+   flags.u.ray_query = var->data.ray_query;
 
    blob_write_uint32(ctx->blob, flags.u32);
 
@@ -385,6 +387,8 @@ read_variable(read_ctx *ctx)
 
       ctx->last_var_data = var->data;
    }
+
+   var->data.ray_query = flags.u.ray_query;
 
    var->num_state_slots = flags.u.num_state_slots;
    if (var->num_state_slots != 0) {
@@ -1319,7 +1323,7 @@ write_load_const(write_ctx *ctx, const nir_load_const_instr *lc)
             /* packed_value contains high 19 bits, low bits are 0 */
             header.load_const.packing = load_const_scalar_hi_19bits;
             header.load_const.packed_value = lc->value[0].u64 >> 45;
-         } else if (util_sign_extend(lc->value[0].i64 & BITFIELD64_MASK(19), 19) == lc->value[0].i64) {
+         } else if (util_mask_sign_extend(lc->value[0].i64, 19) == lc->value[0].i64) {
             /* packed_value contains low 19 bits, high bits are sign-extended */
             header.load_const.packing = load_const_scalar_lo_19bits_sext;
             header.load_const.packed_value = lc->value[0].u64;
@@ -1330,7 +1334,7 @@ write_load_const(write_ctx *ctx, const nir_load_const_instr *lc)
          if ((lc->value[0].u32 & 0x1fff) == 0) {
             header.load_const.packing = load_const_scalar_hi_19bits;
             header.load_const.packed_value = lc->value[0].u32 >> 13;
-         } else if (util_sign_extend(lc->value[0].i32 & BITFIELD_MASK(19), 19) == lc->value[0].i32) {
+         } else if (util_mask_sign_extend(lc->value[0].i32, 19) == lc->value[0].i32) {
             header.load_const.packing = load_const_scalar_lo_19bits_sext;
             header.load_const.packed_value = lc->value[0].u32;
          }
@@ -1389,6 +1393,7 @@ read_load_const(read_ctx *ctx, union packed_instr header)
    nir_load_const_instr *lc =
       nir_load_const_instr_create(ctx->nir, header.load_const.last_component + 1,
                                   decode_bit_size_3bits(header.load_const.bit_size));
+   lc->def.divergent = false;
 
    switch (header.load_const.packing) {
    case load_const_scalar_hi_19bits:
@@ -1477,6 +1482,8 @@ read_ssa_undef(read_ctx *ctx, union packed_instr header)
    nir_ssa_undef_instr *undef =
       nir_ssa_undef_instr_create(ctx->nir, header.undef.last_component + 1,
                                  decode_bit_size_3bits(header.undef.bit_size));
+
+   undef->def.divergent = false;
 
    read_add_object(ctx, &undef->def);
    return undef;

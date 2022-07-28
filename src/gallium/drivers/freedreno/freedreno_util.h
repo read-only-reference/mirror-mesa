@@ -96,6 +96,7 @@ enum fd_debug_flag {
    FD_DBG_LAYOUT       = BITFIELD_BIT(26),
    FD_DBG_NOFP16       = BITFIELD_BIT(27),
    FD_DBG_NOHW         = BITFIELD_BIT(28),
+   FD_DBG_NOSBIN       = BITFIELD_BIT(29),
 };
 /* clang-format on */
 
@@ -441,10 +442,7 @@ fd_msaa_samples(unsigned samples)
 {
    switch (samples) {
    default:
-      debug_assert(0);
-#if defined(NDEBUG) || defined(DEBUG)
-      FALLTHROUGH;
-#endif
+      assert(0);
    case 0:
    case 1:
       return MSAA_ONE;

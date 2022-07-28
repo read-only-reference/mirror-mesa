@@ -169,6 +169,9 @@ dzn_image_create(struct dzn_device *device,
       image->desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
    }
 
+   if (image->vk.create_flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT)
+      image->desc.Format = dzn_get_typeless_dxgi_format(image->desc.Format);
+
    if (image->desc.SampleDesc.Count > 1)
       image->desc.Alignment = D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT;
    else
@@ -587,6 +590,53 @@ dzn_image_layout_to_state(const struct dzn_image *image,
    }
 }
 
+bool
+dzn_image_formats_are_compatible(const struct dzn_device *device,
+                                 VkFormat orig_fmt, VkFormat new_fmt,
+                                 VkImageUsageFlags usage,
+                                 VkImageAspectFlagBits aspect)
+{
+   const struct dzn_physical_device *pdev =
+      container_of(device->vk.physical, struct dzn_physical_device, vk);
+   DXGI_FORMAT orig_dxgi = dzn_image_get_dxgi_format(orig_fmt, usage, aspect);
+   DXGI_FORMAT new_dxgi = dzn_image_get_dxgi_format(new_fmt, usage, aspect);
+
+   if (orig_dxgi == new_dxgi)
+      return true;
+
+   DXGI_FORMAT typeless_orig = dzn_get_typeless_dxgi_format(orig_dxgi);
+   DXGI_FORMAT typeless_new = dzn_get_typeless_dxgi_format(new_dxgi);
+
+   if (!(usage & VK_IMAGE_USAGE_SAMPLED_BIT))
+      return typeless_orig == typeless_new;
+
+   if (pdev->options3.CastingFullyTypedFormatSupported) {
+      enum pipe_format orig_pfmt = vk_format_to_pipe_format(orig_fmt);
+      enum pipe_format new_pfmt = vk_format_to_pipe_format(new_fmt);
+
+      /* Types don't belong to the same group, they're incompatible. */
+      if (typeless_orig != typeless_new)
+         return false;
+
+      /* FLOAT <-> non-FLOAT casting is disallowed. */
+      if (util_format_is_float(orig_pfmt) != util_format_is_float(new_pfmt))
+         return false;
+
+      /* UNORM <-> SNORM casting is disallowed. */
+      bool orig_is_norm =
+         util_format_is_unorm(orig_pfmt) || util_format_is_snorm(orig_pfmt);
+      bool new_is_norm =
+         util_format_is_unorm(new_pfmt) || util_format_is_snorm(new_pfmt);
+      if (orig_is_norm && new_is_norm &&
+          util_format_is_unorm(orig_pfmt) != util_format_is_unorm(new_pfmt))
+         return false;
+
+      return true;
+   }
+
+   return false;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 dzn_CreateImage(VkDevice device,
                 const VkImageCreateInfo *pCreateInfo,
@@ -640,7 +690,7 @@ dzn_BindImageMemory2(VkDevice dev,
          case VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR: {
             const VkBindImageMemorySwapchainInfoKHR *swapchain_info =
                (const VkBindImageMemorySwapchainInfoKHR *) s;
-            struct dzn_image *swapchain_image =
+            ASSERTED struct dzn_image *swapchain_image =
                dzn_swapchain_get_image(device,
                                        swapchain_info->swapchain,
                                        swapchain_info->imageIndex);
@@ -709,8 +759,7 @@ dzn_GetImageMemoryRequirements2(VkDevice _device,
       }
    }
 
-   D3D12_RESOURCE_ALLOCATION_INFO info;
-   ID3D12Device1_GetResourceAllocationInfo(device->dev, &info, 0, 1, &image->desc);
+   D3D12_RESOURCE_ALLOCATION_INFO info = dzn_ID3D12Device2_GetResourceAllocationInfo(device->dev, 0, 1, &image->desc);
 
    pMemoryRequirements->memoryRequirements = (VkMemoryRequirements) {
       .size = info.SizeInBytes,
@@ -1094,7 +1143,7 @@ dzn_image_view_init(struct dzn_device *device,
    VK_FROM_HANDLE(dzn_image, image, pCreateInfo->image);
 
    const VkImageSubresourceRange *range = &pCreateInfo->subresourceRange;
-   uint32_t layer_count = dzn_get_layer_count(image, range);
+   ASSERTED uint32_t layer_count = dzn_get_layer_count(image, range);
 
    vk_image_view_init(&device->vk, &iview->vk, false, pCreateInfo);
 

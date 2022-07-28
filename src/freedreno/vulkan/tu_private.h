@@ -95,6 +95,7 @@ typedef uint32_t xcb_window_t;
 #include <vulkan/vulkan.h>
 
 #include "tu_entrypoints.h"
+#include "vulkan/runtime/vk_common_entrypoints.h"
 
 #include "vk_format.h"
 #include "vk_image.h"
@@ -114,7 +115,7 @@ typedef uint32_t xcb_window_t;
 #define MAX_VIEWPORT_SIZE (1 << 14)
 #define MAX_SCISSORS 16
 #define MAX_DISCARD_RECTANGLES 4
-#define MAX_PUSH_CONSTANTS_SIZE 128
+#define MAX_PUSH_CONSTANTS_SIZE 256
 #define MAX_PUSH_DESCRIPTORS 32
 #define MAX_DYNAMIC_UNIFORM_BUFFERS 16
 #define MAX_DYNAMIC_STORAGE_BUFFERS 8
@@ -146,6 +147,7 @@ typedef uint32_t xcb_window_t;
  */
 
 struct tu_instance;
+struct breadcrumbs_context;
 
 VkResult
 __vk_startup_errorf(struct tu_instance *instance,
@@ -266,6 +268,7 @@ enum tu_debug_flags
    TU_DEBUG_LOG_SKIP_GMEM_OPS = 1 << 17,
    TU_DEBUG_PERF = 1 << 18,
    TU_DEBUG_NOLRZFC = 1 << 19,
+   TU_DEBUG_DYNAMIC = 1 << 20,
 };
 
 struct tu_instance
@@ -484,14 +487,26 @@ struct tu6_global
 
    ALIGN16 uint32_t cs_indirect_xyz[3];
 
+   volatile uint32_t vtx_stats_query_not_running;
+
    /* To know when renderpass stats for autotune are valid */
    volatile uint32_t autotune_fence;
+
+   /* For recycling command buffers for dynamic suspend/resume comamnds */
+   volatile uint32_t dynamic_rendering_fence;
 
    volatile uint32_t dbg_one;
    volatile uint32_t dbg_gmem_total_loads;
    volatile uint32_t dbg_gmem_taken_loads;
    volatile uint32_t dbg_gmem_total_stores;
    volatile uint32_t dbg_gmem_taken_stores;
+
+   /* Written from GPU */
+   volatile uint32_t breadcrumb_gpu_sync_seqno;
+   uint32_t _pad3;
+   /* Written from CPU, acknowledges value written from GPU */
+   volatile uint32_t breadcrumb_cpu_sync_seqno;
+   uint32_t _pad4;
 
    /* note: larger global bo will be used for customBorderColors */
    struct bcolor_entry bcolor_builtin[TU_BORDER_COLOR_BUILTIN], bcolor[];
@@ -591,12 +606,18 @@ struct tu_device
    struct tu_cs *perfcntrs_pass_cs;
    struct tu_cs_entry *perfcntrs_pass_cs_entries;
 
+   struct util_dynarray dynamic_rendering_pending;
+   VkCommandPool dynamic_rendering_pool;
+   uint32_t dynamic_rendering_fence;
+
    /* Condition variable for timeline semaphore to notify waiters when a
     * new submit is executed. */
    pthread_cond_t timeline_cond;
    pthread_mutex_t submit_mutex;
 
    struct tu_autotune autotune;
+
+   struct breadcrumbs_context *breadcrumbs_ctx;
 
 #ifdef ANDROID
    const void *gralloc;
@@ -621,6 +642,14 @@ struct tu_device
 void tu_init_clear_blit_shaders(struct tu_device *dev);
 
 void tu_destroy_clear_blit_shaders(struct tu_device *dev);
+
+VkResult tu_init_dynamic_rendering(struct tu_device *dev);
+
+void tu_destroy_dynamic_rendering(struct tu_device *dev);
+
+VkResult tu_insert_dynamic_cmdbufs(struct tu_device *dev,
+                                   struct tu_cmd_buffer ***cmds_ptr,
+                                   uint32_t *size);
 
 VkResult
 tu_device_submit_deferred_locked(struct tu_device *dev);
@@ -718,8 +747,7 @@ enum tu_draw_state_group_id
    TU_DRAW_STATE_VI,
    TU_DRAW_STATE_VI_BINNING,
    TU_DRAW_STATE_RAST,
-   TU_DRAW_STATE_SHADER_GEOM_CONST,
-   TU_DRAW_STATE_FS_CONST,
+   TU_DRAW_STATE_CONST,
    TU_DRAW_STATE_DESC_SETS,
    TU_DRAW_STATE_DESC_SETS_LOAD,
    TU_DRAW_STATE_VS_PARAMS,
@@ -795,6 +823,8 @@ struct tu_cs
    uint32_t cond_stack_depth;
    uint32_t cond_flags[TU_COND_EXEC_STACK_SIZE];
    uint32_t *cond_dwords[TU_COND_EXEC_STACK_SIZE];
+
+   uint32_t breadcrumb_emit_after;
 };
 
 struct tu_device_memory
@@ -908,6 +938,136 @@ tu_get_debug_option_name(int id);
 
 const char *
 tu_get_perftest_option_name(int id);
+
+struct tu_attachment_info
+{
+   struct tu_image_view *attachment;
+};
+
+struct tu_framebuffer
+{
+   struct vk_object_base base;
+
+   uint32_t width;
+   uint32_t height;
+   uint32_t layers;
+
+   /* size of the first tile */
+   VkExtent2D tile0;
+   /* number of tiles */
+   VkExtent2D tile_count;
+
+   /* size of the first VSC pipe */
+   VkExtent2D pipe0;
+   /* number of VSC pipes */
+   VkExtent2D pipe_count;
+
+   /* Whether binning should be used for gmem rendering using this framebuffer. */
+   bool binning;
+
+   /* Whether binning could be used for gmem rendering using this framebuffer. */
+   bool binning_possible;
+
+   /* pipe register values */
+   uint32_t pipe_config[MAX_VSC_PIPES];
+   uint32_t pipe_sizes[MAX_VSC_PIPES];
+
+   uint32_t attachment_count;
+   struct tu_attachment_info attachments[0];
+};
+
+struct tu_subpass_barrier {
+   VkPipelineStageFlags2 src_stage_mask;
+   VkPipelineStageFlags2 dst_stage_mask;
+   VkAccessFlags2 src_access_mask;
+   VkAccessFlags2 dst_access_mask;
+   bool incoherent_ccu_color, incoherent_ccu_depth;
+};
+
+struct tu_subpass_attachment
+{
+   uint32_t attachment;
+
+   /* For input attachments, true if it needs to be patched to refer to GMEM
+    * in GMEM mode. This is false if it hasn't already been written as an
+    * attachment.
+    */
+   bool patch_input_gmem;
+};
+
+struct tu_subpass
+{
+   uint32_t input_count;
+   uint32_t color_count;
+   uint32_t resolve_count;
+   bool resolve_depth_stencil;
+
+   bool feedback_loop_color;
+   bool feedback_loop_ds;
+
+   /* True if we must invalidate UCHE thanks to a feedback loop. */
+   bool feedback_invalidate;
+
+   /* In other words - framebuffer fetch support */
+   bool raster_order_attachment_access;
+
+   struct tu_subpass_attachment *input_attachments;
+   struct tu_subpass_attachment *color_attachments;
+   struct tu_subpass_attachment *resolve_attachments;
+   struct tu_subpass_attachment depth_stencil_attachment;
+
+   VkSampleCountFlagBits samples;
+
+   uint32_t srgb_cntl;
+   uint32_t multiview_mask;
+
+   struct tu_subpass_barrier start_barrier;
+};
+
+struct tu_render_pass_attachment
+{
+   VkFormat format;
+   uint32_t samples;
+   uint32_t cpp;
+   VkImageAspectFlags clear_mask;
+   uint32_t clear_views;
+   bool load;
+   bool store;
+   int32_t gmem_offset;
+   bool will_be_resolved;
+   /* for D32S8 separate stencil: */
+   bool load_stencil;
+   bool store_stencil;
+
+   bool cond_load_allowed;
+   bool cond_store_allowed;
+
+   int32_t gmem_offset_stencil;
+};
+
+struct tu_render_pass
+{
+   struct vk_object_base base;
+
+   uint32_t attachment_count;
+   uint32_t subpass_count;
+   uint32_t gmem_pixels;
+   uint32_t tile_align_w;
+
+   /* memory bandwidth costs (in bytes) for gmem / sysmem rendering */
+   uint32_t gmem_bandwidth_per_pixel;
+   uint32_t sysmem_bandwidth_per_pixel;
+
+   struct tu_subpass_attachment *subpass_attachments;
+   struct tu_render_pass_attachment *attachments;
+   struct tu_subpass_barrier end_barrier;
+   struct tu_subpass subpasses[0];
+};
+
+void
+tu_framebuffer_tiling_config(struct tu_framebuffer *fb,
+                             const struct tu_device *device,
+                             const struct tu_render_pass *pass);
 
 struct tu_descriptor_state
 {
@@ -1081,7 +1241,14 @@ enum tu_cmd_flush_bits {
    TU_CMD_FLAG_ALL_INVALIDATE =
       TU_CMD_FLAG_CCU_INVALIDATE_DEPTH |
       TU_CMD_FLAG_CCU_INVALIDATE_COLOR |
-      TU_CMD_FLAG_CACHE_INVALIDATE,
+      TU_CMD_FLAG_CACHE_INVALIDATE |
+      /* Treat CP_WAIT_FOR_ME as a "cache" that needs to be invalidated when a
+       * a command that needs CP_WAIT_FOR_ME is executed. This means we may
+       * insert an extra WAIT_FOR_ME before an indirect command requiring it
+       * in case there was another command before the current command buffer
+       * that it needs to wait for.
+       */
+      TU_CMD_FLAG_WAIT_FOR_ME,
 };
 
 /* Changing the CCU from sysmem mode to gmem mode or vice-versa is pretty
@@ -1147,12 +1314,58 @@ struct tu_vs_params {
    uint32_t first_instance;
 };
 
+/* This should be for state that is set inside a renderpass and used at
+ * renderpass end time, e.g. to decide whether to use sysmem. This needs
+ * special handling for secondary cmdbufs and suspending/resuming render
+ * passes where the state may need to be combined afterwards.
+ */
+struct tu_render_pass_state
+{
+   bool xfb_used;
+   bool has_tess;
+   bool has_prim_generated_query_in_rp;
+   bool disable_gmem;
+
+   /* Track whether conditional predicate for COND_REG_EXEC is changed in draw_cs */
+   bool draw_cs_writes_to_cond_pred;
+
+   uint32_t drawcall_count;
+
+   /* A calculated "draw cost" value for renderpass, which tries to
+    * estimate the bandwidth-per-sample of all the draws according
+    * to:
+    *
+    *    foreach_draw (...) {
+    *      sum += pipeline->color_bandwidth_per_sample;
+    *      if (depth_test_enabled)
+    *        sum += pipeline->depth_cpp_per_sample;
+    *      if (depth_write_enabled)
+    *        sum += pipeline->depth_cpp_per_sample;
+    *      if (stencil_write_enabled)
+    *        sum += pipeline->stencil_cpp_per_sample * 2;
+    *    }
+    *    drawcall_bandwidth_per_sample = sum / drawcall_count;
+    *
+    * It allows us to estimate the total bandwidth of drawcalls later, by
+    * calculating (drawcall_bandwidth_per_sample * zpass_sample_count).
+    *
+    * This does ignore depth buffer traffic for samples which do not
+    * pass due to depth-test fail, and some other details.  But it is
+    * just intended to be a rough estimate that is easy to calculate.
+    */
+   uint32_t drawcall_bandwidth_per_sample_sum;
+};
+
+void tu_render_pass_state_merge(struct tu_render_pass_state *dst,
+                                const struct tu_render_pass_state *src);
 struct tu_cmd_state
 {
    uint32_t dirty;
 
    struct tu_pipeline *pipeline;
    struct tu_pipeline *compute_pipeline;
+
+   struct tu_render_pass_state rp;
 
    /* Vertex buffers, viewports, and scissors
     * the states for these can be updated partially, so we need to save these
@@ -1187,7 +1400,7 @@ struct tu_cmd_state
    /* saved states to re-emit in TU_CMD_DIRTY_DRAW_STATE case */
    struct tu_draw_state dynamic_state[TU_DYNAMIC_STATE_COUNT];
    struct tu_draw_state vertex_buffers;
-   struct tu_draw_state shader_const[2];
+   struct tu_draw_state shader_const;
    struct tu_draw_state desc_sets;
 
    struct tu_draw_state vs_params;
@@ -1220,46 +1433,126 @@ struct tu_cmd_state
    VkRect2D render_area;
 
    const struct tu_image_view **attachments;
-   /* Track whether conditional predicate for COND_REG_EXEC is changed in draw_cs */
-   bool draw_cs_writes_to_cond_pred;
 
-   bool xfb_used;
-   bool has_tess;
+   /* State that in the dynamic case comes from VkRenderingInfo and needs to
+    * be saved/restored when suspending. This holds the state for the last
+    * suspended renderpass, which may point to this command buffer's dynamic_*
+    * or another command buffer if executed on a secondary.
+    */
+   struct {
+      const struct tu_render_pass *pass;
+      const struct tu_subpass *subpass;
+      const struct tu_framebuffer *framebuffer;
+      VkRect2D render_area;
+
+      const struct tu_image_view **attachments;
+
+      struct tu_lrz_state lrz;
+   } suspended_pass;
+
    bool tessfactor_addr_set;
-   bool has_subpass_predication;
    bool predication_active;
-   bool disable_gmem;
    enum a5xx_line_mode line_mode;
    bool z_negative_one_to_one;
 
-   uint32_t drawcall_count;
-
-   /* A calculated "draw cost" value for renderpass, which tries to
-    * estimate the bandwidth-per-sample of all the draws according
-    * to:
-    *
-    *    foreach_draw (...) {
-    *      sum += pipeline->color_bandwidth_per_sample;
-    *      if (depth_test_enabled)
-    *        sum += pipeline->depth_cpp_per_sample;
-    *      if (depth_write_enabled)
-    *        sum += pipeline->depth_cpp_per_sample;
-    *      if (stencil_write_enabled)
-    *        sum += pipeline->stencil_cpp_per_sample * 2;
-    *    }
-    *    drawcall_bandwidth_per_sample = sum / drawcall_count;
-    *
-    * It allows us to estimate the total bandwidth of drawcalls later, by
-    * calculating (drawcall_bandwidth_per_sample * zpass_sample_count).
-    *
-    * This does ignore depth buffer traffic for samples which do not
-    * pass due to depth-test fail, and some other details.  But it is
-    * just intended to be a rough estimate that is easy to calculate.
+   /* VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT and
+    * VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT are allowed to run simultaniously,
+    * but they use the same {START,STOP}_PRIMITIVE_CTRS control.
     */
-   uint32_t drawcall_bandwidth_per_sample_sum;
+   uint32_t prim_counters_running;
 
    bool prim_generated_query_running_before_rp;
-   bool has_prim_generated_query_in_rp;
+
+   /* These are the states of the suspend/resume state machine. In addition to
+    * tracking whether we're in the middle of a chain of suspending and
+    * resuming passes that will be merged, we need to track whether the
+    * command buffer begins in the middle of such a chain, for when it gets
+    * merged with other command buffers. We call such a chain that begins
+    * before the command buffer starts a "pre-chain".
+    *
+    * Note that when this command buffer is finished, this state is untouched
+    * but it gains a different meaning. For example, if we finish in state
+    * SR_IN_CHAIN, we finished in the middle of a suspend/resume chain, so
+    * there's a suspend/resume chain that extends past the end of the command
+    * buffer. In this sense it's the "opposite" of SR_AFTER_PRE_CHAIN, which
+    * means that there's a suspend/resume chain that extends before the
+    * beginning.
+    */
+   enum {
+      /* Either there are no suspend/resume chains, or they are entirely
+       * contained in the current command buffer.
+       *
+       *   BeginCommandBuffer() <- start of current command buffer
+       *       ...
+       *       // we are here
+       */
+      SR_NONE = 0,
+
+      /* We are in the middle of a suspend/resume chain that starts before the
+       * current command buffer. This happens when the command buffer begins
+       * with a resuming render pass and all of the passes up to the current
+       * one are suspending. In this state, our part of the chain is not saved
+       * and is in the current draw_cs/state.
+       *
+       *   BeginRendering() ... EndRendering(suspending)
+       *   BeginCommandBuffer() <- start of current command buffer
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       ...
+       *       // we are here
+       */
+      SR_IN_PRE_CHAIN,
+
+      /* We are currently outside of any suspend/resume chains, but there is a
+       * chain starting before the current command buffer. It is saved in
+       * pre_chain.
+       *
+       *   BeginRendering() ... EndRendering(suspending)
+       *   BeginCommandBuffer() <- start of current command buffer
+       *       // This part is stashed in pre_chain
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       ...
+       *       BeginRendering(resuming) ... EndRendering() // end of chain
+       *       ...
+       *       // we are here
+       */
+      SR_AFTER_PRE_CHAIN,
+
+      /* We are in the middle of a suspend/resume chain and there is no chain
+       * starting before the current command buffer.
+       *
+       *   BeginCommandBuffer() <- start of current command buffer
+       *       ...
+       *       BeginRendering() ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       ...
+       *       // we are here
+       */
+      SR_IN_CHAIN,
+
+      /* We are in the middle of a suspend/resume chain and there is another,
+       * separate, chain starting before the current command buffer.
+       *
+       *   BeginRendering() ... EndRendering(suspending)
+       *   CommandBufferBegin() <- start of current command buffer
+       *       // This part is stashed in pre_chain
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       ...
+       *       BeginRendering(resuming) ... EndRendering() // end of chain
+       *       ...
+       *       BeginRendering() ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       BeginRendering(resuming) ... EndRendering(suspending)
+       *       ...
+       *       // we are here
+       */
+      SR_IN_CHAIN_AFTER_PRE_CHAIN,
+   } suspend_resume;
+
+   bool suspending, resuming;
 
    struct tu_lrz_state lrz;
 
@@ -1304,6 +1597,8 @@ struct tu_cmd_buffer
    VkCommandBufferUsageFlags usage_flags;
    enum tu_cmd_buffer_status status;
 
+   VkQueryPipelineStatisticFlags inherited_pipeline_statistics;
+
    struct tu_cmd_state state;
    uint32_t queue_family_index;
 
@@ -1313,6 +1608,15 @@ struct tu_cmd_buffer
 
    struct tu_descriptor_state descriptors[MAX_BIND_POINTS];
 
+   struct tu_render_pass_attachment dynamic_rp_attachments[2 * (MAX_RTS + 1)];
+   struct tu_subpass_attachment dynamic_color_attachments[MAX_RTS];
+   struct tu_subpass_attachment dynamic_resolve_attachments[MAX_RTS + 1];
+   const struct tu_image_view *dynamic_attachments[2 * (MAX_RTS + 1)];
+
+   struct tu_render_pass dynamic_pass;
+   struct tu_subpass dynamic_subpass;
+   struct tu_framebuffer dynamic_framebuffer;
+
    VkResult record_result;
 
    struct tu_cs cs;
@@ -1320,6 +1624,24 @@ struct tu_cmd_buffer
    struct tu_cs tile_store_cs;
    struct tu_cs draw_epilogue_cs;
    struct tu_cs sub_cs;
+
+   /* If the first render pass in the command buffer is resuming, then it is
+    * part of a suspend/resume chain that starts before the current command
+    * buffer and needs to be merged later. In this case, its incomplete state
+    * is stored in pre_chain. In the symmetric case where the last render pass
+    * is suspending, we just skip ending the render pass and its state is
+    * stored in draw_cs/the current state. The first and last render pass
+    * might be part of different chains, which is why all the state may need
+    * to be saved separately here.
+    */
+   struct {
+      struct tu_cs draw_cs;
+      struct tu_cs draw_epilogue_cs;
+
+      struct u_trace_iterator trace_renderpass_start, trace_renderpass_end;
+
+      struct tu_render_pass_state state;
+   } pre_chain;
 
    uint32_t vsc_draw_strm_pitch;
    uint32_t vsc_prim_strm_pitch;
@@ -1338,6 +1660,8 @@ struct tu_reg_value {
    uint32_t bo_shift;
 };
 
+VkResult tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd_buffer,
+                             VkCommandBufferUsageFlags usage_flags);
 
 void tu_emit_cache_flush_renderpass(struct tu_cmd_buffer *cmd_buffer,
                                     struct tu_cs *cs);
@@ -1345,6 +1669,33 @@ void tu_emit_cache_flush_renderpass(struct tu_cmd_buffer *cmd_buffer,
 void tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
                              struct tu_cs *cs,
                              enum tu_cmd_ccu_state ccu_state);
+
+void tu_setup_dynamic_render_pass(struct tu_cmd_buffer *cmd_buffer,
+                                  const VkRenderingInfo *pRenderingInfo);
+
+void tu_setup_dynamic_inheritance(struct tu_cmd_buffer *cmd_buffer,
+                                  const VkCommandBufferInheritanceRenderingInfo *info);
+
+void tu_setup_dynamic_framebuffer(struct tu_cmd_buffer *cmd_buffer,
+                                  const VkRenderingInfo *pRenderingInfo);
+
+void
+tu_append_pre_chain(struct tu_cmd_buffer *cmd,
+                    struct tu_cmd_buffer *secondary);
+
+void
+tu_append_pre_post_chain(struct tu_cmd_buffer *cmd,
+                         struct tu_cmd_buffer *secondary);
+
+void
+tu_append_post_chain(struct tu_cmd_buffer *cmd,
+                     struct tu_cmd_buffer *secondary);
+
+void
+tu_restore_suspended_pass(struct tu_cmd_buffer *cmd,
+                          struct tu_cmd_buffer *suspended);
+
+void tu_cmd_render(struct tu_cmd_buffer *cmd);
 
 void
 tu6_emit_event_write(struct tu_cmd_buffer *cmd,
@@ -1367,7 +1718,7 @@ struct tu_event
 struct tu_push_constant_range
 {
    uint32_t lo;
-   uint32_t count;
+   uint32_t dwords;
 };
 
 struct tu_shader
@@ -1419,6 +1770,15 @@ void
 tu_shader_destroy(struct tu_device *dev,
                   struct tu_shader *shader,
                   const VkAllocationCallbacks *alloc);
+
+static bool inline
+tu6_shared_constants_enable(const struct tu_pipeline_layout *layout,
+                            const struct ir3_compiler *compiler)
+{
+   return layout->push_constant_size > 0 &&
+          layout->push_constant_size <= (compiler->shared_consts_size * 16);
+}
+
 
 struct tu_program_descriptor_linkage
 {
@@ -1487,6 +1847,8 @@ struct tu_pipeline
 
    /* for vertex buffers state */
    uint32_t num_vbs;
+
+   struct tu_push_constant_range shared_consts;
 
    struct
    {
@@ -1567,11 +1929,14 @@ tu_lrz_clear_depth_image(struct tu_cmd_buffer *cmd,
 
 void
 tu_lrz_begin_renderpass(struct tu_cmd_buffer *cmd,
-                        const VkRenderPassBeginInfo *pRenderPassBegin);
+                        const VkClearValue *clear_values);
 
 void
-tu_lrz_begin_secondary_cmdbuf(struct tu_cmd_buffer *cmd,
-                              struct tu_framebuffer *fb);
+tu_lrz_begin_resumed_renderpass(struct tu_cmd_buffer *cmd,
+                                const VkClearValue *clear_values);
+
+void
+tu_lrz_begin_secondary_cmdbuf(struct tu_cmd_buffer *cmd);
 
 void
 tu_lrz_tiling_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
@@ -1664,13 +2029,13 @@ void
 tu_clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
                            struct tu_cs *cs,
                            uint32_t a,
-                           const VkRenderPassBeginInfo *info);
+                           const VkClearValue *value);
 
 void
 tu_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
                          struct tu_cs *cs,
                          uint32_t a,
-                         const VkRenderPassBeginInfo *info);
+                         const VkClearValue *value);
 
 void
 tu_load_gmem_attachment(struct tu_cmd_buffer *cmd,
@@ -1717,14 +2082,7 @@ tu6_base_format(enum pipe_format format)
 
 struct tu_image
 {
-   struct vk_object_base base;
-
-   /* The original VkFormat provided by the client.  This may not match any
-    * of the actual surface formats.
-    */
-   VkFormat vk_format;
-   uint32_t level_count;
-   uint32_t layer_count;
+   struct vk_image vk;
 
    struct fdl_layout layout[3];
    uint32_t total_size;
@@ -1743,27 +2101,7 @@ struct tu_image
    uint32_t lrz_offset;
    uint32_t lrz_fc_offset;
    uint32_t lrz_fc_size;
-
-   bool shareable;
 };
-
-static inline uint32_t
-tu_get_layerCount(const struct tu_image *image,
-                  const VkImageSubresourceRange *range)
-{
-   return range->layerCount == VK_REMAINING_ARRAY_LAYERS
-             ? image->layer_count - range->baseArrayLayer
-             : range->layerCount;
-}
-
-static inline uint32_t
-tu_get_levelCount(const struct tu_image *image,
-                  const VkImageSubresourceRange *range)
-{
-   return range->levelCount == VK_REMAINING_MIP_LEVELS
-             ? image->level_count - range->baseMipLevel
-             : range->levelCount;
-}
 
 uint32_t tu6_plane_count(VkFormat format);
 enum pipe_format tu6_plane_format(VkFormat format, uint32_t plane);
@@ -1775,7 +2113,7 @@ enum pipe_format tu_format_for_aspect(enum pipe_format format,
 
 struct tu_image_view
 {
-   struct vk_object_base base;
+   struct vk_image_view vk;
 
    struct tu_image *image; /**< VkImageViewCreateInfo::image */
 
@@ -1843,11 +2181,6 @@ tu_import_memory_from_gralloc_handle(VkDevice device_h,
                                      const VkAllocationCallbacks *alloc,
                                      VkImage image_h);
 
-void
-tu_image_view_init(struct tu_image_view *iview,
-                   const VkImageViewCreateInfo *pCreateInfo,
-                   bool limited_z24s8);
-
 bool
 tiling_possible(VkFormat format);
 
@@ -1868,136 +2201,6 @@ void
 tu_buffer_view_init(struct tu_buffer_view *view,
                     struct tu_device *device,
                     const VkBufferViewCreateInfo *pCreateInfo);
-
-struct tu_attachment_info
-{
-   struct tu_image_view *attachment;
-};
-
-struct tu_framebuffer
-{
-   struct vk_object_base base;
-
-   uint32_t width;
-   uint32_t height;
-   uint32_t layers;
-
-   /* size of the first tile */
-   VkExtent2D tile0;
-   /* number of tiles */
-   VkExtent2D tile_count;
-
-   /* size of the first VSC pipe */
-   VkExtent2D pipe0;
-   /* number of VSC pipes */
-   VkExtent2D pipe_count;
-
-   /* Whether binning should be used for gmem rendering using this framebuffer. */
-   bool binning;
-
-   /* Whether binning could be used for gmem rendering using this framebuffer. */
-   bool binning_possible;
-
-   /* pipe register values */
-   uint32_t pipe_config[MAX_VSC_PIPES];
-   uint32_t pipe_sizes[MAX_VSC_PIPES];
-
-   uint32_t attachment_count;
-   struct tu_attachment_info attachments[0];
-};
-
-void
-tu_framebuffer_tiling_config(struct tu_framebuffer *fb,
-                             const struct tu_device *device,
-                             const struct tu_render_pass *pass);
-
-struct tu_subpass_barrier {
-   VkPipelineStageFlags2 src_stage_mask;
-   VkPipelineStageFlags2 dst_stage_mask;
-   VkAccessFlags2 src_access_mask;
-   VkAccessFlags2 dst_access_mask;
-   bool incoherent_ccu_color, incoherent_ccu_depth;
-};
-
-struct tu_subpass_attachment
-{
-   uint32_t attachment;
-
-   /* For input attachments, true if it needs to be patched to refer to GMEM
-    * in GMEM mode. This is false if it hasn't already been written as an
-    * attachment.
-    */
-   bool patch_input_gmem;
-};
-
-struct tu_subpass
-{
-   uint32_t input_count;
-   uint32_t color_count;
-   uint32_t resolve_count;
-   bool resolve_depth_stencil;
-
-   bool feedback_loop_color;
-   bool feedback_loop_ds;
-
-   /* True if we must invalidate UCHE thanks to a feedback loop. */
-   bool feedback_invalidate;
-
-   /* In other words - framebuffer fetch support */
-   bool raster_order_attachment_access;
-
-   struct tu_subpass_attachment *input_attachments;
-   struct tu_subpass_attachment *color_attachments;
-   struct tu_subpass_attachment *resolve_attachments;
-   struct tu_subpass_attachment depth_stencil_attachment;
-
-   VkSampleCountFlagBits samples;
-
-   uint32_t srgb_cntl;
-   uint32_t multiview_mask;
-
-   struct tu_subpass_barrier start_barrier;
-};
-
-struct tu_render_pass_attachment
-{
-   VkFormat format;
-   uint32_t samples;
-   uint32_t cpp;
-   VkImageAspectFlags clear_mask;
-   uint32_t clear_views;
-   bool load;
-   bool store;
-   int32_t gmem_offset;
-   bool will_be_resolved;
-   /* for D32S8 separate stencil: */
-   bool load_stencil;
-   bool store_stencil;
-
-   bool cond_load_allowed;
-   bool cond_store_allowed;
-
-   int32_t gmem_offset_stencil;
-};
-
-struct tu_render_pass
-{
-   struct vk_object_base base;
-
-   uint32_t attachment_count;
-   uint32_t subpass_count;
-   uint32_t gmem_pixels;
-   uint32_t tile_align_w;
-
-   /* memory bandwidth costs (in bytes) for gmem / sysmem rendering */
-   uint32_t gmem_bandwidth_per_pixel;
-   uint32_t sysmem_bandwidth_per_pixel;
-
-   struct tu_subpass_attachment *subpass_attachments;
-   struct tu_render_pass_attachment *attachments;
-   struct tu_subpass_barrier end_barrier;
-   struct tu_subpass subpasses[0];
-};
 
 #define PERF_CNTRS_REG 4
 
@@ -2119,6 +2322,12 @@ tu_u_trace_submission_data_finish(
    struct tu_device *device,
    struct tu_u_trace_submission_data *submission_data);
 
+void
+tu_breadcrumbs_init(struct tu_device *device);
+
+void
+tu_breadcrumbs_finish(struct tu_device *device);
+
 #define TU_FROM_HANDLE(__tu_type, __name, __handle)                          \
    VK_FROM_HANDLE(__tu_type, __name, __handle)
 
@@ -2152,8 +2361,8 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(tu_device_memory, base, VkDeviceMemory,
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_event, base, VkEvent, VK_OBJECT_TYPE_EVENT)
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_framebuffer, base, VkFramebuffer,
                                VK_OBJECT_TYPE_FRAMEBUFFER)
-VK_DEFINE_NONDISP_HANDLE_CASTS(tu_image, base, VkImage, VK_OBJECT_TYPE_IMAGE)
-VK_DEFINE_NONDISP_HANDLE_CASTS(tu_image_view, base, VkImageView,
+VK_DEFINE_NONDISP_HANDLE_CASTS(tu_image, vk.base, VkImage, VK_OBJECT_TYPE_IMAGE)
+VK_DEFINE_NONDISP_HANDLE_CASTS(tu_image_view, vk.base, VkImageView,
                                VK_OBJECT_TYPE_IMAGE_VIEW);
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_pipeline_cache, base, VkPipelineCache,
                                VK_OBJECT_TYPE_PIPELINE_CACHE)

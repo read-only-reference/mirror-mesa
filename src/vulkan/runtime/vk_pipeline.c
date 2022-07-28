@@ -32,6 +32,30 @@
 
 #include "util/mesa-sha1.h"
 
+bool
+vk_pipeline_shader_stage_is_null(const VkPipelineShaderStageCreateInfo *info)
+{
+   if (info->module != VK_NULL_HANDLE)
+      return false;
+
+   vk_foreach_struct_const(ext, info->pNext) {
+      if (ext->sType == VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO ||
+          ext->sType == VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_MODULE_IDENTIFIER_CREATE_INFO_EXT)
+         return false;
+   }
+
+   return true;
+}
+
+static uint32_t
+get_required_subgroup_size(const VkPipelineShaderStageCreateInfo *info)
+{
+   const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *rss_info =
+      vk_find_struct_const(info->pNext,
+                           PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO);
+   return rss_info != NULL ? rss_info->requiredSubgroupSize : 0;
+}
+
 VkResult
 vk_pipeline_shader_stage_to_nir(struct vk_device *device,
                                 const VkPipelineShaderStageCreateInfo *info,
@@ -80,8 +104,26 @@ vk_pipeline_shader_stage_to_nir(struct vk_device *device,
       spirv_size = minfo->codeSize;
    }
 
+   enum gl_subgroup_size subgroup_size;
+   uint32_t req_subgroup_size = get_required_subgroup_size(info);
+   if (req_subgroup_size > 0) {
+      assert(util_is_power_of_two_nonzero(req_subgroup_size));
+      assert(req_subgroup_size >= 8 && req_subgroup_size <= 128);
+      subgroup_size = req_subgroup_size;
+   } else if (info->flags & VK_PIPELINE_SHADER_STAGE_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT ||
+              vk_spirv_version(spirv_data, spirv_size) >= 0x10600) {
+      /* Starting with SPIR-V 1.6, varying subgroup size the default */
+      subgroup_size = SUBGROUP_SIZE_VARYING;
+   } else if (info->flags & VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT) {
+      assert(stage == MESA_SHADER_COMPUTE);
+      subgroup_size = SUBGROUP_SIZE_FULL_SUBGROUPS;
+   } else {
+      subgroup_size = SUBGROUP_SIZE_API_CONSTANT;
+   }
+
    nir_shader *nir = vk_spirv_to_nir(device, spirv_data, spirv_size, stage,
-                                     info->pName, info->pSpecializationInfo,
+                                     info->pName, subgroup_size,
+                                     info->pSpecializationInfo,
                                      spirv_options, nir_options, mem_ctx);
    if (nir == NULL)
       return vk_errorf(device, VK_ERROR_UNKNOWN, "spirv_to_nir failed");
@@ -117,25 +159,36 @@ vk_pipeline_hash_shader_stage(const VkPipelineShaderStageCreateInfo *info,
       return;
    }
 
+   const VkShaderModuleCreateInfo *minfo =
+      vk_find_struct_const(info->pNext, SHADER_MODULE_CREATE_INFO);
+   const VkPipelineShaderStageModuleIdentifierCreateInfoEXT *iinfo =
+      vk_find_struct_const(info->pNext, PIPELINE_SHADER_STAGE_MODULE_IDENTIFIER_CREATE_INFO_EXT);
+
    struct mesa_sha1 ctx;
 
    _mesa_sha1_init(&ctx);
-   if (module) {
-      _mesa_sha1_update(&ctx, module->sha1, sizeof(module->sha1));
-   } else {
-      const VkShaderModuleCreateInfo *minfo =
-         vk_find_struct_const(info->pNext, SHADER_MODULE_CREATE_INFO);
-      unsigned char spirv_sha1[SHA1_DIGEST_LENGTH];
 
-      assert(minfo);
-      _mesa_sha1_compute(minfo->pCode, minfo->codeSize, spirv_sha1);
-      _mesa_sha1_update(&ctx, spirv_sha1, sizeof(spirv_sha1));
-   }
-
-   _mesa_sha1_update(&ctx, info->pName, strlen(info->pName));
+   _mesa_sha1_update(&ctx, &info->flags, sizeof(info->flags));
 
    assert(util_bitcount(info->stage) == 1);
    _mesa_sha1_update(&ctx, &info->stage, sizeof(info->stage));
+
+   if (module) {
+      _mesa_sha1_update(&ctx, module->sha1, sizeof(module->sha1));
+   } else if (minfo) {
+      unsigned char spirv_sha1[SHA1_DIGEST_LENGTH];
+
+      _mesa_sha1_compute(minfo->pCode, minfo->codeSize, spirv_sha1);
+      _mesa_sha1_update(&ctx, spirv_sha1, sizeof(spirv_sha1));
+   } else {
+      /* It is legal to pass in arbitrary identifiers as long as they don't exceed
+       * the limit. Shaders with bogus identifiers are more or less guaranteed to fail. */
+      assert(iinfo);
+      assert(iinfo->identifierSize <= VK_MAX_SHADER_MODULE_IDENTIFIER_SIZE_EXT);
+      _mesa_sha1_update(&ctx, iinfo->pIdentifier, iinfo->identifierSize);
+   }
+
+   _mesa_sha1_update(&ctx, info->pName, strlen(info->pName));
 
    if (info->pSpecializationInfo) {
       _mesa_sha1_update(&ctx, info->pSpecializationInfo->pMapEntries,
@@ -144,5 +197,9 @@ vk_pipeline_hash_shader_stage(const VkPipelineShaderStageCreateInfo *info,
       _mesa_sha1_update(&ctx, info->pSpecializationInfo->pData,
                         info->pSpecializationInfo->dataSize);
    }
+
+   uint32_t req_subgroup_size = get_required_subgroup_size(info);
+   _mesa_sha1_update(&ctx, &req_subgroup_size, sizeof(req_subgroup_size));
+
    _mesa_sha1_final(&ctx, stage_sha1);
 }

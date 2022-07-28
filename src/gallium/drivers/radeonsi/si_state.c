@@ -871,7 +871,7 @@ static void si_emit_clip_regs(struct si_context *sctx)
 
    radeon_begin(&sctx->gfx_cs);
    radeon_opt_set_context_reg(sctx, R_02881C_PA_CL_VS_OUT_CNTL, SI_TRACKED_PA_CL_VS_OUT_CNTL,
-			      pa_cl_cntl | vs->pa_cl_vs_out_cntl);
+                              pa_cl_cntl | vs->pa_cl_vs_out_cntl);
    radeon_opt_set_context_reg(sctx, R_028810_PA_CL_CLIP_CNTL, SI_TRACKED_PA_CL_CLIP_CNTL,
                               rs->pa_cl_clip_cntl | ucp_mask | S_028810_CLIP_DISABLE(window_space));
    radeon_end_update_context_roll(sctx);
@@ -949,6 +949,7 @@ static void *si_create_rs_state(struct pipe_context *ctx, const struct pipe_rast
    rs->line_smooth = state->line_smooth;
    rs->line_width = state->line_width;
    rs->poly_smooth = state->poly_smooth;
+   rs->point_smooth = state->point_smooth;
    rs->uses_poly_offset = state->offset_point || state->offset_line || state->offset_tri;
    rs->clamp_fragment_color = state->clamp_fragment_color;
    rs->clamp_vertex_color = state->clamp_vertex_color;
@@ -1195,6 +1196,7 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
        old_rs->multisample_enable != rs->multisample_enable ||
        old_rs->poly_stipple_enable != rs->poly_stipple_enable ||
        old_rs->poly_smooth != rs->poly_smooth || old_rs->line_smooth != rs->line_smooth ||
+       old_rs->point_smooth != rs->point_smooth ||
        old_rs->clamp_fragment_color != rs->clamp_fragment_color ||
        old_rs->force_persample_interp != rs->force_persample_interp ||
        old_rs->polygon_mode_is_points != rs->polygon_mode_is_points) {
@@ -1207,6 +1209,7 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 
    if (old_rs->line_smooth != rs->line_smooth ||
        old_rs->poly_smooth != rs->poly_smooth ||
+       old_rs->point_smooth != rs->point_smooth ||
        old_rs->poly_stipple_enable != rs->poly_stipple_enable ||
        old_rs->flatshade != rs->flatshade)
       si_update_vrs_flat_shading(sctx);
@@ -1647,8 +1650,6 @@ uint32_t si_translate_colorformat(enum amd_gfx_level gfx_level,
                                   enum pipe_format format)
 {
    const struct util_format_description *desc = util_format_description(format);
-   if (!desc)
-      return V_028C70_COLOR_INVALID;
 
 #define HAS_SIZE(x, y, z, w)                                                                       \
    (desc->channel[0].size == (x) && desc->channel[1].size == (y) &&                                \
@@ -1867,9 +1868,6 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen, enum pipe_for
    }
 
    if (desc->layout == UTIL_FORMAT_LAYOUT_RGTC) {
-      if (!sscreen->info.has_format_bc1_through_bc7)
-         goto out_unknown;
-
       switch (format) {
       case PIPE_FORMAT_RGTC1_SNORM:
       case PIPE_FORMAT_LATC1_SNORM:
@@ -1912,9 +1910,6 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen, enum pipe_for
    }
 
    if (desc->layout == UTIL_FORMAT_LAYOUT_BPTC) {
-      if (!sscreen->info.has_format_bc1_through_bc7)
-         goto out_unknown;
-
       switch (format) {
       case PIPE_FORMAT_BPTC_RGBA_UNORM:
       case PIPE_FORMAT_BPTC_SRGBA:
@@ -1941,9 +1936,6 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen, enum pipe_for
    }
 
    if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-      if (!sscreen->info.has_format_bc1_through_bc7)
-         goto out_unknown;
-
       switch (format) {
       case PIPE_FORMAT_DXT1_RGB:
       case PIPE_FORMAT_DXT1_RGBA:
@@ -2209,9 +2201,6 @@ static bool si_is_sampler_format_supported(struct pipe_screen *screen, enum pipe
    struct si_screen *sscreen = (struct si_screen *)screen;
    const struct util_format_description *desc = util_format_description(format);
 
-   if (!desc)
-      return false;
-
    /* Samplers don't support 64 bits per channel. */
    if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN &&
        desc->channel[0].size == 64)
@@ -2351,8 +2340,6 @@ static unsigned si_is_vertex_format_supported(struct pipe_screen *screen, enum p
           0);
 
    desc = util_format_description(format);
-   if (!desc)
-      return 0;
 
    /* There are no native 8_8_8 or 16_16_16 data formats, and we currently
     * select 8_8_8_8 and 16_16_16_16 instead. This works reasonably well
@@ -4527,9 +4514,9 @@ static void si_make_texture_descriptor(struct si_screen *screen, struct si_textu
 /**
  * Create a sampler view.
  *
- * @param ctx		context
- * @param texture	texture
- * @param state		sampler view template
+ * @param ctx      context
+ * @param texture  texture
+ * @param state    sampler view template
  */
 static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx,
                                                         struct pipe_resource *texture,
