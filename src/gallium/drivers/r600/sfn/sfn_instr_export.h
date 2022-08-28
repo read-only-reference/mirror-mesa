@@ -90,23 +90,25 @@ private:
    bool m_is_last;
 };
 
-class WriteScratchInstr : public WriteOutInstr {
+class ScratchIOInstr : public WriteOutInstr {
 public:
-   WriteScratchInstr(const RegisterVec4& value, PRegister addr,
-                     int align, int align_offset, int writemask, int array_size);
-   WriteScratchInstr(const RegisterVec4& value, int addr,  int align, int align_offset,
-                     int writemask);
+   ScratchIOInstr(const RegisterVec4& value, PRegister addr,
+                  int align, int align_offset, int writemask, int array_size,
+                  bool is_read = false);
+   ScratchIOInstr(const RegisterVec4& value, int addr,  int align, int align_offset,
+                  int writemask, bool is_read = false);
 
    void accept(ConstInstrVisitor& visitor) const override;
    void accept(InstrVisitor& visitor) override;
 
-   bool is_equal_to(const WriteScratchInstr& lhs) const;
+   bool is_equal_to(const ScratchIOInstr& lhs) const;
 
    unsigned location() const { return m_loc;};
    int write_mask() const { return m_writemask;}
    auto address() const { return m_address;}
    bool indirect() const { return !!m_address;}
    int array_size() const { return m_array_size;}
+   bool is_read() const {return m_read; }
 
    static auto from_string(std::istream& is, ValueFactory &vf) -> Pointer;
 private:
@@ -120,6 +122,7 @@ private:
    unsigned m_align_offset;
    unsigned m_writemask;
    int m_array_size{0};
+   bool m_read{false};
 };
 
 class StreamOutInstr: public WriteOutInstr {
@@ -132,7 +135,7 @@ public:
    int array_base() const { return m_array_base;}
    int array_size() const { return m_array_size;}
    int comp_mask() const { return m_writemask;}
-   unsigned op() const;
+   unsigned op(amd_gfx_level gfx_level) const;
 
    bool is_equal_to(const StreamOutInstr& lhs) const;
 

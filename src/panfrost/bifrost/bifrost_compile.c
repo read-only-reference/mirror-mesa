@@ -770,6 +770,10 @@ bi_emit_blend_op(bi_builder *b, bi_index rgba, nir_alu_type T,
         uint64_t blend_desc = inputs->blend.bifrost_blend_desc;
         enum bi_register_format regfmt = bi_reg_fmt_for_nir(T);
 
+        /* Workaround for NIR-to-TGSI */
+        if (b->shader->nir->info.fs.untyped_color_outputs)
+                regfmt = BI_REGISTER_FORMAT_AUTO;
+
         if (inputs->is_blend && inputs->blend.nr_samples > 1) {
                 /* Conversion descriptor comes from the compile inputs, pixel
                  * indices derived at run time based on sample ID */
@@ -2211,7 +2215,7 @@ bi_clper_xor(bi_builder *b, bi_index s0, bi_index s1)
 
         bi_index lane_id = bi_fau(BIR_FAU_LANE_ID, false);
         bi_index lane = bi_lshift_xor_i32(b, lane_id, s1, bi_imm_u8(0));
-        return bi_clper_v6_i32(b, s0, lane);
+        return bi_clper_old_i32(b, s0, lane);
 }
 
 static enum bi_cmpf
@@ -2625,6 +2629,56 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
                 bi_mux_i32_to(b, dst, s2, s1, s0, BI_MUX_INT_ZERO);
                 break;
 
+        case nir_op_extract_u8:
+        case nir_op_extract_i8: {
+                assert(comps == 1 && "should be scalarized");
+                assert((src_sz == 16 || src_sz == 32) && "should be lowered");
+                unsigned byte = nir_src_as_uint(instr->src[1].src);
+
+                if (s0.swizzle == BI_SWIZZLE_H11) {
+                        assert(byte < 2);
+                        byte += 2;
+                } else if (s0.swizzle != BI_SWIZZLE_H01) {
+                        assert(s0.swizzle == BI_SWIZZLE_H00);
+                }
+
+                assert(byte < 4);
+
+                s0.swizzle = BI_SWIZZLE_H01;
+
+                if (instr->op == nir_op_extract_i8)
+                        bi_s8_to_s32_to(b, dst, bi_byte(s0, byte));
+                else
+                        bi_u8_to_u32_to(b, dst, bi_byte(s0, byte));
+                break;
+        }
+
+        case nir_op_extract_u16:
+        case nir_op_extract_i16: {
+                assert(comps == 1 && "should be scalarized");
+                assert(src_sz == 32 && "should be lowered");
+                unsigned half = nir_src_as_uint(instr->src[1].src);
+                assert(half == 0 || half == 1);
+
+                if (instr->op == nir_op_extract_i16)
+                        bi_s16_to_s32_to(b, dst, bi_half(s0, half));
+                else
+                        bi_u16_to_u32_to(b, dst, bi_half(s0, half));
+                break;
+        }
+
+        case nir_op_insert_u16: {
+                assert(comps == 1 && "should be scalarized");
+                unsigned half = nir_src_as_uint(instr->src[1].src);
+                assert(half == 0 || half == 1);
+
+                if (half == 0)
+                        bi_u16_to_u32_to(b, dst, bi_half(s0, 0));
+                else
+                        bi_mkvec_v2i16_to(b, dst, bi_imm_u16(0), bi_half(s0, 0));
+                break;
+        }
+
         case nir_op_ishl:
                 bi_lshift_or_to(b, sz, dst, s0, bi_zero(), bi_byte(s1, 0));
                 break;
@@ -2708,8 +2762,8 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
                 bi_index left, right;
 
                 if (b->shader->quirks & BIFROST_LIMITED_CLPER) {
-                        left = bi_clper_v6_i32(b, s0, lane1);
-                        right = bi_clper_v6_i32(b, s0, lane2);
+                        left = bi_clper_old_i32(b, s0, lane1);
+                        right = bi_clper_old_i32(b, s0, lane2);
                 } else {
                         left = bi_clper_i32(b, s0, lane1,
                                         BI_INACTIVE_RESULT_ZERO, BI_LANE_OP_NONE,
@@ -4319,6 +4373,11 @@ bi_vectorize_filter(const nir_instr *instr, const void *data)
         case nir_op_ushr:
         case nir_op_f2i16:
         case nir_op_f2u16:
+        case nir_op_extract_u8:
+        case nir_op_extract_i8:
+        case nir_op_extract_u16:
+        case nir_op_extract_i16:
+        case nir_op_insert_u16:
                 return 1;
         default:
                 break;
@@ -4446,9 +4505,9 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
         NIR_PASS(progress, nir, nir_lower_int64);
 
         nir_lower_idiv_options idiv_options = {
-                .imprecise_32bit_lowering = true,
                 .allow_fp16 = true,
         };
+        NIR_PASS(progress, nir, nir_opt_idiv_const, 8);
         NIR_PASS(progress, nir, nir_lower_idiv, &idiv_options);
 
         NIR_PASS(progress, nir, nir_lower_tex, &lower_tex_options);
@@ -4516,6 +4575,10 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
                 NIR_PASS(progress, nir, nir_opt_cse);
         }
 
+        /* This opt currently helps on Bifrost but not Valhall */
+        if (gpu_id < 0x9000)
+                NIR_PASS(progress, nir, bifrost_nir_opt_boolean_bitwise);
+
         NIR_PASS(progress, nir, nir_lower_alu_to_scalar, bi_scalarize_filter, NULL);
         NIR_PASS(progress, nir, nir_lower_phis_to_scalar, true);
         NIR_PASS(progress, nir, nir_opt_vectorize, bi_vectorize_filter, NULL);
@@ -4570,70 +4633,6 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
                 NIR_PASS_V(nir, nir_shader_instructions_pass,
                         nir_invalidate_divergence, nir_metadata_all, NULL);
         }
-}
-
-/* The cmdstream lowers 8-bit fragment output as 16-bit, so we need to do the
- * same lowering here to zero-extend correctly */
-
-static bool
-bifrost_nir_lower_i8_fragout_impl(struct nir_builder *b,
-                nir_intrinsic_instr *intr, UNUSED void *data)
-{
-        if (nir_src_bit_size(intr->src[0]) != 8)
-                return false;
-
-        nir_alu_type type =
-                nir_alu_type_get_base_type(nir_intrinsic_src_type(intr));
-
-        assert(type == nir_type_int || type == nir_type_uint);
-
-        b->cursor = nir_before_instr(&intr->instr);
-        nir_ssa_def *cast = nir_convert_to_bit_size(b, intr->src[0].ssa, type, 16);
-
-        nir_intrinsic_set_src_type(intr, type | 16);
-        nir_instr_rewrite_src_ssa(&intr->instr, &intr->src[0], cast);
-        return true;
-}
-
-static bool
-bifrost_nir_lower_i8_fragin_impl(struct nir_builder *b,
-                nir_intrinsic_instr *intr, UNUSED void *data)
-{
-        if (nir_dest_bit_size(intr->dest) != 8)
-                return false;
-
-        nir_alu_type type =
-                nir_alu_type_get_base_type(nir_intrinsic_dest_type(intr));
-
-        assert(type == nir_type_int || type == nir_type_uint);
-
-        b->cursor = nir_before_instr(&intr->instr);
-        nir_ssa_def *out =
-                nir_load_output(b, intr->num_components, 16, intr->src[0].ssa,
-                        .base = nir_intrinsic_base(intr),
-                        .component = nir_intrinsic_component(intr),
-                        .dest_type = type | 16,
-                        .io_semantics = nir_intrinsic_io_semantics(intr));
-
-        nir_ssa_def *cast = nir_convert_to_bit_size(b, out, type, 8);
-        nir_ssa_def_rewrite_uses(&intr->dest.ssa, cast);
-        return true;
-}
-
-static bool
-bifrost_nir_lower_i8_frag(struct nir_builder *b,
-                nir_instr *instr, UNUSED void *data)
-{
-        if (instr->type != nir_instr_type_intrinsic)
-                return false;
-
-        nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
-        if (intr->intrinsic == nir_intrinsic_load_output)
-                return bifrost_nir_lower_i8_fragin_impl(b, intr, data);
-        else if (intr->intrinsic == nir_intrinsic_store_output)
-                return bifrost_nir_lower_i8_fragout_impl(b, intr, data);
-        else
-                return false;
 }
 
 static void
@@ -4910,13 +4909,6 @@ bi_finalize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
         NIR_PASS_V(nir, pan_nir_lower_zs_store);
         NIR_PASS_V(nir, pan_lower_sample_pos);
         NIR_PASS_V(nir, nir_lower_bit_size, bi_lower_bit_size, NULL);
-
-        if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-                NIR_PASS_V(nir, nir_shader_instructions_pass,
-                                bifrost_nir_lower_i8_frag,
-                                nir_metadata_block_index | nir_metadata_dominance,
-                                NULL);
-        }
 
         if (nir->xfb_info != NULL && nir->info.has_transform_feedback_varyings) {
                 NIR_PASS_V(nir, nir_io_add_const_offset_to_base,

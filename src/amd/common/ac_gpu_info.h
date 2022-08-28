@@ -33,6 +33,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "util/macros.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -82,6 +84,7 @@ struct radeon_info {
    enum amd_gfx_level gfx_level;
    uint32_t family_id;
    uint32_t chip_external_rev;
+   uint32_t chip_rev; /* 0 = A0, 1 = A1, etc. */
 
    /* Flags. */
    bool is_pro_graphics;
@@ -113,6 +116,7 @@ struct radeon_info {
    bool has_sqtt_auto_flush_mode_bug;
    bool never_send_perfcounter_stop;
    bool discardable_allows_big_page;
+   bool has_export_conflict_bug;
 
    /* Display features. */
    /* There are 2 display DCC codepaths, because display expects unaligned DCC. */
@@ -307,6 +311,8 @@ struct ac_task_info {
 
 void ac_get_task_info(struct radeon_info *info,
                       struct ac_task_info *task_info);
+
+uint32_t ac_memory_ops_per_clock(uint32_t vram_type);
 
 #ifdef __cplusplus
 }

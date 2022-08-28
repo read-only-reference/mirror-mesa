@@ -319,7 +319,7 @@ intrinsic("deref_mode_is", src_comp=[-1], dest_comp=1,
 intrinsic("addr_mode_is", src_comp=[-1], dest_comp=1,
           indices=[MEMORY_MODES], flags=[CAN_ELIMINATE, CAN_REORDER])
 
-intrinsic("is_sparse_texels_resident", dest_comp=1, src_comp=[1], bit_sizes=[1],
+intrinsic("is_sparse_texels_resident", dest_comp=1, src_comp=[1], bit_sizes=[1,32],
           flags=[CAN_ELIMINATE, CAN_REORDER])
 # result code is resident only if both inputs are resident
 intrinsic("sparse_residency_code_and", dest_comp=1, src_comp=[1, 1], bit_sizes=[32],
@@ -649,6 +649,11 @@ image("size",    dest_comp=0, src_comp=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
 image("samples", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
 image("atomic_inc_wrap",  src_comp=[4, 1, 1], dest_comp=1)
 image("atomic_dec_wrap",  src_comp=[4, 1, 1], dest_comp=1)
+# This returns true if all samples within the pixel have equal color values.
+image("samples_identical", dest_comp=1, src_comp=[4], flags=[CAN_ELIMINATE])
+# Non-uniform access is not lowered for image_descriptor_amd.
+# dest_comp can be either 4 (buffer) or 8 (image).
+image("descriptor_amd", dest_comp=0, src_comp=[], flags=[CAN_ELIMINATE, CAN_REORDER])
 # CL-specific format queries
 image("format", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
 image("order", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -871,8 +876,6 @@ system_value("cull_mask", 1)
 #
 # Panfrost needs to implement all coordinate transformation in the
 # vertex shader; system values allow us to share this routine in NIR.
-#
-# RADV uses these for NGG primitive culling.
 system_value("viewport_x_scale", 1)
 system_value("viewport_y_scale", 1)
 system_value("viewport_z_scale", 1)
@@ -881,6 +884,8 @@ system_value("viewport_y_offset", 1)
 system_value("viewport_z_offset", 1)
 system_value("viewport_scale", 3)
 system_value("viewport_offset", 3)
+# Pack xy scale and offset into a vec4 load (used by AMD NGG primitive culling)
+system_value("viewport_xy_scale_and_offset", 4)
 
 # Blend constant color values.  Float values are clamped. Vectored versions are
 # provided as well for driver convenience
@@ -1410,6 +1415,9 @@ system_value("lshs_vertex_stride_amd", 1)
 
 # Per patch data offset in HS VRAM output buffer
 system_value("hs_out_patch_data_offset_amd", 1)
+
+# line_width * 0.5 / abs(viewport_scale[2])
+system_value("clip_half_line_width_amd", 2)
 
 # V3D-specific instrinc for tile buffer color reads.
 #

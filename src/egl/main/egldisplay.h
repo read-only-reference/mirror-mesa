@@ -31,7 +31,7 @@
 #ifndef EGLDISPLAY_INCLUDED
 #define EGLDISPLAY_INCLUDED
 
-#include "c11/threads.h"
+#include "util/simple_mtx.h"
 
 #include "egltypedefs.h"
 #include "egldefines.h"
@@ -100,6 +100,7 @@ struct _egl_extensions
    EGLBoolean ANDROID_native_fence_sync;
    EGLBoolean ANDROID_recordable;
 
+   EGLBoolean ANGLE_sync_control_rate;
    EGLBoolean CHROMIUM_sync_control;
 
    EGLBoolean EXT_buffer_age;
@@ -158,7 +159,7 @@ struct _egl_display
    /* used to link displays */
    _EGLDisplay *Next;
 
-   mtx_t Mutex;
+   simple_mtx_t Mutex;
 
    _EGLPlatformType Platform; /**< The type of the platform display */
    void *PlatformDisplay;     /**< A pointer to the platform display */

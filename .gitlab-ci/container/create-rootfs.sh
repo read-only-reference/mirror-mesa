@@ -1,4 +1,7 @@
 #!/bin/bash
+# shellcheck disable=SC2140  # ugly array, remove later
+# shellcheck disable=SC2288  # ugly array, remove later
+# shellcheck disable=SC2086 # we want word splitting
 
 set -ex
 
@@ -92,7 +95,8 @@ apt-get -y install --no-install-recommends \
     waffle-utils \
     wget \
     xinit \
-    xserver-xorg-core
+    xserver-xorg-core \
+    zstd
 
 # Needed for ci-fairy, this revision is able to upload files to
 # MinIO and doesn't depend on git

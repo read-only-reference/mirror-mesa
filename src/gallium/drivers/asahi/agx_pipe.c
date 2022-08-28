@@ -730,8 +730,23 @@ agx_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_FRAGMENT_SHADER_DERIVATIVES:
    case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
-   case PIPE_CAP_CLIP_HALFZ:
       return 1;
+
+   /* We could support ARB_clip_control by toggling the clip control bit for
+    * the render pass. Because this bit is for the whole render pass,
+    * switching clip modes necessarily incurs a flush. This should be ok, from
+    * the ARB_clip_control spec:
+    *
+    *         Some implementations may introduce a flush when changing the
+    *         clip control state.  Hence frequent clip control changes are
+    *         not recommended.
+    *
+    * However, this would require tuning to ensure we don't flush unnecessary
+    * when using u_blitter clears, for example. As we don't yet have a use case,
+    * don't expose the feature.
+    */
+   case PIPE_CAP_CLIP_HALFZ:
+      return 0;
 
    case PIPE_CAP_MAX_RENDER_TARGETS:
       return 1;
@@ -1202,8 +1217,10 @@ agx_screen_create(struct sw_winsys *winsys)
    screen->resource_create = u_transfer_helper_resource_create;
    screen->resource_destroy = u_transfer_helper_resource_destroy;
    screen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
-                                                      true, true, false, true,
-                                                      true);
+                                                      U_TRANSFER_HELPER_SEPARATE_Z32S8 |
+                                                      U_TRANSFER_HELPER_SEPARATE_STENCIL |
+                                                      U_TRANSFER_HELPER_MSAA_MAP |
+                                                      U_TRANSFER_HELPER_Z24_IN_Z32F);
 
    agx_internal_shaders(&agx_screen->dev);
 

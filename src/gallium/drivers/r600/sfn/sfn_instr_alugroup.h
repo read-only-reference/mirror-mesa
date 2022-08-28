@@ -86,6 +86,8 @@ public:
 
    static bool has_t() { return s_max_slots == 5;}
 
+   bool addr_for_src() const { return m_addr_for_src;}
+
 private:
    void forward_set_blockid(int id, int index) override;
    bool do_ready() const override;
@@ -99,6 +101,7 @@ private:
    AluReadportReservation m_readports_evaluator;
 
    static int s_max_slots;
+   static r600_chip_class s_chip_class;
 
    PRegister m_addr_used{nullptr};
 
@@ -107,6 +110,7 @@ private:
    int m_nesting_depth{0};
    bool m_has_lds_op{false};
    bool m_addr_is_index{false};
+   bool m_addr_for_src{false};
 };
 
 

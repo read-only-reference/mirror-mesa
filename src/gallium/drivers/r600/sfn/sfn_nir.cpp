@@ -560,7 +560,7 @@ optimize_once(nir_shader *shader)
            NIR_PASS(progress, shader, nir_opt_dce);
    }
 
-   NIR_PASS(progress, shader, nir_opt_if, false);
+   NIR_PASS(progress, shader, nir_opt_if, nir_opt_if_optimize_phi_true_false);
    NIR_PASS(progress, shader, nir_opt_dead_cf);
    NIR_PASS(progress, shader, nir_opt_cse);
    NIR_PASS(progress, shader, nir_opt_peephole_select, 200, true, true);
@@ -663,11 +663,10 @@ int r600_shader_from_nir(struct r600_context *rctx,
 
    NIR_PASS_V(sel->nir, nir_lower_regs_to_ssa);
    nir_lower_idiv_options idiv_options = {0};
-   idiv_options.imprecise_32bit_lowering = sel->nir->info.stage != MESA_SHADER_COMPUTE;
    idiv_options.allow_fp16 = true;
 
    NIR_PASS_V(sel->nir, nir_lower_idiv, &idiv_options);
-   NIR_PASS_V(sel->nir, r600_nir_lower_trigen);
+   NIR_PASS_V(sel->nir, r600_nir_lower_trigen, rctx->b.gfx_level);
    NIR_PASS_V(sel->nir, nir_lower_phis_to_scalar, false);
    NIR_PASS_V(sel->nir, nir_lower_undef_to_zero);
 
@@ -682,6 +681,7 @@ int r600_shader_from_nir(struct r600_context *rctx,
    lower_tex_options.lower_txp = ~0u;
    lower_tex_options.lower_txf_offset = true;
    lower_tex_options.lower_invalid_implicit_lod = true;
+   lower_tex_options.lower_tg4_offsets = true;
 
    NIR_PASS_V(sel->nir, nir_lower_tex, &lower_tex_options);
    NIR_PASS_V(sel->nir, r600_nir_lower_txl_txf_array_or_cube);

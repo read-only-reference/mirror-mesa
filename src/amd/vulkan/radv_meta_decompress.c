@@ -320,8 +320,8 @@ radv_device_finish_meta_depth_decomp_state(struct radv_device *device)
                         state->expand_depth_stencil_compute_pipeline, &state->alloc);
    radv_DestroyPipelineLayout(radv_device_to_handle(device),
                               state->expand_depth_stencil_compute_p_layout, &state->alloc);
-   radv_DestroyDescriptorSetLayout(radv_device_to_handle(device),
-                                   state->expand_depth_stencil_compute_ds_layout, &state->alloc);
+   device->vk.dispatch_table.DestroyDescriptorSetLayout(
+      radv_device_to_handle(device), state->expand_depth_stencil_compute_ds_layout, &state->alloc);
 }
 
 VkResult
@@ -470,7 +470,7 @@ radv_process_depth_stencil(struct radv_cmd_buffer *cmd_buffer, struct radv_image
 
    radv_meta_save(
       &saved_state, cmd_buffer,
-      RADV_META_SAVE_GRAPHICS_PIPELINE | RADV_META_SAVE_SAMPLE_LOCATIONS | RADV_META_SAVE_PASS);
+      RADV_META_SAVE_GRAPHICS_PIPELINE | RADV_META_SAVE_PASS);
 
    pipeline = radv_get_depth_pipeline(cmd_buffer, image, subresourceRange, op);
 

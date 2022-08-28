@@ -37,9 +37,6 @@
 #include <valgrind.h>
 #include <memcheck.h>
 #define VG(x) x
-#ifndef NDEBUG
-#define __gen_validate_value(x) VALGRIND_CHECK_MEM_IS_DEFINED(&(x), sizeof(x))
-#endif
 #else
 #define VG(x) ((void)0)
 #endif
@@ -1076,19 +1073,8 @@ anv_physical_device_has_vram(const struct anv_physical_device *device)
    return device->vram_mappable.size > 0;
 }
 
-struct anv_app_info {
-   const char*        app_name;
-   uint32_t           app_version;
-   const char*        engine_name;
-   uint32_t           engine_version;
-   uint32_t           api_version;
-};
-
 struct anv_instance {
     struct vk_instance                          vk;
-
-    bool                                        physical_devices_enumerated;
-    struct list_head                            physical_devices;
 
     struct driOptionCache                       dri_options;
     struct driOptionCache                       available_dri_options;
@@ -1165,7 +1151,7 @@ struct anv_device {
     struct vk_device                            vk;
 
     struct anv_physical_device *                physical;
-    struct intel_device_info                      info;
+    const struct intel_device_info *            info;
     struct isl_device                           isl_dev;
     int                                         context_id;
     int                                         fd;
@@ -1376,11 +1362,8 @@ enum anv_bo_alloc_flags {
    /** This buffer has implicit CCS data attached to it */
    ANV_BO_ALLOC_IMPLICIT_CCS = (1 << 9),
 
-   /** This buffer is allocated from local memory */
-   ANV_BO_ALLOC_LOCAL_MEM = (1 << 10),
-
    /** This buffer is allocated from local memory and should be cpu visible */
-   ANV_BO_ALLOC_LOCAL_MEM_CPU_VISIBLE = (1 << 11),
+   ANV_BO_ALLOC_LOCAL_MEM_CPU_VISIBLE = (1 << 10),
 };
 
 VkResult anv_device_alloc_bo(struct anv_device *device,
@@ -1418,6 +1401,14 @@ VkResult anv_device_set_bo_tiling(struct anv_device *device,
 void anv_device_release_bo(struct anv_device *device,
                            struct anv_bo *bo);
 
+static inline void anv_device_set_physical(struct anv_device *device,
+                                           struct anv_physical_device *physical_device)
+{
+   device->physical = physical_device;
+   device->info = &physical_device->info;
+   device->isl_dev = physical_device->isl_dev;
+}
+
 static inline struct anv_bo *
 anv_device_lookup_bo(struct anv_device *device, uint32_t gem_handle)
 {
@@ -1447,7 +1438,6 @@ uint32_t anv_gem_create_regions(struct anv_device *device, uint64_t anv_bo_size,
                                 uint32_t flags, uint32_t num_regions,
                                 struct drm_i915_gem_memory_class_instance *regions);
 uint32_t anv_gem_userptr(struct anv_device *device, void *mem, size_t size);
-int anv_gem_busy(struct anv_device *device, uint32_t gem_handle);
 int anv_gem_wait(struct anv_device *device, uint32_t gem_handle, int64_t *timeout_ns);
 int anv_gem_execbuffer(struct anv_device *device,
                        struct drm_i915_gem_execbuffer2 *execbuf);
@@ -1466,8 +1456,6 @@ int anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle);
 int anv_gem_reg_read(int fd, uint32_t offset, uint64_t *result);
 uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
-int anv_gem_set_domain(struct anv_device *device, uint32_t gem_handle,
-                       uint32_t read_domains, uint32_t write_domain);
 int anv_i915_query(int fd, uint64_t query_id, void *buffer,
                    int32_t *buffer_len);
 struct drm_i915_query_engine_info *anv_gem_get_engine_info(int fd);
@@ -1604,7 +1592,7 @@ static inline void
 write_reloc(const struct anv_device *device, void *p, uint64_t v, bool flush)
 {
    unsigned reloc_size = 0;
-   if (device->info.ver >= 8) {
+   if (device->info->ver >= 8) {
       reloc_size = sizeof(uint64_t);
       *(uint64_t *)p = intel_canonical_address(v);
    } else {
@@ -2238,6 +2226,12 @@ enum anv_pipe_bits {
     */
    ANV_PIPE_HDC_PIPELINE_FLUSH_BIT           = (1 << 14),
    ANV_PIPE_PSS_STALL_SYNC_BIT               = (1 << 15),
+
+   /*
+    * This bit flush data-port's Untyped L1 data cache (LSC L1).
+    */
+   ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT = (1 << 16),
+
    ANV_PIPE_CS_STALL_BIT                     = (1 << 20),
    ANV_PIPE_END_OF_PIPE_SYNC_BIT             = (1 << 21),
 
@@ -2273,6 +2267,7 @@ enum anv_pipe_bits {
    ANV_PIPE_DEPTH_CACHE_FLUSH_BIT | \
    ANV_PIPE_DATA_CACHE_FLUSH_BIT | \
    ANV_PIPE_HDC_PIPELINE_FLUSH_BIT | \
+   ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT | \
    ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | \
    ANV_PIPE_TILE_CACHE_FLUSH_BIT)
 
@@ -2308,6 +2303,7 @@ anv_pipe_flush_bits_for_access_flags(struct anv_device *device,
           * to future operations, flush the hdc pipeline.
           */
          pipe_bits |= ANV_PIPE_HDC_PIPELINE_FLUSH_BIT;
+         pipe_bits |= ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT;
          break;
       case VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT:
          /* We're transitioning a buffer that was previously used as render
@@ -2415,10 +2411,12 @@ anv_pipe_invalidate_bits_for_access_flags(struct anv_device *device,
           * port) to avoid stale data.
           */
          pipe_bits |= ANV_PIPE_CONSTANT_CACHE_INVALIDATE_BIT;
-         if (device->physical->compiler->indirect_ubos_use_sampler)
+         if (device->physical->compiler->indirect_ubos_use_sampler) {
             pipe_bits |= ANV_PIPE_TEXTURE_CACHE_INVALIDATE_BIT;
-         else
+         } else {
             pipe_bits |= ANV_PIPE_HDC_PIPELINE_FLUSH_BIT;
+            pipe_bits |= ANV_PIPE_UNTYPED_DATAPORT_CACHE_FLUSH_BIT;
+         }
          break;
       case VK_ACCESS_2_SHADER_READ_BIT:
       case VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT:
@@ -2680,7 +2678,7 @@ struct anv_cmd_graphics_state {
 enum anv_depth_reg_mode {
    ANV_DEPTH_REG_MODE_UNKNOWN = 0,
    ANV_DEPTH_REG_MODE_HW_DEFAULT,
-   ANV_DEPTH_REG_MODE_D16,
+   ANV_DEPTH_REG_MODE_D16_1X_MSAA,
 };
 
 /** State tracking for compute pipeline
@@ -3124,11 +3122,6 @@ struct anv_graphics_pipeline {
    bool                                         kill_pixel;
    bool                                         force_fragment_thread_dispatch;
    bool                                         negative_one_to_one;
-
-   /* When primitive replication is used, subpass->view_mask will describe what
-    * views to replicate.
-    */
-   bool                                         use_primitive_replication;
 
    uint32_t                                     vb_used;
    struct anv_pipeline_vertex_binding {
@@ -3700,7 +3693,7 @@ anv_image_get_fast_clear_type_addr(const struct anv_device *device,
    struct anv_address addr =
       anv_image_get_clear_color_addr(device, image, aspect);
 
-   const unsigned clear_color_state_size = device->info.ver >= 10 ?
+   const unsigned clear_color_state_size = device->info->ver >= 10 ?
       device->isl_dev.ss.clear_color_state_size :
       device->isl_dev.ss.clear_value_size;
    return anv_address_add(addr, clear_color_state_size);
@@ -3798,7 +3791,7 @@ anv_image_plane_uses_aux_map(const struct anv_device *device,
                              const struct anv_image *image,
                              uint32_t plane)
 {
-   return device->info.has_aux_map &&
+   return device->info->has_aux_map &&
       isl_aux_usage_has_ccs(image->planes[plane].aux_usage);
 }
 
@@ -4108,28 +4101,6 @@ struct anv_acceleration_structure {
    VkDeviceSize                                 size;
    struct anv_address                           address;
 };
-
-int anv_get_instance_entrypoint_index(const char *name);
-int anv_get_device_entrypoint_index(const char *name);
-int anv_get_physical_device_entrypoint_index(const char *name);
-
-const char *anv_get_instance_entry_name(int index);
-const char *anv_get_physical_device_entry_name(int index);
-const char *anv_get_device_entry_name(int index);
-
-bool
-anv_instance_entrypoint_is_enabled(int index, uint32_t core_version,
-                                   const struct vk_instance_extension_table *instance);
-bool
-anv_physical_device_entrypoint_is_enabled(int index, uint32_t core_version,
-                                          const struct vk_instance_extension_table *instance);
-bool
-anv_device_entrypoint_is_enabled(int index, uint32_t core_version,
-                                 const struct vk_instance_extension_table *instance,
-                                 const struct vk_device_extension_table *device);
-
-const struct vk_device_dispatch_table *
-anv_get_device_dispatch_table(const struct intel_device_info *devinfo);
 
 void
 anv_dump_pipe_bits(enum anv_pipe_bits bits);

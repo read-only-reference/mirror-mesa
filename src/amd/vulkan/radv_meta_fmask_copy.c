@@ -106,7 +106,7 @@ build_fmask_copy_compute_shader(struct radv_device *dev, int samples)
       frag_fetch->src[2].src = nir_src_for_ssa(input_img_deref);
       frag_fetch->src[3].src_type = nir_tex_src_ms_index;
       frag_fetch->src[3].src = nir_src_for_ssa(sample_id);
-      frag_fetch->dest_type = nir_type_uint32;
+      frag_fetch->dest_type = nir_type_float32;
       frag_fetch->is_array = false;
       frag_fetch->coord_components = 2;
 
@@ -132,8 +132,8 @@ radv_device_finish_meta_fmask_copy_state(struct radv_device *device)
 
    radv_DestroyPipelineLayout(radv_device_to_handle(device), state->fmask_copy.p_layout,
                               &state->alloc);
-   radv_DestroyDescriptorSetLayout(radv_device_to_handle(device), state->fmask_copy.ds_layout,
-                                   &state->alloc);
+   device->vk.dispatch_table.DestroyDescriptorSetLayout(radv_device_to_handle(device),
+                                                        state->fmask_copy.ds_layout, &state->alloc);
 
    for (uint32_t i = 0; i < MAX_SAMPLES_LOG2; ++i) {
       radv_DestroyPipeline(radv_device_to_handle(device), state->fmask_copy.pipeline[i], &state->alloc);

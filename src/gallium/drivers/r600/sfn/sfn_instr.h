@@ -45,7 +45,7 @@ class ExportInstr;
 class FetchInstr;
 class ControlFlowInstr;
 class IfInstr;
-class WriteScratchInstr;
+class ScratchIOInstr;
 class StreamOutInstr;
 class MemRingOutInstr;
 class EmitVertexInstr;
@@ -210,6 +210,10 @@ public:
 
    bool kcache_reservation_failed() const { return m_kcache_alloc_failed;}
 
+   int inc_rat_emitted() { return  ++m_emitted_rat_instr;}
+
+   static void set_chipclass(r600_chip_class chip_class);
+
 private:
    bool try_reserve_kcache(const UniformValue& u,
                            std::array<KCacheLine, 4>& kcache) const;
@@ -231,7 +235,8 @@ private:
 
    int m_lds_group_requirement{0};
    AluInstr *m_lds_group_start{nullptr};
-
+   static unsigned s_max_kcache_banks;
+   int m_emitted_rat_instr{0};
 };
 
 class InstrWithVectorResult : public Instr {
@@ -284,7 +289,7 @@ public:
    virtual void visit(const Block& instr) = 0;
    virtual void visit(const ControlFlowInstr& instr) = 0;
    virtual void visit(const IfInstr& instr) = 0;
-   virtual void visit(const WriteScratchInstr& instr) = 0;
+   virtual void visit(const ScratchIOInstr& instr) = 0;
    virtual void visit(const StreamOutInstr& instr) = 0;
    virtual void visit(const MemRingOutInstr& instr) = 0;
    virtual void visit(const EmitVertexInstr& instr) = 0;
@@ -305,7 +310,7 @@ public:
    virtual void visit(Block *instr) = 0;
    virtual void visit(ControlFlowInstr *instr) = 0;
    virtual void visit(IfInstr *instr) = 0;
-   virtual void visit(WriteScratchInstr *instr) = 0;
+   virtual void visit(ScratchIOInstr *instr) = 0;
    virtual void visit(StreamOutInstr *instr) = 0;
    virtual void visit(MemRingOutInstr *instr) = 0;
    virtual void visit(EmitVertexInstr *instr) = 0;

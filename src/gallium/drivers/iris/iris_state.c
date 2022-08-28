@@ -77,9 +77,6 @@
 #include <valgrind.h>
 #include <memcheck.h>
 #define VG(x) x
-#ifdef DEBUG
-#define __gen_validate_value(x) VALGRIND_CHECK_MEM_IS_DEFINED(&(x), sizeof(x))
-#endif
 #else
 #define VG(x)
 #endif
@@ -654,6 +651,7 @@ emit_pipeline_select(struct iris_batch *batch, uint32_t pipeline)
                                  PIPE_CONTROL_RENDER_TARGET_FLUSH |
                                  PIPE_CONTROL_DEPTH_CACHE_FLUSH |
                                  PIPE_CONTROL_DATA_CACHE_FLUSH |
+                                 PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH |
                                  PIPE_CONTROL_CS_STALL);
 
     iris_emit_pipe_control_flush(batch,
@@ -739,6 +737,9 @@ init_state_base_address(struct iris_batch *batch)
       sba.IndirectObjectBufferSize = 0xfffff;
       sba.InstructionBufferSize    = 0xfffff;
       sba.DynamicStateBufferSize   = 0xfffff;
+#if GFX_VERx10 >= 125
+      sba.L1CacheControl = L1CC_WB;
+#endif
    }
 
    flush_after_state_base_change(batch);
@@ -1102,6 +1103,17 @@ iris_init_render_context(struct iris_batch *batch)
    }
 #endif
 
+#if GFX_VERx10 == 120
+   /* Wa_1806527549 says to disable the following HiZ optimization when the
+    * depth buffer is D16_UNORM. We've found the WA to help with more depth
+    * buffer configurations however, so we always disable it just to be safe.
+    */
+   iris_emit_reg(batch, GENX(HIZ_CHICKEN), reg) {
+      reg.HZDepthTestLEGEOptimizationDisable = true;
+      reg.HZDepthTestLEGEOptimizationDisableMask = true;
+   }
+#endif
+
    upload_pixel_hashing_tables(batch);
 
    /* 3DSTATE_DRAWING_RECTANGLE is non-pipelined, so we want to avoid
@@ -1206,11 +1218,11 @@ struct iris_depth_buffer_state {
 };
 
 #if GFX_VERx10 == 120
-   enum iris_depth_reg_mode {
-      IRIS_DEPTH_REG_MODE_HW_DEFAULT = 0,
-      IRIS_DEPTH_REG_MODE_D16,
-      IRIS_DEPTH_REG_MODE_UNKNOWN,
-   };
+enum iris_depth_reg_mode {
+   IRIS_DEPTH_REG_MODE_HW_DEFAULT = 0,
+   IRIS_DEPTH_REG_MODE_D16_1X_MSAA,
+   IRIS_DEPTH_REG_MODE_UNKNOWN,
+};
 #endif
 
 /**
@@ -1663,7 +1675,8 @@ want_pma_fix(struct iris_context *ice)
    /* 3DSTATE_DEPTH_BUFFER::SURFACE_TYPE != NULL &&
     * 3DSTATE_DEPTH_BUFFER::HIZ Enable &&
     */
-   if (!zres || !iris_resource_level_has_hiz(zres, cso_fb->zsbuf->u.tex.level))
+   if (!zres ||
+       !iris_resource_level_has_hiz(devinfo, zres, cso_fb->zsbuf->u.tex.level))
       return false;
 
    /* 3DSTATE_WM::EDSC_Mode != EDSC_PREPS */
@@ -3201,6 +3214,7 @@ iris_set_framebuffer_state(struct pipe_context *ctx,
 {
    struct iris_context *ice = (struct iris_context *) ctx;
    struct iris_screen *screen = (struct iris_screen *)ctx->screen;
+   const struct intel_device_info *devinfo = &screen->devinfo;
    struct isl_device *isl_dev = &screen->isl_dev;
    struct pipe_framebuffer_state *cso = &ice->state.framebuffer;
    struct iris_resource *zres;
@@ -3270,7 +3284,7 @@ iris_set_framebuffer_state(struct pipe_context *ctx,
 
          view.format = zres->surf.format;
 
-         if (iris_resource_level_has_hiz(zres, view.base_level)) {
+         if (iris_resource_level_has_hiz(devinfo, zres, view.base_level)) {
             info.hiz_usage = zres->aux.usage;
             info.hiz_surf = &zres->aux.surf;
             info.hiz_address = zres->aux.bo->address + zres->aux.offset;
@@ -5490,6 +5504,9 @@ iris_update_binder_address(struct iris_batch *batch,
 #if GFX_VER >= 9
       sba.BindlessSurfaceStateMOCS    = mocs;
 #endif
+#if GFX_VERx10 >= 125
+      sba.L1CacheControl = L1CC_WB;
+#endif
    }
 #endif
 
@@ -5711,15 +5728,16 @@ genX(emit_depth_state_workarounds)(struct iris_context *ice,
                                    const struct isl_surf *surf)
 {
 #if GFX_VERx10 == 120
-   const bool fmt_is_d16 = surf->format == ISL_FORMAT_R16_UNORM;
+   const bool is_d16_1x_msaa = surf->format == ISL_FORMAT_R16_UNORM &&
+                               surf->samples == 1;
 
    switch (ice->state.genx->depth_reg_mode) {
    case IRIS_DEPTH_REG_MODE_HW_DEFAULT:
-      if (!fmt_is_d16)
+      if (!is_d16_1x_msaa)
          return;
       break;
-   case IRIS_DEPTH_REG_MODE_D16:
-      if (fmt_is_d16)
+   case IRIS_DEPTH_REG_MODE_D16_1X_MSAA:
+      if (is_d16_1x_msaa)
          return;
       break;
    case IRIS_DEPTH_REG_MODE_UNKNOWN:
@@ -5741,21 +5759,13 @@ genX(emit_depth_state_workarounds)(struct iris_context *ice,
     * Surface Format is D16_UNORM , surface type is not NULL & 1X_MSAA”.
     */
    iris_emit_reg(batch, GENX(COMMON_SLICE_CHICKEN1), reg) {
-      reg.HIZPlaneOptimizationdisablebit = fmt_is_d16 && surf->samples == 1;
+      reg.HIZPlaneOptimizationdisablebit = is_d16_1x_msaa;
       reg.HIZPlaneOptimizationdisablebitMask = true;
    }
 
-   /* Wa_1806527549
-    *
-    * Set HIZ_CHICKEN (7018h) bit 13 = 1 when depth buffer is D16_UNORM.
-    */
-   iris_emit_reg(batch, GENX(HIZ_CHICKEN), reg) {
-      reg.HZDepthTestLEGEOptimizationDisable = fmt_is_d16;
-      reg.HZDepthTestLEGEOptimizationDisableMask = true;
-   }
-
    ice->state.genx->depth_reg_mode =
-      fmt_is_d16 ? IRIS_DEPTH_REG_MODE_D16 : IRIS_DEPTH_REG_MODE_HW_DEFAULT;
+      is_d16_1x_msaa ? IRIS_DEPTH_REG_MODE_D16_1X_MSAA :
+                       IRIS_DEPTH_REG_MODE_HW_DEFAULT;
 #endif
 }
 
@@ -8074,7 +8084,7 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
 
    if (INTEL_DEBUG(DEBUG_PIPE_CONTROL)) {
       fprintf(stderr,
-              "  PC [%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%"PRIx64"]: %s\n",
+              "  PC [%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%"PRIx64"]: %s\n",
               (flags & PIPE_CONTROL_FLUSH_ENABLE) ? "PipeCon " : "",
               (flags & PIPE_CONTROL_CS_STALL) ? "CS " : "",
               (flags & PIPE_CONTROL_STALL_AT_SCOREBOARD) ? "Scoreboard " : "",
@@ -8100,6 +8110,7 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
               (flags & PIPE_CONTROL_WRITE_TIMESTAMP) ? "WriteTimestamp " : "",
               (flags & PIPE_CONTROL_FLUSH_HDC) ? "HDC " : "",
               (flags & PIPE_CONTROL_PSS_STALL_SYNC) ? "PSS " : "",
+              (flags & PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH) ? "UntypedDataPortCache " : "",
               imm, reason);
    }
 
@@ -8121,6 +8132,12 @@ iris_emit_raw_pipe_control(struct iris_batch *batch,
 #endif
 #if GFX_VER >= 11
       pc.HDCPipelineFlushEnable = flags & PIPE_CONTROL_FLUSH_HDC;
+#endif
+#if GFX_VERx10 >= 125
+      pc.UntypedDataPortCacheFlushEnable =
+         (flags & PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH) &&
+         IS_COMPUTE_PIPELINE(batch);
+      pc.HDCPipelineFlushEnable |= pc.UntypedDataPortCacheFlushEnable;
 #endif
       pc.LRIPostSyncOperation = NoLRIOperation;
       pc.PipeControlFlushEnable = flags & PIPE_CONTROL_FLUSH_ENABLE;

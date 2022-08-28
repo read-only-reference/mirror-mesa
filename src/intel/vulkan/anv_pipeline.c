@@ -309,7 +309,7 @@ populate_base_prog_key(const struct anv_device *device,
    key->limit_trig_input_range =
       device->physical->instance->limit_trig_input_range;
 
-   populate_sampler_prog_key(&device->info, &key->tex);
+   populate_sampler_prog_key(device->info, &key->tex);
 }
 
 static void
@@ -691,7 +691,8 @@ static void
 anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
                        void *mem_ctx,
                        struct anv_pipeline_stage *stage,
-                       struct anv_pipeline_layout *layout)
+                       struct anv_pipeline_layout *layout,
+                       bool use_primitive_replication)
 {
    const struct anv_physical_device *pdevice = pipeline->device->physical;
    const struct brw_compiler *compiler = pdevice->compiler;
@@ -711,8 +712,10 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
    NIR_PASS(_, nir, anv_nir_lower_ycbcr_textures, layout);
 
    if (pipeline->type == ANV_PIPELINE_GRAPHICS) {
-      NIR_PASS(_, nir, anv_nir_lower_multiview,
-               anv_pipeline_to_graphics(pipeline));
+      struct anv_graphics_pipeline *gfx_pipeline =
+         anv_pipeline_to_graphics(pipeline);
+      NIR_PASS(_, nir, anv_nir_lower_multiview, gfx_pipeline->view_mask,
+               use_primitive_replication);
    }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
@@ -747,15 +750,26 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    NIR_PASS(_, nir, anv_nir_lower_ubo_loads);
 
-   /* We don't support non-uniform UBOs and non-uniform SSBO access is
-    * handled naturally by falling back to A64 messages.
+   enum nir_lower_non_uniform_access_type lower_non_uniform_access_types =
+      nir_lower_non_uniform_texture_access | nir_lower_non_uniform_image_access;
+
+   /* In practice, most shaders do not have non-uniform-qualified
+    * accesses (see
+    * https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/17558#note_1475069)
+    * thus a cheaper and likely to fail check is run first.
     */
-   NIR_PASS(_, nir, nir_lower_non_uniform_access,
-            &(nir_lower_non_uniform_access_options) {
-                .types = nir_lower_non_uniform_texture_access |
-                         nir_lower_non_uniform_image_access,
-                .callback = NULL,
-            });
+   if (nir_has_non_uniform_access(nir, lower_non_uniform_access_types)) {
+      NIR_PASS(_, nir, nir_opt_non_uniform_access);
+
+      /* We don't support non-uniform UBOs and non-uniform SSBO access is
+      * handled naturally by falling back to A64 messages.
+      */
+      NIR_PASS(_, nir, nir_lower_non_uniform_access,
+               &(nir_lower_non_uniform_access_options) {
+                  .types = lower_non_uniform_access_types,
+                  .callback = NULL,
+               });
+   }
 
    NIR_PASS_V(nir, anv_nir_compute_push_layout,
               pdevice, pipeline->device->robust_buffer_access,
@@ -811,8 +825,12 @@ anv_pipeline_compile_vs(const struct brw_compiler *compiler,
    /* When using Primitive Replication for multiview, each view gets its own
     * position slot.
     */
-   uint32_t pos_slots = pipeline->use_primitive_replication ?
+   uint32_t pos_slots =
+      (vs_stage->nir->info.per_view_outputs & VARYING_BIT_POS) ?
       MAX2(1, util_bitcount(pipeline->view_mask)) : 1;
+
+   /* Only position is allowed to be per-view */
+   assert(!(vs_stage->nir->info.per_view_outputs & ~VARYING_BIT_POS));
 
    brw_compute_vue_map(compiler->devinfo,
                        &vs_stage->prog_data.vs.base.vue_map,
@@ -1289,29 +1307,6 @@ anv_pipeline_add_executables(struct anv_pipeline *pipeline,
 }
 
 static void
-anv_pipeline_init_from_cached_graphics(struct anv_graphics_pipeline *pipeline)
-{
-   /* TODO: Cache this pipeline-wide information. */
-
-   if (anv_pipeline_is_primitive(pipeline)) {
-      /* Primitive replication depends on information from all the shaders.
-       * Recover this bit from the fact that we have more than one position slot
-       * in the vertex shader when using it.
-       */
-      assert(pipeline->active_stages & VK_SHADER_STAGE_VERTEX_BIT);
-      int pos_slots = 0;
-      const struct brw_vue_prog_data *vue_prog_data =
-         (const void *) pipeline->shaders[MESA_SHADER_VERTEX]->prog_data;
-      const struct brw_vue_map *vue_map = &vue_prog_data->vue_map;
-      for (int i = 0; i < vue_map->num_slots; i++) {
-         if (vue_map->slot_to_varying[i] == VARYING_SLOT_POS)
-            pos_slots++;
-      }
-      pipeline->use_primitive_replication = pos_slots > 1;
-   }
-}
-
-static void
 anv_graphics_pipeline_init_keys(struct anv_graphics_pipeline *pipeline,
                                 const struct vk_graphics_pipeline_state *state,
                                 struct anv_pipeline_stage *stages)
@@ -1421,7 +1416,6 @@ anv_graphics_pipeline_load_cached_shaders(struct anv_graphics_pipeline *pipeline
          anv_pipeline_add_executables(&pipeline->base, &stages[s],
                                       pipeline->shaders[s]);
       }
-      anv_pipeline_init_from_cached_graphics(pipeline);
       return true;
    } else if (found > 0) {
       /* We found some but not all of our shaders. This shouldn't happen most
@@ -1589,7 +1583,8 @@ anv_graphics_pipeline_compile(struct anv_graphics_pipeline *pipeline,
       next_stage = &stages[s];
    }
 
-   if (pipeline->base.device->info.ver >= 12 &&
+   bool use_primitive_replication = false;
+   if (pipeline->base.device->info->ver >= 12 &&
        pipeline->view_mask != 0) {
       /* For some pipelines HW Primitive Replication can be used instead of
        * instancing to implement Multiview.  This depend on how viewIndex is
@@ -1600,10 +1595,10 @@ anv_graphics_pipeline_compile(struct anv_graphics_pipeline *pipeline,
       for (unsigned s = 0; s < ARRAY_SIZE(shaders); s++)
          shaders[s] = stages[s].nir;
 
-      pipeline->use_primitive_replication =
-         anv_check_for_primitive_replication(shaders, pipeline);
-   } else {
-      pipeline->use_primitive_replication = false;
+      use_primitive_replication =
+         anv_check_for_primitive_replication(pipeline->base.device,
+                                             pipeline->active_stages,
+                                             shaders, pipeline->view_mask);
    }
 
    struct anv_pipeline_stage *prev_stage = NULL;
@@ -1616,7 +1611,8 @@ anv_graphics_pipeline_compile(struct anv_graphics_pipeline *pipeline,
 
       void *stage_ctx = ralloc_context(NULL);
 
-      anv_pipeline_lower_nir(&pipeline->base, stage_ctx, &stages[s], layout);
+      anv_pipeline_lower_nir(&pipeline->base, stage_ctx, &stages[s], layout,
+                             use_primitive_replication);
 
       if (prev_stage && compiler->nir_options[s]->unify_interfaces) {
          prev_stage->nir->info.outputs_written |= stages[s].nir->info.inputs_read &
@@ -1642,7 +1638,7 @@ anv_graphics_pipeline_compile(struct anv_graphics_pipeline *pipeline,
     * We iterate backwards in the stage and stop on the first shader that can
     * set the value.
     */
-   const struct intel_device_info *devinfo = &pipeline->base.device->info;
+   const struct intel_device_info *devinfo = pipeline->base.device->info;
    if (devinfo->has_coarse_pixel_primitive_and_cb &&
        stages[MESA_SHADER_FRAGMENT].info &&
        stages[MESA_SHADER_FRAGMENT].key.wm.coarse_pixel &&
@@ -1849,7 +1845,8 @@ anv_pipeline_compile_cs(struct anv_compute_pipeline *pipeline,
 
       NIR_PASS(_, stage.nir, anv_nir_add_base_work_group_id);
 
-      anv_pipeline_lower_nir(&pipeline->base, mem_ctx, &stage, layout);
+      anv_pipeline_lower_nir(&pipeline->base, mem_ctx, &stage, layout,
+                             false /* use_primitive_replication */);
 
       unsigned local_size = stage.nir->info.workgroup_size[0] *
                             stage.nir->info.workgroup_size[1] *
@@ -1977,7 +1974,7 @@ anv_compute_pipeline_create(struct anv_device *device,
       return result;
    }
 
-   anv_genX(&device->info, compute_pipeline_emit)(pipeline);
+   anv_genX(device->info, compute_pipeline_emit)(pipeline);
 
    *pPipeline = anv_pipeline_to_handle(&pipeline->base);
 
@@ -2035,7 +2032,7 @@ VkResult anv_CreateComputePipelines(
 void
 anv_pipeline_setup_l3_config(struct anv_pipeline *pipeline, bool needs_slm)
 {
-   const struct intel_device_info *devinfo = &pipeline->device->info;
+   const struct intel_device_info *devinfo = pipeline->device->info;
 
    const struct intel_l3_weights w =
       intel_get_default_l3_weights(devinfo, true, needs_slm);
@@ -2103,12 +2100,16 @@ anv_graphics_pipeline_init(struct anv_graphics_pipeline *pipeline,
       }
 
       /* Our implementation of VK_KHR_multiview uses instancing to draw the
-       * different views.  If the client asks for instancing, we need to multiply
-       * the instance divisor by the number of views ensure that we repeat the
-       * client's per-instance data once for each view.
+       * different views when primitive replication cannot be used.  If the
+       * client asks for instancing, we need to multiply by the client's
+       * instance count at draw time and instance divisor in the vertex
+       * bindings by the number of views ensure that we repeat the client's
+       * per-instance data once for each view.
        */
+      const bool uses_primitive_replication =
+         anv_pipeline_get_last_vue_prog_data(pipeline)->vue_map.num_pos_slots > 1;
       pipeline->instance_multiplier = 1;
-      if (pipeline->view_mask && !pipeline->use_primitive_replication)
+      if (pipeline->view_mask && !uses_primitive_replication)
          pipeline->instance_multiplier = util_bitcount(pipeline->view_mask);
    } else {
       assert(anv_pipeline_is_mesh(pipeline));
@@ -2180,7 +2181,7 @@ anv_graphics_pipeline_create(struct anv_device *device,
       return result;
    }
 
-   anv_genX(&device->info, graphics_pipeline_emit)(pipeline, &state);
+   anv_genX(device->info, graphics_pipeline_emit)(pipeline, &state);
 
    *pPipeline = anv_pipeline_to_handle(&pipeline->base);
 
@@ -2480,7 +2481,7 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
                                  struct vk_pipeline_cache *cache,
                                  const VkRayTracingPipelineCreateInfoKHR *info)
 {
-   const struct intel_device_info *devinfo = &pipeline->base.device->info;
+   const struct intel_device_info *devinfo = pipeline->base.device->info;
    VkResult result;
 
    VkPipelineCreationFeedback pipeline_feedback = {
@@ -2525,7 +2526,8 @@ anv_pipeline_compile_ray_tracing(struct anv_ray_tracing_pipeline *pipeline,
          return vk_error(pipeline, VK_ERROR_OUT_OF_HOST_MEMORY);
       }
 
-      anv_pipeline_lower_nir(&pipeline->base, pipeline_ctx, &stages[i], layout);
+      anv_pipeline_lower_nir(&pipeline->base, pipeline_ctx, &stages[i],
+                             layout, false /* use_primitive_replication */);
 
       stages[i].feedback.duration += os_time_get_nano() - stage_start;
    }
@@ -2760,7 +2762,7 @@ anv_device_init_rt_shaders(struct anv_device *device)
       nir_shader *trivial_return_nir =
          brw_nir_create_trivial_return_shader(device->physical->compiler, tmp_ctx);
 
-      NIR_PASS_V(trivial_return_nir, brw_nir_lower_rt_intrinsics, &device->info);
+      NIR_PASS_V(trivial_return_nir, brw_nir_lower_rt_intrinsics, device->info);
 
       struct anv_pipeline_bind_map bind_map = {
          .surface_count = 0,
@@ -2931,7 +2933,7 @@ anv_ray_tracing_pipeline_create(
       return result;
    }
 
-   anv_genX(&device->info, ray_tracing_pipeline_emit)(pipeline);
+   anv_genX(device->info, ray_tracing_pipeline_emit)(pipeline);
 
    *pPipeline = anv_pipeline_to_handle(&pipeline->base);
 
@@ -3054,6 +3056,14 @@ VkResult anv_GetPipelineExecutableStatisticsKHR(
    }
    case ANV_PIPELINE_COMPUTE: {
       prog_data = anv_pipeline_to_compute(pipeline)->cs->prog_data;
+      break;
+   }
+   case ANV_PIPELINE_RAY_TRACING: {
+      struct anv_shader_bin **shader =
+         util_dynarray_element(&anv_pipeline_to_ray_tracing(pipeline)->shaders,
+                               struct anv_shader_bin *,
+                               pExecutableInfo->executableIndex);
+      prog_data = (*shader)->prog_data;
       break;
    }
    default:

@@ -1,41 +1,26 @@
 /*
  * Copyright © 2016 Red Hat.
  * Copyright © 2016 Bas Nieuwenhuizen
+ * SPDX-License-Identifier: MIT
  *
  * based in part on anv driver which is:
  * Copyright © 2015 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
  */
 
-#include "tu_private.h"
+#include "tu_image.h"
+
 #include "fdl/fd6_format_table.h"
 
 #include "util/debug.h"
-#include "util/u_atomic.h"
 #include "util/format/u_format.h"
-#include "vk_format.h"
 #include "vk_util.h"
 #include "drm-uapi/drm_fourcc.h"
 
+#include "tu_android.h"
 #include "tu_cs.h"
+#include "tu_descriptor_set.h"
+#include "tu_device.h"
+#include "tu_formats.h"
 
 uint32_t
 tu6_plane_count(VkFormat format)
@@ -353,6 +338,55 @@ ubwc_possible(VkFormat format, VkImageType type, VkImageUsageFlags usage,
    return true;
 }
 
+/* R8G8 have a different block width/height and height alignment from other
+ * formats that would normally be compatible (like R16), and so if we are
+ * trying to, for example, sample R16 as R8G8 we need to demote to linear.
+ */
+static bool
+format_list_reinterprets_r8g8_r16(enum pipe_format format, const VkImageFormatListCreateInfo *fmt_list)
+{
+   /* Check if it's actually a 2-cpp color format. */
+   if (!tu_is_r8g8_compatible(format))
+      return false;
+
+   /* If there's no format list, then the app may reinterpret to any compatible
+    * format.
+    */
+   if (!fmt_list || !fmt_list->viewFormatCount)
+      return true;
+
+   bool has_r8g8 = false;
+   bool has_non_r8g8 = false;
+   for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+      enum pipe_format format =
+         tu_vk_format_to_pipe_format(fmt_list->pViewFormats[i]);
+      if (tu_is_r8g8(format))
+         has_r8g8 = true;
+      else
+         has_non_r8g8 = true;
+   }
+   return has_r8g8 && has_non_r8g8;
+}
+
+static bool
+format_list_has_swaps(const VkImageFormatListCreateInfo *fmt_list)
+{
+   /* If there's no format list, then the app may reinterpret to any compatible
+    * format, and presumably one would have the swap set.
+    */
+   if (!fmt_list || !fmt_list->viewFormatCount)
+      return true;
+
+   for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+      enum pipe_format format =
+         tu_vk_format_to_pipe_format(fmt_list->pViewFormats[i]);
+
+      if (tu6_format_texture(format, TILE6_LINEAR).swap)
+         return true;
+   }
+   return false;
+}
+
 static VkResult
 tu_image_init(struct tu_device *device, struct tu_image *image,
               const VkImageCreateInfo *pCreateInfo, uint64_t modifier,
@@ -403,46 +437,14 @@ tu_image_init(struct tu_device *device, struct tu_image *image,
        !vk_format_is_depth_or_stencil(image->vk.format)) {
       const VkImageFormatListCreateInfo *fmt_list =
          vk_find_struct_const(pCreateInfo->pNext, IMAGE_FORMAT_LIST_CREATE_INFO);
-      bool may_be_swapped = true;
-      /* Whether a view of the image with a non-R8G8 but R8G8 compatible format
-       * could be made.
-       */
-      bool has_r8g8_compatible = false;
-      if (fmt_list) {
-         may_be_swapped = false;
-         has_r8g8_compatible = !has_r8g8 && tu_is_r8g8_compatible(format);
-         for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
-            enum pipe_format format =
-               tu_vk_format_to_pipe_format(fmt_list->pViewFormats[i]);
-            bool is_r8g8 = tu_is_r8g8(format);
-            has_r8g8 = has_r8g8 || is_r8g8;
-            has_r8g8_compatible = has_r8g8_compatible ||
-                                  (!is_r8g8 && tu_is_r8g8_compatible(format));
+      if (!tu6_mutable_format_list_ubwc_compatible(fmt_list)) {
+         ubwc_enabled = false;
 
-            if (tu6_format_texture(format, TILE6_LINEAR).swap) {
-               may_be_swapped = true;
-               break;
-            }
+         if (format_list_reinterprets_r8g8_r16(format, fmt_list) ||
+            format_list_has_swaps(fmt_list)) {
+            tile_mode = TILE6_LINEAR;
          }
-      } else {
-         /* If there is no format list it could be reinterpreted as
-          * any compatible format.
-          */
-         has_r8g8 = tu_is_r8g8_compatible(format);
-         has_r8g8_compatible = has_r8g8;
       }
-
-      if (may_be_swapped)
-         tile_mode = TILE6_LINEAR;
-
-      /* R8G8 have a different block width/height and height alignment from other
-       * formats that would normally be compatible (like R16), and so if we are
-       * trying to, for example, sample R16 as R8G8 we need to demote to linear.
-       */
-      if (has_r8g8 && has_r8g8_compatible)
-         tile_mode = TILE6_LINEAR;
-
-      ubwc_enabled = false;
    }
 
    if (!ubwc_possible(image->vk.format, pCreateInfo->imageType,

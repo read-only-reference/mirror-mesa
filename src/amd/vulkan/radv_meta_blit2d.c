@@ -298,6 +298,8 @@ radv_meta_blit2d_normal_dst(struct radv_cmd_buffer *cmd_buffer,
                },
                .layerCount = 1,
                .pDepthAttachment = &depth_att_info,
+               .pStencilAttachment = (dst->image->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT) ?
+                                     &depth_att_info : NULL,
             };
 
             radv_CmdBeginRendering(radv_cmd_buffer_to_handle(cmd_buffer), &rendering_info);
@@ -329,6 +331,8 @@ radv_meta_blit2d_normal_dst(struct radv_cmd_buffer *cmd_buffer,
                   .extent = { rects[r].width, rects[r].height },
                },
                .layerCount = 1,
+               .pDepthAttachment = (dst->image->vk.aspects & VK_IMAGE_ASPECT_DEPTH_BIT) ?
+                                   &stencil_att_info : NULL,
                .pStencilAttachment = &stencil_att_info,
             };
 
@@ -601,9 +605,9 @@ radv_device_finish_meta_blit2d_state(struct radv_device *device)
       for (unsigned src = 0; src < BLIT2D_NUM_SRC_TYPES; src++) {
          radv_DestroyPipelineLayout(radv_device_to_handle(device),
                                     state->blit2d[log2_samples].p_layouts[src], &state->alloc);
-         radv_DestroyDescriptorSetLayout(radv_device_to_handle(device),
-                                         state->blit2d[log2_samples].ds_layouts[src],
-                                         &state->alloc);
+         device->vk.dispatch_table.DestroyDescriptorSetLayout(
+            radv_device_to_handle(device), state->blit2d[log2_samples].ds_layouts[src],
+            &state->alloc);
 
          for (unsigned j = 0; j < NUM_META_FS_KEYS; ++j) {
             radv_DestroyPipeline(radv_device_to_handle(device),

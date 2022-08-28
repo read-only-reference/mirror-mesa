@@ -179,6 +179,15 @@ int GeometryShader::do_allocate_reserved_registers()
 
    m_ring_item_sizes[0] = m_next_input_ring_offset;
 
+
+   /* GS thread with no output workaround - emit a cut at start of GS */
+   if (chip_class() == ISA_CC_R600) {
+      emit_instruction(new EmitVertexInstr(0, true));
+      start_new_block(0);
+   }
+
+
+
    if (m_tri_strip_adj_fix)
       emit_adj_fix();
 
@@ -326,13 +335,21 @@ bool GeometryShader::emit_load_per_vertex_input(nir_intrinsic_instr* instr)
    assert(literal_index->u32 < 6);
    assert(nir_intrinsic_io_semantics(instr).num_slots == 1);
 
+
+   EVTXDataFormat fmt = chip_class() >= ISA_CC_EVERGREEN ?
+                           fmt_invalid:
+                           fmt_32_32_32_32_float;
+
+
    auto addr = m_per_vertex_offsets[literal_index->u32];
    auto fetch = new LoadFromBuffer(dest, dest_swz, addr,
                                    16 * nir_intrinsic_base(instr),
                                    R600_GS_RING_CONST_BUFFER, nullptr,
-                                   fmt_invalid);
+                                   fmt);
 
-   fetch->set_fetch_flag(FetchInstr::use_const_field);
+   if (chip_class() >= ISA_CC_EVERGREEN)
+      fetch->set_fetch_flag(FetchInstr::use_const_field);
+
    fetch->set_num_format(vtx_nf_norm);
    fetch->reset_fetch_flag(FetchInstr::format_comp_signed);
 

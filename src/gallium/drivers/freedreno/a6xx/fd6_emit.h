@@ -31,8 +31,8 @@
 #include "pipe/p_context.h"
 
 #include "fd6_context.h"
-#include "fd6_format.h"
 #include "fd6_program.h"
+#include "fdl/fd6_format_table.h"
 #include "freedreno_context.h"
 #include "ir3_gallium.h"
 
@@ -89,9 +89,9 @@ struct fd6_emit {
    struct fd_context *ctx;
    const struct fd_vertex_state *vtx;
    const struct pipe_draw_info *info;
-	unsigned drawid_offset;
+   unsigned drawid_offset;
    const struct pipe_draw_indirect_info *indirect;
-	const struct pipe_draw_start_count_bias *draw;
+   const struct pipe_draw_start_count_bias *draw;
    struct ir3_cache_key key;
    enum fd_dirty_3d_state dirty;
    uint32_t dirty_groups;

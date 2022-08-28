@@ -123,11 +123,8 @@ static void pvr_cmd_buffer_free_sub_cmds(struct pvr_cmd_buffer *cmd_buffer)
    }
 }
 
-static void pvr_cmd_buffer_destroy(struct vk_command_buffer *vk_cmd_buffer)
+static void pvr_cmd_buffer_free_resources(struct pvr_cmd_buffer *cmd_buffer)
 {
-   struct pvr_cmd_buffer *cmd_buffer =
-      container_of(vk_cmd_buffer, struct pvr_cmd_buffer, vk);
-
    vk_free(&cmd_buffer->vk.pool->alloc,
            cmd_buffer->state.render_pass_info.attachments);
    vk_free(&cmd_buffer->vk.pool->alloc,
@@ -142,7 +139,33 @@ static void pvr_cmd_buffer_destroy(struct vk_command_buffer *vk_cmd_buffer)
 
    util_dynarray_fini(&cmd_buffer->scissor_array);
    util_dynarray_fini(&cmd_buffer->depth_bias_array);
+}
 
+static void pvr_cmd_buffer_reset(struct pvr_cmd_buffer *cmd_buffer)
+{
+   if (cmd_buffer->status != PVR_CMD_BUFFER_STATUS_INITIAL) {
+      /* FIXME: For now we always free all resources as if
+       * VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT was set.
+       */
+      pvr_cmd_buffer_free_resources(cmd_buffer);
+
+      vk_command_buffer_reset(&cmd_buffer->vk);
+
+      memset(&cmd_buffer->state, 0, sizeof(cmd_buffer->state));
+      memset(cmd_buffer->scissor_words, 0, sizeof(cmd_buffer->scissor_words));
+
+      cmd_buffer->usage_flags = 0;
+      cmd_buffer->state.status = VK_SUCCESS;
+      cmd_buffer->status = PVR_CMD_BUFFER_STATUS_INITIAL;
+   }
+}
+
+static void pvr_cmd_buffer_destroy(struct vk_command_buffer *vk_cmd_buffer)
+{
+   struct pvr_cmd_buffer *cmd_buffer =
+      container_of(vk_cmd_buffer, struct pvr_cmd_buffer, vk);
+
+   pvr_cmd_buffer_free_resources(cmd_buffer);
    vk_command_buffer_finish(&cmd_buffer->vk);
    vk_free(&cmd_buffer->vk.pool->alloc, cmd_buffer);
 }
@@ -1685,13 +1708,6 @@ VkResult pvr_cmd_buffer_alloc_mem(struct pvr_cmd_buffer *cmd_buffer,
    return VK_SUCCESS;
 }
 
-VkResult pvr_ResetCommandBuffer(VkCommandBuffer commandBuffer,
-                                VkCommandBufferResetFlags flags)
-{
-   assert(!"Unimplemented");
-   return VK_SUCCESS;
-}
-
 static void pvr_cmd_bind_compute_pipeline(
    const struct pvr_compute_pipeline *const compute_pipeline,
    struct pvr_cmd_buffer *const cmd_buffer)
@@ -2481,27 +2497,6 @@ void pvr_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
    }
 }
 
-static void pvr_cmd_buffer_reset(struct pvr_cmd_buffer *cmd_buffer)
-{
-   if (cmd_buffer->status != PVR_CMD_BUFFER_STATUS_INITIAL) {
-      /* FIXME: For now we always free all resources as if
-       * VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT was set.
-       */
-      pvr_cmd_buffer_free_sub_cmds(cmd_buffer);
-
-      list_for_each_entry_safe (struct pvr_bo, bo, &cmd_buffer->bo_list, link) {
-         list_del(&bo->link);
-         pvr_bo_free(cmd_buffer->device, bo);
-      }
-
-      util_dynarray_clear(&cmd_buffer->scissor_array);
-      util_dynarray_clear(&cmd_buffer->depth_bias_array);
-
-      cmd_buffer->state.status = VK_SUCCESS;
-      cmd_buffer->status = PVR_CMD_BUFFER_STATUS_INITIAL;
-   }
-}
-
 VkResult pvr_BeginCommandBuffer(VkCommandBuffer commandBuffer,
                                 const VkCommandBufferBeginInfo *pBeginInfo)
 {
@@ -2553,6 +2548,16 @@ VkResult pvr_BeginCommandBuffer(VkCommandBuffer commandBuffer,
           sizeof(*state->barriers_needed) * ARRAY_SIZE(state->barriers_needed));
 
    cmd_buffer->status = PVR_CMD_BUFFER_STATUS_RECORDING;
+
+   return VK_SUCCESS;
+}
+
+VkResult pvr_ResetCommandBuffer(VkCommandBuffer commandBuffer,
+                                VkCommandBufferResetFlags flags)
+{
+   PVR_FROM_HANDLE(pvr_cmd_buffer, cmd_buffer, commandBuffer);
+
+   pvr_cmd_buffer_reset(cmd_buffer);
 
    return VK_SUCCESS;
 }

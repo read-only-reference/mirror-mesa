@@ -92,12 +92,6 @@ typedef void *drmDevicePtr;
 
 static VkResult radv_queue_submit(struct vk_queue *vqueue, struct vk_queue_submit *submission);
 
-uint64_t
-radv_get_current_time(void)
-{
-   return os_time_get_nano();
-}
-
 static void
 parse_hex(char *out, const char *in, unsigned length)
 {
@@ -474,6 +468,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_format_feature_flags2 = true,
       .KHR_fragment_shading_rate = device->rad_info.gfx_level >= GFX10_3,
       .KHR_get_memory_requirements2 = true,
+      .KHR_global_priority = true,
       .KHR_image_format_list = true,
       .KHR_imageless_framebuffer = true,
 #ifdef RADV_USE_WSI_PLATFORM
@@ -519,6 +514,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .KHR_workgroup_memory_explicit_layout = true,
       .KHR_zero_initialize_workgroup_memory = true,
       .EXT_4444_formats = true,
+      .EXT_attachment_feedback_loop_layout = true,
       .EXT_border_color_swizzle = device->rad_info.gfx_level >= GFX10,
       .EXT_buffer_device_address = true,
       .EXT_calibrated_timestamps = RADV_SUPPORT_CALIBRATED_TIMESTAMPS,
@@ -541,6 +537,7 @@ radv_physical_device_get_supported_extensions(const struct radv_physical_device 
       .EXT_external_memory_host = device->rad_info.has_userptr,
       .EXT_global_priority = true,
       .EXT_global_priority_query = true,
+      .EXT_graphics_pipeline_library = !!(device->instance->perftest_flags & RADV_PERFTEST_GPL),
       .EXT_host_query_reset = true,
       .EXT_image_2d_view_of_3d = true,
       .EXT_image_drm_format_modifier = device->rad_info.gfx_level >= GFX9,
@@ -652,6 +649,31 @@ radv_physical_device_init_queue_table(struct radv_physical_device *pdevice)
       idx++;
    }
    pdevice->num_queues = idx;
+}
+
+static void
+radv_get_binning_settings(const struct radv_physical_device *pdevice,
+                          struct radv_binning_settings *settings)
+{
+   if (pdevice->rad_info.has_dedicated_vram) {
+      if (pdevice->rad_info.max_render_backends > 4) {
+         settings->context_states_per_bin = 1;
+         settings->persistent_states_per_bin = 1;
+      } else {
+         settings->context_states_per_bin = 3;
+         settings->persistent_states_per_bin = 8;
+      }
+      settings->fpovs_per_batch = 63;
+   } else {
+      /* The context states are affected by the scissor bug. */
+      settings->context_states_per_bin = 6;
+      /* 32 causes hangs for RAVEN. */
+      settings->persistent_states_per_bin = 16;
+      settings->fpovs_per_batch = 63;
+   }
+
+   if (pdevice->rad_info.has_gfx9_scissor_bug)
+      settings->context_states_per_bin = 1;
 }
 
 static VkResult
@@ -898,6 +920,7 @@ radv_physical_device_try_create(struct radv_instance *instance, drmDevicePtr drm
 
    ac_get_hs_info(&device->rad_info, &device->hs);
    ac_get_task_info(&device->rad_info, &device->task_info);
+   radv_get_binning_settings(device, &device->binning_settings);
 
    *device_out = device;
 
@@ -923,8 +946,10 @@ fail_fd:
 }
 
 static void
-radv_physical_device_destroy(struct radv_physical_device *device)
+radv_physical_device_destroy(struct vk_physical_device *vk_device)
 {
+   struct radv_physical_device *device = container_of(vk_device, struct radv_physical_device, vk);
+
    radv_finish_wsi(device);
    ac_destroy_perfcounters(&device->ac_perfcounters);
    device->ws->destroy(device->ws);
@@ -999,6 +1024,7 @@ static const struct debug_control radv_perftest_options[] = {{"localbos", RADV_P
                                                              {"emulate_rt", RADV_PERFTEST_EMULATE_RT},
                                                              {"nv_ms", RADV_PERFTEST_NV_MS},
                                                              {"rtwave64", RADV_PERFTEST_RT_WAVE_64},
+                                                             {"gpl", RADV_PERFTEST_GPL},
                                                              {NULL, 0}};
 
 const char *
@@ -1037,6 +1063,7 @@ static const driOptionDescription radv_dri_options[] = {
       DRI_CONF_RADV_DISABLE_ANISO_SINGLE_LEVEL(false)
       DRI_CONF_RADV_DISABLE_SINKING_LOAD_INPUT_FS(false)
       DRI_CONF_RADV_DGC(false)
+      DRI_CONF_RADV_FLUSH_BEFORE_QUERY_COPY(false)
    DRI_CONF_SECTION_END
 };
 // clang-format on
@@ -1085,7 +1112,16 @@ radv_init_dri_options(struct radv_instance *instance)
 
    instance->disable_sinking_load_input_fs =
       driQueryOptionb(&instance->dri_options, "radv_disable_sinking_load_input_fs");
+
+   instance->flush_before_query_copy =
+      driQueryOptionb(&instance->dri_options, "radv_flush_before_query_copy");
 }
+
+static VkResult create_null_physical_device(struct vk_instance *vk_instance);
+
+static VkResult create_drm_physical_device(struct vk_instance *vk_instance,
+                                           struct _drmDevice *device,
+                                           struct vk_physical_device **out);
 
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
@@ -1116,11 +1152,19 @@ radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    instance->debug_flags = parse_debug_string(getenv("RADV_DEBUG"), radv_debug_options);
    instance->perftest_flags = parse_debug_string(getenv("RADV_PERFTEST"), radv_perftest_options);
 
+   /* When RADV_FORCE_FAMILY is set, the driver creates a null
+    * device that allows to test the compiler without having an
+    * AMDGPU instance.
+    */
+   if (getenv("RADV_FORCE_FAMILY"))
+      instance->vk.physical_devices.enumerate = create_null_physical_device;
+   else
+      instance->vk.physical_devices.try_create_for_drm = create_drm_physical_device;
+
+   instance->vk.physical_devices.destroy = radv_physical_device_destroy;
+
    if (instance->debug_flags & RADV_DEBUG_STARTUP)
       fprintf(stderr, "radv: info: Created an instance.\n");
-
-   instance->physical_devices_enumerated = false;
-   list_inithead(&instance->physical_devices);
 
    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
 
@@ -1139,11 +1183,6 @@ radv_DestroyInstance(VkInstance _instance, const VkAllocationCallbacks *pAllocat
    if (!instance)
       return;
 
-   list_for_each_entry_safe(struct radv_physical_device, pdevice, &instance->physical_devices, link)
-   {
-      radv_physical_device_destroy(pdevice);
-   }
-
    VG(VALGRIND_DESTROY_MEMPOOL(instance));
 
    driDestroyOptionCache(&instance->dri_options);
@@ -1154,114 +1193,34 @@ radv_DestroyInstance(VkInstance _instance, const VkAllocationCallbacks *pAllocat
 }
 
 static VkResult
-radv_enumerate_physical_devices(struct radv_instance *instance)
+create_null_physical_device(struct vk_instance *vk_instance)
 {
-   if (instance->physical_devices_enumerated)
-      return VK_SUCCESS;
+   struct radv_instance *instance = container_of(vk_instance, struct radv_instance, vk);
+   struct radv_physical_device *pdevice;
 
-   instance->physical_devices_enumerated = true;
+   VkResult result = radv_physical_device_try_create(instance, NULL, &pdevice);
+   if (result != VK_SUCCESS)
+      return result;
 
-   VkResult result = VK_SUCCESS;
+   list_addtail(&pdevice->vk.link, &instance->vk.physical_devices.list);
+   return VK_SUCCESS;
+}
 
-   if (getenv("RADV_FORCE_FAMILY")) {
-      /* When RADV_FORCE_FAMILY is set, the driver creates a nul
-       * device that allows to test the compiler without having an
-       * AMDGPU instance.
-       */
-      struct radv_physical_device *pdevice;
-
-      result = radv_physical_device_try_create(instance, NULL, &pdevice);
-      if (result != VK_SUCCESS)
-         return result;
-
-      list_addtail(&pdevice->link, &instance->physical_devices);
-      return VK_SUCCESS;
-   }
-
+static VkResult
+create_drm_physical_device(struct vk_instance *vk_instance, struct _drmDevice *device,
+                           struct vk_physical_device **out)
+{
 #ifndef _WIN32
-   /* TODO: Check for more devices ? */
-   drmDevicePtr devices[8];
-   int max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
+   if (!(device->available_nodes & (1 << DRM_NODE_RENDER)) ||
+       device->bustype != DRM_BUS_PCI ||
+       device->deviceinfo.pci->vendor_id != ATI_VENDOR_ID)
+      return VK_ERROR_INCOMPATIBLE_DRIVER;
 
-   if (instance->debug_flags & RADV_DEBUG_STARTUP)
-      fprintf(stderr, "radv: info: Found %d drm nodes.\n", max_devices);
-
-   if (max_devices < 1)
-      return vk_error(instance, VK_SUCCESS);
-
-   for (unsigned i = 0; i < (unsigned)max_devices; i++) {
-      if (devices[i]->available_nodes & 1 << DRM_NODE_RENDER &&
-          devices[i]->bustype == DRM_BUS_PCI &&
-          devices[i]->deviceinfo.pci->vendor_id == ATI_VENDOR_ID) {
-
-         struct radv_physical_device *pdevice;
-         result = radv_physical_device_try_create(instance, devices[i], &pdevice);
-         /* Incompatible DRM device, skip. */
-         if (result == VK_ERROR_INCOMPATIBLE_DRIVER) {
-            result = VK_SUCCESS;
-            continue;
-         }
-
-         /* Error creating the physical device, report the error. */
-         if (result != VK_SUCCESS)
-            break;
-
-         list_addtail(&pdevice->link, &instance->physical_devices);
-      }
-   }
-   drmFreeDevices(devices, max_devices);
+   return radv_physical_device_try_create((struct radv_instance *)vk_instance, device,
+                                          (struct radv_physical_device **)out);
+#else
+   return VK_SUCCESS;
 #endif
-
-   /* If we successfully enumerated any devices, call it success */
-   return result;
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL
-radv_EnumeratePhysicalDevices(VkInstance _instance, uint32_t *pPhysicalDeviceCount,
-                              VkPhysicalDevice *pPhysicalDevices)
-{
-   RADV_FROM_HANDLE(radv_instance, instance, _instance);
-   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDevice, out, pPhysicalDevices, pPhysicalDeviceCount);
-
-   VkResult result = radv_enumerate_physical_devices(instance);
-   if (result != VK_SUCCESS)
-      return result;
-
-   list_for_each_entry(struct radv_physical_device, pdevice, &instance->physical_devices, link)
-   {
-      vk_outarray_append_typed(VkPhysicalDevice, &out, i)
-      {
-         *i = radv_physical_device_to_handle(pdevice);
-      }
-   }
-
-   return vk_outarray_status(&out);
-}
-
-VKAPI_ATTR VkResult VKAPI_CALL
-radv_EnumeratePhysicalDeviceGroups(VkInstance _instance, uint32_t *pPhysicalDeviceGroupCount,
-                                   VkPhysicalDeviceGroupProperties *pPhysicalDeviceGroupProperties)
-{
-   RADV_FROM_HANDLE(radv_instance, instance, _instance);
-   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceGroupProperties, out, pPhysicalDeviceGroupProperties,
-                          pPhysicalDeviceGroupCount);
-
-   VkResult result = radv_enumerate_physical_devices(instance);
-   if (result != VK_SUCCESS)
-      return result;
-
-   list_for_each_entry(struct radv_physical_device, pdevice, &instance->physical_devices, link)
-   {
-      vk_outarray_append_typed(VkPhysicalDeviceGroupProperties, &out, p)
-      {
-         p->physicalDeviceCount = 1;
-         memset(p->physicalDevices, 0, sizeof(p->physicalDevices));
-         p->physicalDevices[0] = radv_physical_device_to_handle(pdevice);
-         p->subsetAllocation = false;
-      }
-   }
-
-   return vk_outarray_status(&out);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1672,7 +1631,7 @@ radv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          features->accelerationStructure = true;
          features->accelerationStructureCaptureReplay = false;
          features->accelerationStructureIndirectBuild = false;
-         features->accelerationStructureHostCommands = true;
+         features->accelerationStructureHostCommands = false;
          features->descriptorBindingAccelerationStructureUpdateAfterBind = true;
          break;
       }
@@ -1848,6 +1807,18 @@ radv_GetPhysicalDeviceFeatures2(VkPhysicalDevice physicalDevice,
          VkPhysicalDeviceDeviceGeneratedCommandsFeaturesNV *features =
             (VkPhysicalDeviceDeviceGeneratedCommandsFeaturesNV *)ext;
          features->deviceGeneratedCommands = true;
+         break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT: {
+         VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT *features =
+            (VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT *)ext;
+         features->attachmentFeedbackLoopLayout = true;
+	 break;
+      }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT: {
+         VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT *features =
+            (VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT *)ext;
+         features->graphicsPipelineLibrary = true;
          break;
       }
       default:
@@ -2049,6 +2020,8 @@ radv_get_physical_device_properties_1_1(struct radv_physical_device *pdevice,
 
    p->subgroupSize = RADV_SUBGROUP_SIZE;
    p->subgroupSupportedStages = VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT;
+   if (radv_enable_rt(pdevice, true))
+      p->subgroupSupportedStages |= RADV_RT_STAGE_BITS;
    p->subgroupSupportedOperations =
       VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT |
       VK_SUBGROUP_FEATURE_ARITHMETIC_BIT | VK_SUBGROUP_FEATURE_BALLOT_BIT |
@@ -2568,6 +2541,13 @@ radv_GetPhysicalDeviceProperties2(VkPhysicalDevice physicalDevice,
          properties->maxIndirectSequenceCount = UINT32_MAX;
          break;
       }
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT: {
+         VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT *props =
+            (VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT *)ext;
+         props->graphicsPipelineLibraryFastLinking = false;
+         props->graphicsPipelineLibraryIndependentInterpolationDecoration = false;
+         break;
+      }
       default:
          break;
       }
@@ -3018,16 +2998,24 @@ radv_device_finish_vs_prologs(struct radv_device *device)
       hash_table_foreach(device->vs_prologs, entry)
       {
          free((void *)entry->key);
-         radv_shader_part_destroy(device, entry->data);
+         radv_shader_part_unref(device, entry->data);
       }
       _mesa_hash_table_destroy(device->vs_prologs, NULL);
    }
 
-   for (unsigned i = 0; i < ARRAY_SIZE(device->simple_vs_prologs); i++)
-      radv_shader_part_destroy(device, device->simple_vs_prologs[i]);
+   for (unsigned i = 0; i < ARRAY_SIZE(device->simple_vs_prologs); i++) {
+      if (!device->simple_vs_prologs[i])
+         continue;
 
-   for (unsigned i = 0; i < ARRAY_SIZE(device->instance_rate_vs_prologs); i++)
-      radv_shader_part_destroy(device, device->instance_rate_vs_prologs[i]);
+      radv_shader_part_unref(device, device->simple_vs_prologs[i]);
+   }
+
+   for (unsigned i = 0; i < ARRAY_SIZE(device->instance_rate_vs_prologs); i++) {
+      if (!device->instance_rate_vs_prologs[i])
+         continue;
+
+      radv_shader_part_unref(device, device->instance_rate_vs_prologs[i]);
+   }
 }
 
 VkResult
@@ -4954,39 +4942,6 @@ radv_cmd_buffer_needs_ace(const struct radv_cmd_buffer *cmd_buffer)
 {
    return cmd_buffer->ace_internal.cs && cmd_buffer->task_rings_needed;
 }
-
-struct radv_deferred_queue_submission {
-   struct radv_queue *queue;
-   VkCommandBuffer *cmd_buffers;
-   uint32_t cmd_buffer_count;
-
-   /* Sparse bindings that happen on a queue. */
-   VkSparseBufferMemoryBindInfo *buffer_binds;
-   uint32_t buffer_bind_count;
-   VkSparseImageOpaqueMemoryBindInfo *image_opaque_binds;
-   uint32_t image_opaque_bind_count;
-   VkSparseImageMemoryBindInfo *image_binds;
-   uint32_t image_bind_count;
-
-   bool flush_caches;
-   VkPipelineStageFlags2 wait_dst_stage_mask;
-   struct radv_semaphore_part **wait_semaphores;
-   uint32_t wait_semaphore_count;
-   struct radv_semaphore_part **signal_semaphores;
-   uint32_t signal_semaphore_count;
-   VkFence fence;
-
-   uint64_t *wait_values;
-   uint64_t *signal_values;
-
-   struct radv_semaphore_part *temporary_semaphore_parts;
-   uint32_t temporary_semaphore_part_count;
-
-   struct list_head queue_pending_list;
-   uint32_t submission_wait_count;
-
-   struct list_head processing_list;
-};
 
 static VkResult
 radv_queue_submit_bind_sparse_memory(struct radv_device *device, struct vk_queue_submit *submission)

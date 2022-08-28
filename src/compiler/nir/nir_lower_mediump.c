@@ -166,25 +166,46 @@ nir_lower_mediump_io(nir_shader *nir, nir_variable_mode modes,
                            !(nir->info.stage == MESA_SHADER_FRAGMENT &&
                              mode == nir_var_shader_out);
 
-         if (!sem.medium_precision ||
-             (is_varying && sem.location <= VARYING_SLOT_VAR31 &&
-              !(varying_mask & BITFIELD64_BIT(sem.location))))
+         if (is_varying && sem.location <= VARYING_SLOT_VAR31 &&
+            !(varying_mask & BITFIELD64_BIT(sem.location))) {
             continue; /* can't lower */
+         }
 
          if (nir_intrinsic_has_src_type(intr)) {
             /* Stores. */
             nir_alu_type type = nir_intrinsic_src_type(intr);
 
+            nir_op upconvert_op;
             switch (type) {
             case nir_type_float32:
                convert = nir_f2fmp;
+               upconvert_op = nir_op_f2f32;
                break;
             case nir_type_int32:
+               convert = nir_i2imp;
+               upconvert_op = nir_op_i2i32;
+               break;
             case nir_type_uint32:
                convert = nir_i2imp;
+               upconvert_op = nir_op_u2u32;
                break;
             default:
                continue; /* already lowered? */
+            }
+
+            /* Check that the output is mediump, or (for fragment shader
+             * outputs) is a conversion from a mediump value, and lower it to
+             * mediump.  Note that we don't automatically apply it to
+             * gl_FragDepth, as GLSL ES declares it highp and so hardware such
+             * as Adreno a6xx doesn't expect a half-float output for it.
+             */
+            nir_ssa_def *val = intr->src[0].ssa;
+            bool is_fragdepth = (nir->info.stage == MESA_SHADER_FRAGMENT &&
+                                 sem.location == FRAG_RESULT_DEPTH);
+            if (!sem.medium_precision &&
+                (is_varying || is_fragdepth || val->parent_instr->type != nir_instr_type_alu ||
+                 nir_instr_as_alu(val->parent_instr)->op != upconvert_op)) {
+               continue;
             }
 
             /* Convert the 32-bit store into a 16-bit store. */
@@ -193,6 +214,9 @@ nir_lower_mediump_io(nir_shader *nir, nir_variable_mode modes,
                                       convert(&b, intr->src[0].ssa));
             nir_intrinsic_set_src_type(intr, (type & ~32) | 16);
          } else {
+            if (!sem.medium_precision)
+               continue;
+
             /* Loads. */
             nir_alu_type type = nir_intrinsic_dest_type(intr);
 
@@ -524,7 +548,7 @@ can_fold_16bit_src(nir_ssa_def *ssa, nir_alu_type src_type, bool sext_matters)
    bool can_fold = fold_f16 || fold_u16 || fold_i16 || fold_i16_u16;
    for (unsigned i = 0; can_fold && i < ssa->num_components; i++) {
       nir_ssa_scalar comp = nir_ssa_scalar_resolved(ssa, i);
-      if (comp.def->parent_instr->type == nir_instr_type_ssa_undef)
+      if (nir_ssa_scalar_is_undef(comp))
          continue;
       else if (nir_ssa_scalar_is_const(comp)) {
          if (fold_f16)
@@ -560,7 +584,7 @@ fold_16bit_src(nir_builder *b, nir_instr *instr, nir_src *src, nir_alu_type src_
    for (unsigned i = 0; i < src->ssa->num_components; i++) {
       nir_ssa_scalar comp = nir_ssa_scalar_resolved(src->ssa, i);
 
-      if (comp.def->parent_instr->type == nir_instr_type_ssa_undef)
+      if (nir_ssa_scalar_is_undef(comp))
          new_comps[i] = nir_get_ssa_scalar(nir_ssa_undef(b, 1, 16), 0);
       else if (nir_ssa_scalar_is_const(comp)) {
          nir_ssa_def *constant;
@@ -723,6 +747,30 @@ fold_16bit_tex_srcs(nir_builder *b, nir_tex_instr *tex,
 }
 
 static bool
+fold_16bit_image_srcs(nir_builder *b, nir_intrinsic_instr *instr, int lod_idx)
+{
+   enum glsl_sampler_dim dim = nir_intrinsic_image_dim(instr);
+   bool is_ms = (dim == GLSL_SAMPLER_DIM_MS || dim == GLSL_SAMPLER_DIM_SUBPASS_MS);
+   nir_src *coords = &instr->src[1];
+   nir_src *sample = is_ms ? &instr->src[2] : NULL;
+   nir_src *lod = lod_idx >= 0 ? &instr->src[lod_idx] : NULL;
+
+   if (dim == GLSL_SAMPLER_DIM_BUF ||
+       !can_fold_16bit_src(coords->ssa, nir_type_int32, false) ||
+       (sample && !can_fold_16bit_src(sample->ssa, nir_type_int32, false)) ||
+       (lod && !can_fold_16bit_src(lod->ssa, nir_type_int32, false)))
+      return false;
+
+   fold_16bit_src(b, &instr->instr, coords, nir_type_int32);
+   if (sample)
+      fold_16bit_src(b, &instr->instr, sample, nir_type_int32);
+   if (lod)
+      fold_16bit_src(b, &instr->instr, lod, nir_type_int32);
+
+   return true;
+}
+
+static bool
 fold_16bit_tex_image(nir_builder *b, nir_instr *instr, void *params)
 {
    struct nir_fold_16bit_tex_image_options *options = params;
@@ -738,12 +786,70 @@ fold_16bit_tex_image(nir_builder *b, nir_instr *instr, void *params)
       case nir_intrinsic_image_store:
          if (options->fold_image_load_store_data)
             progress |= fold_16bit_store_data(b, intrinsic);
+         if (options->fold_image_srcs)
+            progress |= fold_16bit_image_srcs(b, intrinsic, 4);
          break;
       case nir_intrinsic_bindless_image_load:
       case nir_intrinsic_image_deref_load:
       case nir_intrinsic_image_load:
          if (options->fold_image_load_store_data)
             progress |= fold_16bit_load_data(b, intrinsic, exec_mode, options->rounding_mode);
+         if (options->fold_image_srcs)
+            progress |= fold_16bit_image_srcs(b, intrinsic, 3);
+         break;
+      case nir_intrinsic_bindless_image_sparse_load:
+      case nir_intrinsic_image_deref_sparse_load:
+      case nir_intrinsic_image_sparse_load:
+         if (options->fold_image_srcs)
+            progress |= fold_16bit_image_srcs(b, intrinsic, 3);
+         break;
+      case nir_intrinsic_bindless_image_atomic_add:
+      case nir_intrinsic_bindless_image_atomic_imin:
+      case nir_intrinsic_bindless_image_atomic_umin:
+      case nir_intrinsic_bindless_image_atomic_imax:
+      case nir_intrinsic_bindless_image_atomic_umax:
+      case nir_intrinsic_bindless_image_atomic_and:
+      case nir_intrinsic_bindless_image_atomic_or:
+      case nir_intrinsic_bindless_image_atomic_xor:
+      case nir_intrinsic_bindless_image_atomic_exchange:
+      case nir_intrinsic_bindless_image_atomic_comp_swap:
+      case nir_intrinsic_bindless_image_atomic_fadd:
+      case nir_intrinsic_bindless_image_atomic_fmin:
+      case nir_intrinsic_bindless_image_atomic_fmax:
+      case nir_intrinsic_bindless_image_atomic_inc_wrap:
+      case nir_intrinsic_bindless_image_atomic_dec_wrap:
+      case nir_intrinsic_image_deref_atomic_add:
+      case nir_intrinsic_image_deref_atomic_umin:
+      case nir_intrinsic_image_deref_atomic_imin:
+      case nir_intrinsic_image_deref_atomic_umax:
+      case nir_intrinsic_image_deref_atomic_imax:
+      case nir_intrinsic_image_deref_atomic_and:
+      case nir_intrinsic_image_deref_atomic_or:
+      case nir_intrinsic_image_deref_atomic_xor:
+      case nir_intrinsic_image_deref_atomic_exchange:
+      case nir_intrinsic_image_deref_atomic_comp_swap:
+      case nir_intrinsic_image_deref_atomic_fadd:
+      case nir_intrinsic_image_deref_atomic_fmin:
+      case nir_intrinsic_image_deref_atomic_fmax:
+      case nir_intrinsic_image_deref_atomic_inc_wrap:
+      case nir_intrinsic_image_deref_atomic_dec_wrap:
+      case nir_intrinsic_image_atomic_add:
+      case nir_intrinsic_image_atomic_imin:
+      case nir_intrinsic_image_atomic_umin:
+      case nir_intrinsic_image_atomic_imax:
+      case nir_intrinsic_image_atomic_umax:
+      case nir_intrinsic_image_atomic_and:
+      case nir_intrinsic_image_atomic_or:
+      case nir_intrinsic_image_atomic_xor:
+      case nir_intrinsic_image_atomic_exchange:
+      case nir_intrinsic_image_atomic_comp_swap:
+      case nir_intrinsic_image_atomic_fadd:
+      case nir_intrinsic_image_atomic_fmin:
+      case nir_intrinsic_image_atomic_fmax:
+      case nir_intrinsic_image_atomic_inc_wrap:
+      case nir_intrinsic_image_atomic_dec_wrap:
+         if (options->fold_image_srcs)
+            progress |= fold_16bit_image_srcs(b, intrinsic, -1);
          break;
       default:
          break;

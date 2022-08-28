@@ -107,6 +107,8 @@ struct ntv_context {
          subgroup_le_mask_var,
          subgroup_lt_mask_var,
          subgroup_size_var;
+
+   SpvId discard_func;
 };
 
 static SpvId
@@ -871,6 +873,19 @@ get_bare_image_type(struct ntv_context *ctx, struct nir_variable *var, bool is_s
    }
 
    SpvDim dimension = type_to_dim(glsl_get_sampler_dim(type), &is_ms);
+   if (dimension == SpvDim1D) {
+      if (is_sampler)
+         spirv_builder_emit_cap(&ctx->builder, SpvCapabilitySampled1D);
+      else
+         spirv_builder_emit_cap(&ctx->builder, SpvCapabilityImage1D);
+   }
+   if (dimension == SpvDimBuffer) {
+      if (is_sampler)
+         spirv_builder_emit_cap(&ctx->builder, SpvCapabilityImageBuffer);
+      else
+         spirv_builder_emit_cap(&ctx->builder, SpvCapabilitySampledBuffer);
+   }
+
    bool arrayed = glsl_sampler_type_is_array(type);
    if (dimension == SpvDimCube && arrayed)
       spirv_builder_emit_cap(&ctx->builder, SpvCapabilityImageCubeArray);
@@ -2111,9 +2126,6 @@ emit_alu(struct ntv_context *ctx, nir_alu_instr *alu)
    BINOP(nir_op_fge, SpvOpFOrdGreaterThanEqual)
    BINOP(nir_op_feq, SpvOpFOrdEqual)
    BINOP(nir_op_fneu, SpvOpFUnordNotEqual)
-   BINOP(nir_op_ishl, SpvOpShiftLeftLogical)
-   BINOP(nir_op_ishr, SpvOpShiftRightArithmetic)
-   BINOP(nir_op_ushr, SpvOpShiftRightLogical)
    BINOP(nir_op_frem, SpvOpFRem)
 #undef BINOP
 
@@ -2132,6 +2144,23 @@ emit_alu(struct ntv_context *ctx, nir_alu_instr *alu)
    BINOP_LOG(nir_op_ine, SpvOpINotEqual, SpvOpLogicalNotEqual)
    BINOP_LOG(nir_op_ixor, SpvOpBitwiseXor, SpvOpLogicalNotEqual)
 #undef BINOP_LOG
+
+#define BINOP_SHIFT(nir_op, spirv_op) \
+   case nir_op: { \
+      assert(nir_op_infos[alu->op].num_inputs == 2); \
+      int shift_bit_size = nir_src_bit_size(alu->src[1].src); \
+      nir_alu_type shift_nir_type = nir_alu_type_get_base_type(nir_op_infos[alu->op].input_types[1]); \
+      SpvId shift_type = get_alu_type(ctx, shift_nir_type, num_components, shift_bit_size); \
+      SpvId shift_mask = get_ivec_constant(ctx, shift_bit_size, num_components, bit_size - 1); \
+      SpvId shift_count = emit_binop(ctx, SpvOpBitwiseAnd, shift_type, src[1], shift_mask); \
+      result = emit_binop(ctx, spirv_op, dest_type, src[0], shift_count); \
+      break; \
+   }
+
+   BINOP_SHIFT(nir_op_ishl, SpvOpShiftLeftLogical)
+   BINOP_SHIFT(nir_op_ishr, SpvOpShiftRightArithmetic)
+   BINOP_SHIFT(nir_op_ushr, SpvOpShiftRightLogical)
+#undef BINOP_SHIFT
 
 #define BUILTIN_BINOP(nir_op, spirv_op) \
    case nir_op: \
@@ -2318,11 +2347,10 @@ emit_load_const(struct ntv_context *ctx, nir_load_const_instr *load_const)
 static void
 emit_discard(struct ntv_context *ctx, nir_intrinsic_instr *intr)
 {
-   assert(ctx->block_started);
-   spirv_builder_emit_kill(&ctx->builder);
-   /* discard is weird in NIR, so let's just create an unreachable block after
-      it and hope that the vulkan driver will DCE any instructinos in it. */
-   spirv_builder_label(&ctx->builder, spirv_builder_new_id(&ctx->builder));
+   assert(ctx->discard_func);
+   SpvId type_void = spirv_builder_type_void(&ctx->builder);
+   spirv_builder_function_call(&ctx->builder, type_void,
+                               ctx->discard_func, NULL, 0);
 }
 
 static void
@@ -2846,6 +2874,8 @@ emit_image_deref_size(struct ntv_context *ctx, nir_intrinsic_instr *intr)
    /* SPIRV requires 2 components for non-array cube size */
    if (glsl_get_sampler_dim(type) == GLSL_SAMPLER_DIM_CUBE && !glsl_sampler_type_is_array(type))
       num_components = 2;
+
+   spirv_builder_emit_cap(&ctx->builder, SpvCapabilityImageQuery);
    SpvId result = spirv_builder_emit_image_query_size(&ctx->builder, get_uvec_type(ctx, 32, num_components), img, 0);
    store_dest(ctx, &intr->dest, result, nir_type_uint);
 }
@@ -2858,6 +2888,8 @@ emit_image_deref_samples(struct ntv_context *ctx, nir_intrinsic_instr *intr)
    nir_variable *var = deref->deref_type == nir_deref_type_var ? deref->var : get_var_from_image(ctx, img_var);
    SpvId img_type = var->data.bindless ? get_bare_image_type(ctx, var, false) : ctx->image_types[var->data.driver_location];
    SpvId img = spirv_builder_emit_load(&ctx->builder, img_type, img_var);
+
+   spirv_builder_emit_cap(&ctx->builder, SpvCapabilityImageQuery);
    SpvId result = spirv_builder_emit_unop(&ctx->builder, SpvOpImageQuerySamples, get_dest_type(ctx, &intr->dest, nir_type_uint), img);
    store_dest(ctx, &intr->dest, result, nir_type_uint);
 }
@@ -3491,6 +3523,9 @@ emit_tex(struct ntv_context *ctx, nir_tex_instr *tex)
       tex->dest.ssa.num_components--;
    SpvId dest_type = get_dest_type(ctx, &tex->dest, tex->dest_type);
 
+   if (nir_tex_instr_is_query(tex))
+      spirv_builder_emit_cap(&ctx->builder, SpvCapabilityImageQuery);
+
    if (!tex_instr_is_lod_allowed(tex))
       lod = 0;
    else if (ctx->stage != MESA_SHADER_FRAGMENT &&
@@ -3703,6 +3738,28 @@ emit_deref_array(struct ntv_context *ctx, nir_deref_instr *deref)
 {
    assert(deref->deref_type == nir_deref_type_array);
    nir_variable *var = nir_deref_instr_get_variable(deref);
+
+   if (!nir_src_is_always_uniform(deref->arr.index)) {
+      if (deref->modes & nir_var_mem_ubo)
+         spirv_builder_emit_cap(&ctx->builder,
+                                SpvCapabilityUniformBufferArrayDynamicIndexing);
+
+      if (deref->modes & nir_var_mem_ssbo)
+         spirv_builder_emit_cap(&ctx->builder,
+                                SpvCapabilityStorageBufferArrayDynamicIndexing);
+
+      if (deref->modes & (nir_var_uniform | nir_var_image)) {
+         const struct glsl_type *type = glsl_without_array(var->type);
+         assert(glsl_type_is_sampler(type) || glsl_type_is_image(type));
+
+         if (glsl_type_is_sampler(type))
+            spirv_builder_emit_cap(&ctx->builder,
+                                   SpvCapabilitySampledImageArrayDynamicIndexing);
+         else
+            spirv_builder_emit_cap(&ctx->builder,
+                                   SpvCapabilityStorageImageArrayDynamicIndexing);
+      }
+   }
 
    SpvStorageClass storage_class = get_storage_class(var);
    SpvId base, type;
@@ -4086,9 +4143,6 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
       goto fail;
 
    spirv_builder_emit_cap(&ctx.builder, SpvCapabilityShader);
-   if (BITSET_COUNT(s->info.image_buffers) != 0)
-      spirv_builder_emit_cap(&ctx.builder, SpvCapabilityImageBuffer);
-   spirv_builder_emit_cap(&ctx.builder, SpvCapabilitySampledBuffer);
 
    switch (s->info.stage) {
    case MESA_SHADER_FRAGMENT:
@@ -4104,7 +4158,8 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
           BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_DRAW_ID) ||
           BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE) ||
           BITSET_TEST(s->info.system_values_read, SYSTEM_VALUE_BASE_VERTEX)) {
-         spirv_builder_emit_extension(&ctx.builder, "SPV_KHR_shader_draw_parameters");
+         if (spirv_version < SPIRV_VERSION(1, 3))
+            spirv_builder_emit_extension(&ctx.builder, "SPV_KHR_shader_draw_parameters");
          spirv_builder_emit_cap(&ctx.builder, SpvCapabilityDrawParameters);
       }
       break;
@@ -4147,7 +4202,7 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
          spirv_builder_emit_cap(&ctx.builder, SpvCapabilityGeometry);
    }
 
-   if (s->info.num_ssbos)
+   if (s->info.num_ssbos && spirv_version < SPIRV_VERSION(1, 1))
       spirv_builder_emit_extension(&ctx.builder, "SPV_KHR_storage_buffer_storage_class");
 
    if (s->info.stage < MESA_SHADER_FRAGMENT &&
@@ -4156,16 +4211,6 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
          spirv_builder_emit_cap(&ctx.builder, SpvCapabilityShaderViewportIndex);
       else
          spirv_builder_emit_cap(&ctx.builder, SpvCapabilityMultiViewport);
-   }
-
-   if (s->info.num_textures) {
-      spirv_builder_emit_cap(&ctx.builder, SpvCapabilitySampled1D);
-      spirv_builder_emit_cap(&ctx.builder, SpvCapabilityImageQuery);
-   }
-
-   if (s->info.num_images) {
-      spirv_builder_emit_cap(&ctx.builder, SpvCapabilityImage1D);
-      spirv_builder_emit_cap(&ctx.builder, SpvCapabilityImageQuery);
    }
 
    ctx.stage = s->info.stage;
@@ -4227,8 +4272,8 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
    }
 
    SpvId type_void = spirv_builder_type_void(&ctx.builder);
-   SpvId type_main = spirv_builder_type_function(&ctx.builder, type_void,
-                                                 NULL, 0);
+   SpvId type_void_func = spirv_builder_type_function(&ctx.builder, type_void,
+                                                      NULL, 0);
    SpvId entry_point = spirv_builder_new_id(&ctx.builder);
    spirv_builder_emit_name(&ctx.builder, entry_point, "main");
 
@@ -4368,9 +4413,22 @@ nir_to_spirv(struct nir_shader *s, const struct zink_shader_info *sinfo, uint32_
       spirv_builder_emit_exec_mode(&ctx.builder, entry_point,
                                    SpvExecutionModeXfb);
    }
+
+   if (s->info.stage == MESA_SHADER_FRAGMENT && s->info.fs.uses_discard) {
+      ctx.discard_func = spirv_builder_new_id(&ctx.builder);
+      spirv_builder_emit_name(&ctx.builder, ctx.discard_func, "discard");
+      spirv_builder_function(&ctx.builder, ctx.discard_func, type_void,
+                             SpvFunctionControlMaskNone,
+                             type_void_func);
+      SpvId label = spirv_builder_new_id(&ctx.builder);
+      spirv_builder_label(&ctx.builder, label);
+      spirv_builder_emit_kill(&ctx.builder);
+      spirv_builder_function_end(&ctx.builder);
+   }
+
    spirv_builder_function(&ctx.builder, entry_point, type_void,
-                                            SpvFunctionControlMaskNone,
-                                            type_main);
+                          SpvFunctionControlMaskNone,
+                          type_void_func);
 
    nir_function_impl *entry = nir_shader_get_entrypoint(s);
    nir_metadata_require(entry, nir_metadata_block_index);

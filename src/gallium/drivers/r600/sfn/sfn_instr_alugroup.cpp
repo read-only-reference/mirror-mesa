@@ -42,10 +42,14 @@ bool AluGroup::add_instruction(AluInstr *instr)
    if (m_has_lds_op && instr->has_lds_access())
       return false;
 
-   if (instr->has_alu_flag(alu_is_trans) && add_trans_instructions(instr))
-      return true;
+   if (instr->has_alu_flag(alu_is_trans)) {
+      auto opinfo = alu_ops.find(instr->opcode());
+      assert(opinfo->second.can_channel(AluOp::t, s_chip_class));
+      if (add_trans_instructions(instr))
+         return true;
+   }
 
-   if (add_vec_instructions(instr)) {
+   if (add_vec_instructions(instr) && !instr->has_alu_flag(alu_is_trans)) {
       instr->set_parent_group(this);
       return true;
    }
@@ -54,7 +58,7 @@ bool AluGroup::add_instruction(AluInstr *instr)
    assert(opinfo != alu_ops.end());
 
    if (s_max_slots > 4 &&
-       opinfo->second.can_channel(AluOp::t) &&
+       opinfo->second.can_channel(AluOp::t, s_chip_class) &&
        add_trans_instructions(instr)) {
       instr->set_parent_group(this);
       return true;
@@ -78,9 +82,8 @@ bool AluGroup::add_trans_instructions(AluInstr *instr)
    auto opinfo = alu_ops.find(instr->opcode());
    assert(opinfo != alu_ops.end());
 
-   if (!opinfo->second.can_channel(AluOp::t))
+   if (!opinfo->second.can_channel(AluOp::t, s_chip_class))
       return false;
-
 
    /* if we schedule a non-trans instr into the trans slot, we have to make
     * sure that the corresponding vector slot is already occupied, otherwise
@@ -228,13 +231,14 @@ bool AluGroup::try_readport(AluInstr *instr, AluBankSwizzle cycle)
 
 bool AluGroup::update_indirect_access(AluInstr *instr)
 {
-   auto indirect_addr = instr->indirect_addr();
+   auto [indirect_addr, for_src, is_index ] = instr->indirect_addr();
 
-   if (indirect_addr.first) {
+   if (indirect_addr) {
       if (!m_addr_used) {
-         m_addr_used = indirect_addr.first;
-         m_addr_is_index = indirect_addr.second;
-      } else if (!indirect_addr.first->equal_to(*m_addr_used)) {
+         m_addr_used = indirect_addr;
+         m_addr_for_src = for_src;
+         m_addr_is_index = is_index;
+      } else if (!indirect_addr->equal_to(*m_addr_used)) {
          return false;
       }
    }
@@ -373,15 +377,10 @@ AluInstr::SrcValues AluGroup::get_kconsts() const
 
 void AluGroup::set_chipclass(r600_chip_class chip_class)
 {
-   switch (chip_class) {
-   case ISA_CC_CAYMAN:
-      s_max_slots = 4;
-   break;
-   default:
-      s_max_slots = 5;
-   }
+   s_chip_class = chip_class;
+   s_max_slots  = chip_class == ISA_CC_CAYMAN ? 4 : 5;    
 }
 
 int AluGroup::s_max_slots = 5;
-
+r600_chip_class AluGroup::s_chip_class = ISA_CC_EVERGREEN;
 }

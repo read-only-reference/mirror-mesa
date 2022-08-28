@@ -335,13 +335,14 @@ fs_generator::generate_send(fs_inst *inst,
    uint32_t ex_desc_imm = inst->ex_desc |
       brw_message_ex_desc(devinfo, inst->ex_mlen);
 
-   if (ex_desc.file != BRW_IMMEDIATE_VALUE || ex_desc.ud || ex_desc_imm) {
+   if (ex_desc.file != BRW_IMMEDIATE_VALUE || ex_desc.ud || ex_desc_imm ||
+       inst->send_ex_desc_scratch) {
       /* If we have any sort of extended descriptor, then we need SENDS.  This
        * also covers the dual-payload case because ex_mlen goes in ex_desc.
        */
       brw_send_indirect_split_message(p, inst->sfid, dst, payload, payload2,
                                       desc, desc_imm, ex_desc, ex_desc_imm,
-                                      inst->eot);
+                                      inst->send_ex_desc_scratch, inst->eot);
       if (inst->check_tdr)
          brw_inst_set_opcode(p->isa, brw_last_inst,
                              devinfo->ver >= 12 ? BRW_OPCODE_SENDC : BRW_OPCODE_SENDSC);
@@ -2343,32 +2344,12 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
 
          break;
 
-      case SHADER_OPCODE_FIND_LIVE_CHANNEL: {
-         const bool uses_vmask =
-            stage == MESA_SHADER_FRAGMENT &&
-            brw_wm_prog_data(this->prog_data)->uses_vmask;
-         const struct brw_reg mask =
-            brw_stage_has_packed_dispatch(devinfo, stage,
-                                          prog_data) ? brw_imm_ud(~0u) :
-            uses_vmask ? brw_vmask_reg() : brw_dmask_reg();
-
-         brw_find_live_channel(p, dst, mask, false);
+      case SHADER_OPCODE_FIND_LIVE_CHANNEL:
+         brw_find_live_channel(p, dst, false);
          break;
-      }
-      case SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL: {
-         const bool uses_vmask =
-            stage == MESA_SHADER_FRAGMENT &&
-            brw_wm_prog_data(this->prog_data)->uses_vmask;
-
-         /* ce0 doesn't consider the thread dispatch mask, so if we want
-          * to find the true last enabled channel, we need to apply that too.
-          */
-         const struct brw_reg mask =
-            uses_vmask ? brw_vmask_reg() : brw_dmask_reg();
-
-         brw_find_live_channel(p, dst, mask, true);
+      case SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL:
+         brw_find_live_channel(p, dst, true);
          break;
-      }
 
       case FS_OPCODE_LOAD_LIVE_CHANNELS: {
          assert(devinfo->ver >= 8);

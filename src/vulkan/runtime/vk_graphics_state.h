@@ -504,6 +504,12 @@ struct vk_render_pass_state {
 
    /** VkPipelineRenderingCreateInfo::stencilAttachmentFormat */
    VkFormat stencil_attachment_format;
+
+   /** VkAttachmentSampleCountInfoAMD::pColorAttachmentSamples */
+   uint8_t color_attachment_samples[MESA_VK_MAX_COLOR_ATTACHMENTS];
+
+   /** VkAttachmentSampleCountInfoAMD::depthStencilAttachmentSamples */
+   uint8_t depth_stencil_attachment_samples;
 };
 
 /** Struct representing all dynamic graphics state
@@ -746,7 +752,16 @@ struct vk_graphics_pipeline_state {
  * we can get this information ourselves.
  */
 struct vk_subpass_info {
+   /** VkSubpassDescription2::viewMask */
    uint32_t view_mask;
+
+   /**
+    * Aspects of all attachments used as color or depth/stencil attachments
+    * in the subpass.  Input and resolve attachments should not be considered
+    * when computing the attachments aspect mask.  This is used to determine
+    * whether or not depth/stencil and color blend state are required for a
+    * pipeline.
+    */
    VkImageAspectFlags attachment_aspects;
 };
 

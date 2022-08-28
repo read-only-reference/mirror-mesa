@@ -2701,7 +2701,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       return;
    } else if (opcode == SpvOpImageSparseTexelsResident) {
       nir_ssa_def *code = vtn_get_nir_ssa(b, w[3]);
-      vtn_push_nir_ssa(b, w[2], nir_is_sparse_texels_resident(&b->nb, code));
+      vtn_push_nir_ssa(b, w[2], nir_is_sparse_texels_resident(&b->nb, 1, code));
       return;
    }
 
@@ -2826,8 +2826,13 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       break;
    case nir_texop_txf_ms_mcs_intel:
       vtn_fail("unexpected nir_texop_txf_ms_mcs");
+      break;
    case nir_texop_tex_prefetch:
       vtn_fail("unexpected nir_texop_tex_prefetch");
+      break;
+   case nir_texop_descriptor_amd:
+      vtn_fail("unexpected nir_texop_descriptor_amd");
+      break;
    }
 
    unsigned idx = 4;
@@ -4499,7 +4504,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
             vtn_warn("Unsupported SPIR-V capability: %s",
                      spirv_capability_to_string(cap));
          spv_check_supported(linkage, cap);
-         vtn_warn("The SPIR-V Linkage capability is not fully supported");
          break;
 
       case SpvCapabilitySparseResidency:

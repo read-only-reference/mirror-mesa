@@ -337,10 +337,20 @@ bool Block::try_reserve_kcache(const AluInstr& instr)
    return true;
 }
 
+void Block::set_chipclass(r600_chip_class chip_class)
+{
+   if (chip_class < ISA_CC_EVERGREEN)
+      s_max_kcache_banks = 2;
+   else
+      s_max_kcache_banks = 4;
+}
+
+unsigned Block::s_max_kcache_banks = 4;
+
 bool Block::try_reserve_kcache(const UniformValue& u,
                                std::array<KCacheLine, 4>& kcache) const
 {
-   const int kcache_banks = 4; // TODO: handle pre-evergreen
+   const int kcache_banks = s_max_kcache_banks; // TODO: handle pre-evergreen
 
    int bank = u.kcache_bank();
    int sel  = (u.sel() - 512);
@@ -448,7 +458,7 @@ public:
    DECLARE_MEMBER(Block);
    DECLARE_MEMBER(ControlFlowInstr);
    DECLARE_MEMBER(IfInstr);
-   DECLARE_MEMBER(WriteScratchInstr);
+   DECLARE_MEMBER(ScratchIOInstr);
    DECLARE_MEMBER(StreamOutInstr);
    DECLARE_MEMBER(MemRingOutInstr);
    DECLARE_MEMBER(EmitVertexInstr);
@@ -494,7 +504,7 @@ public:
       m_comparer = InstrComparer(&instr);
    }
 
-   void visit(const WriteScratchInstr& instr) override {
+   void visit(const ScratchIOInstr& instr) override {
       m_comparer = InstrComparer(&instr);
    }
 

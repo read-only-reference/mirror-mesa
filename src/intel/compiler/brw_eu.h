@@ -1587,6 +1587,7 @@ brw_send_indirect_split_message(struct brw_codegen *p,
                                 unsigned desc_imm,
                                 struct brw_reg ex_desc,
                                 unsigned ex_desc_imm,
+                                bool ex_desc_scratch,
                                 bool eot);
 
 void brw_ff_sync(struct brw_codegen *p,
@@ -1801,7 +1802,6 @@ brw_pixel_interpolator_query(struct brw_codegen *p,
 void
 brw_find_live_channel(struct brw_codegen *p,
                       struct brw_reg dst,
-                      struct brw_reg mask,
                       bool last);
 
 void

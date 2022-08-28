@@ -361,9 +361,12 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_SAMPLE_SHADING:
    case PIPE_CAP_GL_SPIRV:
    case PIPE_CAP_POST_DEPTH_COVERAGE:
+   case PIPE_CAP_SHADER_CLOCK:
    case PIPE_CAP_PACKED_UNIFORMS: {
       struct llvmpipe_screen *lscreen = llvmpipe_screen(screen);
       return !lscreen->use_tgsi;
+   case PIPE_CAP_NIR_IMAGES_AS_DEREF:
+      return 0;
    }
    default:
       return u_pipe_screen_get_param_defaults(screen, param);
@@ -918,8 +921,8 @@ static void update_cache_sha1_cpu(struct mesa_sha1 *ctx)
     * Don't need the cpu cache affinity stuff. The rest
     * is contained in first 5 dwords.
     */
-   STATIC_ASSERT(offsetof(struct util_cpu_caps_t, num_L3_caches) == 6 * sizeof(uint32_t));
-   _mesa_sha1_update(ctx, cpu_caps, 6 * sizeof(uint32_t));
+   STATIC_ASSERT(offsetof(struct util_cpu_caps_t, num_L3_caches) == 5 * sizeof(uint32_t));
+   _mesa_sha1_update(ctx, cpu_caps, 5 * sizeof(uint32_t));
 }
 
 static void lp_disk_cache_create(struct llvmpipe_screen *screen)

@@ -87,7 +87,6 @@ bool ir_constant_fold(ir_rvalue **rvalue);
 bool do_rebalance_tree(exec_list *instructions);
 bool do_algebraic(exec_list *instructions, bool native_integers,
                   const struct gl_shader_compiler_options *options);
-bool opt_conditional_discard(exec_list *instructions);
 bool do_constant_folding(exec_list *instructions);
 bool do_constant_variable(exec_list *instructions);
 bool do_constant_variable_unlinked(exec_list *instructions);
@@ -119,12 +118,10 @@ bool lower_vector_insert(exec_list *instructions, bool lower_nonconstant_index);
 bool lower_vector_derefs(gl_linked_shader *shader);
 void lower_named_interface_blocks(void *mem_ctx, gl_linked_shader *shader);
 bool optimize_split_arrays(exec_list *instructions, bool linked);
-bool lower_offset_arrays(exec_list *instructions);
 void optimize_dead_builtin_variables(exec_list *instructions,
                                      enum ir_variable_mode other);
 bool lower_tess_level(gl_linked_shader *shader);
 
-bool lower_vertex_id(gl_linked_shader *shader);
 bool lower_cs_derived(gl_linked_shader *shader);
 bool lower_blend_equation_advanced(gl_linked_shader *shader, bool coherent);
 

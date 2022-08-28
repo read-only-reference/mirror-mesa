@@ -142,11 +142,19 @@ create_surface(struct pipe_context *pctx,
    VkImageViewUsageCreateInfo usage_info;
    usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
    usage_info.pNext = NULL;
-   VkFormatFeatureFlags feats = res->optimal_tiling ?
-                                screen->format_props[templ->format].optimalTilingFeatures :
-                                screen->format_props[templ->format].linearTilingFeatures;
+   VkFormatFeatureFlags feats = res->linear ?
+                                screen->format_props[templ->format].linearTilingFeatures :
+                                screen->format_props[templ->format].optimalTilingFeatures;
    VkImageUsageFlags attachment = (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
    usage_info.usage = res->obj->vkusage & ~attachment;
+   if (res->obj->modifier_aspect) {
+      feats = res->obj->vkfeats;
+      /* intersect format features for current modifier */
+      for (unsigned i = 0; i < screen->modifier_props[templ->format].drmFormatModifierCount; i++) {
+         if (res->obj->modifier == screen->modifier_props[templ->format].pDrmFormatModifierProperties[i].drmFormatModifier)
+            feats &= screen->modifier_props[templ->format].pDrmFormatModifierProperties[i].drmFormatModifierTilingFeatures;
+      }
+   }
    if ((res->obj->vkusage & attachment) &&
        !(feats & (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT))) {
       ivci->pNext = &usage_info;
@@ -165,7 +173,6 @@ create_surface(struct pipe_context *pctx,
    surface->base.u.tex.first_layer = templ->u.tex.first_layer;
    surface->base.u.tex.last_layer = templ->u.tex.last_layer;
    surface->obj = zink_resource(pres)->obj;
-   util_dynarray_init(&surface->desc_set_refs.refs, NULL);
 
    init_surface_info(surface, res, ivci);
 
@@ -309,7 +316,6 @@ zink_destroy_surface(struct zink_screen *screen, struct pipe_surface *psurface)
       _mesa_hash_table_remove(&res->surface_cache, he);
       simple_mtx_unlock(&res->surface_mtx);
    }
-   zink_descriptor_set_refs_clear(&surface->desc_set_refs, surface);
    if (surface->simage_view)
       VKSCR(DestroyImageView)(screen->dev, surface->simage_view, NULL);
    if (surface->is_swapchain) {
@@ -351,7 +357,6 @@ zink_rebind_surface(struct zink_context *ctx, struct pipe_surface **psurface)
    struct hash_entry *new_entry = _mesa_hash_table_search_pre_hashed(&res->surface_cache, hash, &ivci);
    if (zink_batch_usage_exists(surface->batch_uses))
       zink_batch_reference_surface(&ctx->batch, surface);
-   zink_descriptor_set_refs_clear(&surface->desc_set_refs, surface);
    if (new_entry) {
       /* reuse existing surface; old one will be cleaned up naturally */
       struct zink_surface *new_surface = new_entry->data;

@@ -285,7 +285,12 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_index_type_uint8                  = true,
       .EXT_inline_uniform_block              = true,
       .EXT_line_rasterization                = true,
-      .EXT_memory_budget                     = device->sys.available,
+      /* Enable the extension only if we have support on both the local &
+       * system memory
+       */
+      .EXT_memory_budget                     = (!device->info.has_local_mem ||
+                                                device->vram_mappable.available > 0) &&
+                                               device->sys.available,
       .EXT_non_seamless_cube_map             = true,
       .EXT_pci_bus_info                      = true,
       .EXT_physical_device_drm               = true,
@@ -601,7 +606,7 @@ anv_physical_device_free_disk_cache(struct anv_physical_device *device)
       device->vk.disk_cache = NULL;
    }
 #else
-   assert(device->disk_cache == NULL);
+   assert(device->vk.disk_cache == NULL);
 #endif
 }
 
@@ -727,10 +732,18 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
 }
 
 static VkResult
-anv_physical_device_try_create(struct anv_instance *instance,
-                               drmDevicePtr drm_device,
-                               struct anv_physical_device **device_out)
+anv_physical_device_try_create(struct vk_instance *vk_instance,
+                               struct _drmDevice *drm_device,
+                               struct vk_physical_device **out)
 {
+   struct anv_instance *instance =
+      container_of(vk_instance, struct anv_instance, vk);
+
+   if (!(drm_device->available_nodes & (1 << DRM_NODE_RENDER)) ||
+       drm_device->bustype != DRM_BUS_PCI ||
+       drm_device->deviceinfo.pci->vendor_id != 0x8086)
+      return VK_ERROR_INCOMPATIBLE_DRIVER;
+
    const char *primary_path = drm_device->nodes[DRM_NODE_PRIMARY];
    const char *path = drm_device->nodes[DRM_NODE_RENDER];
    VkResult result;
@@ -871,11 +884,6 @@ anv_physical_device_try_create(struct anv_instance *instance,
    device->supports_48bit_addresses = (device->info.ver >= 8) &&
                                       device->gtt_size > (4ULL << 30 /* GiB */);
 
-   /* Initialize memory regions struct to 0. */
-   memset(&device->vram_non_mappable, 0, sizeof(device->vram_non_mappable));
-   memset(&device->vram_mappable, 0, sizeof(device->vram_mappable));
-   memset(&device->sys, 0, sizeof(device->sys));
-
    result = anv_physical_device_init_heaps(device, fd);
    if (result != VK_SUCCESS)
       goto fail_base;
@@ -1004,7 +1012,7 @@ anv_physical_device_try_create(struct anv_instance *instance,
 
    anv_genX(&device->info, init_physical_device_state)(device);
 
-   *device_out = device;
+   *out = &device->vk;
 
    struct stat st;
 
@@ -1048,8 +1056,11 @@ fail_fd:
 }
 
 static void
-anv_physical_device_destroy(struct anv_physical_device *device)
+anv_physical_device_destroy(struct vk_physical_device *vk_device)
 {
+   struct anv_physical_device *device =
+      container_of(vk_device, struct anv_physical_device, vk);
+
    anv_finish_wsi(device);
    anv_measure_device_destroy(device);
    free(device->engine_info);
@@ -1126,8 +1137,8 @@ VkResult anv_CreateInstance(
       return vk_error(NULL, result);
    }
 
-   instance->physical_devices_enumerated = false;
-   list_inithead(&instance->physical_devices);
+   instance->vk.physical_devices.try_create_for_drm = anv_physical_device_try_create;
+   instance->vk.physical_devices.destroy = anv_physical_device_destroy;
 
    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
 
@@ -1149,10 +1160,6 @@ void anv_DestroyInstance(
    if (!instance)
       return;
 
-   list_for_each_entry_safe(struct anv_physical_device, pdevice,
-                            &instance->physical_devices, link)
-      anv_physical_device_destroy(pdevice);
-
    VG(VALGRIND_DESTROY_MEMPOOL(instance));
 
    driDestroyOptionCache(&instance->dri_options);
@@ -1160,103 +1167,6 @@ void anv_DestroyInstance(
 
    vk_instance_finish(&instance->vk);
    vk_free(&instance->vk.alloc, instance);
-}
-
-static VkResult
-anv_enumerate_physical_devices(struct anv_instance *instance)
-{
-   if (instance->physical_devices_enumerated)
-      return VK_SUCCESS;
-
-   instance->physical_devices_enumerated = true;
-
-   /* TODO: Check for more devices ? */
-   drmDevicePtr devices[8];
-   int max_devices;
-
-   max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
-   if (max_devices < 1)
-      return VK_SUCCESS;
-
-   VkResult result = VK_SUCCESS;
-   for (unsigned i = 0; i < (unsigned)max_devices; i++) {
-      if (devices[i]->available_nodes & 1 << DRM_NODE_RENDER &&
-          devices[i]->bustype == DRM_BUS_PCI &&
-          devices[i]->deviceinfo.pci->vendor_id == 0x8086) {
-
-         struct anv_physical_device *pdevice;
-         result = anv_physical_device_try_create(instance, devices[i],
-                                                 &pdevice);
-         /* Incompatible DRM device, skip. */
-         if (result == VK_ERROR_INCOMPATIBLE_DRIVER) {
-            result = VK_SUCCESS;
-            continue;
-         }
-
-         /* Error creating the physical device, report the error. */
-         if (result != VK_SUCCESS)
-            break;
-
-         list_addtail(&pdevice->link, &instance->physical_devices);
-      }
-   }
-   drmFreeDevices(devices, max_devices);
-
-   /* If we successfully enumerated any devices, call it success */
-   return result;
-}
-
-VkResult anv_EnumeratePhysicalDevices(
-    VkInstance                                  _instance,
-    uint32_t*                                   pPhysicalDeviceCount,
-    VkPhysicalDevice*                           pPhysicalDevices)
-{
-   ANV_FROM_HANDLE(anv_instance, instance, _instance);
-   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDevice, out,
-                          pPhysicalDevices, pPhysicalDeviceCount);
-
-   VkResult result = anv_enumerate_physical_devices(instance);
-   if (result != VK_SUCCESS)
-      return result;
-
-   list_for_each_entry(struct anv_physical_device, pdevice,
-                       &instance->physical_devices, link) {
-      vk_outarray_append_typed(VkPhysicalDevice, &out, i) {
-         *i = anv_physical_device_to_handle(pdevice);
-      }
-   }
-
-   return vk_outarray_status(&out);
-}
-
-VkResult anv_EnumeratePhysicalDeviceGroups(
-    VkInstance                                  _instance,
-    uint32_t*                                   pPhysicalDeviceGroupCount,
-    VkPhysicalDeviceGroupProperties*            pPhysicalDeviceGroupProperties)
-{
-   ANV_FROM_HANDLE(anv_instance, instance, _instance);
-   VK_OUTARRAY_MAKE_TYPED(VkPhysicalDeviceGroupProperties, out,
-                          pPhysicalDeviceGroupProperties,
-                          pPhysicalDeviceGroupCount);
-
-   VkResult result = anv_enumerate_physical_devices(instance);
-   if (result != VK_SUCCESS)
-      return result;
-
-   list_for_each_entry(struct anv_physical_device, pdevice,
-                       &instance->physical_devices, link) {
-      vk_outarray_append_typed(VkPhysicalDeviceGroupProperties, &out, p) {
-         p->physicalDeviceCount = 1;
-         memset(p->physicalDevices, 0, sizeof(p->physicalDevices));
-         p->physicalDevices[0] = anv_physical_device_to_handle(pdevice);
-         p->subsetAllocation = false;
-
-         vk_foreach_struct(ext, p->pNext)
-            anv_debug_ignored_stype(ext->sType);
-      }
-   }
-
-   return vk_outarray_status(&out);
 }
 
 void anv_GetPhysicalDeviceFeatures(
@@ -2752,6 +2662,9 @@ anv_get_memory_budget(VkPhysicalDevice physicalDevice,
 {
    ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
 
+   if (!device->vk.supported_extensions.EXT_memory_budget)
+      return;
+
    anv_update_meminfo(device, device->local_fd);
 
    VkDeviceSize total_sys_heaps_size = 0, total_vram_heaps_size = 0;
@@ -2906,7 +2819,7 @@ anv_state_pool_emit_data(struct anv_state_pool *pool, size_t size, size_t align,
 static void
 anv_device_init_border_colors(struct anv_device *device)
 {
-   if (device->info.platform == INTEL_PLATFORM_HSW) {
+   if (device->info->platform == INTEL_PLATFORM_HSW) {
       static const struct hsw_border_color border_colors[] = {
          [VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK] =  { .float32 = { 0.0, 0.0, 0.0, 0.0 } },
          [VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK] =       { .float32 = { 0.0, 0.0, 0.0, 1.0 } },
@@ -3061,6 +2974,85 @@ static struct intel_mapped_pinned_buffer_alloc aux_map_allocator = {
 
 static VkResult anv_device_check_status(struct vk_device *vk_device);
 
+static VkResult
+anv_device_setup_context(struct anv_device *device,
+                         const VkDeviceCreateInfo *pCreateInfo,
+                         const uint32_t num_queues)
+{
+   struct anv_physical_device *physical_device = device->physical;
+   VkResult result = VK_SUCCESS;
+
+   if (device->physical->engine_info) {
+      /* The kernel API supports at most 64 engines */
+      assert(num_queues <= 64);
+      uint16_t engine_classes[64];
+      int engine_count = 0;
+      for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
+         const VkDeviceQueueCreateInfo *queueCreateInfo =
+            &pCreateInfo->pQueueCreateInfos[i];
+
+         assert(queueCreateInfo->queueFamilyIndex <
+                physical_device->queue.family_count);
+         struct anv_queue_family *queue_family =
+            &physical_device->queue.families[queueCreateInfo->queueFamilyIndex];
+
+         for (uint32_t j = 0; j < queueCreateInfo->queueCount; j++)
+            engine_classes[engine_count++] = queue_family->engine_class;
+      }
+      device->context_id =
+         intel_gem_create_context_engines(device->fd,
+                                          physical_device->engine_info,
+                                          engine_count, engine_classes);
+   } else {
+      assert(num_queues == 1);
+      device->context_id = anv_gem_create_context(device);
+   }
+
+   if (device->context_id == -1) {
+      result = vk_error(device, VK_ERROR_INITIALIZATION_FAILED);
+      return result;
+   }
+
+   /* Here we tell the kernel not to attempt to recover our context but
+    * immediately (on the next batchbuffer submission) report that the
+    * context is lost, and we will do the recovery ourselves.  In the case
+    * of Vulkan, recovery means throwing VK_ERROR_DEVICE_LOST and letting
+    * the client clean up the pieces.
+    */
+   anv_gem_set_context_param(device->fd, device->context_id,
+                             I915_CONTEXT_PARAM_RECOVERABLE, false);
+
+   /* Check if client specified queue priority. */
+   const VkDeviceQueueGlobalPriorityCreateInfoKHR *queue_priority =
+      vk_find_struct_const(pCreateInfo->pQueueCreateInfos[0].pNext,
+                           DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR);
+
+   VkQueueGlobalPriorityKHR priority =
+      queue_priority ? queue_priority->globalPriority :
+         VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
+
+   /* As per spec, the driver implementation may deny requests to acquire
+    * a priority above the default priority (MEDIUM) if the caller does not
+    * have sufficient privileges. In this scenario VK_ERROR_NOT_PERMITTED_KHR
+    * is returned.
+    */
+   if (physical_device->max_context_priority >= INTEL_CONTEXT_MEDIUM_PRIORITY) {
+      int err = anv_gem_set_context_param(device->fd, device->context_id,
+                                          I915_CONTEXT_PARAM_PRIORITY,
+                                          vk_priority_to_gen(priority));
+      if (err != 0 && priority > VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR) {
+         result = vk_error(device, VK_ERROR_NOT_PERMITTED_KHR);
+         goto fail_context;
+      }
+   }
+
+   return result;
+
+fail_context:
+   anv_gem_destroy_context(device, device->context_id);
+   return result;
+}
+
 VkResult anv_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -3104,15 +3096,6 @@ VkResult anv_CreateDevice(
          return vk_error(physical_device, VK_ERROR_INITIALIZATION_FAILED);
    }
 
-   /* Check if client specified queue priority. */
-   const VkDeviceQueueGlobalPriorityCreateInfoKHR *queue_priority =
-      vk_find_struct_const(pCreateInfo->pQueueCreateInfos[0].pNext,
-                           DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR);
-
-   VkQueueGlobalPriorityKHR priority =
-      queue_priority ? queue_priority->globalPriority :
-         VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR;
-
    device = vk_zalloc2(&physical_device->instance->vk.alloc, pAllocator,
                        sizeof(*device), 8,
                        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
@@ -3151,7 +3134,7 @@ VkResult anv_CreateDevice(
          INSTRUCTION_STATE_POOL_MIN_ADDRESS;
    }
 
-   device->physical = physical_device;
+   anv_device_set_physical(device, physical_device);
 
    /* XXX(chadv): Can we dup() physicalDevice->fd here? */
    device->fd = open(physical_device->path, O_RDWR | O_CLOEXEC);
@@ -3168,44 +3151,9 @@ VkResult anv_CreateDevice(
    for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; i++)
       num_queues += pCreateInfo->pQueueCreateInfos[i].queueCount;
 
-   if (device->physical->engine_info) {
-      /* The kernel API supports at most 64 engines */
-      assert(num_queues <= 64);
-      uint16_t engine_classes[64];
-      int engine_count = 0;
-      for (uint32_t i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
-         const VkDeviceQueueCreateInfo *queueCreateInfo =
-            &pCreateInfo->pQueueCreateInfos[i];
-
-         assert(queueCreateInfo->queueFamilyIndex <
-                physical_device->queue.family_count);
-         struct anv_queue_family *queue_family =
-            &physical_device->queue.families[queueCreateInfo->queueFamilyIndex];
-
-         for (uint32_t j = 0; j < queueCreateInfo->queueCount; j++)
-            engine_classes[engine_count++] = queue_family->engine_class;
-      }
-      device->context_id =
-         intel_gem_create_context_engines(device->fd,
-                                          physical_device->engine_info,
-                                          engine_count, engine_classes);
-   } else {
-      assert(num_queues == 1);
-      device->context_id = anv_gem_create_context(device);
-   }
-   if (device->context_id == -1) {
-      result = vk_error(device, VK_ERROR_INITIALIZATION_FAILED);
+   result = anv_device_setup_context(device, pCreateInfo, num_queues);
+   if (result != VK_SUCCESS)
       goto fail_fd;
-   }
-
-   /* Here we tell the kernel not to attempt to recover our context but
-    * immediately (on the next batchbuffer submission) report that the
-    * context is lost, and we will do the recovery ourselves.  In the case
-    * of Vulkan, recovery means throwing VK_ERROR_DEVICE_LOST and letting
-    * the client clean up the pieces.
-    */
-   anv_gem_set_context_param(device->fd, device->context_id,
-                             I915_CONTEXT_PARAM_RECOVERABLE, false);
 
    device->queues =
       vk_zalloc(&device->vk.alloc, num_queues * sizeof(*device->queues), 8,
@@ -3261,36 +3209,18 @@ VkResult anv_CreateDevice(
 
    list_inithead(&device->memory_objects);
 
-   /* As per spec, the driver implementation may deny requests to acquire
-    * a priority above the default priority (MEDIUM) if the caller does not
-    * have sufficient privileges. In this scenario VK_ERROR_NOT_PERMITTED_KHR
-    * is returned.
-    */
-   if (physical_device->max_context_priority >= INTEL_CONTEXT_MEDIUM_PRIORITY) {
-      int err = anv_gem_set_context_param(device->fd, device->context_id,
-                                          I915_CONTEXT_PARAM_PRIORITY,
-                                          vk_priority_to_gen(priority));
-      if (err != 0 && priority > VK_QUEUE_GLOBAL_PRIORITY_MEDIUM_KHR) {
-         result = vk_error(device, VK_ERROR_NOT_PERMITTED_KHR);
-         goto fail_vmas;
-      }
-   }
-
-   device->info = physical_device->info;
-   device->isl_dev = physical_device->isl_dev;
-
    /* On Broadwell and later, we can use batch chaining to more efficiently
     * implement growing command buffers.  Prior to Haswell, the kernel
     * command parser gets in the way and we have to fall back to growing
     * the batch.
     */
-   device->can_chain_batches = device->info.ver >= 8;
+   device->can_chain_batches = device->info->ver >= 8;
 
    device->robust_buffer_access = robust_buffer_access;
 
    if (pthread_mutex_init(&device->mutex, NULL) != 0) {
       result = vk_error(device, VK_ERROR_INITIALIZATION_FAILED);
-      goto fail_queues;
+      goto fail_vmas;
    }
 
    pthread_condattr_t condattr;
@@ -3332,7 +3262,7 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_general_state_pool;
 
-   if (device->info.ver >= 8) {
+   if (device->info->ver >= 8) {
       /* The border color pointer is limited to 24 bits, so we need to make
        * sure that any such color used at any point in the program doesn't
        * exceed that limit.
@@ -3357,7 +3287,7 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_instruction_state_pool;
 
-   if (device->info.verx10 >= 125) {
+   if (device->info->verx10 >= 125) {
       /* We're using 3DSTATE_BINDING_TABLE_POOL_ALLOC to give the binding
        * table its own base address separately from surface state base.
        */
@@ -3378,7 +3308,7 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_surface_state_pool;
 
-   if (device->info.has_aux_map) {
+   if (device->info->has_aux_map) {
       device->aux_map_ctx = intel_aux_map_init(device, &aux_map_allocator,
                                                &physical_device->info);
       if (!device->aux_map_ctx)
@@ -3387,8 +3317,7 @@ VkResult anv_CreateDevice(
 
    result = anv_device_alloc_bo(device, "workaround", 4096,
                                 ANV_BO_ALLOC_CAPTURE |
-                                ANV_BO_ALLOC_MAPPED |
-                                ANV_BO_ALLOC_LOCAL_MEM,
+                                ANV_BO_ALLOC_MAPPED,
                                 0 /* explicit_address */,
                                 &device->workaround_bo);
    if (result != VK_SUCCESS)
@@ -3409,11 +3338,11 @@ VkResult anv_CreateDevice(
 
    if (device->vk.enabled_extensions.KHR_ray_query) {
       uint32_t ray_queries_size =
-         align_u32(brw_rt_ray_queries_hw_stacks_size(&device->info), 4096);
+         align_u32(brw_rt_ray_queries_hw_stacks_size(device->info), 4096);
 
       result = anv_device_alloc_bo(device, "ray queries",
                                    ray_queries_size,
-                                   ANV_BO_ALLOC_LOCAL_MEM,
+                                   0,
                                    0 /* explicit_address */,
                                    &device->ray_query_bo);
       if (result != VK_SUCCESS)
@@ -3424,11 +3353,11 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_ray_query_bo;
 
-   if (device->info.ver >= 12 &&
+   if (device->info->ver >= 12 &&
        device->vk.enabled_extensions.KHR_fragment_shading_rate) {
       uint32_t n_cps_states = 3 * 3; /* All combinaisons of X by Y CP sizes (1, 2, 4) */
 
-      if (device->info.has_coarse_pixel_primitive_and_cb)
+      if (device->info->has_coarse_pixel_primitive_and_cb)
          n_cps_states *= 5 * 5; /* 5 combiners by 2 operators */
 
       n_cps_states += 1; /* Disable CPS */
@@ -3438,12 +3367,12 @@ VkResult anv_CreateDevice(
 
       device->cps_states =
          anv_state_pool_alloc(&device->dynamic_state_pool,
-                              n_cps_states * CPS_STATE_length(&device->info) * 4,
+                              n_cps_states * CPS_STATE_length(device->info) * 4,
                               32);
       if (device->cps_states.map == NULL)
          goto fail_trivial_batch;
 
-      anv_genX(&device->info, init_cps_device_state)(device);
+      anv_genX(device->info, init_cps_device_state)(device);
    }
 
    /* Allocate a null surface state at surface state offset 0.  This makes
@@ -3463,7 +3392,7 @@ VkResult anv_CreateDevice(
    /* TODO(RT): Do we want some sort of data structure for this? */
    memset(device->rt_scratch_bos, 0, sizeof(device->rt_scratch_bos));
 
-   result = anv_genX(&device->info, init_device_state)(device);
+   result = anv_genX(device->info, init_device_state)(device);
    if (result != VK_SUCCESS)
       goto fail_trivial_batch_bo_and_scratch_pool;
 
@@ -3520,7 +3449,7 @@ VkResult anv_CreateDevice(
  fail_workaround_bo:
    anv_device_release_bo(device, device->workaround_bo);
  fail_surface_aux_map_pool:
-   if (device->info.has_aux_map) {
+   if (device->info->has_aux_map) {
       intel_aux_map_finish(device->aux_map_ctx);
       device->aux_map_ctx = NULL;
    }
@@ -3532,7 +3461,7 @@ VkResult anv_CreateDevice(
  fail_instruction_state_pool:
    anv_state_pool_finish(&device->instruction_state_pool);
  fail_dynamic_state_pool:
-   if (device->info.ver >= 8)
+   if (device->info->ver >= 8)
       anv_state_reserved_pool_finish(&device->custom_border_colors);
    anv_state_pool_finish(&device->dynamic_state_pool);
  fail_general_state_pool:
@@ -3588,7 +3517,7 @@ void anv_DestroyDevice(
    /* We only need to free these to prevent valgrind errors.  The backing
     * BO will go away in a couple of lines so we don't actually leak.
     */
-   if (device->info.ver >= 8)
+   if (device->info->ver >= 8)
       anv_state_reserved_pool_finish(&device->custom_border_colors);
    anv_state_pool_free(&device->dynamic_state_pool, device->border_colors);
    anv_state_pool_free(&device->dynamic_state_pool, device->slice_hash);
@@ -3612,7 +3541,7 @@ void anv_DestroyDevice(
    anv_device_release_bo(device, device->workaround_bo);
    anv_device_release_bo(device, device->trivial_batch_bo);
 
-   if (device->info.has_aux_map) {
+   if (device->info->has_aux_map) {
       intel_aux_map_finish(device->aux_map_ctx);
       device->aux_map_ctx = NULL;
    }
@@ -3863,7 +3792,7 @@ VkResult anv_AllocateMemory(
    }
 
    /* By default, we want all VkDeviceMemory objects to support CCS */
-   if (device->physical->has_implicit_ccs && device->info.has_aux_map)
+   if (device->physical->has_implicit_ccs && device->info->has_aux_map)
       alloc_flags |= ANV_BO_ALLOC_IMPLICIT_CCS;
 
    /* If i915 reported a mappable/non_mappable vram regions and the
@@ -3976,12 +3905,6 @@ VkResult anv_AllocateMemory(
       mem->host_ptr = host_ptr_info->pHostPointer;
       goto success;
    }
-
-   /* Set ALLOC_LOCAL_MEM flag if heap has device local bit set and requested
-    * memory property flag has DEVICE_LOCAL_BIT set.
-    */
-   if (mem_type->propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
-      alloc_flags |= ANV_BO_ALLOC_LOCAL_MEM;
 
    /* Regular allocate (not importing memory). */
 
@@ -4151,6 +4074,16 @@ VkResult anv_MapMemory(
       return VK_SUCCESS;
    }
 
+   /* From the Vulkan spec version 1.0.32 docs for MapMemory:
+    *
+    *  * memory must have been created with a memory type that reports
+    *    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+    */
+   if (!(mem->type->propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+      return vk_errorf(device, VK_ERROR_MEMORY_MAP_FAILED,
+                       "Memory object not mappable.");
+   }
+
    if (size == VK_WHOLE_SIZE)
       size = mem->bo->size - offset;
 
@@ -4181,7 +4114,7 @@ VkResult anv_MapMemory(
 
    uint32_t gem_flags = 0;
 
-   if (!device->info.has_llc &&
+   if (!device->info->has_llc &&
        (mem->type->propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
       gem_flags |= I915_MMAP_WC;
 
@@ -4665,7 +4598,7 @@ VkResult anv_GetCalibratedTimestampsEXT(
    uint64_t                                     *pMaxDeviation)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
-   uint64_t timestamp_frequency = device->info.timestamp_frequency;
+   uint64_t timestamp_frequency = device->info->timestamp_frequency;
    int  ret;
    int d;
    uint64_t begin, end;

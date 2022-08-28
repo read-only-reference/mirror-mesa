@@ -758,7 +758,6 @@ fs_inst::components_read(unsigned i) const
          return 1;
       }
 
-   case SHADER_OPCODE_OWORD_BLOCK_READ_LOGICAL:
    case SHADER_OPCODE_UNALIGNED_OWORD_BLOCK_READ_LOGICAL:
       assert(src[SURFACE_LOGICAL_SRC_IMM_ARG].file == IMM);
       return 1;
@@ -1148,8 +1147,6 @@ fs_visitor::import_uniforms(fs_visitor *v)
    this->push_constant_loc = v->push_constant_loc;
    this->uniforms = v->uniforms;
    this->subgroup_id = v->subgroup_id;
-   for (unsigned i = 0; i < ARRAY_SIZE(this->group_size); i++)
-      this->group_size[i] = v->group_size[i];
 }
 
 void
@@ -1588,67 +1585,56 @@ fs_visitor::assign_curb_setup()
       assert(devinfo->verx10 >= 125);
       assert(uniform_push_length <= 1);
    } else if (is_compute && devinfo->verx10 >= 125) {
-      fs_builder ubld = bld.exec_all().group(8, 0).at(
+      assert(devinfo->has_lsc);
+      fs_builder ubld = bld.exec_all().group(1, 0).at(
          cfg->first_block(), cfg->first_block()->start());
 
-      /* The base address for our push data is passed in as R0.0[31:6].  We
-       * have to mask off the bottom 6 bits.
+      /* The base offset for our push data is passed in as R0.0[31:6]. We have
+       * to mask off the bottom 6 bits.
        */
       fs_reg base_addr = ubld.vgrf(BRW_REGISTER_TYPE_UD);
-      ubld.group(1, 0).AND(base_addr,
-                           retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UD),
-                           brw_imm_ud(INTEL_MASK(31, 6)));
-
-      fs_reg header0 = ubld.vgrf(BRW_REGISTER_TYPE_UD);
-      ubld.MOV(header0, brw_imm_ud(0));
-      ubld.group(1, 0).SHR(component(header0, 2), base_addr, brw_imm_ud(4));
+      ubld.AND(base_addr,
+               retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UD),
+               brw_imm_ud(INTEL_MASK(31, 6)));
 
       /* On Gfx12-HP we load constants at the start of the program using A32
        * stateless messages.
        */
       for (unsigned i = 0; i < uniform_push_length;) {
-         /* Limit ourselves to HW limit of 8 Owords (8 * 16bytes = 128 bytes
-          * or 4 registers).
-          */
-         unsigned num_regs = MIN2(uniform_push_length - i, 4);
+         /* Limit ourselves to LSC HW limit of 8 GRFs (256bytes D32V64). */
+         unsigned num_regs = MIN2(uniform_push_length - i, 8);
          assert(num_regs > 0);
          num_regs = 1 << util_logbase2(num_regs);
 
-         fs_reg header;
-         if (i == 0) {
-            header = header0;
-         } else {
-            header = ubld.vgrf(BRW_REGISTER_TYPE_UD);
-            ubld.MOV(header, brw_imm_ud(0));
-            ubld.group(1, 0).ADD(component(header, 2),
-                                 component(header0, 2),
-                                 brw_imm_ud(i * 2));
-         }
+         fs_reg addr = ubld.vgrf(BRW_REGISTER_TYPE_UD);
+         ubld.ADD(addr, base_addr, brw_imm_ud(i * REG_SIZE));
 
          fs_reg srcs[4] = {
             brw_imm_ud(0), /* desc */
             brw_imm_ud(0), /* ex_desc */
-            header, /* payload */
-            fs_reg(), /* payload2 */
+            addr,          /* payload */
+            fs_reg(),      /* payload2 */
          };
 
          fs_reg dest = retype(brw_vec8_grf(payload.num_regs + i, 0),
                               BRW_REGISTER_TYPE_UD);
+         fs_inst *send = ubld.emit(SHADER_OPCODE_SEND, dest, srcs, 4);
 
-         /* This instruction has to be run SIMD16 if we're filling more than a
-          * single register.
-          */
-         unsigned send_width = MIN2(16, num_regs * 8);
-
-         fs_inst *send = ubld.group(send_width, 0).emit(SHADER_OPCODE_SEND,
-                                                        dest, srcs, 4);
-         send->sfid = GFX7_SFID_DATAPORT_DATA_CACHE;
-         send->desc = brw_dp_desc(devinfo, GFX8_BTI_STATELESS_NON_COHERENT,
-                                  GFX7_DATAPORT_DC_OWORD_BLOCK_READ,
-                                  BRW_DATAPORT_OWORD_BLOCK_OWORDS(num_regs * 2));
-         send->header_size = 1;
-         send->mlen = 1;
-         send->size_written = num_regs * REG_SIZE;
+         send->sfid = GFX12_SFID_UGM;
+         send->desc = lsc_msg_desc(devinfo, LSC_OP_LOAD,
+                                   1 /* exec_size */,
+                                   LSC_ADDR_SURFTYPE_FLAT,
+                                   LSC_ADDR_SIZE_A32,
+                                   1 /* num_coordinates */,
+                                   LSC_DATA_SIZE_D32,
+                                   num_regs * 8 /* num_channels */,
+                                   true /* transpose */,
+                                   LSC_CACHE_LOAD_L1STATE_L3MOCS,
+                                   true /* has_dest */);
+         send->header_size = 0;
+         send->mlen = lsc_msg_desc_src0_len(devinfo, send->desc);
+         send->size_written =
+            lsc_msg_desc_dest_len(devinfo, send->desc) * REG_SIZE;
          send->send_is_volatile = true;
 
          i += num_regs;
@@ -5061,7 +5047,7 @@ get_lowered_simd_width(const struct brw_compiler *compiler,
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT16_LOGICAL:
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT32_LOGICAL:
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT64_LOGICAL:
-      return 8;
+      return devinfo->has_lsc ? MIN2(16, inst->exec_size) : 8;
 
    case SHADER_OPCODE_URB_READ_LOGICAL:
    case SHADER_OPCODE_URB_WRITE_LOGICAL:
@@ -5521,6 +5507,77 @@ fs_visitor::lower_derivatives()
       else if (inst->opcode == FS_OPCODE_DDY_FINE)
          progress |= lower_derivative(this, block, inst,
                                       BRW_SWIZZLE_XYXY, BRW_SWIZZLE_ZWZW);
+   }
+
+   if (progress)
+      invalidate_analysis(DEPENDENCY_INSTRUCTIONS | DEPENDENCY_VARIABLES);
+
+   return progress;
+}
+
+bool
+fs_visitor::lower_find_live_channel()
+{
+   bool progress = false;
+
+   if (devinfo->ver < 8)
+      return false;
+
+   bool packed_dispatch =
+      brw_stage_has_packed_dispatch(devinfo, stage, stage_prog_data);
+   bool vmask =
+      stage == MESA_SHADER_FRAGMENT &&
+      brw_wm_prog_data(stage_prog_data)->uses_vmask;
+
+   foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
+      if (inst->opcode != SHADER_OPCODE_FIND_LIVE_CHANNEL &&
+          inst->opcode != SHADER_OPCODE_FIND_LAST_LIVE_CHANNEL)
+         continue;
+
+      bool first = inst->opcode == SHADER_OPCODE_FIND_LIVE_CHANNEL;
+
+      /* Getting the first active channel index is easy on Gfx8: Just find
+       * the first bit set in the execution mask.  The register exists on
+       * HSW already but it reads back as all ones when the current
+       * instruction has execution masking disabled, so it's kind of
+       * useless there.
+       */
+      fs_reg exec_mask(retype(brw_mask_reg(0), BRW_REGISTER_TYPE_UD));
+
+      const fs_builder ubld = bld.at(block, inst).exec_all().group(1, 0);
+
+      /* ce0 doesn't consider the thread dispatch mask (DMask or VMask),
+       * so combine the execution and dispatch masks to obtain the true mask.
+       *
+       * If we're looking for the first live channel, and we have packed
+       * dispatch, we can skip this step, as we know all dispatched channels
+       * will appear at the front of the mask.
+       */
+      if (!(first && packed_dispatch)) {
+         fs_reg mask = ubld.vgrf(BRW_REGISTER_TYPE_UD);
+         ubld.emit(SHADER_OPCODE_READ_SR_REG, mask, brw_imm_ud(vmask ? 3 : 2));
+
+         /* Quarter control has the effect of magically shifting the value of
+          * ce0 so you'll get the first/last active channel relative to the
+          * specified quarter control as result.
+          */
+         if (inst->group > 0)
+            ubld.SHR(mask, mask, brw_imm_ud(ALIGN(inst->group, 8)));
+
+         ubld.AND(mask, exec_mask, mask);
+         exec_mask = mask;
+      }
+
+      if (first) {
+         ubld.FBL(inst->dst, exec_mask);
+      } else {
+         fs_reg tmp = ubld.vgrf(BRW_REGISTER_TYPE_UD, 1);
+         ubld.LZD(tmp, exec_mask);
+         ubld.ADD(inst->dst, negate(tmp), brw_imm_uw(31));
+      }
+
+      inst->remove(block);
+      progress = true;
    }
 
    if (progress)
@@ -6121,6 +6178,8 @@ fs_visitor::optimize()
 
    lower_uniform_pull_constant_loads();
 
+   lower_find_live_channel();
+
    validate();
 }
 
@@ -6584,13 +6643,12 @@ fs_visitor::set_tcs_invocation_id()
    struct brw_tcs_prog_data *tcs_prog_data = brw_tcs_prog_data(prog_data);
    struct brw_vue_prog_data *vue_prog_data = &tcs_prog_data->base;
 
-   const bool dg2_plus =
-      devinfo->ver > 12 || intel_device_info_is_dg2(devinfo);
    const unsigned instance_id_mask =
-      dg2_plus ? INTEL_MASK(7, 0) :
-      (devinfo->ver >= 11) ? INTEL_MASK(22, 16) : INTEL_MASK(23, 17);
+      (devinfo->verx10 >= 125) ? INTEL_MASK(7, 0) :
+      (devinfo->ver >= 11)     ? INTEL_MASK(22, 16) :
+                                 INTEL_MASK(23, 17);
    const unsigned instance_id_shift =
-      dg2_plus ? 0 : (devinfo->ver >= 11) ? 16 : 17;
+      (devinfo->verx10 >= 125) ? 0 : (devinfo->ver >= 11) ? 16 : 17;
 
    /* Get instance number from g0.2 bits:
     *  * 7:0 on DG2+
@@ -6603,7 +6661,7 @@ fs_visitor::set_tcs_invocation_id()
 
    invocation_id = bld.vgrf(BRW_REGISTER_TYPE_UD);
 
-   if (vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_8_PATCH) {
+   if (vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_MULTI_PATCH) {
       /* gl_InvocationID is just the thread number */
       bld.SHR(invocation_id, t, brw_imm_ud(instance_id_shift));
       return;
@@ -6635,13 +6693,13 @@ fs_visitor::run_tcs()
    struct brw_tcs_prog_key *tcs_key = (struct brw_tcs_prog_key *) key;
 
    assert(vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_SINGLE_PATCH ||
-          vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_8_PATCH);
+          vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_MULTI_PATCH);
 
    if (vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_SINGLE_PATCH) {
       /* r1-r4 contain the ICP handles. */
       payload.num_regs = 5;
    } else {
-      assert(vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_8_PATCH);
+      assert(vue_prog_data->dispatch_mode == DISPATCH_MODE_TCS_MULTI_PATCH);
       assert(tcs_key->input_vertices > 0);
       /* r1 contains output handles, r2 may contain primitive ID, then the
        * ICP handles occupy the next 1-32 registers.
@@ -6966,6 +7024,8 @@ fs_visitor::run_task(bool allow_spilling)
    if (failed)
       return false;
 
+   emit_urb_fence();
+
    emit_cs_terminate();
 
    calculate_cfg();
@@ -7010,6 +7070,8 @@ fs_visitor::run_mesh(bool allow_spilling)
 
    if (failed)
       return false;
+
+   emit_urb_fence();
 
    emit_cs_terminate();
 
@@ -7679,10 +7741,10 @@ lower_simd(nir_builder *b, nir_instr *instr, void *options)
    }
 }
 
-void
+bool
 brw_nir_lower_simd(nir_shader *nir, unsigned dispatch_width)
 {
-   nir_shader_lower_instructions(nir, filter_simd, lower_simd,
+   return nir_shader_lower_instructions(nir, filter_simd, lower_simd,
                                  (void *)(uintptr_t)dispatch_width);
 }
 
@@ -7726,11 +7788,11 @@ brw_compile_cs(const struct brw_compiler *compiler,
       brw_nir_apply_key(shader, compiler, &key->base,
                         dispatch_width, true /* is_scalar */);
 
-      NIR_PASS_V(shader, brw_nir_lower_simd, dispatch_width);
+      NIR_PASS(_, shader, brw_nir_lower_simd, dispatch_width);
 
       /* Clean up after the local index and ID calculations. */
-      NIR_PASS_V(shader, nir_opt_constant_folding);
-      NIR_PASS_V(shader, nir_opt_dce);
+      NIR_PASS(_, shader, nir_opt_constant_folding);
+      NIR_PASS(_, shader, nir_opt_dce);
 
       brw_postprocess_nir(shader, compiler, true, debug_enabled,
                           key->base.robust_buffer_access);
@@ -7748,9 +7810,6 @@ brw_compile_cs(const struct brw_compiler *compiler,
                                   nir->info.workgroup_size_variable;
 
       if (v[simd]->run_cs(allow_spilling)) {
-         /* We should always be able to do SIMD32 for compute shaders. */
-         assert(v[simd]->max_dispatch_width >= 32);
-
          cs_fill_push_const_info(compiler->devinfo, prog_data);
 
          brw_simd_mark_compiled(simd, prog_data, v[simd]->spilled_any_registers);
@@ -7964,6 +8023,7 @@ brw_compile_bs(const struct brw_compiler *compiler,
    prog_data->base.total_scratch = 0;
 
    prog_data->max_stack_size = 0;
+   prog_data->num_resume_shaders = num_resume_shaders;
 
    fs_generator g(compiler, params->log_data, mem_ctx, &prog_data->base,
                   false, shader->info.stage);

@@ -1,25 +1,5 @@
-#
 # Copyright © 2021 Igalia S.L.
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice (including the next
-# paragraph) shall be included in all copies or substantial portions of the
-# Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
+# SPDX-License-Identifier: MIT
 
 import argparse
 import sys
@@ -44,6 +24,18 @@ from u_trace import TracepointArgStruct as ArgStruct
 from u_trace import utrace_generate
 from u_trace import utrace_generate_perfetto_utils
 
+Header('vk_enum_to_str.h', scope=HeaderScope.SOURCE|HeaderScope.PERFETTO)
+Header('vk_format.h')
+Header('tu_cmd_buffer.h', scope=HeaderScope.SOURCE)
+Header('tu_device.h', scope=HeaderScope.SOURCE)
+
+# we can't use tu_common.h because it includes ir3 headers which are not
+# compatible with C++
+ForwardDecl('struct tu_cmd_buffer')
+ForwardDecl('struct tu_device')
+ForwardDecl('struct tu_framebuffer')
+ForwardDecl('struct tu_tiling_config')
+
 # List of the default tracepoints enabled. By default tracepoints are enabled,
 # set tp_default_enabled=False to disable them by default.
 tu_default_tps = []
@@ -51,13 +43,6 @@ tu_default_tps = []
 #
 # Tracepoint definitions:
 #
-
-Header('util/u_dump.h')
-Header('vk_format.h')
-Header('freedreno/vulkan/tu_private.h', scope=HeaderScope.SOURCE)
-
-ForwardDecl('struct tu_device')
-
 
 def begin_end_tp(name, args=[], tp_struct=None, tp_print=None,
                  tp_default_enabled=True):
@@ -74,16 +59,21 @@ def begin_end_tp(name, args=[], tp_struct=None, tp_print=None,
                tp_perfetto='tu_end_{0}'.format(name),
                tp_print=tp_print)
 
+begin_end_tp('cmd_buffer',
+    args=[ArgStruct(type='const struct tu_cmd_buffer *', var='cmd')],
+    tp_struct=[Arg(type='VkCommandBufferLevel', name='level', var='cmd->vk.level', c_format='%s', to_prim_type='vk_CommandBufferLevel_to_str({})'),
+               Arg(type='uint8_t', name='render_pass_continue', var='!!(cmd->usage_flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)', c_format='%u')])
 
 begin_end_tp('render_pass',
-    args=[ArgStruct(type='const struct tu_framebuffer *', var='fb')],
+    args=[ArgStruct(type='const struct tu_framebuffer *', var='fb'),
+          ArgStruct(type='const struct tu_tiling_config *', var='tiling')],
     tp_struct=[Arg(type='uint16_t', name='width',        var='fb->width',                                    c_format='%u'),
                Arg(type='uint16_t', name='height',       var='fb->height',                                   c_format='%u'),
                Arg(type='uint8_t',  name='MRTs',         var='fb->attachment_count',                         c_format='%u'),
             #    Arg(type='uint8_t',  name='samples',      var='fb->samples',                                  c_format='%u'),
-               Arg(type='uint16_t', name='numberOfBins', var='fb->tile_count.width * fb->tile_count.height', c_format='%u'),
-               Arg(type='uint16_t', name='binWidth',     var='fb->tile0.width',                              c_format='%u'),
-               Arg(type='uint16_t', name='binHeight',    var='fb->tile0.height',                             c_format='%u')])
+               Arg(type='uint16_t', name='numberOfBins', var='tiling->tile_count.width * tiling->tile_count.height', c_format='%u'),
+               Arg(type='uint16_t', name='binWidth',     var='tiling->tile0.width',                                  c_format='%u'),
+               Arg(type='uint16_t', name='binHeight',    var='tiling->tile0.height',                                 c_format='%u')])
 
 begin_end_tp('binning_ib')
 begin_end_tp('draw_ib_sysmem')

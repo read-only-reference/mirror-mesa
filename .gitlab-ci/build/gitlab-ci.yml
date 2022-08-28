@@ -78,7 +78,7 @@ debian-testing:
       -D dri3=enabled
       -D gallium-va=enabled
     GALLIUM_DRIVERS: "swrast,virgl,radeonsi,zink,crocus,iris,i915"
-    VULKAN_DRIVERS: "swrast,amd,intel"
+    VULKAN_DRIVERS: "swrast,amd,intel,virtio-experimental"
     BUILDTYPE: "debugoptimized"
     EXTRA_OPTION: >
       -D spirv-to-dxil=true
@@ -86,7 +86,6 @@ debian-testing:
     MINIO_ARTIFACT_NAME: mesa-amd64
     LLVM_VERSION: "13"
   script:
-    - .gitlab-ci/lava/lava-pytest.sh
     - .gitlab-ci/meson/build.sh
     - .gitlab-ci/prepare-artifacts.sh
   artifacts:
@@ -145,7 +144,7 @@ debian-clover-testing:
     - .gitlab-ci/meson/build.sh
     - .gitlab-ci/prepare-artifacts.sh
 
-debian-gallium:
+debian-build-testing:
   extends: .meson-build
   variables:
     UNWIND: "enabled"
@@ -171,6 +170,8 @@ debian-gallium:
       -D osmesa=true
       -D tools=drm-shim,etnaviv,freedreno,glsl,intel,intel-ui,nir,nouveau,xvmc,lima,panfrost,asahi
   script:
+    - .gitlab-ci/lava/lava-pytest.sh
+    - .gitlab-ci/run-shellcheck.sh
     - .gitlab-ci/meson/build.sh
     - .gitlab-ci/run-shader-db.sh
 
@@ -247,7 +248,6 @@ fedora-release:
       -D llvm=enabled
       -D microsoft-clc=disabled
       -D shared-llvm=enabled
-      -D vulkan-device-select-layer=true
     LLVM_VERSION: ""
     UNWIND: "disabled"
     VULKAN_DRIVERS: "amd,broadcom,freedreno,intel,imagination-experimental"
@@ -402,7 +402,6 @@ debian-clang:
       -Wno-error=unused-function
     CPP_ARGS: >
       -Wno-error=c99-designator
-      -Wno-error=deprecated-declarations
       -Wno-error=implicit-const-int-float-conversion
       -Wno-error=missing-braces
       -Wno-error=overloaded-virtual
@@ -440,7 +439,7 @@ debian-clover:
       -D glx=disabled
       -D egl=disabled
       -D gbm=disabled
-    GALLIUM_DRIVERS: "r600,radeonsi"
+    GALLIUM_DRIVERS: "r600,radeonsi,swrast"
     GALLIUM_ST: >
       -D dri3=disabled
       -D gallium-vdpau=disabled
@@ -452,9 +451,6 @@ debian-clover:
       -D gallium-opencl=icd
     EXTRA_OPTION: >
       -D valgrind=false
-  script:
-    - LLVM_VERSION=9 GALLIUM_DRIVERS=r600,swrast .gitlab-ci/meson/build.sh
-    - .gitlab-ci/meson/build.sh
 
 debian-vulkan:
   extends: .meson-build
@@ -494,6 +490,7 @@ debian-i386:
     CROSS: i386
     VULKAN_DRIVERS: intel,amd,swrast,virtio-experimental
     GALLIUM_DRIVERS: "iris,nouveau,r300,r600,radeonsi,swrast,virgl,zink,crocus"
+    LLVM_VERSION: 13
     EXTRA_OPTION: >
       -D vulkan-layers=device-select,overlay
 
@@ -507,8 +504,7 @@ debian-s390x:
   variables:
     CROSS: s390x
     GALLIUM_DRIVERS: "swrast,zink"
-    # The lp_test_blend test times out with LLVM 11
-    LLVM_VERSION: 9
+    LLVM_VERSION: 13
     VULKAN_DRIVERS: "swrast"
 
 debian-ppc64el:

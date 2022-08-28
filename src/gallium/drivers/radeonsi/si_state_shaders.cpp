@@ -37,6 +37,8 @@
 #include "util/u_prim.h"
 #include "tgsi/tgsi_from_mesa.h"
 
+static void si_update_tess_in_out_patch_vertices(struct si_context *sctx);
+
 unsigned si_determine_wave_size(struct si_screen *sscreen, struct si_shader *shader)
 {
    /* There are a few uses that pass shader=NULL here, expecting the default compute wave size. */
@@ -666,10 +668,13 @@ static unsigned si_get_vs_vgpr_comp_cnt(struct si_screen *sscreen, struct si_sha
    return max;
 }
 
-unsigned si_calc_inst_pref_size(struct si_shader *shader)
+unsigned si_get_shader_prefetch_size(struct si_shader *shader)
 {
-   /* TODO: Disable for now. */
-   if (shader->selector->screen->info.gfx_level == GFX11)
+   /* Return 0 for some A0 chips only. Other chips don't need it. */
+   if ((shader->selector->screen->info.family == CHIP_GFX1100 ||
+        shader->selector->screen->info.family == CHIP_GFX1102 ||
+        shader->selector->screen->info.family == CHIP_GFX1103) &&
+       shader->selector->screen->info.chip_rev == 0)
       return 0;
 
    /* inst_pref_size is calculated in cache line size granularity */
@@ -714,7 +719,7 @@ static void si_shader_hs(struct si_screen *sscreen, struct si_shader *shader)
    if (sscreen->info.gfx_level >= GFX9) {
       if (sscreen->info.gfx_level >= GFX11) {
          ac_set_reg_cu_en(pm4, R_00B404_SPI_SHADER_PGM_RSRC4_HS,
-                          S_00B404_INST_PREF_SIZE(si_calc_inst_pref_size(shader)) |
+                          S_00B404_INST_PREF_SIZE(si_get_shader_prefetch_size(shader)) |
                           S_00B404_CU_EN(0xffff),
                           C_00B404_CU_EN, 16, &sscreen->info,
                           (void (*)(void*, unsigned, uint32_t))si_pm4_set_reg_idx3);
@@ -1436,7 +1441,7 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
    if (sscreen->info.gfx_level >= GFX11) {
       shader->ctx_reg.ngg.spi_shader_pgm_rsrc4_gs =
          S_00B204_CU_EN_GFX11(0x1) | S_00B204_SPI_SHADER_LATE_ALLOC_GS_GFX10(late_alloc_wave64) |
-         S_00B204_INST_PREF_SIZE(si_calc_inst_pref_size(shader));
+         S_00B204_INST_PREF_SIZE(si_get_shader_prefetch_size(shader));
    } else {
       shader->ctx_reg.ngg.spi_shader_pgm_rsrc4_gs =
          S_00B204_CU_EN_GFX10(0xffff) | S_00B204_SPI_SHADER_LATE_ALLOC_GS_GFX10(late_alloc_wave64);
@@ -1513,7 +1518,7 @@ static void gfx10_shader_ngg(struct si_screen *sscreen, struct si_shader *shader
       shader->ge_cntl = S_03096C_PRIMS_PER_SUBGRP(shader->ngg.max_gsprims) |
                         S_03096C_VERTS_PER_SUBGRP(shader->ngg.hw_max_esverts) |
                         S_03096C_BREAK_PRIMGRP_AT_EOI(break_wave_at_eoi) |
-                        S_03096C_PRIM_GRP_SIZE_GFX11(256);
+                        S_03096C_PRIM_GRP_SIZE_GFX11(252 / MAX2(shader->ngg.prim_amp_factor, 1));
    } else {
       shader->ge_cntl = S_03096C_PRIM_GRP_SIZE_GFX10(shader->ngg.max_gsprims) |
                         S_03096C_VERT_GRP_SIZE(shader->ngg.hw_max_esverts) |
@@ -2023,7 +2028,7 @@ static void si_shader_ps(struct si_screen *sscreen, struct si_shader *shader)
       unsigned cu_mask_ps = gfx103_get_cu_mask_ps(sscreen);
 
       ac_set_reg_cu_en(pm4, R_00B004_SPI_SHADER_PGM_RSRC4_PS,
-                       S_00B004_INST_PREF_SIZE(si_calc_inst_pref_size(shader)) |
+                       S_00B004_INST_PREF_SIZE(si_get_shader_prefetch_size(shader)) |
                        S_00B004_CU_EN(cu_mask_ps >> 16),
                        C_00B004_CU_EN, 16, &sscreen->info,
                        (void (*)(void*, unsigned, uint32_t))si_pm4_set_reg_idx3);
@@ -3029,7 +3034,12 @@ static void si_init_shader_selector_async(void *job, void *gdata, int thread_ind
          /* Compile the shader if it hasn't been loaded from the cache. */
          if (!si_compile_shader(sscreen, compiler, shader, debug)) {
             FREE(shader);
-            fprintf(stderr, "radeonsi: can't compile a main shader part\n");
+            fprintf(stderr,
+               "radeonsi: can't compile a main shader part (type: %s, name: %s).\n"
+               "This is probably a driver bug, please report "
+               "it to https://gitlab.freedesktop.org/mesa/mesa/-/issues.\n",
+               gl_shader_stage_name(shader->selector->stage),
+               shader->selector->info.base.name);
             return;
          }
 
@@ -3310,26 +3320,20 @@ static void si_update_clip_regs(struct si_context *sctx, struct si_shader_select
 
 static void si_update_rasterized_prim(struct si_context *sctx)
 {
-   enum pipe_prim_type rast_prim;
+   struct si_shader *hw_vs = si_get_vs(sctx)->current;
 
    if (sctx->shader.gs.cso) {
       /* Only possibilities: POINTS, LINE_STRIP, TRIANGLES */
-      rast_prim = sctx->shader.gs.cso->rast_prim;
+      si_set_rasterized_prim(sctx, sctx->shader.gs.cso->rast_prim, hw_vs, sctx->ngg);
    } else if (sctx->shader.tes.cso) {
       /* Only possibilities: POINTS, LINE_STRIP, TRIANGLES */
-      rast_prim = sctx->shader.tes.cso->rast_prim;
+      si_set_rasterized_prim(sctx, sctx->shader.tes.cso->rast_prim, hw_vs, sctx->ngg);
    } else {
-      /* Determined by draw calls. */
-      return;
+      /* The rasterized prim is determined by draw calls. */
    }
 
-   if (rast_prim != sctx->current_rast_prim) {
-      if (util_prim_is_points_or_lines(sctx->current_rast_prim) !=
-          util_prim_is_points_or_lines(rast_prim))
-         si_mark_atom_dirty(sctx, &sctx->atoms.s.guardband);
-
-      sctx->current_rast_prim = rast_prim;
-   }
+   /* This must be done unconditionally because it also depends on si_shader fields. */
+   si_update_ngg_prim_state_sgpr(sctx, hw_vs, sctx->ngg);
 }
 
 static void si_update_common_shader_state(struct si_context *sctx, struct si_shader_selector *sel,
@@ -3494,6 +3498,7 @@ static void si_bind_tcs_shader(struct pipe_context *ctx, void *state)
    sctx->shader.tcs.key.ge.part.tcs.epilog.invoc0_tess_factors_are_def =
       sel ? sel->info.tessfactors_are_def_in_all_invocs : 0;
    si_update_tess_uses_prim_id(sctx);
+   si_update_tess_in_out_patch_vertices(sctx);
 
    si_update_common_shader_state(sctx, sel, PIPE_SHADER_TESS_CTRL);
 
@@ -4287,6 +4292,59 @@ bool si_set_tcs_to_fixed_func_shader(struct si_context *sctx)
    return true;
 }
 
+static void si_update_tess_in_out_patch_vertices(struct si_context *sctx)
+{
+   if (sctx->is_user_tcs) {
+      struct si_shader_selector *tcs = sctx->shader.tcs.cso;
+
+      bool same_patch_vertices =
+         sctx->gfx_level >= GFX9 &&
+         sctx->patch_vertices == tcs->info.base.tess.tcs_vertices_out;
+
+      if (sctx->shader.tcs.key.ge.opt.same_patch_vertices != same_patch_vertices) {
+         sctx->shader.tcs.key.ge.opt.same_patch_vertices = same_patch_vertices;
+         sctx->do_update_shaders = true;
+      }
+
+      if (sctx->gfx_level == GFX9 && sctx->screen->info.has_ls_vgpr_init_bug) {
+         /* Determine whether the LS VGPR fix should be applied.
+          *
+          * It is only required when num input CPs > num output CPs,
+          * which cannot happen with the fixed function TCS.
+          */
+         bool ls_vgpr_fix =
+            sctx->patch_vertices > tcs->info.base.tess.tcs_vertices_out;
+
+         if (ls_vgpr_fix != sctx->shader.tcs.key.ge.part.tcs.ls_prolog.ls_vgpr_fix) {
+            sctx->shader.tcs.key.ge.part.tcs.ls_prolog.ls_vgpr_fix = ls_vgpr_fix;
+            sctx->do_update_shaders = true;
+         }
+      }
+   } else {
+      /* These fields are static for fixed function TCS. So no need to set
+       * do_update_shaders between fixed-TCS draws. As fixed-TCS to user-TCS
+       * or opposite, do_update_shaders should already be set by bind state.
+       */
+      sctx->shader.tcs.key.ge.opt.same_patch_vertices = sctx->gfx_level >= GFX9;
+      sctx->shader.tcs.key.ge.part.tcs.ls_prolog.ls_vgpr_fix = false;
+
+      /* User may only change patch vertices, needs to update fixed func TCS. */
+      if (sctx->shader.tcs.cso &&
+          sctx->shader.tcs.cso->info.base.tess.tcs_vertices_out != sctx->patch_vertices)
+         sctx->do_update_shaders = true;
+   }
+}
+
+static void si_set_patch_vertices(struct pipe_context *ctx, uint8_t patch_vertices)
+{
+   struct si_context *sctx = (struct si_context *)ctx;
+
+   if (sctx->patch_vertices != patch_vertices) {
+      sctx->patch_vertices = patch_vertices;
+      si_update_tess_in_out_patch_vertices(sctx);
+   }
+}
+
 void si_init_screen_live_shader_cache(struct si_screen *sscreen)
 {
    util_live_shader_cache_init(&sscreen->live_shader_cache, si_create_shader_selector,
@@ -4314,4 +4372,6 @@ void si_init_shader_functions(struct si_context *sctx)
    sctx->b.delete_tes_state = si_delete_shader_selector;
    sctx->b.delete_gs_state = si_delete_shader_selector;
    sctx->b.delete_fs_state = si_delete_shader_selector;
+
+   sctx->b.set_patch_vertices = si_set_patch_vertices;
 }
