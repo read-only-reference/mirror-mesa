@@ -69,6 +69,7 @@ public:
       vpm,
       force_cf,
       ack_rat_return_write,
+      helper,
       nflags
       };
 
@@ -125,6 +126,7 @@ public:
 
    const InstrList& dependend_instr() { return m_dependend_instr;}
 
+   virtual AluInstr *as_alu() { return nullptr;}
 protected:
 
    const InstrList& required_instr() const {return m_required_instr; }

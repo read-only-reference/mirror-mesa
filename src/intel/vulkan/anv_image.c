@@ -358,14 +358,6 @@ anv_image_plane_needs_shadow_surface(const struct intel_device_info *devinfo,
       return true;
    }
 
-   if (devinfo->ver <= 7 &&
-       plane_format.aspect == VK_IMAGE_ASPECT_STENCIL_BIT &&
-       (vk_plane_usage & (VK_IMAGE_USAGE_SAMPLED_BIT |
-                          VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))) {
-      /* gfx7 can't sample from W-tiled surfaces. */
-      return true;
-   }
-
    return false;
 }
 
@@ -731,11 +723,6 @@ add_aux_surface_if_supported(struct anv_device *device,
          return VK_SUCCESS;
       }
 
-      if (device->info->ver == 7) {
-         anv_perf_warn(VK_LOG_OBJS(&image->vk.base), "Implement gfx7 HiZ");
-         return VK_SUCCESS;
-      }
-
       if (image->vk.mip_levels > 1) {
          anv_perf_warn(VK_LOG_OBJS(&image->vk.base), "Enable multi-LOD HiZ");
          return VK_SUCCESS;
@@ -806,7 +793,7 @@ add_aux_surface_if_supported(struct anv_device *device,
          return VK_SUCCESS;
       }
 
-      if ((image->vk.create_flags & VK_IMAGE_CREATE_ALIAS_BIT)) {
+      if ((image->vk.create_flags & VK_IMAGE_CREATE_ALIAS_BIT) && !image->from_wsi) {
          /* The image may alias a plane of a multiplanar image. Above we ban
           * CCS on multiplanar images.
           *
@@ -1050,6 +1037,7 @@ check_memory_bindings(const struct anv_device *device,
        * live in a VkDeviceMemory.  The one exception is swapchain images.
        */
       assert(!(image->vk.create_flags & VK_IMAGE_CREATE_ALIAS_BIT) ||
+             image->from_wsi ||
              image->bindings[ANV_IMAGE_MEMORY_BINDING_PRIVATE].memory_range.size == 0);
 
       /* Check primary surface */
@@ -1472,6 +1460,9 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
    }
 
    image->n_planes = anv_get_format_planes(image->vk.format);
+
+   image->from_wsi =
+      vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA) != NULL;
 
    /* The Vulkan 1.2.165 glossary says:
     *
@@ -2377,14 +2368,11 @@ anv_layout_to_fast_clear_type(const struct intel_device_info * const devinfo,
    if (image->planes[plane].aux_usage == ISL_AUX_USAGE_NONE)
       return ANV_FAST_CLEAR_NONE;
 
-   /* We don't support MSAA fast-clears on Ivybridge or Bay Trail because they
-    * lack the MI ALU which we need to determine the predicates.
-    */
-   if (devinfo->verx10 == 70 && image->vk.samples > 1)
-      return ANV_FAST_CLEAR_NONE;
-
    enum isl_aux_state aux_state =
       anv_layout_to_aux_state(devinfo, image, aspect, layout);
+
+   const VkImageUsageFlags layout_usage =
+      vk_image_layout_to_usage_flags(layout, aspect);
 
    switch (aux_state) {
    case ISL_AUX_STATE_CLEAR:
@@ -2404,6 +2392,12 @@ anv_layout_to_fast_clear_type(const struct intel_device_info * const devinfo,
           * must get partially resolved before we leave the render pass.
           */
          return ANV_FAST_CLEAR_ANY;
+      } else if (layout_usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+         /* Fast clear with non zero color is not supported during transfer
+          * operations since transfer may do format reinterpretation.
+          */
+         return ANV_FAST_CLEAR_DEFAULT_VALUE;
       } else if (image->planes[plane].aux_usage == ISL_AUX_USAGE_MCS ||
                  image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E) {
          if (devinfo->ver >= 11) {
@@ -2470,8 +2464,7 @@ anv_image_fill_surface_state(struct anv_device *device,
                              enum isl_aux_usage aux_usage,
                              const union isl_color_value *clear_color,
                              enum anv_image_view_state_flags flags,
-                             struct anv_surface_state *state_inout,
-                             struct brw_image_param *image_param_out)
+                             struct anv_surface_state *state_inout)
 {
    const uint32_t plane = anv_image_aspect_to_plane(image, aspect);
 
@@ -2495,28 +2488,14 @@ anv_image_fill_surface_state(struct anv_device *device,
       surface = &image->planes[plane].shadow_surface;
    }
 
-   /* For texturing from stencil on gfx7, we have to sample from a shadow
-    * surface because we don't support W-tiling in the sampler.
-    */
-   if (anv_surface_is_valid(&image->planes[plane].shadow_surface) &&
-       aspect == VK_IMAGE_ASPECT_STENCIL_BIT) {
-      assert(device->info->ver == 7);
-      assert(view_usage & ISL_SURF_USAGE_TEXTURE_BIT);
-      surface = &image->planes[plane].shadow_surface;
-   }
-
    if (view_usage == ISL_SURF_USAGE_RENDER_TARGET_BIT)
       view.swizzle = anv_swizzle_for_render(view.swizzle);
-
-   /* On Ivy Bridge and Bay Trail we do the swizzle in the shader */
-   if (device->info->verx10 == 70)
-      view.swizzle = ISL_SWIZZLE_IDENTITY;
 
    /* If this is a HiZ buffer we can sample from with a programmable clear
     * value (SKL+), define the clear value to the optimal constant.
     */
    union isl_color_value default_clear_color = { .u32 = { 0, } };
-   if (device->info->ver >= 9 && aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
+   if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT)
       default_clear_color.f32[0] = ANV_HZ_FC_VAL;
    if (!clear_color)
       clear_color = &default_clear_color;
@@ -2645,12 +2624,6 @@ anv_image_fill_surface_state(struct anv_device *device,
          state_inout->clear_address.offset |= *clear_addr_dw & 0x3f;
       }
    }
-
-   if (image_param_out) {
-      assert(view_usage == ISL_SURF_USAGE_STORAGE_BIT);
-      isl_surf_fill_image_param(&device->isl_dev, image_param_out,
-                                &surface->isl, &view);
-   }
 }
 
 static uint32_t
@@ -2768,16 +2741,14 @@ anv_CreateImageView(VkDevice _device,
                                       ISL_SURF_USAGE_TEXTURE_BIT,
                                       optimal_aux_usage, NULL,
                                       ANV_IMAGE_VIEW_STATE_TEXTURE_OPTIMAL,
-                                      &iview->planes[vplane].optimal_sampler_surface_state,
-                                      NULL);
+                                      &iview->planes[vplane].optimal_sampler_surface_state);
 
          anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
                                       &iview->planes[vplane].isl,
                                       ISL_SURF_USAGE_TEXTURE_BIT,
                                       general_aux_usage, NULL,
                                       0,
-                                      &iview->planes[vplane].general_sampler_surface_state,
-                                      NULL);
+                                      &iview->planes[vplane].general_sampler_surface_state);
       }
 
       /* NOTE: This one needs to go last since it may stomp isl_view.format */
@@ -2792,8 +2763,7 @@ anv_CreateImageView(VkDevice _device,
                                       ISL_SURF_USAGE_STORAGE_BIT,
                                       general_aux_usage, NULL,
                                       0,
-                                      &iview->planes[vplane].storage_surface_state,
-                                      NULL);
+                                      &iview->planes[vplane].storage_surface_state);
 
          if (isl_is_storage_image_format(format.isl_format)) {
             iview->planes[vplane].lowered_storage_surface_state.state =
@@ -2804,9 +2774,7 @@ anv_CreateImageView(VkDevice _device,
                                          ISL_SURF_USAGE_STORAGE_BIT,
                                          general_aux_usage, NULL,
                                          ANV_IMAGE_VIEW_STATE_STORAGE_LOWERED,
-                                         &iview->planes[vplane].lowered_storage_surface_state,
-                                         device->info->ver >= 9 ? NULL :
-                                         &iview->planes[vplane].lowered_storage_image_param);
+                                         &iview->planes[vplane].lowered_storage_surface_state);
          } else {
             /* In this case, we support the format but, because there's no
              * SPIR-V format specifier corresponding to it, we only support it
@@ -2933,10 +2901,6 @@ anv_CreateBufferView(VkDevice _device,
                                     view->address, view->range,
                                     (lowered_format == ISL_FORMAT_RAW ? 1 :
                                      isl_format_get_layout(lowered_format)->bpb / 8));
-
-      isl_buffer_fill_image_param(&device->isl_dev,
-                                  &view->lowered_storage_image_param,
-                                  format.isl_format, view->range);
    } else {
       view->storage_surface_state = (struct anv_state){ 0 };
       view->lowered_storage_surface_state = (struct anv_state){ 0 };

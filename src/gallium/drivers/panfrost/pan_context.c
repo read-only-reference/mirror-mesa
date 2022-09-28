@@ -43,10 +43,12 @@
 #include "util/format/u_format.h"
 #include "util/u_prim.h"
 #include "util/u_prim_restart.h"
+#include "util/u_surface.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_from_mesa.h"
 #include "nir/tgsi_to_nir.h"
 #include "util/u_math.h"
+#include "util/u_debug_cb.h"
 
 #include "pan_screen.h"
 #include "pan_util.h"
@@ -344,7 +346,7 @@ panfrost_create_shader_state(
 
                 panfrost_shader_compile(pctx->screen,
                                         &ctx->shaders, &ctx->descs,
-                                        so->nir, &state);
+                                        so->nir, &ctx->base.debug, &state, 0);
         }
 
         return so;
@@ -516,7 +518,7 @@ panfrost_new_variant_locked(
         /* We finally have a variant, so compile it */
         panfrost_shader_compile(ctx->base.screen,
                                 &ctx->shaders, &ctx->descs,
-                                variants->nir, shader_state);
+                                variants->nir, &ctx->base.debug, shader_state, 0);
 
         /* Fixup the stream out information */
         shader_state->stream_output = variants->stream_output;
@@ -1093,9 +1095,11 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         gallium->destroy = panfrost_destroy;
 
         gallium->set_framebuffer_state = panfrost_set_framebuffer_state;
+        gallium->set_debug_callback = u_default_set_debug_callback;
 
         gallium->flush = panfrost_flush;
         gallium->clear = panfrost_clear;
+        gallium->clear_texture = util_clear_texture;
         gallium->texture_barrier = panfrost_texture_barrier;
         gallium->set_frontend_noop = panfrost_set_frontend_noop;
 

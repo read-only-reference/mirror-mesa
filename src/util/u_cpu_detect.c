@@ -90,6 +90,9 @@
 #include <sched.h>
 #endif
 
+// prevent inadvert infinite recursion
+#define util_get_cpu_caps() util_get_cpu_caps_DO_NOT_USE()
+
 DEBUG_GET_ONCE_BOOL_OPTION(dump_cpu, "GALLIUM_DUMP_CPU", false)
 
 static
@@ -590,6 +593,95 @@ get_cpu_topology(void)
 #endif
 }
 
+static
+void check_cpu_caps_override(void)
+{
+   const char *override_cpu_caps = debug_get_option("GALLIUM_OVERRIDE_CPU_CAPS", NULL);
+#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+   if (debug_get_bool_option("GALLIUM_NOSSE", false)) {
+      util_cpu_caps.has_sse = 0;
+   }
+#ifdef DEBUG
+   /* For simulating less capable machines */
+   if (debug_get_bool_option("LP_FORCE_SSE2", false)) {
+      util_cpu_caps.has_sse3 = 0;
+   }
+#endif
+#endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
+
+   if (override_cpu_caps != NULL) {
+#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+      if (!strcmp(override_cpu_caps, "nosse")) {
+         util_cpu_caps.has_sse = 0;
+      } else if (!strcmp(override_cpu_caps, "sse")) {
+         util_cpu_caps.has_sse2 = 0;
+      } else if (!strcmp(override_cpu_caps, "sse2")) {
+         util_cpu_caps.has_sse3 = 0;
+      } else if (!strcmp(override_cpu_caps, "sse3")) {
+         util_cpu_caps.has_ssse3 = 0;
+      } else if (!strcmp(override_cpu_caps, "ssse3")) {
+         util_cpu_caps.has_sse4_1 = 0;
+      } else if (!strcmp(override_cpu_caps, "sse4.1")) {
+         util_cpu_caps.has_avx = 0;
+      } else if (!strcmp(override_cpu_caps, "avx")) {
+         util_cpu_caps.has_avx512f = 0;
+      }
+#endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
+   }
+
+#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+   if (!util_cpu_caps.has_sse) {
+      util_cpu_caps.has_sse2 = 0;
+   }
+   if (!util_cpu_caps.has_sse2) {
+      util_cpu_caps.has_sse3 = 0;
+   }
+   if (!util_cpu_caps.has_sse3) {
+      util_cpu_caps.has_ssse3 = 0;
+   }
+   if (!util_cpu_caps.has_ssse3) {
+      util_cpu_caps.has_sse4_1 = 0;
+   }
+   if (!util_cpu_caps.has_sse4_1) {
+      util_cpu_caps.has_sse4_2 = 0;
+      util_cpu_caps.has_avx = 0;
+   }
+   if (!util_cpu_caps.has_avx) {
+      util_cpu_caps.has_avx2 = 0;
+      util_cpu_caps.has_f16c = 0;
+      util_cpu_caps.has_fma = 0;
+      util_cpu_caps.has_avx512f = 0;
+   }
+   if (!util_cpu_caps.has_avx512f) {
+      /* avx512 are cleared */
+      util_cpu_caps.has_avx512dq   = 0;
+      util_cpu_caps.has_avx512ifma = 0;
+      util_cpu_caps.has_avx512pf   = 0;
+      util_cpu_caps.has_avx512er   = 0;
+      util_cpu_caps.has_avx512cd   = 0;
+      util_cpu_caps.has_avx512bw   = 0;
+      util_cpu_caps.has_avx512vl   = 0;
+      util_cpu_caps.has_avx512vbmi = 0;
+   }
+#endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
+}
+
+static
+void check_max_vector_bits(void)
+{
+   /* Leave it at 128, even when no SIMD extensions are available.
+    * Really needs to be a multiple of 128 so can fit 4 floats.
+    */
+   util_cpu_caps.max_vector_bits = 128;
+#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+   if (util_cpu_caps.has_avx512f) {
+      util_cpu_caps.max_vector_bits = 512;
+   } else if (util_cpu_caps.has_avx) {
+      util_cpu_caps.max_vector_bits = 256;
+   }
+#endif
+}
+
 void _util_cpu_detect_once(void);
 
 void
@@ -597,7 +689,6 @@ _util_cpu_detect_once(void)
 {
    int available_cpus = 0;
    int total_cpus = 0;
-   const char *override_cpu_caps = debug_get_option("GALLIUM_OVERRIDE_CPU_CAPS", NULL);
 
    memset(&util_cpu_caps, 0, sizeof util_cpu_caps);
 
@@ -803,64 +894,6 @@ _util_cpu_detect_once(void)
             util_cpu_caps.cacheline = cacheline;
       }
    }
-   if (debug_get_bool_option("GALLIUM_NOSSE", false)) {
-      util_cpu_caps.has_sse = 0;
-   }
-#ifdef DEBUG
-   /* For simulating less capable machines */
-   if (debug_get_bool_option("LP_FORCE_SSE2", false)) {
-      util_cpu_caps.has_sse3 = 0;
-   }
-#endif
-#endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
-
-   if (override_cpu_caps != NULL) {
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
-      if (!strcmp(override_cpu_caps, "nosse")) {
-         util_cpu_caps.has_sse = 0;
-      } else if (!strcmp(override_cpu_caps, "sse")) {
-         util_cpu_caps.has_sse2 = 0;
-      } else if (!strcmp(override_cpu_caps, "sse2")) {
-         util_cpu_caps.has_sse3 = 0;
-      } else if (!strcmp(override_cpu_caps, "sse3")) {
-         util_cpu_caps.has_sse4_1 = 0;
-      } else if (!strcmp(override_cpu_caps, "sse4.1")) {
-         util_cpu_caps.has_avx = 0;
-      }
-#endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
-   }
-
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
-   if (!util_cpu_caps.has_sse) {
-      util_cpu_caps.has_sse2 = 0;
-   }
-   if (!util_cpu_caps.has_sse2) {
-      util_cpu_caps.has_sse3 = 0;
-   }
-   if (!util_cpu_caps.has_sse3) {
-      util_cpu_caps.has_ssse3 = 0;
-      util_cpu_caps.has_sse4_1 = 0;
-   }
-   if (!util_cpu_caps.has_sse4_1) {
-      util_cpu_caps.has_sse4_2 = 0;
-      util_cpu_caps.has_avx = 0;
-   }
-   if (!util_cpu_caps.has_avx) {
-      util_cpu_caps.has_avx2 = 0;
-      util_cpu_caps.has_f16c = 0;
-      util_cpu_caps.has_fma = 0;
-
-      /* avx512 are cleared */
-      util_cpu_caps.has_avx512f    = 0;
-      util_cpu_caps.has_avx512dq   = 0;
-      util_cpu_caps.has_avx512ifma = 0;
-      util_cpu_caps.has_avx512pf   = 0;
-      util_cpu_caps.has_avx512er   = 0;
-      util_cpu_caps.has_avx512cd   = 0;
-      util_cpu_caps.has_avx512bw   = 0;
-      util_cpu_caps.has_avx512vl   = 0;
-      util_cpu_caps.has_avx512vbmi = 0;
-   }
 #endif /* PIPE_ARCH_X86 || PIPE_ARCH_X86_64 */
 
 #if defined(PIPE_ARCH_ARM) || defined(PIPE_ARCH_AARCH64)
@@ -878,6 +911,11 @@ _util_cpu_detect_once(void)
 #if defined(PIPE_ARCH_S390)
    util_cpu_caps.family = CPU_S390X;
 #endif
+
+   check_cpu_caps_override();
+
+   /* max_vector_bits should be checked after cpu caps override */
+   check_max_vector_bits();
 
    get_cpu_topology();
 

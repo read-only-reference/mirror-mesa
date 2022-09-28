@@ -414,7 +414,9 @@ struct lvp_pipeline {
    bool is_compute_pipeline;
    bool force_min_sample;
    nir_shader *pipeline_nir[MESA_SHADER_STAGES];
+   nir_shader *tess_ccw;
    void *shader_cso[PIPE_SHADER_TYPES];
+   void *tess_ccw_cso;
    struct {
       uint32_t uniform_offsets[PIPE_MAX_CONSTANT_BUFFERS][MAX_INLINABLE_UNIFORMS];
       uint8_t count[PIPE_MAX_CONSTANT_BUFFERS];
@@ -469,13 +471,6 @@ struct lvp_query_pool {
    struct pipe_query *queries[0];
 };
 
-struct lvp_cmd_pool {
-   struct vk_command_pool                       vk;
-   struct list_head                             cmd_buffers;
-   struct list_head                             free_cmd_buffers;
-};
-
-
 enum lvp_cmd_buffer_status {
    LVP_CMD_BUFFER_STATUS_INVALID,
    LVP_CMD_BUFFER_STATUS_INITIAL,
@@ -490,12 +485,11 @@ struct lvp_cmd_buffer {
    struct lvp_device *                          device;
 
    enum lvp_cmd_buffer_status status;
-   struct lvp_cmd_pool *                        pool;
-   struct list_head                             pool_link;
 
    uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
 };
 
+extern const struct vk_command_buffer_ops lvp_cmd_buffer_ops;
 
 static inline const struct lvp_descriptor_set_layout *
 get_set_layout(const struct lvp_pipeline_layout *layout, uint32_t set)
@@ -522,8 +516,6 @@ VK_DEFINE_HANDLE_CASTS(lvp_physical_device, vk.base, VkPhysicalDevice,
                        VK_OBJECT_TYPE_PHYSICAL_DEVICE)
 VK_DEFINE_HANDLE_CASTS(lvp_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
-VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_cmd_pool, vk.base, VkCommandPool,
-                               VK_OBJECT_TYPE_COMMAND_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_buffer, base, VkBuffer,
                                VK_OBJECT_TYPE_BUFFER)
 VK_DEFINE_NONDISP_HANDLE_CASTS(lvp_buffer_view, base, VkBufferView,

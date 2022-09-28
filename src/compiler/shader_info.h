@@ -74,6 +74,7 @@ struct spirv_supported_capabilities {
    bool kernel_image_read_write;
    bool linkage;
    bool literal_sampler;
+   bool mesh_shading;
    bool mesh_shading_nv;
    bool min_lod;
    bool multiview;
@@ -241,6 +242,11 @@ typedef struct shader_info {
    uint16_t workgroup_size[3];
 
    enum gl_subgroup_size subgroup_size;
+
+   /**
+    * Uses subgroup intrinsics which can communicate across a quad.
+    */
+   bool uses_wide_subgroup_intrinsics;
 
    /* Transform feedback buffer strides in dwords, max. 1K - 4. */
    uint8_t xfb_stride[MAX_XFB_BUFFERS];
@@ -499,11 +505,6 @@ typedef struct shader_info {
           *   AddressingModelPhysical64: 64
           */
          unsigned ptr_size;
-
-         /**
-          * Uses subgroup intrinsics which can communicate across a quad.
-          */
-         bool uses_wide_subgroup_intrinsics;
       } cs;
 
       /* Applies to both TCS and TES. */
@@ -539,6 +540,9 @@ typedef struct shader_info {
          uint16_t max_vertices_out;
          uint16_t max_primitives_out;
          uint16_t primitive_type;  /* GL_POINTS, GL_LINES or GL_TRIANGLES. */
+
+         /* TODO: remove this when we stop supporting NV_mesh_shader. */
+         bool nv;
       } mesh;
    };
 } shader_info;

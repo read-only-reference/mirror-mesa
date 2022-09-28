@@ -251,7 +251,7 @@ bool Shader::read_output(std::istream& is)
       int sid = int_from_string_with_prefix(value, "SID:");
       output.set_sid(sid);
       is >> value;
-      int spi_sid = int_from_string_with_prefix(value, "SPI_SID:");
+      ASSERTED int spi_sid = int_from_string_with_prefix(value, "SPI_SID:");
       assert(spi_sid == output.spi_sid());
    }
 
@@ -282,7 +282,7 @@ bool Shader::read_input(std::istream& is)
          int sid = int_from_string_with_prefix(value, "SID:");
          input.set_sid(sid);
       } else if (value.substr(0, 8) == "SPI_SID:") {
-         int spi_sid = int_from_string_with_prefix(value, "SPI_SID:");
+         ASSERTED int spi_sid = int_from_string_with_prefix(value, "SPI_SID:");
          assert(spi_sid == input.spi_sid());
       } else if (value.substr(0, 7) == "INTERP:") {
          interp = int_from_string_with_prefix(value, "INTERP:");
@@ -1071,16 +1071,20 @@ void Shader::InstructionChain::visit(ScratchIOInstr *instr)
 void Shader::InstructionChain::visit(GDSInstr *instr)
 {
    apply(instr, &last_gds_instr);
+   Instr::Flags flag = instr->has_instr_flag(Instr::helper) ?
+                          Instr::helper: Instr::vpm;
    for (auto& loop : this_shader->m_loops) {
-      loop->set_instr_flag(Instr::vpm);
+      loop->set_instr_flag(flag);
    }
 }
 
 void Shader::InstructionChain::visit(RatInstr *instr)
 {
    apply(instr, &last_ssbo_instr);
+   Instr::Flags flag = instr->has_instr_flag(Instr::helper) ?
+                          Instr::helper: Instr::vpm;
    for (auto& loop : this_shader->m_loops) {
-      loop->set_instr_flag(Instr::vpm);
+      loop->set_instr_flag(flag);
    }
 
    if (prepare_mem_barrier)

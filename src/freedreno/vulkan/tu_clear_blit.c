@@ -802,8 +802,7 @@ r3d_common(struct tu_cmd_buffer *cmd, struct tu_cs *cs, bool blit,
       }
    }
 
-   cmd->state.line_mode = RECTANGULAR;
-   tu6_emit_msaa(cs, samples, cmd->state.line_mode);
+   tu6_emit_msaa(cs, samples, false);
 }
 
 static void
@@ -909,7 +908,7 @@ r3d_src_common(struct tu_cmd_buffer *cmd,
                                  2, /* allocate space for a sampler too */
                                  A6XX_TEX_CONST_DWORDS, &texture);
    if (result != VK_SUCCESS) {
-      cmd->record_result = result;
+      vk_command_buffer_set_error(&cmd->vk, result);
       return;
    }
 
@@ -1991,7 +1990,7 @@ tu_copy_image_to_image(struct tu_cmd_buffer *cmd,
                                           staging_layout.size,
                                           &staging_bo);
       if (result != VK_SUCCESS) {
-         cmd->record_result = result;
+         vk_command_buffer_set_error(&cmd->vk, result);
          return;
       }
 
@@ -2156,7 +2155,7 @@ tu_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
    struct tu_cs_memory tmp;
    VkResult result = tu_cs_alloc(&cmd->sub_cs, DIV_ROUND_UP(dataSize, 64), 64 / 4, &tmp);
    if (result != VK_SUCCESS) {
-      cmd->record_result = result;
+      vk_command_buffer_set_error(&cmd->vk, result);
       return;
    }
 
@@ -2176,8 +2175,7 @@ tu_CmdFillBuffer(VkCommandBuffer commandBuffer,
    const struct blit_ops *ops = &r2d_ops;
    struct tu_cs *cs = &cmd->cs;
 
-   if (fillSize == VK_WHOLE_SIZE)
-      fillSize = buffer->size - dstOffset;
+   fillSize = vk_buffer_range(&buffer->vk, dstOffset, fillSize);
 
    uint64_t dst_va = buffer->iova + dstOffset;
    uint32_t blocks = fillSize / 4;
@@ -2720,6 +2718,9 @@ tu_emit_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
 
    trace_start_gmem_clear(&cmd->trace, cs);
 
+   tu_cs_emit_regs(cs,
+                   A6XX_RB_BLIT_GMEM_MSAA_CNTL(tu_msaa_samples(att->samples)));
+
    enum pipe_format format = tu_vk_format_to_pipe_format(att->format);
    if (att->format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
       if (mask & VK_IMAGE_ASPECT_DEPTH_BIT)
@@ -2945,8 +2946,6 @@ tu_clear_gmem_attachment(struct tu_cmd_buffer *cmd,
    if (!attachment->clear_mask)
       return;
 
-   tu_cs_emit_regs(cs, A6XX_RB_MSAA_CNTL(tu_msaa_samples(attachment->samples)));
-
    tu_emit_clear_gmem_attachment(cmd, cs, a, attachment->clear_mask, value);
 }
 
@@ -2959,7 +2958,7 @@ tu_emit_blit(struct tu_cmd_buffer *cmd,
              bool separate_stencil)
 {
    tu_cs_emit_regs(cs,
-                   A6XX_RB_MSAA_CNTL(tu_msaa_samples(attachment->samples)));
+                   A6XX_RB_BLIT_GMEM_MSAA_CNTL(tu_msaa_samples(attachment->samples)));
 
    tu_cs_emit_regs(cs, A6XX_RB_BLIT_INFO(
       .unk0 = !resolve,

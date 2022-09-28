@@ -28,6 +28,7 @@
 
 #include "pipe/p_config.h"
 #include "pipe/p_compiler.h"
+#include "util/macros.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
@@ -438,14 +439,8 @@ lp_build_init(void)
 
    lp_set_target_options();
 
-   if (util_get_cpu_caps()->has_avx2 || util_get_cpu_caps()->has_avx) {
-      lp_native_vector_width = 256;
-   } else {
-      /* Leave it at 128, even when no SIMD extensions are available.
-       * Really needs to be a multiple of 128 so can fit 4 floats.
-       */
-      lp_native_vector_width = 128;
-   }
+   // Default to 256 until we're confident llvmpipe with 512 is as correct and not slower than 256
+   lp_native_vector_width = MIN2(util_get_cpu_caps()->max_vector_bits, 256);
 
    lp_native_vector_width = debug_get_num_option("LP_NATIVE_VECTOR_WIDTH",
                                                  lp_native_vector_width);

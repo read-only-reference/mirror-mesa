@@ -230,6 +230,7 @@ files_libgallium = files(
   'util/u_cache.h',
   'util/u_compute.c',
   'util/u_compute.h',
+  'util/u_debug_cb.h',
   'util/u_debug_flush.c',
   'util/u_debug_flush.h',
   'util/u_debug_image.c',
@@ -474,7 +475,7 @@ endif
 
 if with_glx == 'xlib' or with_glx == 'gallium-xlib'
   files_libgalliumvlwinsys += files('vl/vl_winsys_xlib_swrast.c')
-else
+elif with_gallium_drisw_kms
   files_libgalliumvlwinsys += files('vl/vl_winsys_dri_vgem.c')
 endif
 

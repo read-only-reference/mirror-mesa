@@ -93,6 +93,29 @@ collect_enabled_features(struct vk_device *device,
          break;
       }
 
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES: {
+         const VkPhysicalDeviceImageRobustnessFeatures *features = (void *)ext;
+         if (features->robustImageAccess)
+            device->enabled_features.robustImageAccess = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT: {
+         const VkPhysicalDeviceRobustness2FeaturesEXT *features = (void *)ext;
+         if (features->robustBufferAccess2)
+            device->enabled_features.robustBufferAccess2 = true;
+         if (features->robustImageAccess2)
+            device->enabled_features.robustImageAccess2 = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES: {
+         const VkPhysicalDeviceVulkan13Features *features = (void *)ext;
+         if (features->robustImageAccess)
+            device->enabled_features.robustImageAccess = true;
+         break;
+      }
+
       default:
          /* Don't warn */
          break;
@@ -526,6 +549,27 @@ vk_common_DeviceWaitIdle(VkDevice _device)
 
    return VK_SUCCESS;
 }
+
+#ifndef _WIN32
+
+uint64_t
+vk_clock_gettime(clockid_t clock_id)
+{
+   struct timespec current;
+   int ret;
+
+   ret = clock_gettime(clock_id, &current);
+#ifdef CLOCK_MONOTONIC_RAW
+   if (ret < 0 && clock_id == CLOCK_MONOTONIC_RAW)
+      ret = clock_gettime(CLOCK_MONOTONIC, &current);
+#endif
+   if (ret < 0)
+      return 0;
+
+   return (uint64_t)current.tv_sec * 1000000000ULL + current.tv_nsec;
+}
+
+#endif //!_WIN32
 
 #define CORE_FEATURE(feature) features->feature = core->feature
 
