@@ -534,11 +534,11 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
                nir_load_reloc_const_intel(&b, BRW_SHADER_RELOC_CONST_DATA_ADDR_HIGH));
 
             nir_ssa_def *data =
-               nir_load_global(&b, nir_iadd(&b, const_data_base_addr,
-                                                nir_u2u64(&b, offset)),
-                               load_align,
-                               intrin->dest.ssa.num_components,
-                               intrin->dest.ssa.bit_size);
+               nir_load_global_constant(&b, nir_iadd(&b, const_data_base_addr,
+                                                     nir_u2u64(&b, offset)),
+                                        load_align,
+                                        intrin->dest.ssa.num_components,
+                                        intrin->dest.ssa.bit_size);
 
             nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
                                      data);
@@ -922,8 +922,9 @@ iris_setup_binding_table(const struct intel_device_info *devinfo,
       info->textures_used[0] | ((uint64_t)info->textures_used[1]) << 32;
    bt->used_mask[IRIS_SURFACE_GROUP_TEXTURE_HIGH64] =
       info->textures_used[2] | ((uint64_t)info->textures_used[3]) << 32;
+   bt->samplers_used_mask = info->samplers_used[0];
 
-   bt->sizes[IRIS_SURFACE_GROUP_IMAGE] = info->num_images;
+   bt->sizes[IRIS_SURFACE_GROUP_IMAGE] = BITSET_LAST_BIT(info->images_used);
 
    /* Allocate an extra slot in the UBO section for NIR constants.
     * Binding table compaction will remove it if unnecessary.

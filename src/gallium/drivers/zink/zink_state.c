@@ -62,7 +62,7 @@ zink_create_vertex_elements_state(struct pipe_context *pctx,
 
       int binding = elem->vertex_buffer_index;
       if (buffer_map[binding] < 0) {
-         ves->binding_map[num_bindings] = binding;
+         ves->hw_state.binding_map[num_bindings] = binding;
          buffer_map[binding] = num_bindings++;
       }
       binding = buffer_map[binding];
@@ -591,6 +591,7 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
 
    assert(rs_state->depth_clip_far == rs_state->depth_clip_near);
    state->hw_state.depth_clip = rs_state->depth_clip_near;
+   state->hw_state.depth_clamp = rs_state->depth_clamp;
    state->hw_state.pv_last = !rs_state->flatshade_first;
    state->hw_state.clip_halfz = rs_state->clip_halfz;
 
@@ -615,7 +616,7 @@ zink_create_rasterizer_state(struct pipe_context *pctx,
    }
 
    if (!rs_state->line_stipple_enable) {
-      state->base.line_stipple_factor = 0;
+      state->base.line_stipple_factor = 1;
       state->base.line_stipple_pattern = UINT16_MAX;
    }
 
