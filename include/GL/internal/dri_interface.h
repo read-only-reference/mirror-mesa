@@ -416,11 +416,12 @@ struct __DRI2fenceExtensionRec {
  */
 
 #define __DRI2_INTEROP "DRI2_Interop"
-#define __DRI2_INTEROP_VERSION 1
+#define __DRI2_INTEROP_VERSION 2
 
 struct mesa_glinterop_device_info;
 struct mesa_glinterop_export_in;
 struct mesa_glinterop_export_out;
+typedef struct __GLsync *GLsync;
 
 struct __DRI2interopExtensionRec {
    __DRIextension base;
@@ -433,6 +434,15 @@ struct __DRI2interopExtensionRec {
    int (*export_object)(__DRIcontext *ctx,
                         struct mesa_glinterop_export_in *in,
                         struct mesa_glinterop_export_out *out);
+
+   /**
+    * Same as MesaGLInterop*FlushObjects.
+    * 
+    * \since 2
+    */
+   int (*flush_objects)(__DRIcontext *ctx,
+                        unsigned count, struct mesa_glinterop_export_in *objects,
+                        GLsync *sync);
 };
 
 
@@ -1845,23 +1855,6 @@ typedef struct __DRIconfigOptionsExtensionRec {
     */
    char *(*getXml)(const char *driver_name);
 } __DRIconfigOptionsExtension;
-
-/**
- * This extension provides a driver vtable to a set of common driver helper
- * functions (driCoreExtension, driDRI2Extension) within the driver
- * implementation, as opposed to having to pass them through a global
- * variable.
- *
- * It is not intended to be public API to the actual loader, and the vtable
- * layout may change at any time.
- */
-#define __DRI_DRIVER_VTABLE "DRI_DriverVtable"
-#define __DRI_DRIVER_VTABLE_VERSION 1
-
-typedef struct __DRIDriverVtableExtensionRec {
-    __DRIextension base;
-    const struct __DriverAPIRec *vtable;
-} __DRIDriverVtableExtension;
 
 /**
  * Query renderer driver extension

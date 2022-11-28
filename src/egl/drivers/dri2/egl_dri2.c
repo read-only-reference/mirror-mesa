@@ -2775,6 +2775,7 @@ dri2_num_fourcc_format_planes(EGLint format)
    case DRM_FORMAT_P010:
    case DRM_FORMAT_P012:
    case DRM_FORMAT_P016:
+   case DRM_FORMAT_P030:
       return 2;
 
    case DRM_FORMAT_YUV410:
@@ -3824,6 +3825,20 @@ dri2_interop_export_object(_EGLDisplay *disp, _EGLContext *ctx,
    return dri2_dpy->interop->export_object(dri2_ctx->dri_context, in, out);
 }
 
+static int
+dri2_interop_flush_objects(_EGLDisplay *disp, _EGLContext *ctx,
+                           unsigned count, struct mesa_glinterop_export_in *objects,
+                           GLsync *sync)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
+
+   if (!dri2_dpy->interop || dri2_dpy->interop->base.version < 2)
+      return MESA_GLINTEROP_UNSUPPORTED;
+
+   return dri2_dpy->interop->flush_objects(dri2_ctx->dri_context, count, objects, sync);
+}
+
 const _EGLDriver _eglDriver = {
    .Initialize = dri2_initialize,
    .Terminate = dri2_terminate,
@@ -3875,6 +3890,7 @@ const _EGLDriver _eglDriver = {
    .DestroySyncKHR = dri2_destroy_sync,
    .GLInteropQueryDeviceInfo = dri2_interop_query_device_info,
    .GLInteropExportObject = dri2_interop_export_object,
+   .GLInteropFlushObjects = dri2_interop_flush_objects,
    .DupNativeFenceFDANDROID = dri2_dup_native_fence_fd,
    .SetBlobCacheFuncsANDROID = dri2_set_blob_cache_funcs,
 };

@@ -643,6 +643,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_opt_combine_stores, nir_var_all);
 
       OPT(nir_opt_ray_queries);
+      OPT(nir_opt_ray_query_ranges);
 
       if (is_scalar) {
          OPT(nir_lower_alu_to_scalar, NULL, NULL);
@@ -951,7 +952,10 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    brw_nir_optimize(nir, compiler, is_scalar, true);
 
    OPT(nir_lower_doubles, softfp64, nir->options->lower_doubles_options);
-   OPT(nir_lower_int64);
+   if (OPT(nir_lower_int64)) {
+      OPT(nir_opt_algebraic);
+      OPT(nir_lower_doubles, softfp64, nir->options->lower_doubles_options);
+   }
 
    OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
 
@@ -1119,7 +1123,7 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
    }
 }
 
-static bool
+bool
 brw_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
                              unsigned bit_size,
                              unsigned num_components,
@@ -1282,6 +1286,9 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
       /* Try and fuse multiply-adds */
       OPT(brw_nir_opt_peephole_ffma);
    }
+
+   if (is_scalar)
+      OPT(brw_nir_opt_peephole_imul32x16);
 
    if (OPT(nir_opt_comparison_pre)) {
       OPT(nir_copy_prop);
@@ -1691,9 +1698,10 @@ brw_type_for_nir_type(const struct intel_device_info *devinfo,
 
 nir_shader *
 brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compiler,
-                               const nir_shader_compiler_options *options,
                                const struct brw_tcs_prog_key *key)
 {
+   const nir_shader_compiler_options *options =
+      compiler->nir_options[MESA_SHADER_TESS_CTRL];
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_TESS_CTRL,
                                                   options, "passthrough TCS");
    ralloc_steal(mem_ctx, b.shader);
