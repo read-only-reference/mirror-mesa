@@ -33,7 +33,7 @@
     <constant desc="Zero">0x00000000</constant>
     <constant desc="All ones; integer $-1$">0xFFFFFFFF</constant>
     <constant desc="Maximum integer; floating-point NaN">0x7FFFFFFF</constant>
-    <constant desc="Integers $(-2, -3, -4, -5)$">0xFAFCFDFE</constant>
+    <constant desc="Integers $(-2, -3, -4, -6)$">0xFAFCFDFE</constant>
     <constant desc="16-bit integer $2^8$">0x01000000</constant>
     <constant desc="Multiples of 16 $(0, 32, 0, 128)$">0x80002000</constant>
     <constant desc="Multiples of 16 $(48, 80, 96, 112)$">0x70605030</constant>
@@ -322,7 +322,7 @@
     <value desc="Zero-extend to 16-bit, low-half">h0</value>
     <value desc="Zero-extend to 16-bit, high-half">h1</value>
     <value desc="Zero-extend to 32-bit">w0</value>
-    <value desc="Zero-extend to 32-bit">d0</value>
+    <value desc="Zero-extend to 64-bit">d0</value>
   </enum>
 
   <enum name="Load lane (16-bit)">
@@ -2061,7 +2061,7 @@
       as the `mux` modifier is evaluated on the mask. If true, `A` is chosen,
       else `B` is chosen. The `bit` modifier acts bitwise, equivalent to
       `bitselect()` in OpenCL, so `MUX.i32.bit A, B, mask` calculates
-      `(A &amp; mask) | (A &amp; ~mask)`.
+      `(A &amp; mask) | (B &amp; ~mask)`.
     </desc>
     <mod name="mux" start="32" size="2"/>
     <src>A</src>
@@ -2075,7 +2075,7 @@
       as the `mux` modifier is evaluated on the mask. If true, `A` is chosen,
       else `B` is chosen. The `bit` modifier acts bitwise, equivalent to
       `bitselect()` in OpenCL, so `MUX.i32.bit A, B, mask` calculates
-      `(A &amp; mask) | (A &amp; ~mask)`.
+      `(A &amp; mask) | (B &amp; ~mask)`.
     </desc>
     <mod name="mux" start="32" size="2"/>
     <src swizzle="true">A</src>

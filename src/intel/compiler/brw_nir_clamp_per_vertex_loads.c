@@ -1,5 +1,5 @@
 /*
- * Copyright © 2017 Intel Corporation
+ * Copyright (c) 2022 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,43 +21,42 @@
  * IN THE SOFTWARE.
  */
 
-#include "anv_nir.h"
-#include "nir/nir_builder.h"
-#include "compiler/brw_compiler.h"
+/*
+ * Limit input per vertex input accesses. This is useful for the tesselation stages.
+ * On Gfx12.5+ out of bound accesses generate hangs.
+ */
+
+#include "brw_nir.h"
+#include "compiler/nir/nir_builder.h"
 
 static bool
-anv_nir_add_base_work_group_id_instr(nir_builder *b,
-                                     nir_instr *instr,
-                                     UNUSED void *cb_data)
+lower_instr(nir_builder *b, nir_instr *instr, void *cb_data)
 {
+   unsigned *input_vertices = cb_data;
+
    if (instr->type != nir_instr_type_intrinsic)
       return false;
 
-   nir_intrinsic_instr *load_id = nir_instr_as_intrinsic(instr);
-   if (load_id->intrinsic != nir_intrinsic_load_workgroup_id)
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+   if (intrin->intrinsic != nir_intrinsic_load_per_vertex_input)
       return false;
 
-   b->cursor = nir_after_instr(&load_id->instr);
+   b->cursor = nir_before_instr(instr);
 
-   nir_ssa_def *load_base =
-      nir_load_push_constant(b, 3, 32, nir_imm_int(b, 0),
-                             .base = offsetof(struct anv_push_constants, cs.base_work_group_id),
-                             .range = 3 * sizeof(uint32_t));
+   nir_instr_rewrite_src_ssa(instr,
+                             &intrin->src[0],
+                             nir_imin(b, intrin->src[0].ssa,
+                                         nir_imm_int(b, *input_vertices - 1)));
 
-   nir_ssa_def *id = nir_iadd(b, &load_id->dest.ssa, load_base);
-
-   nir_ssa_def_rewrite_uses_after(&load_id->dest.ssa, id, id->parent_instr);
    return true;
 }
 
 bool
-anv_nir_add_base_work_group_id(nir_shader *shader)
+brw_nir_clamp_per_vertex_loads(nir_shader *shader,
+                               unsigned input_vertices)
 {
-   assert(shader->info.stage == MESA_SHADER_COMPUTE);
-
-   return nir_shader_instructions_pass(shader,
-                                       anv_nir_add_base_work_group_id_instr,
+   return nir_shader_instructions_pass(shader, lower_instr,
                                        nir_metadata_block_index |
                                        nir_metadata_dominance,
-                                       NULL);
+                                       &input_vertices);
 }

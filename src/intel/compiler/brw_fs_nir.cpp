@@ -191,6 +191,7 @@ emit_system_values_block(nir_block *block, fs_visitor *v)
          break;
 
       case nir_intrinsic_load_workgroup_id:
+      case nir_intrinsic_load_workgroup_id_zero_base:
          assert(gl_shader_stage_uses_workgroup(v->stage));
          reg = &v->nir_system_values[SYSTEM_VALUE_WORKGROUP_ID];
          if (reg->file == BAD_FILE)
@@ -1568,23 +1569,14 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       inst = bld.emit(SHADER_OPCODE_RSQ, result, op[0]);
       break;
 
-   case nir_op_i2b32:
    case nir_op_f2b32: {
       uint32_t bit_size = nir_src_bit_size(instr->src[0].src);
       if (bit_size == 64) {
          /* two-argument instructions can't take 64-bit immediates */
-         fs_reg zero;
-         fs_reg tmp;
+         fs_reg zero = vgrf(glsl_type::double_type);
+         fs_reg tmp = vgrf(glsl_type::double_type);
 
-         if (instr->op == nir_op_f2b32) {
-            zero = vgrf(glsl_type::double_type);
-            tmp = vgrf(glsl_type::double_type);
-            bld.MOV(zero, setup_imm_df(bld, 0.0));
-         } else {
-            zero = vgrf(glsl_type::int64_t_type);
-            tmp = vgrf(glsl_type::int64_t_type);
-            bld.MOV(zero, brw_imm_q(0));
-         }
+         bld.MOV(zero, setup_imm_df(bld, 0.0));
 
          /* A SIMD16 execution needs to be split in two instructions, so use
           * a vgrf instead of the flag register as dst so instruction splitting
@@ -1595,11 +1587,10 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr,
       } else {
          fs_reg zero;
          if (bit_size == 32) {
-            zero = instr->op == nir_op_f2b32 ? brw_imm_f(0.0f) : brw_imm_d(0);
+            zero = brw_imm_f(0.0f);
          } else {
             assert(bit_size == 16);
-            zero = instr->op == nir_op_f2b32 ?
-               retype(brw_imm_w(0), BRW_REGISTER_TYPE_HF) : brw_imm_w(0);
+            zero = retype(brw_imm_w(0), BRW_REGISTER_TYPE_HF);
          }
          bld.CMP(result, op[0], zero, BRW_CONDITIONAL_NZ);
       }
@@ -3741,10 +3732,18 @@ fs_visitor::nir_emit_cs_intrinsic(const fs_builder &bld,
       cs_payload().load_subgroup_id(bld, dest);
       break;
 
-   case nir_intrinsic_load_local_invocation_id:
-   case nir_intrinsic_load_workgroup_id: {
-      gl_system_value sv = nir_system_value_from_intrinsic(instr->intrinsic);
-      fs_reg val = nir_system_values[sv];
+   case nir_intrinsic_load_local_invocation_id: {
+      fs_reg val = nir_system_values[SYSTEM_VALUE_LOCAL_INVOCATION_ID];
+      assert(val.file != BAD_FILE);
+      dest.type = val.type;
+      for (unsigned i = 0; i < 3; i++)
+         bld.MOV(offset(dest, bld, i), offset(val, bld, i));
+      break;
+   }
+
+   case nir_intrinsic_load_workgroup_id:
+   case nir_intrinsic_load_workgroup_id_zero_base: {
+      fs_reg val = nir_system_values[SYSTEM_VALUE_WORKGROUP_ID];
       assert(val.file != BAD_FILE);
       dest.type = val.type;
       for (unsigned i = 0; i < 3; i++)
@@ -6388,8 +6387,7 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
    if (srcs[TEX_LOGICAL_SRC_MCS].file == BAD_FILE &&
        (instr->op == nir_texop_txf_ms ||
         instr->op == nir_texop_samples_identical)) {
-      if (devinfo->ver >= 7 &&
-          key_tex->compressed_multisample_layout_mask & (1 << texture)) {
+      if (devinfo->ver >= 7) {
          srcs[TEX_LOGICAL_SRC_MCS] =
             emit_mcs_fetch(srcs[TEX_LOGICAL_SRC_COORDINATE],
                            instr->coord_components,
@@ -6428,7 +6426,7 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
        */
       if (devinfo->verx10 >= 125)
          opcode = SHADER_OPCODE_TXF_CMS_W_GFX12_LOGICAL;
-      else if ((key_tex->msaa_16 & (1 << sampler)))
+      else if (devinfo->ver >= 9)
          opcode = SHADER_OPCODE_TXF_CMS_W_LOGICAL;
       else
          opcode = SHADER_OPCODE_TXF_CMS_LOGICAL;
@@ -6460,7 +6458,7 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
        */
       if (srcs[TEX_LOGICAL_SRC_MCS].file == BRW_IMMEDIATE_VALUE) {
          bld.MOV(dst, brw_imm_ud(0u));
-      } else if ((key_tex->msaa_16 & (1 << sampler))) {
+      } else if (devinfo->ver >= 9) {
          fs_reg tmp = vgrf(glsl_type::uint_type);
          bld.OR(tmp, srcs[TEX_LOGICAL_SRC_MCS],
                 offset(srcs[TEX_LOGICAL_SRC_MCS], bld, 1));
