@@ -101,6 +101,7 @@ get_nir_options_for_stage(struct radv_physical_device *device, gl_shader_stage s
       .has_dot_2x16 =
          device->rad_info.has_accelerated_dot_product && device->rad_info.gfx_level < GFX11,
       .has_find_msb_rev = true,
+      .has_pack_half_2x16_rtz = true,
       .use_scoped_barrier = true,
 #ifdef LLVM_AVAILABLE
       .has_fmulz = !device->use_llvm || LLVM_VERSION_MAJOR >= 12,
@@ -716,7 +717,7 @@ is_not_xfb_output(nir_variable *var, void *data)
 
 nir_shader *
 radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_stage *stage,
-                         const struct radv_pipeline_key *key)
+                         const struct radv_pipeline_key *key, bool is_internal)
 {
    unsigned subgroup_size = 64, ballot_bit_size = 64;
    if (key->cs.compute_subgroup_size) {
@@ -745,7 +746,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_
 
       bool dump_meta = device->instance->debug_flags & RADV_DEBUG_DUMP_META_SHADERS;
       if ((device->instance->debug_flags & RADV_DEBUG_DUMP_SPIRV) &&
-          (!device->app_shaders_internal || dump_meta))
+          (!is_internal || dump_meta))
          radv_print_spirv(stage->spirv.data, stage->spirv.size, stderr);
 
       uint32_t num_spec_entries = 0;
@@ -839,7 +840,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_pipeline_
       nir = spirv_to_nir(spirv, stage->spirv.size / 4, spec_entries, num_spec_entries, stage->stage,
                          stage->entrypoint, &spirv_options,
                          &device->physical_device->nir_options[stage->stage]);
-      nir->info.internal |= device->app_shaders_internal;
+      nir->info.internal |= is_internal;
       assert(nir->info.stage == stage->stage);
       nir_validate_shader(nir, "after spirv_to_nir");
 
@@ -1612,6 +1613,7 @@ radv_alloc_shader_memory(struct radv_device *device, uint32_t size, void *ptr)
       RADV_BO_PRIORITY_SHADER, 0, &arena->bo);
    if (result != VK_SUCCESS)
       goto fail;
+   radv_rmv_log_bo_allocate(device, arena->bo, arena_size, true);
 
    list_inithead(&arena->entries);
 
@@ -1649,8 +1651,10 @@ fail:
    mtx_unlock(&device->shader_arena_mutex);
    free(alloc);
    free(hole);
-   if (arena && arena->bo)
+   if (arena && arena->bo) {
+      radv_rmv_log_bo_destroy(device, arena->bo);
       device->ws->buffer_destroy(device->ws, arena->bo);
+   }
    free(arena);
    return NULL;
 }
@@ -1702,6 +1706,7 @@ radv_free_shader_memory(struct radv_device *device, union radv_shader_arena_bloc
       struct radv_shader_arena *arena = hole->arena;
       free_block_obj(device, hole);
 
+      radv_rmv_log_bo_destroy(device, arena->bo);
       device->ws->buffer_destroy(device->ws, arena->bo);
       list_del(&arena->list);
       free(arena);
@@ -1733,6 +1738,7 @@ radv_destroy_shader_arenas(struct radv_device *device)
 
    list_for_each_entry_safe(struct radv_shader_arena, arena, &device->shader_arenas, list)
    {
+      radv_rmv_log_bo_destroy(device, arena->bo);
       device->ws->buffer_destroy(device->ws, arena->bo);
       free(arena);
    }
@@ -2370,8 +2376,9 @@ radv_fill_nir_compiler_options(struct radv_nir_compiler_options *options,
    options->check_ir = device->instance->debug_flags & RADV_DEBUG_CHECKIR;
    options->address32_hi = device->physical_device->rad_info.address32_hi;
    options->has_ls_vgpr_init_bug = device->physical_device->rad_info.has_ls_vgpr_init_bug;
-   options->enable_mrt_output_nan_fixup =
-      !is_meta_shader && options->key.ps.epilog.enable_mrt_output_nan_fixup;
+
+   if (!is_meta_shader)
+      options->enable_mrt_output_nan_fixup = options->key.ps.epilog.enable_mrt_output_nan_fixup;
 }
 
 static struct radv_shader *
@@ -2667,6 +2674,8 @@ radv_create_ps_epilog(struct radv_device *device, const struct radv_ps_epilog_ke
    epilog = radv_shader_part_create(binary, info.wave_size);
    if (!epilog)
       goto fail_create;
+
+   epilog->spi_shader_col_format = key->spi_shader_col_format;
 
    /* Allocate memory and upload the epilog. */
    epilog->alloc = radv_alloc_shader_memory(device, epilog->code_size, NULL);

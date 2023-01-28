@@ -83,6 +83,8 @@ void genX(flush_pipeline_select_3d)(struct anv_cmd_buffer *cmd_buffer);
 void genX(flush_pipeline_select_gpgpu)(struct anv_cmd_buffer *cmd_buffer);
 void genX(emit_pipeline_select)(struct anv_batch *batch, uint32_t pipeline);
 
+void genX(apply_task_urb_workaround)(struct anv_cmd_buffer *cmd_buffer);
+
 enum anv_pipe_bits
 genX(emit_apply_pipe_flushes)(struct anv_batch *batch,
                               struct anv_device *device,
@@ -94,6 +96,8 @@ void genX(emit_so_memcpy_init)(struct anv_memcpy_state *state,
                                struct anv_batch *batch);
 
 void genX(emit_so_memcpy_fini)(struct anv_memcpy_state *state);
+
+void genX(emit_so_memcpy_end)(struct anv_memcpy_state *state);
 
 void genX(emit_so_memcpy)(struct anv_memcpy_state *state,
                           struct anv_address dst, struct anv_address src,
@@ -151,7 +155,7 @@ void genX(blorp_exec)(struct blorp_batch *batch,
 void genX(cmd_emit_timestamp)(struct anv_batch *batch,
                               struct anv_device *device,
                               struct anv_address addr,
-                              bool end_of_pipe);
+                              enum anv_timestamp_capture_type);
 
 void genX(batch_emit_dummy_post_sync_op)(struct anv_batch *batch,
                                          struct anv_device *device,

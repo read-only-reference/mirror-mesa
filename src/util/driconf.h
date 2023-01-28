@@ -164,6 +164,10 @@
    DRI_CONF_OPT_B(disable_glsl_line_continuations, def, \
                   "Disable backslash-based line continuations in GLSL source")
 
+#define DRI_CONF_DISABLE_UNIFORM_ARRAY_RESIZE(def) \
+   DRI_CONF_OPT_B(disable_uniform_array_resize, def, \
+                  "Disable the glsl optimisation that resizes uniform arrays")
+
 #define DRI_CONF_FORCE_GLSL_VERSION(def) \
    DRI_CONF_OPT_I(force_glsl_version, def, 0, 999, \
                   "Force a default GLSL version for shaders that lack an explicit #version line")
@@ -512,6 +516,14 @@
                   "Force-enable reading back L8_SRGB textures")
 
 /**
+ * \brief freedreno specific configuration options
+ */
+
+#define DRI_CONF_DISABLE_CONSERVATIVE_LRZ(def) \
+   DRI_CONF_OPT_B(disable_conservative_lrz, def, \
+                  "Disable conservative LRZ")
+
+/**
  * \brief venus specific configuration options
  */
 #define DRI_CONF_VENUS_IMPLICIT_FENCING(def) \
@@ -603,6 +615,8 @@
    DRI_CONF_OPT_B(radv_rt, def, \
                   "Expose support for VK_KHR_ray_tracing_pipeline")
 
+#define DRI_CONF_RADV_APP_LAYER() DRI_CONF_OPT_S_NODEF(radv_app_layer, "Select an application layer.")
+
 /**
  * \brief ANV specific configuration options
  */
@@ -622,5 +636,12 @@
 #define DRI_CONF_ANV_GENERATED_INDIRECT_THRESHOLD(def) \
    DRI_CONF_OPT_I(generated_indirect_threshold, def, 0, INT32_MAX, \
                   "Indirect threshold count above which we start generating commands")
+
+/**
+ * \brief DZN specific configuration options
+ */
+
+#define DRI_CONF_DZN_CLAIM_WIDE_LINES(def) \
+   DRI_CONF_OPT_B(dzn_claim_wide_lines, def, "Claim wide line support")
 
 #endif

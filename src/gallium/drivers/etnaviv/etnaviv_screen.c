@@ -74,6 +74,7 @@ static const struct debug_named_value etna_debug_options[] = {
    {"nocache",        ETNA_DBG_NOCACHE,    "Disable shader cache"},
    {"linear_pe",      ETNA_DBG_LINEAR_PE, "Enable linear PE"},
    {"msaa",           ETNA_DBG_MSAA, "Enable MSAA support"},
+   {"shared_ts",      ETNA_DBG_SHARED_TS, "Enable TS sharing"},
    DEBUG_NAMED_VALUE_END
 };
 
@@ -93,6 +94,8 @@ etna_screen_destroy(struct pipe_screen *pscreen)
 
    if (screen->perfmon)
       etna_perfmon_del(screen->perfmon);
+
+   util_dynarray_fini(&screen->supported_pm_queries);
 
    etna_shader_screen_fini(pscreen);
 
@@ -126,7 +129,7 @@ etna_screen_get_name(struct pipe_screen *pscreen)
 static const char *
 etna_screen_get_vendor(struct pipe_screen *pscreen)
 {
-   return "etnaviv";
+   return "Mesa";
 }
 
 static const char *
@@ -653,7 +656,8 @@ etna_screen_query_dmabuf_modifiers(struct pipe_screen *pscreen,
    int mods_multiplier = 1;
    int i, j;
 
-   if (VIV_FEATURE(screen, chipFeatures, FAST_CLEAR)) {
+   if (DBG_ENABLED(ETNA_DBG_SHARED_TS) &&
+       VIV_FEATURE(screen, chipFeatures, FAST_CLEAR)) {
       /* If TS is supported expose the TS modifiers. GPUs with feature
        * CACHE128B256BPERLINE have both 128B and 256B color tile TS modes,
        * older cores support exactly one TS layout.
@@ -1018,10 +1022,12 @@ etna_get_specs(struct etna_screen *screen)
 
    screen->specs.use_blt = VIV_FEATURE(screen, chipMinorFeatures5, BLT_ENGINE);
 
-   /* Only allow fast clear with MC2.0, as the TS unit bypasses the memory
-    * offset on MC1.0 and we have no way to fixup the address.
+   /* Only allow fast clear with MC2.0 or MMUv2, as the TS unit bypasses the
+    * memory offset for the MMUv1 linear window on MC1.0 and we have no way to
+    * fixup the address.
     */
-   if (!VIV_FEATURE(screen, chipMinorFeatures0, MC20))
+   if (!VIV_FEATURE(screen, chipMinorFeatures0, MC20) &&
+       !VIV_FEATURE(screen, chipMinorFeatures1, MMU_VERSION))
       screen->features[viv_chipFeatures] &= ~chipFeatures_FAST_CLEAR;
 
    return true;

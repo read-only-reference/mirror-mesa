@@ -3669,6 +3669,9 @@ typedef struct nir_shader_compiler_options {
    /** Backend supports 32bit ufind_msb_rev and ifind_msb_rev. */
    bool has_find_msb_rev;
 
+   /** Backend supports pack_half_2x16_rtz_split. */
+   bool has_pack_half_2x16_rtz;
+
    /**
     * Is this the Intel vec4 backend?
     *
@@ -3760,6 +3763,16 @@ typedef struct nir_shader_compiler_options {
     * fragment task is far more than vertex one, so better left it disabled.
     */
    bool lower_varying_from_uniform;
+
+   /** store the variable offset into the instrinsic range_base instead
+    *  of adding it to the image index.
+    */
+   bool lower_image_offset_to_range_base;
+
+   /** store the variable offset into the instrinsic range_base instead
+    *  of adding it to the atomic source
+    */
+   bool lower_atomic_offset_to_range_base;
 } nir_shader_compiler_options;
 
 typedef struct nir_shader {
@@ -4972,7 +4985,7 @@ bool nir_scale_fdiv(nir_shader *shader);
 bool nir_lower_alu_to_scalar(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
 bool nir_lower_alu_width(nir_shader *shader, nir_vectorize_cb cb, const void *data);
 bool nir_lower_bool_to_bitsize(nir_shader *shader);
-bool nir_lower_bool_to_float(nir_shader *shader);
+bool nir_lower_bool_to_float(nir_shader *shader, bool has_fcsel_ne);
 bool nir_lower_bool_to_int32(nir_shader *shader);
 bool nir_opt_simplify_convert_alu_types(nir_shader *shader);
 bool nir_lower_const_arrays_to_uniforms(nir_shader *shader,
@@ -5823,6 +5836,8 @@ nir_function_impl *nir_shader_get_preamble(nir_shader *shader);
 
 bool nir_lower_point_smooth(nir_shader *shader);
 bool nir_lower_poly_line_smooth(nir_shader *shader, unsigned num_smooth_aa_sample);
+
+bool nir_mod_analysis(nir_ssa_scalar val, nir_alu_type val_type, unsigned div, unsigned *mod);
 
 #include "nir_inline_helpers.h"
 

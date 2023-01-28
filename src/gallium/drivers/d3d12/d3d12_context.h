@@ -177,7 +177,7 @@ struct d3d12_context {
    struct hash_table *compute_transform_cache;
    struct hash_table_u64 *bo_state_table;
 
-   struct d3d12_batch batches[4];
+   struct d3d12_batch batches[8];
    unsigned current_batch_idx;
 
    struct util_dynarray recently_destroyed_bos;
@@ -255,7 +255,9 @@ struct d3d12_context {
    struct d3d12_descriptor_handle null_sampler;
 
    PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE D3D12SerializeVersionedRootSignature;
+#ifndef _GAMING_XBOX
    ID3D12DeviceConfiguration *dev_config;
+#endif
 #ifdef _WIN32
    struct dxil_validator *dxil_validator;
 #endif

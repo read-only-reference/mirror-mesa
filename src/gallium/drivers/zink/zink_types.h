@@ -61,6 +61,9 @@
 #include "zink_shader_keys.h"
 #include "vk_dispatch_table.h"
 
+#ifdef HAVE_RENDERDOC_APP_H
+#include "renderdoc_app.h"
+#endif
 
 /* the descriptor binding id for fbfetch/input attachment */
 #define ZINK_FBFETCH_BINDING 5
@@ -76,6 +79,10 @@
 /* enum zink_descriptor_type */
 #define ZINK_MAX_DESCRIPTOR_SETS 6
 #define ZINK_MAX_DESCRIPTORS_PER_TYPE (32 * ZINK_GFX_SHADER_COUNT)
+/* the number of typed descriptors that can fit in a given batch;
+ * sized based on max values seen in drawoverhead
+ */
+#define ZINK_DESCRIPTOR_BUFFER_MULTIPLIER 25000
 
 /* suballocator defines */
 #define NUM_SLAB_ALLOCATORS 3
@@ -146,6 +153,15 @@ enum zink_descriptor_type {
    ZINK_DESCRIPTOR_NON_BINDLESS_TYPES = ZINK_DESCRIPTOR_BASE_TYPES + 1, /**< for struct sizing */
 };
 
+enum zink_descriptor_mode {
+   ZINK_DESCRIPTOR_MODE_AUTO,
+   ZINK_DESCRIPTOR_MODE_LAZY,
+   ZINK_DESCRIPTOR_MODE_DB,
+};
+
+/* the current mode */
+extern enum zink_descriptor_mode zink_descriptor_mode;
+
 /* indexing for descriptor template management */
 enum zink_descriptor_size_index {
    ZDS_INDEX_UBO,
@@ -176,6 +192,7 @@ enum zink_resource_access {
 };
 
 
+/* zink heaps are based off of vulkan memory types, but are not a 1-to-1 mapping to vulkan memory type indices and have no direct relation to vulkan memory heaps*/
 enum zink_heap {
    ZINK_HEAP_DEVICE_LOCAL,
    ZINK_HEAP_DEVICE_LOCAL_SPARSE,
@@ -312,7 +329,6 @@ struct zink_blend_state {
    VkBool32 alpha_to_coverage;
    VkBool32 alpha_to_one;
 
-   bool need_blend_constants;
    bool dual_src_blend;
 };
 
@@ -357,6 +373,14 @@ struct zink_descriptor_pool_key {
    struct zink_descriptor_layout_key *layout;
 };
 
+/* a template used for updating descriptor buffers */
+struct zink_descriptor_template {
+   uint16_t stride; //the stride between mem pointers
+   uint16_t db_size; //the size of the entry in the buffer
+   unsigned count; //the number of descriptors
+   uint8_t *mem; //the base host pointer to update from
+};
+
 /* ctx->dd; created at context creation */
 struct zink_descriptor_data {
    bool bindless_bound;
@@ -377,6 +401,11 @@ struct zink_descriptor_data {
 
    VkDescriptorUpdateTemplateEntry push_entries[MESA_SHADER_STAGES]; //gfx+fbfetch
    VkDescriptorUpdateTemplateEntry compute_push_entry;
+
+   /* push descriptor layout size and binding offsets */
+   uint32_t db_size[2]; //gfx, compute
+   uint32_t db_offset[ZINK_GFX_SHADER_COUNT + 1]; //gfx + fbfetch
+   /* compute offset is always 0 */
 };
 
 /* pg->dd; created at program creation */
@@ -392,7 +421,12 @@ struct zink_program_descriptor_data {
    /* all the layouts for the program */
    struct zink_descriptor_layout *layouts[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES];
    /* all the templates for the program */
-   VkDescriptorUpdateTemplate templates[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES];
+   union {
+      VkDescriptorUpdateTemplate templates[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES];
+      struct zink_descriptor_template *db_template[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES];
+   };
+   uint32_t db_size[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //the total size of the layout
+   uint32_t *db_offset[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //the offset of each binding in the layout
 };
 
 struct zink_descriptor_pool {
@@ -434,10 +468,18 @@ struct zink_batch_descriptor_data {
    uint32_t compat_id[2]; //gfx, compute
    /* the current set layout */
    VkDescriptorSetLayout dsl[2][ZINK_DESCRIPTOR_BASE_TYPES]; //gfx, compute
-   /* the current set for a given type; used for rebinding if pipeline compat id changes and current set must be rebound */
-   VkDescriptorSet sets[2][ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //gfx, compute
+   union {
+      /* the current set for a given type; used for rebinding if pipeline compat id changes and current set must be rebound */
+      VkDescriptorSet sets[2][ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //gfx, compute
+      uint64_t cur_db_offset[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //gfx, compute; the current offset of a descriptor buffer for rebinds
+   };
    /* mask of push descriptor usage */
    unsigned push_usage[2]; //gfx, compute
+
+   struct zink_resource *db[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //the descriptor buffer for a given type
+   uint8_t *db_map[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //the host map for the buffer
+   struct pipe_transfer *db_xfer[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //the transfer map for the buffer
+   uint64_t db_offset[ZINK_DESCRIPTOR_NON_BINDLESS_TYPES]; //the "next" offset that will be used when the buffer is updated
 };
 
 /** batch types */
@@ -501,7 +543,6 @@ struct zink_batch_state {
    struct zink_resource *swapchain;
    struct util_dynarray acquires;
    struct util_dynarray acquire_flags;
-   struct util_dynarray unref_semaphores;
 
    struct util_queue_fence flush_completed;
 
@@ -689,6 +730,7 @@ struct zink_shader {
       } non_fs;
 
       struct {
+         uint32_t legacy_shadow_mask; //is_new_style_shadow is false for these
          nir_variable *fbfetch; //for fs output
       } fs;
    };
@@ -755,6 +797,7 @@ struct zink_gfx_pipeline_state {
    uint32_t vertex_buffers_enabled_mask;
    uint32_t vertex_strides[PIPE_MAX_ATTRIBS];
    struct zink_vertex_elements_hw_state *element_state;
+   struct zink_fs_shadow_key *shadow;
    bool sample_locations_enabled;
    enum pipe_prim_type shader_rast_prim, rast_prim; /* reduced type or max for unknown */
    union {
@@ -833,7 +876,7 @@ struct zink_shader_module {
    bool has_nonseamless;
    uint8_t num_uniforms;
    uint8_t key_size;
-   uint8_t key[0]; /* | key | uniforms | */
+   uint8_t key[0]; /* | key | uniforms | shadow swizzle | */
 };
 
 struct zink_program {
@@ -858,6 +901,7 @@ struct zink_program {
 };
 
 #define STAGE_MASK_OPTIMAL (1<<16)
+#define STAGE_MASK_OPTIMAL_SHADOW (1<<17)
 typedef bool (*equals_gfx_pipeline_state_func)(const void *a, const void *b);
 
 struct zink_gfx_library_key {
@@ -1143,7 +1187,6 @@ struct zink_resource {
 
    uint8_t modifiers_count;
    uint64_t *modifiers;
-   enum pipe_format drm_format;
 };
 
 static inline struct zink_resource *
@@ -1184,6 +1227,9 @@ struct zink_screen {
    struct util_queue flush_queue;
    struct zink_context *copy_context;
 
+   simple_mtx_t semaphores_lock;
+   struct util_dynarray semaphores;
+
    unsigned buffer_rebind_counter;
    unsigned image_rebind_counter;
    unsigned robust_ctx_count;
@@ -1207,14 +1253,16 @@ struct zink_screen {
    struct set desc_pool_keys[ZINK_DESCRIPTOR_BASE_TYPES];
    struct util_live_shader_cache shaders;
 
+   uint64_t db_size[ZINK_DESCRIPTOR_ALL_TYPES];
+
    struct {
       struct pb_cache bo_cache;
       struct pb_slabs bo_slabs[NUM_SLAB_ALLOCATORS];
       unsigned min_alloc_size;
       uint32_t next_bo_unique_id;
    } pb;
-   uint8_t heap_map[ZINK_HEAP_MAX][VK_MAX_MEMORY_TYPES];
-   uint8_t heap_count[ZINK_HEAP_MAX];
+   uint8_t heap_map[ZINK_HEAP_MAX][VK_MAX_MEMORY_TYPES];  // mapping from zink heaps to memory type indices
+   uint8_t heap_count[ZINK_HEAP_MAX];  // number of memory types per zink heap
    bool resizable_bar;
 
    uint64_t total_video_mem;
@@ -1255,6 +1303,17 @@ struct zink_screen {
 
    uint32_t cur_custom_border_color_samplers;
 
+   unsigned screen_id;
+
+#ifdef HAVE_RENDERDOC_APP_H
+   RENDERDOC_API_1_0_0 *renderdoc_api;
+   unsigned renderdoc_capture_start;
+   unsigned renderdoc_capture_end;
+   unsigned renderdoc_frame;
+   bool renderdoc_capturing;
+   bool renderdoc_capture_all;
+#endif
+
    struct vk_dispatch_table vk;
 
    void (*buffer_barrier)(struct zink_context *ctx, struct zink_resource *res, VkAccessFlags flags, VkPipelineStageFlags pipeline);
@@ -1277,7 +1336,6 @@ struct zink_screen {
 
    struct {
       bool broken_l4a4;
-      bool depth_clip_control_missing;
       bool implicit_sync;
       bool always_feedback_loop;
       bool always_feedback_loop_zs;
@@ -1286,6 +1344,7 @@ struct zink_screen {
       bool no_linestipple;
       bool no_linesmooth;
       bool no_hw_gl_point;
+      bool lower_robustImageAccess2;
       unsigned z16_unscaled_bias;
       unsigned z24_unscaled_bias;
    } driver_workarounds;
@@ -1328,7 +1387,7 @@ struct zink_surface {
    VkImageView *swapchain;
    unsigned swapchain_size;
    void *obj; //backing resource object; used to determine rebinds
-   void *dt; //current swapchain object; used to determine swapchain rebinds
+   void *dt_swapchain; //current swapchain object; used to determine swapchain rebinds
    uint32_t hash; //for surface caching
 };
 
@@ -1411,6 +1470,8 @@ struct zink_sampler_view {
       struct zink_buffer_view *buffer_view;
    };
    struct zink_surface *cube_array;
+   struct zink_surface *shadow;
+   struct zink_fs_shadow_swizzle swizzle;
 };
 
 struct zink_image_view {
@@ -1627,25 +1688,39 @@ struct zink_context {
 
    struct {
       /* descriptor info */
-      VkDescriptorBufferInfo ubos[MESA_SHADER_STAGES][PIPE_MAX_CONSTANT_BUFFERS];
       uint32_t push_valid;
       uint8_t num_ubos[MESA_SHADER_STAGES];
 
-      VkDescriptorBufferInfo ssbos[MESA_SHADER_STAGES][PIPE_MAX_SHADER_BUFFERS];
       uint8_t num_ssbos[MESA_SHADER_STAGES];
 
       VkDescriptorImageInfo textures[MESA_SHADER_STAGES][PIPE_MAX_SAMPLERS];
-      VkBufferView tbos[MESA_SHADER_STAGES][PIPE_MAX_SAMPLERS];
       uint32_t emulate_nonseamless[MESA_SHADER_STAGES];
       uint32_t cubes[MESA_SHADER_STAGES];
       uint8_t num_samplers[MESA_SHADER_STAGES];
       uint8_t num_sampler_views[MESA_SHADER_STAGES];
 
       VkDescriptorImageInfo images[MESA_SHADER_STAGES][ZINK_MAX_SHADER_IMAGES];
-      VkBufferView texel_images[MESA_SHADER_STAGES][ZINK_MAX_SHADER_IMAGES];
       uint8_t num_images[MESA_SHADER_STAGES];
 
+      union {
+         struct {
+            VkDescriptorBufferInfo ubos[MESA_SHADER_STAGES][PIPE_MAX_CONSTANT_BUFFERS];
+            VkDescriptorBufferInfo ssbos[MESA_SHADER_STAGES][PIPE_MAX_SHADER_BUFFERS];
+            VkBufferView tbos[MESA_SHADER_STAGES][PIPE_MAX_SAMPLERS];
+            VkBufferView texel_images[MESA_SHADER_STAGES][ZINK_MAX_SHADER_IMAGES];
+         } t;
+         struct {
+            VkDescriptorAddressInfoEXT ubos[MESA_SHADER_STAGES][PIPE_MAX_CONSTANT_BUFFERS];
+            VkDescriptorAddressInfoEXT ssbos[MESA_SHADER_STAGES][PIPE_MAX_SHADER_BUFFERS];
+            VkDescriptorAddressInfoEXT tbos[MESA_SHADER_STAGES][PIPE_MAX_SAMPLERS];
+            VkDescriptorAddressInfoEXT texel_images[MESA_SHADER_STAGES][ZINK_MAX_SHADER_IMAGES];
+         } db;
+      };
+
       VkDescriptorImageInfo fbfetch;
+
+      /* the current state of the shadow swizzle data */
+      struct zink_fs_shadow_key shadow;
 
       struct zink_resource *descriptor_res[ZINK_DESCRIPTOR_BASE_TYPES][MESA_SHADER_STAGES][PIPE_MAX_SAMPLERS];
 
@@ -1683,6 +1758,7 @@ struct zink_context {
    bool blend_state_changed : 1;
    bool sample_mask_changed : 1;
    bool rast_state_changed : 1;
+   bool line_width_changed : 1;
    bool dsa_state_changed : 1;
    bool stencil_ref_changed : 1;
    bool rasterizer_discard_changed : 1;

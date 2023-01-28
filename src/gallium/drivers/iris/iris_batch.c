@@ -275,7 +275,8 @@ iris_create_engines_context(struct iris_context *ice, int priority)
    const struct intel_device_info *devinfo = screen->devinfo;
    int fd = iris_bufmgr_get_fd(screen->bufmgr);
 
-   struct intel_query_engine_info *engines_info = intel_engine_get_info(fd);
+   struct intel_query_engine_info *engines_info;
+   engines_info = intel_engine_get_info(fd, screen->devinfo->kmd_type);
 
    if (!engines_info)
       return -1;
@@ -1094,10 +1095,11 @@ _iris_batch_flush(struct iris_batch *batch, const char *file, int line)
     * dubiously claim success...
     * Also handle ENOMEM here.
     */
-   if ((ret == -EIO || ret == -ENOMEM) && replace_kernel_ctx(batch)) {
+   if (ret == -EIO || ret == -ENOMEM) {
+      enum pipe_reset_status status = iris_batch_check_for_reset(batch);
       if (batch->reset->reset) {
          /* Tell gallium frontends the device is lost and it was our fault. */
-         batch->reset->reset(batch->reset->data, PIPE_GUILTY_CONTEXT_RESET);
+         batch->reset->reset(batch->reset->data, status);
       }
 
       ret = 0;
