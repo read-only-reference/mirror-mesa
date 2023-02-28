@@ -90,6 +90,8 @@ static const struct vk_instance_extension_table instance_extensions = {
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
    .KHR_display                         = true,
    .KHR_get_display_properties2         = true,
+   .EXT_direct_mode_display             = true,
+   .EXT_acquire_drm_display             = true,
 #endif
    .KHR_external_fence_capabilities     = true,
    .KHR_external_memory_capabilities    = true,
@@ -108,6 +110,9 @@ static const struct vk_instance_extension_table instance_extensions = {
 #endif
 #ifdef VK_USE_PLATFORM_XLIB_KHR
    .KHR_xlib_surface                    = true,
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_XRANDR_EXT
+   .EXT_acquire_xlib_display            = true,
 #endif
    .EXT_debug_report                    = true,
    .EXT_debug_utils                     = true,
@@ -3060,7 +3065,7 @@ v3dv_CreateSampler(VkDevice _device,
 
    if (ycbcr_conv_info) {
       VK_FROM_HANDLE(vk_ycbcr_conversion, conversion, ycbcr_conv_info->conversion);
-      ycbcr_info = vk_format_get_ycbcr_info(conversion->format);
+      ycbcr_info = vk_format_get_ycbcr_info(conversion->state.format);
       if (ycbcr_info) {
          sampler->plane_count = ycbcr_info->n_planes;
          sampler->conversion = conversion;

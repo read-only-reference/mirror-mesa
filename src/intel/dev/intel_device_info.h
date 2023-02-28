@@ -92,6 +92,12 @@ enum intel_platform {
 #define intel_device_info_is_mtl(devinfo) \
    intel_platform_in_range((devinfo)->platform, MTL)
 
+struct intel_memory_class_instance {
+   /* Kernel backend specific class value, no translation needed yet */
+   uint16_t klass;
+   uint16_t instance;
+};
+
 /**
  * Intel hardware information and quirks
  */
@@ -171,6 +177,11 @@ struct intel_device_info
     * primitive in geometry shaders and by a control buffer.
     */
    bool has_coarse_pixel_primitive_and_cb;
+
+   /**
+    * Whether this platform has compute engine
+    */
+   bool has_compute_engine;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -358,6 +369,12 @@ struct intel_device_info
     */
    unsigned max_constant_urb_size_kb;
 
+   /* Maximum size that can be allocated to constants in mesh pipeline.
+    * This essentially applies to fragment shaders only, since mesh stages
+    * don't need to allocate space for push constants.
+    */
+   unsigned mesh_max_constant_urb_size_kb;
+
    /**
     * Size of the command streamer prefetch. This is important to know for
     * self modifying batches.
@@ -413,8 +430,7 @@ struct intel_device_info
    struct {
       bool use_class_instance;
       struct {
-         uint16_t mem_class;
-         uint16_t mem_instance;
+         struct intel_memory_class_instance mem;
          struct {
             uint64_t size;
             uint64_t free;

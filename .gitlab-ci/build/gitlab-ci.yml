@@ -78,7 +78,7 @@ debian-testing:
       -D dri3=enabled
       -D gallium-va=enabled
     GALLIUM_DRIVERS: "swrast,virgl,radeonsi,zink,crocus,iris,i915"
-    VULKAN_DRIVERS: "swrast,amd,intel,virtio-experimental"
+    VULKAN_DRIVERS: "swrast,amd,intel,intel_hasvk,virtio-experimental"
     BUILDTYPE: "debugoptimized"
     EXTRA_OPTION: >
       -D spirv-to-dxil=true
@@ -224,8 +224,10 @@ debian-release:
       -D tools=all
       -D intel-clc=enabled
       -D imagination-srv=true
+    MINIO_ARTIFACT_NAME: "mesa-amd64-rel"
   script:
     - .gitlab-ci/meson/build.sh
+    - 'if [ -n "$MESA_CI_PERFORMANCE_ENABLED" ]; then .gitlab-ci/prepare-artifacts.sh; fi'
 
 alpine-build-testing:
   extends:
@@ -280,15 +282,14 @@ fedora-release:
       -D egl=enabled
       -D glvnd=true
       -D platforms=x11,wayland
-    # intel-clc disabled, we need llvm-spirv-translator 13.0+, Fedora 34 only packages 12.0.
     EXTRA_OPTION: >
       -D osmesa=true
       -D selinux=true
       -D tools=drm-shim,etnaviv,freedreno,glsl,intel,nir,nouveau,lima,panfrost,imagination
       -D vulkan-layers=device-select,overlay
-      -D intel-clc=disabled
+      -D intel-clc=enabled
       -D imagination-srv=true
-    GALLIUM_DRIVERS: "crocus,etnaviv,freedreno,iris,kmsro,lima,nouveau,panfrost,r300,r600,radeonsi,svga,swrast,tegra,v3d,vc4,virgl,zink"
+    GALLIUM_DRIVERS: "crocus,etnaviv,freedreno,i915,iris,kmsro,lima,nouveau,panfrost,r300,r600,radeonsi,svga,swrast,tegra,v3d,vc4,virgl,zink"
     GALLIUM_ST: >
       -D dri3=enabled
       -D gallium-extra-hud=true
@@ -306,7 +307,7 @@ fedora-release:
       -D shared-llvm=enabled
     LLVM_VERSION: ""
     UNWIND: "disabled"
-    VULKAN_DRIVERS: "amd,broadcom,freedreno,intel,imagination-experimental"
+    VULKAN_DRIVERS: "amd,broadcom,freedreno,imagination-experimental,intel,intel_hasvk"
   script:
     - .gitlab-ci/meson/build.sh
 
@@ -345,7 +346,7 @@ debian-android:
       -D llvm=disabled
       -D platform-sdk-version=33
       -D valgrind=disabled
-      -D android-libbacktrace=false
+      -D android-libbacktrace=disabled
     GALLIUM_ST: >
       -D dri3=disabled
       -D gallium-vdpau=disabled
@@ -458,6 +459,18 @@ debian-arm64-build-test:
       -Dtools=panfrost,imagination
   script:
     - .gitlab-ci/meson/build.sh
+
+debian-arm64-release:
+  extends:
+    - debian-arm64
+  variables:
+    MINIO_ARTIFACT_NAME: mesa-arm64-rel
+    BUILDTYPE: "release"
+    C_ARGS: >
+      -Wno-error=stringop-truncation
+  script:
+    - .gitlab-ci/meson/build.sh
+    - 'if [ -n "$MESA_CI_PERFORMANCE_ENABLED" ]; then .gitlab-ci/prepare-artifacts.sh; fi'
 
 debian-clang:
   extends: .meson-build
@@ -646,18 +659,11 @@ debian-mingw32-x86_64:
     UNWIND: "disabled"
     C_ARGS: >
       -Wno-error=format
-      -Wno-error=format-extra-args
-      -Wno-error=deprecated-declarations
       -Wno-error=unused-function
       -Wno-error=unused-variable
       -Wno-error=unused-but-set-variable
-      -Wno-error=unused-value
-      -Wno-error=switch
-      -Wno-error=parentheses
-      -Wno-error=missing-prototypes
       -Wno-error=sign-compare
       -Wno-error=narrowing
-      -Wno-error=overflow
     CPP_ARGS: $C_ARGS
     GALLIUM_DRIVERS: "swrast,d3d12,zink"
     VULKAN_DRIVERS: "swrast,amd,microsoft-experimental"
