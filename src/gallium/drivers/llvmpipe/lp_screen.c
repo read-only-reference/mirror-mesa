@@ -226,6 +226,10 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 64;
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return 1;
+   case PIPE_CAP_LINEAR_IMAGE_PITCH_ALIGNMENT:
+      return 1;
+   case PIPE_CAP_LINEAR_IMAGE_BASE_ADDRESS_ALIGNMENT:
+      return 1;
    /* Adressing that many 64bpp texels fits in an i32 so this is a reasonable value */
    case PIPE_CAP_MAX_TEXEL_BUFFER_ELEMENTS_UINT:
       return 134217728;
@@ -960,6 +964,18 @@ lp_get_disk_shader_cache(struct pipe_screen *_screen)
    return screen->disk_shader_cache;
 }
 
+static int
+llvmpipe_screen_get_fd(struct pipe_screen *_screen)
+{
+   struct llvmpipe_screen *screen = llvmpipe_screen(_screen);
+   struct sw_winsys *winsys = screen->winsys;
+
+   if (winsys->get_fd)
+      return winsys->get_fd(winsys);
+   else
+      return -1;
+}
+
 
 void
 lp_disk_cache_find_shader(struct llvmpipe_screen *screen,
@@ -1062,6 +1078,7 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
    screen->base.get_name = llvmpipe_get_name;
    screen->base.get_vendor = llvmpipe_get_vendor;
    screen->base.get_device_vendor = llvmpipe_get_vendor; // TODO should be the CPU vendor
+   screen->base.get_screen_fd = llvmpipe_screen_get_fd;
    screen->base.get_param = llvmpipe_get_param;
    screen->base.get_shader_param = llvmpipe_get_shader_param;
    screen->base.get_compute_param = llvmpipe_get_compute_param;

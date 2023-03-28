@@ -75,6 +75,7 @@
 #include "vk_debug_report.h"
 #include "vk_descriptor_update_template.h"
 #include "vk_device.h"
+#include "vk_device_memory.h"
 #include "vk_drm_syncobj.h"
 #include "vk_enum_defines.h"
 #include "vk_format.h"
@@ -460,6 +461,9 @@ enum anv_bo_alloc_flags {
     * Should be faster for bo pools, which write but do not read
     */
    ANV_BO_ALLOC_WRITE_COMBINE = (1 << 12),
+
+   /** This buffer will be scanout to display */
+   ANV_BO_ALLOC_SCANOUT = (1 << 13),
 };
 
 struct anv_bo {
@@ -920,14 +924,6 @@ struct anv_physical_device {
     struct anv_instance *                       instance;
     char                                        path[20];
     struct intel_device_info                      info;
-    /** Amount of "GPU memory" we want to advertise
-     *
-     * Clearly, this value is bogus since Intel is a UMA architecture.  On
-     * gfx7 platforms, we are limited by GTT size unless we want to implement
-     * fine-grained tracking and GTT splitting.  On Broadwell and above we are
-     * practically unlimited.  However, we will never report more than 3/4 of
-     * the total system ram to try and avoid running out of RAM.
-     */
     bool                                        supports_48bit_addresses;
     bool                                        video_decode_enabled;
 
@@ -1005,6 +1001,9 @@ struct anv_physical_device {
     uint8_t                                     device_uuid[VK_UUID_SIZE];
     uint8_t                                     rt_uuid[VK_UUID_SIZE];
 
+    /* Maximum amount of scratch space used by all the GRL kernels */
+    uint32_t                                    max_grl_scratch_size;
+
     struct vk_sync_type                         sync_syncobj_type;
     struct vk_sync_timeline_type                sync_timeline_type;
     const struct vk_sync_type *                 sync_types[4];
@@ -1036,6 +1035,7 @@ struct anv_instance {
     struct driOptionCache                       dri_options;
     struct driOptionCache                       available_dri_options;
 
+    int                                         mesh_conv_prim_attrs_to_vert_attrs;
     /**
      * Workarounds for game bugs.
      */
@@ -1045,6 +1045,9 @@ struct anv_instance {
     bool                                        fp64_workaround_enabled;
     float                                       lower_depth_range_rate;
     unsigned                                    generated_indirect_threshold;
+
+    /* HW workarounds */
+    bool                                        no_16bit;
 };
 
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
@@ -1059,7 +1062,10 @@ struct anv_queue {
 
    struct intel_batch_decode_ctx *           decoder;
 
-   uint32_t                                  exec_flags;
+   union {
+      uint32_t                               exec_flags; /* i915 */
+      uint32_t                               engine_id; /* Xe */
+   };
 
    /** Synchronization object for debug purposes (DEBUG_SYNC) */
    struct vk_sync                           *sync;
@@ -1124,7 +1130,10 @@ struct anv_device {
     const struct intel_device_info *            info;
     const struct anv_kmd_backend *              kmd_backend;
     struct isl_device                           isl_dev;
-    uint32_t                                    context_id;
+    union {
+       uint32_t                                 context_id; /* i915 */
+       uint32_t                                 vm_id; /* Xe */
+    };
     int                                         fd;
 
     pthread_mutex_t                             vma_mutex;
@@ -1230,7 +1239,6 @@ struct anv_device {
      * workaround slowness with indirect draw calls.
      */
     struct anv_shader_bin                      *generated_draw_kernel;
-    struct anv_shader_bin                      *generated_draw_count_kernel;
     const struct intel_l3_config               *generated_draw_l3_config;
 
     pthread_mutex_t                             mutex;
@@ -1567,7 +1575,7 @@ _anv_combine_address(struct anv_batch *batch, void *location,
 /* #define __gen_address_offset anv_address_add */
 
 struct anv_device_memory {
-   struct vk_object_base                        base;
+   struct vk_device_memory                      vk;
 
    struct list_head                             link;
 
@@ -1579,14 +1587,6 @@ struct anv_device_memory {
 
    /* The map, from the user PoV is map + map_delta */
    uint64_t                                     map_delta;
-
-   /* If set, we are holding reference to AHardwareBuffer
-    * which we must release when memory is freed.
-    */
-   struct AHardwareBuffer *                     ahw;
-
-   /* If set, this memory comes from a host pointer. */
-   void *                                       host_ptr;
 };
 
 /**
@@ -2477,7 +2477,6 @@ anv_gfx8_9_vb_cache_range_needs_workaround(struct anv_vb_cache_range *bound,
       return false;
    }
 
-   assert(vb_address.bo);
    bound->start = intel_48b_address(anv_address_physical(vb_address));
    bound->end = bound->start + vb_size;
    assert(bound->end > bound->start); /* No overflow */
@@ -2584,6 +2583,9 @@ struct anv_cmd_compute_state {
    struct anv_state push_data;
 
    struct anv_address num_workgroups;
+
+   uint32_t scratch_size;
+   bool cfe_state_valid;
 };
 
 struct anv_cmd_ray_tracing_state {
@@ -2779,6 +2781,11 @@ struct anv_cmd_buffer {
     */
    struct anv_address                           generation_return_addr;
 
+   /**
+    * Binding table allocation for generation shaders (only used on Gfx9).
+    */
+   struct anv_state                             generation_bt_state;
+
    /** List of anv_batch_bo used for generation
     *
     * We have to keep this separated of the anv_cmd_buffer::batch_bos that is
@@ -2818,6 +2825,20 @@ anv_cmd_buffer_is_chainable(struct anv_cmd_buffer *cmd_buffer)
 {
    return !(cmd_buffer->usage_flags &
             VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT);
+}
+
+static inline bool
+anv_cmd_buffer_is_render_queue(const struct anv_cmd_buffer *cmd_buffer)
+{
+   struct anv_queue_family *queue_family = cmd_buffer->queue_family;
+   return (queue_family->queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+}
+
+static inline bool
+anv_cmd_buffer_is_video_queue(const struct anv_cmd_buffer *cmd_buffer)
+{
+   struct anv_queue_family *queue_family = cmd_buffer->queue_family;
+   return (queue_family->queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) != 0;
 }
 
 VkResult anv_cmd_buffer_init_batch_bo_chain(struct anv_cmd_buffer *cmd_buffer);
@@ -2867,6 +2888,9 @@ anv_cmd_buffer_exec_batch_debug(struct anv_queue *queue,
                                 struct anv_cmd_buffer **cmd_buffers,
                                 struct anv_query_pool *perf_query_pool,
                                 uint32_t perf_query_pass);
+void
+anv_cmd_buffer_clflush(struct anv_cmd_buffer **cmd_buffers,
+                       uint32_t num_cmd_buffers);
 
 /**
  * A allocation tied to a command buffer.
@@ -3920,6 +3944,12 @@ struct anv_image_view {
       struct isl_view isl;
 
       /**
+       * A version of the image view for storage usage (can apply 3D image
+       * slicing).
+       */
+      struct isl_view isl_storage;
+
+      /**
        * RENDER_SURFACE_STATE when using image as a sampler surface with an
        * image layout of SHADER_READ_ONLY_OPTIMAL or
        * DEPTH_STENCIL_READ_ONLY_OPTIMAL.
@@ -3969,6 +3999,9 @@ struct anv_image_create_info {
 
    /** These flags will be added to any derived from VkImageCreateInfo. */
    isl_surf_usage_flags_t isl_extra_usage_flags;
+
+   /** An opt-in stride, should be 0 for implicit layouts */
+   uint32_t stride;
 };
 
 VkResult anv_image_init(struct anv_device *device, struct anv_image *image,
@@ -4011,7 +4044,7 @@ anv_line_rasterization_mode(VkLineRasterizationModeEXT line_mode,
 
 /* Fill provoking vertex mode to packet. */
 #define ANV_SETUP_PROVOKING_VERTEX(cmd, mode)         \
-   switch (dyn->rs.provoking_vertex) {                \
+   switch (mode) {                                    \
    case VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT:    \
       cmd.TriangleStripListProvokingVertexSelect = 0; \
       cmd.LineStripListProvokingVertexSelect = 0;     \
@@ -4174,6 +4207,11 @@ void anv_perf_write_pass_results(struct intel_perf_config *perf,
                                  const struct intel_perf_query_result *accumulated_results,
                                  union VkPerformanceCounterResultKHR *results);
 
+void anv_apply_per_prim_attr_wa(struct nir_shader *ms_nir,
+                                struct nir_shader *fs_nir,
+                                struct anv_device *device,
+                                const VkGraphicsPipelineCreateInfo *info);
+
 /* Use to emit a series of memcpy operations */
 struct anv_memcpy_state {
    struct anv_device *device;
@@ -4188,7 +4226,16 @@ anv_device_init_generated_indirect_draws(struct anv_device *device);
 void
 anv_device_finish_generated_indirect_draws(struct anv_device *device);
 
-struct anv_utrace_flush_copy {
+/* This structure is used in 2 scenarios :
+ *
+ *    - copy utrace timestamps from command buffer so that command buffer can
+ *      be resubmitted multiple times without the recorded timestamps being
+ *      overwritten before they're read back
+ *
+ *    - emit trace points for queue debug tagging
+ *      (vkQueueBeginDebugUtilsLabelEXT/vkQueueEndDebugUtilsLabelEXT)
+ */
+struct anv_utrace_submit {
    /* Needs to be the first field */
    struct intel_ds_flush_data ds;
 
@@ -4199,15 +4246,16 @@ struct anv_utrace_flush_copy {
    struct anv_batch batch;
    struct anv_bo *batch_bo;
 
-   /* Buffer of 64bits timestamps */
-   struct anv_bo *trace_bo;
-
    /* Syncobj to be signaled when the batch completes */
    struct vk_sync *sync;
 
    /* Queue on which all the recorded traces are submitted */
    struct anv_queue *queue;
 
+   /* Buffer of 64bits timestamps (only used for timestamp copies) */
+   struct anv_bo *trace_bo;
+
+   /* Memcpy state tracking (only used for timestamp copies) */
    struct anv_memcpy_state memcpy_state;
 };
 
@@ -4217,7 +4265,7 @@ VkResult
 anv_device_utrace_flush_cmd_buffers(struct anv_queue *queue,
                                     uint32_t cmd_buffer_count,
                                     struct anv_cmd_buffer **cmd_buffers,
-                                    struct anv_utrace_flush_copy **out_flush_data);
+                                    struct anv_utrace_submit **out_submit);
 
 #ifdef HAVE_PERFETTO
 void anv_perfetto_init(void);
@@ -4261,7 +4309,7 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_descriptor_set, base, VkDescriptorSet,
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_descriptor_set_layout, base,
                                VkDescriptorSetLayout,
                                VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT)
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_device_memory, base, VkDeviceMemory,
+VK_DEFINE_NONDISP_HANDLE_CASTS(anv_device_memory, vk.base, VkDeviceMemory,
                                VK_OBJECT_TYPE_DEVICE_MEMORY)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_event, base, VkEvent, VK_OBJECT_TYPE_EVENT)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_image, vk.base, VkImage, VK_OBJECT_TYPE_IMAGE)

@@ -956,8 +956,9 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
       .lower_txf_offset = true,
       .lower_rect_offset = true,
       .lower_txd_cube_map = true,
-      .lower_txd_3d = devinfo->verx10 >= 125,    /* Wa_1209978020 */
-      .lower_txd_array = devinfo->verx10 >= 125, /* Wa_1209978020 */
+      /* For below, See bspec 45942, "Enable new message layout for cube array" */
+      .lower_txd_3d = devinfo->verx10 >= 125,
+      .lower_txd_array = devinfo->verx10 >= 125,
       .lower_txb_shadow_clamp = true,
       .lower_txd_shadow_clamp = true,
       .lower_txd_offset_clamp = true,
@@ -1094,6 +1095,78 @@ brw_nir_zero_inputs(nir_shader *shader, uint64_t *zero_inputs)
          nir_metadata_block_index | nir_metadata_dominance, zero_inputs);
 }
 
+/* Code for Wa_14015590813 may have created input/output variables beyond
+ * VARYING_SLOT_MAX and removed uses of variables below VARYING_SLOT_MAX.
+ * Clean it up, so they all stay below VARYING_SLOT_MAX.
+ */
+static void
+brw_mesh_compact_io(nir_shader *mesh, nir_shader *frag)
+{
+   gl_varying_slot mapping[VARYING_SLOT_MAX] = {0, };
+   gl_varying_slot cur = VARYING_SLOT_VAR0;
+   bool compact = false;
+
+   nir_foreach_shader_out_variable(var, mesh) {
+      gl_varying_slot location = var->data.location;
+      if (location < VARYING_SLOT_VAR0)
+         continue;
+      assert(location < ARRAY_SIZE(mapping));
+
+      const struct glsl_type *type = var->type;
+      if (nir_is_arrayed_io(var, MESA_SHADER_MESH) || var->data.per_view) {
+         assert(glsl_type_is_array(type));
+         type = glsl_get_array_element(type);
+      }
+
+      if (mapping[location])
+         continue;
+
+      unsigned num_slots = glsl_count_attribute_slots(type, false);
+
+      compact |= location + num_slots > VARYING_SLOT_MAX;
+
+      mapping[location] = cur;
+      cur += num_slots;
+   }
+
+   if (!compact)
+      return;
+
+   /* The rest of this function should be hit only for Wa_14015590813. */
+
+   nir_foreach_shader_out_variable(var, mesh) {
+      gl_varying_slot location = var->data.location;
+      if (location < VARYING_SLOT_VAR0)
+         continue;
+      location = mapping[location];
+      if (location == 0)
+         continue;
+      var->data.location = location;
+   }
+
+   nir_foreach_shader_in_variable(var, frag) {
+      gl_varying_slot location = var->data.location;
+      if (location < VARYING_SLOT_VAR0)
+         continue;
+      location = mapping[location];
+      if (location == 0)
+         continue;
+      var->data.location = location;
+   }
+
+   nir_shader_gather_info(mesh, nir_shader_get_entrypoint(mesh));
+   nir_shader_gather_info(frag, nir_shader_get_entrypoint(frag));
+
+   if (should_print_nir(mesh)) {
+      printf("%s\n", __func__);
+      nir_print_shader(mesh, stdout);
+   }
+   if (should_print_nir(frag)) {
+      printf("%s\n", __func__);
+      nir_print_shader(frag, stdout);
+   }
+}
+
 void
 brw_nir_link_shaders(const struct brw_compiler *compiler,
                      nir_shader *producer, nir_shader *consumer)
@@ -1176,6 +1249,11 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
 
       brw_nir_optimize(producer, compiler, p_is_scalar);
       brw_nir_optimize(consumer, compiler, c_is_scalar);
+
+      if (producer->info.stage == MESA_SHADER_MESH &&
+            consumer->info.stage == MESA_SHADER_FRAGMENT) {
+         brw_mesh_compact_io(producer, consumer);
+      }
    }
 
    NIR_PASS(_, producer, nir_lower_io_to_vector, nir_var_shader_out);
@@ -1243,10 +1321,15 @@ brw_nir_should_vectorize_mem(unsigned align_mul, unsigned align_offset,
 }
 
 static
-bool combine_all_barriers(nir_intrinsic_instr *a,
-                          nir_intrinsic_instr *b,
-                          void *data)
+bool combine_all_memory_barriers(nir_intrinsic_instr *a,
+                                 nir_intrinsic_instr *b,
+                                 void *data)
 {
+   /* Only combine pure memory barriers */
+   if ((nir_intrinsic_execution_scope(a) != NIR_SCOPE_NONE) ||
+       (nir_intrinsic_execution_scope(b) != NIR_SCOPE_NONE))
+      return false;
+
    /* Translation to backend IR will get rid of modes we don't care about, so
     * no harm in always combining them.
     *
@@ -1267,9 +1350,7 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
                           uint32_t align_mul, uint32_t align_offset,
                           bool offset_is_const, const void *cb_data)
 {
-   assert(align_offset < align_mul);
-   const uint32_t align =
-      align_offset ? 1 << (ffs(align_offset) - 1) : align_mul;
+   const uint32_t align = nir_combined_align(align_mul, align_offset);
 
    switch (intrin) {
    case nir_intrinsic_load_ssbo:
@@ -1281,11 +1362,11 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
       if (align < 4 && offset_is_const) {
          assert(util_is_power_of_two_nonzero(align_mul) && align_mul >= 4);
          const unsigned pad = align_offset % 4;
-         const unsigned comps32 = DIV_ROUND_UP(bytes + pad, 4);
+         const unsigned comps32 = MIN2(DIV_ROUND_UP(bytes + pad, 4), 4);
          return (nir_mem_access_size_align) {
             .bit_size = 32,
             .num_components = comps32,
-            .align_mul = 4,
+            .align = 4,
          };
       }
       break;
@@ -1295,7 +1376,7 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
          return (nir_mem_access_size_align) {
             .bit_size = 32,
             .num_components = 1,
-            .align_mul = 4,
+            .align = 4,
          };
       }
       break;
@@ -1330,7 +1411,7 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
       return (nir_mem_access_size_align) {
          .bit_size = bytes * 8,
          .num_components = 1,
-         .align_mul = 1,
+         .align = 1,
       };
    } else {
       bytes = MIN2(bytes, 16);
@@ -1338,7 +1419,7 @@ get_mem_access_size_align(nir_intrinsic_op intrin, uint8_t bytes,
          .bit_size = 32,
          .num_components = is_scratch ? 1 :
                            is_load ? DIV_ROUND_UP(bytes, 4) : bytes / 4,
-         .align_mul = 4,
+         .align = 4,
       };
    }
 }
@@ -1368,7 +1449,15 @@ brw_vectorize_lower_mem_access(nir_shader *nir,
       OPT(nir_opt_load_store_vectorize, &options);
    }
 
-   OPT(nir_lower_mem_access_bit_sizes, get_mem_access_size_align, NULL);
+   OPT(nir_lower_mem_access_bit_sizes,
+       nir_var_mem_ssbo |
+       nir_var_mem_constant |
+       nir_var_mem_task_payload |
+       nir_var_shader_temp |
+       nir_var_function_temp |
+       nir_var_mem_global |
+       nir_var_mem_shared,
+       get_mem_access_size_align, NULL);
 
    while (progress) {
       progress = false;
@@ -1411,8 +1500,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
 
-   OPT(brw_nir_lower_scoped_barriers);
-   OPT(nir_opt_combine_memory_barriers, combine_all_barriers, NULL);
+   OPT(nir_opt_combine_barriers, combine_all_memory_barriers, NULL);
 
    do {
       progress = false;
@@ -1448,8 +1536,19 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
       brw_nir_optimize(nir, compiler, is_scalar);
 
    if (devinfo->ver >= 6) {
-      /* Try and fuse multiply-adds */
-      OPT(brw_nir_opt_peephole_ffma);
+      /* Try and fuse multiply-adds, if successful, run shrink_vectors to
+       * avoid peephole_ffma to generate things like this :
+       *    vec16 ssa_0 = ...
+       *    vec16 ssa_1 = fneg ssa_0
+       *    vec1  ssa_2 = ffma ssa_1, ...
+       *
+       * We want this instead :
+       *    vec16 ssa_0 = ...
+       *    vec1  ssa_1 = fneg ssa_0.x
+       *    vec1  ssa_2 = ffma ssa_1, ...
+       */
+      if (OPT(brw_nir_opt_peephole_ffma))
+         OPT(nir_opt_shrink_vectors);
    }
 
    if (is_scalar)
@@ -1597,6 +1696,7 @@ brw_nir_apply_sampler_key(nir_shader *nir,
       .lower_txd_clamp_bindless_sampler = true,
       .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
       .lower_invalid_implicit_lod = true,
+      .lower_index_to_offset = true,
    };
 
    /* Iron Lake and prior require lowering of all rectangle textures */
@@ -1665,6 +1765,13 @@ get_subgroup_size(const struct shader_info *info, unsigned max_subgroup_size)
    }
 
    unreachable("Invalid subgroup size type");
+}
+
+unsigned
+brw_nir_api_subgroup_size(const nir_shader *nir,
+                          unsigned hw_subgroup_size)
+{
+   return get_subgroup_size(&nir->info, hw_subgroup_size);
 }
 
 void
@@ -1867,6 +1974,9 @@ brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compile
    nir_shader *nir =
       nir_create_passthrough_tcs_impl(options, locations, num_locations,
                                       key->input_vertices);
+
+   ralloc_steal(mem_ctx, nir);
+
    nir->info.inputs_read = inputs_read;
    nir->info.tess._primitive_mode = key->_tes_primitive_mode;
    nir_validate_shader(nir, "in brw_nir_create_passthrough_tcs");

@@ -251,7 +251,7 @@ struct pvr_device {
       struct pvr_bo *usc_programs;
       struct pvr_bo *pds_programs;
 
-      struct {
+      struct pvr_spm_per_load_program_state {
          pvr_dev_addr_t pds_pixel_program_offset;
          pvr_dev_addr_t pds_uniform_program_offset;
 
@@ -273,6 +273,8 @@ struct pvr_device {
    VkPhysicalDeviceFeatures features;
 
    struct pvr_bo_store *bo_store;
+
+   struct pvr_bo *robustness_buffer;
 
    struct vk_sync *presignaled_sync;
 };
@@ -988,8 +990,9 @@ struct pvr_framebuffer {
 
    struct pvr_spm_scratch_buffer *scratch_buffer;
 
-   uint32_t spm_eot_state_count;
+   uint32_t render_count;
    struct pvr_spm_eot_state *spm_eot_state_per_render;
+   struct pvr_spm_bgobj_state *spm_bgobj_state_per_render;
 };
 
 struct pvr_render_pass_attachment {
@@ -1030,7 +1033,7 @@ struct pvr_render_subpass {
    uint32_t input_count;
    uint32_t *input_attachments;
 
-   uint32_t *depth_stencil_attachment;
+   uint32_t depth_stencil_attachment;
 
    /*  Derived and other state. */
    uint32_t dep_count;

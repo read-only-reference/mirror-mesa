@@ -1370,6 +1370,10 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
    if (image->vk.external_handle_types &
        VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
       image->from_ahb = true;
+#ifdef ANDROID
+      image->vk.ahardware_buffer_format =
+         anv_ahb_format_for_vk_format(image->vk.format);
+#endif
       return VK_SUCCESS;
    }
 
@@ -1399,7 +1403,7 @@ anv_image_init(struct anv_device *device, struct anv_image *image,
                                            mod_explicit_info, isl_tiling_flags,
                                            create_info->isl_extra_usage_flags);
    } else {
-      r = add_all_surfaces_implicit_layout(device, image, fmt_list, 0,
+      r = add_all_surfaces_implicit_layout(device, image, fmt_list, create_info->stride,
                                            isl_tiling_flags,
                                            create_info->isl_extra_usage_flags);
    }
@@ -1567,9 +1571,9 @@ resolve_ahw_image(struct anv_device *device,
                   struct anv_device_memory *mem)
 {
 #if defined(ANDROID) && ANDROID_API_LEVEL >= 26
-   assert(mem->ahw);
+   assert(mem->vk.ahardware_buffer);
    AHardwareBuffer_Desc desc;
-   AHardwareBuffer_describe(mem->ahw, &desc);
+   AHardwareBuffer_describe(mem->vk.ahardware_buffer, &desc);
    VkResult result;
 
    /* Check tiling. */
@@ -1774,7 +1778,7 @@ VkResult anv_BindImageMemory2(
       bool did_bind = false;
 
       /* Resolve will alter the image's aspects, do this first. */
-      if (mem && mem->ahw)
+      if (mem && mem->vk.ahardware_buffer)
          resolve_ahw_image(device, image, mem);
 
       vk_foreach_struct_const(s, bind_info->pNext) {
@@ -2663,14 +2667,21 @@ anv_CreateImageView(VkDevice _device,
 
       /* NOTE: This one needs to go last since it may stomp isl_view.format */
       if (iview->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {
+         struct isl_view storage_view = iview->planes[vplane].isl;
+         if (iview->vk.view_type == VK_IMAGE_VIEW_TYPE_3D) {
+            storage_view.base_array_layer = iview->vk.storage.z_slice_offset;
+            storage_view.array_len = iview->vk.storage.z_slice_count;
+         }
+
          enum isl_aux_usage general_aux_usage =
             anv_layout_to_aux_usage(device->info, image, 1UL << iaspect_bit,
                                     VK_IMAGE_USAGE_STORAGE_BIT,
                                     VK_IMAGE_LAYOUT_GENERAL);
          iview->planes[vplane].storage_surface_state.state =
             alloc_bindless_surface_state(device);
+
          anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                      &iview->planes[vplane].isl,
+                                      &storage_view,
                                       ISL_SURF_USAGE_STORAGE_BIT,
                                       general_aux_usage, NULL,
                                       0,
@@ -2680,7 +2691,7 @@ anv_CreateImageView(VkDevice _device,
             alloc_bindless_surface_state(device);
          if (isl_is_storage_image_format(format.isl_format)) {
             anv_image_fill_surface_state(device, image, 1ULL << iaspect_bit,
-                                         &iview->planes[vplane].isl,
+                                         &storage_view,
                                          ISL_SURF_USAGE_STORAGE_BIT,
                                          general_aux_usage, NULL,
                                          ANV_IMAGE_VIEW_STATE_STORAGE_LOWERED,

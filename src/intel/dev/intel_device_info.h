@@ -28,11 +28,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "util/bitset.h"
 #include "util/macros.h"
 #include "compiler/shader_enums.h"
 #include "intel_kmd.h"
 
 #include "intel/common/intel_engine.h"
+#include "intel/dev/intel_wa.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -382,6 +384,11 @@ struct intel_device_info
    unsigned engine_class_prefetch[INTEL_ENGINE_CLASS_COMPUTE + 1];
 
    /**
+    * Memory alignment requirement for this device.
+    */
+   unsigned mem_alignment;
+
+   /**
     * For the longest time the timestamp frequency for Gen's timestamp counter
     * could be assumed to be 12.5MHz, where the least significant bit neatly
     * corresponded to 80 nanoseconds.
@@ -437,6 +444,8 @@ struct intel_device_info
          } mappable, unmappable;
       } sram, vram;
    } mem;
+
+   BITSET_DECLARE(workarounds, INTEL_WA_NUM);
    /** @} */
 };
 
@@ -565,6 +574,17 @@ void intel_device_info_update_l3_banks(struct intel_device_info *devinfo);
 void intel_device_info_update_cs_workgroup_threads(struct intel_device_info *devinfo);
 bool intel_device_info_compute_system_memory(struct intel_device_info *devinfo, bool update);
 void intel_device_info_update_after_hwconfig(struct intel_device_info *devinfo);
+
+#ifdef GFX_VERx10
+#define intel_needs_workaround(devinfo, id)         \
+   INTEL_WA_ ## id ## _GFX_VER &&                              \
+   BITSET_TEST(devinfo->workarounds, INTEL_WA_##id)
+#else
+#define intel_needs_workaround(devinfo, id) \
+   BITSET_TEST(devinfo->workarounds, INTEL_WA_##id)
+#endif
+
+enum intel_wa_steppings intel_device_info_wa_stepping(struct intel_device_info *devinfo);
 
 #ifdef __cplusplus
 }

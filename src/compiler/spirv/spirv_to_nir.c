@@ -21,7 +21,7 @@
  * IN THE SOFTWARE.
  *
  * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
+ *    Faith Ekstrand (faith@gfxstrand.net)
  *
  */
 
@@ -203,7 +203,8 @@ _vtn_fail(struct vtn_builder *b, const char *file, unsigned line,
       vtn_dump_shader(b, dump_path, "fail");
 
 #ifndef NDEBUG
-   os_break();
+   if (!b->options->skip_os_break_in_debug_build)
+      os_break();
 #endif
 
    vtn_longjmp(b->fail_jump, 1);
@@ -2462,12 +2463,8 @@ vtn_mem_semantics_to_nir_var_modes(struct vtn_builder *b,
    }
 
    nir_variable_mode modes = 0;
-   if (semantics & SpvMemorySemanticsUniformMemoryMask) {
-      modes |= nir_var_uniform |
-               nir_var_mem_ubo |
-               nir_var_mem_ssbo |
-               nir_var_mem_global;
-   }
+   if (semantics & SpvMemorySemanticsUniformMemoryMask)
+      modes |= nir_var_mem_ssbo | nir_var_mem_global;
    if (semantics & SpvMemorySemanticsImageMemoryMask)
       modes |= nir_var_image;
    if (semantics & SpvMemorySemanticsWorkgroupMemoryMask)
@@ -4892,6 +4889,10 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          spv_check_supported(subgroup_rotate, cap);
          break;
 
+      case SpvCapabilityFragmentFullyCoveredEXT:
+         spv_check_supported(fragment_fully_covered, cap);
+         break;
+
       default:
          vtn_fail("Unhandled capability: %s (%u)",
                   spirv_capability_to_string(cap), cap);
@@ -6497,6 +6498,9 @@ vtn_emit_kernel_entry_point_wrapper(struct vtn_builder *b,
 
    for (unsigned i = 0; i < entry_point->num_params; ++i) {
       struct vtn_type *param_type = b->entry_point->func->type->params[i];
+
+      b->shader->info.cs.has_variable_shared_mem |=
+         param_type->storage_class == SpvStorageClassWorkgroup;
 
       /* consider all pointers to function memory to be parameters passed
        * by value

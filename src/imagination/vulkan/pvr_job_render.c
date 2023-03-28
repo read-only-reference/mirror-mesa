@@ -1443,11 +1443,12 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
       if (job->has_stencil_attachment) {
          value.addr = job->ds.addr;
 
-         /* This should be set iff we only have a stencil attachment; all
-          * currently supported formats with a stencil component also contain
-          * depth.
+         /* Enable separate stencil. This should be enabled iff the buffer set
+          * in CR_ISP_STENCIL_LOAD_BASE does not contain a depth component.
           */
-         value.enable = false;
+         assert(job->has_depth_attachment ||
+                job->ds.vk_format == VK_FORMAT_S8_UINT);
+         value.enable = !job->has_depth_attachment;
       }
    }
    stream_ptr += pvr_cmd_length(CR_ISP_STENCIL_LOAD_BASE);
@@ -1475,8 +1476,11 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
           sizeof(job->pds_bgnd_reg_values));
    stream_ptr += 3U * 2U;
 
-   /* Set pds_pr_bgnd array to 0 */
-   memset(stream_ptr, 0, 3U * sizeof(uint64_t));
+   STATIC_ASSERT(ARRAY_SIZE(job->pds_pr_bgnd_reg_values) == 3U);
+   STATIC_ASSERT(sizeof(job->pds_pr_bgnd_reg_values[0]) == sizeof(uint64_t));
+   memcpy(stream_ptr,
+          job->pds_pr_bgnd_reg_values,
+          sizeof(job->pds_pr_bgnd_reg_values));
    stream_ptr += 3U * 2U;
 
    /* Set usc_clear_register array to 0 */

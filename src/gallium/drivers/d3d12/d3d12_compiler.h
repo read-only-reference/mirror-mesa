@@ -35,6 +35,8 @@
 #include "nir.h"
 
 struct pipe_screen;
+struct d3d12_context;
+struct d3d12_screen;
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,6 +66,14 @@ d3d12_get_compiler_options(struct pipe_screen *screen,
                            enum pipe_shader_ir ir,
                            enum pipe_shader_type shader);
 
+
+void
+d3d12_varying_cache_init(struct d3d12_screen *ctx);
+
+void
+d3d12_varying_cache_destroy(struct d3d12_screen *ctx);
+
+
 struct d3d12_varying_info {
    struct {
       const struct glsl_type *types[4];
@@ -76,6 +86,7 @@ struct d3d12_varying_info {
       } vars[4];
    } slots[VARYING_SLOT_MAX];
    uint64_t mask;
+   uint32_t hash;
    uint32_t max;
 };
 
@@ -95,11 +106,16 @@ struct d3d12_shader_key {
    struct d3d12_varying_info *required_varying_outputs;
    uint64_t next_varying_inputs;
    uint64_t prev_varying_outputs;
-   unsigned last_vertex_processing_stage : 1;
-   unsigned invert_depth : 16;
-   unsigned halfz : 1;
-   unsigned samples_int_textures : 1;
-   unsigned input_clip_size : 4;
+   union {
+      struct {
+         unsigned last_vertex_processing_stage : 1;
+         unsigned invert_depth : 16;
+         unsigned halfz : 1;
+         unsigned samples_int_textures : 1;
+         unsigned input_clip_size : 4;
+      };
+      uint32_t common_all;
+   };
    unsigned tex_saturate_s : PIPE_MAX_SAMPLERS;
    unsigned tex_saturate_r : PIPE_MAX_SAMPLERS;
    unsigned tex_saturate_t : PIPE_MAX_SAMPLERS;
@@ -166,7 +182,7 @@ struct d3d12_shader_key {
    };
 
    int n_texture_states;
-   dxil_wrap_sampler_state tex_wrap_states[PIPE_MAX_SHADER_SAMPLER_VIEWS];
+   dxil_wrap_sampler_state *tex_wrap_states;
    dxil_texture_swizzle_state swizzle_state[PIPE_MAX_SHADER_SAMPLER_VIEWS];
    enum compare_func sampler_compare_funcs[PIPE_MAX_SHADER_SAMPLER_VIEWS];
 
@@ -209,7 +225,6 @@ struct d3d12_shader {
    size_t end_srv_binding;
 
    struct {
-      enum pipe_format format;
       uint32_t dimension;
    } uav_bindings[PIPE_MAX_SHADER_IMAGES];
 
@@ -222,15 +237,20 @@ struct d3d12_shader {
 
 struct d3d12_gs_variant_key
 {
-   unsigned passthrough:1;
-   unsigned provoking_vertex:3;
-   unsigned alternate_tri:1;
-   unsigned fill_mode:2;
-   unsigned cull_mode:2;
-   unsigned has_front_face:1;
-   unsigned front_ccw:1;
-   unsigned edge_flag_fix:1;
-   unsigned flatshade_first:1;
+   union {
+      struct {
+         unsigned passthrough:1;
+         unsigned provoking_vertex:3;
+         unsigned alternate_tri:1;
+         unsigned fill_mode:2;
+         unsigned cull_mode:2;
+         unsigned has_front_face:1;
+         unsigned front_ccw:1;
+         unsigned edge_flag_fix:1;
+         unsigned flatshade_first:1;
+      };
+      uint64_t all;
+   };
    uint64_t flat_varyings;
    struct d3d12_varying_info *varyings;
 };
@@ -261,8 +281,6 @@ struct d3d12_shader_selector {
       struct d3d12_tcs_variant_key tcs_key;
    };
 };
-
-struct d3d12_context;
 
 struct d3d12_shader_selector *
 d3d12_create_shader(struct d3d12_context *ctx,
@@ -310,6 +328,9 @@ has_flat_varyings(struct d3d12_context* ctx);
 
 bool
 d3d12_compare_varying_info(const struct d3d12_varying_info *expect, const struct d3d12_varying_info *have);
+
+bool
+manual_depth_range(struct d3d12_context* ctx);
 
 #ifdef __cplusplus
 }

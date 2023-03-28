@@ -512,6 +512,19 @@ emit_3dstate_sbe(struct anv_graphics_pipeline *pipeline)
       sbe.VertexURBEntryReadLength = DIV_ROUND_UP(max_source_attr + 1, 2);
       sbe.ForceVertexURBEntryReadOffset = true;
       sbe.ForceVertexURBEntryReadLength = true;
+
+      /* Ask the hardware to supply PrimitiveID if the fragment shader
+       * reads it but a previous stage didn't write one.
+       */
+      if ((wm_prog_data->inputs & VARYING_BIT_PRIMITIVE_ID) &&
+          fs_input_map->varying_to_slot[VARYING_SLOT_PRIMITIVE_ID] == -1) {
+         sbe.PrimitiveIDOverrideAttributeSelect =
+            wm_prog_data->urb_setup[VARYING_SLOT_PRIMITIVE_ID];
+         sbe.PrimitiveIDOverrideComponentX = true;
+         sbe.PrimitiveIDOverrideComponentY = true;
+         sbe.PrimitiveIDOverrideComponentZ = true;
+         sbe.PrimitiveIDOverrideComponentW = true;
+      }
    } else {
       assert(anv_pipeline_is_mesh(pipeline));
 #if GFX_VERx10 >= 125
@@ -1089,6 +1102,17 @@ emit_3dstate_streamout(struct anv_graphics_pipeline *pipeline,
       so.Stream2VertexReadLength = urb_entry_read_length - 1;
       so.Stream3VertexReadOffset = urb_entry_read_offset;
       so.Stream3VertexReadLength = urb_entry_read_length - 1;
+
+#if INTEL_NEEDS_WA_14017076903
+      /* Wa_14017076903 : SOL should be programmed to force the
+       * rendering to be enabled.
+       *
+       * This fixes a rare case where SOL must render to get correct
+       * occlusion query results even when no PS and depth buffers are
+       * bound.
+       */
+      so.ForceRendering = Force_on;
+#endif
    }
 
    GENX(3DSTATE_STREAMOUT_pack)(NULL, pipeline->gfx8.streamout_state, &so);
@@ -1185,7 +1209,7 @@ emit_3dstate_vs(struct anv_graphics_pipeline *pipeline)
           * but the Haswell docs for the "VS Reference Count Full Force Miss
           * Enable" field of the "Thread Mode" register refer to a HSW bug in
           * which the VUE handle reference count would overflow resulting in
-          * internal reference counting bugs.  My (Jason's) best guess is that
+          * internal reference counting bugs.  My (Faith's) best guess is that
           * this bug cropped back up on SKL GT4 when we suddenly had more
           * threads in play than any previous gfx9 hardware.
           *
@@ -1293,7 +1317,7 @@ emit_3dstate_hs_ds(struct anv_graphics_pipeline *pipeline,
    hs.DispatchMode = tcs_prog_data->base.dispatch_mode;
    hs.IncludePrimitiveID = tcs_prog_data->include_primitive_id;
 
-   GENX(3DSTATE_HS_pack)(NULL, pipeline->gfx8.hs, &hs);
+   GENX(3DSTATE_HS_pack)(&pipeline->base.batch, pipeline->gfx8.hs, &hs);
 
    anv_batch_emit(&pipeline->base.batch, GENX(3DSTATE_DS), ds) {
       ds.Enable = true;
@@ -1855,19 +1879,8 @@ genX(graphics_pipeline_emit)(struct anv_graphics_pipeline *pipeline,
 void
 genX(compute_pipeline_emit)(struct anv_compute_pipeline *pipeline)
 {
-   struct anv_device *device = pipeline->base.device;
    const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(pipeline);
    anv_pipeline_setup_l3_config(&pipeline->base, cs_prog_data->base.total_shared > 0);
-
-   const UNUSED struct anv_shader_bin *cs_bin = pipeline->cs;
-   const struct intel_device_info *devinfo = device->info;
-
-   anv_batch_emit(&pipeline->base.batch, GENX(CFE_STATE), cfe) {
-      cfe.MaximumNumberofThreads =
-         devinfo->max_cs_threads * devinfo->subslice_total;
-      cfe.ScratchSpaceBuffer =
-         get_scratch_surf(&pipeline->base, MESA_SHADER_COMPUTE, cs_bin);
-   }
 }
 
 #else /* #if GFX_VERx10 >= 125 */

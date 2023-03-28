@@ -1,24 +1,6 @@
 /*
- * Copyright (C) 2021 Alyssa Rosenzweig <alyssa@rosenzweig.io>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright 2021 Alyssa Rosenzweig
+ * SPDX-License-Identifier: MIT
  */
 
 #include "agx_compiler.h"
@@ -66,18 +48,28 @@ agx_pack_sample_coords(agx_index index, bool *flag)
 static unsigned
 agx_pack_texture(agx_index index, unsigned *flag)
 {
-   /* TODO: indirection */
-   assert(index.type == AGX_INDEX_IMMEDIATE);
-   *flag = 0;
+   if (index.type == AGX_INDEX_REGISTER) {
+      assert(index.size == AGX_SIZE_16);
+      *flag = 1;
+   } else {
+      assert(index.type == AGX_INDEX_IMMEDIATE);
+      *flag = 0;
+   }
+
    return index.value;
 }
 
 static unsigned
 agx_pack_sampler(agx_index index, bool *flag)
 {
-   /* TODO: indirection */
-   assert(index.type == AGX_INDEX_IMMEDIATE);
-   *flag = 0;
+   if (index.type == AGX_INDEX_REGISTER) {
+      assert(index.size == AGX_SIZE_16);
+      *flag = 1;
+   } else {
+      assert(index.type == AGX_INDEX_IMMEDIATE);
+      *flag = 0;
+   }
+
    return index.value;
 }
 
@@ -158,6 +150,7 @@ agx_pack_memory_index(agx_index index, bool *flag)
       return index.value;
    } else {
       assert(index.type == AGX_INDEX_REGISTER);
+      assert(index.size == AGX_SIZE_32);
       assert((index.value & 1) == 0);
       assert(index.value < 0x100);
 

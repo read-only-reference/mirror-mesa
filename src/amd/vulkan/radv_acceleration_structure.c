@@ -25,7 +25,7 @@
 
 #include "nir_builder.h"
 #include "radv_cs.h"
-#include "radv_meta.h"
+#include "meta/radv_meta.h"
 
 #include "radix_sort/radv_radix_sort.h"
 
@@ -398,7 +398,7 @@ create_build_pipeline_spv(struct radv_device *device, const uint32_t *spv, uint3
    };
 
    result = radv_compute_pipeline_create(radv_device_to_handle(device), device->meta_state.cache,
-                                         &pipeline_info, &device->meta_state.alloc, pipeline, true);
+                                         &pipeline_info, &device->meta_state.alloc, pipeline);
 
 cleanup:
    device->vk.dispatch_table.DestroyShaderModule(radv_device_to_handle(device), module,
@@ -454,7 +454,7 @@ radv_device_init_null_accel_struct(struct radv_device *device)
    VkMemoryRequirements2 mem_req = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2,
    };
-   radv_GetBufferMemoryRequirements2(_device, &info, &mem_req);
+   vk_common_GetBufferMemoryRequirements2(_device, &info, &mem_req);
 
    VkMemoryAllocateInfo alloc_info = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
@@ -480,7 +480,7 @@ radv_device_init_null_accel_struct(struct radv_device *device)
       return result;
 
    void *data;
-   result = radv_MapMemory(_device, memory, 0, size, 0, &data);
+   result = vk_common_MapMemory(_device, memory, 0, size, 0, &data);
    if (result != VK_SUCCESS)
       return result;
 
@@ -512,7 +512,7 @@ radv_device_init_null_accel_struct(struct radv_device *device)
 
    memcpy((uint8_t *)data + bvh_offset, &root, sizeof(struct radv_bvh_box32_node));
 
-   radv_UnmapMemory(_device, memory);
+   vk_common_UnmapMemory(_device, memory);
 
    VkAccelerationStructureCreateInfoKHR create_info = {
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,

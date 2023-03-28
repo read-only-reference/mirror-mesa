@@ -1069,7 +1069,7 @@ lower_sampler_logical_send_gfx7(const fs_builder &bld, fs_inst *inst, opcode op,
           * component before the min_lod, so the maximum coordinate components
           * is 3.
           *
-          * Wa_1209978020
+          * See bspec 45942, "Enable new message layout for cube array"
           */
          length += 3 - coord_components;
          length += (2 - grad_components) * 2;

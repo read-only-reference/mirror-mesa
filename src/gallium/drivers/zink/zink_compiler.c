@@ -32,6 +32,7 @@
 #include "pipe/p_state.h"
 
 #include "nir.h"
+#include "nir_xfb_info.h"
 #include "nir/nir_draw_helpers.h"
 #include "compiler/nir/nir_builder.h"
 #include "compiler/nir/nir_builtin_builder.h"
@@ -384,12 +385,240 @@ lower_gl_point_gs(nir_shader *shader)
                                        nir_metadata_dominance, &state);
 }
 
+struct lower_pv_mode_state {
+   nir_variable *varyings[VARYING_SLOT_MAX];
+   nir_variable *pos_counter;
+   nir_variable *out_pos_counter;
+   unsigned primitive_vert_count;
+   unsigned prim;
+};
+
+static bool
+lower_pv_mode_gs_store(nir_builder *b,
+                       nir_intrinsic_instr *intrin,
+                       struct lower_pv_mode_state *state)
+{
+   b->cursor = nir_before_instr(&intrin->instr);
+   nir_deref_instr *deref = nir_src_as_deref(intrin->src[0]);
+   if (nir_deref_mode_is(deref, nir_var_shader_out)) {
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+
+      gl_varying_slot location = var->data.location;
+      assert(state->varyings[location]);
+      assert(intrin->src[1].is_ssa);
+      nir_ssa_def *pos_counter = nir_load_var(b, state->pos_counter);
+      nir_store_array_var(b, state->varyings[location],
+                             pos_counter, intrin->src[1].ssa,
+                             nir_intrinsic_write_mask(intrin));
+      nir_instr_remove(&intrin->instr);
+      return true;
+   }
+
+   return false;
+}
+
+static void
+lower_pv_mode_emit_rotated_prim(nir_builder *b,
+                                struct lower_pv_mode_state *state,
+                                nir_ssa_def *current_vertex)
+{
+   nir_ssa_def *two = nir_imm_int(b, 2);
+   nir_ssa_def *three = nir_imm_int(b, 3);
+   bool is_triangle = state->primitive_vert_count == 3;
+   /* This shader will always see the last three vertices emitted by the user gs.
+    * The following table is used to to rotate primitives within a strip generated
+    * by the user gs such that the last vertex becomes the first.
+    *
+    * [lines, tris][even/odd index][vertex mod 3]
+    */
+   static const unsigned vert_maps[2][2][3] = {
+      {{1, 0, 0}, {0, 1, 0}},
+      {{2, 0, 1}, {2, 1, 0}}
+   };
+   /* When the primive supplied to the gs comes from a strip, the last provoking vertex
+    * is either the last or the second, depending on whether the triangle is at an odd
+    * or even position within the strip.
+    *
+    * odd or even primitive within draw
+    */
+   nir_ssa_def *odd_prim = nir_imod(b, nir_load_primitive_id(b), two);
+   for (unsigned i = 0; i < state->primitive_vert_count; i++) {
+      /* odd or even triangle within strip emitted by user GS
+       * this is handled using the table
+       */
+      nir_ssa_def *odd_user_prim = nir_imod(b, current_vertex, two);
+      unsigned offset_even = vert_maps[is_triangle][0][i];
+      unsigned offset_odd = vert_maps[is_triangle][1][i];
+      nir_ssa_def *offset_even_value = nir_imm_int(b, offset_even);
+      nir_ssa_def *offset_odd_value = nir_imm_int(b, offset_odd);
+      nir_ssa_def *rotated_i = nir_bcsel(b, nir_b2b1(b, odd_user_prim),
+                                            offset_odd_value, offset_even_value);
+      /* Here we account for how triangles are provided to the gs from a strip.
+       * For even primitives we rotate by 3, meaning we do nothing.
+       * For odd primitives we rotate by 2, combined with the previous rotation this
+       * means the second vertex becomes the last.
+       */
+      if (state->prim == ZINK_PVE_PRIMITIVE_TRISTRIP)
+        rotated_i = nir_imod(b, nir_iadd(b, rotated_i,
+                                            nir_isub(b, three,
+                                                        odd_prim)),
+                                            three);
+      /* Triangles that come from fans are provided to the gs the same way as
+       * odd triangles from a strip so always rotate by 2.
+       */
+      else if (state->prim == ZINK_PVE_PRIMITIVE_FAN)
+        rotated_i = nir_imod(b, nir_iadd_imm(b, rotated_i, 2),
+                                three);
+      nir_foreach_variable_with_modes(var, b->shader, nir_var_shader_out) {
+         gl_varying_slot location = var->data.location;
+         if (state->varyings[location]) {
+            nir_ssa_def *value = nir_load_array_var(b, state->varyings[location], rotated_i);
+            nir_store_var(b, var, value, (1u << value->num_components) - 1);
+         }
+      }
+      nir_emit_vertex(b);
+   }
+}
+
+static bool
+lower_pv_mode_gs_emit_vertex(nir_builder *b,
+                             nir_intrinsic_instr *intrin,
+                             struct lower_pv_mode_state *state)
+{
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   // increment pos_counter
+   nir_ssa_def *pos_counter = nir_load_var(b, state->pos_counter);
+   nir_store_var(b, state->pos_counter, nir_iadd_imm(b, pos_counter, 1), 1);
+
+   nir_instr_remove(&intrin->instr);
+   return true;
+}
+
+static bool
+lower_pv_mode_gs_end_primitive(nir_builder *b,
+                               nir_intrinsic_instr *intrin,
+                               struct lower_pv_mode_state *state)
+{
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   nir_ssa_def *pos_counter = nir_load_var(b, state->pos_counter);
+   nir_push_loop(b);
+   {
+      nir_ssa_def *out_pos_counter = nir_load_var(b, state->out_pos_counter);
+      nir_push_if(b, nir_ilt(b, nir_isub(b, pos_counter, out_pos_counter),
+                                nir_imm_int(b, state->primitive_vert_count - 1)));
+      nir_jump(b, nir_jump_break);
+      nir_pop_if(b, NULL);
+
+      lower_pv_mode_emit_rotated_prim(b, state, out_pos_counter);
+      nir_end_primitive(b);
+
+      nir_store_var(b, state->out_pos_counter, nir_iadd_imm(b, out_pos_counter, 1), 1);
+   }
+   nir_pop_loop(b, NULL);
+   nir_store_var(b, state->pos_counter, nir_imm_int(b, 0), 1);
+   nir_store_var(b, state->out_pos_counter, nir_imm_int(b, 0), 1);
+
+   nir_instr_remove(&intrin->instr);
+   return true;
+}
+
+static bool
+lower_pv_mode_gs_instr(nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   struct lower_pv_mode_state *state = data;
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+
+   switch (intrin->intrinsic) {
+   case nir_intrinsic_store_deref:
+      return lower_pv_mode_gs_store(b, intrin, state);
+   case nir_intrinsic_copy_deref:
+      unreachable("should be lowered");
+   case nir_intrinsic_emit_vertex_with_counter:
+   case nir_intrinsic_emit_vertex:
+      return lower_pv_mode_gs_emit_vertex(b, intrin, state);
+   case nir_intrinsic_end_primitive:
+   case nir_intrinsic_end_primitive_with_counter:
+      return lower_pv_mode_gs_end_primitive(b, intrin, state);
+   default:
+      return false;
+   }
+}
+
+static unsigned int
+lower_pv_mode_vertices_for_prim(enum shader_prim prim)
+{
+   switch (prim) {
+   case SHADER_PRIM_POINTS:
+      return 1;
+   case SHADER_PRIM_LINE_STRIP:
+      return 2;
+   case SHADER_PRIM_TRIANGLE_STRIP:
+      return 3;
+   default:
+      unreachable("unsupported primitive for gs output");
+   }
+}
+
+static bool
+lower_pv_mode_gs(nir_shader *shader, unsigned prim)
+{
+   nir_builder b;
+   struct lower_pv_mode_state state;
+   memset(state.varyings, 0, sizeof(state.varyings));
+
+   nir_function_impl *entry = nir_shader_get_entrypoint(shader);
+   nir_builder_init(&b, entry);
+   b.cursor = nir_before_cf_list(&entry->body);
+
+   state.primitive_vert_count =
+      lower_pv_mode_vertices_for_prim(shader->info.gs.output_primitive);
+
+   nir_foreach_variable_with_modes(var, shader, nir_var_shader_out) {
+      gl_varying_slot location = var->data.location;
+
+      char name[100];
+      snprintf(name, sizeof(name), "__tmp_primverts_%d", location);
+      state.varyings[location] =
+         nir_local_variable_create(entry,
+                                   glsl_array_type(var->type,
+                                                   shader->info.gs.vertices_out,
+                                                   false),
+                                   name);
+   }
+
+   state.pos_counter = nir_local_variable_create(entry,
+                                                 glsl_uint_type(),
+                                                 "__pos_counter");
+
+   state.out_pos_counter = nir_local_variable_create(entry,
+                                                     glsl_uint_type(),
+                                                     "__out_pos_counter");
+
+   state.prim = prim;
+
+   // initialize pos_counter and out_pos_counter
+   nir_store_var(&b, state.pos_counter, nir_imm_int(&b, 0), 1);
+   nir_store_var(&b, state.out_pos_counter, nir_imm_int(&b, 0), 1);
+
+   shader->info.gs.vertices_out = (shader->info.gs.vertices_out -
+                                   (state.primitive_vert_count - 1)) *
+                                  state.primitive_vert_count;
+   return nir_shader_instructions_pass(shader, lower_pv_mode_gs_instr,
+                                       nir_metadata_dominance, &state);
+}
+
 struct lower_line_stipple_state {
    nir_variable *pos_out;
    nir_variable *stipple_out;
    nir_variable *prev_pos;
    nir_variable *pos_counter;
    nir_variable *stipple_counter;
+   bool line_rectangular;
 };
 
 static nir_ssa_def *
@@ -428,7 +657,13 @@ lower_line_stipple_gs_instr(nir_builder *b, nir_instr *instr, void *data)
    curr = viewport_map(b, curr, vp_scale);
 
    // calculate length of line
-   nir_ssa_def *len = nir_fast_distance(b, prev, curr);
+   nir_ssa_def *len;
+   if (state->line_rectangular)
+      len = nir_fast_distance(b, prev, curr);
+   else {
+      nir_ssa_def *diff = nir_fabs(b, nir_fsub(b, prev, curr));
+      len = nir_fmax(b, nir_channel(b, diff, 0), nir_channel(b, diff, 1));
+   }
    // update stipple_counter
    nir_store_var(b, state->stipple_counter,
                     nir_fadd(b, nir_load_var(b, state->stipple_counter),
@@ -448,7 +683,7 @@ lower_line_stipple_gs_instr(nir_builder *b, nir_instr *instr, void *data)
 }
 
 static bool
-lower_line_stipple_gs(nir_shader *shader)
+lower_line_stipple_gs(nir_shader *shader, bool line_rectangular)
 {
    nir_builder b;
    struct lower_line_stipple_state state;
@@ -480,6 +715,7 @@ lower_line_stipple_gs(nir_shader *shader)
                                                glsl_float_type(),
                                                "__stipple_counter");
 
+   state.line_rectangular = line_rectangular;
    // initialize pos_counter and stipple_counter
    nir_function_impl *entry = nir_shader_get_entrypoint(shader);
    nir_builder_init(&b, entry);
@@ -891,6 +1127,111 @@ lower_64bit_pack(nir_shader *shader)
 {
    return nir_shader_instructions_pass(shader, lower_64bit_pack_instr,
                                        nir_metadata_block_index | nir_metadata_dominance, NULL);
+}
+
+nir_shader *
+zink_create_quads_emulation_gs(const nir_shader_compiler_options *options,
+                               const nir_shader *prev_stage,
+                               int last_pv_vert_offset)
+{
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
+                                                  options,
+                                                  "filled quad gs");
+
+   nir_shader *nir = b.shader;
+   nir->info.gs.input_primitive = SHADER_PRIM_LINES_ADJACENCY;
+   nir->info.gs.output_primitive = SHADER_PRIM_TRIANGLE_STRIP;
+   nir->info.gs.vertices_in = 4;
+   nir->info.gs.vertices_out = 6;
+   nir->info.gs.invocations = 1;
+   nir->info.gs.active_stream_mask = 1;
+
+   nir->info.has_transform_feedback_varyings = prev_stage->info.has_transform_feedback_varyings;
+   memcpy(nir->info.xfb_stride, prev_stage->info.xfb_stride, sizeof(prev_stage->info.xfb_stride));
+   if (prev_stage->xfb_info) {
+      nir->xfb_info = mem_dup(prev_stage->xfb_info, sizeof(nir_xfb_info));
+   }
+
+   nir_variable *in_vars[VARYING_SLOT_MAX];
+   nir_variable *out_vars[VARYING_SLOT_MAX];
+   unsigned num_vars = 0;
+
+   /* Create input/output variables. */
+   nir_foreach_shader_out_variable(var, prev_stage) {
+      assert(!var->data.patch);
+
+      char name[100];
+      if (var->name)
+         snprintf(name, sizeof(name), "in_%s", var->name);
+      else
+         snprintf(name, sizeof(name), "in_%d", var->data.driver_location);
+
+      nir_variable *in = nir_variable_clone(var, nir);
+      ralloc_free(in->name);
+      in->name = ralloc_strdup(in, name);
+      in->type = glsl_array_type(var->type, 4, false);
+      in->data.mode = nir_var_shader_in;
+      nir_shader_add_variable(nir, in);
+
+      if (var->name)
+         snprintf(name, sizeof(name), "out_%s", var->name);
+      else
+         snprintf(name, sizeof(name), "out_%d", var->data.driver_location);
+
+      nir_variable *out = nir_variable_clone(var, nir);
+      ralloc_free(out->name);
+      out->name = ralloc_strdup(out, name);
+      out->data.mode = nir_var_shader_out;
+      nir_shader_add_variable(nir, out);
+
+      in_vars[num_vars] = in;
+      out_vars[num_vars++] = out;
+   }
+
+   int mapping_first[] = {0, 1, 2, 0, 2, 3};
+   int mapping_last[] = {0, 1, 3, 1, 2, 3};
+   nir_ssa_def *last_pv_vert_def = nir_load_ubo(&b, 1, 32,
+                                                nir_imm_int(&b, 0), nir_imm_int(&b, last_pv_vert_offset),
+                                                .align_mul = 4, .align_offset = 0, .range_base = 0, .range = ~0);
+   last_pv_vert_def = nir_ine_imm(&b, last_pv_vert_def, 0);
+   for (unsigned i = 0; i < 6; ++i) {
+      /* swap indices 2 and 3 */
+      nir_ssa_def *idx = nir_bcsel(&b, last_pv_vert_def,
+                                   nir_imm_int(&b, mapping_last[i]),
+                                   nir_imm_int(&b, mapping_first[i]));
+      /* Copy inputs to outputs. */
+      for (unsigned j = 0; j < num_vars; ++j) {
+         if (in_vars[j]->data.location == VARYING_SLOT_EDGE) {
+            continue;
+         }
+         /* no need to use copy_var to save a lower pass */
+         nir_deref_instr *deref_var = nir_build_deref_var(&b, in_vars[j]);
+         nir_deref_instr *deref_array = nir_build_deref_array(&b, deref_var, idx);
+         if (glsl_type_is_array(deref_array->type)) {
+            nir_deref_instr *deref_out = nir_build_deref_var(&b, out_vars[j]);
+            for (unsigned k = 0; k < glsl_array_size(deref_array->type); k++) {
+               nir_deref_instr *deref_arr_arr = nir_build_deref_array_imm(&b, deref_array, k);
+               nir_deref_instr *deref_arr_out = nir_build_deref_array_imm(&b, deref_out, k);
+               assert(glsl_type_is_vector_or_scalar(deref_arr_arr->type));
+               nir_ssa_def *value = nir_load_deref(&b, deref_arr_arr);
+               nir_store_deref(&b, deref_arr_out, value,
+                             (1u << value->num_components) - 1);
+            }
+         } else {
+            nir_ssa_def *value = nir_load_deref(&b, deref_array);
+            nir_store_var(&b, out_vars[j], value,
+                        (1u << value->num_components) - 1);
+         }
+      }
+      nir_emit_vertex(&b, 0);
+      if (i == 2)
+        nir_end_primitive(&b, 0);
+   }
+
+   nir_end_primitive(&b, 0);
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   nir_validate_shader(nir, "in zink_create_quads_emulation_gs");
+   return nir;
 }
 
 void
@@ -2914,14 +3255,26 @@ rewrite_tex_dest(nir_builder *b, nir_tex_instr *tex, nir_variable *var, void *da
    return dest;
 }
 
+struct lower_zs_swizzle_state {
+   bool shadow_only;
+   unsigned base_sampler_id;
+   const struct zink_zs_swizzle_key *swizzle;
+};
+
 static bool
-lower_shadow_tex_instr(nir_builder *b, nir_instr *instr, void *data)
+lower_zs_swizzle_tex_instr(nir_builder *b, nir_instr *instr, void *data)
 {
-   struct zink_fs_shadow_key *shadow = data;
+   struct lower_zs_swizzle_state *state = data;
+   const struct zink_zs_swizzle_key *swizzle_key = state->swizzle;
+   assert(state->shadow_only || swizzle_key);
    if (instr->type != nir_instr_type_tex)
       return false;
    nir_tex_instr *tex = nir_instr_as_tex(instr);
-   if (tex->op == nir_texop_txs || tex->op == nir_texop_lod || !tex->is_shadow || tex->is_new_style_shadow)
+   if (tex->op == nir_texop_txs || tex->op == nir_texop_lod ||
+       (!tex->is_shadow && state->shadow_only) || tex->is_new_style_shadow)
+      return false;
+   if (tex->is_shadow && tex->op == nir_texop_tg4)
+      /* Will not even try to emulate the shadow comparison */
       return false;
    int handle = nir_tex_instr_src_index(tex, nir_tex_src_texture_handle);
    nir_variable *var = NULL;
@@ -2939,31 +3292,66 @@ lower_shadow_tex_instr(nir_builder *b, nir_instr *instr, void *data)
       }
    }
    assert(var);
-   uint32_t sampler_id = var->data.binding - (PIPE_MAX_SAMPLERS * MESA_SHADER_FRAGMENT);
+   uint32_t sampler_id = var->data.binding - state->base_sampler_id;
+   const struct glsl_type *type = glsl_without_array(var->type);
+   enum glsl_base_type ret_type = glsl_get_sampler_result_type(type);
+   bool is_int = glsl_base_type_is_integer(ret_type);
    unsigned num_components = nir_dest_num_components(tex->dest);
+   if (tex->is_shadow)
+      tex->is_new_style_shadow = true;
    nir_ssa_def *dest = rewrite_tex_dest(b, tex, var, NULL);
-   assert(!tex->is_new_style_shadow);
-   tex->dest.ssa.num_components = 1;
-   tex->is_new_style_shadow = true;
-   if (shadow && (shadow->mask & BITFIELD_BIT(sampler_id))) {
+   assert(dest || !state->shadow_only);
+   if (!dest && !(swizzle_key->mask & BITFIELD_BIT(sampler_id)))
+      return false;
+   else if (!dest)
+      dest = &tex->dest.ssa;
+   else
+      tex->dest.ssa.num_components = 1;
+   if (swizzle_key && (swizzle_key->mask & BITFIELD_BIT(sampler_id))) {
       /* these require manual swizzles */
+      if (tex->op == nir_texop_tg4) {
+         assert(!tex->is_shadow);
+         nir_ssa_def *swizzle;
+         switch (swizzle_key->swizzle[sampler_id].s[tex->component]) {
+         case PIPE_SWIZZLE_0:
+            swizzle = nir_imm_zero(b, 4, nir_dest_bit_size(tex->dest));
+            break;
+         case PIPE_SWIZZLE_1:
+            if (is_int)
+               swizzle = nir_imm_intN_t(b, 4, nir_dest_bit_size(tex->dest));
+            else
+               swizzle = nir_imm_floatN_t(b, 4, nir_dest_bit_size(tex->dest));
+            break;
+         default:
+            if (!tex->component)
+               return false;
+            tex->component = 0;
+            return true;
+         }
+         nir_ssa_def_rewrite_uses_after(dest, swizzle, swizzle->parent_instr);
+         return true;
+      }
       nir_ssa_def *vec[4];
       for (unsigned i = 0; i < ARRAY_SIZE(vec); i++) {
-         switch (shadow->swizzle[sampler_id].s[i]) {
+         switch (swizzle_key->swizzle[sampler_id].s[i]) {
          case PIPE_SWIZZLE_0:
             vec[i] = nir_imm_zero(b, 1, nir_dest_bit_size(tex->dest));
             break;
          case PIPE_SWIZZLE_1:
-            vec[i] = nir_imm_floatN_t(b, 1, nir_dest_bit_size(tex->dest));
+            if (is_int)
+               vec[i] = nir_imm_intN_t(b, 1, nir_dest_bit_size(tex->dest));
+            else
+               vec[i] = nir_imm_floatN_t(b, 1, nir_dest_bit_size(tex->dest));
             break;
          default:
-            vec[i] = dest;
+            vec[i] = dest->num_components == 1 ? dest : nir_channel(b, dest, i);
             break;
          }
       }
       nir_ssa_def *swizzle = nir_vec(b, vec, num_components);
       nir_ssa_def_rewrite_uses_after(dest, swizzle, swizzle->parent_instr);
    } else {
+      assert(tex->is_shadow);
       nir_ssa_def *vec[4] = {dest, dest, dest, dest};
       nir_ssa_def *splat = nir_vec(b, vec, num_components);
       nir_ssa_def_rewrite_uses_after(dest, splat, splat->parent_instr);
@@ -2972,9 +3360,11 @@ lower_shadow_tex_instr(nir_builder *b, nir_instr *instr, void *data)
 }
 
 static bool
-lower_shadow_tex(nir_shader *nir, const void *shadow)
+lower_zs_swizzle_tex(nir_shader *nir, const void *swizzle, bool shadow_only)
 {
-   return nir_shader_instructions_pass(nir, lower_shadow_tex_instr, nir_metadata_dominance | nir_metadata_block_index, (void*)shadow);
+   unsigned base_sampler_id = gl_shader_stage_is_compute(nir->info.stage) ? 0 : PIPE_MAX_SAMPLERS * nir->info.stage;
+   struct lower_zs_swizzle_state state = {shadow_only, base_sampler_id, swizzle};
+   return nir_shader_instructions_pass(nir, lower_zs_swizzle_tex_instr, nir_metadata_dominance | nir_metadata_block_index, (void*)&state);
 }
 
 static bool
@@ -3073,7 +3463,7 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
 
          case MESA_SHADER_GEOMETRY:
             if (zink_gs_key(key)->lower_line_stipple) {
-               NIR_PASS_V(nir, lower_line_stipple_gs);
+               NIR_PASS_V(nir, lower_line_stipple_gs, zink_gs_key(key)->line_rectangular);
                NIR_PASS_V(nir, nir_lower_var_copies);
                need_optimize = true;
             }
@@ -3087,6 +3477,11 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
             if (zink_gs_key(key)->lower_gl_point) {
                NIR_PASS_V(nir, lower_gl_point_gs);
                need_optimize = true;
+            }
+
+            if (zink_gs_key(key)->lower_pv_mode) {
+               NIR_PASS_V(nir, lower_pv_mode_gs, zink_gs_key(key)->lower_pv_mode);
+               need_optimize = true; //TODO verify that this is required
             }
             break;
 
@@ -3121,6 +3516,13 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
          } else if (zink_fs_key(key)->lower_line_stipple)
                NIR_PASS_V(nir, lower_line_stipple_fs);
 
+         if (zink_fs_key(key)->lower_point_smooth) {
+            NIR_PASS_V(nir, nir_lower_point_smooth);
+            NIR_PASS_V(nir, nir_lower_discard_if, nir_lower_discard_if_to_cf);
+            nir->info.fs.uses_discard = true;
+            need_optimize = true;
+         }
+
          if (zink_fs_key(key)->robust_access)
             NIR_PASS(need_optimize, nir, lower_txf_lod_robustness);
 
@@ -3150,8 +3552,8 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
             nir->info.fs.uses_sample_qualifier = true;
             nir->info.fs.uses_sample_shading = true;
          }
-         if (zs->fs.legacy_shadow_mask)
-            NIR_PASS_V(nir, lower_shadow_tex, zink_fs_key_base(key)->shadow_needs_shader_swizzle ? extra_data : NULL);
+         if (zs->fs.legacy_shadow_mask && !key->base.needs_zs_shader_swizzle)
+            NIR_PASS(need_optimize, nir, lower_zs_swizzle_tex, zink_fs_key_base(key)->shadow_needs_shader_swizzle ? extra_data : NULL, true);
          if (nir->info.fs.uses_fbfetch_output) {
             nir_variable *fbfetch = NULL;
             NIR_PASS_V(nir, lower_fbfetch, &fbfetch, zink_fs_key_base(key)->fbfetch_ms);
@@ -3176,6 +3578,10 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
             NIR_PASS(need_optimize, nir, lower_txf_lod_robustness);
          break;
       default: break;
+      }
+      if (key->base.needs_zs_shader_swizzle) {
+         assert(extra_data);
+         NIR_PASS(need_optimize, nir, lower_zs_swizzle_tex, extra_data, false);
       }
       if (key->base.nonseamless_cube_mask) {
          NIR_PASS_V(nir, zink_lower_cubemap_to_array, key->base.nonseamless_cube_mask);
@@ -3207,7 +3613,7 @@ zink_shader_compile(struct zink_screen *screen, struct zink_shader *zs,
 }
 
 VkShaderModule
-zink_shader_compile_separate(struct zink_screen *screen, struct zink_shader *zs, nir_shader **ret_nir)
+zink_shader_compile_separate(struct zink_screen *screen, struct zink_shader *zs)
 {
    nir_shader *nir = nir_shader_clone(NULL, zs->nir);
    int set = nir->info.stage == MESA_SHADER_FRAGMENT;
@@ -3235,8 +3641,9 @@ zink_shader_compile_separate(struct zink_screen *screen, struct zink_shader *zs,
       }
    }
    optimize_nir(nir, zs);
-   *ret_nir = nir;
-   return compile_module(screen, zs, nir);
+   VkShaderModule mod = compile_module(screen, zs, nir);
+   ralloc_free(nir);
+   return mod;
 }
 
 static bool
@@ -4261,6 +4668,9 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
    struct zink_shader *ret = rzalloc(NULL, struct zink_shader);
    bool have_psiz = false;
 
+   ret->has_edgeflags = nir->info.stage == MESA_SHADER_VERTEX &&
+                        nir_find_variable_with_location(nir, nir_var_shader_out, VARYING_SLOT_EDGE);
+
    ret->sinfo.have_vulkan_memory_model = screen->info.have_KHR_vulkan_memory_model;
 
    util_queue_fence_init(&ret->precompile.fence);
@@ -4334,7 +4744,7 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
    bool needs_size = analyze_io(ret, nir);
    NIR_PASS_V(nir, unbreak_bos, ret, needs_size);
    /* run in compile if there could be inlined uniforms */
-   if (!screen->driconf.inline_uniforms) {
+   if (!screen->driconf.inline_uniforms && !nir->info.num_inlinable_uniforms) {
       NIR_PASS_V(nir, nir_lower_io_to_scalar, nir_var_mem_global | nir_var_mem_ubo | nir_var_mem_ssbo | nir_var_mem_shared);
       NIR_PASS_V(nir, rewrite_bo_access, screen);
       NIR_PASS_V(nir, remove_bo_access, ret);
@@ -4469,8 +4879,9 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
       NIR_PASS_V(nir, match_tex_dests, ret);
 
    ret->nir = nir;
-   nir_foreach_shader_out_variable(var, nir)
-      var->data.explicit_xfb_buffer = 0;
+   if (!nir->info.internal)
+      nir_foreach_shader_out_variable(var, nir)
+         var->data.explicit_xfb_buffer = 0;
    if (so_info && so_info->num_outputs)
       update_so_info(ret, so_info, nir->info.outputs_written, have_psiz);
    else if (have_psiz) {
@@ -4561,6 +4972,10 @@ zink_shader_free(struct zink_screen *screen, struct zink_shader *shader)
 
          while (util_dynarray_contains(&shader->pipeline_libs, struct zink_gfx_lib_cache*)) {
             struct zink_gfx_lib_cache *libs = util_dynarray_pop(&shader->pipeline_libs, struct zink_gfx_lib_cache*);
+            //this condition is equivalent to verifying that, for each bit stages_present_i in stages_present,
+            //stages_present_i implies libs->stages_present_i
+            if ((stages_present & ~(libs->stages_present & stages_present)) != 0)
+               continue;
             if (!libs->removed) {
                libs->removed = true;
                simple_mtx_lock(&screen->pipeline_libs_lock[idx]);
@@ -4577,8 +4992,12 @@ zink_shader_free(struct zink_screen *screen, struct zink_shader *shader)
       /* only remove generated tcs during parent tes destruction */
       if (stage == MESA_SHADER_TESS_EVAL && shader->non_fs.generated_tcs)
          prog->shaders[MESA_SHADER_TESS_CTRL] = NULL;
-      if (stage != MESA_SHADER_FRAGMENT && shader->non_fs.generated_gs)
+      if (stage != MESA_SHADER_FRAGMENT &&
+          prog->shaders[MESA_SHADER_GEOMETRY] &&
+          prog->shaders[MESA_SHADER_GEOMETRY]->non_fs.parent ==
+          shader) {
          prog->shaders[MESA_SHADER_GEOMETRY] = NULL;
+      }
       zink_gfx_program_reference(screen, &prog, NULL);
    }
    if (shader->nir->info.stage == MESA_SHADER_TESS_EVAL &&
@@ -4587,11 +5006,15 @@ zink_shader_free(struct zink_screen *screen, struct zink_shader *shader)
       zink_shader_free(screen, shader->non_fs.generated_tcs);
       shader->non_fs.generated_tcs = NULL;
    }
-   if (shader->nir->info.stage != MESA_SHADER_FRAGMENT &&
-       shader->non_fs.generated_gs) {
-      /* automatically destroy generated gs shaders when owner is destroyed */
-      zink_shader_free(screen, shader->non_fs.generated_gs);
-      shader->non_fs.generated_gs = NULL;
+   for (unsigned int i = 0; i < ARRAY_SIZE(shader->non_fs.generated_gs); i++) {
+      for (int j = 0; j < ARRAY_SIZE(shader->non_fs.generated_gs[0]); j++) {
+         if (shader->nir->info.stage != MESA_SHADER_FRAGMENT &&
+             shader->non_fs.generated_gs[i][j]) {
+            /* automatically destroy generated gs shaders when owner is destroyed */
+            zink_shader_free(screen, shader->non_fs.generated_gs[i][j]);
+            shader->non_fs.generated_gs[i][j] = NULL;
+         }
+      }
    }
    _mesa_set_destroy(shader->programs, NULL);
    util_queue_fence_wait(&shader->precompile.fence);
