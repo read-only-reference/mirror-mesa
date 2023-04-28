@@ -313,16 +313,26 @@ isl_device_init(struct isl_device *dev,
       dev->ds.hiz_offset = 0;
    }
 
-   if (ISL_GFX_VER(dev) >= 7) {
-      /* From the IVB PRM, SURFACE_STATE::Height,
-       *
-       *    For typed buffer and structured buffer surfaces, the number
-       *    of entries in the buffer ranges from 1 to 2^27. For raw buffer
-       *    surfaces, the number of entries in the buffer is the number of bytes
-       *    which can range from 1 to 2^30.
-       *
-       * This limit is only concerned with raw buffers.
-       */
+   /* From the IVB PRM, SURFACE_STATE::Height,
+    *
+    *    For typed buffer and structured buffer surfaces, the number
+    *    of entries in the buffer ranges from 1 to 2^27. For raw buffer
+    *    surfaces, the number of entries in the buffer is the number of bytes
+    *    which can range from 1 to 2^30.
+    *
+    * From the SKL PRM, SURFACE_STATE::Width/Height/Depth for RAW buffers,
+    *
+    *    Width  : bits [6:0]
+    *    Height : bits [20:7]
+    *    Depth  : bits [31:21]
+    *
+    *    So we can address 4Gb
+    *
+    * This limit is only concerned with raw buffers.
+    */
+   if (ISL_GFX_VER(dev) >= 9) {
+      dev->max_buffer_size = 1ull << 32;
+   } else if (ISL_GFX_VER(dev) >= 7) {
       dev->max_buffer_size = 1ull << 30;
    } else {
       dev->max_buffer_size = 1ull << 27;
@@ -2122,8 +2132,8 @@ isl_surf_get_mcs_surf(const struct isl_device *dev,
    if (surf->msaa_layout != ISL_MSAA_LAYOUT_ARRAY)
       return false;
 
-   /* We are seeing failures with mcs on dg2, so disable it for now. */
-   if (intel_device_info_is_dg2(dev->info))
+   /* We are seeing failures with mcs on dg2/mtl, so disable it for now. */
+   if (ISL_GFX_VERX10(dev) == 125)
       return false;
 
    /* The following are true of all multisampled surfaces */

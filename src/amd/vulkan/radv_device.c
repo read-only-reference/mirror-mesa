@@ -43,15 +43,16 @@
 #include <sys/inotify.h>
 #endif
 
-#include "util/u_debug.h"
 #include "util/disk_cache.h"
+#include "util/u_debug.h"
 #include "radv_cs.h"
 #include "radv_debug.h"
 #include "radv_private.h"
 #include "radv_shader.h"
-#include "vk_util.h"
 #include "vk_common_entrypoints.h"
+#include "vk_pipeline_cache.h"
 #include "vk_semaphore.h"
+#include "vk_util.h"
 #ifdef _WIN32
 typedef void *drmDevicePtr;
 #include <io.h>
@@ -105,8 +106,7 @@ radv_get_int_debug_option(const char *name, int default_value)
 static bool
 radv_spm_trace_enabled()
 {
-   return radv_thread_trace_enabled() &&
-          debug_get_bool_option("RADV_THREAD_TRACE_CACHE_COUNTERS", false);
+   return radv_sqtt_enabled() && debug_get_bool_option("RADV_THREAD_TRACE_CACHE_COUNTERS", false);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -586,7 +586,7 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *ph
       add_entrypoints(&b, &rage2_device_entrypoints, RADV_APP_DISPATCH_TABLE);
    }
 
-   if (radv_thread_trace_enabled())
+   if (radv_sqtt_enabled())
       add_entrypoints(&b, &sqtt_device_entrypoints, RADV_RGP_DISPATCH_TABLE);
 
    if (radv_rra_trace_enabled() && radv_enable_rt(physical_device, false))
@@ -600,6 +600,32 @@ init_dispatch_tables(struct radv_device *device, struct radv_physical_device *ph
    add_entrypoints(&b, &radv_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
    add_entrypoints(&b, &wsi_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
    add_entrypoints(&b, &vk_common_device_entrypoints, RADV_DISPATCH_TABLE_COUNT);
+}
+
+static VkResult
+radv_check_status(struct vk_device *vk_device)
+{
+   struct radv_device *device = container_of(vk_device, struct radv_device, vk);
+   enum radv_reset_status status;
+   bool context_reset = false;
+
+   /* If an INNOCENT_CONTEXT_RESET is found in one of the contexts, we need to
+    * keep querying in case there's a guilty one, so we can correctly log if the
+    * hung happened in this app or not */
+   for (int i = 0; i < RADV_NUM_HW_CTX; i++) {
+      if (device->hw_ctx[i]) {
+         status = device->ws->ctx_query_reset_status(device->hw_ctx[i]);
+
+         if (status == RADV_GUILTY_CONTEXT_RESET)
+            return vk_device_set_lost(&device->vk, "GPU hung detected in this process");
+         else if (status == RADV_INNOCENT_CONTEXT_RESET)
+            context_reset = true;
+      }
+   }
+
+   if (context_reset)
+      return vk_device_set_lost(&device->vk, "GPU hung triggered by other process");
+   return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -750,6 +776,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    init_dispatch_tables(device, physical_device);
 
    device->vk.command_buffer_ops = &radv_cmd_buffer_ops;
+   device->vk.check_status = radv_check_status;
 
    device->instance = physical_device->instance;
    device->physical_device = physical_device;
@@ -905,7 +932,7 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
       radv_dump_enabled_options(device, stderr);
    }
 
-   if (radv_thread_trace_enabled()) {
+   if (radv_sqtt_enabled()) {
       if (device->physical_device->rad_info.gfx_level < GFX8 ||
           device->physical_device->rad_info.gfx_level > GFX11) {
          fprintf(stderr, "GPU hardware not supported: refer to "
@@ -914,14 +941,15 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
          abort();
       }
 
-      if (!radv_thread_trace_init(device)) {
+      if (!radv_sqtt_init(device)) {
          result = VK_ERROR_INITIALIZATION_FAILED;
          goto fail;
       }
 
-      fprintf(stderr, "radv: Thread trace support is enabled (initial buffer size: %u MiB, "
-                      "instruction timing: %s, cache counters: %s).\n",
-              device->thread_trace.buffer_size / (1024 * 1024),
+      fprintf(stderr,
+              "radv: Thread trace support is enabled (initial buffer size: %u MiB, "
+              "instruction timing: %s, cache counters: %s).\n",
+              device->sqtt.buffer_size / (1024 * 1024),
               radv_is_instruction_timing_enabled() ? "enabled" : "disabled",
               radv_spm_trace_enabled() ? "enabled" : "disabled");
 
@@ -1020,18 +1048,10 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    if (device->physical_device->rad_info.gfx_level >= GFX7)
       cik_create_gfx_config(device);
 
-   VkPipelineCacheCreateInfo ci;
-   ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-   ci.pNext = NULL;
-   ci.flags = 0;
-   ci.pInitialData = NULL;
-   ci.initialDataSize = 0;
-   VkPipelineCache pc;
-   result = radv_CreatePipelineCache(radv_device_to_handle(device), &ci, NULL, &pc);
-   if (result != VK_SUCCESS)
+   struct vk_pipeline_cache_create_info info = {0};
+   device->mem_cache = vk_pipeline_cache_create(&device->vk, &info, NULL);
+   if (!device->mem_cache)
       goto fail_meta;
-
-   device->mem_cache = radv_pipeline_cache_from_handle(pc);
 
    device->force_aniso = MIN2(16, radv_get_int_debug_option("RADV_TEX_ANISO", -1));
    if (device->force_aniso >= 0) {
@@ -1069,11 +1089,11 @@ radv_CreateDevice(VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCr
    return VK_SUCCESS;
 
 fail_cache:
-   radv_DestroyPipelineCache(radv_device_to_handle(device), pc, NULL);
+   vk_pipeline_cache_destroy(device->mem_cache, NULL);
 fail_meta:
    radv_device_finish_meta(device);
 fail:
-   radv_thread_trace_finish(device);
+   radv_sqtt_finish(device);
 
    radv_spm_finish(device);
 
@@ -1166,8 +1186,7 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    radv_device_finish_meta(device);
 
-   VkPipelineCache pc = radv_pipeline_cache_to_handle(device->mem_cache);
-   radv_DestroyPipelineCache(radv_device_to_handle(device), pc, NULL);
+   vk_pipeline_cache_destroy(device->mem_cache, NULL);
 
    radv_destroy_shader_upload_queue(device);
 
@@ -1176,7 +1195,7 @@ radv_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
 
    radv_destroy_shader_arenas(device);
 
-   radv_thread_trace_finish(device);
+   radv_sqtt_finish(device);
 
    radv_rra_trace_finish(_device, &device->rra_trace);
 

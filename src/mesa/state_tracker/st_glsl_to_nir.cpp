@@ -542,6 +542,14 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
             NIR_PASS(revectorize, nir, nir_lower_alu_to_scalar, filter_64_bit_instr, nullptr);
             NIR_PASS(revectorize, nir, nir_lower_phis_to_scalar, false);
          }
+         /* doubles lowering requires frexp to be lowered first if it will be,
+          * since the pass generates other 64-bit ops.  Most backends lower
+          * frexp, and using doubles is rare, and using frexp is even more rare
+          * (no instances in shader-db), so we're not too worried about
+          * accidentally lowering a 32-bit frexp here.
+          */
+         NIR_PASS(lowered_64bit_ops, nir, nir_lower_frexp);
+
          NIR_PASS(lowered_64bit_ops, nir, nir_lower_doubles,
                   st->ctx->SoftFP64, nir->options->lower_doubles_options);
       }
@@ -703,6 +711,8 @@ st_link_nir(struct gl_context *ctx,
    struct st_context *st = st_context(ctx);
    struct gl_linked_shader *linked_shader[MESA_SHADER_STAGES];
    unsigned num_shaders = 0;
+
+   MESA_TRACE_FUNC();
 
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       if (shader_program->_LinkedShaders[i])
@@ -1048,6 +1058,8 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
 {
    struct pipe_screen *screen = st->screen;
 
+   MESA_TRACE_FUNC();
+
    NIR_PASS_V(nir, nir_split_var_copies);
    NIR_PASS_V(nir, nir_lower_var_copies);
 
@@ -1068,8 +1080,11 @@ st_finalize_nir(struct st_context *st, struct gl_program *prog,
    /* Lower load_deref/store_deref of inputs and outputs.
     * This depends on st_nir_assign_varying_locations.
     */
-   if (nir->options->lower_io_variables)
+   if (nir->options->lower_io_variables) {
       nir_lower_io_passes(nir);
+      NIR_PASS_V(nir, nir_remove_dead_variables,
+                 nir_var_shader_in | nir_var_shader_out, NULL);
+   }
 
    /* Set num_uniforms in number of attribute slots (vec4s) */
    nir->num_uniforms = DIV_ROUND_UP(prog->Parameters->NumParameterValues, 4);

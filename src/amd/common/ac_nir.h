@@ -67,7 +67,14 @@ typedef struct nir_builder nir_builder;
 typedef void (*ac_nir_cull_accepted)(nir_builder *b, void *state);
 
 nir_ssa_def *
-ac_nir_load_arg(nir_builder *b, const struct ac_shader_args *ac_args, struct ac_arg arg);
+ac_nir_load_arg_at_offset(nir_builder *b, const struct ac_shader_args *ac_args,
+                          struct ac_arg arg, unsigned relative_index);
+
+static inline nir_ssa_def *
+ac_nir_load_arg(nir_builder *b, const struct ac_shader_args *ac_args, struct ac_arg arg)
+{
+   return ac_nir_load_arg_at_offset(b, ac_args, arg, 0);
+}
 
 nir_ssa_def *
 ac_nir_unpack_arg(nir_builder *b, const struct ac_shader_args *ac_args, struct ac_arg arg,
@@ -223,6 +230,7 @@ bool
 ac_nir_lower_global_access(nir_shader *shader);
 
 bool ac_nir_lower_resinfo(nir_shader *nir, enum amd_gfx_level gfx_level);
+bool ac_nir_lower_image_opcodes(nir_shader *nir);
 
 typedef struct ac_nir_gs_output_info {
    const uint8_t *streams;
@@ -289,12 +297,21 @@ typedef struct {
    enum radeon_family family;
    enum amd_gfx_level gfx_level;
 
+   bool use_aco;
    bool uses_discard;
    bool alpha_to_coverage_via_mrtz;
    bool dual_src_blend_swizzle;
    unsigned spi_shader_col_format;
    unsigned color_is_int8;
    unsigned color_is_int10;
+
+   bool bc_optimize_for_persp;
+   bool bc_optimize_for_linear;
+   bool force_persp_sample_interp;
+   bool force_linear_sample_interp;
+   bool force_persp_center_interp;
+   bool force_linear_center_interp;
+   unsigned samplemask_log_ps_iter;
 
    /* OpenGL only */
    bool clamp_color;
@@ -304,6 +321,7 @@ typedef struct {
 
    /* Vulkan only */
    unsigned enable_mrt_output_nan_fixup;
+   bool no_color_export;
 } ac_nir_lower_ps_options;
 
 void

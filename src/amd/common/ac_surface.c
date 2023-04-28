@@ -793,7 +793,7 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib, const struct ac_surf_config *
             if (ret == ADDR_OK) {
                /* If the DCC memory isn't properly
                 * aligned, the data are interleaved
-                * accross slices.
+                * across slices.
                 */
                if (AddrDccOut->dccRamSizeAligned)
                   dcc_level->dcc_slice_fast_clear_size = AddrDccOut->dccFastClearSize;
@@ -2514,6 +2514,10 @@ int ac_compute_surface(struct ac_addrlib *addrlib, const struct radeon_info *inf
    r = surf_config_sanity(config, surf->flags);
    if (r)
       return r;
+
+   /* Images are emulated on some CDNA chips. */
+   if (!info->has_image_opcodes)
+      mode = RADEON_SURF_MODE_LINEAR_ALIGNED;
 
    if (info->family_id >= FAMILY_AI)
       r = gfx9_compute_surface(addrlib, info, config, mode, surf);

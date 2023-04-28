@@ -850,13 +850,12 @@ smem_combine(opt_ctx& ctx, aco_ptr<Instruction>& instr)
 
       Temp base;
       uint32_t offset;
-      bool prevent_overflow = smem.operands[0].size() > 2 || smem.prevent_overflow;
       if (info.is_constant_or_literal(32) &&
           ((ctx.program->gfx_level == GFX6 && info.val <= 0x3FF) ||
            (ctx.program->gfx_level == GFX7 && info.val <= 0xFFFFFFFF) ||
            (ctx.program->gfx_level >= GFX8 && info.val <= 0xFFFFF))) {
          instr->operands[1] = Operand::c32(info.val);
-      } else if (parse_base_offset(ctx, instr.get(), 1, &base, &offset, prevent_overflow) &&
+      } else if (parse_base_offset(ctx, instr.get(), 1, &base, &offset, true) &&
                  base.regClass() == s1 && offset <= 0xFFFFF && ctx.program->gfx_level >= GFX9 &&
                  offset % 4u == 0) {
          bool soe = smem.operands.size() >= (!smem.definitions.empty() ? 3 : 4);
@@ -1135,7 +1134,7 @@ apply_extract(opt_ctx& ctx, aco_ptr<Instruction>& instr, unsigned idx, ssa_info&
               sel.offset() == 0 &&
               ((sel.size() == 2 && instr->operands[0].constantValue() >= 16u) ||
                (sel.size() == 1 && instr->operands[0].constantValue() >= 24u))) {
-      /* The undesireable upper bits are already shifted out. */
+      /* The undesirable upper bits are already shifted out. */
       return;
    } else if (instr->opcode == aco_opcode::v_mul_u32_u24 && ctx.program->gfx_level >= GFX10 &&
               !instr->usesModifiers() && sel.size() == 2 && !sel.sign_extend() &&
@@ -2354,7 +2353,7 @@ bool
 optimize_cmp_subgroup_invocation(opt_ctx& ctx, aco_ptr<Instruction>& instr)
 {
    /* This optimization only applies to VOPC with 2 operands. */
-   if (instr->operands.size() == 2)
+   if (instr->operands.size() != 2)
       return false;
 
    /* Find the constant operand or return early if there isn't one. */
@@ -2420,7 +2419,7 @@ optimize_cmp_subgroup_invocation(opt_ctx& ctx, aco_ptr<Instruction>& instr)
 
    cpy->definitions[0] = instr->definitions[0];
    ctx.info[instr->definitions[0].tempId()].label = 0;
-   decrease_uses(ctx, ctx.instructions[mbcnt_op_idx].get());
+   decrease_uses(ctx, ctx.info[mbcnt_op.tempId()].instr);
    instr.reset(cpy);
 
    return true;
@@ -3567,7 +3566,7 @@ apply_ds_extract(opt_ctx& ctx, aco_ptr<Instruction>& extract)
    unsigned sign_ext = extract->operands[3].constantValue();
    unsigned dst_bitsize = extract->definitions[0].bytes() * 8u;
 
-   /* TODO: These are doable, but probably don't occour too often. */
+   /* TODO: These are doable, but probably don't occur too often. */
    if (extract_idx || sign_ext || dst_bitsize != 32)
       return false;
 

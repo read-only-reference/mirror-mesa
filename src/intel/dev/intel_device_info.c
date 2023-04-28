@@ -1361,6 +1361,9 @@ intel_get_device_info_from_pci_id(int pci_id,
    if (intel_needs_workaround(devinfo, 22012575642))
       devinfo->urb.max_entries[MESA_SHADER_GEOMETRY] = 1536;
 
+   /* This is a placeholder until a proper value is set. */
+   devinfo->kmd_type = INTEL_KMD_TYPE_I915;
+
    return true;
 }
 
@@ -1650,6 +1653,17 @@ intel_device_info_wa_stepping(struct intel_device_info *devinfo)
       if (devinfo->revision < 4)
          return INTEL_STEPPING_A0;
       return INTEL_STEPPING_B0;
+   } else if (devinfo->platform == INTEL_PLATFORM_TGL) {
+      switch (devinfo->revision) {
+      case 0:
+         return INTEL_STEPPING_A0;
+      case 1:
+         return INTEL_STEPPING_B0;
+      case 3:
+         return INTEL_STEPPING_C0;
+      default:
+         return INTEL_STEPPING_RELEASE;
+      }
    }
 
    /* all other platforms support only released steppings */

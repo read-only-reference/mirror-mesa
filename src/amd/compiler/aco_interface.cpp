@@ -121,13 +121,12 @@ aco_postprocess_shader(const struct aco_compiler_options* options,
 
    aco::live live_vars;
    if (!info->is_trap_handler_shader) {
-      /* Phi lowering */
-      aco::lower_phis(program.get());
       aco::dominator_tree(program.get());
+      aco::lower_phis(program.get());
       validate(program.get());
 
       /* Optimization */
-      if (!options->key.optimisations_disabled) {
+      if (!options->optimisations_disabled) {
          if (!(aco::debug_flags & aco::DEBUG_NO_VN))
             aco::value_numbering(program.get());
          if (!(aco::debug_flags & aco::DEBUG_NO_OPT))
@@ -166,7 +165,7 @@ aco_postprocess_shader(const struct aco_compiler_options* options,
       aco_print_program(program.get(), stderr, live_vars, aco::print_live_vars | aco::print_kill);
 
    if (!info->is_trap_handler_shader) {
-      if (!options->key.optimisations_disabled && !(aco::debug_flags & aco::DEBUG_NO_SCHED))
+      if (!options->optimisations_disabled && !(aco::debug_flags & aco::DEBUG_NO_SCHED))
          aco::schedule_program(program.get(), live_vars);
       validate(program.get());
 
@@ -183,7 +182,7 @@ aco_postprocess_shader(const struct aco_compiler_options* options,
       validate(program.get());
 
       /* Optimization */
-      if (!options->key.optimisations_disabled && !(aco::debug_flags & aco::DEBUG_NO_OPT)) {
+      if (!options->optimisations_disabled && !(aco::debug_flags & aco::DEBUG_NO_OPT)) {
          aco::optimize_postRA(program.get());
          validate(program.get());
       }
@@ -237,7 +236,8 @@ aco_compile_shader(const struct aco_compiler_options* options,
 
    /* assembly */
    std::vector<uint32_t> code;
-   unsigned exec_size = aco::emit_program(program.get(), code);
+   std::vector<struct aco_symbol> symbols;
+   unsigned exec_size = aco::emit_program(program.get(), code, &symbols);
 
    if (program->collect_statistics)
       aco::collect_postasm_stats(program.get(), code);
@@ -253,7 +253,8 @@ aco_compile_shader(const struct aco_compiler_options* options,
       stats_size = aco_num_statistics * sizeof(uint32_t);
 
    (*build_binary)(binary, &config, llvm_ir.c_str(), llvm_ir.size(), disasm.c_str(), disasm.size(),
-                   program->statistics, stats_size, exec_size, code.data(), code.size());
+                   program->statistics, stats_size, exec_size, code.data(), code.size(),
+                   symbols.data(), symbols.size());
 }
 
 void
@@ -283,7 +284,7 @@ aco_compile_rt_prolog(const struct aco_compiler_options* options,
    /* assembly */
    std::vector<uint32_t> code;
    code.reserve(align(program->blocks[0].instructions.size() * 2, 16));
-   unsigned exec_size = aco::emit_program(program.get(), code);
+   unsigned exec_size = aco::emit_program(program.get(), code, NULL);
 
    bool get_disasm = options->dump_shader || options->record_ir;
 
@@ -292,7 +293,7 @@ aco_compile_rt_prolog(const struct aco_compiler_options* options,
       disasm = get_disasm_string(program.get(), code, exec_size);
 
    (*build_prolog)(binary, &config, NULL, 0, disasm.c_str(), disasm.size(), program->statistics, 0,
-                   exec_size, code.data(), code.size());
+                   exec_size, code.data(), code.size(), NULL, 0);
 }
 
 void
@@ -320,7 +321,7 @@ aco_compile_vs_prolog(const struct aco_compiler_options* options,
    /* assembly */
    std::vector<uint32_t> code;
    code.reserve(align(program->blocks[0].instructions.size() * 2, 16));
-   unsigned exec_size = aco::emit_program(program.get(), code);
+   unsigned exec_size = aco::emit_program(program.get(), code, NULL);
 
    bool get_disasm = options->dump_shader || options->record_ir;
 
@@ -362,7 +363,7 @@ aco_compile_ps_epilog(const struct aco_compiler_options* options,
 
    /* assembly */
    std::vector<uint32_t> code;
-   unsigned exec_size = aco::emit_program(program.get(), code);
+   unsigned exec_size = aco::emit_program(program.get(), code, NULL);
 
    bool get_disasm = options->dump_shader || options->record_ir;
 

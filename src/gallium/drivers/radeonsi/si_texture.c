@@ -549,7 +549,7 @@ static void si_set_tex_bo_metadata(struct si_screen *sscreen, struct si_texture 
 
    sscreen->make_texture_descriptor(sscreen, tex, true, res->target, res->format, swizzle, 0,
                                     res->last_level, 0, is_array ? res->array_size - 1 : 0,
-                                    res->width0, res->height0, res->depth0, desc, NULL);
+                                    res->width0, res->height0, res->depth0, true, desc, NULL);
    si_set_mutable_tex_desc_fields(sscreen, tex, &tex->surface.u.legacy.level[0], 0, 0,
                                   tex->surface.blk_w, false, 0, desc);
 
@@ -1255,7 +1255,7 @@ si_texture_create_with_modifier(struct pipe_screen *screen,
    if (templ->nr_samples >= 2) {
       /* This is hackish (overwriting the const pipe_resource template),
        * but should be harmless and gallium frontends can also see
-       * the overriden number of samples in the created pipe_resource.
+       * the overridden number of samples in the created pipe_resource.
        */
       if (is_zs && sscreen->eqaa_force_z_samples) {
          ((struct pipe_resource *)templ)->nr_samples =
@@ -2358,7 +2358,7 @@ static int si_get_sparse_texture_virtual_page_size(struct pipe_screen *screen,
    if (multi_sample && sscreen->info.gfx_level != GFX9)
       return 0;
 
-   /* Unsupport formats. */
+   /* Unsupported formats. */
    /* TODO: support these formats. */
    if (util_format_is_depth_or_stencil(format) ||
        util_format_get_num_planes(format) > 1 ||

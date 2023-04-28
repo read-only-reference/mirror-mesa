@@ -25,18 +25,20 @@
 #ifndef ACO_IR_H
 #define ACO_IR_H
 
-#include "aco_interface.h"
 #include "aco_opcodes.h"
 #include "aco_shader_info.h"
 #include "aco_util.h"
 
-#include "nir.h"
+#include "util/compiler.h"
 
 #include "ac_binary.h"
+#include "amd_family.h"
 #include <algorithm>
 #include <bitset>
 #include <memory>
 #include <vector>
+
+typedef struct nir_shader nir_shader;
 
 namespace aco {
 
@@ -1382,8 +1384,7 @@ struct SMEM_instruction : public Instruction {
    bool dlc : 1; /* NAVI: device level coherent */
    bool nv : 1;  /* VEGA only: Non-volatile */
    bool disable_wqm : 1;
-   bool prevent_overflow : 1; /* avoid overflow when combining additions */
-   uint8_t padding : 3;
+   uint8_t padding : 4;
 };
 static_assert(sizeof(SMEM_instruction) == sizeof(Instruction) + 4, "Unexpected padding");
 
@@ -1664,7 +1665,11 @@ struct Pseudo_branch_instruction : public Instruction {
     * A value of 0 means the target has not been initialized (BB0 cannot be a branch target).
     */
    uint32_t target[2];
-   nir_selection_control selection_control;
+
+   /* Indicates that selection control prefers to remove this instruction if possible.
+    * This is set when the branch is divergent and always taken, or flattened.
+    */
+   bool selection_control_remove;
 };
 static_assert(sizeof(Pseudo_branch_instruction) == sizeof(Instruction) + 12, "Unexpected padding");
 
@@ -2031,11 +2036,11 @@ static constexpr Stage vertex_geometry_gs(HWStage::GS, SWStage::VS_GS);
 static constexpr Stage vertex_tess_control_hs(HWStage::HS, SWStage::VS_TCS);
 static constexpr Stage tess_eval_geometry_gs(HWStage::GS, SWStage::TES_GS);
 /* pre-GFX9 */
-static constexpr Stage vertex_ls(HWStage::LS, SWStage::VS); /* vertex before tesselation control */
+static constexpr Stage vertex_ls(HWStage::LS, SWStage::VS); /* vertex before tessellation control */
 static constexpr Stage vertex_es(HWStage::ES, SWStage::VS); /* vertex before geometry */
 static constexpr Stage tess_control_hs(HWStage::HS, SWStage::TCS);
 static constexpr Stage tess_eval_es(HWStage::ES,
-                                    SWStage::TES); /* tesselation evaluation before geometry */
+                                    SWStage::TES); /* tessellation evaluation before geometry */
 static constexpr Stage geometry_gs(HWStage::GS, SWStage::GS);
 /* Raytracing */
 static constexpr Stage raytracing_cs(HWStage::CS, SWStage::RT);
@@ -2221,7 +2226,8 @@ void insert_wait_states(Program* program);
 bool dealloc_vgprs(Program* program);
 void insert_NOPs(Program* program);
 void form_hard_clauses(Program* program);
-unsigned emit_program(Program* program, std::vector<uint32_t>& code);
+unsigned emit_program(Program* program, std::vector<uint32_t>& code,
+                      std::vector<struct aco_symbol> *symbols);
 /**
  * Returns true if print_asm can disassemble the given program for the current build/runtime
  * configuration

@@ -38,8 +38,6 @@
 
 struct intel_sample_positions;
 
-typedef struct VkRenderingSelfDependencyInfoMESA VkRenderingSelfDependencyInfoMESA;
-
 extern const uint32_t genX(vk_to_intel_cullmode)[];
 
 extern const uint32_t genX(vk_to_intel_front_face)[];
@@ -59,6 +57,17 @@ void genX(init_physical_device_state)(struct anv_physical_device *device);
 VkResult genX(init_device_state)(struct anv_device *device);
 
 void genX(init_cps_device_state)(struct anv_device *device);
+
+void
+genX(set_fast_clear_state)(struct anv_cmd_buffer *cmd_buffer,
+                           const struct anv_image *image,
+                           const enum isl_format format,
+                           union isl_color_value clear_color);
+
+void
+genX(load_image_clear_color)(struct anv_cmd_buffer *cmd_buffer,
+                             struct anv_state surface_state,
+                             const struct anv_image *image);
 
 void genX(cmd_buffer_emit_state_base_address)(struct anv_cmd_buffer *cmd_buffer);
 

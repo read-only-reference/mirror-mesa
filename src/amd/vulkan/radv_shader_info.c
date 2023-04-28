@@ -721,6 +721,12 @@ gather_shader_info_task(const nir_shader *nir, struct radv_shader_info *info)
 
    /* Needed for storing draw ready only on the 1st thread. */
    info->cs.uses_local_invocation_idx = true;
+
+   /* Task->Mesh dispatch is linear when Y = Z = 1.
+    * GFX11 CP can optimize this case with a field in its draw packets.
+    */
+   info->cs.linear_taskmesh_dispatch = nir->info.mesh.ts_mesh_dispatch_dimensions[1] == 1 &&
+                                       nir->info.mesh.ts_mesh_dispatch_dimensions[2] == 1;
 }
 
 static uint32_t
@@ -1096,7 +1102,9 @@ radv_get_legacy_gs_info(const struct radv_device *device, struct radv_pipeline_s
    const uint32_t gs_prims_per_subgroup = gs_prims;
    const uint32_t gs_inst_prims_in_subgroup = gs_prims * gs_num_invocations;
    const uint32_t max_prims_per_subgroup = gs_inst_prims_in_subgroup * gs_info->gs.vertices_out;
-   out->lds_size = align(esgs_lds_size, 128) / 128;
+   const uint32_t lds_granularity = device->physical_device->rad_info.lds_encode_granularity;
+   const uint32_t total_lds_bytes = align(esgs_lds_size * 4, lds_granularity);
+   out->lds_size = total_lds_bytes / lds_granularity;
    out->vgt_gs_onchip_cntl = S_028A44_ES_VERTS_PER_SUBGRP(es_verts_per_subgroup) |
                              S_028A44_GS_PRIMS_PER_SUBGRP(gs_prims_per_subgroup) |
                              S_028A44_GS_INST_PRIMS_IN_SUBGRP(gs_inst_prims_in_subgroup);

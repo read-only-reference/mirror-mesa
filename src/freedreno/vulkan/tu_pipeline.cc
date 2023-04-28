@@ -2869,12 +2869,14 @@ tu_shaders_serialize(struct vk_pipeline_cache_object *object,
                      struct blob *blob);
 
 static struct vk_pipeline_cache_object *
-tu_shaders_deserialize(struct vk_device *device,
-                       const void *key_data, size_t key_size,
+tu_shaders_deserialize(struct vk_pipeline_cache *cache,
+                       const void *key_data,
+                       size_t key_size,
                        struct blob_reader *blob);
 
 static void
-tu_shaders_destroy(struct vk_pipeline_cache_object *object)
+tu_shaders_destroy(struct vk_device *device,
+                   struct vk_pipeline_cache_object *object)
 {
    struct tu_compiled_shaders *shaders =
       container_of(object, struct tu_compiled_shaders, base);
@@ -2886,7 +2888,7 @@ tu_shaders_destroy(struct vk_pipeline_cache_object *object)
       ralloc_free(shaders->safe_const_variants[i]);
 
    vk_pipeline_cache_object_finish(&shaders->base);
-   vk_free(&object->device->alloc, shaders);
+   vk_free(&device->alloc, shaders);
 }
 
 const struct vk_pipeline_cache_object_ops tu_shaders_ops = {
@@ -2943,11 +2945,13 @@ tu_shaders_serialize(struct vk_pipeline_cache_object *object,
 }
 
 static struct vk_pipeline_cache_object *
-tu_shaders_deserialize(struct vk_device *_device,
-                       const void *key_data, size_t key_size,
+tu_shaders_deserialize(struct vk_pipeline_cache *cache,
+                       const void *key_data,
+                       size_t key_size,
                        struct blob_reader *blob)
 {
-   struct tu_device *dev = container_of(_device, struct tu_device, vk);
+   struct tu_device *dev =
+      container_of(cache->base.device, struct tu_device, vk);
    struct tu_compiled_shaders *shaders =
       tu_shaders_init(dev, key_data, key_size);
 
@@ -2998,12 +3002,14 @@ tu_nir_shaders_serialize(struct vk_pipeline_cache_object *object,
                          struct blob *blob);
 
 static struct vk_pipeline_cache_object *
-tu_nir_shaders_deserialize(struct vk_device *device,
-                           const void *key_data, size_t key_size,
+tu_nir_shaders_deserialize(struct vk_pipeline_cache *cache,
+                           const void *key_data,
+                           size_t key_size,
                            struct blob_reader *blob);
 
 static void
-tu_nir_shaders_destroy(struct vk_pipeline_cache_object *object)
+tu_nir_shaders_destroy(struct vk_device *device,
+                       struct vk_pipeline_cache_object *object)
 {
    struct tu_nir_shaders *shaders =
       container_of(object, struct tu_nir_shaders, base);
@@ -3012,7 +3018,7 @@ tu_nir_shaders_destroy(struct vk_pipeline_cache_object *object)
       ralloc_free(shaders->nir[i]);
 
    vk_pipeline_cache_object_finish(&shaders->base);
-   vk_free(&object->device->alloc, shaders);
+   vk_free(&device->alloc, shaders);
 }
 
 const struct vk_pipeline_cache_object_ops tu_nir_shaders_ops = {
@@ -3059,11 +3065,13 @@ tu_nir_shaders_serialize(struct vk_pipeline_cache_object *object,
 }
 
 static struct vk_pipeline_cache_object *
-tu_nir_shaders_deserialize(struct vk_device *_device,
-                       const void *key_data, size_t key_size,
-                       struct blob_reader *blob)
+tu_nir_shaders_deserialize(struct vk_pipeline_cache *cache,
+                           const void *key_data,
+                           size_t key_size,
+                           struct blob_reader *blob)
 {
-   struct tu_device *dev = container_of(_device, struct tu_device, vk);
+   struct tu_device *dev =
+      container_of(cache->base.device, struct tu_device, vk);
    struct tu_nir_shaders *shaders =
       tu_nir_shaders_init(dev, key_data, key_size);
 
@@ -3540,7 +3548,8 @@ done:;
        * when compiling all stages, but make sure we don't leak.
        */
       if (nir_shaders)
-         vk_pipeline_cache_object_unref(&nir_shaders->base);
+         vk_pipeline_cache_object_unref(&builder->device->vk,
+                                        &nir_shaders->base);
    } else {
       pipeline->compiled_shaders = compiled_shaders;
       pipeline->nir_shaders = nir_shaders;
@@ -3579,10 +3588,12 @@ fail:
    }
 
    if (compiled_shaders)
-      vk_pipeline_cache_object_unref(&compiled_shaders->base);
+      vk_pipeline_cache_object_unref(&builder->device->vk,
+                                     &compiled_shaders->base);
 
    if (nir_shaders)
-      vk_pipeline_cache_object_unref(&nir_shaders->base);
+      vk_pipeline_cache_object_unref(&builder->device->vk,
+                                     &nir_shaders->base);
 
    return result;
 }
@@ -4738,10 +4749,11 @@ tu_pipeline_finish(struct tu_pipeline *pipeline,
       tu_bo_finish(dev, pipeline->pvtmem_bo);
 
    if (pipeline->compiled_shaders)
-      vk_pipeline_cache_object_unref(&pipeline->compiled_shaders->base);
+      vk_pipeline_cache_object_unref(&dev->vk,
+                                     &pipeline->compiled_shaders->base);
 
    if (pipeline->nir_shaders)
-      vk_pipeline_cache_object_unref(&pipeline->nir_shaders->base);
+      vk_pipeline_cache_object_unref(&dev->vk, &pipeline->nir_shaders->base);
 
    for (unsigned i = 0; i < pipeline->num_sets; i++) {
       if (pipeline->layouts[i])
@@ -4893,7 +4905,8 @@ static void
 tu_pipeline_builder_finish(struct tu_pipeline_builder *builder)
 {
    if (builder->compiled_shaders)
-      vk_pipeline_cache_object_unref(&builder->compiled_shaders->base);
+      vk_pipeline_cache_object_unref(&builder->device->vk,
+                                     &builder->compiled_shaders->base);
    ralloc_free(builder->mem_ctx);
 }
 
@@ -4964,6 +4977,8 @@ tu_pipeline_builder_init_graphics(
       builder->create_info->pRasterizationState->rasterizerDiscardEnable &&
       !rasterizer_discard_dynamic;
 
+   VkPipelineCreateFlags rendering_flags = builder->create_info->flags;
+
    if (builder->state &
        (VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT |
         VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT |
@@ -5014,16 +5029,7 @@ tu_pipeline_builder_init_graphics(
          builder->subpass_feedback_loop_ds = false;
          builder->subpass_feedback_loop_color = false;
 
-         const VkRenderingSelfDependencyInfoMESA *self_dependency =
-            vk_find_struct_const(rendering_info->pNext, RENDERING_SELF_DEPENDENCY_INFO_MESA);
-
-         if (self_dependency) {
-            builder->subpass_feedback_loop_ds =
-               self_dependency->depthSelfDependency ||
-               self_dependency->stencilSelfDependency;
-            builder->subpass_feedback_loop_color =
-               self_dependency->colorSelfDependencies;
-         }
+         rendering_flags = vk_get_pipeline_rendering_flags(builder->create_info);
 
          if (!builder->rasterizer_discard) {
             builder->depth_attachment_format =
@@ -5077,12 +5083,12 @@ tu_pipeline_builder_init_graphics(
       }
    }
 
-   if (builder->create_info->flags & VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT) {
+   if (rendering_flags & VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT) {
       builder->subpass_feedback_loop_color = true;
       builder->feedback_loop_may_involve_textures = true;
    }
 
-   if (builder->create_info->flags & VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT) {
+   if (rendering_flags & VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT) {
       builder->subpass_feedback_loop_ds = true;
       builder->feedback_loop_may_involve_textures = true;
    }
@@ -5312,7 +5318,7 @@ tu_compute_pipeline_create(VkDevice device,
 
    pipeline->program.cs_instrlen = v->instrlen;
 
-   vk_pipeline_cache_object_unref(&compiled->base);
+   vk_pipeline_cache_object_unref(&dev->vk, &compiled->base);
    ralloc_free(pipeline_mem_ctx);
 
    *pPipeline = tu_pipeline_to_handle(pipeline);
@@ -5321,7 +5327,7 @@ tu_compute_pipeline_create(VkDevice device,
 
 fail:
    if (compiled)
-      vk_pipeline_cache_object_unref(&compiled->base);
+      vk_pipeline_cache_object_unref(&dev->vk, &compiled->base);
 
    ralloc_free(pipeline_mem_ctx);
 

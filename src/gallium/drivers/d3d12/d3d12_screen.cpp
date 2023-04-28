@@ -213,7 +213,7 @@ d3d12_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
 
    case PIPE_CAP_TEXTURE_TRANSFER_MODES:
-      return 0; /* unsure */
+      return PIPE_TEXTURE_TRANSFER_BLIT;
 
    case PIPE_CAP_ENDIANNESS:
       return PIPE_ENDIAN_NATIVE; /* unsure */
@@ -473,7 +473,6 @@ d3d12_get_shader_param(struct pipe_screen *pscreen,
       return PIPE_MAX_SAMPLERS;
 
    case PIPE_SHADER_CAP_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
       return 0; /* not implemented */
 
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
@@ -496,7 +495,6 @@ d3d12_get_shader_param(struct pipe_screen *pscreen,
           screen->opts.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3) ?
          PIPE_MAX_SHADER_IMAGES : D3D12_PS_CS_UAV_REGISTER_COUNT;
 
-   case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
    case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
    case PIPE_SHADER_CAP_CONT_SUPPORTED:
@@ -1476,6 +1474,8 @@ d3d12_init_screen(struct d3d12_screen *screen, IUnknown *adapter)
       debug_printf("D3D12: failed to get device options\n");
       return false;
    }
+   screen->dev->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS14, &screen->opts14, sizeof(screen->opts14));
+   screen->dev->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS19, &screen->opts19, sizeof(screen->opts19));
 
    screen->architecture.NodeIndex = 0;
    if (FAILED(screen->dev->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE,

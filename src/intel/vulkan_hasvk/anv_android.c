@@ -34,6 +34,7 @@
 #include <sync/sync.h>
 
 #include "anv_private.h"
+#include "vk_android.h"
 #include "vk_common_entrypoints.h"
 #include "vk_util.h"
 
@@ -163,12 +164,6 @@ anv_ahb_format_for_vk_format(VkFormat vk_format)
    }
 }
 
-static VkFormatFeatureFlags
-features2_to_features(VkFormatFeatureFlags2 features2)
-{
-   return features2 & VK_ALL_FORMAT_FEATURE_FLAG_BITS;
-}
-
 static VkResult
 get_ahw_buffer_format_properties2(
    VkDevice device_h,
@@ -270,7 +265,7 @@ anv_GetAndroidHardwareBufferPropertiesANDROID(
       format_prop->format                 = format_prop2.format;
       format_prop->externalFormat         = format_prop2.externalFormat;
       format_prop->formatFeatures         =
-         features2_to_features(format_prop2.formatFeatures);
+         vk_format_features2_to_features(format_prop2.formatFeatures);
       format_prop->samplerYcbcrConversionComponents =
          format_prop2.samplerYcbcrConversionComponents;
       format_prop->suggestedYcbcrModel    = format_prop2.suggestedYcbcrModel;

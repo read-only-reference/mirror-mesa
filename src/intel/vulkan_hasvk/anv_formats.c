@@ -843,7 +843,7 @@ get_buffer_format_features2(const struct intel_device_info *devinfo,
    if (isl_format_supports_vertex_fetch(devinfo, isl_format))
       flags |= VK_FORMAT_FEATURE_2_VERTEX_BUFFER_BIT;
 
-   if (isl_is_storage_image_format(isl_format))
+   if (isl_is_storage_image_format(devinfo, isl_format))
       flags |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
 
    if (isl_format == ISL_FORMAT_R32_SINT || isl_format == ISL_FORMAT_R32_UINT)
@@ -855,12 +855,6 @@ get_buffer_format_features2(const struct intel_device_info *devinfo,
       flags |= VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
 
    return flags;
-}
-
-static VkFormatFeatureFlags
-features2_to_features(VkFormatFeatureFlags2 features2)
-{
-   return features2 & VK_ALL_FORMAT_FEATURE_FLAG_BITS;
 }
 
 static void
@@ -880,7 +874,7 @@ get_drm_format_modifier_properties_list(const struct anv_physical_device *physic
          anv_get_image_format_features2(devinfo, vk_format, anv_format,
                                         VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
                                         isl_mod_info);
-      VkFormatFeatureFlags features = features2_to_features(features2);
+      VkFormatFeatureFlags features = vk_format_features2_to_features(features2);
       if (!features)
          continue;
 
@@ -951,9 +945,9 @@ void anv_GetPhysicalDeviceFormatProperties2(
    buffer2 = get_buffer_format_features2(devinfo, vk_format, anv_format);
 
    pFormatProperties->formatProperties = (VkFormatProperties) {
-      .linearTilingFeatures = features2_to_features(linear2),
-      .optimalTilingFeatures = features2_to_features(optimal2),
-      .bufferFeatures = features2_to_features(buffer2),
+      .linearTilingFeatures = vk_format_features2_to_features(linear2),
+      .optimalTilingFeatures = vk_format_features2_to_features(optimal2),
+      .bufferFeatures = vk_format_features2_to_features(buffer2),
    };
 
    vk_foreach_struct(ext, pFormatProperties->pNext) {

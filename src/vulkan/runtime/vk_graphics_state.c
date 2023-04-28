@@ -660,8 +660,13 @@ vk_multisample_state_init(struct vk_multisample_state *ms,
                           const BITSET_WORD *dynamic,
                           const VkPipelineMultisampleStateCreateInfo *ms_info)
 {
-   assert(ms_info->rasterizationSamples <= MESA_VK_MAX_SAMPLES);
-   ms->rasterization_samples = ms_info->rasterizationSamples;
+   if (IS_DYNAMIC(MS_RASTERIZATION_SAMPLES)) {
+      ms->rasterization_samples = 0;
+   } else {
+      assert(ms_info->rasterizationSamples <= MESA_VK_MAX_SAMPLES);
+      ms->rasterization_samples = ms_info->rasterizationSamples;
+   }
+
    ms->sample_shading_enable = ms_info->sampleShadingEnable;
    ms->min_sample_shading = ms_info->minSampleShading;
 
@@ -976,17 +981,34 @@ vk_render_pass_state_init(struct vk_render_pass_state *rp,
                           const struct vk_subpass_info *sp_info,
                           VkGraphicsPipelineLibraryFlagsEXT lib)
 {
+   VkPipelineCreateFlags valid_pipeline_flags = 0;
+   if (lib & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
+      valid_pipeline_flags |=
+         VK_PIPELINE_CREATE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR |
+         VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT;
+   }
+   if (lib & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT) {
+      valid_pipeline_flags |=
+         VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT |
+         VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+   }
+   const VkPipelineCreateFlags pipeline_flags =
+      vk_get_pipeline_rendering_flags(info) & valid_pipeline_flags;
+
    /* If we already have render pass state and it has attachment info, then
-    * it's complete and we don't need a new one.
+    * it's complete and we don't need a new one.  The one caveat here is that
+    * we may need to add in some rendering flags.
     */
    if (old_rp != NULL && vk_render_pass_state_is_complete(old_rp)) {
       *rp = *old_rp;
+      rp->pipeline_flags |= pipeline_flags;
       return;
    }
 
    *rp = (struct vk_render_pass_state) {
       .render_pass = info->renderPass,
       .subpass = info->subpass,
+      .pipeline_flags = pipeline_flags,
       .depth_attachment_format = VK_FORMAT_UNDEFINED,
       .stencil_attachment_format = VK_FORMAT_UNDEFINED,
    };
@@ -1042,16 +1064,6 @@ vk_render_pass_state_init(struct vk_render_pass_state *rp,
    rp->stencil_attachment_format = r_info->stencilAttachmentFormat;
    if (r_info->stencilAttachmentFormat != VK_FORMAT_UNDEFINED)
       rp->attachment_aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
-
-   const VkRenderingSelfDependencyInfoMESA *rsd_info =
-      vk_find_struct_const(r_info->pNext, RENDERING_SELF_DEPENDENCY_INFO_MESA);
-   if (rsd_info != NULL) {
-      STATIC_ASSERT(sizeof(rp->color_self_dependencies) * 8 >=
-                    MESA_VK_MAX_COLOR_ATTACHMENTS);
-      rp->color_self_dependencies = rsd_info->colorSelfDependencies;
-      rp->depth_self_dependency = rsd_info->depthSelfDependency;
-      rp->stencil_self_dependency = rsd_info->stencilSelfDependency;
-   }
 
    const VkAttachmentSampleCountInfoAMD *asc_info =
       vk_get_pipeline_sample_count_info_amd(info);
@@ -1151,13 +1163,6 @@ vk_graphics_pipeline_state_fill(const struct vk_device *device,
    BITSET_DECLARE(dynamic, MESA_VK_DYNAMIC_GRAPHICS_STATE_ENUM_MAX);
    vk_get_dynamic_graphics_states(dynamic, info->pDynamicState);
 
-   for (uint32_t i = 0; i < info->stageCount; i++)
-      state->shader_stages |= info->pStages[i].stage;
-
-   /* In case we return early */
-   if (alloc_ptr_out != NULL)
-      *alloc_ptr_out = NULL;
-
    /*
     * First, figure out which library-level shader/state groups we need
     */
@@ -1167,6 +1172,49 @@ vk_graphics_pipeline_state_fill(const struct vk_device *device,
       vk_find_struct_const(info->pNext, GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT);
    const VkPipelineLibraryCreateInfoKHR *lib_info =
       vk_find_struct_const(info->pNext, PIPELINE_LIBRARY_CREATE_INFO_KHR);
+
+   VkShaderStageFlagBits allowed_stages;
+   if (!(info->flags & VK_PIPELINE_CREATE_LIBRARY_BIT_KHR)) {
+      allowed_stages = VK_SHADER_STAGE_ALL_GRAPHICS |
+                       VK_SHADER_STAGE_TASK_BIT_EXT |
+                       VK_SHADER_STAGE_MESH_BIT_EXT;
+   } else if (gpl_info) {
+      allowed_stages = 0;
+
+      /* If we're creating a pipeline library without pre-rasterization,
+       * discard all the associated stages.
+       */
+      if (gpl_info->flags &
+          VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT) {
+         allowed_stages |= (VK_SHADER_STAGE_VERTEX_BIT |
+                            VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT |
+                            VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT |
+                            VK_SHADER_STAGE_GEOMETRY_BIT |
+                            VK_SHADER_STAGE_TASK_BIT_EXT |
+                            VK_SHADER_STAGE_MESH_BIT_EXT);
+      }
+
+      /* If we're creating a pipeline library without fragment shader,
+       * discard that stage.
+       */
+      if (gpl_info->flags &
+           VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT)
+         allowed_stages |= VK_SHADER_STAGE_FRAGMENT_BIT;
+   } else {
+      /* VkGraphicsPipelineLibraryCreateInfoEXT was omitted, flags should
+       * be assumed to be empty and therefore no shader stage should be
+       * considered.
+       */
+      allowed_stages = 0;
+   }
+
+   for (uint32_t i = 0; i < info->stageCount; i++) {
+      state->shader_stages |= info->pStages[i].stage & allowed_stages;
+   }
+
+   /* In case we return early */
+   if (alloc_ptr_out != NULL)
+      *alloc_ptr_out = NULL;
 
    if (gpl_info) {
       lib = gpl_info->flags;
@@ -2215,8 +2263,9 @@ vk_common_CmdSetSampleMaskEXT(VkCommandBuffer commandBuffer,
    struct vk_dynamic_graphics_state *dyn = &cmd->dynamic_graphics_state;
 
    assert(samples <= MESA_VK_MAX_SAMPLES);
+   VkSampleMask sample_mask = *pSampleMask & BITFIELD_MASK(MESA_VK_MAX_SAMPLES);
 
-   SET_DYN_VALUE(dyn, MS_SAMPLE_MASK, ms.sample_mask, *pSampleMask);
+   SET_DYN_VALUE(dyn, MS_SAMPLE_MASK, ms.sample_mask, sample_mask);
 }
 
 VKAPI_ATTR void VKAPI_CALL

@@ -59,7 +59,7 @@ static void ac_init_llvm_target(void)
 #endif
    };
 
-   ac_reset_llvm_all_options_occurences();
+   ac_reset_llvm_all_options_occurrences();
    LLVMParseCommandLineOptions(ARRAY_SIZE(argv), argv, NULL);
 
    ac_llvm_run_atexit_for_destructors();
@@ -156,6 +156,8 @@ const char *ac_get_llvm_processor_name(enum radeon_family family)
       return "gfx908";
    case CHIP_MI200:
       return "gfx90a";
+   case CHIP_GFX940:
+      return "gfx940";
    case CHIP_NAVI10:
       return "gfx1010";
    case CHIP_NAVI12:
