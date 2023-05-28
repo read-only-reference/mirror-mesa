@@ -1033,8 +1033,12 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          * rendering to each texture's BO.
          */
         if (v3d->tex[PIPE_SHADER_VERTEX].num_textures || (indirect && indirect->buffer)) {
-                perf_debug("Blocking binner on last render "
-                           "due to vertex texturing or indirect drawing.\n");
+                static bool warned = false;
+                if (!warned) {
+                        perf_debug("Blocking binner on last render due to "
+                                   "vertex texturing or indirect drawing.\n");
+                        warned = true;
+                }
                 job->submit.in_sync_bcl = v3d->out_sync;
         }
 
@@ -1089,11 +1093,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          */
         v3d_emit_wait_for_tf_if_needed(v3d, job);
 
-#if V3D_VERSION >= 41
-        v3d41_emit_state(pctx);
-#else
-        v3d33_emit_state(pctx);
-#endif
+        v3dX(emit_state)(pctx);
 
         if (v3d->dirty & (V3D_DIRTY_VTXBUF |
                           V3D_DIRTY_VTXSTATE |
@@ -1135,7 +1135,9 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 prim_tf_enable = (V3D_PRIM_POINTS_TF - V3D_PRIM_POINTS);
 #endif
 
-        if (!v3d->prog.gs)
+        v3d->prim_restart = info->primitive_restart;
+
+        if (!v3d->prog.gs && !v3d->prim_restart)
                 v3d_update_primitives_generated_counter(v3d, info, &draws[0]);
 
         uint32_t hw_prim_type = v3d_hw_prim_type(info->mode);
@@ -1262,10 +1264,16 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         /* Increment the TF offsets by how many verts we wrote.  XXX: This
          * needs some clamping to the buffer size.
+         *
+         * If primitive restart is enabled or we have a geometry shader, we
+         * update it later, when we can query the device to know how many
+         * vertices were written.
          */
-        for (int i = 0; i < v3d->streamout.num_targets; i++)
-                v3d_stream_output_target(v3d->streamout.targets[i])->offset +=
-                        u_stream_outputs_for_vertices(info->mode, draws[0].count);
+        if (!v3d->prog.gs && !v3d->prim_restart) {
+                for (int i = 0; i < v3d->streamout.num_targets; i++)
+                        v3d_stream_output_target(v3d->streamout.targets[i])->offset +=
+                                u_stream_outputs_for_vertices(info->mode, draws[0].count);
+        }
 
         if (v3d->zsa && job->zsbuf && v3d->zsa->base.depth_enabled) {
                 struct v3d_resource *rsc = v3d_resource(job->zsbuf->texture);

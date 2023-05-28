@@ -70,6 +70,7 @@ enum {
    RADV_DEBUG_SHADOW_REGS = 1ull << 39,
    RADV_DEBUG_EXTRA_MD = 1ull << 40,
    RADV_DEBUG_NO_GPL = 1ull << 41,
+   RADV_DEBUG_VIDEO_ARRAY_PATH = 1ull << 42,
 };
 
 enum {
@@ -97,7 +98,7 @@ void radv_check_gpu_hangs(struct radv_queue *queue, struct radeon_cmdbuf *cs);
 
 void radv_print_spirv(const char *data, uint32_t size, FILE *fp);
 
-void radv_dump_enabled_options(struct radv_device *device, FILE *f);
+void radv_dump_enabled_options(const struct radv_device *device, FILE *f);
 
 bool radv_trap_handler_init(struct radv_device *device);
 void radv_trap_handler_finish(struct radv_device *device);

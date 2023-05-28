@@ -310,6 +310,9 @@
    DRI_CONF_OPT_B(ignore_discard_framebuffer, def, \
                   "Ignore glDiscardFramebuffer/glInvalidateFramebuffer, workaround for games that use it incorrectly")
 
+#define DRI_CONF_FORCE_VK_VENDOR(def) \
+   DRI_CONF_OPT_I(force_vk_vendor, 0, -1, 2147483647, "Override GPU vendor id")
+
 /**
  * \brief Image quality-related options
  */
@@ -442,6 +445,13 @@
    DRI_CONF_OPT_B(force_integer_tex_nearest, def, \
                   "Force integer textures to use nearest filtering")
 
+/* The GL spec does not allow this but wine has translation bug:
+   https://bugs.winehq.org/show_bug.cgi?id=54787
+*/
+#define DRI_CONF_ALLOW_MULTISAMPLED_COPYTEXIMAGE(def) \
+   DRI_CONF_OPT_B(allow_multisampled_copyteximage, def, \
+                  "Allow CopyTexSubImage and other to copy sampled framebuffer")
+
 /**
  * \brief Initialization configuration options
  */
@@ -498,6 +508,10 @@
 #define DRI_CONF_NINE_FORCESWRENDERINGONCPU(def) \
    DRI_CONF_OPT_B(force_sw_rendering_on_cpu, def, \
                   "If set to false, emulates software rendering on the requested device, else uses a software renderer.")
+
+#define DRI_CONF_NINE_FORCEFEATURESEMULATION(def) \
+   DRI_CONF_OPT_B(force_features_emulation, def, \
+                  "If set to true, force emulation of d3d9 features when possible instead of using native hw support.")
 
 #define DRI_CONF_V3D_NONMSAA_TEXTURE_SIZE_LIMIT(def) \
    DRI_CONF_OPT_B(v3d_nonmsaa_texture_size_limit, def, \
@@ -627,6 +641,10 @@
    DRI_CONF_OPT_B(radv_rt, def, \
                   "Expose support for VK_KHR_ray_tracing_pipeline")
 
+#define DRI_CONF_RADV_FLUSH_BEFORE_TIMESTAMP_WRITE(def) \
+   DRI_CONF_OPT_B(radv_flush_before_timestamp_write, def, \
+                  "Wait for previous commands to finish before writing timestamps")
+
 #define DRI_CONF_RADV_APP_LAYER() DRI_CONF_OPT_S_NODEF(radv_app_layer, "Select an application layer.")
 
 /**
@@ -661,6 +679,10 @@
 #define DRI_CONF_ANV_QUERY_CLEAR_WITH_BLORP_THRESHOLD(def) \
    DRI_CONF_OPT_I(query_clear_with_blorp_threshold, def, 0, INT32_MAX, \
                   "Indirect threshold count above which we start generating commands")
+
+#define DRI_CONF_ANV_FORCE_INDIRECT_DESCRIPTORS(def) \
+   DRI_CONF_OPT_B(force_indirect_descriptors, def, \
+                  "Use an indirection to access buffer/image/texture/sampler handles")
 
 /**
  * \brief DZN specific configuration options

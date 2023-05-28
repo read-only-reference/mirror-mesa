@@ -168,7 +168,8 @@ fs_inst::resize_sources(uint8_t num_sources)
 void
 fs_visitor::VARYING_PULL_CONSTANT_LOAD(const fs_builder &bld,
                                        const fs_reg &dst,
-                                       const fs_reg &surf_index,
+                                       const fs_reg &surface,
+                                       const fs_reg &surface_handle,
                                        const fs_reg &varying_offset,
                                        uint32_t const_offset,
                                        uint8_t alignment)
@@ -194,9 +195,15 @@ fs_visitor::VARYING_PULL_CONSTANT_LOAD(const fs_builder &bld,
     * result.
     */
    fs_reg vec4_result = bld.vgrf(BRW_REGISTER_TYPE_F, 4);
+
+   fs_reg srcs[PULL_VARYING_CONSTANT_SRCS];
+   srcs[PULL_VARYING_CONSTANT_SRC_SURFACE]        = surface;
+   srcs[PULL_VARYING_CONSTANT_SRC_SURFACE_HANDLE] = surface_handle;
+   srcs[PULL_VARYING_CONSTANT_SRC_OFFSET]         = vec4_offset;
+   srcs[PULL_VARYING_CONSTANT_SRC_ALIGNMENT]      = brw_imm_ud(alignment);
+
    fs_inst *inst = bld.emit(FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_LOGICAL,
-                            vec4_result, surf_index, vec4_offset,
-                            brw_imm_ud(alignment));
+                            vec4_result, srcs, PULL_VARYING_CONSTANT_SRCS);
    inst->size_written = 4 * vec4_result.component_size(inst->exec_size);
 
    shuffle_from_32bit_read(bld, dst, vec4_result,
@@ -258,7 +265,6 @@ fs_inst::is_control_source(unsigned arg) const
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
    case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
-   case SHADER_OPCODE_GET_BUFFER_SIZE:
       return arg == 1;
 
    case SHADER_OPCODE_MOV_INDIRECT:
@@ -877,7 +883,7 @@ fs_inst::size_read(int arg) const
 
    case SHADER_OPCODE_LOAD_PAYLOAD:
       if (arg < this->header_size)
-         return REG_SIZE;
+         return retype(src[arg], BRW_REGISTER_TYPE_UD).component_size(8);
       break;
 
    case CS_OPCODE_CS_TERMINATE:
@@ -2514,6 +2520,7 @@ fs_visitor::lower_constant_loads()
 
          VARYING_PULL_CONSTANT_LOAD(ibld, inst->dst,
                                     brw_imm_ud(index),
+                                    fs_reg() /* surface_handle */,
                                     inst->src[1],
                                     pull_index * 4, 4);
          inst->remove(block);
@@ -4998,7 +5005,6 @@ get_lowered_simd_width(const struct brw_compiler *compiler,
       return MIN2(8, inst->exec_size);
 
    case FS_OPCODE_LINTERP:
-   case SHADER_OPCODE_GET_BUFFER_SIZE:
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
    case FS_OPCODE_PACK_HALF_2x16_SPLIT:
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
@@ -7399,8 +7405,15 @@ brw_nir_populate_wm_prog_data(const nir_shader *shader,
       (prog_data->barycentric_interp_modes &
       BRW_BARYCENTRIC_NONPERSPECTIVE_BITS) != 0;
 
-   /* You can't be coarse and per-sample */
-   assert(!key->coarse_pixel || !key->persample_interp);
+   /* The current VK_EXT_graphics_pipeline_library specification requires
+    * coarse to specified at compile time. But per sample interpolation can be
+    * dynamic. So we should never be in a situation where coarse &
+    * persample_interp are both respectively true & BRW_ALWAYS.
+    *
+    * Coarse will dynamically turned off when persample_interp is active.
+    */
+   assert(!key->coarse_pixel || key->persample_interp != BRW_ALWAYS);
+
    prog_data->coarse_pixel_dispatch =
       brw_sometimes_invert(prog_data->persample_dispatch);
    if (!key->coarse_pixel ||
@@ -7463,7 +7476,7 @@ brw_compile_fs(const struct brw_compiler *compiler,
    const struct intel_device_info *devinfo = compiler->devinfo;
    const unsigned max_subgroup_size = compiler->devinfo->ver >= 6 ? 32 : 16;
 
-   brw_nir_apply_key(nir, compiler, &key->base, max_subgroup_size, true);
+   brw_nir_apply_key(nir, compiler, &key->base, max_subgroup_size);
    brw_nir_lower_fs_inputs(nir, devinfo, key);
    brw_nir_lower_fs_outputs(nir);
 
@@ -7484,7 +7497,7 @@ brw_compile_fs(const struct brw_compiler *compiler,
    }
 
    NIR_PASS(_, nir, brw_nir_move_interpolation_to_top);
-   brw_postprocess_nir(nir, compiler, true, debug_enabled,
+   brw_postprocess_nir(nir, compiler, debug_enabled,
                        key->base.robust_buffer_access);
 
    brw_nir_populate_wm_prog_data(nir, compiler->devinfo, key, prog_data,
@@ -7841,7 +7854,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
 
       nir_shader *shader = nir_shader_clone(mem_ctx, nir);
       brw_nir_apply_key(shader, compiler, &key->base,
-                        dispatch_width, true /* is_scalar */);
+                        dispatch_width);
 
       NIR_PASS(_, shader, brw_nir_lower_simd, dispatch_width);
 
@@ -7849,7 +7862,7 @@ brw_compile_cs(const struct brw_compiler *compiler,
       NIR_PASS(_, shader, nir_opt_constant_folding);
       NIR_PASS(_, shader, nir_opt_dce);
 
-      brw_postprocess_nir(shader, compiler, true, debug_enabled,
+      brw_postprocess_nir(shader, compiler, debug_enabled,
                           key->base.robust_buffer_access);
 
       v[simd] = std::make_unique<fs_visitor>(compiler, params->log_data, mem_ctx, &key->base,
@@ -7967,8 +7980,8 @@ compile_single_bs(const struct brw_compiler *compiler, void *log_data,
                                     shader->scratch_size);
 
    const unsigned max_dispatch_width = 16;
-   brw_nir_apply_key(shader, compiler, &key->base, max_dispatch_width, true);
-   brw_postprocess_nir(shader, compiler, true, debug_enabled,
+   brw_nir_apply_key(shader, compiler, &key->base, max_dispatch_width);
+   brw_postprocess_nir(shader, compiler, debug_enabled,
                        key->base.robust_buffer_access);
 
    brw_simd_selection_state simd_state{

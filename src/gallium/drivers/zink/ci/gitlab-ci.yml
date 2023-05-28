@@ -139,7 +139,7 @@ zink-tu-a618-traces-performance:
 
 .zink-freedreno-a630-traces:
   extends:
-    - .a630-traces
+    - a630-traces
     - .zink-turnip-rules
     - .zink-trace-test
   variables:

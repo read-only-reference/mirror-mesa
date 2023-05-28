@@ -447,7 +447,7 @@ build_tfb_query_shader(struct radv_device *device)
       nir_local_variable_create(b.impl, glsl_vector_type(GLSL_TYPE_UINT64, 2), "result");
    nir_variable *available = nir_local_variable_create(b.impl, glsl_bool_type(), "available");
 
-   nir_store_var(&b, result, nir_vec2(&b, nir_imm_int64(&b, 0), nir_imm_int64(&b, 0)), 0x3);
+   nir_store_var(&b, result, nir_replicate(&b, nir_imm_int64(&b, 0), 2), 0x3);
    nir_store_var(&b, available, nir_imm_false(&b), 0x1);
 
    nir_ssa_def *flags = nir_load_push_constant(&b, 1, 32, nir_imm_int(&b, 0), .range = 4);
@@ -483,11 +483,11 @@ build_tfb_query_shader(struct radv_device *device)
    /* Pack values. */
    nir_ssa_def *packed64[4];
    packed64[0] =
-      nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load1, 0), nir_channel(&b, load1, 1)));
+      nir_pack_64_2x32(&b, nir_trim_vector(&b, load1, 2));
    packed64[1] =
       nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load1, 2), nir_channel(&b, load1, 3)));
    packed64[2] =
-      nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load2, 0), nir_channel(&b, load2, 1)));
+      nir_pack_64_2x32(&b, nir_trim_vector(&b, load2, 2));
    packed64[3] =
       nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load2, 2), nir_channel(&b, load2, 3)));
 
@@ -591,7 +591,7 @@ build_timestamp_query_shader(struct radv_device *device)
    /* Pack the timestamp. */
    nir_ssa_def *timestamp;
    timestamp =
-      nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load, 0), nir_channel(&b, load, 1)));
+      nir_pack_64_2x32(&b, nir_trim_vector(&b, load, 2));
 
    /* Check if result is available. */
    nir_ssa_def *result_is_available = nir_i2b(&b, nir_ine_imm(&b, timestamp, TIMESTAMP_NOT_READY));
@@ -723,9 +723,9 @@ build_pg_query_shader(struct radv_device *device)
    /* Pack values. */
    nir_ssa_def *packed64[2];
    packed64[0] =
-      nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load1, 0), nir_channel(&b, load1, 1)));
+      nir_pack_64_2x32(&b, nir_trim_vector(&b, load1, 2));
    packed64[1] =
-      nir_pack_64_2x32(&b, nir_vec2(&b, nir_channel(&b, load2, 0), nir_channel(&b, load2, 1)));
+      nir_pack_64_2x32(&b, nir_trim_vector(&b, load2, 2));
 
    /* Compute result. */
    nir_ssa_def *primitive_storage_needed = nir_isub(&b, packed64[1], packed64[0]);
@@ -1384,11 +1384,13 @@ radv_GetQueryPoolResults(VkDevice _device, VkQueryPool queryPool, uint32_t first
           *	u64 PrimitiveStorageNeeded;
           * }
           */
-         available = 1;
-         for (int j = 0; j < 4; j++) {
-            if (!(p_atomic_read(src64 + j) & 0x8000000000000000UL))
-               available = 0;
-         }
+         do {
+            available = 1;
+            for (int j = 0; j < 4; j++) {
+               if (!(p_atomic_read(src64 + j) & 0x8000000000000000UL))
+                  available = 0;
+            }
+         } while (!available && (flags & VK_QUERY_RESULT_WAIT_BIT));
 
          if (!available && !(flags & VK_QUERY_RESULT_PARTIAL_BIT))
             result = VK_NOT_READY;
@@ -1423,11 +1425,13 @@ radv_GetQueryPoolResults(VkDevice _device, VkQueryPool queryPool, uint32_t first
           *	u64 PrimitiveStorageNeeded;
           * }
           */
-         available = 1;
-         if (!(p_atomic_read(src64 + 0) & 0x8000000000000000UL) ||
-             !(p_atomic_read(src64 + 2) & 0x8000000000000000UL)) {
-            available = 0;
-         }
+         do {
+            available = 1;
+            if (!(p_atomic_read(src64 + 0) & 0x8000000000000000UL) ||
+                !(p_atomic_read(src64 + 2) & 0x8000000000000000UL)) {
+               available = 0;
+            }
+         } while (!available && (flags & VK_QUERY_RESULT_WAIT_BIT));
 
          if (!available && !(flags & VK_QUERY_RESULT_PARTIAL_BIT))
             result = VK_NOT_READY;
@@ -1897,8 +1901,6 @@ emit_begin_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *poo
             cmd_buffer->state.active_prims_gen_queries++;
          }
 
-         emit_sample_streamout(cmd_buffer, va, index);
-
          if (pool->uses_gds) {
             /* generated prim counter */
             gfx10_copy_gds_query(cmd_buffer, RADV_NGG_QUERY_PRIM_GEN_OFFSET(index), va + 32);
@@ -1911,6 +1913,8 @@ emit_begin_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *poo
 
             cmd_buffer->state.active_prims_gen_gds_queries++;
          }
+
+         emit_sample_streamout(cmd_buffer, va, index);
       }
       break;
    }
@@ -2033,8 +2037,6 @@ emit_end_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *pool,
             cmd_buffer->state.active_prims_gen_queries--;
          }
 
-         emit_sample_streamout(cmd_buffer, va + 16, index);
-
          if (pool->uses_gds) {
             /* generated prim counter */
             gfx10_copy_gds_query(cmd_buffer, RADV_NGG_QUERY_PRIM_GEN_OFFSET(index), va + 36);
@@ -2044,6 +2046,8 @@ emit_end_query(struct radv_cmd_buffer *cmd_buffer, struct radv_query_pool *pool,
             if (!cmd_buffer->state.active_prims_gen_gds_queries)
                cmd_buffer->state.dirty |= RADV_CMD_DIRTY_NGG_QUERY;
          }
+
+         emit_sample_streamout(cmd_buffer, va + 16, index);
       }
       break;
    }
@@ -2141,7 +2145,12 @@ radv_CmdWriteTimestamp2(VkCommandBuffer commandBuffer, VkPipelineStageFlags2 sta
 
    radv_cs_add_buffer(cmd_buffer->device->ws, cs, pool->bo);
 
-   emit_query_flush(cmd_buffer, pool);
+   if (cmd_buffer->device->instance->flush_before_timestamp_write) {
+      /* Make sure previously launched waves have finished */
+      cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_PS_PARTIAL_FLUSH | RADV_CMD_FLAG_CS_PARTIAL_FLUSH;
+   }
+   
+   si_emit_cache_flush(cmd_buffer);
 
    int num_queries = 1;
    if (cmd_buffer->state.render.view_mask)

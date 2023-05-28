@@ -1116,6 +1116,7 @@ typedef uint64_t isl_surf_usage_flags_t;
 #define ISL_SURF_USAGE_STAGING_BIT             (1u << 14)
 #define ISL_SURF_USAGE_CPB_BIT                 (1u << 15)
 #define ISL_SURF_USAGE_PROTECTED_BIT           (1u << 16)
+#define ISL_SURF_USAGE_VIDEO_DECODE_BIT        (1u << 17)
 /** @} */
 
 /**
@@ -2207,6 +2208,13 @@ isl_aux_usage_has_ccs(enum isl_aux_usage usage)
           usage == ISL_AUX_USAGE_HIZ_CCS ||
           usage == ISL_AUX_USAGE_MCS_CCS ||
           usage == ISL_AUX_USAGE_STC_CCS;
+}
+
+static inline bool
+isl_aux_usage_has_ccs_e(enum isl_aux_usage usage)
+{
+   return usage == ISL_AUX_USAGE_CCS_E ||
+          usage == ISL_AUX_USAGE_GFX12_CCS_E;
 }
 
 static inline bool

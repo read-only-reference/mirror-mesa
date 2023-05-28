@@ -146,6 +146,9 @@ fd_screen_destroy(struct pipe_screen *pscreen)
 {
    struct fd_screen *screen = fd_screen(pscreen);
 
+   if (screen->aux_ctx)
+      screen->aux_ctx->destroy(screen->aux_ctx);
+
    if (screen->tess_bo)
       fd_bo_del(screen->tess_bo);
 
@@ -213,6 +216,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
    case PIPE_CAP_CLEAR_TEXTURE:
+   case PIPE_CAP_MULTI_DRAW_INDIRECT:
+   case PIPE_CAP_DRAW_PARAMETERS:
+   case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
       return is_a6xx(screen);
 
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
@@ -880,11 +886,17 @@ fd_screen_bo_get_handle(struct pipe_screen *pscreen, struct fd_bo *bo,
       if (screen->ro) {
          return renderonly_get_handle(scanout, whandle);
       } else {
-         whandle->handle = fd_bo_handle(bo);
+         uint32_t handle = fd_bo_handle(bo);
+         if (!handle)
+            return false;
+         whandle->handle = handle;
          return true;
       }
    } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
-      whandle->handle = fd_bo_dmabuf(bo);
+      int fd = fd_bo_dmabuf(bo);
+      if (fd < 0)
+         return false;
+      whandle->handle = fd;
       return true;
    } else {
       return false;
@@ -1221,9 +1233,34 @@ fd_screen_create(int fd,
 
    slab_create_parent(&screen->transfer_pool, sizeof(struct fd_transfer), 16);
 
+   simple_mtx_init(&screen->aux_ctx_lock, mtx_plain);
+
    return pscreen;
 
 fail:
    fd_screen_destroy(pscreen);
    return NULL;
+}
+
+struct fd_context *
+fd_screen_aux_context_get(struct pipe_screen *pscreen)
+{
+   struct fd_screen *screen = fd_screen(pscreen);
+
+   simple_mtx_lock(&screen->aux_ctx_lock);
+
+   if (!screen->aux_ctx) {
+      screen->aux_ctx = pscreen->context_create(pscreen, NULL, 0);
+   }
+
+   return fd_context(screen->aux_ctx);
+}
+
+void
+fd_screen_aux_context_put(struct pipe_screen *pscreen)
+{
+   struct fd_screen *screen = fd_screen(pscreen);
+
+   screen->aux_ctx->flush(screen->aux_ctx, NULL, 0);
+   simple_mtx_unlock(&screen->aux_ctx_lock);
 }

@@ -614,7 +614,16 @@
       when: on_success
     - changes: &radeon_vcn_file_list
       - src/gallium/frontends/va/**/*
+      - src/gallium/targets/va/**/*
       when: on_success
+
+.radeonsi-vaapi-manual-rules:
+  stage: amd
+  rules:
+    - !reference [.gl-manual-rules, rules]
+    - changes:
+        *radeon_vcn_file_list
+      when: manual
 
 .i915g-rules:
   stage: intel
@@ -737,10 +746,8 @@
     # Note that we trigger on changes both anv and iris, because piglit and skqp jobs test both.
     - !reference [.vulkan-rules, rules]
     - !reference [.gl-rules, rules]
-    - changes: &iris_file_list
-      - src/gallium/drivers/iris/**/*
-      - src/gallium/winsys/iris/**/*
-      - src/intel/**/*
+    - changes:
+        *iris_file_list
       when: on_success
 
 .virgl-rules:
@@ -843,6 +850,9 @@
   rules:
     - !reference [.radv-valve-manual-rules, rules]
     - !reference [.zink-common-manual-rules, rules]
+    - changes:
+      - .gitlab-ci/container/build-piglit.sh
+      when: manual
 
 # Unfortunately YAML doesn't let us concatenate arrays, so we have to do the
 # rules duplication manually
@@ -984,6 +994,10 @@
    rules:
     - !reference [.core-rules, rules]
     - changes:
+      - .clang-format
+      - .clang-format-include
+      - .clang-format-ignore
+      - src/**/.clang-format
       - src/**/asahi/**/*
       - src/**/panfrost/**/*
       when: on_success

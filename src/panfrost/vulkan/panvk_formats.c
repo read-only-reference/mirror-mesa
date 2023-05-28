@@ -377,8 +377,7 @@ panvk_GetPhysicalDeviceImageFormatProperties2(
       return result;
 
    /* Extract input structs */
-   vk_foreach_struct_const(s, base_info->pNext)
-   {
+   vk_foreach_struct_const(s, base_info->pNext) {
       switch (s->sType) {
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO:
          external_info = (const void *)s;
@@ -392,8 +391,7 @@ panvk_GetPhysicalDeviceImageFormatProperties2(
    }
 
    /* Extract output structs */
-   vk_foreach_struct(s, base_props->pNext)
-   {
+   vk_foreach_struct(s, base_props->pNext) {
       switch (s->sType) {
       case VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES:
          external_props = (void *)s;
@@ -462,7 +460,7 @@ fail:
 void
 panvk_GetPhysicalDeviceSparseImageFormatProperties(
    VkPhysicalDevice physicalDevice, VkFormat format, VkImageType type,
-   uint32_t samples, VkImageUsageFlags usage, VkImageTiling tiling,
+   VkSampleCountFlagBits samples, VkImageUsageFlags usage, VkImageTiling tiling,
    uint32_t *pNumProperties, VkSparseImageFormatProperties *pProperties)
 {
    /* Sparse images are not yet supported. */

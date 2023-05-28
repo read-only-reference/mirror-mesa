@@ -1,25 +1,7 @@
 /*
  * Copyright 2012 Advanced Micro Devices, Inc.
- * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * on the rights to use, copy, modify, merge, publish, distribute, sub
- * license, and/or sell copies of the Software, and to permit persons to whom
- * the Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "ac_nir.h"
@@ -317,8 +299,8 @@ static bool si_update_shaders(struct si_context *sctx)
          struct si_shader *shader = sctx->shaders[i].current;
          if (sctx->shaders[i].cso && shader) {
             pipeline_code_hash = XXH64(
-               shader->binary.elf_buffer,
-               shader->binary.elf_size,
+               shader->binary.code_buffer,
+               shader->binary.code_size,
                pipeline_code_hash);
 
             total_size += ALIGN(shader->binary.uploaded_code_size, 256);
@@ -1340,7 +1322,7 @@ template <amd_gfx_level GFX_VERSION, si_has_tess HAS_TESS, si_has_gs HAS_GS, si_
           si_is_draw_vertex_state IS_DRAW_VERTEX_STATE> ALWAYS_INLINE
 static void si_emit_draw_registers(struct si_context *sctx,
                                    const struct pipe_draw_indirect_info *indirect,
-                                   enum pipe_prim_type prim,
+                                   enum pipe_prim_type prim, unsigned index_size,
                                    unsigned instance_count, bool primitive_restart,
                                    unsigned restart_index, unsigned min_vertex_count)
 {
@@ -1370,20 +1352,39 @@ static void si_emit_draw_registers(struct si_context *sctx,
    }
 
    /* Primitive restart. */
-   if (primitive_restart != sctx->last_primitive_restart_en) {
-      if (GFX_VERSION >= GFX11)
-         radeon_set_uconfig_reg(R_03092C_GE_MULTI_PRIM_IB_RESET_EN, primitive_restart);
-      else if (GFX_VERSION >= GFX9)
-         radeon_set_uconfig_reg(R_03092C_VGT_MULTI_PRIM_IB_RESET_EN, primitive_restart);
-      else
-         radeon_set_context_reg(R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, primitive_restart);
-      sctx->last_primitive_restart_en = primitive_restart;
-   }
-   if (si_prim_restart_index_changed(sctx, primitive_restart, restart_index)) {
-      radeon_set_context_reg(R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, restart_index);
-      sctx->last_restart_index = restart_index;
-      if (GFX_VERSION == GFX9)
-         sctx->context_roll = true;
+   if (GFX_VERSION >= GFX11) {
+      /* GFX11+ can ignore primitive restart for non-indexed draws because it has no effect.
+       * (it's disabled for non-indexed draws by setting DISABLE_FOR_AUTO_INDEX in the preamble)
+       */
+      if (index_size) {
+         if (primitive_restart != sctx->last_primitive_restart_en) {
+            radeon_set_uconfig_reg(R_03092C_GE_MULTI_PRIM_IB_RESET_EN,
+                                   S_03092C_RESET_EN(primitive_restart) |
+                                   /* This disables primitive restart for non-indexed draws.
+                                    * By keeping this set, we don't have to unset RESET_EN
+                                    * for non-indexed draws. */
+                                   S_03092C_DISABLE_FOR_AUTO_INDEX(1));
+            sctx->last_primitive_restart_en = primitive_restart;
+         }
+         if (si_prim_restart_index_changed(sctx, primitive_restart, restart_index)) {
+            radeon_set_context_reg(R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, restart_index);
+            sctx->last_restart_index = restart_index;
+         }
+      }
+   } else {
+      if (primitive_restart != sctx->last_primitive_restart_en) {
+         if (GFX_VERSION >= GFX9)
+            radeon_set_uconfig_reg(R_03092C_VGT_MULTI_PRIM_IB_RESET_EN, primitive_restart);
+         else
+            radeon_set_context_reg(R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, primitive_restart);
+         sctx->last_primitive_restart_en = primitive_restart;
+      }
+      if (si_prim_restart_index_changed(sctx, primitive_restart, restart_index)) {
+         radeon_set_context_reg(R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, restart_index);
+         sctx->last_restart_index = restart_index;
+         if (GFX_VERSION == GFX9)
+            sctx->context_roll = true;
+      }
    }
    radeon_end();
 }
@@ -2091,13 +2092,9 @@ static void si_get_draw_start_count(struct si_context *sctx, const struct pipe_d
    }
 }
 
-template <amd_gfx_level GFX_VERSION, si_has_tess HAS_TESS, si_has_gs HAS_GS, si_has_ngg NGG,
-          si_is_draw_vertex_state IS_DRAW_VERTEX_STATE> ALWAYS_INLINE
-static void si_emit_all_states(struct si_context *sctx, const struct pipe_draw_info *info,
-                               const struct pipe_draw_indirect_info *indirect,
-                               enum pipe_prim_type prim, unsigned instance_count,
-                               unsigned min_vertex_count, bool primitive_restart,
-                               unsigned skip_atom_mask)
+template <amd_gfx_level GFX_VERSION, si_has_tess HAS_TESS, si_has_gs HAS_GS, si_has_ngg NGG>
+ALWAYS_INLINE
+static void si_emit_all_states(struct si_context *sctx, unsigned skip_atom_mask)
 {
    si_emit_rasterizer_prim_state<GFX_VERSION, HAS_GS, NGG>(sctx);
    if (HAS_TESS)
@@ -2129,12 +2126,6 @@ static void si_emit_all_states(struct si_context *sctx, const struct pipe_draw_i
 
       sctx->dirty_states = 0;
    }
-
-   /* Emit draw states. */
-   si_emit_vs_state<GFX_VERSION, HAS_TESS, HAS_GS, NGG, IS_DRAW_VERTEX_STATE>(sctx, info->index_size);
-   si_emit_draw_registers<GFX_VERSION, HAS_TESS, HAS_GS, NGG, IS_DRAW_VERTEX_STATE>
-         (sctx, indirect, prim, instance_count, primitive_restart,
-          info->restart_index, min_vertex_count);
 }
 
 #define DRAW_CLEANUP do {                                 \
@@ -2429,9 +2420,14 @@ static void si_draw(struct pipe_context *ctx,
    bool primitive_restart = !IS_DRAW_VERTEX_STATE && info->primitive_restart;
 
    /* Emit all states except possibly render condition. */
-   si_emit_all_states<GFX_VERSION, HAS_TESS, HAS_GS, NGG, IS_DRAW_VERTEX_STATE>
-         (sctx, info, indirect, prim, instance_count, min_direct_count,
-          primitive_restart, masked_atoms);
+   si_emit_all_states<GFX_VERSION, HAS_TESS, HAS_GS, NGG>(sctx, masked_atoms);
+
+   /* Emit draw states. */
+   si_emit_vs_state<GFX_VERSION, HAS_TESS, HAS_GS, NGG, IS_DRAW_VERTEX_STATE>(sctx, index_size);
+   si_emit_draw_registers<GFX_VERSION, HAS_TESS, HAS_GS, NGG, IS_DRAW_VERTEX_STATE>
+         (sctx, indirect, prim, index_size, instance_count, primitive_restart,
+          info->restart_index, min_direct_count);
+
    if (sctx->flags)
       sctx->emit_cache_flush(sctx, &sctx->gfx_cs);
    /* <-- CUs are idle here if we waited. */

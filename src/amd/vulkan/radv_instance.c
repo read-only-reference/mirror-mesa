@@ -76,6 +76,7 @@ static const struct debug_control radv_debug_options[] = {
    {"shadowregs", RADV_DEBUG_SHADOW_REGS},
    {"extra_md", RADV_DEBUG_EXTRA_MD},
    {"nogpl", RADV_DEBUG_NO_GPL},
+   {"videoarraypath", RADV_DEBUG_VIDEO_ARRAY_PATH},
    {NULL, 0}};
 
 const char *
@@ -144,6 +145,7 @@ static const driOptionDescription radv_dri_options[] = {
       DRI_CONF_RADV_ENABLE_UNIFIED_HEAP_ON_APU(false)
       DRI_CONF_RADV_TEX_NON_UNIFORM(false)
       DRI_CONF_RADV_RT(false)
+      DRI_CONF_RADV_FLUSH_BEFORE_TIMESTAMP_WRITE(false)
       DRI_CONF_RADV_APP_LAYER()
    DRI_CONF_SECTION_END
 };
@@ -202,6 +204,9 @@ radv_init_dri_options(struct radv_instance *instance)
    instance->tex_non_uniform = driQueryOptionb(&instance->dri_options, "radv_tex_non_uniform");
 
    instance->app_layer = driQueryOptionstr(&instance->dri_options, "radv_app_layer");
+
+   instance->flush_before_timestamp_write =
+      driQueryOptionb(&instance->dri_options, "radv_flush_before_timestamp_write");
 }
 
 static const struct vk_instance_extension_table radv_instance_extensions_supported = {
@@ -263,7 +268,7 @@ radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                              pCreateInfo, pAllocator);
    if (result != VK_SUCCESS) {
       vk_free(pAllocator, instance);
-      return vk_error(instance, result);
+      return vk_error(NULL, result);
    }
 
    instance->debug_flags = parse_debug_string(getenv("RADV_DEBUG"), radv_debug_options);

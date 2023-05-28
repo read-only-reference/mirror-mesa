@@ -280,7 +280,8 @@ BlockScheduler::BlockScheduler(r600_chip_class chip_class,
     m_last_pixel(nullptr),
     m_last_param(nullptr),
     m_current_block(nullptr),
-    m_chip_class(chip_class)
+    m_chip_class(chip_class),
+    m_chip_family(chip_family)
 {
    m_nop_after_rel_dest = chip_family == CHIP_RV770;
 
@@ -325,6 +326,7 @@ BlockScheduler::schedule_block(Block& in_block,
    bool have_instr = collect_ready(cir);
 
    m_current_block = new Block(in_block.nesting_depth(), in_block.id());
+   m_current_block->set_instr_flag(Instr::force_cf);
    assert(m_current_block->id() >= 0);
 
    while (have_instr) {
@@ -775,6 +777,10 @@ BlockScheduler::schedule_alu_to_group_vec(AluGroup *group)
          continue;
       }
 
+      // precausion: don't kill while we hae LDS queue reads in the pipeline
+      if ((*i)->is_kill() && m_current_block->lds_group_active())
+         continue;
+
       if (!m_current_block->try_reserve_kcache(**i)) {
          sfn_log << SfnLog::schedule << " failed (kcache)\n";
          ++i;
@@ -1166,7 +1172,7 @@ public:
          need_extra_group = true;
 
       if (value.addr() && last_direct_array_write.find(entry) !=
-          last_indirect_array_write.end()) {
+          last_direct_array_write.end()) {
          need_extra_group = true;
       }
    }
